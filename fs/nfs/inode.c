@@ -332,7 +332,7 @@ nfs_sb_init(struct super_block *sb, rpc_authflavor_t authflavor)
 
 	server->client->cl_intr = (server->flags & NFS_MOUNT_INTR) ? 1 : 0;
 	server->client->cl_softrtry = (server->flags & NFS_MOUNT_SOFT) ? 1 : 0;
-	clnt->cl_tagxid   = (server->flags & NFS_MOUNT_TAGXID) ? 1 : 0;
+	server->client->cl_tagxid   = (server->flags & NFS_MOUNT_TAGXID) ? 1 : 0;
 
 	/* We're airborne Set socket buffersize */
 	rpc_setbufsize(server->client, server->wsize + 100, server->rsize + 100);

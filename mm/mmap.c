@@ -1998,7 +1998,7 @@ void exit_mmap(struct mm_struct *mm)
 	mm->mmap = mm->mmap_cache = NULL;
 	mm->mm_rb = RB_ROOT;
 	// set_mm_counter(mm, rss, 0);
-	vx_rsspages_sub(mm, mm->rss);
+	vx_rsspages_sub(mm, mm->_rss);
 	// mm->total_vm = 0;
 	vx_vmpages_sub(mm, mm->total_vm);
 	// mm->locked_vm = 0;
