@@ -809,7 +809,8 @@ unsigned long do_mmap_pgoff(struct file *file,
 	realalloc += kobjsize(vma);
 	askedalloc += sizeof(*vma);
 
-	current->mm->total_vm += len >> PAGE_SHIFT;
+	// current->mm->total_vm += len >> PAGE_SHIFT;
+	vx_vmpages_add(current->mm, len >> PAGE_SHIFT);
 
 	add_nommu_vma(vma);
 
@@ -924,7 +925,8 @@ int do_munmap(struct mm_struct *mm, unsigned long addr, size_t len)
 	realalloc -= kobjsize(vml);
 	askedalloc -= sizeof(*vml);
 	kfree(vml);
-	mm->total_vm -= len >> PAGE_SHIFT;
+	// mm->total_vm -= len >> PAGE_SHIFT;
+	vx_vmpages_sub(mm, len >> PAGE_SHIFT);
 
 #ifdef DEBUG
 	show_process_blocks();
@@ -943,7 +945,8 @@ void exit_mmap(struct mm_struct * mm)
 		printk("Exit_mmap:\n");
 #endif
 
-		mm->total_vm = 0;
+		// mm->total_vm = 0;
+		vx_vmpages_sub(mm, mm->total_vm);
 
 		while ((tmp = mm->context.vmlist)) {
 			mm->context.vmlist = tmp->next;

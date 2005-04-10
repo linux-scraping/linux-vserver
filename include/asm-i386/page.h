@@ -121,16 +121,23 @@ extern int sysctl_legacy_va_layout;
 
 #endif /* __ASSEMBLY__ */
 
-#ifdef __ASSEMBLY__
+#if   defined(CONFIG_SPLIT_3GB)
 #define __PAGE_OFFSET		(0xC0000000)
-#else
-#define __PAGE_OFFSET		(0xC0000000UL)
+#elif defined(CONFIG_SPLIT_25GB)
+#define __PAGE_OFFSET		(0xA0000000)
+#elif defined(CONFIG_SPLIT_2GB)
+#define __PAGE_OFFSET		(0x80000000)
+#elif defined(CONFIG_SPLIT_15GB)
+#define __PAGE_OFFSET		(0x60000000)
+#elif defined(CONFIG_SPLIT_1GB)
+#define __PAGE_OFFSET		(0x40000000)
 #endif
-
 
 #define PAGE_OFFSET		((unsigned long)__PAGE_OFFSET)
 #define VMALLOC_RESERVE		((unsigned long)__VMALLOC_RESERVE)
-#define MAXMEM			(-__PAGE_OFFSET-__VMALLOC_RESERVE)
+#define __MAXMEM		(-__PAGE_OFFSET-__VMALLOC_RESERVE)
+#define MAXMEM			((unsigned long)(-PAGE_OFFSET-VMALLOC_RESERVE))
+
 #define __pa(x)			((unsigned long)(x)-PAGE_OFFSET)
 #define __va(x)			((void *)((unsigned long)(x)+PAGE_OFFSET))
 #define pfn_to_kaddr(pfn)      __va((pfn) << PAGE_SHIFT)

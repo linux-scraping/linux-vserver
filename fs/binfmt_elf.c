@@ -38,6 +38,7 @@
 #include <linux/security.h>
 #include <linux/syscalls.h>
 #include <linux/random.h>
+#include <linux/vs_memory.h>
 
 #include <asm/uaccess.h>
 #include <asm/param.h>
@@ -773,7 +774,8 @@ static int load_elf_binary(struct linux_binprm * bprm, struct pt_regs * regs)
 
 	/* Do this so that we can load the interpreter, if need be.  We will
 	   change some of these later */
-	set_mm_counter(current->mm, rss, 0);
+	// set_mm_counter(current->mm, rss, 0);
+	vx_rsspages_sub(current->mm, current->mm->rss);
 	current->mm->free_area_cache = current->mm->mmap_base;
 	retval = setup_arg_pages(bprm, randomize_stack_top(STACK_TOP),
 				 executable_stack);

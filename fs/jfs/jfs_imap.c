@@ -45,6 +45,7 @@
 #include <linux/buffer_head.h>
 #include <linux/pagemap.h>
 #include <linux/quotaops.h>
+#include <linux/vserver/xid.h>
 
 #include "jfs_incore.h"
 #include "jfs_filsys.h"
@@ -3098,14 +3099,21 @@ static void duplicateIXtree(struct super_block *sb, s64 blkno,
 static int copy_from_dinode(struct dinode * dip, struct inode *ip)
 {
 	struct jfs_inode_info *jfs_ip = JFS_IP(ip);
+	uid_t uid;
+	gid_t gid;
 
 	jfs_ip->fileset = le32_to_cpu(dip->di_fileset);
 	jfs_ip->mode2 = le32_to_cpu(dip->di_mode);
 
 	ip->i_mode = le32_to_cpu(dip->di_mode) & 0xffff;
 	ip->i_nlink = le32_to_cpu(dip->di_nlink);
-	ip->i_uid = le32_to_cpu(dip->di_uid);
-	ip->i_gid = le32_to_cpu(dip->di_gid);
+
+	uid = le32_to_cpu(dip->di_uid);
+	gid = le32_to_cpu(dip->di_gid);
+	ip->i_uid = INOXID_UID(XID_TAG(ip), uid, gid);
+	ip->i_gid = INOXID_GID(XID_TAG(ip), uid, gid);
+	ip->i_xid = INOXID_XID(XID_TAG(ip), uid, gid, 0);
+
 	ip->i_size = le64_to_cpu(dip->di_size);
 	ip->i_atime.tv_sec = le32_to_cpu(dip->di_atime.tv_sec);
 	ip->i_atime.tv_nsec = le32_to_cpu(dip->di_atime.tv_nsec);
@@ -3156,6 +3164,8 @@ static int copy_from_dinode(struct dinode * dip, struct inode *ip)
 static void copy_to_dinode(struct dinode * dip, struct inode *ip)
 {
 	struct jfs_inode_info *jfs_ip = JFS_IP(ip);
+	uid_t uid;
+	gid_t gid;
 
 	dip->di_fileset = cpu_to_le32(jfs_ip->fileset);
 	dip->di_inostamp = cpu_to_le32(JFS_SBI(ip->i_sb)->inostamp);
@@ -3164,8 +3174,11 @@ static void copy_to_dinode(struct dinode * dip, struct inode *ip)
 	dip->di_size = cpu_to_le64(ip->i_size);
 	dip->di_nblocks = cpu_to_le64(PBLK2LBLK(ip->i_sb, ip->i_blocks));
 	dip->di_nlink = cpu_to_le32(ip->i_nlink);
-	dip->di_uid = cpu_to_le32(ip->i_uid);
-	dip->di_gid = cpu_to_le32(ip->i_gid);
+
+	uid = XIDINO_UID(XID_TAG(ip), ip->i_uid, ip->i_xid);
+	gid = XIDINO_GID(XID_TAG(ip), ip->i_gid, ip->i_xid);
+	dip->di_uid = cpu_to_le32(uid);
+	dip->di_gid = cpu_to_le32(gid);
 	/*
 	 * mode2 is only needed for storing the higher order bits.
 	 * Trust i_mode for the lower order ones

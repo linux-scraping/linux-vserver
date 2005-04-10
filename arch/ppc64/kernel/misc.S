@@ -940,7 +940,7 @@ _GLOBAL(sys_call_table32)
 	.llong .ppc32_fadvise64_64	/* 32bit only fadvise64_64 */
 	.llong .ppc_rtas		/* 255 */
 	.llong .sys_ni_syscall		/* 256 reserved for sys_debug_setcontext */
-	.llong .sys_ni_syscall		/* 257 reserved for vserver */
+	.llong .sys_vserver
 	.llong .sys_ni_syscall		/* 258 reserved for new sys_remap_file_pages */
 	.llong .compat_sys_mbind
 	.llong .compat_sys_get_mempolicy	/* 260 */

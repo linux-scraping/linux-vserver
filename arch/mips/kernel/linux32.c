@@ -1199,7 +1199,7 @@ asmlinkage long sys32_newuname(struct new_utsname * name)
 	int ret = 0;
 
 	down_read(&uts_sem);
-	if (copy_to_user(name,&system_utsname,sizeof *name))
+	if (copy_to_user(name, vx_new_utsname(), sizeof *name))
 		ret = -EFAULT;
 	up_read(&uts_sem);
 

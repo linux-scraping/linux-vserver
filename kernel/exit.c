@@ -27,6 +27,7 @@
 #include <linux/mempolicy.h>
 #include <linux/cpuset.h>
 #include <linux/syscalls.h>
+#include <linux/vs_limit.h>
 
 #include <asm/uaccess.h>
 #include <asm/unistd.h>
@@ -41,6 +42,11 @@ int getrusage(struct task_struct *, int, struct rusage __user *);
 static void __unhash_process(struct task_struct *p)
 {
 	nr_threads--;
+	/* tasklist_lock is held, is this sufficient? */
+	if (p->vx_info) {
+		atomic_dec(&p->vx_info->cvirt.nr_threads);
+		vx_nproc_dec(p);
+	}
 	detach_pid(p, PIDTYPE_PID);
 	detach_pid(p, PIDTYPE_TGID);
 	if (thread_group_leader(p)) {
@@ -97,6 +103,8 @@ repeat:
 	spin_unlock(&p->proc_lock);
 	proc_pid_flush(proc_dentry);
 	release_thread(p);
+	if (p->vx_info)
+		release_vx_info(p->vx_info, p);
 	put_task_struct(p);
 
 	p = leader;
@@ -227,6 +235,7 @@ void reparent_to_init(void)
 	ptrace_unlink(current);
 	/* Reparent to init */
 	REMOVE_LINKS(current);
+	/* FIXME handle vchild_reaper/initpid */
 	current->parent = child_reaper;
 	current->real_parent = child_reaper;
 	SET_LINKS(current);
@@ -247,26 +256,26 @@ void reparent_to_init(void)
 	switch_uid(INIT_USER);
 }
 
-void __set_special_pids(pid_t session, pid_t pgrp)
+void __set_special_task_pids(struct task_struct *task,
+	pid_t session, pid_t pgrp)
 {
-	struct task_struct *curr = current;
-
-	if (curr->signal->session != session) {
-		detach_pid(curr, PIDTYPE_SID);
-		curr->signal->session = session;
-		attach_pid(curr, PIDTYPE_SID, session);
+	if (task->signal->session != session) {
+		detach_pid(task, PIDTYPE_SID);
+		task->signal->session = session;
+		attach_pid(task, PIDTYPE_SID, session);
 	}
-	if (process_group(curr) != pgrp) {
-		detach_pid(curr, PIDTYPE_PGID);
-		curr->signal->pgrp = pgrp;
-		attach_pid(curr, PIDTYPE_PGID, pgrp);
+	if (process_group(task) != pgrp) {
+		detach_pid(task, PIDTYPE_PGID);
+		task->signal->pgrp = pgrp;
+		attach_pid(task, PIDTYPE_PGID, pgrp);
 	}
 }
 
-void set_special_pids(pid_t session, pid_t pgrp)
+void set_special_task_pids(struct task_struct *task,
+	pid_t session, pid_t pgrp)
 {
 	write_lock_irq(&tasklist_lock);
-	__set_special_pids(session, pgrp);
+	__set_special_task_pids(task, session, pgrp);
 	write_unlock_irq(&tasklist_lock);
 }
 
@@ -332,7 +341,7 @@ void daemonize(const char *name, ...)
 	 */
 	exit_mm(current);
 
-	set_special_pids(1, 1);
+	set_special_task_pids(current, 1, 1);
 	down(&tty_sem);
 	current->signal->tty = NULL;
 	up(&tty_sem);
@@ -373,6 +382,7 @@ static inline void close_files(struct files_struct * files)
 				struct file * file = xchg(&files->fd[i], NULL);
 				if (file)
 					filp_close(file, files);
+				vx_openfd_dec(i);
 			}
 			i++;
 			set >>= 1;
@@ -591,6 +601,7 @@ static inline void forget_original_parent(struct task_struct * father,
 	struct task_struct *p, *reaper = father;
 	struct list_head *_p, *_n;
 
+	/* FIXME handle vchild_reaper/initpid */
 	do {
 		reaper = next_thread(reaper);
 		if (reaper == father) {

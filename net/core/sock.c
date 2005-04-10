@@ -124,6 +124,8 @@
 #include <linux/ipsec.h>
 
 #include <linux/filter.h>
+#include <linux/vs_socket.h>
+#include <linux/vs_limit.h>
 
 #ifdef CONFIG_INET
 #include <net/tcp.h>
@@ -639,6 +641,8 @@ struct sock *sk_alloc(int family, int priority, struct proto *prot, int zero_it)
 			sk->sk_prot = prot;
 			sock_lock_init(sk);
 		}
+		sock_vx_init(sk);
+		sock_nx_init(sk);
 		
 		if (security_sk_alloc(sk, family, priority)) {
 			kmem_cache_free(slab, sk);
@@ -670,6 +674,13 @@ void sk_free(struct sock *sk)
 		       __FUNCTION__, atomic_read(&sk->sk_omem_alloc));
 
 	security_sk_free(sk);
+	vx_sock_dec(sk);
+	// BUG_ON(sk->sk_vx_info);
+	clr_vx_info(&sk->sk_vx_info);
+	sk->sk_xid = -1;
+	// BUG_ON(sk->sk_nx_info);
+	clr_nx_info(&sk->sk_nx_info);
+	sk->sk_nid = -1;
 	if (sk->sk_prot->slab != NULL)
 		kmem_cache_free(sk->sk_prot->slab, sk);
 	else
@@ -1216,6 +1227,11 @@ void sock_init_data(struct socket *sock, struct sock *sk)
 	sk->sk_stamp.tv_sec     = -1L;
 	sk->sk_stamp.tv_usec    = -1L;
 
+	set_vx_info(&sk->sk_vx_info, current->vx_info);
+	sk->sk_xid = vx_current_xid();
+	vx_sock_inc(sk);
+	set_nx_info(&sk->sk_nx_info, current->nx_info);
+	sk->sk_nid = nx_current_nid();
 	atomic_set(&sk->sk_refcnt, 1);
 }
 

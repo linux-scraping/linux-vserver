@@ -19,6 +19,7 @@
 #include <linux/idr.h>
 #include <linux/namei.h>
 #include <linux/bitops.h>
+#include <linux/vserver/inode.h>
 #include <asm/uaccess.h>
 
 static ssize_t proc_file_read(struct file *file, char __user *buf,
@@ -372,11 +373,15 @@ struct dentry *proc_lookup(struct inode * dir, struct dentry *dentry, struct nam
 		for (de = de->subdir; de ; de = de->next) {
 			if (de->namelen != dentry->d_name.len)
 				continue;
+			if (!vx_hide_check(0, de->vx_flags))
+				continue;
 			if (!memcmp(dentry->d_name.name, de->name, de->namelen)) {
 				unsigned int ino = de->low_ino;
 
 				error = -EINVAL;
 				inode = proc_get_inode(dir->i_sb, ino, de);
+				/* generic proc entries belong to the host */
+				inode->i_xid = 0;
 				break;
 			}
 		}
@@ -448,9 +453,12 @@ int proc_readdir(struct file * filp,
 			}
 
 			do {
+				if (!vx_hide_check(0, de->vx_flags))
+					goto skip;
 				if (filldir(dirent, de->name, de->namelen, filp->f_pos,
 					    de->low_ino, de->mode >> 12) < 0)
 					goto out;
+			skip:
 				filp->f_pos++;
 				de = de->next;
 			} while (de);
@@ -567,6 +575,7 @@ static struct proc_dir_entry *proc_create(struct proc_dir_entry **parent,
 	ent->namelen = len;
 	ent->mode = mode;
 	ent->nlink = nlink;
+	ent->vx_flags = IATTR_PROC_DEFAULT;
  out:
 	return ent;
 }
@@ -587,7 +596,8 @@ struct proc_dir_entry *proc_symlink(const char *name,
 				kfree(ent->data);
 				kfree(ent);
 				ent = NULL;
-			}
+			} else
+				ent->vx_flags = IATTR_PROC_SYMLINK;
 		} else {
 			kfree(ent);
 			ent = NULL;

@@ -1302,7 +1302,7 @@ static int __init kswapd_init(void)
 	swap_setup();
 	for_each_pgdat(pgdat)
 		pgdat->kswapd
-		= find_task_by_pid(kernel_thread(kswapd, pgdat, CLONE_KERNEL));
+		= find_task_by_real_pid(kernel_thread(kswapd, pgdat, CLONE_KERNEL));
 	total_memory = nr_free_pagecache_pages();
 	hotcpu_notifier(cpu_callback, 0);
 	return 0;

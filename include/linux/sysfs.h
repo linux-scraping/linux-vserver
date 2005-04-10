@@ -12,6 +12,8 @@
 
 #include <asm/atomic.h>
 
+#define SYSFS_SUPER_MAGIC	0x62656572
+
 struct kobject;
 struct module;
 

@@ -192,6 +192,8 @@ source "arch/parisc/oprofile/Kconfig"
 
 source "arch/parisc/Kconfig.debug"
 
+source "kernel/vserver/Kconfig"
+
 source "security/Kconfig"
 
 source "crypto/Kconfig"

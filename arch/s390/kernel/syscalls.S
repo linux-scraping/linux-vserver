@@ -271,7 +271,7 @@ SYSCALL(sys_clock_settime,sys_clock_settime,sys32_clock_settime_wrapper)
 SYSCALL(sys_clock_gettime,sys_clock_gettime,sys32_clock_gettime_wrapper)	/* 260 */
 SYSCALL(sys_clock_getres,sys_clock_getres,sys32_clock_getres_wrapper)
 SYSCALL(sys_clock_nanosleep,sys_clock_nanosleep,sys32_clock_nanosleep_wrapper)
-NI_SYSCALL							/* reserved for vserver */
+SYSCALL(sys_vserver,sys_vserver,sys_vserver)
 SYSCALL(s390_fadvise64_64,sys_ni_syscall,sys32_fadvise64_64_wrapper)
 SYSCALL(sys_statfs64,sys_statfs64,compat_sys_statfs64_wrapper)
 SYSCALL(sys_fstatfs64,sys_fstatfs64,compat_sys_fstatfs64_wrapper)

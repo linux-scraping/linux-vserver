@@ -854,6 +854,10 @@ _xfs_dic2xflags(
 			flags |= XFS_XFLAG_PREALLOC;
 		if (di_flags & XFS_DIFLAG_IMMUTABLE)
 			flags |= XFS_XFLAG_IMMUTABLE;
+		if (di_flags & XFS_DIFLAG_IUNLINK)
+			flags |= XFS_XFLAG_IUNLINK;
+		if (di_flags & XFS_DIFLAG_BARRIER)
+			flags |= XFS_XFLAG_BARRIER;
 		if (di_flags & XFS_DIFLAG_APPEND)
 			flags |= XFS_XFLAG_APPEND;
 		if (di_flags & XFS_DIFLAG_SYNC)

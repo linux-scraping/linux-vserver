@@ -17,6 +17,7 @@
 #include <linux/mpage.h>
 #include <linux/writeback.h>
 #include <linux/quotaops.h>
+#include <linux/vserver/xid.h>
 
 extern int reiserfs_default_io_size; /* default io size devuned in super.c */
 
@@ -1047,6 +1048,8 @@ static void init_inode (struct inode * inode, struct path * path)
     struct buffer_head * bh;
     struct item_head * ih;
     __u32 rdev;
+    uid_t uid;
+    gid_t gid;
     //int version = ITEM_VERSION_1;
 
     bh = PATH_PLAST_BUFFER (path);
@@ -1070,12 +1073,13 @@ static void init_inode (struct inode * inode, struct path * path)
 	struct stat_data_v1 * sd = (struct stat_data_v1 *)B_I_PITEM (bh, ih);
 	unsigned long blocks;
 
+	uid = sd_v1_uid(sd);
+	gid = sd_v1_gid(sd);
+
 	set_inode_item_key_version (inode, KEY_FORMAT_3_5);
         set_inode_sd_version (inode, STAT_DATA_V1);
 	inode->i_mode  = sd_v1_mode(sd);
 	inode->i_nlink = sd_v1_nlink(sd);
-	inode->i_uid   = sd_v1_uid(sd);
-	inode->i_gid   = sd_v1_gid(sd);
 	inode->i_size  = sd_v1_size(sd);
 	inode->i_atime.tv_sec = sd_v1_atime(sd);
 	inode->i_mtime.tv_sec = sd_v1_mtime(sd);
@@ -1115,11 +1119,12 @@ static void init_inode (struct inode * inode, struct path * path)
 	// (directories and symlinks)
 	struct stat_data * sd = (struct stat_data *)B_I_PITEM (bh, ih);
 
+	uid    = sd_v2_uid(sd);
+	gid    = sd_v2_gid(sd);
+
 	inode->i_mode   = sd_v2_mode(sd);
 	inode->i_nlink  = sd_v2_nlink(sd);
-	inode->i_uid    = sd_v2_uid(sd);
 	inode->i_size   = sd_v2_size(sd);
-	inode->i_gid    = sd_v2_gid(sd);
 	inode->i_mtime.tv_sec  = sd_v2_mtime(sd);
 	inode->i_atime.tv_sec = sd_v2_atime(sd);
 	inode->i_ctime.tv_sec  = sd_v2_ctime(sd);
@@ -1146,6 +1151,9 @@ static void init_inode (struct inode * inode, struct path * path)
 	REISERFS_I(inode)->i_attrs = sd_v2_attrs( sd );
 	sd_attrs_to_i_attrs( sd_v2_attrs( sd ), inode );
     }
+    inode->i_uid = INOXID_UID(XID_TAG(inode), uid, gid);
+    inode->i_gid = INOXID_GID(XID_TAG(inode), uid, gid);
+    inode->i_xid = INOXID_XID(XID_TAG(inode), uid, gid, 0);
 
     pathrelse (path);
     if (S_ISREG (inode->i_mode)) {
@@ -1170,13 +1178,15 @@ static void init_inode (struct inode * inode, struct path * path)
 static void inode2sd (void * sd, struct inode * inode, loff_t size)
 {
     struct stat_data * sd_v2 = (struct stat_data *)sd;
+    uid_t uid = XIDINO_UID(XID_TAG(inode), inode->i_uid, inode->i_xid);
+    gid_t gid = XIDINO_GID(XID_TAG(inode), inode->i_gid, inode->i_xid);
     __u16 flags;
 
+    set_sd_v2_uid(sd_v2, uid );
+    set_sd_v2_gid(sd_v2, gid );
     set_sd_v2_mode(sd_v2, inode->i_mode );
     set_sd_v2_nlink(sd_v2, inode->i_nlink );
-    set_sd_v2_uid(sd_v2, inode->i_uid );
     set_sd_v2_size(sd_v2, size );
-    set_sd_v2_gid(sd_v2, inode->i_gid );
     set_sd_v2_mtime(sd_v2, inode->i_mtime.tv_sec );
     set_sd_v2_atime(sd_v2, inode->i_atime.tv_sec );
     set_sd_v2_ctime(sd_v2, inode->i_ctime.tv_sec );
@@ -2552,6 +2562,14 @@ void sd_attrs_to_i_attrs( __u16 sd_attrs, struct inode *inode )
 			inode -> i_flags |= S_IMMUTABLE;
 		else
 			inode -> i_flags &= ~S_IMMUTABLE;
+		if( sd_attrs & REISERFS_IUNLINK_FL )
+			inode -> i_flags |= S_IUNLINK;
+		else
+			inode -> i_flags &= ~S_IUNLINK;
+		if( sd_attrs & REISERFS_BARRIER_FL )
+			inode -> i_flags |= S_BARRIER;
+		else
+			inode -> i_flags &= ~S_BARRIER;
 		if( sd_attrs & REISERFS_APPEND_FL )
 			inode -> i_flags |= S_APPEND;
 		else
@@ -2574,6 +2592,14 @@ void i_attrs_to_sd_attrs( struct inode *inode, __u16 *sd_attrs )
 			*sd_attrs |= REISERFS_IMMUTABLE_FL;
 		else
 			*sd_attrs &= ~REISERFS_IMMUTABLE_FL;
+		if( inode -> i_flags & S_IUNLINK )
+			*sd_attrs |= REISERFS_IUNLINK_FL;
+		else
+			*sd_attrs &= ~REISERFS_IUNLINK_FL;
+		if( inode -> i_flags & S_BARRIER )
+			*sd_attrs |= REISERFS_BARRIER_FL;
+		else
+			*sd_attrs &= ~REISERFS_BARRIER_FL;
 		if( inode -> i_flags & S_SYNC )
 			*sd_attrs |= REISERFS_SYNC_FL;
 		else
@@ -2746,6 +2772,27 @@ static ssize_t reiserfs_direct_IO(int rw, struct kiocb *iocb,
 			offset, nr_segs, reiserfs_get_blocks_direct_io, NULL);
 }
 
+int reiserfs_setattr_flags(struct inode *inode, unsigned int flags)
+{
+	unsigned int oldflags, newflags;
+
+	oldflags = REISERFS_I(inode)->i_flags;
+	newflags = oldflags & ~(REISERFS_IMMUTABLE_FL |
+		REISERFS_IUNLINK_FL | REISERFS_BARRIER_FL);
+	if (flags & ATTR_FLAG_IMMUTABLE)
+		newflags |= REISERFS_IMMUTABLE_FL;
+	if (flags & ATTR_FLAG_IUNLINK)
+		newflags |= REISERFS_IUNLINK_FL;
+	if (flags & ATTR_FLAG_BARRIER)
+		newflags |= REISERFS_BARRIER_FL;
+
+	if (oldflags ^ newflags) {
+		REISERFS_I(inode)->i_flags = newflags;
+		inode->i_ctime = CURRENT_TIME;
+	}
+	return 0;
+}
+
 int reiserfs_setattr(struct dentry *dentry, struct iattr *attr) {
     struct inode *inode = dentry->d_inode ;
     int error ;
@@ -2789,6 +2836,10 @@ int reiserfs_setattr(struct dentry *dentry, struct iattr *attr) {
 	}
 
     error = inode_change_ok(inode, attr) ;
+
+    if (!error && attr->ia_valid & ATTR_ATTR_FLAG)
+	reiserfs_setattr_flags(inode, attr->ia_attr_flags);
+
     if (!error) {
 	if ((ia_valid & ATTR_UID && attr->ia_uid != inode->i_uid) ||
 	    (ia_valid & ATTR_GID && attr->ia_gid != inode->i_gid)) {

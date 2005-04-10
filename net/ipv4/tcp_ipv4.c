@@ -74,6 +74,7 @@
 #include <linux/stddef.h>
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
+#include <linux/vserver/debug.h>
 
 extern int sysctl_ip_dynaddr;
 int sysctl_tcp_tw_reuse;
@@ -181,7 +182,6 @@ void tcp_bind_hash(struct sock *sk, struct tcp_bind_bucket *tb,
 
 static inline int tcp_bind_conflict(struct sock *sk, struct tcp_bind_bucket *tb)
 {
-	const u32 sk_rcv_saddr = tcp_v4_rcv_saddr(sk);
 	struct sock *sk2;
 	struct hlist_node *node;
 	int reuse = sk->sk_reuse;
@@ -194,9 +194,8 @@ static inline int tcp_bind_conflict(struct sock *sk, struct tcp_bind_bucket *tb)
 		     sk->sk_bound_dev_if == sk2->sk_bound_dev_if)) {
 			if (!reuse || !sk2->sk_reuse ||
 			    sk2->sk_state == TCP_LISTEN) {
-				const u32 sk2_rcv_saddr = tcp_v4_rcv_saddr(sk2);
-				if (!sk2_rcv_saddr || !sk_rcv_saddr ||
-				    sk2_rcv_saddr == sk_rcv_saddr)
+				if (nx_addr_conflict(sk->sk_nx_info,
+					tcp_v4_rcv_saddr(sk), sk2))
 					break;
 			}
 		}
@@ -405,6 +404,26 @@ void tcp_unhash(struct sock *sk)
 		wake_up(&tcp_lhash_wait);
 }
 
+
+/*
+ *      Check if a given address matches for a tcp socket
+ *
+ *      nxi:	the socket's nx_info if any
+ *      addr:	to be verified address
+ *      saddr:	socket addresses
+ */
+static inline int tcp_addr_match (
+	struct nx_info *nxi,
+	uint32_t addr,
+	uint32_t saddr)
+{
+	if (addr && (saddr == addr))
+		return 1;
+	if (!saddr)
+		return addr_in_nx_info(nxi, addr);
+	return 0;
+}
+
 /* Don't inline this cruft.  Here are some nice properties to
  * exploit here.  The BSD API does not allow a listening TCP
  * to specify the remote port nor the remote address for the
@@ -426,11 +445,10 @@ static struct sock *__tcp_v4_lookup_listener(struct hlist_head *head, u32 daddr,
 			__u32 rcv_saddr = inet->rcv_saddr;
 
 			score = (sk->sk_family == PF_INET ? 1 : 0);
-			if (rcv_saddr) {
-				if (rcv_saddr != daddr)
-					continue;
+			if (tcp_addr_match(sk->sk_nx_info, daddr, rcv_saddr))
 				score+=2;
-			}
+			else
+				continue;
 			if (sk->sk_bound_dev_if) {
 				if (sk->sk_bound_dev_if != dif)
 					continue;
@@ -460,8 +478,8 @@ static inline struct sock *tcp_v4_lookup_listener(u32 daddr,
 		struct inet_sock *inet = inet_sk((sk = __sk_head(head)));
 
 		if (inet->num == hnum && !sk->sk_node.next &&
-		    (!inet->rcv_saddr || inet->rcv_saddr == daddr) &&
 		    (sk->sk_family == PF_INET || !ipv6_only_sock(sk)) &&
+		    tcp_addr_match(sk->sk_nx_info, daddr, inet->rcv_saddr) &&
 		    !sk->sk_bound_dev_if)
 			goto sherry_cache;
 		sk = __tcp_v4_lookup_listener(head, daddr, hnum, dif);
@@ -2147,6 +2165,12 @@ static void *listening_get_next(struct seq_file *seq, void *cur)
 		req = req->dl_next;
 		while (1) {
 			while (req) {
+				vxdprintk(VXD_CBIT(net, 6),
+					"sk,req: %p [#%d] (from %d)", req->sk,
+					(req->sk)?req->sk->sk_xid:0, vx_current_xid());
+				if (req->sk &&
+					!vx_check(req->sk->sk_xid, VX_IDENT|VX_WATCH))
+					continue;
 				if (req->class->family == st->family) {
 					cur = req;
 					goto out;
@@ -2171,6 +2195,10 @@ get_req:
 	}
 get_sk:
 	sk_for_each_from(sk, node) {
+		vxdprintk(VXD_CBIT(net, 6), "sk: %p [#%d] (from %d)",
+			sk, sk->sk_xid, vx_current_xid());
+		if (!vx_check(sk->sk_xid, VX_IDENT|VX_WATCH))
+			continue;
 		if (sk->sk_family == st->family) {
 			cur = sk;
 			goto out;
@@ -2222,18 +2250,26 @@ static void *established_get_first(struct seq_file *seq)
 
 		read_lock(&tcp_ehash[st->bucket].lock);
 		sk_for_each(sk, node, &tcp_ehash[st->bucket].chain) {
-			if (sk->sk_family != st->family) {
+			vxdprintk(VXD_CBIT(net, 6),
+				"sk,egf: %p [#%d] (from %d)",
+				sk, sk->sk_xid, vx_current_xid());
+			if (!vx_check(sk->sk_xid, VX_IDENT|VX_WATCH))
 				continue;
-			}
+			if (sk->sk_family != st->family)
+				continue;
 			rc = sk;
 			goto out;
 		}
 		st->state = TCP_SEQ_STATE_TIME_WAIT;
 		tw_for_each(tw, node,
 			    &tcp_ehash[st->bucket + tcp_ehash_size].chain) {
-			if (tw->tw_family != st->family) {
+			vxdprintk(VXD_CBIT(net, 6),
+				"tw: %p [#%d] (from %d)",
+				tw, tw->tw_xid, vx_current_xid());
+			if (!vx_check(tw->tw_xid, VX_IDENT|VX_WATCH))
 				continue;
-			}
+			if (tw->tw_family != st->family)
+				continue;
 			rc = tw;
 			goto out;
 		}
@@ -2257,7 +2293,8 @@ static void *established_get_next(struct seq_file *seq, void *cur)
 		tw = cur;
 		tw = tw_next(tw);
 get_tw:
-		while (tw && tw->tw_family != st->family) {
+		while (tw && (tw->tw_family != st->family ||
+			!vx_check(tw->tw_xid, VX_IDENT|VX_WATCH))) {
 			tw = tw_next(tw);
 		}
 		if (tw) {
@@ -2281,6 +2318,11 @@ get_tw:
 		sk = sk_next(sk);
 
 	sk_for_each_from(sk, node) {
+		vxdprintk(VXD_CBIT(net, 6),
+			"sk,egn: %p [#%d] (from %d)",
+			sk, sk->sk_xid, vx_current_xid());
+		if (!vx_check(sk->sk_xid, VX_IDENT|VX_WATCH))
+			continue;
 		if (sk->sk_family == st->family)
 			goto found;
 	}

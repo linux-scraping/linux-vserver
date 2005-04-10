@@ -22,7 +22,7 @@ static int reiserfs_unpack (struct inode * inode, struct file * filp);
 int reiserfs_ioctl (struct inode * inode, struct file * filp, unsigned int cmd,
 		unsigned long arg)
 {
-	unsigned int flags;
+	unsigned int flags, oldflags;
 
 	switch (cmd) {
 	    case REISERFS_IOC_UNPACK:
@@ -38,9 +38,11 @@ int reiserfs_ioctl (struct inode * inode, struct file * filp, unsigned int cmd,
 	case REISERFS_IOC_GETFLAGS:
 		flags = REISERFS_I(inode) -> i_attrs;
 		i_attrs_to_sd_attrs( inode, ( __u16 * ) &flags );
+		flags &= REISERFS_FL_USER_VISIBLE;
 		return put_user(flags, (int __user *) arg);
 	case REISERFS_IOC_SETFLAGS: {
-		if (IS_RDONLY(inode))
+		if (IS_RDONLY(inode) ||
+			(filp && MNT_IS_RDONLY(filp->f_vfsmnt)))
 			return -EROFS;
 
 		if ((current->fsuid != inode->i_uid) && !capable(CAP_FOWNER))
@@ -49,8 +51,12 @@ int reiserfs_ioctl (struct inode * inode, struct file * filp, unsigned int cmd,
 		if (get_user(flags, (int __user *) arg))
 			return -EFAULT;
 
-		if ( ( ( flags ^ REISERFS_I(inode) -> i_attrs) & ( REISERFS_IMMUTABLE_FL | REISERFS_APPEND_FL)) &&
-		     !capable( CAP_LINUX_IMMUTABLE ) )
+		oldflags = REISERFS_I(inode) -> i_attrs;
+		if ( ( (oldflags & REISERFS_IMMUTABLE_FL) ||
+			( (flags ^ oldflags) &
+			(REISERFS_IMMUTABLE_FL | REISERFS_IUNLINK_FL |
+			 REISERFS_APPEND_FL) ) ) &&
+			!capable( CAP_LINUX_IMMUTABLE ) )
 			return -EPERM;
 			
 		if( ( flags & REISERFS_NOTAIL_FL ) &&
@@ -61,6 +67,9 @@ int reiserfs_ioctl (struct inode * inode, struct file * filp, unsigned int cmd,
 				if( result )
 					return result;
 		}
+
+		flags = flags & REISERFS_FL_USER_MODIFYABLE;
+		flags |= oldflags & ~REISERFS_FL_USER_MODIFYABLE;
 		sd_attrs_to_i_attrs( flags, inode );
 		REISERFS_I(inode) -> i_attrs = flags;
 		inode->i_ctime = CURRENT_TIME_SEC;
@@ -72,7 +81,8 @@ int reiserfs_ioctl (struct inode * inode, struct file * filp, unsigned int cmd,
 	case REISERFS_IOC_SETVERSION:
 		if ((current->fsuid != inode->i_uid) && !capable(CAP_FOWNER))
 			return -EPERM;
-		if (IS_RDONLY(inode))
+		if (IS_RDONLY(inode) ||
+			(filp && MNT_IS_RDONLY(filp->f_vfsmnt)))
 			return -EROFS;
 		if (get_user(inode->i_generation, (int __user *) arg))
 			return -EFAULT;	

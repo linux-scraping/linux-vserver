@@ -15,6 +15,7 @@
 #include <linux/module.h>
 #include <linux/security.h>
 #include <linux/ptrace.h>
+#include <linux/vs_limit.h>
 
 #include <asm/poll.h>
 #include <asm/siginfo.h>
@@ -76,6 +77,8 @@ repeat:
 	error = -EMFILE;
 	if (newfd >= current->signal->rlim[RLIMIT_NOFILE].rlim_cur)
 		goto out;
+	if (!vx_files_avail(1))
+		goto out;
 
 	error = expand_files(files, newfd);
 	if (error < 0)
@@ -108,6 +111,7 @@ static int dupfd(struct file *file, unsigned int start)
 		FD_SET(fd, files->open_fds);
 		FD_CLR(fd, files->close_on_exec);
 		spin_unlock(&files->file_lock);
+		vx_openfd_inc(fd);
 		fd_install(fd, file);
 	} else {
 		spin_unlock(&files->file_lock);
@@ -158,6 +162,9 @@ asmlinkage long sys_dup2(unsigned int oldfd, unsigned int newfd)
 
 	if (tofree)
 		filp_close(tofree, files);
+	else
+		vx_openfd_inc(newfd);	/* fd was unused */
+
 	err = newfd;
 out:
 	return err;
@@ -457,7 +464,7 @@ void send_sigio(struct fown_struct *fown, int fd, int band)
 	
 	read_lock(&tasklist_lock);
 	if (pid > 0) {
-		p = find_task_by_pid(pid);
+		p = find_task_by_real_pid(pid);
 		if (p) {
 			send_sigio_to_task(p, fown, fd, band);
 		}
@@ -492,7 +499,7 @@ int send_sigurg(struct fown_struct *fown)
 	
 	read_lock(&tasklist_lock);
 	if (pid > 0) {
-		p = find_task_by_pid(pid);
+		p = find_task_by_real_pid(pid);
 		if (p) {
 			send_sigurg_to_task(p, fown);
 		}

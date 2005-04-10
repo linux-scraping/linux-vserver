@@ -848,6 +848,7 @@ static int reiserfs_parse_options (struct super_block * s, char * options, /* st
 	{"user_xattr",	.setmask = 1<<REISERFS_UNSUPPORTED_OPT},
 	{"nouser_xattr",.clrmask = 1<<REISERFS_UNSUPPORTED_OPT},
 #endif
+	{"tagxid",	.setmask = 1<<REISERFS_TAGXID},
 #ifdef CONFIG_REISERFS_FS_POSIX_ACL
 	{"acl",		.setmask = 1<<REISERFS_POSIXACL},
 	{"noacl",	.clrmask = 1<<REISERFS_POSIXACL},

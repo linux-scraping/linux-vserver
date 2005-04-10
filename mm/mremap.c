@@ -17,6 +17,7 @@
 #include <linux/highmem.h>
 #include <linux/security.h>
 #include <linux/syscalls.h>
+#include <linux/vs_memory.h>
 
 #include <asm/uaccess.h>
 #include <asm/cacheflush.h>
@@ -237,10 +238,12 @@ static unsigned long move_vma(struct vm_area_struct *vma,
 			vma->vm_next->vm_flags |= VM_ACCOUNT;
 	}
 
-	mm->total_vm += new_len >> PAGE_SHIFT;
+	// mm->total_vm += new_len >> PAGE_SHIFT;
+	vx_vmpages_add(mm, new_len >> PAGE_SHIFT);
 	__vm_stat_account(mm, vma->vm_flags, vma->vm_file, new_len>>PAGE_SHIFT);
 	if (vm_flags & VM_LOCKED) {
-		mm->locked_vm += new_len >> PAGE_SHIFT;
+		// mm->locked_vm += new_len >> PAGE_SHIFT;
+		vx_vmlocked_add(mm, new_len >> PAGE_SHIFT);
 		if (new_len > old_len)
 			make_pages_present(new_addr + old_len,
 					   new_addr + new_len);
@@ -346,10 +349,17 @@ unsigned long do_mremap(unsigned long addr,
 		ret = -EAGAIN;
 		if (locked > lock_limit && !capable(CAP_IPC_LOCK))
 			goto out;
+		ret = -ENOMEM;
+		if (!vx_vmlocked_avail(current->mm,
+			(new_len - old_len) >> PAGE_SHIFT))
+			goto out;
 	}
 	ret = -ENOMEM;
 	if ((current->mm->total_vm << PAGE_SHIFT) + (new_len - old_len)
 	    > current->signal->rlim[RLIMIT_AS].rlim_cur)
+		goto out;
+	/* check context space, maybe only Private writable mapping? */
+	if (!vx_vmpages_avail(current->mm, (new_len - old_len) >> PAGE_SHIFT))
 		goto out;
 
 	if (vma->vm_flags & VM_ACCOUNT) {
@@ -374,11 +384,13 @@ unsigned long do_mremap(unsigned long addr,
 			vma_adjust(vma, vma->vm_start,
 				addr + new_len, vma->vm_pgoff, NULL);
 
-			current->mm->total_vm += pages;
+			// current->mm->total_vm += pages;
+			vx_vmpages_add(current->mm, pages);
 			__vm_stat_account(vma->vm_mm, vma->vm_flags,
 							vma->vm_file, pages);
 			if (vma->vm_flags & VM_LOCKED) {
-				current->mm->locked_vm += pages;
+				// current->mm->locked_vm += pages;
+				vx_vmlocked_add(vma->vm_mm, pages);
 				make_pages_present(addr + old_len,
 						   addr + new_len);
 			}

@@ -315,6 +315,12 @@ config BLK_DEV_CRYPTOLOOP
 	  instead, which can be configured to be on-disk compatible with the
 	  cryptoloop device.
 
+config BLK_DEV_VROOT
+	tristate "Virtual Root device support"
+	---help---
+	  Saying Y here will allow you to use quota/fs ioctls on a shared
+	  partition within a virtual server without compromising security.
+
 config BLK_DEV_NBD
 	tristate "Network block device support"
 	depends on NET

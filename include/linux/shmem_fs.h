@@ -8,6 +8,9 @@
 
 #define SHMEM_NR_DIRECT 16
 
+#define TMPFS_SUPER_MAGIC	0x01021994
+
+
 struct shmem_inode_info {
 	spinlock_t		lock;
 	unsigned long		flags;

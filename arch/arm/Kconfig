@@ -729,6 +729,8 @@ source "arch/arm/oprofile/Kconfig"
 
 source "arch/arm/Kconfig.debug"
 
+source "kernel/vserver/Kconfig"
+
 source "security/Kconfig"
 
 source "crypto/Kconfig"

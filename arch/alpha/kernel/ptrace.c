@@ -288,6 +288,8 @@ do_sys_ptrace(long request, long pid, long addr, long data,
 	read_unlock(&tasklist_lock);
 	if (!child)
 		goto out_notsk;
+	if (!vx_check(vx_task_xid(child), VX_WATCH|VX_IDENT))
+		goto out;
 
 	if (request == PTRACE_ATTACH) {
 		ret = ptrace_attach(child);

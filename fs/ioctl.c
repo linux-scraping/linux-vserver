@@ -12,9 +12,18 @@
 #include <linux/fs.h>
 #include <linux/security.h>
 #include <linux/module.h>
+#include <linux/proc_fs.h>
+#include <linux/vserver/inode.h>
+#include <linux/vserver/xid.h>
 
 #include <asm/uaccess.h>
 #include <asm/ioctls.h>
+
+
+#ifdef	CONFIG_VSERVER_LEGACY
+extern int vx_proc_ioctl(struct inode *, struct file *,
+	unsigned int, unsigned long);
+#endif
 
 static long do_ioctl(struct file *filp, unsigned int cmd,
 		unsigned long arg)
@@ -146,6 +155,48 @@ int vfs_ioctl(struct file *filp, unsigned int fd, unsigned int cmd, unsigned lon
 			else
 				error = -ENOTTY;
 			break;
+#ifdef	CONFIG_VSERVER_LEGACY
+#ifndef CONFIG_INOXID_NONE
+		case FIOC_GETXID: {
+			struct inode *inode = filp->f_dentry->d_inode;
+
+			/* fixme: if stealth, return -ENOTTY */
+			error = -EPERM;
+			if (capable(CAP_CONTEXT))
+				error = put_user(inode->i_xid, (int *) arg);
+			break;
+		}
+		case FIOC_SETXID: {
+			struct inode *inode = filp->f_dentry->d_inode;
+			int xid;
+
+			/* fixme: if stealth, return -ENOTTY */
+			error = -EPERM;
+			if (!capable(CAP_CONTEXT))
+				break;
+			error = -EROFS;
+			if (IS_RDONLY(inode))
+				break;
+			error = -ENOSYS;
+			if (!(inode->i_sb->s_flags & MS_TAGXID))
+				break;
+			error = -EFAULT;
+			if (get_user(xid, (int *) arg))
+				break;
+			error = 0;
+			inode->i_xid = (xid & 0xFFFF);
+			inode->i_ctime = CURRENT_TIME;
+			mark_inode_dirty(inode);
+			break;
+		}
+#endif
+		case FIOC_GETXFLG:
+		case FIOC_SETXFLG:
+			error = -ENOTTY;
+			if (filp->f_dentry->d_inode->i_sb->s_magic == PROC_SUPER_MAGIC)
+				error = vx_proc_ioctl(filp->f_dentry->d_inode, filp, cmd, arg);
+			break;
+#endif
 		default:
 			if (S_ISREG(filp->f_dentry->d_inode->i_mode))
 				error = file_ioctl(filp, cmd, arg);

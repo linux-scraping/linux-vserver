@@ -11,8 +11,6 @@
 
 #include "sysfs.h"
 
-/* Random magic number */
-#define SYSFS_MAGIC 0x62656572
 
 struct vfsmount *sysfs_mount;
 struct super_block * sysfs_sb = NULL;
@@ -37,7 +35,7 @@ static int sysfs_fill_super(struct super_block *sb, void *data, int silent)
 
 	sb->s_blocksize = PAGE_CACHE_SIZE;
 	sb->s_blocksize_bits = PAGE_CACHE_SHIFT;
-	sb->s_magic = SYSFS_MAGIC;
+	sb->s_magic = SYSFS_SUPER_MAGIC;
 	sb->s_op = &sysfs_ops;
 	sb->s_time_gran = 1;
 	sysfs_sb = sb;

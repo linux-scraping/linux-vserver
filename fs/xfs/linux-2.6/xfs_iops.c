@@ -468,6 +468,28 @@ linvfs_getattr(
 }
 
 STATIC int
+linvfs_setattr_flags(
+	vattr_t *vap,
+	unsigned int flags)
+{
+	unsigned int oldflags, newflags;
+
+	oldflags = vap->va_xflags;
+	newflags = oldflags & ~(XFS_XFLAG_IMMUTABLE |
+		XFS_XFLAG_IUNLINK | XFS_XFLAG_BARRIER);
+	if (flags & ATTR_FLAG_IMMUTABLE)
+		newflags |= XFS_XFLAG_IMMUTABLE;
+	if (flags & ATTR_FLAG_IUNLINK)
+		newflags |= XFS_XFLAG_IUNLINK;
+	if (flags & ATTR_FLAG_BARRIER)
+		newflags |= XFS_XFLAG_BARRIER;
+
+	if (oldflags ^ newflags)
+		vap->va_xflags = newflags;
+	return 0;
+}
+
+STATIC int
 linvfs_setattr(
 	struct dentry	*dentry,
 	struct iattr	*attr)
@@ -517,6 +539,11 @@ linvfs_setattr(
 	if ((ia_valid & ATTR_NO_BLOCK))
 		flags |= ATTR_NONBLOCK;
 #endif
+
+	if (ia_valid & ATTR_ATTR_FLAG) {
+		vattr.va_mask |= XFS_AT_XFLAGS;
+		linvfs_setattr_flags(&vattr, attr->ia_attr_flags);
+	}
 
 	VOP_SETATTR(vp, &vattr, flags, NULL, error);
 	if (error)

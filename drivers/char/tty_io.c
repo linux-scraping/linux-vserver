@@ -102,6 +102,7 @@
 #include <linux/vt_kern.h>
 #include <linux/selection.h>
 #include <linux/devfs_fs_kernel.h>
+#include <linux/vs_cvirt.h>
 
 #include <linux/kmod.h>
 
@@ -2115,13 +2116,16 @@ static int tiocsctty(struct tty_struct *tty, int arg)
 
 static int tiocgpgrp(struct tty_struct *tty, struct tty_struct *real_tty, pid_t __user *p)
 {
+	pid_t pgrp;
 	/*
 	 * (tty == real_tty) is a cheap way of
 	 * testing if the tty is NOT a master pty.
 	 */
 	if (tty == real_tty && current->signal->tty != real_tty)
 		return -ENOTTY;
-	return put_user(real_tty->pgrp, p);
+
+	pgrp = vx_map_pid(real_tty->pgrp);
+	return put_user(pgrp, p);
 }
 
 static int tiocspgrp(struct tty_struct *tty, struct tty_struct *real_tty, pid_t __user *p)
@@ -2139,6 +2143,8 @@ static int tiocspgrp(struct tty_struct *tty, struct tty_struct *real_tty, pid_t 
 		return -ENOTTY;
 	if (get_user(pgrp, p))
 		return -EFAULT;
+
+	pgrp = vx_rmap_pid(pgrp);
 	if (pgrp < 0)
 		return -EINVAL;
 	if (session_of_pgrp(pgrp) != current->signal->session)

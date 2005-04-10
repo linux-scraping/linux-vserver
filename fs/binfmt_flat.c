@@ -36,6 +36,7 @@
 #include <linux/personality.h>
 #include <linux/init.h>
 #include <linux/flat.h>
+#include <linux/vs_memory.h>
 
 #include <asm/byteorder.h>
 #include <asm/system.h>
@@ -650,7 +651,8 @@ static int load_flat_file(struct linux_binprm * bprm,
 		current->mm->start_brk = datapos + data_len + bss_len;
 		current->mm->brk = (current->mm->start_brk + 3) & ~3;
 		current->mm->context.end_brk = memp + ksize((void *) memp) - stack_len;
-		set_mm_counter(current->mm, rss, 0);
+		// set_mm_counter(current->mm, rss, 0);
+		vx_rsspages_sub(current->mm, current->mm->rss);
 	}
 
 	if (flags & FLAT_FLAG_KTRACE)

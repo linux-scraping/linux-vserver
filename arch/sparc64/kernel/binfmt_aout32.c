@@ -27,6 +27,7 @@
 #include <linux/binfmts.h>
 #include <linux/personality.h>
 #include <linux/init.h>
+#include <linux/vs_memory.h>
 
 #include <asm/system.h>
 #include <asm/uaccess.h>
@@ -241,7 +242,8 @@ static int load_aout32_binary(struct linux_binprm * bprm, struct pt_regs * regs)
 	current->mm->brk = ex.a_bss +
 		(current->mm->start_brk = N_BSSADDR(ex));
 
-	set_mm_counter(current->mm, rss, 0);
+	// set_mm_counter(current->mm, rss, 0);
+	vx_rsspages_sub(current->mm, current->mm->rss);
 	current->mm->mmap = NULL;
 	compute_creds(bprm);
  	current->flags &= ~PF_FORKNOEXEC;

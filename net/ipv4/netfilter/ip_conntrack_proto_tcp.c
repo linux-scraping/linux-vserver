@@ -88,7 +88,11 @@ static const char *tcp_conntrack_names[] = {
 
 unsigned long ip_ct_tcp_timeout_syn_sent =      2 MINS;
 unsigned long ip_ct_tcp_timeout_syn_recv =     60 SECS;
-unsigned long ip_ct_tcp_timeout_established =   5 DAYS;
+#if HZ < 9942
+unsigned long ip_ct_tcp_timeout_established =  5U DAYS;
+#else
+unsigned long ip_ct_tcp_timeout_established =  2U DAYS;
+#endif
 unsigned long ip_ct_tcp_timeout_fin_wait =      2 MINS;
 unsigned long ip_ct_tcp_timeout_close_wait =   60 SECS;
 unsigned long ip_ct_tcp_timeout_last_ack =     30 SECS;

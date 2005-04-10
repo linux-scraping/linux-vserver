@@ -1,8 +1,14 @@
 #ifndef _ASMi386_PARAM_H
 #define _ASMi386_PARAM_H
 
+#include <linux/config.h>
+
 #ifdef __KERNEL__
-# define HZ		1000		/* Internal kernel timer frequency */
+# ifdef CONFIG_KERNEL_HZ
+#  define HZ		CONFIG_KERNEL_HZ
+# else
+#  define HZ		1000		/* Internal kernel timer frequency */
+# endif
 # define USER_HZ	100		/* .. some user interfaces are in "ticks" */
 # define CLOCKS_PER_SEC		(USER_HZ)	/* like times() */
 #endif

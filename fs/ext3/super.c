@@ -582,7 +582,7 @@ enum {
 	Opt_abort, Opt_data_journal, Opt_data_ordered, Opt_data_writeback,
 	Opt_usrjquota, Opt_grpjquota, Opt_offusrjquota, Opt_offgrpjquota,
 	Opt_jqfmt_vfsold, Opt_jqfmt_vfsv0,
-	Opt_ignore, Opt_barrier, Opt_err, Opt_resize,
+	Opt_tagxid, Opt_barrier, Opt_ignore, Opt_err, Opt_resize,
 };
 
 static match_table_t tokens = {
@@ -626,6 +626,7 @@ static match_table_t tokens = {
 	{Opt_grpjquota, "grpjquota=%s"},
 	{Opt_jqfmt_vfsold, "jqfmt=vfsold"},
 	{Opt_jqfmt_vfsv0, "jqfmt=vfsv0"},
+	{Opt_tagxid, "tagxid"},
 	{Opt_ignore, "grpquota"},
 	{Opt_ignore, "noquota"},
 	{Opt_ignore, "quota"},
@@ -722,6 +723,16 @@ static int parse_options (char * options, struct super_block *sb,
 		case Opt_nouid32:
 			set_opt (sbi->s_mount_opt, NO_UID32);
 			break;
+#ifndef CONFIG_INOXID_NONE
+		case Opt_tagxid:
+			if (is_remount) {
+				printk(KERN_ERR "EXT3-fs: cannot specify "
+				       "tagxid on remount\n");
+				return 0;
+			}
+			set_opt (sbi->s_mount_opt, TAG_XID);
+			break;
+#endif
 		case Opt_check:
 #ifdef CONFIG_EXT3_CHECK
 			set_opt (sbi->s_mount_opt, CHECK);
@@ -1324,6 +1335,9 @@ static int ext3_fill_super (struct super_block *sb, void *data, int silent)
 
 	if (!parse_options ((char *) data, sb, &journal_inum, NULL, 0))
 		goto failed_mount;
+
+	if (EXT3_SB(sb)->s_mount_opt & EXT3_MOUNT_TAG_XID)
+		sb->s_flags |= MS_TAGXID;
 
 	sb->s_flags = (sb->s_flags & ~MS_POSIXACL) |
 		((sbi->s_mount_opt & EXT3_MOUNT_POSIX_ACL) ? MS_POSIXACL : 0);

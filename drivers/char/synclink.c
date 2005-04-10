@@ -4376,7 +4376,11 @@ static struct mgsl_struct* mgsl_allocate_device(void)
 		INIT_WORK(&info->task, mgsl_bh_handler, info);
 		info->max_frame_size = 4096;
 		info->close_delay = 5*HZ/10;
+		#if HZ < 2185
 		info->closing_wait = 30*HZ;
+		#else
+		info->closing_wait = 65534;
+		#endif
 		init_waitqueue_head(&info->open_wait);
 		init_waitqueue_head(&info->close_wait);
 		init_waitqueue_head(&info->status_event_wait_q);

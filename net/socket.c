@@ -93,6 +93,7 @@
 
 #include <net/sock.h>
 #include <linux/netfilter.h>
+#include <linux/vs_socket.h>
 
 static int sock_no_open(struct inode *irrelevant, struct file *dontcare);
 static ssize_t sock_aio_read(struct kiocb *iocb, char __user *buf,
@@ -530,7 +531,7 @@ static inline int __sock_sendmsg(struct kiocb *iocb, struct socket *sock,
 				 struct msghdr *msg, size_t size)
 {
 	struct sock_iocb *si = kiocb_to_siocb(iocb);
-	int err;
+	int err, len;
 
 	si->sock = sock;
 	si->scm = NULL;
@@ -541,7 +542,21 @@ static inline int __sock_sendmsg(struct kiocb *iocb, struct socket *sock,
 	if (err)
 		return err;
 
-	return sock->ops->sendmsg(iocb, sock, msg, size);
+	len = sock->ops->sendmsg(iocb, sock, msg, size);
+	if (sock->sk) {
+		if (len == size)
+			vx_sock_send(sock->sk, size);
+		else
+			vx_sock_fail(sock->sk, size);
+	}
+	vxdprintk(VXD_CBIT(net, 7),
+		"__sock_sendmsg: %p[%p,%p,%p;%d]:%d/%d",
+		sock, sock->sk,
+		(sock->sk)?sock->sk->sk_nx_info:0,
+		(sock->sk)?sock->sk->sk_vx_info:0,
+		(sock->sk)?sock->sk->sk_xid:0,
+		(unsigned int)size, len);
+	return len;
 }
 
 int sock_sendmsg(struct socket *sock, struct msghdr *msg, size_t size)
@@ -579,7 +594,7 @@ int kernel_sendmsg(struct socket *sock, struct msghdr *msg,
 static inline int __sock_recvmsg(struct kiocb *iocb, struct socket *sock, 
 				 struct msghdr *msg, size_t size, int flags)
 {
-	int err;
+	int err, len;
 	struct sock_iocb *si = kiocb_to_siocb(iocb);
 
 	si->sock = sock;
@@ -592,7 +607,17 @@ static inline int __sock_recvmsg(struct kiocb *iocb, struct socket *sock,
 	if (err)
 		return err;
 
-	return sock->ops->recvmsg(iocb, sock, msg, size, flags);
+	len = sock->ops->recvmsg(iocb, sock, msg, size, flags);
+	if ((len >= 0) && sock->sk)
+		vx_sock_recv(sock->sk, len);
+	vxdprintk(VXD_CBIT(net, 7),
+		"__sock_recvmsg: %p[%p,%p,%p;%d]:%d/%d",
+		sock, sock->sk,
+		(sock->sk)?sock->sk->sk_nx_info:0,
+		(sock->sk)?sock->sk->sk_vx_info:0,
+		(sock->sk)?sock->sk->sk_xid:0,
+		(unsigned int)size, len);
+	return len;
 }
 
 int sock_recvmsg(struct socket *sock, struct msghdr *msg, 
@@ -1079,6 +1104,10 @@ static int __sock_create(int family, int type, int protocol, struct socket **res
 	if (type < 0 || type >= SOCK_MAX)
 		return -EINVAL;
 
+	/* disable IPv6 inside vservers for now */
+	if (family == PF_INET6 && !vx_check(0, VX_ADMIN))
+		return -EAFNOSUPPORT;
+
 	/* Compatibility.
 
 	   This uglymoron is moved from INET layer to here to avoid
@@ -1186,6 +1215,7 @@ asmlinkage long sys_socket(int family, int type, int protocol)
 	if (retval < 0)
 		goto out;
 
+	set_bit(SOCK_USER_SOCKET, &sock->flags);
 	retval = sock_map_fd(sock);
 	if (retval < 0)
 		goto out_release;
@@ -1216,10 +1246,12 @@ asmlinkage long sys_socketpair(int family, int type, int protocol, int __user *u
 	err = sock_create(family, type, protocol, &sock1);
 	if (err < 0)
 		goto out;
+	set_bit(SOCK_USER_SOCKET, &sock1->flags);
 
 	err = sock_create(family, type, protocol, &sock2);
 	if (err < 0)
 		goto out_release_1;
+	set_bit(SOCK_USER_SOCKET, &sock2->flags);
 
 	err = sock1->ops->socketpair(sock1, sock2);
 	if (err < 0) 

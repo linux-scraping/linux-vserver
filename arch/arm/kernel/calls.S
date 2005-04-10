@@ -327,6 +327,7 @@ __syscall_start:
 /* 310 */	.long	sys_request_key
 		.long	sys_keyctl
 		.long	sys_semtimedop
+		.long	sys_vserver
 __syscall_end:
 
 		.rept	NR_syscalls - (__syscall_end - __syscall_start) / 4

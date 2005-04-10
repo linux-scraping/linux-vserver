@@ -192,10 +192,17 @@ struct ext2_group_desc
 #define EXT2_NOTAIL_FL			0x00008000 /* file tail should not be merged */
 #define EXT2_DIRSYNC_FL			0x00010000 /* dirsync behaviour (directories only) */
 #define EXT2_TOPDIR_FL			0x00020000 /* Top of directory hierarchies*/
+#define EXT2_BARRIER_FL			0x04000000 /* Barrier for chroot() */
+#define EXT2_IUNLINK_FL			0x08000000 /* Immutable unlink */
 #define EXT2_RESERVED_FL		0x80000000 /* reserved for ext2 lib */
 
+#ifdef CONFIG_VSERVER_LEGACY
+#define EXT2_FL_USER_VISIBLE		0x0803DFFF /* User visible flags */
+#define EXT2_FL_USER_MODIFIABLE		0x080380FF /* User modifiable flags */
+#else
 #define EXT2_FL_USER_VISIBLE		0x0003DFFF /* User visible flags */
 #define EXT2_FL_USER_MODIFIABLE		0x000380FF /* User modifiable flags */
+#endif
 
 /*
  * ioctl commands
@@ -240,7 +247,7 @@ struct ext2_inode {
 		struct {
 			__u8	l_i_frag;	/* Fragment number */
 			__u8	l_i_fsize;	/* Fragment size */
-			__u16	i_pad1;
+			__u16	l_i_xid;	/* LRU Context */
 			__le16	l_i_uid_high;	/* these 2 fields    */
 			__le16	l_i_gid_high;	/* were reserved2[0] */
 			__u32	l_i_reserved2;
@@ -272,6 +279,7 @@ struct ext2_inode {
 #define i_gid_low	i_gid
 #define i_uid_high	osd2.linux2.l_i_uid_high
 #define i_gid_high	osd2.linux2.l_i_gid_high
+#define i_raw_xid	osd2.linux2.l_i_xid
 #define i_reserved2	osd2.linux2.l_i_reserved2
 #endif
 
@@ -312,6 +320,7 @@ struct ext2_inode {
 #define EXT2_MOUNT_NO_UID32		0x0200  /* Disable 32-bit UIDs */
 #define EXT2_MOUNT_XATTR_USER		0x4000	/* Extended user attributes */
 #define EXT2_MOUNT_POSIX_ACL		0x8000	/* POSIX Access Control Lists */
+#define EXT2_MOUNT_TAG_XID		(1<<24) /* Enable Context Tags */
 
 #define clear_opt(o, opt)		o &= ~EXT2_MOUNT_##opt
 #define set_opt(o, opt)			o |= EXT2_MOUNT_##opt

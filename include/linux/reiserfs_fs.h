@@ -885,6 +885,18 @@ struct stat_data_v1
 #define REISERFS_COMPR_FL     EXT2_COMPR_FL
 #define REISERFS_NOTAIL_FL    EXT2_NOTAIL_FL
 
+/* unfortunately reiserfs sdattr is only 16 bit */
+#define REISERFS_BARRIER_FL   (EXT2_BARRIER_FL >> 16)
+#define REISERFS_IUNLINK_FL   (EXT2_IUNLINK_FL >> 16)
+
+#ifdef CONFIG_VSERVER_LEGACY
+#define REISERFS_FL_USER_VISIBLE	(REISERFS_IUNLINK_FL|0x80FF)
+#define REISERFS_FL_USER_MODIFYABLE	(REISERFS_IUNLINK_FL|0x80FF)
+#else
+#define REISERFS_FL_USER_VISIBLE	0x80FF
+#define REISERFS_FL_USER_MODIFYABLE	0x80FF
+#endif
+
 /* persistent flags that file inherits from the parent directory */
 #define REISERFS_INHERIT_MASK ( REISERFS_IMMUTABLE_FL |	\
 				REISERFS_SYNC_FL |	\

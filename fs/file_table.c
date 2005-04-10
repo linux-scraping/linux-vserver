@@ -16,6 +16,8 @@
 #include <linux/eventpoll.h>
 #include <linux/mount.h>
 #include <linux/cdev.h>
+#include <linux/vs_limit.h>
+#include <linux/vs_context.h>
 
 /* sysctl tunables... */
 struct files_stat_struct files_stat = {
@@ -85,6 +87,9 @@ static int old_max;
 			rwlock_init(&f->f_owner.lock);
 			/* f->f_version: 0 */
 			INIT_LIST_HEAD(&f->f_list);
+			// set_vx_info(&f->f_vx_info, current->vx_info);
+			f->f_xid = vx_current_xid();
+			vx_files_inc(f);
 			f->f_maxcount = INT_MAX;
 			return f;
 		}
@@ -138,6 +143,8 @@ void fastcall __fput(struct file *file)
 	fops_put(file->f_op);
 	if (file->f_mode & FMODE_WRITE)
 		put_write_access(inode);
+	vx_files_dec(file);
+	file->f_xid = 0;
 	file_kill(file);
 	file->f_dentry = NULL;
 	file->f_vfsmnt = NULL;
@@ -193,6 +200,8 @@ void put_filp(struct file *file)
 {
 	if (atomic_dec_and_test(&file->f_count)) {
 		security_file_free(file);
+		vx_files_dec(file);
+		file->f_xid = 0;
 		file_kill(file);
 		file_free(file);
 	}

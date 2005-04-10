@@ -124,6 +124,7 @@
 #include <linux/smp_lock.h>
 #include <linux/syscalls.h>
 #include <linux/time.h>
+#include <linux/vs_limit.h>
 
 #include <asm/semaphore.h>
 #include <asm/uaccess.h>
@@ -149,12 +150,16 @@ static kmem_cache_t *filelock_cache;
 /* Allocate an empty lock structure. */
 static struct file_lock *locks_alloc_lock(void)
 {
+	if (!vx_locks_avail(1))
+		return NULL;
 	return kmem_cache_alloc(filelock_cache, SLAB_KERNEL);
 }
 
 /* Free a lock which is not in use. */
 static inline void locks_free_lock(struct file_lock *fl)
 {
+	vx_locks_dec(fl);
+
 	if (fl == NULL) {
 		BUG();
 		return;
@@ -198,6 +203,7 @@ void locks_init_lock(struct file_lock *fl)
 	fl->fl_start = fl->fl_end = 0;
 	fl->fl_ops = NULL;
 	fl->fl_lmops = NULL;
+	fl->fl_xid = -1;
 }
 
 EXPORT_SYMBOL(locks_init_lock);
@@ -235,6 +241,8 @@ void locks_copy_lock(struct file_lock *new, struct file_lock *fl)
 		fl->fl_ops->fl_copy_lock(new, fl);
 	if (fl->fl_lmops && fl->fl_lmops->fl_copy_lock)
 		fl->fl_lmops->fl_copy_lock(new, fl);
+
+	new->fl_xid = fl->fl_xid;
 }
 
 EXPORT_SYMBOL(locks_copy_lock);
@@ -271,6 +279,10 @@ static int flock_make_lock(struct file *filp, struct file_lock **lock,
 	fl->fl_flags = FL_FLOCK;
 	fl->fl_type = type;
 	fl->fl_end = OFFSET_MAX;
+
+	/* check agains file xid maybe ? */
+	fl->fl_xid = vx_current_xid();
+	vx_locks_inc(fl);
 	
 	*lock = fl;
 	return 0;
@@ -448,6 +460,8 @@ static int lease_alloc(struct file *filp, int type, struct file_lock **flp)
 	if (fl == NULL)
 		return -ENOMEM;
 
+	fl->fl_xid = vx_current_xid();
+	vx_locks_inc(fl);
 	error = lease_init(filp, type, fl);
 	if (error)
 		return error;
@@ -777,7 +791,11 @@ static int __posix_lock_file(struct inode *inode, struct file_lock *request)
 	 * so we get them in advance to avoid races.
 	 */
 	new_fl = locks_alloc_lock();
+	new_fl->fl_xid = vx_current_xid();
+	vx_locks_inc(new_fl);
 	new_fl2 = locks_alloc_lock();
+	new_fl2->fl_xid = vx_current_xid();
+	vx_locks_inc(new_fl2);
 
 	lock_kernel();
 	if (request->fl_type != F_UNLCK) {
@@ -1597,6 +1615,9 @@ int fcntl_setlk(struct file *filp, unsigned int cmd, struct flock __user *l)
 	if (file_lock == NULL)
 		return -ENOLCK;
 
+	file_lock->fl_xid = vx_current_xid();
+	vx_locks_inc(file_lock);
+
 	/*
 	 * This might block, so we do it before checking the inode.
 	 */
@@ -1727,6 +1748,9 @@ int fcntl_setlk64(struct file *filp, unsigned int cmd, struct flock64 __user *l)
 
 	if (file_lock == NULL)
 		return -ENOLCK;
+
+	file_lock->fl_xid = vx_current_xid();
+	vx_locks_inc(file_lock);
 
 	/*
 	 * This might block, so we do it before checking the inode.

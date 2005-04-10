@@ -102,6 +102,27 @@ static void raw_v4_unhash(struct sock *sk)
 	write_unlock_bh(&raw_v4_lock);
 }
 
+
+/*
+ *	Check if a given address matches for a socket
+ *
+ *	nxi:		the socket's nx_info if any
+ *	addr:		to be verified address
+ *	saddr/baddr:	socket addresses
+ */
+static inline int raw_addr_match (
+	struct nx_info *nxi,
+	uint32_t addr,
+	uint32_t saddr,
+	uint32_t baddr)
+{
+	if (addr && (saddr == addr || baddr == addr))
+		return 1;
+	if (!saddr)
+		return addr_in_nx_info(nxi, addr);
+	return 0;
+}
+
 struct sock *__raw_v4_lookup(struct sock *sk, unsigned short num,
 			     unsigned long raddr, unsigned long laddr,
 			     int dif)
@@ -113,7 +134,8 @@ struct sock *__raw_v4_lookup(struct sock *sk, unsigned short num,
 
 		if (inet->num == num 					&&
 		    !(inet->daddr && inet->daddr != raddr) 		&&
-		    !(inet->rcv_saddr && inet->rcv_saddr != laddr)	&&
+		    raw_addr_match(sk->sk_nx_info, laddr,
+			inet->rcv_saddr, inet->rcv_saddr2)		&&
 		    !(sk->sk_bound_dev_if && sk->sk_bound_dev_if != dif))
 			goto found; /* gotcha */
 	}
@@ -308,6 +330,10 @@ static int raw_send_hdrinc(struct sock *sk, void *from, int length,
 
 		iph->check = ip_fast_csum((unsigned char *)iph, iph->ihl);
 	}
+	err = -EPERM;
+	if (!vx_check(0, VX_ADMIN) && !capable(CAP_NET_RAW)
+		&& (!addr_in_nx_info(sk->sk_nx_info, iph->saddr)))
+		goto error;
 
 	err = NF_HOOK(PF_INET, NF_IP_LOCAL_OUT, skb, NULL, rt->u.dst.dev,
 		      dst_output);
@@ -480,6 +506,12 @@ static int raw_sendmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
 		if (!inet->hdrincl)
 			raw_probe_proto_opt(&fl, msg);
 
+		if (sk->sk_nx_info) {
+			err = ip_find_src(sk->sk_nx_info, &rt, &fl);
+
+			if (err)
+				goto done;
+		}
 		err = ip_route_output_flow(&rt, &fl, sk, !(msg->msg_flags&MSG_DONTWAIT));
 	}
 	if (err)
@@ -743,7 +775,8 @@ static struct sock *raw_get_first(struct seq_file *seq)
 		struct hlist_node *node;
 
 		sk_for_each(sk, node, &raw_v4_htable[state->bucket])
-			if (sk->sk_family == PF_INET)
+			if (sk->sk_family == PF_INET &&
+				vx_check(sk->sk_xid, VX_IDENT|VX_WATCH))
 				goto found;
 	}
 	sk = NULL;
@@ -759,7 +792,8 @@ static struct sock *raw_get_next(struct seq_file *seq, struct sock *sk)
 		sk = sk_next(sk);
 try_again:
 		;
-	} while (sk && sk->sk_family != PF_INET);
+	} while (sk && (sk->sk_family != PF_INET ||
+		!vx_check(sk->sk_xid, VX_IDENT|VX_WATCH)));
 
 	if (!sk && ++state->bucket < RAWV4_HTABLE_SIZE) {
 		sk = sk_head(&raw_v4_htable[state->bucket]);

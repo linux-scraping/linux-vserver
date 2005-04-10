@@ -284,6 +284,8 @@ source "net/Kconfig"
 
 source "fs/Kconfig"
 
+source "kernel/vserver/Kconfig"
+
 source "security/Kconfig"
 
 source "crypto/Kconfig"

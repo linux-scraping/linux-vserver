@@ -19,6 +19,10 @@
 #define MNT_NOSUID	1
 #define MNT_NODEV	2
 #define MNT_NOEXEC	4
+#define MNT_RDONLY	8
+#define MNT_NOATIME	16
+#define MNT_NODIRATIME	32
+#define MNT_XID		256
 
 struct vfsmount
 {
@@ -36,7 +40,12 @@ struct vfsmount
 	struct list_head mnt_list;
 	struct list_head mnt_fslink;	/* link in fs-specific expiry list */
 	struct namespace *mnt_namespace; /* containing namespace */
+	xid_t mnt_xid;			/* xid tagging used for vfsmount */
 };
+
+#define	MNT_IS_RDONLY(m)	((m) && ((m)->mnt_flags & MNT_RDONLY))
+#define	MNT_IS_NOATIME(m)	((m) && ((m)->mnt_flags & MNT_NOATIME))
+#define	MNT_IS_NODIRATIME(m)	((m) && ((m)->mnt_flags & MNT_NODIRATIME))
 
 static inline struct vfsmount *mntget(struct vfsmount *mnt)
 {

@@ -336,7 +336,7 @@ static void elf32_init(struct pt_regs *regs)
 
 int setup_arg_pages(struct linux_binprm *bprm, unsigned long stack_top, int executable_stack)
 {
-	unsigned long stack_base;
+	unsigned long stack_base, grow;
 	struct vm_area_struct *mpnt;
 	struct mm_struct *mm = current->mm;
 	int i, ret;
@@ -353,7 +353,10 @@ int setup_arg_pages(struct linux_binprm *bprm, unsigned long stack_top, int exec
 	if (!mpnt) 
 		return -ENOMEM; 
 	
-	if (security_vm_enough_memory((IA32_STACK_TOP - (PAGE_MASK & (unsigned long) bprm->p))>>PAGE_SHIFT)) {
+	grow = (IA32_STACK_TOP - (PAGE_MASK & (unsigned long) bprm->p))
+		>> PAGE_SHIFT;
+	if (security_vm_enough_memory(grow) ||
+		!vx_vmpages_avail(mm, grow)) {
 		kmem_cache_free(vm_area_cachep, mpnt);
 		return -ENOMEM;
 	}
@@ -378,7 +381,9 @@ int setup_arg_pages(struct linux_binprm *bprm, unsigned long stack_top, int exec
 			kmem_cache_free(vm_area_cachep, mpnt);
 			return ret;
 		}
-		mm->stack_vm = mm->total_vm = vma_pages(mpnt);
+		// mm->stack_vm = mm->total_vm = vma_pages(mpnt);
+		vx_vmpages_sub(mm, mm->total_vm - vma_pages(mpnt));
+		mm->stack_vm = mm->total_vm;
 	} 
 
 	for (i = 0 ; i < MAX_ARG_PAGES ; i++) {

@@ -87,6 +87,7 @@
 #include <linux/root_dev.h>
 #include <net/ipconfig.h>
 #include <linux/parser.h>
+#include <linux/vs_cvirt.h>
 
 /* Define this to allow debugging output */
 #undef NFSROOT_DEBUG
@@ -124,6 +125,7 @@ enum {
 	Opt_soft, Opt_hard, Opt_intr,
 	Opt_nointr, Opt_posix, Opt_noposix, Opt_cto, Opt_nocto, Opt_ac, 
 	Opt_noac, Opt_lock, Opt_nolock, Opt_v2, Opt_v3, Opt_udp, Opt_tcp,
+	Opt_tagxid,
 	/* Error token */
 	Opt_err
 };
@@ -158,6 +160,7 @@ static match_table_t __initdata tokens = {
 	{Opt_udp, "udp"},
 	{Opt_tcp, "proto=tcp"},
 	{Opt_tcp, "tcp"},
+	{Opt_tagxid, "tagxid"},
 	{Opt_err, NULL}
 	
 };
@@ -266,6 +269,9 @@ static int __init root_nfs_parse(char *name, char *buf)
 			case Opt_tcp:
 				nfs_data.flags |= NFS_MOUNT_TCP;
 				break;
+			case Opt_tagxid:
+				nfs_data.flags |= NFS_MOUNT_TAGXID;
+				break;
 			default : 
 				return 0;
 		}
@@ -301,7 +307,7 @@ static int __init root_nfs_name(char *name)
 	/* Override them by options set on kernel command-line */
 	root_nfs_parse(name, buf);
 
-	cp = system_utsname.nodename;
+	cp = vx_new_uts(nodename);
 	if (strlen(buf) + strlen(cp) > NFS_MAXPATHLEN) {
 		printk(KERN_ERR "Root-NFS: Pathname for remote directory too long.\n");
 		return -1;

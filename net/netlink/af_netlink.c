@@ -50,6 +50,9 @@
 #include <linux/bitops.h>
 #include <linux/mm.h>
 #include <linux/types.h>
+#include <linux/vs_context.h>
+#include <linux/vs_network.h>
+#include <linux/vs_limit.h>
 #include <net/sock.h>
 #include <net/scm.h>
 

@@ -411,6 +411,8 @@ source "arch/ppc64/oprofile/Kconfig"
 
 source "arch/ppc64/Kconfig.debug"
 
+source "kernel/vserver/Kconfig"
+
 source "security/Kconfig"
 
 config KEYS_COMPAT

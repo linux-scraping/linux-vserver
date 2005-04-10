@@ -3,6 +3,7 @@
 
 #include <asm/pgalloc.h>
 #include <asm/tlbflush.h>
+#include <linux/vs_memory.h>
 
 /*
  * TLB handling.  This allows us to remove pages from the page
@@ -41,7 +42,8 @@ tlb_finish_mmu(struct mmu_gather *tlb, unsigned long start, unsigned long end)
 
         if (rss < freed)
                 freed = rss;
-        add_mm_counter(mm, rss, -freed);
+	// add_mm_counter(mm, rss, -freed);
+	vx_rsspages_sub(mm, freed);
 
         if (freed) {
                 flush_tlb_mm(mm);

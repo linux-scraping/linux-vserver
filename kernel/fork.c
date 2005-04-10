@@ -41,6 +41,9 @@
 #include <linux/profile.h>
 #include <linux/rmap.h>
 #include <linux/acct.h>
+#include <linux/vs_network.h>
+#include <linux/vs_limit.h>
+#include <linux/vs_memory.h>
 
 #include <asm/pgtable.h>
 #include <asm/pgalloc.h>
@@ -101,6 +104,8 @@ static kmem_cache_t *mm_cachep;
 void free_task(struct task_struct *tsk)
 {
 	free_thread_info(tsk->thread_info);
+	clr_vx_info(&tsk->vx_info);
+	clr_nx_info(&tsk->nx_info);
 	free_task_struct(tsk);
 }
 EXPORT_SYMBOL(free_task);
@@ -325,6 +330,7 @@ static struct mm_struct * mm_init(struct mm_struct * mm)
 
 	if (likely(!mm_alloc_pgd(mm))) {
 		mm->def_flags = 0;
+		set_vx_info(&mm->mm_vx_info, current->vx_info);
 		return mm;
 	}
 	free_mm(mm);
@@ -356,6 +362,7 @@ void fastcall __mmdrop(struct mm_struct *mm)
 	BUG_ON(mm == &init_mm);
 	mm_free_pgd(mm);
 	destroy_context(mm);
+	clr_vx_info(&mm->mm_vx_info);
 	free_mm(mm);
 }
 
@@ -482,6 +489,7 @@ static int copy_mm(unsigned long clone_flags, struct task_struct * tsk)
 
 	/* Copy the current MM stuff.. */
 	memcpy(mm, oldmm, sizeof(*mm));
+	mm->mm_vx_info = NULL;
 	if (!mm_init(mm))
 		goto fail_nomem;
 
@@ -510,6 +518,7 @@ fail_nocontext:
 	 * If init_new_context() failed, we cannot use mmput() to free the mm
 	 * because it calls destroy_context()
 	 */
+	clr_vx_info(&mm->mm_vx_info);
 	mm_free_pgd(mm);
 	free_mm(mm);
 	return retval;
@@ -650,6 +659,8 @@ static int copy_files(unsigned long clone_flags, struct task_struct * tsk)
 		struct file *f = *old_fds++;
 		if (f) {
 			get_file(f);
+			/* FIXME sum it first for avail check and performance */
+			vx_openfd_inc(open_files - i);
 		} else {
 			/*
 			 * The fd may be claimed in the fd bitmap but not yet
@@ -845,6 +856,7 @@ static task_t *copy_process(unsigned long clone_flags,
 {
 	int retval;
 	struct task_struct *p = NULL;
+	struct vx_info *vxi;
 
 	if ((clone_flags & (CLONE_NEWNS|CLONE_FS)) == (CLONE_NEWNS|CLONE_FS))
 		return ERR_PTR(-EINVAL);
@@ -873,12 +885,31 @@ static task_t *copy_process(unsigned long clone_flags,
 	if (!p)
 		goto fork_out;
 
+	init_vx_info(&p->vx_info, current->vx_info);
+	p->nx_info = NULL;
+	set_nx_info(&p->nx_info, current->nx_info);
+
+	/* check vserver memory */
+	if (p->mm && !(clone_flags & CLONE_VM)) {
+		if (vx_vmpages_avail(p->mm, p->mm->total_vm))
+			vx_pages_add(p->mm->mm_vx_info, RLIMIT_AS, p->mm->total_vm);
+		else
+			goto bad_fork_free;
+	}
+	if (p->mm && vx_flags(VXF_FORK_RSS, 0)) {
+		if (!vx_rsspages_avail(p->mm, p->mm->rss))
+			goto bad_fork_cleanup_vm;
+	}
+
 	retval = -EAGAIN;
+	if (!vx_nproc_avail(1))
+		goto bad_fork_cleanup_vm;
+
 	if (atomic_read(&p->user->processes) >=
 			p->signal->rlim[RLIMIT_NPROC].rlim_cur) {
 		if (!capable(CAP_SYS_ADMIN) && !capable(CAP_SYS_RESOURCE) &&
 				p->user != &root_user)
-			goto bad_fork_free;
+			goto bad_fork_cleanup_vm;
 	}
 
 	atomic_inc(&p->user->__count);
@@ -1101,6 +1132,15 @@ static task_t *copy_process(unsigned long clone_flags,
 
 	nr_threads++;
 	total_forks++;
+
+	/* p is copy of current */
+	vxi = p->vx_info;
+	if (vxi) {
+		claim_vx_info(vxi, p);
+		atomic_inc(&vxi->cvirt.nr_threads);
+		vx_cacct_inc(vxi, total_forks);
+		vx_nproc_inc(p);
+	}
 	write_unlock_irq(&tasklist_lock);
 	retval = 0;
 
@@ -1143,6 +1183,9 @@ bad_fork_cleanup_count:
 	put_group_info(p->group_info);
 	atomic_dec(&p->user->processes);
 	free_uid(p->user);
+bad_fork_cleanup_vm:
+	if (p->mm && !(clone_flags & CLONE_VM))
+		vx_pages_sub(p->mm->mm_vx_info, RLIMIT_AS, p->mm->total_vm);
 bad_fork_free:
 	free_task(p);
 	goto fork_out;

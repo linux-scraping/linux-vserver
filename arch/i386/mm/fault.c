@@ -342,14 +342,18 @@ good_area:
 	 */
 	switch (handle_mm_fault(mm, vma, address, write)) {
 		case VM_FAULT_MINOR:
+			vx_cacct_inc(tsk->vx_info, fault_minor);
 			tsk->min_flt++;
 			break;
 		case VM_FAULT_MAJOR:
+			vx_cacct_inc(tsk->vx_info, fault_major);
 			tsk->maj_flt++;
 			break;
 		case VM_FAULT_SIGBUS:
+			vx_cacct_inc(tsk->vx_info, fault_sigbus);
 			goto do_sigbus;
 		case VM_FAULT_OOM:
+			vx_cacct_inc(tsk->vx_info, fault_oom);
 			goto out_of_memory;
 		default:
 			BUG();

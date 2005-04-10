@@ -37,6 +37,8 @@
 #include <linux/writeback.h>		/* for the emergency remount stuff */
 #include <linux/idr.h>
 #include <linux/kobject.h>
+#include <linux/devpts_fs.h>
+#include <linux/proc_fs.h>
 #include <asm/uaccess.h>
 
 
@@ -797,7 +799,7 @@ struct vfsmount *
 do_kern_mount(const char *fstype, int flags, const char *name, void *data)
 {
 	struct file_system_type *type = get_fs_type(fstype);
-	struct super_block *sb = ERR_PTR(-ENOMEM);
+	struct super_block *sb;
 	struct vfsmount *mnt;
 	int error;
 	char *secdata = NULL;
@@ -805,6 +807,12 @@ do_kern_mount(const char *fstype, int flags, const char *name, void *data)
 	if (!type)
 		return ERR_PTR(-ENODEV);
 
+	sb = ERR_PTR(-EPERM);
+	if ((type->fs_flags & FS_BINARY_MOUNTDATA) &&
+		!capable(CAP_SYS_ADMIN) && !vx_ccaps(VXC_BINARY_MOUNT))
+		goto out;
+
+	sb = ERR_PTR(-ENOMEM);
 	mnt = alloc_vfsmnt(name);
 	if (!mnt)
 		goto out;
@@ -826,6 +834,13 @@ do_kern_mount(const char *fstype, int flags, const char *name, void *data)
 	sb = type->get_sb(type, flags, name, data);
 	if (IS_ERR(sb))
 		goto out_free_secdata;
+
+	error = -EPERM;
+	if (!capable(CAP_SYS_ADMIN) && !sb->s_bdev &&
+		(sb->s_magic != PROC_SUPER_MAGIC) &&
+		(sb->s_magic != DEVPTS_SUPER_MAGIC))
+		goto out_sb;
+
  	error = security_sb_kern_mount(sb, secdata);
  	if (error)
  		goto out_sb;

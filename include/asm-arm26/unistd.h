@@ -304,6 +304,8 @@
 #define __NR_mq_getsetattr		(__NR_SYSCALL_BASE+279)
 #define __NR_waitid			(__NR_SYSCALL_BASE+280)
 
+#define __NR_vserver			(__NR_SYSCALL_BASE+313)
+
 /*
  * The following SWIs are ARM private. FIXME - make appropriate for arm26
  */

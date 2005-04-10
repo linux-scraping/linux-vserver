@@ -484,7 +484,10 @@ static int x25_create(struct socket *sock, int protocol)
 
 	x25 = x25_sk(sk);
 
-	sock_init_data(sock, sk);
+	sk->sk_socket = sock;
+	sk->sk_type = sock->type;
+	sk->sk_sleep = &sock->wait;
+	sock->sk = sk;
 
 	x25_init_timers(sk);
 

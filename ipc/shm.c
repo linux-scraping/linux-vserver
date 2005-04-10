@@ -28,6 +28,8 @@
 #include <linux/security.h>
 #include <linux/syscalls.h>
 #include <linux/audit.h>
+#include <linux/vs_context.h>
+#include <linux/vs_limit.h>
 #include <asm/uaccess.h>
 
 #include "util.h"
@@ -112,7 +114,12 @@ static void shm_open (struct vm_area_struct *shmd)
  */
 static void shm_destroy (struct shmid_kernel *shp)
 {
-	shm_tot -= (shp->shm_segsz + PAGE_SIZE - 1) >> PAGE_SHIFT;
+	struct vx_info *vxi = locate_vx_info(shp->shm_perm.xid);
+	int numpages = (shp->shm_segsz + PAGE_SIZE - 1) >> PAGE_SHIFT;
+
+	vx_ipcshm_sub(vxi, shp, numpages);
+	shm_tot -= numpages;
+
 	shm_rmid (shp->id);
 	shm_unlock(shp);
 	if (!is_file_hugepages(shp->shm_file))
@@ -122,6 +129,7 @@ static void shm_destroy (struct shmid_kernel *shp)
 						shp->mlock_user);
 	fput (shp->shm_file);
 	security_shm_free(shp);
+	put_vx_info(vxi);
 	ipc_rcu_putref(shp);
 }
 
@@ -188,12 +196,15 @@ static int newseg (key_t key, int shmflg, size_t size)
 
 	if (shm_tot + numpages >= shm_ctlall)
 		return -ENOSPC;
+	if (!vx_ipcshm_avail(current->vx_info, numpages))
+		return -ENOSPC;
 
 	shp = ipc_rcu_alloc(sizeof(*shp));
 	if (!shp)
 		return -ENOMEM;
 
 	shp->shm_perm.key = key;
+	shp->shm_perm.xid = vx_current_xid();
 	shp->shm_flags = (shmflg & S_IRWXUGO);
 	shp->mlock_user = NULL;
 
@@ -235,6 +246,7 @@ static int newseg (key_t key, int shmflg, size_t size)
 	else
 		file->f_op = &shm_file_operations;
 	shm_tot += numpages;
+	vx_ipcshm_add(current->vx_info, key, numpages);
 	shm_unlock(shp);
 	return shp->id;
 
@@ -868,11 +880,15 @@ static int sysvipc_shm_read_proc(char *buffer, char **start, off_t offset, int l
 		struct shmid_kernel* shp;
 
 		shp = shm_lock(i);
-		if(shp!=NULL) {
+		if (shp) {
 #define SMALL_STRING "%10d %10d  %4o %10u %5u %5u  %5d %5u %5u %5u %5u %10lu %10lu %10lu\n"
 #define BIG_STRING   "%10d %10d  %4o %21u %5u %5u  %5d %5u %5u %5u %5u %10lu %10lu %10lu\n"
 			char *format;
 
+			if (!vx_check(shp->shm_perm.xid, VX_IDENT)) {
+				shm_unlock(shp);
+				continue;
+			}
 			if (sizeof(size_t) <= sizeof(int))
 				format = SMALL_STRING;
 			else

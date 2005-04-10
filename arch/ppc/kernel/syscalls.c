@@ -36,6 +36,7 @@
 #include <linux/utsname.h>
 #include <linux/file.h>
 #include <linux/unistd.h>
+#include <linux/vs_cvirt.h>
 
 #include <asm/uaccess.h>
 #include <asm/ipc.h>
@@ -229,7 +230,7 @@ int sys_uname(struct old_utsname __user * name)
 	int err = -EFAULT;
 
 	down_read(&uts_sem);
-	if (name && !copy_to_user(name, &system_utsname, sizeof (*name)))
+	if (name && !copy_to_user(name, vx_new_utsname(), sizeof (*name)))
 		err = 0;
 	up_read(&uts_sem);
 	return err;
@@ -238,6 +239,7 @@ int sys_uname(struct old_utsname __user * name)
 int sys_olduname(struct oldold_utsname __user * name)
 {
 	int error;
+	struct new_utsname *ptr;
 
 	if (!name)
 		return -EFAULT;
@@ -245,15 +247,16 @@ int sys_olduname(struct oldold_utsname __user * name)
 		return -EFAULT;
 
 	down_read(&uts_sem);
-	error = __copy_to_user(&name->sysname,&system_utsname.sysname,__OLD_UTS_LEN);
+	ptr = vx_new_utsname();
+	error = __copy_to_user(&name->sysname,ptr->sysname,__OLD_UTS_LEN);
 	error -= __put_user(0,name->sysname+__OLD_UTS_LEN);
-	error -= __copy_to_user(&name->nodename,&system_utsname.nodename,__OLD_UTS_LEN);
+	error -= __copy_to_user(&name->nodename,ptr->nodename,__OLD_UTS_LEN);
 	error -= __put_user(0,name->nodename+__OLD_UTS_LEN);
-	error -= __copy_to_user(&name->release,&system_utsname.release,__OLD_UTS_LEN);
+	error -= __copy_to_user(&name->release,ptr->release,__OLD_UTS_LEN);
 	error -= __put_user(0,name->release+__OLD_UTS_LEN);
-	error -= __copy_to_user(&name->version,&system_utsname.version,__OLD_UTS_LEN);
+	error -= __copy_to_user(&name->version,ptr->version,__OLD_UTS_LEN);
 	error -= __put_user(0,name->version+__OLD_UTS_LEN);
-	error -= __copy_to_user(&name->machine,&system_utsname.machine,__OLD_UTS_LEN);
+	error -= __copy_to_user(&name->machine,ptr->machine,__OLD_UTS_LEN);
 	error = __put_user(0,name->machine+__OLD_UTS_LEN);
 	up_read(&uts_sem);
 

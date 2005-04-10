@@ -55,6 +55,7 @@ struct proc_dir_entry {
 	nlink_t nlink;
 	uid_t uid;
 	gid_t gid;
+	int vx_flags;
 	unsigned long size;
 	struct inode_operations * proc_iops;
 	struct file_operations * proc_fops;
@@ -238,9 +239,11 @@ extern void kclist_add(struct kcore_list *, void *, size_t);
 struct proc_inode {
 	struct task_struct *task;
 	int type;
+	int vx_flags;
 	union {
 		int (*proc_get_link)(struct inode *, struct dentry **, struct vfsmount **);
 		int (*proc_read)(struct task_struct *task, char *page);
+		int (*proc_vid_read)(int vid, char *page);
 	} op;
 	struct proc_dir_entry *pde;
 	struct inode vfs_inode;

@@ -61,7 +61,7 @@ match_pid(const struct sk_buff *skb, pid_t pid)
 	int i;
 
 	read_lock(&tasklist_lock);
-	p = find_task_by_pid(pid);
+	p = find_task_by_real_pid(pid);
 	if (!p)
 		goto out;
 	task_lock(p);

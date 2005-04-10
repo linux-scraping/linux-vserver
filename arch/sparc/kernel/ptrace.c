@@ -321,6 +321,10 @@ asmlinkage void do_ptrace(struct pt_regs *regs)
 		pt_error_return(regs, ESRCH);
 		goto out;
 	}
+	if (!vx_check(vx_task_xid(child), VX_WATCH|VX_IDENT)) {
+		pt_error_return(regs, ESRCH);
+		goto out_tsk;
+	}
 
 	if ((current->personality == PER_SUNOS && request == PTRACE_SUNATTACH)
 	    || (current->personality != PER_SUNOS && request == PTRACE_ATTACH)) {

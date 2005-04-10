@@ -23,6 +23,9 @@
 #include <linux/fs.h>
 #include <linux/pagemap.h>
 #include <linux/syscalls.h>
+#include <linux/vs_limit.h>
+#include <linux/vs_dlimit.h>
+#include <linux/vserver/xid.h>
 
 #include <asm/unistd.h>
 
@@ -41,6 +44,8 @@ int vfs_statfs(struct super_block *sb, struct kstatfs *buf)
 			if (retval == 0 && buf->f_frsize == 0)
 				buf->f_frsize = buf->f_bsize;
 		}
+		if (!vx_check(0, VX_ADMIN|VX_WATCH))
+			vx_vsi_statfs(sb, buf);
 	}
 	return retval;
 }
@@ -239,7 +244,7 @@ static inline long do_sys_truncate(const char __user * path, loff_t length)
 		goto dput_and_out;
 
 	error = -EROFS;
-	if (IS_RDONLY(inode))
+	if (IS_RDONLY(inode) || MNT_IS_RDONLY(nd.mnt))
 		goto dput_and_out;
 
 	error = -EPERM;
@@ -363,7 +368,7 @@ asmlinkage long sys_utime(char __user * filename, struct utimbuf __user * times)
 	inode = nd.dentry->d_inode;
 
 	error = -EROFS;
-	if (IS_RDONLY(inode))
+	if (IS_RDONLY(inode) || MNT_IS_RDONLY(nd.mnt))
 		goto dput_and_out;
 
 	/* Don't worry, the checks are done in inode_change_ok() */
@@ -420,7 +425,7 @@ long do_utimes(char __user * filename, struct timeval * times)
 	inode = nd.dentry->d_inode;
 
 	error = -EROFS;
-	if (IS_RDONLY(inode))
+	if (IS_RDONLY(inode) || MNT_IS_RDONLY(nd.mnt))
 		goto dput_and_out;
 
 	/* Don't worry, the checks are done in inode_change_ok() */
@@ -502,7 +507,8 @@ asmlinkage long sys_access(const char __user * filename, int mode)
 	if (!res) {
 		res = permission(nd.dentry->d_inode, mode, &nd);
 		/* SuS v2 requires we report a read only fs too */
-		if(!res && (mode & S_IWOTH) && IS_RDONLY(nd.dentry->d_inode)
+		if(!res && (mode & S_IWOTH)
+		   && (IS_RDONLY(nd.dentry->d_inode) || MNT_IS_RDONLY(nd.mnt))
 		   && !special_file(nd.dentry->d_inode->i_mode))
 			res = -EROFS;
 		path_release(&nd);
@@ -608,7 +614,7 @@ asmlinkage long sys_fchmod(unsigned int fd, mode_t mode)
 	inode = dentry->d_inode;
 
 	err = -EROFS;
-	if (IS_RDONLY(inode))
+	if (IS_RDONLY(inode) || MNT_IS_RDONLY(file->f_vfsmnt))
 		goto out_putf;
 	err = -EPERM;
 	if (IS_IMMUTABLE(inode) || IS_APPEND(inode))
@@ -640,7 +646,7 @@ asmlinkage long sys_chmod(const char __user * filename, mode_t mode)
 	inode = nd.dentry->d_inode;
 
 	error = -EROFS;
-	if (IS_RDONLY(inode))
+	if (IS_RDONLY(inode) || MNT_IS_RDONLY(nd.mnt))
 		goto dput_and_out;
 
 	error = -EPERM;
@@ -661,7 +667,8 @@ out:
 	return error;
 }
 
-static int chown_common(struct dentry * dentry, uid_t user, gid_t group)
+static int chown_common(struct dentry *dentry, struct vfsmount *mnt,
+	uid_t user, gid_t group)
 {
 	struct inode * inode;
 	int error;
@@ -673,19 +680,20 @@ static int chown_common(struct dentry * dentry, uid_t user, gid_t group)
 		goto out;
 	}
 	error = -EROFS;
-	if (IS_RDONLY(inode))
+	if (IS_RDONLY(inode) || MNT_IS_RDONLY(mnt))
 		goto out;
 	error = -EPERM;
 	if (IS_IMMUTABLE(inode) || IS_APPEND(inode))
 		goto out;
+
 	newattrs.ia_valid =  ATTR_CTIME;
 	if (user != (uid_t) -1) {
 		newattrs.ia_valid |= ATTR_UID;
-		newattrs.ia_uid = user;
+		newattrs.ia_uid = vx_map_uid(user);
 	}
 	if (group != (gid_t) -1) {
 		newattrs.ia_valid |= ATTR_GID;
-		newattrs.ia_gid = group;
+		newattrs.ia_gid = vx_map_gid(group);
 	}
 	if (!S_ISDIR(inode->i_mode))
 		newattrs.ia_valid |= ATTR_KILL_SUID|ATTR_KILL_SGID;
@@ -703,7 +711,7 @@ asmlinkage long sys_chown(const char __user * filename, uid_t user, gid_t group)
 
 	error = user_path_walk(filename, &nd);
 	if (!error) {
-		error = chown_common(nd.dentry, user, group);
+		error = chown_common(nd.dentry, nd.mnt, user, group);
 		path_release(&nd);
 	}
 	return error;
@@ -716,7 +724,7 @@ asmlinkage long sys_lchown(const char __user * filename, uid_t user, gid_t group
 
 	error = user_path_walk_link(filename, &nd);
 	if (!error) {
-		error = chown_common(nd.dentry, user, group);
+		error = chown_common(nd.dentry, nd.mnt, user, group);
 		path_release(&nd);
 	}
 	return error;
@@ -730,7 +738,7 @@ asmlinkage long sys_fchown(unsigned int fd, uid_t user, gid_t group)
 
 	file = fget(fd);
 	if (file) {
-		error = chown_common(file->f_dentry, user, group);
+		error = chown_common(file->f_dentry, file->f_vfsmnt, user, group);
 		fput(file);
 	}
 	return error;
@@ -872,6 +880,7 @@ repeat:
 	FD_SET(fd, files->open_fds);
 	FD_CLR(fd, files->close_on_exec);
 	files->next_fd = fd + 1;
+	vx_openfd_inc(fd);
 #if 1
 	/* Sanity check */
 	if (files->fd[fd] != NULL) {
@@ -893,6 +902,7 @@ static inline void __put_unused_fd(struct files_struct *files, unsigned int fd)
 	__FD_CLR(fd, files->open_fds);
 	if (fd < files->next_fd)
 		files->next_fd = fd;
+	vx_openfd_dec(fd);
 }
 
 void fastcall put_unused_fd(unsigned int fd)

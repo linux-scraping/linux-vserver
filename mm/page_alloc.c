@@ -34,6 +34,8 @@
 #include <linux/cpuset.h>
 #include <linux/nodemask.h>
 #include <linux/vmalloc.h>
+#include <linux/vs_limit.h>
+#include <linux/vs_cvirt.h>
 
 #include <asm/tlbflush.h>
 #include "internal.h"
@@ -774,6 +776,7 @@ __alloc_pages(unsigned int __nocast gfp_mask, unsigned int order,
 			goto got_pg;
 	}
 
+	vx_cacct_inc(p->vx_info, wakeup_kswapd);
 	for (i = 0; (z = zones[i]) != NULL; i++)
 		wakeup_kswapd(z, order);
 
@@ -1182,6 +1185,8 @@ void si_meminfo(struct sysinfo *val)
 	val->freehigh = 0;
 #endif
 	val->mem_unit = PAGE_SIZE;
+	if (vx_flags(VXF_VIRT_MEM, 0))
+		vx_vsi_meminfo(val);
 }
 
 EXPORT_SYMBOL(si_meminfo);

@@ -111,6 +111,10 @@ extern struct group_info init_groups;
 	.switch_lock	= SPIN_LOCK_UNLOCKED,				\
 	.journal_info	= NULL,						\
 	.cpu_timers	= INIT_CPU_TIMERS(tsk.cpu_timers),		\
+	.xid		= 0,						\
+	.vx_info	= NULL,						\
+	.nid		= 0,						\
+	.nx_info	= NULL,						\
 }
 
 

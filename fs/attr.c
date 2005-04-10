@@ -15,6 +15,9 @@
 #include <linux/quotaops.h>
 #include <linux/security.h>
 #include <linux/time.h>
+#include <linux/proc_fs.h>
+#include <linux/devpts_fs.h>
+#include <linux/vserver/debug.h>
 
 /* Taken over from the old code... */
 
@@ -56,6 +59,28 @@ int inode_change_ok(struct inode *inode, struct iattr *attr)
 		if (current->fsuid != inode->i_uid && !capable(CAP_FOWNER))
 			goto error;
 	}
+
+	/* Check for evil vserver activity */
+	if (vx_check(0, VX_ADMIN))
+		goto fine;
+
+	if (IS_BARRIER(inode)) {
+		vxwprintk(1, "xid=%d messing with the barrier.",
+			vx_current_xid());
+		goto error;
+	}
+	switch (inode->i_sb->s_magic) {
+		case PROC_SUPER_MAGIC:
+			vxwprintk(1, "xid=%d messing with the procfs.",
+				vx_current_xid());
+			goto error;
+		case DEVPTS_SUPER_MAGIC:
+			if (vx_check(inode->i_xid, VX_IDENT))
+				goto fine;
+			vxwprintk(1, "xid=%d messing with the devpts.",
+				vx_current_xid());
+			goto error;
+	}
 fine:
 	retval = 0;
 error:
@@ -63,6 +88,24 @@ error:
 }
 
 EXPORT_SYMBOL(inode_change_ok);
+
+int inode_setattr_flags(struct inode *inode, unsigned int flags)
+{
+	unsigned int oldflags, newflags;
+
+	oldflags = inode->i_flags;
+	newflags = oldflags & ~(S_IMMUTABLE | S_IUNLINK | S_BARRIER);
+	if (flags & ATTR_FLAG_IMMUTABLE)
+		newflags |= S_IMMUTABLE;
+	if (flags & ATTR_FLAG_IUNLINK)
+		newflags |= S_IUNLINK;
+	if (flags & ATTR_FLAG_BARRIER)
+		newflags |= S_BARRIER;
+
+	if (oldflags ^ newflags)
+		inode->i_flags = newflags;
+	return 0;
+}
 
 int inode_setattr(struct inode * inode, struct iattr * attr)
 {
@@ -87,6 +130,8 @@ int inode_setattr(struct inode * inode, struct iattr * attr)
 		inode->i_uid = attr->ia_uid;
 	if (ia_valid & ATTR_GID)
 		inode->i_gid = attr->ia_gid;
+	if (ia_valid & ATTR_XID)
+		inode->i_xid = attr->ia_xid;
 	if (ia_valid & ATTR_ATIME)
 		inode->i_atime = timespec_trunc(attr->ia_atime,
 						inode->i_sb->s_time_gran);
@@ -103,6 +148,8 @@ int inode_setattr(struct inode * inode, struct iattr * attr)
 			mode &= ~S_ISGID;
 		inode->i_mode = mode;
 	}
+	if (ia_valid & ATTR_ATTR_FLAG)
+		inode_setattr_flags(inode, attr->ia_attr_flags);
 	mark_inode_dirty(inode);
 out:
 	return error;
@@ -117,6 +164,8 @@ int setattr_mask(unsigned int ia_valid)
 	if (ia_valid & ATTR_UID)
 		dn_mask |= DN_ATTRIB;
 	if (ia_valid & ATTR_GID)
+		dn_mask |= DN_ATTRIB;
+	if (ia_valid & ATTR_XID)
 		dn_mask |= DN_ATTRIB;
 	if (ia_valid & ATTR_SIZE)
 		dn_mask |= DN_MODIFY;
@@ -187,7 +236,8 @@ int notify_change(struct dentry * dentry, struct iattr * attr)
 			error = security_inode_setattr(dentry, attr);
 		if (!error) {
 			if ((ia_valid & ATTR_UID && attr->ia_uid != inode->i_uid) ||
-			    (ia_valid & ATTR_GID && attr->ia_gid != inode->i_gid))
+			    (ia_valid & ATTR_GID && attr->ia_gid != inode->i_gid) ||
+			    (ia_valid & ATTR_XID && attr->ia_xid != inode->i_xid))
 				error = DQUOT_TRANSFER(inode, attr) ? -EDQUOT : 0;
 			if (!error)
 				error = inode_setattr(inode, attr);

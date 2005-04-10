@@ -31,6 +31,7 @@
 #include <linux/pagemap.h>
 #include <linux/smp_lock.h>
 #include <linux/namei.h>
+#include <linux/vserver/xid.h>
 
 #include "delegation.h"
 
@@ -751,6 +752,7 @@ static struct dentry *nfs_lookup(struct inode *dir, struct dentry * dentry, stru
 	inode = nfs_fhget(dentry->d_sb, &fhandle, &fattr);
 	if (!inode)
 		goto out_unlock;
+	vx_propagate_xid(nd, inode);
 no_entry:
 	res = d_add_unique(dentry, inode);
 	if (res != NULL)
@@ -783,7 +785,8 @@ static int is_atomic_open(struct inode *dir, struct nameidata *nd)
 	if (nd->flags & LOOKUP_DIRECTORY)
 		return 0;
 	/* Are we trying to write to a read only partition? */
-	if (IS_RDONLY(dir) && (nd->intent.open.flags & (O_CREAT|O_TRUNC|FMODE_WRITE)))
+	if ((IS_RDONLY(dir) || MNT_IS_RDONLY(nd->mnt)) &&
+		(nd->intent.open.flags & (O_CREAT|O_TRUNC|FMODE_WRITE)))
 		return 0;
 	return 1;
 }

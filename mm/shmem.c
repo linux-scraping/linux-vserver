@@ -51,7 +51,6 @@
 #include <asm/pgtable.h>
 
 /* This magic number is used in glibc for posix shared memory */
-#define TMPFS_MAGIC	0x01021994
 
 #define ENTRIES_PER_PAGE (PAGE_CACHE_SIZE/sizeof(unsigned long))
 #define ENTRIES_PER_PAGEPAGE (ENTRIES_PER_PAGE*ENTRIES_PER_PAGE)
@@ -1604,7 +1603,7 @@ static int shmem_statfs(struct super_block *sb, struct kstatfs *buf)
 {
 	struct shmem_sb_info *sbinfo = SHMEM_SB(sb);
 
-	buf->f_type = TMPFS_MAGIC;
+	buf->f_type = TMPFS_SUPER_MAGIC;
 	buf->f_bsize = PAGE_CACHE_SIZE;
 	buf->f_namelen = NAME_MAX;
 	if (sbinfo) {
@@ -2002,7 +2001,7 @@ static int shmem_fill_super(struct super_block *sb,
 	sb->s_maxbytes = SHMEM_MAX_BYTES;
 	sb->s_blocksize = PAGE_CACHE_SIZE;
 	sb->s_blocksize_bits = PAGE_CACHE_SHIFT;
-	sb->s_magic = TMPFS_MAGIC;
+	sb->s_magic = TMPFS_SUPER_MAGIC;
 	sb->s_op = &shmem_ops;
 	inode = shmem_get_inode(sb, S_IFDIR | mode, 0);
 	if (!inode)

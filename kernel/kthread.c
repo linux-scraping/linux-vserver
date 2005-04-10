@@ -114,7 +114,7 @@ static void keventd_create_kthread(void *_create)
 		create->result = ERR_PTR(pid);
 	} else {
 		wait_for_completion(&create->started);
-		create->result = find_task_by_pid(pid);
+		create->result = find_task_by_real_pid(pid);
 	}
 	complete(&create->done);
 }

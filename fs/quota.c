@@ -15,6 +15,8 @@
 #include <linux/security.h>
 #include <linux/syscalls.h>
 #include <linux/buffer_head.h>
+#include <linux/major.h>
+#include <linux/blkdev.h>
 
 /* Check validity of generic quotactl commands */
 static int generic_quotactl_valid(struct super_block *sb, int type, int cmd, qid_t id)
@@ -79,11 +81,11 @@ static int generic_quotactl_valid(struct super_block *sb, int type, int cmd, qid
 	if (cmd == Q_GETQUOTA) {
 		if (((type == USRQUOTA && current->euid != id) ||
 		     (type == GRPQUOTA && !in_egroup_p(id))) &&
-		    !capable(CAP_SYS_ADMIN))
+		    !capable(CAP_SYS_ADMIN) && !vx_ccaps(VXC_QUOTA_CTL))
 			return -EPERM;
 	}
 	else if (cmd != Q_GETFMT && cmd != Q_SYNC && cmd != Q_GETINFO)
-		if (!capable(CAP_SYS_ADMIN))
+		if (!capable(CAP_SYS_ADMIN) && !vx_ccaps(VXC_QUOTA_CTL))
 			return -EPERM;
 
 	return 0;
@@ -126,10 +128,10 @@ static int xqm_quotactl_valid(struct super_block *sb, int type, int cmd, qid_t i
 	if (cmd == Q_XGETQUOTA) {
 		if (((type == XQM_USRQUOTA && current->euid != id) ||
 		     (type == XQM_GRPQUOTA && !in_egroup_p(id))) &&
-		     !capable(CAP_SYS_ADMIN))
+		     !capable(CAP_SYS_ADMIN) && !vx_ccaps(VXC_QUOTA_CTL))
 			return -EPERM;
 	} else if (cmd != Q_XGETQSTAT) {
-		if (!capable(CAP_SYS_ADMIN))
+		if (!capable(CAP_SYS_ADMIN) && !vx_ccaps(VXC_QUOTA_CTL))
 			return -EPERM;
 	}
 
@@ -341,6 +343,10 @@ static int do_quotactl(struct super_block *sb, int type, int cmd, qid_t id, void
 	return 0;
 }
 
+#ifdef CONFIG_BLK_DEV_VROOT
+extern struct block_device *vroot_get_real_bdev(struct block_device *);
+#endif
+
 /*
  * This is the system call interface. This communicates with
  * the user-level programs. Currently this only supports diskquota
@@ -366,6 +372,22 @@ asmlinkage long sys_quotactl(unsigned int cmd, const char __user *special, qid_t
 		putname(tmp);
 		if (IS_ERR(bdev))
 			return PTR_ERR(bdev);
+#ifdef CONFIG_BLK_DEV_VROOT
+		printk("bdev=%p, gendisk=%p inode=%p[%d,%d]\n",
+			bdev, bdev?bdev->bd_disk:0, bdev->bd_inode,
+			imajor(bdev->bd_inode), iminor(bdev->bd_inode));
+
+		if (bdev && bdev->bd_inode &&
+			imajor(bdev->bd_inode) == VROOT_MAJOR) {
+			struct block_device *bdnew =
+				vroot_get_real_bdev(bdev);
+
+			bdput(bdev);
+			if (IS_ERR(bdnew))
+				return PTR_ERR(bdnew);
+			bdev = bdnew;
+		}
+#endif
 		sb = get_super(bdev);
 		bdput(bdev);
 		if (!sb)

@@ -576,6 +576,14 @@ config X86_VISWS_APIC
 	depends on X86_VISWS
 	default y
 
+config KERNEL_HZ
+	int "Timer Frequency (100-20000)"
+	range 100 20000
+	default "1000"
+	help
+	  This allows you to specify the frequency at which the
+	  kernel timer interrupt will occur.
+
 config X86_TSC
 	bool
 	depends on (MWINCHIP3D || MWINCHIP2 || MCRUSOE || MEFFICEON || MCYRIXIII || MK7 || MK6 || MPENTIUM4 || MPENTIUMM || MPENTIUMIII || MPENTIUMII || M686 || M586MMX || M586TSC || MK8 || MVIAC3_2 || MGEODE) && !X86_NUMAQ
@@ -740,6 +748,46 @@ config HIGHMEM64G
 	help
 	  Select this if you have a 32-bit processor and more than 4
 	  gigabytes of physical RAM.
+
+endchoice
+
+choice
+	prompt "Memory Split User Space"
+	default SPLIT_3GB
+	help
+	  A different Userspace/Kernel split allows you to
+	  utilize up to alsmost 3GB of RAM without the requirement
+	  for HIGHMEM. It also increases the available lowmem.
+
+config SPLIT_3GB
+	bool "3.0GB/1.0GB Kernel (Default)"
+	help
+	  This is the default split of 3GB userspace to 1GB kernel
+	  space, which will result in about 860MB of lowmem.
+
+config SPLIT_25GB
+	bool "2.5GB/1.5GB Kernel"
+	help
+	  This split provides 2.5GB userspace and 1.5GB kernel
+	  space, which will result in about 1370MB of lowmem.
+
+config SPLIT_2GB
+	bool "2.0GB/2.0GB Kernel"
+	help
+	  This split provides 2GB userspace and 2GB kernel
+	  space, which will result in about 1880MB of lowmem.
+
+config SPLIT_15GB
+	bool "1.5GB/2.5GB Kernel"
+	help
+	  This split provides 1.5GB userspace and 2.5GB kernel
+	  space, which will result in about 2390MB of lowmem.
+
+config SPLIT_1GB
+	bool "1.0GB/3.0GB Kernel"
+	help
+	  This split provides 1GB userspace and 3GB kernel
+	  space, which will result in about 2900MB of lowmem.
 
 endchoice
 
@@ -1225,6 +1273,8 @@ source "fs/Kconfig"
 source "arch/i386/oprofile/Kconfig"
 
 source "arch/i386/Kconfig.debug"
+
+source "kernel/vserver/Kconfig"
 
 source "security/Kconfig"
 

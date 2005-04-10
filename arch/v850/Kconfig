@@ -307,6 +307,8 @@ source "drivers/usb/Kconfig"
 
 source "arch/v850/Kconfig.debug"
 
+source "kernel/vserver/Kconfig"
+
 source "security/Kconfig"
 
 source "crypto/Kconfig"

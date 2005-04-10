@@ -53,6 +53,7 @@
 
 #include <linux/irq.h>
 #include <linux/module.h>
+#include <linux/vserver/debug.h>
 
 #include "mach_traps.h"
 
@@ -306,6 +307,7 @@ void die(const char * str, struct pt_regs * regs, long err)
 	};
 	static int die_counter;
 
+	vxh_throw_oops();
 	if (die.lock_owner != _smp_processor_id()) {
 		console_verbose();
 		spin_lock_irq(&die.lock);
@@ -340,6 +342,7 @@ void die(const char * str, struct pt_regs * regs, long err)
 	bust_spinlocks(0);
 	die.lock_owner = -1;
 	spin_unlock_irq(&die.lock);
+	vxh_dump_history();
 	if (in_interrupt())
 		panic("Fatal exception in interrupt");
 

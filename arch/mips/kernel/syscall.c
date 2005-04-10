@@ -26,6 +26,7 @@
 #include <linux/msg.h>
 #include <linux/shm.h>
 #include <linux/compiler.h>
+#include <linux/vs_cvirt.h>
 
 #include <asm/branch.h>
 #include <asm/cachectl.h>
@@ -210,7 +211,7 @@ out:
  */
 asmlinkage int sys_uname(struct old_utsname * name)
 {
-	if (name && !copy_to_user(name, &system_utsname, sizeof (*name)))
+	if (name && !copy_to_user(name, vx_new_utsname(), sizeof (*name)))
 		return 0;
 	return -EFAULT;
 }
@@ -221,21 +222,23 @@ asmlinkage int sys_uname(struct old_utsname * name)
 asmlinkage int sys_olduname(struct oldold_utsname * name)
 {
 	int error;
+	struct new_utsname *ptr;
 
 	if (!name)
 		return -EFAULT;
 	if (!access_ok(VERIFY_WRITE,name,sizeof(struct oldold_utsname)))
 		return -EFAULT;
 
-	error = __copy_to_user(&name->sysname,&system_utsname.sysname,__OLD_UTS_LEN);
+	ptr = vx_new_utsname();
+	error = __copy_to_user(&name->sysname,ptr->sysname,__OLD_UTS_LEN);
 	error -= __put_user(0,name->sysname+__OLD_UTS_LEN);
-	error -= __copy_to_user(&name->nodename,&system_utsname.nodename,__OLD_UTS_LEN);
+	error -= __copy_to_user(&name->nodename,ptr->nodename,__OLD_UTS_LEN);
 	error -= __put_user(0,name->nodename+__OLD_UTS_LEN);
-	error -= __copy_to_user(&name->release,&system_utsname.release,__OLD_UTS_LEN);
+	error -= __copy_to_user(&name->release,ptr->release,__OLD_UTS_LEN);
 	error -= __put_user(0,name->release+__OLD_UTS_LEN);
-	error -= __copy_to_user(&name->version,&system_utsname.version,__OLD_UTS_LEN);
+	error -= __copy_to_user(&name->version,ptr->version,__OLD_UTS_LEN);
 	error -= __put_user(0,name->version+__OLD_UTS_LEN);
-	error -= __copy_to_user(&name->machine,&system_utsname.machine,__OLD_UTS_LEN);
+	error -= __copy_to_user(&name->machine,ptr->machine,__OLD_UTS_LEN);
 	error = __put_user(0,name->machine+__OLD_UTS_LEN);
 	error = error ? -EFAULT : 0;
 
@@ -261,10 +264,10 @@ asmlinkage int _sys_sysmips(int cmd, long arg1, int arg2, int arg3)
 			return -EFAULT;
 
 		down_write(&uts_sem);
-		strncpy(system_utsname.nodename, nodename, len);
+		strncpy(vx_new_uts(nodename), nodename, len);
 		nodename[__NEW_UTS_LEN] = '\0';
-		strlcpy(system_utsname.nodename, nodename,
-		        sizeof(system_utsname.nodename));
+		strlcpy(vx_new_uts(nodename), nodename,
+			sizeof(vx_new_uts(nodename)));
 		up_write(&uts_sem);
 		return 0;
 	}

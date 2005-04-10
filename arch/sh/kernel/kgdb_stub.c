@@ -412,7 +412,7 @@ static struct task_struct *get_thread(int pid)
 	if (pid == PID_MAX) pid = 0;
 
 	/* First check via PID */
-	thread = find_task_by_pid(pid);
+	thread = find_task_by_real_pid(pid);
 
 	if (thread)
 		return thread;

@@ -53,6 +53,7 @@
 #include <linux/init.h>
 #include <linux/rmap.h>
 #include <linux/rcupdate.h>
+#include <linux/vs_memory.h>
 
 #include <asm/tlbflush.h>
 
@@ -436,7 +437,8 @@ void page_add_anon_rmap(struct page *page,
 	BUG_ON(PageReserved(page));
 	BUG_ON(!anon_vma);
 
-	inc_mm_counter(vma->vm_mm, anon_rss);
+	// inc_mm_counter(vma->vm_mm, anon_rss);
+	vx_anonpages_inc(vma->vm_mm);
 
 	anon_vma = (void *) anon_vma + PAGE_MAPPING_ANON;
 	index = (address - vma->vm_start) >> PAGE_SHIFT;
@@ -595,10 +597,12 @@ static int try_to_unmap_one(struct page *page, struct vm_area_struct *vma)
 		}
 		set_pte_at(mm, address, pte, swp_entry_to_pte(entry));
 		BUG_ON(pte_file(*pte));
-		dec_mm_counter(mm, anon_rss);
+		// dec_mm_counter(mm, anon_rss);
+		vx_anonpages_dec(mm);
 	}
 
-	inc_mm_counter(mm, rss);
+	// inc_mm_counter(mm, rss);
+	vx_rsspages_dec(mm);
 	page_remove_rmap(page);
 	page_cache_release(page);
 
@@ -703,7 +707,8 @@ static void try_to_unmap_cluster(unsigned long cursor,
 
 		page_remove_rmap(page);
 		page_cache_release(page);
-		dec_mm_counter(mm, rss);
+		// dec_mm_counter(mm, rss);
+		vx_rsspages_dec(mm);
 		(*mapcount)--;
 	}
 

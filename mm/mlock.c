@@ -9,6 +9,7 @@
 #include <linux/mm.h>
 #include <linux/mempolicy.h>
 #include <linux/syscalls.h>
+#include <linux/vs_memory.h>
 
 
 static int mlock_fixup(struct vm_area_struct *vma, struct vm_area_struct **prev,
@@ -64,7 +65,8 @@ success:
 			ret = make_pages_present(start, end);
 	}
 
-	vma->vm_mm->locked_vm -= pages;
+	// vma->vm_mm->locked_vm -= pages;
+	vx_vmlocked_sub(vma->vm_mm, pages);
 out:
 	if (ret == -ENOMEM)
 		ret = -EAGAIN;
@@ -122,7 +124,7 @@ static int do_mlock(unsigned long start, size_t len, int on)
 
 asmlinkage long sys_mlock(unsigned long start, size_t len)
 {
-	unsigned long locked;
+	unsigned long locked, grow;
 	unsigned long lock_limit;
 	int error = -ENOMEM;
 
@@ -133,8 +135,10 @@ asmlinkage long sys_mlock(unsigned long start, size_t len)
 	len = PAGE_ALIGN(len + (start & ~PAGE_MASK));
 	start &= PAGE_MASK;
 
-	locked = len >> PAGE_SHIFT;
-	locked += current->mm->locked_vm;
+	grow = len >> PAGE_SHIFT;
+	if (!vx_vmlocked_avail(current->mm, grow))
+		goto out;
+	locked = current->mm->locked_vm + grow;
 
 	lock_limit = current->signal->rlim[RLIMIT_MEMLOCK].rlim_cur;
 	lock_limit >>= PAGE_SHIFT;
@@ -142,6 +146,7 @@ asmlinkage long sys_mlock(unsigned long start, size_t len)
 	/* check against resource limits */
 	if ((locked <= lock_limit) || capable(CAP_IPC_LOCK))
 		error = do_mlock(start, len, 1);
+out:
 	up_write(&current->mm->mmap_sem);
 	return error;
 }
@@ -201,6 +206,8 @@ asmlinkage long sys_mlockall(int flags)
 	lock_limit >>= PAGE_SHIFT;
 
 	ret = -ENOMEM;
+	if (!vx_vmlocked_avail(current->mm, current->mm->total_vm))
+		goto out;
 	if (!(flags & MCL_CURRENT) || (current->mm->total_vm <= lock_limit) ||
 	    capable(CAP_IPC_LOCK))
 		ret = do_mlockall(flags);

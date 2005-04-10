@@ -447,7 +447,7 @@ sys_call_table:
 	.quad sys_stat64			/* 425 */
 	.quad sys_lstat64
 	.quad sys_fstat64
-	.quad sys_ni_syscall			/* sys_vserver */
+	.quad sys_vserver			/* sys_vserver */
 	.quad sys_ni_syscall			/* sys_mbind */
 	.quad sys_ni_syscall			/* sys_get_mempolicy */
 	.quad sys_ni_syscall			/* sys_set_mempolicy */

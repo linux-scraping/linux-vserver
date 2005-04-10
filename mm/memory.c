@@ -57,6 +57,7 @@
 
 #include <linux/swapops.h>
 #include <linux/elf.h>
+#include <linux/vs_cvirt.h>
 
 #ifndef CONFIG_DISCONTIGMEM
 /* use the per-pgdat data instead for discontigmem - mbligh */
@@ -309,9 +310,11 @@ copy_one_pte(struct mm_struct *dst_mm, struct mm_struct *src_mm,
 		pte = pte_mkclean(pte);
 	pte = pte_mkold(pte);
 	get_page(page);
-	inc_mm_counter(dst_mm, rss);
+	// inc_mm_counter(dst_mm, rss);
+	vx_rsspages_inc(dst_mm);
 	if (PageAnon(page))
-		inc_mm_counter(dst_mm, anon_rss);
+		// inc_mm_counter(dst_mm, anon_rss);
+		vx_anonpages_inc(dst_mm);
 	set_pte_at(dst_mm, addr, dst_pte, pte);
 	page_dup_rmap(page);
 }
@@ -475,7 +478,8 @@ static void zap_pte_range(struct mmu_gather *tlb, pmd_t *pmd,
 			if (pte_dirty(ptent))
 				set_page_dirty(page);
 			if (PageAnon(page))
-				dec_mm_counter(tlb->mm, anon_rss);
+				// dec_mm_counter(tlb->mm, anon_rss);
+				vx_anonpages_dec(tlb->mm);
 			else if (pte_young(ptent))
 				mark_page_accessed(page);
 			tlb->freed++;
@@ -885,14 +889,18 @@ int get_user_pages(struct task_struct *tsk, struct mm_struct *mm,
 				spin_unlock(&mm->page_table_lock);
 				switch (handle_mm_fault(mm,vma,start,write)) {
 				case VM_FAULT_MINOR:
+					vx_cacct_inc(tsk->vx_info, fault_minor);
 					tsk->min_flt++;
 					break;
 				case VM_FAULT_MAJOR:
+					vx_cacct_inc(tsk->vx_info, fault_major);
 					tsk->maj_flt++;
 					break;
 				case VM_FAULT_SIGBUS:
+					vx_cacct_inc(tsk->vx_info, fault_sigbus);
 					return i ? i : -EFAULT;
 				case VM_FAULT_OOM:
+					vx_cacct_inc(tsk->vx_info, fault_oom);
 					return i ? i : -ENOMEM;
 				default:
 					BUG();
@@ -1221,9 +1229,11 @@ static int do_wp_page(struct mm_struct *mm, struct vm_area_struct * vma,
 	page_table = pte_offset_map(pmd, address);
 	if (likely(pte_same(*page_table, pte))) {
 		if (PageAnon(old_page))
-			dec_mm_counter(mm, anon_rss);
+			// dec_mm_counter(mm, anon_rss);
+			vx_anonpages_dec(mm);
 		if (PageReserved(old_page))
-			inc_mm_counter(mm, rss);
+			// inc_mm_counter(mm, rss);
+			vx_rsspages_inc(mm);
 		else
 			page_remove_rmap(old_page);
 		flush_cache_page(vma, address, pfn);
@@ -1605,6 +1615,10 @@ static int do_swap_page(struct mm_struct * mm,
 		grab_swap_token();
 	}
 
+	if (!vx_rsspages_avail(mm, 1)) {
+		ret = VM_FAULT_OOM;
+		goto out;
+	}
 	mark_page_accessed(page);
 	lock_page(page);
 
@@ -1629,7 +1643,8 @@ static int do_swap_page(struct mm_struct * mm,
 	if (vm_swap_full())
 		remove_exclusive_swap_page(page);
 
-	inc_mm_counter(mm, rss);
+	// inc_mm_counter(mm, rss);
+	vx_rsspages_inc(mm);
 	pte = mk_pte(page, vma->vm_page_prot);
 	if (write_access && can_share_swap_page(page)) {
 		pte = maybe_mkwrite(pte_mkdirty(pte), vma);
@@ -1679,6 +1694,8 @@ do_anonymous_page(struct mm_struct *mm, struct vm_area_struct *vma,
 		pte_unmap(page_table);
 		spin_unlock(&mm->page_table_lock);
 
+		if (!vx_rsspages_avail(mm, 1))
+			goto no_mem;
 		if (unlikely(anon_vma_prepare(vma)))
 			goto no_mem;
 		page = alloc_zeroed_user_highpage(vma, addr);
@@ -1694,7 +1711,8 @@ do_anonymous_page(struct mm_struct *mm, struct vm_area_struct *vma,
 			spin_unlock(&mm->page_table_lock);
 			goto out;
 		}
-		inc_mm_counter(mm, rss);
+		// inc_mm_counter(mm, rss);
+		vx_rsspages_inc(mm);
 		entry = maybe_mkwrite(pte_mkdirty(mk_pte(page,
 							 vma->vm_page_prot)),
 				      vma);
@@ -1752,6 +1770,9 @@ do_no_page(struct mm_struct *mm, struct vm_area_struct *vma,
 	}
 retry:
 	cond_resched();
+	/* FIXME: is that check useful here? */
+	if (!vx_rsspages_avail(mm, 1))
+		return VM_FAULT_OOM;
 	new_page = vma->vm_ops->nopage(vma, address & PAGE_MASK, &ret);
 	/*
 	 * No smp_rmb is needed here as long as there's a full
@@ -1811,7 +1832,8 @@ retry:
 	/* Only go through if we didn't race with anybody else... */
 	if (pte_none(*page_table)) {
 		if (!PageReserved(new_page))
-			inc_mm_counter(mm, rss);
+			// inc_mm_counter(mm, rss);
+			vx_rsspages_inc(mm);
 
 		flush_icache_page(vma, new_page);
 		entry = mk_pte(new_page, vma->vm_page_prot);
@@ -1948,6 +1970,7 @@ int handle_mm_fault(struct mm_struct *mm, struct vm_area_struct * vma,
 
 	__set_current_state(TASK_RUNNING);
 
+	vx_cacct_inc(mm->mm_vx_info, fault_page);
 	inc_page_state(pgfault);
 
 	if (is_vm_hugetlb_page(vma))

@@ -598,6 +598,8 @@ source "arch/alpha/oprofile/Kconfig"
 
 source "arch/alpha/Kconfig.debug"
 
+source "kernel/vserver/Kconfig"
+
 source "security/Kconfig"
 
 source "crypto/Kconfig"

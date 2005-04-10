@@ -2407,7 +2407,10 @@ static void if6_seq_stop(struct seq_file *seq, void *v)
 static int if6_seq_show(struct seq_file *seq, void *v)
 {
 	struct inet6_ifaddr *ifp = (struct inet6_ifaddr *)v;
-	seq_printf(seq,
+
+	/* no ipv6 inside a vserver for now */
+	if (vx_check(0, VX_ADMIN|VX_WATCH))
+		seq_printf(seq,
 		   "%04x%04x%04x%04x%04x%04x%04x%04x %02x %02x %02x %02x %8s\n",
 		   NIP6(ifp->addr),
 		   ifp->idev->dev->ifindex,
@@ -2763,6 +2766,10 @@ static int inet6_dump_addr(struct sk_buff *skb, struct netlink_callback *cb,
 	struct ifmcaddr6 *ifmca;
 	struct ifacaddr6 *ifaca;
 
+	/* no ipv6 inside a vserver for now */
+	if (skb->sk && skb->sk->sk_vx_info)
+		return skb->len;
+
 	s_idx = cb->args[0];
 	s_ip_idx = ip_idx = cb->args[1];
 	read_lock(&dev_base_lock);
@@ -2977,6 +2984,10 @@ static int inet6_dump_ifinfo(struct sk_buff *skb, struct netlink_callback *cb)
 	int s_idx = cb->args[0];
 	struct net_device *dev;
 	struct inet6_dev *idev;
+
+	/* no ipv6 inside a vserver for now */
+	if (skb->sk && skb->sk->sk_vx_info)
+		return skb->len;
 
 	read_lock(&dev_base_lock);
 	for (dev=dev_base, idx=0; dev; dev = dev->next, idx++) {

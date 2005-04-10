@@ -473,6 +473,8 @@ source "arch/s390/oprofile/Kconfig"
 
 source "arch/s390/Kconfig.debug"
 
+source "kernel/vserver/Kconfig"
+
 source "security/Kconfig"
 
 source "crypto/Kconfig"

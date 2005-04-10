@@ -110,6 +110,9 @@ long sys_ptrace(long request, pid_t pid, long addr, long data)
 	read_unlock(&tasklist_lock);
 	if (!child)
 		goto out;
+	if (!vx_check(vx_task_xid(child), VX_WATCH|VX_IDENT))
+		goto out_tsk;
+
 	ret = -EPERM;
 	if (pid == 1)		/* no messing around with init! */
 		goto out_tsk;

@@ -1640,6 +1640,8 @@ source "fs/Kconfig"
 
 source "arch/mips/Kconfig.debug"
 
+source "kernel/vserver/Kconfig"
+
 source "security/Kconfig"
 
 source "crypto/Kconfig"

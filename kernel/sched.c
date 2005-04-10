@@ -50,6 +50,9 @@
 #include <asm/tlb.h>
 
 #include <asm/unistd.h>
+#include <linux/vs_context.h>
+#include <linux/vs_cvirt.h>
+#include <linux/vs_sched.h>
 
 /*
  * Convert user-nice values [ -20 ... 0 ... 19 ]
@@ -235,6 +238,10 @@ struct runqueue {
 
 	task_t *migration_thread;
 	struct list_head migration_queue;
+#endif
+#ifdef CONFIG_VSERVER_HARDCPU
+	struct list_head hold_queue;
+	int idle_tokens;
 #endif
 
 #ifdef CONFIG_SCHEDSTATS
@@ -541,6 +548,7 @@ static inline void sched_info_switch(task_t *prev, task_t *next)
  */
 static void dequeue_task(struct task_struct *p, prio_array_t *array)
 {
+	BUG_ON(p->state & TASK_ONHOLD);
 	array->nr_active--;
 	list_del(&p->run_list);
 	if (list_empty(array->queue + p->prio))
@@ -549,6 +557,7 @@ static void dequeue_task(struct task_struct *p, prio_array_t *array)
 
 static void enqueue_task(struct task_struct *p, prio_array_t *array)
 {
+	BUG_ON(p->state & TASK_ONHOLD);
 	sched_info_queued(p);
 	list_add_tail(&p->run_list, array->queue + p->prio);
 	__set_bit(p->prio, array->bitmap);
@@ -562,11 +571,13 @@ static void enqueue_task(struct task_struct *p, prio_array_t *array)
  */
 static void requeue_task(struct task_struct *p, prio_array_t *array)
 {
+	BUG_ON(p->state & TASK_ONHOLD);
 	list_move_tail(&p->run_list, array->queue + p->prio);
 }
 
 static inline void enqueue_task_head(struct task_struct *p, prio_array_t *array)
 {
+	BUG_ON(p->state & TASK_ONHOLD);
 	list_add(&p->run_list, array->queue + p->prio);
 	__set_bit(p->prio, array->bitmap);
 	array->nr_active++;
@@ -590,6 +601,7 @@ static inline void enqueue_task_head(struct task_struct *p, prio_array_t *array)
 static int effective_prio(task_t *p)
 {
 	int bonus, prio;
+	struct vx_info *vxi;
 
 	if (rt_task(p))
 		return p->prio;
@@ -597,6 +609,11 @@ static int effective_prio(task_t *p)
 	bonus = CURRENT_BONUS(p) - MAX_BONUS / 2;
 
 	prio = p->static_prio - bonus;
+
+	if ((vxi = p->vx_info) &&
+		vx_info_flags(vxi, VXF_SCHED_PRIO, 0))
+		prio += vx_effective_vavavoom(vxi, MAX_USER_PRIO);
+
 	if (prio < MAX_RT_PRIO)
 		prio = MAX_RT_PRIO;
 	if (prio > MAX_PRIO-1)
@@ -730,18 +747,84 @@ static void activate_task(task_t *p, runqueue_t *rq, int local)
 	}
 	p->timestamp = now;
 
+	vx_activate_task(p);
 	__activate_task(p, rq);
 }
 
 /*
  * deactivate_task - remove a task from the runqueue.
  */
-static void deactivate_task(struct task_struct *p, runqueue_t *rq)
+static void __deactivate_task(struct task_struct *p, runqueue_t *rq)
 {
 	rq->nr_running--;
 	dequeue_task(p, p->array);
 	p->array = NULL;
 }
+
+static inline
+void deactivate_task(struct task_struct *p, runqueue_t *rq)
+{
+	vx_deactivate_task(p);
+	__deactivate_task(p, rq);
+}
+
+
+#ifdef	CONFIG_VSERVER_HARDCPU
+/*
+ * vx_hold_task - put a task on the hold queue
+ */
+static inline
+void vx_hold_task(struct vx_info *vxi,
+	struct task_struct *p, runqueue_t *rq)
+{
+	__deactivate_task(p, rq);
+	p->state |= TASK_ONHOLD;
+	// recalc_task_prio(p, now);
+	// a new one on hold
+	vx_onhold_inc(vxi);
+	list_add_tail(&p->run_list, &rq->hold_queue);
+
+	//printk("··· %8lu hold   %p [%d]\n", jiffies, p, p->prio);
+}
+
+/*
+ * vx_unhold_task - put a task back to the runqueue
+ */
+static inline
+void vx_unhold_task(struct vx_info *vxi,
+	struct task_struct *p, runqueue_t *rq)
+{
+	list_del(&p->run_list);
+	// one less waiting
+	vx_onhold_dec(vxi);
+	// p->prio = MAX_PRIO-1;
+	// p->activated = 1;
+	// recalc_task_prio(p, now);
+	p->state &= ~TASK_ONHOLD;
+	enqueue_task(p, rq->expired);
+	rq->nr_running++;
+
+	if (p->static_prio < rq->best_expired_prio)
+		rq->best_expired_prio = p->static_prio;
+
+	// printk("··· %8lu unhold %p [%d]\n", jiffies, p, p->prio);
+}
+#else
+static inline
+void vx_hold_task(struct vx_info *vxi,
+	struct task_struct *p, runqueue_t *rq)
+{
+	return;
+}
+
+static inline
+void vx_unhold_task(struct vx_info *vxi,
+	struct task_struct *p, runqueue_t *rq)
+{
+	return;
+}
+#endif /* CONFIG_VSERVER_HARDCPU */
+
 
 /*
  * resched_task - mark a task 'to be rescheduled now'.
@@ -973,6 +1056,12 @@ static int try_to_wake_up(task_t * p, unsigned int state, int sync)
 
 	rq = task_rq_lock(p, &flags);
 	old_state = p->state;
+
+	/* we need to unhold suspended tasks */
+	if (old_state & TASK_ONHOLD) {
+		vx_unhold_task(p->vx_info, p, rq);
+		old_state = p->state;
+	}
 	if (!(old_state & state))
 		goto out;
 
@@ -1093,6 +1182,9 @@ out_activate:
 	 * to be considered on this CPU.)
 	 */
 	activate_task(p, rq, cpu == this_cpu);
+	/* this is to get the accounting behind the load update */
+	if (old_state == TASK_UNINTERRUPTIBLE)
+		vx_uninterruptible_dec(p);
 	if (!sync || cpu != this_cpu) {
 		if (TASK_PREEMPTS_CURR(p, rq))
 			resched_task(rq->curr);
@@ -1212,6 +1304,7 @@ void fastcall wake_up_new_task(task_t * p, unsigned long clone_flags)
 
 	p->prio = effective_prio(p);
 
+	vx_activate_task(p);
 	if (likely(cpu == this_cpu)) {
 		if (!(clone_flags & CLONE_VM)) {
 			/*
@@ -1223,6 +1316,7 @@ void fastcall wake_up_new_task(task_t * p, unsigned long clone_flags)
 				__activate_task(p, rq);
 			else {
 				p->prio = current->prio;
+				BUG_ON(p->state & TASK_ONHOLD);
 				list_add_tail(&p->run_list, &current->run_list);
 				p->array = current->array;
 				p->array->nr_active++;
@@ -2365,6 +2459,10 @@ void scheduler_tick(void)
 	if (p == rq->idle) {
 		if (wake_priority_sleeper(rq))
 			goto out;
+#ifdef CONFIG_VSERVER_HARDCPU_IDLE
+		if (!--rq->idle_tokens && !list_empty(&rq->hold_queue))
+			set_need_resched();
+#endif
 		rebalance_tick(cpu, rq, SCHED_IDLE);
 		return;
 	}
@@ -2397,7 +2495,7 @@ void scheduler_tick(void)
 		}
 		goto out_unlock;
 	}
-	if (!--p->time_slice) {
+	if (vx_need_resched(p)) {
 		dequeue_task(p, rq->active);
 		set_tsk_need_resched(p);
 		p->prio = effective_prio(p);
@@ -2613,6 +2711,10 @@ asmlinkage void __sched schedule(void)
 	struct list_head *queue;
 	unsigned long long now;
 	unsigned long run_time;
+	struct vx_info *vxi;
+#ifdef	CONFIG_VSERVER_HARDCPU
+	int maxidle = -HZ;
+#endif
 	int cpu, idx;
 
 	/*
@@ -2673,11 +2775,41 @@ need_resched_nonpreemptible:
 				unlikely(signal_pending(prev))))
 			prev->state = TASK_RUNNING;
 		else {
-			if (prev->state == TASK_UNINTERRUPTIBLE)
+			if (prev->state == TASK_UNINTERRUPTIBLE) {
 				rq->nr_uninterruptible++;
+				vx_uninterruptible_inc(prev);
+			}
 			deactivate_task(prev, rq);
 		}
 	}
+
+#ifdef CONFIG_VSERVER_HARDCPU
+	if (!list_empty(&rq->hold_queue)) {
+		struct list_head *l, *n;
+		int ret;
+
+		vxi = NULL;
+		list_for_each_safe(l, n, &rq->hold_queue) {
+			next = list_entry(l, task_t, run_list);
+			if (vxi == next->vx_info)
+				continue;
+
+			vxi = next->vx_info;
+			ret = vx_tokens_recalc(vxi);
+			// tokens = vx_tokens_avail(next);
+
+			if (ret > 0) {
+				vx_unhold_task(vxi, next, rq);
+				break;
+			}
+			if ((ret < 0) && (maxidle < ret))
+				maxidle = ret;
+		}
+	}
+	rq->idle_tokens = -maxidle;
+
+pick_next:
+#endif
 
 	cpu = smp_processor_id();
 	if (unlikely(!rq->nr_running)) {
@@ -2725,6 +2857,22 @@ go_idle:
 	idx = sched_find_first_bit(array->bitmap);
 	queue = array->queue + idx;
 	next = list_entry(queue->next, task_t, run_list);
+
+	vxi = next->vx_info;
+#ifdef	CONFIG_VSERVER_HARDCPU
+	if (vx_info_flags(vxi, VXF_SCHED_PAUSE|VXF_SCHED_HARD, 0)) {
+		int ret = vx_tokens_recalc(vxi);
+
+		if (unlikely(ret <= 0)) {
+			if (ret && (rq->idle_tokens > -ret))
+				rq->idle_tokens = -ret;
+			vx_hold_task(vxi, next, rq);
+			goto pick_next;
+		}
+	} else	/* well, looks ugly but not as ugly as the ifdef-ed version */
+#endif
+	if (vx_info_flags(vxi, VXF_SCHED_PRIO, 0))
+		vx_tokens_recalc(vxi);
 
 	if (!rt_task(next) && next->activated > 0) {
 		unsigned long long delta = now - next->timestamp;
@@ -3243,6 +3391,8 @@ asmlinkage long sys_nice(int increment)
 	 * and we have a single winner.
 	 */
 	if (increment < 0) {
+		if (vx_flags(VXF_IGNEG_NICE, 0))
+			return 0;
 		if (!capable(CAP_SYS_NICE))
 			return -EPERM;
 		if (increment < -40)
@@ -3398,6 +3548,7 @@ recheck:
 	oldprio = p->prio;
 	__setscheduler(p, policy, param->sched_priority);
 	if (array) {
+		vx_activate_task(p);
 		__activate_task(p, rq);
 		/*
 		 * Reschedule if we are currently running on this runqueue and
@@ -4923,6 +5074,9 @@ void __init sched_init(void)
 		INIT_LIST_HEAD(&rq->migration_queue);
 #endif
 		atomic_set(&rq->nr_iowait, 0);
+#ifdef CONFIG_VSERVER_HARDCPU
+		INIT_LIST_HEAD(&rq->hold_queue);
+#endif
 
 		for (j = 0; j < 2; j++) {
 			array = rq->arrays + j;
@@ -4992,6 +5146,7 @@ void normalize_rt_tasks(void)
 			deactivate_task(p, task_rq(p));
 		__setscheduler(p, SCHED_NORMAL, 0);
 		if (array) {
+			vx_activate_task(p);
 			__activate_task(p, task_rq(p));
 			resched_task(rq->curr);
 		}

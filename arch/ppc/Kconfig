@@ -1312,6 +1312,8 @@ source "arch/ppc/oprofile/Kconfig"
 
 source "arch/ppc/Kconfig.debug"
 
+source "kernel/vserver/Kconfig"
+
 source "security/Kconfig"
 
 source "crypto/Kconfig"

@@ -23,6 +23,7 @@
 #include <linux/buffer_head.h>
 #include <linux/random.h>
 #include <linux/bitops.h>
+#include <linux/vs_dlimit.h>
 
 #include <asm/byteorder.h>
 
@@ -125,6 +126,7 @@ void ext3_free_inode (handle_t *handle, struct inode * inode)
 	 */
 	DQUOT_INIT(inode);
 	ext3_xattr_delete_inode(handle, inode);
+	DLIMIT_FREE_INODE(sb, inode->i_xid);
 	DQUOT_FREE_INODE(inode);
 	DQUOT_DROP(inode);
 
@@ -443,6 +445,16 @@ struct inode *ext3_new_inode(handle_t *handle, struct inode * dir, int mode)
 	inode = new_inode(sb);
 	if (!inode)
 		return ERR_PTR(-ENOMEM);
+
+	if (sb->s_flags & MS_TAGXID)
+		inode->i_xid = vx_current_xid();
+	else
+		inode->i_xid = 0;
+
+	if (DLIMIT_ALLOC_INODE(sb, inode->i_xid)) {
+		err = -ENOSPC;
+		goto out;
+	}
 	ei = EXT3_I(inode);
 
 	sbi = EXT3_SB(sb);
@@ -565,7 +577,8 @@ got:
 	ei->i_dir_start_lookup = 0;
 	ei->i_disksize = 0;
 
-	ei->i_flags = EXT3_I(dir)->i_flags & ~EXT3_INDEX_FL;
+	ei->i_flags = EXT3_I(dir)->i_flags &
+		~(EXT3_INDEX_FL|EXT3_IUNLINK_FL|EXT3_BARRIER_FL);
 	if (S_ISLNK(mode))
 		ei->i_flags &= ~(EXT3_IMMUTABLE_FL|EXT3_APPEND_FL);
 	/* dirsync only applies to directories */
@@ -616,6 +629,7 @@ got:
 	ext3_debug("allocating inode %lu\n", inode->i_ino);
 	goto really_out;
 fail:
+	DLIMIT_FREE_INODE(sb, inode->i_xid);
 	ext3_std_error(sb, err);
 out:
 	iput(inode);
@@ -625,6 +639,7 @@ really_out:
 	return ret;
 
 fail2:
+	DLIMIT_FREE_INODE(sb, inode->i_xid);
 	inode->i_flags |= S_NOQUOTA;
 	inode->i_nlink = 0;
 	iput(inode);

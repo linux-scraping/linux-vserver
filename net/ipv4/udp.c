@@ -174,14 +174,12 @@ gotit:
 			struct inet_sock *inet2 = inet_sk(sk2);
 
 			if (inet2->num == snum &&
-			    sk2 != sk &&
-			    !ipv6_only_sock(sk2) &&
+			    sk2 != sk && !ipv6_only_sock(sk2) &&
 			    (!sk2->sk_bound_dev_if ||
 			     !sk->sk_bound_dev_if ||
 			     sk2->sk_bound_dev_if == sk->sk_bound_dev_if) &&
-			    (!inet2->rcv_saddr ||
-			     !inet->rcv_saddr ||
-			     inet2->rcv_saddr == inet->rcv_saddr) &&
+			    nx_addr_conflict(sk->sk_nx_info,
+			     tcp_v4_rcv_saddr(sk), sk2) &&
 			    (!sk2->sk_reuse || !sk->sk_reuse))
 				goto fail;
 		}
@@ -216,6 +214,17 @@ static void udp_v4_unhash(struct sock *sk)
 	write_unlock_bh(&udp_hash_lock);
 }
 
+static inline int udp_in_list(struct nx_info *nx_info, u32 addr)
+{
+	int n = nx_info->nbipv4;
+	int i;
+
+	for (i=0; i<n; i++)
+		if (nx_info->ipv4[i] == addr)
+			return 1;
+	return 0;
+}
+
 /* UDP is nearly always wildcards out the wazoo, it makes no sense to try
  * harder than this. -DaveM
  */
@@ -236,6 +245,11 @@ static struct sock *udp_v4_lookup_longway(u32 saddr, u16 sport,
 				if (inet->rcv_saddr != daddr)
 					continue;
 				score+=2;
+			} else if (sk->sk_nx_info) {
+				if (udp_in_list(sk->sk_nx_info, daddr))
+					score+=2;
+				else
+					continue;
 			}
 			if (inet->daddr) {
 				if (inet->daddr != saddr)
@@ -292,7 +306,8 @@ static inline struct sock *udp_v4_mcast_next(struct sock *sk,
 		if (inet->num != hnum					||
 		    (inet->daddr && inet->daddr != rmt_addr)		||
 		    (inet->dport != rmt_port && inet->dport)		||
-		    (inet->rcv_saddr && inet->rcv_saddr != loc_addr)	||
+		    (inet->rcv_saddr && inet->rcv_saddr != loc_addr &&
+		     inet->rcv_saddr2 && inet->rcv_saddr2 != loc_addr)	||
 		    ipv6_only_sock(s)					||
 		    (s->sk_bound_dev_if && s->sk_bound_dev_if != dif))
 			continue;
@@ -602,6 +617,15 @@ int udp_sendmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
 				    .uli_u = { .ports =
 					       { .sport = inet->sport,
 						 .dport = dport } } };
+		struct nx_info *nxi = sk->sk_nx_info;
+
+		if (nxi) {
+			err = ip_find_src(nxi, &rt, &fl);
+			if (err)
+				goto out;
+			if (daddr == IPI_LOOPBACK && !vx_check(0, VX_ADMIN))
+				daddr = fl.fl4_dst = nxi->ipv4[0];
+		}
 		err = ip_route_output_flow(&rt, &fl, sk, !(msg->msg_flags&MSG_DONTWAIT));
 		if (err)
 			goto out;
@@ -1384,8 +1408,10 @@ static struct sock *udp_get_first(struct seq_file *seq)
 
 	for (state->bucket = 0; state->bucket < UDP_HTABLE_SIZE; ++state->bucket) {
 		struct hlist_node *node;
+
 		sk_for_each(sk, node, &udp_hash[state->bucket]) {
-			if (sk->sk_family == state->family)
+			if (sk->sk_family == state->family &&
+				vx_check(sk->sk_xid, VX_IDENT|VX_WATCH))
 				goto found;
 		}
 	}
@@ -1402,7 +1428,8 @@ static struct sock *udp_get_next(struct seq_file *seq, struct sock *sk)
 		sk = sk_next(sk);
 try_again:
 		;
-	} while (sk && sk->sk_family != state->family);
+	} while (sk && (sk->sk_family != state->family ||
+		!vx_check(sk->sk_xid, VX_IDENT|VX_WATCH)));
 
 	if (!sk && ++state->bucket < UDP_HTABLE_SIZE) {
 		sk = sk_head(&udp_hash[state->bucket]);

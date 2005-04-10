@@ -1769,7 +1769,7 @@ static int __init timer_irq_works(void)
 
 	local_irq_enable();
 	/* Let ten ticks pass... */
-	mdelay((10 * 1000) / HZ);
+	mdelay((10 * 1000) / HZ + 1);
 
 	/*
 	 * Expect a few ticks at least, to be sure some possible

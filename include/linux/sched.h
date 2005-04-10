@@ -34,6 +34,7 @@
 #include <linux/percpu.h>
 #include <linux/topology.h>
 #include <linux/seccomp.h>
+#include <linux/vs_base.h>
 
 struct exec_domain;
 
@@ -112,6 +113,7 @@ extern unsigned long nr_iowait(void);
 #define TASK_TRACED		8
 #define EXIT_ZOMBIE		16
 #define EXIT_DEAD		32
+#define TASK_ONHOLD		64
 
 #define __set_task_state(tsk, state_value)		\
 	do { (tsk)->state = (state_value); } while (0)
@@ -250,6 +252,7 @@ struct mm_struct {
 
 	/* Architecture-specific MM context */
 	mm_context_t context;
+	struct vx_info *mm_vx_info;
 
 	/* Token based thrashing protection. */
 	unsigned long swap_token_time;
@@ -416,9 +419,10 @@ struct user_struct {
 	/* Hash table maintenance information */
 	struct list_head uidhash_list;
 	uid_t uid;
+	xid_t xid;
 };
 
-extern struct user_struct *find_user(uid_t);
+extern struct user_struct *find_user(xid_t, uid_t);
 
 extern struct user_struct root_user;
 #define INIT_USER (&root_user)
@@ -691,6 +695,14 @@ struct task_struct {
 	struct audit_context *audit_context;
 	seccomp_t seccomp;
 
+/* vserver context data */
+	xid_t xid;
+	struct vx_info *vx_info;
+
+/* vserver network data */
+	nid_t nid;
+	struct nx_info *nx_info;
+
 /* Thread group tracking */
    	u32 parent_exec_id;
    	u32 self_exec_id;
@@ -877,13 +889,21 @@ extern struct task_struct init_task;
 
 extern struct   mm_struct init_mm;
 
-#define find_task_by_pid(nr)	find_task_by_pid_type(PIDTYPE_PID, nr)
+
+#define find_task_by_real_pid(nr) \
+	find_task_by_pid_type(PIDTYPE_PID, nr)
+#define find_task_by_pid(nr) \
+	find_task_by_pid_type(PIDTYPE_PID, \
+		vx_rmap_pid(nr))
+
 extern struct task_struct *find_task_by_pid_type(int type, int pid);
-extern void set_special_pids(pid_t session, pid_t pgrp);
-extern void __set_special_pids(pid_t session, pid_t pgrp);
+extern void set_special_task_pids(struct task_struct *task,
+	pid_t session, pid_t pgrp);
+extern void __set_special_task_pids(struct task_struct *task,
+	pid_t session, pid_t pgrp);
 
 /* per-UID process charging. */
-extern struct user_struct * alloc_uid(uid_t);
+extern struct user_struct * alloc_uid(xid_t, uid_t);
 static inline struct user_struct *get_uid(struct user_struct *u)
 {
 	atomic_inc(&u->__count);
@@ -976,10 +996,23 @@ static inline int sas_ss_flags(unsigned long sp)
 #ifdef CONFIG_SECURITY
 /* code is in security.c */
 extern int capable(int cap);
+extern int vx_capable(int cap, int ccap);
 #else
 static inline int capable(int cap)
 {
+	if (vx_check_bit(VXC_CAP_MASK, cap) && !vx_mcaps(1L << cap))
+		return 0;
 	if (cap_raised(current->cap_effective, cap)) {
+		current->flags |= PF_SUPERPRIV;
+		return 1;
+	}
+	return 0;
+}
+
+static inline int vx_capable(int cap, int ccap)
+{
+	if (cap_raised(current->cap_effective, cap) &&
+		vx_ccaps(ccap)) {
 		current->flags |= PF_SUPERPRIV;
 		return 1;
 	}

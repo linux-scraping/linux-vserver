@@ -22,8 +22,8 @@
 #define UIDHASH_BITS (CONFIG_BASE_SMALL ? 3 : 8)
 #define UIDHASH_SZ		(1 << UIDHASH_BITS)
 #define UIDHASH_MASK		(UIDHASH_SZ - 1)
-#define __uidhashfn(uid)	(((uid >> UIDHASH_BITS) + uid) & UIDHASH_MASK)
-#define uidhashentry(uid)	(uidhash_table + __uidhashfn((uid)))
+#define __uidhashfn(xid,uid)	((((uid) >> UIDHASH_BITS) + ((uid)^(xid))) & UIDHASH_MASK)
+#define uidhashentry(xid,uid)	(uidhash_table + __uidhashfn((xid),(uid)))
 
 static kmem_cache_t *uid_cachep;
 static struct list_head uidhash_table[UIDHASH_SZ];
@@ -55,7 +55,7 @@ static inline void uid_hash_remove(struct user_struct *up)
 	list_del(&up->uidhash_list);
 }
 
-static inline struct user_struct *uid_hash_find(uid_t uid, struct list_head *hashent)
+static inline struct user_struct *uid_hash_find(xid_t xid, uid_t uid, struct list_head *hashent)
 {
 	struct list_head *up;
 
@@ -64,7 +64,7 @@ static inline struct user_struct *uid_hash_find(uid_t uid, struct list_head *has
 
 		user = list_entry(up, struct user_struct, uidhash_list);
 
-		if(user->uid == uid) {
+		if(user->uid == uid && user->xid == xid) {
 			atomic_inc(&user->__count);
 			return user;
 		}
@@ -79,12 +79,12 @@ static inline struct user_struct *uid_hash_find(uid_t uid, struct list_head *has
  *
  * If the user_struct could not be found, return NULL.
  */
-struct user_struct *find_user(uid_t uid)
+struct user_struct *find_user(xid_t xid, uid_t uid)
 {
 	struct user_struct *ret;
 
 	spin_lock(&uidhash_lock);
-	ret = uid_hash_find(uid, uidhashentry(uid));
+	ret = uid_hash_find(xid, uid, uidhashentry(xid, uid));
 	spin_unlock(&uidhash_lock);
 	return ret;
 }
@@ -100,13 +100,13 @@ void free_uid(struct user_struct *up)
 	}
 }
 
-struct user_struct * alloc_uid(uid_t uid)
+struct user_struct * alloc_uid(xid_t xid, uid_t uid)
 {
-	struct list_head *hashent = uidhashentry(uid);
+	struct list_head *hashent = uidhashentry(xid, uid);
 	struct user_struct *up;
 
 	spin_lock(&uidhash_lock);
-	up = uid_hash_find(uid, hashent);
+	up = uid_hash_find(xid, uid, hashent);
 	spin_unlock(&uidhash_lock);
 
 	if (!up) {
@@ -116,6 +116,7 @@ struct user_struct * alloc_uid(uid_t uid)
 		if (!new)
 			return NULL;
 		new->uid = uid;
+		new->xid = xid;
 		atomic_set(&new->__count, 1);
 		atomic_set(&new->processes, 0);
 		atomic_set(&new->files, 0);
@@ -134,7 +135,7 @@ struct user_struct * alloc_uid(uid_t uid)
 		 * on adding the same user already..
 		 */
 		spin_lock(&uidhash_lock);
-		up = uid_hash_find(uid, hashent);
+		up = uid_hash_find(xid, uid, hashent);
 		if (up) {
 			key_put(new->uid_keyring);
 			key_put(new->session_keyring);
@@ -180,7 +181,7 @@ static int __init uid_cache_init(void)
 
 	/* Insert the root user immediately (init already runs as root) */
 	spin_lock(&uidhash_lock);
-	uid_hash_insert(&root_user, uidhashentry(0));
+	uid_hash_insert(&root_user, uidhashentry(0,0));
 	spin_unlock(&uidhash_lock);
 
 	return 0;

@@ -3,6 +3,8 @@
 
 #include <linux/config.h>
 #include <linux/swap.h>
+#include <linux/vs_memory.h>
+
 #include <asm/pgalloc.h>
 #include <asm/tlbflush.h>
 #include <asm/mmu_context.h>
@@ -84,7 +86,8 @@ static inline void tlb_finish_mmu(struct mmu_gather *mp, unsigned long start, un
 
 	if (rss < freed)
 		freed = rss;
-	add_mm_counter(mm, rss, -freed);
+	// add_mm_counter(mm, rss, -freed);
+	vx_rsspages_sub(mm, freed);
 
 	tlb_flush_mmu(mp);
 

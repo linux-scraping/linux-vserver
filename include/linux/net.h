@@ -62,6 +62,7 @@ typedef enum {
 #define SOCK_ASYNC_WAITDATA	1
 #define SOCK_NOSPACE		2
 #define SOCK_PASSCRED		3
+#define SOCK_USER_SOCKET	4
 
 #ifndef ARCH_HAS_SOCKET_TYPES
 /** sock_type - Socket types

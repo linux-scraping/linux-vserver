@@ -74,6 +74,7 @@ struct cfq_io_context {
 struct io_context {
 	atomic_t refcount;
 	pid_t pid;
+	struct vx_info *vx_info;
 
 	/*
 	 * For request batching
@@ -179,6 +180,8 @@ struct request {
 	 * For Power Management requests
 	 */
 	struct request_pm_state *pm;
+
+	struct vx_info *vx_info;
 
 	/*
 	 * completion callback. end_io_data should be folded in with waiting

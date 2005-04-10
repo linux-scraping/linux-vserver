@@ -177,6 +177,7 @@ static int newary (key_t key, int nsems, int semflg)
 
 	sma->sem_perm.mode = (semflg & S_IRWXUGO);
 	sma->sem_perm.key = key;
+	sma->sem_perm.xid = vx_current_xid();
 
 	sma->sem_perm.security = NULL;
 	retval = security_sem_alloc(sma);
@@ -1347,7 +1348,11 @@ static int sysvipc_sem_read_proc(char *buffer, char **start, off_t offset, int l
 	for(i = 0; i <= sem_ids.max_id; i++) {
 		struct sem_array *sma;
 		sma = sem_lock(i);
-		if(sma) {
+		if (sma) {
+			if (!vx_check(sma->sem_perm.xid, VX_IDENT)) {
+				sem_unlock(sma);
+				continue;
+			}
 			len += sprintf(buffer + len, "%10d %10d  %4o %10lu %5u %5u %5u %5u %10lu %10lu\n",
 				sma->sem_perm.key,
 				sem_buildid(i,sma->sem_perm.seq),

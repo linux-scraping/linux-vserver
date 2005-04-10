@@ -699,9 +699,11 @@ sys_ptrace(long request, long pid, long addr, long data)
 	read_unlock(&tasklist_lock);
 	if (!child)
 		goto out;
+	if (!vx_check(vx_task_xid(child), VX_WATCH|VX_IDENT))
+		goto out_tsk;
 
 	ret = do_ptrace(child, request, addr, data);
-
+out_tsk:
 	put_task_struct(child);
 out:
 	unlock_kernel();

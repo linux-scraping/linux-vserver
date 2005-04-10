@@ -57,7 +57,11 @@ enum {
 
 #define	LAPB_DEFAULT_MODE		(LAPB_STANDARD | LAPB_SLP | LAPB_DTE)
 #define	LAPB_DEFAULT_WINDOW		7		/* Window=7 */
+#if HZ < 2185
 #define	LAPB_DEFAULT_T1			(5 * HZ)	/* T1=5s    */
+#else
+#define	LAPB_DEFAULT_T1			(65534)		/* T1=max   */
+#endif
 #define	LAPB_DEFAULT_T2			(1 * HZ)	/* T2=1s    */
 #define	LAPB_DEFAULT_N2			20		/* N2=20    */
 

@@ -257,6 +257,11 @@ __syscall_start:
 		.long	sys_lremovexattr
 		.long	sys_fremovexattr
 		.long	sys_tkill
+
+		.rept	313 - (. - __syscall_start) / 4
+			.long	sys_ni_syscall
+		.endr
+		.long	sys_vserver	/* 313 */
 __syscall_end:
 
 		.rept	NR_syscalls - (__syscall_end - __syscall_start) / 4

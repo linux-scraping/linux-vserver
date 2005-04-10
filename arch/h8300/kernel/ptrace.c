@@ -80,6 +80,8 @@ asmlinkage int sys_ptrace(long request, long pid, long addr, long data)
 	read_unlock(&tasklist_lock);
 	if (!child)
 		goto out;
+	if (!vx_check(vx_task_xid(child), VX_WATCH|VX_IDENT))
+		goto out_tsk;
 
 	ret = -EPERM;
 	if (pid == 1)		/* you may not mess with init */

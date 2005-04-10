@@ -21,6 +21,8 @@
 #include "linux/spinlock.h"
 #include "linux/proc_fs.h"
 #include "linux/ptrace.h"
+#include "linux/vs_cvirt.h"
+
 #include "linux/random.h"
 #include "asm/unistd.h"
 #include "asm/mman.h"

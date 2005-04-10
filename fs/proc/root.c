@@ -23,6 +23,9 @@ struct proc_dir_entry *proc_net, *proc_net_stat, *proc_bus, *proc_root_fs, *proc
 #ifdef CONFIG_SYSCTL
 struct proc_dir_entry *proc_sys_root;
 #endif
+struct proc_dir_entry *proc_virtual;
+
+extern void proc_vx_init(void);
 
 static struct super_block *proc_get_sb(struct file_system_type *fs_type,
 	int flags, const char *dev_name, void *data)
@@ -77,6 +80,7 @@ void __init proc_root_init(void)
 	proc_device_tree_init();
 #endif
 	proc_bus = proc_mkdir("bus", NULL);
+	proc_vx_init();
 }
 
 static struct dentry *proc_root_lookup(struct inode * dir, struct dentry * dentry, struct nameidata *nd)

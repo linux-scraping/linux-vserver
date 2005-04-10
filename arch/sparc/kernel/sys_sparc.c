@@ -21,6 +21,7 @@
 #include <linux/utsname.h>
 #include <linux/smp.h>
 #include <linux/smp_lock.h>
+#include <linux/vs_cvirt.h>
 
 #include <asm/uaccess.h>
 #include <asm/ipc.h>
@@ -470,13 +471,13 @@ asmlinkage int sys_getdomainname(char __user *name, int len)
  	
  	down_read(&uts_sem);
  	
-	nlen = strlen(system_utsname.domainname) + 1;
+	nlen = strlen(vx_new_uts(domainname)) + 1;
 
 	if (nlen < len)
 		len = nlen;
 	if (len > __NEW_UTS_LEN)
 		goto done;
-	if (copy_to_user(name, system_utsname.domainname, len))
+	if (copy_to_user(name, vx_new_uts(domainname), len))
 		goto done;
 	err = 0;
 done:

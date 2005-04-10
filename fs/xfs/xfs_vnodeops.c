@@ -832,6 +832,10 @@ xfs_setattr(
 			di_flags = (ip->i_d.di_flags & XFS_DIFLAG_PREALLOC);
 			if (vap->va_xflags & XFS_XFLAG_IMMUTABLE)
 				di_flags |= XFS_DIFLAG_IMMUTABLE;
+			if (vap->va_xflags & XFS_XFLAG_IUNLINK)
+				di_flags |= XFS_DIFLAG_IUNLINK;
+			if (vap->va_xflags & XFS_XFLAG_BARRIER)
+				di_flags |= XFS_DIFLAG_BARRIER;
 			if (vap->va_xflags & XFS_XFLAG_APPEND)
 				di_flags |= XFS_DIFLAG_APPEND;
 			if (vap->va_xflags & XFS_XFLAG_SYNC)

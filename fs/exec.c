@@ -48,6 +48,7 @@
 #include <linux/syscalls.h>
 #include <linux/rmap.h>
 #include <linux/acct.h>
+#include <linux/vs_memory.h>
 
 #include <asm/uaccess.h>
 #include <asm/mmu_context.h>
@@ -326,7 +327,8 @@ void install_arg_page(struct vm_area_struct *vma,
 		pte_unmap(pte);
 		goto out;
 	}
-	inc_mm_counter(mm, rss);
+	// inc_mm_counter(mm, rss);
+	vx_rsspages_inc(mm);
 	lru_cache_add_active(page);
 	set_pte_at(mm, address, pte, pte_mkdirty(pte_mkwrite(mk_pte(
 					page, vma->vm_page_prot))));
@@ -417,7 +419,8 @@ int setup_arg_pages(struct linux_binprm *bprm,
 	if (!mpnt)
 		return -ENOMEM;
 
-	if (security_vm_enough_memory(arg_size >> PAGE_SHIFT)) {
+	if (security_vm_enough_memory(arg_size >> PAGE_SHIFT) ||
+		!vx_vmpages_avail(mm, arg_size >> PAGE_SHIFT)) {
 		kmem_cache_free(vm_area_cachep, mpnt);
 		return -ENOMEM;
 	}
@@ -450,7 +453,9 @@ int setup_arg_pages(struct linux_binprm *bprm,
 			kmem_cache_free(vm_area_cachep, mpnt);
 			return ret;
 		}
-		mm->stack_vm = mm->total_vm = vma_pages(mpnt);
+		// mm->stack_vm = mm->total_vm = vma_pages(mpnt);
+		vx_vmpages_sub(mm, mm->total_vm - vma_pages(mpnt));
+		mm->stack_vm = mm->total_vm;
 	}
 
 	for (i = 0 ; i < MAX_ARG_PAGES ; i++) {

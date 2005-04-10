@@ -1009,6 +1009,10 @@ munmap_back:
 	    > current->signal->rlim[RLIMIT_AS].rlim_cur)
 		return -ENOMEM;
 
+	/* check context space, maybe only Private writable mapping? */
+	if (!vx_vmpages_avail(mm, len >> PAGE_SHIFT))
+		return -ENOMEM;
+
 	if (accountable && (!(flags & MAP_NORESERVE) ||
 			    sysctl_overcommit_memory == OVERCOMMIT_NEVER)) {
 		if (vm_flags & VM_SHARED) {
@@ -1108,10 +1112,12 @@ munmap_back:
 		kmem_cache_free(vm_area_cachep, vma);
 	}
 out:	
-	mm->total_vm += len >> PAGE_SHIFT;
+	// mm->total_vm += len >> PAGE_SHIFT;
+	vx_vmpages_add(mm, len >> PAGE_SHIFT);
 	__vm_stat_account(mm, vm_flags, file, len >> PAGE_SHIFT);
 	if (vm_flags & VM_LOCKED) {
-		mm->locked_vm += len >> PAGE_SHIFT;
+		// mm->locked_vm += len >> PAGE_SHIFT;
+		vx_vmlocked_add(mm, len >> PAGE_SHIFT);
 		make_pages_present(addr, addr + len);
 	}
 	if (flags & MAP_POPULATE) {
@@ -1433,6 +1439,9 @@ static int acct_stack_growth(struct vm_area_struct * vma, unsigned long size, un
 			return -ENOMEM;
 	}
 
+	if (!vx_vmpages_avail(vma->vm_mm, grow))
+		return -ENOMEM;
+
 	/*
 	 * Overcommit..  This must be the final test, as it will
 	 * update security statistics.
@@ -1441,9 +1450,11 @@ static int acct_stack_growth(struct vm_area_struct * vma, unsigned long size, un
 		return -ENOMEM;
 
 	/* Ok, everything looks good - let it rip */
-	mm->total_vm += grow;
+	// mm->total_vm += grow;
+	vx_vmpages_add(mm, grow);
 	if (vma->vm_flags & VM_LOCKED)
-		mm->locked_vm += grow;
+		// mm->locked_vm += grow;
+		vx_vmlocked_add(mm, grow);
 	__vm_stat_account(mm, vma->vm_flags, vma->vm_file, grow);
 	return 0;
 }
@@ -1643,9 +1654,12 @@ static void unmap_vma(struct mm_struct *mm, struct vm_area_struct *area)
 {
 	size_t len = area->vm_end - area->vm_start;
 
-	area->vm_mm->total_vm -= len >> PAGE_SHIFT;
+	// area->vm_mm->total_vm -= len >> PAGE_SHIFT;
+	vx_vmpages_sub(area->vm_mm, len >> PAGE_SHIFT);
+
 	if (area->vm_flags & VM_LOCKED)
-		area->vm_mm->locked_vm -= len >> PAGE_SHIFT;
+		// area->vm_mm->locked_vm -= len >> PAGE_SHIFT;
+		vx_vmlocked_sub(area->vm_mm, len >> PAGE_SHIFT);
 	vm_stat_unaccount(area);
 	area->vm_mm->unmap_area(area);
 	remove_vm_struct(area);
@@ -1888,6 +1902,8 @@ unsigned long do_brk(unsigned long addr, unsigned long len)
 		locked += len;
 		if (locked > lock_limit && !capable(CAP_IPC_LOCK))
 			return -EAGAIN;
+		if (!vx_vmlocked_avail(mm, len >> PAGE_SHIFT))
+			return -ENOMEM;
 	}
 
 	/*
@@ -1915,7 +1931,8 @@ unsigned long do_brk(unsigned long addr, unsigned long len)
 	if (mm->map_count > sysctl_max_map_count)
 		return -ENOMEM;
 
-	if (security_vm_enough_memory(len >> PAGE_SHIFT))
+	if (security_vm_enough_memory(len >> PAGE_SHIFT) ||
+		!vx_vmpages_avail(mm, len >> PAGE_SHIFT))
 		return -ENOMEM;
 
 	flags = VM_DATA_DEFAULT_FLAGS | VM_ACCOUNT | mm->def_flags;
@@ -1943,9 +1960,11 @@ unsigned long do_brk(unsigned long addr, unsigned long len)
 	vma->vm_page_prot = protection_map[flags & 0x0f];
 	vma_link(mm, vma, prev, rb_link, rb_parent);
 out:
-	mm->total_vm += len >> PAGE_SHIFT;
+	// mm->total_vm += len >> PAGE_SHIFT;
+	vx_vmpages_add(mm, len >> PAGE_SHIFT);
 	if (flags & VM_LOCKED) {
-		mm->locked_vm += len >> PAGE_SHIFT;
+		// mm->locked_vm += len >> PAGE_SHIFT;
+		vx_vmlocked_add(mm, len >> PAGE_SHIFT);
 		make_pages_present(addr, addr + len);
 	}
 	return addr;
@@ -1978,9 +1997,12 @@ void exit_mmap(struct mm_struct *mm)
 	vma = mm->mmap;
 	mm->mmap = mm->mmap_cache = NULL;
 	mm->mm_rb = RB_ROOT;
-	set_mm_counter(mm, rss, 0);
-	mm->total_vm = 0;
-	mm->locked_vm = 0;
+	// set_mm_counter(mm, rss, 0);
+	vx_rsspages_sub(mm, mm->rss);
+	// mm->total_vm = 0;
+	vx_vmpages_sub(mm, mm->total_vm);
+	// mm->locked_vm = 0;
+	vx_vmlocked_sub(mm, mm->locked_vm);
 
 	spin_unlock(&mm->page_table_lock);
 

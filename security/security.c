@@ -185,10 +185,26 @@ int mod_unreg_security(const char *name, struct security_operations *ops)
  */
 int capable(int cap)
 {
+	if (vx_check_bit(VXC_CAP_MASK, cap) && !vx_mcaps(1L << cap))
+		return 0;
 	if (security_ops->capable(current, cap)) {
 		/* capability denied */
 		return 0;
 	}
+
+	/* capability granted */
+	current->flags |= PF_SUPERPRIV;
+	return 1;
+}
+
+int vx_capable(int cap, int ccap)
+{
+	if (security_ops->capable(current, cap)) {
+		/* capability denied */
+		return 0;
+	}
+	if (!vx_ccaps(ccap))
+		return 0;
 
 	/* capability granted */
 	current->flags |= PF_SUPERPRIV;
@@ -200,4 +216,5 @@ EXPORT_SYMBOL_GPL(unregister_security);
 EXPORT_SYMBOL_GPL(mod_reg_security);
 EXPORT_SYMBOL_GPL(mod_unreg_security);
 EXPORT_SYMBOL(capable);
+EXPORT_SYMBOL(vx_capable);
 EXPORT_SYMBOL(security_ops);

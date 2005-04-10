@@ -33,6 +33,8 @@
 #include <linux/posix-timers.h>
 #include <linux/cpu.h>
 #include <linux/syscalls.h>
+#include <linux/vs_cvirt.h>
+#include <linux/vserver/sched.h>
 
 #include <asm/uaccess.h>
 #include <asm/unistd.h>
@@ -686,7 +688,11 @@ static void second_overflow(void)
 	if (ltemp > (MAXPHASE / MINSEC) << SHIFT_UPDATE)
 	    ltemp = (MAXPHASE / MINSEC) << SHIFT_UPDATE;
 	time_offset += ltemp;
+	#if SHIFT_SCALE - SHIFT_HZ - SHIFT_UPDATE > 0
 	time_adj = -ltemp << (SHIFT_SCALE - SHIFT_HZ - SHIFT_UPDATE);
+	#else
+	time_adj = -ltemp >> (SHIFT_HZ + SHIFT_UPDATE - SHIFT_SCALE);
+	#endif
     } else {
 	ltemp = time_offset;
 	if (!(time_status & STA_FLL))
@@ -694,7 +700,11 @@ static void second_overflow(void)
 	if (ltemp > (MAXPHASE / MINSEC) << SHIFT_UPDATE)
 	    ltemp = (MAXPHASE / MINSEC) << SHIFT_UPDATE;
 	time_offset -= ltemp;
+	#if SHIFT_SCALE - SHIFT_HZ - SHIFT_UPDATE > 0
 	time_adj = ltemp << (SHIFT_SCALE - SHIFT_HZ - SHIFT_UPDATE);
+	#else
+	time_adj = ltemp >> (SHIFT_HZ + SHIFT_UPDATE - SHIFT_SCALE);
+	#endif
     }
 
     /*
@@ -971,7 +981,7 @@ asmlinkage unsigned long sys_alarm(unsigned int seconds)
  */
 asmlinkage long sys_getpid(void)
 {
-	return current->tgid;
+	return vx_map_tgid(current->tgid);
 }
 
 /*
@@ -1015,7 +1025,7 @@ asmlinkage long sys_getppid(void)
 #endif
 		break;
 	}
-	return pid;
+	return vx_map_pid(pid);
 }
 
 asmlinkage long sys_getuid(void)
@@ -1223,6 +1233,8 @@ asmlinkage long sys_sysinfo(struct sysinfo __user *info)
 			tp.tv_nsec = tp.tv_nsec - NSEC_PER_SEC;
 			tp.tv_sec++;
 		}
+		if (vx_flags(VXF_VIRT_UPTIME, 0))
+			vx_vsi_uptime(&tp, NULL);
 		val.uptime = tp.tv_sec + (tp.tv_nsec ? 1 : 0);
 
 		val.loads[0] = avenrun[0] << (SI_LOAD_SHIFT - FSHIFT);
@@ -1232,6 +1244,9 @@ asmlinkage long sys_sysinfo(struct sysinfo __user *info)
 		val.procs = nr_threads;
 	} while (read_seqretry(&xtime_lock, seq));
 
+/*	if (vx_flags(VXF_VIRT_CPU, 0))
+		vx_vsi_cpu(val);
+*/
 	si_meminfo(&val);
 	si_swapinfo(&val);
 

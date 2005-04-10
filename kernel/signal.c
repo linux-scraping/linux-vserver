@@ -646,17 +646,26 @@ static int check_kill_permission(int sig, struct siginfo *info,
 				 struct task_struct *t)
 {
 	int error = -EINVAL;
+	int user;
+
 	if (sig < 0 || sig > _NSIG)
 		return error;
+
+	user = (!info || ((unsigned long)info != 1 &&
+		(unsigned long)info != 2 && SI_FROMUSER(info)));
+
 	error = -EPERM;
-	if ((!info || ((unsigned long)info != 1 &&
-			(unsigned long)info != 2 && SI_FROMUSER(info)))
-	    && ((sig != SIGCONT) ||
+	if (user && ((sig != SIGCONT) ||
 		(current->signal->session != t->signal->session))
 	    && (current->euid ^ t->suid) && (current->euid ^ t->uid)
 	    && (current->uid ^ t->suid) && (current->uid ^ t->uid)
 	    && !capable(CAP_KILL))
 		return error;
+
+	error = -ESRCH;
+	if (user && !vx_check(vx_task_xid(t), VX_ADMIN|VX_IDENT))
+		return error;
+
 	return security_task_kill(t, info, sig);
 }
 
@@ -1898,6 +1907,11 @@ relock:
 
 		/* Init gets no signals it doesn't want.  */
 		if (current->pid == 1)
+			continue;
+
+		/* virtual init is protected against user signals */
+		if ((info->si_code == SI_USER) &&
+			vx_current_initpid(current->pid))
 			continue;
 
 		if (sig_kernel_stop(signr)) {

@@ -259,7 +259,7 @@ enum {
 	Opt_bsd_df, Opt_minix_df, Opt_grpid, Opt_nogrpid,
 	Opt_resgid, Opt_resuid, Opt_sb, Opt_err_cont, Opt_err_panic, Opt_err_ro,
 	Opt_nouid32, Opt_check, Opt_nocheck, Opt_debug, Opt_oldalloc, Opt_orlov, Opt_nobh,
-	Opt_user_xattr, Opt_nouser_xattr, Opt_acl, Opt_noacl,
+	Opt_user_xattr, Opt_nouser_xattr, Opt_acl, Opt_noacl, Opt_tagxid,
 	Opt_ignore, Opt_err,
 };
 
@@ -288,6 +288,7 @@ static match_table_t tokens = {
 	{Opt_nouser_xattr, "nouser_xattr"},
 	{Opt_acl, "acl"},
 	{Opt_noacl, "noacl"},
+	{Opt_tagxid, "tagxid"},
 	{Opt_ignore, "grpquota"},
 	{Opt_ignore, "noquota"},
 	{Opt_ignore, "quota"},
@@ -351,6 +352,11 @@ static int parse_options (char * options,
 		case Opt_nouid32:
 			set_opt (sbi->s_mount_opt, NO_UID32);
 			break;
+#ifndef CONFIG_INOXID_NONE
+		case Opt_tagxid:
+			set_opt (sbi->s_mount_opt, TAG_XID);
+			break;
+#endif
 		case Opt_check:
 #ifdef CONFIG_EXT2_CHECK
 			set_opt (sbi->s_mount_opt, CHECK);
@@ -638,6 +644,8 @@ static int ext2_fill_super(struct super_block *sb, void *data, int silent)
 	if (!parse_options ((char *) data, sbi))
 		goto failed_mount;
 
+	if (EXT2_SB(sb)->s_mount_opt & EXT2_MOUNT_TAG_XID)
+		sb->s_flags |= MS_TAGXID;
 	sb->s_flags = (sb->s_flags & ~MS_POSIXACL) |
 		((EXT2_SB(sb)->s_mount_opt & EXT2_MOUNT_POSIX_ACL) ?
 		 MS_POSIXACL : 0);
