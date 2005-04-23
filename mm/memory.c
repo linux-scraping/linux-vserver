@@ -57,7 +57,6 @@
 
 #include <linux/swapops.h>
 #include <linux/elf.h>
-#include <linux/vs_cvirt.h>
 
 #ifndef CONFIG_DISCONTIGMEM
 /* use the per-pgdat data instead for discontigmem - mbligh */
@@ -975,18 +974,14 @@ int get_user_pages(struct task_struct *tsk, struct mm_struct *mm,
 				spin_unlock(&mm->page_table_lock);
 				switch (handle_mm_fault(mm,vma,start,write)) {
 				case VM_FAULT_MINOR:
-					vx_cacct_inc(tsk->vx_info, fault_minor);
 					tsk->min_flt++;
 					break;
 				case VM_FAULT_MAJOR:
-					vx_cacct_inc(tsk->vx_info, fault_major);
 					tsk->maj_flt++;
 					break;
 				case VM_FAULT_SIGBUS:
-					vx_cacct_inc(tsk->vx_info, fault_sigbus);
 					return i ? i : -EFAULT;
 				case VM_FAULT_OOM:
-					vx_cacct_inc(tsk->vx_info, fault_oom);
 					return i ? i : -ENOMEM;
 				default:
 					BUG();
@@ -2056,7 +2051,6 @@ int handle_mm_fault(struct mm_struct *mm, struct vm_area_struct * vma,
 
 	__set_current_state(TASK_RUNNING);
 
-	vx_cacct_inc(mm->mm_vx_info, fault_page);
 	inc_page_state(pgfault);
 
 	if (is_vm_hugetlb_page(vma))

@@ -256,26 +256,26 @@ static inline void reparent_to_init(void)
 	switch_uid(INIT_USER);
 }
 
-void __set_special_task_pids(struct task_struct *task,
-	pid_t session, pid_t pgrp)
+void __set_special_pids(pid_t session, pid_t pgrp)
 {
-	if (task->signal->session != session) {
-		detach_pid(task, PIDTYPE_SID);
-		task->signal->session = session;
-		attach_pid(task, PIDTYPE_SID, session);
+	struct task_struct *curr = current;
+
+	if (curr->signal->session != session) {
+		detach_pid(curr, PIDTYPE_SID);
+		curr->signal->session = session;
+		attach_pid(curr, PIDTYPE_SID, session);
 	}
-	if (process_group(task) != pgrp) {
-		detach_pid(task, PIDTYPE_PGID);
-		task->signal->pgrp = pgrp;
-		attach_pid(task, PIDTYPE_PGID, pgrp);
+	if (process_group(curr) != pgrp) {
+		detach_pid(curr, PIDTYPE_PGID);
+		curr->signal->pgrp = pgrp;
+		attach_pid(curr, PIDTYPE_PGID, pgrp);
 	}
 }
 
-void set_special_task_pids(struct task_struct *task,
-	pid_t session, pid_t pgrp)
+void set_special_pids(pid_t session, pid_t pgrp)
 {
 	write_lock_irq(&tasklist_lock);
-	__set_special_task_pids(task, session, pgrp);
+	__set_special_pids(session, pgrp);
 	write_unlock_irq(&tasklist_lock);
 }
 
@@ -341,7 +341,7 @@ void daemonize(const char *name, ...)
 	 */
 	exit_mm(current);
 
-	set_special_task_pids(current, 1, 1);
+	set_special_pids(1, 1);
 	down(&tty_sem);
 	current->signal->tty = NULL;
 	up(&tty_sem);

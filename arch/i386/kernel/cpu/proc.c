@@ -129,8 +129,8 @@ static int show_cpuinfo(struct seq_file *m, void *v)
 			seq_printf(m, " %s", x86_cap_flags[i]);
 
 	seq_printf(m, "\nbogomips\t: %lu.%02lu\n\n",
-		     HZ*(c->loops_per_jiffy >> 3)/62500,
-		     (HZ*(c->loops_per_jiffy >> 3)/625) % 100);
+		     c->loops_per_jiffy/(500000/HZ),
+		     (c->loops_per_jiffy/(5000/HZ)) % 100);
 
 	return 0;
 }

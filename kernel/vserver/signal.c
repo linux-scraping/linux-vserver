@@ -45,8 +45,9 @@ int vc_ctx_kill(uint32_t id, void __user *data)
 	retval = -ESRCH;
 	read_lock(&tasklist_lock);
 	switch (vc_data.pid) {
-	case -1:
 	case  0:
+		info.si_code = SI_KERNEL;
+	case -1:
 		for_each_process(p) {
 			int err = 0;
 

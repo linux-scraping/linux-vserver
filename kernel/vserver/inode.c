@@ -18,6 +18,7 @@
 #include <linux/mount.h>
 #include <linux/parser.h>
 #include <linux/vserver/inode.h>
+#include <linux/vserver/inode_cmd.h>
 #include <linux/vserver/xid.h>
 
 #include <asm/errno.h>

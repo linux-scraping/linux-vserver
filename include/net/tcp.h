@@ -489,8 +489,8 @@ static __inline__ int tcp_sk_listen_hashfn(struct sock *sk)
    so that we select tick to get range about 4 seconds.
  */
 
-#if HZ <= 16 || HZ > 32768
-# error Unsupported: HZ <= 16 or HZ > 32768
+#if HZ <= 16 || HZ > 4096
+# error Unsupported: HZ <= 16 or HZ > 4096
 #elif HZ <= 32
 # define TCP_TW_RECYCLE_TICK (5+2-TCP_TW_RECYCLE_SLOTS_LOG)
 #elif HZ <= 64
@@ -505,14 +505,8 @@ static __inline__ int tcp_sk_listen_hashfn(struct sock *sk)
 # define TCP_TW_RECYCLE_TICK (10+2-TCP_TW_RECYCLE_SLOTS_LOG)
 #elif HZ <= 2048
 # define TCP_TW_RECYCLE_TICK (11+2-TCP_TW_RECYCLE_SLOTS_LOG)
-#elif HZ <= 4096
-# define TCP_TW_RECYCLE_TICK (12+2-TCP_TW_RECYCLE_SLOTS_LOG)
-#elif HZ <= 8192
-# define TCP_TW_RECYCLE_TICK (13+2-TCP_TW_RECYCLE_SLOTS_LOG)
-#elif HZ <= 16384
-# define TCP_TW_RECYCLE_TICK (14+2-TCP_TW_RECYCLE_SLOTS_LOG)
 #else
-# define TCP_TW_RECYCLE_TICK (15+2-TCP_TW_RECYCLE_SLOTS_LOG)
+# define TCP_TW_RECYCLE_TICK (12+2-TCP_TW_RECYCLE_SLOTS_LOG)
 #endif
 
 #define BICTCP_BETA_SCALE    1024	/* Scale factor beta calculation

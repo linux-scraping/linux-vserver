@@ -23,6 +23,22 @@
 char vshelper_path[255] = "/sbin/vshelper";
 
 
+int do_vshelper(char *name, char *argv[], char *envp[], int sync)
+{
+	int ret;
+
+	if ((ret = call_usermodehelper(name, argv, envp, sync))) {
+		printk(	KERN_WARNING
+			"%s: (%s %s) returned %s with %d\n",
+			name, argv[1], argv[2],
+			sync?"sync":"async", ret);
+	}
+	vxdprintk(VXD_CBIT(switch, 1),
+		"%s: (%s %s) returned %s with %d",
+		name, argv[1], argv[2], sync?"sync":"async", ret);
+	return ret;
+}
+
 /*
  *      vshelper path is set via /proc/sys
  *      invoked by vserver sys_reboot(), with
@@ -31,18 +47,16 @@ char vshelper_path[255] = "/sbin/vshelper";
  *      argv [0] = vshelper_path;
  *      argv [1] = action: "restart", "halt", "poweroff", ...
  *      argv [2] = context identifier
- *      argv [3] = additional argument (restart2)
  *
  *      envp [*] = type-specific parameters
  */
 
 long vs_reboot(unsigned int cmd, void * arg)
 {
-	char id_buf[8], cmd_buf[32];
-	char uid_buf[32], pid_buf[32];
-	char buffer[256];
+	char id_buf[8], cmd_buf[16];
+	char uid_buf[16], pid_buf[16];
 
-	char *argv[] = {vshelper_path, NULL, id_buf, NULL, 0};
+	char *argv[] = {vshelper_path, NULL, id_buf, 0};
 	char *envp[] = {"HOME=/", "TERM=linux",
 			"PATH=/sbin:/usr/sbin:/bin:/usr/bin",
 			uid_buf, pid_buf, cmd_buf, 0};
@@ -70,34 +84,35 @@ long vs_reboot(unsigned int cmd, void * arg)
 		argv[1] = "swsusp";
 		break;
 
-	case LINUX_REBOOT_CMD_RESTART2:
-		if (strncpy_from_user(&buffer[0], (char *)arg, sizeof(buffer) - 1) < 0)
-			return -EFAULT;
-		argv[3] = buffer;
 	default:
-		argv[1] = "restart2";
-		break;
+		return 0;
 	}
 
-	/* maybe we should wait ? */
-	if (call_usermodehelper(*argv, argv, envp, 0)) {
-		printk( KERN_WARNING
-			"vs_reboot(): failed to exec (%s %s %s %s)\n",
-			vshelper_path, argv[1], argv[2], argv[3]);
+	if (do_vshelper(vshelper_path, argv, envp, 1))
 		return -EPERM;
-	}
 	return 0;
 }
 
-long vs_context_state(unsigned int cmd)
-{
-	char id_buf[8], cmd_buf[32];
 
-	char *argv[] = {vshelper_path, NULL, id_buf, NULL, 0};
+/*
+ *      invoked by vserver sys_reboot(), with
+ *      the following arguments
+ *
+ *      argv [0] = vshelper_path;
+ *      argv [1] = action: "startup", "shutdown"
+ *      argv [2] = context identifier
+ *
+ *      envp [*] = type-specific parameters
+ */
+
+long vs_context_state(struct vx_info *vxi, unsigned int cmd)
+{
+	char id_buf[8], cmd_buf[16];
+	char *argv[] = {vshelper_path, NULL, id_buf, 0};
 	char *envp[] = {"HOME=/", "TERM=linux",
 			"PATH=/sbin:/usr/sbin:/bin:/usr/bin", cmd_buf, 0};
 
-	snprintf(id_buf, sizeof(id_buf)-1, "%d", vx_current_xid());
+	snprintf(id_buf, sizeof(id_buf)-1, "%d", vxi->vx_id);
 	snprintf(cmd_buf, sizeof(cmd_buf)-1, "VS_CMD=%08x", cmd);
 
 	switch (cmd) {
@@ -111,12 +126,7 @@ long vs_context_state(unsigned int cmd)
 		return 0;
 	}
 
-	if (call_usermodehelper(*argv, argv, envp, 1)) {
-		printk( KERN_WARNING
-			"vs_context_state(): failed to exec (%s %s %s %s)\n",
-			vshelper_path, argv[1], argv[2], argv[3]);
-		return 0;
-	}
+	do_vshelper(vshelper_path, argv, envp, 1);
 	return 0;
 }
 

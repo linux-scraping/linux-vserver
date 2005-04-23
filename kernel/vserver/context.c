@@ -114,6 +114,8 @@ void __shutdown_vx_info(struct vx_info *vxi)
 
 	might_sleep();
 
+	vs_context_state(vxi, VS_CONTEXT_DESTROY);
+
 	namespace = xchg(&vxi->vx_namespace, NULL);
 	if (namespace)
 		put_namespace(namespace);
@@ -590,7 +592,6 @@ int vx_set_init(struct vx_info *vxi, struct task_struct *p)
 		vxi, vxi->vx_id, p, p->xid, p->pid, p->tgid);
 
 	vxi->vx_initpid = p->tgid;
-	set_special_task_pids(p, 0, 0);
 	return 0;
 }
 
@@ -667,6 +668,7 @@ int vc_ctx_create(uint32_t xid, void __user *data)
 	if (IS_ERR(new_vxi))
 		return PTR_ERR(new_vxi);
 
+	vs_context_state(new_vxi, VS_CONTEXT_CREATED);
 	ret = new_vxi->vx_id;
 	vx_migrate_task(current, new_vxi);
 	/* if this fails, we might end up with a hashed vx_info */

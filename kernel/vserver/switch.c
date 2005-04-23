@@ -35,6 +35,8 @@ vc_get_version(uint32_t id)
 #include <linux/vserver/network_cmd.h>
 #include <linux/vserver/sched_cmd.h>
 #include <linux/vserver/debug_cmd.h>
+#include <linux/vserver/inode_cmd.h>
+#include <linux/vserver/dlimit_cmd.h>
 
 #include <linux/vserver/legacy.h>
 #include <linux/vserver/namespace.h>

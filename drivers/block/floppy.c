@@ -358,11 +358,7 @@ static int inr;			/* size of reply buffer, when called from interrupt */
 #define R_SECTOR (reply_buffer[5])
 #define R_SIZECODE (reply_buffer[6])
 
-#if HZ < 12800
 #define SEL_DLY (2*HZ/100)
-#else
-#define SEL_DLY (255)
-#endif
 
 /*
  * this struct defines the different floppy drive types.
@@ -4088,7 +4084,7 @@ static void __init daring(int *ints, int param, int param2)
 			    FD_SILENT_DCL_CLEAR;
 		} else {
 			default_drive_params[i].params.select_delay =
-			    SEL_DLY;
+			    2 * HZ / 100;
 			default_drive_params[i].params.flags &=
 			    ~FD_SILENT_DCL_CLEAR;
 		}

@@ -17,6 +17,7 @@
 #include <linux/vserver/switch.h>
 #include <linux/vs_context.h>
 #include <linux/vs_dlimit.h>
+#include <linux/vserver/dlimit_cmd.h>
 
 #include <asm/errno.h>
 #include <asm/uaccess.h>

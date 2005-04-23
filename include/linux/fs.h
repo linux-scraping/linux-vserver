@@ -9,7 +9,6 @@
 #include <linux/config.h>
 #include <linux/limits.h>
 #include <linux/ioctl.h>
-#include <linux/mount.h>
 
 /*
  * It's silly to have NR_OPEN bigger than NR_FILE, but you can change
@@ -151,7 +150,7 @@ extern int dir_notify_enable;
  */
 #define __IS_FLG(inode,flg) ((inode)->i_sb->s_flags & (flg))
 
-#define IS_RDONLY(inode)	__IS_FLG(inode, MS_RDONLY)
+#define IS_RDONLY(inode) ((inode)->i_sb->s_flags & MS_RDONLY)
 #define IS_SYNC(inode)		(__IS_FLG(inode, MS_SYNCHRONOUS) || \
 					((inode)->i_flags & S_SYNC))
 #define IS_DIRSYNC(inode)	(__IS_FLG(inode, MS_SYNCHRONOUS|MS_DIRSYNC) || \
@@ -853,12 +852,12 @@ static inline void unlock_super(struct super_block * sb)
  * VFS helper functions..
  */
 extern int vfs_create(struct inode *, struct dentry *, int, struct nameidata *);
-extern int vfs_mkdir(struct inode *, struct dentry *, int, struct nameidata *);
-extern int vfs_mknod(struct inode *, struct dentry *, int, dev_t, struct nameidata *);
-extern int vfs_symlink(struct inode *, struct dentry *, const char *, int, struct nameidata *);
-extern int vfs_link(struct dentry *, struct inode *, struct dentry *, struct nameidata *);
-extern int vfs_rmdir(struct inode *, struct dentry *, struct nameidata *);
-extern int vfs_unlink(struct inode *, struct dentry *, struct nameidata *);
+extern int vfs_mkdir(struct inode *, struct dentry *, int);
+extern int vfs_mknod(struct inode *, struct dentry *, int, dev_t);
+extern int vfs_symlink(struct inode *, struct dentry *, const char *, int);
+extern int vfs_link(struct dentry *, struct inode *, struct dentry *);
+extern int vfs_rmdir(struct inode *, struct dentry *);
+extern int vfs_unlink(struct inode *, struct dentry *);
 extern int vfs_rename(struct inode *, struct dentry *, struct inode *, struct dentry *);
 
 /*
@@ -1056,16 +1055,8 @@ static inline void mark_inode_dirty_sync(struct inode *inode)
 
 static inline void touch_atime(struct vfsmount *mnt, struct dentry *dentry)
 {
-	struct inode *inode = dentry->d_inode;
-
-	if (MNT_IS_NOATIME(mnt))
-		return;
-	if (S_ISDIR(inode->i_mode) && MNT_IS_NODIRATIME(mnt))
-		return;
-	if (IS_RDONLY(inode) || MNT_IS_RDONLY(mnt))
-		return;
-
-	update_atime(inode);
+	/* per-mountpoint checks will go here */
+	update_atime(dentry->d_inode);
 }
 
 static inline void file_accessed(struct file *file)

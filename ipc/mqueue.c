@@ -737,7 +737,7 @@ asmlinkage long sys_mq_unlink(const char __user *u_name)
 	if (inode)
 		atomic_inc(&inode->i_count);
 
-	err = vfs_unlink(dentry->d_parent->d_inode, dentry, NULL);
+	err = vfs_unlink(dentry->d_parent->d_inode, dentry);
 out_err:
 	dput(dentry);
 

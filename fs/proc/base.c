@@ -1051,7 +1051,7 @@ static int proc_pident_readdir(struct file *filp,
 	struct inode *inode = dentry->d_inode;
 	struct pid_entry *p;
 	ino_t ino;
-	int ret;
+	int ret, hide;
 
 	ret = -ENOENT;
 	if (!pid_alive(proc_task(inode)))
@@ -1082,11 +1082,20 @@ static int proc_pident_readdir(struct file *filp,
 			goto out;
 		}
 		p = ents + i;
+		hide = vx_flags(VXF_INFO_HIDE, 0);
 		while (p->name) {
+			if (hide) {
+				switch (p->type) {
+				case PROC_TGID_VX_INFO:
+				case PROC_TGID_IP_INFO:
+					goto skip;
+				}
+			}
 			if (filldir(dirent, p->name, p->len, filp->f_pos,
 				    fake_ino(pid, p->type), p->mode >> 12) < 0)
 				goto out;
 			filp->f_pos++;
+		skip:
 			p++;
 		}
 	}
@@ -1613,23 +1622,31 @@ static struct dentry *proc_pident_lookup(struct inode *dir,
 #endif
 		case PROC_TID_VX_INFO:
 		case PROC_TGID_VX_INFO:
+			if (task_vx_flags(task, VXF_INFO_HIDE, 0))
+				goto out_noent;
 			inode->i_fop = &proc_info_file_operations;
 			ei->op.proc_read = proc_pid_vx_info;
 			break;
 		case PROC_TID_IP_INFO:
 		case PROC_TGID_IP_INFO:
+			if (task_vx_flags(task, VXF_INFO_HIDE, 0))
+				goto out_noent;
 			inode->i_fop = &proc_info_file_operations;
 			ei->op.proc_read = proc_pid_nx_info;
 			break;
 		default:
 			printk("procfs: impossible type (%d)",p->type);
-			iput(inode);
-			return ERR_PTR(-EINVAL);
+			error = -EINVAL;
+			goto out_put;
 	}
 	dentry->d_op = &pid_dentry_operations;
 	d_add(dentry, inode);
 	return NULL;
 
+out_noent:
+	error=-ENOENT;
+out_put:
+	iput(inode);
 out:
 	return ERR_PTR(error);
 }

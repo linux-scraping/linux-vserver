@@ -1138,7 +1138,7 @@ static task_t *copy_process(unsigned long clone_flags,
 	if (vxi) {
 		claim_vx_info(vxi, p);
 		atomic_inc(&vxi->cvirt.nr_threads);
-		vx_cacct_inc(vxi, total_forks);
+		atomic_inc(&vxi->cvirt.total_forks);
 		vx_nproc_inc(p);
 	}
 	write_unlock_irq(&tasklist_lock);

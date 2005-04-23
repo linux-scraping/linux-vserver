@@ -1096,11 +1096,11 @@ asmlinkage long sys_setsid(void)
 	write_lock_irq(&tasklist_lock);
 
 	pid = find_pid(PIDTYPE_PGID, current->pid);
-	if (pid || vx_current_initpid(current->pid))
+	if (pid)
 		goto out;
 
 	current->signal->leader = 1;
-	__set_special_task_pids(current, current->pid, current->pid);
+	__set_special_pids(current->pid, current->pid);
 	current->signal->tty = NULL;
 	current->signal->tty_old_pgrp = 0;
 	err = process_group(current);

@@ -897,10 +897,8 @@ extern struct   mm_struct init_mm;
 		vx_rmap_pid(nr))
 
 extern struct task_struct *find_task_by_pid_type(int type, int pid);
-extern void set_special_task_pids(struct task_struct *task,
-	pid_t session, pid_t pgrp);
-extern void __set_special_task_pids(struct task_struct *task,
-	pid_t session, pid_t pgrp);
+extern void set_special_pids(pid_t session, pid_t pgrp);
+extern void __set_special_pids(pid_t session, pid_t pgrp);
 
 /* per-UID process charging. */
 extern struct user_struct * alloc_uid(xid_t, uid_t);

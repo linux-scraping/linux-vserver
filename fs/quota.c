@@ -373,7 +373,7 @@ asmlinkage long sys_quotactl(unsigned int cmd, const char __user *special, qid_t
 		if (IS_ERR(bdev))
 			return PTR_ERR(bdev);
 #ifdef CONFIG_BLK_DEV_VROOT
-		printk("bdev=%p, gendisk=%p inode=%p[%d,%d]\n",
+		printk(KERN_INFO "bdev=%p, gendisk=%p inode=%p[%d,%d]\n",
 			bdev, bdev?bdev->bd_disk:0, bdev->bd_inode,
 			imajor(bdev->bd_inode), iminor(bdev->bd_inode));
 

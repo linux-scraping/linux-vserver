@@ -145,7 +145,7 @@ extern int xid_is_hashed(xid_t);
 
 extern int vx_migrate_task(struct task_struct *, struct vx_info *);
 
-extern long vs_context_state(unsigned int);
+extern long vs_context_state(struct vx_info *, unsigned int);
 
 extern void free_vx_info(struct vx_info *);
 
