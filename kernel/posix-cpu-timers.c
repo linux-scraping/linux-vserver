@@ -6,6 +6,7 @@
 #include <linux/posix-timers.h>
 #include <asm/uaccess.h>
 #include <linux/errno.h>
+#include <linux/vs_cvirt.h>
 
 static int check_clock(clockid_t which_clock)
 {

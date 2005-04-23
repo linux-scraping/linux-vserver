@@ -897,7 +897,7 @@ static task_t *copy_process(unsigned long clone_flags,
 			goto bad_fork_free;
 	}
 	if (p->mm && vx_flags(VXF_FORK_RSS, 0)) {
-		if (!vx_rsspages_avail(p->mm, p->mm->rss))
+		if (!vx_rsspages_avail(p->mm, p->mm->_rss))
 			goto bad_fork_cleanup_vm;
 	}
 

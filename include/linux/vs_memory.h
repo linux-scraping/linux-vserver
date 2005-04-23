@@ -61,13 +61,13 @@ static inline void __vx_acc_pages(unsigned long *v, struct vx_info *vxi,
 
 #define vx_acc_vmpage(m,d)	vx_acc_page(m, d, total_vm,  RLIMIT_AS)
 #define vx_acc_vmlpage(m,d)	vx_acc_page(m, d, locked_vm, RLIMIT_MEMLOCK)
-#define vx_acc_rsspage(m,d)	vx_acc_page(m, d, rss,	     RLIMIT_RSS)
-#define vx_acc_anonpage(m,d)	vx_acc_page(m, d, anon_rss,  VLIMIT_ANON)
+#define vx_acc_rsspage(m,d)	vx_acc_page(m, d, _rss,	     RLIMIT_RSS)
+#define vx_acc_anonpage(m,d)	vx_acc_page(m, d, _anon_rss,  VLIMIT_ANON)
 
 #define vx_acc_vmpages(m,p)	vx_acc_pages(m, p, total_vm,  RLIMIT_AS)
 #define vx_acc_vmlpages(m,p)	vx_acc_pages(m, p, locked_vm, RLIMIT_MEMLOCK)
-#define vx_acc_rsspages(m,p)	vx_acc_pages(m, p, rss,       RLIMIT_RSS)
-#define vx_acc_anonpages(m,p)	vx_acc_pages(m, p, anon_rss,  VLIMIT_ANON)
+#define vx_acc_rsspages(m,p)	vx_acc_pages(m, p, _rss,       RLIMIT_RSS)
+#define vx_acc_anonpages(m,p)	vx_acc_pages(m, p, _anon_rss,  VLIMIT_ANON)
 
 #define vx_pages_add(s,r,p)	__vx_acc_pages(0, s, r, p, __FILE__, __LINE__)
 #define vx_pages_sub(s,r,p)	vx_pages_add(s, r, -(p))
