@@ -123,7 +123,7 @@ unx_match(struct auth_cred *acred, struct rpc_cred *rcred, int taskflags)
 		int groups;
 
 		if (cred->uc_uid != acred->uid
- 		 || cred->uc_gid != acred->gid
+		 || cred->uc_gid != acred->gid
 		 || cred->uc_xid != acred->xid)
 			return 0;
 

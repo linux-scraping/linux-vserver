@@ -354,13 +354,11 @@ unsigned long do_mremap(unsigned long addr,
 			(new_len - old_len) >> PAGE_SHIFT))
 			goto out;
 	}
-	ret = -ENOMEM;
-	if ((current->mm->total_vm << PAGE_SHIFT) + (new_len - old_len)
-	    > current->signal->rlim[RLIMIT_AS].rlim_cur)
+	if (!may_expand_vm(current->mm, (new_len - old_len) >> PAGE_SHIFT) ||
+		vx_vmpages_avail(current->mm, (new_len - old_len) >> PAGE_SHIFT)) {
+		ret = -ENOMEM;
 		goto out;
-	/* check context space, maybe only Private writable mapping? */
-	if (!vx_vmpages_avail(current->mm, (new_len - old_len) >> PAGE_SHIFT))
-		goto out;
+	}
 
 	if (vma->vm_flags & VM_ACCOUNT) {
 		charged = (new_len - old_len) >> PAGE_SHIFT;

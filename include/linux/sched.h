@@ -206,11 +206,12 @@ arch_get_unmapped_area_topdown(struct file *filp, unsigned long addr,
 extern void arch_unmap_area(struct vm_area_struct *area);
 extern void arch_unmap_area_topdown(struct vm_area_struct *area);
 
-#define set_mm_counter(mm, member, value) (mm)->_##member = (value)
+#define __set_mm_counter(mm, member, value) (mm)->_##member = (value)
+#define set_mm_counter(mm, member, value) vx_ ## member ## pages_sub((mm), ((mm)->_##member - value))
 #define get_mm_counter(mm, member) ((mm)->_##member)
-#define add_mm_counter(mm, member, value) (mm)->_##member += (value)
-#define inc_mm_counter(mm, member) (mm)->_##member++
-#define dec_mm_counter(mm, member) (mm)->_##member--
+#define add_mm_counter(mm, member, value) vx_ ## member ## pages_add((mm), (value))
+#define inc_mm_counter(mm, member) vx_ ## member ## pages_inc((mm))
+#define dec_mm_counter(mm, member) vx_ ## member ## pages_dec((mm))
 typedef unsigned long mm_counter_t;
 
 struct mm_struct {
@@ -582,7 +583,7 @@ struct task_struct {
 	unsigned long flags;	/* per process flags, defined below */
 	unsigned long ptrace;
 
-	int lock_depth;		/* Lock depth */
+	int lock_depth;		/* BKL lock depth */
 
 	int prio, static_prio;
 	struct list_head run_list;
@@ -665,7 +666,10 @@ struct task_struct {
 	struct key *thread_keyring;	/* keyring private to this thread */
 #endif
 	int oomkilladj; /* OOM kill score adjustment (bit shift). */
-	char comm[TASK_COMM_LEN];
+	char comm[TASK_COMM_LEN]; /* executable name excluding path
+				     - access with [gs]et_task_comm (which lock
+				       it with task_lock())
+				     - initialized normally by flush_old_exec */
 /* file system info */
 	int link_count, total_link_count;
 /* ipc stuff */
@@ -857,6 +861,7 @@ extern void sched_idle_next(void);
 extern void set_user_nice(task_t *p, long nice);
 extern int task_prio(const task_t *p);
 extern int task_nice(const task_t *p);
+extern int can_nice(const task_t *p, const int nice);
 extern int task_curr(const task_t *p);
 extern int idle_cpu(int cpu);
 extern int sched_setscheduler(struct task_struct *, int, struct sched_param *);
@@ -1042,7 +1047,6 @@ extern int  copy_thread(int, unsigned long, unsigned long, unsigned long, struct
 extern void flush_thread(void);
 extern void exit_thread(void);
 
-extern void exit_mm(struct task_struct *);
 extern void exit_files(struct task_struct *);
 extern void exit_signal(struct task_struct *);
 extern void __exit_signal(struct task_struct *);

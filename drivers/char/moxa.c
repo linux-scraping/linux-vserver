@@ -148,7 +148,7 @@ struct moxa_str {
 	int type;
 	int port;
 	int close_delay;
-	unsigned short closing_wait;
+	unsigned int closing_wait;
 	int count;
 	int blocked_open;
 	long event; /* long req'd for set_bit --RR */

@@ -6,6 +6,7 @@
  *  Copyright (C) 2004-2005  Herbert Pötzl
  *
  *  V0.01  initial version
+ *  V0.02  compat32 splitup
  *
  */
 
@@ -14,6 +15,7 @@
 #include <linux/namespace.h>
 #include <linux/namei.h>
 #include <linux/statfs.h>
+#include <linux/compat.h>
 #include <linux/vserver/switch.h>
 #include <linux/vs_context.h>
 #include <linux/vs_dlimit.h>
@@ -179,18 +181,13 @@ void rcu_free_dl_info(struct rcu_head *head)
 
 
 
-int vc_add_dlimit(uint32_t id, void __user *data)
+int do_addrem_dlimit(uint32_t id, const char __user *name,
+	uint32_t flags, int add)
 {
 	struct nameidata nd;
-	struct vcmd_ctx_dlimit_base_v0 vc_data;
 	int ret;
 
-	if (!vx_check(0, VX_ADMIN))
-		return -ENOSYS;
-	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
-		return -EFAULT;
-
-	ret = user_path_walk_link(vc_data.name, &nd);
+	ret = user_path_walk_link(name, &nd);
 	if (!ret) {
 		struct super_block *sb;
 		struct dl_info *dli;
@@ -201,19 +198,28 @@ int vc_add_dlimit(uint32_t id, void __user *data)
 		if (!(sb = nd.dentry->d_inode->i_sb))
 			goto out_release;
 
-		dli = __alloc_dl_info(sb, id);
-		spin_lock(&dl_info_hash_lock);
+		if (add) {
+			dli = __alloc_dl_info(sb, id);
+			spin_lock(&dl_info_hash_lock);
 
-		ret = -EEXIST;
-		if (__lookup_dl_info(sb, id))
-			goto out_unlock;
-		__hash_dl_info(dli);
-		dli = NULL;
+			ret = -EEXIST;
+			if (__lookup_dl_info(sb, id))
+				goto out_unlock;
+			__hash_dl_info(dli);
+			dli = NULL;
+		} else {
+			spin_lock(&dl_info_hash_lock);
+			dli = __lookup_dl_info(sb, id);
+
+			ret = -ESRCH;
+			if (!dli)
+				goto out_unlock;
+			__unhash_dl_info(dli);
+		}
 		ret = 0;
-
 	out_unlock:
 		spin_unlock(&dl_info_hash_lock);
-		if (dli)
+		if (add && dli)
 			__dealloc_dl_info(dli);
 	out_release:
 		path_release(&nd);
@@ -221,60 +227,71 @@ int vc_add_dlimit(uint32_t id, void __user *data)
 	return ret;
 }
 
+int vc_add_dlimit(uint32_t id, void __user *data)
+{
+	struct vcmd_ctx_dlimit_base_v0 vc_data;
+
+	if (!vx_check(0, VX_ADMIN))
+		return -ENOSYS;
+	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
+		return -EFAULT;
+
+	return do_addrem_dlimit(id, vc_data.name, vc_data.flags, 1);
+}
 
 int vc_rem_dlimit(uint32_t id, void __user *data)
 {
-	struct nameidata nd;
 	struct vcmd_ctx_dlimit_base_v0 vc_data;
-	int ret;
 
 	if (!vx_check(0, VX_ADMIN))
 		return -ENOSYS;
 	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
-	ret = user_path_walk_link(vc_data.name, &nd);
-	if (!ret) {
-		struct super_block *sb;
-		struct dl_info *dli;
-
-		ret = -EINVAL;
-		if (!nd.dentry->d_inode)
-			goto out_release;
-		if (!(sb = nd.dentry->d_inode->i_sb))
-			goto out_release;
-
-		spin_lock(&dl_info_hash_lock);
-		dli = __lookup_dl_info(sb, id);
-
-		ret = -ESRCH;
-		if (!dli)
-			goto out_unlock;
-
-		__unhash_dl_info(dli);
-		ret = 0;
-
-	out_unlock:
-		spin_unlock(&dl_info_hash_lock);
-	out_release:
-		path_release(&nd);
-	}
-	return ret;
+	return do_addrem_dlimit(id, vc_data.name, vc_data.flags, 0);
 }
 
+#ifdef	CONFIG_COMPAT
 
-int vc_set_dlimit(uint32_t id, void __user *data)
+int vc_add_dlimit_x32(uint32_t id, void __user *data)
 {
-	struct nameidata nd;
-	struct vcmd_ctx_dlimit_v0 vc_data;
-	int ret;
+	struct vcmd_ctx_dlimit_base_v0_x32 vc_data;
 
 	if (!vx_check(0, VX_ADMIN))
 		return -ENOSYS;
 	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
-	ret = user_path_walk_link(vc_data.name, &nd);
+	return do_addrem_dlimit(id,
+		compat_ptr(vc_data.name_ptr), vc_data.flags, 1);
+}
+
+int vc_rem_dlimit_x32(uint32_t id, void __user *data)
+{
+	struct vcmd_ctx_dlimit_base_v0_x32 vc_data;
+
+	if (!vx_check(0, VX_ADMIN))
+		return -ENOSYS;
+	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
+		return -EFAULT;
+
+	return do_addrem_dlimit(id,
+		compat_ptr(vc_data.name_ptr), vc_data.flags, 0);
+}
+
+#endif	/* CONFIG_COMPAT */
+
+
+static inline
+int do_set_dlimit(uint32_t id, const char __user *name,
+	uint32_t space_used, uint32_t space_total,
+	uint32_t inodes_used, uint32_t inodes_total,
+	uint32_t reserved, uint32_t flags)
+{
+	struct nameidata nd;
+	int ret;
+
+	ret = user_path_walk_link(name, &nd);
 	if (!ret) {
 		struct super_block *sb;
 		struct dl_info *dli;
@@ -284,12 +301,12 @@ int vc_set_dlimit(uint32_t id, void __user *data)
 			goto out_release;
 		if (!(sb = nd.dentry->d_inode->i_sb))
 			goto out_release;
-		if ((vc_data.reserved != (uint32_t)CDLIM_KEEP &&
-			vc_data.reserved > 100) ||
-			(vc_data.inodes_used != (uint32_t)CDLIM_KEEP &&
-			vc_data.inodes_used > vc_data.inodes_total) ||
-			(vc_data.space_used != (uint32_t)CDLIM_KEEP &&
-			vc_data.space_used > vc_data.space_total))
+		if ((reserved != (uint32_t)CDLIM_KEEP &&
+			reserved > 100) ||
+			(inodes_used != (uint32_t)CDLIM_KEEP &&
+			inodes_used > inodes_total) ||
+			(space_used != (uint32_t)CDLIM_KEEP &&
+			space_used > space_total))
 			goto out_release;
 
 		ret = -ESRCH;
@@ -299,22 +316,22 @@ int vc_set_dlimit(uint32_t id, void __user *data)
 
 		spin_lock(&dli->dl_lock);
 
-		if (vc_data.inodes_used != (uint32_t)CDLIM_KEEP)
-			dli->dl_inodes_used = vc_data.inodes_used;
-		if (vc_data.inodes_total != (uint32_t)CDLIM_KEEP)
-			dli->dl_inodes_total = vc_data.inodes_total;
-		if (vc_data.space_used != (uint32_t)CDLIM_KEEP) {
-			dli->dl_space_used = vc_data.space_used;
+		if (inodes_used != (uint32_t)CDLIM_KEEP)
+			dli->dl_inodes_used = inodes_used;
+		if (inodes_total != (uint32_t)CDLIM_KEEP)
+			dli->dl_inodes_total = inodes_total;
+		if (space_used != (uint32_t)CDLIM_KEEP) {
+			dli->dl_space_used = space_used;
 			dli->dl_space_used <<= 10;
 		}
-		if (vc_data.space_total == (uint32_t)CDLIM_INFINITY)
+		if (space_total == (uint32_t)CDLIM_INFINITY)
 			dli->dl_space_total = (uint64_t)CDLIM_INFINITY;
-		else if (vc_data.space_total != (uint32_t)CDLIM_KEEP) {
-			dli->dl_space_total = vc_data.space_total;
+		else if (space_total != (uint32_t)CDLIM_KEEP) {
+			dli->dl_space_total = space_total;
 			dli->dl_space_total <<= 10;
 		}
-		if (vc_data.reserved != (uint32_t)CDLIM_KEEP)
-			dli->dl_nrlmult = (1 << 10) * (100 - vc_data.reserved) / 100;
+		if (reserved != (uint32_t)CDLIM_KEEP)
+			dli->dl_nrlmult = (1 << 10) * (100 - reserved) / 100;
 
 		spin_unlock(&dli->dl_lock);
 
@@ -327,18 +344,51 @@ int vc_set_dlimit(uint32_t id, void __user *data)
 	return ret;
 }
 
-int vc_get_dlimit(uint32_t id, void __user *data)
+int vc_set_dlimit(uint32_t id, void __user *data)
 {
-	struct nameidata nd;
 	struct vcmd_ctx_dlimit_v0 vc_data;
-	int ret;
 
 	if (!vx_check(0, VX_ADMIN))
 		return -ENOSYS;
 	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
-	ret = user_path_walk_link(vc_data.name, &nd);
+	return do_set_dlimit(id, vc_data.name,
+		vc_data.space_used, vc_data.space_total,
+		vc_data.inodes_used, vc_data.inodes_total,
+		vc_data.reserved, vc_data.flags);
+}
+
+#ifdef	CONFIG_COMPAT
+
+int vc_set_dlimit_x32(uint32_t id, void __user *data)
+{
+	struct vcmd_ctx_dlimit_v0_x32 vc_data;
+
+	if (!vx_check(0, VX_ADMIN))
+		return -ENOSYS;
+	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
+		return -EFAULT;
+
+	return do_set_dlimit(id, compat_ptr(vc_data.name_ptr),
+		vc_data.space_used, vc_data.space_total,
+		vc_data.inodes_used, vc_data.inodes_total,
+		vc_data.reserved, vc_data.flags);
+}
+
+#endif	/* CONFIG_COMPAT */
+
+
+static inline
+int do_get_dlimit(uint32_t id, const char __user *name,
+	uint32_t *space_used, uint32_t *space_total,
+	uint32_t *inodes_used, uint32_t *inodes_total,
+	uint32_t *reserved, uint32_t *flags)
+{
+	struct nameidata nd;
+	int ret;
+
+	ret = user_path_walk_link(name, &nd);
 	if (!ret) {
 		struct super_block *sb;
 		struct dl_info *dli;
@@ -348,10 +398,6 @@ int vc_get_dlimit(uint32_t id, void __user *data)
 			goto out_release;
 		if (!(sb = nd.dentry->d_inode->i_sb))
 			goto out_release;
-		if (vc_data.reserved > 100 ||
-			vc_data.inodes_used > vc_data.inodes_total ||
-			vc_data.space_used > vc_data.space_total)
-			goto out_release;
 
 		ret = -ESRCH;
 		dli = locate_dl_info(sb, id);
@@ -359,21 +405,19 @@ int vc_get_dlimit(uint32_t id, void __user *data)
 			goto out_release;
 
 		spin_lock(&dli->dl_lock);
-		vc_data.inodes_used = dli->dl_inodes_used;
-		vc_data.inodes_total = dli->dl_inodes_total;
-		vc_data.space_used = dli->dl_space_used >> 10;
+		*inodes_used = dli->dl_inodes_used;
+		*inodes_total = dli->dl_inodes_total;
+		*space_used = dli->dl_space_used >> 10;
 		if (dli->dl_space_total == (uint64_t)CDLIM_INFINITY)
-			vc_data.space_total = (uint32_t)CDLIM_INFINITY;
+			*space_total = (uint32_t)CDLIM_INFINITY;
 		else
-			vc_data.space_total = dli->dl_space_total >> 10;
+			*space_total = dli->dl_space_total >> 10;
 
-		vc_data.reserved = 100 - ((dli->dl_nrlmult * 100 + 512) >> 10);
+		*reserved = 100 - ((dli->dl_nrlmult * 100 + 512) >> 10);
 		spin_unlock(&dli->dl_lock);
 
 		put_dl_info(dli);
 		ret = -EFAULT;
-		if (copy_to_user(data, &vc_data, sizeof(vc_data)))
-			goto out_release;
 
 		ret = 0;
 	out_release:
@@ -381,6 +425,55 @@ int vc_get_dlimit(uint32_t id, void __user *data)
 	}
 	return ret;
 }
+
+
+int vc_get_dlimit(uint32_t id, void __user *data)
+{
+	struct vcmd_ctx_dlimit_v0 vc_data;
+	int ret;
+
+	if (!vx_check(0, VX_ADMIN))
+		return -ENOSYS;
+	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
+		return -EFAULT;
+
+	ret = do_get_dlimit(id, vc_data.name,
+		&vc_data.space_used, &vc_data.space_total,
+		&vc_data.inodes_used, &vc_data.inodes_total,
+		&vc_data.reserved, &vc_data.flags);
+	if (ret)
+		return ret;
+
+	if (copy_to_user(data, &vc_data, sizeof(vc_data)))
+		return -EFAULT;
+	return 0;
+}
+
+#ifdef	CONFIG_COMPAT
+
+int vc_get_dlimit_x32(uint32_t id, void __user *data)
+{
+	struct vcmd_ctx_dlimit_v0_x32 vc_data;
+	int ret;
+
+	if (!vx_check(0, VX_ADMIN))
+		return -ENOSYS;
+	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
+		return -EFAULT;
+
+	ret = do_get_dlimit(id, compat_ptr(vc_data.name_ptr),
+		&vc_data.space_used, &vc_data.space_total,
+		&vc_data.inodes_used, &vc_data.inodes_total,
+		&vc_data.reserved, &vc_data.flags);
+	if (ret)
+		return ret;
+
+	if (copy_to_user(data, &vc_data, sizeof(vc_data)))
+		return -EFAULT;
+	return 0;
+}
+
+#endif	/* CONFIG_COMPAT */
 
 
 void vx_vsi_statfs(struct super_block *sb, struct kstatfs *buf)

@@ -86,8 +86,7 @@ static inline void tlb_finish_mmu(struct mmu_gather *mp, unsigned long start, un
 
 	if (rss < freed)
 		freed = rss;
-	// add_mm_counter(mm, rss, -freed);
-	vx_rsspages_sub(mm, freed);
+	add_mm_counter(mm, rss, -freed);
 
 	tlb_flush_mmu(mp);
 

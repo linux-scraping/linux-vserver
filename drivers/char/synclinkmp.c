@@ -157,8 +157,8 @@ typedef struct _synclinkmp_info {
 	int			flags;
 	int			count;		/* count of opens */
 	int			line;
-	unsigned short		close_delay;
-	unsigned short		closing_wait;	/* time to wait before closing */
+	unsigned int		close_delay;
+	unsigned int		closing_wait;	/* time to wait before closing */
 
 	struct mgsl_icount	icount;
 

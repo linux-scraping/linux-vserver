@@ -260,8 +260,7 @@ load_som_binary(struct linux_binprm * bprm, struct pt_regs * regs)
 	create_som_tables(bprm);
 
 	current->mm->start_stack = bprm->p;
-	// set_mm_counter(current->mm, rss, 0);
-	vx_rsspages_sub(current->mm, current->mm->rss);
+	set_mm_counter(current->mm, rss, 0);
 
 #if 0
 	printk("(start_brk) %08lx\n" , (unsigned long) current->mm->start_brk);

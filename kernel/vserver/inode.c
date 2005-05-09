@@ -9,7 +9,6 @@
  *
  */
 
-#include <linux/config.h>
 #include <linux/sched.h>
 #include <linux/vs_context.h>
 #include <linux/proc_fs.h>
@@ -17,6 +16,7 @@
 #include <linux/namei.h>
 #include <linux/mount.h>
 #include <linux/parser.h>
+#include <linux/compat.h>
 #include <linux/vserver/inode.h>
 #include <linux/vserver/inode_cmd.h>
 #include <linux/vserver/xid.h>
@@ -87,11 +87,43 @@ int vc_get_iattr(uint32_t id, void __user *data)
 			&vc_data.xid, &vc_data.flags, &vc_data.mask);
 		path_release(&nd);
 	}
+	if (ret)
+		return ret;
 
 	if (copy_to_user (data, &vc_data, sizeof(vc_data)))
 		ret = -EFAULT;
 	return ret;
 }
+
+#ifdef	CONFIG_COMPAT
+
+int vc_get_iattr_x32(uint32_t id, void __user *data)
+{
+	struct nameidata nd;
+	struct vcmd_ctx_iattr_v1_x32 vc_data = { .xid = -1 };
+	int ret;
+
+	if (!vx_check(0, VX_ADMIN))
+		return -ENOSYS;
+	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
+		return -EFAULT;
+
+	ret = user_path_walk_link(compat_ptr(vc_data.name_ptr), &nd);
+	if (!ret) {
+		ret = __vc_get_iattr(nd.dentry->d_inode,
+			&vc_data.xid, &vc_data.flags, &vc_data.mask);
+		path_release(&nd);
+	}
+	if (ret)
+		return ret;
+
+	if (copy_to_user (data, &vc_data, sizeof(vc_data)))
+		ret = -EFAULT;
+	return ret;
+}
+
+#endif	/* CONFIG_COMPAT */
+
 
 static int __vc_set_iattr(struct dentry *de, uint32_t *xid, uint32_t *flags, uint32_t *mask)
 {
@@ -189,6 +221,32 @@ int vc_set_iattr(uint32_t id, void __user *data)
 	return ret;
 }
 
+#ifdef	CONFIG_COMPAT
+
+int vc_set_iattr_x32(uint32_t id, void __user *data)
+{
+	struct nameidata nd;
+	struct vcmd_ctx_iattr_v1_x32 vc_data;
+	int ret;
+
+	if (!capable(CAP_SYS_ADMIN) || !capable(CAP_LINUX_IMMUTABLE))
+		return -EPERM;
+	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
+		return -EFAULT;
+
+	ret = user_path_walk_link(compat_ptr(vc_data.name_ptr), &nd);
+	if (!ret) {
+		ret = __vc_set_iattr(nd.dentry,
+			&vc_data.xid, &vc_data.flags, &vc_data.mask);
+		path_release(&nd);
+	}
+
+	if (copy_to_user (data, &vc_data, sizeof(vc_data)))
+		ret = -EFAULT;
+	return ret;
+}
+
+#endif	/* CONFIG_COMPAT */
 
 #ifdef	CONFIG_VSERVER_LEGACY
 

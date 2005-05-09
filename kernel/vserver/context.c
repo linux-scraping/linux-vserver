@@ -66,7 +66,7 @@ static struct vx_info *__alloc_vx_info(xid_t xid)
 	new->vx_parent = NULL;
 	new->vx_state = 0;
 	new->vx_lock = SPIN_LOCK_UNLOCKED;
-	init_waitqueue_head(&new->vx_exit);
+	init_waitqueue_head(&new->vx_wait);
 
 	/* rest of init goes here */
 	vx_info_init_limit(&new->limit);
@@ -114,7 +114,8 @@ void __shutdown_vx_info(struct vx_info *vxi)
 
 	might_sleep();
 
-	vs_context_state(vxi, VS_CONTEXT_DESTROY);
+	vxi->vx_state |= VXS_SHUTDOWN;
+	vs_state_change(vxi, VSC_SHUTDOWN);
 
 	namespace = xchg(&vxi->vx_namespace, NULL);
 	if (namespace)
@@ -178,7 +179,6 @@ static inline void __hash_vx_info(struct vx_info *vxi)
 	/* context must not be hashed */
 	BUG_ON(vxi->vx_state & VXS_HASHED);
 
-	get_vx_info(vxi);
 	vxi->vx_state |= VXS_HASHED;
 	head = &vx_info_hash[__hashval(vxi->vx_id)];
 	hlist_add_head(&vxi->vx_hlist, head);
@@ -202,7 +202,6 @@ static inline void __unhash_vx_info(struct vx_info *vxi)
 
 	vxi->vx_state &= ~VXS_HASHED;
 	hlist_del(&vxi->vx_hlist);
-	put_vx_info(vxi);
 }
 
 
@@ -391,6 +390,7 @@ void unhash_vx_info(struct vx_info *vxi)
 	spin_lock(&vx_info_hash_lock);
 	__unhash_vx_info(vxi);
 	spin_unlock(&vx_info_hash_lock);
+	__wakeup_vx_info(vxi);
 }
 
 
@@ -668,7 +668,7 @@ int vc_ctx_create(uint32_t xid, void __user *data)
 	if (IS_ERR(new_vxi))
 		return PTR_ERR(new_vxi);
 
-	vs_context_state(new_vxi, VS_CONTEXT_CREATED);
+	vs_state_change(new_vxi, VSC_STARTUP);
 	ret = new_vxi->vx_id;
 	vx_migrate_task(current, new_vxi);
 	/* if this fails, we might end up with a hashed vx_info */

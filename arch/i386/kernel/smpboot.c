@@ -1022,8 +1022,8 @@ static void __init smp_boot_cpus(unsigned int max_cpus)
 	printk(KERN_INFO
 		"Total of %d processors activated (%lu.%02lu BogoMIPS).\n",
 		cpucount+1,
-		bogosum/(500000/HZ),
-		(bogosum/(5000/HZ))%100);
+		HZ*(bogosum >> 3)/62500,
+		(HZ*(bogosum >> 3)/625) % 100);
 	
 	Dprintk("Before bogocount - setting activated=1.\n");
 
@@ -1088,9 +1088,6 @@ static void __init smp_boot_cpus(unsigned int max_cpus)
 			cpu_core_map[cpu] = cpu_sibling_map[cpu];
 		}
 	}
-
-	if (nmi_watchdog == NMI_LOCAL_APIC)
-		check_nmi_watchdog();
 
 	smpboot_setup_io_apic();
 

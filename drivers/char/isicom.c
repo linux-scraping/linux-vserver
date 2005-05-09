@@ -194,7 +194,7 @@ struct	isi_port {
 	int			close_delay;
 	unsigned short		channel;
 	unsigned short		status;
-	unsigned short		closing_wait;
+	unsigned int		closing_wait;
 	struct isi_board	* card;
 	struct tty_struct 	* tty;
 	wait_queue_head_t	close_wait;

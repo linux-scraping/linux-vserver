@@ -25,7 +25,7 @@ static int show_cpuinfo(struct seq_file *m, void *v)
 	        "fxsr", "sse", "sse2", "ss", "ht", "tm", "ia64", "pbe",
 
 		/* AMD-defined */
-		"pni", NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+		NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
 		NULL, NULL, NULL, "syscall", NULL, NULL, NULL, NULL,
 		NULL, NULL, NULL, "mp", "nx", NULL, "mmxext", NULL,
 		NULL, "fxsr_opt", NULL, NULL, NULL, "lm", "3dnowext", "3dnow",
@@ -129,8 +129,8 @@ static int show_cpuinfo(struct seq_file *m, void *v)
 			seq_printf(m, " %s", x86_cap_flags[i]);
 
 	seq_printf(m, "\nbogomips\t: %lu.%02lu\n\n",
-		     c->loops_per_jiffy/(500000/HZ),
-		     (c->loops_per_jiffy/(5000/HZ)) % 100);
+		     HZ*(c->loops_per_jiffy >> 3)/62500,
+		     (HZ*(c->loops_per_jiffy >> 3)/625) % 100);
 
 	return 0;
 }

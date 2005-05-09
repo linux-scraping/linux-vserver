@@ -160,6 +160,12 @@ static __inline__ struct vx_info *__task_get_vx_info(struct task_struct *p,
 }
 
 
+static inline void __wakeup_vx_info(struct vx_info *vxi)
+{
+	if (waitqueue_active(&vxi->vx_wait))
+		wake_up_interruptible(&vxi->vx_wait);
+}
+
 #else
 #warning duplicate inclusion
 #endif

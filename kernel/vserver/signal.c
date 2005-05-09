@@ -16,7 +16,7 @@
 #include <asm/uaccess.h>
 
 #include <linux/vs_context.h>
-#include <linux/vserver/signal.h>
+#include <linux/vserver/signal_cmd.h>
 
 
 int vc_ctx_kill(uint32_t id, void __user *data)
@@ -95,11 +95,11 @@ static int __wait_exit(struct vx_info *vxi)
 	DECLARE_WAITQUEUE(wait, current);
 	int ret = 0;
 
-	add_wait_queue(&vxi->vx_exit, &wait);
+	add_wait_queue(&vxi->vx_wait, &wait);
 	set_current_state(TASK_INTERRUPTIBLE);
 
 wait:
-	if (vx_info_state(vxi, VXS_DEFUNCT))
+	if (vx_info_state(vxi, VXS_SHUTDOWN|VXS_HASHED) == VXS_SHUTDOWN)
 		goto out;
 	if (signal_pending(current)) {
 		ret = -ERESTARTSYS;
@@ -110,7 +110,7 @@ wait:
 
 out:
 	set_current_state(TASK_RUNNING);
-	remove_wait_queue(&vxi->vx_exit, &wait);
+	remove_wait_queue(&vxi->vx_wait, &wait);
 	return ret;
 }
 

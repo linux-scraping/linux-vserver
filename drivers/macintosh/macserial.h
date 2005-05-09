@@ -22,11 +22,11 @@ struct serial_struct {
 	int	xmit_fifo_size;
 	int	custom_divisor;
 	int	baud_base;
-	unsigned short	close_delay;
+	unsigned int	close_delay;
 	char	reserved_char[2];
 	int	hub6;
-	unsigned short	closing_wait; /* time to wait before closing */
-	unsigned short	closing_wait2; /* no longer used... */
+	unsigned int	closing_wait; /* time to wait before closing */
+	unsigned int	closing_wait2; /* no longer used... */
 	int	reserved[4];
 };
 
@@ -149,8 +149,8 @@ struct mac_serial {
 	int			custom_divisor;
 	int			x_char;	/* xon/xoff character */
 	int			close_delay;
-	unsigned short		closing_wait;
-	unsigned short		closing_wait2;
+	unsigned int		closing_wait;
+	unsigned int		closing_wait2;
 	unsigned long		event;
 	unsigned long		last_active;
 	int			line;

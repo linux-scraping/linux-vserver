@@ -585,7 +585,7 @@ struct cyclades_port {
 	int			custom_divisor;
 	int                     x_char; /* to be pushed out ASAP */
 	int			close_delay;
-	unsigned short		closing_wait;
+	unsigned int		closing_wait;
 	unsigned long		event;
 	unsigned long		last_active;
 	int			count;	/* # of fd on device */

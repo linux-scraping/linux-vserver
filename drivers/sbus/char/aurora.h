@@ -258,7 +258,7 @@ struct Aurora_port {
 	struct tq_struct	tqueue_hangup;
 	short			wakeup_chars;
 	short			break_length;
-	unsigned short		closing_wait;
+	unsigned int		closing_wait;
 	unsigned char		mark_mask;
 	unsigned char		SRER;
 	unsigned char		MSVR;

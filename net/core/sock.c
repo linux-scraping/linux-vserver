@@ -9,7 +9,7 @@
  *
  * Version:	$Id: sock.c,v 1.117 2002/02/01 22:01:03 davem Exp $
  *
- * Authors:	Ross Biro, <bir7@leland.Stanford.Edu>
+ * Authors:	Ross Biro
  *		Fred N. van Kempen, <waltje@uWalt.NL.Mugnet.ORG>
  *		Florian La Roche, <flla@stud.uni-sb.de>
  *		Alan Cox, <A.Cox@swansea.ac.uk>
@@ -97,7 +97,6 @@
 #include <linux/socket.h>
 #include <linux/in.h>
 #include <linux/kernel.h>
-#include <linux/major.h>
 #include <linux/module.h>
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
@@ -126,6 +125,7 @@
 #include <linux/filter.h>
 #include <linux/vs_socket.h>
 #include <linux/vs_limit.h>
+#include <linux/vs_context.h>
 
 #ifdef CONFIG_INET
 #include <net/tcp.h>
@@ -619,10 +619,10 @@ lenout:
 
 /**
  *	sk_alloc - All socket objects are allocated here
- *	@family - protocol family
- *	@priority - for allocation (%GFP_KERNEL, %GFP_ATOMIC, etc)
- *	@prot - struct proto associated with this new sock instance
- *	@zero_it - if we should zero the newly allocated sock
+ *	@family: protocol family
+ *	@priority: for allocation (%GFP_KERNEL, %GFP_ATOMIC, etc)
+ *	@prot: struct proto associated with this new sock instance
+ *	@zero_it: if we should zero the newly allocated sock
  */
 struct sock *sk_alloc(int family, int priority, struct proto *prot, int zero_it)
 {
@@ -638,7 +638,11 @@ struct sock *sk_alloc(int family, int priority, struct proto *prot, int zero_it)
 		if (zero_it) {
 			memset(sk, 0, prot->obj_size);
 			sk->sk_family = family;
-			sk->sk_prot = prot;
+			/*
+			 * See comment in struct sock definition to understand
+			 * why we need sk_prot_creator -acme
+			 */
+			sk->sk_prot = sk->sk_prot_creator = prot;
 			sock_lock_init(sk);
 		}
 		sock_vx_init(sk);
@@ -659,7 +663,7 @@ struct sock *sk_alloc(int family, int priority, struct proto *prot, int zero_it)
 void sk_free(struct sock *sk)
 {
 	struct sk_filter *filter;
-	struct module *owner = sk->sk_prot->owner;
+	struct module *owner = sk->sk_prot_creator->owner;
 
 	if (sk->sk_destruct)
 		sk->sk_destruct(sk);
@@ -684,8 +688,8 @@ void sk_free(struct sock *sk)
 	// BUG_ON(sk->sk_nx_info);
 	clr_nx_info(&sk->sk_nx_info);
 	sk->sk_nid = -1;
-	if (sk->sk_prot->slab != NULL)
-		kmem_cache_free(sk->sk_prot->slab, sk);
+	if (sk->sk_prot_creator->slab != NULL)
+		kmem_cache_free(sk->sk_prot_creator->slab, sk);
 	else
 		kfree(sk);
 	module_put(owner);
@@ -982,8 +986,8 @@ static void __release_sock(struct sock *sk)
 
 /**
  * sk_wait_data - wait for data to arrive at sk_receive_queue
- * sk - sock to wait on
- * timeo - for how long
+ * @sk:    sock to wait on
+ * @timeo: for how long
  *
  * Now socket state including sk->sk_err is changed only under lock,
  * hence we may omit checks after joining wait queue.

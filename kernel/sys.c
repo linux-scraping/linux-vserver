@@ -26,6 +26,7 @@
 #include <linux/dcookies.h>
 #include <linux/suspend.h>
 #include <linux/tty.h>
+#include <linux/signal.h>
 
 #include <linux/compat.h>
 #include <linux/syscalls.h>
@@ -229,7 +230,7 @@ static int set_one_prio(struct task_struct *p, int niceval, int error)
 		error = -EPERM;
 		goto out;
 	}
-	if (niceval < task_nice(p) && !capable(CAP_SYS_NICE)) {
+	if (niceval < task_nice(p) && !can_nice(p, niceval)) {
 		if (vx_flags(VXF_IGNEG_NICE, 0))
 			error = 0;
 		else
@@ -536,7 +537,7 @@ asmlinkage long sys_setregid(gid_t rgid, gid_t egid)
 	if (new_egid != old_egid)
 	{
 		current->mm->dumpable = 0;
-		wmb();
+		smp_wmb();
 	}
 	if (rgid != (gid_t) -1 ||
 	    (egid != (gid_t) -1 && egid != old_rgid))
@@ -567,7 +568,7 @@ asmlinkage long sys_setgid(gid_t gid)
 		if(old_egid != gid)
 		{
 			current->mm->dumpable=0;
-			wmb();
+			smp_wmb();
 		}
 		current->gid = current->egid = current->sgid = current->fsgid = gid;
 	}
@@ -576,7 +577,7 @@ asmlinkage long sys_setgid(gid_t gid)
 		if(old_egid != gid)
 		{
 			current->mm->dumpable=0;
-			wmb();
+			smp_wmb();
 		}
 		current->egid = current->fsgid = gid;
 	}
@@ -607,7 +608,7 @@ static int set_user(uid_t new_ruid, int dumpclear)
 	if(dumpclear)
 	{
 		current->mm->dumpable = 0;
-		wmb();
+		smp_wmb();
 	}
 	current->uid = new_ruid;
 	return 0;
@@ -664,7 +665,7 @@ asmlinkage long sys_setreuid(uid_t ruid, uid_t euid)
 	if (new_euid != old_euid)
 	{
 		current->mm->dumpable=0;
-		wmb();
+		smp_wmb();
 	}
 	current->fsuid = current->euid = new_euid;
 	if (ruid != (uid_t) -1 ||
@@ -714,7 +715,7 @@ asmlinkage long sys_setuid(uid_t uid)
 	if (old_euid != uid)
 	{
 		current->mm->dumpable = 0;
-		wmb();
+		smp_wmb();
 	}
 	current->fsuid = current->euid = uid;
 	current->suid = new_suid;
@@ -759,7 +760,7 @@ asmlinkage long sys_setresuid(uid_t ruid, uid_t euid, uid_t suid)
 		if (euid != current->euid)
 		{
 			current->mm->dumpable = 0;
-			wmb();
+			smp_wmb();
 		}
 		current->euid = euid;
 	}
@@ -809,7 +810,7 @@ asmlinkage long sys_setresgid(gid_t rgid, gid_t egid, gid_t sgid)
 		if (egid != current->egid)
 		{
 			current->mm->dumpable = 0;
-			wmb();
+			smp_wmb();
 		}
 		current->egid = egid;
 	}
@@ -856,7 +857,7 @@ asmlinkage long sys_setfsuid(uid_t uid)
 		if (uid != old_fsuid)
 		{
 			current->mm->dumpable = 0;
-			wmb();
+			smp_wmb();
 		}
 		current->fsuid = uid;
 	}
@@ -886,7 +887,7 @@ asmlinkage long sys_setfsgid(gid_t gid)
 		if (gid != old_fsgid)
 		{
 			current->mm->dumpable = 0;
-			wmb();
+			smp_wmb();
 		}
 		current->fsgid = gid;
 		key_fsgid_changed(current);
@@ -1208,7 +1209,7 @@ static int groups_from_user(struct group_info *group_info,
 	return 0;
 }
 
-/* a simple shell-metzner sort */
+/* a simple Shell sort */
 static void groups_sort(struct group_info *group_info)
 {
 	int base, max, stride;
@@ -1657,7 +1658,7 @@ asmlinkage long sys_prctl(int option, unsigned long arg2, unsigned long arg3,
 	switch (option) {
 		case PR_SET_PDEATHSIG:
 			sig = arg2;
-			if (sig < 0 || sig > _NSIG) {
+			if (!valid_signal(sig)) {
 				error = -EINVAL;
 				break;
 			}

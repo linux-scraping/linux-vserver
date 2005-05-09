@@ -3345,7 +3345,7 @@ static inline int set_geometry(unsigned int cmd, struct floppy_struct *g,
 			struct block_device *bdev = opened_bdev[cnt];
 			if (!bdev || ITYPE(drive_state[cnt].fd_device) != type)
 				continue;
-			__invalidate_device(bdev, 0);
+			__invalidate_device(bdev);
 		}
 		up(&open_lock);
 	} else {
@@ -4084,7 +4084,7 @@ static void __init daring(int *ints, int param, int param2)
 			    FD_SILENT_DCL_CLEAR;
 		} else {
 			default_drive_params[i].params.select_delay =
-			    2 * HZ / 100;
+			    SEL_DLY;
 			default_drive_params[i].params.flags &=
 			    ~FD_SILENT_DCL_CLEAR;
 		}

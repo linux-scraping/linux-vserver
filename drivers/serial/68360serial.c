@@ -159,8 +159,8 @@ struct serial_state {
         int     count;
         u8      *iomem_base;
         u16     iomem_reg_shift;
-        unsigned short  close_delay;
-        unsigned short  closing_wait; /* time to wait before closing */
+	unsigned int  close_delay;
+	unsigned int  closing_wait; /* time to wait before closing */
         struct async_icount_24     icount; 
         int     io_type;
         struct async_struct *info;
@@ -244,8 +244,8 @@ typedef struct serial_info {
 	int			line;
 	int			x_char;	/* xon/xoff character */
 	int			close_delay;
-	unsigned short		closing_wait;
-	unsigned short		closing_wait2;
+	unsigned int		closing_wait;
+	unsigned int		closing_wait2;
 	unsigned long		event;
 	unsigned long		last_active;
 	int			blocked_open; /* # of blocked opens */

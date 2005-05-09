@@ -52,8 +52,8 @@ struct mcf_serial {
 	int			x_char;	/* xon/xoff character */
 	int			baud_base;
 	int			close_delay;
-	unsigned short		closing_wait;
-	unsigned short		closing_wait2;
+	unsigned int		closing_wait;
+	unsigned int		closing_wait2;
 	unsigned long		event;
 	int			line;
 	int			count;	    /* # of fd on device */

@@ -166,8 +166,7 @@ tlb_finish_mmu (struct mmu_gather *tlb, unsigned long start, unsigned long end)
 
 	if (rss < freed)
 		freed = rss;
-	// add_mm_counter(mm, rss, -freed);
-	vx_rsspages_sub(mm, freed);
+	add_mm_counter(mm, rss, -freed);
 	/*
 	 * Note: tlb->nr may be 0 at this point, so we can't rely on tlb->start_addr and
 	 * tlb->end_addr.

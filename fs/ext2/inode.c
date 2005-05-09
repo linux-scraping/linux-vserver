@@ -53,8 +53,6 @@ static inline int ext2_inode_is_fast_symlink(struct inode *inode)
 		inode->i_blocks - ea_blocks == 0);
 }
 
-static void ext2_truncate_nocheck (struct inode * inode);
-
 /*
  * Called at each iput().
  *
@@ -67,6 +65,8 @@ void ext2_put_inode(struct inode *inode)
 	if (!is_bad_inode(inode))
 		ext2_discard_prealloc(inode);
 }
+
+static void ext2_truncate_nocheck (struct inode * inode);
 
 /*
  * Called at the last iput() if i_nlink is zero.

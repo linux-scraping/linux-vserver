@@ -103,8 +103,16 @@ config	INOXID_RUNTIME
 
 endchoice
 
+config	XID_TAG_NFSD
+	bool	"Tag NFSD User Auth and Files"
+	default n
+	help
+	  Enable this if you do want the kernel nfsd to
+	  use the xid tagging specified above.
+	  (will require patched clients too)
+
 config	VSERVER_DEBUG
-	bool	"Compile Debugging Code"
+	bool	"VServer Debugging Code"
 	default n
 	help
 	  Set this to yes if you want to be able to activate
@@ -113,7 +121,7 @@ config	VSERVER_DEBUG
 	  increases the kernel size by about 20k.
 
 config	VSERVER_HISTORY
-	bool	"Compile History Tracing"
+	bool	"VServer History Tracing"
 	depends on VSERVER_DEBUG
 	default n
 	help

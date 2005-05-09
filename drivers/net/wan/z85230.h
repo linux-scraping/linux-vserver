@@ -348,7 +348,7 @@ struct z8530_channel
 	int			xmit_fifo_size;	/* Transmit FIFO info */
 
 	int			close_delay;	/* Do we wait for drain on close ? */
-	unsigned short		closing_wait;
+	unsigned int		closing_wait;
 
 	/* We need to know the current clock divisor
 	 * to read the bps rate the chip has currently

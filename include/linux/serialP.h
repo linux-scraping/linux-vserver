@@ -42,8 +42,8 @@ struct serial_state {
 	int	count;
 	u8	*iomem_base;
 	u16	iomem_reg_shift;
-	unsigned short	close_delay;
-	unsigned short	closing_wait; /* time to wait before closing */
+	unsigned int	close_delay;
+	unsigned int	closing_wait; /* time to wait before closing */
 	struct async_icount	icount;	
 	int	io_type;
 	struct async_struct *info;
@@ -64,8 +64,8 @@ struct async_struct {
 	int			quot;
 	int			x_char;	/* xon/xoff character */
 	int			close_delay;
-	unsigned short		closing_wait;
-	unsigned short		closing_wait2; /* obsolete */
+	unsigned int		closing_wait;
+	unsigned int		closing_wait2; /* obsolete */
 	int			IER; 	/* Interrupt Enable Register */
 	int			MCR; 	/* Modem control register */
 	int			LCR; 	/* Line control register */

@@ -52,7 +52,7 @@
 #define KERNEL
 #include <linux/types.h>
 #include <linux/fs.h>
-#include <linux/mm.h>		/* for verify_area */
+#include <linux/mm.h>
 #include <linux/errno.h>	/* for -EBUSY */
 #include <linux/ioport.h>	/* for request_region */
 #include <linux/delay.h>	/* for loops_per_jiffy */
@@ -198,7 +198,7 @@ static ssize_t dtlk_write(struct file *file, const char __user *buf,
 				   up to 250 usec for the RDY bit to
 				   go nonzero. */
 				for (retries = 0;
-				     retries < loops_per_jiffy / (4000/HZ);
+				     retries < HZ*(loops_per_jiffy >> 3)/500;
 				     retries++)
 					if (inb_p(dtlk_port_tts) &
 					    TTS_WRITABLE)
@@ -445,7 +445,7 @@ for (i = 0; i < 10; i++)			\
 				LOOK
 				dtlk_write_bytes("\0012I\r", 4);
 				buffer[b++] = 0;
-				__delay(50 * loops_per_jiffy / (1000/HZ));
+				__delay(50 * (loops_per_jiffy >> 3) * HZ / 125);
 				outb_p(0xff, dtlk_port_lpc);
 				buffer[b++] = 0;
 				LOOK

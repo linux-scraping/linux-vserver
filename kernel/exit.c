@@ -27,6 +27,7 @@
 #include <linux/mempolicy.h>
 #include <linux/cpuset.h>
 #include <linux/syscalls.h>
+#include <linux/signal.h>
 #include <linux/vs_limit.h>
 
 #include <asm/uaccess.h>
@@ -38,6 +39,8 @@ extern void sem_exit (void);
 extern struct task_struct *child_reaper;
 
 int getrusage(struct task_struct *, int, struct rusage __user *);
+
+static void exit_mm(struct task_struct * tsk);
 
 static void __unhash_process(struct task_struct *p)
 {
@@ -217,7 +220,7 @@ static inline int has_stopped_jobs(int pgrp)
 }
 
 /**
- * reparent_to_init() - Reparent the calling kernel thread to the init task.
+ * reparent_to_init - Reparent the calling kernel thread to the init task.
  *
  * If a kernel thread is launched as a result of a system call, or if
  * it ever exits, it should generally reparent itself to init so that
@@ -286,7 +289,7 @@ void set_special_pids(pid_t session, pid_t pgrp)
  */
 int allow_signal(int sig)
 {
-	if (sig < 1 || sig > _NSIG)
+	if (!valid_signal(sig) || sig < 1)
 		return -EINVAL;
 
 	spin_lock_irq(&current->sighand->siglock);
@@ -307,7 +310,7 @@ EXPORT_SYMBOL(allow_signal);
 
 int disallow_signal(int sig)
 {
-	if (sig < 1 || sig > _NSIG)
+	if (!valid_signal(sig) || sig < 1)
 		return -EINVAL;
 
 	spin_lock_irq(&current->sighand->siglock);
@@ -483,7 +486,7 @@ EXPORT_SYMBOL_GPL(exit_fs);
  * Turn us into a lazy TLB process if we
  * aren't already..
  */
-void exit_mm(struct task_struct * tsk)
+static void exit_mm(struct task_struct * tsk)
 {
 	struct mm_struct *mm = tsk->mm;
 
@@ -527,8 +530,6 @@ static inline void choose_new_parent(task_t *p, task_t *reaper, task_t *child_re
 	 */
 	BUG_ON(p == reaper || reaper->exit_state >= EXIT_ZOMBIE);
 	p->real_parent = reaper;
-	if (p->parent == p->real_parent)
-		BUG();
 }
 
 static inline void reparent_thread(task_t *p, task_t *father, int traced)
@@ -855,6 +856,8 @@ fastcall NORET_TYPE void do_exit(long code)
 	/* Avoid "noreturn function does return".  */
 	for (;;) ;
 }
+
+EXPORT_SYMBOL_GPL(do_exit);
 
 NORET_TYPE void complete_and_exit(struct completion *comp, long code)
 {

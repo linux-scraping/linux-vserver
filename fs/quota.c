@@ -373,10 +373,6 @@ asmlinkage long sys_quotactl(unsigned int cmd, const char __user *special, qid_t
 		if (IS_ERR(bdev))
 			return PTR_ERR(bdev);
 #ifdef CONFIG_BLK_DEV_VROOT
-		printk(KERN_INFO "bdev=%p, gendisk=%p inode=%p[%d,%d]\n",
-			bdev, bdev?bdev->bd_disk:0, bdev->bd_inode,
-			imajor(bdev->bd_inode), iminor(bdev->bd_inode));
-
 		if (bdev && bdev->bd_inode &&
 			imajor(bdev->bd_inode) == VROOT_MAJOR) {
 			struct block_device *bdnew =
