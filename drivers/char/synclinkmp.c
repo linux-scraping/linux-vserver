@@ -157,8 +157,8 @@ typedef struct _synclinkmp_info {
 	int			flags;
 	int			count;		/* count of opens */
 	int			line;
-	unsigned short		close_delay;
-	unsigned short		closing_wait;	/* time to wait before closing */
+	unsigned int		close_delay;
+	unsigned int		closing_wait;	/* time to wait before closing */
 
 	struct mgsl_icount	icount;
 
@@ -3831,11 +3831,7 @@ static SLMP_INFO *alloc_dev(int adapter_num, int port_num, struct pci_dev *pdev)
 		INIT_WORK(&info->task, bh_handler, info);
 		info->max_frame_size = 4096;
 		info->close_delay = 5*HZ/10;
-		#if HZ < 2185
 		info->closing_wait = 30*HZ;
-		#else
-		info->closing_wait = 65534;
-		#endif
 		init_waitqueue_head(&info->open_wait);
 		init_waitqueue_head(&info->close_wait);
 		init_waitqueue_head(&info->status_event_wait_q);

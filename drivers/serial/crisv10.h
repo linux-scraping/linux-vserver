@@ -78,8 +78,8 @@ struct e100_serial {
 	int			ignore_status_mask;
 	int			x_char;	/* xon/xoff character */
 	int			close_delay;
-	unsigned short		closing_wait;
-	unsigned short		closing_wait2;
+	unsigned int		closing_wait;
+	unsigned int		closing_wait2;
 	unsigned long		event;
 	unsigned long		last_active;
 	int			line;

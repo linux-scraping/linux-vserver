@@ -88,11 +88,7 @@ static const char *tcp_conntrack_names[] = {
 
 unsigned long ip_ct_tcp_timeout_syn_sent =      2 MINS;
 unsigned long ip_ct_tcp_timeout_syn_recv =     60 SECS;
-#if HZ < 9942
-unsigned long ip_ct_tcp_timeout_established =  5U DAYS;
-#else
-unsigned long ip_ct_tcp_timeout_established =  2U DAYS;
-#endif
+unsigned long ip_ct_tcp_timeout_established =   2 DAYS;
 unsigned long ip_ct_tcp_timeout_fin_wait =      2 MINS;
 unsigned long ip_ct_tcp_timeout_close_wait =   60 SECS;
 unsigned long ip_ct_tcp_timeout_last_ack =     30 SECS;
@@ -774,6 +770,7 @@ static u8 tcp_valid_flags[(TH_FIN|TH_SYN|TH_RST|TH_PUSH|TH_ACK|TH_URG) + 1] =
 {
 	[TH_SYN]			= 1,
 	[TH_SYN|TH_ACK]			= 1,
+	[TH_SYN|TH_ACK|TH_PUSH]		= 1,
 	[TH_RST]			= 1,
 	[TH_RST|TH_ACK]			= 1,
 	[TH_RST|TH_ACK|TH_PUSH]		= 1,
@@ -822,6 +819,7 @@ static int tcp_error(struct sk_buff *skb,
 	 */
 	/* FIXME: Source route IP option packets --RR */
 	if (hooknum == NF_IP_PRE_ROUTING
+	    && skb->ip_summed != CHECKSUM_UNNECESSARY
 	    && csum_tcpudp_magic(iph->saddr, iph->daddr, tcplen, IPPROTO_TCP,
 			         skb->ip_summed == CHECKSUM_HW ? skb->csum
 			      	 : skb_checksum(skb, iph->ihl*4, tcplen, 0))) {

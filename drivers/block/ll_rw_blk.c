@@ -28,8 +28,6 @@
 #include <linux/slab.h>
 #include <linux/swap.h>
 #include <linux/writeback.h>
-#include <linux/vs_context.h>
-#include <linux/vs_cvirt.h>
 
 /*
  * for max sense size
@@ -1954,7 +1952,6 @@ rq_starved:
 	
 	rq_init(q, rq);
 	rq->rl = rl;
-	rq->vx_info = get_vx_info(ioc->vx_info);
 out:
 	put_io_context(ioc);
 	return rq;
@@ -2304,11 +2301,6 @@ void drive_stat_acct(struct request *rq, int nr_sectors, int new_io)
 {
 	int rw = rq_data_dir(rq);
 
-	if (rw == READ)
-		vx_cacct(rq->vx_info, read_sectors, nr_sectors);
-	else
-		vx_cacct(rq->vx_info, write_sectors, nr_sectors);
-
 	if (!blk_fs_request(rq) || !rq->rq_disk)
 		return;
 
@@ -2408,7 +2400,6 @@ static void __blk_put_request(request_queue_t *q, struct request *req)
 
 void blk_put_request(struct request *req)
 {
-	put_vx_info(req->vx_info);
 	/*
 	 * if req->rl isn't set, this request didnt originate from the
 	 * block layer, so it's safe to just disregard it
@@ -3310,7 +3301,6 @@ void put_io_context(struct io_context *ioc)
 		if (ioc->cic && ioc->cic->dtor)
 			ioc->cic->dtor(ioc->cic);
 
-		clr_vx_info(&ioc->vx_info);
 		kmem_cache_free(iocontext_cachep, ioc);
 	}
 }
@@ -3365,7 +3355,6 @@ struct io_context *get_io_context(int gfp_flags)
 		ret->aic = NULL;
 		ret->cic = NULL;
 		spin_lock_init(&ret->lock);
-		init_vx_info(&ret->vx_info, current->vx_info);
 
 		local_irq_save(flags);
 
@@ -3376,7 +3365,6 @@ struct io_context *get_io_context(int gfp_flags)
 		if (!tsk->io_context)
 			tsk->io_context = ret;
 		else {
-			clr_vx_info(&ret->vx_info);
 			kmem_cache_free(iocontext_cachep, ret);
 			ret = tsk->io_context;
 		}

@@ -21,9 +21,9 @@
 #include "linux/spinlock.h"
 #include "linux/proc_fs.h"
 #include "linux/ptrace.h"
+#include "linux/random.h"
 #include "linux/vs_cvirt.h"
 
-#include "linux/random.h"
 #include "asm/unistd.h"
 #include "asm/mman.h"
 #include "asm/segment.h"
@@ -117,16 +117,6 @@ int kernel_thread(int (*fn)(void *), void * arg, unsigned long flags)
 	return(pid);
 }
 
-void switch_mm(struct mm_struct *prev, struct mm_struct *next, 
-	       struct task_struct *tsk)
-{
-	int cpu = smp_processor_id();
-
-	if (prev != next) 
-		cpu_clear(cpu, prev->cpu_vm_mask);
-	cpu_set(cpu, next->cpu_vm_mask);
-}
-
 void set_current(void *t)
 {
 	struct task_struct *task = t;
@@ -154,17 +144,12 @@ void release_thread(struct task_struct *task)
  
 void exit_thread(void)
 {
-	CHOOSE_MODE(exit_thread_tt(), exit_thread_skas());
 	unprotect_stack((unsigned long) current_thread);
 }
  
 void *get_current(void)
 {
 	return(current);
-}
-
-void prepare_to_copy(struct task_struct *tsk)
-{
 }
 
 int copy_thread(int nr, unsigned long clone_flags, unsigned long sp,
@@ -482,12 +467,21 @@ int singlestepping(void * t)
 	return 2;
 }
 
+/*
+ * Only x86 and x86_64 have an arch_align_stack().
+ * All other arches have "#define arch_align_stack(x) (x)"
+ * in their asm/system.h
+ * As this is included in UML from asm-um/system-generic.h,
+ * we can use it to behave as the subarch does.
+ */
+#ifndef arch_align_stack
 unsigned long arch_align_stack(unsigned long sp)
 {
 	if (randomize_va_space)
 		sp -= get_random_int() % 8192;
 	return sp & ~0xf;
 }
+#endif
 
 
 /*

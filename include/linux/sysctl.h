@@ -644,6 +644,7 @@ enum {
 	NET_SCTP_MAX_BURST               = 12,
 	NET_SCTP_ADDIP_ENABLE		 = 13,
 	NET_SCTP_PRSCTP_ENABLE		 = 14,
+	NET_SCTP_SNDBUF_POLICY		 = 15,
 };
 
 /* /proc/sys/net/bridge */
@@ -793,6 +794,9 @@ typedef int ctl_handler (ctl_table *table, int __user *name, int nlen,
 typedef int proc_handler (ctl_table *ctl, int write, struct file * filp,
 			  void __user *buffer, size_t *lenp, loff_t *ppos);
 
+typedef int virt_handler (struct ctl_table *ctl, int write, xid_t xid,
+			  void **datap, size_t *lenp);
+
 extern int proc_dostring(ctl_table *, int, struct file *,
 			 void __user *, size_t *, loff_t *);
 extern int proc_dointvec(ctl_table *, int, struct file *,
@@ -874,6 +878,7 @@ struct ctl_table
 	mode_t mode;
 	ctl_table *child;
 	proc_handler *proc_handler;	/* Callback for text formatting */
+	virt_handler *virt_handler;	/* Context virtualization */
 	ctl_handler *strategy;		/* Callback function for all r/w */
 	struct proc_dir_entry *de;	/* /proc control block */
 	void *extra1;

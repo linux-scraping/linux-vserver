@@ -200,8 +200,8 @@ static inline int dup_mmap(struct mm_struct * mm, struct mm_struct * oldmm)
 	mm->mmap_cache = NULL;
 	mm->free_area_cache = oldmm->mmap_base;
 	mm->map_count = 0;
-	set_mm_counter(mm, rss, 0);
-	set_mm_counter(mm, anon_rss, 0);
+	__set_mm_counter(mm, rss, 0);
+	__set_mm_counter(mm, anon_rss, 0);
 	cpus_clear(mm->cpu_vm_mask);
 	mm->mm_rb = RB_ROOT;
 	rb_link = &mm->mm_rb.rb_node;
@@ -897,7 +897,7 @@ static task_t *copy_process(unsigned long clone_flags,
 			goto bad_fork_free;
 	}
 	if (p->mm && vx_flags(VXF_FORK_RSS, 0)) {
-		if (!vx_rsspages_avail(p->mm, p->mm->_rss))
+		if (!vx_rsspages_avail(p->mm, get_mm_counter(p->mm, rss)))
 			goto bad_fork_cleanup_vm;
 	}
 
@@ -1138,7 +1138,7 @@ static task_t *copy_process(unsigned long clone_flags,
 	if (vxi) {
 		claim_vx_info(vxi, p);
 		atomic_inc(&vxi->cvirt.nr_threads);
-		vx_cacct_inc(vxi, total_forks);
+		atomic_inc(&vxi->cvirt.total_forks);
 		vx_nproc_inc(p);
 	}
 	write_unlock_irq(&tasklist_lock);

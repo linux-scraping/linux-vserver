@@ -579,7 +579,7 @@ ia32_sys_call_table:
 	.quad sys_tgkill		/* 270 */
 	.quad compat_sys_utimes
 	.quad sys32_fadvise64_64
-	.quad sys_vserver
+	.quad sys32_vserver
 	.quad sys_mbind
 	.quad compat_sys_get_mempolicy	/* 275 */
 	.quad sys_set_mempolicy

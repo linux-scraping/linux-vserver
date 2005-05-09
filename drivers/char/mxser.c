@@ -316,7 +316,7 @@ struct mxser_struct {
 	int custom_divisor;
 	int x_char;		/* xon/xoff character */
 	int close_delay;
-	unsigned short closing_wait;
+	unsigned int closing_wait;
 	int IER;		/* Interrupt Enable Register */
 	int MCR;		/* Modem control register */
 	unsigned long event;

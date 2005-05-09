@@ -59,38 +59,46 @@ static inline void __vx_acc_pages(unsigned long *v, struct vx_info *vxi,
 
 
 
-#define vx_acc_vmpage(m,d)	vx_acc_page(m, d, total_vm,  RLIMIT_AS)
-#define vx_acc_vmlpage(m,d)	vx_acc_page(m, d, locked_vm, RLIMIT_MEMLOCK)
-#define vx_acc_rsspage(m,d)	vx_acc_page(m, d, _rss,	     RLIMIT_RSS)
-#define vx_acc_anonpage(m,d)	vx_acc_page(m, d, _anon_rss,  VLIMIT_ANON)
+#define vx_acc_vmpage(m,d) \
+	vx_acc_page(m, d, total_vm,  RLIMIT_AS)
+#define vx_acc_vmlpage(m,d) \
+	vx_acc_page(m, d, locked_vm, RLIMIT_MEMLOCK)
+#define vx_acc_rsspage(m,d) \
+	vx_acc_page(m, d, _rss,      RLIMIT_RSS)
+#define vx_acc_anon_rsspage(m,d) \
+	vx_acc_page(m, d, _anon_rss, VLIMIT_ANON)
 
-#define vx_acc_vmpages(m,p)	vx_acc_pages(m, p, total_vm,  RLIMIT_AS)
-#define vx_acc_vmlpages(m,p)	vx_acc_pages(m, p, locked_vm, RLIMIT_MEMLOCK)
-#define vx_acc_rsspages(m,p)	vx_acc_pages(m, p, _rss,       RLIMIT_RSS)
-#define vx_acc_anonpages(m,p)	vx_acc_pages(m, p, _anon_rss,  VLIMIT_ANON)
+#define vx_acc_vmpages(m,p) \
+	vx_acc_pages(m, p, total_vm,  RLIMIT_AS)
+#define vx_acc_vmlpages(m,p) \
+	vx_acc_pages(m, p, locked_vm, RLIMIT_MEMLOCK)
+#define vx_acc_rsspages(m,p) \
+	vx_acc_pages(m, p, _rss,      RLIMIT_RSS)
+#define vx_acc_anon_rsspages(m,p) \
+	vx_acc_pages(m, p, _anon_rss, VLIMIT_ANON)
 
 #define vx_pages_add(s,r,p)	__vx_acc_pages(0, s, r, p, __FILE__, __LINE__)
 #define vx_pages_sub(s,r,p)	vx_pages_add(s, r, -(p))
 
-#define vx_vmpages_inc(m)	vx_acc_vmpage(m, 1)
-#define vx_vmpages_dec(m)	vx_acc_vmpage(m,-1)
-#define vx_vmpages_add(m,p)	vx_acc_vmpages(m, p)
-#define vx_vmpages_sub(m,p)	vx_acc_vmpages(m,-(p))
+#define vx_vmpages_inc(m)		vx_acc_vmpage(m, 1)
+#define vx_vmpages_dec(m)		vx_acc_vmpage(m,-1)
+#define vx_vmpages_add(m,p)		vx_acc_vmpages(m, p)
+#define vx_vmpages_sub(m,p)		vx_acc_vmpages(m,-(p))
 
-#define vx_vmlocked_inc(m)	vx_acc_vmlpage(m, 1)
-#define vx_vmlocked_dec(m)	vx_acc_vmlpage(m,-1)
-#define vx_vmlocked_add(m,p)	vx_acc_vmlpages(m, p)
-#define vx_vmlocked_sub(m,p)	vx_acc_vmlpages(m,-(p))
+#define vx_vmlocked_inc(m)		vx_acc_vmlpage(m, 1)
+#define vx_vmlocked_dec(m)		vx_acc_vmlpage(m,-1)
+#define vx_vmlocked_add(m,p)		vx_acc_vmlpages(m, p)
+#define vx_vmlocked_sub(m,p)		vx_acc_vmlpages(m,-(p))
 
-#define vx_rsspages_inc(m)	vx_acc_rsspage(m, 1)
-#define vx_rsspages_dec(m)	vx_acc_rsspage(m,-1)
-#define vx_rsspages_add(m,p)	vx_acc_rsspages(m, p)
-#define vx_rsspages_sub(m,p)	vx_acc_rsspages(m,-(p))
+#define vx_rsspages_inc(m)		vx_acc_rsspage(m, 1)
+#define vx_rsspages_dec(m)		vx_acc_rsspage(m,-1)
+#define vx_rsspages_add(m,p)		vx_acc_rsspages(m, p)
+#define vx_rsspages_sub(m,p)		vx_acc_rsspages(m,-(p))
 
-#define vx_anonpages_inc(m)	vx_acc_anonpage(m, 1)
-#define vx_anonpages_dec(m)	vx_acc_anonpage(m,-1)
-#define vx_anonpages_add(m,p)	vx_acc_anonpages(m, p)
-#define vx_anonpages_sub(m,p)	vx_acc_anonpages(m,-(p))
+#define vx_anon_rsspages_inc(m)		vx_acc_anon_rsspage(m, 1)
+#define vx_anon_rsspages_dec(m)		vx_acc_anon_rsspage(m,-1)
+#define vx_anon_rsspages_add(m,p)	vx_acc_anon_rsspages(m, p)
+#define vx_anon_rsspages_sub(m,p)	vx_acc_anon_rsspages(m,-(p))
 
 
 #define vx_pages_avail(m,p,r) \

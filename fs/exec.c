@@ -198,7 +198,8 @@ static int count(char __user * __user * argv, int max)
  * memory to free pages in kernel mem. These are in a format ready
  * to be put directly into the top of new user memory.
  */
-int copy_strings(int argc,char __user * __user * argv, struct linux_binprm *bprm)
+static int copy_strings(int argc, char __user * __user * argv,
+			struct linux_binprm *bprm)
 {
 	struct page *kmapped_page = NULL;
 	char *kaddr = NULL;
@@ -327,8 +328,7 @@ void install_arg_page(struct vm_area_struct *vma,
 		pte_unmap(pte);
 		goto out;
 	}
-	// inc_mm_counter(mm, rss);
-	vx_rsspages_inc(mm);
+	inc_mm_counter(mm, rss);
 	lru_cache_add_active(page);
 	set_pte_at(mm, address, pte, pte_mkdirty(pte_mkwrite(mk_pte(
 					page, vma->vm_page_prot))));
@@ -873,9 +873,11 @@ int flush_old_exec(struct linux_binprm * bprm)
 	if (current->euid == current->uid && current->egid == current->gid)
 		current->mm->dumpable = 1;
 	name = bprm->filename;
+
+	/* Copies the binary name from after last slash */
 	for (i=0; (ch = *(name++)) != '\0';) {
 		if (ch == '/')
-			i = 0;
+			i = 0; /* overwrite what we wrote */
 		else
 			if (i < (sizeof(tcomm) - 1))
 				tcomm[i++] = ch;

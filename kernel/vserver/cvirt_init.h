@@ -28,6 +28,7 @@ static inline void vx_info_init_cvirt(struct _vx_cvirt *cvirt)
 	cvirt->load[1] = 0;
 	cvirt->load[2] = 0;
 
+	atomic_set(&cvirt->total_forks, 0);
 	spin_lock_init(&cvirt->syslog.logbuf_lock);
 	init_waitqueue_head(&cvirt->syslog.log_wait);
 	cvirt->syslog.log_start = 0;
@@ -67,18 +68,6 @@ static inline void vx_info_init_cacct(struct _vx_cacct *cacct)
 			atomic_set(&cacct->sock[i][j].total, 0);
 		}
 	}
-
-	atomic_set(&cacct->total_forks, 0);
-	atomic_set(&cacct->read_sectors, 0);
-	atomic_set(&cacct->write_sectors, 0);
-
-	atomic_set(&cacct->fault_page, 0);
-	atomic_set(&cacct->fault_major, 0);
-	atomic_set(&cacct->fault_minor, 0);
-	atomic_set(&cacct->fault_sigbus, 0);
-	atomic_set(&cacct->fault_oom, 0);
-
-	atomic_set(&cacct->wakeup_kswapd, 0);
 }
 
 static inline void vx_info_exit_cacct(struct _vx_cacct *cacct)

@@ -21,7 +21,6 @@
 
 #include <linux/kernel.h>
 #include <linux/init.h>
-#include <linux/major.h>
 #include <linux/signal.h>
 #include <linux/sched.h>
 #include <linux/errno.h>
@@ -50,9 +49,11 @@
 #include <linux/bitops.h>
 #include <linux/mm.h>
 #include <linux/types.h>
+#include <linux/audit.h>
 #include <linux/vs_context.h>
 #include <linux/vs_network.h>
 #include <linux/vs_limit.h>
+
 #include <net/sock.h>
 #include <net/scm.h>
 
@@ -377,7 +378,6 @@ static int netlink_release(struct socket *sock)
 		nlk->cb->done(nlk->cb);
 		netlink_destroy_callback(nlk->cb);
 		nlk->cb = NULL;
-		__sock_put(sk);
 	}
 	spin_unlock(&nlk->cb_lock);
 
@@ -909,6 +909,7 @@ static int netlink_sendmsg(struct kiocb *kiocb, struct socket *sock,
 	NETLINK_CB(skb).groups	= nlk->groups;
 	NETLINK_CB(skb).dst_pid = dst_pid;
 	NETLINK_CB(skb).dst_groups = dst_groups;
+	NETLINK_CB(skb).loginuid = audit_get_loginuid(current->audit_context);
 	memcpy(NETLINK_CREDS(skb), &siocb->scm->creds, sizeof(struct ucred));
 
 	/* What can I do? Netlink is asynchronous, so that
@@ -1103,7 +1104,6 @@ static int netlink_dump(struct sock *sk)
 	spin_unlock(&nlk->cb_lock);
 
 	netlink_destroy_callback(cb);
-	__sock_put(sk);
 	return 0;
 }
 
@@ -1142,7 +1142,6 @@ int netlink_dump_start(struct sock *ssk, struct sk_buff *skb,
 		return -EBUSY;
 	}
 	nlk->cb = cb;
-	sock_hold(sk);
 	spin_unlock(&nlk->cb_lock);
 
 	netlink_dump(sk);

@@ -585,7 +585,7 @@ struct cyclades_port {
 	int			custom_divisor;
 	int                     x_char; /* to be pushed out ASAP */
 	int			close_delay;
-	unsigned short		closing_wait;
+	unsigned int		closing_wait;
 	unsigned long		event;
 	unsigned long		last_active;
 	int			count;	/* # of fd on device */
@@ -624,11 +624,7 @@ struct cyclades_port {
 #define	Cy_EVENT_DELTA_WAKEUP		6
 #define	Cy_EVENT_Z_RX_FULL		7
 
-#if HZ < 2185
 #define	CLOSING_WAIT_DELAY	30*HZ
-#else
-#define	CLOSING_WAIT_DELAY	65534
-#endif
 #define CY_CLOSING_WAIT_NONE	65535
 #define CY_CLOSING_WAIT_INF	0
 

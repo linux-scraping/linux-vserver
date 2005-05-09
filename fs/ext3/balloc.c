@@ -1219,7 +1219,7 @@ int ext3_new_block(handle_t *handle, struct inode *inode,
 		return 0;
 	}
 	if (DLIMIT_ALLOC_BLOCK(sb, inode->i_xid, 1))
-		goto out_dlimit;
+	    goto out_dlimit;
 
 	sbi = EXT3_SB(sb);
 	es = EXT3_SB(sb)->s_es;

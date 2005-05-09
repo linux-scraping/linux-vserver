@@ -54,6 +54,8 @@ struct _vx_cvirt {
 	uint32_t load_last;		/* last time load was cacled */
 	uint32_t load[3];		/* load averages 1,5,15 */
 
+	atomic_t total_forks;		/* number of forks so far */
+
 	struct _vx_usage_stat cpustat[NR_CPUS];
 
 	struct _vx_syslog syslog;
@@ -67,20 +69,9 @@ struct _vx_sock_acc {
 /* context sub struct */
 
 struct _vx_cacct {
-	atomic_t total_forks;
+	unsigned long total_forks;
 
 	struct _vx_sock_acc sock[5][3];
-
-	atomic_t read_sectors;
-	atomic_t write_sectors;
-
-	atomic_t fault_page;
-	atomic_t fault_major;
-	atomic_t fault_minor;
-	atomic_t fault_sigbus;
-	atomic_t fault_oom;
-
-	atomic_t wakeup_kswapd;
 };
 
 #endif	/* _VX_CVIRT_DEF_H */

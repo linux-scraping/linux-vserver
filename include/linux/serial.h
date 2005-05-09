@@ -39,12 +39,12 @@ struct serial_struct {
 	int	xmit_fifo_size;
 	int	custom_divisor;
 	int	baud_base;
-	unsigned short	close_delay;
+	unsigned int	close_delay;
 	char	io_type;
 	char	reserved_char[1];
 	int	hub6;
-	unsigned short	closing_wait; /* time to wait before closing */
-	unsigned short	closing_wait2; /* no longer used... */
+	unsigned int	closing_wait; /* time to wait before closing */
+	unsigned int	closing_wait2; /* no longer used... */
 	unsigned char	*iomem_base;
 	unsigned short	iomem_reg_shift;
 	unsigned int	port_high;

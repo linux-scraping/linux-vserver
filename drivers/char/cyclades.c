@@ -4054,7 +4054,7 @@ cy_ioctl(struct tty_struct *tty, struct file * file,
 	    break;
 #endif /* CONFIG_CYZ_INTR */
 	case CYSETWAIT:
-    	    info->closing_wait = (unsigned short)arg * HZ/100;
+	    info->closing_wait = (unsigned int)arg * HZ/100;
 	    ret_val = 0;
 	    break;
 	case CYGETWAIT:

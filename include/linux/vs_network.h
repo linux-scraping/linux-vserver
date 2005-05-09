@@ -133,9 +133,7 @@ static inline int addr_in_nx_info(struct nx_info *nxi, uint32_t addr)
 
 	n = nxi->nbipv4;
 	for (i=0; i<n; i++) {
-		uint32_t ipa = nxi->ipv4[i];
-
-		if (!ipa || ipa == addr)
+		if (nxi->ipv4[i] == addr)
 			return 1;
 	}
 	return 0;

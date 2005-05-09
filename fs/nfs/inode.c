@@ -332,7 +332,7 @@ nfs_sb_init(struct super_block *sb, rpc_authflavor_t authflavor)
 
 	server->client->cl_intr = (server->flags & NFS_MOUNT_INTR) ? 1 : 0;
 	server->client->cl_softrtry = (server->flags & NFS_MOUNT_SOFT) ? 1 : 0;
-	server->client->cl_tagxid   = (server->flags & NFS_MOUNT_TAGXID) ? 1 : 0;
+	server->client->cl_tagxid = (server->flags & NFS_MOUNT_TAGXID) ? 1 : 0;
 
 	/* We're airborne Set socket buffersize */
 	rpc_setbufsize(server->client, server->wsize + 100, server->rsize + 100);
@@ -1937,7 +1937,7 @@ static void init_once(void * foo, kmem_cache_t * cachep, unsigned long flags)
 	}
 }
  
-int nfs_init_inodecache(void)
+static int nfs_init_inodecache(void)
 {
 	nfs_inode_cachep = kmem_cache_create("nfs_inode_cache",
 					     sizeof(struct nfs_inode),
@@ -1949,7 +1949,7 @@ int nfs_init_inodecache(void)
 	return 0;
 }
 
-void nfs_destroy_inodecache(void)
+static void nfs_destroy_inodecache(void)
 {
 	if (kmem_cache_destroy(nfs_inode_cachep))
 		printk(KERN_INFO "nfs_inode_cache: not all structures were freed\n");

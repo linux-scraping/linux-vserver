@@ -358,11 +358,7 @@ static int inr;			/* size of reply buffer, when called from interrupt */
 #define R_SECTOR (reply_buffer[5])
 #define R_SIZECODE (reply_buffer[6])
 
-#if HZ < 12800
 #define SEL_DLY (2*HZ/100)
-#else
-#define SEL_DLY (255)
-#endif
 
 /*
  * this struct defines the different floppy drive types.
@@ -3349,7 +3345,7 @@ static inline int set_geometry(unsigned int cmd, struct floppy_struct *g,
 			struct block_device *bdev = opened_bdev[cnt];
 			if (!bdev || ITYPE(drive_state[cnt].fd_device) != type)
 				continue;
-			__invalidate_device(bdev, 0);
+			__invalidate_device(bdev);
 		}
 		up(&open_lock);
 	} else {

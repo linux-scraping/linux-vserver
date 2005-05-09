@@ -11,6 +11,7 @@
 
 #include <linux/config.h>
 #include <linux/sched.h>
+#include <linux/sysctl.h>
 #include <linux/types.h>
 #include <linux/vs_context.h>
 #include <linux/vs_cvirt.h>
@@ -92,6 +93,32 @@ out:
 	atomic_inc(&vxi->cvirt.load_updates);
 	spin_unlock(&vxi->cvirt.load_lock);
 }
+
+
+int vx_uts_virt_handler(struct ctl_table *ctl, int write, xid_t xid,
+	void **datap, size_t *lenp)
+{
+	switch (ctl->ctl_name) {
+	case KERN_OSTYPE:
+		*datap = vx_new_uts(sysname);
+		break;
+	case KERN_OSRELEASE:
+		*datap = vx_new_uts(release);
+		break;
+	case KERN_VERSION:
+		*datap = vx_new_uts(version);
+		break;
+	case KERN_NODENAME:
+		*datap = vx_new_uts(nodename);
+		break;
+	case KERN_DOMAINNAME:
+		*datap = vx_new_uts(domainname);
+		break;
+	}
+
+	return 0;
+}
+
 
 
 /*

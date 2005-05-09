@@ -7,7 +7,7 @@
  *
  * Version:	$Id: tcp_minisocks.c,v 1.15 2002/02/01 22:01:04 davem Exp $
  *
- * Authors:	Ross Biro, <bir7@leland.Stanford.Edu>
+ * Authors:	Ross Biro
  *		Fred N. van Kempen, <waltje@uWalt.NL.Mugnet.ORG>
  *		Mark Evans, <evansmp@uhura.aston.ac.uk>
  *		Corey Minyard <wf-rch!minyard@relay.EU.net>
@@ -31,6 +31,7 @@
 
 #include <linux/vs_limit.h>
 #include <linux/vs_socket.h>
+#include <linux/vs_context.h>
 
 #ifdef CONFIG_SYSCTL
 #define SYNC_INIT 0 /* let the user enable it */

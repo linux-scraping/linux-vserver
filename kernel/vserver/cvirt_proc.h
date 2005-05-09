@@ -41,6 +41,7 @@ static inline int vx_info_proc_cvirt(struct _vx_cvirt *cvirt, char *buffer)
 		"nr_onhold:\t%d\n"
 		"load_updates:\t%d\n"
 		"loadavg:\t%d.%02d %d.%02d %d.%02d\n"
+		"total_forks:\t%d\n"
 		,atomic_read(&cvirt->nr_threads)
 		,atomic_read(&cvirt->nr_running)
 		,atomic_read(&cvirt->nr_uninterruptible)
@@ -49,6 +50,7 @@ static inline int vx_info_proc_cvirt(struct _vx_cvirt *cvirt, char *buffer)
 		,LOAD_INT(a), LOAD_FRAC(a)
 		,LOAD_INT(b), LOAD_FRAC(b)
 		,LOAD_INT(c), LOAD_FRAC(c)
+		,atomic_read(&cvirt->total_forks)
 		);
 	return length;
 }
@@ -83,22 +85,7 @@ static inline int vx_info_proc_cacct(struct _vx_cacct *cacct, char *buffer)
 		buffer[length++] = '\n';
 	}
 	length += sprintf(buffer + length,
-		"forks:\t%12u\n",
-		atomic_read(&cacct->total_forks));
-	length += sprintf(buffer + length,
-		"blkio:\t%12u\t%12u\n",
-		atomic_read(&cacct->read_sectors),
-		atomic_read(&cacct->write_sectors));
-	length += sprintf(buffer + length,
-		"faults:\t%12u\t%12u\t%12u\t%12u\t%12u\n",
-		atomic_read(&cacct->fault_page),
-		atomic_read(&cacct->fault_major),
-		atomic_read(&cacct->fault_minor),
-		atomic_read(&cacct->fault_sigbus),
-		atomic_read(&cacct->fault_oom));
-	length += sprintf(buffer + length,
-		"swap:\t%12u\n",
-		atomic_read(&cacct->wakeup_kswapd));
+		"forks:\t%lu\n", cacct->total_forks);
 	return length;
 }
 

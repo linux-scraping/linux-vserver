@@ -833,9 +833,10 @@ void proc_vx_init(void)
 /* per pid info */
 
 
-char *task_vx_info(struct task_struct *p, char *buffer)
+int proc_pid_vx_info(struct task_struct *p, char *buffer)
 {
 	struct vx_info *vxi;
+	char * orig = buffer;
 
 	buffer += sprintf (buffer,"XID:\t%d\n", vx_task_xid(p));
 	vxi = task_get_vx_info(p);
@@ -850,20 +851,14 @@ char *task_vx_info(struct task_struct *p, char *buffer)
 			,vxi->vx_initpid);
 	}
 	put_vx_info(vxi);
-	return buffer;
-}
-
-int proc_pid_vx_info(struct task_struct *p, char *buffer)
-{
-	char * orig = buffer;
-
-	buffer = task_vx_info(p, buffer);
 	return buffer - orig;
 }
 
-char *task_nx_info(struct task_struct *p, char *buffer)
+
+int proc_pid_nx_info(struct task_struct *p, char *buffer)
 {
 	struct nx_info *nxi;
+	char * orig = buffer;
 
 	buffer += sprintf (buffer,"NID:\t%d\n", nx_task_nid(p));
 	nxi = task_get_nx_info(p);
@@ -881,14 +876,6 @@ char *task_nx_info(struct task_struct *p, char *buffer)
 			,NIPQUAD(nxi->v4_bcast));
 	}
 	put_nx_info(nxi);
-	return buffer;
-}
-
-int proc_pid_nx_info(struct task_struct *p, char *buffer)
-{
-	char * orig = buffer;
-
-	buffer = task_nx_info(p, buffer);
 	return buffer - orig;
 }
 

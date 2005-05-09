@@ -1812,13 +1812,8 @@ static int get_serial_info(struct edgeport_port *edge_port, struct serial_struct
 	tmp.flags		= ASYNC_SKIP_TEST | ASYNC_AUTO_IRQ;
 	tmp.xmit_fifo_size	= edge_port->maxTxCredits;
 	tmp.baud_base		= 9600;
-	#if HZ < 2185
 	tmp.close_delay		= 5*HZ;
 	tmp.closing_wait	= 30*HZ;
-	#else
-	tmp.close_delay		= 2*HZ;
-	tmp.closing_wait	= 65534;
-	#endif
 //	tmp.custom_divisor	= state->custom_divisor;
 //	tmp.hub6		= state->hub6;
 //	tmp.io_type		= state->io_type;

@@ -692,8 +692,7 @@ static int load_irix_binary(struct linux_binprm * bprm, struct pt_regs * regs)
 	/* Do this so that we can load the interpreter, if need be.  We will
 	 * change some of these later.
 	 */
-	// set_mm_counter(current->mm, rss, 0);
-	vx_rsspages_sub(current->mm, current->mm->rss);
+	set_mm_counter(current->mm, rss, 0);
 	setup_arg_pages(bprm, STACK_TOP, EXSTACK_DEFAULT);
 	current->mm->start_stack = bprm->p;
 

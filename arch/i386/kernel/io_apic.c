@@ -1769,7 +1769,7 @@ static int __init timer_irq_works(void)
 
 	local_irq_enable();
 	/* Let ten ticks pass... */
-	mdelay((10 * 1000) / HZ + 1);
+	mdelay((10 * 1000) / HZ);
 
 	/*
 	 * Expect a few ticks at least, to be sure some possible
@@ -2175,7 +2175,6 @@ static inline void check_timer(void)
 				disable_8259A_irq(0);
 				setup_nmi();
 				enable_8259A_irq(0);
-				check_nmi_watchdog();
 			}
 			return;
 		}
@@ -2198,7 +2197,6 @@ static inline void check_timer(void)
 				add_pin_to_irq(0, 0, pin2);
 			if (nmi_watchdog == NMI_IO_APIC) {
 				setup_nmi();
-				check_nmi_watchdog();
 			}
 			return;
 		}

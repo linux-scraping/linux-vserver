@@ -318,6 +318,8 @@ int proc_pid_status(struct task_struct *task, char * buffer)
 	buffer = task_cap(task, buffer);
 	buffer = cpuset_task_status_allowed(task, buffer);
 
+	if (task_vx_flags(task, VXF_INFO_HIDE, 0))
+		goto skip;
 #ifdef	CONFIG_VSERVER_LEGACY
 	buffer += sprintf (buffer,"s_context: %d\n", vx_task_xid(task));
 	vxi = task_get_vx_info(task);
@@ -354,6 +356,7 @@ int proc_pid_status(struct task_struct *task, char * buffer)
 	}
 	put_nx_info(nxi);
 #endif
+skip:
 #if defined(CONFIG_ARCH_S390)
 	buffer = task_show_regs(task, buffer);
 #endif

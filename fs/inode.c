@@ -26,7 +26,6 @@
  * This is needed for the following functions:
  *  - inode_has_buffers
  *  - invalidate_inode_buffers
- *  - fsync_bdev
  *  - invalidate_bdev
  *
  * FIXME: remove all knowledge of the buffer layer from this file
@@ -235,6 +234,8 @@ void __iget(struct inode * inode)
 	inodes_stat.nr_unused--;
 }
 
+EXPORT_SYMBOL_GPL(__iget);
+
 /**
  * clear_inode - clear an inode
  * @inode: inode to clear
@@ -336,14 +337,6 @@ static int invalidate_list(struct list_head *head, struct list_head *dispose)
 	return busy;
 }
 
-/*
- * This is a two-stage process. First we collect all
- * offending inodes onto the throw-away list, and in
- * the second stage we actually dispose of them. This
- * is because we don't want to sleep while messing
- * with the global lists..
- */
- 
 /**
  *	invalidate_inodes	- discard the inodes on a device
  *	@sb: superblock
@@ -370,16 +363,11 @@ int invalidate_inodes(struct super_block * sb)
 
 EXPORT_SYMBOL(invalidate_inodes);
  
-int __invalidate_device(struct block_device *bdev, int do_sync)
+int __invalidate_device(struct block_device *bdev)
 {
-	struct super_block *sb;
-	int res;
+	struct super_block *sb = get_super(bdev);
+	int res = 0;
 
-	if (do_sync)
-		fsync_bdev(bdev);
-
-	res = 0;
-	sb = get_super(bdev);
 	if (sb) {
 		/*
 		 * no need to lock the super, get_super holds the
@@ -394,7 +382,6 @@ int __invalidate_device(struct block_device *bdev, int do_sync)
 	invalidate_bdev(bdev, 0);
 	return res;
 }
-
 EXPORT_SYMBOL(__invalidate_device);
 
 static int can_unuse(struct inode *inode)
@@ -1340,7 +1327,7 @@ void __init inode_init(unsigned long mempages)
 
 	/* inode slab cache */
 	inode_cachep = kmem_cache_create("inode_cache", sizeof(struct inode),
-				0, SLAB_PANIC, init_once, NULL);
+				0, SLAB_RECLAIM_ACCOUNT|SLAB_PANIC, init_once, NULL);
 	set_shrinker(DEFAULT_SEEKS, shrink_icache_memory);
 
 	/* Hash may have been set up in inode_init_early */

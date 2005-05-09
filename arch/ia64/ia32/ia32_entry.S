@@ -483,7 +483,7 @@ ia32_syscall_table:
  	data8 sys_tgkill	/* 270 */
  	data8 compat_sys_utimes
  	data8 sys32_fadvise64_64
- 	data8 sys_ni_syscall
+	data8 sys32_vserver
   	data8 sys_ni_syscall
  	data8 sys_ni_syscall	/* 275 */
   	data8 sys_ni_syscall

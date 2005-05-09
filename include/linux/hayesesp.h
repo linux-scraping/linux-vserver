@@ -88,8 +88,8 @@ struct esp_struct {
 	int			stat_flags;
 	int			custom_divisor;
 	int			close_delay;
-	unsigned short		closing_wait;
-	unsigned short		closing_wait2;
+	unsigned int		closing_wait;
+	unsigned int		closing_wait2;
 	int			IER; 	/* Interrupt Enable Register */
 	int			MCR; 	/* Modem control register */
 	unsigned long		event;

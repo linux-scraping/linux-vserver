@@ -61,11 +61,7 @@ static const char *sctp_conntrack_names[] = {
 static unsigned long ip_ct_sctp_timeout_closed            =  10 SECS;
 static unsigned long ip_ct_sctp_timeout_cookie_wait       =   3 SECS;
 static unsigned long ip_ct_sctp_timeout_cookie_echoed     =   3 SECS;
-#if HZ < 9942
-static unsigned long ip_ct_sctp_timeout_established       =  5U DAYS;
-#else
-static unsigned long ip_ct_sctp_timeout_established       =  2U DAYS;
-#endif
+static unsigned long ip_ct_sctp_timeout_established       =   2 DAYS;
 static unsigned long ip_ct_sctp_timeout_shutdown_sent     = 300 SECS / 1000;
 static unsigned long ip_ct_sctp_timeout_shutdown_recd     = 300 SECS / 1000;
 static unsigned long ip_ct_sctp_timeout_shutdown_ack_sent =   3 SECS;

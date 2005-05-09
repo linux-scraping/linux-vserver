@@ -118,9 +118,9 @@ decode_sattr(u32 *p, struct iattr *iap)
 		iap->ia_valid |= ATTR_GID;
 		gid = tmp;
 	}
-	iap->ia_uid = INOXID_UID(1, uid, gid);
-	iap->ia_gid = INOXID_GID(1, uid, gid);
-	iap->ia_xid = INOXID_XID(1, uid, gid, 0);
+	iap->ia_uid = INOXID_UID(XID_TAG_NFSD, uid, gid);
+	iap->ia_gid = INOXID_GID(XID_TAG_NFSD, uid, gid);
+	iap->ia_xid = INOXID_XID(XID_TAG_NFSD, uid, gid, 0);
 	if ((tmp = ntohl(*p++)) != (u32)-1) {
 		iap->ia_valid |= ATTR_SIZE;
 		iap->ia_size = tmp;

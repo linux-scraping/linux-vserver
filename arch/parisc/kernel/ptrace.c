@@ -17,6 +17,7 @@
 #include <linux/personality.h>
 #include <linux/security.h>
 #include <linux/compat.h>
+#include <linux/signal.h>
 
 #include <asm/uaccess.h>
 #include <asm/pgtable.h>
@@ -288,7 +289,7 @@ long sys_ptrace(long request, pid_t pid, long addr, long data)
 		ret = -EIO;
 		DBG("sys_ptrace(%s)\n",
 			request == PTRACE_SYSCALL ? "SYSCALL" : "CONT");
-		if ((unsigned long) data > _NSIG)
+		if (!valid_signal(data))
 			goto out_tsk;
 		child->ptrace &= ~(PT_SINGLESTEP|PT_BLOCKSTEP);
 		if (request == PTRACE_SYSCALL) {
@@ -314,7 +315,7 @@ long sys_ptrace(long request, pid_t pid, long addr, long data)
 	case PTRACE_SINGLEBLOCK:
 		DBG("sys_ptrace(SINGLEBLOCK)\n");
 		ret = -EIO;
-		if ((unsigned long) data > _NSIG)
+		if (!valid_signal(data))
 			goto out_tsk;
 		clear_tsk_thread_flag(child, TIF_SYSCALL_TRACE);
 		child->ptrace &= ~PT_SINGLESTEP;
@@ -331,7 +332,7 @@ long sys_ptrace(long request, pid_t pid, long addr, long data)
 	case PTRACE_SINGLESTEP:
 		DBG("sys_ptrace(SINGLESTEP)\n");
 		ret = -EIO;
-		if ((unsigned long) data > _NSIG)
+		if (!valid_signal(data))
 			goto out_tsk;
 
 		clear_tsk_thread_flag(child, TIF_SYSCALL_TRACE);

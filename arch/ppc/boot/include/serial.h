@@ -36,8 +36,8 @@ struct serial_state {
 	int	count;
 	u8	*iomem_base;
 	u16	iomem_reg_shift;
-	unsigned short	close_delay;
-	unsigned short	closing_wait; /* time to wait before closing */
+	unsigned int	close_delay;
+	unsigned int	closing_wait; /* time to wait before closing */
 	unsigned long	icount;
 	int	io_type;
 	void    *info;
