@@ -2372,13 +2372,16 @@ unsigned long long current_sched_time(const task_t *tsk)
 void account_user_time(struct task_struct *p, cputime_t cputime)
 {
 	struct cpu_usage_stat *cpustat = &kstat_this_cpu.cpustat;
+	struct vx_info *vxi = p->vx_info;  /* p is _always_ current */
 	cputime64_t tmp;
+	int nice = (TASK_NICE(p) > 0);
 
 	p->utime = cputime_add(p->utime, cputime);
+	vx_account_user(vxi, cputime, nice);
 
 	/* Add user time to cpustat. */
 	tmp = cputime_to_cputime64(cputime);
-	if (TASK_NICE(p) > 0)
+	if (nice)
 		cpustat->nice = cputime64_add(cpustat->nice, tmp);
 	else
 		cpustat->user = cputime64_add(cpustat->user, tmp);
@@ -2394,10 +2397,12 @@ void account_system_time(struct task_struct *p, int hardirq_offset,
 			 cputime_t cputime)
 {
 	struct cpu_usage_stat *cpustat = &kstat_this_cpu.cpustat;
+	struct vx_info *vxi = p->vx_info;  /* p is _always_ current */
 	runqueue_t *rq = this_rq();
 	cputime64_t tmp;
 
 	p->stime = cputime_add(p->stime, cputime);
+	vx_account_system(vxi, cputime, (p == rq->idle));
 
 	/* Add system time to cpustat. */
 	tmp = cputime_to_cputime64(cputime);

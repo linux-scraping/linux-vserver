@@ -71,6 +71,26 @@ static inline void vx_onhold_dec(struct vx_info *vxi)
 		__vx_onhold_update(vxi);
 }
 
+static inline void vx_account_user(struct vx_info *vxi,
+	cputime_t cputime, int nice)
+{
+	int cpu = smp_processor_id();
+
+	if (!vxi)
+		return;
+	vxi->sched.cpu[cpu].user_ticks += cputime;
+}
+
+static inline void vx_account_system(struct vx_info *vxi,
+	cputime_t cputime, int idle)
+{
+	int cpu = smp_processor_id();
+
+	if (!vxi)
+		return;
+	vxi->sched.cpu[cpu].sys_ticks += cputime;
+}
+
 #else
 #warning duplicate inclusion
 #endif

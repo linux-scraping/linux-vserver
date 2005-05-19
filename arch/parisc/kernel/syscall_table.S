@@ -368,5 +368,16 @@
 	ENTRY_COMP(mbind)		/* 260 */
 	ENTRY_COMP(get_mempolicy)
 	ENTRY_COMP(set_mempolicy)
+	ENTRY_SAME(ni_syscall)
+	ENTRY_SAME(ni_syscall)
+	ENTRY_SAME(ni_syscall)		/* 265 */
+	ENTRY_SAME(ni_syscall)
+	ENTRY_SAME(ni_syscall)
+	ENTRY_SAME(ni_syscall)
+	ENTRY_SAME(ni_syscall)
+	ENTRY_SAME(ni_syscall)		/* 270 */
+	ENTRY_SAME(ni_syscall)
+	ENTRY_SAME(ni_syscall)
+	ENTRY_DIFF(vserver)
 	/* Nothing yet */
 

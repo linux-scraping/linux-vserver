@@ -1194,7 +1194,7 @@ static int pid_revalidate(struct dentry *dentry, struct nameidata *nd)
 	struct inode *inode = dentry->d_inode;
 	struct task_struct *task = proc_task(inode);
 
-	if (!vx_check(vx_task_xid(task), VX_WATCH|VX_IDENT))
+	if (!vx_check(vx_task_xid(task), VX_IDENT))
 		goto out_drop;
 	/* discard wrong fakeinit */
 
