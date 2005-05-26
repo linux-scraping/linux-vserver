@@ -37,8 +37,6 @@ struct	vcmd_net_nx_v0 {
 	/* more to come */
 };
 
-//	IPN_TYPE_IPV4
-
 
 #ifdef	__KERNEL__
 extern int vc_net_create(uint32_t, void __user *);
@@ -61,7 +59,6 @@ extern int vc_set_nflags(uint32_t, void __user *);
 #endif	/* __KERNEL__ */
 
 #define IPF_STATE_SETUP		(1ULL<<32)
-
 
 #define IPF_ONE_TIME		(0x0001ULL<<32)
 

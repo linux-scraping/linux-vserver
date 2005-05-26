@@ -221,9 +221,9 @@ int proc_nid_status (int vid, char *buffer)
 		return 0;
 	length = sprintf(buffer,
 		"UseCnt:\t%d\n"
-		"RefCnt:\t%d\n"
+		"Tasks:\t%d\n"
 		,atomic_read(&nxi->nx_usecnt)
-		,atomic_read(&nxi->nx_refcnt)
+		,atomic_read(&nxi->nx_tasks)
 		);
 	put_nx_info(nxi);
 	return length;
@@ -255,7 +255,6 @@ static struct inode *proc_vid_make_inode(struct super_block * sb,
 
 	inode->i_uid = 0;
 	inode->i_gid = 0;
-	// inode->i_xid = xid;
 out:
 	return inode;
 }
@@ -279,13 +278,6 @@ static int proc_vid_revalidate(struct dentry * dentry, struct nameidata *nd)
 	d_drop(dentry);
 	return 0;
 }
-
-/*
-static int proc_vid_delete_dentry(struct dentry * dentry)
-{
-	return 1;
-}
-*/
 
 
 #define PROC_BLOCK_SIZE (PAGE_SIZE - 1024)
@@ -325,7 +317,6 @@ static struct file_operations proc_vid_info_file_operations = {
 
 static struct dentry_operations proc_vid_dentry_operations = {
 	d_revalidate:	proc_vid_revalidate,
-//	d_delete:       proc_vid_delete_dentry,
 };
 
 
@@ -424,7 +415,6 @@ static struct dentry *proc_vid_lookup(struct inode *dir,
 			return ERR_PTR(-EINVAL);
 	}
 	inode->i_mode = p->mode;
-//	inode->i_op = &proc_vid_info_inode_operations;
 	inode->i_fop = &proc_vid_info_file_operations;
 	inode->i_nlink = 1;
 	inode->i_flags|=S_IMMUTABLE;
@@ -546,8 +536,6 @@ struct dentry *proc_virtual_lookup(struct inode *dir,
 		inode->i_ino = fake_ino(1, PROC_XID_INO);
 		inode->i_mode = S_IFLNK|S_IRWXUGO;
 		inode->i_uid = inode->i_gid = 0;
-		inode->i_size = 64;
-//		inode->i_op = &proc_current_inode_operations;
 		d_add(dentry, inode);
 		return NULL;
 	}
@@ -558,8 +546,6 @@ struct dentry *proc_virtual_lookup(struct inode *dir,
 		inode->i_fop = &proc_vid_info_file_operations;
 		PROC_I(inode)->op.proc_vid_read = proc_virtual_info;
 		inode->i_mode = S_IFREG|S_IRUGO;
-//		inode->i_size = 64;
-//		inode->i_op = &proc_current_inode_operations;
 		d_add(dentry, inode);
 		return NULL;
 	}
@@ -616,8 +602,6 @@ struct dentry *proc_vnet_lookup(struct inode *dir,
 		inode->i_ino = fake_ino(1, PROC_NID_INO);
 		inode->i_mode = S_IFLNK|S_IRWXUGO;
 		inode->i_uid = inode->i_gid = 0;
-		inode->i_size = 64;
-//		inode->i_op = &proc_current_inode_operations;
 		d_add(dentry, inode);
 		return NULL;
 	}
@@ -628,8 +612,6 @@ struct dentry *proc_vnet_lookup(struct inode *dir,
 		inode->i_fop = &proc_vid_info_file_operations;
 		PROC_I(inode)->op.proc_vid_read = proc_vnet_info;
 		inode->i_mode = S_IFREG|S_IRUGO;
-//		inode->i_size = 64;
-//		inode->i_op = &proc_current_inode_operations;
 		d_add(dentry, inode);
 		return NULL;
 	}

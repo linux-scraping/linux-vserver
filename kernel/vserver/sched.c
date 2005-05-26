@@ -114,14 +114,8 @@ int vx_effective_vavavoom(struct vx_info *vxi, int max_prio)
 		max = max * max;
 		vavavoom = max_prio * VAVAVOOM_RATIO / 100
 			* (vavavoom*vavavoom - (max >> 2)) / max;
-		/*  alternative, geometric mapping
-		vavavoom = -( MAX_USER_PRIO*VAVAVOOM_RATIO/100 * vavavoom
-			/ vxi->sched.tokens_max -
-			MAX_USER_PRIO*VAVAVOOM_RATIO/100/2); */
 	} else
 		vavavoom = 0;
-	/* vavavoom = ( MAX_USER_PRIO*VAVAVOOM_RATIO/100*tokens_left(p) -
-		MAX_USER_PRIO*VAVAVOOM_RATIO/100/2); */
 
 	vxi->sched.vavavoom = vavavoom;
 	return vavavoom;

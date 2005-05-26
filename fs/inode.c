@@ -114,7 +114,6 @@ static struct inode *alloc_inode(struct super_block *sb)
 		struct address_space * const mapping = &inode->i_data;
 
 		inode->i_sb = sb;
-		// inode->i_dqh = dqhget(sb->s_dqh);
 
 		/* essential because of inode slab reuse */
 		inode->i_xid = 0;

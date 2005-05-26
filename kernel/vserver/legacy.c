@@ -52,7 +52,6 @@ int vc_new_s_context(uint32_t ctx, void __user *data)
 		if (ret == 0) {
 			/* We keep the same vx_id, but lower the capabilities */
 			current->vx_info->vx_bcaps &= (~vc_data.remove_cap);
-			// current->cap_bset &= (~vc_data.remove_cap);
 			ret = vx_current_xid();
 			current->vx_info->vx_flags |= vc_data.flags;
 		}
@@ -92,7 +91,6 @@ int vc_new_s_context(uint32_t ctx, void __user *data)
 	ret = vx_migrate_task(current, new_vxi);
 	if (ret == 0) {
 		current->vx_info->vx_bcaps &= (~vc_data.remove_cap);
-		// current->cap_bset &= (~vc_data.remove_cap);
 		new_vxi->vx_flags |= vc_data.flags;
 		if (vc_data.flags & VX_INFO_INIT)
 			vx_set_initpid(new_vxi, current->tgid);

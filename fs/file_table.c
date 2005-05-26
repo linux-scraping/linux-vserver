@@ -87,7 +87,6 @@ static int old_max;
 			rwlock_init(&f->f_owner.lock);
 			/* f->f_version: 0 */
 			INIT_LIST_HEAD(&f->f_list);
-			// set_vx_info(&f->f_vx_info, current->vx_info);
 			f->f_xid = vx_current_xid();
 			vx_files_inc(f);
 			f->f_maxcount = INT_MAX;

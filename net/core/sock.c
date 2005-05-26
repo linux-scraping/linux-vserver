@@ -682,10 +682,8 @@ void sk_free(struct sock *sk)
 
 	security_sk_free(sk);
 	vx_sock_dec(sk);
-	// BUG_ON(sk->sk_vx_info);
 	clr_vx_info(&sk->sk_vx_info);
 	sk->sk_xid = -1;
-	// BUG_ON(sk->sk_nx_info);
 	clr_nx_info(&sk->sk_nx_info);
 	sk->sk_nid = -1;
 	if (sk->sk_prot_creator->slab != NULL)

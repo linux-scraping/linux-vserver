@@ -29,6 +29,7 @@
 #include <linux/syscalls.h>
 #include <linux/signal.h>
 #include <linux/vs_limit.h>
+#include <linux/vs_network.h>
 
 #include <asm/uaccess.h>
 #include <asm/unistd.h>
@@ -108,6 +109,8 @@ repeat:
 	release_thread(p);
 	if (p->vx_info)
 		release_vx_info(p->vx_info, p);
+	if (p->nx_info)
+		release_nx_info(p->nx_info, p);
 	put_task_struct(p);
 
 	p = leader;

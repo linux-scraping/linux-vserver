@@ -118,7 +118,6 @@ out:
 
 int vc_wait_exit(uint32_t id, void __user *data)
 {
-//	struct vcmd_wait_exit_v0 vc_data;
 	struct vx_info *vxi;
 	int ret;
 

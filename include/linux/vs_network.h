@@ -13,9 +13,11 @@ static inline struct nx_info *__get_nx_info(struct nx_info *nxi,
 {
 	if (!nxi)
 		return NULL;
+
 	vxlprintk(VXD_CBIT(nid, 2), "get_nx_info(%p[#%d.%d])",
 		nxi, nxi?nxi->nx_id:0, nxi?atomic_read(&nxi->nx_usecnt):0,
 		_file, _line);
+
 	atomic_inc(&nxi->nx_usecnt);
 	return nxi;
 }
@@ -29,12 +31,33 @@ static inline void __put_nx_info(struct nx_info *nxi, const char *_file, int _li
 {
 	if (!nxi)
 		return;
+
 	vxlprintk(VXD_CBIT(nid, 2), "put_nx_info(%p[#%d.%d])",
 		nxi, nxi?nxi->nx_id:0, nxi?atomic_read(&nxi->nx_usecnt):0,
 		_file, _line);
+
 	if (atomic_dec_and_test(&nxi->nx_usecnt))
 		free_nx_info(nxi);
 }
+
+
+#define init_nx_info(p,i) __init_nx_info(p,i,__FILE__,__LINE__)
+
+static inline void __init_nx_info(struct nx_info **nxp, struct nx_info *nxi,
+		const char *_file, int _line)
+{
+	if (nxi) {
+		vxlprintk(VXD_CBIT(nid, 3),
+			"init_nx_info(%p[#%d.%d])",
+			nxi, nxi?nxi->nx_id:0,
+			nxi?atomic_read(&nxi->nx_usecnt):0,
+			_file, _line);
+
+		atomic_inc(&nxi->nx_usecnt);
+	}
+	*nxp = nxi;
+}
+
 
 #define set_nx_info(p,i) __set_nx_info(p,i,__FILE__,__LINE__)
 
@@ -46,14 +69,12 @@ static inline void __set_nx_info(struct nx_info **nxp, struct nx_info *nxi,
 	if (!nxi)
 		return;
 
-	vxlprintk(VXD_CBIT(nid, 3), "set_nx_info(%p[#%d.%d.%d])",
+	vxlprintk(VXD_CBIT(nid, 3), "set_nx_info(%p[#%d.%d])",
 		nxi, nxi?nxi->nx_id:0,
 		nxi?atomic_read(&nxi->nx_usecnt):0,
-		nxi?atomic_read(&nxi->nx_refcnt):0,
 		_file, _line);
 
-	atomic_inc(&nxi->nx_refcnt);
-	// nxo = xchg(nxp, __get_nx_info(nxi, _file, _line));
+	atomic_inc(&nxi->nx_usecnt);
 	nxo = xchg(nxp, nxi);
 	BUG_ON(nxo);
 }
@@ -69,15 +90,48 @@ static inline void __clr_nx_info(struct nx_info **nxp,
 	if (!nxo)
 		return;
 
-	vxlprintk(VXD_CBIT(nid, 3), "clr_nx_info(%p[#%d.%d.%d])",
+	vxlprintk(VXD_CBIT(nid, 3), "clr_nx_info(%p[#%d.%d])",
 		nxo, nxo?nxo->nx_id:0,
 		nxo?atomic_read(&nxo->nx_usecnt):0,
-		nxo?atomic_read(&nxo->nx_refcnt):0,
 		_file, _line);
 
-	if (atomic_dec_and_test(&nxo->nx_refcnt))
-		unhash_nx_info(nxo);
-	// __put_nx_info(nxo, _file, _line);
+	if (atomic_dec_and_test(&nxo->nx_usecnt))
+		free_nx_info(nxo);
+}
+
+
+#define claim_nx_info(v,p) __claim_nx_info(v,p,__FILE__,__LINE__)
+
+static inline void __claim_nx_info(struct nx_info *nxi,
+	struct task_struct *task, const char *_file, int _line)
+{
+	vxlprintk(VXD_CBIT(nid, 3), "claim_nx_info(%p[#%d.%d.%d]) %p",
+		nxi, nxi?nxi->nx_id:0,
+		nxi?atomic_read(&nxi->nx_usecnt):0,
+		nxi?atomic_read(&nxi->nx_tasks):0,
+		task, _file, _line);
+
+	atomic_inc(&nxi->nx_tasks);
+}
+
+
+extern void unhash_nx_info(struct nx_info *);
+
+#define release_nx_info(v,p) __release_nx_info(v,p,__FILE__,__LINE__)
+
+static inline void __release_nx_info(struct nx_info *nxi,
+	struct task_struct *task, const char *_file, int _line)
+{
+	vxlprintk(VXD_CBIT(nid, 3), "release_nx_info(%p[#%d.%d.%d]) %p",
+		nxi, nxi?nxi->nx_id:0,
+		nxi?atomic_read(&nxi->nx_usecnt):0,
+		nxi?atomic_read(&nxi->nx_tasks):0,
+		task, _file, _line);
+
+	might_sleep();
+
+	if (atomic_dec_and_test(&nxi->nx_tasks))
+		unhash_nx_info(nxi);
 }
 
 
@@ -89,9 +143,9 @@ static __inline__ struct nx_info *__task_get_nx_info(struct task_struct *p,
 	struct nx_info *nxi;
 
 	task_lock(p);
-	nxi = __get_nx_info(p->nx_info, _file, _line);
 	vxlprintk(VXD_CBIT(nid, 5), "task_get_nx_info(%p)",
 		p, _file, _line);
+	nxi = __get_nx_info(p->nx_info, _file, _line);
 	task_unlock(p);
 	return nxi;
 }
@@ -106,22 +160,33 @@ static __inline__ struct nx_info *__task_get_nx_info(struct task_struct *p,
 #define nx_weak_check(c,m)	((m) ? nx_check(c,m) : 1)
 
 
-#define __nx_flags(v,m,f)	(((v) & (m)) ^ (f))
+#define __nx_state(v)	((v) ? ((v)->nx_state) : 0)
 
-#define __nx_task_flags(t,m,f) \
-	(((t) && ((t)->nx_info)) ? \
-		__nx_flags((t)->nx_info->nx_flags,(m),(f)) : 0)
-
-#define nx_current_flags() \
-	((current->nx_info) ? current->nx_info->nx_flags : 0)
-
-#define nx_flags(m,f)	__nx_flags(nx_current_flags(),(m),(f))
+#define nx_info_state(v,m)	(__nx_state(v) & (m))
 
 
-#define nx_current_ncaps() \
-	((current->nx_info) ? current->nx_info->nx_ncaps : 0)
+#define __nx_flags(v)	((v) ? (v)->nx_flags : 0)
 
-#define nx_ncaps(c)	(nx_current_ncaps() & (c))
+#define nx_current_flags()	__nx_flags(current->nx_info)
+
+#define nx_info_flags(v,m,f) \
+	vx_check_flags(__nx_flags(v),(m),(f))
+
+#define task_nx_flags(t,m,f) \
+	((t) && nx_info_flags((t)->nx_info, (m), (f)))
+
+#define nx_flags(m,f)	nx_info_flags(current->nx_info,(m),(f))
+
+
+/* context caps */
+
+#define __nx_ncaps(v)	((v) ? (v)->nx_ncaps : 0)
+
+#define nx_current_ncaps()	__nx_ncaps(current->nx_info)
+
+#define nx_info_ncaps(v,c)	(__nx_ncaps(v) & (c))
+
+#define nx_ncaps(c)	nx_info_ncaps(current->nx_info,(c))
 
 
 static inline int addr_in_nx_info(struct nx_info *nxi, uint32_t addr)

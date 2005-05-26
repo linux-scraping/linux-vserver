@@ -161,22 +161,11 @@ int vx_do_syslog(int type, char __user *buf, int len)
 		break;
 	case 4:		/* Read/clear last kernel messages */
 		do_clear = 1;
-		/* FALL THRU */
+		/* fall through */
 	case 3:		/* Read last kernel messages */
-		// if (count > log_buf_len)
-		//	count = log_buf_len;
-		spin_lock_irq(&log->logbuf_lock);
-		// if (count > logged_chars)
-		//	count = logged_chars;
-		// if (do_clear)
-		//	logged_chars = 0;
-		spin_unlock_irq(&log->logbuf_lock);
-		if (error)
-			break;
 		return 0;
 
 	case 5:		/* Clear ring buffer */
-		// logged_chars = 0;
 		return 0;
 
 	case 6:		/* Disable logging to console */

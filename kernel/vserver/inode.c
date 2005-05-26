@@ -50,7 +50,7 @@ static int __vc_get_iattr(struct inode *in, uint32_t *xid, uint32_t *flags, uint
 	case PROC_SUPER_MAGIC:
 		entry = PROC_I(in)->pde;
 
-		// check for specific inodes ?
+		/* check for specific inodes? */
 		if (entry)
 			*mask |= IATTR_FLAGS;
 		if (entry)

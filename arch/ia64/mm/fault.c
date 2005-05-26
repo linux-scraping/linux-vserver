@@ -42,10 +42,8 @@ expand_backing_store (struct vm_area_struct *vma, unsigned long address)
 		!vx_vmlocked_avail(vma->vm_mm, grow)))
 		return -ENOMEM;
 	vma->vm_end += PAGE_SIZE;
-	// vma->vm_mm->total_vm += grow;
 	vx_vmpages_add(vma->vm_mm, grow);
 	if (vma->vm_flags & VM_LOCKED)
-		// vma->vm_mm->locked_vm += grow;
 		vx_vmlocked_add(vma->vm_mm, grow);
 	__vm_stat_account(vma->vm_mm, vma->vm_flags, vma->vm_file, grow);
 	return 0;
