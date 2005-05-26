@@ -244,7 +244,6 @@ ia32_setup_arg_pages (struct linux_binprm *bprm, int executable_stack)
 			kmem_cache_free(vm_area_cachep, mpnt);
 			return ret;
 		}
-		// current->mm->stack_vm = current->mm->total_vm = vma_pages(mpnt);
 		vx_vmpages_sub(current->mm, current->mm->total_vm - vma_pages(mpnt));
 		current->mm->stack_vm = current->mm->total_vm;
 	}

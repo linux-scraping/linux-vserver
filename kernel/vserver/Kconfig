@@ -12,6 +12,11 @@ config	VSERVER_SECURITY
 	default y
 	select SECURITY_CAPABILITIES
 
+config	VSERVER_LEGACYNET
+	bool
+	depends on !VSERVER_NGNET
+	default y
+
 menu "Linux VServer"
 
 config	VSERVER_LEGACY
@@ -21,15 +26,13 @@ config	VSERVER_LEGACY
 	  This enables the legacy API used in vs1.xx, which allows
 	  to use older tools (for migration purposes).
 
-config	VSERVER_LEGACYNET
-	bool	"Enable Legacy Networking Kernel API"
-	default y
+config	VSERVER_NGNET
+	bool	"Disable Legacy Networking Kernel API"
+	depends on EXPERIMENTAL
+	default n
 	help
-	  This enables the legacy networking API, which allows
+	  This disables the legacy networking API, which allows
 	  to configure per vserver IPs as we know it.
-	  For now, even recent tools use this interface of the
-	  legacy API, so unless you know what you are doing,
-	  leave that option enabled.
 
 config	VSERVER_PROC_SECURE
 	bool	"Enable Proc Security"

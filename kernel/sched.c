@@ -779,12 +779,9 @@ void vx_hold_task(struct vx_info *vxi,
 {
 	__deactivate_task(p, rq);
 	p->state |= TASK_ONHOLD;
-	// recalc_task_prio(p, now);
-	// a new one on hold
+	/* a new one on hold */
 	vx_onhold_inc(vxi);
 	list_add_tail(&p->run_list, &rq->hold_queue);
-
-	//printk("··· %8lu hold   %p [%d]\n", jiffies, p, p->prio);
 }
 
 /*
@@ -795,19 +792,14 @@ void vx_unhold_task(struct vx_info *vxi,
 	struct task_struct *p, runqueue_t *rq)
 {
 	list_del(&p->run_list);
-	// one less waiting
+	/* one less waiting */
 	vx_onhold_dec(vxi);
-	// p->prio = MAX_PRIO-1;
-	// p->activated = 1;
-	// recalc_task_prio(p, now);
 	p->state &= ~TASK_ONHOLD;
 	enqueue_task(p, rq->expired);
 	rq->nr_running++;
 
 	if (p->static_prio < rq->best_expired_prio)
 		rq->best_expired_prio = p->static_prio;
-
-	// printk("··· %8lu unhold %p [%d]\n", jiffies, p, p->prio);
 }
 #else
 static inline
@@ -2801,7 +2793,6 @@ need_resched_nonpreemptible:
 
 			vxi = next->vx_info;
 			ret = vx_tokens_recalc(vxi);
-			// tokens = vx_tokens_avail(next);
 
 			if (ret > 0) {
 				vx_unhold_task(vxi, next, rq);
@@ -4397,7 +4388,7 @@ static void move_task_off_dead_cpu(int dead_cpu, struct task_struct *tsk)
 
 	/* No more Mr. Nice Guy. */
 	if (dest_cpu == NR_CPUS) {
-		tsk->cpus_allowed = cpuset_cpus_allowed(tsk);
+		cpus_setall(tsk->cpus_allowed);
 		dest_cpu = any_online_cpu(tsk->cpus_allowed);
 
 		/*

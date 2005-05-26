@@ -1244,9 +1244,6 @@ asmlinkage long sys_sysinfo(struct sysinfo __user *info)
 		val.procs = nr_threads;
 	} while (read_seqretry(&xtime_lock, seq));
 
-/*	if (vx_flags(VXF_VIRT_CPU, 0))
-		vx_vsi_cpu(val);
-*/
 	si_meminfo(&val);
 	si_swapinfo(&val);
 

@@ -18,6 +18,7 @@
 #include <linux/vserver/legacy.h>
 #include <linux/vserver/namespace.h>
 #include <linux/namespace.h>
+#include <linux/err.h>
 
 #include <asm/errno.h>
 #include <asm/uaccess.h>
@@ -39,14 +40,14 @@ int vc_set_ipv4root(uint32_t nbip, void __user *data)
 		return -EFAULT;
 
 	if (!nxi || nxi->ipv4[0] == 0 || capable(CAP_NET_ADMIN))
-		// We are allowed to change everything
+		/* We are allowed to change everything */
 		err = 0;
 	else if (nxi) {
 		int found = 0;
 
-		// We are allowed to select a subset of the currently
-		// installed IP numbers. No new one allowed
-		// We can't change the broadcast address though
+		/* We are allowed to select a subset of the currently
+		   installed IP numbers. No new one are allowed
+		   We can't change the broadcast address though */
 		for (i=0; i<nbip; i++) {
 			int j;
 			__u32 nxip = vc_data.nx_mask_pair[i].ip;
@@ -65,7 +66,7 @@ int vc_set_ipv4root(uint32_t nbip, void __user *data)
 		return err;
 
 	new_nxi = create_nx_info();
-	if (!new_nxi)
+	if (IS_ERR(new_nxi))
 		return -EINVAL;
 
 	new_nxi->nbipv4 = nbip;
@@ -74,14 +75,10 @@ int vc_set_ipv4root(uint32_t nbip, void __user *data)
 		new_nxi->mask[i] = vc_data.nx_mask_pair[i].mask;
 	}
 	new_nxi->v4_bcast = vc_data.broadcast;
-	// current->nx_info = new_nxi;
-	if (nxi) {
+	if (nxi)
 		printk("!!! switching nx_info %p->%p\n", nxi, new_nxi);
-		clr_nx_info(&current->nx_info);
-	}
+
 	nx_migrate_task(current, new_nxi);
-	// set_nx_info(&current->nx_info, new_nxi);
-	// current->nid = new_nxi->nx_id;
 	put_nx_info(new_nxi);
 	return 0;
 }

@@ -59,13 +59,11 @@ static struct vx_info *__alloc_vx_info(xid_t xid)
 
 	memset (new, 0, sizeof(struct vx_info));
 	new->vx_id = xid;
-	// INIT_RCU_HEAD(&new->vx_rcu);
 	INIT_HLIST_NODE(&new->vx_hlist);
 	atomic_set(&new->vx_usecnt, 0);
 	atomic_set(&new->vx_tasks, 0);
 	new->vx_parent = NULL;
 	new->vx_state = 0;
-	new->vx_lock = SPIN_LOCK_UNLOCKED;
 	init_waitqueue_head(&new->vx_wait);
 
 	/* rest of init goes here */
@@ -73,7 +71,6 @@ static struct vx_info *__alloc_vx_info(xid_t xid)
 	vx_info_init_sched(&new->sched);
 	vx_info_init_cvirt(&new->cvirt);
 	vx_info_init_cacct(&new->cacct);
-
 
 	new->vx_flags = VXF_STATE_SETUP|VXF_STATE_INIT;
 	new->vx_bcaps = CAP_INIT_EFF_SET;
@@ -107,7 +104,7 @@ static void __dealloc_vx_info(struct vx_info *vxi)
 	kfree(vxi);
 }
 
-void __shutdown_vx_info(struct vx_info *vxi)
+static void __shutdown_vx_info(struct vx_info *vxi)
 {
 	struct namespace *namespace;
 	struct fs_struct *fs;
@@ -131,13 +128,12 @@ void __shutdown_vx_info(struct vx_info *vxi)
 void free_vx_info(struct vx_info *vxi)
 {
 	/* context shutdown is mandatory */
-	// BUG_ON(vxi->vx_state != VXS_SHUTDOWN);
+	BUG_ON(!vx_info_state(vxi, VXS_SHUTDOWN));
 
 	BUG_ON(atomic_read(&vxi->vx_usecnt));
 	BUG_ON(atomic_read(&vxi->vx_tasks));
 
 	BUG_ON(vx_info_state(vxi, VXS_HASHED));
-	// BUG_ON(!vx_state(vxi, VXS_DEFUNCT));
 
 	BUG_ON(vxi->vx_namespace);
 	BUG_ON(vxi->vx_fs);
@@ -177,7 +173,7 @@ static inline void __hash_vx_info(struct vx_info *vxi)
 	vxh_hash_vx_info(vxi);
 
 	/* context must not be hashed */
-	BUG_ON(vxi->vx_state & VXS_HASHED);
+	BUG_ON(vx_info_state(vxi, VXS_HASHED));
 
 	vxi->vx_state |= VXS_HASHED;
 	head = &vx_info_hash[__hashval(vxi->vx_id)];
@@ -196,9 +192,8 @@ static inline void __unhash_vx_info(struct vx_info *vxi)
 		"__unhash_vx_info: %p[#%d]", vxi, vxi->vx_id);
 	vxh_unhash_vx_info(vxi);
 
-	/* maybe warn on that? */
-	if (!(vxi->vx_state & VXS_HASHED))
-		return;
+	/* context must be hashed */
+	BUG_ON(!vx_info_state(vxi, VXS_HASHED));
 
 	vxi->vx_state &= ~VXS_HASHED;
 	hlist_del(&vxi->vx_hlist);
@@ -323,7 +318,7 @@ out_unlock:
 /*	__create_vx_info()
 
 	* create the requested context
-	* get() it and hash it					*/
+	* get() and hash it				*/
 
 static struct vx_info * __create_vx_info(int id)
 {
@@ -331,9 +326,8 @@ static struct vx_info * __create_vx_info(int id)
 
 	vxdprintk(VXD_CBIT(xid, 1), "create_vx_info(%d)*", id);
 
-	if (!(new = __alloc_vx_info(id))) {
+	if (!(new = __alloc_vx_info(id)))
 		return ERR_PTR(-ENOMEM);
-	}
 
 	/* required to make dynamic xids unique */
 	spin_lock(&vx_info_hash_lock);
@@ -348,7 +342,7 @@ static struct vx_info * __create_vx_info(int id)
 		}
 		new->vx_id = id;
 	}
-	/* existing context requested */
+	/* static context requested */
 	else if ((vxi = __lookup_vx_info(id))) {
 		vxdprintk(VXD_CBIT(xid, 0),
 			"create_vx_info(%d) = %p (already there)", id, vxi);
@@ -366,7 +360,7 @@ static struct vx_info * __create_vx_info(int id)
 		goto out_unlock;
 	}
 
-	/* new context requested */
+	/* new context */
 	vxdprintk(VXD_CBIT(xid, 0),
 		"create_vx_info(%d) = %p (new)", id, new);
 	__hash_vx_info(get_vx_info(new));
@@ -469,6 +463,7 @@ out:
 	return nr_xids;
 }
 #endif
+
 
 int vx_migrate_user(struct task_struct *p, struct vx_info *vxi)
 {
