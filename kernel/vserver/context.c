@@ -223,7 +223,7 @@ found:
 	vxdprintk(VXD_CBIT(xid, 0),
 		"__lookup_vx_info(#%u): %p[#%u]",
 		xid, vxi, vxi?vxi->vx_id:0);
-	vxh_lookup_vx_info(xid, vxi);
+	vxh_lookup_vx_info(vxi, xid);
 	return vxi;
 }
 
@@ -307,7 +307,7 @@ static struct vx_info * __loc_vx_info(int id, int *err)
 
 out_unlock:
 	spin_unlock(&vx_info_hash_lock);
-	vxh_loc_vx_info(id, vxi);
+	vxh_loc_vx_info(vxi, id);
 	if (new)
 		__dealloc_vx_info(new);
 	return vxi;
@@ -368,7 +368,7 @@ static struct vx_info * __create_vx_info(int id)
 
 out_unlock:
 	spin_unlock(&vx_info_hash_lock);
-	vxh_create_vx_info(id, IS_ERR(vxi)?NULL:vxi);
+	vxh_create_vx_info(IS_ERR(vxi)?NULL:vxi, id);
 	if (new)
 		__dealloc_vx_info(new);
 	return vxi;

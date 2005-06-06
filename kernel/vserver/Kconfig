@@ -31,8 +31,9 @@ config	VSERVER_NGNET
 	depends on EXPERIMENTAL
 	default n
 	help
-	  This disables the legacy networking API, which allows
-	  to configure per vserver IPs as we know it.
+	  This disables the legacy networking API which is required
+	  by the chbind tool. Do not disable it unless you exactly
+	  know what you are doing.
 
 config	VSERVER_PROC_SECURE
 	bool	"Enable Proc Security"
