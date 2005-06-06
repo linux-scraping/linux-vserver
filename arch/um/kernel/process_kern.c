@@ -45,7 +45,6 @@
 #include "tlb.h"
 #include "frame_kern.h"
 #include "sigcontext.h"
-#include "2_5compat.h"
 #include "os.h"
 #include "mode.h"
 #include "mode_kern.h"
@@ -56,18 +55,6 @@
  * entry.
  */
 struct cpu_task cpu_tasks[NR_CPUS] = { [0 ... NR_CPUS - 1] = { -1, NULL } };
-
-struct task_struct *get_task(int pid, int require)
-{
-        struct task_struct *ret;
-
-        read_lock(&tasklist_lock);
-	ret = find_task_by_pid(pid);
-        read_unlock(&tasklist_lock);
-
-        if(require && (ret == NULL)) panic("get_task couldn't find a task\n");
-        return(ret);
-}
 
 int external_pid(void *t)
 {
@@ -191,7 +178,6 @@ void default_idle(void)
 
 	while(1){
 		/* endless idle loop with no priority at all */
-		SET_PRI(current);
 
 		/*
 		 * although we are an idle CPU, we do not want to
@@ -212,11 +198,6 @@ void cpu_idle(void)
 int page_size(void)
 {
 	return(PAGE_SIZE);
-}
-
-unsigned long page_mask(void)
-{
-	return(PAGE_MASK);
 }
 
 void *um_virt_to_phys(struct task_struct *task, unsigned long addr, 
@@ -351,11 +332,6 @@ char *uml_strdup(char *string)
 	return(new);
 }
 
-void *get_init_task(void)
-{
-	return(&init_thread_union.thread_info.task);
-}
-
 int copy_to_user_proc(void __user *to, void *from, int size)
 {
 	return(copy_to_user(to, from, size));
@@ -482,15 +458,3 @@ unsigned long arch_align_stack(unsigned long sp)
 	return sp & ~0xf;
 }
 #endif
-
-
-/*
- * Overrides for Emacs so that we follow Linus's tabbing style.
- * Emacs will notice this stuff at the end of the file and automatically
- * adjust the settings for this buffer only.  This must remain at the end
- * of the file.
- * ---------------------------------------------------------------------------
- * Local variables:
- * c-file-style: "linux"
- * End:
- */
