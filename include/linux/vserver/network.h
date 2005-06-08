@@ -13,7 +13,11 @@
 
 /* context flags */
 
-#define NXF_STATE_SETUP         (1ULL<<32)
+#define NXF_STATE_SETUP		(1ULL<<32)
+
+#define NXF_STATE_HELPER	(1ULL<<36)
+
+#define NXF_INIT_SET		(0)
 
 
 #ifdef	__KERNEL__
@@ -61,6 +65,8 @@ extern int get_nid_list(int, unsigned int *, int);
 extern int nid_is_hashed(nid_t);
 
 extern int nx_migrate_task(struct task_struct *, struct nx_info *);
+
+extern long vs_net_change(struct nx_info *, unsigned int);
 
 struct in_ifaddr;
 struct net_device;

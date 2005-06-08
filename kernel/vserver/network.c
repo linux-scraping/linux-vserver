@@ -45,6 +45,8 @@ static struct nx_info *__alloc_nx_info(nid_t nid)
 	atomic_set(&new->nx_tasks, 0);
 	new->nx_state = 0;
 
+	new->nx_flags = NXF_INIT_SET;
+
 	/* rest of init goes here */
 
 	vxdprintk(VXD_CBIT(nid, 0),
@@ -74,6 +76,7 @@ static void __dealloc_nx_info(struct nx_info *nxi)
 static void __shutdown_nx_info(struct nx_info *nxi)
 {
 	nxi->nx_state |= NXS_SHUTDOWN;
+	vs_net_change(nxi, VSC_NETDOWN);
 }
 
 /*	exported stuff						*/
@@ -530,15 +533,17 @@ int vc_nx_info(uint32_t id, void __user *data)
 
 int vc_net_create(uint32_t nid, void __user *data)
 {
+	struct vcmd_net_create vc_data = { .flagword = NXF_INIT_SET };
 	struct nx_info *new_nxi;
 	int ret;
 
 	if (!capable(CAP_SYS_ADMIN))
 		return -EPERM;
+	if (data && copy_from_user (&vc_data, data, sizeof(vc_data)))
+		return -EFAULT;
 
 	if ((nid > MAX_S_CONTEXT) && (nid != VX_DYNAMIC_ID))
 		return -EINVAL;
-
 	if (nid < 2)
 		return -EINVAL;
 
@@ -546,15 +551,10 @@ int vc_net_create(uint32_t nid, void __user *data)
 	if (IS_ERR(new_nxi))
 		return PTR_ERR(new_nxi);
 
-/*
-	new_nxi = __loc_nx_info(nid, &ret);
-	if (!new_nxi)
-		return ret;
-	if (!(new_nxi->nx_flags & VXF_STATE_SETUP)) {
-		ret = -EEXIST;
-		goto out_put;
-	}
-*/
+	/* initial flags */
+	new_nxi->nx_flags = vc_data.flagword;
+
+	vs_net_change(new_nxi, VSC_NETUP);
 	ret = new_nxi->nx_id;
 	nx_migrate_task(current, new_nxi);
 	/* if this fails, we might end up with a hashed nx_info */

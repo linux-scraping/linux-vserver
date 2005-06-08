@@ -186,7 +186,7 @@ long do_vserver(uint32_t cmd, uint32_t id, void __user *data, int compat)
 
 	case VCMD_create_context:
 #ifdef	CONFIG_VSERVER_LEGACY
-		return vc_ctx_create(id, data);
+		return vc_ctx_create(id, NULL);
 #else
 		return -ENOSYS;
 #endif
@@ -199,17 +199,21 @@ long do_vserver(uint32_t cmd, uint32_t id, void __user *data, int compat)
 	case VCMD_enter_namespace:
 		return vc_enter_namespace(id, data);
 
-	case VCMD_ctx_create:
+	case VCMD_ctx_create_v0:
 #ifdef	CONFIG_VSERVER_LEGACY
 		if (id == 1) {
 			current->xid = 1;
 			return 1;
 		}
 #endif
+		return vc_ctx_create(id, NULL);
+	case VCMD_ctx_create:
 		return vc_ctx_create(id, data);
 	case VCMD_ctx_migrate:
 		return vc_ctx_migrate(id, data);
 
+	case VCMD_net_create_v0:
+		return vc_net_create(id, NULL);
 	case VCMD_net_create:
 		return vc_net_create(id, data);
 	case VCMD_net_migrate:

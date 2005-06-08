@@ -36,12 +36,16 @@
 #define VXF_STATE_SETUP		(1ULL<<32)
 #define VXF_STATE_INIT		(1ULL<<33)
 
+#define VXF_STATE_HELPER	(1ULL<<36)
+
 #define VXF_FORK_RSS		(1ULL<<48)
 #define VXF_PROLIFIC		(1ULL<<49)
 
 #define VXF_IGNEG_NICE		(1ULL<<52)
 
 #define VXF_ONE_TIME		(0x0003ULL<<32)
+
+#define VXF_INIT_SET		(VXF_STATE_SETUP|VXF_STATE_INIT)
 
 
 /* context caps */
@@ -66,6 +70,9 @@
 enum {
 	VSC_STARTUP = 1,
 	VSC_SHUTDOWN,
+
+	VSC_NETUP,
+	VSC_NETDOWN,
 };
 
 

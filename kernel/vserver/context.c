@@ -72,7 +72,7 @@ static struct vx_info *__alloc_vx_info(xid_t xid)
 	vx_info_init_cvirt(&new->cvirt);
 	vx_info_init_cacct(&new->cacct);
 
-	new->vx_flags = VXF_STATE_SETUP|VXF_STATE_INIT;
+	new->vx_flags = VXF_INIT_SET;
 	new->vx_bcaps = CAP_INIT_EFF_SET;
 	new->vx_ccaps = 0;
 
@@ -647,21 +647,26 @@ int vc_vx_info(uint32_t id, void __user *data)
 
 int vc_ctx_create(uint32_t xid, void __user *data)
 {
+	struct vcmd_ctx_create vc_data = { .flagword = VXF_INIT_SET };
 	struct vx_info *new_vxi;
 	int ret;
 
 	if (!capable(CAP_SYS_ADMIN))
 		return -EPERM;
+	if (data && copy_from_user (&vc_data, data, sizeof(vc_data)))
+		return -EFAULT;
 
 	if ((xid > MAX_S_CONTEXT) && (xid != VX_DYNAMIC_ID))
 		return -EINVAL;
-
 	if (xid < 2)
 		return -EINVAL;
 
 	new_vxi = __create_vx_info(xid);
 	if (IS_ERR(new_vxi))
 		return PTR_ERR(new_vxi);
+
+	/* initial flags */
+	new_vxi->vx_flags = vc_data.flagword;
 
 	vs_state_change(new_vxi, VSC_STARTUP);
 	ret = new_vxi->vx_id;
