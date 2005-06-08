@@ -15,6 +15,7 @@
 #include <linux/kmod.h>
 #include <linux/sched.h>
 #include <linux/vs_context.h>
+#include <linux/vs_network.h>
 
 #include <asm/uaccess.h>
 #include <asm/unistd.h>
@@ -55,6 +56,7 @@ long vs_reboot(unsigned int cmd, void * arg)
 {
 	char id_buf[8], cmd_buf[16];
 	char uid_buf[16], pid_buf[16];
+	int ret;
 
 	char *argv[] = {vshelper_path, NULL, id_buf, 0};
 	char *envp[] = {"HOME=/", "TERM=linux",
@@ -88,9 +90,12 @@ long vs_reboot(unsigned int cmd, void * arg)
 		return 0;
 	}
 
-	if (do_vshelper(vshelper_path, argv, envp, 1))
-		return -EPERM;
-	return 0;
+#ifndef CONFIG_VSERVER_LEGACY
+	ret = do_vshelper(vshelper_path, argv, envp, 1);
+#else
+	ret = do_vshelper(vshelper_path, argv, envp, 0);
+#endif
+	return (ret) ? -EPERM : 0;
 }
 
 
@@ -109,6 +114,9 @@ long vs_state_change(struct vx_info *vxi, unsigned int cmd)
 	char *envp[] = {"HOME=/", "TERM=linux",
 			"PATH=/sbin:/usr/sbin:/bin:/usr/bin", cmd_buf, 0};
 
+	if (!vx_info_flags(vxi, VXF_STATE_HELPER, 0))
+		return 0;
+
 	snprintf(id_buf, sizeof(id_buf)-1, "%d", vxi->vx_id);
 	snprintf(cmd_buf, sizeof(cmd_buf)-1, "VS_CMD=%08x", cmd);
 
@@ -118,6 +126,43 @@ long vs_state_change(struct vx_info *vxi, unsigned int cmd)
 		break;
 	case VSC_SHUTDOWN:
 		argv[1] = "shutdown";
+		break;
+	default:
+		return 0;
+	}
+
+	do_vshelper(vshelper_path, argv, envp, 1);
+	return 0;
+}
+
+
+/*
+ *      argv [0] = vshelper_path;
+ *      argv [1] = action: "netup", "netdown"
+ *      argv [2] = context identifier
+ *
+ *      envp [*] = type-specific parameters
+ */
+
+long vs_net_change(struct nx_info *nxi, unsigned int cmd)
+{
+	char id_buf[8], cmd_buf[16];
+	char *argv[] = {vshelper_path, NULL, id_buf, 0};
+	char *envp[] = {"HOME=/", "TERM=linux",
+			"PATH=/sbin:/usr/sbin:/bin:/usr/bin", cmd_buf, 0};
+
+	if (!nx_info_flags(nxi, NXF_STATE_HELPER, 0))
+		return 0;
+
+	snprintf(id_buf, sizeof(id_buf)-1, "%d", nxi->nx_id);
+	snprintf(cmd_buf, sizeof(cmd_buf)-1, "VS_CMD=%08x", cmd);
+
+	switch (cmd) {
+	case VSC_NETUP:
+		argv[1] = "netup";
+		break;
+	case VSC_NETDOWN:
+		argv[1] = "netdown";
 		break;
 	default:
 		return 0;

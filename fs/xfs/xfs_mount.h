@@ -421,6 +421,7 @@ typedef struct xfs_mount {
 						 * allocation */
 #define XFS_MOUNT_IHASHSIZE	0x00100000	/* inode hash table size */
 #define XFS_MOUNT_DIRSYNC	0x00200000	/* synchronous directory ops */
+#define XFS_MOUNT_TAGXID	0x80000000	/* context xid tagging */
 
 /*
  * Default minimum read and write sizes.

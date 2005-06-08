@@ -23,7 +23,13 @@ extern int vc_nx_info(uint32_t, void __user *);
 
 #endif	/* __KERNEL__ */
 
-#define VCMD_net_create		VC_CMD(VNET, 1, 0)
+#define VCMD_net_create_v0	VC_CMD(VNET, 1, 0)
+#define VCMD_net_create		VC_CMD(VNET, 1, 1)
+
+struct  vcmd_net_create {
+	uint64_t flagword;
+};
+
 #define VCMD_net_migrate	VC_CMD(NETMIG, 1, 0)
 
 #define VCMD_net_add		VC_CMD(NETALT, 1, 0)
