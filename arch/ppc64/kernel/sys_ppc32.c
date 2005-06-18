@@ -791,31 +791,6 @@ asmlinkage int sys32_pciconfig_iobase(u32 which, u32 in_bus, u32 in_devfn)
 }
 
 
-asmlinkage int ppc64_newuname(struct new_utsname __user * name)
-{
-	int errno = sys_newuname(name);
-
-	if (current->personality == PER_LINUX32 && !errno) {
-		if(copy_to_user(name->machine, "ppc\0\0", 8)) {
-			errno = -EFAULT;
-		}
-	}
-	return errno;
-}
-
-asmlinkage int ppc64_personality(unsigned long personality)
-{
-	int ret;
-	if (current->personality == PER_LINUX32 && personality == PER_LINUX)
-		personality = PER_LINUX32;
-	ret = sys_personality(personality);
-	if (ret == PER_LINUX32)
-		ret = PER_LINUX;
-	return ret;
-}
-
-
-
 /* Note: it is necessary to treat mode as an unsigned int,
  * with the corresponding cast to a signed int to insure that the 
  * proper conversion (sign extension) between the register representation of a signed int (msr in 32-bit mode)
@@ -1158,28 +1133,49 @@ asmlinkage long sys32_sysctl(struct __sysctl_args32 __user *args)
 }
 #endif
 
+asmlinkage int sys32_uname(struct old_utsname __user * name)
+{
+	int err = 0;
+	
+	down_read(&uts_sem);
+	if (copy_to_user(name, vx_new_utsname(), sizeof(*name)))
+		err = -EFAULT;
+	up_read(&uts_sem);
+	if (!err && personality(current->personality) == PER_LINUX32) {
+		/* change "ppc64" to "ppc" */
+		if (__put_user(0, name->machine + 3)
+		    || __put_user(0, name->machine + 4))
+			err = -EFAULT;
+	}
+	return err;
+}
+
 asmlinkage int sys32_olduname(struct oldold_utsname __user * name)
 {
 	int error;
 	struct new_utsname *ptr;
-	
-	if (!name)
-		return -EFAULT;
+
 	if (!access_ok(VERIFY_WRITE,name,sizeof(struct oldold_utsname)))
 		return -EFAULT;
   
 	down_read(&uts_sem);
 	ptr = vx_new_utsname();
 	error = __copy_to_user(&name->sysname,ptr->sysname,__OLD_UTS_LEN);
-	error -= __put_user(0,name->sysname+__OLD_UTS_LEN);
-	error -= __copy_to_user(&name->nodename,ptr->nodename,__OLD_UTS_LEN);
-	error -= __put_user(0,name->nodename+__OLD_UTS_LEN);
-	error -= __copy_to_user(&name->release,ptr->release,__OLD_UTS_LEN);
-	error -= __put_user(0,name->release+__OLD_UTS_LEN);
-	error -= __copy_to_user(&name->version,ptr->version,__OLD_UTS_LEN);
-	error -= __put_user(0,name->version+__OLD_UTS_LEN);
-	error -= __copy_to_user(&name->machine,ptr->machine,__OLD_UTS_LEN);
-	error = __put_user(0,name->machine+__OLD_UTS_LEN);
+	error |= __put_user(0,name->sysname+__OLD_UTS_LEN);
+	error |= __copy_to_user(&name->nodename,ptr->nodename,__OLD_UTS_LEN);
+	error |= __put_user(0,name->nodename+__OLD_UTS_LEN);
+	error |= __copy_to_user(&name->release,ptr->release,__OLD_UTS_LEN);
+	error |= __put_user(0,name->release+__OLD_UTS_LEN);
+	error |= __copy_to_user(&name->version,ptr->version,__OLD_UTS_LEN);
+	error |= __put_user(0,name->version+__OLD_UTS_LEN);
+	error |= __copy_to_user(&name->machine,ptr->machine,__OLD_UTS_LEN);
+	error |= __put_user(0,name->machine+__OLD_UTS_LEN);
+	if (personality(current->personality) == PER_LINUX32) {
+		/* change "ppc64" to "ppc" */
+		error |= __put_user(0, name->machine + 3);
+		error |= __put_user(0, name->machine + 4);
+	}
+	
 	up_read(&uts_sem);
 
 	error = error ? -EFAULT : 0;
