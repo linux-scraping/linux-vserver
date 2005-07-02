@@ -40,9 +40,9 @@ int vc_get_version(uint32_t id)
 #include <linux/vserver/inode_cmd.h>
 #include <linux/vserver/dlimit_cmd.h>
 #include <linux/vserver/signal_cmd.h>
+#include <linux/vserver/namespace_cmd.h>
 
 #include <linux/vserver/legacy.h>
-#include <linux/vserver/namespace.h>
 #include <linux/vserver/inode.h>
 #include <linux/vserver/dlimit.h>
 
@@ -132,9 +132,9 @@ long do_vserver(uint32_t cmd, uint32_t id, void __user *data, int compat)
 	case VCMD_get_rlimit_mask:
 		return vc_get_rlimit_mask(id, data);
 
-	case VCMD_vx_get_vhi_name:
+	case VCMD_get_vhi_name:
 		return vc_get_vhi_name(id, data);
-	case VCMD_vx_set_vhi_name:
+	case VCMD_set_vhi_name:
 		return vc_set_vhi_name(id, data);
 
 	case VCMD_set_cflags:
