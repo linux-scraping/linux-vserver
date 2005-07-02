@@ -6,6 +6,7 @@
  *  Copyright (C) 2004-2005  Herbert Pötzl
  *
  *  V0.01  broken out from limit.c
+ *  V0.02  added utsname stuff
  *
  */
 
@@ -16,6 +17,7 @@
 #include <linux/vs_context.h>
 #include <linux/vs_cvirt.h>
 #include <linux/vserver/switch.h>
+#include <linux/vserver/cvirt_cmd.h>
 
 #include <asm/errno.h>
 #include <asm/uaccess.h>
@@ -184,3 +186,75 @@ int vx_do_syslog(int type, char __user *buf, int len)
 	return error;
 }
 
+
+/* virtual host info names */
+
+static char * vx_vhi_name(struct vx_info *vxi, int id)
+{
+	switch (id) {
+		case VHIN_CONTEXT:
+			return vxi->vx_name;
+		case VHIN_SYSNAME:
+			return vxi->cvirt.utsname.sysname;
+		case VHIN_NODENAME:
+			return vxi->cvirt.utsname.nodename;
+		case VHIN_RELEASE:
+			return vxi->cvirt.utsname.release;
+		case VHIN_VERSION:
+			return vxi->cvirt.utsname.version;
+		case VHIN_MACHINE:
+			return vxi->cvirt.utsname.machine;
+		case VHIN_DOMAINNAME:
+			return vxi->cvirt.utsname.domainname;
+		default:
+			return NULL;
+	}
+	return NULL;
+}
+
+int vc_set_vhi_name(uint32_t id, void __user *data)
+{
+	struct vx_info *vxi;
+	struct vcmd_vhi_name_v0 vc_data;
+	char *name;
+
+	if (!capable(CAP_SYS_ADMIN))
+		return -EPERM;
+	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
+		return -EFAULT;
+
+	vxi = locate_vx_info(id);
+	if (!vxi)
+		return -ESRCH;
+
+	name = vx_vhi_name(vxi, vc_data.field);
+	if (name)
+		memcpy(name, vc_data.name, 65);
+	put_vx_info(vxi);
+	return (name ? 0 : -EFAULT);
+}
+
+int vc_get_vhi_name(uint32_t id, void __user *data)
+{
+	struct vx_info *vxi;
+	struct vcmd_vhi_name_v0 vc_data;
+	char *name;
+
+	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
+		return -EFAULT;
+
+	vxi = locate_vx_info(id);
+	if (!vxi)
+		return -ESRCH;
+
+	name = vx_vhi_name(vxi, vc_data.field);
+	if (!name)
+		goto out_put;
+
+	memcpy(vc_data.name, name, 65);
+	if (copy_to_user (data, &vc_data, sizeof(vc_data)))
+		return -EFAULT;
+out_put:
+	put_vx_info(vxi);
+	return (name ? 0 : -EFAULT);
+}
