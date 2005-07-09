@@ -501,6 +501,10 @@ linvfs_setattr(
 	int		flags = 0;
 	int		error;
 
+	error = inode_change_ok(inode, attr);
+	if (error)
+		return error;
+
 	memset(&vattr, 0, sizeof(vattr_t));
 	if (ia_valid & ATTR_UID) {
 		vattr.va_mask |= XFS_AT_UID;
@@ -509,6 +513,10 @@ linvfs_setattr(
 	if (ia_valid & ATTR_GID) {
 		vattr.va_mask |= XFS_AT_GID;
 		vattr.va_gid = attr->ia_gid;
+	}
+	if (ia_valid & ATTR_XID) {
+		vattr.va_mask |= XFS_AT_XID;
+		vattr.va_xid = attr->ia_xid;
 	}
 	if (ia_valid & ATTR_SIZE) {
 		vattr.va_mask |= XFS_AT_SIZE;

@@ -2842,7 +2842,8 @@ int reiserfs_setattr(struct dentry *dentry, struct iattr *attr) {
 
     if (!error) {
 	if ((ia_valid & ATTR_UID && attr->ia_uid != inode->i_uid) ||
-	    (ia_valid & ATTR_GID && attr->ia_gid != inode->i_gid)) {
+	    (ia_valid & ATTR_GID && attr->ia_gid != inode->i_gid) ||
+	    (ia_valid & ATTR_XID && attr->ia_xid != inode->i_xid)) {
                 error = reiserfs_chown_xattrs (inode, attr);
 
                 if (!error) {
@@ -2861,6 +2862,8 @@ int reiserfs_setattr(struct dentry *dentry, struct iattr *attr) {
 			inode->i_uid = attr->ia_uid;
 		    if (attr->ia_valid & ATTR_GID)
 			inode->i_gid = attr->ia_gid;
+		    if (attr->ia_valid & ATTR_XID)
+			inode->i_xid = attr->ia_xid;
 		    mark_inode_dirty(inode);
 		    journal_end(&th, inode->i_sb, 4*REISERFS_QUOTA_INIT_BLOCKS+2);
 		}

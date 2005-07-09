@@ -28,6 +28,10 @@
 static inline
 int vc_get_version(uint32_t id)
 {
+#ifdef	CONFIG_VSERVER_LEGACY_VERSION
+	if (id == 63)
+		return VCI_LEGACY_VERSION;
+#endif
 	return VCI_VERSION;
 }
 
@@ -218,6 +222,10 @@ long do_vserver(uint32_t cmd, uint32_t id, void __user *data, int compat)
 		return vc_net_create(id, data);
 	case VCMD_net_migrate:
 		return vc_net_migrate(id, data);
+	case VCMD_net_add:
+		return vc_net_add(id, data);
+	case VCMD_net_remove:
+		return vc_net_remove(id, data);
 
 	}
 	return -ENOSYS;
@@ -226,7 +234,13 @@ long do_vserver(uint32_t cmd, uint32_t id, void __user *data, int compat)
 extern asmlinkage long
 sys_vserver(uint32_t cmd, uint32_t id, void __user *data)
 {
-	return do_vserver(cmd, id, data, 0);
+	long ret = do_vserver(cmd, id, data, 0);
+
+	vxdprintk(VXD_CBIT(switch, 1),
+		"vc: VCMD_%02d_%d[%d] = %08lx(%ld)",
+		VC_CATEGORY(cmd), VC_COMMAND(cmd),
+		VC_VERSION(cmd), ret, ret);
+	return ret;
 }
 
 #ifdef	CONFIG_COMPAT
@@ -234,7 +248,13 @@ sys_vserver(uint32_t cmd, uint32_t id, void __user *data)
 extern asmlinkage long
 sys32_vserver(uint32_t cmd, uint32_t id, void __user *data)
 {
-	return do_vserver(cmd, id, data, 1);
+	long ret = do_vserver(cmd, id, data, 1);
+
+	vxdprintk(VXD_CBIT(switch, 1),
+		"vc: VCMD_%02d_%d[%d] = %08lx(%ld)",
+		VC_CATEGORY(cmd), VC_COMMAND(cmd),
+		VC_VERSION(cmd), ret, ret);
+	return ret;
 }
 
 #endif	/* CONFIG_COMPAT */

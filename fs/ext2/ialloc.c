@@ -19,6 +19,7 @@
 #include <linux/buffer_head.h>
 #include <linux/random.h>
 #include <linux/vs_dlimit.h>
+#include <linux/vserver/xid.h>
 
 #include "ext2.h"
 #include "xattr.h"
@@ -468,11 +469,7 @@ struct inode *ext2_new_inode(struct inode *dir, int mode)
 	if (!inode)
 		return ERR_PTR(-ENOMEM);
 
-	if (sb->s_flags & MS_TAGXID)
-		inode->i_xid = vx_current_xid();
-	else
-		inode->i_xid = 0;
-
+	inode->i_xid = vx_current_fsxid(sb);
 	if (DLIMIT_ALLOC_INODE(sb, inode->i_xid)) {
 		err = -ENOSPC;
 		goto fail_dlim;

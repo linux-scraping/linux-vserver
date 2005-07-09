@@ -225,8 +225,6 @@ static int mnt_is_reachable(struct vfsmount *mnt)
 	struct dentry *root, *point;
 	int ret;
 
-	if (!mnt)
-		return 1;
 	if (mnt == mnt->mnt_namespace->root)
 		return 1;
 

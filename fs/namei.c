@@ -237,7 +237,7 @@ static inline int xid_permission(struct inode *inode, int mask, struct nameidata
 	if (vx_check(inode->i_xid, VX_ADMIN|VX_WATCH|VX_IDENT))
 		return 0;
 
-	vxwprintk(1, "xid=%d denied access to %p[#%d,%lu] Â»%sÂ«.",
+	vxwprintk(1, "xid=%d denied access to %p[#%d,%lu] »%s«.",
 		vx_current_xid(), inode, inode->i_xid, inode->i_ino,
 		vxd_path(nd->dentry, nd->mnt));
 	return -EACCES;
@@ -661,6 +661,7 @@ static inline void follow_dotdot(struct nameidata *nd)
 		if (nd->dentry == current->fs->root &&
 		    nd->mnt == current->fs->rootmnt) {
                         read_unlock(&current->fs->lock);
+			/* for sane / avoid follow_mount() */
 			return;
 		}
                 read_unlock(&current->fs->lock);
@@ -721,7 +722,7 @@ done:
 	__follow_mount(path);
 	return 0;
 hidden:
-	vxwprintk(1, "xid=%d did lookup hidden %p[#%d,%lu] Â»%sÂ«.",
+	vxwprintk(1, "xid=%d did lookup hidden %p[#%d,%lu] »%s«.",
 		vx_current_xid(), inode, inode->i_xid, inode->i_ino,
 		vxd_path(dentry, mnt));
 	dput(dentry);
