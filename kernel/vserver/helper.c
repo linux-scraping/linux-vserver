@@ -34,7 +34,7 @@ int do_vshelper(char *name, char *argv[], char *envp[], int sync)
 			name, argv[1], argv[2],
 			sync?"sync":"async", ret);
 	}
-	vxdprintk(VXD_CBIT(switch, 1),
+	vxdprintk(VXD_CBIT(switch, 4),
 		"%s: (%s %s) returned %s with %d",
 		name, argv[1], argv[2], sync?"sync":"async", ret);
 	return ret;

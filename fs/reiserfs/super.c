@@ -1626,6 +1626,10 @@ static int reiserfs_fill_super (struct super_block * s, void * data, int silent)
       goto error;
     }
 
+    /* map mount option tagxid */
+    if (REISERFS_SB(s)->s_mount_opt & (1 << REISERFS_TAGXID))
+	s->s_flags |= MS_TAGXID ;
+
     rs = SB_DISK_SUPER_BLOCK (s);
     /* Let's do basic sanity check to verify that underlying device is not
        smaller than the filesystem. If the check fails then abort and scream,

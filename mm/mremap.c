@@ -352,13 +352,11 @@ unsigned long do_mremap(unsigned long addr,
 		ret = -EAGAIN;
 		if (locked > lock_limit && !capable(CAP_IPC_LOCK))
 			goto out;
-		ret = -ENOMEM;
 		if (!vx_vmlocked_avail(current->mm,
 			(new_len - old_len) >> PAGE_SHIFT))
 			goto out;
 	}
-	if (!may_expand_vm(current->mm, (new_len - old_len) >> PAGE_SHIFT) ||
-		vx_vmpages_avail(current->mm, (new_len - old_len) >> PAGE_SHIFT)) {
+	if (!may_expand_vm(current->mm, (new_len - old_len) >> PAGE_SHIFT)) {
 		ret = -ENOMEM;
 		goto out;
 	}

@@ -873,22 +873,15 @@ sys_getxgid:
 	.globl	sys_getxpid
 	.ent	sys_getxpid
 sys_getxpid:
+	lda	$sp, -16($sp)
+	stq	$26, 0($sp)
 	.prologue 0
-	ldq	$2, TI_TASK($8)
 
-	/* See linux/kernel/timer.c sys_getppid for discussion
-	   about this loop.  */
-	ldq	$3, TASK_REAL_PARENT($2)
-1:	ldl	$1, TASK_TGID($3)
-#ifdef CONFIG_SMP
-	mov	$3, $4
-	mb
-	ldq	$3, TASK_REAL_PARENT($2)
-	cmpeq	$3, $4, $4
-	beq	$4, 1b
-#endif
-	stq	$1, 80($sp)
-	ldl	$0, TASK_TGID($2)
+	lda	$16, 96($sp)
+	jsr	$26, do_getxpid
+	ldq	$26, 0($sp)
+
+	lda	$sp, 16($sp)
 	ret
 .end sys_getxpid
 

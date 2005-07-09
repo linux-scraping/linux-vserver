@@ -171,6 +171,7 @@ xfs_revalidate_inode(
 	inode->i_nlink	= ip->i_d.di_nlink;
 	inode->i_uid	= ip->i_d.di_uid;
 	inode->i_gid	= ip->i_d.di_gid;
+	inode->i_xid	= ip->i_d.di_xid;
 	if (((1 << vp->v_type) & ((1<<VBLK) | (1<<VCHR))) == 0) {
 		inode->i_rdev = 0;
 	} else {

@@ -578,6 +578,86 @@ int vc_net_migrate(uint32_t id, void __user *data)
 	return 0;
 }
 
+int vc_net_add(uint32_t nid, void __user *data)
+{
+	struct vcmd_net_addr_v0 vc_data;
+	struct nx_info *nxi;
+	int index, pos, ret = 0;
+
+	if (!capable(CAP_SYS_ADMIN))
+		return -EPERM;
+	if (data && copy_from_user (&vc_data, data, sizeof(vc_data)))
+		return -EFAULT;
+
+	switch (vc_data.type) {
+	case NXA_TYPE_IPV4:
+		if ((vc_data.count < 1) || (vc_data.count > 4))
+			return -EINVAL;
+		break;
+
+	default:
+		break;
+	}
+
+	nxi = locate_nx_info(nid);
+	if (!nxi)
+		return -ESRCH;
+
+	switch (vc_data.type) {
+	case NXA_TYPE_IPV4:
+		index = 0;
+		while ((index < vc_data.count) &&
+			((pos = nxi->nbipv4) < NB_IPV4ROOT)) {
+			nxi->ipv4[pos] = vc_data.ip[index];
+			nxi->mask[pos] = vc_data.mask[index];
+			index++;
+			nxi->nbipv4++;
+		}
+		ret = index;
+		break;
+
+	case NXA_TYPE_IPV4|NXA_MOD_BCAST:
+		nxi->v4_bcast = vc_data.ip[0];
+		ret = 1;
+		break;
+
+	default:
+		ret = -EINVAL;
+		break;
+	}
+
+	put_nx_info(nxi);
+	return ret;
+}
+
+int vc_net_remove(uint32_t nid, void __user *data)
+{
+	struct vcmd_net_addr_v0 vc_data;
+	struct nx_info *nxi;
+	int ret = 0;
+
+	if (!capable(CAP_SYS_ADMIN))
+		return -EPERM;
+	if (data && copy_from_user (&vc_data, data, sizeof(vc_data)))
+		return -EFAULT;
+
+	nxi = locate_nx_info(nid);
+	if (!nxi)
+		return -ESRCH;
+
+	switch (vc_data.type) {
+	case NXA_TYPE_ANY:
+		nxi->nbipv4 = 0;
+		break;
+
+	default:
+		ret = -EINVAL;
+		break;
+	}
+
+	put_nx_info(nxi);
+	return ret;
+}
 
 int vc_get_nflags(uint32_t id, void __user *data)
 {
@@ -594,7 +674,7 @@ int vc_get_nflags(uint32_t id, void __user *data)
 	vc_data.flagword = nxi->nx_flags;
 
 	/* special STATE flag handling */
-	vc_data.mask = vx_mask_flags(~0UL, nxi->nx_flags, IPF_ONE_TIME);
+	vc_data.mask = vx_mask_flags(~0UL, nxi->nx_flags, NXF_ONE_TIME);
 
 	put_nx_info(nxi);
 
@@ -619,7 +699,7 @@ int vc_set_nflags(uint32_t id, void __user *data)
 		return -ESRCH;
 
 	/* special STATE flag handling */
-	mask = vx_mask_mask(vc_data.mask, nxi->nx_flags, IPF_ONE_TIME);
+	mask = vx_mask_mask(vc_data.mask, nxi->nx_flags, NXF_ONE_TIME);
 	trigger = (mask & nxi->nx_flags) ^ (mask & vc_data.flagword);
 
 	nxi->nx_flags = vx_mask_flags(nxi->nx_flags,

@@ -8,6 +8,8 @@ enum {
 	VCI_KCBIT_HARDCPU,
 	VCI_KCBIT_HARDCPU_IDLE,
 
+	VCI_KCBIT_LEGACY_VERSION,
+
 	VCI_KCBIT_DEBUG = 16,
 	VCI_KCBIT_HISTORY = 20,
 	VCI_KCBIT_TAGXID = 24,
@@ -23,6 +25,9 @@ static inline uint32_t vci_kernel_config(void)
 #endif
 #ifdef	CONFIG_VSERVER_LEGACYNET
 	(1 << VCI_KCBIT_LEGACYNET) |
+#endif
+#ifdef	CONFIG_VSERVER_LEGACY_VERSION
+	(1 << VCI_KCBIT_LEGACY_VERSION) |
 #endif
 
 	/* configured features */

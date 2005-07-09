@@ -129,6 +129,7 @@ static int __vc_set_iattr(struct dentry *de, uint32_t *xid, uint32_t *flags, uin
 {
 	struct inode *in = de->d_inode;
 	int error = 0, is_proc = 0, has_xid = 0;
+	struct iattr attr = { 0 };
 
 	if (!in || !in->i_sb)
 		return -ESRCH;
@@ -143,8 +144,10 @@ static int __vc_set_iattr(struct dentry *de, uint32_t *xid, uint32_t *flags, uin
 		return -EINVAL;
 
 	down(&in->i_sem);
-	if (*mask & IATTR_XID)
-		in->i_xid = *xid;
+	if (*mask & IATTR_XID) {
+		attr.ia_xid = *xid;
+		attr.ia_valid |= ATTR_XID;
+	}
 
 	if (*mask & IATTR_FLAGS) {
 		struct proc_dir_entry *entry = PROC_I(in)->pde;
@@ -158,9 +161,8 @@ static int __vc_set_iattr(struct dentry *de, uint32_t *xid, uint32_t *flags, uin
 	}
 
 	if (*mask & (IATTR_BARRIER | IATTR_IUNLINK | IATTR_IMMUTABLE)) {
-		struct iattr attr;
 
-		attr.ia_valid = ATTR_ATTR_FLAG;
+		attr.ia_valid |= ATTR_ATTR_FLAG;
 		attr.ia_attr_flags =
 			(IS_IMMUTABLE(in) ? ATTR_FLAG_IMMUTABLE : 0) |
 			(IS_IUNLINK(in) ? ATTR_FLAG_IUNLINK : 0) |
@@ -184,6 +186,9 @@ static int __vc_set_iattr(struct dentry *de, uint32_t *xid, uint32_t *flags, uin
 			else
 				attr.ia_attr_flags &= ~ATTR_FLAG_BARRIER;
 		}
+	}
+
+	if (attr.ia_valid) {
 		if (in->i_op && in->i_op->setattr)
 			error = in->i_op->setattr(de, &attr);
 		else {
@@ -193,7 +198,6 @@ static int __vc_set_iattr(struct dentry *de, uint32_t *xid, uint32_t *flags, uin
 		}
 	}
 
-	mark_inode_dirty(in);
 	up(&in->i_sem);
 	return 0;
 }

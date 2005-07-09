@@ -963,12 +963,6 @@ asmlinkage unsigned long sys_alarm(unsigned int seconds)
 
 #endif
 
-#ifndef __alpha__
-
-/*
- * The Alpha uses getxpid, getxuid, and getxgid instead.  Maybe this
- * should be moved into arch/i386 instead?
- */
 
 /**
  * sys_getpid - return the thread group id of the current process
@@ -1027,6 +1021,20 @@ asmlinkage long sys_getppid(void)
 	}
 	return vx_map_pid(pid);
 }
+
+#ifdef __alpha__
+
+/*
+ * The Alpha uses getxpid, getxuid, and getxgid instead.
+ */
+
+asmlinkage long do_getxpid(long *ppid)
+{
+	*ppid = sys_getppid();
+	return sys_getpid();
+}
+
+#else /* _alpha_ */
 
 asmlinkage long sys_getuid(void)
 {

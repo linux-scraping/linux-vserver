@@ -65,7 +65,8 @@ debug_nid:
 debug_switch:
 
  0   1	"vc: VCMD_%02d_%d[%d], %d,%p,%d"
- 1   2	"%s: (%s %s) returned %s with %d"
+ 1   2	"vc: VCMD_%02d_%d[%d] = %08lx(%ld)"
+ 4  10	"%s: (%s %s) returned %s with %d"
 
 debug_xid:
 

@@ -96,58 +96,14 @@ static int devpts_remount(struct super_block *sb, int *flags, char *data)
 	return 0;
 }
 
+static int devpts_filter(struct dentry *de)
+{
+	return vx_check(de->d_inode->i_xid, VX_IDENT);
+}
+
 static int devpts_readdir(struct file * filp, void * dirent, filldir_t filldir)
 {
-	struct dentry *dentry = filp->f_dentry;
-	struct dentry *cursor = filp->private_data;
-	struct list_head *p, *q = &cursor->d_child;
-	ino_t ino;
-	int i = filp->f_pos;
-
-	switch (i) {
-		case 0:
-			ino = dentry->d_inode->i_ino;
-			if (filldir(dirent, ".", 1, i, ino, DT_DIR) < 0)
-				break;
-			filp->f_pos++;
-			i++;
-			/* fallthrough */
-		case 1:
-			ino = parent_ino(dentry);
-			if (filldir(dirent, "..", 2, i, ino, DT_DIR) < 0)
-				break;
-			filp->f_pos++;
-			i++;
-			/* fallthrough */
-		default:
-			spin_lock(&dcache_lock);
-			if (filp->f_pos == 2) {
-				list_del(q);
-				list_add(q, &dentry->d_subdirs);
-			}
-			for (p=q->next; p != &dentry->d_subdirs; p=p->next) {
-				struct dentry *next;
-				next = list_entry(p, struct dentry, d_child);
-				if (d_unhashed(next) || !next->d_inode)
-					continue;
-				if (!vx_check(next->d_inode->i_xid, VX_IDENT))
-					continue;
-
-				spin_unlock(&dcache_lock);
-				if (filldir(dirent, next->d_name.name,
-					next->d_name.len, filp->f_pos,
-					next->d_inode->i_ino, DT_CHR) < 0)
-					return 0;
-				spin_lock(&dcache_lock);
-				/* next is still alive */
-				list_del(q);
-				list_add(q, p);
-				p = q;
-				filp->f_pos++;
-			}
-			spin_unlock(&dcache_lock);
-	}
-	return 0;
+	return dcache_readdir_filter(filp, dirent, filldir, devpts_filter);
 }
 
 static struct file_operations devpts_dir_operations = {

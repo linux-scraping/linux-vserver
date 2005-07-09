@@ -1010,8 +1010,7 @@ munmap_back:
 	}
 
 	/* Check against address space limit. */
-	if (!may_expand_vm(mm, len >> PAGE_SHIFT) ||
-		!vx_vmpages_avail(mm, len >> PAGE_SHIFT))
+	if (!may_expand_vm(mm, len >> PAGE_SHIFT))
 		return -ENOMEM;
 
 	if (accountable && (!(flags & MAP_NORESERVE) ||
@@ -1425,7 +1424,7 @@ static int acct_stack_growth(struct vm_area_struct * vma, unsigned long size, un
 	struct rlimit *rlim = current->signal->rlim;
 
 	/* address space limit tests */
-	if (!may_expand_vm(mm, grow) || !vx_vmpages_avail(mm, grow))
+	if (!may_expand_vm(mm, grow))
 		return -ENOMEM;
 
 	/* Stack limit test */
@@ -1862,8 +1861,7 @@ unsigned long do_brk(unsigned long addr, unsigned long len)
 	if (mm->map_count > sysctl_max_map_count)
 		return -ENOMEM;
 
-	if (security_vm_enough_memory(len >> PAGE_SHIFT) ||
-		!vx_vmpages_avail(mm, len >> PAGE_SHIFT))
+	if (security_vm_enough_memory(len >> PAGE_SHIFT))
 		return -ENOMEM;
 
 	flags = VM_DATA_DEFAULT_FLAGS | VM_ACCOUNT | mm->def_flags;
@@ -2040,6 +2038,8 @@ int may_expand_vm(struct mm_struct *mm, unsigned long npages)
 	lim = current->signal->rlim[RLIMIT_AS].rlim_cur >> PAGE_SHIFT;
 
 	if (cur + npages > lim)
+		return 0;
+	if (!vx_vmpages_avail(mm, npages))
 		return 0;
 	return 1;
 }

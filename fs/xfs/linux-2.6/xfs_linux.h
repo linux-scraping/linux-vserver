@@ -152,6 +152,7 @@ static inline void set_buffer_unwritten_io(struct buffer_head *bh)
 #define current_pid()		(current->pid)
 #define current_fsuid(cred)	(current->fsuid)
 #define current_fsgid(cred)	(current->fsgid)
+#define current_fsxid(cred,vp)	(vx_current_fsxid(LINVFS_GET_IP(vp)->i_sb))
 
 #define NBPP		PAGE_SIZE
 #define DPPSHFT		(PAGE_SHIFT - 9)

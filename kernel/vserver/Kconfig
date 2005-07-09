@@ -32,6 +32,18 @@ config	VSERVER_LEGACY
 	  this API, so disabling this option may reduce some
 	  functionality.
 
+config	VSERVER_LEGACY_VERSION
+	bool	"Show a Legacy Version ID"
+	depends on VSERVER_LEGACY
+	default n
+	help
+	  This shows a special legacy version to very old tools
+	  which do not handle the current version correctly.
+
+	  This will probably disable some features of newer tools
+	  so better avoid it, unless you really, really need it
+	  for backwards compatibility.
+
 config	VSERVER_NGNET
 	bool	"Disable Legacy Networking Kernel API"
 	depends on EXPERIMENTAL

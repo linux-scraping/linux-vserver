@@ -219,7 +219,7 @@ static void jfs_put_super(struct super_block *sb)
 
 enum {
 	Opt_integrity, Opt_nointegrity, Opt_iocharset, Opt_resize,
-	Opt_resize_nosize, Opt_errors, Opt_ignore, Opt_err,
+	Opt_resize_nosize, Opt_errors, Opt_tagxid, Opt_ignore, Opt_err,
 };
 
 static match_table_t tokens = {
@@ -229,6 +229,7 @@ static match_table_t tokens = {
 	{Opt_resize, "resize=%u"},
 	{Opt_resize_nosize, "resize"},
 	{Opt_errors, "errors=%s"},
+	{Opt_tagxid, "tagxid"},
 	{Opt_ignore, "noquota"},
 	{Opt_ignore, "quota"},
 	{Opt_ignore, "usrquota"},
@@ -320,6 +321,9 @@ static int parse_options(char *options, struct super_block *sb, s64 *newLVSize,
 			}
 			break;
 		}
+		case Opt_tagxid:
+			*flag |= JFS_TAGXID;
+			break;
 		default:
 			printk("jfs: Unrecognized mount option \"%s\" "
 					" or missing value\n", p);
@@ -421,6 +425,9 @@ static int jfs_fill_super(struct super_block *sb, void *data, int silent)
 #ifdef CONFIG_JFS_POSIX_ACL
 	sb->s_flags |= MS_POSIXACL;
 #endif
+	/* map mount option tagxid */
+	if (sbi->flag & JFS_TAGXID)
+		sb->s_flags |= MS_TAGXID;
 
 	if (newLVSize) {
 		printk(KERN_ERR "resize option for remount only\n");
