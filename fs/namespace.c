@@ -24,7 +24,6 @@
 #include <linux/mount.h>
 #include <linux/vserver/namespace.h>
 #include <linux/vserver/xid.h>
-
 #include <asm/uaccess.h>
 #include <asm/unistd.h>
 
