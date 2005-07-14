@@ -20,7 +20,6 @@
 #include <linux/random.h>
 #include <linux/vs_dlimit.h>
 #include <linux/vserver/xid.h>
-
 #include "ext2.h"
 #include "xattr.h"
 #include "acl.h"

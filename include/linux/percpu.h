@@ -8,7 +8,7 @@
 
 /* Enough to cover all DEFINE_PER_CPUs in kernel, including modules. */
 #ifndef PERCPU_ENOUGH_ROOM
-#define PERCPU_ENOUGH_ROOM 32768
+#define PERCPU_ENOUGH_ROOM 65536
 #endif
 
 /* Must be an lvalue. */

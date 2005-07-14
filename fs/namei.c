@@ -31,7 +31,6 @@
 #include <linux/proc_fs.h>
 #include <linux/vserver/inode.h>
 #include <linux/vserver/debug.h>
-
 #include <asm/namei.h>
 #include <asm/uaccess.h>
 
@@ -661,7 +660,7 @@ static inline void follow_dotdot(struct nameidata *nd)
 		if (nd->dentry == current->fs->root &&
 		    nd->mnt == current->fs->rootmnt) {
                         read_unlock(&current->fs->lock);
-			/* for sane / avoid follow_mount() */
+			/* for sane '/' avoid follow_mount() */
 			return;
 		}
                 read_unlock(&current->fs->lock);

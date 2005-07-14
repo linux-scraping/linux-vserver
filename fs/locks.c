@@ -280,7 +280,7 @@ static int flock_make_lock(struct file *filp, struct file_lock **lock,
 	fl->fl_type = type;
 	fl->fl_end = OFFSET_MAX;
 
-	/* check agains file xid maybe ? */
+	/* check against file xid maybe ? */
 	fl->fl_xid = vx_current_xid();
 	vx_locks_inc(fl);
 	

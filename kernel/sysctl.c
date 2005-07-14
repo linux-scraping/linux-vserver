@@ -1414,14 +1414,12 @@ int proc_dostring(ctl_table *table, int write, struct file *filp,
 
 	data = table->data;
 	maxlen = table->maxlen;
+
+	if (!data || !maxlen || !*lenp || (*ppos && !write))
+		return (*lenp = 0);
+	
 	if (table->virt_handler)
 		table->virt_handler(table, write, filp->f_xid, &data, &maxlen);
-
-	if (!table->data || !table->maxlen || !*lenp ||
-	    (*ppos && !write)) {
-		*lenp = 0;
-		return 0;
-	}
 
 	if (write) {
 		len = 0;

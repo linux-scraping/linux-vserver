@@ -4,7 +4,6 @@
 #include <linux/config.h>
 #include <linux/swap.h>
 #include <linux/vs_memory.h>
-
 #include <asm/pgalloc.h>
 #include <asm/tlbflush.h>
 #include <asm/mmu_context.h>
