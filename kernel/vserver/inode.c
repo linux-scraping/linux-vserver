@@ -41,7 +41,7 @@ static int __vc_get_iattr(struct inode *in, uint32_t *xid, uint32_t *flags, uint
 	if (S_ISDIR(in->i_mode))
 		*mask |= IATTR_BARRIER;
 
-	if (in->i_sb->s_flags & MS_TAGXID) {
+	if (IS_TAGXID(in)) {
 		*xid = in->i_xid;
 		*mask |= IATTR_XID;
 	}
@@ -138,7 +138,7 @@ static int __vc_set_iattr(struct dentry *de, uint32_t *xid, uint32_t *flags, uin
 	if ((*mask & IATTR_FLAGS) && !is_proc)
 		return -EINVAL;
 
-	has_xid = (in->i_sb->s_flags & MS_TAGXID) ||
+	has_xid = IS_TAGXID(in) ||
 		(in->i_sb->s_magic == DEVPTS_SUPER_MAGIC);
 	if ((*mask & IATTR_XID) && !has_xid)
 		return -EINVAL;

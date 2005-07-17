@@ -269,9 +269,11 @@ static int __init root_nfs_parse(char *name, char *buf)
 			case Opt_tcp:
 				nfs_data.flags |= NFS_MOUNT_TCP;
 				break;
+#ifndef CONFIG_INOXID_NONE
 			case Opt_tagxid:
 				nfs_data.flags |= NFS_MOUNT_TAGXID;
 				break;
+#endif
 			default : 
 				return 0;
 		}

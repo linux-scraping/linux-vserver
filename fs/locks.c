@@ -280,8 +280,9 @@ static int flock_make_lock(struct file *filp, struct file_lock **lock,
 	fl->fl_type = type;
 	fl->fl_end = OFFSET_MAX;
 
-	/* check against file xid maybe ? */
-	fl->fl_xid = vx_current_xid();
+	vxd_assert(filp->f_xid == vx_current_xid(),
+		"f_xid(%d) == current(%d)", filp->f_xid, vx_current_xid());
+	fl->fl_xid = filp->f_xid;
 	vx_locks_inc(fl);
 	
 	*lock = fl;
@@ -460,7 +461,9 @@ static int lease_alloc(struct file *filp, int type, struct file_lock **flp)
 	if (fl == NULL)
 		return -ENOMEM;
 
-	fl->fl_xid = vx_current_xid();
+	vxd_assert(filp->f_xid == vx_current_xid(),
+		"f_xid(%d) == current(%d)", filp->f_xid, vx_current_xid());
+	fl->fl_xid = filp->f_xid;
 	vx_locks_inc(fl);
 	error = lease_init(filp, type, fl);
 	if (error)
@@ -777,7 +780,7 @@ out:
 
 EXPORT_SYMBOL(posix_lock_file);
 
-static int __posix_lock_file(struct inode *inode, struct file_lock *request)
+static int __posix_lock_file(struct inode *inode, struct file_lock *request, xid_t xid)
 {
 	struct file_lock *fl;
 	struct file_lock *new_fl, *new_fl2;
@@ -786,15 +789,17 @@ static int __posix_lock_file(struct inode *inode, struct file_lock *request)
 	struct file_lock **before;
 	int error, added = 0;
 
+	vxd_assert(xid == vx_current_xid(),
+		"xid(%d) == current(%d)", xid, vx_current_xid());
 	/*
 	 * We may need two file_lock structures for this operation,
 	 * so we get them in advance to avoid races.
 	 */
 	new_fl = locks_alloc_lock();
-	new_fl->fl_xid = vx_current_xid();
+	new_fl->fl_xid = xid;
 	vx_locks_inc(new_fl);
 	new_fl2 = locks_alloc_lock();
-	new_fl2->fl_xid = vx_current_xid();
+	new_fl2->fl_xid = xid;
 	vx_locks_inc(new_fl2);
 
 	lock_kernel();
@@ -969,7 +974,7 @@ static int __posix_lock_file(struct inode *inode, struct file_lock *request)
  */
 int posix_lock_file(struct file *filp, struct file_lock *fl)
 {
-	return __posix_lock_file(filp->f_dentry->d_inode, fl);
+	return __posix_lock_file(filp->f_dentry->d_inode, fl, filp->f_xid);
 }
 
 /**
@@ -986,7 +991,8 @@ int posix_lock_file_wait(struct file *filp, struct file_lock *fl)
 	int error;
 	might_sleep ();
 	for (;;) {
-		error = __posix_lock_file(filp->f_dentry->d_inode, fl);
+		error = __posix_lock_file(filp->f_dentry->d_inode,
+			fl, filp->f_xid);
 		if ((error != -EAGAIN) || !(fl->fl_flags & FL_SLEEP))
 			break;
 		error = wait_event_interruptible(fl->fl_wait, !fl->fl_next);
@@ -1058,7 +1064,7 @@ int locks_mandatory_area(int read_write, struct inode *inode,
 	fl.fl_end = offset + count - 1;
 
 	for (;;) {
-		error = __posix_lock_file(inode, &fl);
+		error = __posix_lock_file(inode, &fl, filp->f_xid);
 		if (error != -EAGAIN)
 			break;
 		if (!(fl.fl_flags & FL_SLEEP))
@@ -1615,7 +1621,9 @@ int fcntl_setlk(struct file *filp, unsigned int cmd, struct flock __user *l)
 	if (file_lock == NULL)
 		return -ENOLCK;
 
-	file_lock->fl_xid = vx_current_xid();
+	vxd_assert(filp->f_xid == vx_current_xid(),
+		"f_xid(%d) == current(%d)", filp->f_xid, vx_current_xid());
+	file_lock->fl_xid = filp->f_xid;
 	vx_locks_inc(file_lock);
 
 	/*
@@ -1671,7 +1679,7 @@ int fcntl_setlk(struct file *filp, unsigned int cmd, struct flock __user *l)
 	}
 
 	for (;;) {
-		error = __posix_lock_file(inode, file_lock);
+		error = __posix_lock_file(inode, file_lock, filp->f_xid);
 		if ((error != -EAGAIN) || (cmd == F_SETLK))
 			break;
 		error = wait_event_interruptible(file_lock->fl_wait,
@@ -1749,7 +1757,9 @@ int fcntl_setlk64(struct file *filp, unsigned int cmd, struct flock64 __user *l)
 	if (file_lock == NULL)
 		return -ENOLCK;
 
-	file_lock->fl_xid = vx_current_xid();
+	vxd_assert(filp->f_xid == vx_current_xid(),
+		"f_xid(%d) == current(%d)", filp->f_xid, vx_current_xid());
+	file_lock->fl_xid = filp->f_xid;
 	vx_locks_inc(file_lock);
 
 	/*
@@ -1805,7 +1815,7 @@ int fcntl_setlk64(struct file *filp, unsigned int cmd, struct flock64 __user *l)
 	}
 
 	for (;;) {
-		error = __posix_lock_file(inode, file_lock);
+		error = __posix_lock_file(inode, file_lock, filp->f_xid);
 		if ((error != -EAGAIN) || (cmd == F_SETLK64))
 			break;
 		error = wait_event_interruptible(file_lock->fl_wait,

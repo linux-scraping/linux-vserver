@@ -352,7 +352,7 @@ static int parse_options (char * options,
 			break;
 #ifndef CONFIG_INOXID_NONE
 		case Opt_tagxid:
-			set_opt (sbi->s_mount_opt, TAG_XID);
+			set_opt (sbi->s_mount_opt, TAGXID);
 			break;
 #endif
 		case Opt_check:
@@ -642,7 +642,7 @@ static int ext2_fill_super(struct super_block *sb, void *data, int silent)
 	if (!parse_options ((char *) data, sbi))
 		goto failed_mount;
 
-	if (EXT2_SB(sb)->s_mount_opt & EXT2_MOUNT_TAG_XID)
+	if (EXT2_SB(sb)->s_mount_opt & EXT2_MOUNT_TAGXID)
 		sb->s_flags |= MS_TAGXID;
 	sb->s_flags = (sb->s_flags & ~MS_POSIXACL) |
 		((EXT2_SB(sb)->s_mount_opt & EXT2_MOUNT_POSIX_ACL) ?
@@ -930,6 +930,13 @@ static int ext2_remount (struct super_block * sb, int * flags, char * data)
 	 */
 	if (!parse_options (data, sbi))
 		return -EINVAL;
+
+	if ((sbi->s_mount_opt & EXT2_MOUNT_TAGXID) &&
+		!(sb->s_flags & MS_TAGXID)) {
+		printk("EXT2-fs: %s: tagxid not permitted on remount.\n",
+		       sb->s_id);
+		return -EINVAL;
+	}
 
 	sb->s_flags = (sb->s_flags & ~MS_POSIXACL) |
 		((sbi->s_mount_opt & EXT2_MOUNT_POSIX_ACL) ? MS_POSIXACL : 0);

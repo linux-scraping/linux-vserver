@@ -68,6 +68,7 @@
 
 #include <linux/xattr.h>
 #include <linux/namei.h>
+#include <linux/vserver/xid.h>
 
 
 /*
@@ -239,6 +240,7 @@ linvfs_lookup(
 		d_add(dentry, NULL);
 		return NULL;
 	}
+	vx_propagate_xid(nd, LINVFS_GET_IP(cvp));
 
 	return d_splice_alias(LINVFS_GET_IP(cvp), dentry);
 }
@@ -514,7 +516,7 @@ linvfs_setattr(
 		vattr.va_mask |= XFS_AT_GID;
 		vattr.va_gid = attr->ia_gid;
 	}
-	if (ia_valid & ATTR_XID) {
+	if ((ia_valid & ATTR_XID) && IS_TAGXID(inode)) {
 		vattr.va_mask |= XFS_AT_XID;
 		vattr.va_xid = attr->ia_xid;
 	}
