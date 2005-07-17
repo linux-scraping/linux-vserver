@@ -461,9 +461,10 @@ static int lease_alloc(struct file *filp, int type, struct file_lock **flp)
 	if (fl == NULL)
 		return -ENOMEM;
 
-	vxd_assert(filp->f_xid == vx_current_xid(),
-		"f_xid(%d) == current(%d)", filp->f_xid, vx_current_xid());
-	fl->fl_xid = filp->f_xid;
+	fl->fl_xid = vx_current_xid();
+	if (filp)
+		vxd_assert(filp->f_xid == fl->fl_xid,
+			"f_xid(%d) == fl_xid(%d)", filp->f_xid, fl->fl_xid);
 	vx_locks_inc(fl);
 	error = lease_init(filp, type, fl);
 	if (error)
