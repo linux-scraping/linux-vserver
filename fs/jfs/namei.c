@@ -20,6 +20,7 @@
 #include <linux/fs.h>
 #include <linux/ctype.h>
 #include <linux/quotaops.h>
+#include <linux/vserver/xid.h>
 #include "jfs_incore.h"
 #include "jfs_superblock.h"
 #include "jfs_inode.h"
@@ -1432,6 +1433,7 @@ static struct dentry *jfs_lookup(struct inode *dip, struct dentry *dentry, struc
 			iput(ip);
 		return ERR_PTR(-EACCES);
 	}
+	vx_propagate_xid(nd, ip);
 
 	if (JFS_SBI(dip->i_sb)->mntflag & JFS_OS2)
 		dentry->d_op = &jfs_ci_dentry_operations;

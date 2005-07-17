@@ -733,12 +733,7 @@ static int parse_options (char * options, struct super_block *sb,
 			break;
 #ifndef CONFIG_INOXID_NONE
 		case Opt_tagxid:
-			if (is_remount) {
-				printk(KERN_ERR "EXT3-fs: cannot specify "
-				       "tagxid on remount\n");
-				return 0;
-			}
-			set_opt (sbi->s_mount_opt, TAG_XID);
+			set_opt (sbi->s_mount_opt, TAGXID);
 			break;
 #endif
 		case Opt_check:
@@ -1344,7 +1339,7 @@ static int ext3_fill_super (struct super_block *sb, void *data, int silent)
 	if (!parse_options ((char *) data, sb, &journal_inum, NULL, 0))
 		goto failed_mount;
 
-	if (EXT3_SB(sb)->s_mount_opt & EXT3_MOUNT_TAG_XID)
+	if (EXT3_SB(sb)->s_mount_opt & EXT3_MOUNT_TAGXID)
 		sb->s_flags |= MS_TAGXID;
 
 	sb->s_flags = (sb->s_flags & ~MS_POSIXACL) |
@@ -2118,6 +2113,12 @@ static int ext3_remount (struct super_block * sb, int * flags, char * data)
 
 	if (sbi->s_mount_opt & EXT3_MOUNT_ABORT)
 		ext3_abort(sb, __FUNCTION__, "Abort forced by user");
+	if ((sbi->s_mount_opt & EXT3_MOUNT_TAGXID) &&
+		!(sb->s_flags & MS_TAGXID)) {
+		printk("EXT3-fs: %s: tagxid not permitted on remount.\n",
+			sb->s_id);
+		return -EINVAL;
+	}
 
 	sb->s_flags = (sb->s_flags & ~MS_POSIXACL) |
 		((sbi->s_mount_opt & EXT3_MOUNT_POSIX_ACL) ? MS_POSIXACL : 0);

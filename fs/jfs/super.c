@@ -321,9 +321,11 @@ static int parse_options(char *options, struct super_block *sb, s64 *newLVSize,
 			}
 			break;
 		}
+#ifndef CONFIG_INOXID_NONE
 		case Opt_tagxid:
 			*flag |= JFS_TAGXID;
 			break;
+#endif
 		default:
 			printk("jfs: Unrecognized mount option \"%s\" "
 					" or missing value\n", p);
@@ -354,6 +356,13 @@ static int jfs_remount(struct super_block *sb, int *flags, char *data)
 	if (!parse_options(data, sb, &newLVSize, &flag)) {
 		return -EINVAL;
 	}
+
+	if ((flag & JFS_TAGXID) && !(sb->s_flags & MS_TAGXID)) {
+		printk(KERN_ERR "JFS: %s: tagxid not permitted on remount.\n",
+			sb->s_id);
+		return -EINVAL;
+	}
+
 	if (newLVSize) {
 		if (sb->s_flags & MS_RDONLY) {
 			printk(KERN_ERR

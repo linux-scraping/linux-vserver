@@ -2842,9 +2842,7 @@ int ext3_setattr(struct dentry *dentry, struct iattr *attr)
 			inode->i_uid = attr->ia_uid;
 		if (attr->ia_valid & ATTR_GID)
 			inode->i_gid = attr->ia_gid;
-		if ((attr->ia_valid & ATTR_XID)
-			&& inode->i_sb
-			&& (inode->i_sb->s_flags & MS_TAGXID))
+		if ((attr->ia_valid & ATTR_XID) && IS_TAGXID(inode))
 			inode->i_xid = attr->ia_xid;
 		error = ext3_mark_inode_dirty(handle, inode);
 		ext3_journal_stop(handle);

@@ -17,6 +17,7 @@
 #include <linux/time.h>
 #include <linux/proc_fs.h>
 #include <linux/devpts_fs.h>
+// #include <linux/vserver/xid.h>
 #include <linux/vserver/debug.h>
 
 /* Taken over from the old code... */
@@ -130,7 +131,7 @@ int inode_setattr(struct inode * inode, struct iattr * attr)
 		inode->i_uid = attr->ia_uid;
 	if (ia_valid & ATTR_GID)
 		inode->i_gid = attr->ia_gid;
-	if (ia_valid & ATTR_XID)
+	if ((ia_valid & ATTR_XID) && IS_TAGXID(inode))
 		inode->i_xid = attr->ia_xid;
 	if (ia_valid & ATTR_ATIME)
 		inode->i_atime = timespec_trunc(attr->ia_atime,

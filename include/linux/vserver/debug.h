@@ -135,10 +135,10 @@ struct _vx_hist_entry {
 
 struct _vx_hist_entry *vxh_advance(void *loc);
 
-#define	VXH_HERE()		\
-	({ __label__ here;	\
-		here:;		\
-		&&here; })
+#define	VXH_HERE(__type)			\
+	({ __label__ __vxh_##__type;		\
+		__vxh_##__type:;		\
+		&&__vxh_##__type; })
 
 
 
@@ -157,7 +157,7 @@ static inline void __vxh_copy_vxi(struct _vx_hist_entry *entry, struct vx_info *
 	struct _vx_hist_entry *entry;		\
 						\
 	preempt_disable();			\
-	entry = vxh_advance(VXH_HERE());	\
+	entry = vxh_advance(VXH_HERE(__type));	\
 	__data;					\
 	entry->type = __type;			\
 	preempt_enable();
@@ -261,8 +261,11 @@ extern void vxh_dump_history(void);
 
 #ifdef	CONFIG_VSERVER_DEBUG
 #define vxd_assert_lock(l)	assert_spin_locked(l)
+#define vxd_assert(c,f,x...)	vxlprintk(!(c), \
+	"assertion [" f "] failed.", ##x, __FILE__, __LINE__)
 #else
 #define	vxd_assert_lock(l)	do { } while (0)
+#define vxd_assert(c,f,x...)	do { } while (0)
 #endif
 
 

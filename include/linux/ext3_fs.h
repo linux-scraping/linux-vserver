@@ -369,7 +369,7 @@ struct ext3_inode {
 #define EXT3_MOUNT_RESERVATION		0x10000	/* Preallocation */
 #define EXT3_MOUNT_BARRIER		0x20000 /* Use block barriers */
 #define EXT3_MOUNT_NOBH			0x40000 /* No bufferheads */
-#define EXT3_MOUNT_TAG_XID		(1<<24) /* Enable Context Tags */
+#define EXT3_MOUNT_TAGXID		(1<<24) /* Enable Context Tags */
 
 /* Compatibility, for having both ext2_fs.h and ext3_fs.h included at once */
 #ifndef _LINUX_EXT2_FS_H

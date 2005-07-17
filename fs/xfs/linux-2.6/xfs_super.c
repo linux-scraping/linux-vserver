@@ -650,6 +650,12 @@ linvfs_remount(
 	int			error;
 
 	VFS_PARSEARGS(vfsp, options, args, 1, error);
+	if ((args->flags & XFSMNT_TAGXID) &&
+		!(sb->s_flags & MS_TAGXID)) {
+		printk("XFS: %s: tagxid not permitted on remount.\n",
+			sb->s_id);
+		error = EINVAL;
+	}
 	if (!error)
 		VFS_MNTUPDATE(vfsp, flags, args, error);
 	kmem_free(args, sizeof(*args));

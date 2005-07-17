@@ -1820,8 +1820,10 @@ xfs_parseargs(
 			args->flags &= ~XFSMNT_IDELETE;
 		} else if (!strcmp(this_char, MNTOPT_NOIKEEP)) {
 			args->flags |= XFSMNT_IDELETE;
+#ifndef CONFIG_INOXID_NONE
 		} else if (!strcmp(this_char, MNTOPT_TAGXID)) {
 			args->flags |= XFSMNT_TAGXID;
+#endif
 		} else if (!strcmp(this_char, "osyncisdsync")) {
 			/* no-op, this is now the default */
 printk("XFS: osyncisdsync is now the default, option is deprecated.\n");
