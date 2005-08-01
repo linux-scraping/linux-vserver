@@ -46,7 +46,7 @@ static void exit_mm(struct task_struct * tsk);
 static void __unhash_process(struct task_struct *p)
 {
 	nr_threads--;
-	/* tasklist_lock is held, is this sufficient? */
+	/* tasklist_lock is held */
 	if (p->vx_info) {
 		atomic_dec(&p->vx_info->cvirt.nr_threads);
 		vx_nproc_dec(p);
