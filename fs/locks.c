@@ -2086,6 +2086,10 @@ int get_locks_status(char *buffer, char **start, off_t offset, int length)
 	list_for_each(tmp, &file_lock_list) {
 		struct list_head *btmp;
 		struct file_lock *fl = list_entry(tmp, struct file_lock, fl_link);
+
+		if (!vx_check(fl->fl_xid, VX_IDENT|VX_WATCH))
+			continue;
+
 		lock_get_status(q, fl, ++i, "");
 		move_lock_status(&q, &pos, offset);
 

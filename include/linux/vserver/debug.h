@@ -179,7 +179,7 @@ static inline void __name(struct vx_info *vxi)	\
 	entry->sc.data = data
 
 #define VXH_DATA(__name, __type)		\
-static inline 					\
+static inline					\
 void __name(struct vx_info *vxi, void *data)	\
 {						\
 	__VXH_BODY(__type, __VXH_DATA)		\
@@ -191,7 +191,7 @@ void __name(struct vx_info *vxi, void *data)	\
 	entry->ll.arg = arg
 
 #define VXH_LARG(__name, __type)		\
-static inline 					\
+static inline					\
 void __name(struct vx_info *vxi, long arg)	\
 {						\
 	__VXH_BODY(__type, __VXH_LARG)		\

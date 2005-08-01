@@ -17,7 +17,6 @@
 #include <linux/time.h>
 #include <linux/proc_fs.h>
 #include <linux/devpts_fs.h>
-// #include <linux/vserver/xid.h>
 #include <linux/vserver/debug.h>
 
 /* Taken over from the old code... */

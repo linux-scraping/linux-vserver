@@ -23,10 +23,10 @@ struct _vx_syslog {
 	wait_queue_head_t log_wait;
 	spinlock_t logbuf_lock;		/* lock for the log buffer */
 
-	unsigned long log_start; 	/* next char to be read by syslog() */
-	unsigned long con_start; 	/* next char to be sent to consoles */
-	unsigned long log_end;   	/* most-recently-written-char + 1 */
-	unsigned long logged_chars; 	/* #chars since last read+clear operation */
+	unsigned long log_start;	/* next char to be read by syslog() */
+	unsigned long con_start;	/* next char to be sent to consoles */
+	unsigned long log_end;	/* most-recently-written-char + 1 */
+	unsigned long logged_chars;	/* #chars since last read+clear operation */
 
 	char log_buf[1024];
 };
