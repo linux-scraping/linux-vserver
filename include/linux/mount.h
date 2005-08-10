@@ -12,6 +12,7 @@
 #define _LINUX_MOUNT_H
 #ifdef __KERNEL__
 
+#include <linux/types.h>
 #include <linux/list.h>
 #include <linux/spinlock.h>
 #include <asm/atomic.h>
@@ -19,6 +20,9 @@
 #define MNT_NOSUID	1
 #define MNT_NODEV	2
 #define MNT_NOEXEC	4
+#define MNT_RDONLY	8
+#define MNT_NOATIME	16
+#define MNT_NODIRATIME	32
 #define MNT_XID		256
 
 struct vfsmount
@@ -35,10 +39,14 @@ struct vfsmount
 	int mnt_expiry_mark;		/* true if marked for expiry */
 	char *mnt_devname;		/* Name of device e.g. /dev/dsk/hda1 */
 	struct list_head mnt_list;
-	struct list_head mnt_fslink;	/* link in fs-specific expiry list */
+	struct list_head mnt_expire;	/* link in fs-specific expiry list */
 	struct namespace *mnt_namespace; /* containing namespace */
 	xid_t mnt_xid;			/* xid tagging used for vfsmount */
 };
+
+#define	MNT_IS_RDONLY(m)	((m) && ((m)->mnt_flags & MNT_RDONLY))
+#define	MNT_IS_NOATIME(m)	((m) && ((m)->mnt_flags & MNT_NOATIME))
+#define	MNT_IS_NODIRATIME(m)	((m) && ((m)->mnt_flags & MNT_NODIRATIME))
 
 static inline struct vfsmount *mntget(struct vfsmount *mnt)
 {
@@ -49,7 +57,7 @@ static inline struct vfsmount *mntget(struct vfsmount *mnt)
 
 extern void __mntput(struct vfsmount *mnt);
 
-static inline void _mntput(struct vfsmount *mnt)
+static inline void mntput_no_expire(struct vfsmount *mnt)
 {
 	if (mnt) {
 		if (atomic_dec_and_test(&mnt->mnt_count))
@@ -61,7 +69,7 @@ static inline void mntput(struct vfsmount *mnt)
 {
 	if (mnt) {
 		mnt->mnt_expiry_mark = 0;
-		_mntput(mnt);
+		mntput_no_expire(mnt);
 	}
 }
 
@@ -78,6 +86,7 @@ extern int do_add_mount(struct vfsmount *newmnt, struct nameidata *nd,
 extern void mark_mounts_for_expiry(struct list_head *mounts);
 
 extern spinlock_t vfsmount_lock;
+extern dev_t name_to_dev_t(char *name);
 
 #endif
 #endif /* _LINUX_MOUNT_H */

@@ -9,6 +9,7 @@ enum {
 	VCI_KCBIT_HARDCPU_IDLE,
 
 	VCI_KCBIT_LEGACY_VERSION,
+	VCI_KCBIT_COWBL,
 
 	VCI_KCBIT_DEBUG = 16,
 	VCI_KCBIT_HISTORY = 20,
@@ -39,6 +40,9 @@ static inline uint32_t vci_kernel_config(void)
 #endif
 #ifdef	CONFIG_VSERVER_HARDCPU_IDLE
 	(1 << VCI_KCBIT_HARDCPU_IDLE) |
+#endif
+#ifdef	CONFIG_VSERVER_COWBL
+	(1 << VCI_KCBIT_COWBL) |
 #endif
 
 	/* debug options */

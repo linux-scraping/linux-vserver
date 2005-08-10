@@ -222,6 +222,37 @@ pci_find_parent_resource(const struct pci_dev *dev, struct resource *res)
 }
 
 /**
+ * pci_restore_bars - restore a devices BAR values (e.g. after wake-up)
+ * @dev: PCI device to have its BARs restored
+ *
+ * Restore the BAR values for a given device, so as to make it
+ * accessible by its driver.
+ */
+void
+pci_restore_bars(struct pci_dev *dev)
+{
+	int i, numres;
+
+	switch (dev->hdr_type) {
+	case PCI_HEADER_TYPE_NORMAL:
+		numres = 6;
+		break;
+	case PCI_HEADER_TYPE_BRIDGE:
+		numres = 2;
+		break;
+	case PCI_HEADER_TYPE_CARDBUS:
+		numres = 1;
+		break;
+	default:
+		/* Should never get here, but just in case... */
+		return;
+	}
+
+	for (i = 0; i < numres; i ++)
+		pci_update_resource(dev, &dev->resource[i], i);
+}
+
+/**
  * pci_set_power_state - Set the power state of a PCI device
  * @dev: PCI device to be suspended
  * @state: PCI power state (D0, D1, D2, D3hot, D3cold) we're entering
@@ -235,11 +266,11 @@ pci_find_parent_resource(const struct pci_dev *dev, struct resource *res)
  * -EIO if device does not support PCI PM.
  * 0 if we can successfully change the power state.
  */
-
+int (*platform_pci_set_power_state)(struct pci_dev *dev, pci_power_t t);
 int
 pci_set_power_state(struct pci_dev *dev, pci_power_t state)
 {
-	int pm;
+	int pm, need_restore = 0;
 	u16 pmcsr, pmc;
 
 	/* bound the state we're entering */
@@ -278,14 +309,17 @@ pci_set_power_state(struct pci_dev *dev, pci_power_t state)
 			return -EIO;
 	}
 
+	pci_read_config_word(dev, pm + PCI_PM_CTRL, &pmcsr);
+
 	/* If we're in D3, force entire word to 0.
 	 * This doesn't affect PME_Status, disables PME_En, and
 	 * sets PowerState to 0.
 	 */
-	if (dev->current_state >= PCI_D3hot)
+	if (dev->current_state >= PCI_D3hot) {
+		if (!(pmcsr & PCI_PM_CTRL_NO_SOFT_RESET))
+			need_restore = 1;
 		pmcsr = 0;
-	else {
-		pci_read_config_word(dev, pm + PCI_PM_CTRL, &pmcsr);
+	} else {
 		pmcsr &= ~PCI_PM_CTRL_STATE_MASK;
 		pmcsr |= state;
 	}
@@ -299,11 +333,36 @@ pci_set_power_state(struct pci_dev *dev, pci_power_t state)
 		msleep(10);
 	else if (state == PCI_D2 || dev->current_state == PCI_D2)
 		udelay(200);
+
+	/*
+	 * Give firmware a chance to be called, such as ACPI _PRx, _PSx
+	 * Firmware method after natice method ?
+	 */
+	if (platform_pci_set_power_state)
+		platform_pci_set_power_state(dev, state);
+
 	dev->current_state = state;
+
+	/* According to section 5.4.1 of the "PCI BUS POWER MANAGEMENT
+	 * INTERFACE SPECIFICATION, REV. 1.2", a device transitioning
+	 * from D3hot to D0 _may_ perform an internal reset, thereby
+	 * going to "D0 Uninitialized" rather than "D0 Initialized".
+	 * For example, at least some versions of the 3c905B and the
+	 * 3c556B exhibit this behaviour.
+	 *
+	 * At least some laptop BIOSen (e.g. the Thinkpad T21) leave
+	 * devices in a D3hot state at boot.  Consequently, we need to
+	 * restore at least the BARs so that the device will be
+	 * accessible to its driver.
+	 */
+	if (need_restore)
+		pci_restore_bars(dev);
 
 	return 0;
 }
 
+int (*platform_pci_choose_state)(struct pci_dev *dev, pm_message_t state);
+ 
 /**
  * pci_choose_state - Choose the power state of a PCI device
  * @dev: PCI device to be suspended
@@ -316,10 +375,17 @@ pci_set_power_state(struct pci_dev *dev, pci_power_t state)
 
 pci_power_t pci_choose_state(struct pci_dev *dev, pm_message_t state)
 {
+	int ret;
+
 	if (!pci_find_capability(dev, PCI_CAP_ID_PM))
 		return PCI_D0;
 
-	switch (state) {
+	if (platform_pci_choose_state) {
+		ret = platform_pci_choose_state(dev, state);
+		if (ret >= 0)
+			state = ret;
+	}
+ 	switch (state) {
 	case 0: return PCI_D0;
 	case 3: return PCI_D3hot;
 	default:
@@ -334,10 +400,6 @@ EXPORT_SYMBOL(pci_choose_state);
 /**
  * pci_save_state - save the PCI configuration space of a device before suspending
  * @dev: - PCI device that we're dealing with
- * @buffer: - buffer to hold config space context
- *
- * @buffer must be large enough to hold the entire PCI 2.2 config space 
- * (>= 64 bytes).
  */
 int
 pci_save_state(struct pci_dev *dev)
@@ -352,8 +414,6 @@ pci_save_state(struct pci_dev *dev)
 /** 
  * pci_restore_state - Restore the saved state of a PCI device
  * @dev: - PCI device that we're dealing with
- * @buffer: - saved PCI config space
- *
  */
 int 
 pci_restore_state(struct pci_dev *dev)
@@ -795,6 +855,7 @@ struct pci_dev *isa_bridge;
 EXPORT_SYMBOL(isa_bridge);
 #endif
 
+EXPORT_SYMBOL_GPL(pci_restore_bars);
 EXPORT_SYMBOL(pci_enable_device_bars);
 EXPORT_SYMBOL(pci_enable_device);
 EXPORT_SYMBOL(pci_disable_device);

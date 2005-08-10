@@ -135,7 +135,7 @@ static int shaper_start_xmit(struct sk_buff *skb, struct net_device *dev)
 {
 	struct shaper *shaper = dev->priv;
  	struct sk_buff *ptr;
-
+  
 	spin_lock(&shaper->lock);
  	ptr=shaper->sendq.prev;
  	

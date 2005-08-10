@@ -63,7 +63,7 @@ struct vfsmount *alloc_vfsmnt(const char *name)
 		INIT_LIST_HEAD(&mnt->mnt_child);
 		INIT_LIST_HEAD(&mnt->mnt_mounts);
 		INIT_LIST_HEAD(&mnt->mnt_list);
-		INIT_LIST_HEAD(&mnt->mnt_fslink);
+		INIT_LIST_HEAD(&mnt->mnt_expire);
 		if (name) {
 			int size = strlen(name)+1;
 			char *newname = kmalloc(size, GFP_KERNEL);
@@ -162,14 +162,14 @@ clone_mnt(struct vfsmount *old, struct dentry *root)
 		mnt->mnt_root = dget(root);
 		mnt->mnt_mountpoint = mnt->mnt_root;
 		mnt->mnt_parent = mnt;
-		mnt->mnt_namespace = old->mnt_namespace;
+		mnt->mnt_namespace = current->namespace;
 		mnt->mnt_xid = old->mnt_xid;
 
 		/* stick the duplicate mount on the same expiry list
 		 * as the original if that was on one */
 		spin_lock(&vfsmount_lock);
-		if (!list_empty(&old->mnt_fslink))
-			list_add(&mnt->mnt_fslink, &old->mnt_fslink);
+		if (!list_empty(&old->mnt_expire))
+			list_add(&mnt->mnt_expire, &old->mnt_expire);
 		spin_unlock(&vfsmount_lock);
 	}
 	return mnt;
@@ -249,24 +249,27 @@ static int show_vfsmnt(struct seq_file *m, void *v)
 	struct vfsmount *mnt = v;
 	int err = 0;
 	static struct proc_fs_info {
-		int flag;
-		char *str;
-	} fs_info[] = {
-		{ MS_SYNCHRONOUS, ",sync" },
-		{ MS_DIRSYNC, ",dirsync" },
-		{ MS_MANDLOCK, ",mand" },
-		{ MS_NOATIME, ",noatime" },
-		{ MS_NODIRATIME, ",nodiratime" },
-		{ MS_TAGXID, ",tagxid" },
-		{ 0, NULL }
+		int s_flag;
+		int mnt_flag;
+		char *set_str;
+		char *unset_str;
 	};
-	static struct proc_fs_info mnt_info[] = {
-		{ MNT_NOSUID, ",nosuid" },
-		{ MNT_NODEV, ",nodev" },
-		{ MNT_NOEXEC, ",noexec" },
-		{ 0, NULL }
+	static struct proc_fs_info fs_info[] = {
+		{ MS_RDONLY, MNT_RDONLY, "ro", "rw" },
+		{ MS_SYNCHRONOUS, 0, ",sync", NULL },
+		{ MS_DIRSYNC, 0, ",dirsync", NULL },
+		{ MS_MANDLOCK, 0, ",mand", NULL },
+		{ MS_TAGXID, 0, ",tagxid", NULL },
+		{ MS_NOATIME, MNT_NOATIME, ",noatime", NULL },
+		{ MS_NODIRATIME, MNT_NODIRATIME, ",nodiratime", NULL },
+		{ 0, MNT_NOSUID, ",nosuid", NULL },
+		{ 0, MNT_NODEV, ",nodev", NULL },
+		{ 0, MNT_NOEXEC, ",noexec", NULL },
+		{ 0, 0, NULL, NULL }
 	};
-	struct proc_fs_info *fs_infop;
+	struct proc_fs_info *p;
+	unsigned long s_flags = mnt->mnt_sb->s_flags;
+	int mnt_flags = mnt->mnt_flags;
 
 	if (vx_flags(VXF_HIDE_MOUNT, 0))
 		return 0;
@@ -283,14 +286,15 @@ static int show_vfsmnt(struct seq_file *m, void *v)
 		seq_putc(m, ' ');
 	}
 	mangle(m, mnt->mnt_sb->s_type->name);
-	seq_puts(m, mnt->mnt_sb->s_flags & MS_RDONLY ? " ro" : " rw");
-	for (fs_infop = fs_info; fs_infop->flag; fs_infop++) {
-		if (mnt->mnt_sb->s_flags & fs_infop->flag)
-			seq_puts(m, fs_infop->str);
-	}
-	for (fs_infop = mnt_info; fs_infop->flag; fs_infop++) {
-		if (mnt->mnt_flags & fs_infop->flag)
-			seq_puts(m, fs_infop->str);
+	seq_putc(m, ' ');
+	for (p = fs_info; (p->s_flag | p->mnt_flag) ; p++) {
+		if ((s_flags & p->s_flag) || (mnt_flags & p->mnt_flag)) {
+			if (p->set_str)
+				seq_puts(m, p->set_str);
+		} else {
+			if (p->unset_str)
+				seq_puts(m, p->unset_str);
+		}
 	}
 	if (mnt->mnt_flags & MNT_XID)
 		seq_printf(m, ",xid=%d", mnt->mnt_xid);
@@ -386,7 +390,7 @@ static inline void __umount_list(struct list_head *kill)
 	while (!list_empty(kill)) {
 		mnt = list_entry(kill->next, struct vfsmount, mnt_list);
 		list_del_init(&mnt->mnt_list);
-		list_del_init(&mnt->mnt_fslink);
+		list_del_init(&mnt->mnt_expire);
 		if (mnt->mnt_parent == mnt) {
 			spin_unlock(&vfsmount_lock);
 		} else {
@@ -408,6 +412,7 @@ void umount_tree(struct vfsmount *mnt)
 	for (p = mnt; p; p = next_mnt(p, mnt)) {
 		list_del(&p->mnt_list);
 		list_add(&p->mnt_list, &kill);
+		p->mnt_namespace = NULL;
 	}
 	__umount_list(&kill);
 }
@@ -422,6 +427,7 @@ void umount_unused(struct vfsmount *mnt, struct fs_struct *fs)
 			continue;
 		list_del(&p->mnt_list);
 		list_add(&p->mnt_list, &kill);
+		p->mnt_namespace = NULL;
 	}
 	__umount_list(&kill);
 }
@@ -682,7 +688,8 @@ out_unlock:
 /*
  * do loopback mount.
  */
-static int do_loopback(struct nameidata *nd, char *old_name, xid_t xid, int flags)
+static int do_loopback(struct nameidata *nd, char *old_name, xid_t xid,
+	unsigned long flags, int mnt_flags)
 {
 	struct nameidata old_nd;
 	struct vfsmount *mnt = NULL;
@@ -709,7 +716,7 @@ static int do_loopback(struct nameidata *nd, char *old_name, xid_t xid, int flag
 	if (mnt) {
 		/* stop bind mounts from expiring */
 		spin_lock(&vfsmount_lock);
-		list_del_init(&mnt->mnt_fslink);
+		list_del_init(&mnt->mnt_expire);
 		spin_unlock(&vfsmount_lock);
 
 		if (flags & MS_XID) {
@@ -723,6 +730,7 @@ static int do_loopback(struct nameidata *nd, char *old_name, xid_t xid, int flag
 			spin_unlock(&vfsmount_lock);
 		} else
 			mntput(mnt);
+		mnt->mnt_flags = mnt_flags;
 	}
 
 	up_write(&current->namespace->sem);
@@ -817,7 +825,7 @@ static int do_move_mount(struct nameidata *nd, char *old_name)
 
 	/* if the mount is moved, it should no longer be expire
 	 * automatically */
-	list_del_init(&old_nd.mnt->mnt_fslink);
+	list_del_init(&old_nd.mnt->mnt_expire);
 out2:
 	spin_unlock(&vfsmount_lock);
 out1:
@@ -881,12 +889,13 @@ int do_add_mount(struct vfsmount *newmnt, struct nameidata *nd,
 		goto unlock;
 
 	newmnt->mnt_flags = mnt_flags;
+	newmnt->mnt_namespace = current->namespace;
 	err = graft_tree(newmnt, nd);
 
 	if (err == 0 && fslist) {
 		/* add to the specified expiration list */
 		spin_lock(&vfsmount_lock);
-		list_add_tail(&newmnt->mnt_fslink, fslist);
+		list_add_tail(&newmnt->mnt_expire, fslist);
 		spin_unlock(&vfsmount_lock);
 	}
 
@@ -897,6 +906,54 @@ unlock:
 }
 
 EXPORT_SYMBOL_GPL(do_add_mount);
+
+static void expire_mount(struct vfsmount *mnt, struct list_head *mounts)
+{
+	spin_lock(&vfsmount_lock);
+
+	/*
+	 * Check if mount is still attached, if not, let whoever holds it deal
+	 * with the sucker
+	 */
+	if (mnt->mnt_parent == mnt) {
+		spin_unlock(&vfsmount_lock);
+		return;
+	}
+
+	/*
+	 * Check that it is still dead: the count should now be 2 - as
+	 * contributed by the vfsmount parent and the mntget above
+	 */
+	if (atomic_read(&mnt->mnt_count) == 2) {
+		struct nameidata old_nd;
+
+		/* delete from the namespace */
+		list_del_init(&mnt->mnt_list);
+		mnt->mnt_namespace = NULL;
+		detach_mnt(mnt, &old_nd);
+		spin_unlock(&vfsmount_lock);
+		path_release(&old_nd);
+
+		/*
+		 * Now lay it to rest if this was the last ref on the superblock
+		 */
+		if (atomic_read(&mnt->mnt_sb->s_active) == 1) {
+			/* last instance - try to be smart */
+			lock_kernel();
+			DQUOT_OFF(mnt->mnt_sb);
+			acct_auto_close(mnt->mnt_sb);
+			unlock_kernel();
+		}
+		mntput(mnt);
+	} else {
+		/*
+		 * Someone brought it back to life whilst we didn't have any
+		 * locks held so return it to the expiration list
+		 */
+		list_add_tail(&mnt->mnt_expire, mounts);
+		spin_unlock(&vfsmount_lock);
+	}
+}
 
 /*
  * process a list of expirable mountpoints with the intent of discarding any
@@ -920,13 +977,13 @@ void mark_mounts_for_expiry(struct list_head *mounts)
 	 * - still marked for expiry (marked on the last call here; marks are
 	 *   cleared by mntput())
 	 */
-	list_for_each_entry_safe(mnt, next, mounts, mnt_fslink) {
+	list_for_each_entry_safe(mnt, next, mounts, mnt_expire) {
 		if (!xchg(&mnt->mnt_expiry_mark, 1) ||
 		    atomic_read(&mnt->mnt_count) != 1)
 			continue;
 
 		mntget(mnt);
-		list_move(&mnt->mnt_fslink, &graveyard);
+		list_move(&mnt->mnt_expire, &graveyard);
 	}
 
 	/*
@@ -936,61 +993,19 @@ void mark_mounts_for_expiry(struct list_head *mounts)
 	 * - dispose of the corpse
 	 */
 	while (!list_empty(&graveyard)) {
-		mnt = list_entry(graveyard.next, struct vfsmount, mnt_fslink);
-		list_del_init(&mnt->mnt_fslink);
+		mnt = list_entry(graveyard.next, struct vfsmount, mnt_expire);
+		list_del_init(&mnt->mnt_expire);
 
 		/* don't do anything if the namespace is dead - all the
 		 * vfsmounts from it are going away anyway */
 		namespace = mnt->mnt_namespace;
-		if (!namespace || atomic_read(&namespace->count) <= 0)
+		if (!namespace || !namespace->root)
 			continue;
 		get_namespace(namespace);
 
 		spin_unlock(&vfsmount_lock);
 		down_write(&namespace->sem);
-		spin_lock(&vfsmount_lock);
-
-		/* check that it is still dead: the count should now be 2 - as
-		 * contributed by the vfsmount parent and the mntget above */
-		if (atomic_read(&mnt->mnt_count) == 2) {
-			struct vfsmount *xdmnt;
-			struct dentry *xdentry;
-
-			/* delete from the namespace */
-			list_del_init(&mnt->mnt_list);
-			list_del_init(&mnt->mnt_child);
-			list_del_init(&mnt->mnt_hash);
-			mnt->mnt_mountpoint->d_mounted--;
-
-			xdentry = mnt->mnt_mountpoint;
-			mnt->mnt_mountpoint = mnt->mnt_root;
-			xdmnt = mnt->mnt_parent;
-			mnt->mnt_parent = mnt;
-
-			spin_unlock(&vfsmount_lock);
-
-			mntput(xdmnt);
-			dput(xdentry);
-
-			/* now lay it to rest if this was the last ref on the
-			 * superblock */
-			if (atomic_read(&mnt->mnt_sb->s_active) == 1) {
-				/* last instance - try to be smart */
-				lock_kernel();
-				DQUOT_OFF(mnt->mnt_sb);
-				acct_auto_close(mnt->mnt_sb);
-				unlock_kernel();
-			}
-
-			mntput(mnt);
-		} else {
-			/* someone brought it back to life whilst we didn't
-			 * have any locks held so return it to the expiration
-			 * list */
-			list_add_tail(&mnt->mnt_fslink, mounts);
-			spin_unlock(&vfsmount_lock);
-		}
-
+		expire_mount(mnt, mounts);
 		up_write(&namespace->sem);
 
 		mntput(mnt);
@@ -1110,12 +1125,18 @@ long do_mount(char * dev_name, char * dir_name, char *type_page,
 	}
 
 	/* Separate the per-mountpoint flags */
+	if (flags & MS_RDONLY)
+		mnt_flags |= MNT_RDONLY;
 	if (flags & MS_NOSUID)
 		mnt_flags |= MNT_NOSUID;
 	if (flags & MS_NODEV)
 		mnt_flags |= MNT_NODEV;
 	if (flags & MS_NOEXEC)
 		mnt_flags |= MNT_NOEXEC;
+	if (flags & MS_NOATIME)
+		mnt_flags |= MNT_NOATIME;
+	if (flags & MS_NODIRATIME)
+		mnt_flags |= MNT_NODIRATIME;
 	flags &= ~(MS_NOSUID|MS_NOEXEC|MS_NODEV|MS_ACTIVE);
 
 	if (vx_ccaps(VXC_SECURE_MOUNT))
@@ -1134,7 +1155,7 @@ long do_mount(char * dev_name, char * dir_name, char *type_page,
 		retval = do_remount(&nd, flags & ~MS_REMOUNT, mnt_flags,
 				    data_page, xid);
 	else if (flags & MS_BIND)
-		retval = do_loopback(&nd, dev_name, xid, flags);
+		retval = do_loopback(&nd, dev_name, xid, flags, mnt_flags);
 	else if (flags & MS_MOVE)
 		retval = do_move_mount(&nd, dev_name);
 	else
@@ -1535,16 +1556,12 @@ void __init mnt_init(unsigned long mempages)
 
 void __put_namespace(struct namespace *namespace)
 {
-	struct vfsmount *mnt;
-
+	struct vfsmount *root = namespace->root;
+	namespace->root = NULL;
+	spin_unlock(&vfsmount_lock);
 	down_write(&namespace->sem);
 	spin_lock(&vfsmount_lock);
-
-	list_for_each_entry(mnt, &namespace->list, mnt_list) {
-		mnt->mnt_namespace = NULL;
-	}
-
-	umount_tree(namespace->root);
+	umount_tree(root);
 	spin_unlock(&vfsmount_lock);
 	up_write(&namespace->sem);
 	kfree(namespace);

@@ -10,7 +10,7 @@
 #include <linux/file.h>
 #include <linux/smp_lock.h>
 #include <linux/quotaops.h>
-#include <linux/dnotify.h>
+#include <linux/fsnotify.h>
 #include <linux/module.h>
 #include <linux/slab.h>
 #include <linux/tty.h>
@@ -21,6 +21,7 @@
 #include <linux/vfs.h>
 #include <asm/uaccess.h>
 #include <linux/fs.h>
+#include <linux/personality.h>
 #include <linux/pagemap.h>
 #include <linux/syscalls.h>
 #include <linux/vs_limit.h>
@@ -244,7 +245,7 @@ static inline long do_sys_truncate(const char __user * path, loff_t length)
 		goto dput_and_out;
 
 	error = -EROFS;
-	if (IS_RDONLY(inode))
+	if (IS_RDONLY(inode) || MNT_IS_RDONLY(nd.mnt))
 		goto dput_and_out;
 
 	error = -EPERM;
@@ -368,7 +369,7 @@ asmlinkage long sys_utime(char __user * filename, struct utimbuf __user * times)
 	inode = nd.dentry->d_inode;
 
 	error = -EROFS;
-	if (IS_RDONLY(inode))
+	if (IS_RDONLY(inode) || MNT_IS_RDONLY(nd.mnt))
 		goto dput_and_out;
 
 	/* Don't worry, the checks are done in inode_change_ok() */
@@ -425,7 +426,7 @@ long do_utimes(char __user * filename, struct timeval * times)
 	inode = nd.dentry->d_inode;
 
 	error = -EROFS;
-	if (IS_RDONLY(inode))
+	if (IS_RDONLY(inode) || MNT_IS_RDONLY(nd.mnt))
 		goto dput_and_out;
 
 	/* Don't worry, the checks are done in inode_change_ok() */
@@ -507,7 +508,8 @@ asmlinkage long sys_access(const char __user * filename, int mode)
 	if (!res) {
 		res = permission(nd.dentry->d_inode, mode, &nd);
 		/* SuS v2 requires we report a read only fs too */
-		if(!res && (mode & S_IWOTH) && IS_RDONLY(nd.dentry->d_inode)
+		if(!res && (mode & S_IWOTH)
+		   && (IS_RDONLY(nd.dentry->d_inode) || MNT_IS_RDONLY(nd.mnt))
 		   && !special_file(nd.dentry->d_inode->i_mode))
 			res = -EROFS;
 		path_release(&nd);
@@ -613,7 +615,7 @@ asmlinkage long sys_fchmod(unsigned int fd, mode_t mode)
 	inode = dentry->d_inode;
 
 	err = -EROFS;
-	if (IS_RDONLY(inode))
+	if (IS_RDONLY(inode) || MNT_IS_RDONLY(file->f_vfsmnt))
 		goto out_putf;
 	err = -EPERM;
 	if (IS_IMMUTABLE(inode) || IS_APPEND(inode))
@@ -645,7 +647,7 @@ asmlinkage long sys_chmod(const char __user * filename, mode_t mode)
 	inode = nd.dentry->d_inode;
 
 	error = -EROFS;
-	if (IS_RDONLY(inode))
+	if (IS_RDONLY(inode) || MNT_IS_RDONLY(nd.mnt))
 		goto dput_and_out;
 
 	error = -EPERM;
@@ -666,7 +668,8 @@ out:
 	return error;
 }
 
-static int chown_common(struct dentry * dentry, uid_t user, gid_t group)
+static int chown_common(struct dentry *dentry, struct vfsmount *mnt,
+	uid_t user, gid_t group)
 {
 	struct inode * inode;
 	int error;
@@ -678,7 +681,7 @@ static int chown_common(struct dentry * dentry, uid_t user, gid_t group)
 		goto out;
 	}
 	error = -EROFS;
-	if (IS_RDONLY(inode))
+	if (IS_RDONLY(inode) || MNT_IS_RDONLY(mnt))
 		goto out;
 	error = -EPERM;
 	if (IS_IMMUTABLE(inode) || IS_APPEND(inode))
@@ -708,7 +711,7 @@ asmlinkage long sys_chown(const char __user * filename, uid_t user, gid_t group)
 
 	error = user_path_walk(filename, &nd);
 	if (!error) {
-		error = chown_common(nd.dentry, user, group);
+		error = chown_common(nd.dentry, nd.mnt, user, group);
 		path_release(&nd);
 	}
 	return error;
@@ -721,7 +724,7 @@ asmlinkage long sys_lchown(const char __user * filename, uid_t user, gid_t group
 
 	error = user_path_walk_link(filename, &nd);
 	if (!error) {
-		error = chown_common(nd.dentry, user, group);
+		error = chown_common(nd.dentry, nd.mnt, user, group);
 		path_release(&nd);
 	}
 	return error;
@@ -735,7 +738,7 @@ asmlinkage long sys_fchown(unsigned int fd, uid_t user, gid_t group)
 
 	file = fget(fd);
 	if (file) {
-		error = chown_common(file->f_dentry, user, group);
+		error = chown_common(file->f_dentry, file->f_vfsmnt, user, group);
 		fput(file);
 	}
 	return error;
@@ -764,7 +767,7 @@ struct file *filp_open(const char * filename, int flags, int mode)
 	if ((namei_flags+1) & O_ACCMODE)
 		namei_flags++;
 	if (namei_flags & O_TRUNC)
-		namei_flags |= 2;
+		namei_flags |= FMODE_WRITE;
 
 	error = open_namei(filename, namei_flags, mode, &nd);
 	if (!error)
@@ -812,7 +815,9 @@ struct file *dentry_open(struct dentry *dentry, struct vfsmount *mnt, int flags)
 
 	/* NB: we're sure to have correct a_ops only after f_op->open */
 	if (f->f_flags & O_DIRECT) {
-		if (!f->f_mapping->a_ops || !f->f_mapping->a_ops->direct_IO) {
+		if (!f->f_mapping->a_ops ||
+		    ((!f->f_mapping->a_ops->direct_IO) &&
+		    (!f->f_mapping->a_ops->get_xip_page))) {
 			fput(f);
 			f = ERR_PTR(-EINVAL);
 		}
@@ -940,31 +945,28 @@ EXPORT_SYMBOL(fd_install);
 asmlinkage long sys_open(const char __user * filename, int flags, int mode)
 {
 	char * tmp;
-	int fd, error;
+	int fd;
 
-#if BITS_PER_LONG != 32
-	flags |= O_LARGEFILE;
-#endif
+	if (force_o_largefile())
+		flags |= O_LARGEFILE;
+
 	tmp = getname(filename);
 	fd = PTR_ERR(tmp);
 	if (!IS_ERR(tmp)) {
 		fd = get_unused_fd();
 		if (fd >= 0) {
 			struct file *f = filp_open(tmp, flags, mode);
-			error = PTR_ERR(f);
-			if (IS_ERR(f))
-				goto out_error;
-			fd_install(fd, f);
+			if (IS_ERR(f)) {
+				put_unused_fd(fd);
+				fd = PTR_ERR(f);
+			} else {
+				fsnotify_open(f->f_dentry);
+				fd_install(fd, f);
+			}
 		}
-out:
 		putname(tmp);
 	}
 	return fd;
-
-out_error:
-	put_unused_fd(fd);
-	fd = error;
-	goto out;
 }
 EXPORT_SYMBOL_GPL(sys_open);
 
@@ -987,23 +989,15 @@ asmlinkage long sys_creat(const char __user * pathname, int mode)
  */
 int filp_close(struct file *filp, fl_owner_t id)
 {
-	int retval;
-
-	/* Report and clear outstanding errors */
-	retval = filp->f_error;
-	if (retval)
-		filp->f_error = 0;
+	int retval = 0;
 
 	if (!file_count(filp)) {
 		printk(KERN_ERR "VFS: Close: file count is 0\n");
-		return retval;
+		return 0;
 	}
 
-	if (filp->f_op && filp->f_op->flush) {
-		int err = filp->f_op->flush(filp);
-		if (!retval)
-			retval = err;
-	}
+	if (filp->f_op && filp->f_op->flush)
+		retval = filp->f_op->flush(filp);
 
 	dnotify_flush(filp, id);
 	locks_remove_posix(filp, id);

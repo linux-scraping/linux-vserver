@@ -125,7 +125,7 @@ enum {
 	Opt_soft, Opt_hard, Opt_intr,
 	Opt_nointr, Opt_posix, Opt_noposix, Opt_cto, Opt_nocto, Opt_ac, 
 	Opt_noac, Opt_lock, Opt_nolock, Opt_v2, Opt_v3, Opt_udp, Opt_tcp,
-	Opt_tagxid,
+	Opt_acl, Opt_noacl, Opt_tagxid,
 	/* Error token */
 	Opt_err
 };
@@ -160,6 +160,8 @@ static match_table_t __initdata tokens = {
 	{Opt_udp, "udp"},
 	{Opt_tcp, "proto=tcp"},
 	{Opt_tcp, "tcp"},
+	{Opt_acl, "acl"},
+	{Opt_noacl, "noacl"},
 	{Opt_tagxid, "tagxid"},
 	{Opt_err, NULL}
 	
@@ -268,6 +270,12 @@ static int __init root_nfs_parse(char *name, char *buf)
 				break;
 			case Opt_tcp:
 				nfs_data.flags |= NFS_MOUNT_TCP;
+				break;
+			case Opt_acl:
+				nfs_data.flags &= ~NFS_MOUNT_NOACL;
+				break;
+			case Opt_noacl:
+				nfs_data.flags |= NFS_MOUNT_NOACL;
 				break;
 #ifndef CONFIG_INOXID_NONE
 			case Opt_tagxid:

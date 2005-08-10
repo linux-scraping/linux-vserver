@@ -229,13 +229,7 @@ static struct dentry_operations cpuset_dops = {
 
 static struct dentry *cpuset_get_dentry(struct dentry *parent, const char *name)
 {
-	struct qstr qstr;
-	struct dentry *d;
-
-	qstr.name = name;
-	qstr.len = strlen(name);
-	qstr.hash = full_name_hash(name, qstr.len);
-	d = lookup_hash(&qstr, parent);
+	struct dentry *d = lookup_one_len(name, parent, strlen(name));
 	if (!IS_ERR(d))
 		d->d_op = &cpuset_dops;
 	return d;
@@ -602,10 +596,62 @@ static int validate_change(const struct cpuset *cur, const struct cpuset *trial)
 	return 0;
 }
 
+/*
+ * For a given cpuset cur, partition the system as follows
+ * a. All cpus in the parent cpuset's cpus_allowed that are not part of any
+ *    exclusive child cpusets
+ * b. All cpus in the current cpuset's cpus_allowed that are not part of any
+ *    exclusive child cpusets
+ * Build these two partitions by calling partition_sched_domains
+ *
+ * Call with cpuset_sem held.  May nest a call to the
+ * lock_cpu_hotplug()/unlock_cpu_hotplug() pair.
+ */
+static void update_cpu_domains(struct cpuset *cur)
+{
+	struct cpuset *c, *par = cur->parent;
+	cpumask_t pspan, cspan;
+
+	if (par == NULL || cpus_empty(cur->cpus_allowed))
+		return;
+
+	/*
+	 * Get all cpus from parent's cpus_allowed not part of exclusive
+	 * children
+	 */
+	pspan = par->cpus_allowed;
+	list_for_each_entry(c, &par->children, sibling) {
+		if (is_cpu_exclusive(c))
+			cpus_andnot(pspan, pspan, c->cpus_allowed);
+	}
+	if (is_removed(cur) || !is_cpu_exclusive(cur)) {
+		cpus_or(pspan, pspan, cur->cpus_allowed);
+		if (cpus_equal(pspan, cur->cpus_allowed))
+			return;
+		cspan = CPU_MASK_NONE;
+	} else {
+		if (cpus_empty(pspan))
+			return;
+		cspan = cur->cpus_allowed;
+		/*
+		 * Get all cpus from current cpuset's cpus_allowed not part
+		 * of exclusive children
+		 */
+		list_for_each_entry(c, &cur->children, sibling) {
+			if (is_cpu_exclusive(c))
+				cpus_andnot(cspan, cspan, c->cpus_allowed);
+		}
+	}
+
+	lock_cpu_hotplug();
+	partition_sched_domains(&pspan, &cspan);
+	unlock_cpu_hotplug();
+}
+
 static int update_cpumask(struct cpuset *cs, char *buf)
 {
 	struct cpuset trialcs;
-	int retval;
+	int retval, cpus_unchanged;
 
 	trialcs = *cs;
 	retval = cpulist_parse(buf, trialcs.cpus_allowed);
@@ -615,9 +661,13 @@ static int update_cpumask(struct cpuset *cs, char *buf)
 	if (cpus_empty(trialcs.cpus_allowed))
 		return -ENOSPC;
 	retval = validate_change(cs, &trialcs);
-	if (retval == 0)
-		cs->cpus_allowed = trialcs.cpus_allowed;
-	return retval;
+	if (retval < 0)
+		return retval;
+	cpus_unchanged = cpus_equal(cs->cpus_allowed, trialcs.cpus_allowed);
+	cs->cpus_allowed = trialcs.cpus_allowed;
+	if (is_cpu_exclusive(cs) && !cpus_unchanged)
+		update_cpu_domains(cs);
+	return 0;
 }
 
 static int update_nodemask(struct cpuset *cs, char *buf)
@@ -653,7 +703,7 @@ static int update_flag(cpuset_flagbits_t bit, struct cpuset *cs, char *buf)
 {
 	int turning_on;
 	struct cpuset trialcs;
-	int err;
+	int err, cpu_exclusive_changed;
 
 	turning_on = (simple_strtoul(buf, NULL, 10) != 0);
 
@@ -664,13 +714,18 @@ static int update_flag(cpuset_flagbits_t bit, struct cpuset *cs, char *buf)
 		clear_bit(bit, &trialcs.flags);
 
 	err = validate_change(cs, &trialcs);
-	if (err == 0) {
-		if (turning_on)
-			set_bit(bit, &cs->flags);
-		else
-			clear_bit(bit, &cs->flags);
-	}
-	return err;
+	if (err < 0)
+		return err;
+	cpu_exclusive_changed =
+		(is_cpu_exclusive(cs) != is_cpu_exclusive(&trialcs));
+	if (turning_on)
+		set_bit(bit, &cs->flags);
+	else
+		clear_bit(bit, &cs->flags);
+
+	if (cpu_exclusive_changed)
+                update_cpu_domains(cs);
+	return 0;
 }
 
 static int attach_task(struct cpuset *cs, char *buf)
@@ -1316,12 +1371,14 @@ static int cpuset_rmdir(struct inode *unused_dir, struct dentry *dentry)
 		up(&cpuset_sem);
 		return -EBUSY;
 	}
-	spin_lock(&cs->dentry->d_lock);
 	parent = cs->parent;
 	set_bit(CS_REMOVED, &cs->flags);
+	if (is_cpu_exclusive(cs))
+		update_cpu_domains(cs);
 	list_del(&cs->sibling);	/* delete my sibling from parent->children */
 	if (list_empty(&parent->children))
 		check_for_release(parent);
+	spin_lock(&cs->dentry->d_lock);
 	d = dget(cs->dentry);
 	cs->dentry = NULL;
 	spin_unlock(&d->d_lock);
@@ -1384,10 +1441,10 @@ void __init cpuset_init_smp(void)
 
 /**
  * cpuset_fork - attach newly forked task to its parents cpuset.
- * @p: pointer to task_struct of forking parent process.
+ * @tsk: pointer to task_struct of forking parent process.
  *
  * Description: By default, on fork, a task inherits its
- * parents cpuset.  The pointer to the shared cpuset is
+ * parent's cpuset.  The pointer to the shared cpuset is
  * automatically copied in fork.c by dup_task_struct().
  * This cpuset_fork() routine need only increment the usage
  * counter in that cpuset.
@@ -1415,7 +1472,6 @@ void cpuset_fork(struct task_struct *tsk)
  * by the cpuset_sem semaphore.  If you don't hold cpuset_sem,
  * then a zero cpuset use count is a license to any other task to
  * nuke the cpuset immediately.
- *
  **/
 
 void cpuset_exit(struct task_struct *tsk)
@@ -1465,7 +1521,9 @@ void cpuset_init_current_mems_allowed(void)
 	current->mems_allowed = NODE_MASK_ALL;
 }
 
-/*
+/**
+ * cpuset_update_current_mems_allowed - update mems parameters to new values
+ *
  * If the current tasks cpusets mems_allowed changed behind our backs,
  * update current->mems_allowed and mems_generation to the new value.
  * Do not call this routine if in_interrupt().
@@ -1484,13 +1542,20 @@ void cpuset_update_current_mems_allowed(void)
 	}
 }
 
+/**
+ * cpuset_restrict_to_mems_allowed - limit nodes to current mems_allowed
+ * @nodes: pointer to a node bitmap that is and-ed with mems_allowed
+ */
 void cpuset_restrict_to_mems_allowed(unsigned long *nodes)
 {
 	bitmap_and(nodes, nodes, nodes_addr(current->mems_allowed),
 							MAX_NUMNODES);
 }
 
-/*
+/**
+ * cpuset_zonelist_valid_mems_allowed - check zonelist vs. curremt mems_allowed
+ * @zl: the zonelist to be checked
+ *
  * Are any of the nodes on zonelist zl allowed in current->mems_allowed?
  */
 int cpuset_zonelist_valid_mems_allowed(struct zonelist *zl)
@@ -1506,8 +1571,12 @@ int cpuset_zonelist_valid_mems_allowed(struct zonelist *zl)
 	return 0;
 }
 
-/*
- * Is 'current' valid, and is zone z allowed in current->mems_allowed?
+/**
+ * cpuset_zone_allowed - is zone z allowed in current->mems_allowed
+ * @z: zone in question
+ *
+ * Is zone z allowed in current->mems_allowed, or is
+ * the CPU in interrupt context? (zone is always allowed in this case)
  */
 int cpuset_zone_allowed(struct zone *z)
 {

@@ -37,7 +37,6 @@
 #include <linux/vfs.h>
 #include <linux/pagemap.h>
 #include <linux/mount.h>
-#include <linux/version.h>
 #include <linux/bitops.h>
 #include <linux/vs_memory.h>
 #include <linux/vs_cvirt.h>

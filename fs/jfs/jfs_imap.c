@@ -48,6 +48,7 @@
 #include <linux/vserver/xid.h>
 
 #include "jfs_incore.h"
+#include "jfs_inode.h"
 #include "jfs_filsys.h"
 #include "jfs_dinode.h"
 #include "jfs_dmap.h"
@@ -70,11 +71,6 @@
 #define AG_UNLOCK(imap,agno)		up(&imap->im_aglock[agno])
 
 /*
- * external references
- */
-extern struct address_space_operations jfs_aops;
-
-/*
  * forward references
  */
 static int diAllocAG(struct inomap *, int, boolean_t, struct inode *);
@@ -90,25 +86,6 @@ static void duplicateIXtree(struct super_block *, s64, int, s64 *);
 static int diIAGRead(struct inomap * imap, int, struct metapage **);
 static int copy_from_dinode(struct dinode *, struct inode *);
 static void copy_to_dinode(struct dinode *, struct inode *);
-
-/*
- *	debug code for double-checking inode map
- */
-/* #define	_JFS_DEBUG_IMAP	1 */
-
-#ifdef	_JFS_DEBUG_IMAP
-#define DBG_DIINIT(imap)	DBGdiInit(imap)
-#define DBG_DIALLOC(imap, ino)	DBGdiAlloc(imap, ino)
-#define DBG_DIFREE(imap, ino)	DBGdiFree(imap, ino)
-
-static void *DBGdiInit(struct inomap * imap);
-static void DBGdiAlloc(struct inomap * imap, ino_t ino);
-static void DBGdiFree(struct inomap * imap, ino_t ino);
-#else
-#define DBG_DIINIT(imap)
-#define DBG_DIALLOC(imap, ino)
-#define DBG_DIFREE(imap, ino)
-#endif				/* _JFS_DEBUG_IMAP */
 
 /*
  * NAME:        diMount()
@@ -192,8 +169,6 @@ int diMount(struct inode *ipimap)
 	 */
 	imap->im_ipimap = ipimap;
 	JFS_IP(ipimap)->i_imap = imap;
-
-//      DBG_DIINIT(imap);
 
 	return (0);
 }
@@ -1048,7 +1023,6 @@ int diFree(struct inode *ip)
 		/* update the bitmap.
 		 */
 		iagp->wmap[extno] = cpu_to_le32(bitmap);
-		DBG_DIFREE(imap, inum);
 
 		/* update the free inode counts at the iag, ag and
 		 * map level.
@@ -1236,7 +1210,6 @@ int diFree(struct inode *ip)
 		jfs_error(ip->i_sb, "diFree: the pmap does not show inode free");
 	}
 	iagp->wmap[extno] = 0;
-	DBG_DIFREE(imap, inum);
 	PXDlength(&iagp->inoext[extno], 0);
 	PXDaddress(&iagp->inoext[extno], 0);
 
@@ -1355,7 +1328,6 @@ diInitInode(struct inode *ip, int iagno, int ino, int extno, struct iag * iagp)
 	struct jfs_inode_info *jfs_ip = JFS_IP(ip);
 
 	ip->i_ino = (iagno << L2INOSPERIAG) + ino;
-	DBG_DIALLOC(JFS_IP(ipimap)->i_imap, ip->i_ino);
 	jfs_ip->ixpxd = iagp->inoext[extno];
 	jfs_ip->agno = BLKTOAG(le64_to_cpu(iagp->agstart), sbi);
 	jfs_ip->active_ag = -1;
@@ -3202,84 +3174,3 @@ static void copy_to_dinode(struct dinode * dip, struct inode *ip)
 	if (S_ISCHR(ip->i_mode) || S_ISBLK(ip->i_mode))
 		dip->di_rdev = cpu_to_le32(jfs_ip->dev);
 }
-
-#ifdef	_JFS_DEBUG_IMAP
-/*
- *	DBGdiInit()
- */
-static void *DBGdiInit(struct inomap * imap)
-{
-	u32 *dimap;
-	int size;
-	size = 64 * 1024;
-	if ((dimap = (u32 *) xmalloc(size, L2PSIZE, kernel_heap)) == NULL)
-		assert(0);
-	bzero((void *) dimap, size);
-	imap->im_DBGdimap = dimap;
-}
-
-/*
- *	DBGdiAlloc()
- */
-static void DBGdiAlloc(struct inomap * imap, ino_t ino)
-{
-	u32 *dimap = imap->im_DBGdimap;
-	int w, b;
-	u32 m;
-	w = ino >> 5;
-	b = ino & 31;
-	m = 0x80000000 >> b;
-	assert(w < 64 * 256);
-	if (dimap[w] & m) {
-		printk("DEBUG diAlloc: duplicate alloc ino:0x%x\n", ino);
-	}
-	dimap[w] |= m;
-}
-
-/*
- *	DBGdiFree()
- */
-static void DBGdiFree(struct inomap * imap, ino_t ino)
-{
-	u32 *dimap = imap->im_DBGdimap;
-	int w, b;
-	u32 m;
-	w = ino >> 5;
-	b = ino & 31;
-	m = 0x80000000 >> b;
-	assert(w < 64 * 256);
-	if ((dimap[w] & m) == 0) {
-		printk("DEBUG diFree: duplicate free ino:0x%x\n", ino);
-	}
-	dimap[w] &= ~m;
-}
-
-static void dump_cp(struct inomap * ipimap, char *function, int line)
-{
-	printk("\n* ********* *\nControl Page %s %d\n", function, line);
-	printk("FreeIAG %d\tNextIAG %d\n", ipimap->im_freeiag,
-	       ipimap->im_nextiag);
-	printk("NumInos %d\tNumFree %d\n",
-	       atomic_read(&ipimap->im_numinos),
-	       atomic_read(&ipimap->im_numfree));
-	printk("AG InoFree %d\tAG ExtFree %d\n",
-	       ipimap->im_agctl[0].inofree, ipimap->im_agctl[0].extfree);
-	printk("AG NumInos %d\tAG NumFree %d\n",
-	       ipimap->im_agctl[0].numinos, ipimap->im_agctl[0].numfree);
-}
-
-static void dump_iag(struct iag * iag, char *function, int line)
-{
-	printk("\n* ********* *\nIAG %s %d\n", function, line);
-	printk("IagNum %d\tIAG Free %d\n", le32_to_cpu(iag->iagnum),
-	       le32_to_cpu(iag->iagfree));
-	printk("InoFreeFwd %d\tInoFreeBack %d\n",
-	       le32_to_cpu(iag->inofreefwd),
-	       le32_to_cpu(iag->inofreeback));
-	printk("ExtFreeFwd %d\tExtFreeBack %d\n",
-	       le32_to_cpu(iag->extfreefwd),
-	       le32_to_cpu(iag->extfreeback));
-	printk("NFreeInos %d\tNFreeExts %d\n", le32_to_cpu(iag->nfreeinos),
-	       le32_to_cpu(iag->nfreeexts));
-}
-#endif				/* _JFS_DEBUG_IMAP */
