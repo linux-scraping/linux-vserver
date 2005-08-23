@@ -102,6 +102,7 @@
 
 #include <linux/fs.h>
 #include <linux/quotaops.h>
+#include <linux/vs_dlimit.h>
 #include "jfs_incore.h"
 #include "jfs_superblock.h"
 #include "jfs_filsys.h"
@@ -383,10 +384,10 @@ static u32 add_index(tid_t tid, struct inode *ip, s64 bn, int slot)
 		 */
 		if (DQUOT_ALLOC_BLOCK(ip, sbi->nbperpage))
 			goto clean_up;
-		if (dbAlloc(ip, 0, sbi->nbperpage, &xaddr)) {
-			DQUOT_FREE_BLOCK(ip, sbi->nbperpage);
-			goto clean_up;
-		}
+		if (DLIMIT_ALLOC_BLOCK(ip, sbi->nbperpage))
+			goto clean_up_dquot;
+		if (dbAlloc(ip, 0, sbi->nbperpage, &xaddr))
+			goto clean_up_dlimit;
 
 		/*
 		 * Save the table, we're going to overwrite it with the
@@ -478,6 +479,12 @@ static u32 add_index(tid_t tid, struct inode *ip, s64 bn, int slot)
 	release_metapage(mp);
 
 	return index;
+
+      clean_up_dlimit:
+	DLIMIT_FREE_BLOCK(ip, sbi->nbperpage);
+
+      clean_up_dquot:
+	DQUOT_FREE_BLOCK(ip, sbi->nbperpage);
 
       clean_up:
 
@@ -930,7 +937,8 @@ int dtInsert(tid_t tid, struct inode *ip,
 static int dtSplitUp(tid_t tid,
 	  struct inode *ip, struct dtsplit * split, struct btstack * btstack)
 {
-	struct jfs_sb_info *sbi = JFS_SBI(ip->i_sb);
+	struct super_block *sb = ip->i_sb;
+	struct jfs_sb_info *sbi = JFS_SBI(sb);
 	int rc = 0;
 	struct metapage *smp;
 	dtpage_t *sp;		/* split page */
@@ -952,6 +960,7 @@ static int dtSplitUp(tid_t tid,
 	struct tlock *tlck;
 	struct lv *lv;
 	int quota_allocation = 0;
+	int dlimit_allocation = 0;
 
 	/* get split page */
 	smp = split->mp;
@@ -1032,6 +1041,12 @@ static int dtSplitUp(tid_t tid,
 			goto extendOut;
 		}
 		quota_allocation += n;
+
+		if (DLIMIT_ALLOC_BLOCK(ip, n)) {
+			rc = -ENOSPC;
+			goto extendOut;
+		}
+		dlimit_allocation += n;
 
 		if ((rc = dbReAlloc(sbi->ipbmap, xaddr, (s64) xlen,
 				    (s64) n, &nxaddr)))
@@ -1301,6 +1316,9 @@ static int dtSplitUp(tid_t tid,
       freeKeyName:
 	kfree(key.name);
 
+	/* Rollback dlimit allocation */
+	if (rc && dlimit_allocation)
+		DLIMIT_FREE_BLOCK(ip, dlimit_allocation);
 	/* Rollback quota allocation */
 	if (rc && quota_allocation)
 		DQUOT_FREE_BLOCK(ip, quota_allocation);
@@ -1367,6 +1385,12 @@ static int dtSplitPage(tid_t tid, struct inode *ip, struct dtsplit * split,
 	if (DQUOT_ALLOC_BLOCK(ip, lengthPXD(pxd))) {
 		release_metapage(rmp);
 		return -EDQUOT;
+	}
+	/* Allocate blocks to dlimit. */
+	if (DLIMIT_ALLOC_BLOCK(ip, lengthPXD(pxd))) {
+		DQUOT_FREE_BLOCK(ip, lengthPXD(pxd));
+		release_metapage(rmp);
+		return -ENOSPC;
 	}
 
 	jfs_info("dtSplitPage: ip:0x%p smp:0x%p rmp:0x%p", ip, smp, rmp);
@@ -1918,6 +1942,12 @@ static int dtSplitRoot(tid_t tid,
 		release_metapage(rmp);
 		return -EDQUOT;
 	}
+	/* Allocate blocks to dlimit. */
+	if (DLIMIT_ALLOC_BLOCK(ip, lengthPXD(pxd))) {
+		DQUOT_FREE_BLOCK(ip, lengthPXD(pxd));
+		release_metapage(rmp);
+		return -ENOSPC;
+	}
 
 	BT_MARK_DIRTY(rmp, ip);
 	/*
@@ -2284,6 +2314,8 @@ static int dtDeleteUp(tid_t tid, struct inode *ip,
 
 	xlen = lengthPXD(&fp->header.self);
 
+	/* Free dlimit allocation. */
+	DLIMIT_FREE_BLOCK(ip, xlen);
 	/* Free quota allocation. */
 	DQUOT_FREE_BLOCK(ip, xlen);
 
@@ -2360,6 +2392,8 @@ static int dtDeleteUp(tid_t tid, struct inode *ip,
 
 				xlen = lengthPXD(&p->header.self);
 
+				/* Free dlimit allocation */
+				DLIMIT_FREE_BLOCK(ip, xlen);
 				/* Free quota allocation */
 				DQUOT_FREE_BLOCK(ip, xlen);
 

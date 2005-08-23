@@ -30,6 +30,7 @@ enum {
 	CTL_DEBUG_NET,
 	CTL_DEBUG_LIMIT,
 	CTL_DEBUG_DLIM,
+	CTL_DEBUG_QUOTA,
 	CTL_DEBUG_CVIRT,
 	CTL_DEBUG_MISC,
 };
@@ -41,6 +42,7 @@ unsigned int vx_debug_nid = 0;
 unsigned int vx_debug_net = 0;
 unsigned int vx_debug_limit = 0;
 unsigned int vx_debug_dlim = 0;
+unsigned int vx_debug_quota = 0;
 unsigned int vx_debug_cvirt = 0;
 unsigned int vx_debug_misc = 0;
 
@@ -175,6 +177,14 @@ static ctl_table debug_table[] = {
 		.proc_handler	= &proc_dodebug
 	},
 	{
+		.ctl_name	= CTL_DEBUG_QUOTA,
+		.procname	= "debug_quota",
+		.data		= &vx_debug_quota,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= &proc_dodebug
+	},
+	{
 		.ctl_name	= CTL_DEBUG_CVIRT,
 		.procname	= "debug_cvirt",
 		.data		= &vx_debug_cvirt,
@@ -210,6 +220,7 @@ EXPORT_SYMBOL_GPL(vx_debug_nid);
 EXPORT_SYMBOL_GPL(vx_debug_net);
 EXPORT_SYMBOL_GPL(vx_debug_limit);
 EXPORT_SYMBOL_GPL(vx_debug_dlim);
+EXPORT_SYMBOL_GPL(vx_debug_quota);
 EXPORT_SYMBOL_GPL(vx_debug_cvirt);
 EXPORT_SYMBOL_GPL(vx_debug_misc);
 

@@ -57,6 +57,7 @@
 #include <linux/smp_lock.h>
 #include <linux/buffer_head.h>
 #include <linux/quotaops.h>
+#include <linux/vs_dlimit.h>
 
 /* Does the buffer contain a disk block which is in the tree. */
 inline int B_IS_IN_TREE(const struct buffer_head *p_s_bh)
@@ -1365,6 +1366,7 @@ int reiserfs_delete_item(struct reiserfs_transaction_handle *th, struct path *p_
 		       "reiserquota delete_item(): freeing %u, id=%u type=%c",
 		       quota_cut_bytes, p_s_inode->i_uid, head2type(&s_ih));
 #endif
+	DLIMIT_FREE_SPACE(p_s_inode, quota_cut_bytes);
 	DQUOT_FREE_SPACE_NODIRTY(p_s_inode, quota_cut_bytes);
 
 	/* Return deleted body length */
@@ -1453,6 +1455,7 @@ void reiserfs_delete_solid_item(struct reiserfs_transaction_handle *th,
 #endif
 				DQUOT_FREE_SPACE_NODIRTY(inode,
 							 quota_cut_bytes);
+				DLIMIT_FREE_SPACE(inode, quota_cut_bytes);
 			}
 			break;
 		}
@@ -1808,6 +1811,7 @@ int reiserfs_cut_from_item(struct reiserfs_transaction_handle *th,
 		       "reiserquota cut_from_item(): freeing %u id=%u type=%c",
 		       quota_cut_bytes, p_s_inode->i_uid, '?');
 #endif
+	DLIMIT_FREE_SPACE(p_s_inode, quota_cut_bytes);
 	DQUOT_FREE_SPACE_NODIRTY(p_s_inode, quota_cut_bytes);
 	return n_ret_value;
 }
@@ -2048,6 +2052,11 @@ int reiserfs_paste_into_item(struct reiserfs_transaction_handle *th, struct path
 		pathrelse(p_s_search_path);
 		return -EDQUOT;
 	}
+	if (DLIMIT_ALLOC_SPACE(inode, n_pasted_size)) {
+		DQUOT_FREE_SPACE_NODIRTY(inode, n_pasted_size);
+		pathrelse(p_s_search_path);
+		return -ENOSPC;
+	}
 	init_tb_struct(th, &s_paste_balance, th->t_super, p_s_search_path,
 		       n_pasted_size);
 #ifdef DISPLACE_NEW_PACKING_LOCALITIES
@@ -2100,6 +2109,7 @@ int reiserfs_paste_into_item(struct reiserfs_transaction_handle *th, struct path
 		       n_pasted_size, inode->i_uid,
 		       key2type(&(p_s_key->on_disk_key)));
 #endif
+	DLIMIT_FREE_SPACE(inode, n_pasted_size);
 	DQUOT_FREE_SPACE_NODIRTY(inode, n_pasted_size);
 	return retval;
 }
@@ -2136,6 +2146,11 @@ int reiserfs_insert_item(struct reiserfs_transaction_handle *th, struct path *p_
 		if (DQUOT_ALLOC_SPACE_NODIRTY(inode, quota_bytes)) {
 			pathrelse(p_s_path);
 			return -EDQUOT;
+		}
+		if (DLIMIT_ALLOC_SPACE(inode, quota_bytes)) {
+			DQUOT_FREE_SPACE_NODIRTY(inode, quota_bytes);
+			pathrelse(p_s_path);
+			return -ENOSPC;
 		}
 	}
 	init_tb_struct(th, &s_ins_balance, th->t_super, p_s_path,
@@ -2184,7 +2199,9 @@ int reiserfs_insert_item(struct reiserfs_transaction_handle *th, struct path *p_
 		       "reiserquota insert_item(): freeing %u id=%u type=%c",
 		       quota_bytes, inode->i_uid, head2type(p_s_ih));
 #endif
-	if (inode)
+	if (inode) {
+		DLIMIT_FREE_SPACE(inode, quota_bytes);
 		DQUOT_FREE_SPACE_NODIRTY(inode, quota_bytes);
+	}
 	return retval;
 }

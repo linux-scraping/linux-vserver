@@ -425,7 +425,7 @@ int inet_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len)
 			s_addr = ipv4root;
 			s_addr1 = (nbipv4 > 1) ? 0 : s_addr;
 			s_addr2 = v4_bcast;
-		} else if (s_addr == 0x0100007f) {
+		} else if (s_addr == IPI_LOOPBACK) {
 			/* rewrite localhost to ipv4root */
 			s_addr = ipv4root;
 			s_addr1 = ipv4root;

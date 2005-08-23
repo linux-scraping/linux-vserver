@@ -268,3 +268,15 @@ void vroot_exit(void)
 module_init(vroot_init);
 module_exit(vroot_exit);
 
+#ifndef MODULE
+
+static int __init max_vroot_setup(char *str)
+{
+	max_vroot = simple_strtol(str, NULL, 0);
+	return 1;
+}
+
+__setup("max_vroot=", max_vroot_setup);
+
+#endif
+

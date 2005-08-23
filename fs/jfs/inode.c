@@ -22,6 +22,7 @@
 #include <linux/buffer_head.h>
 #include <linux/pagemap.h>
 #include <linux/quotaops.h>
+#include <linux/vs_dlimit.h>
 #include "jfs_incore.h"
 #include "jfs_inode.h"
 #include "jfs_filsys.h"
@@ -139,6 +140,7 @@ void jfs_delete_inode(struct inode *inode)
 	DQUOT_INIT(inode);
 	DQUOT_FREE_INODE(inode);
 	DQUOT_DROP(inode);
+	DLIMIT_FREE_INODE(inode);
 
 	clear_inode(inode);
 }

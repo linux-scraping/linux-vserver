@@ -253,8 +253,7 @@ static int show_vfsmnt(struct seq_file *m, void *v)
 		int mnt_flag;
 		char *set_str;
 		char *unset_str;
-	};
-	static struct proc_fs_info fs_info[] = {
+	} fs_info[] = {
 		{ MS_RDONLY, MNT_RDONLY, "ro", "rw" },
 		{ MS_SYNCHRONOUS, 0, ",sync", NULL },
 		{ MS_DIRSYNC, 0, ",dirsync", NULL },
@@ -491,7 +490,7 @@ static int do_umount(struct vfsmount *mnt, int flags)
 		down_write(&sb->s_umount);
 		if (!(sb->s_flags & MS_RDONLY)) {
 			lock_kernel();
-			DQUOT_OFF(sb);
+			DQUOT_OFF(sb->s_dqh);
 			retval = do_remount_sb(sb, MS_RDONLY, NULL, 0);
 			unlock_kernel();
 		}
@@ -506,7 +505,7 @@ static int do_umount(struct vfsmount *mnt, int flags)
 		/* last instance - try to be smart */
 		spin_unlock(&vfsmount_lock);
 		lock_kernel();
-		DQUOT_OFF(sb);
+		DQUOT_OFF(sb->s_dqh);
 		acct_auto_close(sb);
 		unlock_kernel();
 		security_sb_umount_close(mnt);
@@ -940,7 +939,7 @@ static void expire_mount(struct vfsmount *mnt, struct list_head *mounts)
 		if (atomic_read(&mnt->mnt_sb->s_active) == 1) {
 			/* last instance - try to be smart */
 			lock_kernel();
-			DQUOT_OFF(mnt->mnt_sb);
+			DQUOT_OFF(mnt->mnt_sb->s_dqh);
 			acct_auto_close(mnt->mnt_sb);
 			unlock_kernel();
 		}

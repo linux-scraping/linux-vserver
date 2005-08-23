@@ -146,7 +146,7 @@ static inline char rt_tos2priority(u8 tos)
 	return ip_tos2prio[IPTOS_TOS(tos)>>1];
 }
 
-#define IPI_LOOPBACK	0x0100007f
+#define IPI_LOOPBACK	htonl(INADDR_LOOPBACK)
 
 static inline int ip_find_src(struct nx_info *nxi, struct rtable **rp, struct flowi *fl)
 {

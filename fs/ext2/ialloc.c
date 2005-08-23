@@ -126,9 +126,9 @@ void ext2_free_inode (struct inode * inode)
 	if (!is_bad_inode(inode)) {
 		/* Quota is already initialized in iput() */
 		ext2_xattr_delete_inode(inode);
-		DLIMIT_FREE_INODE(sb, inode->i_xid);
 	    	DQUOT_FREE_INODE(inode);
 		DQUOT_DROP(inode);
+		DLIMIT_FREE_INODE(inode);
 	}
 
 	es = EXT2_SB(sb)->s_es;
@@ -469,7 +469,7 @@ struct inode *ext2_new_inode(struct inode *dir, int mode)
 		return ERR_PTR(-ENOMEM);
 
 	inode->i_xid = vx_current_fsxid(sb);
-	if (DLIMIT_ALLOC_INODE(sb, inode->i_xid)) {
+	if (DLIMIT_ALLOC_INODE(inode)) {
 		err = -ENOSPC;
 		goto fail_dlim;
 	}
@@ -615,29 +615,30 @@ got:
 
 	if (DQUOT_ALLOC_INODE(inode)) {
 		DQUOT_DROP(inode);
-		err = -ENOSPC;
+		err = -EDQUOT;
 		goto fail2;
 	}
 	err = ext2_init_acl(inode, dir);
-	if (err) {
-		DQUOT_FREE_INODE(inode);
-		DQUOT_DROP(inode);
-		goto fail2;
-	}
+	if (err)
+		goto fail2_free;
+
 	mark_inode_dirty(inode);
 	ext2_debug("allocating inode %lu\n", inode->i_ino);
 	ext2_preread_inode(inode);
 	return inode;
 
+fail2_free:
+	DQUOT_FREE_INODE(inode);
+	DQUOT_DROP(inode);
 fail2:
-	DLIMIT_FREE_INODE(sb, inode->i_xid);
+	DLIMIT_FREE_INODE(inode);
 	inode->i_flags |= S_NOQUOTA;
 	inode->i_nlink = 0;
 	iput(inode);
 	return ERR_PTR(err);
 
 fail:
-	DLIMIT_FREE_INODE(sb, inode->i_xid);
+	DLIMIT_FREE_INODE(inode);
 fail_dlim:
 	make_bad_inode(inode);
 	iput(inode);

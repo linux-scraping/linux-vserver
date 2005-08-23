@@ -505,7 +505,7 @@ void ext3_free_blocks(handle_t *handle, struct inode *inode,
 	}
 	ext3_free_blocks_sb(handle, sb, block, count, &dquot_freed_blocks);
 	if (dquot_freed_blocks) {
-		DLIMIT_FREE_BLOCK(sb, inode->i_xid, dquot_freed_blocks);
+		DLIMIT_FREE_BLOCK(inode, dquot_freed_blocks);
 		DQUOT_FREE_BLOCK(inode, dquot_freed_blocks);
 	}
 	return;
@@ -1209,7 +1209,7 @@ int ext3_new_block(handle_t *handle, struct inode *inode,
 		*errp = -EDQUOT;
 		return 0;
 	}
-	if (DLIMIT_ALLOC_BLOCK(sb, inode->i_xid, 1))
+	if (DLIMIT_ALLOC_BLOCK(inode, 1))
 	    goto out_dlimit;
 
 	sbi = EXT3_SB(sb);
@@ -1412,7 +1412,7 @@ io_error:
 	*errp = -EIO;
 out:
 	if (!performed_allocation)
-		DLIMIT_FREE_BLOCK(sb, inode->i_xid, 1);
+		DLIMIT_FREE_BLOCK(inode, 1);
 out_dlimit:
 	if (fatal) {
 		*errp = fatal;

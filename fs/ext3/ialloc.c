@@ -127,9 +127,9 @@ void ext3_free_inode (handle_t *handle, struct inode * inode)
 	 */
 	DQUOT_INIT(inode);
 	ext3_xattr_delete_inode(handle, inode);
-	DLIMIT_FREE_INODE(sb, inode->i_xid);
 	DQUOT_FREE_INODE(inode);
 	DQUOT_DROP(inode);
+	DLIMIT_FREE_INODE(inode);
 
 	is_directory = S_ISDIR(inode->i_mode);
 
@@ -448,9 +448,9 @@ struct inode *ext3_new_inode(handle_t *handle, struct inode * dir, int mode)
 		return ERR_PTR(-ENOMEM);
 
 	inode->i_xid = vx_current_fsxid(sb);
-	if (DLIMIT_ALLOC_INODE(sb, inode->i_xid)) {
+	if (DLIMIT_ALLOC_INODE(inode)) {
 		err = -ENOSPC;
-		goto out;
+		goto out_dlimit;
 	}
 	ei = EXT3_I(inode);
 
@@ -606,39 +606,38 @@ got:
 		sizeof(struct ext3_inode) - EXT3_GOOD_OLD_INODE_SIZE : 0;
 
 	ret = inode;
-	if(DQUOT_ALLOC_INODE(inode)) {
+	if (DQUOT_ALLOC_INODE(inode)) {
 		DQUOT_DROP(inode);
 		err = -EDQUOT;
 		goto fail2;
 	}
 	err = ext3_init_acl(handle, inode, dir);
-	if (err) {
-		DQUOT_FREE_INODE(inode);
-		DQUOT_DROP(inode);
-		goto fail2;
-  	}
+	if (err)
+		goto fail2_free;
 	err = ext3_mark_inode_dirty(handle, inode);
 	if (err) {
 		ext3_std_error(sb, err);
-		DQUOT_FREE_INODE(inode);
-		DQUOT_DROP(inode);
-		goto fail2;
+		goto fail2_free;
 	}
 
 	ext3_debug("allocating inode %lu\n", inode->i_ino);
 	goto really_out;
 fail:
-	DLIMIT_FREE_INODE(sb, inode->i_xid);
 	ext3_std_error(sb, err);
 out:
+	DLIMIT_FREE_INODE(inode);
+out_dlimit:
 	iput(inode);
 	ret = ERR_PTR(err);
 really_out:
 	brelse(bitmap_bh);
 	return ret;
 
+fail2_free:
+	DQUOT_FREE_INODE(inode);
+	DQUOT_DROP(inode);
 fail2:
-	DLIMIT_FREE_INODE(sb, inode->i_xid);
+	DLIMIT_FREE_INODE(inode);
 	inode->i_flags |= S_NOQUOTA;
 	inode->i_nlink = 0;
 	iput(inode);

@@ -685,10 +685,10 @@ linvfs_show_options(
 
 STATIC int
 linvfs_getxstate(
-	struct super_block	*sb,
+	struct dqhash		*hash,
 	struct fs_quota_stat	*fqs)
 {
-	struct vfs		*vfsp = LINVFS_GET_VFS(sb);
+	struct vfs		*vfsp = LINVFS_GET_VFS(hash->dqh_sb);
 	int			error;
 
 	VFS_QUOTACTL(vfsp, Q_XGETQSTAT, 0, (caddr_t)fqs, error);
@@ -697,11 +697,11 @@ linvfs_getxstate(
 
 STATIC int
 linvfs_setxstate(
-	struct super_block	*sb,
+	struct dqhash		*hash,
 	unsigned int		flags,
 	int			op)
 {
-	struct vfs		*vfsp = LINVFS_GET_VFS(sb);
+	struct vfs		*vfsp = LINVFS_GET_VFS(hash->dqh_sb);
 	int			error;
 
 	VFS_QUOTACTL(vfsp, op, 0, (caddr_t)&flags, error);
@@ -710,12 +710,12 @@ linvfs_setxstate(
 
 STATIC int
 linvfs_getxquota(
-	struct super_block	*sb,
+	struct dqhash		*hash,
 	int			type,
 	qid_t			id,
 	struct fs_disk_quota	*fdq)
 {
-	struct vfs		*vfsp = LINVFS_GET_VFS(sb);
+	struct vfs		*vfsp = LINVFS_GET_VFS(hash->dqh_sb);
 	int			error, getmode;
 
 	getmode = (type == USRQUOTA) ? Q_XGETQUOTA :
@@ -726,12 +726,12 @@ linvfs_getxquota(
 
 STATIC int
 linvfs_setxquota(
-	struct super_block	*sb,
+	struct dqhash		*hash,
 	int			type,
 	qid_t			id,
 	struct fs_disk_quota	*fdq)
 {
-	struct vfs		*vfsp = LINVFS_GET_VFS(sb);
+	struct vfs		*vfsp = LINVFS_GET_VFS(hash->dqh_sb);
 	int			error, setmode;
 
 	setmode = (type == USRQUOTA) ? Q_XSETQLIM :

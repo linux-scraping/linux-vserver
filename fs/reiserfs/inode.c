@@ -17,6 +17,7 @@
 #include <linux/mpage.h>
 #include <linux/writeback.h>
 #include <linux/quotaops.h>
+#include <linux/vs_dlimit.h>
 #include <linux/vserver/xid.h>
 
 extern int reiserfs_default_io_size;	/* default io size devuned in super.c */
@@ -57,6 +58,7 @@ void reiserfs_delete_inode(struct inode *inode)
 		 * after delete_object so that quota updates go into the same transaction as
 		 * stat data deletion */
 		DQUOT_FREE_INODE(inode);
+		DLIMIT_FREE_INODE(inode);
 
 		if (journal_end(&th, inode->i_sb, jbegin_count)) {
 			up(&inode->i_sem);
@@ -1797,6 +1799,10 @@ int reiserfs_new_inode(struct reiserfs_transaction_handle *th,
 
 	BUG_ON(!th->t_trans_id);
 
+	if (DLIMIT_ALLOC_INODE(inode)) {
+		err = -ENOSPC;
+		goto out_bad_dlimit;
+	}
 	if (DQUOT_ALLOC_INODE(inode)) {
 		err = -EDQUOT;
 		goto out_end_trans;
@@ -1982,6 +1988,9 @@ int reiserfs_new_inode(struct reiserfs_transaction_handle *th,
 	DQUOT_FREE_INODE(inode);
 
       out_end_trans:
+	DLIMIT_FREE_INODE(inode);
+
+      out_bad_dlimit:
 	journal_end(th, th->t_super, th->t_blocks_allocated);
 	/* Drop can be outside and it needs more credits so it's better to have it outside */
 	DQUOT_DROP(inode);

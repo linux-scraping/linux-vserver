@@ -74,8 +74,8 @@ int reiserfs_ioctl(struct inode *inode, struct file *filp, unsigned int cmd,
 					return result;
 			}
 
-			flags = flags & REISERFS_FL_USER_MODIFYABLE;
-			flags |= oldflags & ~REISERFS_FL_USER_MODIFYABLE;
+			flags = flags & REISERFS_FL_USER_MODIFIABLE;
+			flags |= oldflags & ~REISERFS_FL_USER_MODIFIABLE;
 			sd_attrs_to_i_attrs(flags, inode);
 			REISERFS_I(inode)->i_attrs = flags;
 			inode->i_ctime = CURRENT_TIME_SEC;
