@@ -15,6 +15,7 @@
 #include <asm/pgtable.h>
 
 #include <linux/hugetlb.h>
+#include <linux/vs_memory.h>
 
 const unsigned long hugetlb_zero = 0, hugetlb_infinity = ~0UL;
 static unsigned long nr_huge_pages, free_huge_pages;

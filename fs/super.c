@@ -90,7 +90,7 @@ static struct super_block *alloc_super(void)
 		s->s_op = &default_op;
 		s->s_time_gran = 1000000000;
 		/* quick hack to make dqhash id unique, sufficient for now */
-		s->s_dqh = new_dqhash(s, (unsigned int)s);
+		s->s_dqh = new_dqhash(s, (unsigned long)s);
 	}
 out:
 	return s;
