@@ -36,7 +36,8 @@
 #define VXF_STATE_SETUP		(1ULL<<32)
 #define VXF_STATE_INIT		(1ULL<<33)
 
-#define VXF_STATE_HELPER	(1ULL<<36)
+#define VXF_SC_HELPER		(1ULL<<36)
+#define VXF_REBOOT_KILL		(1ULL<<37)
 
 #define VXF_FORK_RSS		(1ULL<<48)
 #define VXF_PROLIFIC		(1ULL<<49)

@@ -15,6 +15,7 @@
 #include <linux/types.h>
 #include <linux/ctype.h>
 #include <linux/sysctl.h>
+#include <linux/parser.h>
 #include <linux/fs.h>
 
 #include <asm/uaccess.h>
@@ -24,6 +25,7 @@
 #define CTL_VSERVER	4242    /* unused? */
 
 enum {
+	CTL_DEBUG_ERROR = 0,
 	CTL_DEBUG_SWITCH = 1,
 	CTL_DEBUG_XID,
 	CTL_DEBUG_NID,
@@ -212,6 +214,64 @@ static ctl_table vserver_table[] = {
 	},
 	{ .ctl_name = 0 }
 };
+
+
+static match_table_t tokens = {
+	{ CTL_DEBUG_SWITCH,	"switch=%x"	},
+	{ CTL_DEBUG_XID,	"xid=%x"	},
+	{ CTL_DEBUG_NID,	"nid=%x"	},
+	{ CTL_DEBUG_NET,	"net=%x"	},
+	{ CTL_DEBUG_LIMIT,	"limit=%x"	},
+	{ CTL_DEBUG_DLIM,	"dlim=%x"	},
+	{ CTL_DEBUG_QUOTA,	"quota=%x"	},
+	{ CTL_DEBUG_CVIRT,	"cvirt=%x"	},
+	{ CTL_DEBUG_MISC,	"misc=%x"	},
+	{ CTL_DEBUG_ERROR,	NULL		}
+};
+
+#define	HANDLE_CASE(id, name, val) 			\
+	case CTL_DEBUG_ ## id:				\
+		vx_debug_ ## name = val;		\
+		printk("vs_debug_" #name "=%x\n", val);	\
+		break
+
+
+static int __init vs_debug_setup(char *str)
+{
+	char *p;
+	int token;
+
+	printk("vs_debug_setup(%s)\n", str);
+	while ((p = strsep(&str, ",")) != NULL) {
+		substring_t args[MAX_OPT_ARGS];
+		unsigned int value;
+
+		if (!*p)
+			continue;
+
+		token = match_token(p, tokens, args);
+		value = (token>0)?simple_strtoul(args[0].from, NULL, 16):0;
+
+		switch (token) {
+		HANDLE_CASE(SWITCH, switch, value);
+		HANDLE_CASE(XID,    xid,    value);
+		HANDLE_CASE(NID,    nid,    value);
+		HANDLE_CASE(NET,    net,    value);
+		HANDLE_CASE(LIMIT,  limit,  value);
+		HANDLE_CASE(DLIM,   dlim,   value);
+		HANDLE_CASE(QUOTA,  dlim,   value);
+		HANDLE_CASE(CVIRT,  cvirt,  value);
+		HANDLE_CASE(MISC,   misc,   value);
+		default:
+			return -EINVAL;
+			break;
+		}
+	}
+	return 1;
+}
+
+__setup("vsdebug=", vs_debug_setup);
+
 
 
 EXPORT_SYMBOL_GPL(vx_debug_switch);

@@ -19,13 +19,56 @@
 #include <linux/vserver/signal_cmd.h>
 
 
-int vc_ctx_kill(uint32_t id, void __user *data)
+int vx_info_kill(struct vx_info *vxi, int pid, int sig)
 {
 	int retval, count=0;
-	struct vcmd_ctx_kill_v0 vc_data;
 	struct task_struct *p;
-	struct vx_info *vxi;
 	unsigned long priv = 0;
+
+	retval = -ESRCH;
+	read_lock(&tasklist_lock);
+	switch (pid) {
+	case  0:
+		priv = 1;
+	case -1:
+		for_each_process(p) {
+			int err = 0;
+
+			if (vx_task_xid(p) != vxi->vx_id || p->pid <= 1 ||
+				(pid && vxi->vx_initpid == p->pid))
+				continue;
+
+			err = group_send_sig_info(sig, (void*)priv, p);
+			++count;
+			if (err != -EPERM)
+				retval = err;
+		}
+		break;
+
+	case 1:
+		if (vxi->vx_initpid) {
+			pid = vxi->vx_initpid;
+			priv = 1;
+		}
+		/* fallthrough */
+	default:
+		p = find_task_by_real_pid(pid);
+		if (p) {
+			if (vx_task_xid(p) == vxi->vx_id)
+				retval = group_send_sig_info(sig,
+					(void*)priv, p);
+		}
+		break;
+	}
+	read_unlock(&tasklist_lock);
+	return retval;
+}
+
+int vc_ctx_kill(uint32_t id, void __user *data)
+{
+	int retval;
+	struct vcmd_ctx_kill_v0 vc_data;
+	struct vx_info *vxi;
 
 	if (!vx_check(0, VX_ADMIN))
 		return -ENOSYS;
@@ -36,42 +79,7 @@ int vc_ctx_kill(uint32_t id, void __user *data)
 	if (!vxi)
 		return -ESRCH;
 
-	retval = -ESRCH;
-	read_lock(&tasklist_lock);
-	switch (vc_data.pid) {
-	case  0:
-		priv = 1;
-	case -1:
-		for_each_process(p) {
-			int err = 0;
-
-			if (vx_task_xid(p) != id || p->pid <= 1 ||
-				(vc_data.pid && vxi->vx_initpid == p->pid))
-				continue;
-
-			err = group_send_sig_info(vc_data.sig, (void*)priv, p);
-			++count;
-			if (err != -EPERM)
-				retval = err;
-		}
-		break;
-
-	case 1:
-		if (vxi->vx_initpid) {
-			vc_data.pid = vxi->vx_initpid;
-			priv = 1;
-		}
-		/* fallthrough */
-	default:
-		p = find_task_by_real_pid(vc_data.pid);
-		if (p) {
-			if ((id == -1) || (vx_task_xid(p) == id))
-				retval = group_send_sig_info(vc_data.sig,
-					(void*)priv, p);
-		}
-		break;
-	}
-	read_unlock(&tasklist_lock);
+	retval = vx_info_kill(vxi, vc_data.pid, vc_data.sig);
 	put_vx_info(vxi);
 	return retval;
 }
