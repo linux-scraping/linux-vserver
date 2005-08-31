@@ -19,7 +19,9 @@
 
 #include <linux/fs.h>
 #include <linux/xattr.h>
+#include <linux/posix_acl_xattr.h>
 #include <linux/quotaops.h>
+#include <linux/vs_dlimit.h>
 #include "jfs_incore.h"
 #include "jfs_superblock.h"
 #include "jfs_dmap.h"
@@ -275,9 +277,16 @@ static int ea_write(struct inode *ip, struct jfs_ea_list *ealist, int size,
 	if (DQUOT_ALLOC_BLOCK(ip, nblocks)) {
 		return -EDQUOT;
 	}
+	/* Allocate new blocks to dlimit. */
+	if (DLIMIT_ALLOC_BLOCK(ip, nblocks)) {
+		DQUOT_FREE_BLOCK(ip, nblocks);
+		return -ENOSPC;
+	}
 
 	rc = dbAlloc(ip, INOHINT(ip), nblocks, &blkno);
 	if (rc) {
+		/*Rollback dlimit allocation. */
+		DLIMIT_FREE_BLOCK(ip, nblocks);
 		/*Rollback quota allocation. */
 		DQUOT_FREE_BLOCK(ip, nblocks);
 		return rc;
@@ -343,6 +352,8 @@ static int ea_write(struct inode *ip, struct jfs_ea_list *ealist, int size,
 	return 0;
 
       failed:
+	/* Rollback quota allocation. */
+	DLIMIT_FREE_BLOCK(ip, nblocks);
 	/* Rollback quota allocation. */
 	DQUOT_FREE_BLOCK(ip, nblocks);
 
@@ -480,6 +491,7 @@ static int ea_get(struct inode *inode, struct ea_buffer *ea_buf, int min_size)
 	s64 blkno;
 	int rc;
 	int quota_allocation = 0;
+	int dlimit_allocation = 0;
 
 	/* When fsck.jfs clears a bad ea, it doesn't clear the size */
 	if (ji->ea.flag == 0)
@@ -552,8 +564,13 @@ static int ea_get(struct inode *inode, struct ea_buffer *ea_buf, int min_size)
 		/* Allocate new blocks to quota. */
 		if (DQUOT_ALLOC_BLOCK(inode, blocks_needed))
 			return -EDQUOT;
-
 		quota_allocation = blocks_needed;
+
+		/* Allocate new blocks to dlimit. */
+		rc = -ENOSPC;
+		if (DLIMIT_ALLOC_BLOCK(inode, blocks_needed))
+			goto clean_up;
+		dlimit_allocation = blocks_needed;
 
 		rc = dbAlloc(inode, INOHINT(inode), (s64) blocks_needed,
 			     &blkno);
@@ -611,6 +628,9 @@ static int ea_get(struct inode *inode, struct ea_buffer *ea_buf, int min_size)
 	return ea_size;
 
       clean_up:
+	/* Rollback dlimit allocation */
+	if (dlimit_allocation)
+		DLIMIT_FREE_BLOCK(inode, dlimit_allocation);
 	/* Rollback quota allocation */
 	if (quota_allocation)
 		DQUOT_FREE_BLOCK(inode, quota_allocation);
@@ -690,8 +710,10 @@ static int ea_put(struct inode *inode, struct ea_buffer *ea_buf, int new_size)
 	}
 
 	/* If old blocks exist, they must be removed from quota allocation. */
-	if (old_blocks)
+	if (old_blocks) {
+		DLIMIT_FREE_BLOCK(inode, old_blocks);
 		DQUOT_FREE_BLOCK(inode, old_blocks);
+	}
 
 	inode->i_ctime = CURRENT_TIME;
 	rc = txCommit(tid, 1, &inode, 0);
@@ -718,9 +740,9 @@ static int can_set_system_xattr(struct inode *inode, const char *name,
 		return -EPERM;
 
 	/*
-	 * XATTR_NAME_ACL_ACCESS is tied to i_mode
+	 * POSIX_ACL_XATTR_ACCESS is tied to i_mode
 	 */
-	if (strcmp(name, XATTR_NAME_ACL_ACCESS) == 0) {
+	if (strcmp(name, POSIX_ACL_XATTR_ACCESS) == 0) {
 		acl = posix_acl_from_xattr(value, value_len);
 		if (IS_ERR(acl)) {
 			rc = PTR_ERR(acl);
@@ -750,7 +772,7 @@ static int can_set_system_xattr(struct inode *inode, const char *name,
 		JFS_IP(inode)->i_acl = JFS_ACL_NOT_CACHED;
 
 		return 0;
-	} else if (strcmp(name, XATTR_NAME_ACL_DEFAULT) == 0) {
+	} else if (strcmp(name, POSIX_ACL_XATTR_DEFAULT) == 0) {
 		acl = posix_acl_from_xattr(value, value_len);
 		if (IS_ERR(acl)) {
 			rc = PTR_ERR(acl);
@@ -780,7 +802,7 @@ static int can_set_xattr(struct inode *inode, const char *name,
 	if (IS_RDONLY(inode))
 		return -EROFS;
 
-	if (IS_IMMUTABLE(inode) || IS_APPEND(inode) || S_ISLNK(inode->i_mode))
+	if (IS_IMMUTABLE(inode) || IS_APPEND(inode))
 		return -EPERM;
 
 	if(strncmp(name, XATTR_SYSTEM_PREFIX, XATTR_SYSTEM_PREFIX_LEN) == 0)
@@ -789,12 +811,12 @@ static int can_set_xattr(struct inode *inode, const char *name,
 		 */
 		return can_set_system_xattr(inode, name, value, value_len);
 
-	if(strncmp(name, XATTR_TRUSTED_PREFIX, XATTR_TRUSTED_PREFIX_LEN) != 0)
+	if(strncmp(name, XATTR_TRUSTED_PREFIX, XATTR_TRUSTED_PREFIX_LEN) == 0)
 		return (capable(CAP_SYS_ADMIN) ? 0 : -EPERM);
 
 #ifdef CONFIG_JFS_SECURITY
 	if (strncmp(name, XATTR_SECURITY_PREFIX, XATTR_SECURITY_PREFIX_LEN)
-	    != 0)
+	    == 0)
 		return 0;	/* Leave it to the security module */
 #endif
 		
@@ -946,8 +968,7 @@ int __jfs_setxattr(struct inode *inode, const char *name, const void *value,
       out:
 	up_write(&JFS_IP(inode)->xattr_sem);
 
-	if (os2name)
-		kfree(os2name);
+	kfree(os2name);
 
 	return rc;
 }
@@ -1042,8 +1063,7 @@ ssize_t __jfs_getxattr(struct inode *inode, const char *name, void *data,
       out:
 	up_read(&JFS_IP(inode)->xattr_sem);
 
-	if (os2name)
-		kfree(os2name);
+	kfree(os2name);
 
 	return size;
 }

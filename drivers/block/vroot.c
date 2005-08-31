@@ -61,7 +61,8 @@ static int vroot_set_dev(
 	} else
 		goto out_fput;
 
-	vxdprintk(1, "vroot[%d]_set_dev: dev=%p[%d,%d]\n",
+	vxdprintk(VXD_CBIT(misc, 0),
+		"vroot[%d]_set_dev: dev=%p[%d,%d]\n",
 		vr->vr_number, real_bdev,
 		imajor(real_bdev->bd_inode), iminor(real_bdev->bd_inode));
 
@@ -88,7 +89,8 @@ static int vroot_clr_dev(
 
 	real_bdev = vr->vr_device;
 
-	vxdprintk(1, "vroot[%d]_clr_dev: dev=%p[%d,%d]\n",
+	vxdprintk(VXD_CBIT(misc, 0),
+		"vroot[%d]_clr_dev: dev=%p[%d,%d]\n",
 		vr->vr_number, real_bdev,
 		imajor(real_bdev->bd_inode), iminor(real_bdev->bd_inode));
 
@@ -158,7 +160,8 @@ struct block_device *vroot_get_real_bdev(struct block_device *bdev)
 	vr = &vroot_dev[minor];
 	real_bdev = vr->vr_device;
 
-	vxdprintk(1, "vroot[%d]_get_real_bdev: dev=%p[%p,%d,%d]\n",
+	vxdprintk(VXD_CBIT(misc, 0),
+		"vroot[%d]_get_real_bdev: dev=%p[%p,%d,%d]\n",
 		vr->vr_number, real_bdev, real_bdev->bd_inode,
 		imajor(real_bdev->bd_inode), iminor(real_bdev->bd_inode));
 
@@ -264,4 +267,16 @@ void vroot_exit(void)
 
 module_init(vroot_init);
 module_exit(vroot_exit);
+
+#ifndef MODULE
+
+static int __init max_vroot_setup(char *str)
+{
+	max_vroot = simple_strtol(str, NULL, 0);
+	return 1;
+}
+
+__setup("max_vroot=", max_vroot_setup);
+
+#endif
 

@@ -25,6 +25,7 @@ extern unsigned int vx_debug_net;
 extern unsigned int vx_debug_limit;
 extern unsigned int vx_debug_dlim;
 extern unsigned int vx_debug_cvirt;
+extern unsigned int vx_debug_misc;
 
 
 #define VX_LOGLEVEL	"vxD: "

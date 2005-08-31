@@ -15,6 +15,7 @@
 #include <linux/types.h>
 #include <linux/ctype.h>
 #include <linux/sysctl.h>
+#include <linux/parser.h>
 #include <linux/fs.h>
 
 #include <asm/uaccess.h>
@@ -24,6 +25,7 @@
 #define CTL_VSERVER	4242    /* unused? */
 
 enum {
+	CTL_DEBUG_ERROR = 0,
 	CTL_DEBUG_SWITCH = 1,
 	CTL_DEBUG_XID,
 	CTL_DEBUG_NID,
@@ -31,6 +33,7 @@ enum {
 	CTL_DEBUG_LIMIT,
 	CTL_DEBUG_DLIM,
 	CTL_DEBUG_CVIRT,
+	CTL_DEBUG_MISC,
 };
 
 
@@ -41,6 +44,7 @@ unsigned int vx_debug_net = 0;
 unsigned int vx_debug_limit = 0;
 unsigned int vx_debug_dlim = 0;
 unsigned int vx_debug_cvirt = 0;
+unsigned int vx_debug_misc = 0;
 
 
 static struct ctl_table_header *vserver_table_header;
@@ -180,6 +184,14 @@ static ctl_table debug_table[] = {
 		.mode		= 0644,
 		.proc_handler	= &proc_dodebug
 	},
+	{
+		.ctl_name	= CTL_DEBUG_MISC,
+		.procname	= "debug_misc",
+		.data		= &vx_debug_misc,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= &proc_dodebug
+	},
 	{ .ctl_name = 0 }
 };
 
@@ -201,4 +213,5 @@ EXPORT_SYMBOL_GPL(vx_debug_net);
 EXPORT_SYMBOL_GPL(vx_debug_limit);
 EXPORT_SYMBOL_GPL(vx_debug_dlim);
 EXPORT_SYMBOL_GPL(vx_debug_cvirt);
+EXPORT_SYMBOL_GPL(vx_debug_misc);
 

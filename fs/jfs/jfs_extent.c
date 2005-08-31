@@ -18,7 +18,9 @@
 
 #include <linux/fs.h>
 #include <linux/quotaops.h>
+#include <linux/vs_dlimit.h>
 #include "jfs_incore.h"
+#include "jfs_inode.h"
 #include "jfs_superblock.h"
 #include "jfs_dmap.h"
 #include "jfs_extent.h"
@@ -32,12 +34,6 @@ static int extBalloc(struct inode *, s64, s64 *, s64 *);
 static int extBrealloc(struct inode *, s64, s64, s64 *, s64 *);
 #endif
 static s64 extRoundDown(s64 nb);
-
-/*
- * external references
- */
-extern int jfs_commit_inode(struct inode *, int);
-
 
 #define DPD(a)          (printk("(a): %d\n",(a)))
 #define DPC(a)          (printk("(a): %c\n",(a)))
@@ -151,6 +147,13 @@ extAlloc(struct inode *ip, s64 xlen, s64 pno, xad_t * xp, boolean_t abnr)
 		up(&JFS_IP(ip)->commit_sem);
 		return -EDQUOT;
 	}
+	/* Allocate blocks to dlimit. */
+	if (DLIMIT_ALLOC_BLOCK(ip, nxlen)) {
+		DQUOT_FREE_BLOCK(ip, nxlen);
+		dbFree(ip, nxaddr, (s64) nxlen);
+		up(&JFS_IP(ip)->commit_sem);
+		return -ENOSPC;
+	}
 
 	/* determine the value of the extent flag */
 	xflag = (abnr == TRUE) ? XAD_NOTRECORDED : 0;
@@ -169,6 +172,7 @@ extAlloc(struct inode *ip, s64 xlen, s64 pno, xad_t * xp, boolean_t abnr)
 	 */
 	if (rc) {
 		dbFree(ip, nxaddr, nxlen);
+		DLIMIT_FREE_BLOCK(ip, nxlen);
 		DQUOT_FREE_BLOCK(ip, nxlen);
 		up(&JFS_IP(ip)->commit_sem);
 		return (rc);
@@ -266,6 +270,13 @@ int extRealloc(struct inode *ip, s64 nxlen, xad_t * xp, boolean_t abnr)
 		up(&JFS_IP(ip)->commit_sem);
 		return -EDQUOT;
 	}
+	/* Allocate blocks to dlimit. */
+	if (DLIMIT_ALLOC_BLOCK(ip, nxlen)) {
+		DQUOT_FREE_BLOCK(ip, nxlen);
+		dbFree(ip, nxaddr, (s64) nxlen);
+		up(&JFS_IP(ip)->commit_sem);
+		return -ENOSPC;
+	}
 
 	delta = nxlen - xlen;
 
@@ -302,6 +313,7 @@ int extRealloc(struct inode *ip, s64 nxlen, xad_t * xp, boolean_t abnr)
 		/* extend the extent */
 		if ((rc = xtExtend(0, ip, xoff + xlen, (int) nextend, 0))) {
 			dbFree(ip, xaddr + xlen, delta);
+			DLIMIT_FREE_BLOCK(ip, nxlen);
 			DQUOT_FREE_BLOCK(ip, nxlen);
 			goto exit;
 		}
@@ -313,6 +325,7 @@ int extRealloc(struct inode *ip, s64 nxlen, xad_t * xp, boolean_t abnr)
 		 */
 		if ((rc = xtTailgate(0, ip, xoff, (int) ntail, nxaddr, 0))) {
 			dbFree(ip, nxaddr, nxlen);
+			DLIMIT_FREE_BLOCK(ip, nxlen);
 			DQUOT_FREE_BLOCK(ip, nxlen);
 			goto exit;
 		}

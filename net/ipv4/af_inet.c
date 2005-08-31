@@ -425,7 +425,7 @@ int inet_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len)
 			s_addr = ipv4root;
 			s_addr1 = (nbipv4 > 1) ? 0 : s_addr;
 			s_addr2 = v4_bcast;
-		} else if (s_addr == 0x0100007f) {
+		} else if (s_addr == IPI_LOOPBACK) {
 			/* rewrite localhost to ipv4root */
 			s_addr = ipv4root;
 			s_addr1 = ipv4root;
@@ -1051,6 +1051,15 @@ static int __init init_ipv4_mibs(void)
 static int ipv4_proc_init(void);
 extern void ipfrag_init(void);
 
+/*
+ *	IP protocol layer initialiser
+ */
+
+static struct packet_type ip_packet_type = {
+	.type = __constant_htons(ETH_P_IP),
+	.func = ip_rcv,
+};
+
 static int __init inet_init(void)
 {
 	struct sk_buff *dummy_skb;
@@ -1144,6 +1153,8 @@ static int __init inet_init(void)
 
 	ipfrag_init();
 
+	dev_add_pack(&ip_packet_type);
+
 	rc = 0;
 out:
 	return rc;
@@ -1161,6 +1172,10 @@ module_init(inet_init);
 #ifdef CONFIG_PROC_FS
 extern int  fib_proc_init(void);
 extern void fib_proc_exit(void);
+#ifdef CONFIG_IP_FIB_TRIE
+extern int  fib_stat_proc_init(void);
+extern void fib_stat_proc_exit(void);
+#endif
 extern int  ip_misc_proc_init(void);
 extern int  raw_proc_init(void);
 extern void raw_proc_exit(void);
@@ -1181,11 +1196,19 @@ static int __init ipv4_proc_init(void)
 		goto out_udp;
 	if (fib_proc_init())
 		goto out_fib;
+#ifdef CONFIG_IP_FIB_TRIE
+         if (fib_stat_proc_init())
+                 goto out_fib_stat;
+#endif
 	if (ip_misc_proc_init())
 		goto out_misc;
 out:
 	return rc;
 out_misc:
+#ifdef CONFIG_IP_FIB_TRIE
+ 	fib_stat_proc_exit();
+out_fib_stat:
+#endif
 	fib_proc_exit();
 out_fib:
 	udp4_proc_exit();

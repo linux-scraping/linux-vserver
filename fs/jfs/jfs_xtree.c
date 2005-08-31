@@ -21,6 +21,7 @@
 
 #include <linux/fs.h>
 #include <linux/quotaops.h>
+#include <linux/vs_dlimit.h>
 #include "jfs_incore.h"
 #include "jfs_filsys.h"
 #include "jfs_metapage.h"
@@ -134,14 +135,6 @@ static int xtSearchNode(struct inode *ip,
 
 static int xtRelink(tid_t tid, struct inode *ip, xtpage_t * fp);
 #endif				/*  _STILL_TO_PORT */
-
-/* External references */
-
-/*
- *      debug control
- */
-/*      #define _JFS_DEBUG_XTREE        1 */
-
 
 /*
  *      xtLookup()
@@ -849,7 +842,12 @@ int xtInsert(tid_t tid,		/* transaction id */
 			hint = 0;
 		if ((rc = DQUOT_ALLOC_BLOCK(ip, xlen)))
 			goto out;
+		if ((rc = DLIMIT_ALLOC_BLOCK(ip, xlen))) {
+			DQUOT_FREE_BLOCK(ip, xlen);
+			goto out;
+		}
 		if ((rc = dbAlloc(ip, hint, (s64) xlen, &xaddr))) {
+			DLIMIT_FREE_BLOCK(ip, xlen);
 			DQUOT_FREE_BLOCK(ip, xlen);
 			goto out;
 		}
@@ -879,6 +877,7 @@ int xtInsert(tid_t tid,		/* transaction id */
 			/* undo data extent allocation */
 			if (*xaddrp == 0) {
 				dbFree(ip, xaddr, (s64) xlen);
+				DLIMIT_FREE_BLOCK(ip, xlen);
 				DQUOT_FREE_BLOCK(ip, xlen);
 			}
 			return rc;
@@ -927,7 +926,6 @@ int xtInsert(tid_t tid,		/* transaction id */
       out:
 	/* unpin the leaf page */
 	XT_PUTPAGE(mp);
-
 	return rc;
 }
 
@@ -1239,6 +1237,7 @@ xtSplitPage(tid_t tid, struct inode *ip,
 	struct tlock *tlck;
 	struct xtlock *sxtlck = NULL, *rxtlck = NULL;
 	int quota_allocation = 0;
+	int dlimit_allocation = 0;
 
 	smp = split->mp;
 	sp = XT_PAGE(ip, smp);
@@ -1251,12 +1250,18 @@ xtSplitPage(tid_t tid, struct inode *ip,
 	rbn = addressPXD(pxd);
 
 	/* Allocate blocks to quota. */
-       if (DQUOT_ALLOC_BLOCK(ip, lengthPXD(pxd))) {
+	if (DQUOT_ALLOC_BLOCK(ip, lengthPXD(pxd))) {
 	       rc = -EDQUOT;
 	       goto clean_up;
 	}
-
 	quota_allocation += lengthPXD(pxd);
+
+	/* Allocate blocks to dlimit. */
+	if (DLIMIT_ALLOC_BLOCK(ip, lengthPXD(pxd))) {
+	       rc = -ENOSPC;
+	       goto clean_up;
+	}
+	dlimit_allocation += lengthPXD(pxd);
 
 	/*
 	 * allocate the new right page for the split
@@ -1459,6 +1464,9 @@ xtSplitPage(tid_t tid, struct inode *ip,
 
       clean_up:
 
+	/* Rollback dlimit allocation. */
+	if (dlimit_allocation)
+		DLIMIT_FREE_BLOCK(ip, dlimit_allocation);
 	/* Rollback quota allocation. */
 	if (quota_allocation)
 		DQUOT_FREE_BLOCK(ip, quota_allocation);
@@ -1522,6 +1530,12 @@ xtSplitRoot(tid_t tid,
 	if (DQUOT_ALLOC_BLOCK(ip, lengthPXD(pxd))) {
 		release_metapage(rmp);
 		return -EDQUOT;
+	}
+	/* Allocate blocks to dlimit. */
+	if (DLIMIT_ALLOC_BLOCK(ip, lengthPXD(pxd))) {
+		DQUOT_FREE_BLOCK(ip, lengthPXD(pxd));
+		release_metapage(rmp);
+		return -ENOSPC;
 	}
 
 	jfs_info("xtSplitRoot: ip:0x%p rmp:0x%p", ip, rmp);
@@ -3949,6 +3963,8 @@ s64 xtTruncate(tid_t tid, struct inode *ip, s64 newsize, int flag)
 	else
 		ip->i_size = newsize;
 
+	/* update dlimit allocation to reflect freed blocks */
+	DLIMIT_FREE_BLOCK(ip, nfreed);
 	/* update quota allocation to reflect freed blocks */
 	DQUOT_FREE_BLOCK(ip, nfreed);
 
@@ -4139,338 +4155,6 @@ s64 xtTruncate_pmap(tid_t tid, struct inode *ip, s64 committed_size)
 
 	return 0;
 }
-
-
-#ifdef _JFS_DEBUG_XTREE
-/*
- *      xtDisplayTree()
- *
- * function: traverse forward
- */
-int xtDisplayTree(struct inode *ip)
-{
-	int rc = 0;
-	struct metapage *mp;
-	xtpage_t *p;
-	s64 bn, pbn;
-	int index, lastindex, v, h;
-	xad_t *xad;
-	struct btstack btstack;
-	struct btframe *btsp;
-	struct btframe *parent;
-
-	printk("display B+-tree.\n");
-
-	/* clear stack */
-	btsp = btstack.stack;
-
-	/*
-	 * start with root
-	 *
-	 * root resides in the inode
-	 */
-	bn = 0;
-	v = h = 0;
-
-	/*
-	 * first access of each page:
-	 */
-      getPage:
-	XT_GETPAGE(ip, bn, mp, PSIZE, p, rc);
-	if (rc)
-		return rc;
-
-	/* process entries forward from first index */
-	index = XTENTRYSTART;
-	lastindex = le16_to_cpu(p->header.nextindex) - 1;
-
-	if (p->header.flag & BT_INTERNAL) {
-		/*
-		 * first access of each internal page
-		 */
-		goto getChild;
-	} else {		/* (p->header.flag & BT_LEAF) */
-
-		/*
-		 * first access of each leaf page
-		 */
-		printf("leaf page ");
-		xtDisplayPage(ip, bn, p);
-
-		/* unpin the leaf page */
-		XT_PUTPAGE(mp);
-	}
-
-	/*
-	 * go back up to the parent page
-	 */
-      getParent:
-	/* pop/restore parent entry for the current child page */
-	if ((parent = (btsp == btstack.stack ? NULL : --btsp)) == NULL)
-		/* current page must have been root */
-		return;
-
-	/*
-	 * parent page scan completed
-	 */
-	if ((index = parent->index) == (lastindex = parent->lastindex)) {
-		/* go back up to the parent page */
-		goto getParent;
-	}
-
-	/*
-	 * parent page has entries remaining
-	 */
-	/* get back the parent page */
-	bn = parent->bn;
-	/* v = parent->level; */
-	XT_GETPAGE(ip, bn, mp, PSIZE, p, rc);
-	if (rc)
-		return rc;
-
-	/* get next parent entry */
-	index++;
-
-	/*
-	 * internal page: go down to child page of current entry
-	 */
-      getChild:
-	/* push/save current parent entry for the child page */
-	btsp->bn = pbn = bn;
-	btsp->index = index;
-	btsp->lastindex = lastindex;
-	/* btsp->level = v; */
-	/* btsp->node = h; */
-	++btsp;
-
-	/* get child page */
-	xad = &p->xad[index];
-	bn = addressXAD(xad);
-
-	/*
-	 * first access of each internal entry:
-	 */
-	/* release parent page */
-	XT_PUTPAGE(mp);
-
-	printk("traverse down 0x%lx[%d]->0x%lx\n", (ulong) pbn, index,
-	       (ulong) bn);
-	v++;
-	h = index;
-
-	/* process the child page */
-	goto getPage;
-}
-
-
-/*
- *      xtDisplayPage()
- *
- * function: display page
- */
-int xtDisplayPage(struct inode *ip, s64 bn, xtpage_t * p)
-{
-	int rc = 0;
-	xad_t *xad;
-	s64 xaddr, xoff;
-	int xlen, i, j;
-
-	/* display page control */
-	printf("bn:0x%lx flag:0x%x nextindex:%d\n",
-	       (ulong) bn, p->header.flag,
-	       le16_to_cpu(p->header.nextindex));
-
-	/* display entries */
-	xad = &p->xad[XTENTRYSTART];
-		for (i = XTENTRYSTART, j = 1; i < le16_to_cpu(p->header.nextindex);
-		     i++, xad++, j++) {
-			xoff = offsetXAD(xad);
-			xaddr = addressXAD(xad);
-			xlen = lengthXAD(xad);
-			printf("\t[%d] 0x%lx:0x%lx(0x%x)", i, (ulong) xoff,
-			       (ulong) xaddr, xlen);
-
-			if (j == 4) {
-				printf("\n");
-				j = 0;
-		}
-	}
-
-	printf("\n");
-}
-#endif				/* _JFS_DEBUG_XTREE */
-
-
-#ifdef _JFS_WIP
-/*
- *      xtGather()
- *
- * function:
- *      traverse for allocation acquiring tlock at commit time
- *      (vs at the time of update) logging backward top down
- *
- * note:
- *      problem - establishing that all new allocation have been
- *      processed both for append and random write in sparse file
- *      at the current entry at the current subtree root page
- *
- */
-int xtGather(btree_t *t)
-{
-	int rc = 0;
-	xtpage_t *p;
-	u64 bn;
-	int index;
-	btentry_t *e;
-	struct btstack btstack;
-	struct btsf *parent;
-
-	/* clear stack */
-	BT_CLR(&btstack);
-
-	/*
-	 * start with root
-	 *
-	 * root resides in the inode
-	 */
-	bn = 0;
-	XT_GETPAGE(ip, bn, mp, PSIZE, p, rc);
-	if (rc)
-		return rc;
-
-	/* new root is NOT pointed by a new entry
-	   if (p->header.flag & NEW)
-	   allocate new page lock;
-	   write a NEWPAGE log;
-	 */
-
-      dopage:
-	/*
-	 * first access of each page:
-	 */
-	/* process entries backward from last index */
-	index = le16_to_cpu(p->header.nextindex) - 1;
-
-	if (p->header.flag & BT_LEAF) {
-		/*
-		 * first access of each leaf page
-		 */
-		/* process leaf page entries backward */
-		for (; index >= XTENTRYSTART; index--) {
-			e = &p->xad[index];
-			/*
-			 * if newpage, log NEWPAGE.
-			 *
-			 if (e->flag & XAD_NEW) {
-			 nfound =+ entry->length;
-			 update current page lock for the entry;
-			 newpage(entry);
-			 *
-			 * if moved, log move.
-			 *
-			 } else if (e->flag & XAD_MOVED) {
-			 reset flag;
-			 update current page lock for the entry;
-			 }
-			 */
-		}
-
-		/* unpin the leaf page */
-		XT_PUTPAGE(mp);
-
-		/*
-		 * go back up to the parent page
-		 */
-	      getParent:
-		/* restore parent entry for the current child page */
-		if ((parent = BT_POP(&btstack)) == NULL)
-			/* current page must have been root */
-			return 0;
-
-		if ((index = parent->index) == XTENTRYSTART) {
-			/*
-			 * parent page scan completed
-			 */
-			/* go back up to the parent page */
-			goto getParent;
-		} else {
-			/*
-			 * parent page has entries remaining
-			 */
-			/* get back the parent page */
-			bn = parent->bn;
-			XT_GETPAGE(ip, bn, mp, PSIZE, p, rc);
-			if (rc)
-				return -EIO;
-
-			/* first subroot page which
-			 * covers all new allocated blocks
-			 * itself not new/modified.
-			 * (if modified from split of descendent,
-			 * go down path of split page)
-
-			 if (nfound == nnew &&
-			 !(p->header.flag & (NEW | MOD)))
-			 exit scan;
-			 */
-
-			/* process parent page entries backward */
-			index--;
-		}
-	} else {
-		/*
-		 * first access of each internal page
-		 */
-	}
-
-	/*
-	 * internal page: go down to child page of current entry
-	 */
-
-	/* save current parent entry for the child page */
-	BT_PUSH(&btstack, bn, index);
-
-	/* get current entry for the child page */
-	e = &p->xad[index];
-
-	/*
-	 * first access of each internal entry:
-	 */
-	/*
-	 * if new entry, log btree_tnewentry.
-	 *
-	 if (e->flag & XAD_NEW)
-	 update parent page lock for the entry;
-	 */
-
-	/* release parent page */
-	XT_PUTPAGE(mp);
-
-	/* get child page */
-	bn = e->bn;
-	XT_GETPAGE(ip, bn, mp, PSIZE, p, rc);
-	if (rc)
-		return rc;
-
-	/*
-	 * first access of each non-root page:
-	 */
-	/*
-	 * if new, log btree_newpage.
-	 *
-	 if (p->header.flag & NEW)
-	 allocate new page lock;
-	 write a NEWPAGE log (next, prev);
-	 */
-
-	/* process the child page */
-	goto dopage;
-
-      out:
-	return 0;
-}
-#endif				/* _JFS_WIP */
-
 
 #ifdef CONFIG_JFS_STATISTICS
 int jfs_xtstat_read(char *buffer, char **start, off_t offset, int length,

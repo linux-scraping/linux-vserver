@@ -12,14 +12,14 @@ struct namespace {
 	struct rw_semaphore	sem;
 };
 
-extern void umount_tree(struct vfsmount *);
-extern void umount_unused(struct vfsmount *, struct fs_struct *);
 extern int copy_namespace(int, struct task_struct *);
 extern void __put_namespace(struct namespace *namespace);
+extern void umount_unused(struct vfsmount *, struct fs_struct *);
 
 static inline void put_namespace(struct namespace *namespace)
 {
-	if (atomic_dec_and_test(&namespace->count))
+	if (atomic_dec_and_lock(&namespace->count, &vfsmount_lock))
+		/* releases vfsmount_lock */
 		__put_namespace(namespace);
 }
 
