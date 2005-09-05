@@ -15,8 +15,6 @@
 
 #include <linux/fs.h>
 
-#define dprintk(...)	/* printk(__VA_ARGS__) */
-
 #if defined(CONFIG_QUOTA)
 
 /*

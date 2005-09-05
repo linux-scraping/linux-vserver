@@ -1197,8 +1197,8 @@ static void destroy_inodecache(void)
 }
 
 #ifdef CONFIG_QUOTA
-static ssize_t ufs_quota_read(struct super_block *, int, char *,size_t, loff_t);
-static ssize_t ufs_quota_write(struct super_block *, int, const char *, size_t, loff_t);
+static ssize_t ufs_quota_read(struct dqhash *, int, char *,size_t, loff_t);
+static ssize_t ufs_quota_write(struct dqhash *, int, const char *, size_t, loff_t);
 #endif
 
 static struct super_operations ufs_super_ops = {

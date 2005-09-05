@@ -2564,10 +2564,6 @@ out_rel_both:
 	path_release(&dir_nd);
 out_rel_old:
 	path_release(&old_nd);
-
-	vxdprintk(VXD_CBIT(misc, 3),
-		"dentry@end: %p[#%d]", dentry,
-		atomic_read(&dentry->d_count));
 	kfree(path);
 	return err;
 }
