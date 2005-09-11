@@ -78,6 +78,7 @@
 #include <linux/kmod.h>
 #include <linux/namei.h>
 #include <linux/buffer_head.h>
+#include <linux/vserver/debug.h>
 
 #include <asm/uaccess.h>
 
@@ -471,7 +472,7 @@ struct dqhash *new_dqhash(struct super_block *sb, unsigned int id)
 	lock_kernel();
 	list_add(&hash->dqh_list, &dqhash_list);
 	unlock_kernel();
-	dprintk ("··· new_dqhash: %p [#0x%08x]\n", hash, hash->dqh_id);
+	vxdprintk (1, "··· new_dqhash: %p [#0x%08x]", hash, hash->dqh_id);
 	return hash;
 
 	// kfree(hash);
@@ -483,7 +484,8 @@ void destroy_dqhash(struct dqhash *hash)
 {
 	int cnt;
 
-	dprintk ("··· destroy_dqhash: %p [#0x%08x] c=%d\n", hash, hash->dqh_id, atomic_read(&hash->dqh_count));
+	vxdprintk (1, "··· destroy_dqhash: %p [#0x%08x] c=%d",
+		hash, hash->dqh_id, atomic_read(&hash->dqh_count));
 	lock_kernel();
 	list_del_init(&hash->dqh_list);
 	unlock_kernel();
