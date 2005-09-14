@@ -16,6 +16,7 @@
 #include <linux/reboot.h>
 #include <linux/vs_context.h>
 #include <linux/vs_network.h>
+#include <linux/vserver/signal.h>
 
 #include <asm/uaccess.h>
 #include <asm/unistd.h>
@@ -106,7 +107,8 @@ long vs_reboot(unsigned int cmd, void * arg)
 
 	if (vx_info_flags(vxi, VXF_REBOOT_KILL, 0)) {
 		vx_info_kill(vxi, 0, SIGKILL);
-
+		vx_info_kill(vxi, 1, SIGKILL);
+		return 0;
 	} else {
 		ret = vs_reboot_helper(vxi, cmd, arg);
 	}
