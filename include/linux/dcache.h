@@ -105,6 +105,7 @@ struct dentry {
 	struct dcookie_struct *d_cookie; /* cookie, if any */
 	struct hlist_node d_hash;	/* lookup hash list */	
 	int d_mounted;
+	struct vx_info *d_vx_info;
 	unsigned char d_iname[DNAME_INLINE_LEN_MIN];	/* small names */
 };
 

@@ -36,6 +36,7 @@ const char *vlimit_name[NUM_LIMITS] = {
 	[VLIMIT_OPENFD]		= "OPENFD",
 	[VLIMIT_ANON]		= "ANON",
 	[VLIMIT_SHMEM]		= "SHMEM",
+	[VLIMIT_DENTRY]		= "DENTRY",
 };
 
 EXPORT_SYMBOL_GPL(vlimit_name);
@@ -56,6 +57,7 @@ static int is_valid_rlimit(int id)
 		case VLIMIT_OPENFD:
 		case VLIMIT_ANON:
 		case VLIMIT_SHMEM:
+		case VLIMIT_DENTRY:
 			valid = 1;
 			break;
 	}
@@ -134,6 +136,7 @@ int vc_get_rlimit_mask(uint32_t id, void __user *data)
 		(1 << RLIMIT_LOCKS) |
 		(1 << RLIMIT_AS) |
 		(1 << VLIMIT_ANON) |
+		(1 << VLIMIT_DENTRY) |
 		0
 		};
 

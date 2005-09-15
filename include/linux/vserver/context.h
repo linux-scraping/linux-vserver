@@ -113,6 +113,11 @@ struct vx_info {
 	char vx_name[65];			/* vserver name */
 };
 
+struct vx_info_save {
+	struct vx_info *vxi;
+	xid_t xid;
+};
+
 
 /* status flags */
 

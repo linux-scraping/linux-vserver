@@ -39,6 +39,7 @@ static inline int vx_info_proc_limit(struct _vx_limit *limit, char *buffer)
 		"SOCK"	VX_LIMIT_FMT
 		"MSGQ"	VX_LIMIT_FMT
 		"SHM"	VX_LIMIT_FMT
+		"DENT"	VX_LIMIT_FMT
 		VX_LIMIT_ARG(RLIMIT_NPROC)
 		VX_LIMIT_ARG(RLIMIT_AS)
 		VX_LIMIT_ARG(RLIMIT_MEMLOCK)
@@ -50,6 +51,7 @@ static inline int vx_info_proc_limit(struct _vx_limit *limit, char *buffer)
 		VX_LIMIT_ARG(VLIMIT_NSOCK)
 		VX_LIMIT_ARG(RLIMIT_MSGQUEUE)
 		VX_LIMIT_ARG(VLIMIT_SHMEM)
+		VX_LIMIT_ARG(VLIMIT_DENTRY)
 		);
 }
 

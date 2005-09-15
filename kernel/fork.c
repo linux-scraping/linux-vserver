@@ -1261,6 +1261,14 @@ long do_fork(unsigned long clone_flags,
 
 	if (pid < 0)
 		return -EAGAIN;
+
+	/* kernel threads are host only */
+	if ((clone_flags & CLONE_KTHREAD) && !vx_check(0, VX_ADMIN)) {
+		vxwprintk(1, "xid=%d tried to spawn a kernel thread.",
+			vx_current_xid());
+		return -EPERM;
+	}
+
 	if (unlikely(current->ptrace)) {
 		trace = fork_traceflag (clone_flags);
 		if (trace)

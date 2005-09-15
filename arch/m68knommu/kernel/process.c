@@ -115,7 +115,7 @@ void show_regs(struct pt_regs * regs)
 int kernel_thread(int (*fn)(void *), void * arg, unsigned long flags)
 {
 	int retval;
-	long clone_arg = flags | CLONE_VM;
+	long clone_arg = flags | CLONE_VM | CLONE_KTHREAD;
 	mm_segment_t fs;
 
 	fs = get_fs();

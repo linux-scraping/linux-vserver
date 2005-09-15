@@ -472,7 +472,8 @@ struct dqhash *new_dqhash(struct super_block *sb, unsigned int id)
 	lock_kernel();
 	list_add(&hash->dqh_list, &dqhash_list);
 	unlock_kernel();
-	vxdprintk (1, "··· new_dqhash: %p [#0x%08x]", hash, hash->dqh_id);
+	vxdprintk(VXD_CBIT(misc, 0),
+		"new_dqhash: %p [#0x%08x]", hash, hash->dqh_id);
 	return hash;
 
 	// kfree(hash);
@@ -484,7 +485,8 @@ void destroy_dqhash(struct dqhash *hash)
 {
 	int cnt;
 
-	vxdprintk (1, "··· destroy_dqhash: %p [#0x%08x] c=%d",
+	vxdprintk(VXD_CBIT(misc, 0),
+		"destroy_dqhash: %p [#0x%08x] c=%d",
 		hash, hash->dqh_id, atomic_read(&hash->dqh_count));
 	lock_kernel();
 	list_del_init(&hash->dqh_list);

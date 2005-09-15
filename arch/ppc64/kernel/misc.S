@@ -658,7 +658,7 @@ _GLOBAL(kernel_thread)
 	stdu	r1,-STACK_FRAME_OVERHEAD(r1)
 	mr	r29,r3
 	mr	r30,r4
-	ori	r3,r5,CLONE_VM	/* flags */
+	ori	r3,r5,(CLONE_VM|CLONE_KTHREAD)	/* flags */
 	oris	r3,r3,(CLONE_UNTRACED>>16)
 	li	r4,0		/* new sp (unused) */
 	li	r0,__NR_clone

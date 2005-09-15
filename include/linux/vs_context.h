@@ -166,6 +166,32 @@ static inline void __wakeup_vx_info(struct vx_info *vxi)
 		wake_up_interruptible(&vxi->vx_wait);
 }
 
+
+#define enter_vx_info(v,s)	__enter_vx_info(v,s,__FILE__,__LINE__)
+
+static __inline__ void __enter_vx_info(struct vx_info *vxi,
+	struct vx_info_save *vxis, const char *_file, int _line)
+{
+	vxlprintk(VXD_CBIT(xid, 5), "enter_vx_info(%p[#%d],%p) %p[#%d,%p]",
+		vxi, vxi ? vxi->vx_id : 0, vxis, current,
+		current->xid, current->vx_info, _file, _line);
+	vxis->vxi = xchg(&current->vx_info, vxi);
+	vxis->xid = current->xid;
+	current->xid = vxi->vx_id;
+}
+
+#define leave_vx_info(s)	__leave_vx_info(v,s,__FILE__,__LINE__)
+
+static __inline__ void __leave_vx_info(struct vx_info_save *vxis,
+	const char *_file, int _line)
+{
+	vxlprintk(VXD_CBIT(xid, 5), "leave_vx_info(%p[#%d,%p]) %p[#%d,%p]",
+		vxis, vxis->xid, vxis->vxi, current,
+		current->xid, current->vx_info, _file, _line);
+	xchg(&current->vx_info, vxis->vxi);
+	current->xid = vxis->xid;
+}
+
 #else
 #warning duplicate inclusion
 #endif

@@ -6,6 +6,7 @@
 #define VLIMIT_OPENFD	17
 #define VLIMIT_ANON	18
 #define VLIMIT_SHMEM	19
+#define VLIMIT_DENTRY	20
 
 #ifdef	__KERNEL__
 
@@ -15,6 +16,8 @@ void vx_vsi_meminfo(struct sysinfo *);
 void vx_vsi_swapinfo(struct sysinfo *);
 
 #define VXD_RLIMIT(r,l)		(VXD_CBIT(limit, (l)) && ((r) == (l)))
+
+#define	VXD_RLIMIT_COND(r)	(VXD_CBIT(limit, (r)))
 
 #define NUM_LIMITS	24
 
