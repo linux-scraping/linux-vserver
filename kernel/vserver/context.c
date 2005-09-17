@@ -16,6 +16,7 @@
  *  V0.09  revert to non RCU for now
  *  V0.10  and back to working RCU hash
  *  V0.11  and back to locking again
+ *  V0.12  referenced context store
  *
  */
 
@@ -39,6 +40,15 @@
 #include "cvirt_init.h"
 #include "limit_init.h"
 #include "sched_init.h"
+
+
+atomic_t vx_global_ctotal	= ATOMIC_INIT(0);
+atomic_t vx_global_cactive 	= ATOMIC_INIT(0);
+
+
+/*	now inactive context structures */
+
+static struct hlist_head vx_info_inactive = HLIST_HEAD_INIT;
 
 
 /*	__alloc_vx_info()
@@ -79,6 +89,7 @@ static struct vx_info *__alloc_vx_info(xid_t xid)
 	vxdprintk(VXD_CBIT(xid, 0),
 		"alloc_vx_info(%d) = %p", xid, new);
 	vxh_alloc_vx_info(new);
+	atomic_inc(&vx_global_ctotal);
 	return new;
 }
 
@@ -92,6 +103,7 @@ static void __dealloc_vx_info(struct vx_info *vxi)
 		"dealloc_vx_info(%p)", vxi);
 	vxh_dealloc_vx_info(vxi);
 
+	hlist_del(&vxi->vx_hlist);
 	vxi->vx_hlist.next = LIST_POISON1;
 	vxi->vx_id = -1;
 
@@ -102,6 +114,7 @@ static void __dealloc_vx_info(struct vx_info *vxi)
 
 	vxi->vx_state |= VXS_RELEASED;
 	kfree(vxi);
+	atomic_dec(&vx_global_ctotal);
 }
 
 static void __shutdown_vx_info(struct vx_info *vxi)
@@ -146,7 +159,8 @@ void free_vx_info(struct vx_info *vxi)
 
 #define VX_HASH_SIZE	13
 
-struct hlist_head vx_info_hash[VX_HASH_SIZE];
+static struct hlist_head vx_info_hash[VX_HASH_SIZE] =
+	{ [0 ... VX_HASH_SIZE-1] = HLIST_HEAD_INIT };
 
 static spinlock_t vx_info_hash_lock = SPIN_LOCK_UNLOCKED;
 
@@ -178,6 +192,7 @@ static inline void __hash_vx_info(struct vx_info *vxi)
 	vxi->vx_state |= VXS_HASHED;
 	head = &vx_info_hash[__hashval(vxi->vx_id)];
 	hlist_add_head(&vxi->vx_hlist, head);
+	atomic_inc(&vx_global_cactive);
 }
 
 /*	__unhash_vx_info()
@@ -196,7 +211,9 @@ static inline void __unhash_vx_info(struct vx_info *vxi)
 	BUG_ON(!vx_info_state(vxi, VXS_HASHED));
 
 	vxi->vx_state &= ~VXS_HASHED;
-	hlist_del(&vxi->vx_hlist);
+	hlist_del_init(&vxi->vx_hlist);
+	hlist_add_head(&vxi->vx_hlist, &vx_info_inactive);
+	atomic_dec(&vx_global_cactive);
 }
 
 
@@ -388,12 +405,12 @@ void unhash_vx_info(struct vx_info *vxi)
 }
 
 
-/*	locate_vx_info()
+/*	lookup_vx_info()
 
 	* search for a vx_info and get() it
 	* negative id means current				*/
 
-struct vx_info *locate_vx_info(int id)
+struct vx_info *lookup_vx_info(int id)
 {
 	struct vx_info *vxi = NULL;
 
@@ -423,7 +440,7 @@ int xid_is_hashed(xid_t xid)
 
 #ifdef	CONFIG_VSERVER_LEGACY
 
-struct vx_info *locate_or_create_vx_info(int id)
+struct vx_info *lookup_or_create_vx_info(int id)
 {
 	int err;
 
@@ -464,6 +481,21 @@ out:
 }
 #endif
 
+#ifdef	CONFIG_VSERVER_DEBUG
+
+void	dump_vx_info_inactive(int level)
+{
+	struct hlist_node *entry, *next;
+
+	hlist_for_each_safe(entry, next, &vx_info_inactive) {
+		struct vx_info *vxi =
+			list_entry(entry, struct vx_info, vx_hlist);
+
+		dump_vx_info(vxi, level);
+	}
+}
+
+#endif
 
 int vx_migrate_user(struct task_struct *p, struct vx_info *vxi)
 {
@@ -629,7 +661,7 @@ int vc_vx_info(uint32_t id, void __user *data)
 	if (!capable(CAP_SYS_ADMIN) || !capable(CAP_SYS_RESOURCE))
 		return -EPERM;
 
-	vxi = locate_vx_info(id);
+	vxi = lookup_vx_info(id);
 	if (!vxi)
 		return -ESRCH;
 
@@ -690,7 +722,7 @@ int vc_ctx_migrate(uint32_t id, void __user *data)
 		return 0;
 	}
 
-	vxi = locate_vx_info(id);
+	vxi = lookup_vx_info(id);
 	if (!vxi)
 		return -ESRCH;
 	vx_migrate_task(current, vxi);
@@ -707,7 +739,7 @@ int vc_get_cflags(uint32_t id, void __user *data)
 	if (!capable(CAP_SYS_ADMIN))
 		return -EPERM;
 
-	vxi = locate_vx_info(id);
+	vxi = lookup_vx_info(id);
 	if (!vxi)
 		return -ESRCH;
 
@@ -734,7 +766,7 @@ int vc_set_cflags(uint32_t id, void __user *data)
 	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
-	vxi = locate_vx_info(id);
+	vxi = lookup_vx_info(id);
 	if (!vxi)
 		return -ESRCH;
 
@@ -762,7 +794,7 @@ int vc_get_ccaps(uint32_t id, void __user *data)
 	if (!capable(CAP_SYS_ADMIN))
 		return -EPERM;
 
-	vxi = locate_vx_info(id);
+	vxi = lookup_vx_info(id);
 	if (!vxi)
 		return -ESRCH;
 
@@ -786,7 +818,7 @@ int vc_set_ccaps(uint32_t id, void __user *data)
 	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
-	vxi = locate_vx_info(id);
+	vxi = lookup_vx_info(id);
 	if (!vxi)
 		return -ESRCH;
 

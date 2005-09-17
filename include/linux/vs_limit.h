@@ -134,18 +134,6 @@ static inline int __vx_cres_avail(struct vx_info *vxi,
 	vx_cres_avail(current->vx_info, n, VLIMIT_NSOCK)
 
 
-/* dentry limits */
-
-#define vx_dentry_inc(d) \
-	vx_acc_cres((d)->d_vx_info, 1, d, VLIMIT_DENTRY)
-
-#define vx_dentry_dec(d) \
-	vx_acc_cres((d)->d_vx_info,-1, d, VLIMIT_DENTRY)
-
-#define vx_dentry_avail(n) \
-	vx_cres_avail(current->vx_info, n, VLIMIT_DENTRY)
-
-
 /* ipc resource limits */
 
 #define vx_ipcmsg_add(v,u,a) \

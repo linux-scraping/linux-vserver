@@ -33,8 +33,6 @@
 #include <linux/seqlock.h>
 #include <linux/swap.h>
 #include <linux/bootmem.h>
-#include <linux/vs_context.h>
-#include <linux/vs_limit.h>
 
 /* #define DCACHE_DEBUG 1 */
 
@@ -77,8 +75,6 @@ static void d_callback(struct rcu_head *head)
 
 	if (dname_external(dentry))
 		kfree(dentry->d_name.name);
-	vx_dentry_dec(dentry);
-	clr_vx_info(&dentry->d_vx_info);
 	kmem_cache_free(dentry_cache, dentry); 
 }
 
@@ -727,21 +723,18 @@ struct dentry *d_alloc(struct dentry * parent, const struct qstr *name)
 
 	dentry = kmem_cache_alloc(dentry_cache, GFP_KERNEL); 
 	if (!dentry)
-		goto out_dentry;
+		return NULL;
 
 	if (name->len > DNAME_INLINE_LEN-1) {
 		dname = kmalloc(name->len + 1, GFP_KERNEL);
-		if (!dname)
-			goto out_dname;
+		if (!dname) {
+			kmem_cache_free(dentry_cache, dentry); 
+			return NULL;
+		}
 	} else  {
 		dname = dentry->d_iname;
 	}	
 	dentry->d_name.name = dname;
-	init_vx_info(&dentry->d_vx_info, current->vx_info);
-
-	if (!vx_dentry_avail(1))
-		goto out_limit;
-	vx_dentry_inc(dentry);
 
 	dentry->d_name.len = name->len;
 	dentry->d_name.hash = name->hash;
@@ -775,16 +768,8 @@ struct dentry *d_alloc(struct dentry * parent, const struct qstr *name)
 		list_add(&dentry->d_child, &parent->d_subdirs);
 	dentry_stat.nr_dentry++;
 	spin_unlock(&dcache_lock);
+
 	return dentry;
-
-out_limit:
-	if (dname_external(dentry))
-		kfree(dname);
-out_dname:
-	kmem_cache_free(dentry_cache, dentry);
-out_dentry:
-	return NULL;
-
 }
 
 struct dentry *d_alloc_name(struct dentry *parent, const char *name)

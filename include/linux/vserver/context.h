@@ -150,8 +150,8 @@ struct vx_info_save {
 extern void claim_vx_info(struct vx_info *, struct task_struct *);
 extern void release_vx_info(struct vx_info *, struct task_struct *);
 
-extern struct vx_info *locate_vx_info(int);
-extern struct vx_info *locate_or_create_vx_info(int);
+extern struct vx_info *lookup_vx_info(int);
+extern struct vx_info *lookup_or_create_vx_info(int);
 
 extern int get_xid_list(int, unsigned int *, int);
 extern int xid_is_hashed(xid_t);

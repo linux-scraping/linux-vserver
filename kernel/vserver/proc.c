@@ -24,6 +24,7 @@
 #include <linux/vs_cvirt.h>
 
 #include <linux/vserver/switch.h>
+#include <linux/vserver/global.h>
 
 #include <asm/uaccess.h>
 #include <asm/unistd.h>
@@ -71,13 +72,23 @@ static int proc_virtual_info(int vid, char *buffer)
 		);
 }
 
+static int proc_virtual_status(int vid, char *buffer)
+{
+	return sprintf(buffer,
+		"#CTotal:\t%d\n"
+		"#CActive:\t%d\n"
+		,atomic_read(&vx_global_ctotal)
+		,atomic_read(&vx_global_cactive)
+		);
+}
+
 
 int proc_xid_info (int vid, char *buffer)
 {
 	struct vx_info *vxi;
 	int length;
 
-	vxi = locate_vx_info(vid);
+	vxi = lookup_vx_info(vid);
 	if (!vxi)
 		return 0;
 	length = sprintf(buffer,
@@ -97,7 +108,7 @@ int proc_xid_status (int vid, char *buffer)
 	struct vx_info *vxi;
 	int length;
 
-	vxi = locate_vx_info(vid);
+	vxi = lookup_vx_info(vid);
 	if (!vxi)
 		return 0;
 	length = sprintf(buffer,
@@ -106,13 +117,13 @@ int proc_xid_status (int vid, char *buffer)
 		"Flags:\t%016llx\n"
 		"BCaps:\t%016llx\n"
 		"CCaps:\t%016llx\n"
-		"Ticks:\t%d\n"
+//		"Ticks:\t%d\n"
 		,atomic_read(&vxi->vx_usecnt)
 		,atomic_read(&vxi->vx_tasks)
 		,(unsigned long long)vxi->vx_flags
 		,(unsigned long long)vxi->vx_bcaps
 		,(unsigned long long)vxi->vx_ccaps
-		,atomic_read(&vxi->limit.ticks)
+//		,atomic_read(&vxi->limit.ticks)
 		);
 	put_vx_info(vxi);
 	return length;
@@ -123,7 +134,7 @@ int proc_xid_limit (int vid, char *buffer)
 	struct vx_info *vxi;
 	int length;
 
-	vxi = locate_vx_info(vid);
+	vxi = lookup_vx_info(vid);
 	if (!vxi)
 		return 0;
 	length = vx_info_proc_limit(&vxi->limit, buffer);
@@ -136,7 +147,7 @@ int proc_xid_sched (int vid, char *buffer)
 	struct vx_info *vxi;
 	int length;
 
-	vxi = locate_vx_info(vid);
+	vxi = lookup_vx_info(vid);
 	if (!vxi)
 		return 0;
 	length = vx_info_proc_sched(&vxi->sched, buffer);
@@ -149,7 +160,7 @@ int proc_xid_cvirt (int vid, char *buffer)
 	struct vx_info *vxi;
 	int length;
 
-	vxi = locate_vx_info(vid);
+	vxi = lookup_vx_info(vid);
 	if (!vxi)
 		return 0;
 	vx_update_load(vxi);
@@ -163,7 +174,7 @@ int proc_xid_cacct (int vid, char *buffer)
 	struct vx_info *vxi;
 	int length;
 
-	vxi = locate_vx_info(vid);
+	vxi = lookup_vx_info(vid);
 	if (!vxi)
 		return 0;
 	length = vx_info_proc_cacct(&vxi->cacct, buffer);
@@ -192,7 +203,7 @@ int proc_nid_info (int vid, char *buffer)
 	struct nx_info *nxi;
 	int length, i;
 
-	nxi = locate_nx_info(vid);
+	nxi = lookup_nx_info(vid);
 	if (!nxi)
 		return 0;
 	length = sprintf(buffer,
@@ -216,7 +227,7 @@ int proc_nid_status (int vid, char *buffer)
 	struct nx_info *nxi;
 	int length;
 
-	nxi = locate_nx_info(vid);
+	nxi = lookup_nx_info(vid);
 	if (!nxi)
 		return 0;
 	length = sprintf(buffer,
@@ -514,6 +525,29 @@ static __inline__ int atovid(const char *str, int len)
 	return vid;
 }
 
+static __inline__ unsigned long atoaddr(const char *str, int len)
+{
+	unsigned long addr, c;
+
+	addr = 0;
+	while (len-- > 0) {
+		c = *str - '0';
+		if (c > 9)
+			c -= 'A'-'0'+10;
+		if (c > 15)
+			c -= 'a'-'A';
+		if (c > 15)
+			return -1;
+		str++;
+		if (addr >= ((1 << 28) - 1))
+			return -1;
+		addr = (addr << 4) | c;
+		if (!addr)
+			return -1;
+	}
+	return addr;
+}
+
 
 struct dentry *proc_virtual_lookup(struct inode *dir,
 	struct dentry * dentry, struct nameidata *nd)
@@ -549,12 +583,22 @@ struct dentry *proc_virtual_lookup(struct inode *dir,
 		d_add(dentry, inode);
 		return NULL;
 	}
+	if (len == 6 && !memcmp(name, "status", 6)) {
+		inode = proc_vid_make_inode(dir->i_sb, 0, PROC_XID_STATUS);
+		if (!inode)
+			goto out;
+		inode->i_fop = &proc_vid_info_file_operations;
+		PROC_I(inode)->op.proc_vid_read = proc_virtual_status;
+		inode->i_mode = S_IFREG|S_IRUGO;
+		d_add(dentry, inode);
+		return NULL;
+	}
 
 	ret = -ENOENT;
 	xid = atovid(name, len);
 	if (xid < 0)
 		goto out;
-	vxi = locate_vx_info(xid);
+	vxi = lookup_vx_info(xid);
 	if (!vxi)
 		goto out;
 
@@ -620,7 +664,7 @@ struct dentry *proc_vnet_lookup(struct inode *dir,
 	nid = atovid(name, len);
 	if (nid < 0)
 		goto out;
-	nxi = locate_nx_info(nid);
+	nxi = lookup_nx_info(nid);
 	if (!nxi)
 		goto out;
 
@@ -685,6 +729,13 @@ int proc_virtual_readdir(struct file * filp,
 			filp->f_pos++;
 			/* fall through */
 		case 3:
+			ino = fake_ino(0, PROC_XID_STATUS);
+			if (filldir(dirent, "status", 6,
+				filp->f_pos, ino, DT_LNK) < 0)
+				return 0;
+			filp->f_pos++;
+			/* fall through */
+		case 4:
 			if (vx_current_xid() > 1) {
 				ino = fake_ino(1, PROC_XID_INO);
 				if (filldir(dirent, "current", 7,

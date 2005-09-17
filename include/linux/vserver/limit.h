@@ -6,7 +6,6 @@
 #define VLIMIT_OPENFD	17
 #define VLIMIT_ANON	18
 #define VLIMIT_SHMEM	19
-#define VLIMIT_DENTRY	20
 
 #ifdef	__KERNEL__
 

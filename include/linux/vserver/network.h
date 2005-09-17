@@ -70,8 +70,7 @@ struct nx_info {
 #define NXS_SHUTDOWN    0x0100
 #define NXS_RELEASED    0x8000
 
-extern struct nx_info *locate_nx_info(int);
-extern struct nx_info *locate_or_create_nx_info(int);
+extern struct nx_info *lookup_nx_info(int);
 
 extern int get_nid_list(int, unsigned int *, int);
 extern int nid_is_hashed(nid_t);

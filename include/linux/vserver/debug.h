@@ -62,6 +62,10 @@ extern unsigned int vx_debug_misc;
 	({ static char _buffer[PATH_MAX];			\
 	   d_path((d), (m), _buffer, sizeof(_buffer)); })
 
+
+void dump_vx_info(struct vx_info *, int);
+void dump_vx_info_inactive(int);
+
 #else	/* CONFIG_VSERVER_DEBUG */
 
 #define vx_debug_switch 0
@@ -78,6 +82,7 @@ extern unsigned int vx_debug_misc;
 #define vxwprintk(x...) do { } while (0)
 
 #define vxd_path	"<none>"
+
 
 #endif	/* CONFIG_VSERVER_DEBUG */
 

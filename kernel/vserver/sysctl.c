@@ -1,5 +1,5 @@
 /*
- *  linux/kernel/sysctl.c
+ *  kernel/vserver/sysctl.c
  *
  *  Virtual Context Support
  *

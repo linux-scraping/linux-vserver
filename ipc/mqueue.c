@@ -260,7 +260,7 @@ static void mqueue_delete_inode(struct inode *inode)
 		   (info->attr.mq_maxmsg * info->attr.mq_msgsize));
 	user = info->user;
 	if (user) {
-		struct vx_info *vxi = locate_vx_info(user->xid);
+		struct vx_info *vxi = lookup_vx_info(user->xid);
 
 		spin_lock(&mq_lock);
 		user->mq_bytes -= mq_bytes;
