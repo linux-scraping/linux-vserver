@@ -177,10 +177,10 @@ static __inline__ void __enter_vx_info(struct vx_info *vxi,
 		current->xid, current->vx_info, _file, _line);
 	vxis->vxi = xchg(&current->vx_info, vxi);
 	vxis->xid = current->xid;
-	current->xid = vxi->vx_id;
+	current->xid = vxi ? vxi->vx_id : 0;
 }
 
-#define leave_vx_info(s)	__leave_vx_info(v,s,__FILE__,__LINE__)
+#define leave_vx_info(s)	__leave_vx_info(s,__FILE__,__LINE__)
 
 static __inline__ void __leave_vx_info(struct vx_info_save *vxis,
 	const char *_file, int _line)
@@ -189,6 +189,21 @@ static __inline__ void __leave_vx_info(struct vx_info_save *vxis,
 		vxis, vxis->xid, vxis->vxi, current,
 		current->xid, current->vx_info, _file, _line);
 	xchg(&current->vx_info, vxis->vxi);
+	current->xid = vxis->xid;
+}
+
+
+static __inline__ void __enter_vx_admin(struct vx_info_save *vxis)
+{
+	vxis->vxi = xchg(&current->vx_info, NULL);
+	vxis->xid = current->xid;
+	current->xid = 0;
+}
+
+static __inline__ void __leave_vx_admin(struct vx_info_save *vxis)
+{
+	if (vxis->vxi)
+		xchg(&current->vx_info, vxis->vxi);
 	current->xid = vxis->xid;
 }
 

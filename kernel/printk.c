@@ -31,6 +31,7 @@
 #include <linux/security.h>
 #include <linux/bootmem.h>
 #include <linux/syscalls.h>
+#include <linux/vs_context.h>
 #include <linux/vserver/cvirt.h>
 
 #include <asm/uaccess.h>
@@ -500,11 +501,14 @@ __setup("time", printk_time_setup);
 
 asmlinkage int printk(const char *fmt, ...)
 {
+	struct vx_info_save vxis;
 	va_list args;
 	int r;
 
 	va_start(args, fmt);
+	__enter_vx_admin(&vxis);
 	r = vprintk(fmt, args);
+	__leave_vx_admin(&vxis);
 	va_end(args);
 
 	return r;

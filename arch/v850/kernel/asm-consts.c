@@ -56,6 +56,7 @@ int main (void)
 	/* clone flag bits */
 	DEFINE (CLONE_VFORK, CLONE_VFORK);
 	DEFINE (CLONE_VM, CLONE_VM);
+	DEFINE (CLONE_KTHREAD, CLONE_KTHREAD);
 
 	return 0;
 }
