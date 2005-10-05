@@ -1134,8 +1134,8 @@ _GLOBAL(kernel_thread)
 	stw	r31,12(r1)
 	mr	r30,r3		/* function */
 	mr	r31,r4		/* argument */
-	ori	r3,r5,CLONE_VM|CLONE_KTHREAD	/* flags */
-	oris	r3,r3,CLONE_UNTRACED>>16
+	ori	r3,r5,CLONE_VM	/* flags */
+	oris	r3,r3,(CLONE_UNTRACED|CLONE_KTHREAD)>>16
 	li	r4,0		/* new sp (unused) */
 	li	r0,__NR_clone
 	sc

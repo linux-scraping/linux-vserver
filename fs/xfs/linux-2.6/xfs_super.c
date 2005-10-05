@@ -769,7 +769,9 @@ linvfs_fill_super(
 	sb->s_export_op = &linvfs_export_ops;
 #endif
 	sb->s_qcop = &linvfs_qops;
+#ifdef CONFIG_QUOTA
 	sb->s_dqh->dqh_qcop = &linvfs_qops;
+#endif
 	sb->s_op = &linvfs_sops;
 
 	VFS_MOUNT(vfsp, args, NULL, error);

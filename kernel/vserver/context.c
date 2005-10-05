@@ -50,6 +50,8 @@ atomic_t vx_global_cactive 	= ATOMIC_INIT(0);
 
 static struct hlist_head vx_info_inactive = HLIST_HEAD_INIT;
 
+static spinlock_t vx_info_inactive_lock = SPIN_LOCK_UNLOCKED;
+
 
 /*	__alloc_vx_info()
 
@@ -103,8 +105,9 @@ static void __dealloc_vx_info(struct vx_info *vxi)
 		"dealloc_vx_info(%p)", vxi);
 	vxh_dealloc_vx_info(vxi);
 
+	spin_lock(&vx_info_inactive_lock);
 	hlist_del(&vxi->vx_hlist);
-	vxi->vx_hlist.next = LIST_POISON1;
+	spin_unlock(&vx_info_inactive_lock);
 	vxi->vx_id = -1;
 
 	vx_info_exit_limit(&vxi->limit);
@@ -212,7 +215,9 @@ static inline void __unhash_vx_info(struct vx_info *vxi)
 
 	vxi->vx_state &= ~VXS_HASHED;
 	hlist_del_init(&vxi->vx_hlist);
+	spin_lock(&vx_info_inactive_lock);
 	hlist_add_head(&vxi->vx_hlist, &vx_info_inactive);
+	spin_unlock(&vx_info_inactive_lock);
 	atomic_dec(&vx_global_cactive);
 }
 

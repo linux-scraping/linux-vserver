@@ -103,12 +103,21 @@ long vs_reboot_helper(struct vx_info *vxi, int cmd, void *arg)
 long vs_reboot(unsigned int cmd, void * arg)
 {
 	struct vx_info *vxi = current->vx_info;
-	long ret;
+	long ret = 0;
 
+	vxdprintk(VXD_CBIT(misc, 5),
+		"vs_reboot(%p[#%d],%d)",
+		vxi, vxi?vxi->vx_id:0, cmd);
 	if (vx_info_flags(vxi, VXF_REBOOT_KILL, 0)) {
-		vx_info_kill(vxi, 0, SIGKILL);
-		vx_info_kill(vxi, 1, SIGKILL);
-		return 0;
+		switch (cmd) {
+		case LINUX_REBOOT_CMD_RESTART:
+		case LINUX_REBOOT_CMD_HALT:
+		case LINUX_REBOOT_CMD_POWER_OFF:
+			vx_info_kill(vxi, 0, SIGKILL);
+			vx_info_kill(vxi, 1, SIGKILL);
+		default:
+			break;
+		}
 	} else {
 		ret = vs_reboot_helper(vxi, cmd, arg);
 	}
