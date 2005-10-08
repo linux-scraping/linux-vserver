@@ -32,6 +32,7 @@
 #include <linux/vserver/debug.h>
 
 #include <linux/vs_context.h>
+#include <linux/vs_limit.h>
 #include <linux/vserver/context_cmd.h>
 
 #include <linux/err.h>
@@ -105,9 +106,6 @@ static void __dealloc_vx_info(struct vx_info *vxi)
 		"dealloc_vx_info(%p)", vxi);
 	vxh_dealloc_vx_info(vxi);
 
-	spin_lock(&vx_info_inactive_lock);
-	hlist_del(&vxi->vx_hlist);
-	spin_unlock(&vx_info_inactive_lock);
 	vxi->vx_id = -1;
 
 	vx_info_exit_limit(&vxi->limit);
@@ -153,6 +151,10 @@ void free_vx_info(struct vx_info *vxi)
 
 	BUG_ON(vxi->vx_namespace);
 	BUG_ON(vxi->vx_fs);
+
+	spin_lock(&vx_info_inactive_lock);
+	hlist_del(&vxi->vx_hlist);
+	spin_unlock(&vx_info_inactive_lock);
 
 	__dealloc_vx_info(vxi);
 }
@@ -485,6 +487,21 @@ out:
 	return nr_xids;
 }
 #endif
+
+
+/*	task must me current or locked 		*/
+
+void	exit_vx_info(struct task_struct *p)
+{
+	struct vx_info *vxi = p->vx_info;
+
+	if (vxi) {
+		atomic_dec(&vxi->cvirt.nr_threads);
+		vx_nproc_dec(p);
+		release_vx_info(vxi, p);
+	}
+}
+
 
 #ifdef	CONFIG_VSERVER_DEBUG
 

@@ -229,10 +229,10 @@ static match_table_t tokens = {
 	{ CTL_DEBUG_ERROR,	NULL		}
 };
 
-#define	HANDLE_CASE(id, name, val) 			\
-	case CTL_DEBUG_ ## id:				\
-		vx_debug_ ## name = val;		\
-		printk("vs_debug_" #name "=%x\n", val);	\
+#define	HANDLE_CASE(id, name, val) 				\
+	case CTL_DEBUG_ ## id:					\
+		vx_debug_ ## name = val;			\
+		printk("vs_debug_" #name "=0x%x\n", val);	\
 		break
 
 
@@ -250,7 +250,7 @@ static int __init vs_debug_setup(char *str)
 			continue;
 
 		token = match_token(p, tokens, args);
-		value = (token>0)?simple_strtoul(args[0].from, NULL, 16):0;
+		value = (token>0)?simple_strtoul(args[0].from, NULL, 0):0;
 
 		switch (token) {
 		HANDLE_CASE(SWITCH, switch, value);

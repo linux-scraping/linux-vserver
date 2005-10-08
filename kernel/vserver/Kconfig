@@ -158,6 +158,15 @@ config	XID_TAG_NFSD
 	  Server to use the xid tagging specified above.
 	  (will require patched clients too)
 
+config	XID_PROPAGATE
+	bool	"Enable XID Propagation"
+	default n
+	depends on EXPERIMENTAL
+	help
+	  This allows for the xid= mount option to specify
+	  an xid which is to be used for the entire mount
+	  tree.
+
 config	VSERVER_DEBUG
 	bool	"VServer Debugging Code"
 	default n
