@@ -30,39 +30,19 @@
 #include <linux/sem.h>
 #include <linux/msg.h>
 #include <linux/shm.h>
-#include <linux/slab.h>
-#include <linux/uio.h>
-#include <linux/aio.h>
-#include <linux/nfs_fs.h>
-#include <linux/module.h>
-#include <linux/sunrpc/svc.h>
-#include <linux/nfsd/nfsd.h>
-#include <linux/nfsd/cache.h>
-#include <linux/nfsd/xdr.h>
-#include <linux/nfsd/syscall.h>
 #include <linux/poll.h>
 #include <linux/personality.h>
 #include <linux/stat.h>
-#include <linux/filter.h>
-#include <linux/highmem.h>
-#include <linux/highuid.h>
 #include <linux/mman.h>
-#include <linux/ipv6.h>
 #include <linux/in.h>
-#include <linux/icmpv6.h>
 #include <linux/syscalls.h>
 #include <linux/unistd.h>
 #include <linux/sysctl.h>
 #include <linux/binfmts.h>
-#include <linux/dnotify.h>
 #include <linux/security.h>
 #include <linux/compat.h>
 #include <linux/ptrace.h>
-#include <linux/aio_abi.h>
 #include <linux/elf.h>
-
-#include <net/scm.h>
-#include <net/sock.h>
 
 #include <asm/ptrace.h>
 #include <asm/types.h>
@@ -70,7 +50,6 @@
 #include <asm/uaccess.h>
 #include <asm/unistd.h>
 #include <asm/semaphore.h>
-#include <asm/ppcdebug.h>
 #include <asm/time.h>
 #include <asm/mmu_context.h>
 #include <asm/systemcfg.h>
@@ -350,8 +329,6 @@ asmlinkage long sys32_adjtimex(struct timex32 __user *utp)
 	return ret;
 }
 
-
-/* These are here just in case some old sparc32 binary calls it. */
 asmlinkage long sys32_pause(void)
 {
 	current->state = TASK_INTERRUPTIBLE;
@@ -359,8 +336,6 @@ asmlinkage long sys32_pause(void)
 	
 	return -ERESTARTNOHAND;
 }
-
-
 
 static inline long get_ts32(struct timespec *o, struct compat_timeval __user *i)
 {
@@ -733,61 +708,9 @@ asmlinkage int sys32_pciconfig_write(u32 bus, u32 dfn, u32 off, u32 len, u32 ubu
 				   compat_ptr(ubuf));
 }
 
-#define IOBASE_BRIDGE_NUMBER	0
-#define IOBASE_MEMORY		1
-#define IOBASE_IO		2
-#define IOBASE_ISA_IO		3
-#define IOBASE_ISA_MEM		4
-
 asmlinkage int sys32_pciconfig_iobase(u32 which, u32 in_bus, u32 in_devfn)
 {
-	struct pci_controller* hose;
-	struct list_head *ln;
-	struct pci_bus *bus = NULL;
-	struct device_node *hose_node;
-
-	/* Argh ! Please forgive me for that hack, but that's the
-	 * simplest way to get existing XFree to not lockup on some
-	 * G5 machines... So when something asks for bus 0 io base
-	 * (bus 0 is HT root), we return the AGP one instead.
-	 */
-#ifdef CONFIG_PPC_PMAC
-	if (systemcfg->platform == PLATFORM_POWERMAC &&
-	    machine_is_compatible("MacRISC4"))
-		if (in_bus == 0)
-			in_bus = 0xf0;
-#endif /* CONFIG_PPC_PMAC */
-
-	/* That syscall isn't quite compatible with PCI domains, but it's
-	 * used on pre-domains setup. We return the first match
-	 */
-
-	for (ln = pci_root_buses.next; ln != &pci_root_buses; ln = ln->next) {
-		bus = pci_bus_b(ln);
-		if (in_bus >= bus->number && in_bus < (bus->number + bus->subordinate))
-			break;
-		bus = NULL;
-	}
-	if (bus == NULL || bus->sysdata == NULL)
-		return -ENODEV;
-
-	hose_node = (struct device_node *)bus->sysdata;
-	hose = hose_node->phb;
-
-	switch (which) {
-	case IOBASE_BRIDGE_NUMBER:
-		return (long)hose->first_busno;
-	case IOBASE_MEMORY:
-		return (long)hose->pci_mem_offset;
-	case IOBASE_IO:
-		return (long)hose->io_base_phys;
-	case IOBASE_ISA_IO:
-		return (long)isa_io_base;
-	case IOBASE_ISA_MEM:
-		return -EINVAL;
-	}
-
-	return -EOPNOTSUPP;
+	return sys_pciconfig_iobase(which, in_bus, in_devfn);
 }
 
 
@@ -846,16 +769,6 @@ asmlinkage long sys32_getpgid(u32 pid)
 }
 
 
-/* Note: it is necessary to treat which and who as unsigned ints,
- * with the corresponding cast to a signed int to insure that the 
- * proper conversion (sign extension) between the register representation of a signed int (msr in 32-bit mode)
- * and the register representation of a signed int (msr in 64-bit mode) is performed.
- */
-asmlinkage long sys32_getpriority(u32 which, u32 who)
-{
-	return sys_getpriority((int)which, (int)who);
-}
-
 
 /* Note: it is necessary to treat pid as an unsigned int,
  * with the corresponding cast to a signed int to insure that the 
@@ -899,37 +812,6 @@ off_t ppc32_lseek(unsigned int fd, u32 offset, unsigned int origin)
 {
 	/* sign extend n */
 	return sys_lseek(fd, (int)offset, origin);
-}
-
-/*
- * This is just a version for 32-bit applications which does
- * not force O_LARGEFILE on.
- */
-asmlinkage long sys32_open(const char __user * filename, int flags, int mode)
-{
-	char * tmp;
-	int fd, error;
-
-	tmp = getname(filename);
-	fd = PTR_ERR(tmp);
-	if (!IS_ERR(tmp)) {
-		fd = get_unused_fd();
-		if (fd >= 0) {
-			struct file * f = filp_open(tmp, flags, mode);
-			error = PTR_ERR(f);
-			if (IS_ERR(f))
-				goto out_error;
-			fd_install(fd, f);
-		}
-out:
-		putname(tmp);
-	}
-	return fd;
-
-out_error:
-	put_unused_fd(fd);
-	fd = error;
-	goto out;
 }
 
 /* Note: it is necessary to treat bufsiz as an unsigned int,
@@ -1047,11 +929,28 @@ asmlinkage long sys32_setpgid(u32 pid, u32 pgid)
 	return sys_setpgid((int)pid, (int)pgid);
 }
 
+long sys32_getpriority(u32 which, u32 who)
+{
+	/* sign extend which and who */
+	return sys_getpriority((int)which, (int)who);
+}
 
 long sys32_setpriority(u32 which, u32 who, u32 niceval)
 {
 	/* sign extend which, who and niceval */
 	return sys_setpriority((int)which, (int)who, (int)niceval);
+}
+
+long sys32_ioprio_get(u32 which, u32 who)
+{
+	/* sign extend which and who */
+	return sys_ioprio_get((int)which, (int)who);
+}
+
+long sys32_ioprio_set(u32 which, u32 who, u32 ioprio)
+{
+	/* sign extend which, who and ioprio */
+	return sys_ioprio_set((int)which, (int)who, (int)ioprio);
 }
 
 /* Note: it is necessary to treat newmask as an unsigned int,
@@ -1273,8 +1172,6 @@ long ppc32_fadvise64_64(int fd, int advice, u32 offset_high, u32 offset_low,
 	return sys_fadvise64(fd, (u64)offset_high << 32 | offset_low,
 			     (u64)len_high << 32 | len_low, advice);
 }
-
-extern asmlinkage long sys_timer_create(clockid_t, sigevent_t __user *, timer_t __user *);
 
 long ppc32_timer_create(clockid_t clock,
 			struct compat_sigevent __user *ev32,

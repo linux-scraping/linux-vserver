@@ -160,25 +160,6 @@ MODULE_PARM_DESC(joystick, "Enable joystick.");
 #endif
 
 
-/* PCI Dev ID's */
-
-#ifndef PCI_VENDOR_ID_ESS
-#define PCI_VENDOR_ID_ESS	0x125D
-#endif
-
-#define PCI_VENDOR_ID_ESS_OLD	0x1285	/* Platform Tech, the people the ESS
-					   was bought form */
-
-#ifndef PCI_DEVICE_ID_ESS_M2E
-#define PCI_DEVICE_ID_ESS_M2E	0x1978
-#endif
-#ifndef PCI_DEVICE_ID_ESS_M2
-#define PCI_DEVICE_ID_ESS_M2	0x1968
-#endif
-#ifndef PCI_DEVICE_ID_ESS_M1
-#define PCI_DEVICE_ID_ESS_M1	0x0100
-#endif
-
 #define NR_APUS			64
 #define NR_APU_REGS		16
 
@@ -636,7 +617,7 @@ static void __maestro_write(es1968_t *chip, u16 reg, u16 data)
 	chip->maestro_map[reg] = data;
 }
 
-inline static void maestro_write(es1968_t *chip, u16 reg, u16 data)
+static inline void maestro_write(es1968_t *chip, u16 reg, u16 data)
 {
 	unsigned long flags;
 	spin_lock_irqsave(&chip->reg_lock, flags);
@@ -654,7 +635,7 @@ static u16 __maestro_read(es1968_t *chip, u16 reg)
 	return chip->maestro_map[reg];
 }
 
-inline static u16 maestro_read(es1968_t *chip, u16 reg)
+static inline u16 maestro_read(es1968_t *chip, u16 reg)
 {
 	unsigned long flags;
 	u16 result;
@@ -664,11 +645,6 @@ inline static u16 maestro_read(es1968_t *chip, u16 reg)
 	return result;
 }
 
-#define big_mdelay(msec) do {\
-	set_current_state(TASK_UNINTERRUPTIBLE);\
-	schedule_timeout(((msec) * HZ + 999) / 1000);\
-} while (0)
-	
 /* Wait for the codec bus to be free */
 static int snd_es1968_ac97_wait(es1968_t *chip)
 {
@@ -755,7 +731,7 @@ static void __apu_set_register(es1968_t *chip, u16 channel, u8 reg, u16 data)
 	apu_data_set(chip, data);
 }
 
-inline static void apu_set_register(es1968_t *chip, u16 channel, u8 reg, u16 data)
+static inline void apu_set_register(es1968_t *chip, u16 channel, u8 reg, u16 data)
 {
 	unsigned long flags;
 	spin_lock_irqsave(&chip->reg_lock, flags);
@@ -771,7 +747,7 @@ static u16 __apu_get_register(es1968_t *chip, u16 channel, u8 reg)
 	return __maestro_read(chip, IDR0_DATA_PORT);
 }
 
-inline static u16 apu_get_register(es1968_t *chip, u16 channel, u8 reg)
+static inline u16 apu_get_register(es1968_t *chip, u16 channel, u8 reg)
 {
 	unsigned long flags;
 	u16 v;
@@ -957,7 +933,7 @@ static u32 snd_es1968_compute_rate(es1968_t *chip, u32 freq)
 }
 
 /* get current pointer */
-inline static unsigned int
+static inline unsigned int
 snd_es1968_get_dma_ptr(es1968_t *chip, esschan_t *es)
 {
 	unsigned int offset;
@@ -978,7 +954,7 @@ static void snd_es1968_apu_set_freq(es1968_t *chip, int apu, int freq)
 }
 
 /* spin lock held */
-inline static void snd_es1968_trigger_apu(es1968_t *esm, int apu, int mode)
+static inline void snd_es1968_trigger_apu(es1968_t *esm, int apu, int mode)
 {
 	/* set the APU mode */
 	__apu_set_register(esm, apu, 0,
@@ -1601,7 +1577,7 @@ static int snd_es1968_playback_open(snd_pcm_substream_t *substream)
 	if (apu1 < 0)
 		return apu1;
 
-	es = kcalloc(1, sizeof(*es), GFP_KERNEL);
+	es = kzalloc(sizeof(*es), GFP_KERNEL);
 	if (!es) {
 		snd_es1968_free_apu_pair(chip, apu1);
 		return -ENOMEM;
@@ -1646,7 +1622,7 @@ static int snd_es1968_capture_open(snd_pcm_substream_t *substream)
 		return apu2;
 	}
 	
-	es = kcalloc(1, sizeof(*es), GFP_KERNEL);
+	es = kzalloc(sizeof(*es), GFP_KERNEL);
 	if (!es) {
 		snd_es1968_free_apu_pair(chip, apu1);
 		snd_es1968_free_apu_pair(chip, apu2);
@@ -1809,8 +1785,7 @@ static void __devinit es1968_measure_clock(es1968_t *chip)
 	snd_es1968_trigger_apu(chip, apu, ESM_APU_16BITLINEAR);
 	do_gettimeofday(&start_time);
 	spin_unlock_irq(&chip->reg_lock);
-	set_current_state(TASK_UNINTERRUPTIBLE);
-	schedule_timeout(HZ / 20); /* 50 msec */
+	msleep(50);
 	spin_lock_irq(&chip->reg_lock);
 	offset = __apu_get_register(chip, apu, 5);
 	do_gettimeofday(&stop_time);
@@ -2093,7 +2068,7 @@ static void snd_es1968_ac97_reset(es1968_t *chip)
 	outw(0x0000, ioaddr + 0x60);	/* write 0 to gpio 0 */
 	udelay(20);
 	outw(0x0001, ioaddr + 0x60);	/* write 1 to gpio 1 */
-	big_mdelay(20);
+	msleep(20);
 
 	outw(save_68 | 0x1, ioaddr + 0x68);	/* now restore .. */
 	outw((inw(ioaddr + 0x38) & 0xfffc) | 0x1, ioaddr + 0x38);
@@ -2109,7 +2084,7 @@ static void snd_es1968_ac97_reset(es1968_t *chip)
 	outw(0x0001, ioaddr + 0x60);	/* write 1 to gpio */
 	udelay(20);
 	outw(0x0009, ioaddr + 0x60);	/* write 9 to gpio */
-	big_mdelay(500);
+	msleep(500);
 	//outw(inw(ioaddr + 0x38) & 0xfffc, ioaddr + 0x38);
 	outw(inw(ioaddr + 0x3a) & 0xfffc, ioaddr + 0x3a);
 	outw(inw(ioaddr + 0x3c) & 0xfffc, ioaddr + 0x3c);
@@ -2135,7 +2110,7 @@ static void snd_es1968_ac97_reset(es1968_t *chip)
 
 		if (w > 10000) {
 			outb(inb(ioaddr + 0x37) | 0x08, ioaddr + 0x37);	/* do a software reset */
-			big_mdelay(500);	/* oh my.. */
+			msleep(500);	/* oh my.. */
 			outb(inb(ioaddr + 0x37) & ~0x08,
 				ioaddr + 0x37);
 			udelay(1);
@@ -2559,6 +2534,7 @@ static struct ess_device_list pm_whitelist[] __devinitdata = {
 	{ TYPE_MAESTRO2E, 0x103c },
 	{ TYPE_MAESTRO2E, 0x1179 },
 	{ TYPE_MAESTRO2E, 0x14c0 },	/* HP omnibook 4150 */
+	{ TYPE_MAESTRO2E, 0x1558 },
 };
 
 static struct ess_device_list mpu_blacklist[] __devinitdata = {
@@ -2593,7 +2569,7 @@ static int __devinit snd_es1968_create(snd_card_t * card,
 		return -ENXIO;
 	}
 
-	chip = kcalloc(1, sizeof(*chip), GFP_KERNEL);
+	chip = kzalloc(sizeof(*chip), GFP_KERNEL);
 	if (! chip) {
 		pci_disable_device(pci);
 		return -ENOMEM;
@@ -2787,6 +2763,7 @@ static void __devexit snd_es1968_remove(struct pci_dev *pci)
 
 static struct pci_driver driver = {
 	.name = "ES1968 (ESS Maestro)",
+	.owner = THIS_MODULE,
 	.id_table = snd_es1968_ids,
 	.probe = snd_es1968_probe,
 	.remove = __devexit_p(snd_es1968_remove),
@@ -2795,7 +2772,7 @@ static struct pci_driver driver = {
 
 static int __init alsa_card_es1968_init(void)
 {
-	return pci_module_init(&driver);
+	return pci_register_driver(&driver);
 }
 
 static void __exit alsa_card_es1968_exit(void)

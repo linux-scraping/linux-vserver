@@ -51,11 +51,7 @@
 #include <asm/commproc.h>
 #endif
 
-/* Tell string.h we don't want memcpy etc. as cpp defines */
-#define EXPORT_SYMTAB_STROPS
-
 extern void transfer_to_handler(void);
-extern void do_syscall_trace(void);
 extern void do_IRQ(struct pt_regs *regs);
 extern void MachineCheckException(struct pt_regs *regs);
 extern void AlignmentException(struct pt_regs *regs);
@@ -74,7 +70,6 @@ extern unsigned long mm_ptov (unsigned long paddr);
 EXPORT_SYMBOL(clear_pages);
 EXPORT_SYMBOL(clear_user_page);
 EXPORT_SYMBOL(do_signal);
-EXPORT_SYMBOL(do_syscall_trace);
 EXPORT_SYMBOL(transfer_to_handler);
 EXPORT_SYMBOL(do_IRQ);
 EXPORT_SYMBOL(MachineCheckException);
@@ -265,6 +260,7 @@ EXPORT_SYMBOL(__ashrdi3);
 EXPORT_SYMBOL(__ashldi3);
 EXPORT_SYMBOL(__lshrdi3);
 EXPORT_SYMBOL(memcpy);
+EXPORT_SYMBOL(cacheable_memcpy);
 EXPORT_SYMBOL(memset);
 EXPORT_SYMBOL(memmove);
 EXPORT_SYMBOL(memscan);
@@ -326,7 +322,7 @@ EXPORT_SYMBOL(__res);
 
 EXPORT_SYMBOL(next_mmu_context);
 EXPORT_SYMBOL(set_context);
-EXPORT_SYMBOL(handle_mm_fault); /* For MOL */
+EXPORT_SYMBOL_GPL(__handle_mm_fault); /* For MOL */
 EXPORT_SYMBOL(disarm_decr);
 #ifdef CONFIG_PPC_STD_MMU
 extern long mol_trampoline;

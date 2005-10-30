@@ -52,7 +52,7 @@ static struct plat_serial8250_port serial_platform_data[] = {
 
 static struct platform_device serial_device = {
 	.name			= "serial8250",
-	.id			= 0,
+	.id			= PLAT8250_DEV_PLATFORM,
 	.dev			= {
 		.platform_data	= serial_platform_data,
 	},
@@ -63,10 +63,12 @@ extern void epxa10db_init_irq(void);
 extern struct sys_timer epxa10db_timer;
 
 MACHINE_START(CAMELOT, "Altera Epxa10db")
-	MAINTAINER("Altera Corporation")
-	BOOT_MEM(0x00000000, 0x7fffc000, 0xffffc000)
-	MAPIO(epxa10db_map_io)
-	INITIRQ(epxa10db_init_irq)
+	/* Maintainer: Altera Corporation */
+	.phys_ram	= 0x00000000,
+	.phys_io	= 0x7fffc000,
+	.io_pg_offst	= ((0xffffc000) >> 18) & 0xfffc,
+	.map_io		= epxa10db_map_io,
+	.init_irq	= epxa10db_init_irq,
 	.timer		= &epxa10db_timer,
 MACHINE_END
 

@@ -36,7 +36,6 @@
 #include <linux/netfilter_ipv4.h>
 #include <linux/netfilter_ipv4/ip_conntrack.h>
 #include <linux/netfilter_ipv4/ip_conntrack_protocol.h>
-#include <linux/netfilter_ipv4/lockhelp.h>
 
 #if 0
 #define DEBUGP printk
@@ -46,7 +45,7 @@
 #endif
 
 /* Protects conntrack->proto.tcp */
-static DECLARE_RWLOCK(tcp_lock);
+static DEFINE_RWLOCK(tcp_lock);
 
 /* "Be conservative in what you do, 
     be liberal in what you accept from others." 
@@ -88,7 +87,7 @@ static const char *tcp_conntrack_names[] = {
 
 unsigned long ip_ct_tcp_timeout_syn_sent =      2 MINS;
 unsigned long ip_ct_tcp_timeout_syn_recv =     60 SECS;
-unsigned long ip_ct_tcp_timeout_established =   2 DAYS;
+unsigned long ip_ct_tcp_timeout_established =   5 DAYS;
 unsigned long ip_ct_tcp_timeout_fin_wait =      2 MINS;
 unsigned long ip_ct_tcp_timeout_close_wait =   60 SECS;
 unsigned long ip_ct_tcp_timeout_last_ack =     30 SECS;
@@ -330,12 +329,56 @@ static int tcp_print_conntrack(struct seq_file *s,
 {
 	enum tcp_conntrack state;
 
-	READ_LOCK(&tcp_lock);
+	read_lock_bh(&tcp_lock);
 	state = conntrack->proto.tcp.state;
-	READ_UNLOCK(&tcp_lock);
+	read_unlock_bh(&tcp_lock);
 
 	return seq_printf(s, "%s ", tcp_conntrack_names[state]);
 }
+
+#if defined(CONFIG_IP_NF_CONNTRACK_NETLINK) || \
+    defined(CONFIG_IP_NF_CONNTRACK_NETLINK_MODULE)
+static int tcp_to_nfattr(struct sk_buff *skb, struct nfattr *nfa,
+			 const struct ip_conntrack *ct)
+{
+	struct nfattr *nest_parms = NFA_NEST(skb, CTA_PROTOINFO_TCP);
+	
+	read_lock_bh(&tcp_lock);
+	NFA_PUT(skb, CTA_PROTOINFO_TCP_STATE, sizeof(u_int8_t),
+		&ct->proto.tcp.state);
+	read_unlock_bh(&tcp_lock);
+
+	NFA_NEST_END(skb, nest_parms);
+
+	return 0;
+
+nfattr_failure:
+	read_unlock_bh(&tcp_lock);
+	return -1;
+}
+
+static int nfattr_to_tcp(struct nfattr *cda[], struct ip_conntrack *ct)
+{
+	struct nfattr *attr = cda[CTA_PROTOINFO_TCP-1];
+	struct nfattr *tb[CTA_PROTOINFO_TCP_MAX];
+
+        if (nfattr_parse_nested(tb, CTA_PROTOINFO_TCP_MAX, attr) < 0)
+                goto nfattr_failure;
+
+	if (!tb[CTA_PROTOINFO_TCP_STATE-1])
+		return -EINVAL;
+
+	write_lock_bh(&tcp_lock);
+	ct->proto.tcp.state = 
+		*(u_int8_t *)NFA_DATA(tb[CTA_PROTOINFO_TCP_STATE-1]);
+	write_unlock_bh(&tcp_lock);
+
+	return 0;
+
+nfattr_failure:
+	return -1;
+}
+#endif
 
 static unsigned int get_conntrack_index(const struct tcphdr *tcph)
 {
@@ -700,7 +743,7 @@ static int tcp_in_window(struct ip_ct_tcp *state,
 		res = 1;
 	} else {
 		if (LOG_INVALID(IPPROTO_TCP))
-			nf_log_packet(PF_INET, 0, skb, NULL, NULL,
+			nf_log_packet(PF_INET, 0, skb, NULL, NULL, NULL,
 			"ip_ct_tcp: %s ",
 			before(seq, sender->td_maxend + 1) ?
 			after(end, sender->td_end - receiver->td_maxwin - 1) ?
@@ -738,14 +781,14 @@ void ip_conntrack_tcp_update(struct sk_buff *skb,
 
 	end = segment_seq_plus_len(ntohl(tcph->seq), skb->len, iph, tcph);
 	
-	WRITE_LOCK(&tcp_lock);
+	write_lock_bh(&tcp_lock);
 	/*
 	 * We have to worry for the ack in the reply packet only...
 	 */
 	if (after(end, conntrack->proto.tcp.seen[dir].td_end))
 		conntrack->proto.tcp.seen[dir].td_end = end;
 	conntrack->proto.tcp.last_end = end;
-	WRITE_UNLOCK(&tcp_lock);
+	write_unlock_bh(&tcp_lock);
 	DEBUGP("tcp_update: sender end=%u maxend=%u maxwin=%u scale=%i "
 	       "receiver end=%u maxend=%u maxwin=%u scale=%i\n",
 		sender->td_end, sender->td_maxend, sender->td_maxwin,
@@ -799,7 +842,7 @@ static int tcp_error(struct sk_buff *skb,
 				sizeof(_tcph), &_tcph);
 	if (th == NULL) {
 		if (LOG_INVALID(IPPROTO_TCP))
-			nf_log_packet(PF_INET, 0, skb, NULL, NULL, 
+			nf_log_packet(PF_INET, 0, skb, NULL, NULL, NULL,
 				"ip_ct_tcp: short packet ");
 		return -NF_ACCEPT;
   	}
@@ -807,7 +850,7 @@ static int tcp_error(struct sk_buff *skb,
 	/* Not whole TCP header or malformed packet */
 	if (th->doff*4 < sizeof(struct tcphdr) || tcplen < th->doff*4) {
 		if (LOG_INVALID(IPPROTO_TCP))
-			nf_log_packet(PF_INET, 0, skb, NULL, NULL, 
+			nf_log_packet(PF_INET, 0, skb, NULL, NULL, NULL,
 				"ip_ct_tcp: truncated/malformed packet ");
 		return -NF_ACCEPT;
 	}
@@ -824,7 +867,7 @@ static int tcp_error(struct sk_buff *skb,
 			         skb->ip_summed == CHECKSUM_HW ? skb->csum
 			      	 : skb_checksum(skb, iph->ihl*4, tcplen, 0))) {
 		if (LOG_INVALID(IPPROTO_TCP))
-			nf_log_packet(PF_INET, 0, skb, NULL, NULL, 
+			nf_log_packet(PF_INET, 0, skb, NULL, NULL, NULL,
 				  "ip_ct_tcp: bad TCP checksum ");
 		return -NF_ACCEPT;
 	}
@@ -833,7 +876,7 @@ static int tcp_error(struct sk_buff *skb,
 	tcpflags = (((u_int8_t *)th)[13] & ~(TH_ECE|TH_CWR));
 	if (!tcp_valid_flags[tcpflags]) {
 		if (LOG_INVALID(IPPROTO_TCP))
-			nf_log_packet(PF_INET, 0, skb, NULL, NULL, 
+			nf_log_packet(PF_INET, 0, skb, NULL, NULL, NULL,
 				  "ip_ct_tcp: invalid TCP flag combination ");
 		return -NF_ACCEPT;
 	}
@@ -857,7 +900,7 @@ static int tcp_packet(struct ip_conntrack *conntrack,
 				sizeof(_tcph), &_tcph);
 	BUG_ON(th == NULL);
 	
-	WRITE_LOCK(&tcp_lock);
+	write_lock_bh(&tcp_lock);
 	old_state = conntrack->proto.tcp.state;
 	dir = CTINFO2DIR(ctinfo);
 	index = get_conntrack_index(th);
@@ -879,10 +922,11 @@ static int tcp_packet(struct ip_conntrack *conntrack,
 			 * that the client cannot but retransmit its SYN and 
 			 * thus initiate a clean new session.
 			 */
-		    	WRITE_UNLOCK(&tcp_lock);
+		    	write_unlock_bh(&tcp_lock);
 			if (LOG_INVALID(IPPROTO_TCP))
-				nf_log_packet(PF_INET, 0, skb, NULL, NULL, 
-					  "ip_ct_tcp: killing out of sync session ");
+				nf_log_packet(PF_INET, 0, skb, NULL, NULL,
+					      NULL, "ip_ct_tcp: "
+					      "killing out of sync session ");
 		    	if (del_timer(&conntrack->timeout))
 		    		conntrack->timeout.function((unsigned long)
 		    					    conntrack);
@@ -894,9 +938,9 @@ static int tcp_packet(struct ip_conntrack *conntrack,
 		conntrack->proto.tcp.last_end = 
 		    segment_seq_plus_len(ntohl(th->seq), skb->len, iph, th);
 		
-		WRITE_UNLOCK(&tcp_lock);
+		write_unlock_bh(&tcp_lock);
 		if (LOG_INVALID(IPPROTO_TCP))
-			nf_log_packet(PF_INET, 0, skb, NULL, NULL, 
+			nf_log_packet(PF_INET, 0, skb, NULL, NULL, NULL,
 				  "ip_ct_tcp: invalid packet ignored ");
 		return NF_ACCEPT;
 	case TCP_CONNTRACK_MAX:
@@ -904,9 +948,9 @@ static int tcp_packet(struct ip_conntrack *conntrack,
 		DEBUGP("ip_ct_tcp: Invalid dir=%i index=%u ostate=%u\n",
 		       dir, get_conntrack_index(th),
 		       old_state);
-		WRITE_UNLOCK(&tcp_lock);
+		write_unlock_bh(&tcp_lock);
 		if (LOG_INVALID(IPPROTO_TCP))
-			nf_log_packet(PF_INET, 0, skb, NULL, NULL, 
+			nf_log_packet(PF_INET, 0, skb, NULL, NULL, NULL,
 				  "ip_ct_tcp: invalid state ");
 		return -NF_ACCEPT;
 	case TCP_CONNTRACK_SYN_SENT:
@@ -918,16 +962,16 @@ static int tcp_packet(struct ip_conntrack *conntrack,
 		    	     conntrack->proto.tcp.seen[dir].td_end)) {	
 		    	/* Attempt to reopen a closed connection.
 		    	* Delete this connection and look up again. */
-		    	WRITE_UNLOCK(&tcp_lock);
+		    	write_unlock_bh(&tcp_lock);
 		    	if (del_timer(&conntrack->timeout))
 		    		conntrack->timeout.function((unsigned long)
 		    					    conntrack);
 		    	return -NF_REPEAT;
 		} else {
-			WRITE_UNLOCK(&tcp_lock);
+			write_unlock_bh(&tcp_lock);
 			if (LOG_INVALID(IPPROTO_TCP))
 				nf_log_packet(PF_INET, 0, skb, NULL, NULL,
-				              "ip_ct_tcp: invalid SYN");
+					      NULL, "ip_ct_tcp: invalid SYN");
 			return -NF_ACCEPT;
 		}
 	case TCP_CONNTRACK_CLOSE:
@@ -949,7 +993,7 @@ static int tcp_packet(struct ip_conntrack *conntrack,
 
 	if (!tcp_in_window(&conntrack->proto.tcp, dir, index, 
 			   skb, iph, th)) {
-		WRITE_UNLOCK(&tcp_lock);
+		write_unlock_bh(&tcp_lock);
 		return -NF_ACCEPT;
 	}
     in_window:
@@ -972,7 +1016,11 @@ static int tcp_packet(struct ip_conntrack *conntrack,
 	timeout = conntrack->proto.tcp.retrans >= ip_ct_tcp_max_retrans
 		  && *tcp_timeouts[new_state] > ip_ct_tcp_timeout_max_retrans
 		  ? ip_ct_tcp_timeout_max_retrans : *tcp_timeouts[new_state];
-	WRITE_UNLOCK(&tcp_lock);
+	write_unlock_bh(&tcp_lock);
+
+	ip_conntrack_event_cache(IPCT_PROTOINFO_VOLATILE, skb);
+	if (new_state != old_state)
+		ip_conntrack_event_cache(IPCT_PROTOINFO, skb);
 
 	if (!test_bit(IPS_SEEN_REPLY_BIT, &conntrack->status)) {
 		/* If only reply is a RST, we can consider ourselves not to
@@ -992,7 +1040,8 @@ static int tcp_packet(struct ip_conntrack *conntrack,
 		/* Set ASSURED if we see see valid ack in ESTABLISHED 
 		   after SYN_RECV or a valid answer for a picked up 
 		   connection. */
-			set_bit(IPS_ASSURED_BIT, &conntrack->status);
+		set_bit(IPS_ASSURED_BIT, &conntrack->status);
+		ip_conntrack_event_cache(IPCT_STATUS, skb);
 	}
 	ip_ct_refresh_acct(conntrack, ctinfo, skb, timeout);
 
@@ -1097,4 +1146,11 @@ struct ip_conntrack_protocol ip_conntrack_protocol_tcp =
 	.packet 		= tcp_packet,
 	.new 			= tcp_new,
 	.error			= tcp_error,
+#if defined(CONFIG_IP_NF_CONNTRACK_NETLINK) || \
+    defined(CONFIG_IP_NF_CONNTRACK_NETLINK_MODULE)
+	.to_nfattr		= tcp_to_nfattr,
+	.from_nfattr		= nfattr_to_tcp,
+	.tuple_to_nfattr	= ip_ct_port_tuple_to_nfattr,
+	.nfattr_to_tuple	= ip_ct_port_nfattr_to_tuple,
+#endif
 };

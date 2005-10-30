@@ -66,6 +66,7 @@ typedef enum {
     e1000_eeprom_spi,
     e1000_eeprom_microwire,
     e1000_eeprom_flash,
+    e1000_eeprom_none, /* No NVM support */
     e1000_num_eeprom_types
 } e1000_eeprom_type;
 
@@ -1269,7 +1270,7 @@ struct e1000_hw_stats {
 
 /* Structure containing variables used by the shared code (e1000_hw.c) */
 struct e1000_hw {
-    uint8_t *hw_addr;
+    uint8_t __iomem *hw_addr;
     uint8_t *flash_address;
     e1000_mac_type mac_type;
     e1000_phy_type phy_type;

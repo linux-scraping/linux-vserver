@@ -57,8 +57,6 @@
 #ifndef CONFIG_BT_HCIUART_DEBUG
 #undef  BT_DBG
 #define BT_DBG( A... )
-#undef  BT_DMP
-#define BT_DMP( A... )
 #endif
 
 static int reset = 0;
@@ -155,7 +153,7 @@ restart:
 			break;
 		}
 	
-		hci_uart_tx_complete(hu, skb->pkt_type);
+		hci_uart_tx_complete(hu, bt_cb(skb)->pkt_type);
 		kfree_skb(skb);
 	} 
 	
@@ -231,7 +229,7 @@ static int hci_uart_send_frame(struct sk_buff *skb)
 	hu = (struct hci_uart *) hdev->driver_data;
 	tty = hu->tty;
 
-	BT_DBG("%s: type %d len %d", hdev->name, skb->pkt_type, skb->len);
+	BT_DBG("%s: type %d len %d", hdev->name, bt_cb(skb)->pkt_type, skb->len);
 
 	hu->proto->enqueue(hu, skb);
 
@@ -576,7 +574,7 @@ static void __exit hci_uart_exit(void)
 #endif
 
 	/* Release tty registration of line discipline */
-	if ((err = tty_register_ldisc(N_HCI, NULL)))
+	if ((err = tty_unregister_ldisc(N_HCI)))
 		BT_ERR("Can't unregister HCI line discipline (%d)", err);
 }
 

@@ -39,7 +39,6 @@
 #include <asm/pgtable.h>
 #include <asm/page.h>
 #include <linux/sched.h>
-#include <asm/segment.h>
 #include <linux/types.h>
 
 #include <linux/videodev.h>
@@ -434,22 +433,13 @@ static unsigned short normal_i2c[] =
 	I2C_ADV7176 >> 1, (I2C_ADV7176 >> 1) + 1,
 	I2C_CLIENT_END
 };
-static unsigned short normal_i2c_range[] = { I2C_CLIENT_END };
 
-static unsigned short probe[2] = { I2C_CLIENT_END, I2C_CLIENT_END };
-static unsigned short probe_range[2] = { I2C_CLIENT_END, I2C_CLIENT_END };
-static unsigned short ignore[2] = { I2C_CLIENT_END, I2C_CLIENT_END };
-static unsigned short ignore_range[2] = { I2C_CLIENT_END, I2C_CLIENT_END };
-static unsigned short force[2] = { I2C_CLIENT_END , I2C_CLIENT_END };
+static unsigned short ignore = I2C_CLIENT_END;
                                                                                 
 static struct i2c_client_address_data addr_data = {
 	.normal_i2c		= normal_i2c,
-	.normal_i2c_range	= normal_i2c_range,
-	.probe			= probe,
-	.probe_range		= probe_range,
-	.ignore			= ignore,
-	.ignore_range		= ignore_range,
-	.force			= force
+	.probe			= &ignore,
+	.ignore			= &ignore,
 };
 
 static struct i2c_driver i2c_driver_adv7175;

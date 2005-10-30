@@ -1,7 +1,7 @@
 /*
- * file.c - NTFS kernel file operations. Part of the Linux-NTFS project.
+ * file.c - NTFS kernel file operations.  Part of the Linux-NTFS project.
  *
- * Copyright (c) 2001-2004 Anton Altaparmakov
+ * Copyright (c) 2001-2005 Anton Altaparmakov
  *
  * This program/include file is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License as published
@@ -47,7 +47,7 @@
 static int ntfs_file_open(struct inode *vi, struct file *filp)
 {
 	if (sizeof(unsigned long) < 8) {
-		if (vi->i_size > MAX_LFS_FILESIZE)
+		if (i_size_read(vi) > MAX_LFS_FILESIZE)
 			return -EFBIG;
 	}
 	return generic_file_open(vi, filp);
@@ -94,6 +94,11 @@ static int ntfs_file_fsync(struct file *filp, struct dentry *dentry,
 	if (!datasync || !NInoNonResident(NTFS_I(vi)))
 		ret = ntfs_write_inode(vi, 1);
 	write_inode_now(vi, !datasync);
+	/*
+	 * NOTE: If we were to use mapping->private_list (see ext2 and
+	 * fs/buffer.c) for dirty blocks then we could optimize the below to be
+	 * sync_mapping_buffers(vi->i_mapping).
+	 */
 	err = sync_blockdev(vi->i_sb->s_bdev);
 	if (unlikely(err && !ret))
 		ret = err;

@@ -77,7 +77,7 @@ static inline void ack_APIC_irq(void)
 extern int get_maxlvt (void);
 extern void clear_local_APIC (void);
 extern void connect_bsp_APIC (void);
-extern void disconnect_bsp_APIC (void);
+extern void disconnect_bsp_APIC (int virt_wire_setup);
 extern void disable_local_APIC (void);
 extern int verify_local_APIC (void);
 extern void cache_APIC_registers (void);
@@ -109,9 +109,10 @@ extern unsigned int nmi_watchdog;
 #define NMI_LOCAL_APIC	2
 #define NMI_INVALID	3
 
+extern int disable_timer_pin_1;
+
 #endif /* CONFIG_X86_LOCAL_APIC */
 
-#define esr_disable 0
 extern unsigned boot_cpu_id;
 
 #endif /* __ASM_APIC_H */

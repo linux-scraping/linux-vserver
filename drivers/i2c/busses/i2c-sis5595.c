@@ -55,7 +55,6 @@
  * Add adapter resets
  */
 
-#include <linux/config.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/delay.h>
@@ -229,7 +228,7 @@ static int sis5595_transaction(struct i2c_adapter *adap)
 	/* Make sure the SMBus host is ready to start transmitting */
 	temp = sis5595_read(SMB_STS_LO) + (sis5595_read(SMB_STS_HI) << 8);
 	if (temp != 0x00) {
-		dev_dbg(&adap->dev, "SMBus busy (%04x). Resetting... \n", temp);
+		dev_dbg(&adap->dev, "SMBus busy (%04x). Resetting...\n", temp);
 		sis5595_write(SMB_STS_LO, temp & 0xff);
 		sis5595_write(SMB_STS_HI, temp >> 8);
 		if ((temp = sis5595_read(SMB_STS_LO) + (sis5595_read(SMB_STS_HI) << 8)) != 0x00) {
@@ -358,8 +357,6 @@ static u32 sis5595_func(struct i2c_adapter *adapter)
 }
 
 static struct i2c_algorithm smbus_algorithm = {
-	.name		= "Non-I2C SMBus adapter",
-	.id		= I2C_ALGO_SMBUS,
 	.smbus_xfer	= sis5595_access,
 	.functionality	= sis5595_func,
 };

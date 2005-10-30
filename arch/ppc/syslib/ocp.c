@@ -68,7 +68,7 @@ static int ocp_inited;
 /* Sysfs support */
 #define OCP_DEF_ATTR(field, format_string)				\
 static ssize_t								\
-show_##field(struct device *dev, char *buf)				\
+show_##field(struct device *dev, struct device_attribute *attr, char *buf)				\
 {									\
 	struct ocp_device *odev = to_ocp_dev(dev);			\
 									\
@@ -165,7 +165,7 @@ ocp_device_remove(struct device *dev)
 }
 
 static int
-ocp_device_suspend(struct device *dev, u32 state)
+ocp_device_suspend(struct device *dev, pm_message_t state)
 {
 	struct ocp_device *ocp_dev = to_ocp_dev(dev);
 	struct ocp_driver *ocp_drv = to_ocp_drv(dev->driver);

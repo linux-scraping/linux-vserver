@@ -15,8 +15,10 @@
 
 static struct dma_mapping_ops *get_dma_ops(struct device *dev)
 {
+#ifdef CONFIG_PCI
 	if (dev->bus == &pci_bus_type)
 		return &pci_dma_ops;
+#endif
 #ifdef CONFIG_IBMVIO
 	if (dev->bus == &vio_bus_type)
 		return &vio_dma_ops;
@@ -37,8 +39,10 @@ EXPORT_SYMBOL(dma_supported);
 
 int dma_set_mask(struct device *dev, u64 dma_mask)
 {
+#ifdef CONFIG_PCI
 	if (dev->bus == &pci_bus_type)
 		return pci_set_dma_mask(to_pci_dev(dev), dma_mask);
+#endif
 #ifdef CONFIG_IBMVIO
 	if (dev->bus == &vio_bus_type)
 		return -EIO;
@@ -49,7 +53,7 @@ int dma_set_mask(struct device *dev, u64 dma_mask)
 EXPORT_SYMBOL(dma_set_mask);
 
 void *dma_alloc_coherent(struct device *dev, size_t size,
-		dma_addr_t *dma_handle, unsigned int __nocast flag)
+		dma_addr_t *dma_handle, gfp_t flag)
 {
 	struct dma_mapping_ops *dma_ops = get_dma_ops(dev);
 

@@ -367,7 +367,7 @@ static irqreturn_t snd_als4000_interrupt(int irq, void *dev_id, struct pt_regs *
 	if ((gcr_status & 0x40) && (chip->capture_substream)) /* capturing */
 		snd_pcm_period_elapsed(chip->capture_substream);
 	if ((gcr_status & 0x10) && (chip->rmidi)) /* MPU401 interrupt */
-		snd_mpu401_uart_interrupt(irq, chip->rmidi, regs);
+		snd_mpu401_uart_interrupt(irq, chip->rmidi->private_data, regs);
 	/* release the gcr */
 	outb(gcr_status, chip->alt_port + 0xe);
 	
@@ -770,6 +770,7 @@ static void __devexit snd_card_als4000_remove(struct pci_dev *pci)
 
 static struct pci_driver driver = {
 	.name = "ALS4000",
+	.owner = THIS_MODULE,
 	.id_table = snd_als4000_ids,
 	.probe = snd_card_als4000_probe,
 	.remove = __devexit_p(snd_card_als4000_remove),
@@ -777,7 +778,7 @@ static struct pci_driver driver = {
 
 static int __init alsa_card_als4000_init(void)
 {
-	return pci_module_init(&driver);
+	return pci_register_driver(&driver);
 }
 
 static void __exit alsa_card_als4000_exit(void)

@@ -604,7 +604,7 @@ static void pmz_set_mctrl(struct uart_port *port, unsigned int mctrl)
 /* 
  * Get Modem Control bits (only the input ones, the core will
  * or that with a cached value of the control ones)
- * The port lock is not held.
+ * The port lock is held and interrupts are disabled.
  */
 static unsigned int pmz_get_mctrl(struct uart_port *port)
 {
@@ -615,7 +615,7 @@ static unsigned int pmz_get_mctrl(struct uart_port *port)
 	if (ZS_IS_ASLEEP(uap) || uap->node == NULL)
 		return 0;
 
-	status = pmz_peek_status(to_pmz(port));
+	status = read_zsreg(uap, R0);
 
 	ret = 0;
 	if (status & DCD)
@@ -630,11 +630,10 @@ static unsigned int pmz_get_mctrl(struct uart_port *port)
 
 /* 
  * Stop TX side. Dealt like sunzilog at next Tx interrupt,
- * though for DMA, we will have to do a bit more. What is
- * the meaning of the tty_stop bit ? XXX
+ * though for DMA, we will have to do a bit more.
  * The port lock is held and interrupts are disabled.
  */
-static void pmz_stop_tx(struct uart_port *port, unsigned int tty_stop)
+static void pmz_stop_tx(struct uart_port *port)
 {
 	to_pmz(port)->flags |= PMACZILOG_FLAG_TX_STOPPED;
 }
@@ -643,7 +642,7 @@ static void pmz_stop_tx(struct uart_port *port, unsigned int tty_stop)
  * Kick the Tx side.
  * The port lock is held and interrupts are disabled.
  */
-static void pmz_start_tx(struct uart_port *port, unsigned int tty_start)
+static void pmz_start_tx(struct uart_port *port)
 {
 	struct uart_pmac_port *uap = to_pmz(port);
 	unsigned char status;
@@ -1545,7 +1544,7 @@ static void pmz_dispose_port(struct uart_pmac_port *uap)
 /*
  * Called upon match with an escc node in the devive-tree.
  */
-static int pmz_attach(struct macio_dev *mdev, const struct of_match *match)
+static int pmz_attach(struct macio_dev *mdev, const struct of_device_id *match)
 {
 	int i;
 	
@@ -1601,7 +1600,7 @@ static int pmz_suspend(struct macio_dev *mdev, pm_message_t pm_state)
 		return 0;
 	}
 
-	if (pm_state == mdev->ofdev.dev.power.power_state || pm_state < 2)
+	if (pm_state.event == mdev->ofdev.dev.power.power_state.event)
 		return 0;
 
 	pmz_debug("suspend, switching to state %d\n", pm_state);
@@ -1661,7 +1660,7 @@ static int pmz_resume(struct macio_dev *mdev)
 	if (uap == NULL)
 		return 0;
 
-	if (mdev->ofdev.dev.power.power_state == 0)
+	if (mdev->ofdev.dev.power.power_state.event == PM_EVENT_ON)
 		return 0;
 	
 	pmz_debug("resume, switching to state 0\n");
@@ -1714,7 +1713,7 @@ static int pmz_resume(struct macio_dev *mdev)
 
 	pmz_debug("resume, switching complete\n");
 
-	mdev->ofdev.dev.power.power_state = 0;
+	mdev->ofdev.dev.power.power_state.event = PM_EVENT_ON;
 
 	return 0;
 }
@@ -1850,20 +1849,17 @@ err_out:
 	return rc;
 }
 
-static struct of_match pmz_match[] = 
+static struct of_device_id pmz_match[] = 
 {
 	{
 	.name 		= "ch-a",
-	.type		= OF_ANY_MATCH,
-	.compatible	= OF_ANY_MATCH
 	},
 	{
 	.name 		= "ch-b",
-	.type		= OF_ANY_MATCH,
-	.compatible	= OF_ANY_MATCH
 	},
 	{},
 };
+MODULE_DEVICE_TABLE (of, pmz_match);
 
 static struct macio_driver pmz_driver = 
 {

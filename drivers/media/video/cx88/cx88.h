@@ -1,5 +1,4 @@
 /*
- * $Id: cx88.h,v 1.56 2005/03/04 09:12:23 kraxel Exp $
  *
  * v4l2 device driver for cx2388x based TV cards
  *
@@ -36,7 +35,7 @@
 #include "cx88-reg.h"
 
 #include <linux/version.h>
-#define CX88_VERSION_CODE KERNEL_VERSION(0,0,4)
+#define CX88_VERSION_CODE KERNEL_VERSION(0,0,5)
 
 #ifndef TRUE
 # define TRUE (1==1)
@@ -48,10 +47,11 @@
 
 #define CX88_MAXBOARDS 8
 
+/* Max number of inputs by card */
+#define MAX_CX88_INPUT 8
+
 /* ----------------------------------------------------------- */
 /* defines and enums                                           */
-
-#define V4L2_I2C_CLIENTS 1
 
 #define FORMAT_FLAGS_PACKED       0x01
 #define FORMAT_FLAGS_PLANAR       0x02
@@ -63,6 +63,13 @@
 #define SHADOW_AUD_VOL_CTL           1
 #define SHADOW_AUD_BAL_CTL           2
 #define SHADOW_MAX                   2
+
+/* FM Radio deemphasis type */
+enum cx88_deemph_type {
+	FM_NO_DEEMPH = 0,
+	FM_DEEMPH_50,
+	FM_DEEMPH_75
+};
 
 /* ----------------------------------------------------------- */
 /* tv norms                                                    */
@@ -77,8 +84,8 @@ struct cx88_tvnorm {
 static unsigned int inline norm_maxw(struct cx88_tvnorm *norm)
 {
 	return (norm->id & V4L2_STD_625_50) ? 768 : 640;
-//	return (norm->id & V4L2_STD_625_50) ? 720 : 640;
 }
+
 
 static unsigned int inline norm_maxh(struct cx88_tvnorm *norm)
 {
@@ -152,7 +159,7 @@ extern struct sram_channel cx88_sram_channels[];
 #define CX88_BOARD_KWORLD_DVB_T            14
 #define CX88_BOARD_DVICO_FUSIONHDTV_DVB_T1 15
 #define CX88_BOARD_KWORLD_LTV883           16
-#define CX88_BOARD_DVICO_FUSIONHDTV_3_GOLD 17
+#define CX88_BOARD_DVICO_FUSIONHDTV_3_GOLD_Q  17
 #define CX88_BOARD_HAUPPAUGE_DVB_T1        18
 #define CX88_BOARD_CONEXANT_DVB_T1         19
 #define CX88_BOARD_PROVIDEO_PV259          20
@@ -160,8 +167,13 @@ extern struct sram_channel cx88_sram_channels[];
 #define CX88_BOARD_PCHDTV_HD3000           22
 #define CX88_BOARD_DNTV_LIVE_DVB_T         23
 #define CX88_BOARD_HAUPPAUGE_ROSLYN        24
-#define CX88_BOARD_DIGITALLOGIC_MEC	       25
+#define CX88_BOARD_DIGITALLOGIC_MEC        25
 #define CX88_BOARD_IODATA_GVBCTV7E         26
+#define CX88_BOARD_PIXELVIEW_PLAYTV_ULTRA_PRO 27
+#define CX88_BOARD_DVICO_FUSIONHDTV_3_GOLD_T  28
+#define CX88_BOARD_ADSTECH_DVB_T_PCI          29
+#define CX88_BOARD_TERRATEC_CINERGY_1400_DVB_T1  30
+#define CX88_BOARD_DVICO_FUSIONHDTV_5_GOLD 31
 
 enum cx88_itype {
 	CX88_VMUX_COMPOSITE1 = 1,
@@ -185,8 +197,11 @@ struct cx88_input {
 struct cx88_board {
 	char                    *name;
 	unsigned int            tuner_type;
+	unsigned int		radio_type;
+	unsigned char		tuner_addr;
+	unsigned char		radio_addr;
 	int                     tda9887_conf;
-	struct cx88_input       input[8];
+	struct cx88_input       input[MAX_CX88_INPUT];
 	struct cx88_input       radio;
 	int                     blackbird:1;
 	int                     dvb:1;
@@ -208,7 +223,6 @@ struct cx88_subid {
 #define RESOURCE_VBI           4
 
 #define BUFFER_TIMEOUT     (HZ/2)  /* 0.5 seconds */
-//#define BUFFER_TIMEOUT     (HZ*2)
 
 /* buffer for one video frame */
 struct cx88_buffer {
@@ -255,6 +269,9 @@ struct cx88_core {
 	/* config info -- analog */
 	unsigned int               board;
 	unsigned int               tuner_type;
+	unsigned int               radio_type;
+	unsigned char              tuner_addr;
+	unsigned char              radio_addr;
 	unsigned int               tda9887_conf;
 	unsigned int               has_radio;
 
@@ -273,6 +290,11 @@ struct cx88_core {
 
 	/* IR remote control state */
 	struct cx88_IR             *ir;
+
+	struct semaphore           lock;
+
+	/* various v4l controls */
+	u32                        freq;
 };
 
 struct cx8800_dev;
@@ -308,8 +330,7 @@ struct cx8800_suspend_state {
 struct cx8800_dev {
 	struct cx88_core           *core;
 	struct list_head           devlist;
-        struct semaphore           lock;
-       	spinlock_t                 slock;
+	spinlock_t                 slock;
 
 	/* various device info */
 	unsigned int               resources;
@@ -321,18 +342,12 @@ struct cx8800_dev {
 	struct pci_dev             *pci;
 	unsigned char              pci_rev,pci_lat;
 
-#if 0
-	/* video overlay */
-	struct v4l2_framebuffer    fbuf;
-	struct cx88_buffer         *screen;
-#endif
 
 	/* capture queues */
 	struct cx88_dmaqueue       vidq;
 	struct cx88_dmaqueue       vbiq;
 
 	/* various v4l controls */
-	u32                        freq;
 
 	/* other global state info */
 	struct cx8800_suspend_state state;
@@ -340,14 +355,8 @@ struct cx8800_dev {
 
 /* ----------------------------------------------------------- */
 /* function 1: audio/alsa stuff                                */
+/* =============> moved to cx88-alsa.c <====================== */
 
-struct cx8801_dev {
-	struct cx88_core           *core;
-
-	/* pci i/o */
-	struct pci_dev             *pci;
-	unsigned char              pci_rev,pci_lat;
-};
 
 /* ----------------------------------------------------------- */
 /* function 2: mpeg stuff                                      */
@@ -363,8 +372,7 @@ struct cx8802_suspend_state {
 
 struct cx8802_dev {
 	struct cx88_core           *core;
-        struct semaphore           lock;
-       	spinlock_t                 slock;
+	spinlock_t                 slock;
 
 	/* pci i/o */
 	struct pci_dev             *pci;
@@ -420,8 +428,6 @@ struct cx8802_dev {
 /* ----------------------------------------------------------- */
 /* cx88-core.c                                                 */
 
-extern char *cx88_vid_irqs[32];
-extern char *cx88_mpeg_irqs[32];
 extern void cx88_print_irqbits(char *name, char *tag, char **strings,
 			       u32 bits, u32 mask);
 extern void cx88_print_ioctl(char *name, unsigned int cmd);
@@ -471,6 +477,11 @@ extern void cx88_core_put(struct cx88_core *core,
 /* cx88-vbi.c                                                  */
 
 void cx8800_vbi_fmt(struct cx8800_dev *dev, struct v4l2_format *f);
+/*
+int cx8800_start_vbi_dma(struct cx8800_dev    *dev,
+			 struct cx88_dmaqueue *q,
+			 struct cx88_buffer   *buf);
+*/
 int cx8800_stop_vbi_dma(struct cx8800_dev *dev);
 int cx8800_restart_vbi_queue(struct cx8800_dev    *dev,
 			     struct cx88_dmaqueue *q);
@@ -540,8 +551,21 @@ void cx8802_fini_common(struct cx8802_dev *dev);
 int cx8802_suspend_common(struct pci_dev *pci_dev, pm_message_t state);
 int cx8802_resume_common(struct pci_dev *pci_dev);
 
+/* ----------------------------------------------------------- */
+/* cx88-video.c                                                */
+extern int cx88_do_ioctl(struct inode *inode, struct file *file, int radio,
+				struct cx88_core *core, unsigned int cmd,
+				void *arg, v4l2_kioctl driver_ioctl);
+
+/* ----------------------------------------------------------- */
+/* cx88-blackbird.c                                            */
+extern int (*cx88_ioctl_hook)(struct inode *inode, struct file *file,
+				unsigned int cmd, void *arg);
+extern unsigned int (*cx88_ioctl_translator)(unsigned int cmd);
+
 /*
  * Local variables:
  * c-basic-offset: 8
  * End:
+ * kate: eol "unix"; indent-width 3; remove-trailing-space on; replace-trailing-space-save on; tab-width 8; replace-tabs off; space-indent off; mixed-indent off
  */

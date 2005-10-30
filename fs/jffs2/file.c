@@ -7,11 +7,10 @@
  *
  * For licensing information, see the file 'LICENCE' in this directory.
  *
- * $Id: file.c,v 1.99 2004/11/16 20:36:11 dwmw2 Exp $
+ * $Id: file.c,v 1.102 2005/07/06 12:13:09 dwmw2 Exp $
  *
  */
 
-#include <linux/version.h>
 #include <linux/kernel.h>
 #include <linux/slab.h>
 #include <linux/fs.h>
@@ -21,9 +20,6 @@
 #include <linux/crc32.h>
 #include <linux/jffs2.h>
 #include "nodelist.h"
-
-extern int generic_file_open(struct inode *, struct file *) __attribute__((weak));
-extern loff_t generic_file_llseek(struct file *file, loff_t offset, int origin) __attribute__((weak));
 
 static int jffs2_commit_write (struct file *filp, struct page *pg,
 			       unsigned start, unsigned end);
@@ -51,9 +47,7 @@ struct file_operations jffs2_file_operations =
 	.ioctl =	jffs2_ioctl,
 	.mmap =		generic_file_readonly_mmap,
 	.fsync =	jffs2_fsync,
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,5,29)
 	.sendfile =	generic_file_sendfile
-#endif
 };
 
 /* jffs2_file_inode_operations */

@@ -60,7 +60,8 @@ static inline int dma_set_mask(struct device *dev, u64 dma_mask)
 }
 
 static inline void *dma_alloc_coherent(struct device *dev, size_t size,
-				       dma_addr_t * dma_handle, int gfp)
+				       dma_addr_t * dma_handle,
+				       gfp_t gfp)
 {
 #ifdef CONFIG_NOT_COHERENT_CACHE
 	return __dma_alloc_coherent(size, dma_handle, gfp);
@@ -117,7 +118,7 @@ dma_map_page(struct device *dev, struct page *page,
 
 	__dma_sync_page(page, offset, size, direction);
 
-	return (page - mem_map) * PAGE_SIZE + PCI_DRAM_OFFSET + offset;
+	return page_to_bus(page) + offset;
 }
 
 /* We do nothing. */

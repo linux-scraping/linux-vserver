@@ -19,7 +19,7 @@
 #define	AS_EIO		(__GFP_BITS_SHIFT + 0)	/* IO error on async write */
 #define AS_ENOSPC	(__GFP_BITS_SHIFT + 1)	/* ENOSPC on async write */
 
-static inline unsigned int __nocast mapping_gfp_mask(struct address_space * mapping)
+static inline gfp_t mapping_gfp_mask(struct address_space * mapping)
 {
 	return mapping->flags & __GFP_BITS_MASK;
 }
@@ -52,12 +52,12 @@ void release_pages(struct page **pages, int nr, int cold);
 
 static inline struct page *page_cache_alloc(struct address_space *x)
 {
-	return alloc_pages(mapping_gfp_mask(x), 0);
+	return alloc_pages(mapping_gfp_mask(x)|__GFP_NORECLAIM, 0);
 }
 
 static inline struct page *page_cache_alloc_cold(struct address_space *x)
 {
-	return alloc_pages(mapping_gfp_mask(x)|__GFP_COLD, 0);
+	return alloc_pages(mapping_gfp_mask(x)|__GFP_COLD|__GFP_NORECLAIM, 0);
 }
 
 typedef int filler_t(void *, struct page *);

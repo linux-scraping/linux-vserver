@@ -1,5 +1,4 @@
 /*
- * $Id: ir-common.h,v 1.8 2005/02/22 12:28:40 kraxel Exp $
  *
  * some common structs and functions to handle infrared remotes via
  * input layer ...
@@ -21,11 +20,11 @@
  *  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
-#include <linux/version.h>
 #include <linux/input.h>
 
 
 #define IR_TYPE_RC5     1
+#define IR_TYPE_PD      2 /* Pulse distance encoded IR */
 #define IR_TYPE_OTHER  99
 
 #define IR_KEYTAB_TYPE	u32
@@ -50,6 +49,7 @@ extern IR_KEYTAB_TYPE ir_codes_rc5_tv[IR_KEYTAB_SIZE];
 extern IR_KEYTAB_TYPE ir_codes_winfast[IR_KEYTAB_SIZE];
 extern IR_KEYTAB_TYPE ir_codes_empty[IR_KEYTAB_SIZE];
 extern IR_KEYTAB_TYPE ir_codes_hauppauge_new[IR_KEYTAB_SIZE];
+extern IR_KEYTAB_TYPE ir_codes_pixelview[IR_KEYTAB_SIZE];
 
 void ir_input_init(struct input_dev *dev, struct ir_input_state *ir,
 		   int ir_type, IR_KEYTAB_TYPE *ir_codes);
@@ -59,6 +59,7 @@ void ir_input_keydown(struct input_dev *dev, struct ir_input_state *ir,
 u32  ir_extract_bits(u32 data, u32 mask);
 int  ir_dump_samples(u32 *samples, int count);
 int  ir_decode_biphase(u32 *samples, int count, int low, int high);
+int  ir_decode_pulsedistance(u32 *samples, int count, int low, int high);
 
 /*
  * Local variables:

@@ -35,7 +35,6 @@
 #include <sound/pcm.h>
 #include <sound/ac97_codec.h>
 #include <sound/info.h>
-#include <sound/control.h>
 #include <sound/initval.h>
 
 MODULE_AUTHOR("Jaroslav Kysela <perex@suse.cz>");
@@ -74,51 +73,6 @@ MODULE_PARM_DESC(ac97_clock, "AC'97 codec clock (0 = auto-detect).");
 /*
  *  Direct registers
  */
-
-#ifndef PCI_DEVICE_ID_INTEL_82801_6
-#define PCI_DEVICE_ID_INTEL_82801_6     0x2416
-#endif
-#ifndef PCI_DEVICE_ID_INTEL_82901_6
-#define PCI_DEVICE_ID_INTEL_82901_6     0x2426
-#endif
-#ifndef PCI_DEVICE_ID_INTEL_82801BA_6
-#define PCI_DEVICE_ID_INTEL_82801BA_6   0x2446
-#endif
-#ifndef PCI_DEVICE_ID_INTEL_440MX_6
-#define PCI_DEVICE_ID_INTEL_440MX_6     0x7196
-#endif
-#ifndef PCI_DEVICE_ID_INTEL_ICH3_6
-#define PCI_DEVICE_ID_INTEL_ICH3_6	0x2486
-#endif
-#ifndef PCI_DEVICE_ID_INTEL_ICH4_6
-#define PCI_DEVICE_ID_INTEL_ICH4_6	0x24c6
-#endif
-#ifndef PCI_DEVICE_ID_INTEL_ICH5_6
-#define PCI_DEVICE_ID_INTEL_ICH5_6	0x24d6
-#endif
-#ifndef PCI_DEVICE_ID_INTEL_ICH6_6
-#define PCI_DEVICE_ID_INTEL_ICH6_6	0x266d
-#endif
-#ifndef PCI_DEVICE_ID_INTEL_ICH7_6
-#define PCI_DEVICE_ID_INTEL_ICH7_6	0x27dd
-#endif
-#ifndef PCI_DEVICE_ID_SI_7013
-#define PCI_DEVICE_ID_SI_7013		0x7013
-#endif
-#ifndef PCI_DEVICE_ID_NVIDIA_MCP_MODEM
-#define PCI_DEVICE_ID_NVIDIA_MCP_MODEM	0x01c1
-#endif
-#ifndef PCI_DEVICE_ID_NVIDIA_MCP2_MODEM
-#define PCI_DEVICE_ID_NVIDIA_MCP2_MODEM	0x0069
-#endif
-#ifndef PCI_DEVICE_ID_NVIDIA_MCP2S_MODEM
-#define PCI_DEVICE_ID_NVIDIA_MCP2S_MODEM 0x0089
-#endif
-#ifndef PCI_DEVICE_ID_NVIDIA_MCP3_MODEM
-#define PCI_DEVICE_ID_NVIDIA_MCP3_MODEM	0x00d9
-#endif
-
-
 enum { DEVICE_INTEL, DEVICE_SIS, DEVICE_ALI, DEVICE_NFORCE };
 
 #define ICHREG(x) ICH_REG_##x
@@ -292,60 +246,9 @@ static struct pci_device_id snd_intel8x0m_ids[] = {
 #endif
 	{ 0, }
 };
-static int snd_intel8x0m_switch_default_get(snd_kcontrol_t *kcontrol,
-					    snd_ctl_elem_value_t *ucontrol);
-static int snd_intel8x0m_switch_default_put(snd_kcontrol_t *kcontrol,
-					    snd_ctl_elem_value_t *ucontrol);
-static int snd_intel8x0m_switch_default_info(snd_kcontrol_t *kcontrol,
-					     snd_ctl_elem_info_t *uinfo);
-
-#define PRIVATE_VALUE_INITIALIZER(r,m) (((r) & 0xffff) << 16 | ((m) & 0xffff))
-#define PRIVATE_VALUE_MASK(control) ((control)->private_value & 0xffff)
-#define PRIVATE_VALUE_REG(control) (((control)->private_value >> 16) & 0xffff)
-
-static snd_kcontrol_new_t snd_intel8x0m_mixer_switches[] __devinitdata = {
-  { .name  = "Off-hook Switch",
-    .iface = SNDRV_CTL_ELEM_IFACE_MIXER,
-    .info  = snd_intel8x0m_switch_default_info,
-    .get   = snd_intel8x0m_switch_default_get,
-    .put   = snd_intel8x0m_switch_default_put,
-    .private_value = PRIVATE_VALUE_INITIALIZER(AC97_GPIO_STATUS,AC97_GPIO_LINE1_OH)
-  }
-};
 
 MODULE_DEVICE_TABLE(pci, snd_intel8x0m_ids);
 
-static int snd_intel8x0m_switch_default_info(snd_kcontrol_t *kcontrol,
-					     snd_ctl_elem_info_t *uinfo)
-{
-	uinfo->type = SNDRV_CTL_ELEM_TYPE_BOOLEAN;
-	uinfo->count = 1;
-	uinfo->value.integer.min = 0;
-	uinfo->value.integer.max = 1;
-	return 0;
-}
-
-static int snd_intel8x0m_switch_default_get(snd_kcontrol_t *kcontrol,
-					    snd_ctl_elem_value_t *ucontrol)
-{
-	unsigned short mask = PRIVATE_VALUE_MASK(kcontrol);
-	unsigned short reg = PRIVATE_VALUE_REG(kcontrol);
-	intel8x0_t *chip = snd_kcontrol_chip(kcontrol);
-	unsigned int status;
-	status = snd_ac97_read(chip->ac97, reg) & mask ? 1 : 0;
-	ucontrol->value.integer.value[0] = status;
-	return 0;
-}
-static int snd_intel8x0m_switch_default_put(snd_kcontrol_t *kcontrol,
-					    snd_ctl_elem_value_t *ucontrol)
-{
-	unsigned short mask = PRIVATE_VALUE_MASK(kcontrol);
-	unsigned short reg = PRIVATE_VALUE_REG(kcontrol);
-	intel8x0_t *chip = snd_kcontrol_chip(kcontrol);
-	unsigned short new_status = ucontrol->value.integer.value[0] ? mask : ~mask;
-	return snd_ac97_update_bits(chip->ac97, reg,
-				    mask, new_status);
-}
 /*
  *  Lowlevel I/O - busmaster
  */
@@ -500,6 +403,8 @@ static unsigned short snd_intel8x0_codec_read(ac97_t *ac97,
 			res = 0xffff;
 		}
 	}
+	if (reg == AC97_GPIO_STATUS)
+		iagetword(chip, 0); /* clear semaphore */
 	return res;
 }
 
@@ -698,21 +603,6 @@ static snd_pcm_uframes_t snd_intel8x0_pcm_pointer(snd_pcm_substream_t * substrea
 	return bytes_to_frames(substream->runtime, ptr);
 }
 
-static int snd_intel8x0m_pcm_trigger(snd_pcm_substream_t *substream, int cmd)
-{
-	/* hook off/on on start/stop */
-	/* Moved this to mixer control */
-	switch (cmd) {
-	case SNDRV_PCM_TRIGGER_START:
-		break;
-	case SNDRV_PCM_TRIGGER_STOP:
-		break;
-	default:
-		return -EINVAL;
-	}
-	return snd_intel8x0_pcm_trigger(substream,cmd);
-}
-
 static int snd_intel8x0m_pcm_prepare(snd_pcm_substream_t * substream)
 {
 	intel8x0_t *chip = snd_pcm_substream_chip(substream);
@@ -808,7 +698,7 @@ static snd_pcm_ops_t snd_intel8x0m_playback_ops = {
 	.hw_params =	snd_intel8x0_hw_params,
 	.hw_free =	snd_intel8x0_hw_free,
 	.prepare =	snd_intel8x0m_pcm_prepare,
-	.trigger =	snd_intel8x0m_pcm_trigger,
+	.trigger =	snd_intel8x0_pcm_trigger,
 	.pointer =	snd_intel8x0_pcm_pointer,
 };
 
@@ -819,7 +709,7 @@ static snd_pcm_ops_t snd_intel8x0m_capture_ops = {
 	.hw_params =	snd_intel8x0_hw_params,
 	.hw_free =	snd_intel8x0_hw_free,
 	.prepare =	snd_intel8x0m_pcm_prepare,
-	.trigger =	snd_intel8x0m_pcm_trigger,
+	.trigger =	snd_intel8x0_pcm_trigger,
 	.pointer =	snd_intel8x0_pcm_pointer,
 };
 
@@ -947,7 +837,6 @@ static int __devinit snd_intel8x0_mixer(intel8x0_t *chip, int ac97_clock)
 	ac97_t *x97;
 	int err;
 	unsigned int glob_sta = 0;
-	unsigned int idx;
 	static ac97_bus_ops_t ops = {
 		.write = snd_intel8x0_codec_write,
 		.read = snd_intel8x0_codec_read,
@@ -982,10 +871,6 @@ static int __devinit snd_intel8x0_mixer(intel8x0_t *chip, int ac97_clock)
 	if(ac97_is_modem(x97) && !chip->ichd[ICHD_MDMIN].ac97) {
 		chip->ichd[ICHD_MDMIN].ac97 = x97;
 		chip->ichd[ICHD_MDMOUT].ac97 = x97;
-	}
-	for (idx = 0; idx < ARRAY_SIZE(snd_intel8x0m_mixer_switches); idx++) {
-		if ((err = snd_ctl_add(chip->card, snd_ctl_new1(&snd_intel8x0m_mixer_switches[idx], chip))) < 0)
-			goto __err;
 	}
 
 	chip->in_ac97_init = 0;
@@ -1228,7 +1113,7 @@ static int __devinit snd_intel8x0m_create(snd_card_t * card,
 	if ((err = pci_enable_device(pci)) < 0)
 		return err;
 
-	chip = kcalloc(1, sizeof(*chip), GFP_KERNEL);
+	chip = kzalloc(sizeof(*chip), GFP_KERNEL);
 	if (chip == NULL) {
 		pci_disable_device(pci);
 		return -ENOMEM;
@@ -1353,18 +1238,18 @@ static struct shortname_table {
 	unsigned int id;
 	const char *s;
 } shortnames[] __devinitdata = {
-	{ PCI_DEVICE_ID_INTEL_82801_6, "Intel 82801AA-ICH" },
-	{ PCI_DEVICE_ID_INTEL_82901_6, "Intel 82901AB-ICH0" },
+	{ PCI_DEVICE_ID_INTEL_82801AA_6, "Intel 82801AA-ICH" },
+	{ PCI_DEVICE_ID_INTEL_82801AB_6, "Intel 82901AB-ICH0" },
 	{ PCI_DEVICE_ID_INTEL_82801BA_6, "Intel 82801BA-ICH2" },
 	{ PCI_DEVICE_ID_INTEL_440MX_6, "Intel 440MX" },
-	{ PCI_DEVICE_ID_INTEL_ICH3_6, "Intel 82801CA-ICH3" },
-	{ PCI_DEVICE_ID_INTEL_ICH4_6, "Intel 82801DB-ICH4" },
-	{ PCI_DEVICE_ID_INTEL_ICH5_6, "Intel ICH5" },
-	{ PCI_DEVICE_ID_INTEL_ICH6_6, "Intel ICH6" },
-	{ PCI_DEVICE_ID_INTEL_ICH7_6, "Intel ICH7" },
+	{ PCI_DEVICE_ID_INTEL_82801CA_6, "Intel 82801CA-ICH3" },
+	{ PCI_DEVICE_ID_INTEL_82801DB_6, "Intel 82801DB-ICH4" },
+	{ PCI_DEVICE_ID_INTEL_82801EB_6, "Intel ICH5" },
+	{ PCI_DEVICE_ID_INTEL_ICH6_17, "Intel ICH6" },
+	{ PCI_DEVICE_ID_INTEL_ICH7_19, "Intel ICH7" },
 	{ 0x7446, "AMD AMD768" },
 	{ PCI_DEVICE_ID_SI_7013, "SiS SI7013" },
-	{ PCI_DEVICE_ID_NVIDIA_MCP_MODEM, "NVidia nForce" },
+	{ PCI_DEVICE_ID_NVIDIA_MCP1_MODEM, "NVidia nForce" },
 	{ PCI_DEVICE_ID_NVIDIA_MCP2_MODEM, "NVidia nForce2" },
 	{ PCI_DEVICE_ID_NVIDIA_MCP2S_MODEM, "NVidia nForce2s" },
 	{ PCI_DEVICE_ID_NVIDIA_MCP3_MODEM, "NVidia nForce3" },
@@ -1441,6 +1326,7 @@ static void __devexit snd_intel8x0m_remove(struct pci_dev *pci)
 
 static struct pci_driver driver = {
 	.name = "Intel ICH Modem",
+	.owner = THIS_MODULE,
 	.id_table = snd_intel8x0m_ids,
 	.probe = snd_intel8x0m_probe,
 	.remove = __devexit_p(snd_intel8x0m_remove),
@@ -1450,7 +1336,7 @@ static struct pci_driver driver = {
 
 static int __init alsa_card_intel8x0m_init(void)
 {
-	return pci_module_init(&driver);
+	return pci_register_driver(&driver);
 }
 
 static void __exit alsa_card_intel8x0m_exit(void)

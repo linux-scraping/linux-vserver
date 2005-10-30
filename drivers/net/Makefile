@@ -9,6 +9,7 @@ endif
 obj-$(CONFIG_E1000) += e1000/
 obj-$(CONFIG_IBM_EMAC) += ibm_emac/
 obj-$(CONFIG_IXGB) += ixgb/
+obj-$(CONFIG_CHELSIO_T1) += chelsio/
 obj-$(CONFIG_BONDING) += bonding/
 obj-$(CONFIG_GIANFAR) += gianfar_driver.o
 
@@ -27,6 +28,7 @@ obj-$(CONFIG_SUNQE) += sunqe.o
 obj-$(CONFIG_SUNBMAC) += sunbmac.o
 obj-$(CONFIG_MYRI_SBUS) += myri_sbus.o
 obj-$(CONFIG_SUNGEM) += sungem.o sungem_phy.o
+obj-$(CONFIG_CASSINI) += cassini.o
 
 obj-$(CONFIG_MACE) += mace.o
 obj-$(CONFIG_BMAC) += bmac.o
@@ -42,6 +44,7 @@ obj-$(CONFIG_EEPRO100) += eepro100.o
 obj-$(CONFIG_E100) += e100.o
 obj-$(CONFIG_TLAN) += tlan.o
 obj-$(CONFIG_EPIC100) += epic100.o
+obj-$(CONFIG_SIS190) += sis190.o
 obj-$(CONFIG_SIS900) += sis900.o
 obj-$(CONFIG_YELLOWFIN) += yellowfin.o
 obj-$(CONFIG_ACENIC) += acenic.o
@@ -52,7 +55,10 @@ obj-$(CONFIG_STNIC) += stnic.o 8390.o
 obj-$(CONFIG_FEALNX) += fealnx.o
 obj-$(CONFIG_TIGON3) += tg3.o
 obj-$(CONFIG_BNX2) += bnx2.o
+spidernet-y += spider_net.o spider_net_ethtool.o sungem_phy.o
+obj-$(CONFIG_SPIDER_NET) += spidernet.o
 obj-$(CONFIG_TC35815) += tc35815.o
+obj-$(CONFIG_SKGE) += skge.o
 obj-$(CONFIG_SK98LIN) += sk98lin/
 obj-$(CONFIG_SKFP) += skfp/
 obj-$(CONFIG_VIA_RHINE) += via-rhine.o
@@ -64,6 +70,7 @@ obj-$(CONFIG_ADAPTEC_STARFIRE) += starfire.o
 #
 
 obj-$(CONFIG_MII) += mii.o
+obj-$(CONFIG_PHYLIB) += phy/
 
 obj-$(CONFIG_SUNDANCE) += sundance.o
 obj-$(CONFIG_HAMACHI) += hamachi.o
@@ -74,7 +81,6 @@ obj-$(CONFIG_MAC8390) += mac8390.o 8390.o
 obj-$(CONFIG_APNE) += apne.o 8390.o
 obj-$(CONFIG_PCMCIA_PCNET) += 8390.o
 obj-$(CONFIG_SHAPER) += shaper.o
-obj-$(CONFIG_SK_G16) += sk_g16.o
 obj-$(CONFIG_HP100) += hp100.o
 obj-$(CONFIG_SMC9194) += smc9194.o
 obj-$(CONFIG_FEC) += fec.o
@@ -122,7 +128,6 @@ obj-$(CONFIG_DEFXX) += defxx.o
 obj-$(CONFIG_SGISEEQ) += sgiseeq.o
 obj-$(CONFIG_SGI_O2MACE_ETH) += meth.o
 obj-$(CONFIG_AT1700) += at1700.o
-obj-$(CONFIG_FMV18X) += fmv18x.o
 obj-$(CONFIG_EL1) += 3c501.o
 obj-$(CONFIG_EL16) += 3c507.o
 obj-$(CONFIG_ELMC) += 3c523.o
@@ -180,6 +185,7 @@ obj-$(CONFIG_AMD8111_ETH) += amd8111e.o
 obj-$(CONFIG_IBMVETH) += ibmveth.o
 obj-$(CONFIG_S2IO) += s2io.o
 obj-$(CONFIG_SMC91X) += smc91x.o
+obj-$(CONFIG_DM9000) += dm9000.o
 obj-$(CONFIG_FEC_8XX) += fec_8xx/
 
 obj-$(CONFIG_ARM) += arm/

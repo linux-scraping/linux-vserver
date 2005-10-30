@@ -45,8 +45,8 @@
 
 #include "fib_lookup.h"
 
-static kmem_cache_t *fn_hash_kmem;
-static kmem_cache_t *fn_alias_kmem;
+static kmem_cache_t *fn_hash_kmem __read_mostly;
+static kmem_cache_t *fn_alias_kmem __read_mostly;
 
 struct fib_node {
 	struct hlist_node	fn_hash;
@@ -703,7 +703,8 @@ fn_hash_dump_bucket(struct sk_buff *skb, struct netlink_callback *cb,
 					  &f->fn_key,
 					  fz->fz_order,
 					  fa->fa_tos,
-					  fa->fa_info) < 0) {
+					  fa->fa_info,
+					  NLM_F_MULTI) < 0) {
 				cb->args[3] = i;
 				return -1;
 			}

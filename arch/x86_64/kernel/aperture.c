@@ -40,11 +40,7 @@ int fix_aperture __initdata = 1;
 
 static u32 __init allocate_aperture(void) 
 {
-#ifdef CONFIG_DISCONTIGMEM
 	pg_data_t *nd0 = NODE_DATA(0);
-#else
-	pg_data_t *nd0 = &contig_page_data;
-#endif	
 	u32 aper_size;
 	void *p; 
 
@@ -249,6 +245,8 @@ void __init iommu_hole_init(void)
 		
 	if (aper_alloc) { 
 		/* Got the aperture from the AGP bridge */
+	} else if (swiotlb && !valid_agp) {
+		/* Do nothing */
 	} else if ((!no_iommu && end_pfn >= 0xffffffff>>PAGE_SHIFT) ||
 		   force_iommu ||
 		   valid_agp ||

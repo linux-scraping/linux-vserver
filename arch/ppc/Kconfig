@@ -26,10 +26,6 @@ config GENERIC_CALIBRATE_DELAY
 	bool
 	default y
 
-config HAVE_DEC_LOCK
-	bool
-	default y
-
 config PPC
 	bool
 	default y
@@ -44,6 +40,10 @@ config GENERIC_NVRAM
 	default y
 
 config SCHED_NO_NO_OMIT_FRAME_POINTER
+	bool
+	default y
+
+config ARCH_MAY_HAVE_PC_FDC
 	bool
 	default y
 
@@ -85,8 +85,10 @@ config POWER4
 	bool "POWER4 and 970 (G5)"
 
 config 8xx
-	depends on BROKEN
 	bool "8xx"
+
+config E200
+	bool "e200"
 
 config E500
 	bool "e500"
@@ -98,12 +100,12 @@ config PPC_FPU
 
 config BOOKE
 	bool
-	depends on E500
+	depends on E200 || E500
 	default y
 
 config FSL_BOOKE
 	bool
-	depends on E500
+	depends on E200 || E500
 	default y
 
 config PTE_64BIT
@@ -141,16 +143,16 @@ config ALTIVEC
 
 config SPE
 	bool "SPE Support"
-	depends on E500
+	depends on E200 || E500
 	---help---
 	  This option enables kernel support for the Signal Processing
 	  Extensions (SPE) to the PowerPC processor. The kernel currently
 	  supports saving and restoring SPE registers, and turning on the
 	  'spe enable' bit so user processes can execute SPE instructions.
 
-	  This option is only usefully if you have a processor that supports
+	  This option is only useful if you have a processor that supports
 	  SPE (e500, otherwise known as 85xx series), but does not have any
-	  affect on a non-spe cpu (it does, however add code to the kernel).
+	  effect on a non-spe cpu (it does, however add code to the kernel).
 
 	  If in doubt, say Y here.
 
@@ -200,7 +202,7 @@ config TAU_AVERAGE
 
 config MATH_EMULATION
 	bool "Math emulation"
-	depends on 4xx || 8xx || E500
+	depends on 4xx || 8xx || E200 || E500
 	---help---
 	  Some PowerPC chips designed for embedded applications do not have
 	  a floating-point unit and therefore do not implement the
@@ -213,6 +215,26 @@ config MATH_EMULATION
 	  or any machine with a 6xx, 7xx or 7xxx series processor, say N
 	  here.  Saying Y here will not hurt performance (on any machine) but
 	  will increase the size of the kernel.
+
+config KEXEC
+	bool "kexec system call (EXPERIMENTAL)"
+	depends on EXPERIMENTAL
+	help
+	  kexec is a system call that implements the ability to shutdown your
+	  current kernel, and to start another kernel.  It is like a reboot
+	  but it is indepedent of the system firmware.   And like a reboot
+	  you can start any kernel with it, not just Linux.
+
+	  The name comes from the similiarity to the exec system call.
+
+	  It is an ongoing process to be certain the hardware in a machine
+	  is properly shutdown, so do not be surprised if this code does not
+	  initially work for you.  It may help to enable device hotplugging
+	  support.  As of this writing the exact hardware interface is
+	  strongly in flux, so no good recommendation can be made.
+
+	  In the GameCube implementation, kexec allows you to load and
+	  run DOL files, including kernel and homebrew DOLs.
 
 source "drivers/cpufreq/Kconfig"
 
@@ -239,6 +261,15 @@ config PPC601_SYNC_FIX
 
 	  If in doubt, say Y here.
 
+config HOTPLUG_CPU
+	bool "Support for enabling/disabling CPUs"
+	depends on SMP && HOTPLUG && EXPERIMENTAL && PPC_PMAC
+	---help---
+	  Say Y here to be able to disable and re-enable individual
+	  CPUs at runtime on SMP machines.
+
+	  Say N if you are unsure.
+
 source arch/ppc/platforms/4xx/Kconfig
 source arch/ppc/platforms/85xx/Kconfig
 
@@ -254,12 +285,15 @@ config PPC_STD_MMU
 
 config NOT_COHERENT_CACHE
 	bool
-	depends on 4xx || 8xx
+	depends on 4xx || 8xx || E200
 	default y
 
 endmenu
 
 menu "Platform options"
+
+config FADS
+	bool
 
 choice
 	prompt "8xx Machine Type"
@@ -305,14 +339,6 @@ config RPXLITE
 	  End of life: end 2000 ?
 	  URL: see TQM850L
 
-	  SPD823TS:
-	  MPC823 based board used in the "Tele Server" product
-	  Manufacturer: Speech Design, <http://www.speech-design.de/>
-	  Date of Release: Mid 2000 (?)
-	  End of life: -
-	  URL: <http://www.speech-design.de/>
-	  select "English", then "Teleteam Solutions", then "TeleServer"
-
 	  IVMS8:
 	  MPC860 based board used in the "Integrated Voice Mail System",
 	  Small Version (8 voice channels)
@@ -328,13 +354,6 @@ config RPXLITE
 	  Date of Release: March 2001  (?)
 	  End of life: -
 	  URL: <http://www.speech-design.de/>
-
-	  SM850:
-	  Service Module (based on TQM850L)
-	  Manufacturer: Dependable Computer Systems, <http://www.decomsys.com/>
-	  Date of Release: end 2000 (?)
-	  End of life: mid 2001 (?)
-	  URL: <http://www.tz-mikroelektronik.de/ServiceModule/index.html>
 
 	  HERMES:
 	  Hermes-Pro ISDN/LAN router with integrated 8 x hub
@@ -376,8 +395,25 @@ config BSEIP
 	  26MB DRAM, 4MB flash, Ethernet, a 16K-gate FPGA, USB, an LCD/video
 	  controller, and two RS232 ports.
 
-config FADS
+config MPC8XXFADS
 	bool "FADS"
+	select FADS
+
+config MPC86XADS
+	bool "MPC86XADS"
+	help
+	  MPC86x Application Development System by Freescale Semiconductor.
+	  The MPC86xADS is meant to serve as a platform for s/w and h/w
+	  development around the MPC86X processor families.
+	select FADS
+
+config MPC885ADS
+	bool "MPC885ADS"
+	help
+	  Freescale Semiconductor MPC885 Application Development System (ADS).
+	  Also known as DUET.
+	  The MPC885ADS is meant to serve as a platform for s/w and h/w
+	  development around the MPC885 processor family.
 
 config TQM823L
 	bool "TQM823L"
@@ -422,13 +458,6 @@ config TQM860L
 config FPS850L
 	bool "FPS850L"
 
-config SPD823TS
-	bool "SPD823TS"
-	help
-	  Say Y here to support the Speech Design 823 Tele-Server from Speech
-	  Design, released in 2000.  The manufacturer's website is at
-	  <http://www.speech-design.de/>.
-
 config IVMS8
 	bool "IVMS8"
 	help
@@ -442,14 +471,6 @@ config IVML24
 	  Say Y here to support the Integrated Voice-Mail Large 24-channel SBC
 	  from Speech Design, released March 2001.  The manufacturer's website
 	  is at <http://www.speech-design.de/>.
-
-config SM850
-	bool "SM850"
-	help
-	  Say Y here to support the Service Module 850 from Dependable
-	  Computer Systems, an SBC based on the TQM850L module by TQ
-	  Components.  This board is no longer in production.  The
-	  manufacturer's website is at <http://www.decomsys.com/>.
 
 config HERMES_PRO
 	bool "HERMES"
@@ -516,6 +537,7 @@ config PPC_MULTIPLATFORM
 
 config APUS
 	bool "Amiga-APUS"
+	depends on BROKEN
 	help
 	  Select APUS if configuring for a PowerUP Amiga.
 	  More information is available at:
@@ -534,9 +556,6 @@ config CPCI690
 	bool "Force-CPCI690"
 	help
 	  Select CPCI690 if configuring a Force CPCI690 cPCI board.
-
-config PCORE
-	bool "Force-PowerCore"
 
 config POWERPMC250
 	bool "Force-PowerPMC250"
@@ -570,9 +589,6 @@ config EV64260
 config LOPEC
 	bool "Motorola-LoPEC"
 
-config MCPN765
-	bool "Motorola-MCPN765"
-
 config MVME5100
 	bool "Motorola-MVME5100"
 
@@ -594,17 +610,12 @@ config SANDPOINT
 config RADSTONE_PPC7D
 	bool "Radstone Technology PPC7D board"
 
-config ADIR
-	bool "SBS-Adirondack"
-
-config K2
-	bool "SBS-K2"
-
 config PAL4
 	bool "SBS-Palomar4"
 
 config GEMINI
 	bool "Synergy-Gemini"
+	depends on BROKEN
 	help
 	  Select Gemini if configuring for a Synergy Microsystems' Gemini
 	  series Single Board Computer.  More information is available at:
@@ -669,6 +680,16 @@ config MPC834x_SYS
 	help
 	  This option enables support for the MPC 834x SYS evaluation board.
 
+	  Be aware that PCI buses can only function when SYS board is plugged
+	  into the PIB (Platform IO Board) board from Freescale which provide
+	  3 PCI slots.  The PIBs PCI initialization is the bootloader's
+	  responsiblilty.
+
+config EV64360
+	bool "Marvell-EV64360BP"
+	help
+	  Select EV64360 if configuring a Marvell EV64360BP Evaluation
+	  platform.
 endchoice
 
 config PQ2ADS
@@ -678,7 +699,7 @@ config PQ2ADS
 
 config TQM8xxL
 	bool
-	depends on 8xx && (TQM823L || TQM850L || FPS850L || TQM855L || TQM860L || SM850)
+	depends on 8xx && (TQM823L || TQM850L || FPS850L || TQM855L || TQM860L)
 	default y
 
 config EMBEDDEDBOOT
@@ -752,15 +773,15 @@ config PPC_OF
 
 config PPC_GEN550
 	bool
-	depends on SANDPOINT || MCPN765 || SPRUCE || PPLUS || PCORE || \
-		PRPMC750 || K2 || PRPMC800 || LOPEC || \
+	depends on SANDPOINT || SPRUCE || PPLUS || \
+		PRPMC750 || PRPMC800 || LOPEC || \
 		(EV64260 && !SERIAL_MPSC) || CHESTNUT || RADSTONE_PPC7D || \
 		83xx
 	default y
 
 config FORCE
 	bool
-	depends on 6xx && (PCORE || POWERPMC250)
+	depends on 6xx && POWERPMC250
 	default y
 
 config GT64260
@@ -770,7 +791,7 @@ config GT64260
 
 config MV64360		# Really MV64360 & MV64460
 	bool
-	depends on CHESTNUT || KATANA || RADSTONE_PPC7D || HDPU
+	depends on CHESTNUT || KATANA || RADSTONE_PPC7D || HDPU || EV64360
 	default y
 
 config MV64X60
@@ -823,12 +844,7 @@ config EPIC_SERIAL_MODE
 
 config MPC10X_BRIDGE
 	bool
-	depends on PCORE || POWERPMC250 || LOPEC || SANDPOINT
-	default y
-
-config FSL_OCP
-	bool
-	depends on MPC10X_BRIDGE
+	depends on POWERPMC250 || LOPEC || SANDPOINT
 	default y
 
 config MPC10X_OPENPIC
@@ -840,9 +856,12 @@ config MPC10X_STORE_GATHERING
 	bool "Enable MPC10x store gathering"
 	depends on MPC10X_BRIDGE
 
-config CPC710_DATA_GATHERING
-	bool "Enable CPC710 data gathering"
-	depends on K2
+config SANDPOINT_ENABLE_UART1
+	bool "Enable DUART mode on Sandpoint"
+	depends on SANDPOINT
+	help
+	  If this option is enabled then the MPC824x processor will run
+	  in DUART mode instead of UART mode.
 
 config HARRIER_STORE_GATHERING
 	bool "Enable Harrier store gathering"
@@ -865,6 +884,7 @@ config PPCBUG_NVRAM
 	default y if PPC_PREP
 
 config SMP
+	depends on PPC_STD_MMU
 	bool "Symmetric multi-processing support"
 	---help---
 	  This enables support for systems with more than one CPU. If you have
@@ -884,7 +904,7 @@ config SMP
 
 config IRQ_ALL_CPUS
 	bool "Distribute interrupts on all CPUs by default"
-	depends on SMP
+	depends on SMP && !MV64360
 	help
 	  This option gives the kernel permission to distribute IRQs across
 	  multiple CPUs.  Saying N here will route all IRQs to the first
@@ -897,18 +917,12 @@ config NR_CPUS
 	depends on SMP
 	default "4"
 
-config PREEMPT
-	bool "Preemptible Kernel"
-	help
-	  This option reduces the latency of the kernel when reacting to
-	  real-time or interactive events by allowing a low priority process to
-	  be preempted even if it is in kernel mode executing a system call.
-
-	  Say Y here if you are building a kernel for a desktop, embedded
-	  or real-time system.  Say N if you are unsure.
-
 config HIGHMEM
 	bool "High memory support"
+
+source kernel/Kconfig.hz
+source kernel/Kconfig.preempt
+source "mm/Kconfig"
 
 source "fs/Kconfig.binfmt"
 
@@ -1081,7 +1095,26 @@ config PROC_HARDWARE
 
 source "drivers/zorro/Kconfig"
 
+if !44x || BROKEN
 source kernel/power/Kconfig
+endif
+
+config SECCOMP
+	bool "Enable seccomp to safely compute untrusted bytecode"
+	depends on PROC_FS
+	default y
+	help
+	  This kernel feature is useful for number crunching applications
+	  that may need to compute untrusted bytecode during their
+	  execution. By using pipes or other transports made available to
+	  the process as file descriptors supporting the read/write
+	  syscalls, it's possible to isolate those applications in
+	  their own address space using seccomp. Once seccomp is
+	  enabled via /proc/<pid>/seccomp, it cannot be disabled
+	  and the task is only allowed to execute a few safe syscalls
+	  defined by each seccomp mode.
+
+	  If unsure, say Y. Only embedded should say N here.
 
 endmenu
 
@@ -1133,6 +1166,11 @@ config PCI
 config PCI_DOMAINS
 	bool
 	default PCI
+
+config MPC83xx_PCI2
+	bool "  Supprt for 2nd PCI host controller"
+	depends on PCI && MPC834x
+	default y if MPC834x_SYS
 
 config PCI_QSPAN
 	bool "QSpan PCI"
@@ -1297,6 +1335,8 @@ config PIN_TLB
 	bool "Pinned Kernel TLBs (860 ONLY)"
 	depends on ADVANCED_OPTIONS && 8xx
 endmenu
+
+source "net/Kconfig"
 
 source "drivers/Kconfig"
 

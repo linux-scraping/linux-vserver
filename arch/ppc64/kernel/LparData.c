@@ -28,35 +28,38 @@
 #include <asm/iSeries/IoHriProcessorVpd.h>
 #include <asm/iSeries/ItSpCommArea.h>
 
-/* The LpQueue is used to pass event data from the hypervisor to
- * the partition.  This is where I/O interrupt events are communicated.
- */
-
-/* May be filled in by the hypervisor so cannot end up in the BSS */
-struct ItLpQueue xItLpQueue __attribute__((__section__(".data")));
-
 
 /* The HvReleaseData is the root of the information shared between 
  * the hypervisor and Linux.  
  */
-
 struct HvReleaseData hvReleaseData = {
 	.xDesc = 0xc8a5d9c4,	/* "HvRD" ebcdic */
 	.xSize = sizeof(struct HvReleaseData),
 	.xVpdAreasPtrOffset = offsetof(struct naca_struct, xItVpdAreas),
 	.xSlicNacaAddr = &naca,		/* 64-bit Naca address */
-	.xMsNucDataOffset = 0x4800,	/* offset of LparMap within loadarea (see head.S) */
-	.xTagsMode = 1,			/* tags inactive       */
-	.xAddressSize = 0,		/* 64 bit              */
-	.xNoSharedProcs = 0,		/* shared processors   */
-	.xNoHMT = 0,			/* HMT allowed         */
-	.xRsvd2 = 6,			/* TEMP: This allows non-GA driver */
+	.xMsNucDataOffset = LPARMAP_PHYS,
+	.xFlags = HVREL_TAGSINACTIVE	/* tags inactive       */
+					/* 64 bit              */
+					/* shared processors   */
+					/* HMT allowed         */
+		  | 6,			/* TEMP: This allows non-GA driver */
 	.xVrmIndex = 4,			/* We are v5r2m0               */
 	.xMinSupportedPlicVrmIndex = 3,		/* v5r1m0 */
 	.xMinCompatablePlicVrmIndex = 3,	/* v5r1m0 */
 	.xVrmName = { 0xd3, 0x89, 0x95, 0xa4,	/* "Linux 2.4.64" ebcdic */
 		0xa7, 0x40, 0xf2, 0x4b,
 		0xf4, 0x4b, 0xf6, 0xf4 },
+};
+
+/*
+ * The NACA.  The first dword of the naca is required by the iSeries
+ * hypervisor to point to itVpdAreas.  The hypervisor finds the NACA
+ * through the pointer in hvReleaseData.
+ */
+struct naca_struct naca = {
+	.xItVpdAreas = &itVpdAreas,
+	.xRamDisk = 0,
+	.xRamDiskSize = 0,
 };
 
 extern void system_reset_iSeries(void);
@@ -200,7 +203,7 @@ struct ItVpdAreas itVpdAreas = {
 		0,0,0,			/* 13 - 15 */
 		sizeof(struct IoHriProcessorVpd),/* 16 length of Proc Vpd */
 		0,0,0,0,0,0,		/* 17 - 22  */
-		sizeof(struct ItLpQueue),/*     23 length of Lp Queue */
+		sizeof(struct hvlpevent_queue),	/* 23 length of Lp Queue */
 		0,0			/* 24 - 25 */
 		},
 	.xSlicVpdAdrs = {			/* VPD addresses */
@@ -218,33 +221,7 @@ struct ItVpdAreas itVpdAreas = {
 		0,0,0,			/* 13 - 15 */
 		&xIoHriProcessorVpd,	/*      16 Proc Vpd */
 		0,0,0,0,0,0,		/* 17 - 22 */
-		&xItLpQueue,		/*      23 Lp Queue */
+		&hvlpevent_queue,	/*      23 Lp Queue */
 		0,0
 	}
 };
-
-struct msChunks msChunks;
-EXPORT_SYMBOL(msChunks);
-
-/* Depending on whether this is called from iSeries or pSeries setup
- * code, the location of the msChunks struct may or may not have
- * to be reloc'd, so we force the caller to do that for us by passing
- * in a pointer to the structure.
- */
-unsigned long
-msChunks_alloc(unsigned long mem, unsigned long num_chunks, unsigned long chunk_size)
-{
-	unsigned long offset = reloc_offset();
-	struct msChunks *_msChunks = PTRRELOC(&msChunks);
-
-	_msChunks->num_chunks  = num_chunks;
-	_msChunks->chunk_size  = chunk_size;
-	_msChunks->chunk_shift = __ilog2(chunk_size);
-	_msChunks->chunk_mask  = (1UL<<_msChunks->chunk_shift)-1;
-
-	mem = _ALIGN(mem, sizeof(msChunks_entry));
-	_msChunks->abs = (msChunks_entry *)(mem + offset);
-	mem += num_chunks * sizeof(msChunks_entry);
-
-	return mem;
-}

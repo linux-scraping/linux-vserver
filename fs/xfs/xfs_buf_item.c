@@ -172,7 +172,7 @@ STATIC void	xfs_buf_do_callbacks(xfs_buf_t *bp, xfs_log_item_t *lip);
  *
  * If the XFS_BLI_STALE flag has been set, then log nothing.
  */
-uint
+STATIC uint
 xfs_buf_item_size(
 	xfs_buf_log_item_t	*bip)
 {
@@ -240,7 +240,7 @@ xfs_buf_item_size(
  * format structure, and the rest point to contiguous chunks
  * within the buffer.
  */
-void
+STATIC void
 xfs_buf_item_format(
 	xfs_buf_log_item_t	*bip,
 	xfs_log_iovec_t		*log_vector)
@@ -274,6 +274,7 @@ xfs_buf_item_format(
 		       ((bip->bli_format.blf_map_size - 1) * sizeof(uint)));
 	vecp->i_addr = (xfs_caddr_t)&bip->bli_format;
 	vecp->i_len = base_size;
+	XLOG_VEC_SET_TYPE(vecp, XLOG_REG_TYPE_BFORMAT);
 	vecp++;
 	nvecs = 1;
 
@@ -320,12 +321,14 @@ xfs_buf_item_format(
 			buffer_offset = first_bit * XFS_BLI_CHUNK;
 			vecp->i_addr = xfs_buf_offset(bp, buffer_offset);
 			vecp->i_len = nbits * XFS_BLI_CHUNK;
+			XLOG_VEC_SET_TYPE(vecp, XLOG_REG_TYPE_BCHUNK);
 			nvecs++;
 			break;
 		} else if (next_bit != last_bit + 1) {
 			buffer_offset = first_bit * XFS_BLI_CHUNK;
 			vecp->i_addr = xfs_buf_offset(bp, buffer_offset);
 			vecp->i_len = nbits * XFS_BLI_CHUNK;
+			XLOG_VEC_SET_TYPE(vecp, XLOG_REG_TYPE_BCHUNK);
 			nvecs++;
 			vecp++;
 			first_bit = next_bit;
@@ -337,6 +340,7 @@ xfs_buf_item_format(
 			buffer_offset = first_bit * XFS_BLI_CHUNK;
 			vecp->i_addr = xfs_buf_offset(bp, buffer_offset);
 			vecp->i_len = nbits * XFS_BLI_CHUNK;
+			XLOG_VEC_SET_TYPE(vecp, XLOG_REG_TYPE_BCHUNK);
 /* You would think we need to bump the nvecs here too, but we do not
  * this number is used by recovery, and it gets confused by the boundary
  * split here
@@ -365,7 +369,7 @@ xfs_buf_item_format(
  * item in memory so it cannot be written out.  Simply call bpin()
  * on the buffer to do this.
  */
-void
+STATIC void
 xfs_buf_item_pin(
 	xfs_buf_log_item_t	*bip)
 {
@@ -391,7 +395,7 @@ xfs_buf_item_pin(
  * If the XFS_BLI_STALE flag is set and we are the last reference,
  * then free up the buf log item and unlock the buffer.
  */
-void
+STATIC void
 xfs_buf_item_unpin(
 	xfs_buf_log_item_t	*bip,
 	int			stale)
@@ -446,7 +450,7 @@ xfs_buf_item_unpin(
  * so we need to free the item's descriptor (that points to the item)
  * in the transaction.
  */
-void
+STATIC void
 xfs_buf_item_unpin_remove(
 	xfs_buf_log_item_t	*bip,
 	xfs_trans_t		*tp)
@@ -493,7 +497,7 @@ xfs_buf_item_unpin_remove(
  * the lock right away, return 0.  If we can get the lock, pull the
  * buffer from the free list, mark it busy, and return 1.
  */
-uint
+STATIC uint
 xfs_buf_item_trylock(
 	xfs_buf_log_item_t	*bip)
 {
@@ -537,7 +541,7 @@ xfs_buf_item_trylock(
  * This is for support of xfs_trans_bhold(). Make sure the
  * XFS_BLI_HOLD field is cleared if we don't free the item.
  */
-void
+STATIC void
 xfs_buf_item_unlock(
 	xfs_buf_log_item_t	*bip)
 {
@@ -635,7 +639,7 @@ xfs_buf_item_unlock(
  * by returning the original lsn of that transaction here rather than
  * the current one.
  */
-xfs_lsn_t
+STATIC xfs_lsn_t
 xfs_buf_item_committed(
 	xfs_buf_log_item_t	*bip,
 	xfs_lsn_t		lsn)
@@ -654,7 +658,7 @@ xfs_buf_item_committed(
  * and have aborted this transaction, we'll trap this buffer when it tries to
  * get written out.
  */
-void
+STATIC void
 xfs_buf_item_abort(
 	xfs_buf_log_item_t	*bip)
 {
@@ -674,7 +678,7 @@ xfs_buf_item_abort(
  * B_DELWRI set, then get it going out to disk with a call to bawrite().
  * If not, then just release the buffer.
  */
-void
+STATIC void
 xfs_buf_item_push(
 	xfs_buf_log_item_t	*bip)
 {
@@ -693,7 +697,7 @@ xfs_buf_item_push(
 }
 
 /* ARGSUSED */
-void
+STATIC void
 xfs_buf_item_committing(xfs_buf_log_item_t *bip, xfs_lsn_t commit_lsn)
 {
 }
@@ -701,7 +705,7 @@ xfs_buf_item_committing(xfs_buf_log_item_t *bip, xfs_lsn_t commit_lsn)
 /*
  * This is the ops vector shared by all buf log items.
  */
-struct xfs_item_ops xfs_buf_item_ops = {
+STATIC struct xfs_item_ops xfs_buf_item_ops = {
 	.iop_size	= (uint(*)(xfs_log_item_t*))xfs_buf_item_size,
 	.iop_format	= (void(*)(xfs_log_item_t*, xfs_log_iovec_t*))
 					xfs_buf_item_format,

@@ -426,8 +426,6 @@
 static char *serial_version = "$Revision: 1.25 $";
 
 #include <linux/config.h>
-#include <linux/version.h>
-
 #include <linux/types.h>
 #include <linux/errno.h>
 #include <linux/signal.h>
@@ -448,7 +446,6 @@ static char *serial_version = "$Revision: 1.25 $";
 #include <asm/io.h>
 #include <asm/irq.h>
 #include <asm/system.h>
-#include <asm/segment.h>
 #include <asm/bitops.h>
 #include <linux/delay.h>
 
@@ -5043,17 +5040,3 @@ rs_init(void)
 /* this makes sure that rs_init is called during kernel boot */
 
 module_init(rs_init);
-
-/*
- * register_serial and unregister_serial allows for serial ports to be
- * configured at run-time, to support PCMCIA modems.
- */
-int
-register_serial(struct serial_struct *req)
-{
-	return -1;
-}
-
-void unregister_serial(int line)
-{
-}

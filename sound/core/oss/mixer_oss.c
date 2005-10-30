@@ -24,6 +24,7 @@
 #include <linux/smp_lock.h>
 #include <linux/slab.h>
 #include <linux/time.h>
+#include <linux/string.h>
 #include <sound/core.h>
 #include <sound/minors.h>
 #include <sound/control.h>
@@ -52,7 +53,7 @@ static int snd_mixer_oss_open(struct inode *inode, struct file *file)
 	err = snd_card_file_add(card, file);
 	if (err < 0)
 		return err;
-	fmixer = kcalloc(1, sizeof(*fmixer), GFP_KERNEL);
+	fmixer = kzalloc(sizeof(*fmixer), GFP_KERNEL);
 	if (fmixer == NULL) {
 		snd_card_file_remove(card, file);
 		return -ENOMEM;
@@ -516,8 +517,8 @@ static void snd_mixer_oss_get_volume1_vol(snd_mixer_oss_file_t *fmixer,
 		up_read(&card->controls_rwsem);
 		return;
 	}
-	uinfo = kcalloc(1, sizeof(*uinfo), GFP_KERNEL);
-	uctl = kcalloc(1, sizeof(*uctl), GFP_KERNEL);
+	uinfo = kzalloc(sizeof(*uinfo), GFP_KERNEL);
+	uctl = kzalloc(sizeof(*uctl), GFP_KERNEL);
 	if (uinfo == NULL || uctl == NULL)
 		goto __unalloc;
 	snd_runtime_check(!kctl->info(kctl, uinfo), goto __unalloc);
@@ -550,8 +551,8 @@ static void snd_mixer_oss_get_volume1_sw(snd_mixer_oss_file_t *fmixer,
 		up_read(&card->controls_rwsem);
 		return;
 	}
-	uinfo = kcalloc(1, sizeof(*uinfo), GFP_KERNEL);
-	uctl = kcalloc(1, sizeof(*uctl), GFP_KERNEL);
+	uinfo = kzalloc(sizeof(*uinfo), GFP_KERNEL);
+	uctl = kzalloc(sizeof(*uctl), GFP_KERNEL);
 	if (uinfo == NULL || uctl == NULL)
 		goto __unalloc;
 	snd_runtime_check(!kctl->info(kctl, uinfo), goto __unalloc);
@@ -611,8 +612,8 @@ static void snd_mixer_oss_put_volume1_vol(snd_mixer_oss_file_t *fmixer,
 	down_read(&card->controls_rwsem);
 	if ((kctl = snd_ctl_find_numid(card, numid)) == NULL)
 		return;
-	uinfo = kcalloc(1, sizeof(*uinfo), GFP_KERNEL);
-	uctl = kcalloc(1, sizeof(*uctl), GFP_KERNEL);
+	uinfo = kzalloc(sizeof(*uinfo), GFP_KERNEL);
+	uctl = kzalloc(sizeof(*uctl), GFP_KERNEL);
 	if (uinfo == NULL || uctl == NULL)
 		goto __unalloc;
 	snd_runtime_check(!kctl->info(kctl, uinfo), goto __unalloc);
@@ -648,8 +649,8 @@ static void snd_mixer_oss_put_volume1_sw(snd_mixer_oss_file_t *fmixer,
 		up_read(&fmixer->card->controls_rwsem);
 		return;
 	}
-	uinfo = kcalloc(1, sizeof(*uinfo), GFP_KERNEL);
-	uctl = kcalloc(1, sizeof(*uctl), GFP_KERNEL);
+	uinfo = kzalloc(sizeof(*uinfo), GFP_KERNEL);
+	uctl = kzalloc(sizeof(*uctl), GFP_KERNEL);
 	if (uinfo == NULL || uctl == NULL)
 		goto __unalloc;
 	snd_runtime_check(!kctl->info(kctl, uinfo), goto __unalloc);
@@ -767,8 +768,8 @@ static int snd_mixer_oss_get_recsrc2(snd_mixer_oss_file_t *fmixer, unsigned int 
 	snd_ctl_elem_value_t *uctl;
 	int err, idx;
 	
-	uinfo = kcalloc(1, sizeof(*uinfo), GFP_KERNEL);
-	uctl = kcalloc(1, sizeof(*uctl), GFP_KERNEL);
+	uinfo = kzalloc(sizeof(*uinfo), GFP_KERNEL);
+	uctl = kzalloc(sizeof(*uctl), GFP_KERNEL);
 	if (uinfo == NULL || uctl == NULL) {
 		err = -ENOMEM;
 		goto __unlock;
@@ -812,8 +813,8 @@ static int snd_mixer_oss_put_recsrc2(snd_mixer_oss_file_t *fmixer, unsigned int 
 	int err;
 	unsigned int idx;
 
-	uinfo = kcalloc(1, sizeof(*uinfo), GFP_KERNEL);
-	uctl = kcalloc(1, sizeof(*uctl), GFP_KERNEL);
+	uinfo = kzalloc(sizeof(*uinfo), GFP_KERNEL);
+	uctl = kzalloc(sizeof(*uctl), GFP_KERNEL);
 	if (uinfo == NULL || uctl == NULL) {
 		err = -ENOMEM;
 		goto __unlock;
@@ -1137,7 +1138,7 @@ static void snd_mixer_oss_proc_write(snd_info_entry_t *entry,
 			goto __unlock;
 		}
 		tbl->oss_id = ch;
-		tbl->name = snd_kmalloc_strdup(str, GFP_KERNEL);
+		tbl->name = kstrdup(str, GFP_KERNEL);
 		if (! tbl->name) {
 			kfree(tbl);
 			goto __unlock;

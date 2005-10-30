@@ -87,7 +87,7 @@ static int serport_ldisc_open(struct tty_struct *tty)
 	if (!capable(CAP_SYS_ADMIN))
 		return -EPERM;
 
-	serport = kcalloc(1, sizeof(struct serport), GFP_KERNEL);
+	serport = kzalloc(sizeof(struct serport), GFP_KERNEL);
 	if (!serport)
 		return -ENOMEM;
 
@@ -165,7 +165,7 @@ static ssize_t serport_ldisc_read(struct tty_struct * tty, struct file * file, u
 	if (test_and_set_bit(SERPORT_BUSY, &serport->flags))
 		return -EBUSY;
 
-	serport->serio = serio = kcalloc(1, sizeof(struct serio), GFP_KERNEL);
+	serport->serio = serio = kzalloc(sizeof(struct serio), GFP_KERNEL);
 	if (!serio)
 		return -ENOMEM;
 
@@ -257,7 +257,7 @@ static int __init serport_init(void)
 
 static void __exit serport_exit(void)
 {
-	tty_register_ldisc(N_MOUSE, NULL);
+	tty_unregister_ldisc(N_MOUSE);
 }
 
 module_init(serport_init);

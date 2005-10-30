@@ -4556,8 +4556,6 @@ advansys_detect(struct scsi_host_template *tpnt)
                 continue;
             }
 
-	    scsi_set_device(shp, dev);
-
             /* Save a pointer to the Scsi_Host of each board found. */
             asc_host[asc_board_count++] = shp;
 
@@ -9194,16 +9192,16 @@ asc_prt_scsi_cmnd(struct scsi_cmnd *s)
         s->sc_data_direction, s->resid);
 
     printk(
-" use_sg %u, sglist_len %u, abort_reason 0x%x\n",
-        s->use_sg, s->sglist_len, s->abort_reason);
+" use_sg %u, sglist_len %u\n",
+        s->use_sg, s->sglist_len);
 
     printk(
 " serial_number 0x%x, retries %d, allowed %d\n",
         (unsigned) s->serial_number, s->retries, s->allowed);
 
     printk(
-" timeout_per_command %d, timeout_total %d, timeout %d\n",
-        s->timeout_per_command, s->timeout_total, s->timeout);
+" timeout_per_command %d\n",
+        s->timeout_per_command);
 
     printk(
 " scsi_done 0x%lx, done 0x%lx, host_scribble 0x%lx, result 0x%x\n",

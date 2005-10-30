@@ -19,6 +19,11 @@
 #define IRQ_POLARITY_POSITIVE	0x2	/* high level or low->high edge */
 #define IRQ_POLARITY_NEGATIVE	0x0	/* low level or high->low edge */
 
+/*
+ * IRQ line status macro IRQ_PER_CPU is used
+ */
+#define ARCH_HAS_IRQ_PER_CPU
+
 #if defined(CONFIG_40x)
 #include <asm/ibm4xx.h>
 
@@ -133,6 +138,16 @@ irq_canonicalize(int irq)
 #define	SIU_IRQ7	(14)
 #define	SIU_LEVEL7	(15)
 
+#define MPC8xx_INT_FEC1		SIU_LEVEL1
+#define MPC8xx_INT_FEC2		SIU_LEVEL3
+
+#define MPC8xx_INT_SCC1		(CPM_IRQ_OFFSET + CPMVEC_SCC1)
+#define MPC8xx_INT_SCC2		(CPM_IRQ_OFFSET + CPMVEC_SCC2)
+#define MPC8xx_INT_SCC3		(CPM_IRQ_OFFSET + CPMVEC_SCC3)
+#define MPC8xx_INT_SCC4		(CPM_IRQ_OFFSET + CPMVEC_SCC4)
+#define MPC8xx_INT_SMC1		(CPM_IRQ_OFFSET + CPMVEC_SMC1)
+#define MPC8xx_INT_SMC2		(CPM_IRQ_OFFSET + CPMVEC_SMC2)
+
 /* The internal interrupts we can configure as we see fit.
  * My personal preference is CPM at level 2, which puts it above the
  * MBX PCI/ISA/IDE interrupts.
@@ -176,7 +191,7 @@ static __inline__ int irq_canonicalize(int irq)
 */
 #include <asm/mpc85xx.h>
 
-/* The MPC8560 openpic has  32 internal interrupts and 12 external
+/* The MPC8548 openpic has 48 internal interrupts and 12 external
  * interrupts.
  *
  * We are "flattening" the interrupt vectors of the cascaded CPM
@@ -184,7 +199,7 @@ static __inline__ int irq_canonicalize(int irq)
  * single integer.
  */
 #define NR_CPM_INTS	64
-#define NR_EPIC_INTS	44
+#define NR_EPIC_INTS	60
 #ifndef NR_8259_INTS
 #define NR_8259_INTS	0
 #endif
@@ -223,9 +238,15 @@ static __inline__ int irq_canonicalize(int irq)
 #define MPC85xx_IRQ_RIO_RX	(12 + MPC85xx_OPENPIC_IRQ_OFFSET)
 #define MPC85xx_IRQ_TSEC1_TX	(13 + MPC85xx_OPENPIC_IRQ_OFFSET)
 #define MPC85xx_IRQ_TSEC1_RX	(14 + MPC85xx_OPENPIC_IRQ_OFFSET)
+#define MPC85xx_IRQ_TSEC3_TX	(15 + MPC85xx_OPENPIC_IRQ_OFFSET)
+#define MPC85xx_IRQ_TSEC3_RX	(16 + MPC85xx_OPENPIC_IRQ_OFFSET)
+#define MPC85xx_IRQ_TSEC3_ERROR	(17 + MPC85xx_OPENPIC_IRQ_OFFSET)
 #define MPC85xx_IRQ_TSEC1_ERROR	(18 + MPC85xx_OPENPIC_IRQ_OFFSET)
 #define MPC85xx_IRQ_TSEC2_TX	(19 + MPC85xx_OPENPIC_IRQ_OFFSET)
 #define MPC85xx_IRQ_TSEC2_RX	(20 + MPC85xx_OPENPIC_IRQ_OFFSET)
+#define MPC85xx_IRQ_TSEC4_TX	(21 + MPC85xx_OPENPIC_IRQ_OFFSET)
+#define MPC85xx_IRQ_TSEC4_RX	(22 + MPC85xx_OPENPIC_IRQ_OFFSET)
+#define MPC85xx_IRQ_TSEC4_ERROR	(23 + MPC85xx_OPENPIC_IRQ_OFFSET)
 #define MPC85xx_IRQ_TSEC2_ERROR	(24 + MPC85xx_OPENPIC_IRQ_OFFSET)
 #define MPC85xx_IRQ_FEC		(25 + MPC85xx_OPENPIC_IRQ_OFFSET)
 #define MPC85xx_IRQ_DUART	(26 + MPC85xx_OPENPIC_IRQ_OFFSET)
@@ -235,18 +256,18 @@ static __inline__ int irq_canonicalize(int irq)
 #define MPC85xx_IRQ_CPM		(30 + MPC85xx_OPENPIC_IRQ_OFFSET)
 
 /* The 12 external interrupt lines */
-#define MPC85xx_IRQ_EXT0        (32 + MPC85xx_OPENPIC_IRQ_OFFSET)
-#define MPC85xx_IRQ_EXT1        (33 + MPC85xx_OPENPIC_IRQ_OFFSET)
-#define MPC85xx_IRQ_EXT2        (34 + MPC85xx_OPENPIC_IRQ_OFFSET)
-#define MPC85xx_IRQ_EXT3        (35 + MPC85xx_OPENPIC_IRQ_OFFSET)
-#define MPC85xx_IRQ_EXT4        (36 + MPC85xx_OPENPIC_IRQ_OFFSET)
-#define MPC85xx_IRQ_EXT5        (37 + MPC85xx_OPENPIC_IRQ_OFFSET)
-#define MPC85xx_IRQ_EXT6        (38 + MPC85xx_OPENPIC_IRQ_OFFSET)
-#define MPC85xx_IRQ_EXT7        (39 + MPC85xx_OPENPIC_IRQ_OFFSET)
-#define MPC85xx_IRQ_EXT8        (40 + MPC85xx_OPENPIC_IRQ_OFFSET)
-#define MPC85xx_IRQ_EXT9        (41 + MPC85xx_OPENPIC_IRQ_OFFSET)
-#define MPC85xx_IRQ_EXT10       (42 + MPC85xx_OPENPIC_IRQ_OFFSET)
-#define MPC85xx_IRQ_EXT11       (43 + MPC85xx_OPENPIC_IRQ_OFFSET)
+#define MPC85xx_IRQ_EXT0        (48 + MPC85xx_OPENPIC_IRQ_OFFSET)
+#define MPC85xx_IRQ_EXT1        (49 + MPC85xx_OPENPIC_IRQ_OFFSET)
+#define MPC85xx_IRQ_EXT2        (50 + MPC85xx_OPENPIC_IRQ_OFFSET)
+#define MPC85xx_IRQ_EXT3        (51 + MPC85xx_OPENPIC_IRQ_OFFSET)
+#define MPC85xx_IRQ_EXT4        (52 + MPC85xx_OPENPIC_IRQ_OFFSET)
+#define MPC85xx_IRQ_EXT5        (53 + MPC85xx_OPENPIC_IRQ_OFFSET)
+#define MPC85xx_IRQ_EXT6        (54 + MPC85xx_OPENPIC_IRQ_OFFSET)
+#define MPC85xx_IRQ_EXT7        (55 + MPC85xx_OPENPIC_IRQ_OFFSET)
+#define MPC85xx_IRQ_EXT8        (56 + MPC85xx_OPENPIC_IRQ_OFFSET)
+#define MPC85xx_IRQ_EXT9        (57 + MPC85xx_OPENPIC_IRQ_OFFSET)
+#define MPC85xx_IRQ_EXT10       (58 + MPC85xx_OPENPIC_IRQ_OFFSET)
+#define MPC85xx_IRQ_EXT11       (59 + MPC85xx_OPENPIC_IRQ_OFFSET)
 
 /* CPM related interrupts */
 #define	SIU_INT_ERROR		((uint)0x00+CPM_IRQ_OFFSET)
@@ -331,6 +352,7 @@ static __inline__ int irq_canonicalize(int irq)
 #define	SIU_INT_IDMA3		((uint)0x08 + CPM_IRQ_OFFSET)
 #define	SIU_INT_IDMA4		((uint)0x09 + CPM_IRQ_OFFSET)
 #define	SIU_INT_SDMA		((uint)0x0a + CPM_IRQ_OFFSET)
+#define	SIU_INT_USB		((uint)0x0b + CPM_IRQ_OFFSET)
 #define	SIU_INT_TIMER1		((uint)0x0c + CPM_IRQ_OFFSET)
 #define	SIU_INT_TIMER2		((uint)0x0d + CPM_IRQ_OFFSET)
 #define	SIU_INT_TIMER3		((uint)0x0e + CPM_IRQ_OFFSET)
@@ -391,10 +413,6 @@ static __inline__ int irq_canonicalize(int irq)
 extern unsigned long ppc_cached_irq_mask[NR_MASK_WORDS];
 extern unsigned long ppc_lost_interrupts[NR_MASK_WORDS];
 extern atomic_t ppc_n_lost_interrupts;
-
-struct irqaction;
-struct pt_regs;
-int handle_IRQ_event(unsigned int, struct pt_regs *, struct irqaction *);
 
 #endif /* _ASM_IRQ_H */
 #endif /* __KERNEL__ */

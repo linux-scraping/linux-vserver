@@ -1324,9 +1324,9 @@ pmac_ide_setup_device(pmac_ide_hwif_t *pmif, ide_hwif_t *hwif)
 	/* XXX FIXME: Media bay stuff need re-organizing */
 	if (np->parent && np->parent->name
 	    && strcasecmp(np->parent->name, "media-bay") == 0) {
-#ifdef CONFIG_PMAC_PBOOK
+#ifdef CONFIG_PMAC_MEDIABAY
 		media_bay_set_ide_infos(np->parent, pmif->regbase, pmif->irq, hwif->index);
-#endif /* CONFIG_PMAC_PBOOK */
+#endif /* CONFIG_PMAC_MEDIABAY */
 		pmif->mediabay = 1;
 		if (!bidp)
 			pmif->aapl_bus_id = 1;
@@ -1382,10 +1382,10 @@ pmac_ide_setup_device(pmac_ide_hwif_t *pmif, ide_hwif_t *hwif)
 	       hwif->index, model_name[pmif->kind], pmif->aapl_bus_id,
 	       pmif->mediabay ? " (mediabay)" : "", hwif->irq);
 			
-#ifdef CONFIG_PMAC_PBOOK
+#ifdef CONFIG_PMAC_MEDIABAY
 	if (pmif->mediabay && check_media_bay_by_base(pmif->regbase, MB_CD) == 0)
 		hwif->noprobe = 0;
-#endif /* CONFIG_PMAC_PBOOK */
+#endif /* CONFIG_PMAC_MEDIABAY */
 
 	hwif->sg_max_nents = MAX_DCMDS;
 
@@ -1419,7 +1419,7 @@ pmac_ide_setup_device(pmac_ide_hwif_t *pmif, ide_hwif_t *hwif)
  * Attach to a macio probed interface
  */
 static int __devinit
-pmac_ide_macio_attach(struct macio_dev *mdev, const struct of_match *match)
+pmac_ide_macio_attach(struct macio_dev *mdev, const struct of_device_id *match)
 {
 	void __iomem *base;
 	unsigned long regbase;
@@ -1504,12 +1504,12 @@ pmac_ide_macio_attach(struct macio_dev *mdev, const struct of_match *match)
 }
 
 static int
-pmac_ide_macio_suspend(struct macio_dev *mdev, u32 state)
+pmac_ide_macio_suspend(struct macio_dev *mdev, pm_message_t state)
 {
 	ide_hwif_t	*hwif = (ide_hwif_t *)dev_get_drvdata(&mdev->ofdev.dev);
 	int		rc = 0;
 
-	if (state != mdev->ofdev.dev.power.power_state && state >= 2) {
+	if (state.event != mdev->ofdev.dev.power.power_state.event && state.event >= PM_EVENT_SUSPEND) {
 		rc = pmac_ide_do_suspend(hwif);
 		if (rc == 0)
 			mdev->ofdev.dev.power.power_state = state;
@@ -1524,10 +1524,10 @@ pmac_ide_macio_resume(struct macio_dev *mdev)
 	ide_hwif_t	*hwif = (ide_hwif_t *)dev_get_drvdata(&mdev->ofdev.dev);
 	int		rc = 0;
 	
-	if (mdev->ofdev.dev.power.power_state != 0) {
+	if (mdev->ofdev.dev.power.power_state.event != PM_EVENT_ON) {
 		rc = pmac_ide_do_resume(hwif);
 		if (rc == 0)
-			mdev->ofdev.dev.power.power_state = 0;
+			mdev->ofdev.dev.power.power_state = PMSG_ON;
 	}
 
 	return rc;
@@ -1608,12 +1608,12 @@ pmac_ide_pci_attach(struct pci_dev *pdev, const struct pci_device_id *id)
 }
 
 static int
-pmac_ide_pci_suspend(struct pci_dev *pdev, u32 state)
+pmac_ide_pci_suspend(struct pci_dev *pdev, pm_message_t state)
 {
 	ide_hwif_t	*hwif = (ide_hwif_t *)pci_get_drvdata(pdev);
 	int		rc = 0;
 	
-	if (state != pdev->dev.power.power_state && state >= 2) {
+	if (state.event != pdev->dev.power.power_state.event && state.event >= 2) {
 		rc = pmac_ide_do_suspend(hwif);
 		if (rc == 0)
 			pdev->dev.power.power_state = state;
@@ -1628,36 +1628,28 @@ pmac_ide_pci_resume(struct pci_dev *pdev)
 	ide_hwif_t	*hwif = (ide_hwif_t *)pci_get_drvdata(pdev);
 	int		rc = 0;
 	
-	if (pdev->dev.power.power_state != 0) {
+	if (pdev->dev.power.power_state.event != PM_EVENT_ON) {
 		rc = pmac_ide_do_resume(hwif);
 		if (rc == 0)
-			pdev->dev.power.power_state = 0;
+			pdev->dev.power.power_state = PMSG_ON;
 	}
 
 	return rc;
 }
 
-static struct of_match pmac_ide_macio_match[] = 
+static struct of_device_id pmac_ide_macio_match[] = 
 {
 	{
 	.name 		= "IDE",
-	.type		= OF_ANY_MATCH,
-	.compatible	= OF_ANY_MATCH
 	},
 	{
 	.name 		= "ATA",
-	.type		= OF_ANY_MATCH,
-	.compatible	= OF_ANY_MATCH
 	},
 	{
-	.name 		= OF_ANY_MATCH,
 	.type		= "ide",
-	.compatible	= OF_ANY_MATCH
 	},
 	{
-	.name 		= OF_ANY_MATCH,
 	.type		= "ata",
-	.compatible	= OF_ANY_MATCH
 	},
 	{},
 };
@@ -1672,7 +1664,7 @@ static struct macio_driver pmac_ide_macio_driver =
 };
 
 static struct pci_device_id pmac_ide_pci_match[] = {
-	{ PCI_VENDOR_ID_APPLE, PCI_DEVIEC_ID_APPLE_UNI_N_ATA, PCI_ANY_ID, PCI_ANY_ID, 0, 0, 0},
+	{ PCI_VENDOR_ID_APPLE, PCI_DEVICE_ID_APPLE_UNI_N_ATA, PCI_ANY_ID, PCI_ANY_ID, 0, 0, 0},
 	{ PCI_VENDOR_ID_APPLE, PCI_DEVICE_ID_APPLE_IPID_ATA100, PCI_ANY_ID, PCI_ANY_ID, 0, 0, 0},
 	{ PCI_VENDOR_ID_APPLE, PCI_DEVICE_ID_APPLE_K2_ATA100, PCI_ANY_ID, PCI_ANY_ID, 0, 0, 0},
 	{ PCI_VENDOR_ID_APPLE, PCI_DEVICE_ID_APPLE_SH_ATA,

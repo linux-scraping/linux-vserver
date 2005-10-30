@@ -261,7 +261,7 @@ do_more:
 	}
 error_return:
 	brelse(bitmap_bh);
-	DLIMIT_FREE_BLOCK(sb, inode->i_xid, freed);
+	DLIMIT_FREE_BLOCK(inode, freed);
 	release_blocks(sb, freed);
 	DQUOT_FREE_BLOCK(inode, freed);
 }
@@ -365,7 +365,7 @@ int ext2_new_block(struct inode *inode, unsigned long goal,
 		*err = -ENOSPC;
 		goto out_dquot;
 	}
-	if (DLIMIT_ALLOC_BLOCK(sb, inode->i_xid, es_alloc)) {
+	if (DLIMIT_ALLOC_BLOCK(inode, es_alloc)) {
 		*err = -ENOSPC;
 		goto out_dlimit;
 	}
@@ -516,7 +516,7 @@ got_block:
 	*err = 0;
 out_release:
 	group_release_blocks(sb, group_no, desc, gdp_bh, group_alloc);
-	DLIMIT_FREE_BLOCK(sb, inode->i_xid, es_alloc);
+	DLIMIT_FREE_BLOCK(inode, es_alloc);
 out_dlimit:
 	release_blocks(sb, es_alloc);
 out_dquot:

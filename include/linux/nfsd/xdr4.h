@@ -210,6 +210,7 @@ struct nfsd4_open {
 	u32		op_share_access;    /* request */
 	u32		op_share_deny;      /* request */
 	stateid_t	op_stateid;         /* response */
+	u32		op_recall;          /* recall */
 	struct nfsd4_change_info  op_cinfo; /* response */
 	u32		op_rflags;          /* response */
 	int		op_truncate;        /* used during processing */
@@ -437,17 +438,22 @@ extern int nfsd4_process_open1(struct nfsd4_open *open);
 extern int nfsd4_process_open2(struct svc_rqst *rqstp, 
 		struct svc_fh *current_fh, struct nfsd4_open *open);
 extern int nfsd4_open_confirm(struct svc_rqst *rqstp, 
-		struct svc_fh *current_fh, struct nfsd4_open_confirm *oc);
+		struct svc_fh *current_fh, struct nfsd4_open_confirm *oc,
+		struct nfs4_stateowner **);
 extern  int nfsd4_close(struct svc_rqst *rqstp, struct svc_fh *current_fh, 
-		struct nfsd4_close *close);
+		struct nfsd4_close *close,
+		struct nfs4_stateowner **replay_owner);
 extern int nfsd4_open_downgrade(struct svc_rqst *rqstp, 
-		struct svc_fh *current_fh, struct nfsd4_open_downgrade *od);
+		struct svc_fh *current_fh, struct nfsd4_open_downgrade *od,
+		struct nfs4_stateowner **replay_owner);
 extern int nfsd4_lock(struct svc_rqst *rqstp, struct svc_fh *current_fh, 
-		struct nfsd4_lock *lock);
+		struct nfsd4_lock *lock,
+		struct nfs4_stateowner **replay_owner);
 extern int nfsd4_lockt(struct svc_rqst *rqstp, struct svc_fh *current_fh, 
 		struct nfsd4_lockt *lockt);
 extern int nfsd4_locku(struct svc_rqst *rqstp, struct svc_fh *current_fh, 
-		struct nfsd4_locku *locku);
+		struct nfsd4_locku *locku,
+		struct nfs4_stateowner **replay_owner);
 extern int
 nfsd4_release_lockowner(struct svc_rqst *rqstp,
 		struct nfsd4_release_lockowner *rlockowner);

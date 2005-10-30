@@ -100,13 +100,6 @@ MODULE_PARM_DESC(joystick, "Enable joystick.");
 #endif
 #endif /* SUPPORT_JOYSTICK */
 
-#ifndef PCI_DEVICE_ID_ENSONIQ_CT5880
-#define PCI_DEVICE_ID_ENSONIQ_CT5880    0x5880
-#endif
-#ifndef PCI_DEVICE_ID_ENSONIQ_ES1371
-#define PCI_DEVICE_ID_ENSONIQ_ES1371	0x1371
-#endif
-
 /* ES1371 chip ID */
 /* This is a little confusing because all ES1371 compatible chips have the
    same DEVICE_ID, the only thing differentiating them is the REV_ID field.
@@ -683,6 +676,15 @@ static unsigned short snd_es1371_codec_read(ac97_t *ac97,
 	up(&ensoniq->src_mutex);
 	snd_printk("es1371: codec read timeout at 0x%lx [0x%x]\n", ES_REG(ensoniq, 1371_CODEC), inl(ES_REG(ensoniq, 1371_CODEC)));
 	return 0;
+}
+
+static void snd_es1371_codec_wait(ac97_t *ac97)
+{
+	msleep(750);
+	snd_es1371_codec_read(ac97, AC97_RESET);
+	snd_es1371_codec_read(ac97, AC97_VENDOR_ID1);
+	snd_es1371_codec_read(ac97, AC97_VENDOR_ID2);
+	msleep(50);
 }
 
 static void snd_es1371_adc_rate(ensoniq_t * ensoniq, unsigned int rate)
@@ -1435,7 +1437,7 @@ static int snd_es1371_spdif_put(snd_kcontrol_t * kcontrol, snd_ctl_elem_value_t 
 
 /* spdif controls */
 static snd_kcontrol_new_t snd_es1371_mixer_spdif[] __devinitdata = {
-	ES1371_SPDIF("IEC958 Playback Switch"),
+	ES1371_SPDIF(SNDRV_CTL_NAME_IEC958("",PLAYBACK,SWITCH)),
 	{
 		.iface =	SNDRV_CTL_ELEM_IFACE_PCM,
 		.name =		SNDRV_CTL_NAME_IEC958("",PLAYBACK,DEFAULT),
@@ -1585,6 +1587,7 @@ static int snd_ensoniq_1371_mixer(ensoniq_t * ensoniq)
 	static ac97_bus_ops_t ops = {
 		.write = snd_es1371_codec_write,
 		.read = snd_es1371_codec_read,
+		.wait = snd_es1371_codec_wait,
 	};
 
 	if ((err = snd_ac97_bus(card, 0, &ops, NULL, &pbus)) < 0)
@@ -1940,7 +1943,7 @@ static int __devinit snd_ensoniq_create(snd_card_t * card,
 	*rensoniq = NULL;
 	if ((err = pci_enable_device(pci)) < 0)
 		return err;
-	ensoniq = kcalloc(1, sizeof(*ensoniq), GFP_KERNEL);
+	ensoniq = kzalloc(sizeof(*ensoniq), GFP_KERNEL);
 	if (ensoniq == NULL) {
 		pci_disable_device(pci);
 		return -ENOMEM;
@@ -2008,21 +2011,11 @@ static int __devinit snd_ensoniq_create(snd_card_t * card,
 		if (pci->vendor == es1371_ac97_reset_hack[idx].vid &&
 		    pci->device == es1371_ac97_reset_hack[idx].did &&
 		    ensoniq->rev == es1371_ac97_reset_hack[idx].rev) {
-		        unsigned long tmo;
-			signed long tmo2;
-
 			ensoniq->cssr |= ES_1371_ST_AC97_RST;
 			outl(ensoniq->cssr, ES_REG(ensoniq, STATUS));
 			/* need to delay around 20ms(bleech) to give
 			some CODECs enough time to wakeup */
-			tmo = jiffies + (HZ / 50) + 1;
-			while (1) {
-				tmo2 = tmo - jiffies;
-				if (tmo2 <= 0)
-					break;
-				set_current_state(TASK_UNINTERRUPTIBLE);
-				schedule_timeout(tmo2);
-			}
+			msleep(20);
 			break;
 		}
 	/* AC'97 warm reset to start the bitclk */
@@ -2394,6 +2387,7 @@ static void __devexit snd_audiopci_remove(struct pci_dev *pci)
 
 static struct pci_driver driver = {
 	.name = DRIVER_NAME,
+	.owner = THIS_MODULE,
 	.id_table = snd_audiopci_ids,
 	.probe = snd_audiopci_probe,
 	.remove = __devexit_p(snd_audiopci_remove),
@@ -2401,7 +2395,7 @@ static struct pci_driver driver = {
 	
 static int __init alsa_card_ens137x_init(void)
 {
-	return pci_module_init(&driver);
+	return pci_register_driver(&driver);
 }
 
 static void __exit alsa_card_ens137x_exit(void)

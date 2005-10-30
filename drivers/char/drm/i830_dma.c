@@ -47,11 +47,6 @@
 #define I830_BUF_UNMAPPED 0
 #define I830_BUF_MAPPED   1
 
-#if LINUX_VERSION_CODE <= KERNEL_VERSION(2,4,2)
-#define down_write down
-#define up_write up
-#endif
-
 static drm_buf_t *i830_freelist_get(drm_device_t *dev)
 {
    	drm_device_dma_t *dma = dev->dma;
@@ -92,16 +87,7 @@ static int i830_freelist_put(drm_device_t *dev, drm_buf_t *buf)
    	return 0;
 }
 
-static struct file_operations i830_buffer_fops = {
-	.open	 = drm_open,
-	.flush	 = drm_flush,
-	.release = drm_release,
-	.ioctl	 = drm_ioctl,
-	.mmap	 = i830_mmap_buffers,
-	.fasync  = drm_fasync,
-};
-
-int i830_mmap_buffers(struct file *filp, struct vm_area_struct *vma)
+static int i830_mmap_buffers(struct file *filp, struct vm_area_struct *vma)
 {
 	drm_file_t	    *priv	  = filp->private_data;
 	drm_device_t	    *dev;
@@ -127,6 +113,15 @@ int i830_mmap_buffers(struct file *filp, struct vm_area_struct *vma)
 			     vma->vm_page_prot)) return -EAGAIN;
 	return 0;
 }
+
+static struct file_operations i830_buffer_fops = {
+	.open	 = drm_open,
+	.flush	 = drm_flush,
+	.release = drm_release,
+	.ioctl	 = drm_ioctl,
+	.mmap	 = i830_mmap_buffers,
+	.fasync  = drm_fasync,
+};
 
 static int i830_map_buffer(drm_buf_t *buf, struct file *filp)
 {
@@ -358,6 +353,7 @@ static int i830_dma_initialize(drm_device_t *dev,
 		DRM_ERROR("can not find mmio map!\n");
 		return -EINVAL;
 	}
+	dev->agp_buffer_token = init->buffers_offset;
 	dev->agp_buffer_map = drm_core_findmap(dev, init->buffers_offset);
 	if(!dev->agp_buffer_map) {
 		dev->dev_private = (void *)dev_priv;
@@ -1586,3 +1582,19 @@ drm_ioctl_desc_t i830_ioctls[] = {
 };
 
 int i830_max_ioctl = DRM_ARRAY_SIZE(i830_ioctls);
+
+/**
+ * Determine if the device really is AGP or not.
+ *
+ * All Intel graphics chipsets are treated as AGP, even if they are really
+ * PCI-e.
+ *
+ * \param dev   The device to be tested.
+ *
+ * \returns
+ * A value of 1 is always retured to indictate every i8xx is AGP.
+ */
+int i830_driver_device_is_agp(drm_device_t * dev)
+{
+	return 1;
+}

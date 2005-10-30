@@ -39,16 +39,14 @@
 #include <linux/init.h>
 #include <linux/slab.h>
 #include <linux/i2c.h>
-#include <linux/i2c-sensor.h>
 
 /* Addresses to scan */
 static unsigned short normal_i2c[] = { 0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27,
 					0x38, 0x39, 0x3a, 0x3b, 0x3c, 0x3d, 0x3e, 0x3f,
 					I2C_CLIENT_END };
-static unsigned int normal_isa[] = { I2C_CLIENT_ISA_END };
 
 /* Insmod parameters */
-SENSORS_INSMOD_2(pcf8574, pcf8574a);
+I2C_CLIENT_INSMOD_2(pcf8574, pcf8574a);
 
 /* Initial values */
 #define PCF8574_INIT 255	/* All outputs on (input mode) */
@@ -57,7 +55,7 @@ SENSORS_INSMOD_2(pcf8574, pcf8574a);
 struct pcf8574_data {
 	struct i2c_client client;
 
-	u8 read, write;			/* Register values */
+	u8 write;			/* Remember last written value */
 };
 
 static int pcf8574_attach_adapter(struct i2c_adapter *adapter);
@@ -76,23 +74,21 @@ static struct i2c_driver pcf8574_driver = {
 };
 
 /* following are the sysfs callback functions */
-static ssize_t show_read(struct device *dev, char *buf)
+static ssize_t show_read(struct device *dev, struct device_attribute *attr, char *buf)
 {
 	struct i2c_client *client = to_i2c_client(dev);
-	struct pcf8574_data *data = i2c_get_clientdata(client);
-	data->read = i2c_smbus_read_byte(client); 
-	return sprintf(buf, "%u\n", data->read);
+	return sprintf(buf, "%u\n", i2c_smbus_read_byte(client));
 }
 
 static DEVICE_ATTR(read, S_IRUGO, show_read, NULL);
 
-static ssize_t show_write(struct device *dev, char *buf)
+static ssize_t show_write(struct device *dev, struct device_attribute *attr, char *buf)
 {
 	struct pcf8574_data *data = i2c_get_clientdata(to_i2c_client(dev));
 	return sprintf(buf, "%u\n", data->write);
 }
 
-static ssize_t set_write(struct device *dev, const char *buf,
+static ssize_t set_write(struct device *dev, struct device_attribute *attr, const char *buf,
 			 size_t count)
 {
 	struct i2c_client *client = to_i2c_client(dev);
@@ -115,10 +111,10 @@ static DEVICE_ATTR(write, S_IWUSR | S_IRUGO, show_write, set_write);
 
 static int pcf8574_attach_adapter(struct i2c_adapter *adapter)
 {
-	return i2c_detect(adapter, &addr_data, pcf8574_detect);
+	return i2c_probe(adapter, &addr_data, pcf8574_detect);
 }
 
-/* This function is called by i2c_detect */
+/* This function is called by i2c_probe */
 int pcf8574_detect(struct i2c_adapter *adapter, int address, int kind)
 {
 	struct i2c_client *new_client;
@@ -188,11 +184,8 @@ static int pcf8574_detach_client(struct i2c_client *client)
 {
 	int err;
 
-	if ((err = i2c_detach_client(client))) {
-		dev_err(&client->dev,
-			"Client deregistration failed, client not detached.\n");
+	if ((err = i2c_detach_client(client)))
 		return err;
-	}
 
 	kfree(i2c_get_clientdata(client));
 	return 0;

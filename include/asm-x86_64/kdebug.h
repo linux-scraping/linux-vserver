@@ -14,7 +14,7 @@ struct die_args {
 }; 
 
 /* Note - you should never unregister because that can race with NMIs.
-   If you really want to do it first unregister - then synchronize_kernel - then free. 
+   If you really want to do it first unregister - then synchronize_sched - then free.
   */
 int register_die_notifier(struct notifier_block *nb);
 extern struct notifier_block *die_chain;
@@ -46,7 +46,7 @@ extern void die(const char *,struct pt_regs *,long);
 extern void __die(const char *,struct pt_regs *,long);
 extern void show_registers(struct pt_regs *regs);
 extern void dump_pagetable(unsigned long);
-extern void oops_begin(void);
-extern void oops_end(void);
+extern unsigned long oops_begin(void);
+extern void oops_end(unsigned long);
 
 #endif

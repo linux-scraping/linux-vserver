@@ -27,14 +27,15 @@
 #include <asm/voyager.h>
 #include <asm/vic.h>
 #include <linux/pm.h>
-#include <linux/irq.h>
 #include <asm/tlbflush.h>
 #include <asm/arch_hooks.h>
+#include <asm/i8253.h>
 
 /*
  * Power off function, if any
  */
 void (*pm_power_off)(void);
+EXPORT_SYMBOL(pm_power_off);
 
 int voyager_level = 0;
 
@@ -182,7 +183,6 @@ voyager_timer_interrupt(struct pt_regs *regs)
 		 * and swiftly introduce it to something sharp and
 		 * pointy.  */
 		__u16 val;
-		extern spinlock_t i8253_lock;
 
 		spin_lock(&i8253_lock);
 		
@@ -233,10 +233,9 @@ voyager_power_off(void)
 #endif
 	}
 	/* and wait for it to happen */
-	for(;;) {
-		__asm("cli");
-		__asm("hlt");
-	}
+	local_irq_disable();
+	for(;;)
+		halt();
 }
 
 /* copied from process.c */
@@ -248,6 +247,12 @@ kb_wait(void)
 	for (i=0; i<0x10000; i++)
 		if ((inb_p(0x64) & 0x02) == 0)
 			break;
+}
+
+void
+machine_shutdown(void)
+{
+	/* Architecture specific shutdown needed before a kexec */
 }
 
 void
@@ -271,13 +276,17 @@ machine_restart(char *cmd)
 		outb(basebd | 0x08, VOYAGER_MC_SETUP);
 		outb(0x02, catbase + 0x21);
 	}
-	for(;;) {
-		asm("cli");
-		asm("hlt");
-	}
+	local_irq_disable();
+	for(;;)
+		halt();
 }
 
-EXPORT_SYMBOL(machine_restart);
+void
+machine_emergency_restart(void)
+{
+	/*for now, just hook this to a warm restart */
+	machine_restart(NULL);
+}
 
 void
 mca_nmi_hook(void)
@@ -314,12 +323,9 @@ machine_halt(void)
 	machine_power_off();
 }
 
-EXPORT_SYMBOL(machine_halt);
-
 void machine_power_off(void)
 {
 	if (pm_power_off)
 		pm_power_off();
 }
 
-EXPORT_SYMBOL(machine_power_off);

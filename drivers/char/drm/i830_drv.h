@@ -123,8 +123,6 @@ typedef struct drm_i830_private {
 /* i830_dma.c */
 extern void i830_reclaim_buffers(drm_device_t *dev, struct file *filp);
 
-extern int i830_mmap_buffers(struct file *filp, struct vm_area_struct *vma);
-
 /* i830_irq.c */
 extern int i830_irq_emit( struct inode *inode, struct file *filp, 
 			  unsigned int cmd, unsigned long arg );
@@ -139,6 +137,7 @@ extern void i830_driver_pretakedown(drm_device_t *dev);
 extern void i830_driver_release(drm_device_t *dev, struct file *filp);
 extern int i830_driver_dma_quiescent(drm_device_t *dev);
 extern void i830_driver_prerelease(drm_device_t *dev, DRMFILE filp);
+extern int i830_driver_device_is_agp(drm_device_t * dev);
 
 #define I830_BASE(reg)		((unsigned long) \
 				dev_priv->mmio_map->handle)

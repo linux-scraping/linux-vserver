@@ -57,8 +57,6 @@
 #ifndef CONFIG_BT_HCIUART_DEBUG
 #undef  BT_DBG
 #define BT_DBG( A... )
-#undef  BT_DMP
-#define BT_DMP( A... )
 #endif
 
 /* Initialize protocol */
@@ -114,7 +112,7 @@ static int h4_enqueue(struct hci_uart *hu, struct sk_buff *skb)
 	BT_DBG("hu %p skb %p", hu, skb);
 
 	/* Prepend skb with frame type */
-	memcpy(skb_push(skb, 1), &skb->pkt_type, 1);
+	memcpy(skb_push(skb, 1), &bt_cb(skb)->pkt_type, 1);
 	skb_queue_tail(&h4->txq, skb);
 	return 0;
 }
@@ -125,7 +123,6 @@ static inline int h4_check_data_len(struct h4_struct *h4, int len)
 
 	BT_DBG("len %d room %d", len, room);
 	if (!len) {
-		BT_DMP(h4->rx_skb->data, h4->rx_skb->len);
 		hci_recv_frame(h4->rx_skb);
 	} else if (len > room) {
 		BT_ERR("Data length is too large");
@@ -168,8 +165,6 @@ static int h4_recv(struct hci_uart *hu, void *data, int count)
 			switch (h4->rx_state) {
 			case H4_W4_DATA:
 				BT_DBG("Complete data");
-
-				BT_DMP(h4->rx_skb->data, h4->rx_skb->len);
 
 				hci_recv_frame(h4->rx_skb);
 
@@ -244,7 +239,7 @@ static int h4_recv(struct hci_uart *hu, void *data, int count)
 			return 0;
 		}
 		h4->rx_skb->dev = (void *) hu->hdev;
-		h4->rx_skb->pkt_type = type;
+		bt_cb(h4->rx_skb)->pkt_type = type;
 	}
 	return count;
 }

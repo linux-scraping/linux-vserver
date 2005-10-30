@@ -13,7 +13,7 @@
 #include <linux/init.h>
 
 #include <asm/ccwdev.h>
-#include <asm/qdio.h>
+#include <asm/cio.h>
 
 #include "cio.h"
 #include "cio_debug.h"
@@ -21,7 +21,6 @@
 #include "device.h"
 #include "chsc.h"
 #include "ioasm.h"
-#include "qdio.h"
 
 int
 device_is_online(struct subchannel *sch)
@@ -235,6 +234,9 @@ ccw_device_recog_done(struct ccw_device *cdev, int state)
 		sch->schib.pmcw.pam &
 		sch->schib.pmcw.pom &
 		sch->opm;
+	/* Check since device may again have become not operational. */
+	if (!sch->schib.pmcw.dnv)
+		state = DEV_STATE_NOT_OPER;
 	if (cdev->private->state == DEV_STATE_DISCONNECTED_SENSE_ID)
 		/* Force reprobe on all chpids. */
 		old_lpm = 0;

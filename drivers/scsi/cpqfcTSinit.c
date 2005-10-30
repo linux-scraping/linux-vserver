@@ -336,7 +336,6 @@ int cpqfcTS_detect(Scsi_Host_Template *ScsiHostTemplate)
       DEBUG_PCI(printk("  PciDev->baseaddress[3]= %lx\n", 
 				PciDev->resource[3].start));
 
-      scsi_set_device(HostAdapter, &PciDev->dev);
       HostAdapter->irq = PciDev->irq;  // copy for Scsi layers
       
       // HP Tachlite uses two (255-byte) ranges of Port I/O (lower & upper),
@@ -692,8 +691,7 @@ int cpqfcTS_ioctl( struct scsi_device *ScsiDev, int Cmnd, void *arg)
         if(  copy_to_user( vendor_cmd->bufp, buf, vendor_cmd->len))
 		result = -EFAULT;
 
-        if( buf) 
-	  kfree( buf);
+	kfree(buf);
 
         return result;
       }

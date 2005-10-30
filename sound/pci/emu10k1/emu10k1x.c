@@ -361,10 +361,7 @@ static void snd_emu10k1x_gpio_write(emu10k1x_t *emu, unsigned int value)
 
 static void snd_emu10k1x_pcm_free_substream(snd_pcm_runtime_t *runtime)
 {
-	emu10k1x_pcm_t *epcm = runtime->private_data;
-  
-	if (epcm)
-		kfree(epcm);
+	kfree(runtime->private_data);
 }
 
 static void snd_emu10k1x_pcm_interrupt(emu10k1x_t *emu, emu10k1x_voice_t *voice)
@@ -398,7 +395,7 @@ static int snd_emu10k1x_playback_open(snd_pcm_substream_t *substream)
 	if ((err = snd_pcm_hw_constraint_step(runtime, 0, SNDRV_PCM_HW_PARAM_PERIOD_BYTES, 64)) < 0)
                 return err;
 
-	epcm = kcalloc(1, sizeof(*epcm), GFP_KERNEL);
+	epcm = kzalloc(sizeof(*epcm), GFP_KERNEL);
 	if (epcm == NULL)
 		return -ENOMEM;
 	epcm->emu = chip;
@@ -574,7 +571,7 @@ static int snd_emu10k1x_pcm_open_capture(snd_pcm_substream_t *substream)
 	if ((err = snd_pcm_hw_constraint_step(runtime, 0, SNDRV_PCM_HW_PARAM_PERIOD_BYTES, 64)) < 0)
                 return err;
 
-	epcm = kcalloc(1, sizeof(*epcm), GFP_KERNEL);
+	epcm = kzalloc(sizeof(*epcm), GFP_KERNEL);
 	if (epcm == NULL)
 		return -ENOMEM;
 
@@ -923,7 +920,7 @@ static int __devinit snd_emu10k1x_create(snd_card_t *card,
 		return -ENXIO;
 	}
   
-	chip = kcalloc(1, sizeof(*chip), GFP_KERNEL);
+	chip = kzalloc(sizeof(*chip), GFP_KERNEL);
 	if (chip == NULL) {
 		pci_disable_device(pci);
 		return -ENOMEM;
@@ -1075,6 +1072,7 @@ static int __devinit snd_emu10k1x_proc_init(emu10k1x_t * emu)
 		snd_info_set_text_ops(entry, emu, 1024, snd_emu10k1x_proc_reg_read);
 		entry->c.text.write_size = 64;
 		entry->c.text.write = snd_emu10k1x_proc_reg_write;
+		entry->mode |= S_IWUSR;
 		entry->private_data = emu;
 	}
 	
@@ -1185,7 +1183,7 @@ static int snd_emu10k1x_spdif_put(snd_kcontrol_t * kcontrol,
 static snd_kcontrol_new_t snd_emu10k1x_spdif_mask_control =
 {
 	.access =	SNDRV_CTL_ELEM_ACCESS_READ,
-	.iface =        SNDRV_CTL_ELEM_IFACE_MIXER,
+	.iface =        SNDRV_CTL_ELEM_IFACE_PCM,
 	.name =         SNDRV_CTL_NAME_IEC958("",PLAYBACK,MASK),
 	.count =	3,
 	.info =         snd_emu10k1x_spdif_info,
@@ -1194,7 +1192,7 @@ static snd_kcontrol_new_t snd_emu10k1x_spdif_mask_control =
 
 static snd_kcontrol_new_t snd_emu10k1x_spdif_control =
 {
-	.iface =	SNDRV_CTL_ELEM_IFACE_MIXER,
+	.iface =	SNDRV_CTL_ELEM_IFACE_PCM,
 	.name =         SNDRV_CTL_NAME_IEC958("",PLAYBACK,DEFAULT),
 	.count =	3,
 	.info =         snd_emu10k1x_spdif_info,
@@ -1617,6 +1615,7 @@ MODULE_DEVICE_TABLE(pci, snd_emu10k1x_ids);
 // pci_driver definition
 static struct pci_driver driver = {
 	.name = "EMU10K1X",
+	.owner = THIS_MODULE,
 	.id_table = snd_emu10k1x_ids,
 	.probe = snd_emu10k1x_probe,
 	.remove = __devexit_p(snd_emu10k1x_remove),
@@ -1627,7 +1626,7 @@ static int __init alsa_card_emu10k1x_init(void)
 {
 	int err;
 
-	if ((err = pci_module_init(&driver)) > 0)
+	if ((err = pci_register_driver(&driver)) > 0)
 		return err;
 
 	return 0;

@@ -53,6 +53,7 @@ static int irq[SNDRV_CARDS] = SNDRV_DEFAULT_IRQ;	/* Pnp setup */
 static int mpu_irq[SNDRV_CARDS] = SNDRV_DEFAULT_IRQ;	/* Pnp setup */
 static int dma1[SNDRV_CARDS] = SNDRV_DEFAULT_DMA;	/* PnP setup */
 static int dma2[SNDRV_CARDS] = SNDRV_DEFAULT_DMA;	/* PnP setup */
+static int clockfreq[SNDRV_CARDS];
 
 module_param_array(index, int, NULL, 0444);
 MODULE_PARM_DESC(index, "Index value for ad1816a based soundcard.");
@@ -74,6 +75,8 @@ module_param_array(dma1, int, NULL, 0444);
 MODULE_PARM_DESC(dma1, "1st DMA # for ad1816a driver.");
 module_param_array(dma2, int, NULL, 0444);
 MODULE_PARM_DESC(dma2, "2nd DMA # for ad1816a driver.");
+module_param_array(clockfreq, int, NULL, 0444);
+MODULE_PARM_DESC(clockfreq, "Clock frequency for ad1816a driver (default = 0).");
 
 struct snd_card_ad1816a {
 	struct pnp_dev *dev;
@@ -83,6 +86,8 @@ struct snd_card_ad1816a {
 static struct pnp_card_device_id snd_ad1816a_pnpids[] = {
 	/* Analog Devices AD1815 */
 	{ .id = "ADS7150", .devs = { { .id = "ADS7150" }, { .id = "ADS7151" } } },
+	/* Analog Device AD1816? */
+	{ .id = "ADS7180", .devs = { { .id = "ADS7180" }, { .id = "ADS7181" } } },
 	/* Analog Devices AD1816A - added by Kenneth Platz <kxp@atl.hp.com> */
 	{ .id = "ADS7181", .devs = { { .id = "ADS7180" }, { .id = "ADS7181" } } },
 	/* Analog Devices AD1816A - Aztech/Newcom SC-16 3D */
@@ -207,6 +212,8 @@ static int __devinit snd_card_ad1816a_probe(int dev, struct pnp_card_link *pcard
 		snd_card_free(card);
 		return error;
 	}
+	if (clockfreq[dev] >= 5000 && clockfreq[dev] <= 100000)
+		chip->clock_freq = clockfreq[dev];
 
 	strcpy(card->driver, "AD1816A");
 	strcpy(card->shortname, "ADI SoundPort AD1816A");

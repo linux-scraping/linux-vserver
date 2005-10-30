@@ -17,7 +17,7 @@
 #include <asm/cputable.h>
 #include <asm/cache.h>
 #include <asm/thread_info.h>
-#include <asm/offsets.h>
+#include <asm/asm-offsets.h>
 
 #define MAGIC	0x4c617273	/* 'Lars' */
 
@@ -46,7 +46,7 @@
 	.section .text
 	.align	5
 
-#if defined(CONFIG_PMAC_PBOOK) || defined(CONFIG_CPU_FREQ_PMAC)
+#if defined(CONFIG_PM) || defined(CONFIG_CPU_FREQ_PMAC)
 
 /* This gets called by via-pmu.c late during the sleep process.
  * The PMU was already send the sleep command and will shut us down
@@ -161,6 +161,8 @@ _GLOBAL(low_sleep_handler)
 	addi r3,r3,sleep_storage@l
 	stw r5,0(r3)
 
+	.globl	low_cpu_die
+low_cpu_die:
 	/* Flush & disable all caches */
 	bl	flush_disable_caches
 
@@ -382,7 +384,7 @@ turn_on_mmu:
 	isync
 	rfi
 
-#endif /* defined(CONFIG_PMAC_PBOOK) || defined(CONFIG_CPU_FREQ) */
+#endif /* defined(CONFIG_PM) || defined(CONFIG_CPU_FREQ) */
 
 	.section .data
 	.balign	L1_CACHE_LINE_SIZE

@@ -11,6 +11,10 @@ extern int pci_bus_alloc_resource(struct pci_bus *bus, struct resource *res,
 				  void (*alignf)(void *, struct resource *,
 					  	 unsigned long, unsigned long),
 				  void *alignf_data);
+/* Firmware callbacks */
+extern int (*platform_pci_choose_state)(struct pci_dev *dev, pm_message_t state);
+extern int (*platform_pci_set_power_state)(struct pci_dev *dev, pci_power_t state);
+
 /* PCI /proc functions */
 #ifdef CONFIG_PROC_FS
 extern int pci_proc_attach_device(struct pci_dev *dev);
@@ -25,7 +29,6 @@ static inline int pci_proc_detach_bus(struct pci_bus *bus) { return 0; }
 #endif
 
 /* Functions for PCI Hotplug drivers to use */
-extern struct pci_bus * pci_add_new_bus(struct pci_bus *parent, struct pci_dev *dev, int busnr);
 extern unsigned int pci_do_scan_bus(struct pci_bus *bus);
 extern int pci_remove_device_safe(struct pci_dev *dev);
 extern unsigned char pci_max_busnr(void);
@@ -41,6 +44,12 @@ extern spinlock_t pci_bus_lock;
 extern int pci_msi_quirk;
 #else
 #define pci_msi_quirk 0
+#endif
+
+#ifdef CONFIG_PCI_MSI
+void disable_msi_mode(struct pci_dev *dev, int pos, int type);
+#else
+static inline void disable_msi_mode(struct pci_dev *dev, int pos, int type) { }
 #endif
 
 extern int pcie_mch_quirk;

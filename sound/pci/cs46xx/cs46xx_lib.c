@@ -1243,8 +1243,8 @@ static snd_pcm_hardware_t snd_cs46xx_playback =
 {
 	.info =			(SNDRV_PCM_INFO_MMAP |
 				 SNDRV_PCM_INFO_INTERLEAVED | 
-				 SNDRV_PCM_INFO_BLOCK_TRANSFER |
-				 SNDRV_PCM_INFO_RESUME),
+				 SNDRV_PCM_INFO_BLOCK_TRANSFER /*|*/
+				 /*SNDRV_PCM_INFO_RESUME*/),
 	.formats =		(SNDRV_PCM_FMTBIT_S8 | SNDRV_PCM_FMTBIT_U8 |
 				 SNDRV_PCM_FMTBIT_S16_LE | SNDRV_PCM_FMTBIT_S16_BE |
 				 SNDRV_PCM_FMTBIT_U16_LE | SNDRV_PCM_FMTBIT_U16_BE),
@@ -1265,8 +1265,8 @@ static snd_pcm_hardware_t snd_cs46xx_capture =
 {
 	.info =			(SNDRV_PCM_INFO_MMAP |
 				 SNDRV_PCM_INFO_INTERLEAVED |
-				 SNDRV_PCM_INFO_BLOCK_TRANSFER |
-				 SNDRV_PCM_INFO_RESUME),
+				 SNDRV_PCM_INFO_BLOCK_TRANSFER /*|*/
+				 /*SNDRV_PCM_INFO_RESUME*/),
 	.formats =		SNDRV_PCM_FMTBIT_S16_LE,
 	.rates =		SNDRV_PCM_RATE_CONTINUOUS | SNDRV_PCM_RATE_8000_48000,
 	.rate_min =		5500,
@@ -1295,8 +1295,7 @@ static snd_pcm_hw_constraint_list_t hw_constraints_period_sizes = {
 
 static void snd_cs46xx_pcm_free_substream(snd_pcm_runtime_t *runtime)
 {
-	cs46xx_pcm_t * cpcm = runtime->private_data;
-	kfree(cpcm);
+	kfree(runtime->private_data);
 }
 
 static int _cs46xx_playback_open_channel (snd_pcm_substream_t * substream,int pcm_channel_id)
@@ -1305,7 +1304,7 @@ static int _cs46xx_playback_open_channel (snd_pcm_substream_t * substream,int pc
 	cs46xx_pcm_t * cpcm;
 	snd_pcm_runtime_t *runtime = substream->runtime;
 
-	cpcm = kcalloc(1, sizeof(*cpcm), GFP_KERNEL);
+	cpcm = kzalloc(sizeof(*cpcm), GFP_KERNEL);
 	if (cpcm == NULL)
 		return -ENOMEM;
 	if (snd_dma_alloc_pages(SNDRV_DMA_TYPE_DEV, snd_dma_pci_data(chip->pci),
@@ -2232,7 +2231,7 @@ static snd_kcontrol_new_t snd_cs46xx_controls[] __devinitdata = {
 },
 {
 	.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
-	.name = "IEC958 Output Switch",
+	.name = SNDRV_CTL_NAME_IEC958("Output ",NONE,SWITCH),
 	.info = snd_mixer_boolean_info,
 	.get = snd_cs46xx_iec958_get,
 	.put = snd_cs46xx_iec958_put,
@@ -2240,7 +2239,7 @@ static snd_kcontrol_new_t snd_cs46xx_controls[] __devinitdata = {
 },
 {
 	.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
-	.name = "IEC958 Input Switch",
+	.name = SNDRV_CTL_NAME_IEC958("Input ",NONE,SWITCH),
 	.info = snd_mixer_boolean_info,
 	.get = snd_cs46xx_iec958_get,
 	.put = snd_cs46xx_iec958_put,
@@ -2250,7 +2249,7 @@ static snd_kcontrol_new_t snd_cs46xx_controls[] __devinitdata = {
 /* Input IEC958 volume does not work for the moment. (Benny) */
 {
 	.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
-	.name = "IEC958 Input Volume",
+	.name = SNDRV_CTL_NAME_IEC958("Input ",NONE,VOLUME),
 	.info = snd_cs46xx_vol_info,
 	.get = snd_cs46xx_vol_iec958_get,
 	.put = snd_cs46xx_vol_iec958_put,
@@ -2401,8 +2400,7 @@ static void snd_cs46xx_codec_reset (ac97_t * ac97)
 		if ((err = snd_ac97_read(ac97, AC97_REC_GAIN)) == 0x8a05)
 			return;
 
-		set_current_state(TASK_UNINTERRUPTIBLE);
-		schedule_timeout(HZ/100);
+		msleep(10);
 	} while (time_after_eq(end_time, jiffies));
 
 	snd_printk("CS46xx secondary codec dont respond!\n");  
@@ -2436,14 +2434,13 @@ static int __devinit cs46xx_detect_codec(cs46xx_t *chip, int codec)
 			err = snd_ac97_mixer(chip->ac97_bus, &ac97, &chip->ac97[codec]);
 			return err;
 		}
-		set_current_state(TASK_INTERRUPTIBLE);
-		schedule_timeout(HZ/100);
+		msleep(10);
 	}
 	snd_printdd("snd_cs46xx: codec %d detection timeout\n", codec);
 	return -ENXIO;
 }
 
-int __devinit snd_cs46xx_mixer(cs46xx_t *chip)
+int __devinit snd_cs46xx_mixer(cs46xx_t *chip, int spdif_device)
 {
 	snd_card_t *card = chip->card;
 	snd_ctl_elem_id_t id;
@@ -2479,6 +2476,8 @@ int __devinit snd_cs46xx_mixer(cs46xx_t *chip)
 	for (idx = 0; idx < ARRAY_SIZE(snd_cs46xx_controls); idx++) {
 		snd_kcontrol_t *kctl;
 		kctl = snd_ctl_new1(&snd_cs46xx_controls[idx], chip);
+		if (kctl && kctl->id.iface == SNDRV_CTL_ELEM_IFACE_PCM)
+			kctl->id.device = spdif_device;
 		if ((err = snd_ctl_add(card, kctl)) < 0)
 			return err;
 	}
@@ -3019,8 +3018,7 @@ static int snd_cs46xx_chip_init(cs46xx_t *chip)
 	/*
          *  Wait until the PLL has stabilized.
 	 */
-	set_current_state(TASK_UNINTERRUPTIBLE);
-	schedule_timeout(HZ/10); /* 100ms */
+	msleep(100);
 
 	/*
 	 *  Turn on clocking of the core so that we can setup the serial ports.
@@ -3073,8 +3071,7 @@ static int snd_cs46xx_chip_init(cs46xx_t *chip)
 		 */
 		if (snd_cs46xx_peekBA0(chip, BA0_ACSTS) & ACSTS_CRDY)
 			goto ok1;
-		set_current_state(TASK_UNINTERRUPTIBLE);
-		schedule_timeout((HZ+99)/100);
+		msleep(10);
 	}
 
 
@@ -3123,8 +3120,7 @@ static int snd_cs46xx_chip_init(cs46xx_t *chip)
 		 */
 		if ((snd_cs46xx_peekBA0(chip, BA0_ACISV) & (ACISV_ISV3 | ACISV_ISV4)) == (ACISV_ISV3 | ACISV_ISV4))
 			goto ok2;
-		set_current_state(TASK_UNINTERRUPTIBLE);
-		schedule_timeout((HZ+99)/100);
+		msleep(10);
 	}
 
 #ifndef CONFIG_SND_CS46XX_NEW_DSP
@@ -3529,17 +3525,6 @@ static void amp_voyetra_4294(cs46xx_t *chip, int change)
 
 
 /*
- * piix4 pci ids
- */
-#ifndef PCI_VENDOR_ID_INTEL
-#define PCI_VENDOR_ID_INTEL 0x8086
-#endif /* PCI_VENDOR_ID_INTEL */
-
-#ifndef PCI_DEVICE_ID_INTEL_82371AB_3
-#define PCI_DEVICE_ID_INTEL_82371AB_3 0x7113
-#endif /* PCI_DEVICE_ID_INTEL_82371AB_3 */
-
-/*
  *	Handle the CLKRUN on a thinkpad. We must disable CLKRUN support
  *	whenever we need to beat on the chip.
  *
@@ -3552,7 +3537,7 @@ static void clkrun_hack(cs46xx_t *chip, int change)
 {
 	u16 control, nval;
 	
-	if (chip->acpi_dev == NULL)
+	if (!chip->acpi_port)
 		return;
 
 	chip->amplifier += change;
@@ -3575,15 +3560,20 @@ static void clkrun_hack(cs46xx_t *chip, int change)
  */
 static void clkrun_init(cs46xx_t *chip)
 {
+	struct pci_dev *pdev;
 	u8 pp;
 
-	chip->acpi_dev = pci_find_device(PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_INTEL_82371AB_3, NULL);
-	if (chip->acpi_dev == NULL)
+	chip->acpi_port = 0;
+	
+	pdev = pci_get_device(PCI_VENDOR_ID_INTEL,
+		PCI_DEVICE_ID_INTEL_82371AB_3, NULL);
+	if (pdev == NULL)
 		return;		/* Not a thinkpad thats for sure */
 
 	/* Find the control port */		
-	pci_read_config_byte(chip->acpi_dev, 0x41, &pp);
+	pci_read_config_byte(pdev, 0x41, &pp);
 	chip->acpi_port = pp << 8;
+	pci_dev_put(pdev);
 }
 
 
@@ -3784,7 +3774,7 @@ int __devinit snd_cs46xx_create(snd_card_t * card,
 	if ((err = pci_enable_device(pci)) < 0)
 		return err;
 
-	chip = kcalloc(1, sizeof(*chip), GFP_KERNEL);
+	chip = kzalloc(sizeof(*chip), GFP_KERNEL);
 	if (chip == NULL) {
 		pci_disable_device(pci);
 		return -ENOMEM;

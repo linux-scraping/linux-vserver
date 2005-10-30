@@ -95,6 +95,7 @@ static void iforce_usb_irq(struct urb *urb, struct pt_regs *regs)
 		goto exit;
 	}
 
+	wake_up(&iforce->wait);
 	iforce_process_packet(iforce,
 		(iforce->data[0] << 8) | (urb->actual_length - 1), iforce->data + 1, regs);
 
@@ -229,6 +230,7 @@ static struct usb_device_id iforce_usb_ids [] = {
 	{ USB_DEVICE(0x061c, 0xc0a4) },         /* ACT LABS Force RS */
 	{ USB_DEVICE(0x06f8, 0x0001) },		/* Guillemot Race Leader Force Feedback */
 	{ USB_DEVICE(0x06f8, 0x0004) },		/* Guillemot Force Feedback Racing Wheel */
+	{ USB_DEVICE(0x06f8, 0xa302) },		/* Guillemot Jet Leader 3D */
 	{ }					/* Terminating entry */
 };
 

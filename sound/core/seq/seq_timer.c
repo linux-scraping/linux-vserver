@@ -36,7 +36,8 @@ extern int seq_default_timer_resolution;
 
 #define SKEW_BASE	0x10000	/* 16bit shift */
 
-void snd_seq_timer_set_tick_resolution(seq_timer_tick_t *tick, int tempo, int ppq, int nticks)
+static void snd_seq_timer_set_tick_resolution(seq_timer_tick_t *tick,
+					      int tempo, int ppq, int nticks)
 {
 	if (tempo < 1000000)
 		tick->resolution = (tempo * 1000) / ppq;
@@ -59,7 +60,7 @@ seq_timer_t *snd_seq_timer_new(void)
 {
 	seq_timer_t *tmr;
 	
-	tmr = kcalloc(1, sizeof(*tmr), GFP_KERNEL);
+	tmr = kzalloc(sizeof(*tmr), GFP_KERNEL);
 	if (tmr == NULL) {
 		snd_printd("malloc failed for snd_seq_timer_new() \n");
 		return NULL;

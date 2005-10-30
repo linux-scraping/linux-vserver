@@ -1,4 +1,5 @@
 /*
+ *
  *	Video for Linux Two
  *	Backward Compatibility Layer
  *
@@ -15,14 +16,11 @@
  *
  */
 
-#ifndef __KERNEL__
-#define __KERNEL__
-#endif
-
 #include <linux/config.h>
 
 #include <linux/init.h>
 #include <linux/module.h>
+#include <linux/moduleparam.h>
 #include <linux/types.h>
 #include <linux/kernel.h>
 #include <linux/sched.h>
@@ -605,9 +603,6 @@ v4l_compat_translate_ioctl(struct inode         *inode,
 			dprintk("VIDIOCGPICT / VIDIOC_G_FMT: %d\n",err);
 			break;
 		}
-#if 0 /* FIXME */
-		pict->depth   = fmt2->fmt.pix.depth;
-#endif
 		pict->palette = pixelformat_to_palette(
 			fmt2->fmt.pix.pixelformat);
 		break;
@@ -708,13 +703,7 @@ v4l_compat_translate_ioctl(struct inode         *inode,
 	}
 	case VIDIOCSTUNER: /*  select a tuner input  */
 	{
-#if 0 /* FIXME */
-		err = drv(inode, file, VIDIOC_S_INPUT, &i);
-		if (err < 0)
-			dprintk("VIDIOCSTUNER / VIDIOC_S_INPUT: %d\n",err);
-#else
 		err = 0;
-#endif
 		break;
 	}
 	case VIDIOCGFREQ: /*  get frequency  */
@@ -787,12 +776,15 @@ v4l_compat_translate_ioctl(struct inode         *inode,
 		    !(qctrl2.flags & V4L2_CTRL_FLAG_DISABLED))
 			aud->step = qctrl2.step;
 		aud->mode = 0;
+
+		memset(&tun2,0,sizeof(tun2));
 		err = drv(inode, file, VIDIOC_G_TUNER, &tun2);
 		if (err < 0) {
 			dprintk("VIDIOCGAUDIO / VIDIOC_G_TUNER: %d\n",err);
 			err = 0;
 			break;
 		}
+
 		if (tun2.rxsubchans & V4L2_TUNER_SUB_LANG2)
 			aud->mode = VIDEO_SOUND_LANG1 | VIDEO_SOUND_LANG2;
 		else if (tun2.rxsubchans & V4L2_TUNER_SUB_STEREO)
@@ -850,12 +842,6 @@ v4l_compat_translate_ioctl(struct inode         *inode,
 		err = 0;
 		break;
 	}
-#if 0
-	case VIDIOCGMBUF:
-		/* v4l2 drivers must implement that themself.  The
-		   mmap() differences can't be translated fully
-		   transparent, thus there is no point to try that */
-#endif
 	case VIDIOCMCAPTURE: /*  capture a frame  */
 	{
 		struct video_mmap	*mm = arg;

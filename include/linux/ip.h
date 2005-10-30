@@ -81,6 +81,7 @@
 #ifdef __KERNEL__
 #include <linux/config.h>
 #include <linux/types.h>
+#include <net/request_sock.h>
 #include <net/sock.h>
 #include <linux/igmp.h>
 #include <net/flow.h>
@@ -106,6 +107,26 @@ struct ip_options {
 };
 
 #define optlength(opt) (sizeof(struct ip_options) + opt->optlen)
+
+struct inet_request_sock {
+	struct request_sock	req;
+	u32			loc_addr;
+	u32			rmt_addr;
+	u16			rmt_port;
+	u16			snd_wscale : 4, 
+				rcv_wscale : 4, 
+				tstamp_ok  : 1,
+				sack_ok	   : 1,
+				wscale_ok  : 1,
+				ecn_ok	   : 1,
+				acked	   : 1;
+	struct ip_options	*opt;
+};
+
+static inline struct inet_request_sock *inet_rsk(const struct request_sock *sk)
+{
+	return (struct inet_request_sock *)sk;
+}
 
 struct ipv6_pinfo;
 
@@ -175,6 +196,8 @@ static inline void inet_sk_copy_descendant(struct sock *sk_to,
 }
 #endif
 #endif
+
+extern int inet_sk_rebuild_header(struct sock *sk);
 
 struct iphdr {
 #if defined(__LITTLE_ENDIAN_BITFIELD)

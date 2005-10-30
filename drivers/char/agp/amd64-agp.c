@@ -429,7 +429,7 @@ static int __devinit uli_agp_init(struct pci_dev *pdev)
 	struct pci_dev *dev1;
 	int i;
 	unsigned size = amd64_fetch_size();
-	printk(KERN_INFO "Setting up ULi AGP. \n");
+	printk(KERN_INFO "Setting up ULi AGP.\n");
 	dev1 = pci_find_slot ((unsigned int)pdev->bus->number,PCI_DEVFN(0,0));
 	if (dev1 == NULL) {
 		printk(KERN_INFO PFX "Detected a ULi chipset, "
@@ -683,6 +683,15 @@ static struct pci_device_id agp_amd64_pci_table[] = {
 	.class_mask	= ~0,
 	.vendor		= PCI_VENDOR_ID_SI,
 	.device		= PCI_DEVICE_ID_SI_755,
+	.subvendor	= PCI_ANY_ID,
+	.subdevice	= PCI_ANY_ID,
+	},
+	/* SIS 760 */
+	{
+	.class		= (PCI_CLASS_BRIDGE_HOST << 8),
+	.class_mask	= ~0,
+	.vendor		= PCI_VENDOR_ID_SI,
+	.device		= PCI_DEVICE_ID_SI_760,
 	.subvendor	= PCI_ANY_ID,
 	.subdevice	= PCI_ANY_ID,
 	},

@@ -159,13 +159,16 @@ struct packet_iosched
 	struct bio		*read_queue_tail;
 	struct bio		*write_queue;
 	struct bio		*write_queue_tail;
-	int			high_prio_read;	/* An important read request has been queued */
+	sector_t		last_write;	/* The sector where the last write ended */
 	int			successive_reads;
 };
 
 /*
  * 32 buffers of 2048 bytes
  */
+#if (PAGE_SIZE % CD_FRAMESIZE) != 0
+#error "PAGE_SIZE must be a multiple of CD_FRAMESIZE"
+#endif
 #define PACKET_MAX_SIZE		32
 #define PAGES_PER_PACKET	(PACKET_MAX_SIZE * CD_FRAMESIZE / PAGE_SIZE)
 #define PACKET_MAX_SECTORS	(PACKET_MAX_SIZE * CD_FRAMESIZE >> 9)

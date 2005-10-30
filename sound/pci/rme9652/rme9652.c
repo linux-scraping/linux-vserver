@@ -120,13 +120,6 @@ MODULE_SUPPORTED_DEVICE("{{RME,Hammerfall},"
 
 #define RME9652_REV15_buf_pos(x) ((((x)&0xE0000000)>>26)|((x)&RME9652_buf_pos))
 
-#ifndef PCI_VENDOR_ID_XILINX
-#define PCI_VENDOR_ID_XILINX		0x10ee
-#endif
-#ifndef PCI_DEVICE_ID_XILINX_HAMMERFALL
-#define PCI_DEVICE_ID_XILINX_HAMMERFALL	0x3fc4
-#endif
-
 /* amount of io space we remap for register access. i'm not sure we
    even need this much, but 1K is nice round number :)
 */
@@ -303,18 +296,22 @@ static int snd_hammerfall_get_buffer(struct pci_dev *pci, struct snd_dma_buffer 
 {
 	dmab->dev.type = SNDRV_DMA_TYPE_DEV;
 	dmab->dev.dev = snd_dma_pci_data(pci);
-	if (! snd_dma_get_reserved_buf(dmab, snd_dma_pci_buf_id(pci))) {
-		if (snd_dma_alloc_pages(SNDRV_DMA_TYPE_DEV, snd_dma_pci_data(pci),
-					size, dmab) < 0)
-			return -ENOMEM;
+	if (snd_dma_get_reserved_buf(dmab, snd_dma_pci_buf_id(pci))) {
+		if (dmab->bytes >= size)
+			return 0;
 	}
+	if (snd_dma_alloc_pages(SNDRV_DMA_TYPE_DEV, snd_dma_pci_data(pci),
+				size, dmab) < 0)
+		return -ENOMEM;
 	return 0;
 }
 
 static void snd_hammerfall_free_buffer(struct snd_dma_buffer *dmab, struct pci_dev *pci)
 {
-	if (dmab->area)
+	if (dmab->area) {
+		dmab->dev.dev = NULL; /* make it anonymous */
 		snd_dma_reserve_buf(dmab, snd_dma_pci_buf_id(pci));
+	}
 }
 
 
@@ -889,7 +886,7 @@ static int snd_rme9652_control_spdif_mask_get(snd_kcontrol_t * kcontrol, snd_ctl
 }
 
 #define RME9652_ADAT1_IN(xname, xindex) \
-{ .iface = SNDRV_CTL_ELEM_IFACE_PCM, .name = xname, .index = xindex, \
+{ .iface = SNDRV_CTL_ELEM_IFACE_MIXER, .name = xname, .index = xindex, \
   .info = snd_rme9652_info_adat1_in, \
   .get = snd_rme9652_get_adat1_in, \
   .put = snd_rme9652_put_adat1_in }
@@ -967,7 +964,7 @@ static int snd_rme9652_put_adat1_in(snd_kcontrol_t * kcontrol, snd_ctl_elem_valu
 }
 
 #define RME9652_SPDIF_IN(xname, xindex) \
-{ .iface = SNDRV_CTL_ELEM_IFACE_PCM, .name = xname, .index = xindex, \
+{ .iface = SNDRV_CTL_ELEM_IFACE_MIXER, .name = xname, .index = xindex, \
   .info = snd_rme9652_info_spdif_in, \
   .get = snd_rme9652_get_spdif_in, .put = snd_rme9652_put_spdif_in }
 
@@ -1038,7 +1035,7 @@ static int snd_rme9652_put_spdif_in(snd_kcontrol_t * kcontrol, snd_ctl_elem_valu
 }
 
 #define RME9652_SPDIF_OUT(xname, xindex) \
-{ .iface = SNDRV_CTL_ELEM_IFACE_PCM, .name = xname, .index = xindex, \
+{ .iface = SNDRV_CTL_ELEM_IFACE_MIXER, .name = xname, .index = xindex, \
   .info = snd_rme9652_info_spdif_out, \
   .get = snd_rme9652_get_spdif_out, .put = snd_rme9652_put_spdif_out }
 
@@ -1106,7 +1103,7 @@ static int snd_rme9652_put_spdif_out(snd_kcontrol_t * kcontrol, snd_ctl_elem_val
 }
 
 #define RME9652_SYNC_MODE(xname, xindex) \
-{ .iface = SNDRV_CTL_ELEM_IFACE_PCM, .name = xname, .index = xindex, \
+{ .iface = SNDRV_CTL_ELEM_IFACE_MIXER, .name = xname, .index = xindex, \
   .info = snd_rme9652_info_sync_mode, \
   .get = snd_rme9652_get_sync_mode, .put = snd_rme9652_put_sync_mode }
 
@@ -1191,7 +1188,7 @@ static int snd_rme9652_put_sync_mode(snd_kcontrol_t * kcontrol, snd_ctl_elem_val
 }
 
 #define RME9652_SYNC_PREF(xname, xindex) \
-{ .iface = SNDRV_CTL_ELEM_IFACE_PCM, .name = xname, .index = xindex, \
+{ .iface = SNDRV_CTL_ELEM_IFACE_MIXER, .name = xname, .index = xindex, \
   .info = snd_rme9652_info_sync_pref, \
   .get = snd_rme9652_get_sync_pref, .put = snd_rme9652_put_sync_pref }
 
@@ -1336,7 +1333,7 @@ static int snd_rme9652_put_thru(snd_kcontrol_t * kcontrol, snd_ctl_elem_value_t 
 }
 
 #define RME9652_PASSTHRU(xname, xindex) \
-{ .iface = SNDRV_CTL_ELEM_IFACE_PCM, .name = xname, .index = xindex, \
+{ .iface = SNDRV_CTL_ELEM_IFACE_MIXER, .name = xname, .index = xindex, \
   .info = snd_rme9652_info_passthru, \
   .put = snd_rme9652_put_passthru, \
   .get = snd_rme9652_get_passthru }
@@ -1382,7 +1379,7 @@ static int snd_rme9652_put_passthru(snd_kcontrol_t * kcontrol, snd_ctl_elem_valu
 /* Read-only switches */
 
 #define RME9652_SPDIF_RATE(xname, xindex) \
-{ .iface = SNDRV_CTL_ELEM_IFACE_PCM, .name = xname, .index = xindex, \
+{ .iface = SNDRV_CTL_ELEM_IFACE_MIXER, .name = xname, .index = xindex, \
   .access = SNDRV_CTL_ELEM_ACCESS_READ | SNDRV_CTL_ELEM_ACCESS_VOLATILE, \
   .info = snd_rme9652_info_spdif_rate, \
   .get = snd_rme9652_get_spdif_rate }
@@ -1407,7 +1404,7 @@ static int snd_rme9652_get_spdif_rate(snd_kcontrol_t * kcontrol, snd_ctl_elem_va
 }
 
 #define RME9652_ADAT_SYNC(xname, xindex, xidx) \
-{ .iface = SNDRV_CTL_ELEM_IFACE_PCM, .name = xname, .index = xindex, \
+{ .iface = SNDRV_CTL_ELEM_IFACE_MIXER, .name = xname, .index = xindex, \
   .access = SNDRV_CTL_ELEM_ACCESS_READ | SNDRV_CTL_ELEM_ACCESS_VOLATILE, \
   .info = snd_rme9652_info_adat_sync, \
   .get = snd_rme9652_get_adat_sync, .private_value = xidx }
@@ -1443,7 +1440,7 @@ static int snd_rme9652_get_adat_sync(snd_kcontrol_t * kcontrol, snd_ctl_elem_val
 }
 
 #define RME9652_TC_VALID(xname, xindex) \
-{ .iface = SNDRV_CTL_ELEM_IFACE_PCM, .name = xname, .index = xindex, \
+{ .iface = SNDRV_CTL_ELEM_IFACE_MIXER, .name = xname, .index = xindex, \
   .access = SNDRV_CTL_ELEM_ACCESS_READ | SNDRV_CTL_ELEM_ACCESS_VOLATILE, \
   .info = snd_rme9652_info_tc_valid, \
   .get = snd_rme9652_get_tc_valid }
@@ -1466,7 +1463,7 @@ static int snd_rme9652_get_tc_valid(snd_kcontrol_t * kcontrol, snd_ctl_elem_valu
 	return 0;
 }
 
-#if ALSA_HAS_STANDARD_WAY_OF_RETURNING_TIMECODE
+#ifdef ALSA_HAS_STANDARD_WAY_OF_RETURNING_TIMECODE
 
 /* FIXME: this routine needs a port to the new control API --jk */
 
@@ -1541,7 +1538,7 @@ static snd_kcontrol_new_t snd_rme9652_controls[] = {
 },
 {
 	.access =	SNDRV_CTL_ELEM_ACCESS_READ,
-	.iface =	SNDRV_CTL_ELEM_IFACE_MIXER,
+	.iface =	SNDRV_CTL_ELEM_IFACE_PCM,
 	.name =		SNDRV_CTL_NAME_IEC958("",PLAYBACK,CON_MASK),
 	.info =		snd_rme9652_control_spdif_mask_info,
 	.get =		snd_rme9652_control_spdif_mask_get,
@@ -1551,7 +1548,7 @@ static snd_kcontrol_new_t snd_rme9652_controls[] = {
 },
 {
 	.access =	SNDRV_CTL_ELEM_ACCESS_READ,
-	.iface =	SNDRV_CTL_ELEM_IFACE_MIXER,
+	.iface =	SNDRV_CTL_ELEM_IFACE_PCM,
 	.name =		SNDRV_CTL_NAME_IEC958("",PLAYBACK,PRO_MASK),
 	.info =		snd_rme9652_control_spdif_mask_info,
 	.get =		snd_rme9652_control_spdif_mask_get,
@@ -1564,7 +1561,7 @@ RME9652_SPDIF_OUT("IEC958 Output also on ADAT1", 0),
 RME9652_SYNC_MODE("Sync Mode", 0),
 RME9652_SYNC_PREF("Preferred Sync Source", 0),
 {
-	.iface = SNDRV_CTL_ELEM_IFACE_PCM,
+	.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
 	.name = "Channels Thru",
 	.index = 0,
 	.info = snd_rme9652_info_thru,
@@ -2657,6 +2654,7 @@ static void __devexit snd_rme9652_remove(struct pci_dev *pci)
 
 static struct pci_driver driver = {
 	.name	  = "RME Digi9652 (Hammerfall)",
+	.owner	  = THIS_MODULE,
 	.id_table = snd_rme9652_ids,
 	.probe	  = snd_rme9652_probe,
 	.remove	  = __devexit_p(snd_rme9652_remove),
@@ -2664,7 +2662,7 @@ static struct pci_driver driver = {
 
 static int __init alsa_card_hammerfall_init(void)
 {
-	return pci_module_init(&driver);
+	return pci_register_driver(&driver);
 }
 
 static void __exit alsa_card_hammerfall_exit(void)

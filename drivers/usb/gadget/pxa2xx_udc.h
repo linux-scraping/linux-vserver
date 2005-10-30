@@ -69,11 +69,11 @@ struct pxa2xx_ep {
 	 * UDDR = UDC Endpoint Data Register (the fifo)
 	 * DRCM = DMA Request Channel Map
 	 */
-	volatile u32				*reg_udccs;
-	volatile u32				*reg_ubcr;
-	volatile u32				*reg_uddr;
+	volatile unsigned long			*reg_udccs;
+	volatile unsigned long			*reg_ubcr;
+	volatile unsigned long			*reg_uddr;
 #ifdef USE_DMA
-	volatile u32				*reg_drcmr;
+	volatile unsigned long			*reg_drcmr;
 #define	drcmr(n)  .reg_drcmr = & DRCMR ## n ,
 #else
 #define	drcmr(n)  
@@ -177,23 +177,23 @@ struct pxa2xx_udc {
 
 static struct pxa2xx_udc *the_controller;
 
-/* one GPIO should be used to detect host disconnect */
-static inline int is_usb_connected(void)
+/* one GPIO should be used to detect VBUS from the host */
+static inline int is_vbus_present(void)
 {
 	if (!the_controller->mach->udc_is_connected)
 		return 1;
 	return the_controller->mach->udc_is_connected();
 }
 
-/* one GPIO should force the host to see this device (or not) */
-static inline void make_usb_disappear(void)
+/* one GPIO should control a D+ pullup, so host sees this device (or not) */
+static inline void pullup_off(void)
 {
 	if (!the_controller->mach->udc_command)
 		return;
 	the_controller->mach->udc_command(PXA2XX_UDC_CMD_DISCONNECT);
 }
 
-static inline void let_usb_appear(void)
+static inline void pullup_on(void)
 {
 	if (!the_controller->mach->udc_command)
 		return;

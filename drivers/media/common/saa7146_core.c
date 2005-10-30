@@ -62,13 +62,15 @@ void saa7146_setgpio(struct saa7146_dev *dev, int port, u32 data)
 int saa7146_wait_for_debi_done(struct saa7146_dev *dev, int nobusyloop)
 {
 	unsigned long start;
+	int err;
 
 	/* wait for registers to be programmed */
 	start = jiffies;
 	while (1) {
-                if (saa7146_read(dev, MC2) & 2)
-                        break;
-		if (time_after(jiffies, start + HZ/20)) {
+		err = time_after(jiffies, start + HZ/20);
+		if (saa7146_read(dev, MC2) & 2)
+			break;
+		if (err) {
 			DEB_S(("timed out while waiting for registers getting programmed\n"));
 			return -ETIMEDOUT;
 		}
@@ -79,10 +81,11 @@ int saa7146_wait_for_debi_done(struct saa7146_dev *dev, int nobusyloop)
 	/* wait for transfer to complete */
 	start = jiffies;
 	while (1) {
+		err = time_after(jiffies, start + HZ/4);
 		if (!(saa7146_read(dev, PSR) & SPCI_DEBI_S))
 			break;
 		saa7146_read(dev, MC2);
-		if (time_after(jiffies, start + HZ/4)) {
+		if (err) {
 			DEB_S(("timed out while waiting for transfer completion\n"));
 			return -ETIMEDOUT;
 		}
@@ -165,10 +168,8 @@ void saa7146_pgtable_free(struct pci_dev *pci, struct saa7146_pgtable *pt)
 		return;
 	pci_free_consistent(pci, pt->size, pt->cpu, pt->dma);
 	pt->cpu = NULL;
-	if (NULL != pt->slist) {
-		kfree(pt->slist);
-		pt->slist = NULL;
-	}
+	kfree(pt->slist);
+	pt->slist = NULL;
 }
 
 int saa7146_pgtable_alloc(struct pci_dev *pci, struct saa7146_pgtable *pt)
@@ -512,7 +513,7 @@ int saa7146_register_extension(struct saa7146_extension* ext)
 	ext->driver.remove = saa7146_remove_one;
 
 	printk("saa7146: register extension '%s'.\n",ext->name);
-	return pci_module_init(&ext->driver);
+	return pci_register_driver(&ext->driver);
 }
 
 int saa7146_unregister_extension(struct saa7146_extension* ext)

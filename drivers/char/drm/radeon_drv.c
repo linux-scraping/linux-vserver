@@ -76,6 +76,7 @@ static struct drm_driver driver = {
 	.driver_features = DRIVER_USE_AGP | DRIVER_USE_MTRR | DRIVER_PCI_DMA | DRIVER_SG | DRIVER_HAVE_IRQ | DRIVER_HAVE_DMA | DRIVER_IRQ_SHARED | DRIVER_IRQ_VBL,
 	.dev_priv_size = sizeof(drm_radeon_buf_priv_t),
 	.preinit = radeon_driver_preinit,
+	.presetup = radeon_presetup,
 	.postcleanup = radeon_driver_postcleanup,
 	.prerelease = radeon_driver_prerelease,
 	.pretakedown = radeon_driver_pretakedown,
@@ -101,6 +102,9 @@ static struct drm_driver driver = {
 		.mmap = drm_mmap,
 		.poll = drm_poll,
 		.fasync = drm_fasync,
+#ifdef CONFIG_COMPAT
+		.compat_ioctl = radeon_compat_ioctl,
+#endif
 	},
 	.pci_driver = {
 		.name          = DRIVER_NAME,

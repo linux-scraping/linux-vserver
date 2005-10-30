@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2004 Silicon Graphics, Inc.  All Rights Reserved.
+ * Copyright (c) 2000-2005 Silicon Graphics, Inc.  All Rights Reserved.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of version 2 of the GNU General Public License as
@@ -104,7 +104,7 @@ xfs_open(
 	 * If it's a directory with any blocks, read-ahead block 0
 	 * as we're almost certain to have the next operation be a read there.
 	 */
-	if (vp->v_type == VDIR && ip->i_d.di_nextents > 0) {
+	if (VN_ISDIR(vp) && ip->i_d.di_nextents > 0) {
 		mode = xfs_ilock_map_shared(ip);
 		if (ip->i_d.di_nextents > 0)
 			(void)xfs_da_reada_buf(NULL, ip, 0, XFS_DATA_FORK);
@@ -163,8 +163,7 @@ xfs_getattr(
 	/*
 	 * Copy from in-core inode.
 	 */
-	vap->va_type = vp->v_type;
-	vap->va_mode = ip->i_d.di_mode & MODEMASK;
+	vap->va_mode = ip->i_d.di_mode;
 	vap->va_uid = ip->i_d.di_uid;
 	vap->va_gid = ip->i_d.di_gid;
 	vap->va_xid = ip->i_d.di_xid;
@@ -172,10 +171,14 @@ xfs_getattr(
 
 	/*
 	 * Check vnode type block/char vs. everything else.
-	 * Do it with bitmask because that's faster than looking
-	 * for multiple values individually.
 	 */
-	if (((1 << vp->v_type) & ((1<<VBLK) | (1<<VCHR))) == 0) {
+	switch (ip->i_d.di_mode & S_IFMT) {
+	case S_IFBLK:
+	case S_IFCHR:
+		vap->va_rdev = ip->i_df.if_u2.if_rdev;
+		vap->va_blocksize = BLKDEV_IOSIZE;
+		break;
+	default:
 		vap->va_rdev = 0;
 
 		if (!(ip->i_d.di_flags & XFS_DIFLAG_REALTIME)) {
@@ -225,9 +228,7 @@ xfs_getattr(
 				(ip->i_d.di_extsize << mp->m_sb.sb_blocklog) :
 				(mp->m_sb.sb_rextsize << mp->m_sb.sb_blocklog);
 		}
-	} else {
-		vap->va_rdev = ip->i_df.if_u2.if_rdev;
-		vap->va_blocksize = BLKDEV_IOSIZE;
+		break;
 	}
 
 	vap->va_atime.tv_sec = ip->i_d.di_atime.t_sec;
@@ -353,21 +354,28 @@ xfs_setattr(
 	 * If the IDs do change before we take the ilock, we're covered
 	 * because the i_*dquot fields will get updated anyway.
 	 */
-	if (XFS_IS_QUOTA_ON(mp) && (mask & (XFS_AT_UID|XFS_AT_GID))) {
+	if (XFS_IS_QUOTA_ON(mp) &&
+	    (mask & (XFS_AT_UID|XFS_AT_GID|XFS_AT_PROJID))) {
 		uint	qflags = 0;
 
 		/* FIXME: handle xid? */
-		if (mask & XFS_AT_UID) {
+		if ((mask & XFS_AT_UID) && XFS_IS_UQUOTA_ON(mp)) {
 			uid = vap->va_uid;
 			qflags |= XFS_QMOPT_UQUOTA;
 		} else {
 			uid = ip->i_d.di_uid;
 		}
-		if (mask & XFS_AT_GID) {
+		if ((mask & XFS_AT_GID) && XFS_IS_GQUOTA_ON(mp)) {
 			gid = vap->va_gid;
 			qflags |= XFS_QMOPT_GQUOTA;
 		}  else {
 			gid = ip->i_d.di_gid;
+		}
+		if ((mask & XFS_AT_PROJID) && XFS_IS_PQUOTA_ON(mp)) {
+			projid = vap->va_projid;
+			qflags |= XFS_QMOPT_PQUOTA;
+		}  else {
+			projid = ip->i_d.di_projid;
 		}
 		/*
 		 * We take a reference when we initialize udqp and gdqp,
@@ -376,7 +384,8 @@ xfs_setattr(
 		 */
 		ASSERT(udqp == NULL);
 		ASSERT(gdqp == NULL);
-		code = XFS_QM_DQVOPALLOC(mp, ip, uid,gid, qflags, &udqp, &gdqp);
+		code = XFS_QM_DQVOPALLOC(mp, ip, uid, gid, projid, qflags,
+					 &udqp, &gdqp);
 		if (code)
 			return (code);
 	}
@@ -465,7 +474,7 @@ xfs_setattr(
 				m |= S_ISGID;
 #if 0
 			/* Linux allows this, Irix doesn't. */
-			if ((vap->va_mode & S_ISVTX) && vp->v_type != VDIR)
+			if ((vap->va_mode & S_ISVTX) && !VN_ISDIR(vp))
 				m |= S_ISVTX;
 #endif
 			if (m && !capable(CAP_FSETID))
@@ -506,8 +515,6 @@ xfs_setattr(
 		 * that the group ID supplied to the chown() function
 		 * shall be equal to either the group ID or one of the
 		 * supplementary group IDs of the calling process.
-		 *
-		 * XXX: How does restricted_chown affect projid?
 		 */
 		if (restricted_chown &&
 		    (iuid != uid || (igid != gid &&
@@ -517,10 +524,11 @@ xfs_setattr(
 			goto error_return;
 		}
 		/*
-		 * Do a quota reservation only if uid or gid is actually
+		 * Do a quota reservation only if uid/projid/gid is actually
 		 * going to change.
 		 */
 		if ((XFS_IS_UQUOTA_ON(mp) && iuid != uid) ||
+		    (XFS_IS_PQUOTA_ON(mp) && iprojid != projid) ||
 		    (XFS_IS_GQUOTA_ON(mp) && igid != gid)) {
 			/* FIXME: handle xid? */
 			ASSERT(tp);
@@ -547,10 +555,10 @@ xfs_setattr(
 			goto error_return;
 		}
 
-		if (vp->v_type == VDIR) {
+		if (VN_ISDIR(vp)) {
 			code = XFS_ERROR(EISDIR);
 			goto error_return;
-		} else if (vp->v_type != VREG) {
+		} else if (!VN_ISREG(vp)) {
 			code = XFS_ERROR(EINVAL);
 			goto error_return;
 		}
@@ -788,6 +796,7 @@ xfs_setattr(
 		}
 		if (igid != gid) {
 			if (XFS_IS_GQUOTA_ON(mp)) {
+				ASSERT(!XFS_IS_PQUOTA_ON(mp));
 				ASSERT(mask & XFS_AT_GID);
 				ASSERT(gdqp);
 				olddquot2 = XFS_QM_DQVOPCHOWN(mp, tp, ip,
@@ -796,6 +805,13 @@ xfs_setattr(
 			ip->i_d.di_gid = gid;
 		}
 		if (iprojid != projid) {
+			if (XFS_IS_PQUOTA_ON(mp)) {
+				ASSERT(!XFS_IS_GQUOTA_ON(mp));
+				ASSERT(mask & XFS_AT_PROJID);
+				ASSERT(gdqp);
+				olddquot2 = XFS_QM_DQVOPCHOWN(mp, tp, ip,
+							&ip->i_gdquot, gdqp);
+			}
 			ip->i_d.di_projid = projid;
 			/*
 			 * We may have to rev the inode as well as
@@ -861,6 +877,8 @@ xfs_setattr(
 				di_flags |= XFS_DIFLAG_NOATIME;
 			if (vap->va_xflags & XFS_XFLAG_NODUMP)
 				di_flags |= XFS_DIFLAG_NODUMP;
+			if (vap->va_xflags & XFS_XFLAG_PROJINHERIT)
+				di_flags |= XFS_DIFLAG_PROJINHERIT;
 			if ((ip->i_d.di_mode & S_IFMT) == S_IFDIR) {
 				if (vap->va_xflags & XFS_XFLAG_RTINHERIT)
 					di_flags |= XFS_DIFLAG_RTINHERIT;
@@ -1568,7 +1586,7 @@ xfs_release(
 	vp = BHV_TO_VNODE(bdp);
 	ip = XFS_BHVTOI(bdp);
 
-	if ((vp->v_type != VREG) || (ip->i_d.di_mode == 0)) {
+	if (!VN_ISREG(vp) || (ip->i_d.di_mode == 0)) {
 		return 0;
 	}
 
@@ -1896,7 +1914,7 @@ xfs_create(
 	dp = XFS_BHVTOI(dir_bdp);
 	mp = dp->i_mount;
 
-	dm_di_mode = vap->va_mode|VTTOIF(vap->va_type);
+	dm_di_mode = vap->va_mode;
 	namelen = VNAMELEN(dentry);
 
 	if (DM_EVENT_ENABLED(dir_vp->v_vfsp, dp, DM_EVENT_CREATE)) {
@@ -1916,7 +1934,9 @@ xfs_create(
 	/* Return through std_return after this point. */
 
 	udqp = gdqp = NULL;
-	if (vap->va_mask & XFS_AT_PROJID)
+	if (dp->i_d.di_flags & XFS_DIFLAG_PROJINHERIT)
+		prid = dp->i_d.di_projid;
+	else if (vap->va_mask & XFS_AT_PROJID)
 		prid = (xfs_prid_t)vap->va_projid;
 	else
 		prid = (xfs_prid_t)dfltprid;
@@ -1925,7 +1945,7 @@ xfs_create(
 	 * Make sure that we have allocated dquot(s) on disk.
 	 */
 	error = XFS_QM_DQVOPALLOC(mp, dp,
-			current_fsuid(credp), current_fsgid(credp),
+			current_fsuid(credp), current_fsgid(credp), prid,
 			XFS_QMOPT_QUOTALL|XFS_QMOPT_INHERIT, &udqp, &gdqp);
 	if (error)
 		goto std_return;
@@ -1972,8 +1992,7 @@ xfs_create(
 	    (error = XFS_DIR_CANENTER(mp, tp, dp, name, namelen)))
 		goto error_return;
 	rdev = (vap->va_mask & XFS_AT_RDEV) ? vap->va_rdev : 0;
-	error = xfs_dir_ialloc(&tp, dp,
-			MAKEIMODE(vap->va_type,vap->va_mode), 1,
+	error = xfs_dir_ialloc(&tp, dp, vap->va_mode, 1,
 			rdev, credp, prid, resblks > 0,
 			&ip, &committed);
 	if (error) {
@@ -2619,20 +2638,10 @@ xfs_link(
 	vn_trace_entry(src_vp, __FUNCTION__, (inst_t *)__return_address);
 
 	target_namelen = VNAMELEN(dentry);
-	if (src_vp->v_type == VDIR)
+	if (VN_ISDIR(src_vp))
 		return XFS_ERROR(EPERM);
 
-	/*
-	 * For now, manually find the XFS behavior descriptor for
-	 * the source vnode.  If it doesn't exist then something
-	 * is wrong and we should just return an error.
-	 * Eventually we need to figure out how link is going to
-	 * work in the face of stacked vnodes.
-	 */
 	src_bdp = vn_bhv_lookup_unlocked(VN_BHV_HEAD(src_vp), &xfs_vnodeops);
-	if (src_bdp == NULL) {
-		return XFS_ERROR(EXDEV);
-	}
 	sip = XFS_BHVTOI(src_bdp);
 	tdp = XFS_BHVTOI(target_dir_bdp);
 	mp = tdp->i_mount;
@@ -2696,6 +2705,17 @@ xfs_link(
 	 */
 	if (sip->i_d.di_nlink >= XFS_MAXLINK) {
 		error = XFS_ERROR(EMLINK);
+		goto error_return;
+	}
+
+	/*
+	 * If we are using project inheritance, we only allow hard link
+	 * creation in our tree when the project IDs are the same; else
+	 * the tree quota mechanism could be circumvented.
+	 */
+	if (unlikely((tdp->i_d.di_flags & XFS_DIFLAG_PROJINHERIT) &&
+		     (tdp->i_d.di_projid != sip->i_d.di_projid))) {
+		error = XFS_ERROR(EPERM);
 		goto error_return;
 	}
 
@@ -2803,7 +2823,7 @@ xfs_mkdir(
 
 	tp = NULL;
 	dp_joined_to_trans = B_FALSE;
-	dm_di_mode = vap->va_mode|VTTOIF(vap->va_type);
+	dm_di_mode = vap->va_mode;
 
 	if (DM_EVENT_ENABLED(dir_vp->v_vfsp, dp, DM_EVENT_CREATE)) {
 		error = XFS_SEND_NAMESP(mp, DM_EVENT_CREATE,
@@ -2821,7 +2841,9 @@ xfs_mkdir(
 
 	mp = dp->i_mount;
 	udqp = gdqp = NULL;
-	if (vap->va_mask & XFS_AT_PROJID)
+	if (dp->i_d.di_flags & XFS_DIFLAG_PROJINHERIT)
+		prid = dp->i_d.di_projid;
+	else if (vap->va_mask & XFS_AT_PROJID)
 		prid = (xfs_prid_t)vap->va_projid;
 	else
 		prid = (xfs_prid_t)dfltprid;
@@ -2830,7 +2852,7 @@ xfs_mkdir(
 	 * Make sure that we have allocated dquot(s) on disk.
 	 */
 	error = XFS_QM_DQVOPALLOC(mp, dp,
-			current_fsuid(credp), current_fsgid(credp),
+			current_fsuid(credp), current_fsgid(credp), prid,
 			XFS_QMOPT_QUOTALL | XFS_QMOPT_INHERIT, &udqp, &gdqp);
 	if (error)
 		goto std_return;
@@ -2875,8 +2897,7 @@ xfs_mkdir(
 	/*
 	 * create the directory inode.
 	 */
-	error = xfs_dir_ialloc(&tp, dp,
-			MAKEIMODE(vap->va_type,vap->va_mode), 2,
+	error = xfs_dir_ialloc(&tp, dp, vap->va_mode, 2,
 			0, credp, prid, resblks > 0,
 		&cdp, NULL);
 	if (error) {
@@ -3375,7 +3396,9 @@ xfs_symlink(
 	/* Return through std_return after this point. */
 
 	udqp = gdqp = NULL;
-	if (vap->va_mask & XFS_AT_PROJID)
+	if (dp->i_d.di_flags & XFS_DIFLAG_PROJINHERIT)
+		prid = dp->i_d.di_projid;
+	else if (vap->va_mask & XFS_AT_PROJID)
 		prid = (xfs_prid_t)vap->va_projid;
 	else
 		prid = (xfs_prid_t)dfltprid;
@@ -3384,7 +3407,7 @@ xfs_symlink(
 	 * Make sure that we have allocated dquot(s) on disk.
 	 */
 	error = XFS_QM_DQVOPALLOC(mp, dp,
-			current_fsuid(credp), current_fsgid(credp),
+			current_fsuid(credp), current_fsgid(credp), prid,
 			XFS_QMOPT_QUOTALL | XFS_QMOPT_INHERIT, &udqp, &gdqp);
 	if (error)
 		goto std_return;
@@ -3644,7 +3667,7 @@ xfs_rwlock(
 	vnode_t		*vp;
 
 	vp = BHV_TO_VNODE(bdp);
-	if (vp->v_type == VDIR)
+	if (VN_ISDIR(vp))
 		return 1;
 	ip = XFS_BHVTOI(bdp);
 	if (locktype == VRWLOCK_WRITE) {
@@ -3675,7 +3698,7 @@ xfs_rwunlock(
 	vnode_t		*vp;
 
 	vp = BHV_TO_VNODE(bdp);
-	if (vp->v_type == VDIR)
+	if (VN_ISDIR(vp))
 		return;
 	ip = XFS_BHVTOI(bdp);
 	if (locktype == VRWLOCK_WRITE) {
@@ -3841,51 +3864,10 @@ xfs_reclaim(
 		return 0;
 	}
 
-	if ((ip->i_d.di_mode & S_IFMT) == S_IFREG) {
-		if (ip->i_d.di_size > 0) {
-			/*
-			 * Flush and invalidate any data left around that is
-			 * a part of this file.
-			 *
-			 * Get the inode's i/o lock so that buffers are pushed
-			 * out while holding the proper lock.  We can't hold
-			 * the inode lock here since flushing out buffers may
-			 * cause us to try to get the lock in xfs_strategy().
-			 *
-			 * We don't have to call remapf() here, because there
-			 * cannot be any mapped file references to this vnode
-			 * since it is being reclaimed.
-			 */
-			xfs_ilock(ip, XFS_IOLOCK_EXCL);
+	vn_iowait(vp);
 
-			/*
-			 * If we hit an IO error, we need to make sure that the
-			 * buffer and page caches of file data for
-			 * the file are tossed away. We don't want to use
-			 * VOP_FLUSHINVAL_PAGES here because we don't want dirty
-			 * pages to stay attached to the vnode, but be
-			 * marked P_BAD. pdflush/vnode_pagebad
-			 * hates that.
-			 */
-			if (!XFS_FORCED_SHUTDOWN(ip->i_mount)) {
-				VOP_FLUSHINVAL_PAGES(vp, 0, -1, FI_NONE);
-			} else {
-				VOP_TOSS_PAGES(vp, 0, -1, FI_NONE);
-			}
-
-			ASSERT(VN_CACHED(vp) == 0);
-			ASSERT(XFS_FORCED_SHUTDOWN(ip->i_mount) ||
-			       ip->i_delayed_blks == 0);
-			xfs_iunlock(ip, XFS_IOLOCK_EXCL);
-		} else if (XFS_FORCED_SHUTDOWN(ip->i_mount)) {
-			/*
-			 * di_size field may not be quite accurate if we're
-			 * shutting down.
-			 */
-			VOP_TOSS_PAGES(vp, 0, -1, FI_NONE);
-			ASSERT(VN_CACHED(vp) == 0);
-		}
-	}
+	ASSERT(XFS_FORCED_SHUTDOWN(ip->i_mount) || ip->i_delayed_blks == 0);
+	ASSERT(VN_CACHED(vp) == 0);
 
 	/* If we have nothing to flush with this inode then complete the
 	 * teardown now, otherwise break the link between the xfs inode
@@ -4046,7 +4028,7 @@ xfs_finish_reclaim_all(xfs_mount_t *mp, int noblock)
  *      errno on error
  *
  */
-int
+STATIC int
 xfs_alloc_file_space(
 	xfs_inode_t		*ip,
 	xfs_off_t		offset,
@@ -4169,9 +4151,8 @@ retry:
 			break;
 		}
 		xfs_ilock(ip, XFS_ILOCK_EXCL);
-		error = XFS_TRANS_RESERVE_QUOTA_BYDQUOTS(mp, tp,
-				ip->i_udquot, ip->i_gdquot, resblks, 0, rt ?
-				XFS_QMOPT_RES_RTBLKS : XFS_QMOPT_RES_REGBLKS);
+		error = XFS_TRANS_RESERVE_QUOTA(mp, tp,
+				ip->i_udquot, ip->i_gdquot, resblks, 0, 0);
 		if (error)
 			goto error1;
 
@@ -4323,6 +4304,7 @@ xfs_free_file_space(
 	xfs_off_t		len,
 	int			attr_flags)
 {
+	vnode_t			*vp;
 	int			committed;
 	int			done;
 	xfs_off_t		end_dmi_offset;
@@ -4343,8 +4325,10 @@ xfs_free_file_space(
 	xfs_trans_t		*tp;
 	int			need_iolock = 1;
 
-	vn_trace_entry(XFS_ITOV(ip), __FUNCTION__, (inst_t *)__return_address);
+	vp = XFS_ITOV(ip);
 	mp = ip->i_mount;
+
+	vn_trace_entry(vp, __FUNCTION__, (inst_t *)__return_address);
 
 	if ((error = XFS_QM_DQATTACH(mp, ip, 0)))
 		return error;
@@ -4362,7 +4346,7 @@ xfs_free_file_space(
 	    DM_EVENT_ENABLED(XFS_MTOVFS(mp), ip, DM_EVENT_WRITE)) {
 		if (end_dmi_offset > ip->i_d.di_size)
 			end_dmi_offset = ip->i_d.di_size;
-		error = XFS_SEND_DATA(mp, DM_EVENT_WRITE, XFS_ITOV(ip),
+		error = XFS_SEND_DATA(mp, DM_EVENT_WRITE, vp,
 				offset, end_dmi_offset - offset,
 				AT_DELAY_FLAG(attr_flags), NULL);
 		if (error)
@@ -4381,7 +4365,14 @@ xfs_free_file_space(
 	ioffset = offset & ~(rounding - 1);
 	if (ilen & (rounding - 1))
 		ilen = (ilen + rounding) & ~(rounding - 1);
-	xfs_inval_cached_pages(XFS_ITOV(ip), &(ip->i_iocore), ioffset, 0, 0);
+
+	if (VN_CACHED(vp) != 0) {
+		xfs_inval_cached_trace(&ip->i_iocore, ioffset, -1,
+				ctooff(offtoct(ioffset)), -1);
+		VOP_FLUSHINVAL_PAGES(vp, ctooff(offtoct(ioffset)),
+				-1, FI_REMAPF_LOCKED);
+	}
+
 	/*
 	 * Need to zero the stuff we're not freeing, on disk.
 	 * If its a realtime file & can't use unwritten extents then we
@@ -4552,7 +4543,7 @@ xfs_change_file_space(
 	/*
 	 * must be a regular file and have write permission
 	 */
-	if (vp->v_type != VREG)
+	if (!VN_ISREG(vp))
 		return XFS_ERROR(EINVAL);
 
 	xfs_ilock(ip, XFS_ILOCK_SHARED);

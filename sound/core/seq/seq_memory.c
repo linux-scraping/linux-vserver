@@ -36,12 +36,12 @@
 #define semaphore_of(fp)	((fp)->f_dentry->d_inode->i_sem)
 
 
-inline static int snd_seq_pool_available(pool_t *pool)
+static inline int snd_seq_pool_available(pool_t *pool)
 {
 	return pool->total_elements - atomic_read(&pool->counter);
 }
 
-inline static int snd_seq_output_ok(pool_t *pool)
+static inline int snd_seq_output_ok(pool_t *pool)
 {
 	return snd_seq_pool_available(pool) >= pool->room;
 }
@@ -452,7 +452,7 @@ pool_t *snd_seq_pool_new(int poolsize)
 	pool_t *pool;
 
 	/* create pool block */
-	pool = kcalloc(1, sizeof(*pool), GFP_KERNEL);
+	pool = kzalloc(sizeof(*pool), GFP_KERNEL);
 	if (pool == NULL) {
 		snd_printd("seq: malloc failed for pool\n");
 		return NULL;

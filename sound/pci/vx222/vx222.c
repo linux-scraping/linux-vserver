@@ -252,6 +252,7 @@ static void __devexit snd_vx222_remove(struct pci_dev *pci)
 
 static struct pci_driver driver = {
 	.name = "Digigram VX222",
+	.owner = THIS_MODULE,
 	.id_table = snd_vx222_ids,
 	.probe = snd_vx222_probe,
 	.remove = __devexit_p(snd_vx222_remove),
@@ -260,7 +261,7 @@ static struct pci_driver driver = {
 
 static int __init alsa_card_vx222_init(void)
 {
-	return pci_module_init(&driver);
+	return pci_register_driver(&driver);
 }
 
 static void __exit alsa_card_vx222_exit(void)

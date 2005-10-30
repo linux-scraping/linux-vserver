@@ -507,18 +507,15 @@ static int deadline_dispatch_requests(struct deadline_data *dd)
 	const int reads = !list_empty(&dd->fifo_list[READ]);
 	const int writes = !list_empty(&dd->fifo_list[WRITE]);
 	struct deadline_rq *drq;
-	int data_dir, other_dir;
+	int data_dir;
 
 	/*
 	 * batches are currently reads XOR writes
 	 */
-	drq = NULL;
-
-	if (dd->next_drq[READ])
-		drq = dd->next_drq[READ];
-
 	if (dd->next_drq[WRITE])
 		drq = dd->next_drq[WRITE];
+	else
+		drq = dd->next_drq[READ];
 
 	if (drq) {
 		/* we have a "next request" */
@@ -544,7 +541,6 @@ static int deadline_dispatch_requests(struct deadline_data *dd)
 			goto dispatch_writes;
 
 		data_dir = READ;
-		other_dir = WRITE;
 
 		goto dispatch_find_request;
 	}
@@ -560,7 +556,6 @@ dispatch_writes:
 		dd->starved = 0;
 
 		data_dir = WRITE;
-		other_dir = READ;
 
 		goto dispatch_find_request;
 	}
@@ -711,18 +706,20 @@ static int deadline_init_queue(request_queue_t *q, elevator_t *e)
 	if (!drq_pool)
 		return -ENOMEM;
 
-	dd = kmalloc(sizeof(*dd), GFP_KERNEL);
+	dd = kmalloc_node(sizeof(*dd), GFP_KERNEL, q->node);
 	if (!dd)
 		return -ENOMEM;
 	memset(dd, 0, sizeof(*dd));
 
-	dd->hash = kmalloc(sizeof(struct list_head)*DL_HASH_ENTRIES,GFP_KERNEL);
+	dd->hash = kmalloc_node(sizeof(struct list_head)*DL_HASH_ENTRIES,
+				GFP_KERNEL, q->node);
 	if (!dd->hash) {
 		kfree(dd);
 		return -ENOMEM;
 	}
 
-	dd->drq_pool = mempool_create(BLKDEV_MIN_RQ, mempool_alloc_slab, mempool_free_slab, drq_pool);
+	dd->drq_pool = mempool_create_node(BLKDEV_MIN_RQ, mempool_alloc_slab,
+					mempool_free_slab, drq_pool, q->node);
 	if (!dd->drq_pool) {
 		kfree(dd->hash);
 		kfree(dd);
@@ -758,7 +755,8 @@ static void deadline_put_request(request_queue_t *q, struct request *rq)
 }
 
 static int
-deadline_set_request(request_queue_t *q, struct request *rq, int gfp_mask)
+deadline_set_request(request_queue_t *q, struct request *rq, struct bio *bio,
+		     int gfp_mask)
 {
 	struct deadline_data *dd = q->elevator->elevator_data;
 	struct deadline_rq *drq;
@@ -886,7 +884,7 @@ deadline_attr_show(struct kobject *kobj, struct attribute *attr, char *page)
 	struct deadline_fs_entry *entry = to_deadline(attr);
 
 	if (!entry->show)
-		return 0;
+		return -EIO;
 
 	return entry->show(e->elevator_data, page);
 }
@@ -899,7 +897,7 @@ deadline_attr_store(struct kobject *kobj, struct attribute *attr,
 	struct deadline_fs_entry *entry = to_deadline(attr);
 
 	if (!entry->store)
-		return -EINVAL;
+		return -EIO;
 
 	return entry->store(e->elevator_data, page, length);
 }

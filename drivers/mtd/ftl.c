@@ -1,5 +1,5 @@
 /* This version ported to the Linux-MTD system by dwmw2@infradead.org
- * $Id: ftl.c,v 1.54 2004/11/16 18:33:15 dwmw2 Exp $
+ * $Id: ftl.c,v 1.55 2005/01/17 13:47:21 hvr Exp $
  *
  * Fixes: Arnaldo Carvalho de Melo <acme@conectiva.com.br>
  * - fixes some leaks on failure in build_maps and ftl_notify_add, cleanups
@@ -357,6 +357,7 @@ static int erase_xfer(partition_t *part,
     if (!erase) 
             return -ENOMEM;
 
+    erase->mtd = part->mbd.mtd;
     erase->callback = ftl_erase_callback;
     erase->addr = xfer->Offset;
     erase->len = 1 << part->header.EraseUnitSize;
@@ -1016,27 +1017,16 @@ static int ftl_writesect(struct mtd_blktrans_dev *dev,
 
 void ftl_freepart(partition_t *part)
 {
-    if (part->VirtualBlockMap) {
 	vfree(part->VirtualBlockMap);
 	part->VirtualBlockMap = NULL;
-    }
-    if (part->VirtualPageMap) {
 	kfree(part->VirtualPageMap);
 	part->VirtualPageMap = NULL;
-    }
-    if (part->EUNInfo) {
 	kfree(part->EUNInfo);
 	part->EUNInfo = NULL;
-    }
-    if (part->XferInfo) {
 	kfree(part->XferInfo);
 	part->XferInfo = NULL;
-    }
-    if (part->bam_cache) {
 	kfree(part->bam_cache);
 	part->bam_cache = NULL;
-    }
-    
 } /* ftl_freepart */
 
 static void ftl_add_mtd(struct mtd_blktrans_ops *tr, struct mtd_info *mtd)
@@ -1096,7 +1086,7 @@ struct mtd_blktrans_ops ftl_tr = {
 
 int init_ftl(void)
 {
-	DEBUG(0, "$Id: ftl.c,v 1.54 2004/11/16 18:33:15 dwmw2 Exp $\n");
+	DEBUG(0, "$Id: ftl.c,v 1.55 2005/01/17 13:47:21 hvr Exp $\n");
 
 	return register_mtd_blktrans(&ftl_tr);
 }

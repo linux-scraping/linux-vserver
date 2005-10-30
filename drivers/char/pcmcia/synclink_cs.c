@@ -1,7 +1,7 @@
 /*
  * linux/drivers/char/pcmcia/synclink_cs.c
  *
- * $Id: synclink_cs.c,v 4.26 2004/08/11 19:30:02 paulkf Exp $
+ * $Id: synclink_cs.c,v 4.34 2005/09/08 13:20:54 paulkf Exp $
  *
  * Device driver for Microgate SyncLink PC Card
  * multiprotocol serial adapter.
@@ -71,7 +71,6 @@
 #include <linux/workqueue.h>
 #include <linux/hdlc.h>
 
-#include <pcmcia/version.h>
 #include <pcmcia/cs_types.h>
 #include <pcmcia/cs.h>
 #include <pcmcia/cistpl.h>
@@ -146,8 +145,8 @@ typedef struct _mgslpc_info {
 	int			flags;
 	int			count;		/* count of opens */
 	int			line;
-	unsigned int		close_delay;
-	unsigned int		closing_wait;	/* time to wait before closing */
+	unsigned short		close_delay;
+	unsigned short		closing_wait;	/* time to wait before closing */
 	
 	struct mgsl_icount	icount;
 	
@@ -473,7 +472,7 @@ module_param_array(dosyncppp, int, NULL, 0);
 MODULE_LICENSE("GPL");
 
 static char *driver_name = "SyncLink PC Card driver";
-static char *driver_version = "$Revision: 4.26 $";
+static char *driver_version = "$Revision: 4.34 $";
 
 static struct tty_driver *serial_driver;
 
@@ -581,7 +580,7 @@ static dev_link_t *mgslpc_attach(void)
 
     /* Interrupt setup */
     link->irq.Attributes = IRQ_TYPE_EXCLUSIVE;
-    link->irq.IRQInfo1   = IRQ_INFO2_VALID | IRQ_LEVEL_ID;
+    link->irq.IRQInfo1   = IRQ_LEVEL_ID;
     link->irq.Handler = NULL;
     
     link->conf.Attributes = 0;
@@ -593,11 +592,6 @@ static dev_link_t *mgslpc_attach(void)
     dev_list = link;
 
     client_reg.dev_info = &dev_info;
-    client_reg.EventMask =
-	    CS_EVENT_CARD_INSERTION | CS_EVENT_CARD_REMOVAL |
-	    CS_EVENT_RESET_PHYSICAL | CS_EVENT_CARD_RESET |
-	    CS_EVENT_PM_SUSPEND | CS_EVENT_PM_RESUME;
-    client_reg.event_handler = &mgslpc_event;
     client_reg.Version = 0x0210;
     client_reg.event_callback_args.client_data = link;
 
@@ -1463,6 +1457,8 @@ static int startup(MGSLPC_INFO * info)
 
 	info->pending_bh = 0;
 	
+	memset(&info->icount, 0, sizeof(info->icount));
+
 	init_timer(&info->tx_timer);
 	info->tx_timer.data = (unsigned long)info;
 	info->tx_timer.function = tx_timeout;
@@ -1952,9 +1948,13 @@ static int get_stats(MGSLPC_INFO * info, struct mgsl_icount __user *user_icount)
 	int err;
 	if (debug_level >= DEBUG_LEVEL_INFO)
 		printk("get_params(%s)\n", info->device_name);
-	COPY_TO_USER(err,user_icount, &info->icount, sizeof(struct mgsl_icount));
-	if (err)
-		return -EFAULT;
+	if (!user_icount) {
+		memset(&info->icount, 0, sizeof(info->icount));
+	} else {
+		COPY_TO_USER(err, user_icount, &info->icount, sizeof(struct mgsl_icount));
+		if (err)
+			return -EFAULT;
+	}
 	return 0;
 }
 
@@ -3081,13 +3081,21 @@ void mgslpc_remove_device(MGSLPC_INFO *remove_info)
 	}
 }
 
+static struct pcmcia_device_id mgslpc_ids[] = {
+	PCMCIA_DEVICE_MANF_CARD(0x02c5, 0x0050),
+	PCMCIA_DEVICE_NULL
+};
+MODULE_DEVICE_TABLE(pcmcia, mgslpc_ids);
+
 static struct pcmcia_driver mgslpc_driver = {
 	.owner		= THIS_MODULE,
 	.drv		= {
 		.name	= "synclink_cs",
 	},
 	.attach		= mgslpc_attach,
+	.event		= mgslpc_event,
 	.detach		= mgslpc_detach,
+	.id_table	= mgslpc_ids,
 };
 
 static struct tty_operations mgslpc_ops = {

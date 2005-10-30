@@ -103,7 +103,7 @@ static DEFINE_SPINLOCK(mfc_unres_lock);
    In this case data path is free of exclusive locks at all.
  */
 
-static kmem_cache_t *mrt_cachep;
+static kmem_cache_t *mrt_cachep __read_mostly;
 
 static int ip_mr_forward(struct sk_buff *skb, struct mfc_cache *cache, int local);
 static int ipmr_cache_report(struct sk_buff *pkt, vifi_t vifi, int assert);
@@ -149,7 +149,7 @@ struct net_device *ipmr_new_tunnel(struct vifctl *v)
 		if (err == 0 && (dev = __dev_get_by_name(p.name)) != NULL) {
 			dev->flags |= IFF_MULTICAST;
 
-			in_dev = __in_dev_get(dev);
+			in_dev = __in_dev_get_rtnl(dev);
 			if (in_dev == NULL && (in_dev = inetdev_init(dev)) == NULL)
 				goto failure;
 			in_dev->cnf.rp_filter = 0;
@@ -278,7 +278,7 @@ static int vif_delete(int vifi)
 
 	dev_set_allmulti(dev, -1);
 
-	if ((in_dev = __in_dev_get(dev)) != NULL) {
+	if ((in_dev = __in_dev_get_rtnl(dev)) != NULL) {
 		in_dev->cnf.mc_forwarding--;
 		ip_rt_multicast_event(in_dev);
 	}
@@ -297,6 +297,7 @@ static int vif_delete(int vifi)
 static void ipmr_destroy_unres(struct mfc_cache *c)
 {
 	struct sk_buff *skb;
+	struct nlmsgerr *e;
 
 	atomic_dec(&cache_resolve_queue_len);
 
@@ -306,7 +307,9 @@ static void ipmr_destroy_unres(struct mfc_cache *c)
 			nlh->nlmsg_type = NLMSG_ERROR;
 			nlh->nlmsg_len = NLMSG_LENGTH(sizeof(struct nlmsgerr));
 			skb_trim(skb, nlh->nlmsg_len);
-			((struct nlmsgerr*)NLMSG_DATA(nlh))->error = -ETIMEDOUT;
+			e = NLMSG_DATA(nlh);
+			e->error = -ETIMEDOUT;
+			memset(&e->msg, 0, sizeof(e->msg));
 			netlink_unicast(rtnl, skb, NETLINK_CB(skb).dst_pid, MSG_DONTWAIT);
 		} else
 			kfree_skb(skb);
@@ -359,7 +362,7 @@ out:
 
 /* Fill oifs list. It is called under write locked mrt_lock. */
 
-static void ipmr_update_threshoulds(struct mfc_cache *cache, unsigned char *ttls)
+static void ipmr_update_thresholds(struct mfc_cache *cache, unsigned char *ttls)
 {
 	int vifi;
 
@@ -418,7 +421,7 @@ static int vif_add(struct vifctl *vifc, int mrtsock)
 		return -EINVAL;
 	}
 
-	if ((in_dev = __in_dev_get(dev)) == NULL)
+	if ((in_dev = __in_dev_get_rtnl(dev)) == NULL)
 		return -EADDRNOTAVAIL;
 	in_dev->cnf.mc_forwarding++;
 	dev_set_allmulti(dev, +1);
@@ -499,6 +502,7 @@ static struct mfc_cache *ipmr_cache_alloc_unres(void)
 static void ipmr_cache_resolve(struct mfc_cache *uc, struct mfc_cache *c)
 {
 	struct sk_buff *skb;
+	struct nlmsgerr *e;
 
 	/*
 	 *	Play the pending entries through our router
@@ -515,7 +519,9 @@ static void ipmr_cache_resolve(struct mfc_cache *uc, struct mfc_cache *c)
 				nlh->nlmsg_type = NLMSG_ERROR;
 				nlh->nlmsg_len = NLMSG_LENGTH(sizeof(struct nlmsgerr));
 				skb_trim(skb, nlh->nlmsg_len);
-				((struct nlmsgerr*)NLMSG_DATA(nlh))->error = -EMSGSIZE;
+				e = NLMSG_DATA(nlh);
+				e->error = -EMSGSIZE;
+				memset(&e->msg, 0, sizeof(e->msg));
 			}
 			err = netlink_unicast(rtnl, skb, NETLINK_CB(skb).dst_pid, MSG_DONTWAIT);
 		} else
@@ -721,7 +727,7 @@ static int ipmr_mfc_add(struct mfcctl *mfc, int mrtsock)
 	if (c != NULL) {
 		write_lock_bh(&mrt_lock);
 		c->mfc_parent = mfc->mfcc_parent;
-		ipmr_update_threshoulds(c, mfc->mfcc_ttls);
+		ipmr_update_thresholds(c, mfc->mfcc_ttls);
 		if (!mrtsock)
 			c->mfc_flags |= MFC_STATIC;
 		write_unlock_bh(&mrt_lock);
@@ -738,7 +744,7 @@ static int ipmr_mfc_add(struct mfcctl *mfc, int mrtsock)
 	c->mfc_origin=mfc->mfcc_origin.s_addr;
 	c->mfc_mcastgrp=mfc->mfcc_mcastgrp.s_addr;
 	c->mfc_parent=mfc->mfcc_parent;
-	ipmr_update_threshoulds(c, mfc->mfcc_ttls);
+	ipmr_update_thresholds(c, mfc->mfcc_ttls);
 	if (!mrtsock)
 		c->mfc_flags |= MFC_STATIC;
 
@@ -1350,6 +1356,7 @@ int ip_mr_input(struct sk_buff *skb)
 			     */
 			    read_lock(&mrt_lock);
 			    if (mroute_socket) {
+				    nf_reset(skb);
 				    raw_rcv(mroute_socket, skb);
 				    read_unlock(&mrt_lock);
 				    return 0;

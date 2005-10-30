@@ -58,7 +58,7 @@ static inline int software_suspend(void)
 }
 #endif
 
-#ifdef CONFIG_SMP
+#ifdef CONFIG_SUSPEND_SMP
 extern void disable_nonboot_cpus(void);
 extern void enable_nonboot_cpus(void);
 #else
@@ -71,5 +71,7 @@ void restore_processor_state(void);
 struct saved_context;
 void __save_processor_state(struct saved_context *ctxt);
 void __restore_processor_state(struct saved_context *ctxt);
+extern unsigned long get_usable_page(unsigned gfp_mask);
+extern void free_eaten_memory(void);
 
 #endif /* _LINUX_SWSUSP_H */

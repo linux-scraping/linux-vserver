@@ -195,7 +195,6 @@ static struct ip_tunnel * ipip6_tunnel_locate(struct ip_tunnel_parm *parms, int 
 	dev_hold(dev);
 
 	ipip6_tunnel_link(nt);
-	/* Do not decrement MOD_USE_COUNT here. */
 	return nt;
 
 failed:
@@ -771,7 +770,7 @@ static int ipip6_tunnel_init(struct net_device *dev)
 	return 0;
 }
 
-int __init ipip6_fb_tunnel_init(struct net_device *dev)
+static int __init ipip6_fb_tunnel_init(struct net_device *dev)
 {
 	struct ip_tunnel *tunnel = dev->priv;
 	struct iphdr *iph = &tunnel->parms.iph;
@@ -794,10 +793,28 @@ static struct net_protocol sit_protocol = {
 	.err_handler	=	ipip6_err,
 };
 
+static void __exit sit_destroy_tunnels(void)
+{
+	int prio;
+
+	for (prio = 1; prio < 4; prio++) {
+		int h;
+		for (h = 0; h < HASH_SIZE; h++) {
+			struct ip_tunnel *t;
+			while ((t = tunnels[prio][h]) != NULL)
+				unregister_netdevice(t->dev);
+		}
+	}
+}
+
 void __exit sit_cleanup(void)
 {
 	inet_del_protocol(&sit_protocol, IPPROTO_IPV6);
-	unregister_netdev(ipip6_fb_tunnel_dev);
+
+	rtnl_lock();
+	sit_destroy_tunnels();
+	unregister_netdevice(ipip6_fb_tunnel_dev);
+	rtnl_unlock();
 }
 
 int __init sit_init(void)

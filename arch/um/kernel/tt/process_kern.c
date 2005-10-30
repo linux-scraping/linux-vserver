@@ -23,10 +23,11 @@
 #include "mem_user.h"
 #include "tlb.h"
 #include "mode.h"
+#include "mode_kern.h"
 #include "init.h"
 #include "tt.h"
 
-void *switch_to_tt(void *prev, void *next, void *last)
+void switch_to_tt(void *prev, void *next)
 {
 	struct task_struct *from, *to, *prev_sched;
 	unsigned long flags;
@@ -35,8 +36,6 @@ void *switch_to_tt(void *prev, void *next, void *last)
 
 	from = prev;
 	to = next;
-
-	to->thread.prev_sched = from;
 
 	cpu = from->thread_info->cpu;
 	if(cpu == 0)
@@ -53,7 +52,6 @@ void *switch_to_tt(void *prev, void *next, void *last)
 	forward_pending_sigio(to->thread.mode.tt.extern_pid);
 
 	c = 0;
-	set_current(to);
 
 	err = os_write_file(to->thread.mode.tt.switch_pipe[1], &c, sizeof(c));
 	if(err != sizeof(c))
@@ -85,8 +83,6 @@ void *switch_to_tt(void *prev, void *next, void *last)
 
 	flush_tlb_all();
 	local_irq_restore(flags);
-
-	return(current->thread.prev_sched);
 }
 
 void release_thread_tt(struct task_struct *task)
@@ -266,10 +262,10 @@ int copy_thread_tt(int nr, unsigned long clone_flags, unsigned long sp,
 	}
 
 	if(current->thread.forking){
-		sc_to_sc(UPT_SC(&p->thread.regs.regs), 
-			 UPT_SC(&current->thread.regs.regs));
+		sc_to_sc(UPT_SC(&p->thread.regs.regs), UPT_SC(&regs->regs));
 		SC_SET_SYSCALL_RETURN(UPT_SC(&p->thread.regs.regs), 0);
-		if(sp != 0) SC_SP(UPT_SC(&p->thread.regs.regs)) = sp;
+		if(sp != 0)
+			SC_SP(UPT_SC(&p->thread.regs.regs)) = sp;
 	}
 	p->thread.mode.tt.extern_pid = new_pid;
 
@@ -459,14 +455,3 @@ int is_valid_pid(int pid)
 	read_unlock(&tasklist_lock);
 	return(0);
 }
-
-/*
- * Overrides for Emacs so that we follow Linus's tabbing style.
- * Emacs will notice this stuff at the end of the file and automatically
- * adjust the settings for this buffer only.  This must remain at the end
- * of the file.
- * ---------------------------------------------------------------------------
- * Local variables:
- * c-file-style: "linux"
- * End:
- */

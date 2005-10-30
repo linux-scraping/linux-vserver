@@ -24,7 +24,6 @@
 #include <linux/smp.h>
 #include <linux/param.h>
 #include <linux/string.h>
-#include <linux/bootmem.h>
 #include <linux/initrd.h>
 #include <linux/seq_file.h>
 #include <linux/kdev_t.h>
@@ -40,6 +39,7 @@
 #include <asm/cputable.h>
 #include <asm/sections.h>
 #include <asm/iommu.h>
+#include <asm/firmware.h>
 
 #include <asm/time.h>
 #include "iSeries_setup.h"
@@ -47,7 +47,7 @@
 #include <asm/paca.h>
 #include <asm/cache.h>
 #include <asm/sections.h>
-#include <asm/iSeries/LparData.h>
+#include <asm/abs_addr.h>
 #include <asm/iSeries/HvCallHpt.h>
 #include <asm/iSeries/HvLpConfig.h>
 #include <asm/iSeries/HvCallEvent.h>
@@ -55,10 +55,12 @@
 #include <asm/iSeries/HvCallXm.h>
 #include <asm/iSeries/ItLpQueue.h>
 #include <asm/iSeries/IoHriMainStore.h>
-#include <asm/iSeries/iSeries_proc.h>
 #include <asm/iSeries/mf.h>
 #include <asm/iSeries/HvLpEvent.h>
 #include <asm/iSeries/iSeries_irq.h>
+#include <asm/iSeries/IoHriProcessorVpd.h>
+#include <asm/iSeries/ItVpdAreas.h>
+#include <asm/iSeries/LparMap.h>
 
 extern void hvlog(char *fmt, ...);
 
@@ -74,7 +76,11 @@ extern void ppcdbg_initialize(void);
 static void build_iSeries_Memory_Map(void);
 static void setup_iSeries_cache_sizes(void);
 static void iSeries_bolt_kernel(unsigned long saddr, unsigned long eaddr);
+#ifdef CONFIG_PCI
 extern void iSeries_pci_final_fixup(void);
+#else
+static void iSeries_pci_final_fixup(void) { }
+#endif
 
 /* Global Variables */
 static unsigned long procFreqHz;
@@ -309,6 +315,8 @@ static void __init iSeries_init_early(void)
 
 	DBG(" -> iSeries_init_early()\n");
 
+	ppc64_firmware_features = FW_FEATURE_ISERIES;
+
 	ppcdbg_initialize();
 
 #if defined(CONFIG_BLK_DEV_INITRD)
@@ -407,6 +415,22 @@ static void __init iSeries_init_early(void)
 	DBG(" <- iSeries_init_early()\n");
 }
 
+struct mschunks_map mschunks_map = {
+	/* XXX We don't use these, but Piranha might need them. */
+	.chunk_size  = MSCHUNKS_CHUNK_SIZE,
+	.chunk_shift = MSCHUNKS_CHUNK_SHIFT,
+	.chunk_mask  = MSCHUNKS_OFFSET_MASK,
+};
+EXPORT_SYMBOL(mschunks_map);
+
+void mschunks_alloc(unsigned long num_chunks)
+{
+	klimit = _ALIGN(klimit, sizeof(u32));
+	mschunks_map.mapping = (u32 *)klimit;
+	klimit += num_chunks * sizeof(u32);
+	mschunks_map.num_chunks = num_chunks;
+}
+
 /*
  * The iSeries may have very large memories ( > 128 GB ) and a partition
  * may get memory in "chunks" that may be anywhere in the 2**52 real
@@ -444,7 +468,7 @@ static void __init build_iSeries_Memory_Map(void)
 
 	/* Chunk size on iSeries is 256K bytes */
 	totalChunks = (u32)HvLpConfig_getMsChunks();
-	klimit = msChunks_alloc(klimit, totalChunks, 1UL << 18);
+	mschunks_alloc(totalChunks);
 
 	/*
 	 * Get absolute address of our load area
@@ -481,7 +505,7 @@ static void __init build_iSeries_Memory_Map(void)
 	printk("Load area size %dK\n", loadAreaSize * 256);
 
 	for (nextPhysChunk = 0; nextPhysChunk < loadAreaSize; ++nextPhysChunk)
-		msChunks.abs[nextPhysChunk] =
+		mschunks_map.mapping[nextPhysChunk] =
 			loadAreaFirstChunk + nextPhysChunk;
 
 	/*
@@ -490,7 +514,7 @@ static void __init build_iSeries_Memory_Map(void)
 	 */
 	hptFirstChunk = (u32)addr_to_chunk(HvCallHpt_getHptAddress());
 	hptSizePages = (u32)HvCallHpt_getHptPages();
-	hptSizeChunks = hptSizePages >> (msChunks.chunk_shift - PAGE_SHIFT);
+	hptSizeChunks = hptSizePages >> (MSCHUNKS_CHUNK_SHIFT - PAGE_SHIFT);
 	hptLastChunk = hptFirstChunk + hptSizeChunks - 1;
 
 	printk("HPT absolute addr = %016lx, size = %dK\n",
@@ -498,7 +522,7 @@ static void __init build_iSeries_Memory_Map(void)
 
 	/* Fill in the hashed page table hash mask */
 	num_ptegs = hptSizePages *
-		(PAGE_SIZE / (sizeof(HPTE) * HPTES_PER_GROUP));
+		(PAGE_SIZE / (sizeof(hpte_t) * HPTES_PER_GROUP));
 	htab_hash_mask = num_ptegs - 1;
 
 	/*
@@ -547,7 +571,8 @@ static void __init build_iSeries_Memory_Map(void)
 				     (absChunk > hptLastChunk)) &&
 				    ((absChunk < loadAreaFirstChunk) ||
 				     (absChunk > loadAreaLastChunk))) {
-					msChunks.abs[nextPhysChunk] = absChunk;
+					mschunks_map.mapping[nextPhysChunk] =
+						absChunk;
 					++nextPhysChunk;
 				}
 			}
@@ -613,25 +638,23 @@ static void __init setup_iSeries_cache_sizes(void)
 static void iSeries_make_pte(unsigned long va, unsigned long pa,
 			     int mode)
 {
-	HPTE local_hpte, rhpte;
+	hpte_t local_hpte, rhpte;
 	unsigned long hash, vpn;
 	long slot;
 
 	vpn = va >> PAGE_SHIFT;
 	hash = hpt_hash(vpn, 0);
 
-	local_hpte.dw1.dword1 = pa | mode;
-	local_hpte.dw0.dword0 = 0;
-	local_hpte.dw0.dw0.avpn = va >> 23;
-	local_hpte.dw0.dw0.bolted = 1;		/* bolted */
-	local_hpte.dw0.dw0.v = 1;
+	local_hpte.r = pa | mode;
+	local_hpte.v = ((va >> 23) << HPTE_V_AVPN_SHIFT)
+		| HPTE_V_BOLTED | HPTE_V_VALID;
 
 	slot = HvCallHpt_findValid(&rhpte, vpn);
 	if (slot < 0) {
 		/* Must find space in primary group */
 		panic("hash_page: hpte already exists\n");
 	}
-	HvCallHpt_addValidate(slot, 0, (HPTE *)&local_hpte );
+	HvCallHpt_addValidate(slot, 0, &local_hpte);
 }
 
 /*
@@ -641,7 +664,7 @@ static void __init iSeries_bolt_kernel(unsigned long saddr, unsigned long eaddr)
 {
 	unsigned long pa;
 	unsigned long mode_rw = _PAGE_ACCESSED | _PAGE_COHERENT | PP_RWXX;
-	HPTE hpte;
+	hpte_t hpte;
 
 	for (pa = saddr; pa < eaddr ;pa += PAGE_SIZE) {
 		unsigned long ea = (unsigned long)__va(pa);
@@ -654,7 +677,7 @@ static void __init iSeries_bolt_kernel(unsigned long saddr, unsigned long eaddr)
 		if (!in_kernel_text(ea))
 			mode_rw |= HW_NO_EXEC;
 
-		if (hpte.dw0.dw0.v) {
+		if (hpte.v & HPTE_V_VALID) {
 			/* HPTE exists, so just bolt it */
 			HvCallHpt_setSwBits(slot, 0x10, 0);
 			/* And make sure the pp bits are correct */
@@ -665,15 +688,11 @@ static void __init iSeries_bolt_kernel(unsigned long saddr, unsigned long eaddr)
 	}
 }
 
-extern unsigned long ppc_proc_freq;
-extern unsigned long ppc_tb_freq;
-
 /*
  * Document me.
  */
 static void __init iSeries_setup_arch(void)
 {
-	void *eventStack;
 	unsigned procIx = get_paca()->lppaca.dyn_hv_phys_proc_index;
 
 	/* Add an eye catcher and the systemcfg layout version number */
@@ -682,24 +701,7 @@ static void __init iSeries_setup_arch(void)
 	systemcfg->version.minor = SYSTEMCFG_MINOR;
 
 	/* Setup the Lp Event Queue */
-
-	/* Allocate a page for the Event Stack
-	 * The hypervisor wants the absolute real address, so
-	 * we subtract out the KERNELBASE and add in the
-	 * absolute real address of the kernel load area
-	 */
-	eventStack = alloc_bootmem_pages(LpEventStackSize);
-	memset(eventStack, 0, LpEventStackSize);
-
-	/* Invoke the hypervisor to initialize the event stack */
-	HvCallEvent_setLpEventStack(0, eventStack, LpEventStackSize);
-
-	/* Initialize fields in our Lp Event Queue */
-	xItLpQueue.xSlicEventStackPtr = (char *)eventStack;
-	xItLpQueue.xSlicCurEventPtr = (char *)eventStack;
-	xItLpQueue.xSlicLastValidEventPtr = (char *)eventStack +
-					(LpEventStackSize - LpEventMaxSize);
-	xItLpQueue.xIndex = 0;
+	setup_hvlpevent_queue();
 
 	/* Compute processor frequency */
 	procFreqHz = ((1UL << 34) * 1000000) /
@@ -765,8 +767,6 @@ static void iSeries_halt(void)
 {
 	mf_power_off();
 }
-
-extern void setup_default_decr(void);
 
 /*
  * void __init iSeries_calibrate_decr()
@@ -852,27 +852,95 @@ static int __init iSeries_src_init(void)
 
 late_initcall(iSeries_src_init);
 
-static int set_spread_lpevents(char *str)
+static inline void process_iSeries_events(void)
 {
-	unsigned long i;
-	unsigned long val = simple_strtoul(str, NULL, 0);
+	asm volatile ("li 0,0x5555; sc" : : : "r0", "r3");
+}
+
+static void yield_shared_processor(void)
+{
+	unsigned long tb;
+
+	HvCall_setEnabledInterrupts(HvCall_MaskIPI |
+				    HvCall_MaskLpEvent |
+				    HvCall_MaskLpProd |
+				    HvCall_MaskTimeout);
+
+	tb = get_tb();
+	/* Compute future tb value when yield should expire */
+	HvCall_yieldProcessor(HvCall_YieldTimed, tb+tb_ticks_per_jiffy);
 
 	/*
-	 * The parameter is the number of processors to share in processing
-	 * lp events.
+	 * The decrementer stops during the yield.  Force a fake decrementer
+	 * here and let the timer_interrupt code sort out the actual time.
 	 */
-	if (( val > 0) && (val <= NR_CPUS)) {
-		for (i = 1; i < val; ++i)
-			paca[i].lpqueue_ptr = paca[0].lpqueue_ptr;
+	get_paca()->lppaca.int_dword.fields.decr_int = 1;
+	process_iSeries_events();
+}
 
-		printk("lpevent processing spread over %ld processors\n", val);
-	} else {
-		printk("invalid spread_lpevents %ld\n", val);
+static int iseries_shared_idle(void)
+{
+	while (1) {
+		while (!need_resched() && !hvlpevent_is_pending()) {
+			local_irq_disable();
+			ppc64_runlatch_off();
+
+			/* Recheck with irqs off */
+			if (!need_resched() && !hvlpevent_is_pending())
+				yield_shared_processor();
+
+			HMT_medium();
+			local_irq_enable();
+		}
+
+		ppc64_runlatch_on();
+
+		if (hvlpevent_is_pending())
+			process_iSeries_events();
+
+		schedule();
 	}
 
-	return 1;
+	return 0;
 }
-__setup("spread_lpevents=", set_spread_lpevents);
+
+static int iseries_dedicated_idle(void)
+{
+	long oldval;
+
+	while (1) {
+		oldval = test_and_clear_thread_flag(TIF_NEED_RESCHED);
+
+		if (!oldval) {
+			set_thread_flag(TIF_POLLING_NRFLAG);
+
+			while (!need_resched()) {
+				ppc64_runlatch_off();
+				HMT_low();
+
+				if (hvlpevent_is_pending()) {
+					HMT_medium();
+					ppc64_runlatch_on();
+					process_iSeries_events();
+				}
+			}
+
+			HMT_medium();
+			clear_thread_flag(TIF_POLLING_NRFLAG);
+		} else {
+			set_need_resched();
+		}
+
+		ppc64_runlatch_on();
+		schedule();
+	}
+
+	return 0;
+}
+
+#ifndef CONFIG_PCI
+void __init iSeries_init_IRQ(void) { }
+#endif
 
 void __init iSeries_early_setup(void)
 {
@@ -895,5 +963,15 @@ void __init iSeries_early_setup(void)
 	ppc_md.get_rtc_time = iSeries_get_rtc_time;
 	ppc_md.calibrate_decr = iSeries_calibrate_decr;
 	ppc_md.progress = iSeries_progress;
+
+	/* XXX Implement enable_pmcs for iSeries */
+
+	if (get_paca()->lppaca.shared_proc) {
+		ppc_md.idle_loop = iseries_shared_idle;
+		printk(KERN_INFO "Using shared processor idle loop\n");
+	} else {
+		ppc_md.idle_loop = iseries_dedicated_idle;
+		printk(KERN_INFO "Using dedicated idle loop\n");
+	}
 }
 

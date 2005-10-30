@@ -5,29 +5,41 @@
  * May be copied or modified under the terms of the GNU General Public
  * License.  See linux/COPYING for more information.
  *
- * Packet writing layer for ATAPI and SCSI CD-R, CD-RW, DVD-R, and
- * DVD-RW devices (aka an exercise in block layer masturbation)
- *
- *
- * TODO: (circa order of when I will fix it)
- * - Only able to write on CD-RW media right now.
- * - check host application code on media and set it in write page
- * - interface for UDF <-> packet to negotiate a new location when a write
- *   fails.
- * - handle OPC, especially for -RW media
+ * Packet writing layer for ATAPI and SCSI CD-RW, DVD+RW, DVD-RW and
+ * DVD-RAM devices.
  *
  * Theory of operation:
  *
- * We use a custom make_request_fn function that forwards reads directly to
- * the underlying CD device. Write requests are either attached directly to
- * a live packet_data object, or simply stored sequentially in a list for
- * later processing by the kcdrwd kernel thread. This driver doesn't use
- * any elevator functionally as defined by the elevator_s struct, but the
- * underlying CD device uses a standard elevator.
+ * At the lowest level, there is the standard driver for the CD/DVD device,
+ * typically ide-cd.c or sr.c. This driver can handle read and write requests,
+ * but it doesn't know anything about the special restrictions that apply to
+ * packet writing. One restriction is that write requests must be aligned to
+ * packet boundaries on the physical media, and the size of a write request
+ * must be equal to the packet size. Another restriction is that a
+ * GPCMD_FLUSH_CACHE command has to be issued to the drive before a read
+ * command, if the previous command was a write.
  *
- * This strategy makes it possible to do very late merging of IO requests.
- * A new bio sent to pkt_make_request can be merged with a live packet_data
- * object even if the object is in the data gathering state.
+ * The purpose of the packet writing driver is to hide these restrictions from
+ * higher layers, such as file systems, and present a block device that can be
+ * randomly read and written using 2kB-sized blocks.
+ *
+ * The lowest layer in the packet writing driver is the packet I/O scheduler.
+ * Its data is defined by the struct packet_iosched and includes two bio
+ * queues with pending read and write requests. These queues are processed
+ * by the pkt_iosched_process_queue() function. The write requests in this
+ * queue are already properly aligned and sized. This layer is responsible for
+ * issuing the flush cache commands and scheduling the I/O in a good order.
+ *
+ * The next layer transforms unaligned write requests to aligned writes. This
+ * transformation requires reading missing pieces of data from the underlying
+ * block device, assembling the pieces to full packets and queuing them to the
+ * packet I/O scheduler.
+ *
+ * At the top layer there is a custom make_request_fn function that forwards
+ * read requests directly to the iosched queue and puts write requests in the
+ * unaligned write queue. A kernel thread performs the necessary read
+ * gathering to convert the unaligned writes to aligned writes and then feeds
+ * them to the packet I/O scheduler.
  *
  *************************************************************************/
 
@@ -100,10 +112,9 @@ static struct bio *pkt_bio_alloc(int nr_iovecs)
 		goto no_bio;
 	bio_init(bio);
 
-	bvl = kmalloc(nr_iovecs * sizeof(struct bio_vec), GFP_KERNEL);
+	bvl = kcalloc(nr_iovecs, sizeof(struct bio_vec), GFP_KERNEL);
 	if (!bvl)
 		goto no_bvl;
-	memset(bvl, 0, nr_iovecs * sizeof(struct bio_vec));
 
 	bio->bi_max_vecs = nr_iovecs;
 	bio->bi_io_vec = bvl;
@@ -125,10 +136,9 @@ static struct packet_data *pkt_alloc_packet_data(void)
 	int i;
 	struct packet_data *pkt;
 
-	pkt = kmalloc(sizeof(struct packet_data), GFP_KERNEL);
+	pkt = kzalloc(sizeof(struct packet_data), GFP_KERNEL);
 	if (!pkt)
 		goto no_pkt;
-	memset(pkt, 0, sizeof(struct packet_data));
 
 	pkt->w_bio = pkt_bio_alloc(PACKET_MAX_SIZE);
 	if (!pkt->w_bio)
@@ -219,7 +229,7 @@ static int pkt_grow_pktlist(struct pktcdvd_device *pd, int nr_packets)
 	return 1;
 }
 
-static void *pkt_rb_alloc(unsigned int __nocast gfp_mask, void *data)
+static void *pkt_rb_alloc(gfp_t gfp_mask, void *data)
 {
 	return kmalloc(sizeof(struct pkt_rb_node), gfp_mask);
 }
@@ -467,14 +477,12 @@ static int pkt_set_speed(struct pktcdvd_device *pd, unsigned write_speed, unsign
  * Queue a bio for processing by the low-level CD device. Must be called
  * from process context.
  */
-static void pkt_queue_bio(struct pktcdvd_device *pd, struct bio *bio, int high_prio_read)
+static void pkt_queue_bio(struct pktcdvd_device *pd, struct bio *bio)
 {
 	spin_lock(&pd->iosched.lock);
 	if (bio_data_dir(bio) == READ) {
 		pkt_add_list_last(bio, &pd->iosched.read_queue,
 				  &pd->iosched.read_queue_tail);
-		if (high_prio_read)
-			pd->iosched.high_prio_read = 1;
 	} else {
 		pkt_add_list_last(bio, &pd->iosched.write_queue,
 				  &pd->iosched.write_queue_tail);
@@ -490,15 +498,16 @@ static void pkt_queue_bio(struct pktcdvd_device *pd, struct bio *bio, int high_p
  * requirements for CDRW drives:
  * - A cache flush command must be inserted before a read request if the
  *   previous request was a write.
- * - Switching between reading and writing is slow, so don't it more often
+ * - Switching between reading and writing is slow, so don't do it more often
  *   than necessary.
+ * - Optimize for throughput at the expense of latency. This means that streaming
+ *   writes will never be interrupted by a read, but if the drive has to seek
+ *   before the next write, switch to reading instead if there are any pending
+ *   read requests.
  * - Set the read speed according to current usage pattern. When only reading
  *   from the device, it's best to use the highest possible read speed, but
  *   when switching often between reading and writing, it's better to have the
  *   same read and write speeds.
- * - Reads originating from user space should have higher priority than reads
- *   originating from pkt_gather_data, because some process is usually waiting
- *   on reads of the first kind.
  */
 static void pkt_iosched_process_queue(struct pktcdvd_device *pd)
 {
@@ -512,21 +521,24 @@ static void pkt_iosched_process_queue(struct pktcdvd_device *pd)
 
 	for (;;) {
 		struct bio *bio;
-		int reads_queued, writes_queued, high_prio_read;
+		int reads_queued, writes_queued;
 
 		spin_lock(&pd->iosched.lock);
 		reads_queued = (pd->iosched.read_queue != NULL);
 		writes_queued = (pd->iosched.write_queue != NULL);
-		if (!reads_queued)
-			pd->iosched.high_prio_read = 0;
-		high_prio_read = pd->iosched.high_prio_read;
 		spin_unlock(&pd->iosched.lock);
 
 		if (!reads_queued && !writes_queued)
 			break;
 
 		if (pd->iosched.writing) {
-			if (high_prio_read || (!writes_queued && reads_queued)) {
+			int need_write_seek = 1;
+			spin_lock(&pd->iosched.lock);
+			bio = pd->iosched.write_queue;
+			spin_unlock(&pd->iosched.lock);
+			if (bio && (bio->bi_sector == pd->iosched.last_write))
+				need_write_seek = 0;
+			if (need_write_seek && reads_queued) {
 				if (atomic_read(&pd->cdrw.pending_bios) > 0) {
 					VPRINTK("pktcdvd: write, waiting\n");
 					break;
@@ -559,8 +571,10 @@ static void pkt_iosched_process_queue(struct pktcdvd_device *pd)
 
 		if (bio_data_dir(bio) == READ)
 			pd->iosched.successive_reads += bio->bi_size >> 10;
-		else
+		else {
 			pd->iosched.successive_reads = 0;
+			pd->iosched.last_write = bio->bi_sector + bio_sectors(bio);
+		}
 		if (pd->iosched.successive_reads >= HI_SPEED_SWITCH) {
 			if (pd->read_speed == pd->write_speed) {
 				pd->read_speed = MAX_SPEED;
@@ -655,7 +669,6 @@ static void pkt_make_local_copy(struct packet_data *pkt, struct page **pages, in
 		}
 		offs += CD_FRAMESIZE;
 		if (offs >= PAGE_SIZE) {
-			BUG_ON(offs > PAGE_SIZE);
 			offs = 0;
 			p++;
 		}
@@ -720,12 +733,6 @@ static void pkt_gather_data(struct pktcdvd_device *pd, struct packet_data *pkt)
 	atomic_set(&pkt->io_wait, 0);
 	atomic_set(&pkt->io_errors, 0);
 
-	if (pkt->cache_valid) {
-		VPRINTK("pkt_gather_data: zone %llx cached\n",
-			(unsigned long long)pkt->sector);
-		goto out_account;
-	}
-
 	/*
 	 * Figure out which frames we need to read before we can write.
 	 */
@@ -734,12 +741,19 @@ static void pkt_gather_data(struct pktcdvd_device *pd, struct packet_data *pkt)
 	for (bio = pkt->orig_bios; bio; bio = bio->bi_next) {
 		int first_frame = (bio->bi_sector - pkt->sector) / (CD_FRAMESIZE >> 9);
 		int num_frames = bio->bi_size / CD_FRAMESIZE;
+		pd->stats.secs_w += num_frames * (CD_FRAMESIZE >> 9);
 		BUG_ON(first_frame < 0);
 		BUG_ON(first_frame + num_frames > pkt->frames);
 		for (f = first_frame; f < first_frame + num_frames; f++)
 			written[f] = 1;
 	}
 	spin_unlock(&pkt->lock);
+
+	if (pkt->cache_valid) {
+		VPRINTK("pkt_gather_data: zone %llx cached\n",
+			(unsigned long long)pkt->sector);
+		goto out_account;
+	}
 
 	/*
 	 * Schedule reads for missing parts of the packet.
@@ -765,7 +779,7 @@ static void pkt_gather_data(struct pktcdvd_device *pd, struct packet_data *pkt)
 
 		atomic_inc(&pkt->io_wait);
 		bio->bi_rw = READ;
-		pkt_queue_bio(pd, bio, 0);
+		pkt_queue_bio(pd, bio);
 		frames_read++;
 	}
 
@@ -774,7 +788,6 @@ out_account:
 		frames_read, (unsigned long long)pkt->sector);
 	pd->stats.pkt_started++;
 	pd->stats.secs_rg += frames_read * (CD_FRAMESIZE >> 9);
-	pd->stats.secs_w += pd->settings.size;
 }
 
 /*
@@ -790,10 +803,11 @@ static struct packet_data *pkt_get_packet_data(struct pktcdvd_device *pd, int zo
 			list_del_init(&pkt->list);
 			if (pkt->sector != zone)
 				pkt->cache_valid = 0;
-			break;
+			return pkt;
 		}
 	}
-	return pkt;
+	BUG();
+	return NULL;
 }
 
 static void pkt_put_packet_data(struct pktcdvd_device *pd, struct packet_data *pkt)
@@ -937,12 +951,10 @@ try_next_bio:
 	}
 
 	pkt = pkt_get_packet_data(pd, zone);
-	BUG_ON(!pkt);
 
 	pd->current_sector = zone + pd->settings.size;
 	pkt->sector = zone;
 	pkt->frames = pd->settings.size >> 2;
-	BUG_ON(pkt->frames > PACKET_MAX_SIZE);
 	pkt->write_size = 0;
 
 	/*
@@ -1062,7 +1074,7 @@ static void pkt_start_write(struct pktcdvd_device *pd, struct packet_data *pkt)
 
 	atomic_set(&pkt->io_wait, 1);
 	pkt->w_bio->bi_rw = WRITE;
-	pkt_queue_bio(pd, pkt->w_bio, 0);
+	pkt_queue_bio(pd, pkt->w_bio);
 }
 
 static void pkt_finish_packet(struct packet_data *pkt, int uptodate)
@@ -1247,8 +1259,7 @@ static int kcdrwd(void *foobar)
 			VPRINTK("kcdrwd: wake up\n");
 
 			/* make swsusp happy with our thread */
-			if (current->flags & PF_FREEZE)
-				refrigerator(PF_FREEZE);
+			try_to_freeze();
 
 			list_for_each_entry(pkt, &pd->cdrw.pkt_active_list, list) {
 				if (!pkt->sleep_time)
@@ -1632,6 +1643,10 @@ static int pkt_probe_settings(struct pktcdvd_device *pd)
 	if (pd->settings.size == 0) {
 		printk("pktcdvd: detected zero packet size!\n");
 		pd->settings.size = 128;
+	}
+	if (pd->settings.size > PACKET_MAX_SECTORS) {
+		printk("pktcdvd: packet size is too big\n");
+		return -ENXIO;
 	}
 	pd->settings.fp = ti.fp;
 	pd->offset = (be32_to_cpu(ti.track_start) << 2) & (pd->settings.size - 1);
@@ -2067,7 +2082,7 @@ static int pkt_close(struct inode *inode, struct file *file)
 }
 
 
-static void *psd_pool_alloc(unsigned int __nocast gfp_mask, void *data)
+static void *psd_pool_alloc(gfp_t gfp_mask, void *data)
 {
 	return kmalloc(sizeof(struct packet_stacked_data), gfp_mask);
 }
@@ -2120,7 +2135,7 @@ static int pkt_make_request(request_queue_t *q, struct bio *bio)
 		cloned_bio->bi_private = psd;
 		cloned_bio->bi_end_io = pkt_end_io_read_cloned;
 		pd->stats.secs_r += bio->bi_size >> 9;
-		pkt_queue_bio(pd, cloned_bio, 1);
+		pkt_queue_bio(pd, cloned_bio);
 		return 0;
 	}
 
@@ -2195,7 +2210,6 @@ static int pkt_make_request(request_queue_t *q, struct bio *bio)
 	 * No matching packet found. Store the bio in the work queue.
 	 */
 	node = mempool_alloc(pd->rb_pool, GFP_NOIO);
-	BUG_ON(!node);
 	node->bio = bio;
 	spin_lock(&pd->lock);
 	BUG_ON(pd->bio_queue_size < 0);
@@ -2403,7 +2417,6 @@ static int pkt_ioctl(struct inode *inode, struct file *file, unsigned int cmd, u
 	struct pktcdvd_device *pd = inode->i_bdev->bd_disk->private_data;
 
 	VPRINTK("pkt_ioctl: cmd %x, dev %d:%d\n", cmd, imajor(inode), iminor(inode));
-	BUG_ON(!pd);
 
 	switch (cmd) {
 	/*
@@ -2474,10 +2487,9 @@ static int pkt_setup_dev(struct pkt_ctrl_command *ctrl_cmd)
 		return -EBUSY;
 	}
 
-	pd = kmalloc(sizeof(struct pktcdvd_device), GFP_KERNEL);
+	pd = kzalloc(sizeof(struct pktcdvd_device), GFP_KERNEL);
 	if (!pd)
 		return ret;
-	memset(pd, 0, sizeof(struct pktcdvd_device));
 
 	pd->rb_pool = mempool_create(PKT_RB_POOL_SIZE, pkt_rb_alloc, pkt_rb_free, NULL);
 	if (!pd->rb_pool)

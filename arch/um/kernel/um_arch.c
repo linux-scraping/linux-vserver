@@ -38,6 +38,9 @@
 #include "choose-mode.h"
 #include "mode_kern.h"
 #include "mode.h"
+#ifdef UML_CONFIG_MODE_SKAS
+#include "skas.h"
+#endif
 
 #define DEFAULT_COMMAND_LINE "root=98:0"
 
@@ -123,7 +126,7 @@ unsigned long start_vm;
 unsigned long end_vm;
 int ncpus = 1;
 
-#ifdef CONFIG_MODE_TT
+#ifdef CONFIG_CMDLINE_ON_HOST
 /* Pointer set in linux_main, the array itself is private to each thread,
  * and changed at address space creation time so this poses no concurrency
  * problems.
@@ -138,7 +141,7 @@ long physmem_size = 32 * 1024 * 1024;
 
 void set_cmdline(char *cmd)
 {
-#ifdef CONFIG_MODE_TT
+#ifdef CONFIG_CMDLINE_ON_HOST
 	char *umid, *ptr;
 
 	if(CHOOSE_MODE(honeypot, 0)) return;
@@ -318,6 +321,7 @@ int linux_main(int argc, char **argv)
 	unsigned long avail, diff;
 	unsigned long virtmem_size, max_physmem;
 	unsigned int i, add;
+	char * mode;
 
 	for (i = 1; i < argc; i++){
 		if((i == 1) && (argv[i][0] == ' ')) continue;
@@ -329,6 +333,9 @@ int linux_main(int argc, char **argv)
 	if(have_root == 0)
 		add_arg(DEFAULT_COMMAND_LINE);
 
+	os_early_checks();
+	if (force_tt)
+		clear_can_do_skas();
 	mode_tt = force_tt ? 1 : !can_do_skas();
 #ifndef CONFIG_MODE_TT
 	if (mode_tt) {
@@ -338,13 +345,23 @@ int linux_main(int argc, char **argv)
 		exit(1);
 	}
 #endif
+
+#ifndef CONFIG_MODE_SKAS
+	mode = "TT";
+#else
+	/* Show to the user the result of selection */
+	if (mode_tt)
+		mode = "TT";
+	else if (proc_mm && ptrace_faultinfo)
+		mode = "SKAS3";
+	else
+		mode = "SKAS0";
+#endif
+
+	printf("UML running in %s mode\n", mode);
+
 	uml_start = CHOOSE_MODE_PROC(set_task_sizes_tt, set_task_sizes_skas, 0,
 				     &host_task_size, &task_size);
-
-	/* Need to check this early because mmapping happens before the
-	 * kernel is running.
-	 */
-	check_tmpexec();
 
 	brk_start = (unsigned long) sbrk(0);
 	CHOOSE_MODE_PROC(before_mem_tt, before_mem_skas, brk_start);
@@ -366,7 +383,7 @@ int linux_main(int argc, char **argv)
 
 	setup_machinename(system_utsname.machine);
 
-#ifdef CONFIG_MODE_TT
+#ifdef CONFIG_CMDLINE_ON_HOST
 	argv1_begin = argv[1];
 	argv1_end = &argv[1][strlen(argv[1])];
 #endif
@@ -451,7 +468,6 @@ void __init setup_arch(char **cmdline_p)
 void __init check_bugs(void)
 {
 	arch_check_bugs();
-	check_ptrace();
 	check_sigio();
 	check_devanon();
 }

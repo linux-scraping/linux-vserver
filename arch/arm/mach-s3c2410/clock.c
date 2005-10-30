@@ -98,7 +98,10 @@ struct clk *clk_get(struct device *dev, const char *id)
 	struct clk *clk = ERR_PTR(-ENOENT);
 	int idno;
 
-	idno = (dev == NULL) ? -1 : to_platform_device(dev)->id;
+	if (dev == NULL || dev->bus != &platform_bus_type)
+		idno = -1;
+	else
+		idno = to_platform_device(dev)->id;
 
 	down(&clocks_sem);
 
@@ -388,6 +391,7 @@ int __init s3c24xx_setup_clocks(unsigned long xtal,
 				unsigned long hclk,
 				unsigned long pclk)
 {
+	unsigned long clkslow = __raw_readl(S3C2410_CLKSLOW);
 	struct clk *clkp = init_clocks;
 	int ptr;
 	int ret;
@@ -446,62 +450,13 @@ int __init s3c24xx_setup_clocks(unsigned long xtal,
 		}
 	}
 
-	return 0;
-}
+	/* show the clock-slow value */
 
-/* S3C2440 extended clock support */
-
-#ifdef CONFIG_CPU_S3C2440
-
-static struct clk s3c2440_clk_upll = {
-	.name		= "upll",
-	.id		= -1,
-};
-
-static struct clk s3c2440_clk_cam = {
-	.name		= "camif",
-	.parent		= &clk_h,
-	.id		= -1,
-	.enable		= s3c24xx_clkcon_enable,
-	.ctrlbit	= S3C2440_CLKCON_CAMERA,
-};
-
-static struct clk s3c2440_clk_ac97 = {
-	.name		= "ac97",
-	.parent		= &clk_p,
-	.id		= -1,
-	.enable		= s3c24xx_clkcon_enable,
-	.ctrlbit	= S3C2440_CLKCON_CAMERA,
-};
-
-static int s3c2440_clk_add(struct sys_device *sysdev)
-{
-	unsigned long upllcon = __raw_readl(S3C2410_UPLLCON);
-
-	s3c2440_clk_upll.rate = s3c2410_get_pll(upllcon, clk_xtal.rate);
-
-	printk("S3C2440: Clock Support, UPLL %ld.%03ld MHz\n",
-	       print_mhz(s3c2440_clk_upll.rate));
-
-	s3c24xx_register_clock(&s3c2440_clk_ac97);
-	s3c24xx_register_clock(&s3c2440_clk_cam);
-	s3c24xx_register_clock(&s3c2440_clk_upll);
-
-	clk_disable(&s3c2440_clk_ac97);
-	clk_disable(&s3c2440_clk_cam);
+	printk("CLOCK: Slow mode (%ld.%ld MHz), %s, MPLL %s, UPLL %s\n",
+	       print_mhz(xtal / ( 2 * S3C2410_CLKSLOW_GET_SLOWVAL(clkslow))),
+	       (clkslow & S3C2410_CLKSLOW_SLOW) ? "slow" : "fast",
+	       (clkslow & S3C2410_CLKSLOW_MPLL_OFF) ? "off" : "on",
+	       (clkslow & S3C2410_CLKSLOW_UCLK_OFF) ? "off" : "on");
 
 	return 0;
 }
-
-static struct sysdev_driver s3c2440_clk_driver = {
-	.add	= s3c2440_clk_add,
-};
-
-static int s3c24xx_clk_driver(void)
-{
-	return sysdev_driver_register(&s3c2440_sysclass, &s3c2440_clk_driver);
-}
-
-arch_initcall(s3c24xx_clk_driver);
-
-#endif /* CONFIG_CPU_S3C2440 */

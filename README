@@ -87,6 +87,16 @@ INSTALLING the kernel:
    kernel source.  Patches are applied from the current directory, but
    an alternative directory can be specified as the second argument.
 
+ - If you are upgrading between releases using the stable series patches
+   (for example, patch-2.6.xx.y), note that these "dot-releases" are
+   not incremental and must be applied to the 2.6.xx base tree. For
+   example, if your base kernel is 2.6.12 and you want to apply the
+   2.6.12.3 patch, you do not and indeed must not first apply the
+   2.6.12.1 and 2.6.12.2 patches. Similarly, if you are running kernel
+   version 2.6.12.2 and want to jump to 2.6.12.3, you must first
+   reverse the 2.6.12.2 patch (that is, patch -R) _before_ applying
+   the 2.6.12.3 patch.
+
  - Make sure you have no stale .o files and dependencies lying around:
 
 		cd linux
@@ -139,6 +149,9 @@ CONFIGURING the kernel:
 	"make gconfig"     X windows (Gtk) based configuration tool.
 	"make oldconfig"   Default all questions based on the contents of
 			   your existing ./.config file.
+	"make silentoldconfig"
+			   Like above, but avoids cluttering the screen
+			   with questions already answered.
    
 	NOTES on "make config":
 	- having unnecessary drivers will make the kernel bigger, and can
@@ -158,9 +171,6 @@ CONFIGURING the kernel:
 	  break bad code to find kernel problems (kmalloc()).  Thus you
 	  should probably answer 'n' to the questions for
           "development", "experimental", or "debugging" features.
-
- - Check the top Makefile for further site-dependent configuration
-   (default SVGA mode etc). 
 
 COMPILING the kernel:
 
@@ -189,6 +199,9 @@ COMPILING the kernel:
    are installing a new kernel with the same version number as your
    working kernel, make a backup of your modules directory before you
    do a "make modules_install".
+   Alternatively, before compiling, use the kernel config option
+   "LOCALVERSION" to append a unique suffix to the regular kernel version.
+   LOCALVERSION can be set in the "General Setup" menu.
 
  - In order to boot your new kernel, you'll need to copy the kernel
    image (e.g. .../linux/arch/i386/boot/bzImage after compilation)

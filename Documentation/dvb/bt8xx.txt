@@ -19,7 +19,7 @@ Because of this, you need to enable
 
 Furthermore you need to enable
 "Device drivers" => "Multimedia devices" => "Digital Video Broadcasting Devices"
-  => "DVB for Linux" "DVB Core Support" "Nebula/Pinnacle PCTV/TwinHan PCI Cards"
+  => "DVB for Linux" "DVB Core Support" "BT8xx based PCI cards"
 
 2) Loading Modules
 ==================
@@ -52,9 +52,14 @@ mailing list.
 
 The DST module takes a couple of useful parameters.
 
-verbose takes values 0 to 5. These values control the verbosity level.
+verbose takes values 0 to 4. These values control the verbosity level,
+and can be used to debug also.
 
-debug takes values 0 and 1. You can either disable or enable debugging.
+verbose=0 means complete disabling of messages
+	1 only error messages are displayed
+	2 notifications are also displayed
+	3 informational messages are also displayed
+	4 debug setting
 
 dst_addons takes values 0 and 0x20. A value of 0 means it is a FTA card.
 0x20 means it has a Conditional Access slot.

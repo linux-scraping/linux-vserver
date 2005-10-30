@@ -128,7 +128,7 @@ asmlinkage long sys_gettimeofday(struct timeval __user *tv, struct timezone __us
  * as real UNIX machines always do it. This avoids all headaches about
  * daylight saving times and warping kernel clocks.
  */
-inline static void warp_clock(void)
+static inline void warp_clock(void)
 {
 	write_seqlock_irq(&xtime_lock);
 	wall_to_monotonic.tv_sec -= sys_tz.tz_minuteswest * 60;
@@ -570,6 +570,7 @@ void getnstimeofday(struct timespec *tv)
 	tv->tv_sec = x.tv_sec;
 	tv->tv_nsec = x.tv_usec * NSEC_PER_USEC;
 }
+EXPORT_SYMBOL_GPL(getnstimeofday);
 #endif
 
 #if (BITS_PER_LONG < 64)

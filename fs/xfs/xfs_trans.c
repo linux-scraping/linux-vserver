@@ -276,7 +276,7 @@ xfs_trans_reserve(
 
 		error = xfs_log_reserve(tp->t_mountp, logspace, logcount,
 					&tp->t_ticket,
-					XFS_TRANSACTION, log_flags);
+					XFS_TRANSACTION, log_flags, tp->t_type);
 		if (error) {
 			goto undo_blocks;
 		}
@@ -328,25 +328,6 @@ undo_blocks:
         PFLAGS_RESTORE_FSTRANS(&tp->t_pflags);
 
 	return (error);
-}
-
-
-/*
- * This is called to set the a callback to be called when the given
- * transaction is committed to disk.  The transaction pointer and the
- * argument pointer will be passed to the callback routine.
- *
- * Only one callback can be associated with any single transaction.
- */
-void
-xfs_trans_callback(
-	xfs_trans_t		*tp,
-	xfs_trans_callback_t	callback,
-	void			*arg)
-{
-	ASSERT(tp->t_callback == NULL);
-	tp->t_callback = callback;
-	tp->t_callarg = arg;
 }
 
 
@@ -551,7 +532,7 @@ xfs_trans_apply_sb_deltas(
  *
  * This is done efficiently with a single call to xfs_mod_incore_sb_batch().
  */
-void
+STATIC void
 xfs_trans_unreserve_and_mod_sb(
 	xfs_trans_t	*tp)
 {
@@ -1051,6 +1032,7 @@ xfs_trans_fill_vecs(
 	tp->t_header.th_num_items = nitems;
 	log_vector->i_addr = (xfs_caddr_t)&tp->t_header;
 	log_vector->i_len = sizeof(xfs_trans_header_t);
+	XLOG_VEC_SET_TYPE(log_vector, XLOG_REG_TYPE_TRANSHDR);
 }
 
 

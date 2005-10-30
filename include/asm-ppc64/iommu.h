@@ -82,24 +82,6 @@ struct iommu_table {
 	unsigned long *it_map;       /* A simple allocation bitmap for now */
 };
 
-#ifdef CONFIG_PPC_ISERIES
-struct iommu_table_cb {
-	unsigned long	itc_busno;	/* Bus number for this tce table */
-	unsigned long	itc_start;	/* Will be NULL for secondary */
-	unsigned long	itc_totalsize;	/* Size (in pages) of whole table */
-	unsigned long	itc_offset;	/* Index into real tce table of the
-					   start of our section */
-	unsigned long	itc_size;	/* Size (in pages) of our section */
-	unsigned long	itc_index;	/* Index of this tce table */
-	unsigned short	itc_maxtables;	/* Max num of tables for partition */
-	unsigned char	itc_virtbus;	/* Flag to indicate virtual bus */
- 	unsigned char	itc_slotno;	/* IOA Tce Slot Index */
- 	unsigned char	itc_rsvd[4];
-};
-
-extern struct iommu_table vio_tce_table;      /* Tce table for virtual bus */
-#endif /* CONFIG_PPC_ISERIES */
-
 struct scatterlist;
 
 #ifdef CONFIG_PPC_MULTIPLATFORM
@@ -122,12 +104,6 @@ extern void iommu_devnode_init_pSeries(struct device_node *dn);
 
 #ifdef CONFIG_PPC_ISERIES
 
-/* Walks all buses and creates iommu tables */
-extern void iommu_setup_iSeries(void);
-
-/* Initializes tables for bio buses */
-extern void __init iommu_vio_init(void);
-
 struct iSeries_Device_Node;
 /* Creates table for an individual device node */
 extern void iommu_devnode_init_iSeries(struct iSeries_Device_Node *dn);
@@ -146,7 +122,7 @@ extern void iommu_unmap_sg(struct iommu_table *tbl, struct scatterlist *sglist,
 		int nelems, enum dma_data_direction direction);
 
 extern void *iommu_alloc_coherent(struct iommu_table *tbl, size_t size,
-		dma_addr_t *dma_handle, unsigned int __nocast flag);
+		dma_addr_t *dma_handle, gfp_t flag);
 extern void iommu_free_coherent(struct iommu_table *tbl, size_t size,
 		void *vaddr, dma_addr_t dma_handle);
 extern dma_addr_t iommu_map_single(struct iommu_table *tbl, void *vaddr,
@@ -158,8 +134,12 @@ extern void iommu_init_early_pSeries(void);
 extern void iommu_init_early_iSeries(void);
 extern void iommu_init_early_u3(void);
 
+#ifdef CONFIG_PCI
 extern void pci_iommu_init(void);
 extern void pci_direct_iommu_init(void);
+#else
+static inline void pci_iommu_init(void) { }
+#endif
 
 extern void alloc_u3_dart_table(void);
 

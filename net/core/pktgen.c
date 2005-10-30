@@ -151,7 +151,7 @@
 #include <asm/timex.h>
 
 
-#define VERSION  "pktgen v2.61: Packet Generator for packet performance testing.\n"
+#define VERSION  "pktgen v2.62: Packet Generator for packet performance testing.\n"
 
 /* #define PG_DEBUG(a) a */
 #define PG_DEBUG(a) 
@@ -186,7 +186,7 @@
 
 /* Used to help with determining the pkts on receive */
 #define PKTGEN_MAGIC 0xbe9be955
-#define PG_PROC_DIR "pktgen"
+#define PG_PROC_DIR "net/pktgen"
 
 #define MAX_CFLOWS  65536
 
@@ -363,7 +363,7 @@ struct pktgen_thread {
  * All Rights Reserved.
  *
  */
-inline static s64 divremdi3(s64 x, s64 y, int type) 
+static inline s64 divremdi3(s64 x, s64 y, int type)
 {
         u64 a = (x < 0) ? -x : x;
         u64 b = (y < 0) ? -y : y;
@@ -503,7 +503,7 @@ static int pg_delay_d = 0;
 static int pg_clone_skb_d = 0;
 static int debug = 0;
 
-static spinlock_t _thread_lock = SPIN_LOCK_UNLOCKED;
+static DEFINE_SPINLOCK(_thread_lock);
 static struct pktgen_thread *pktgen_threads = NULL;
 
 static char module_fname[128];
@@ -1452,8 +1452,7 @@ static int proc_thread_write(struct file *file, const char __user *user_buffer,
 		thread_lock();
 		t->control |= T_REMDEV;
 		thread_unlock();
-		current->state = TASK_INTERRUPTIBLE;
-		schedule_timeout(HZ/8);  /* Propagate thread->control  */
+		schedule_timeout_interruptible(msecs_to_jiffies(125));  /* Propagate thread->control  */
 		ret = count;
                 sprintf(pg_result, "OK: rem_device_all");
 		goto out;
@@ -1477,18 +1476,7 @@ static int proc_thread_write(struct file *file, const char __user *user_buffer,
 
 static int create_proc_dir(void)
 {
-        int     len;
-        /*  does proc_dir already exists */
-        len = strlen(PG_PROC_DIR);
-
-        for (pg_proc_dir = proc_net->subdir; pg_proc_dir; pg_proc_dir=pg_proc_dir->next) {
-                if ((pg_proc_dir->namelen == len) &&
-		    (! memcmp(pg_proc_dir->name, PG_PROC_DIR, len))) 
-                        break;
-        }
-        
-        if (!pg_proc_dir) 
-                pg_proc_dir = create_proc_entry(PG_PROC_DIR, S_IFDIR, proc_net);
+	pg_proc_dir = proc_mkdir(PG_PROC_DIR, NULL);
         
         if (!pg_proc_dir) 
                 return -ENODEV;
@@ -1498,7 +1486,7 @@ static int create_proc_dir(void)
 
 static int remove_proc_dir(void)
 {
-        remove_proc_entry(PG_PROC_DIR, proc_net);
+        remove_proc_entry(PG_PROC_DIR, NULL);
         return 0;
 }
 
@@ -1679,13 +1667,12 @@ static void pktgen_setup_inject(struct pktgen_dev *pkt_dev)
 			struct in_device *in_dev; 
 
 			rcu_read_lock();
-			in_dev = __in_dev_get(pkt_dev->odev);
+			in_dev = __in_dev_get_rcu(pkt_dev->odev);
 			if (in_dev) {
 				if (in_dev->ifa_list) {
 					pkt_dev->saddr_min = in_dev->ifa_list->ifa_address;
 					pkt_dev->saddr_max = pkt_dev->saddr_min;
 				}
-				__in_dev_put(in_dev);	
 			}
 			rcu_read_unlock();
 		}
@@ -1716,10 +1703,9 @@ static void spin(struct pktgen_dev *pkt_dev, __u64 spin_until_us)
 	printk(KERN_INFO "sleeping for %d\n", (int)(spin_until_us - now));
 	while (now < spin_until_us) {
 		/* TODO: optimise sleeping behavior */
-		if (spin_until_us - now > (1000000/HZ)+1) {
-			current->state = TASK_INTERRUPTIBLE;
-			schedule_timeout(1);
-		} else if (spin_until_us - now > 100) {
+		if (spin_until_us - now > jiffies_to_usecs(1)+1)
+			schedule_timeout_interruptible(1);
+		else if (spin_until_us - now > 100) {
 			do_softirq();
 			if (!pkt_dev->running)
 				return;
@@ -1921,6 +1907,11 @@ static struct sk_buff *fill_packet_ipv4(struct net_device *odev,
 	struct iphdr *iph;
         struct pktgen_hdr *pgh = NULL;
         
+	/* Update any of the values, used when we're incrementing various
+	 * fields.
+	 */
+	mod_cur_headers(pkt_dev);
+
 	skb = alloc_skb(pkt_dev->cur_pkt_size + 64 + 16, GFP_ATOMIC);
 	if (!skb) {
 		sprintf(pkt_dev->result, "No memory");
@@ -1933,11 +1924,6 @@ static struct sk_buff *fill_packet_ipv4(struct net_device *odev,
 	eth = (__u8 *) skb_push(skb, 14);
 	iph = (struct iphdr *)skb_put(skb, sizeof(struct iphdr));
 	udph = (struct udphdr *)skb_put(skb, sizeof(struct udphdr));
-
-        /* Update any of the values, used when we're incrementing various
-         * fields.
-         */
-        mod_cur_headers(pkt_dev);
 
 	memcpy(eth, pkt_dev->hh, 12);
 	*(u16*)&eth[12] = __constant_htons(ETH_P_IP);
@@ -2192,7 +2178,12 @@ static struct sk_buff *fill_packet_ipv6(struct net_device *odev,
 	int datalen;
 	struct ipv6hdr *iph;
         struct pktgen_hdr *pgh = NULL;
-        
+
+	/* Update any of the values, used when we're incrementing various
+	 * fields.
+	 */
+	mod_cur_headers(pkt_dev);
+
 	skb = alloc_skb(pkt_dev->cur_pkt_size + 64 + 16, GFP_ATOMIC);
 	if (!skb) {
 		sprintf(pkt_dev->result, "No memory");
@@ -2206,17 +2197,9 @@ static struct sk_buff *fill_packet_ipv6(struct net_device *odev,
 	iph = (struct ipv6hdr *)skb_put(skb, sizeof(struct ipv6hdr));
 	udph = (struct udphdr *)skb_put(skb, sizeof(struct udphdr));
 
-
-        /* Update any of the values, used when we're incrementing various
-         * fields.
-         */
-	mod_cur_headers(pkt_dev);
-
-	
 	memcpy(eth, pkt_dev->hh, 12);
 	*(u16*)&eth[12] = __constant_htons(ETH_P_IPV6);
-	
-        
+
 	datalen = pkt_dev->cur_pkt_size-14- 
 		sizeof(struct ipv6hdr)-sizeof(struct udphdr); /* Eth + IPh + UDPh */
 
@@ -2452,8 +2435,7 @@ static void pktgen_run_all_threads(void)
 	}
 	thread_unlock();
 
-	current->state = TASK_INTERRUPTIBLE;
-	schedule_timeout(HZ/8);  /* Propagate thread->control  */
+	schedule_timeout_interruptible(msecs_to_jiffies(125));  /* Propagate thread->control  */
 			
 	pktgen_wait_all_threads_run();
 }
@@ -2914,7 +2896,7 @@ static int pktgen_add_device(struct pktgen_thread *t, const char* ifname)
                 pkt_dev->udp_dst_max = 9;
 
                 strncpy(pkt_dev->ifname, ifname, 31);
-                sprintf(pkt_dev->fname, "net/%s/%s", PG_PROC_DIR, ifname);
+                sprintf(pkt_dev->fname, "%s/%s", PG_PROC_DIR, ifname);
 
                 if (! pktgen_setup_dev(pkt_dev)) {
                         printk("pktgen: ERROR: pktgen_setup_dev failed.\n");
@@ -2987,7 +2969,7 @@ static int pktgen_create_thread(const char* name, int cpu)
         spin_lock_init(&t->if_lock);
 	t->cpu = cpu;
         
-        sprintf(t->fname, "net/%s/%s", PG_PROC_DIR, t->name);
+        sprintf(t->fname, "%s/%s", PG_PROC_DIR, t->name);
         t->proc_ent = create_proc_entry(t->fname, 0600, NULL);
         if (!t->proc_ent) {
                 printk("pktgen: cannot create %s procfs entry.\n", t->fname);
@@ -3070,7 +3052,7 @@ static int __init pg_init(void)
 
 	create_proc_dir();
 
-        sprintf(module_fname, "net/%s/pgctrl", PG_PROC_DIR);
+        sprintf(module_fname, "%s/pgctrl", PG_PROC_DIR);
         module_proc_ent = create_proc_entry(module_fname, 0600, NULL);
         if (!module_proc_ent) {
                 printk("pktgen: ERROR: cannot create %s procfs entry.\n", module_fname);

@@ -59,16 +59,6 @@ module_param(load_all, bool, 0444);
 MODULE_PARM_DESC(load_all, "Allow to load the non-whitelisted cards");
 
 
-#ifndef PCI_VENDOR_ID_BROOKTREE
-#define PCI_VENDOR_ID_BROOKTREE 0x109e
-#endif
-#ifndef PCI_DEVICE_ID_BROOKTREE_878
-#define PCI_DEVICE_ID_BROOKTREE_878 0x0878
-#endif
-#ifndef PCI_DEVICE_ID_BROOKTREE_879
-#define PCI_DEVICE_ID_BROOKTREE_879 0x0879
-#endif
-
 /* register offsets */
 #define REG_INT_STAT		0x100	/* interrupt status */
 #define REG_INT_MASK		0x104	/* interrupt mask */
@@ -720,7 +710,7 @@ static int __devinit snd_bt87x_create(snd_card_t *card,
 	if (err < 0)
 		return err;
 
-	chip = kcalloc(1, sizeof(*chip), GFP_KERNEL);
+	chip = kzalloc(sizeof(*chip), GFP_KERNEL);
 	if (!chip) {
 		pci_disable_device(pci);
 		return -ENOMEM;
@@ -798,13 +788,15 @@ static struct {
 	{0x270f, 0xfc00}, /* Chaintech Digitop DST-1000 DVB-S */
 };
 
+static struct pci_driver driver;
+
 /* return the rate of the card, or a negative value if it's blacklisted */
 static int __devinit snd_bt87x_detect_card(struct pci_dev *pci)
 {
 	int i;
 	const struct pci_device_id *supported;
 
-	supported = pci_match_device(snd_bt87x_ids, pci);
+	supported = pci_match_device(&driver, pci);
 	if (supported)
 		return supported->driver_data;
 
@@ -909,6 +901,7 @@ static struct pci_device_id snd_bt87x_default_ids[] = {
 
 static struct pci_driver driver = {
 	.name = "Bt87x",
+	.owner = THIS_MODULE,
 	.id_table = snd_bt87x_ids,
 	.probe = snd_bt87x_probe,
 	.remove = __devexit_p(snd_bt87x_remove),
@@ -918,7 +911,7 @@ static int __init alsa_card_bt87x_init(void)
 {
 	if (load_all)
 		driver.id_table = snd_bt87x_default_ids;
-	return pci_module_init(&driver);
+	return pci_register_driver(&driver);
 }
 
 static void __exit alsa_card_bt87x_exit(void)

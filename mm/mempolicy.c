@@ -88,7 +88,7 @@ static kmem_cache_t *sn_cache;
    policied. */
 static int policy_zone;
 
-static struct mempolicy default_policy = {
+struct mempolicy default_policy = {
 	.refcnt = ATOMIC_INIT(1), /* never free it */
 	.policy = MPOL_DEFAULT,
 };
@@ -238,46 +238,80 @@ static struct mempolicy *mpol_new(int mode, unsigned long *nodes)
 }
 
 /* Ensure all existing pages follow the policy. */
-static int
-verify_pages(struct mm_struct *mm,
-	     unsigned long addr, unsigned long end, unsigned long *nodes)
+static int check_pte_range(struct mm_struct *mm, pmd_t *pmd,
+		unsigned long addr, unsigned long end, unsigned long *nodes)
 {
-	while (addr < end) {
-		struct page *p;
-		pte_t *pte;
-		pmd_t *pmd;
-		pud_t *pud;
-		pgd_t *pgd;
-		pgd = pgd_offset(mm, addr);
-		if (pgd_none(*pgd)) {
-			unsigned long next = (addr + PGDIR_SIZE) & PGDIR_MASK;
-			if (next > addr)
-				break;
-			addr = next;
+	pte_t *orig_pte;
+	pte_t *pte;
+
+	spin_lock(&mm->page_table_lock);
+	orig_pte = pte = pte_offset_map(pmd, addr);
+	do {
+		unsigned long pfn;
+		unsigned int nid;
+
+		if (!pte_present(*pte))
 			continue;
-		}
-		pud = pud_offset(pgd, addr);
-		if (pud_none(*pud)) {
-			addr = (addr + PUD_SIZE) & PUD_MASK;
+		pfn = pte_pfn(*pte);
+		if (!pfn_valid(pfn))
 			continue;
-		}
-		pmd = pmd_offset(pud, addr);
-		if (pmd_none(*pmd)) {
-			addr = (addr + PMD_SIZE) & PMD_MASK;
+		nid = pfn_to_nid(pfn);
+		if (!test_bit(nid, nodes))
+			break;
+	} while (pte++, addr += PAGE_SIZE, addr != end);
+	pte_unmap(orig_pte);
+	spin_unlock(&mm->page_table_lock);
+	return addr != end;
+}
+
+static inline int check_pmd_range(struct mm_struct *mm, pud_t *pud,
+		unsigned long addr, unsigned long end, unsigned long *nodes)
+{
+	pmd_t *pmd;
+	unsigned long next;
+
+	pmd = pmd_offset(pud, addr);
+	do {
+		next = pmd_addr_end(addr, end);
+		if (pmd_none_or_clear_bad(pmd))
 			continue;
-		}
-		p = NULL;
-		pte = pte_offset_map(pmd, addr);
-		if (pte_present(*pte))
-			p = pte_page(*pte);
-		pte_unmap(pte);
-		if (p) {
-			unsigned nid = page_to_nid(p);
-			if (!test_bit(nid, nodes))
-				return -EIO;
-		}
-		addr += PAGE_SIZE;
-	}
+		if (check_pte_range(mm, pmd, addr, next, nodes))
+			return -EIO;
+	} while (pmd++, addr = next, addr != end);
+	return 0;
+}
+
+static inline int check_pud_range(struct mm_struct *mm, pgd_t *pgd,
+		unsigned long addr, unsigned long end, unsigned long *nodes)
+{
+	pud_t *pud;
+	unsigned long next;
+
+	pud = pud_offset(pgd, addr);
+	do {
+		next = pud_addr_end(addr, end);
+		if (pud_none_or_clear_bad(pud))
+			continue;
+		if (check_pmd_range(mm, pud, addr, next, nodes))
+			return -EIO;
+	} while (pud++, addr = next, addr != end);
+	return 0;
+}
+
+static inline int check_pgd_range(struct mm_struct *mm,
+		unsigned long addr, unsigned long end, unsigned long *nodes)
+{
+	pgd_t *pgd;
+	unsigned long next;
+
+	pgd = pgd_offset(mm, addr);
+	do {
+		next = pgd_addr_end(addr, end);
+		if (pgd_none_or_clear_bad(pgd))
+			continue;
+		if (check_pud_range(mm, pgd, addr, next, nodes))
+			return -EIO;
+	} while (pgd++, addr = next, addr != end);
 	return 0;
 }
 
@@ -299,8 +333,13 @@ check_range(struct mm_struct *mm, unsigned long start, unsigned long end,
 		if (prev && prev->vm_end < vma->vm_start)
 			return ERR_PTR(-EFAULT);
 		if ((flags & MPOL_MF_STRICT) && !is_vm_hugetlb_page(vma)) {
-			err = verify_pages(vma->vm_mm,
-					   vma->vm_start, vma->vm_end, nodes);
+			unsigned long endvma = vma->vm_end;
+			if (endvma > end)
+				endvma = end;
+			if (vma->vm_start > start)
+				start = vma->vm_start;
+			err = check_pgd_range(vma->vm_mm,
+					   start, endvma, nodes);
 			if (err) {
 				first = ERR_PTR(err);
 				break;
@@ -409,7 +448,7 @@ asmlinkage long sys_set_mempolicy(int mode, unsigned long __user *nmask,
 	struct mempolicy *new;
 	DECLARE_BITMAP(nodes, MAX_NUMNODES);
 
-	if (mode > MPOL_MAX)
+	if (mode < 0 || mode > MPOL_MAX)
 		return -EINVAL;
 	err = get_nodes(nodes, nmask, maxnode, mode);
 	if (err)
@@ -630,10 +669,10 @@ asmlinkage long compat_sys_mbind(compat_ulong_t start, compat_ulong_t len,
 #endif
 
 /* Return effective policy for a VMA */
-static struct mempolicy *
-get_vma_policy(struct vm_area_struct *vma, unsigned long addr)
+struct mempolicy *
+get_vma_policy(struct task_struct *task, struct vm_area_struct *vma, unsigned long addr)
 {
-	struct mempolicy *pol = current->mempolicy;
+	struct mempolicy *pol = task->mempolicy;
 
 	if (vma) {
 		if (vma->vm_ops && vma->vm_ops->get_policy)
@@ -648,7 +687,7 @@ get_vma_policy(struct vm_area_struct *vma, unsigned long addr)
 }
 
 /* Return a zonelist representing a mempolicy */
-static struct zonelist *zonelist_policy(unsigned int __nocast gfp, struct mempolicy *policy)
+static struct zonelist *zonelist_policy(gfp_t gfp, struct mempolicy *policy)
 {
 	int nd;
 
@@ -712,7 +751,7 @@ static unsigned offset_il_node(struct mempolicy *pol,
 
 /* Allocate a page in interleaved policy.
    Own path because it needs to do special accounting. */
-static struct page *alloc_page_interleave(unsigned int __nocast gfp, unsigned order, unsigned nid)
+static struct page *alloc_page_interleave(gfp_t gfp, unsigned order, unsigned nid)
 {
 	struct zonelist *zl;
 	struct page *page;
@@ -721,7 +760,7 @@ static struct page *alloc_page_interleave(unsigned int __nocast gfp, unsigned or
 	zl = NODE_DATA(nid)->node_zonelists + (gfp & GFP_ZONEMASK);
 	page = __alloc_pages(gfp, order, zl);
 	if (page && page_zone(page) == zl->zones[0]) {
-		zl->zones[0]->pageset[get_cpu()].interleave_hit++;
+		zone_pcp(zl->zones[0],get_cpu())->interleave_hit++;
 		put_cpu();
 	}
 	return page;
@@ -750,9 +789,9 @@ static struct page *alloc_page_interleave(unsigned int __nocast gfp, unsigned or
  *	Should be called with the mm_sem of the vma hold.
  */
 struct page *
-alloc_page_vma(unsigned int __nocast gfp, struct vm_area_struct *vma, unsigned long addr)
+alloc_page_vma(gfp_t gfp, struct vm_area_struct *vma, unsigned long addr)
 {
-	struct mempolicy *pol = get_vma_policy(vma, addr);
+	struct mempolicy *pol = get_vma_policy(current, vma, addr);
 
 	cpuset_update_current_mems_allowed();
 
@@ -793,7 +832,7 @@ alloc_page_vma(unsigned int __nocast gfp, struct vm_area_struct *vma, unsigned l
  *	1) it's ok to take cpuset_sem (can WAIT), and
  *	2) allocating for current task (not interrupt).
  */
-struct page *alloc_pages_current(unsigned int __nocast gfp, unsigned order)
+struct page *alloc_pages_current(gfp_t gfp, unsigned order)
 {
 	struct mempolicy *pol = current->mempolicy;
 
@@ -874,7 +913,7 @@ void __mpol_free(struct mempolicy *p)
 /* Find first node suitable for an allocation */
 int mpol_first_node(struct vm_area_struct *vma, unsigned long addr)
 {
-	struct mempolicy *pol = get_vma_policy(vma, addr);
+	struct mempolicy *pol = get_vma_policy(current, vma, addr);
 
 	switch (pol->policy) {
 	case MPOL_DEFAULT:
@@ -894,7 +933,7 @@ int mpol_first_node(struct vm_area_struct *vma, unsigned long addr)
 /* Find secondary valid nodes for an allocation */
 int mpol_node_valid(int nid, struct vm_area_struct *vma, unsigned long addr)
 {
-	struct mempolicy *pol = get_vma_policy(vma, addr);
+	struct mempolicy *pol = get_vma_policy(current, vma, addr);
 
 	switch (pol->policy) {
 	case MPOL_PREFERRED:
@@ -1104,11 +1143,11 @@ void mpol_free_shared_policy(struct shared_policy *p)
 	while (next) {
 		n = rb_entry(next, struct sp_node, nd);
 		next = rb_next(&n->nd);
+		rb_erase(&n->nd, &p->root);
 		mpol_free(n->policy);
 		kmem_cache_free(sn_cache, n);
 	}
 	spin_unlock(&p->lock);
-	p->root = RB_ROOT;
 }
 
 /* assumes fs == KERNEL_DS */

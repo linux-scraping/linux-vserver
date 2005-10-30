@@ -34,7 +34,6 @@
 #include <linux/init.h>
 #include <linux/config.h>
 
-#include <pcmcia/version.h>
 #include <pcmcia/cs_types.h>
 #include <pcmcia/cs.h>
 #include <pcmcia/ss.h>
@@ -127,5 +126,5 @@ MODULE_AUTHOR("John Dorsey <john+@cs.cmu.edu>");
 MODULE_DESCRIPTION("Linux PCMCIA Card Services: SA-11x0 Socket Controller");
 MODULE_LICENSE("Dual MPL/GPL");
 
-module_init(sa11x0_pcmcia_init);
+fs_initcall(sa11x0_pcmcia_init);
 module_exit(sa11x0_pcmcia_exit);

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2004 Silicon Graphics, Inc.  All Rights Reserved.
+ * Copyright (c) 2000-2005 Silicon Graphics, Inc.  All Rights Reserved.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of version 2 of the GNU General Public License as
@@ -54,6 +54,7 @@
 #include <linux/percpu.h>
 #include <linux/blkdev.h>
 #include <linux/hash.h>
+#include <linux/kthread.h>
 
 #include "xfs_linux.h"
 
@@ -61,12 +62,13 @@
  * File wide globals
  */
 
-STATIC kmem_cache_t *pagebuf_cache;
+STATIC kmem_cache_t *pagebuf_zone;
 STATIC kmem_shaker_t pagebuf_shake;
-STATIC int pagebuf_daemon_wakeup(int, unsigned int);
+STATIC int xfsbufd_wakeup(int, unsigned int);
 STATIC void pagebuf_delwri_queue(xfs_buf_t *, int);
-STATIC struct workqueue_struct *pagebuf_logio_workqueue;
-STATIC struct workqueue_struct *pagebuf_dataio_workqueue;
+
+STATIC struct workqueue_struct *xfslogd_workqueue;
+struct workqueue_struct *xfsdatad_workqueue;
 
 /*
  * Pagebuf debugging
@@ -123,9 +125,9 @@ ktrace_t *pagebuf_trace_buf;
 
 
 #define pagebuf_allocate(flags) \
-	kmem_zone_alloc(pagebuf_cache, pb_to_km(flags))
+	kmem_zone_alloc(pagebuf_zone, pb_to_km(flags))
 #define pagebuf_deallocate(pb) \
-	kmem_zone_free(pagebuf_cache, (pb));
+	kmem_zone_free(pagebuf_zone, (pb));
 
 /*
  * Page Region interfaces.
@@ -425,7 +427,7 @@ _pagebuf_lookup_pages(
 					__FUNCTION__, gfp_mask);
 
 			XFS_STATS_INC(pb_page_retries);
-			pagebuf_daemon_wakeup(0, gfp_mask);
+			xfsbufd_wakeup(0, gfp_mask);
 			blk_congestion_wait(WRITE, HZ/50);
 			goto retry;
 		}
@@ -589,8 +591,10 @@ found:
 		PB_SET_OWNER(pb);
 	}
 
-	if (pb->pb_flags & PBF_STALE)
+	if (pb->pb_flags & PBF_STALE) {
+		ASSERT((pb->pb_flags & _PBF_DELWRI_Q) == 0);
 		pb->pb_flags &= PBF_MAPPED;
+	}
 	PB_TRACE(pb, "got_lock", 0);
 	XFS_STATS_INC(pb_get_locked);
 	return (pb);
@@ -696,25 +700,6 @@ xfs_buf_read_flags(
 		pagebuf_unlock(pb);
 	pagebuf_rele(pb);
 	return NULL;
-}
-
-/*
- * Create a skeletal pagebuf (no pages associated with it).
- */
-xfs_buf_t *
-pagebuf_lookup(
-	xfs_buftarg_t		*target,
-	loff_t			ioff,
-	size_t			isize,
-	page_buf_flags_t	flags)
-{
-	xfs_buf_t		*pb;
-
-	pb = pagebuf_allocate(flags);
-	if (pb) {
-		_pagebuf_initialize(pb, target, ioff, isize, flags);
-	}
-	return pb;
 }
 
 /*
@@ -912,22 +897,23 @@ pagebuf_rele(
 			do_free = 0;
 		}
 
-		if (pb->pb_flags & PBF_DELWRI) {
-			pb->pb_flags |= PBF_ASYNC;
-			atomic_inc(&pb->pb_hold);
-			pagebuf_delwri_queue(pb, 0);
-			do_free = 0;
-		} else if (pb->pb_flags & PBF_FS_MANAGED) {
+		if (pb->pb_flags & PBF_FS_MANAGED) {
 			do_free = 0;
 		}
 
 		if (do_free) {
+			ASSERT((pb->pb_flags & (PBF_DELWRI|_PBF_DELWRI_Q)) == 0);
 			list_del_init(&pb->pb_hash_list);
 			spin_unlock(&hash->bh_lock);
 			pagebuf_free(pb);
 		} else {
 			spin_unlock(&hash->bh_lock);
 		}
+	} else {
+		/*
+		 * Catch reference count leaks
+		 */
+		ASSERT(atomic_read(&pb->pb_hold) >= 0);
 	}
 }
 
@@ -1005,13 +991,24 @@ pagebuf_lock(
  *	pagebuf_unlock
  *
  *	pagebuf_unlock releases the lock on the buffer object created by
- *	pagebuf_lock or pagebuf_cond_lock (not any
- *	pinning of underlying pages created by pagebuf_pin).
+ *	pagebuf_lock or pagebuf_cond_lock (not any pinning of underlying pages
+ *	created by pagebuf_pin).
+ *
+ *	If the buffer is marked delwri but is not queued, do so before we
+ *	unlock the buffer as we need to set flags correctly. We also need to
+ *	take a reference for the delwri queue because the unlocker is going to
+ *	drop their's and they don't know we just queued it.
  */
 void
 pagebuf_unlock(				/* unlock buffer		*/
 	xfs_buf_t		*pb)	/* buffer to unlock		*/
 {
+	if ((pb->pb_flags & (PBF_DELWRI|_PBF_DELWRI_Q)) == PBF_DELWRI) {
+		atomic_inc(&pb->pb_hold);
+		pb->pb_flags |= PBF_ASYNC;
+		pagebuf_delwri_queue(pb, 0);
+	}
+
 	PB_CLEAR_OWNER(pb);
 	up(&pb->pb_sema);
 	PB_TRACE(pb, "unlock", 0);
@@ -1136,8 +1133,8 @@ pagebuf_iodone(
 	if ((pb->pb_iodone) || (pb->pb_flags & PBF_ASYNC)) {
 		if (schedule) {
 			INIT_WORK(&pb->pb_iodone_work, pagebuf_iodone_work, pb);
-			queue_work(dataio ? pagebuf_dataio_workqueue :
-				pagebuf_logio_workqueue, &pb->pb_iodone_work);
+			queue_work(dataio ? xfsdatad_workqueue :
+				xfslogd_workqueue, &pb->pb_iodone_work);
 		} else {
 			pagebuf_iodone_work(pb);
 		}
@@ -1248,8 +1245,8 @@ bio_end_io_pagebuf(
 	int			error)
 {
 	xfs_buf_t		*pb = (xfs_buf_t *)bio->bi_private;
-	unsigned int		i, blocksize = pb->pb_target->pbr_bsize;
-	struct bio_vec		*bvec = bio->bi_io_vec;
+	unsigned int		blocksize = pb->pb_target->pbr_bsize;
+	struct bio_vec		*bvec = bio->bi_io_vec + bio->bi_vcnt - 1;
 
 	if (bio->bi_size)
 		return 1;
@@ -1257,10 +1254,12 @@ bio_end_io_pagebuf(
 	if (!test_bit(BIO_UPTODATE, &bio->bi_flags))
 		pb->pb_error = EIO;
 
-	for (i = 0; i < bio->bi_vcnt; i++, bvec++) {
+	do {
 		struct page	*page = bvec->bv_page;
 
-		if (pb->pb_error) {
+		if (unlikely(pb->pb_error)) {
+			if (pb->pb_flags & PBF_READ)
+				ClearPageUptodate(page);
 			SetPageError(page);
 		} else if (blocksize == PAGE_CACHE_SIZE) {
 			SetPageUptodate(page);
@@ -1269,10 +1268,13 @@ bio_end_io_pagebuf(
 			set_page_region(page, bvec->bv_offset, bvec->bv_len);
 		}
 
+		if (--bvec >= bio->bi_io_vec)
+			prefetchw(&bvec->bv_page->flags);
+
 		if (_pagebuf_iolocked(pb)) {
 			unlock_page(page);
 		}
-	}
+	} while (bvec >= bio->bi_io_vec);
 
 	_pagebuf_iodone(pb, 1);
 	bio_put(bio);
@@ -1510,6 +1512,11 @@ again:
 			ASSERT(btp == bp->pb_target);
 			if (!(bp->pb_flags & PBF_FS_MANAGED)) {
 				spin_unlock(&hash->bh_lock);
+				/*
+				 * Catch superblock reference count leaks
+				 * immediately
+				 */
+				BUG_ON(bp->pb_bn == 0);
 				delay(100);
 				goto again;
 			}
@@ -1560,16 +1567,6 @@ xfs_free_buftarg(
 	xfs_free_bufhash(btp);
 	iput(btp->pbr_mapping->host);
 	kmem_free(btp, sizeof(*btp));
-}
-
-void
-xfs_incore_relse(
-	xfs_buftarg_t		*btp,
-	int			delwri_only,
-	int			wait)
-{
-	invalidate_bdev(btp->pbr_bdev, 1);
-	truncate_inode_pages(btp->pbr_mapping, 0LL);
 }
 
 STATIC int
@@ -1695,17 +1692,20 @@ pagebuf_delwri_queue(
 	int			unlock)
 {
 	PB_TRACE(pb, "delwri_q", (long)unlock);
-	ASSERT(pb->pb_flags & PBF_DELWRI);
+	ASSERT((pb->pb_flags & (PBF_DELWRI|PBF_ASYNC)) ==
+					(PBF_DELWRI|PBF_ASYNC));
 
 	spin_lock(&pbd_delwrite_lock);
 	/* If already in the queue, dequeue and place at tail */
 	if (!list_empty(&pb->pb_list)) {
+		ASSERT(pb->pb_flags & _PBF_DELWRI_Q);
 		if (unlock) {
 			atomic_dec(&pb->pb_hold);
 		}
 		list_del(&pb->pb_list);
 	}
 
+	pb->pb_flags |= _PBF_DELWRI_Q;
 	list_add_tail(&pb->pb_list, &pbd_delwrite_queue);
 	pb->pb_queuetime = jiffies;
 	spin_unlock(&pbd_delwrite_lock);
@@ -1722,10 +1722,11 @@ pagebuf_delwri_dequeue(
 
 	spin_lock(&pbd_delwrite_lock);
 	if ((pb->pb_flags & PBF_DELWRI) && !list_empty(&pb->pb_list)) {
+		ASSERT(pb->pb_flags & _PBF_DELWRI_Q);
 		list_del_init(&pb->pb_list);
 		dequeued = 1;
 	}
-	pb->pb_flags &= ~PBF_DELWRI;
+	pb->pb_flags &= ~(PBF_DELWRI|_PBF_DELWRI_Q);
 	spin_unlock(&pbd_delwrite_lock);
 
 	if (dequeued)
@@ -1742,27 +1743,25 @@ pagebuf_runall_queues(
 }
 
 /* Defines for pagebuf daemon */
-STATIC DECLARE_COMPLETION(pagebuf_daemon_done);
-STATIC struct task_struct *pagebuf_daemon_task;
-STATIC int pagebuf_daemon_active;
-STATIC int force_flush;
-STATIC int force_sleep;
+STATIC struct task_struct *xfsbufd_task;
+STATIC int xfsbufd_force_flush;
+STATIC int xfsbufd_force_sleep;
 
 STATIC int
-pagebuf_daemon_wakeup(
+xfsbufd_wakeup(
 	int			priority,
 	unsigned int		mask)
 {
-	if (force_sleep)
+	if (xfsbufd_force_sleep)
 		return 0;
-	force_flush = 1;
+	xfsbufd_force_flush = 1;
 	barrier();
-	wake_up_process(pagebuf_daemon_task);
+	wake_up_process(xfsbufd_task);
 	return 0;
 }
 
 STATIC int
-pagebuf_daemon(
+xfsbufd(
 	void			*data)
 {
 	struct list_head	tmp;
@@ -1770,41 +1769,35 @@ pagebuf_daemon(
 	xfs_buftarg_t		*target;
 	xfs_buf_t		*pb, *n;
 
-	/*  Set up the thread  */
-	daemonize("xfsbufd");
 	current->flags |= PF_MEMALLOC;
-
-	pagebuf_daemon_task = current;
-	pagebuf_daemon_active = 1;
-	barrier();
 
 	INIT_LIST_HEAD(&tmp);
 	do {
-		if (unlikely(current->flags & PF_FREEZE)) {
-			force_sleep = 1;
-			refrigerator(PF_FREEZE);
+		if (unlikely(freezing(current))) {
+			xfsbufd_force_sleep = 1;
+			refrigerator();
 		} else {
-			force_sleep = 0;
+			xfsbufd_force_sleep = 0;
 		}
 
-		set_current_state(TASK_INTERRUPTIBLE);
-		schedule_timeout((xfs_buf_timer_centisecs * HZ) / 100);
+		schedule_timeout_interruptible
+			(xfs_buf_timer_centisecs * msecs_to_jiffies(10));
 
-		age = (xfs_buf_age_centisecs * HZ) / 100;
+		age = xfs_buf_age_centisecs * msecs_to_jiffies(10);
 		spin_lock(&pbd_delwrite_lock);
 		list_for_each_entry_safe(pb, n, &pbd_delwrite_queue, pb_list) {
 			PB_TRACE(pb, "walkq1", (long)pagebuf_ispin(pb));
 			ASSERT(pb->pb_flags & PBF_DELWRI);
 
 			if (!pagebuf_ispin(pb) && !pagebuf_cond_lock(pb)) {
-				if (!force_flush &&
+				if (!xfsbufd_force_flush &&
 				    time_before(jiffies,
 						pb->pb_queuetime + age)) {
 					pagebuf_unlock(pb);
 					break;
 				}
 
-				pb->pb_flags &= ~PBF_DELWRI;
+				pb->pb_flags &= ~(PBF_DELWRI|_PBF_DELWRI_Q);
 				pb->pb_flags |= PBF_WRITE;
 				list_move(&pb->pb_list, &tmp);
 			}
@@ -1824,10 +1817,10 @@ pagebuf_daemon(
 		if (as_list_len > 0)
 			purge_addresses();
 
-		force_flush = 0;
-	} while (pagebuf_daemon_active);
+		xfsbufd_force_flush = 0;
+	} while (!kthread_should_stop());
 
-	complete_and_exit(&pagebuf_daemon_done, 0);
+	return 0;
 }
 
 /*
@@ -1844,8 +1837,8 @@ xfs_flush_buftarg(
 	xfs_buf_t		*pb, *n;
 	int			pincount = 0;
 
-	pagebuf_runall_queues(pagebuf_dataio_workqueue);
-	pagebuf_runall_queues(pagebuf_logio_workqueue);
+	pagebuf_runall_queues(xfsdatad_workqueue);
+	pagebuf_runall_queues(xfslogd_workqueue);
 
 	INIT_LIST_HEAD(&tmp);
 	spin_lock(&pbd_delwrite_lock);
@@ -1854,15 +1847,13 @@ xfs_flush_buftarg(
 		if (pb->pb_target != target)
 			continue;
 
-		ASSERT(pb->pb_flags & PBF_DELWRI);
+		ASSERT(pb->pb_flags & (PBF_DELWRI|_PBF_DELWRI_Q));
 		PB_TRACE(pb, "walkq2", (long)pagebuf_ispin(pb));
 		if (pagebuf_ispin(pb)) {
 			pincount++;
 			continue;
 		}
 
-		pb->pb_flags &= ~PBF_DELWRI;
-		pb->pb_flags |= PBF_WRITE;
 		list_move(&pb->pb_list, &tmp);
 	}
 	spin_unlock(&pbd_delwrite_lock);
@@ -1871,12 +1862,14 @@ xfs_flush_buftarg(
 	 * Dropped the delayed write list lock, now walk the temporary list
 	 */
 	list_for_each_entry_safe(pb, n, &tmp, pb_list) {
+		pagebuf_lock(pb);
+		pb->pb_flags &= ~(PBF_DELWRI|_PBF_DELWRI_Q);
+		pb->pb_flags |= PBF_WRITE;
 		if (wait)
 			pb->pb_flags &= ~PBF_ASYNC;
 		else
 			list_del_init(&pb->pb_list);
 
-		pagebuf_lock(pb);
 		pagebuf_iostrategy(pb);
 	}
 
@@ -1898,43 +1891,42 @@ xfs_flush_buftarg(
 }
 
 STATIC int
-pagebuf_daemon_start(void)
+xfs_buf_daemons_start(void)
 {
-	int		rval;
+	int		error = -ENOMEM;
 
-	pagebuf_logio_workqueue = create_workqueue("xfslogd");
-	if (!pagebuf_logio_workqueue)
-		return -ENOMEM;
+	xfslogd_workqueue = create_workqueue("xfslogd");
+	if (!xfslogd_workqueue)
+		goto out;
 
-	pagebuf_dataio_workqueue = create_workqueue("xfsdatad");
-	if (!pagebuf_dataio_workqueue) {
-		destroy_workqueue(pagebuf_logio_workqueue);
-		return -ENOMEM;
+	xfsdatad_workqueue = create_workqueue("xfsdatad");
+	if (!xfsdatad_workqueue)
+		goto out_destroy_xfslogd_workqueue;
+
+	xfsbufd_task = kthread_run(xfsbufd, NULL, "xfsbufd");
+	if (IS_ERR(xfsbufd_task)) {
+		error = PTR_ERR(xfsbufd_task);
+		goto out_destroy_xfsdatad_workqueue;
 	}
+	return 0;
 
-	rval = kernel_thread(pagebuf_daemon, NULL, CLONE_FS|CLONE_FILES);
-	if (rval < 0) {
-		destroy_workqueue(pagebuf_logio_workqueue);
-		destroy_workqueue(pagebuf_dataio_workqueue);
-	}
-
-	return rval;
+ out_destroy_xfsdatad_workqueue:
+	destroy_workqueue(xfsdatad_workqueue);
+ out_destroy_xfslogd_workqueue:
+	destroy_workqueue(xfslogd_workqueue);
+ out:
+	return error;
 }
 
 /*
- * pagebuf_daemon_stop
- *
  * Note: do not mark as __exit, it is called from pagebuf_terminate.
  */
 STATIC void
-pagebuf_daemon_stop(void)
+xfs_buf_daemons_stop(void)
 {
-	pagebuf_daemon_active = 0;
-	barrier();
-	wait_for_completion(&pagebuf_daemon_done);
-
-	destroy_workqueue(pagebuf_logio_workqueue);
-	destroy_workqueue(pagebuf_dataio_workqueue);
+	kthread_stop(xfsbufd_task);
+	destroy_workqueue(xfslogd_workqueue);
+	destroy_workqueue(xfsdatad_workqueue);
 }
 
 /*
@@ -1944,27 +1936,37 @@ pagebuf_daemon_stop(void)
 int __init
 pagebuf_init(void)
 {
-	pagebuf_cache = kmem_cache_create("xfs_buf_t", sizeof(xfs_buf_t), 0,
-			SLAB_HWCACHE_ALIGN, NULL, NULL);
-	if (pagebuf_cache == NULL) {
-		printk("XFS: couldn't init xfs_buf_t cache\n");
-		pagebuf_terminate();
-		return -ENOMEM;
-	}
+	int		error = -ENOMEM;
+
+	pagebuf_zone = kmem_zone_init(sizeof(xfs_buf_t), "xfs_buf");
+	if (!pagebuf_zone)
+		goto out;
 
 #ifdef PAGEBUF_TRACE
 	pagebuf_trace_buf = ktrace_alloc(PAGEBUF_TRACE_SIZE, KM_SLEEP);
 #endif
 
-	pagebuf_daemon_start();
+	error = xfs_buf_daemons_start();
+	if (error)
+		goto out_free_buf_zone;
 
-	pagebuf_shake = kmem_shake_register(pagebuf_daemon_wakeup);
-	if (pagebuf_shake == NULL) {
-		pagebuf_terminate();
-		return -ENOMEM;
+	pagebuf_shake = kmem_shake_register(xfsbufd_wakeup);
+	if (!pagebuf_shake) {
+		error = -ENOMEM;
+		goto out_stop_daemons;
 	}
 
 	return 0;
+
+ out_stop_daemons:
+	xfs_buf_daemons_stop();
+ out_free_buf_zone:
+#ifdef PAGEBUF_TRACE
+	ktrace_free(pagebuf_trace_buf);
+#endif
+	kmem_zone_destroy(pagebuf_zone);
+ out:
+	return error;
 }
 
 
@@ -1976,12 +1978,12 @@ pagebuf_init(void)
 void
 pagebuf_terminate(void)
 {
-	pagebuf_daemon_stop();
+	xfs_buf_daemons_stop();
 
 #ifdef PAGEBUF_TRACE
 	ktrace_free(pagebuf_trace_buf);
 #endif
 
-	kmem_zone_destroy(pagebuf_cache);
+	kmem_zone_destroy(pagebuf_zone);
 	kmem_shake_deregister(pagebuf_shake);
 }

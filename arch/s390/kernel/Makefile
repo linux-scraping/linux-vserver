@@ -6,7 +6,7 @@ EXTRA_AFLAGS	:= -traditional
 
 obj-y	:=  bitmap.o traps.o time.o process.o \
             setup.o sys_s390.o ptrace.o signal.o cpcmd.o ebcdic.o \
-            semaphore.o s390_ext.o debug.o profile.o irq.o
+            semaphore.o s390_ext.o debug.o profile.o irq.o reipl_diag.o
 
 extra-$(CONFIG_ARCH_S390_31)	+= head.o 
 extra-$(CONFIG_ARCH_S390X)	+= head64.o 
@@ -24,6 +24,16 @@ obj-$(CONFIG_ARCH_S390_31)	+= entry.o reipl.o
 obj-$(CONFIG_ARCH_S390X)	+= entry64.o reipl64.o
 
 obj-$(CONFIG_VIRT_TIMER)	+= vtime.o
+
+# Kexec part
+S390_KEXEC_OBJS := machine_kexec.o crash.o
+ifeq ($(CONFIG_ARCH_S390X),y)
+S390_KEXEC_OBJS += relocate_kernel64.o
+else
+S390_KEXEC_OBJS += relocate_kernel.o
+endif
+obj-$(CONFIG_KEXEC) += $(S390_KEXEC_OBJS)
+
 
 #
 # This is just to get the dependencies...

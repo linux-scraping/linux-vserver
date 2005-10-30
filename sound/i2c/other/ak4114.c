@@ -92,7 +92,7 @@ int snd_ak4114_create(snd_card_t *card,
 		.dev_free =     snd_ak4114_dev_free,
 	};
 
-	chip = kcalloc(1, sizeof(*chip), GFP_KERNEL);
+	chip = kzalloc(sizeof(*chip), GFP_KERNEL);
 	if (chip == NULL)
 		return -ENOMEM;
 	spin_lock_init(&chip->lock);
@@ -554,7 +554,6 @@ int snd_ak4114_check_rate_and_errors(ak4114_t *ak4114, unsigned int flags)
 		if (snd_pcm_running(ak4114->capture_substream)) {
 			// printk("rate changed (%i <- %i)\n", runtime->rate, res);
 			snd_pcm_stop(ak4114->capture_substream, SNDRV_PCM_STATE_DRAINING);
-			wake_up(&runtime->sleep);
 			res = 1;
 		}
 		snd_pcm_stream_unlock_irqrestore(ak4114->capture_substream, _flags);

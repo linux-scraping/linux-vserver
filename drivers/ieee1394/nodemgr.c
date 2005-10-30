@@ -30,7 +30,7 @@
 #include "csr.h"
 #include "nodemgr.h"
 
-static int ignore_drivers = 0;
+static int ignore_drivers;
 module_param(ignore_drivers, int, 0444);
 MODULE_PARM_DESC(ignore_drivers, "Disable automatic probing for drivers.");
 
@@ -64,10 +64,10 @@ static int nodemgr_bus_read(struct csr1212_csr *csr, u64 addr, u16 length,
 	struct nodemgr_csr_info *ci = (struct nodemgr_csr_info*)__ci;
 	int i, ret = 0;
 
-	for (i = 0; i < 3; i++) {
+	for (i = 1; ; i++) {
 		ret = hpsb_read(ci->host, ci->nodeid, ci->generation, addr,
 				buffer, length);
-		if (!ret)
+		if (!ret || i == 3)
 			break;
 
 		if (msleep_interruptible(334))
@@ -220,7 +220,7 @@ struct device nodemgr_dev_template_host = {
 
 
 #define fw_attr(class, class_type, field, type, format_string)		\
-static ssize_t fw_show_##class##_##field (struct device *dev, char *buf)\
+static ssize_t fw_show_##class##_##field (struct device *dev, struct device_attribute *attr, char *buf)\
 {									\
 	class_type *class;						\
 	class = container_of(dev, class_type, device);			\
@@ -232,7 +232,7 @@ static struct device_attribute dev_attr_##class##_##field = {		\
 };
 
 #define fw_attr_td(class, class_type, td_kv)				\
-static ssize_t fw_show_##class##_##td_kv (struct device *dev, char *buf)\
+static ssize_t fw_show_##class##_##td_kv (struct device *dev, struct device_attribute *attr, char *buf)\
 {									\
 	int len;							\
 	class_type *class = container_of(dev, class_type, device);	\
@@ -265,7 +265,7 @@ static struct driver_attribute driver_attr_drv_##field = {	\
 };
 
 
-static ssize_t fw_show_ne_bus_options(struct device *dev, char *buf)
+static ssize_t fw_show_ne_bus_options(struct device *dev, struct device_attribute *attr, char *buf)
 {
 	struct node_entry *ne = container_of(dev, struct node_entry, device);
 
@@ -281,7 +281,7 @@ static ssize_t fw_show_ne_bus_options(struct device *dev, char *buf)
 static DEVICE_ATTR(bus_options,S_IRUGO,fw_show_ne_bus_options,NULL);
 
 
-static ssize_t fw_show_ne_tlabels_free(struct device *dev, char *buf)
+static ssize_t fw_show_ne_tlabels_free(struct device *dev, struct device_attribute *attr, char *buf)
 {
 	struct node_entry *ne = container_of(dev, struct node_entry, device);
 	return sprintf(buf, "%d\n", atomic_read(&ne->tpool->count.count) + 1);
@@ -289,7 +289,7 @@ static ssize_t fw_show_ne_tlabels_free(struct device *dev, char *buf)
 static DEVICE_ATTR(tlabels_free,S_IRUGO,fw_show_ne_tlabels_free,NULL);
 
 
-static ssize_t fw_show_ne_tlabels_allocations(struct device *dev, char *buf)
+static ssize_t fw_show_ne_tlabels_allocations(struct device *dev, struct device_attribute *attr, char *buf)
 {
 	struct node_entry *ne = container_of(dev, struct node_entry, device);
 	return sprintf(buf, "%u\n", ne->tpool->allocations);
@@ -297,7 +297,7 @@ static ssize_t fw_show_ne_tlabels_allocations(struct device *dev, char *buf)
 static DEVICE_ATTR(tlabels_allocations,S_IRUGO,fw_show_ne_tlabels_allocations,NULL);
 
 
-static ssize_t fw_show_ne_tlabels_mask(struct device *dev, char *buf)
+static ssize_t fw_show_ne_tlabels_mask(struct device *dev, struct device_attribute *attr, char *buf)
 {
 	struct node_entry *ne = container_of(dev, struct node_entry, device);
 #if (BITS_PER_LONG <= 32)
@@ -309,7 +309,7 @@ static ssize_t fw_show_ne_tlabels_mask(struct device *dev, char *buf)
 static DEVICE_ATTR(tlabels_mask, S_IRUGO, fw_show_ne_tlabels_mask, NULL);
 
 
-static ssize_t fw_set_ignore_driver(struct device *dev, const char *buf, size_t count)
+static ssize_t fw_set_ignore_driver(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
 {
 	struct unit_directory *ud = container_of(dev, struct unit_directory, device);
 	int state = simple_strtoul(buf, NULL, 10);
@@ -324,7 +324,7 @@ static ssize_t fw_set_ignore_driver(struct device *dev, const char *buf, size_t 
 
 	return count;
 }
-static ssize_t fw_get_ignore_driver(struct device *dev, char *buf)
+static ssize_t fw_get_ignore_driver(struct device *dev, struct device_attribute *attr, char *buf)
 {
 	struct unit_directory *ud = container_of(dev, struct unit_directory, device);
 
@@ -695,14 +695,15 @@ static void nodemgr_remove_ne(struct node_entry *ne)
 	put_device(dev);
 }
 
+static int __nodemgr_remove_host_dev(struct device *dev, void *data)
+{
+	nodemgr_remove_ne(container_of(dev, struct node_entry, device));
+	return 0;
+}
 
 static void nodemgr_remove_host_dev(struct device *dev)
 {
-	struct device *ne_dev, *next;
-
-	list_for_each_entry_safe(ne_dev, next, &dev->children, node)
-		nodemgr_remove_ne(container_of(ne_dev, struct node_entry, device));
-
+	device_for_each_child(dev, NULL, __nodemgr_remove_host_dev);
 	sysfs_remove_link(&dev->kobj, "irm_id");
 	sysfs_remove_link(&dev->kobj, "busmgr_id");
 	sysfs_remove_link(&dev->kobj, "host_id");
@@ -1067,6 +1068,8 @@ static int nodemgr_hotplug(struct class_device *cdev, char **envp, int num_envp,
 	struct unit_directory *ud;
 	int i = 0;
 	int length = 0;
+	/* ieee1394:venNmoNspNverN */
+	char buf[8 + 1 + 3 + 8 + 2 + 8 + 2 + 8 + 3 + 8 + 1];
 
 	if (!cdev)
 		return -ENODEV;
@@ -1093,6 +1096,12 @@ do {								\
 	PUT_ENVP("GUID=%016Lx", (unsigned long long)ud->ne->guid);
 	PUT_ENVP("SPECIFIER_ID=%06x", ud->specifier_id);
 	PUT_ENVP("VERSION=%06x", ud->version);
+	snprintf(buf, sizeof(buf), "ieee1394:ven%08Xmo%08Xsp%08Xver%08X",
+			ud->vendor_id,
+			ud->model_id,
+			ud->specifier_id,
+			ud->version);
+	PUT_ENVP("MODALIAS=%s", buf);
 
 #undef PUT_ENVP
 
@@ -1429,9 +1438,13 @@ static int nodemgr_do_irm_duties(struct hpsb_host *host, int cycles)
 	if (host->busmgr_id == 0xffff && host->node_count > 1)
 	{
 		u16 root_node = host->node_count - 1;
-		struct node_entry *ne = find_entry_by_nodeid(host, root_node | LOCAL_BUS);
 
-		if (ne && ne->busopt.cmc)
+		/* get cycle master capability flag from root node */
+		if (host->is_cycmst ||
+		    (!hpsb_read(host, LOCAL_BUS | root_node, get_hpsb_generation(host),
+				(CSR_REGISTER_BASE + CSR_CONFIG_ROM + 2 * sizeof(quadlet_t)),
+				&bc, sizeof(quadlet_t)) &&
+		     be32_to_cpu(bc) & 1 << CSR_CMC_SHIFT))
 			hpsb_send_phy_config(host, root_node, -1);
 		else {
 			HPSB_DEBUG("The root node is not cycle master capable; "
@@ -1509,7 +1522,7 @@ static int nodemgr_host_thread(void *__hi)
 
 		if (down_interruptible(&hi->reset_sem) ||
 		    down_interruptible(&nodemgr_serialize)) {
-			if (try_to_freeze(PF_FREEZE))
+			if (try_to_freeze())
 				continue;
 			printk("NodeMgr: received unexpected signal?!\n" );
 			break;
@@ -1548,24 +1561,19 @@ static int nodemgr_host_thread(void *__hi)
 			}
 		}
 
-		if (!nodemgr_check_irm_capability(host, reset_cycles)) {
+		if (!nodemgr_check_irm_capability(host, reset_cycles) ||
+		    !nodemgr_do_irm_duties(host, reset_cycles)) {
 			reset_cycles++;
 			up(&nodemgr_serialize);
 			continue;
 		}
+		reset_cycles = 0;
 
 		/* Scan our nodes to get the bus options and create node
 		 * entries. This does not do the sysfs stuff, since that
 		 * would trigger hotplug callbacks and such, which is a
 		 * bad idea at this point. */
 		nodemgr_node_scan(hi, generation);
-		if (!nodemgr_do_irm_duties(host, reset_cycles)) {
-			reset_cycles++;
-			up(&nodemgr_serialize);
-			continue;
-		}
-
-		reset_cycles = 0;
 
 		/* This actually does the full probe, with sysfs
 		 * registration. */

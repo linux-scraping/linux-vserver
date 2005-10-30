@@ -81,8 +81,10 @@ void die(const char * str, struct pt_regs * fp, long err)
 	console_verbose();
 	spin_lock_irq(&die_lock);
 #ifdef CONFIG_PMAC_BACKLIGHT
-	set_backlight_enable(1);
-	set_backlight_level(BACKLIGHT_MAX);
+	if (_machine == _MACH_Pmac) {
+		set_backlight_enable(1);
+		set_backlight_level(BACKLIGHT_MAX);
+	}
 #endif
 	printk("Oops: %s, sig: %ld [#%d]\n", str, err, ++die_counter);
 #ifdef CONFIG_PREEMPT
@@ -116,6 +118,28 @@ void _exception(int signr, struct pt_regs *regs, int code, unsigned long addr)
 	info.si_code = code;
 	info.si_addr = (void __user *) addr;
 	force_sig_info(signr, &info, current);
+
+	/*
+	 * Init gets no signals that it doesn't have a handler for.
+	 * That's all very well, but if it has caused a synchronous
+	 * exception and we ignore the resulting signal, it will just
+	 * generate the same exception over and over again and we get
+	 * nowhere.  Better to kill it and let the kernel panic.
+	 */
+	if (current->pid == 1) {
+		__sighandler_t handler;
+
+		spin_lock_irq(&current->sighand->siglock);
+		handler = current->sighand->action[signr-1].sa.sa_handler;
+		spin_unlock_irq(&current->sighand->siglock);
+		if (handler == SIG_DFL) {
+			/* init has generated a synchronous exception
+			   and it doesn't have a handler for the signal */
+			printk(KERN_CRIT "init has generated signal %d "
+			       "but has no handler for it\n", signr);
+			do_exit(signr);
+		}
+	}
 }
 
 /*
@@ -171,13 +195,13 @@ static inline int check_io_access(struct pt_regs *regs)
 /* On 4xx, the reason for the machine check or program exception
    is in the ESR. */
 #define get_reason(regs)	((regs)->dsisr)
-#ifndef CONFIG_E500
+#ifndef CONFIG_FSL_BOOKE
 #define get_mc_reason(regs)	((regs)->dsisr)
 #else
 #define get_mc_reason(regs)	(mfspr(SPRN_MCSR))
 #endif
 #define REASON_FP		ESR_FP
-#define REASON_ILLEGAL		ESR_PIL
+#define REASON_ILLEGAL		(ESR_PIL | ESR_PUO)
 #define REASON_PRIVILEGED	ESR_PPR
 #define REASON_TRAP		ESR_PTR
 
@@ -300,7 +324,25 @@ void MachineCheckException(struct pt_regs *regs)
 		printk("Bus - Instruction Parity Error\n");
 	if (reason & MCSR_BUS_RPERR)
 		printk("Bus - Read Parity Error\n");
-#else /* !CONFIG_4xx && !CONFIG_E500 */
+#elif defined (CONFIG_E200)
+	printk("Machine check in kernel mode.\n");
+	printk("Caused by (from MCSR=%lx): ", reason);
+
+	if (reason & MCSR_MCP)
+		printk("Machine Check Signal\n");
+	if (reason & MCSR_CP_PERR)
+		printk("Cache Push Parity Error\n");
+	if (reason & MCSR_CPERR)
+		printk("Cache Parity Error\n");
+	if (reason & MCSR_EXCP_ERR)
+		printk("ISI, ITLB, or Bus Error on first instruction fetch for an exception handler\n");
+	if (reason & MCSR_BUS_IRERR)
+		printk("Bus - Read Bus Error on instruction fetch\n");
+	if (reason & MCSR_BUS_DRERR)
+		printk("Bus - Read Bus Error on data load\n");
+	if (reason & MCSR_BUS_WRERR)
+		printk("Bus - Write Bus Error on buffered store or cache line push\n");
+#else /* !CONFIG_4xx && !CONFIG_E500 && !CONFIG_E200 */
 	printk("Machine check in kernel mode.\n");
 	printk("Caused by (from SRR1=%lx): ", reason);
 	switch (reason & 0x601F0000) {
@@ -829,10 +871,12 @@ void AltivecAssistException(struct pt_regs *regs)
 }
 #endif /* CONFIG_ALTIVEC */
 
+#ifdef CONFIG_E500
 void PerformanceMonitorException(struct pt_regs *regs)
 {
 	perf_irq(regs);
 }
+#endif
 
 #ifdef CONFIG_FSL_BOOKE
 void CacheLockingException(struct pt_regs *regs, unsigned long address,
@@ -881,6 +925,25 @@ void SPEFloatingPointException(struct pt_regs *regs)
 
 	_exception(SIGFPE, regs, code, regs->nip);
 	return;
+}
+#endif
+
+#ifdef CONFIG_BOOKE_WDT
+/*
+ * Default handler for a Watchdog exception,
+ * spins until a reboot occurs
+ */
+void __attribute__ ((weak)) WatchdogHandler(struct pt_regs *regs)
+{
+	/* Generic WatchdogHandler, implement your own */
+	mtspr(SPRN_TCR, mfspr(SPRN_TCR)&(~TCR_WIE));
+	return;
+}
+
+void WatchdogException(struct pt_regs *regs)
+{
+	printk (KERN_EMERG "PowerPC Book-E Watchdog Exception\n");
+	WatchdogHandler(regs);
 }
 #endif
 

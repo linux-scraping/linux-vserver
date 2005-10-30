@@ -16,11 +16,7 @@
  */
 
 #include <linux/config.h>
-
-int serial8250_register_port(struct uart_port *);
-void serial8250_unregister_port(int line);
-void serial8250_suspend_port(int line);
-void serial8250_resume_port(int line);
+#include <linux/serial_8250.h>
 
 struct old_serial_port {
 	unsigned int uart;
@@ -50,6 +46,9 @@ struct serial8250_config {
 #define UART_CAP_SLEEP	(1 << 10)	/* UART has IER sleep */
 #define UART_CAP_AFE	(1 << 11)	/* MCR-based hw flow control */
 #define UART_CAP_UUE	(1 << 12)	/* UART needs IER bit 6 set (Xscale) */
+
+#define UART_BUG_QUOT	(1 << 0)	/* UART has buggy quot LSB */
+#define UART_BUG_TXEN	(1 << 1)	/* UART has buggy TX IIR status */
 
 #if defined(__i386__) && (defined(CONFIG_M386) || defined(CONFIG_M486))
 #define _INLINE_ inline

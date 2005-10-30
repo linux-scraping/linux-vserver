@@ -105,7 +105,7 @@
 #include <linux/skbuff.h>
 #include <linux/netdevice.h>
 #include <net/sock.h>
-#include <linux/tcp.h>
+#include <net/tcp_states.h>
 #include <net/af_unix.h>
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
@@ -305,7 +305,7 @@ static void unix_write_space(struct sock *sk)
  * may receive messages only from that peer. */
 static void unix_dgram_disconnected(struct sock *sk, struct sock *other)
 {
-	if (skb_queue_len(&sk->sk_receive_queue)) {
+	if (!skb_queue_empty(&sk->sk_receive_queue)) {
 		skb_queue_purge(&sk->sk_receive_queue);
 		wake_up_interruptible_all(&unix_sk(sk)->peer_wait);
 
@@ -1622,7 +1622,7 @@ static long unix_stream_data_wait(struct sock * sk, long timeo)
 	for (;;) {
 		prepare_to_wait(sk->sk_sleep, &wait, TASK_INTERRUPTIBLE);
 
-		if (skb_queue_len(&sk->sk_receive_queue) ||
+		if (!skb_queue_empty(&sk->sk_receive_queue) ||
 		    sk->sk_err ||
 		    (sk->sk_shutdown & RCV_SHUTDOWN) ||
 		    signal_pending(current) ||
@@ -2028,14 +2028,6 @@ static struct net_proto_family unix_family_ops = {
 	.create = unix_create,
 	.owner	= THIS_MODULE,
 };
-
-#ifdef CONFIG_SYSCTL
-extern void unix_sysctl_register(void);
-extern void unix_sysctl_unregister(void);
-#else
-static inline void unix_sysctl_register(void) {}
-static inline void unix_sysctl_unregister(void) {}
-#endif
 
 static int __init af_unix_init(void)
 {

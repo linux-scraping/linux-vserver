@@ -65,19 +65,6 @@ int drm_mem_info(char *buf, char **start, off_t offset,
 	return 0;
 }
 
-/** Wrapper around kmalloc() */
-void *drm_calloc(size_t nmemb, size_t size, int area)
-{
-	void *addr;
-
-	addr = kmalloc(size * nmemb, GFP_KERNEL);
-	if (addr != NULL)
-		memset((void *)addr, 0, size * nmemb);
-
-	return addr;
-}
-EXPORT_SYMBOL(drm_calloc);
-
 /** Wrapper around kmalloc() and kfree() */
 void *drm_realloc(void *oldpt, size_t oldsize, size_t size, int area)
 {
@@ -155,27 +142,31 @@ void drm_free_pages(unsigned long address, int order, int area)
 
 #if __OS_HAS_AGP
 /** Wrapper around agp_allocate_memory() */
-DRM_AGP_MEM *drm_alloc_agp(struct agp_bridge_data *bridge, int pages, u32 type)
+DRM_AGP_MEM *drm_alloc_agp(drm_device_t *dev, int pages, u32 type)
 {
-	return drm_agp_allocate_memory(bridge, pages, type);
+	return drm_agp_allocate_memory(dev->agp->bridge, pages, type);
 }
+EXPORT_SYMBOL(drm_alloc_agp);
 
 /** Wrapper around agp_free_memory() */
 int drm_free_agp(DRM_AGP_MEM *handle, int pages)
 {
 	return drm_agp_free_memory(handle) ? 0 : -EINVAL;
 }
+EXPORT_SYMBOL(drm_free_agp);
 
 /** Wrapper around agp_bind_memory() */
 int drm_bind_agp(DRM_AGP_MEM *handle, unsigned int start)
 {
 	return drm_agp_bind_memory(handle, start);
 }
+EXPORT_SYMBOL(drm_bind_agp);
 
 /** Wrapper around agp_unbind_memory() */
 int drm_unbind_agp(DRM_AGP_MEM *handle)
 {
 	return drm_agp_unbind_memory(handle);
 }
+EXPORT_SYMBOL(drm_unbind_agp);
 #endif /* agp */
 #endif /* debug_memory */

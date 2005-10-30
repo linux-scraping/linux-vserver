@@ -1,26 +1,34 @@
 /*
  *  ahci.c - AHCI SATA support
  *
- *  Copyright 2004 Red Hat, Inc.
+ *  Maintained by:  Jeff Garzik <jgarzik@pobox.com>
+ *    		    Please ALWAYS copy linux-ide@vger.kernel.org
+ *		    on emails.
  *
- *  The contents of this file are subject to the Open
- *  Software License version 1.1 that can be found at
- *  http://www.opensource.org/licenses/osl-1.1.txt and is included herein
- *  by reference.
+ *  Copyright 2004-2005 Red Hat, Inc.
  *
- *  Alternatively, the contents of this file may be used under the terms
- *  of the GNU General Public License version 2 (the "GPL") as distributed
- *  in the kernel source COPYING file, in which case the provisions of
- *  the GPL are applicable instead of the above.  If you wish to allow
- *  the use of your version of this file only under the terms of the
- *  GPL and not to allow others to use your version of this file under
- *  the OSL, indicate your decision by deleting the provisions above and
- *  replace them with the notice and other provisions required by the GPL.
- *  If you do not delete the provisions above, a recipient may use your
- *  version of this file under either the OSL or the GPL.
  *
- * Version 1.0 of the AHCI specification:
+ *  This program is free software; you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License as published by
+ *  the Free Software Foundation; either version 2, or (at your option)
+ *  any later version.
+ *
+ *  This program is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *  GNU General Public License for more details.
+ *
+ *  You should have received a copy of the GNU General Public License
+ *  along with this program; see the file COPYING.  If not, write to
+ *  the Free Software Foundation, 675 Mass Ave, Cambridge, MA 02139, USA.
+ *
+ *
+ * libata documentation is available via 'make {ps|pdf}docs',
+ * as Documentation/DocBook/libata.*
+ *
+ * AHCI hardware documentation:
  * http://www.intel.com/technology/serialata/pdf/rev1_0.pdf
+ * http://www.intel.com/technology/serialata/pdf/rev1_1.pdf
  *
  */
 
@@ -39,7 +47,7 @@
 #include <asm/io.h>
 
 #define DRV_NAME	"ahci"
-#define DRV_VERSION	"1.00"
+#define DRV_VERSION	"1.01"
 
 
 enum {
@@ -50,6 +58,7 @@ enum {
 	AHCI_CMD_SLOT_SZ	= 32 * 32,
 	AHCI_RX_FIS_SZ		= 256,
 	AHCI_CMD_TBL_HDR	= 0x80,
+	AHCI_CMD_TBL_CDB	= 0x40,
 	AHCI_CMD_TBL_SZ		= AHCI_CMD_TBL_HDR + (AHCI_MAX_SG * 16),
 	AHCI_PORT_PRIV_DMA_SZ	= AHCI_CMD_SLOT_SZ + AHCI_CMD_TBL_SZ +
 				  AHCI_RX_FIS_SZ,
@@ -134,6 +143,9 @@ enum {
 	PORT_CMD_ICC_ACTIVE	= (0x1 << 28), /* Put i/f in active state */
 	PORT_CMD_ICC_PARTIAL	= (0x2 << 28), /* Put i/f in partial state */
 	PORT_CMD_ICC_SLUMBER	= (0x6 << 28), /* Put i/f in slumber state */
+
+	/* hpriv->flags bits */
+	AHCI_FLAG_MSI		= (1 << 0),
 };
 
 struct ahci_cmd_hdr {
@@ -177,12 +189,12 @@ static void ahci_irq_clear(struct ata_port *ap);
 static void ahci_eng_timeout(struct ata_port *ap);
 static int ahci_port_start(struct ata_port *ap);
 static void ahci_port_stop(struct ata_port *ap);
-static void ahci_host_stop(struct ata_host_set *host_set);
 static void ahci_tf_read(struct ata_port *ap, struct ata_taskfile *tf);
 static void ahci_qc_prep(struct ata_queued_cmd *qc);
 static u8 ahci_check_status(struct ata_port *ap);
 static u8 ahci_check_err(struct ata_port *ap);
 static inline int ahci_host_intr(struct ata_port *ap, struct ata_queued_cmd *qc);
+static void ahci_remove_one (struct pci_dev *pdev);
 
 static Scsi_Host_Template ahci_sht = {
 	.module			= THIS_MODULE,
@@ -229,7 +241,6 @@ static struct ata_port_operations ahci_ops = {
 
 	.port_start		= ahci_port_start,
 	.port_stop		= ahci_port_stop,
-	.host_stop		= ahci_host_stop,
 };
 
 static struct ata_port_info ahci_port_info[] = {
@@ -239,7 +250,7 @@ static struct ata_port_info ahci_port_info[] = {
 		.host_flags	= ATA_FLAG_SATA | ATA_FLAG_NO_LEGACY |
 				  ATA_FLAG_SATA_RESET | ATA_FLAG_MMIO |
 				  ATA_FLAG_PIO_DMA,
-		.pio_mask	= 0x03, /* pio3-4 */
+		.pio_mask	= 0x1f, /* pio0-4 */
 		.udma_mask	= 0x7f, /* udma0-6 ; FIXME */
 		.port_ops	= &ahci_ops,
 	},
@@ -264,6 +275,8 @@ static struct pci_device_id ahci_pci_tbl[] = {
 	  board_ahci }, /* ESB2 */
 	{ PCI_VENDOR_ID_INTEL, 0x2683, PCI_ANY_ID, PCI_ANY_ID, 0, 0,
 	  board_ahci }, /* ESB2 */
+	{ PCI_VENDOR_ID_INTEL, 0x27c6, PCI_ANY_ID, PCI_ANY_ID, 0, 0,
+	  board_ahci }, /* ICH7-M DH */
 	{ }	/* terminate list */
 };
 
@@ -272,7 +285,7 @@ static struct pci_driver ahci_pci_driver = {
 	.name			= DRV_NAME,
 	.id_table		= ahci_pci_tbl,
 	.probe			= ahci_init_one,
-	.remove			= ata_pci_remove_one,
+	.remove			= ahci_remove_one,
 };
 
 
@@ -281,17 +294,9 @@ static inline unsigned long ahci_port_base_ul (unsigned long base, unsigned int 
 	return base + 0x100 + (port * 0x80);
 }
 
-static inline void *ahci_port_base (void *base, unsigned int port)
+static inline void __iomem *ahci_port_base (void __iomem *base, unsigned int port)
 {
-	return (void *) ahci_port_base_ul((unsigned long)base, port);
-}
-
-static void ahci_host_stop(struct ata_host_set *host_set)
-{
-	struct ahci_host_priv *hpriv = host_set->private_data;
-	kfree(hpriv);
-
-	ata_host_stop(host_set);
+	return (void __iomem *) ahci_port_base_ul((unsigned long)base, port);
 }
 
 static int ahci_port_start(struct ata_port *ap)
@@ -299,26 +304,20 @@ static int ahci_port_start(struct ata_port *ap)
 	struct device *dev = ap->host_set->dev;
 	struct ahci_host_priv *hpriv = ap->host_set->private_data;
 	struct ahci_port_priv *pp;
-	int rc;
-	void *mem, *mmio = ap->host_set->mmio_base;
-	void *port_mmio = ahci_port_base(mmio, ap->port_no);
+	void __iomem *mmio = ap->host_set->mmio_base;
+	void __iomem *port_mmio = ahci_port_base(mmio, ap->port_no);
+	void *mem;
 	dma_addr_t mem_dma;
 
-	rc = ata_port_start(ap);
-	if (rc)
-		return rc;
-
 	pp = kmalloc(sizeof(*pp), GFP_KERNEL);
-	if (!pp) {
-		rc = -ENOMEM;
-		goto err_out;
-	}
+	if (!pp)
+		return -ENOMEM;
 	memset(pp, 0, sizeof(*pp));
 
 	mem = dma_alloc_coherent(dev, AHCI_PORT_PRIV_DMA_SZ, &mem_dma, GFP_KERNEL);
 	if (!mem) {
-		rc = -ENOMEM;
-		goto err_out_kfree;
+		kfree(pp);
+		return -ENOMEM;
 	}
 	memset(mem, 0, AHCI_PORT_PRIV_DMA_SZ);
 
@@ -368,12 +367,6 @@ static int ahci_port_start(struct ata_port *ap)
 	readl(port_mmio + PORT_CMD); /* flush */
 
 	return 0;
-
-err_out_kfree:
-	kfree(pp);
-err_out:
-	ata_port_stop(ap);
-	return rc;
 }
 
 
@@ -381,8 +374,8 @@ static void ahci_port_stop(struct ata_port *ap)
 {
 	struct device *dev = ap->host_set->dev;
 	struct ahci_port_priv *pp = ap->private_data;
-	void *mmio = ap->host_set->mmio_base;
-	void *port_mmio = ahci_port_base(mmio, ap->port_no);
+	void __iomem *mmio = ap->host_set->mmio_base;
+	void __iomem *port_mmio = ahci_port_base(mmio, ap->port_no);
 	u32 tmp;
 
 	tmp = readl(port_mmio + PORT_CMD);
@@ -399,7 +392,6 @@ static void ahci_port_stop(struct ata_port *ap)
 	dma_free_coherent(dev, AHCI_PORT_PRIV_DMA_SZ,
 			  pp->cmd_slot, pp->cmd_slot_dma);
 	kfree(pp);
-	ata_port_stop(ap);
 }
 
 static u32 ahci_scr_read (struct ata_port *ap, unsigned int sc_reg_in)
@@ -506,7 +498,8 @@ static void ahci_fill_sg(struct ata_queued_cmd *qc)
 
 static void ahci_qc_prep(struct ata_queued_cmd *qc)
 {
-	struct ahci_port_priv *pp = qc->ap->private_data;
+	struct ata_port *ap = qc->ap;
+	struct ahci_port_priv *pp = ap->private_data;
 	u32 opts;
 	const u32 cmd_fis_len = 5; /* five dwords */
 
@@ -518,18 +511,8 @@ static void ahci_qc_prep(struct ata_queued_cmd *qc)
 	opts = (qc->n_elem << 16) | cmd_fis_len;
 	if (qc->tf.flags & ATA_TFLAG_WRITE)
 		opts |= AHCI_CMD_WRITE;
-
-	switch (qc->tf.protocol) {
-	case ATA_PROT_ATAPI:
-	case ATA_PROT_ATAPI_NODATA:
-	case ATA_PROT_ATAPI_DMA:
+	if (is_atapi_taskfile(&qc->tf))
 		opts |= AHCI_CMD_ATAPI;
-		break;
-
-	default:
-		/* do nothing */
-		break;
-	}
 
 	pp->cmd_slot[0].opts = cpu_to_le32(opts);
 	pp->cmd_slot[0].status = 0;
@@ -541,6 +524,10 @@ static void ahci_qc_prep(struct ata_queued_cmd *qc)
 	 * a SATA Register - Host to Device command FIS.
 	 */
 	ata_tf_to_fis(&qc->tf, pp->cmd_tbl, 0);
+	if (opts & AHCI_CMD_ATAPI) {
+		memset(pp->cmd_tbl + AHCI_CMD_TBL_CDB, 0, 32);
+		memcpy(pp->cmd_tbl + AHCI_CMD_TBL_CDB, qc->cdb, ap->cdb_len);
+	}
 
 	if (!(qc->flags & ATA_QCFLAG_DMAMAP))
 		return;
@@ -550,8 +537,8 @@ static void ahci_qc_prep(struct ata_queued_cmd *qc)
 
 static void ahci_intr_error(struct ata_port *ap, u32 irq_stat)
 {
-	void *mmio = ap->host_set->mmio_base;
-	void *port_mmio = ahci_port_base(mmio, ap->port_no);
+	void __iomem *mmio = ap->host_set->mmio_base;
+	void __iomem *port_mmio = ahci_port_base(mmio, ap->port_no);
 	u32 tmp;
 	int work;
 
@@ -598,11 +585,15 @@ static void ahci_intr_error(struct ata_port *ap, u32 irq_stat)
 
 static void ahci_eng_timeout(struct ata_port *ap)
 {
-	void *mmio = ap->host_set->mmio_base;
-	void *port_mmio = ahci_port_base(mmio, ap->port_no);
+	struct ata_host_set *host_set = ap->host_set;
+	void __iomem *mmio = host_set->mmio_base;
+	void __iomem *port_mmio = ahci_port_base(mmio, ap->port_no);
 	struct ata_queued_cmd *qc;
+	unsigned long flags;
 
 	DPRINTK("ENTER\n");
+
+	spin_lock_irqsave(&host_set->lock, flags);
 
 	ahci_intr_error(ap, readl(port_mmio + PORT_IRQ_STAT));
 
@@ -621,12 +612,13 @@ static void ahci_eng_timeout(struct ata_port *ap)
 		ata_qc_complete(qc, ATA_ERR);
 	}
 
+	spin_unlock_irqrestore(&host_set->lock, flags);
 }
 
 static inline int ahci_host_intr(struct ata_port *ap, struct ata_queued_cmd *qc)
 {
-	void *mmio = ap->host_set->mmio_base;
-	void *port_mmio = ahci_port_base(mmio, ap->port_no);
+	void __iomem *mmio = ap->host_set->mmio_base;
+	void __iomem *port_mmio = ahci_port_base(mmio, ap->port_no);
 	u32 status, serr, ci;
 
 	serr = readl(port_mmio + PORT_SCR_ERR);
@@ -662,7 +654,7 @@ static irqreturn_t ahci_interrupt (int irq, void *dev_instance, struct pt_regs *
 	struct ata_host_set *host_set = dev_instance;
 	struct ahci_host_priv *hpriv;
 	unsigned int i, handled = 0;
-	void *mmio;
+	void __iomem *mmio;
 	u32 irq_stat, irq_ack = 0;
 
 	VPRINTK("ENTER\n");
@@ -708,10 +700,7 @@ static irqreturn_t ahci_interrupt (int irq, void *dev_instance, struct pt_regs *
 static int ahci_qc_issue(struct ata_queued_cmd *qc)
 {
 	struct ata_port *ap = qc->ap;
-	void *port_mmio = (void *) ap->ioaddr.cmd_addr;
-
-	writel(1, port_mmio + PORT_SCR_ACT);
-	readl(port_mmio + PORT_SCR_ACT);	/* flush */
+	void __iomem *port_mmio = (void __iomem *) ap->ioaddr.cmd_addr;
 
 	writel(1, port_mmio + PORT_CMD_ISSUE);
 	readl(port_mmio + PORT_CMD_ISSUE);	/* flush */
@@ -795,8 +784,6 @@ static int ahci_host_init(struct ata_probe_ent *probe_ent)
 				return rc;
 			}
 		}
-
-		hpriv->flags |= HOST_CAP_64;
 	} else {
 		rc = pci_set_dma_mask(pdev, DMA_32BIT_MASK);
 		if (rc) {
@@ -878,23 +865,11 @@ static int ahci_host_init(struct ata_probe_ent *probe_ent)
 	return 0;
 }
 
-/* move to PCI layer, integrate w/ MSI stuff */
-static void pci_enable_intx(struct pci_dev *pdev)
-{
-	u16 pci_command;
-
-	pci_read_config_word(pdev, PCI_COMMAND, &pci_command);
-	if (pci_command & PCI_COMMAND_INTX_DISABLE) {
-		pci_command &= ~PCI_COMMAND_INTX_DISABLE;
-		pci_write_config_word(pdev, PCI_COMMAND, pci_command);
-	}
-}
-
 static void ahci_print_info(struct ata_probe_ent *probe_ent)
 {
 	struct ahci_host_priv *hpriv = probe_ent->private_data;
 	struct pci_dev *pdev = to_pci_dev(probe_ent->dev);
-	void *mmio = probe_ent->mmio_base;
+	void __iomem *mmio = probe_ent->mmio_base;
 	u32 vers, cap, impl, speed;
 	const char *speed_s;
 	u16 cc;
@@ -967,9 +942,9 @@ static int ahci_init_one (struct pci_dev *pdev, const struct pci_device_id *ent)
 	struct ata_probe_ent *probe_ent = NULL;
 	struct ahci_host_priv *hpriv;
 	unsigned long base;
-	void *mmio_base;
+	void __iomem *mmio_base;
 	unsigned int board_idx = (unsigned int) ent->driver_data;
-	int pci_dev_busy = 0;
+	int have_msi, pci_dev_busy = 0;
 	int rc;
 
 	VPRINTK("ENTER\n");
@@ -987,20 +962,24 @@ static int ahci_init_one (struct pci_dev *pdev, const struct pci_device_id *ent)
 		goto err_out;
 	}
 
-	pci_enable_intx(pdev);
+	if (pci_enable_msi(pdev) == 0)
+		have_msi = 1;
+	else {
+		pci_intx(pdev, 1);
+		have_msi = 0;
+	}
 
 	probe_ent = kmalloc(sizeof(*probe_ent), GFP_KERNEL);
 	if (probe_ent == NULL) {
 		rc = -ENOMEM;
-		goto err_out_regions;
+		goto err_out_msi;
 	}
 
 	memset(probe_ent, 0, sizeof(*probe_ent));
 	probe_ent->dev = pci_dev_to_dev(pdev);
 	INIT_LIST_HEAD(&probe_ent->node);
 
-	mmio_base = ioremap(pci_resource_start(pdev, AHCI_PCI_BAR),
-		            pci_resource_len(pdev, AHCI_PCI_BAR));
+	mmio_base = pci_iomap(pdev, AHCI_PCI_BAR, 0);
 	if (mmio_base == NULL) {
 		rc = -ENOMEM;
 		goto err_out_free_ent;
@@ -1025,6 +1004,9 @@ static int ahci_init_one (struct pci_dev *pdev, const struct pci_device_id *ent)
 	probe_ent->mmio_base = mmio_base;
 	probe_ent->private_data = hpriv;
 
+	if (have_msi)
+		hpriv->flags |= AHCI_FLAG_MSI;
+
 	/* initialize adapter */
 	rc = ahci_host_init(probe_ent);
 	if (rc)
@@ -1041,10 +1023,14 @@ static int ahci_init_one (struct pci_dev *pdev, const struct pci_device_id *ent)
 err_out_hpriv:
 	kfree(hpriv);
 err_out_iounmap:
-	iounmap(mmio_base);
+	pci_iounmap(pdev, mmio_base);
 err_out_free_ent:
 	kfree(probe_ent);
-err_out_regions:
+err_out_msi:
+	if (have_msi)
+		pci_disable_msi(pdev);
+	else
+		pci_intx(pdev, 0);
 	pci_release_regions(pdev);
 err_out:
 	if (!pci_dev_busy)
@@ -1052,12 +1038,48 @@ err_out:
 	return rc;
 }
 
+static void ahci_remove_one (struct pci_dev *pdev)
+{
+	struct device *dev = pci_dev_to_dev(pdev);
+	struct ata_host_set *host_set = dev_get_drvdata(dev);
+	struct ahci_host_priv *hpriv = host_set->private_data;
+	struct ata_port *ap;
+	unsigned int i;
+	int have_msi;
+
+	for (i = 0; i < host_set->n_ports; i++) {
+		ap = host_set->ports[i];
+
+		scsi_remove_host(ap->host);
+	}
+
+	have_msi = hpriv->flags & AHCI_FLAG_MSI;
+	free_irq(host_set->irq, host_set);
+
+	for (i = 0; i < host_set->n_ports; i++) {
+		ap = host_set->ports[i];
+
+		ata_scsi_release(ap->host);
+		scsi_host_put(ap->host);
+	}
+
+	kfree(hpriv);
+	pci_iounmap(pdev, host_set->mmio_base);
+	kfree(host_set);
+
+	if (have_msi)
+		pci_disable_msi(pdev);
+	else
+		pci_intx(pdev, 0);
+	pci_release_regions(pdev);
+	pci_disable_device(pdev);
+	dev_set_drvdata(dev, NULL);
+}
 
 static int __init ahci_init(void)
 {
 	return pci_module_init(&ahci_pci_driver);
 }
-
 
 static void __exit ahci_exit(void)
 {
@@ -1069,6 +1091,7 @@ MODULE_AUTHOR("Jeff Garzik");
 MODULE_DESCRIPTION("AHCI SATA low-level driver");
 MODULE_LICENSE("GPL");
 MODULE_DEVICE_TABLE(pci, ahci_pci_tbl);
+MODULE_VERSION(DRV_VERSION);
 
 module_init(ahci_init);
 module_exit(ahci_exit);

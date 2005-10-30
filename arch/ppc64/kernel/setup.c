@@ -25,7 +25,7 @@
 #include <linux/seq_file.h>
 #include <linux/ioport.h>
 #include <linux/console.h>
-#include <linux/version.h>
+#include <linux/utsname.h>
 #include <linux/tty.h>
 #include <linux/root_dev.h>
 #include <linux/notifier.h>
@@ -41,7 +41,6 @@
 #include <asm/smp.h>
 #include <asm/elf.h>
 #include <asm/machdep.h>
-#include <asm/iSeries/LparData.h>
 #include <asm/paca.h>
 #include <asm/ppcdebug.h>
 #include <asm/time.h>
@@ -57,6 +56,8 @@
 #include <asm/cache.h>
 #include <asm/page.h>
 #include <asm/mmu.h>
+#include <asm/lmb.h>
+#include <asm/iSeries/ItLpNaca.h>
 
 #ifdef DEBUG
 #define DBG(fmt...) udbg_printf(fmt)
@@ -88,14 +89,13 @@ extern void udbg_init_maple_realmode(void);
 #define EARLY_DEBUG_INIT() udbg_init_maple_realmode()
 #define EARLY_DEBUG_INIT() udbg_init_pmac_realmode()
 #define EARLY_DEBUG_INIT()						\
-	do { ppc_md.udbg_putc = call_rtas_display_status_delay; } while(0)
+	do { udbg_putc = call_rtas_display_status_delay; } while(0)
 #endif
 
 /* extern void *stab; */
 extern unsigned long klimit;
 
 extern void mm_init_ppc64(void);
-extern int  idle_setup(void);
 extern void stab_initialize(unsigned long stab);
 extern void htab_initialize(void);
 extern void early_init_devtree(void *flat_dt);
@@ -108,7 +108,6 @@ int boot_cpuid = 0;
 int boot_cpuid_phys = 0;
 dev_t boot_dev;
 u64 ppc64_pft_size;
-u64 ppc64_debug_switch;
 
 struct ppc64_caches ppc64_caches;
 EXPORT_SYMBOL_GPL(ppc64_caches);
@@ -153,34 +152,6 @@ struct screen_info screen_info = {
 	.orig_video_isVGA = 1,
 	.orig_video_points = 16
 };
-
-/*
- * Initialize the PPCDBG state.  Called before relocation has been enabled.
- */
-void __init ppcdbg_initialize(void)
-{
-	ppc64_debug_switch = PPC_DEBUG_DEFAULT; /* | PPCDBG_BUSWALK | */
-	/* PPCDBG_PHBINIT | PPCDBG_MM | PPCDBG_MMINIT | PPCDBG_TCEINIT | PPCDBG_TCE */;
-}
-
-/*
- * Early boot console based on udbg
- */
-static struct console udbg_console = {
-	.name	= "udbg",
-	.write	= udbg_console_write,
-	.flags	= CON_PRINTBUFFER,
-	.index	= -1,
-};
-static int early_console_initialized;
-
-void __init disable_early_printk(void)
-{
-	if (!early_console_initialized)
-		return;
-	unregister_console(&udbg_console);
-	early_console_initialized = 0;
-}
 
 #if defined(CONFIG_PPC_MULTIPLATFORM) && defined(CONFIG_SMP)
 
@@ -343,6 +314,7 @@ static void __init setup_cpu_maps(void)
 extern struct machdep_calls pSeries_md;
 extern struct machdep_calls pmac_md;
 extern struct machdep_calls maple_md;
+extern struct machdep_calls bpa_md;
 
 /* Ultimately, stuff them in an elf section like initcalls... */
 static struct machdep_calls __initdata *machines[] = {
@@ -355,6 +327,9 @@ static struct machdep_calls __initdata *machines[] = {
 #ifdef CONFIG_PPC_MAPLE
 	&maple_md,
 #endif /* CONFIG_PPC_MAPLE */
+#ifdef CONFIG_PPC_BPA
+	&bpa_md,
+#endif
 	NULL
 };
 
@@ -420,12 +395,6 @@ void __init early_setup(unsigned long dt_ptr)
 		for (;;);
 	}
 	ppc_md = **mach;
-
-	/* our udbg callbacks got overriden by the above, let's put them
-	 * back in. Ultimately, I want those things to be split from the
-	 * main ppc_md
-	 */
-	EARLY_DEBUG_INIT();
 
 	DBG("Found, Initializing memory management...\n");
 
@@ -532,15 +501,19 @@ static void __init check_for_initrd(void)
 
 	DBG(" -> check_for_initrd()\n");
 
-	prop = (u64 *)get_property(of_chosen, "linux,initrd-start", NULL);
-	if (prop != NULL) {
-		initrd_start = (unsigned long)__va(*prop);
-		prop = (u64 *)get_property(of_chosen, "linux,initrd-end", NULL);
+	if (of_chosen) {
+		prop = (u64 *)get_property(of_chosen,
+				"linux,initrd-start", NULL);
 		if (prop != NULL) {
-			initrd_end = (unsigned long)__va(*prop);
-			initrd_below_start_ok = 1;
-		} else
-			initrd_start = 0;
+			initrd_start = (unsigned long)__va(*prop);
+			prop = (u64 *)get_property(of_chosen,
+					"linux,initrd-end", NULL);
+			if (prop != NULL) {
+				initrd_end = (unsigned long)__va(*prop);
+				initrd_below_start_ok = 1;
+			} else
+				initrd_start = 0;
+		}
 	}
 
 	/* If we were passed an initrd, set the ROOT_DEV properly if the values
@@ -623,13 +596,12 @@ void __init setup_system(void)
 	 * Initialize xmon
 	 */
 #ifdef CONFIG_XMON_DEFAULT
-	xmon_init();
+	xmon_init(1);
 #endif
 	/*
 	 * Register early console
 	 */
-	early_console_initialized = 1;
-	register_console(&udbg_console);
+	register_early_udbg_console();
 
 	/* Save unparsed command line copy for /proc/cmdline */
 	strlcpy(saved_command_line, cmd_line, COMMAND_LINE_SIZE);
@@ -649,7 +621,7 @@ void __init setup_system(void)
 	smp_release_cpus();
 #endif /* defined(CONFIG_SMP) && !defined(CONFIG_PPC_ISERIES) */
 
-	printk("Starting Linux PPC64 %s\n", UTS_RELEASE);
+	printk("Starting Linux PPC64 %s\n", system_utsname.version);
 
 	printk("-----------------------------------------------------\n");
 	printk("ppc64_pft_size                = 0x%lx\n", ppc64_pft_size);
@@ -672,36 +644,50 @@ void __init setup_system(void)
 	DBG(" <- setup_system()\n");
 }
 
+/* also used by kexec */
+void machine_shutdown(void)
+{
+	if (ppc_md.nvram_sync)
+		ppc_md.nvram_sync();
+}
 
 void machine_restart(char *cmd)
 {
-	if (ppc_md.nvram_sync)
-		ppc_md.nvram_sync();
+	machine_shutdown();
 	ppc_md.restart(cmd);
+#ifdef CONFIG_SMP
+	smp_send_stop();
+#endif
+	printk(KERN_EMERG "System Halted, OK to turn off power\n");
+	local_irq_disable();
+	while (1) ;
 }
 
-EXPORT_SYMBOL(machine_restart);
-  
 void machine_power_off(void)
 {
-	if (ppc_md.nvram_sync)
-		ppc_md.nvram_sync();
+	machine_shutdown();
 	ppc_md.power_off();
+#ifdef CONFIG_SMP
+	smp_send_stop();
+#endif
+	printk(KERN_EMERG "System Halted, OK to turn off power\n");
+	local_irq_disable();
+	while (1) ;
 }
+/* Used by the G5 thermal driver */
+EXPORT_SYMBOL_GPL(machine_power_off);
 
-EXPORT_SYMBOL(machine_power_off);
-  
 void machine_halt(void)
 {
-	if (ppc_md.nvram_sync)
-		ppc_md.nvram_sync();
+	machine_shutdown();
 	ppc_md.halt();
+#ifdef CONFIG_SMP
+	smp_send_stop();
+#endif
+	printk(KERN_EMERG "System Halted, OK to turn off power\n");
+	local_irq_disable();
+	while (1) ;
 }
-
-EXPORT_SYMBOL(machine_halt);
-
-unsigned long ppc_proc_freq;
-unsigned long ppc_tb_freq;
 
 static int ppc64_panic_event(struct notifier_block *this,
                              unsigned long event, void *ptr)
@@ -1052,16 +1038,22 @@ void __init setup_arch(char **cmdline_p)
 	irqstack_early_init();
 	emergency_stack_init();
 
+	stabs_alloc();
+
 	/* set up the bootmem stuff with available memory */
 	do_init_bootmem();
+	sparse_init();
 
 	/* initialize the syscall map in systemcfg */
 	setup_syscall_map();
 
 	ppc_md.setup_arch();
 
-	/* Select the correct idle loop for the platform. */
-	idle_setup();
+	/* Use the default idle loop if the platform hasn't provided one. */
+	if (NULL == ppc_md.idle_loop) {
+		ppc_md.idle_loop = default_idle;
+		printk(KERN_INFO "Using default idle loop\n");
+	}
 
 	paging_init();
 	ppc64_boot_msg(0x15, "Setup Done");
@@ -1072,17 +1064,15 @@ void __init setup_arch(char **cmdline_p)
 #define PPC64_LINUX_FUNCTION 0x0f000000
 #define PPC64_IPL_MESSAGE 0xc0000000
 #define PPC64_TERM_MESSAGE 0xb0000000
-#define PPC64_ATTN_MESSAGE 0xa0000000
-#define PPC64_DUMP_MESSAGE 0xd0000000
 
 static void ppc64_do_msg(unsigned int src, const char *msg)
 {
 	if (ppc_md.progress) {
-		char buf[32];
+		char buf[128];
 
-		sprintf(buf, "%08x        \n", src);
+		sprintf(buf, "%08X\n", src);
 		ppc_md.progress(buf, 0);
-		sprintf(buf, "%-16s", msg);
+		snprintf(buf, 128, "%s", msg);
 		ppc_md.progress(buf, 0);
 	}
 }
@@ -1101,22 +1091,8 @@ void ppc64_terminate_msg(unsigned int src, const char *msg)
 	printk("[terminate]%04x %s\n", src, msg);
 }
 
-/* Print something that needs attention (device error, etc) */
-void ppc64_attention_msg(unsigned int src, const char *msg)
-{
-	ppc64_do_msg(PPC64_LINUX_FUNCTION|PPC64_ATTN_MESSAGE|src, msg);
-	printk("[attention]%04x %s\n", src, msg);
-}
-
-/* Print a dump progress message. */
-void ppc64_dump_msg(unsigned int src, const char *msg)
-{
-	ppc64_do_msg(PPC64_LINUX_FUNCTION|PPC64_DUMP_MESSAGE|src, msg);
-	printk("[dump]%04x %s\n", src, msg);
-}
-
 /* This should only be called on processor 0 during calibrate decr */
-void setup_default_decr(void)
+void __init setup_default_decr(void)
 {
 	struct paca_struct *lpaca = get_paca();
 
@@ -1291,7 +1267,7 @@ void __init generic_find_legacy_serial_ports(u64 *physport,
 
 static struct platform_device serial_device = {
 	.name	= "serial8250",
-	.id	= 0,
+	.id	= PLAT8250_DEV_PLATFORM,
 	.dev	= {
 		.platform_data = serial_ports,
 	},
@@ -1319,11 +1295,13 @@ static int __init early_xmon(char *p)
 	/* ensure xmon is enabled */
 	if (p) {
 		if (strncmp(p, "on", 2) == 0)
-			xmon_init();
+			xmon_init(1);
+		if (strncmp(p, "off", 3) == 0)
+			xmon_init(0);
 		if (strncmp(p, "early", 5) != 0)
 			return 0;
 	}
-	xmon_init();
+	xmon_init(1);
 	debugger(NULL);
 
 	return 0;

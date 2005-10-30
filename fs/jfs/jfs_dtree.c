@@ -102,6 +102,7 @@
 
 #include <linux/fs.h>
 #include <linux/quotaops.h>
+#include <linux/vs_dlimit.h>
 #include "jfs_incore.h"
 #include "jfs_superblock.h"
 #include "jfs_filsys.h"
@@ -381,9 +382,12 @@ static u32 add_index(tid_t tid, struct inode *ip, s64 bn, int slot)
 		 * It's time to move the inline table to an external
 		 * page and begin to build the xtree
 		 */
-		if (DQUOT_ALLOC_BLOCK(ip, sbi->nbperpage) ||
-		    dbAlloc(ip, 0, sbi->nbperpage, &xaddr))
-			goto clean_up;	/* No space */
+		if (DQUOT_ALLOC_BLOCK(ip, sbi->nbperpage))
+			goto clean_up;
+		if (DLIMIT_ALLOC_BLOCK(ip, sbi->nbperpage))
+			goto clean_up_quota;
+		if (dbAlloc(ip, 0, sbi->nbperpage, &xaddr))
+			goto clean_up_dlim;
 
 		/*
 		 * Save the table, we're going to overwrite it with the
@@ -397,13 +401,15 @@ static u32 add_index(tid_t tid, struct inode *ip, s64 bn, int slot)
 		xtInitRoot(tid, ip);
 
 		/*
-		 * Allocate the first block & add it to the xtree
+		 * Add the first block to the xtree
 		 */
 		if (xtInsert(tid, ip, 0, 0, sbi->nbperpage, &xaddr, 0)) {
 			/* This really shouldn't fail */
 			jfs_warn("add_index: xtInsert failed!");
 			memcpy(&jfs_ip->i_dirtable, temp_table,
 			       sizeof (temp_table));
+			dbFree(ip, xaddr, sbi->nbperpage);
+			DQUOT_FREE_BLOCK(ip, sbi->nbperpage);
 			goto clean_up;
 		}
 		ip->i_size = PSIZE;
@@ -474,6 +480,10 @@ static u32 add_index(tid_t tid, struct inode *ip, s64 bn, int slot)
 
 	return index;
 
+      clean_up_dlim:
+	DLIMIT_FREE_BLOCK(ip, sbi->nbperpage);
+      clean_up_quota:
+	DQUOT_FREE_BLOCK(ip, sbi->nbperpage);
       clean_up:
 
 	jfs_ip->next_index--;
@@ -925,7 +935,8 @@ int dtInsert(tid_t tid, struct inode *ip,
 static int dtSplitUp(tid_t tid,
 	  struct inode *ip, struct dtsplit * split, struct btstack * btstack)
 {
-	struct jfs_sb_info *sbi = JFS_SBI(ip->i_sb);
+	struct super_block *sb = ip->i_sb;
+	struct jfs_sb_info *sbi = JFS_SBI(sb);
 	int rc = 0;
 	struct metapage *smp;
 	dtpage_t *sp;		/* split page */
@@ -947,6 +958,7 @@ static int dtSplitUp(tid_t tid,
 	struct tlock *tlck;
 	struct lv *lv;
 	int quota_allocation = 0;
+	int dlimit_allocation = 0;
 
 	/* get split page */
 	smp = split->mp;
@@ -1027,6 +1039,12 @@ static int dtSplitUp(tid_t tid,
 			goto extendOut;
 		}
 		quota_allocation += n;
+
+		if (DLIMIT_ALLOC_BLOCK(ip, n)) {
+			rc = -ENOSPC;
+			goto extendOut;
+		}
+		dlimit_allocation += n;
 
 		if ((rc = dbReAlloc(sbi->ipbmap, xaddr, (s64) xlen,
 				    (s64) n, &nxaddr)))
@@ -1296,6 +1314,9 @@ static int dtSplitUp(tid_t tid,
       freeKeyName:
 	kfree(key.name);
 
+	/* Rollback dlimit allocation */
+	if (rc && dlimit_allocation)
+		DLIMIT_FREE_BLOCK(ip, dlimit_allocation);
 	/* Rollback quota allocation */
 	if (rc && quota_allocation)
 		DQUOT_FREE_BLOCK(ip, quota_allocation);
@@ -1362,6 +1383,12 @@ static int dtSplitPage(tid_t tid, struct inode *ip, struct dtsplit * split,
 	if (DQUOT_ALLOC_BLOCK(ip, lengthPXD(pxd))) {
 		release_metapage(rmp);
 		return -EDQUOT;
+	}
+	/* Allocate blocks to dlimit. */
+	if (DLIMIT_ALLOC_BLOCK(ip, lengthPXD(pxd))) {
+		DQUOT_FREE_BLOCK(ip, lengthPXD(pxd));
+		release_metapage(rmp);
+		return -ENOSPC;
 	}
 
 	jfs_info("dtSplitPage: ip:0x%p smp:0x%p rmp:0x%p", ip, smp, rmp);
@@ -1913,6 +1940,12 @@ static int dtSplitRoot(tid_t tid,
 		release_metapage(rmp);
 		return -EDQUOT;
 	}
+	/* Allocate blocks to dlimit. */
+	if (DLIMIT_ALLOC_BLOCK(ip, lengthPXD(pxd))) {
+		DQUOT_FREE_BLOCK(ip, lengthPXD(pxd));
+		release_metapage(rmp);
+		return -ENOSPC;
+	}
 
 	BT_MARK_DIRTY(rmp, ip);
 	/*
@@ -2279,6 +2312,8 @@ static int dtDeleteUp(tid_t tid, struct inode *ip,
 
 	xlen = lengthPXD(&fp->header.self);
 
+	/* Free dlimit allocation. */
+	DLIMIT_FREE_BLOCK(ip, xlen);
 	/* Free quota allocation. */
 	DQUOT_FREE_BLOCK(ip, xlen);
 
@@ -2355,6 +2390,8 @@ static int dtDeleteUp(tid_t tid, struct inode *ip,
 
 				xlen = lengthPXD(&p->header.self);
 
+				/* Free dlimit allocation */
+				DLIMIT_FREE_BLOCK(ip, xlen);
 				/* Free quota allocation */
 				DQUOT_FREE_BLOCK(ip, xlen);
 
@@ -2931,6 +2968,9 @@ static void add_missing_indices(struct inode *inode, s64 bn)
 	ASSERT(p->header.flag & BT_LEAF);
 
 	tlck = txLock(tid, inode, mp, tlckDTREE | tlckENTRY);
+	if (BT_IS_ROOT(mp))
+		tlck->type |= tlckBTROOT;
+
 	dtlck = (struct dt_lock *) &tlck->lock;
 
 	stbl = DT_GETSTBL(p);
@@ -4551,202 +4591,3 @@ int dtModify(tid_t tid, struct inode *ip,
 
 	return 0;
 }
-
-#ifdef _JFS_DEBUG_DTREE
-/*
- *	dtDisplayTree()
- *
- * function: traverse forward
- */
-int dtDisplayTree(struct inode *ip)
-{
-	int rc;
-	struct metapage *mp;
-	dtpage_t *p;
-	s64 bn, pbn;
-	int index, lastindex, v, h;
-	pxd_t *xd;
-	struct btstack btstack;
-	struct btframe *btsp;
-	struct btframe *parent;
-	u8 *stbl;
-	int psize = 256;
-
-	printk("display B+-tree.\n");
-
-	/* clear stack */
-	btsp = btstack.stack;
-
-	/*
-	 * start with root
-	 *
-	 * root resides in the inode
-	 */
-	bn = 0;
-	v = h = 0;
-
-	/*
-	 * first access of each page:
-	 */
-      newPage:
-	DT_GETPAGE(ip, bn, mp, psize, p, rc);
-	if (rc)
-		return rc;
-
-	/* process entries forward from first index */
-	index = 0;
-	lastindex = p->header.nextindex - 1;
-
-	if (p->header.flag & BT_INTERNAL) {
-		/*
-		 * first access of each internal page
-		 */
-		printf("internal page ");
-		dtDisplayPage(ip, bn, p);
-
-		goto getChild;
-	} else {		/* (p->header.flag & BT_LEAF) */
-
-		/*
-		 * first access of each leaf page
-		 */
-		printf("leaf page ");
-		dtDisplayPage(ip, bn, p);
-
-		/*
-		 * process leaf page entries
-		 *
-		 for ( ; index <= lastindex; index++)
-		 {
-		 }
-		 */
-
-		/* unpin the leaf page */
-		DT_PUTPAGE(mp);
-	}
-
-	/*
-	 * go back up to the parent page
-	 */
-      getParent:
-	/* pop/restore parent entry for the current child page */
-	if ((parent = (btsp == btstack.stack ? NULL : --btsp)) == NULL)
-		/* current page must have been root */
-		return;
-
-	/*
-	 * parent page scan completed
-	 */
-	if ((index = parent->index) == (lastindex = parent->lastindex)) {
-		/* go back up to the parent page */
-		goto getParent;
-	}
-
-	/*
-	 * parent page has entries remaining
-	 */
-	/* get back the parent page */
-	bn = parent->bn;
-	/* v = parent->level; */
-	DT_GETPAGE(ip, bn, mp, PSIZE, p, rc);
-	if (rc)
-		return rc;
-
-	/* get next parent entry */
-	index++;
-
-	/*
-	 * internal page: go down to child page of current entry
-	 */
-      getChild:
-	/* push/save current parent entry for the child page */
-	btsp->bn = pbn = bn;
-	btsp->index = index;
-	btsp->lastindex = lastindex;
-	/* btsp->level = v; */
-	/* btsp->node = h; */
-	++btsp;
-
-	/* get current entry for the child page */
-	stbl = DT_GETSTBL(p);
-	xd = (pxd_t *) & p->slot[stbl[index]];
-
-	/*
-	 * first access of each internal entry:
-	 */
-
-	/* get child page */
-	bn = addressPXD(xd);
-	psize = lengthPXD(xd) << ip->i_ipmnt->i_l2bsize;
-
-	printk("traverse down 0x%Lx[%d]->0x%Lx\n", pbn, index, bn);
-	v++;
-	h = index;
-
-	/* release parent page */
-	DT_PUTPAGE(mp);
-
-	/* process the child page */
-	goto newPage;
-}
-
-
-/*
- *	dtDisplayPage()
- *
- * function: display page
- */
-int dtDisplayPage(struct inode *ip, s64 bn, dtpage_t * p)
-{
-	int rc;
-	struct metapage *mp;
-	struct ldtentry *lh;
-	struct idtentry *ih;
-	pxd_t *xd;
-	int i, j;
-	u8 *stbl;
-	wchar_t name[JFS_NAME_MAX + 1];
-	struct component_name key = { 0, name };
-	int freepage = 0;
-
-	if (p == NULL) {
-		freepage = 1;
-		DT_GETPAGE(ip, bn, mp, PSIZE, p, rc);
-		if (rc)
-			return rc;
-	}
-
-	/* display page control */
-	printk("bn:0x%Lx flag:0x%08x nextindex:%d\n",
-	       bn, p->header.flag, p->header.nextindex);
-
-	/* display entries */
-	stbl = DT_GETSTBL(p);
-	for (i = 0, j = 1; i < p->header.nextindex; i++, j++) {
-		dtGetKey(p, i, &key, JFS_SBI(ip->i_sb)->mntflag);
-		key.name[key.namlen] = '\0';
-		if (p->header.flag & BT_LEAF) {
-			lh = (struct ldtentry *) & p->slot[stbl[i]];
-			printf("\t[%d] %s:%d", i, key.name,
-			       le32_to_cpu(lh->inumber));
-		} else {
-			ih = (struct idtentry *) & p->slot[stbl[i]];
-			xd = (pxd_t *) ih;
-			bn = addressPXD(xd);
-			printf("\t[%d] %s:0x%Lx", i, key.name, bn);
-		}
-
-		if (j == 4) {
-			printf("\n");
-			j = 0;
-		}
-	}
-
-	printf("\n");
-
-	if (freepage)
-		DT_PUTPAGE(mp);
-
-	return 0;
-}
-#endif				/* _JFS_DEBUG_DTREE */

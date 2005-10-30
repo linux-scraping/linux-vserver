@@ -31,12 +31,12 @@
  */
 
 #include "debug.h"
+#include "spin.h"
 
 #include <asm/page.h>
 #include <linux/sched.h>
 #include <linux/kernel.h>
 
-int			doass = 1;
 static char		message[256];	/* keep it off the stack */
 static DEFINE_SPINLOCK(xfs_err_lock);
 

@@ -28,7 +28,6 @@
    Note: we assume there can only be one device, with one SMBus interface.
 */
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/moduleparam.h>
 #include <linux/pci.h>
@@ -244,7 +243,7 @@ static int piix4_transaction(void)
 	/* Make sure the SMBus host is ready to start transmitting */
 	if ((temp = inb_p(SMBHSTSTS)) != 0x00) {
 		dev_dbg(&piix4_adapter.dev, "SMBus busy (%02x). "
-			"Resetting... \n", temp);
+			"Resetting...\n", temp);
 		outb_p(temp, SMBHSTSTS);
 		if ((temp = inb_p(SMBHSTSTS)) != 0x00) {
 			dev_err(&piix4_adapter.dev, "Failed! (%02x)\n", temp);
@@ -400,8 +399,6 @@ static u32 piix4_func(struct i2c_adapter *adapter)
 }
 
 static struct i2c_algorithm smbus_algorithm = {
-	.name		= "Non-I2C SMBus adapter",
-	.id		= I2C_ALGO_SMBUS,
 	.smbus_xfer	= piix4_access,
 	.functionality	= piix4_func,
 };

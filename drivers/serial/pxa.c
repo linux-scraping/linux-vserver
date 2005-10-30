@@ -80,7 +80,7 @@ static void serial_pxa_enable_ms(struct uart_port *port)
 	serial_out(up, UART_IER, up->ier);
 }
 
-static void serial_pxa_stop_tx(struct uart_port *port, unsigned int tty_stop)
+static void serial_pxa_stop_tx(struct uart_port *port)
 {
 	struct uart_pxa_port *up = (struct uart_pxa_port *)port;
 
@@ -185,7 +185,7 @@ static void transmit_chars(struct uart_pxa_port *up)
 		return;
 	}
 	if (uart_circ_empty(xmit) || uart_tx_stopped(&up->port)) {
-		serial_pxa_stop_tx(&up->port, 0);
+		serial_pxa_stop_tx(&up->port);
 		return;
 	}
 
@@ -203,10 +203,10 @@ static void transmit_chars(struct uart_pxa_port *up)
 
 
 	if (uart_circ_empty(xmit))
-		serial_pxa_stop_tx(&up->port, 0);
+		serial_pxa_stop_tx(&up->port);
 }
 
-static void serial_pxa_start_tx(struct uart_port *port, unsigned int tty_start)
+static void serial_pxa_start_tx(struct uart_port *port)
 {
 	struct uart_pxa_port *up = (struct uart_pxa_port *)port;
 
@@ -274,14 +274,11 @@ static unsigned int serial_pxa_tx_empty(struct uart_port *port)
 static unsigned int serial_pxa_get_mctrl(struct uart_port *port)
 {
 	struct uart_pxa_port *up = (struct uart_pxa_port *)port;
-	unsigned long flags;
 	unsigned char status;
 	unsigned int ret;
 
 return TIOCM_CTS | TIOCM_DSR | TIOCM_CAR;
-	spin_lock_irqsave(&up->port.lock, flags);
 	status = serial_in(up, UART_MSR);
-	spin_unlock_irqrestore(&up->port.lock, flags);
 
 	ret = 0;
 	if (status & UART_MSR_DCD)
@@ -455,22 +452,22 @@ serial_pxa_set_termios(struct uart_port *port, struct termios *termios,
 
 	switch (termios->c_cflag & CSIZE) {
 	case CS5:
-		cval = 0x00;
+		cval = UART_LCR_WLEN5;
 		break;
 	case CS6:
-		cval = 0x01;
+		cval = UART_LCR_WLEN6;
 		break;
 	case CS7:
-		cval = 0x02;
+		cval = UART_LCR_WLEN7;
 		break;
 	default:
 	case CS8:
-		cval = 0x03;
+		cval = UART_LCR_WLEN8;
 		break;
 	}
 
 	if (termios->c_cflag & CSTOPB)
-		cval |= 0x04;
+		cval |= UART_LCR_STOP;
 	if (termios->c_cflag & PARENB)
 		cval |= UART_LCR_PARITY;
 	if (!(termios->c_cflag & PARODD))
@@ -502,7 +499,7 @@ serial_pxa_set_termios(struct uart_port *port, struct termios *termios,
 	/*
 	 * Update the per-port timeout.
 	 */
-	uart_update_timeout(port, termios->c_cflag, quot);
+	uart_update_timeout(port, termios->c_cflag, baud);
 
 	up->port.read_status_mask = UART_LSR_OE | UART_LSR_THRE | UART_LSR_DR;
 	if (termios->c_iflag & INPCK)
@@ -592,8 +589,8 @@ serial_pxa_type(struct uart_port *port)
 
 #ifdef CONFIG_SERIAL_PXA_CONSOLE
 
-extern struct uart_pxa_port serial_pxa_ports[];
-extern struct uart_driver serial_pxa_reg;
+static struct uart_pxa_port serial_pxa_ports[];
+static struct uart_driver serial_pxa_reg;
 
 #define BOTH_EMPTY (UART_LSR_TEMT | UART_LSR_THRE)
 

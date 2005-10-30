@@ -337,8 +337,8 @@ out:
 	return err;
 }
 
-int snd_pcm_hw_params(snd_pcm_substream_t *substream,
-		      snd_pcm_hw_params_t *params)
+static int snd_pcm_hw_params(snd_pcm_substream_t *substream,
+			     snd_pcm_hw_params_t *params)
 {
 	snd_pcm_runtime_t *runtime;
 	int err;
@@ -859,6 +859,7 @@ static struct action_ops snd_pcm_action_start = {
 
 /**
  * snd_pcm_start
+ * @substream: the PCM substream instance
  *
  * Start all linked streams.
  */
@@ -908,6 +909,8 @@ static struct action_ops snd_pcm_action_stop = {
 
 /**
  * snd_pcm_stop
+ * @substream: the PCM substream instance
+ * @state: PCM state after stopping the stream
  *
  * Try to stop all running streams in the substream group.
  * The state of each stream is changed to the given value after that unconditionally.
@@ -919,6 +922,7 @@ int snd_pcm_stop(snd_pcm_substream_t *substream, int state)
 
 /**
  * snd_pcm_drain_done
+ * @substream: the PCM substream
  *
  * Stop the DMA only when the given stream is playback.
  * The state is changed to SETUP.
@@ -1025,7 +1029,7 @@ static void snd_pcm_post_suspend(snd_pcm_substream_t *substream, int state)
 	snd_pcm_runtime_t *runtime = substream->runtime;
 	snd_pcm_trigger_tstamp(substream);
 	if (substream->timer)
-		snd_timer_notify(substream->timer, SNDRV_TIMER_EVENT_MPAUSE, &runtime->trigger_tstamp);
+		snd_timer_notify(substream->timer, SNDRV_TIMER_EVENT_MSUSPEND, &runtime->trigger_tstamp);
 	runtime->status->suspended_state = runtime->status->state;
 	runtime->status->state = SNDRV_PCM_STATE_SUSPENDED;
 	snd_pcm_tick_set(substream, 0);
@@ -1040,6 +1044,7 @@ static struct action_ops snd_pcm_action_suspend = {
 
 /**
  * snd_pcm_suspend
+ * @substream: the PCM substream
  *
  * Trigger SUSPEND to all linked streams.
  * After this call, all streams are changed to SUSPENDED state.
@@ -1057,6 +1062,7 @@ int snd_pcm_suspend(snd_pcm_substream_t *substream)
 
 /**
  * snd_pcm_suspend_all
+ * @pcm: the PCM instance
  *
  * Trigger SUSPEND to all substreams in the given pcm.
  * After this call, all streams are changed to SUSPENDED state.
@@ -1115,7 +1121,7 @@ static void snd_pcm_post_resume(snd_pcm_substream_t *substream, int state)
 	snd_pcm_runtime_t *runtime = substream->runtime;
 	snd_pcm_trigger_tstamp(substream);
 	if (substream->timer)
-		snd_timer_notify(substream->timer, SNDRV_TIMER_EVENT_MCONTINUE, &runtime->trigger_tstamp);
+		snd_timer_notify(substream->timer, SNDRV_TIMER_EVENT_MRESUME, &runtime->trigger_tstamp);
 	runtime->status->state = runtime->status->suspended_state;
 	if (runtime->sleep_min)
 		snd_pcm_tick_prepare(substream);
@@ -1272,6 +1278,9 @@ static struct action_ops snd_pcm_action_prepare = {
 
 /**
  * snd_pcm_prepare
+ * @substream: the PCM substream instance
+ *
+ * Prepare the PCM substream to be triggerable.
  */
 int snd_pcm_prepare(snd_pcm_substream_t *substream)
 {
@@ -1368,43 +1377,32 @@ static int snd_pcm_drain(snd_pcm_substream_t *substream)
 	if (runtime->status->state == SNDRV_PCM_STATE_OPEN)
 		return -EBADFD;
 
-	down_read(&snd_pcm_link_rwsem);
 	snd_power_lock(card);
 	if (runtime->status->state == SNDRV_PCM_STATE_SUSPENDED) {
 		result = snd_power_wait(card, SNDRV_CTL_POWER_D0, substream->ffile);
-		if (result < 0)
-			goto _unlock;
+		if (result < 0) {
+			snd_power_unlock(card);
+			return result;
+		}
 	}
 
 	/* allocate temporary record for drain sync */
+	down_read(&snd_pcm_link_rwsem);
 	if (snd_pcm_stream_linked(substream)) {
 		drec = kmalloc(substream->group->count * sizeof(*drec), GFP_KERNEL);
 		if (! drec) {
-			result = -ENOMEM;
-			goto _unlock;
+			up_read(&snd_pcm_link_rwsem);
+			snd_power_unlock(card);
+			return -ENOMEM;
 		}
 	} else
 		drec = &drec_tmp;
 
-	snd_pcm_stream_lock_irq(substream);
-	/* resume pause */
-	if (runtime->status->state == SNDRV_PCM_STATE_PAUSED)
-		snd_pcm_pause(substream, 0);
-
-	/* pre-start/stop - all running streams are changed to DRAINING state */
-	result = snd_pcm_action(&snd_pcm_action_drain_init, substream, 0);
-	if (result < 0)
-		goto _end;
-
-	/* check streams with PLAYBACK & DRAINING */
+	/* count only playback streams */
 	num_drecs = 0;
 	snd_pcm_group_for_each(pos, substream) {
 		snd_pcm_substream_t *s = snd_pcm_group_substream_entry(pos);
 		runtime = s->runtime;
-		if (runtime->status->state != SNDRV_PCM_STATE_DRAINING) {
-			runtime->status->state = SNDRV_PCM_STATE_SETUP;
-			continue;
-		}
 		if (s->stream == SNDRV_PCM_STREAM_PLAYBACK) {
 			d = &drec[num_drecs++];
 			d->substream = s;
@@ -1418,9 +1416,21 @@ static int snd_pcm_drain(snd_pcm_substream_t *substream)
 				runtime->stop_threshold = runtime->buffer_size;
 		}
 	}
-
+	up_read(&snd_pcm_link_rwsem);
 	if (! num_drecs)
-		goto _end;
+		goto _error;
+
+	snd_pcm_stream_lock_irq(substream);
+	/* resume pause */
+	if (runtime->status->state == SNDRV_PCM_STATE_PAUSED)
+		snd_pcm_pause(substream, 0);
+
+	/* pre-start/stop - all running streams are changed to DRAINING state */
+	result = snd_pcm_action(&snd_pcm_action_drain_init, substream, 0);
+	if (result < 0) {
+		snd_pcm_stream_unlock_irq(substream);
+		goto _error;
+	}
 
 	for (;;) {
 		long tout;
@@ -1428,6 +1438,15 @@ static int snd_pcm_drain(snd_pcm_substream_t *substream)
 			result = -ERESTARTSYS;
 			break;
 		}
+		/* all finished? */
+		for (i = 0; i < num_drecs; i++) {
+			runtime = drec[i].substream->runtime;
+			if (runtime->status->state == SNDRV_PCM_STATE_DRAINING)
+				break;
+		}
+		if (i == num_drecs)
+			break; /* yes, all drained */
+
 		set_current_state(TASK_INTERRUPTIBLE);
 		snd_pcm_stream_unlock_irq(substream);
 		snd_power_unlock(card);
@@ -1444,15 +1463,11 @@ static int snd_pcm_drain(snd_pcm_substream_t *substream)
 			}
 			break;
 		}
-		/* all finished? */
-		for (i = 0; i < num_drecs; i++) {
-			runtime = drec[i].substream->runtime;
-			if (runtime->status->state == SNDRV_PCM_STATE_DRAINING)
-				break;
-		}
-		if (i == num_drecs)
-			break;
 	}
+
+	snd_pcm_stream_unlock_irq(substream);
+
+ _error:
 	for (i = 0; i < num_drecs; i++) {
 		d = &drec[i];
 		runtime = d->substream->runtime;
@@ -1460,13 +1475,9 @@ static int snd_pcm_drain(snd_pcm_substream_t *substream)
 		runtime->stop_threshold = d->stop_threshold;
 	}
 
- _end:
-	snd_pcm_stream_unlock_irq(substream);
 	if (drec != &drec_tmp)
 		kfree(drec);
- _unlock:
 	snd_power_unlock(card);
-	up_read(&snd_pcm_link_rwsem);
 
 	return result;
 }
@@ -1965,13 +1976,12 @@ static int snd_pcm_release_file(snd_pcm_file_t * pcm_file)
 	runtime = substream->runtime;
 	str = substream->pstr;
 	snd_pcm_unlink(substream);
-	if (substream->open_flag) {
+	if (substream->ffile != NULL) {
 		if (substream->ops->hw_free != NULL)
 			substream->ops->hw_free(substream);
 		substream->ops->close(substream);
-		substream->open_flag = 0;
+		substream->ffile = NULL;
 	}
-	substream->ffile = NULL;
 	snd_pcm_remove_file(str, pcm_file);
 	snd_pcm_release_substream(substream);
 	kfree(pcm_file);
@@ -1991,7 +2001,7 @@ static int snd_pcm_open_file(struct file *file,
 	snd_assert(rpcm_file != NULL, return -EINVAL);
 	*rpcm_file = NULL;
 
-	pcm_file = kcalloc(1, sizeof(*pcm_file), GFP_KERNEL);
+	pcm_file = kzalloc(sizeof(*pcm_file), GFP_KERNEL);
 	if (pcm_file == NULL) {
 		return -ENOMEM;
 	}
@@ -2020,17 +2030,14 @@ static int snd_pcm_open_file(struct file *file,
 		snd_pcm_release_file(pcm_file);
 		return err;
 	}
-	substream->open_flag = 1;
+	substream->ffile = file;
 
 	err = snd_pcm_hw_constraints_complete(substream);
 	if (err < 0) {
 		snd_printd("snd_pcm_hw_constraints_complete failed\n");
-		substream->ops->close(substream);
 		snd_pcm_release_file(pcm_file);
 		return err;
 	}
-
-	substream->ffile = file;
 
 	file->private_data = pcm_file;
 	*rpcm_file = pcm_file;

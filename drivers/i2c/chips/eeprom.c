@@ -26,7 +26,6 @@
     Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
 */
 
-#include <linux/config.h>
 #include <linux/kernel.h>
 #include <linux/init.h>
 #include <linux/module.h>
@@ -34,15 +33,13 @@
 #include <linux/sched.h>
 #include <linux/jiffies.h>
 #include <linux/i2c.h>
-#include <linux/i2c-sensor.h>
 
 /* Addresses to scan */
 static unsigned short normal_i2c[] = { 0x50, 0x51, 0x52, 0x53, 0x54,
 					0x55, 0x56, 0x57, I2C_CLIENT_END };
-static unsigned int normal_isa[] = { I2C_CLIENT_ISA_END };
 
 /* Insmod parameters */
-SENSORS_INSMOD_1(eeprom);
+I2C_CLIENT_INSMOD_1(eeprom);
 
 
 /* Size of EEPROM in bytes */
@@ -154,10 +151,10 @@ static struct bin_attribute eeprom_attr = {
 
 static int eeprom_attach_adapter(struct i2c_adapter *adapter)
 {
-	return i2c_detect(adapter, &addr_data, eeprom_detect);
+	return i2c_probe(adapter, &addr_data, eeprom_detect);
 }
 
-/* This function is called by i2c_detect */
+/* This function is called by i2c_probe */
 int eeprom_detect(struct i2c_adapter *adapter, int address, int kind)
 {
 	struct i2c_client *new_client;
@@ -174,9 +171,6 @@ int eeprom_detect(struct i2c_adapter *adapter, int address, int kind)
 					    | I2C_FUNC_SMBUS_BYTE))
 		goto exit;
 
-	/* OK. For now, we presume we have a valid client. We now create the
-	   client structure, even though we cannot fill it completely yet.
-	   But it allows us to access eeprom_{read,write}_value. */
 	if (!(data = kmalloc(sizeof(struct eeprom_data), GFP_KERNEL))) {
 		err = -ENOMEM;
 		goto exit;
@@ -190,9 +184,6 @@ int eeprom_detect(struct i2c_adapter *adapter, int address, int kind)
 	new_client->adapter = adapter;
 	new_client->driver = &eeprom_driver;
 	new_client->flags = 0;
-
-	/* prevent 24RF08 corruption */
-	i2c_smbus_write_quick(new_client, 0);
 
 	/* Fill in the remaining client fields */
 	strlcpy(new_client->name, "eeprom", I2C_NAME_SIZE);
@@ -233,10 +224,8 @@ static int eeprom_detach_client(struct i2c_client *client)
 	int err;
 
 	err = i2c_detach_client(client);
-	if (err) {
-		dev_err(&client->dev, "Client deregistration failed, client not detached.\n");
+	if (err)
 		return err;
-	}
 
 	kfree(i2c_get_clientdata(client));
 

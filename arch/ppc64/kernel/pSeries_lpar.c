@@ -52,7 +52,6 @@ EXPORT_SYMBOL(plpar_hcall_4out);
 EXPORT_SYMBOL(plpar_hcall_norets);
 EXPORT_SYMBOL(plpar_hcall_8arg_2ret);
 
-extern void fw_feature_init(void);
 extern void pSeries_find_serial_port(void);
 
 
@@ -193,9 +192,9 @@ static unsigned char udbg_getcLP(void)
 void udbg_init_debug_lpar(void)
 {
 	vtermno = 0;
-	ppc_md.udbg_putc = udbg_putcLP;
-	ppc_md.udbg_getc = udbg_getcLP;
-	ppc_md.udbg_getc_poll = udbg_getc_pollLP;
+	udbg_putc = udbg_putcLP;
+	udbg_getc = udbg_getcLP;
+	udbg_getc_poll = udbg_getc_pollLP;
 }
 
 /* returns 0 if couldn't find or use /chosen/stdout as console */
@@ -228,18 +227,18 @@ int find_udbg_vterm(void)
 			termno = (u32 *)get_property(stdout_node, "reg", NULL);
 			if (termno) {
 				vtermno = termno[0];
-				ppc_md.udbg_putc = udbg_putcLP;
-				ppc_md.udbg_getc = udbg_getcLP;
-				ppc_md.udbg_getc_poll = udbg_getc_pollLP;
+				udbg_putc = udbg_putcLP;
+				udbg_getc = udbg_getcLP;
+				udbg_getc_poll = udbg_getc_pollLP;
 				found = 1;
 			}
 		} else if (device_is_compatible(stdout_node, "hvterm-protocol")) {
 			termno = (u32 *)get_property(stdout_node, "reg", NULL);
 			if (termno) {
 				vtermno = termno[0];
-				ppc_md.udbg_putc = udbg_hvsi_putc;
-				ppc_md.udbg_getc = udbg_hvsi_getc;
-				ppc_md.udbg_getc_poll = udbg_hvsi_getc_poll;
+				udbg_putc = udbg_hvsi_putc;
+				udbg_getc = udbg_hvsi_getc;
+				udbg_getc_poll = udbg_hvsi_getc_poll;
 				found = 1;
 			}
 		}
@@ -267,6 +266,10 @@ void vpa_init(int cpu)
 
 	/* Register the Virtual Processor Area (VPA) */
 	flags = 1UL << (63 - 18);
+
+	if (cpu_has_feature(CPU_FTR_ALTIVEC))
+		paca[cpu].lppaca.vmxregs_in_use = 1;
+
 	ret = register_vpa(flags, hwcpu, __pa(vpa));
 
 	if (ret)
@@ -277,31 +280,19 @@ void vpa_init(int cpu)
 
 long pSeries_lpar_hpte_insert(unsigned long hpte_group,
 			      unsigned long va, unsigned long prpn,
-			      int secondary, unsigned long hpteflags,
-			      int bolted, int large)
+			      unsigned long vflags, unsigned long rflags)
 {
-	unsigned long arpn = physRpn_to_absRpn(prpn);
 	unsigned long lpar_rc;
 	unsigned long flags;
 	unsigned long slot;
-	HPTE lhpte;
+	unsigned long hpte_v, hpte_r;
 	unsigned long dummy0, dummy1;
 
-	/* Fill in the local HPTE with absolute rpn, avpn and flags */
-	lhpte.dw1.dword1      = 0;
-	lhpte.dw1.dw1.rpn     = arpn;
-	lhpte.dw1.flags.flags = hpteflags;
+	hpte_v = ((va >> 23) << HPTE_V_AVPN_SHIFT) | vflags | HPTE_V_VALID;
+	if (vflags & HPTE_V_LARGE)
+		hpte_v &= ~(1UL << HPTE_V_AVPN_SHIFT);
 
-	lhpte.dw0.dword0      = 0;
-	lhpte.dw0.dw0.avpn    = va >> 23;
-	lhpte.dw0.dw0.h       = secondary;
-	lhpte.dw0.dw0.bolted  = bolted;
-	lhpte.dw0.dw0.v       = 1;
-
-	if (large) {
-		lhpte.dw0.dw0.l = 1;
-		lhpte.dw0.dw0.avpn &= ~0x1UL;
-	}
+	hpte_r = (prpn << HPTE_R_RPN_SHIFT) | rflags;
 
 	/* Now fill in the actual HPTE */
 	/* Set CEC cookie to 0         */
@@ -312,11 +303,11 @@ long pSeries_lpar_hpte_insert(unsigned long hpte_group,
 	flags = 0;
 
 	/* XXX why is this here? - Anton */
-	if (hpteflags & (_PAGE_GUARDED|_PAGE_NO_CACHE))
-		lhpte.dw1.flags.flags &= ~_PAGE_COHERENT;
+	if (rflags & (_PAGE_GUARDED|_PAGE_NO_CACHE))
+		hpte_r &= ~_PAGE_COHERENT;
 
-	lpar_rc = plpar_hcall(H_ENTER, flags, hpte_group, lhpte.dw0.dword0,
-			      lhpte.dw1.dword1, &slot, &dummy0, &dummy1);
+	lpar_rc = plpar_hcall(H_ENTER, flags, hpte_group, hpte_v,
+			      hpte_r, &slot, &dummy0, &dummy1);
 
 	if (unlikely(lpar_rc == H_PTEG_Full))
 		return -1;
@@ -332,7 +323,7 @@ long pSeries_lpar_hpte_insert(unsigned long hpte_group,
 	/* Because of iSeries, we have to pass down the secondary
 	 * bucket bit here as well
 	 */
-	return (slot & 7) | (secondary << 3);
+	return (slot & 7) | (!!(vflags & HPTE_V_SECONDARY) << 3);
 }
 
 static DEFINE_SPINLOCK(pSeries_lpar_tlbie_lock);
@@ -427,22 +418,18 @@ static long pSeries_lpar_hpte_find(unsigned long vpn)
 	unsigned long hash;
 	unsigned long i, j;
 	long slot;
-	union {
-		unsigned long dword0;
-		Hpte_dword0 dw0;
-	} hpte_dw0;
-	Hpte_dword0 dw0;
+	unsigned long hpte_v;
 
 	hash = hpt_hash(vpn, 0);
 
 	for (j = 0; j < 2; j++) {
 		slot = (hash & htab_hash_mask) * HPTES_PER_GROUP;
 		for (i = 0; i < HPTES_PER_GROUP; i++) {
-			hpte_dw0.dword0 = pSeries_lpar_hpte_getword0(slot);
-			dw0 = hpte_dw0.dw0;
+			hpte_v = pSeries_lpar_hpte_getword0(slot);
 
-			if ((dw0.avpn == (vpn >> 11)) && dw0.v &&
-			    (dw0.h == j)) {
+			if ((HPTE_V_AVPN_VAL(hpte_v) == (vpn >> 11))
+			    && (hpte_v & HPTE_V_VALID)
+			    && (!!(hpte_v & HPTE_V_SECONDARY) == j)) {
 				/* HPTE matches */
 				if (j)
 					slot = -slot;

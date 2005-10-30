@@ -1,4 +1,4 @@
-/* $Id: time.c,v 1.14 2004/06/01 05:38:11 starvik Exp $
+/* $Id: time.c,v 1.18 2005/03/04 08:16:17 starvik Exp $
  *
  *  linux/arch/cris/kernel/time.c
  *
@@ -30,6 +30,7 @@
 #include <linux/bcd.h>
 #include <linux/timex.h>
 #include <linux/init.h>
+#include <linux/profile.h>
 
 u64 jiffies_64 = INITIAL_JIFFIES;
 
@@ -113,10 +114,7 @@ int do_settimeofday(struct timespec *tv)
 	set_normalized_timespec(&xtime, sec, nsec);
 	set_normalized_timespec(&wall_to_monotonic, wtm_sec, wtm_nsec);
 
-	time_adjust = 0;		/* stop active adjtime() */
-	time_status |= STA_UNSYNC;
-	time_maxerror = NTP_PHASE_LIMIT;
-	time_esterror = NTP_PHASE_LIMIT;
+	ntp_clear();
 	write_sequnlock_irq(&xtime_lock);
 	clock_was_set();
 	return 0;
@@ -212,6 +210,21 @@ update_xtime_from_cmos(void)
 		xtime.tv_sec = get_cmos_time();
 		xtime.tv_nsec = 0;
 	}
+}
+
+extern void cris_profile_sample(struct pt_regs* regs);
+
+void
+cris_do_profile(struct pt_regs* regs)
+{
+
+#if CONFIG_SYSTEM_PROFILER
+        cris_profile_sample(regs);
+#endif
+
+#if CONFIG_PROFILING
+        profile_tick(CPU_PROFILING, regs);
+#endif
 }
 
 /*

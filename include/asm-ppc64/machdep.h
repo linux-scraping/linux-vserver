@@ -53,10 +53,8 @@ struct machdep_calls {
 	long		(*hpte_insert)(unsigned long hpte_group,
 				       unsigned long va,
 				       unsigned long prpn,
-				       int secondary, 
-				       unsigned long hpteflags, 
-				       int bolted,
-				       int large);
+				       unsigned long vflags,
+				       unsigned long rflags);
 	long		(*hpte_remove)(unsigned long hpte_group);
 	void		(*flush_hash_range)(unsigned long context,
 					    unsigned long number,
@@ -76,6 +74,7 @@ struct machdep_calls {
 	void		(*tce_flush)(struct iommu_table *tbl);
 	void		(*iommu_dev_setup)(struct pci_dev *dev);
 	void		(*iommu_bus_setup)(struct pci_bus *bus);
+	void		(*irq_bus_setup)(struct pci_bus *bus);
 
 	int		(*probe)(int platform);
 	void		(*setup_arch)(void);
@@ -85,9 +84,11 @@ struct machdep_calls {
 
 	void		(*init_IRQ)(void);
 	int		(*get_irq)(struct pt_regs *);
+	void		(*cpu_irq_down)(int secondary);
 
 	/* PCI stuff */
 	void		(*pcibios_fixup)(void);
+	int		(*pci_probe_mode)(struct pci_bus *);
 
 	void		(*restart)(char *cmd);
 	void		(*power_off)(void);
@@ -102,11 +103,6 @@ struct machdep_calls {
 	void		(*calibrate_decr)(void);
 
 	void		(*progress)(char *, unsigned short);
-
-	/* Debug interface.  Low level I/O to some terminal device */
-	void		(*udbg_putc)(unsigned char c);
-	unsigned char	(*udbg_getc)(void);
-	int		(*udbg_getc_poll)(void);
 
 	/* Interface for platform error logging */
 	void 		(*log_error)(char *buf, unsigned int err_type, int fatal);
@@ -138,7 +134,15 @@ struct machdep_calls {
 						unsigned long size,
 						pgprot_t vma_prot);
 
+	/* Idle loop for this platform, leave empty for default idle loop */
+	int		(*idle_loop)(void);
+
+	/* Function to enable pmcs for this platform, called once per cpu. */
+	void		(*enable_pmcs)(void);
 };
+
+extern int default_idle(void);
+extern int native_idle(void);
 
 extern struct machdep_calls ppc_md;
 extern char cmd_line[COMMAND_LINE_SIZE];
@@ -170,10 +174,6 @@ extern sys_ctrler_t sys_ctrler;
 void ppc64_boot_msg(unsigned int src, const char *msg);
 /* Print a termination message (print only -- does not stop the kernel) */
 void ppc64_terminate_msg(unsigned int src, const char *msg);
-/* Print something that needs attention (device error, etc) */
-void ppc64_attention_msg(unsigned int src, const char *msg);
-/* Print a dump progress message. */
-void ppc64_dump_msg(unsigned int src, const char *msg);
 
 static inline void log_error(char *buf, unsigned int err_type, int fatal)
 {

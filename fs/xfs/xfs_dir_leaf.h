@@ -127,13 +127,13 @@ typedef union {
 	 * Watch the order here (endian-ness dependent).
 	 */
 	struct {
-#if __BYTE_ORDER == __LITTLE_ENDIAN
+#ifndef XFS_NATIVE_HOST
 		xfs_dahash_t	h;	/* hash value */
 		__uint32_t	be;	/* block and entry */
-#else	/* __BYTE_ORDER == __BIG_ENDIAN */
+#else
 		__uint32_t	be;	/* block and entry */
 		xfs_dahash_t	h;	/* hash value */
-#endif	/* __BYTE_ORDER == __BIG_ENDIAN */
+#endif /* XFS_NATIVE_HOST */
 	} s;
 } xfs_dircook_t;
 
@@ -202,8 +202,6 @@ int xfs_dir_leaf_to_shortform(struct xfs_da_args *args);
 /*
  * Routines used for growing the Btree.
  */
-int	xfs_dir_leaf_create(struct xfs_da_args *args, xfs_dablk_t which_block,
-				   struct xfs_dabuf **bpp);
 int	xfs_dir_leaf_split(struct xfs_da_state *state,
 				  struct xfs_da_state_blk *oldblk,
 				  struct xfs_da_state_blk *newblk);

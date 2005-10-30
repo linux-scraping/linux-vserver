@@ -74,6 +74,9 @@ struct scan_control {
 
 	int may_writepage;
 
+	/* Can pages be swapped as part of reclaim? */
+	int may_swap;
+
 	/* This context's SWAP_CLUSTER_MAX. If freeing memory for
 	 * suspend, we effectively ignore SWAP_CLUSTER_MAX.
 	 * In this context, it doesn't matter that we scan the
@@ -180,17 +183,20 @@ EXPORT_SYMBOL(remove_shrinker);
  * `lru_pages' represents the number of on-LRU pages in all the zones which
  * are eligible for the caller's allocation attempt.  It is used for balancing
  * slab reclaim versus page reclaim.
+ *
+ * Returns the number of slab objects which we shrunk.
  */
 static int shrink_slab(unsigned long scanned, unsigned int gfp_mask,
 			unsigned long lru_pages)
 {
 	struct shrinker *shrinker;
+	int ret = 0;
 
 	if (scanned == 0)
 		scanned = SWAP_CLUSTER_MAX;
 
 	if (!down_read_trylock(&shrinker_rwsem))
-		return 0;
+		return 1;	/* Assume we'll be able to shrink next time */
 
 	list_for_each_entry(shrinker, &shrinker_list, list) {
 		unsigned long long delta;
@@ -209,10 +215,14 @@ static int shrink_slab(unsigned long scanned, unsigned int gfp_mask,
 		while (total_scan >= SHRINK_BATCH) {
 			long this_scan = SHRINK_BATCH;
 			int shrink_ret;
+			int nr_before;
 
+			nr_before = (*shrinker->shrinker)(0, gfp_mask);
 			shrink_ret = (*shrinker->shrinker)(this_scan, gfp_mask);
 			if (shrink_ret == -1)
 				break;
+			if (shrink_ret < nr_before)
+				ret += nr_before - shrink_ret;
 			mod_page_state(slabs_scanned, this_scan);
 			total_scan -= this_scan;
 
@@ -222,7 +232,7 @@ static int shrink_slab(unsigned long scanned, unsigned int gfp_mask,
 		shrinker->nr += total_scan;
 	}
 	up_read(&shrinker_rwsem);
-	return 0;
+	return ret;
 }
 
 /* Called without lock on whether page is mapped, so answer is unstable */
@@ -407,7 +417,7 @@ static int shrink_list(struct list_head *page_list, struct scan_control *sc)
 		 * Anonymous process memory has backing store?
 		 * Try to allocate it some swap space here.
 		 */
-		if (PageAnon(page) && !PageSwapCache(page)) {
+		if (PageAnon(page) && !PageSwapCache(page) && sc->may_swap) {
 			if (!add_to_swap(page))
 				goto activate_locked;
 		}
@@ -501,10 +511,11 @@ static int shrink_list(struct list_head *page_list, struct scan_control *sc)
 		 * PageDirty _after_ making sure that the page is freeable and
 		 * not in use by anybody. 	(pagecache + us == 2)
 		 */
-		if (page_count(page) != 2 || PageDirty(page)) {
-			write_unlock_irq(&mapping->tree_lock);
-			goto keep_locked;
-		}
+		if (unlikely(page_count(page) != 2))
+			goto cannot_free;
+		smp_rmb();
+		if (unlikely(PageDirty(page)))
+			goto cannot_free;
 
 #ifdef CONFIG_SWAP
 		if (PageSwapCache(page)) {
@@ -527,6 +538,10 @@ free_it:
 		if (!pagevec_add(&freed_pvec, page))
 			__pagevec_release_nonlru(&freed_pvec);
 		continue;
+
+cannot_free:
+		write_unlock_irq(&mapping->tree_lock);
+		goto keep_locked;
 
 activate_locked:
 		SetPageActive(page);
@@ -812,6 +827,8 @@ shrink_zone(struct zone *zone, struct scan_control *sc)
 	unsigned long nr_active;
 	unsigned long nr_inactive;
 
+	atomic_inc(&zone->reclaim_in_progress);
+
 	/*
 	 * Add one to `nr_to_scan' just to make sure that the kernel will
 	 * slowly sift through the active list.
@@ -851,6 +868,8 @@ shrink_zone(struct zone *zone, struct scan_control *sc)
 	}
 
 	throttle_vm_writeout();
+
+	atomic_dec(&zone->reclaim_in_progress);
 }
 
 /*
@@ -880,7 +899,7 @@ shrink_caches(struct zone **zones, struct scan_control *sc)
 		if (zone->present_pages == 0)
 			continue;
 
-		if (!cpuset_zone_allowed(zone))
+		if (!cpuset_zone_allowed(zone, __GFP_HARDWALL))
 			continue;
 
 		zone->temp_priority = sc->priority;
@@ -907,8 +926,7 @@ shrink_caches(struct zone **zones, struct scan_control *sc)
  * holds filesystem locks which prevent writeout this might not work, and the
  * allocation attempt will fail.
  */
-int try_to_free_pages(struct zone **zones,
-		unsigned int gfp_mask, unsigned int order)
+int try_to_free_pages(struct zone **zones, unsigned int gfp_mask)
 {
 	int priority;
 	int ret = 0;
@@ -920,13 +938,14 @@ int try_to_free_pages(struct zone **zones,
 
 	sc.gfp_mask = gfp_mask;
 	sc.may_writepage = 0;
+	sc.may_swap = 1;
 
 	inc_page_state(allocstall);
 
 	for (i = 0; zones[i] != NULL; i++) {
 		struct zone *zone = zones[i];
 
-		if (!cpuset_zone_allowed(zone))
+		if (!cpuset_zone_allowed(zone, __GFP_HARDWALL))
 			continue;
 
 		zone->temp_priority = DEF_PRIORITY;
@@ -960,7 +979,7 @@ int try_to_free_pages(struct zone **zones,
 		 * writeout.  So in laptop mode, write out the whole world.
 		 */
 		if (total_scanned > sc.swap_cluster_max + sc.swap_cluster_max/2) {
-			wakeup_bdflush(laptop_mode ? 0 : total_scanned);
+			wakeup_pdflush(laptop_mode ? 0 : total_scanned);
 			sc.may_writepage = 1;
 		}
 
@@ -972,7 +991,7 @@ out:
 	for (i = 0; zones[i] != 0; i++) {
 		struct zone *zone = zones[i];
 
-		if (!cpuset_zone_allowed(zone))
+		if (!cpuset_zone_allowed(zone, __GFP_HARDWALL))
 			continue;
 
 		zone->prev_priority = zone->temp_priority;
@@ -1020,6 +1039,7 @@ loop_again:
 	total_reclaimed = 0;
 	sc.gfp_mask = GFP_KERNEL;
 	sc.may_writepage = 0;
+	sc.may_swap = 1;
 	sc.nr_mapped = read_page_state(nr_mapped);
 
 	inc_page_state(pageoutrun);
@@ -1079,6 +1099,7 @@ scan:
 		 */
 		for (i = 0; i <= end_zone; i++) {
 			struct zone *zone = pgdat->node_zones + i;
+			int nr_slab;
 
 			if (zone->present_pages == 0)
 				continue;
@@ -1098,16 +1119,19 @@ scan:
 			sc.nr_reclaimed = 0;
 			sc.priority = priority;
 			sc.swap_cluster_max = nr_pages? nr_pages : SWAP_CLUSTER_MAX;
+			atomic_inc(&zone->reclaim_in_progress);
 			shrink_zone(zone, &sc);
+			atomic_dec(&zone->reclaim_in_progress);
 			reclaim_state->reclaimed_slab = 0;
-			shrink_slab(sc.nr_scanned, GFP_KERNEL, lru_pages);
+			nr_slab = shrink_slab(sc.nr_scanned, GFP_KERNEL,
+						lru_pages);
 			sc.nr_reclaimed += reclaim_state->reclaimed_slab;
 			total_reclaimed += sc.nr_reclaimed;
 			total_scanned += sc.nr_scanned;
 			if (zone->all_unreclaimable)
 				continue;
-			if (zone->pages_scanned >= (zone->nr_active +
-							zone->nr_inactive) * 4)
+			if (nr_slab == 0 && zone->pages_scanned >=
+				    (zone->nr_active + zone->nr_inactive) * 4)
 				zone->all_unreclaimable = 1;
 			/*
 			 * If we've done a decent amount of scanning and
@@ -1199,8 +1223,8 @@ static int kswapd(void *p)
 	order = 0;
 	for ( ; ; ) {
 		unsigned long new_order;
-		if (current->flags & PF_FREEZE)
-			refrigerator(PF_FREEZE);
+
+		try_to_freeze();
 
 		prepare_to_wait(&pgdat->kswapd_wait, &wait, TASK_INTERRUPTIBLE);
 		new_order = pgdat->kswapd_max_order;
@@ -1237,11 +1261,11 @@ void wakeup_kswapd(struct zone *zone, int order)
 		return;
 	if (pgdat->kswapd_max_order < order)
 		pgdat->kswapd_max_order = order;
-	if (!cpuset_zone_allowed(zone))
+	if (!cpuset_zone_allowed(zone, __GFP_HARDWALL))
 		return;
-	if (!waitqueue_active(&zone->zone_pgdat->kswapd_wait))
+	if (!waitqueue_active(&pgdat->kswapd_wait))
 		return;
-	wake_up_interruptible(&zone->zone_pgdat->kswapd_wait);
+	wake_up_interruptible(&pgdat->kswapd_wait);
 }
 
 #ifdef CONFIG_PM
@@ -1309,3 +1333,75 @@ static int __init kswapd_init(void)
 }
 
 module_init(kswapd_init)
+
+
+/*
+ * Try to free up some pages from this zone through reclaim.
+ */
+int zone_reclaim(struct zone *zone, unsigned int gfp_mask, unsigned int order)
+{
+	struct scan_control sc;
+	int nr_pages = 1 << order;
+	int total_reclaimed = 0;
+
+	/* The reclaim may sleep, so don't do it if sleep isn't allowed */
+	if (!(gfp_mask & __GFP_WAIT))
+		return 0;
+	if (zone->all_unreclaimable)
+		return 0;
+
+	sc.gfp_mask = gfp_mask;
+	sc.may_writepage = 0;
+	sc.may_swap = 0;
+	sc.nr_mapped = read_page_state(nr_mapped);
+	sc.nr_scanned = 0;
+	sc.nr_reclaimed = 0;
+	/* scan at the highest priority */
+	sc.priority = 0;
+
+	if (nr_pages > SWAP_CLUSTER_MAX)
+		sc.swap_cluster_max = nr_pages;
+	else
+		sc.swap_cluster_max = SWAP_CLUSTER_MAX;
+
+	/* Don't reclaim the zone if there are other reclaimers active */
+	if (atomic_read(&zone->reclaim_in_progress) > 0)
+		goto out;
+
+	shrink_zone(zone, &sc);
+	total_reclaimed = sc.nr_reclaimed;
+
+ out:
+	return total_reclaimed;
+}
+
+asmlinkage long sys_set_zone_reclaim(unsigned int node, unsigned int zone,
+				     unsigned int state)
+{
+	struct zone *z;
+	int i;
+
+	if (!capable(CAP_SYS_ADMIN))
+		return -EACCES;
+
+	if (node >= MAX_NUMNODES || !node_online(node))
+		return -EINVAL;
+
+	/* This will break if we ever add more zones */
+	if (!(zone & (1<<ZONE_DMA|1<<ZONE_NORMAL|1<<ZONE_HIGHMEM)))
+		return -EINVAL;
+
+	for (i = 0; i < MAX_NR_ZONES; i++) {
+		if (!(zone & 1<<i))
+			continue;
+
+		z = &NODE_DATA(node)->node_zones[i];
+
+		if (state)
+			z->reclaim_pages = 1;
+		else
+			z->reclaim_pages = 0;
+	}
+
+	return 0;
+}

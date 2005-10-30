@@ -43,7 +43,6 @@
 #include <asm/system.h>
 #include <asm/io.h>
 
-#include <pcmcia/version.h>
 #include <pcmcia/cs_types.h>
 #include <pcmcia/cs.h>
 #include <pcmcia/cistpl.h>
@@ -212,9 +211,9 @@ static void btuart_receive(btuart_info_t *info)
 		if (info->rx_state == RECV_WAIT_PACKET_TYPE) {
 
 			info->rx_skb->dev = (void *) info->hdev;
-			info->rx_skb->pkt_type = inb(iobase + UART_RX);
+			bt_cb(info->rx_skb)->pkt_type = inb(iobase + UART_RX);
 
-			switch (info->rx_skb->pkt_type) {
+			switch (bt_cb(info->rx_skb)->pkt_type) {
 
 			case HCI_EVENT_PKT:
 				info->rx_state = RECV_WAIT_EVENT_HEADER;
@@ -233,7 +232,7 @@ static void btuart_receive(btuart_info_t *info)
 
 			default:
 				/* Unknown packet */
-				BT_ERR("Unknown HCI packet with type 0x%02x received", info->rx_skb->pkt_type);
+				BT_ERR("Unknown HCI packet with type 0x%02x received", bt_cb(info->rx_skb)->pkt_type);
 				info->hdev->stat.err_rx++;
 				clear_bit(HCI_RUNNING, &(info->hdev->flags));
 
@@ -448,7 +447,7 @@ static int btuart_hci_send_frame(struct sk_buff *skb)
 
 	info = (btuart_info_t *)(hdev->driver_data);
 
-	switch (skb->pkt_type) {
+	switch (bt_cb(skb)->pkt_type) {
 	case HCI_COMMAND_PKT:
 		hdev->stat.cmd_tx++;
 		break;
@@ -461,7 +460,7 @@ static int btuart_hci_send_frame(struct sk_buff *skb)
 	};
 
 	/* Prepend skb with frame type */
-	memcpy(skb_push(skb, 1), &(skb->pkt_type), 1);
+	memcpy(skb_push(skb, 1), &bt_cb(skb)->pkt_type, 1);
 	skb_queue_tail(&(info->txq), skb);
 
 	btuart_write_wakeup(info);
@@ -615,11 +614,6 @@ static dev_link_t *btuart_attach(void)
 	link->next = dev_list;
 	dev_list = link;
 	client_reg.dev_info = &dev_info;
-	client_reg.EventMask =
-		CS_EVENT_CARD_INSERTION | CS_EVENT_CARD_REMOVAL |
-		CS_EVENT_RESET_PHYSICAL | CS_EVENT_CARD_RESET |
-		CS_EVENT_PM_SUSPEND | CS_EVENT_PM_RESUME;
-	client_reg.event_handler = &btuart_event;
 	client_reg.Version = 0x0210;
 	client_reg.event_callback_args.client_data = link;
 
@@ -855,13 +849,21 @@ static int btuart_event(event_t event, int priority, event_callback_args_t *args
 	return 0;
 }
 
+static struct pcmcia_device_id btuart_ids[] = {
+	/* don't use this driver. Use serial_cs + hci_uart instead */
+	PCMCIA_DEVICE_NULL
+};
+MODULE_DEVICE_TABLE(pcmcia, btuart_ids);
+
 static struct pcmcia_driver btuart_driver = {
 	.owner		= THIS_MODULE,
 	.drv		= {
 		.name	= "btuart_cs",
 	},
 	.attach		= btuart_attach,
+	.event		= btuart_event,
 	.detach		= btuart_detach,
+	.id_table	= btuart_ids,
 };
 
 static int __init init_btuart_cs(void)

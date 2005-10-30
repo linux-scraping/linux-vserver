@@ -51,7 +51,6 @@
 #include <linux/cpu.h>
 #include <linux/security.h>
 
-#include <asm/segment.h>
 #include <asm/io.h>
 #include <asm/processor.h>
 #include <asm/nvram.h>
@@ -67,6 +66,7 @@
 #include <asm/prom.h>
 #include <asm/sections.h>
 #include <asm/systemcfg.h>
+#include <asm/firmware.h>
 
 u64 jiffies_64 __cacheline_aligned_in_smp = INITIAL_JIFFIES;
 
@@ -91,6 +91,7 @@ unsigned long tb_to_xs;
 unsigned      tb_to_us;
 unsigned long processor_freq;
 DEFINE_SPINLOCK(rtc_lock);
+EXPORT_SYMBOL_GPL(rtc_lock);
 
 unsigned long tb_to_ns_scale;
 unsigned long tb_to_ns_shift;
@@ -98,7 +99,6 @@ unsigned long tb_to_ns_shift;
 struct gettimeofday_struct do_gtod;
 
 extern unsigned long wall_jiffies;
-extern unsigned long lpevent_count;
 extern int smp_tb_synchronized;
 
 extern struct timezone sys_tz;
@@ -106,6 +106,9 @@ extern struct timezone sys_tz;
 void ppc_adjtimex(void);
 
 static unsigned adjusting_time = 0;
+
+unsigned long ppc_proc_freq;
+unsigned long ppc_tb_freq;
 
 static __inline__ void timer_check_rtc(void)
 {
@@ -125,7 +128,7 @@ static __inline__ void timer_check_rtc(void)
          * We should have an rtc call that only sets the minutes and
          * seconds like on Intel to avoid problems with non UTC clocks.
          */
-        if ( (time_status & STA_UNSYNC) == 0 &&
+        if (ntp_synced() &&
              xtime.tv_sec - last_rtc_update >= 659 &&
              abs((xtime.tv_nsec/1000) - (1000000-1000000/HZ)) < 500000/HZ &&
              jiffies - wall_jiffies == 1) {
@@ -363,20 +366,15 @@ int timer_interrupt(struct pt_regs * regs)
 	set_dec(next_dec);
 
 #ifdef CONFIG_PPC_ISERIES
-	{
-		struct ItLpQueue *lpq = lpaca->lpqueue_ptr;
-		if (lpq && ItLpQueue_isLpIntPending(lpq))
-			lpevent_count += ItLpQueue_process(lpq, regs);
-	}
+	if (hvlpevent_is_pending())
+		process_hvlpevents(regs);
 #endif
 
-/* collect purr register values often, for accurate calculations */
-#if defined(CONFIG_PPC_PSERIES)
-	if (cur_cpu_spec->firmware_features & FW_FEATURE_SPLPAR) {
+	/* collect purr register values often, for accurate calculations */
+	if (firmware_has_feature(FW_FEATURE_SPLPAR)) {
 		struct cpu_usage *cu = &__get_cpu_var(cpu_usage_array);
 		cu->current_tb = mfspr(SPRN_PURR);
 	}
-#endif
 
 	irq_exit();
 
@@ -437,10 +435,7 @@ int do_settimeofday(struct timespec *tv)
 	 */
 	last_rtc_update = new_sec - 658;
 
-	time_adjust = 0;                /* stop active adjtime() */
-	time_status |= STA_UNSYNC;
-	time_maxerror = NTP_PHASE_LIMIT;
-	time_esterror = NTP_PHASE_LIMIT;
+	ntp_clear();
 
 	delta_xsec = mulhdu( (tb_last_stamp-do_gtod.varp->tb_orig_stamp),
 			     do_gtod.varp->tb_to_xs );
@@ -471,6 +466,66 @@ int do_settimeofday(struct timespec *tv)
 }
 
 EXPORT_SYMBOL(do_settimeofday);
+
+#if defined(CONFIG_PPC_PSERIES) || defined(CONFIG_PPC_MAPLE) || defined(CONFIG_PPC_BPA)
+void __init generic_calibrate_decr(void)
+{
+	struct device_node *cpu;
+	struct div_result divres;
+	unsigned int *fp;
+	int node_found;
+
+	/*
+	 * The cpu node should have a timebase-frequency property
+	 * to tell us the rate at which the decrementer counts.
+	 */
+	cpu = of_find_node_by_type(NULL, "cpu");
+
+	ppc_tb_freq = DEFAULT_TB_FREQ;		/* hardcoded default */
+	node_found = 0;
+	if (cpu != 0) {
+		fp = (unsigned int *)get_property(cpu, "timebase-frequency",
+						  NULL);
+		if (fp != 0) {
+			node_found = 1;
+			ppc_tb_freq = *fp;
+		}
+	}
+	if (!node_found)
+		printk(KERN_ERR "WARNING: Estimating decrementer frequency "
+				"(not found)\n");
+
+	ppc_proc_freq = DEFAULT_PROC_FREQ;
+	node_found = 0;
+	if (cpu != 0) {
+		fp = (unsigned int *)get_property(cpu, "clock-frequency",
+						  NULL);
+		if (fp != 0) {
+			node_found = 1;
+			ppc_proc_freq = *fp;
+		}
+	}
+	if (!node_found)
+		printk(KERN_ERR "WARNING: Estimating processor frequency "
+				"(not found)\n");
+
+	of_node_put(cpu);
+
+	printk(KERN_INFO "time_init: decrementer frequency = %lu.%.6lu MHz\n",
+	       ppc_tb_freq/1000000, ppc_tb_freq%1000000);
+	printk(KERN_INFO "time_init: processor frequency   = %lu.%.6lu MHz\n",
+	       ppc_proc_freq/1000000, ppc_proc_freq%1000000);
+
+	tb_ticks_per_jiffy = ppc_tb_freq / HZ;
+	tb_ticks_per_sec = tb_ticks_per_jiffy * HZ;
+	tb_ticks_per_usec = ppc_tb_freq / 1000000;
+	tb_to_us = mulhwu_scale_factor(ppc_tb_freq, 1000000);
+	div128_by_32(1024*1024, 0, tb_ticks_per_sec, &divres);
+	tb_to_xs = divres.result_low;
+
+	setup_default_decr();
+}
+#endif
 
 void __init time_init(void)
 {
@@ -815,7 +870,7 @@ void div128_by_32( unsigned long dividend_high, unsigned long dividend_low,
 	rb = ((ra + b) - (x * divisor)) << 32;
 
 	y = (rb + c)/divisor;
-	rc = ((rb + b) - (y * divisor)) << 32;
+	rc = ((rb + c) - (y * divisor)) << 32;
 
 	z = (rc + d)/divisor;
 

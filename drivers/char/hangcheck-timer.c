@@ -149,8 +149,7 @@ static unsigned long long hangcheck_tsc, hangcheck_tsc_margin;
 
 static void hangcheck_fire(unsigned long);
 
-static struct timer_list hangcheck_ticktock =
-		TIMER_INITIALIZER(hangcheck_fire, 0, 0);
+static DEFINE_TIMER(hangcheck_ticktock, hangcheck_fire, 0, 0);
 
 
 static void hangcheck_fire(unsigned long data)
@@ -173,7 +172,7 @@ static void hangcheck_fire(unsigned long data)
 		}
 		if (hangcheck_reboot) {
 			printk(KERN_CRIT "Hangcheck: hangcheck is restarting the machine.\n");
-			machine_restart(NULL);
+			emergency_restart();
 		} else {
 			printk(KERN_CRIT "Hangcheck: hangcheck value past margin!\n");
 		}

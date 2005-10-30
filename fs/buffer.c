@@ -40,6 +40,7 @@
 #include <linux/cpu.h>
 #include <linux/bitops.h>
 #include <linux/mpage.h>
+#include <linux/bit_spinlock.h>
 
 static int fsync_buffers_list(spinlock_t *lock, struct list_head *list);
 static void invalidate_bh_lrus(void);
@@ -278,7 +279,7 @@ EXPORT_SYMBOL(thaw_bdev);
  */
 static void do_sync(unsigned long wait)
 {
-	wakeup_bdflush(0);
+	wakeup_pdflush(0);
 	sync_inodes(0);		/* All mappings, inodes and their blockdevs */
 	DQUOT_SYNC(NULL);
 	sync_supers();		/* Write the superblocks */
@@ -331,7 +332,7 @@ int file_fsync(struct file *filp, struct dentry *dentry, int datasync)
 	return ret;
 }
 
-asmlinkage long sys_fsync(unsigned int fd)
+static long do_fsync(unsigned int fd, int datasync)
 {
 	struct file * file;
 	struct address_space *mapping;
@@ -342,13 +343,13 @@ asmlinkage long sys_fsync(unsigned int fd)
 	if (!file)
 		goto out;
 
-	mapping = file->f_mapping;
-
 	ret = -EINVAL;
 	if (!file->f_op || !file->f_op->fsync) {
 		/* Why?  We can still call filemap_fdatawrite */
 		goto out_putf;
 	}
+
+	mapping = file->f_mapping;
 
 	current->flags |= PF_SYNCWRITE;
 	ret = filemap_fdatawrite(mapping);
@@ -358,7 +359,7 @@ asmlinkage long sys_fsync(unsigned int fd)
 	 * which could cause livelocks in fsync_buffers_list
 	 */
 	down(&mapping->host->i_sem);
-	err = file->f_op->fsync(file, file->f_dentry, 0);
+	err = file->f_op->fsync(file, file->f_dentry, datasync);
 	if (!ret)
 		ret = err;
 	up(&mapping->host->i_sem);
@@ -373,39 +374,14 @@ out:
 	return ret;
 }
 
+asmlinkage long sys_fsync(unsigned int fd)
+{
+	return do_fsync(fd, 0);
+}
+
 asmlinkage long sys_fdatasync(unsigned int fd)
 {
-	struct file * file;
-	struct address_space *mapping;
-	int ret, err;
-
-	ret = -EBADF;
-	file = fget(fd);
-	if (!file)
-		goto out;
-
-	ret = -EINVAL;
-	if (!file->f_op || !file->f_op->fsync)
-		goto out_putf;
-
-	mapping = file->f_mapping;
-
-	current->flags |= PF_SYNCWRITE;
-	ret = filemap_fdatawrite(mapping);
-	down(&mapping->host->i_sem);
-	err = file->f_op->fsync(file, file->f_dentry, 1);
-	if (!ret)
-		ret = err;
-	up(&mapping->host->i_sem);
-	err = filemap_fdatawait(mapping);
-	if (!ret)
-		ret = err;
-	current->flags &= ~PF_SYNCWRITE;
-
-out_putf:
-	fput(file);
-out:
-	return ret;
+	return do_fsync(fd, 1);
 }
 
 /*
@@ -522,13 +498,13 @@ static void free_more_memory(void)
 	struct zone **zones;
 	pg_data_t *pgdat;
 
-	wakeup_bdflush(1024);
+	wakeup_pdflush(1024);
 	yield();
 
 	for_each_pgdat(pgdat) {
 		zones = pgdat->node_zonelists[GFP_NOFS&GFP_ZONEMASK].zones;
 		if (*zones)
-			try_to_free_pages(zones, GFP_NOFS, 0);
+			try_to_free_pages(zones, GFP_NOFS);
 	}
 }
 
@@ -538,8 +514,8 @@ static void free_more_memory(void)
  */
 static void end_buffer_async_read(struct buffer_head *bh, int uptodate)
 {
-	static DEFINE_SPINLOCK(page_uptodate_lock);
 	unsigned long flags;
+	struct buffer_head *first;
 	struct buffer_head *tmp;
 	struct page *page;
 	int page_uptodate = 1;
@@ -561,7 +537,9 @@ static void end_buffer_async_read(struct buffer_head *bh, int uptodate)
 	 * two buffer heads end IO at almost the same time and both
 	 * decide that the page is now completely done.
 	 */
-	spin_lock_irqsave(&page_uptodate_lock, flags);
+	first = page_buffers(page);
+	local_irq_save(flags);
+	bit_spin_lock(BH_Uptodate_Lock, &first->b_state);
 	clear_buffer_async_read(bh);
 	unlock_buffer(bh);
 	tmp = bh;
@@ -574,7 +552,8 @@ static void end_buffer_async_read(struct buffer_head *bh, int uptodate)
 		}
 		tmp = tmp->b_this_page;
 	} while (tmp != bh);
-	spin_unlock_irqrestore(&page_uptodate_lock, flags);
+	bit_spin_unlock(BH_Uptodate_Lock, &first->b_state);
+	local_irq_restore(flags);
 
 	/*
 	 * If none of the buffers had errors and they are all
@@ -586,7 +565,8 @@ static void end_buffer_async_read(struct buffer_head *bh, int uptodate)
 	return;
 
 still_busy:
-	spin_unlock_irqrestore(&page_uptodate_lock, flags);
+	bit_spin_unlock(BH_Uptodate_Lock, &first->b_state);
+	local_irq_restore(flags);
 	return;
 }
 
@@ -597,8 +577,8 @@ still_busy:
 void end_buffer_async_write(struct buffer_head *bh, int uptodate)
 {
 	char b[BDEVNAME_SIZE];
-	static DEFINE_SPINLOCK(page_uptodate_lock);
 	unsigned long flags;
+	struct buffer_head *first;
 	struct buffer_head *tmp;
 	struct page *page;
 
@@ -619,7 +599,10 @@ void end_buffer_async_write(struct buffer_head *bh, int uptodate)
 		SetPageError(page);
 	}
 
-	spin_lock_irqsave(&page_uptodate_lock, flags);
+	first = page_buffers(page);
+	local_irq_save(flags);
+	bit_spin_lock(BH_Uptodate_Lock, &first->b_state);
+
 	clear_buffer_async_write(bh);
 	unlock_buffer(bh);
 	tmp = bh->b_this_page;
@@ -630,12 +613,14 @@ void end_buffer_async_write(struct buffer_head *bh, int uptodate)
 		}
 		tmp = tmp->b_this_page;
 	}
-	spin_unlock_irqrestore(&page_uptodate_lock, flags);
+	bit_spin_unlock(BH_Uptodate_Lock, &first->b_state);
+	local_irq_restore(flags);
 	end_page_writeback(page);
 	return;
 
 still_busy:
-	spin_unlock_irqrestore(&page_uptodate_lock, flags);
+	bit_spin_unlock(BH_Uptodate_Lock, &first->b_state);
+	local_irq_restore(flags);
 	return;
 }
 
@@ -933,8 +918,7 @@ static int fsync_buffers_list(spinlock_t *lock, struct list_head *list)
 				 * contents - it is a noop if I/O is still in
 				 * flight on potentially older contents.
 				 */
-				wait_on_buffer(bh);
-				ll_rw_block(WRITE, 1, &bh);
+				ll_rw_block(SWRITE, 1, &bh);
 				brelse(bh);
 				spin_lock(lock);
 			}
@@ -1951,7 +1935,6 @@ static int __block_prepare_write(struct inode *inode, struct page *page,
 			if (err)
 				break;
 			if (buffer_new(bh)) {
-				clear_buffer_new(bh);
 				unmap_underlying_metadata(bh->b_bdev,
 							bh->b_blocknr);
 				if (PageUptodate(page)) {
@@ -1993,9 +1976,14 @@ static int __block_prepare_write(struct inode *inode, struct page *page,
 		if (!buffer_uptodate(*wait_bh))
 			err = -EIO;
 	}
-	if (!err)
-		return err;
-
+	if (!err) {
+		bh = head;
+		do {
+			if (buffer_new(bh))
+				clear_buffer_new(bh);
+		} while ((bh = bh->b_this_page) != head);
+		return 0;
+	}
 	/* Error case: */
 	/*
 	 * Zero out any newly allocated blocks to avoid exposing stale
@@ -2805,21 +2793,22 @@ int submit_bh(int rw, struct buffer_head * bh)
 
 /**
  * ll_rw_block: low-level access to block devices (DEPRECATED)
- * @rw: whether to %READ or %WRITE or maybe %READA (readahead)
+ * @rw: whether to %READ or %WRITE or %SWRITE or maybe %READA (readahead)
  * @nr: number of &struct buffer_heads in the array
  * @bhs: array of pointers to &struct buffer_head
  *
- * ll_rw_block() takes an array of pointers to &struct buffer_heads,
- * and requests an I/O operation on them, either a %READ or a %WRITE.
- * The third %READA option is described in the documentation for
- * generic_make_request() which ll_rw_block() calls.
+ * ll_rw_block() takes an array of pointers to &struct buffer_heads, and
+ * requests an I/O operation on them, either a %READ or a %WRITE.  The third
+ * %SWRITE is like %WRITE only we make sure that the *current* data in buffers
+ * are sent to disk. The fourth %READA option is described in the documentation
+ * for generic_make_request() which ll_rw_block() calls.
  *
  * This function drops any buffer that it cannot get a lock on (with the
- * BH_Lock state bit), any buffer that appears to be clean when doing a
- * write request, and any buffer that appears to be up-to-date when doing
- * read request.  Further it marks as clean buffers that are processed for
- * writing (the buffer cache won't assume that they are actually clean until
- * the buffer gets unlocked).
+ * BH_Lock state bit) unless SWRITE is required, any buffer that appears to be
+ * clean when doing a write request, and any buffer that appears to be
+ * up-to-date when doing read request.  Further it marks as clean buffers that
+ * are processed for writing (the buffer cache won't assume that they are
+ * actually clean until the buffer gets unlocked).
  *
  * ll_rw_block sets b_end_io to simple completion handler that marks
  * the buffer up-to-date (if approriate), unlocks the buffer and wakes
@@ -2835,11 +2824,13 @@ void ll_rw_block(int rw, int nr, struct buffer_head *bhs[])
 	for (i = 0; i < nr; i++) {
 		struct buffer_head *bh = bhs[i];
 
-		if (test_set_buffer_locked(bh))
+		if (rw == SWRITE)
+			lock_buffer(bh);
+		else if (test_set_buffer_locked(bh))
 			continue;
 
 		get_bh(bh);
-		if (rw == WRITE) {
+		if (rw == WRITE || rw == SWRITE) {
 			if (test_clear_buffer_dirty(bh)) {
 				bh->b_end_io = end_buffer_write_sync;
 				submit_bh(WRITE, bh);
@@ -3054,14 +3045,13 @@ static void recalc_bh_state(void)
 	buffer_heads_over_limit = (tot > max_buffer_heads);
 }
 	
-struct buffer_head *alloc_buffer_head(unsigned int __nocast gfp_flags)
+struct buffer_head *alloc_buffer_head(gfp_t gfp_flags)
 {
 	struct buffer_head *ret = kmem_cache_alloc(bh_cachep, gfp_flags);
 	if (ret) {
-		preempt_disable();
-		__get_cpu_var(bh_accounting).nr++;
+		get_cpu_var(bh_accounting).nr++;
 		recalc_bh_state();
-		preempt_enable();
+		put_cpu_var(bh_accounting);
 	}
 	return ret;
 }
@@ -3071,10 +3061,9 @@ void free_buffer_head(struct buffer_head *bh)
 {
 	BUG_ON(!list_empty(&bh->b_assoc_buffers));
 	kmem_cache_free(bh_cachep, bh);
-	preempt_disable();
-	__get_cpu_var(bh_accounting).nr--;
+	get_cpu_var(bh_accounting).nr--;
 	recalc_bh_state();
-	preempt_enable();
+	put_cpu_var(bh_accounting);
 }
 EXPORT_SYMBOL(free_buffer_head);
 

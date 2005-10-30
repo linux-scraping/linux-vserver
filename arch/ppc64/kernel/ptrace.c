@@ -17,6 +17,7 @@
  * this archive for more details.
  */
 
+#include <linux/config.h>
 #include <linux/kernel.h>
 #include <linux/sched.h>
 #include <linux/mm.h>
@@ -208,6 +209,20 @@ int sys_ptrace(long request, long pid, long addr, long data)
 		break;
 	}
 
+	case PTRACE_GET_DEBUGREG: {
+		ret = -EINVAL;
+		/* We only support one DABR and no IABRS at the moment */
+		if (addr > 0)
+			break;
+		ret = put_user(child->thread.dabr,
+			       (unsigned long __user *)data);
+		break;
+	}
+
+	case PTRACE_SET_DEBUGREG:
+		ret = ptrace_set_debugreg(child, addr, data);
+		break;
+
 	case PTRACE_DETACH:
 		ret = ptrace_detach(child, data);
 		break;
@@ -276,6 +291,20 @@ int sys_ptrace(long request, long pid, long addr, long data)
 		break;
 	}
 
+#ifdef CONFIG_ALTIVEC
+	case PTRACE_GETVRREGS:
+		/* Get the child altivec register state. */
+		flush_altivec_to_thread(child);
+		ret = get_vrregs((unsigned long __user *)data, child);
+		break;
+
+	case PTRACE_SETVRREGS:
+		/* Set the child altivec register state. */
+		flush_altivec_to_thread(child);
+		ret = set_vrregs(child, (unsigned long __user *)data);
+		break;
+#endif
+
 	default:
 		ret = ptrace_request(child, request, addr, data);
 		break;
@@ -307,6 +336,8 @@ static void do_syscall_trace(void)
 
 void do_syscall_trace_enter(struct pt_regs *regs)
 {
+	secure_computing(regs->gpr[0]);
+
 	if (test_thread_flag(TIF_SYSCALL_TRACE)
 	    && (current->ptrace & PT_PTRACED))
 		do_syscall_trace();
@@ -322,8 +353,6 @@ void do_syscall_trace_enter(struct pt_regs *regs)
 
 void do_syscall_trace_leave(struct pt_regs *regs)
 {
-	secure_computing(regs->gpr[0]);
-
 	if (unlikely(current->audit_context))
 		audit_syscall_exit(current, 
 				   (regs->ccr&0x1000)?AUDITSC_FAILURE:AUDITSC_SUCCESS,

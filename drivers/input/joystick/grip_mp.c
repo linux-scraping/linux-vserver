@@ -171,7 +171,7 @@ static int mp_io(struct gameport* gameport, int sendflags, int sendcode, u32 *pa
 	*packet = 0;
 	raw_data = gameport_read(gameport);
 	if (raw_data & 1)
- 		return IO_RETRY;
+		return IO_RETRY;
 
 	for (i = 0; i < 64; i++) {
 		raw_data = gameport_read(gameport);
@@ -607,7 +607,7 @@ static int grip_connect(struct gameport *gameport, struct gameport_driver *drv)
 	struct grip_mp *grip;
 	int err;
 
-	if (!(grip = kcalloc(1, sizeof(struct grip_mp), GFP_KERNEL)))
+	if (!(grip = kzalloc(sizeof(struct grip_mp), GFP_KERNEL)))
 		return -ENOMEM;
 
 	grip->gameport = gameport;

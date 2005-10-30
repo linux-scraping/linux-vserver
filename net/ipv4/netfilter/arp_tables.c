@@ -60,7 +60,6 @@ static DECLARE_MUTEX(arpt_mutex);
 
 #define ASSERT_READ_LOCK(x) ARP_NF_ASSERT(down_trylock(&arpt_mutex) != 0)
 #define ASSERT_WRITE_LOCK(x) ARP_NF_ASSERT(down_trylock(&arpt_mutex) != 0)
-#include <linux/netfilter_ipv4/lockhelp.h>
 #include <linux/netfilter_ipv4/listhelp.h>
 
 struct arpt_table_info {
@@ -717,8 +716,10 @@ static int translate_table(const char *name,
 	}
 
 	/* And one copy for every other CPU */
-	for (i = 1; i < num_possible_cpus(); i++) {
-		memcpy(newinfo->entries + SMP_ALIGN(newinfo->size)*i,
+	for_each_cpu(i) {
+		if (i == 0)
+			continue;
+		memcpy(newinfo->entries + SMP_ALIGN(newinfo->size) * i,
 		       newinfo->entries,
 		       SMP_ALIGN(newinfo->size));
 	}
@@ -768,7 +769,7 @@ static void get_counters(const struct arpt_table_info *t,
 	unsigned int cpu;
 	unsigned int i;
 
-	for (cpu = 0; cpu < num_possible_cpus(); cpu++) {
+	for_each_cpu(cpu) {
 		i = 0;
 		ARPT_ENTRY_ITERATE(t->entries + TABLE_OFFSET(t, cpu),
 				   t->size,
@@ -886,7 +887,8 @@ static int do_replace(void __user *user, unsigned int len)
 		return -ENOMEM;
 
 	newinfo = vmalloc(sizeof(struct arpt_table_info)
-			  + SMP_ALIGN(tmp.size) * num_possible_cpus());
+			  + SMP_ALIGN(tmp.size) *
+			  		(highest_possible_processor_id()+1));
 	if (!newinfo)
 		return -ENOMEM;
 
@@ -1159,7 +1161,8 @@ int arpt_register_table(struct arpt_table *table,
 		= { 0, 0, 0, { 0 }, { 0 }, { } };
 
 	newinfo = vmalloc(sizeof(struct arpt_table_info)
-			  + SMP_ALIGN(repl->size) * num_possible_cpus());
+			  + SMP_ALIGN(repl->size) *
+			  		(highest_possible_processor_id()+1));
 	if (!newinfo) {
 		ret = -ENOMEM;
 		return ret;

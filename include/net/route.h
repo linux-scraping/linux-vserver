@@ -106,10 +106,6 @@ struct rt_cache_stat
         unsigned int out_hlist_search;
 };
 
-extern struct rt_cache_stat *rt_cache_stat;
-#define RT_CACHE_STAT_INC(field)					  \
-		(per_cpu_ptr(rt_cache_stat, _smp_processor_id())->field++)
-
 extern struct ip_rt_acct *ip_rt_acct;
 
 struct in_device;
@@ -146,7 +142,7 @@ static inline char rt_tos2priority(u8 tos)
 	return ip_tos2prio[IPTOS_TOS(tos)>>1];
 }
 
-#define IPI_LOOPBACK	0x0100007f
+#define IPI_LOOPBACK	htonl(INADDR_LOOPBACK)
 
 static inline int ip_find_src(struct nx_info *nxi, struct rtable **rp, struct flowi *fl)
 {
@@ -268,5 +264,7 @@ static inline struct inet_peer *rt_get_peer(struct rtable *rt)
 	rt_bind_peer(rt, 0);
 	return rt->peer;
 }
+
+extern ctl_table ipv4_route_table[];
 
 #endif	/* _ROUTE_H */

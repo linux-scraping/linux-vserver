@@ -40,7 +40,6 @@ MODULE_PARM_DESC(debug, "Turn on/off device debugging (default:off).");
 
 /* addresses to scan, found only at 0x4c and/or 0x4d (7-Bit) */
 static unsigned short normal_i2c[] = { I2C_TEA6420_1, I2C_TEA6420_2, I2C_CLIENT_END };
-static unsigned short normal_i2c_range[] = { I2C_CLIENT_END };
 
 /* magic definition of all other variables and things */
 I2C_CLIENT_INSMOD;
@@ -136,7 +135,7 @@ static int tea6420_detect(struct i2c_adapter *adapter, int address, int kind)
 static int attach(struct i2c_adapter *adapter)
 {
 	/* let's see whether this is a know adapter we can attach to */
-	if (adapter->id != I2C_ALGO_SAA7146) {
+	if (adapter->id != I2C_HW_SAA7146) {
 		dprintk("refusing to probe on unknown adapter [name='%s',id=0x%x]\n", adapter->name, adapter->id);
 		return -ENODEV;
 	}
@@ -178,7 +177,7 @@ static struct i2c_driver driver = {
 };
 
 static struct i2c_client client_template = {
-	I2C_DEVNAME("tea6420"),
+	.name = "tea6420",
 	.driver = &driver,
 };
 

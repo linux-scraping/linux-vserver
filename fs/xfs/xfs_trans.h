@@ -112,6 +112,7 @@ typedef struct xfs_trans_header {
 #define	XFS_TRANS_GROWFSRT_ZERO		38
 #define	XFS_TRANS_GROWFSRT_FREE		39
 #define	XFS_TRANS_SWAPEXT		40
+#define	XFS_TRANS_TYPE_MAX		40
 /* new transaction types need to be reflected in xfs_logprint(8) */
 
 
@@ -987,8 +988,6 @@ xfs_trans_t	*_xfs_trans_alloc(struct xfs_mount *, uint);
 xfs_trans_t	*xfs_trans_dup(xfs_trans_t *);
 int		xfs_trans_reserve(xfs_trans_t *, uint, uint, uint,
 				  uint, uint);
-void		xfs_trans_callback(xfs_trans_t *,
-				   void (*)(xfs_trans_t *, void *), void *);
 void		xfs_trans_mod_sb(xfs_trans_t *, uint, long);
 struct xfs_buf	*xfs_trans_get_buf(xfs_trans_t *, struct xfs_buftarg *, xfs_daddr_t,
 				   int, uint);
@@ -1000,6 +999,7 @@ struct xfs_buf	*xfs_trans_getsb(xfs_trans_t *, struct xfs_mount *, int);
 void		xfs_trans_brelse(xfs_trans_t *, struct xfs_buf *);
 void		xfs_trans_bjoin(xfs_trans_t *, struct xfs_buf *);
 void		xfs_trans_bhold(xfs_trans_t *, struct xfs_buf *);
+void		xfs_trans_bhold_release(xfs_trans_t *, struct xfs_buf *);
 void		xfs_trans_binval(xfs_trans_t *, struct xfs_buf *);
 void		xfs_trans_inode_buf(xfs_trans_t *, struct xfs_buf *);
 void		xfs_trans_inode_buf(xfs_trans_t *, struct xfs_buf *);
@@ -1010,7 +1010,6 @@ int		xfs_trans_iget(struct xfs_mount *, xfs_trans_t *,
 			       xfs_ino_t , uint, uint, struct xfs_inode **);
 void		xfs_trans_ijoin(xfs_trans_t *, struct xfs_inode *, uint);
 void		xfs_trans_ihold(xfs_trans_t *, struct xfs_inode *);
-void		xfs_trans_ihold_release(xfs_trans_t *, struct xfs_inode *);
 void		xfs_trans_log_buf(xfs_trans_t *, struct xfs_buf *, uint, uint);
 void		xfs_trans_log_inode(xfs_trans_t *, struct xfs_inode *, uint);
 struct xfs_efi_log_item	*xfs_trans_get_efi(xfs_trans_t *, uint);

@@ -18,8 +18,10 @@
 
 #include <linux/fs.h>
 #include <linux/quotaops.h>
+#include <linux/vs_dlimit.h>
 #include <linux/vserver/xid.h>
 #include "jfs_incore.h"
+#include "jfs_inode.h"
 #include "jfs_filsys.h"
 #include "jfs_imap.h"
 #include "jfs_dinode.h"
@@ -61,12 +63,18 @@ struct inode *ialloc(struct inode *parent, umode_t mode)
 			mode |= S_ISGID;
 	} else
 		inode->i_gid = current->fsgid;
+
 	inode->i_xid = vx_current_fsxid(sb);
+	if (DLIMIT_ALLOC_INODE(inode)) {
+		iput(inode);
+		return NULL;
+	}
 
 	/*
 	 * Allocate inode to quota.
 	 */
 	if (DQUOT_ALLOC_INODE(inode)) {
+		DLIMIT_FREE_INODE(inode);
 		DQUOT_DROP(inode);
 		inode->i_flags |= S_NOQUOTA;
 		inode->i_nlink = 0;

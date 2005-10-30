@@ -516,9 +516,9 @@ static struct backlight_controller nvidia_backlight_controller = {
 static void nvidiafb_load_cursor_image(struct nvidia_par *par, u8 * data8,
 				       u16 bg, u16 fg, u32 w, u32 h)
 {
+	u32 *data = (u32 *) data8;
 	int i, j, k = 0;
 	u32 b, tmp;
-	u32 *data = (u32 *) data8;
 
 	w = (w + 1) & ~1;
 
@@ -658,7 +658,7 @@ static int nvidia_calc_regs(struct fb_info *info)
 {
 	struct nvidia_par *par = info->par;
 	struct _riva_hw_state *state = &par->ModeReg;
-	int i, depth = fb_get_color_depth(&info->var);
+	int i, depth = fb_get_color_depth(&info->var, &info->fix);
 	int h_display = info->var.xres / 8 - 1;
 	int h_start = (info->var.xres + info->var.right_margin) / 8 - 1;
 	int h_end = (info->var.xres + info->var.right_margin +
@@ -890,11 +890,11 @@ static int nvidiafb_cursor(struct fb_info *info, struct fb_cursor *cursor)
 {
 	struct nvidia_par *par = info->par;
 	u8 data[MAX_CURS * MAX_CURS / 8];
-	u16 fg, bg;
 	int i, set = cursor->set;
+	u16 fg, bg;
 
 	if (cursor->image.width > MAX_CURS || cursor->image.height > MAX_CURS)
-		return soft_cursor(info, cursor);
+		return -ENXIO;
 
 	NVShowHideCursor(par, 0);
 
@@ -931,21 +931,18 @@ static int nvidiafb_cursor(struct fb_info *info, struct fb_cursor *cursor)
 		if (src) {
 			switch (cursor->rop) {
 			case ROP_XOR:
-				for (i = 0; i < s_pitch * cursor->image.height;
-				     i++)
+				for (i = 0; i < s_pitch * cursor->image.height; i++)
 					src[i] = dat[i] ^ msk[i];
 				break;
 			case ROP_COPY:
 			default:
-				for (i = 0; i < s_pitch * cursor->image.height;
-				     i++)
+				for (i = 0; i < s_pitch * cursor->image.height; i++)
 					src[i] = dat[i] & msk[i];
 				break;
 			}
 
-			fb_sysmove_buf_aligned(info, &info->pixmap, data,
-					       d_pitch, src, s_pitch,
-					       cursor->image.height);
+			fb_pad_aligned_buffer(data, d_pitch, src, s_pitch,
+						cursor->image.height);
 
 			bg = ((info->cmap.red[bg_idx] & 0xf8) << 7) |
 			    ((info->cmap.green[bg_idx] & 0xf8) << 2) |
@@ -981,6 +978,9 @@ static int nvidiafb_set_par(struct fb_info *info)
 	    !par->twoHeads)
 		par->FPDither = 0;
 
+	info->fix.visual = (info->var.bits_per_pixel == 8) ?
+	    FB_VISUAL_PSEUDOCOLOR : FB_VISUAL_DIRECTCOLOR;
+
 	nvidia_init_vga(info);
 	nvidia_calc_regs(info);
 	nvidia_write_regs(par);
@@ -995,9 +995,6 @@ static int nvidiafb_set_par(struct fb_info *info)
 	NVWriteCrtc(par, 0x11, 0x00);
 	info->fix.line_length = (info->var.xres_virtual *
 				 info->var.bits_per_pixel) >> 3;
-	info->fix.visual = (info->var.bits_per_pixel == 8) ?
-	    FB_VISUAL_PSEUDOCOLOR : FB_VISUAL_DIRECTCOLOR;
-
 	if (info->var.accel_flags) {
 		info->fbops->fb_imageblit = nvidiafb_imageblit;
 		info->fbops->fb_fillrect = nvidiafb_fillrect;
@@ -1327,6 +1324,13 @@ static int __devinit nvidia_set_fbinfo(struct fb_info *info)
 
 		fb_videomode_to_var(&nvidiafb_default_var, &modedb);
 		nvidiafb_default_var.bits_per_pixel = 8;
+	} else if (par->fpWidth && par->fpHeight) {
+		char buf[16];
+
+		memset(buf, 0, 16);
+		snprintf(buf, 15, "%dx%dMR", par->fpWidth, par->fpHeight);
+		fb_find_mode(&nvidiafb_default_var, info, buf, specs->modedb,
+			     specs->modedb_len, &modedb, 8);
 	}
 
 	if (mode_option)
@@ -1348,11 +1352,13 @@ static int __devinit nvidia_set_fbinfo(struct fb_info *info)
 
 	info->pixmap.scan_align = 4;
 	info->pixmap.buf_align = 4;
+	info->pixmap.access_align = 32;
 	info->pixmap.size = 8 * 1024;
 	info->pixmap.flags = FB_PIXMAP_SYSTEM;
 
 	if (!hwcur)
-		info->fbops->fb_cursor = soft_cursor;
+	    info->fbops->fb_cursor = soft_cursor;
+
 	info->var.accel_flags = (!noaccel);
 
 	switch (par->Architecture) {
@@ -1467,10 +1473,6 @@ static int __devinit nvidiafb_probe(struct pci_dev *pd,
 
 	par->Chipset = (pd->vendor << 16) | pd->device;
 	printk(KERN_INFO PFX "nVidia device/chipset %X\n", par->Chipset);
-
-#ifdef CONFIG_PCI_NAMES
-	printk(KERN_INFO PFX "%s\n", pd->pretty_name);
-#endif
 
 	if (par->Architecture == 0) {
 		printk(KERN_ERR PFX "unknown NV_ARCH\n");

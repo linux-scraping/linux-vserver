@@ -59,6 +59,9 @@
 
 int core_uses_pid;
 char core_pattern[65] = "core";
+int suid_dumpable = 0;
+
+EXPORT_SYMBOL(suid_dumpable);
 /* The maximal length of core_pattern is also specified in sysctl.c */
 
 static struct linux_binfmt *formats;
@@ -419,12 +422,6 @@ int setup_arg_pages(struct linux_binprm *bprm,
 	if (!mpnt)
 		return -ENOMEM;
 
-	if (security_vm_enough_memory(arg_size >> PAGE_SHIFT) ||
-		!vx_vmpages_avail(mm, arg_size >> PAGE_SHIFT)) {
-		kmem_cache_free(vm_area_cachep, mpnt);
-		return -ENOMEM;
-	}
-
 	memset(mpnt, 0, sizeof(*mpnt));
 
 	down_write(&mm->mmap_sem);
@@ -642,6 +639,18 @@ static inline int de_thread(struct task_struct *tsk)
 	count = 2;
 	if (thread_group_leader(current))
 		count = 1;
+	else {
+		/*
+		 * The SIGALRM timer survives the exec, but needs to point
+		 * at us as the new group leader now.  We have a race with
+		 * a timer firing now getting the old leader, so we need to
+		 * synchronize with any firing (by calling del_timer_sync)
+		 * before we can safely let the old group leader die.
+		 */
+		sig->real_timer.data = (unsigned long)current;
+		if (del_timer_sync(&sig->real_timer))
+			add_timer(&sig->real_timer);
+	}
 	while (atomic_read(&sig->count) > count) {
 		sig->group_exit_task = current;
 		sig->notify_count = count;
@@ -679,10 +688,8 @@ static inline int de_thread(struct task_struct *tsk)
 		proc_dentry2 = proc_pid_unhash(leader);
 		write_lock_irq(&tasklist_lock);
 
-		if (leader->tgid != current->tgid)
-			BUG();
-		if (current->pid == current->tgid)
-			BUG();
+		BUG_ON(leader->tgid != current->tgid);
+		BUG_ON(current->pid == current->tgid);
 		/*
 		 * An exec() starts a new thread group with the
 		 * TGID of the previous thread group. Rehash the
@@ -730,14 +737,13 @@ static inline int de_thread(struct task_struct *tsk)
 		proc_pid_flush(proc_dentry1);
 		proc_pid_flush(proc_dentry2);
 
-		if (exit_state != EXIT_ZOMBIE)
-			BUG();
+		BUG_ON(exit_state != EXIT_ZOMBIE);
 		release_task(leader);
         }
 
 	/*
-	 * Now there are really no other threads at all,
-	 * so it's safe to stop telling them to kill themselves.
+	 * There may be one thread left which is just exiting,
+	 * but it's safe to stop telling the group to kill themselves.
 	 */
 	sig->flags = 0;
 
@@ -776,10 +782,7 @@ no_thread_group:
 			kmem_cache_free(sighand_cachep, oldsighand);
 	}
 
-	if (!thread_group_empty(current))
-		BUG();
-	if (!thread_group_leader(current))
-		BUG();
+	BUG_ON(!thread_group_leader(current));
 	return 0;
 }
 	
@@ -791,6 +794,7 @@ no_thread_group:
 static inline void flush_old_files(struct files_struct * files)
 {
 	long j = -1;
+	struct fdtable *fdt;
 
 	spin_lock(&files->file_lock);
 	for (;;) {
@@ -798,12 +802,13 @@ static inline void flush_old_files(struct files_struct * files)
 
 		j++;
 		i = j * __NFDBITS;
-		if (i >= files->max_fds || i >= files->max_fdset)
+		fdt = files_fdtable(files);
+		if (i >= fdt->max_fds || i >= fdt->max_fdset)
 			break;
-		set = files->close_on_exec->fds_bits[j];
+		set = fdt->close_on_exec->fds_bits[j];
 		if (!set)
 			continue;
-		files->close_on_exec->fds_bits[j] = 0;
+		fdt->close_on_exec->fds_bits[j] = 0;
 		spin_unlock(&files->file_lock);
 		for ( ; set ; i++,set >>= 1) {
 			if (set & 1) {
@@ -872,6 +877,9 @@ int flush_old_exec(struct linux_binprm * bprm)
 
 	if (current->euid == current->uid && current->egid == current->gid)
 		current->mm->dumpable = 1;
+	else
+		current->mm->dumpable = suid_dumpable;
+
 	name = bprm->filename;
 
 	/* Copies the binary name from after last slash */
@@ -892,7 +900,7 @@ int flush_old_exec(struct linux_binprm * bprm)
 	    permission(bprm->file->f_dentry->d_inode,MAY_READ, NULL) ||
 	    (bprm->interp_flags & BINPRM_FLAGS_ENFORCE_NONDUMP)) {
 		suid_keys(current);
-		current->mm->dumpable = 0;
+		current->mm->dumpable = suid_dumpable;
 	}
 
 	/* An exec changes our domain. We are no longer part of the thread
@@ -1440,6 +1448,8 @@ int do_coredump(long signr, int exit_code, struct pt_regs * regs)
 	struct inode * inode;
 	struct file * file;
 	int retval = 0;
+	int fsuid = current->fsuid;
+	int flag = 0;
 
 	binfmt = current->binfmt;
 	if (!binfmt || !binfmt->core_dump)
@@ -1448,6 +1458,16 @@ int do_coredump(long signr, int exit_code, struct pt_regs * regs)
 	if (!mm->dumpable) {
 		up_write(&mm->mmap_sem);
 		goto fail;
+	}
+
+	/*
+	 *	We cannot trust fsuid as being the "true" uid of the
+	 *	process nor do we know its entire history. We only know it
+	 *	was tainted so we dump it as root in mode 2.
+	 */
+	if (mm->dumpable == 2) {	/* Setuid core dump mode */
+		flag = O_EXCL;		/* Stop rewrite attacks */
+		current->fsuid = 0;	/* Dump root private */
 	}
 	mm->dumpable = 0;
 	init_completion(&mm->core_done);
@@ -1474,7 +1494,7 @@ int do_coredump(long signr, int exit_code, struct pt_regs * regs)
  	lock_kernel();
 	format_corename(corename, core_pattern, signr);
 	unlock_kernel();
-	file = filp_open(corename, O_CREAT | 2 | O_NOFOLLOW | O_LARGEFILE, 0600);
+	file = filp_open(corename, O_CREAT | 2 | O_NOFOLLOW | O_LARGEFILE | flag, 0600);
 	if (IS_ERR(file))
 		goto fail_unlock;
 	inode = file->f_dentry->d_inode;
@@ -1499,6 +1519,7 @@ int do_coredump(long signr, int exit_code, struct pt_regs * regs)
 close_fail:
 	filp_close(file, NULL);
 fail_unlock:
+	current->fsuid = fsuid;
 	complete_all(&mm->core_done);
 fail:
 	return retval;

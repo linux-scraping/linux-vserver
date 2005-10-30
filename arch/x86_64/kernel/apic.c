@@ -18,7 +18,6 @@
 #include <linux/init.h>
 
 #include <linux/mm.h>
-#include <linux/irq.h>
 #include <linux/delay.h>
 #include <linux/bootmem.h>
 #include <linux/smp_lock.h>
@@ -109,11 +108,8 @@ void clear_local_APIC(void)
 	if (maxlvt >= 4)
 		apic_write_around(APIC_LVTPC, APIC_LVT_MASKED);
 	v = GET_APIC_VERSION(apic_read(APIC_LVR));
-	if (APIC_INTEGRATED(v)) {	/* !82489DX */
-		if (maxlvt > 3)		/* Due to Pentium errata 3AP and 11AP. */
-			apic_write(APIC_ESR, 0);
-		apic_read(APIC_ESR);
-	}
+	apic_write(APIC_ESR, 0);
+	apic_read(APIC_ESR);
 }
 
 void __init connect_bsp_APIC(void)
@@ -133,7 +129,7 @@ void __init connect_bsp_APIC(void)
 	}
 }
 
-void disconnect_bsp_APIC(void)
+void disconnect_bsp_APIC(int virt_wire_setup)
 {
 	if (pic_mode) {
 		/*
@@ -145,6 +141,42 @@ void disconnect_bsp_APIC(void)
 		apic_printk(APIC_QUIET, "disabling APIC mode, entering PIC mode.\n");
 		outb(0x70, 0x22);
 		outb(0x00, 0x23);
+	}
+	else {
+		/* Go back to Virtual Wire compatibility mode */
+		unsigned long value;
+
+		/* For the spurious interrupt use vector F, and enable it */
+		value = apic_read(APIC_SPIV);
+		value &= ~APIC_VECTOR_MASK;
+		value |= APIC_SPIV_APIC_ENABLED;
+		value |= 0xf;
+		apic_write_around(APIC_SPIV, value);
+
+		if (!virt_wire_setup) {
+			/* For LVT0 make it edge triggered, active high, external and enabled */
+			value = apic_read(APIC_LVT0);
+			value &= ~(APIC_MODE_MASK | APIC_SEND_PENDING |
+				APIC_INPUT_POLARITY | APIC_LVT_REMOTE_IRR |
+				APIC_LVT_LEVEL_TRIGGER | APIC_LVT_MASKED );
+			value |= APIC_LVT_REMOTE_IRR | APIC_SEND_PENDING;
+			value = SET_APIC_DELIVERY_MODE(value, APIC_MODE_EXTINT);
+			apic_write_around(APIC_LVT0, value);
+		}
+		else {
+			/* Disable LVT0 */
+			apic_write_around(APIC_LVT0, APIC_LVT_MASKED);
+		}
+
+		/* For LVT1 make it edge triggered, active high, nmi and enabled */
+		value = apic_read(APIC_LVT1);
+		value &= ~(
+			APIC_MODE_MASK | APIC_SEND_PENDING |
+			APIC_INPUT_POLARITY | APIC_LVT_REMOTE_IRR |
+			APIC_LVT_LEVEL_TRIGGER | APIC_LVT_MASKED);
+		value |= APIC_LVT_REMOTE_IRR | APIC_SEND_PENDING;
+		value = SET_APIC_DELIVERY_MODE(value, APIC_MODE_NMI);
+		apic_write_around(APIC_LVT1, value);
 	}
 }
 
@@ -280,22 +312,12 @@ void __init init_bsp_APIC(void)
 	 */
 	apic_write_around(APIC_LVT0, APIC_DM_EXTINT);
 	value = APIC_DM_NMI;
-	if (!APIC_INTEGRATED(ver))		/* 82489DX */
-		value |= APIC_LVT_LEVEL_TRIGGER;
 	apic_write_around(APIC_LVT1, value);
 }
 
-void __init setup_local_APIC (void)
+void __cpuinit setup_local_APIC (void)
 {
 	unsigned int value, ver, maxlvt;
-
-	/* Pound the ESR really hard over the head with a big hammer - mbligh */
-	if (esr_disable) {
-		apic_write(APIC_ESR, 0);
-		apic_write(APIC_ESR, 0);
-		apic_write(APIC_ESR, 0);
-		apic_write(APIC_ESR, 0);
-	}
 
 	value = apic_read(APIC_LVR);
 	ver = GET_APIC_VERSION(value);
@@ -394,15 +416,11 @@ void __init setup_local_APIC (void)
 		value = APIC_DM_NMI;
 	else
 		value = APIC_DM_NMI | APIC_LVT_MASKED;
-	if (!APIC_INTEGRATED(ver))		/* 82489DX */
-		value |= APIC_LVT_LEVEL_TRIGGER;
 	apic_write_around(APIC_LVT1, value);
 
-	if (APIC_INTEGRATED(ver) && !esr_disable) {		/* !82489DX */
+	{
 		unsigned oldvalue;
 		maxlvt = get_maxlvt();
-		if (maxlvt > 3)		/* Due to the Pentium erratum 3AP. */
-			apic_write(APIC_ESR, 0);
 		oldvalue = apic_read(APIC_ESR);
 		value = ERROR_APIC_VECTOR;      // enables sending errors
 		apic_write_around(APIC_LVTERR, value);
@@ -416,17 +434,6 @@ void __init setup_local_APIC (void)
 			apic_printk(APIC_VERBOSE,
 			"ESR value after enabling vector: %08x, after %08x\n",
 			oldvalue, value);
-	} else {
-		if (esr_disable)	
-			/* 
-			 * Something untraceble is creating bad interrupts on 
-			 * secondary quads ... for the moment, just leave the
-			 * ESR disabled - we can't do anything useful with the
-			 * errors anyway - mbligh
-			 */
-			apic_printk(APIC_DEBUG, "Leaving ESR disabled.\n");
-		else 
-			apic_printk(APIC_DEBUG, "No ESR for 82489DX.\n");
 	}
 
 	nmi_watchdog_default();
@@ -534,7 +541,7 @@ static struct sys_device device_lapic = {
 	.cls		= &lapic_sysclass,
 };
 
-static void __init apic_pm_activate(void)
+static void __cpuinit apic_pm_activate(void)
 {
 	apic_pm_state.active = 1;
 }
@@ -614,8 +621,7 @@ void __init init_apic_mappings(void)
 	 * Fetch the APIC ID of the BSP in case we have a
 	 * default configuration (or the MP table is broken).
 	 */
-	if (boot_cpu_id == -1U)
-		boot_cpu_id = GET_APIC_ID(apic_read(APIC_ID));
+	boot_cpu_id = GET_APIC_ID(apic_read(APIC_ID));
 
 #ifdef CONFIG_X86_IO_APIC
 	{
@@ -657,8 +663,6 @@ static void __setup_APIC_LVTT(unsigned int clocks)
 
 	ver = GET_APIC_VERSION(apic_read(APIC_LVR));
 	lvtt_value = APIC_LVT_TIMER_PERIODIC | LOCAL_TIMER_VECTOR;
-	if (!APIC_INTEGRATED(ver))
-		lvtt_value |= SET_APIC_TIMER_BASE(APIC_TIMER_BASE_DIV);
 	apic_write_around(APIC_LVTT, lvtt_value);
 
 	/*
@@ -774,14 +778,14 @@ void __init setup_boot_APIC_clock (void)
 	local_irq_enable();
 }
 
-void __init setup_secondary_APIC_clock(void)
+void __cpuinit setup_secondary_APIC_clock(void)
 {
 	local_irq_disable(); /* FIXME: Do we need this? --RR */
 	setup_APIC_timer(calibration_result);
 	local_irq_enable();
 }
 
-void __init disable_APIC_timer(void)
+void __cpuinit disable_APIC_timer(void)
 {
 	if (using_apic_timer) {
 		unsigned long v;
@@ -1045,7 +1049,7 @@ int __init APIC_init_uniprocessor (void)
 
 	connect_bsp_APIC();
 
-	phys_cpu_present_map = physid_mask_of_physid(0);
+	phys_cpu_present_map = physid_mask_of_physid(boot_cpu_id);
 	apic_write_around(APIC_ID, boot_cpu_id);
 
 	setup_local_APIC();

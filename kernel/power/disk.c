@@ -16,11 +16,13 @@
 #include <linux/device.h>
 #include <linux/delay.h>
 #include <linux/fs.h>
+#include <linux/mount.h>
+#include <linux/pm.h>
+
 #include "power.h"
 
 
 extern suspend_disk_method_t pm_disk_mode;
-extern struct pm_ops * pm_ops;
 
 extern int swsusp_suspend(void);
 extern int swsusp_write(void);
@@ -47,26 +49,21 @@ dev_t swsusp_resume_device;
 
 static void power_down(suspend_disk_method_t mode)
 {
-	unsigned long flags;
 	int error = 0;
 
-	local_irq_save(flags);
 	switch(mode) {
 	case PM_DISK_PLATFORM:
- 		device_shutdown();
+		kernel_power_off_prepare();
 		error = pm_ops->enter(PM_SUSPEND_DISK);
 		break;
 	case PM_DISK_SHUTDOWN:
-		printk("Powering off system\n");
-		device_shutdown();
-		machine_power_off();
+		kernel_power_off();
 		break;
 	case PM_DISK_REBOOT:
-		device_shutdown();
-		machine_restart(NULL);
+		kernel_restart(NULL);
 		break;
 	}
-	machine_halt();
+	kernel_halt();
 	/* Valid image is on the disk, if we continue we risk serious data corruption
 	   after resume. */
 	printk(KERN_CRIT "Please power me down manually\n");
@@ -113,62 +110,42 @@ static inline void platform_finish(void)
 	}
 }
 
-static void finish(void)
-{
-	device_resume();
-	platform_finish();
-	enable_nonboot_cpus();
-	thaw_processes();
-	pm_restore_console();
-}
-
-
 static int prepare_processes(void)
 {
 	int error;
 
 	pm_prepare_console();
-
 	sys_sync();
+	disable_nonboot_cpus();
 
 	if (freeze_processes()) {
 		error = -EBUSY;
-		return error;
+		goto thaw;
 	}
 
 	if (pm_disk_mode == PM_DISK_PLATFORM) {
 		if (pm_ops && pm_ops->prepare) {
 			if ((error = pm_ops->prepare(PM_SUSPEND_DISK)))
-				return error;
+				goto thaw;
 		}
 	}
 
 	/* Free memory before shutting down devices. */
 	free_some_memory();
-
 	return 0;
+thaw:
+	thaw_processes();
+	enable_nonboot_cpus();
+	pm_restore_console();
+	return error;
 }
 
 static void unprepare_processes(void)
 {
-	enable_nonboot_cpus();
+	platform_finish();
 	thaw_processes();
+	enable_nonboot_cpus();
 	pm_restore_console();
-}
-
-static int prepare_devices(void)
-{
-	int error;
-
-	disable_nonboot_cpus();
-	if ((error = device_suspend(PMSG_FREEZE))) {
-		printk("Some devices failed to suspend\n");
-		platform_finish();
-		enable_nonboot_cpus();
-		return error;
-	}
-
-	return 0;
 }
 
 /**
@@ -185,18 +162,15 @@ int pm_suspend_disk(void)
 	int error;
 
 	error = prepare_processes();
-	if (!error) {
-		error = prepare_devices();
-	}
+	if (error)
+		return error;
 
+	error = device_suspend(PMSG_FREEZE);
 	if (error) {
+		printk("Some devices failed to suspend\n");
 		unprepare_processes();
 		return error;
 	}
-
-	pr_debug("PM: Attempting to suspend to disk.\n");
-	if (pm_disk_mode == PM_DISK_FIRMWARE)
-		return pm_ops->enter(PM_SUSPEND_DISK);
 
 	pr_debug("PM: snapshotting memory.\n");
 	in_suspend = 1;
@@ -208,11 +182,20 @@ int pm_suspend_disk(void)
 		error = swsusp_write();
 		if (!error)
 			power_down(pm_disk_mode);
+		else {
+		/* swsusp_write can not fail in device_resume,
+		   no need to do second device_resume */
+			swsusp_free();
+			unprepare_processes();
+			return error;
+		}
 	} else
 		pr_debug("PM: Image restored successfully.\n");
+
 	swsusp_free();
  Done:
-	finish();
+	device_resume();
+	unprepare_processes();
 	return error;
 }
 
@@ -233,11 +216,25 @@ static int software_resume(void)
 {
 	int error;
 
+	down(&pm_sem);
+	if (!swsusp_resume_device) {
+		if (!strlen(resume_file)) {
+			up(&pm_sem);
+			return -ENOENT;
+		}
+		swsusp_resume_device = name_to_dev_t(resume_file);
+		pr_debug("swsusp: Resume From Partition %s\n", resume_file);
+	} else {
+		pr_debug("swsusp: Resume From Partition %d:%d\n",
+			 MAJOR(swsusp_resume_device), MINOR(swsusp_resume_device));
+	}
+
 	if (noresume) {
 		/**
 		 * FIXME: If noresume is specified, we need to find the partition
 		 * and reset it back to normal swap space.
 		 */
+		up(&pm_sem);
 		return 0;
 	}
 
@@ -250,7 +247,7 @@ static int software_resume(void)
 
 	if ((error = prepare_processes())) {
 		swsusp_close();
-		goto Cleanup;
+		goto Done;
 	}
 
 	pr_debug("PM: Reading swsusp image.\n");
@@ -260,20 +257,24 @@ static int software_resume(void)
 
 	pr_debug("PM: Preparing devices for restore.\n");
 
-	if ((error = prepare_devices()))
+	if ((error = device_suspend(PMSG_FREEZE))) {
+		printk("Some devices failed to suspend\n");
 		goto Free;
+	}
 
 	mb();
 
 	pr_debug("PM: Restoring saved image.\n");
 	swsusp_resume();
 	pr_debug("PM: Restore failed, recovering.n");
-	finish();
+	device_resume();
  Free:
 	swsusp_free();
  Cleanup:
 	unprepare_processes();
  Done:
+	/* For success case, the suspend path will release the lock */
+	up(&pm_sem);
 	pr_debug("PM: Resume from disk failed.\n");
 	return 0;
 }
@@ -380,7 +381,9 @@ static ssize_t resume_store(struct subsystem * subsys, const char * buf, size_t 
 	if (sscanf(buf, "%u:%u", &maj, &min) == 2) {
 		res = MKDEV(maj,min);
 		if (maj == MAJOR(res) && min == MINOR(res)) {
+			down(&pm_sem);
 			swsusp_resume_device = res;
+			up(&pm_sem);
 			printk("Attempting manual resume\n");
 			noresume = 0;
 			software_resume();

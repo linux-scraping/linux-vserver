@@ -470,7 +470,7 @@ static void snd_emu10k1_write_op(emu10k1_fx8010_code_t *icode, unsigned int *ptr
 {
 	u_int32_t *code;
 	snd_assert(*ptr < 512, return);
-	code = (u_int32_t *)icode->code + (*ptr) * 2;
+	code = (u_int32_t __force *)icode->code + (*ptr) * 2;
 	set_bit(*ptr, icode->code_valid);
 	code[0] = ((x & 0x3ff) << 10) | (y & 0x3ff);
 	code[1] = ((op & 0x0f) << 20) | ((r & 0x3ff) << 10) | (a & 0x3ff);
@@ -485,7 +485,7 @@ static void snd_emu10k1_audigy_write_op(emu10k1_fx8010_code_t *icode, unsigned i
 {
 	u_int32_t *code;
 	snd_assert(*ptr < 1024, return);
-	code = (u_int32_t *)icode->code + (*ptr) * 2;
+	code = (u_int32_t __force *)icode->code + (*ptr) * 2;
 	set_bit(*ptr, icode->code_valid);
 	code[0] = ((x & 0x7ff) << 12) | (y & 0x7ff);
 	code[1] = ((op & 0x0f) << 24) | ((r & 0x7ff) << 12) | (a & 0x7ff);
@@ -1036,13 +1036,13 @@ static int __devinit _snd_emu10k1_audigy_init_efx(emu10k1_t *emu)
 	spin_lock_init(&emu->fx8010.irq_lock);
 	INIT_LIST_HEAD(&emu->fx8010.gpr_ctl);
 
-	if ((icode = kcalloc(1, sizeof(*icode), GFP_KERNEL)) == NULL ||
+	if ((icode = kzalloc(sizeof(*icode), GFP_KERNEL)) == NULL ||
 	    (icode->gpr_map = (u_int32_t __user *)kcalloc(512 + 256 + 256 + 2 * 1024, sizeof(u_int32_t), GFP_KERNEL)) == NULL ||
 	    (controls = kcalloc(SND_EMU10K1_GPR_CONTROLS, sizeof(*controls), GFP_KERNEL)) == NULL) {
 		err = -ENOMEM;
 		goto __err;
 	}
-	gpr_map = (u32 *)icode->gpr_map;
+	gpr_map = (u32 __force *)icode->gpr_map;
 
 	icode->tram_data_map = icode->gpr_map + 512;
 	icode->tram_addr_map = icode->tram_data_map + 256;
@@ -1077,7 +1077,7 @@ static int __devinit _snd_emu10k1_audigy_init_efx(emu10k1_t *emu)
 	gpr += 2;
 	
 	/* PCM Side Playback (independent from stereo mix) */
-	if (emu->spk71) {
+	if (emu->card_capabilities->spk71) {
 		A_OP(icode, &ptr, iMAC0, A_GPR(playback+6), A_C_00000000, A_GPR(gpr), A_FXBUS(FXBUS_PCM_LEFT_SIDE));
 		A_OP(icode, &ptr, iMAC0, A_GPR(playback+7), A_C_00000000, A_GPR(gpr+1), A_FXBUS(FXBUS_PCM_RIGHT_SIDE));
 		snd_emu10k1_init_stereo_control(&controls[nctl++], "PCM Side Playback Volume", gpr, 100);
@@ -1145,40 +1145,40 @@ A_OP(icode, &ptr, iMAC0, A_GPR(var), A_GPR(var), A_GPR(vol), A_EXTIN(input))
 	A_ADD_VOLUME_IN(stereo_mix, gpr, A_EXTIN_SPDIF_CD_L);
 	A_ADD_VOLUME_IN(stereo_mix+1, gpr+1, A_EXTIN_SPDIF_CD_R);
 	snd_emu10k1_init_stereo_control(&controls[nctl++],
-					emu->no_ac97 ? "CD Playback Volume" : "Audigy CD Playback Volume",
+					emu->card_capabilities->ac97_chip ? "Audigy CD Playback Volume" : "CD Playback Volume",
 					gpr, 0);
 	gpr += 2;
 	/* Audigy CD Capture Volume */
 	A_ADD_VOLUME_IN(capture, gpr, A_EXTIN_SPDIF_CD_L);
 	A_ADD_VOLUME_IN(capture+1, gpr+1, A_EXTIN_SPDIF_CD_R);
 	snd_emu10k1_init_stereo_control(&controls[nctl++],
-					emu->no_ac97 ? "CD Capture Volume" : "Audigy CD Capture Volume",
+					emu->card_capabilities->ac97_chip ? "Audigy CD Capture Volume" : "CD Capture Volume",
 					gpr, 0);
 	gpr += 2;
 
  	/* Optical SPDIF Playback Volume */
 	A_ADD_VOLUME_IN(stereo_mix, gpr, A_EXTIN_OPT_SPDIF_L);
 	A_ADD_VOLUME_IN(stereo_mix+1, gpr+1, A_EXTIN_OPT_SPDIF_R);
-	snd_emu10k1_init_stereo_control(&controls[nctl++], "IEC958 Optical Playback Volume", gpr, 0);
+	snd_emu10k1_init_stereo_control(&controls[nctl++], SNDRV_CTL_NAME_IEC958("Optical ",PLAYBACK,VOLUME), gpr, 0);
 	gpr += 2;
 	/* Optical SPDIF Capture Volume */
 	A_ADD_VOLUME_IN(capture, gpr, A_EXTIN_OPT_SPDIF_L);
 	A_ADD_VOLUME_IN(capture+1, gpr+1, A_EXTIN_OPT_SPDIF_R);
-	snd_emu10k1_init_stereo_control(&controls[nctl++], "IEC958 Optical Capture Volume", gpr, 0);
+	snd_emu10k1_init_stereo_control(&controls[nctl++], SNDRV_CTL_NAME_IEC958("Optical ",CAPTURE,VOLUME), gpr, 0);
 	gpr += 2;
 
 	/* Line2 Playback Volume */
 	A_ADD_VOLUME_IN(stereo_mix, gpr, A_EXTIN_LINE2_L);
 	A_ADD_VOLUME_IN(stereo_mix+1, gpr+1, A_EXTIN_LINE2_R);
 	snd_emu10k1_init_stereo_control(&controls[nctl++],
-					emu->no_ac97 ? "Line Playback Volume" : "Line2 Playback Volume",
+					emu->card_capabilities->ac97_chip ? "Line2 Playback Volume" : "Line Playback Volume",
 					gpr, 0);
 	gpr += 2;
 	/* Line2 Capture Volume */
 	A_ADD_VOLUME_IN(capture, gpr, A_EXTIN_LINE2_L);
 	A_ADD_VOLUME_IN(capture+1, gpr+1, A_EXTIN_LINE2_R);
 	snd_emu10k1_init_stereo_control(&controls[nctl++],
-					emu->no_ac97 ? "Line Capture Volume" : "Line2 Capture Volume",
+					emu->card_capabilities->ac97_chip ? "Line2 Capture Volume" : "Line Capture Volume",
 					gpr, 0);
 	gpr += 2;
         
@@ -1197,14 +1197,14 @@ A_OP(icode, &ptr, iMAC0, A_GPR(var), A_GPR(var), A_GPR(vol), A_EXTIN(input))
 	A_ADD_VOLUME_IN(stereo_mix, gpr, A_EXTIN_AUX2_L);
 	A_ADD_VOLUME_IN(stereo_mix+1, gpr+1, A_EXTIN_AUX2_R);
 	snd_emu10k1_init_stereo_control(&controls[nctl++],
-					emu->no_ac97 ? "Aux Playback Volume" : "Aux2 Playback Volume",
+					emu->card_capabilities->ac97_chip ? "Aux2 Playback Volume" : "Aux Playback Volume",
 					gpr, 0);
 	gpr += 2;
 	/* Aux2 Capture Volume */
 	A_ADD_VOLUME_IN(capture, gpr, A_EXTIN_AUX2_L);
 	A_ADD_VOLUME_IN(capture+1, gpr+1, A_EXTIN_AUX2_R);
 	snd_emu10k1_init_stereo_control(&controls[nctl++],
-					emu->no_ac97 ? "Aux Capture Volume" : "Aux2 Capture Volume",
+					emu->card_capabilities->ac97_chip ? "Aux2 Capture Volume" : "Aux Capture Volume",
 					gpr, 0);
 	gpr += 2;
 	
@@ -1232,7 +1232,7 @@ A_OP(icode, &ptr, iMAC0, A_GPR(var), A_GPR(var), A_GPR(vol), A_EXTIN(input))
 	snd_emu10k1_init_mono_control(&controls[nctl++], "LFE Playback Volume", gpr, 0);
 	gpr++;
 	
-	if (emu->spk71) {
+	if (emu->card_capabilities->spk71) {
 		/* Stereo Mix Side Playback */
 		A_OP(icode, &ptr, iMAC0, A_GPR(playback+6), A_GPR(playback+6), A_GPR(gpr), A_GPR(stereo_mix));
 		A_OP(icode, &ptr, iMAC0, A_GPR(playback+7), A_GPR(playback+7), A_GPR(gpr+1), A_GPR(stereo_mix+1));
@@ -1266,7 +1266,7 @@ A_OP(icode, &ptr, iMAC0, A_GPR(var), A_GPR(var), A_GPR(vol), A_EXTIN(input))
 	A_OP(icode, &ptr, iACC3, A_GPR(playback + SND_EMU10K1_PLAYBACK_CHANNELS + 3), A_GPR(playback + 3), A_C_00000000, A_C_00000000); /* rear right */
 	A_OP(icode, &ptr, iACC3, A_GPR(playback + SND_EMU10K1_PLAYBACK_CHANNELS + 4), A_GPR(playback + 4), A_C_00000000, A_C_00000000); /* center */
 	A_OP(icode, &ptr, iACC3, A_GPR(playback + SND_EMU10K1_PLAYBACK_CHANNELS + 5), A_GPR(playback + 5), A_C_00000000, A_C_00000000); /* LFE */
-	if (emu->spk71) {
+	if (emu->card_capabilities->spk71) {
 		A_OP(icode, &ptr, iACC3, A_GPR(playback + SND_EMU10K1_PLAYBACK_CHANNELS + 6), A_GPR(playback + 6), A_C_00000000, A_C_00000000); /* side left */
 		A_OP(icode, &ptr, iACC3, A_GPR(playback + SND_EMU10K1_PLAYBACK_CHANNELS + 7), A_GPR(playback + 7), A_C_00000000, A_C_00000000); /* side right */
 	}
@@ -1359,7 +1359,7 @@ A_OP(icode, &ptr, iMAC0, A_GPR(var), A_GPR(var), A_GPR(vol), A_EXTIN(input))
 	A_PUT_STEREO_OUTPUT(A_EXTOUT_AREAR_L, A_EXTOUT_AREAR_R, playback+2 + SND_EMU10K1_PLAYBACK_CHANNELS);
 	A_PUT_OUTPUT(A_EXTOUT_ACENTER, playback+4 + SND_EMU10K1_PLAYBACK_CHANNELS);
 	A_PUT_OUTPUT(A_EXTOUT_ALFE, playback+5 + SND_EMU10K1_PLAYBACK_CHANNELS);
-	if (emu->spk71)
+	if (emu->card_capabilities->spk71)
 		A_PUT_STEREO_OUTPUT(A_EXTOUT_ASIDE_L, A_EXTOUT_ASIDE_R, playback+6 + SND_EMU10K1_PLAYBACK_CHANNELS);
 
 	/* headphone */
@@ -1389,7 +1389,7 @@ A_OP(icode, &ptr, iMAC0, A_GPR(var), A_GPR(var), A_GPR(vol), A_EXTIN(input))
 			A_OP(icode, &ptr, iACC3, A_EXTOUT(A_EXTOUT_FRONT_L + z), A_GPR(tmp + 0), A_GPR(tmp + 1), A_C_00000000);
 		}
 	}
-	snd_emu10k1_init_stereo_onoff_control(controls + nctl++, "IEC958 Optical Raw Playback Switch", gpr, 0);
+	snd_emu10k1_init_stereo_onoff_control(controls + nctl++, SNDRV_CTL_NAME_IEC958("Optical Raw ",PLAYBACK,SWITCH), gpr, 0);
 	gpr += 2;
 	
 	A_PUT_STEREO_OUTPUT(A_EXTOUT_REAR_L, A_EXTOUT_REAR_R, playback+2 + SND_EMU10K1_PLAYBACK_CHANNELS);
@@ -1431,7 +1431,7 @@ A_OP(icode, &ptr, iMAC0, A_GPR(var), A_GPR(var), A_GPR(vol), A_EXTIN(input))
  __err:
 	kfree(controls);
 	if (icode != NULL) {
-		kfree((void *)icode->gpr_map);
+		kfree((void __force *)icode->gpr_map);
 		kfree(icode);
 	}
 	return err;
@@ -1503,15 +1503,15 @@ static int __devinit _snd_emu10k1_init_efx(emu10k1_t *emu)
 	spin_lock_init(&emu->fx8010.irq_lock);
 	INIT_LIST_HEAD(&emu->fx8010.gpr_ctl);
 
-	if ((icode = kcalloc(1, sizeof(*icode), GFP_KERNEL)) == NULL)
+	if ((icode = kzalloc(sizeof(*icode), GFP_KERNEL)) == NULL)
 		return -ENOMEM;
 	if ((icode->gpr_map = (u_int32_t __user *)kcalloc(256 + 160 + 160 + 2 * 512, sizeof(u_int32_t), GFP_KERNEL)) == NULL ||
             (controls = kcalloc(SND_EMU10K1_GPR_CONTROLS, sizeof(emu10k1_fx8010_control_gpr_t), GFP_KERNEL)) == NULL ||
-	    (ipcm = kcalloc(1, sizeof(*ipcm), GFP_KERNEL)) == NULL) {
+	    (ipcm = kzalloc(sizeof(*ipcm), GFP_KERNEL)) == NULL) {
 		err = -ENOMEM;
 		goto __err;
 	}
-	gpr_map = (u32 *)icode->gpr_map;
+	gpr_map = (u32 __force *)icode->gpr_map;
 
 	icode->tram_data_map = icode->gpr_map + 256;
 	icode->tram_addr_map = icode->tram_data_map + 160;
@@ -1716,7 +1716,7 @@ static int __devinit _snd_emu10k1_init_efx(emu10k1_t *emu)
 		/* IEC958 TTL Playback Volume */
 		for (z = 0; z < 2; z++)
 			VOLUME_ADDIN(icode, &ptr, playback + z, EXTIN_SPDIF_CD_L + z, gpr + z);
-		snd_emu10k1_init_stereo_control(controls + i++, "IEC958 TTL Playback Volume", gpr, 0);
+		snd_emu10k1_init_stereo_control(controls + i++, SNDRV_CTL_NAME_IEC958("TTL ",PLAYBACK,VOLUME), gpr, 0);
 		gpr += 2;
 	
 		/* IEC958 TTL Capture Volume + Switch */
@@ -1724,8 +1724,8 @@ static int __devinit _snd_emu10k1_init_efx(emu10k1_t *emu)
 			SWITCH_IN(icode, &ptr, tmp + 0, EXTIN_SPDIF_CD_L + z, gpr + 2 + z);
 			VOLUME_ADD(icode, &ptr, capture + z, tmp + 0, gpr + z);
 		}
-		snd_emu10k1_init_stereo_control(controls + i++, "IEC958 TTL Capture Volume", gpr, 0);
-		snd_emu10k1_init_stereo_onoff_control(controls + i++, "IEC958 TTL Capture Switch", gpr + 2, 0);
+		snd_emu10k1_init_stereo_control(controls + i++, SNDRV_CTL_NAME_IEC958("TTL ",CAPTURE,VOLUME), gpr, 0);
+		snd_emu10k1_init_stereo_onoff_control(controls + i++, SNDRV_CTL_NAME_IEC958("TTL ",CAPTURE,SWITCH), gpr + 2, 0);
 		gpr += 4;
 	}
 	
@@ -1750,7 +1750,7 @@ static int __devinit _snd_emu10k1_init_efx(emu10k1_t *emu)
 		/* IEC958 Optical Playback Volume */
 		for (z = 0; z < 2; z++)
 			VOLUME_ADDIN(icode, &ptr, playback + z, EXTIN_TOSLINK_L + z, gpr + z);
-		snd_emu10k1_init_stereo_control(controls + i++, "IEC958 LiveDrive Playback Volume", gpr, 0);
+		snd_emu10k1_init_stereo_control(controls + i++, SNDRV_CTL_NAME_IEC958("LiveDrive ",PLAYBACK,VOLUME), gpr, 0);
 		gpr += 2;
 	
 		/* IEC958 Optical Capture Volume */
@@ -1758,8 +1758,8 @@ static int __devinit _snd_emu10k1_init_efx(emu10k1_t *emu)
 			SWITCH_IN(icode, &ptr, tmp + 0, EXTIN_TOSLINK_L + z, gpr + 2 + z);
 			VOLUME_ADD(icode, &ptr, capture + z, tmp + 0, gpr + z);
 		}
-		snd_emu10k1_init_stereo_control(controls + i++, "IEC958 LiveDrive Capture Volume", gpr, 0);
-		snd_emu10k1_init_stereo_onoff_control(controls + i++, "IEC958 LiveDrive Capture Switch", gpr + 2, 0);
+		snd_emu10k1_init_stereo_control(controls + i++, SNDRV_CTL_NAME_IEC958("LiveDrive ",CAPTURE,VOLUME), gpr, 0);
+		snd_emu10k1_init_stereo_onoff_control(controls + i++, SNDRV_CTL_NAME_IEC958("LiveDrive ",CAPTURE,SWITCH), gpr + 2, 0);
 		gpr += 4;
 	}
 	
@@ -1784,7 +1784,7 @@ static int __devinit _snd_emu10k1_init_efx(emu10k1_t *emu)
 		/* IEC958 Coax Playback Volume */
 		for (z = 0; z < 2; z++)
 			VOLUME_ADDIN(icode, &ptr, playback + z, EXTIN_COAX_SPDIF_L + z, gpr + z);
-		snd_emu10k1_init_stereo_control(controls + i++, "IEC958 Coaxial Playback Volume", gpr, 0);
+		snd_emu10k1_init_stereo_control(controls + i++, SNDRV_CTL_NAME_IEC958("Coaxial ",PLAYBACK,VOLUME), gpr, 0);
 		gpr += 2;
 	
 		/* IEC958 Coax Capture Volume + Switch */
@@ -1792,8 +1792,8 @@ static int __devinit _snd_emu10k1_init_efx(emu10k1_t *emu)
 			SWITCH_IN(icode, &ptr, tmp + 0, EXTIN_COAX_SPDIF_L + z, gpr + 2 + z);
 			VOLUME_ADD(icode, &ptr, capture + z, tmp + 0, gpr + z);
 		}
-		snd_emu10k1_init_stereo_control(controls + i++, "IEC958 Coaxial Capture Volume", gpr, 0);
-		snd_emu10k1_init_stereo_onoff_control(controls + i++, "IEC958 Coaxial Capture Switch", gpr + 2, 0);
+		snd_emu10k1_init_stereo_control(controls + i++, SNDRV_CTL_NAME_IEC958("Coaxial ",CAPTURE,VOLUME), gpr, 0);
+		snd_emu10k1_init_stereo_onoff_control(controls + i++, SNDRV_CTL_NAME_IEC958("Coaxial ",CAPTURE,SWITCH), gpr + 2, 0);
 		gpr += 4;
 	}
 	
@@ -1920,7 +1920,7 @@ static int __devinit _snd_emu10k1_init_efx(emu10k1_t *emu)
 #endif
 		}
 
-		snd_emu10k1_init_stereo_onoff_control(controls + i++, "IEC958 Optical Raw Playback Switch", gpr, 0);
+		snd_emu10k1_init_stereo_onoff_control(controls + i++, SNDRV_CTL_NAME_IEC958("Optical Raw ",PLAYBACK,SWITCH), gpr, 0);
 		gpr += 2;
 	}
 
@@ -1982,22 +1982,27 @@ static int __devinit _snd_emu10k1_init_efx(emu10k1_t *emu)
 		OP(icode, &ptr, iACC3, EXTOUT(EXTOUT_MIC_CAP), GPR(capture + 2), C_00000000, C_00000000);
 
 	/* EFX capture - capture the 16 EXTINS */
-	OP(icode, &ptr, iACC3, FXBUS2(14), C_00000000, C_00000000, EXTIN(0));
-	OP(icode, &ptr, iACC3, FXBUS2(15), C_00000000, C_00000000, EXTIN(1));
-	OP(icode, &ptr, iACC3, FXBUS2(0), C_00000000, C_00000000, EXTIN(2));
-	OP(icode, &ptr, iACC3, FXBUS2(3), C_00000000, C_00000000, EXTIN(3));
-	/* Dont connect anything to FXBUS2 1 and 2.  These are shared with 
-	 * Center/LFE on the SBLive 5.1.  The kX driver only changes the 
-	 * routing when it detects an SBLive 5.1.
-	 *
-	 * Since only 14 of the 16 EXTINs are used, this is not a big problem.  
-	 * We route AC97L and R to FX capture 14 and 15, SPDIF CD in to FX capture 
-	 * 0 and 3, then the rest of the EXTINs to the corresponding FX capture 
-	 * channel.
-	 */
-	for (z = 4; z < 14; z++) {
-		OP(icode, &ptr, iACC3, FXBUS2(z), C_00000000, C_00000000, EXTIN(z));
+	if (emu->card_capabilities->sblive51) {
+		/* On the Live! 5.1, FXBUS2(1) and FXBUS(2) are shared with EXTOUT_ACENTER
+		 * and EXTOUT_ALFE, so we can't connect inputs to them for multitrack recording.
+		 *
+		 * Since only 14 of the 16 EXTINs are used, this is not a big problem.  
+		 * We route AC97L and R to FX capture 14 and 15, SPDIF CD in to FX capture 
+		 * 0 and 3, then the rest of the EXTINs to the corresponding FX capture 
+		 * channel.  Multitrack recorders will still see the center/lfe output signal 
+		 * on the second and third channels.
+		 */
+		OP(icode, &ptr, iACC3, FXBUS2(14), C_00000000, C_00000000, EXTIN(0));
+		OP(icode, &ptr, iACC3, FXBUS2(15), C_00000000, C_00000000, EXTIN(1));
+		OP(icode, &ptr, iACC3, FXBUS2(0), C_00000000, C_00000000, EXTIN(2));
+		OP(icode, &ptr, iACC3, FXBUS2(3), C_00000000, C_00000000, EXTIN(3));
+		for (z = 4; z < 14; z++)
+			OP(icode, &ptr, iACC3, FXBUS2(z), C_00000000, C_00000000, EXTIN(z));
+	} else {
+		for (z = 0; z < 16; z++)
+			OP(icode, &ptr, iACC3, FXBUS2(z), C_00000000, C_00000000, EXTIN(z));
 	}
+	    
 
 	if (gpr > tmp) {
 		snd_BUG();
@@ -2027,7 +2032,7 @@ static int __devinit _snd_emu10k1_init_efx(emu10k1_t *emu)
 	kfree(ipcm);
 	kfree(controls);
 	if (icode != NULL) {
-		kfree((void *)icode->gpr_map);
+		kfree((void __force *)icode->gpr_map);
 		kfree(icode);
 	}
 	return err;
@@ -2128,7 +2133,6 @@ static int snd_emu10k1_fx8010_info(emu10k1_t *emu, emu10k1_fx8010_info_t *info)
 	int res;
 
 	memset(info, 0, sizeof(info));
-	info->card = emu->card_type;
 	info->internal_tram_size = emu->fx8010.itram_size;
 	info->external_tram_size = emu->fx8010.etram_pages.bytes / 2;
 	fxbus = fxbuses;
@@ -2213,7 +2217,7 @@ static int snd_emu10k1_fx8010_ioctl(snd_hwdep_t * hw, struct file *file, unsigne
 		kfree(ipcm);
 		return res;
 	case SNDRV_EMU10K1_IOCTL_PCM_PEEK:
-		ipcm = kcalloc(1, sizeof(*ipcm), GFP_KERNEL);
+		ipcm = kzalloc(sizeof(*ipcm), GFP_KERNEL);
 		if (ipcm == NULL)
 			return -ENOMEM;
 		if (copy_from_user(ipcm, argp, sizeof(*ipcm))) {

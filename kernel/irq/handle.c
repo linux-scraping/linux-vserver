@@ -111,7 +111,7 @@ fastcall unsigned int __do_IRQ(unsigned int irq, struct pt_regs *regs)
 	unsigned int status;
 
 	kstat_this_cpu.irqs[irq]++;
-	if (desc->status & IRQ_PER_CPU) {
+	if (CHECK_IRQ_PER_CPU(desc->status)) {
 		irqreturn_t action_ret;
 
 		/*
@@ -172,7 +172,7 @@ fastcall unsigned int __do_IRQ(unsigned int irq, struct pt_regs *regs)
 
 		spin_lock(&desc->lock);
 		if (!noirqdebug)
-			note_interrupt(irq, desc, action_ret);
+			note_interrupt(irq, desc, action_ret, regs);
 		if (likely(!(desc->status & IRQ_PENDING)))
 			break;
 		desc->status &= ~IRQ_PENDING;

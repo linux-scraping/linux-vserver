@@ -12,6 +12,7 @@
 #include <linux/string.h>
 #include <linux/bootmem.h>
 #include <linux/bitops.h>
+#include <linux/module.h>
 #include <asm/bootsetup.h>
 #include <asm/pda.h>
 #include <asm/pgtable.h>
@@ -22,27 +23,20 @@
 #include <asm/smp.h>
 #include <asm/i387.h>
 #include <asm/percpu.h>
-#include <asm/mtrr.h>
 #include <asm/proto.h>
-#include <asm/mman.h>
-#include <asm/numa.h>
+#include <asm/sections.h>
 
 char x86_boot_params[BOOT_PARAM_SIZE] __initdata = {0,};
 
-cpumask_t cpu_initialized __initdata = CPU_MASK_NONE;
+cpumask_t cpu_initialized __cpuinitdata = CPU_MASK_NONE;
 
 struct x8664_pda cpu_pda[NR_CPUS] __cacheline_aligned; 
 
-extern struct task_struct init_task;
-
-extern unsigned char __per_cpu_start[], __per_cpu_end[]; 
-
-extern struct desc_ptr cpu_gdt_descr[];
 struct desc_ptr idt_descr = { 256 * 16, (unsigned long) idt_table }; 
 
 char boot_cpu_stack[IRQSTACKSIZE] __attribute__((section(".bss.page_aligned")));
 
-unsigned long __supported_pte_mask = ~0UL;
+unsigned long __supported_pte_mask __read_mostly = ~0UL;
 static int do_not_nx __initdata = 0;
 
 /* noexec=on|off
@@ -93,6 +87,10 @@ void __init setup_per_cpu_areas(void)
 	int i;
 	unsigned long size;
 
+#ifdef CONFIG_HOTPLUG_CPU
+	prefill_possible_map();
+#endif
+
 	/* Copy section for each CPU (we discard the original) */
 	size = ALIGN(__per_cpu_end - __per_cpu_start, SMP_CACHE_BYTES);
 #ifdef CONFIG_MODULES
@@ -100,8 +98,8 @@ void __init setup_per_cpu_areas(void)
 		size = PERCPU_ENOUGH_ROOM;
 #endif
 
-	for (i = 0; i < NR_CPUS; i++) { 
-		unsigned char *ptr;
+	for_each_cpu_mask (i, cpu_possible_map) {
+		char *ptr;
 
 		if (!NODE_DATA(cpu_to_node(i))) {
 			printk("cpu with no node %d, num_online_nodes %d\n",
@@ -125,7 +123,6 @@ void pda_init(int cpu)
 	asm volatile("movl %0,%%fs ; movl %0,%%gs" :: "r" (0)); 
 	wrmsrl(MSR_GS_BASE, cpu_pda + cpu);
 
-	pda->me = pda;
 	pda->cpunumber = cpu; 
 	pda->irqcount = -1;
 	pda->kernelstack = 
@@ -171,7 +168,7 @@ void syscall_init(void)
 	wrmsrl(MSR_SYSCALL_MASK, EF_TF|EF_DF|EF_IE|0x3000); 
 }
 
-void __init check_efer(void)
+void __cpuinit check_efer(void)
 {
 	unsigned long efer;
 
@@ -188,13 +185,9 @@ void __init check_efer(void)
  * 'CPU state barrier', nothing should get across.
  * A lot of state is already set up in PDA init.
  */
-void __init cpu_init (void)
+void __cpuinit cpu_init (void)
 {
-#ifdef CONFIG_SMP
 	int cpu = stack_smp_processor_id();
-#else
-	int cpu = smp_processor_id();
-#endif
 	struct tss_struct *t = &per_cpu(init_tss, cpu);
 	unsigned long v; 
 	char *estacks = NULL; 
@@ -214,7 +207,7 @@ void __init cpu_init (void)
 
 	printk("Initializing CPU#%d\n", cpu);
 
-		clear_in_cr4(X86_CR4_VME|X86_CR4_PVI|X86_CR4_TSD|X86_CR4_DE);
+	clear_in_cr4(X86_CR4_VME|X86_CR4_PVI|X86_CR4_TSD|X86_CR4_DE);
 
 	/*
 	 * Initialize the per-CPU GDT with the boot GDT,

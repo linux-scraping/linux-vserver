@@ -4,6 +4,10 @@
  *  Copyright (C) 1992 Linus Torvalds
  *  Modifications for ARM processor Copyright (C) 1995-2000 Russell King.
  *
+ *  Support for Dynamic Tick Timer Copyright (C) 2004-2005 Nokia Corporation.
+ *  Dynamic Tick Timer written by Tony Lindgren <tony@atomide.com> and
+ *  Tuukka Tikkanen <tuukka.tikkanen@elektrobit.com>.
+ *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
@@ -37,6 +41,7 @@
 #include <asm/irq.h>
 #include <asm/system.h>
 #include <asm/mach/irq.h>
+#include <asm/mach/time.h>
 
 /*
  * Maximum IRQ count.  Currently, this is arbitary.  However, it should
@@ -202,8 +207,8 @@ void enable_irq_wake(unsigned int irq)
 	unsigned long flags;
 
 	spin_lock_irqsave(&irq_controller_lock, flags);
-	if (desc->chip->wake)
-		desc->chip->wake(irq, 1);
+	if (desc->chip->set_wake)
+		desc->chip->set_wake(irq, 1);
 	spin_unlock_irqrestore(&irq_controller_lock, flags);
 }
 EXPORT_SYMBOL(enable_irq_wake);
@@ -214,8 +219,8 @@ void disable_irq_wake(unsigned int irq)
 	unsigned long flags;
 
 	spin_lock_irqsave(&irq_controller_lock, flags);
-	if (desc->chip->wake)
-		desc->chip->wake(irq, 0);
+	if (desc->chip->set_wake)
+		desc->chip->set_wake(irq, 0);
 	spin_unlock_irqrestore(&irq_controller_lock, flags);
 }
 EXPORT_SYMBOL(disable_irq_wake);
@@ -328,6 +333,15 @@ __do_irq(unsigned int irq, struct irqaction *action, struct pt_regs *regs)
 	int ret, retval = 0;
 
 	spin_unlock(&irq_controller_lock);
+
+#ifdef CONFIG_NO_IDLE_HZ
+	if (!(action->flags & SA_TIMER) && system_timer->dyn_tick != NULL) {
+		write_seqlock(&xtime_lock);
+		if (system_timer->dyn_tick->state & DYN_TICK_ENABLED)
+			system_timer->dyn_tick->handler(irq, 0, regs);
+		write_sequnlock(&xtime_lock);
+	}
+#endif
 
 	if (!(action->flags & SA_INTERRUPT))
 		local_irq_enable();
@@ -503,7 +517,7 @@ static void do_pending_irqs(struct pt_regs *regs)
 		list_for_each_safe(l, n, &head) {
 			desc = list_entry(l, struct irqdesc, pend);
 			list_del_init(&desc->pend);
-			desc->handle(desc - irq_desc, desc, regs);
+			desc_handle_irq(desc - irq_desc, desc, regs);
 		}
 
 		/*
@@ -531,7 +545,7 @@ asmlinkage void asm_do_IRQ(unsigned int irq, struct pt_regs *regs)
 
 	irq_enter();
 	spin_lock(&irq_controller_lock);
-	desc->handle(irq, desc, regs);
+	desc_handle_irq(irq, desc, regs);
 
 	/*
 	 * Now re-run any pending interrupts.
@@ -610,9 +624,9 @@ int set_irq_type(unsigned int irq, unsigned int type)
 	}
 
 	desc = irq_desc + irq;
-	if (desc->chip->type) {
+	if (desc->chip->set_type) {
 		spin_lock_irqsave(&irq_controller_lock, flags);
-		ret = desc->chip->type(irq, type);
+		ret = desc->chip->set_type(irq, type);
 		spin_unlock_irqrestore(&irq_controller_lock, flags);
 	}
 
@@ -832,8 +846,8 @@ unsigned long probe_irq_on(void)
 
 		irq_desc[i].probing = 1;
 		irq_desc[i].triggered = 0;
-		if (irq_desc[i].chip->type)
-			irq_desc[i].chip->type(i, IRQT_PROBE);
+		if (irq_desc[i].chip->set_type)
+			irq_desc[i].chip->set_type(i, IRQT_PROBE);
 		irq_desc[i].chip->unmask(i);
 		irqs += 1;
 	}

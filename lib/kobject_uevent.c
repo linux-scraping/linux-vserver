@@ -93,6 +93,7 @@ static int send_uevent(const char *signal, const char *obj,
 		}
 	}
 
+	NETLINK_CB(skb).dst_group = 1;
 	return netlink_broadcast(uevent_sock, skb, 0, 1, gfp_mask);
 }
 
@@ -153,7 +154,8 @@ EXPORT_SYMBOL_GPL(kobject_uevent_atomic);
 
 static int __init kobject_uevent_init(void)
 {
-	uevent_sock = netlink_kernel_create(NETLINK_KOBJECT_UEVENT, NULL);
+	uevent_sock = netlink_kernel_create(NETLINK_KOBJECT_UEVENT, 1, NULL,
+					    THIS_MODULE);
 
 	if (!uevent_sock) {
 		printk(KERN_ERR
@@ -197,7 +199,7 @@ void kobject_hotplug(struct kobject *kobj, enum kobject_action action)
 	int i = 0;
 	int retval;
 	char *kobj_path = NULL;
-	char *name = NULL;
+	const char *name = NULL;
 	char *action_string;
 	u64 seq;
 	struct kobject *top_kobj = kobj;
@@ -246,10 +248,10 @@ void kobject_hotplug(struct kobject *kobj, enum kobject_action action)
 	if (hotplug_ops->name)
 		name = hotplug_ops->name(kset, kobj);
 	if (name == NULL)
-		name = kset->kobj.name;
+		name = kobject_name(&kset->kobj);
 
 	argv [0] = hotplug_path;
-	argv [1] = name;
+	argv [1] = (char *)name; /* won't be changed but 'const' has to go */
 	argv [2] = NULL;
 
 	/* minimal command environment */

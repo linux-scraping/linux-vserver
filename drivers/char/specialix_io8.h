@@ -126,7 +126,7 @@ struct specialix_port {
 	struct work_struct	tqueue_hangup;
 	short			wakeup_chars;
 	short			break_length;
-	unsigned int		closing_wait;
+	unsigned short		closing_wait;
 	unsigned char		mark_mask;
 	unsigned char		IER;
 	unsigned char		MSVR;

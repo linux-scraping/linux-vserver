@@ -148,7 +148,7 @@ tioca_gart_init(struct tioca_kernel *tioca_kern)
 	tioca_kern->ca_pcigart_entries =
 	    tioca_kern->ca_pciap_size / tioca_kern->ca_ap_pagesize;
 	tioca_kern->ca_pcigart_pagemap =
-	    kcalloc(1, tioca_kern->ca_pcigart_entries / 8, GFP_KERNEL);
+	    kzalloc(tioca_kern->ca_pcigart_entries / 8, GFP_KERNEL);
 	if (!tioca_kern->ca_pcigart_pagemap) {
 		free_pages((unsigned long)tioca_kern->ca_gart,
 			   get_order(tioca_kern->ca_gart_size));
@@ -336,7 +336,7 @@ tioca_dma_d48(struct pci_dev *pdev, uint64_t paddr)
 	if (!ct_addr)
 		return 0;
 
-	bus_addr = (dma_addr_t) (ct_addr & 0xffffffffffff);
+	bus_addr = (dma_addr_t) (ct_addr & 0xffffffffffffUL);
 	node_upper = ct_addr >> 48;
 
 	if (node_upper > 64) {
@@ -392,7 +392,7 @@ tioca_dma_mapped(struct pci_dev *pdev, uint64_t paddr, size_t req_size)
 	 * allocate a map struct
 	 */
 
-	ca_dmamap = kcalloc(1, sizeof(struct tioca_dmamap), GFP_ATOMIC);
+	ca_dmamap = kzalloc(sizeof(struct tioca_dmamap), GFP_ATOMIC);
 	if (!ca_dmamap)
 		goto map_return;
 
@@ -464,7 +464,7 @@ map_return:
  * For mappings created using the direct modes (64 or 48) there are no
  * resources to release.
  */
-void
+static void
 tioca_dma_unmap(struct pci_dev *pdev, dma_addr_t bus_addr, int dir)
 {
 	int i, entry;
@@ -514,7 +514,7 @@ tioca_dma_unmap(struct pci_dev *pdev, dma_addr_t bus_addr, int dir)
  * The mapping mode used is based on the devices dma_mask.  As a last resort
  * use the GART mapped mode.
  */
-uint64_t
+static uint64_t
 tioca_dma_map(struct pci_dev *pdev, uint64_t paddr, size_t byte_count)
 {
 	uint64_t mapaddr;
@@ -559,7 +559,7 @@ tioca_error_intr_handler(int irq, void *arg, struct pt_regs *pt)
 	ret_stuff.status = 0;
 	ret_stuff.v0 = 0;
 
-	segment = 0;
+	segment = soft->ca_common.bs_persist_segment;
 	busnum = soft->ca_common.bs_persist_busnum;
 
 	SAL_CALL_NOLOCK(ret_stuff,
@@ -580,8 +580,8 @@ tioca_error_intr_handler(int irq, void *arg, struct pt_regs *pt)
  * On successful setup, returns the kernel version of tioca_common back to
  * the caller.
  */
-void *
-tioca_bus_fixup(struct pcibus_bussoft *prom_bussoft)
+static void *
+tioca_bus_fixup(struct pcibus_bussoft *prom_bussoft, struct pci_controller *controller)
 {
 	struct tioca_common *tioca_common;
 	struct tioca_kernel *tioca_kern;
@@ -589,8 +589,7 @@ tioca_bus_fixup(struct pcibus_bussoft *prom_bussoft)
 
 	/* sanity check prom rev */
 
-	if (sn_sal_rev_major() < 4 ||
-	    (sn_sal_rev_major() == 4 && sn_sal_rev_minor() < 6)) {
+	if (sn_sal_rev() < 0x0406) {
 		printk
 		    (KERN_ERR "%s:  SGI prom rev 4.06 or greater required "
 		     "for tioca support\n", __FUNCTION__);
@@ -601,7 +600,7 @@ tioca_bus_fixup(struct pcibus_bussoft *prom_bussoft)
 	 * Allocate kernel bus soft and copy from prom.
 	 */
 
-	tioca_common = kcalloc(1, sizeof(struct tioca_common), GFP_KERNEL);
+	tioca_common = kzalloc(sizeof(struct tioca_common), GFP_KERNEL);
 	if (!tioca_common)
 		return NULL;
 
@@ -610,7 +609,7 @@ tioca_bus_fixup(struct pcibus_bussoft *prom_bussoft)
 
 	/* init kernel-private area */
 
-	tioca_kern = kcalloc(1, sizeof(struct tioca_kernel), GFP_KERNEL);
+	tioca_kern = kzalloc(sizeof(struct tioca_kernel), GFP_KERNEL);
 	if (!tioca_kern) {
 		kfree(tioca_common);
 		return NULL;
@@ -623,7 +622,8 @@ tioca_bus_fixup(struct pcibus_bussoft *prom_bussoft)
 	    nasid_to_cnodeid(tioca_common->ca_closest_nasid);
 	tioca_common->ca_kernel_private = (uint64_t) tioca_kern;
 
-	bus = pci_find_bus(0, tioca_common->ca_common.bs_persist_busnum);
+	bus = pci_find_bus(tioca_common->ca_common.bs_persist_segment,
+		tioca_common->ca_common.bs_persist_busnum);
 	BUG_ON(!bus);
 	tioca_kern->ca_devices = &bus->devices;
 
@@ -647,6 +647,8 @@ tioca_bus_fixup(struct pcibus_bussoft *prom_bussoft)
 		       __FUNCTION__, SGI_TIOCA_ERROR,
 		       (int)tioca_common->ca_common.bs_persist_busnum);
 
+	/* Setup locality information */
+	controller->node = tioca_kern->ca_closest_node;
 	return tioca_common;
 }
 
@@ -655,6 +657,8 @@ static struct sn_pcibus_provider tioca_pci_interfaces = {
 	.dma_map_consistent = tioca_dma_map,
 	.dma_unmap = tioca_dma_unmap,
 	.bus_fixup = tioca_bus_fixup,
+	.force_interrupt = NULL,
+	.target_interrupt = NULL
 };
 
 /**

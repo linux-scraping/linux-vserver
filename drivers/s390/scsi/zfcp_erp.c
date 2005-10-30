@@ -35,7 +35,7 @@
 
 #include "zfcp_ext.h"
 
-static int zfcp_erp_adisc(struct zfcp_adapter *, fc_id_t);
+static int zfcp_erp_adisc(struct zfcp_port *);
 static void zfcp_erp_adisc_handler(unsigned long);
 
 static int zfcp_erp_adapter_reopen_internal(struct zfcp_adapter *, int);
@@ -82,6 +82,7 @@ static int zfcp_erp_adapter_strategy_open(struct zfcp_erp_action *);
 static int zfcp_erp_adapter_strategy_open_qdio(struct zfcp_erp_action *);
 static int zfcp_erp_adapter_strategy_open_fsf(struct zfcp_erp_action *);
 static int zfcp_erp_adapter_strategy_open_fsf_xconfig(struct zfcp_erp_action *);
+static int zfcp_erp_adapter_strategy_open_fsf_xport(struct zfcp_erp_action *);
 static int zfcp_erp_adapter_strategy_open_fsf_statusread(
 	struct zfcp_erp_action *);
 
@@ -295,12 +296,12 @@ zfcp_erp_unit_shutdown(struct zfcp_unit *unit, int clear_mask)
 
 /**
  * zfcp_erp_adisc - send ADISC ELS command
- * @adapter: adapter structure
- * @d_id: d_id of port where ADISC is sent to
+ * @port: port structure
  */
 int
-zfcp_erp_adisc(struct zfcp_adapter *adapter, fc_id_t d_id)
+zfcp_erp_adisc(struct zfcp_port *port)
 {
+	struct zfcp_adapter *adapter = port->adapter;
 	struct zfcp_send_els *send_els;
 	struct zfcp_ls_adisc *adisc;
 	void *address = NULL;
@@ -332,7 +333,8 @@ zfcp_erp_adisc(struct zfcp_adapter *adapter, fc_id_t d_id)
 	send_els->req_count = send_els->resp_count = 1;
 
 	send_els->adapter = adapter;
-	send_els->d_id = d_id;
+	send_els->port = port;
+	send_els->d_id = port->d_id;
 	send_els->handler = zfcp_erp_adisc_handler;
 	send_els->handler_data = (unsigned long) send_els;
 
@@ -344,13 +346,13 @@ zfcp_erp_adisc(struct zfcp_adapter *adapter, fc_id_t d_id)
 
 	/* acc. to FC-FS, hard_nport_id in ADISC should not be set for ports
 	   without FC-AL-2 capability, so we don't set it */
-	adisc->wwpn = adapter->wwpn;
-	adisc->wwnn = adapter->wwnn;
-	adisc->nport_id = adapter->s_id;
+	adisc->wwpn = fc_host_port_name(adapter->scsi_host);
+	adisc->wwnn = fc_host_node_name(adapter->scsi_host);
+	adisc->nport_id = fc_host_port_id(adapter->scsi_host);
 	ZFCP_LOG_INFO("ADISC request from s_id 0x%08x to d_id 0x%08x "
 		      "(wwpn=0x%016Lx, wwnn=0x%016Lx, "
 		      "hard_nport_id=0x%08x, nport_id=0x%08x)\n",
-		      adapter->s_id, d_id, (wwn_t) adisc->wwpn,
+		      adisc->nport_id, send_els->d_id, (wwn_t) adisc->wwpn,
 		      (wwn_t) adisc->wwnn, adisc->hard_nport_id,
 		      adisc->nport_id);
 
@@ -367,7 +369,7 @@ zfcp_erp_adisc(struct zfcp_adapter *adapter, fc_id_t d_id)
 	retval = zfcp_fsf_send_els(send_els);
 	if (retval != 0) {
 		ZFCP_LOG_NORMAL("error: initiation of Send ELS failed for port "
-				"0x%08x on adapter %s\n", d_id,
+				"0x%08x on adapter %s\n", send_els->d_id,
 				zfcp_get_busid_by_adapter(adapter));
 		del_timer(send_els->timer);
 		goto freemem;
@@ -403,7 +405,7 @@ zfcp_erp_adisc_handler(unsigned long data)
 	struct zfcp_send_els *send_els;
 	struct zfcp_port *port;
 	struct zfcp_adapter *adapter;
-	fc_id_t d_id;
+	u32 d_id;
 	struct zfcp_ls_adisc_acc *adisc;
 
 	send_els = (struct zfcp_send_els *) data;
@@ -411,13 +413,8 @@ zfcp_erp_adisc_handler(unsigned long data)
 	del_timer(send_els->timer);
 
 	adapter = send_els->adapter;
+	port = send_els->port;
 	d_id = send_els->d_id;
-
-	read_lock(&zfcp_data.config_lock);
-	port = zfcp_get_port_by_did(send_els->adapter, send_els->d_id);
-	read_unlock(&zfcp_data.config_lock);
-
-	BUG_ON(port == NULL);
 
 	/* request rejected or timed out */
 	if (send_els->status != 0) {
@@ -439,9 +436,9 @@ zfcp_erp_adisc_handler(unsigned long data)
 	ZFCP_LOG_INFO("ADISC response from d_id 0x%08x to s_id "
 		      "0x%08x (wwpn=0x%016Lx, wwnn=0x%016Lx, "
 		      "hard_nport_id=0x%08x, nport_id=0x%08x)\n",
-		      d_id, adapter->s_id, (wwn_t) adisc->wwpn,
-		      (wwn_t) adisc->wwnn, adisc->hard_nport_id,
-		      adisc->nport_id);
+		      d_id, fc_host_port_id(adapter->scsi_host),
+		      (wwn_t) adisc->wwpn, (wwn_t) adisc->wwnn,
+		      adisc->hard_nport_id, adisc->nport_id);
 
 	/* set wwnn for port */
 	if (port->wwnn == 0)
@@ -482,7 +479,7 @@ zfcp_test_link(struct zfcp_port *port)
 	int retval;
 
 	zfcp_port_get(port);
-	retval = zfcp_erp_adisc(port->adapter, port->d_id);
+	retval = zfcp_erp_adisc(port);
 	if (retval != 0) {
 		zfcp_port_put(port);
 		ZFCP_LOG_NORMAL("reopen needed for port 0x%016Lx "
@@ -890,17 +887,17 @@ static int
 zfcp_erp_strategy_check_fsfreq(struct zfcp_erp_action *erp_action)
 {
 	int retval = 0;
-	struct zfcp_fsf_req *fsf_req;
+	struct zfcp_fsf_req *fsf_req = NULL;
 	struct zfcp_adapter *adapter = erp_action->adapter;
 
 	if (erp_action->fsf_req) {
 		/* take lock to ensure that request is not being deleted meanwhile */
-		write_lock(&adapter->fsf_req_list_lock);
+		spin_lock(&adapter->fsf_req_list_lock);
 		/* check whether fsf req does still exist */
 		list_for_each_entry(fsf_req, &adapter->fsf_req_list_head, list)
 		    if (fsf_req == erp_action->fsf_req)
 			break;
-		if (fsf_req == erp_action->fsf_req) {
+		if (fsf_req && (fsf_req->erp_action == erp_action)) {
 			/* fsf_req still exists */
 			debug_text_event(adapter->erp_dbf, 3, "a_ca_req");
 			debug_event(adapter->erp_dbf, 3, &fsf_req,
@@ -938,7 +935,7 @@ zfcp_erp_strategy_check_fsfreq(struct zfcp_erp_action *erp_action)
 			 */
 			erp_action->fsf_req = NULL;
 		}
-		write_unlock(&adapter->fsf_req_list_lock);
+		spin_unlock(&adapter->fsf_req_list_lock);
 	} else
 		debug_text_event(adapter->erp_dbf, 3, "a_ca_noreq");
 
@@ -2262,16 +2259,21 @@ zfcp_erp_adapter_strategy_close_qdio(struct zfcp_erp_action *erp_action)
 static int
 zfcp_erp_adapter_strategy_open_fsf(struct zfcp_erp_action *erp_action)
 {
-	int retval;
+	int xconfig, xport;
 
-	/* do 'exchange configuration data' */
-	retval = zfcp_erp_adapter_strategy_open_fsf_xconfig(erp_action);
-	if (retval == ZFCP_ERP_FAILED)
-		return retval;
+	if (atomic_test_mask(ZFCP_STATUS_ADAPTER_LINK_UNPLUGGED,
+			     &erp_action->adapter->status)) {
+		zfcp_erp_adapter_strategy_open_fsf_xport(erp_action);
+		atomic_set(&erp_action->adapter->erp_counter, 0);
+		return ZFCP_ERP_FAILED;
+	}
 
-	/* start the desired number of Status Reads */
-	retval = zfcp_erp_adapter_strategy_open_fsf_statusread(erp_action);
-	return retval;
+	xconfig = zfcp_erp_adapter_strategy_open_fsf_xconfig(erp_action);
+	xport   = zfcp_erp_adapter_strategy_open_fsf_xport(erp_action);
+	if ((xconfig == ZFCP_ERP_FAILED) || (xport == ZFCP_ERP_FAILED))
+		return ZFCP_ERP_FAILED;
+
+	return zfcp_erp_adapter_strategy_open_fsf_statusread(erp_action);
 }
 
 /*
@@ -2286,16 +2288,18 @@ zfcp_erp_adapter_strategy_open_fsf_xconfig(struct zfcp_erp_action *erp_action)
 {
 	int retval = ZFCP_ERP_SUCCEEDED;
 	int retries;
+	int sleep = ZFCP_EXCHANGE_CONFIG_DATA_FIRST_SLEEP;
 	struct zfcp_adapter *adapter = erp_action->adapter;
 
 	atomic_clear_mask(ZFCP_STATUS_ADAPTER_XCONFIG_OK, &adapter->status);
-	retries = ZFCP_EXCHANGE_CONFIG_DATA_RETRIES;
 
-	do {
+	for (retries = ZFCP_EXCHANGE_CONFIG_DATA_RETRIES; retries; retries--) {
 		atomic_clear_mask(ZFCP_STATUS_ADAPTER_HOST_CON_INIT,
 				  &adapter->status);
 		ZFCP_LOG_DEBUG("Doing exchange config data\n");
+		write_lock(&adapter->erp_lock);
 		zfcp_erp_action_to_running(erp_action);
+		write_unlock(&adapter->erp_lock);
 		zfcp_erp_timeout_init(erp_action);
 		if (zfcp_fsf_exchange_config_data(erp_action)) {
 			retval = ZFCP_ERP_FAILED;
@@ -2329,20 +2333,91 @@ zfcp_erp_adapter_strategy_open_fsf_xconfig(struct zfcp_erp_action *erp_action)
 				      zfcp_get_busid_by_adapter(adapter));
 			break;
 		}
-		if (atomic_test_mask(ZFCP_STATUS_ADAPTER_HOST_CON_INIT,
-				     &adapter->status)) {
-			ZFCP_LOG_DEBUG("host connection still initialising... "
-				       "waiting and retrying...\n");
-			/* sleep a little bit before retry */
-			msleep(jiffies_to_msecs(ZFCP_EXCHANGE_CONFIG_DATA_SLEEP));
-		}
-	} while ((retries--) &&
-		 atomic_test_mask(ZFCP_STATUS_ADAPTER_HOST_CON_INIT,
-				  &adapter->status));
+
+		if (!atomic_test_mask(ZFCP_STATUS_ADAPTER_HOST_CON_INIT,
+				     &adapter->status))
+			break;
+
+		ZFCP_LOG_DEBUG("host connection still initialising... "
+			       "waiting and retrying...\n");
+		/* sleep a little bit before retry */
+		msleep(jiffies_to_msecs(sleep));
+		sleep *= 2;
+	}
 
 	if (!atomic_test_mask(ZFCP_STATUS_ADAPTER_XCONFIG_OK,
 			      &adapter->status)) {
 		ZFCP_LOG_INFO("error: exchange of configuration data for "
+			      "adapter %s failed\n",
+			      zfcp_get_busid_by_adapter(adapter));
+		retval = ZFCP_ERP_FAILED;
+	}
+
+	return retval;
+}
+
+static int
+zfcp_erp_adapter_strategy_open_fsf_xport(struct zfcp_erp_action *erp_action)
+{
+	int retval = ZFCP_ERP_SUCCEEDED;
+	int retries;
+	int sleep;
+	struct zfcp_adapter *adapter = erp_action->adapter;
+
+	atomic_clear_mask(ZFCP_STATUS_ADAPTER_XPORT_OK, &adapter->status);
+
+	for (retries = 0; ; retries++) {
+		ZFCP_LOG_DEBUG("Doing exchange port data\n");
+		zfcp_erp_action_to_running(erp_action);
+		zfcp_erp_timeout_init(erp_action);
+		if (zfcp_fsf_exchange_port_data(erp_action, adapter, NULL)) {
+			retval = ZFCP_ERP_FAILED;
+			debug_text_event(adapter->erp_dbf, 5, "a_fstx_xf");
+			ZFCP_LOG_INFO("error: initiation of exchange of "
+				      "port data failed for adapter %s\n",
+				      zfcp_get_busid_by_adapter(adapter));
+			break;
+		}
+		debug_text_event(adapter->erp_dbf, 6, "a_fstx_xok");
+		ZFCP_LOG_DEBUG("Xchange underway\n");
+
+		/*
+		 * Why this works:
+		 * Both the normal completion handler as well as the timeout
+		 * handler will do an 'up' when the 'exchange port data'
+		 * request completes or times out. Thus, the signal to go on
+		 * won't be lost utilizing this semaphore.
+		 * Furthermore, this 'adapter_reopen' action is
+		 * guaranteed to be the only action being there (highest action
+		 * which prevents other actions from being created).
+		 * Resulting from that, the wake signal recognized here
+		 * _must_ be the one belonging to the 'exchange port
+		 * data' request.
+		 */
+		down(&adapter->erp_ready_sem);
+		if (erp_action->status & ZFCP_STATUS_ERP_TIMEDOUT) {
+			ZFCP_LOG_INFO("error: exchange of port data "
+				      "for adapter %s timed out\n",
+				      zfcp_get_busid_by_adapter(adapter));
+			break;
+		}
+
+		if (!atomic_test_mask(ZFCP_STATUS_ADAPTER_LINK_UNPLUGGED,
+				      &adapter->status))
+			break;
+
+		ZFCP_LOG_DEBUG("host connection still initialising... "
+			       "waiting and retrying...\n");
+		/* sleep a little bit before retry */
+		sleep = retries < ZFCP_EXCHANGE_PORT_DATA_SHORT_RETRIES ?
+				ZFCP_EXCHANGE_PORT_DATA_SHORT_SLEEP :
+				ZFCP_EXCHANGE_PORT_DATA_LONG_SLEEP;
+		msleep(jiffies_to_msecs(sleep));
+	}
+
+	if (atomic_test_mask(ZFCP_STATUS_ADAPTER_LINK_UNPLUGGED,
+			     &adapter->status)) {
+		ZFCP_LOG_INFO("error: exchange of port data for "
 			      "adapter %s failed\n",
 			      zfcp_get_busid_by_adapter(adapter));
 		retval = ZFCP_ERP_FAILED;
@@ -3197,11 +3272,19 @@ zfcp_erp_action_enqueue(int action,
 		/* fall through !!! */
 
 	case ZFCP_ERP_ACTION_REOPEN_PORT_FORCED:
-		if (atomic_test_mask
-		    (ZFCP_STATUS_COMMON_ERP_INUSE, &port->status)
-		    && port->erp_action.action ==
-		    ZFCP_ERP_ACTION_REOPEN_PORT_FORCED) {
-			debug_text_event(adapter->erp_dbf, 4, "pf_actenq_drp");
+		if (atomic_test_mask(ZFCP_STATUS_COMMON_ERP_INUSE,
+				     &port->status)) {
+			if (port->erp_action.action !=
+			    ZFCP_ERP_ACTION_REOPEN_PORT_FORCED) {
+				ZFCP_LOG_INFO("dropped erp action %i (port "
+					      "0x%016Lx, action in use: %i)\n",
+					      action, port->wwpn,
+					      port->erp_action.action);
+				debug_text_event(adapter->erp_dbf, 4,
+						 "pf_actenq_drp");
+			} else 
+				debug_text_event(adapter->erp_dbf, 4,
+						 "pf_actenq_drpcp");
 			debug_event(adapter->erp_dbf, 4, &port->wwpn,
 				    sizeof (wwn_t));
 			goto out;
@@ -3363,13 +3446,32 @@ zfcp_erp_action_cleanup(int action, struct zfcp_adapter *adapter,
 		if ((result == ZFCP_ERP_SUCCEEDED)
 		    && (!atomic_test_mask(ZFCP_STATUS_UNIT_TEMPORARY,
 					  &unit->status))
-		    && (!unit->device))
- 			scsi_add_device(unit->port->adapter->scsi_host, 0,
- 					unit->port->scsi_id, unit->scsi_lun);
+		    && !unit->device
+		    && port->rport)
+ 			scsi_add_device(port->adapter->scsi_host, 0,
+ 					port->rport->scsi_target_id,
+					unit->scsi_lun);
 		zfcp_unit_put(unit);
 		break;
 	case ZFCP_ERP_ACTION_REOPEN_PORT_FORCED:
 	case ZFCP_ERP_ACTION_REOPEN_PORT:
+		if ((result == ZFCP_ERP_SUCCEEDED)
+		    && !atomic_test_mask(ZFCP_STATUS_PORT_NO_WWPN,
+					 &port->status)
+		    && !port->rport) {
+			struct fc_rport_identifiers ids;
+			ids.node_name = port->wwnn;
+			ids.port_name = port->wwpn;
+			ids.port_id = port->d_id;
+			ids.roles = FC_RPORT_ROLE_FCP_TARGET;
+			port->rport =
+				fc_remote_port_add(adapter->scsi_host, 0, &ids);
+			if (!port->rport)
+				ZFCP_LOG_NORMAL("failed registration of rport"
+						"(adapter %s, wwpn=0x%016Lx)\n",
+						zfcp_get_busid_by_port(port),
+						port->wwpn);
+		}
 		zfcp_port_put(port);
 		break;
 	case ZFCP_ERP_ACTION_REOPEN_ADAPTER:
@@ -3485,6 +3587,45 @@ zfcp_erp_action_to_ready(struct zfcp_erp_action *erp_action)
 }
 
 /*
+ * function:	zfcp_erp_port_boxed
+ *
+ * purpose:
+ */
+void
+zfcp_erp_port_boxed(struct zfcp_port *port)
+{
+	struct zfcp_adapter *adapter = port->adapter;
+	unsigned long flags;
+
+	debug_text_event(adapter->erp_dbf, 3, "p_access_boxed");
+	debug_event(adapter->erp_dbf, 3, &port->wwpn, sizeof(wwn_t));
+	read_lock_irqsave(&zfcp_data.config_lock, flags);
+	zfcp_erp_modify_port_status(port,
+			ZFCP_STATUS_COMMON_ACCESS_BOXED,
+			ZFCP_SET);
+	read_unlock_irqrestore(&zfcp_data.config_lock, flags);
+	zfcp_erp_port_reopen(port, ZFCP_STATUS_COMMON_ERP_FAILED);
+}
+
+/*
+ * function:	zfcp_erp_unit_boxed
+ *
+ * purpose:
+ */
+void
+zfcp_erp_unit_boxed(struct zfcp_unit *unit)
+{
+	struct zfcp_adapter *adapter = unit->port->adapter;
+
+	debug_text_event(adapter->erp_dbf, 3, "u_access_boxed");
+	debug_event(adapter->erp_dbf, 3, &unit->fcp_lun, sizeof(fcp_lun_t));
+	zfcp_erp_modify_unit_status(unit,
+			ZFCP_STATUS_COMMON_ACCESS_BOXED,
+			ZFCP_SET);
+	zfcp_erp_unit_reopen(unit, ZFCP_STATUS_COMMON_ERP_FAILED);
+}
+
+/*
  * function:	zfcp_erp_port_access_denied
  *
  * purpose:
@@ -3495,11 +3636,13 @@ zfcp_erp_port_access_denied(struct zfcp_port *port)
 	struct zfcp_adapter *adapter = port->adapter;
 	unsigned long flags;
 
-	debug_text_event(adapter->erp_dbf, 3, "p_access_block");
+	debug_text_event(adapter->erp_dbf, 3, "p_access_denied");
 	debug_event(adapter->erp_dbf, 3, &port->wwpn, sizeof(wwn_t));
 	read_lock_irqsave(&zfcp_data.config_lock, flags);
-	zfcp_erp_modify_port_status(port, ZFCP_STATUS_COMMON_ERP_FAILED |
-				    ZFCP_STATUS_COMMON_ACCESS_DENIED, ZFCP_SET);
+	zfcp_erp_modify_port_status(port,
+			ZFCP_STATUS_COMMON_ERP_FAILED |
+			ZFCP_STATUS_COMMON_ACCESS_DENIED,
+			ZFCP_SET);
 	read_unlock_irqrestore(&zfcp_data.config_lock, flags);
 }
 
@@ -3513,10 +3656,12 @@ zfcp_erp_unit_access_denied(struct zfcp_unit *unit)
 {
 	struct zfcp_adapter *adapter = unit->port->adapter;
 
-	debug_text_event(adapter->erp_dbf, 3, "u_access_block");
+	debug_text_event(adapter->erp_dbf, 3, "u_access_denied");
 	debug_event(adapter->erp_dbf, 3, &unit->fcp_lun, sizeof(fcp_lun_t));
-	zfcp_erp_modify_unit_status(unit, ZFCP_STATUS_COMMON_ERP_FAILED |
-				    ZFCP_STATUS_COMMON_ACCESS_DENIED, ZFCP_SET);
+	zfcp_erp_modify_unit_status(unit,
+			ZFCP_STATUS_COMMON_ERP_FAILED |
+			ZFCP_STATUS_COMMON_ACCESS_DENIED,
+			ZFCP_SET);
 }
 
 /*
@@ -3530,7 +3675,10 @@ zfcp_erp_adapter_access_changed(struct zfcp_adapter *adapter)
 	struct zfcp_port *port;
 	unsigned long flags;
 
-	debug_text_event(adapter->erp_dbf, 3, "a_access_unblock");
+	if (adapter->connection_features & FSF_FEATURE_NPIV_MODE)
+		return;
+
+	debug_text_event(adapter->erp_dbf, 3, "a_access_recover");
 	debug_event(adapter->erp_dbf, 3, &adapter->name, 8);
 
 	read_lock_irqsave(&zfcp_data.config_lock, flags);
@@ -3553,10 +3701,12 @@ zfcp_erp_port_access_changed(struct zfcp_port *port)
 	struct zfcp_adapter *adapter = port->adapter;
 	struct zfcp_unit *unit;
 
-	debug_text_event(adapter->erp_dbf, 3, "p_access_unblock");
+	debug_text_event(adapter->erp_dbf, 3, "p_access_recover");
 	debug_event(adapter->erp_dbf, 3, &port->wwpn, sizeof(wwn_t));
 
 	if (!atomic_test_mask(ZFCP_STATUS_COMMON_ACCESS_DENIED,
+			      &port->status) &&
+	    !atomic_test_mask(ZFCP_STATUS_COMMON_ACCESS_BOXED,
 			      &port->status)) {
 		if (!atomic_test_mask(ZFCP_STATUS_PORT_WKA, &port->status))
 			list_for_each_entry(unit, &port->unit_list_head, list)
@@ -3583,10 +3733,13 @@ zfcp_erp_unit_access_changed(struct zfcp_unit *unit)
 {
 	struct zfcp_adapter *adapter = unit->port->adapter;
 
-	debug_text_event(adapter->erp_dbf, 3, "u_access_unblock");
+	debug_text_event(adapter->erp_dbf, 3, "u_access_recover");
 	debug_event(adapter->erp_dbf, 3, &unit->fcp_lun, sizeof(fcp_lun_t));
 
-	if (!atomic_test_mask(ZFCP_STATUS_COMMON_ACCESS_DENIED, &unit->status))
+	if (!atomic_test_mask(ZFCP_STATUS_COMMON_ACCESS_DENIED,
+			      &unit->status) &&
+	    !atomic_test_mask(ZFCP_STATUS_COMMON_ACCESS_BOXED,
+			      &unit->status))
 		return;
 
 	ZFCP_LOG_NORMAL("reopen of unit 0x%016Lx on port 0x%016Lx "

@@ -18,14 +18,11 @@
 #include <asm/atomic.h>
 #include <asm/system.h>
 #include <asm/io.h>
-#include <asm/irq.h>
 #include <asm/hw_irq.h>
 #include <asm/pgtable.h>
 #include <asm/delay.h>
 #include <asm/desc.h>
 #include <asm/apic.h>
-
-#include <linux/irq.h>
 
 /*
  * Common place to define all x86 IRQ vectors
@@ -157,14 +154,13 @@ static unsigned int startup_8259A_irq(unsigned int irq)
 }
 
 static struct hw_interrupt_type i8259A_irq_type = {
-	"XT-PIC",
-	startup_8259A_irq,
-	shutdown_8259A_irq,
-	enable_8259A_irq,
-	disable_8259A_irq,
-	mask_and_ack_8259A,
-	end_8259A_irq,
-	NULL
+	.typename = "XT-PIC",
+	.startup = startup_8259A_irq,
+	.shutdown = shutdown_8259A_irq,
+	.enable = enable_8259A_irq,
+	.disable = disable_8259A_irq,
+	.ack = mask_and_ack_8259A,
+	.end = end_8259A_irq,
 };
 
 /*
@@ -415,10 +411,22 @@ static int i8259A_suspend(struct sys_device *dev, pm_message_t state)
 	return 0;
 }
 
+static int i8259A_shutdown(struct sys_device *dev)
+{
+	/* Put the i8259A into a quiescent state that
+	 * the kernel initialization code can get it
+	 * out of.
+	 */
+	outb(0xff, 0x21);	/* mask all of 8259A-1 */
+	outb(0xff, 0xA1);	/* mask all of 8259A-1 */
+	return 0;
+}
+
 static struct sysdev_class i8259_sysdev_class = {
 	set_kset_name("i8259"),
 	.suspend = i8259A_suspend,
 	.resume = i8259A_resume,
+	.shutdown = i8259A_shutdown,
 };
 
 static struct sys_device device_i8259A = {
@@ -475,7 +483,14 @@ void spurious_interrupt(void);
 void error_interrupt(void);
 void reschedule_interrupt(void);
 void call_function_interrupt(void);
-void invalidate_interrupt(void);
+void invalidate_interrupt0(void);
+void invalidate_interrupt1(void);
+void invalidate_interrupt2(void);
+void invalidate_interrupt3(void);
+void invalidate_interrupt4(void);
+void invalidate_interrupt5(void);
+void invalidate_interrupt6(void);
+void invalidate_interrupt7(void);
 void thermal_interrupt(void);
 void i8254_timer_resume(void);
 
@@ -551,8 +566,15 @@ void __init init_IRQ(void)
 	 */
 	set_intr_gate(RESCHEDULE_VECTOR, reschedule_interrupt);
 
-	/* IPI for invalidation */
-	set_intr_gate(INVALIDATE_TLB_VECTOR, invalidate_interrupt);
+	/* IPIs for invalidation */
+	set_intr_gate(INVALIDATE_TLB_VECTOR_START+0, invalidate_interrupt0);
+	set_intr_gate(INVALIDATE_TLB_VECTOR_START+1, invalidate_interrupt1);
+	set_intr_gate(INVALIDATE_TLB_VECTOR_START+2, invalidate_interrupt2);
+	set_intr_gate(INVALIDATE_TLB_VECTOR_START+3, invalidate_interrupt3);
+	set_intr_gate(INVALIDATE_TLB_VECTOR_START+4, invalidate_interrupt4);
+	set_intr_gate(INVALIDATE_TLB_VECTOR_START+5, invalidate_interrupt5);
+	set_intr_gate(INVALIDATE_TLB_VECTOR_START+6, invalidate_interrupt6);
+	set_intr_gate(INVALIDATE_TLB_VECTOR_START+7, invalidate_interrupt7);
 
 	/* IPI for generic function call */
 	set_intr_gate(CALL_FUNCTION_VECTOR, call_function_interrupt);

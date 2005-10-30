@@ -48,7 +48,6 @@
 #include <linux/adb.h>
 #include <linux/cuda.h>
 #include <linux/pmu.h>
-#include <linux/irq.h>
 #include <linux/seq_file.h>
 #include <linux/root_dev.h>
 #include <linux/bitops.h>
@@ -113,7 +112,7 @@ extern int pmac_newworld;
 extern void zs_kgdb_hook(int tty_num);
 static void ohare_init(void);
 #ifdef CONFIG_BOOTX_TEXT
-void pmac_progress(char *s, unsigned short hex);
+static void pmac_progress(char *s, unsigned short hex);
 #endif
 
 sys_ctrler_t sys_ctrler = SYS_CTRLER_UNKNOWN;
@@ -123,7 +122,7 @@ extern struct smp_ops_t psurge_smp_ops;
 extern struct smp_ops_t core99_smp_ops;
 #endif /* CONFIG_SMP */
 
-int __pmac
+static int __pmac
 pmac_show_cpuinfo(struct seq_file *m)
 {
 	struct device_node *np;
@@ -227,7 +226,7 @@ pmac_show_cpuinfo(struct seq_file *m)
 	return 0;
 }
 
-int __openfirmware
+static int __openfirmware
 pmac_show_percpuinfo(struct seq_file *m, int i)
 {
 #ifdef CONFIG_CPU_FREQ_PMAC
@@ -415,7 +414,7 @@ find_ide_boot(void)
 }
 #endif /* CONFIG_BLK_DEV_IDE && CONFIG_BLK_DEV_IDE_PMAC */
 
-void __init
+static void __init
 find_boot_device(void)
 {
 #if defined(CONFIG_BLK_DEV_IDE) && defined(CONFIG_BLK_DEV_IDE_PMAC)
@@ -512,7 +511,7 @@ note_bootable_part(dev_t dev, int part, int goodness)
 	}
 }
 
-void __pmac
+static void __pmac
 pmac_restart(char *cmd)
 {
 #ifdef CONFIG_ADB_CUDA
@@ -537,7 +536,7 @@ pmac_restart(char *cmd)
 	}
 }
 
-void __pmac
+static void __pmac
 pmac_power_off(void)
 {
 #ifdef CONFIG_ADB_CUDA
@@ -562,7 +561,7 @@ pmac_power_off(void)
 	}
 }
 
-void __pmac
+static void __pmac
 pmac_halt(void)
 {
    pmac_power_off();
@@ -700,7 +699,7 @@ pmac_init(unsigned long r3, unsigned long r4, unsigned long r5,
 }
 
 #ifdef CONFIG_BOOTX_TEXT
-void __init
+static void __init
 pmac_progress(char *s, unsigned short hex)
 {
 	if (boot_text_mapped) {
@@ -719,7 +718,8 @@ pmac_declare_of_platform_devices(void)
 	if (np) {
 		for (np = np->child; np != NULL; np = np->sibling)
 			if (strncmp(np->name, "i2c", 3) == 0) {
-				of_platform_device_create(np, "uni-n-i2c");
+				of_platform_device_create(np, "uni-n-i2c",
+							  NULL);
 				break;
 			}
 	}
@@ -727,17 +727,18 @@ pmac_declare_of_platform_devices(void)
 	if (np) {
 		for (np = np->child; np != NULL; np = np->sibling)
 			if (strncmp(np->name, "i2c", 3) == 0) {
-				of_platform_device_create(np, "u3-i2c");
+				of_platform_device_create(np, "u3-i2c",
+							  NULL);
 				break;
 			}
 	}
 
 	np = find_devices("valkyrie");
 	if (np)
-		of_platform_device_create(np, "valkyrie");
+		of_platform_device_create(np, "valkyrie", NULL);
 	np = find_devices("platinum");
 	if (np)
-		of_platform_device_create(np, "platinum");
+		of_platform_device_create(np, "platinum", NULL);
 
 	return 0;
 }

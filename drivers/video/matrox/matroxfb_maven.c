@@ -1230,7 +1230,6 @@ static int maven_shutdown_client(struct i2c_client* clnt) {
 }
 
 static unsigned short normal_i2c[] = { MAVEN_I2CID, I2C_CLIENT_END };
-static unsigned short normal_i2c_range[] = { MAVEN_I2CID, MAVEN_I2CID, I2C_CLIENT_END };
 I2C_CLIENT_INSMOD;
 
 static struct i2c_driver maven_driver;
@@ -1272,7 +1271,7 @@ ERROR0:;
 }
 
 static int maven_attach_adapter(struct i2c_adapter* adapter) {
-	if (adapter->id == (I2C_ALGO_BIT | I2C_HW_B_G400))
+	if (adapter->id == I2C_HW_B_G400)
 		return i2c_probe(adapter, &addr_data, &maven_detect_client);
 	return 0;
 }

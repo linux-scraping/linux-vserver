@@ -49,7 +49,6 @@
 
 #include <net/iw_handler.h>
 
-#include <pcmcia/version.h>
 #include <pcmcia/cs_types.h>
 #include <pcmcia/cs.h>
 #include <pcmcia/cistpl.h>
@@ -297,7 +296,8 @@ static int wl3501_get_flash_mac_addr(struct wl3501_card *this)
  *
  * Move 'size' bytes from PC to card. (Shouldn't be interrupted)
  */
-void wl3501_set_to_wla(struct wl3501_card *this, u16 dest, void *src, int size)
+static void wl3501_set_to_wla(struct wl3501_card *this, u16 dest, void *src,
+			      int size)
 {
 	/* switch to SRAM Page 0 */
 	wl3501_switch_page(this, (dest & 0x8000) ? WL3501_BSS_SPAGE1 :
@@ -318,8 +318,8 @@ void wl3501_set_to_wla(struct wl3501_card *this, u16 dest, void *src, int size)
  *
  * Move 'size' bytes from card to PC. (Shouldn't be interrupted)
  */
-void wl3501_get_from_wla(struct wl3501_card *this, u16 src, void *dest,
-			 int size)
+static void wl3501_get_from_wla(struct wl3501_card *this, u16 src, void *dest,
+				int size)
 {
 	/* switch to SRAM Page 0 */
 	wl3501_switch_page(this, (src & 0x8000) ? WL3501_BSS_SPAGE1 :
@@ -1439,14 +1439,14 @@ fail:
 	goto out;
 }
 
-struct net_device_stats *wl3501_get_stats(struct net_device *dev)
+static struct net_device_stats *wl3501_get_stats(struct net_device *dev)
 {
 	struct wl3501_card *this = dev->priv;
 
 	return &this->stats;
 }
 
-struct iw_statistics *wl3501_get_wireless_stats(struct net_device *dev)
+static struct iw_statistics *wl3501_get_wireless_stats(struct net_device *dev)
 {
 	struct wl3501_card *this = dev->priv;
 	struct iw_statistics *wstats = &this->wstats;
@@ -1944,7 +1944,7 @@ static const iw_handler	wl3501_handler[] = {
 static const struct iw_handler_def wl3501_handler_def = {
 	.num_standard	= sizeof(wl3501_handler) / sizeof(iw_handler),
 	.standard	= (iw_handler *)wl3501_handler,
-	.spy_offset	= offsetof(struct wl3501_card, spy_data),
+	.get_wireless_stats = wl3501_get_wireless_stats,
 };
 
 /**
@@ -1961,6 +1961,7 @@ static dev_link_t *wl3501_attach(void)
 	client_reg_t client_reg;
 	dev_link_t *link;
 	struct net_device *dev;
+	struct wl3501_card *this;
 	int ret;
 
 	/* Initialize the dev_link_t structure */
@@ -1995,7 +1996,9 @@ static dev_link_t *wl3501_attach(void)
 	dev->tx_timeout		= wl3501_tx_timeout;
 	dev->watchdog_timeo	= 5 * HZ;
 	dev->get_stats		= wl3501_get_stats;
-	dev->get_wireless_stats = wl3501_get_wireless_stats;
+	this = dev->priv;
+	this->wireless_data.spy_data = &this->spy_data;
+	dev->wireless_data	= &this->wireless_data;
 	dev->wireless_handlers	= (struct iw_handler_def *)&wl3501_handler_def;
 	SET_ETHTOOL_OPS(dev, &ops);
 	netif_stop_queue(dev);
@@ -2005,13 +2008,6 @@ static dev_link_t *wl3501_attach(void)
 	link->next		 = wl3501_dev_list;
 	wl3501_dev_list		 = link;
 	client_reg.dev_info	 = &wl3501_dev_info;
-	client_reg.EventMask	 = CS_EVENT_CARD_INSERTION |
-				   CS_EVENT_RESET_PHYSICAL |
-				   CS_EVENT_CARD_RESET |
-				   CS_EVENT_CARD_REMOVAL |
-				   CS_EVENT_PM_SUSPEND |
-				   CS_EVENT_PM_RESUME;
-	client_reg.event_handler = wl3501_event;
 	client_reg.Version	 = 0x0210;
 	client_reg.event_callback_args.client_data = link;
 	ret = pcmcia_register_client(&link->handle, &client_reg);
@@ -2239,13 +2235,21 @@ static int wl3501_event(event_t event, int pri, event_callback_args_t *args)
 	return 0;
 }
 
+static struct pcmcia_device_id wl3501_ids[] = {
+	PCMCIA_DEVICE_MANF_CARD(0xd601, 0x0001),
+	PCMCIA_DEVICE_NULL
+};
+MODULE_DEVICE_TABLE(pcmcia, wl3501_ids);
+
 static struct pcmcia_driver wl3501_driver = {
-	.owner          = THIS_MODULE,
-	.drv            = {
-		.name   = "wl3501_cs",
+	.owner		= THIS_MODULE,
+	.drv		= {
+		.name	= "wl3501_cs",
 	},
-	.attach         = wl3501_attach,
-	.detach         = wl3501_detach,
+	.attach		= wl3501_attach,
+	.event		= wl3501_event,
+	.detach		= wl3501_detach,
+	.id_table	= wl3501_ids,
 };
 
 static int __init wl3501_init_module(void)

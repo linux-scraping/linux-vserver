@@ -175,7 +175,7 @@ build_up:
 	 * Add a new layer to the top of the tree if the requested
 	 * id is larger than the currently allocated space.
 	 */
-	while ((layers < MAX_LEVEL) && (id >= (1 << (layers*IDR_BITS)))) {
+	while ((layers < (MAX_LEVEL - 1)) && (id >= (1 << (layers*IDR_BITS)))) {
 		layers++;
 		if (!p->count)
 			continue;
@@ -207,7 +207,7 @@ build_up:
 }
 
 /**
- * idr_get_new_above - allocate new idr entry above a start id
+ * idr_get_new_above - allocate new idr entry above or equal to a start id
  * @idp: idr handle
  * @ptr: pointer you want associated with the ide
  * @start_id: id to start search at
@@ -344,6 +344,19 @@ void idr_remove(struct idr *idp, int id)
 	}
 }
 EXPORT_SYMBOL(idr_remove);
+
+/**
+ * idr_destroy - release all cached layers within an idr tree
+ * idp: idr handle
+ */
+void idr_destroy(struct idr *idp)
+{
+	while (idp->id_free_cnt) {
+		struct idr_layer *p = alloc_layer(idp);
+		kmem_cache_free(idr_layer_cache, p);
+	}
+}
+EXPORT_SYMBOL(idr_destroy);
 
 /**
  * idr_find - return pointer for given id

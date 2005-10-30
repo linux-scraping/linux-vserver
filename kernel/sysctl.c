@@ -31,6 +31,7 @@
 #include <linux/smp_lock.h>
 #include <linux/init.h>
 #include <linux/kernel.h>
+#include <linux/net.h>
 #include <linux/sysrq.h>
 #include <linux/highuid.h>
 #include <linux/writeback.h>
@@ -59,6 +60,7 @@ extern int sysctl_overcommit_ratio;
 extern int max_threads;
 extern int sysrq_enabled;
 extern int core_uses_pid;
+extern int suid_dumpable;
 extern char core_pattern[];
 extern int cad_pid;
 extern int pid_max;
@@ -115,6 +117,7 @@ extern int unaligned_enabled;
 extern int sysctl_ieee_emulation_warnings;
 #endif
 extern int sysctl_userprocess_debug;
+extern int spin_retry;
 #endif
 
 extern int sysctl_hz_timer;
@@ -136,9 +139,6 @@ static struct ctl_table_header root_table_header =
 
 static ctl_table kern_table[];
 static ctl_table vm_table[];
-#ifdef CONFIG_NET
-extern ctl_table net_table[];
-#endif
 static ctl_table proc_table[];
 static ctl_table fs_table[];
 static ctl_table debug_table[];
@@ -146,6 +146,9 @@ static ctl_table dev_table[];
 extern ctl_table random_table[];
 #ifdef CONFIG_UNIX98_PTYS
 extern ctl_table pty_table[];
+#endif
+#ifdef CONFIG_INOTIFY
+extern ctl_table inotify_table[];
 #endif
 
 #ifdef HAVE_ARCH_PICK_MMAP_LAYOUT
@@ -219,6 +222,7 @@ static ctl_table root_table[] = {
 		.mode		= 0555,
 		.child		= dev_table,
 	},
+
 	{ .ctl_name = 0 }
 };
 
@@ -658,7 +662,16 @@ static ctl_table kern_table[] = {
 		.mode		= 0644,
 		.proc_handler	= &proc_dointvec,
 	},
-
+#if defined(CONFIG_ARCH_S390)
+	{
+		.ctl_name	= KERN_SPIN_RETRY,
+		.procname	= "spin_retry",
+		.data		= &spin_retry,
+		.maxlen		= sizeof (int),
+		.mode		= 0644,
+		.proc_handler	= &proc_dointvec,
+	},
+#endif
 	{ .ctl_name = 0 }
 };
 
@@ -965,7 +978,23 @@ static ctl_table fs_table[] = {
 		.mode		= 0644,
 		.proc_handler	= &proc_dointvec,
 	},
+#ifdef CONFIG_INOTIFY
+	{
+		.ctl_name	= FS_INOTIFY,
+		.procname	= "inotify",
+		.mode		= 0555,
+		.child		= inotify_table,
+	},
+#endif	
 #endif
+	{
+		.ctl_name	= KERN_SETUID_DUMPABLE,
+		.procname	= "suid_dumpable",
+		.data		= &suid_dumpable,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= &proc_dointvec,
+	},
 	{ .ctl_name = 0 }
 };
 
@@ -975,7 +1004,7 @@ static ctl_table debug_table[] = {
 
 static ctl_table dev_table[] = {
 	{ .ctl_name = 0 }
-};  
+};
 
 extern void init_irq_proc (void);
 
@@ -1007,8 +1036,7 @@ int do_sysctl(int __user *name, int nlen, void __user *oldval, size_t __user *ol
 		int error = parse_table(name, nlen, oldval, oldlenp, 
 					newval, newlen, head->ctl_table,
 					&context);
-		if (context)
-			kfree(context);
+		kfree(context);
 		if (error != -ENOTDIR)
 			return error;
 		tmp = tmp->next;

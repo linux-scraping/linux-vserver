@@ -30,6 +30,7 @@
 #include <linux/init.h>
 #include <linux/module.h>
 #include <linux/delay.h>
+#include <linux/kprobes.h>
 #include <asm/kdebug.h>
 
 #include <asm/pgtable.h>
@@ -126,6 +127,10 @@ int die(const char *str, struct pt_regs *regs, long err)
 			printk("POWERMAC ");
 			nl = 1;
 			break;
+		case PLATFORM_BPA:
+			printk("BPA ");
+			nl = 1;
+			break;
 	}
 	if (nl)
 		printk("\n");
@@ -216,7 +221,7 @@ void instruction_breakpoint_exception(struct pt_regs *regs)
 	_exception(SIGTRAP, regs, TRAP_BRKPT, regs->nip);
 }
 
-void single_step_exception(struct pt_regs *regs)
+void __kprobes single_step_exception(struct pt_regs *regs)
 {
 	regs->msr &= ~MSR_SE;  /* Turn off 'trace' bit */
 
@@ -394,7 +399,7 @@ check_bug_trap(struct pt_regs *regs)
 	return 0;
 }
 
-void program_check_exception(struct pt_regs *regs)
+void __kprobes program_check_exception(struct pt_regs *regs)
 {
 	if (debugger_fault_handler(regs))
 		return;

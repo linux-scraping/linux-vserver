@@ -60,7 +60,6 @@
 
 /* Note: we assume there can only be one ALI15X3, with one SMBus interface */
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/pci.h>
 #include <linux/kernel.h>
@@ -463,8 +462,6 @@ static u32 ali15x3_func(struct i2c_adapter *adapter)
 }
 
 static struct i2c_algorithm smbus_algorithm = {
-	.name		= "Non-I2C SMBus adapter",
-	.id		= I2C_ALGO_SMBUS,
 	.smbus_xfer	= ali15x3_access,
 	.functionality	= ali15x3_func,
 };

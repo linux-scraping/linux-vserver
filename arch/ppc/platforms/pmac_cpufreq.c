@@ -452,7 +452,7 @@ static u32 __pmac read_gpio(struct device_node *np)
 	return offset;
 }
 
-static int __pmac pmac_cpufreq_suspend(struct cpufreq_policy *policy, u32 state)
+static int __pmac pmac_cpufreq_suspend(struct cpufreq_policy *policy, pm_message_t pmsg)
 {
 	/* Ok, this could be made a bit smarter, but let's be robust for now. We
 	 * always force a speed change to high speed before sleep, to make sure
@@ -692,6 +692,13 @@ static int __init pmac_cpufreq_setup(void)
 	} else if (machine_is_compatible("PowerBook4,1")) {
 		hi_freq = cur_freq;
 		low_freq = 400000;
+		set_speed_proc = pmu_set_cpu_speed;
+		is_pmu_based = 1;
+	}
+	/* Else check for TiPb 550 */
+	else if (machine_is_compatible("PowerBook3,3") && cur_freq == 550000) {
+		hi_freq = cur_freq;
+		low_freq = 500000;
 		set_speed_proc = pmu_set_cpu_speed;
 		is_pmu_based = 1;
 	}

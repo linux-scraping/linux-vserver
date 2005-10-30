@@ -1,8 +1,8 @@
 /*
- * 	w1_family.c
+ *	w1_family.c
  *
  * Copyright (c) 2004 Evgeniy Polyakov <johnpol@2ka.mipt.ru>
- * 
+ *
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -27,23 +27,13 @@
 
 DEFINE_SPINLOCK(w1_flock);
 static LIST_HEAD(w1_families);
-
-static int w1_check_family(struct w1_family *f)
-{
-	if (!f->fops->rname || !f->fops->rbin || !f->fops->rval || !f->fops->rvalname)
-		return -EINVAL;
-
-	return 0;
-}
+extern void w1_reconnect_slaves(struct w1_family *f);
 
 int w1_register_family(struct w1_family *newf)
 {
 	struct list_head *ent, *n;
 	struct w1_family *f;
 	int ret = 0;
-
-	if (w1_check_family(newf))
-		return -EINVAL;
 
 	spin_lock(&w1_flock);
 	list_for_each_safe(ent, n, &w1_families) {
@@ -60,8 +50,9 @@ int w1_register_family(struct w1_family *newf)
 		newf->need_exit = 0;
 		list_add_tail(&newf->family_entry, &w1_families);
 	}
-
 	spin_unlock(&w1_flock);
+
+	w1_reconnect_slaves(newf);
 
 	return ret;
 }

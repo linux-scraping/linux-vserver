@@ -16,6 +16,7 @@
  *	14-Jan-2005 BJD  Added new clock init
  *	10-Mar-2005 LCVR Changed S3C2410_VA to S3C24XX_VA
  *	14-Mar-2005 BJD  Fixed __iomem warnings
+ *	20-Sep-2005 BJD  Added static to non-exported items
 */
 
 #include <linux/kernel.h>
@@ -108,7 +109,7 @@ static struct s3c24xx_board rx3715_board __initdata = {
 	.devices_count = ARRAY_SIZE(rx3715_devices)
 };
 
-void __init rx3715_map_io(void)
+static void __init rx3715_map_io(void)
 {
 	s3c24xx_init_io(rx3715_iodesc, ARRAY_SIZE(rx3715_iodesc));
 	s3c24xx_init_clocks(16934000);
@@ -116,7 +117,7 @@ void __init rx3715_map_io(void)
 	s3c24xx_set_board(&rx3715_board);
 }
 
-void __init rx3715_init_irq(void)
+static void __init rx3715_init_irq(void)
 {
 	s3c24xx_init_irq();
 }
@@ -131,11 +132,13 @@ static void __init rx3715_init_machine(void)
 #endif
 
 MACHINE_START(RX3715, "IPAQ-RX3715")
-     MAINTAINER("Ben Dooks <ben@fluff.org>")
-     BOOT_MEM(S3C2410_SDRAM_PA, S3C2410_PA_UART, (u32)S3C24XX_VA_UART)
-     BOOT_PARAMS(S3C2410_SDRAM_PA + 0x100)
-     MAPIO(rx3715_map_io)
-     INITIRQ(rx3715_init_irq)
-     INIT_MACHINE(rx3715_init_machine)
+	/* Maintainer: Ben Dooks <ben@fluff.org> */
+	.phys_ram	= S3C2410_SDRAM_PA,
+	.phys_io	= S3C2410_PA_UART,
+	.io_pg_offst	= (((u32)S3C24XX_VA_UART) >> 18) & 0xfffc,
+	.boot_params	= S3C2410_SDRAM_PA + 0x100,
+	.map_io		= rx3715_map_io,
+	.init_irq	= rx3715_init_irq,
+	.init_machine	= rx3715_init_machine,
 	.timer		= &s3c24xx_timer,
 MACHINE_END

@@ -30,9 +30,9 @@
 #include <asm/io.h>
 #include <asm/irq.h>
 #include <asm/leds.h>
-#include <asm/mach-types.h>
 #include <asm/hardware/amba.h>
 #include <asm/hardware/amba_clcd.h>
+#include <asm/hardware/arm_timer.h>
 #include <asm/hardware/icst307.h>
 
 #include <asm/mach/arch.h>
@@ -51,8 +51,9 @@
  *
  * Setup a VA for the Versatile Vectored Interrupt Controller.
  */
-#define VA_VIC_BASE		 IO_ADDRESS(VERSATILE_VIC_BASE)
-#define VA_SIC_BASE		 IO_ADDRESS(VERSATILE_SIC_BASE)
+#define __io_address(n)		__io(IO_ADDRESS(n))
+#define VA_VIC_BASE		__io_address(VERSATILE_VIC_BASE)
+#define VA_SIC_BASE		__io_address(VERSATILE_SIC_BASE)
 
 static void vic_mask_irq(unsigned int irq)
 {
@@ -107,7 +108,7 @@ sic_handle_irq(unsigned int irq, struct irqdesc *desc, struct pt_regs *regs)
 		irq += IRQ_SIC_START;
 
 		desc = irq_desc + irq;
-		desc->handle(irq, desc, regs);
+		desc_handle_irq(irq, desc, regs);
 	} while (status);
 }
 
@@ -196,11 +197,15 @@ static struct map_desc versatile_io_desc[] __initdata = {
 #ifdef CONFIG_DEBUG_LL
  { IO_ADDRESS(VERSATILE_UART0_BASE), VERSATILE_UART0_BASE, SZ_4K,      MT_DEVICE },
 #endif
-#ifdef FIXME
- { PCI_MEMORY_VADDR,		     PHYS_PCI_MEM_BASE,    SZ_16M,     MT_DEVICE },
- { PCI_CONFIG_VADDR,		     PHYS_PCI_CONFIG_BASE, SZ_16M,     MT_DEVICE },
- { PCI_V3_VADDR,		     PHYS_PCI_V3_BASE,     SZ_512K,    MT_DEVICE },
- { PCI_IO_VADDR,		     PHYS_PCI_IO_BASE,     SZ_64K,     MT_DEVICE },
+#ifdef CONFIG_PCI
+ { IO_ADDRESS(VERSATILE_PCI_CORE_BASE), VERSATILE_PCI_CORE_BASE, SZ_4K, MT_DEVICE },
+ { VERSATILE_PCI_VIRT_BASE,          VERSATILE_PCI_BASE,   VERSATILE_PCI_BASE_SIZE, MT_DEVICE },
+ { VERSATILE_PCI_CFG_VIRT_BASE,      VERSATILE_PCI_CFG_BASE, VERSATILE_PCI_CFG_BASE_SIZE, MT_DEVICE },
+#if 0
+ { VERSATILE_PCI_VIRT_MEM_BASE0,     VERSATILE_PCI_MEM_BASE0, SZ_16M,  MT_DEVICE },
+ { VERSATILE_PCI_VIRT_MEM_BASE1,     VERSATILE_PCI_MEM_BASE1, SZ_16M,  MT_DEVICE },
+ { VERSATILE_PCI_VIRT_MEM_BASE2,     VERSATILE_PCI_MEM_BASE2, SZ_16M,  MT_DEVICE },
+#endif
 #endif
 };
 
@@ -209,7 +214,7 @@ void __init versatile_map_io(void)
 	iotable_init(versatile_io_desc, ARRAY_SIZE(versatile_io_desc));
 }
 
-#define VERSATILE_REFCOUNTER	(IO_ADDRESS(VERSATILE_SYS_BASE) + VERSATILE_SYS_24MHz_OFFSET)
+#define VERSATILE_REFCOUNTER	(__io_address(VERSATILE_SYS_BASE) + VERSATILE_SYS_24MHz_OFFSET)
 
 /*
  * This is the Versatile sched_clock implementation.  This has
@@ -226,7 +231,7 @@ unsigned long long sched_clock(void)
 }
 
 
-#define VERSATILE_FLASHCTRL    (IO_ADDRESS(VERSATILE_SYS_BASE) + VERSATILE_SYS_FLASH_OFFSET)
+#define VERSATILE_FLASHCTRL    (__io_address(VERSATILE_SYS_BASE) + VERSATILE_SYS_FLASH_OFFSET)
 
 static int versatile_flash_init(void)
 {
@@ -304,7 +309,7 @@ static struct platform_device smc91x_device = {
 	.resource	= smc91x_resources,
 };
 
-#define VERSATILE_SYSMCI	(IO_ADDRESS(VERSATILE_SYS_BASE) + VERSATILE_SYS_MCI_OFFSET)
+#define VERSATILE_SYSMCI	(__io_address(VERSATILE_SYS_BASE) + VERSATILE_SYS_MCI_OFFSET)
 
 unsigned int mmc_status(struct device *dev)
 {
@@ -338,11 +343,11 @@ static const struct icst307_params versatile_oscvco_params = {
 
 static void versatile_oscvco_set(struct clk *clk, struct icst307_vco vco)
 {
-	unsigned long sys_lock = IO_ADDRESS(VERSATILE_SYS_BASE) + VERSATILE_SYS_LOCK_OFFSET;
+	void __iomem *sys_lock = __io_address(VERSATILE_SYS_BASE) + VERSATILE_SYS_LOCK_OFFSET;
 #if defined(CONFIG_ARCH_VERSATILE_PB)
-	unsigned long sys_osc = IO_ADDRESS(VERSATILE_SYS_BASE) + VERSATILE_SYS_OSC4_OFFSET;
+	void __iomem *sys_osc = __io_address(VERSATILE_SYS_BASE) + VERSATILE_SYS_OSC4_OFFSET;
 #elif defined(CONFIG_MACH_VERSATILE_AB)
-	unsigned long sys_osc = IO_ADDRESS(VERSATILE_SYS_BASE) + VERSATILE_SYS_OSC1_OFFSET;
+	void __iomem *sys_osc = __io_address(VERSATILE_SYS_BASE) + VERSATILE_SYS_OSC1_OFFSET;
 #endif
 	u32 val;
 
@@ -478,7 +483,7 @@ static struct clcd_panel epson_2_2_in = {
  */
 static struct clcd_panel *versatile_clcd_panel(void)
 {
-	unsigned long sys_clcd = IO_ADDRESS(VERSATILE_SYS_BASE) + VERSATILE_SYS_CLCD_OFFSET;
+	void __iomem *sys_clcd = __io_address(VERSATILE_SYS_BASE) + VERSATILE_SYS_CLCD_OFFSET;
 	struct clcd_panel *panel = &vga;
 	u32 val;
 
@@ -505,7 +510,7 @@ static struct clcd_panel *versatile_clcd_panel(void)
  */
 static void versatile_clcd_disable(struct clcd_fb *fb)
 {
-	unsigned long sys_clcd = IO_ADDRESS(VERSATILE_SYS_BASE) + VERSATILE_SYS_CLCD_OFFSET;
+	void __iomem *sys_clcd = __io_address(VERSATILE_SYS_BASE) + VERSATILE_SYS_CLCD_OFFSET;
 	u32 val;
 
 	val = readl(sys_clcd);
@@ -517,7 +522,7 @@ static void versatile_clcd_disable(struct clcd_fb *fb)
 	 * If the LCD is Sanyo 2x5 in on the IB2 board, turn the back-light off
 	 */
 	if (fb->panel == &sanyo_2_5_in) {
-		unsigned long versatile_ib2_ctrl = IO_ADDRESS(VERSATILE_IB2_CTRL);
+		void __iomem *versatile_ib2_ctrl = __io_address(VERSATILE_IB2_CTRL);
 		unsigned long ctrl;
 
 		ctrl = readl(versatile_ib2_ctrl);
@@ -532,7 +537,7 @@ static void versatile_clcd_disable(struct clcd_fb *fb)
  */
 static void versatile_clcd_enable(struct clcd_fb *fb)
 {
-	unsigned long sys_clcd = IO_ADDRESS(VERSATILE_SYS_BASE) + VERSATILE_SYS_CLCD_OFFSET;
+	void __iomem *sys_clcd = __io_address(VERSATILE_SYS_BASE) + VERSATILE_SYS_CLCD_OFFSET;
 	u32 val;
 
 	val = readl(sys_clcd);
@@ -566,7 +571,7 @@ static void versatile_clcd_enable(struct clcd_fb *fb)
 	 * If the LCD is Sanyo 2x5 in on the IB2 board, turn the back-light on
 	 */
 	if (fb->panel == &sanyo_2_5_in) {
-		unsigned long versatile_ib2_ctrl = IO_ADDRESS(VERSATILE_IB2_CTRL);
+		void __iomem *versatile_ib2_ctrl = __io_address(VERSATILE_IB2_CTRL);
 		unsigned long ctrl;
 
 		ctrl = readl(versatile_ib2_ctrl);
@@ -715,7 +720,7 @@ static struct amba_device *amba_devs[] __initdata = {
 };
 
 #ifdef CONFIG_LEDS
-#define VA_LEDS_BASE (IO_ADDRESS(VERSATILE_SYS_BASE) + VERSATILE_SYS_LED_OFFSET)
+#define VA_LEDS_BASE (__io_address(VERSATILE_SYS_BASE) + VERSATILE_SYS_LED_OFFSET)
 
 static void versatile_leds_event(led_event_t ledevt)
 {
@@ -773,41 +778,29 @@ void __init versatile_init(void)
 /*
  * Where is the timer (VA)?
  */
-#define TIMER0_VA_BASE		 IO_ADDRESS(VERSATILE_TIMER0_1_BASE)
-#define TIMER1_VA_BASE		(IO_ADDRESS(VERSATILE_TIMER0_1_BASE) + 0x20)
-#define TIMER2_VA_BASE		 IO_ADDRESS(VERSATILE_TIMER2_3_BASE)
-#define TIMER3_VA_BASE		(IO_ADDRESS(VERSATILE_TIMER2_3_BASE) + 0x20)
-#define VA_IC_BASE		 IO_ADDRESS(VERSATILE_VIC_BASE) 
+#define TIMER0_VA_BASE		 __io_address(VERSATILE_TIMER0_1_BASE)
+#define TIMER1_VA_BASE		(__io_address(VERSATILE_TIMER0_1_BASE) + 0x20)
+#define TIMER2_VA_BASE		 __io_address(VERSATILE_TIMER2_3_BASE)
+#define TIMER3_VA_BASE		(__io_address(VERSATILE_TIMER2_3_BASE) + 0x20)
+#define VA_IC_BASE		 __io_address(VERSATILE_VIC_BASE) 
 
 /*
  * How long is the timer interval?
  */
 #define TIMER_INTERVAL	(TICKS_PER_uSEC * mSEC_10)
 #if TIMER_INTERVAL >= 0x100000
-#define TIMER_RELOAD	(TIMER_INTERVAL >> 8)		/* Divide by 256 */
-#define TIMER_CTRL	0x88				/* Enable, Clock / 256 */
+#define TIMER_RELOAD	(TIMER_INTERVAL >> 8)
+#define TIMER_DIVISOR	(TIMER_CTRL_DIV256)
 #define TICKS2USECS(x)	(256 * (x) / TICKS_PER_uSEC)
 #elif TIMER_INTERVAL >= 0x10000
 #define TIMER_RELOAD	(TIMER_INTERVAL >> 4)		/* Divide by 16 */
-#define TIMER_CTRL	0x84				/* Enable, Clock / 16 */
+#define TIMER_DIVISOR	(TIMER_CTRL_DIV16)
 #define TICKS2USECS(x)	(16 * (x) / TICKS_PER_uSEC)
 #else
 #define TIMER_RELOAD	(TIMER_INTERVAL)
-#define TIMER_CTRL	0x80				/* Enable */
+#define TIMER_DIVISOR	(TIMER_CTRL_DIV1)
 #define TICKS2USECS(x)	((x) / TICKS_PER_uSEC)
 #endif
-
-#define TIMER_CTRL_IE	(1 << 5)	/* Interrupt Enable */
-
-/*
- * What does it look like?
- */
-typedef struct TimerStruct {
-	unsigned long TimerLoad;
-	unsigned long TimerValue;
-	unsigned long TimerControl;
-	unsigned long TimerClear;
-} TimerStruct_t;
 
 /*
  * Returns number of ms since last clock interrupt.  Note that interrupts
@@ -815,7 +808,6 @@ typedef struct TimerStruct {
  */
 static unsigned long versatile_gettimeoffset(void)
 {
-	volatile TimerStruct_t *timer0 = (TimerStruct_t *)TIMER0_VA_BASE;
 	unsigned long ticks1, ticks2, status;
 
 	/*
@@ -824,11 +816,11 @@ static unsigned long versatile_gettimeoffset(void)
 	 * an interrupt.  We get around this by ensuring that the
 	 * counter has not reloaded between our two reads.
 	 */
-	ticks2 = timer0->TimerValue & 0xffff;
+	ticks2 = readl(TIMER0_VA_BASE + TIMER_VALUE) & 0xffff;
 	do {
 		ticks1 = ticks2;
 		status = __raw_readl(VA_IC_BASE + VIC_IRQ_RAW_STATUS);
-		ticks2 = timer0->TimerValue & 0xffff;
+		ticks2 = readl(TIMER0_VA_BASE + TIMER_VALUE) & 0xffff;
 	} while (ticks2 > ticks1);
 
 	/*
@@ -855,12 +847,10 @@ static unsigned long versatile_gettimeoffset(void)
  */
 static irqreturn_t versatile_timer_interrupt(int irq, void *dev_id, struct pt_regs *regs)
 {
-	volatile TimerStruct_t *timer0 = (volatile TimerStruct_t *)TIMER0_VA_BASE;
-
 	write_seqlock(&xtime_lock);
 
 	// ...clear the interrupt
-	timer0->TimerClear = 1;
+	writel(1, TIMER0_VA_BASE + TIMER_INTCLR);
 
 	timer_tick(regs);
 
@@ -871,8 +861,8 @@ static irqreturn_t versatile_timer_interrupt(int irq, void *dev_id, struct pt_re
 
 static struct irqaction versatile_timer_irq = {
 	.name		= "Versatile Timer Tick",
-	.flags		= SA_INTERRUPT,
-	.handler	= versatile_timer_interrupt
+	.flags		= SA_INTERRUPT | SA_TIMER,
+	.handler	= versatile_timer_interrupt,
 };
 
 /*
@@ -880,31 +870,32 @@ static struct irqaction versatile_timer_irq = {
  */
 static void __init versatile_timer_init(void)
 {
-	volatile TimerStruct_t *timer0 = (volatile TimerStruct_t *)TIMER0_VA_BASE;
-	volatile TimerStruct_t *timer1 = (volatile TimerStruct_t *)TIMER1_VA_BASE;
-	volatile TimerStruct_t *timer2 = (volatile TimerStruct_t *)TIMER2_VA_BASE;
-	volatile TimerStruct_t *timer3 = (volatile TimerStruct_t *)TIMER3_VA_BASE;
+	u32 val;
 
 	/* 
 	 * set clock frequency: 
 	 *	VERSATILE_REFCLK is 32KHz
 	 *	VERSATILE_TIMCLK is 1MHz
 	 */
-	*(volatile unsigned int *)IO_ADDRESS(VERSATILE_SCTL_BASE) |= 
-	  ((VERSATILE_TIMCLK << VERSATILE_TIMER1_EnSel) | (VERSATILE_TIMCLK << VERSATILE_TIMER2_EnSel) | 
-	   (VERSATILE_TIMCLK << VERSATILE_TIMER3_EnSel) | (VERSATILE_TIMCLK << VERSATILE_TIMER4_EnSel));
+	val = readl(__io_address(VERSATILE_SCTL_BASE));
+	writel((VERSATILE_TIMCLK << VERSATILE_TIMER1_EnSel) |
+	       (VERSATILE_TIMCLK << VERSATILE_TIMER2_EnSel) | 
+	       (VERSATILE_TIMCLK << VERSATILE_TIMER3_EnSel) |
+	       (VERSATILE_TIMCLK << VERSATILE_TIMER4_EnSel) | val,
+	       __io_address(VERSATILE_SCTL_BASE));
 
 	/*
 	 * Initialise to a known state (all timers off)
 	 */
-	timer0->TimerControl = 0;
-	timer1->TimerControl = 0;
-	timer2->TimerControl = 0;
-	timer3->TimerControl = 0;
+	writel(0, TIMER0_VA_BASE + TIMER_CTRL);
+	writel(0, TIMER1_VA_BASE + TIMER_CTRL);
+	writel(0, TIMER2_VA_BASE + TIMER_CTRL);
+	writel(0, TIMER3_VA_BASE + TIMER_CTRL);
 
-	timer0->TimerLoad    = TIMER_RELOAD;
-	timer0->TimerValue   = TIMER_RELOAD;
-	timer0->TimerControl = TIMER_CTRL | 0x40 | TIMER_CTRL_IE;  /* periodic + IE */
+	writel(TIMER_RELOAD, TIMER0_VA_BASE + TIMER_LOAD);
+	writel(TIMER_RELOAD, TIMER0_VA_BASE + TIMER_VALUE);
+	writel(TIMER_DIVISOR | TIMER_CTRL_ENABLE | TIMER_CTRL_PERIODIC |
+	       TIMER_CTRL_IE, TIMER0_VA_BASE + TIMER_CTRL);
 
 	/* 
 	 * Make irqs happen for the system timer

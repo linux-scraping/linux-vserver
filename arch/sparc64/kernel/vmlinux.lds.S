@@ -9,14 +9,14 @@ ENTRY(_start)
 jiffies = jiffies_64;
 SECTIONS
 {
-  swapper_pmd_dir = 0x0000000000402000;
-  empty_pg_dir = 0x0000000000403000;
+  swapper_low_pmd_dir = 0x0000000000402000;
   . = 0x4000;
   .text 0x0000000000404000 :
   {
     *(.text)
     SCHED_TEXT
     LOCK_TEXT
+    KPROBES_TEXT
     *(.gnu.warning)
   } =0
   _etext = .;
@@ -32,6 +32,8 @@ SECTIONS
   .data1   : { *(.data1) }
   . = ALIGN(64);
   .data.cacheline_aligned : { *(.data.cacheline_aligned) }
+  . = ALIGN(64);
+  .data.read_mostly : { *(.data.read_mostly) }
   _edata  =  .;
   PROVIDE (edata = .);
   .fixup   : { *(.fixup) }

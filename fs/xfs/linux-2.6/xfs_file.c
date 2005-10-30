@@ -57,7 +57,9 @@
 #include <linux/smp_lock.h>
 
 static struct vm_operations_struct linvfs_file_vm_ops;
-
+#ifdef CONFIG_XFS_DMAPI
+static struct vm_operations_struct linvfs_dmapi_file_vm_ops;
+#endif
 
 STATIC inline ssize_t
 __linvfs_read(
@@ -309,6 +311,31 @@ linvfs_fsync(
 
 #define nextdp(dp)      ((struct xfs_dirent *)((char *)(dp) + (dp)->d_reclen))
 
+#ifdef CONFIG_XFS_DMAPI
+
+STATIC struct page *
+linvfs_filemap_nopage(
+	struct vm_area_struct	*area,
+	unsigned long		address,
+	int			*type)
+{
+	struct inode	*inode = area->vm_file->f_dentry->d_inode;
+	vnode_t		*vp = LINVFS_GET_VP(inode);
+	xfs_mount_t	*mp = XFS_VFSTOM(vp->v_vfsp);
+	int		error;
+
+	ASSERT_ALWAYS(vp->v_vfsp->vfs_flag & VFS_DMI);
+
+	error = XFS_SEND_MMAP(mp, area, 0);
+	if (error)
+		return NULL;
+
+	return filemap_nopage(area, address, type);
+}
+
+#endif /* CONFIG_XFS_DMAPI */
+
+
 STATIC int
 linvfs_readdir(
 	struct file	*filp,
@@ -399,15 +426,13 @@ linvfs_file_mmap(
 	vattr_t		va = { .va_mask = XFS_AT_UPDATIME };
 	int		error;
 
-	if (vp->v_vfsp->vfs_flag & VFS_DMI) {
-		xfs_mount_t	*mp = XFS_VFSTOM(vp->v_vfsp);
-
-		error = -XFS_SEND_MMAP(mp, vma, 0);
-		if (error)
-			return error;
-	}
-
 	vma->vm_ops = &linvfs_file_vm_ops;
+
+#ifdef CONFIG_XFS_DMAPI
+	if (vp->v_vfsp->vfs_flag & VFS_DMI) {
+		vma->vm_ops = &linvfs_dmapi_file_vm_ops;
+	}
+#endif /* CONFIG_XFS_DMAPI */
 
 	VOP_SETATTR(vp, &va, XFS_AT_UPDATIME, NULL, error);
 	if (!error)
@@ -461,6 +486,7 @@ linvfs_ioctl_invis(
 	return error;
 }
 
+#ifdef CONFIG_XFS_DMAPI
 #ifdef HAVE_VMOP_MPROTECT
 STATIC int
 linvfs_mprotect(
@@ -481,6 +507,7 @@ linvfs_mprotect(
 	return error;
 }
 #endif /* HAVE_VMOP_MPROTECT */
+#endif /* CONFIG_XFS_DMAPI */
 
 #ifdef HAVE_FOP_OPEN_EXEC
 /* If the user is attempting to execute a file that is offline then
@@ -515,49 +542,10 @@ open_exec_out:
 }
 #endif /* HAVE_FOP_OPEN_EXEC */
 
-/*
- * Temporary workaround to the AIO direct IO write problem.
- * This code can go and we can revert to do_sync_write once
- * the writepage(s) rework is merged.
- */
-STATIC ssize_t
-linvfs_write(
-	struct file	*filp,
-	const char	__user *buf,
-	size_t		len,
-	loff_t		*ppos)
-{
-	struct kiocb	kiocb;
-	ssize_t		ret;
-
-	init_sync_kiocb(&kiocb, filp);
-	kiocb.ki_pos = *ppos;
-	ret = __linvfs_write(&kiocb, buf, 0, len, kiocb.ki_pos);
-	*ppos = kiocb.ki_pos;
-	return ret;
-}
-STATIC ssize_t
-linvfs_write_invis(
-	struct file	*filp,
-	const char	__user *buf,
-	size_t		len,
-	loff_t		*ppos)
-{
-	struct kiocb	kiocb;
-	ssize_t		ret;
-
-	init_sync_kiocb(&kiocb, filp);
-	kiocb.ki_pos = *ppos;
-	ret = __linvfs_write(&kiocb, buf, IO_INVIS, len, kiocb.ki_pos);
-	*ppos = kiocb.ki_pos;
-	return ret;
-}
-
-
 struct file_operations linvfs_file_operations = {
 	.llseek		= generic_file_llseek,
 	.read		= do_sync_read,
-	.write		= linvfs_write,
+	.write		= do_sync_write,
 	.readv		= linvfs_readv,
 	.writev		= linvfs_writev,
 	.aio_read	= linvfs_aio_read,
@@ -579,7 +567,7 @@ struct file_operations linvfs_file_operations = {
 struct file_operations linvfs_invis_file_operations = {
 	.llseek		= generic_file_llseek,
 	.read		= do_sync_read,
-	.write		= linvfs_write_invis,
+	.write		= do_sync_write,
 	.readv		= linvfs_readv_invis,
 	.writev		= linvfs_writev_invis,
 	.aio_read	= linvfs_aio_read_invis,
@@ -609,7 +597,14 @@ struct file_operations linvfs_dir_operations = {
 static struct vm_operations_struct linvfs_file_vm_ops = {
 	.nopage		= filemap_nopage,
 	.populate	= filemap_populate,
+};
+
+#ifdef CONFIG_XFS_DMAPI
+static struct vm_operations_struct linvfs_dmapi_file_vm_ops = {
+	.nopage		= linvfs_filemap_nopage,
+	.populate	= filemap_populate,
 #ifdef HAVE_VMOP_MPROTECT
 	.mprotect	= linvfs_mprotect,
 #endif
 };
+#endif /* CONFIG_XFS_DMAPI */

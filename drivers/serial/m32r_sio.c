@@ -275,7 +275,7 @@ serial_out(struct uart_sio_port *up, int offset, int value)
 	__sio_out(value, offset);
 }
 
-static void m32r_sio_stop_tx(struct uart_port *port, unsigned int tty_stop)
+static void m32r_sio_stop_tx(struct uart_port *port)
 {
 	struct uart_sio_port *up = (struct uart_sio_port *)port;
 
@@ -285,7 +285,7 @@ static void m32r_sio_stop_tx(struct uart_port *port, unsigned int tty_stop)
 	}
 }
 
-static void m32r_sio_start_tx(struct uart_port *port, unsigned int tty_start)
+static void m32r_sio_start_tx(struct uart_port *port)
 {
 #ifdef CONFIG_SERIAL_M32R_PLDSIO
 	struct uart_sio_port *up = (struct uart_sio_port *)port;
@@ -425,7 +425,7 @@ static _INLINE_ void transmit_chars(struct uart_sio_port *up)
 		return;
 	}
 	if (uart_circ_empty(xmit) || uart_tx_stopped(&up->port)) {
-		m32r_sio_stop_tx(&up->port, 0);
+		m32r_sio_stop_tx(&up->port);
 		return;
 	}
 
@@ -446,7 +446,7 @@ static _INLINE_ void transmit_chars(struct uart_sio_port *up)
 	DEBUG_INTR("THRE...");
 
 	if (uart_circ_empty(xmit))
-		m32r_sio_stop_tx(&up->port, 0);
+		m32r_sio_stop_tx(&up->port);
 }
 
 /*
@@ -724,22 +724,22 @@ static void m32r_sio_set_termios(struct uart_port *port,
 
 	switch (termios->c_cflag & CSIZE) {
 	case CS5:
-		cval = 0x00;
+		cval = UART_LCR_WLEN5;
 		break;
 	case CS6:
-		cval = 0x01;
+		cval = UART_LCR_WLEN6;
 		break;
 	case CS7:
-		cval = 0x02;
+		cval = UART_LCR_WLEN7;
 		break;
 	default:
 	case CS8:
-		cval = 0x03;
+		cval = UART_LCR_WLEN8;
 		break;
 	}
 
 	if (termios->c_cflag & CSTOPB)
-		cval |= 0x04;
+		cval |= UART_LCR_STOP;
 	if (termios->c_cflag & PARENB)
 		cval |= UART_LCR_PARITY;
 	if (!(termios->c_cflag & PARODD))
@@ -1123,7 +1123,7 @@ static int __init m32r_sio_console_setup(struct console *co, char *options)
 	return uart_set_options(port, co, baud, parity, bits, flow);
 }
 
-extern struct uart_driver m32r_sio_reg;
+static struct uart_driver m32r_sio_reg;
 static struct console m32r_sio_console = {
 	.name		= "ttyS",
 	.write		= m32r_sio_console_write,

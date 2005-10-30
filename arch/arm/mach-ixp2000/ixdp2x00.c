@@ -42,6 +42,9 @@
 #include <asm/mach/flash.h>
 #include <asm/mach/arch.h>
 
+#include <asm/arch/gpio.h>
+
+
 /*************************************************************************
  * IXDP2x00 IRQ Initialization
  *************************************************************************/
@@ -130,7 +133,7 @@ static void ixdp2x00_irq_handler(unsigned int irq, struct irqdesc *desc, struct 
 			struct irqdesc *cpld_desc;
 			int cpld_irq = IXP2000_BOARD_IRQ(0) + i;
 			cpld_desc = irq_desc + cpld_irq;
-			cpld_desc->handle(cpld_irq, cpld_desc, regs);
+			desc_handle_irq(cpld_irq, cpld_desc, regs);
 		}
 	}
 
@@ -300,5 +303,6 @@ void __init ixdp2x00_init_machine(void)
 	gpio_line_config(IXDP2X00_GPIO_I2C_ENABLE, GPIO_OUT);
 
 	platform_add_devices(ixdp2x00_devices, ARRAY_SIZE(ixdp2x00_devices));
+	ixp2000_uart_init();
 }
 

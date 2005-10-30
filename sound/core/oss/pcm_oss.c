@@ -33,6 +33,7 @@
 #include <linux/time.h>
 #include <linux/vmalloc.h>
 #include <linux/moduleparam.h>
+#include <linux/string.h>
 #include <sound/core.h>
 #include <sound/minors.h>
 #include <sound/pcm.h>
@@ -125,17 +126,26 @@ int snd_pcm_plugin_append(snd_pcm_plugin_t *plugin)
 static long snd_pcm_oss_bytes(snd_pcm_substream_t *substream, long frames)
 {
 	snd_pcm_runtime_t *runtime = substream->runtime;
-	snd_pcm_uframes_t buffer_size = snd_pcm_lib_buffer_bytes(substream);
-	frames = frames_to_bytes(runtime, frames);
+	long buffer_size = snd_pcm_lib_buffer_bytes(substream);
+	long bytes = frames_to_bytes(runtime, frames);
 	if (buffer_size == runtime->oss.buffer_bytes)
-		return frames;
-	return (runtime->oss.buffer_bytes * frames) / buffer_size;
+		return bytes;
+#if BITS_PER_LONG >= 64
+	return runtime->oss.buffer_bytes * bytes / buffer_size;
+#else
+	{
+		u64 bsize = (u64)runtime->oss.buffer_bytes * (u64)bytes;
+		u32 rem;
+		div64_32(&bsize, buffer_size, &rem);
+		return (long)bsize;
+	}
+#endif
 }
 
 static long snd_pcm_alsa_frames(snd_pcm_substream_t *substream, long bytes)
 {
 	snd_pcm_runtime_t *runtime = substream->runtime;
-	snd_pcm_uframes_t buffer_size = snd_pcm_lib_buffer_bytes(substream);
+	long buffer_size = snd_pcm_lib_buffer_bytes(substream);
 	if (buffer_size == runtime->oss.buffer_bytes)
 		return bytes_to_frames(runtime, bytes);
 	return bytes_to_frames(runtime, (buffer_size * bytes) / runtime->oss.buffer_bytes);
@@ -464,7 +474,8 @@ static int snd_pcm_oss_change_params(snd_pcm_substream_t *substream)
 	sw_params->tstamp_mode = SNDRV_PCM_TSTAMP_NONE;
 	sw_params->period_step = 1;
 	sw_params->sleep_min = 0;
-	sw_params->avail_min = 1;
+	sw_params->avail_min = substream->stream == SNDRV_PCM_STREAM_PLAYBACK ?
+		1 : runtime->period_size;
 	sw_params->xfer_align = 1;
 	if (atomic_read(&runtime->mmap_count) ||
 	    (substream->oss.setup && substream->oss.setup->nosilence)) {
@@ -839,7 +850,9 @@ static ssize_t snd_pcm_oss_write1(snd_pcm_substream_t *substream, const char __u
 					return xfer > 0 ? xfer : -EAGAIN;
 			}
 		} else {
-			tmp = snd_pcm_oss_write2(substream, (const char *)buf, runtime->oss.period_bytes, 0);
+			tmp = snd_pcm_oss_write2(substream,
+						 (const char __force *)buf,
+						 runtime->oss.period_bytes, 0);
 			if (tmp <= 0)
 				return xfer > 0 ? (snd_pcm_sframes_t)xfer : tmp;
 			runtime->oss.bytes += tmp;
@@ -915,7 +928,8 @@ static ssize_t snd_pcm_oss_read1(snd_pcm_substream_t *substream, char __user *bu
 			xfer += tmp;
 			runtime->oss.buffer_used -= tmp;
 		} else {
-			tmp = snd_pcm_oss_read2(substream, (char *)buf, runtime->oss.period_bytes, 0);
+			tmp = snd_pcm_oss_read2(substream, (char __force *)buf,
+						runtime->oss.period_bytes, 0);
 			if (tmp <= 0)
 				return xfer > 0 ? (snd_pcm_sframes_t)xfer : tmp;
 			runtime->oss.bytes += tmp;
@@ -1527,12 +1541,19 @@ static int snd_pcm_oss_get_ptr(snd_pcm_oss_file_t *pcm_oss_file, int stream, str
 			snd_pcm_oss_simulate_fill(substream, delay);
 		info.bytes = snd_pcm_oss_bytes(substream, runtime->status->hw_ptr) & INT_MAX;
 	} else {
-		delay = snd_pcm_oss_bytes(substream, delay) + fixup;
-		info.blocks = delay / runtime->oss.period_bytes;
-		if (stream == SNDRV_PCM_STREAM_PLAYBACK)
+		delay = snd_pcm_oss_bytes(substream, delay);
+		if (stream == SNDRV_PCM_STREAM_PLAYBACK) {
+			snd_pcm_oss_setup_t *setup = substream->oss.setup;
+			if (setup && setup->buggyptr)
+				info.blocks = (runtime->oss.buffer_bytes - delay - fixup) / runtime->oss.period_bytes;
+			else
+				info.blocks = (delay + fixup) / runtime->oss.period_bytes;
 			info.bytes = (runtime->oss.bytes - delay) & INT_MAX;
-		else
+		} else {
+			delay += fixup;
+			info.blocks = delay / runtime->oss.period_bytes;
 			info.bytes = (runtime->oss.bytes + delay) & INT_MAX;
+		}
 	}
 	if (copy_to_user(_info, &info, sizeof(info)))
 		return -EFAULT;
@@ -1691,13 +1712,12 @@ static int snd_pcm_oss_release_file(snd_pcm_oss_file_t *pcm_oss_file)
 		if (snd_pcm_running(substream))
 			snd_pcm_stop(substream, SNDRV_PCM_STATE_SETUP);
 		snd_pcm_stream_unlock_irq(substream);
-		if (substream->open_flag) {
+		if (substream->ffile != NULL) {
 			if (substream->ops->hw_free != NULL)
 				substream->ops->hw_free(substream);
 			substream->ops->close(substream);
-			substream->open_flag = 0;
+			substream->ffile = NULL;
 		}
-		substream->ffile = NULL;
 		snd_pcm_oss_release_substream(substream);
 		snd_pcm_release_substream(substream);
 	}
@@ -1720,7 +1740,7 @@ static int snd_pcm_oss_open_file(struct file *file,
 	snd_assert(rpcm_oss_file != NULL, return -EINVAL);
 	*rpcm_oss_file = NULL;
 
-	pcm_oss_file = kcalloc(1, sizeof(*pcm_oss_file), GFP_KERNEL);
+	pcm_oss_file = kzalloc(sizeof(*pcm_oss_file), GFP_KERNEL);
 	if (pcm_oss_file == NULL)
 		return -ENOMEM;
 
@@ -1764,14 +1784,13 @@ static int snd_pcm_oss_open_file(struct file *file,
 			snd_pcm_oss_release_file(pcm_oss_file);
 			return err;
 		}
-		psubstream->open_flag = 1;
+		psubstream->ffile = file;
 		err = snd_pcm_hw_constraints_complete(psubstream);
 		if (err < 0) {
 			snd_printd("snd_pcm_hw_constraint_complete failed\n");
 			snd_pcm_oss_release_file(pcm_oss_file);
 			return err;
 		}
-		psubstream->ffile = file;
 		snd_pcm_oss_init_substream(psubstream, psetup, minor);
 	}
 	if (csubstream != NULL) {
@@ -1786,14 +1805,13 @@ static int snd_pcm_oss_open_file(struct file *file,
 			snd_pcm_oss_release_file(pcm_oss_file);
 			return err;
 		}
-		csubstream->open_flag = 1;
+		csubstream->ffile = file;
 		err = snd_pcm_hw_constraints_complete(csubstream);
 		if (err < 0) {
 			snd_printd("snd_pcm_hw_constraint_complete failed\n");
 			snd_pcm_oss_release_file(pcm_oss_file);
 			return err;
 		}
-		csubstream->ffile = file;
 		snd_pcm_oss_init_substream(csubstream, csetup, minor);
 	}
 
@@ -2336,6 +2354,8 @@ static void snd_pcm_oss_proc_write(snd_info_entry_t *entry,
 				template.partialfrag = 1;
 			} else if (!strcmp(str, "no-silence")) {
 				template.nosilence = 1;
+			} else if (!strcmp(str, "buggy-ptr")) {
+				template.buggyptr = 1;
 			}
 		} while (*str);
 		if (setup == NULL) {
@@ -2347,7 +2367,7 @@ static void snd_pcm_oss_proc_write(snd_info_entry_t *entry,
 					for (setup1 = pstr->oss.setup_list; setup1->next; setup1 = setup1->next);
 					setup1->next = setup;
 				}
-				template.task_name = snd_kmalloc_strdup(task_name, GFP_KERNEL);
+				template.task_name = kstrdup(task_name, GFP_KERNEL);
 			} else {
 				buffer->error = -ENOMEM;
 			}

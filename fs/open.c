@@ -10,7 +10,7 @@
 #include <linux/file.h>
 #include <linux/smp_lock.h>
 #include <linux/quotaops.h>
-#include <linux/dnotify.h>
+#include <linux/fsnotify.h>
 #include <linux/module.h>
 #include <linux/slab.h>
 #include <linux/tty.h>
@@ -21,8 +21,10 @@
 #include <linux/vfs.h>
 #include <asm/uaccess.h>
 #include <linux/fs.h>
+#include <linux/personality.h>
 #include <linux/pagemap.h>
 #include <linux/syscalls.h>
+#include <linux/rcupdate.h>
 #include <linux/vs_limit.h>
 #include <linux/vs_dlimit.h>
 #include <linux/vserver/xid.h>
@@ -741,52 +743,15 @@ asmlinkage long sys_fchown(unsigned int fd, uid_t user, gid_t group)
 	return error;
 }
 
-/*
- * Note that while the flag value (low two bits) for sys_open means:
- *	00 - read-only
- *	01 - write-only
- *	10 - read-write
- *	11 - special
- * it is changed into
- *	00 - no permissions needed
- *	01 - read-permission
- *	10 - write-permission
- *	11 - read-write
- * for the internal routines (ie open_namei()/follow_link() etc). 00 is
- * used by symlinks.
- */
-struct file *filp_open(const char * filename, int flags, int mode)
+static struct file *__dentry_open(struct dentry *dentry, struct vfsmount *mnt,
+					int flags, struct file *f)
 {
-	int namei_flags, error;
-	struct nameidata nd;
-
-	namei_flags = flags;
-	if ((namei_flags+1) & O_ACCMODE)
-		namei_flags++;
-	if (namei_flags & O_TRUNC)
-		namei_flags |= 2;
-
-	error = open_namei(filename, namei_flags, mode, &nd);
-	if (!error)
-		return dentry_open(nd.dentry, nd.mnt, flags);
-
-	return ERR_PTR(error);
-}
-
-EXPORT_SYMBOL(filp_open);
-
-struct file *dentry_open(struct dentry *dentry, struct vfsmount *mnt, int flags)
-{
-	struct file * f;
 	struct inode *inode;
 	int error;
 
-	error = -ENFILE;
-	f = get_empty_filp();
-	if (!f)
-		goto cleanup_dentry;
 	f->f_flags = flags;
-	f->f_mode = ((flags+1) & O_ACCMODE) | FMODE_LSEEK | FMODE_PREAD | FMODE_PWRITE;
+	f->f_mode = ((flags+1) & O_ACCMODE) | FMODE_LSEEK |
+				FMODE_PREAD | FMODE_PWRITE;
 	inode = dentry->d_inode;
 	if (f->f_mode & FMODE_WRITE) {
 		error = get_write_access(inode);
@@ -812,7 +777,9 @@ struct file *dentry_open(struct dentry *dentry, struct vfsmount *mnt, int flags)
 
 	/* NB: we're sure to have correct a_ops only after f_op->open */
 	if (f->f_flags & O_DIRECT) {
-		if (!f->f_mapping->a_ops || !f->f_mapping->a_ops->direct_IO) {
+		if (!f->f_mapping->a_ops ||
+		    ((!f->f_mapping->a_ops->direct_IO) &&
+		    (!f->f_mapping->a_ops->get_xip_page))) {
 			fput(f);
 			f = ERR_PTR(-EINVAL);
 		}
@@ -829,12 +796,63 @@ cleanup_all:
 	f->f_vfsmnt = NULL;
 cleanup_file:
 	put_filp(f);
-cleanup_dentry:
 	dput(dentry);
 	mntput(mnt);
 	return ERR_PTR(error);
 }
 
+/*
+ * Note that while the flag value (low two bits) for sys_open means:
+ *	00 - read-only
+ *	01 - write-only
+ *	10 - read-write
+ *	11 - special
+ * it is changed into
+ *	00 - no permissions needed
+ *	01 - read-permission
+ *	10 - write-permission
+ *	11 - read-write
+ * for the internal routines (ie open_namei()/follow_link() etc). 00 is
+ * used by symlinks.
+ */
+struct file *filp_open(const char * filename, int flags, int mode)
+{
+	int namei_flags, error;
+	struct nameidata nd;
+	struct file *f;
+
+	namei_flags = flags;
+	if ((namei_flags+1) & O_ACCMODE)
+		namei_flags++;
+	if (namei_flags & O_TRUNC)
+		namei_flags |= 2;
+
+	error = -ENFILE;
+	f = get_empty_filp();
+	if (f == NULL)
+		return ERR_PTR(error);
+
+	error = open_namei(filename, namei_flags, mode, &nd);
+	if (!error)
+		return __dentry_open(nd.dentry, nd.mnt, flags, f);
+
+	put_filp(f);
+	return ERR_PTR(error);
+}
+EXPORT_SYMBOL(filp_open);
+
+struct file *dentry_open(struct dentry *dentry, struct vfsmount *mnt, int flags)
+{
+	int error;
+	struct file *f;
+
+	error = -ENFILE;
+	f = get_empty_filp();
+	if (f == NULL)
+		return ERR_PTR(error);
+
+	return __dentry_open(dentry, mnt, flags, f);
+}
 EXPORT_SYMBOL(dentry_open);
 
 /*
@@ -844,14 +862,16 @@ int get_unused_fd(void)
 {
 	struct files_struct * files = current->files;
 	int fd, error;
+	struct fdtable *fdt;
 
   	error = -EMFILE;
 	spin_lock(&files->file_lock);
 
 repeat:
- 	fd = find_next_zero_bit(files->open_fds->fds_bits, 
-				files->max_fdset, 
-				files->next_fd);
+	fdt = files_fdtable(files);
+ 	fd = find_next_zero_bit(fdt->open_fds->fds_bits,
+				fdt->max_fdset,
+				fdt->next_fd);
 
 	/*
 	 * N.B. For clone tasks sharing a files structure, this test
@@ -874,15 +894,15 @@ repeat:
 		goto repeat;
 	}
 
-	FD_SET(fd, files->open_fds);
-	FD_CLR(fd, files->close_on_exec);
-	files->next_fd = fd + 1;
+	FD_SET(fd, fdt->open_fds);
+	FD_CLR(fd, fdt->close_on_exec);
+	fdt->next_fd = fd + 1;
 	vx_openfd_inc(fd);
 #if 1
 	/* Sanity check */
-	if (files->fd[fd] != NULL) {
+	if (fdt->fd[fd] != NULL) {
 		printk(KERN_WARNING "get_unused_fd: slot %d not NULL!\n", fd);
-		files->fd[fd] = NULL;
+		fdt->fd[fd] = NULL;
 	}
 #endif
 	error = fd;
@@ -896,9 +916,10 @@ EXPORT_SYMBOL(get_unused_fd);
 
 static inline void __put_unused_fd(struct files_struct *files, unsigned int fd)
 {
-	__FD_CLR(fd, files->open_fds);
-	if (fd < files->next_fd)
-		files->next_fd = fd;
+	struct fdtable *fdt = files_fdtable(files);
+	__FD_CLR(fd, fdt->open_fds);
+	if (fd < fdt->next_fd)
+		fdt->next_fd = fd;
 	vx_openfd_dec(fd);
 }
 
@@ -928,43 +949,44 @@ EXPORT_SYMBOL(put_unused_fd);
 void fastcall fd_install(unsigned int fd, struct file * file)
 {
 	struct files_struct *files = current->files;
+	struct fdtable *fdt;
 	spin_lock(&files->file_lock);
-	if (unlikely(files->fd[fd] != NULL))
-		BUG();
-	files->fd[fd] = file;
+	fdt = files_fdtable(files);
+	BUG_ON(fdt->fd[fd] != NULL);
+	rcu_assign_pointer(fdt->fd[fd], file);
 	spin_unlock(&files->file_lock);
 }
 
 EXPORT_SYMBOL(fd_install);
 
-asmlinkage long sys_open(const char __user * filename, int flags, int mode)
+long do_sys_open(const char __user *filename, int flags, int mode)
 {
-	char * tmp;
-	int fd, error;
+	char *tmp = getname(filename);
+	int fd = PTR_ERR(tmp);
 
-#if BITS_PER_LONG != 32
-	flags |= O_LARGEFILE;
-#endif
-	tmp = getname(filename);
-	fd = PTR_ERR(tmp);
 	if (!IS_ERR(tmp)) {
 		fd = get_unused_fd();
 		if (fd >= 0) {
 			struct file *f = filp_open(tmp, flags, mode);
-			error = PTR_ERR(f);
-			if (IS_ERR(f))
-				goto out_error;
-			fd_install(fd, f);
+			if (IS_ERR(f)) {
+				put_unused_fd(fd);
+				fd = PTR_ERR(f);
+			} else {
+				fsnotify_open(f->f_dentry);
+				fd_install(fd, f);
+			}
 		}
-out:
 		putname(tmp);
 	}
 	return fd;
+}
 
-out_error:
-	put_unused_fd(fd);
-	fd = error;
-	goto out;
+asmlinkage long sys_open(const char __user *filename, int flags, int mode)
+{
+	if (force_o_largefile())
+		flags |= O_LARGEFILE;
+
+	return do_sys_open(filename, flags, mode);
 }
 EXPORT_SYMBOL_GPL(sys_open);
 
@@ -987,23 +1009,15 @@ asmlinkage long sys_creat(const char __user * pathname, int mode)
  */
 int filp_close(struct file *filp, fl_owner_t id)
 {
-	int retval;
-
-	/* Report and clear outstanding errors */
-	retval = filp->f_error;
-	if (retval)
-		filp->f_error = 0;
+	int retval = 0;
 
 	if (!file_count(filp)) {
 		printk(KERN_ERR "VFS: Close: file count is 0\n");
-		return retval;
+		return 0;
 	}
 
-	if (filp->f_op && filp->f_op->flush) {
-		int err = filp->f_op->flush(filp);
-		if (!retval)
-			retval = err;
-	}
+	if (filp->f_op && filp->f_op->flush)
+		retval = filp->f_op->flush(filp);
 
 	dnotify_flush(filp, id);
 	locks_remove_posix(filp, id);
@@ -1022,15 +1036,17 @@ asmlinkage long sys_close(unsigned int fd)
 {
 	struct file * filp;
 	struct files_struct *files = current->files;
+	struct fdtable *fdt;
 
 	spin_lock(&files->file_lock);
-	if (fd >= files->max_fds)
+	fdt = files_fdtable(files);
+	if (fd >= fdt->max_fds)
 		goto out_unlock;
-	filp = files->fd[fd];
+	filp = fdt->fd[fd];
 	if (!filp)
 		goto out_unlock;
-	files->fd[fd] = NULL;
-	FD_CLR(fd, files->close_on_exec);
+	rcu_assign_pointer(fdt->fd[fd], NULL);
+	FD_CLR(fd, fdt->close_on_exec);
 	__put_unused_fd(files, fd);
 	spin_unlock(&files->file_lock);
 	return filp_close(filp, files);

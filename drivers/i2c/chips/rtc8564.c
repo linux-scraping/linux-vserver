@@ -19,7 +19,6 @@
 #include <linux/string.h>
 #include <linux/rtc.h>		/* get the user-level API */
 #include <linux/init.h>
-#include <linux/init.h>
 
 #include "rtc8564.h"
 
@@ -66,12 +65,8 @@ static unsigned short normal_addr[] = { 0x51, I2C_CLIENT_END };
 
 static struct i2c_client_address_data addr_data = {
 	.normal_i2c		= normal_addr,
-	.normal_i2c_range	= ignore,
 	.probe			= ignore,
-	.probe_range		= ignore,
 	.ignore			= ignore,
-	.ignore_range		= ignore,
-	.force			= ignore,
 };
 
 static int rtc8564_read_mem(struct i2c_client *client, struct mem *mem);

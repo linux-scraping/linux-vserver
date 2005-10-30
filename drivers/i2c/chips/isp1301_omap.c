@@ -145,7 +145,6 @@ static inline void notresponding(struct isp1301 *isp)
 static unsigned short normal_i2c[] = {
 	ISP_BASE, ISP_BASE + 1,
 	I2C_CLIENT_END };
-static unsigned short normal_i2c_range[] = { I2C_CLIENT_END };
 
 I2C_CLIENT_INSMOD;
 
@@ -1490,7 +1489,7 @@ static int isp1301_probe(struct i2c_adapter *bus, int address, int kind)
 	if (the_transceiver)
 		return 0;
 
-	isp = kcalloc(1, sizeof *isp, GFP_KERNEL);
+	isp = kzalloc(sizeof *isp, GFP_KERNEL);
 	if (!isp)
 		return 0;
 

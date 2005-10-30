@@ -59,14 +59,22 @@ struct completion;
  * be biten later when the calling function happens to sleep when it is not
  * supposed to.
  */
-#ifdef CONFIG_DEBUG_SPINLOCK_SLEEP
-#define might_sleep() __might_sleep(__FILE__, __LINE__)
-#define might_sleep_if(cond) do { if (unlikely(cond)) might_sleep(); } while (0)
-void __might_sleep(char *file, int line);
+#ifdef CONFIG_PREEMPT_VOLUNTARY
+extern int cond_resched(void);
+# define might_resched() cond_resched()
 #else
-#define might_sleep() do {} while(0)
-#define might_sleep_if(cond) do {} while (0)
+# define might_resched() do { } while (0)
 #endif
+
+#ifdef CONFIG_DEBUG_SPINLOCK_SLEEP
+  void __might_sleep(char *file, int line);
+# define might_sleep() \
+	do { __might_sleep(__FILE__, __LINE__); might_resched(); } while (0)
+#else
+# define might_sleep() do { might_resched(); } while (0)
+#endif
+
+#define might_sleep_if(cond) do { if (unlikely(cond)) might_sleep(); } while (0)
 
 #define abs(x) ({				\
 		int __x = (x);			\
@@ -300,8 +308,8 @@ struct sysinfo {
 	char _f[20-2*sizeof(long)-sizeof(int)];	/* Padding: libc5 uses this.. */
 };
 
-extern void BUILD_BUG(void);
-#define BUILD_BUG_ON(condition) do { if (condition) BUILD_BUG(); } while(0)
+/* Force a compilation error if condition is false */
+#define BUILD_BUG_ON(condition) ((void)sizeof(char[1 - 2*!!(condition)]))
 
 #ifdef CONFIG_SYSCTL
 extern int randomize_va_space;

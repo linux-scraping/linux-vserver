@@ -32,6 +32,7 @@
 #include "os.h"
 #include "umid.h"
 #include "irq_kern.h"
+#include "choose-mode.h"
 
 static int do_unlink_socket(struct notifier_block *notifier, 
 			    unsigned long what, void *data)
@@ -276,6 +277,7 @@ void mconsole_proc(struct mc_request *req)
     go - continue the UML after a 'stop' \n\
     log <string> - make UML enter <string> into the kernel log\n\
     proc <file> - returns the contents of the UML's /proc/<file>\n\
+    stack <pid> - returns the stack of the specified pid\n\
 "
 
 void mconsole_help(struct mc_request *req)
@@ -419,8 +421,9 @@ void mconsole_config(struct mc_request *req)
 void mconsole_remove(struct mc_request *req)
 {
 	struct mc_device *dev;	
-	char *ptr = req->request.data;
-	int err;
+	char *ptr = req->request.data, *err_msg = "";
+        char error[256];
+	int err, start, end, n;
 
 	ptr += strlen("remove");
 	while(isspace(*ptr)) ptr++;
@@ -429,8 +432,35 @@ void mconsole_remove(struct mc_request *req)
 		mconsole_reply(req, "Bad remove option", 1, 0);
 		return;
 	}
-	err = (*dev->remove)(&ptr[strlen(dev->name)]);
-	mconsole_reply(req, "", err, 0);
+
+        ptr = &ptr[strlen(dev->name)];
+
+        err = 1;
+        n = (*dev->id)(&ptr, &start, &end);
+        if(n < 0){
+                err_msg = "Couldn't parse device number";
+                goto out;
+        }
+        else if((n < start) || (n > end)){
+                sprintf(error, "Invalid device number - must be between "
+                        "%d and %d", start, end);
+                err_msg = error;
+                goto out;
+        }
+
+	err = (*dev->remove)(n);
+        switch(err){
+        case -ENODEV:
+                err_msg = "Device doesn't exist";
+                break;
+        case -EBUSY:
+                err_msg = "Device is currently open";
+                break;
+        default:
+                break;
+        }
+ out:
+	mconsole_reply(req, err_msg, err, 0);
 }
 
 #ifdef CONFIG_MAGIC_SYSRQ
@@ -450,6 +480,56 @@ void mconsole_sysrq(struct mc_request *req)
 	mconsole_reply(req, "Sysrq not compiled in", 1, 0);
 }
 #endif
+
+/* Mconsole stack trace
+ *  Added by Allan Graves, Jeff Dike
+ *  Dumps a stacks registers to the linux console.
+ *  Usage stack <pid>.
+ */
+void do_stack(struct mc_request *req)
+{
+        char *ptr = req->request.data;
+        int pid_requested= -1;
+        struct task_struct *from = NULL;
+	struct task_struct *to = NULL;
+
+        /* Would be nice:
+         * 1) Send showregs output to mconsole.
+	 * 2) Add a way to stack dump all pids.
+	 */
+
+        ptr += strlen("stack");
+        while(isspace(*ptr)) ptr++;
+
+        /* Should really check for multiple pids or reject bad args here */
+        /* What do the arguments in mconsole_reply mean? */
+        if(sscanf(ptr, "%d", &pid_requested) == 0){
+                mconsole_reply(req, "Please specify a pid", 1, 0);
+                return;
+        }
+
+        from = current;
+        to = find_task_by_pid(pid_requested);
+
+        if((to == NULL) || (pid_requested == 0)) {
+                mconsole_reply(req, "Couldn't find that pid", 1, 0);
+                return;
+        }
+        to->thread.saved_task = current;
+
+        switch_to(from, to, from);
+        mconsole_reply(req, "Stack Dumped to console and message log", 0, 0);
+}
+
+void mconsole_stack(struct mc_request *req)
+{
+	/* This command doesn't work in TT mode, so let's check and then
+	 * get out of here
+	 */
+	CHOOSE_MODE(mconsole_reply(req, "Sorry, this doesn't work in TT mode",
+				   1, 0),
+		    do_stack(req));
+}
 
 /* Changed by mconsole_setup, which is __setup, and called before SMP is
  * active.
@@ -529,7 +609,7 @@ static int create_proc_mconsole(void)
 
 	ent = create_proc_entry("mconsole", S_IFREG | 0200, NULL);
 	if(ent == NULL){
-		printk("create_proc_mconsole : create_proc_entry failed\n");
+		printk(KERN_INFO "create_proc_mconsole : create_proc_entry failed\n");
 		return(0);
 	}
 

@@ -1,5 +1,4 @@
 /*
-    $Id: bttv-i2c.c,v 1.18 2005/02/16 12:14:10 kraxel Exp $
 
     bttv-i2c.c  --  all the i2c code is here
 
@@ -109,7 +108,7 @@ static struct i2c_adapter bttv_i2c_adap_sw_template = {
 #ifdef I2C_CLASS_TV_ANALOG
 	.class             = I2C_CLASS_TV_ANALOG,
 #endif
-	I2C_DEVNAME("bt848"),
+	.name              = "bt848",
 	.id                = I2C_HW_B_BT848,
 	.client_register   = attach_inform,
 };
@@ -270,8 +269,6 @@ static int bttv_i2c_xfer(struct i2c_adapter *i2c_adap, struct i2c_msg *msgs, int
 }
 
 static struct i2c_algorithm bttv_algo = {
-	.name          = "bt878",
-	.id            = I2C_ALGO_BIT | I2C_HW_B_BT848 /* FIXME */,
 	.master_xfer   = bttv_i2c_xfer,
 	.algo_control  = algo_control,
 	.functionality = functionality,
@@ -282,8 +279,8 @@ static struct i2c_adapter bttv_i2c_adap_hw_template = {
 #ifdef I2C_CLASS_TV_ANALOG
 	.class         = I2C_CLASS_TV_ANALOG,
 #endif
-	I2C_DEVNAME("bt878"),
-	.id            = I2C_ALGO_BIT | I2C_HW_B_BT848 /* FIXME */,
+	.name          = "bt878",
+	.id            = I2C_HW_B_BT848 /* FIXME */,
 	.algo          = &bttv_algo,
 	.client_register = attach_inform,
 };
@@ -295,14 +292,26 @@ static int attach_inform(struct i2c_client *client)
 {
         struct bttv *btv = i2c_get_adapdata(client->adapter);
 
-	if (btv->tuner_type != UNSET)
-		bttv_call_i2c_clients(btv,TUNER_SET_TYPE,&btv->tuner_type);
+	if (bttv_debug)
+		printk(KERN_DEBUG "bttv%d: %s i2c attach [addr=0x%x,client=%s]\n",
+			btv->c.nr,client->driver->name,client->addr,
+			client->name);
+	if (!client->driver->command)
+		return 0;
+
+	if (btv->tuner_type != UNSET) {
+	        struct tuner_setup tun_setup;
+
+	        tun_setup.mode_mask = T_RADIO | T_ANALOG_TV | T_DIGITAL_TV;
+		tun_setup.type = btv->tuner_type;
+		tun_setup.addr = ADDR_UNSET;
+
+		client->driver->command (client, TUNER_SET_TYPE_ADDR, &tun_setup);
+	}
+
 	if (btv->pinnacle_id != UNSET)
-		bttv_call_i2c_clients(btv,AUDC_CONFIG_PINNACLE,
+		client->driver->command(client,AUDC_CONFIG_PINNACLE,
 				      &btv->pinnacle_id);
-        if (bttv_debug)
-		printk("bttv%d: i2c attach [client=%s]\n",
-		       btv->c.nr, i2c_clientname(client));
         return 0;
 }
 
@@ -314,7 +323,7 @@ void bttv_call_i2c_clients(struct bttv *btv, unsigned int cmd, void *arg)
 }
 
 static struct i2c_client bttv_i2c_client_template = {
-	I2C_DEVNAME("bttv internal"),
+	.name	= "bttv internal",
 };
 
 
@@ -371,6 +380,7 @@ void __devinit bttv_readee(struct bttv *btv, unsigned char *eedata, int addr)
 }
 
 static char *i2c_devs[128] = {
+	[ 0x1c >> 1 ] = "lgdt330x",
 	[ 0x30 >> 1 ] = "IR (hauppauge)",
 	[ 0x80 >> 1 ] = "msp34xx",
 	[ 0x86 >> 1 ] = "tda9887",

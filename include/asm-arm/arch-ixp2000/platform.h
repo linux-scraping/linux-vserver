@@ -31,20 +31,24 @@
 
 #include <asm/system.h>		/* Pickup local_irq_ functions */
 
-static inline void ixp2000_reg_write(volatile unsigned long *reg, unsigned long val)
+static inline void ixp2000_reg_write(volatile void *reg, unsigned long val)
 {
-	volatile unsigned long dummy;
+	unsigned long dummy;
 	unsigned long flags;
 
 	local_irq_save(flags);
-	*reg = val;
+	*((volatile unsigned long *)reg) = val;
 	barrier();
-	dummy = *reg;
+	dummy = *((volatile unsigned long *)reg);
 	local_irq_restore(flags);
 }
 #else
-#define	ixp2000_reg_write(reg, val) (*reg = val)
+static inline void ixp2000_reg_write(volatile void *reg, unsigned long val)
+{
+	*((volatile unsigned long *)reg) = val;
+}
 #endif	/* IXDP2400 || IXDP2401 */
+#define ixp2000_reg_read(reg)	(*((volatile unsigned long *)reg))
 
 /*
  * Boards may multiplex different devices on the 2nd channel of 
@@ -84,7 +88,7 @@ void ixp2000_release_slowport(struct slowport_cfg *);
  */
 static inline unsigned ixp2000_has_broken_slowport(void)
 {
-	unsigned long id = *IXP2000_PROD_ID;
+	unsigned long id = *IXP2000_PRODUCT_ID;
 	unsigned long id_prod = id & (IXP2000_MAJ_PROD_TYPE_MASK |
 				      IXP2000_MIN_PROD_TYPE_MASK);
 	return (((id_prod ==
@@ -115,6 +119,7 @@ static inline unsigned int ixp2000_is_pcimaster(void)
 }
 
 void ixp2000_map_io(void);
+void ixp2000_uart_init(void);
 void ixp2000_init_irq(void);
 void ixp2000_init_time(unsigned long);
 unsigned long ixp2000_gettimeoffset(void);
@@ -138,30 +143,10 @@ struct ixp2000_flash_data {
 	unsigned long (*bank_setup)(unsigned long);
 };
 
-/*
- * GPIO helper functions
- */
-#define	GPIO_IN		0
-#define	GPIO_OUT	1
-
-extern void gpio_line_config(int line, int style);
-
-static inline int gpio_line_get(int line)
-{
-	return (((*IXP2000_GPIO_PLR) >> line) & 1);
-}
-
-static inline void gpio_line_set(int line, int value)
-{
-	if (value) 
-		ixp2000_reg_write(IXP2000_GPIO_POSR, (1 << line));
-	else 
-		ixp2000_reg_write(IXP2000_GPIO_POCR, (1 << line));
-}
-
 struct ixp2000_i2c_pins {
 	unsigned long sda_pin;
 	unsigned long scl_pin;
 };
+
 
 #endif /*  !__ASSEMBLY__ */

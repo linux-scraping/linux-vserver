@@ -22,6 +22,8 @@ subdir-$(CONFIG_PCMCIA)		+= pcmcia
 
 obj-$(CONFIG_SCSI)		+= scsi_mod.o
 
+obj-$(CONFIG_RAID_ATTRS)	+= raid_class.o
+
 # --- NOTE ORDERING HERE ---
 # For kernel non-modular link, transport attributes need to
 # be initialised before drivers
@@ -29,6 +31,7 @@ obj-$(CONFIG_SCSI)		+= scsi_mod.o
 obj-$(CONFIG_SCSI_SPI_ATTRS)	+= scsi_transport_spi.o
 obj-$(CONFIG_SCSI_FC_ATTRS) 	+= scsi_transport_fc.o
 obj-$(CONFIG_SCSI_ISCSI_ATTRS)	+= scsi_transport_iscsi.o
+obj-$(CONFIG_SCSI_SAS_ATTRS)	+= scsi_transport_sas.o
 
 obj-$(CONFIG_SCSI_AMIGA7XX)	+= amiga7xx.o	53c7xx.o
 obj-$(CONFIG_A3000_SCSI)	+= a3000.o	wd33c93.o
@@ -50,8 +53,6 @@ obj-$(CONFIG_MVME16x_SCSI)	+= mvme16x.o	53c7xx.o
 obj-$(CONFIG_BVME6000_SCSI)	+= bvme6000.o	53c7xx.o
 obj-$(CONFIG_SCSI_SIM710)	+= 53c700.o	sim710.o
 obj-$(CONFIG_SCSI_ADVANSYS)	+= advansys.o
-obj-$(CONFIG_SCSI_PCI2000)	+= pci2000.o
-obj-$(CONFIG_SCSI_PCI2220I)	+= pci2220i.o
 obj-$(CONFIG_SCSI_PSI240I)	+= psi240i.o
 obj-$(CONFIG_SCSI_BUSLOGIC)	+= BusLogic.o
 obj-$(CONFIG_SCSI_DPT_I2O)	+= dpt_i2o.o
@@ -98,6 +99,7 @@ obj-$(CONFIG_SCSI_DC395x)	+= dc395x.o
 obj-$(CONFIG_SCSI_DC390T)	+= tmscsim.o
 obj-$(CONFIG_MEGARAID_LEGACY)	+= megaraid.o
 obj-$(CONFIG_MEGARAID_NEWGEN)	+= megaraid/
+obj-$(CONFIG_MEGARAID_SAS)	+= megaraid/
 obj-$(CONFIG_SCSI_ACARD)	+= atp870u.o
 obj-$(CONFIG_SCSI_SUNESP)	+= esp.o
 obj-$(CONFIG_SCSI_GDTH)		+= gdth.o
@@ -134,6 +136,7 @@ obj-$(CONFIG_SCSI_SATA_SIS)	+= libata.o sata_sis.o
 obj-$(CONFIG_SCSI_SATA_SX4)	+= libata.o sata_sx4.o
 obj-$(CONFIG_SCSI_SATA_NV)	+= libata.o sata_nv.o
 obj-$(CONFIG_SCSI_SATA_ULI)	+= libata.o sata_uli.o
+obj-$(CONFIG_SCSI_SATA_MV)	+= libata.o sata_mv.o
 
 obj-$(CONFIG_ARM)		+= arm/
 
@@ -142,6 +145,7 @@ obj-$(CONFIG_CHR_DEV_OSST)	+= osst.o
 obj-$(CONFIG_BLK_DEV_SD)	+= sd_mod.o
 obj-$(CONFIG_BLK_DEV_SR)	+= sr_mod.o
 obj-$(CONFIG_CHR_DEV_SG)	+= sg.o
+obj-$(CONFIG_CHR_DEV_SCH)	+= ch.o
 
 scsi_mod-y			+= scsi.o hosts.o scsi_ioctl.o constants.o \
 				   scsicam.o scsi_error.o scsi_lib.o \

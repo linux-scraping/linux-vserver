@@ -173,7 +173,7 @@ int fib_validate_source(u32 src, u32 dst, u8 tos, int oif,
 
 	no_addr = rpf = 0;
 	rcu_read_lock();
-	in_dev = __in_dev_get(dev);
+	in_dev = __in_dev_get_rcu(dev);
 	if (in_dev) {
 		no_addr = in_dev->ifa_list == NULL;
 		rpf = IN_DEV_RPFILTER(in_dev);
@@ -516,6 +516,59 @@ static void fib_del_ifaddr(struct in_ifaddr *ifa)
 #undef BRD1_OK
 }
 
+static void nl_fib_lookup(struct fib_result_nl *frn, struct fib_table *tb )
+{
+	
+	struct fib_result       res;
+	struct flowi            fl = { .nl_u = { .ip4_u = { .daddr = frn->fl_addr, 
+							    .fwmark = frn->fl_fwmark,
+							    .tos = frn->fl_tos,
+							    .scope = frn->fl_scope } } };
+	if (tb) {
+		local_bh_disable();
+
+		frn->tb_id = tb->tb_id;
+		frn->err = tb->tb_lookup(tb, &fl, &res);
+
+		if (!frn->err) {
+			frn->prefixlen = res.prefixlen;
+			frn->nh_sel = res.nh_sel;
+			frn->type = res.type;
+			frn->scope = res.scope;
+		}
+		local_bh_enable();
+	}
+}
+
+static void nl_fib_input(struct sock *sk, int len)
+{
+	struct sk_buff *skb = NULL;
+        struct nlmsghdr *nlh = NULL;
+	struct fib_result_nl *frn;
+	int err;
+	u32 pid;     
+	struct fib_table *tb;
+	
+	skb = skb_recv_datagram(sk, 0, 0, &err);
+	nlh = (struct nlmsghdr *)skb->data;
+	
+	frn = (struct fib_result_nl *) NLMSG_DATA(nlh);
+	tb = fib_get_table(frn->tb_id_in);
+
+	nl_fib_lookup(frn, tb);
+	
+	pid = nlh->nlmsg_pid;           /*pid of sending process */
+	NETLINK_CB(skb).pid = 0;         /* from kernel */
+	NETLINK_CB(skb).dst_pid = pid;
+	NETLINK_CB(skb).dst_group = 0;  /* unicast */
+	netlink_unicast(sk, skb, pid, MSG_DONTWAIT);
+}    
+
+static void nl_fib_lookup_init(void)
+{
+      netlink_kernel_create(NETLINK_FIB_LOOKUP, 0, nl_fib_input, THIS_MODULE);
+}
+
 static void fib_disable_ip(struct net_device *dev, int force)
 {
 	if (fib_sync_down(0, dev, force))
@@ -554,7 +607,7 @@ static int fib_inetaddr_event(struct notifier_block *this, unsigned long event, 
 static int fib_netdev_event(struct notifier_block *this, unsigned long event, void *ptr)
 {
 	struct net_device *dev = ptr;
-	struct in_device *in_dev = __in_dev_get(dev);
+	struct in_device *in_dev = __in_dev_get_rtnl(dev);
 
 	if (event == NETDEV_UNREGISTER) {
 		fib_disable_ip(dev, 2);
@@ -604,8 +657,8 @@ void __init ip_fib_init(void)
 
 	register_netdevice_notifier(&fib_netdev_notifier);
 	register_inetaddr_notifier(&fib_inetaddr_notifier);
+	nl_fib_lookup_init();
 }
 
 EXPORT_SYMBOL(inet_addr_type);
-EXPORT_SYMBOL(ip_dev_find);
 EXPORT_SYMBOL(ip_rt_ioctl);

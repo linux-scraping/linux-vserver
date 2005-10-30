@@ -871,8 +871,7 @@ static irqreturn_t aurora_interrupt(int irq, void * dev_id, struct pt_regs * reg
 #ifdef AURORA_INT_DEBUG
 static void aurora_timer (unsigned long ignored);
 
-static struct timer_list aurora_poll_timer =
-			TIMER_INITIALIZER(aurora_timer, 0, 0);
+static DEFINE_TIMER(aurora_poll_timer, aurora_timer, 0, 0);
 
 static void
 aurora_timer (unsigned long ignored)
@@ -1515,8 +1514,7 @@ static void aurora_close(struct tty_struct * tty, struct file * filp)
 		 */
 		timeout = jiffies+HZ;
 		while(port->SRER & SRER_TXEMPTY)  {
-			current->state = TASK_INTERRUPTIBLE;
-			schedule_timeout(port->timeout);
+			msleep_interruptible(jiffies_to_msecs(port->timeout));
 			if (time_after(jiffies, timeout))
 				break;
 		}
@@ -1533,8 +1531,7 @@ static void aurora_close(struct tty_struct * tty, struct file * filp)
 	port->tty = 0;
 	if (port->blocked_open) {
 		if (port->close_delay) {
-			current->state = TASK_INTERRUPTIBLE;
-			schedule_timeout(port->close_delay);
+			msleep_interruptible(jiffies_to_msecs(port->close_delay));
 		}
 		wake_up_interruptible(&port->open_wait);
 	}

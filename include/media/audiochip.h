@@ -1,3 +1,6 @@
+/*
+ */
+
 #ifndef AUDIOCHIP_H
 #define AUDIOCHIP_H
 
@@ -31,5 +34,4 @@
 
 /* misc stuff to pass around config info to i2c chips */
 #define AUDC_CONFIG_PINNACLE  _IOW('m',32,int)
-
 #endif /* AUDIOCHIP_H */

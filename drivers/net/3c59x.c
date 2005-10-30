@@ -973,6 +973,11 @@ static int vortex_suspend (struct pci_dev *pdev, pm_message_t state)
 			netif_device_detach(dev);
 			vortex_down(dev, 1);
 		}
+		pci_save_state(pdev);
+		pci_enable_wake(pdev, pci_choose_state(pdev, state), 0);
+		free_irq(dev->irq, dev);
+		pci_disable_device(pdev);
+		pci_set_power_state(pdev, pci_choose_state(pdev, state));
 	}
 	return 0;
 }
@@ -980,8 +985,19 @@ static int vortex_suspend (struct pci_dev *pdev, pm_message_t state)
 static int vortex_resume (struct pci_dev *pdev)
 {
 	struct net_device *dev = pci_get_drvdata(pdev);
+	struct vortex_private *vp = netdev_priv(dev);
 
-	if (dev && dev->priv) {
+	if (dev && vp) {
+		pci_set_power_state(pdev, PCI_D0);
+		pci_restore_state(pdev);
+		pci_enable_device(pdev);
+		pci_set_master(pdev);
+		if (request_irq(dev->irq, vp->full_bus_master_rx ?
+				&boomerang_interrupt : &vortex_interrupt, SA_SHIRQ, dev->name, dev)) {
+			printk(KERN_WARNING "%s: Could not reserve IRQ %d\n", dev->name, dev->irq);
+			pci_disable_device(pdev);
+			return -EBUSY;
+		}
 		if (netif_running(dev)) {
 			vortex_up(dev);
 			netif_device_attach(dev);
@@ -1802,7 +1818,7 @@ vortex_open(struct net_device *dev)
 				break;			/* Bad news!  */
 			skb->dev = dev;			/* Mark as being used by this device. */
 			skb_reserve(skb, 2);	/* Align IP on 16 byte boundaries */
-			vp->rx_ring[i].addr = cpu_to_le32(pci_map_single(VORTEX_PCI(vp), skb->tail, PKT_BUF_SZ, PCI_DMA_FROMDEVICE));
+			vp->rx_ring[i].addr = cpu_to_le32(pci_map_single(VORTEX_PCI(vp), skb->data, PKT_BUF_SZ, PCI_DMA_FROMDEVICE));
 		}
 		if (i != RX_RING_SIZE) {
 			int j;
@@ -1872,6 +1888,7 @@ vortex_timer(unsigned long data)
 	case XCVR_MII: case XCVR_NWAY:
 		{
 			spin_lock_bh(&vp->lock);
+			mii_status = mdio_read(dev, vp->phys[0], 1);
 			mii_status = mdio_read(dev, vp->phys[0], 1);
 			ok = 1;
 			if (vortex_debug > 2)
@@ -2202,9 +2219,8 @@ boomerang_start_xmit(struct sk_buff *skb, struct net_device *dev)
 
 	if (vortex_debug > 6) {
 		printk(KERN_DEBUG "boomerang_start_xmit()\n");
-		if (vortex_debug > 3)
-			printk(KERN_DEBUG "%s: Trying to send a packet, Tx index %d.\n",
-				   dev->name, vp->cur_tx);
+		printk(KERN_DEBUG "%s: Trying to send a packet, Tx index %d.\n",
+			   dev->name, vp->cur_tx);
 	}
 
 	if (vp->cur_tx - vp->dirty_tx >= TX_RING_SIZE) {
@@ -2633,7 +2649,7 @@ boomerang_rx(struct net_device *dev)
 				pci_dma_sync_single_for_cpu(VORTEX_PCI(vp), dma, PKT_BUF_SZ, PCI_DMA_FROMDEVICE);
 				/* 'skb_put()' points to the start of sk_buff data area. */
 				memcpy(skb_put(skb, pkt_len),
-					   vp->rx_skbuff[entry]->tail,
+					   vp->rx_skbuff[entry]->data,
 					   pkt_len);
 				pci_dma_sync_single_for_device(VORTEX_PCI(vp), dma, PKT_BUF_SZ, PCI_DMA_FROMDEVICE);
 				vp->rx_copy++;
@@ -2679,7 +2695,7 @@ boomerang_rx(struct net_device *dev)
 			}
 			skb->dev = dev;			/* Mark as being used by this device. */
 			skb_reserve(skb, 2);	/* Align IP on 16 byte boundaries */
-			vp->rx_ring[entry].addr = cpu_to_le32(pci_map_single(VORTEX_PCI(vp), skb->tail, PKT_BUF_SZ, PCI_DMA_FROMDEVICE));
+			vp->rx_ring[entry].addr = cpu_to_le32(pci_map_single(VORTEX_PCI(vp), skb->data, PKT_BUF_SZ, PCI_DMA_FROMDEVICE));
 			vp->rx_skbuff[entry] = skb;
 		}
 		vp->rx_ring[entry].status = 0;	/* Clear complete bit. */

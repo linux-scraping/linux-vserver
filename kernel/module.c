@@ -20,6 +20,7 @@
 #include <linux/module.h>
 #include <linux/moduleloader.h>
 #include <linux/init.h>
+#include <linux/kernel.h>
 #include <linux/slab.h>
 #include <linux/vmalloc.h>
 #include <linux/elf.h>
@@ -35,6 +36,7 @@
 #include <linux/notifier.h>
 #include <linux/stop_machine.h>
 #include <linux/device.h>
+#include <linux/string.h>
 #include <asm/uaccess.h>
 #include <asm/semaphore.h>
 #include <asm/cacheflush.h>
@@ -249,13 +251,18 @@ static inline unsigned int block_size(int val)
 /* Created by linker magic */
 extern char __per_cpu_start[], __per_cpu_end[];
 
-static void *percpu_modalloc(unsigned long size, unsigned long align)
+static void *percpu_modalloc(unsigned long size, unsigned long align,
+			     const char *name)
 {
 	unsigned long extra;
 	unsigned int i;
 	void *ptr;
 
-	BUG_ON(align > SMP_CACHE_BYTES);
+	if (align > SMP_CACHE_BYTES) {
+		printk(KERN_WARNING "%s: per-cpu alignment %li > %i\n",
+		       name, align, SMP_CACHE_BYTES);
+		align = SMP_CACHE_BYTES;
+	}
 
 	ptr = __per_cpu_start;
 	for (i = 0; i < pcpu_num_used; ptr += block_size(pcpu_size[i]), i++) {
@@ -347,7 +354,8 @@ static int percpu_modinit(void)
 }	
 __initcall(percpu_modinit);
 #else /* ... !CONFIG_SMP */
-static inline void *percpu_modalloc(unsigned long size, unsigned long align)
+static inline void *percpu_modalloc(unsigned long size, unsigned long align,
+				    const char *name)
 {
 	return NULL;
 }
@@ -370,6 +378,43 @@ static inline void percpu_modcopy(void *pcpudst, const void *src,
 #endif /* CONFIG_SMP */
 
 #ifdef CONFIG_MODULE_UNLOAD
+#define MODINFO_ATTR(field)	\
+static void setup_modinfo_##field(struct module *mod, const char *s)  \
+{                                                                     \
+	mod->field = kstrdup(s, GFP_KERNEL);                          \
+}                                                                     \
+static ssize_t show_modinfo_##field(struct module_attribute *mattr,   \
+	                struct module *mod, char *buffer)             \
+{                                                                     \
+	return sprintf(buffer, "%s\n", mod->field);                   \
+}                                                                     \
+static int modinfo_##field##_exists(struct module *mod)               \
+{                                                                     \
+	return mod->field != NULL;                                    \
+}                                                                     \
+static void free_modinfo_##field(struct module *mod)                  \
+{                                                                     \
+        kfree(mod->field);                                            \
+        mod->field = NULL;                                            \
+}                                                                     \
+static struct module_attribute modinfo_##field = {                    \
+	.attr = { .name = __stringify(field), .mode = 0444,           \
+		  .owner = THIS_MODULE },                             \
+	.show = show_modinfo_##field,                                 \
+	.setup = setup_modinfo_##field,                               \
+	.test = modinfo_##field##_exists,                             \
+	.free = free_modinfo_##field,                                 \
+};
+
+MODINFO_ATTR(version);
+MODINFO_ATTR(srcversion);
+
+static struct module_attribute *modinfo_attrs[] = {
+	&modinfo_version,
+	&modinfo_srcversion,
+	NULL,
+};
+
 /* Init the unload section of the module. */
 static void module_unload_init(struct module *mod)
 {
@@ -379,7 +424,7 @@ static void module_unload_init(struct module *mod)
 	for (i = 0; i < NR_CPUS; i++)
 		local_set(&mod->ref[i].count, 0);
 	/* Hold reference count during initialization. */
-	local_set(&mod->ref[_smp_processor_id()].count, 1);
+	local_set(&mod->ref[raw_smp_processor_id()].count, 1);
 	/* Backwards compatibility macros put refcount during init. */
 	mod->waiter = current;
 }
@@ -454,7 +499,7 @@ static inline int try_force(unsigned int flags)
 {
 	int ret = (flags & O_TRUNC);
 	if (ret)
-		tainted |= TAINT_FORCED_MODULE;
+		add_taint(TAINT_FORCED_MODULE);
 	return ret;
 }
 #else
@@ -692,7 +737,7 @@ static int obsparm_copy_string(const char *val, struct kernel_param *kp)
 	return 0;
 }
 
-int set_obsolete(const char *val, struct kernel_param *kp)
+static int set_obsolete(const char *val, struct kernel_param *kp)
 {
 	unsigned int min, max;
 	unsigned int size, maxsize;
@@ -853,7 +898,7 @@ static int check_version(Elf_Shdr *sechdrs,
 	if (!(tainted & TAINT_FORCED_MODULE)) {
 		printk("%s: no version for \"%s\" found: kernel tainted.\n",
 		       mod->name, symname);
-		tainted |= TAINT_FORCED_MODULE;
+		add_taint(TAINT_FORCED_MODULE);
 	}
 	return 1;
 }
@@ -1031,6 +1076,32 @@ static void module_remove_refcnt_attr(struct module *mod)
 }
 #endif
 
+#ifdef CONFIG_MODULE_UNLOAD
+static int module_add_modinfo_attrs(struct module *mod)
+{
+	struct module_attribute *attr;
+	int error = 0;
+	int i;
+
+	for (i = 0; (attr = modinfo_attrs[i]) && !error; i++) {
+		if (!attr->test ||
+		    (attr->test && attr->test(mod)))
+			error = sysfs_create_file(&mod->mkobj.kobj,&attr->attr);
+	}
+	return error;
+}
+
+static void module_remove_modinfo_attrs(struct module *mod)
+{
+	struct module_attribute *attr;
+	int i;
+
+	for (i = 0; (attr = modinfo_attrs[i]); i++) {
+		sysfs_remove_file(&mod->mkobj.kobj,&attr->attr);
+		attr->free(mod);
+	}
+}
+#endif
 
 static int mod_sysfs_setup(struct module *mod,
 			   struct kernel_param *kparam,
@@ -1056,6 +1127,12 @@ static int mod_sysfs_setup(struct module *mod,
 	if (err)
 		goto out_unreg;
 
+#ifdef CONFIG_MODULE_UNLOAD
+	err = module_add_modinfo_attrs(mod);
+	if (err)
+		goto out_unreg;
+#endif
+
 	return 0;
 
 out_unreg:
@@ -1066,6 +1143,9 @@ out:
 
 static void mod_kobject_remove(struct module *mod)
 {
+#ifdef CONFIG_MODULE_UNLOAD
+	module_remove_modinfo_attrs(mod);
+#endif
 	module_remove_refcnt_attr(mod);
 	module_param_sysfs_remove(mod);
 
@@ -1273,7 +1353,7 @@ static void set_license(struct module *mod, const char *license)
 	if (!mod->license_gplok && !(tainted & TAINT_PROPRIETARY_MODULE)) {
 		printk(KERN_WARNING "%s: module license '%s' taints kernel.\n",
 		       mod->name, license);
-		tainted |= TAINT_PROPRIETARY_MODULE;
+		add_taint(TAINT_PROPRIETARY_MODULE);
 	}
 }
 
@@ -1310,6 +1390,23 @@ static char *get_modinfo(Elf_Shdr *sechdrs,
 	}
 	return NULL;
 }
+
+#ifdef CONFIG_MODULE_UNLOAD
+static void setup_modinfo(struct module *mod, Elf_Shdr *sechdrs,
+			  unsigned int infoindex)
+{
+	struct module_attribute *attr;
+	int i;
+
+	for (i = 0; (attr = modinfo_attrs[i]); i++) {
+		if (attr->setup)
+			attr->setup(mod,
+				    get_modinfo(sechdrs,
+						infoindex,
+						attr->attr.name));
+	}
+}
+#endif
 
 #ifdef CONFIG_KALLSYMS
 int is_exported(const char *name, const struct module *mod)
@@ -1413,6 +1510,7 @@ static struct module *load_module(void __user *umod,
 	long err = 0;
 	void *percpu = NULL, *ptr = NULL; /* Stops spurious gcc warning */
 	struct exception_table_entry *extable;
+	mm_segment_t old_fs;
 
 	DEBUGP("load_module: umod=%p, len=%lu, uargs=%p\n",
 	       umod, len, uargs);
@@ -1513,7 +1611,7 @@ static struct module *load_module(void __user *umod,
 	modmagic = get_modinfo(sechdrs, infoindex, "vermagic");
 	/* This is allowed: modprobe --force will invalidate it. */
 	if (!modmagic) {
-		tainted |= TAINT_FORCED_MODULE;
+		add_taint(TAINT_FORCED_MODULE);
 		printk(KERN_WARNING "%s: no version magic, tainting kernel.\n",
 		       mod->name);
 	} else if (!same_magic(modmagic, vermagic)) {
@@ -1554,7 +1652,8 @@ static struct module *load_module(void __user *umod,
 	if (pcpuindex) {
 		/* We have a special allocation for this section. */
 		percpu = percpu_modalloc(sechdrs[pcpuindex].sh_size,
-					 sechdrs[pcpuindex].sh_addralign);
+					 sechdrs[pcpuindex].sh_addralign,
+					 mod->name);
 		if (!percpu) {
 			err = -ENOMEM;
 			goto free_mod;
@@ -1615,6 +1714,11 @@ static struct module *load_module(void __user *umod,
 	/* Set up license info based on the info section */
 	set_license(mod, get_modinfo(sechdrs, infoindex, "license"));
 
+#ifdef CONFIG_MODULE_UNLOAD
+	/* Set up MODINFO_ATTR fields */
+	setup_modinfo(mod, sechdrs, infoindex);
+#endif
+
 	/* Fix up syms, so that st_value is a pointer to location. */
 	err = simplify_symbols(sechdrs, symindex, strtab, versindex, pcpuindex,
 			       mod);
@@ -1636,7 +1740,7 @@ static struct module *load_module(void __user *umod,
 	    (mod->num_gpl_syms && !gplcrcindex)) {
 		printk(KERN_WARNING "%s: No versions for exported symbols."
 		       " Tainting kernel.\n", mod->name);
-		tainted |= TAINT_FORCED_MODULE;
+		add_taint(TAINT_FORCED_MODULE);
 	}
 #endif
 
@@ -1676,6 +1780,24 @@ static struct module *load_module(void __user *umod,
 	err = module_finalize(hdr, sechdrs, mod);
 	if (err < 0)
 		goto cleanup;
+
+	/* flush the icache in correct context */
+	old_fs = get_fs();
+	set_fs(KERNEL_DS);
+
+	/*
+	 * Flush the instruction cache, since we've played with text.
+	 * Do it before processing of module parameters, so the module
+	 * can provide parameter accessor functions of its own.
+	 */
+	if (mod->module_init)
+		flush_icache_range((unsigned long)mod->module_init,
+				   (unsigned long)mod->module_init
+				   + mod->init_size);
+	flush_icache_range((unsigned long)mod->module_core,
+			   (unsigned long)mod->module_core + mod->core_size);
+
+	set_fs(old_fs);
 
 	mod->args = args;
 	if (obsparmindex) {
@@ -1758,7 +1880,6 @@ sys_init_module(void __user *umod,
 		const char __user *uargs)
 {
 	struct module *mod;
-	mm_segment_t old_fs = get_fs();
 	int ret = 0;
 
 	/* Must have permission */
@@ -1775,19 +1896,6 @@ sys_init_module(void __user *umod,
 		up(&module_mutex);
 		return PTR_ERR(mod);
 	}
-
-	/* flush the icache in correct context */
-	set_fs(KERNEL_DS);
-
-	/* Flush the instruction cache, since we've played with text */
-	if (mod->module_init)
-		flush_icache_range((unsigned long)mod->module_init,
-				   (unsigned long)mod->module_init
-				   + mod->init_size);
-	flush_icache_range((unsigned long)mod->module_core,
-			   (unsigned long)mod->module_core + mod->core_size);
-
-	set_fs(old_fs);
 
 	/* Now sew it into the lists.  They won't access us, since
            strong_try_module_get() will fail. */

@@ -1,26 +1,22 @@
 /*******************************************************************
  * This file is part of the Emulex Linux Device Driver for         *
- * Enterprise Fibre Channel Host Bus Adapters.                     *
- * Refer to the README file included with this package for         *
- * driver version and adapter support.                             *
- * Copyright (C) 2004 Emulex Corporation.                          *
+ * Fibre Channel Host Bus Adapters.                                *
+ * Copyright (C) 2004-2005 Emulex.  All rights reserved.           *
+ * EMULEX and SLI are trademarks of Emulex.                        *
  * www.emulex.com                                                  *
  *                                                                 *
  * This program is free software; you can redistribute it and/or   *
- * modify it under the terms of the GNU General Public License     *
- * as published by the Free Software Foundation; either version 2  *
- * of the License, or (at your option) any later version.          *
- *                                                                 *
- * This program is distributed in the hope that it will be useful, *
- * but WITHOUT ANY WARRANTY; without even the implied warranty of  *
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the   *
- * GNU General Public License for more details, a copy of which    *
- * can be found in the file COPYING included with this package.    *
+ * modify it under the terms of version 2 of the GNU General       *
+ * Public License as published by the Free Software Foundation.    *
+ * This program is distributed in the hope that it will be useful. *
+ * ALL EXPRESS OR IMPLIED CONDITIONS, REPRESENTATIONS AND          *
+ * WARRANTIES, INCLUDING ANY IMPLIED WARRANTY OF MERCHANTABILITY,  *
+ * FITNESS FOR A PARTICULAR PURPOSE, OR NON-INFRINGEMENT, ARE      *
+ * DISCLAIMED, EXCEPT TO THE EXTENT THAT SUCH DISCLAIMERS ARE HELD *
+ * TO BE LEGALLY INVALID.  See the GNU General Public License for  *
+ * more details, a copy of which can be found in the file COPYING  *
+ * included with this package.                                     *
  *******************************************************************/
-
-/*
- * $Id: lpfc_hw.h 1.37 2005/03/29 19:51:45EST sf_support Exp  $
- */
 
 #define FDMI_DID        0xfffffaU
 #define NameServer_DID  0xfffffcU
@@ -266,12 +262,14 @@ struct lpfc_sli_ct_request {
 #define FF_FRAME_SIZE     2048
 
 struct lpfc_name {
+	union {
+		struct {
 #ifdef __BIG_ENDIAN_BITFIELD
-	uint8_t nameType:4;	/* FC Word 0, bit 28:31 */
-	uint8_t IEEEextMsn:4;	/* FC Word 0, bit 24:27, bit 8:11 of IEEE ext */
+			uint8_t nameType:4;	/* FC Word 0, bit 28:31 */
+			uint8_t IEEEextMsn:4;	/* FC Word 0, bit 24:27, bit 8:11 of IEEE ext */
 #else	/*  __LITTLE_ENDIAN_BITFIELD */
-	uint8_t IEEEextMsn:4;	/* FC Word 0, bit 24:27, bit 8:11 of IEEE ext */
-	uint8_t nameType:4;	/* FC Word 0, bit 28:31 */
+			uint8_t IEEEextMsn:4;	/* FC Word 0, bit 24:27, bit 8:11 of IEEE ext */
+			uint8_t nameType:4;	/* FC Word 0, bit 28:31 */
 #endif
 
 #define NAME_IEEE           0x1	/* IEEE name - nameType */
@@ -280,8 +278,11 @@ struct lpfc_name {
 #define NAME_IP_TYPE        0x4	/* IP address */
 #define NAME_CCITT_TYPE     0xC
 #define NAME_CCITT_GR_TYPE  0xE
-	uint8_t IEEEextLsb;	/* FC Word 0, bit 16:23, IEEE extended Lsb */
-	uint8_t IEEE[6];	/* FC IEEE address */
+			uint8_t IEEEextLsb;	/* FC Word 0, bit 16:23, IEEE extended Lsb */
+			uint8_t IEEE[6];	/* FC IEEE address */
+		} s;
+		uint8_t wwn[8];
+	} u;
 };
 
 struct csp {
@@ -2214,20 +2215,20 @@ typedef union {
  * SLI-2 specific structures
  */
 
-typedef struct {
-	uint32_t cmdPutInx;
-	uint32_t rspGetInx;
-} HGP;
+struct lpfc_hgp {
+	__le32 cmdPutInx;
+	__le32 rspGetInx;
+};
 
-typedef struct {
-	uint32_t cmdGetInx;
-	uint32_t rspPutInx;
-} PGP;
+struct lpfc_pgp {
+	__le32 cmdGetInx;
+	__le32 rspPutInx;
+};
 
 typedef struct _SLI2_DESC {
-	HGP host[MAX_RINGS];
+	struct lpfc_hgp host[MAX_RINGS];
 	uint32_t unused1[16];
-	PGP port[MAX_RINGS];
+	struct lpfc_pgp port[MAX_RINGS];
 } SLI2_DESC;
 
 typedef union {

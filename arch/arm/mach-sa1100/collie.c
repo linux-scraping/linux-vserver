@@ -111,12 +111,11 @@ static struct mtd_partition collie_partitions[] = {
 
 static void collie_set_vpp(int vpp)
 {
-	write_scoop_reg(SCOOP_GPCR, read_scoop_reg(SCOOP_GPCR) | COLLIE_SCP_VPEN);
-	if (vpp) {
-		write_scoop_reg(SCOOP_GPWR, read_scoop_reg(SCOOP_GPWR) | COLLIE_SCP_VPEN);
-	} else {
-		write_scoop_reg(SCOOP_GPWR, read_scoop_reg(SCOOP_GPWR) & ~COLLIE_SCP_VPEN);
-	}
+	write_scoop_reg(&colliescoop_device.dev, SCOOP_GPCR, read_scoop_reg(&colliescoop_device.dev, SCOOP_GPCR) | COLLIE_SCP_VPEN);
+	if (vpp)
+		write_scoop_reg(&colliescoop_device.dev, SCOOP_GPWR, read_scoop_reg(&colliescoop_device.dev, SCOOP_GPWR) | COLLIE_SCP_VPEN);
+	else
+		write_scoop_reg(&colliescoop_device.dev, SCOOP_GPWR, read_scoop_reg(&colliescoop_device.dev, SCOOP_GPWR) & ~COLLIE_SCP_VPEN);
 }
 
 static struct flash_platform_data collie_flash_data = {
@@ -184,9 +183,11 @@ static void __init collie_map_io(void)
 }
 
 MACHINE_START(COLLIE, "Sharp-Collie")
-	BOOT_MEM(0xc0000000, 0x80000000, 0xf8000000)
-	MAPIO(collie_map_io)
-	INITIRQ(sa1100_init_irq)
+	.phys_ram	= 0xc0000000,
+	.phys_io	= 0x80000000,
+	.io_pg_offst	= ((0xf8000000) >> 18) & 0xfffc,
+	.map_io		= collie_map_io,
+	.init_irq	= sa1100_init_irq,
 	.timer		= &sa1100_timer,
 	.init_machine	= collie_init,
 MACHINE_END

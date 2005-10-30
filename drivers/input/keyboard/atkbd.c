@@ -208,6 +208,7 @@ struct atkbd {
 	unsigned char resend;
 	unsigned char release;
 	unsigned char bat_xl;
+	unsigned char err_xl;
 	unsigned int last;
 	unsigned long time;
 };
@@ -219,15 +220,15 @@ static ssize_t atkbd_attr_set_helper(struct device *dev, const char *buf, size_t
 #define ATKBD_DEFINE_ATTR(_name)						\
 static ssize_t atkbd_show_##_name(struct atkbd *, char *);			\
 static ssize_t atkbd_set_##_name(struct atkbd *, const char *, size_t);		\
-static ssize_t atkbd_do_show_##_name(struct device *d, char *b)			\
+static ssize_t atkbd_do_show_##_name(struct device *d, struct device_attribute *attr, char *b)			\
 {										\
 	return atkbd_attr_show_helper(d, b, atkbd_show_##_name);		\
 }										\
-static ssize_t atkbd_do_set_##_name(struct device *d, const char *b, size_t s)	\
+static ssize_t atkbd_do_set_##_name(struct device *d, struct device_attribute *attr, const char *b, size_t s)	\
 {										\
 	return atkbd_attr_set_helper(d, b, s, atkbd_set_##_name);		\
 }										\
-static struct device_attribute atkbd_attr_##_name = 				\
+static struct device_attribute atkbd_attr_##_name =				\
 	__ATTR(_name, S_IWUSR | S_IRUGO, atkbd_do_show_##_name, atkbd_do_set_##_name);
 
 ATKBD_DEFINE_ATTR(extra);
@@ -296,15 +297,18 @@ static irqreturn_t atkbd_interrupt(struct serio *serio, unsigned char data,
 		if (atkbd->emul ||
 		    !(code == ATKBD_RET_EMUL0 || code == ATKBD_RET_EMUL1 ||
 		      code == ATKBD_RET_HANGUEL || code == ATKBD_RET_HANJA ||
-		      code == ATKBD_RET_ERR ||
+		     (code == ATKBD_RET_ERR && !atkbd->err_xl) ||
 	             (code == ATKBD_RET_BAT && !atkbd->bat_xl))) {
 			atkbd->release = code >> 7;
 			code &= 0x7f;
 		}
 
-		if (!atkbd->emul &&
-		     (code & 0x7f) == (ATKBD_RET_BAT & 0x7f))
+		if (!atkbd->emul) {
+		     if ((code & 0x7f) == (ATKBD_RET_BAT & 0x7f))
 			atkbd->bat_xl = !atkbd->release;
+		     if ((code & 0x7f) == (ATKBD_RET_ERR & 0x7f))
+			atkbd->err_xl = !atkbd->release;
+		}
 	}
 
 	switch (code) {
@@ -388,7 +392,7 @@ static irqreturn_t atkbd_interrupt(struct serio *serio, unsigned char data,
 			value = atkbd->release ? 0 :
 				(1 + (!atkbd->softrepeat && test_bit(atkbd->keycode[code], atkbd->dev.key)));
 
-			switch (value) { 	/* Workaround Toshiba laptop multiple keypress */
+			switch (value) {	/* Workaround Toshiba laptop multiple keypress */
 				case 0:
 					atkbd->last = 0;
 					break;
@@ -894,7 +898,7 @@ static int atkbd_reconnect(struct serio *serio)
 	if (atkbd->write) {
 		param[0] = (test_bit(LED_SCROLLL, atkbd->dev.led) ? 1 : 0)
 		         | (test_bit(LED_NUML,    atkbd->dev.led) ? 2 : 0)
- 		         | (test_bit(LED_CAPSL,   atkbd->dev.led) ? 4 : 0);
+		         | (test_bit(LED_CAPSL,   atkbd->dev.led) ? 4 : 0);
 
 		if (atkbd_probe(atkbd))
 			return -1;

@@ -171,7 +171,7 @@ int snd_pcm_plugin_build(snd_pcm_plug_t *plug,
 	
 	snd_assert(plug != NULL, return -ENXIO);
 	snd_assert(src_format != NULL && dst_format != NULL, return -ENXIO);
-	plugin = kcalloc(1, sizeof(*plugin) + extra, GFP_KERNEL);
+	plugin = kzalloc(sizeof(*plugin) + extra, GFP_KERNEL);
 	if (plugin == NULL)
 		return -ENOMEM;
 	plugin->name = name;
@@ -663,10 +663,7 @@ static int snd_pcm_plug_playback_channels_mask(snd_pcm_plug_t *plug,
 		bitset_t *dstmask = bs;
 		int err;
 		bitset_one(dstmask, schannels);
-		if (plugin == NULL) {
-			bitset_and(client_vmask, dstmask, schannels);
-			return 0;
-		}
+
 		while (1) {
 			err = plugin->src_channels_mask(plugin, dstmask, &srcmask);
 			if (err < 0)

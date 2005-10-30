@@ -11,13 +11,6 @@
 #include <linux/module.h>
 #include <linux/ctype.h>
 #include <linux/slab.h>
-
-#ifdef CONFIG_PNP_DEBUG
-	#define DEBUG
-#else
-	#undef DEBUG
-#endif
-
 #include <linux/pnp.h>
 #include "base.h"
 
@@ -160,10 +153,16 @@ struct bus_type pnp_bus_type = {
 };
 
 
+static int count_devices(struct device * dev, void * c)
+{
+	int * count = c;
+	(*count)++;
+	return 0;
+}
+
 int pnp_register_driver(struct pnp_driver *drv)
 {
 	int count;
-	struct list_head *pos;
 
 	pnp_dbg("the driver '%s' has been registered", drv->name);
 
@@ -177,9 +176,7 @@ int pnp_register_driver(struct pnp_driver *drv)
 	/* get the number of initial matches */
 	if (count >= 0){
 		count = 0;
-		list_for_each(pos,&drv->driver.devices){
-			count++;
-		}
+		driver_for_each_device(&drv->driver, NULL, &count, count_devices);
 	}
 	return count;
 }

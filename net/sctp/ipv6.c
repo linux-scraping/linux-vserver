@@ -66,8 +66,8 @@
 #include <linux/seq_file.h>
 
 #include <net/protocol.h>
-#include <net/tcp.h>
 #include <net/ndisc.h>
+#include <net/ip.h>
 #include <net/ipv6.h>
 #include <net/transp_v6.h>
 #include <net/addrconf.h>
@@ -91,7 +91,6 @@ SCTP_STATIC void sctp_v6_err(struct sk_buff *skb, struct inet6_skb_parm *opt,
 	struct ipv6hdr *iph = (struct ipv6hdr *)skb->data;
 	struct sctphdr *sh = (struct sctphdr *)(skb->data + offset);
 	struct sock *sk;
-	struct sctp_endpoint *ep;
 	struct sctp_association *asoc;
 	struct sctp_transport *transport;
 	struct ipv6_pinfo *np;
@@ -105,7 +104,7 @@ SCTP_STATIC void sctp_v6_err(struct sk_buff *skb, struct inet6_skb_parm *opt,
 	savesctp  = skb->h.raw;
 	skb->nh.ipv6h = iph;
 	skb->h.raw = (char *)sh;
-	sk = sctp_err_lookup(AF_INET6, skb, sh, &ep, &asoc, &transport);
+	sk = sctp_err_lookup(AF_INET6, skb, sh, &asoc, &transport);
 	/* Put back, the original pointers. */
 	skb->nh.raw = saveip;
 	skb->h.raw = savesctp;
@@ -124,7 +123,7 @@ SCTP_STATIC void sctp_v6_err(struct sk_buff *skb, struct inet6_skb_parm *opt,
 		goto out_unlock;
 	case ICMPV6_PARAMPROB:
 		if (ICMPV6_UNK_NEXTHDR == code) {
-			sctp_icmp_proto_unreachable(sk, ep, asoc, transport);
+			sctp_icmp_proto_unreachable(sk, asoc, transport);
 			goto out_unlock;
 		}
 		break;
@@ -142,7 +141,7 @@ SCTP_STATIC void sctp_v6_err(struct sk_buff *skb, struct inet6_skb_parm *opt,
 	}
 
 out_unlock:
-	sctp_err_finish(sk, ep, asoc);
+	sctp_err_finish(sk, asoc);
 out:
 	if (likely(idev != NULL))
 		in6_dev_put(idev);
@@ -642,10 +641,7 @@ static struct sock *sctp_v6_create_accept_sk(struct sock *sk,
 	else
 		newinet->pmtudisc = IP_PMTUDISC_WANT;
 
-#ifdef INET_REFCNT_DEBUG
-	atomic_inc(&inet6_sock_nr);
-	atomic_inc(&inet_sock_nr);
-#endif
+	sk_refcnt_debug_inc(newsk);
 
 	if (newsk->sk_prot->init(newsk)) {
 		sk_common_release(newsk);

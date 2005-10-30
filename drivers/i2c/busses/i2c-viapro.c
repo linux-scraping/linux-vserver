@@ -33,7 +33,6 @@
    Note: we assume there can only be one device, with one SMBus interface.
 */
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/delay.h>
 #include <linux/pci.h>
@@ -287,8 +286,6 @@ static u32 vt596_func(struct i2c_adapter *adapter)
 }
 
 static struct i2c_algorithm smbus_algorithm = {
-	.name		= "Non-I2C SMBus adapter",
-	.id		= I2C_ALGO_SMBUS,
 	.smbus_xfer	= vt596_access,
 	.functionality	= vt596_func,
 };

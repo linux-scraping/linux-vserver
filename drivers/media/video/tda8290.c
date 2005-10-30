@@ -1,5 +1,4 @@
 /*
- * $Id: tda8290.c,v 1.7 2005/03/07 12:01:51 kraxel Exp $
  *
  * i2c tv tuner chip device driver
  * controls the philips tda8290+75 tuner chip combo.
@@ -8,6 +7,9 @@
 #include <linux/videodev.h>
 #include <linux/delay.h>
 #include <media/tuner.h>
+
+#define I2C_ADDR_TDA8290        0x4b
+#define I2C_ADDR_TDA8275        0x61
 
 /* ---------------------------------------------------------------------- */
 
@@ -69,16 +71,18 @@ static __u8 get_freq_entry( struct freq_entry* table, __u16 freq)
 static unsigned char i2c_enable_bridge[2] = 	{ 0x21, 0xC0 };
 static unsigned char i2c_disable_bridge[2] = 	{ 0x21, 0x80 };
 static unsigned char i2c_init_tda8275[14] = 	{ 0x00, 0x00, 0x00, 0x00,
-						  0x7C, 0x04, 0xA3, 0x3F,
+						  0xfC, 0x04, 0xA3, 0x3F,
 						  0x2A, 0x04, 0xFF, 0x00,
 						  0x00, 0x40 };
 static unsigned char i2c_set_VS[2] = 		{ 0x30, 0x6F };
 static unsigned char i2c_set_GP01_CF[2] = 	{ 0x20, 0x0B };
 static unsigned char i2c_tda8290_reset[2] =	{ 0x00, 0x00 };
+static unsigned char i2c_tda8290_standby[2] =	{ 0x00, 0x02 };
 static unsigned char i2c_gainset_off[2] =	{ 0x28, 0x14 };
 static unsigned char i2c_gainset_on[2] =	{ 0x28, 0x54 };
 static unsigned char i2c_agc3_00[2] =		{ 0x80, 0x00 };
 static unsigned char i2c_agc2_BF[2] =		{ 0x60, 0xBF };
+static unsigned char i2c_cb1_D0[2] =		{ 0x30, 0xD0 };
 static unsigned char i2c_cb1_D2[2] =		{ 0x30, 0xD2 };
 static unsigned char i2c_cb1_56[2] =		{ 0x30, 0x56 };
 static unsigned char i2c_cb1_52[2] =		{ 0x30, 0x52 };
@@ -117,6 +121,13 @@ static struct i2c_msg i2c_msg_epilog[] = {
 	{ I2C_ADDR_TDA8290, 0, ARRAY_SIZE(i2c_gainset_on), i2c_gainset_on },
 };
 
+static struct i2c_msg i2c_msg_standby[] = {
+	{ I2C_ADDR_TDA8290, 0, ARRAY_SIZE(i2c_enable_bridge), i2c_enable_bridge },
+	{ I2C_ADDR_TDA8275, 0, ARRAY_SIZE(i2c_cb1_D0), i2c_cb1_D0 },
+	{ I2C_ADDR_TDA8290, 0, ARRAY_SIZE(i2c_disable_bridge), i2c_disable_bridge },
+	{ I2C_ADDR_TDA8290, 0, ARRAY_SIZE(i2c_tda8290_standby), i2c_tda8290_standby },
+};
+
 static int tda8290_tune(struct i2c_client *c)
 {
 	struct tuner *t = i2c_get_clientdata(c);
@@ -136,18 +147,23 @@ static int tda8290_tune(struct i2c_client *c)
 	return 0;
 }
 
-static void set_frequency(struct tuner *t, u16 ifc)
+static void set_frequency(struct tuner *t, u16 ifc, unsigned int freq)
 {
-	u32 N = (((t->freq<<3)+ifc)&0x3fffc);
+	u32 N;
 
-	N = N >> get_freq_entry(div_table, t->freq);
+	if (t->mode == V4L2_TUNER_RADIO)
+		freq = freq / 1000;
+
+	N = (((freq<<3)+ifc)&0x3fffc);
+
+	N = N >> get_freq_entry(div_table, freq);
 	t->i2c_set_freq[0] = 0;
 	t->i2c_set_freq[1] = (unsigned char)(N>>8);
 	t->i2c_set_freq[2] = (unsigned char) N;
 	t->i2c_set_freq[3] = 0x40;
 	t->i2c_set_freq[4] = 0x52;
-	t->i2c_set_freq[5] = get_freq_entry(band_table, t->freq);
-	t->i2c_set_freq[6] = get_freq_entry(agc_table,  t->freq);
+	t->i2c_set_freq[5] = get_freq_entry(band_table, freq);
+	t->i2c_set_freq[6] = get_freq_entry(agc_table,  freq);
 	t->i2c_set_freq[7] = 0x8f;
 }
 
@@ -179,14 +195,14 @@ static void set_tv_freq(struct i2c_client *c, unsigned int freq)
 	struct tuner *t = i2c_get_clientdata(c);
 
 	set_audio(t);
-	set_frequency(t, 864);
+	set_frequency(t, 864, freq);
 	tda8290_tune(c);
 }
 
 static void set_radio_freq(struct i2c_client *c, unsigned int freq)
 {
 	struct tuner *t = i2c_get_clientdata(c);
-	set_frequency(t, 704);
+	set_frequency(t, 704, freq);
 	tda8290_tune(c);
 }
 
@@ -200,6 +216,11 @@ static int has_signal(struct i2c_client *c)
 	return (afc & 0x80)? 65535:0;
 }
 
+static void standby(struct i2c_client *c)
+{
+	i2c_transfer(c->adapter, i2c_msg_standby, ARRAY_SIZE(i2c_msg_standby));
+}
+
 int tda8290_init(struct i2c_client *c)
 {
 	struct tuner *t = i2c_get_clientdata(c);
@@ -209,6 +230,7 @@ int tda8290_init(struct i2c_client *c)
 	t->tv_freq    = set_tv_freq;
 	t->radio_freq = set_radio_freq;
 	t->has_signal = has_signal;
+	t->standby = standby;
 
 	i2c_master_send(c, i2c_enable_bridge, ARRAY_SIZE(i2c_enable_bridge));
 	i2c_transfer(c->adapter, i2c_msg_init, ARRAY_SIZE(i2c_msg_init));

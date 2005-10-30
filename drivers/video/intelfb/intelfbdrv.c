@@ -117,14 +117,10 @@
 #include <linux/slab.h>
 #include <linux/delay.h>
 #include <linux/fb.h>
-#include <linux/console.h>
-#include <linux/selection.h>
 #include <linux/ioport.h>
 #include <linux/init.h>
 #include <linux/pci.h>
 #include <linux/vmalloc.h>
-#include <linux/kd.h>
-#include <linux/vt_kern.h>
 #include <linux/pagemap.h>
 #include <linux/version.h>
 
@@ -214,7 +210,7 @@ static struct fb_ops intel_fb_ops = {
 
 /* PCI driver module table */
 static struct pci_driver intelfb_driver = {
-	.name =		"Intel(R) " SUPPORTED_CHIPSETS " Framebuffer Driver",
+	.name =		"intelfb",
 	.id_table =	intelfb_pci_table,
 	.probe =	intelfb_pci_register,
 	.remove =	__devexit_p(intelfb_pci_unregister)
@@ -230,7 +226,7 @@ MODULE_DEVICE_TABLE(pci, intelfb_pci_table);
 
 static int accel        = 1;
 static int vram         = 4;
-static int hwcursor     = 1;
+static int hwcursor     = 0;
 static int mtrr         = 1;
 static int fixed        = 0;
 static int noinit       = 0;
@@ -238,12 +234,15 @@ static int noregister   = 0;
 static int probeonly    = 0;
 static int idonly       = 0;
 static int bailearly    = 0;
+static int voffset	= 48;
 static char *mode       = NULL;
 
 module_param(accel, bool, S_IRUGO);
-MODULE_PARM_DESC(accel, "Enable console acceleration");
+MODULE_PARM_DESC(accel, "Enable hardware acceleration");
 module_param(vram, int, S_IRUGO);
 MODULE_PARM_DESC(vram, "System RAM to allocate to framebuffer in MiB");
+module_param(voffset, int, S_IRUGO);
+MODULE_PARM_DESC(voffset, "Offset of framebuffer in MiB");
 module_param(hwcursor, bool, S_IRUGO);
 MODULE_PARM_DESC(hwcursor, "Enable HW cursor");
 module_param(mtrr, bool, S_IRUGO);
@@ -495,7 +494,7 @@ intelfb_pci_register(struct pci_dev *pdev, const struct pci_device_id *ent)
 {
 	struct fb_info *info;
 	struct intelfb_info *dinfo;
-	int i, j, err, dvo;
+	int i, err, dvo;
 	int aperture_size, stolen_size;
 	struct agp_kern_info gtt_info;
 	int agp_memtype;
@@ -503,6 +502,7 @@ intelfb_pci_register(struct pci_dev *pdev, const struct pci_device_id *ent)
 	struct agp_bridge_data *bridge;
  	int aperture_bar = 0;
  	int mmio_bar = 1;
+	int offset;
 
 	DBG_MSG("intelfb_pci_register\n");
 
@@ -579,23 +579,6 @@ intelfb_pci_register(struct pci_dev *pdev, const struct pci_device_id *ent)
 		return -ENODEV;
 	}
 
-	/* Map the fb and MMIO regions */
-	dinfo->aperture.virtual = (u8 __iomem *)ioremap_nocache
-		(dinfo->aperture.physical, dinfo->aperture.size);
-	if (!dinfo->aperture.virtual) {
-		ERR_MSG("Cannot remap FB region.\n");
-		cleanup(dinfo);
-		return -ENODEV;
-	}
-	dinfo->mmio_base =
-		(u8 __iomem *)ioremap_nocache(dinfo->mmio_base_phys,
-					       INTEL_REG_SIZE);
-	if (!dinfo->mmio_base) {
-		ERR_MSG("Cannot remap MMIO region.\n");
-		cleanup(dinfo);
-		return -ENODEV;
-	}
-
 	/* Get the chipset info. */
 	dinfo->pci_chipset = pdev->device;
 
@@ -659,22 +642,46 @@ intelfb_pci_register(struct pci_dev *pdev, const struct pci_device_id *ent)
 		return -ENODEV;
 	}
 
+	if (MB(voffset) < stolen_size)
+		offset = (stolen_size >> 12);
+	else
+		offset = ROUND_UP_TO_PAGE(MB(voffset))/GTT_PAGE_SIZE;
+
 	/* set the mem offsets - set them after the already used pages */
 	if (dinfo->accel) {
-		dinfo->ring.offset = (stolen_size >> 12)
-			+ gtt_info.current_memory;
+		dinfo->ring.offset = offset + gtt_info.current_memory;
 	}
 	if (dinfo->hwcursor) {
-		dinfo->cursor.offset = (stolen_size >> 12) +
+		dinfo->cursor.offset = offset +
 			+ gtt_info.current_memory + (dinfo->ring.size >> 12);
 	}
 	if (dinfo->fbmem_gart) {
-		dinfo->fb.offset = (stolen_size >> 12) +
+		dinfo->fb.offset = offset +
 			+ gtt_info.current_memory + (dinfo->ring.size >> 12)
 			+ (dinfo->cursor.size >> 12);
 	}
 
 	/* Allocate memories (which aren't stolen) */
+	/* Map the fb and MMIO regions */
+	/* ioremap only up to the end of used aperture */
+	dinfo->aperture.virtual = (u8 __iomem *)ioremap_nocache
+		(dinfo->aperture.physical, ((offset + dinfo->fb.offset) << 12)
+		 + dinfo->fb.size);
+	if (!dinfo->aperture.virtual) {
+		ERR_MSG("Cannot remap FB region.\n");
+		cleanup(dinfo);
+		return -ENODEV;
+	}
+
+	dinfo->mmio_base =
+		(u8 __iomem *)ioremap_nocache(dinfo->mmio_base_phys,
+					       INTEL_REG_SIZE);
+	if (!dinfo->mmio_base) {
+		ERR_MSG("Cannot remap MMIO region.\n");
+		cleanup(dinfo);
+		return -ENODEV;
+	}
+
 	if (dinfo->accel) {
 		if (!(dinfo->gtt_ring_mem =
 		      agp_allocate_memory(bridge, dinfo->ring.size >> 12,
@@ -832,13 +839,6 @@ intelfb_pci_register(struct pci_dev *pdev, const struct pci_device_id *ent)
 
 	if (bailearly == 5)
 		bailout(dinfo);
-
-	for (i = 0; i < 16; i++) {
-		j = color_table[i];
-		dinfo->palette[i].red = default_red[j];
-		dinfo->palette[i].green = default_grn[j];
-		dinfo->palette[i].blue = default_blu[j];
-	}
 
 	if (bailearly == 6)
 		bailout(dinfo);
@@ -1083,6 +1083,7 @@ intelfb_set_fbinfo(struct intelfb_info *dinfo)
 
 	info->pixmap.size = 64*1024;
 	info->pixmap.buf_align = 8;
+	info->pixmap.access_align = 32;
 	info->pixmap.flags = FB_PIXMAP_SYSTEM;
 
 	if (intelfb_init_var(dinfo))
@@ -1293,7 +1294,7 @@ intelfb_set_par(struct fb_info *info)
 
 	intelfb_blank(FB_BLANK_POWERDOWN, info);
 
-	if (dinfo->accel)
+	if (ACCEL(dinfo, info))
 		intelfbhw_2d_stop(dinfo);
 
  	memcpy(hw, &dinfo->save_state, sizeof(*hw));
@@ -1309,7 +1310,7 @@ intelfb_set_par(struct fb_info *info)
 
 	update_dinfo(dinfo, &info->var);
 
-	if (dinfo->accel)
+	if (ACCEL(dinfo, info))
 		intelfbhw_2d_start(dinfo);
 
 	intelfb_pan_display(&info->var, info);
@@ -1349,10 +1350,6 @@ intelfb_setcolreg(unsigned regno, unsigned red, unsigned green,
 			red >>= 8;
 			green >>= 8;
 			blue >>= 8;
-
-			dinfo->palette[regno].red = red;
-			dinfo->palette[regno].green = green;
-			dinfo->palette[regno].blue = blue;
 
 			intelfbhw_setcolreg(dinfo, regno, red, green, blue,
 					    transp);

@@ -40,7 +40,6 @@
 #include <linux/skbuff.h>
 #include <asm/io.h>
 
-#include <pcmcia/version.h>
 #include <pcmcia/cs_types.h>
 #include <pcmcia/cs.h>
 #include <pcmcia/cistpl.h>
@@ -271,7 +270,7 @@ static void bluecard_write_wakeup(bluecard_info_t *info)
 		if (!(skb = skb_dequeue(&(info->txq))))
 			break;
 
-		if (skb->pkt_type & 0x80) {
+		if (bt_cb(skb)->pkt_type & 0x80) {
 			/* Disable RTS */
 			info->ctrl_reg |= REG_CONTROL_RTS;
 			outb(info->ctrl_reg, iobase + REG_CONTROL);
@@ -289,13 +288,13 @@ static void bluecard_write_wakeup(bluecard_info_t *info)
 		/* Mark the buffer as dirty */
 		clear_bit(ready_bit, &(info->tx_state));
 
-		if (skb->pkt_type & 0x80) {
+		if (bt_cb(skb)->pkt_type & 0x80) {
 			DECLARE_WAIT_QUEUE_HEAD(wq);
 			DEFINE_WAIT(wait);
 
 			unsigned char baud_reg;
 
-			switch (skb->pkt_type) {
+			switch (bt_cb(skb)->pkt_type) {
 			case PKT_BAUD_RATE_460800:
 				baud_reg = REG_CONTROL_BAUD_RATE_460800;
 				break;
@@ -411,9 +410,9 @@ static void bluecard_receive(bluecard_info_t *info, unsigned int offset)
 		if (info->rx_state == RECV_WAIT_PACKET_TYPE) {
 
 			info->rx_skb->dev = (void *) info->hdev;
-			info->rx_skb->pkt_type = buf[i];
+			bt_cb(info->rx_skb)->pkt_type = buf[i];
 
-			switch (info->rx_skb->pkt_type) {
+			switch (bt_cb(info->rx_skb)->pkt_type) {
 
 			case 0x00:
 				/* init packet */
@@ -445,7 +444,7 @@ static void bluecard_receive(bluecard_info_t *info, unsigned int offset)
 
 			default:
 				/* unknown packet */
-				BT_ERR("Unknown HCI packet with type 0x%02x received", info->rx_skb->pkt_type);
+				BT_ERR("Unknown HCI packet with type 0x%02x received", bt_cb(info->rx_skb)->pkt_type);
 				info->hdev->stat.err_rx++;
 
 				kfree_skb(info->rx_skb);
@@ -587,21 +586,21 @@ static int bluecard_hci_set_baud_rate(struct hci_dev *hdev, int baud)
 	switch (baud) {
 	case 460800:
 		cmd[4] = 0x00;
-		skb->pkt_type = PKT_BAUD_RATE_460800;
+		bt_cb(skb)->pkt_type = PKT_BAUD_RATE_460800;
 		break;
 	case 230400:
 		cmd[4] = 0x01;
-		skb->pkt_type = PKT_BAUD_RATE_230400;
+		bt_cb(skb)->pkt_type = PKT_BAUD_RATE_230400;
 		break;
 	case 115200:
 		cmd[4] = 0x02;
-		skb->pkt_type = PKT_BAUD_RATE_115200;
+		bt_cb(skb)->pkt_type = PKT_BAUD_RATE_115200;
 		break;
 	case 57600:
 		/* Fall through... */
 	default:
 		cmd[4] = 0x03;
-		skb->pkt_type = PKT_BAUD_RATE_57600;
+		bt_cb(skb)->pkt_type = PKT_BAUD_RATE_57600;
 		break;
 	}
 
@@ -681,7 +680,7 @@ static int bluecard_hci_send_frame(struct sk_buff *skb)
 
 	info = (bluecard_info_t *)(hdev->driver_data);
 
-	switch (skb->pkt_type) {
+	switch (bt_cb(skb)->pkt_type) {
 	case HCI_COMMAND_PKT:
 		hdev->stat.cmd_tx++;
 		break;
@@ -694,7 +693,7 @@ static int bluecard_hci_send_frame(struct sk_buff *skb)
 	};
 
 	/* Prepend skb with frame type */
-	memcpy(skb_push(skb, 1), &(skb->pkt_type), 1);
+	memcpy(skb_push(skb, 1), &bt_cb(skb)->pkt_type, 1);
 	skb_queue_tail(&(info->txq), skb);
 
 	bluecard_write_wakeup(info);
@@ -895,11 +894,6 @@ static dev_link_t *bluecard_attach(void)
 	link->next = dev_list;
 	dev_list = link;
 	client_reg.dev_info = &dev_info;
-	client_reg.EventMask =
-		CS_EVENT_CARD_INSERTION | CS_EVENT_CARD_REMOVAL |
-		CS_EVENT_RESET_PHYSICAL | CS_EVENT_CARD_RESET |
-		CS_EVENT_PM_SUSPEND | CS_EVENT_PM_RESUME;
-	client_reg.event_handler = &bluecard_event;
 	client_reg.Version = 0x0210;
 	client_reg.event_callback_args.client_data = link;
 
@@ -1089,13 +1083,23 @@ static int bluecard_event(event_t event, int priority, event_callback_args_t *ar
 	return 0;
 }
 
+static struct pcmcia_device_id bluecard_ids[] = {
+	PCMCIA_DEVICE_PROD_ID12("BlueCard", "LSE041", 0xbaf16fbf, 0x657cc15e),
+	PCMCIA_DEVICE_PROD_ID12("BTCFCARD", "LSE139", 0xe3987764, 0x2524b59c),
+	PCMCIA_DEVICE_PROD_ID12("WSS", "LSE039", 0x0a0736ec, 0x24e6dfab),
+	PCMCIA_DEVICE_NULL
+};
+MODULE_DEVICE_TABLE(pcmcia, bluecard_ids);
+
 static struct pcmcia_driver bluecard_driver = {
 	.owner		= THIS_MODULE,
 	.drv		= {
 		.name	= "bluecard_cs",
 	},
 	.attach		= bluecard_attach,
+	.event		= bluecard_event,
 	.detach		= bluecard_detach,
+	.id_table	= bluecard_ids,
 };
 
 static int __init init_bluecard_cs(void)

@@ -160,6 +160,7 @@
 #define HID0_ICFI	(1<<11)		/* Instr. Cache Flash Invalidate */
 #define HID0_DCI	(1<<10)		/* Data Cache Invalidate */
 #define HID0_SPD	(1<<9)		/* Speculative disable */
+#define HID0_DAPUEN	(1<<8)		/* Debug APU enable */
 #define HID0_SGE	(1<<7)		/* Store Gathering Enable */
 #define HID0_SIED	(1<<7)		/* Serial Instr. Execution [Disable] */
 #define HID0_DFCA	(1<<6)		/* Data Cache Flush Assist */
@@ -365,12 +366,6 @@
 #define PVR_STB03XXX	0x40310000
 #define PVR_NP405H	0x41410000
 #define PVR_NP405L	0x41610000
-#define PVR_440GP_RB	0x40120440
-#define PVR_440GP_RC1	0x40120481
-#define PVR_440GP_RC2	0x40200481
-#define PVR_440GX_RA	0x51b21850
-#define PVR_440GX_RB	0x51b21851
-#define PVR_440GX_RC	0x51b21892
 #define PVR_601		0x00010000
 #define PVR_602		0x00050000
 #define PVR_603		0x00030000

@@ -310,8 +310,9 @@ static int usblp_check_status(struct usblp *usblp, int err)
 
 	error = usblp_read_status (usblp, usblp->statusbuf);
 	if (error < 0) {
-		err("usblp%d: error %d reading printer status",
-			usblp->minor, error);
+		if (printk_ratelimit())
+			err("usblp%d: error %d reading printer status",
+				usblp->minor, error);
 		return 0;
 	}
 
@@ -379,6 +380,8 @@ static int usblp_open(struct inode *inode, struct file *file)
 	usblp->writeurb->transfer_buffer_length = 0;
 	usblp->wcomplete = 1; /* we begin writeable */
 	usblp->rcomplete = 0;
+	usblp->writeurb->status = 0;
+	usblp->readurb->status = 0;
 
 	if (usblp->bidir) {
 		usblp->readcount = 0;
@@ -602,7 +605,9 @@ static int usblp_ioctl(struct inode *inode, struct file *file, unsigned int cmd,
 
 			case LPGETSTATUS:
 				if (usblp_read_status(usblp, usblp->statusbuf)) {
-					err("usblp%d: failed reading printer status", usblp->minor);
+					if (printk_ratelimit())
+						err("usblp%d: failed reading printer status",
+							usblp->minor);
 					retval = -EIO;
 					goto done;
 				}
@@ -751,6 +756,7 @@ static ssize_t usblp_read(struct file *file, char __user *buffer, size_t count, 
 				schedule();
 			} else {
 				set_current_state(TASK_RUNNING);
+				down(&usblp->sem);
 				break;
 			}
 			down (&usblp->sem);

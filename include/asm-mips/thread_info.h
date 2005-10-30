@@ -27,7 +27,7 @@ struct thread_info {
 	struct exec_domain	*exec_domain;	/* execution domain */
 	unsigned long		flags;		/* low level flags */
 	__u32			cpu;		/* current CPU */
-	__s32			preempt_count; /* 0 => preemptable, <0 => BUG */
+	int			preempt_count;	/* 0 => preemptable, <0 => BUG */
 
 	mm_segment_t		addr_limit;	/* thread address space:
 					 	   0-0xBFFFFFFF for user-thead
@@ -62,10 +62,10 @@ register struct thread_info *__current_thread_info __asm__("$28");
 #define current_thread_info()  __current_thread_info
 
 /* thread information allocation */
-#if defined(CONFIG_PAGE_SIZE_4KB) && defined(CONFIG_MIPS32)
+#if defined(CONFIG_PAGE_SIZE_4KB) && defined(CONFIG_32BIT)
 #define THREAD_SIZE_ORDER (1)
 #endif
-#if defined(CONFIG_PAGE_SIZE_4KB) && defined(CONFIG_MIPS64)
+#if defined(CONFIG_PAGE_SIZE_4KB) && defined(CONFIG_64BIT)
 #define THREAD_SIZE_ORDER (2)
 #endif
 #ifdef CONFIG_PAGE_SIZE_8KB

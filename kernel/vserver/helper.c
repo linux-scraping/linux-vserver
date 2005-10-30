@@ -11,9 +11,9 @@
 
 #include <linux/config.h>
 #include <linux/errno.h>
-#include <linux/reboot.h>
 #include <linux/kmod.h>
 #include <linux/sched.h>
+#include <linux/reboot.h>
 #include <linux/vs_context.h>
 #include <linux/vs_network.h>
 

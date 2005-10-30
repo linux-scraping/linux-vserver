@@ -25,6 +25,15 @@ static nodemask_t nodes_found __initdata;
 static struct node nodes[MAX_NUMNODES] __initdata;
 static __u8  pxm2node[256] = { [0 ... 255] = 0xff };
 
+static int node_to_pxm(int n);
+
+int pxm_to_node(int pxm)
+{
+	if ((unsigned)pxm >= 256)
+		return 0;
+	return pxm2node[pxm];
+}
+
 static __init int setup_node(int pxm)
 {
 	unsigned node = pxm2node[pxm];
@@ -41,14 +50,14 @@ static __init int setup_node(int pxm)
 static __init int conflicting_nodes(unsigned long start, unsigned long end)
 {
 	int i;
-	for_each_online_node(i) {
+	for_each_node_mask(i, nodes_parsed) {
 		struct node *nd = &nodes[i];
 		if (nd->start == nd->end)
 			continue;
 		if (nd->end > start && nd->start < end)
-			return 1;
+			return i;
 		if (nd->end == end && nd->start == start)
-			return 1;
+			return i;
 	}
 	return -1;
 }
@@ -72,8 +81,11 @@ static __init void cutoff_node(int i, unsigned long start, unsigned long end)
 
 static __init void bad_srat(void)
 {
+	int i;
 	printk(KERN_ERR "SRAT: SRAT not used.\n");
 	acpi_numa = -1;
+	for (i = 0; i < MAX_LOCAL_APIC; i++)
+		apicid_to_node[i] = NUMA_NO_NODE;
 }
 
 static __init inline int srat_disabled(void)
@@ -101,13 +113,7 @@ acpi_numa_processor_affinity_init(struct acpi_table_processor_affinity *pa)
 		bad_srat();
 		return;
 	}
-	if (pa->apic_id >= NR_CPUS) {
-		printk(KERN_ERR "SRAT: lapic %u too large.\n",
-		       pa->apic_id);
-		bad_srat();
-		return;
-	}
-	cpu_to_node[pa->apic_id] = node;
+	apicid_to_node[pa->apic_id] = node;
 	acpi_numa = 1;
 	printk(KERN_INFO "SRAT: PXM %u -> APIC %u -> Node %u\n",
 	       pxm, pa->apic_id, node);
@@ -124,7 +130,6 @@ acpi_numa_memory_affinity_init(struct acpi_table_memory_affinity *ma)
 
 	if (srat_disabled() || ma->flags.enabled == 0)
 		return;
-	/* hotplug bit is ignored for now */
 	pxm = ma->proximity_domain;
 	node = setup_node(pxm);
 	if (node < 0) {
@@ -134,11 +139,20 @@ acpi_numa_memory_affinity_init(struct acpi_table_memory_affinity *ma)
 	}
 	start = ma->base_addr_lo | ((u64)ma->base_addr_hi << 32);
 	end = start + (ma->length_lo | ((u64)ma->length_hi << 32));
+	/* It is fine to add this area to the nodes data it will be used later*/
+	if (ma->flags.hot_pluggable == 1)
+		printk(KERN_INFO "SRAT: hot plug zone found %lx - %lx \n",
+				start, end);
 	i = conflicting_nodes(start, end);
-	if (i >= 0) {
+	if (i == node) {
+		printk(KERN_WARNING
+		"SRAT: Warning: PXM %d (%lx-%lx) overlaps with itself (%Lx-%Lx)\n",
+			pxm, start, end, nodes[i].start, nodes[i].end);
+	} else if (i >= 0) {
 		printk(KERN_ERR
-		       "SRAT: pxm %d overlap %lx-%lx with node %d(%Lx-%Lx)\n",
-		       pxm, start, end, i, nodes[i].start, nodes[i].end);
+		       "SRAT: PXM %d (%lx-%lx) overlaps with PXM %d (%Lx-%Lx)\n",
+		       pxm, start, end, node_to_pxm(i),
+			nodes[i].start, nodes[i].end);
 		bad_srat();
 		return;
 	}
@@ -166,6 +180,14 @@ int __init acpi_scan_nodes(unsigned long start, unsigned long end)
 	int i;
 	if (acpi_numa <= 0)
 		return -1;
+
+	/* First clean up the node list */
+	for_each_node_mask(i, nodes_parsed) {
+		cutoff_node(i, start, end);
+		if (nodes[i].start == nodes[i].end)
+			node_clear(i, nodes_parsed);
+	}
+
 	memnode_shift = compute_hash_shift(nodes, nodes_weight(nodes_parsed));
 	if (memnode_shift < 0) {
 		printk(KERN_ERR
@@ -173,16 +195,10 @@ int __init acpi_scan_nodes(unsigned long start, unsigned long end)
 		bad_srat();
 		return -1;
 	}
-	for (i = 0; i < MAX_NUMNODES; i++) {
-		if (!node_isset(i, nodes_parsed))
-			continue;
-		cutoff_node(i, start, end);
-		if (nodes[i].start == nodes[i].end) { 
-			node_clear(i, nodes_parsed);
-			continue;
-		}
+
+	/* Finally register nodes */
+	for_each_node_mask(i, nodes_parsed)
 		setup_node_bootmem(i, nodes[i].start, nodes[i].end);
-	}
 	for (i = 0; i < NR_CPUS; i++) { 
 		if (cpu_to_node[i] == NUMA_NO_NODE)
 			continue;
@@ -193,7 +209,7 @@ int __init acpi_scan_nodes(unsigned long start, unsigned long end)
 	return 0;
 }
 
-int node_to_pxm(int n)
+static int node_to_pxm(int n)
 {
        int i;
        if (pxm2node[n] == n)

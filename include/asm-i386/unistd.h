@@ -256,7 +256,7 @@
 #define __NR_io_submit		248
 #define __NR_io_cancel		249
 #define __NR_fadvise64		250
-
+#define __NR_set_zone_reclaim	251
 #define __NR_exit_group		252
 #define __NR_lookup_dcookie	253
 #define __NR_epoll_create	254
@@ -294,8 +294,13 @@
 #define __NR_add_key		286
 #define __NR_request_key	287
 #define __NR_keyctl		288
+#define __NR_ioprio_set		289
+#define __NR_ioprio_get		290
+#define __NR_inotify_init	291
+#define __NR_inotify_add_watch	292
+#define __NR_inotify_rm_watch	293
 
-#define NR_syscalls 289
+#define NR_syscalls 294
 
 /*
  * user-visible error numbers are in the range -1 - -128: see
@@ -327,7 +332,7 @@ type name(type1 arg1) \
 long __res; \
 __asm__ volatile ("int $0x80" \
 	: "=a" (__res) \
-	: "0" (__NR_##name),"b" ((long)(arg1))); \
+	: "0" (__NR_##name),"b" ((long)(arg1)) : "memory"); \
 __syscall_return(type,__res); \
 }
 
@@ -337,7 +342,7 @@ type name(type1 arg1,type2 arg2) \
 long __res; \
 __asm__ volatile ("int $0x80" \
 	: "=a" (__res) \
-	: "0" (__NR_##name),"b" ((long)(arg1)),"c" ((long)(arg2))); \
+	: "0" (__NR_##name),"b" ((long)(arg1)),"c" ((long)(arg2)) : "memory"); \
 __syscall_return(type,__res); \
 }
 
@@ -348,7 +353,7 @@ long __res; \
 __asm__ volatile ("int $0x80" \
 	: "=a" (__res) \
 	: "0" (__NR_##name),"b" ((long)(arg1)),"c" ((long)(arg2)), \
-		  "d" ((long)(arg3))); \
+		  "d" ((long)(arg3)) : "memory"); \
 __syscall_return(type,__res); \
 }
 
@@ -359,7 +364,7 @@ long __res; \
 __asm__ volatile ("int $0x80" \
 	: "=a" (__res) \
 	: "0" (__NR_##name),"b" ((long)(arg1)),"c" ((long)(arg2)), \
-	  "d" ((long)(arg3)),"S" ((long)(arg4))); \
+	  "d" ((long)(arg3)),"S" ((long)(arg4)) : "memory"); \
 __syscall_return(type,__res); \
 } 
 
@@ -371,7 +376,7 @@ long __res; \
 __asm__ volatile ("int $0x80" \
 	: "=a" (__res) \
 	: "0" (__NR_##name),"b" ((long)(arg1)),"c" ((long)(arg2)), \
-	  "d" ((long)(arg3)),"S" ((long)(arg4)),"D" ((long)(arg5))); \
+	  "d" ((long)(arg3)),"S" ((long)(arg4)),"D" ((long)(arg5)) : "memory"); \
 __syscall_return(type,__res); \
 }
 
@@ -384,7 +389,7 @@ __asm__ volatile ("push %%ebp ; movl %%eax,%%ebp ; movl %1,%%eax ; int $0x80 ; p
 	: "=a" (__res) \
 	: "i" (__NR_##name),"b" ((long)(arg1)),"c" ((long)(arg2)), \
 	  "d" ((long)(arg3)),"S" ((long)(arg4)),"D" ((long)(arg5)), \
-	  "0" ((long)(arg6))); \
+	  "0" ((long)(arg6)) : "memory"); \
 __syscall_return(type,__res); \
 }
 

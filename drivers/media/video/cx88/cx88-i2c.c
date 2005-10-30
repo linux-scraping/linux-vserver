@@ -1,5 +1,4 @@
 /*
-    $Id: cx88-i2c.c,v 1.20 2005/02/15 15:59:35 kraxel Exp $
 
     cx88-i2c.c  --  all the i2c code is here
 
@@ -91,15 +90,34 @@ static int cx8800_bit_getsda(void *data)
 
 static int attach_inform(struct i2c_client *client)
 {
+        struct tuner_setup tun_setup;
 	struct cx88_core *core = i2c_get_adapdata(client->adapter);
 
-	dprintk(1, "i2c attach [addr=0x%x,client=%s]\n",
-		client->addr, i2c_clientname(client));
+	dprintk(1, "%s i2c attach [addr=0x%x,client=%s]\n",
+		client->driver->name, client->addr, client->name);
 	if (!client->driver->command)
 		return 0;
 
-	if (core->tuner_type != UNSET)
-		client->driver->command(client, TUNER_SET_TYPE, &core->tuner_type);
+        if (core->radio_type != UNSET) {
+		if ((core->radio_addr==ADDR_UNSET)||(core->radio_addr==client->addr)) {
+			tun_setup.mode_mask = T_RADIO;
+			tun_setup.type = core->radio_type;
+			tun_setup.addr = core->radio_addr;
+
+			client->driver->command (client, TUNER_SET_TYPE_ADDR, &tun_setup);
+		}
+        }
+        if (core->tuner_type != UNSET) {
+		if ((core->tuner_addr==ADDR_UNSET)||(core->tuner_addr==client->addr)) {
+
+			tun_setup.mode_mask = T_ANALOG_TV;
+			tun_setup.type = core->tuner_type;
+			tun_setup.addr = core->tuner_addr;
+
+			client->driver->command (client,TUNER_SET_TYPE_ADDR, &tun_setup);
+		}
+        }
+
 	if (core->tda9887_conf)
 		client->driver->command(client, TDA9887_SET_CONFIG, &core->tda9887_conf);
 	return 0;
@@ -109,7 +127,7 @@ static int detach_inform(struct i2c_client *client)
 {
 	struct cx88_core *core = i2c_get_adapdata(client->adapter);
 
-	dprintk(1, "i2c detach [client=%s]\n", i2c_clientname(client));
+	dprintk(1, "i2c detach [client=%s]\n", client->name);
 	return 0;
 }
 
@@ -133,7 +151,7 @@ static struct i2c_algo_bit_data cx8800_i2c_algo_template = {
 /* ----------------------------------------------------------------------- */
 
 static struct i2c_adapter cx8800_i2c_adap_template = {
-	I2C_DEVNAME("cx2388x"),
+	.name              = "cx2388x",
 	.owner             = THIS_MODULE,
 	.id                = I2C_HW_B_CX2388x,
 	.client_register   = attach_inform,
@@ -141,10 +159,11 @@ static struct i2c_adapter cx8800_i2c_adap_template = {
 };
 
 static struct i2c_client cx8800_i2c_client_template = {
-        I2C_DEVNAME("cx88xx internal"),
+        .name	= "cx88xx internal",
 };
 
 static char *i2c_devs[128] = {
+	[ 0x1c >> 1 ] = "lgdt330x",
 	[ 0x86 >> 1 ] = "tda9887/cx22702",
 	[ 0xa0 >> 1 ] = "eeprom",
 	[ 0xc0 >> 1 ] = "tuner (analog)",

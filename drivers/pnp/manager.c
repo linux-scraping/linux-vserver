@@ -11,13 +11,6 @@
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/kernel.h>
-
-#ifdef CONFIG_PNP_DEBUG
-	#define DEBUG
-#else
-	#undef DEBUG
-#endif
-
 #include <linux/pnp.h>
 #include "base.h"
 
@@ -390,6 +383,7 @@ fail:
  * pnp_manual_config_dev - Disables Auto Config and Manually sets the resource table
  * @dev: pointer to the desired device
  * @res: pointer to the new resource config
+ * @mode: 0 or PNP_CONFIG_FORCE
  *
  * This function can be used by drivers that want to manually set thier resources.
  */

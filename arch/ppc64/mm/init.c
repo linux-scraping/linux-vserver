@@ -42,7 +42,6 @@
 
 #include <asm/pgalloc.h>
 #include <asm/page.h>
-#include <asm/abs_addr.h>
 #include <asm/prom.h>
 #include <asm/lmb.h>
 #include <asm/rtas.h>
@@ -66,15 +65,20 @@
 #include <asm/vdso.h>
 #include <asm/imalloc.h>
 
+#if PGTABLE_RANGE > USER_VSID_RANGE
+#warning Limited user VSID range means pagetable space is wasted
+#endif
+
+#if (TASK_SIZE_USER64 < PGTABLE_RANGE) && (TASK_SIZE_USER64 < USER_VSID_RANGE)
+#warning TASK_SIZE is smaller than it needs to be.
+#endif
+
 int mem_init_done;
 unsigned long ioremap_bot = IMALLOC_BASE;
 static unsigned long phbs_io_bot = PHBS_IO_BASE;
 
 extern pgd_t swapper_pg_dir[];
 extern struct task_struct *current_set[NR_CPUS];
-
-extern pgd_t ioremap_dir[];
-pgd_t * ioremap_pgd = (pgd_t *)&ioremap_dir;
 
 unsigned long klimit = (unsigned long)_end;
 
@@ -101,7 +105,7 @@ void show_mem(void)
 	printk("Free swap:       %6ldkB\n", nr_swap_pages<<(PAGE_SHIFT-10));
 	for_each_pgdat(pgdat) {
 		for (i = 0; i < pgdat->node_spanned_pages; i++) {
-			page = pgdat->node_mem_map + i;
+			page = pgdat_page_nr(pgdat, i);
 			total++;
 			if (PageReserved(page))
 				reserved++;
@@ -137,69 +141,6 @@ void iounmap(volatile void __iomem *addr)
 
 #else
 
-static void unmap_im_area_pte(pmd_t *pmd, unsigned long addr,
-				  unsigned long end)
-{
-	pte_t *pte;
-
-	pte = pte_offset_kernel(pmd, addr);
-	do {
-		pte_t ptent = ptep_get_and_clear(&ioremap_mm, addr, pte);
-		WARN_ON(!pte_none(ptent) && !pte_present(ptent));
-	} while (pte++, addr += PAGE_SIZE, addr != end);
-}
-
-static inline void unmap_im_area_pmd(pud_t *pud, unsigned long addr,
-				     unsigned long end)
-{
-	pmd_t *pmd;
-	unsigned long next;
-
-	pmd = pmd_offset(pud, addr);
-	do {
-		next = pmd_addr_end(addr, end);
-		if (pmd_none_or_clear_bad(pmd))
-			continue;
-		unmap_im_area_pte(pmd, addr, next);
-	} while (pmd++, addr = next, addr != end);
-}
-
-static inline void unmap_im_area_pud(pgd_t *pgd, unsigned long addr,
-				     unsigned long end)
-{
-	pud_t *pud;
-	unsigned long next;
-
-	pud = pud_offset(pgd, addr);
-	do {
-		next = pud_addr_end(addr, end);
-		if (pud_none_or_clear_bad(pud))
-			continue;
-		unmap_im_area_pmd(pud, addr, next);
-	} while (pud++, addr = next, addr != end);
-}
-
-static void unmap_im_area(unsigned long addr, unsigned long end)
-{
-	struct mm_struct *mm = &ioremap_mm;
-	unsigned long next;
-	pgd_t *pgd;
-
-	spin_lock(&mm->page_table_lock);
-
-	pgd = pgd_offset_i(addr);
-	flush_cache_vunmap(addr, end);
-	do {
-		next = pgd_addr_end(addr, end);
-		if (pgd_none_or_clear_bad(pgd))
-			continue;
-		unmap_im_area_pud(pgd, addr, next);
-	} while (pgd++, addr = next, addr != end);
-	flush_tlb_kernel_range(start, end);
-
-	spin_unlock(&mm->page_table_lock);
-}
-
 /*
  * map_io_page currently only called by __ioremap
  * map_io_page adds an entry to the ioremap page table
@@ -214,21 +155,20 @@ static int map_io_page(unsigned long ea, unsigned long pa, int flags)
 	unsigned long vsid;
 
 	if (mem_init_done) {
-		spin_lock(&ioremap_mm.page_table_lock);
-		pgdp = pgd_offset_i(ea);
-		pudp = pud_alloc(&ioremap_mm, pgdp, ea);
+		spin_lock(&init_mm.page_table_lock);
+		pgdp = pgd_offset_k(ea);
+		pudp = pud_alloc(&init_mm, pgdp, ea);
 		if (!pudp)
 			return -ENOMEM;
-		pmdp = pmd_alloc(&ioremap_mm, pudp, ea);
+		pmdp = pmd_alloc(&init_mm, pudp, ea);
 		if (!pmdp)
 			return -ENOMEM;
-		ptep = pte_alloc_kernel(&ioremap_mm, pmdp, ea);
+		ptep = pte_alloc_kernel(&init_mm, pmdp, ea);
 		if (!ptep)
 			return -ENOMEM;
-		pa = abs_to_phys(pa);
-		set_pte_at(&ioremap_mm, ea, ptep, pfn_pte(pa >> PAGE_SHIFT,
+		set_pte_at(&init_mm, ea, ptep, pfn_pte(pa >> PAGE_SHIFT,
 							  __pgprot(flags)));
-		spin_unlock(&ioremap_mm.page_table_lock);
+		spin_unlock(&init_mm.page_table_lock);
 	} else {
 		unsigned long va, vpn, hash, hpteg;
 
@@ -246,9 +186,10 @@ static int map_io_page(unsigned long ea, unsigned long pa, int flags)
 		hpteg = ((hash & htab_hash_mask) * HPTES_PER_GROUP);
 
 		/* Panic if a pte grpup is full */
-		if (ppc_md.hpte_insert(hpteg, va, pa >> PAGE_SHIFT, 0,
-				       _PAGE_NO_CACHE|_PAGE_GUARDED|PP_RWXX,
-				       1, 0) == -1) {
+		if (ppc_md.hpte_insert(hpteg, va, pa >> PAGE_SHIFT,
+				       HPTE_V_BOLTED,
+				       _PAGE_NO_CACHE|_PAGE_GUARDED|PP_RWXX)
+		    == -1) {
 			panic("map_io_page: could not insert mapping");
 		}
 	}
@@ -267,13 +208,9 @@ static void __iomem * __ioremap_com(unsigned long addr, unsigned long pa,
 
 	for (i = 0; i < size; i += PAGE_SIZE)
 		if (map_io_page(ea+i, pa+i, flags))
-			goto failure;
+			return NULL;
 
 	return (void __iomem *) (ea + (addr & ~PAGE_MASK));
- failure:
-	if (mem_init_done)
-		unmap_im_area(ea, ea + size);
-	return NULL;
 }
 
 
@@ -295,7 +232,7 @@ void __iomem * __ioremap(unsigned long addr, unsigned long size,
 	 * Before that, we map using addresses going
 	 * up from ioremap_bot.  imalloc will use
 	 * the addresses from ioremap_bot through
-	 * IMALLOC_END (0xE000001fffffffff)
+	 * IMALLOC_END
 	 * 
 	 */
 	pa = addr & PAGE_MASK;
@@ -381,19 +318,14 @@ int __ioremap_explicit(unsigned long pa, unsigned long ea,
  */
 void iounmap(volatile void __iomem *token)
 {
-	unsigned long address, size;
 	void *addr;
 
 	if (!mem_init_done)
 		return;
 	
 	addr = (void *) ((unsigned long __force) token & PAGE_MASK);
-	
-	if ((size = im_free(addr)) == 0)
-		return;
 
-	address = (unsigned long)addr; 
-	unmap_im_area(address, address + size);
+	im_free(addr);
 }
 
 static int iounmap_subset_regions(unsigned long addr, unsigned long size)
@@ -460,6 +392,7 @@ void free_initmem(void)
 
 	addr = (unsigned long)__init_begin;
 	for (; addr < (unsigned long)__init_end; addr += PAGE_SIZE) {
+		memset((void *)addr, 0xcc, PAGE_SIZE);
 		ClearPageReserved(virt_to_page(addr));
 		set_page_count(virt_to_page(addr), 1);
 		free_page(addr);
@@ -491,12 +424,6 @@ int init_new_context(struct task_struct *tsk, struct mm_struct *mm)
 	int index;
 	int err;
 
-#ifdef CONFIG_HUGETLB_PAGE
-	/* We leave htlb_segs as it was, but for a fork, we need to
-	 * clear the huge_pgdir. */
-	mm->context.huge_pgdir = NULL;
-#endif
-
 again:
 	if (!idr_pre_get(&mmu_context_idr, GFP_KERNEL))
 		return -ENOMEM;
@@ -527,8 +454,6 @@ void destroy_context(struct mm_struct *mm)
 	spin_unlock(&mmu_context_lock);
 
 	mm->context.id = NO_CONTEXT;
-
-	hugetlb_mm_free_pgd(mm);
 }
 
 /*
@@ -558,9 +483,9 @@ void __init mm_init_ppc64(void)
 	for (i = 1; i < lmb.memory.cnt; i++) {
 		unsigned long base, prevbase, prevsize;
 
-		prevbase = lmb.memory.region[i-1].physbase;
+		prevbase = lmb.memory.region[i-1].base;
 		prevsize = lmb.memory.region[i-1].size;
-		base = lmb.memory.region[i].physbase;
+		base = lmb.memory.region[i].base;
 		if (base > (prevbase + prevsize)) {
 			io_hole_start = prevbase + prevsize;
 			io_hole_size = base  - (prevbase + prevsize);
@@ -587,11 +512,8 @@ int page_is_ram(unsigned long pfn)
 	for (i=0; i < lmb.memory.cnt; i++) {
 		unsigned long base;
 
-#ifdef CONFIG_MSCHUNKS
-		base = lmb.memory.region[i].physbase;
-#else
 		base = lmb.memory.region[i].base;
-#endif
+
 		if ((paddr >= base) &&
 			(paddr < (base + lmb.memory.region[i].size))) {
 			return 1;
@@ -606,7 +528,7 @@ EXPORT_SYMBOL(page_is_ram);
  * Initialize the bootmem system and give it all the memory we
  * have available.
  */
-#ifndef CONFIG_DISCONTIGMEM
+#ifndef CONFIG_NEED_MULTIPLE_NODES
 void __init do_init_bootmem(void)
 {
 	unsigned long i;
@@ -621,29 +543,28 @@ void __init do_init_bootmem(void)
 	 */
 	bootmap_pages = bootmem_bootmap_pages(total_pages);
 
-	start = abs_to_phys(lmb_alloc(bootmap_pages<<PAGE_SHIFT, PAGE_SIZE));
+	start = lmb_alloc(bootmap_pages<<PAGE_SHIFT, PAGE_SIZE);
 	BUG_ON(!start);
 
 	boot_mapsize = init_bootmem(start >> PAGE_SHIFT, total_pages);
 
 	max_pfn = max_low_pfn;
 
-	/* add all physical memory to the bootmem map. Also find the first */
-	for (i=0; i < lmb.memory.cnt; i++) {
-		unsigned long physbase, size;
-
-		physbase = lmb.memory.region[i].physbase;
-		size = lmb.memory.region[i].size;
-		free_bootmem(physbase, size);
-	}
+	/* Add all physical memory to the bootmem map, mark each area
+	 * present.
+	 */
+	for (i=0; i < lmb.memory.cnt; i++)
+		free_bootmem(lmb.memory.region[i].base,
+			     lmb_size_bytes(&lmb.memory, i));
 
 	/* reserve the sections we're already using */
-	for (i=0; i < lmb.reserved.cnt; i++) {
-		unsigned long physbase = lmb.reserved.region[i].physbase;
-		unsigned long size = lmb.reserved.region[i].size;
+	for (i=0; i < lmb.reserved.cnt; i++)
+		reserve_bootmem(lmb.reserved.region[i].base,
+				lmb_size_bytes(&lmb.reserved, i));
 
-		reserve_bootmem(physbase, size);
-	}
+	for (i=0; i < lmb.memory.cnt; i++)
+		memory_present(0, lmb_start_pfn(&lmb.memory, i),
+			       lmb_end_pfn(&lmb.memory, i));
 }
 
 /*
@@ -672,7 +593,7 @@ void __init paging_init(void)
 	free_area_init_node(0, NODE_DATA(0), zones_size,
 			    __pa(PAGE_OFFSET) >> PAGE_SHIFT, zholes_size);
 }
-#endif /* CONFIG_DISCONTIGMEM */
+#endif /* ! CONFIG_NEED_MULTIPLE_NODES */
 
 static struct kcore_list kcore_vmem;
 
@@ -681,10 +602,10 @@ static int __init setup_kcore(void)
 	int i;
 
 	for (i=0; i < lmb.memory.cnt; i++) {
-		unsigned long physbase, size;
+		unsigned long base, size;
 		struct kcore_list *kcore_mem;
 
-		physbase = lmb.memory.region[i].physbase;
+		base = lmb.memory.region[i].base;
 		size = lmb.memory.region[i].size;
 
 		/* GFP_ATOMIC to avoid might_sleep warnings during boot */
@@ -692,7 +613,7 @@ static int __init setup_kcore(void)
 		if (!kcore_mem)
 			panic("mem_init: kmalloc failed\n");
 
-		kclist_add(kcore_mem, __va(physbase), size);
+		kclist_add(kcore_mem, __va(base), size);
 	}
 
 	kclist_add(&kcore_vmem, (void *)VMALLOC_START, VMALLOC_END-VMALLOC_START);
@@ -703,7 +624,7 @@ module_init(setup_kcore);
 
 void __init mem_init(void)
 {
-#ifdef CONFIG_DISCONTIGMEM
+#ifdef CONFIG_NEED_MULTIPLE_NODES
 	int nid;
 #endif
 	pg_data_t *pgdat;
@@ -714,7 +635,7 @@ void __init mem_init(void)
 	num_physpages = max_low_pfn;	/* RAM is assumed contiguous */
 	high_memory = (void *) __va(max_low_pfn * PAGE_SIZE);
 
-#ifdef CONFIG_DISCONTIGMEM
+#ifdef CONFIG_NEED_MULTIPLE_NODES
         for_each_online_node(nid) {
 		if (NODE_DATA(nid)->node_spanned_pages != 0) {
 			printk("freeing bootmem node %x\n", nid);
@@ -729,7 +650,7 @@ void __init mem_init(void)
 
 	for_each_pgdat(pgdat) {
 		for (i = 0; i < pgdat->node_spanned_pages; i++) {
-			page = pgdat->node_mem_map + i;
+			page = pgdat_page_nr(pgdat, i);
 			if (PageReserved(page))
 				reservedpages++;
 		}
@@ -752,9 +673,6 @@ void __init mem_init(void)
 
 	mem_init_done = 1;
 
-#ifdef CONFIG_PPC_ISERIES
-	iommu_vio_init();
-#endif
 	/* Initialize the vDSO */
 	vdso_init();
 }
@@ -881,8 +799,7 @@ void update_mmu_cache(struct vm_area_struct *vma, unsigned long ea,
 	if (cpus_equal(vma->vm_mm->cpu_vm_mask, tmp))
 		local = 1;
 
-	__hash_page(ea, pte_val(pte) & (_PAGE_USER|_PAGE_RW), vsid, ptep,
-		    0x300, local);
+	__hash_page(ea, 0, vsid, ptep, 0x300, local);
 	local_irq_restore(flags);
 }
 
@@ -899,23 +816,43 @@ void __iomem * reserve_phb_iospace(unsigned long size)
 	return virt_addr;
 }
 
-kmem_cache_t *zero_cache;
-
-static void zero_ctor(void *pte, kmem_cache_t *cache, unsigned long flags)
+static void zero_ctor(void *addr, kmem_cache_t *cache, unsigned long flags)
 {
-	memset(pte, 0, PAGE_SIZE);
+	memset(addr, 0, kmem_cache_size(cache));
 }
+
+static const int pgtable_cache_size[2] = {
+	PTE_TABLE_SIZE, PMD_TABLE_SIZE
+};
+static const char *pgtable_cache_name[ARRAY_SIZE(pgtable_cache_size)] = {
+	"pgd_pte_cache", "pud_pmd_cache",
+};
+
+kmem_cache_t *pgtable_cache[ARRAY_SIZE(pgtable_cache_size)];
 
 void pgtable_cache_init(void)
 {
-	zero_cache = kmem_cache_create("zero",
-				PAGE_SIZE,
-				0,
-				SLAB_HWCACHE_ALIGN | SLAB_MUST_HWCACHE_ALIGN,
-				zero_ctor,
-				NULL);
-	if (!zero_cache)
-		panic("pgtable_cache_init(): could not create zero_cache!\n");
+	int i;
+
+	BUILD_BUG_ON(PTE_TABLE_SIZE != pgtable_cache_size[PTE_CACHE_NUM]);
+	BUILD_BUG_ON(PMD_TABLE_SIZE != pgtable_cache_size[PMD_CACHE_NUM]);
+	BUILD_BUG_ON(PUD_TABLE_SIZE != pgtable_cache_size[PUD_CACHE_NUM]);
+	BUILD_BUG_ON(PGD_TABLE_SIZE != pgtable_cache_size[PGD_CACHE_NUM]);
+
+	for (i = 0; i < ARRAY_SIZE(pgtable_cache_size); i++) {
+		int size = pgtable_cache_size[i];
+		const char *name = pgtable_cache_name[i];
+
+		pgtable_cache[i] = kmem_cache_create(name,
+						     size, size,
+						     SLAB_HWCACHE_ALIGN
+						     | SLAB_MUST_HWCACHE_ALIGN,
+						     zero_ctor,
+						     NULL);
+		if (! pgtable_cache[i])
+			panic("pgtable_cache_init(): could not create %s!\n",
+			      name);
+	}
 }
 
 pgprot_t phys_mem_access_prot(struct file *file, unsigned long addr,

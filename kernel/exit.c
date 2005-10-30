@@ -79,6 +79,11 @@ repeat:
 	BUG_ON(!list_empty(&p->ptrace_list) || !list_empty(&p->ptrace_children));
 	__exit_signal(p);
 	__exit_sighand(p);
+	/*
+	 * Note that the fastpath in sys_times depends on __exit_signal having
+	 * updated the counters before a task is removed from the tasklist of
+	 * the process by __unhash_process.
+	 */
 	__unhash_process(p);
 
 	/*
@@ -375,17 +380,25 @@ EXPORT_SYMBOL(daemonize);
 static inline void close_files(struct files_struct * files)
 {
 	int i, j;
+	struct fdtable *fdt;
 
 	j = 0;
+
+	/*
+	 * It is safe to dereference the fd table without RCU or
+	 * ->file_lock because this is the last reference to the
+	 * files structure.
+	 */
+	fdt = files_fdtable(files);
 	for (;;) {
 		unsigned long set;
 		i = j * __NFDBITS;
-		if (i >= files->max_fdset || i >= files->max_fds)
+		if (i >= fdt->max_fdset || i >= fdt->max_fds)
 			break;
-		set = files->open_fds->fds_bits[j++];
+		set = fdt->open_fds->fds_bits[j++];
 		while (set) {
 			if (set & 1) {
-				struct file * file = xchg(&files->fd[i], NULL);
+				struct file * file = xchg(&fdt->fd[i], NULL);
 				if (file)
 					filp_close(file, files);
 				vx_openfd_dec(i);
@@ -411,18 +424,22 @@ struct files_struct *get_files_struct(struct task_struct *task)
 
 void fastcall put_files_struct(struct files_struct *files)
 {
+	struct fdtable *fdt;
+
 	if (atomic_dec_and_test(&files->count)) {
 		close_files(files);
 		/*
 		 * Free the fd and fdset arrays if we expanded them.
+		 * If the fdtable was embedded, pass files for freeing
+		 * at the end of the RCU grace period. Otherwise,
+		 * you can free files immediately.
 		 */
-		if (files->fd != &files->fd_array[0])
-			free_fd_array(files->fd, files->max_fds);
-		if (files->max_fdset > __FD_SETSIZE) {
-			free_fdset(files->open_fds, files->max_fdset);
-			free_fdset(files->close_on_exec, files->max_fdset);
-		}
-		kmem_cache_free(files_cachep, files);
+		fdt = files_fdtable(files);
+		if (fdt == &files->fdtab)
+			fdt->free_files = files;
+		else
+			kmem_cache_free(files_cachep, files);
+		free_fdtable(fdt);
 	}
 }
 
@@ -793,6 +810,8 @@ fastcall NORET_TYPE void do_exit(long code)
 
 	profile_task_exit(tsk);
 
+	WARN_ON(atomic_read(&tsk->fs_excl));
+
 	if (unlikely(in_interrupt()))
 		panic("Aiee, killing interrupt handler!");
 	if (unlikely(!tsk->pid))
@@ -805,6 +824,17 @@ fastcall NORET_TYPE void do_exit(long code)
 	if (unlikely(current->ptrace & PT_TRACE_EXIT)) {
 		current->ptrace_message = code;
 		ptrace_notify((PTRACE_EVENT_EXIT << 8) | SIGTRAP);
+	}
+
+	/*
+	 * We're taking recursive faults here in do_exit. Safest is to just
+	 * leave this task alone and wait for reboot.
+	 */
+	if (unlikely(tsk->flags & PF_EXITING)) {
+		printk(KERN_ALERT
+			"Fixing recursive fault but reboot is needed!\n");
+		set_current_state(TASK_UNINTERRUPTIBLE);
+		schedule();
 	}
 
 	tsk->flags |= PF_EXITING;
@@ -825,8 +855,11 @@ fastcall NORET_TYPE void do_exit(long code)
 	acct_update_integrals(tsk);
 	update_mem_hiwater(tsk);
 	group_dead = atomic_dec_and_test(&tsk->signal->live);
-	if (group_dead)
+	if (group_dead) {
+ 		del_timer_sync(&tsk->signal->real_timer);
+		exit_itimers(tsk->signal);
 		acct_process(code);
+	}
 	exit_mm(tsk);
 
 	exit_sem(tsk);
@@ -1185,7 +1218,7 @@ static int wait_task_stopped(task_t *p, int delayed_group_leader, int noreap,
 
 		exit_code = p->exit_code;
 		if (unlikely(!exit_code) ||
-		    unlikely(p->state > TASK_STOPPED))
+		    unlikely(p->state & TASK_TRACED))
 			goto bail_ref;
 		return wait_noreap_copyout(p, pid, uid,
 					   why, (exit_code << 8) | 0x7f,

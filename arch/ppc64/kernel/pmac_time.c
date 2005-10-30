@@ -40,11 +40,6 @@
 #define DBG(x...)
 #endif
 
-extern void setup_default_decr(void);
-
-extern unsigned long ppc_tb_freq;
-extern unsigned long ppc_proc_freq;
-
 /* Apparently the RTC stores seconds since 1 Jan 1904 */
 #define RTC_OFFSET	2082844800
 
@@ -89,7 +84,7 @@ void __pmac pmac_get_rtc_time(struct rtc_time *tm)
 
 #ifdef CONFIG_PMAC_SMU
 	case SYS_CTRLER_SMU:
-		smu_get_rtc_time(tm);
+		smu_get_rtc_time(tm, 1);
 		break;
 #endif /* CONFIG_PMAC_SMU */
 	default:
@@ -133,7 +128,7 @@ int __pmac pmac_set_rtc_time(struct rtc_time *tm)
 
 #ifdef CONFIG_PMAC_SMU
 	case SYS_CTRLER_SMU:
-		return smu_set_rtc_time(tm);
+		return smu_set_rtc_time(tm, 1);
 #endif /* CONFIG_PMAC_SMU */
 	default:
 		return -ENODEV;
@@ -161,8 +156,7 @@ void __init pmac_get_boot_time(struct rtc_time *tm)
 
 /*
  * Query the OF and get the decr frequency.
- * This was taken from the pmac time_init() when merging the prep/pmac
- * time functions.
+ * FIXME: merge this with generic_calibrate_decr
  */
 void __init pmac_calibrate_decr(void)
 {

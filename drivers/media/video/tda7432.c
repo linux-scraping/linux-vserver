@@ -74,7 +74,6 @@ static unsigned short normal_i2c[] = {
 	I2C_TDA7432 >> 1,
 	I2C_CLIENT_END,
 };
-static unsigned short normal_i2c_range[] = { I2C_CLIENT_END, I2C_CLIENT_END };
 I2C_CLIENT_INSMOD;
 
 /* Structure of address and subaddresses for the tda7432 */
@@ -244,19 +243,6 @@ static int tda7432_write(struct i2c_client *client, int subaddr, int val)
 }
 
 /* I don't think we ever actually _read_ the chip... */
-#if 0
-static int tda7432_read(struct i2c_client *client)
-{
-	unsigned char buffer;
-	d2printk("tda7432: In tda7432_read\n");
-	if (1 != i2c_master_recv(client,&buffer,1)) {
-		printk(KERN_WARNING "tda7432: I/O error, trying (read)\n");
-		return -1;
-	}
-	dprintk("tda7432: Read 0x%02x\n", buffer);
-	return buffer;
-}
-#endif
 
 static int tda7432_set(struct i2c_client *client)
 {
@@ -342,7 +328,7 @@ static int tda7432_probe(struct i2c_adapter *adap)
 	if (adap->class & I2C_CLASS_TV_ANALOG)
 		return i2c_probe(adap, &addr_data, tda7432_attach);
 #else
-	if (adap->id == (I2C_ALGO_BIT | I2C_HW_B_BT848))
+	if (adap->id == I2C_HW_B_BT848)
 		return i2c_probe(adap, &addr_data, tda7432_attach);
 #endif
 	return 0;
@@ -527,7 +513,7 @@ static struct i2c_driver driver = {
 
 static struct i2c_client client_template =
 {
-	I2C_DEVNAME("tda7432"),
+	.name       = "tda7432",
 	.driver     = &driver,
 };
 

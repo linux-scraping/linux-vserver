@@ -19,6 +19,8 @@
 #include <linux/smp.h>
 #include <linux/smp_lock.h>
 #include <linux/security.h>
+#include <linux/seccomp.h>
+#include <linux/audit.h>
 #include <linux/signal.h>
 
 #include <asm/asi.h>
@@ -28,6 +30,8 @@
 #include <asm/psrcompat.h>
 #include <asm/visasm.h>
 #include <asm/spitfire.h>
+#include <asm/page.h>
+#include <asm/cpudata.h>
 
 /* Returning from ptrace is a bit tricky because the syscall return
  * low level code assumes any value returned which is negative and
@@ -126,20 +130,24 @@ void flush_ptrace_access(struct vm_area_struct *vma, struct page *page,
 	 * is mapped to in the user's address space, we can skip the
 	 * D-cache flush.
 	 */
-	if ((uaddr ^ kaddr) & (1UL << 13)) {
+	if ((uaddr ^ (unsigned long) kaddr) & (1UL << 13)) {
 		unsigned long start = __pa(kaddr);
 		unsigned long end = start + len;
+		unsigned long dcache_line_size;
+
+		dcache_line_size = local_cpu_data().dcache_line_size;
 
 		if (tlb_type == spitfire) {
-			for (; start < end; start += 32)
-				spitfire_put_dcache_tag(va & 0x3fe0, 0x0);
+			for (; start < end; start += dcache_line_size)
+				spitfire_put_dcache_tag(start & 0x3fe0, 0x0);
 		} else {
-			for (; start < end; start += 32)
+			start &= ~(dcache_line_size - 1);
+			for (; start < end; start += dcache_line_size)
 				__asm__ __volatile__(
 					"stxa %%g0, [%0] %1\n\t"
 					"membar #Sync"
 					: /* no outputs */
-					: "r" (va),
+					: "r" (start),
 					"i" (ASI_DCACHE_INVALIDATE));
 		}
 	}
@@ -147,8 +155,11 @@ void flush_ptrace_access(struct vm_area_struct *vma, struct page *page,
 	if (write && tlb_type == spitfire) {
 		unsigned long start = (unsigned long) kaddr;
 		unsigned long end = start + len;
+		unsigned long icache_line_size;
 
-		for (; start < end; start += 32)
+		icache_line_size = local_cpu_data().icache_line_size;
+
+		for (; start < end; start += icache_line_size)
 			flushi(start);
 	}
 }
@@ -632,15 +643,27 @@ out:
 	unlock_kernel();
 }
 
-asmlinkage void syscall_trace(void)
+asmlinkage void syscall_trace(struct pt_regs *regs, int syscall_exit_p)
 {
-#ifdef DEBUG_PTRACE
-	printk("%s [%d]: syscall_trace\n", current->comm, current->pid);
-#endif
-	if (!test_thread_flag(TIF_SYSCALL_TRACE))
-		return;
+	/* do the secure computing check first */
+	secure_computing(regs->u_regs[UREG_G1]);
+
+	if (unlikely(current->audit_context) && syscall_exit_p) {
+		unsigned long tstate = regs->tstate;
+		int result = AUDITSC_SUCCESS;
+
+		if (unlikely(tstate & (TSTATE_XCARRY | TSTATE_ICARRY)))
+			result = AUDITSC_FAILURE;
+
+		audit_syscall_exit(current, result, regs->u_regs[UREG_I0]);
+	}
+
 	if (!(current->ptrace & PT_PTRACED))
-		return;
+		goto out;
+
+	if (!test_thread_flag(TIF_SYSCALL_TRACE))
+		goto out;
+
 	ptrace_notify(SIGTRAP | ((current->ptrace & PT_TRACESYSGOOD)
 				 ? 0x80 : 0));
 
@@ -649,12 +672,20 @@ asmlinkage void syscall_trace(void)
 	 * for normal use.  strace only continues with a signal if the
 	 * stopping signal is not SIGTRAP.  -brl
 	 */
-#ifdef DEBUG_PTRACE
-	printk("%s [%d]: syscall_trace exit= %x\n", current->comm,
-		current->pid, current->exit_code);
-#endif
 	if (current->exit_code) {
-		send_sig (current->exit_code, current, 1);
+		send_sig(current->exit_code, current, 1);
 		current->exit_code = 0;
 	}
+
+out:
+	if (unlikely(current->audit_context) && !syscall_exit_p)
+		audit_syscall_entry(current,
+				    (test_thread_flag(TIF_32BIT) ?
+				     AUDIT_ARCH_SPARC :
+				     AUDIT_ARCH_SPARC64),
+				    regs->u_regs[UREG_G1],
+				    regs->u_regs[UREG_I0],
+				    regs->u_regs[UREG_I1],
+				    regs->u_regs[UREG_I2],
+				    regs->u_regs[UREG_I3]);
 }

@@ -124,10 +124,14 @@ module_param(standard,         int, 0644);
 module_param(amsound,          int, 0644);
 module_param(dolby,            int, 0644);
 
+MODULE_PARM_DESC(opmode, "Forces a MSP3400 opmode. 0=Manual, 1=Simple, 2=Simpler");
 MODULE_PARM_DESC(once, "No continuous stereo monitoring");
 MODULE_PARM_DESC(debug, "Enable debug messages");
+MODULE_PARM_DESC(stereo_threshold, "Sets signal threshold to activate stereo");
 MODULE_PARM_DESC(standard, "Specify audio standard: 32 = NTSC, 64 = radio, Default: Autodetect");
 MODULE_PARM_DESC(amsound, "Hardwire AM sound at 6.5Hz (France), FM can autoscan");
+MODULE_PARM_DESC(dolby, "Activates Dolby processsing");
+
 
 MODULE_DESCRIPTION("device driver for msp34xx TV sound processor");
 MODULE_AUTHOR("Gerd Knorr");
@@ -147,7 +151,6 @@ static unsigned short normal_i2c[] = {
 	I2C_MSP3400C_ALT  >> 1,
 	I2C_CLIENT_END
 };
-static unsigned short normal_i2c_range[] = {I2C_CLIENT_END,I2C_CLIENT_END};
 I2C_CLIENT_INSMOD;
 
 /* ----------------------------------------------------------------------- */
@@ -568,10 +571,6 @@ static void msp3400c_set_audmode(struct i2c_client *client, int audmode)
 	switch (audmode) {
 	case V4L2_TUNER_MODE_STEREO:
 		src = 0x0020 | nicam;
-#if 0
-		/* spatial effect */
-		msp3400c_write(client,I2C_MSP3400C_DFP, 0x0005,0x4000);
-#endif
 		break;
 	case V4L2_TUNER_MODE_MONO:
 		if (msp->mode == MSP_MODE_AM_NICAM) {
@@ -736,28 +735,19 @@ static int msp34xx_sleep(struct msp3400c *msp, int timeout)
 {
 	DECLARE_WAITQUEUE(wait, current);
 
-again:
 	add_wait_queue(&msp->wq, &wait);
 	if (!kthread_should_stop()) {
 		if (timeout < 0) {
 			set_current_state(TASK_INTERRUPTIBLE);
 			schedule();
 		} else {
-#if 0
-			/* hmm, that one doesn't return on wakeup ... */
-			msleep_interruptible(timeout);
-#else
 			set_current_state(TASK_INTERRUPTIBLE);
 			schedule_timeout(msecs_to_jiffies(timeout));
-#endif
 		}
 	}
 
 	remove_wait_queue(&msp->wq, &wait);
-
-	if (try_to_freeze(PF_FREEZE))
-		goto again;
-
+	try_to_freeze();
 	return msp->restart;
 }
 
@@ -1160,17 +1150,10 @@ static int msp3410d_thread(void *data)
 					    MSP_CARRIER(10.7));
 			/* scart routing */
 			msp3400c_set_scart(client,SCART_IN2,0);
-#if 0
-			/* radio from SCART_IN2 */
-			msp3400c_write(client,I2C_MSP3400C_DFP, 0x08, 0x0220);
-			msp3400c_write(client,I2C_MSP3400C_DFP, 0x09, 0x0220);
-			msp3400c_write(client,I2C_MSP3400C_DFP, 0x0b, 0x0220);
-#else
 			/* msp34xx does radio decoding */
 			msp3400c_write(client,I2C_MSP3400C_DFP, 0x08, 0x0020);
 			msp3400c_write(client,I2C_MSP3400C_DFP, 0x09, 0x0020);
 			msp3400c_write(client,I2C_MSP3400C_DFP, 0x0b, 0x0020);
-#endif
 			break;
 		case 0x0003:
 		case 0x0004:
@@ -1458,7 +1441,7 @@ static struct i2c_driver driver = {
 
 static struct i2c_client client_template =
 {
-	I2C_DEVNAME("(unset)"),
+	.name      = "(unset)",
 	.flags     = I2C_CLIENT_ALLOW_USE,
         .driver    = &driver,
 };
@@ -1473,7 +1456,7 @@ static int msp_attach(struct i2c_adapter *adap, int addr, int kind)
         client_template.addr = addr;
 
         if (-1 == msp3400c_reset(&client_template)) {
-                dprintk("msp3400: no chip found\n");
+                dprintk("msp34xx: no chip found\n");
                 return -1;
         }
 
@@ -1499,7 +1482,7 @@ static int msp_attach(struct i2c_adapter *adap, int addr, int kind)
 	if (-1 == msp3400c_reset(c)) {
 		kfree(msp);
 		kfree(c);
-		dprintk("msp3400: no chip found\n");
+		dprintk("msp34xx: no chip found\n");
 		return -1;
 	}
 
@@ -1509,14 +1492,10 @@ static int msp_attach(struct i2c_adapter *adap, int addr, int kind)
 	if ((-1 == msp->rev1) || (0 == msp->rev1 && 0 == msp->rev2)) {
 		kfree(msp);
 		kfree(c);
-		printk("msp3400: error while reading chip version\n");
+		dprintk("msp34xx: error while reading chip version\n");
 		return -1;
 	}
 
-#if 0
-	/* this will turn on a 1kHz beep - might be useful for debugging... */
-	msp3400c_write(c,I2C_MSP3400C_DFP, 0x0014, 0x1040);
-#endif
 	msp3400c_setvolume(c, msp->muted, msp->volume, msp->balance);
 
 	snprintf(c->name, sizeof(c->name), "MSP34%02d%c-%c%d",
@@ -1534,7 +1513,7 @@ static int msp_attach(struct i2c_adapter *adap, int addr, int kind)
 	}
 
 	/* hello world :-) */
-	printk(KERN_INFO "msp34xx: init: chip=%s",i2c_clientname(c));
+	printk(KERN_INFO "msp34xx: init: chip=%s", c->name);
 	if (HAVE_NICAM(msp))
 		printk(" +nicam");
 	if (HAVE_SIMPLE(msp))

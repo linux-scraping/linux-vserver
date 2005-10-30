@@ -19,6 +19,7 @@
 #include <linux/fb.h>
 #include <linux/ioport.h>
 #include <linux/init.h>
+#include <video/vga.h>
 #include <asm/io.h>
 #include <asm/mtrr.h>
 
@@ -45,7 +46,7 @@ static struct fb_fix_screeninfo vesafb_fix __initdata = {
 };
 
 static int             inverse   = 0;
-static int             mtrr      = 1;
+static int             mtrr      = 3; /* default to write-combining */
 static int	       vram_remap __initdata = 0; /* Set amount of memory to be used */
 static int	       vram_total __initdata = 0; /* Set total amount of memory */
 static int             pmi_setpal = 0;	/* pmi for palette changes ??? */
@@ -54,6 +55,7 @@ static unsigned short  *pmi_base  = NULL;
 static void            (*pmi_start)(void);
 static void            (*pmi_pal)(void);
 static int             depth;
+static int             vga_compat;
 
 /* --------------------------------------------------------------------- */
 
@@ -84,6 +86,37 @@ static int vesafb_pan_display(struct fb_var_screeninfo *var,
                   "D" (&pmi_start));    /* EDI */
 #endif
 	return 0;
+}
+
+static int vesafb_blank(int blank, struct fb_info *info)
+{
+	int err = 1;
+
+	if (vga_compat) {
+		int loop = 10000;
+		u8 seq = 0, crtc17 = 0;
+
+		if (blank == FB_BLANK_POWERDOWN) {
+			seq = 0x20;
+			crtc17 = 0x00;
+			err = 0;
+		} else {
+			seq = 0x00;
+			crtc17 = 0x80;
+			err = (blank == FB_BLANK_UNBLANK) ? 0 : -EINVAL;
+		}
+
+		vga_wseq(NULL, 0x00, 0x01);
+		seq |= vga_rseq(NULL, 0x01) & ~0x20;
+		vga_wseq(NULL, 0x00, seq);
+
+		crtc17 |= vga_rcrt(NULL, 0x17) & ~0x80;
+		while (loop--);
+		vga_wcrt(NULL, 0x17, crtc17);
+		vga_wseq(NULL, 0x00, 0x03);
+	}
+
+	return err;
 }
 
 static void vesa_setpalette(int regno, unsigned red, unsigned green,
@@ -176,6 +209,7 @@ static struct fb_ops vesafb_ops = {
 	.owner		= THIS_MODULE,
 	.fb_setcolreg	= vesafb_setcolreg,
 	.fb_pan_display	= vesafb_pan_display,
+	.fb_blank       = vesafb_blank,
 	.fb_fillrect	= cfb_fillrect,
 	.fb_copyarea	= cfb_copyarea,
 	.fb_imageblit	= cfb_imageblit,
@@ -204,8 +238,8 @@ static int __init vesafb_setup(char *options)
 			pmi_setpal=0;
 		else if (! strcmp(this_opt, "pmipal"))
 			pmi_setpal=1;
-		else if (! strcmp(this_opt, "mtrr"))
-			mtrr=1;
+		else if (! strncmp(this_opt, "mtrr:", 5))
+			mtrr = simple_strtoul(this_opt+5, NULL, 0);
 		else if (! strcmp(this_opt, "nomtrr"))
 			mtrr=0;
 		else if (! strncmp(this_opt, "vtotal:", 7))
@@ -271,7 +305,7 @@ static int __init vesafb_probe(struct device *device)
 
 	if (!request_mem_region(vesafb_fix.smem_start, size_total, "vesafb")) {
 		printk(KERN_WARNING
-		       "vesafb: abort, cannot reserve video memory at 0x%lx\n",
+		       "vesafb: cannot reserve video memory at 0x%lx\n",
 			vesafb_fix.smem_start);
 		/* We cannot make this fatal. Sometimes this comes from magic
 		   spaces our resource handlers simply don't know about */
@@ -279,13 +313,13 @@ static int __init vesafb_probe(struct device *device)
 
 	info = framebuffer_alloc(sizeof(u32) * 256, &dev->dev);
 	if (!info) {
-		release_mem_region(vesafb_fix.smem_start, vesafb_fix.smem_len);
+		release_mem_region(vesafb_fix.smem_start, size_total);
 		return -ENOMEM;
 	}
 	info->pseudo_palette = info->par;
 	info->par = NULL;
 
-        info->screen_base = ioremap(vesafb_fix.smem_start, vesafb_fix.smem_len);
+	info->screen_base = ioremap(vesafb_fix.smem_start, vesafb_fix.smem_len);
 	if (!info->screen_base) {
 		printk(KERN_ERR
 		       "vesafb: abort, cannot ioremap video memory 0x%x @ 0x%lx\n",
@@ -386,14 +420,40 @@ static int __init vesafb_probe(struct device *device)
 	request_region(0x3c0, 32, "vesafb");
 
 	if (mtrr) {
-		int temp_size = size_total;
-		/* Find the largest power-of-two */
-		while (temp_size & (temp_size - 1))
-                	temp_size &= (temp_size - 1);
-                        
-                /* Try and find a power of two to add */
-		while (temp_size && mtrr_add(vesafb_fix.smem_start, temp_size, MTRR_TYPE_WRCOMB, 1)==-EINVAL) {
-			temp_size >>= 1;
+		unsigned int temp_size = size_total;
+		unsigned int type = 0;
+
+		switch (mtrr) {
+		case 1:
+			type = MTRR_TYPE_UNCACHABLE;
+			break;
+		case 2:
+			type = MTRR_TYPE_WRBACK;
+			break;
+		case 3:
+			type = MTRR_TYPE_WRCOMB;
+			break;
+		case 4:
+			type = MTRR_TYPE_WRTHROUGH;
+			break;
+		default:
+			type = 0;
+			break;
+		}
+
+		if (type) {
+			int rc;
+
+			/* Find the largest power-of-two */
+			while (temp_size & (temp_size - 1))
+				temp_size &= (temp_size - 1);
+
+			/* Try and find a power of two to add */
+			do {
+				rc = mtrr_add(vesafb_fix.smem_start, temp_size,
+					      type, 1);
+				temp_size >>= 1;
+			} while (temp_size >= PAGE_SIZE && rc == -EINVAL);
 		}
 	}
 	
@@ -402,6 +462,10 @@ static int __init vesafb_probe(struct device *device)
 	info->fix = vesafb_fix;
 	info->flags = FBINFO_FLAG_DEFAULT |
 		(ypan) ? FBINFO_HWACCEL_YPAN : 0;
+
+	vga_compat = (screen_info.capabilities & 2) ? 0 : 1;
+	printk("vesafb: Mode is %sVGA compatible\n",
+	       (vga_compat) ? "" : "not ");
 
 	if (fb_alloc_cmap(&info->cmap, 256, 0) < 0) {
 		err = -ENOMEM;

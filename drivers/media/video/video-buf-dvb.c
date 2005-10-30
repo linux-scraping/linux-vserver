@@ -1,5 +1,4 @@
 /*
- * $Id: video-buf-dvb.c,v 1.7 2004/12/09 12:51:35 kraxel Exp $
  *
  * some helper function for simple DVB cards which simply DMA the
  * complete transport stream and let the computer sort everything else
@@ -62,8 +61,7 @@ static int videobuf_dvb_thread(void *data)
 			break;
 		if (kthread_should_stop())
 			break;
-		if (current->flags & PF_FREEZE)
-			refrigerator(PF_FREEZE);
+		try_to_freeze();
 
 		/* feed buffer data to demux */
 		if (buf->state == STATE_DONE)

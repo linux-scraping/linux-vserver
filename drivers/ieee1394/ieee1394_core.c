@@ -52,7 +52,7 @@
 /*
  * Disable the nodemgr detection and config rom reading functionality.
  */
-static int disable_nodemgr = 0;
+static int disable_nodemgr;
 module_param(disable_nodemgr, int, 0444);
 MODULE_PARM_DESC(disable_nodemgr, "Disable nodemgr functionality.");
 
@@ -67,10 +67,10 @@ MODULE_LICENSE("GPL");
 
 /* Some globals used */
 const char *hpsb_speedto_str[] = { "S100", "S200", "S400", "S800", "S1600", "S3200" };
-struct class_simple *hpsb_protocol_class;
+struct class *hpsb_protocol_class;
 
 #ifdef CONFIG_IEEE1394_VERBOSEDEBUG
-static void dump_packet(const char *text, quadlet_t *data, int size)
+static void dump_packet(const char *text, quadlet_t *data, int size, int speed)
 {
 	int i;
 
@@ -78,12 +78,15 @@ static void dump_packet(const char *text, quadlet_t *data, int size)
 	size = (size > 4 ? 4 : size);
 
 	printk(KERN_DEBUG "ieee1394: %s", text);
+	if (speed > -1 && speed < 6)
+		printk(" at %s", hpsb_speedto_str[speed]);
+	printk(":");
 	for (i = 0; i < size; i++)
 		printk(" %08x", data[i]);
 	printk("\n");
 }
 #else
-#define dump_packet(x,y,z)
+#define dump_packet(a,b,c,d)
 #endif
 
 static void abort_requests(struct hpsb_host *host);
@@ -520,6 +523,9 @@ int hpsb_send_packet(struct hpsb_packet *packet)
 
 	if (!packet->no_waiter || packet->expect_response) {
 		atomic_inc(&packet->refcnt);
+		/* Set the initial "sendtime" to 10 seconds from now, to
+		   prevent premature expiry.  If a packet takes more than
+		   10 seconds to hit the wire, we have bigger problems :) */
 		packet->sendtime = jiffies + 10 * HZ;
 		skb_queue_tail(&host->pending_packet_queue, packet->skb);
 	}
@@ -541,8 +547,7 @@ int hpsb_send_packet(struct hpsb_packet *packet)
                 if (packet->data_size)
 			memcpy(((u8*)data) + packet->header_size, packet->data, packet->data_size);
 
-                dump_packet("send packet local:", packet->header,
-                            packet->header_size);
+                dump_packet("send packet local", packet->header, packet->header_size, -1);
 
                 hpsb_packet_sent(host, packet, packet->expect_response ? ACK_PENDING : ACK_COMPLETE);
                 hpsb_packet_received(host, data, size, 0);
@@ -558,21 +563,7 @@ int hpsb_send_packet(struct hpsb_packet *packet)
                                        + NODEID_TO_NODE(packet->node_id)];
         }
 
-#ifdef CONFIG_IEEE1394_VERBOSEDEBUG
-        switch (packet->speed_code) {
-        case 2:
-                dump_packet("send packet 400:", packet->header,
-                            packet->header_size);
-                break;
-        case 1:
-                dump_packet("send packet 200:", packet->header,
-                            packet->header_size);
-                break;
-        default:
-                dump_packet("send packet 100:", packet->header,
-                            packet->header_size);
-        }
-#endif
+        dump_packet("send packet", packet->header, packet->header_size, packet->speed_code);
 
         return host->driver->transmit_packet(host, packet);
 }
@@ -633,7 +624,7 @@ static void handle_packet_response(struct hpsb_host *host, int tcode,
 
 	if (packet == NULL) {
                 HPSB_DEBUG("unsolicited response packet received - no tlabel match");
-                dump_packet("contents:", data, 16);
+                dump_packet("contents", data, 16, -1);
 		spin_unlock_irqrestore(&host->pending_packet_queue.lock, flags);
                 return;
         }
@@ -674,11 +665,11 @@ static void handle_packet_response(struct hpsb_host *host, int tcode,
         if (!tcode_match) {
 		spin_unlock_irqrestore(&host->pending_packet_queue.lock, flags);
                 HPSB_INFO("unsolicited response packet received - tcode mismatch");
-                dump_packet("contents:", data, 16);
+                dump_packet("contents", data, 16, -1);
                 return;
         }
 
-	__skb_unlink(skb, skb->list);
+	__skb_unlink(skb, &host->pending_packet_queue);
 
 	if (packet->state == hpsb_queued) {
 		packet->sendtime = jiffies;
@@ -911,7 +902,7 @@ void hpsb_packet_received(struct hpsb_host *host, quadlet_t *data, size_t size,
                 return;
         }
 
-        dump_packet("received packet:", data, size);
+        dump_packet("received packet", data, size, -1);
 
         tcode = (data[0] >> 4) & 0xf;
 
@@ -986,7 +977,7 @@ void abort_timedouts(unsigned long __opaque)
 		packet = (struct hpsb_packet *)skb->data;
 
 		if (time_before(packet->sendtime + expire, jiffies)) {
-			__skb_unlink(skb, skb->list);
+			__skb_unlink(skb, &host->pending_packet_queue);
 			packet->state = hpsb_complete;
 			packet->ack_code = ACKX_TIMEOUT;
 			queue_packet_complete(packet);
@@ -1041,10 +1032,8 @@ static int hpsbpkt_thread(void *__hi)
 
 	while (1) {
 		if (down_interruptible(&khpsbpkt_sig)) {
-			if (current->flags & PF_FREEZE) {
-				refrigerator(0);
+			if (try_to_freeze())
 				continue;
-			}
 			printk("khpsbpkt: received unexpected signal?!\n" );
 			break;
 		}
@@ -1121,7 +1110,7 @@ static int __init ieee1394_init(void)
 	if (ret < 0)
 		goto release_all_bus;
 
-	hpsb_protocol_class = class_simple_create(THIS_MODULE, "ieee1394_protocol");
+	hpsb_protocol_class = class_create(THIS_MODULE, "ieee1394_protocol");
 	if (IS_ERR(hpsb_protocol_class)) {
 		ret = PTR_ERR(hpsb_protocol_class);
 		goto release_class_host;
@@ -1159,7 +1148,7 @@ static int __init ieee1394_init(void)
 cleanup_csr:
 	cleanup_csr();
 release_class_protocol:
-	class_simple_destroy(hpsb_protocol_class);
+	class_destroy(hpsb_protocol_class);
 release_class_host:
 	class_unregister(&hpsb_host_class);
 release_all_bus:
@@ -1189,7 +1178,7 @@ static void __exit ieee1394_cleanup(void)
 
 	cleanup_csr();
 
-	class_simple_destroy(hpsb_protocol_class);
+	class_destroy(hpsb_protocol_class);
 	class_unregister(&hpsb_host_class);
 	for (i = 0; fw_bus_attrs[i]; i++)
 		bus_remove_file(&ieee1394_bus_type, fw_bus_attrs[i]);
@@ -1225,9 +1214,7 @@ EXPORT_SYMBOL(hpsb_protocol_class);
 EXPORT_SYMBOL(hpsb_set_packet_complete_task);
 EXPORT_SYMBOL(hpsb_alloc_packet);
 EXPORT_SYMBOL(hpsb_free_packet);
-EXPORT_SYMBOL(hpsb_send_phy_config);
 EXPORT_SYMBOL(hpsb_send_packet);
-EXPORT_SYMBOL(hpsb_send_packet_and_wait);
 EXPORT_SYMBOL(hpsb_reset_bus);
 EXPORT_SYMBOL(hpsb_bus_reset);
 EXPORT_SYMBOL(hpsb_selfid_received);
@@ -1235,6 +1222,10 @@ EXPORT_SYMBOL(hpsb_selfid_complete);
 EXPORT_SYMBOL(hpsb_packet_sent);
 EXPORT_SYMBOL(hpsb_packet_received);
 EXPORT_SYMBOL_GPL(hpsb_disable_irm);
+#ifdef CONFIG_IEEE1394_EXPORT_FULL_API
+EXPORT_SYMBOL(hpsb_send_phy_config);
+EXPORT_SYMBOL(hpsb_send_packet_and_wait);
+#endif
 
 /** ieee1394_transactions.c **/
 EXPORT_SYMBOL(hpsb_get_tlabel);
@@ -1264,9 +1255,11 @@ EXPORT_SYMBOL(hpsb_destroy_hostinfo);
 EXPORT_SYMBOL(hpsb_set_hostinfo_key);
 EXPORT_SYMBOL(hpsb_get_hostinfo_bykey);
 EXPORT_SYMBOL(hpsb_set_hostinfo);
+EXPORT_SYMBOL(highlevel_host_reset);
+#ifdef CONFIG_IEEE1394_EXPORT_FULL_API
 EXPORT_SYMBOL(highlevel_add_host);
 EXPORT_SYMBOL(highlevel_remove_host);
-EXPORT_SYMBOL(highlevel_host_reset);
+#endif
 
 /** nodemgr.c **/
 EXPORT_SYMBOL(hpsb_node_fill_packet);
@@ -1274,7 +1267,9 @@ EXPORT_SYMBOL(hpsb_node_write);
 EXPORT_SYMBOL(hpsb_register_protocol);
 EXPORT_SYMBOL(hpsb_unregister_protocol);
 EXPORT_SYMBOL(ieee1394_bus_type);
+#ifdef CONFIG_IEEE1394_EXPORT_FULL_API
 EXPORT_SYMBOL(nodemgr_for_each_host);
+#endif
 
 /** csr.c **/
 EXPORT_SYMBOL(hpsb_update_config_rom);
@@ -1311,19 +1306,21 @@ EXPORT_SYMBOL(hpsb_iso_wake);
 EXPORT_SYMBOL(hpsb_iso_recv_flush);
 
 /** csr1212.c **/
+EXPORT_SYMBOL(csr1212_new_directory);
+EXPORT_SYMBOL(csr1212_attach_keyval_to_directory);
+EXPORT_SYMBOL(csr1212_detach_keyval_from_directory);
+EXPORT_SYMBOL(csr1212_release_keyval);
+EXPORT_SYMBOL(csr1212_read);
+EXPORT_SYMBOL(csr1212_parse_keyval);
+EXPORT_SYMBOL(_csr1212_read_keyval);
+EXPORT_SYMBOL(_csr1212_destroy_keyval);
+#ifdef CONFIG_IEEE1394_EXPORT_FULL_API
 EXPORT_SYMBOL(csr1212_create_csr);
 EXPORT_SYMBOL(csr1212_init_local_csr);
 EXPORT_SYMBOL(csr1212_new_immediate);
-EXPORT_SYMBOL(csr1212_new_directory);
 EXPORT_SYMBOL(csr1212_associate_keyval);
-EXPORT_SYMBOL(csr1212_attach_keyval_to_directory);
 EXPORT_SYMBOL(csr1212_new_string_descriptor_leaf);
-EXPORT_SYMBOL(csr1212_detach_keyval_from_directory);
-EXPORT_SYMBOL(csr1212_release_keyval);
 EXPORT_SYMBOL(csr1212_destroy_csr);
-EXPORT_SYMBOL(csr1212_read);
 EXPORT_SYMBOL(csr1212_generate_csr_image);
-EXPORT_SYMBOL(csr1212_parse_keyval);
 EXPORT_SYMBOL(csr1212_parse_csr);
-EXPORT_SYMBOL(_csr1212_read_keyval);
-EXPORT_SYMBOL(_csr1212_destroy_keyval);
+#endif

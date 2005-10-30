@@ -8,7 +8,7 @@
  * Basic handling of the devices is done in drivers/base/cpu.c
  * and system devices are handled in drivers/base/sys.c. 
  *
- * CPUs are exported via driverfs in the class/cpu/devices/
+ * CPUs are exported via sysfs in the class/cpu/devices/
  * directory. 
  *
  * Per-cpu interfaces can be implemented using a struct device_interface. 
@@ -69,6 +69,7 @@ extern struct semaphore cpucontrol;
 	register_cpu_notifier(&fn##_nb);			\
 }
 int cpu_down(unsigned int cpu);
+extern int __attribute__((weak)) smp_prepare_cpu(int cpu);
 #define cpu_is_offline(cpu) unlikely(!cpu_online(cpu))
 #else
 #define lock_cpu_hotplug()	do { } while (0)

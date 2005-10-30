@@ -5,7 +5,7 @@
  *  Based on code written by:
  *           Sven Luther, <luther@dpt-info.u-strasbg.fr>
  *           Alan Hourihane, <alanh@fairlite.demon.co.uk>
- *           Russel King, <rmk@arm.linux.org.uk>
+ *           Russell King, <rmk@arm.linux.org.uk>
  *  Based on linux/drivers/video/skeletonfb.c:
  *	Copyright (C) 1997 Geert Uytterhoeven
  *  Based on linux/driver/video/pm2fb.c:
@@ -67,6 +67,7 @@
 #include <linux/init.h>
 #include <linux/pci.h>
 #include <linux/ioport.h>
+#include <linux/ctype.h>
 
 #include <video/fbcon.h>
 #include <video/fbcon-mfb.h>
@@ -2594,7 +2595,7 @@ static char *pm3fb_boardnum_setup(char *options, unsigned long *bn)
 {
 	char *next;
 
-	if (!(CHAR_IS_NUM(options[0]))) {
+	if (!(isdigit(options[0]))) {
 		(*bn) = 0;
 		return (options);
 	}

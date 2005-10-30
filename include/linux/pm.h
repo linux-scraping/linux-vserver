@@ -103,7 +103,8 @@ extern int pm_active;
 /*
  * Register a device with power management
  */
-struct pm_dev __deprecated *pm_register(pm_dev_t type, unsigned long id, pm_callback callback);
+struct pm_dev __deprecated *
+pm_register(pm_dev_t type, unsigned long id, pm_callback callback);
 
 /*
  * Unregister a device with power management
@@ -175,7 +176,7 @@ struct pm_ops {
 };
 
 extern void pm_set_ops(struct pm_ops *);
-
+extern struct pm_ops *pm_ops;
 extern int pm_suspend(suspend_state_t state);
 
 
@@ -185,29 +186,36 @@ extern int pm_suspend(suspend_state_t state);
 
 struct device;
 
-typedef u32 __bitwise pm_message_t;
+typedef struct pm_message {
+	int event;
+} pm_message_t;
 
 /*
  * There are 4 important states driver can be in:
  * ON     -- driver is working
- * FREEZE -- stop operations and apply whatever policy is applicable to a suspended driver
- *           of that class, freeze queues for block like IDE does, drop packets for
- *           ethernet, etc... stop DMA engine too etc... so a consistent image can be
- *           saved; but do not power any hardware down.
- * SUSPEND - like FREEZE, but hardware is doing as much powersaving as possible. Roughly
- *           pci D3.
+ * FREEZE -- stop operations and apply whatever policy is applicable to a
+ *           suspended driver of that class, freeze queues for block like IDE
+ *           does, drop packets for ethernet, etc... stop DMA engine too etc...
+ *           so a consistent image can be saved; but do not power any hardware
+ *           down.
+ * SUSPEND - like FREEZE, but hardware is doing as much powersaving as
+ *           possible. Roughly pci D3.
  *
- * Unfortunately, current drivers only recognize numeric values 0 (ON) and 3 (SUSPEND).
- * We'll need to fix the drivers. So yes, putting 3 to all diferent defines is intentional,
- * and will go away as soon as drivers are fixed. Also note that typedef is neccessary,
- * we'll probably want to switch to
+ * Unfortunately, current drivers only recognize numeric values 0 (ON) and 3
+ * (SUSPEND).  We'll need to fix the drivers. So yes, putting 3 to all different
+ * defines is intentional, and will go away as soon as drivers are fixed.  Also
+ * note that typedef is neccessary, we'll probably want to switch to
  *   typedef struct pm_message_t { int event; int flags; } pm_message_t
  * or something similar soon.
  */
 
-#define PMSG_FREEZE	((__force pm_message_t) 3)
-#define PMSG_SUSPEND	((__force pm_message_t) 3)
-#define PMSG_ON		((__force pm_message_t) 0)
+#define PM_EVENT_ON 0
+#define PM_EVENT_FREEZE 1
+#define PM_EVENT_SUSPEND 2
+
+#define PMSG_FREEZE	((struct pm_message){ .event = PM_EVENT_FREEZE, })
+#define PMSG_SUSPEND	((struct pm_message){ .event = PM_EVENT_SUSPEND, })
+#define PMSG_ON		((struct pm_message){ .event = PM_EVENT_ON, })
 
 struct dev_pm_info {
 	pm_message_t		power_state;
@@ -222,11 +230,18 @@ struct dev_pm_info {
 
 extern void device_pm_set_parent(struct device * dev, struct device * parent);
 
-extern int device_suspend(pm_message_t state);
 extern int device_power_down(pm_message_t state);
 extern void device_power_up(void);
 extern void device_resume(void);
 
+#ifdef CONFIG_PM
+extern int device_suspend(pm_message_t state);
+#else
+static inline int device_suspend(pm_message_t state)
+{
+	return 0;
+}
+#endif
 
 #endif /* __KERNEL__ */
 

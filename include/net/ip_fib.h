@@ -109,6 +109,20 @@ struct fib_result {
 #endif
 };
 
+struct fib_result_nl {
+	u32		fl_addr;   /* To be looked up*/ 
+	u32		fl_fwmark; 
+	unsigned char	fl_tos;
+	unsigned char   fl_scope;
+	unsigned char   tb_id_in;
+
+	unsigned char   tb_id;      /* Results */
+	unsigned char	prefixlen;
+	unsigned char	nh_sel;
+	unsigned char	type;
+	unsigned char	scope;
+	int             err;      
+};
 
 #ifdef CONFIG_IP_ROUTE_MULTIPATH
 
@@ -280,5 +294,10 @@ static inline void fib_res_put(struct fib_result *res)
 		fib_rule_put(res->r);
 #endif
 }
+
+#ifdef CONFIG_PROC_FS
+extern int  fib_proc_init(void);
+extern void fib_proc_exit(void);
+#endif
 
 #endif  /* _NET_FIB_H */

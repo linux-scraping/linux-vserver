@@ -192,7 +192,7 @@ static int ciintf_slot_reset(struct dvb_ca_en50221 *ca, int slot)
 {
 	struct budget_av *budget_av = (struct budget_av *) ca->data;
 	struct saa7146_dev *saa = budget_av->budget.dev;
-	int timeout = 50; // 5 seconds (4.4.6 Ready)
+	int timeout = 500; // 5 seconds (4.4.6 Ready)
 
 	if (slot != 0)
 		return -EINVAL;
@@ -217,7 +217,6 @@ static int ciintf_slot_reset(struct dvb_ca_en50221 *ca, int slot)
 	{
 		printk(KERN_ERR "budget-av: cam reset failed (timeout).\n");
 		saa7146_setgpio(saa, 2, SAA7146_GPIO_OUTHI); /* disable card */
-		saa7146_setgpio(saa, 0, SAA7146_GPIO_OUTHI); /* Vcc off */
 		return -ETIMEDOUT;
 	}
 
@@ -276,7 +275,6 @@ static int ciintf_poll_slot_status(struct dvb_ca_en50221 *ca, int slot, int open
 		{
 			printk(KERN_INFO "budget-av: cam ejected\n");
 			saa7146_setgpio(saa, 2, SAA7146_GPIO_OUTHI); /* disable card */
-			saa7146_setgpio(saa, 0, SAA7146_GPIO_OUTHI); /* Vcc off */
 			budget_av->slot_status = 0;
 		}
 	}
@@ -453,9 +451,9 @@ static int philips_su1278_ty_ci_set_symbol_rate(struct dvb_frontend *fe, u32 sra
 }
 
 static int philips_su1278_ty_ci_pll_set(struct dvb_frontend *fe,
+					struct i2c_adapter *i2c,
 					struct dvb_frontend_parameters *params)
 {
-	struct budget_av *budget_av = (struct budget_av *) fe->dvb->priv;
 	u32 div;
 	u8 buf[4];
 	struct i2c_msg msg = {.addr = 0x61,.flags = 0,.buf = buf,.len = sizeof(buf) };
@@ -481,7 +479,7 @@ static int philips_su1278_ty_ci_pll_set(struct dvb_frontend *fe,
 	else if (params->frequency < 2150000)
 		buf[3] |= 0xC0;
 
-	if (i2c_transfer(&budget_av->budget.i2c_adap, &msg, 1) != 1)
+	if (i2c_transfer(i2c, &msg, 1) != 1)
 		return -EIO;
 	return 0;
 }
@@ -570,9 +568,9 @@ static int philips_cu1216_pll_set(struct dvb_frontend *fe, struct dvb_frontend_p
 
 	buf[0] = (div >> 8) & 0x7f;
 	buf[1] = div & 0xff;
-	buf[2] = 0x8e;
-	buf[3] = (params->frequency < 174500000 ? 0xa1 :
-		  params->frequency < 454000000 ? 0x92 : 0x34);
+	buf[2] = 0x86;
+	buf[3] = (params->frequency < 150000000 ? 0x01 :
+		  params->frequency < 445000000 ? 0x02 : 0x04);
 
 	if (i2c_transfer(&budget->i2c_adap, &msg, 1) != 1)
 		return -EIO;
@@ -695,8 +693,12 @@ static struct tda1004x_config philips_tu1216_config = {
 	.demod_address = 0x8,
 	.invert = 1,
 	.invert_oclk = 1,
+	.xtal_freq = TDA10046_XTAL_4M,
+	.agc_config = TDA10046_AGC_DEFAULT,
+	.if_freq = TDA10046_FREQ_3617,
 	.pll_init = philips_tu1216_pll_init,
 	.pll_set = philips_tu1216_pll_set,
+	.pll_sleep = NULL,
 	.request_firmware = philips_tu1216_request_firmware,
 };
 
@@ -741,6 +743,7 @@ static void frontend_init(struct budget_av *budget_av)
 		case SUBID_DVBC_KNC1_PLUS:
 		case SUBID_DVBT_KNC1_PLUS:
 			// Enable / PowerON Frontend
+			saa7146_setgpio(saa, 0, SAA7146_GPIO_OUTLO);
 			saa7146_setgpio(saa, 3, SAA7146_GPIO_OUTHI);
 			break;
 	}
@@ -1018,7 +1021,7 @@ static struct pci_device_id pci_tbl[] = {
 MODULE_DEVICE_TABLE(pci, pci_tbl);
 
 static struct saa7146_extension budget_extension = {
-	.name = "budget dvb /w video in\0",
+	.name = "budget_av",
 	.pci_tbl = pci_tbl,
 
 	.module = THIS_MODULE,

@@ -122,9 +122,9 @@ int copy_sc_from_user_tt(struct sigcontext *to, struct sigcontext *from,
 	int err;
 
 	to_fp = to->fpstate;
-	from_fp = from->fpstate;
 	sigs = to->oldmask;
 	err = copy_from_user(to, from, sizeof(*to));
+	from_fp = to->fpstate;
 	to->oldmask = sigs;
 	to->fpstate = to_fp;
 	if(to_fp != NULL)
@@ -312,7 +312,7 @@ long sys_sigreturn(struct pt_regs regs)
 	unsigned long __user *extramask = frame->extramask;
 	int sig_size = (_NSIG_WORDS - 1) * sizeof(unsigned long);
 
-	if(copy_from_user(&set.sig[0], oldmask, sizeof(&set.sig[0])) ||
+	if(copy_from_user(&set.sig[0], oldmask, sizeof(set.sig[0])) ||
 	   copy_from_user(&set.sig[1], extramask, sig_size))
 		goto segfault;
 

@@ -861,13 +861,18 @@ static void change_speed(struct async_struct *info,
 
 static void rs_put_char(struct tty_struct *tty, unsigned char ch)
 {
-	struct async_struct *info = (struct async_struct *)tty->driver_data;
+	struct async_struct *info;
 	unsigned long flags;
+
+	if (!tty)
+		return;
+
+	info = tty->driver_data;
 
 	if (serial_paranoia_check(info, tty->name, "rs_put_char"))
 		return;
 
-	if (!tty || !info->xmit.buf)
+	if (!info->xmit.buf)
 		return;
 
 	local_irq_save(flags);
@@ -910,13 +915,18 @@ static void rs_flush_chars(struct tty_struct *tty)
 static int rs_write(struct tty_struct * tty, const unsigned char *buf, int count)
 {
 	int	c, ret = 0;
-	struct async_struct *info = (struct async_struct *)tty->driver_data;
+	struct async_struct *info;
 	unsigned long flags;
+
+	if (!tty)
+		return 0;
+
+	info = tty->driver_data;
 
 	if (serial_paranoia_check(info, tty->name, "rs_write"))
 		return 0;
 
-	if (!tty || !info->xmit.buf || !tmp_buf)
+	if (!info->xmit.buf || !tmp_buf)
 		return 0;
 
 	local_save_flags(flags);
@@ -1963,10 +1973,6 @@ static _INLINE_ void show_serial_version(void)
 }
 
 
-int register_serial(struct serial_struct *req);
-void unregister_serial(int line);
-
-
 static struct tty_operations serial_ops = {
 	.open = rs_open,
 	.close = rs_close,
@@ -2047,10 +2053,6 @@ static int __init rs_init(void)
 	state->icount.rx = state->icount.tx = 0;
 	state->icount.frame = state->icount.parity = 0;
 	state->icount.overrun = state->icount.brk = 0;
-	/*
-	if(state->port && check_region(state->port,REGION_LENGTH(state)))
-	  continue;
-	*/
 
 	printk(KERN_INFO "ttyS%d is the amiga builtin serial port\n",
 		       state->line);

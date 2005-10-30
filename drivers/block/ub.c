@@ -16,13 +16,15 @@
  *  -- verify the 13 conditions and do bulk resets
  *  -- kill last_pipe and simply do two-state clearing on both pipes
  *  -- verify protocol (bulk) from USB descriptors (maybe...)
- *  -- highmem and sg
+ *  -- highmem
  *  -- move top_sense and work_bcs into separate allocations (if they survive)
  *     for cache purists and esoteric architectures.
+ *  -- Allocate structure for LUN 0 before the first ub_sync_tur, avoid NULL. ?
  *  -- prune comments, they are too volumnous
  *  -- Exterminate P3 printks
  *  -- Resove XXX's
  *  -- Redo "benh's retries", perhaps have spin-up code to handle them. V:D=?
+ *  -- CLEAR, CLR2STS, CLRRS seem to be ripe for refactoring.
  */
 #include <linux/kernel.h>
 #include <linux/module.h>
@@ -36,6 +38,73 @@
 #define DEVFS_NAME DRV_NAME
 
 #define UB_MAJOR 180
+
+/*
+ * The command state machine is the key model for understanding of this driver.
+ *
+ * The general rule is that all transitions are done towards the bottom
+ * of the diagram, thus preventing any loops.
+ *
+ * An exception to that is how the STAT state is handled. A counter allows it
+ * to be re-entered along the path marked with [C].
+ *
+ *       +--------+
+ *       ! INIT   !
+ *       +--------+
+ *           !
+ *        ub_scsi_cmd_start fails ->--------------------------------------\
+ *           !                                                            !
+ *           V                                                            !
+ *       +--------+                                                       !
+ *       ! CMD    !                                                       !
+ *       +--------+                                                       !
+ *           !                                            +--------+      !
+ *         was -EPIPE -->-------------------------------->! CLEAR  !      !
+ *           !                                            +--------+      !
+ *           !                                                !           !
+ *         was error -->------------------------------------- ! --------->\
+ *           !                                                !           !
+ *  /--<-- cmd->dir == NONE ?                                 !           !
+ *  !        !                                                !           !
+ *  !        V                                                !           !
+ *  !    +--------+                                           !           !
+ *  !    ! DATA   !                                           !           !
+ *  !    +--------+                                           !           !
+ *  !        !                           +---------+          !           !
+ *  !      was -EPIPE -->--------------->! CLR2STS !          !           !
+ *  !        !                           +---------+          !           !
+ *  !        !                                !               !           !
+ *  !        !                              was error -->---- ! --------->\
+ *  !      was error -->--------------------- ! ------------- ! --------->\
+ *  !        !                                !               !           !
+ *  !        V                                !               !           !
+ *  \--->+--------+                           !               !           !
+ *       ! STAT   !<--------------------------/               !           !
+ *  /--->+--------+                                           !           !
+ *  !        !                                                !           !
+ * [C]     was -EPIPE -->-----------\                         !           !
+ *  !        !                      !                         !           !
+ *  +<---- len == 0                 !                         !           !
+ *  !        !                      !                         !           !
+ *  !      was error -->--------------------------------------!---------->\
+ *  !        !                      !                         !           !
+ *  +<---- bad CSW                  !                         !           !
+ *  +<---- bad tag                  !                         !           !
+ *  !        !                      V                         !           !
+ *  !        !                 +--------+                     !           !
+ *  !        !                 ! CLRRS  !                     !           !
+ *  !        !                 +--------+                     !           !
+ *  !        !                      !                         !           !
+ *  \------- ! --------------------[C]--------\               !           !
+ *           !                                !               !           !
+ *         cmd->error---\                +--------+           !           !
+ *           !          +--------------->! SENSE  !<----------/           !
+ *         STAT_FAIL----/                +--------+                       !
+ *           !                                !                           V
+ *           !                                V                      +--------+
+ *           \--------------------------------\--------------------->! DONE   !
+ *                                                                   +--------+
+ */
 
 /*
  * Definitions which have to be scattered once we understand the layout better.
@@ -91,8 +160,6 @@ struct bulk_cs_wrap {
 
 #define US_BULK_CS_WRAP_LEN	13
 #define US_BULK_CS_SIGN		0x53425355	/* spells out 'USBS' */
-/* This is for Olympus Camedia digital cameras */
-#define US_BULK_CS_OLYMPUS_SIGN	0x55425355	/* spells out 'USBU' */
 #define US_BULK_STAT_OK		0
 #define US_BULK_STAT_FAIL	1
 #define US_BULK_STAT_PHASE	2
@@ -105,7 +172,7 @@ struct bulk_cs_wrap {
  */
 struct ub_dev;
 
-#define UB_MAX_REQ_SG	1
+#define UB_MAX_REQ_SG	9	/* cdrecord requires 32KB and maybe a header */
 #define UB_MAX_SECTORS 64
 
 /*
@@ -135,6 +202,7 @@ enum ub_scsi_cmd_state {
 	UB_CMDST_CLR2STS,		/* Clearing before requesting status */
 	UB_CMDST_STAT,			/* Status phase */
 	UB_CMDST_CLEAR,			/* Clearing a stall (halt, actually) */
+	UB_CMDST_CLRRS,			/* Clearing before retrying status */
 	UB_CMDST_SENSE,			/* Sending Request Sense */
 	UB_CMDST_DONE			/* Final state */
 };
@@ -146,6 +214,7 @@ static char *ub_scsi_cmd_stname[] = {
 	"c2s",
 	"sts",
 	"clr",
+	"crs",
 	"Sen",
 	"fin"
 };
@@ -166,13 +235,10 @@ struct ub_scsi_cmd {
 
 	int stat_count;			/* Retries getting status. */
 
-	/*
-	 * We do not support transfers from highmem pages
-	 * because the underlying USB framework does not do what we need.
-	 */
-	char *data;			/* Requested buffer */
 	unsigned int len;		/* Requested length */
-	// struct scatterlist sgv[UB_MAX_REQ_SG];
+	unsigned int current_sg;
+	unsigned int nsg;		/* sgv[nsg] */
+	struct scatterlist sgv[UB_MAX_REQ_SG];
 
 	struct ub_lun *lun;
 	void (*done)(struct ub_dev *, struct ub_scsi_cmd *);
@@ -316,21 +382,23 @@ struct ub_dev {
 	struct urb work_urb;
 	struct timer_list work_timer;
 	int last_pipe;			/* What might need clearing */
+	__le32 signature;		/* Learned signature */
 	struct bulk_cb_wrap work_bcb;
 	struct bulk_cs_wrap work_bcs;
 	struct usb_ctrlrequest work_cr;
 
+	int sg_stat[6];
 	struct ub_scsi_trace tr;
 };
 
 /*
  */
 static void ub_cleanup(struct ub_dev *sc);
-static int ub_bd_rq_fn_1(struct ub_lun *lun, struct request *rq);
+static int ub_request_fn_1(struct ub_lun *lun, struct request *rq);
 static int ub_cmd_build_block(struct ub_dev *sc, struct ub_lun *lun,
     struct ub_scsi_cmd *cmd, struct request *rq);
-static int ub_cmd_build_packet(struct ub_dev *sc, struct ub_scsi_cmd *cmd,
-    struct request *rq);
+static int ub_cmd_build_packet(struct ub_dev *sc, struct ub_lun *lun,
+    struct ub_scsi_cmd *cmd, struct request *rq);
 static void ub_rw_cmd_done(struct ub_dev *sc, struct ub_scsi_cmd *cmd);
 static void ub_end_rq(struct request *rq, int uptodate);
 static int ub_submit_scsi(struct ub_dev *sc, struct ub_scsi_cmd *cmd);
@@ -338,9 +406,11 @@ static void ub_urb_complete(struct urb *urb, struct pt_regs *pt);
 static void ub_scsi_action(unsigned long _dev);
 static void ub_scsi_dispatch(struct ub_dev *sc);
 static void ub_scsi_urb_compl(struct ub_dev *sc, struct ub_scsi_cmd *cmd);
+static void ub_data_start(struct ub_dev *sc, struct ub_scsi_cmd *cmd);
 static void ub_state_done(struct ub_dev *sc, struct ub_scsi_cmd *cmd, int rc);
-static void __ub_state_stat(struct ub_dev *sc, struct ub_scsi_cmd *cmd);
+static int __ub_state_stat(struct ub_dev *sc, struct ub_scsi_cmd *cmd);
 static void ub_state_stat(struct ub_dev *sc, struct ub_scsi_cmd *cmd);
+static void ub_state_stat_counted(struct ub_dev *sc, struct ub_scsi_cmd *cmd);
 static void ub_state_sense(struct ub_dev *sc, struct ub_scsi_cmd *cmd);
 static int ub_submit_clear_stall(struct ub_dev *sc, struct ub_scsi_cmd *cmd,
     int stalled_pipe);
@@ -430,7 +500,8 @@ static void ub_cmdtr_sense(struct ub_dev *sc, struct ub_scsi_cmd *cmd,
 	}
 }
 
-static ssize_t ub_diag_show(struct device *dev, char *page)
+static ssize_t ub_diag_show(struct device *dev, struct device_attribute *attr,
+    char *page)
 {
 	struct usb_interface *intf;
 	struct ub_dev *sc;
@@ -453,6 +524,14 @@ static ssize_t ub_diag_show(struct device *dev, char *page)
 	cnt += sprintf(page + cnt,
 	    "qlen %d qmax %d\n",
 	    sc->cmd_queue.qlen, sc->cmd_queue.qmax);
+	cnt += sprintf(page + cnt,
+	    "sg %d %d %d %d %d .. %d\n",
+	    sc->sg_stat[0],
+	    sc->sg_stat[1],
+	    sc->sg_stat[2],
+	    sc->sg_stat[3],
+	    sc->sg_stat[4],
+	    sc->sg_stat[5]);
 
 	list_for_each (p, &sc->luns) {
 		lun = list_entry(p, struct ub_lun, link);
@@ -674,20 +753,20 @@ static struct ub_scsi_cmd *ub_cmdq_pop(struct ub_dev *sc)
  * The request function is our main entry point
  */
 
-static void ub_bd_rq_fn(request_queue_t *q)
+static void ub_request_fn(request_queue_t *q)
 {
 	struct ub_lun *lun = q->queuedata;
 	struct request *rq;
 
 	while ((rq = elv_next_request(q)) != NULL) {
-		if (ub_bd_rq_fn_1(lun, rq) != 0) {
+		if (ub_request_fn_1(lun, rq) != 0) {
 			blk_stop_queue(q);
 			break;
 		}
 	}
 }
 
-static int ub_bd_rq_fn_1(struct ub_lun *lun, struct request *rq)
+static int ub_request_fn_1(struct ub_lun *lun, struct request *rq)
 {
 	struct ub_dev *sc = lun->udev;
 	struct ub_scsi_cmd *cmd;
@@ -704,9 +783,8 @@ static int ub_bd_rq_fn_1(struct ub_lun *lun, struct request *rq)
 	memset(cmd, 0, sizeof(struct ub_scsi_cmd));
 
 	blkdev_dequeue_request(rq);
-
 	if (blk_pc_request(rq)) {
-		rc = ub_cmd_build_packet(sc, cmd, rq);
+		rc = ub_cmd_build_packet(sc, lun, cmd, rq);
 	} else {
 		rc = ub_cmd_build_block(sc, lun, cmd, rq);
 	}
@@ -721,7 +799,7 @@ static int ub_bd_rq_fn_1(struct ub_lun *lun, struct request *rq)
 	cmd->back = rq;
 
 	cmd->tag = sc->tagcnt++;
-	if ((rc = ub_submit_scsi(sc, cmd)) != 0) {
+	if (ub_submit_scsi(sc, cmd) != 0) {
 		ub_put_cmd(lun, cmd);
 		ub_end_rq(rq, 0);
 		return 0;
@@ -734,58 +812,31 @@ static int ub_cmd_build_block(struct ub_dev *sc, struct ub_lun *lun,
     struct ub_scsi_cmd *cmd, struct request *rq)
 {
 	int ub_dir;
-#if 0 /* We use rq->buffer for now */
-	struct scatterlist *sg;
 	int n_elem;
-#endif
 	unsigned int block, nblks;
 
 	if (rq_data_dir(rq) == WRITE)
 		ub_dir = UB_DIR_WRITE;
 	else
 		ub_dir = UB_DIR_READ;
+	cmd->dir = ub_dir;
 
 	/*
 	 * get scatterlist from block layer
 	 */
-#if 0 /* We use rq->buffer for now */
-	sg = &cmd->sgv[0];
-	n_elem = blk_rq_map_sg(q, rq, sg);
+	n_elem = blk_rq_map_sg(lun->disk->queue, rq, &cmd->sgv[0]);
 	if (n_elem <= 0) {
-		ub_put_cmd(lun, cmd);
-		ub_end_rq(rq, 0);
-		blk_start_queue(q);
-		return 0;		/* request with no s/g entries? */
+		printk(KERN_INFO "%s: failed request map (%d)\n",
+		    sc->name, n_elem); /* P3 */
+		return -1;		/* request with no s/g entries? */
 	}
-
-	if (n_elem != 1) {		/* Paranoia */
+	if (n_elem > UB_MAX_REQ_SG) {	/* Paranoia */
 		printk(KERN_WARNING "%s: request with %d segments\n",
 		    sc->name, n_elem);
-		ub_put_cmd(lun, cmd);
-		ub_end_rq(rq, 0);
-		blk_start_queue(q);
-		return 0;
-	}
-#endif
-
-	/*
-	 * XXX Unfortunately, this check does not work. It is quite possible
-	 * to get bogus non-null rq->buffer if you allow sg by mistake.
-	 */
-	if (rq->buffer == NULL) {
-		/*
-		 * This must not happen if we set the queue right.
-		 * The block level must create bounce buffers for us.
-		 */
-		static int do_print = 1;
-		if (do_print) {
-			printk(KERN_WARNING "%s: unmapped block request"
-			    " flags 0x%lx sectors %lu\n",
-			    sc->name, rq->flags, rq->nr_sectors);
-			do_print = 0;
-		}
 		return -1;
 	}
+	cmd->nsg = n_elem;
+	sc->sg_stat[n_elem < 5 ? n_elem : 5]++;
 
 	/*
 	 * build the command
@@ -806,30 +857,15 @@ static int ub_cmd_build_block(struct ub_dev *sc, struct ub_lun *lun,
 	cmd->cdb[8] = nblks;
 	cmd->cdb_len = 10;
 
-	cmd->dir = ub_dir;
-	cmd->data = rq->buffer;
 	cmd->len = rq->nr_sectors * 512;
 
 	return 0;
 }
 
-static int ub_cmd_build_packet(struct ub_dev *sc, struct ub_scsi_cmd *cmd,
-    struct request *rq)
+static int ub_cmd_build_packet(struct ub_dev *sc, struct ub_lun *lun,
+    struct ub_scsi_cmd *cmd, struct request *rq)
 {
-
-	if (rq->data_len != 0 && rq->data == NULL) {
-		static int do_print = 1;
-		if (do_print) {
-			printk(KERN_WARNING "%s: unmapped packet request"
-			    " flags 0x%lx length %d\n",
-			    sc->name, rq->flags, rq->data_len);
-			do_print = 0;
-		}
-		return -1;
-	}
-
-	memcpy(&cmd->cdb, rq->cmd, rq->cmd_len);
-	cmd->cdb_len = rq->cmd_len;
+	int n_elem;
 
 	if (rq->data_len == 0) {
 		cmd->dir = UB_DIR_NONE;
@@ -838,8 +874,29 @@ static int ub_cmd_build_packet(struct ub_dev *sc, struct ub_scsi_cmd *cmd,
 			cmd->dir = UB_DIR_WRITE;
 		else
 			cmd->dir = UB_DIR_READ;
+
 	}
-	cmd->data = rq->data;
+
+	/*
+	 * get scatterlist from block layer
+	 */
+	n_elem = blk_rq_map_sg(lun->disk->queue, rq, &cmd->sgv[0]);
+	if (n_elem < 0) {
+		printk(KERN_INFO "%s: failed request map (%d)\n",
+		    sc->name, n_elem); /* P3 */
+		return -1;
+	}
+	if (n_elem > UB_MAX_REQ_SG) {	/* Paranoia */
+		printk(KERN_WARNING "%s: request with %d segments\n",
+		    sc->name, n_elem);
+		return -1;
+	}
+	cmd->nsg = n_elem;
+	sc->sg_stat[n_elem < 5 ? n_elem : 5]++;
+
+	memcpy(&cmd->cdb, rq->cmd, rq->cmd_len);
+	cmd->cdb_len = rq->cmd_len;
+
 	cmd->len = rq->data_len;
 
 	return 0;
@@ -849,24 +906,34 @@ static void ub_rw_cmd_done(struct ub_dev *sc, struct ub_scsi_cmd *cmd)
 {
 	struct request *rq = cmd->back;
 	struct ub_lun *lun = cmd->lun;
-	struct gendisk *disk = lun->disk;
-	request_queue_t *q = disk->queue;
 	int uptodate;
 
-	if (blk_pc_request(rq)) {
-		/* UB_SENSE_SIZE is smaller than SCSI_SENSE_BUFFERSIZE */
-		memcpy(rq->sense, sc->top_sense, UB_SENSE_SIZE);
-		rq->sense_len = UB_SENSE_SIZE;
-	}
-
-	if (cmd->error == 0)
+	if (cmd->error == 0) {
 		uptodate = 1;
-	else
+
+		if (blk_pc_request(rq)) {
+			if (cmd->act_len >= rq->data_len)
+				rq->data_len = 0;
+			else
+				rq->data_len -= cmd->act_len;
+		}
+	} else {
 		uptodate = 0;
+
+		if (blk_pc_request(rq)) {
+			/* UB_SENSE_SIZE is smaller than SCSI_SENSE_BUFFERSIZE */
+			memcpy(rq->sense, sc->top_sense, UB_SENSE_SIZE);
+			rq->sense_len = UB_SENSE_SIZE;
+			if (sc->top_sense[0] != 0)
+				rq->errors = SAM_STAT_CHECK_CONDITION;
+			else
+				rq->errors = DID_ERROR << 16;
+		}
+	}
 
 	ub_put_cmd(lun, cmd);
 	ub_end_rq(rq, uptodate);
-	blk_start_queue(q);
+	blk_start_queue(lun->disk->queue);
 }
 
 static void ub_end_rq(struct request *rq, int uptodate)
@@ -944,7 +1011,6 @@ static int ub_scsi_cmd_start(struct ub_dev *sc, struct ub_scsi_cmd *cmd)
 	sc->last_pipe = sc->send_bulk_pipe;
 	usb_fill_bulk_urb(&sc->work_urb, sc->dev, sc->send_bulk_pipe,
 	    bcb, US_BULK_CB_WRAP_LEN, ub_urb_complete, sc);
-	sc->work_urb.transfer_flags = URB_ASYNC_UNLINK;
 
 	/* Fill what we shouldn't be filling, because usb-storage did so. */
 	sc->work_urb.actual_length = 0;
@@ -953,7 +1019,6 @@ static int ub_scsi_cmd_start(struct ub_dev *sc, struct ub_scsi_cmd *cmd)
 
 	if ((rc = usb_submit_urb(&sc->work_urb, GFP_ATOMIC)) != 0) {
 		/* XXX Clear stalls */
-		printk("ub: cmd #%d start failed (%d)\n", cmd->tag, rc); /* P3 */
 		ub_complete(&sc->work_done);
 		return rc;
 	}
@@ -1033,7 +1098,6 @@ static void ub_scsi_urb_compl(struct ub_dev *sc, struct ub_scsi_cmd *cmd)
 {
 	struct urb *urb = &sc->work_urb;
 	struct bulk_cs_wrap *bcs;
-	int pipe;
 	int rc;
 
 	if (atomic_read(&sc->poison)) {
@@ -1085,6 +1149,28 @@ static void ub_scsi_urb_compl(struct ub_dev *sc, struct ub_scsi_cmd *cmd)
 
 		ub_state_stat(sc, cmd);
 
+	} else if (cmd->state == UB_CMDST_CLRRS) {
+		if (urb->status == -EPIPE) {
+			/*
+			 * STALL while clearning STALL.
+			 * The control pipe clears itself - nothing to do.
+			 * XXX Might try to reset the device here and retry.
+			 */
+			printk(KERN_NOTICE "%s: stall on control pipe\n",
+			    sc->name);
+			goto Bad_End;
+		}
+
+		/*
+		 * We ignore the result for the halt clear.
+		 */
+
+		/* reset the endpoint toggle */
+		usb_settoggle(sc->dev, usb_pipeendpoint(sc->last_pipe),
+			usb_pipeout(sc->last_pipe), 0);
+
+		ub_state_stat_counted(sc, cmd);
+
 	} else if (cmd->state == UB_CMDST_CMD) {
 		if (urb->status == -EPIPE) {
 			rc = ub_submit_clear_stall(sc, cmd, sc->last_pipe);
@@ -1103,47 +1189,20 @@ static void ub_scsi_urb_compl(struct ub_dev *sc, struct ub_scsi_cmd *cmd)
 			return;
 		}
 		if (urb->status != 0) {
-			printk("ub: cmd #%d cmd status (%d)\n", cmd->tag, urb->status); /* P3 */
 			goto Bad_End;
 		}
 		if (urb->actual_length != US_BULK_CB_WRAP_LEN) {
-			printk("ub: cmd #%d xferred %d\n", cmd->tag, urb->actual_length); /* P3 */
 			/* XXX Must do reset here to unconfuse the device */
 			goto Bad_End;
 		}
 
-		if (cmd->dir == UB_DIR_NONE) {
+		if (cmd->dir == UB_DIR_NONE || cmd->nsg < 1) {
 			ub_state_stat(sc, cmd);
 			return;
 		}
 
-		UB_INIT_COMPLETION(sc->work_done);
-
-		if (cmd->dir == UB_DIR_READ)
-			pipe = sc->recv_bulk_pipe;
-		else
-			pipe = sc->send_bulk_pipe;
-		sc->last_pipe = pipe;
-		usb_fill_bulk_urb(&sc->work_urb, sc->dev, pipe,
-		    cmd->data, cmd->len, ub_urb_complete, sc);
-		sc->work_urb.transfer_flags = URB_ASYNC_UNLINK;
-		sc->work_urb.actual_length = 0;
-		sc->work_urb.error_count = 0;
-		sc->work_urb.status = 0;
-
-		if ((rc = usb_submit_urb(&sc->work_urb, GFP_ATOMIC)) != 0) {
-			/* XXX Clear stalls */
-			printk("ub: data #%d submit failed (%d)\n", cmd->tag, rc); /* P3 */
-			ub_complete(&sc->work_done);
-			ub_state_done(sc, cmd, rc);
-			return;
-		}
-
-		sc->work_timer.expires = jiffies + UB_DATA_TIMEOUT;
-		add_timer(&sc->work_timer);
-
-		cmd->state = UB_CMDST_DATA;
-		ub_cmdtr_state(sc, cmd);
+		// udelay(125);		// usb-storage has this
+		ub_data_start(sc, cmd);
 
 	} else if (cmd->state == UB_CMDST_DATA) {
 		if (urb->status == -EPIPE) {
@@ -1165,16 +1224,22 @@ static void ub_scsi_urb_compl(struct ub_dev *sc, struct ub_scsi_cmd *cmd)
 		if (urb->status == -EOVERFLOW) {
 			/*
 			 * A babble? Failure, but we must transfer CSW now.
+			 * XXX This is going to end in perpetual babble. Reset.
 			 */
 			cmd->error = -EOVERFLOW;	/* A cheap trick... */
-		} else {
-			if (urb->status != 0)
-				goto Bad_End;
+			ub_state_stat(sc, cmd);
+			return;
 		}
+		if (urb->status != 0)
+			goto Bad_End;
 
-		cmd->act_len = urb->actual_length;
+		cmd->act_len += urb->actual_length;
 		ub_cmdtr_act_len(sc, cmd);
 
+		if (++cmd->current_sg < cmd->nsg) {
+			ub_data_start(sc, cmd);
+			return;
+		}
 		ub_state_stat(sc, cmd);
 
 	} else if (cmd->state == UB_CMDST_STAT) {
@@ -1190,34 +1255,70 @@ static void ub_scsi_urb_compl(struct ub_dev *sc, struct ub_scsi_cmd *cmd)
 				 */
 				goto Bad_End;
 			}
-			cmd->state = UB_CMDST_CLEAR;
+
+			/*
+			 * Having a stall when getting CSW is an error, so
+			 * make sure uppper levels are not oblivious to it.
+			 */
+			cmd->error = -EIO;		/* A cheap trick... */
+
+			cmd->state = UB_CMDST_CLRRS;
 			ub_cmdtr_state(sc, cmd);
 			return;
+		}
+		if (urb->status == -EOVERFLOW) {
+			/*
+			 * XXX We are screwed here. Retrying is pointless,
+			 * because the pipelined data will not get in until
+			 * we read with a big enough buffer. We must reset XXX.
+			 */
+			goto Bad_End;
 		}
 		if (urb->status != 0)
 			goto Bad_End;
 
 		if (urb->actual_length == 0) {
-			/*
-			 * Some broken devices add unnecessary zero-length
-			 * packets to the end of their data transfers.
-			 * Such packets show up as 0-length CSWs. If we
-			 * encounter such a thing, try to read the CSW again.
-			 */
-			if (++cmd->stat_count >= 4) {
-				printk(KERN_NOTICE "%s: unable to get CSW\n",
-				    sc->name);
-				goto Bad_End;
-			}
-			__ub_state_stat(sc, cmd);
+			ub_state_stat_counted(sc, cmd);
 			return;
 		}
 
 		/*
 		 * Check the returned Bulk protocol status.
+		 * The status block has to be validated first.
 		 */
 
 		bcs = &sc->work_bcs;
+
+		if (sc->signature == cpu_to_le32(0)) {
+			/*
+			 * This is the first reply, so do not perform the check.
+			 * Instead, remember the signature the device uses
+			 * for future checks. But do not allow a nul.
+			 */
+			sc->signature = bcs->Signature;
+			if (sc->signature == cpu_to_le32(0)) {
+				ub_state_stat_counted(sc, cmd);
+				return;
+			}
+		} else {
+			if (bcs->Signature != sc->signature) {
+				ub_state_stat_counted(sc, cmd);
+				return;
+			}
+		}
+
+		if (bcs->Tag != cmd->tag) {
+			/*
+			 * This usually happens when we disagree with the
+			 * device's microcode about something. For instance,
+			 * a few of them throw this after timeouts. They buffer
+			 * commands and reply at commands we timed out before.
+			 * Without flushing these replies we loop forever.
+			 */
+			ub_state_stat_counted(sc, cmd);
+			return;
+		}
+
 		rc = le32_to_cpu(bcs->Residue);
 		if (rc != cmd->len - cmd->act_len) {
 			/*
@@ -1228,31 +1329,6 @@ static void ub_scsi_urb_compl(struct ub_dev *sc, struct ub_scsi_cmd *cmd)
 			/* P3 */ printk("%s: resid %d len %d act %d\n",
 			    sc->name, rc, cmd->len, cmd->act_len);
 			goto Bad_End;
-		}
-
-#if 0
-		if (bcs->Signature != cpu_to_le32(US_BULK_CS_SIGN) &&
-		    bcs->Signature != cpu_to_le32(US_BULK_CS_OLYMPUS_SIGN)) {
-			/* Windows ignores signatures, so do we. */
-		}
-#endif
-
-		if (bcs->Tag != cmd->tag) {
-			/*
-			 * This usually happens when we disagree with the
-			 * device's microcode about something. For instance,
-			 * a few of them throw this after timeouts. They buffer
-			 * commands and reply at commands we timed out before.
-			 * Without flushing these replies we loop forever.
-			 */
-			if (++cmd->stat_count >= 4) {
-				printk(KERN_NOTICE "%s: "
-				    "tag mismatch orig 0x%x reply 0x%x\n",
-				    sc->name, cmd->tag, bcs->Tag);
-				goto Bad_End;
-			}
-			__ub_state_stat(sc, cmd);
-			return;
 		}
 
 		switch (bcs->Status) {
@@ -1272,6 +1348,10 @@ static void ub_scsi_urb_compl(struct ub_dev *sc, struct ub_scsi_cmd *cmd)
 		}
 
 		/* Not zeroing error to preserve a babble indicator */
+		if (cmd->error != 0) {
+			ub_state_sense(sc, cmd);
+			return;
+		}
 		cmd->state = UB_CMDST_DONE;
 		ub_cmdtr_state(sc, cmd);
 		ub_cmdq_pop(sc);
@@ -1294,6 +1374,44 @@ Bad_End: /* Little Excel is dead */
 
 /*
  * Factorization helper for the command state machine:
+ * Initiate a data segment transfer.
+ */
+static void ub_data_start(struct ub_dev *sc, struct ub_scsi_cmd *cmd)
+{
+	struct scatterlist *sg = &cmd->sgv[cmd->current_sg];
+	int pipe;
+	int rc;
+
+	UB_INIT_COMPLETION(sc->work_done);
+
+	if (cmd->dir == UB_DIR_READ)
+		pipe = sc->recv_bulk_pipe;
+	else
+		pipe = sc->send_bulk_pipe;
+	sc->last_pipe = pipe;
+	usb_fill_bulk_urb(&sc->work_urb, sc->dev, pipe,
+	    page_address(sg->page) + sg->offset, sg->length,
+	    ub_urb_complete, sc);
+	sc->work_urb.actual_length = 0;
+	sc->work_urb.error_count = 0;
+	sc->work_urb.status = 0;
+
+	if ((rc = usb_submit_urb(&sc->work_urb, GFP_ATOMIC)) != 0) {
+		/* XXX Clear stalls */
+		ub_complete(&sc->work_done);
+		ub_state_done(sc, cmd, rc);
+		return;
+	}
+
+	sc->work_timer.expires = jiffies + UB_DATA_TIMEOUT;
+	add_timer(&sc->work_timer);
+
+	cmd->state = UB_CMDST_DATA;
+	ub_cmdtr_state(sc, cmd);
+}
+
+/*
+ * Factorization helper for the command state machine:
  * Finish the command.
  */
 static void ub_state_done(struct ub_dev *sc, struct ub_scsi_cmd *cmd, int rc)
@@ -1310,7 +1428,7 @@ static void ub_state_done(struct ub_dev *sc, struct ub_scsi_cmd *cmd, int rc)
  * Factorization helper for the command state machine:
  * Submit a CSW read.
  */
-static void __ub_state_stat(struct ub_dev *sc, struct ub_scsi_cmd *cmd)
+static int __ub_state_stat(struct ub_dev *sc, struct ub_scsi_cmd *cmd)
 {
 	int rc;
 
@@ -1319,7 +1437,6 @@ static void __ub_state_stat(struct ub_dev *sc, struct ub_scsi_cmd *cmd)
 	sc->last_pipe = sc->recv_bulk_pipe;
 	usb_fill_bulk_urb(&sc->work_urb, sc->dev, sc->recv_bulk_pipe,
 	    &sc->work_bcs, US_BULK_CS_WRAP_LEN, ub_urb_complete, sc);
-	sc->work_urb.transfer_flags = URB_ASYNC_UNLINK;
 	sc->work_urb.actual_length = 0;
 	sc->work_urb.error_count = 0;
 	sc->work_urb.status = 0;
@@ -1328,11 +1445,12 @@ static void __ub_state_stat(struct ub_dev *sc, struct ub_scsi_cmd *cmd)
 		/* XXX Clear stalls */
 		ub_complete(&sc->work_done);
 		ub_state_done(sc, cmd, rc);
-		return;
+		return -1;
 	}
 
 	sc->work_timer.expires = jiffies + UB_STAT_TIMEOUT;
 	add_timer(&sc->work_timer);
+	return 0;
 }
 
 /*
@@ -1341,9 +1459,30 @@ static void __ub_state_stat(struct ub_dev *sc, struct ub_scsi_cmd *cmd)
  */
 static void ub_state_stat(struct ub_dev *sc, struct ub_scsi_cmd *cmd)
 {
-	__ub_state_stat(sc, cmd);
+
+	if (__ub_state_stat(sc, cmd) != 0)
+		return;
 
 	cmd->stat_count = 0;
+	cmd->state = UB_CMDST_STAT;
+	ub_cmdtr_state(sc, cmd);
+}
+
+/*
+ * Factorization helper for the command state machine:
+ * Submit a CSW read and go to STAT state with counter (along [C] path).
+ */
+static void ub_state_stat_counted(struct ub_dev *sc, struct ub_scsi_cmd *cmd)
+{
+
+	if (++cmd->stat_count >= 4) {
+		ub_state_sense(sc, cmd);
+		return;
+	}
+
+	if (__ub_state_stat(sc, cmd) != 0)
+		return;
+
 	cmd->state = UB_CMDST_STAT;
 	ub_cmdtr_state(sc, cmd);
 }
@@ -1355,6 +1494,7 @@ static void ub_state_stat(struct ub_dev *sc, struct ub_scsi_cmd *cmd)
 static void ub_state_sense(struct ub_dev *sc, struct ub_scsi_cmd *cmd)
 {
 	struct ub_scsi_cmd *scmd;
+	struct scatterlist *sg;
 	int rc;
 
 	if (cmd->cdb[0] == REQUEST_SENSE) {
@@ -1363,12 +1503,17 @@ static void ub_state_sense(struct ub_dev *sc, struct ub_scsi_cmd *cmd)
 	}
 
 	scmd = &sc->top_rqs_cmd;
+	memset(scmd, 0, sizeof(struct ub_scsi_cmd));
 	scmd->cdb[0] = REQUEST_SENSE;
 	scmd->cdb[4] = UB_SENSE_SIZE;
 	scmd->cdb_len = 6;
 	scmd->dir = UB_DIR_READ;
 	scmd->state = UB_CMDST_INIT;
-	scmd->data = sc->top_sense;
+	scmd->nsg = 1;
+	sg = &scmd->sgv[0];
+	sg->page = virt_to_page(sc->top_sense);
+	sg->offset = (unsigned int)sc->top_sense & (PAGE_SIZE-1);
+	sg->length = UB_SENSE_SIZE;
 	scmd->len = UB_SENSE_SIZE;
 	scmd->lun = cmd->lun;
 	scmd->done = ub_top_sense_done;
@@ -1412,7 +1557,6 @@ static int ub_submit_clear_stall(struct ub_dev *sc, struct ub_scsi_cmd *cmd,
 
 	usb_fill_control_urb(&sc->work_urb, sc->dev, sc->send_ctrl_pipe,
 	    (unsigned char*) cr, NULL, 0, ub_urb_complete, sc);
-	sc->work_urb.transfer_flags = URB_ASYNC_UNLINK;
 	sc->work_urb.actual_length = 0;
 	sc->work_urb.error_count = 0;
 	sc->work_urb.status = 0;
@@ -1431,7 +1575,7 @@ static int ub_submit_clear_stall(struct ub_dev *sc, struct ub_scsi_cmd *cmd,
  */
 static void ub_top_sense_done(struct ub_dev *sc, struct ub_scsi_cmd *scmd)
 {
-	unsigned char *sense = scmd->data;
+	unsigned char *sense = sc->top_sense;
 	struct ub_scsi_cmd *cmd;
 
 	/*
@@ -1723,6 +1867,7 @@ static int ub_sync_read_cap(struct ub_dev *sc, struct ub_lun *lun,
     struct ub_capacity *ret)
 {
 	struct ub_scsi_cmd *cmd;
+	struct scatterlist *sg;
 	char *p;
 	enum { ALLOC_SIZE = sizeof(struct ub_scsi_cmd) + 8 };
 	unsigned long flags;
@@ -1743,7 +1888,11 @@ static int ub_sync_read_cap(struct ub_dev *sc, struct ub_lun *lun,
 	cmd->cdb_len = 10;
 	cmd->dir = UB_DIR_READ;
 	cmd->state = UB_CMDST_INIT;
-	cmd->data = p;
+	cmd->nsg = 1;
+	sg = &cmd->sgv[0];
+	sg->page = virt_to_page(p);
+	sg->offset = (unsigned int)p & (PAGE_SIZE-1);
+	sg->length = 8;
 	cmd->len = 8;
 	cmd->lun = lun;
 	cmd->done = ub_probe_done;
@@ -1844,17 +1993,16 @@ static int ub_sync_getmaxlun(struct ub_dev *sc)
 
 	usb_fill_control_urb(&sc->work_urb, sc->dev, sc->recv_ctrl_pipe,
 	    (unsigned char*) cr, p, 1, ub_probe_urb_complete, &compl);
-	sc->work_urb.transfer_flags = 0;
 	sc->work_urb.actual_length = 0;
 	sc->work_urb.error_count = 0;
 	sc->work_urb.status = 0;
 
 	if ((rc = usb_submit_urb(&sc->work_urb, GFP_KERNEL)) != 0) {
 		if (rc == -EPIPE) {
-			printk("%s: Stall at GetMaxLUN, using 1 LUN\n",
+			printk("%s: Stall submitting GetMaxLUN, using 1 LUN\n",
 			     sc->name); /* P3 */
 		} else {
-			printk(KERN_WARNING
+			printk(KERN_NOTICE
 			     "%s: Unable to submit GetMaxLUN (%d)\n",
 			     sc->name, rc);
 		}
@@ -1871,6 +2019,18 @@ static int ub_sync_getmaxlun(struct ub_dev *sc)
 
 	del_timer_sync(&timer);
 	usb_kill_urb(&sc->work_urb);
+
+	if ((rc = sc->work_urb.status) < 0) {
+		if (rc == -EPIPE) {
+			printk("%s: Stall at GetMaxLUN, using 1 LUN\n",
+			     sc->name); /* P3 */
+		} else {
+			printk(KERN_NOTICE
+			     "%s: Error at GetMaxLUN (%d)\n",
+			     sc->name, rc);
+		}
+		goto err_io;
+	}
 
 	if (sc->work_urb.actual_length != 1) {
 		printk("%s: GetMaxLUN returned %d bytes\n", sc->name,
@@ -1892,6 +2052,7 @@ static int ub_sync_getmaxlun(struct ub_dev *sc)
 	kfree(p);
 	return nluns;
 
+err_io:
 err_submit:
 	kfree(p);
 err_alloc:
@@ -1924,7 +2085,6 @@ static int ub_probe_clear_stall(struct ub_dev *sc, int stalled_pipe)
 
 	usb_fill_control_urb(&sc->work_urb, sc->dev, sc->send_ctrl_pipe,
 	    (unsigned char*) cr, NULL, 0, ub_probe_urb_complete, &compl);
-	sc->work_urb.transfer_flags = 0;
 	sc->work_urb.actual_length = 0;
 	sc->work_urb.error_count = 0;
 	sc->work_urb.status = 0;
@@ -2057,8 +2217,10 @@ static int ub_probe(struct usb_interface *intf,
 	 * This is needed to clear toggles. It is a problem only if we do
 	 * `rmmod ub && modprobe ub` without disconnects, but we like that.
 	 */
+#if 0 /* iPod Mini fails if we do this (big white iPod works) */
 	ub_probe_clear_stall(sc, sc->recv_bulk_pipe);
 	ub_probe_clear_stall(sc, sc->send_bulk_pipe);
+#endif
 
 	/*
 	 * The way this is used by the startup code is a little specific.
@@ -2085,10 +2247,10 @@ static int ub_probe(struct usb_interface *intf,
 	for (i = 0; i < 3; i++) {
 		if ((rc = ub_sync_getmaxlun(sc)) < 0) {
 			/* 
-			 * Some devices (i.e. Iomega Zip100) need this --
-			 * apparently the bulk pipes get STALLed when the
-			 * GetMaxLUN request is processed.
-			 * XXX I have a ZIP-100, verify it does this.
+			 * This segment is taken from usb-storage. They say
+			 * that ZIP-100 needs this, but my own ZIP-100 works
+			 * fine without this.
+			 * Still, it does not seem to hurt anything.
 			 */
 			if (rc == -EPIPE) {
 				ub_probe_clear_stall(sc, sc->recv_bulk_pipe);
@@ -2157,10 +2319,10 @@ static int ub_probe_lun(struct ub_dev *sc, int lnum)
 	disk->first_minor = lun->id * UB_MINORS_PER_MAJOR;
 	disk->fops = &ub_bd_fops;
 	disk->private_data = lun;
-	disk->driverfs_dev = &sc->intf->dev;	/* XXX Many to one ok? */
+	disk->driverfs_dev = &sc->intf->dev;
 
 	rc = -ENOMEM;
-	if ((q = blk_init_queue(ub_bd_rq_fn, &sc->lock)) == NULL)
+	if ((q = blk_init_queue(ub_request_fn, &sc->lock)) == NULL)
 		goto err_blkqinit;
 
 	disk->queue = q;
@@ -2309,9 +2471,6 @@ static struct usb_driver ub_driver = {
 static int __init ub_init(void)
 {
 	int rc;
-
-	/* P3 */ printk("ub: sizeof ub_scsi_cmd %zu ub_dev %zu ub_lun %zu\n",
-			sizeof(struct ub_scsi_cmd), sizeof(struct ub_dev), sizeof(struct ub_lun));
 
 	if ((rc = register_blkdev(UB_MAJOR, DRV_NAME)) != 0)
 		goto err_regblkdev;

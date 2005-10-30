@@ -8,7 +8,8 @@
  * 
  *  X86-64 port
  *	Andi Kleen.
- * 
+ *
+ *	CPU hotplug support - ashok.raj@intel.com
  *  $Id: process.c,v 1.38 2002/01/15 10:08:03 ak Exp $
  */
 
@@ -18,6 +19,7 @@
 
 #include <stdarg.h>
 
+#include <linux/cpu.h>
 #include <linux/errno.h>
 #include <linux/sched.h>
 #include <linux/kernel.h>
@@ -30,10 +32,10 @@
 #include <linux/a.out.h>
 #include <linux/interrupt.h>
 #include <linux/delay.h>
-#include <linux/irq.h>
 #include <linux/ptrace.h>
 #include <linux/utsname.h>
 #include <linux/random.h>
+#include <linux/kprobes.h>
 
 #include <asm/uaccess.h>
 #include <asm/pgtable.h>
@@ -120,6 +122,7 @@ static void poll_idle (void)
 			: :
 			"i" (_TIF_NEED_RESCHED), 
 			"m" (current_thread_info()->flags));
+		clear_thread_flag(TIF_POLLING_NRFLAG);
 	} else {
 		set_need_resched();
 	}
@@ -153,6 +156,29 @@ void cpu_idle_wait(void)
 }
 EXPORT_SYMBOL_GPL(cpu_idle_wait);
 
+#ifdef CONFIG_HOTPLUG_CPU
+DECLARE_PER_CPU(int, cpu_state);
+
+#include <asm/nmi.h>
+/* We don't actually take CPU down, just spin without interrupts. */
+static inline void play_dead(void)
+{
+	idle_task_exit();
+	wbinvd();
+	mb();
+	/* Ack it */
+	__get_cpu_var(cpu_state) = CPU_DEAD;
+
+	while (1)
+		safe_halt();
+}
+#else
+static inline void play_dead(void)
+{
+	BUG();
+}
+#endif /* CONFIG_HOTPLUG_CPU */
+
 /*
  * The idle thread. There's no useful work to be
  * done, so just try to conserve power and have a
@@ -173,6 +199,8 @@ void cpu_idle (void)
 			idle = pm_idle;
 			if (!idle)
 				idle = default_idle;
+			if (cpu_is_offline(smp_processor_id()))
+				play_dead();
 			idle();
 		}
 
@@ -203,7 +231,7 @@ static void mwait_idle(void)
 	}
 }
 
-void __init select_idle_routine(const struct cpuinfo_x86 *c)
+void __cpuinit select_idle_routine(const struct cpuinfo_x86 *c)
 {
 	static int printed;
 	if (cpu_has(c, X86_FEATURE_MWAIT)) {
@@ -243,8 +271,11 @@ void __show_regs(struct pt_regs * regs)
 
 	printk("\n");
 	print_modules();
-	printk("Pid: %d, comm: %.20s %s %s\n", 
-	       current->pid, current->comm, print_tainted(), system_utsname.release);
+	printk("Pid: %d, comm: %.20s %s %s %.*s\n",
+		current->pid, current->comm, print_tainted(),
+		system_utsname.release,
+		(int)strcspn(system_utsname.version, " "),
+		system_utsname.version);
 	printk("RIP: %04lx:[<%016lx>] ", regs->cs & 0xffff, regs->rip);
 	printk_address(regs->rip); 
 	printk("\nRSP: %04lx:%016lx  EFLAGS: %08lx\n", regs->ss, regs->rsp, regs->eflags);
@@ -282,6 +313,7 @@ void __show_regs(struct pt_regs * regs)
 
 void show_regs(struct pt_regs *regs)
 {
+	printk("CPU %d:", smp_processor_id());
 	__show_regs(regs);
 	show_trace(&regs->rsp);
 }
@@ -293,6 +325,14 @@ void exit_thread(void)
 {
 	struct task_struct *me = current;
 	struct thread_struct *t = &me->thread;
+
+	/*
+	 * Remove function-return probe instances associated with this task
+	 * and put them back on the free list. Do not insert an exit probe for
+	 * this function, it will be disabled by kprobe_flush_task if you do.
+	 */
+	kprobe_flush_task(me);
+
 	if (me->thread.io_bitmap_ptr) { 
 		struct tss_struct *tss = &per_cpu(init_tss, get_cpu());
 
@@ -311,6 +351,13 @@ void flush_thread(void)
 {
 	struct task_struct *tsk = current;
 	struct thread_info *t = current_thread_info();
+
+	/*
+	 * Remove function-return probe instances associated with this task
+	 * and put them back on the free list. Do not insert an exit probe for
+	 * this function, it will be disabled by kprobe_flush_task if you do.
+	 */
+	kprobe_flush_task(tsk);
 
 	if (t->flags & _TIF_ABI_PENDING)
 		t->flags ^= (_TIF_ABI_PENDING | _TIF_IA32);
@@ -656,7 +703,7 @@ long do_arch_prctl(struct task_struct *task, int code, unsigned long addr)
 
 	switch (code) { 
 	case ARCH_SET_GS:
-		if (addr >= TASK_SIZE) 
+		if (addr >= TASK_SIZE_OF(task))
 			return -EPERM; 
 		cpu = get_cpu();
 		/* handle small bases via the GDT because that's faster to 
@@ -682,7 +729,7 @@ long do_arch_prctl(struct task_struct *task, int code, unsigned long addr)
 	case ARCH_SET_FS:
 		/* Not strictly needed for fs, but do it for symmetry
 		   with gs */
-		if (addr >= TASK_SIZE)
+		if (addr >= TASK_SIZE_OF(task))
 			return -EPERM; 
 		cpu = get_cpu();
 		/* handle small bases via the GDT because that's faster to 

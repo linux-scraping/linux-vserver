@@ -209,7 +209,7 @@ enum {
 	NoStructure = 0,	/* Really old firmware */
 	StructuredMessages = 1,	/* Parsable AT response msgs */
 	ChecksummedMessages = 2	/* Parsable AT response msgs with checksums */
-} FirmwareLevel;
+};
 
 struct strip {
 	int magic;
@@ -1352,7 +1352,7 @@ static unsigned char *strip_make_packet(unsigned char *buffer,
 		struct in_device *in_dev;
 
 		rcu_read_lock();
-		in_dev = __in_dev_get(strip_info->dev);
+		in_dev = __in_dev_get_rcu(strip_info->dev);
 		if (in_dev == NULL) {
 			rcu_read_unlock();
 			return NULL;
@@ -1508,7 +1508,7 @@ static void strip_send(struct strip *strip_info, struct sk_buff *skb)
 
 		brd = addr = 0;
 		rcu_read_lock();
-		in_dev = __in_dev_get(strip_info->dev);
+		in_dev = __in_dev_get_rcu(strip_info->dev);
 		if (in_dev) {
 			if (in_dev->ifa_list) {
 				brd = in_dev->ifa_list->ifa_broadcast;
@@ -2828,7 +2828,7 @@ static void __exit strip_exit_driver(void)
 	/* Unregister with the /proc/net file here. */
 	proc_net_remove("strip");
 
-	if ((i = tty_register_ldisc(N_STRIP, NULL)))
+	if ((i = tty_unregister_ldisc(N_STRIP)))
 		printk(KERN_ERR "STRIP: can't unregister line discipline (err = %d)\n", i);
 
 	printk(signoff);

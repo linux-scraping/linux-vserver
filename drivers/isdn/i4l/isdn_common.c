@@ -67,7 +67,7 @@ static isdn_divert_if *divert_if; /* = NULL */
 static int isdn_writebuf_stub(int, int, const u_char __user *, int);
 static void set_global_features(void);
 static int isdn_wildmat(char *s, char *p);
-
+static int isdn_add_channels(isdn_driver_t *d, int drvidx, int n, int adding);
 
 static inline void
 isdn_lock_driver(isdn_driver_t *drv)
@@ -388,7 +388,7 @@ isdn_all_eaz(int di, int ch)
  */
 #include <linux/isdn/capicmd.h>
 
-int
+static int
 isdn_capi_rec_hl_msg(capi_msg *cm) {
 	
 	int di;
@@ -1923,7 +1923,7 @@ isdn_writebuf_skb_stub(int drvidx, int chan, int ack, struct sk_buff *skb)
 	return ret;
 }
 
-int
+static int
 isdn_add_channels(isdn_driver_t *d, int drvidx, int n, int adding)
 {
 	int j, k, m;
@@ -1953,7 +1953,8 @@ isdn_add_channels(isdn_driver_t *d, int drvidx, int n, int adding)
 		kfree(d->rcvcount);
 	if (!(d->rcvcount = kmalloc(sizeof(int) * m, GFP_ATOMIC))) {
 		printk(KERN_WARNING "register_isdn: Could not alloc rcvcount\n");
-		if (!adding) kfree(d->rcverr);
+		if (!adding)
+			kfree(d->rcverr);
 		return -1;
 	}
 	memset((char *) d->rcvcount, 0, sizeof(int) * m);

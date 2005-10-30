@@ -475,7 +475,20 @@
  *        Solution is to move call to dev_remove_pack outside of the
  *        spinlock.
  *        Set version to 2.6.1.
- *
+ * 2005/06/05 - Jay Vosburgh <fubar@us.ibm.com>
+ * 	- Support for generating gratuitous ARPs in active-backup mode.
+ * 	  Includes support for VLAN tagging all bonding-generated ARPs
+ * 	  as needed.  Set version to 2.6.2.
+ * 2005/06/08 - Jason Gabler <jygabler at lbl dot gov>
+ *	- alternate hashing policy support for mode 2
+ *	  * Added kernel parameter "xmit_hash_policy" to allow the selection
+ *	    of different hashing policies for mode 2.  The original mode 2
+ *	    policy is the default, now found in xmit_hash_policy_layer2().
+ *	  * Added xmit_hash_policy_layer34()
+ *	- Modified by Jay Vosburgh <fubar@us.ibm.com> to also support mode 4.
+ *	  Set version to 2.6.3.
+ * 2005/09/26 - Jay Vosburgh <fubar@us.ibm.com>
+ *	- Removed backwards compatibility for old ifenslaves.  Version 2.6.4.
  */
 
 //#define BONDING_DEBUG 1
@@ -490,7 +503,10 @@
 #include <linux/ptrace.h>
 #include <linux/ioport.h>
 #include <linux/in.h>
+#include <net/ip.h>
 #include <linux/ip.h>
+#include <linux/tcp.h>
+#include <linux/udp.h>
 #include <linux/slab.h>
 #include <linux/string.h>
 #include <linux/init.h>
@@ -519,6 +535,7 @@
 #include <linux/ethtool.h>
 #include <linux/if_vlan.h>
 #include <linux/if_bonding.h>
+#include <net/route.h>
 #include "bonding.h"
 #include "bond_3ad.h"
 #include "bond_alb.h"
@@ -537,6 +554,7 @@ static int use_carrier	= 1;
 static char *mode	= NULL;
 static char *primary	= NULL;
 static char *lacp_rate	= NULL;
+static char *xmit_hash_policy = NULL;
 static int arp_interval = BOND_LINK_ARP_INTERV;
 static char *arp_ip_target[BOND_MAX_ARP_TARGETS] = { NULL, };
 
@@ -556,6 +574,8 @@ module_param(primary, charp, 0);
 MODULE_PARM_DESC(primary, "Primary network device to use");
 module_param(lacp_rate, charp, 0);
 MODULE_PARM_DESC(lacp_rate, "LACPDU tx rate to request from 802.3ad partner (slow/fast)");
+module_param(xmit_hash_policy, charp, 0);
+MODULE_PARM_DESC(xmit_hash_policy, "XOR hashing method : 0 for layer 2 (default), 1 for layer 3+4");
 module_param(arp_interval, int, 0);
 MODULE_PARM_DESC(arp_interval, "arp interval in milliseconds");
 module_param_array(arp_ip_target, charp, NULL, 0);
@@ -574,17 +594,9 @@ static struct proc_dir_entry *bond_proc_dir = NULL;
 
 static u32 arp_target[BOND_MAX_ARP_TARGETS] = { 0, } ;
 static int arp_ip_count	= 0;
-static u32 my_ip	= 0;
 static int bond_mode	= BOND_MODE_ROUNDROBIN;
+static int xmit_hashtype= BOND_XMIT_POLICY_LAYER2;
 static int lacp_fast	= 0;
-static int app_abi_ver	= 0;
-static int orig_app_abi_ver = -1; /* This is used to save the first ABI version
-				   * we receive from the application. Once set,
-				   * it won't be changed, and the module will
-				   * refuse to enslave/release interfaces if the
-				   * command comes from an application using
-				   * another ABI version.
-				   */
 
 struct bond_parm_tbl {
 	char *modename;
@@ -608,9 +620,16 @@ static struct bond_parm_tbl bond_mode_tbl[] = {
 {	NULL,			-1},
 };
 
+static struct bond_parm_tbl xmit_hashtype_tbl[] = {
+{	"layer2",		BOND_XMIT_POLICY_LAYER2},
+{	"layer3+4",		BOND_XMIT_POLICY_LAYER34},
+{	NULL,			-1},
+};
+
 /*-------------------------- Forward declarations ---------------------------*/
 
-static inline void bond_set_mode_ops(struct net_device *bond_dev, int mode);
+static inline void bond_set_mode_ops(struct bonding *bond, int mode);
+static void bond_send_gratuitous_arp(struct bonding *bond);
 
 /*---------------------------- General routines -----------------------------*/
 
@@ -659,6 +678,7 @@ static int bond_add_vlan(struct bonding *bond, unsigned short vlan_id)
 
 	INIT_LIST_HEAD(&vlan->vlan_list);
 	vlan->vlan_id = vlan_id;
+	vlan->vlan_ip = 0;
 
 	write_lock_bh(&bond->lock);
 
@@ -1269,12 +1289,13 @@ static void bond_mc_list_destroy(struct bonding *bond)
 /*
  * Copy all the Multicast addresses from src to the bonding device dst
  */
-static int bond_mc_list_copy(struct dev_mc_list *mc_list, struct bonding *bond, int gpf_flag)
+static int bond_mc_list_copy(struct dev_mc_list *mc_list, struct bonding *bond,
+			     gfp_t gfp_flag)
 {
 	struct dev_mc_list *dmi, *new_dmi;
 
 	for (dmi = mc_list; dmi; dmi = dmi->next) {
-		new_dmi = kmalloc(sizeof(struct dev_mc_list), gpf_flag);
+		new_dmi = kmalloc(sizeof(struct dev_mc_list), gfp_flag);
 
 		if (!new_dmi) {
 			/* FIXME: Potential memory leak !!! */
@@ -1468,16 +1489,6 @@ static void bond_change_active_slave(struct bonding *bond, struct slave *new_act
 		}
 	}
 
-	if (bond->params.mode == BOND_MODE_ACTIVEBACKUP) {
-		if (old_active) {
-			bond_set_slave_inactive_flags(old_active);
-		}
-
-		if (new_active) {
-			bond_set_slave_active_flags(new_active);
-		}
-	}
-
 	if (USES_PRIMARY(bond->params.mode)) {
 		bond_mc_swap(bond, new_active, old_active);
 	}
@@ -1487,6 +1498,17 @@ static void bond_change_active_slave(struct bonding *bond, struct slave *new_act
 		bond_alb_handle_active_change(bond, new_active);
 	} else {
 		bond->curr_active_slave = new_active;
+	}
+
+	if (bond->params.mode == BOND_MODE_ACTIVEBACKUP) {
+		if (old_active) {
+			bond_set_slave_inactive_flags(old_active);
+		}
+
+		if (new_active) {
+			bond_set_slave_active_flags(new_active);
+		}
+		bond_send_gratuitous_arp(bond);
 	}
 }
 
@@ -1578,6 +1600,44 @@ static int bond_sethwaddr(struct net_device *bond_dev, struct net_device *slave_
 	return 0;
 }
 
+#define BOND_INTERSECT_FEATURES \
+	(NETIF_F_SG|NETIF_F_IP_CSUM|NETIF_F_NO_CSUM|NETIF_F_HW_CSUM)
+
+/* 
+ * Compute the features available to the bonding device by 
+ * intersection of all of the slave devices' BOND_INTERSECT_FEATURES.
+ * Call this after attaching or detaching a slave to update the 
+ * bond's features.
+ */
+static int bond_compute_features(struct bonding *bond)
+{
+	int i;
+	struct slave *slave;
+	struct net_device *bond_dev = bond->dev;
+	int features = bond->bond_features;
+
+	bond_for_each_slave(bond, slave, i) {
+		struct net_device * slave_dev = slave->dev;
+		if (i == 0) {
+			features |= BOND_INTERSECT_FEATURES;
+		}
+		features &=
+			~(~slave_dev->features & BOND_INTERSECT_FEATURES);
+	}
+
+	/* turn off NETIF_F_SG if we need a csum and h/w can't do it */
+	if ((features & NETIF_F_SG) && 
+		!(features & (NETIF_F_IP_CSUM |
+			      NETIF_F_NO_CSUM |
+			      NETIF_F_HW_CSUM))) {
+		features &= ~NETIF_F_SG;
+	}
+
+	bond_dev->features = features;
+
+	return 0;
+}
+
 /* enslave device <slave> to bond device <master> */
 static int bond_enslave(struct net_device *bond_dev, struct net_device *slave_dev)
 {
@@ -1589,7 +1649,8 @@ static int bond_enslave(struct net_device *bond_dev, struct net_device *slave_de
 	int old_features = bond_dev->features;
 	int res = 0;
 
-	if (slave_dev->do_ioctl == NULL) {
+	if (!bond->params.use_carrier && slave_dev->ethtool_ops == NULL &&
+		slave_dev->do_ioctl == NULL) {
 		printk(KERN_WARNING DRV_NAME
 		       ": Warning : no link monitoring support for %s\n",
 		       slave_dev->name);
@@ -1637,51 +1698,29 @@ static int bond_enslave(struct net_device *bond_dev, struct net_device *slave_de
 		}
 	}
 
-	if (app_abi_ver >= 1) {
-		/* The application is using an ABI, which requires the
-		 * slave interface to be closed.
-		 */
-		if ((slave_dev->flags & IFF_UP)) {
-			printk(KERN_ERR DRV_NAME
-			       ": Error: %s is up\n",
-			       slave_dev->name);
-			res = -EPERM;
-			goto err_undo_flags;
-		}
+	/*
+	 * Old ifenslave binaries are no longer supported.  These can
+	 * be identified with moderate accurary by the state of the slave:
+	 * the current ifenslave will set the interface down prior to
+	 * enslaving it; the old ifenslave will not.
+	 */
+	if ((slave_dev->flags & IFF_UP)) {
+		printk(KERN_ERR DRV_NAME ": %s is up. "
+		       "This may be due to an out of date ifenslave.\n",
+		       slave_dev->name);
+		res = -EPERM;
+		goto err_undo_flags;
+	}
 
-		if (slave_dev->set_mac_address == NULL) {
-			printk(KERN_ERR DRV_NAME
-			       ": Error: The slave device you specified does "
-			       "not support setting the MAC address.\n");
-			printk(KERN_ERR
-			       "Your kernel likely does not support slave "
-			       "devices.\n");
+	if (slave_dev->set_mac_address == NULL) {
+		printk(KERN_ERR DRV_NAME
+		       ": Error: The slave device you specified does "
+		       "not support setting the MAC address.\n");
+		printk(KERN_ERR
+		       "Your kernel likely does not support slave devices.\n");
 
-			res = -EOPNOTSUPP;
-			goto err_undo_flags;
-		}
-	} else {
-		/* The application is not using an ABI, which requires the
-		 * slave interface to be open.
-		 */
-		if (!(slave_dev->flags & IFF_UP)) {
-			printk(KERN_ERR DRV_NAME
-			       ": Error: %s is not running\n",
-			       slave_dev->name);
-			res = -EINVAL;
-			goto err_undo_flags;
-		}
-
-		if ((bond->params.mode == BOND_MODE_8023AD) ||
-		    (bond->params.mode == BOND_MODE_TLB)    ||
-		    (bond->params.mode == BOND_MODE_ALB)) {
-			printk(KERN_ERR DRV_NAME
-			       ": Error: to use %s mode, you must upgrade "
-			       "ifenslave.\n",
-			       bond_mode_name(bond->params.mode));
-			res = -EOPNOTSUPP;
-			goto err_undo_flags;
-		}
+		res = -EOPNOTSUPP;
+		goto err_undo_flags;
 	}
 
 	new_slave = kmalloc(sizeof(struct slave), GFP_KERNEL);
@@ -1697,41 +1736,36 @@ static int bond_enslave(struct net_device *bond_dev, struct net_device *slave_de
 	 */
 	new_slave->original_flags = slave_dev->flags;
 
-	if (app_abi_ver >= 1) {
-		/* save slave's original ("permanent") mac address for
-		 * modes that needs it, and for restoring it upon release,
-		 * and then set it to the master's address
-		 */
-		memcpy(new_slave->perm_hwaddr, slave_dev->dev_addr, ETH_ALEN);
+	/*
+	 * Save slave's original ("permanent") mac address for modes
+	 * that need it, and for restoring it upon release, and then
+	 * set it to the master's address
+	 */
+	memcpy(new_slave->perm_hwaddr, slave_dev->dev_addr, ETH_ALEN);
 
-		/* set slave to master's mac address
-		 * The application already set the master's
-		 * mac address to that of the first slave
-		 */
-		memcpy(addr.sa_data, bond_dev->dev_addr, bond_dev->addr_len);
-		addr.sa_family = slave_dev->type;
-		res = dev_set_mac_address(slave_dev, &addr);
-		if (res) {
-			dprintk("Error %d calling set_mac_address\n", res);
-			goto err_free;
-		}
+	/*
+	 * Set slave to master's mac address.  The application already
+	 * set the master's mac address to that of the first slave
+	 */
+	memcpy(addr.sa_data, bond_dev->dev_addr, bond_dev->addr_len);
+	addr.sa_family = slave_dev->type;
+	res = dev_set_mac_address(slave_dev, &addr);
+	if (res) {
+		dprintk("Error %d calling set_mac_address\n", res);
+		goto err_free;
+	}
 
-		/* open the slave since the application closed it */
-		res = dev_open(slave_dev);
-		if (res) {
-			dprintk("Openning slave %s failed\n", slave_dev->name);
-			goto err_restore_mac;
-		}
+	/* open the slave since the application closed it */
+	res = dev_open(slave_dev);
+	if (res) {
+		dprintk("Openning slave %s failed\n", slave_dev->name);
+		goto err_restore_mac;
 	}
 
 	res = netdev_set_master(slave_dev, bond_dev);
 	if (res) {
 		dprintk("Error %d calling netdev_set_master\n", res);
-		if (app_abi_ver < 1) {
-			goto err_free;
-		} else {
-			goto err_close;
-		}
+		goto err_close;
 	}
 
 	new_slave->dev = slave_dev;
@@ -1784,6 +1818,8 @@ static int bond_enslave(struct net_device *bond_dev, struct net_device *slave_de
 
 	new_slave->delay = 0;
 	new_slave->link_failure_count = 0;
+
+	bond_compute_features(bond);
 
 	if (bond->params.miimon && !bond->params.use_carrier) {
 		link_reporting = bond_check_dev_link(bond, slave_dev, 1);
@@ -1930,39 +1966,6 @@ static int bond_enslave(struct net_device *bond_dev, struct net_device *slave_de
 
 	write_unlock_bh(&bond->lock);
 
-	if (app_abi_ver < 1) {
-		/*
-		 * !!! This is to support old versions of ifenslave.
-		 * We can remove this in 2.5 because our ifenslave takes
-		 * care of this for us.
-		 * We check to see if the master has a mac address yet.
-		 * If not, we'll give it the mac address of our slave device.
-		 */
-		int ndx = 0;
-
-		for (ndx = 0; ndx < bond_dev->addr_len; ndx++) {
-			dprintk("Checking ndx=%d of bond_dev->dev_addr\n",
-				ndx);
-			if (bond_dev->dev_addr[ndx] != 0) {
-				dprintk("Found non-zero byte at ndx=%d\n",
-					ndx);
-				break;
-			}
-		}
-
-		if (ndx == bond_dev->addr_len) {
-			/*
-			 * We got all the way through the address and it was
-			 * all 0's.
-			 */
-			dprintk("%s doesn't have a MAC address yet.  \n",
-				bond_dev->name);
-			dprintk("Going to give assign it from %s.\n",
-				slave_dev->name);
-			bond_sethwaddr(bond_dev, slave_dev);
-		}
-	}
-
 	printk(KERN_INFO DRV_NAME
 	       ": %s: enslaving %s as a%s interface with a%s link.\n",
 	       bond_dev->name, slave_dev->name,
@@ -1989,7 +1992,7 @@ err_free:
 
 err_undo_flags:
 	bond_dev->features = old_features;
-
+ 
 	return res;
 }
 
@@ -2073,6 +2076,8 @@ static int bond_release(struct net_device *bond_dev, struct net_device *slave_de
 
 	/* release the slave from its bond */
 	bond_detach_slave(bond, slave);
+
+	bond_compute_features(bond);
 
 	if (bond->primary_slave == slave) {
 		bond->primary_slave = NULL;
@@ -2158,12 +2163,10 @@ static int bond_release(struct net_device *bond_dev, struct net_device *slave_de
 	/* close slave before restoring its mac address */
 	dev_close(slave_dev);
 
-	if (app_abi_ver >= 1) {
-		/* restore original ("permanent") mac address */
-		memcpy(addr.sa_data, slave->perm_hwaddr, ETH_ALEN);
-		addr.sa_family = slave_dev->type;
-		dev_set_mac_address(slave_dev, &addr);
-	}
+	/* restore original ("permanent") mac address */
+	memcpy(addr.sa_data, slave->perm_hwaddr, ETH_ALEN);
+	addr.sa_family = slave_dev->type;
+	dev_set_mac_address(slave_dev, &addr);
 
 	/* restore the original state of the
 	 * IFF_NOARP flag that might have been
@@ -2217,6 +2220,8 @@ static int bond_release_all(struct net_device *bond_dev)
 			bond_alb_deinit_slave(bond, slave);
 		}
 
+		bond_compute_features(bond);
+
 		/* now that the slave is detached, unlock and perform
 		 * all the undo steps that should not be called from
 		 * within a lock.
@@ -2249,12 +2254,10 @@ static int bond_release_all(struct net_device *bond_dev)
 		/* close slave before restoring its mac address */
 		dev_close(slave_dev);
 
-		if (app_abi_ver >= 1) {
-			/* restore original ("permanent") mac address*/
-			memcpy(addr.sa_data, slave->perm_hwaddr, ETH_ALEN);
-			addr.sa_family = slave_dev->type;
-			dev_set_mac_address(slave_dev, &addr);
-		}
+		/* restore original ("permanent") mac address*/
+		memcpy(addr.sa_data, slave->perm_hwaddr, ETH_ALEN);
+		addr.sa_family = slave_dev->type;
+		dev_set_mac_address(slave_dev, &addr);
 
 		/* restore the original state of the IFF_NOARP flag that might have
 		 * been set by bond_set_slave_inactive_flags()
@@ -2350,57 +2353,6 @@ static int bond_ioctl_change_active(struct net_device *bond_dev, struct net_devi
 	write_unlock_bh(&bond->lock);
 
 	return res;
-}
-
-static int bond_ethtool_ioctl(struct net_device *bond_dev, struct ifreq *ifr)
-{
-	struct ethtool_drvinfo info;
-	void __user *addr = ifr->ifr_data;
-	uint32_t cmd;
-
-	if (get_user(cmd, (uint32_t __user *)addr)) {
-		return -EFAULT;
-	}
-
-	switch (cmd) {
-	case ETHTOOL_GDRVINFO:
-		if (copy_from_user(&info, addr, sizeof(info))) {
-			return -EFAULT;
-		}
-
-		if (strcmp(info.driver, "ifenslave") == 0) {
-			int new_abi_ver;
-			char *endptr;
-
-			new_abi_ver = simple_strtoul(info.fw_version,
-						     &endptr, 0);
-			if (*endptr) {
-				printk(KERN_ERR DRV_NAME
-				       ": Error: got invalid ABI "
-				       "version from application\n");
-
-				return -EINVAL;
-			}
-
-			if (orig_app_abi_ver == -1) {
-				orig_app_abi_ver  = new_abi_ver;
-			}
-
-			app_abi_ver = new_abi_ver;
-		}
-
-		strncpy(info.driver,  DRV_NAME, 32);
-		strncpy(info.version, DRV_VERSION, 32);
-		snprintf(info.fw_version, 32, "%d", BOND_ABI_VERSION);
-
-		if (copy_to_user(addr, &info, sizeof(info))) {
-			return -EFAULT;
-		}
-
-		return 0;
-	default:
-		return -EOPNOTSUPP;
-	}
 }
 
 static int bond_info_query(struct net_device *bond_dev, struct ifbond *info)
@@ -2694,15 +2646,183 @@ out:
 	read_unlock(&bond->lock);
 }
 
+
+static u32 bond_glean_dev_ip(struct net_device *dev)
+{
+	struct in_device *idev;
+	struct in_ifaddr *ifa;
+	u32 addr = 0;
+
+	if (!dev)
+		return 0;
+
+	rcu_read_lock();
+	idev = __in_dev_get_rcu(dev);
+	if (!idev)
+		goto out;
+
+	ifa = idev->ifa_list;
+	if (!ifa)
+		goto out;
+
+	addr = ifa->ifa_local;
+out:
+	rcu_read_unlock();
+	return addr;
+}
+
+static int bond_has_ip(struct bonding *bond)
+{
+	struct vlan_entry *vlan, *vlan_next;
+
+	if (bond->master_ip)
+		return 1;
+
+	if (list_empty(&bond->vlan_list))
+		return 0;
+
+	list_for_each_entry_safe(vlan, vlan_next, &bond->vlan_list,
+				 vlan_list) {
+		if (vlan->vlan_ip)
+			return 1;
+	}
+
+	return 0;
+}
+
+/*
+ * We go to the (large) trouble of VLAN tagging ARP frames because
+ * switches in VLAN mode (especially if ports are configured as
+ * "native" to a VLAN) might not pass non-tagged frames.
+ */
+static void bond_arp_send(struct net_device *slave_dev, int arp_op, u32 dest_ip, u32 src_ip, unsigned short vlan_id)
+{
+	struct sk_buff *skb;
+
+	dprintk("arp %d on slave %s: dst %x src %x vid %d\n", arp_op,
+	       slave_dev->name, dest_ip, src_ip, vlan_id);
+	       
+	skb = arp_create(arp_op, ETH_P_ARP, dest_ip, slave_dev, src_ip,
+			 NULL, slave_dev->dev_addr, NULL);
+
+	if (!skb) {
+		printk(KERN_ERR DRV_NAME ": ARP packet allocation failed\n");
+		return;
+	}
+	if (vlan_id) {
+		skb = vlan_put_tag(skb, vlan_id);
+		if (!skb) {
+			printk(KERN_ERR DRV_NAME ": failed to insert VLAN tag\n");
+			return;
+		}
+	}
+	arp_xmit(skb);
+}
+
+
 static void bond_arp_send_all(struct bonding *bond, struct slave *slave)
 {
-	int i;
+	int i, vlan_id, rv;
 	u32 *targets = bond->params.arp_targets;
+	struct vlan_entry *vlan, *vlan_next;
+	struct net_device *vlan_dev;
+	struct flowi fl;
+	struct rtable *rt;
 
 	for (i = 0; (i < BOND_MAX_ARP_TARGETS) && targets[i]; i++) {
-		arp_send(ARPOP_REQUEST, ETH_P_ARP, targets[i], slave->dev,
-			 my_ip, NULL, slave->dev->dev_addr,
-			 NULL);
+		dprintk("basa: target %x\n", targets[i]);
+		if (list_empty(&bond->vlan_list)) {
+			dprintk("basa: empty vlan: arp_send\n");
+			bond_arp_send(slave->dev, ARPOP_REQUEST, targets[i],
+				      bond->master_ip, 0);
+			continue;
+		}
+
+		/*
+		 * If VLANs are configured, we do a route lookup to
+		 * determine which VLAN interface would be used, so we
+		 * can tag the ARP with the proper VLAN tag.
+		 */
+		memset(&fl, 0, sizeof(fl));
+		fl.fl4_dst = targets[i];
+		fl.fl4_tos = RTO_ONLINK;
+
+		rv = ip_route_output_key(&rt, &fl);
+		if (rv) {
+			if (net_ratelimit()) {
+				printk(KERN_WARNING DRV_NAME
+			     ": %s: no route to arp_ip_target %u.%u.%u.%u\n",
+				       bond->dev->name, NIPQUAD(fl.fl4_dst));
+			}
+			continue;
+		}
+
+		/*
+		 * This target is not on a VLAN
+		 */
+		if (rt->u.dst.dev == bond->dev) {
+			ip_rt_put(rt);
+			dprintk("basa: rtdev == bond->dev: arp_send\n");
+			bond_arp_send(slave->dev, ARPOP_REQUEST, targets[i],
+				      bond->master_ip, 0);
+			continue;
+		}
+
+		vlan_id = 0;
+		list_for_each_entry_safe(vlan, vlan_next, &bond->vlan_list,
+					 vlan_list) {
+			vlan_dev = bond->vlgrp->vlan_devices[vlan->vlan_id];
+			if (vlan_dev == rt->u.dst.dev) {
+				vlan_id = vlan->vlan_id;
+				dprintk("basa: vlan match on %s %d\n",
+				       vlan_dev->name, vlan_id);
+				break;
+			}
+		}
+
+		if (vlan_id) {
+			ip_rt_put(rt);
+			bond_arp_send(slave->dev, ARPOP_REQUEST, targets[i],
+				      vlan->vlan_ip, vlan_id);
+			continue;
+		}
+
+		if (net_ratelimit()) {
+			printk(KERN_WARNING DRV_NAME
+	       ": %s: no path to arp_ip_target %u.%u.%u.%u via rt.dev %s\n",
+			       bond->dev->name, NIPQUAD(fl.fl4_dst),
+			       rt->u.dst.dev ? rt->u.dst.dev->name : "NULL");
+		}
+		ip_rt_put(rt);
+	}
+}
+
+/*
+ * Kick out a gratuitous ARP for an IP on the bonding master plus one
+ * for each VLAN above us.
+ */
+static void bond_send_gratuitous_arp(struct bonding *bond)
+{
+	struct slave *slave = bond->curr_active_slave;
+	struct vlan_entry *vlan;
+	struct net_device *vlan_dev;
+
+	dprintk("bond_send_grat_arp: bond %s slave %s\n", bond->dev->name,
+				slave ? slave->dev->name : "NULL");
+	if (!slave)
+		return;
+
+	if (bond->master_ip) {
+		bond_arp_send(slave->dev, ARPOP_REPLY, bond->master_ip,
+				  bond->master_ip, 0);
+	}
+
+	list_for_each_entry(vlan, &bond->vlan_list, vlan_list) {
+		vlan_dev = bond->vlgrp->vlan_devices[vlan->vlan_id];
+		if (vlan->vlan_ip) {
+			bond_arp_send(slave->dev, ARPOP_REPLY, vlan->vlan_ip,
+				      vlan->vlan_ip, vlan->vlan_id);
+		}
 	}
 }
 
@@ -2781,7 +2901,7 @@ static void bond_loadbalance_arp_mon(struct net_device *bond_dev)
 			 */
 			if (((jiffies - slave->dev->trans_start) >= (2*delta_in_ticks)) ||
 			    (((jiffies - slave->dev->last_rx) >= (2*delta_in_ticks)) &&
-			     my_ip)) {
+			     bond_has_ip(bond))) {
 
 				slave->link  = BOND_LINK_DOWN;
 				slave->state = BOND_STATE_BACKUP;
@@ -2920,7 +3040,7 @@ static void bond_activebackup_arp_mon(struct net_device *bond_dev)
 			if ((slave != bond->curr_active_slave) &&
 			    (!bond->current_arp_slave) &&
 			    (((jiffies - slave->dev->last_rx) >= 3*delta_in_ticks) &&
-			     my_ip)) {
+			     bond_has_ip(bond))) {
 				/* a backup slave has gone down; three times
 				 * the delta allows the current slave to be
 				 * taken out before the backup slave.
@@ -2966,8 +3086,8 @@ static void bond_activebackup_arp_mon(struct net_device *bond_dev)
 		 * if it is up and needs to take over as the curr_active_slave
 		 */
 		if ((((jiffies - slave->dev->trans_start) >= (2*delta_in_ticks)) ||
-		     (((jiffies - slave->dev->last_rx) >= (2*delta_in_ticks)) &&
-		      my_ip)) &&
+	    (((jiffies - slave->dev->last_rx) >= (2*delta_in_ticks)) &&
+	     bond_has_ip(bond))) &&
 		    ((jiffies - slave->jiffies) >= 2*delta_in_ticks)) {
 
 			slave->link  = BOND_LINK_DOWN;
@@ -3019,7 +3139,7 @@ static void bond_activebackup_arp_mon(struct net_device *bond_dev)
 		/* the current slave must tx an arp to ensure backup slaves
 		 * rx traffic
 		 */
-		if (slave && my_ip) {
+		if (slave && bond_has_ip(bond)) {
 			bond_arp_send_all(bond, slave);
 		}
 	}
@@ -3203,16 +3323,11 @@ static void bond_info_show_slave(struct seq_file *seq, const struct slave *slave
 	seq_printf(seq, "Link Failure Count: %d\n",
 		   slave->link_failure_count);
 
-	if (app_abi_ver >= 1) {
-		seq_printf(seq,
-			   "Permanent HW addr: %02x:%02x:%02x:%02x:%02x:%02x\n",
-			   slave->perm_hwaddr[0],
-			   slave->perm_hwaddr[1],
-			   slave->perm_hwaddr[2],
-			   slave->perm_hwaddr[3],
-			   slave->perm_hwaddr[4],
-			   slave->perm_hwaddr[5]);
-	}
+	seq_printf(seq,
+		   "Permanent HW addr: %02x:%02x:%02x:%02x:%02x:%02x\n",
+		   slave->perm_hwaddr[0], slave->perm_hwaddr[1],
+		   slave->perm_hwaddr[2], slave->perm_hwaddr[3],
+		   slave->perm_hwaddr[4], slave->perm_hwaddr[5]);
 
 	if (bond->params.mode == BOND_MODE_8023AD) {
 		const struct aggregator *agg
@@ -3397,6 +3512,7 @@ static int bond_master_netdev_event(unsigned long event, struct net_device *bond
 static int bond_slave_netdev_event(unsigned long event, struct net_device *slave_dev)
 {
 	struct net_device *bond_dev = slave_dev->master;
+	struct bonding *bond = bond_dev->priv;
 
 	switch (event) {
 	case NETDEV_UNREGISTER:
@@ -3435,6 +3551,9 @@ static int bond_slave_netdev_event(unsigned long event, struct net_device *slave
 		 * TODO: handle changing the primary's name
 		 */
 		break;
+	case NETDEV_FEAT_CHANGE:
+		bond_compute_features(bond);
+		break;
 	default:
 		break;
 	}
@@ -3471,8 +3590,65 @@ static int bond_netdev_event(struct notifier_block *this, unsigned long event, v
 	return NOTIFY_DONE;
 }
 
+/*
+ * bond_inetaddr_event: handle inetaddr notifier chain events.
+ *
+ * We keep track of device IPs primarily to use as source addresses in
+ * ARP monitor probes (rather than spewing out broadcasts all the time).
+ *
+ * We track one IP for the main device (if it has one), plus one per VLAN.
+ */
+static int bond_inetaddr_event(struct notifier_block *this, unsigned long event, void *ptr)
+{
+	struct in_ifaddr *ifa = ptr;
+	struct net_device *vlan_dev, *event_dev = ifa->ifa_dev->dev;
+	struct bonding *bond, *bond_next;
+	struct vlan_entry *vlan, *vlan_next;
+
+	list_for_each_entry_safe(bond, bond_next, &bond_dev_list, bond_list) {
+		if (bond->dev == event_dev) {
+			switch (event) {
+			case NETDEV_UP:
+				bond->master_ip = ifa->ifa_local;
+				return NOTIFY_OK;
+			case NETDEV_DOWN:
+				bond->master_ip = bond_glean_dev_ip(bond->dev);
+				return NOTIFY_OK;
+			default:
+				return NOTIFY_DONE;
+			}
+		}
+
+		if (list_empty(&bond->vlan_list))
+			continue;
+
+		list_for_each_entry_safe(vlan, vlan_next, &bond->vlan_list,
+					 vlan_list) {
+			vlan_dev = bond->vlgrp->vlan_devices[vlan->vlan_id];
+			if (vlan_dev == event_dev) {
+				switch (event) {
+				case NETDEV_UP:
+					vlan->vlan_ip = ifa->ifa_local;
+					return NOTIFY_OK;
+				case NETDEV_DOWN:
+					vlan->vlan_ip =
+						bond_glean_dev_ip(vlan_dev);
+					return NOTIFY_OK;
+				default:
+					return NOTIFY_DONE;
+				}
+			}
+		}
+	}
+	return NOTIFY_DONE;
+}
+
 static struct notifier_block bond_netdev_notifier = {
 	.notifier_call = bond_netdev_event,
+};
+
+static struct notifier_block bond_inetaddr_notifier = {
+	.notifier_call = bond_inetaddr_event,
 };
 
 /*-------------------------- Packet type handling ---------------------------*/
@@ -3494,6 +3670,46 @@ static void bond_register_lacpdu(struct bonding *bond)
 static void bond_unregister_lacpdu(struct bonding *bond)
 {
 	dev_remove_pack(&(BOND_AD_INFO(bond).ad_pkt_type));
+}
+
+/*---------------------------- Hashing Policies -----------------------------*/
+
+/*
+ * Hash for the the output device based upon layer 3 and layer 4 data. If
+ * the packet is a frag or not TCP or UDP, just use layer 3 data.  If it is
+ * altogether not IP, mimic bond_xmit_hash_policy_l2()
+ */
+static int bond_xmit_hash_policy_l34(struct sk_buff *skb,
+				    struct net_device *bond_dev, int count)
+{
+	struct ethhdr *data = (struct ethhdr *)skb->data;
+	struct iphdr *iph = skb->nh.iph;
+	u16 *layer4hdr = (u16 *)((u32 *)iph + iph->ihl);
+	int layer4_xor = 0;
+
+	if (skb->protocol == __constant_htons(ETH_P_IP)) {
+		if (!(iph->frag_off & __constant_htons(IP_MF|IP_OFFSET)) &&
+		    (iph->protocol == IPPROTO_TCP ||
+		     iph->protocol == IPPROTO_UDP)) {
+			layer4_xor = htons((*layer4hdr ^ *(layer4hdr + 1)));
+		}
+		return (layer4_xor ^
+			((ntohl(iph->saddr ^ iph->daddr)) & 0xffff)) % count;
+
+	}
+
+	return (data->h_dest[5] ^ bond_dev->dev_addr[5]) % count;
+}
+
+/*
+ * Hash for the output device based upon layer 2 data
+ */
+static int bond_xmit_hash_policy_l2(struct sk_buff *skb,
+				   struct net_device *bond_dev, int count)
+{
+	struct ethhdr *data = (struct ethhdr *)skb->data;
+
+	return (data->h_dest[5] ^ bond_dev->dev_addr[5]) % count;
 }
 
 /*-------------------------- Device entry points ----------------------------*/
@@ -3670,15 +3886,12 @@ static int bond_do_ioctl(struct net_device *bond_dev, struct ifreq *ifr, int cmd
 	struct ifslave k_sinfo;
 	struct ifslave __user *u_sinfo = NULL;
 	struct mii_ioctl_data *mii = NULL;
-	int prev_abi_ver = orig_app_abi_ver;
 	int res = 0;
 
 	dprintk("bond_ioctl: master=%s, cmd=%d\n",
 		bond_dev->name, cmd);
 
 	switch (cmd) {
-	case SIOCETHTOOL:
-		return bond_ethtool_ioctl(bond_dev, ifr);
 	case SIOCGMIIPHY:
 		mii = if_mii(ifr);
 		if (!mii) {
@@ -3750,21 +3963,6 @@ static int bond_do_ioctl(struct net_device *bond_dev, struct ifreq *ifr, int cmd
 		return -EPERM;
 	}
 
-	if (orig_app_abi_ver == -1) {
-		/* no orig_app_abi_ver was provided yet, so we'll use the
-		 * current one from now on, even if it's 0
-		 */
-		orig_app_abi_ver = app_abi_ver;
-
-	} else if (orig_app_abi_ver != app_abi_ver) {
-		printk(KERN_ERR DRV_NAME
-		       ": Error: already using ifenslave ABI version %d; to "
-		       "upgrade ifenslave to version %d, you must first "
-		       "reload bonding.\n",
-		       orig_app_abi_ver, app_abi_ver);
-		return -EINVAL;
-	}
-
 	slave_dev = dev_get_by_name(ifr->ifr_slave);
 
 	dprintk("slave_dev=%p: \n", slave_dev);
@@ -3795,14 +3993,6 @@ static int bond_do_ioctl(struct net_device *bond_dev, struct ifreq *ifr, int cmd
 		}
 
 		dev_put(slave_dev);
-	}
-
-	if (res < 0) {
-		/* The ioctl failed, so there's no point in changing the
-		 * orig_app_abi_ver. We'll restore it's value just in case
-		 * we've changed it earlier in this function.
-		 */
-		orig_app_abi_ver = prev_abi_ver;
 	}
 
 	return res;
@@ -4060,17 +4250,6 @@ static int bond_xmit_activebackup(struct sk_buff *skb, struct net_device *bond_d
 	struct bonding *bond = bond_dev->priv;
 	int res = 1;
 
-	/* if we are sending arp packets, try to at least
-	   identify our own ip address */
-	if (bond->params.arp_interval && !my_ip &&
-		(skb->protocol == __constant_htons(ETH_P_ARP))) {
-		char *the_ip = (char *)skb->data +
-				sizeof(struct ethhdr) +
-				sizeof(struct arphdr) +
-				ETH_ALEN;
-		memcpy(&my_ip, the_ip, 4);
-	}
-
 	read_lock(&bond->lock);
 	read_lock(&bond->curr_slave_lock);
 
@@ -4093,14 +4272,13 @@ out:
 }
 
 /*
- * in XOR mode, we determine the output device by performing xor on
- * the source and destination hw adresses.  If this device is not
- * enabled, find the next slave following this xor slave.
+ * In bond_xmit_xor() , we determine the output device by using a pre-
+ * determined xmit_hash_policy(), If the selected device is not enabled,
+ * find the next active slave.
  */
 static int bond_xmit_xor(struct sk_buff *skb, struct net_device *bond_dev)
 {
 	struct bonding *bond = bond_dev->priv;
-	struct ethhdr *data = (struct ethhdr *)skb->data;
 	struct slave *slave, *start_at;
 	int slave_no;
 	int i;
@@ -4112,7 +4290,7 @@ static int bond_xmit_xor(struct sk_buff *skb, struct net_device *bond_dev)
 		goto out;
 	}
 
-	slave_no = (data->h_dest[5]^bond_dev->dev_addr[5]) % bond->slave_cnt;
+	slave_no = bond->xmit_hash_policy(skb, bond_dev, bond->slave_cnt);
 
 	bond_for_each_slave(bond, slave, i) {
 		slave_no--;
@@ -4208,8 +4386,10 @@ out:
 /*
  * set bond mode specific net device operations
  */
-static inline void bond_set_mode_ops(struct net_device *bond_dev, int mode)
+static inline void bond_set_mode_ops(struct bonding *bond, int mode)
 {
+	struct net_device *bond_dev = bond->dev;
+
 	switch (mode) {
 	case BOND_MODE_ROUNDROBIN:
 		bond_dev->hard_start_xmit = bond_xmit_roundrobin;
@@ -4219,12 +4399,20 @@ static inline void bond_set_mode_ops(struct net_device *bond_dev, int mode)
 		break;
 	case BOND_MODE_XOR:
 		bond_dev->hard_start_xmit = bond_xmit_xor;
+		if (bond->params.xmit_policy == BOND_XMIT_POLICY_LAYER34)
+			bond->xmit_hash_policy = bond_xmit_hash_policy_l34;
+		else
+			bond->xmit_hash_policy = bond_xmit_hash_policy_l2;
 		break;
 	case BOND_MODE_BROADCAST:
 		bond_dev->hard_start_xmit = bond_xmit_broadcast;
 		break;
 	case BOND_MODE_8023AD:
 		bond_dev->hard_start_xmit = bond_3ad_xmit_xor;
+		if (bond->params.xmit_policy == BOND_XMIT_POLICY_LAYER34)
+			bond->xmit_hash_policy = bond_xmit_hash_policy_l34;
+		else
+			bond->xmit_hash_policy = bond_xmit_hash_policy_l2;
 		break;
 	case BOND_MODE_TLB:
 	case BOND_MODE_ALB:
@@ -4239,6 +4427,20 @@ static inline void bond_set_mode_ops(struct net_device *bond_dev, int mode)
 		break;
 	}
 }
+
+static void bond_ethtool_get_drvinfo(struct net_device *bond_dev,
+				    struct ethtool_drvinfo *drvinfo)
+{
+	strncpy(drvinfo->driver, DRV_NAME, 32);
+	strncpy(drvinfo->version, DRV_VERSION, 32);
+	snprintf(drvinfo->fw_version, 32, "%d", BOND_ABI_VERSION);
+}
+
+static struct ethtool_ops bond_ethtool_ops = {
+	.get_tx_csum		= ethtool_op_get_tx_csum,
+	.get_sg			= ethtool_op_get_sg,
+	.get_drvinfo		= bond_ethtool_get_drvinfo,
+};
 
 /*
  * Does not allocate but creates a /proc entry.
@@ -4269,11 +4471,12 @@ static int __init bond_init(struct net_device *bond_dev, struct bond_params *par
 	bond_dev->stop = bond_close;
 	bond_dev->get_stats = bond_get_stats;
 	bond_dev->do_ioctl = bond_do_ioctl;
+	bond_dev->ethtool_ops = &bond_ethtool_ops;
 	bond_dev->set_multicast_list = bond_set_multicast_list;
 	bond_dev->change_mtu = bond_change_mtu;
 	bond_dev->set_mac_address = bond_set_mac_address;
 
-	bond_set_mode_ops(bond_dev, bond->params.mode);
+	bond_set_mode_ops(bond, bond->params.mode);
 
 	bond_dev->destructor = free_netdev;
 
@@ -4304,6 +4507,8 @@ static int __init bond_init(struct net_device *bond_dev, struct bond_params *par
 	bond_dev->features |= (NETIF_F_HW_VLAN_TX |
 			       NETIF_F_HW_VLAN_RX |
 			       NETIF_F_HW_VLAN_FILTER);
+
+	bond->bond_features = bond_dev->features;
 
 #ifdef CONFIG_PROC_FS
 	bond_create_proc_entry(bond);
@@ -4381,6 +4586,25 @@ static int bond_check_params(struct bond_params *params)
 			       ": Error: Invalid bonding mode \"%s\"\n",
 			       mode == NULL ? "NULL" : mode);
 			return -EINVAL;
+		}
+	}
+
+	if (xmit_hash_policy) {
+		if ((bond_mode != BOND_MODE_XOR) &&
+		    (bond_mode != BOND_MODE_8023AD)) {
+			printk(KERN_INFO DRV_NAME
+			       ": xor_mode param is irrelevant in mode %s\n",
+			       bond_mode_name(bond_mode));
+		} else {
+			xmit_hashtype = bond_parse_parm(xmit_hash_policy,
+							xmit_hashtype_tbl);
+			if (xmit_hashtype == -1) {
+				printk(KERN_ERR DRV_NAME
+			       	": Error: Invalid xmit_hash_policy \"%s\"\n",
+			       	xmit_hash_policy == NULL ? "NULL" :
+				       xmit_hash_policy);
+				return -EINVAL;
+			}
 		}
 	}
 
@@ -4595,6 +4819,7 @@ static int bond_check_params(struct bond_params *params)
 
 	/* fill params struct with the proper values */
 	params->mode = bond_mode;
+	params->xmit_policy = xmit_hashtype;
 	params->miimon = miimon;
 	params->arp_interval = arp_interval;
 	params->updelay = updelay;
@@ -4669,10 +4894,19 @@ static int __init bonding_init(void)
 
 	rtnl_unlock();
 	register_netdevice_notifier(&bond_netdev_notifier);
+	register_inetaddr_notifier(&bond_inetaddr_notifier);
 
 	return 0;
 
 out_err:
+	/*
+	 * rtnl_unlock() will run netdev_run_todo(), putting the
+	 * thus-far-registered bonding devices into a state which
+	 * unregigister_netdevice() will accept
+	 */
+	rtnl_unlock();
+	rtnl_lock();
+
 	/* free and unregister all bonds that were successfully added */
 	bond_free_all();
 
@@ -4684,6 +4918,7 @@ out_err:
 static void __exit bonding_exit(void)
 {
 	unregister_netdevice_notifier(&bond_netdev_notifier);
+	unregister_inetaddr_notifier(&bond_inetaddr_notifier);
 
 	rtnl_lock();
 	bond_free_all();

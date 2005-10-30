@@ -29,7 +29,7 @@
 #include <asm/mach/arch.h>
 #include <asm/mach/map.h>
 #include <asm/mach/irq.h>
-
+#include <asm/arch/fb.h>
 #include <asm/hardware.h>
 #include <asm/io.h>
 #include <asm/irq.h>
@@ -96,12 +96,21 @@ struct platform_device s3c_device_lcd = {
 	.num_resources	  = ARRAY_SIZE(s3c_lcd_resource),
 	.resource	  = s3c_lcd_resource,
 	.dev              = {
-		.dma_mask = &s3c_device_lcd_dmamask,
-		.coherent_dma_mask = 0xffffffffUL
+		.dma_mask		= &s3c_device_lcd_dmamask,
+		.coherent_dma_mask	= 0xffffffffUL
 	}
 };
 
 EXPORT_SYMBOL(s3c_device_lcd);
+
+static struct s3c2410fb_mach_info s3c2410fb_info;
+
+void __init set_s3c2410fb_info(struct s3c2410fb_mach_info *hard_s3c2410fb_info)
+{
+	memcpy(&s3c2410fb_info,hard_s3c2410fb_info,sizeof(struct s3c2410fb_mach_info));
+	s3c_device_lcd.dev.platform_data = &s3c2410fb_info;
+}
+EXPORT_SYMBOL(set_s3c2410fb_info);
 
 /* NAND Controller */
 

@@ -2,9 +2,9 @@
  *  drivers/s390/net/claw.c
  *    ESCON CLAW network driver
  *
- *    $Revision: 1.35 $ $Date: 2005/03/24 12:25:38 $
+ *    $Revision: 1.38 $ $Date: 2005/08/29 09:47:04 $
  *
- *  Linux fo zSeries version
+ *  Linux for zSeries version
  *    Copyright (C) 2002,2005 IBM Corporation
  *  Author(s) Original code written by:
  *              Kazuo Iimura (iimura@jp.ibm.com)
@@ -146,8 +146,8 @@ claw_unregister_debug_facility(void)
 static int
 claw_register_debug_facility(void)
 {
-	claw_dbf_setup = debug_register("claw_setup", 1, 1, 8);
-	claw_dbf_trace = debug_register("claw_trace", 1, 2, 8);
+	claw_dbf_setup = debug_register("claw_setup", 2, 1, 8);
+	claw_dbf_trace = debug_register("claw_trace", 2, 2, 8);
 	if (claw_dbf_setup == NULL || claw_dbf_trace == NULL) {
 		printk(KERN_WARNING "Not enough memory for debug facility.\n");
 		claw_unregister_debug_facility();
@@ -241,20 +241,20 @@ static struct sk_buff *claw_pack_skb(struct claw_privbk *privptr);
 static void dumpit (char *buf, int len);
 #endif
 /* sysfs Functions */
-static ssize_t claw_hname_show(struct device *dev, char *buf);
-static ssize_t claw_hname_write(struct device *dev,
+static ssize_t claw_hname_show(struct device *dev, struct device_attribute *attr, char *buf);
+static ssize_t claw_hname_write(struct device *dev, struct device_attribute *attr,
 	const char *buf, size_t count);
-static ssize_t claw_adname_show(struct device *dev, char *buf);
-static ssize_t claw_adname_write(struct device *dev,
+static ssize_t claw_adname_show(struct device *dev, struct device_attribute *attr, char *buf);
+static ssize_t claw_adname_write(struct device *dev, struct device_attribute *attr,
 	const char *buf, size_t count);
-static ssize_t claw_apname_show(struct device *dev, char *buf);
-static ssize_t claw_apname_write(struct device *dev,
+static ssize_t claw_apname_show(struct device *dev, struct device_attribute *attr, char *buf);
+static ssize_t claw_apname_write(struct device *dev, struct device_attribute *attr,
 	const char *buf, size_t count);
-static ssize_t claw_wbuff_show(struct device *dev, char *buf);
-static ssize_t claw_wbuff_write(struct device *dev,
+static ssize_t claw_wbuff_show(struct device *dev, struct device_attribute *attr, char *buf);
+static ssize_t claw_wbuff_write(struct device *dev, struct device_attribute *attr,
 	const char *buf, size_t count);
-static ssize_t claw_rbuff_show(struct device *dev, char *buf);
-static ssize_t claw_rbuff_write(struct device *dev,
+static ssize_t claw_rbuff_show(struct device *dev, struct device_attribute *attr, char *buf);
+static ssize_t claw_rbuff_write(struct device *dev, struct device_attribute *attr,
 	const char *buf, size_t count);
 static int claw_add_files(struct device *dev);
 static void claw_remove_files(struct device *dev);
@@ -428,15 +428,15 @@ claw_pack_skb(struct claw_privbk *privptr)
 	new_skb = NULL;		/* assume no dice */
 	pkt_cnt = 0;
 	CLAW_DBF_TEXT(4,trace,"PackSKBe");
-	if (skb_queue_len(&p_ch->collect_queue) > 0) {
+	if (!skb_queue_empty(&p_ch->collect_queue)) {
 	/* some data */
 		held_skb = skb_dequeue(&p_ch->collect_queue);
-		if (p_env->packing != DO_PACKED)
-			return held_skb;
 		if (held_skb)
-			atomic_dec(&held_skb->users);
+			dev_kfree_skb_any(held_skb);
 		else
 			return NULL;
+		if (p_env->packing != DO_PACKED)
+			return held_skb;
 		/* get a new SKB we will pack at least one */
 		new_skb = dev_alloc_skb(p_env->write_size);
 		if (new_skb == NULL) {
@@ -455,7 +455,7 @@ claw_pack_skb(struct claw_privbk *privptr)
 				privptr->stats.tx_packets++;
 				so_far += held_skb->len;
 				pkt_cnt++;
-				dev_kfree_skb_irq(held_skb);
+				dev_kfree_skb_any(held_skb);
 				held_skb = skb_dequeue(&p_ch->collect_queue);
 				if (held_skb)
 					atomic_dec(&held_skb->users);
@@ -1092,7 +1092,7 @@ claw_release(struct net_device *dev)
                 }
         }
 	if (privptr->pk_skb != NULL) {
-		dev_kfree_skb(privptr->pk_skb);
+		dev_kfree_skb_any(privptr->pk_skb);
 		privptr->pk_skb = NULL;
 	}
 	if(privptr->buffs_alloc != 1) {
@@ -1254,7 +1254,7 @@ claw_write_next ( struct chbk * p_ch )
 	privptr = (struct claw_privbk *) dev->priv;
         claw_free_wrt_buf( dev );
 	if ((privptr->write_free_count > 0) &&
-	    (skb_queue_len(&p_ch->collect_queue) > 0)) {
+	    !skb_queue_empty(&p_ch->collect_queue)) {
 	  	pk_skb = claw_pack_skb(privptr);
 		while (pk_skb != NULL) {
 			rc = claw_hw_tx( pk_skb, dev,1);
@@ -2016,7 +2016,7 @@ claw_hw_tx(struct sk_buff *skb, struct net_device *dev, long linkid)
         p_buf=(struct ccwbk*)privptr->p_end_ccw;
         dumpit((char *)p_buf, sizeof(struct endccw));
 #endif
-        dev_kfree_skb(skb);
+        dev_kfree_skb_any(skb);
 	if (linkid==0) {
         	lock=LOCK_NO;
         }
@@ -4061,7 +4061,7 @@ claw_purge_skb_queue(struct sk_buff_head *q)
 
         while ((skb = skb_dequeue(q))) {
                 atomic_dec(&skb->users);
-                dev_kfree_skb_irq(skb);
+                dev_kfree_skb_any(skb);
         }
 }
 
@@ -4149,7 +4149,7 @@ claw_remove_device(struct ccwgroup_device *cgdev)
  * sysfs attributes
  */
 static ssize_t
-claw_hname_show(struct device *dev, char *buf)
+claw_hname_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
 	struct claw_privbk *priv;
 	struct claw_env *  p_env;
@@ -4162,7 +4162,7 @@ claw_hname_show(struct device *dev, char *buf)
 }
 
 static ssize_t
-claw_hname_write(struct device *dev, const char *buf, size_t count)
+claw_hname_write(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
 {
 	struct claw_privbk *priv;
 	struct claw_env *  p_env;
@@ -4186,7 +4186,7 @@ claw_hname_write(struct device *dev, const char *buf, size_t count)
 static DEVICE_ATTR(host_name, 0644, claw_hname_show, claw_hname_write);
 
 static ssize_t
-claw_adname_show(struct device *dev, char *buf)
+claw_adname_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
 	struct claw_privbk *priv;
 	struct claw_env *  p_env;
@@ -4199,7 +4199,7 @@ claw_adname_show(struct device *dev, char *buf)
 }
 
 static ssize_t
-claw_adname_write(struct device *dev, const char *buf, size_t count)
+claw_adname_write(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
 {
 	struct claw_privbk *priv;
 	struct claw_env *  p_env;
@@ -4223,7 +4223,7 @@ claw_adname_write(struct device *dev, const char *buf, size_t count)
 static DEVICE_ATTR(adapter_name, 0644, claw_adname_show, claw_adname_write);
 
 static ssize_t
-claw_apname_show(struct device *dev, char *buf)
+claw_apname_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
 	struct claw_privbk *priv;
 	struct claw_env *  p_env;
@@ -4237,7 +4237,7 @@ claw_apname_show(struct device *dev, char *buf)
 }
 
 static ssize_t
-claw_apname_write(struct device *dev, const char *buf, size_t count)
+claw_apname_write(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
 {
 	struct claw_privbk *priv;
 	struct claw_env *  p_env;
@@ -4271,7 +4271,7 @@ claw_apname_write(struct device *dev, const char *buf, size_t count)
 static DEVICE_ATTR(api_type, 0644, claw_apname_show, claw_apname_write);
 
 static ssize_t
-claw_wbuff_show(struct device *dev, char *buf)
+claw_wbuff_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
 	struct claw_privbk *priv;
 	struct claw_env * p_env;
@@ -4284,7 +4284,7 @@ claw_wbuff_show(struct device *dev, char *buf)
 }
 
 static ssize_t
-claw_wbuff_write(struct device *dev, const char *buf, size_t count)
+claw_wbuff_write(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
 {
 	struct claw_privbk *priv;
 	struct claw_env *  p_env;
@@ -4312,7 +4312,7 @@ claw_wbuff_write(struct device *dev, const char *buf, size_t count)
 static DEVICE_ATTR(write_buffer, 0644, claw_wbuff_show, claw_wbuff_write);
 
 static ssize_t
-claw_rbuff_show(struct device *dev, char *buf)
+claw_rbuff_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
 	struct claw_privbk *priv;
 	struct claw_env *  p_env;
@@ -4325,7 +4325,7 @@ claw_rbuff_show(struct device *dev, char *buf)
 }
 
 static ssize_t
-claw_rbuff_write(struct device *dev, const char *buf, size_t count)
+claw_rbuff_write(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
 {
 	struct claw_privbk *priv;
 	struct claw_env *p_env;
@@ -4410,7 +4410,7 @@ claw_init(void)
 #else
                 "compiled into kernel "
 #endif
-                " $Revision: 1.35 $ $Date: 2005/03/24 12:25:38 $ \n");
+                " $Revision: 1.38 $ $Date: 2005/08/29 09:47:04 $ \n");
 
 
 #ifdef FUNCTRACE

@@ -135,7 +135,6 @@
 /*
  * OMAP-1510 specific IRQ numbers for interrupt handler 2
  */
-#define INT_1510_OS_32kHz_TIMER (22 + IH2_BASE)
 #define INT_1510_COM_SPI_RO	(31 + IH2_BASE)
 
 /*
@@ -159,6 +158,7 @@
 #define INT_1610_GPIO_BANK3	(41 + IH2_BASE)
 #define INT_1610_MMC2		(42 + IH2_BASE)
 #define INT_1610_CF		(43 + IH2_BASE)
+#define INT_1610_WAKE_UP_REQ	(46 + IH2_BASE)
 #define INT_1610_GPIO_BANK4	(48 + IH2_BASE)
 #define INT_1610_SPI		(49 + IH2_BASE)
 #define INT_1610_DMA_CH6	(53 + IH2_BASE)
@@ -231,12 +231,19 @@
 #define INT_730_DMA_CH15	(62 + IH2_BASE)
 #define INT_730_NAND		(63 + IH2_BASE)
 
+#define INT_24XX_GPIO_BANK1	29
+#define INT_24XX_GPIO_BANK2	30
+#define INT_24XX_GPIO_BANK3	31
+#define INT_24XX_GPIO_BANK4	32
+
 /* Max. 128 level 2 IRQs (OMAP1610), 192 GPIOs (OMAP730) and
  * 16 MPUIO lines */
 #define OMAP_MAX_GPIO_LINES	192
 #define IH_GPIO_BASE		(128 + IH2_BASE)
 #define IH_MPUIO_BASE		(OMAP_MAX_GPIO_LINES + IH_GPIO_BASE)
 #define IH_BOARD_BASE		(16 + IH_MPUIO_BASE)
+
+#define OMAP_IRQ_BIT(irq)	(1 << ((irq) % 32))
 
 #ifndef __ASSEMBLY__
 extern void omap_init_irq(void);

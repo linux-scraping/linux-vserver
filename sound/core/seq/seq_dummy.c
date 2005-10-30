@@ -140,10 +140,7 @@ dummy_input(snd_seq_event_t *ev, int direct, void *private_data, int atomic, int
 static void
 dummy_free(void *private_data)
 {
-	snd_seq_dummy_port_t *p;
-
-	p = private_data;
-	kfree(p);
+	kfree(private_data);
 }
 
 /*
@@ -156,7 +153,7 @@ create_port(int idx, int type)
 	snd_seq_port_callback_t pcb;
 	snd_seq_dummy_port_t *rec;
 
-	if ((rec = kcalloc(1, sizeof(*rec), GFP_KERNEL)) == NULL)
+	if ((rec = kzalloc(sizeof(*rec), GFP_KERNEL)) == NULL)
 		return NULL;
 
 	rec->client = my_client;

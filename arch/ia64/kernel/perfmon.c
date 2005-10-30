@@ -37,8 +37,8 @@
 #include <linux/vfs.h>
 #include <linux/pagemap.h>
 #include <linux/mount.h>
-#include <linux/version.h>
 #include <linux/bitops.h>
+#include <linux/rcupdate.h>
 #include <linux/vs_memory.h>
 #include <linux/vs_cvirt.h>
 
@@ -499,7 +499,7 @@ typedef struct {
 static pfm_stats_t		pfm_stats[NR_CPUS];
 static pfm_session_t		pfm_sessions;	/* global sessions information */
 
-static spinlock_t pfm_alt_install_check = SPIN_LOCK_UNLOCKED;
+static DEFINE_SPINLOCK(pfm_alt_install_check);
 static pfm_intr_handler_desc_t  *pfm_alt_intr_handler;
 
 static struct proc_dir_entry 	*perfmon_dir;
@@ -576,7 +576,7 @@ pfm_protect_ctx_ctxsw(pfm_context_t *x)
 	return 0UL;
 }
 
-static inline unsigned long
+static inline void
 pfm_unprotect_ctx_ctxsw(pfm_context_t *x, unsigned long f)
 {
 	spin_unlock(&(x)->ctx_lock);
@@ -2220,15 +2220,18 @@ static void
 pfm_free_fd(int fd, struct file *file)
 {
 	struct files_struct *files = current->files;
+	struct fdtable *fdt;
 
 	/* 
 	 * there ie no fd_uninstall(), so we do it here
 	 */
 	spin_lock(&files->file_lock);
-        files->fd[fd] = NULL;
+	fdt = files_fdtable(files);
+	rcu_assign_pointer(fdt->fd[fd], NULL);
 	spin_unlock(&files->file_lock);
 
-	if (file) put_filp(file);
+	if (file)
+		put_filp(file);
 	put_unused_fd(fd);
 }
 
@@ -4315,6 +4318,7 @@ pfm_context_load(pfm_context_t *ctx, void *arg, int count, struct pt_regs *regs)
 	DPRINT(("before cmpxchg() old_ctx=%p new_ctx=%p\n",
 		thread->pfm_context, ctx));
 
+	ret = -EBUSY;
 	old = ia64_cmpxchg(acq, &thread->pfm_context, NULL, ctx, sizeof(pfm_context_t *));
 	if (old != NULL) {
 		DPRINT(("load_pid [%d] already has a context\n", req->load_pid));

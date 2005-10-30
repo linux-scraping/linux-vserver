@@ -19,7 +19,10 @@
 
 #include <linux/fs.h>
 #include <linux/xattr.h>
+#include <linux/posix_acl_xattr.h>
 #include <linux/quotaops.h>
+#include <linux/security.h>
+#include <linux/vs_dlimit.h>
 #include "jfs_incore.h"
 #include "jfs_superblock.h"
 #include "jfs_dmap.h"
@@ -275,9 +278,16 @@ static int ea_write(struct inode *ip, struct jfs_ea_list *ealist, int size,
 	if (DQUOT_ALLOC_BLOCK(ip, nblocks)) {
 		return -EDQUOT;
 	}
+	/* Allocate new blocks to dlimit. */
+	if (DLIMIT_ALLOC_BLOCK(ip, nblocks)) {
+		DQUOT_FREE_BLOCK(ip, nblocks);
+		return -ENOSPC;
+	}
 
 	rc = dbAlloc(ip, INOHINT(ip), nblocks, &blkno);
 	if (rc) {
+		/*Rollback dlimit allocation. */
+		DLIMIT_FREE_BLOCK(ip, nblocks);
 		/*Rollback quota allocation. */
 		DQUOT_FREE_BLOCK(ip, nblocks);
 		return rc;
@@ -343,6 +353,8 @@ static int ea_write(struct inode *ip, struct jfs_ea_list *ealist, int size,
 	return 0;
 
       failed:
+	/* Rollback quota allocation. */
+	DLIMIT_FREE_BLOCK(ip, nblocks);
 	/* Rollback quota allocation. */
 	DQUOT_FREE_BLOCK(ip, nblocks);
 
@@ -480,6 +492,7 @@ static int ea_get(struct inode *inode, struct ea_buffer *ea_buf, int min_size)
 	s64 blkno;
 	int rc;
 	int quota_allocation = 0;
+	int dlimit_allocation = 0;
 
 	/* When fsck.jfs clears a bad ea, it doesn't clear the size */
 	if (ji->ea.flag == 0)
@@ -552,8 +565,13 @@ static int ea_get(struct inode *inode, struct ea_buffer *ea_buf, int min_size)
 		/* Allocate new blocks to quota. */
 		if (DQUOT_ALLOC_BLOCK(inode, blocks_needed))
 			return -EDQUOT;
-
 		quota_allocation = blocks_needed;
+
+		/* Allocate new blocks to dlimit. */
+		rc = -ENOSPC;
+		if (DLIMIT_ALLOC_BLOCK(inode, blocks_needed))
+			goto clean_up;
+		dlimit_allocation = blocks_needed;
 
 		rc = dbAlloc(inode, INOHINT(inode), (s64) blocks_needed,
 			     &blkno);
@@ -611,6 +629,9 @@ static int ea_get(struct inode *inode, struct ea_buffer *ea_buf, int min_size)
 	return ea_size;
 
       clean_up:
+	/* Rollback dlimit allocation */
+	if (dlimit_allocation)
+		DLIMIT_FREE_BLOCK(inode, dlimit_allocation);
 	/* Rollback quota allocation */
 	if (quota_allocation)
 		DQUOT_FREE_BLOCK(inode, quota_allocation);
@@ -632,12 +653,12 @@ static void ea_release(struct inode *inode, struct ea_buffer *ea_buf)
 	}
 }
 
-static int ea_put(struct inode *inode, struct ea_buffer *ea_buf, int new_size)
+static int ea_put(tid_t tid, struct inode *inode, struct ea_buffer *ea_buf,
+		  int new_size)
 {
 	struct jfs_inode_info *ji = JFS_IP(inode);
 	unsigned long old_blocks, new_blocks;
 	int rc = 0;
-	tid_t tid;
 
 	if (new_size == 0) {
 		ea_release(inode, ea_buf);
@@ -663,9 +684,6 @@ static int ea_put(struct inode *inode, struct ea_buffer *ea_buf, int new_size)
 	if (rc)
 		return rc;
 
-	tid = txBegin(inode->i_sb, 0);
-	down(&ji->commit_sem);
-
 	old_blocks = new_blocks = 0;
 
 	if (ji->ea.flag & DXD_EXTENT) {
@@ -690,15 +708,14 @@ static int ea_put(struct inode *inode, struct ea_buffer *ea_buf, int new_size)
 	}
 
 	/* If old blocks exist, they must be removed from quota allocation. */
-	if (old_blocks)
+	if (old_blocks) {
+		DLIMIT_FREE_BLOCK(inode, old_blocks);
 		DQUOT_FREE_BLOCK(inode, old_blocks);
+	}
 
 	inode->i_ctime = CURRENT_TIME;
-	rc = txCommit(tid, 1, &inode, 0);
-	txEnd(tid);
-	up(&ji->commit_sem);
 
-	return rc;
+	return 0;
 }
 
 /*
@@ -718,9 +735,9 @@ static int can_set_system_xattr(struct inode *inode, const char *name,
 		return -EPERM;
 
 	/*
-	 * XATTR_NAME_ACL_ACCESS is tied to i_mode
+	 * POSIX_ACL_XATTR_ACCESS is tied to i_mode
 	 */
-	if (strcmp(name, XATTR_NAME_ACL_ACCESS) == 0) {
+	if (strcmp(name, POSIX_ACL_XATTR_ACCESS) == 0) {
 		acl = posix_acl_from_xattr(value, value_len);
 		if (IS_ERR(acl)) {
 			rc = PTR_ERR(acl);
@@ -750,7 +767,7 @@ static int can_set_system_xattr(struct inode *inode, const char *name,
 		JFS_IP(inode)->i_acl = JFS_ACL_NOT_CACHED;
 
 		return 0;
-	} else if (strcmp(name, XATTR_NAME_ACL_DEFAULT) == 0) {
+	} else if (strcmp(name, POSIX_ACL_XATTR_DEFAULT) == 0) {
 		acl = posix_acl_from_xattr(value, value_len);
 		if (IS_ERR(acl)) {
 			rc = PTR_ERR(acl);
@@ -780,7 +797,7 @@ static int can_set_xattr(struct inode *inode, const char *name,
 	if (IS_RDONLY(inode))
 		return -EROFS;
 
-	if (IS_IMMUTABLE(inode) || IS_APPEND(inode) || S_ISLNK(inode->i_mode))
+	if (IS_IMMUTABLE(inode) || IS_APPEND(inode))
 		return -EPERM;
 
 	if(strncmp(name, XATTR_SYSTEM_PREFIX, XATTR_SYSTEM_PREFIX_LEN) == 0)
@@ -789,12 +806,12 @@ static int can_set_xattr(struct inode *inode, const char *name,
 		 */
 		return can_set_system_xattr(inode, name, value, value_len);
 
-	if(strncmp(name, XATTR_TRUSTED_PREFIX, XATTR_TRUSTED_PREFIX_LEN) != 0)
+	if(strncmp(name, XATTR_TRUSTED_PREFIX, XATTR_TRUSTED_PREFIX_LEN) == 0)
 		return (capable(CAP_SYS_ADMIN) ? 0 : -EPERM);
 
 #ifdef CONFIG_JFS_SECURITY
 	if (strncmp(name, XATTR_SECURITY_PREFIX, XATTR_SECURITY_PREFIX_LEN)
-	    != 0)
+	    == 0)
 		return 0;	/* Leave it to the security module */
 #endif
 		
@@ -809,8 +826,8 @@ static int can_set_xattr(struct inode *inode, const char *name,
 	return permission(inode, MAY_WRITE, NULL);
 }
 
-int __jfs_setxattr(struct inode *inode, const char *name, const void *value,
-		   size_t value_len, int flags)
+int __jfs_setxattr(tid_t tid, struct inode *inode, const char *name,
+		   const void *value, size_t value_len, int flags)
 {
 	struct jfs_ea_list *ealist;
 	struct jfs_ea *ea, *old_ea = NULL, *next_ea = NULL;
@@ -823,9 +840,6 @@ int __jfs_setxattr(struct inode *inode, const char *name, const void *value,
 	int found = 0;
 	int rc;
 	int length;
-
-	if ((rc = can_set_xattr(inode, name, value, value_len)))
-		return rc;
 
 	if (strncmp(name, XATTR_OS2_PREFIX, XATTR_OS2_PREFIX_LEN) == 0) {
 		os2name = kmalloc(namelen - XATTR_OS2_PREFIX_LEN + 1,
@@ -938,7 +952,7 @@ int __jfs_setxattr(struct inode *inode, const char *name, const void *value,
 
 	ealist->size = cpu_to_le32(new_size);
 
-	rc = ea_put(inode, &ea_buf, new_size);
+	rc = ea_put(tid, inode, &ea_buf, new_size);
 
 	goto out;
       release:
@@ -946,8 +960,7 @@ int __jfs_setxattr(struct inode *inode, const char *name, const void *value,
       out:
 	up_write(&JFS_IP(inode)->xattr_sem);
 
-	if (os2name)
-		kfree(os2name);
+	kfree(os2name);
 
 	return rc;
 }
@@ -955,12 +968,29 @@ int __jfs_setxattr(struct inode *inode, const char *name, const void *value,
 int jfs_setxattr(struct dentry *dentry, const char *name, const void *value,
 		 size_t value_len, int flags)
 {
+	struct inode *inode = dentry->d_inode;
+	struct jfs_inode_info *ji = JFS_IP(inode);
+	int rc;
+	tid_t tid;
+
+	if ((rc = can_set_xattr(inode, name, value, value_len)))
+		return rc;
+
 	if (value == NULL) {	/* empty EA, do not remove */
 		value = "";
 		value_len = 0;
 	}
 
-	return __jfs_setxattr(dentry->d_inode, name, value, value_len, flags);
+	tid = txBegin(inode->i_sb, 0);
+	down(&ji->commit_sem);
+	rc = __jfs_setxattr(tid, dentry->d_inode, name, value, value_len,
+			    flags);
+	if (!rc)
+		rc = txCommit(tid, 1, &inode, 0);
+	txEnd(tid);
+	up(&ji->commit_sem);
+
+	return rc;
 }
 
 static int can_get_xattr(struct inode *inode, const char *name)
@@ -1042,8 +1072,7 @@ ssize_t __jfs_getxattr(struct inode *inode, const char *name, void *data,
       out:
 	up_read(&JFS_IP(inode)->xattr_sem);
 
-	if (os2name)
-		kfree(os2name);
+	kfree(os2name);
 
 	return size;
 }
@@ -1123,5 +1152,56 @@ ssize_t jfs_listxattr(struct dentry * dentry, char *data, size_t buf_size)
 
 int jfs_removexattr(struct dentry *dentry, const char *name)
 {
-	return __jfs_setxattr(dentry->d_inode, name, NULL, 0, XATTR_REPLACE);
+	struct inode *inode = dentry->d_inode;
+	struct jfs_inode_info *ji = JFS_IP(inode);
+	int rc;
+	tid_t tid;
+
+	if ((rc = can_set_xattr(inode, name, NULL, 0)))
+		return rc;
+
+	tid = txBegin(inode->i_sb, 0);
+	down(&ji->commit_sem);
+	rc = __jfs_setxattr(tid, dentry->d_inode, name, NULL, 0, XATTR_REPLACE);
+	if (!rc)
+		rc = txCommit(tid, 1, &inode, 0);
+	txEnd(tid);
+	up(&ji->commit_sem);
+
+	return rc;
 }
+
+#ifdef CONFIG_JFS_SECURITY
+int jfs_init_security(tid_t tid, struct inode *inode, struct inode *dir)
+{
+	int rc;
+	size_t len;
+	void *value;
+	char *suffix;
+	char *name;
+
+	rc = security_inode_init_security(inode, dir, &suffix, &value, &len);
+	if (rc) {
+		if (rc == -EOPNOTSUPP)
+			return 0;
+		return rc;
+	}
+	name = kmalloc(XATTR_SECURITY_PREFIX_LEN + 1 + strlen(suffix),
+		       GFP_NOFS);
+	if (!name) {
+		rc = -ENOMEM;
+		goto kmalloc_failed;
+	}
+	strcpy(name, XATTR_SECURITY_PREFIX);
+	strcpy(name + XATTR_SECURITY_PREFIX_LEN, suffix);
+
+	rc = __jfs_setxattr(tid, inode, name, value, len, 0);
+
+	kfree(name);
+kmalloc_failed:
+	kfree(suffix);
+	kfree(value);
+
+	return rc;
+}
+#endif

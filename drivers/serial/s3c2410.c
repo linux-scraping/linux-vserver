@@ -82,8 +82,6 @@
 #include <asm/arch/regs-serial.h>
 #include <asm/arch/regs-gpio.h>
 
-#include <asm/mach-types.h>
-
 /* structures */
 
 struct s3c24xx_uart_info {
@@ -198,7 +196,7 @@ static inline struct s3c24xx_uart_port *to_ourport(struct uart_port *port)
 
 /* translate a port to the device name */
 
-static inline char *s3c24xx_serial_portname(struct uart_port *port)
+static inline const char *s3c24xx_serial_portname(struct uart_port *port)
 {
 	return to_platform_device(port->dev)->name;
 }
@@ -246,8 +244,7 @@ static void s3c24xx_serial_rx_disable(struct uart_port *port)
 	spin_unlock_irqrestore(&port->lock, flags);
 }
 
-static void
-s3c24xx_serial_stop_tx(struct uart_port *port, unsigned int tty_stop)
+static void s3c24xx_serial_stop_tx(struct uart_port *port)
 {
 	if (tx_enabled(port)) {
 		disable_irq(TX_IRQ(port));
@@ -257,8 +254,7 @@ s3c24xx_serial_stop_tx(struct uart_port *port, unsigned int tty_stop)
 	}
 }
 
-static void
-s3c24xx_serial_start_tx(struct uart_port *port, unsigned int tty_start)
+static void s3c24xx_serial_start_tx(struct uart_port *port)
 {
 	if (!tx_enabled(port)) {
 		if (port->flags & UPF_CONS_FLOW)
@@ -424,7 +420,7 @@ static irqreturn_t s3c24xx_serial_tx_chars(int irq, void *id, struct pt_regs *re
 	*/
 
 	if (uart_circ_empty(xmit) || uart_tx_stopped(port)) {
-		s3c24xx_serial_stop_tx(port, 0);
+		s3c24xx_serial_stop_tx(port);
 		goto out;
 	}
 
@@ -443,7 +439,7 @@ static irqreturn_t s3c24xx_serial_tx_chars(int irq, void *id, struct pt_regs *re
 		uart_write_wakeup(port);
 
 	if (uart_circ_empty(xmit))
-		s3c24xx_serial_stop_tx(port, 0);
+		s3c24xx_serial_stop_tx(port);
 
  out:
 	return IRQ_HANDLED;
@@ -522,13 +518,10 @@ static void s3c24xx_serial_shutdown(struct uart_port *port)
 static int s3c24xx_serial_startup(struct uart_port *port)
 {
 	struct s3c24xx_uart_port *ourport = to_ourport(port);
-	unsigned long flags;
 	int ret;
 
 	dbg("s3c24xx_serial_startup: port=%p (%08lx,%p)\n",
 	    port->mapbase, port->membase);
-
-	local_irq_save(flags);
 
 	rx_enabled(port) = 1;
 
@@ -563,12 +556,10 @@ static int s3c24xx_serial_startup(struct uart_port *port)
 	/* the port reset code should have done the correct
 	 * register setup for the port controls */
 
-	local_irq_restore(flags);
 	return ret;
 
  err:
 	s3c24xx_serial_shutdown(port);
-	local_irq_restore(flags);
 	return ret;
 }
 
@@ -760,8 +751,8 @@ static void s3c24xx_serial_set_termios(struct uart_port *port,
 {
 	struct s3c2410_uartcfg *cfg = s3c24xx_port_to_cfg(port);
 	struct s3c24xx_uart_port *ourport = to_ourport(port);
-	struct s3c24xx_uart_clksrc *clksrc;
-	struct clk *clk;
+	struct s3c24xx_uart_clksrc *clksrc = NULL;
+	struct clk *clk = NULL;
 	unsigned long flags;
 	unsigned int baud, quot;
 	unsigned int ulcon;
@@ -903,7 +894,7 @@ static void s3c24xx_serial_release_port(struct uart_port *port)
 
 static int s3c24xx_serial_request_port(struct uart_port *port)
 {
-	char *name = s3c24xx_serial_portname(port);
+	const char *name = s3c24xx_serial_portname(port);
 	return request_mem_region(port->mapbase, MAP_SIZE, name) ? 0 : -EBUSY;
 }
 
@@ -1101,8 +1092,8 @@ static int s3c24xx_serial_init_port(struct s3c24xx_uart_port *ourport,
 
 static int probe_index = 0;
 
-int s3c24xx_serial_probe(struct device *_dev,
-			 struct s3c24xx_uart_info *info)
+static int s3c24xx_serial_probe(struct device *_dev,
+				struct s3c24xx_uart_info *info)
 {
 	struct s3c24xx_uart_port *ourport;
 	struct platform_device *dev = to_platform_device(_dev);
@@ -1129,7 +1120,7 @@ int s3c24xx_serial_probe(struct device *_dev,
 	return ret;
 }
 
-int s3c24xx_serial_remove(struct device *_dev)
+static int s3c24xx_serial_remove(struct device *_dev)
 {
 	struct uart_port *port = s3c24xx_dev_to_port(_dev);
 
@@ -1143,7 +1134,8 @@ int s3c24xx_serial_remove(struct device *_dev)
 
 #ifdef CONFIG_PM
 
-int s3c24xx_serial_suspend(struct device *dev, pm_message_t state, u32 level)
+static int s3c24xx_serial_suspend(struct device *dev, pm_message_t state,
+				  u32 level)
 {
 	struct uart_port *port = s3c24xx_dev_to_port(dev);
 
@@ -1153,7 +1145,7 @@ int s3c24xx_serial_suspend(struct device *dev, pm_message_t state, u32 level)
 	return 0;
 }
 
-int s3c24xx_serial_resume(struct device *dev, u32 level)
+static int s3c24xx_serial_resume(struct device *dev, u32 level)
 {
 	struct uart_port *port = s3c24xx_dev_to_port(dev);
 	struct s3c24xx_uart_port *ourport = to_ourport(port);
@@ -1174,8 +1166,8 @@ int s3c24xx_serial_resume(struct device *dev, u32 level)
 #define s3c24xx_serial_resume  NULL
 #endif
 
-int s3c24xx_serial_init(struct device_driver *drv,
-			struct s3c24xx_uart_info *info)
+static int s3c24xx_serial_init(struct device_driver *drv,
+			       struct s3c24xx_uart_info *info)
 {
 	dbg("s3c24xx_serial_init(%p,%p)\n", drv, info);
 	return driver_register(drv);
@@ -1244,6 +1236,7 @@ static int s3c2400_serial_probe(struct device *dev)
 
 static struct device_driver s3c2400_serial_drv = {
 	.name		= "s3c2400-uart",
+	.owner		= THIS_MODULE,
 	.bus		= &platform_bus_type,
 	.probe		= s3c2400_serial_probe,
 	.remove		= s3c24xx_serial_remove,
@@ -1347,6 +1340,7 @@ static int s3c2410_serial_probe(struct device *dev)
 
 static struct device_driver s3c2410_serial_drv = {
 	.name		= "s3c2410-uart",
+	.owner		= THIS_MODULE,
 	.bus		= &platform_bus_type,
 	.probe		= s3c2410_serial_probe,
 	.remove		= s3c24xx_serial_remove,
@@ -1508,6 +1502,7 @@ static int s3c2440_serial_probe(struct device *dev)
 
 static struct device_driver s3c2440_serial_drv = {
 	.name		= "s3c2440-uart",
+	.owner		= THIS_MODULE,
 	.bus		= &platform_bus_type,
 	.probe		= s3c2440_serial_probe,
 	.remove		= s3c24xx_serial_remove,

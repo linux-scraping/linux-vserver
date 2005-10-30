@@ -50,7 +50,8 @@ static int snd_seq_gf1_copy_wave_from_stream(snd_gf1_ops_t *ops,
 {
 	gf1_wave_t *wp, *prev;
 	gf1_xwave_t xp;
-	int err, gfp_mask;
+	int err;
+	unsigned int gfp_mask;
 	unsigned int real_size;
 	
 	gfp_mask = atomic ? GFP_ATOMIC : GFP_KERNEL;
@@ -60,7 +61,7 @@ static int snd_seq_gf1_copy_wave_from_stream(snd_gf1_ops_t *ops,
 		return -EFAULT;
 	*data += sizeof(xp);
 	*len -= sizeof(xp);
-	wp = kcalloc(1, sizeof(*wp), gfp_mask);
+	wp = kzalloc(sizeof(*wp), gfp_mask);
 	if (wp == NULL)
 		return -ENOMEM;
 	wp->share_id[0] = le32_to_cpu(xp.share_id[0]);

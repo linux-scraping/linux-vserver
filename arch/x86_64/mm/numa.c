@@ -22,49 +22,63 @@
 #define Dprintk(x...)
 #endif
 
-struct pglist_data *node_data[MAX_NUMNODES];
+struct pglist_data *node_data[MAX_NUMNODES] __read_mostly;
 bootmem_data_t plat_node_bdata[MAX_NUMNODES];
 
 int memnode_shift;
 u8  memnodemap[NODEMAPSIZE];
 
-unsigned char cpu_to_node[NR_CPUS] = { [0 ... NR_CPUS-1] = NUMA_NO_NODE };
-cpumask_t     node_to_cpumask[MAX_NUMNODES];
+unsigned char cpu_to_node[NR_CPUS] __read_mostly = {
+	[0 ... NR_CPUS-1] = NUMA_NO_NODE
+};
+unsigned char apicid_to_node[MAX_LOCAL_APIC] __cpuinitdata = {
+ 	[0 ... MAX_LOCAL_APIC-1] = NUMA_NO_NODE
+};
+cpumask_t node_to_cpumask[MAX_NUMNODES] __read_mostly;
 
 int numa_off __initdata;
 
 int __init compute_hash_shift(struct node *nodes, int numnodes)
 {
 	int i; 
-	int shift = 24;
-	u64 addr;
+	int shift = 20;
+	unsigned long addr,maxend=0;
 	
-	/* When in doubt use brute force. */
-	while (shift < 48) { 
-		memset(memnodemap,0xff,sizeof(*memnodemap) * NODEMAPSIZE); 
-		for (i = 0; i < numnodes; i++) {
-			if (nodes[i].start == nodes[i].end) 
-				continue;
-			for (addr = nodes[i].start; 
-			     addr < nodes[i].end; 
-			     addr += (1UL << shift)) {
-				if (memnodemap[addr >> shift] != 0xff && 
-				    memnodemap[addr >> shift] != i) { 
-					printk(KERN_INFO 
-					    "node %d shift %d addr %Lx conflict %d\n", 
-					       i, shift, addr, memnodemap[addr>>shift]);
-					goto next; 
-				} 
-				memnodemap[addr >> shift] = i; 
+	for (i = 0; i < numnodes; i++)
+		if ((nodes[i].start != nodes[i].end) && (nodes[i].end > maxend))
+				maxend = nodes[i].end;
+
+	while ((1UL << shift) <  (maxend / NODEMAPSIZE))
+		shift++;
+
+	printk (KERN_DEBUG"Using %d for the hash shift. Max adder is %lx \n",
+			shift,maxend);
+	memset(memnodemap,0xff,sizeof(*memnodemap) * NODEMAPSIZE);
+	for (i = 0; i < numnodes; i++) {
+		if (nodes[i].start == nodes[i].end)
+			continue;
+		for (addr = nodes[i].start;
+		     addr < nodes[i].end;
+		     addr += (1UL << shift)) {
+			if (memnodemap[addr >> shift] != 0xff) {
+				printk(KERN_INFO
+	"Your memory is not aligned you need to rebuild your kernel "
+	"with a bigger NODEMAPSIZE shift=%d adder=%lu\n",
+					shift,addr);
+				return -1;
 			} 
+			memnodemap[addr >> shift] = i;
 		} 
-		return shift; 
-	next:
-		shift++; 
 	} 
-	memset(memnodemap,0,sizeof(*memnodemap) * NODEMAPSIZE); 
-	return -1; 
+	return shift;
 }
+
+#ifdef CONFIG_SPARSEMEM
+int early_pfn_to_nid(unsigned long pfn)
+{
+	return phys_to_nid(pfn << PAGE_SHIFT);
+}
+#endif
 
 /* Initialize bootmem allocator for a node */
 void __init setup_node_bootmem(int nodeid, unsigned long start, unsigned long end)
@@ -80,6 +94,7 @@ void __init setup_node_bootmem(int nodeid, unsigned long start, unsigned long en
 	start_pfn = start >> PAGE_SHIFT;
 	end_pfn = end >> PAGE_SHIFT;
 
+	memory_present(nodeid, start_pfn, end_pfn);
 	nodedata_phys = find_e820_area(start, end, pgdat_size); 
 	if (nodedata_phys == -1L) 
 		panic("Cannot find memory pgdat in node %d\n", nodeid);
@@ -116,9 +131,11 @@ void __init setup_node_zones(int nodeid)
 { 
 	unsigned long start_pfn, end_pfn; 
 	unsigned long zones[MAX_NR_ZONES];
+	unsigned long holes[MAX_NR_ZONES];
 	unsigned long dma_end_pfn;
 
 	memset(zones, 0, sizeof(unsigned long) * MAX_NR_ZONES); 
+	memset(holes, 0, sizeof(unsigned long) * MAX_NR_ZONES);
 
 	start_pfn = node_start_pfn(nodeid);
 	end_pfn = node_end_pfn(nodeid);
@@ -129,13 +146,17 @@ void __init setup_node_zones(int nodeid)
 	dma_end_pfn = __pa(MAX_DMA_ADDRESS) >> PAGE_SHIFT; 
 	if (start_pfn < dma_end_pfn) { 
 		zones[ZONE_DMA] = dma_end_pfn - start_pfn;
+		holes[ZONE_DMA] = e820_hole_size(start_pfn, dma_end_pfn);
 		zones[ZONE_NORMAL] = end_pfn - dma_end_pfn; 
+		holes[ZONE_NORMAL] = e820_hole_size(dma_end_pfn, end_pfn);
+
 	} else { 
 		zones[ZONE_NORMAL] = end_pfn - start_pfn; 
+		holes[ZONE_NORMAL] = e820_hole_size(start_pfn, end_pfn);
 	} 
     
 	free_area_init_node(nodeid, NODE_DATA(nodeid), zones,
-			    start_pfn, NULL); 
+			    start_pfn, holes);
 } 
 
 void __init numa_init_array(void)
@@ -146,18 +167,16 @@ void __init numa_init_array(void)
 	   mapping. To avoid this fill in the mapping for all possible
 	   CPUs, as the number of CPUs is not known yet. 
 	   We round robin the existing nodes. */
-	rr = 0;
+	rr = first_node(node_online_map);
 	for (i = 0; i < NR_CPUS; i++) {
 		if (cpu_to_node[i] != NUMA_NO_NODE)
 			continue;
+		cpu_to_node[i] = rr;
 		rr = next_node(rr, node_online_map);
 		if (rr == MAX_NUMNODES)
 			rr = first_node(node_online_map);
-		cpu_to_node[i] = rr;
-		rr++; 
 	}
 
-	set_bit(0, &node_to_cpumask[cpu_to_node(0)]);
 }
 
 #ifdef CONFIG_NUMA_EMU
@@ -243,11 +262,9 @@ void __init numa_initmem_init(unsigned long start_pfn, unsigned long end_pfn)
 	setup_node_bootmem(0, start_pfn << PAGE_SHIFT, end_pfn << PAGE_SHIFT);
 }
 
-__init void numa_add_cpu(int cpu)
+__cpuinit void numa_add_cpu(int cpu)
 {
-	/* BP is initialized elsewhere */
-	if (cpu) 
-		set_bit(cpu, &node_to_cpumask[cpu_to_node(cpu)]);
+	set_bit(cpu, &node_to_cpumask[cpu_to_node(cpu)]);
 } 
 
 unsigned long __init numa_free_all_bootmem(void) 

@@ -50,6 +50,7 @@
    Currently rawusb dma pcm buffer transport (this file) is only available to snd-usb-usx2y. 
 */
 
+#include <linux/delay.h>
 #include "usbusx2yaudio.c"
 
 #if defined(USX2Y_NRPACKS_VARIABLE) || (!defined(USX2Y_NRPACKS_VARIABLE) &&  USX2Y_NRPACKS == 1)
@@ -520,11 +521,8 @@ static int snd_usX2Y_usbpcm_prepare(snd_pcm_substream_t *substream)
 		usX2Y->hwdep_pcm_shm->playback_iso_start = -1;
 		if (atomic_read(&subs->state) < state_PREPARED) {
 			while (usX2Y_iso_frames_per_buffer(runtime, usX2Y) > usX2Y->hwdep_pcm_shm->captured_iso_frames) {
-				signed long timeout;
 				snd_printd("Wait: iso_frames_per_buffer=%i,captured_iso_frames=%i\n", usX2Y_iso_frames_per_buffer(runtime, usX2Y), usX2Y->hwdep_pcm_shm->captured_iso_frames);
-				set_current_state(TASK_INTERRUPTIBLE);
-				timeout = schedule_timeout(HZ/100 + 1);
-				if (signal_pending(current)) {
+				if (msleep_interruptible(10)) {
 					err = -ERESTARTSYS;
 					goto up_prepare_mutex;
 				}
@@ -626,7 +624,7 @@ static int usX2Y_pcms_lock_check(snd_card_t *card)
 		for (s = 0; s < 2; ++s) {
 			snd_pcm_substream_t *substream;
 			substream = pcm->streams[s].substream;
-			if (substream && substream->open_flag)
+			if (substream && substream->ffile != NULL)
 				err = -EBUSY;
 		}
 	}

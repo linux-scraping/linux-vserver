@@ -31,6 +31,7 @@
 #include <linux/kernel.h>
 #include <linux/input.h>
 #include <linux/usb.h>
+#include <linux/usb_input.h>
 
 #undef DEBUG
 
@@ -77,8 +78,8 @@ static void hidinput_configure_usage(struct hid_input *hidinput, struct hid_fiel
 {
 	struct input_dev *input = &hidinput->input;
 	struct hid_device *device = hidinput->input.private;
-	int max, code;
-	unsigned long *bit;
+	int max = 0, code;
+	unsigned long *bit = NULL;
 
 	field->hidinput = hidinput;
 
@@ -130,6 +131,15 @@ static void hidinput_configure_usage(struct hid_input *hidinput, struct hid_fiel
 			map_key(code);
 			break;
 
+
+		case HID_UP_SIMULATION:
+
+			switch (usage->hid & 0xffff) {
+				case 0xba: map_abs(ABS_RUDDER); break;
+				case 0xbb: map_abs(ABS_THROTTLE); break;
+			}
+			break;
+
 		case HID_UP_GENDESK:
 
 			if ((usage->hid & 0xf0) == 0x80) {	/* SystemControl */
@@ -164,7 +174,7 @@ static void hidinput_configure_usage(struct hid_input *hidinput, struct hid_fiel
 				case HID_GD_X: case HID_GD_Y: case HID_GD_Z:
 				case HID_GD_RX: case HID_GD_RY: case HID_GD_RZ:
 				case HID_GD_SLIDER: case HID_GD_DIAL: case HID_GD_WHEEL:
-					if (field->flags & HID_MAIN_ITEM_RELATIVE) 
+					if (field->flags & HID_MAIN_ITEM_RELATIVE)
 						map_rel(usage->hid & 0xf);
 					else
 						map_abs(usage->hid & 0xf);
@@ -237,8 +247,12 @@ static void hidinput_configure_usage(struct hid_input *hidinput, struct hid_fiel
 				case 0x000: goto ignore;
 				case 0x034: map_key_clear(KEY_SLEEP);		break;
 				case 0x036: map_key_clear(BTN_MISC);		break;
+				case 0x045: map_key_clear(KEY_RADIO);		break;
 				case 0x08a: map_key_clear(KEY_WWW);		break;
+				case 0x08d: map_key_clear(KEY_PROGRAM);		break;
 				case 0x095: map_key_clear(KEY_HELP);		break;
+				case 0x09c: map_key_clear(KEY_CHANNELUP);	break;
+				case 0x09d: map_key_clear(KEY_CHANNELDOWN);	break;
 				case 0x0b0: map_key_clear(KEY_PLAY);		break;
 				case 0x0b1: map_key_clear(KEY_PAUSE);		break;
 				case 0x0b2: map_key_clear(KEY_RECORD);		break;
@@ -258,6 +272,11 @@ static void hidinput_configure_usage(struct hid_input *hidinput, struct hid_fiel
 				case 0x18a: map_key_clear(KEY_MAIL);		break;
 				case 0x192: map_key_clear(KEY_CALC);		break;
 				case 0x194: map_key_clear(KEY_FILE);		break;
+				case 0x1a7: map_key_clear(KEY_DOCUMENTS);	break;
+				case 0x201: map_key_clear(KEY_NEW);		break;
+				case 0x207: map_key_clear(KEY_SAVE);		break;
+				case 0x208: map_key_clear(KEY_PRINT);		break;
+				case 0x209: map_key_clear(KEY_PROPS);		break;
 				case 0x21a: map_key_clear(KEY_UNDO);		break;
 				case 0x21b: map_key_clear(KEY_COPY);		break;
 				case 0x21c: map_key_clear(KEY_CUT);		break;
@@ -270,7 +289,11 @@ static void hidinput_configure_usage(struct hid_input *hidinput, struct hid_fiel
 				case 0x227: map_key_clear(KEY_REFRESH);		break;
 				case 0x22a: map_key_clear(KEY_BOOKMARKS);	break;
 				case 0x238: map_rel(REL_HWHEEL);		break;
-				default:    goto unknown;
+				case 0x279: map_key_clear(KEY_REDO);		break;
+				case 0x289: map_key_clear(KEY_REPLY);		break;
+				case 0x28b: map_key_clear(KEY_FORWARDMAIL);	break;
+				case 0x28c: map_key_clear(KEY_SEND);		break;
+				default:    goto ignore;
 			}
 			break;
 
@@ -295,9 +318,42 @@ static void hidinput_configure_usage(struct hid_input *hidinput, struct hid_fiel
 			break;
 
 		case HID_UP_MSVENDOR:
-
 			goto ignore;
-			
+
+		case HID_UP_CUSTOM: /* Reported on Logitech and Powerbook USB keyboards */
+
+			set_bit(EV_REP, input->evbit);
+			switch(usage->hid & HID_USAGE) {
+				case 0x003: map_key_clear(KEY_FN);		break;
+				default:    goto ignore;
+			}
+			break;
+
+		case HID_UP_LOGIVENDOR: /* Reported on Logitech Ultra X Media Remote */
+
+			set_bit(EV_REP, input->evbit);
+			switch(usage->hid & HID_USAGE) {
+				case 0x004: map_key_clear(KEY_AGAIN);		break;
+				case 0x00d: map_key_clear(KEY_HOME);		break;
+				case 0x024: map_key_clear(KEY_SHUFFLE);		break;
+				case 0x025: map_key_clear(KEY_TV);		break;
+				case 0x026: map_key_clear(KEY_MENU);		break;
+				case 0x031: map_key_clear(KEY_AUDIO);		break;
+				case 0x032: map_key_clear(KEY_SUBTITLE);	break;
+				case 0x033: map_key_clear(KEY_LAST);		break;
+				case 0x047: map_key_clear(KEY_MP3);		break;
+				case 0x048: map_key_clear(KEY_DVD);		break;
+				case 0x049: map_key_clear(KEY_MEDIA);		break;
+				case 0x04a: map_key_clear(KEY_VIDEO);		break;
+				case 0x04b: map_key_clear(KEY_ANGLE);		break;
+				case 0x04c: map_key_clear(KEY_LANGUAGE);	break;
+				case 0x04d: map_key_clear(KEY_SUBTITLE);	break;
+				case 0x051: map_key_clear(KEY_RED);		break;
+				case 0x052: map_key_clear(KEY_CLOSE);		break;
+				default:    goto ignore;
+			}
+			break;
+
 		case HID_UP_PID:
 
 			set_bit(EV_FF, input->evbit);
@@ -348,8 +404,11 @@ static void hidinput_configure_usage(struct hid_input *hidinput, struct hid_fiel
 	if (usage->code > max)
 		goto ignore;
 
+	if (((device->quirks & (HID_QUIRK_2WHEEL_POWERMOUSE)) && (usage->hid == 0x00010032)))
+		map_rel(REL_HWHEEL);
+
 	if ((device->quirks & (HID_QUIRK_2WHEEL_MOUSE_HACK_7 | HID_QUIRK_2WHEEL_MOUSE_HACK_5)) &&
-		 (usage->type == EV_REL) && (usage->code == REL_WHEEL)) 
+		 (usage->type == EV_REL) && (usage->code == REL_WHEEL))
 			set_bit(REL_HWHEEL, bit);
 
 	if (((device->quirks & HID_QUIRK_2WHEEL_MOUSE_HACK_5) && (usage->hid == 0x00090005))
@@ -365,11 +424,11 @@ static void hidinput_configure_usage(struct hid_input *hidinput, struct hid_fiel
 			a = field->logical_minimum = 0;
 			b = field->logical_maximum = 255;
 		}
-		
+
 		if (field->application == HID_GD_GAMEPAD || field->application == HID_GD_JOYSTICK)
 			input_set_abs_params(input, usage->code, a, b, (b - a) >> 8, (b - a) >> 4);
 		else	input_set_abs_params(input, usage->code, a, b, 0, 0);
-		
+
 	}
 
 	if (usage->hat_min < usage->hat_max || usage->hat_dir) {
@@ -397,11 +456,12 @@ ignore:
 
 void hidinput_hid_event(struct hid_device *hid, struct hid_field *field, struct hid_usage *usage, __s32 value, struct pt_regs *regs)
 {
-	struct input_dev *input = &field->hidinput->input;
+	struct input_dev *input;
 	int *quirks = &hid->quirks;
 
-	if (!input)
+	if (!field->hidinput)
 		return;
+	input = &field->hidinput->input;
 
 	input_regs(input, regs);
 
@@ -420,7 +480,7 @@ void hidinput_hid_event(struct hid_device *hid, struct hid_field *field, struct 
 		return;
 	}
 
-	if (usage->hat_min < usage->hat_max || usage->hat_dir) { 
+	if (usage->hat_min < usage->hat_max || usage->hat_dir) {
 		int hat_dir = usage->hat_dir;
 		if (!hat_dir)
 			hat_dir = (value - usage->hat_min) * 8 / (usage->hat_max - usage->hat_min + 1) + 1;
@@ -551,7 +611,7 @@ int hidinput_connect(struct hid_device *hid)
 	for (i = 0; i < hid->maxcollection; i++)
 		if (hid->collection[i].type == HID_COLLECTION_APPLICATION ||
 		    hid->collection[i].type == HID_COLLECTION_PHYSICAL)
-		    	if (IS_INPUT_APPLICATION(hid->collection[i].usage))
+			if (IS_INPUT_APPLICATION(hid->collection[i].usage))
 				break;
 
 	if (i == hid->maxcollection)
@@ -581,10 +641,7 @@ int hidinput_connect(struct hid_device *hid)
 				hidinput->input.name = hid->name;
 				hidinput->input.phys = hid->phys;
 				hidinput->input.uniq = hid->uniq;
-				hidinput->input.id.bustype = BUS_USB;
-				hidinput->input.id.vendor = le16_to_cpu(dev->descriptor.idVendor);
-				hidinput->input.id.product = le16_to_cpu(dev->descriptor.idProduct);
-				hidinput->input.id.version = le16_to_cpu(dev->descriptor.bcdDevice);
+				usb_to_input_id(dev, &hidinput->input.id);
 				hidinput->input.dev = &hid->intf->dev;
 			}
 
@@ -592,7 +649,7 @@ int hidinput_connect(struct hid_device *hid)
 				for (j = 0; j < report->field[i]->maxusage; j++)
 					hidinput_configure_usage(hidinput, report->field[i],
 								 report->field[i]->usage + j);
-			
+
 			if (hid->quirks & HID_QUIRK_MULTI_INPUT) {
 				/* This will leave hidinput NULL, so that it
 				 * allocates another one if we have more inputs on

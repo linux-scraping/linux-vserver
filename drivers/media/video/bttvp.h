@@ -1,5 +1,4 @@
 /*
-    $Id: bttvp.h,v 1.17 2005/02/16 12:14:10 kraxel Exp $
 
     bttv - Bt848 frame grabber driver
 
@@ -27,7 +26,7 @@
 #define _BTTVP_H_
 
 #include <linux/version.h>
-#define BTTV_VERSION_CODE KERNEL_VERSION(0,9,15)
+#define BTTV_VERSION_CODE KERNEL_VERSION(0,9,16)
 
 #include <linux/types.h>
 #include <linux/wait.h>
@@ -222,13 +221,9 @@ extern void bttv_gpio_tracking(struct bttv *btv, char *comment);
 extern int init_bttv_i2c(struct bttv *btv);
 extern int fini_bttv_i2c(struct bttv *btv);
 
-#define vprintk  if (bttv_verbose) printk
+#define bttv_printk if (bttv_verbose) printk
 #define dprintk  if (bttv_debug >= 1) printk
 #define d2printk if (bttv_debug >= 2) printk
-
-/* our devices */
-#define BTTV_MAX 16
-extern unsigned int bttv_num;
 
 #define BTTV_MAX_FBUF   0x208000
 #define VBIBUF_SIZE     (2048*VBI_MAXLINES*2)
@@ -330,6 +325,9 @@ struct bttv {
 	int opt_vcr_hack;
 	int opt_whitecrush_upper;
 	int opt_whitecrush_lower;
+	int opt_uv_ratio;
+	int opt_full_luma_range;
+	int opt_coring;
 
 	/* radio data/state */
 	int has_radio;
@@ -375,6 +373,10 @@ struct bttv {
 	unsigned int users;
 	struct bttv_fh init;
 };
+
+/* our devices */
+#define BTTV_MAX 16
+extern unsigned int bttv_num;
 extern struct bttv bttvs[BTTV_MAX];
 
 /* private ioctls */

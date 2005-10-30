@@ -47,7 +47,7 @@ MODULE_PARM_DESC(cards_limit, "Maximum number of graphics cards");
 MODULE_PARM_DESC(debug, "Enable debug output");
 
 module_param_named(cards_limit, drm_cards_limit, int, 0444);
-module_param_named(debug, drm_debug, int, 0666);
+module_param_named(debug, drm_debug, int, 0600);
 
 drm_head_t **drm_heads;
 struct drm_sysfs_class *drm_class;
@@ -75,6 +75,11 @@ static int drm_fill_in_dev(drm_device_t *dev, struct pci_dev *pdev, const struct
 	dev->pci_func = PCI_FUNC(pdev->devfn);
 	dev->irq = pdev->irq;
 
+	dev->maplist = drm_calloc(1, sizeof(*dev->maplist), DRM_MEM_MAPS);
+	if (dev->maplist == NULL)
+		return -ENOMEM;
+	INIT_LIST_HEAD(&dev->maplist->head);
+
 	/* the DRM has 6 basic counters */
 	dev->counters = 6;
 	dev->types[0]  = _DRM_STAT_LOCK;
@@ -91,7 +96,8 @@ static int drm_fill_in_dev(drm_device_t *dev, struct pci_dev *pdev, const struct
 			goto error_out_unreg;
 
 	if (drm_core_has_AGP(dev)) {
-		dev->agp = drm_agp_init(dev);
+		if (drm_device_is_agp(dev))
+			dev->agp = drm_agp_init(dev);
 		if (drm_core_check_feature(dev, DRIVER_REQUIRE_AGP) && (dev->agp == NULL)) {
 			DRM_ERROR( "Cannot initialize the agpgart module.\n" );
 			retcode = -EINVAL;
@@ -157,52 +163,6 @@ int drm_stub_open(struct inode *inode, struct file *filp)
 	return err;
 }
 
-
-/**
- * Register.
- *
- * \param pdev - PCI device structure
- * \param ent entry from the PCI ID table with device type flags
- * \return zero on success or a negative number on failure.
- *
- * Attempt to gets inter module "drm" information. If we are first
- * then register the character device and inter module information.
- * Try and register, if we fail to register, backout previous work.
- */
-int drm_get_dev(struct pci_dev *pdev, const struct pci_device_id *ent,
-	      struct drm_driver *driver)
-{
-	drm_device_t *dev;
-	int ret;
-
-	DRM_DEBUG("\n");
-
-	dev = drm_calloc(1, sizeof(*dev), DRM_MEM_STUB);
-	if (!dev)
-		return -ENOMEM;
-
-	pci_enable_device(pdev);
-
-	if ((ret = drm_fill_in_dev(dev, pdev, ent, driver))) {
-		printk(KERN_ERR "DRM: Fill_in_dev failed.\n");
-		goto err_g1;
-	}
-	if ((ret = drm_get_head(dev, &dev->primary)))
-		goto err_g1;
-
-	/* postinit is a required function to display the signon banner */
-	/* drivers add secondary heads here if needed */
-	if ((ret = dev->driver->postinit(dev, ent->driver_data)))
-		goto err_g1;
-
-	return 0;
-
-err_g1:
-	drm_free(dev, sizeof(*dev), DRM_MEM_STUB);
-	return ret;
-}
-EXPORT_SYMBOL(drm_get_dev);
-
 /**
  * Get a secondary minor number.
  *
@@ -214,7 +174,7 @@ EXPORT_SYMBOL(drm_get_dev);
  * create the proc init entry via proc_init(). This routines assigns
  * minor numbers to secondary heads of multi-headed cards
  */
-int drm_get_head(drm_device_t *dev, drm_head_t *head)
+static int drm_get_head(drm_device_t *dev, drm_head_t *head)
 {
 	drm_head_t **heads = drm_heads;
 	int ret;
@@ -262,6 +222,50 @@ err_g1:
 	return ret;
 }
 		
+/**
+ * Register.
+ *
+ * \param pdev - PCI device structure
+ * \param ent entry from the PCI ID table with device type flags
+ * \return zero on success or a negative number on failure.
+ *
+ * Attempt to gets inter module "drm" information. If we are first
+ * then register the character device and inter module information.
+ * Try and register, if we fail to register, backout previous work.
+ */
+int drm_get_dev(struct pci_dev *pdev, const struct pci_device_id *ent,
+	      struct drm_driver *driver)
+{
+	drm_device_t *dev;
+	int ret;
+
+	DRM_DEBUG("\n");
+
+	dev = drm_calloc(1, sizeof(*dev), DRM_MEM_STUB);
+	if (!dev)
+		return -ENOMEM;
+
+	pci_enable_device(pdev);
+
+	if ((ret = drm_fill_in_dev(dev, pdev, ent, driver))) {
+		printk(KERN_ERR "DRM: Fill_in_dev failed.\n");
+		goto err_g1;
+	}
+	if ((ret = drm_get_head(dev, &dev->primary)))
+		goto err_g1;
+
+	/* postinit is a required function to display the signon banner */
+	/* drivers add secondary heads here if needed */
+	if ((ret = dev->driver->postinit(dev, ent->driver_data)))
+		goto err_g1;
+
+	return 0;
+
+err_g1:
+	drm_free(dev, sizeof(*dev), DRM_MEM_STUB);
+	return ret;
+}
+EXPORT_SYMBOL(drm_get_dev);
 
 /**
  * Put a device minor number.

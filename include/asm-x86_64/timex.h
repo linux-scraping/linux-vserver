@@ -6,7 +6,6 @@
 #ifndef _ASMx8664_TIMEX_H
 #define _ASMx8664_TIMEX_H
 
-#include <linux/config.h>
 #include <asm/8253pit.h>
 #include <asm/msr.h>
 #include <asm/vsyscall.h>
@@ -25,6 +24,9 @@ static inline cycles_t get_cycles (void)
 }
 
 extern unsigned int cpu_khz;
+
+extern int read_current_timer(unsigned long *timer_value);
+#define ARCH_HAS_READ_CURRENT_TIMER	1
 
 extern struct vxtime_data vxtime;
 

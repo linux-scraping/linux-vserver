@@ -472,6 +472,7 @@ void snd_trident_write_voice_regs(trident_t * trident,
 		break;
 	default:
 		snd_BUG();
+		return;
 	}
 
 	outb(voice->number, TRID_REG(trident, T4D_LFO_GC_CIR));
@@ -1688,7 +1689,7 @@ static snd_pcm_hardware_t snd_trident_playback =
 	.info =			(SNDRV_PCM_INFO_MMAP | SNDRV_PCM_INFO_INTERLEAVED |
 				 SNDRV_PCM_INFO_BLOCK_TRANSFER |
 				 SNDRV_PCM_INFO_MMAP_VALID | SNDRV_PCM_INFO_SYNC_START |
-				 SNDRV_PCM_INFO_PAUSE | SNDRV_PCM_INFO_RESUME),
+				 SNDRV_PCM_INFO_PAUSE /* | SNDRV_PCM_INFO_RESUME */),
 	.formats =		(SNDRV_PCM_FMTBIT_U8 | SNDRV_PCM_FMTBIT_S16_LE |
 				 SNDRV_PCM_FMTBIT_S8 | SNDRV_PCM_FMTBIT_U16_LE),
 	.rates =		SNDRV_PCM_RATE_CONTINUOUS | SNDRV_PCM_RATE_8000_48000,
@@ -1713,7 +1714,7 @@ static snd_pcm_hardware_t snd_trident_capture =
 	.info =			(SNDRV_PCM_INFO_MMAP | SNDRV_PCM_INFO_INTERLEAVED |
 				 SNDRV_PCM_INFO_BLOCK_TRANSFER |
 				 SNDRV_PCM_INFO_MMAP_VALID | SNDRV_PCM_INFO_SYNC_START |
-				 SNDRV_PCM_INFO_PAUSE | SNDRV_PCM_INFO_RESUME),
+				 SNDRV_PCM_INFO_PAUSE /* | SNDRV_PCM_INFO_RESUME */),
 	.formats =		(SNDRV_PCM_FMTBIT_U8 | SNDRV_PCM_FMTBIT_S16_LE |
 				 SNDRV_PCM_FMTBIT_S8 | SNDRV_PCM_FMTBIT_U16_LE),
 	.rates =		SNDRV_PCM_RATE_CONTINUOUS | SNDRV_PCM_RATE_8000_48000,
@@ -1738,7 +1739,7 @@ static snd_pcm_hardware_t snd_trident_foldback =
 	.info =			(SNDRV_PCM_INFO_MMAP | SNDRV_PCM_INFO_INTERLEAVED |
 				 SNDRV_PCM_INFO_BLOCK_TRANSFER |
 				 SNDRV_PCM_INFO_MMAP_VALID | SNDRV_PCM_INFO_SYNC_START |
-				 SNDRV_PCM_INFO_PAUSE | SNDRV_PCM_INFO_RESUME),
+				 SNDRV_PCM_INFO_PAUSE /* | SNDRV_PCM_INFO_RESUME */),
 	.formats =		SNDRV_PCM_FMTBIT_S16_LE,
 	.rates =		SNDRV_PCM_RATE_48000,
 	.rate_min =		48000,
@@ -1762,7 +1763,7 @@ static snd_pcm_hardware_t snd_trident_spdif =
 	.info =			(SNDRV_PCM_INFO_MMAP | SNDRV_PCM_INFO_INTERLEAVED |
 				 SNDRV_PCM_INFO_BLOCK_TRANSFER |
 				 SNDRV_PCM_INFO_MMAP_VALID | SNDRV_PCM_INFO_SYNC_START |
-				 SNDRV_PCM_INFO_PAUSE | SNDRV_PCM_INFO_RESUME),
+				 SNDRV_PCM_INFO_PAUSE /* | SNDRV_PCM_INFO_RESUME */),
 	.formats =		SNDRV_PCM_FMTBIT_S16_LE,
 	.rates =		(SNDRV_PCM_RATE_32000 | SNDRV_PCM_RATE_44100 |
 				 SNDRV_PCM_RATE_48000),
@@ -1783,7 +1784,7 @@ static snd_pcm_hardware_t snd_trident_spdif_7018 =
 	.info =			(SNDRV_PCM_INFO_MMAP | SNDRV_PCM_INFO_INTERLEAVED |
 				 SNDRV_PCM_INFO_BLOCK_TRANSFER |
 				 SNDRV_PCM_INFO_MMAP_VALID | SNDRV_PCM_INFO_SYNC_START |
-				 SNDRV_PCM_INFO_PAUSE | SNDRV_PCM_INFO_RESUME),
+				 SNDRV_PCM_INFO_PAUSE /* | SNDRV_PCM_INFO_RESUME */),
 	.formats =		SNDRV_PCM_FMTBIT_S16_LE,
 	.rates =		SNDRV_PCM_RATE_48000,
 	.rate_min =		48000,
@@ -2959,7 +2960,7 @@ static int __devinit snd_trident_mixer(trident_t * trident, int pcm_spdif_device
 		.read = snd_trident_codec_read,
 	};
 
-	uctl = kcalloc(1, sizeof(*uctl), GFP_KERNEL);
+	uctl = kzalloc(sizeof(*uctl), GFP_KERNEL);
 	if (!uctl)
 		return -ENOMEM;
 
@@ -3152,8 +3153,7 @@ static int snd_trident_gameport_open(struct gameport *gameport, int mode)
 	switch (mode) {
 		case GAMEPORT_MODE_COOKED:
 			outb(GAMEPORT_MODE_ADC, TRID_REG(chip, GAMEPORT_GCR));
-			set_current_state(TASK_UNINTERRUPTIBLE);
-			schedule_timeout(1 + 20 * HZ / 1000); /* 20msec */
+			msleep(20);
 			return 0;
 		case GAMEPORT_MODE_RAW:
 			outb(0, TRID_REG(chip, GAMEPORT_GCR));
@@ -3204,7 +3204,7 @@ static inline void snd_trident_free_gameport(trident_t *chip) { }
 /*
  * delay for 1 tick
  */
-inline static void do_delay(trident_t *chip)
+static inline void do_delay(trident_t *chip)
 {
 	set_current_state(TASK_UNINTERRUPTIBLE);
 	schedule_timeout(1);
@@ -3546,7 +3546,7 @@ int __devinit snd_trident_create(snd_card_t * card,
 		return -ENXIO;
 	}
 	
-	trident = kcalloc(1, sizeof(*trident), GFP_KERNEL);
+	trident = kzalloc(sizeof(*trident), GFP_KERNEL);
 	if (trident == NULL) {
 		pci_disable_device(pci);
 		return -ENOMEM;

@@ -1,7 +1,7 @@
 /*******************************************************************************
 
   
-  Copyright(c) 1999 - 2004 Intel Corporation. All rights reserved.
+  Copyright(c) 1999 - 2005 Intel Corporation. All rights reserved.
   
   This program is free software; you can redistribute it and/or modify it 
   under the terms of the GNU General Public License as published by the Free 
@@ -143,6 +143,7 @@
 #include <linux/delay.h>
 #include <linux/init.h>
 #include <linux/pci.h>
+#include <linux/dma-mapping.h>
 #include <linux/netdevice.h>
 #include <linux/etherdevice.h>
 #include <linux/mii.h>
@@ -155,7 +156,7 @@
 
 #define DRV_NAME		"e100"
 #define DRV_EXT		"-NAPI"
-#define DRV_VERSION		"3.4.8-k2"DRV_EXT
+#define DRV_VERSION		"3.4.14-k2"DRV_EXT
 #define DRV_DESCRIPTION		"Intel(R) PRO/100 Network Driver"
 #define DRV_COPYRIGHT		"Copyright(c) 1999-2005 Intel Corporation"
 #define PFX			DRV_NAME ": "
@@ -784,6 +785,7 @@ static int e100_eeprom_save(struct nic *nic, u16 start, u16 count)
 }
 
 #define E100_WAIT_SCB_TIMEOUT 20000 /* we might have to wait 100ms!!! */
+#define E100_WAIT_SCB_FAST 20       /* delay like the old code */
 static inline int e100_exec_cmd(struct nic *nic, u8 cmd, dma_addr_t dma_addr)
 {
 	unsigned long flags;
@@ -797,7 +799,7 @@ static inline int e100_exec_cmd(struct nic *nic, u8 cmd, dma_addr_t dma_addr)
 		if(likely(!readb(&nic->csr->scb.cmd_lo)))
 			break;
 		cpu_relax();
-		if(unlikely(i > (E100_WAIT_SCB_TIMEOUT >> 1)))
+		if(unlikely(i > E100_WAIT_SCB_FAST))
 			udelay(5);
 	}
 	if(unlikely(i == E100_WAIT_SCB_TIMEOUT)) {
@@ -1092,11 +1094,16 @@ static int e100_phy_init(struct nic *nic)
 	}
 
 	if((nic->mac >= mac_82550_D102) || ((nic->flags & ich) && 
-		(mdio_read(netdev, nic->mii.phy_id, MII_TPISTATUS) & 0x8000) && 
-		(nic->eeprom[eeprom_cnfg_mdix] & eeprom_mdix_enabled)))
-		/* enable/disable MDI/MDI-X auto-switching */
-		mdio_write(netdev, nic->mii.phy_id, MII_NCONFIG,
-			nic->mii.force_media ? 0 : NCONFIG_AUTO_SWITCH);
+	   (mdio_read(netdev, nic->mii.phy_id, MII_TPISTATUS) & 0x8000))) {
+		/* enable/disable MDI/MDI-X auto-switching.
+		   MDI/MDI-X auto-switching is disabled for 82551ER/QM chips */
+		if((nic->mac == mac_82551_E) || (nic->mac == mac_82551_F) ||
+		   (nic->mac == mac_82551_10) || (nic->mii.force_media) || 
+		   !(nic->eeprom[eeprom_cnfg_mdix] & eeprom_mdix_enabled)) 
+			mdio_write(netdev, nic->mii.phy_id, MII_NCONFIG, 0);
+		else
+			mdio_write(netdev, nic->mii.phy_id, MII_NCONFIG, NCONFIG_AUTO_SWITCH);
+	}
 
 	return 0;
 }
@@ -1192,13 +1199,13 @@ static void e100_update_stats(struct nic *nic)
 		ns->collisions += nic->tx_collisions;
 		ns->tx_errors += le32_to_cpu(s->tx_max_collisions) +
 			le32_to_cpu(s->tx_lost_crs);
-		ns->rx_dropped += le32_to_cpu(s->rx_resource_errors);
 		ns->rx_length_errors += le32_to_cpu(s->rx_short_frame_errors) +
 			nic->rx_over_length_errors;
 		ns->rx_crc_errors += le32_to_cpu(s->rx_crc_errors);
 		ns->rx_frame_errors += le32_to_cpu(s->rx_alignment_errors);
 		ns->rx_over_errors += le32_to_cpu(s->rx_overrun_errors);
 		ns->rx_fifo_errors += le32_to_cpu(s->rx_overrun_errors);
+		ns->rx_missed_errors += le32_to_cpu(s->rx_resource_errors);
 		ns->rx_errors += le32_to_cpu(s->rx_crc_errors) +
 			le32_to_cpu(s->rx_alignment_errors) +
 			le32_to_cpu(s->rx_short_frame_errors) +
@@ -1301,14 +1308,15 @@ static inline void e100_xmit_prepare(struct nic *nic, struct cb *cb,
 {
 	cb->command = nic->tx_command;
 	/* interrupt every 16 packets regardless of delay */
-	if((nic->cbs_avail & ~15) == nic->cbs_avail) cb->command |= cb_i;
+	if((nic->cbs_avail & ~15) == nic->cbs_avail)
+		cb->command |= cpu_to_le16(cb_i);
 	cb->u.tcb.tbd_array = cb->dma_addr + offsetof(struct cb, u.tcb.tbd);
 	cb->u.tcb.tcb_byte_count = 0;
 	cb->u.tcb.threshold = nic->tx_threshold;
 	cb->u.tcb.tbd_count = 1;
 	cb->u.tcb.tbd.buf_addr = cpu_to_le32(pci_map_single(nic->pdev,
 		skb->data, skb->len, PCI_DMA_TODEVICE));
-	// check for mapping failure?
+	/* check for mapping failure? */
 	cb->u.tcb.tbd.size = cpu_to_le16(skb->len);
 }
 
@@ -1531,12 +1539,10 @@ static inline int e100_rx_indicate(struct nic *nic, struct rx *rx,
 
 	if(unlikely(!(rfd_status & cb_ok))) {
 		/* Don't indicate if hardware indicates errors */
-		nic->net_stats.rx_dropped++;
 		dev_kfree_skb_any(skb);
-	} else if(actual_size > nic->netdev->mtu + VLAN_ETH_HLEN) {
+	} else if(actual_size > ETH_DATA_LEN + VLAN_ETH_HLEN) {
 		/* Don't indicate oversized frames */
 		nic->rx_over_length_errors++;
-		nic->net_stats.rx_dropped++;
 		dev_kfree_skb_any(skb);
 	} else {
 		nic->net_stats.rx_packets++;
@@ -1665,8 +1671,10 @@ static irqreturn_t e100_intr(int irq, void *dev_id, struct pt_regs *regs)
 	if(stat_ack & stat_ack_rnr)
 		nic->ru_running = RU_SUSPENDED;
 
-	e100_disable_irq(nic);
-	netif_rx_schedule(netdev);
+	if(likely(netif_rx_schedule_prep(netdev))) {
+		e100_disable_irq(nic);
+		__netif_rx_schedule(netdev);
+	}
 
 	return IRQ_HANDLED;
 }
@@ -1698,6 +1706,7 @@ static int e100_poll(struct net_device *netdev, int *budget)
 static void e100_netpoll(struct net_device *netdev)
 {
 	struct nic *nic = netdev_priv(netdev);
+
 	e100_disable_irq(nic);
 	e100_intr(nic->pdev->irq, netdev, NULL);
 	e100_tx_clean(nic);
@@ -2100,6 +2109,8 @@ static void e100_diag_test(struct net_device *netdev,
 	}
 	for(i = 0; i < E100_TEST_LEN; i++)
 		test->flags |= data[i] ? ETH_TEST_FL_FAILED : 0;
+
+	msleep_interruptible(4 * 1000);
 }
 
 static int e100_phys_id(struct net_device *netdev, u32 data)
@@ -2286,7 +2297,7 @@ static int __devinit e100_probe(struct pci_dev *pdev,
 		goto err_out_disable_pdev;
 	}
 
-	if((err = pci_set_dma_mask(pdev, 0xFFFFFFFFULL))) {
+	if((err = pci_set_dma_mask(pdev, DMA_32BIT_MASK))) {
 		DPRINTK(PROBE, ERR, "No usable DMA configuration, aborting.\n");
 		goto err_out_free_res;
 	}
@@ -2334,10 +2345,10 @@ static int __devinit e100_probe(struct pci_dev *pdev,
 		goto err_out_iounmap;
 	}
 
-	e100_phy_init(nic);
-
 	if((err = e100_eeprom_load(nic)))
 		goto err_out_free;
+
+	e100_phy_init(nic);
 
 	memcpy(netdev->dev_addr, nic->eeprom, ETH_ALEN);
 	if(!is_valid_ether_addr(netdev->dev_addr)) {
@@ -2439,9 +2450,8 @@ static int e100_resume(struct pci_dev *pdev)
 #endif
 
 
-static void e100_shutdown(struct device *dev)
+static void e100_shutdown(struct pci_dev *pdev)
 {
-	struct pci_dev *pdev = container_of(dev, struct pci_dev, dev);
 	struct net_device *netdev = pci_get_drvdata(pdev);
 	struct nic *nic = netdev_priv(netdev);
 
@@ -2462,11 +2472,7 @@ static struct pci_driver e100_driver = {
 	.suspend =      e100_suspend,
 	.resume =       e100_resume,
 #endif
-
-	.driver = {
-		.shutdown = e100_shutdown,
-	}
-
+	.shutdown =	e100_shutdown,
 };
 
 static int __init e100_init_module(void)

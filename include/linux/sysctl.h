@@ -70,6 +70,14 @@ enum
 	CTL_BUS_ISA=1		/* ISA */
 };
 
+/* /proc/sys/fs/inotify/ */
+enum
+{
+	INOTIFY_MAX_USER_INSTANCES=1,	/* max instances per user */
+	INOTIFY_MAX_USER_WATCHES=2,	/* max watches per user */
+	INOTIFY_MAX_QUEUED_EVENTS=3	/* max queued events per instance */
+};
+
 /* CTL_KERN names: */
 enum
 {
@@ -136,7 +144,9 @@ enum
 	KERN_UNKNOWN_NMI_PANIC=66, /* int: unknown nmi panic flag */
 	KERN_BOOTLOADER_TYPE=67, /* int: boot loader type */
 	KERN_RANDOMIZE=68, /* int: randomize virtual address space */
-	KERN_VSHELPER=69,	/* string: path to vshelper policy agent */
+	KERN_SETUID_DUMPABLE=69, /* int: behaviour of dumps for setuid core */
+	KERN_SPIN_RETRY=70,	/* int: number of spinlock retries */
+	KERN_VSHELPER=71,	/* string: path to vshelper policy agent */
 };
 
 
@@ -193,7 +203,8 @@ enum
 	NET_TR=14,
 	NET_DECNET=15,
 	NET_ECONET=16,
-	NET_SCTP=17, 
+	NET_SCTP=17,
+	NET_LLC=18,
 };
 
 /* /proc/sys/kernel/random */
@@ -243,6 +254,7 @@ enum
 	NET_CORE_MOD_CONG=16,
 	NET_CORE_DEV_WEIGHT=17,
 	NET_CORE_SOMAXCONN=18,
+	NET_CORE_BUDGET=19,
 };
 
 /* /proc/sys/net/ethernet */
@@ -333,21 +345,14 @@ enum
 	NET_TCP_FRTO=92,
 	NET_TCP_LOW_LATENCY=93,
 	NET_IPV4_IPFRAG_SECRET_INTERVAL=94,
-	NET_TCP_WESTWOOD=95,
 	NET_IPV4_IGMP_MAX_MSF=96,
 	NET_TCP_NO_METRICS_SAVE=97,
-	NET_TCP_VEGAS=98,
-	NET_TCP_VEGAS_ALPHA=99,
-	NET_TCP_VEGAS_BETA=100,
-	NET_TCP_VEGAS_GAMMA=101,
- 	NET_TCP_BIC=102,
- 	NET_TCP_BIC_FAST_CONVERGENCE=103,
-	NET_TCP_BIC_LOW_WINDOW=104,
 	NET_TCP_DEFAULT_WIN_SCALE=105,
 	NET_TCP_MODERATE_RCVBUF=106,
 	NET_TCP_TSO_WIN_DIVISOR=107,
 	NET_TCP_BIC_BETA=108,
 	NET_IPV4_ICMP_ERRORS_USE_INBOUND_IFADDR=109,
+	NET_TCP_CONG_CONTROL=110,
 };
 
 enum {
@@ -519,6 +524,29 @@ enum {
 	NET_IPX_FORWARDING=2
 };
 
+/* /proc/sys/net/llc */
+enum {
+	NET_LLC2=1,
+	NET_LLC_STATION=2,
+};
+
+/* /proc/sys/net/llc/llc2 */
+enum {
+	NET_LLC2_TIMEOUT=1,
+};
+
+/* /proc/sys/net/llc/station */
+enum {
+	NET_LLC_STATION_ACK_TIMEOUT=1,
+};
+
+/* /proc/sys/net/llc/llc2/timeout */
+enum {
+	NET_LLC2_ACK_TIMEOUT=1,
+	NET_LLC2_P_TIMEOUT=2,
+	NET_LLC2_REJ_TIMEOUT=3,
+	NET_LLC2_BUSY_TIMEOUT=4,
+};
 
 /* /proc/sys/net/appletalk */
 enum {
@@ -541,7 +569,8 @@ enum {
 	NET_NETROM_TRANSPORT_REQUESTED_WINDOW_SIZE=8,
 	NET_NETROM_TRANSPORT_NO_ACTIVITY_TIMEOUT=9,
 	NET_NETROM_ROUTING_CONTROL=10,
-	NET_NETROM_LINK_FAILS_COUNT=11
+	NET_NETROM_LINK_FAILS_COUNT=11,
+	NET_NETROM_RESET=12
 };
 
 /* /proc/sys/net/ax25 */
@@ -647,6 +676,7 @@ enum {
 	NET_SCTP_ADDIP_ENABLE		 = 13,
 	NET_SCTP_PRSCTP_ENABLE		 = 14,
 	NET_SCTP_SNDBUF_POLICY		 = 15,
+	NET_SCTP_SACK_TIMEOUT		 = 16,
 };
 
 /* /proc/sys/net/bridge */
@@ -681,6 +711,7 @@ enum
 	FS_XFS=17,	/* struct: control xfs parameters */
 	FS_AIO_NR=18,	/* current system-wide number of aio requests */
 	FS_AIO_MAX_NR=19,	/* system-wide maximum number of aio requests */
+	FS_INOTIFY=20,	/* inotify submenu */
 };
 
 /* /proc/sys/fs/quota/ */
@@ -706,6 +737,7 @@ enum {
 	DEV_RAID=4,
 	DEV_MAC_HID=5,
 	DEV_SCSI=6,
+	DEV_IPMI=7,
 };
 
 /* /proc/sys/dev/cdrom */
@@ -769,6 +801,11 @@ enum {
 /* /proc/sys/dev/scsi */
 enum {
 	DEV_SCSI_LOGGING_LEVEL=1,
+};
+
+/* /proc/sys/dev/ipmi */
+enum {
+	DEV_IPMI_POWEROFF_POWERCYCLE=1,
 };
 
 /* /proc/sys/abi */

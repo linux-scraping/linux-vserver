@@ -268,8 +268,8 @@ static struct irqchip sa1111_low_chip = {
 	.mask		= sa1111_mask_lowirq,
 	.unmask		= sa1111_unmask_lowirq,
 	.retrigger	= sa1111_retrigger_lowirq,
-	.type		= sa1111_type_lowirq,
-	.wake		= sa1111_wake_lowirq,
+	.set_type	= sa1111_type_lowirq,
+	.set_wake	= sa1111_wake_lowirq,
 };
 
 static void sa1111_mask_highirq(unsigned int irq)
@@ -364,8 +364,8 @@ static struct irqchip sa1111_high_chip = {
 	.mask		= sa1111_mask_highirq,
 	.unmask		= sa1111_unmask_highirq,
 	.retrigger	= sa1111_retrigger_highirq,
-	.type		= sa1111_type_highirq,
-	.wake		= sa1111_wake_highirq,
+	.set_type	= sa1111_type_highirq,
+	.set_wake	= sa1111_wake_highirq,
 };
 
 static void sa1111_setup_irq(struct sa1111 *sachip)
@@ -721,16 +721,17 @@ __sa1111_probe(struct device *me, struct resource *mem, int irq)
 	return ret;
 }
 
+static int sa1111_remove_one(struct device *dev, void *data)
+{
+	device_unregister(dev);
+	return 0;
+}
+
 static void __sa1111_remove(struct sa1111 *sachip)
 {
-	struct list_head *l, *n;
 	void __iomem *irqbase = sachip->base + SA1111_INTC;
 
-	list_for_each_safe(l, n, &sachip->dev->children) {
-		struct device *d = list_to_dev(l);
-
-		device_unregister(d);
-	}
+	device_for_each_child(sachip->dev, NULL, sa1111_remove_one);
 
 	/* disable all IRQs */
 	sa1111_writel(0, irqbase + SA1111_INTEN0);

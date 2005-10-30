@@ -668,21 +668,22 @@ static int ubd_add(int n)
 	struct ubd *dev = &ubd_dev[n];
 	int err;
 
+	err = -ENODEV;
 	if(dev->file == NULL)
-		return(-ENODEV);
+		goto out;
 
 	if (ubd_open_dev(dev))
-		return(-ENODEV);
+		goto out;
 
 	err = ubd_file_size(dev, &dev->size);
 	if(err < 0)
-		return(err);
+		goto out_close;
 
 	dev->size = ROUND_BLOCK(dev->size);
 
 	err = ubd_new_disk(MAJOR_NR, dev->size, n, &ubd_gendisk[n]);
 	if(err) 
-		return(err);
+		goto out_close;
  
 	if(fake_major != MAJOR_NR)
 		ubd_new_disk(fake_major, dev->size, n, 
@@ -693,8 +694,11 @@ static int ubd_add(int n)
 	if (fake_ide)
 		make_ide_entries(ubd_gendisk[n]->disk_name);
 
+	err = 0;
+out_close:
 	ubd_close(dev);
-	return 0;
+out:
+	return err;
 }
 
 static int ubd_config(char *str)
@@ -754,24 +758,34 @@ static int ubd_get_config(char *name, char *str, int size, char **error_out)
 	return(len);
 }
 
-static int ubd_remove(char *str)
+static int ubd_id(char **str, int *start_out, int *end_out)
+{
+        int n;
+
+	n = parse_unit(str);
+        *start_out = 0;
+        *end_out = MAX_DEV - 1;
+        return n;
+}
+
+static int ubd_remove(int n)
 {
 	struct ubd *dev;
-	int n, err = -ENODEV;
+	int err = -ENODEV;
 
-	n = parse_unit(&str);
-
-	if((n < 0) || (n >= MAX_DEV))
-		return(err);
-
-	dev = &ubd_dev[n];
-	if(dev->count > 0)
-		return(-EBUSY);	/* you cannot remove a open disk */
-
-	err = 0;
- 	spin_lock(&ubd_lock);
+	spin_lock(&ubd_lock);
 
 	if(ubd_gendisk[n] == NULL)
+		goto out;
+
+	dev = &ubd_dev[n];
+
+	if(dev->file == NULL)
+		goto out;
+
+	/* you cannot remove a open disk */
+	err = -EBUSY;
+	if(dev->count > 0)
 		goto out;
 
 	del_gendisk(ubd_gendisk[n]);
@@ -787,15 +801,16 @@ static int ubd_remove(char *str)
 	platform_device_unregister(&dev->pdev);
 	*dev = ((struct ubd) DEFAULT_UBD);
 	err = 0;
- out:
- 	spin_unlock(&ubd_lock);
-	return(err);
+out:
+	spin_unlock(&ubd_lock);
+	return err;
 }
 
 static struct mc_device ubd_mc = {
 	.name		= "ubd",
 	.config		= ubd_config,
  	.get_config	= ubd_get_config,
+	.id		= ubd_id,
 	.remove		= ubd_remove,
 };
 

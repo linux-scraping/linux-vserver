@@ -44,6 +44,7 @@
 #include <linux/init.h>
 #include <linux/errno.h>
 #include <linux/pci.h>
+#include <linux/dma-mapping.h>
 #include <linux/netdevice.h>
 #include <linux/etherdevice.h>
 #include <linux/skbuff.h>
@@ -947,6 +948,7 @@ static irqreturn_t gem_interrupt(int irq, void *dev_id, struct pt_regs *regs)
 		u32 gem_status = readl(gp->regs + GREG_STAT);
 
 		if (gem_status == 0) {
+			netif_poll_enable(dev);
 			spin_unlock_irqrestore(&gp->lock, flags);
 			return IRQ_NONE;
 		}
@@ -2815,7 +2817,7 @@ static int gem_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
 
 #if (!defined(__sparc__) && !defined(CONFIG_PPC_PMAC))
 /* Fetch MAC address from vital product data of PCI ROM. */
-static void find_eth_addr_in_vpd(void __iomem *rom_base, int len, unsigned char *dev_addr)
+static int find_eth_addr_in_vpd(void __iomem *rom_base, int len, unsigned char *dev_addr)
 {
 	int this_offset;
 
@@ -2836,35 +2838,27 @@ static void find_eth_addr_in_vpd(void __iomem *rom_base, int len, unsigned char 
 
 		for (i = 0; i < 6; i++)
 			dev_addr[i] = readb(p + i);
-		break;
+		return 1;
 	}
+	return 0;
 }
 
 static void get_gem_mac_nonobp(struct pci_dev *pdev, unsigned char *dev_addr)
 {
-	u32 rom_reg_orig;
-	void __iomem *p;
+	size_t size;
+	void __iomem *p = pci_map_rom(pdev, &size);
 
-	if (pdev->resource[PCI_ROM_RESOURCE].parent == NULL) {
-		if (pci_assign_resource(pdev, PCI_ROM_RESOURCE) < 0)
-			goto use_random;
+	if (p) {
+			int found;
+
+		found = readb(p) == 0x55 &&
+			readb(p + 1) == 0xaa &&
+			find_eth_addr_in_vpd(p, (64 * 1024), dev_addr);
+		pci_unmap_rom(pdev, p);
+		if (found)
+			return;
 	}
 
-	pci_read_config_dword(pdev, pdev->rom_base_reg, &rom_reg_orig);
-	pci_write_config_dword(pdev, pdev->rom_base_reg,
-			       rom_reg_orig | PCI_ROM_ADDRESS_ENABLE);
-
-	p = ioremap(pci_resource_start(pdev, PCI_ROM_RESOURCE), (64 * 1024));
-	if (p != NULL && readb(p) == 0x55 && readb(p + 1) == 0xaa)
-		find_eth_addr_in_vpd(p, (64 * 1024), dev_addr);
-
-	if (p != NULL)
-		iounmap(p);
-
-	pci_write_config_dword(pdev, pdev->rom_base_reg, rom_reg_orig);
-	return;
-
-use_random:
 	/* Sun MAC prefix then 3 random bytes. */
 	dev_addr[0] = 0x08;
 	dev_addr[1] = 0x00;
@@ -2989,10 +2983,10 @@ static int __devinit gem_init_one(struct pci_dev *pdev,
 	 */
 	if (pdev->vendor == PCI_VENDOR_ID_SUN &&
 	    pdev->device == PCI_DEVICE_ID_SUN_GEM &&
-	    !pci_set_dma_mask(pdev, (u64) 0xffffffffffffffffULL)) {
+	    !pci_set_dma_mask(pdev, DMA_64BIT_MASK)) {
 		pci_using_dac = 1;
 	} else {
-		err = pci_set_dma_mask(pdev, (u64) 0xffffffff);
+		err = pci_set_dma_mask(pdev, DMA_32BIT_MASK);
 		if (err) {
 			printk(KERN_ERR PFX "No usable DMA configuration, "
 			       "aborting.\n");
@@ -3078,7 +3072,9 @@ static int __devinit gem_init_one(struct pci_dev *pdev,
 	gp->phy_mii.dev = dev;
 	gp->phy_mii.mdio_read = _phy_read;
 	gp->phy_mii.mdio_write = _phy_write;
-
+#ifdef CONFIG_PPC_PMAC
+	gp->phy_mii.platform_data = gp->of_node;
+#endif
 	/* By default, we start with autoneg */
 	gp->want_autoneg = 1;
 

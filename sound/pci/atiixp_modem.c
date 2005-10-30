@@ -265,6 +265,7 @@ struct snd_atiixp {
  */
 static struct pci_device_id snd_atiixp_ids[] = {
 	{ 0x1002, 0x434d, PCI_ANY_ID, PCI_ANY_ID, 0, 0, 0 }, /* SB200 */
+	{ 0x1002, 0x4378, PCI_ANY_ID, PCI_ANY_ID, 0, 0, 0 }, /* SB400 */
 	{ 0, }
 };
 
@@ -404,7 +405,7 @@ static int snd_atiixp_acquire_codec(atiixp_t *chip)
 
 	while (atiixp_read(chip, PHYS_OUT_ADDR) & ATI_REG_PHYS_OUT_ADDR_EN) {
 		if (! timeout--) {
-			snd_printk(KERN_WARNING "atiixp: codec acquire timeout\n");
+			snd_printk(KERN_WARNING "atiixp-modem: codec acquire timeout\n");
 			return -EBUSY;
 		}
 		udelay(1);
@@ -435,7 +436,7 @@ static unsigned short snd_atiixp_codec_read(atiixp_t *chip, unsigned short codec
 	} while (--timeout);
 	/* time out may happen during reset */
 	if (reg < 0x7c)
-		snd_printk(KERN_WARNING "atiixp: codec read timeout (reg %x)\n", reg);
+		snd_printk(KERN_WARNING "atiixp-modem: codec read timeout (reg %x)\n", reg);
 	return 0xffff;
 }
 
@@ -463,6 +464,11 @@ static unsigned short snd_atiixp_ac97_read(ac97_t *ac97, unsigned short reg)
 static void snd_atiixp_ac97_write(ac97_t *ac97, unsigned short reg, unsigned short val)
 {
 	atiixp_t *chip = ac97->private_data;
+	if (reg == AC97_GPIO_STATUS) {
+		atiixp_write(chip, MODEM_OUT_GPIO,
+			(val << ATI_REG_MODEM_OUT_GPIO_DATA_SHIFT) | ATI_REG_MODEM_OUT_GPIO_EN);
+		return;
+	}
 	snd_atiixp_codec_write(chip, ac97->num, reg, val);
 }
 
@@ -492,7 +498,7 @@ static int snd_atiixp_aclink_reset(atiixp_t *chip)
 		do_delay();
 		atiixp_update(chip, CMD, ATI_REG_CMD_AC_RESET, ATI_REG_CMD_AC_RESET);
 		if (--timeout) {
-			snd_printk(KERN_ERR "atiixp: codec reset timeout\n");
+			snd_printk(KERN_ERR "atiixp-modem: codec reset timeout\n");
 			break;
 		}
 	}
@@ -546,7 +552,7 @@ static int snd_atiixp_codec_detect(atiixp_t *chip)
 	atiixp_write(chip, IER, 0); /* disable irqs */
 
 	if ((chip->codec_not_ready_bits & ALL_CODEC_NOT_READY) == ALL_CODEC_NOT_READY) {
-		snd_printk(KERN_ERR "atiixp: no codec detected!\n");
+		snd_printk(KERN_ERR "atiixp-modem: no codec detected!\n");
 		return -ENXIO;
 	}
 	return 0;
@@ -629,7 +635,7 @@ static void snd_atiixp_xrun_dma(atiixp_t *chip, atiixp_dma_t *dma)
 {
 	if (! dma->substream || ! dma->running)
 		return;
-	snd_printdd("atiixp: XRUN detected (DMA %d)\n", dma->ops->type);
+	snd_printdd("atiixp-modem: XRUN detected (DMA %d)\n", dma->ops->type);
 	snd_pcm_stop(dma->substream, SNDRV_PCM_STATE_XRUN);
 }
 
@@ -663,44 +669,33 @@ static int snd_atiixp_pcm_trigger(snd_pcm_substream_t *substream, int cmd)
 {
 	atiixp_t *chip = snd_pcm_substream_chip(substream);
 	atiixp_dma_t *dma = (atiixp_dma_t *)substream->runtime->private_data;
-	unsigned int reg = 0;
-	int i;
+	int err = 0;
 
 	snd_assert(dma->ops->enable_transfer && dma->ops->flush_dma, return -EINVAL);
 
-	if (cmd != SNDRV_PCM_TRIGGER_START && cmd != SNDRV_PCM_TRIGGER_STOP)
-		return -EINVAL;
-
 	spin_lock(&chip->reg_lock);
-
-	/* hook off/on: via GPIO_OUT */
-	for (i = 0; i < NUM_ATI_CODECS; i++) {
-		if (chip->ac97[i]) {
-			reg = snd_ac97_read(chip->ac97[i], AC97_GPIO_STATUS);
-			break;
-	}
-	}
-	if(cmd == SNDRV_PCM_TRIGGER_START)
-		reg |= AC97_GPIO_LINE1_OH;
-	else
-		reg &= ~AC97_GPIO_LINE1_OH;
-	reg = (reg << ATI_REG_MODEM_OUT_GPIO_DATA_SHIFT) | ATI_REG_MODEM_OUT_GPIO_EN ;
-	atiixp_write(chip, MODEM_OUT_GPIO, reg);
-
-	if (cmd == SNDRV_PCM_TRIGGER_START) {
+	switch(cmd) {
+	case SNDRV_PCM_TRIGGER_START:
 		dma->ops->enable_transfer(chip, 1);
 		dma->running = 1;
-	} else {
+		break;
+	case SNDRV_PCM_TRIGGER_STOP:
 		dma->ops->enable_transfer(chip, 0);
 		dma->running = 0;
+		break;
+	default:
+		err = -EINVAL;
+		break;
 	}
+	if (! err) {
 	snd_atiixp_check_bus_busy(chip);
 	if (cmd == SNDRV_PCM_TRIGGER_STOP) {
 		dma->ops->flush_dma(chip);
 		snd_atiixp_check_bus_busy(chip);
 	}
+	}
 	spin_unlock(&chip->reg_lock);
-	return 0;
+	return err;
 }
 
 
@@ -1086,14 +1081,14 @@ static int __devinit snd_atiixp_mixer_new(atiixp_t *chip, int clock)
 		ac97.scaps = AC97_SCAP_SKIP_AUDIO;
 		if ((err = snd_ac97_mixer(pbus, &ac97, &chip->ac97[i])) < 0) {
 			chip->ac97[i] = NULL; /* to be sure */
-			snd_printdd("atiixp: codec %d not available for modem\n", i);
+			snd_printdd("atiixp-modem: codec %d not available for modem\n", i);
 			continue;
 		}
 		codec_count++;
 	}
 
 	if (! codec_count) {
-		snd_printk(KERN_ERR "atiixp: no codec available\n");
+		snd_printk(KERN_ERR "atiixp-modem: no codec available\n");
 		return -ENODEV;
 	}
 
@@ -1164,7 +1159,7 @@ static void __devinit snd_atiixp_proc_init(atiixp_t *chip)
 {
 	snd_info_entry_t *entry;
 
-	if (! snd_card_proc_new(chip->card, "atiixp", &entry))
+	if (! snd_card_proc_new(chip->card, "atiixp-modem", &entry))
 		snd_info_set_text_ops(entry, chip, 1024, snd_atiixp_proc_read);
 }
 
@@ -1213,7 +1208,7 @@ static int __devinit snd_atiixp_create(snd_card_t *card,
 	if ((err = pci_enable_device(pci)) < 0)
 		return err;
 
-	chip = kcalloc(1, sizeof(*chip), GFP_KERNEL);
+	chip = kzalloc(sizeof(*chip), GFP_KERNEL);
 	if (chip == NULL) {
 		pci_disable_device(pci);
 		return -ENOMEM;
@@ -1323,6 +1318,7 @@ static void __devexit snd_atiixp_remove(struct pci_dev *pci)
 
 static struct pci_driver driver = {
 	.name = "ATI IXP MC97 controller",
+	.owner = THIS_MODULE,
 	.id_table = snd_atiixp_ids,
 	.probe = snd_atiixp_probe,
 	.remove = __devexit_p(snd_atiixp_remove),
@@ -1332,7 +1328,7 @@ static struct pci_driver driver = {
 
 static int __init alsa_card_atiixp_init(void)
 {
-	return pci_module_init(&driver);
+	return pci_register_driver(&driver);
 }
 
 static void __exit alsa_card_atiixp_exit(void)

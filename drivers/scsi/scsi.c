@@ -68,6 +68,8 @@
 #include "scsi_priv.h"
 #include "scsi_logging.h"
 
+static void scsi_done(struct scsi_cmnd *cmd);
+static int scsi_retry_command(struct scsi_cmnd *cmd);
 
 /*
  * Definitions and constants.
@@ -111,6 +113,7 @@ const char *const scsi_device_types[MAX_SCSI_DEVICE_CODE] = {
 	"Unknown          ",
 	"RAID             ",
 	"Enclosure        ",
+	"Direct-Access-RBC",
 };
 EXPORT_SYMBOL(scsi_device_types);
 
@@ -257,8 +260,6 @@ struct scsi_cmnd *scsi_get_command(struct scsi_device *dev, int gfp_mask)
 
 		memset(cmd, 0, sizeof(*cmd));
 		cmd->device = dev;
-		cmd->state = SCSI_STATE_UNUSED;
-		cmd->owner = SCSI_OWNER_NOBODY;
 		init_timer(&cmd->eh_timeout);
 		INIT_LIST_HEAD(&cmd->list);
 		spin_lock_irqsave(&dev->list_lock, flags);
@@ -267,6 +268,7 @@ struct scsi_cmnd *scsi_get_command(struct scsi_device *dev, int gfp_mask)
 	} else
 		put_device(&dev->sdev_gendev);
 
+	cmd->jiffies_at_alloc = jiffies;
 	return cmd;
 }				
 EXPORT_SYMBOL(scsi_get_command);
@@ -608,10 +610,6 @@ int scsi_dispatch_cmd(struct scsi_cmnd *cmd)
 	 * We will use a queued command if possible, otherwise we will
 	 * emulate the queuing and calling of completion function ourselves.
 	 */
-
-	cmd->state = SCSI_STATE_QUEUED;
-	cmd->owner = SCSI_OWNER_LOWLEVEL;
-
 	atomic_inc(&cmd->device->iorequest_cnt);
 
 	/*
@@ -630,7 +628,7 @@ int scsi_dispatch_cmd(struct scsi_cmnd *cmd)
 	spin_lock_irqsave(host->host_lock, flags);
 	scsi_cmd_get_serial(host, cmd); 
 
-	if (unlikely(test_bit(SHOST_CANCEL, &host->shost_state))) {
+	if (unlikely(host->shost_state == SHOST_DEL)) {
 		cmd->result = (DID_NO_CONNECT << 16);
 		scsi_done(cmd);
 	} else {
@@ -638,10 +636,12 @@ int scsi_dispatch_cmd(struct scsi_cmnd *cmd)
 	}
 	spin_unlock_irqrestore(host->host_lock, flags);
 	if (rtn) {
-		atomic_inc(&cmd->device->iodone_cnt);
-		scsi_queue_insert(cmd,
-				(rtn == SCSI_MLQUEUE_DEVICE_BUSY) ?
-				 rtn : SCSI_MLQUEUE_HOST_BUSY);
+		if (scsi_delete_timer(cmd)) {
+			atomic_inc(&cmd->device->iodone_cnt);
+			scsi_queue_insert(cmd,
+					  (rtn == SCSI_MLQUEUE_DEVICE_BUSY) ?
+					  rtn : SCSI_MLQUEUE_HOST_BUSY);
+		}
 		SCSI_LOG_MLQUEUE(3,
 		    printk("queuecommand : request rejected\n"));
 	}
@@ -679,7 +679,6 @@ void scsi_init_cmd_from_req(struct scsi_cmnd *cmd, struct scsi_request *sreq)
 {
 	sreq->sr_command = cmd;
 
-	cmd->owner = SCSI_OWNER_MIDLEVEL;
 	cmd->cmd_len = sreq->sr_cmd_len;
 	cmd->use_sg = sreq->sr_use_sg;
 
@@ -715,7 +714,6 @@ void scsi_init_cmd_from_req(struct scsi_cmnd *cmd, struct scsi_request *sreq)
 	/*
 	 * Start the timer ticking.
 	 */
-	cmd->abort_reason = 0;
 	cmd->result = 0;
 
 	SCSI_LOG_MLQUEUE(3, printk("Leaving scsi_init_cmd_from_req()\n"));
@@ -739,7 +737,7 @@ static DEFINE_PER_CPU(struct list_head, scsi_done_q);
  *
  * This function is interrupt context safe.
  */
-void scsi_done(struct scsi_cmnd *cmd)
+static void scsi_done(struct scsi_cmnd *cmd)
 {
 	/*
 	 * We don't have to worry about this one timing out any more.
@@ -764,8 +762,6 @@ void __scsi_done(struct scsi_cmnd *cmd)
 	 * Set the serial numbers back to zero
 	 */
 	cmd->serial_number = 0;
-	cmd->state = SCSI_STATE_BHQUEUE;
-	cmd->owner = SCSI_OWNER_BH_HANDLER;
 
 	atomic_inc(&cmd->device->iodone_cnt);
 	if (cmd->result)
@@ -803,9 +799,23 @@ static void scsi_softirq(struct softirq_action *h)
 	while (!list_empty(&local_q)) {
 		struct scsi_cmnd *cmd = list_entry(local_q.next,
 						   struct scsi_cmnd, eh_entry);
+		/* The longest time any command should be outstanding is the
+		 * per command timeout multiplied by the number of retries.
+		 *
+		 * For a typical command, this is 2.5 minutes */
+		unsigned long wait_for 
+			= cmd->allowed * cmd->timeout_per_command;
 		list_del_init(&cmd->eh_entry);
 
 		disposition = scsi_decide_disposition(cmd);
+		if (disposition != SUCCESS &&
+		    time_before(cmd->jiffies_at_alloc + wait_for, jiffies)) {
+			dev_printk(KERN_ERR, &cmd->device->sdev_gendev, 
+				   "timing out command, waited %lus\n",
+				   wait_for/HZ);
+			disposition = SUCCESS;
+		}
+			
 		scsi_log_completion(cmd, disposition);
 		switch (disposition) {
 		case SUCCESS:
@@ -834,7 +844,7 @@ static void scsi_softirq(struct softirq_action *h)
  *              level drivers should not become re-entrant as a result of
  *              this.
  */
-int scsi_retry_command(struct scsi_cmnd *cmd)
+static int scsi_retry_command(struct scsi_cmnd *cmd)
 {
 	/*
 	 * Restore the SCSI command state.
@@ -885,9 +895,6 @@ void scsi_finish_command(struct scsi_cmnd *cmd)
 
 	SCSI_LOG_MLCOMPLETE(4, printk("Notifying upper driver of completion "
 				"for device %d %x\n", sdev->id, cmd->result));
-
-	cmd->owner = SCSI_OWNER_HIGHLEVEL;
-	cmd->state = SCSI_STATE_FINISHED;
 
 	/*
 	 * We can get here with use_sg=0, causing a panic in the upper level
@@ -1258,9 +1265,8 @@ int scsi_device_cancel(struct scsi_device *sdev, int recovery)
 		list_for_each_safe(lh, lh_sf, &active_list) {
 			scmd = list_entry(lh, struct scsi_cmnd, eh_entry);
 			list_del_init(lh);
-			if (recovery) {
-				scsi_eh_scmd_add(scmd, SCSI_EH_CANCEL_CMD);
-			} else {
+			if (recovery &&
+			    !scsi_eh_scmd_add(scmd, SCSI_EH_CANCEL_CMD)) {
 				scmd->result = (DID_ABORT << 16);
 				scsi_finish_command(scmd);
 			}

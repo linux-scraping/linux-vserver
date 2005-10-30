@@ -1,5 +1,4 @@
 /*
-    $Id: cx88-reg.h,v 1.6 2004/10/13 10:39:00 kraxel Exp $
 
     cx88x-hw.h - CX2388x register offsets
 
@@ -40,6 +39,29 @@
 #define CX88X_EN_TBFX 0x02
 #define CX88X_EN_VSFX 0x04
 
+/* ---------------------------------------------------------------------- */
+/* PCI controller registers                                               */
+
+/* Command and Status Register */
+#define F0_CMD_STAT_MM      0x2f0004
+#define F1_CMD_STAT_MM      0x2f0104
+#define F2_CMD_STAT_MM      0x2f0204
+#define F3_CMD_STAT_MM      0x2f0304
+#define F4_CMD_STAT_MM      0x2f0404
+
+/* Device Control #1 */
+#define F0_DEV_CNTRL1_MM    0x2f0040
+#define F1_DEV_CNTRL1_MM    0x2f0140
+#define F2_DEV_CNTRL1_MM    0x2f0240
+#define F3_DEV_CNTRL1_MM    0x2f0340
+#define F4_DEV_CNTRL1_MM    0x2f0440
+
+/* Device Control #1 */
+#define F0_BAR0_MM          0x2f0010
+#define F1_BAR0_MM          0x2f0110
+#define F2_BAR0_MM          0x2f0210
+#define F3_BAR0_MM          0x2f0310
+#define F4_BAR0_MM          0x2f0410
 
 /* ---------------------------------------------------------------------- */
 /* DMA Controller registers                                               */
@@ -397,6 +419,7 @@
 #define AUD_RATE_ADJ4            0x3205e4
 #define AUD_RATE_ADJ5            0x3205e8
 #define AUD_APB_IN_RATE_ADJ      0x3205ec
+#define AUD_I2SCNTL              0x3205ec
 #define AUD_PHASE_FIX_CTL        0x3205f0
 #define AUD_PLL_PRESCALE         0x320600
 #define AUD_PLL_DDS              0x320604
@@ -603,20 +626,11 @@
 #define EN_I2SIN_STR2DAC        0x00004000
 #define EN_I2SIN_ENABLE         0x00008000
 
-#if 0
-/* old */
-#define EN_DMTRX_SUMDIFF        0x00000800
-#define EN_DMTRX_SUMR           0x00000880
-#define EN_DMTRX_LR             0x00000900
-#define EN_DMTRX_MONO           0x00000980
-#else
-/* dscaler cvs */
 #define EN_DMTRX_SUMDIFF        (0 << 7)
 #define EN_DMTRX_SUMR           (1 << 7)
 #define EN_DMTRX_LR             (2 << 7)
 #define EN_DMTRX_MONO           (3 << 7)
 #define EN_DMTRX_BYPASS         (1 << 11)
-#endif
 
 // Video
 #define VID_CAPTURE_CONTROL		0x310180

@@ -148,7 +148,7 @@ struct moxa_str {
 	int type;
 	int port;
 	int close_delay;
-	unsigned int closing_wait;
+	unsigned short closing_wait;
 	int count;
 	int blocked_open;
 	long event; /* long req'd for set_bit --RR */
@@ -339,7 +339,7 @@ static int __init moxa_init(void)
 
 	init_MUTEX(&moxaBuffSem);
 	moxaDriver->owner = THIS_MODULE;
-	moxaDriver->name = "ttya";
+	moxaDriver->name = "ttyMX";
 	moxaDriver->devfs_name = "tts/a";
 	moxaDriver->major = ttymajor;
 	moxaDriver->minor_start = 0;
@@ -451,7 +451,7 @@ static int __init moxa_init(void)
 		int n = (sizeof(moxa_pcibrds) / sizeof(moxa_pcibrds[0])) - 1;
 		i = 0;
 		while (i < n) {
-			while ((p = pci_find_device(moxa_pcibrds[i].vendor, moxa_pcibrds[i].device, p))!=NULL)
+			while ((p = pci_get_device(moxa_pcibrds[i].vendor, moxa_pcibrds[i].device, p))!=NULL)
 			{
 				if (pci_enable_device(p))
 					continue;

@@ -74,7 +74,7 @@ static noinline int is_prefetch(struct pt_regs *regs, unsigned long addr,
 	instr = (unsigned char *)convert_rip_to_linear(current, regs);
 	max_instr = instr + 15;
 
-	if ((regs->cs & 3) != 0 && instr >= (unsigned char *)TASK_SIZE)
+	if (user_mode(regs) && instr >= (unsigned char *)TASK_SIZE)
 		return 0;
 
 	while (scan_more && instr < max_instr) { 
@@ -106,7 +106,7 @@ static noinline int is_prefetch(struct pt_regs *regs, unsigned long addr,
 			/* Could check the LDT for lm, but for now it's good
 			   enough to assume that long mode only uses well known
 			   segments or kernel. */
-			scan_more = ((regs->cs & 3) == 0) || (regs->cs == __USER_CS);
+			scan_more = (!user_mode(regs)) || (regs->cs == __USER_CS);
 			break;
 			
 		case 0x60:
@@ -212,9 +212,7 @@ int unhandled_signal(struct task_struct *tsk, int sig)
 {
 	if (tsk->pid == 1)
 		return 1;
-	/* Warn for strace, but not for gdb */
-	if (!test_ti_thread_flag(tsk->thread_info, TIF_SYSCALL_TRACE) &&
-	    (tsk->ptrace & PT_PTRACED))
+	if (tsk->ptrace & PT_PTRACED)
 		return 0;
 	return (tsk->sighand->action[sig-1].sa.sa_handler == SIG_IGN) ||
 		(tsk->sighand->action[sig-1].sa.sa_handler == SIG_DFL);
@@ -223,12 +221,13 @@ int unhandled_signal(struct task_struct *tsk, int sig)
 static noinline void pgtable_bad(unsigned long address, struct pt_regs *regs,
 				 unsigned long error_code)
 {
-	oops_begin();
+	unsigned long flags = oops_begin();
+
 	printk(KERN_ALERT "%s: Corrupted page table at address %lx\n",
 	       current->comm, address);
 	dump_pagetable(address);
 	__die("Bad pagetable", regs, error_code);
-	oops_end();
+	oops_end(flags);
 	do_exit(SIGKILL);
 }
 
@@ -297,7 +296,8 @@ int exception_trace = 1;
  *	bit 2 == 0 means kernel, 1 means user-mode
  *      bit 3 == 1 means fault was an instruction fetch
  */
-asmlinkage void do_page_fault(struct pt_regs *regs, unsigned long error_code)
+asmlinkage void __kprobes do_page_fault(struct pt_regs *regs,
+					unsigned long error_code)
 {
 	struct task_struct *tsk;
 	struct mm_struct *mm;
@@ -305,6 +305,7 @@ asmlinkage void do_page_fault(struct pt_regs *regs, unsigned long error_code)
 	unsigned long address;
 	const struct exception_table_entry *fixup;
 	int write;
+	unsigned long flags;
 	siginfo_t info;
 
 #ifdef CONFIG_CHECKING
@@ -350,7 +351,7 @@ asmlinkage void do_page_fault(struct pt_regs *regs, unsigned long error_code)
 	 * (error_code & 4) == 0, and that the fault was not a
 	 * protection error (error_code & 1) == 0.
 	 */
-	if (unlikely(address >= TASK_SIZE)) {
+	if (unlikely(address >= TASK_SIZE64)) {
 		if (!(error_code & 5) &&
 		      ((address >= VMALLOC_START && address < VMALLOC_END) ||
 		       (address >= MODULES_VADDR && address < MODULES_END))) {
@@ -440,13 +441,13 @@ good_area:
 	 * the fault.
 	 */
 	switch (handle_mm_fault(mm, vma, address, write)) {
-	case 1:
+	case VM_FAULT_MINOR:
 		tsk->min_flt++;
 		break;
-	case 2:
+	case VM_FAULT_MAJOR:
 		tsk->maj_flt++;
 		break;
-	case 0:
+	case VM_FAULT_SIGBUS:
 		goto do_sigbus;
 	default:
 		goto out_of_memory;
@@ -522,7 +523,7 @@ no_context:
  * terminate things with extreme prejudice.
  */
 
-	oops_begin(); 
+	flags = oops_begin();
 
 	if (address < PAGE_SIZE)
 		printk(KERN_ALERT "Unable to handle kernel NULL pointer dereference");
@@ -535,7 +536,7 @@ no_context:
 	__die("Oops", regs, error_code);
 	/* Executive summary in case the body of the oops scrolled away */
 	printk(KERN_EMERG "CR2: %016lx\n", address);
-	oops_end(); 
+	oops_end(flags);
 	do_exit(SIGKILL);
 
 /*

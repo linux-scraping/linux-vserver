@@ -445,9 +445,9 @@ static int snd_mixart_trigger(snd_pcm_substream_t *subs, int cmd)
 
 static int mixart_sync_nonblock_events(mixart_mgr_t *mgr)
 {
-	int timeout = HZ;
+	unsigned long timeout = jiffies + HZ;
 	while (atomic_read(&mgr->msg_processed) > 0) {
-		if (! timeout--) {
+		if (time_after(jiffies, timeout)) {
 			snd_printk(KERN_ERR "mixart: cannot process nonblock events!\n");
 			return -EBUSY;
 		}
@@ -1004,7 +1004,7 @@ static int __devinit snd_mixart_create(mixart_mgr_t *mgr, snd_card_t *card, int 
 		.dev_free = snd_mixart_chip_dev_free,
 	};
 
-	mgr->chip[idx] = chip = kcalloc(1, sizeof(*chip), GFP_KERNEL);
+	mgr->chip[idx] = chip = kzalloc(sizeof(*chip), GFP_KERNEL);
 	if (! chip) {
 		snd_printk(KERN_ERR "cannot allocate chip\n");
 		return -ENOMEM;
@@ -1292,7 +1292,7 @@ static int __devinit snd_mixart_probe(struct pci_dev *pci,
 
 	/*
 	 */
-	mgr = kcalloc(1, sizeof(*mgr), GFP_KERNEL);
+	mgr = kzalloc(sizeof(*mgr), GFP_KERNEL);
 	if (! mgr) {
 		pci_disable_device(pci);
 		return -ENOMEM;
@@ -1424,6 +1424,7 @@ static void __devexit snd_mixart_remove(struct pci_dev *pci)
 
 static struct pci_driver driver = {
 	.name = "Digigram miXart",
+	.owner = THIS_MODULE,
 	.id_table = snd_mixart_ids,
 	.probe = snd_mixart_probe,
 	.remove = __devexit_p(snd_mixart_remove),
@@ -1431,7 +1432,7 @@ static struct pci_driver driver = {
 
 static int __init alsa_card_mixart_init(void)
 {
-	return pci_module_init(&driver);
+	return pci_register_driver(&driver);
 }
 
 static void __exit alsa_card_mixart_exit(void)

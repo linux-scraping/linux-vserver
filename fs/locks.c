@@ -124,6 +124,7 @@
 #include <linux/smp_lock.h>
 #include <linux/syscalls.h>
 #include <linux/time.h>
+#include <linux/rcupdate.h>
 #include <linux/vs_limit.h>
 
 #include <asm/semaphore.h>
@@ -1301,7 +1302,7 @@ int fcntl_getlease(struct file *filp)
  */
 static int __setlease(struct file *filp, long arg, struct file_lock **flp)
 {
-	struct file_lock *fl, **before, **my_before = NULL, *lease = *flp;
+	struct file_lock *fl, **before, **my_before = NULL, *lease;
 	struct dentry *dentry = filp->f_dentry;
 	struct inode *inode = dentry->d_inode;
 	int error, rdlease_count = 0, wrlease_count = 0;
@@ -1311,6 +1312,8 @@ static int __setlease(struct file *filp, long arg, struct file_lock **flp)
 	error = -EINVAL;
 	if (!flp || !(*flp) || !(*flp)->fl_lmops || !(*flp)->fl_lmops->fl_break)
 		goto out;
+
+	lease = *flp;
 
 	error = -EAGAIN;
 	if ((arg == F_RDLCK) && (atomic_read(&inode->i_writecount) > 0))
@@ -1573,6 +1576,8 @@ int fcntl_getlk(struct file *filp, struct flock __user *l)
 
 	if (filp->f_op && filp->f_op->lock) {
 		error = filp->f_op->lock(filp, F_GETLK, &file_lock);
+		if (file_lock.fl_ops && file_lock.fl_ops->fl_release_private)
+			file_lock.fl_ops->fl_release_private(&file_lock);
 		if (error < 0)
 			goto out;
 		else
@@ -1612,7 +1617,8 @@ out:
 /* Apply the lock described by l to an open file descriptor.
  * This implements both the F_SETLK and F_SETLKW commands of fcntl().
  */
-int fcntl_setlk(struct file *filp, unsigned int cmd, struct flock __user *l)
+int fcntl_setlk(unsigned int fd, struct file *filp, unsigned int cmd,
+		struct flock __user *l)
 {
 	struct file_lock *file_lock = locks_alloc_lock();
 	struct flock flock;
@@ -1646,6 +1652,7 @@ int fcntl_setlk(struct file *filp, unsigned int cmd, struct flock __user *l)
 		goto out;
 	}
 
+again:
 	error = flock_to_posix_lock(filp, file_lock, &flock);
 	if (error)
 		goto out;
@@ -1674,25 +1681,33 @@ int fcntl_setlk(struct file *filp, unsigned int cmd, struct flock __user *l)
 	if (error)
 		goto out;
 
-	if (filp->f_op && filp->f_op->lock != NULL) {
+	if (filp->f_op && filp->f_op->lock != NULL)
 		error = filp->f_op->lock(filp, cmd, file_lock);
-		goto out;
-	}
-
-	for (;;) {
+	else {
+		for (;;) {
 		error = __posix_lock_file(inode, file_lock, filp->f_xid);
-		if ((error != -EAGAIN) || (cmd == F_SETLK))
-			break;
-		error = wait_event_interruptible(file_lock->fl_wait,
-				!file_lock->fl_next);
-		if (!error)
-			continue;
+			if ((error != -EAGAIN) || (cmd == F_SETLK))
+				break;
+			error = wait_event_interruptible(file_lock->fl_wait,
+					!file_lock->fl_next);
+			if (!error)
+				continue;
 
-		locks_delete_block(file_lock);
-		break;
+			locks_delete_block(file_lock);
+			break;
+		}
 	}
 
- out:
+	/*
+	 * Attempt to detect a close/fcntl race and recover by
+	 * releasing the lock that was just acquired.
+	 */
+	if (!error && fcheck(fd) != filp && flock.l_type != F_UNLCK) {
+		flock.l_type = F_UNLCK;
+		goto again;
+	}
+
+out:
 	locks_free_lock(file_lock);
 	return error;
 }
@@ -1720,6 +1735,8 @@ int fcntl_getlk64(struct file *filp, struct flock64 __user *l)
 
 	if (filp->f_op && filp->f_op->lock) {
 		error = filp->f_op->lock(filp, F_GETLK, &file_lock);
+		if (file_lock.fl_ops && file_lock.fl_ops->fl_release_private)
+			file_lock.fl_ops->fl_release_private(&file_lock);
 		if (error < 0)
 			goto out;
 		else
@@ -1748,7 +1765,8 @@ out:
 /* Apply the lock described by l to an open file descriptor.
  * This implements both the F_SETLK and F_SETLKW commands of fcntl().
  */
-int fcntl_setlk64(struct file *filp, unsigned int cmd, struct flock64 __user *l)
+int fcntl_setlk64(unsigned int fd, struct file *filp, unsigned int cmd,
+		struct flock64 __user *l)
 {
 	struct file_lock *file_lock = locks_alloc_lock();
 	struct flock64 flock;
@@ -1782,6 +1800,7 @@ int fcntl_setlk64(struct file *filp, unsigned int cmd, struct flock64 __user *l)
 		goto out;
 	}
 
+again:
 	error = flock64_to_posix_lock(filp, file_lock, &flock);
 	if (error)
 		goto out;
@@ -1810,22 +1829,30 @@ int fcntl_setlk64(struct file *filp, unsigned int cmd, struct flock64 __user *l)
 	if (error)
 		goto out;
 
-	if (filp->f_op && filp->f_op->lock != NULL) {
+	if (filp->f_op && filp->f_op->lock != NULL)
 		error = filp->f_op->lock(filp, cmd, file_lock);
-		goto out;
+	else {
+		for (;;) {
+		error = __posix_lock_file(inode, file_lock, filp->f_xid);
+			if ((error != -EAGAIN) || (cmd == F_SETLK64))
+				break;
+			error = wait_event_interruptible(file_lock->fl_wait,
+					!file_lock->fl_next);
+			if (!error)
+				continue;
+
+			locks_delete_block(file_lock);
+			break;
+		}
 	}
 
-	for (;;) {
-		error = __posix_lock_file(inode, file_lock, filp->f_xid);
-		if ((error != -EAGAIN) || (cmd == F_SETLK64))
-			break;
-		error = wait_event_interruptible(file_lock->fl_wait,
-				!file_lock->fl_next);
-		if (!error)
-			continue;
-
-		locks_delete_block(file_lock);
-		break;
+	/*
+	 * Attempt to detect a close/fcntl race and recover by
+	 * releasing the lock that was just acquired.
+	 */
+	if (!error && fcheck(fd) != filp && flock.l_type != F_UNLCK) {
+		flock.l_type = F_UNLCK;
+		goto again;
 	}
 
 out:
@@ -1908,6 +1935,8 @@ void locks_remove_flock(struct file *filp)
 			.fl_end = OFFSET_MAX,
 		};
 		filp->f_op->flock(filp, F_SETLKW, &fl);
+		if (fl.fl_ops && fl.fl_ops->fl_release_private)
+			fl.fl_ops->fl_release_private(&fl);
 	}
 
 	lock_kernel();
@@ -1915,12 +1944,7 @@ void locks_remove_flock(struct file *filp)
 
 	while ((fl = *before) != NULL) {
 		if (fl->fl_file == filp) {
-			/*
-			 * We might have a POSIX lock that was created at the same time
-			 * the filp was closed for the last time. Just remove that too,
-			 * regardless of ownership, since nobody can own it.
-			 */
-			if (IS_FLOCK(fl) || IS_POSIX(fl)) {
+			if (IS_FLOCK(fl)) {
 				locks_delete_lock(before);
 				continue;
 			}
@@ -2214,21 +2238,24 @@ void steal_locks(fl_owner_t from)
 {
 	struct files_struct *files = current->files;
 	int i, j;
+	struct fdtable *fdt;
 
 	if (from == files)
 		return;
 
 	lock_kernel();
 	j = 0;
+	rcu_read_lock();
+	fdt = files_fdtable(files);
 	for (;;) {
 		unsigned long set;
 		i = j * __NFDBITS;
-		if (i >= files->max_fdset || i >= files->max_fds)
+		if (i >= fdt->max_fdset || i >= fdt->max_fds)
 			break;
-		set = files->open_fds->fds_bits[j++];
+		set = fdt->open_fds->fds_bits[j++];
 		while (set) {
 			if (set & 1) {
-				struct file *file = files->fd[i];
+				struct file *file = fdt->fd[i];
 				if (file)
 					__steal_locks(file, from);
 			}
@@ -2236,6 +2263,7 @@ void steal_locks(fl_owner_t from)
 			set >>= 1;
 		}
 	}
+	rcu_read_unlock();
 	unlock_kernel();
 }
 EXPORT_SYMBOL(steal_locks);

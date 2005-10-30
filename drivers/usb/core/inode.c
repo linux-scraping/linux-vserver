@@ -453,17 +453,6 @@ static int usbfs_fill_super(struct super_block *sb, void *data, int silent)
 	return 0;
 }
 
-static struct dentry * get_dentry(struct dentry *parent, const char *name)
-{               
-	struct qstr qstr;
-
-	qstr.name = name;
-	qstr.len = strlen(name);
-	qstr.hash = full_name_hash(name,qstr.len);
-	return lookup_hash(&qstr,parent);
-}               
-
-
 /*
  * fs_create_by_name - create a file, given a name
  * @name:	name of file
@@ -496,7 +485,7 @@ static int fs_create_by_name (const char *name, mode_t mode,
 
 	*dentry = NULL;
 	down(&parent->d_inode->i_sem);
-	*dentry = get_dentry (parent, name);
+	*dentry = lookup_one_len(name, parent, strlen(name));
 	if (!IS_ERR(dentry)) {
 		if ((mode & S_IFMT) == S_IFDIR)
 			error = usbfs_mkdir (parent->d_inode, *dentry, mode);
@@ -724,7 +713,7 @@ void usbfs_remove_device(struct usb_device *dev)
 			sinfo.si_errno = EPIPE;
 			sinfo.si_code = SI_ASYNCIO;
 			sinfo.si_addr = ds->disccontext;
-			send_sig_info(ds->discsignr, &sinfo, ds->disctask);
+			kill_proc_info_as_uid(ds->discsignr, &sinfo, ds->disc_pid, ds->disc_uid, ds->disc_euid);
 		}
 	}
 	usbfs_update_special();
@@ -739,15 +728,9 @@ int __init usbfs_init(void)
 {
 	int retval;
 
-	retval = usb_register(&usbfs_driver);
+	retval = register_filesystem(&usb_fs_type);
 	if (retval)
 		return retval;
-
-	retval = register_filesystem(&usb_fs_type);
-	if (retval) {
-		usb_deregister(&usbfs_driver);
-		return retval;
-	}
 
 	/* create mount point for usbfs */
 	usbdir = proc_mkdir("usb", proc_bus);
@@ -757,7 +740,6 @@ int __init usbfs_init(void)
 
 void usbfs_cleanup(void)
 {
-	usb_deregister(&usbfs_driver);
 	unregister_filesystem(&usb_fs_type);
 	if (usbdir)
 		remove_proc_entry("usb", proc_bus);

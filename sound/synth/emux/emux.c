@@ -22,6 +22,7 @@
 #include <linux/wait.h>
 #include <linux/sched.h>
 #include <linux/slab.h>
+#include <linux/string.h>
 #include <sound/core.h>
 #include <sound/emux_synth.h>
 #include <linux/init.h>
@@ -39,7 +40,7 @@ int snd_emux_new(snd_emux_t **remu)
 	snd_emux_t *emu;
 
 	*remu = NULL;
-	emu = kcalloc(1, sizeof(*emu), GFP_KERNEL);
+	emu = kzalloc(sizeof(*emu), GFP_KERNEL);
 	if (emu == NULL)
 		return -ENOMEM;
 
@@ -76,7 +77,7 @@ int snd_emux_register(snd_emux_t *emu, snd_card_t *card, int index, char *name)
 	snd_assert(name != NULL, return -EINVAL);
 
 	emu->card = card;
-	emu->name = snd_kmalloc_strdup(name, GFP_KERNEL);
+	emu->name = kstrdup(name, GFP_KERNEL);
 	emu->voices = kcalloc(emu->max_voices, sizeof(snd_emux_voice_t), GFP_KERNEL);
 	if (emu->voices == NULL)
 		return -ENOMEM;

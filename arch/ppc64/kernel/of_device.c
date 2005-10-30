@@ -3,6 +3,7 @@
 #include <linux/kernel.h>
 #include <linux/init.h>
 #include <linux/module.h>
+#include <linux/mod_devicetable.h>
 #include <asm/errno.h>
 #include <asm/of_device.h>
 
@@ -15,20 +16,20 @@
  * Used by a driver to check whether an of_device present in the
  * system is in its list of supported devices.
  */
-const struct of_match * of_match_device(const struct of_match *matches,
+const struct of_device_id *of_match_device(const struct of_device_id *matches,
 					const struct of_device *dev)
 {
 	if (!dev->node)
 		return NULL;
-	while (matches->name || matches->type || matches->compatible) {
+	while (matches->name[0] || matches->type[0] || matches->compatible[0]) {
 		int match = 1;
-		if (matches->name && matches->name != OF_ANY_MATCH)
+		if (matches->name[0])
 			match &= dev->node->name
 				&& !strcmp(matches->name, dev->node->name);
-		if (matches->type && matches->type != OF_ANY_MATCH)
+		if (matches->type[0])
 			match &= dev->node->type
 				&& !strcmp(matches->type, dev->node->type);
-		if (matches->compatible && matches->compatible != OF_ANY_MATCH)
+		if (matches->compatible[0])
 			match &= device_is_compatible(dev->node,
 				matches->compatible);
 		if (match)
@@ -42,7 +43,7 @@ static int of_platform_bus_match(struct device *dev, struct device_driver *drv)
 {
 	struct of_device * of_dev = to_of_device(dev);
 	struct of_platform_driver * of_drv = to_of_platform_driver(drv);
-	const struct of_match * matches = of_drv->match_table;
+	const struct of_device_id * matches = of_drv->match_table;
 
 	if (!matches)
 		return 0;
@@ -75,7 +76,7 @@ static int of_device_probe(struct device *dev)
 	int error = -ENODEV;
 	struct of_platform_driver *drv;
 	struct of_device *of_dev;
-	const struct of_match *match;
+	const struct of_device_id *match;
 
 	drv = to_of_platform_driver(dev->driver);
 	of_dev = to_of_device(dev);
@@ -161,7 +162,7 @@ void of_unregister_driver(struct of_platform_driver *drv)
 }
 
 
-static ssize_t dev_show_devspec(struct device *dev, char *buf)
+static ssize_t dev_show_devspec(struct device *dev, struct device_attribute *attr, char *buf)
 {
 	struct of_device *ofdev;
 
@@ -232,10 +233,11 @@ void of_device_unregister(struct of_device *ofdev)
 	device_unregister(&ofdev->dev);
 }
 
-struct of_device* of_platform_device_create(struct device_node *np, const char *bus_id)
+struct of_device* of_platform_device_create(struct device_node *np,
+					    const char *bus_id,
+					    struct device *parent)
 {
 	struct of_device *dev;
-	u32 *reg;
 
 	dev = kmalloc(sizeof(*dev), GFP_KERNEL);
 	if (!dev)
@@ -245,11 +247,10 @@ struct of_device* of_platform_device_create(struct device_node *np, const char *
 	dev->node = np;
 	dev->dma_mask = 0xffffffffUL;
 	dev->dev.dma_mask = &dev->dma_mask;
-	dev->dev.parent = NULL;
+	dev->dev.parent = parent;
 	dev->dev.bus = &of_platform_bus_type;
 	dev->dev.release = of_release_dev;
 
-	reg = (u32 *)get_property(np, "reg", NULL);
 	strlcpy(dev->dev.bus_id, bus_id, BUS_ID_SIZE);
 
 	if (of_device_register(dev) != 0) {
@@ -259,6 +260,7 @@ struct of_device* of_platform_device_create(struct device_node *np, const char *
 
 	return dev;
 }
+
 
 EXPORT_SYMBOL(of_match_device);
 EXPORT_SYMBOL(of_platform_bus_type);

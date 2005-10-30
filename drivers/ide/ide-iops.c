@@ -601,44 +601,15 @@ EXPORT_SYMBOL(ide_wait_stat);
  */
 u8 eighty_ninty_three (ide_drive_t *drive)
 {
-#if 0
-	if (!HWIF(drive)->udma_four)
+	if(HWIF(drive)->udma_four == 0)
 		return 0;
-
-	if (drive->id->major_rev_num) {
-		int hssbd = 0;
-		int i;
-		/*
-		 * Determine highest Supported SPEC
-		 */
-		for (i=1; i<=15; i++)
-			if (drive->id->major_rev_num & (1<<i))
-				hssbd++;
-
-		switch (hssbd) {
-			case 7:
-			case 6:
-			case 5:
-		/* ATA-4 and older do not support above Ultra 33 */
-			default:
-				return 0;
-		}
-	}
-
-	return ((u8) (
+	if (!(drive->id->hw_config & 0x6000))
+		return 0;
 #ifndef CONFIG_IDEDMA_IVB
-		(drive->id->hw_config & 0x4000) &&
+	if(!(drive->id->hw_config & 0x4000))
+		return 0;
 #endif /* CONFIG_IDEDMA_IVB */
-		 (drive->id->hw_config & 0x6000)) ? 1 : 0);
-
-#else
-
-	return ((u8) ((HWIF(drive)->udma_four) &&
-#ifndef CONFIG_IDEDMA_IVB
-			(drive->id->hw_config & 0x4000) &&
-#endif /* CONFIG_IDEDMA_IVB */
-			(drive->id->hw_config & 0x6000)) ? 1 : 0);
-#endif
+	return 1;
 }
 
 EXPORT_SYMBOL(eighty_ninty_three);
@@ -1181,7 +1152,8 @@ static ide_startstop_t do_reset1 (ide_drive_t *drive, int do_not_try_atapi)
 		pre_reset(drive);
 		SELECT_DRIVE(drive);
 		udelay (20);
-		hwif->OUTB(WIN_SRST, IDE_COMMAND_REG);
+		hwif->OUTBSYNC(drive, WIN_SRST, IDE_COMMAND_REG);
+		ndelay(400);
 		hwgroup->poll_timeout = jiffies + WAIT_WORSTCASE;
 		hwgroup->polling = 1;
 		__ide_set_handler(drive, &atapi_reset_pollfunc, HZ/20, NULL);

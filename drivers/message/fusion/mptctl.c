@@ -1,40 +1,12 @@
 /*
  *  linux/drivers/message/fusion/mptctl.c
- *      Fusion MPT misc device (ioctl) driver.
- *      For use with PCI chip/adapter(s):
- *          LSIFC9xx/LSI409xx Fibre Channel
+ *      mpt Ioctl driver.
+ *      For use with LSI Logic PCI chip/adapters
  *      running LSI Logic Fusion MPT (Message Passing Technology) firmware.
  *
- *  Credits:
- *      This driver would not exist if not for Alan Cox's development
- *      of the linux i2o driver.
- *
- *      A special thanks to Pamela Delaney (LSI Logic) for tons of work
- *      and countless enhancements while adding support for the 1030
- *      chip family.  Pam has been instrumental in the development of
- *      of the 2.xx.xx series fusion drivers, and her contributions are
- *      far too numerous to hope to list in one place.
- *
- *      A huge debt of gratitude is owed to David S. Miller (DaveM)
- *      for fixing much of the stupid and broken stuff in the early
- *      driver while porting to sparc64 platform.  THANK YOU!
- *
- *      A big THANKS to Eddie C. Dost for fixing the ioctl path
- *      and most importantly f/w download on sparc64 platform!
- *      (plus Eddie's other helpful hints and insights)
- *
- *      Thanks to Arnaldo Carvalho de Melo for finding and patching
- *      a potential memory leak in mptctl_do_fw_download(),
- *      and for some kmalloc insight:-)
- *
- *      (see also mptbase.c)
- *
- *  Copyright (c) 1999-2004 LSI Logic Corporation
- *  Originally By: Steven J. Ralston, Noah Romer
- *  (mailto:sjralston1@netscape.net)
+ *  Copyright (c) 1999-2005 LSI Logic Corporation
  *  (mailto:mpt_linux_developer@lsil.com)
  *
- *  $Id: mptctl.c,v 1.63 2002/12/03 21:26:33 pdelaney Exp $
  */
 /*=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=*/
 /*
@@ -95,8 +67,8 @@
 #include <scsi/scsi_host.h>
 #include <scsi/scsi_tcq.h>
 
-#define COPYRIGHT	"Copyright (c) 1999-2004 LSI Logic Corporation"
-#define MODULEAUTHOR	"Steven J. Ralston, Noah Romer, Pamela Delaney"
+#define COPYRIGHT	"Copyright (c) 1999-2005 LSI Logic Corporation"
+#define MODULEAUTHOR	"LSI Logic Corporation"
 #include "mptbase.h"
 #include "mptctl.h"
 
@@ -127,14 +99,14 @@ struct buflist {
  * arg contents specific to function.
  */
 static int mptctl_fw_download(unsigned long arg);
-static int mptctl_getiocinfo (unsigned long arg, unsigned int cmd);
-static int mptctl_gettargetinfo (unsigned long arg);
-static int mptctl_readtest (unsigned long arg);
-static int mptctl_mpt_command (unsigned long arg);
-static int mptctl_eventquery (unsigned long arg);
-static int mptctl_eventenable (unsigned long arg);
-static int mptctl_eventreport (unsigned long arg);
-static int mptctl_replace_fw (unsigned long arg);
+static int mptctl_getiocinfo(unsigned long arg, unsigned int cmd);
+static int mptctl_gettargetinfo(unsigned long arg);
+static int mptctl_readtest(unsigned long arg);
+static int mptctl_mpt_command(unsigned long arg);
+static int mptctl_eventquery(unsigned long arg);
+static int mptctl_eventenable(unsigned long arg);
+static int mptctl_eventreport(unsigned long arg);
+static int mptctl_replace_fw(unsigned long arg);
 
 static int mptctl_do_reset(unsigned long arg);
 static int mptctl_hp_hostinfo(unsigned long arg, unsigned int cmd);
@@ -149,11 +121,11 @@ static long compat_mpctl_ioctl(struct file *f, unsigned cmd, unsigned long arg);
 /*
  * Private function calls.
  */
-static int mptctl_do_mpt_command (struct mpt_ioctl_command karg, void __user *mfPtr);
+static int mptctl_do_mpt_command(struct mpt_ioctl_command karg, void __user *mfPtr);
 static int mptctl_do_fw_download(int ioc, char __user *ufwbuf, size_t fwlen);
-static MptSge_t *kbuf_alloc_2_sgl( int bytes, u32 dir, int sge_offset, int *frags,
+static MptSge_t *kbuf_alloc_2_sgl(int bytes, u32 dir, int sge_offset, int *frags,
 		struct buflist **blp, dma_addr_t *sglbuf_dma, MPT_ADAPTER *ioc);
-static void kfree_sgl( MptSge_t *sgl, dma_addr_t sgl_dma,
+static void kfree_sgl(MptSge_t *sgl, dma_addr_t sgl_dma,
 		struct buflist *buflist, MPT_ADAPTER *ioc);
 static void mptctl_timeout_expired (MPT_IOCTL *ioctl);
 static int  mptctl_bus_reset(MPT_IOCTL *ioctl);
@@ -270,7 +242,7 @@ mptctl_reply(MPT_ADAPTER *ioc, MPT_FRAME_HDR *req, MPT_FRAME_HDR *reply)
 		/* Set the command status to GOOD if IOC Status is GOOD
 		 * OR if SCSI I/O cmd and data underrun or recovered error.
 		 */
-		iocStatus = reply->u.reply.IOCStatus & MPI_IOCSTATUS_MASK;
+		iocStatus = le16_to_cpu(reply->u.reply.IOCStatus) & MPI_IOCSTATUS_MASK;
 		if (iocStatus  == MPI_IOCSTATUS_SUCCESS)
 			ioc->ioctl->status |= MPT_IOCTL_STATUS_COMMAND_GOOD;
 
@@ -1119,7 +1091,7 @@ mptctl_getiocinfo (unsigned long arg, unsigned int data_size)
 	int			numDevices = 0;
 	unsigned int		max_id;
 	int			ii;
-	int			port;
+	unsigned int		port;
 	int			cim_rev;
 	u8			revision;
 
@@ -1162,9 +1134,7 @@ mptctl_getiocinfo (unsigned long arg, unsigned int data_size)
 		return -ENODEV;
 	}
 
-	/* Verify the data transfer size is correct.
-	 * Ignore the port setting.
-	 */
+	/* Verify the data transfer size is correct. */
 	if (karg->hdr.maxDataSize != data_size) {
 		printk(KERN_ERR "%s@%d::mptctl_getiocinfo - "
 			"Structure size mismatch. Command not completed.\n",
@@ -1181,6 +1151,8 @@ mptctl_getiocinfo (unsigned long arg, unsigned int data_size)
 	else
 		karg->adapterType = MPT_IOCTL_INTERFACE_SCSI;
 
+	if (karg->hdr.port > 1)
+		return -EINVAL;
 	port = karg->hdr.port;
 
 	karg->port = port;
@@ -1354,7 +1326,7 @@ mptctl_gettargetinfo (unsigned long arg)
 		 */
 		if (hd && hd->Targets) {
 			mpt_findImVolumes(ioc);
-			pIoc2 = ioc->spi_data.pIocPg2;
+			pIoc2 = ioc->raid_data.pIocPg2;
 			for ( id = 0; id <= max_id; ) {
 				if ( pIoc2 && pIoc2->NumActiveVolumes ) {
 					if ( id == pIoc2->RaidVolume[0].VolumeID ) {
@@ -1376,7 +1348,7 @@ mptctl_gettargetinfo (unsigned long arg)
 						--maxWordsLeft;
 						goto next_id;
 					} else {
-						pIoc3 = ioc->spi_data.pIocPg3;
+						pIoc3 = ioc->raid_data.pIocPg3;
             					for ( jj = 0; jj < pIoc3->NumPhysDisks; jj++ ) {
                     					if ( pIoc3->PhysDisk[jj].PhysDiskID == id )
 								goto next_id;
@@ -2352,7 +2324,7 @@ mptctl_hp_hostinfo(unsigned long arg, unsigned int data_size)
 	hdr.PageLength = 0;
 	hdr.PageNumber = 0;
 	hdr.PageType = MPI_CONFIG_PAGETYPE_MANUFACTURING;
-	cfg.hdr = &hdr;
+	cfg.cfghdr.hdr = &hdr;
 	cfg.physAddr = -1;
 	cfg.pageAddr = 0;
 	cfg.action = MPI_CONFIG_ACTION_PAGE_HEADER;
@@ -2361,7 +2333,7 @@ mptctl_hp_hostinfo(unsigned long arg, unsigned int data_size)
 
 	strncpy(karg.serial_number, " ", 24);
 	if (mpt_config(ioc, &cfg) == 0) {
-		if (cfg.hdr->PageLength > 0) {
+		if (cfg.cfghdr.hdr->PageLength > 0) {
 			/* Issue the second config page request */
 			cfg.action = MPI_CONFIG_ACTION_PAGE_READ_CURRENT;
 
@@ -2507,7 +2479,7 @@ mptctl_hp_targetinfo(unsigned long arg)
 		hdr.PageNumber = 0;
 		hdr.PageType = MPI_CONFIG_PAGETYPE_SCSI_DEVICE;
 
-		cfg.hdr = &hdr;
+		cfg.cfghdr.hdr = &hdr;
 		cfg.action = MPI_CONFIG_ACTION_PAGE_READ_CURRENT;
 		cfg.dir = 0;
 		cfg.timeout = 0;
@@ -2555,15 +2527,15 @@ mptctl_hp_targetinfo(unsigned long arg)
 	hdr.PageNumber = 3;
 	hdr.PageType = MPI_CONFIG_PAGETYPE_SCSI_DEVICE;
 
-	cfg.hdr = &hdr;
+	cfg.cfghdr.hdr = &hdr;
 	cfg.action = MPI_CONFIG_ACTION_PAGE_HEADER;
 	cfg.dir = 0;
 	cfg.timeout = 0;
 	cfg.physAddr = -1;
-	if ((mpt_config(ioc, &cfg) == 0) && (cfg.hdr->PageLength > 0)) {
+	if ((mpt_config(ioc, &cfg) == 0) && (cfg.cfghdr.hdr->PageLength > 0)) {
 		/* Issue the second config page request */
 		cfg.action = MPI_CONFIG_ACTION_PAGE_READ_CURRENT;
-		data_sz = (int) cfg.hdr->PageLength * 4;
+		data_sz = (int) cfg.cfghdr.hdr->PageLength * 4;
 		pg3_alloc = (SCSIDevicePage3_t *) pci_alloc_consistent(
 							ioc->pcidev, data_sz, &page_dma);
 		if (pg3_alloc) {

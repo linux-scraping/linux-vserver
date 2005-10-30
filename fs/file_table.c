@@ -14,8 +14,10 @@
 #include <linux/fs.h>
 #include <linux/security.h>
 #include <linux/eventpoll.h>
+#include <linux/rcupdate.h>
 #include <linux/mount.h>
 #include <linux/cdev.h>
+#include <linux/fsnotify.h>
 #include <linux/vs_limit.h>
 #include <linux/vs_context.h>
 
@@ -54,9 +56,15 @@ void filp_dtor(void * objp, struct kmem_cache_s *cachep, unsigned long dflags)
 	spin_unlock_irqrestore(&filp_count_lock, flags);
 }
 
+static inline void file_free_rcu(struct rcu_head *head)
+{
+	struct file *f =  container_of(head, struct file, f_rcuhead);
+	kmem_cache_free(filp_cachep, f);
+}
+
 static inline void file_free(struct file *f)
 {
-	kmem_cache_free(filp_cachep, f);
+	call_rcu(&f->f_rcuhead, file_free_rcu);
 }
 
 /* Find an unused file structure and return a pointer to it.
@@ -65,44 +73,46 @@ static inline void file_free(struct file *f)
  */
 struct file *get_empty_filp(void)
 {
-static int old_max;
+	static int old_max;
 	struct file * f;
 
 	/*
 	 * Privileged users can go above max_files
 	 */
-	if (files_stat.nr_files < files_stat.max_files ||
-				capable(CAP_SYS_ADMIN)) {
-		f = kmem_cache_alloc(filp_cachep, GFP_KERNEL);
-		if (f) {
-			memset(f, 0, sizeof(*f));
-			if (security_file_alloc(f)) {
-				file_free(f);
-				goto fail;
-			}
-			eventpoll_init_file(f);
-			atomic_set(&f->f_count, 1);
-			f->f_uid = current->fsuid;
-			f->f_gid = current->fsgid;
-			rwlock_init(&f->f_owner.lock);
-			/* f->f_version: 0 */
-			INIT_LIST_HEAD(&f->f_list);
-			f->f_xid = vx_current_xid();
-			vx_files_inc(f);
-			f->f_maxcount = INT_MAX;
-			return f;
-		}
-	}
+	if (files_stat.nr_files >= files_stat.max_files &&
+				!capable(CAP_SYS_ADMIN))
+		goto over;
 
+	f = kmem_cache_alloc(filp_cachep, GFP_KERNEL);
+	if (f == NULL)
+		goto fail;
+
+	memset(f, 0, sizeof(*f));
+	if (security_file_alloc(f))
+		goto fail_sec;
+
+	eventpoll_init_file(f);
+	atomic_set(&f->f_count, 1);
+	f->f_uid = current->fsuid;
+	f->f_gid = current->fsgid;
+	rwlock_init(&f->f_owner.lock);
+	/* f->f_version: 0 */
+	INIT_LIST_HEAD(&f->f_list);
+	f->f_xid = vx_current_xid();
+	vx_files_inc(f);
+	return f;
+
+over:
 	/* Ran out of filps - report that */
-	if (files_stat.max_files >= old_max) {
+	if (files_stat.nr_files > old_max) {
 		printk(KERN_INFO "VFS: file-max limit %d reached\n",
 					files_stat.max_files);
-		old_max = files_stat.max_files;
-	} else {
-		/* Big problems... */
-		printk(KERN_WARNING "VFS: filp allocation failed\n");
+		old_max = files_stat.nr_files;
 	}
+	goto fail;
+
+fail_sec:
+	file_free(f);
 fail:
 	return NULL;
 }
@@ -111,7 +121,7 @@ EXPORT_SYMBOL(get_empty_filp);
 
 void fastcall fput(struct file *file)
 {
-	if (atomic_dec_and_test(&file->f_count))
+	if (rcuref_dec_and_test(&file->f_count))
 		__fput(file);
 }
 
@@ -127,6 +137,8 @@ void fastcall __fput(struct file *file)
 	struct inode *inode = dentry->d_inode;
 
 	might_sleep();
+
+	fsnotify_close(file);
 	/*
 	 * The function eventpoll_release() should be the first called
 	 * in the file cleanup chain.
@@ -157,11 +169,17 @@ struct file fastcall *fget(unsigned int fd)
 	struct file *file;
 	struct files_struct *files = current->files;
 
-	spin_lock(&files->file_lock);
+	rcu_read_lock();
 	file = fcheck_files(files, fd);
-	if (file)
-		get_file(file);
-	spin_unlock(&files->file_lock);
+	if (file) {
+		if (!rcuref_inc_lf(&file->f_count)) {
+			/* File object ref couldn't be taken */
+			rcu_read_unlock();
+			return NULL;
+		}
+	}
+	rcu_read_unlock();
+
 	return file;
 }
 
@@ -183,21 +201,25 @@ struct file fastcall *fget_light(unsigned int fd, int *fput_needed)
 	if (likely((atomic_read(&files->count) == 1))) {
 		file = fcheck_files(files, fd);
 	} else {
-		spin_lock(&files->file_lock);
+		rcu_read_lock();
 		file = fcheck_files(files, fd);
 		if (file) {
-			get_file(file);
-			*fput_needed = 1;
+			if (rcuref_inc_lf(&file->f_count))
+				*fput_needed = 1;
+			else
+				/* Didn't get the reference, someone's freed */
+				file = NULL;
 		}
-		spin_unlock(&files->file_lock);
+		rcu_read_unlock();
 	}
+
 	return file;
 }
 
 
 void put_filp(struct file *file)
 {
-	if (atomic_dec_and_test(&file->f_count)) {
+	if (rcuref_dec_and_test(&file->f_count)) {
 		security_file_free(file);
 		vx_files_dec(file);
 		file->f_xid = 0;
@@ -260,4 +282,5 @@ void __init files_init(unsigned long mempages)
 	files_stat.max_files = n; 
 	if (files_stat.max_files < NR_FILE)
 		files_stat.max_files = NR_FILE;
+	files_defer_init();
 } 

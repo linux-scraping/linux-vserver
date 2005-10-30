@@ -1253,7 +1253,7 @@ static int emac_init_tah(struct ocp_enet_private *fep)
 		 TAH_MR_CVR | TAH_MR_ST_768 | TAH_MR_TFS_10KB | TAH_MR_DTFP |
 		 TAH_MR_DIG);
 
-	iounmap(&tahp);
+	iounmap(tahp);
 
 	return 0;
 }
@@ -1712,11 +1712,10 @@ struct mal_commac_ops emac_commac_ops = {
 };
 
 #ifdef CONFIG_NET_POLL_CONTROLLER
-static int emac_netpoll(struct net_device *ndev)
+static void emac_netpoll(struct net_device *ndev)
 {
 	emac_rxeob_dev((void *)ndev, 0);
 	emac_txeob_dev((void *)ndev, 0);
-	return 0;
 }
 #endif
 
@@ -1876,6 +1875,9 @@ static int emac_init_device(struct ocp_device *ocpdev, struct ibm_ocp_mal *mal)
 		rc = -ENODEV;
 		goto bail;
 	}
+	
+	/* Disable any PHY features not supported by the platform */
+	ep->phy_mii.def->features &= ~emacdata->phy_feat_exc;
 
 	/* Setup initial PHY config & startup aneg */
 	if (ep->phy_mii.def->ops->init)
@@ -1883,6 +1885,34 @@ static int emac_init_device(struct ocp_device *ocpdev, struct ibm_ocp_mal *mal)
 	netif_carrier_off(ndev);
 	if (ep->phy_mii.def->features & SUPPORTED_Autoneg)
 		ep->want_autoneg = 1;
+	else {
+		ep->want_autoneg = 0;
+		
+		/* Select highest supported speed/duplex */
+		if (ep->phy_mii.def->features & SUPPORTED_1000baseT_Full) {
+			ep->phy_mii.speed = SPEED_1000;
+			ep->phy_mii.duplex = DUPLEX_FULL;
+		} else if (ep->phy_mii.def->features & 
+			   SUPPORTED_1000baseT_Half) {
+			ep->phy_mii.speed = SPEED_1000;
+			ep->phy_mii.duplex = DUPLEX_HALF;
+		} else if (ep->phy_mii.def->features & 
+			   SUPPORTED_100baseT_Full) {
+			ep->phy_mii.speed = SPEED_100;
+			ep->phy_mii.duplex = DUPLEX_FULL;
+		} else if (ep->phy_mii.def->features & 
+			   SUPPORTED_100baseT_Half) {
+			ep->phy_mii.speed = SPEED_100;
+			ep->phy_mii.duplex = DUPLEX_HALF;
+		} else if (ep->phy_mii.def->features & 
+			   SUPPORTED_10baseT_Full) {
+			ep->phy_mii.speed = SPEED_10;
+			ep->phy_mii.duplex = DUPLEX_FULL;
+		} else {
+			ep->phy_mii.speed = SPEED_10;
+			ep->phy_mii.duplex = DUPLEX_HALF;
+		}
+	}
 	emac_start_link(ep, NULL);
 
 	/* read the MAC Address */

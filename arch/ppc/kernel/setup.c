@@ -41,7 +41,11 @@
 #include <asm/xmon.h>
 #include <asm/ocp.h>
 
-#if defined(CONFIG_85xx) || defined(CONFIG_83xx)
+#define USES_PPC_SYS (defined(CONFIG_85xx) || defined(CONFIG_83xx) || \
+		      defined(CONFIG_MPC10X_BRIDGE) || defined(CONFIG_8260) || \
+		      defined(CONFIG_PPC_MPC52xx))
+
+#if USES_PPC_SYS
 #include <asm/ppc_sys.h>
 #endif
 
@@ -61,8 +65,6 @@ extern void power4_idle(void);
 
 extern boot_infos_t *boot_infos;
 struct ide_machdep_calls ppc_ide_md;
-char *sysmap;
-unsigned long sysmap_size;
 
 /* Used with the BI_MEMSIZE bootinfo parameter to store the memory
    size value reported by the boot loader. */
@@ -123,8 +125,6 @@ void machine_restart(char *cmd)
 	ppc_md.restart(cmd);
 }
 
-EXPORT_SYMBOL(machine_restart);
-
 void machine_power_off(void)
 {
 #ifdef CONFIG_NVRAM
@@ -133,8 +133,6 @@ void machine_power_off(void)
 	ppc_md.power_off();
 }
 
-EXPORT_SYMBOL(machine_power_off);
-
 void machine_halt(void)
 {
 #ifdef CONFIG_NVRAM
@@ -142,8 +140,6 @@ void machine_halt(void)
 #endif
 	ppc_md.halt();
 }
-
-EXPORT_SYMBOL(machine_halt);
 
 void (*pm_power_off)(void) = machine_power_off;
 
@@ -249,7 +245,7 @@ int show_cpuinfo(struct seq_file *m, void *v)
 	seq_printf(m, "bogomips\t: %lu.%02lu\n",
 		   lpj / (500000/HZ), (lpj / (5000/HZ)) % 100);
 
-#if defined(CONFIG_85xx) || defined(CONFIG_83xx)
+#if USES_PPC_SYS
 	if (cur_ppc_sys_spec->ppc_sys_name)
 		seq_printf(m, "chipset\t\t: %s\n",
 			cur_ppc_sys_spec->ppc_sys_name);
@@ -578,11 +574,6 @@ void parse_bootinfo(struct bi_record *rec)
 		case BI_CMD_LINE:
 			strlcpy(cmd_line, (void *)data, sizeof(cmd_line));
 			break;
-		case BI_SYSMAP:
-			sysmap = (char *)((data[0] >= (KERNELBASE)) ? data[0] :
-					  (data[0]+KERNELBASE));
-			sysmap_size = data[1];
-			break;
 #ifdef CONFIG_BLK_DEV_INITRD
 		case BI_INITRD:
 			initrd_start = data[0] + KERNELBASE;
@@ -628,6 +619,26 @@ machine_init(unsigned long r3, unsigned long r4, unsigned long r5,
 	if (ppc_md.progress)
 		ppc_md.progress("id mach(): done", 0x200);
 }
+#ifdef CONFIG_BOOKE_WDT
+/* Checks wdt=x and wdt_period=xx command-line option */
+int __init early_parse_wdt(char *p)
+{
+	if (p && strncmp(p, "0", 1) != 0)
+	       booke_wdt_enabled = 1;
+
+	return 0;
+}
+early_param("wdt", early_parse_wdt);
+
+int __init early_parse_wdt_period (char *p)
+{
+	if (p)
+		booke_wdt_period = simple_strtoul(p, NULL, 0);
+
+	return 0;
+}
+early_param("wdt_period", early_parse_wdt_period);
+#endif	/* CONFIG_BOOKE_WDT */
 
 /* Checks "l2cr=xxxx" command-line option */
 int __init ppc_setup_l2cr(char *str)

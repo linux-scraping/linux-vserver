@@ -642,7 +642,7 @@ static int __pmac media_bay_task(void *x)
 	}
 }
 
-static int __devinit media_bay_attach(struct macio_dev *mdev, const struct of_match *match)
+static int __devinit media_bay_attach(struct macio_dev *mdev, const struct of_device_id *match)
 {
 	struct media_bay_info* bay;
 	u32 __iomem *regbase;
@@ -708,7 +708,7 @@ static int __pmac media_bay_suspend(struct macio_dev *mdev, pm_message_t state)
 {
 	struct media_bay_info	*bay = macio_get_drvdata(mdev);
 
-	if (state != mdev->ofdev.dev.power.power_state && state == PM_SUSPEND_MEM) {
+	if (state.event != mdev->ofdev.dev.power.power_state.event && state.event == PM_EVENT_SUSPEND) {
 		down(&bay->lock);
 		bay->sleeping = 1;
 		set_mb_power(bay, 0);
@@ -723,8 +723,8 @@ static int __pmac media_bay_resume(struct macio_dev *mdev)
 {
 	struct media_bay_info	*bay = macio_get_drvdata(mdev);
 
-	if (mdev->ofdev.dev.power.power_state != 0) {
-		mdev->ofdev.dev.power.power_state = 0;
+	if (mdev->ofdev.dev.power.power_state.event != PM_EVENT_ON) {
+		mdev->ofdev.dev.power.power_state = PMSG_ON;
 
 	       	/* We re-enable the bay using it's previous content
 	       	   only if it did not change. Note those bozo timings,
@@ -797,23 +797,20 @@ static struct mb_ops keylargo_mb_ops __pmacdata = {
  * Therefore we do it all by polling the media bay once each tick.
  */
 
-static struct of_match media_bay_match[] =
+static struct of_device_id media_bay_match[] =
 {
 	{
 	.name		= "media-bay",
-	.type		= OF_ANY_MATCH,
 	.compatible	= "keylargo-media-bay",
 	.data		= &keylargo_mb_ops,
 	},
 	{
 	.name		= "media-bay",
-	.type		= OF_ANY_MATCH,
 	.compatible	= "heathrow-media-bay",
 	.data		= &heathrow_mb_ops,
 	},
 	{
 	.name		= "media-bay",
-	.type		= OF_ANY_MATCH,
 	.compatible	= "ohare-media-bay",
 	.data		= &ohare_mb_ops,
 	},

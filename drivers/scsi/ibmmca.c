@@ -36,7 +36,6 @@
 #include <linux/proc_fs.h>
 #include <linux/stat.h>
 #include <linux/mca.h>
-#include <linux/string.h>
 #include <linux/spinlock.h>
 #include <linux/init.h>
 #include <linux/mca-legacy.h>
@@ -461,6 +460,8 @@ MODULE_PARM(adisplay, "1i");
 MODULE_PARM(normal, "1i");
 MODULE_PARM(ansi, "1i");
 #endif
+
+MODULE_LICENSE("GPL");
 #endif
 /*counter of concurrent disk read/writes, to turn on/off disk led */
 static int disk_rw_in_progress = 0;
@@ -2118,7 +2119,7 @@ static int ibmmca_queuecommand(Scsi_Cmnd * cmd, void (*done) (Scsi_Cmnd *))
 	return 0;
 }
 
-static int ibmmca_abort(Scsi_Cmnd * cmd)
+static int __ibmmca_abort(Scsi_Cmnd * cmd)
 {
 	/* Abort does not work, as the adapter never generates an interrupt on
 	 * whatever situation is simulated, even when really pending commands
@@ -2225,7 +2226,19 @@ static int ibmmca_abort(Scsi_Cmnd * cmd)
 	}
 }
 
-static int ibmmca_host_reset(Scsi_Cmnd * cmd)
+static int ibmmca_abort(Scsi_Cmnd * cmd)
+{
+	struct Scsi_Host *shpnt = cmd->device->host;
+	int rc;
+
+	spin_lock_irq(shpnt->host_lock);
+	rc = __ibmmca_abort(cmd);
+	spin_unlock_irq(shpnt->host_lock);
+
+	return rc;
+}
+
+static int __ibmmca_host_reset(Scsi_Cmnd * cmd)
 {
 	struct Scsi_Host *shpnt;
 	Scsi_Cmnd *cmd_aid;
@@ -2310,6 +2323,18 @@ static int ibmmca_host_reset(Scsi_Cmnd * cmd)
 		}
 	}
 	return SUCCESS;
+}
+
+static int ibmmca_host_reset(Scsi_Cmnd * cmd)
+{
+	struct Scsi_Host *shpnt = cmd->device->host;
+	int rc;
+
+	spin_lock_irq(shpnt->host_lock);
+	rc = __ibmmca_host_reset(cmd);
+	spin_unlock_irq(shpnt->host_lock);
+
+	return rc;
 }
 
 static int ibmmca_biosparam(struct scsi_device *sdev, struct block_device *bdev, sector_t capacity, int *info)

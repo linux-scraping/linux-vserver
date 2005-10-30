@@ -86,7 +86,7 @@ static int show_cpuinfo(struct seq_file *m, void *v)
 		seq_printf(m, "stepping\t: unknown\n");
 
 	if ( cpu_has(c, X86_FEATURE_TSC) ) {
-		seq_printf(m, "cpu MHz\t\t: %lu.%03lu\n",
+		seq_printf(m, "cpu MHz\t\t: %u.%03u\n",
 			cpu_khz / 1000, (cpu_khz % 1000));
 	}
 
@@ -129,8 +129,8 @@ static int show_cpuinfo(struct seq_file *m, void *v)
 			seq_printf(m, " %s", x86_cap_flags[i]);
 
 	seq_printf(m, "\nbogomips\t: %lu.%02lu\n\n",
-		     HZ*(c->loops_per_jiffy >> 3)/62500,
-		     (HZ*(c->loops_per_jiffy >> 3)/625) % 100);
+		     c->loops_per_jiffy/(500000/HZ),
+		     (c->loops_per_jiffy/(5000/HZ)) % 100);
 
 	return 0;
 }

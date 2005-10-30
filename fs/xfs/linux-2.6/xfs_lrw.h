@@ -70,9 +70,10 @@ struct xfs_iomap;
 #define	XFS_SENDFILE_ENTER	21
 #define	XFS_WRITEPAGE_ENTER	22
 #define	XFS_RELEASEPAGE_ENTER	23
-#define	XFS_IOMAP_ALLOC_ENTER	24
-#define	XFS_IOMAP_ALLOC_MAP	25
-#define	XFS_IOMAP_UNWRITTEN	26
+#define	XFS_INVALIDPAGE_ENTER	24
+#define	XFS_IOMAP_ALLOC_ENTER	25
+#define	XFS_IOMAP_ALLOC_MAP	26
+#define	XFS_IOMAP_UNWRITTEN	27
 extern void xfs_rw_enter_trace(int, struct xfs_iocore *,
 				void *, size_t, loff_t, int);
 extern void xfs_inval_cached_trace(struct xfs_iocore *,
@@ -94,8 +95,6 @@ extern int xfs_bdstrat_cb(struct xfs_buf *);
 
 extern int xfs_zero_eof(struct vnode *, struct xfs_iocore *, xfs_off_t,
 				xfs_fsize_t, xfs_fsize_t);
-extern void xfs_inval_cached_pages(struct vnode	*, struct xfs_iocore *,
-				xfs_off_t, int, int);
 extern ssize_t xfs_read(struct bhv_desc *, struct kiocb *,
 				const struct iovec *, unsigned int,
 				loff_t *, int, struct cred *);

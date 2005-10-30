@@ -35,6 +35,7 @@
 #include <linux/spinlock.h>
 #include <linux/bcd.h>
 #include <linux/interrupt.h>
+#include <linux/delay.h>
 
 #include <asm/io.h>
 #include <asm/uaccess.h>
@@ -42,10 +43,8 @@
 #include <asm/time.h>
 #include <asm/rtas.h>
 
-#include <asm/iSeries/LparData.h>
 #include <asm/iSeries/mf.h>
 #include <asm/machdep.h>
-#include <asm/iSeries/ItSpCommArea.h>
 
 extern int piranha_simulator;
 
@@ -303,7 +302,7 @@ void iSeries_get_boot_time(struct rtc_time *tm)
 #ifdef CONFIG_PPC_RTAS
 #define MAX_RTC_WAIT 5000	/* 5 sec */
 #define RTAS_CLOCK_BUSY (-2)
-void pSeries_get_boot_time(struct rtc_time *rtc_tm)
+void rtas_get_boot_time(struct rtc_time *rtc_tm)
 {
 	int ret[8];
 	int error, wait_time;
@@ -338,7 +337,7 @@ void pSeries_get_boot_time(struct rtc_time *rtc_tm)
  * and if a delay is needed to read the clock.  In this case we just
  * silently return without updating rtc_tm.
  */
-void pSeries_get_rtc_time(struct rtc_time *rtc_tm)
+void rtas_get_rtc_time(struct rtc_time *rtc_tm)
 {
         int ret[8];
 	int error, wait_time;
@@ -353,8 +352,7 @@ void pSeries_get_rtc_time(struct rtc_time *rtc_tm)
 				return;	/* delay not allowed */
 			}
 			wait_time = rtas_extended_busy_delay_time(error);
-			set_current_state(TASK_INTERRUPTIBLE);
-			schedule_timeout(wait_time);
+			msleep_interruptible(wait_time);
 			error = RTAS_CLOCK_BUSY;
 		}
 	} while (error == RTAS_CLOCK_BUSY && (__get_tb() < max_wait_tb));
@@ -373,7 +371,7 @@ void pSeries_get_rtc_time(struct rtc_time *rtc_tm)
 	rtc_tm->tm_year = ret[0] - 1900;
 }
 
-int pSeries_set_rtc_time(struct rtc_time *tm)
+int rtas_set_rtc_time(struct rtc_time *tm)
 {
 	int error, wait_time;
 	unsigned long max_wait_tb;
@@ -388,8 +386,7 @@ int pSeries_set_rtc_time(struct rtc_time *tm)
 			if (in_interrupt())
 				return 1;	/* probably decrementer */
 			wait_time = rtas_extended_busy_delay_time(error);
-			set_current_state(TASK_INTERRUPTIBLE);
-			schedule_timeout(wait_time);
+			msleep_interruptible(wait_time);
 			error = RTAS_CLOCK_BUSY;
 		}
 	} while (error == RTAS_CLOCK_BUSY && (__get_tb() < max_wait_tb));

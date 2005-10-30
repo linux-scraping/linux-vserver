@@ -26,6 +26,7 @@
  */
 
 #include <linux/bitops.h>
+#include <linux/device.h>
 #include "pcm.h"
 #include "control.h"
 #include "info.h"
@@ -374,6 +375,9 @@
 #define AC97_HAS_NO_PC_BEEP	(1<<12) /* no PC Beep volume */
 #define AC97_HAS_NO_VIDEO	(1<<13) /* no Video volume */
 #define AC97_HAS_NO_CD		(1<<14) /* no CD volume */
+#define AC97_HAS_NO_MIC	(1<<15) /* no MIC volume */
+#define AC97_HAS_NO_TONE	(1<<16) /* no Tone volume */
+#define AC97_HAS_NO_STD_PCM	(1<<17)	/* no standard AC97 PCM volume and mute */
 
 /* rates indexes */
 #define AC97_RATES_FRONT_DAC	0
@@ -437,6 +441,7 @@ struct snd_ac97_build_ops {
 	void (*suspend) (ac97_t *ac97);
 	void (*resume) (ac97_t *ac97);
 #endif
+	void (*update_jacks) (ac97_t *ac97);	/* for jack-sharing */
 };
 
 struct _snd_ac97_bus_ops {
@@ -516,7 +521,13 @@ struct _snd_ac97 {
 		} ad18xx;
 		unsigned int dev_flags;		/* device specific */
 	} spec;
+	/* jack-sharing info */
+	unsigned char indep_surround;
+	unsigned char channel_mode;
+	struct device dev;
 };
+
+#define to_ac97_t(d) container_of(d, struct _snd_ac97, dev)
 
 /* conditions */
 static inline int ac97_is_audio(ac97_t * ac97)
@@ -569,8 +580,8 @@ enum {
 };
 
 struct ac97_quirk {
-	unsigned short vendor;	/* PCI vendor id */
-	unsigned short device;	/* PCI device id */
+	unsigned short subvendor; /* PCI subsystem vendor id */
+	unsigned short subdevice; /* PCI sybsystem device id */
 	unsigned short mask;	/* device id bit mask, 0 = accept all */
 	unsigned int codec_id;	/* codec id (if any), 0 = accept all */
 	const char *name;	/* name shown as info */
@@ -595,4 +606,8 @@ struct ac97_enum {
 	unsigned short mask;
 	const char **texts;
 };
+
+/* ad hoc AC97 device driver access */
+extern struct bus_type ac97_bus_type;
+
 #endif /* __SOUND_AC97_CODEC_H */

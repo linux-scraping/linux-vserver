@@ -25,7 +25,6 @@
 #define SERIAL_DO_RESTART
 #include <linux/module.h>
 #include <linux/config.h>
-#include <linux/version.h>
 #include <linux/kernel.h>
 #include <linux/errno.h>
 #include <linux/signal.h>
@@ -57,7 +56,6 @@
 #include <linux/bitops.h>
 
 #include <asm/system.h>
-#include <asm/segment.h>
 #include <asm/io.h>
 #include <asm/irq.h>
 #include <asm/uaccess.h>
@@ -990,18 +988,16 @@ static unsigned int icom_get_mctrl(struct uart_port *port)
 	return result;
 }
 
-static void icom_stop_tx(struct uart_port *port, unsigned int tty_stop)
+static void icom_stop_tx(struct uart_port *port)
 {
 	unsigned char cmdReg;
 
-	if (tty_stop) {
-		trace(ICOM_PORT, "STOP", 0);
-		cmdReg = readb(&ICOM_PORT->dram->CmdReg);
-		writeb(cmdReg | CMD_HOLD_XMIT, &ICOM_PORT->dram->CmdReg);
-	}
+	trace(ICOM_PORT, "STOP", 0);
+	cmdReg = readb(&ICOM_PORT->dram->CmdReg);
+	writeb(cmdReg | CMD_HOLD_XMIT, &ICOM_PORT->dram->CmdReg);
 }
 
-static void icom_start_tx(struct uart_port *port, unsigned int tty_start)
+static void icom_start_tx(struct uart_port *port)
 {
 	unsigned char cmdReg;
 

@@ -484,6 +484,11 @@ static int __init printk_time_setup(char *str)
 
 __setup("time", printk_time_setup);
 
+__attribute__((weak)) unsigned long long printk_clock(void)
+{
+	return sched_clock();
+}
+
 /*
  * This is printk.  It can be called from any context.  We want it to work.
  * 
@@ -510,7 +515,8 @@ asmlinkage int printk(const char *fmt, ...)
 	return r;
 }
 
-static volatile int printk_cpu = -1;
+/* cpu currently holding logbuf_lock */
+static volatile unsigned int printk_cpu = UINT_MAX;
 
 asmlinkage int vprintk(const char *fmt, va_list args)
 {
@@ -520,7 +526,10 @@ asmlinkage int vprintk(const char *fmt, va_list args)
 	static char printk_buf[1024];
 	static int log_level_unknown = 1;
 
-	if (unlikely(oops_in_progress && printk_cpu == smp_processor_id()))
+	preempt_disable();
+	if (unlikely(oops_in_progress) && printk_cpu == smp_processor_id())
+		/* If a crash is occurring during printk() on this CPU,
+		 * make sure we can't deadlock */
 		zap_locks();
 
 	/* This stops the holder of console_sem just where we want him */
@@ -557,7 +566,7 @@ asmlinkage int vprintk(const char *fmt, va_list args)
 					loglev_char = default_message_loglevel
 						+ '0';
 				}
-				t = sched_clock();
+				t = printk_clock();
 				nanosec_rem = do_div(t, 1000000000);
 				tlen = sprintf(tbuf,
 						"<%c>[%5lu.%06lu] ",
@@ -587,14 +596,14 @@ asmlinkage int vprintk(const char *fmt, va_list args)
 			log_level_unknown = 1;
 	}
 
-	if (!cpu_online(smp_processor_id()) &&
-	    system_state != SYSTEM_RUNNING) {
+	if (!cpu_online(smp_processor_id())) {
 		/*
 		 * Some console drivers may assume that per-cpu resources have
 		 * been allocated.  So don't allow them to be called by this
 		 * CPU until it is officially up.  We shouldn't be calling into
 		 * random console drivers on a CPU which doesn't exist yet..
 		 */
+		printk_cpu = UINT_MAX;
 		spin_unlock_irqrestore(&logbuf_lock, flags);
 		goto out;
 	}
@@ -604,6 +613,7 @@ asmlinkage int vprintk(const char *fmt, va_list args)
 		 * We own the drivers.  We can drop the spinlock and let
 		 * release_console_sem() print the text
 		 */
+		printk_cpu = UINT_MAX;
 		spin_unlock_irqrestore(&logbuf_lock, flags);
 		console_may_schedule = 0;
 		release_console_sem();
@@ -613,9 +623,11 @@ asmlinkage int vprintk(const char *fmt, va_list args)
 		 * allows the semaphore holder to proceed and to call the
 		 * console drivers with the output which we just produced.
 		 */
+		printk_cpu = UINT_MAX;
 		spin_unlock_irqrestore(&logbuf_lock, flags);
 	}
 out:
+	preempt_enable();
 	return printed_len;
 }
 EXPORT_SYMBOL(printk);
@@ -875,8 +887,10 @@ void register_console(struct console * console)
 			break;
 		console->flags |= CON_ENABLED;
 		console->index = console_cmdline[i].index;
-		if (i == preferred_console)
+		if (i == selected_console) {
 			console->flags |= CON_CONSDEV;
+			preferred_console = selected_console;
+		}
 		break;
 	}
 
@@ -896,6 +910,8 @@ void register_console(struct console * console)
 	if ((console->flags & CON_CONSDEV) || console_drivers == NULL) {
 		console->next = console_drivers;
 		console_drivers = console;
+		if (console->next)
+			console->next->flags &= ~CON_CONSDEV;
 	} else {
 		console->next = console_drivers->next;
 		console_drivers->next = console;
@@ -936,10 +952,14 @@ int unregister_console(struct console * console)
 	/* If last console is removed, we re-enable picking the first
 	 * one that gets registered. Without that, pmac early boot console
 	 * would prevent fbcon from taking over.
+	 *
+	 * If this isn't the last console and it has CON_CONSDEV set, we
+	 * need to set it on the next preferred console.
 	 */
 	if (console_drivers == NULL)
 		preferred_console = selected_console;
-		
+	else if (console->flags & CON_CONSDEV)
+		console_drivers->flags |= CON_CONSDEV;
 
 	release_console_sem();
 	return res;

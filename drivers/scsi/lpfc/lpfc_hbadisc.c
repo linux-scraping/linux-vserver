@@ -1,32 +1,30 @@
 /*******************************************************************
  * This file is part of the Emulex Linux Device Driver for         *
- * Enterprise Fibre Channel Host Bus Adapters.                     *
- * Refer to the README file included with this package for         *
- * driver version and adapter support.                             *
- * Copyright (C) 2004 Emulex Corporation.                          *
+ * Fibre Channel Host Bus Adapters.                                *
+ * Copyright (C) 2004-2005 Emulex.  All rights reserved.           *
+ * EMULEX and SLI are trademarks of Emulex.                        *
  * www.emulex.com                                                  *
+ * Portions Copyright (C) 2004-2005 Christoph Hellwig              *
  *                                                                 *
  * This program is free software; you can redistribute it and/or   *
- * modify it under the terms of the GNU General Public License     *
- * as published by the Free Software Foundation; either version 2  *
- * of the License, or (at your option) any later version.          *
- *                                                                 *
- * This program is distributed in the hope that it will be useful, *
- * but WITHOUT ANY WARRANTY; without even the implied warranty of  *
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the   *
- * GNU General Public License for more details, a copy of which    *
- * can be found in the file COPYING included with this package.    *
+ * modify it under the terms of version 2 of the GNU General       *
+ * Public License as published by the Free Software Foundation.    *
+ * This program is distributed in the hope that it will be useful. *
+ * ALL EXPRESS OR IMPLIED CONDITIONS, REPRESENTATIONS AND          *
+ * WARRANTIES, INCLUDING ANY IMPLIED WARRANTY OF MERCHANTABILITY,  *
+ * FITNESS FOR A PARTICULAR PURPOSE, OR NON-INFRINGEMENT, ARE      *
+ * DISCLAIMED, EXCEPT TO THE EXTENT THAT SUCH DISCLAIMERS ARE HELD *
+ * TO BE LEGALLY INVALID.  See the GNU General Public License for  *
+ * more details, a copy of which can be found in the file COPYING  *
+ * included with this package.                                     *
  *******************************************************************/
-
-/*
- * $Id: lpfc_hbadisc.c 1.266 2005/04/13 11:59:06EDT sf_support Exp  $
- */
 
 #include <linux/blkdev.h>
 #include <linux/pci.h>
 #include <linux/kthread.h>
 #include <linux/interrupt.h>
 
+#include <scsi/scsi.h>
 #include <scsi/scsi_device.h>
 #include <scsi/scsi_host.h>
 #include <scsi/scsi_transport_fc.h>
@@ -61,14 +59,7 @@ static void lpfc_disc_timeout_handler(struct lpfc_hba *);
 static void
 lpfc_process_nodev_timeout(struct lpfc_hba *phba, struct lpfc_nodelist *ndlp)
 {
-	if (!(ndlp->nlp_type & NLP_FABRIC)) {
-		/* Nodev timeout on NPort <nlp_DID> */
-		lpfc_printf_log(phba, KERN_ERR, LOG_DISCOVERY,
-			"%d:0203 Nodev timeout on NPort x%x "
-			"Data: x%x x%x x%x\n",
-			phba->brd_no, ndlp->nlp_DID, ndlp->nlp_flag,
-			ndlp->nlp_state, ndlp->nlp_rpi);
-	}
+	int warn_on = 0;
 
 	spin_lock_irq(phba->host->host_lock);
 	if (!(ndlp->nlp_flag & NLP_NODEV_TMO)) {
@@ -79,11 +70,26 @@ lpfc_process_nodev_timeout(struct lpfc_hba *phba, struct lpfc_nodelist *ndlp)
 	ndlp->nlp_flag &= ~NLP_NODEV_TMO;
 
 	if (ndlp->nlp_sid != NLP_NO_SID) {
+		warn_on = 1;
 		/* flush the target */
 		lpfc_sli_abort_iocb(phba, &phba->sli.ring[phba->sli.fcp_ring],
 			ndlp->nlp_sid, 0, 0, LPFC_CTX_TGT);
 	}
 	spin_unlock_irq(phba->host->host_lock);
+
+	if (warn_on) {
+		lpfc_printf_log(phba, KERN_ERR, LOG_DISCOVERY,
+				"%d:0203 Nodev timeout on NPort x%x "
+				"Data: x%x x%x x%x\n",
+				phba->brd_no, ndlp->nlp_DID, ndlp->nlp_flag,
+				ndlp->nlp_state, ndlp->nlp_rpi);
+	} else {
+		lpfc_printf_log(phba, KERN_INFO, LOG_DISCOVERY,
+				"%d:0204 Nodev timeout on NPort x%x "
+				"Data: x%x x%x x%x\n",
+				phba->brd_no, ndlp->nlp_DID, ndlp->nlp_flag,
+				ndlp->nlp_state, ndlp->nlp_rpi);
+	}
 
 	lpfc_disc_state_machine(phba, ndlp, NULL, NLP_EVT_DEVICE_RM);
 	return;
@@ -1011,13 +1017,10 @@ lpfc_register_remote_port(struct lpfc_hba * phba,
 	struct fc_rport *rport;
 	struct lpfc_rport_data *rdata;
 	struct fc_rport_identifiers rport_ids;
-	uint64_t wwn;
 
 	/* Remote port has reappeared. Re-register w/ FC transport */
-	memcpy(&wwn, &ndlp->nlp_nodename, sizeof(uint64_t));
-	rport_ids.node_name = be64_to_cpu(wwn);
-	memcpy(&wwn, &ndlp->nlp_portname, sizeof(uint64_t));
-	rport_ids.port_name = be64_to_cpu(wwn);
+	rport_ids.node_name = wwn_to_u64(ndlp->nlp_nodename.u.wwn);
+	rport_ids.port_name = wwn_to_u64(ndlp->nlp_portname.u.wwn);
 	rport_ids.port_id = ndlp->nlp_DID;
 	rport_ids.roles = FC_RPORT_ROLE_UNKNOWN;
 	if (ndlp->nlp_type & NLP_FCP_TARGET)
@@ -1130,6 +1133,8 @@ lpfc_nlp_list(struct lpfc_hba * phba, struct lpfc_nodelist * nlp, int list)
 	switch(list) {
 	case NLP_NO_LIST: /* No list, just remove it */
 		lpfc_nlp_remove(phba, nlp);
+		/* as node removed - stop further transport calls */
+		rport_del = none;
 		break;
 	case NLP_UNUSED_LIST:
 		spin_lock_irq(phba->host->host_lock);

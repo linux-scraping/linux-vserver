@@ -89,6 +89,11 @@
 	.cache_hot_time		= 0,			\
 	.cache_nice_tries	= 0,			\
 	.per_cpu_gain		= 25,			\
+	.busy_idx		= 0,			\
+	.idle_idx		= 0,			\
+	.newidle_idx		= 1,			\
+	.wake_idx		= 0,			\
+	.forkexec_idx		= 0,			\
 	.flags			= SD_LOAD_BALANCE	\
 				| SD_BALANCE_NEWIDLE	\
 				| SD_BALANCE_EXEC	\
@@ -115,17 +120,43 @@
 	.cache_hot_time		= (5*1000000/2),	\
 	.cache_nice_tries	= 1,			\
 	.per_cpu_gain		= 100,			\
+	.busy_idx		= 2,			\
+	.idle_idx		= 1,			\
+	.newidle_idx		= 2,			\
+	.wake_idx		= 1,			\
+	.forkexec_idx		= 1,			\
 	.flags			= SD_LOAD_BALANCE	\
 				| SD_BALANCE_NEWIDLE	\
 				| SD_BALANCE_EXEC	\
-				| SD_WAKE_AFFINE	\
-				| SD_WAKE_IDLE		\
-				| SD_WAKE_BALANCE,	\
+				| SD_WAKE_AFFINE,	\
 	.last_balance		= jiffies,		\
 	.balance_interval	= 1,			\
 	.nr_balance_failed	= 0,			\
 }
 #endif
+
+/* sched_domains SD_ALLNODES_INIT for NUMA machines */
+#define SD_ALLNODES_INIT (struct sched_domain) {	\
+	.span			= CPU_MASK_NONE,	\
+	.parent			= NULL,			\
+	.groups			= NULL,			\
+	.min_interval		= 64,			\
+	.max_interval		= 64*num_online_cpus(),	\
+	.busy_factor		= 128,			\
+	.imbalance_pct		= 133,			\
+	.cache_hot_time		= (10*1000000),		\
+	.cache_nice_tries	= 1,			\
+	.busy_idx		= 3,			\
+	.idle_idx		= 3,			\
+	.newidle_idx		= 0, /* unused */	\
+	.wake_idx		= 0, /* unused */	\
+	.forkexec_idx		= 0, /* unused */	\
+	.per_cpu_gain		= 100,			\
+	.flags			= SD_LOAD_BALANCE,	\
+	.last_balance		= jiffies,		\
+	.balance_interval	= 64,			\
+	.nr_balance_failed	= 0,			\
+}
 
 #ifdef CONFIG_NUMA
 #ifndef SD_NODE_INIT

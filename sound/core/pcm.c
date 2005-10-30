@@ -451,6 +451,7 @@ static int snd_pcm_stream_proc_init(snd_pcm_str_t *pstr)
 		entry->c.text.read = snd_pcm_xrun_debug_read;
 		entry->c.text.write_size = 64;
 		entry->c.text.write = snd_pcm_xrun_debug_write;
+		entry->mode |= S_IWUSR;
 		entry->private_data = pstr;
 		if (snd_info_register(entry) < 0) {
 			snd_info_free_entry(entry);
@@ -596,7 +597,7 @@ int snd_pcm_new_stream(snd_pcm_t *pcm, int stream, int substream_count)
 	}
 	prev = NULL;
 	for (idx = 0, prev = NULL; idx < substream_count; idx++) {
-		substream = kcalloc(1, sizeof(*substream), GFP_KERNEL);
+		substream = kzalloc(sizeof(*substream), GFP_KERNEL);
 		if (substream == NULL)
 			return -ENOMEM;
 		substream->pcm = pcm;
@@ -656,7 +657,7 @@ int snd_pcm_new(snd_card_t * card, char *id, int device,
 	snd_assert(rpcm != NULL, return -EINVAL);
 	*rpcm = NULL;
 	snd_assert(card != NULL, return -ENXIO);
-	pcm = kcalloc(1, sizeof(*pcm), GFP_KERNEL);
+	pcm = kzalloc(sizeof(*pcm), GFP_KERNEL);
 	if (pcm == NULL)
 		return -ENOMEM;
 	pcm->card = card;
@@ -794,7 +795,7 @@ int snd_pcm_open_substream(snd_pcm_t *pcm, int stream,
 	if (substream == NULL)
 		return -EAGAIN;
 
-	runtime = kcalloc(1, sizeof(*runtime), GFP_KERNEL);
+	runtime = kzalloc(sizeof(*runtime), GFP_KERNEL);
 	if (runtime == NULL)
 		return -ENOMEM;
 
@@ -1048,7 +1049,6 @@ EXPORT_SYMBOL(snd_pcm_release_substream);
 EXPORT_SYMBOL(snd_pcm_format_name);
   /* pcm_native.c */
 EXPORT_SYMBOL(snd_pcm_link_rwlock);
-EXPORT_SYMBOL(snd_pcm_start);
 #ifdef CONFIG_PM
 EXPORT_SYMBOL(snd_pcm_suspend);
 EXPORT_SYMBOL(snd_pcm_suspend_all);
@@ -1068,6 +1068,7 @@ EXPORT_SYMBOL(snd_pcm_format_little_endian);
 EXPORT_SYMBOL(snd_pcm_format_big_endian);
 EXPORT_SYMBOL(snd_pcm_format_width);
 EXPORT_SYMBOL(snd_pcm_format_physical_width);
+EXPORT_SYMBOL(snd_pcm_format_size);
 EXPORT_SYMBOL(snd_pcm_format_silence_64);
 EXPORT_SYMBOL(snd_pcm_format_set_silence);
 EXPORT_SYMBOL(snd_pcm_build_linear_format);

@@ -370,16 +370,6 @@ xfs_finish_flags(
 	}
 
 	/*
-	 * disallow mount attempts with (IRIX) project quota enabled
-	 */
-	if (XFS_SB_VERSION_HASQUOTA(&mp->m_sb) &&
-	    (mp->m_sb.sb_qflags & XFS_PQUOTA_ACCT)) {
-		cmn_err(CE_WARN,
-	"XFS: cannot mount a filesystem with IRIX project quota enabled");
-		return XFS_ERROR(ENOSYS);
-	}
-
-	/*
 	 * check for shared mount.
 	 */
 	if (ap->flags & XFSMNT_SHARED) {
@@ -626,7 +616,34 @@ out:
 	return XFS_ERROR(error);
 }
 
-#define REMOUNT_READONLY_FLAGS	(SYNC_REMOUNT|SYNC_ATTR|SYNC_WAIT)
+STATIC int
+xfs_quiesce_fs(
+	xfs_mount_t		*mp)
+{
+	int			count = 0, pincount;
+		
+	xfs_refcache_purge_mp(mp);
+	xfs_flush_buftarg(mp->m_ddev_targp, 0);
+	xfs_finish_reclaim_all(mp, 0);
+
+	/* This loop must run at least twice.
+	 * The first instance of the loop will flush
+	 * most meta data but that will generate more
+	 * meta data (typically directory updates).
+	 * Which then must be flushed and logged before
+	 * we can write the unmount record.
+	 */ 
+	do {
+		xfs_syncsub(mp, SYNC_REMOUNT|SYNC_ATTR|SYNC_WAIT, 0, NULL);
+		pincount = xfs_flush_buftarg(mp->m_ddev_targp, 1);
+		if (!pincount) {
+			delay(50);
+			count++;
+		}
+	} while (count < 2);
+
+	return 0;
+}
 
 STATIC int
 xfs_mntupdate(
@@ -636,8 +653,7 @@ xfs_mntupdate(
 {
 	struct vfs	*vfsp = bhvtovfs(bdp);
 	xfs_mount_t	*mp = XFS_BHVTOM(bdp);
-	int		pincount, error;
-	int		count = 0;
+	int		error;
 
 	if (args->flags & XFSMNT_NOATIME)
 		mp->m_flags |= XFS_MOUNT_NOATIME;
@@ -649,25 +665,7 @@ xfs_mntupdate(
 	}
 
 	if (*flags & MS_RDONLY) {
-		xfs_refcache_purge_mp(mp);
-		xfs_flush_buftarg(mp->m_ddev_targp, 0);
-		xfs_finish_reclaim_all(mp, 0);
-
-		/* This loop must run at least twice.
-		 * The first instance of the loop will flush
-		 * most meta data but that will generate more
-		 * meta data (typically directory updates).
-		 * Which then must be flushed and logged before
-		 * we can write the unmount record.
-		 */ 
-		do {
-			VFS_SYNC(vfsp, REMOUNT_READONLY_FLAGS, NULL, error);
-			pincount = xfs_flush_buftarg(mp->m_ddev_targp, 1);
-			if (!pincount) {
-				delay(50);
-				count++;
-			}
-		} while (count < 2);
+		xfs_quiesce_fs(mp);
 
 		/* Ok now write out an unmount record */
 		xfs_log_unmount_write(mp);
@@ -801,7 +799,6 @@ xfs_statvfs(
 	xfs_mount_t	*mp;
 	xfs_sb_t	*sbp;
 	unsigned long	s;
-	u64 id;
 
 	mp = XFS_BHVTOM(bdp);
 	sbp = &(mp->m_sb);
@@ -829,9 +826,7 @@ xfs_statvfs(
 	statp->f_ffree = statp->f_files - (sbp->sb_icount - sbp->sb_ifree);
 	XFS_SB_UNLOCK(mp, s);
 
-	id = huge_encode_dev(mp->m_dev);
-	statp->f_fsid.val[0] = (u32)id;
-	statp->f_fsid.val[1] = (u32)(id >> 32);
+	xfs_statvfs_fsid(statp, mp);
 	statp->f_namelen = MAXNAMELEN - 1;
 
 	return 0;
@@ -883,10 +878,12 @@ xfs_sync(
 	int		flags,
 	cred_t		*credp)
 {
-	xfs_mount_t	*mp;
+	xfs_mount_t	*mp = XFS_BHVTOM(bdp);
 
-	mp = XFS_BHVTOM(bdp);
-	return (xfs_syncsub(mp, flags, 0, NULL));
+	if (unlikely(flags == SYNC_QUIESCE))
+		return xfs_quiesce_fs(mp);
+	else
+		return xfs_syncsub(mp, flags, 0, NULL);
 }
 
 /*
@@ -910,7 +907,6 @@ xfs_sync_inodes(
 	xfs_inode_t	*ip_next;
 	xfs_buf_t	*bp;
 	vnode_t		*vp = NULL;
-	vmap_t		vmap;
 	int		error;
 	int		last_error;
 	uint64_t	fflag;
@@ -1105,48 +1101,21 @@ xfs_sync_inodes(
 		 * lock in xfs_ireclaim() after the inode is pulled from
 		 * the mount list will sleep until we release it here.
 		 * This keeps the vnode from being freed while we reference
-		 * it.  It is also cheaper and simpler than actually doing
-		 * a vn_get() for every inode we touch here.
+		 * it.
 		 */
 		if (xfs_ilock_nowait(ip, lock_flags) == 0) {
-
 			if ((flags & SYNC_BDFLUSH) || (vp == NULL)) {
 				ip = ip->i_mnext;
 				continue;
 			}
 
-			/*
-			 * We need to unlock the inode list lock in order
-			 * to lock the inode. Insert a marker record into
-			 * the inode list to remember our position, dropping
-			 * the lock is now done inside the IPOINTER_INSERT
-			 * macro.
-			 *
-			 * We also use the inode list lock to protect us
-			 * in taking a snapshot of the vnode version number
-			 * for use in calling vn_get().
-			 */
-			VMAP(vp, vmap);
-			IPOINTER_INSERT(ip, mp);
-
-			vp = vn_get(vp, &vmap);
+			vp = vn_grab(vp);
 			if (vp == NULL) {
-				/*
-				 * The vnode was reclaimed once we let go
-				 * of the inode list lock.  Skip to the
-				 * next list entry. Remove the marker.
-				 */
-
-				XFS_MOUNT_ILOCK(mp);
-
-				mount_locked = B_TRUE;
-				vnode_refed  = B_FALSE;
-
-				IPOINTER_REMOVE(ip, mp);
-
+				ip = ip->i_mnext;
 				continue;
 			}
 
+			IPOINTER_INSERT(ip, mp);
 			xfs_ilock(ip, lock_flags);
 
 			ASSERT(vp == XFS_ITOV(ip));
@@ -1537,7 +1506,10 @@ xfs_syncsub(
 	 * eventually kicked out of the cache.
 	 */
 	if (flags & SYNC_REFCACHE) {
-		xfs_refcache_purge_some(mp);
+		if (flags & SYNC_WAIT)
+			xfs_refcache_purge_mp(mp);
+		else
+			xfs_refcache_purge_some(mp);
 	}
 
 	/*
@@ -1653,6 +1625,10 @@ xfs_vget(
 #define MNTOPT_SWIDTH	"swidth"	/* data volume stripe width */
 #define MNTOPT_NOUUID	"nouuid"	/* ignore filesystem UUID */
 #define MNTOPT_MTPT	"mtpt"		/* filesystem mount point */
+#define MNTOPT_GRPID	"grpid"		/* group-ID from parent directory */
+#define MNTOPT_NOGRPID	"nogrpid"	/* group-ID from current process */
+#define MNTOPT_BSDGROUPS    "bsdgroups"    /* group-ID from parent directory */
+#define MNTOPT_SYSVGROUPS   "sysvgroups"   /* group-ID from current process */
 #define MNTOPT_ALLOCSIZE    "allocsize"    /* preferred allocation size */
 #define MNTOPT_IHASHSIZE    "ihashsize"    /* size of inode hash table */
 #define MNTOPT_NORECOVERY   "norecovery"   /* don't run XFS recovery */
@@ -1686,7 +1662,7 @@ suffix_strtoul(const char *cp, char **endp, unsigned int base)
 	return simple_strtoul(cp, endp, base) << shift_left_factor;
 }
 
-int
+STATIC int
 xfs_parseargs(
 	struct bhv_desc		*bhv,
 	char			*options,
@@ -1774,6 +1750,12 @@ xfs_parseargs(
 			}
 			args->flags |= XFSMNT_IHASHSIZE;
 			args->ihashsize = simple_strtoul(value, &eov, 10);
+		} else if (!strcmp(this_char, MNTOPT_GRPID) ||
+			   !strcmp(this_char, MNTOPT_BSDGROUPS)) {
+			vfsp->vfs_flag |= VFS_GRPID;
+		} else if (!strcmp(this_char, MNTOPT_NOGRPID) ||
+			   !strcmp(this_char, MNTOPT_SYSVGROUPS)) {
+			vfsp->vfs_flag &= ~VFS_GRPID;
 		} else if (!strcmp(this_char, MNTOPT_WSYNC)) {
 			args->flags |= XFSMNT_WSYNC;
 		} else if (!strcmp(this_char, MNTOPT_OSYNCISOSYNC)) {
@@ -1876,7 +1858,7 @@ printk("XFS: irixsgid is now a sysctl(2) variable, option is deprecated.\n");
 	return 0;
 }
 
-int
+STATIC int
 xfs_showargs(
 	struct bhv_desc		*bhv,
 	struct seq_file		*m)
@@ -1899,6 +1881,7 @@ xfs_showargs(
 	};
 	struct proc_xfs_info	*xfs_infop;
 	struct xfs_mount	*mp = XFS_BHVTOM(bhv);
+	struct vfs		*vfsp = XFS_MTOVFS(mp);
 
 	for (xfs_infop = xfs_info; xfs_infop->flag; xfs_infop++) {
 		if (mp->m_flags & xfs_infop->flag)
@@ -1935,7 +1918,10 @@ xfs_showargs(
 
 	if (!(mp->m_flags & XFS_MOUNT_32BITINOOPT))
 		seq_printf(m, "," MNTOPT_64BITINODE);
-	
+
+	if (vfsp->vfs_flag & VFS_GRPID)
+		seq_printf(m, "," MNTOPT_GRPID);
+
 	return 0;
 }
 

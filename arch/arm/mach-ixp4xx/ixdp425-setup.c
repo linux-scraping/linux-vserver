@@ -24,11 +24,6 @@
 #include <asm/mach/arch.h>
 #include <asm/mach/flash.h>
 
-void __init ixdp425_map_io(void) 
-{
-	ixp4xx_map_io();
-}
-
 static struct flash_platform_data ixdp425_flash_data = {
 	.map_name	= "cfi_probe",
 	.width		= 2,
@@ -36,7 +31,7 @@ static struct flash_platform_data ixdp425_flash_data = {
 
 static struct resource ixdp425_flash_resource = {
 	.start		= IXDP425_FLASH_BASE,
-	.end		= IXDP425_FLASH_BASE + IXDP425_FLASH_SIZE,
+	.end		= IXDP425_FLASH_BASE + IXDP425_FLASH_SIZE - 1,
 	.flags		= IORESOURCE_MEM,
 };
 
@@ -82,7 +77,7 @@ static struct plat_serial8250_port ixdp425_uart_data[] = {
 		.mapbase	= IXP4XX_UART1_BASE_PHYS,
 		.membase	= (char *)IXP4XX_UART1_BASE_VIRT + REG_OFFSET,
 		.irq		= IRQ_IXP4XX_UART1,
-		.flags		= UPF_BOOT_AUTOCONF,
+		.flags		= UPF_BOOT_AUTOCONF | UPF_SKIP_TEST,
 		.iotype		= UPIO_MEM,
 		.regshift	= 2,
 		.uartclk	= IXP4XX_UART_XTAL,
@@ -91,16 +86,17 @@ static struct plat_serial8250_port ixdp425_uart_data[] = {
 		.mapbase	= IXP4XX_UART2_BASE_PHYS,
 		.membase	= (char *)IXP4XX_UART2_BASE_VIRT + REG_OFFSET,
 		.irq		= IRQ_IXP4XX_UART1,
-		.flags		= UPF_BOOT_AUTOCONF,
+		.flags		= UPF_BOOT_AUTOCONF | UPF_SKIP_TEST,
 		.iotype		= UPIO_MEM,
 		.regshift	= 2,
 		.uartclk	= IXP4XX_UART_XTAL,
-	}
+	},
+	{ },
 };
 
 static struct platform_device ixdp425_uart = {
 	.name			= "serial8250",
-	.id			= 0,
+	.id			= PLAT8250_DEV_PLATFORM,
 	.dev.platform_data	= ixdp425_uart_data,
 	.num_resources		= 2,
 	.resource		= ixdp425_uart_resources
@@ -127,38 +123,47 @@ static void __init ixdp425_init(void)
 	platform_add_devices(ixdp425_devices, ARRAY_SIZE(ixdp425_devices));
 }
 
+#ifdef CONFIG_ARCH_IXDP425
 MACHINE_START(IXDP425, "Intel IXDP425 Development Platform")
-	MAINTAINER("MontaVista Software, Inc.")
-	BOOT_MEM(PHYS_OFFSET, IXP4XX_PERIPHERAL_BASE_PHYS,
-		IXP4XX_PERIPHERAL_BASE_VIRT)
-	MAPIO(ixdp425_map_io)
-	INITIRQ(ixp4xx_init_irq)
+	/* Maintainer: MontaVista Software, Inc. */
+	.phys_ram	= PHYS_OFFSET,
+	.phys_io	= IXP4XX_PERIPHERAL_BASE_PHYS,
+	.io_pg_offst	= ((IXP4XX_PERIPHERAL_BASE_VIRT) >> 18) & 0xfffc,
+	.map_io		= ixp4xx_map_io,
+	.init_irq	= ixp4xx_init_irq,
 	.timer		= &ixp4xx_timer,
-	BOOT_PARAMS(0x0100)
-	INIT_MACHINE(ixdp425_init)
+	.boot_params	= 0x0100,
+	.init_machine	= ixdp425_init,
 MACHINE_END
+#endif
 
+#ifdef CONFIG_MACH_IXDP465
 MACHINE_START(IXDP465, "Intel IXDP465 Development Platform")
-	MAINTAINER("MontaVista Software, Inc.")
-	BOOT_MEM(PHYS_OFFSET, IXP4XX_PERIPHERAL_BASE_PHYS,
-		IXP4XX_PERIPHERAL_BASE_VIRT)
-	MAPIO(ixdp425_map_io)
-	INITIRQ(ixp4xx_init_irq)
+	/* Maintainer: MontaVista Software, Inc. */
+	.phys_ram	= PHYS_OFFSET,
+	.phys_io	= IXP4XX_PERIPHERAL_BASE_PHYS,
+	.io_pg_offst	= ((IXP4XX_PERIPHERAL_BASE_VIRT) >> 18) & 0xfffc,
+	.map_io		= ixp4xx_map_io,
+	.init_irq	= ixp4xx_init_irq,
 	.timer		= &ixp4xx_timer,
-	BOOT_PARAMS(0x0100)
-	INIT_MACHINE(ixdp425_init)
+	.boot_params	= 0x0100,
+	.init_machine	= ixdp425_init,
 MACHINE_END
+#endif
 
+#ifdef CONFIG_ARCH_PRPMC1100
 MACHINE_START(IXCDP1100, "Intel IXCDP1100 Development Platform")
-	MAINTAINER("MontaVista Software, Inc.")
-	BOOT_MEM(PHYS_OFFSET, IXP4XX_PERIPHERAL_BASE_PHYS,
-		IXP4XX_PERIPHERAL_BASE_VIRT)
-	MAPIO(ixdp425_map_io)
-	INITIRQ(ixp4xx_init_irq)
+	/* Maintainer: MontaVista Software, Inc. */
+	.phys_ram	= PHYS_OFFSET,
+	.phys_io	= IXP4XX_PERIPHERAL_BASE_PHYS,
+	.io_pg_offst	= ((IXP4XX_PERIPHERAL_BASE_VIRT) >> 18) & 0xfffc,
+	.map_io		= ixp4xx_map_io,
+	.init_irq	= ixp4xx_init_irq,
 	.timer		= &ixp4xx_timer,
-	BOOT_PARAMS(0x0100)
-	INIT_MACHINE(ixdp425_init)
+	.boot_params	= 0x0100,
+	.init_machine	= ixdp425_init,
 MACHINE_END
+#endif
 
 /*
  * Avila is functionally equivalent to IXDP425 except that it adds
@@ -168,14 +173,15 @@ MACHINE_END
  */
 #ifdef CONFIG_ARCH_AVILA
 MACHINE_START(AVILA, "Gateworks Avila Network Platform")
-	MAINTAINER("Deepak Saxena <dsaxena@plexity.net>")
-	BOOT_MEM(PHYS_OFFSET, IXP4XX_PERIPHERAL_BASE_PHYS,
-		IXP4XX_PERIPHERAL_BASE_VIRT)
-	MAPIO(ixdp425_map_io)
-	INITIRQ(ixp4xx_init_irq)
+	/* Maintainer: Deepak Saxena <dsaxena@plexity.net> */
+	.phys_ram	= PHYS_OFFSET,
+	.phys_io	= IXP4XX_PERIPHERAL_BASE_PHYS,
+	.io_pg_offst	= ((IXP4XX_PERIPHERAL_BASE_VIRT) >> 18) & 0xfffc,
+	.map_io		= ixp4xx_map_io,
+	.init_irq	= ixp4xx_init_irq,
 	.timer		= &ixp4xx_timer,
-	BOOT_PARAMS(0x0100)
-	INIT_MACHINE(ixdp425_init)
+	.boot_params	= 0x0100,
+	.init_machine	= ixdp425_init,
 MACHINE_END
 #endif
 

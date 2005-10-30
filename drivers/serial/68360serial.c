@@ -159,8 +159,8 @@ struct serial_state {
         int     count;
         u8      *iomem_base;
         u16     iomem_reg_shift;
-	unsigned int  close_delay;
-	unsigned int  closing_wait; /* time to wait before closing */
+        unsigned short  close_delay;
+        unsigned short  closing_wait; /* time to wait before closing */
         struct async_icount_24     icount; 
         int     io_type;
         struct async_struct *info;
@@ -244,8 +244,8 @@ typedef struct serial_info {
 	int			line;
 	int			x_char;	/* xon/xoff character */
 	int			close_delay;
-	unsigned int		closing_wait;
-	unsigned int		closing_wait2;
+	unsigned short		closing_wait;
+	unsigned short		closing_wait2;
 	unsigned long		event;
 	unsigned long		last_active;
 	int			blocked_open; /* # of blocked opens */
@@ -1394,14 +1394,13 @@ static void end_break(ser_info_t *info)
 /*
  * This routine sends a break character out the serial port.
  */
-static void send_break(ser_info_t *info, int duration)
+static void send_break(ser_info_t *info, unsigned int duration)
 {
-	set_current_state(TASK_INTERRUPTIBLE);
 #ifdef SERIAL_DEBUG_SEND_BREAK
 	printk("rs_send_break(%d) jiff=%lu...", duration, jiffies);
 #endif
 	begin_break(info);
-	schedule_timeout(duration);
+	msleep_interruptible(duration);
 	end_break(info);
 #ifdef SERIAL_DEBUG_SEND_BREAK
 	printk("done jiffies=%lu\n", jiffies);
@@ -1436,7 +1435,7 @@ static int rs_360_ioctl(struct tty_struct *tty, struct file * file,
 			if (signal_pending(current))
 				return -EINTR;
 			if (!arg) {
-				send_break(info, HZ/4);	/* 1/4 second */
+				send_break(info, 250);	/* 1/4 second */
 				if (signal_pending(current))
 					return -EINTR;
 			}
@@ -1448,7 +1447,7 @@ static int rs_360_ioctl(struct tty_struct *tty, struct file * file,
 			tty_wait_until_sent(tty, 0);
 			if (signal_pending(current))
 				return -EINTR;
-			send_break(info, arg ? arg*(HZ/10) : HZ/4);
+			send_break(info, arg ? arg*100 : 250);
 			if (signal_pending(current))
 				return -EINTR;
 			return 0;
@@ -2475,8 +2474,7 @@ static struct tty_operations rs_360_ops = {
 	.tiocmset = rs_360_tiocmset,
 };
 
-/* int __init rs_360_init(void) */
-int rs_360_init(void)
+static int __init rs_360_init(void)
 {
 	struct serial_state * state;
 	ser_info_t	*info;
@@ -2828,10 +2826,7 @@ int rs_360_init(void)
 
 	return 0;
 }
-
-
-
-
+module_init(rs_360_init);
 
 /* This must always be called before the rs_360_init() function, otherwise
  * it blows away the port control information.

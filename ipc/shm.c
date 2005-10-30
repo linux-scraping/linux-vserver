@@ -23,12 +23,12 @@
 #include <linux/init.h>
 #include <linux/file.h>
 #include <linux/mman.h>
-#include <linux/proc_fs.h>
 #include <linux/shmem_fs.h>
 #include <linux/security.h>
 #include <linux/syscalls.h>
 #include <linux/audit.h>
 #include <linux/ptrace.h>
+#include <linux/seq_file.h>
 #include <linux/vs_limit.h>
 
 #include <asm/uaccess.h>
@@ -52,7 +52,7 @@ static int newseg (key_t key, int shmflg, size_t size);
 static void shm_open (struct vm_area_struct *shmd);
 static void shm_close (struct vm_area_struct *shmd);
 #ifdef CONFIG_PROC_FS
-static int sysvipc_shm_read_proc(char *buffer, char **start, off_t offset, int length, int *eof, void *data);
+static int sysvipc_shm_proc_show(struct seq_file *s, void *it);
 #endif
 
 size_t	shm_ctlmax = SHMMAX;
@@ -64,9 +64,10 @@ static int shm_tot; /* total number of shared memory pages */
 void __init shm_init (void)
 {
 	ipc_init_ids(&shm_ids, 1);
-#ifdef CONFIG_PROC_FS
-	create_proc_read_entry("sysvipc/shm", 0, NULL, sysvipc_shm_read_proc, NULL);
-#endif
+	ipc_init_proc_interface("sysvipc/shm",
+				"       key      shmid perms       size  cpid  lpid nattch   uid   gid  cuid  cgid      atime      dtime      ctime\n",
+				&shm_ids,
+				sysvipc_shm_proc_show);
 }
 
 static inline int shm_checkid(struct shmid_kernel *s, int id)
@@ -177,7 +178,7 @@ static struct vm_operations_struct shm_vm_ops = {
 	.open	= shm_open,	/* callback for a new vm-area open */
 	.close	= shm_close,	/* callback for when the vm-area is released */
 	.nopage	= shmem_nopage,
-#ifdef CONFIG_NUMA
+#if defined(CONFIG_NUMA) && defined(CONFIG_SHMEM)
 	.set_policy = shmem_set_policy,
 	.get_policy = shmem_get_policy,
 #endif
@@ -880,67 +881,35 @@ asmlinkage long sys_shmdt(char __user *shmaddr)
 }
 
 #ifdef CONFIG_PROC_FS
-static int sysvipc_shm_read_proc(char *buffer, char **start, off_t offset, int length, int *eof, void *data)
+static int sysvipc_shm_proc_show(struct seq_file *s, void *it)
 {
-	off_t pos = 0;
-	off_t begin = 0;
-	int i, len = 0;
+	struct shmid_kernel *shp = it;
+	char *format;
 
-	down(&shm_ids.sem);
-	len += sprintf(buffer, "       key      shmid perms       size  cpid  lpid nattch   uid   gid  cuid  cgid      atime      dtime      ctime\n");
-
-	for(i = 0; i <= shm_ids.max_id; i++) {
-		struct shmid_kernel* shp;
-
-		shp = shm_lock(i);
-		if (shp) {
 #define SMALL_STRING "%10d %10d  %4o %10u %5u %5u  %5d %5u %5u %5u %5u %10lu %10lu %10lu\n"
 #define BIG_STRING   "%10d %10d  %4o %21u %5u %5u  %5d %5u %5u %5u %5u %10lu %10lu %10lu\n"
-			char *format;
 
-			if (!vx_check(shp->shm_perm.xid, VX_IDENT)) {
-				shm_unlock(shp);
-				continue;
-			}
-			if (sizeof(size_t) <= sizeof(int))
-				format = SMALL_STRING;
-			else
-				format = BIG_STRING;
-			len += sprintf(buffer + len, format,
-				shp->shm_perm.key,
-				shm_buildid(i, shp->shm_perm.seq),
-				shp->shm_flags,
-				shp->shm_segsz,
-				shp->shm_cprid,
-				shp->shm_lprid,
-				is_file_hugepages(shp->shm_file) ? (file_count(shp->shm_file) - 1) : shp->shm_nattch,
-				shp->shm_perm.uid,
-				shp->shm_perm.gid,
-				shp->shm_perm.cuid,
-				shp->shm_perm.cgid,
-				shp->shm_atim,
-				shp->shm_dtim,
-				shp->shm_ctim);
-			shm_unlock(shp);
+	if (!vx_check(shp->shm_perm.xid, VX_IDENT))
+		return 0;
 
-			pos += len;
-			if(pos < offset) {
-				len = 0;
-				begin = pos;
-			}
-			if(pos > offset + length)
-				goto done;
-		}
-	}
-	*eof = 1;
-done:
-	up(&shm_ids.sem);
-	*start = buffer + (offset - begin);
-	len -= (offset - begin);
-	if(len > length)
-		len = length;
-	if(len < 0)
-		len = 0;
-	return len;
+	if (sizeof(size_t) <= sizeof(int))
+		format = SMALL_STRING;
+	else
+		format = BIG_STRING;
+	return seq_printf(s, format,
+			  shp->shm_perm.key,
+			  shp->id,
+			  shp->shm_flags,
+			  shp->shm_segsz,
+			  shp->shm_cprid,
+			  shp->shm_lprid,
+			  is_file_hugepages(shp->shm_file) ? (file_count(shp->shm_file) - 1) : shp->shm_nattch,
+			  shp->shm_perm.uid,
+			  shp->shm_perm.gid,
+			  shp->shm_perm.cuid,
+			  shp->shm_perm.cgid,
+			  shp->shm_atim,
+			  shp->shm_dtim,
+			  shp->shm_ctim);
 }
 #endif

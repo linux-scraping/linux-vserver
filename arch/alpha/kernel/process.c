@@ -127,6 +127,10 @@ common_shutdown_1(void *generic_ptr)
 	/* If booted from SRM, reset some of the original environment. */
 	if (alpha_using_srm) {
 #ifdef CONFIG_DUMMY_CONSOLE
+		/* If we've gotten here after SysRq-b, leave interrupt
+		   context before taking over the console. */
+		if (in_interrupt())
+			irq_exit();
 		/* This has the effect of resetting the VGA video origin.  */
 		take_over_console(&dummy_con, 0, MAX_NR_CONSOLES-1, 1);
 #endif
@@ -165,7 +169,6 @@ machine_restart(char *restart_cmd)
 	common_shutdown(LINUX_REBOOT_CMD_RESTART, restart_cmd);
 }
 
-EXPORT_SYMBOL(machine_restart);
 
 void
 machine_halt(void)
@@ -173,7 +176,6 @@ machine_halt(void)
 	common_shutdown(LINUX_REBOOT_CMD_HALT, NULL);
 }
 
-EXPORT_SYMBOL(machine_halt);
 
 void
 machine_power_off(void)
@@ -181,7 +183,6 @@ machine_power_off(void)
 	common_shutdown(LINUX_REBOOT_CMD_POWER_OFF, NULL);
 }
 
-EXPORT_SYMBOL(machine_power_off);
 
 /* Used by sysrq-p, among others.  I don't believe r9-r15 are ever
    saved in the context it's used.  */

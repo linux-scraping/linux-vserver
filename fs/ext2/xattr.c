@@ -651,11 +651,11 @@ ext2_xattr_set2(struct inode *inode, struct buffer_head *old_bh,
 				ea_bdebug(new_bh, "reusing block");
 
 				error = -ENOSPC;
-				if (DLIMIT_ALLOC_BLOCK(sb, inode->i_xid, 1))
+				if (DLIMIT_ALLOC_BLOCK(inode, 1))
 					goto cleanup;
 				error = -EDQUOT;
 				if (DQUOT_ALLOC_BLOCK(inode, 1)) {
-					DLIMIT_FREE_BLOCK(sb, inode->i_xid, 1);
+					DLIMIT_FREE_BLOCK(inode, 1);
 					unlock_buffer(new_bh);
 					goto cleanup;
 				}
@@ -749,7 +749,7 @@ ext2_xattr_set2(struct inode *inode, struct buffer_head *old_bh,
 				le32_to_cpu(HDR(old_bh)->h_refcount) - 1);
 			if (ce)
 				mb_cache_entry_release(ce);
-			DLIMIT_FREE_BLOCK(sb, inode->i_xid, 1);
+			DLIMIT_FREE_BLOCK(inode, 1);
 			DQUOT_FREE_BLOCK(inode, 1);
 			mark_buffer_dirty(old_bh);
 			ea_bdebug(old_bh, "refcount now=%d",
@@ -810,7 +810,7 @@ ext2_xattr_delete_inode(struct inode *inode)
 		mark_buffer_dirty(bh);
 		if (IS_SYNC(inode))
 			sync_dirty_buffer(bh);
-		DLIMIT_FREE_BLOCK(inode->i_sb, inode->i_xid, 1);
+		DLIMIT_FREE_BLOCK(inode, 1);
 		DQUOT_FREE_BLOCK(inode, 1);
 	}
 	ea_bdebug(bh, "refcount now=%d", le32_to_cpu(HDR(bh)->h_refcount) - 1);
@@ -830,7 +830,7 @@ cleanup:
 void
 ext2_xattr_put_super(struct super_block *sb)
 {
-	mb_cache_shrink(ext2_xattr_cache, sb->s_bdev);
+	mb_cache_shrink(sb->s_bdev);
 }
 
 

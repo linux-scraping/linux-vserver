@@ -26,7 +26,7 @@
 #include <asm/page.h>
 #include <asm/cache.h>
 #include <asm/ppc_asm.h>
-#include <asm/offsets.h>
+#include <asm/asm-offsets.h>
 #include <asm/cputable.h>
 
 	.text
@@ -183,7 +183,7 @@ PPC64_CACHES:
  *   flush all bytes from start through stop-1 inclusive
  */
 
-_GLOBAL(__flush_icache_range)
+_KPROBE(__flush_icache_range)
 
 /*
  * Flush the data cache to memory 
@@ -223,7 +223,7 @@ _GLOBAL(__flush_icache_range)
 	bdnz	2b
 	isync
 	blr
-	
+	.previous .text
 /*
  * Like above, but only do the D-cache.
  *
@@ -680,6 +680,275 @@ _GLOBAL(kernel_thread)
 	ld	r30,-16(r1)
 	blr
 
+/*
+ * disable_kernel_fp()
+ * Disable the FPU.
+ */
+_GLOBAL(disable_kernel_fp)
+	mfmsr	r3
+	rldicl	r0,r3,(63-MSR_FP_LG),1
+	rldicl	r3,r0,(MSR_FP_LG+1),0
+	mtmsrd	r3			/* disable use of fpu now */
+	isync
+	blr
+
+/*
+ * giveup_fpu(tsk)
+ * Disable FP for the task given as the argument,
+ * and save the floating-point registers in its thread_struct.
+ * Enables the FPU for use in the kernel on return.
+ */
+_GLOBAL(giveup_fpu)
+	mfmsr	r5
+	ori	r5,r5,MSR_FP
+	mtmsrd	r5			/* enable use of fpu now */
+	isync
+	cmpdi	0,r3,0
+	beqlr-				/* if no previous owner, done */
+	addi	r3,r3,THREAD		/* want THREAD of task */
+	ld	r5,PT_REGS(r3)
+	cmpdi	0,r5,0
+	SAVE_32FPRS(0, r3)
+	mffs	fr0
+	stfd	fr0,THREAD_FPSCR(r3)
+	beq	1f
+	ld	r4,_MSR-STACK_FRAME_OVERHEAD(r5)
+	li	r3,MSR_FP|MSR_FE0|MSR_FE1
+	andc	r4,r4,r3		/* disable FP for previous task */
+	std	r4,_MSR-STACK_FRAME_OVERHEAD(r5)
+1:
+#ifndef CONFIG_SMP
+	li	r5,0
+	ld	r4,last_task_used_math@got(r2)
+	std	r5,0(r4)
+#endif /* CONFIG_SMP */
+	blr
+
+#ifdef CONFIG_ALTIVEC
+
+#if 0 /* this has no callers for now */
+/*
+ * disable_kernel_altivec()
+ * Disable the VMX.
+ */
+_GLOBAL(disable_kernel_altivec)
+	mfmsr	r3
+	rldicl	r0,r3,(63-MSR_VEC_LG),1
+	rldicl	r3,r0,(MSR_VEC_LG+1),0
+	mtmsrd	r3			/* disable use of VMX now */
+	isync
+	blr
+#endif /* 0 */
+
+/*
+ * giveup_altivec(tsk)
+ * Disable VMX for the task given as the argument,
+ * and save the vector registers in its thread_struct.
+ * Enables the VMX for use in the kernel on return.
+ */
+_GLOBAL(giveup_altivec)
+	mfmsr	r5
+	oris	r5,r5,MSR_VEC@h
+	mtmsrd	r5			/* enable use of VMX now */
+	isync
+	cmpdi	0,r3,0
+	beqlr-				/* if no previous owner, done */
+	addi	r3,r3,THREAD		/* want THREAD of task */
+	ld	r5,PT_REGS(r3)
+	cmpdi	0,r5,0
+	SAVE_32VRS(0,r4,r3)
+	mfvscr	vr0
+	li	r4,THREAD_VSCR
+	stvx	vr0,r4,r3
+	beq	1f
+	ld	r4,_MSR-STACK_FRAME_OVERHEAD(r5)
+	lis	r3,MSR_VEC@h
+	andc	r4,r4,r3		/* disable FP for previous task */
+	std	r4,_MSR-STACK_FRAME_OVERHEAD(r5)
+1:
+#ifndef CONFIG_SMP
+	li	r5,0
+	ld	r4,last_task_used_altivec@got(r2)
+	std	r5,0(r4)
+#endif /* CONFIG_SMP */
+	blr
+
+#endif /* CONFIG_ALTIVEC */
+
+_GLOBAL(__setup_cpu_power3)
+	blr
+
+/* kexec_wait(phys_cpu)
+ *
+ * wait for the flag to change, indicating this kernel is going away but
+ * the slave code for the next one is at addresses 0 to 100.
+ *
+ * This is used by all slaves.
+ *
+ * Physical (hardware) cpu id should be in r3.
+ */
+_GLOBAL(kexec_wait)
+	bl	1f
+1:	mflr	r5
+	addi	r5,r5,kexec_flag-1b
+
+99:	HMT_LOW
+#ifdef CONFIG_KEXEC		/* use no memory without kexec */
+	lwz	r4,0(r5)
+	cmpwi	0,r4,0
+	bnea	0x60
+#endif
+	b	99b
+
+/* this can be in text because we won't change it until we are
+ * running in real anyways
+ */
+kexec_flag:
+	.long	0
+
+
+#ifdef CONFIG_KEXEC
+
+/* kexec_smp_wait(void)
+ *
+ * call with interrupts off
+ * note: this is a terminal routine, it does not save lr
+ *
+ * get phys id from paca
+ * set paca id to -1 to say we got here
+ * switch to real mode
+ * join other cpus in kexec_wait(phys_id)
+ */
+_GLOBAL(kexec_smp_wait)
+	lhz	r3,PACAHWCPUID(r13)
+	li	r4,-1
+	sth	r4,PACAHWCPUID(r13)	/* let others know we left */
+	bl	real_mode
+	b	.kexec_wait
+
+/*
+ * switch to real mode (turn mmu off)
+ * we use the early kernel trick that the hardware ignores bits
+ * 0 and 1 (big endian) of the effective address in real mode
+ *
+ * don't overwrite r3 here, it is live for kexec_wait above.
+ */
+real_mode:	/* assume normal blr return */
+1:	li	r9,MSR_RI
+	li	r10,MSR_DR|MSR_IR
+	mflr	r11		/* return address to SRR0 */
+	mfmsr	r12
+	andc	r9,r12,r9
+	andc	r10,r12,r10
+
+	mtmsrd	r9,1
+	mtspr	SPRN_SRR1,r10
+	mtspr	SPRN_SRR0,r11
+	rfid
+
+
+/*
+ * kexec_sequence(newstack, start, image, control, clear_all())
+ *
+ * does the grungy work with stack switching and real mode switches
+ * also does simple calls to other code
+ */
+
+_GLOBAL(kexec_sequence)
+	mflr	r0
+	std	r0,16(r1)
+
+	/* switch stacks to newstack -- &kexec_stack.stack */
+	stdu	r1,THREAD_SIZE-112(r3)
+	mr	r1,r3
+
+	li	r0,0
+	std	r0,16(r1)
+
+	/* save regs for local vars on new stack.
+	 * yes, we won't go back, but ...
+	 */
+	std	r31,-8(r1)
+	std	r30,-16(r1)
+	std	r29,-24(r1)
+	std	r28,-32(r1)
+	std	r27,-40(r1)
+	std	r26,-48(r1)
+	std	r25,-56(r1)
+
+	stdu	r1,-112-64(r1)
+
+	/* save args into preserved regs */
+	mr	r31,r3			/* newstack (both) */
+	mr	r30,r4			/* start (real) */
+	mr	r29,r5			/* image (virt) */
+	mr	r28,r6			/* control, unused */
+	mr	r27,r7			/* clear_all() fn desc */
+	mr	r26,r8			/* spare */
+	lhz	r25,PACAHWCPUID(r13)	/* get our phys cpu from paca */
+
+	/* disable interrupts, we are overwriting kernel data next */
+	mfmsr	r3
+	rlwinm	r3,r3,0,17,15
+	mtmsrd	r3,1
+
+	/* copy dest pages, flush whole dest image */
+	mr	r3,r29
+	bl	.kexec_copy_flush	/* (image) */
+
+	/* turn off mmu */
+	bl	real_mode
+
+	/* clear out hardware hash page table and tlb */
+	ld	r5,0(r27)		/* deref function descriptor */
+	mtctr	r5
+	bctrl				/* ppc_md.hash_clear_all(void); */
+
+/*
+ *   kexec image calling is:
+ *      the first 0x100 bytes of the entry point are copied to 0
+ *
+ *      all slaves branch to slave = 0x60 (absolute)
+ *              slave(phys_cpu_id);
+ *
+ *      master goes to start = entry point
+ *              start(phys_cpu_id, start, 0);
+ *
+ *
+ *   a wrapper is needed to call existing kernels, here is an approximate
+ *   description of one method:
+ *
+ * v2: (2.6.10)
+ *   start will be near the boot_block (maybe 0x100 bytes before it?)
+ *   it will have a 0x60, which will b to boot_block, where it will wait
+ *   and 0 will store phys into struct boot-block and load r3 from there,
+ *   copy kernel 0-0x100 and tell slaves to back down to 0x60 again
+ *
+ * v1: (2.6.9)
+ *    boot block will have all cpus scanning device tree to see if they
+ *    are the boot cpu ?????
+ *    other device tree differences (prop sizes, va vs pa, etc)...
+ */
+
+	/* copy  0x100 bytes starting at start to 0 */
+	li	r3,0
+	mr	r4,r30
+	li	r5,0x100
+	li	r6,0
+	bl	.copy_and_flush	/* (dest, src, copy limit, start offset) */
+1:	/* assume normal blr return */
+
+	/* release other cpus to the new kernel secondary start at 0x60 */
+	mflr	r5
+	li	r6,1
+	stw	r6,kexec_flag-1b(5)
+	mr	r3,r25	# my phys cpu
+	mr	r4,r30	# start, aka phys mem offset
+	mtlr	4
+	li	r5,0
+	blr	/* image->start(physid, image->start, 0); */
+#endif /* CONFIG_KEXEC */
+
 /* Why isn't this a) automatic, b) written in 'C'? */	
 	.balign 8
 _GLOBAL(sys_call_table32)
@@ -688,7 +957,7 @@ _GLOBAL(sys_call_table32)
 	.llong .ppc_fork
 	.llong .sys_read
 	.llong .sys_write
-	.llong .sys32_open		/* 5 */
+	.llong .compat_sys_open		/* 5 */
 	.llong .sys_close
 	.llong .sys32_waitpid
 	.llong .sys32_creat
@@ -951,11 +1220,16 @@ _GLOBAL(sys_call_table32)
 	.llong .compat_sys_mq_timedreceive /* 265 */
 	.llong .compat_sys_mq_notify
 	.llong .compat_sys_mq_getsetattr
-	.llong .sys_ni_syscall		/* 268 reserved for sys_kexec_load */
+	.llong .compat_sys_kexec_load
 	.llong .sys32_add_key
-	.llong .sys32_request_key
+	.llong .sys32_request_key	/* 270 */
 	.llong .compat_sys_keyctl
 	.llong .compat_sys_waitid
+	.llong .sys32_ioprio_set
+	.llong .sys32_ioprio_get
+	.llong .sys_inotify_init	/* 275 */
+	.llong .sys_inotify_add_watch
+	.llong .sys_inotify_rm_watch
 
 	.balign 8
 _GLOBAL(sys_call_table)
@@ -1157,9 +1431,9 @@ _GLOBAL(sys_call_table)
 	.llong .sys_ni_syscall		/* 195 - 32bit only stat64 */
 	.llong .sys_ni_syscall		/* 32bit only lstat64 */
 	.llong .sys_ni_syscall		/* 32bit only fstat64 */
-	.llong .sys_ni_syscall		/* 32bit only pciconfig_read */
-	.llong .sys_ni_syscall		/* 32bit only pciconfig_write */
-	.llong .sys_ni_syscall		/* 32bit only pciconfig_iobase */
+	.llong .sys_pciconfig_read
+	.llong .sys_pciconfig_write
+	.llong .sys_pciconfig_iobase	/* 200 - pciconfig_iobase */
 	.llong .sys_ni_syscall		/* reserved for MacOnLinux */
 	.llong .sys_getdents64
 	.llong .sys_pivot_root
@@ -1227,8 +1501,13 @@ _GLOBAL(sys_call_table)
 	.llong .sys_mq_timedreceive	/* 265 */
 	.llong .sys_mq_notify
 	.llong .sys_mq_getsetattr
-	.llong .sys_ni_syscall		/* 268 reserved for sys_kexec_load */
+	.llong .sys_kexec_load
 	.llong .sys_add_key
 	.llong .sys_request_key		/* 270 */
 	.llong .sys_keyctl
 	.llong .sys_waitid
+	.llong .sys_ioprio_set
+	.llong .sys_ioprio_get
+	.llong .sys_inotify_init	/* 275 */
+	.llong .sys_inotify_add_watch
+	.llong .sys_inotify_rm_watch

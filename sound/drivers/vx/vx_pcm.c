@@ -473,7 +473,7 @@ static int vx_alloc_pipe(vx_core_t *chip, int capture,
 		return err;
 
 	/* initialize the pipe record */
-	pipe = kcalloc(1, sizeof(*pipe), GFP_KERNEL);
+	pipe = kzalloc(sizeof(*pipe), GFP_KERNEL);
 	if (! pipe) {
 		/* release the pipe */
 		vx_init_rmh(&rmh, CMD_FREE_PIPE);
@@ -549,8 +549,8 @@ static int vx_stop_stream(vx_core_t *chip, vx_pipe_t *pipe)
 
 static snd_pcm_hardware_t vx_pcm_playback_hw = {
 	.info =			(SNDRV_PCM_INFO_MMAP | SNDRV_PCM_INFO_INTERLEAVED |
-				 SNDRV_PCM_INFO_PAUSE | SNDRV_PCM_INFO_MMAP_VALID |
-				 SNDRV_PCM_INFO_RESUME),
+				 SNDRV_PCM_INFO_PAUSE | SNDRV_PCM_INFO_MMAP_VALID /*|*/
+				 /*SNDRV_PCM_INFO_RESUME*/),
 	.formats =		/*SNDRV_PCM_FMTBIT_U8 |*/ SNDRV_PCM_FMTBIT_S16_LE | SNDRV_PCM_FMTBIT_S24_3LE,
 	.rates =		SNDRV_PCM_RATE_CONTINUOUS | SNDRV_PCM_RATE_8000_48000,
 	.rate_min =		5000,
@@ -949,8 +949,8 @@ static snd_pcm_ops_t vx_pcm_playback_ops = {
 
 static snd_pcm_hardware_t vx_pcm_capture_hw = {
 	.info =			(SNDRV_PCM_INFO_MMAP | SNDRV_PCM_INFO_INTERLEAVED |
-				 SNDRV_PCM_INFO_PAUSE | SNDRV_PCM_INFO_MMAP_VALID |
-				 SNDRV_PCM_INFO_RESUME),
+				 SNDRV_PCM_INFO_PAUSE | SNDRV_PCM_INFO_MMAP_VALID /*|*/
+				 /*SNDRV_PCM_INFO_RESUME*/),
 	.formats =		/*SNDRV_PCM_FMTBIT_U8 |*/ SNDRV_PCM_FMTBIT_S16_LE | SNDRV_PCM_FMTBIT_S24_3LE,
 	.rates =		SNDRV_PCM_RATE_CONTINUOUS | SNDRV_PCM_RATE_8000_48000,
 	.rate_min =		5000,
@@ -1264,14 +1264,10 @@ static void snd_vx_pcm_free(snd_pcm_t *pcm)
 {
 	vx_core_t *chip = pcm->private_data;
 	chip->pcm[pcm->device] = NULL;
-	if (chip->playback_pipes) {
-		kfree(chip->playback_pipes);
-		chip->playback_pipes = NULL;
-	}
-	if (chip->capture_pipes) {
-		kfree(chip->capture_pipes);
-		chip->capture_pipes = NULL;
-	}
+	kfree(chip->playback_pipes);
+	chip->playback_pipes = NULL;
+	kfree(chip->capture_pipes);
+	chip->capture_pipes = NULL;
 }
 
 /*

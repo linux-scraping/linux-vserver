@@ -29,9 +29,7 @@
  * stack+task struct.  Use the same method as 'current' uses to
  * reach them.
  */
-register unsigned long *user_registers asm("sl");
-
-#define GET_USERREG() (user_registers)
+#define GET_USERREG() ((struct pt_regs *)(THREAD_START_SP + (unsigned long)current_thread_info()) - 1)
 
 #include <linux/config.h>
 #include <linux/thread_info.h>
@@ -39,6 +37,13 @@ register unsigned long *user_registers asm("sl");
 /* includes */
 #include "fpsr.h"		/* FP control and status register definitions */
 #include "milieu.h"
+
+struct roundingData {
+    int8 mode;
+    int8 precision;
+    signed char exception;
+};
+
 #include "softfloat.h"
 
 #define		typeNone		0x00
@@ -86,8 +91,28 @@ typedef struct tagFPA11 {
 				   initialised. */
 } FPA11;
 
-extern void SetRoundingMode(const unsigned int);
-extern void SetRoundingPrecision(const unsigned int);
+extern int8 SetRoundingMode(const unsigned int);
+extern int8 SetRoundingPrecision(const unsigned int);
 extern void nwfpe_init_fpa(union fp_state *fp);
+
+extern unsigned int EmulateAll(unsigned int opcode);
+
+extern unsigned int EmulateCPDT(const unsigned int opcode);
+extern unsigned int EmulateCPDO(const unsigned int opcode);
+extern unsigned int EmulateCPRT(const unsigned int opcode);
+
+/* fpa11_cpdt.c */
+extern unsigned int PerformLDF(const unsigned int opcode);
+extern unsigned int PerformSTF(const unsigned int opcode);
+extern unsigned int PerformLFM(const unsigned int opcode);
+extern unsigned int PerformSFM(const unsigned int opcode);
+
+/* single_cpdo.c */
+
+extern unsigned int SingleCPDO(struct roundingData *roundData,
+			       const unsigned int opcode, FPREG * rFd);
+/* double_cpdo.c */
+extern unsigned int DoubleCPDO(struct roundingData *roundData,
+			       const unsigned int opcode, FPREG * rFd);
 
 #endif

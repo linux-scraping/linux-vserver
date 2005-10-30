@@ -69,7 +69,6 @@ static __init void do_uml_initcalls(void)
 
 static void last_ditch_exit(int sig)
 {
-        kmalloc_ok = 0;
 	signal(SIGINT, SIG_DFL);
 	signal(SIGTERM, SIG_DFL);
 	signal(SIGHUP, SIG_DFL);
@@ -98,7 +97,7 @@ int main(int argc, char **argv, char **envp)
 		exit(1);
 	}
 
-#ifdef UML_CONFIG_MODE_TT
+#ifdef UML_CONFIG_CMDLINE_ON_HOST
 	/* Allocate memory for thread command lines */
 	if(argc < 2 || strlen(argv[1]) < THREAD_NAME_LEN - 1){
 

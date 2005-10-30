@@ -96,7 +96,7 @@ static void __init kmap_init(void)
 	kmap_prot = PAGE_KERNEL;
 }
 
-#ifdef CONFIG_MIPS64
+#ifdef CONFIG_64BIT
 static void __init fixrange_init(unsigned long start, unsigned long end,
 	pgd_t *pgd_base)
 {
@@ -125,10 +125,10 @@ static void __init fixrange_init(unsigned long start, unsigned long end,
 		j = 0;
 	}
 }
-#endif /* CONFIG_MIPS64 */
+#endif /* CONFIG_64BIT */
 #endif /* CONFIG_HIGHMEM */
 
-#ifndef CONFIG_DISCONTIGMEM
+#ifndef CONFIG_NEED_MULTIPLE_NODES
 extern void pagetable_init(void);
 
 void __init paging_init(void)
@@ -232,7 +232,6 @@ void __init mem_init(void)
 #ifdef CONFIG_LIMITED_DMA
 		set_page_address(page, lowmem_page_address(page));
 #endif
-		set_bit(PG_highmem, &page->flags);
 		set_page_count(page, 1);
 		__free_page(page);
 		totalhigh_pages++;
@@ -254,12 +253,12 @@ void __init mem_init(void)
 	       initsize >> 10,
 	       (unsigned long) (totalhigh_pages << (PAGE_SHIFT-10)));
 }
-#endif /* !CONFIG_DISCONTIGMEM */
+#endif /* !CONFIG_NEED_MULTIPLE_NODES */
 
 #ifdef CONFIG_BLK_DEV_INITRD
 void free_initrd_mem(unsigned long start, unsigned long end)
 {
-#ifdef CONFIG_MIPS64
+#ifdef CONFIG_64BIT
 	/* Switch from KSEG0 to XKPHYS addresses */
 	start = (unsigned long)phys_to_virt(CPHYSADDR(start));
 	end = (unsigned long)phys_to_virt(CPHYSADDR(end));
@@ -287,7 +286,7 @@ void free_initmem(void)
 
 	addr = (unsigned long) &__init_begin;
 	while (addr < (unsigned long) &__init_end) {
-#ifdef CONFIG_MIPS64
+#ifdef CONFIG_64BIT
 		page = PAGE_OFFSET | CPHYSADDR(addr);
 #else
 		page = addr;

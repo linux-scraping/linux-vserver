@@ -65,6 +65,16 @@ static int generic_probe (struct device *dev)
 }
 static int generic_remove (struct device *dev)
 {
+	struct usb_device *udev = to_usb_device(dev);
+
+	/* if this is only an unbind, not a physical disconnect, then
+	 * unconfigure the device */
+	if (udev->state == USB_STATE_CONFIGURED)
+		usb_set_configuration(udev, 0);
+
+	/* in case the call failed or the device was suspended */
+	if (udev->state >= USB_STATE_CONFIGURED)
+		usb_disable_device(udev, 0);
 	return 0;
 }
 
@@ -293,7 +303,7 @@ int usb_driver_claim_interface(struct usb_driver *driver,
 	/* if interface was already added, bind now; else let
 	 * the future device_add() bind it, bypassing probe()
 	 */
-	if (!list_empty (&dev->bus_list))
+	if (device_is_registered(dev))
 		device_bind_driver(dev);
 
 	return 0;
@@ -322,9 +332,15 @@ void usb_driver_release_interface(struct usb_driver *driver,
 	if (!dev->driver || dev->driver != &driver->driver)
 		return;
 
-	/* don't disconnect from disconnect(), or before dev_add() */
-	if (!list_empty (&dev->driver_list) && !list_empty (&dev->bus_list))
+	/* don't release from within disconnect() */
+	if (iface->condition != USB_INTERFACE_BOUND)
+		return;
+
+	/* don't release if the interface hasn't been added yet */
+	if (device_is_registered(dev)) {
+		iface->condition = USB_INTERFACE_UNBINDING;
 		device_release_driver(dev);
+	}
 
 	dev->driver = NULL;
 	usb_set_intfdata(iface, NULL);
@@ -462,6 +478,25 @@ usb_match_id(struct usb_interface *interface, const struct usb_device_id *id)
 	return NULL;
 }
 
+
+static int __find_interface(struct device * dev, void * data)
+{
+	struct usb_interface ** ret = (struct usb_interface **)data;
+	struct usb_interface * intf = *ret;
+	int *minor = (int *)data;
+
+	/* can't look at usb devices, only interfaces */
+	if (dev->driver == &usb_generic_driver)
+		return 0;
+
+	intf = to_usb_interface(dev);
+	if (intf->minor != -1 && intf->minor == *minor) {
+		*ret = intf;
+		return 1;
+	}
+	return 0;
+}
+
 /**
  * usb_find_interface - find usb_interface pointer for driver and device
  * @drv: the driver whose current configuration is considered
@@ -473,26 +508,12 @@ usb_match_id(struct usb_interface *interface, const struct usb_device_id *id)
  */
 struct usb_interface *usb_find_interface(struct usb_driver *drv, int minor)
 {
-	struct list_head *entry;
-	struct device *dev;
-	struct usb_interface *intf;
+	struct usb_interface *intf = (struct usb_interface *)(long)minor;
+	int ret;
 
-	list_for_each(entry, &drv->driver.devices) {
-		dev = container_of(entry, struct device, driver_list);
+	ret = driver_for_each_device(&drv->driver, NULL, &intf, __find_interface);
 
-		/* can't look at usb devices, only interfaces */
-		if (dev->driver == &usb_generic_driver)
-			continue;
-
-		intf = to_usb_interface(dev);
-		if (intf->minor == -1)
-			continue;
-		if (intf->minor == minor)
-			return intf;
-	}
-
-	/* no device found that matches */
-	return NULL;	
+	return ret ? intf : NULL;
 }
 
 static int usb_device_match (struct device *dev, struct device_driver *drv)
@@ -901,7 +922,7 @@ int usb_trylock_device(struct usb_device *udev)
  * is neither BINDING nor BOUND.  Rather than sleeping to wait for the
  * lock, the routine polls repeatedly.  This is to prevent deadlock with
  * disconnect; in some drivers (such as usb-storage) the disconnect()
- * callback will block waiting for a device reset to complete.
+ * or suspend() method will block waiting for a device reset to complete.
  *
  * Returns a negative error code for failure, otherwise 1 or 0 to indicate
  * that the device will or will not have to be unlocked.  (0 can be
@@ -911,6 +932,8 @@ int usb_trylock_device(struct usb_device *udev)
 int usb_lock_device_for_reset(struct usb_device *udev,
 		struct usb_interface *iface)
 {
+	unsigned long jiffies_expire = jiffies + HZ;
+
 	if (udev->state == USB_STATE_NOTATTACHED)
 		return -ENODEV;
 	if (udev->state == USB_STATE_SUSPENDED)
@@ -927,6 +950,12 @@ int usb_lock_device_for_reset(struct usb_device *udev,
 	}
 
 	while (!usb_trylock_device(udev)) {
+
+		/* If we can't acquire the lock after waiting one second,
+		 * we're probably deadlocked */
+		if (time_after(jiffies, jiffies_expire))
+			return -EBUSY;
+
 		msleep(15);
 		if (udev->state == USB_STATE_NOTATTACHED)
 			return -ENODEV;
@@ -1118,7 +1147,7 @@ int __usb_get_extra_descriptor(char *buffer, unsigned size,
 void *usb_buffer_alloc (
 	struct usb_device *dev,
 	size_t size,
-	int mem_flags,
+	unsigned mem_flags,
 	dma_addr_t *dma
 )
 {
@@ -1389,7 +1418,7 @@ static int usb_generic_suspend(struct device *dev, pm_message_t message)
 	driver = to_usb_driver(dev->driver);
 
 	/* there's only one USB suspend state */
-	if (intf->dev.power.power_state)
+	if (intf->dev.power.power_state.event)
 		return 0;
 
 	if (driver->suspend)
@@ -1467,13 +1496,18 @@ static int __init usb_init(void)
 	retval = usb_major_init();
 	if (retval)
 		goto major_init_failed;
+	retval = usb_register(&usbfs_driver);
+	if (retval)
+		goto driver_register_failed;
+	retval = usbdev_init();
+	if (retval)
+		goto usbdevice_init_failed;
 	retval = usbfs_init();
 	if (retval)
 		goto fs_init_failed;
 	retval = usb_hub_init();
 	if (retval)
 		goto hub_init_failed;
-
 	retval = driver_register(&usb_generic_driver);
 	if (!retval)
 		goto out;
@@ -1482,7 +1516,11 @@ static int __init usb_init(void)
 hub_init_failed:
 	usbfs_cleanup();
 fs_init_failed:
-	usb_major_cleanup();	
+	usbdev_cleanup();
+usbdevice_init_failed:
+	usb_deregister(&usbfs_driver);
+driver_register_failed:
+	usb_major_cleanup();
 major_init_failed:
 	usb_host_cleanup();
 host_init_failed:
@@ -1503,6 +1541,8 @@ static void __exit usb_exit(void)
 	driver_unregister(&usb_generic_driver);
 	usb_major_cleanup();
 	usbfs_cleanup();
+	usb_deregister(&usbfs_driver);
+	usbdev_cleanup();
 	usb_hub_cleanup();
 	usb_host_cleanup();
 	bus_unregister(&usb_bus_type);
@@ -1520,6 +1560,9 @@ module_exit(usb_exit);
 EXPORT_SYMBOL(usb_register);
 EXPORT_SYMBOL(usb_deregister);
 EXPORT_SYMBOL(usb_disabled);
+
+EXPORT_SYMBOL_GPL(usb_get_intf);
+EXPORT_SYMBOL_GPL(usb_put_intf);
 
 EXPORT_SYMBOL(usb_alloc_dev);
 EXPORT_SYMBOL(usb_put_dev);

@@ -18,12 +18,14 @@
 #include <linux/delay.h>
 #include <linux/time.h>
 #include <linux/errno.h>
+#include <linux/jiffies.h>
 #include <asm/semaphore.h>
 
 #include "dvb_frontend.h"
 #include "dmxdev.h"
 #include "dvb_demux.h"
 #include "dvb_net.h"
+#include "ves1820.h"
 #include "cx22700.h"
 #include "tda1004x.h"
 #include "stv0299.h"
@@ -569,7 +571,8 @@ static void ttusb_handle_sec_data(struct ttusb_channel *channel,
 				  const u8 * data, int len);
 #endif
 
-static int numpkt = 0, lastj, numts, numstuff, numsec, numinvalid;
+static int numpkt = 0, numts, numstuff, numsec, numinvalid;
+static unsigned long lastj;
 
 static void ttusb_process_muxpack(struct ttusb *ttusb, const u8 * muxpack,
 			   int len)
@@ -778,7 +781,7 @@ static void ttusb_iso_irq(struct urb *urb, struct pt_regs *ptregs)
 			u8 *data;
 			int len;
 			numpkt++;
-			if ((jiffies - lastj) >= HZ) {
+			if (time_after_eq(jiffies, lastj + HZ)) {
 #if DEBUG > 2
 				printk
 				    ("frames/s: %d (ts: %d, stuff %d, sec: %d, invalid: %d, all: %d)\n",
@@ -1298,7 +1301,7 @@ static int alps_stv0299_set_symbol_rate(struct dvb_frontend *fe, u32 srate, u32 
 	return 0;
 }
 
-static int philips_tsa5059_pll_set(struct dvb_frontend *fe, struct dvb_frontend_parameters *params)
+static int philips_tsa5059_pll_set(struct dvb_frontend *fe, struct i2c_adapter *i2c, struct dvb_frontend_parameters *params)
 {
 	struct ttusb* ttusb = (struct ttusb*) fe->dvb->priv;
 	u8 buf[4];
@@ -1321,7 +1324,7 @@ static int philips_tsa5059_pll_set(struct dvb_frontend *fe, struct dvb_frontend_
 	if (ttusb->revision == TTUSB_REV_2_2)
 		buf[3] |= 0x20;
 
-	if (i2c_transfer(&ttusb->i2c_adap, &msg, 1) != 1)
+	if (i2c_transfer(i2c, &msg, 1) != 1)
 		return -EIO;
 
 	return 0;
@@ -1367,6 +1370,47 @@ static struct tda8083_config ttusb_novas_grundig_29504_491_config = {
 	.pll_set = ttusb_novas_grundig_29504_491_pll_set,
 };
 
+static int alps_tdbe2_pll_set(struct dvb_frontend* fe, struct dvb_frontend_parameters* params)
+{
+	struct ttusb* ttusb = fe->dvb->priv;
+	u32 div;
+	u8 data[4];
+	struct i2c_msg msg = { .addr = 0x62, .flags = 0, .buf = data, .len = sizeof(data) };
+
+	div = (params->frequency + 35937500 + 31250) / 62500;
+
+	data[0] = (div >> 8) & 0x7f;
+	data[1] = div & 0xff;
+	data[2] = 0x85 | ((div >> 10) & 0x60);
+	data[3] = (params->frequency < 174000000 ? 0x88 : params->frequency < 470000000 ? 0x84 : 0x81);
+
+	if (i2c_transfer (&ttusb->i2c_adap, &msg, 1) != 1)
+		return -EIO;
+
+	return 0;
+}
+
+
+static struct ves1820_config alps_tdbe2_config = {
+	.demod_address = 0x09,
+	.xin = 57840000UL,
+	.invert = 1,
+	.selagc = VES1820_SELAGC_SIGNAMPERR,
+	.pll_set = alps_tdbe2_pll_set,
+};
+
+static u8 read_pwm(struct ttusb* ttusb)
+{
+	u8 b = 0xff;
+	u8 pwm;
+	struct i2c_msg msg[] = { { .addr = 0x50,.flags = 0,.buf = &b,.len = 1 },
+				{ .addr = 0x50,.flags = I2C_M_RD,.buf = &pwm,.len = 1} };
+
+	if ((i2c_transfer(&ttusb->i2c_adap, msg, 2) != 2) || (pwm == 0xff))
+		pwm = 0x48;
+
+	return pwm;
+}
 
 
 static void frontend_init(struct ttusb* ttusb)
@@ -1392,6 +1436,12 @@ static void frontend_init(struct ttusb* ttusb)
 			break;
 		}
 
+		break;
+
+	case 0x1004: // Hauppauge/TT DVB-C budget (ves1820/ALPS TDBE2(sp5659))
+		ttusb->fe = ves1820_attach(&alps_tdbe2_config, &ttusb->i2c_adap, read_pwm(ttusb));
+		if (ttusb->fe != NULL)
+			break;
 		break;
 
 	case 0x1005: // Hauppauge/TT Nova-USB-t budget (tda10046/Philips td1316(tda6651tt) OR cx22700/ALPS TDMB7(??))
@@ -1424,8 +1474,6 @@ static void frontend_init(struct ttusb* ttusb)
 
 
 static struct i2c_algorithm ttusb_dec_algo = {
-	.name		= "ttusb dec i2c algorithm",
-	.id		= I2C_ALGO_BIT,
 	.master_xfer	= master_xfer,
 	.functionality	= functionality,
 };
@@ -1477,7 +1525,6 @@ static int ttusb_probe(struct usb_interface *intf, const struct usb_device_id *i
 #endif
 	ttusb->i2c_adap.algo              = &ttusb_dec_algo;
 	ttusb->i2c_adap.algo_data         = NULL;
-	ttusb->i2c_adap.id                = I2C_ALGO_BIT;
 
 	result = i2c_add_adapter(&ttusb->i2c_adap);
 	if (result) {
@@ -1570,7 +1617,7 @@ static void ttusb_disconnect(struct usb_interface *intf)
 
 static struct usb_device_id ttusb_table[] = {
 	{USB_DEVICE(0xb48, 0x1003)},
-/*	{USB_DEVICE(0xb48, 0x1004)},UNDEFINED HARDWARE - mail linuxtv.org list*/	/* to be confirmed ????  */
+	{USB_DEVICE(0xb48, 0x1004)},
 	{USB_DEVICE(0xb48, 0x1005)},
 	{}
 };
@@ -1578,7 +1625,7 @@ static struct usb_device_id ttusb_table[] = {
 MODULE_DEVICE_TABLE(usb, ttusb_table);
 
 static struct usb_driver ttusb_driver = {
-      .name		= "Technotrend/Hauppauge USB-Nova",
+      .name		= "ttusb",
       .probe		= ttusb_probe,
       .disconnect	= ttusb_disconnect,
       .id_table		= ttusb_table,

@@ -354,7 +354,7 @@ static void background_writeout(unsigned long _min_pages)
  * the whole world.  Returns 0 if a pdflush thread was dispatched.  Returns
  * -1 if all pdflush threads were busy.
  */
-int wakeup_bdflush(long nr_pages)
+int wakeup_pdflush(long nr_pages)
 {
 	if (nr_pages == 0) {
 		struct writeback_state wbs;
@@ -368,10 +368,8 @@ int wakeup_bdflush(long nr_pages)
 static void wb_timer_fn(unsigned long unused);
 static void laptop_timer_fn(unsigned long unused);
 
-static struct timer_list wb_timer =
-			TIMER_INITIALIZER(wb_timer_fn, 0, 0);
-static struct timer_list laptop_mode_wb_timer =
-			TIMER_INITIALIZER(laptop_timer_fn, 0, 0);
+static DEFINE_TIMER(wb_timer, wb_timer_fn, 0, 0);
+static DEFINE_TIMER(laptop_mode_wb_timer, laptop_timer_fn, 0, 0);
 
 /*
  * Periodic writeback of "old" data.

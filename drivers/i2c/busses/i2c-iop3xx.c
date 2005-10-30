@@ -85,7 +85,7 @@ iop3xx_i2c_enable(struct i2c_algo_iop3xx_data *iop3xx_adap)
 	u32 cr = IOP3XX_ICR_GCD | IOP3XX_ICR_SCLEN | IOP3XX_ICR_UE;
 
 	/* 
-	 * Everytime unit enable is asserted, GPOD needs to be cleared
+	 * Every time unit enable is asserted, GPOD needs to be cleared
 	 * on IOP321 to avoid data corruption on the bus.
 	 */
 #ifdef CONFIG_ARCH_IOP321
@@ -399,8 +399,6 @@ iop3xx_i2c_func(struct i2c_adapter *adap)
 }
 
 static struct i2c_algorithm iop3xx_i2c_algo = {
-	.name		= "IOP3xx I2C algorithm",
-	.id		= I2C_ALGO_IOP3XX,
 	.master_xfer	= iop3xx_i2c_master_xfer,
 	.algo_control	= iop3xx_i2c_algo_control,
 	.functionality	= iop3xx_i2c_func,

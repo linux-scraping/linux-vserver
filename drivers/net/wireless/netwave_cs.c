@@ -62,7 +62,6 @@
 #endif	/* WIRELESS_EXT > 12 */
 #endif
 
-#include <pcmcia/version.h>
 #include <pcmcia/cs_types.h>
 #include <pcmcia/cs.h>
 #include <pcmcia/cistpl.h>
@@ -472,12 +471,12 @@ static dev_link_t *netwave_attach(void)
     dev->get_stats  = &netwave_get_stats;
     dev->set_multicast_list = &set_multicast_list;
     /* wireless extensions */
-#ifdef WIRELESS_EXT
+#if WIRELESS_EXT <= 16
     dev->get_wireless_stats = &netwave_get_wireless_stats;
+#endif /* WIRELESS_EXT <= 16 */
 #if WIRELESS_EXT > 12
     dev->wireless_handlers = (struct iw_handler_def *)&netwave_handler_def;
 #endif /* WIRELESS_EXT > 12 */
-#endif /* WIRELESS_EXT */
     dev->do_ioctl = &netwave_ioctl;
 
     dev->tx_timeout = &netwave_watchdog;
@@ -491,11 +490,6 @@ static dev_link_t *netwave_attach(void)
     link->next = dev_list;
     dev_list = link;
     client_reg.dev_info = &dev_info;
-    client_reg.EventMask =
-	CS_EVENT_CARD_INSERTION | CS_EVENT_CARD_REMOVAL |
-	CS_EVENT_RESET_PHYSICAL | CS_EVENT_CARD_RESET |
-	CS_EVENT_PM_SUSPEND | CS_EVENT_PM_RESUME;
-    client_reg.event_handler = &netwave_event;
     client_reg.Version = 0x0210;
     client_reg.event_callback_args.client_data = link;
     ret = pcmcia_register_client(&link->handle, &client_reg);
@@ -845,6 +839,9 @@ static const struct iw_handler_def	netwave_handler_def =
 	.standard	= (iw_handler *) netwave_handler,
 	.private	= (iw_handler *) netwave_private_handler,
 	.private_args	= (struct iw_priv_args *) netwave_private_args,
+#if WIRELESS_EXT > 16
+	.get_wireless_stats = netwave_get_wireless_stats,
+#endif /* WIRELESS_EXT > 16 */
 };
 #endif /* WIRELESS_EXT > 12 */
 
@@ -1668,13 +1665,21 @@ static int netwave_close(struct net_device *dev) {
     return 0;
 }
 
+static struct pcmcia_device_id netwave_ids[] = {
+	PCMCIA_DEVICE_PROD_ID12("Xircom", "CreditCard Netwave", 0x2e3ee845, 0x54e28a28),
+	PCMCIA_DEVICE_NULL,
+};
+MODULE_DEVICE_TABLE(pcmcia, netwave_ids);
+
 static struct pcmcia_driver netwave_driver = {
 	.owner		= THIS_MODULE,
 	.drv		= {
 		.name	= "netwave_cs",
 	},
 	.attach		= netwave_attach,
+	.event		= netwave_event,
 	.detach		= netwave_detach,
+	.id_table       = netwave_ids,
 };
 
 static int __init init_netwave_cs(void)

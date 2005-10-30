@@ -1,5 +1,4 @@
 /*
- * $Id: saa7134-empress.c,v 1.10 2005/02/03 10:24:33 kraxel Exp $
  *
  * (c) 2004 Gerd Knorr <kraxel@bytesex.org> [SuSE Labs]
  *

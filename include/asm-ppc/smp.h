@@ -41,10 +41,14 @@ extern void smp_send_xmon_break(int cpu);
 struct pt_regs;
 extern void smp_message_recv(int, struct pt_regs *);
 
+extern int __cpu_disable(void);
+extern void __cpu_die(unsigned int cpu);
+extern void cpu_die(void) __attribute__((noreturn));
+
 #define NO_PROC_ID		0xFF            /* No processor magic marker */
 #define PROC_CHANGE_PENALTY	20
 
-#define smp_processor_id() (current_thread_info()->cpu)
+#define raw_smp_processor_id()	(current_thread_info()->cpu)
 
 extern int __cpu_up(unsigned int cpu);
 
@@ -63,6 +67,8 @@ extern struct klock_info_struct klock_info;
 #endif /* __ASSEMBLY__ */
 
 #else /* !(CONFIG_SMP) */
+
+static inline void cpu_die(void) { }
 
 #endif /* !(CONFIG_SMP) */
 

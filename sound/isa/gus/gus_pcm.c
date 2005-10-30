@@ -656,8 +656,7 @@ static snd_pcm_hardware_t snd_gf1_pcm_capture =
 
 static void snd_gf1_pcm_playback_free(snd_pcm_runtime_t *runtime)
 {
-	gus_pcm_private_t * pcmp = runtime->private_data;
-	kfree(pcmp);
+	kfree(runtime->private_data);
 }
 
 static int snd_gf1_pcm_playback_open(snd_pcm_substream_t *substream)
@@ -667,7 +666,7 @@ static int snd_gf1_pcm_playback_open(snd_pcm_substream_t *substream)
 	snd_pcm_runtime_t *runtime = substream->runtime;
 	int err;
 
-	pcmp = kcalloc(1, sizeof(*pcmp), GFP_KERNEL);
+	pcmp = kzalloc(sizeof(*pcmp), GFP_KERNEL);
 	if (pcmp == NULL)
 		return -ENOMEM;
 	pcmp->gus = gus;

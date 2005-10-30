@@ -24,7 +24,7 @@
 #include "proc_mm.h"
 #include "registers.h"
 
-void *switch_to_skas(void *prev, void *next)
+void switch_to_skas(void *prev, void *next)
 {
 	struct task_struct *from, *to;
 
@@ -35,16 +35,11 @@ void *switch_to_skas(void *prev, void *next)
 	if(current->pid == 0)
 		switch_timers(0);
 
-	to->thread.prev_sched = from;
-	set_current(to);
-
 	switch_threads(&from->thread.mode.skas.switch_buf, 
 		       to->thread.mode.skas.switch_buf);
 
 	if(current->pid == 0)
 		switch_timers(1);
-
-	return(current->thread.prev_sched);
 }
 
 extern void schedule_tail(struct task_struct *prev);
@@ -111,8 +106,7 @@ int copy_thread_skas(int nr, unsigned long clone_flags, unsigned long sp,
   	void (*handler)(int);
 
 	if(current->thread.forking){
-	  	memcpy(&p->thread.regs.regs.skas, 
-		       &current->thread.regs.regs.skas, 
+	  	memcpy(&p->thread.regs.regs.skas, &regs->regs.skas,
 		       sizeof(p->thread.regs.regs.skas));
 		REGS_SET_SYSCALL_RETURN(p->thread.regs.regs.skas.regs, 0);
 		if(sp != 0) REGS_SP(p->thread.regs.regs.skas.regs) = sp;
@@ -130,7 +124,9 @@ int copy_thread_skas(int nr, unsigned long clone_flags, unsigned long sp,
 	return(0);
 }
 
-int new_mm(int from)
+extern void map_stub_pages(int fd, unsigned long code,
+			   unsigned long data, unsigned long stack);
+int new_mm(int from, unsigned long stack)
 {
 	struct proc_mm_op copy;
 	int n, fd;
@@ -148,6 +144,9 @@ int new_mm(int from)
 			printk("new_mm : /proc/mm copy_segments failed, "
 			       "err = %d\n", -n);
 	}
+
+	if(!ptrace_faultinfo)
+		map_stub_pages(fd, CONFIG_STUB_CODE, CONFIG_STUB_DATA, stack);
 
 	return(fd);
 }
@@ -176,12 +175,14 @@ static int start_kernel_proc(void *unused)
 	return(0);
 }
 
+extern int userspace_pid[];
+
 int start_uml_skas(void)
 {
-	start_userspace(0);
+	if(proc_mm)
+		userspace_pid[0] = start_userspace(0);
 
 	init_new_thread_signals(1);
-	uml_idle_timer();
 
 	init_task.thread.request.u.thread.proc = start_kernel_proc;
 	init_task.thread.request.u.thread.arg = NULL;
@@ -202,13 +203,30 @@ int thread_pid_skas(struct task_struct *task)
 	return(userspace_pid[0]);
 }
 
-/*
- * Overrides for Emacs so that we follow Linus's tabbing style.
- * Emacs will notice this stuff at the end of the file and automatically
- * adjust the settings for this buffer only.  This must remain at the end
- * of the file.
- * ---------------------------------------------------------------------------
- * Local variables:
- * c-file-style: "linux"
- * End:
- */
+void kill_off_processes_skas(void)
+{
+	if(proc_mm)
+#warning need to loop over userspace_pids in kill_off_processes_skas
+		os_kill_ptraced_process(userspace_pid[0], 1);
+	else {
+		struct task_struct *p;
+		int pid, me;
+
+		me = os_getpid();
+		for_each_process(p){
+			if(p->mm == NULL)
+				continue;
+
+			pid = p->mm->context.skas.id.u.pid;
+			os_kill_ptraced_process(pid, 1);
+		}
+	}
+}
+
+unsigned long current_stub_stack(void)
+{
+	if(current->mm == NULL)
+		return(0);
+
+	return(current->mm->context.skas.id.stack);
+}

@@ -43,7 +43,6 @@
 #include <asm/system.h>
 #include <asm/io.h>
 
-#include <pcmcia/version.h>
 #include <pcmcia/cs_types.h>
 #include <pcmcia/cs.h>
 #include <pcmcia/cistpl.h>
@@ -252,7 +251,7 @@ static void dtl1_receive(dtl1_info_t *info)
 				info->rx_count = nsh->len + (nsh->len & 0x0001);
 				break;
 			case RECV_WAIT_DATA:
-				info->rx_skb->pkt_type = nsh->type;
+				bt_cb(info->rx_skb)->pkt_type = nsh->type;
 
 				/* remove PAD byte if it exists */
 				if (nsh->len & 0x0001) {
@@ -263,7 +262,7 @@ static void dtl1_receive(dtl1_info_t *info)
 				/* remove NSH */
 				skb_pull(info->rx_skb, NSHL);
 
-				switch (info->rx_skb->pkt_type) {
+				switch (bt_cb(info->rx_skb)->pkt_type) {
 				case 0x80:
 					/* control data for the Nokia Card */
 					dtl1_control(info, info->rx_skb);
@@ -273,12 +272,12 @@ static void dtl1_receive(dtl1_info_t *info)
 				case 0x84:
 					/* send frame to the HCI layer */
 					info->rx_skb->dev = (void *) info->hdev;
-					info->rx_skb->pkt_type &= 0x0f;
+					bt_cb(info->rx_skb)->pkt_type &= 0x0f;
 					hci_recv_frame(info->rx_skb);
 					break;
 				default:
 					/* unknown packet */
-					BT_ERR("Unknown HCI packet with type 0x%02x received", info->rx_skb->pkt_type);
+					BT_ERR("Unknown HCI packet with type 0x%02x received", bt_cb(info->rx_skb)->pkt_type);
 					kfree_skb(info->rx_skb);
 					break;
 				}
@@ -411,7 +410,7 @@ static int dtl1_hci_send_frame(struct sk_buff *skb)
 
 	info = (dtl1_info_t *)(hdev->driver_data);
 
-	switch (skb->pkt_type) {
+	switch (bt_cb(skb)->pkt_type) {
 	case HCI_COMMAND_PKT:
 		hdev->stat.cmd_tx++;
 		nsh.type = 0x81;
@@ -594,11 +593,6 @@ static dev_link_t *dtl1_attach(void)
 	link->next = dev_list;
 	dev_list = link;
 	client_reg.dev_info = &dev_info;
-	client_reg.EventMask =
-		CS_EVENT_CARD_INSERTION | CS_EVENT_CARD_REMOVAL |
-		CS_EVENT_RESET_PHYSICAL | CS_EVENT_CARD_RESET |
-		CS_EVENT_PM_SUSPEND | CS_EVENT_PM_RESUME;
-	client_reg.event_handler = &dtl1_event;
 	client_reg.Version = 0x0210;
 	client_reg.event_callback_args.client_data = link;
 
@@ -807,13 +801,22 @@ static int dtl1_event(event_t event, int priority, event_callback_args_t *args)
 	return 0;
 }
 
+static struct pcmcia_device_id dtl1_ids[] = {
+	PCMCIA_DEVICE_PROD_ID12("Nokia Mobile Phones", "DTL-1", 0xe1bfdd64, 0xe168480d),
+	PCMCIA_DEVICE_PROD_ID12("Socket", "CF", 0xb38bcc2e, 0x44ebf863),
+	PCMCIA_DEVICE_NULL
+};
+MODULE_DEVICE_TABLE(pcmcia, dtl1_ids);
+
 static struct pcmcia_driver dtl1_driver = {
 	.owner		= THIS_MODULE,
 	.drv		= {
 		.name	= "dtl1_cs",
 	},
 	.attach		= dtl1_attach,
+	.event		= dtl1_event,
 	.detach		= dtl1_detach,
+	.id_table	= dtl1_ids,
 };
 
 static int __init init_dtl1_cs(void)

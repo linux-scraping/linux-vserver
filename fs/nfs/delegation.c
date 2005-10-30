@@ -16,6 +16,7 @@
 #include <linux/nfs_fs.h>
 #include <linux/nfs_xdr.h>
 
+#include "nfs4_fs.h"
 #include "delegation.h"
 
 static struct nfs_delegation *nfs_alloc_delegation(void)
@@ -83,6 +84,10 @@ int nfs_inode_set_delegation(struct inode *inode, struct rpc_cred *cred, struct 
 	struct nfs_inode *nfsi = NFS_I(inode);
 	struct nfs_delegation *delegation;
 	int status = 0;
+
+	/* Ensure we first revalidate the attributes and page cache! */
+	if ((nfsi->cache_validity & (NFS_INO_REVAL_PAGECACHE|NFS_INO_INVALID_ATTR)))
+		__nfs_revalidate_inode(NFS_SERVER(inode), inode);
 
 	delegation = nfs_alloc_delegation();
 	if (delegation == NULL)

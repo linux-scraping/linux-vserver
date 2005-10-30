@@ -179,22 +179,30 @@ static inline void __dl_adjust_block(struct super_block *sb, xid_t xid,
 	put_dl_info(dli);
 }
 
-
-#define DLIMIT_ALLOC_BLOCK(sb, xid, nr) \
-	__dl_alloc_space(sb, xid, \
-		((dlsize_t)(nr)) << (sb)->s_blocksize_bits, \
+#define DLIMIT_ALLOC_SPACE(in, bytes) \
+	__dl_alloc_space((in)->i_sb, (in)->i_xid, (dlsize_t)(bytes), \
 		__FILE__, __LINE__ )
 
-#define DLIMIT_FREE_BLOCK(sb, xid, nr) \
-	__dl_free_space(sb, xid, \
-		((dlsize_t)(nr)) << (sb)->s_blocksize_bits, \
+#define DLIMIT_FREE_SPACE(in, bytes) \
+	__dl_free_space((in)->i_sb, (in)->i_xid, (dlsize_t)(bytes), \
 		__FILE__, __LINE__ )
 
-#define DLIMIT_ALLOC_INODE(sb, xid) \
-	__dl_alloc_inode(sb, xid, __FILE__, __LINE__ )
+#define DLIMIT_ALLOC_BLOCK(in, nr) \
+	__dl_alloc_space((in)->i_sb, (in)->i_xid, \
+		((dlsize_t)(nr)) << (in)->i_sb->s_blocksize_bits, \
+		__FILE__, __LINE__ )
 
-#define DLIMIT_FREE_INODE(sb, xid) \
-	__dl_free_inode(sb, xid, __FILE__, __LINE__ )
+#define DLIMIT_FREE_BLOCK(in, nr) \
+	__dl_free_space((in)->i_sb, (in)->i_xid, \
+		((dlsize_t)(nr)) << (in)->i_sb->s_blocksize_bits, \
+		__FILE__, __LINE__ )
+
+
+#define DLIMIT_ALLOC_INODE(in) \
+	__dl_alloc_inode((in)->i_sb, (in)->i_xid, __FILE__, __LINE__ )
+
+#define DLIMIT_FREE_INODE(in) \
+	__dl_free_inode((in)->i_sb, (in)->i_xid, __FILE__, __LINE__ )
 
 
 #define DLIMIT_ADJUST_BLOCK(sb, xid, fb, rb) \

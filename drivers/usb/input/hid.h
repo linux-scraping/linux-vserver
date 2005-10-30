@@ -118,7 +118,7 @@ struct hid_item {
 #define HID_MAIN_ITEM_CONSTANT		0x001
 #define HID_MAIN_ITEM_VARIABLE		0x002
 #define HID_MAIN_ITEM_RELATIVE		0x004
-#define HID_MAIN_ITEM_WRAP		0x008	
+#define HID_MAIN_ITEM_WRAP		0x008
 #define HID_MAIN_ITEM_NONLINEAR		0x010
 #define HID_MAIN_ITEM_NO_PREFERRED	0x020
 #define HID_MAIN_ITEM_NULL_STATE	0x040
@@ -172,16 +172,19 @@ struct hid_item {
 #define HID_USAGE_PAGE		0xffff0000
 
 #define HID_UP_UNDEFINED	0x00000000
-#define HID_UP_GENDESK 		0x00010000
-#define HID_UP_KEYBOARD 	0x00070000
-#define HID_UP_LED 		0x00080000
-#define HID_UP_BUTTON 		0x00090000
-#define HID_UP_ORDINAL 		0x000a0000
+#define HID_UP_GENDESK		0x00010000
+#define HID_UP_SIMULATION	0x00020000
+#define HID_UP_KEYBOARD		0x00070000
+#define HID_UP_LED		0x00080000
+#define HID_UP_BUTTON		0x00090000
+#define HID_UP_ORDINAL		0x000a0000
 #define HID_UP_CONSUMER		0x000c0000
-#define HID_UP_DIGITIZER 	0x000d0000
-#define HID_UP_PID 		0x000f0000
+#define HID_UP_DIGITIZER	0x000d0000
+#define HID_UP_PID		0x000f0000
 #define HID_UP_HPVENDOR         0xff7f0000
 #define HID_UP_MSVENDOR		0xff000000
+#define HID_UP_CUSTOM		0x00ff0000
+#define HID_UP_LOGIVENDOR	0xffbc0000
 
 #define HID_USAGE		0x0000ffff
 
@@ -242,6 +245,7 @@ struct hid_item {
 #define HID_QUIRK_2WHEEL_MOUSE_HACK_7		0x080
 #define HID_QUIRK_2WHEEL_MOUSE_HACK_5		0x100
 #define HID_QUIRK_2WHEEL_MOUSE_HACK_ON		0x200
+#define HID_QUIRK_2WHEEL_POWERMOUSE		0x400
 
 /*
  * This is the global environment of the parser. This information is
@@ -348,7 +352,8 @@ struct hid_report_enum {
 
 #define HID_REPORT_TYPES 3
 
-#define HID_BUFFER_SIZE		64		/* use 64 for compatibility with all possible packetlen */
+#define HID_MIN_BUFFER_SIZE	64		/* make sure there is at least a packet size of space */
+#define HID_MAX_BUFFER_SIZE	4096		/* 4kb */
 #define HID_CONTROL_FIFO_SIZE	256		/* to init devices with >100 reports */
 #define HID_OUTPUT_FIFO_SIZE	64
 
@@ -386,6 +391,8 @@ struct hid_device {							/* device report descriptor */
 
 	unsigned long iofl;						/* I/O flags (CTRL_RUNNING, OUT_RUNNING) */
 
+	unsigned int bufsize;						/* URB buffer size */
+
 	struct urb *urbin;						/* Input URB */
 	char *inbuf;							/* Input buffer */
 	dma_addr_t inbuf_dma;						/* Input buffer dma */
@@ -406,7 +413,7 @@ struct hid_device {							/* device report descriptor */
 	dma_addr_t outbuf_dma;						/* Output buffer dma */
 	spinlock_t outlock;						/* Output fifo spinlock */
 
-	unsigned claimed;						/* Claimed by hidinput, hiddev? */	
+	unsigned claimed;						/* Claimed by hidinput, hiddev? */
 	unsigned quirks;						/* Various quirks the device can pull on us */
 
 	struct list_head inputs;					/* The list of inputs */

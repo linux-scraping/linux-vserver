@@ -25,6 +25,11 @@ config GENERIC_CALIBRATE_DELAY
 	bool
 	default y
 
+config ARCH_MAY_HAVE_PC_FDC
+	bool
+	depends on Q40 || (BROKEN && SUN3X)
+	default y
+
 mainmenu "Linux/68k Kernel Configuration"
 
 source "init/Kconfig"
@@ -357,6 +362,8 @@ config 060_WRITETHROUGH
 	  is hardwired on.  The 53c710 SCSI driver is known to suffer from
 	  this problem.
 
+source "mm/Kconfig"
+
 endmenu
 
 menu "General setup"
@@ -447,6 +454,8 @@ source "drivers/pci/Kconfig"
 source "drivers/zorro/Kconfig"
 
 endmenu
+
+source "net/Kconfig"
 
 source "drivers/Kconfig"
 

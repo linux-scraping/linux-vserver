@@ -46,7 +46,7 @@ struct elf_phdr;
 
 #define IA32_EMULATOR 1
 
-#define ELF_ET_DYN_BASE		(TASK_UNMAPPED_32 + 0x1000000)
+#define ELF_ET_DYN_BASE		(TASK_UNMAPPED_BASE + 0x1000000)
 
 #undef ELF_ARCH
 #define ELF_ARCH EM_386
@@ -307,9 +307,6 @@ MODULE_AUTHOR("Eric Youngdale, Andi Kleen");
 
 #define elf_addr_t __u32
 
-#undef TASK_SIZE
-#define TASK_SIZE 0xffffffff
-
 static void elf32_init(struct pt_regs *);
 
 #define ARCH_HAS_SETUP_ADDITIONAL_PAGES 1
@@ -356,14 +353,6 @@ int setup_arg_pages(struct linux_binprm *bprm, unsigned long stack_top, int exec
 	mpnt = kmem_cache_alloc(vm_area_cachep, SLAB_KERNEL);
 	if (!mpnt) 
 		return -ENOMEM; 
-	
-	grow = (IA32_STACK_TOP - (PAGE_MASK & (unsigned long) bprm->p))
-		>> PAGE_SHIFT;
-	if (security_vm_enough_memory(grow) ||
-		!vx_vmpages_avail(mm, grow)) {
-		kmem_cache_free(vm_area_cachep, mpnt);
-		return -ENOMEM;
-	}
 
 	memset(mpnt, 0, sizeof(*mpnt));
 

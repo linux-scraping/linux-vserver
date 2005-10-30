@@ -146,7 +146,7 @@ config CRYPTO_SERPENT
 
 config CRYPTO_AES
 	tristate "AES cipher algorithms"
-	depends on CRYPTO && !((X86 || UML_X86) && !64BIT)
+	depends on CRYPTO && !(X86 || UML_X86)
 	help
 	  AES cipher algorithms (FIPS-197). AES uses the Rijndael 
 	  algorithm.
@@ -184,6 +184,26 @@ config CRYPTO_AES_586
 
 	  See <http://csrc.nist.gov/encryption/aes/> for more information.
 
+config CRYPTO_AES_X86_64
+	tristate "AES cipher algorithms (x86_64)"
+	depends on CRYPTO && ((X86 || UML_X86) && 64BIT)
+	help
+	  AES cipher algorithms (FIPS-197). AES uses the Rijndael 
+	  algorithm.
+
+	  Rijndael appears to be consistently a very good performer in
+	  both hardware and software across a wide range of computing 
+	  environments regardless of its use in feedback or non-feedback 
+	  modes. Its key setup time is excellent, and its key agility is 
+	  good. Rijndael's very low memory requirements make it very well 
+	  suited for restricted-space environments, in which it also 
+	  demonstrates excellent performance. Rijndael's operations are 
+	  among the easiest to defend against power and timing attacks.	
+
+	  The AES specifies three key sizes: 128, 192 and 256 bits	  
+
+	  See <http://csrc.nist.gov/encryption/aes/> for more information.
+
 config CRYPTO_CAST5
 	tristate "CAST5 (CAST-128) cipher algorithm"
 	depends on CRYPTO
@@ -199,7 +219,7 @@ config CRYPTO_CAST6
 	  described in RFC2612.
 
 config CRYPTO_TEA
-	tristate "TEA and XTEA cipher algorithms"
+	tristate "TEA, XTEA and XETA cipher algorithms"
 	depends on CRYPTO
 	help
 	  TEA cipher algorithm.
@@ -211,6 +231,9 @@ config CRYPTO_TEA
 	  Xtendend Tiny Encryption Algorithm is a modification to
 	  the TEA algorithm to address a potential key weakness
 	  in the TEA algorithm.
+
+	  Xtendend Encryption Tiny Algorithm is a mis-implementation 
+	  of the XTEA algorithm for compatibility purposes.
 
 config CRYPTO_ARC4
 	tristate "ARC4 cipher algorithm"

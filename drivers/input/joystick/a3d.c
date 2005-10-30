@@ -185,7 +185,7 @@ static void a3d_poll(struct gameport *gameport)
 	a3d->reads++;
 	if (a3d_read_packet(a3d->gameport, a3d->length, data) != a3d->length ||
 	    data[0] != a3d->mode || a3d_csum(data, a3d->length))
-	 	a3d->bads++;
+		a3d->bads++;
 	else
 		a3d_read(a3d, data);
 }
@@ -269,7 +269,7 @@ static int a3d_connect(struct gameport *gameport, struct gameport_driver *drv)
 	int i;
 	int err;
 
-	if (!(a3d = kcalloc(1, sizeof(struct a3d), GFP_KERNEL)))
+	if (!(a3d = kzalloc(sizeof(struct a3d), GFP_KERNEL)))
 		return -ENOMEM;
 
 	a3d->gameport = gameport;
