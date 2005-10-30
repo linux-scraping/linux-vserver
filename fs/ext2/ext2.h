@@ -162,7 +162,6 @@ extern struct file_operations ext2_xip_file_operations;
 extern struct address_space_operations ext2_aops;
 extern struct address_space_operations ext2_aops_xip;
 extern struct address_space_operations ext2_nobh_aops;
-extern int ext2_sync_flags(struct inode *inode);
 
 /* namei.c */
 extern struct inode_operations ext2_dir_inode_operations;

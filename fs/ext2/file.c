@@ -53,6 +53,7 @@ struct file_operations ext2_file_operations = {
 	.readv		= generic_file_readv,
 	.writev		= generic_file_writev,
 	.sendfile	= generic_file_sendfile,
+	.sendpage	= generic_file_sendpage,
 };
 
 #ifdef CONFIG_EXT2_FS_XIP
@@ -79,5 +80,4 @@ struct inode_operations ext2_file_inode_operations = {
 #endif
 	.setattr	= ext2_setattr,
 	.permission	= ext2_permission,
-	.sync_flags	= ext2_sync_flags,
 };

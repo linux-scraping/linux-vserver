@@ -412,7 +412,6 @@ struct inode_operations ext2_dir_inode_operations = {
 #endif
 	.setattr	= ext2_setattr,
 	.permission	= ext2_permission,
-	.sync_flags	= ext2_sync_flags,
 };
 
 struct inode_operations ext2_special_inode_operations = {
@@ -424,5 +423,4 @@ struct inode_operations ext2_special_inode_operations = {
 #endif
 	.setattr	= ext2_setattr,
 	.permission	= ext2_permission,
-	.sync_flags	= ext2_sync_flags,
 };

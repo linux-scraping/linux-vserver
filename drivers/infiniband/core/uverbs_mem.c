@@ -36,7 +36,6 @@
 
 #include <linux/mm.h>
 #include <linux/dma-mapping.h>
-#include <linux/vs_memory.h>
 
 #include "uverbs.h"
 
@@ -162,7 +161,7 @@ out:
 	if (ret < 0)
 		__ib_umem_release(dev, mem, 0);
 	else
-		vx_vmlocked_sub(current->mm, current->mm->locked_vm - locked);
+		current->mm->locked_vm = locked;
 
 	up_write(&current->mm->mmap_sem);
 	free_page((unsigned long) page_list);
@@ -175,8 +174,8 @@ void ib_umem_release(struct ib_device *dev, struct ib_umem *umem)
 	__ib_umem_release(dev, umem, 1);
 
 	down_write(&current->mm->mmap_sem);
-	vx_vmlocked_sub(current->mm,
-		PAGE_ALIGN(umem->length + umem->offset) >> PAGE_SHIFT);
+	current->mm->locked_vm -=
+		PAGE_ALIGN(umem->length + umem->offset) >> PAGE_SHIFT;
 	up_write(&current->mm->mmap_sem);
 }
 
@@ -185,7 +184,7 @@ static void ib_umem_account(void *work_ptr)
 	struct ib_umem_account_work *work = work_ptr;
 
 	down_write(&work->mm->mmap_sem);
-	vx_vmlocked_sub(work->mm, work->diff);
+	work->mm->locked_vm -= work->diff;
 	up_write(&work->mm->mmap_sem);
 	mmput(work->mm);
 	kfree(work);

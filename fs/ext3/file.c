@@ -119,6 +119,7 @@ struct file_operations ext3_file_operations = {
 	.release	= ext3_release_file,
 	.fsync		= ext3_sync_file,
 	.sendfile	= generic_file_sendfile,
+	.sendpage	= generic_file_sendpage,
 };
 
 struct inode_operations ext3_file_inode_operations = {
@@ -131,6 +132,5 @@ struct inode_operations ext3_file_inode_operations = {
 	.removexattr	= generic_removexattr,
 #endif
 	.permission	= ext3_permission,
-	.sync_flags	= ext3_sync_flags,
 };
 

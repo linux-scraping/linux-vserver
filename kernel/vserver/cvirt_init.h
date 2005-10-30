@@ -27,8 +27,8 @@ static inline void vx_info_init_cvirt(struct _vx_cvirt *cvirt)
 	cvirt->load[0] = 0;
 	cvirt->load[1] = 0;
 	cvirt->load[2] = 0;
-
 	atomic_set(&cvirt->total_forks, 0);
+
 	spin_lock_init(&cvirt->syslog.logbuf_lock);
 	init_waitqueue_head(&cvirt->syslog.log_wait);
 	cvirt->syslog.log_start = 0;
@@ -61,6 +61,7 @@ static inline void vx_info_exit_cvirt(struct _vx_cvirt *cvirt)
 static inline void vx_info_init_cacct(struct _vx_cacct *cacct)
 {
 	int i,j;
+
 
 	for (i=0; i<5; i++) {
 		for (j=0; j<3; j++) {

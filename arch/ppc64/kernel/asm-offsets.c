@@ -163,6 +163,7 @@ int main(void)
 
 	DEFINE(CLONE_VM, CLONE_VM);
 	DEFINE(CLONE_UNTRACED, CLONE_UNTRACED);
+	DEFINE(CLONE_KTHREAD, CLONE_KTHREAD);
 
 	/* About the CPU features table */
 	DEFINE(CPU_SPEC_ENTRY_SIZE, sizeof(struct cpu_spec));

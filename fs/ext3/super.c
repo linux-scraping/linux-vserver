@@ -553,12 +553,12 @@ static int ext3_write_dquot(struct dquot *dquot);
 static int ext3_acquire_dquot(struct dquot *dquot);
 static int ext3_release_dquot(struct dquot *dquot);
 static int ext3_mark_dquot_dirty(struct dquot *dquot);
-static int ext3_write_info(struct super_block *sb, int type);
-static int ext3_quota_on(struct super_block *sb, int type, int format_id, char *path);
-static int ext3_quota_on_mount(struct super_block *sb, int type);
-static ssize_t ext3_quota_read(struct super_block *sb, int type, char *data,
+static int ext3_write_info(struct dqhash *hash, int type);
+static int ext3_quota_on(struct dqhash *hash, int type, int format_id, char *path);
+static int ext3_quota_on_mount(struct dqhash *hash, int type);
+static ssize_t ext3_quota_read(struct dqhash *hash, int type, char *data,
 			       size_t len, loff_t off);
-static ssize_t ext3_quota_write(struct super_block *sb, int type,
+static ssize_t ext3_quota_write(struct dqhash *hash, int type,
 				const char *data, size_t len, loff_t off);
 
 static struct dquot_operations ext3_quota_operations = {
@@ -887,7 +887,7 @@ static int parse_options (char * options, struct super_block *sb,
 		case Opt_grpjquota:
 			qtype = GRPQUOTA;
 set_qf_name:
-			if (sb_any_quota_enabled(sb)) {
+			if (dqh_any_quota_enabled(sb->s_dqh)) {
 				printk(KERN_ERR
 					"EXT3-fs: Cannot change journalled "
 					"quota options when quota turned on.\n");
@@ -925,7 +925,7 @@ set_qf_name:
 		case Opt_offgrpjquota:
 			qtype = GRPQUOTA;
 clear_qf_name:
-			if (sb_any_quota_enabled(sb)) {
+			if (dqh_any_quota_enabled(sb->s_dqh)) {
 				printk(KERN_ERR "EXT3-fs: Cannot change "
 					"journalled quota options when "
 					"quota turned on.\n");
@@ -953,7 +953,7 @@ clear_qf_name:
 			set_opt(sbi->s_mount_opt, GRPQUOTA);
 			break;
 		case Opt_noquota:
-			if (sb_any_quota_enabled(sb)) {
+			if (dqh_any_quota_enabled(sb->s_dqh)) {
 				printk(KERN_ERR "EXT3-fs: Cannot change quota "
 					"options when quota turned on.\n");
 				return 0;
@@ -1231,7 +1231,7 @@ static void ext3_orphan_cleanup (struct super_block * sb,
 	/* Turn on quotas so that they are updated correctly */
 	for (i = 0; i < MAXQUOTAS; i++) {
 		if (EXT3_SB(sb)->s_qf_names[i]) {
-			int ret = ext3_quota_on_mount(sb, i);
+			int ret = ext3_quota_on_mount(sb->s_dqh, i);
 			if (ret < 0)
 				printk(KERN_ERR
 					"EXT3-fs: Cannot turn on journalled "
@@ -1281,8 +1281,8 @@ static void ext3_orphan_cleanup (struct super_block * sb,
 #ifdef CONFIG_QUOTA
 	/* Turn quotas off */
 	for (i = 0; i < MAXQUOTAS; i++) {
-		if (sb_dqopt(sb)->files[i])
-			vfs_quota_off(sb, i);
+		if (dqh_dqopt(sb->s_dqh)->files[i])
+			vfs_quota_off(sb->s_dqh, i);
 	}
 #endif
 	sb->s_flags = s_flags; /* Restore MS_RDONLY status */
@@ -1621,8 +1621,10 @@ static int ext3_fill_super (struct super_block *sb, void *data, int silent)
 	sb->s_export_op = &ext3_export_ops;
 	sb->s_xattr = ext3_xattr_handlers;
 #ifdef CONFIG_QUOTA
-	sb->s_qcop = &ext3_qctl_operations;
-	sb->dq_op = &ext3_quota_operations;
+//	sb->dq_op = &ext3_quota_operations;
+	sb->s_dqh->dqh_qop = &ext3_quota_operations;
+//	sb->s_qcop = &ext3_qctl_operations;
+	sb->s_dqh->dqh_qcop = &ext3_qctl_operations;
 #endif
 	INIT_LIST_HEAD(&sbi->s_orphan); /* unlinked but open files */
 
@@ -2379,7 +2381,7 @@ static int ext3_statfs (struct super_block * sb, struct kstatfs * buf)
 
 static inline struct inode *dquot_to_inode(struct dquot *dquot)
 {
-	return sb_dqopt(dquot->dq_sb)->files[dquot->dq_type];
+	return dqh_dqopt(dquot->dq_dqh)->files[dquot->dq_type];
 }
 
 static int ext3_dquot_initialize(struct inode *inode, int type)
@@ -2422,7 +2424,7 @@ static int ext3_write_dquot(struct dquot *dquot)
 
 	inode = dquot_to_inode(dquot);
 	handle = ext3_journal_start(inode,
-					EXT3_QUOTA_TRANS_BLOCKS(dquot->dq_sb));
+		EXT3_QUOTA_TRANS_BLOCKS(dquot->dq_dqh->dqh_sb));
 	if (IS_ERR(handle))
 		return PTR_ERR(handle);
 	ret = dquot_commit(dquot);
@@ -2438,7 +2440,7 @@ static int ext3_acquire_dquot(struct dquot *dquot)
 	handle_t *handle;
 
 	handle = ext3_journal_start(dquot_to_inode(dquot),
-					EXT3_QUOTA_INIT_BLOCKS(dquot->dq_sb));
+		EXT3_QUOTA_INIT_BLOCKS(dquot->dq_dqh->dqh_sb));
 	if (IS_ERR(handle))
 		return PTR_ERR(handle);
 	ret = dquot_acquire(dquot);
@@ -2454,7 +2456,7 @@ static int ext3_release_dquot(struct dquot *dquot)
 	handle_t *handle;
 
 	handle = ext3_journal_start(dquot_to_inode(dquot),
-					EXT3_QUOTA_DEL_BLOCKS(dquot->dq_sb));
+		EXT3_QUOTA_DEL_BLOCKS(dquot->dq_dqh->dqh_sb));
 	if (IS_ERR(handle))
 		return PTR_ERR(handle);
 	ret = dquot_release(dquot);
@@ -2467,8 +2469,8 @@ static int ext3_release_dquot(struct dquot *dquot)
 static int ext3_mark_dquot_dirty(struct dquot *dquot)
 {
 	/* Are we journalling quotas? */
-	if (EXT3_SB(dquot->dq_sb)->s_qf_names[USRQUOTA] ||
-	    EXT3_SB(dquot->dq_sb)->s_qf_names[GRPQUOTA]) {
+	if (EXT3_SB(dquot->dq_dqh->dqh_sb)->s_qf_names[USRQUOTA] ||
+	    EXT3_SB(dquot->dq_dqh->dqh_sb)->s_qf_names[GRPQUOTA]) {
 		dquot_mark_dquot_dirty(dquot);
 		return ext3_write_dquot(dquot);
 	} else {
@@ -2476,8 +2478,9 @@ static int ext3_mark_dquot_dirty(struct dquot *dquot)
 	}
 }
 
-static int ext3_write_info(struct super_block *sb, int type)
+static int ext3_write_info(struct dqhash *hash, int type)
 {
+	struct super_block *sb = hash->dqh_sb;
 	int ret, err;
 	handle_t *handle;
 
@@ -2485,7 +2488,7 @@ static int ext3_write_info(struct super_block *sb, int type)
 	handle = ext3_journal_start(sb->s_root->d_inode, 2);
 	if (IS_ERR(handle))
 		return PTR_ERR(handle);
-	ret = dquot_commit_info(sb, type);
+	ret = dquot_commit_info(hash, type);
 	err = ext3_journal_stop(handle);
 	if (!ret)
 		ret = err;
@@ -2496,18 +2499,20 @@ static int ext3_write_info(struct super_block *sb, int type)
  * Turn on quotas during mount time - we need to find
  * the quota file and such...
  */
-static int ext3_quota_on_mount(struct super_block *sb, int type)
+static int ext3_quota_on_mount(struct dqhash *hash, int type)
 {
-	return vfs_quota_on_mount(sb, EXT3_SB(sb)->s_qf_names[type],
-			EXT3_SB(sb)->s_jquota_fmt, type);
+	return vfs_quota_on_mount(hash,
+		EXT3_SB(hash->dqh_sb)->s_qf_names[type],
+		EXT3_SB(hash->dqh_sb)->s_jquota_fmt, type);
 }
 
 /*
  * Standard function to be called on quota_on
  */
-static int ext3_quota_on(struct super_block *sb, int type, int format_id,
+static int ext3_quota_on(struct dqhash *hash, int type, int format_id,
 			 char *path)
 {
+	struct super_block *sb = hash->dqh_sb;
 	int err;
 	struct nameidata nd;
 
@@ -2516,7 +2521,7 @@ static int ext3_quota_on(struct super_block *sb, int type, int format_id,
 	/* Not journalling quota? */
 	if (!EXT3_SB(sb)->s_qf_names[USRQUOTA] &&
 	    !EXT3_SB(sb)->s_qf_names[GRPQUOTA])
-		return vfs_quota_on(sb, type, format_id, path);
+		return vfs_quota_on(hash, type, format_id, path);
 	err = path_lookup(path, LOOKUP_FOLLOW, &nd);
 	if (err)
 		return err;
@@ -2531,17 +2536,18 @@ static int ext3_quota_on(struct super_block *sb, int type, int format_id,
 			"EXT3-fs: Quota file not on filesystem root. "
 			"Journalled quota will not work.\n");
 	path_release(&nd);
-	return vfs_quota_on(sb, type, format_id, path);
+	return vfs_quota_on(hash, type, format_id, path);
 }
 
 /* Read data from quotafile - avoid pagecache and such because we cannot afford
  * acquiring the locks... As quota files are never truncated and quota code
  * itself serializes the operations (and noone else should touch the files)
  * we don't have to be afraid of races */
-static ssize_t ext3_quota_read(struct super_block *sb, int type, char *data,
+static ssize_t ext3_quota_read(struct dqhash *hash, int type, char *data,
 			       size_t len, loff_t off)
 {
-	struct inode *inode = sb_dqopt(sb)->files[type];
+	struct inode *inode = dqh_dqopt(hash)->files[type];
+	struct super_block *sb = hash->dqh_sb;
 	sector_t blk = off >> EXT3_BLOCK_SIZE_BITS(sb);
 	int err = 0;
 	int offset = off & (sb->s_blocksize - 1);
@@ -2576,10 +2582,11 @@ static ssize_t ext3_quota_read(struct super_block *sb, int type, char *data,
 
 /* Write to quotafile (we know the transaction is already started and has
  * enough credits) */
-static ssize_t ext3_quota_write(struct super_block *sb, int type,
+static ssize_t ext3_quota_write(struct dqhash *hash, int type,
 				const char *data, size_t len, loff_t off)
 {
-	struct inode *inode = sb_dqopt(sb)->files[type];
+	struct inode *inode = dqh_dqopt(hash)->files[type];
+	struct super_block *sb = hash->dqh_sb;
 	sector_t blk = off >> EXT3_BLOCK_SIZE_BITS(sb);
 	int err = 0;
 	int offset = off & (sb->s_blocksize - 1);

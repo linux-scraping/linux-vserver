@@ -1,5 +1,5 @@
 /*
- *  linux/kernel/sysctl.c
+ *  kernel/vserver/sysctl.c
  *
  *  Virtual Context Support
  *
@@ -32,6 +32,7 @@ enum {
 	CTL_DEBUG_NET,
 	CTL_DEBUG_LIMIT,
 	CTL_DEBUG_DLIM,
+	CTL_DEBUG_QUOTA,
 	CTL_DEBUG_CVIRT,
 	CTL_DEBUG_MISC,
 };
@@ -43,6 +44,7 @@ unsigned int vx_debug_nid = 0;
 unsigned int vx_debug_net = 0;
 unsigned int vx_debug_limit = 0;
 unsigned int vx_debug_dlim = 0;
+unsigned int vx_debug_quota = 0;
 unsigned int vx_debug_cvirt = 0;
 unsigned int vx_debug_misc = 0;
 
@@ -177,6 +179,14 @@ static ctl_table debug_table[] = {
 		.proc_handler	= &proc_dodebug
 	},
 	{
+		.ctl_name	= CTL_DEBUG_QUOTA,
+		.procname	= "debug_quota",
+		.data		= &vx_debug_quota,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= &proc_dodebug
+	},
+	{
 		.ctl_name	= CTL_DEBUG_CVIRT,
 		.procname	= "debug_cvirt",
 		.data		= &vx_debug_cvirt,
@@ -206,12 +216,71 @@ static ctl_table vserver_table[] = {
 };
 
 
+static match_table_t tokens = {
+	{ CTL_DEBUG_SWITCH,	"switch=%x"	},
+	{ CTL_DEBUG_XID,	"xid=%x"	},
+	{ CTL_DEBUG_NID,	"nid=%x"	},
+	{ CTL_DEBUG_NET,	"net=%x"	},
+	{ CTL_DEBUG_LIMIT,	"limit=%x"	},
+	{ CTL_DEBUG_DLIM,	"dlim=%x"	},
+	{ CTL_DEBUG_QUOTA,	"quota=%x"	},
+	{ CTL_DEBUG_CVIRT,	"cvirt=%x"	},
+	{ CTL_DEBUG_MISC,	"misc=%x"	},
+	{ CTL_DEBUG_ERROR,	NULL		}
+};
+
+#define	HANDLE_CASE(id, name, val) 				\
+	case CTL_DEBUG_ ## id:					\
+		vx_debug_ ## name = val;			\
+		printk("vs_debug_" #name "=0x%x\n", val);	\
+		break
+
+
+static int __init vs_debug_setup(char *str)
+{
+	char *p;
+	int token;
+
+	printk("vs_debug_setup(%s)\n", str);
+	while ((p = strsep(&str, ",")) != NULL) {
+		substring_t args[MAX_OPT_ARGS];
+		unsigned int value;
+
+		if (!*p)
+			continue;
+
+		token = match_token(p, tokens, args);
+		value = (token>0)?simple_strtoul(args[0].from, NULL, 0):0;
+
+		switch (token) {
+		HANDLE_CASE(SWITCH, switch, value);
+		HANDLE_CASE(XID,    xid,    value);
+		HANDLE_CASE(NID,    nid,    value);
+		HANDLE_CASE(NET,    net,    value);
+		HANDLE_CASE(LIMIT,  limit,  value);
+		HANDLE_CASE(DLIM,   dlim,   value);
+		HANDLE_CASE(QUOTA,  dlim,   value);
+		HANDLE_CASE(CVIRT,  cvirt,  value);
+		HANDLE_CASE(MISC,   misc,   value);
+		default:
+			return -EINVAL;
+			break;
+		}
+	}
+	return 1;
+}
+
+__setup("vsdebug=", vs_debug_setup);
+
+
+
 EXPORT_SYMBOL_GPL(vx_debug_switch);
 EXPORT_SYMBOL_GPL(vx_debug_xid);
 EXPORT_SYMBOL_GPL(vx_debug_nid);
 EXPORT_SYMBOL_GPL(vx_debug_net);
 EXPORT_SYMBOL_GPL(vx_debug_limit);
 EXPORT_SYMBOL_GPL(vx_debug_dlim);
+EXPORT_SYMBOL_GPL(vx_debug_quota);
 EXPORT_SYMBOL_GPL(vx_debug_cvirt);
 EXPORT_SYMBOL_GPL(vx_debug_misc);
 

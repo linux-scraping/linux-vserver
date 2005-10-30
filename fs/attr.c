@@ -89,6 +89,24 @@ error:
 
 EXPORT_SYMBOL(inode_change_ok);
 
+int inode_setattr_flags(struct inode *inode, unsigned int flags)
+{
+	unsigned int oldflags, newflags;
+
+	oldflags = inode->i_flags;
+	newflags = oldflags & ~(S_IMMUTABLE | S_IUNLINK | S_BARRIER);
+	if (flags & ATTR_FLAG_IMMUTABLE)
+		newflags |= S_IMMUTABLE;
+	if (flags & ATTR_FLAG_IUNLINK)
+		newflags |= S_IUNLINK;
+	if (flags & ATTR_FLAG_BARRIER)
+		newflags |= S_BARRIER;
+
+	if (oldflags ^ newflags)
+		inode->i_flags = newflags;
+	return 0;
+}
+
 int inode_setattr(struct inode * inode, struct iattr * attr)
 {
 	unsigned int ia_valid = attr->ia_valid;
@@ -130,6 +148,8 @@ int inode_setattr(struct inode * inode, struct iattr * attr)
 			mode &= ~S_ISGID;
 		inode->i_mode = mode;
 	}
+	if (ia_valid & ATTR_ATTR_FLAG)
+		inode_setattr_flags(inode, attr->ia_attr_flags);
 	mark_inode_dirty(inode);
 out:
 	return error;

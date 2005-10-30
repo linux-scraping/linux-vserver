@@ -47,6 +47,7 @@
 #include <linux/wait.h>
 #include <linux/workqueue.h>
 #include <linux/module.h>
+#include <linux/vs_context.h>
 #include <linux/vs_cvirt.h>
 
 #ifndef div_long_long_rem
@@ -412,6 +413,10 @@ exit:
 
 int posix_timer_event(struct k_itimer *timr,int si_private)
 {
+	struct vx_info_save vxis;
+	int ret;
+
+	enter_vx_info(task_get_vx_info(timr->it_process), &vxis);
 	memset(&timr->sigq->info, 0, sizeof(siginfo_t));
 	timr->sigq->info.si_sys_private = si_private;
 	/*
@@ -431,12 +436,11 @@ int posix_timer_event(struct k_itimer *timr,int si_private)
 
 	if (timr->it_sigev_notify & SIGEV_THREAD_ID) {
 		struct task_struct *leader;
-		int ret;
 
 		ret = send_sigqueue(timr->it_sigev_signo, timr->sigq,
 				    timr->it_process);
 		if (likely(ret >= 0))
-			return ret;
+			goto out;
 
 		timr->it_sigev_notify = SIGEV_SIGNAL;
 		leader = timr->it_process->group_leader;
@@ -444,8 +448,12 @@ int posix_timer_event(struct k_itimer *timr,int si_private)
 		timr->it_process = leader;
 	}
 
-	return send_group_sigqueue(timr->it_sigev_signo, timr->sigq,
-				   timr->it_process);
+	ret = send_group_sigqueue(timr->it_sigev_signo, timr->sigq,
+				  timr->it_process);
+out:
+	leave_vx_info(&vxis);
+	put_vx_info(vxis.vxi);
+	return ret;
 }
 EXPORT_SYMBOL_GPL(posix_timer_event);
 

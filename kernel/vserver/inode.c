@@ -161,28 +161,30 @@ static int __vc_set_iattr(struct dentry *de, uint32_t *xid, uint32_t *flags, uin
 	}
 
 	if (*mask & (IATTR_BARRIER | IATTR_IUNLINK | IATTR_IMMUTABLE)) {
+
+		attr.ia_valid |= ATTR_ATTR_FLAG;
+		attr.ia_attr_flags =
+			(IS_IMMUTABLE(in) ? ATTR_FLAG_IMMUTABLE : 0) |
+			(IS_IUNLINK(in) ? ATTR_FLAG_IUNLINK : 0) |
+			(IS_BARRIER(in) ? ATTR_FLAG_BARRIER : 0);
+
 		if (*mask & IATTR_IMMUTABLE) {
 			if (*flags & IATTR_IMMUTABLE)
-				in->i_flags |= S_IMMUTABLE;
+				attr.ia_attr_flags |= ATTR_FLAG_IMMUTABLE;
 			else
-				in->i_flags &= ~S_IMMUTABLE;
+				attr.ia_attr_flags &= ~ATTR_FLAG_IMMUTABLE;
 		}
 		if (*mask & IATTR_IUNLINK) {
 			if (*flags & IATTR_IUNLINK)
-				in->i_flags |= S_IUNLINK;
+				attr.ia_attr_flags |= ATTR_FLAG_IUNLINK;
 			else
-				in->i_flags &= ~S_IUNLINK;
+				attr.ia_attr_flags &= ~ATTR_FLAG_IUNLINK;
 		}
 		if (S_ISDIR(in->i_mode) && (*mask & IATTR_BARRIER)) {
 			if (*flags & IATTR_BARRIER)
-				in->i_flags |= S_BARRIER;
+				attr.ia_attr_flags |= ATTR_FLAG_BARRIER;
 			else
-				in->i_flags &= ~S_BARRIER;
-		}
-		if (in->i_op && in->i_op->sync_flags) {
-			error = in->i_op->sync_flags(in);
-			if (error)
-				goto out;
+				attr.ia_attr_flags &= ~ATTR_FLAG_BARRIER;
 		}
 	}
 
@@ -196,9 +198,8 @@ static int __vc_set_iattr(struct dentry *de, uint32_t *xid, uint32_t *flags, uin
 		}
 	}
 
-out:
 	up(&in->i_sem);
-	return error;
+	return 0;
 }
 
 int vc_set_iattr(uint32_t id, void __user *data)
@@ -298,8 +299,9 @@ int vx_proc_ioctl(struct inode * inode, struct file * filp,
 	}
 	return error;
 }
-#endif
+#endif	/* CONFIG_VSERVER_LEGACY */
 
+#ifdef	CONFIG_XID_PROPAGATE
 
 int vx_parse_xid(char *string, xid_t *xid, int remove)
 {
@@ -337,7 +339,7 @@ int vx_parse_xid(char *string, xid_t *xid, int remove)
 	return token;
 }
 
-void vx_propagate_xid(struct nameidata *nd, struct inode *inode)
+void __vx_propagate_xid(struct nameidata *nd, struct inode *inode)
 {
 	xid_t new_xid = 0;
 	struct vfsmount *mnt;
@@ -364,5 +366,7 @@ void vx_propagate_xid(struct nameidata *nd, struct inode *inode)
 
 #include <linux/module.h>
 
-EXPORT_SYMBOL_GPL(vx_propagate_xid);
+EXPORT_SYMBOL_GPL(__vx_propagate_xid);
+
+#endif	/* CONFIG_XID_PROPAGATE */
 

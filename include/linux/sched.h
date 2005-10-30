@@ -61,6 +61,7 @@ struct exec_domain;
 #define CLONE_UNTRACED		0x00800000	/* set if the tracing process can't force CLONE_PTRACE on this clone */
 #define CLONE_CHILD_SETTID	0x01000000	/* set the TID in the child */
 #define CLONE_STOPPED		0x02000000	/* Start in stopped state */
+#define CLONE_KTHREAD		0x10000000	/* clone a kernel thread */
 
 /*
  * List of flags we want to share for kernel threads,

@@ -81,6 +81,7 @@ extern int cap_netlink_recv(struct sk_buff *skb);
 struct nfsctl_arg;
 struct sched_param;
 struct swap_info_struct;
+// struct dqhash;
 
 /* bprm_apply_creds unsafe reasons */
 #define LSM_UNSAFE_SHARE	1
@@ -1025,7 +1026,7 @@ struct security_operations {
 	int (*acct) (struct file * file);
 	int (*sysctl) (struct ctl_table * table, int op);
 	int (*capable) (struct task_struct * tsk, int cap);
-	int (*quotactl) (int cmds, int type, int id, struct super_block * sb);
+	int (*quotactl) (int cmds, int type, int id, struct dqhash *);
 	int (*quota_on) (struct dentry * dentry);
 	int (*syslog) (int type);
 	int (*settime) (struct timespec *ts, struct timezone *tz);
@@ -1259,9 +1260,9 @@ static inline int security_sysctl(struct ctl_table *table, int op)
 }
 
 static inline int security_quotactl (int cmds, int type, int id,
-				     struct super_block *sb)
+				     struct dqhash *hash)
 {
-	return security_ops->quotactl (cmds, type, id, sb);
+	return security_ops->quotactl (cmds, type, id, hash);
 }
 
 static inline int security_quota_on (struct dentry * dentry)
@@ -1966,7 +1967,7 @@ static inline int security_sysctl(struct ctl_table *table, int op)
 }
 
 static inline int security_quotactl (int cmds, int type, int id,
-				     struct super_block * sb)
+				     struct dqhash * hash)
 {
 	return 0;
 }

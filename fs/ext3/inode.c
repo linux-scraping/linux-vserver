@@ -2420,75 +2420,21 @@ void ext3_set_inode_flags(struct inode *inode)
 {
 	unsigned int flags = EXT3_I(inode)->i_flags;
 
-	inode->i_flags &= ~(S_IMMUTABLE | S_IUNLINK | S_BARRIER |
-		S_SYNC | S_APPEND | S_NOATIME | S_DIRSYNC);
-
+	inode->i_flags &= ~(S_SYNC|S_APPEND|S_IMMUTABLE|S_IUNLINK|S_BARRIER|S_NOATIME|S_DIRSYNC);
+	if (flags & EXT3_SYNC_FL)
+		inode->i_flags |= S_SYNC;
+	if (flags & EXT3_APPEND_FL)
+		inode->i_flags |= S_APPEND;
 	if (flags & EXT3_IMMUTABLE_FL)
 		inode->i_flags |= S_IMMUTABLE;
 	if (flags & EXT3_IUNLINK_FL)
 		inode->i_flags |= S_IUNLINK;
 	if (flags & EXT3_BARRIER_FL)
 		inode->i_flags |= S_BARRIER;
-
-	if (flags & EXT3_SYNC_FL)
-		inode->i_flags |= S_SYNC;
-	if (flags & EXT3_APPEND_FL)
-		inode->i_flags |= S_APPEND;
 	if (flags & EXT3_NOATIME_FL)
 		inode->i_flags |= S_NOATIME;
 	if (flags & EXT3_DIRSYNC_FL)
 		inode->i_flags |= S_DIRSYNC;
-}
-
-int ext3_sync_flags(struct inode *inode)
-{
-	unsigned int oldflags, newflags;
-	int err = 0;
-
-	oldflags = EXT3_I(inode)->i_flags;
-	newflags = oldflags & ~(EXT3_APPEND_FL |
-		EXT3_IMMUTABLE_FL | EXT3_IUNLINK_FL |
-		EXT3_BARRIER_FL | EXT3_NOATIME_FL |
-		EXT3_SYNC_FL | EXT3_DIRSYNC_FL);
-
-	if (IS_APPEND(inode))
-		newflags |= EXT3_APPEND_FL;
-	if (IS_IMMUTABLE(inode))
-		newflags |= EXT3_IMMUTABLE_FL;
-	if (IS_IUNLINK(inode))
-		newflags |= EXT3_IUNLINK_FL;
-	if (IS_BARRIER(inode))
-		newflags |= EXT3_BARRIER_FL;
-
-	/* we do not want to copy superblock flags */
-	if (inode->i_flags & S_NOATIME)
-		newflags |= EXT3_NOATIME_FL;
-	if (inode->i_flags & S_SYNC)
-		newflags |= EXT3_SYNC_FL;
-	if (inode->i_flags & S_DIRSYNC)
-		newflags |= EXT3_DIRSYNC_FL;
-
-	if (oldflags ^ newflags) {
-		handle_t *handle;
-		struct ext3_iloc iloc;
-
-		handle = ext3_journal_start(inode, 1);
-		if (IS_ERR(handle))
-			return PTR_ERR(handle);
-		if (IS_SYNC(inode))
-			handle->h_sync = 1;
-		err = ext3_reserve_inode_write(handle, inode, &iloc);
-		if (err)
-			goto flags_err;
-
-		EXT3_I(inode)->i_flags = newflags;
-		inode->i_ctime = CURRENT_TIME;
-
-		err = ext3_mark_iloc_dirty(handle, inode, &iloc);
-	flags_err:
-		ext3_journal_stop(handle);
-	}
-	return err;
 }
 
 void ext3_read_inode(struct inode * inode)
@@ -2810,6 +2756,44 @@ int ext3_write_inode(struct inode *inode, int wait)
 	return ext3_force_commit(inode->i_sb);
 }
 
+int ext3_setattr_flags(struct inode *inode, unsigned int flags)
+{
+	unsigned int oldflags, newflags;
+	int err = 0;
+
+	oldflags = EXT3_I(inode)->i_flags;
+	newflags = oldflags &
+		~(EXT3_IMMUTABLE_FL | EXT3_IUNLINK_FL | EXT3_BARRIER_FL);
+	if (flags & ATTR_FLAG_IMMUTABLE)
+		newflags |= EXT3_IMMUTABLE_FL;
+	if (flags & ATTR_FLAG_IUNLINK)
+		newflags |= EXT3_IUNLINK_FL;
+	if (flags & ATTR_FLAG_BARRIER)
+		newflags |= EXT3_BARRIER_FL;
+
+	if (oldflags ^ newflags) {
+		handle_t *handle;
+		struct ext3_iloc iloc;
+
+		handle = ext3_journal_start(inode, 1);
+		if (IS_ERR(handle))
+			return PTR_ERR(handle);
+		if (IS_SYNC(inode))
+			handle->h_sync = 1;
+		err = ext3_reserve_inode_write(handle, inode, &iloc);
+		if (err)
+			goto flags_err;
+
+		EXT3_I(inode)->i_flags = newflags;
+		inode->i_ctime = CURRENT_TIME;
+
+		err = ext3_mark_iloc_dirty(handle, inode, &iloc);
+	flags_err:
+		ext3_journal_stop(handle);
+	}
+	return err;
+}
+
 /*
  * ext3_setattr()
  *
@@ -2883,6 +2867,12 @@ int ext3_setattr(struct dentry *dentry, struct iattr *attr)
 		if (!error)
 			error = rc;
 		ext3_journal_stop(handle);
+	}
+
+	if (ia_valid & ATTR_ATTR_FLAG) {
+		rc = ext3_setattr_flags(inode, attr->ia_attr_flags);
+		if (!error)
+			error = rc;
 	}
 
 	rc = inode_setattr(inode, attr);

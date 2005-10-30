@@ -13,18 +13,15 @@
 	__vx_acc_cres(((x) == vx_current_xid()) ? current->vx_info : 0, \
 	r, d, p, __FILE__, __LINE__)
 
+
 static inline void __vx_acc_cres(struct vx_info *vxi,
 	int res, int dir, void *_data, char *_file, int _line)
 {
-	if (VXD_RLIMIT(res, RLIMIT_NOFILE) ||
-		VXD_RLIMIT(res, RLIMIT_NPROC) ||
-		VXD_RLIMIT(res, RLIMIT_LOCKS) ||
-		VXD_RLIMIT(res, VLIMIT_NSOCK) ||
-		VXD_RLIMIT(res, VLIMIT_OPENFD))
-		vxlprintk(1, "vx_acc_cres[%5d,%s,%2d]: %5d%s (%p)",
-			(vxi?vxi->vx_id:-1), vlimit_name[res], res,
-			(vxi?atomic_read(&vxi->limit.rcur[res]):0),
-			(dir>0)?"++":"--", _data, _file, _line);
+	vxlprintk(VXD_RLIMIT_COND(res),
+		"vx_acc_cres[%5d,%s,%2d]: %5d%s (%p)",
+		(vxi?vxi->vx_id:-1), vlimit_name[res], res,
+		(vxi?atomic_read(&vxi->limit.rcur[res]):0),
+		(dir>0)?"++":"--", _data, _file, _line);
 	if (vxi) {
 		if (dir > 0)
 			atomic_inc(&vxi->limit.rcur[res]);
@@ -46,11 +43,11 @@ static inline void __vx_acc_cres(struct vx_info *vxi,
 static inline void __vx_add_cres(struct vx_info *vxi,
 	int res, int amount, void *_data, char *_file, int _line)
 {
-	if (VXD_RLIMIT(res, RLIMIT_MSGQUEUE))
-		vxlprintk(1, "vx_add_cres[%5d,%s,%2d]: %5d += %5d (%p)",
-			(vxi?vxi->vx_id:-1), vlimit_name[res], res,
-			(vxi?atomic_read(&vxi->limit.rcur[res]):0),
-			amount, _data, _file, _line);
+	vxlprintk(VXD_RLIMIT_COND(res),
+		"vx_add_cres[%5d,%s,%2d]: %5d += %5d (%p)",
+		(vxi?vxi->vx_id:-1), vlimit_name[res], res,
+		(vxi?atomic_read(&vxi->limit.rcur[res]):0),
+		amount, _data, _file, _line);
 	if (amount == 0)
 		return;
 	if (vxi)
@@ -93,15 +90,12 @@ static inline int __vx_cres_avail(struct vx_info *vxi,
 {
 	unsigned long value;
 
-	if (VXD_RLIMIT(res, RLIMIT_NOFILE) ||
-		VXD_RLIMIT(res, RLIMIT_NPROC) ||
-		VXD_RLIMIT(res, VLIMIT_NSOCK) ||
-		VXD_RLIMIT(res, VLIMIT_OPENFD))
-		vxlprintk(1, "vx_cres_avail[%5d,%s,%2d]: %5ld > %5d + %5d",
-			(vxi?vxi->vx_id:-1), vlimit_name[res], res,
-			(vxi?vxi->limit.rlim[res]:1),
-			(vxi?atomic_read(&vxi->limit.rcur[res]):0),
-			num, _file, _line);
+	vxlprintk(VXD_RLIMIT_COND(res),
+		"vx_cres_avail[%5d,%s,%2d]: %5ld > %5d + %5d",
+		(vxi?vxi->vx_id:-1), vlimit_name[res], res,
+		(vxi?vxi->limit.rlim[res]:1),
+		(vxi?atomic_read(&vxi->limit.rcur[res]):0),
+		num, _file, _line);
 	if (!vxi)
 		return 1;
 	value = atomic_read(&vxi->limit.rcur[res]);

@@ -57,7 +57,7 @@ int vc_enter_namespace(uint32_t id, void *data)
 	if (!vx_check(0, VX_ADMIN))
 		return -ENOSYS;
 
-	vxi = locate_vx_info(id);
+	vxi = lookup_vx_info(id);
 	if (!vxi)
 		return -ESRCH;
 

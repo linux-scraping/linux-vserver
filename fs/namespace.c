@@ -249,24 +249,26 @@ static int show_vfsmnt(struct seq_file *m, void *v)
 	struct vfsmount *mnt = v;
 	int err = 0;
 	static struct proc_fs_info {
-		int flag;
-		char *str;
+		int s_flag;
+		int mnt_flag;
+		char *set_str;
+		char *unset_str;
 	} fs_info[] = {
-		{ MS_SYNCHRONOUS, ",sync" },
-		{ MS_DIRSYNC, ",dirsync" },
-		{ MS_MANDLOCK, ",mand" },
-		{ MS_NOATIME, ",noatime" },
-		{ MS_NODIRATIME, ",nodiratime" },
-		{ MS_TAGXID, ",tagxid" },
-		{ 0, NULL }
+		{ MS_RDONLY, MNT_RDONLY, "ro", "rw" },
+		{ MS_SYNCHRONOUS, 0, ",sync", NULL },
+		{ MS_DIRSYNC, 0, ",dirsync", NULL },
+		{ MS_MANDLOCK, 0, ",mand", NULL },
+		{ MS_TAGXID, 0, ",tagxid", NULL },
+		{ MS_NOATIME, MNT_NOATIME, ",noatime", NULL },
+		{ MS_NODIRATIME, MNT_NODIRATIME, ",nodiratime", NULL },
+		{ 0, MNT_NOSUID, ",nosuid", NULL },
+		{ 0, MNT_NODEV, ",nodev", NULL },
+		{ 0, MNT_NOEXEC, ",noexec", NULL },
+		{ 0, 0, NULL, NULL }
 	};
-	static struct proc_fs_info mnt_info[] = {
-		{ MNT_NOSUID, ",nosuid" },
-		{ MNT_NODEV, ",nodev" },
-		{ MNT_NOEXEC, ",noexec" },
-		{ 0, NULL }
-	};
-	struct proc_fs_info *fs_infop;
+	struct proc_fs_info *p;
+	unsigned long s_flags = mnt->mnt_sb->s_flags;
+	int mnt_flags = mnt->mnt_flags;
 
 	if (vx_flags(VXF_HIDE_MOUNT, 0))
 		return 0;
@@ -283,14 +285,15 @@ static int show_vfsmnt(struct seq_file *m, void *v)
 		seq_putc(m, ' ');
 	}
 	mangle(m, mnt->mnt_sb->s_type->name);
-	seq_puts(m, mnt->mnt_sb->s_flags & MS_RDONLY ? " ro" : " rw");
-	for (fs_infop = fs_info; fs_infop->flag; fs_infop++) {
-		if (mnt->mnt_sb->s_flags & fs_infop->flag)
-			seq_puts(m, fs_infop->str);
-	}
-	for (fs_infop = mnt_info; fs_infop->flag; fs_infop++) {
-		if (mnt->mnt_flags & fs_infop->flag)
-			seq_puts(m, fs_infop->str);
+	seq_putc(m, ' ');
+	for (p = fs_info; (p->s_flag | p->mnt_flag) ; p++) {
+		if ((s_flags & p->s_flag) || (mnt_flags & p->mnt_flag)) {
+			if (p->set_str)
+				seq_puts(m, p->set_str);
+		} else {
+			if (p->unset_str)
+				seq_puts(m, p->unset_str);
+		}
 	}
 	if (mnt->mnt_flags & MNT_XID)
 		seq_printf(m, ",xid=%d", mnt->mnt_xid);
@@ -487,7 +490,7 @@ static int do_umount(struct vfsmount *mnt, int flags)
 		down_write(&sb->s_umount);
 		if (!(sb->s_flags & MS_RDONLY)) {
 			lock_kernel();
-			DQUOT_OFF(sb);
+			DQUOT_OFF(sb->s_dqh);
 			retval = do_remount_sb(sb, MS_RDONLY, NULL, 0);
 			unlock_kernel();
 		}
@@ -502,7 +505,7 @@ static int do_umount(struct vfsmount *mnt, int flags)
 		/* last instance - try to be smart */
 		spin_unlock(&vfsmount_lock);
 		lock_kernel();
-		DQUOT_OFF(sb);
+		DQUOT_OFF(sb->s_dqh);
 		acct_auto_close(sb);
 		unlock_kernel();
 		security_sb_umount_close(mnt);
@@ -682,7 +685,8 @@ out_unlock:
 /*
  * do loopback mount.
  */
-static int do_loopback(struct nameidata *nd, char *old_name, xid_t xid, int flags)
+static int do_loopback(struct nameidata *nd, char *old_name, xid_t xid,
+	unsigned long flags, int mnt_flags)
 {
 	struct nameidata old_nd;
 	struct vfsmount *mnt = NULL;
@@ -723,6 +727,7 @@ static int do_loopback(struct nameidata *nd, char *old_name, xid_t xid, int flag
 			spin_unlock(&vfsmount_lock);
 		} else
 			mntput(mnt);
+		mnt->mnt_flags = mnt_flags;
 	}
 
 	up_write(&current->namespace->sem);
@@ -932,7 +937,7 @@ static void expire_mount(struct vfsmount *mnt, struct list_head *mounts)
 		if (atomic_read(&mnt->mnt_sb->s_active) == 1) {
 			/* last instance - try to be smart */
 			lock_kernel();
-			DQUOT_OFF(mnt->mnt_sb);
+			DQUOT_OFF(mnt->mnt_sb->s_dqh);
 			acct_auto_close(mnt->mnt_sb);
 			unlock_kernel();
 		}
@@ -1108,6 +1113,7 @@ long do_mount(char * dev_name, char * dir_name, char *type_page,
 	if (data_page)
 		((char *)data_page)[PAGE_SIZE - 1] = 0;
 
+#ifdef	CONFIG_XID_PROPAGATE
 	retval = vx_parse_xid(data_page, &xid, 1);
 	if (retval) {
 		mnt_flags |= MNT_XID;
@@ -1115,14 +1121,21 @@ long do_mount(char * dev_name, char * dir_name, char *type_page,
 		if (flags & (MS_BIND|MS_REMOUNT))
 			flags |= MS_XID;
 	}
+#endif
 
 	/* Separate the per-mountpoint flags */
+	if (flags & MS_RDONLY)
+		mnt_flags |= MNT_RDONLY;
 	if (flags & MS_NOSUID)
 		mnt_flags |= MNT_NOSUID;
 	if (flags & MS_NODEV)
 		mnt_flags |= MNT_NODEV;
 	if (flags & MS_NOEXEC)
 		mnt_flags |= MNT_NOEXEC;
+	if (flags & MS_NOATIME)
+		mnt_flags |= MNT_NOATIME;
+	if (flags & MS_NODIRATIME)
+		mnt_flags |= MNT_NODIRATIME;
 	flags &= ~(MS_NOSUID|MS_NOEXEC|MS_NODEV|MS_ACTIVE);
 
 	if (vx_ccaps(VXC_SECURE_MOUNT))
@@ -1141,7 +1154,7 @@ long do_mount(char * dev_name, char * dir_name, char *type_page,
 		retval = do_remount(&nd, flags & ~MS_REMOUNT, mnt_flags,
 				    data_page, xid);
 	else if (flags & MS_BIND)
-		retval = do_loopback(&nd, dev_name, xid, flags);
+		retval = do_loopback(&nd, dev_name, xid, flags, mnt_flags);
 	else if (flags & MS_MOVE)
 		retval = do_move_mount(&nd, dev_name);
 	else

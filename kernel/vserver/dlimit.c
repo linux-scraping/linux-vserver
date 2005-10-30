@@ -494,12 +494,6 @@ void vx_vsi_statfs(struct super_block *sb, struct kstatfs *buf)
 	if (buf->f_files > dli->dl_inodes_total)
 		buf->f_files = dli->dl_inodes_total;
 
-	/* inode hack for reiserfs */
-	if ((buf->f_files == 0) && (dli->dl_inodes_total > 0)) {
-		buf->f_files = dli->dl_inodes_total;
-		buf->f_ffree = dli->dl_inodes_total;
-	}
-
 	ifree = dli->dl_inodes_total - dli->dl_inodes_used;
 	/* reduce free inodes to min */
 	if (ifree < buf->f_ffree)

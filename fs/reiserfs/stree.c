@@ -1453,9 +1453,9 @@ void reiserfs_delete_solid_item(struct reiserfs_transaction_handle *th,
 					       quota_cut_bytes, inode->i_uid,
 					       key2type(key));
 #endif
-				DLIMIT_FREE_SPACE(inode, quota_cut_bytes);
 				DQUOT_FREE_SPACE_NODIRTY(inode,
 							 quota_cut_bytes);
+				DLIMIT_FREE_SPACE(inode, quota_cut_bytes);
 			}
 			break;
 		}

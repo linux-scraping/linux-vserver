@@ -1056,60 +1056,21 @@ void ext2_set_inode_flags(struct inode *inode)
 {
 	unsigned int flags = EXT2_I(inode)->i_flags;
 
-	inode->i_flags &= ~(S_IMMUTABLE | S_IUNLINK | S_BARRIER |
-		S_SYNC | S_APPEND | S_NOATIME | S_DIRSYNC);
-
+	inode->i_flags &= ~(S_SYNC|S_APPEND|S_IMMUTABLE|S_IUNLINK|S_BARRIER|S_NOATIME|S_DIRSYNC);
+	if (flags & EXT2_SYNC_FL)
+		inode->i_flags |= S_SYNC;
+	if (flags & EXT2_APPEND_FL)
+		inode->i_flags |= S_APPEND;
 	if (flags & EXT2_IMMUTABLE_FL)
 		inode->i_flags |= S_IMMUTABLE;
 	if (flags & EXT2_IUNLINK_FL)
 		inode->i_flags |= S_IUNLINK;
 	if (flags & EXT2_BARRIER_FL)
 		inode->i_flags |= S_BARRIER;
-
-	if (flags & EXT2_SYNC_FL)
-		inode->i_flags |= S_SYNC;
-	if (flags & EXT2_APPEND_FL)
-		inode->i_flags |= S_APPEND;
 	if (flags & EXT2_NOATIME_FL)
 		inode->i_flags |= S_NOATIME;
 	if (flags & EXT2_DIRSYNC_FL)
 		inode->i_flags |= S_DIRSYNC;
-}
-
-int ext2_sync_flags(struct inode *inode)
-{
-	unsigned int oldflags, newflags;
-
-	oldflags = EXT2_I(inode)->i_flags;
-	newflags = oldflags & ~(EXT2_APPEND_FL |
-		EXT2_IMMUTABLE_FL | EXT2_IUNLINK_FL |
-		EXT2_BARRIER_FL | EXT2_NOATIME_FL |
-		EXT2_SYNC_FL | EXT2_DIRSYNC_FL);
-
-	if (IS_APPEND(inode))
-		newflags |= EXT2_APPEND_FL;
-	if (IS_IMMUTABLE(inode))
-		newflags |= EXT2_IMMUTABLE_FL;
-	if (IS_IUNLINK(inode))
-		newflags |= EXT2_IUNLINK_FL;
-	if (IS_BARRIER(inode))
-		newflags |= EXT2_BARRIER_FL;
-
-	/* we do not want to copy superblock flags */
-	if (inode->i_flags & S_NOATIME)
-		newflags |= EXT2_NOATIME_FL;
-	if (inode->i_flags & S_SYNC)
-		newflags |= EXT2_SYNC_FL;
-	if (inode->i_flags & S_DIRSYNC)
-		newflags |= EXT2_DIRSYNC_FL;
-
-	if (oldflags ^ newflags) {
-		EXT2_I(inode)->i_flags = newflags;
-		inode->i_ctime = CURRENT_TIME;
-		mark_inode_dirty(inode);
-	}
-
-	return 0;
 }
 
 void ext2_read_inode (struct inode * inode)
@@ -1354,6 +1315,27 @@ int ext2_sync_inode(struct inode *inode)
 	return sync_inode(inode, &wbc);
 }
 
+int ext2_setattr_flags(struct inode *inode, unsigned int flags)
+{
+	unsigned int oldflags, newflags;
+
+	oldflags = EXT2_I(inode)->i_flags;
+	newflags = oldflags &
+		~(EXT2_IMMUTABLE_FL | EXT2_IUNLINK_FL | EXT2_BARRIER_FL);
+	if (flags & ATTR_FLAG_IMMUTABLE)
+		newflags |= EXT2_IMMUTABLE_FL;
+	if (flags & ATTR_FLAG_IUNLINK)
+		newflags |= EXT2_IUNLINK_FL;
+	if (flags & ATTR_FLAG_BARRIER)
+		newflags |= EXT2_BARRIER_FL;
+
+	if (oldflags ^ newflags) {
+		EXT2_I(inode)->i_flags = newflags;
+		inode->i_ctime = CURRENT_TIME;
+	}
+	return 0;
+}
+
 int ext2_setattr(struct dentry *dentry, struct iattr *iattr)
 {
 	struct inode *inode = dentry->d_inode;
@@ -1369,6 +1351,8 @@ int ext2_setattr(struct dentry *dentry, struct iattr *iattr)
 		if (error)
 			return error;
 	}
+	if (iattr->ia_valid & ATTR_ATTR_FLAG)
+		ext2_setattr_flags(inode, iattr->ia_attr_flags);
 
 	error = inode_setattr(inode, iattr);
 	if (!error && (iattr->ia_valid & ATTR_MODE))
