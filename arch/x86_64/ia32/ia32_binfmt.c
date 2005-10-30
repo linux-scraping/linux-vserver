@@ -353,14 +353,6 @@ int setup_arg_pages(struct linux_binprm *bprm, unsigned long stack_top, int exec
 	mpnt = kmem_cache_alloc(vm_area_cachep, SLAB_KERNEL);
 	if (!mpnt) 
 		return -ENOMEM; 
-	
-	grow = (IA32_STACK_TOP - (PAGE_MASK & (unsigned long) bprm->p))
-		>> PAGE_SHIFT;
-	if (security_vm_enough_memory(grow) ||
-		!vx_vmpages_avail(mm, grow)) {
-		kmem_cache_free(vm_area_cachep, mpnt);
-		return -ENOMEM;
-	}
 
 	memset(mpnt, 0, sizeof(*mpnt));
 

@@ -712,11 +712,7 @@ static void second_overflow(void)
 	if (ltemp > (MAXPHASE / MINSEC) << SHIFT_UPDATE)
 	    ltemp = (MAXPHASE / MINSEC) << SHIFT_UPDATE;
 	time_offset += ltemp;
-	#if SHIFT_SCALE - SHIFT_HZ - SHIFT_UPDATE > 0
 	time_adj = -ltemp << (SHIFT_SCALE - SHIFT_HZ - SHIFT_UPDATE);
-	#else
-	time_adj = -ltemp >> (SHIFT_HZ + SHIFT_UPDATE - SHIFT_SCALE);
-	#endif
     } else {
 	ltemp = time_offset;
 	if (!(time_status & STA_FLL))
@@ -724,11 +720,7 @@ static void second_overflow(void)
 	if (ltemp > (MAXPHASE / MINSEC) << SHIFT_UPDATE)
 	    ltemp = (MAXPHASE / MINSEC) << SHIFT_UPDATE;
 	time_offset -= ltemp;
-	#if SHIFT_SCALE - SHIFT_HZ - SHIFT_UPDATE > 0
 	time_adj = ltemp << (SHIFT_SCALE - SHIFT_HZ - SHIFT_UPDATE);
-	#else
-	time_adj = ltemp >> (SHIFT_HZ + SHIFT_UPDATE - SHIFT_SCALE);
-	#endif
     }
 
     /*
@@ -960,6 +952,7 @@ void do_timer(struct pt_regs *regs)
 {
 	jiffies_64++;
 	update_times();
+	softlockup_tick(regs);
 }
 
 #ifdef __ARCH_WANT_SYS_ALARM
@@ -1168,8 +1161,25 @@ fastcall signed long __sched schedule_timeout(signed long timeout)
  out:
 	return timeout < 0 ? 0 : timeout;
 }
-
 EXPORT_SYMBOL(schedule_timeout);
+
+/*
+ * We can use __set_current_state() here because schedule_timeout() calls
+ * schedule() unconditionally.
+ */
+signed long __sched schedule_timeout_interruptible(signed long timeout)
+{
+       __set_current_state(TASK_INTERRUPTIBLE);
+       return schedule_timeout(timeout);
+}
+EXPORT_SYMBOL(schedule_timeout_interruptible);
+
+signed long __sched schedule_timeout_uninterruptible(signed long timeout)
+{
+       __set_current_state(TASK_UNINTERRUPTIBLE);
+       return schedule_timeout(timeout);
+}
+EXPORT_SYMBOL(schedule_timeout_uninterruptible);
 
 /* Thread ID - the internal kernel "pid" */
 asmlinkage long sys_gettid(void)
@@ -1187,8 +1197,7 @@ static long __sched nanosleep_restart(struct restart_block *restart)
 	if (!time_after(expire, now))
 		return 0;
 
-	current->state = TASK_INTERRUPTIBLE;
-	expire = schedule_timeout(expire - now);
+	expire = schedule_timeout_interruptible(expire - now);
 
 	ret = 0;
 	if (expire) {
@@ -1216,8 +1225,7 @@ asmlinkage long sys_nanosleep(struct timespec __user *rqtp, struct timespec __us
 		return -EINVAL;
 
 	expire = timespec_to_jiffies(&t) + (t.tv_sec || t.tv_nsec);
-	current->state = TASK_INTERRUPTIBLE;
-	expire = schedule_timeout(expire);
+	expire = schedule_timeout_interruptible(expire);
 
 	ret = 0;
 	if (expire) {
@@ -1448,7 +1456,7 @@ static inline u64 time_interpolator_get_cycles(unsigned int src)
 	}
 }
 
-static inline u64 time_interpolator_get_counter(void)
+static inline u64 time_interpolator_get_counter(int writelock)
 {
 	unsigned int src = time_interpolator->source;
 
@@ -1462,6 +1470,15 @@ static inline u64 time_interpolator_get_counter(void)
 			now = time_interpolator_get_cycles(src);
 			if (lcycle && time_after(lcycle, now))
 				return lcycle;
+
+			/* When holding the xtime write lock, there's no need
+			 * to add the overhead of the cmpxchg.  Readers are
+			 * force to retry until the write lock is released.
+			 */
+			if (writelock) {
+				time_interpolator->last_cycle = now;
+				return now;
+			}
 			/* Keep track of the last timer value returned. The use of cmpxchg here
 			 * will cause contention in an SMP environment.
 			 */
@@ -1475,7 +1492,7 @@ static inline u64 time_interpolator_get_counter(void)
 void time_interpolator_reset(void)
 {
 	time_interpolator->offset = 0;
-	time_interpolator->last_counter = time_interpolator_get_counter();
+	time_interpolator->last_counter = time_interpolator_get_counter(1);
 }
 
 #define GET_TI_NSECS(count,i) (((((count) - i->last_counter) & (i)->mask) * (i)->nsec_per_cyc) >> (i)->shift)
@@ -1487,7 +1504,7 @@ unsigned long time_interpolator_get_offset(void)
 		return 0;
 
 	return time_interpolator->offset +
-		GET_TI_NSECS(time_interpolator_get_counter(), time_interpolator);
+		GET_TI_NSECS(time_interpolator_get_counter(0), time_interpolator);
 }
 
 #define INTERPOLATOR_ADJUST 65536
@@ -1510,7 +1527,7 @@ static void time_interpolator_update(long delta_nsec)
 	 * and the tuning logic insures that.
          */
 
-	counter = time_interpolator_get_counter();
+	counter = time_interpolator_get_counter(1);
 	offset = time_interpolator->offset + GET_TI_NSECS(counter, time_interpolator);
 
 	if (delta_nsec < 0 || (unsigned long) delta_nsec < offset)
@@ -1608,10 +1625,8 @@ void msleep(unsigned int msecs)
 {
 	unsigned long timeout = msecs_to_jiffies(msecs) + 1;
 
-	while (timeout) {
-		set_current_state(TASK_UNINTERRUPTIBLE);
-		timeout = schedule_timeout(timeout);
-	}
+	while (timeout)
+		timeout = schedule_timeout_uninterruptible(timeout);
 }
 
 EXPORT_SYMBOL(msleep);
@@ -1624,10 +1639,8 @@ unsigned long msleep_interruptible(unsigned int msecs)
 {
 	unsigned long timeout = msecs_to_jiffies(msecs) + 1;
 
-	while (timeout && !signal_pending(current)) {
-		set_current_state(TASK_INTERRUPTIBLE);
-		timeout = schedule_timeout(timeout);
-	}
+	while (timeout && !signal_pending(current))
+		timeout = schedule_timeout_interruptible(timeout);
 	return jiffies_to_msecs(timeout);
 }
 

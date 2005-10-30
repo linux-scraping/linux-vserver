@@ -159,8 +159,8 @@ struct serial_state {
         int     count;
         u8      *iomem_base;
         u16     iomem_reg_shift;
-	unsigned int  close_delay;
-	unsigned int  closing_wait; /* time to wait before closing */
+        unsigned short  close_delay;
+        unsigned short  closing_wait; /* time to wait before closing */
         struct async_icount_24     icount; 
         int     io_type;
         struct async_struct *info;
@@ -244,8 +244,8 @@ typedef struct serial_info {
 	int			line;
 	int			x_char;	/* xon/xoff character */
 	int			close_delay;
-	unsigned int		closing_wait;
-	unsigned int		closing_wait2;
+	unsigned short		closing_wait;
+	unsigned short		closing_wait2;
 	unsigned long		event;
 	unsigned long		last_active;
 	int			blocked_open; /* # of blocked opens */
@@ -2474,8 +2474,7 @@ static struct tty_operations rs_360_ops = {
 	.tiocmset = rs_360_tiocmset,
 };
 
-/* int __init rs_360_init(void) */
-int rs_360_init(void)
+static int __init rs_360_init(void)
 {
 	struct serial_state * state;
 	ser_info_t	*info;
@@ -2827,10 +2826,7 @@ int rs_360_init(void)
 
 	return 0;
 }
-
-
-
-
+module_init(rs_360_init);
 
 /* This must always be called before the rs_360_init() function, otherwise
  * it blows away the port control information.

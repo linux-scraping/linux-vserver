@@ -74,6 +74,8 @@ static void ext2_truncate_nocheck (struct inode * inode);
  */
 void ext2_delete_inode (struct inode * inode)
 {
+	truncate_inode_pages(&inode->i_data, 0);
+
 	if (is_bad_inode(inode))
 		goto no_delete;
 	EXT2_I(inode)->i_dtime	= get_seconds();

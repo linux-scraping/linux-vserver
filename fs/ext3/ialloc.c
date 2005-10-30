@@ -606,18 +606,23 @@ got:
 		sizeof(struct ext3_inode) - EXT3_GOOD_OLD_INODE_SIZE : 0;
 
 	ret = inode;
-	if (DQUOT_ALLOC_INODE(inode)) {
-		DQUOT_DROP(inode);
+	if(DQUOT_ALLOC_INODE(inode)) {
 		err = -EDQUOT;
-		goto fail2;
+		goto fail_drop;
 	}
+
 	err = ext3_init_acl(handle, inode, dir);
 	if (err)
-		goto fail2_free;
+		goto fail_free_drop;
+
+	err = ext3_init_security(handle,inode, dir);
+	if (err)
+		goto fail_free_drop;
+
 	err = ext3_mark_inode_dirty(handle, inode);
 	if (err) {
 		ext3_std_error(sb, err);
-		goto fail2_free;
+		goto fail_free_drop;
 	}
 
 	ext3_debug("allocating inode %lu\n", inode->i_ino);
@@ -633,10 +638,11 @@ really_out:
 	brelse(bitmap_bh);
 	return ret;
 
-fail2_free:
+fail_free_drop:
 	DQUOT_FREE_INODE(inode);
+
+fail_drop:
 	DQUOT_DROP(inode);
-fail2:
 	DLIMIT_FREE_INODE(inode);
 	inode->i_flags |= S_NOQUOTA;
 	inode->i_nlink = 0;

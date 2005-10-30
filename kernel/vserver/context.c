@@ -500,12 +500,14 @@ void vx_mask_bcaps(struct task_struct *p)
 static int vx_openfd_task(struct task_struct *tsk)
 {
 	struct files_struct *files = tsk->files;
+	struct fdtable *fdt;
 	const unsigned long *bptr;
 	int count, total;
 
 	spin_lock(&files->file_lock);
-	bptr = files->open_fds->fds_bits;
-	count = files->max_fds / (sizeof(unsigned long) * 8);
+	fdt = files_fdtable(files);
+	bptr = fdt->open_fds->fds_bits;
+	count = fdt->max_fds / (sizeof(unsigned long) * 8);
 	for (total = 0; count > 0; count--) {
 		if (*bptr)
 			total += hweight_long(*bptr);

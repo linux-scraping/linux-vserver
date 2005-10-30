@@ -865,7 +865,7 @@ static void cyz_poll(unsigned long);
 static long cyz_polling_cycle = CZ_DEF_POLL;
 
 static int cyz_timeron = 0;
-static struct timer_list cyz_timerlist = TIMER_INITIALIZER(cyz_poll, 0, 0);
+static DEFINE_TIMER(cyz_timerlist, cyz_poll, 0, 0);
 
 #else /* CONFIG_CYZ_INTR */
 static void cyz_rx_restart(unsigned long);
@@ -4054,7 +4054,7 @@ cy_ioctl(struct tty_struct *tty, struct file * file,
 	    break;
 #endif /* CONFIG_CYZ_INTR */
 	case CYSETWAIT:
-	    info->closing_wait = (unsigned int)arg * HZ/100;
+    	    info->closing_wait = (unsigned short)arg * HZ/100;
 	    ret_val = 0;
 	    break;
 	case CYGETWAIT:

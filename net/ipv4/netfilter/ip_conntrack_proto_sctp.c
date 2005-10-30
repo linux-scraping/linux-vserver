@@ -60,7 +60,7 @@ static const char *sctp_conntrack_names[] = {
 static unsigned long ip_ct_sctp_timeout_closed            =  10 SECS;
 static unsigned long ip_ct_sctp_timeout_cookie_wait       =   3 SECS;
 static unsigned long ip_ct_sctp_timeout_cookie_echoed     =   3 SECS;
-static unsigned long ip_ct_sctp_timeout_established       =   2 DAYS;
+static unsigned long ip_ct_sctp_timeout_established       =   5 DAYS;
 static unsigned long ip_ct_sctp_timeout_shutdown_sent     = 300 SECS / 1000;
 static unsigned long ip_ct_sctp_timeout_shutdown_recd     = 300 SECS / 1000;
 static unsigned long ip_ct_sctp_timeout_shutdown_ack_sent =   3 SECS;
@@ -404,6 +404,8 @@ static int sctp_packet(struct ip_conntrack *conntrack,
 		}
 
 		conntrack->proto.sctp.state = newconntrack;
+		if (oldsctpstate != newconntrack)
+			ip_conntrack_event_cache(IPCT_PROTOINFO, skb);
 		write_unlock_bh(&sctp_lock);
 	}
 
@@ -414,6 +416,7 @@ static int sctp_packet(struct ip_conntrack *conntrack,
 		&& newconntrack == SCTP_CONNTRACK_ESTABLISHED) {
 		DEBUGP("Setting assured bit\n");
 		set_bit(IPS_ASSURED_BIT, &conntrack->status);
+		ip_conntrack_event_cache(IPCT_STATUS, skb);
 	}
 
 	return NF_ACCEPT;
@@ -503,7 +506,12 @@ static struct ip_conntrack_protocol ip_conntrack_protocol_sctp = {
 	.packet 	 = sctp_packet, 
 	.new 		 = sctp_new, 
 	.destroy 	 = NULL, 
-	.me 		 = THIS_MODULE 
+	.me 		 = THIS_MODULE,
+#if defined(CONFIG_IP_NF_CONNTRACK_NETLINK) || \
+    defined(CONFIG_IP_NF_CONNTRACK_NETLINK_MODULE)
+	.tuple_to_nfattr = ip_ct_port_tuple_to_nfattr,
+	.nfattr_to_tuple = ip_ct_port_nfattr_to_tuple,
+#endif
 };
 
 #ifdef CONFIG_SYSCTL

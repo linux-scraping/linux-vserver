@@ -408,7 +408,7 @@ int ifa_in_nx_info(struct in_ifaddr *ifa, struct nx_info *nxi)
 
 int dev_in_nx_info(struct net_device *dev, struct nx_info *nxi)
 {
-	struct in_device *in_dev = __in_dev_get(dev);
+	struct in_device *in_dev = in_dev_get(dev);
 	struct in_ifaddr **ifap = NULL;
 	struct in_ifaddr *ifa = NULL;
 
@@ -434,7 +434,7 @@ int dev_in_nx_info(struct net_device *dev, struct nx_info *nxi)
 static inline int __addr_in_socket(struct sock *sk, uint32_t addr)
 {
 	struct nx_info *nxi = sk->sk_nx_info;
-	uint32_t saddr = tcp_v4_rcv_saddr(sk);
+	uint32_t saddr = inet_rcv_saddr(sk);
 
 	vxdprintk(VXD_CBIT(net, 5),
 		"__addr_in_socket(%p,%d.%d.%d.%d) %p:%d.%d.%d.%d %p;%lx",

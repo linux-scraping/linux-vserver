@@ -216,14 +216,6 @@ ia32_setup_arg_pages (struct linux_binprm *bprm, int executable_stack)
 	if (!mpnt)
 		return -ENOMEM;
 
-	grow = (IA32_STACK_TOP - (PAGE_MASK & (unsigned long) bprm->p))
-		>> PAGE_SHIFT;
-	if (security_vm_enough_memory(grow) ||
-		!vx_vmpages_avail(mm, grow)) {
-		kmem_cache_free(vm_area_cachep, mpnt);
-		return -ENOMEM;
-	}
-
 	memset(mpnt, 0, sizeof(*mpnt));
 
 	down_write(&current->mm->mmap_sem);

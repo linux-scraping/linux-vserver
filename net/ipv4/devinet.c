@@ -351,7 +351,7 @@ static int inet_insert_ifa(struct in_ifaddr *ifa)
 
 static int inet_set_ifa(struct net_device *dev, struct in_ifaddr *ifa)
 {
-	struct in_device *in_dev = __in_dev_get(dev);
+	struct in_device *in_dev = __in_dev_get_rtnl(dev);
 
 	ASSERT_RTNL();
 
@@ -449,7 +449,7 @@ static int inet_rtm_newaddr(struct sk_buff *skb, struct nlmsghdr *nlh, void *arg
 		goto out;
 
 	rc = -ENOBUFS;
-	if ((in_dev = __in_dev_get(dev)) == NULL) {
+	if ((in_dev = __in_dev_get_rtnl(dev)) == NULL) {
 		in_dev = inetdev_init(dev);
 		if (!in_dev)
 			goto out;
@@ -611,7 +611,7 @@ int devinet_ioctl(unsigned int cmd, void __user *arg)
 	if (colon)
 		*colon = ':';
 
-	if ((in_dev = __in_dev_get(dev)) != NULL) {
+	if ((in_dev = __in_dev_get_rtnl(dev)) != NULL) {
 		if (tryaddrmatch) {
 			/* Matthias Andree */
 			/* compare label and address (4.4BSD style) */
@@ -778,7 +778,7 @@ rarok:
 
 static int inet_gifconf(struct net_device *dev, char __user *buf, int len)
 {
-	struct in_device *in_dev = __in_dev_get(dev);
+	struct in_device *in_dev = __in_dev_get_rtnl(dev);
 	struct in_ifaddr *ifa;
 	struct ifreq ifr;
 	int done = 0;
@@ -824,7 +824,7 @@ u32 inet_select_addr(const struct net_device *dev, u32 dst, int scope)
 	struct in_device *in_dev;
 
 	rcu_read_lock();
-	in_dev = __in_dev_get(dev);
+	in_dev = __in_dev_get_rcu(dev);
 	if (!in_dev)
 		goto no_in_dev;
 
@@ -851,7 +851,7 @@ no_in_dev:
 	read_lock(&dev_base_lock);
 	rcu_read_lock();
 	for (dev = dev_base; dev; dev = dev->next) {
-		if ((in_dev = __in_dev_get(dev)) == NULL)
+		if ((in_dev = __in_dev_get_rcu(dev)) == NULL)
 			continue;
 
 		for_primary_ifa(in_dev) {
@@ -920,7 +920,7 @@ u32 inet_confirm_addr(const struct net_device *dev, u32 dst, u32 local, int scop
 
 	if (dev) {
 		rcu_read_lock();
-		if ((in_dev = __in_dev_get(dev)))
+		if ((in_dev = __in_dev_get_rcu(dev)))
 			addr = confirm_addr_indev(in_dev, dst, local, scope);
 		rcu_read_unlock();
 
@@ -930,7 +930,7 @@ u32 inet_confirm_addr(const struct net_device *dev, u32 dst, u32 local, int scop
 	read_lock(&dev_base_lock);
 	rcu_read_lock();
 	for (dev = dev_base; dev; dev = dev->next) {
-		if ((in_dev = __in_dev_get(dev))) {
+		if ((in_dev = __in_dev_get_rcu(dev))) {
 			addr = confirm_addr_indev(in_dev, dst, local, scope);
 			if (addr)
 				break;
@@ -990,7 +990,7 @@ static int inetdev_event(struct notifier_block *this, unsigned long event,
 			 void *ptr)
 {
 	struct net_device *dev = ptr;
-	struct in_device *in_dev = __in_dev_get(dev);
+	struct in_device *in_dev = __in_dev_get_rtnl(dev);
 
 	ASSERT_RTNL();
 
@@ -1112,7 +1112,7 @@ static int inet_dump_ifaddr(struct sk_buff *skb, struct netlink_callback *cb)
 		if (idx > s_idx)
 			s_ip_idx = 0;
 		rcu_read_lock();
-		if ((in_dev = __in_dev_get(dev)) == NULL) {
+		if ((in_dev = __in_dev_get_rcu(dev)) == NULL) {
 			rcu_read_unlock();
 			continue;
 		}
@@ -1148,13 +1148,12 @@ static void rtmsg_ifa(int event, struct in_ifaddr* ifa)
 	struct sk_buff *skb = alloc_skb(size, GFP_KERNEL);
 
 	if (!skb)
-		netlink_set_err(rtnl, 0, RTMGRP_IPV4_IFADDR, ENOBUFS);
+		netlink_set_err(rtnl, 0, RTNLGRP_IPV4_IFADDR, ENOBUFS);
 	else if (inet_fill_ifaddr(skb, ifa, current->pid, 0, event, 0) < 0) {
 		kfree_skb(skb);
-		netlink_set_err(rtnl, 0, RTMGRP_IPV4_IFADDR, EINVAL);
+		netlink_set_err(rtnl, 0, RTNLGRP_IPV4_IFADDR, EINVAL);
 	} else {
-		NETLINK_CB(skb).dst_groups = RTMGRP_IPV4_IFADDR;
-		netlink_broadcast(rtnl, skb, 0, RTMGRP_IPV4_IFADDR, GFP_KERNEL);
+		netlink_broadcast(rtnl, skb, 0, RTNLGRP_IPV4_IFADDR, GFP_KERNEL);
 	}
 }
 
@@ -1187,7 +1186,7 @@ void inet_forward_change(void)
 	for (dev = dev_base; dev; dev = dev->next) {
 		struct in_device *in_dev;
 		rcu_read_lock();
-		in_dev = __in_dev_get(dev);
+		in_dev = __in_dev_get_rcu(dev);
 		if (in_dev)
 			in_dev->cnf.forwarding = on;
 		rcu_read_unlock();

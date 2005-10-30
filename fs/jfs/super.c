@@ -23,9 +23,11 @@
 #include <linux/parser.h>
 #include <linux/completion.h>
 #include <linux/vfs.h>
+#include <linux/mount.h>
 #include <linux/moduleparam.h>
 #include <linux/posix_acl.h>
 #include <asm/uaccess.h>
+#include <linux/seq_file.h>
 
 #include "jfs_incore.h"
 #include "jfs_filsys.h"
@@ -192,7 +194,8 @@ static void jfs_put_super(struct super_block *sb)
 
 enum {
 	Opt_integrity, Opt_nointegrity, Opt_iocharset, Opt_resize,
-	Opt_resize_nosize, Opt_errors, Opt_tagxid, Opt_ignore, Opt_err,
+	Opt_resize_nosize, Opt_errors, Opt_ignore, Opt_err, Opt_quota,
+	Opt_usrquota, Opt_grpquota, Opt_tagxid
 };
 
 static match_table_t tokens = {
@@ -205,8 +208,8 @@ static match_table_t tokens = {
 	{Opt_tagxid, "tagxid"},
 	{Opt_ignore, "noquota"},
 	{Opt_ignore, "quota"},
-	{Opt_ignore, "usrquota"},
-	{Opt_ignore, "grpquota"},
+	{Opt_usrquota, "usrquota"},
+	{Opt_grpquota, "grpquota"},
 	{Opt_err, NULL}
 };
 
@@ -294,6 +297,23 @@ static int parse_options(char *options, struct super_block *sb, s64 *newLVSize,
 			}
 			break;
 		}
+
+#if defined(CONFIG_QUOTA)
+		case Opt_quota:
+		case Opt_usrquota:
+			*flag |= JFS_USRQUOTA;
+			break;
+		case Opt_grpquota:
+			*flag |= JFS_GRPQUOTA;
+			break;
+#else
+		case Opt_usrquota:
+		case Opt_grpquota:
+		case Opt_quota:
+			printk(KERN_ERR
+			       "JFS: quota operations not supported\n");
+			break;
+#endif
 #ifndef CONFIG_INOXID_NONE
 		case Opt_tagxid:
 			*flag |= JFS_TAGXID;
@@ -555,6 +575,26 @@ static int jfs_sync_fs(struct super_block *sb, int wait)
 	return 0;
 }
 
+static int jfs_show_options(struct seq_file *seq, struct vfsmount *vfs)
+{
+	struct jfs_sb_info *sbi = JFS_SBI(vfs->mnt_sb);
+
+	if (sbi->flag & JFS_NOINTEGRITY)
+		seq_puts(seq, ",nointegrity");
+	else
+		seq_puts(seq, ",integrity");
+
+#if defined(CONFIG_QUOTA)
+	if (sbi->flag & JFS_USRQUOTA)
+		seq_puts(seq, ",usrquota");
+
+	if (sbi->flag & JFS_GRPQUOTA)
+		seq_puts(seq, ",grpquota");
+#endif
+
+	return 0;
+}
+
 static struct super_operations jfs_super_operations = {
 	.alloc_inode	= jfs_alloc_inode,
 	.destroy_inode	= jfs_destroy_inode,
@@ -568,6 +608,7 @@ static struct super_operations jfs_super_operations = {
 	.unlockfs       = jfs_unlockfs,
 	.statfs		= jfs_statfs,
 	.remount_fs	= jfs_remount,
+	.show_options	= jfs_show_options
 };
 
 static struct export_operations jfs_export_operations = {

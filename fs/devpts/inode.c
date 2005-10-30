@@ -18,16 +18,7 @@
 #include <linux/mount.h>
 #include <linux/tty.h>
 #include <linux/devpts_fs.h>
-#include <linux/xattr.h>
 
-extern struct xattr_handler devpts_xattr_security_handler;
-
-static struct xattr_handler *devpts_xattr_handlers[] = {
-#ifdef CONFIG_DEVPTS_FS_SECURITY
-	&devpts_xattr_security_handler,
-#endif
-	NULL
-};
 
 static int devpts_permission(struct inode *inode, int mask, struct nameidata *nd)
 {
@@ -39,13 +30,7 @@ static int devpts_permission(struct inode *inode, int mask, struct nameidata *nd
 }
 
 static struct inode_operations devpts_file_inode_operations = {
-#ifdef CONFIG_DEVPTS_FS_XATTR
-	.setxattr	= generic_setxattr,
-	.getxattr	= generic_getxattr,
-	.listxattr	= generic_listxattr,
-	.removexattr	= generic_removexattr,
-#endif
-	.permission	= devpts_permission,
+	.permission     = devpts_permission,
 };
 
 static struct vfsmount *devpts_mnt;
@@ -128,7 +113,6 @@ devpts_fill_super(struct super_block *s, void *data, int silent)
 	s->s_blocksize_bits = 10;
 	s->s_magic = DEVPTS_SUPER_MAGIC;
 	s->s_op = &devpts_sops;
-	s->s_xattr = devpts_xattr_handlers;
 	s->s_time_gran = 1;
 
 	inode = new_inode(s);

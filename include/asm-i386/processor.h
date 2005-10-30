@@ -203,9 +203,7 @@ static inline unsigned int cpuid_edx(unsigned int op)
 	return edx;
 }
 
-#define load_cr3(pgdir) \
-	asm volatile("movl %0,%%cr3": :"r" (__pa(pgdir)))
-
+#define load_cr3(pgdir) write_cr3(__pa(pgdir))
 
 /*
  * Intel CPU features in CR4
@@ -232,22 +230,20 @@ extern unsigned long mmu_cr4_features;
 
 static inline void set_in_cr4 (unsigned long mask)
 {
+	unsigned cr4;
 	mmu_cr4_features |= mask;
-	__asm__("movl %%cr4,%%eax\n\t"
-		"orl %0,%%eax\n\t"
-		"movl %%eax,%%cr4\n"
-		: : "irg" (mask)
-		:"ax");
+	cr4 = read_cr4();
+	cr4 |= mask;
+	write_cr4(cr4);
 }
 
 static inline void clear_in_cr4 (unsigned long mask)
 {
+	unsigned cr4;
 	mmu_cr4_features &= ~mask;
-	__asm__("movl %%cr4,%%eax\n\t"
-		"andl %0,%%eax\n\t"
-		"movl %%eax,%%cr4\n"
-		: : "irg" (~mask)
-		:"ax");
+	cr4 = read_cr4();
+	cr4 &= ~mask;
+	write_cr4(cr4);
 }
 
 /*
@@ -280,6 +276,11 @@ static inline void clear_in_cr4 (unsigned long mask)
 	outb((reg), 0x22); \
 	outb((data), 0x23); \
 } while (0)
+
+static inline void serialize_cpu(void)
+{
+	 __asm__ __volatile__ ("cpuid" : : : "ax", "bx", "cx", "dx");
+}
 
 static inline void __monitor(const void *eax, unsigned long ecx,
 		unsigned long edx)
@@ -455,6 +456,7 @@ struct thread_struct {
 	unsigned int		saved_fs, saved_gs;
 /* IO permissions */
 	unsigned long	*io_bitmap_ptr;
+ 	unsigned long	iopl;
 /* max allowed port in the bitmap, in bytes: */
 	unsigned long	io_bitmap_max;
 };
@@ -475,7 +477,6 @@ struct thread_struct {
 	.esp0		= sizeof(init_stack) + (long)&init_stack,	\
 	.ss0		= __KERNEL_DS,					\
 	.ss1		= __KERNEL_CS,					\
-	.ldt		= GDT_ENTRY_LDT,				\
 	.io_bitmap_base	= INVALID_IO_BITMAP_OFFSET,			\
 	.io_bitmap	= { [ 0 ... IO_BITMAP_LONGS] = ~0 },		\
 }
@@ -512,6 +513,21 @@ static inline void load_esp0(struct tss_struct *tss, struct thread_struct *threa
 			: /* no output */			\
 			:"r" (value))
 
+/*
+ * Set IOPL bits in EFLAGS from given mask
+ */
+static inline void set_iopl_mask(unsigned mask)
+{
+	unsigned int reg;
+	__asm__ __volatile__ ("pushfl;"
+			      "popl %0;"
+			      "andl %1, %0;"
+			      "orl %2, %0;"
+			      "pushl %0;"
+			      "popfl"
+				: "=&r" (reg)
+				: "i" (~X86_EFLAGS_IOPL), "r" (mask));
+}
 
 /* Forward declaration, a strange C thing */
 struct task_struct;
@@ -664,7 +680,7 @@ static inline void rep_nop(void)
    However we don't do prefetches for pre XP Athlons currently
    That should be fixed. */
 #define ARCH_HAS_PREFETCH
-extern inline void prefetch(const void *x)
+static inline void prefetch(const void *x)
 {
 	alternative_input(ASM_NOP4,
 			  "prefetchnta (%1)",
@@ -678,7 +694,7 @@ extern inline void prefetch(const void *x)
 
 /* 3dnow! prefetch to get an exclusive cache line. Useful for 
    spinlocks to avoid one state transition in the cache coherency protocol. */
-extern inline void prefetchw(const void *x)
+static inline void prefetchw(const void *x)
 {
 	alternative_input(ASM_NOP4,
 			  "prefetchw (%1)",

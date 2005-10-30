@@ -42,10 +42,6 @@
 #include <asm/ipc.h>
 #include <asm/semaphore.h>
 
-void
-check_bugs(void)
-{
-}
 
 /*
  * sys_ipc() is the de-multiplexer for the SysV IPC calls..
