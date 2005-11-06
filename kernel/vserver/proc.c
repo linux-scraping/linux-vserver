@@ -561,6 +561,7 @@ struct dentry *proc_virtual_lookup(struct inode *dir,
 	len = dentry->d_name.len;
 	ret = -ENOMEM;
 
+#if 0
 	if (len == 7 && !memcmp(name, "current", 7)) {
 		inode = new_inode(dir->i_sb);
 		if (!inode)
@@ -573,6 +574,7 @@ struct dentry *proc_virtual_lookup(struct inode *dir,
 		d_add(dentry, inode);
 		return NULL;
 	}
+#endif
 	if (len == 4 && !memcmp(name, "info", 4)) {
 		inode = proc_vid_make_inode(dir->i_sb, 0, PROC_XID_INFO);
 		if (!inode)
@@ -637,6 +639,7 @@ struct dentry *proc_vnet_lookup(struct inode *dir,
 	name = dentry->d_name.name;
 	len = dentry->d_name.len;
 	ret = -ENOMEM;
+#if 0
 	if (len == 7 && !memcmp(name, "current", 7)) {
 		inode = new_inode(dir->i_sb);
 		if (!inode)
@@ -649,6 +652,7 @@ struct dentry *proc_vnet_lookup(struct inode *dir,
 		d_add(dentry, inode);
 		return NULL;
 	}
+#endif
 	if (len == 4 && !memcmp(name, "info", 4)) {
 		inode = proc_vid_make_inode(dir->i_sb, 0, PROC_NID_INFO);
 		if (!inode)
@@ -704,6 +708,7 @@ int proc_virtual_readdir(struct file * filp,
 	char buf[PROC_NUMBUF];
 	unsigned int nr = filp->f_pos-3;
 	unsigned int nr_xids, i;
+	int visible = vx_check(0, VX_ADMIN|VX_WATCH);
 	ino_t ino;
 
 	switch ((long)filp->f_pos) {
@@ -722,19 +727,22 @@ int proc_virtual_readdir(struct file * filp,
 			filp->f_pos++;
 			/* fall through */
 		case 2:
-			ino = fake_ino(0, PROC_XID_INFO);
-			if (filldir(dirent, "info", 4,
-				filp->f_pos, ino, DT_LNK) < 0)
-				return 0;
+			if (visible) {
+				ino = fake_ino(0, PROC_XID_INFO);
+				if (filldir(dirent, "info", 4,
+					filp->f_pos, ino, DT_REG) < 0)
+					return 0;
+			}
 			filp->f_pos++;
 			/* fall through */
 		case 3:
 			ino = fake_ino(0, PROC_XID_STATUS);
 			if (filldir(dirent, "status", 6,
-				filp->f_pos, ino, DT_LNK) < 0)
+				filp->f_pos, ino, DT_REG) < 0)
 				return 0;
 			filp->f_pos++;
 			/* fall through */
+#if 0
 		case 4:
 			if (vx_current_xid() > 1) {
 				ino = fake_ino(1, PROC_XID_INO);
@@ -743,6 +751,7 @@ int proc_virtual_readdir(struct file * filp,
 					return 0;
 			}
 			filp->f_pos++;
+#endif
 	}
 
 	nr_xids = get_xid_list(nr, xid_array, PROC_MAXVIDS);
@@ -779,6 +788,7 @@ int proc_vnet_readdir(struct file * filp,
 	char buf[PROC_NUMBUF];
 	unsigned int nr = filp->f_pos-3;
 	unsigned int nr_nids, i;
+//	int visible = vx_check(0, VX_ADMIN|VX_WATCH);
 	ino_t ino;
 
 	switch ((long)filp->f_pos) {
@@ -799,10 +809,11 @@ int proc_vnet_readdir(struct file * filp,
 		case 2:
 			ino = fake_ino(0, PROC_NID_INFO);
 			if (filldir(dirent, "info", 4,
-				filp->f_pos, ino, DT_LNK) < 0)
+				filp->f_pos, ino, DT_REG) < 0)
 				return 0;
 			filp->f_pos++;
 			/* fall through */
+#if 0
 		case 3:
 			if (vx_current_xid() > 1) {
 				ino = fake_ino(1, PROC_NID_INO);
@@ -811,6 +822,7 @@ int proc_vnet_readdir(struct file * filp,
 					return 0;
 			}
 			filp->f_pos++;
+#endif
 	}
 
 	nr_nids = get_nid_list(nr, nid_array, PROC_MAXVIDS);

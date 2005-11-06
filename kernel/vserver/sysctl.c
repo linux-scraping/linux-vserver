@@ -25,8 +25,8 @@
 #define CTL_VSERVER	4242    /* unused? */
 
 enum {
-	CTL_DEBUG_ERROR = 0,
-	CTL_DEBUG_SWITCH = 1,
+	CTL_DEBUG_ERROR		= 0,
+	CTL_DEBUG_SWITCH	= 1,
 	CTL_DEBUG_XID,
 	CTL_DEBUG_NID,
 	CTL_DEBUG_NET,
@@ -38,15 +38,15 @@ enum {
 };
 
 
-unsigned int vx_debug_switch = 0;
-unsigned int vx_debug_xid = 0;
-unsigned int vx_debug_nid = 0;
-unsigned int vx_debug_net = 0;
-unsigned int vx_debug_limit = 0;
-unsigned int vx_debug_dlim = 0;
-unsigned int vx_debug_quota = 0;
-unsigned int vx_debug_cvirt = 0;
-unsigned int vx_debug_misc = 0;
+unsigned int vx_debug_switch	= 0;
+unsigned int vx_debug_xid	= 0;
+unsigned int vx_debug_nid	= 0;
+unsigned int vx_debug_net	= 0;
+unsigned int vx_debug_limit	= 0;
+unsigned int vx_debug_dlim	= 0;
+unsigned int vx_debug_quota	= 0;
+unsigned int vx_debug_cvirt	= 0;
+unsigned int vx_debug_misc	= 0;
 
 
 static struct ctl_table_header *vserver_table_header;
@@ -128,80 +128,26 @@ done:
 }
 
 
+#define	CTL_ENTRY(ctl, name)				\
+	{						\
+		.ctl_name	= ctl,			\
+		.procname	= #name,		\
+		.data		= &vx_##name,		\
+		.maxlen		= sizeof(int),		\
+		.mode		= 0644,			\
+		.proc_handler	= &proc_dodebug		\
+	}
 
 static ctl_table debug_table[] = {
-	{
-		.ctl_name	= CTL_DEBUG_SWITCH,
-		.procname	= "debug_switch",
-		.data		= &vx_debug_switch,
-		.maxlen		= sizeof(int),
-		.mode		= 0644,
-		.proc_handler	= &proc_dodebug
-	},
-	{
-		.ctl_name	= CTL_DEBUG_XID,
-		.procname	= "debug_xid",
-		.data		= &vx_debug_xid,
-		.maxlen		= sizeof(int),
-		.mode		= 0644,
-		.proc_handler	= &proc_dodebug
-	},
-	{
-		.ctl_name	= CTL_DEBUG_NID,
-		.procname	= "debug_nid",
-		.data		= &vx_debug_nid,
-		.maxlen		= sizeof(int),
-		.mode		= 0644,
-		.proc_handler	= &proc_dodebug
-	},
-	{
-		.ctl_name	= CTL_DEBUG_NET,
-		.procname	= "debug_net",
-		.data		= &vx_debug_net,
-		.maxlen		= sizeof(int),
-		.mode		= 0644,
-		.proc_handler	= &proc_dodebug
-	},
-	{
-		.ctl_name	= CTL_DEBUG_LIMIT,
-		.procname	= "debug_limit",
-		.data		= &vx_debug_limit,
-		.maxlen		= sizeof(int),
-		.mode		= 0644,
-		.proc_handler	= &proc_dodebug
-	},
-	{
-		.ctl_name	= CTL_DEBUG_DLIM,
-		.procname	= "debug_dlim",
-		.data		= &vx_debug_dlim,
-		.maxlen		= sizeof(int),
-		.mode		= 0644,
-		.proc_handler	= &proc_dodebug
-	},
-	{
-		.ctl_name	= CTL_DEBUG_QUOTA,
-		.procname	= "debug_quota",
-		.data		= &vx_debug_quota,
-		.maxlen		= sizeof(int),
-		.mode		= 0644,
-		.proc_handler	= &proc_dodebug
-	},
-	{
-		.ctl_name	= CTL_DEBUG_CVIRT,
-		.procname	= "debug_cvirt",
-		.data		= &vx_debug_cvirt,
-		.maxlen		= sizeof(int),
-		.mode		= 0644,
-		.proc_handler	= &proc_dodebug
-	},
-	{
-		.ctl_name	= CTL_DEBUG_MISC,
-		.procname	= "debug_misc",
-		.data		= &vx_debug_misc,
-		.maxlen		= sizeof(int),
-		.mode		= 0644,
-		.proc_handler	= &proc_dodebug
-	},
+	CTL_ENTRY (CTL_DEBUG_SWITCH,	debug_switch),
+	CTL_ENTRY (CTL_DEBUG_XID,	debug_xid),
+	CTL_ENTRY (CTL_DEBUG_NID,	debug_nid),
+	CTL_ENTRY (CTL_DEBUG_NET,	debug_net),
+	CTL_ENTRY (CTL_DEBUG_LIMIT,	debug_limit),
+	CTL_ENTRY (CTL_DEBUG_DLIM,	debug_dlim),
+	CTL_ENTRY (CTL_DEBUG_QUOTA,	debug_quota),
+	CTL_ENTRY (CTL_DEBUG_CVIRT,	debug_cvirt),
+	CTL_ENTRY (CTL_DEBUG_MISC,	debug_misc),
 	{ .ctl_name = 0 }
 };
 

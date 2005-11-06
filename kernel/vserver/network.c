@@ -318,9 +318,22 @@ int nid_is_hashed(nid_t nid)
 
 #ifdef	CONFIG_PROC_FS
 
+/*	get_nid_list()
+
+	* get a subset of hashed nids for proc
+	* assumes size is at least one 				*/
+
 int get_nid_list(int index, unsigned int *nids, int size)
 {
 	int hindex, nr_nids = 0;
+
+	/* only show current and children */
+	if (!nx_check(0, VX_ADMIN|VX_WATCH)) {
+		if (index > 0)
+			return 0;
+		nids[nr_nids] = nx_current_nid();
+		return 1;
+	}
 
 	for (hindex = 0; hindex < NX_HASH_SIZE; hindex++) {
 		struct hlist_head *head = &nx_info_hash[hindex];
@@ -501,7 +514,7 @@ int vc_task_nid(uint32_t id, void __user *data)
 		read_unlock(&tasklist_lock);
 	}
 	else
-		nid = current->nid;
+		nid = nx_current_nid();
 	return nid;
 }
 

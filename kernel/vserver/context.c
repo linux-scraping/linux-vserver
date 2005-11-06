@@ -458,9 +458,22 @@ struct vx_info *lookup_or_create_vx_info(int id)
 
 #ifdef	CONFIG_PROC_FS
 
+/*	get_xid_list()
+
+	* get a subset of hashed xids for proc
+	* assumes size is at least one 				*/
+
 int get_xid_list(int index, unsigned int *xids, int size)
 {
 	int hindex, nr_xids = 0;
+
+	/* only show current and children */
+	if (!vx_check(0, VX_ADMIN|VX_WATCH)) {
+		if (index > 0)
+			return 0;
+		xids[nr_xids] = vx_current_xid();
+		return 1;
+	}
 
 	for (hindex = 0; hindex < VX_HASH_SIZE; hindex++) {
 		struct hlist_head *head = &vx_info_hash[hindex];

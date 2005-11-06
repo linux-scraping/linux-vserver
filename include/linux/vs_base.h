@@ -16,7 +16,7 @@
 
 /*
  * check current context for ADMIN/WATCH and
- * optionally agains supplied argument
+ * optionally against supplied argument
  */
 static inline int __vx_check(xid_t cid, xid_t id, unsigned int mode)
 {

@@ -473,25 +473,38 @@ linvfs_getattr(
 }
 
 STATIC int
-linvfs_setattr_flags(
-	vattr_t *vap,
-	unsigned int flags)
+linvfs_sync_flags(struct inode *inode)
 {
 	unsigned int oldflags, newflags;
+	vattr_t		vattr;
+	int		flags = 0;
+	int		error;
+	vnode_t		*vp = LINVFS_GET_VP(inode);
 
-	oldflags = vap->va_xflags;
+	memset(&vattr, 0, sizeof(vattr_t));
+
+	vattr.va_mask = XFS_AT_XFLAGS;
+	VOP_GETATTR(vp, &vattr, 0, NULL, error);
+	if (error)
+		return error;
+	oldflags = vattr.va_xflags;
 	newflags = oldflags & ~(XFS_XFLAG_IMMUTABLE |
 		XFS_XFLAG_IUNLINK | XFS_XFLAG_BARRIER);
-	if (flags & ATTR_FLAG_IMMUTABLE)
+
+	if (IS_IMMUTABLE(inode))
 		newflags |= XFS_XFLAG_IMMUTABLE;
-	if (flags & ATTR_FLAG_IUNLINK)
+	if (IS_IUNLINK(inode))
 		newflags |= XFS_XFLAG_IUNLINK;
-	if (flags & ATTR_FLAG_BARRIER)
+	if (IS_BARRIER(inode))
 		newflags |= XFS_XFLAG_BARRIER;
 
-	if (oldflags ^ newflags)
-		vap->va_xflags = newflags;
-	return 0;
+	if (oldflags ^ newflags) {
+		vattr.va_xflags = newflags;
+		vattr.va_mask |= XFS_AT_XFLAGS;
+		VOP_SETATTR(vp, &vattr, flags, NULL, error);
+	}
+	vn_revalidate(vp);
+	return error;
 }
 
 STATIC int
@@ -552,11 +565,6 @@ linvfs_setattr(
 	if ((ia_valid & ATTR_NO_BLOCK))
 		flags |= ATTR_NONBLOCK;
 #endif
-
-	if (ia_valid & ATTR_ATTR_FLAG) {
-		vattr.va_mask |= XFS_AT_XFLAGS;
-		linvfs_setattr_flags(&vattr, attr->ia_attr_flags);
-	}
 
 	VOP_SETATTR(vp, &vattr, flags, NULL, error);
 	if (error)
@@ -685,6 +693,7 @@ struct inode_operations linvfs_file_inode_operations = {
 	.getxattr		= linvfs_getxattr,
 	.listxattr		= linvfs_listxattr,
 	.removexattr		= linvfs_removexattr,
+	.sync_flags		= linvfs_sync_flags,
 };
 
 struct inode_operations linvfs_dir_inode_operations = {
@@ -704,6 +713,7 @@ struct inode_operations linvfs_dir_inode_operations = {
 	.getxattr		= linvfs_getxattr,
 	.listxattr		= linvfs_listxattr,
 	.removexattr		= linvfs_removexattr,
+	.sync_flags		= linvfs_sync_flags,
 };
 
 struct inode_operations linvfs_symlink_inode_operations = {
@@ -717,4 +727,5 @@ struct inode_operations linvfs_symlink_inode_operations = {
 	.getxattr		= linvfs_getxattr,
 	.listxattr		= linvfs_listxattr,
 	.removexattr		= linvfs_removexattr,
+	.sync_flags		= linvfs_sync_flags,
 };

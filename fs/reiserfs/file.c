@@ -1568,4 +1568,5 @@ struct inode_operations reiserfs_file_inode_operations = {
 	.listxattr = reiserfs_listxattr,
 	.removexattr = reiserfs_removexattr,
 	.permission = reiserfs_permission,
+	.sync_flags = reiserfs_sync_flags,
 };
