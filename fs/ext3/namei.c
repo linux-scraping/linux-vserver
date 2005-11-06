@@ -2375,6 +2375,7 @@ struct inode_operations ext3_dir_inode_operations = {
 	.removexattr	= generic_removexattr,
 #endif
 	.permission	= ext3_permission,
+	.sync_flags	= ext3_sync_flags,
 };
 
 struct inode_operations ext3_special_inode_operations = {
@@ -2386,4 +2387,5 @@ struct inode_operations ext3_special_inode_operations = {
 	.removexattr	= generic_removexattr,
 #endif
 	.permission	= ext3_permission,
+	.sync_flags	= ext3_sync_flags,
 }; 

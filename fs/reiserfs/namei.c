@@ -1553,6 +1553,7 @@ struct inode_operations reiserfs_dir_inode_operations = {
 	.listxattr = reiserfs_listxattr,
 	.removexattr = reiserfs_removexattr,
 	.permission = reiserfs_permission,
+	.sync_flags = reiserfs_sync_flags,
 };
 
 /*
@@ -1569,6 +1570,7 @@ struct inode_operations reiserfs_symlink_inode_operations = {
 	.listxattr = reiserfs_listxattr,
 	.removexattr = reiserfs_removexattr,
 	.permission = reiserfs_permission,
+	.sync_flags = reiserfs_sync_flags,
 
 };
 
@@ -1582,5 +1584,6 @@ struct inode_operations reiserfs_special_inode_operations = {
 	.listxattr = reiserfs_listxattr,
 	.removexattr = reiserfs_removexattr,
 	.permission = reiserfs_permission,
+	.sync_flags = reiserfs_sync_flags,
 
 };

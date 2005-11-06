@@ -293,10 +293,8 @@ struct iattr {
 	struct timespec	ia_atime;
 	struct timespec	ia_mtime;
 	struct timespec	ia_ctime;
-	unsigned int    ia_attr_flags;
 };
 
-#define ATTR_FLAG_IMMUTABLE	256	/* Immutable file */
 #define ATTR_FLAG_BARRIER	512	/* Barrier for chroot() */
 #define ATTR_FLAG_IUNLINK	1024	/* Immutable unlink */
 
@@ -1013,6 +1011,7 @@ struct inode_operations {
 	ssize_t (*getxattr) (struct dentry *, const char *, void *, size_t);
 	ssize_t (*listxattr) (struct dentry *, char *, size_t);
 	int (*removexattr) (struct dentry *, const char *);
+	int (*sync_flags) (struct inode *);
 };
 
 struct seq_file;
