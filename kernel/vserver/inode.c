@@ -161,30 +161,28 @@ static int __vc_set_iattr(struct dentry *de, uint32_t *xid, uint32_t *flags, uin
 	}
 
 	if (*mask & (IATTR_BARRIER | IATTR_IUNLINK | IATTR_IMMUTABLE)) {
-
-		attr.ia_valid |= ATTR_ATTR_FLAG;
-		attr.ia_attr_flags =
-			(IS_IMMUTABLE(in) ? ATTR_FLAG_IMMUTABLE : 0) |
-			(IS_IUNLINK(in) ? ATTR_FLAG_IUNLINK : 0) |
-			(IS_BARRIER(in) ? ATTR_FLAG_BARRIER : 0);
-
 		if (*mask & IATTR_IMMUTABLE) {
 			if (*flags & IATTR_IMMUTABLE)
-				attr.ia_attr_flags |= ATTR_FLAG_IMMUTABLE;
+				in->i_flags |= S_IMMUTABLE;
 			else
-				attr.ia_attr_flags &= ~ATTR_FLAG_IMMUTABLE;
+				in->i_flags &= ~S_IMMUTABLE;
 		}
 		if (*mask & IATTR_IUNLINK) {
 			if (*flags & IATTR_IUNLINK)
-				attr.ia_attr_flags |= ATTR_FLAG_IUNLINK;
+				in->i_flags |= S_IUNLINK;
 			else
-				attr.ia_attr_flags &= ~ATTR_FLAG_IUNLINK;
+				in->i_flags &= ~S_IUNLINK;
 		}
 		if (S_ISDIR(in->i_mode) && (*mask & IATTR_BARRIER)) {
 			if (*flags & IATTR_BARRIER)
-				attr.ia_attr_flags |= ATTR_FLAG_BARRIER;
+				in->i_flags |= S_BARRIER;
 			else
-				attr.ia_attr_flags &= ~ATTR_FLAG_BARRIER;
+				in->i_flags &= ~S_BARRIER;
+		}
+		if (in->i_op && in->i_op->sync_flags) {
+			error = in->i_op->sync_flags(in);
+			if (error)
+				goto out;
 		}
 	}
 
@@ -198,8 +196,9 @@ static int __vc_set_iattr(struct dentry *de, uint32_t *xid, uint32_t *flags, uin
 		}
 	}
 
+out:
 	up(&in->i_sem);
-	return 0;
+	return error;
 }
 
 int vc_set_iattr(uint32_t id, void __user *data)

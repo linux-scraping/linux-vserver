@@ -2921,24 +2921,21 @@ static ssize_t reiserfs_direct_IO(int rw, struct kiocb *iocb,
 				  reiserfs_get_blocks_direct_io, NULL);
 }
 
-int reiserfs_setattr_flags(struct inode *inode, unsigned int flags)
+int reiserfs_sync_flags(struct inode *inode)
 {
-	unsigned int oldflags, newflags;
+	u16 oldflags, newflags;
 
+	reiserfs_write_lock(inode->i_sb);
 	oldflags = REISERFS_I(inode)->i_flags;
-	newflags = oldflags & ~(REISERFS_IMMUTABLE_FL |
-		REISERFS_IUNLINK_FL | REISERFS_BARRIER_FL);
-	if (flags & ATTR_FLAG_IMMUTABLE)
-		newflags |= REISERFS_IMMUTABLE_FL;
-	if (flags & ATTR_FLAG_IUNLINK)
-		newflags |= REISERFS_IUNLINK_FL;
-	if (flags & ATTR_FLAG_BARRIER)
-		newflags |= REISERFS_BARRIER_FL;
+	newflags = oldflags;
+	i_attrs_to_sd_attrs(inode, &newflags);
 
 	if (oldflags ^ newflags) {
 		REISERFS_I(inode)->i_flags = newflags;
 		inode->i_ctime = CURRENT_TIME;
+		mark_inode_dirty(inode);
 	}
+	reiserfs_write_unlock(inode->i_sb);
 	return 0;
 }
 
@@ -2986,9 +2983,6 @@ int reiserfs_setattr(struct dentry *dentry, struct iattr *attr)
 	}
 
 	error = inode_change_ok(inode, attr);
-
-	if (!error && attr->ia_valid & ATTR_ATTR_FLAG)
-		reiserfs_setattr_flags(inode, attr->ia_attr_flags);
 
 	if (!error) {
 		if ((ia_valid & ATTR_UID && attr->ia_uid != inode->i_uid) ||
