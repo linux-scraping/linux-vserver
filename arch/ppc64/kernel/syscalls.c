@@ -37,6 +37,7 @@
 #include <linux/file.h>
 #include <linux/init.h>
 #include <linux/personality.h>
+#include <linux/vs_cvirt.h>
 
 #include <asm/uaccess.h>
 #include <asm/ipc.h>
@@ -213,7 +214,7 @@ long ppc64_newuname(struct new_utsname __user * name)
 	int err = 0;
 
 	down_read(&uts_sem);
-	if (copy_to_user(name, &system_utsname, sizeof(*name)))
+	if (copy_to_user(name, vx_new_utsname(), sizeof(*name)))
 		err = -EFAULT;
 	up_read(&uts_sem);
 	if (!err && personality(current->personality) == PER_LINUX32) {
