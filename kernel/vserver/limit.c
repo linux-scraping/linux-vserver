@@ -67,9 +67,7 @@ static inline uint64_t vc_get_rlim(struct vx_info *vxi, int id)
 	unsigned long limit;
 
 	limit = vxi->limit.rlim[id];
-	if (limit == RLIM_INFINITY)
-		return CRLIM_INFINITY;
-	return limit;
+	return VX_VLIM(limit);
 }
 
 int vc_get_rlimit(uint32_t id, void __user *data)
@@ -113,7 +111,7 @@ int vc_set_rlimit(uint32_t id, void __user *data)
 		return -ESRCH;
 
 	if (vc_data.maximum != CRLIM_KEEP)
-		vxi->limit.rlim[vc_data.id] = vc_data.maximum;
+		vxi->limit.rlim[vc_data.id] = VX_RLIM(vc_data.maximum);
 	put_vx_info(vxi);
 
 	return 0;

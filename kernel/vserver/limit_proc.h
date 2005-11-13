@@ -16,12 +16,13 @@ static inline void vx_limit_fixup(struct _vx_limit *limit)
 	}
 }
 
-#define VX_LIMIT_FMT	":\t%10d\t%10ld\t%10ld\t%6d\n"
+
+#define VX_LIMIT_FMT	":\t%10d\t%10ld\t%10lld\t%6d\n"
 
 #define VX_LIMIT_ARG(r)				\
 		,atomic_read(&limit->rcur[r])	\
 		,limit->rmax[r]			\
-		,limit->rlim[r]			\
+		,VX_VLIM(limit->rlim[r])	\
 		,atomic_read(&limit->lhit[r])
 
 static inline int vx_info_proc_limit(struct _vx_limit *limit, char *buffer)
