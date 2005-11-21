@@ -335,8 +335,41 @@ static int do_quotactl(struct dqhash *hash, int type, int cmd, qid_t id, void __
 	return 0;
 }
 
-#ifdef CONFIG_BLK_DEV_VROOT
-extern struct block_device *vroot_get_real_bdev(struct block_device *);
+#if defined(CONFIG_BLK_DEV_VROOT) || defined(CONFIG_BLK_DEV_VROOT_MODULE)
+
+#include <linux/vroot.h>
+#include <linux/kallsyms.h>
+
+static vroot_grb_func *vroot_get_real_bdev = NULL;
+
+static spinlock_t vroot_grb_lock = SPIN_LOCK_UNLOCKED;
+
+int register_vroot_grb(vroot_grb_func *func) {
+	int ret = -EBUSY;
+
+	spin_lock(&vroot_grb_lock);
+	if (!vroot_get_real_bdev) {
+		vroot_get_real_bdev = func;
+		ret = 0;
+	}
+	spin_unlock(&vroot_grb_lock);
+	return ret;
+}
+EXPORT_SYMBOL(register_vroot_grb);
+
+int unregister_vroot_grb(vroot_grb_func *func) {
+	int ret = -EINVAL;
+
+	spin_lock(&vroot_grb_lock);
+	if (vroot_get_real_bdev) {
+		vroot_get_real_bdev = NULL;
+		ret = 0;
+	}
+	spin_unlock(&vroot_grb_lock);
+	return ret;
+}
+EXPORT_SYMBOL(unregister_vroot_grb);
+
 #endif
 
 /*
@@ -366,10 +399,12 @@ asmlinkage long sys_quotactl(unsigned int cmd, const char __user *special, qid_t
 		if (IS_ERR(bdev))
 			return PTR_ERR(bdev);
 #ifdef CONFIG_BLK_DEV_VROOT
-		if (bdev && bdev->bd_inode &&
+		if (bdev && bdev->bd_inode && vroot_get_real_bdev &&
 			imajor(bdev->bd_inode) == VROOT_MAJOR) {
-			struct block_device *bdnew =
-				vroot_get_real_bdev(bdev);
+			struct block_device *bdnew = (void *)-EINVAL;
+
+			if (vroot_get_real_bdev)
+				bdnew = vroot_get_real_bdev(bdev);
 
 			bdput(bdev);
 			if (IS_ERR(bdnew))

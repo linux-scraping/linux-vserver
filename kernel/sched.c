@@ -1351,9 +1351,10 @@ out_activate:
 	 * sleep is handled in a priority-neutral manner, no priority
 	 * boost and no penalty.)
 	 */
-	if (old_state & TASK_NONINTERACTIVE)
+	if (old_state & TASK_NONINTERACTIVE) {
+		vx_activate_task(p);
 		__activate_task(p, rq);
-	else
+	} else
 		activate_task(p, rq, cpu == this_cpu);
 
 	/* this is to get the accounting behind the load update */

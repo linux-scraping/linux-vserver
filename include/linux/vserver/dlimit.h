@@ -3,12 +3,12 @@
 
 #include "switch.h"
 
-#define CDLIM_UNSET		(0ULL)
-#define CDLIM_INFINITY		(~0ULL)
-#define CDLIM_KEEP		(~1ULL)
-
 
 #ifdef	__KERNEL__
+
+/*      keep in sync with CDLIM_INFINITY	*/
+
+#define DLIM_INFINITY		(~0ULL)
 
 #include <linux/spinlock.h>
 
@@ -25,10 +25,10 @@ struct dl_info {
 
 	spinlock_t dl_lock;			/* protect the values */
 
-	uint64_t dl_space_used;			/* used space in bytes */
-	uint64_t dl_space_total;		/* maximum space in bytes */
-	uint32_t dl_inodes_used;		/* used inodes */
-	uint32_t dl_inodes_total;		/* maximum inodes */
+	unsigned long long dl_space_used;	/* used space in bytes */
+	unsigned long long dl_space_total;	/* maximum space in bytes */
+	unsigned long dl_inodes_used;		/* used inodes */
+	unsigned long dl_inodes_total;		/* maximum inodes */
 
 	unsigned int dl_nrlmult;		/* non root limit mult */
 };

@@ -301,11 +301,11 @@ int do_set_dlimit(uint32_t id, const char __user *name,
 			goto out_release;
 		if (!(sb = nd.dentry->d_inode->i_sb))
 			goto out_release;
-		if ((reserved != (uint32_t)CDLIM_KEEP &&
+		if ((reserved != CDLIM_KEEP &&
 			reserved > 100) ||
-			(inodes_used != (uint32_t)CDLIM_KEEP &&
+			(inodes_used != CDLIM_KEEP &&
 			inodes_used > inodes_total) ||
-			(space_used != (uint32_t)CDLIM_KEEP &&
+			(space_used != CDLIM_KEEP &&
 			space_used > space_total))
 			goto out_release;
 
@@ -316,21 +316,21 @@ int do_set_dlimit(uint32_t id, const char __user *name,
 
 		spin_lock(&dli->dl_lock);
 
-		if (inodes_used != (uint32_t)CDLIM_KEEP)
+		if (inodes_used != CDLIM_KEEP)
 			dli->dl_inodes_used = inodes_used;
-		if (inodes_total != (uint32_t)CDLIM_KEEP)
+		if (inodes_total != CDLIM_KEEP)
 			dli->dl_inodes_total = inodes_total;
-		if (space_used != (uint32_t)CDLIM_KEEP) {
+		if (space_used != CDLIM_KEEP) {
 			dli->dl_space_used = space_used;
 			dli->dl_space_used <<= 10;
 		}
-		if (space_total == (uint32_t)CDLIM_INFINITY)
-			dli->dl_space_total = (uint64_t)CDLIM_INFINITY;
-		else if (space_total != (uint32_t)CDLIM_KEEP) {
+		if (space_total == CDLIM_INFINITY)
+			dli->dl_space_total = DLIM_INFINITY;
+		else if (space_total != CDLIM_KEEP) {
 			dli->dl_space_total = space_total;
 			dli->dl_space_total <<= 10;
 		}
-		if (reserved != (uint32_t)CDLIM_KEEP)
+		if (reserved != CDLIM_KEEP)
 			dli->dl_nrlmult = (1 << 10) * (100 - reserved) / 100;
 
 		spin_unlock(&dli->dl_lock);
@@ -408,8 +408,8 @@ int do_get_dlimit(uint32_t id, const char __user *name,
 		*inodes_used = dli->dl_inodes_used;
 		*inodes_total = dli->dl_inodes_total;
 		*space_used = dli->dl_space_used >> 10;
-		if (dli->dl_space_total == (uint64_t)CDLIM_INFINITY)
-			*space_total = (uint32_t)CDLIM_INFINITY;
+		if (dli->dl_space_total == DLIM_INFINITY)
+			*space_total = CDLIM_INFINITY;
 		else
 			*space_total = dli->dl_space_total >> 10;
 
@@ -487,7 +487,7 @@ void vx_vsi_statfs(struct super_block *sb, struct kstatfs *buf)
 		return;
 
 	spin_lock(&dli->dl_lock);
-	if (dli->dl_inodes_total == (uint32_t)CDLIM_INFINITY)
+	if (dli->dl_inodes_total == (unsigned long)DLIM_INFINITY)
 		goto no_ilim;
 
 	/* reduce max inodes available to limit */
@@ -500,7 +500,7 @@ void vx_vsi_statfs(struct super_block *sb, struct kstatfs *buf)
 		buf->f_ffree = ifree;
 
 no_ilim:
-	if (dli->dl_space_total == (uint64_t)CDLIM_INFINITY)
+	if (dli->dl_space_total == DLIM_INFINITY)
 		goto no_blim;
 
 	blimit = dli->dl_space_total >> sb->s_blocksize_bits;

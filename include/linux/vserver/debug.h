@@ -12,6 +12,12 @@
 #define VXD_QPOS(v,p)	(((uint32_t)(v) >> ((p)*8)) & 0xFF)
 #define VXD_QUAD(v)	VXD_QPOS(v,0), VXD_QPOS(v,1),		\
 			VXD_QPOS(v,2), VXD_QPOS(v,3)
+#define VXF_QUAD	"%u.%u.%u.%u"
+
+#define	VXD_DEV(d)	(d), (d)->bd_inode->i_ino, 		\
+			imajor((d)->bd_inode), iminor((d)->bd_inode)
+#define VXF_DEV		"%p[%lu,%d:%d]"
+
 
 #define __FUNC__	__func__
 

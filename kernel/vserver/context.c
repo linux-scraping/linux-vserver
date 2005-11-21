@@ -552,10 +552,8 @@ int vx_migrate_user(struct task_struct *p, struct vx_info *vxi)
 	return 0;
 }
 
-void vx_mask_bcaps(struct task_struct *p)
+void vx_mask_bcaps(struct vx_info *vxi, struct task_struct *p)
 {
-	struct vx_info *vxi = p->vx_info;
-
 	p->cap_effective &= vxi->vx_bcaps;
 	p->cap_inheritable &= vxi->vx_bcaps;
 	p->cap_permitted &= vxi->vx_bcaps;
@@ -636,7 +634,7 @@ int vx_migrate_task(struct task_struct *p, struct vx_info *vxi)
 			"moved task %p into vxi:%p[#%d]",
 			p, vxi, vxi->vx_id);
 
-		vx_mask_bcaps(p);
+		vx_mask_bcaps(vxi, p);
 		task_unlock(p);
 	}
 out:
@@ -657,6 +655,20 @@ int vx_set_init(struct vx_info *vxi, struct task_struct *p)
 
 	vxi->vx_initpid = p->tgid;
 	return 0;
+}
+
+void vx_set_persistant(struct vx_info *vxi)
+{
+	vxdprintk(VXD_CBIT(xid, 6),
+		"vx_set_persistant(%p[#%d])", vxi, vxi->vx_id);
+
+	if (vx_info_flags(vxi, VXF_PERSISTANT, 0)) {
+		get_vx_info(vxi);
+		claim_vx_info(vxi, current);
+	} else {
+		release_vx_info(vxi, current);
+		put_vx_info(vxi);
+	}
 }
 
 
@@ -737,6 +749,10 @@ int vc_ctx_create(uint32_t xid, void __user *data)
 	/* initial flags */
 	new_vxi->vx_flags = vc_data.flagword;
 
+	/* get a reference for persistant contexts */
+	if ((vc_data.flagword & VXF_PERSISTANT))
+		vx_set_persistant(new_vxi);
+
 	vs_state_change(new_vxi, VSC_STARTUP);
 	ret = new_vxi->vx_id;
 	vx_migrate_task(current, new_vxi);
@@ -811,14 +827,18 @@ int vc_set_cflags(uint32_t id, void __user *data)
 	mask = vx_mask_mask(vc_data.mask, vxi->vx_flags, VXF_ONE_TIME);
 	trigger = (mask & vxi->vx_flags) ^ (mask & vc_data.flagword);
 
-	if (trigger & VXF_STATE_SETUP)
-		vx_mask_bcaps(current);
-	if (trigger & VXF_STATE_INIT)
-		if (vxi == current->vx_info)
+	if (vxi == current->vx_info) {
+		if (trigger & VXF_STATE_SETUP)
+			vx_mask_bcaps(vxi, current);
+		if (trigger & VXF_STATE_INIT)
 			vx_set_init(vxi, current);
+	}
 
 	vxi->vx_flags = vx_mask_flags(vxi->vx_flags,
 		vc_data.flagword, mask);
+	if (trigger & VXF_PERSISTANT)
+		vx_set_persistant(vxi);
+
 	put_vx_info(vxi);
 	return 0;
 }
