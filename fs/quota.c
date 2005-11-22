@@ -17,6 +17,7 @@
 #include <linux/buffer_head.h>
 #include <linux/major.h>
 #include <linux/blkdev.h>
+#include <linux/vserver/debug.h>
 
 /* Check validity of generic quotactl commands */
 static int generic_quotactl_valid(struct super_block *sb, int type, int cmd, qid_t id)
@@ -331,8 +332,41 @@ static int do_quotactl(struct super_block *sb, int type, int cmd, qid_t id, void
 	return 0;
 }
 
-#ifdef CONFIG_BLK_DEV_VROOT
-extern struct block_device *vroot_get_real_bdev(struct block_device *);
+#if defined(CONFIG_BLK_DEV_VROOT) || defined(CONFIG_BLK_DEV_VROOT_MODULE)
+
+#include <linux/vroot.h>
+#include <linux/kallsyms.h>
+
+static vroot_grb_func *vroot_get_real_bdev = NULL;
+
+static spinlock_t vroot_grb_lock = SPIN_LOCK_UNLOCKED;
+
+int register_vroot_grb(vroot_grb_func *func) {
+	int ret = -EBUSY;
+
+	spin_lock(&vroot_grb_lock);
+	if (!vroot_get_real_bdev) {
+		vroot_get_real_bdev = func;
+		ret = 0;
+	}
+	spin_unlock(&vroot_grb_lock);
+	return ret;
+}
+EXPORT_SYMBOL(register_vroot_grb);
+
+int unregister_vroot_grb(vroot_grb_func *func) {
+	int ret = -EINVAL;
+
+	spin_lock(&vroot_grb_lock);
+	if (vroot_get_real_bdev) {
+		vroot_get_real_bdev = NULL;
+		ret = 0;
+	}
+	spin_unlock(&vroot_grb_lock);
+	return ret;
+}
+EXPORT_SYMBOL(unregister_vroot_grb);
+
 #endif
 
 /*
@@ -360,11 +394,16 @@ asmlinkage long sys_quotactl(unsigned int cmd, const char __user *special, qid_t
 		putname(tmp);
 		if (IS_ERR(bdev))
 			return PTR_ERR(bdev);
-#ifdef CONFIG_BLK_DEV_VROOT
+#if defined(CONFIG_BLK_DEV_VROOT) || defined(CONFIG_BLK_DEV_VROOT_MODULE)
 		if (bdev && bdev->bd_inode &&
 			imajor(bdev->bd_inode) == VROOT_MAJOR) {
-			struct block_device *bdnew =
-				vroot_get_real_bdev(bdev);
+			struct block_device *bdnew = (void *)-EINVAL;
+
+			if (vroot_get_real_bdev)
+				bdnew = vroot_get_real_bdev(bdev);
+			else
+				vxdprintk(VXD_CBIT(misc, 0),
+					"vroot_get_real_bdev not set");
 
 			bdput(bdev);
 			if (IS_ERR(bdnew))

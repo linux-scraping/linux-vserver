@@ -317,6 +317,7 @@ config BLK_DEV_CRYPTOLOOP
 
 config BLK_DEV_VROOT
 	tristate "Virtual Root device support"
+	depends on QUOTACTL
 	---help---
 	  Saying Y here will allow you to use quota/fs ioctls on a shared
 	  partition within a virtual server without compromising security.
