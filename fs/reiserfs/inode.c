@@ -3017,8 +3017,9 @@ int reiserfs_setattr(struct dentry *dentry, struct iattr *attr)
 					inode->i_uid = attr->ia_uid;
 				if (attr->ia_valid & ATTR_GID)
 					inode->i_gid = attr->ia_gid;
-		    if ((attr->ia_valid & ATTR_XID) && IS_TAGXID(inode))
-			inode->i_xid = attr->ia_xid;
+				if ((attr->ia_valid & ATTR_XID) &&
+					IS_TAGXID(inode))
+					inode->i_xid = attr->ia_xid;
 				mark_inode_dirty(inode);
 				error =
 				    journal_end(&th, inode->i_sb, jbegin_count);

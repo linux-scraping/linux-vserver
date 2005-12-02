@@ -246,7 +246,7 @@ static inline void reparent_to_init(void)
 	ptrace_unlink(current);
 	/* Reparent to init */
 	REMOVE_LINKS(current);
-	/* FIXME handle vchild_reaper/initpid */
+	/* FIXME: handle vchild_reaper/initpid */
 	current->parent = child_reaper;
 	current->real_parent = child_reaper;
 	SET_LINKS(current);
@@ -622,7 +622,7 @@ static inline void forget_original_parent(struct task_struct * father,
 	struct task_struct *p, *reaper = father;
 	struct list_head *_p, *_n;
 
-	/* FIXME handle vchild_reaper/initpid */
+	/* FIXME: handle vchild_reaper/initpid */
 	do {
 		reaper = next_thread(reaper);
 		if (reaper == father) {

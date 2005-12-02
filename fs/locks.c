@@ -1443,7 +1443,7 @@ int fcntl_setlease(unsigned int fd, struct file *filp, long arg)
 	lock_kernel();
 
 	error = __setlease(filp, arg, &flp);
-	if (error)
+	if (error || arg == F_UNLCK)
 		goto out_unlock;
 
 	error = fasync_helper(fd, filp, 1, &flp->fl_fasync);
@@ -1685,7 +1685,8 @@ again:
 		error = filp->f_op->lock(filp, cmd, file_lock);
 	else {
 		for (;;) {
-		error = __posix_lock_file(inode, file_lock, filp->f_xid);
+			error = __posix_lock_file(inode, file_lock,
+				filp->f_xid);
 			if ((error != -EAGAIN) || (cmd == F_SETLK))
 				break;
 			error = wait_event_interruptible(file_lock->fl_wait,
@@ -1833,7 +1834,8 @@ again:
 		error = filp->f_op->lock(filp, cmd, file_lock);
 	else {
 		for (;;) {
-		error = __posix_lock_file(inode, file_lock, filp->f_xid);
+			error = __posix_lock_file(inode, file_lock,
+				filp->f_xid);
 			if ((error != -EAGAIN) || (cmd == F_SETLK64))
 				break;
 			error = wait_event_interruptible(file_lock->fl_wait,

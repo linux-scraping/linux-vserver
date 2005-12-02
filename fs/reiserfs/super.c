@@ -889,7 +889,7 @@ static int reiserfs_parse_options(struct super_block *s, char *options,	/* strin
 		{"nouser_xattr",.clrmask = 1 << REISERFS_UNSUPPORTED_OPT},
 #endif
 #ifndef CONFIG_INOXID_NONE
-	{"tagxid",	.setmask = 1<<REISERFS_TAGXID},
+		{"tagxid",.setmask = 1 << REISERFS_TAGXID},
 #endif
 #ifdef CONFIG_REISERFS_FS_POSIX_ACL
 		{"acl",.setmask = 1 << REISERFS_POSIXACL},
@@ -1170,10 +1170,11 @@ static int reiserfs_remount(struct super_block *s, int *mount_flags, char *arg)
 		return -EINVAL;
 	}
 
-  if ((mount_options & (1 << REISERFS_TAGXID)) && !(s->s_flags & MS_TAGXID)) {
-    reiserfs_warning(s, "reiserfs: tagxid not permitted on remount.");
-    return -EINVAL;
-  }
+	if ((mount_options & (1 << REISERFS_TAGXID)) &&
+		!(s->s_flags & MS_TAGXID)) {
+		reiserfs_warning(s, "reiserfs: tagxid not permitted on remount.");
+		return -EINVAL;
+	}
 
 	handle_attrs(s);
 
