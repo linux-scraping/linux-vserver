@@ -926,6 +926,7 @@ int xtInsert(tid_t tid,		/* transaction id */
       out:
 	/* unpin the leaf page */
 	XT_PUTPAGE(mp);
+
 	return rc;
 }
 

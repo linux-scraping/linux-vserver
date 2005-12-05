@@ -298,12 +298,17 @@ static struct vx_info * __loc_vx_info(int id, int *err)
 
 	/* dynamic context requested */
 	if (id == VX_DYNAMIC_ID) {
+#ifdef	CONFIG_VSERVER_DYNAMIC_IDS
 		id = __vx_dynamic_id();
 		if (!id) {
 			printk(KERN_ERR "no dynamic context available.\n");
 			goto out_unlock;
 		}
 		new->vx_id = id;
+#else
+		printk(KERN_ERR "dynamic contexts disabled.\n");
+		goto out_unlock;
+#endif
 	}
 	/* existing context requested */
 	else if ((vxi = __lookup_vx_info(id))) {
@@ -358,6 +363,7 @@ static struct vx_info * __create_vx_info(int id)
 
 	/* dynamic context requested */
 	if (id == VX_DYNAMIC_ID) {
+#ifdef	CONFIG_VSERVER_DYNAMIC_IDS
 		id = __vx_dynamic_id();
 		if (!id) {
 			printk(KERN_ERR "no dynamic context available.\n");
@@ -365,6 +371,11 @@ static struct vx_info * __create_vx_info(int id)
 			goto out_unlock;
 		}
 		new->vx_id = id;
+#else
+		printk(KERN_ERR "dynamic contexts disabled.\n");
+		vxi = ERR_PTR(-EINVAL);
+		goto out_unlock;
+#endif
 	}
 	/* static context requested */
 	else if ((vxi = __lookup_vx_info(id))) {
@@ -376,6 +387,7 @@ static struct vx_info * __create_vx_info(int id)
 			vxi = ERR_PTR(-EEXIST);
 		goto out_unlock;
 	}
+#ifdef	CONFIG_VSERVER_DYNAMIC_IDS
 	/* dynamic xid creation blocker */
 	else if (id >= MIN_D_CONTEXT) {
 		vxdprintk(VXD_CBIT(xid, 0),
@@ -383,6 +395,7 @@ static struct vx_info * __create_vx_info(int id)
 		vxi = ERR_PTR(-EINVAL);
 		goto out_unlock;
 	}
+#endif
 
 	/* new context */
 	vxdprintk(VXD_CBIT(xid, 0),

@@ -398,13 +398,16 @@ asmlinkage long sys_quotactl(unsigned int cmd, const char __user *special, qid_t
 		putname(tmp);
 		if (IS_ERR(bdev))
 			return PTR_ERR(bdev);
-#ifdef CONFIG_BLK_DEV_VROOT
-		if (bdev && bdev->bd_inode && vroot_get_real_bdev &&
+#if defined(CONFIG_BLK_DEV_VROOT) || defined(CONFIG_BLK_DEV_VROOT_MODULE)
+		if (bdev && bdev->bd_inode &&
 			imajor(bdev->bd_inode) == VROOT_MAJOR) {
 			struct block_device *bdnew = (void *)-EINVAL;
 
 			if (vroot_get_real_bdev)
 				bdnew = vroot_get_real_bdev(bdev);
+			else
+				vxdprintk(VXD_CBIT(misc, 0),
+					"vroot_get_real_bdev not set");
 
 			bdput(bdev);
 			if (IS_ERR(bdnew))

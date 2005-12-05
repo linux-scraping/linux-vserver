@@ -221,6 +221,7 @@ static struct nx_info * __create_nx_info(int id)
 
 	/* dynamic context requested */
 	if (id == NX_DYNAMIC_ID) {
+#ifdef	CONFIG_VSERVER_DYNAMIC_IDS
 		id = __nx_dynamic_id();
 		if (!id) {
 			printk(KERN_ERR "no dynamic context available.\n");
@@ -228,6 +229,11 @@ static struct nx_info * __create_nx_info(int id)
 			goto out_unlock;
 		}
 		new->nx_id = id;
+#else
+		printk(KERN_ERR "dynamic contexts disabled.\n");
+		nxi = ERR_PTR(-EINVAL);
+		goto out_unlock;
+#endif
 	}
 	/* static context requested */
 	else if ((nxi = __lookup_nx_info(id))) {

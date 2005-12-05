@@ -5,7 +5,12 @@
 
 
 #define MAX_S_CONTEXT	65535	/* Arbitrary limit */
+
+#ifdef	CONFIG_VSERVER_DYNAMIC_IDS
 #define MIN_D_CONTEXT	49152	/* dynamic contexts start here */
+#else
+#define MIN_D_CONTEXT	65536
+#endif
 
 #define VX_DYNAMIC_ID	((uint32_t)-1)		/* id for dynamic context */
 

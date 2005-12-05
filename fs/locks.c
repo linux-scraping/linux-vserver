@@ -1685,7 +1685,8 @@ again:
 		error = filp->f_op->lock(filp, cmd, file_lock);
 	else {
 		for (;;) {
-		error = __posix_lock_file(inode, file_lock, filp->f_xid);
+			error = __posix_lock_file(inode, file_lock,
+				filp->f_xid);
 			if ((error != -EAGAIN) || (cmd == F_SETLK))
 				break;
 			error = wait_event_interruptible(file_lock->fl_wait,
@@ -1833,7 +1834,8 @@ again:
 		error = filp->f_op->lock(filp, cmd, file_lock);
 	else {
 		for (;;) {
-		error = __posix_lock_file(inode, file_lock, filp->f_xid);
+			error = __posix_lock_file(inode, file_lock,
+				filp->f_xid);
 			if ((error != -EAGAIN) || (cmd == F_SETLK64))
 				break;
 			error = wait_event_interruptible(file_lock->fl_wait,

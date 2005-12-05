@@ -44,6 +44,15 @@ config	VSERVER_LEGACY_VERSION
 	  so better avoid it, unless you really, really need it
 	  for backwards compatibility.
 
+config	VSERVER_DYNAMIC_IDS
+	bool	"Enable dynamic context IDs"
+	depends on VSERVER_LEGACY
+	default n
+	help
+	  This enables support of in kernel dynamic context IDs,
+	  which is deprecated and will probably be removed in the
+	  next release.
+
 config	VSERVER_NGNET
 	bool	"Disable Legacy Networking Kernel API"
 	depends on EXPERIMENTAL
@@ -58,10 +67,10 @@ config	VSERVER_COWBL
 	depends on EXPERIMENTAL
 	default y
 	help
-	  This enables the COW link break code which will allow to
-	  treat unified files like normal files in regard of writing
-	  to them (which will implicitely break the link and create
-	  a copy of the unified file)
+	  This enables the COW (Copy-On-Write) link break code.
+	  It allows you to treat unified files like normal files
+	  when writing to them (which will implicitely break the
+	  link and create a copy of the unified file)
 
 config	VSERVER_PROC_SECURE
 	bool	"Enable Proc Security"

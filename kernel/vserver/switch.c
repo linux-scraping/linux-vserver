@@ -52,10 +52,10 @@ int vc_get_version(uint32_t id)
 
 
 #ifdef	CONFIG_COMPAT
-#define	__COMPAT(name, id, data, compat)	\
+#define __COMPAT(name, id, data, compat)	\
 	(compat) ? name ## _x32 (id, data) : name (id, data)
 #else
-#define	__COMPAT(name, id, data, compat)	\
+#define __COMPAT(name, id, data, compat)	\
 	name (id, data)
 #endif
 
