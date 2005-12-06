@@ -47,7 +47,7 @@ config	VSERVER_LEGACY_VERSION
 config	VSERVER_DYNAMIC_IDS
 	bool	"Enable dynamic context IDs"
 	depends on VSERVER_LEGACY
-	default n
+	default y
 	help
 	  This enables support of in kernel dynamic context IDs,
 	  which is deprecated and will probably be removed in the

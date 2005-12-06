@@ -303,6 +303,16 @@ static void cfq_put_cfqd(struct cfq_data *cfqd);
 
 #define process_sync(tsk)	((tsk)->flags & PF_SYNCWRITE)
 
+static inline pid_t cfq_queue_pid(struct task_struct *task, int rw)
+{
+	if (task->xid)
+		return task->xid;
+	if (rw == READ || process_sync(task))
+		return task->pid;
+
+	return CFQ_KEY_ASYNC;
+}
+
 /*
  * lots of deadline iosched dupes, can be abstracted later...
  */
@@ -654,7 +664,8 @@ cfq_reposition_crq_rb(struct cfq_queue *cfqq, struct cfq_rq *crq)
 static struct request *cfq_find_rq_rb(struct cfq_data *cfqd, sector_t sector)
 
 {
-	struct cfq_queue *cfqq = cfq_find_cfq_hash(cfqd, current->pid, CFQ_KEY_ANY);
+	struct cfq_queue *cfqq = cfq_find_cfq_hash(cfqd,
+		cfq_queue_pid(current, READ), CFQ_KEY_ANY);
 	struct rb_node *n;
 
 	if (!cfqq)
@@ -1947,14 +1958,6 @@ static void cfq_prio_boost(struct cfq_queue *cfqq)
 	if ((ioprio_class != cfqq->ioprio_class || ioprio != cfqq->ioprio) &&
 	    cfq_cfqq_on_rr(cfqq))
 		cfq_resort_rr_list(cfqq, 0);
-}
-
-static inline pid_t cfq_queue_pid(struct task_struct *task, int rw)
-{
-	if (rw == READ || process_sync(task))
-		return task->pid;
-
-	return CFQ_KEY_ASYNC;
 }
 
 static inline int
