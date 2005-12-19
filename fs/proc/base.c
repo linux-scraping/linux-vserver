@@ -1962,7 +1962,7 @@ void proc_pid_flush(struct dentry *proc_dentry)
 	}
 }
 
-#define	VXF_FAKE_INIT	(VXF_INFO_INIT|VXF_STATE_INIT)
+#define VXF_FAKE_INIT	(VXF_INFO_INIT|VXF_STATE_INIT)
 
 static inline int proc_pid_visible(struct task_struct *task, int pid)
 {

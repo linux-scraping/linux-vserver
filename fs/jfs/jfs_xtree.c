@@ -1255,6 +1255,7 @@ xtSplitPage(tid_t tid, struct inode *ip,
 	       rc = -EDQUOT;
 	       goto clean_up;
 	}
+
 	quota_allocation += lengthPXD(pxd);
 
 	/* Allocate blocks to dlimit. */

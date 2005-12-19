@@ -469,7 +469,6 @@ static int do_task_stat(struct task_struct *task, char * buffer, int whole)
 	/* convert timespec -> nsec*/
 	start_time = (unsigned long long)task->start_time.tv_sec * NSEC_PER_SEC
 				+ task->start_time.tv_nsec;
-
 	/* convert nsec -> ticks */
 	start_time = nsec_to_clock_t(start_time);
 

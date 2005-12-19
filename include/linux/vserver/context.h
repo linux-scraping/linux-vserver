@@ -57,7 +57,7 @@
 
 /* context caps */
 
-#define	VXC_CAP_MASK		0x00000000
+#define VXC_CAP_MASK		0x00000000
 
 #define VXC_SET_UTSNAME		0x00000001
 #define VXC_SET_RLIMIT		0x00000002

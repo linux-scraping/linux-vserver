@@ -205,7 +205,7 @@ static inline nid_t __nx_dynamic_id(void)
 /*	__create_nx_info()
 
 	* create the requested context
-	* get() and hash it				*/
+	* get() and hash it					*/
 
 static struct nx_info * __create_nx_info(int id)
 {
@@ -327,7 +327,7 @@ int nid_is_hashed(nid_t nid)
 /*	get_nid_list()
 
 	* get a subset of hashed nids for proc
-	* assumes size is at least one 				*/
+	* assumes size is at least one				*/
 
 int get_nid_list(int index, unsigned int *nids, int size)
 {

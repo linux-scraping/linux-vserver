@@ -182,7 +182,6 @@ struct mem_dqinfo {
 	} u;
 };
 
-// struct super_block;
 struct dqhash;
 
 #define DQF_MASK 0xffff		/* Mask for format specific flags */
@@ -194,9 +193,6 @@ extern void mark_info_dirty(struct dqhash *hash, int type);
 #define info_dirty(info) test_bit(DQF_INFO_DIRTY_B, &(info)->dqi_flags)
 #define info_any_dquot_dirty(info) (!list_empty(&(info)->dqi_dirty_list))
 #define info_any_dirty(info) (info_dirty(info) || info_any_dquot_dirty(info))
-
-// #define sb_dqopt(sb) (&(sb)->s_dquot)
-// #define sb_dqinfo(sb, type) (sb_dqopt(sb)->info+(type))
 
 #define dqh_dqopt(hash) (&(hash)->dqh_dqopt)
 #define dqh_dqinfo(hash, type) (dqh_dqopt(hash)->info+(type))
@@ -338,7 +334,6 @@ struct dqhash {
 	struct dquot_operations	*dqh_qop;
 	struct quotactl_ops *dqh_qcop;
 	struct super_block *dqh_sb;	/* super block */
-//	struct list_head dqh_hash[NR_DQHASH];
 	unsigned int dqh_hash_bits;
 	unsigned int dqh_hash_mask;
 	struct hlist_head *dqh_hash;

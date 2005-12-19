@@ -32,12 +32,12 @@ static inline void __vx_acc_cres(struct vx_info *vxi,
 
 #define vx_add_cres(v,a,p,r) \
 	__vx_add_cres(v, r, a, p, __FILE__, __LINE__)
-#define	vx_sub_cres(v,a,p,r)		vx_add_cres(v,-(a),p,r)
+#define vx_sub_cres(v,a,p,r)		vx_add_cres(v,-(a),p,r)
 
 #define vx_add_cres_cond(x,a,p,r) \
 	__vx_add_cres(((x) == vx_current_xid()) ? current->vx_info : 0, \
 	r, a, p, __FILE__, __LINE__)
-#define	vx_sub_cres_cond(x,a,p,r)	vx_add_cres_cond(x,-(a),p,r)
+#define vx_sub_cres_cond(x,a,p,r)	vx_add_cres_cond(x,-(a),p,r)
 
 
 static inline void __vx_add_cres(struct vx_info *vxi,

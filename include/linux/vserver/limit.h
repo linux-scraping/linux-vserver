@@ -11,7 +11,7 @@
 
 #ifdef	__KERNEL__
 
-/* 	keep in sync with CRLIM_INFINITY */
+/*	keep in sync with CRLIM_INFINITY */
 
 #define	VLIM_INFINITY	(~0ULL)
 

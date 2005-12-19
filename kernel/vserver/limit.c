@@ -46,18 +46,18 @@ static int is_valid_rlimit(int id)
 	int valid = 0;
 
 	switch (id) {
-		case RLIMIT_RSS:
-		case RLIMIT_NPROC:
-		case RLIMIT_NOFILE:
-		case RLIMIT_MEMLOCK:
-		case RLIMIT_AS:
+	case RLIMIT_RSS:
+	case RLIMIT_NPROC:
+	case RLIMIT_NOFILE:
+	case RLIMIT_MEMLOCK:
+	case RLIMIT_AS:
 
-		case VLIMIT_NSOCK:
-		case VLIMIT_OPENFD:
-		case VLIMIT_ANON:
-		case VLIMIT_SHMEM:
-			valid = 1;
-			break;
+	case VLIMIT_NSOCK:
+	case VLIMIT_OPENFD:
+	case VLIMIT_ANON:
+	case VLIMIT_SHMEM:
+		valid = 1;
+		break;
 	}
 	return valid;
 }

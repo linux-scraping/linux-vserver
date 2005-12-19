@@ -55,7 +55,7 @@ unsigned long badness(struct task_struct *p, unsigned long uptime)
 	 * The memory size of the process is the basis for the badness.
 	 */
 	points = p->mm->total_vm;
-	/* FIXME add vserver badness ;) */
+	/* FIXME: add vserver badness ;) */
 
 	/*
 	 * Processes which fork a lot of child processes are likely
@@ -199,8 +199,8 @@ static void __oom_kill_task(task_t *p)
 		return;
 	}
 	task_unlock(p);
-	printk(KERN_ERR "Out of Memory: Killed process %d (%s).\n",
-							p->pid, p->comm);
+	printk(KERN_ERR "Out of Memory: Killed process %d[#%u] (%s).\n",
+		p->pid, p->xid, p->comm);
 
 	/*
 	 * We give our sacrificial lamb high priority and access to

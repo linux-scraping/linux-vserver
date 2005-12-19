@@ -694,7 +694,7 @@ static int copy_files(unsigned long clone_flags, struct task_struct * tsk)
 		struct file *f = *old_fds++;
 		if (f) {
 			get_file(f);
-			/* FIXME sum it first for check and performance */
+			/* FIXME: sum it first for check and performance */
 			vx_openfd_inc(open_files - i);
 		} else {
 			/*

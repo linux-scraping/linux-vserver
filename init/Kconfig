@@ -1,9 +1,5 @@
 menu "Code maturity level options"
 
-config DEVFS_FS
-	bool
-	default y
-
 config EXPERIMENTAL
 	bool "Prompt for development and/or incomplete code/drivers"
 	---help---

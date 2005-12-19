@@ -81,7 +81,6 @@ extern int cap_netlink_recv(struct sk_buff *skb);
 struct nfsctl_arg;
 struct sched_param;
 struct swap_info_struct;
-// struct dqhash;
 
 /* bprm_apply_creds unsafe reasons */
 #define LSM_UNSAFE_SHARE	1

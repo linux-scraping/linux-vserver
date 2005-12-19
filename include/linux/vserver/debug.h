@@ -1,7 +1,7 @@
 #ifndef _VX_DEBUG_H
 #define _VX_DEBUG_H
 
-#ifndef	CONFIG_VSERVER
+#ifndef CONFIG_VSERVER
 #warning config options missing
 #endif
 
@@ -14,7 +14,7 @@
 			VXD_QPOS(v,2), VXD_QPOS(v,3)
 #define VXF_QUAD	"%u.%u.%u.%u"
 
-#define	VXD_DEV(d)	(d), (d)->bd_inode->i_ino, 		\
+#define VXD_DEV(d)	(d), (d)->bd_inode->i_ino,		\
 			imajor((d)->bd_inode), iminor((d)->bd_inode)
 #define VXF_DEV		"%p[%lu,%d:%d]"
 
@@ -161,8 +161,7 @@ void	__vxh_copy_vxi(struct _vx_hist_entry *entry, struct vx_info *vxi)
 }
 
 
-#define	__HERE__ \
-	({ __label__ __vxh_label; __vxh_label:; &&__vxh_label; })
+#define	__HERE__ current_text_addr()
 
 #define __VXH_BODY(__type, __data, __here)	\
 	struct _vx_hist_entry *entry;		\
@@ -295,7 +294,7 @@ extern void vxh_dump_history(void);
 #define vxd_assert(c,f,x...)	vxlprintk(!(c), \
 	"assertion [" f "] failed.", ##x, __FILE__, __LINE__)
 #else
-#define	vxd_assert_lock(l)	do { } while (0)
+#define vxd_assert_lock(l)	do { } while (0)
 #define vxd_assert(c,f,x...)	do { } while (0)
 #endif
 

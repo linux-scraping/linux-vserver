@@ -1621,9 +1621,7 @@ static int ext3_fill_super (struct super_block *sb, void *data, int silent)
 	sb->s_export_op = &ext3_export_ops;
 	sb->s_xattr = ext3_xattr_handlers;
 #ifdef CONFIG_QUOTA
-//	sb->dq_op = &ext3_quota_operations;
 	sb->s_dqh->dqh_qop = &ext3_quota_operations;
-//	sb->s_qcop = &ext3_qctl_operations;
 	sb->s_dqh->dqh_qcop = &ext3_qctl_operations;
 #endif
 	INIT_LIST_HEAD(&sbi->s_orphan); /* unlinked but open files */

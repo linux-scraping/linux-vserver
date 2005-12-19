@@ -755,7 +755,7 @@ xfs_xlate_dinode_core(
 
 	if (dir < 0) {
 		xid = mem_core->di_xid;
-		/* FIXME supposed to use superblock flag */
+		/* FIXME: supposed to use superblock flag */
 		uid = XIDINO_UID(1, mem_core->di_uid, xid);
 		gid = XIDINO_GID(1, mem_core->di_gid, xid);
 		xid = XIDINO_XID(1, xid);
@@ -773,7 +773,7 @@ xfs_xlate_dinode_core(
 	INT_XLATE(buf_core->di_projid, mem_core->di_projid, dir, arch);
 
 	if (dir > 0) {
-		/* FIXME supposed to use superblock flag */
+		/* FIXME: supposed to use superblock flag */
 		mem_core->di_uid = INOXID_UID(1, uid, gid);
 		mem_core->di_gid = INOXID_GID(1, uid, gid);
 		mem_core->di_xid = INOXID_XID(1, uid, gid, xid);

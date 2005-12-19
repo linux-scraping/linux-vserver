@@ -2144,7 +2144,7 @@ generic_kernel_file_aio_write_nolock(struct kiocb *iocb, const struct iovec*iov,
 	struct address_space_operations *a_ops = mapping->a_ops;
 	size_t ocount;		/* original count */
 	size_t count;		/* after file limit checks */
-	struct inode 	*inode = mapping->host;
+	struct inode	*inode = mapping->host;
 	long		status = 0;
 	loff_t		pos;
 	struct page	*page;

@@ -330,7 +330,6 @@ out_buf:
 /* Insert reference to structure into the trie */
 static int do_insert_tree(struct dquot *dquot, uint *treeblk, int depth)
 {
-	// struct super_block *sb = dquot->dq_sb;
 	struct dqhash *dqh = dquot->dq_dqh;
 	dqbuf_t buf;
 	int ret = 0, newson = 0, newact = 0;
@@ -484,7 +483,6 @@ out_buf:
 /* Remove reference to dquot from tree */
 static int remove_tree(struct dquot *dquot, uint *blk, int depth)
 {
-	// struct super_block *sb = dquot->dq_sb;
 	struct dqhash *dqh = dquot->dq_dqh;
 	int type = dquot->dq_type;
 	dqbuf_t buf = getdqbuf();

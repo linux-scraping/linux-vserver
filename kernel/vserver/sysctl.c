@@ -175,7 +175,7 @@ static match_table_t tokens = {
 	{ CTL_DEBUG_ERROR,	NULL		}
 };
 
-#define	HANDLE_CASE(id, name, val) 				\
+#define	HANDLE_CASE(id, name, val)				\
 	case CTL_DEBUG_ ## id:					\
 		vx_debug_ ## name = val;			\
 		printk("vs_debug_" #name "=0x%x\n", val);	\

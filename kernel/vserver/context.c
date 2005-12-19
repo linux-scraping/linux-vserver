@@ -44,7 +44,7 @@
 
 
 atomic_t vx_global_ctotal	= ATOMIC_INIT(0);
-atomic_t vx_global_cactive 	= ATOMIC_INIT(0);
+atomic_t vx_global_cactive	= ATOMIC_INIT(0);
 
 
 /*	now inactive context structures */
@@ -347,7 +347,7 @@ out_unlock:
 /*	__create_vx_info()
 
 	* create the requested context
-	* get() and hash it				*/
+	* get() and hash it					*/
 
 static struct vx_info * __create_vx_info(int id)
 {
@@ -474,7 +474,7 @@ struct vx_info *lookup_or_create_vx_info(int id)
 /*	get_xid_list()
 
 	* get a subset of hashed xids for proc
-	* assumes size is at least one 				*/
+	* assumes size is at least one				*/
 
 int get_xid_list(int index, unsigned int *xids, int size)
 {
@@ -515,7 +515,7 @@ out:
 #endif
 
 
-/*	task must me current or locked 		*/
+/*	task must me current or locked		*/
 
 void	exit_vx_info(struct task_struct *p)
 {

@@ -1364,8 +1364,6 @@ int vfs_create(struct inode *dir, struct dentry *dentry, int mode,
 	return error;
 }
 
-
-
 int may_open(struct nameidata *nd, int acc_mode, int flag)
 {
 	struct dentry *dentry = nd->dentry;
@@ -1485,7 +1483,6 @@ restart:
 	   access from general write access. */
 	if (flag & O_APPEND)
 		acc_mode |= MAY_APPEND;
-
 
 	/* Fill in the open() intent data */
 	nd->intent.open.flags = flag;
@@ -1728,6 +1725,7 @@ asmlinkage long sys_mknod(const char __user * filename, int mode, unsigned dev)
 		goto out;
 	dentry = lookup_create(&nd, 0);
 	error = PTR_ERR(dentry);
+
 	if (!IS_POSIXACL(nd.dentry->d_inode))
 		mode &= ~current->fs->umask;
 	if (!IS_ERR(dentry)) {
