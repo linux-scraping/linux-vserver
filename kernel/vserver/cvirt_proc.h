@@ -7,7 +7,8 @@
 #define LOAD_INT(x) ((x) >> FSHIFT)
 #define LOAD_FRAC(x) LOAD_INT(((x) & (FIXED_1-1)) * 100)
 
-static inline int vx_info_proc_cvirt(struct _vx_cvirt *cvirt, char *buffer)
+static inline
+int vx_info_proc_cvirt(struct _vx_cvirt *cvirt, char *buffer)
 {
 	int length = 0;
 	int a, b, c;
@@ -55,6 +56,13 @@ static inline int vx_info_proc_cvirt(struct _vx_cvirt *cvirt, char *buffer)
 	return length;
 }
 
+static inline
+int vx_info_proc_cvirt_pc(struct _vx_cvirt_pc *cvirt_pc,
+	char *buffer, int cpu)
+{
+	int length = 0;
+	return length;
+}
 
 static inline long vx_sock_count(struct _vx_cacct *cacct, int type, int pos)
 {

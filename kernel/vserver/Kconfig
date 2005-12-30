@@ -100,7 +100,18 @@ config	VSERVER_HARDCPU
 	  to consume CPU resources again until a per-context
 	  configured minimum of tokens has been reached.
 
-config	VSERVER_HARDCPU_IDLE
+config	VSERVER_IDLETIME
+	bool	"Avoid idle CPUs by skipping Time"
+	depends on VSERVER_HARDCPU
+	default n
+	help
+	  This option allows the scheduler to artificially
+	  advance time (per cpu) when otherwise the idle
+	  task would be scheduled, thus keeping the cpu
+	  busy and sharing the available resources among
+	  certain contexts.
+
+config	VSERVER_IDLELIMIT
 	bool	"Limit the IDLE task"
 	depends on VSERVER_HARDCPU
 	default n

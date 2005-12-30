@@ -56,9 +56,11 @@ struct _vx_cvirt {
 
 	atomic_t total_forks;		/* number of forks so far */
 
-	struct _vx_usage_stat cpustat[NR_CPUS];
-
 	struct _vx_syslog syslog;
+};
+
+struct _vx_cvirt_pc {
+	struct _vx_usage_stat cpustat;
 };
 
 

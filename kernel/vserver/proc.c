@@ -145,12 +145,17 @@ int proc_xid_limit (int vid, char *buffer)
 int proc_xid_sched (int vid, char *buffer)
 {
 	struct vx_info *vxi;
-	int length;
+	int cpu, length;
 
 	vxi = lookup_vx_info(vid);
 	if (!vxi)
 		return 0;
 	length = vx_info_proc_sched(&vxi->sched, buffer);
+	for_each_online_cpu(cpu) {
+		length += vx_info_proc_sched_pc(
+			&vx_per_cpu(vxi, sched_pc, cpu),
+			buffer + length, cpu);
+	}
 	put_vx_info(vxi);
 	return length;
 }
@@ -158,13 +163,18 @@ int proc_xid_sched (int vid, char *buffer)
 int proc_xid_cvirt (int vid, char *buffer)
 {
 	struct vx_info *vxi;
-	int length;
+	int cpu, length;
 
 	vxi = lookup_vx_info(vid);
 	if (!vxi)
 		return 0;
 	vx_update_load(vxi);
 	length = vx_info_proc_cvirt(&vxi->cvirt, buffer);
+	for_each_online_cpu(cpu) {
+		length += vx_info_proc_cvirt_pc(
+			&vx_per_cpu(vxi, cvirt_pc, cpu),
+			buffer + length, cpu);
+	}
 	put_vx_info(vxi);
 	return length;
 }

@@ -163,9 +163,13 @@ long do_vserver(uint32_t cmd, uint32_t id, void __user *data, int compat)
 	case VCMD_get_ncaps:
 		return vc_get_ncaps(id, data);
 
+#ifdef	CONFIG_VSERVER_LEGACY
 	case VCMD_set_sched_v2:
 		return vc_set_sched_v2(id, data);
-	/* this is version 3 */
+#endif
+	case VCMD_set_sched_v3:
+		return vc_set_sched_v3(id, data);
+	/* this is version 4 */
 	case VCMD_set_sched:
 		return vc_set_sched(id, data);
 

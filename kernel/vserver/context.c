@@ -17,6 +17,7 @@
  *  V0.10  and back to working RCU hash
  *  V0.11  and back to locking again
  *  V0.12  referenced context store
+ *  V0.13  separate per cpu data
  *
  */
 
@@ -63,6 +64,7 @@ static spinlock_t vx_info_inactive_lock = SPIN_LOCK_UNLOCKED;
 static struct vx_info *__alloc_vx_info(xid_t xid)
 {
 	struct vx_info *new = NULL;
+	int cpu;
 
 	vxdprintk(VXD_CBIT(xid, 0), "alloc_vx_info(%d)*", xid);
 
@@ -72,6 +74,11 @@ static struct vx_info *__alloc_vx_info(xid_t xid)
 		return 0;
 
 	memset (new, 0, sizeof(struct vx_info));
+#ifdef CONFIG_SMP
+	new->ptr_pc = alloc_percpu(struct _vx_info_pc);
+	if (!new->ptr_pc)
+		goto error;
+#endif
 	new->vx_id = xid;
 	INIT_HLIST_NODE(&new->vx_hlist);
 	atomic_set(&new->vx_usecnt, 0);
@@ -86,6 +93,14 @@ static struct vx_info *__alloc_vx_info(xid_t xid)
 	vx_info_init_cvirt(&new->cvirt);
 	vx_info_init_cacct(&new->cacct);
 
+	/* per cpu data structures */
+	for_each_cpu(cpu) {
+		vx_info_init_sched_pc(
+			&vx_per_cpu(new, sched_pc, cpu), cpu);
+		vx_info_init_cvirt_pc(
+			&vx_per_cpu(new, cvirt_pc, cpu), cpu);
+	}
+
 	new->vx_flags = VXF_INIT_SET;
 	new->vx_bcaps = CAP_INIT_EFF_SET;
 	new->vx_ccaps = 0;
@@ -95,6 +110,11 @@ static struct vx_info *__alloc_vx_info(xid_t xid)
 	vxh_alloc_vx_info(new);
 	atomic_inc(&vx_global_ctotal);
 	return new;
+#ifdef CONFIG_SMP
+error:
+	kfree(new);
+	return 0;
+#endif
 }
 
 /*	__dealloc_vx_info()
@@ -103,6 +123,8 @@ static struct vx_info *__alloc_vx_info(xid_t xid)
 
 static void __dealloc_vx_info(struct vx_info *vxi)
 {
+	int cpu;
+
 	vxdprintk(VXD_CBIT(xid, 0),
 		"dealloc_vx_info(%p)", vxi);
 	vxh_dealloc_vx_info(vxi);
@@ -114,7 +136,18 @@ static void __dealloc_vx_info(struct vx_info *vxi)
 	vx_info_exit_cvirt(&vxi->cvirt);
 	vx_info_exit_cacct(&vxi->cacct);
 
+	for_each_cpu(cpu) {
+		vx_info_exit_sched_pc(
+			&vx_per_cpu(vxi, sched_pc, cpu), cpu);
+		vx_info_exit_cvirt_pc(
+			&vx_per_cpu(vxi, cvirt_pc, cpu), cpu);
+	}
+
 	vxi->vx_state |= VXS_RELEASED;
+
+#ifdef CONFIG_SMP
+	free_percpu(vxi->ptr_pc);
+#endif
 	kfree(vxi);
 	atomic_dec(&vx_global_ctotal);
 }

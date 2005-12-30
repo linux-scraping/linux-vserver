@@ -93,6 +93,11 @@ enum {
 #include "sched_def.h"
 #include "cvirt_def.h"
 
+struct _vx_info_pc {
+	struct _vx_sched_pc sched_pc;
+	struct _vx_cvirt_pc cvirt_pc;
+};
+
 struct vx_info {
 	struct hlist_node vx_hlist;		/* linked list of contexts */
 	xid_t vx_id;				/* context id */
@@ -116,8 +121,25 @@ struct vx_info {
 	struct _vx_cvirt cvirt;			/* virtual/bias stuff */
 	struct _vx_cacct cacct;			/* context accounting */
 
+#ifndef CONFIG_SMP
+	struct _vx_info_pc info_pc;		/* per cpu data */
+#else
+	struct _vx_info_pc *ptr_pc;		/* per cpu array */
+#endif
+
 	char vx_name[65];			/* vserver name */
 };
+
+#ifndef CONFIG_SMP
+#define	vx_ptr_pc(vxi)		(&(vxi)->info_pc)
+#define	vx_per_cpu(vxi, v, id)	per_cpu_ptr(vx_ptr_pc(vxi), id)->v
+#else
+#define	vx_ptr_pc(vxi)		((vxi)->ptr_pc)
+#define	vx_per_cpu(vxi, v, id)	per_cpu_ptr(vx_ptr_pc(vxi), id)->v
+#endif
+
+#define	vx_cpu(vxi, v)		vx_per_cpu(vxi, v, smp_processor_id())
+
 
 struct vx_info_save {
 	struct vx_info *vxi;
@@ -129,7 +151,6 @@ struct vx_info_save {
 
 #define VXS_HASHED	0x0001
 #define VXS_PAUSED	0x0010
-#define VXS_ONHOLD	0x0020
 #define VXS_SHUTDOWN	0x0100
 #define VXS_RELEASED	0x8000
 
