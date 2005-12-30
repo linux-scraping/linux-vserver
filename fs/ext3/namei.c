@@ -37,6 +37,8 @@
 #include <linux/buffer_head.h>
 #include <linux/smp_lock.h>
 #include <linux/vserver/xid.h>
+
+#include "namei.h"
 #include "xattr.h"
 #include "acl.h"
 

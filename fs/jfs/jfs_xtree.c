@@ -926,6 +926,7 @@ int xtInsert(tid_t tid,		/* transaction id */
       out:
 	/* unpin the leaf page */
 	XT_PUTPAGE(mp);
+
 	return rc;
 }
 
@@ -1254,6 +1255,7 @@ xtSplitPage(tid_t tid, struct inode *ip,
 	       rc = -EDQUOT;
 	       goto clean_up;
 	}
+
 	quota_allocation += lengthPXD(pxd);
 
 	/* Allocate blocks to dlimit. */
@@ -3538,16 +3540,10 @@ s64 xtTruncate(tid_t tid, struct inode *ip, s64 newsize, int flag)
 	/* process entries backward from last index */
 	index = le16_to_cpu(p->header.nextindex) - 1;
 
-	if (p->header.flag & BT_INTERNAL)
-		goto getChild;
 
-	/*
-	 *      leaf page
-	 */
-
-	/* Since this is the rightmost leaf, and we may have already freed
-	 * a page that was formerly to the right, let's make sure that the
-	 * next pointer is zero.
+	/* Since this is the rightmost page at this level, and we may have
+	 * already freed a page that was formerly to the right, let's make
+	 * sure that the next pointer is zero.
 	 */
 	if (p->header.next) {
 		if (log)
@@ -3561,6 +3557,12 @@ s64 xtTruncate(tid_t tid, struct inode *ip, s64 newsize, int flag)
 		p->header.next = 0;
 	}
 
+	if (p->header.flag & BT_INTERNAL)
+		goto getChild;
+
+	/*
+	 *      leaf page
+	 */
 	freed = 0;
 
 	/* does region covered by leaf page precede Teof ? */

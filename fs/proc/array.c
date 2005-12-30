@@ -139,7 +139,8 @@ static const char *task_state_array[] = {
 	"T (tracing stop)",	/*  8 */
 	"Z (zombie)",		/* 16 */
 	"X (dead)",		/* 32 */
-	"H (on hold)"		/* 64 */
+	"N (noninteractive)",	/* 64 */
+	"H (on hold)"		/* 128 */
 };
 
 static inline const char * get_task_state(struct task_struct *tsk)
@@ -468,7 +469,6 @@ static int do_task_stat(struct task_struct *task, char * buffer, int whole)
 	/* convert timespec -> nsec*/
 	start_time = (unsigned long long)task->start_time.tv_sec * NSEC_PER_SEC
 				+ task->start_time.tv_nsec;
-
 	/* convert nsec -> ticks */
 	start_time = nsec_to_clock_t(start_time);
 
@@ -509,7 +509,7 @@ static int do_task_stat(struct task_struct *task, char * buffer, int whole)
 		jiffies_to_clock_t(it_real_value),
 		start_time,
 		vsize,
-		mm ? get_mm_counter(mm, rss) : 0, /* you might want to shift this left 3 */
+		mm ? get_mm_rss(mm) : 0,
 	        rsslim,
 		mm ? mm->start_code : 0,
 		mm ? mm->end_code : 0,

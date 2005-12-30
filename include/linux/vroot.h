@@ -31,6 +31,12 @@ struct vroot_device {
 	int			vr_state;
 };
 
+
+typedef struct block_device *(vroot_grb_func)(struct block_device *);
+
+extern int register_vroot_grb(vroot_grb_func *);
+extern int unregister_vroot_grb(vroot_grb_func *);
+
 #endif /* __KERNEL__ */
 
 #define MAX_VROOT_DEFAULT	8

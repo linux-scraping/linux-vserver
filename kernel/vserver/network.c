@@ -205,7 +205,7 @@ static inline nid_t __nx_dynamic_id(void)
 /*	__create_nx_info()
 
 	* create the requested context
-	* get() and hash it				*/
+	* get() and hash it					*/
 
 static struct nx_info * __create_nx_info(int id)
 {
@@ -408,21 +408,28 @@ int ifa_in_nx_info(struct in_ifaddr *ifa, struct nx_info *nxi)
 
 int dev_in_nx_info(struct net_device *dev, struct nx_info *nxi)
 {
-	struct in_device *in_dev = in_dev_get(dev);
-	struct in_ifaddr **ifap = NULL;
-	struct in_ifaddr *ifa = NULL;
+	struct in_device *in_dev;
+	struct in_ifaddr **ifap;
+	struct in_ifaddr *ifa;
+	int ret = 0;
 
 	if (!nxi)
 		return 1;
+
+	in_dev = in_dev_get(dev);
 	if (!in_dev)
-		return 0;
+		goto out;
 
 	for (ifap = &in_dev->ifa_list; (ifa = *ifap) != NULL;
 		ifap = &ifa->ifa_next) {
-		if (addr_in_nx_info(nxi, ifa->ifa_address))
-			return 1;
+		if (addr_in_nx_info(nxi, ifa->ifa_address)) {
+			ret = 1;
+			break;
+		}
 	}
-	return 0;
+	in_dev_put(in_dev);
+out:
+	return ret;
 }
 
 /*

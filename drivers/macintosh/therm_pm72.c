@@ -933,7 +933,7 @@ static void do_monitor_cpu_combined(void)
 	if (state0->overtemp > 0) {
 		state0->rpm = state0->mpu.rmaxn_exhaust_fan;
 		state0->intake_rpm = intake = state0->mpu.rmaxn_intake_fan;
-		pump = state0->pump_min;
+		pump = state0->pump_max;
 		goto do_set_fans;
 	}
 
@@ -1678,10 +1678,9 @@ static int main_control_loop(void *x)
 		}
 
 		// FIXME: Deal with signals
-		set_current_state(TASK_INTERRUPTIBLE);
 		elapsed = jiffies - start;
 		if (elapsed < HZ)
-			schedule_timeout(HZ - elapsed);
+			schedule_timeout_interruptible(HZ - elapsed);
 	}
 
  out:

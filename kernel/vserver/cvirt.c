@@ -192,22 +192,22 @@ int vx_do_syslog(int type, char __user *buf, int len)
 static char * vx_vhi_name(struct vx_info *vxi, int id)
 {
 	switch (id) {
-		case VHIN_CONTEXT:
-			return vxi->vx_name;
-		case VHIN_SYSNAME:
-			return vxi->cvirt.utsname.sysname;
-		case VHIN_NODENAME:
-			return vxi->cvirt.utsname.nodename;
-		case VHIN_RELEASE:
-			return vxi->cvirt.utsname.release;
-		case VHIN_VERSION:
-			return vxi->cvirt.utsname.version;
-		case VHIN_MACHINE:
-			return vxi->cvirt.utsname.machine;
-		case VHIN_DOMAINNAME:
-			return vxi->cvirt.utsname.domainname;
-		default:
-			return NULL;
+	case VHIN_CONTEXT:
+		return vxi->vx_name;
+	case VHIN_SYSNAME:
+		return vxi->cvirt.utsname.sysname;
+	case VHIN_NODENAME:
+		return vxi->cvirt.utsname.nodename;
+	case VHIN_RELEASE:
+		return vxi->cvirt.utsname.release;
+	case VHIN_VERSION:
+		return vxi->cvirt.utsname.version;
+	case VHIN_MACHINE:
+		return vxi->cvirt.utsname.machine;
+	case VHIN_DOMAINNAME:
+		return vxi->cvirt.utsname.domainname;
+	default:
+		return NULL;
 	}
 	return NULL;
 }

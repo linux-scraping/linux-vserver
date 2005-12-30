@@ -29,6 +29,7 @@
 #include <linux/vserver/legacy.h>
 #include <linux/vserver/limit.h>
 #include <linux/vserver/debug.h>
+#include <linux/vserver/limit_int.h>
 
 #include <linux/vs_context.h>
 #include <linux/vserver/context_cmd.h>
@@ -318,7 +319,7 @@ out_unlock:
 /*	__create_vx_info()
 
 	* create the requested context
-	* get() and hash it				*/
+	* get() and hash it					*/
 
 static struct vx_info * __create_vx_info(int id)
 {
@@ -504,6 +505,7 @@ static int vx_openfd_task(struct task_struct *tsk)
 	const unsigned long *bptr;
 	int count, total;
 
+	/* no rcu_read_lock() because of spin_lock() */
 	spin_lock(&files->file_lock);
 	fdt = files_fdtable(files);
 	bptr = fdt->open_fds->fds_bits;
