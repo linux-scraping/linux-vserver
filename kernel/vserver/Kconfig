@@ -44,6 +44,15 @@ config	VSERVER_LEGACY_VERSION
 	  so better avoid it, unless you really, really need it
 	  for backwards compatibility.
 
+config	VSERVER_DYNAMIC_IDS
+	bool	"Enable dynamic context IDs"
+	depends on VSERVER_LEGACY
+	default y
+	help
+	  This enables support of in kernel dynamic context IDs,
+	  which is deprecated and will probably be removed in the
+	  next release.
+
 config	VSERVER_NGNET
 	bool	"Disable Legacy Networking Kernel API"
 	depends on EXPERIMENTAL
@@ -52,6 +61,16 @@ config	VSERVER_NGNET
 	  This disables the legacy networking API which is required
 	  by the chbind tool. Do not disable it unless you exactly
 	  know what you are doing.
+
+config	VSERVER_COWBL
+	bool	"Enable COW Immutable Link Breaking"
+	depends on EXPERIMENTAL
+	default y
+	help
+	  This enables the COW (Copy-On-Write) link break code.
+	  It allows you to treat unified files like normal files
+	  when writing to them (which will implicitely break the
+	  link and create a copy of the unified file)
 
 config	VSERVER_PROC_SECURE
 	bool	"Enable Proc Security"
@@ -147,6 +166,15 @@ config	XID_TAG_NFSD
 	  Enable this if you do want the in-kernel NFS
 	  Server to use the xid tagging specified above.
 	  (will require patched clients too)
+
+config	XID_PROPAGATE
+	bool	"Enable XID Propagation"
+	default n
+	depends on EXPERIMENTAL
+	help
+	  This allows for the xid= mount option to specify
+	  an xid which is to be used for the entire mount
+	  tree.
 
 config	VSERVER_DEBUG
 	bool	"VServer Debugging Code"

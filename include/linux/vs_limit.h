@@ -51,7 +51,6 @@
 #define vx_openfd_dec(f) \
 	vx_acc_cres(current->vx_info,-1, (void *)(long)(f), VLIMIT_OPENFD)
 
-
 #define vx_cres_avail(v,n,r) \
 	__vx_cres_avail(v, r, n, __FILE__, __LINE__)
 
@@ -101,6 +100,20 @@
 
 #define vx_ipcshm_avail(v,a) \
 	vx_cres_avail(v, a, VLIMIT_SHMEM)
+
+
+#define vx_semary_inc(a) \
+	vx_acc_cres(current->vx_info, 1, a, VLIMIT_SEMARY)
+
+#define vx_semary_dec(a) \
+	vx_acc_cres(current->vx_info,-1, a, VLIMIT_SEMARY)
+
+
+#define vx_nsems_add(a,n) \
+	vx_add_cres(current->vx_info, n, a, VLIMIT_NSEMS)
+
+#define vx_nsems_sub(a,n) \
+	vx_sub_cres(current->vx_info, n, a, VLIMIT_NSEMS)
 
 
 #else

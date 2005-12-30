@@ -614,7 +614,7 @@ static struct mtd_erase_region_info *calc_erase_regions(
 }
 
 
-extern dev_t __init name_to_dev_t(const char *line);
+extern dev_t __init name_to_dev_t(char *line);
 
 static struct blkmtd_dev *add_device(char *devname, int readonly, int erase_size)
 {

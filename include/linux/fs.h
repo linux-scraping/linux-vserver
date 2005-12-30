@@ -10,6 +10,7 @@
 #include <linux/limits.h>
 #include <linux/ioctl.h>
 #include <linux/rcuref.h>
+#include <linux/mount.h>
 
 /*
  * It's silly to have NR_OPEN bigger than NR_FILE, but you can change
@@ -156,7 +157,7 @@ extern int dir_notify_enable;
  */
 #define __IS_FLG(inode,flg) ((inode)->i_sb->s_flags & (flg))
 
-#define IS_RDONLY(inode) ((inode)->i_sb->s_flags & MS_RDONLY)
+#define IS_RDONLY(inode)	__IS_FLG(inode, MS_RDONLY)
 #define IS_SYNC(inode)		(__IS_FLG(inode, MS_SYNCHRONOUS) || \
 					((inode)->i_flags & S_SYNC))
 #define IS_DIRSYNC(inode)	(__IS_FLG(inode, MS_SYNCHRONOUS|MS_DIRSYNC) || \
@@ -178,6 +179,9 @@ extern int dir_notify_enable;
 #define IS_NOCMTIME(inode)	((inode)->i_flags & S_NOCMTIME)
 #define IS_SWAPFILE(inode)	((inode)->i_flags & S_SWAPFILE)
 #define IS_PRIVATE(inode)	((inode)->i_flags & S_PRIVATE)
+
+#define IS_COW_LINK(inode)	(S_ISREG((inode)->i_mode) && \
+					((inode)->i_nlink > 1) && IS_IUNLINK(inode))
 
 /* the read-only stuff doesn't really belong here, but any other place is
    probably as bad and I don't want to create yet another include file. */
@@ -476,6 +480,7 @@ struct inode {
 	struct address_space	*i_mapping;
 	struct address_space	i_data;
 #ifdef CONFIG_QUOTA
+	struct dqhash		*i_dqh;
 	struct dquot		*i_dquot[MAXQUOTAS];
 #endif
 	/* These three should probably be a union */
@@ -799,7 +804,7 @@ struct super_block {
 	unsigned long long	s_maxbytes;	/* Max file size */
 	struct file_system_type	*s_type;
 	struct super_operations	*s_op;
-	struct dquot_operations	*dq_op;
+	struct dquot_operations	*s_qop;
  	struct quotactl_ops	*s_qcop;
 	struct export_operations *s_export_op;
 	unsigned long		s_flags;
@@ -822,7 +827,7 @@ struct super_block {
 
 	struct block_device	*s_bdev;
 	struct list_head	s_instances;
-	struct quota_info	s_dquot;	/* Diskquota specific options */
+	struct dqhash		*s_dqh;		/* Diskquota hash */
 
 	int			s_frozen;
 	wait_queue_head_t	s_wait_unfrozen;
@@ -892,12 +897,12 @@ static inline void unlock_super(struct super_block * sb)
  */
 extern int vfs_permission(struct nameidata *, int);
 extern int vfs_create(struct inode *, struct dentry *, int, struct nameidata *);
-extern int vfs_mkdir(struct inode *, struct dentry *, int);
-extern int vfs_mknod(struct inode *, struct dentry *, int, dev_t);
-extern int vfs_symlink(struct inode *, struct dentry *, const char *, int);
-extern int vfs_link(struct dentry *, struct inode *, struct dentry *);
-extern int vfs_rmdir(struct inode *, struct dentry *);
-extern int vfs_unlink(struct inode *, struct dentry *);
+extern int vfs_mkdir(struct inode *, struct dentry *, int, struct nameidata *);
+extern int vfs_mknod(struct inode *, struct dentry *, int, dev_t, struct nameidata *);
+extern int vfs_symlink(struct inode *, struct dentry *, const char *, int, struct nameidata *);
+extern int vfs_link(struct dentry *, struct inode *, struct dentry *, struct nameidata *);
+extern int vfs_rmdir(struct inode *, struct dentry *, struct nameidata *);
+extern int vfs_unlink(struct inode *, struct dentry *, struct nameidata *);
 extern int vfs_rename(struct inode *, struct dentry *, struct inode *, struct dentry *);
 
 /*
@@ -1046,6 +1051,7 @@ extern ssize_t vfs_readv(struct file *, const struct iovec __user *,
 		unsigned long, loff_t *);
 extern ssize_t vfs_writev(struct file *, const struct iovec __user *,
 		unsigned long, loff_t *);
+ssize_t vfs_sendfile(struct file *, struct file *, loff_t *, size_t, loff_t);
 
 /*
  * NOTE: write_inode, delete_inode, clear_inode, put_inode can be called
@@ -1074,8 +1080,8 @@ struct super_operations {
 
 	int (*show_options)(struct seq_file *, struct vfsmount *);
 
-	ssize_t (*quota_read)(struct super_block *, int, char *, size_t, loff_t);
-	ssize_t (*quota_write)(struct super_block *, int, const char *, size_t, loff_t);
+	ssize_t (*quota_read)(struct dqhash *, int, char *, size_t, loff_t);
+	ssize_t (*quota_write)(struct dqhash *, int, const char *, size_t, loff_t);
 };
 
 /* Inode state bits.  Protected by inode_lock. */
@@ -1104,8 +1110,16 @@ static inline void mark_inode_dirty_sync(struct inode *inode)
 
 static inline void touch_atime(struct vfsmount *mnt, struct dentry *dentry)
 {
-	/* per-mountpoint checks will go here */
-	update_atime(dentry->d_inode);
+	struct inode *inode = dentry->d_inode;
+
+	if (MNT_IS_NOATIME(mnt))
+		return;
+	if (S_ISDIR(inode->i_mode) && MNT_IS_NODIRATIME(mnt))
+		return;
+	if (IS_RDONLY(inode) || MNT_IS_RDONLY(mnt))
+		return;
+
+	update_atime(inode);
 }
 
 static inline void file_accessed(struct file *file)
@@ -1512,7 +1526,7 @@ extern void clear_inode(struct inode *);
 extern void destroy_inode(struct inode *);
 extern struct inode *new_inode(struct super_block *);
 extern int remove_suid(struct dentry *);
-extern void remove_dquot_ref(struct super_block *, int, struct list_head *);
+extern void remove_dquot_ref(struct dqhash *, int, struct list_head *);
 extern struct semaphore iprune_sem;
 
 extern void __insert_inode_hash(struct inode *, unsigned long hashval);
@@ -1552,6 +1566,7 @@ extern ssize_t do_sync_write(struct file *filp, const char __user *buf, size_t l
 ssize_t generic_file_write_nolock(struct file *file, const struct iovec *iov,
 				unsigned long nr_segs, loff_t *ppos);
 extern ssize_t generic_file_sendfile(struct file *, loff_t *, size_t, read_actor_t, void *);
+extern ssize_t generic_file_sendpage(struct file *, struct page *, int, size_t, loff_t *, int);
 extern void do_generic_mapping_read(struct address_space *mapping,
 				    struct file_ra_state *, struct file *,
 				    loff_t *, read_descriptor_t *, read_actor_t);

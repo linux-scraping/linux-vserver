@@ -130,9 +130,9 @@ int vc_set_sched_v2(uint32_t xid, void __user *data)
 	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
-	vxi = locate_vx_info(xid);
+	vxi = lookup_vx_info(xid);
 	if (!vxi)
-		return -EINVAL;
+		return -ESRCH;
 
 	spin_lock(&vxi->sched.tokens_lock);
 
@@ -174,9 +174,9 @@ int vc_set_sched(uint32_t xid, void __user *data)
 	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
-	vxi = locate_vx_info(xid);
+	vxi = lookup_vx_info(xid);
 	if (!vxi)
-		return -EINVAL;
+		return -ESRCH;
 
 	set_mask = vc_data.set_mask;
 

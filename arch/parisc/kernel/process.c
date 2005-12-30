@@ -201,7 +201,7 @@ pid_t kernel_thread(int (*fn)(void *), void *arg, unsigned long flags)
 	 *	  kernel_thread can become a #define.
 	 */
 
-	return __kernel_thread(fn, arg, flags);
+	return __kernel_thread(fn, arg, flags | CLONE_KTHREAD);
 }
 EXPORT_SYMBOL(kernel_thread);
 

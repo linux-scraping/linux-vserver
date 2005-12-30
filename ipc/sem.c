@@ -74,6 +74,7 @@
 #include <linux/syscalls.h>
 #include <linux/audit.h>
 #include <linux/seq_file.h>
+#include <linux/vs_limit.h>
 #include <asm/uaccess.h>
 #include "util.h"
 
@@ -194,6 +195,8 @@ static int newary (key_t key, int nsems, int semflg)
 		return -ENOSPC;
 	}
 	used_sems += nsems;
+	vx_semary_inc(sma);
+	vx_nsems_add(sma, nsems);
 
 	sma->sem_id = sem_buildid(id, sma->sem_perm.seq);
 	sma->sem_base = (struct sem *) &sma[1];
@@ -473,6 +476,8 @@ static void freeary (struct sem_array *sma, int id)
 	sem_unlock(sma);
 
 	used_sems -= sma->sem_nsems;
+	vx_nsems_sub(sma, sma->sem_nsems);
+	vx_semary_dec(sma);
 	size = sizeof (*sma) + sma->sem_nsems * sizeof (struct sem);
 	security_sem_free(sma);
 	ipc_rcu_putref(sma);

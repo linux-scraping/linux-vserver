@@ -204,7 +204,7 @@ int kernel_thread(int (*fn)(void *), void * arg, unsigned long flags)
 		 :"=r" (retval)
 		 :"i" (__NR_clone), "i" (__NR_exit),
 		 "r" (arg), "r" (fn),
-		 "r" (flags | CLONE_VM)
+		 "r" (flags | CLONE_VM | CLONE_KTHREAD)
 		 : "a2", "a3", "a4", "a5", "a6" );
 	return retval;
 }

@@ -160,6 +160,33 @@ static __inline__ struct nx_info *__task_get_nx_info(struct task_struct *p,
 #define nx_weak_check(c,m)	((m) ? nx_check(c,m) : 1)
 
 
+/*
+ * check current context for ADMIN/WATCH and
+ * optionally against supplied argument
+ */
+static inline int __nx_check(nid_t cid, nid_t id, unsigned int mode)
+{
+	if (mode & NX_ARG_MASK) {
+		if ((mode & NX_IDENT) &&
+			(id == cid))
+			return 1;
+	}
+	if (mode & NX_ATR_MASK) {
+		if ((mode & NX_DYNAMIC) &&
+			(id >= MIN_D_CONTEXT) &&
+			(id <= MAX_S_CONTEXT))
+			return 1;
+		if ((mode & NX_STATIC) &&
+			(id > 1) && (id < MIN_D_CONTEXT))
+			return 1;
+	}
+	return (((mode & NX_ADMIN) && (cid == 0)) ||
+		((mode & NX_WATCH) && (cid == 1)) ||
+		((mode & NX_BLEND) && (id == 1)) ||
+		((mode & NX_HOSTID) && (id == 0)));
+}
+
+
 #define __nx_state(v)	((v) ? ((v)->nx_state) : 0)
 
 #define nx_info_state(v,m)	(__nx_state(v) & (m))
@@ -202,6 +229,12 @@ static inline int addr_in_nx_info(struct nx_info *nxi, uint32_t addr)
 			return 1;
 	}
 	return 0;
+}
+
+static inline void exit_nx_info(struct task_struct *p)
+{
+	if (p->nx_info)
+		release_nx_info(p->nx_info, p);
 }
 
 

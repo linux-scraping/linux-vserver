@@ -173,7 +173,7 @@ EXPORT_SYMBOL(sync_blockdev);
 int fsync_super(struct super_block *sb)
 {
 	sync_inodes_sb(sb, 0);
-	DQUOT_SYNC(sb);
+	DQUOT_SYNC(sb->s_dqh);
 	lock_super(sb);
 	if (sb->s_dirt && sb->s_op->write_super)
 		sb->s_op->write_super(sb);
@@ -222,7 +222,7 @@ struct super_block *freeze_bdev(struct block_device *bdev)
 		smp_wmb();
 
 		sync_inodes_sb(sb, 0);
-		DQUOT_SYNC(sb);
+		DQUOT_SYNC(sb->s_dqh);
 
 		lock_super(sb);
 		if (sb->s_dirt && sb->s_op->write_super)

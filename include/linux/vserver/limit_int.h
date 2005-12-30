@@ -3,14 +3,14 @@
 
 #ifdef	__KERNEL__
 
-#define VXD_RLIMIT(r)	VXD_CBIT(limit, (r))
+#define VXD_RLIMIT_COND(r)	VXD_CBIT(limit, (r))
 
 extern const char *vlimit_name[NUM_LIMITS];
 
 static inline void __vx_acc_cres(struct vx_info *vxi,
 	int res, int dir, void *_data, char *_file, int _line)
 {
-	if (VXD_RLIMIT(res))
+	if (VXD_RLIMIT_COND(res))
 		vxlprintk(1, "vx_acc_cres[%5d,%s,%2d]: %5d%s (%p)",
 			(vxi ? vxi->vx_id : -1), vlimit_name[res], res,
 			(vxi ? atomic_read(&vxi->limit.rcur[res]) : 0),
@@ -27,7 +27,7 @@ static inline void __vx_acc_cres(struct vx_info *vxi,
 static inline void __vx_add_cres(struct vx_info *vxi,
 	int res, int amount, void *_data, char *_file, int _line)
 {
-	if (VXD_RLIMIT(res))
+	if (VXD_RLIMIT_COND(res))
 		vxlprintk(1, "vx_add_cres[%5d,%s,%2d]: %5d += %5d (%p)",
 			(vxi ? vxi->vx_id : -1), vlimit_name[res], res,
 			(vxi ? atomic_read(&vxi->limit.rcur[res]) : 0),
@@ -44,7 +44,7 @@ static inline int __vx_cres_avail(struct vx_info *vxi,
 {
 	unsigned long value;
 
-	if (VXD_RLIMIT(res))
+	if (VXD_RLIMIT_COND(res))
 		vxlprintk(1, "vx_cres_avail[%5d,%s,%2d]: %5ld > %5d + %5d",
 			(vxi ? vxi->vx_id : -1), vlimit_name[res], res,
 			(vxi ? vxi->limit.rlim[res] : 1),

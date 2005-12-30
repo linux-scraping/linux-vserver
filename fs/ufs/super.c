@@ -874,7 +874,7 @@ magic_found:
 	 * Read ufs_super_block into internal data structures
 	 */
 	sb->s_op = &ufs_super_ops;
-	sb->dq_op = NULL; /***/
+	sb->s_qop = NULL; /***/
 	sb->s_magic = fs32_to_cpu(sb, usb3->fs_magic);
 
 	uspi->s_sblkno = fs32_to_cpu(sb, usb1->fs_sblkno);
@@ -1199,8 +1199,8 @@ static void destroy_inodecache(void)
 }
 
 #ifdef CONFIG_QUOTA
-static ssize_t ufs_quota_read(struct super_block *, int, char *,size_t, loff_t);
-static ssize_t ufs_quota_write(struct super_block *, int, const char *, size_t, loff_t);
+static ssize_t ufs_quota_read(struct dqhash *, int, char *,size_t, loff_t);
+static ssize_t ufs_quota_write(struct dqhash *, int, const char *, size_t, loff_t);
 #endif
 
 static struct super_operations ufs_super_ops = {
@@ -1225,10 +1225,11 @@ static struct super_operations ufs_super_ops = {
  * acquiring the locks... As quota files are never truncated and quota code
  * itself serializes the operations (and noone else should touch the files)
  * we don't have to be afraid of races */
-static ssize_t ufs_quota_read(struct super_block *sb, int type, char *data,
+static ssize_t ufs_quota_read(struct dqhash *hash, int type, char *data,
 			       size_t len, loff_t off)
 {
-	struct inode *inode = sb_dqopt(sb)->files[type];
+	struct inode *inode = dqh_dqopt(hash)->files[type];
+	struct super_block *sb = hash->dqh_sb;
 	sector_t blk = off >> sb->s_blocksize_bits;
 	int err = 0;
 	int offset = off & (sb->s_blocksize - 1);
@@ -1264,10 +1265,11 @@ static ssize_t ufs_quota_read(struct super_block *sb, int type, char *data,
 }
 
 /* Write to quotafile */
-static ssize_t ufs_quota_write(struct super_block *sb, int type,
+static ssize_t ufs_quota_write(struct dqhash *hash, int type,
 				const char *data, size_t len, loff_t off)
 {
-	struct inode *inode = sb_dqopt(sb)->files[type];
+	struct inode *inode = dqh_dqopt(hash)->files[type];
+	struct super_block *sb = hash->dqh_sb;
 	sector_t blk = off >> sb->s_blocksize_bits;
 	int err = 0;
 	int offset = off & (sb->s_blocksize - 1);

@@ -47,8 +47,8 @@ int reiserfs_ioctl(struct inode *inode, struct file *filp, unsigned int cmd,
 			if (!reiserfs_attrs(inode->i_sb))
 				return -ENOTTY;
 
-			if (IS_RDONLY(inode))
-				return -EROFS;
+			if (IS_RDONLY(inode) ||
+				(filp && MNT_IS_RDONLY(filp->f_vfsmnt)))
 
 			if ((current->fsuid != inode->i_uid)
 			    && !capable(CAP_FOWNER))
@@ -87,7 +87,8 @@ int reiserfs_ioctl(struct inode *inode, struct file *filp, unsigned int cmd,
 	case REISERFS_IOC_SETVERSION:
 		if ((current->fsuid != inode->i_uid) && !capable(CAP_FOWNER))
 			return -EPERM;
-		if (IS_RDONLY(inode))
+		if (IS_RDONLY(inode) ||
+			(filp && MNT_IS_RDONLY(filp->f_vfsmnt)))
 			return -EROFS;
 		if (get_user(inode->i_generation, (int __user *)arg))
 			return -EFAULT;
