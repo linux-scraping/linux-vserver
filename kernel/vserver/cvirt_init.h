@@ -37,6 +37,12 @@ static inline void vx_info_init_cvirt(struct _vx_cvirt *cvirt)
 	cvirt->syslog.logged_chars = 0;
 }
 
+static inline
+void vx_info_init_cvirt_pc(struct _vx_cvirt_pc *cvirt_pc, int cpu)
+{
+	// cvirt_pc->cpustat = { 0 };
+}
+
 static inline void vx_info_exit_cvirt(struct _vx_cvirt *cvirt)
 {
 #ifdef	CONFIG_VSERVER_DEBUG
@@ -57,6 +63,13 @@ static inline void vx_info_exit_cvirt(struct _vx_cvirt *cvirt)
 #endif
 	return;
 }
+
+static inline
+void vx_info_exit_cvirt_pc(struct _vx_cvirt_pc *cvirt_pc, int cpu)
+{
+	return;
+}
+
 
 static inline void vx_info_init_cacct(struct _vx_cacct *cacct)
 {
