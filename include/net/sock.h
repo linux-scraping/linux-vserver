@@ -116,9 +116,9 @@ struct sock_common {
 	unsigned int		skc_hash;
 	struct proto		*skc_prot;
 	xid_t			skc_xid;
-	struct vx_info  	*skc_vx_info;
+	struct vx_info	*skc_vx_info;
 	nid_t			skc_nid;
-	struct nx_info  	*skc_nx_info;
+	struct nx_info	*skc_nx_info;
 };
 
 /**
@@ -215,7 +215,7 @@ struct sock {
 	struct sk_buff_head	sk_write_queue;
 	int			sk_wmem_queued;
 	int			sk_forward_alloc;
-	unsigned int		sk_allocation;
+	gfp_t			sk_allocation;
 	int			sk_sndbuf;
 	int			sk_route_caps;
 	unsigned long 		sk_flags;
@@ -469,16 +469,16 @@ static inline void sk_stream_free_skb(struct sock *sk, struct sk_buff *skb)
 }
 
 /* The per-socket spinlock must be held here. */
-#define sk_add_backlog(__sk, __skb)				\
-do {	if (!(__sk)->sk_backlog.tail) {				\
-		(__sk)->sk_backlog.head =			\
-		     (__sk)->sk_backlog.tail = (__skb);		\
-	} else {						\
-		((__sk)->sk_backlog.tail)->next = (__skb);	\
-		(__sk)->sk_backlog.tail = (__skb);		\
-	}							\
-	(__skb)->next = NULL;					\
-} while(0)
+static inline void sk_add_backlog(struct sock *sk, struct sk_buff *skb)
+{
+	if (!sk->sk_backlog.tail) {
+		sk->sk_backlog.head = sk->sk_backlog.tail = skb;
+	} else {
+		sk->sk_backlog.tail->next = skb;
+		sk->sk_backlog.tail = skb;
+	}
+	skb->next = NULL;
+}
 
 #define sk_wait_event(__sk, __timeo, __condition)		\
 ({	int rc;							\
@@ -1252,6 +1252,12 @@ static inline struct page *sk_stream_alloc_page(struct sock *sk)
 #define sk_stream_for_retrans_queue(skb, sk)				\
 		for (skb = (sk)->sk_write_queue.next;			\
 		     (skb != (sk)->sk_send_head) &&			\
+		     (skb != (struct sk_buff *)&(sk)->sk_write_queue);	\
+		     skb = skb->next)
+
+/*from STCP for fast SACK Process*/
+#define sk_stream_for_retrans_queue_from(skb, sk)			\
+		for (; (skb != (sk)->sk_send_head) &&                   \
 		     (skb != (struct sk_buff *)&(sk)->sk_write_queue);	\
 		     skb = skb->next)
 

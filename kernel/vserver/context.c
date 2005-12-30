@@ -29,6 +29,7 @@
 #include <linux/vserver/legacy.h>
 #include <linux/vserver/limit.h>
 #include <linux/vserver/debug.h>
+#include <linux/vserver/limit_int.h>
 
 #include <linux/vs_context.h>
 #include <linux/vserver/context_cmd.h>
@@ -318,7 +319,7 @@ out_unlock:
 /*	__create_vx_info()
 
 	* create the requested context
-	* get() and hash it				*/
+	* get() and hash it					*/
 
 static struct vx_info * __create_vx_info(int id)
 {

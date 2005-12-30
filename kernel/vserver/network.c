@@ -205,7 +205,7 @@ static inline nid_t __nx_dynamic_id(void)
 /*	__create_nx_info()
 
 	* create the requested context
-	* get() and hash it				*/
+	* get() and hash it					*/
 
 static struct nx_info * __create_nx_info(int id)
 {

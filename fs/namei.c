@@ -28,6 +28,7 @@
 #include <linux/syscalls.h>
 #include <linux/mount.h>
 #include <linux/audit.h>
+#include <linux/file.h>
 #include <linux/proc_fs.h>
 #include <linux/vserver/inode.h>
 #include <linux/vserver/debug.h>
@@ -278,6 +279,38 @@ int permission(struct inode *inode, int mask, struct nameidata *nd)
 	return security_inode_permission(inode, mask, nd);
 }
 
+/**
+ * vfs_permission  -  check for access rights to a given path
+ * @nd:		lookup result that describes the path
+ * @mask:	right to check for (%MAY_READ, %MAY_WRITE, %MAY_EXEC)
+ *
+ * Used to check for read/write/execute permissions on a path.
+ * We use "fsuid" for this, letting us set arbitrary permissions
+ * for filesystem access without changing the "normal" uids which
+ * are used for other things.
+ */
+int vfs_permission(struct nameidata *nd, int mask)
+{
+	return permission(nd->dentry->d_inode, mask, nd);
+}
+
+/**
+ * file_permission  -  check for additional access rights to a given file
+ * @file:	file to check access rights for
+ * @mask:	right to check for (%MAY_READ, %MAY_WRITE, %MAY_EXEC)
+ *
+ * Used to check for read/write/execute permissions on an already opened
+ * file.
+ *
+ * Note:
+ *	Do not use this function in new code.  All access checks should
+ *	be done using vfs_permission().
+ */
+int file_permission(struct file *file, int mask)
+{
+	return permission(file->f_dentry->d_inode, mask, NULL);
+}
+
 /*
  * get_write_access() gets write permission for a file.
  * put_write_access() releases this write permission.
@@ -338,6 +371,18 @@ void path_release_on_umount(struct nameidata *nd)
 {
 	dput(nd->dentry);
 	mntput_no_expire(nd->mnt);
+}
+
+/**
+ * release_open_intent - free up open intent resources
+ * @nd: pointer to nameidata
+ */
+void release_open_intent(struct nameidata *nd)
+{
+	if (nd->intent.open.file->f_dentry == NULL)
+		put_filp(nd->intent.open.file);
+	else
+		fput(nd->intent.open.file);
 }
 
 /*
@@ -792,10 +837,10 @@ static fastcall int __link_path_walk(const char * name, struct nameidata *nd)
 		struct qstr this;
 		unsigned int c;
 
+		nd->flags |= LOOKUP_CONTINUE;
 		err = exec_permission_lite(inode, nd);
-		if (err == -EAGAIN) { 
-			err = permission(inode, MAY_EXEC, nd);
-		}
+		if (err == -EAGAIN)
+			err = vfs_permission(nd, MAY_EXEC);
  		if (err)
 			break;
 
@@ -844,7 +889,6 @@ static fastcall int __link_path_walk(const char * name, struct nameidata *nd)
 			if (err < 0)
 				break;
 		}
-		nd->flags |= LOOKUP_CONTINUE;
 		/* This does the actual lookups.. */
 		err = do_lookup(nd, &this, &next);
 		if (err)
@@ -1094,6 +1138,71 @@ out:
 	return retval;
 }
 
+static int __path_lookup_intent_open(const char *name, unsigned int lookup_flags,
+		struct nameidata *nd, int open_flags, int create_mode)
+{
+	struct file *filp = get_empty_filp();
+	int err;
+
+	if (filp == NULL)
+		return -ENFILE;
+	nd->intent.open.file = filp;
+	nd->intent.open.flags = open_flags;
+	nd->intent.open.create_mode = create_mode;
+	err = path_lookup(name, lookup_flags|LOOKUP_OPEN, nd);
+	if (IS_ERR(nd->intent.open.file)) {
+		if (err == 0) {
+			err = PTR_ERR(nd->intent.open.file);
+			path_release(nd);
+		}
+	} else if (err != 0)
+		release_open_intent(nd);
+	return err;
+}
+
+/**
+ * path_lookup_open - lookup a file path with open intent
+ * @name: pointer to file name
+ * @lookup_flags: lookup intent flags
+ * @nd: pointer to nameidata
+ * @open_flags: open intent flags
+ */
+int path_lookup_open(const char *name, unsigned int lookup_flags,
+		struct nameidata *nd, int open_flags)
+{
+	return __path_lookup_intent_open(name, lookup_flags, nd,
+			open_flags, 0);
+}
+
+/**
+ * path_lookup_create - lookup a file path with open + create intent
+ * @name: pointer to file name
+ * @lookup_flags: lookup intent flags
+ * @nd: pointer to nameidata
+ * @open_flags: open intent flags
+ * @create_mode: create intent flags
+ */
+static int path_lookup_create(const char *name, unsigned int lookup_flags,
+			      struct nameidata *nd, int open_flags,
+			      int create_mode)
+{
+	return __path_lookup_intent_open(name, lookup_flags|LOOKUP_CREATE, nd,
+			open_flags, create_mode);
+}
+
+int __user_path_lookup_open(const char __user *name, unsigned int lookup_flags,
+		struct nameidata *nd, int open_flags)
+{
+	char *tmp = getname(name);
+	int err = PTR_ERR(tmp);
+
+	if (!IS_ERR(tmp)) {
+		err = __path_lookup_intent_open(tmp, lookup_flags, nd, open_flags, 0);
+		putname(tmp);
+	}
+	return err;
+}
+
 /*
  * Restricted form of lookup. Doesn't follow links, single-component only,
  * needs parent already locked. Doesn't follow mounts.
@@ -1138,9 +1247,9 @@ out:
 	return dentry;
 }
 
-struct dentry * lookup_hash(struct qstr *name, struct dentry * base)
+struct dentry * lookup_hash(struct nameidata *nd)
 {
-	return __lookup_hash(name, base, NULL);
+	return __lookup_hash(&nd->last, nd->dentry, nd);
 }
 
 /* SMP-safe */
@@ -1164,7 +1273,7 @@ struct dentry * lookup_one_len(const char * name, struct dentry * base, int len)
 	}
 	this.hash = end_name_hash(hash);
 
-	return lookup_hash(&this, base);
+	return __lookup_hash(&this, base, NULL);
 access:
 	return ERR_PTR(-EACCES);
 }
@@ -1276,9 +1385,6 @@ static inline int may_create(struct inode *dir, struct dentry *child,
 }
 
 /* 
- * Special case: O_CREAT|O_EXCL implies O_NOFOLLOW for security
- * reasons.
- *
  * O_DIRECTORY translates into forcing a directory lookup.
  */
 static inline int lookup_flags(unsigned int f)
@@ -1286,9 +1392,6 @@ static inline int lookup_flags(unsigned int f)
 	unsigned long retval = LOOKUP_FOLLOW;
 
 	if (f & O_NOFOLLOW)
-		retval &= ~LOOKUP_FOLLOW;
-	
-	if ((f & (O_CREAT|O_EXCL)) == (O_CREAT|O_EXCL))
 		retval &= ~LOOKUP_FOLLOW;
 	
 	if (f & O_DIRECTORY)
@@ -1378,7 +1481,7 @@ int may_open(struct nameidata *nd, int acc_mode, int flag)
 	if (S_ISDIR(inode->i_mode) && (flag & FMODE_WRITE))
 		return -EISDIR;
 
-	error = permission(inode, acc_mode, nd);
+	error = vfs_permission(nd, acc_mode);
 	if (error)
 		return error;
 
@@ -1430,7 +1533,7 @@ int may_open(struct nameidata *nd, int acc_mode, int flag)
 		if (!error) {
 			DQUOT_INIT(inode);
 			
-			error = do_truncate(dentry, 0);
+			error = do_truncate(dentry, 0, NULL);
 		}
 		put_write_access(inode);
 		if (error)
@@ -1458,27 +1561,27 @@ int may_open(struct nameidata *nd, int acc_mode, int flag)
  */
 int open_namei(const char * pathname, int flag, int mode, struct nameidata *nd)
 {
-	int acc_mode, error = 0;
+	int acc_mode, error;
 	struct path path;
 	struct dentry *dir;
 	int count = 0;
 
 	acc_mode = ACC_MODE(flag);
 
+	/* O_TRUNC implies we need access checks for write permissions */
+	if (flag & O_TRUNC)
+		acc_mode |= MAY_WRITE;
+
 	/* Allow the LSM permission hook to distinguish append 
 	   access from general write access. */
 	if (flag & O_APPEND)
 		acc_mode |= MAY_APPEND;
 
-	/* Fill in the open() intent data */
-	nd->intent.open.flags = flag;
-	nd->intent.open.create_mode = mode;
-
 	/*
 	 * The simplest case - just a plain lookup.
 	 */
 	if (!(flag & O_CREAT)) {
-		error = path_lookup(pathname, lookup_flags(flag)|LOOKUP_OPEN, nd);
+		error = path_lookup_open(pathname, lookup_flags(flag), nd, flag);
 		if (error)
 			return error;
 		goto ok;
@@ -1487,7 +1590,7 @@ int open_namei(const char * pathname, int flag, int mode, struct nameidata *nd)
 	/*
 	 * Create - we need to know the parent.
 	 */
-	error = path_lookup(pathname, LOOKUP_PARENT|LOOKUP_OPEN|LOOKUP_CREATE, nd);
+	error = path_lookup_create(pathname, LOOKUP_PARENT, nd, flag, mode);
 	if (error)
 		return error;
 
@@ -1503,7 +1606,7 @@ int open_namei(const char * pathname, int flag, int mode, struct nameidata *nd)
 	dir = nd->dentry;
 	nd->flags &= ~LOOKUP_PARENT;
 	down(&dir->d_inode->i_sem);
-	path.dentry = __lookup_hash(&nd->last, nd->dentry, nd);
+	path.dentry = lookup_hash(nd);
 	path.mnt = nd->mnt;
 
 do_last:
@@ -1562,6 +1665,8 @@ ok:
 exit_dput:
 	dput_path(&path, nd);
 exit:
+	if (!IS_ERR(nd->intent.open.file))
+		release_open_intent(nd);
 	path_release(nd);
 	return error;
 
@@ -1603,7 +1708,7 @@ do_link:
 	}
 	dir = nd->dentry;
 	down(&dir->d_inode->i_sem);
-	path.dentry = __lookup_hash(&nd->last, nd->dentry, nd);
+	path.dentry = lookup_hash(nd);
 	path.mnt = nd->mnt;
 	__putname(nd->last.name);
 	goto do_last;
@@ -1635,7 +1740,7 @@ struct dentry *lookup_create(struct nameidata *nd, int is_dir)
 	/*
 	 * Do the final lookup.
 	 */
-	dentry = lookup_hash(&nd->last, nd->dentry);
+	dentry = lookup_hash(nd);
 	if (IS_ERR(dentry))
 		goto fail;
 
@@ -1870,7 +1975,7 @@ asmlinkage long sys_rmdir(const char __user * pathname)
 			goto exit1;
 	}
 	down(&nd.dentry->d_inode->i_sem);
-	dentry = lookup_hash(&nd.last, nd.dentry);
+	dentry = lookup_hash(&nd);
 	error = PTR_ERR(dentry);
 	if (!IS_ERR(dentry)) {
 		error = vfs_rmdir(nd.dentry->d_inode, dentry);
@@ -1939,7 +2044,7 @@ asmlinkage long sys_unlink(const char __user * pathname)
 	if (nd.last_type != LAST_NORM)
 		goto exit1;
 	down(&nd.dentry->d_inode->i_sem);
-	dentry = lookup_hash(&nd.last, nd.dentry);
+	dentry = lookup_hash(&nd);
 	error = PTR_ERR(dentry);
 	if (!IS_ERR(dentry)) {
 		/* Why not before? Because we want correct error value */
@@ -2282,7 +2387,7 @@ static inline int do_rename(const char * oldname, const char * newname)
 
 	trap = lock_rename(new_dir, old_dir);
 
-	old_dentry = lookup_hash(&oldnd.last, old_dir);
+	old_dentry = lookup_hash(&oldnd);
 	error = PTR_ERR(old_dentry);
 	if (IS_ERR(old_dentry))
 		goto exit3;
@@ -2302,7 +2407,7 @@ static inline int do_rename(const char * oldname, const char * newname)
 	error = -EINVAL;
 	if (old_dentry == trap)
 		goto exit4;
-	new_dentry = lookup_hash(&newnd.last, new_dir);
+	new_dentry = lookup_hash(&newnd);
 	error = PTR_ERR(new_dentry);
 	if (IS_ERR(new_dentry))
 		goto exit4;
@@ -2505,6 +2610,8 @@ EXPORT_SYMBOL(path_lookup);
 EXPORT_SYMBOL(path_release);
 EXPORT_SYMBOL(path_walk);
 EXPORT_SYMBOL(permission);
+EXPORT_SYMBOL(vfs_permission);
+EXPORT_SYMBOL(file_permission);
 EXPORT_SYMBOL(unlock_rename);
 EXPORT_SYMBOL(vfs_create);
 EXPORT_SYMBOL(vfs_follow_link);

@@ -55,7 +55,7 @@ unsigned long badness(struct task_struct *p, unsigned long uptime)
 	 * The memory size of the process is the basis for the badness.
 	 */
 	points = p->mm->total_vm;
-	/* FIXME add vserver badness ;) */
+	/* FIXME: add vserver badness ;) */
 
 	/*
 	 * Processes which fork a lot of child processes are likely

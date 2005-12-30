@@ -565,6 +565,7 @@ static int ea_get(struct inode *inode, struct ea_buffer *ea_buf, int min_size)
 		/* Allocate new blocks to quota. */
 		if (DQUOT_ALLOC_BLOCK(inode, blocks_needed))
 			return -EDQUOT;
+
 		quota_allocation = blocks_needed;
 
 		/* Allocate new blocks to dlimit. */

@@ -412,8 +412,10 @@ static void _reiserfs_free_block(struct reiserfs_transaction_handle *th,
 	set_sb_free_blocks(rs, sb_free_blocks(rs) + 1);
 
 	journal_mark_dirty(th, s, sbh);
-	if (for_unformatted)
+	if (for_unformatted) {
+		DLIMIT_FREE_BLOCK(inode, 1);
 		DQUOT_FREE_BLOCK_NODIRTY(inode, 1);
+	}
 }
 
 void reiserfs_free_block(struct reiserfs_transaction_handle *th,
@@ -1032,12 +1034,15 @@ static inline int blocknrs_and_prealloc_arrays_from_search_start
 			       "reiserquota: allocating %d blocks id=%u",
 			       amount_needed, hint->inode->i_uid);
 #endif
-		quota_ret =
-		    DQUOT_ALLOC_BLOCK_NODIRTY(hint->inode, amount_needed);
-		if (quota_ret)	/* Quota exceeded? */
+		quota_ret = DQUOT_ALLOC_BLOCK_NODIRTY(hint->inode,
+			amount_needed);
+		if (quota_ret)
 			return QUOTA_EXCEEDED;
-		if (DLIMIT_ALLOC_BLOCK(hint->inode, amount_needed))
-			goto out_dlimit;
+		if (DLIMIT_ALLOC_BLOCK(hint->inode, amount_needed)) {
+			DQUOT_FREE_BLOCK_NODIRTY(hint->inode,
+				amount_needed);
+			return NO_DISK_SPACE;
+		}
 
 		if (hint->preallocate && hint->prealloc_size) {
 #ifdef REISERQUOTA_DEBUG
@@ -1045,15 +1050,16 @@ static inline int blocknrs_and_prealloc_arrays_from_search_start
 				       "reiserquota: allocating (prealloc) %d blocks id=%u",
 				       hint->prealloc_size, hint->inode->i_uid);
 #endif
-			quota_ret =
-			    DQUOT_PREALLOC_BLOCK_NODIRTY(hint->inode,
-							 hint->prealloc_size);
+			quota_ret = DQUOT_PREALLOC_BLOCK_NODIRTY(hint->inode,
+				hint->prealloc_size);
+			if (!quota_ret &&
+				DLIMIT_ALLOC_BLOCK(hint->inode, hint->prealloc_size)) {
+				DQUOT_FREE_BLOCK_NODIRTY(hint->inode,
+					hint->prealloc_size);
+				quota_ret = 1;
+			}
 			if (quota_ret)
 				hint->preallocate = hint->prealloc_size = 0;
-			if (DLIMIT_ALLOC_BLOCK(hint->inode, hint->prealloc_size)) {
-				DQUOT_FREE_BLOCK_NODIRTY(hint->inode, hint->prealloc_size);
-				hint->preallocate=hint->prealloc_size=0;
-			}
 		}
 
 		/* for unformatted nodes, force large allocations */
@@ -1145,10 +1151,6 @@ static inline int blocknrs_and_prealloc_arrays_from_search_start
 	}
 
 	return CARRY_ON;
-
-out_dlimit:
-	DQUOT_FREE_BLOCK_NODIRTY(hint->inode, amount_needed);
-	return NO_DISK_SPACE;
 }
 
 /* grab new blocknrs from preallocated list */
