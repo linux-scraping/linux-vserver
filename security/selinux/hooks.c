@@ -1376,9 +1376,10 @@ static int selinux_sysctl(ctl_table *table, int op)
 	return error;
 }
 
-static int selinux_quotactl(int cmds, int type, int id, struct super_block *sb)
+static int selinux_quotactl(int cmds, int type, int id, struct dqhash *hash)
 {
 	int rc = 0;
+	struct super_block *sb = hash->dqh_sb;
 
 	if (!sb)
 		return 0;

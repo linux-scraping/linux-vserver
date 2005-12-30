@@ -904,7 +904,8 @@ static int is_atomic_open(struct inode *dir, struct nameidata *nd)
 	if (nd->flags & LOOKUP_DIRECTORY)
 		return 0;
 	/* Are we trying to write to a read only partition? */
-	if (IS_RDONLY(dir) && (nd->intent.open.flags & (O_CREAT|O_TRUNC|FMODE_WRITE)))
+	if ((IS_RDONLY(dir) || MNT_IS_RDONLY(nd->mnt)) &&
+		(nd->intent.open.flags & (O_CREAT|O_TRUNC|FMODE_WRITE)))
 		return 0;
 	return 1;
 }

@@ -298,8 +298,9 @@ int vx_proc_ioctl(struct inode * inode, struct file * filp,
 	}
 	return error;
 }
-#endif
+#endif	/* CONFIG_VSERVER_LEGACY */
 
+#ifdef	CONFIG_XID_PROPAGATE
 
 int vx_parse_xid(char *string, xid_t *xid, int remove)
 {
@@ -337,7 +338,7 @@ int vx_parse_xid(char *string, xid_t *xid, int remove)
 	return token;
 }
 
-void vx_propagate_xid(struct nameidata *nd, struct inode *inode)
+void __vx_propagate_xid(struct nameidata *nd, struct inode *inode)
 {
 	xid_t new_xid = 0;
 	struct vfsmount *mnt;
@@ -364,5 +365,7 @@ void vx_propagate_xid(struct nameidata *nd, struct inode *inode)
 
 #include <linux/module.h>
 
-EXPORT_SYMBOL_GPL(vx_propagate_xid);
+EXPORT_SYMBOL_GPL(__vx_propagate_xid);
+
+#endif	/* CONFIG_XID_PROPAGATE */
 

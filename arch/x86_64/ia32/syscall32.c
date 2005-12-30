@@ -10,7 +10,6 @@
 #include <linux/init.h>
 #include <linux/stringify.h>
 #include <linux/security.h>
-#include <linux/vs_memory.h>
 #include <asm/proto.h>
 #include <asm/tlbflush.h>
 #include <asm/ia32_unistd.h>
@@ -71,7 +70,7 @@ int syscall32_setup_pages(struct linux_binprm *bprm, int exstack)
 		kmem_cache_free(vm_area_cachep, vma);
 		return ret;
 	}
-	vx_vmpages_add(mm, npages);
+	mm->total_vm += npages;
 	up_write(&mm->mmap_sem);
 	return 0;
 }

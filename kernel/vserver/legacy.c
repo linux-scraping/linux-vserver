@@ -74,9 +74,9 @@ int vc_new_s_context(uint32_t ctx, void __user *data)
 		return -EINVAL;
 
 	if ((ctx == VX_DYNAMIC_ID) || (ctx < MIN_D_CONTEXT))
-		new_vxi = locate_or_create_vx_info(ctx);
+		new_vxi = lookup_or_create_vx_info(ctx);
 	else
-		new_vxi = locate_vx_info(ctx);
+		new_vxi = lookup_vx_info(ctx);
 
 	if (!new_vxi)
 		return -EINVAL;

@@ -692,7 +692,8 @@ kernel_thread (int (*fn)(void *), void *arg, unsigned long flags)
 	regs.sw.ar_fpsr = regs.pt.ar_fpsr = ia64_getreg(_IA64_REG_AR_FPSR);
 	regs.sw.ar_bspstore = (unsigned long) current + IA64_RBS_OFFSET;
 	regs.sw.pr = (1 << PRED_KERNEL_STACK);
-	return do_fork(flags | CLONE_VM | CLONE_UNTRACED, 0, &regs.pt, 0, NULL, NULL);
+	return do_fork(flags | CLONE_VM | CLONE_UNTRACED | CLONE_KTHREAD,
+		0, &regs.pt, 0, NULL, NULL);
 }
 EXPORT_SYMBOL(kernel_thread);
 

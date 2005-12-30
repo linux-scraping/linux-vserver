@@ -637,7 +637,7 @@ int kernel_thread(int (*fn)(void *), void * arg, unsigned long flags)
 static __inline__ _syscall2(int,clone,unsigned long,flags,unsigned long,newsp)
 static __inline__ _syscall1(int,exit,int,ret)
 
-	reply = clone(flags | CLONE_VM, 0);
+	reply = clone(flags | CLONE_VM | CLONE_KTHREAD, 0);
 	if (!reply) {
 		/* Child */
 		reply = exit(fn(arg));

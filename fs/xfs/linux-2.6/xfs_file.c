@@ -538,6 +538,7 @@ struct file_operations linvfs_file_operations = {
 	.aio_read	= linvfs_aio_read,
 	.aio_write	= linvfs_aio_write,
 	.sendfile	= linvfs_sendfile,
+	.sendpage	= generic_file_sendpage,
 	.unlocked_ioctl	= linvfs_ioctl,
 #ifdef CONFIG_COMPAT
 	.compat_ioctl	= linvfs_compat_ioctl,

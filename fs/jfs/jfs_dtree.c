@@ -385,9 +385,9 @@ static u32 add_index(tid_t tid, struct inode *ip, s64 bn, int slot)
 		if (DQUOT_ALLOC_BLOCK(ip, sbi->nbperpage))
 			goto clean_up;
 		if (DLIMIT_ALLOC_BLOCK(ip, sbi->nbperpage))
-			goto clean_up_quota;
+			goto clean_up_dquot;
 		if (dbAlloc(ip, 0, sbi->nbperpage, &xaddr))
-			goto clean_up_dlim;
+			goto clean_up_dlimit;
 
 		/*
 		 * Save the table, we're going to overwrite it with the
@@ -480,10 +480,12 @@ static u32 add_index(tid_t tid, struct inode *ip, s64 bn, int slot)
 
 	return index;
 
-      clean_up_dlim:
+      clean_up_dlimit:
 	DLIMIT_FREE_BLOCK(ip, sbi->nbperpage);
-      clean_up_quota:
+
+      clean_up_dquot:
 	DQUOT_FREE_BLOCK(ip, sbi->nbperpage);
+
       clean_up:
 
 	jfs_ip->next_index--;

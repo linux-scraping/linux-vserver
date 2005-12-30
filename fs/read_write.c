@@ -622,12 +622,75 @@ sys_writev(unsigned long fd, const struct iovec __user *vec, unsigned long vlen)
 	return ret;
 }
 
+ssize_t vfs_sendfile(struct file *out_file, struct file *in_file, loff_t *ppos,
+		     size_t count, loff_t max)
+{
+	struct inode * in_inode, * out_inode;
+	loff_t pos;
+	ssize_t ret;
+
+	/* verify in_file */
+	in_inode = in_file->f_dentry->d_inode;
+	if (!in_inode)
+		return -EINVAL;
+	if (!in_file->f_op || !in_file->f_op->sendfile)
+		return -EINVAL;
+
+	if (!ppos)
+		ppos = &in_file->f_pos;
+	else
+		if (!(in_file->f_mode & FMODE_PREAD))
+			return -ESPIPE;
+
+	ret = rw_verify_area(FLOCK_VERIFY_READ, in_file, ppos, count);
+	if (ret)
+		return ret;
+
+	/* verify out_file */
+	out_inode = out_file->f_dentry->d_inode;
+	if (!out_inode)
+		return -EINVAL;
+	if (!out_file->f_op || !out_file->f_op->sendpage)
+		return -EINVAL;
+
+	ret = rw_verify_area(FLOCK_VERIFY_WRITE, out_file, &out_file->f_pos, count);
+	if (ret)
+		return ret;
+
+	ret = security_file_permission (out_file, MAY_WRITE);
+	if (ret)
+		return ret;
+
+	if (!max)
+		max = min(in_inode->i_sb->s_maxbytes, out_inode->i_sb->s_maxbytes);
+
+	pos = *ppos;
+	if (unlikely(pos < 0))
+		return -EINVAL;
+	if (unlikely(pos + count > max)) {
+		if (pos >= max)
+			return -EOVERFLOW;
+		count = max - pos;
+	}
+
+	ret = in_file->f_op->sendfile(in_file, ppos, count, file_send_actor, out_file);
+
+	if (ret > 0) {
+		current->rchar += ret;
+		current->wchar += ret;
+	}
+
+	if (*ppos > max)
+		return -EOVERFLOW;
+	return ret;
+}
+
+EXPORT_SYMBOL(vfs_sendfile);
+
 static ssize_t do_sendfile(int out_fd, int in_fd, loff_t *ppos,
 			   size_t count, loff_t max)
 {
 	struct file * in_file, * out_file;
-	struct inode * in_inode, * out_inode;
-	loff_t pos;
 	ssize_t retval;
 	int fput_needed_in, fput_needed_out;
 
@@ -639,21 +702,6 @@ static ssize_t do_sendfile(int out_fd, int in_fd, loff_t *ppos,
 	if (!in_file)
 		goto out;
 	if (!(in_file->f_mode & FMODE_READ))
-		goto fput_in;
-	retval = -EINVAL;
-	in_inode = in_file->f_dentry->d_inode;
-	if (!in_inode)
-		goto fput_in;
-	if (!in_file->f_op || !in_file->f_op->sendfile)
-		goto fput_in;
-	retval = -ESPIPE;
-	if (!ppos)
-		ppos = &in_file->f_pos;
-	else
-		if (!(in_file->f_mode & FMODE_PREAD))
-			goto fput_in;
-	retval = rw_verify_area(READ, in_file, ppos, count);
-	if (retval)
 		goto fput_in;
 
 	retval = security_file_permission (in_file, MAY_READ);
@@ -669,43 +717,11 @@ static ssize_t do_sendfile(int out_fd, int in_fd, loff_t *ppos,
 		goto fput_in;
 	if (!(out_file->f_mode & FMODE_WRITE))
 		goto fput_out;
-	retval = -EINVAL;
-	if (!out_file->f_op || !out_file->f_op->sendpage)
-		goto fput_out;
-	out_inode = out_file->f_dentry->d_inode;
-	retval = rw_verify_area(WRITE, out_file, &out_file->f_pos, count);
-	if (retval)
-		goto fput_out;
 
-	retval = security_file_permission (out_file, MAY_WRITE);
-	if (retval)
-		goto fput_out;
+	retval = vfs_sendfile(out_file, in_file, ppos, count, max);
 
-	if (!max)
-		max = min(in_inode->i_sb->s_maxbytes, out_inode->i_sb->s_maxbytes);
-
-	pos = *ppos;
-	retval = -EINVAL;
-	if (unlikely(pos < 0))
-		goto fput_out;
-	if (unlikely(pos + count > max)) {
-		retval = -EOVERFLOW;
-		if (pos >= max)
-			goto fput_out;
-		count = max - pos;
-	}
-
-	retval = in_file->f_op->sendfile(in_file, ppos, count, file_send_actor, out_file);
-
-	if (retval > 0) {
-		current->rchar += retval;
-		current->wchar += retval;
-	}
 	current->syscr++;
 	current->syscw++;
-
-	if (*ppos > max)
-		retval = -EOVERFLOW;
 
 fput_out:
 	fput_light(out_file, fput_needed_out);
