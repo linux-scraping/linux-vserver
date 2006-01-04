@@ -545,6 +545,11 @@ static int proc_check_chroot(struct dentry *root, struct vfsmount *vfsmnt)
 	struct dentry *de, *base;
 	struct vfsmount *our_vfsmnt, *mnt;
 	int res = 0;
+
+	/* context admin override */
+	if (capable(CAP_CONTEXT))
+		return 0;
+
 	read_lock(&current->fs->lock);
 	our_vfsmnt = mntget(current->fs->rootmnt);
 	base = dget(current->fs->root);

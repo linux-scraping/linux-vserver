@@ -142,13 +142,6 @@ struct _vx_hist_entry {
 
 struct _vx_hist_entry *vxh_advance(void *loc);
 
-#define VXH_HERE(__type)			\
-	({ __label__ __vxh_##__type;		\
-		__vxh_##__type:;		\
-		&&__vxh_##__type; })
-
-
-
 static inline void __vxh_copy_vxi(struct _vx_hist_entry *entry, struct vx_info *vxi)
 {
 	entry->vxi.ptr = vxi;
@@ -160,11 +153,13 @@ static inline void __vxh_copy_vxi(struct _vx_hist_entry *entry, struct vx_info *
 }
 
 
+#define VXH_HERE()	current_text_addr()
+
 #define __VXH_BODY(__type, __data)		\
 	struct _vx_hist_entry *entry;		\
 						\
 	preempt_disable();			\
-	entry = vxh_advance(VXH_HERE(__type));	\
+	entry = vxh_advance(VXH_HERE());	\
 	__data;					\
 	entry->type = __type;			\
 	preempt_enable();
