@@ -259,27 +259,23 @@ extern void arch_unmap_area_topdown(struct mm_struct *, unsigned long);
  */
 #ifdef ATOMIC64_INIT
 typedef atomic64_t mm_counter_t;
-#define __set_mm_counter(mm, member, value) atomic64_set(&(mm)->_##member, value)
-#define set_mm_counter(mm, member, value) vx_ ## member ## pages64_sub((mm), \
-	(get_mm_counter(mm, member) - value))
 #define get_mm_counter(mm, member) ((unsigned long)atomic64_read(&(mm)->_##member))
-#define add_mm_counter(mm, member, value) vx_ ## member ## pages64_add((mm), (value))
-#define inc_mm_counter(mm, member) vx_ ## member ## pages64_inc((mm))
-#define dec_mm_counter(mm, member) vx_ ## member ## pages64_dec((mm))
+#define __set_mm_counter(mm, member, value) atomic64_set(&(mm)->_##member, value)
 #else /* !ATOMIC64_INIT */
 /*
  * The counters wrap back to 0 at 2^32 * PAGE_SIZE,
  * that is, at 16TB if using 4kB page size.
  */
 typedef atomic_t mm_counter_t;
+#define get_mm_counter(mm, member) ((unsigned long)atomic_read(&(mm)->_##member))
 #define __set_mm_counter(mm, member, value) atomic_set(&(mm)->_##member, value)
+#endif /* !ATOMIC64_INIT */
+
 #define set_mm_counter(mm, member, value) vx_ ## member ## pages_sub((mm), \
 	(get_mm_counter(mm, member) - value))
-#define get_mm_counter(mm, member) ((unsigned long)atomic_read(&(mm)->_##member))
 #define add_mm_counter(mm, member, value) vx_ ## member ## pages_add((mm), (value))
 #define inc_mm_counter(mm, member) vx_ ## member ## pages_inc((mm))
 #define dec_mm_counter(mm, member) vx_ ## member ## pages_dec((mm))
-#endif /* !ATOMIC64_INIT */
 
 #else  /* NR_CPUS < CONFIG_SPLIT_PTLOCK_CPUS */
 /*
