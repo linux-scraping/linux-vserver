@@ -930,6 +930,8 @@ endmenu
 
 source "arch/powerpc/Kconfig.debug"
 
+source "kernel/vserver/Kconfig"
+
 source "security/Kconfig"
 
 config KEYS_COMPAT
