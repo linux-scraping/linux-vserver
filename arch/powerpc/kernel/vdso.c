@@ -25,6 +25,7 @@
 #include <linux/elf.h>
 #include <linux/security.h>
 #include <linux/bootmem.h>
+#include <linux/vs_memory.h>
 
 #include <asm/pgtable.h>
 #include <asm/system.h>
@@ -294,7 +295,7 @@ int arch_setup_additional_pages(struct linux_binprm *bprm,
 		kmem_cache_free(vm_area_cachep, vma);
 		return -ENOMEM;
 	}
-	mm->total_vm += (vma->vm_end - vma->vm_start) >> PAGE_SHIFT;
+	vx_vmpages_add(mm, (vma->vm_end - vma->vm_start) >> PAGE_SHIFT);
 	up_write(&mm->mmap_sem);
 
 	return 0;

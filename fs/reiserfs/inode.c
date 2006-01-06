@@ -2935,17 +2935,15 @@ int reiserfs_sync_flags(struct inode *inode)
 {
 	u16 oldflags, newflags;
 
-	reiserfs_write_lock(inode->i_sb);
-	oldflags = REISERFS_I(inode)->i_flags;
+	oldflags = REISERFS_I(inode)->i_attrs;
 	newflags = oldflags;
 	i_attrs_to_sd_attrs(inode, &newflags);
 
 	if (oldflags ^ newflags) {
-		REISERFS_I(inode)->i_flags = newflags;
-		inode->i_ctime = CURRENT_TIME;
+		REISERFS_I(inode)->i_attrs = newflags;
+		inode->i_ctime = CURRENT_TIME_SEC;
 		mark_inode_dirty(inode);
 	}
-	reiserfs_write_unlock(inode->i_sb);
 	return 0;
 }
 
