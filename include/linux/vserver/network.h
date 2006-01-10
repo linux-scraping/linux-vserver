@@ -16,6 +16,7 @@
 #define NXF_STATE_SETUP		(1ULL<<32)
 
 #define NXF_SC_HELPER		(1ULL<<36)
+#define NXF_PERSISTANT		(1ULL<<38)
 
 #define NXF_ONE_TIME		(0x0001ULL<<32)
 

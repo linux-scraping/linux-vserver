@@ -82,6 +82,8 @@ static inline void vx_info_init_cacct(struct _vx_cacct *cacct)
 			atomic_set(&cacct->sock[i][j].total, 0);
 		}
 	}
+	for (i=0; i<8; i++)
+		atomic_set(&cacct->slab[i], 0);
 }
 
 static inline void vx_info_exit_cacct(struct _vx_cacct *cacct)

@@ -427,21 +427,28 @@ int ifa_in_nx_info(struct in_ifaddr *ifa, struct nx_info *nxi)
 
 int dev_in_nx_info(struct net_device *dev, struct nx_info *nxi)
 {
-	struct in_device *in_dev = in_dev_get(dev);
-	struct in_ifaddr **ifap = NULL;
-	struct in_ifaddr *ifa = NULL;
+	struct in_device *in_dev;
+	struct in_ifaddr **ifap;
+	struct in_ifaddr *ifa;
+	int ret = 0;
 
 	if (!nxi)
 		return 1;
+
+	in_dev = in_dev_get(dev);
 	if (!in_dev)
-		return 0;
+		goto out;
 
 	for (ifap = &in_dev->ifa_list; (ifa = *ifap) != NULL;
 		ifap = &ifa->ifa_next) {
-		if (addr_in_nx_info(nxi, ifa->ifa_address))
-			return 1;
+		if (addr_in_nx_info(nxi, ifa->ifa_address)) {
+			ret = 1;
+			break;
+		}
 	}
-	return 0;
+	in_dev_put(in_dev);
+out:
+	return ret;
 }
 
 /*
@@ -493,6 +500,17 @@ int nx_addr_conflict(struct nx_info *nxi, uint32_t addr, struct sock *sk)
 	} else {
 		/* check against any */
 		return 1;
+	}
+}
+
+void nx_set_persistant(struct nx_info *nxi)
+{
+	if (nx_info_flags(nxi, NXF_PERSISTANT, 0)) {
+		get_nx_info(nxi);
+		claim_nx_info(nxi, current);
+	} else {
+		release_nx_info(nxi, current);
+		put_nx_info(nxi);
 	}
 }
 
@@ -572,6 +590,10 @@ int vc_net_create(uint32_t nid, void __user *data)
 
 	/* initial flags */
 	new_nxi->nx_flags = vc_data.flagword;
+
+	/* get a reference for persistant contexts */
+	if ((vc_data.flagword & NXF_PERSISTANT))
+		nx_set_persistant(new_nxi);
 
 	vs_net_change(new_nxi, VSC_NETUP);
 	ret = new_nxi->nx_id;
@@ -664,7 +686,7 @@ int vc_net_remove(uint32_t nid, void __user *data)
 	if (!nxi)
 		return -ESRCH;
 
-	switch (vc_data.type) {
+	switch ((unsigned)vc_data.type) {
 	case NXA_TYPE_ANY:
 		nxi->nbipv4 = 0;
 		break;
@@ -723,6 +745,9 @@ int vc_set_nflags(uint32_t id, void __user *data)
 
 	nxi->nx_flags = vx_mask_flags(nxi->nx_flags,
 		vc_data.flagword, mask);
+	if (trigger & NXF_PERSISTANT)
+		nx_set_persistant(nxi);
+
 	put_nx_info(nxi);
 	return 0;
 }

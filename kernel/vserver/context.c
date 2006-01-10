@@ -616,6 +616,7 @@ static int vx_openfd_task(struct task_struct *tsk)
 	const unsigned long *bptr;
 	int count, total;
 
+	/* no rcu_read_lock() because of spin_lock() */
 	spin_lock(&files->file_lock);
 	fdt = files_fdtable(files);
 	bptr = fdt->open_fds->fds_bits;

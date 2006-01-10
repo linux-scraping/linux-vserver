@@ -90,6 +90,7 @@ struct _vx_sock_acc {
 
 struct _vx_cacct {
 	struct _vx_sock_acc sock[5][3];
+	atomic_t slab[8];
 };
 
 #ifdef CONFIG_VSERVER_DEBUG
