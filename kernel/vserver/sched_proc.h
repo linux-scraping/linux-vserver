@@ -35,9 +35,9 @@ int vx_info_proc_sched_pc(struct _vx_sched_pc *sched_pc,
 	length += sprintf(buffer + length,
 		"cpu %d: %lld %lld %lld %ld %ld"
 		,cpu
-		,sched_pc->user_ticks
-		,sched_pc->sys_ticks
-		,sched_pc->hold_ticks
+		,(unsigned long long)sched_pc->user_ticks
+		,(unsigned long long)sched_pc->sys_ticks
+		,(unsigned long long)sched_pc->hold_ticks
 		,sched_pc->token_time
 		,sched_pc->idle_time
 		);

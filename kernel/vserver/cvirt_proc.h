@@ -92,9 +92,15 @@ static inline int vx_info_proc_cacct(struct _vx_cacct *cacct, char *buffer)
 		}
 		buffer[length++] = '\n';
 	}
-/*	length += sprintf(buffer + length,
-		"forks:\t%lu\n", cacct->total_forks);
-*/
+
+	length += sprintf(buffer + length,
+		"slab:\t%u %u %u %u\n"
+		,atomic_read(&cacct->slab[1])
+		,atomic_read(&cacct->slab[4])
+		,atomic_read(&cacct->slab[0])
+		,atomic_read(&cacct->slab[2])
+		);
+
 	return length;
 }
 

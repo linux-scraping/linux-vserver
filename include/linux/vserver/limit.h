@@ -15,14 +15,18 @@
 
 #define	VLIM_INFINITY	(~0ULL)
 
+#ifndef RLIM_INFINITY
+#warning RLIM_INFINITY is undefined
+#endif
+
 #if	(RLIM_INFINITY == VLIM_INFINITY)
-#define	VX_VLIM(v) (unsigned long long)(v)
-#define	VX_RLIM(v) (unsigned long)(v)
+#define	VX_VLIM(r) ((long long)(long)(r))
+#define	VX_RLIM(v) ((long)(v))
 #else
-#define	VX_VLIM(r) (((r) == RLIM_INFINITY) ? \
-		VLIM_INFINITY : (unsigned long long)(r))
-#define	VX_RLIM(v) (((v) == VLIM_INFINITY) ? \
-		RLIM_INFINITY : (unsigned long)(v))
+#define	VX_VLIM(r) (((r) == RLIM_INFINITY) \
+		? VLIM_INFINITY : (long long)(r))
+#define	VX_RLIM(v) (((v) == VLIM_INFINITY) \
+		? RLIM_INFINITY : (long)(v))
 #endif
 
 struct sysinfo;
