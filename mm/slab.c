@@ -2638,6 +2638,7 @@ static void free_block(kmem_cache_t *cachep, void **objpp, int nr_objects, int n
 	int i;
 	struct kmem_list3 *l3;
 
+	// printk("·· free_block(%x) = %dx%x\n", cachep->gfpflags, nr_objects, cachep->objsize);
 	for (i = 0; i < nr_objects; i++) {
 		void *objp = objpp[i];
 		struct slab *slabp;

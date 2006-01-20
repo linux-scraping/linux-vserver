@@ -2175,21 +2175,32 @@ static inline int handle_pte_fault(struct mm_struct *mm,
 	pte_t entry;
 	pte_t old_entry;
 	spinlock_t *ptl;
+	int ret, type = VXPT_UNKNOWN;
 
 	old_entry = entry = *pte;
 	if (!pte_present(entry)) {
 		if (pte_none(entry)) {
-			if (!vma->vm_ops || !vma->vm_ops->nopage)
-				return do_anonymous_page(mm, vma, address,
+			if (!vma->vm_ops || !vma->vm_ops->nopage) {
+				ret = do_anonymous_page(mm, vma, address,
 					pte, pmd, write_access);
-			return do_no_page(mm, vma, address,
+				type = VXPT_ANON;
+				goto out;
+			}
+			ret = do_no_page(mm, vma, address,
 					pte, pmd, write_access);
+			type = VXPT_NONE;
+			goto out;
 		}
-		if (pte_file(entry))
-			return do_file_page(mm, vma, address,
+		if (pte_file(entry)) {
+			ret = do_file_page(mm, vma, address,
 					pte, pmd, write_access, entry);
-		return do_swap_page(mm, vma, address,
+			type = VXPT_FILE;
+			goto out;
+		}
+		ret = do_swap_page(mm, vma, address,
 					pte, pmd, write_access, entry);
+		type = VXPT_SWAP;
+		goto out;
 	}
 
 	ptl = pte_lockptr(mm, pmd);
@@ -2197,9 +2208,12 @@ static inline int handle_pte_fault(struct mm_struct *mm,
 	if (unlikely(!pte_same(*pte, entry)))
 		goto unlock;
 	if (write_access) {
-		if (!pte_write(entry))
-			return do_wp_page(mm, vma, address,
+		if (!pte_write(entry)) {
+			ret = do_wp_page(mm, vma, address,
 					pte, pmd, ptl, entry);
+			type = VXPT_WRITE;
+			goto out;
+		}
 		entry = pte_mkdirty(entry);
 	}
 	entry = pte_mkyoung(entry);
@@ -2219,7 +2233,10 @@ static inline int handle_pte_fault(struct mm_struct *mm,
 	}
 unlock:
 	pte_unmap_unlock(pte, ptl);
-	return VM_FAULT_MINOR;
+	ret = VM_FAULT_MINOR;
+out:
+	vx_page_fault(mm, vma, type, ret);
+	return ret;
 }
 
 /*

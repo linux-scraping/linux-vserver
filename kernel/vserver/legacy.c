@@ -98,8 +98,8 @@ int vc_new_s_context(uint32_t ctx, void __user *data)
 			vx_set_namespace(new_vxi,
 				current->namespace, current->fs);
 		if (vc_data.flags & VX_INFO_NPROC)
-			new_vxi->limit.rlim[RLIMIT_NPROC] =
-				current->signal->rlim[RLIMIT_NPROC].rlim_max;
+			__rlim_set(&new_vxi->limit, RLIMIT_NPROC,
+				current->signal->rlim[RLIMIT_NPROC].rlim_max);
 		ret = new_vxi->vx_id;
 	}
 out_put:
