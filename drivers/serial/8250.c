@@ -69,7 +69,7 @@ static unsigned int share_irqs = SERIAL8250_SHARE_IRQS;
 #define DEBUG_INTR(fmt...)	do { } while (0)
 #endif
 
-#define PASS_LIMIT	256
+#define PASS_LIMIT	256*16
 
 /*
  * We default to IRQ0 for the "no irq" hack.   Some

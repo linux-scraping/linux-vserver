@@ -67,7 +67,7 @@ struct exec_domain;
  * List of flags we want to share for kernel threads,
  * if only because they are not used by them anyway.
  */
-#define CLONE_KERNEL	(CLONE_FS | CLONE_FILES | CLONE_SIGHAND)
+#define CLONE_KERNEL	(CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_KTHREAD)
 
 /*
  * These are the constant used to fake the fixed-point load-average
