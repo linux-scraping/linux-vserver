@@ -334,7 +334,7 @@ static void elf32_init(struct pt_regs *regs)
 int ia32_setup_arg_pages(struct linux_binprm *bprm, unsigned long stack_top,
 			 int executable_stack)
 {
-	unsigned long stack_base, grow;
+	unsigned long stack_base;
 	struct vm_area_struct *mpnt;
 	struct mm_struct *mm = current->mm;
 	int i, ret;

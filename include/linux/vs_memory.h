@@ -7,53 +7,47 @@
 #include "vserver/limit_int.h"
 
 
-#define __vx_add_long(a,v)	(*(v) += (a))
-#define __vx_inc_long(v)	(++*(v))
-#define __vx_dec_long(v)	(--*(v))
+#define __acc_add_long(a,v)	(*(v) += (a))
+#define __acc_inc_long(v)	(++*(v))
+#define __acc_dec_long(v)	(--*(v))
 
-#if NR_CPUS >= CONFIG_SPLIT_PTLOCK_CPUS
-#ifdef ATOMIC64_INIT
-#define __vx_add_value(a,v)	atomic64_add(a, v)
-#define __vx_inc_value(v)	atomic64_inc(v)
-#define __vx_dec_value(v)	atomic64_dec(v)
-#else  /* !ATOMIC64_INIT */
-#define __vx_add_value(a,v)	atomic_add(a, v)
-#define __vx_inc_value(v)	atomic_inc(v)
-#define __vx_dec_value(v)	atomic_dec(v)
-#endif /* !ATOMIC64_INIT */
+#if	NR_CPUS >= CONFIG_SPLIT_PTLOCK_CPUS
+#define __acc_add_atomic(a,v)	atomic_long_add(a,v)
+#define __acc_inc_atomic(v)	atomic_long_inc(v)
+#define __acc_dec_atomic(v)	atomic_long_dec(v)
 #else  /* NR_CPUS < CONFIG_SPLIT_PTLOCK_CPUS */
-#define __vx_add_value(a,v)	__vx_add_long(a,v)
-#define __vx_inc_value(v)	__vx_inc_long(v)
-#define __vx_dec_value(v)	__vx_dec_long(v)
+#define __acc_add_atomic(a,v)	__acc_add_long(a,v)
+#define __acc_inc_atomic(v)	__acc_inc_long(v)
+#define __acc_dec_atomic(v)	__acc_dec_long(v)
 #endif /* NR_CPUS < CONFIG_SPLIT_PTLOCK_CPUS */
 
 
 #define vx_acc_page(m,d,v,r) do {					\
 	if ((d) > 0)							\
-		__vx_inc_long(&(m->v));					\
+		__acc_inc_long(&(m->v));				\
 	else								\
-		__vx_dec_long(&(m->v));					\
+		__acc_dec_long(&(m->v));				\
 	__vx_acc_cres(m->mm_vx_info, r, d, m, __FILE__, __LINE__);	\
 } while (0)
 
 #define vx_acc_page_atomic(m,d,v,r) do {				\
 	if ((d) > 0)							\
-		__vx_inc_value(&(m->v));				\
+		__acc_inc_atomic(&(m->v));				\
 	else								\
-		__vx_dec_value(&(m->v));				\
+		__acc_dec_atomic(&(m->v));				\
 	__vx_acc_cres(m->mm_vx_info, r, d, m, __FILE__, __LINE__);	\
 } while (0)
 
 
 #define vx_acc_pages(m,p,v,r) do {					\
 	unsigned long __p = (p);					\
-	__vx_add_long(__p, &(m->v));					\
+	__acc_add_long(__p, &(m->v));					\
 	__vx_add_cres(m->mm_vx_info, r, __p, m, __FILE__, __LINE__);	\
 } while (0)
 
 #define vx_acc_pages_atomic(m,p,v,r) do {				\
 	unsigned long __p = (p);					\
-	__vx_add_value(__p, &(m->v));					\
+	__acc_add_atomic(__p, &(m->v));					\
 	__vx_add_cres(m->mm_vx_info, r, __p, m, __FILE__, __LINE__);	\
 } while (0)
 

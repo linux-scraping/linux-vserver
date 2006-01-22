@@ -22,26 +22,16 @@
 #define	__rlim_val(l,r)		((l)->rcur[(r)])
 #define	__rlim_hit(l,r)		atomic_inc(&(l)->lhit[(r)])
 
-#ifdef ATOMIC64_INIT
-typedef atomic64_t rlim_atomic_t;
+typedef atomic_long_t rlim_atomic_t;
 typedef unsigned long rlim_t;
 
-#define __rlim_get(l,r)		atomic64_read(&__rlim_val(l,r))
-#define __rlim_set(l,r,v)	atomic64_set(&__rlim_val(l,r), v)
-#define	__rlim_inc(l,r)		atomic64_inc(&__rlim_val(l,r))
-#define	__rlim_dec(l,r)		atomic64_dec(&__rlim_val(l,r))
-#define	__rlim_add(l,r,v)	atomic64_add(v, &__rlim_val(l,r))
+#define __rlim_get(l,r)		atomic_long_read(&__rlim_val(l,r))
+#define __rlim_set(l,r,v)	atomic_long_set(&__rlim_val(l,r), v)
+#define	__rlim_inc(l,r)		atomic_long_inc(&__rlim_val(l,r))
+#define	__rlim_dec(l,r)		atomic_long_dec(&__rlim_val(l,r))
+#define	__rlim_add(l,r,v)	atomic_long_add(v, &__rlim_val(l,r))
+#define	__rlim_sub(l,r,v)	atomic_long_sub(v, &__rlim_val(l,r))
 
-#else /* !ATOMIC64_INIT */
-typedef atomic_t rlim_atomic_t;
-typedef unsigned rlim_t;
-
-#define __rlim_get(l,r)		atomic_read(&__rlim_val(l,r))
-#define __rlim_set(l,r,v)	atomic_set(&__rlim_val(l,r), v)
-#define	__rlim_inc(l,r)		atomic_inc(&__rlim_val(l,r))
-#define	__rlim_dec(l,r)		atomic_dec(&__rlim_val(l,r))
-#define	__rlim_add(l,r,v)	atomic_add(v, &__rlim_val(l,r))
-#endif /* ATOMIC64_INIT */
 
 #if	(RLIM_INFINITY == VLIM_INFINITY)
 #define	VX_VLIM(r) ((long long)(long)(r))
