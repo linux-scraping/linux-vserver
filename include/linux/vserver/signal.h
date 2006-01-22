@@ -1,8 +1,8 @@
 #ifndef _VX_SIGNAL_H
 #define _VX_SIGNAL_H
 
-
 #ifdef	__KERNEL__
+
 
 struct vx_info;
 

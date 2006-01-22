@@ -161,7 +161,7 @@ static struct dentry *get_node(int num)
 {
 	char s[12];
 	struct dentry *root = devpts_root;
-	down(&root->d_inode->i_sem);
+	mutex_lock(&root->d_inode->i_mutex);
 	return lookup_one_len(s, root, sprintf(s, "%d", num));
 }
 
@@ -194,7 +194,7 @@ int devpts_pty_new(struct tty_struct *tty)
 	if (!IS_ERR(dentry) && !dentry->d_inode)
 		d_instantiate(dentry, inode);
 
-	up(&devpts_root->d_inode->i_sem);
+	mutex_unlock(&devpts_root->d_inode->i_mutex);
 
 	return 0;
 }
@@ -211,7 +211,7 @@ struct tty_struct *devpts_get_tty(int number)
 		dput(dentry);
 	}
 
-	up(&devpts_root->d_inode->i_sem);
+	mutex_unlock(&devpts_root->d_inode->i_mutex);
 
 	return tty;
 }
@@ -229,7 +229,7 @@ void devpts_pty_kill(int number)
 		}
 		dput(dentry);
 	}
-	up(&devpts_root->d_inode->i_sem);
+	mutex_unlock(&devpts_root->d_inode->i_mutex);
 }
 
 static int __init init_devpts_fs(void)

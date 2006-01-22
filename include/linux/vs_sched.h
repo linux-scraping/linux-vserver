@@ -1,7 +1,10 @@
 #ifndef _VX_VS_SCHED_H
 #define _VX_VS_SCHED_H
 
-#include <linux/config.h>
+#ifndef CONFIG_VSERVER
+#warning config options missing
+#endif
+
 #include "vserver/sched.h"
 
 

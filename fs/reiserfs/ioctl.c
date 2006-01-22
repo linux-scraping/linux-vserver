@@ -2,7 +2,9 @@
  * Copyright 2000 by Hans Reiser, licensing governed by reiserfs/README
  */
 
+#include <linux/capability.h>
 #include <linux/fs.h>
+#include <linux/mount.h>
 #include <linux/reiserfs_fs.h>
 #include <linux/time.h>
 #include <asm/uaccess.h>
@@ -49,6 +51,7 @@ int reiserfs_ioctl(struct inode *inode, struct file *filp, unsigned int cmd,
 
 			if (IS_RDONLY(inode) ||
 				(filp && MNT_IS_RDONLY(filp->f_vfsmnt)))
+				return -EROFS;
 
 			if ((current->fsuid != inode->i_uid)
 			    && !capable(CAP_FOWNER))
@@ -127,7 +130,7 @@ static int reiserfs_unpack(struct inode *inode, struct file *filp)
 	/* we need to make sure nobody is changing the file size beneath
 	 ** us
 	 */
-	down(&inode->i_sem);
+	mutex_lock(&inode->i_mutex);
 
 	write_from = inode->i_size & (blocksize - 1);
 	/* if we are on a block boundary, we are already unpacked.  */
@@ -163,7 +166,7 @@ static int reiserfs_unpack(struct inode *inode, struct file *filp)
 	page_cache_release(page);
 
       out:
-	up(&inode->i_sem);
+	mutex_unlock(&inode->i_mutex);
 	reiserfs_write_unlock(inode->i_sb);
 	return retval;
 }

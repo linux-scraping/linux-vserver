@@ -183,7 +183,7 @@ xdr_encode_sattr(u32 *p, struct iattr *attr, int tagxid)
 {
 	if (attr->ia_valid & ATTR_MODE) {
 		*p++ = xdr_one;
-		*p++ = htonl(attr->ia_mode);
+		*p++ = htonl(attr->ia_mode & S_IALLUGO);
 	} else {
 		*p++ = xdr_zero;
 	}

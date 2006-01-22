@@ -1007,10 +1007,7 @@ static struct dentry *ext3_lookup(struct inode * dir, struct dentry *dentry, str
 			return ERR_PTR(-EACCES);
 		vx_propagate_xid(nd, inode);
 	}
-	if (inode)
-		return d_splice_alias(inode, dentry);
-	d_add(dentry, inode);
-	return NULL;
+	return d_splice_alias(inode, dentry);
 }
 
 
@@ -1478,7 +1475,7 @@ static int ext3_dx_add_entry(handle_t *handle, struct dentry *dentry,
 		if (levels && (dx_get_count(frames->entries) ==
 			       dx_get_limit(frames->entries))) {
 			ext3_warning(sb, __FUNCTION__,
-				     "Directory index full!\n");
+				     "Directory index full!");
 			err = -ENOSPC;
 			goto cleanup;
 		}

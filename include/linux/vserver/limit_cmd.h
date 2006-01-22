@@ -1,7 +1,6 @@
 #ifndef _VX_LIMIT_CMD_H
 #define _VX_LIMIT_CMD_H
 
-
 /*  rlimit vserver commands */
 
 #define VCMD_get_rlimit		VC_CMD(RLIMIT, 1, 0)

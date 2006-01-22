@@ -275,6 +275,7 @@ void out_of_memory(gfp_t gfp_mask, int order)
 		show_mem();
 	}
 
+	cpuset_lock();
 	read_lock(&tasklist_lock);
 retry:
 	p = select_bad_process();
@@ -285,6 +286,7 @@ retry:
 	/* Found nothing?!?! Either we hang forever, or we panic. */
 	if (!p) {
 		read_unlock(&tasklist_lock);
+		cpuset_unlock();
 		panic("Out of memory and no killable processes...\n");
 	}
 
@@ -294,12 +296,14 @@ retry:
 
  out:
 	read_unlock(&tasklist_lock);
+	cpuset_unlock();
 	if (mm)
 		mmput(mm);
 
 	/*
 	 * Give "p" a good chance of killing itself before we
-	 * retry to allocate memory.
+	 * retry to allocate memory unless "p" is current
 	 */
-	schedule_timeout_interruptible(1);
+	if (!test_thread_flag(TIF_MEMDIE))
+		schedule_timeout_interruptible(1);
 }

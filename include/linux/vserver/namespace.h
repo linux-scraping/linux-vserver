@@ -1,7 +1,6 @@
 #ifndef _VX_NAMESPACE_H
 #define _VX_NAMESPACE_H
 
-
 #include <linux/types.h>
 
 struct vx_info;

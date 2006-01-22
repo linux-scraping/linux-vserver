@@ -364,7 +364,7 @@ int proc_pid_status(struct task_struct *task, char * buffer)
 	put_nx_info(nxi);
 #endif
 skip:
-#if defined(CONFIG_ARCH_S390)
+#if defined(CONFIG_S390)
 	buffer = task_show_regs(task, buffer);
 #endif
 	return buffer - orig;
@@ -386,7 +386,7 @@ static int do_task_stat(struct task_struct *task, char * buffer, int whole)
 	unsigned long  min_flt = 0,  maj_flt = 0;
 	cputime_t cutime, cstime, utime, stime;
 	unsigned long rsslim = 0;
-	unsigned long it_real_value = 0;
+	DEFINE_KTIME(it_real_value);
 	struct task_struct *t;
 	char tcomm[sizeof(task->comm)];
 
@@ -442,7 +442,7 @@ static int do_task_stat(struct task_struct *task, char * buffer, int whole)
 			utime = cputime_add(utime, task->signal->utime);
 			stime = cputime_add(stime, task->signal->stime);
 		}
-		it_real_value = task->signal->it_real_value;
+		it_real_value = task->signal->real_timer.expires;
 	}
 	pid = vx_info_map_pid(task->vx_info, pid_alive(task) ? task->pid : 0);
 	ppid = (!(pid > 1)) ? 0 : vx_info_map_tgid(task->vx_info,
@@ -506,7 +506,7 @@ static int do_task_stat(struct task_struct *task, char * buffer, int whole)
 		priority,
 		nice,
 		num_threads,
-		jiffies_to_clock_t(it_real_value),
+		(long) ktime_to_clock_t(it_real_value),
 		start_time,
 		vsize,
 		mm ? get_mm_rss(mm) : 0,

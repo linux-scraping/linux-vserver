@@ -9,6 +9,7 @@
  *
  */
 
+#include <linux/config.h>
 #include <linux/sched.h>
 
 #include <asm/errno.h>

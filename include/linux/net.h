@@ -108,7 +108,7 @@ enum sock_type {
 struct socket {
 	socket_state		state;
 	unsigned long		flags;
-	struct proto_ops	*ops;
+	const struct proto_ops	*ops;
 	struct fasync_struct	*fasync_list;
 	struct file		*file;
 	struct sock		*sk;
@@ -261,7 +261,7 @@ SOCKCALL_WRAP(name, recvmsg, (struct kiocb *iocb, struct socket *sock, struct ms
 SOCKCALL_WRAP(name, mmap, (struct file *file, struct socket *sock, struct vm_area_struct *vma), \
 	      (file, sock, vma)) \
 	      \
-static struct proto_ops name##_ops = {			\
+static const struct proto_ops name##_ops = {			\
 	.family		= fam,				\
 	.owner		= THIS_MODULE,			\
 	.release	= __lock_##name##_release,	\

@@ -25,6 +25,7 @@
  */
 
 #include <linux/config.h>
+#include <linux/in.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/moduleparam.h>
@@ -411,8 +412,6 @@ static int skge_set_ring_param(struct net_device *dev,
 		err = skge_up(dev);
 		if (err)
 			dev_close(dev);
-		else
-			dev->set_multicast_list(dev);
 	}
 
 	return 0;
@@ -1926,6 +1925,7 @@ static void yukon_link_down(struct skge_port *skge)
 
 	}
 
+	yukon_reset(hw, port);
 	skge_link_down(skge);
 
 	yukon_init(hw, port);
@@ -2018,10 +2018,13 @@ static void skge_phy_reset(struct skge_port *skge)
 	netif_carrier_off(skge->netdev);
 
 	spin_lock_bh(&hw->phy_lock);
-	if (hw->chip_id == CHIP_ID_GENESIS)
+	if (hw->chip_id == CHIP_ID_GENESIS) {
+		genesis_reset(hw, port);
 		genesis_mac_init(hw, port);
-	else
+	} else {
+		yukon_reset(hw, port);
 		yukon_init(hw, port);
+	}
 	spin_unlock_bh(&hw->phy_lock);
 }
 

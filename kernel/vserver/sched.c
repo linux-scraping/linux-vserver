@@ -248,7 +248,7 @@ int do_set_sched(struct vx_info *vxi, struct vcmd_set_sched_v4 *data)
 
 #ifdef	CONFIG_VSERVER_LEGACY
 
-#define COPY_MASK_V2(name, mask) 			\
+#define COPY_MASK_V2(name, mask)			\
 	if (vc_data.name != SCHED_KEEP) {		\
 		vc_data_v4.name = vc_data.name;		\
 		vc_data_v4.set_mask |= mask;		\

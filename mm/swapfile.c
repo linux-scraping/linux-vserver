@@ -25,6 +25,7 @@
 #include <linux/rmap.h>
 #include <linux/security.h>
 #include <linux/backing-dev.h>
+#include <linux/capability.h>
 #include <linux/syscalls.h>
 
 #include <asm/pgtable.h>
@@ -208,6 +209,26 @@ swp_entry_t get_swap_page(void)
 
 	nr_swap_pages++;
 noswap:
+	spin_unlock(&swap_lock);
+	return (swp_entry_t) {0};
+}
+
+swp_entry_t get_swap_page_of_type(int type)
+{
+	struct swap_info_struct *si;
+	pgoff_t offset;
+
+	spin_lock(&swap_lock);
+	si = swap_info + type;
+	if (si->flags & SWP_WRITEOK) {
+		nr_swap_pages--;
+		offset = scan_swap_map(si);
+		if (offset) {
+			spin_unlock(&swap_lock);
+			return swp_entry(type, offset);
+		}
+		nr_swap_pages++;
+	}
 	spin_unlock(&swap_lock);
 	return (swp_entry_t) {0};
 }
@@ -1168,9 +1189,9 @@ asmlinkage long sys_swapoff(const char __user * specialfile)
 		set_blocksize(bdev, p->old_block_size);
 		bd_release(bdev);
 	} else {
-		down(&inode->i_sem);
+		mutex_lock(&inode->i_mutex);
 		inode->i_flags &= ~S_SWAPFILE;
-		up(&inode->i_sem);
+		mutex_unlock(&inode->i_mutex);
 	}
 	filp_close(swap_file, NULL);
 	err = 0;
@@ -1387,7 +1408,7 @@ asmlinkage long sys_swapon(const char __user * specialfile, int swap_flags)
 		p->bdev = bdev;
 	} else if (S_ISREG(inode->i_mode)) {
 		p->bdev = inode->i_sb->s_bdev;
-		down(&inode->i_sem);
+		mutex_lock(&inode->i_mutex);
 		did_down = 1;
 		if (IS_SWAPFILE(inode)) {
 			error = -EBUSY;
@@ -1423,7 +1444,7 @@ asmlinkage long sys_swapon(const char __user * specialfile, int swap_flags)
 	else if (!memcmp("SWAPSPACE2",swap_header->magic.magic,10))
 		swap_header_version = 2;
 	else {
-		printk("Unable to find swap-space signature\n");
+		printk(KERN_ERR "Unable to find swap-space signature\n");
 		error = -EINVAL;
 		goto bad_swap;
 	}
@@ -1474,7 +1495,7 @@ asmlinkage long sys_swapon(const char __user * specialfile, int swap_flags)
 			goto bad_swap;
 		if (swap_header->info.nr_badpages > MAX_SWAP_BADPAGES)
 			goto bad_swap;
-		
+
 		/* OK, set up the swap map and apply the bad block list */
 		if (!(p->swap_map = vmalloc(maxpages * sizeof(short)))) {
 			error = -ENOMEM;
@@ -1483,17 +1504,17 @@ asmlinkage long sys_swapon(const char __user * specialfile, int swap_flags)
 
 		error = 0;
 		memset(p->swap_map, 0, maxpages * sizeof(short));
-		for (i=0; i<swap_header->info.nr_badpages; i++) {
-			int page = swap_header->info.badpages[i];
-			if (page <= 0 || page >= swap_header->info.last_page)
+		for (i = 0; i < swap_header->info.nr_badpages; i++) {
+			int page_nr = swap_header->info.badpages[i];
+			if (page_nr <= 0 || page_nr >= swap_header->info.last_page)
 				error = -EINVAL;
 			else
-				p->swap_map[page] = SWAP_MAP_BAD;
+				p->swap_map[page_nr] = SWAP_MAP_BAD;
 		}
 		nr_good_pages = swap_header->info.last_page -
 				swap_header->info.nr_badpages -
 				1 /* header page */;
-		if (error) 
+		if (error)
 			goto bad_swap;
 	}
 
@@ -1577,7 +1598,7 @@ out:
 	if (did_down) {
 		if (!error)
 			inode->i_flags |= S_SWAPFILE;
-		up(&inode->i_sem);
+		mutex_unlock(&inode->i_mutex);
 	}
 	return error;
 }

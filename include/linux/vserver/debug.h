@@ -1,8 +1,9 @@
 #ifndef _VX_DEBUG_H
 #define _VX_DEBUG_H
 
-#include <linux/config.h>
-
+#ifndef CONFIG_VSERVER
+#warning config options missing
+#endif
 
 #define VXD_CBIT(n,m)	(vx_debug_ ## n & (1 << (m)))
 #define VXD_CMIN(n,m)	(vx_debug_ ## n > (m))

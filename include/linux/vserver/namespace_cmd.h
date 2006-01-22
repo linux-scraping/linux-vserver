@@ -1,7 +1,6 @@
 #ifndef _VX_NAMESPACE_CMD_H
 #define _VX_NAMESPACE_CMD_H
 
-
 #define VCMD_enter_namespace	VC_CMD(PROCALT, 1, 0)
 #define VCMD_cleanup_namespace	VC_CMD(PROCALT, 2, 0)
 

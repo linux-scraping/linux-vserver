@@ -1,7 +1,6 @@
 #ifndef _VX_SCHED_H
 #define _VX_SCHED_H
 
-
 #ifdef	__KERNEL__
 
 struct timespec;

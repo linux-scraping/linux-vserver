@@ -78,6 +78,7 @@
 #include <linux/kmod.h>
 #include <linux/namei.h>
 #include <linux/buffer_head.h>
+#include <linux/capability.h>
 #include <linux/quotaops.h>
 #include <linux/vserver/debug.h>
 
@@ -102,7 +103,7 @@
  * operation is just reading pointers from inode (or not using them at all) the
  * read lock is enough. If pointers are altered function must hold write lock
  * (these locking rules also apply for S_NOQUOTA flag in the inode - note that
- * for altering the flag i_sem is also needed).  If operation is holding
+ * for altering the flag i_mutex is also needed).  If operation is holding
  * reference to dquot in other way (e.g. quotactl ops) it must be guarded by
  * dqonoff_sem.
  * This locking assures that:
@@ -119,9 +120,9 @@
  * spinlock to internal buffers before writing.
  *
  * Lock ordering (including related VFS locks) is the following:
- *   i_sem > dqonoff_sem > iprune_sem > journal_lock > dqptr_sem >
+ *   i_mutex > dqonoff_sem > iprune_sem > journal_lock > dqptr_sem >
  *   > dquot->dq_lock > dqio_sem
- * i_sem on quota files is special (it's below dqio_sem)
+ * i_mutex on quota files is special (it's below dqio_sem)
  */
 
 static DEFINE_SPINLOCK(dq_list_lock);
@@ -1459,11 +1460,11 @@ int vfs_quota_off(struct dqhash *hash, int type)
 			/* If quota was reenabled in the meantime, we have
 			 * nothing to do */
 			if (!dqh_has_quota_enabled(hash, cnt)) {
-				down(&toputinode[cnt]->i_sem);
+				mutex_lock(&toputinode[cnt]->i_mutex);
 				toputinode[cnt]->i_flags &= ~(S_IMMUTABLE |
 				  S_NOATIME | S_NOQUOTA);
 				truncate_inode_pages(&toputinode[cnt]->i_data, 0);
-				up(&toputinode[cnt]->i_sem);
+				mutex_unlock(&toputinode[cnt]->i_mutex);
 				mark_inode_dirty(toputinode[cnt]);
 				iput(toputinode[cnt]);
 			}
@@ -1508,7 +1509,7 @@ static int vfs_quota_on_inode(struct inode *inode, int type, int format_id)
 	write_inode_now(inode, 1);
 	/* And now flush the block cache so that kernel sees the changes */
 	invalidate_bdev(sb->s_bdev, 0);
-	down(&inode->i_sem);
+	mutex_lock(&inode->i_mutex);
 	down(&dqopt->dqonoff_sem);
 	if (dqh_has_quota_enabled(hash, type)) {
 		error = -EBUSY;
@@ -1540,7 +1541,7 @@ static int vfs_quota_on_inode(struct inode *inode, int type, int format_id)
 		goto out_file_init;
 	}
 	up(&dqopt->dqio_sem);
-	up(&inode->i_sem);
+	mutex_unlock(&inode->i_mutex);
 	set_enable_flags(dqopt, type);
 
 	add_dquot_ref(hash, type);
@@ -1561,7 +1562,7 @@ out_lock:
 		inode->i_flags |= oldflags;
 		up_write(&dqopt->dqptr_sem);
 	}
-	up(&inode->i_sem);
+	mutex_unlock(&inode->i_mutex);
 out_fmt:
 	put_quota_format(fmt);
 

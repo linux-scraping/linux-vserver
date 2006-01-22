@@ -28,12 +28,14 @@
 #include <net/dst.h>
 #include <net/inetpeer.h>
 #include <net/flow.h>
+#include <net/inet_sock.h>
 #include <linux/in_route.h>
 #include <linux/rtnetlink.h>
 #include <linux/route.h>
 #include <linux/ip.h>
 #include <linux/cache.h>
 #include <linux/vs_network.h>
+#include <linux/in.h>
 
 #ifndef __KERNEL__
 #warning This file is not supposed to be used outside of kernel.

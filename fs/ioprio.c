@@ -22,6 +22,7 @@
 #include <linux/kernel.h>
 #include <linux/ioprio.h>
 #include <linux/blkdev.h>
+#include <linux/capability.h>
 #include <linux/syscalls.h>
 #include <linux/vs_cvirt.h>
 

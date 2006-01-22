@@ -3,7 +3,6 @@
 
 #include "switch.h"
 
-
 /*  compatibiliy vserver commands */
 
 #define VCMD_new_s_context	VC_CMD(COMPAT, 1, 1)
