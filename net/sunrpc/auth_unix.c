@@ -11,7 +11,7 @@
 #include <linux/module.h>
 #include <linux/sunrpc/clnt.h>
 #include <linux/sunrpc/auth.h>
-#include <linux/vserver/xid.h>
+#include <linux/vserver/tag.h>
 
 #define NFS_NGROUPS	16
 
@@ -80,7 +80,7 @@ unx_create_cred(struct rpc_auth *auth, struct auth_cred *acred, int flags)
 	if (flags & RPC_TASK_ROOTCREDS) {
 		cred->uc_uid = 0;
 		cred->uc_gid = 0;
-		cred->uc_xid = vx_current_xid();
+		cred->uc_tag = dx_current_tag();
 		cred->uc_gids[0] = NOGROUP;
 	} else {
 		int groups = acred->group_info->ngroups;
@@ -89,7 +89,7 @@ unx_create_cred(struct rpc_auth *auth, struct auth_cred *acred, int flags)
 
 		cred->uc_uid = acred->uid;
 		cred->uc_gid = acred->gid;
-		cred->uc_xid = acred->xid;
+		cred->uc_tag = acred->tag;
 		for (i = 0; i < groups; i++)
 			cred->uc_gids[i] = GROUP_AT(acred->group_info, i);
 		if (i < NFS_NGROUPS)
@@ -122,7 +122,7 @@ unx_match(struct auth_cred *acred, struct rpc_cred *rcred, int taskflags)
 
 		if (cred->uc_uid != acred->uid
 		 || cred->uc_gid != acred->gid
-		 || cred->uc_xid != acred->xid)
+		 || cred->uc_tag != acred->tag)
 			return 0;
 
 		groups = acred->group_info->ngroups;
@@ -148,7 +148,7 @@ unx_marshal(struct rpc_task *task, u32 *p)
 	struct rpc_clnt	*clnt = task->tk_client;
 	struct unx_cred	*cred = (struct unx_cred *) task->tk_msg.rpc_cred;
 	u32		*base, *hold;
-	int		i, tagxid;
+	int		i, tag;
 
 	*p++ = htonl(RPC_AUTH_UNIX);
 	base = p++;
@@ -158,12 +158,12 @@ unx_marshal(struct rpc_task *task, u32 *p)
 	 * Copy the UTS nodename captured when the client was created.
 	 */
 	p = xdr_encode_array(p, clnt->cl_nodename, clnt->cl_nodelen);
-	tagxid = task->tk_client->cl_tagxid;
+	tag = task->tk_client->cl_tag;
 
-	*p++ = htonl((u32) XIDINO_UID(tagxid,
-		cred->uc_uid, cred->uc_xid));
-	*p++ = htonl((u32) XIDINO_GID(tagxid,
-		cred->uc_gid, cred->uc_xid));
+	*p++ = htonl((u32) TAGINO_UID(tag,
+		cred->uc_uid, cred->uc_tag));
+	*p++ = htonl((u32) TAGINO_GID(tag,
+		cred->uc_gid, cred->uc_tag));
 	hold = p++;
 	for (i = 0; i < 16 && cred->uc_gids[i] != (gid_t) NOGROUP; i++)
 		*p++ = htonl((u32) cred->uc_gids[i]);

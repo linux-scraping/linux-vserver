@@ -52,7 +52,7 @@ struct rpc_clnt {
 				cl_autobind : 1,/* use getport() */
 				cl_oneshot  : 1,/* dispose after use */
 				cl_dead     : 1,/* abandoned */
-				cl_tagxid   : 1;/* do xid tagging */
+				cl_tag      : 1;/* context tagging */
 
 	struct rpc_rtt *	cl_rtt;		/* RTO estimator data */
 	struct rpc_portmap *	cl_pmap;	/* port mapping */

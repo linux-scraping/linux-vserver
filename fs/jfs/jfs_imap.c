@@ -45,7 +45,7 @@
 #include <linux/buffer_head.h>
 #include <linux/pagemap.h>
 #include <linux/quotaops.h>
-#include <linux/vserver/xid.h>
+#include <linux/vserver/tag.h>
 
 #include "jfs_incore.h"
 #include "jfs_inode.h"
@@ -3088,9 +3088,9 @@ static int copy_from_dinode(struct dinode * dip, struct inode *ip)
 
 	uid = le32_to_cpu(dip->di_uid);
 	gid = le32_to_cpu(dip->di_gid);
-	ip->i_uid = INOXID_UID(XID_TAG(ip), uid, gid);
-	ip->i_gid = INOXID_GID(XID_TAG(ip), uid, gid);
-	ip->i_xid = INOXID_XID(XID_TAG(ip), uid, gid, 0);
+	ip->i_uid = INOTAG_UID(DX_TAG(ip), uid, gid);
+	ip->i_gid = INOTAG_GID(DX_TAG(ip), uid, gid);
+	ip->i_tag = INOTAG_TAG(DX_TAG(ip), uid, gid, 0);
 
 	ip->i_size = le64_to_cpu(dip->di_size);
 	ip->i_atime.tv_sec = le32_to_cpu(dip->di_atime.tv_sec);
@@ -3153,8 +3153,8 @@ static void copy_to_dinode(struct dinode * dip, struct inode *ip)
 	dip->di_nblocks = cpu_to_le64(PBLK2LBLK(ip->i_sb, ip->i_blocks));
 	dip->di_nlink = cpu_to_le32(ip->i_nlink);
 
-	uid = XIDINO_UID(XID_TAG(ip), ip->i_uid, ip->i_xid);
-	gid = XIDINO_GID(XID_TAG(ip), ip->i_gid, ip->i_xid);
+	uid = TAGINO_UID(DX_TAG(ip), ip->i_uid, ip->i_tag);
+	gid = TAGINO_GID(DX_TAG(ip), ip->i_gid, ip->i_tag);
 	dip->di_uid = cpu_to_le32(uid);
 	dip->di_gid = cpu_to_le32(gid);
 	/*

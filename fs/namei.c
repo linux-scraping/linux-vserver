@@ -32,6 +32,7 @@
 #include <linux/file.h>
 #include <linux/proc_fs.h>
 #include <linux/vserver/inode.h>
+#include <linux/vs_tag.h>
 #include <linux/vserver/debug.h>
 #include <asm/namei.h>
 #include <asm/uaccess.h>
@@ -226,20 +227,20 @@ int generic_permission(struct inode *inode, int mask,
 	return -EACCES;
 }
 
-static inline int xid_permission(struct inode *inode, int mask, struct nameidata *nd)
+static inline int dx_permission(struct inode *inode, int mask, struct nameidata *nd)
 {
 	if (IS_BARRIER(inode) && !vx_check(0, VX_ADMIN)) {
 		vxwprintk(1, "xid=%d did hit the barrier.",
 			vx_current_xid());
 		return -EACCES;
 	}
-	if (inode->i_xid == 0)
+	if (inode->i_tag == 0)
 		return 0;
-	if (vx_check(inode->i_xid, VX_ADMIN|VX_WATCH|VX_IDENT))
+	if (dx_check(inode->i_tag, DX_ADMIN|DX_WATCH|DX_IDENT))
 		return 0;
 
 	vxwprintk(1, "xid=%d denied access to %p[#%d,%lu] »%s«.",
-		vx_current_xid(), inode, inode->i_xid, inode->i_ino,
+		vx_current_xid(), inode, inode->i_tag, inode->i_ino,
 		vxd_path(nd->dentry, nd->mnt));
 	return -EACCES;
 }
@@ -268,7 +269,7 @@ int permission(struct inode *inode, int mask, struct nameidata *nd)
 
 	/* Ordinary permission routines do not understand MAY_APPEND. */
 	submask = mask & ~MAY_APPEND;
-	if ((retval = xid_permission(inode, mask, nd)))
+	if ((retval = dx_permission(inode, mask, nd)))
 		return retval;
 	if (inode->i_op && inode->i_op->permission)
 		retval = inode->i_op->permission(inode, submask, nd);
@@ -770,14 +771,14 @@ static int do_lookup(struct nameidata *nd, struct qstr *name,
 	inode = dentry->d_inode;
 	if (!inode)
 		goto done;
-	if (!vx_check(inode->i_xid, VX_WATCH|VX_ADMIN|VX_HOSTID|VX_IDENT))
-		goto hidden;
 	if (inode->i_sb->s_magic == PROC_SUPER_MAGIC) {
 		struct proc_dir_entry *de = PDE(inode);
 
 		if (de && !vx_hide_check(0, de->vx_flags))
 			goto hidden;
 	}
+	if (!dx_check(inode->i_tag, DX_WATCH|DX_ADMIN|DX_HOSTID|DX_IDENT))
+		goto hidden;
 done:
 	path->mnt = mnt;
 	path->dentry = dentry;
@@ -785,7 +786,7 @@ done:
 	return 0;
 hidden:
 	vxwprintk(1, "xid=%d did lookup hidden %p[#%d,%lu] »%s«.",
-		vx_current_xid(), inode, inode->i_xid, inode->i_ino,
+		vx_current_xid(), inode, inode->i_tag, inode->i_ino,
 		vxd_path(dentry, mnt));
 	dput(dentry);
 	return -ENOENT;

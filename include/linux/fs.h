@@ -108,8 +108,8 @@ extern int dir_notify_enable;
 #define MS_PRIVATE	(1<<18)	/* change to private */
 #define MS_SLAVE	(1<<19)	/* change to slave */
 #define MS_SHARED	(1<<20)	/* change to shared */
-#define MS_TAGXID	(1<<24) /* tag inodes with context information */
-#define MS_XID		(1<<25) /* use specific xid for this mount */
+#define MS_TAGGED	(1<<24) /* use generic inode tagging */
+#define MS_TAGID	(1<<25) /* use specific tag for this mount */
 #define MS_ACTIVE	(1<<30)
 #define MS_NOUSER	(1<<31)
 
@@ -160,7 +160,7 @@ extern int dir_notify_enable;
 #define IS_DIRSYNC(inode)	(__IS_FLG(inode, MS_SYNCHRONOUS|MS_DIRSYNC) || \
 					((inode)->i_flags & (S_SYNC|S_DIRSYNC)))
 #define IS_MANDLOCK(inode)	__IS_FLG(inode, MS_MANDLOCK)
-#define IS_TAGXID(inode)	__IS_FLG(inode, MS_TAGXID)
+#define IS_TAGGED(inode)	__IS_FLG(inode, MS_TAGGED)
 
 #define IS_NOQUOTA(inode)	((inode)->i_flags & S_NOQUOTA)
 #define IS_APPEND(inode)	((inode)->i_flags & S_APPEND)
@@ -275,7 +275,7 @@ typedef void (dio_iodone_t)(struct kiocb *iocb, loff_t offset,
 #define ATTR_KILL_SUID	2048
 #define ATTR_KILL_SGID	4096
 #define ATTR_FILE	8192
-#define ATTR_XID	16384
+#define ATTR_TAG	16384
 
 /*
  * This is the Inode Attributes structure, used for notify_change().  It
@@ -291,7 +291,7 @@ struct iattr {
 	umode_t		ia_mode;
 	uid_t		ia_uid;
 	gid_t		ia_gid;
-	xid_t		ia_xid;
+	tag_t		ia_tag;
 	loff_t		ia_size;
 	struct timespec	ia_atime;
 	struct timespec	ia_mtime;
@@ -484,7 +484,7 @@ struct inode {
 	unsigned int		i_nlink;
 	uid_t			i_uid;
 	gid_t			i_gid;
-	xid_t			i_xid;
+	tag_t			i_tag;
 	dev_t			i_rdev;
 	loff_t			i_size;
 	struct timespec		i_atime;

@@ -19,7 +19,7 @@
 #include <linux/fs.h>
 #include <linux/quotaops.h>
 #include <linux/vs_dlimit.h>
-#include <linux/vserver/xid.h>
+#include <linux/vs_tag.h>
 #include "jfs_incore.h"
 #include "jfs_inode.h"
 #include "jfs_filsys.h"
@@ -64,7 +64,7 @@ struct inode *ialloc(struct inode *parent, umode_t mode)
 	} else
 		inode->i_gid = current->fsgid;
 
-	inode->i_xid = vx_current_fsxid(sb);
+	inode->i_tag = dx_current_fstag(sb);
 	if (DLIMIT_ALLOC_INODE(inode)) {
 		iput(inode);
 		return NULL;

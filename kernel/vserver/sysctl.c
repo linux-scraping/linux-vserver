@@ -29,6 +29,7 @@ enum {
 	CTL_DEBUG_SWITCH	= 1,
 	CTL_DEBUG_XID,
 	CTL_DEBUG_NID,
+	CTL_DEBUG_TAG,
 	CTL_DEBUG_NET,
 	CTL_DEBUG_LIMIT,
 	CTL_DEBUG_DLIM,
@@ -41,6 +42,7 @@ enum {
 unsigned int vx_debug_switch	= 0;
 unsigned int vx_debug_xid	= 0;
 unsigned int vx_debug_nid	= 0;
+unsigned int vx_debug_tag	= 0;
 unsigned int vx_debug_net	= 0;
 unsigned int vx_debug_limit	= 0;
 unsigned int vx_debug_dlim	= 0;
@@ -142,6 +144,7 @@ static ctl_table debug_table[] = {
 	CTL_ENTRY (CTL_DEBUG_SWITCH,	debug_switch),
 	CTL_ENTRY (CTL_DEBUG_XID,	debug_xid),
 	CTL_ENTRY (CTL_DEBUG_NID,	debug_nid),
+	CTL_ENTRY (CTL_DEBUG_TAG,	debug_tag),
 	CTL_ENTRY (CTL_DEBUG_NET,	debug_net),
 	CTL_ENTRY (CTL_DEBUG_LIMIT,	debug_limit),
 	CTL_ENTRY (CTL_DEBUG_DLIM,	debug_dlim),
@@ -166,6 +169,7 @@ static match_table_t tokens = {
 	{ CTL_DEBUG_SWITCH,	"switch=%x"	},
 	{ CTL_DEBUG_XID,	"xid=%x"	},
 	{ CTL_DEBUG_NID,	"nid=%x"	},
+	{ CTL_DEBUG_TAG,	"tag=%x"	},
 	{ CTL_DEBUG_NET,	"net=%x"	},
 	{ CTL_DEBUG_LIMIT,	"limit=%x"	},
 	{ CTL_DEBUG_DLIM,	"dlim=%x"	},

@@ -1353,7 +1353,8 @@ static struct inode *proc_pid_make_inode(struct super_block * sb, struct task_st
 		inode->i_uid = task->euid;
 		inode->i_gid = task->egid;
 	}
-	inode->i_xid = vx_task_xid(task);
+	/* procfs is xid tagged */
+	inode->i_tag = (tag_t)vx_task_xid(task);
 	security_task_to_inode(task, inode);
 
 out:

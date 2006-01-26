@@ -21,7 +21,7 @@
 #include <linux/sunrpc/svc.h>
 #include <linux/nfsd/nfsd.h>
 #include <linux/nfsd/xdr3.h>
-#include <linux/vserver/xid.h>
+#include <linux/vserver/tag.h>
 
 #define NFSDDBG_FACILITY		NFSDDBG_XDR
 
@@ -129,9 +129,9 @@ decode_sattr3(u32 *p, struct iattr *iap)
 		iap->ia_valid |= ATTR_GID;
 		gid = ntohl(*p++);
 	}
-	iap->ia_uid = INOXID_UID(XID_TAG_NFSD, uid, gid);
-	iap->ia_gid = INOXID_GID(XID_TAG_NFSD, uid, gid);
-	iap->ia_xid = INOXID_XID(XID_TAG_NFSD, uid, gid, 0);
+	iap->ia_uid = INOTAG_UID(DX_TAG_NFSD, uid, gid);
+	iap->ia_gid = INOTAG_GID(DX_TAG_NFSD, uid, gid);
+	iap->ia_tag = INOTAG_TAG(DX_TAG_NFSD, uid, gid, 0);
 	if (*p++) {
 		u64	newsize;
 

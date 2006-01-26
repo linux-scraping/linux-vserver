@@ -386,7 +386,7 @@ typedef struct vattr {
 	xfs_nlink_t	va_nlink;	/* number of references to file */
 	uid_t		va_uid;		/* owner user id */
 	gid_t		va_gid;		/* owner group id */
-	xid_t		va_xid;		/* owner group id */
+	tag_t		va_tag;		/* owner group id */
 	xfs_ino_t	va_nodeid;	/* file id */
 	xfs_off_t	va_size;	/* file size in bytes */
 	u_long		va_blocksize;	/* blocksize preferred for i/o */
@@ -435,7 +435,7 @@ typedef struct vattr {
 #define XFS_AT_PROJID		0x04000000
 #define XFS_AT_SIZE_NOPERM	0x08000000
 #define XFS_AT_GENCOUNT		0x10000000
-#define XFS_AT_XID		0x20000000
+#define XFS_AT_TAG		0x20000000
 
 #define XFS_AT_ALL	(XFS_AT_TYPE|XFS_AT_MODE|XFS_AT_UID|XFS_AT_GID|\
 		XFS_AT_FSID|XFS_AT_NODEID|XFS_AT_NLINK|XFS_AT_SIZE|\
@@ -443,7 +443,7 @@ typedef struct vattr {
 		XFS_AT_BLKSIZE|XFS_AT_NBLOCKS|XFS_AT_VCODE|XFS_AT_MAC|\
 		XFS_AT_ACL|XFS_AT_CAP|XFS_AT_INF|XFS_AT_XFLAGS|XFS_AT_EXTSIZE|\
 		XFS_AT_NEXTENTS|XFS_AT_ANEXTENTS|XFS_AT_PROJID|XFS_AT_GENCOUNT\
-		XFS_AT_XID)
+		XFS_AT_TAG)
 
 #define XFS_AT_STAT	(XFS_AT_TYPE|XFS_AT_MODE|XFS_AT_UID|XFS_AT_GID|\
 		XFS_AT_FSID|XFS_AT_NODEID|XFS_AT_NLINK|XFS_AT_SIZE|\

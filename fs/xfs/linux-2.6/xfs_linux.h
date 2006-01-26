@@ -133,7 +133,7 @@ BUFFER_FNS(PrivateStart, unwritten);
 #define current_pid()		(current->pid)
 #define current_fsuid(cred)	(current->fsuid)
 #define current_fsgid(cred)	(current->fsgid)
-#define current_fsxid(cred,vp)	(vx_current_fsxid(LINVFS_GET_IP(vp)->i_sb))
+#define current_fstag(cred,vp)	(dx_current_fstag(LINVFS_GET_IP(vp)->i_sb))
 
 #define NBPP		PAGE_SIZE
 #define DPPSHFT		(PAGE_SHIFT - 9)

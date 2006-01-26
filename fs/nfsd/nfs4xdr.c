@@ -57,7 +57,7 @@
 #include <linux/nfsd_idmap.h>
 #include <linux/nfs4.h>
 #include <linux/nfs4_acl.h>
-#include <linux/vserver/xid.h>
+#include <linux/vserver/tag.h>
 
 #define NFSDDBG_FACILITY		NFSDDBG_XDR
 

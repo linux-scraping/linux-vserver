@@ -14,7 +14,7 @@ static inline struct dl_info *__get_dl_info(struct dl_info *dli,
 	if (!dli)
 		return NULL;
 	vxlprintk(VXD_CBIT(dlim, 4), "get_dl_info(%p[#%d.%d])",
-		dli, dli?dli->dl_xid:0, dli?atomic_read(&dli->dl_usecnt):0,
+		dli, dli?dli->dl_tag:0, dli?atomic_read(&dli->dl_usecnt):0,
 		_file, _line);
 	atomic_inc(&dli->dl_usecnt);
 	return dli;
@@ -32,7 +32,7 @@ static inline void __put_dl_info(struct dl_info *dli,
 	if (!dli)
 		return;
 	vxlprintk(VXD_CBIT(dlim, 4), "put_dl_info(%p[#%d.%d])",
-		dli, dli?dli->dl_xid:0, dli?atomic_read(&dli->dl_usecnt):0,
+		dli, dli?dli->dl_tag:0, dli?atomic_read(&dli->dl_usecnt):0,
 		_file, _line);
 	if (atomic_dec_and_test(&dli->dl_usecnt))
 		free_dl_info(dli);
@@ -180,33 +180,33 @@ static inline void __dl_adjust_block(struct super_block *sb, xid_t xid,
 }
 
 #define DLIMIT_ALLOC_SPACE(in, bytes) \
-	__dl_alloc_space((in)->i_sb, (in)->i_xid, (dlsize_t)(bytes), \
+	__dl_alloc_space((in)->i_sb, (in)->i_tag, (dlsize_t)(bytes), \
 		__FILE__, __LINE__ )
 
 #define DLIMIT_FREE_SPACE(in, bytes) \
-	__dl_free_space((in)->i_sb, (in)->i_xid, (dlsize_t)(bytes), \
+	__dl_free_space((in)->i_sb, (in)->i_tag, (dlsize_t)(bytes), \
 		__FILE__, __LINE__ )
 
 #define DLIMIT_ALLOC_BLOCK(in, nr) \
-	__dl_alloc_space((in)->i_sb, (in)->i_xid, \
+	__dl_alloc_space((in)->i_sb, (in)->i_tag, \
 		((dlsize_t)(nr)) << (in)->i_sb->s_blocksize_bits, \
 		__FILE__, __LINE__ )
 
 #define DLIMIT_FREE_BLOCK(in, nr) \
-	__dl_free_space((in)->i_sb, (in)->i_xid, \
+	__dl_free_space((in)->i_sb, (in)->i_tag, \
 		((dlsize_t)(nr)) << (in)->i_sb->s_blocksize_bits, \
 		__FILE__, __LINE__ )
 
 
 #define DLIMIT_ALLOC_INODE(in) \
-	__dl_alloc_inode((in)->i_sb, (in)->i_xid, __FILE__, __LINE__ )
+	__dl_alloc_inode((in)->i_sb, (in)->i_tag, __FILE__, __LINE__ )
 
 #define DLIMIT_FREE_INODE(in) \
-	__dl_free_inode((in)->i_sb, (in)->i_xid, __FILE__, __LINE__ )
+	__dl_free_inode((in)->i_sb, (in)->i_tag, __FILE__, __LINE__ )
 
 
-#define DLIMIT_ADJUST_BLOCK(sb, xid, fb, rb) \
-	__dl_adjust_block(sb, xid, fb, rb, __FILE__, __LINE__ )
+#define DLIMIT_ADJUST_BLOCK(sb, tag, fb, rb) \
+	__dl_adjust_block(sb, tag, fb, rb, __FILE__, __LINE__ )
 
 
 #else

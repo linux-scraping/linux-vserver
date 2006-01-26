@@ -15,7 +15,7 @@
 #include <linux/module.h>
 #include <linux/proc_fs.h>
 #include <linux/vserver/inode.h>
-#include <linux/vserver/xid.h>
+#include <linux/vserver/tag.h>
 
 #include <asm/uaccess.h>
 #include <asm/ioctls.h>
@@ -157,19 +157,19 @@ int vfs_ioctl(struct file *filp, unsigned int fd, unsigned int cmd, unsigned lon
 				error = -ENOTTY;
 			break;
 #ifdef	CONFIG_VSERVER_LEGACY
-#ifndef CONFIG_INOXID_NONE
-		case FIOC_GETXID: {
+#ifndef CONFIG_TAGGING_NONE
+		case FIOC_GETTAG: {
 			struct inode *inode = filp->f_dentry->d_inode;
 
 			/* fixme: if stealth, return -ENOTTY */
 			error = -EPERM;
 			if (capable(CAP_CONTEXT))
-				error = put_user(inode->i_xid, (int *) arg);
+				error = put_user(inode->i_tag, (int *) arg);
 			break;
 		}
-		case FIOC_SETXID: {
+		case FIOC_SETTAG: {
 			struct inode *inode = filp->f_dentry->d_inode;
-			int xid;
+			int tag;
 
 			/* fixme: if stealth, return -ENOTTY */
 			error = -EPERM;
@@ -179,13 +179,13 @@ int vfs_ioctl(struct file *filp, unsigned int fd, unsigned int cmd, unsigned lon
 			if (IS_RDONLY(inode))
 				break;
 			error = -ENOSYS;
-			if (!(inode->i_sb->s_flags & MS_TAGXID))
+			if (!(inode->i_sb->s_flags & MS_TAGGED))
 				break;
 			error = -EFAULT;
-			if (get_user(xid, (int *) arg))
+			if (get_user(tag, (int *) arg))
 				break;
 			error = 0;
-			inode->i_xid = (xid & 0xFFFF);
+			inode->i_tag = (tag & 0xFFFF);
 			inode->i_ctime = CURRENT_TIME;
 			mark_inode_dirty(inode);
 			break;

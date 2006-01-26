@@ -17,7 +17,7 @@ struct super_block;
 struct dl_info {
 	struct hlist_node dl_hlist;		/* linked list of contexts */
 	struct rcu_head dl_rcu;			/* the rcu head */
-	xid_t dl_xid;				/* context id */
+	tag_t dl_tag;				/* context tag */
 	atomic_t dl_usecnt;			/* usage count */
 	atomic_t dl_refcnt;			/* reference count */
 

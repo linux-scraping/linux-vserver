@@ -154,7 +154,7 @@ xfs_getattr(
 	vap->va_mode = ip->i_d.di_mode;
 	vap->va_uid = ip->i_d.di_uid;
 	vap->va_gid = ip->i_d.di_gid;
-	vap->va_xid = ip->i_d.di_xid;
+	vap->va_tag = ip->i_d.di_tag;
 	vap->va_projid = ip->i_d.di_projid;
 
 	/*
@@ -255,7 +255,7 @@ xfs_setattr(
 	uint			commit_flags=0;
 	uid_t			uid=0, iuid=0;
 	gid_t			gid=0, igid=0;
-	xid_t			xid=0, ixid=0;
+	tag_t			tag=0, itag=0;
 	int			timeflags = 0;
 	vnode_t			*vp;
 	xfs_prid_t		projid=0, iprojid=0;
@@ -312,7 +312,7 @@ xfs_setattr(
 	    (mask & (XFS_AT_UID|XFS_AT_GID|XFS_AT_PROJID))) {
 		uint	qflags = 0;
 
-		/* FIXME: handle xid? */
+		/* FIXME: handle tagging? */
 		if ((mask & XFS_AT_UID) && XFS_IS_UQUOTA_ON(mp)) {
 			uid = vap->va_uid;
 			qflags |= XFS_QMOPT_UQUOTA;
@@ -393,7 +393,7 @@ xfs_setattr(
 	if (mask &
 	    (XFS_AT_MODE|XFS_AT_XFLAGS|XFS_AT_EXTSIZE|XFS_AT_UID|
 	     XFS_AT_GID|XFS_AT_PROJID)) {
-		/* FIXME: handle xid? */
+		/* FIXME: handle tagging? */
 
 		/*
 		 * CAP_FOWNER overrides the following restrictions:
@@ -443,7 +443,7 @@ xfs_setattr(
 	 * and can change the group id only to a group of which he
 	 * or she is a member.
 	 */
-	if (mask & (XFS_AT_UID|XFS_AT_GID|XFS_AT_XID|XFS_AT_PROJID)) {
+	if (mask & (XFS_AT_UID|XFS_AT_GID|XFS_AT_TAG|XFS_AT_PROJID)) {
 		/*
 		 * These IDs could have changed since we last looked at them.
 		 * But, we're assured that if the ownership did change
@@ -452,11 +452,11 @@ xfs_setattr(
 		 */
 		iuid = ip->i_d.di_uid;
 		igid = ip->i_d.di_gid;
-		ixid = ip->i_d.di_xid;
+		itag = ip->i_d.di_tag;
 		iprojid = ip->i_d.di_projid;
 		uid = (mask & XFS_AT_UID) ? vap->va_uid : iuid;
 		gid = (mask & XFS_AT_GID) ? vap->va_gid : igid;
-		xid = (mask & XFS_AT_XID) ? vap->va_xid : ixid;
+		tag = (mask & XFS_AT_TAG) ? vap->va_tag : itag;
 		projid = (mask & XFS_AT_PROJID) ? (xfs_prid_t)vap->va_projid :
 			 iprojid;
 
@@ -484,7 +484,7 @@ xfs_setattr(
 		if ((XFS_IS_UQUOTA_ON(mp) && iuid != uid) ||
 		    (XFS_IS_PQUOTA_ON(mp) && iprojid != projid) ||
 		    (XFS_IS_GQUOTA_ON(mp) && igid != gid)) {
-			/* FIXME: handle xid? */
+			/* FIXME: handle tagging? */
 			ASSERT(tp);
 			code = XFS_QM_DQVOPCHOWNRESV(mp, tp, ip, udqp, gdqp,
 						capable(CAP_FOWNER) ?
@@ -701,7 +701,7 @@ xfs_setattr(
 	 * and can change the group id only to a group of which he
 	 * or she is a member.
 	 */
-	if (mask & (XFS_AT_UID|XFS_AT_GID|XFS_AT_XID|XFS_AT_PROJID)) {
+	if (mask & (XFS_AT_UID|XFS_AT_GID|XFS_AT_TAG|XFS_AT_PROJID)) {
 		/*
 		 * CAP_FSETID overrides the following restrictions:
 		 *
@@ -717,11 +717,11 @@ xfs_setattr(
 		 * Change the ownerships and register quota modifications
 		 * in the transaction.
 		 */
-		if (ixid != xid) {
+		if (itag != tag) {
 			if (XFS_IS_GQUOTA_ON(mp)) {
-				/* FIXME: handle xid quota? */
+				/* FIXME: handle tag quota? */
 			}
-			ip->i_d.di_xid = xid;
+			ip->i_d.di_tag = tag;
 		}
 		if (iuid != uid) {
 			if (XFS_IS_UQUOTA_ON(mp)) {

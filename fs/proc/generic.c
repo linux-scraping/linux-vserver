@@ -394,7 +394,7 @@ struct dentry *proc_lookup(struct inode * dir, struct dentry *dentry, struct nam
 				error = -EINVAL;
 				inode = proc_get_inode(dir->i_sb, ino, de);
 				/* generic proc entries belong to the host */
-				inode->i_xid = 0;
+				inode->i_tag = 0;
 				break;
 			}
 		}

@@ -14,7 +14,7 @@
 #include <linux/ext3_fs.h>
 #include <linux/ext3_jbd.h>
 #include <linux/time.h>
-#include <linux/vserver/xid.h>
+#include <linux/vserver/tag.h>
 #include <asm/uaccess.h>
 
 
@@ -246,11 +246,11 @@ flags_err:
 		return err;
 	}
 
-#if defined(CONFIG_VSERVER_LEGACY) && !defined(CONFIG_INOXID_NONE)
-	case EXT3_IOC_SETXID: {
+#if defined(CONFIG_VSERVER_LEGACY) && !defined(CONFIG_TAGGING_NONE)
+	case EXT3_IOC_SETTAG: {
 		handle_t *handle;
 		struct ext3_iloc iloc;
-		int xid;
+		int tag;
 		int err;
 
 		/* fixme: if stealth, return -ENOTTY */
@@ -258,9 +258,9 @@ flags_err:
 			return -EPERM;
 		if (IS_RDONLY(inode))
 			return -EROFS;
-		if (!(inode->i_sb->s_flags & MS_TAGXID))
+		if (!(inode->i_sb->s_flags & MS_TAGGED))
 			return -ENOSYS;
-		if (get_user(xid, (int *) arg))
+		if (get_user(tag, (int *) arg))
 			return -EFAULT;
 
 		handle = ext3_journal_start(inode, 1);
@@ -270,7 +270,7 @@ flags_err:
 		if (err)
 			return err;
 
-		inode->i_xid = (xid & 0xFFFF);
+		inode->i_tag = (tag & 0xFFFF);
 		inode->i_ctime = CURRENT_TIME;
 
 		err = ext3_mark_iloc_dirty(handle, inode, &iloc);

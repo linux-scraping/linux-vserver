@@ -52,7 +52,7 @@
 #include "xfs_mac.h"
 #include "xfs_acl.h"
 
-#include <linux/vserver/xid.h>
+#include <linux/vs_tag.h>
 
 kmem_zone_t *xfs_ifork_zone;
 kmem_zone_t *xfs_inode_zone;
@@ -736,16 +736,16 @@ xfs_xlate_dinode_core(
 	xfs_dinode_core_t	*mem_core = (xfs_dinode_core_t *)dip;
 	xfs_arch_t		arch = ARCH_CONVERT;
 	uint32_t		uid = 0, gid = 0;
-	uint16_t		xid = 0;
+	uint16_t		tag = 0;
 
 	ASSERT(dir);
 
 	if (dir < 0) {
-		xid = mem_core->di_xid;
+		tag = mem_core->di_tag;
 		/* FIXME: supposed to use superblock flag */
-		uid = XIDINO_UID(1, mem_core->di_uid, xid);
-		gid = XIDINO_GID(1, mem_core->di_gid, xid);
-		xid = XIDINO_XID(1, xid);
+		uid = TAGINO_UID(1, mem_core->di_uid, tag);
+		gid = TAGINO_GID(1, mem_core->di_gid, tag);
+		tag = TAGINO_TAG(1, tag);
 	}
 
 	INT_XLATE(buf_core->di_magic, mem_core->di_magic, dir, arch);
@@ -755,15 +755,15 @@ xfs_xlate_dinode_core(
 	INT_XLATE(buf_core->di_onlink, mem_core->di_onlink, dir, arch);
 	INT_XLATE(buf_core->di_uid, uid, dir, arch);
 	INT_XLATE(buf_core->di_gid, gid, dir, arch);
-	INT_XLATE(buf_core->di_xid, xid, dir, arch);
+	INT_XLATE(buf_core->di_tag, tag, dir, arch);
 	INT_XLATE(buf_core->di_nlink, mem_core->di_nlink, dir, arch);
 	INT_XLATE(buf_core->di_projid, mem_core->di_projid, dir, arch);
 
 	if (dir > 0) {
 		/* FIXME: supposed to use superblock flag */
-		mem_core->di_uid = INOXID_UID(1, uid, gid);
-		mem_core->di_gid = INOXID_GID(1, uid, gid);
-		mem_core->di_xid = INOXID_XID(1, uid, gid, xid);
+		mem_core->di_uid = INOTAG_UID(1, uid, gid);
+		mem_core->di_gid = INOTAG_GID(1, uid, gid);
+		mem_core->di_tag = INOTAG_TAG(1, uid, gid, tag);
 		memcpy(mem_core->di_pad, buf_core->di_pad,
 			sizeof(buf_core->di_pad));
 	} else {
@@ -1145,7 +1145,7 @@ xfs_ialloc(
 	ASSERT(ip->i_d.di_nlink == nlink);
 	ip->i_d.di_uid = current_fsuid(cr);
 	ip->i_d.di_gid = current_fsgid(cr);
-	ip->i_d.di_xid = current_fsxid(cr, vp);
+	ip->i_d.di_tag = current_fstag(cr, vp);
 	ip->i_d.di_projid = prid;
 	memset(&(ip->i_d.di_pad[0]), 0, sizeof(ip->i_d.di_pad));
 

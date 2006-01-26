@@ -19,20 +19,20 @@
 #include <linux/compat.h>
 #include <linux/vserver/inode.h>
 #include <linux/vserver/inode_cmd.h>
-#include <linux/vserver/xid.h>
+#include <linux/vserver/tag.h>
 
 #include <asm/errno.h>
 #include <asm/uaccess.h>
 
 
-static int __vc_get_iattr(struct inode *in, uint32_t *xid, uint32_t *flags, uint32_t *mask)
+static int __vc_get_iattr(struct inode *in, uint32_t *tag, uint32_t *flags, uint32_t *mask)
 {
 	struct proc_dir_entry *entry;
 
 	if (!in || !in->i_sb)
 		return -ESRCH;
 
-	*flags = IATTR_XID
+	*flags = IATTR_TAG
 		| (IS_BARRIER(in) ? IATTR_BARRIER : 0)
 		| (IS_IUNLINK(in) ? IATTR_IUNLINK : 0)
 		| (IS_IMMUTABLE(in) ? IATTR_IMMUTABLE : 0);
@@ -41,9 +41,9 @@ static int __vc_get_iattr(struct inode *in, uint32_t *xid, uint32_t *flags, uint
 	if (S_ISDIR(in->i_mode))
 		*mask |= IATTR_BARRIER;
 
-	if (IS_TAGXID(in)) {
-		*xid = in->i_xid;
-		*mask |= IATTR_XID;
+	if (IS_TAGGED(in)) {
+		*tag = in->i_tag;
+		*mask |= IATTR_TAG;
 	}
 
 	switch (in->i_sb->s_magic) {
@@ -60,8 +60,8 @@ static int __vc_get_iattr(struct inode *in, uint32_t *xid, uint32_t *flags, uint
 		break;
 
 	case DEVPTS_SUPER_MAGIC:
-		*xid = in->i_xid;
-		*mask |= IATTR_XID;
+		*tag = in->i_tag;
+		*mask |= IATTR_TAG;
 		break;
 
 	default:
@@ -125,10 +125,10 @@ int vc_get_iattr_x32(uint32_t id, void __user *data)
 #endif	/* CONFIG_COMPAT */
 
 
-static int __vc_set_iattr(struct dentry *de, uint32_t *xid, uint32_t *flags, uint32_t *mask)
+static int __vc_set_iattr(struct dentry *de, uint32_t *tag, uint32_t *flags, uint32_t *mask)
 {
 	struct inode *in = de->d_inode;
-	int error = 0, is_proc = 0, has_xid = 0;
+	int error = 0, is_proc = 0, has_tag = 0;
 	struct iattr attr = { 0 };
 
 	if (!in || !in->i_sb)
@@ -138,15 +138,15 @@ static int __vc_set_iattr(struct dentry *de, uint32_t *xid, uint32_t *flags, uin
 	if ((*mask & IATTR_FLAGS) && !is_proc)
 		return -EINVAL;
 
-	has_xid = IS_TAGXID(in) ||
+	has_tag = IS_TAGGED(in) ||
 		(in->i_sb->s_magic == DEVPTS_SUPER_MAGIC);
-	if ((*mask & IATTR_XID) && !has_xid)
+	if ((*mask & IATTR_TAG) && !has_tag)
 		return -EINVAL;
 
 	mutex_lock(&in->i_mutex);
-	if (*mask & IATTR_XID) {
-		attr.ia_xid = *xid;
-		attr.ia_valid |= ATTR_XID;
+	if (*mask & IATTR_TAG) {
+		attr.ia_tag = *tag;
+		attr.ia_valid |= ATTR_TAG;
 	}
 
 	if (*mask & IATTR_FLAGS) {
@@ -300,12 +300,12 @@ int vx_proc_ioctl(struct inode * inode, struct file * filp,
 }
 #endif	/* CONFIG_VSERVER_LEGACY */
 
-#ifdef	CONFIG_XID_PROPAGATE
+#ifdef	CONFIG_PROPAGATE
 
-int vx_parse_xid(char *string, xid_t *xid, int remove)
+int dx_parse_tag(char *string, tag_t *tag, int remove)
 {
 	static match_table_t tokens = {
-		{1, "xid=%u"},
+		{1, "tagid=%u"},
 		{0, NULL}
 	};
 	substring_t args[MAX_OPT_ARGS];
@@ -315,15 +315,15 @@ int vx_parse_xid(char *string, xid_t *xid, int remove)
 		return 0;
 
 	token = match_token(string, tokens, args);
-	if (token && xid && !match_int(args, &option))
-		*xid = option;
+	if (token && tag && !match_int(args, &option))
+		*tag = option;
 
-	vxdprintk(VXD_CBIT(xid, 7),
-		"vx_parse_xid(»%s«): %d:#%d",
+	vxdprintk(VXD_CBIT(tag, 7),
+		"dx_parse_tag(»%s«): %d:#%d",
 		string, token, option);
 
-	if (token && remove) {
-		char *p = strstr(string, "xid=");
+	if ((token == 1) && remove) {
+		char *p = strstr(string, "tagid=");
 		char *q = p;
 
 		if (p) {
@@ -338,9 +338,9 @@ int vx_parse_xid(char *string, xid_t *xid, int remove)
 	return token;
 }
 
-void __vx_propagate_xid(struct nameidata *nd, struct inode *inode)
+void __dx_propagate_tag(struct nameidata *nd, struct inode *inode)
 {
-	xid_t new_xid = 0;
+	tag_t new_tag = 0;
 	struct vfsmount *mnt;
 	int propagate;
 
@@ -350,22 +350,22 @@ void __vx_propagate_xid(struct nameidata *nd, struct inode *inode)
 	if (!mnt)
 		return;
 
-	propagate = (mnt->mnt_flags & MNT_XID);
+	propagate = (mnt->mnt_flags & MNT_TAGID);
 	if (propagate)
-		new_xid = mnt->mnt_xid;
+		new_tag = mnt->mnt_tag;
 
-	vxdprintk(VXD_CBIT(xid, 7),
-		"vx_propagate_xid(%p[#%lu.%d]): %d,%d",
-		inode, inode->i_ino, inode->i_xid,
-		new_xid, (propagate)?1:0);
+	vxdprintk(VXD_CBIT(tag, 7),
+		"dx_propagate_tag(%p[#%lu.%d]): %d,%d",
+		inode, inode->i_ino, inode->i_tag,
+		new_tag, (propagate)?1:0);
 
 	if (propagate)
-		inode->i_xid = new_xid;
+		inode->i_tag = new_tag;
 }
 
 #include <linux/module.h>
 
-EXPORT_SYMBOL_GPL(__vx_propagate_xid);
+EXPORT_SYMBOL_GPL(__dx_propagate_tag);
 
-#endif	/* CONFIG_XID_PROPAGATE */
+#endif	/* CONFIG_PROPAGATE */
 

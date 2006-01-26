@@ -55,7 +55,7 @@
 #include <linux/xattr.h>
 #include <linux/namei.h>
 #include <linux/security.h>
-#include <linux/vserver/xid.h>
+#include <linux/vserver/tag.h>
 
 /*
  * Get a XFS inode from a given vnode.
@@ -397,7 +397,7 @@ linvfs_lookup(
 		d_add(dentry, NULL);
 		return NULL;
 	}
-	vx_propagate_xid(nd, LINVFS_GET_IP(cvp));
+	dx_propagate_tag(nd, LINVFS_GET_IP(cvp));
 
 	return d_splice_alias(LINVFS_GET_IP(cvp), dentry);
 }
@@ -693,9 +693,9 @@ linvfs_setattr(
 		vattr.va_mask |= XFS_AT_GID;
 		vattr.va_gid = attr->ia_gid;
 	}
-	if ((ia_valid & ATTR_XID) && IS_TAGXID(inode)) {
-		vattr.va_mask |= XFS_AT_XID;
-		vattr.va_xid = attr->ia_xid;
+	if ((ia_valid & ATTR_TAG) && IS_TAGGED(inode)) {
+		vattr.va_mask |= XFS_AT_TAG;
+		vattr.va_tag = attr->ia_tag;
 	}
 	if (ia_valid & ATTR_SIZE) {
 		vattr.va_mask |= XFS_AT_SIZE;

@@ -28,7 +28,7 @@
 #include <linux/rcupdate.h>
 #include <linux/vs_limit.h>
 #include <linux/vs_dlimit.h>
-#include <linux/vserver/xid.h>
+#include <linux/vserver/tag.h>
 
 #include <asm/unistd.h>
 
@@ -696,11 +696,11 @@ static int chown_common(struct dentry *dentry, struct vfsmount *mnt,
 	newattrs.ia_valid =  ATTR_CTIME;
 	if (user != (uid_t) -1) {
 		newattrs.ia_valid |= ATTR_UID;
-		newattrs.ia_uid = vx_map_uid(user);
+		newattrs.ia_uid = dx_map_uid(user);
 	}
 	if (group != (gid_t) -1) {
 		newattrs.ia_valid |= ATTR_GID;
-		newattrs.ia_gid = vx_map_gid(group);
+		newattrs.ia_gid = dx_map_gid(group);
 	}
 	if (!S_ISDIR(inode->i_mode))
 		newattrs.ia_valid |= ATTR_KILL_SUID|ATTR_KILL_SGID;

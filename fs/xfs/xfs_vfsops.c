@@ -296,8 +296,8 @@ xfs_start_flags(
 
 	if (ap->flags2 & XFSMNT2_COMPAT_IOSIZE)
 		mp->m_flags |= XFS_MOUNT_COMPAT_IOSIZE;
-	if (ap->flags2 & XFSMNT2_TAGXID)
-		mp->m_flags |= XFS_MOUNT_TAGXID;
+	if (ap->flags2 & XFSMNT2_TAGGED)
+		mp->m_flags |= XFS_MOUNT_TAGGED;
 
 	/*
 	 * no recovery flag requires a read-only mount
@@ -392,8 +392,8 @@ xfs_finish_flags(
 			return XFS_ERROR(EINVAL);
 	}
 
-	if (ap->flags2 & XFSMNT2_TAGXID)
-		vfs->vfs_super->s_flags |= MS_TAGXID;
+	if (ap->flags2 & XFSMNT2_TAGGED)
+		vfs->vfs_super->s_flags |= MS_TAGGED;
 	return 0;
 }
 
@@ -1657,7 +1657,9 @@ xfs_vget(
 					 * in stat(). */
 #define MNTOPT_ATTR2	"attr2"		/* do use attr2 attribute format */
 #define MNTOPT_NOATTR2	"noattr2"	/* do not use attr2 attribute format */
-#define MNTOPT_TAGXID	"tagxid"	/* context xid tagging for inodes */
+#define MNTOPT_TAGXID	"tagxid"	/* context tagging for inodes */
+#define MNTOPT_TAGGED	"tag"		/* context tagging for inodes */
+#define MNTOPT_NOTAGTAG	"notag"		/* do not use context tagging */
 
 STATIC unsigned long
 suffix_strtoul(const char *cp, char **endp, unsigned int base)
@@ -1834,9 +1836,18 @@ xfs_parseargs(
 			args->flags |= XFSMNT_ATTR2;
 		} else if (!strcmp(this_char, MNTOPT_NOATTR2)) {
 			args->flags &= ~XFSMNT_ATTR2;
-#ifndef CONFIG_INOXID_NONE
+#ifndef CONFIG_TAGGING_NONE
+		} else if (!strcmp(this_char, MNTOPT_TAGGED)) {
+			args->flags2 |= XFSMNT2_TAGGED;
+		} else if (!strcmp(this_char, MNTOPT_NOTAGTAG)) {
+			args->flags2 &= ~XFSMNT2_TAGGED;
 		} else if (!strcmp(this_char, MNTOPT_TAGXID)) {
-			args->flags2 |= XFSMNT2_TAGXID;
+			args->flags2 |= XFSMNT2_TAGGED;
+#endif
+#ifdef CONFIG_PROPAGATE
+		} else if (!strcmp(this_char, MNTOPT_TAGGED)) {
+			/* use value */
+			args->flags2 |= XFSMNT2_TAGGED;
 #endif
 		} else if (!strcmp(this_char, "osyncisdsync")) {
 			/* no-op, this is now the default */

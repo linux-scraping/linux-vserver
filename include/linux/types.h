@@ -38,6 +38,7 @@ typedef __kernel_uid16_t        uid16_t;
 typedef __kernel_gid16_t        gid16_t;
 typedef unsigned int		xid_t;
 typedef unsigned int		nid_t;
+typedef unsigned int		tag_t;
 
 #ifdef CONFIG_UID16
 /* This is defined by include/asm-{arch}/posix_types.h */

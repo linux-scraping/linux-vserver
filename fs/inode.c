@@ -118,7 +118,7 @@ static struct inode *alloc_inode(struct super_block *sb)
 		inode->i_sb = sb;
 
 		/* essential because of inode slab reuse */
-		inode->i_xid = 0;
+		inode->i_tag = 0;
 		inode->i_blkbits = sb->s_blocksize_bits;
 		inode->i_flags = 0;
 		atomic_set(&inode->i_count, 1);

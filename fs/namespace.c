@@ -24,7 +24,7 @@
 #include <linux/security.h>
 #include <linux/mount.h>
 #include <linux/vserver/namespace.h>
-#include <linux/vserver/xid.h>
+#include <linux/vserver/tag.h>
 #include <asm/uaccess.h>
 #include <asm/unistd.h>
 #include "pnode.h"
@@ -243,7 +243,7 @@ static struct vfsmount *clone_mnt(struct vfsmount *old, struct dentry *root,
 		mnt->mnt_root = dget(root);
 		mnt->mnt_mountpoint = mnt->mnt_root;
 		mnt->mnt_parent = mnt;
-		mnt->mnt_xid = old->mnt_xid;
+		mnt->mnt_tag = old->mnt_tag;
 
 		if (flag & CL_SLAVE) {
 			list_add(&mnt->mnt_slave, &old->mnt_slave_list);
@@ -392,7 +392,7 @@ static int show_vfsmnt(struct seq_file *m, void *v)
 		{ MS_SYNCHRONOUS, 0, ",sync", NULL },
 		{ MS_DIRSYNC, 0, ",dirsync", NULL },
 		{ MS_MANDLOCK, 0, ",mand", NULL },
-		{ MS_TAGXID, 0, ",tagxid", NULL },
+		{ MS_TAGGED, 0, ",tag", NULL },
 		{ MS_NOATIME, MNT_NOATIME, ",noatime", NULL },
 		{ MS_NODIRATIME, MNT_NODIRATIME, ",nodiratime", NULL },
 		{ 0, MNT_NOSUID, ",nosuid", NULL },
@@ -429,8 +429,8 @@ static int show_vfsmnt(struct seq_file *m, void *v)
 				seq_puts(m, p->unset_str);
 		}
 	}
-	if (mnt->mnt_flags & MNT_XID)
-		seq_printf(m, ",xid=%d", mnt->mnt_xid);
+	if (mnt->mnt_flags & MNT_TAGID)
+		seq_printf(m, ",tag=%d", mnt->mnt_tag);
 	if (mnt->mnt_sb->s_op->show_options)
 		err = mnt->mnt_sb->s_op->show_options(m, mnt);
 	seq_puts(m, " 0 0\n");
@@ -931,7 +931,7 @@ static int do_change_type(struct nameidata *nd, int flag)
 /*
  * do loopback mount.
  */
-static int do_loopback(struct nameidata *nd, char *old_name, xid_t xid,
+static int do_loopback(struct nameidata *nd, char *old_name, tag_t tag,
 	unsigned long flags, int mnt_flags)
 {
 	struct nameidata old_nd;
@@ -964,9 +964,9 @@ static int do_loopback(struct nameidata *nd, char *old_name, xid_t xid,
 		goto out;
 
 	mnt->mnt_flags = mnt_flags;
-	if (flags & MS_XID) {
-		mnt->mnt_xid = xid;
-		mnt->mnt_flags |= MNT_XID;
+	if (flags & MS_TAGID) {
+		mnt->mnt_tag = tag;
+		mnt->mnt_flags |= MNT_TAGID;
 	}
 
 	err = graft_tree(mnt, nd);
@@ -1348,7 +1348,7 @@ long do_mount(char *dev_name, char *dir_name, char *type_page,
 	struct nameidata nd;
 	int retval = 0;
 	int mnt_flags = 0;
-	xid_t xid = 0;
+	tag_t tag = 0;
 
 	/* Discard magic */
 	if ((flags & MS_MGC_MSK) == MS_MGC_VAL)
@@ -1364,13 +1364,13 @@ long do_mount(char *dev_name, char *dir_name, char *type_page,
 	if (data_page)
 		((char *)data_page)[PAGE_SIZE - 1] = 0;
 
-#ifdef	CONFIG_XID_PROPAGATE
-	retval = vx_parse_xid(data_page, &xid, 1);
+#ifdef	CONFIG_PROPAGATE
+	retval = dx_parse_tag(data_page, &tag, 1);
 	if (retval) {
-		mnt_flags |= MNT_XID;
-		/* bind and re-mounts get xid flag */
+		mnt_flags |= MNT_TAGID;
+		/* bind and re-mounts get the tag flag */
 		if (flags & (MS_BIND|MS_REMOUNT))
-			flags |= MS_XID;
+			flags |= MS_TAGID;
 	}
 #endif
 
@@ -1402,9 +1402,9 @@ long do_mount(char *dev_name, char *dir_name, char *type_page,
 
 	if (flags & MS_REMOUNT)
 		retval = do_remount(&nd, flags & ~MS_REMOUNT, mnt_flags,
-				    data_page, xid);
+				    data_page, tag);
 	else if (flags & MS_BIND)
-		retval = do_loopback(&nd, dev_name, xid, flags, mnt_flags);
+		retval = do_loopback(&nd, dev_name, tag, flags, mnt_flags);
 	else if (flags & (MS_SHARED | MS_PRIVATE | MS_SLAVE | MS_UNBINDABLE))
 		retval = do_change_type(&nd, flags);
 	else if (flags & MS_MOVE)

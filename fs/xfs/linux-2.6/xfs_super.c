@@ -161,7 +161,7 @@ xfs_revalidate_inode(
 	inode->i_nlink	= ip->i_d.di_nlink;
 	inode->i_uid	= ip->i_d.di_uid;
 	inode->i_gid	= ip->i_d.di_gid;
-	inode->i_xid	= ip->i_d.di_xid;
+	inode->i_tag	= ip->i_d.di_tag;
 
 	switch (inode->i_mode & S_IFMT) {
 	case S_IFBLK:
@@ -738,9 +738,9 @@ linvfs_remount(
 	int			error;
 
 	VFS_PARSEARGS(vfsp, options, args, 1, error);
-	if ((args->flags2 & XFSMNT2_TAGXID) &&
-		!(sb->s_flags & MS_TAGXID)) {
-		printk("XFS: %s: tagxid not permitted on remount.\n",
+	if ((args->flags2 & XFSMNT2_TAGGED) &&
+		!(sb->s_flags & MS_TAGGED)) {
+		printk("XFS: %s: tagging not permitted on remount.\n",
 			sb->s_id);
 		error = EINVAL;
 	}

@@ -29,7 +29,7 @@
 #define MNT_SHARED	0x1000	/* if the vfsmount is a shared mount */
 #define MNT_UNBINDABLE	0x2000	/* if the vfsmount is a unbindable mount */
 #define MNT_PNODE_MASK	0x3000	/* propogation flag mask */
-#define	MNT_XID		0x8000
+#define MNT_TAGID		0x8000
 
 struct vfsmount {
 	struct list_head mnt_hash;
@@ -51,7 +51,7 @@ struct vfsmount {
 	struct vfsmount *mnt_master;	/* slave is on master->mnt_slave_list */
 	struct namespace *mnt_namespace; /* containing namespace */
 	int mnt_pinned;
-	xid_t mnt_xid;			/* xid tagging used for vfsmount */
+	tag_t mnt_tag;			/* tagging used for vfsmount */
 };
 
 static inline struct vfsmount *mntget(struct vfsmount *mnt)

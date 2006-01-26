@@ -18,6 +18,7 @@
 #include <linux/compat.h>
 #include <linux/vserver/switch.h>
 #include <linux/vs_context.h>
+#include <linux/vs_tag.h>
 #include <linux/vs_dlimit.h>
 #include <linux/vserver/dlimit_cmd.h>
 
@@ -29,12 +30,12 @@
 	* allocate an initialized dl_info struct
 	* doesn't make it visible (hash)			*/
 
-static struct dl_info *__alloc_dl_info(struct super_block *sb, xid_t xid)
+static struct dl_info *__alloc_dl_info(struct super_block *sb, tag_t tag)
 {
 	struct dl_info *new = NULL;
 
 	vxdprintk(VXD_CBIT(dlim, 5),
-		"alloc_dl_info(%p,%d)*", sb, xid);
+		"alloc_dl_info(%p,%d)*", sb, tag);
 
 	/* would this benefit from a slab cache? */
 	new = kmalloc(sizeof(struct dl_info), GFP_KERNEL);
@@ -42,7 +43,7 @@ static struct dl_info *__alloc_dl_info(struct super_block *sb, xid_t xid)
 		return 0;
 
 	memset (new, 0, sizeof(struct dl_info));
-	new->dl_xid = xid;
+	new->dl_tag = tag;
 	new->dl_sb = sb;
 	INIT_RCU_HEAD(&new->dl_rcu);
 	INIT_HLIST_NODE(&new->dl_hlist);
@@ -53,7 +54,7 @@ static struct dl_info *__alloc_dl_info(struct super_block *sb, xid_t xid)
 	/* rest of init goes here */
 
 	vxdprintk(VXD_CBIT(dlim, 4),
-		"alloc_dl_info(%p,%d) = %p", sb, xid, new);
+		"alloc_dl_info(%p,%d) = %p", sb, tag, new);
 	return new;
 }
 
@@ -67,7 +68,7 @@ static void __dealloc_dl_info(struct dl_info *dli)
 		"dealloc_dl_info(%p)", dli);
 
 	dli->dl_hlist.next = LIST_POISON1;
-	dli->dl_xid = -1;
+	dli->dl_tag = -1;
 	dli->dl_sb = 0;
 
 	BUG_ON(atomic_read(&dli->dl_usecnt));
@@ -103,9 +104,9 @@ static inline void __hash_dl_info(struct dl_info *dli)
 	struct hlist_head *head;
 
 	vxdprintk(VXD_CBIT(dlim, 6),
-		"__hash_dl_info: %p[#%d]", dli, dli->dl_xid);
+		"__hash_dl_info: %p[#%d]", dli, dli->dl_tag);
 	get_dl_info(dli);
-	head = &dl_info_hash[__hashval(dli->dl_sb, dli->dl_xid)];
+	head = &dl_info_hash[__hashval(dli->dl_sb, dli->dl_tag)];
 	hlist_add_head_rcu(&dli->dl_hlist, head);
 }
 
@@ -117,7 +118,7 @@ static inline void __hash_dl_info(struct dl_info *dli)
 static inline void __unhash_dl_info(struct dl_info *dli)
 {
 	vxdprintk(VXD_CBIT(dlim, 6),
-		"__unhash_dl_info: %p[#%d]", dli, dli->dl_xid);
+		"__unhash_dl_info: %p[#%d]", dli, dli->dl_tag);
 	hlist_del_rcu(&dli->dl_hlist);
 	put_dl_info(dli);
 }
@@ -128,9 +129,9 @@ static inline void __unhash_dl_info(struct dl_info *dli)
 	* requires the rcu_read_lock()
 	* doesn't increment the dl_refcnt			*/
 
-static inline struct dl_info *__lookup_dl_info(struct super_block *sb, xid_t xid)
+static inline struct dl_info *__lookup_dl_info(struct super_block *sb, tag_t tag)
 {
-	struct hlist_head *head = &dl_info_hash[__hashval(sb, xid)];
+	struct hlist_head *head = &dl_info_hash[__hashval(sb, tag)];
 	struct hlist_node *pos;
 	struct dl_info *dli;
 
@@ -139,7 +140,7 @@ static inline struct dl_info *__lookup_dl_info(struct super_block *sb, xid_t xid
 //		struct dl_info *dli =
 //			hlist_entry(pos, struct dl_info, dl_hlist);
 
-		if (dli->dl_xid == xid && dli->dl_sb == sb) {
+		if (dli->dl_tag == tag && dli->dl_sb == sb) {
 			return dli;
 		}
 	}
@@ -484,7 +485,7 @@ void vx_vsi_statfs(struct super_block *sb, struct kstatfs *buf)
 	__u64 blimit, bfree, bavail;
 	__u32 ifree;
 
-	dli = locate_dl_info(sb, vx_current_xid());
+	dli = locate_dl_info(sb, dx_current_tag());
 	if (!dli)
 		return;
 

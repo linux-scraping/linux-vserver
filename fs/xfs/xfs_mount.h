@@ -412,7 +412,7 @@ typedef struct xfs_mount {
 #define XFS_MOUNT_COMPAT_IOSIZE	(1ULL << 22)	/* don't report large preferred
 						 * I/O size in stat() */
 
-#define XFS_MOUNT_TAGXID	(1ULL << 31)	/* context xid tagging */
+#define XFS_MOUNT_TAGGED	(1ULL << 31)	/* context tagging */
 
 /*
  * Default minimum read and write sizes.
