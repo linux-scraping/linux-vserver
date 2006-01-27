@@ -1,6 +1,7 @@
 #ifndef _VX_LIMIT_INT_H
 #define _VX_LIMIT_INT_H
 
+
 #ifdef	__KERNEL__
 
 #define VXD_RLIMIT_COND(r)	VXD_CBIT(limit, (r))

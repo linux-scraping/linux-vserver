@@ -1,9 +1,8 @@
 #ifndef _DX_TAG_H
 #define _DX_TAG_H
 
-#ifndef CONFIG_VSERVER
-#warning config options missing
-#endif
+#include <linux/config.h>
+
 
 #define DX_TAG(in)	(IS_TAGGED(in))
 

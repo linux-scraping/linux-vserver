@@ -1,7 +1,6 @@
 #ifndef _NX_VS_NETWORK_H
 #define _NX_VS_NETWORK_H
 
-
 #include "vserver/network.h"
 #include "vserver/debug.h"
 

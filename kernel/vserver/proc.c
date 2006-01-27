@@ -15,7 +15,6 @@
  *
  */
 
-#include <linux/config.h>
 #include <linux/errno.h>
 #include <linux/proc_fs.h>
 #include <linux/sched.h>

@@ -9,7 +9,6 @@
  *
  */
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/vs_context.h>
 #include <linux/vs_limit.h>
