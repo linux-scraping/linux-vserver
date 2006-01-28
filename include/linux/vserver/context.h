@@ -6,7 +6,12 @@
 
 
 #define MAX_S_CONTEXT	65535	/* Arbitrary limit */
+
+#ifdef	CONFIG_VSERVER_DYNAMIC_IDS
 #define MIN_D_CONTEXT	49152	/* dynamic contexts start here */
+#else
+#define MIN_D_CONTEXT	65536
+#endif
 
 #define VX_DYNAMIC_ID	((uint32_t)-1)		/* id for dynamic context */
 
@@ -37,7 +42,9 @@
 #define VXF_STATE_SETUP		(1ULL<<32)
 #define VXF_STATE_INIT		(1ULL<<33)
 
-#define VXF_STATE_HELPER	(1ULL<<36)
+#define VXF_SC_HELPER		(1ULL<<36)
+#define VXF_REBOOT_KILL		(1ULL<<37)
+#define VXF_PERSISTANT		(1ULL<<38)
 
 #define VXF_FORK_RSS		(1ULL<<48)
 #define VXF_PROLIFIC		(1ULL<<49)
@@ -87,6 +94,11 @@ enum {
 #include "sched_def.h"
 #include "cvirt_def.h"
 
+struct _vx_info_pc {
+	struct _vx_sched_pc sched_pc;
+	struct _vx_cvirt_pc cvirt_pc;
+};
+
 struct vx_info {
 	struct hlist_node vx_hlist;		/* linked list of contexts */
 	xid_t vx_id;				/* context id */
@@ -110,7 +122,29 @@ struct vx_info {
 	struct _vx_cvirt cvirt;			/* virtual/bias stuff */
 	struct _vx_cacct cacct;			/* context accounting */
 
+#ifndef CONFIG_SMP
+	struct _vx_info_pc info_pc;		/* per cpu data */
+#else
+	struct _vx_info_pc *ptr_pc;		/* per cpu array */
+#endif
+
 	char vx_name[65];			/* vserver name */
+};
+
+#ifndef CONFIG_SMP
+#define	vx_ptr_pc(vxi)		(&(vxi)->info_pc)
+#define	vx_per_cpu(vxi, v, id)	per_cpu_ptr(vx_ptr_pc(vxi), id)->v
+#else
+#define	vx_ptr_pc(vxi)		((vxi)->ptr_pc)
+#define	vx_per_cpu(vxi, v, id)	per_cpu_ptr(vx_ptr_pc(vxi), id)->v
+#endif
+
+#define	vx_cpu(vxi, v)		vx_per_cpu(vxi, v, smp_processor_id())
+
+
+struct vx_info_save {
+	struct vx_info *vxi;
+	xid_t xid;
 };
 
 
@@ -118,7 +152,6 @@ struct vx_info {
 
 #define VXS_HASHED	0x0001
 #define VXS_PAUSED	0x0010
-#define VXS_ONHOLD	0x0020
 #define VXS_SHUTDOWN	0x0100
 #define VXS_RELEASED	0x8000
 
@@ -145,8 +178,8 @@ struct vx_info {
 extern void claim_vx_info(struct vx_info *, struct task_struct *);
 extern void release_vx_info(struct vx_info *, struct task_struct *);
 
-extern struct vx_info *locate_vx_info(int);
-extern struct vx_info *locate_or_create_vx_info(int);
+extern struct vx_info *lookup_vx_info(int);
+extern struct vx_info *lookup_or_create_vx_info(int);
 
 extern int get_xid_list(int, unsigned int *, int);
 extern int xid_is_hashed(xid_t);

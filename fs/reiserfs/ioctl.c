@@ -3,7 +3,6 @@
  */
 
 #include <linux/fs.h>
-#include <linux/mount.h>
 #include <linux/reiserfs_fs.h>
 #include <linux/time.h>
 #include <asm/uaccess.h>
@@ -50,7 +49,6 @@ int reiserfs_ioctl(struct inode *inode, struct file *filp, unsigned int cmd,
 
 			if (IS_RDONLY(inode) ||
 				(filp && MNT_IS_RDONLY(filp->f_vfsmnt)))
-				return -EROFS;
 
 			if ((current->fsuid != inode->i_uid)
 			    && !capable(CAP_FOWNER))

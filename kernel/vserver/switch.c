@@ -108,6 +108,8 @@ long do_vserver(uint32_t cmd, uint32_t id, void __user *data, int compat)
 	case VCMD_nx_info:
 		return vc_nx_info(id, data);
 
+	case VCMD_set_namespace_v0:
+		return vc_set_namespace(-1, data);
 	case VCMD_set_namespace:
 		return vc_set_namespace(id, data);
 	case VCMD_cleanup_namespace:
@@ -161,9 +163,13 @@ long do_vserver(uint32_t cmd, uint32_t id, void __user *data, int compat)
 	case VCMD_get_ncaps:
 		return vc_get_ncaps(id, data);
 
+#ifdef	CONFIG_VSERVER_LEGACY
 	case VCMD_set_sched_v2:
 		return vc_set_sched_v2(id, data);
-	/* this is version 3 */
+#endif
+	case VCMD_set_sched_v3:
+		return vc_set_sched_v3(id, data);
+	/* this is version 4 */
 	case VCMD_set_sched:
 		return vc_set_sched(id, data);
 

@@ -2,9 +2,6 @@
 #include <linux/config.h>
 
 
-#include <linux/config.h>
-
-
 extern uint64_t vx_idle_jiffies(void);
 
 static inline void vx_info_init_cvirt(struct _vx_cvirt *cvirt)
@@ -33,14 +30,20 @@ static inline void vx_info_init_cvirt(struct _vx_cvirt *cvirt)
 	cvirt->load[0] = 0;
 	cvirt->load[1] = 0;
 	cvirt->load[2] = 0;
-
 	atomic_set(&cvirt->total_forks, 0);
+
 	spin_lock_init(&cvirt->syslog.logbuf_lock);
 	init_waitqueue_head(&cvirt->syslog.log_wait);
 	cvirt->syslog.log_start = 0;
 	cvirt->syslog.log_end = 0;
 	cvirt->syslog.con_start = 0;
 	cvirt->syslog.logged_chars = 0;
+}
+
+static inline
+void vx_info_init_cvirt_pc(struct _vx_cvirt_pc *cvirt_pc, int cpu)
+{
+	// cvirt_pc->cpustat = { 0 };
 }
 
 static inline void vx_info_exit_cvirt(struct _vx_cvirt *cvirt)
@@ -64,9 +67,17 @@ static inline void vx_info_exit_cvirt(struct _vx_cvirt *cvirt)
 	return;
 }
 
+static inline
+void vx_info_exit_cvirt_pc(struct _vx_cvirt_pc *cvirt_pc, int cpu)
+{
+	return;
+}
+
+
 static inline void vx_info_init_cacct(struct _vx_cacct *cacct)
 {
 	int i,j;
+
 
 	for (i=0; i<5; i++) {
 		for (j=0; j<3; j++) {
@@ -74,6 +85,11 @@ static inline void vx_info_init_cacct(struct _vx_cacct *cacct)
 			atomic_set(&cacct->sock[i][j].total, 0);
 		}
 	}
+	for (i=0; i<8; i++)
+		atomic_set(&cacct->slab[i], 0);
+	for (i=0; i<5; i++)
+		for (j=0; j<4; j++)
+			atomic_set(&cacct->page[i][j], 0);
 }
 
 static inline void vx_info_exit_cacct(struct _vx_cacct *cacct)

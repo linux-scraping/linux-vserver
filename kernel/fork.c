@@ -219,6 +219,7 @@ static inline int dup_mmap(struct mm_struct *mm, struct mm_struct *oldmm)
 		if (mpnt->vm_flags & VM_DONTCOPY) {
 			long pages = vma_pages(mpnt);
 			vx_vmpages_sub(mm, pages);
+			// mm->total_vm -= pages;
 			vm_stat_account(mm, mpnt->vm_flags, mpnt->vm_file,
 								-pages);
 			continue;
@@ -1287,6 +1288,14 @@ long do_fork(unsigned long clone_flags,
 
 	if (pid < 0)
 		return -EAGAIN;
+
+	/* kernel threads are host only */
+	if ((clone_flags & CLONE_KTHREAD) && !vx_check(0, VX_ADMIN)) {
+		vxwprintk(1, "xid=%d tried to spawn a kernel thread.",
+			vx_current_xid());
+		return -EPERM;
+	}
+
 	if (unlikely(current->ptrace)) {
 		trace = fork_traceflag (clone_flags);
 		if (trace)

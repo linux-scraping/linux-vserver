@@ -238,8 +238,6 @@ static struct sock *__unix_find_socket_byname(struct sockaddr_un *sunname,
 	sk_for_each(s, node, &unix_socket_table[hash ^ type]) {
 		struct unix_sock *u = unix_sk(s);
 
-		if (!vx_check(s->sk_xid, VX_IDENT|VX_WATCH))
-			continue;
 		if (u->addr->len == len &&
 		    !memcmp(u->addr->name, sunname, len))
 			goto found;

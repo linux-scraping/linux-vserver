@@ -622,7 +622,7 @@ static int do_umount(struct vfsmount *mnt, int flags)
 		down_write(&sb->s_umount);
 		if (!(sb->s_flags & MS_RDONLY)) {
 			lock_kernel();
-			DQUOT_OFF(sb);
+			DQUOT_OFF(sb->s_dqh);
 			retval = do_remount_sb(sb, MS_RDONLY, NULL, 0);
 			unlock_kernel();
 		}
@@ -1358,6 +1358,7 @@ long do_mount(char *dev_name, char *dir_name, char *type_page,
 	if (data_page)
 		((char *)data_page)[PAGE_SIZE - 1] = 0;
 
+#ifdef	CONFIG_XID_PROPAGATE
 	retval = vx_parse_xid(data_page, &xid, 1);
 	if (retval) {
 		mnt_flags |= MNT_XID;
@@ -1365,6 +1366,7 @@ long do_mount(char *dev_name, char *dir_name, char *type_page,
 		if (flags & (MS_BIND|MS_REMOUNT))
 			flags |= MS_XID;
 	}
+#endif
 
 	/* Separate the per-mountpoint flags */
 	if (flags & MS_RDONLY)

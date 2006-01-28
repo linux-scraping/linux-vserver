@@ -36,7 +36,7 @@ struct _vx_syslog {
 /* context sub struct */
 
 struct _vx_cvirt {
-	int max_threads;		/* maximum allowed threads */
+//	int max_threads;		/* maximum allowed threads */
 	atomic_t nr_threads;		/* number of current threads */
 	atomic_t nr_running;		/* number of running threads */
 	atomic_t nr_uninterruptible;	/* number of uninterruptible threads */
@@ -57,10 +57,30 @@ struct _vx_cvirt {
 
 	atomic_t total_forks;		/* number of forks so far */
 
-	struct _vx_usage_stat cpustat[NR_CPUS];
-
 	struct _vx_syslog syslog;
 };
+
+struct _vx_cvirt_pc {
+	struct _vx_usage_stat cpustat;
+};
+
+
+#ifdef CONFIG_VSERVER_DEBUG
+
+static inline void __dump_vx_cvirt(struct _vx_cvirt *cvirt)
+{
+	printk("\t_vx_cvirt:\n");
+	printk("\t threads: %4d, %4d, %4d, %4d\n",
+		atomic_read(&cvirt->nr_threads),
+		atomic_read(&cvirt->nr_running),
+		atomic_read(&cvirt->nr_uninterruptible),
+		atomic_read(&cvirt->nr_onhold));
+	/* add rest here */
+	printk("\t total_forks = %d\n", atomic_read(&cvirt->total_forks));
+}
+
+#endif
+
 
 struct _vx_sock_acc {
 	atomic_t count;
@@ -70,9 +90,31 @@ struct _vx_sock_acc {
 /* context sub struct */
 
 struct _vx_cacct {
-	unsigned long total_forks;
-
 	struct _vx_sock_acc sock[5][3];
+	atomic_t slab[8];
+	atomic_t page[6][8];
 };
+
+#ifdef CONFIG_VSERVER_DEBUG
+
+static inline void __dump_vx_cacct(struct _vx_cacct *cacct)
+{
+	int i,j;
+
+	printk("\t_vx_cacct:");
+	for (i=0; i<5; i++) {
+		struct _vx_sock_acc *ptr = cacct->sock[i];
+
+		printk("\t [%d] =", i);
+		for (j=0; j<3; j++) {
+			printk(" [%d] = %8d, %8d", j,
+				atomic_read(&ptr[j].count),
+				atomic_read(&ptr[j].total));
+		}
+		printk("\n");
+	}
+}
+
+#endif
 
 #endif	/* _VX_CVIRT_DEF_H */

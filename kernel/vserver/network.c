@@ -221,6 +221,7 @@ static struct nx_info * __create_nx_info(int id)
 
 	/* dynamic context requested */
 	if (id == NX_DYNAMIC_ID) {
+#ifdef	CONFIG_VSERVER_DYNAMIC_IDS
 		id = __nx_dynamic_id();
 		if (!id) {
 			printk(KERN_ERR "no dynamic context available.\n");
@@ -228,6 +229,11 @@ static struct nx_info * __create_nx_info(int id)
 			goto out_unlock;
 		}
 		new->nx_id = id;
+#else
+		printk(KERN_ERR "dynamic contexts disabled.\n");
+		nxi = ERR_PTR(-EINVAL);
+		goto out_unlock;
+#endif
 	}
 	/* static context requested */
 	else if ((nxi = __lookup_nx_info(id))) {
@@ -282,12 +288,12 @@ struct nx_info *create_nx_info(void)
 
 #endif
 
-/*	locate_nx_info()
+/*	lookup_nx_info()
 
 	* search for a nx_info and get() it
 	* negative id means current				*/
 
-struct nx_info *locate_nx_info(int id)
+struct nx_info *lookup_nx_info(int id)
 {
 	struct nx_info *nxi = NULL;
 
@@ -318,9 +324,22 @@ int nid_is_hashed(nid_t nid)
 
 #ifdef	CONFIG_PROC_FS
 
+/*	get_nid_list()
+
+	* get a subset of hashed nids for proc
+	* assumes size is at least one				*/
+
 int get_nid_list(int index, unsigned int *nids, int size)
 {
 	int hindex, nr_nids = 0;
+
+	/* only show current and children */
+	if (!nx_check(0, VX_ADMIN|VX_WATCH)) {
+		if (index > 0)
+			return 0;
+		nids[nr_nids] = nx_current_nid();
+		return 1;
+	}
 
 	for (hindex = 0; hindex < NX_HASH_SIZE; hindex++) {
 		struct hlist_head *head = &nx_info_hash[hindex];
@@ -484,6 +503,17 @@ int nx_addr_conflict(struct nx_info *nxi, uint32_t addr, struct sock *sk)
 	}
 }
 
+void nx_set_persistant(struct nx_info *nxi)
+{
+	if (nx_info_flags(nxi, NXF_PERSISTANT, 0)) {
+		get_nx_info(nxi);
+		claim_nx_info(nxi, current);
+	} else {
+		release_nx_info(nxi, current);
+		put_nx_info(nxi);
+	}
+}
+
 
 /* vserver syscall commands below here */
 
@@ -508,7 +538,7 @@ int vc_task_nid(uint32_t id, void __user *data)
 		read_unlock(&tasklist_lock);
 	}
 	else
-		nid = current->nid;
+		nid = nx_current_nid();
 	return nid;
 }
 
@@ -523,7 +553,7 @@ int vc_nx_info(uint32_t id, void __user *data)
 	if (!capable(CAP_SYS_ADMIN) || !capable(CAP_SYS_RESOURCE))
 		return -EPERM;
 
-	nxi = locate_nx_info(id);
+	nxi = lookup_nx_info(id);
 	if (!nxi)
 		return -ESRCH;
 
@@ -561,6 +591,10 @@ int vc_net_create(uint32_t nid, void __user *data)
 	/* initial flags */
 	new_nxi->nx_flags = vc_data.flagword;
 
+	/* get a reference for persistant contexts */
+	if ((vc_data.flagword & NXF_PERSISTANT))
+		nx_set_persistant(new_nxi);
+
 	vs_net_change(new_nxi, VSC_NETUP);
 	ret = new_nxi->nx_id;
 	nx_migrate_task(current, new_nxi);
@@ -577,7 +611,7 @@ int vc_net_migrate(uint32_t id, void __user *data)
 	if (!capable(CAP_SYS_ADMIN))
 		return -EPERM;
 
-	nxi = locate_nx_info(id);
+	nxi = lookup_nx_info(id);
 	if (!nxi)
 		return -ESRCH;
 	nx_migrate_task(current, nxi);
@@ -606,7 +640,7 @@ int vc_net_add(uint32_t nid, void __user *data)
 		break;
 	}
 
-	nxi = locate_nx_info(nid);
+	nxi = lookup_nx_info(nid);
 	if (!nxi)
 		return -ESRCH;
 
@@ -648,7 +682,7 @@ int vc_net_remove(uint32_t nid, void __user *data)
 	if (data && copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
-	nxi = locate_nx_info(nid);
+	nxi = lookup_nx_info(nid);
 	if (!nxi)
 		return -ESRCH;
 
@@ -674,7 +708,7 @@ int vc_get_nflags(uint32_t id, void __user *data)
 	if (!capable(CAP_SYS_ADMIN))
 		return -EPERM;
 
-	nxi = locate_nx_info(id);
+	nxi = lookup_nx_info(id);
 	if (!nxi)
 		return -ESRCH;
 
@@ -701,7 +735,7 @@ int vc_set_nflags(uint32_t id, void __user *data)
 	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
-	nxi = locate_nx_info(id);
+	nxi = lookup_nx_info(id);
 	if (!nxi)
 		return -ESRCH;
 
@@ -711,6 +745,9 @@ int vc_set_nflags(uint32_t id, void __user *data)
 
 	nxi->nx_flags = vx_mask_flags(nxi->nx_flags,
 		vc_data.flagword, mask);
+	if (trigger & NXF_PERSISTANT)
+		nx_set_persistant(nxi);
+
 	put_nx_info(nxi);
 	return 0;
 }
@@ -723,7 +760,7 @@ int vc_get_ncaps(uint32_t id, void __user *data)
 	if (!capable(CAP_SYS_ADMIN))
 		return -EPERM;
 
-	nxi = locate_nx_info(id);
+	nxi = lookup_nx_info(id);
 	if (!nxi)
 		return -ESRCH;
 
@@ -746,7 +783,7 @@ int vc_set_ncaps(uint32_t id, void __user *data)
 	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
-	nxi = locate_nx_info(id);
+	nxi = lookup_nx_info(id);
 	if (!nxi)
 		return -ESRCH;
 

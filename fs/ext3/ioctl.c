@@ -8,7 +8,6 @@
  */
 
 #include <linux/fs.h>
-#include <linux/mount.h>
 #include <linux/jbd.h>
 #include <linux/ext3_fs.h>
 #include <linux/ext3_jbd.h>

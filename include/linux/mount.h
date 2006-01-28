@@ -20,13 +20,14 @@
 #define MNT_NOSUID	0x01
 #define MNT_NODEV	0x02
 #define MNT_NOEXEC	0x04
-#define MNT_RDONLY	0x08
 #define MNT_SHARED	0x10	/* if the vfsmount is a shared mount */
 #define MNT_UNBINDABLE	0x20	/* if the vfsmount is a unbindable mount */
 #define MNT_PNODE_MASK	0x30	/* propogation flag mask */
-#define MNT_NOATIME	0x40
-#define MNT_NODIRATIME	0x80
-#define MNT_XID		0x100
+
+#define MNT_RDONLY	0x100
+#define MNT_NOATIME	0x200
+#define MNT_NODIRATIME	0x400
+#define MNT_XID		0x800
 
 struct vfsmount {
 	struct list_head mnt_hash;

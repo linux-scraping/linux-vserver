@@ -47,11 +47,6 @@ static void exit_mm(struct task_struct * tsk);
 static void __unhash_process(struct task_struct *p)
 {
 	nr_threads--;
-	/* tasklist_lock is held */
-	if (p->vx_info) {
-		atomic_dec(&p->vx_info->cvirt.nr_threads);
-		vx_nproc_dec(p);
-	}
 	detach_pid(p, PIDTYPE_PID);
 	detach_pid(p, PIDTYPE_TGID);
 	if (thread_group_leader(p)) {
@@ -113,10 +108,6 @@ repeat:
 	spin_unlock(&p->proc_lock);
 	proc_pid_flush(proc_dentry);
 	release_thread(p);
-	if (p->vx_info)
-		release_vx_info(p->vx_info, p);
-	if (p->nx_info)
-		release_nx_info(p->nx_info, p);
 	put_task_struct(p);
 
 	p = leader;
@@ -866,6 +857,8 @@ fastcall NORET_TYPE void do_exit(long code)
 	__exit_files(tsk);
 	__exit_fs(tsk);
 	exit_namespace(tsk);
+	exit_vx_info(tsk);
+	exit_nx_info(tsk);
 	exit_thread();
 	cpuset_exit(tsk);
 	exit_keys(tsk);

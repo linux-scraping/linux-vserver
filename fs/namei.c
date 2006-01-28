@@ -1482,6 +1482,10 @@ int may_open(struct nameidata *nd, int acc_mode, int flag)
 	if (S_ISDIR(inode->i_mode) && (flag & FMODE_WRITE))
 		return -EISDIR;
 
+#ifdef	CONFIG_VSERVER_COWBL
+	if (IS_COW_LINK(inode) && (flag & FMODE_WRITE))
+		return -EMLINK;
+#endif
 	error = vfs_permission(nd, acc_mode);
 	if (error)
 		return error;
@@ -1547,6 +1551,8 @@ int may_open(struct nameidata *nd, int acc_mode, int flag)
 	return 0;
 }
 
+int cow_break_link(struct dentry *dentry, const char *pathname);
+
 /*
  *	open_namei()
  *
@@ -1568,6 +1574,11 @@ int open_namei(const char * pathname, int flag, int mode, struct nameidata *nd)
 	struct dentry *dir;
 	int count = 0;
 
+#ifdef	CONFIG_VSERVER_COWBL
+	int rflag = flag;
+	int rmode = mode;
+restart:
+#endif
 	acc_mode = ACC_MODE(flag);
 
 	/* O_TRUNC implies we need access checks for write permissions */
@@ -1660,6 +1671,18 @@ do_last:
 		goto exit;
 ok:
 	error = may_open(nd, acc_mode, flag);
+#ifdef	CONFIG_VSERVER_COWBL
+	if (error == -EMLINK) {
+		error = cow_break_link(path.dentry, pathname);
+		if (error)
+			goto exit;
+		path_release(nd);
+		vxdprintk(VXD_CBIT(misc, 2), "restarting open_namei() ...");
+		flag = rflag;
+		mode = rmode;
+		goto restart;
+	}
+#endif
 	if (error)
 		goto exit;
 	return 0;
@@ -2508,6 +2531,124 @@ int vfs_follow_link(struct nameidata *nd, const char *link)
 {
 	return __vfs_follow_link(nd, link);
 }
+
+
+#ifdef	CONFIG_VSERVER_COWBL
+
+#include <linux/file.h>
+
+int cow_break_link(struct dentry *dentry, const char *pathname)
+{
+	int err = -EMLINK;
+	int ret, mode, pathlen;
+	struct nameidata old_nd, dir_nd;
+	struct dentry *old_dentry, *new_dentry;
+	struct vfsmount *old_mnt, *new_mnt;
+	struct file *old_file;
+	struct file *new_file;
+	char *to, *path, pad='\251';
+	loff_t size;
+
+	vxdprintk(VXD_CBIT(misc, 2),
+		"cow_break_link(%p,»%s«)", dentry, pathname);
+	path = kmalloc(PATH_MAX, GFP_KERNEL);
+
+	ret = path_lookup(pathname, LOOKUP_FOLLOW, &old_nd);
+	vxdprintk(VXD_CBIT(misc, 2), "path_lookup(old): %d", ret);
+	old_dentry = old_nd.dentry;
+	old_mnt = old_nd.mnt;
+	mode = old_dentry->d_inode->i_mode;
+
+	to = d_path(old_dentry, old_mnt, path, PATH_MAX-2);
+	pathlen = strlen(to);
+	vxdprintk(VXD_CBIT(misc, 2), "old path »%s«", to);
+
+	to[pathlen+1] = 0;
+retry:
+	to[pathlen] = pad--;
+	if (pad <= '\240')
+		goto out_rel_old;
+
+	vxdprintk(VXD_CBIT(misc, 2), "temp copy »%s«", to);
+	ret = path_lookup(to,
+		LOOKUP_PARENT|LOOKUP_OPEN|LOOKUP_CREATE, &dir_nd);
+
+	/* this puppy downs the inode sem */
+	new_dentry = lookup_create(&dir_nd, 0);
+	vxdprintk(VXD_CBIT(misc, 2),
+		"lookup_create(new): %p", new_dentry);
+	if (!new_dentry) {
+		path_release(&dir_nd);
+		goto retry;
+	}
+
+	ret = vfs_create(dir_nd.dentry->d_inode, new_dentry, mode, &dir_nd);
+	vxdprintk(VXD_CBIT(misc, 2),
+		"vfs_create(new): %d", ret);
+	if (ret == -EEXIST) {
+		up(&dir_nd.dentry->d_inode->i_sem);
+		dput(new_dentry);
+		path_release(&dir_nd);
+		goto retry;
+	}
+
+	new_mnt = dir_nd.mnt;
+
+	dget(old_dentry);
+	mntget(old_mnt);
+	/* this one cleans up the dentry in case of failure */
+	old_file = dentry_open(old_dentry, old_mnt, O_RDONLY);
+	vxdprintk(VXD_CBIT(misc, 2),
+		"dentry_open(old): %p", old_file);
+	if (!old_file)
+		goto out_rel_both;
+
+	dget(new_dentry);
+	mntget(new_mnt);
+	/* this one cleans up the dentry in case of failure */
+	new_file = dentry_open(new_dentry, new_mnt, O_WRONLY);
+	vxdprintk(VXD_CBIT(misc, 2),
+		"dentry_open(new): %p", new_file);
+	if (!new_file)
+		goto out_fput_old;
+
+	size = i_size_read(old_file->f_dentry->d_inode);
+	ret = vfs_sendfile(new_file, old_file, NULL, size, 0);
+	vxdprintk(VXD_CBIT(misc, 2), "vfs_sendfile: %d", ret);
+
+	if (ret < 0)
+		goto out_fput_both;
+
+	ret = vfs_rename(dir_nd.dentry->d_inode, new_dentry,
+		old_nd.dentry->d_parent->d_inode, old_dentry);
+	vxdprintk(VXD_CBIT(misc, 2), "vfs_rename: %d", ret);
+	if (!ret)
+		err = 0;
+
+out_fput_both:
+	vxdprintk(VXD_CBIT(misc, 3),
+		"fput(new_file=%p[#%d])", new_file,
+		atomic_read(&new_file->f_count));
+	fput(new_file);
+
+out_fput_old:
+	vxdprintk(VXD_CBIT(misc, 3),
+		"fput(old_file=%p[#%d])", old_file,
+		atomic_read(&old_file->f_count));
+	fput(old_file);
+
+out_rel_both:
+	up(&dir_nd.dentry->d_inode->i_sem);
+	dput(new_dentry);
+
+	path_release(&dir_nd);
+out_rel_old:
+	path_release(&old_nd);
+	kfree(path);
+	return err;
+}
+
+#endif
 
 /* get the link contents into pagecache */
 static char *page_getlink(struct dentry * dentry, struct page **ppage)

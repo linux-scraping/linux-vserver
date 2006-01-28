@@ -17,7 +17,6 @@
 #include <linux/syscalls.h>
 #include <linux/module.h>
 #include <linux/fsnotify.h>
-#include <linux/mount.h>
 #include <asm/uaccess.h>
 
 /*
@@ -52,12 +51,12 @@ setxattr(struct dentry *d, char __user *name, void __user *value,
 		}
 	}
 
-	if (MNT_IS_RDONLY(mnt))
-		return -EROFS;
-
 	down(&d->d_inode->i_sem);
 	error = security_inode_setxattr(d, kname, kvalue, size, flags);
 	if (error)
+		goto out;
+	error = -EROFS;
+	if (MNT_IS_RDONLY(mnt))
 		goto out;
 	error = -EOPNOTSUPP;
 	if (d->d_inode->i_op && d->d_inode->i_op->setxattr) {
@@ -322,13 +321,13 @@ removexattr(struct dentry *d, char __user *name, struct vfsmount *mnt)
 	if (error < 0)
 		return error;
 
-	if (MNT_IS_RDONLY(mnt))
-		return -EROFS;
-
 	error = -EOPNOTSUPP;
 	if (d->d_inode->i_op && d->d_inode->i_op->removexattr) {
 		error = security_inode_removexattr(d, kname);
 		if (error)
+			goto out;
+		error = -EROFS;
+		if (MNT_IS_RDONLY(mnt))
 			goto out;
 		down(&d->d_inode->i_sem);
 		error = d->d_inode->i_op->removexattr(d, kname);

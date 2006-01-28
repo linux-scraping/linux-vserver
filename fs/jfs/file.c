@@ -111,6 +111,7 @@ struct file_operations jfs_file_operations = {
 	.readv		= generic_file_readv,
 	.writev		= generic_file_writev,
  	.sendfile	= generic_file_sendfile,
+	.sendpage	= generic_file_sendpage,
 	.fsync		= jfs_fsync,
 	.release	= jfs_release,
 };

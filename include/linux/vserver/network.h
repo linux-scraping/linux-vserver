@@ -15,7 +15,8 @@
 
 #define NXF_STATE_SETUP		(1ULL<<32)
 
-#define NXF_STATE_HELPER	(1ULL<<36)
+#define NXF_SC_HELPER		(1ULL<<36)
+#define NXF_PERSISTANT		(1ULL<<38)
 
 #define NXF_ONE_TIME		(0x0001ULL<<32)
 
@@ -70,8 +71,27 @@ struct nx_info {
 #define NXS_SHUTDOWN    0x0100
 #define NXS_RELEASED    0x8000
 
-extern struct nx_info *locate_nx_info(int);
-extern struct nx_info *locate_or_create_nx_info(int);
+/* check conditions */
+
+#define NX_ADMIN	0x0001
+#define NX_WATCH	0x0002
+#define NX_BLEND	0x0004
+#define NX_HOSTID	0x0008
+
+#define NX_IDENT	0x0010
+#define NX_EQUIV	0x0020
+#define NX_PARENT	0x0040
+#define NX_CHILD	0x0080
+
+#define NX_ARG_MASK	0x00F0
+
+#define NX_DYNAMIC	0x0100
+#define NX_STATIC	0x0200
+
+#define NX_ATR_MASK	0x0F00
+
+
+extern struct nx_info *lookup_nx_info(int);
 
 extern int get_nid_list(int, unsigned int *, int);
 extern int nid_is_hashed(nid_t);
