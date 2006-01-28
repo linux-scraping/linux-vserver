@@ -43,20 +43,21 @@ int nfsd_setuser(struct svc_rqst *rqstp, struct svc_export *exp)
 	}
 
 	if (cred->cr_uid != (uid_t) -1)
-		current->fsuid = INOXID_UID(XID_TAG_NFSD, cred->cr_uid, cred->cr_gid);
+		current->fsuid = INOTAG_UID(DX_TAG_NFSD, cred->cr_uid, cred->cr_gid);
 	else
 		current->fsuid = exp->ex_anon_uid;
 	if (cred->cr_gid != (gid_t) -1)
-		current->fsgid = INOXID_GID(XID_TAG_NFSD, cred->cr_uid, cred->cr_gid);
+		current->fsgid = INOTAG_GID(DX_TAG_NFSD, cred->cr_uid, cred->cr_gid);
 	else
 		current->fsgid = exp->ex_anon_gid;
 
-	current->xid = INOXID_XID(XID_TAG_NFSD, cred->cr_uid, cred->cr_gid, 0);
+	/* this desperately needs a tag :) */
+	current->xid = (xid_t)INOTAG_TAG(DX_TAG_NFSD, cred->cr_uid, cred->cr_gid, 0);
 
 	if (!cred->cr_group_info)
 		return -ENOMEM;
 	ret = set_current_groups(cred->cr_group_info);
-	if (INOXID_UID(XID_TAG_NFSD, cred->cr_uid, cred->cr_gid)) {
+	if (INOTAG_UID(DX_TAG_NFSD, cred->cr_uid, cred->cr_gid)) {
 		cap_t(current->cap_effective) &= ~CAP_NFSD_MASK;
 	} else {
 		cap_t(current->cap_effective) |= (CAP_NFSD_MASK &

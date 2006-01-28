@@ -827,15 +827,15 @@ struct task_struct {
 	
 	void *security;
 	struct audit_context *audit_context;
-	seccomp_t seccomp;
 
 /* vserver context data */
-	xid_t xid;
 	struct vx_info *vx_info;
-
-/* vserver network data */
-	nid_t nid;
 	struct nx_info *nx_info;
+
+	xid_t xid;
+	nid_t nid;
+
+	seccomp_t seccomp;
 
 /* Thread group tracking */
    	u32 parent_exec_id;

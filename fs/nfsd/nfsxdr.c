@@ -171,9 +171,9 @@ encode_fattr(struct svc_rqst *rqstp, u32 *p, struct svc_fh *fhp,
 	*p++ = htonl((u32) stat->mode);
 	*p++ = htonl((u32) stat->nlink);
 	*p++ = htonl((u32) nfsd_ruid(rqstp,
-		XIDINO_UID(XID_TAG(dentry->d_inode), stat->uid, stat->xid)));
+		TAGINO_UID(DX_TAG(dentry->d_inode), stat->uid, stat->tag)));
 	*p++ = htonl((u32) nfsd_rgid(rqstp,
-		XIDINO_GID(XID_TAG(dentry->d_inode), stat->gid, stat->xid)));
+		TAGINO_GID(DX_TAG(dentry->d_inode), stat->gid, stat->tag)));
 
 	if (S_ISLNK(type) && stat->size > NFS_MAXPATHLEN) {
 		*p++ = htonl(NFS_MAXPATHLEN);

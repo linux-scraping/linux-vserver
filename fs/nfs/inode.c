@@ -814,7 +814,7 @@ nfs_fhget(struct super_block *sb, struct nfs_fh *fh, struct nfs_fattr *fattr)
 		inode->i_nlink = fattr->nlink;
 		inode->i_uid = INOTAG_UID(DX_TAG(inode), fattr->uid, fattr->gid);
 		inode->i_gid = INOTAG_GID(DX_TAG(inode), fattr->uid, fattr->gid);
-		inode->i_tag = INOTAG_XID(DX_TAG(inode), fattr->uid, fattr->gid, 0);
+		inode->i_tag = INOTAG_TAG(DX_TAG(inode), fattr->uid, fattr->gid, 0);
 					 /* maybe fattr->xid someday */
 		if (fattr->valid & (NFS_ATTR_FATTR_V3 | NFS_ATTR_FATTR_V4)) {
 			/*
@@ -1307,7 +1307,7 @@ static int nfs_check_inode_attributes(struct inode *inode, struct nfs_fattr *fat
 	int data_unstable;
 	uid_t uid;
 	gid_t gid;
-	xid_t xid;
+	tag_t tag;
 
 
 	if ((fattr->valid & NFS_ATTR_FATTR) == 0)
@@ -1347,9 +1347,9 @@ static int nfs_check_inode_attributes(struct inode *inode, struct nfs_fattr *fat
 			nfsi->cache_validity |= NFS_INO_REVAL_PAGECACHE;
 	}
 
-	uid = INOXID_UID(XID_TAG(inode), fattr->uid, fattr->gid);
-	gid = INOXID_GID(XID_TAG(inode), fattr->uid, fattr->gid);
-	xid = INOXID_XID(XID_TAG(inode), fattr->uid, fattr->gid, 0);
+	uid = INOTAG_UID(DX_TAG(inode), fattr->uid, fattr->gid);
+	gid = INOTAG_GID(DX_TAG(inode), fattr->uid, fattr->gid);
+	tag = INOTAG_TAG(DX_TAG(inode), fattr->uid, fattr->gid, 0);
 
 	/* Have any file permissions changed? */
 	if ((inode->i_mode & S_IALLUGO) != (fattr->mode & S_IALLUGO)
@@ -1441,7 +1441,7 @@ static int nfs_update_inode(struct inode *inode, struct nfs_fattr *fattr)
 	int data_stable;
 	uid_t uid;
 	gid_t gid;
-	xid_t xid;
+	tag_t tag;
 
 	dfprintk(VFS, "NFS: %s(%s/%ld ct=%d info=0x%x)\n",
 			__FUNCTION__, inode->i_sb->s_id, inode->i_ino,

@@ -1563,8 +1563,8 @@ out_acl:
 	}
 	if (bmval1 & FATTR4_WORD1_OWNER) {
 		status = nfsd4_encode_user(rqstp,
-			XIDINO_UID(XID_TAG(dentry->d_inode),
-			stat.uid, stat.xid), &p, &buflen);
+			TAGINO_UID(DX_TAG(dentry->d_inode),
+			stat.uid, stat.tag), &p, &buflen);
 		if (status == nfserr_resource)
 			goto out_resource;
 		if (status)
@@ -1572,8 +1572,8 @@ out_acl:
 	}
 	if (bmval1 & FATTR4_WORD1_OWNER_GROUP) {
 		status = nfsd4_encode_group(rqstp,
-			XIDINO_GID(XID_TAG(dentry->d_inode),
-			stat.gid, stat.xid), &p, &buflen);
+			TAGINO_GID(DX_TAG(dentry->d_inode),
+			stat.gid, stat.tag), &p, &buflen);
 		if (status == nfserr_resource)
 			goto out_resource;
 		if (status)

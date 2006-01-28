@@ -11,14 +11,14 @@
 #include <linux/module.h>
 #include <linux/sunrpc/clnt.h>
 #include <linux/sunrpc/auth.h>
-#include <linux/vserver/tag.h>
+#include <linux/vs_tag.h>
 
 #define NFS_NGROUPS	16
 
 struct unx_cred {
 	struct rpc_cred		uc_base;
 	gid_t			uc_gid;
-	xid_t			uc_xid;
+	tag_t			uc_tag;
 	gid_t			uc_gids[NFS_NGROUPS];
 };
 #define uc_uid			uc_base.cr_uid

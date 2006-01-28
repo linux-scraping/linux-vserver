@@ -7,12 +7,12 @@ static inline void vx_info_init_limit(struct _vx_limit *limit)
 	int lim;
 
 	for (lim=0; lim<NUM_LIMITS; lim++) {
-		limit->soft[lim] = RLIM_INFINITY;
-		limit->hard[lim] = RLIM_INFINITY;
+		__rlim_soft(limit, lim) = RLIM_INFINITY;
+		__rlim_hard(limit, lim) = RLIM_INFINITY;
 		__rlim_set(limit, lim, 0);
-		atomic_set(&limit->lhit[lim], 0);
-		limit->rmin[lim] = 0;
-		limit->rmax[lim] = 0;
+		atomic_set(&__rlim_lhit(limit, lim), 0);
+		__rlim_rmin(limit, lim) = 0;
+		__rlim_rmax(limit, lim) = 0;
 	}
 }
 

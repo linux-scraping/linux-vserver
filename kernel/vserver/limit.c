@@ -63,13 +63,13 @@ static int is_valid_rlimit(int id)
 
 static inline uint64_t vc_get_soft(struct vx_info *vxi, int id)
 {
-	rlim_t limit = vxi->limit.soft[id];
+	rlim_t limit = __rlim_soft(&vxi->limit, id);
 	return VX_VLIM(limit);
 }
 
 static inline uint64_t vc_get_hard(struct vx_info *vxi, int id)
 {
-	rlim_t limit = vxi->limit.hard[id];
+	rlim_t limit = __rlim_hard(&vxi->limit, id);
 	return VX_VLIM(limit);
 }
 
@@ -114,9 +114,11 @@ int vc_set_rlimit(uint32_t id, void __user *data)
 		return -ESRCH;
 
 	if (vc_data.maximum != CRLIM_KEEP)
-		vxi->limit.hard[vc_data.id] = VX_RLIM(vc_data.maximum);
+		__rlim_hard(&vxi->limit, vc_data.id) =
+			VX_RLIM(vc_data.maximum);
 	if (vc_data.softlimit != CRLIM_KEEP)
-		vxi->limit.soft[vc_data.id] = VX_RLIM(vc_data.softlimit);
+		__rlim_soft(&vxi->limit, vc_data.id) =
+			VX_RLIM(vc_data.softlimit);
 	put_vx_info(vxi);
 
 	return 0;
@@ -155,7 +157,7 @@ void vx_vsi_meminfo(struct sysinfo *val)
 	struct vx_info *vxi = current->vx_info;
 	rlim_t v;
 
-	v = vxi->limit.soft[RLIMIT_RSS];
+	v = __rlim_soft(&vxi->limit, RLIMIT_RSS);
 	if (v == RLIM_INFINITY)
 		return;
 
@@ -176,11 +178,11 @@ void vx_vsi_swapinfo(struct sysinfo *val)
 	struct vx_info *vxi = current->vx_info;
 	rlim_t v, w;
 
-	v = vxi->limit.soft[RLIMIT_RSS];
+	v = __rlim_soft(&vxi->limit, RLIMIT_RSS);
 	if (v == RLIM_INFINITY)
 		return;
 
-	w = vxi->limit.hard[RLIMIT_RSS];
+	w = __rlim_hard(&vxi->limit, RLIMIT_RSS);
 	if (w == RLIM_INFINITY)
 		return;
 

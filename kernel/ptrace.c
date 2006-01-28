@@ -485,6 +485,7 @@ asmlinkage long sys_ptrace(long request, long pid, long addr, long data)
 		goto out;
 	}
 
+	ret = -EPERM;
 	if (!vx_check(vx_task_xid(child), VX_WATCH|VX_IDENT))
 		goto out_put_task_struct;
 
