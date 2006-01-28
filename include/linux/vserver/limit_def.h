@@ -8,21 +8,17 @@
 #include "limit.h"
 
 
-struct _vx_res_limit {
-	rlim_t soft;		/* Context soft limit */
-	rlim_t hard;		/* Context hard limit */
-
-	rlim_atomic_t rcur;	/* Current value */
-	rlim_t rmin;		/* Context minimum */
-	rlim_t rmax;		/* Context maximum */
-
-	atomic_t lhit;		/* Limit hits */
-};
-
 /* context sub struct */
 
 struct _vx_limit {
-	struct _vx_res_limit res[NUM_LIMITS];
+	rlim_t soft[NUM_LIMITS];	/* Context soft limit */
+	rlim_t hard[NUM_LIMITS];	/* Context hard limit */
+
+	rlim_atomic_t rcur[NUM_LIMITS];	/* Current value */
+	rlim_t rmin[NUM_LIMITS];	/* Context minimum */
+	rlim_t rmax[NUM_LIMITS];	/* Context maximum */
+
+	atomic_t lhit[NUM_LIMITS];	/* Limit hits */
 };
 
 #ifdef CONFIG_VSERVER_DEBUG
@@ -35,11 +31,10 @@ static inline void __dump_vx_limit(struct _vx_limit *limit)
 	for (i=0; i<NUM_LIMITS; i++) {
 		printk("\t [%2d] = %8lu %8lu/%8lu, %8ld/%8ld, %8d\n",
 			i, (unsigned long)__rlim_get(limit, i),
-			(unsigned long)__rlim_rmin(limit, i),
-			(unsigned long)__rlim_rmax(limit, i),
-			(long)__rlim_soft(limit, i),
-			(long)__rlim_hard(limit, i),
-			atomic_read(&__rlim_lhit(limit, i)));
+			(unsigned long)limit->rmin[i],
+			(unsigned long)limit->rmax[i],
+			(long)limit->soft[i], (long)limit->hard[i],
+			atomic_read(&limit->lhit[i]));
 	}
 }
 

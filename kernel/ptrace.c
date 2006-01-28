@@ -17,7 +17,6 @@
 #include <linux/ptrace.h>
 #include <linux/security.h>
 #include <linux/signal.h>
-#include <linux/vs_cvirt.h>
 
 #include <asm/pgtable.h>
 #include <asm/uaccess.h>
@@ -470,7 +469,6 @@ asmlinkage long sys_ptrace(long request, long pid, long addr, long data)
 	if (!child)
 		goto out;
 
-	ret = -EPERM;
 	if (!vx_check(vx_task_xid(child), VX_WATCH|VX_IDENT))
 		goto out_put_task_struct;
 

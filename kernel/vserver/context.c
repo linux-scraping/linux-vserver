@@ -660,15 +660,15 @@ int vx_migrate_task(struct task_struct *p, struct vx_info *vxi)
 		if (old_vxi) {
 			atomic_dec(&old_vxi->cvirt.nr_threads);
 			atomic_dec(&old_vxi->cvirt.nr_running);
-			__rlim_dec(&old_vxi->limit, RLIMIT_NPROC);
+			atomic_dec(&old_vxi->limit.rcur[RLIMIT_NPROC]);
 			/* FIXME: what about the struct files here? */
-			__rlim_sub(&old_vxi->limit, VLIMIT_OPENFD, openfd);
+			atomic_sub(openfd, &old_vxi->limit.rcur[VLIMIT_OPENFD]);
 		}
 		atomic_inc(&vxi->cvirt.nr_threads);
 		atomic_inc(&vxi->cvirt.nr_running);
-		__rlim_inc(&vxi->limit, RLIMIT_NPROC);
+		atomic_inc(&vxi->limit.rcur[RLIMIT_NPROC]);
 		/* FIXME: what about the struct files here? */
-		__rlim_add(&vxi->limit, VLIMIT_OPENFD, openfd);
+		atomic_add(openfd, &vxi->limit.rcur[VLIMIT_OPENFD]);
 
 		if (old_vxi) {
 			release_vx_info(old_vxi, p);

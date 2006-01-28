@@ -215,9 +215,8 @@ void die_if_kernel(char *str, struct pt_regs *regs, long err)
 		if (err == 0)
 			return; /* STFU */
 
-		printk(KERN_CRIT "%s (pid %d[#%u]): %s (code %ld) at " RFMT "\n",
-			current->comm, current->pid, current->xid,
-			str, err, regs->iaoq[0]);
+		printk(KERN_CRIT "%s (pid %d): %s (code %ld) at " RFMT "\n",
+			current->comm, current->pid, str, err, regs->iaoq[0]);
 #ifdef PRINT_USER_FAULTS
 		/* XXX for debugging only */
 		show_regs(regs);
@@ -248,8 +247,8 @@ void die_if_kernel(char *str, struct pt_regs *regs, long err)
 	if (!console_drivers)
 		pdc_console_restart();
 	
-	printk(KERN_CRIT "%s (pid %d[#%u]): %s (code %ld)\n",
-		current->comm, current->pid, current->xid, str, err);
+	printk(KERN_CRIT "%s (pid %d): %s (code %ld)\n",
+		current->comm, current->pid, str, err);
 	show_regs(regs);
 
 	/* Wot's wrong wif bein' racy? */

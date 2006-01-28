@@ -333,11 +333,10 @@ static int raw_send_hdrinc(struct sock *sk, void *from, size_t length,
 
 		iph->check = ip_fast_csum((unsigned char *)iph, iph->ihl);
 	}
-
 	err = -EPERM;
 	if (!vx_check(0, VX_ADMIN) && !capable(CAP_NET_RAW)
 		&& (!addr_in_nx_info(sk->sk_nx_info, iph->saddr)))
-		goto error_free;
+		goto error;
 
 	err = NF_HOOK(PF_INET, NF_IP_LOCAL_OUT, skb, NULL, rt->u.dst.dev,
 		      dst_output);
@@ -350,7 +349,6 @@ out:
 
 error_fault:
 	err = -EFAULT;
-error_free:
 	kfree_skb(skb);
 error:
 	IP_INC_STATS(IPSTATS_MIB_OUTDISCARDS);

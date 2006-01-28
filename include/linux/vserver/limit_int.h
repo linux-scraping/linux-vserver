@@ -48,8 +48,8 @@ static inline int __vx_cres_avail(struct vx_info *vxi,
 	if (VXD_RLIMIT_COND(res))
 		vxlprintk(1, "vx_cres_avail[%5d,%s,%2d]: %5ld/%5ld > %5ld + %5d",
 			(vxi ? vxi->vx_id : -1), vlimit_name[res], res,
-			(vxi ? (long)__rlim_soft(&vxi->limit, res) : -1),
-			(vxi ? (long)__rlim_hard(&vxi->limit, res) : -1),
+			(vxi ? (long)vxi->limit.soft[res] : -1),
+			(vxi ? (long)vxi->limit.hard[res] : -1),
 			(vxi ? (long)__rlim_get(&vxi->limit, res) : 0),
 			num, _file, _line);
 	if (num == 0)
@@ -59,19 +59,19 @@ static inline int __vx_cres_avail(struct vx_info *vxi,
 
 	value = __rlim_get(&vxi->limit, res);
 
-	if (value > __rlim_rmax(&vxi->limit, res))
-		__rlim_rmax(&vxi->limit, res) = value;
-	else if (value < __rlim_rmin(&vxi->limit, res))
-		__rlim_rmin(&vxi->limit, res) = value;
+	if (value > vxi->limit.rmax[res])
+		vxi->limit.rmax[res] = value;
+	else if (value < vxi->limit.rmin[res])
+		vxi->limit.rmin[res] = value;
 
-	if (__rlim_soft(&vxi->limit, res) == RLIM_INFINITY)
+	if (vxi->limit.soft[res] == RLIM_INFINITY)
 		return -1;
-	if (value + num <= __rlim_soft(&vxi->limit, res))
+	if (value + num <= vxi->limit.soft[res])
 		return -1;
 
-	if (__rlim_hard(&vxi->limit, res) == RLIM_INFINITY)
+	if (vxi->limit.hard[res] == RLIM_INFINITY)
 		return 1;
-	if (value + num <= __rlim_hard(&vxi->limit, res))
+	if (value + num <= vxi->limit.hard[res])
 		return 1;
 
 	__rlim_hit(&vxi->limit, res);

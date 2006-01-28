@@ -71,7 +71,6 @@
 #include <linux/cpuset.h>
 #include <linux/audit.h>
 #include <linux/poll.h>
-#include <linux/vs_cvirt.h>
 #include <linux/vs_network.h>
 #include "internal.h"
 
@@ -540,8 +539,6 @@ static int proc_oom_score(struct task_struct *task, char *buffer)
 
 /* If the process being read is separated by chroot from the reading process,
  * don't let the reader access the threads.
- *
- * note: this does dput(root) and mntput(vfsmnt) on exit.
  */
 static int proc_check_chroot(struct dentry *root, struct vfsmount *vfsmnt)
 {
@@ -551,7 +548,7 @@ static int proc_check_chroot(struct dentry *root, struct vfsmount *vfsmnt)
 
 	/* context admin override */
 	if (capable(CAP_CONTEXT))
-		goto override;
+		return 0;
 
 	read_lock(&current->fs->lock);
 	our_vfsmnt = mntget(current->fs->rootmnt);
@@ -562,11 +559,11 @@ static int proc_check_chroot(struct dentry *root, struct vfsmount *vfsmnt)
 	de = root;
 	mnt = vfsmnt;
 
-	while (mnt != our_vfsmnt) {
-		if (mnt == mnt->mnt_parent)
+	while (vfsmnt != our_vfsmnt) {
+		if (vfsmnt == vfsmnt->mnt_parent)
 			goto out;
-		de = mnt->mnt_mountpoint;
-		mnt = mnt->mnt_parent;
+		de = vfsmnt->mnt_mountpoint;
+		vfsmnt = vfsmnt->mnt_parent;
 	}
 
 	if (!is_subdir(de, base))
@@ -576,9 +573,8 @@ static int proc_check_chroot(struct dentry *root, struct vfsmount *vfsmnt)
 exit:
 	dput(base);
 	mntput(our_vfsmnt);
-override:
 	dput(root);
-	mntput(vfsmnt);
+	mntput(mnt);
 	return res;
 out:
 	spin_unlock(&vfsmount_lock);

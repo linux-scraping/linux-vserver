@@ -1519,14 +1519,12 @@ struct inode_operations jfs_dir_inode_operations = {
 	.setattr	= jfs_setattr,
 	.permission	= jfs_permission,
 #endif
-	.sync_flags	= jfs_sync_flags,
 };
 
 struct file_operations jfs_dir_operations = {
 	.read		= generic_read_dir,
 	.readdir	= jfs_readdir,
 	.fsync		= jfs_fsync,
-	.ioctl		= jfs_ioctl,
 };
 
 static int jfs_ci_hash(struct dentry *dir, struct qstr *this)

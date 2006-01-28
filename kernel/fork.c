@@ -43,7 +43,6 @@
 #include <linux/rmap.h>
 #include <linux/acct.h>
 #include <linux/cn_proc.h>
-#include <linux/vs_context.h>
 #include <linux/vs_network.h>
 #include <linux/vs_limit.h>
 #include <linux/vs_memory.h>

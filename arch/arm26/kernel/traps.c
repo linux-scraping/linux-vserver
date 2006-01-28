@@ -186,9 +186,8 @@ NORET_TYPE void die(const char *str, struct pt_regs *regs, int err)
 	printk("Internal error: %s: %x\n", str, err);
 	printk("CPU: %d\n", smp_processor_id());
 	show_regs(regs);
-	printk("Process %s (pid: %d[#%u], stack limit = 0x%p)\n",
-		current->comm, current->pid,
-		current->xid, tsk->thread_info + 1);
+	printk("Process %s (pid: %d, stack limit = 0x%p)\n",
+		current->comm, current->pid, tsk->thread_info + 1);
 
 	if (!user_mode(regs) || in_interrupt()) {
 		__dump_stack(tsk, (unsigned long)(regs + 1));

@@ -1198,9 +1198,8 @@ void die_if_kernel (char *str, struct pt_regs *fp, int nr)
 	printk("d4: %08lx    d5: %08lx    a0: %08lx    a1: %08lx\n",
 	       fp->d4, fp->d5, fp->a0, fp->a1);
 
-	printk("Process %s (pid: %d[#%u], stackpage=%08lx)\n",
-		current->comm, current->pid, current->xid,
-		PAGE_SIZE+(unsigned long)current);
+	printk("Process %s (pid: %d, stackpage=%08lx)\n",
+		current->comm, current->pid, PAGE_SIZE+(unsigned long)current);
 	show_stack(NULL, (unsigned long *)fp);
 	do_exit(SIGSEGV);
 }

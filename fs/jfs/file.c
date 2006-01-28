@@ -98,7 +98,6 @@ struct inode_operations jfs_file_inode_operations = {
 	.setattr	= jfs_setattr,
 	.permission	= jfs_permission,
 #endif
-	.sync_flags	= jfs_sync_flags,
 };
 
 struct file_operations jfs_file_operations = {
@@ -115,5 +114,4 @@ struct file_operations jfs_file_operations = {
 	.sendpage	= generic_file_sendpage,
 	.fsync		= jfs_fsync,
 	.release	= jfs_release,
-	.ioctl		= jfs_ioctl,
 };

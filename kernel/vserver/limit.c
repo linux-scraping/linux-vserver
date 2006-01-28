@@ -63,13 +63,13 @@ static int is_valid_rlimit(int id)
 
 static inline uint64_t vc_get_soft(struct vx_info *vxi, int id)
 {
-	rlim_t limit = __rlim_soft(&vxi->limit, id);
+	rlim_t limit = vxi->limit.soft[id];
 	return VX_VLIM(limit);
 }
 
 static inline uint64_t vc_get_hard(struct vx_info *vxi, int id)
 {
-	rlim_t limit = __rlim_hard(&vxi->limit, id);
+	rlim_t limit = vxi->limit.hard[id];
 	return VX_VLIM(limit);
 }
 
@@ -114,18 +114,9 @@ int vc_set_rlimit(uint32_t id, void __user *data)
 		return -ESRCH;
 
 	if (vc_data.maximum != CRLIM_KEEP)
-		__rlim_hard(&vxi->limit, vc_data.id) =
-			VX_RLIM(vc_data.maximum);
+		vxi->limit.hard[vc_data.id] = VX_RLIM(vc_data.maximum);
 	if (vc_data.softlimit != CRLIM_KEEP)
-		__rlim_soft(&vxi->limit, vc_data.id) =
-			VX_RLIM(vc_data.softlimit);
-
-	/* clamp soft limit */
-	if (__rlim_soft(&vxi->limit, vc_data.id) >
-		__rlim_hard(&vxi->limit, vc_data.id))
-		__rlim_soft(&vxi->limit, vc_data.id) =
-			__rlim_hard(&vxi->limit, vc_data.id);
-
+		vxi->limit.soft[vc_data.id] = VX_RLIM(vc_data.softlimit);
 	put_vx_info(vxi);
 
 	return 0;
@@ -162,19 +153,18 @@ int vc_get_rlimit_mask(uint32_t id, void __user *data)
 void vx_vsi_meminfo(struct sysinfo *val)
 {
 	struct vx_info *vxi = current->vx_info;
-	unsigned long totalram, freeram;
 	rlim_t v;
 
-	/* we blindly accept the max */
-	v = __rlim_soft(&vxi->limit, RLIMIT_RSS);
-	totalram = (v != RLIM_INFINITY) ? v : val->totalram;
+	v = vxi->limit.soft[RLIMIT_RSS];
+	if (v == RLIM_INFINITY)
+		return;
 
-	/* total minus used equals free */
+	val->totalram = min((unsigned long)v,
+		(unsigned long)val->totalram);
+
 	v = __rlim_get(&vxi->limit, RLIMIT_RSS);
-	freeram = (v < totalram) ? totalram - v : 0;
+	val->freeram = (v < val->totalram) ? val->totalram - v : 0;
 
-	val->totalram = totalram;
-	val->freeram = freeram;
 	val->bufferram = 0;
 	val->totalhigh = 0;
 	val->freehigh = 0;
@@ -184,28 +174,21 @@ void vx_vsi_meminfo(struct sysinfo *val)
 void vx_vsi_swapinfo(struct sysinfo *val)
 {
 	struct vx_info *vxi = current->vx_info;
-	unsigned long totalswap, freeswap;
 	rlim_t v, w;
 
-	v = __rlim_soft(&vxi->limit, RLIMIT_RSS);
-	if (v == RLIM_INFINITY) {
-		val->freeswap = val->totalswap;
+	v = vxi->limit.soft[RLIMIT_RSS];
+	if (v == RLIM_INFINITY)
 		return;
-	}
 
-	/* we blindly accept the max */
-	w = __rlim_hard(&vxi->limit, RLIMIT_RSS);
-	totalswap = (w != RLIM_INFINITY) ? (w - v) : val->totalswap;
+	w = vxi->limit.hard[RLIMIT_RSS];
+	if (w == RLIM_INFINITY)
+		return;
 
-	/* currently 'used' swap */
-	w = __rlim_get(&vxi->limit, RLIMIT_RSS);
-	w -= (w > v) ? v : w;
+	val->totalswap = min((unsigned long)(w - v),
+		(unsigned long)val->totalswap);
 
-	/* total minus used equals free */
-	freeswap = (w < totalswap) ? totalswap - w : 0;
-
-	val->totalswap = totalswap;
-	val->freeswap = freeswap;
+	w = __rlim_get(&vxi->limit, RLIMIT_RSS) - v;
+	val->freeswap = (w < val->totalswap) ? val->totalswap - w : 0;
 	return;
 }
 

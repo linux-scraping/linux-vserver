@@ -270,8 +270,8 @@ void __show_regs(struct pt_regs * regs)
 
 	printk("\n");
 	print_modules();
-	printk("Pid: %d[#%u], comm: %.20s %s %s %.*s\n",
-		current->pid, current->xid, current->comm, print_tainted(),
+	printk("Pid: %d, comm: %.20s %s %s %.*s\n",
+		current->pid, current->comm, print_tainted(),
 		system_utsname.release,
 		(int)strcspn(system_utsname.version, " "),
 		system_utsname.version);

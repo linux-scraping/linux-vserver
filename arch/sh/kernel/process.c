@@ -105,8 +105,7 @@ void machine_power_off(void)
 void show_regs(struct pt_regs * regs)
 {
 	printk("\n");
-	printk("Pid : %d[#%u], Comm: %20s\n",
-		current->pid, current->xid, current->comm);
+	printk("Pid : %d, Comm: %20s\n", current->pid, current->comm);
 	print_symbol("PC is at %s\n", regs->pc);
 	printk("PC  : %08lx SP  : %08lx SR  : %08lx ",
 	       regs->pc, regs->regs[15], regs->sr);

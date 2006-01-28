@@ -423,9 +423,8 @@ void show_regs(struct pt_regs * regs)
 	trap = TRAP(regs);
 	if (trap == 0x300 || trap == 0x600)
 		printk("DAR: "REG", DSISR: "REG"\n", regs->dar, regs->dsisr);
-	printk("TASK = %p[%d,#%u] '%s' THREAD: %p",
-	       current, current->pid, current->xid,
-	       current->comm, current->thread_info);
+	printk("TASK = %p[%d] '%s' THREAD: %p",
+	       current, current->pid, current->comm, current->thread_info);
 
 #ifdef CONFIG_SMP
 	printk(" CPU: %d", smp_processor_id());
