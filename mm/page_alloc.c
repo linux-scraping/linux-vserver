@@ -879,7 +879,9 @@ get_page_from_freelist(gfp_t gfp_mask, unsigned int order,
 				mark = (*z)->pages_high;
 			if (!zone_watermark_ok(*z, order, mark,
 				    classzone_idx, alloc_flags))
-				continue;
+				if (!zone_reclaim_mode ||
+				    !zone_reclaim(*z, gfp_mask, order))
+					continue;
 		}
 
 		page = buffered_rmqueue(zonelist, *z, order, gfp_mask);
@@ -1598,13 +1600,22 @@ static void __init build_zonelists(pg_data_t *pgdat)
 	prev_node = local_node;
 	nodes_clear(used_mask);
 	while ((node = find_next_best_node(local_node, &used_mask)) >= 0) {
+		int distance = node_distance(local_node, node);
+
+		/*
+		 * If another node is sufficiently far away then it is better
+		 * to reclaim pages in a zone before going off node.
+		 */
+		if (distance > RECLAIM_DISTANCE)
+			zone_reclaim_mode = 1;
+
 		/*
 		 * We don't want to pressure a particular node.
 		 * So adding penalty to the first node in same
 		 * distance group to make it round-robin.
 		 */
-		if (node_distance(local_node, node) !=
-				node_distance(local_node, prev_node))
+
+		if (distance != node_distance(local_node, prev_node))
 			node_load[node] += load;
 		prev_node = node;
 		load--;
@@ -1791,7 +1802,7 @@ void zonetable_add(struct zone *zone, int nid, int zid, unsigned long pfn,
 	memmap_init_zone((size), (nid), (zone), (start_pfn))
 #endif
 
-static int __meminit zone_batchsize(struct zone *zone)
+static int __cpuinit zone_batchsize(struct zone *zone)
 {
 	int batch;
 
@@ -1885,7 +1896,7 @@ static struct per_cpu_pageset
  * Dynamically allocate memory for the
  * per cpu pageset array in struct zone.
  */
-static int __meminit process_zones(int cpu)
+static int __cpuinit process_zones(int cpu)
 {
 	struct zone *zone, *dzone;
 
@@ -1926,7 +1937,7 @@ static inline void free_zone_pagesets(int cpu)
 	}
 }
 
-static int __meminit pageset_cpuup_callback(struct notifier_block *nfb,
+static int __cpuinit pageset_cpuup_callback(struct notifier_block *nfb,
 		unsigned long action,
 		void *hcpu)
 {

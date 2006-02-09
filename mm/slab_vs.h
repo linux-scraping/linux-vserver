@@ -7,7 +7,7 @@ void vx_slab_alloc(struct kmem_cache *cachep, gfp_t flags)
 	if (!current->vx_info)
 		return;
 
-	atomic_add(cachep->objsize, &current->vx_info->cacct.slab[what]);
+	atomic_add(cachep->buffer_size, &current->vx_info->cacct.slab[what]);
 }
 
 static inline
@@ -18,6 +18,6 @@ void vx_slab_free(struct kmem_cache *cachep)
 	if (!current->vx_info)
 		return;
 
-	atomic_sub(cachep->objsize, &current->vx_info->cacct.slab[what]);
+	atomic_sub(cachep->buffer_size, &current->vx_info->cacct.slab[what]);
 }
 

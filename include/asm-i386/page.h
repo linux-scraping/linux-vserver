@@ -109,22 +109,10 @@ extern int page_is_ram(unsigned long pagenr);
 
 #endif /* __ASSEMBLY__ */
 
-#if   defined(CONFIG_SPLIT_3GB)
-#define __PAGE_OFFSET		(0xC0000000)
-#elif defined(CONFIG_SPLIT_25GB)
-#define __PAGE_OFFSET		(0xA0000000)
-#elif defined(CONFIG_SPLIT_2GB)
-#define __PAGE_OFFSET		(0x80000000)
-#elif defined(CONFIG_SPLIT_15GB)
-#define __PAGE_OFFSET		(0x60000000)
-#elif defined(CONFIG_SPLIT_1GB)
-#define __PAGE_OFFSET		(0x40000000)
-#endif
-
+#define __PAGE_OFFSET		CONFIG_PAGE_OFFSET
 #define __PHYSICAL_START	CONFIG_PHYSICAL_START
 #define __KERNEL_START		(__PAGE_OFFSET + __PHYSICAL_START)
 #define __MAXMEM		(-__PAGE_OFFSET-__VMALLOC_RESERVE)
-
 
 #define PAGE_OFFSET		((unsigned long)__PAGE_OFFSET)
 #define PHYSICAL_START		((unsigned long)__PHYSICAL_START)

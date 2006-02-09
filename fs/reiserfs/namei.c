@@ -458,7 +458,7 @@ static int reiserfs_add_entry(struct reiserfs_transaction_handle *th,
 	/* get memory for composing the entry */
 	buflen = DEH_SIZE + ROUND_UP(namelen);
 	if (buflen > sizeof(small_buf)) {
-		buffer = reiserfs_kmalloc(buflen, GFP_NOFS, dir->i_sb);
+		buffer = kmalloc(buflen, GFP_NOFS);
 		if (buffer == 0)
 			return -ENOMEM;
 	} else
@@ -492,7 +492,7 @@ static int reiserfs_add_entry(struct reiserfs_transaction_handle *th,
 	retval = reiserfs_find_entry(dir, name, namelen, &path, &de);
 	if (retval != NAME_NOT_FOUND) {
 		if (buffer != small_buf)
-			reiserfs_kfree(buffer, buflen, dir->i_sb);
+			kfree(buffer);
 		pathrelse(&path);
 
 		if (retval == IO_ERROR) {
@@ -517,7 +517,7 @@ static int reiserfs_add_entry(struct reiserfs_transaction_handle *th,
 		reiserfs_warning(dir->i_sb,
 				 "reiserfs_add_entry: Congratulations! we have got hash function screwed up");
 		if (buffer != small_buf)
-			reiserfs_kfree(buffer, buflen, dir->i_sb);
+			kfree(buffer);
 		pathrelse(&path);
 		return -EBUSY;
 	}
@@ -537,7 +537,7 @@ static int reiserfs_add_entry(struct reiserfs_transaction_handle *th,
 					 &entry_key);
 
 			if (buffer != small_buf)
-				reiserfs_kfree(buffer, buflen, dir->i_sb);
+				kfree(buffer);
 			pathrelse(&path);
 			return -EBUSY;
 		}
@@ -548,7 +548,7 @@ static int reiserfs_add_entry(struct reiserfs_transaction_handle *th,
 	    reiserfs_paste_into_item(th, &path, &entry_key, dir, buffer,
 				     paste_size);
 	if (buffer != small_buf)
-		reiserfs_kfree(buffer, buflen, dir->i_sb);
+		kfree(buffer);
 	if (retval) {
 		reiserfs_check_path(&path);
 		return retval;
@@ -1068,7 +1068,7 @@ static int reiserfs_symlink(struct inode *parent_dir,
 		goto out_failed;
 	}
 
-	name = reiserfs_kmalloc(item_len, GFP_NOFS, parent_dir->i_sb);
+	name = kmalloc(item_len, GFP_NOFS);
 	if (!name) {
 		drop_new_inode(inode);
 		retval = -ENOMEM;
@@ -1082,14 +1082,14 @@ static int reiserfs_symlink(struct inode *parent_dir,
 	retval = journal_begin(&th, parent_dir->i_sb, jbegin_count);
 	if (retval) {
 		drop_new_inode(inode);
-		reiserfs_kfree(name, item_len, parent_dir->i_sb);
+		kfree(name);
 		goto out_failed;
 	}
 
 	retval =
 	    reiserfs_new_inode(&th, parent_dir, mode, name, strlen(symname),
 			       dentry, inode);
-	reiserfs_kfree(name, item_len, parent_dir->i_sb);
+	kfree(name);
 	if (retval) {		/* reiserfs_new_inode iputs for us */
 		goto out_failed;
 	}

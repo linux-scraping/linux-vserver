@@ -250,8 +250,9 @@ void show_registers(struct pt_regs *regs)
 		regs->esi, regs->edi, regs->ebp, esp);
 	printk(KERN_EMERG "ds: %04x   es: %04x   ss: %04x\n",
 		regs->xds & 0xffff, regs->xes & 0xffff, ss);
-	printk(KERN_EMERG "Process %s (pid: %d, threadinfo=%p task=%p)",
-		current->comm, current->pid, current_thread_info(), current);
+	printk(KERN_EMERG "Process %s (pid: %d[#%u], threadinfo=%p task=%p)",
+		current->comm, current->pid, current->xid,
+		current_thread_info(), current);
 	/*
 	 * When in-kernel, we also print out the stack and code at the
 	 * time of the fault..

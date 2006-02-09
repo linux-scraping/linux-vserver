@@ -2647,7 +2647,7 @@ static int if6_seq_show(struct seq_file *seq, void *v)
 	/* no ipv6 inside a vserver for now */
 	if (vx_check(0, VX_ADMIN|VX_WATCH))
 		seq_printf(seq,
-		   NIP6_FMT " %02x %02x %02x %02x %8s\n",
+		   NIP6_SEQFMT " %02x %02x %02x %02x %8s\n",
 		   NIP6(ifp->addr),
 		   ifp->idev->dev->ifindex,
 		   ifp->prefix_len,

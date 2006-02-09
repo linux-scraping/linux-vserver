@@ -41,14 +41,14 @@ static inline void __put_dl_info(struct dl_info *dli,
 #define __dlimit_char(d)	((d)?'*':' ')
 
 static inline int __dl_alloc_space(struct super_block *sb,
-	xid_t xid, dlsize_t nr, const char *file, int line)
+	tag_t tag, dlsize_t nr, const char *file, int line)
 {
 	struct dl_info *dli = NULL;
 	int ret = 0;
 
 	if (nr == 0)
 		goto out;
-	dli = locate_dl_info(sb, xid);
+	dli = locate_dl_info(sb, tag);
 	if (!dli)
 		goto out;
 
@@ -61,19 +61,19 @@ static inline int __dl_alloc_space(struct super_block *sb,
 out:
 	vxlprintk(VXD_CBIT(dlim, 1),
 		"ALLOC (%p,#%d)%c %lld bytes (%d)",
-		sb, xid, __dlimit_char(dli), (long long)nr,
+		sb, tag, __dlimit_char(dli), (long long)nr,
 		ret, file, line);
 	return ret;
 }
 
 static inline void __dl_free_space(struct super_block *sb,
-	xid_t xid, dlsize_t nr, const char *_file, int _line)
+	tag_t tag, dlsize_t nr, const char *_file, int _line)
 {
 	struct dl_info *dli = NULL;
 
 	if (nr == 0)
 		goto out;
-	dli = locate_dl_info(sb, xid);
+	dli = locate_dl_info(sb, tag);
 	if (!dli)
 		goto out;
 
@@ -87,17 +87,17 @@ static inline void __dl_free_space(struct super_block *sb,
 out:
 	vxlprintk(VXD_CBIT(dlim, 1),
 		"FREE  (%p,#%d)%c %lld bytes",
-		sb, xid, __dlimit_char(dli), (long long)nr,
+		sb, tag, __dlimit_char(dli), (long long)nr,
 		_file, _line);
 }
 
 static inline int __dl_alloc_inode(struct super_block *sb,
-	xid_t xid, const char *_file, int _line)
+	tag_t tag, const char *_file, int _line)
 {
 	struct dl_info *dli;
 	int ret = 0;
 
-	dli = locate_dl_info(sb, xid);
+	dli = locate_dl_info(sb, tag);
 	if (!dli)
 		goto out;
 
@@ -108,7 +108,7 @@ static inline int __dl_alloc_inode(struct super_block *sb,
 #if 0
 	else
 		vxwprintk("DLIMIT hit (%p,#%d), inode %d>=%d @ %s:%d",
-			sb, xid,
+			sb, tag,
 			dli->dl_inodes_used, dli->dl_inodes_total,
 			file, line);
 #endif
@@ -117,16 +117,16 @@ static inline int __dl_alloc_inode(struct super_block *sb,
 out:
 	vxlprintk(VXD_CBIT(dlim, 0),
 		"ALLOC (%p,#%d)%c inode (%d)",
-		sb, xid, __dlimit_char(dli), ret, _file, _line);
+		sb, tag, __dlimit_char(dli), ret, _file, _line);
 	return ret;
 }
 
 static inline void __dl_free_inode(struct super_block *sb,
-	xid_t xid, const char *_file, int _line)
+	tag_t tag, const char *_file, int _line)
 {
 	struct dl_info *dli;
 
-	dli = locate_dl_info(sb, xid);
+	dli = locate_dl_info(sb, tag);
 	if (!dli)
 		goto out;
 
@@ -140,17 +140,17 @@ static inline void __dl_free_inode(struct super_block *sb,
 out:
 	vxlprintk(VXD_CBIT(dlim, 0),
 		"FREE  (%p,#%d)%c inode",
-		sb, xid, __dlimit_char(dli), _file, _line);
+		sb, tag, __dlimit_char(dli), _file, _line);
 }
 
-static inline void __dl_adjust_block(struct super_block *sb, xid_t xid,
+static inline void __dl_adjust_block(struct super_block *sb, tag_t tag,
 	unsigned int *free_blocks, unsigned int *root_blocks,
 	const char *_file, int _line)
 {
 	struct dl_info *dli;
 	uint64_t broot, bfree;
 
-	dli = locate_dl_info(sb, xid);
+	dli = locate_dl_info(sb, tag);
 	if (!dli)
 		return;
 

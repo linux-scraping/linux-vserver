@@ -38,7 +38,7 @@ struct rcu_head;
 extern void rcu_free_dl_info(struct rcu_head *);
 extern void unhash_dl_info(struct dl_info *);
 
-extern struct dl_info *locate_dl_info(struct super_block *, xid_t);
+extern struct dl_info *locate_dl_info(struct super_block *, tag_t);
 
 
 struct kstatfs;

@@ -47,15 +47,6 @@ config DMI
 
 source "init/Kconfig"
 
-config DOUBLEFAULT
-	default y
-	bool "Enable doublefault exception handler" if EMBEDDED
-	help
-          This option allows trapping of rare doublefault exceptions that
-          would otherwise cause a system to silently reboot. Disabling this
-          option saves about 4k and might cause you much additional grey
-          hair.
-
 menu "Processor type and features"
 
 choice
@@ -458,44 +449,61 @@ config HIGHMEM64G
 endchoice
 
 choice
-	prompt "Memory Split User Space"
-	default SPLIT_3GB
+	depends on EXPERIMENTAL && !X86_PAE
+	prompt "Memory split"
+	default VMSPLIT_3G
 	help
-	  A different Userspace/Kernel split allows you to
-	  utilize up to alsmost 3GB of RAM without the requirement
-	  for HIGHMEM. It also increases the available lowmem.
+	  Select the desired split between kernel and user memory.
 
-config SPLIT_3GB
-	bool "3.0GB/1.0GB Kernel (Default)"
-	help
-	  This is the default split of 3GB userspace to 1GB kernel
-	  space, which will result in about 860MB of lowmem.
+	  If the address range available to the kernel is less than the
+	  physical memory installed, the remaining memory will be available
+	  as "high memory". Accessing high memory is a little more costly
+	  than low memory, as it needs to be mapped into the kernel first.
+	  Note that increasing the kernel address space limits the range
+	  available to user programs, making the address space there
+	  tighter.  Selecting anything other than the default 3G/1G split
+	  will also likely make your kernel incompatible with binary-only
+	  kernel modules.
 
-config SPLIT_25GB
-	bool "2.5GB/1.5GB Kernel"
-	help
-	  This split provides 2.5GB userspace and 1.5GB kernel
-	  space, which will result in about 1370MB of lowmem.
+	config VMSPLIT_3G
+		bool "3G/1G user/kernel split (Default)"
+		help
+		  This is the default split of 3GB userspace to 1GB kernel
+		  space, which will result in about 860MB of lowmem.
 
-config SPLIT_2GB
-	bool "2.0GB/2.0GB Kernel"
-	help
-	  This split provides 2GB userspace and 2GB kernel
-	  space, which will result in about 1880MB of lowmem.
+	config VMSPLIT_25G
+		bool "2.5G/1.5G user/kernel split"
+		help
+		  This split provides 2.5GB userspace and 1.5GB kernel
+		  space, which will result in about 1370MB of lowmem.
 
-config SPLIT_15GB
-	bool "1.5GB/2.5GB Kernel"
-	help
-	  This split provides 1.5GB userspace and 2.5GB kernel
-	  space, which will result in about 2390MB of lowmem.
+	config VMSPLIT_2G
+		bool "2G/2G user/kernel split"
+		help
+		  This split provides 2GB userspace and 2GB kernel
+		  space, which will result in about 1880MB of lowmem.
 
-config SPLIT_1GB
-	bool "1.0GB/3.0GB Kernel"
-	help
-	  This split provides 1GB userspace and 3GB kernel
-	  space, which will result in about 2900MB of lowmem.
+	config VMSPLIT_15G
+		bool "1.5G/2.5G user/kernel split"
+		help
+		  This split provides 1.5GB userspace and 2.5GB kernel
+		  space, which will result in about 2390MB of lowmem.
+
+	config VMSPLIT_1G
+		bool "1G/3G user/kernel split"
+		help
+		  This split provides 1GB userspace and 3GB kernel
+		  space, which will result in about 2900MB of lowmem.
 
 endchoice
+
+config PAGE_OFFSET
+	hex
+	default 0xA0000000 if VMSPLIT_25G
+	default 0x80000000 if VMSPLIT_2G
+	default 0x60000000 if VMSPLIT_15G
+	default 0x40000000 if VMSPLIT_1G
+	default 0xC0000000
 
 config HIGHMEM
 	bool
@@ -750,6 +758,15 @@ config HOTPLUG_CPU
 	  can be controlled through /sys/devices/system/cpu.
 
 	  Say N.
+
+config DOUBLEFAULT
+	default y
+	bool "Enable doublefault exception handler" if EMBEDDED
+	help
+          This option allows trapping of rare doublefault exceptions that
+          would otherwise cause a system to silently reboot. Disabling this
+          option saves about 4k and might cause you much additional grey
+          hair.
 
 endmenu
 

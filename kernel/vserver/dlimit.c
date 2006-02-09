@@ -87,9 +87,9 @@ struct hlist_head dl_info_hash[DL_HASH_SIZE];
 static spinlock_t dl_info_hash_lock = SPIN_LOCK_UNLOCKED;
 
 
-static inline unsigned int __hashval(struct super_block *sb, xid_t xid)
+static inline unsigned int __hashval(struct super_block *sb, tag_t tag)
 {
-	return ((xid ^ (unsigned long)sb) % DL_HASH_SIZE);
+	return ((tag ^ (unsigned long)sb) % DL_HASH_SIZE);
 }
 
 
@@ -148,14 +148,14 @@ static inline struct dl_info *__lookup_dl_info(struct super_block *sb, tag_t tag
 }
 
 
-struct dl_info *locate_dl_info(struct super_block *sb, xid_t xid)
+struct dl_info *locate_dl_info(struct super_block *sb, tag_t tag)
 {
 	struct dl_info *dli;
 
 	rcu_read_lock();
-	dli = get_dl_info(__lookup_dl_info(sb, xid));
+	dli = get_dl_info(__lookup_dl_info(sb, tag));
 	vxdprintk(VXD_CBIT(dlim, 7),
-		"locate_dl_info(%p,#%d) = %p", sb, xid, dli);
+		"locate_dl_info(%p,#%d) = %p", sb, tag, dli);
 	rcu_read_unlock();
 	return dli;
 }

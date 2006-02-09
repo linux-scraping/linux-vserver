@@ -40,6 +40,7 @@
 #include <linux/bitops.h>
 #include <linux/capability.h>
 #include <linux/rcupdate.h>
+#include <linux/completion.h>
 #include <linux/vs_memory.h>
 #include <linux/vs_cvirt.h>
 
@@ -288,7 +289,7 @@ typedef struct pfm_context {
 
 	unsigned long		ctx_ovfl_regs[4];	/* which registers overflowed (notification) */
 
-	struct semaphore	ctx_restart_sem;   	/* use for blocking notification mode */
+	struct completion	ctx_restart_done;  	/* use for blocking notification mode */
 
 	unsigned long		ctx_used_pmds[4];	/* bitmask of PMD used            */
 	unsigned long		ctx_all_pmds[4];	/* bitmask of all accessible PMDs */
@@ -1993,7 +1994,7 @@ pfm_close(struct inode *inode, struct file *filp)
 		/*
 		 * force task to wake up from MASKED state
 		 */
-		up(&ctx->ctx_restart_sem);
+		complete(&ctx->ctx_restart_done);
 
 		DPRINT(("waking up ctx_state=%d\n", state));
 
@@ -2708,7 +2709,7 @@ pfm_context_create(pfm_context_t *ctx, void *arg, int count, struct pt_regs *reg
 	/*
 	 * init restart semaphore to locked
 	 */
-	sema_init(&ctx->ctx_restart_sem, 0);
+	init_completion(&ctx->ctx_restart_done);
 
 	/*
 	 * activation is used in SMP only
@@ -3689,7 +3690,7 @@ pfm_restart(pfm_context_t *ctx, void *arg, int count, struct pt_regs *regs)
 	 */
 	if (CTX_OVFL_NOBLOCK(ctx) == 0 && state == PFM_CTX_MASKED) {
 		DPRINT(("unblocking [%d] \n", task->pid));
-		up(&ctx->ctx_restart_sem);
+		complete(&ctx->ctx_restart_done);
 	} else {
 		DPRINT(("[%d] armed exit trap\n", task->pid));
 
@@ -5091,7 +5092,7 @@ pfm_handle_work(void)
 	 * may go through without blocking on SMP systems
 	 * if restart has been received already by the time we call down()
 	 */
-	ret = down_interruptible(&ctx->ctx_restart_sem);
+	ret = wait_for_completion_interruptible(&ctx->ctx_restart_done);
 
 	DPRINT(("after block sleeping ret=%d\n", ret));
 

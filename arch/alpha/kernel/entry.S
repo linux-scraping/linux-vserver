@@ -877,7 +877,6 @@ sys_getxpid:
 	lda	$sp, -16($sp)
 	stq	$26, 0($sp)
 	.prologue 0
-
 	lda	$16, 96($sp)
 	jsr	$26, do_getxpid
 	ldq	$26, 0($sp)

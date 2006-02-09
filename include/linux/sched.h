@@ -817,6 +817,7 @@ struct task_struct {
 	struct sighand_struct *sighand;
 
 	sigset_t blocked, real_blocked;
+	sigset_t saved_sigmask;		/* To be restored with TIF_RESTORE_SIGMASK */
 	struct sigpending pending;
 
 	unsigned long sas_ss_sp;
@@ -979,16 +980,6 @@ static inline int set_cpus_allowed(task_t *p, cpumask_t new_mask)
 {
 	if (!cpu_isset(0, new_mask))
 		return -EINVAL;
-	return 0;
-}
-
-static inline int vx_capable(int cap, int ccap)
-{
-	if (cap_raised(current->cap_effective, cap) &&
-		vx_ccaps(ccap)) {
-		current->flags |= PF_SUPERPRIV;
-		return 1;
-	}
 	return 0;
 }
 #endif

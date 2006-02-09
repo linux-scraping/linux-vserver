@@ -307,8 +307,9 @@ void show_registers(struct pt_regs *regs)
 
 	printk("CPU %d ", cpu);
 	__show_regs(regs);
-	printk("Process %s (pid: %d, threadinfo %p, task %p)\n",
-		cur->comm, cur->pid, task_thread_info(cur), cur);
+	printk("Process %s (pid: %d[#%u], threadinfo %p, task %p)\n",
+		cur->comm, cur->pid, cur->xid,
+		task_thread_info(cur), cur);
 
 	/*
 	 * When in-kernel, we also print out the stack and code at the
