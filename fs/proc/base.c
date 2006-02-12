@@ -549,7 +549,7 @@ static int proc_check_chroot(struct dentry *root, struct vfsmount *vfsmnt)
 
 	/* context admin override */
 	if (capable(CAP_CONTEXT))
-		return 0;
+		goto override;
 
 	read_lock(&current->fs->lock);
 	our_vfsmnt = mntget(current->fs->rootmnt);
@@ -574,6 +574,7 @@ static int proc_check_chroot(struct dentry *root, struct vfsmount *vfsmnt)
 exit:
 	dput(base);
 	mntput(our_vfsmnt);
+override:
 	dput(root);
 	mntput(mnt);
 	return res;

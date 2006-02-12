@@ -246,13 +246,6 @@ int blkdev_ioctl(struct inode *inode, struct file *file, unsigned cmd,
 		set_device_ro(bdev, n);
 		unlock_kernel();
 		return 0;
-
-	case BLKHOLDER:
-		printk("bdev[%p]: holder=%p[%d]\n", bdev, bdev->bd_holder, bdev->bd_holders);
-		if (bdev->bd_holder && bdev->bd_holders)
-			return -EBUSY;
-		return 0;
-
 	case HDIO_GETGEO: {
 		struct hd_geometry geo;
 
