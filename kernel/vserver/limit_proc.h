@@ -9,12 +9,12 @@ static inline void vx_limit_fixup(struct _vx_limit *limit)
 
 	for (lim=0; lim<NUM_LIMITS; lim++) {
 		value = __rlim_get(limit, lim);
-		if (value > limit->rmax[lim])
-			limit->rmax[lim] = value;
-		if (value < limit->rmin[lim])
-			limit->rmin[lim] = value;
-		if (limit->rmax[lim] > limit->hard[lim])
-			limit->rmax[lim] = limit->hard[lim];
+		if (value > __rlim_rmax(limit, lim))
+			__rlim_rmax(limit, lim) = value;
+		if (value < __rlim_rmin(limit, lim))
+			__rlim_rmin(limit, lim) = value;
+		if (__rlim_rmax(limit, lim) > __rlim_hard(limit, lim))
+			__rlim_rmax(limit, lim) = __rlim_hard(limit, lim);
 	}
 }
 
@@ -25,11 +25,11 @@ static inline void vx_limit_fixup(struct _vx_limit *limit)
 
 #define VX_LIMIT_ARG(r)				\
 	,(unsigned long)__rlim_get(limit, r)	\
-	,(unsigned long)limit->rmin[r]		\
-	,(unsigned long)limit->rmax[r]		\
-	,VX_VLIM(limit->soft[r])		\
-	,VX_VLIM(limit->hard[r])		\
-	,atomic_read(&limit->lhit[r])
+	,(unsigned long)__rlim_rmin(limit, r)	\
+	,(unsigned long)__rlim_rmax(limit, r)	\
+	,VX_VLIM(__rlim_soft(limit, r))		\
+	,VX_VLIM(__rlim_hard(limit, r))		\
+	,atomic_read(&__rlim_lhit(limit, r))
 
 static inline int vx_info_proc_limit(struct _vx_limit *limit, char *buffer)
 {

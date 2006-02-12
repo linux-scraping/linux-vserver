@@ -227,7 +227,8 @@ void __show_regs(struct pt_regs *regs)
 void show_regs(struct pt_regs * regs)
 {
 	printk("\n");
-	printk("Pid: %d, comm: %20s\n", current->pid, current->comm);
+	printk("Pid: %d[#%u], comm: %20s\n",
+		current->pid, current->xid, current->comm);
 	__show_regs(regs);
 	__backtrace();
 }

@@ -1,6 +1,7 @@
 #ifndef _VX_SCHED_DEF_H
 #define _VX_SCHED_DEF_H
 
+#include <linux/config.h>
 #include <linux/spinlock.h>
 #include <linux/jiffies.h>
 #include <linux/cpumask.h>
