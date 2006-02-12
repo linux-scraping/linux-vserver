@@ -1,6 +1,7 @@
 #ifndef _VX_CONTEXT_H
 #define _VX_CONTEXT_H
 
+#include <linux/config.h>
 #include <linux/types.h>
 
 

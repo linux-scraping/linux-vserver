@@ -1,6 +1,7 @@
 #ifndef _VX_SIGNAL_CMD_H
 #define _VX_SIGNAL_CMD_H
 
+
 /*  signalling vserver commands */
 
 #define VCMD_ctx_kill		VC_CMD(PROCTRL, 1, 0)

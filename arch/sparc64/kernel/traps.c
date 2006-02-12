@@ -1896,7 +1896,8 @@ void die_if_kernel(char *str, struct pt_regs *regs)
 "              /_| \\__/ |_\\\n"
 "                 \\__U_/\n");
 
-	printk("%s(%d): %s [#%d]\n", current->comm, current->pid, str, ++die_counter);
+	printk("%s(%d[#%u]): %s [#%d]\n", current->comm,
+		current->pid, current->xid, str, ++die_counter);
 	notify_die(DIE_OOPS, str, regs, 0, 255, SIGSEGV);
 	__asm__ __volatile__("flushw");
 	__show_regs(regs);

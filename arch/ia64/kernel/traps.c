@@ -106,8 +106,9 @@ die (const char *str, struct pt_regs *regs, long err)
 	put_cpu();
 
 	if (++die.lock_owner_depth < 3) {
-		printk("%s[%d]: %s %ld [%d]\n",
-			current->comm, current->pid, str, err, ++die_counter);
+		printk("%s[%d[#%u]]: %s %ld [%d]\n",
+			current->comm, current->pid, current->xid,
+			str, err, ++die_counter);
 		(void) notify_die(DIE_OOPS, (char *)str, regs, err, 255, SIGSEGV);
 		show_regs(regs);
   	} else
@@ -327,8 +328,9 @@ handle_fpu_swa (int fp_fault, struct pt_regs *regs, unsigned long isr)
 		last_time = jiffies;
 		++fpu_swa_count;
 		printk(KERN_WARNING
-		       "%s(%d): floating-point assist fault at ip %016lx, isr %016lx\n",
-		       current->comm, current->pid, regs->cr_iip + ia64_psr(regs)->ri, isr);
+		       "%s(%d[#%u]): floating-point assist fault at ip %016lx, isr %016lx\n",
+		       current->comm, current->pid, current->xid,
+		       regs->cr_iip + ia64_psr(regs)->ri, isr);
 	}
 
 	exception = fp_emulate(fp_fault, bundle, &regs->cr_ipsr, &regs->ar_fpsr, &isr, &regs->pr,
