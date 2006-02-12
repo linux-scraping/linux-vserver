@@ -1,7 +1,7 @@
 #ifndef _VX_VS_MEMORY_H
 #define _VX_VS_MEMORY_H
 
-
+#include <linux/config.h>
 #include "vserver/limit.h"
 #include "vserver/debug.h"
 #include "vserver/limit_int.h"

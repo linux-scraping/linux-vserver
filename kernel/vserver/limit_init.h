@@ -1,4 +1,10 @@
 
+#include <linux/config.h>
+
+
+#include <linux/config.h>
+
+
 static inline void vx_info_init_limit(struct _vx_limit *limit)
 {
 	int lim;

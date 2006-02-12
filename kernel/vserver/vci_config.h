@@ -1,4 +1,10 @@
 
+#include <linux/config.h>
+
+
+#include <linux/config.h>
+
+
 enum {
 	VCI_KCBIT_LEGACY = 1,
 	VCI_KCBIT_LEGACYNET,

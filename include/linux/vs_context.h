@@ -1,7 +1,6 @@
 #ifndef _VX_VS_CONTEXT_H
 #define _VX_VS_CONTEXT_H
 
-
 #include <linux/kernel.h>
 #include "vserver/debug.h"
 
