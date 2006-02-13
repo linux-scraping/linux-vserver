@@ -197,7 +197,7 @@ struct ext3_group_desc
 #define EXT3_FL_USER_MODIFIABLE		0x000380FF /* User modifiable flags */
 #endif
 #ifdef	CONFIG_VSERVER_LEGACY
-#define EXT3_IOC_SETXID			FIOC_SETXIDJ
+#define EXT3_IOC_SETTAG			FIOC_SETTAGJ
 #endif
 
 /*
@@ -297,7 +297,7 @@ struct ext3_inode {
 		struct {
 			__u8	l_i_frag;	/* Fragment number */
 			__u8	l_i_fsize;	/* Fragment size */
-			__u16	l_i_xid;	/* LRU Context */
+			__u16	l_i_tag;	/* Context Tag */
 			__le16	l_i_uid_high;	/* these 2 fields    */
 			__le16	l_i_gid_high;	/* were reserved2[0] */
 			__u32	l_i_reserved2;
@@ -331,7 +331,7 @@ struct ext3_inode {
 #define i_gid_low	i_gid
 #define i_uid_high	osd2.linux2.l_i_uid_high
 #define i_gid_high	osd2.linux2.l_i_gid_high
-#define i_raw_xid	osd2.linux2.l_i_xid
+#define i_raw_tag	osd2.linux2.l_i_tag
 #define i_reserved2	osd2.linux2.l_i_reserved2
 
 #elif defined(__GNU__)
@@ -386,7 +386,7 @@ struct ext3_inode {
 #define EXT3_MOUNT_QUOTA		0x80000 /* Some quota option set */
 #define EXT3_MOUNT_USRQUOTA		0x100000 /* "old" user quota */
 #define EXT3_MOUNT_GRPQUOTA		0x200000 /* "old" group quota */
-#define EXT3_MOUNT_TAGXID		(1<<24) /* Enable Context Tags */
+#define EXT3_MOUNT_TAGGED		(1<<24) /* Enable Context Tags */
 
 /* Compatibility, for having both ext2_fs.h and ext3_fs.h included at once */
 #ifndef _LINUX_EXT2_FS_H

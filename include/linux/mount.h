@@ -27,7 +27,7 @@
 #define MNT_RDONLY	0x100
 #define MNT_NOATIME	0x200
 #define MNT_NODIRATIME	0x400
-#define MNT_XID		0x800
+#define MNT_TAGID	0x800
 
 struct vfsmount {
 	struct list_head mnt_hash;
@@ -49,7 +49,7 @@ struct vfsmount {
 	struct vfsmount *mnt_master;	/* slave is on master->mnt_slave_list */
 	struct namespace *mnt_namespace; /* containing namespace */
 	int mnt_pinned;
-	xid_t mnt_xid;			/* xid tagging used for vfsmount */
+	tag_t mnt_tag;			/* tagging used for vfsmount */
 };
 
 #define	MNT_IS_RDONLY(m)	((m) && ((m)->mnt_flags & MNT_RDONLY))

@@ -70,7 +70,7 @@ int syscall32_setup_pages(struct linux_binprm *bprm, int exstack)
 		kmem_cache_free(vm_area_cachep, vma);
 		return ret;
 	}
-	mm->total_vm += npages;
+	vx_vmpages_add(mm, npages);
 	up_write(&mm->mmap_sem);
 	return 0;
 }

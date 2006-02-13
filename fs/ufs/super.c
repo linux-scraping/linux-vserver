@@ -1298,8 +1298,10 @@ static ssize_t ufs_quota_write(struct dqhash *hash, int type,
 		blk++;
 	}
 out:
-	if (len == towrite)
+	if (len == towrite) {
+		up(&inode->i_sem);
 		return err;
+	}
 	if (inode->i_size < off+len-towrite)
 		i_size_write(inode, off+len-towrite);
 	inode->i_version++;

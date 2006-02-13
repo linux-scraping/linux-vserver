@@ -18,7 +18,7 @@
 #include <linux/writeback.h>
 #include <linux/quotaops.h>
 #include <linux/vs_dlimit.h>
-#include <linux/vserver/xid.h>
+#include <linux/vserver/tag.h>
 
 extern int reiserfs_default_io_size;	/* default io size devuned in super.c */
 
@@ -1241,9 +1241,9 @@ static void init_inode(struct inode *inode, struct path *path)
 		sd_attrs_to_i_attrs(sd_v2_attrs(sd), inode);
 	}
 
-	inode->i_uid = INOXID_UID(XID_TAG(inode), uid, gid);
-	inode->i_gid = INOXID_GID(XID_TAG(inode), uid, gid);
-	inode->i_xid = INOXID_XID(XID_TAG(inode), uid, gid, 0);
+	inode->i_uid = INOTAG_UID(DX_TAG(inode), uid, gid);
+	inode->i_gid = INOTAG_GID(DX_TAG(inode), uid, gid);
+	inode->i_tag = INOTAG_TAG(DX_TAG(inode), uid, gid, 0);
 
 	pathrelse(path);
 	if (S_ISREG(inode->i_mode)) {
@@ -1267,8 +1267,8 @@ static void init_inode(struct inode *inode, struct path *path)
 static void inode2sd(void *sd, struct inode *inode, loff_t size)
 {
 	struct stat_data *sd_v2 = (struct stat_data *)sd;
-	uid_t uid = XIDINO_UID(XID_TAG(inode), inode->i_uid, inode->i_xid);
-	gid_t gid = XIDINO_GID(XID_TAG(inode), inode->i_gid, inode->i_xid);
+	uid_t uid = TAGINO_UID(DX_TAG(inode), inode->i_uid, inode->i_tag);
+	gid_t gid = TAGINO_GID(DX_TAG(inode), inode->i_gid, inode->i_tag);
 	__u16 flags;
 
 	set_sd_v2_uid(sd_v2, uid);
@@ -2995,7 +2995,7 @@ int reiserfs_setattr(struct dentry *dentry, struct iattr *attr)
 	if (!error) {
 		if ((ia_valid & ATTR_UID && attr->ia_uid != inode->i_uid) ||
 		    (ia_valid & ATTR_GID && attr->ia_gid != inode->i_gid) ||
-		    (ia_valid & ATTR_XID && attr->ia_xid != inode->i_xid)) {
+		    (ia_valid & ATTR_TAG && attr->ia_tag != inode->i_tag)) {
 			error = reiserfs_chown_xattrs(inode, attr);
 
 			if (!error) {
@@ -3025,9 +3025,9 @@ int reiserfs_setattr(struct dentry *dentry, struct iattr *attr)
 					inode->i_uid = attr->ia_uid;
 				if (attr->ia_valid & ATTR_GID)
 					inode->i_gid = attr->ia_gid;
-				if ((attr->ia_valid & ATTR_XID) &&
-					IS_TAGXID(inode))
-					inode->i_xid = attr->ia_xid;
+				if ((attr->ia_valid & ATTR_TAG) &&
+					IS_TAGGED(inode))
+					inode->i_tag = attr->ia_tag;
 				mark_inode_dirty(inode);
 				error =
 				    journal_end(&th, inode->i_sb, jbegin_count);

@@ -20,6 +20,7 @@
 #include <linux/quotaops.h>
 #include <linux/buffer_head.h>
 #include <linux/vs_dlimit.h>
+#include <linux/vs_tag.h>
 
 #include "bitmap.h"
 
@@ -1132,7 +1133,7 @@ static int ext3_has_free_blocks(struct super_block *sb)
 		"ext3_has_free_blocks(%p): free=%u, root=%u",
 		sb, free_blocks, root_blocks);
 
-	DLIMIT_ADJUST_BLOCK(sb, vx_current_xid(), &free_blocks, &root_blocks);
+	DLIMIT_ADJUST_BLOCK(sb, dx_current_tag(), &free_blocks, &root_blocks);
 
 	cond = (free_blocks < root_blocks + 1 &&
 		!capable(CAP_SYS_RESOURCE) &&

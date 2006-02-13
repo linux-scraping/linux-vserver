@@ -155,8 +155,7 @@ nfsd4_create_clid_dir(struct nfs4_client *clp)
 		dprintk("NFSD: nfsd4_create_clid_dir: DIRECTORY EXISTS\n");
 		goto out_put;
 	}
-	status = vfs_mkdir(rec_dir.dentry->d_inode, dentry,
-		 S_IRWXU, &rec_dir);
+	status = vfs_mkdir(rec_dir.dentry->d_inode, dentry, S_IRWXU, NULL);
 out_put:
 	dput(dentry);
 out_unlock:

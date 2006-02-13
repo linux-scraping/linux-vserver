@@ -123,44 +123,44 @@ config	VSERVER_IDLELIMIT
 	  will also marginally increase scheduling overhead.
 
 choice
-	prompt	"Persistent Inode Context Tagging"
-	default	INOXID_UGID24
+	prompt	"Persistent Inode Tagging"
+	default	TAGGING_ID24
 	help
 	  This adds persistent context information to filesystems
 	  mounted with the tagxid option. Tagging is a requirement
 	  for per-context disk limits and per-context quota.
 
 
-config	INOXID_NONE
+config	TAGGING_NONE
 	bool	"Disabled"
 	help
 	  do not store per-context information in inodes.
 
-config	INOXID_UID16
+config	TAGGING_UID16
 	bool	"UID16/GID32"
 	help
 	  reduces UID to 16 bit, but leaves GID at 32 bit.
 
-config	INOXID_GID16
+config	TAGGING_GID16
 	bool	"UID32/GID16"
 	help
 	  reduces GID to 16 bit, but leaves UID at 32 bit.
 
-config	INOXID_UGID24
+config	TAGGING_ID24
 	bool	"UID24/GID24"
 	help
 	  uses the upper 8bit from UID and GID for XID tagging
 	  which leaves 24bit for UID/GID each, which should be
 	  more than sufficient for normal use.
 
-config	INOXID_INTERN
+config	TAGGING_INTERN
 	bool	"UID32/GID32"
 	help
 	  this uses otherwise reserved inode fields in the on
 	  disk representation, which limits the use to a few
 	  filesystems (currently ext2 and ext3)
 
-config	INOXID_RUNTIME
+config	TAGGING_RUNTIME
 	bool	"Runtime"
 	depends on EXPERIMENTAL
 	help
@@ -170,21 +170,21 @@ config	INOXID_RUNTIME
 
 endchoice
 
-config	XID_TAG_NFSD
+config	TAG_NFSD
 	bool	"Tag NFSD User Auth and Files"
 	default n
 	help
 	  Enable this if you do want the in-kernel NFS
-	  Server to use the xid tagging specified above.
+	  Server to use the tagging specified above.
 	  (will require patched clients too)
 
-config	XID_PROPAGATE
-	bool	"Enable XID Propagation"
+config	PROPAGATE
+	bool	"Enable Inode Tag Propagation"
 	default n
 	depends on EXPERIMENTAL
 	help
-	  This allows for the xid= mount option to specify
-	  an xid which is to be used for the entire mount
+	  This allows for the tagid= mount option to specify
+	  a tagid which is to be used for the entire mount
 	  tree.
 
 config	VSERVER_DEBUG

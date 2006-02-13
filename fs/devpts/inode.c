@@ -24,7 +24,8 @@ static int devpts_permission(struct inode *inode, int mask, struct nameidata *nd
 {
 	int ret = -EACCES;
 
-	if (vx_check(inode->i_xid, VX_IDENT))
+	/* devpts is xid tagged */
+	if (vx_check((xid_t)inode->i_tag, VX_IDENT))
 		ret = generic_permission(inode, mask, NULL);
 	return ret;
 }
@@ -83,7 +84,8 @@ static int devpts_remount(struct super_block *sb, int *flags, char *data)
 
 static int devpts_filter(struct dentry *de)
 {
-	return vx_check(de->d_inode->i_xid, VX_IDENT);
+	/* devpts is xid tagged */
+	return vx_check((xid_t)de->d_inode->i_tag, VX_IDENT);
 }
 
 static int devpts_readdir(struct file * filp, void * dirent, filldir_t filldir)
@@ -127,7 +129,8 @@ devpts_fill_super(struct super_block *s, void *data, int silent)
 	inode->i_op = &simple_dir_inode_operations;
 	inode->i_fop = &devpts_dir_operations;
 	inode->i_nlink = 2;
-	inode->i_xid = vx_current_xid();
+	/* devpts is xid tagged */
+	inode->i_tag = (tag_t)vx_current_xid();
 
 	devpts_root = s->s_root = d_alloc_root(inode);
 	if (s->s_root)
@@ -186,7 +189,8 @@ int devpts_pty_new(struct tty_struct *tty)
 	inode->i_gid = config.setgid ? config.gid : current->fsgid;
 	inode->i_mtime = inode->i_atime = inode->i_ctime = CURRENT_TIME;
 	init_special_inode(inode, S_IFCHR|config.mode, device);
-	inode->i_xid = vx_current_xid();
+	/* devpts is xid tagged */
+	inode->i_tag = (tag_t)vx_current_xid();
 	inode->i_op = &devpts_file_inode_operations;
 	inode->u.generic_ip = tty;
 
