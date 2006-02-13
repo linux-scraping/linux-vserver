@@ -34,6 +34,7 @@
 #include <linux/cpu.h>
 #include <linux/syscalls.h>
 #include <linux/vs_cvirt.h>
+#include <linux/vs_pid.h>
 #include <linux/vserver/sched.h>
 
 #include <asm/uaccess.h>

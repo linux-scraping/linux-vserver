@@ -31,6 +31,7 @@
 #include <linux/signal.h>
 #include <linux/cn_proc.h>
 #include <linux/vs_cvirt.h>
+#include <linux/vs_pid.h>
 
 #include <linux/compat.h>
 #include <linux/syscalls.h>

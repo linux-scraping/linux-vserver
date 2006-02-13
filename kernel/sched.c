@@ -52,6 +52,7 @@
 #include <asm/unistd.h>
 #include <linux/vs_context.h>
 #include <linux/vs_cvirt.h>
+#include <linux/vs_pid.h>
 #include <linux/vs_sched.h>
 
 /*

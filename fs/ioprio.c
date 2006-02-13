@@ -23,7 +23,7 @@
 #include <linux/ioprio.h>
 #include <linux/blkdev.h>
 #include <linux/syscalls.h>
-#include <linux/vs_cvirt.h>
+#include <linux/vs_pid.h>
 
 static int set_task_ioprio(struct task_struct *task, int ioprio)
 {

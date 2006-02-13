@@ -48,7 +48,7 @@
 #include <linux/workqueue.h>
 #include <linux/module.h>
 #include <linux/vs_context.h>
-#include <linux/vs_cvirt.h>
+#include <linux/vs_pid.h>
 
 #ifndef div_long_long_rem
 #include <asm/div64.h>
