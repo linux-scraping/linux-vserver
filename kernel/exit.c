@@ -30,7 +30,9 @@
 #include <linux/signal.h>
 #include <linux/cn_proc.h>
 #include <linux/vs_limit.h>
+#include <linux/vs_context.h>
 #include <linux/vs_network.h>
+#include <linux/vs_cvirt.h>
 
 #include <asm/uaccess.h>
 #include <asm/unistd.h>

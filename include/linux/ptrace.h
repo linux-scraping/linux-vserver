@@ -77,8 +77,6 @@
 
 #include <linux/compiler.h>		/* For unlikely.  */
 #include <linux/sched.h>		/* For struct task_struct.  */
-#include <linux/vs_cvirt.h>
-#include <linux/vs_context.h>
 
 
 extern long arch_ptrace(struct task_struct *child, long request, long addr, long data);

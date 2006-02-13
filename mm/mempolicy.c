@@ -83,6 +83,7 @@
 #include <linux/init.h>
 #include <linux/compat.h>
 #include <linux/mempolicy.h>
+#include <linux/vs_cvirt.h>
 #include <asm/tlbflush.h>
 #include <asm/uaccess.h>
 
