@@ -71,6 +71,7 @@
 #include <linux/cpuset.h>
 #include <linux/audit.h>
 #include <linux/poll.h>
+#include <linux/vs_cvirt.h>
 #include <linux/vs_network.h>
 #include "internal.h"
 
