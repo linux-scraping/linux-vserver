@@ -34,6 +34,7 @@
 #include <linux/namei.h>
 #include <linux/errno.h>
 #include <linux/fs.h>
+#include <linux/mount.h>
 #include <linux/file.h>
 #include <linux/pagemap.h>
 #include <linux/xattr.h>
@@ -835,7 +836,7 @@ int reiserfs_delete_xattrs(struct inode *inode)
 	if (dir->d_inode->i_nlink <= 2) {
 		root = get_xa_root(inode->i_sb);
 		reiserfs_write_lock_xattrs(inode->i_sb);
-		err = vfs_rmdir(root->d_inode, dir);
+		err = vfs_rmdir(root->d_inode, dir, NULL);
 		reiserfs_write_unlock_xattrs(inode->i_sb);
 		dput(root);
 	} else {
@@ -1352,7 +1353,7 @@ __reiserfs_permission(struct inode *inode, int mask, struct nameidata *nd,
 		/*
 		 * Nobody gets write access to a read-only fs.
 		 */
-		if (IS_RDONLY(inode) &&
+		if ((IS_RDONLY(inode) || (nd && MNT_IS_RDONLY(nd->mnt))) &&
 		    (S_ISREG(mode) || S_ISDIR(mode) || S_ISLNK(mode)))
 			return -EROFS;
 

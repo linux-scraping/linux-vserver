@@ -17,6 +17,7 @@
 #include <linux/syscalls.h>
 #include <linux/module.h>
 #include <linux/fsnotify.h>
+#include <linux/mount.h>
 #include <asm/uaccess.h>
 
 /*
@@ -24,7 +25,7 @@
  */
 static long
 setxattr(struct dentry *d, char __user *name, void __user *value,
-	 size_t size, int flags)
+	 size_t size, int flags, struct vfsmount *mnt)
 {
 	int error;
 	void *kvalue = NULL;
@@ -50,6 +51,9 @@ setxattr(struct dentry *d, char __user *name, void __user *value,
 			return -EFAULT;
 		}
 	}
+
+	if (MNT_IS_RDONLY(mnt))
+		return -EROFS;
 
 	down(&d->d_inode->i_sem);
 	error = security_inode_setxattr(d, kname, kvalue, size, flags);
@@ -88,7 +92,7 @@ sys_setxattr(char __user *path, char __user *name, void __user *value,
 	error = user_path_walk(path, &nd);
 	if (error)
 		return error;
-	error = setxattr(nd.dentry, name, value, size, flags);
+	error = setxattr(nd.dentry, name, value, size, flags, nd.mnt);
 	path_release(&nd);
 	return error;
 }
@@ -103,7 +107,7 @@ sys_lsetxattr(char __user *path, char __user *name, void __user *value,
 	error = user_path_walk_link(path, &nd);
 	if (error)
 		return error;
-	error = setxattr(nd.dentry, name, value, size, flags);
+	error = setxattr(nd.dentry, name, value, size, flags, nd.mnt);
 	path_release(&nd);
 	return error;
 }
@@ -118,7 +122,7 @@ sys_fsetxattr(int fd, char __user *name, void __user *value,
 	f = fget(fd);
 	if (!f)
 		return error;
-	error = setxattr(f->f_dentry, name, value, size, flags);
+	error = setxattr(f->f_dentry, name, value, size, flags, f->f_vfsmnt);
 	fput(f);
 	return error;
 }
@@ -307,7 +311,7 @@ sys_flistxattr(int fd, char __user *list, size_t size)
  * Extended attribute REMOVE operations
  */
 static long
-removexattr(struct dentry *d, char __user *name)
+removexattr(struct dentry *d, char __user *name, struct vfsmount *mnt)
 {
 	int error;
 	char kname[XATTR_NAME_MAX + 1];
@@ -317,6 +321,9 @@ removexattr(struct dentry *d, char __user *name)
 		error = -ERANGE;
 	if (error < 0)
 		return error;
+
+	if (MNT_IS_RDONLY(mnt))
+		return -EROFS;
 
 	error = -EOPNOTSUPP;
 	if (d->d_inode->i_op && d->d_inode->i_op->removexattr) {
@@ -342,7 +349,7 @@ sys_removexattr(char __user *path, char __user *name)
 	error = user_path_walk(path, &nd);
 	if (error)
 		return error;
-	error = removexattr(nd.dentry, name);
+	error = removexattr(nd.dentry, name, nd.mnt);
 	path_release(&nd);
 	return error;
 }
@@ -356,7 +363,7 @@ sys_lremovexattr(char __user *path, char __user *name)
 	error = user_path_walk_link(path, &nd);
 	if (error)
 		return error;
-	error = removexattr(nd.dentry, name);
+	error = removexattr(nd.dentry, name, nd.mnt);
 	path_release(&nd);
 	return error;
 }
@@ -370,7 +377,7 @@ sys_fremovexattr(int fd, char __user *name)
 	f = fget(fd);
 	if (!f)
 		return error;
-	error = removexattr(f->f_dentry, name);
+	error = removexattr(f->f_dentry, name, f->f_vfsmnt);
 	fput(f);
 	return error;
 }

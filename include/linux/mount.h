@@ -20,9 +20,12 @@
 #define MNT_NOSUID	0x01
 #define MNT_NODEV	0x02
 #define MNT_NOEXEC	0x04
+#define MNT_RDONLY	0x08
 #define MNT_SHARED	0x10	/* if the vfsmount is a shared mount */
 #define MNT_UNBINDABLE	0x20	/* if the vfsmount is a unbindable mount */
 #define MNT_PNODE_MASK	0x30	/* propogation flag mask */
+#define MNT_NOATIME	0x40
+#define MNT_NODIRATIME	0x80
 #define MNT_XID		0x100
 
 struct vfsmount {
@@ -47,6 +50,10 @@ struct vfsmount {
 	int mnt_pinned;
 	xid_t mnt_xid;			/* xid tagging used for vfsmount */
 };
+
+#define	MNT_IS_RDONLY(m)	((m) && ((m)->mnt_flags & MNT_RDONLY))
+#define	MNT_IS_NOATIME(m)	((m) && ((m)->mnt_flags & MNT_NOATIME))
+#define	MNT_IS_NODIRATIME(m)	((m) && ((m)->mnt_flags & MNT_NODIRATIME))
 
 static inline struct vfsmount *mntget(struct vfsmount *mnt)
 {
