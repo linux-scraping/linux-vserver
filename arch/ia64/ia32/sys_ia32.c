@@ -51,6 +51,7 @@
 #include <linux/compat.h>
 #include <linux/vfs.h>
 #include <linux/mman.h>
+#include <linux/vs_cvirt.h>
 
 #include <asm/intrinsics.h>
 #include <asm/semaphore.h>

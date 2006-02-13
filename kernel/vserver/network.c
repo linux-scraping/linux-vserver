@@ -393,9 +393,10 @@ out:
 }
 
 
+#ifdef CONFIG_INET
+
 #include <linux/netdevice.h>
 #include <linux/inetdevice.h>
-
 
 int ifa_in_nx_info(struct in_ifaddr *ifa, struct nx_info *nxi)
 {
@@ -484,6 +485,7 @@ int nx_addr_conflict(struct nx_info *nxi, uint32_t addr, struct sock *sk)
 	}
 }
 
+#endif /* CONFIG_INET */
 
 /* vserver syscall commands below here */
 

@@ -11,6 +11,7 @@
 
 #include <linux/sched.h>
 #include <linux/mm.h>
+#include <linux/vs_cvirt.h>
 #include <asm/tlbflush.h>
 
 #define NR_CXN	4096
