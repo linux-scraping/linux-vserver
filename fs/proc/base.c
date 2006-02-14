@@ -55,6 +55,7 @@
 #include <linux/proc_fs.h>
 #include <linux/stat.h>
 #include <linux/init.h>
+#include <linux/capability.h>
 #include <linux/file.h>
 #include <linux/string.h>
 #include <linux/seq_file.h>
@@ -540,8 +541,6 @@ static int proc_oom_score(struct task_struct *task, char *buffer)
 
 /* If the process being read is separated by chroot from the reading process,
  * don't let the reader access the threads.
- *
- * note: this does dput(root) and mntput(vfsmnt) on exit.
  */
 static int proc_check_chroot(struct dentry *root, struct vfsmount *vfsmnt)
 {

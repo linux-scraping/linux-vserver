@@ -31,8 +31,6 @@
 
 #define ZFCP_LOG_AREA			ZFCP_LOG_AREA_ERP
 
-#define ZFCP_ERP_REVISION "$Revision: 1.86 $"
-
 #include "zfcp_ext.h"
 
 static int zfcp_erp_adisc(struct zfcp_port *);
@@ -2613,7 +2611,7 @@ zfcp_erp_port_strategy_open_common(struct zfcp_erp_action *erp_action)
 	case ZFCP_ERP_STEP_UNINITIALIZED:
 	case ZFCP_ERP_STEP_PHYS_PORT_CLOSING:
 	case ZFCP_ERP_STEP_PORT_CLOSING:
-		if (adapter->fc_topology == FSF_TOPO_P2P) {
+		if (fc_host_port_type(adapter->scsi_host) == FC_PORTTYPE_PTP) {
 			if (port->wwpn != adapter->peer_wwpn) {
 				ZFCP_LOG_NORMAL("Failed to open port 0x%016Lx "
 						"on adapter %s.\nPeer WWPN "
@@ -3403,7 +3401,7 @@ zfcp_erp_action_dequeue(struct zfcp_erp_action *erp_action)
 /**
  * zfcp_erp_action_cleanup
  *
- * Register unit with scsi stack if appropiate and fix reference counts.
+ * Register unit with scsi stack if appropriate and fix reference counts.
  * Note: Temporary units are not registered with scsi stack.
  */
 static void

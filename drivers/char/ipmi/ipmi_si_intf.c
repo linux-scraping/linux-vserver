@@ -1056,7 +1056,7 @@ MODULE_PARM_DESC(slave_addrs, "Set the default IPMB slave address for"
 #define IPMI_MEM_ADDR_SPACE 1
 #define IPMI_IO_ADDR_SPACE  2
 
-#if defined(CONFIG_ACPI) || defined(CONFIG_X86) || defined(CONFIG_PCI)
+#if defined(CONFIG_ACPI) || defined(CONFIG_DMI) || defined(CONFIG_PCI)
 static int is_new_interface(int intf, u8 addr_space, unsigned long base_addr)
 {
 	int i;
@@ -1580,11 +1580,6 @@ static int try_init_acpi(int intf_num, struct smi_info **new_info)
 	if (! is_new_interface(-1, addr_space, spmi->addr.address))
 		return -ENODEV;
 
-	if (! spmi->addr.register_bit_width) {
-		acpi_failure = 1;
-		return -ENODEV;
-	}
-
 	/* Figure out the interface type. */
 	switch (spmi->InterfaceType)
 	{
@@ -1634,9 +1629,6 @@ static int try_init_acpi(int intf_num, struct smi_info **new_info)
 		regspacings[intf_num] = spmi->addr.register_bit_width / 8;
 		info->io.regspacing = spmi->addr.register_bit_width / 8;
 	} else {
-		/* Some broken systems get this wrong and set the value
-		 * to zero.  Assume it is the default spacing.  If that
-		 * is wrong, too bad, the vendor should fix the tables. */
 		regspacings[intf_num] = DEFAULT_REGSPACING;
 		info->io.regspacing = DEFAULT_REGSPACING;
 	}
@@ -1669,7 +1661,7 @@ static int try_init_acpi(int intf_num, struct smi_info **new_info)
 }
 #endif
 
-#ifdef CONFIG_X86
+#ifdef CONFIG_DMI
 typedef struct dmi_ipmi_data
 {
 	u8   		type;
@@ -1829,7 +1821,7 @@ static int try_init_smbios(int intf_num, struct smi_info **new_info)
 	       ipmi_data->slave_addr);
 	return 0;
 }
-#endif /* CONFIG_X86 */
+#endif /* CONFIG_DMI */
 
 #ifdef CONFIG_PCI
 
@@ -2222,7 +2214,7 @@ static int init_one_smi(int intf_num, struct smi_info **smi)
 	if (rv && si_trydefaults)
 		rv = try_init_acpi(intf_num, &new_smi);
 #endif
-#ifdef CONFIG_X86
+#ifdef CONFIG_DMI
 	if (rv && si_trydefaults)
 		rv = try_init_smbios(intf_num, &new_smi);
 #endif
@@ -2433,7 +2425,7 @@ static __init int init_ipmi_si(void)
 
 	printk(KERN_INFO "IPMI System Interface driver.\n");
 
-#ifdef CONFIG_X86
+#ifdef CONFIG_DMI
 	dmi_find_bmc();
 #endif
 

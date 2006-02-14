@@ -1307,7 +1307,7 @@ void hid_init_reports(struct hid_device *hid)
 	}
 
 	if (err)
-		warn("timeout initializing reports\n");
+		warn("timeout initializing reports");
 }
 
 #define USB_VENDOR_ID_WACOM		0x056a
@@ -1450,11 +1450,17 @@ void hid_init_reports(struct hid_device *hid)
 #define USB_VENDOR_ID_APPLE		0x05ac
 #define USB_DEVICE_ID_APPLE_POWERMOUSE	0x0304
 
+#define USB_VENDOR_ID_CHERRY		0x046a
+#define USB_DEVICE_ID_CHERRY_CYMOTION	0x0023
+
+#define USB_VENDOR_ID_HP		0x03f0
+#define USB_DEVICE_ID_HP_USBHUB_KB	0x020c
+
 /*
  * Alphabetically sorted blacklist by quirk type.
  */
 
-static struct hid_blacklist {
+static const struct hid_blacklist {
 	__u16 idVendor;
 	__u16 idProduct;
 	unsigned quirks;
@@ -1563,6 +1569,7 @@ static struct hid_blacklist {
 	{ USB_VENDOR_ID_ATEN, USB_DEVICE_ID_ATEN_4PORTKVMC, HID_QUIRK_NOGET },
 	{ USB_VENDOR_ID_BTC, USB_DEVICE_ID_BTC_KEYBOARD, HID_QUIRK_NOGET},
 	{ USB_VENDOR_ID_CHICONY, USB_DEVICE_ID_CHICONY_USBHUB_KB, HID_QUIRK_NOGET},
+	{ USB_VENDOR_ID_HP, USB_DEVICE_ID_HP_USBHUB_KB, HID_QUIRK_NOGET },
 	{ USB_VENDOR_ID_TANGTOP, USB_DEVICE_ID_TANGTOP_USBPS2, HID_QUIRK_NOGET },
 
 	{ USB_VENDOR_ID_APPLE, USB_DEVICE_ID_APPLE_POWERMOUSE, HID_QUIRK_2WHEEL_POWERMOUSE },
@@ -1579,6 +1586,16 @@ static struct hid_blacklist {
 	{ USB_VENDOR_ID_NEC, USB_DEVICE_ID_NEC_USB_GAME_PAD, HID_QUIRK_BADPAD },
 	{ USB_VENDOR_ID_SAITEK, USB_DEVICE_ID_SAITEK_RUMBLEPAD, HID_QUIRK_BADPAD },
 	{ USB_VENDOR_ID_TOPMAX, USB_DEVICE_ID_TOPMAX_COBRAPAD, HID_QUIRK_BADPAD },
+
+	{ USB_VENDOR_ID_CHERRY, USB_DEVICE_ID_CHERRY_CYMOTION, HID_QUIRK_CYMOTION },
+
+	{ USB_VENDOR_ID_APPLE, 0x020E, HID_QUIRK_POWERBOOK_HAS_FN },
+	{ USB_VENDOR_ID_APPLE, 0x020F, HID_QUIRK_POWERBOOK_HAS_FN },
+	{ USB_VENDOR_ID_APPLE, 0x0214, HID_QUIRK_POWERBOOK_HAS_FN },
+	{ USB_VENDOR_ID_APPLE, 0x0215, HID_QUIRK_POWERBOOK_HAS_FN },
+	{ USB_VENDOR_ID_APPLE, 0x0216, HID_QUIRK_POWERBOOK_HAS_FN },
+	{ USB_VENDOR_ID_APPLE, 0x030A, HID_QUIRK_POWERBOOK_HAS_FN },
+	{ USB_VENDOR_ID_APPLE, 0x030B, HID_QUIRK_POWERBOOK_HAS_FN },
 
 	{ 0, 0 }
 };
@@ -1624,6 +1641,20 @@ static void hid_free_buffers(struct usb_device *dev, struct hid_device *hid)
 		usb_buffer_free(dev, sizeof(*(hid->cr)), hid->cr, hid->cr_dma);
 	if (hid->ctrlbuf)
 		usb_buffer_free(dev, hid->bufsize, hid->ctrlbuf, hid->ctrlbuf_dma);
+}
+
+/*
+ * Cherry Cymotion keyboard have an invalid HID report descriptor,
+ * that needs fixing before we can parse it.
+ */
+
+static void hid_fixup_cymotion_descriptor(char *rdesc, int rsize)
+{
+	if (rsize >= 17 && rdesc[11] == 0x3c && rdesc[12] == 0x02) {
+		info("Fixing up Cherry Cymotion report descriptor");
+		rdesc[11] = rdesc[16] = 0xff;
+		rdesc[12] = rdesc[17] = 0x03;
+	}
 }
 
 static struct hid_device *usb_hid_configure(struct usb_interface *intf)
@@ -1672,6 +1703,9 @@ static struct hid_device *usb_hid_configure(struct usb_interface *intf)
 		kfree(rdesc);
 		return NULL;
 	}
+
+	if ((quirks & HID_QUIRK_CYMOTION))
+		hid_fixup_cymotion_descriptor(rdesc, rsize);
 
 #ifdef DEBUG_DATA
 	printk(KERN_DEBUG __FILE__ ": report descriptor (size %u, read %d) = ", rsize, n);
@@ -1797,9 +1831,6 @@ static struct hid_device *usb_hid_configure(struct usb_interface *intf)
 	hid->urbctrl->setup_dma = hid->cr_dma;
 	hid->urbctrl->transfer_dma = hid->ctrlbuf_dma;
 	hid->urbctrl->transfer_flags |= (URB_NO_TRANSFER_DMA_MAP | URB_NO_SETUP_DMA_MAP);
-
-	/* May be needed for some devices */
-	usb_clear_halt(hid->dev, hid->urbin->pipe);
 
 	return hid;
 
@@ -1930,7 +1961,6 @@ static struct usb_device_id hid_usb_ids [] = {
 MODULE_DEVICE_TABLE (usb, hid_usb_ids);
 
 static struct usb_driver hid_driver = {
-	.owner =	THIS_MODULE,
 	.name =		"usbhid",
 	.probe =	hid_probe,
 	.disconnect =	hid_disconnect,

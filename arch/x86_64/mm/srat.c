@@ -17,25 +17,23 @@
 #include <linux/topology.h>
 #include <asm/proto.h>
 #include <asm/numa.h>
+#include <asm/e820.h>
 
 static struct acpi_table_slit *acpi_slit;
 
 static nodemask_t nodes_parsed __initdata;
 static nodemask_t nodes_found __initdata;
 static struct node nodes[MAX_NUMNODES] __initdata;
-static __u8  pxm2node[256] = { [0 ... 255] = 0xff };
-
-/* Too small nodes confuse the VM badly. Usually they result
-   from BIOS bugs. */
-#define NODE_MIN_SIZE (4*1024*1024)
+static u8 pxm2node[256] = { [0 ... 255] = 0xff };
 
 static int node_to_pxm(int n);
 
 int pxm_to_node(int pxm)
 {
 	if ((unsigned)pxm >= 256)
-		return 0;
-	return pxm2node[pxm];
+		return -1;
+	/* Extend 0xff to (int)-1 */
+	return (signed char)pxm2node[pxm];
 }
 
 static __init int setup_node(int pxm)
@@ -95,9 +93,36 @@ static __init inline int srat_disabled(void)
 	return numa_off || acpi_numa < 0;
 }
 
+/*
+ * A lot of BIOS fill in 10 (= no distance) everywhere. This messes
+ * up the NUMA heuristics which wants the local node to have a smaller
+ * distance than the others.
+ * Do some quick checks here and only use the SLIT if it passes.
+ */
+static __init int slit_valid(struct acpi_table_slit *slit)
+{
+	int i, j;
+	int d = slit->localities;
+	for (i = 0; i < d; i++) {
+		for (j = 0; j < d; j++)  {
+			u8 val = slit->entry[d*i + j];
+			if (i == j) {
+				if (val != 10)
+					return 0;
+			} else if (val <= 10)
+				return 0;
+		}
+	}
+	return 1;
+}
+
 /* Callback for SLIT parsing */
 void __init acpi_numa_slit_init(struct acpi_table_slit *slit)
 {
+	if (!slit_valid(slit)) {
+		printk(KERN_INFO "ACPI: SLIT table looks invalid. Not used.\n");
+		return;
+	}
 	acpi_slit = slit;
 }
 
@@ -172,14 +197,30 @@ acpi_numa_memory_affinity_init(struct acpi_table_memory_affinity *ma)
 	       nd->start, nd->end);
 }
 
-static void unparse_node(int node)
+/* Sanity check to catch more bad SRATs (they are amazingly common).
+   Make sure the PXMs cover all memory. */
+static int nodes_cover_memory(void)
 {
 	int i;
-	node_clear(node, nodes_parsed);
-	for (i = 0; i < MAX_LOCAL_APIC; i++) {
-		if (apicid_to_node[i] == node)
-			apicid_to_node[i] = NUMA_NO_NODE;
+	unsigned long pxmram, e820ram;
+
+	pxmram = 0;
+	for_each_node_mask(i, nodes_parsed) {
+		unsigned long s = nodes[i].start >> PAGE_SHIFT;
+		unsigned long e = nodes[i].end >> PAGE_SHIFT;
+		pxmram += e - s;
+		pxmram -= e820_hole_size(s, e);
 	}
+
+	e820ram = end_pfn - e820_hole_size(0, end_pfn);
+	if (pxmram < e820ram) {
+		printk(KERN_ERR
+	"SRAT: PXMs only cover %luMB of your %luMB e820 RAM. Not used.\n",
+			(pxmram << PAGE_SHIFT) >> 20,
+			(e820ram << PAGE_SHIFT) >> 20);
+		return 0;
+	}
+	return 1;
 }
 
 void __init acpi_numa_arch_fixup(void) {}
@@ -189,14 +230,20 @@ int __init acpi_scan_nodes(unsigned long start, unsigned long end)
 {
 	int i;
 
-	for (i = 0; i < MAX_NUMNODES; i++) {
- 		cutoff_node(i, start, end);
-		if ((nodes[i].end - nodes[i].start) < NODE_MIN_SIZE)
-			unparse_node(i);
- 	}
-
 	if (acpi_numa <= 0)
 		return -1;
+
+	/* First clean up the node list */
+	for_each_node_mask(i, nodes_parsed) {
+		cutoff_node(i, start, end);
+		if (nodes[i].start == nodes[i].end)
+			node_clear(i, nodes_parsed);
+	}
+
+	if (!nodes_cover_memory()) {
+		bad_srat();
+		return -1;
+	}
 
 	memnode_shift = compute_hash_shift(nodes, nodes_weight(nodes_parsed));
 	if (memnode_shift < 0) {

@@ -147,7 +147,7 @@ int fastcall queue_delayed_work(struct workqueue_struct *wq,
 	return ret;
 }
 
-static inline void run_workqueue(struct cpu_workqueue_struct *cwq)
+static void run_workqueue(struct cpu_workqueue_struct *cwq)
 {
 	unsigned long flags;
 
@@ -318,6 +318,11 @@ struct workqueue_struct *__create_workqueue(const char *name,
 		return NULL;
 
 	wq->cpu_wq = alloc_percpu(struct cpu_workqueue_struct);
+	if (!wq->cpu_wq) {
+		kfree(wq);
+		return NULL;
+	}
+
 	wq->name = name;
 	/* We don't need the distraction of CPUs appearing and vanishing. */
 	lock_cpu_hotplug();
@@ -420,6 +425,25 @@ int schedule_delayed_work_on(int cpu,
 		ret = 1;
 	}
 	return ret;
+}
+
+int schedule_on_each_cpu(void (*func) (void *info), void *info)
+{
+	int cpu;
+	struct work_struct *work;
+
+	work = kmalloc(NR_CPUS * sizeof(struct work_struct), GFP_KERNEL);
+
+	if (!work)
+		return -ENOMEM;
+	for_each_online_cpu(cpu) {
+		INIT_WORK(work + cpu, func, info);
+		__queue_work(per_cpu_ptr(keventd_wq->cpu_wq, cpu),
+				work + cpu);
+	}
+	flush_workqueue(keventd_wq);
+	kfree(work);
+	return 0;
 }
 
 void flush_scheduled_work(void)

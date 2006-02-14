@@ -38,6 +38,12 @@
 int smp_found_config;
 unsigned int __initdata maxcpus = NR_CPUS;
 
+#ifdef CONFIG_HOTPLUG_CPU
+#define CPU_HOTPLUG_ENABLED	(1)
+#else
+#define CPU_HOTPLUG_ENABLED	(0)
+#endif
+
 /*
  * Various Linux-internal data structures created from the
  * MP-table.
@@ -219,14 +225,18 @@ static void __devinit MP_processor_info (struct mpc_config_processor *m)
 	cpu_set(num_processors, cpu_possible_map);
 	num_processors++;
 
-	if ((num_processors > 8) &&
-	    ((APIC_XAPIC(ver) &&
-	     (boot_cpu_data.x86_vendor == X86_VENDOR_INTEL)) ||
-	     (boot_cpu_data.x86_vendor == X86_VENDOR_AMD)))
-		def_to_bigsmp = 1;
-	else
-		def_to_bigsmp = 0;
-
+	if (CPU_HOTPLUG_ENABLED || (num_processors > 8)) {
+		switch (boot_cpu_data.x86_vendor) {
+		case X86_VENDOR_INTEL:
+			if (!APIC_XAPIC(ver)) {
+				def_to_bigsmp = 0;
+				break;
+			}
+			/* If P4 and above fall through */
+		case X86_VENDOR_AMD:
+			def_to_bigsmp = 1;
+		}
+	}
 	bios_cpu_apicid[num_processors - 1] = m->mpc_apicid;
 }
 
@@ -1070,7 +1080,7 @@ void __init mp_config_acpi_legacy_irqs (void)
 
 #define MAX_GSI_NUM	4096
 
-int mp_register_gsi (u32 gsi, int edge_level, int active_high_low)
+int mp_register_gsi (u32 gsi, int triggering, int polarity)
 {
 	int			ioapic = -1;
 	int			ioapic_pin = 0;
@@ -1119,7 +1129,7 @@ int mp_register_gsi (u32 gsi, int edge_level, int active_high_low)
 
 	mp_ioapic_routing[ioapic].pin_programmed[idx] |= (1<<bit);
 
-	if (edge_level) {
+	if (triggering == ACPI_LEVEL_SENSITIVE) {
 		/*
 		 * For PCI devices assign IRQs in order, avoiding gaps
 		 * due to unused I/O APIC pins.
@@ -1141,8 +1151,8 @@ int mp_register_gsi (u32 gsi, int edge_level, int active_high_low)
 	}
 
 	io_apic_set_pci_routing(ioapic, ioapic_pin, gsi,
-		    edge_level == ACPI_EDGE_SENSITIVE ? 0 : 1,
-		    active_high_low == ACPI_ACTIVE_HIGH ? 0 : 1);
+		    triggering == ACPI_EDGE_SENSITIVE ? 0 : 1,
+		    polarity == ACPI_ACTIVE_HIGH ? 0 : 1);
 	return gsi;
 }
 

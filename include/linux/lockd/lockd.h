@@ -84,6 +84,7 @@ struct nlm_rqst {
 	struct nlm_args		a_args;		/* arguments */
 	struct nlm_res		a_res;		/* result */
 	struct nlm_wait *	a_block;
+	unsigned int		a_retries;	/* Retry count */
 	char			a_owner[NLMCLNT_OHSIZE];
 };
 
@@ -148,7 +149,6 @@ struct nlm_rqst * nlmclnt_alloc_call(void);
 int		  nlmclnt_prepare_block(struct nlm_rqst *req, struct nlm_host *host, struct file_lock *fl);
 void		  nlmclnt_finish_block(struct nlm_rqst *req);
 long		  nlmclnt_block(struct nlm_rqst *req, long timeout);
-int		  nlmclnt_cancel(struct nlm_host *, struct file_lock *);
 u32		  nlmclnt_grant(struct nlm_lock *);
 void		  nlmclnt_recovery(struct nlm_host *, u32);
 int		  nlmclnt_reclaim(struct nlm_host *, struct file_lock *);
@@ -172,7 +172,7 @@ extern struct nlm_host *nlm_find_client(void);
 /*
  * Server-side lock handling
  */
-int		  nlmsvc_async_call(struct nlm_rqst *, u32, rpc_action);
+int		  nlmsvc_async_call(struct nlm_rqst *, u32, const struct rpc_call_ops *);
 u32		  nlmsvc_lock(struct svc_rqst *, struct nlm_file *,
 					struct nlm_lock *, int, struct nlm_cookie *);
 u32		  nlmsvc_unlock(struct nlm_file *, struct nlm_lock *);

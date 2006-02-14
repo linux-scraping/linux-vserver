@@ -54,10 +54,12 @@ module_param(ql2xloginretrycount, int, S_IRUGO|S_IRUSR);
 MODULE_PARM_DESC(ql2xloginretrycount,
 		"Specify an alternate value for the NVRAM login retry count.");
 
-int ql2xfwloadbin=1;
-module_param(ql2xfwloadbin, int, S_IRUGO|S_IRUSR);
-MODULE_PARM_DESC(ql2xfwloadbin,
-		"Load ISP2xxx firmware image via hotplug.");
+#if defined(CONFIG_SCSI_QLA2XXX_EMBEDDED_FIRMWARE)
+int ql2xfwloadflash;
+module_param(ql2xfwloadflash, int, S_IRUGO|S_IRUSR);
+MODULE_PARM_DESC(ql2xfwloadflash,
+		"Load ISP24xx firmware image from FLASH (onboard memory).");
+#endif
 
 static void qla2x00_free_device(scsi_qla_host_t *);
 
@@ -68,6 +70,12 @@ module_param(ql2xfdmienable, int, S_IRUGO|S_IRUSR);
 MODULE_PARM_DESC(ql2xfdmienable,
 		"Enables FDMI registratons "
 		"Default is 0 - no FDMI. 1 - perfom FDMI.");
+
+int ql2xprocessrscn;
+module_param(ql2xprocessrscn, int, S_IRUGO|S_IRUSR);
+MODULE_PARM_DESC(ql2xprocessrscn,
+		"Option to enable port RSCN handling via a series of less"
+		"fabric intrusive ADISCs and PLOGIs.");
 
 /*
  * SCSI host template entry points
@@ -748,7 +756,7 @@ qla2xxx_eh_device_reset(struct scsi_cmnd *cmd)
 		if (ret == SUCCESS) {
 			if (fcport->flags & FC_FABRIC_DEVICE) {
 				ha->isp_ops.fabric_logout(ha, fcport->loop_id);
-				qla2x00_mark_device_lost(ha, fcport);
+				qla2x00_mark_device_lost(ha, fcport, 0, 0);
 			}
 		}
 #endif
@@ -1261,12 +1269,16 @@ int qla2x00_probe_one(struct pci_dev *pdev, struct qla_board_info *brd_info)
 	char pci_info[20];
 	char fw_str[30];
 	fc_port_t *fcport;
+	struct scsi_host_template *sht;
 
 	if (pci_enable_device(pdev))
 		goto probe_out;
 
-	host = scsi_host_alloc(brd_info->sht ? brd_info->sht:
-	    &qla2x00_driver_template, sizeof(scsi_qla_host_t));
+	sht = &qla2x00_driver_template;
+	if (pdev->device == PCI_DEVICE_ID_QLOGIC_ISP2422 ||
+	    pdev->device == PCI_DEVICE_ID_QLOGIC_ISP2432)
+		sht = &qla24xx_driver_template;
+	host = scsi_host_alloc(sht, sizeof(scsi_qla_host_t));
 	if (host == NULL) {
 		printk(KERN_WARNING
 		    "qla2xxx: Couldn't allocate host from scsi layer!\n");
@@ -1291,8 +1303,8 @@ int qla2x00_probe_one(struct pci_dev *pdev, struct qla_board_info *brd_info)
 		goto probe_failed;
 
 	qla_printk(KERN_INFO, ha,
-	    "Found an %s, irq %d, iobase 0x%p\n", ha->brd_info->isp_name,
-	    pdev->irq, ha->iobase);
+	    "Found an ISP%04X, irq %d, iobase 0x%p\n", pdev->device, pdev->irq,
+	    ha->iobase);
 
 	spin_lock_init(&ha->hardware_lock);
 
@@ -1368,9 +1380,11 @@ int qla2x00_probe_one(struct pci_dev *pdev, struct qla_board_info *brd_info)
 		ha->isp_ops.reset_adapter = qla24xx_reset_adapter;
 		ha->isp_ops.nvram_config = qla24xx_nvram_config;
 		ha->isp_ops.update_fw_options = qla24xx_update_fw_options;
-		ha->isp_ops.load_risc = qla24xx_load_risc_flash;
-		if (ql2xfwloadbin)
-			ha->isp_ops.load_risc = qla24xx_load_risc_hotplug;
+		ha->isp_ops.load_risc = qla24xx_load_risc;
+#if defined(CONFIG_SCSI_QLA2XXX_EMBEDDED_FIRMWARE)
+		if (ql2xfwloadflash)
+			ha->isp_ops.load_risc = qla24xx_load_risc_flash;
+#endif
 		ha->isp_ops.pci_info_str = qla24xx_pci_info_str;
 		ha->isp_ops.fw_version_str = qla24xx_fw_version_str;
 		ha->isp_ops.intr_handler = qla24xx_intr_handler;
@@ -1531,11 +1545,12 @@ int qla2x00_probe_one(struct pci_dev *pdev, struct qla_board_info *brd_info)
 	qla_printk(KERN_INFO, ha, "\n"
 	    " QLogic Fibre Channel HBA Driver: %s\n"
 	    "  QLogic %s - %s\n"
-	    "  %s: %s @ %s hdma%c, host#=%ld, fw=%s\n", qla2x00_version_str,
-	    ha->model_number, ha->model_desc ? ha->model_desc: "",
-	    ha->brd_info->isp_name, ha->isp_ops.pci_info_str(ha, pci_info),
-	    pci_name(pdev), ha->flags.enable_64bit_addressing ? '+': '-',
-	    ha->host_no, ha->isp_ops.fw_version_str(ha, fw_str));
+	    "  ISP%04X: %s @ %s hdma%c, host#=%ld, fw=%s\n",
+	    qla2x00_version_str, ha->model_number,
+	    ha->model_desc ? ha->model_desc: "", pdev->device,
+	    ha->isp_ops.pci_info_str(ha, pci_info), pci_name(pdev),
+	    ha->flags.enable_64bit_addressing ? '+': '-', ha->host_no,
+	    ha->isp_ops.fw_version_str(ha, fw_str));
 
 	/* Go with fc_rport registration. */
 	list_for_each_entry(fcport, &ha->fcports, list)
@@ -1627,6 +1642,31 @@ qla2x00_free_device(scsi_qla_host_t *ha)
 	pci_disable_device(ha->pdev);
 }
 
+static inline void
+qla2x00_schedule_rport_del(struct scsi_qla_host *ha, fc_port_t *fcport,
+    int defer)
+{
+	unsigned long flags;
+	struct fc_rport *rport;
+
+	if (!fcport->rport)
+		return;
+
+	rport = fcport->rport;
+	if (defer) {
+		spin_lock_irqsave(&fcport->rport_lock, flags);
+		fcport->drport = rport;
+		fcport->rport = NULL;
+		spin_unlock_irqrestore(&fcport->rport_lock, flags);
+		set_bit(FCPORT_UPDATE_NEEDED, &ha->dpc_flags);
+	} else {
+		spin_lock_irqsave(&fcport->rport_lock, flags);
+		fcport->rport = NULL;
+		spin_unlock_irqrestore(&fcport->rport_lock, flags);
+		fc_remote_port_delete(rport);
+	}
+}
+
 /*
  * qla2x00_mark_device_lost Updates fcport state when device goes offline.
  *
@@ -1637,10 +1677,10 @@ qla2x00_free_device(scsi_qla_host_t *ha)
  * Context:
  */
 void qla2x00_mark_device_lost(scsi_qla_host_t *ha, fc_port_t *fcport,
-    int do_login)
+    int do_login, int defer)
 {
-	if (atomic_read(&fcport->state) == FCS_ONLINE && fcport->rport)
-		schedule_work(&fcport->rport_del_work);
+	if (atomic_read(&fcport->state) == FCS_ONLINE)
+		qla2x00_schedule_rport_del(ha, fcport, defer);
 
 	/*
 	 * We may need to retry the login, so don't change the state of the
@@ -1687,7 +1727,7 @@ void qla2x00_mark_device_lost(scsi_qla_host_t *ha, fc_port_t *fcport,
  * Context:
  */
 void
-qla2x00_mark_all_devices_lost(scsi_qla_host_t *ha)
+qla2x00_mark_all_devices_lost(scsi_qla_host_t *ha, int defer)
 {
 	fc_port_t *fcport;
 
@@ -1701,10 +1741,13 @@ qla2x00_mark_all_devices_lost(scsi_qla_host_t *ha)
 		 */
 		if (atomic_read(&fcport->state) == FCS_DEVICE_DEAD)
 			continue;
-		if (atomic_read(&fcport->state) == FCS_ONLINE && fcport->rport)
-			schedule_work(&fcport->rport_del_work);
+		if (atomic_read(&fcport->state) == FCS_ONLINE)
+			qla2x00_schedule_rport_del(ha, fcport, defer);
 		atomic_set(&fcport->state, FCS_DEVICE_LOST);
 	}
+
+	if (defer && ha->dpc_wait && !ha->dpc_active)
+		up(ha->dpc_wait);
 }
 
 /*
@@ -2146,6 +2189,9 @@ qla2x00_do_dpc(void *data)
 			    ha->host_no));
 		}
 
+		if (test_and_clear_bit(FCPORT_UPDATE_NEEDED, &ha->dpc_flags))
+			qla2x00_update_fcports(ha);
+
 		if (test_and_clear_bit(LOOP_RESET_NEEDED, &ha->dpc_flags)) {
 			DEBUG(printk("scsi(%ld): dpc: sched loop_reset()\n",
 			    ha->host_no));
@@ -2204,13 +2250,8 @@ qla2x00_do_dpc(void *data)
 						DEBUG(printk("scsi(%ld): port login OK: logged in ID 0x%x\n",
 						    ha->host_no, fcport->loop_id));
 
-						fcport->port_login_retry_count =
-						    ha->port_down_retry_count * PORT_RETRY_TIME;
-						atomic_set(&fcport->state, FCS_ONLINE);
-						atomic_set(&fcport->port_down_timer,
-						    ha->port_down_retry_count * PORT_RETRY_TIME);
-
-						fcport->login_retry = 0;
+						qla2x00_update_fcport(ha,
+						    fcport);
 					} else if (status == 1) {
 						set_bit(RELOGIN_NEEDED, &ha->dpc_flags);
 						/* retry the login again */
@@ -2454,6 +2495,7 @@ qla2x00_timer(scsi_qla_host_t *ha)
 	if ((test_bit(ISP_ABORT_NEEDED, &ha->dpc_flags) ||
 	    test_bit(LOOP_RESYNC_NEEDED, &ha->dpc_flags) ||
 	    test_bit(LOOP_RESET_NEEDED, &ha->dpc_flags) ||
+	    test_bit(FCPORT_UPDATE_NEEDED, &ha->dpc_flags) ||
 	    start_dpc ||
 	    test_bit(LOGIN_RETRY_NEEDED, &ha->dpc_flags) ||
 	    test_bit(RESET_MARKER_NEEDED, &ha->dpc_flags) ||
@@ -2483,45 +2525,115 @@ qla2x00_down_timeout(struct semaphore *sema, unsigned long timeout)
 	return -ETIMEDOUT;
 }
 
-static struct qla_board_info qla_board_tbl[] = {
-	{
-		.drv_name	= "qla2400",
-		.isp_name	= "ISP2422",
-		.fw_fname	= "ql2400_fw.bin",
-		.sht		= &qla24xx_driver_template,
-	},
-	{
-		.drv_name	= "qla2400",
-		.isp_name	= "ISP2432",
-		.fw_fname	= "ql2400_fw.bin",
-		.sht		= &qla24xx_driver_template,
-	},
+#if defined(CONFIG_SCSI_QLA2XXX_EMBEDDED_FIRMWARE)
+
+#define qla2x00_release_firmware()	do { } while (0)
+#define qla2x00_pci_module_init()	(0)
+#define qla2x00_pci_module_exit()	do { } while (0)
+
+#else	/* !defined(CONFIG_SCSI_QLA2XXX_EMBEDDED_FIRMWARE) */
+
+/* Firmware interface routines. */
+
+#define FW_BLOBS	6
+#define FW_ISP21XX	0
+#define FW_ISP22XX	1
+#define FW_ISP2300	2
+#define FW_ISP2322	3
+#define FW_ISP63XX	4
+#define FW_ISP24XX	5
+
+static DECLARE_MUTEX(qla_fw_lock);
+
+static struct fw_blob qla_fw_blobs[FW_BLOBS] = {
+	{ .name = "ql2100_fw.bin", .segs = { 0x1000, 0 }, },
+	{ .name = "ql2200_fw.bin", .segs = { 0x1000, 0 }, },
+	{ .name = "ql2300_fw.bin", .segs = { 0x800, 0 }, },
+	{ .name = "ql2322_fw.bin", .segs = { 0x800, 0x1c000, 0x1e000, 0 }, },
+	{ .name = "ql6312_fw.bin", .segs = { 0x800, 0 }, },
+	{ .name = "ql2400_fw.bin", },
+};
+
+struct fw_blob *
+qla2x00_request_firmware(scsi_qla_host_t *ha)
+{
+	struct fw_blob *blob;
+
+	blob = NULL;
+	if (IS_QLA2100(ha)) {
+		blob = &qla_fw_blobs[FW_ISP21XX];
+	} else if (IS_QLA2200(ha)) {
+		blob = &qla_fw_blobs[FW_ISP22XX];
+	} else if (IS_QLA2300(ha) || IS_QLA2312(ha)) {
+		blob = &qla_fw_blobs[FW_ISP2300];
+	} else if (IS_QLA2322(ha)) {
+		blob = &qla_fw_blobs[FW_ISP2322];
+	} else if (IS_QLA6312(ha) || IS_QLA6322(ha)) {
+		blob = &qla_fw_blobs[FW_ISP63XX];
+	} else if (IS_QLA24XX(ha)) {
+		blob = &qla_fw_blobs[FW_ISP24XX];
+	}
+
+	down(&qla_fw_lock);
+	if (blob->fw)
+		goto out;
+
+	if (request_firmware(&blob->fw, blob->name, &ha->pdev->dev)) {
+		DEBUG2(printk("scsi(%ld): Failed to load firmware image "
+		    "(%s).\n", ha->host_no, blob->name));
+		blob->fw = NULL;
+		blob = NULL;
+		goto out;
+	}
+
+out:
+	up(&qla_fw_lock);
+	return blob;
+}
+
+static void
+qla2x00_release_firmware(void)
+{
+	int idx;
+
+	down(&qla_fw_lock);
+	for (idx = 0; idx < FW_BLOBS; idx++)
+		if (qla_fw_blobs[idx].fw)
+			release_firmware(qla_fw_blobs[idx].fw);
+	up(&qla_fw_lock);
+}
+
+static struct qla_board_info qla_board_tbl = {
+	.drv_name       = "qla2xxx",
 };
 
 static struct pci_device_id qla2xxx_pci_tbl[] = {
-	{
-		.vendor		= PCI_VENDOR_ID_QLOGIC,
-		.device		= PCI_DEVICE_ID_QLOGIC_ISP2422,
-		.subvendor	= PCI_ANY_ID,
-		.subdevice	= PCI_ANY_ID,
-		.driver_data	= (unsigned long)&qla_board_tbl[0],
-	},
-	{
-		.vendor		= PCI_VENDOR_ID_QLOGIC,
-		.device		= PCI_DEVICE_ID_QLOGIC_ISP2432,
-		.subvendor	= PCI_ANY_ID,
-		.subdevice	= PCI_ANY_ID,
-		.driver_data	= (unsigned long)&qla_board_tbl[1],
-	},
-	{0, 0},
+	{ PCI_VENDOR_ID_QLOGIC, PCI_DEVICE_ID_QLOGIC_ISP2100,
+		PCI_ANY_ID, PCI_ANY_ID, },
+	{ PCI_VENDOR_ID_QLOGIC, PCI_DEVICE_ID_QLOGIC_ISP2200,
+		PCI_ANY_ID, PCI_ANY_ID, },
+	{ PCI_VENDOR_ID_QLOGIC, PCI_DEVICE_ID_QLOGIC_ISP2300,
+		PCI_ANY_ID, PCI_ANY_ID, },
+	{ PCI_VENDOR_ID_QLOGIC, PCI_DEVICE_ID_QLOGIC_ISP2312,
+		PCI_ANY_ID, PCI_ANY_ID, },
+	{ PCI_VENDOR_ID_QLOGIC, PCI_DEVICE_ID_QLOGIC_ISP2322,
+		PCI_ANY_ID, PCI_ANY_ID, },
+	{ PCI_VENDOR_ID_QLOGIC, PCI_DEVICE_ID_QLOGIC_ISP6312,
+		PCI_ANY_ID, PCI_ANY_ID, },
+	{ PCI_VENDOR_ID_QLOGIC, PCI_DEVICE_ID_QLOGIC_ISP6322,
+		PCI_ANY_ID, PCI_ANY_ID, },
+	{ PCI_VENDOR_ID_QLOGIC, PCI_DEVICE_ID_QLOGIC_ISP2422,
+		PCI_ANY_ID, PCI_ANY_ID, },
+	{ PCI_VENDOR_ID_QLOGIC, PCI_DEVICE_ID_QLOGIC_ISP2432,
+		PCI_ANY_ID, PCI_ANY_ID, },
+	{ 0 },
 };
 MODULE_DEVICE_TABLE(pci, qla2xxx_pci_tbl);
 
 static int __devinit
 qla2xxx_probe_one(struct pci_dev *pdev, const struct pci_device_id *id)
 {
-	return qla2x00_probe_one(pdev,
-	    (struct qla_board_info *)id->driver_data);
+	return qla2x00_probe_one(pdev, &qla_board_tbl);
 }
 
 static void __devexit
@@ -2532,10 +2644,27 @@ qla2xxx_remove_one(struct pci_dev *pdev)
 
 static struct pci_driver qla2xxx_pci_driver = {
 	.name		= "qla2xxx",
+	.driver		= {
+		.owner		= THIS_MODULE,
+	},
 	.id_table	= qla2xxx_pci_tbl,
 	.probe		= qla2xxx_probe_one,
 	.remove		= __devexit_p(qla2xxx_remove_one),
 };
+
+static inline int
+qla2x00_pci_module_init(void)
+{
+	return pci_module_init(&qla2xxx_pci_driver);
+}
+
+static inline void
+qla2x00_pci_module_exit(void)
+{
+	pci_unregister_driver(&qla2xxx_pci_driver);
+}
+
+#endif
 
 /**
  * qla2x00_module_init - Module initialization.
@@ -2556,6 +2685,9 @@ qla2x00_module_init(void)
 
 	/* Derive version string. */
 	strcpy(qla2x00_version_str, QLA2XXX_VERSION);
+#if defined(CONFIG_SCSI_QLA2XXX_EMBEDDED_FIRMWARE)
+	strcat(qla2x00_version_str, "-fw");
+#endif
 #if DEBUG_QLA2100
 	strcat(qla2x00_version_str, "-debug");
 #endif
@@ -2565,7 +2697,7 @@ qla2x00_module_init(void)
 		return -ENODEV;
 
 	printk(KERN_INFO "QLogic Fibre Channel HBA Driver\n");
-	ret = pci_module_init(&qla2xxx_pci_driver);
+	ret = qla2x00_pci_module_init();
 	if (ret) {
 		kmem_cache_destroy(srb_cachep);
 		fc_release_transport(qla2xxx_transport_template);
@@ -2579,7 +2711,8 @@ qla2x00_module_init(void)
 static void __exit
 qla2x00_module_exit(void)
 {
-	pci_unregister_driver(&qla2xxx_pci_driver);
+	qla2x00_pci_module_exit();
+	qla2x00_release_firmware();
 	kmem_cache_destroy(srb_cachep);
 	fc_release_transport(qla2xxx_transport_template);
 }

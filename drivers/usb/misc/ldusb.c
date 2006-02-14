@@ -593,7 +593,7 @@ static struct file_operations ld_usb_fops = {
 
 /*
  * usb class driver info in order to get a minor number from the usb core,
- * and to have the device registered with devfs and the driver core
+ * and to have the device registered with the driver core
  */
 static struct usb_class_driver ld_usb_class = {
 	.name =		"ldusb%d",
@@ -763,7 +763,6 @@ static void ld_usb_disconnect(struct usb_interface *intf)
 
 /* usb specific object needed to register this driver with the usb subsystem */
 static struct usb_driver ld_usb_driver = {
-	.owner =	THIS_MODULE,
 	.name =		"ldusb",
 	.probe =	ld_usb_probe,
 	.disconnect =	ld_usb_disconnect,

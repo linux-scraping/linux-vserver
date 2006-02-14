@@ -16,6 +16,7 @@
 #include <linux/eventpoll.h>
 #include <linux/rcupdate.h>
 #include <linux/mount.h>
+#include <linux/capability.h>
 #include <linux/cdev.h>
 #include <linux/fsnotify.h>
 #include <linux/vs_limit.h>
@@ -121,7 +122,7 @@ EXPORT_SYMBOL(get_empty_filp);
 
 void fastcall fput(struct file *file)
 {
-	if (rcuref_dec_and_test(&file->f_count))
+	if (atomic_dec_and_test(&file->f_count))
 		__fput(file);
 }
 
@@ -172,7 +173,7 @@ struct file fastcall *fget(unsigned int fd)
 	rcu_read_lock();
 	file = fcheck_files(files, fd);
 	if (file) {
-		if (!rcuref_inc_lf(&file->f_count)) {
+		if (!atomic_inc_not_zero(&file->f_count)) {
 			/* File object ref couldn't be taken */
 			rcu_read_unlock();
 			return NULL;
@@ -204,7 +205,7 @@ struct file fastcall *fget_light(unsigned int fd, int *fput_needed)
 		rcu_read_lock();
 		file = fcheck_files(files, fd);
 		if (file) {
-			if (rcuref_inc_lf(&file->f_count))
+			if (atomic_inc_not_zero(&file->f_count))
 				*fput_needed = 1;
 			else
 				/* Didn't get the reference, someone's freed */
@@ -219,7 +220,7 @@ struct file fastcall *fget_light(unsigned int fd, int *fput_needed)
 
 void put_filp(struct file *file)
 {
-	if (rcuref_dec_and_test(&file->f_count)) {
+	if (atomic_dec_and_test(&file->f_count)) {
 		security_file_free(file);
 		vx_files_dec(file);
 		file->f_xid = 0;

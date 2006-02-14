@@ -144,7 +144,7 @@ static int __vc_set_iattr(struct dentry *de, uint32_t *xid, uint32_t *flags, uin
 	if ((*mask & IATTR_XID) && !has_xid)
 		return -EINVAL;
 
-	down(&in->i_sem);
+	mutex_lock(&in->i_mutex);
 	if (*mask & IATTR_XID) {
 		attr.ia_xid = *xid;
 		attr.ia_valid |= ATTR_XID;
@@ -198,7 +198,7 @@ static int __vc_set_iattr(struct dentry *de, uint32_t *xid, uint32_t *flags, uin
 	}
 
 out:
-	up(&in->i_sem);
+	mutex_unlock(&in->i_mutex);
 	return error;
 }
 
