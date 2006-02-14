@@ -10,6 +10,7 @@
 #include <linux/limits.h>
 #include <linux/ioctl.h>
 #include <linux/rcuref.h>
+#include <linux/mount.h>
 
 /*
  * It's silly to have NR_OPEN bigger than NR_FILE, but you can change
@@ -1104,8 +1105,16 @@ static inline void mark_inode_dirty_sync(struct inode *inode)
 
 static inline void touch_atime(struct vfsmount *mnt, struct dentry *dentry)
 {
-	/* per-mountpoint checks will go here */
-	update_atime(dentry->d_inode);
+	struct inode *inode = dentry->d_inode;
+
+	if (MNT_IS_NOATIME(mnt))
+		return;
+	if (S_ISDIR(inode->i_mode) && MNT_IS_NODIRATIME(mnt))
+		return;
+	if (IS_RDONLY(inode) || MNT_IS_RDONLY(mnt))
+		return;
+
+	update_atime(inode);
 }
 
 static inline void file_accessed(struct file *file)
