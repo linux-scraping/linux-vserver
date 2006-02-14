@@ -62,6 +62,7 @@
 #include <linux/highuid.h>
 #include <linux/vmalloc.h>
 #include <linux/fsnotify.h>
+#include <linux/vs_cvirt.h>
 #include <asm/mman.h>
 #include <asm/types.h>
 #include <asm/uaccess.h>
