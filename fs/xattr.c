@@ -17,6 +17,7 @@
 #include <linux/syscalls.h>
 #include <linux/module.h>
 #include <linux/fsnotify.h>
+#include <linux/mount.h>
 #include <asm/uaccess.h>
 
 /*

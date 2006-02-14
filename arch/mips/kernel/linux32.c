@@ -37,6 +37,7 @@
 #include <linux/security.h>
 #include <linux/compat.h>
 #include <linux/vfs.h>
+#include <linux/vs_cvirt.h>
 
 #include <net/sock.h>
 #include <net/scm.h>

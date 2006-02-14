@@ -153,7 +153,7 @@ void show_regs(struct pt_regs *regs)
 {
 	struct task_struct *tsk = current;
 
-        printk("CPU:    %d    %s\n", tsk->thread_info->cpu, print_tainted());
+	printk("CPU:    %d    %s\n", tsk->thread_info->cpu, print_tainted());
 	printk("Process %s (pid: %d[#%u], task: %p, ksp: %p)\n",
 	       current->comm, current->pid, current->xid,
 	       (void *) tsk, (void *) tsk->thread.ksp);
