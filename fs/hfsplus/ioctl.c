@@ -15,7 +15,6 @@
 #include <linux/fs.h>
 #include <linux/sched.h>
 #include <linux/xattr.h>
-#include <linux/mount.h>
 #include <asm/uaccess.h>
 #include "hfsplus_fs.h"
 

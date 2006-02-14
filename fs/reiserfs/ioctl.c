@@ -3,7 +3,6 @@
  */
 
 #include <linux/fs.h>
-#include <linux/mount.h>
 #include <linux/reiserfs_fs.h>
 #include <linux/time.h>
 #include <asm/uaccess.h>

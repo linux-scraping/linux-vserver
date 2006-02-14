@@ -33,6 +33,7 @@
 #include <linux/security.h>
 #include <linux/audit.h>
 #include <linux/signal.h>
+#include <linux/vs_pid.h>
 
 #include <asm/segment.h>
 #include <asm/page.h>
