@@ -163,7 +163,7 @@ static int meminfo_read_proc(char *page, char **start, off_t off,
 		* sysctl_overcommit_ratio / 100) + total_swap_pages;
 
 	cached = get_page_cache_size() - total_swapcache_pages - i.bufferram;
-	if (cached < 0)
+	if (cached < 0 || vx_flags(VXF_VIRT_MEM, 0))
 		cached = 0;
 
 	get_vmalloc_info(&vmi);

@@ -2704,6 +2704,7 @@ __cache_alloc(struct kmem_cache *cachep, gfp_t flags, void *caller)
 
 	local_irq_save(save_flags);
 	objp = ____cache_alloc(cachep, flags);
+	vx_slab_alloc(cachep, flags);
 	local_irq_restore(save_flags);
 	objp = cache_alloc_debugcheck_after(cachep, flags, objp,
 					    caller);

@@ -30,6 +30,7 @@
 #include <linux/capability.h>
 #include <linux/ptrace.h>
 #include <linux/seq_file.h>
+#include <linux/vs_context.h>
 #include <linux/vs_limit.h>
 
 #include <asm/uaccess.h>

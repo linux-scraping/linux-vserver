@@ -412,9 +412,10 @@ out:
 }
 
 
+#ifdef CONFIG_INET
+
 #include <linux/netdevice.h>
 #include <linux/inetdevice.h>
-
 
 int ifa_in_nx_info(struct in_ifaddr *ifa, struct nx_info *nxi)
 {
@@ -514,6 +515,7 @@ void nx_set_persistant(struct nx_info *nxi)
 	}
 }
 
+#endif /* CONFIG_INET */
 
 /* vserver syscall commands below here */
 

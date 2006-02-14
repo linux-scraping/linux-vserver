@@ -782,7 +782,7 @@ next_normal:
 			inet_twsk_for_each(tw, node,
 				    &hashinfo->ehash[i + hashinfo->ehash_size].chain) {
 
-				if (!vx_check(sk->sk_xid, VX_IDENT|VX_WATCH))
+				if (!vx_check(tw->tw_xid, VX_IDENT|VX_WATCH))
 					continue;
 				if (num < s_num)
 					goto next_dying;

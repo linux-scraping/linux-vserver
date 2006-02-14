@@ -73,6 +73,7 @@
 #include <linux/audit.h>
 #include <linux/poll.h>
 #include <linux/vs_network.h>
+#include <linux/vs_pid.h>
 #include "internal.h"
 
 /*
@@ -560,11 +561,11 @@ static int proc_check_chroot(struct dentry *root, struct vfsmount *vfsmnt)
 	de = root;
 	mnt = vfsmnt;
 
-	while (vfsmnt != our_vfsmnt) {
-		if (vfsmnt == vfsmnt->mnt_parent)
+	while (mnt != our_vfsmnt) {
+		if (mnt == mnt->mnt_parent)
 			goto out;
-		de = vfsmnt->mnt_mountpoint;
-		vfsmnt = vfsmnt->mnt_parent;
+		de = mnt->mnt_mountpoint;
+		mnt = mnt->mnt_parent;
 	}
 
 	if (!is_subdir(de, base))
@@ -576,7 +577,7 @@ exit:
 	mntput(our_vfsmnt);
 override:
 	dput(root);
-	mntput(mnt);
+	mntput(vfsmnt);
 	return res;
 out:
 	spin_unlock(&vfsmount_lock);

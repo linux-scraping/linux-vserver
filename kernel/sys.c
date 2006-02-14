@@ -32,6 +32,7 @@
 #include <linux/signal.h>
 #include <linux/cn_proc.h>
 #include <linux/vs_cvirt.h>
+#include <linux/vs_pid.h>
 
 #include <linux/compat.h>
 #include <linux/syscalls.h>
@@ -1118,7 +1119,7 @@ asmlinkage long sys_setpgid(pid_t pid, pid_t pgid)
 	int err = -EINVAL;
 
 	if (!pid)
-		pid = group_leader->pid;
+		pid = vx_map_pid(group_leader->pid);
 	if (!pgid)
 		pgid = pid;
 	if (pgid < 0)
