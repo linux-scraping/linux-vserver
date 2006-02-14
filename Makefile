@@ -1,7 +1,7 @@
 VERSION = 2
 PATCHLEVEL = 6
 SUBLEVEL = 16
-EXTRAVERSION = -rc2-vs2.1.1-rc2
+EXTRAVERSION = -rc2-vs2.1.1-rc3
 NAME=Sliding Snow Leopard
 
 # *DOCUMENTATION*
