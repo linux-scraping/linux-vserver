@@ -303,7 +303,7 @@ struct page {
  */
 #define put_page_testzero(p)				\
 	({						\
-		BUG_ON(page_count(p) == 0);		\
+		BUG_ON(atomic_read(&(p)->_count) == -1);\
 		atomic_add_negative(-1, &(p)->_count);	\
 	})
 
@@ -1050,6 +1050,8 @@ int shrink_slab(unsigned long scanned, gfp_t gfp_mask,
 			unsigned long lru_pages);
 void drop_pagecache(void);
 void drop_slab(void);
+
+extern int randomize_va_space;
 
 #endif /* __KERNEL__ */
 #endif /* _LINUX_MM_H */

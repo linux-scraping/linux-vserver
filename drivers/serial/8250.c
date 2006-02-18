@@ -2198,7 +2198,7 @@ serial8250_console_write(struct console *co, const char *s, unsigned int count)
 	touch_nmi_watchdog();
 
 	/*
-	 *	First save the UER then disable the interrupts
+	 *	First save the IER then disable the interrupts
 	 */
 	ier = serial_in(up, UART_IER);
 
@@ -2229,6 +2229,7 @@ serial8250_console_write(struct console *co, const char *s, unsigned int count)
 	 *	and restore the IER
 	 */
 	wait_for_xmitr(up, BOTH_EMPTY);
+	up->ier |= UART_IER_THRI;
 	serial_out(up, UART_IER, ier | UART_IER_THRI);
 }
 

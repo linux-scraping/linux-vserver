@@ -13,7 +13,6 @@
  *
  */
 
-#include <asm/bug.h>
 #include <linux/config.h>
 #include <linux/slab.h>
 #include <linux/kmod.h>
@@ -890,7 +889,9 @@ restart:
 			xfrm_pol_put(policy);
 			if (dst)
 				dst_free(dst);
-			goto restart;
+
+			err = -EHOSTUNREACH;
+			goto error;
 		}
 		dst->next = policy->bundles;
 		policy->bundles = dst;
