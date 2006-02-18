@@ -3,7 +3,7 @@
  *
  *  Virtual Server: Context Virtualization
  *
- *  Copyright (C) 2004-2005  Herbert Pötzl
+ *  Copyright (C) 2004-2006  Herbert Pötzl
  *
  *  V0.01  broken out from limit.c
  *  V0.02  added utsname stuff

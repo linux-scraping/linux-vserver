@@ -3,7 +3,7 @@
  *
  *  Virtual Server: Signal Support
  *
- *  Copyright (C) 2003-2005  Herbert Pötzl
+ *  Copyright (C) 2003-2006  Herbert Pötzl
  *
  *  V0.01  broken out from vcontext V0.05
  *
