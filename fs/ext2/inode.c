@@ -67,8 +67,6 @@ void ext2_put_inode(struct inode *inode)
 		ext2_discard_prealloc(inode);
 }
 
-static void ext2_truncate_nocheck (struct inode * inode);
-
 /*
  * Called at the last iput() if i_nlink is zero.
  */
@@ -84,7 +82,7 @@ void ext2_delete_inode (struct inode * inode)
 
 	inode->i_size = 0;
 	if (inode->i_blocks)
-		ext2_truncate_nocheck(inode);
+		ext2_truncate (inode);
 	ext2_free_inode (inode);
 
 	return;
@@ -911,7 +909,7 @@ static void ext2_free_branches(struct inode *inode, __le32 *p, __le32 *q, int de
 		ext2_free_data(inode, p, q);
 }
 
-static void ext2_truncate_nocheck(struct inode * inode)
+void ext2_truncate (struct inode * inode)
 {
 	__le32 *i_data = EXT2_I(inode)->i_data;
 	int addr_per_block = EXT2_ADDR_PER_BLOCK(inode->i_sb);
@@ -927,6 +925,8 @@ static void ext2_truncate_nocheck(struct inode * inode)
 	    S_ISLNK(inode->i_mode)))
 		return;
 	if (ext2_inode_is_fast_symlink(inode))
+		return;
+	if (IS_APPEND(inode) || IS_IMMUTABLE(inode))
 		return;
 
 	ext2_discard_prealloc(inode);
@@ -1049,13 +1049,6 @@ Eio:
 		   (unsigned long) ino, block);
 Egdp:
 	return ERR_PTR(-EIO);
-}
-
-void ext2_truncate (struct inode * inode)
-{
-	if (IS_APPEND(inode) || IS_IMMUTABLE(inode))
-		return;
-	ext2_truncate_nocheck(inode);
 }
 
 void ext2_set_inode_flags(struct inode *inode)
