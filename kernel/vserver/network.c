@@ -504,6 +504,8 @@ int nx_addr_conflict(struct nx_info *nxi, uint32_t addr, struct sock *sk)
 	}
 }
 
+#endif /* CONFIG_INET */
+
 void nx_set_persistant(struct nx_info *nxi)
 {
 	if (nx_info_flags(nxi, NXF_PERSISTANT, 0)) {
@@ -514,8 +516,6 @@ void nx_set_persistant(struct nx_info *nxi)
 		put_nx_info(nxi);
 	}
 }
-
-#endif /* CONFIG_INET */
 
 /* vserver syscall commands below here */
 
