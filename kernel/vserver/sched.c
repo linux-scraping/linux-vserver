@@ -27,8 +27,6 @@ void vx_update_sched_param(struct _vx_sched *sched,
 {
 	unsigned int set_mask = sched->update_mask;
 
-	printk("updating scheduler params ... %x\n", set_mask);
-
 	if (set_mask & VXSM_FILL_RATE)
 		sched_pc->fill_rate[0] = sched->fill_rate[0];
 	if (set_mask & VXSM_INTERVAL)
