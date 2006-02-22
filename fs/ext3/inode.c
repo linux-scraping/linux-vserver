@@ -181,8 +181,6 @@ static int ext3_journal_test_restart(handle_t *handle, struct inode *inode)
 	return ext3_journal_restart(handle, blocks_for_truncate(inode));
 }
 
-static void ext3_truncate_nocheck (struct inode *inode);
-
 /*
  * Called at the last iput() if i_nlink is zero.
  */
@@ -208,7 +206,7 @@ void ext3_delete_inode (struct inode * inode)
 		handle->h_sync = 1;
 	inode->i_size = 0;
 	if (inode->i_blocks)
-		ext3_truncate_nocheck(inode);
+		ext3_truncate(inode);
 	/*
 	 * Kill off the orphan record which ext3_truncate created.
 	 * AKPM: I think this can be inside the above `if'.
@@ -2081,7 +2079,7 @@ static void ext3_free_branches(handle_t *handle, struct inode *inode,
  * ext3_truncate() run will find them and release them.
  */
 
-void ext3_truncate_nocheck(struct inode * inode)
+void ext3_truncate(struct inode * inode)
 {
 	handle_t *handle;
 	struct ext3_inode_info *ei = EXT3_I(inode);
@@ -2101,6 +2099,8 @@ void ext3_truncate_nocheck(struct inode * inode)
 	    S_ISLNK(inode->i_mode)))
 		return;
 	if (ext3_inode_is_fast_symlink(inode))
+		return;
+	if (IS_APPEND(inode) || IS_IMMUTABLE(inode))
 		return;
 
 	/*
@@ -2418,13 +2418,6 @@ int ext3_get_inode_loc(struct inode *inode, struct ext3_iloc *iloc)
 	/* We have all inode data except xattrs in memory here. */
 	return __ext3_get_inode_loc(inode, iloc,
 		!(EXT3_I(inode)->i_state & EXT3_STATE_XATTR));
-}
-
-void ext3_truncate(struct inode * inode)
-{
-	if (IS_APPEND(inode) || IS_IMMUTABLE(inode))
-		return;
-	ext3_truncate_nocheck(inode);
 }
 
 void ext3_set_inode_flags(struct inode *inode)
