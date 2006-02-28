@@ -213,6 +213,28 @@ static inline void __leave_vx_admin(struct vx_info_save *vxis)
 
 extern void exit_vx_info(struct task_struct *);
 
+
+static inline
+struct task_struct *vx_child_reaper(struct task_struct *p)
+{
+	struct vx_info *vxi = p->vx_info;
+	struct task_struct *reaper = child_reaper;
+
+	if (!vxi)
+		goto out;
+
+	BUG_ON(!p->vx_info->vx_reaper);
+
+	/* child reaper for the guest reaper */
+	if (vxi->vx_reaper == p)
+		goto out;
+
+	reaper = vxi->vx_reaper;
+out:
+	return reaper;
+}
+
+
 #else
 #warning duplicate inclusion
 #endif

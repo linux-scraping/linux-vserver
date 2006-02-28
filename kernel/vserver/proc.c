@@ -785,7 +785,7 @@ int proc_vnet_readdir(struct file * filp,
 {
 	unsigned int nid_array[PROC_MAXVIDS];
 	char buf[PROC_NUMBUF];
-	unsigned int nr = filp->f_pos-3;
+	unsigned int nr = filp->f_pos-2;
 	unsigned int nr_nids, i;
 //	int visible = vx_check(0, VX_ADMIN|VX_WATCH);
 	ino_t ino;

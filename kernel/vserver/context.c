@@ -87,6 +87,10 @@ static struct vx_info *__alloc_vx_info(xid_t xid)
 	new->vx_state = 0;
 	init_waitqueue_head(&new->vx_wait);
 
+	/* prepare reaper */
+	get_task_struct(child_reaper);
+	new->vx_reaper = child_reaper;
+
 	/* rest of init goes here */
 	vx_info_init_limit(&new->limit);
 	vx_info_init_sched(&new->sched);
@@ -548,21 +552,6 @@ out:
 }
 #endif
 
-
-/*	task must me current or locked		*/
-
-void	exit_vx_info(struct task_struct *p)
-{
-	struct vx_info *vxi = p->vx_info;
-
-	if (vxi) {
-		atomic_dec(&vxi->cvirt.nr_threads);
-		vx_nproc_dec(p);
-		release_vx_info(vxi, p);
-	}
-}
-
-
 #ifdef	CONFIG_VSERVER_DEBUG
 
 void	dump_vx_info_inactive(int level)
@@ -690,12 +679,32 @@ out:
 	return ret;
 }
 
+int vx_set_reaper(struct vx_info *vxi, struct task_struct *p)
+{
+	struct task_struct *old_reaper;
+
+	if (!vxi)
+		return -EINVAL;
+
+	vxdprintk(VXD_CBIT(xid, 6),
+		"vx_set_reaper(%p[#%d],%p[#%d,%d])",
+		vxi, vxi->vx_id, p, p->xid, p->pid);
+
+	old_reaper = vxi->vx_reaper;
+	if (old_reaper == p)
+		return 0;
+
+	/* set new child reaper */
+	get_task_struct(p);
+	vxi->vx_reaper = p;
+	put_task_struct(old_reaper);
+	return 0;
+}
+
 int vx_set_init(struct vx_info *vxi, struct task_struct *p)
 {
 	if (!vxi)
 		return -EINVAL;
-	if (vxi->vx_initpid)
-		return -EPERM;
 
 	vxdprintk(VXD_CBIT(xid, 6),
 		"vx_set_init(%p[#%d],%p[#%d,%d,%d])",
@@ -703,6 +712,15 @@ int vx_set_init(struct vx_info *vxi, struct task_struct *p)
 
 	vxi->vx_initpid = p->tgid;
 	return 0;
+}
+
+void vx_exit_init(struct vx_info *vxi, struct task_struct *p)
+{
+	vxdprintk(VXD_CBIT(xid, 6),
+		"vx_exit_init(%p[#%d],%p[#%d,%d,%d])",
+		vxi, vxi->vx_id, p, p->xid, p->pid, p->tgid);
+
+	vxi->vx_initpid = 0;
 }
 
 void vx_set_persistant(struct vx_info *vxi)
@@ -716,6 +734,25 @@ void vx_set_persistant(struct vx_info *vxi)
 	} else {
 		release_vx_info(vxi, current);
 		put_vx_info(vxi);
+	}
+}
+
+
+/*	task must be current or locked		*/
+
+void	exit_vx_info(struct task_struct *p)
+{
+	struct vx_info *vxi = p->vx_info;
+
+	if (vxi) {
+		atomic_dec(&vxi->cvirt.nr_threads);
+		vx_nproc_dec(p);
+
+		if (vxi->vx_initpid == p->tgid)
+			vx_exit_init(vxi, p);
+		if (vxi->vx_reaper == p)
+			vx_set_reaper(vxi, child_reaper);
+		release_vx_info(vxi, p);
 	}
 }
 
@@ -878,8 +915,10 @@ int vc_set_cflags(uint32_t id, void __user *data)
 	if (vxi == current->vx_info) {
 		if (trigger & VXF_STATE_SETUP)
 			vx_mask_bcaps(vxi, current);
-		if (trigger & VXF_STATE_INIT)
+		if (trigger & VXF_STATE_INIT) {
 			vx_set_init(vxi, current);
+			vx_set_reaper(vxi, current);
+		}
 	}
 
 	vxi->vx_flags = vx_mask_flags(vxi->vx_flags,
