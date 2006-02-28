@@ -376,7 +376,7 @@ void daemonize(const char *name, ...)
 	atomic_inc(&fs->count);
 	exit_namespace(current);
 	current->namespace = init_task.namespace;
-	atomic_inc(&current->namespace->count);
+	get_namespace(current->namespace);
  	exit_files(current);
 	current->files = init_task.files;
 	atomic_inc(&current->files->count);
