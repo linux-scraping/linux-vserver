@@ -113,7 +113,8 @@ struct vx_info {
 	uint64_t vx_bcaps;			/* bounding caps (system) */
 	uint64_t vx_ccaps;			/* context caps (vserver) */
 
-	pid_t vx_initpid;			/* PID of fake init process */
+	struct task_struct *vx_reaper;		/* guest reaper process */
+	pid_t vx_initpid;			/* PID of guest init */
 
 	wait_queue_head_t vx_wait;		/* context exit waitqueue */
 

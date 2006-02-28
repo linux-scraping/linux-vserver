@@ -92,6 +92,8 @@ debug_xid:
 	"task_get_vx_info(%p)"
 	"vx_migrate_task(%p,%p[#%d.%d])"
  6  40	"vx_set_init(%p[#%d],%p[#%d,%d,%d])"
+	"vx_exit_init(%p[#%d],%p[#%d,%d,%d])"
+	"vx_set_reaper(%p[#%d],%p[#%d,%d])"
  7  80	"vx_parse_xid(»%s«): %d:#%d"
 	"vx_propagate_xid(%p[#%lu.%d]): %d,%d"
 

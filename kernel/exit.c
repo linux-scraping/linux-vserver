@@ -607,30 +607,6 @@ static inline void reparent_thread(task_t *p, task_t *father, int traced)
 	}
 }
 
-static inline
-struct task_struct *vchild_reaper(struct task_struct *father)
-{
-	struct vx_info *vxi;
-	struct task_struct *reaper, *init;
-
-	reaper = child_reaper;
-	vxi = task_get_vx_info(father);
-	if (!vxi)
-		goto out;
-
-	if (!vxi->vx_initpid)
-		goto out_put;
-
-	init = find_task_by_real_pid(vxi->vx_initpid);
-	if (init && (init != father))
-		reaper = init;
-
-out_put:
-	put_vx_info(vxi);
-out:
-	return reaper;
-}
-
 /*
  * When we die, we re-parent all our children.
  * Try to give them to another thread in our thread
@@ -647,7 +623,7 @@ static inline void forget_original_parent(struct task_struct * father,
 	do {
 		reaper = next_thread(reaper);
 		if (reaper == father) {
-			reaper = vchild_reaper(father);
+			reaper = vx_child_reaper(father);
 			break;
 		}
 	} while (reaper->exit_state);
@@ -671,7 +647,7 @@ static inline void forget_original_parent(struct task_struct * father,
 
 		if (father == p->real_parent) {
 			/* reparent with a reaper, real father it's us */
-			choose_new_parent(p, reaper);
+			choose_new_parent(p, vx_child_reaper(p));
 			reparent_thread(p, father, 0);
 		} else {
 			/* reparent ptraced task to its real parent */
@@ -692,6 +668,10 @@ static inline void forget_original_parent(struct task_struct * father,
 	}
 	list_for_each_safe(_p, _n, &father->ptrace_children) {
 		p = list_entry(_p,struct task_struct,ptrace_list);
+
+		/* check for reaper context */
+		BUG_ON(p->xid != reaper->xid);
+
 		choose_new_parent(p, reaper);
 		reparent_thread(p, father, 1);
 	}
