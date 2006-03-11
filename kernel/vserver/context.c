@@ -723,12 +723,12 @@ void vx_exit_init(struct vx_info *vxi, struct task_struct *p)
 	vxi->vx_initpid = 0;
 }
 
-void vx_set_persistant(struct vx_info *vxi)
+void vx_set_persistent(struct vx_info *vxi)
 {
 	vxdprintk(VXD_CBIT(xid, 6),
-		"vx_set_persistant(%p[#%d])", vxi, vxi->vx_id);
+		"vx_set_persistent(%p[#%d])", vxi, vxi->vx_id);
 
-	if (vx_info_flags(vxi, VXF_PERSISTANT, 0)) {
+	if (vx_info_flags(vxi, VXF_PERSISTENT, 0)) {
 		get_vx_info(vxi);
 		claim_vx_info(vxi, current);
 	} else {
@@ -834,9 +834,9 @@ int vc_ctx_create(uint32_t xid, void __user *data)
 	/* initial flags */
 	new_vxi->vx_flags = vc_data.flagword;
 
-	/* get a reference for persistant contexts */
-	if ((vc_data.flagword & VXF_PERSISTANT))
-		vx_set_persistant(new_vxi);
+	/* get a reference for persistent contexts */
+	if ((vc_data.flagword & VXF_PERSISTENT))
+		vx_set_persistent(new_vxi);
 
 	vs_state_change(new_vxi, VSC_STARTUP);
 	ret = new_vxi->vx_id;
@@ -849,10 +849,13 @@ int vc_ctx_create(uint32_t xid, void __user *data)
 
 int vc_ctx_migrate(uint32_t id, void __user *data)
 {
+	struct vcmd_ctx_migrate vc_data = { .flagword = 0 };
 	struct vx_info *vxi;
 
 	if (!capable(CAP_SYS_ADMIN))
 		return -EPERM;
+	if (data && copy_from_user (&vc_data, data, sizeof(vc_data)))
+		return -EFAULT;
 
 	/* dirty hack until Spectator becomes a cap */
 	if (id == 1) {
@@ -864,6 +867,10 @@ int vc_ctx_migrate(uint32_t id, void __user *data)
 	if (!vxi)
 		return -ESRCH;
 	vx_migrate_task(current, vxi);
+	if (vc_data.flagword & VXM_SET_INIT)
+		vx_set_init(vxi, current);
+	if (vc_data.flagword & VXM_SET_REAPER)
+		vx_set_reaper(vxi, current);
 	put_vx_info(vxi);
 	return 0;
 }
@@ -923,8 +930,8 @@ int vc_set_cflags(uint32_t id, void __user *data)
 
 	vxi->vx_flags = vx_mask_flags(vxi->vx_flags,
 		vc_data.flagword, mask);
-	if (trigger & VXF_PERSISTANT)
-		vx_set_persistant(vxi);
+	if (trigger & VXF_PERSISTENT)
+		vx_set_persistent(vxi);
 
 	put_vx_info(vxi);
 	return 0;

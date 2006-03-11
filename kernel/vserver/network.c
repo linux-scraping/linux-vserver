@@ -506,9 +506,9 @@ int nx_addr_conflict(struct nx_info *nxi, uint32_t addr, struct sock *sk)
 
 #endif /* CONFIG_INET */
 
-void nx_set_persistant(struct nx_info *nxi)
+void nx_set_persistent(struct nx_info *nxi)
 {
-	if (nx_info_flags(nxi, NXF_PERSISTANT, 0)) {
+	if (nx_info_flags(nxi, NXF_PERSISTENT, 0)) {
 		get_nx_info(nxi);
 		claim_nx_info(nxi, current);
 	} else {
@@ -593,9 +593,9 @@ int vc_net_create(uint32_t nid, void __user *data)
 	/* initial flags */
 	new_nxi->nx_flags = vc_data.flagword;
 
-	/* get a reference for persistant contexts */
-	if ((vc_data.flagword & NXF_PERSISTANT))
-		nx_set_persistant(new_nxi);
+	/* get a reference for persistent contexts */
+	if ((vc_data.flagword & NXF_PERSISTENT))
+		nx_set_persistent(new_nxi);
 
 	vs_net_change(new_nxi, VSC_NETUP);
 	ret = new_nxi->nx_id;
@@ -747,8 +747,8 @@ int vc_set_nflags(uint32_t id, void __user *data)
 
 	nxi->nx_flags = vx_mask_flags(nxi->nx_flags,
 		vc_data.flagword, mask);
-	if (trigger & NXF_PERSISTANT)
-		nx_set_persistant(nxi);
+	if (trigger & NXF_PERSISTENT)
+		nx_set_persistent(nxi);
 
 	put_nx_info(nxi);
 	return 0;

@@ -219,6 +219,8 @@ long do_vserver(uint32_t cmd, uint32_t id, void __user *data, int compat)
 		return vc_ctx_create(id, NULL);
 	case VCMD_ctx_create:
 		return vc_ctx_create(id, data);
+	case VCMD_ctx_migrate_v0:
+		return vc_ctx_migrate(id, NULL);
 	case VCMD_ctx_migrate:
 		return vc_ctx_migrate(id, data);
 

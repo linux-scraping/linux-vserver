@@ -44,7 +44,7 @@
 
 #define VXF_SC_HELPER		(1ULL<<36)
 #define VXF_REBOOT_KILL		(1ULL<<37)
-#define VXF_PERSISTANT		(1ULL<<38)
+#define VXF_PERSISTENT		(1ULL<<38)
 
 #define VXF_FORK_RSS		(1ULL<<48)
 #define VXF_PROLIFIC		(1ULL<<49)
@@ -55,6 +55,11 @@
 
 #define VXF_INIT_SET		(VXF_STATE_SETUP|VXF_STATE_INIT)
 
+
+/* context migration */
+
+#define VXM_SET_INIT		0x00000001
+#define VXM_SET_REAPER		0x00000002
 
 /* context caps */
 

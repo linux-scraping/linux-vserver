@@ -620,7 +620,7 @@ struct dentry *proc_virtual_lookup(struct inode *dir,
 	if (!inode)
 		goto out_release;
 
-	inode->i_mode = S_IFDIR|S_IRUGO;
+	inode->i_mode = S_IFDIR|S_IRUGO|S_IXUGO;
 	inode->i_op = &proc_vid_inode_operations;
 	inode->i_fop = &proc_vid_file_operations;
 	inode->i_nlink = 2;
@@ -688,7 +688,7 @@ struct dentry *proc_vnet_lookup(struct inode *dir,
 	if (!inode)
 		goto out_release;
 
-	inode->i_mode = S_IFDIR|S_IRUGO;
+	inode->i_mode = S_IFDIR|S_IRUGO|S_IXUGO;
 	inode->i_op = &proc_vid_inode_operations;
 	inode->i_fop = &proc_vid_file_operations;
 	inode->i_nlink = 2;
@@ -878,7 +878,7 @@ int proc_pid_vx_info(struct task_struct *p, char *buffer)
 
 	vxi = task_get_vx_info(p);
 	if (!vxi)
-		goto out_put;
+		goto out;
 
 	buffer += sprintf (buffer,"BCaps:\t%016llx\n"
 		,(unsigned long long)vxi->vx_bcaps);
@@ -888,7 +888,7 @@ int proc_pid_vx_info(struct task_struct *p, char *buffer)
 		,(unsigned long long)vxi->vx_flags);
 	buffer += sprintf (buffer,"CIPid:\t%d\n"
 		,vxi->vx_initpid);
-out_put:
+
 	put_vx_info(vxi);
 out:
 	return buffer - orig;
@@ -906,7 +906,7 @@ int proc_pid_nx_info(struct task_struct *p, char *buffer)
 		goto out;
 	nxi = task_get_nx_info(p);
 	if (!nxi)
-		goto out_put;
+		goto out;
 
 	for (i=0; i<nxi->nbipv4; i++){
 		buffer += sprintf (buffer,
@@ -917,7 +917,7 @@ int proc_pid_nx_info(struct task_struct *p, char *buffer)
 	buffer += sprintf (buffer,
 		"V4Root[bcast]:\t%d.%d.%d.%d\n"
 		,NIPQUAD(nxi->v4_bcast));
-out_put:
+
 	put_nx_info(nxi);
 out:
 	return buffer - orig;
