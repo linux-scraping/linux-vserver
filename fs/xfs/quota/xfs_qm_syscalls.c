@@ -212,7 +212,7 @@ xfs_qm_scall_quotaoff(
 	xfs_qoff_logitem_t	*qoffstart;
 	int			nculprits;
 
-	if (!force && !capable(CAP_SYS_ADMIN))
+	if (!force && !capable(CAP_SYS_ADMIN) && !vx_ccaps(VXC_QUOTA_CTL))
 		return XFS_ERROR(EPERM);
 	/*
 	 * No file system can have quotas enabled on disk but not in core.
@@ -381,7 +381,7 @@ xfs_qm_scall_trunc_qfiles(
 	int		error;
 	xfs_inode_t	*qip;
 
-	if (!capable(CAP_SYS_ADMIN))
+	if (!capable(CAP_SYS_ADMIN) && !vx_ccaps(VXC_QUOTA_CTL))
 		return XFS_ERROR(EPERM);
 	error = 0;
 	if (!XFS_SB_VERSION_HASQUOTA(&mp->m_sb) || flags == 0) {
@@ -426,7 +426,7 @@ xfs_qm_scall_quotaon(
 	uint		accflags;
 	__int64_t	sbflags;
 
-	if (!capable(CAP_SYS_ADMIN))
+	if (!capable(CAP_SYS_ADMIN) && !vx_ccaps(VXC_QUOTA_CTL))
 		return XFS_ERROR(EPERM);
 
 	flags &= (XFS_ALL_QUOTA_ACCT | XFS_ALL_QUOTA_ENFD);
@@ -597,7 +597,7 @@ xfs_qm_scall_setqlim(
 	int			error;
 	xfs_qcnt_t		hard, soft;
 
-	if (!capable(CAP_SYS_ADMIN))
+	if (!capable(CAP_SYS_ADMIN) && !vx_ccaps(VXC_QUOTA_CTL))
 		return XFS_ERROR(EPERM);
 
 	if ((newlim->d_fieldmask &

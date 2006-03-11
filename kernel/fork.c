@@ -917,7 +917,7 @@ static task_t *copy_process(unsigned long clone_flags,
 	/* check vserver memory */
 	if (p->mm && !(clone_flags & CLONE_VM)) {
 		if (vx_vmpages_avail(p->mm, p->mm->total_vm))
-			vx_pages_add(p->mm->mm_vx_info, RLIMIT_AS, p->mm->total_vm);
+			vx_pages_add(p->vx_info, RLIMIT_AS, p->mm->total_vm);
 		else
 			goto bad_fork_free;
 	}
@@ -1228,7 +1228,7 @@ bad_fork_cleanup_count:
 	free_uid(p->user);
 bad_fork_cleanup_vm:
 	if (p->mm && !(clone_flags & CLONE_VM))
-		vx_pages_sub(p->mm->mm_vx_info, RLIMIT_AS, p->mm->total_vm);
+		vx_pages_sub(p->vx_info, RLIMIT_AS, p->mm->total_vm);
 bad_fork_free:
 	free_task(p);
 	goto fork_out;

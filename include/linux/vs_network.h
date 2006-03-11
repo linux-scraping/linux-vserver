@@ -203,6 +203,12 @@ static inline int addr_in_nx_info(struct nx_info *nxi, uint32_t addr)
 	return 0;
 }
 
+static inline void exit_nx_info(struct task_struct *p)
+{
+	if (p->nx_info)
+		release_nx_info(p->nx_info, p);
+}
+
 
 #else
 #warning duplicate inclusion

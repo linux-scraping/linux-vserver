@@ -2,9 +2,6 @@
 #include <linux/config.h>
 
 
-#include <linux/config.h>
-
-
 enum {
 	VCI_KCBIT_LEGACY = 1,
 	VCI_KCBIT_LEGACYNET,
@@ -14,7 +11,7 @@ enum {
 	VCI_KCBIT_HARDCPU,
 	VCI_KCBIT_HARDCPU_IDLE,
 
-	VCI_KCBIT_LEGACY_VERSION,
+	VCI_KCBIT_LEGACY_VERSION = 15,
 
 	VCI_KCBIT_DEBUG = 16,
 	VCI_KCBIT_HISTORY = 20,

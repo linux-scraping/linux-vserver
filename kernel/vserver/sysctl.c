@@ -1,5 +1,5 @@
 /*
- *  linux/kernel/sysctl.c
+ *  kernel/vserver/sysctl.c
  *
  *  Virtual Context Support
  *
@@ -30,6 +30,7 @@ enum {
 	CTL_DEBUG_NID,
 	CTL_DEBUG_NET,
 	CTL_DEBUG_LIMIT,
+	CTL_DEBUG_CRES,
 	CTL_DEBUG_DLIM,
 	CTL_DEBUG_CVIRT,
 	CTL_DEBUG_MISC,
@@ -41,6 +42,7 @@ unsigned int vx_debug_xid = 0;
 unsigned int vx_debug_nid = 0;
 unsigned int vx_debug_net = 0;
 unsigned int vx_debug_limit = 0;
+unsigned int vx_debug_cres = 0;
 unsigned int vx_debug_dlim = 0;
 unsigned int vx_debug_cvirt = 0;
 unsigned int vx_debug_misc = 0;
@@ -168,6 +170,14 @@ static ctl_table debug_table[] = {
 		.proc_handler	= &proc_dodebug
 	},
 	{
+		.ctl_name	= CTL_DEBUG_CRES,
+		.procname	= "debug_cres",
+		.data		= &vx_debug_cres,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= &proc_dodebug
+	},
+	{
 		.ctl_name	= CTL_DEBUG_DLIM,
 		.procname	= "debug_dlim",
 		.data		= &vx_debug_dlim,
@@ -210,6 +220,7 @@ EXPORT_SYMBOL_GPL(vx_debug_xid);
 EXPORT_SYMBOL_GPL(vx_debug_nid);
 EXPORT_SYMBOL_GPL(vx_debug_net);
 EXPORT_SYMBOL_GPL(vx_debug_limit);
+EXPORT_SYMBOL_GPL(vx_debug_cres);
 EXPORT_SYMBOL_GPL(vx_debug_dlim);
 EXPORT_SYMBOL_GPL(vx_debug_cvirt);
 EXPORT_SYMBOL_GPL(vx_debug_misc);

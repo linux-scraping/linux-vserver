@@ -260,7 +260,7 @@ static void mqueue_delete_inode(struct inode *inode)
 		   (info->attr.mq_maxmsg * info->attr.mq_msgsize));
 	user = info->user;
 	if (user) {
-		struct vx_info *vxi = locate_vx_info(user->xid);
+		struct vx_info *vxi = lookup_vx_info(user->xid);
 
 		spin_lock(&mq_lock);
 		user->mq_bytes -= mq_bytes;
@@ -1026,7 +1026,8 @@ retry:
 				goto out;
 			}
 
-			ret = netlink_attachskb(sock, nc, 0, MAX_SCHEDULE_TIMEOUT);
+			ret = netlink_attachskb(sock, nc, 0,
+					MAX_SCHEDULE_TIMEOUT, NULL);
 			if (ret == 1)
 		       		goto retry;
 			if (ret) {
