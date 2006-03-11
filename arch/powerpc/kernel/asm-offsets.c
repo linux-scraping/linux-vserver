@@ -232,6 +232,7 @@ int main(void)
 
 	DEFINE(CLONE_VM, CLONE_VM);
 	DEFINE(CLONE_UNTRACED, CLONE_UNTRACED);
+	DEFINE(CLONE_KTHREAD, CLONE_KTHREAD);
 
 #ifndef CONFIG_PPC64
 	DEFINE(MM_PGD, offsetof(struct mm_struct, pgd));

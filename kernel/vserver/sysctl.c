@@ -31,6 +31,7 @@ enum {
 	CTL_DEBUG_TAG,
 	CTL_DEBUG_NET,
 	CTL_DEBUG_LIMIT,
+	CTL_DEBUG_CRES,
 	CTL_DEBUG_DLIM,
 	CTL_DEBUG_QUOTA,
 	CTL_DEBUG_CVIRT,
@@ -44,6 +45,7 @@ unsigned int vx_debug_nid	= 0;
 unsigned int vx_debug_tag	= 0;
 unsigned int vx_debug_net	= 0;
 unsigned int vx_debug_limit	= 0;
+unsigned int vx_debug_cres	= 0;
 unsigned int vx_debug_dlim	= 0;
 unsigned int vx_debug_quota	= 0;
 unsigned int vx_debug_cvirt	= 0;
@@ -146,6 +148,7 @@ static ctl_table debug_table[] = {
 	CTL_ENTRY (CTL_DEBUG_TAG,	debug_tag),
 	CTL_ENTRY (CTL_DEBUG_NET,	debug_net),
 	CTL_ENTRY (CTL_DEBUG_LIMIT,	debug_limit),
+	CTL_ENTRY (CTL_DEBUG_CRES,	debug_cres),
 	CTL_ENTRY (CTL_DEBUG_DLIM,	debug_dlim),
 	CTL_ENTRY (CTL_DEBUG_QUOTA,	debug_quota),
 	CTL_ENTRY (CTL_DEBUG_CVIRT,	debug_cvirt),
@@ -171,6 +174,7 @@ static match_table_t tokens = {
 	{ CTL_DEBUG_TAG,	"tag=%x"	},
 	{ CTL_DEBUG_NET,	"net=%x"	},
 	{ CTL_DEBUG_LIMIT,	"limit=%x"	},
+	{ CTL_DEBUG_CRES,	"cres=%x"	},
 	{ CTL_DEBUG_DLIM,	"dlim=%x"	},
 	{ CTL_DEBUG_QUOTA,	"quota=%x"	},
 	{ CTL_DEBUG_CVIRT,	"cvirt=%x"	},
@@ -207,8 +211,9 @@ static int __init vs_debug_setup(char *str)
 		HANDLE_CASE(NID,    nid,    value);
 		HANDLE_CASE(NET,    net,    value);
 		HANDLE_CASE(LIMIT,  limit,  value);
+		HANDLE_CASE(CRES,   cres,   value);
 		HANDLE_CASE(DLIM,   dlim,   value);
-		HANDLE_CASE(QUOTA,  dlim,   value);
+		HANDLE_CASE(QUOTA,  quota,  value);
 		HANDLE_CASE(CVIRT,  cvirt,  value);
 		HANDLE_CASE(MISC,   misc,   value);
 		default:
@@ -228,6 +233,7 @@ EXPORT_SYMBOL_GPL(vx_debug_xid);
 EXPORT_SYMBOL_GPL(vx_debug_nid);
 EXPORT_SYMBOL_GPL(vx_debug_net);
 EXPORT_SYMBOL_GPL(vx_debug_limit);
+EXPORT_SYMBOL_GPL(vx_debug_cres);
 EXPORT_SYMBOL_GPL(vx_debug_dlim);
 EXPORT_SYMBOL_GPL(vx_debug_quota);
 EXPORT_SYMBOL_GPL(vx_debug_cvirt);

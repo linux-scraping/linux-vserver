@@ -880,13 +880,12 @@ static int __xm_phy_read(struct skge_hw *hw, int port, u16 reg, u16 *val)
 	int i;
 
 	xm_write16(hw, port, XM_PHY_ADDR, reg | hw->phy_addr);
-	xm_read16(hw, port, XM_PHY_DATA);
+	*val = xm_read16(hw, port, XM_PHY_DATA);
 
-	/* Need to wait for external PHY */
 	for (i = 0; i < PHY_RETRIES; i++) {
-		udelay(1);
 		if (xm_read16(hw, port, XM_MMU_CMD) & XM_MMU_PHY_RDY)
 			goto ready;
+		udelay(1);
 	}
 
 	return -ETIMEDOUT;
@@ -919,7 +918,12 @@ static int xm_phy_write(struct skge_hw *hw, int port, u16 reg, u16 val)
 
  ready:
 	xm_write16(hw, port, XM_PHY_DATA, val);
-	return 0;
+	for (i = 0; i < PHY_RETRIES; i++) {
+		if (!(xm_read16(hw, port, XM_MMU_CMD) & XM_MMU_PHY_BUSY))
+			return 0;
+		udelay(1);
+	}
+	return -ETIMEDOUT;
 }
 
 static void genesis_init(struct skge_hw *hw)
@@ -1169,13 +1173,17 @@ static void genesis_mac_init(struct skge_hw *hw, int port)
 	u32 r;
 	const u8 zero[6]  = { 0 };
 
-	/* Clear MIB counters */
-	xm_write16(hw, port, XM_STAT_CMD,
-			XM_SC_CLR_RXC | XM_SC_CLR_TXC);
-	/* Clear two times according to Errata #3 */
-	xm_write16(hw, port, XM_STAT_CMD,
-			XM_SC_CLR_RXC | XM_SC_CLR_TXC);
+	for (i = 0; i < 10; i++) {
+		skge_write16(hw, SK_REG(port, TX_MFF_CTRL1),
+			     MFF_SET_MAC_RST);
+		if (skge_read16(hw, SK_REG(port, TX_MFF_CTRL1)) & MFF_SET_MAC_RST)
+			goto reset_ok;
+		udelay(1);
+	}
 
+	printk(KERN_WARNING PFX "%s: genesis reset failed\n", dev->name);
+
+ reset_ok:
 	/* Unreset the XMAC. */
 	skge_write16(hw, SK_REG(port, TX_MFF_CTRL1), MFF_CLR_MAC_RST);
 
@@ -1192,7 +1200,7 @@ static void genesis_mac_init(struct skge_hw *hw, int port)
 		r |= GP_DIR_2|GP_IO_2;
 
 	skge_write32(hw, B2_GP_IO, r);
-	skge_read32(hw, B2_GP_IO);
+
 
 	/* Enable GMII interface */
 	xm_write16(hw, port, XM_HW_CFG, XM_HW_GMII_MD);
@@ -1205,6 +1213,13 @@ static void genesis_mac_init(struct skge_hw *hw, int port)
 	/* We don't use match addresses so clear */
 	for (i = 1; i < 16; i++)
 		xm_outaddr(hw, port, XM_EXM(i), zero);
+
+	/* Clear MIB counters */
+	xm_write16(hw, port, XM_STAT_CMD,
+			XM_SC_CLR_RXC | XM_SC_CLR_TXC);
+	/* Clear two times according to Errata #3 */
+	xm_write16(hw, port, XM_STAT_CMD,
+			XM_SC_CLR_RXC | XM_SC_CLR_TXC);
 
 	/* configure Rx High Water Mark (XM_RX_HI_WM) */
 	xm_write16(hw, port, XM_RX_HI_WM, 1450);
@@ -1698,6 +1713,7 @@ static void yukon_mac_init(struct skge_hw *hw, int port)
 	skge_write32(hw, SK_REG(port, GPHY_CTRL), reg | GPC_RST_SET);
 	skge_write32(hw, SK_REG(port, GPHY_CTRL), reg | GPC_RST_CLR);
 	skge_write32(hw, SK_REG(port, GMAC_CTRL), GMC_PAUSE_ON | GMC_RST_CLR);
+
 	if (skge->autoneg == AUTONEG_DISABLE) {
 		reg = GM_GPCR_AU_ALL_DIS;
 		gma_write16(hw, port, GM_GP_CTRL,
@@ -1705,16 +1721,23 @@ static void yukon_mac_init(struct skge_hw *hw, int port)
 
 		switch (skge->speed) {
 		case SPEED_1000:
+			reg &= ~GM_GPCR_SPEED_100;
 			reg |= GM_GPCR_SPEED_1000;
-			/* fallthru */
+			break;
 		case SPEED_100:
+			reg &= ~GM_GPCR_SPEED_1000;
 			reg |= GM_GPCR_SPEED_100;
+			break;
+		case SPEED_10:
+			reg &= ~(GM_GPCR_SPEED_1000 | GM_GPCR_SPEED_100);
+			break;
 		}
 
 		if (skge->duplex == DUPLEX_FULL)
 			reg |= GM_GPCR_DUP_FULL;
 	} else
 		reg = GM_GPCR_SPEED_1000 | GM_GPCR_SPEED_100 | GM_GPCR_DUP_FULL;
+
 	switch (skge->flow_control) {
 	case FLOW_MODE_NONE:
 		skge_write32(hw, SK_REG(port, GMAC_CTRL), GMC_PAUSE_OFF);
@@ -2159,8 +2182,10 @@ static int skge_up(struct net_device *dev)
 	skge->tx_avail = skge->tx_ring.count - 1;
 
 	/* Enable IRQ from port */
+	spin_lock_irq(&hw->hw_lock);
 	hw->intr_mask |= portirqmask[port];
 	skge_write32(hw, B0_IMSK, hw->intr_mask);
+	spin_unlock_irq(&hw->hw_lock);
 
 	/* Initialize MAC */
 	spin_lock_bh(&hw->phy_lock);
@@ -2218,8 +2243,10 @@ static int skge_down(struct net_device *dev)
 	else
 		yukon_stop(skge);
 
+	spin_lock_irq(&hw->hw_lock);
 	hw->intr_mask &= ~portirqmask[skge->port];
 	skge_write32(hw, B0_IMSK, hw->intr_mask);
+	spin_unlock_irq(&hw->hw_lock);
 
 	/* Stop transmitter */
 	skge_write8(hw, Q_ADDR(txqaddr[port], Q_CSR), CSR_STOP);
@@ -2667,8 +2694,7 @@ static int skge_poll(struct net_device *dev, int *budget)
 
 	/* restart receiver */
 	wmb();
-	skge_write8(hw, Q_ADDR(rxqaddr[skge->port], Q_CSR),
-		    CSR_START | CSR_IRQ_CL_F);
+	skge_write8(hw, Q_ADDR(rxqaddr[skge->port], Q_CSR), CSR_START);
 
 	*budget -= work_done;
 	dev->quota -= work_done;
@@ -2676,10 +2702,11 @@ static int skge_poll(struct net_device *dev, int *budget)
 	if (work_done >=  to_do)
 		return 1; /* not done */
 
-	netif_rx_complete(dev);
-	hw->intr_mask |= portirqmask[skge->port];
-	skge_write32(hw, B0_IMSK, hw->intr_mask);
-	skge_read32(hw, B0_IMSK);
+	spin_lock_irq(&hw->hw_lock);
+	__netif_rx_complete(dev);
+  	hw->intr_mask |= portirqmask[skge->port];
+  	skge_write32(hw, B0_IMSK, hw->intr_mask);
+ 	spin_unlock_irq(&hw->hw_lock);
 
 	return 0;
 }
@@ -2839,18 +2866,10 @@ static void skge_extirq(unsigned long data)
 	}
 	spin_unlock(&hw->phy_lock);
 
-	local_irq_disable();
+	spin_lock_irq(&hw->hw_lock);
 	hw->intr_mask |= IS_EXT_REG;
 	skge_write32(hw, B0_IMSK, hw->intr_mask);
-	local_irq_enable();
-}
-
-static inline void skge_wakeup(struct net_device *dev)
-{
-	struct skge_port *skge = netdev_priv(dev);
-
-	prefetch(skge->rx_ring.to_clean);
-	netif_rx_schedule(dev);
+	spin_unlock_irq(&hw->hw_lock);
 }
 
 static irqreturn_t skge_intr(int irq, void *dev_id, struct pt_regs *regs)
@@ -2861,15 +2880,17 @@ static irqreturn_t skge_intr(int irq, void *dev_id, struct pt_regs *regs)
 	if (status == 0 || status == ~0) /* hotplug or shared irq */
 		return IRQ_NONE;
 
-	status &= hw->intr_mask;
+	spin_lock(&hw->hw_lock);
 	if (status & IS_R1_F) {
+		skge_write8(hw, Q_ADDR(Q_R1, Q_CSR), CSR_IRQ_CL_F);
 		hw->intr_mask &= ~IS_R1_F;
-		skge_wakeup(hw->dev[0]);
+		netif_rx_schedule(hw->dev[0]);
 	}
 
 	if (status & IS_R2_F) {
+		skge_write8(hw, Q_ADDR(Q_R2, Q_CSR), CSR_IRQ_CL_F);
 		hw->intr_mask &= ~IS_R2_F;
-		skge_wakeup(hw->dev[1]);
+		netif_rx_schedule(hw->dev[1]);
 	}
 
 	if (status & IS_XA1_F)
@@ -2911,6 +2932,7 @@ static irqreturn_t skge_intr(int irq, void *dev_id, struct pt_regs *regs)
 	}
 
 	skge_write32(hw, B0_IMSK, hw->intr_mask);
+	spin_unlock(&hw->hw_lock);
 
 	return IRQ_HANDLED;
 }
@@ -3269,6 +3291,7 @@ static int __devinit skge_probe(struct pci_dev *pdev,
 
 	hw->pdev = pdev;
 	spin_lock_init(&hw->phy_lock);
+	spin_lock_init(&hw->hw_lock);
 	tasklet_init(&hw->ext_tasklet, skge_extirq, (unsigned long) hw);
 
 	hw->regs = ioremap_nocache(pci_resource_start(pdev, 0), 0x4000);

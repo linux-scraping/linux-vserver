@@ -620,7 +620,7 @@ struct dentry *proc_virtual_lookup(struct inode *dir,
 	if (!inode)
 		goto out_release;
 
-	inode->i_mode = S_IFDIR|S_IRUGO;
+	inode->i_mode = S_IFDIR|S_IRUGO|S_IXUGO;
 	inode->i_op = &proc_vid_inode_operations;
 	inode->i_fop = &proc_vid_file_operations;
 	inode->i_nlink = 2;
@@ -688,7 +688,7 @@ struct dentry *proc_vnet_lookup(struct inode *dir,
 	if (!inode)
 		goto out_release;
 
-	inode->i_mode = S_IFDIR|S_IRUGO;
+	inode->i_mode = S_IFDIR|S_IRUGO|S_IXUGO;
 	inode->i_op = &proc_vid_inode_operations;
 	inode->i_fop = &proc_vid_file_operations;
 	inode->i_nlink = 2;
