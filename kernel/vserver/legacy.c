@@ -21,14 +21,17 @@
 #include <asm/uaccess.h>
 
 
+extern int vx_set_init(struct vx_info *, struct task_struct *);
 
 static int vx_set_initpid(struct vx_info *vxi, int pid)
 {
-	if (vxi->vx_initpid)
-		return -EPERM;
+	struct task_struct *init;
 
-	vxi->vx_initpid = pid;
-	return 0;
+	init = find_task_by_real_pid(pid);
+	if (!init)
+		return -ESRCH;
+
+	return vx_set_init(vxi, init);
 }
 
 int vc_new_s_context(uint32_t ctx, void __user *data)
@@ -73,9 +76,9 @@ int vc_new_s_context(uint32_t ctx, void __user *data)
 		return -EINVAL;
 
 	if ((ctx == VX_DYNAMIC_ID) || (ctx < MIN_D_CONTEXT))
-		new_vxi = locate_or_create_vx_info(ctx);
+		new_vxi = lookup_or_create_vx_info(ctx);
 	else
-		new_vxi = locate_vx_info(ctx);
+		new_vxi = lookup_vx_info(ctx);
 
 	if (!new_vxi)
 		return -EINVAL;

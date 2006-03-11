@@ -51,11 +51,6 @@ static void exit_mm(struct task_struct * tsk);
 static void __unhash_process(struct task_struct *p)
 {
 	nr_threads--;
-	/* tasklist_lock is held */
-	if (p->vx_info) {
-		atomic_dec(&p->vx_info->cvirt.nr_threads);
-		vx_nproc_dec(p);
-	}
 	detach_pid(p, PIDTYPE_PID);
 	detach_pid(p, PIDTYPE_TGID);
 	if (thread_group_leader(p)) {
@@ -116,10 +111,6 @@ repeat:
 	spin_unlock(&p->proc_lock);
 	proc_pid_flush(proc_dentry);
 	release_thread(p);
-	if (p->vx_info)
-		release_vx_info(p->vx_info, p);
-	if (p->nx_info)
-		release_nx_info(p->nx_info, p);
 	put_task_struct(p);
 
 	p = leader;
@@ -551,7 +542,7 @@ static void exit_mm(struct task_struct * tsk)
 	mmput(mm);
 }
 
-static inline void choose_new_parent(task_t *p, task_t *reaper, task_t *child_reaper)
+static inline void choose_new_parent(task_t *p, task_t *reaper)
 {
 	/*
 	 * Make sure we're not reparenting to ourselves and that
@@ -635,7 +626,7 @@ static void forget_original_parent(struct task_struct * father,
 	do {
 		reaper = next_thread(reaper);
 		if (reaper == father) {
-			reaper = child_reaper;
+			reaper = vx_child_reaper(father);
 			break;
 		}
 	} while (reaper->exit_state);
@@ -659,7 +650,7 @@ static void forget_original_parent(struct task_struct * father,
 
 		if (father == p->real_parent) {
 			/* reparent with a reaper, real father it's us */
-			choose_new_parent(p, reaper, child_reaper);
+			choose_new_parent(p, vx_child_reaper(p));
 			reparent_thread(p, father, 0);
 		} else {
 			/* reparent ptraced task to its real parent */
@@ -680,7 +671,11 @@ static void forget_original_parent(struct task_struct * father,
 	}
 	list_for_each_safe(_p, _n, &father->ptrace_children) {
 		p = list_entry(_p,struct task_struct,ptrace_list);
-		choose_new_parent(p, reaper, child_reaper);
+
+		/* check for reaper context */
+		BUG_ON(p->xid != reaper->xid);
+
+		choose_new_parent(p, reaper);
 		reparent_thread(p, father, 1);
 	}
 }
@@ -874,6 +869,8 @@ fastcall NORET_TYPE void do_exit(long code)
 	__exit_files(tsk);
 	__exit_fs(tsk);
 	exit_namespace(tsk);
+	exit_vx_info(tsk);
+	exit_nx_info(tsk);
 	exit_thread();
 	cpuset_exit(tsk);
 	exit_keys(tsk);

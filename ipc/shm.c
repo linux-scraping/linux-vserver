@@ -116,7 +116,7 @@ static void shm_open (struct vm_area_struct *shmd)
  */
 static void shm_destroy (struct shmid_kernel *shp)
 {
-	struct vx_info *vxi = locate_vx_info(shp->shm_perm.xid);
+	struct vx_info *vxi = lookup_vx_info(shp->shm_perm.xid);
 	int numpages = (shp->shm_segsz + PAGE_SIZE - 1) >> PAGE_SHIFT;
 
 	vx_ipcshm_sub(vxi, shp, numpages);
