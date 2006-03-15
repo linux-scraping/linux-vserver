@@ -730,7 +730,7 @@ sys_ptrace(long request, long pid, long addr, long data)
 	}
 
 	ret = do_ptrace(child, request, addr, data);
-out_task:
+out_tsk:
 	put_task_struct(child);
 out:
 	unlock_kernel();
