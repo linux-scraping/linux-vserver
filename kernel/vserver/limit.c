@@ -50,6 +50,8 @@ static int is_valid_rlimit(int id)
 	case RLIMIT_NOFILE:
 	case RLIMIT_MEMLOCK:
 	case RLIMIT_AS:
+	case RLIMIT_LOCKS:
+	case RLIMIT_MSGQUEUE:
 
 	case VLIMIT_NSOCK:
 	case VLIMIT_OPENFD:
@@ -81,7 +83,7 @@ int vc_get_rlimit(uint32_t id, void __user *data)
 	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 	if (!is_valid_rlimit(vc_data.id))
-		return -ENOTSUPP;
+		return -EINVAL;
 
 	vxi = lookup_vx_info(id);
 	if (!vxi)
@@ -107,7 +109,7 @@ int vc_set_rlimit(uint32_t id, void __user *data)
 	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 	if (!is_valid_rlimit(vc_data.id))
-		return -ENOTSUPP;
+		return -EINVAL;
 
 	vxi = lookup_vx_info(id);
 	if (!vxi)
