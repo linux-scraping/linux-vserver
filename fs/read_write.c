@@ -657,8 +657,9 @@ ssize_t vfs_sendfile(struct file *out_file, struct file *in_file, loff_t *ppos,
 			return -ESPIPE;
 
 	ret = rw_verify_area(READ, in_file, ppos, count);
-	if (ret)
+	if (ret < 0)
 		return ret;
+	count = ret;
 
 	/* verify out_file */
 	out_inode = out_file->f_dentry->d_inode;
@@ -668,8 +669,9 @@ ssize_t vfs_sendfile(struct file *out_file, struct file *in_file, loff_t *ppos,
 		return -EINVAL;
 
 	ret = rw_verify_area(WRITE, out_file, &out_file->f_pos, count);
-	if (ret)
+	if (ret < 0)
 		return ret;
+	count = ret;
 
 	ret = security_file_permission (out_file, MAY_WRITE);
 	if (ret)
