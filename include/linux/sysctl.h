@@ -93,6 +93,7 @@ enum
 	KERN_CAP_BSET=14,	/* int: capability bounding set */
 	KERN_PANIC=15,		/* int: panic timeout */
 	KERN_REALROOTDEV=16,	/* real root device to mount after initrd */
+	KERN_VSHELPER=17,	/* string: path to vshelper policy agent */
 
 	KERN_SPARC_REBOOT=21,	/* reboot command on Sparc */
 	KERN_CTLALTDEL=22,	/* int: allow ctl-alt-del to reboot */
@@ -147,7 +148,7 @@ enum
 	KERN_SETUID_DUMPABLE=69, /* int: behaviour of dumps for setuid core */
 	KERN_SPIN_RETRY=70,	/* int: number of spinlock retries */
 	KERN_ACPI_VIDEO_FLAGS=71, /* int: flags for setting up video after ACPI sleep */
-	KERN_VSHELPER=72,	/* string: path to vshelper policy agent */
+	KERN_IA64_UNALIGNED=72, /* int: ia64 unaligned userland trap enable */
 };
 
 
