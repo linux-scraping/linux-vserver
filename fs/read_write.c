@@ -667,8 +667,9 @@ static ssize_t do_sendfile(int out_fd, int in_fd, loff_t *ppos,
 		if (!(in_file->f_mode & FMODE_PREAD))
 			goto fput_in;
 	retval = rw_verify_area(READ, in_file, ppos, count);
-	if (retval)
+	if (retval < 0)
 		goto fput_in;
+	count = retval;
 
 	retval = security_file_permission (in_file, MAY_READ);
 	if (retval)
@@ -688,8 +689,9 @@ static ssize_t do_sendfile(int out_fd, int in_fd, loff_t *ppos,
 		goto fput_out;
 	out_inode = out_file->f_dentry->d_inode;
 	retval = rw_verify_area(WRITE, out_file, &out_file->f_pos, count);
-	if (retval)
+	if (retval < 0)
 		goto fput_out;
+	count = retval;
 
 	retval = security_file_permission (out_file, MAY_WRITE);
 	if (retval)
