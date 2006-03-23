@@ -146,7 +146,7 @@ int vx_need_resched(struct task_struct *p, int slice, int cpu)
 {
 	struct vx_info *vxi = p->vx_info;
 
-	if (vxi) {
+	if (vx_info_flags(vxi, VXF_SCHED_HARD|VXF_SCHED_PRIO, 0)) {
 		struct _vx_sched_pc *sched_pc =
 			&vx_per_cpu(vxi, sched_pc, cpu);
 		int tokens;
