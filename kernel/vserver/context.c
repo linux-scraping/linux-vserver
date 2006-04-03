@@ -19,7 +19,6 @@
  *
  */
 
-#include <linux/config.h>
 #include <linux/slab.h>
 #include <linux/types.h>
 #include <linux/namespace.h>
@@ -81,6 +80,9 @@ static struct vx_info *__alloc_vx_info(xid_t xid)
 	new->vx_flags = VXF_INIT_SET;
 	new->vx_bcaps = CAP_INIT_EFF_SET;
 	new->vx_ccaps = 0;
+
+	new->reboot_cmd = 0;
+	new->exit_code = 0;
 
 	vxdprintk(VXD_CBIT(xid, 0),
 		"alloc_vx_info(%d) = %p", xid, new);
@@ -617,12 +619,13 @@ int vx_set_init(struct vx_info *vxi, struct task_struct *p)
 	return 0;
 }
 
-void vx_exit_init(struct vx_info *vxi, struct task_struct *p)
+void vx_exit_init(struct vx_info *vxi, struct task_struct *p, int code)
 {
 	vxdprintk(VXD_CBIT(xid, 6),
 		"vx_exit_init(%p[#%d],%p[#%d,%d,%d])",
 		vxi, vxi->vx_id, p, p->xid, p->pid, p->tgid);
 
+	vxi->exit_code = code;
 	vxi->vx_initpid = 0;
 }
 
@@ -643,7 +646,7 @@ void vx_set_persistent(struct vx_info *vxi)
 
 /*	task must be current or locked		*/
 
-void	exit_vx_info(struct task_struct *p)
+void	exit_vx_info(struct task_struct *p, int code)
 {
 	struct vx_info *vxi = p->vx_info;
 
@@ -651,8 +654,9 @@ void	exit_vx_info(struct task_struct *p)
 		atomic_dec(&vxi->cvirt.nr_threads);
 		vx_nproc_dec(p);
 
+		vxi->exit_code = code;
 		if (vxi->vx_initpid == p->tgid)
-			vx_exit_init(vxi, p);
+			vx_exit_init(vxi, p, code);
 		if (vxi->vx_reaper == p)
 			vx_set_reaper(vxi, child_reaper);
 		release_vx_info(vxi, p);

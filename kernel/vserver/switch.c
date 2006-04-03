@@ -14,7 +14,6 @@
  *
  */
 
-#include <linux/config.h>
 #include <linux/linkage.h>
 #include <linux/sched.h>
 #include <linux/compat.h>
@@ -131,10 +130,17 @@ long do_vserver(uint32_t cmd, uint32_t id, void __user *data, int compat)
 #endif
 
 	switch (cmd) {
+#ifdef	CONFIG_IA32_EMULATION
+	case VCMD_get_rlimit:
+		return __COMPAT(vc_get_rlimit, id, data, compat);
+	case VCMD_set_rlimit:
+		return __COMPAT(vc_set_rlimit, id, data, compat);
+#else
 	case VCMD_get_rlimit:
 		return vc_get_rlimit(id, data);
 	case VCMD_set_rlimit:
 		return vc_set_rlimit(id, data);
+#endif
 	case VCMD_get_rlimit_mask:
 		return vc_get_rlimit_mask(id, data);
 

@@ -170,7 +170,7 @@ static inline void __wakeup_vx_info(struct vx_info *vxi)
 		wake_up_interruptible(&vxi->vx_wait);
 }
 
-extern void exit_vx_info(struct task_struct *);
+extern void exit_vx_info(struct task_struct *, int);
 
 static inline
 struct task_struct *vx_child_reaper(struct task_struct *p)

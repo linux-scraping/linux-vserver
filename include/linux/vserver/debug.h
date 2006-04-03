@@ -1,8 +1,6 @@
 #ifndef _VX_DEBUG_H
 #define _VX_DEBUG_H
 
-#include <linux/config.h>
-
 
 #define VXD_CBIT(n,m)	(vx_debug_ ## n & (1 << (m)))
 #define VXD_CMIN(n,m)	(vx_debug_ ## n > (m))

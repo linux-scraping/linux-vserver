@@ -13,7 +13,6 @@
  *
  */
 
-#include <linux/config.h>
 #include <linux/slab.h>
 #include <linux/vserver/network_cmd.h>
 #include <linux/rcupdate.h>

@@ -9,7 +9,6 @@
  *
  */
 
-#include <linux/config.h>
 #include <linux/sched.h>
 #include <linux/vs_context.h>
 #include <linux/proc_fs.h>

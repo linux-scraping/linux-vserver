@@ -28,8 +28,6 @@ struct	vcmd_ctx_iattr_v1 {
 
 #ifdef	__KERNEL__
 
-#include <linux/config.h>
-
 
 #ifdef	CONFIG_COMPAT
 

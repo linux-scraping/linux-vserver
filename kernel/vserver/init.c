@@ -9,7 +9,6 @@
  *
  */
 
-#include <linux/config.h>
 #include <linux/errno.h>
 #include <linux/init.h>
 #include <linux/module.h>

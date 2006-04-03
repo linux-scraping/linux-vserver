@@ -9,7 +9,6 @@
  *
  */
 
-#include <linux/config.h>
 #include <linux/errno.h>
 #include <linux/kmod.h>
 #include <linux/sched.h>
@@ -64,6 +63,10 @@ long vs_reboot_helper(struct vx_info *vxi, int cmd, void *arg)
 			"PATH=/sbin:/usr/sbin:/bin:/usr/bin",
 			uid_buf, pid_buf, cmd_buf, 0};
 
+	if (vx_info_state(vxi, VXS_HELPER))
+		return -EAGAIN;
+	vxi->vx_state |= VXS_HELPER;
+
 	snprintf(id_buf, sizeof(id_buf)-1, "%d", vxi->vx_id);
 
 	snprintf(cmd_buf, sizeof(cmd_buf)-1, "VS_CMD=%08x", cmd);
@@ -88,6 +91,7 @@ long vs_reboot_helper(struct vx_info *vxi, int cmd, void *arg)
 		break;
 
 	default:
+		vxi->vx_state &= ~VXS_HELPER;
 		return 0;
 	}
 
@@ -96,6 +100,8 @@ long vs_reboot_helper(struct vx_info *vxi, int cmd, void *arg)
 #else
 	ret = do_vshelper(vshelper_path, argv, envp, 0);
 #endif
+	vxi->vx_state &= ~VXS_HELPER;
+	__wakeup_vx_info(vxi);
 	return (ret) ? -EPERM : 0;
 }
 
@@ -108,6 +114,12 @@ long vs_reboot(unsigned int cmd, void * arg)
 	vxdprintk(VXD_CBIT(misc, 5),
 		"vs_reboot(%p[#%d],%d)",
 		vxi, vxi?vxi->vx_id:0, cmd);
+
+	ret = vs_reboot_helper(vxi, cmd, arg);
+	if (ret)
+		return ret;
+
+	vxi->reboot_cmd = cmd;
 	if (vx_info_flags(vxi, VXF_REBOOT_KILL, 0)) {
 		switch (cmd) {
 		case LINUX_REBOOT_CMD_RESTART:
@@ -118,10 +130,8 @@ long vs_reboot(unsigned int cmd, void * arg)
 		default:
 			break;
 		}
-	} else {
-		ret = vs_reboot_helper(vxi, cmd, arg);
 	}
-	return ret;
+	return 0;
 }
 
 
