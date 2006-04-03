@@ -13,8 +13,8 @@ struct	vcmd_ctx_kill_v0 {
 };
 
 struct	vcmd_wait_exit_v0 {
-	int32_t a;
-	int32_t b;
+	int32_t reboot_cmd;
+	int32_t exit_code;
 };
 
 #ifdef	__KERNEL__

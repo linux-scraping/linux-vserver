@@ -49,6 +49,7 @@
 #include <linux/rmap.h>
 #include <linux/acct.h>
 #include <linux/cn_proc.h>
+#include <linux/vs_cvirt.h>
 #include <linux/vs_memory.h>
 
 #include <asm/uaccess.h>
@@ -1334,7 +1335,7 @@ static void format_corename(char *corename, const char *pattern, long signr)
 			case 'h':
 				down_read(&uts_sem);
 				rc = snprintf(out_ptr, out_end - out_ptr,
-					      "%s", system_utsname.nodename);
+					      "%s", vx_new_uts(nodename));
 				up_read(&uts_sem);
 				if (rc > out_end - out_ptr)
 					goto out;

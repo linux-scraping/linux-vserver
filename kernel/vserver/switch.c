@@ -14,7 +14,6 @@
  *
  */
 
-#include <linux/config.h>
 #include <linux/linkage.h>
 #include <linux/sched.h>
 #include <linux/compat.h>
@@ -24,7 +23,6 @@
 #include <linux/vserver/switch.h>
 #include <linux/vserver/debug.h>
 
-
 static inline
 int vc_get_version(uint32_t id)
 {
@@ -33,6 +31,14 @@ int vc_get_version(uint32_t id)
 		return VCI_LEGACY_VERSION;
 #endif
 	return VCI_VERSION;
+}
+
+#include "vci_config.h"
+
+static inline
+int vc_get_vci(uint32_t id)
+{
+	return vci_kernel_config();
 }
 
 #include <linux/vserver/context_cmd.h>
@@ -81,6 +87,8 @@ long do_vserver(uint32_t cmd, uint32_t id, void __user *data, int compat)
 	switch (cmd) {
 	case VCMD_get_version:
 		return vc_get_version(id);
+	case VCMD_get_vci:
+		return vc_get_vci(id);
 
 	case VCMD_dump_history:
 #ifdef	CONFIG_VSERVER_HISTORY
@@ -131,10 +139,17 @@ long do_vserver(uint32_t cmd, uint32_t id, void __user *data, int compat)
 #endif
 
 	switch (cmd) {
+#ifdef	CONFIG_IA32_EMULATION
+	case VCMD_get_rlimit:
+		return __COMPAT(vc_get_rlimit, id, data, compat);
+	case VCMD_set_rlimit:
+		return __COMPAT(vc_set_rlimit, id, data, compat);
+#else
 	case VCMD_get_rlimit:
 		return vc_get_rlimit(id, data);
 	case VCMD_set_rlimit:
 		return vc_set_rlimit(id, data);
+#endif
 	case VCMD_get_rlimit_mask:
 		return vc_get_rlimit_mask(id, data);
 

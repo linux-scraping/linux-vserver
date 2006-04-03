@@ -78,12 +78,13 @@
 
 /*  interface version */
 
-#define VCI_VERSION		0x00020001
+#define VCI_VERSION		0x00020101
 #define VCI_LEGACY_VERSION	0x000100FF
 
 /*  query version */
 
 #define VCMD_get_version	VC_CMD(VERSION, 0, 0)
+#define VCMD_get_vci		VC_CMD(VERSION, 1, 0)
 
 
 #ifdef	__KERNEL__

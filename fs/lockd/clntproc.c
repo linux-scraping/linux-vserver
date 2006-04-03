@@ -14,6 +14,7 @@
 #include <linux/nfs_fs.h>
 #include <linux/utsname.h>
 #include <linux/smp_lock.h>
+#include <linux/vs_cvirt.h>
 #include <linux/sunrpc/clnt.h>
 #include <linux/sunrpc/svc.h>
 #include <linux/lockd/lockd.h>
@@ -130,10 +131,10 @@ static void nlmclnt_setlockargs(struct nlm_rqst *req, struct file_lock *fl)
 	nlmclnt_next_cookie(&argp->cookie);
 	argp->state   = nsm_local_state;
 	memcpy(&lock->fh, NFS_FH(fl->fl_file->f_dentry->d_inode), sizeof(struct nfs_fh));
-	lock->caller  = system_utsname.nodename;
+	lock->caller  = vx_new_uts(nodename);
 	lock->oh.data = req->a_owner;
 	lock->oh.len  = sprintf(req->a_owner, "%d@%s",
-				current->pid, system_utsname.nodename);
+				current->pid, vx_new_uts(nodename));
 	locks_copy_lock(&lock->fl, fl);
 }
 
@@ -154,7 +155,7 @@ nlmclnt_setgrantargs(struct nlm_rqst *call, struct nlm_lock *lock)
 {
 	locks_copy_lock(&call->a_args.lock.fl, &lock->fl);
 	memcpy(&call->a_args.lock.fh, &lock->fh, sizeof(call->a_args.lock.fh));
-	call->a_args.lock.caller = system_utsname.nodename;
+	call->a_args.lock.caller = vx_new_uts(nodename);
 	call->a_args.lock.oh.len = lock->oh.len;
 
 	/* set default data area */

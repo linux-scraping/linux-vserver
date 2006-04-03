@@ -10,7 +10,6 @@
  *
  */
 
-#include <linux/config.h>
 #include <linux/sched.h>
 #include <linux/vs_context.h>
 #include <linux/vs_sched.h>
@@ -226,8 +225,8 @@ int do_set_sched(struct vx_info *vxi, struct vcmd_set_sched_v4 *data)
 	if (set_mask & VXSM_PRIO_BIAS)
 		vxi->sched.prio_bias = data->prio_bias;
 
-#ifdef	CONFIG_SMP
 	vxi->sched.update_mask = set_mask;
+#ifdef	CONFIG_SMP
 	rmb();
 	if (set_mask & VXSM_CPU_ID)
 		vxi->sched.update = cpumask_of_cpu(data->cpu_id);

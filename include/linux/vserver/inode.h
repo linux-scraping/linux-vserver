@@ -15,8 +15,6 @@
 
 #ifdef	__KERNEL__
 
-#include <linux/config.h>
-
 
 #ifdef	CONFIG_VSERVER_PROC_SECURE
 #define IATTR_PROC_DEFAULT	( IATTR_ADMIN | IATTR_HIDE )

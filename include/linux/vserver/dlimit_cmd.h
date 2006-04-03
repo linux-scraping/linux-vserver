@@ -1,8 +1,6 @@
 #ifndef _VX_DLIMIT_CMD_H
 #define _VX_DLIMIT_CMD_H
 
-#include <linux/config.h>
-
 
 /*  dlimit vserver commands */
 

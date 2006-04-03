@@ -211,7 +211,7 @@ static inline void __leave_vx_admin(struct vx_info_save *vxis)
 	current->xid = vxis->xid;
 }
 
-extern void exit_vx_info(struct task_struct *);
+extern void exit_vx_info(struct task_struct *, int);
 
 
 static inline

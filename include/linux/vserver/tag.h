@@ -1,8 +1,6 @@
 #ifndef _DX_TAG_H
 #define _DX_TAG_H
 
-#include <linux/config.h>
-
 
 #define DX_TAG(in)	(IS_TAGGED(in))
 

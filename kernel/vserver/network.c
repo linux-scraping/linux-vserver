@@ -13,7 +13,6 @@
  *
  */
 
-#include <linux/config.h>
 #include <linux/slab.h>
 #include <linux/vserver/network_cmd.h>
 #include <linux/rcupdate.h>
@@ -550,8 +549,6 @@ int vc_nx_info(uint32_t id, void __user *data)
 	struct nx_info *nxi;
 	struct vcmd_nx_info_v0 vc_data;
 
-	if (!vx_check(0, VX_ADMIN))
-		return -ENOSYS;
 	if (!capable(CAP_SYS_ADMIN) || !capable(CAP_SYS_RESOURCE))
 		return -EPERM;
 

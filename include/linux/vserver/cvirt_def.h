@@ -1,7 +1,6 @@
 #ifndef _VX_CVIRT_DEF_H
 #define _VX_CVIRT_DEF_H
 
-#include <linux/config.h>
 #include <linux/jiffies.h>
 #include <linux/utsname.h>
 #include <linux/spinlock.h>

@@ -869,7 +869,7 @@ fastcall NORET_TYPE void do_exit(long code)
 	__exit_files(tsk);
 	__exit_fs(tsk);
 	exit_namespace(tsk);
-	exit_vx_info(tsk);
+	exit_vx_info(tsk, code);
 	exit_nx_info(tsk);
 	exit_thread();
 	cpuset_exit(tsk);

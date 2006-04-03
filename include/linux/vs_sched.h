@@ -1,7 +1,6 @@
 #ifndef _VX_VS_SCHED_H
 #define _VX_VS_SCHED_H
 
-#include <linux/config.h>
 #include "vserver/sched.h"
 
 

@@ -9,7 +9,6 @@
  *
  */
 
-#include <linux/config.h>
 #include <linux/sched.h>
 #include <linux/vs_context.h>
 #include <linux/proc_fs.h>
@@ -77,8 +76,6 @@ int vc_get_iattr(uint32_t id, void __user *data)
 	struct vcmd_ctx_iattr_v1 vc_data = { .xid = -1 };
 	int ret;
 
-	if (!vx_check(0, VX_ADMIN))
-		return -ENOSYS;
 	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 

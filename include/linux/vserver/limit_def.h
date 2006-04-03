@@ -1,7 +1,6 @@
 #ifndef _VX_LIMIT_DEF_H
 #define _VX_LIMIT_DEF_H
 
-#include <linux/config.h>
 #include <asm/atomic.h>
 #include <asm/resource.h>
 

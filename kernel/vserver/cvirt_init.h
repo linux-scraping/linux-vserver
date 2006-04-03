@@ -1,6 +1,4 @@
 
-#include <linux/config.h>
-
 
 extern uint64_t vx_idle_jiffies(void);
 

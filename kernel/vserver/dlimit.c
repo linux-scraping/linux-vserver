@@ -10,7 +10,6 @@
  *
  */
 
-#include <linux/config.h>
 #include <linux/fs.h>
 #include <linux/namespace.h>
 #include <linux/namei.h>
@@ -234,8 +233,6 @@ int vc_add_dlimit(uint32_t id, void __user *data)
 {
 	struct vcmd_ctx_dlimit_base_v0 vc_data;
 
-	if (!vx_check(0, VX_ADMIN))
-		return -ENOSYS;
 	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
@@ -246,8 +243,6 @@ int vc_rem_dlimit(uint32_t id, void __user *data)
 {
 	struct vcmd_ctx_dlimit_base_v0 vc_data;
 
-	if (!vx_check(0, VX_ADMIN))
-		return -ENOSYS;
 	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
@@ -260,8 +255,6 @@ int vc_add_dlimit_x32(uint32_t id, void __user *data)
 {
 	struct vcmd_ctx_dlimit_base_v0_x32 vc_data;
 
-	if (!vx_check(0, VX_ADMIN))
-		return -ENOSYS;
 	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
@@ -273,8 +266,6 @@ int vc_rem_dlimit_x32(uint32_t id, void __user *data)
 {
 	struct vcmd_ctx_dlimit_base_v0_x32 vc_data;
 
-	if (!vx_check(0, VX_ADMIN))
-		return -ENOSYS;
 	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
@@ -351,8 +342,6 @@ int vc_set_dlimit(uint32_t id, void __user *data)
 {
 	struct vcmd_ctx_dlimit_v0 vc_data;
 
-	if (!vx_check(0, VX_ADMIN))
-		return -ENOSYS;
 	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
@@ -368,8 +357,6 @@ int vc_set_dlimit_x32(uint32_t id, void __user *data)
 {
 	struct vcmd_ctx_dlimit_v0_x32 vc_data;
 
-	if (!vx_check(0, VX_ADMIN))
-		return -ENOSYS;
 	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
@@ -435,8 +422,6 @@ int vc_get_dlimit(uint32_t id, void __user *data)
 	struct vcmd_ctx_dlimit_v0 vc_data;
 	int ret;
 
-	if (!vx_check(0, VX_ADMIN))
-		return -ENOSYS;
 	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
@@ -459,8 +444,6 @@ int vc_get_dlimit_x32(uint32_t id, void __user *data)
 	struct vcmd_ctx_dlimit_v0_x32 vc_data;
 	int ret;
 
-	if (!vx_check(0, VX_ADMIN))
-		return -ENOSYS;
 	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 

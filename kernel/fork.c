@@ -1348,6 +1348,7 @@ long do_fork(unsigned long clone_flags,
 	if ((clone_flags & CLONE_KTHREAD) && !vx_check(0, VX_ADMIN)) {
 		vxwprintk(1, "xid=%d tried to spawn a kernel thread.",
 			vx_current_xid());
+		free_pidmap(pid);
 		return -EPERM;
 	}
 
