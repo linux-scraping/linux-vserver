@@ -205,7 +205,7 @@ int vc_set_iattr(uint32_t id, void __user *data)
 	struct vcmd_ctx_iattr_v1 vc_data;
 	int ret;
 
-	if (!capable(CAP_SYS_ADMIN) || !capable(CAP_LINUX_IMMUTABLE))
+	if (!capable(CAP_LINUX_IMMUTABLE))
 		return -EPERM;
 	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
@@ -230,7 +230,7 @@ int vc_set_iattr_x32(uint32_t id, void __user *data)
 	struct vcmd_ctx_iattr_v1_x32 vc_data;
 	int ret;
 
-	if (!capable(CAP_SYS_ADMIN) || !capable(CAP_LINUX_IMMUTABLE))
+	if (!capable(CAP_LINUX_IMMUTABLE))
 		return -EPERM;
 	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;

@@ -1,10 +1,3 @@
-#ifndef _VX_SCHED_HARD_H
-#define _VX_SCHED_HARD_H
-
-#ifndef CONFIG_VSERVER
-#warning config options missing
-#endif
-
 
 #ifdef CONFIG_VSERVER_IDLELIMIT
 
@@ -44,11 +37,14 @@ void __vx_save_min_skip(int ret, int *min, int val)
 }
 
 static inline
-int vx_try_skip(runqueue_t *rq)
+int vx_try_skip(runqueue_t *rq, int cpu)
 {
 	/* artificially advance time */
-	if (rq->idle_skip && !list_empty(&rq->hold_queue)) {
+	if (rq->idle_skip > 0) {
+		vxdprintk(list_empty(&rq->hold_queue),
+			"hold queue empty on cpu %d", cpu);
 		rq->idle_time += rq->idle_skip;
+		vxm_idle_skip(rq, cpu);
 		return 1;
 	}
 	return 0;
@@ -62,7 +58,7 @@ int vx_try_skip(runqueue_t *rq)
 #define vx_save_min_skip(ret, min, val)
 
 static inline
-int vx_try_skip(runqueue_t *rq)
+int vx_try_skip(runqueue_t *rq, int cpu)
 {
 	return 0;
 }
@@ -97,6 +93,7 @@ void vx_hold_task(struct task_struct *p, runqueue_t *rq)
 	p->state |= TASK_ONHOLD;
 	/* a new one on hold */
 	rq->nr_onhold++;
+	vxm_hold_task(p, rq);
 	list_add_tail(&p->run_list, &rq->hold_queue);
 }
 
@@ -112,6 +109,7 @@ void vx_unhold_task(struct task_struct *p, runqueue_t *rq)
 	p->state &= ~TASK_ONHOLD;
 	enqueue_task(p, rq->expired);
 	rq->nr_running++;
+	vxm_unhold_task(p, rq);
 
 	if (p->static_prio < rq->best_expired_prio)
 		rq->best_expired_prio = p->static_prio;
@@ -159,8 +157,9 @@ int vx_need_resched(struct task_struct *p, int slice, int cpu)
 
 		/* for tokens > 0, one token was consumed */
 		if (tokens < 2)
-			return 1;
+			slice = 0;
 	}
+	vxm_need_resched(p, slice, cpu);
 	return (slice == 0);
 }
 
@@ -199,8 +198,10 @@ void vx_try_unhold(runqueue_t *rq, int cpu)
 		sched_pc = &vx_per_cpu(vxi, sched_pc, cpu);
 
 		/* recalc tokens */
+		vxm_sched_info(sched_pc, vxi, cpu);
 		ret = vx_tokens_recalc(sched_pc,
 			&rq->norm_time, &rq->idle_time, delta_min);
+		vxm_tokens_recalc(sched_pc, rq, vxi, cpu);
 
 		if (ret > 0) {
 			/* we found a runable context */
@@ -212,6 +213,7 @@ void vx_try_unhold(runqueue_t *rq, int cpu)
 	}
 	vx_set_rq_max_idle(rq, maxidle);
 	vx_set_rq_min_skip(rq, minskip);
+	vxm_rq_max_min(rq, cpu);
 }
 
 
@@ -238,11 +240,14 @@ int vx_schedule(struct task_struct *next, runqueue_t *rq, int cpu)
 	/* update scheduler params */
 	if (cpu_isset(cpu, vxi->sched.update)) {
 		vx_update_sched_param(&vxi->sched, sched_pc);
+		vxm_update_sched(sched_pc, vxi, cpu);
 		cpu_clear(cpu, vxi->sched.update);
 	}
 #endif
+	vxm_sched_info(sched_pc, vxi, cpu);
 	ret  = vx_tokens_recalc(sched_pc,
 		&rq->norm_time, &rq->idle_time, delta_min);
+	vxm_tokens_recalc(sched_pc, rq, vxi, cpu);
 
 	if (!vx_check_flags(flags , VXF_SCHED_HARD, 0))
 		return 1;
@@ -250,6 +255,7 @@ int vx_schedule(struct task_struct *next, runqueue_t *rq, int cpu)
 	if (unlikely(ret < 0)) {
 		vx_save_max_idle(ret, &rq->idle_tokens, delta_min[0]);
 		vx_save_min_skip(ret, &rq->idle_skip, delta_min[1]);
+		vxm_rq_max_min(rq, cpu);
 	put_on_hold:
 		vx_hold_task(next, rq);
 		return 0;
@@ -305,11 +311,12 @@ int vx_schedule(struct task_struct *next, runqueue_t *rq, int cpu)
 		return 1;
 
 	sched_pc = &vx_per_cpu(vxi, sched_pc, cpu);
+	vxm_sched_info(sched_pc, vxi, cpu);
 	ret  = vx_tokens_recalc(sched_pc,
 		&rq->norm_time, &rq->idle_time, delta_min);
+	vxm_tokens_recalc(sched_pc, rq, vxi, cpu);
 	return 1;
 }
 
 #endif /* CONFIG_VSERVER_HARDCPU */
 
-#endif /* _VX_SCHED_HARD_H */

@@ -549,7 +549,7 @@ int vc_nx_info(uint32_t id, void __user *data)
 	struct nx_info *nxi;
 	struct vcmd_nx_info_v0 vc_data;
 
-	if (!capable(CAP_SYS_ADMIN) || !capable(CAP_SYS_RESOURCE))
+	if (!capable(CAP_SYS_RESOURCE))
 		return -EPERM;
 
 	nxi = lookup_nx_info(id);
@@ -573,8 +573,6 @@ int vc_net_create(uint32_t nid, void __user *data)
 	struct nx_info *new_nxi;
 	int ret;
 
-	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
 	if (data && copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
@@ -607,9 +605,6 @@ int vc_net_migrate(uint32_t id, void __user *data)
 {
 	struct nx_info *nxi;
 
-	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
-
 	nxi = lookup_nx_info(id);
 	if (!nxi)
 		return -ESRCH;
@@ -624,8 +619,6 @@ int vc_net_add(uint32_t nid, void __user *data)
 	struct nx_info *nxi;
 	int index, pos, ret = 0;
 
-	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
 	if (data && copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
@@ -676,8 +669,6 @@ int vc_net_remove(uint32_t nid, void __user *data)
 	struct nx_info *nxi;
 	int ret = 0;
 
-	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
 	if (data && copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
@@ -704,9 +695,6 @@ int vc_get_nflags(uint32_t id, void __user *data)
 	struct nx_info *nxi;
 	struct vcmd_net_flags_v0 vc_data;
 
-	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
-
 	nxi = lookup_nx_info(id);
 	if (!nxi)
 		return -ESRCH;
@@ -729,8 +717,6 @@ int vc_set_nflags(uint32_t id, void __user *data)
 	struct vcmd_net_flags_v0 vc_data;
 	uint64_t mask, trigger;
 
-	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
 	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
@@ -756,9 +742,6 @@ int vc_get_ncaps(uint32_t id, void __user *data)
 	struct nx_info *nxi;
 	struct vcmd_net_caps_v0 vc_data;
 
-	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
-
 	nxi = lookup_nx_info(id);
 	if (!nxi)
 		return -ESRCH;
@@ -777,8 +760,6 @@ int vc_set_ncaps(uint32_t id, void __user *data)
 	struct nx_info *nxi;
 	struct vcmd_net_caps_v0 vc_data;
 
-	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
 	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 

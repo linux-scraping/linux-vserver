@@ -794,7 +794,7 @@ int vc_vx_info(uint32_t id, void __user *data)
 	struct vx_info *vxi;
 	struct vcmd_vx_info_v0 vc_data;
 
-	if (!capable(CAP_SYS_ADMIN) || !capable(CAP_SYS_RESOURCE))
+	if (!capable(CAP_SYS_RESOURCE))
 		return -EPERM;
 
 	vxi = lookup_vx_info(id);
@@ -819,8 +819,6 @@ int vc_ctx_create(uint32_t xid, void __user *data)
 	struct vx_info *new_vxi;
 	int ret;
 
-	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
 	if (data && copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
@@ -854,8 +852,6 @@ int vc_ctx_migrate(uint32_t id, void __user *data)
 	struct vcmd_ctx_migrate vc_data = { .flagword = 0 };
 	struct vx_info *vxi;
 
-	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
 	if (data && copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
@@ -883,9 +879,6 @@ int vc_get_cflags(uint32_t id, void __user *data)
 	struct vx_info *vxi;
 	struct vcmd_ctx_flags_v0 vc_data;
 
-	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
-
 	vxi = lookup_vx_info(id);
 	if (!vxi)
 		return -ESRCH;
@@ -908,8 +901,6 @@ int vc_set_cflags(uint32_t id, void __user *data)
 	struct vcmd_ctx_flags_v0 vc_data;
 	uint64_t mask, trigger;
 
-	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
 	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
@@ -939,47 +930,114 @@ int vc_set_cflags(uint32_t id, void __user *data)
 	return 0;
 }
 
-int vc_get_ccaps(uint32_t id, void __user *data)
+int do_get_caps(xid_t xid, uint64_t *bcaps, uint64_t *ccaps)
 {
 	struct vx_info *vxi;
-	struct vcmd_ctx_caps_v0 vc_data;
 
-	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
-
-	vxi = lookup_vx_info(id);
+	vxi = lookup_vx_info(xid);
 	if (!vxi)
 		return -ESRCH;
 
-	vc_data.bcaps = vxi->vx_bcaps;
-	vc_data.ccaps = vxi->vx_ccaps;
-	vc_data.cmask = ~0UL;
+	if (bcaps)
+		*bcaps = vxi->vx_bcaps;
+	if (ccaps)
+		*ccaps = vxi->vx_ccaps;
+
 	put_vx_info(vxi);
+	return 0;
+}
+
+int vc_get_ccaps_v0(uint32_t id, void __user *data)
+{
+	struct vcmd_ctx_caps_v0 vc_data;
+	int ret;
+
+	ret = do_get_caps(id, &vc_data.bcaps, &vc_data.ccaps);
+	if (ret)
+		return ret;
+	vc_data.cmask = ~0UL;
 
 	if (copy_to_user (data, &vc_data, sizeof(vc_data)))
 		return -EFAULT;
 	return 0;
 }
 
-int vc_set_ccaps(uint32_t id, void __user *data)
+int vc_get_ccaps(uint32_t id, void __user *data)
+{
+	struct vcmd_ctx_caps_v1 vc_data;
+	int ret;
+
+	ret = do_get_caps(id, NULL, &vc_data.ccaps);
+	if (ret)
+		return ret;
+	vc_data.cmask = ~0UL;
+
+	if (copy_to_user (data, &vc_data, sizeof(vc_data)))
+		return -EFAULT;
+	return 0;
+}
+
+int do_set_caps(xid_t xid, uint64_t bcaps, uint64_t bmask,
+	uint64_t ccaps, uint64_t cmask)
 {
 	struct vx_info *vxi;
-	struct vcmd_ctx_caps_v0 vc_data;
 
-	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
-	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
-		return -EFAULT;
-
-	vxi = lookup_vx_info(id);
+	vxi = lookup_vx_info(xid);
 	if (!vxi)
 		return -ESRCH;
 
-	vxi->vx_bcaps &= vc_data.bcaps;
-	vxi->vx_ccaps = vx_mask_flags(vxi->vx_ccaps,
-		vc_data.ccaps, vc_data.cmask);
+	vxi->vx_bcaps = vx_mask_flags(vxi->vx_bcaps, bcaps, bmask);
+	vxi->vx_ccaps = vx_mask_flags(vxi->vx_ccaps, ccaps, cmask);
+
 	put_vx_info(vxi);
 	return 0;
+}
+
+int vc_set_ccaps_v0(uint32_t id, void __user *data)
+{
+	struct vcmd_ctx_caps_v0 vc_data;
+
+	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
+		return -EFAULT;
+
+	/* simulate old &= behaviour for bcaps */
+	return do_set_caps(id, 0, ~vc_data.bcaps,
+		vc_data.ccaps, vc_data.cmask);
+}
+
+int vc_set_ccaps(uint32_t id, void __user *data)
+{
+	struct vcmd_ctx_caps_v1 vc_data;
+
+	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
+		return -EFAULT;
+
+	return do_set_caps(id, 0, 0, vc_data.ccaps, vc_data.cmask);
+}
+
+int vc_get_bcaps(uint32_t id, void __user *data)
+{
+	struct vcmd_bcaps vc_data;
+	int ret;
+
+	ret = do_get_caps(id, &vc_data.bcaps, NULL);
+	if (ret)
+		return ret;
+	vc_data.bmask = ~0UL;
+
+	if (copy_to_user (data, &vc_data, sizeof(vc_data)))
+		return -EFAULT;
+	return 0;
+}
+
+int vc_set_bcaps(uint32_t id, void __user *data)
+{
+	struct vcmd_bcaps vc_data;
+
+	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
+		return -EFAULT;
+
+	return do_set_caps(id, vc_data.bcaps, vc_data.bmask, 0, 0);
 }
 
 #include <linux/module.h>

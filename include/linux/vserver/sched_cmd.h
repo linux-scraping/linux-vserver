@@ -51,6 +51,7 @@ struct	vcmd_set_sched_v4 {
 #define VXSM_IDLE_TIME		0x0200
 
 #define	VXSM_V3_MASK		0x0173
+#define	VXSM_SET_MASK		0x01FF
 
 #define VXSM_CPU_ID		0x1000
 #define VXSM_BUCKET_ID		0x2000

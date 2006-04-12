@@ -18,7 +18,12 @@
 #include <asm/errno.h>
 #include <asm/uaccess.h>
 
-#define vxd_check_range(val, min, max)
+#define vxd_check_range(val, min, max) do {		\
+	vxlprintk((val<min) || (val>max),		\
+		"check_range(%ld,%ld,%ld)",		\
+		(long)val, (long)min, (long)max, 	\
+		__FILE__, __LINE__);			\
+	} while (0)
 
 
 void vx_update_sched_param(struct _vx_sched *sched,
@@ -153,27 +158,21 @@ on_hold:
 	BUG_ON(tokens < 0);
 
 #ifdef	CONFIG_VSERVER_HARDCPU
-	if (likely(tokens))
-		delta_min[0] = sched_pc->interval[0] *
-			tokens / sched_pc->fill_rate[0] -
-			delta_min[0];
-	else
-		delta_min[0] = sched_pc->interval[0] -
-			delta_min[0];
+	/* next interval? */
+	if (tokens > sched_pc->fill_rate[0])
+		delta_min[0] += sched_pc->interval[0] *
+			tokens / sched_pc->fill_rate[0];
 	vxd_check_range(delta_min[0], 0, INT_MAX);
 
 #ifdef	CONFIG_VSERVER_IDLETIME
 	if (!(flags & VXSF_IDLE_TIME))
 		return -1;
 
-	if (likely(tokens))
-		delta_min[1] = sched_pc->interval[1] *
-			tokens / sched_pc->fill_rate[1] -
-			delta_min[1];
-	else
-		delta_min[1] = sched_pc->interval[1] -
-			delta_min[1];
-	vxd_check_range(delta_min[0], 0, INT_MAX);
+	/* next interval? */
+	if (tokens > sched_pc->fill_rate[1])
+		delta_min[1] += sched_pc->interval[1] *
+			tokens / sched_pc->fill_rate[1];
+	vxd_check_range(delta_min[1], 0, INT_MAX);
 
 	return -2;
 #else
@@ -188,6 +187,7 @@ on_hold:
 int do_set_sched(struct vx_info *vxi, struct vcmd_set_sched_v4 *data)
 {
 	unsigned int set_mask = data->set_mask;
+	unsigned int update_mask;
 
 	/* Sanity check data values */
 	if (data->fill_rate < 0)
@@ -225,7 +225,9 @@ int do_set_sched(struct vx_info *vxi, struct vcmd_set_sched_v4 *data)
 	if (set_mask & VXSM_PRIO_BIAS)
 		vxi->sched.prio_bias = data->prio_bias;
 
-	vxi->sched.update_mask = set_mask;
+	update_mask = vxi->sched.update_mask & VXSM_SET_MASK;
+	update_mask |= (set_mask & (VXSM_SET_MASK|VXSM_IDLE_TIME));
+	vxi->sched.update_mask = update_mask;
 #ifdef	CONFIG_SMP
 	rmb();
 	if (set_mask & VXSM_CPU_ID)

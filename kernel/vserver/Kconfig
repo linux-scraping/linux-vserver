@@ -199,6 +199,33 @@ config	VSERVER_HISTORY_SIZE
 	  This allows you to specify the number of entries in
 	  the per-CPU history buffer.
 
+config	VSERVER_MONITOR
+	bool	"VServer Scheduling Monitor"
+	depends on VSERVER_DEBUG
+	default n
+	help
+	  Set this to yes if you want to record the scheduling
+	  decisions, so that they can be relayed to userspace
+	  for detailed analysis.
+
+config	VSERVER_MONITOR_SIZE
+	int "Per-CPU Monitor Queue Size (32-65536)"
+	depends on VSERVER_MONITOR
+	range 32 65536
+	default 1024
+	help
+	  This allows you to specify the number of entries in
+	  the per-CPU scheduling monitor buffer.
+
+config	VSERVER_MONITOR_SYNC
+	int "Per-CPU Monitor Sync Interval (0-65536)"
+	depends on VSERVER_MONITOR
+	range 0 65536
+	default 256
+	help
+	  This allows you to specify the interval in ticks
+	  when a time sync entry is inserted.
+
 endmenu
 
 

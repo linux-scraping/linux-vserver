@@ -3,6 +3,7 @@
 
 #include <linux/kernel.h>
 #include "vserver/debug.h"
+#include "vserver/history.h"
 
 
 #define get_vx_info(i)	__get_vx_info(i,__FILE__,__LINE__,__HERE__)

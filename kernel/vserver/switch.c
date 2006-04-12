@@ -83,6 +83,9 @@ long do_vserver(uint32_t cmd, uint32_t id, void __user *data, int compat)
 	if (!capable(CAP_CONTEXT))
 		return -EPERM;
 #endif
+	/* moved here from the individual commands */
+	if (!capable(CAP_SYS_ADMIN))
+		return -EPERM;
 
 	switch (cmd) {
 	case VCMD_get_version:
@@ -118,6 +121,7 @@ long do_vserver(uint32_t cmd, uint32_t id, void __user *data, int compat)
 
 	case VCMD_set_namespace_v0:
 		return vc_set_namespace(-1, data);
+	/* this is version 1 */
 	case VCMD_set_namespace:
 		return vc_set_namespace(id, data);
 	case VCMD_cleanup_namespace:
@@ -132,7 +136,7 @@ long do_vserver(uint32_t cmd, uint32_t id, void __user *data, int compat)
 #ifdef	CONFIG_VSERVER_LEGACY
 	switch (cmd) {
 	case VCMD_set_cflags:
-	case VCMD_set_ccaps:
+	case VCMD_set_ccaps_v0:
 		if (vx_check(0, VX_WATCH))
 			return 0;
 	}
@@ -163,10 +167,20 @@ long do_vserver(uint32_t cmd, uint32_t id, void __user *data, int compat)
 	case VCMD_get_cflags:
 		return vc_get_cflags(id, data);
 
+	case VCMD_set_ccaps_v0:
+		return vc_set_ccaps_v0(id, data);
+	/* this is version 1 */
 	case VCMD_set_ccaps:
 		return vc_set_ccaps(id, data);
+	case VCMD_get_ccaps_v0:
+		return vc_get_ccaps_v0(id, data);
+	/* this is version 1 */
 	case VCMD_get_ccaps:
 		return vc_get_ccaps(id, data);
+	case VCMD_set_bcaps:
+		return vc_set_bcaps(id, data);
+	case VCMD_get_bcaps:
+		return vc_get_bcaps(id, data);
 
 	case VCMD_set_nflags:
 		return vc_set_nflags(id, data);

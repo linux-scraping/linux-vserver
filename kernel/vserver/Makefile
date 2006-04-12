@@ -13,4 +13,5 @@ vserver-$(CONFIG_VSERVER_DEBUG) += sysctl.o debug.o
 vserver-$(CONFIG_VSERVER_LEGACY) += legacy.o
 vserver-$(CONFIG_VSERVER_LEGACYNET) += legacynet.o
 vserver-$(CONFIG_VSERVER_HISTORY) += history.o
+vserver-$(CONFIG_VSERVER_MONITOR) += monitor.o
 

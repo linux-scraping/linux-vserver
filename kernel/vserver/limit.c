@@ -144,7 +144,7 @@ int vc_set_rlimit(uint32_t id, void __user *data)
 {
 	struct vcmd_ctx_rlimit_v0 vc_data;
 
-	if (!capable(CAP_SYS_ADMIN) || !capable(CAP_SYS_RESOURCE))
+	if (!capable(CAP_SYS_RESOURCE))
 		return -EPERM;
 	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
@@ -159,7 +159,7 @@ int vc_set_rlimit_x32(uint32_t id, void __user *data)
 {
 	struct vcmd_ctx_rlimit_v0_x32 vc_data;
 
-	if (!capable(CAP_SYS_ADMIN) || !capable(CAP_SYS_RESOURCE))
+	if (!capable(CAP_SYS_RESOURCE))
 		return -EPERM;
 	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
@@ -209,7 +209,7 @@ int vc_get_rlimit_mask(uint32_t id, void __user *data)
 		0
 		};
 
-	if (!capable(CAP_SYS_ADMIN) || !capable(CAP_SYS_RESOURCE))
+	if (!capable(CAP_SYS_RESOURCE))
 		return -EPERM;
 	if (copy_to_user(data, &mask, sizeof(mask)))
 		return -EFAULT;

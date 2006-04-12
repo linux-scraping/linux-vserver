@@ -674,7 +674,7 @@ static int effective_prio(task_t *p)
 	prio = p->static_prio - bonus;
 
 	/* adjust effective priority */
-	prio += vx_adjust_prio(p, prio, MAX_USER_PRIO);
+	prio = vx_adjust_prio(p, prio, MAX_USER_PRIO);
 
 	if (prio < MAX_RT_PRIO)
 		prio = MAX_RT_PRIO;
@@ -683,11 +683,15 @@ static int effective_prio(task_t *p)
 	return prio;
 }
 
+#include "sched_mon.h"
+
+
 /*
  * __activate_task - move a task to the runqueue.
  */
 static inline void __activate_task(task_t *p, runqueue_t *rq)
 {
+	vxm_activate_task(p, rq);
 	enqueue_task(p, rq->active);
 	rq->nr_running++;
 }
@@ -697,6 +701,7 @@ static inline void __activate_task(task_t *p, runqueue_t *rq)
  */
 static inline void __activate_idle_task(task_t *p, runqueue_t *rq)
 {
+	vxm_activate_idle(p, rq);
 	enqueue_task_head(p, rq->active);
 	rq->nr_running++;
 }
@@ -825,6 +830,7 @@ static void __deactivate_task(struct task_struct *p, runqueue_t *rq)
 {
 	rq->nr_running--;
 	dequeue_task(p, p->array);
+	vxm_deactivate_task(p, rq);
 	p->array = NULL;
 }
 
@@ -901,6 +907,7 @@ static int migrate_task(task_t *p, int dest_cpu, migration_req_t *req)
 {
 	runqueue_t *rq = task_rq(p);
 
+	vxm_migrate_task(p, rq, dest_cpu);
 	/*
 	 * If the task is not on a runqueue (and not running), then
 	 * it is sufficient to simply update the task's cpu field.
@@ -2616,6 +2623,7 @@ void scheduler_tick(void)
 	unsigned long long now = sched_clock();
 
 	update_cpu_clock(p, rq, now);
+	vxm_sync(now, cpu);
 
 	rq->timestamp_last_tick = now;
 
@@ -2996,7 +3004,7 @@ pick_next:
 	if (unlikely(!rq->nr_running)) {
 go_idle:
 		/* can we skip idle time? */
-		if (vx_try_skip(rq))
+		if (vx_try_skip(rq, cpu))
 			goto try_unhold;
 
 		idle_balance(cpu, rq);
