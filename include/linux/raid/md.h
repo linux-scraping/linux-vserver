@@ -71,8 +71,8 @@
  */
 #define MD_PATCHLEVEL_VERSION           3
 
-extern int register_md_personality (int p_num, mdk_personality_t *p);
-extern int unregister_md_personality (int p_num);
+extern int register_md_personality (struct mdk_personality *p);
+extern int unregister_md_personality (struct mdk_personality *p);
 extern mdk_thread_t * md_register_thread (void (*run) (mddev_t *mddev),
 				mddev_t *mddev, const char *name);
 extern void md_unregister_thread (mdk_thread_t *thread);
@@ -92,7 +92,10 @@ extern void md_super_write(mddev_t *mddev, mdk_rdev_t *rdev,
 extern void md_super_wait(mddev_t *mddev);
 extern int sync_page_io(struct block_device *bdev, sector_t sector, int size,
 			struct page *page, int rw);
+extern void md_do_sync(mddev_t *mddev);
+extern void md_new_event(mddev_t *mddev);
 
+extern void md_update_sb(mddev_t * mddev);
 
 #define MD_BUG(x...) { printk("md: bug in file %s, line %d\n", __FILE__, __LINE__); md_print_devices(); }
 

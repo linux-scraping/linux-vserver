@@ -183,7 +183,7 @@ fill_write_buffer(struct sysfs_buffer * buffer, const char __user * buf, size_t 
 		return -ENOMEM;
 
 	if (count >= PAGE_SIZE)
-		count = PAGE_SIZE;
+		count = PAGE_SIZE - 1;
 	error = copy_from_user(buffer->page,buf,count);
 	buffer->needs_read_fill = 1;
 	return error ? -EFAULT : count;
@@ -301,9 +301,8 @@ static int check_perm(struct inode * inode, struct file * file)
 	/* No error? Great, allocate a buffer for the file, and store it
 	 * it in file->private_data for easy access.
 	 */
-	buffer = kmalloc(sizeof(struct sysfs_buffer),GFP_KERNEL);
+	buffer = kzalloc(sizeof(struct sysfs_buffer), GFP_KERNEL);
 	if (buffer) {
-		memset(buffer,0,sizeof(struct sysfs_buffer));
 		init_MUTEX(&buffer->sem);
 		buffer->needs_read_fill = 1;
 		buffer->ops = ops;
@@ -349,7 +348,7 @@ static int sysfs_release(struct inode * inode, struct file * filp)
 	return 0;
 }
 
-struct file_operations sysfs_file_operations = {
+const struct file_operations sysfs_file_operations = {
 	.read		= sysfs_read_file,
 	.write		= sysfs_write_file,
 	.llseek		= generic_file_llseek,
@@ -362,11 +361,13 @@ int sysfs_add_file(struct dentry * dir, const struct attribute * attr, int type)
 {
 	struct sysfs_dirent * parent_sd = dir->d_fsdata;
 	umode_t mode = (attr->mode & S_IALLUGO) | S_IFREG;
-	int error = 0;
+	int error = -EEXIST;
 
-	down(&dir->d_inode->i_sem);
-	error = sysfs_make_dirent(parent_sd, NULL, (void *) attr, mode, type);
-	up(&dir->d_inode->i_sem);
+	mutex_lock(&dir->d_inode->i_mutex);
+	if (!sysfs_dirent_exist(parent_sd, attr->name))
+		error = sysfs_make_dirent(parent_sd, NULL, (void *)attr,
+					  mode, type);
+	mutex_unlock(&dir->d_inode->i_mutex);
 
 	return error;
 }
@@ -398,7 +399,7 @@ int sysfs_update_file(struct kobject * kobj, const struct attribute * attr)
 	struct dentry * victim;
 	int res = -ENOENT;
 
-	down(&dir->d_inode->i_sem);
+	mutex_lock(&dir->d_inode->i_mutex);
 	victim = lookup_one_len(attr->name, dir, strlen(attr->name));
 	if (!IS_ERR(victim)) {
 		/* make sure dentry is really there */
@@ -420,7 +421,7 @@ int sysfs_update_file(struct kobject * kobj, const struct attribute * attr)
 		 */
 		dput(victim);
 	}
-	up(&dir->d_inode->i_sem);
+	mutex_unlock(&dir->d_inode->i_mutex);
 
 	return res;
 }
@@ -441,22 +442,22 @@ int sysfs_chmod_file(struct kobject *kobj, struct attribute *attr, mode_t mode)
 	struct iattr newattrs;
 	int res = -ENOENT;
 
-	down(&dir->d_inode->i_sem);
+	mutex_lock(&dir->d_inode->i_mutex);
 	victim = lookup_one_len(attr->name, dir, strlen(attr->name));
 	if (!IS_ERR(victim)) {
 		if (victim->d_inode &&
 		    (victim->d_parent->d_inode == dir->d_inode)) {
 			inode = victim->d_inode;
-			down(&inode->i_sem);
+			mutex_lock(&inode->i_mutex);
 			newattrs.ia_mode = (mode & S_IALLUGO) |
 						(inode->i_mode & ~S_IALLUGO);
 			newattrs.ia_valid = ATTR_MODE | ATTR_CTIME;
 			res = notify_change(victim, &newattrs);
-			up(&inode->i_sem);
+			mutex_unlock(&inode->i_mutex);
 		}
 		dput(victim);
 	}
-	up(&dir->d_inode->i_sem);
+	mutex_unlock(&dir->d_inode->i_mutex);
 
 	return res;
 }
@@ -480,4 +481,3 @@ void sysfs_remove_file(struct kobject * kobj, const struct attribute * attr)
 EXPORT_SYMBOL_GPL(sysfs_create_file);
 EXPORT_SYMBOL_GPL(sysfs_remove_file);
 EXPORT_SYMBOL_GPL(sysfs_update_file);
-

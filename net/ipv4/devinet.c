@@ -32,6 +32,7 @@
 #include <asm/uaccess.h>
 #include <asm/system.h>
 #include <linux/bitops.h>
+#include <linux/capability.h>
 #include <linux/module.h>
 #include <linux/types.h>
 #include <linux/kernel.h>
@@ -58,6 +59,7 @@
 #endif
 #include <linux/kmod.h>
 
+#include <net/arp.h>
 #include <net/ip.h>
 #include <net/route.h>
 #include <net/ip_fib.h>
@@ -79,7 +81,7 @@ static struct ipv4_devconf ipv4_devconf_dflt = {
 
 static void rtmsg_ifa(int event, struct in_ifaddr *);
 
-static struct notifier_block *inetaddr_chain;
+static BLOCKING_NOTIFIER_HEAD(inetaddr_chain);
 static void inet_del_ifa(struct in_device *in_dev, struct in_ifaddr **ifap,
 			 int destroy);
 #ifdef CONFIG_SYSCTL
@@ -265,7 +267,8 @@ static void inet_del_ifa(struct in_device *in_dev, struct in_ifaddr **ifap,
 				*ifap1 = ifa->ifa_next;
 
 				rtmsg_ifa(RTM_DELADDR, ifa);
-				notifier_call_chain(&inetaddr_chain, NETDEV_DOWN, ifa);
+				blocking_notifier_call_chain(&inetaddr_chain,
+						NETDEV_DOWN, ifa);
 				inet_free_ifa(ifa);
 			} else {
 				promote = ifa;
@@ -289,7 +292,7 @@ static void inet_del_ifa(struct in_device *in_dev, struct in_ifaddr **ifap,
 	   So that, this order is correct.
 	 */
 	rtmsg_ifa(RTM_DELADDR, ifa1);
-	notifier_call_chain(&inetaddr_chain, NETDEV_DOWN, ifa1);
+	blocking_notifier_call_chain(&inetaddr_chain, NETDEV_DOWN, ifa1);
 
 	if (promote) {
 
@@ -301,7 +304,8 @@ static void inet_del_ifa(struct in_device *in_dev, struct in_ifaddr **ifap,
 
 		promote->ifa_flags &= ~IFA_F_SECONDARY;
 		rtmsg_ifa(RTM_NEWADDR, promote);
-		notifier_call_chain(&inetaddr_chain, NETDEV_UP, promote);
+		blocking_notifier_call_chain(&inetaddr_chain,
+				NETDEV_UP, promote);
 		for (ifa = promote->ifa_next; ifa; ifa = ifa->ifa_next) {
 			if (ifa1->ifa_mask != ifa->ifa_mask ||
 			    !inet_ifa_match(ifa1->ifa_address, ifa))
@@ -364,7 +368,7 @@ static int inet_insert_ifa(struct in_ifaddr *ifa)
 	   Notifier will trigger FIB update, so that
 	   listeners of netlink will know about new ifaddr */
 	rtmsg_ifa(RTM_NEWADDR, ifa);
-	notifier_call_chain(&inetaddr_chain, NETDEV_UP, ifa);
+	blocking_notifier_call_chain(&inetaddr_chain, NETDEV_UP, ifa);
 
 	return 0;
 }
@@ -969,12 +973,12 @@ u32 inet_confirm_addr(const struct net_device *dev, u32 dst, u32 local, int scop
 
 int register_inetaddr_notifier(struct notifier_block *nb)
 {
-	return notifier_chain_register(&inetaddr_chain, nb);
+	return blocking_notifier_chain_register(&inetaddr_chain, nb);
 }
 
 int unregister_inetaddr_notifier(struct notifier_block *nb)
 {
-	return notifier_chain_unregister(&inetaddr_chain, nb);
+	return blocking_notifier_chain_unregister(&inetaddr_chain, nb);
 }
 
 /* Rename ifa_labels for a device name change. Make some effort to preserve existing
@@ -1170,7 +1174,7 @@ static void rtmsg_ifa(int event, struct in_ifaddr* ifa)
 
 	if (!skb)
 		netlink_set_err(rtnl, 0, RTNLGRP_IPV4_IFADDR, ENOBUFS);
-	else if (inet_fill_ifaddr(skb, ifa, current->pid, 0, event, 0) < 0) {
+	else if (inet_fill_ifaddr(skb, ifa, 0, 0, event, 0) < 0) {
 		kfree_skb(skb);
 		netlink_set_err(rtnl, 0, RTNLGRP_IPV4_IFADDR, EINVAL);
 	} else {
@@ -1424,6 +1428,14 @@ static struct devinet_sysctl_table {
 			.ctl_name	= NET_IPV4_CONF_ARP_IGNORE,
 			.procname	= "arp_ignore",
 			.data		= &ipv4_devconf.arp_ignore,
+			.maxlen		= sizeof(int),
+			.mode		= 0644,
+			.proc_handler	= &proc_dointvec,
+		},
+		{
+			.ctl_name	= NET_IPV4_CONF_ARP_ACCEPT,
+			.procname	= "arp_accept",
+			.data		= &ipv4_devconf.arp_accept,
 			.maxlen		= sizeof(int),
 			.mode		= 0644,
 			.proc_handler	= &proc_dointvec,

@@ -4,6 +4,7 @@
 #include <linux/config.h>
 #include <linux/socket.h>
 #include <linux/un.h>
+#include <linux/mutex.h>
 #include <net/sock.h>
 
 extern void unix_inflight(struct file *fp);
@@ -13,7 +14,7 @@ extern void unix_gc(void);
 #define UNIX_HASH_SIZE	256
 
 extern struct hlist_head unix_socket_table[UNIX_HASH_SIZE + 1];
-extern rwlock_t unix_table_lock;
+extern spinlock_t unix_table_lock;
 
 extern atomic_t unix_tot_inflight;
 
@@ -61,10 +62,10 @@ struct unix_skb_parms {
 #define UNIXCB(skb) 	(*(struct unix_skb_parms*)&((skb)->cb))
 #define UNIXCREDS(skb)	(&UNIXCB((skb)).creds)
 
-#define unix_state_rlock(s)	read_lock(&unix_sk(s)->lock)
-#define unix_state_runlock(s)	read_unlock(&unix_sk(s)->lock)
-#define unix_state_wlock(s)	write_lock(&unix_sk(s)->lock)
-#define unix_state_wunlock(s)	write_unlock(&unix_sk(s)->lock)
+#define unix_state_rlock(s)	spin_lock(&unix_sk(s)->lock)
+#define unix_state_runlock(s)	spin_unlock(&unix_sk(s)->lock)
+#define unix_state_wlock(s)	spin_lock(&unix_sk(s)->lock)
+#define unix_state_wunlock(s)	spin_unlock(&unix_sk(s)->lock)
 
 #ifdef __KERNEL__
 /* The AF_UNIX socket */
@@ -74,12 +75,12 @@ struct unix_sock {
         struct unix_address     *addr;
         struct dentry		*dentry;
         struct vfsmount		*mnt;
-        struct semaphore        readsem;
+	struct mutex		readlock;
         struct sock		*peer;
         struct sock		*other;
         struct sock		*gc_tree;
         atomic_t                inflight;
-        rwlock_t                lock;
+        spinlock_t		lock;
         wait_queue_head_t       peer_wait;
 };
 #define unix_sk(__sk) ((struct unix_sock *)__sk)

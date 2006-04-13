@@ -8,6 +8,7 @@
  * completion notification.
  */
 
+#include <asm/types.h>
 #include <asm/atomic.h>
 
 #include <linux/blkdev.h>
@@ -21,6 +22,7 @@
 #include <linux/slab.h>
 #include <linux/vmalloc.h>
 #include <linux/workqueue.h>
+#include <linux/mutex.h>
 
 #include "kcopyd.h"
 
@@ -43,6 +45,9 @@ struct kcopyd_client {
 	struct page_list *pages;
 	unsigned int nr_pages;
 	unsigned int nr_free_pages;
+
+	wait_queue_head_t destroyq;
+	atomic_t nr_jobs;
 };
 
 static struct page_list *alloc_pl(void)
@@ -226,8 +231,7 @@ static int jobs_init(void)
 	if (!_job_cache)
 		return -ENOMEM;
 
-	_job_pool = mempool_create(MIN_JOBS, mempool_alloc_slab,
-				   mempool_free_slab, _job_cache);
+	_job_pool = mempool_create_slab_pool(MIN_JOBS, _job_cache);
 	if (!_job_pool) {
 		kmem_cache_destroy(_job_cache);
 		return -ENOMEM;
@@ -292,10 +296,15 @@ static int run_complete_job(struct kcopyd_job *job)
 	int read_err = job->read_err;
 	unsigned int write_err = job->write_err;
 	kcopyd_notify_fn fn = job->fn;
+	struct kcopyd_client *kc = job->kc;
 
-	kcopyd_put_pages(job->kc, job->pages);
+	kcopyd_put_pages(kc, job->pages);
 	mempool_free(job, _job_pool);
 	fn(read_err, write_err, context);
+
+	if (atomic_dec_and_test(&kc->nr_jobs))
+		wake_up(&kc->destroyq);
+
 	return 0;
 }
 
@@ -430,6 +439,7 @@ static void do_work(void *ignored)
  */
 static void dispatch_job(struct kcopyd_job *job)
 {
+	atomic_inc(&job->kc->nr_jobs);
 	push(&_pages_jobs, job);
 	wake();
 }
@@ -561,77 +571,79 @@ int kcopyd_copy(struct kcopyd_client *kc, struct io_region *from,
  * Cancels a kcopyd job, eg. someone might be deactivating a
  * mirror.
  */
+#if 0
 int kcopyd_cancel(struct kcopyd_job *job, int block)
 {
 	/* FIXME: finish */
 	return -1;
 }
+#endif  /*  0  */
 
 /*-----------------------------------------------------------------
  * Unit setup
  *---------------------------------------------------------------*/
-static DECLARE_MUTEX(_client_lock);
+static DEFINE_MUTEX(_client_lock);
 static LIST_HEAD(_clients);
 
 static void client_add(struct kcopyd_client *kc)
 {
-	down(&_client_lock);
+	mutex_lock(&_client_lock);
 	list_add(&kc->list, &_clients);
-	up(&_client_lock);
+	mutex_unlock(&_client_lock);
 }
 
 static void client_del(struct kcopyd_client *kc)
 {
-	down(&_client_lock);
+	mutex_lock(&_client_lock);
 	list_del(&kc->list);
-	up(&_client_lock);
+	mutex_unlock(&_client_lock);
 }
 
-static DECLARE_MUTEX(kcopyd_init_lock);
+static DEFINE_MUTEX(kcopyd_init_lock);
 static int kcopyd_clients = 0;
 
 static int kcopyd_init(void)
 {
 	int r;
 
-	down(&kcopyd_init_lock);
+	mutex_lock(&kcopyd_init_lock);
 
 	if (kcopyd_clients) {
 		/* Already initialized. */
 		kcopyd_clients++;
-		up(&kcopyd_init_lock);
+		mutex_unlock(&kcopyd_init_lock);
 		return 0;
 	}
 
 	r = jobs_init();
 	if (r) {
-		up(&kcopyd_init_lock);
+		mutex_unlock(&kcopyd_init_lock);
 		return r;
 	}
 
 	_kcopyd_wq = create_singlethread_workqueue("kcopyd");
 	if (!_kcopyd_wq) {
 		jobs_exit();
-		up(&kcopyd_init_lock);
+		mutex_unlock(&kcopyd_init_lock);
 		return -ENOMEM;
 	}
 
 	kcopyd_clients++;
 	INIT_WORK(&_kcopyd_work, do_work, NULL);
-	up(&kcopyd_init_lock);
+	mutex_unlock(&kcopyd_init_lock);
 	return 0;
 }
 
 static void kcopyd_exit(void)
 {
-	down(&kcopyd_init_lock);
+	mutex_lock(&kcopyd_init_lock);
 	kcopyd_clients--;
 	if (!kcopyd_clients) {
 		jobs_exit();
 		destroy_workqueue(_kcopyd_wq);
 		_kcopyd_wq = NULL;
 	}
-	up(&kcopyd_init_lock);
+	mutex_unlock(&kcopyd_init_lock);
 }
 
 int kcopyd_client_create(unsigned int nr_pages, struct kcopyd_client **result)
@@ -667,6 +679,9 @@ int kcopyd_client_create(unsigned int nr_pages, struct kcopyd_client **result)
 		return r;
 	}
 
+	init_waitqueue_head(&kc->destroyq);
+	atomic_set(&kc->nr_jobs, 0);
+
 	client_add(kc);
 	*result = kc;
 	return 0;
@@ -674,6 +689,9 @@ int kcopyd_client_create(unsigned int nr_pages, struct kcopyd_client **result)
 
 void kcopyd_client_destroy(struct kcopyd_client *kc)
 {
+	/* Wait for completion of all jobs submitted by this client. */
+	wait_event(kc->destroyq, !atomic_read(&kc->nr_jobs));
+
 	dm_io_put(kc->nr_pages);
 	client_free_pages(kc);
 	client_del(kc);
@@ -684,4 +702,3 @@ void kcopyd_client_destroy(struct kcopyd_client *kc)
 EXPORT_SYMBOL(kcopyd_client_create);
 EXPORT_SYMBOL(kcopyd_client_destroy);
 EXPORT_SYMBOL(kcopyd_copy);
-EXPORT_SYMBOL(kcopyd_cancel);

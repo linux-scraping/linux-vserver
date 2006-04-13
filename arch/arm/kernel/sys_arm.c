@@ -147,6 +147,7 @@ asmlinkage int old_select(struct sel_arg_struct __user *arg)
 	return sys_select(a.n, a.inp, a.outp, a.exp, a.tvp);
 }
 
+#if !defined(CONFIG_AEABI) || defined(CONFIG_OABI_COMPAT)
 /*
  * sys_ipc() is the de-multiplexer for the SysV IPC calls..
  *
@@ -226,13 +227,19 @@ asmlinkage int sys_ipc(uint call, int first, int second, int third,
 		return -ENOSYS;
 	}
 }
+#endif
 
 /* Fork a new task - this creates a new program thread.
  * This is called indirectly via a small wrapper
  */
 asmlinkage int sys_fork(struct pt_regs *regs)
 {
+#ifdef CONFIG_MMU
 	return do_fork(SIGCHLD, regs->ARM_sp, regs, 0, NULL, NULL);
+#else
+	/* can not support in nommu mode */
+	return(-EINVAL);
+#endif
 }
 
 /* Clone a task - this clones the calling program thread.

@@ -10,6 +10,7 @@
 
 #include <linux/netfilter_bridge/ebtables.h>
 #include <linux/netfilter_bridge/ebt_stp.h>
+#include <linux/etherdevice.h>
 #include <linux/module.h>
 
 #define BPDU_TYPE_CONFIG 0
@@ -164,8 +165,8 @@ static int ebt_stp_check(const char *tablename, unsigned int hookmask,
 	if (datalen != len)
 		return -EINVAL;
 	/* Make sure the match only receives stp frames */
-	if (memcmp(e->destmac, bridge_ula, ETH_ALEN) ||
-	    memcmp(e->destmsk, msk, ETH_ALEN) || !(e->bitmask & EBT_DESTMAC))
+	if (compare_ether_addr(e->destmac, bridge_ula) ||
+	    compare_ether_addr(e->destmsk, msk) || !(e->bitmask & EBT_DESTMAC))
 		return -EINVAL;
 
 	return 0;
@@ -179,16 +180,16 @@ static struct ebt_match filter_stp =
 	.me		= THIS_MODULE,
 };
 
-static int __init init(void)
+static int __init ebt_stp_init(void)
 {
 	return ebt_register_match(&filter_stp);
 }
 
-static void __exit fini(void)
+static void __exit ebt_stp_fini(void)
 {
 	ebt_unregister_match(&filter_stp);
 }
 
-module_init(init);
-module_exit(fini);
+module_init(ebt_stp_init);
+module_exit(ebt_stp_fini);
 MODULE_LICENSE("GPL");

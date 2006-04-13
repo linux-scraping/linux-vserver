@@ -16,6 +16,7 @@
 #include <linux/module.h>       /* for EXPORT_SYMBOL */
 #include <linux/hardirq.h>
 #include <linux/kprobes.h>
+#include <linux/delay.h>		/* for ssleep() */
 
 #include <asm/fpswa.h>
 #include <asm/ia32.h>
@@ -29,19 +30,19 @@ extern spinlock_t timerlist_lock;
 fpswa_interface_t *fpswa_interface;
 EXPORT_SYMBOL(fpswa_interface);
 
-struct notifier_block *ia64die_chain;
+ATOMIC_NOTIFIER_HEAD(ia64die_chain);
 
 int
 register_die_notifier(struct notifier_block *nb)
 {
-	return notifier_chain_register(&ia64die_chain, nb);
+	return atomic_notifier_chain_register(&ia64die_chain, nb);
 }
 EXPORT_SYMBOL_GPL(register_die_notifier);
 
 int
 unregister_die_notifier(struct notifier_block *nb)
 {
-	return notifier_chain_unregister(&ia64die_chain, nb);
+	return atomic_notifier_chain_unregister(&ia64die_chain, nb);
 }
 EXPORT_SYMBOL_GPL(unregister_die_notifier);
 
@@ -116,6 +117,13 @@ die (const char *str, struct pt_regs *regs, long err)
 	bust_spinlocks(0);
 	die.lock_owner = -1;
 	spin_unlock_irq(&die.lock);
+
+	if (panic_on_oops) {
+		printk(KERN_EMERG "Fatal exception: panic in 5 seconds\n");
+		ssleep(5);
+		panic("Fatal exception");
+	}
+
   	do_exit(SIGSEGV);
 }
 
@@ -530,12 +538,15 @@ ia64_fault (unsigned long vector, unsigned long isr, unsigned long ifa,
 		if (fsys_mode(current, &regs)) {
 			extern char __kernel_syscall_via_break[];
 			/*
-			 * Got a trap in fsys-mode: Taken Branch Trap and Single Step trap
-			 * need special handling; Debug trap is not supposed to happen.
+			 * Got a trap in fsys-mode: Taken Branch Trap
+			 * and Single Step trap need special handling;
+			 * Debug trap is ignored (we disable it here
+			 * and re-enable it in the lower-privilege trap).
 			 */
 			if (unlikely(vector == 29)) {
-				die("Got debug trap in fsys-mode---not supposed to happen!",
-				    &regs, 0);
+				set_thread_flag(TIF_DB_DISABLED);
+				ia64_psr(&regs)->db = 0;
+				ia64_psr(&regs)->lp = 1;
 				return;
 			}
 			/* re-do the system call via break 0x100000: */
@@ -589,10 +600,19 @@ ia64_fault (unsigned long vector, unsigned long isr, unsigned long ifa,
 	      case 34:
 		if (isr & 0x2) {
 			/* Lower-Privilege Transfer Trap */
+
+			/* If we disabled debug traps during an fsyscall,
+			 * re-enable them here.
+			 */
+			if (test_thread_flag(TIF_DB_DISABLED)) {
+				clear_thread_flag(TIF_DB_DISABLED);
+				ia64_psr(&regs)->db = 1;
+			}
+
 			/*
-			 * Just clear PSR.lp and then return immediately: all the
-			 * interesting work (e.g., signal delivery is done in the kernel
-			 * exit path).
+			 * Just clear PSR.lp and then return immediately:
+			 * all the interesting work (e.g., signal delivery)
+			 * is done in the kernel exit path.
 			 */
 			ia64_psr(&regs)->lp = 0;
 			return;

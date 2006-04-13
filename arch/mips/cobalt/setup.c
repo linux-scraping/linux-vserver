@@ -5,7 +5,7 @@
  * License.  See the file "COPYING" in the main directory of this archive
  * for more details.
  *
- * Copyright (C) 1996, 1997, 2004 by Ralf Baechle (ralf@linux-mips.org)
+ * Copyright (C) 1996, 1997, 2004, 05 by Ralf Baechle (ralf@linux-mips.org)
  * Copyright (C) 2001, 2002, 2003 by Liam Davies (ldavies@agile.tv)
  *
  */
@@ -13,6 +13,7 @@
 #include <linux/interrupt.h>
 #include <linux/pci.h>
 #include <linux/init.h>
+#include <linux/pm.h>
 #include <linux/serial.h>
 #include <linux/serial_core.h>
 
@@ -25,11 +26,12 @@
 #include <asm/gt64120.h>
 #include <asm/serial.h>
 
-#include <asm/cobalt/cobalt.h>
+#include <asm/mach-cobalt/cobalt.h>
 
 extern void cobalt_machine_restart(char *command);
 extern void cobalt_machine_halt(void);
 extern void cobalt_machine_power_off(void);
+extern void cobalt_early_console(void);
 
 int cobalt_board_id;
 
@@ -99,7 +101,7 @@ void __init plat_setup(void)
 
 	_machine_restart = cobalt_machine_restart;
 	_machine_halt = cobalt_machine_halt;
-	_machine_power_off = cobalt_machine_power_off;
+	pm_power_off = cobalt_machine_power_off;
 
 	board_timer_setup = cobalt_timer_setup;
 
@@ -107,14 +109,6 @@ void __init plat_setup(void)
 
 	/* I/O port resource must include UART and LCD/buttons */
 	ioport_resource.end = 0x0fffffff;
-
-	/*
-	 * This is a prom style console. We just poke at the
-	 *  UART to make it talk.
-	 * Only use this console if you really screw up and can't
-	 *  get to the stage of setting up a real serial console.
-	 */
-	/*ns16550_setup_console();*/
 
 	/* request I/O space for devices used on all i[345]86 PCs */
 	for (i = 0; i < COBALT_IO_RESOURCES; i++)
@@ -135,11 +129,15 @@ void __init plat_setup(void)
 #ifdef CONFIG_SERIAL_8250
 	if (cobalt_board_id > COBALT_BRD_ID_RAQ1) {
 
+#ifdef CONFIG_EARLY_PRINTK
+		cobalt_early_console();
+#endif
+
 		uart.line	= 0;
 		uart.type	= PORT_UNKNOWN;
 		uart.uartclk	= 18432000;
 		uart.irq	= COBALT_SERIAL_IRQ;
-		uart.flags	= STD_COM_FLAGS;
+		uart.flags	= UPF_BOOT_AUTOCONF | UPF_SKIP_TEST;
 		uart.iobase	= 0xc800000;
 		uart.iotype	= UPIO_PORT;
 

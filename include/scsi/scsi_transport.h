@@ -30,12 +30,9 @@ struct scsi_transport_template {
 	struct transport_container device_attrs;
 
 	/*
-	 * If set, call target_parent prior to allocating a scsi_target,
-	 * so we get the appropriate parent for the target. This function
-	 * is required for transports like FC and iSCSI that do not put the
-	 * scsi_target under scsi_host.
+	 * If set, called from sysfs and legacy procfs rescanning code.
 	 */
-	struct device *(*target_parent)(struct Scsi_Host *, int, uint);
+	int (*user_scan)(struct Scsi_Host *, uint, uint, uint);
 
 	/* The size of the specific transport attribute structure (a
 	 * space of this size will be left at the end of the
@@ -51,6 +48,17 @@ struct scsi_transport_template {
 	 * True if the transport wants to use a host-based work-queue
 	 */
 	unsigned int create_work_queue : 1;
+
+	/*
+	 * This is an optional routine that allows the transport to become
+	 * involved when a scsi io timer fires. The return value tells the
+	 * timer routine how to finish the io timeout handling:
+	 * EH_HANDLED:		I fixed the error, please complete the command
+	 * EH_RESET_TIMER:	I need more time, reset the timer and
+	 *			begin counting again
+	 * EH_NOT_HANDLED	Begin normal error recovery
+	 */
+	enum scsi_eh_timer_return (* eh_timed_out)(struct scsi_cmnd *);
 };
 
 #define transport_class_to_shost(tc) \

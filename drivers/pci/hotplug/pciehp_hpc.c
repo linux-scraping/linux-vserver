@@ -30,12 +30,18 @@
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/types.h>
+#include <linux/signal.h>
+#include <linux/jiffies.h>
+#include <linux/timer.h>
 #include <linux/pci.h>
 #include <linux/interrupt.h>
 
 #include "../pci.h"
 #include "pciehp.h"
-
+#include <acpi/acpi.h>
+#include <acpi/acpi_bus.h>
+#include <acpi/actypes.h>
+#include <linux/pci-acpi.h>
 #ifdef DEBUG
 #define DBG_K_TRACE_ENTRY      ((unsigned int)0x00000001)	/* On function entry */
 #define DBG_K_TRACE_EXIT       ((unsigned int)0x00000002)	/* On function exit */
@@ -784,8 +790,13 @@ static int hpc_power_on_slot(struct slot * slot)
 
 	slot_cmd = (slot_ctrl & ~PWR_CTRL) | POWER_ON;
 
+	/* Enable detection that we turned off at slot power-off time */
 	if (!pciehp_poll_mode)
-		slot_cmd = slot_cmd | HP_INTR_ENABLE; 
+		slot_cmd = slot_cmd |
+		           PWR_FAULT_DETECT_ENABLE |
+		           MRL_DETECT_ENABLE |
+		           PRSN_DETECT_ENABLE |
+		           HP_INTR_ENABLE;
 
 	retval = pcie_write_cmd(slot, slot_cmd);
 
@@ -830,8 +841,18 @@ static int hpc_power_off_slot(struct slot * slot)
 
 	slot_cmd = (slot_ctrl & ~PWR_CTRL) | POWER_OFF;
 
+	/*
+	 * If we get MRL or presence detect interrupts now, the isr
+	 * will notice the sticky power-fault bit too and issue power
+	 * indicator change commands. This will lead to an endless loop
+	 * of command completions, since the power-fault bit remains on
+	 * till the slot is powered on again.
+	 */
 	if (!pciehp_poll_mode)
-		slot_cmd = slot_cmd | HP_INTR_ENABLE; 
+		slot_cmd = (slot_cmd &
+		            ~PWR_FAULT_DETECT_ENABLE &
+		            ~MRL_DETECT_ENABLE &
+		            ~PRSN_DETECT_ENABLE) | HP_INTR_ENABLE;
 
 	retval = pcie_write_cmd(slot, slot_cmd);
 
@@ -1218,6 +1239,76 @@ static struct hpc_ops pciehp_hpc_ops = {
 	.check_lnk_status		= hpc_check_lnk_status,
 };
 
+#ifdef CONFIG_ACPI
+int pciehp_acpi_get_hp_hw_control_from_firmware(struct pci_dev *dev)
+{
+	acpi_status status;
+	acpi_handle chandle, handle = DEVICE_ACPI_HANDLE(&(dev->dev));
+	struct pci_dev *pdev = dev;
+	struct pci_bus *parent;
+	struct acpi_buffer string = { ACPI_ALLOCATE_BUFFER, NULL };
+
+	/*
+	 * Per PCI firmware specification, we should run the ACPI _OSC
+	 * method to get control of hotplug hardware before using it.
+	 * If an _OSC is missing, we look for an OSHP to do the same thing.
+	 * To handle different BIOS behavior, we look for _OSC and OSHP
+	 * within the scope of the hotplug controller and its parents, upto
+	 * the host bridge under which this controller exists.
+	 */
+	while (!handle) {
+		/*
+		 * This hotplug controller was not listed in the ACPI name
+		 * space at all. Try to get acpi handle of parent pci bus.
+		 */
+		if (!pdev || !pdev->bus->parent)
+			break;
+		parent = pdev->bus->parent;
+		dbg("Could not find %s in acpi namespace, trying parent\n",
+				pci_name(pdev));
+		if (!parent->self)
+			/* Parent must be a host bridge */
+			handle = acpi_get_pci_rootbridge_handle(
+					pci_domain_nr(parent),
+					parent->number);
+		else
+			handle = DEVICE_ACPI_HANDLE(
+					&(parent->self->dev));
+		pdev = parent->self;
+	}
+
+	while (handle) {
+		acpi_get_name(handle, ACPI_FULL_PATHNAME, &string);
+		dbg("Trying to get hotplug control for %s \n",
+			(char *)string.pointer);
+		status = pci_osc_control_set(handle,
+				OSC_PCI_EXPRESS_NATIVE_HP_CONTROL);
+		if (status == AE_NOT_FOUND)
+			status = acpi_run_oshp(handle);
+		if (ACPI_SUCCESS(status)) {
+			dbg("Gained control for hotplug HW for pci %s (%s)\n",
+				pci_name(dev), (char *)string.pointer);
+			acpi_os_free(string.pointer);
+			return 0;
+		}
+		if (acpi_root_bridge(handle))
+			break;
+		chandle = handle;
+		status = acpi_get_parent(chandle, &handle);
+		if (ACPI_FAILURE(status))
+			break;
+	}
+
+	err("Cannot get control of hotplug hardware for pci %s\n",
+			pci_name(dev));
+
+	acpi_os_free(string.pointer);
+	return -1;
+}
+#endif
+
+
+
 int pcie_init(struct controller * ctrl, struct pcie_device *dev)
 {
 	struct php_ctlr_state_s *php_ctlr, *p;
@@ -1316,7 +1407,7 @@ int pcie_init(struct controller * ctrl, struct pcie_device *dev)
 	if (pci_enable_device(pdev))
 		goto abort_free_ctlr;
 	
-	init_MUTEX(&ctrl->crit_sect);
+	mutex_init(&ctrl->crit_sect);
 	/* setup wait queue */
 	init_waitqueue_head(&ctrl->queue);
 

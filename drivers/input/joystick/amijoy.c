@@ -36,6 +36,7 @@
 #include <linux/init.h>
 #include <linux/input.h>
 #include <linux/interrupt.h>
+#include <linux/mutex.h>
 
 #include <asm/system.h>
 #include <asm/amigahw.h>
@@ -52,7 +53,7 @@ MODULE_PARM_DESC(map, "Map of attached joysticks in form of <a>,<b> (default is 
 __obsolete_setup("amijoy=");
 
 static int amijoy_used;
-static DECLARE_MUTEX(amijoy_sem);
+static DEFINE_MUTEX(amijoy_mutex);
 static struct input_dev *amijoy_dev[2];
 static char *amijoy_phys[2] = { "amijoy/input0", "amijoy/input1" };
 
@@ -64,8 +65,8 @@ static irqreturn_t amijoy_interrupt(int irq, void *dummy, struct pt_regs *fp)
 		if (amijoy[i]) {
 
 			switch (i) {
-				case 0: data = ~custom.joy0dat; button = (~ciaa.pra >> 6) & 1; break;
-				case 1: data = ~custom.joy1dat; button = (~ciaa.pra >> 7) & 1; break;
+				case 0: data = ~amiga_custom.joy0dat; button = (~ciaa.pra >> 6) & 1; break;
+				case 1: data = ~amiga_custom.joy1dat; button = (~ciaa.pra >> 7) & 1; break;
 			}
 
 			input_regs(amijoy_dev[i], fp);
@@ -85,7 +86,7 @@ static int amijoy_open(struct input_dev *dev)
 {
 	int err;
 
-	err = down_interruptible(&amijoy_sem);
+	err = mutex_lock_interruptible(&amijoy_mutex);
 	if (err)
 		return err;
 
@@ -97,16 +98,16 @@ static int amijoy_open(struct input_dev *dev)
 
 	amijoy_used++;
 out:
-	up(&amijoy_sem);
+	mutex_unlock(&amijoy_mutex);
 	return err;
 }
 
 static void amijoy_close(struct input_dev *dev)
 {
-	down(&amijoy_sem);
+	mutex_lock(&amijoy_mutex);
 	if (!--amijoy_used)
 		free_irq(IRQ_AMIGA_VERTB, amijoy_interrupt);
-	up(&amijoy_sem);
+	mutex_unlock(&amijoy_mutex);
 }
 
 static int __init amijoy_init(void)

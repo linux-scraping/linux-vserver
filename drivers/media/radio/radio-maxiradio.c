@@ -37,7 +37,8 @@
 #include <linux/sched.h>
 #include <asm/io.h>
 #include <asm/uaccess.h>
-#include <asm/semaphore.h>
+#include <linux/mutex.h>
+
 #include <linux/pci.h>
 #include <linux/videodev.h>
 
@@ -80,6 +81,7 @@ static struct file_operations maxiradio_fops = {
 	.open           = video_exclusive_open,
 	.release        = video_exclusive_release,
 	.ioctl	        = radio_ioctl,
+	.compat_ioctl	= v4l_compat_ioctl32,
 	.llseek         = no_llseek,
 };
 static struct video_device maxiradio_radio =
@@ -100,7 +102,7 @@ static struct radio_device
 		
 	unsigned long freq;
 	
-	struct  semaphore lock;
+	struct mutex lock;
 } radio_unit = {0, 0, 0, 0, };
 
 
@@ -266,9 +268,9 @@ static int radio_ioctl(struct inode *inode, struct file *file,
 	struct radio_device *card=dev->priv;
 	int ret;
 	
-	down(&card->lock);
+	mutex_lock(&card->lock);
 	ret = video_usercopy(inode, file, cmd, arg, radio_function);
-	up(&card->lock);
+	mutex_unlock(&card->lock);
 	return ret;
 }
 
@@ -289,7 +291,7 @@ static int __devinit maxiradio_init_one(struct pci_dev *pdev, const struct pci_d
 	        goto err_out_free_region;
 
 	radio_unit.io = pci_resource_start(pdev, 0);
-	init_MUTEX(&radio_unit.lock);
+	mutex_init(&radio_unit.lock);
 	maxiradio_radio.priv = &radio_unit;
 
 	if(video_register_device(&maxiradio_radio, VFL_TYPE_RADIO, radio_nr)==-1) {
@@ -337,7 +339,7 @@ static struct pci_driver maxiradio_driver = {
 
 static int __init maxiradio_radio_init(void)
 {
-	return pci_module_init(&maxiradio_driver);
+	return pci_register_driver(&maxiradio_driver);
 }
 
 static void __exit maxiradio_radio_exit(void)

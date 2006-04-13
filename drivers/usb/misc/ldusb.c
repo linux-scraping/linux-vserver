@@ -24,6 +24,7 @@
  * V0.1  (mh) Initial version
  * V0.11 (mh) Added raw support for HID 1.0 devices (no interrupt out endpoint)
  * V0.12 (mh) Added kmalloc check for string buffer
+ * V0.13 (mh) Added support for LD X-Ray and Machine Test System
  */
 
 #include <linux/config.h>
@@ -32,6 +33,7 @@
 #include <linux/init.h>
 #include <linux/slab.h>
 #include <linux/module.h>
+#include <linux/mutex.h>
 
 #include <asm/uaccess.h>
 #include <linux/input.h>
@@ -40,17 +42,20 @@
 
 /* Define these values to match your devices */
 #define USB_VENDOR_ID_LD		0x0f11	/* USB Vendor ID of LD Didactic GmbH */
-#define USB_DEVICE_ID_CASSY		0x1000	/* USB Product ID for all CASSY-S modules */
-#define USB_DEVICE_ID_POCKETCASSY	0x1010	/* USB Product ID for Pocket-CASSY */
-#define USB_DEVICE_ID_MOBILECASSY	0x1020	/* USB Product ID for Mobile-CASSY */
-#define USB_DEVICE_ID_JWM		0x1080	/* USB Product ID for Joule and Wattmeter */
-#define USB_DEVICE_ID_DMMP		0x1081	/* USB Product ID for Digital Multimeter P (reserved) */
-#define USB_DEVICE_ID_UMIP		0x1090	/* USB Product ID for UMI P */
-#define USB_DEVICE_ID_VIDEOCOM		0x1200	/* USB Product ID for VideoCom */
-#define USB_DEVICE_ID_COM3LAB		0x2000	/* USB Product ID for COM3LAB */
-#define USB_DEVICE_ID_TELEPORT		0x2010	/* USB Product ID for Terminal Adapter */
-#define USB_DEVICE_ID_NETWORKANALYSER	0x2020	/* USB Product ID for Network Analyser */
-#define USB_DEVICE_ID_POWERCONTROL	0x2030	/* USB Product ID for Controlling device for Power Electronics */
+#define USB_DEVICE_ID_LD_CASSY		0x1000	/* USB Product ID of CASSY-S */
+#define USB_DEVICE_ID_LD_POCKETCASSY	0x1010	/* USB Product ID of Pocket-CASSY */
+#define USB_DEVICE_ID_LD_MOBILECASSY	0x1020	/* USB Product ID of Mobile-CASSY */
+#define USB_DEVICE_ID_LD_JWM		0x1080	/* USB Product ID of Joule and Wattmeter */
+#define USB_DEVICE_ID_LD_DMMP		0x1081	/* USB Product ID of Digital Multimeter P (reserved) */
+#define USB_DEVICE_ID_LD_UMIP		0x1090	/* USB Product ID of UMI P */
+#define USB_DEVICE_ID_LD_XRAY1		0x1100	/* USB Product ID of X-Ray Apparatus */
+#define USB_DEVICE_ID_LD_XRAY2		0x1101	/* USB Product ID of X-Ray Apparatus */
+#define USB_DEVICE_ID_LD_VIDEOCOM	0x1200	/* USB Product ID of VideoCom */
+#define USB_DEVICE_ID_LD_COM3LAB	0x2000	/* USB Product ID of COM3LAB */
+#define USB_DEVICE_ID_LD_TELEPORT	0x2010	/* USB Product ID of Terminal Adapter */
+#define USB_DEVICE_ID_LD_NETWORKANALYSER 0x2020	/* USB Product ID of Network Analyser */
+#define USB_DEVICE_ID_LD_POWERCONTROL	0x2030	/* USB Product ID of Converter Control Unit */
+#define USB_DEVICE_ID_LD_MACHINETEST	0x2040	/* USB Product ID of Machine Test System */
 
 #define USB_VENDOR_ID_VERNIER		0x08f7
 #define USB_DEVICE_ID_VERNIER_LABPRO	0x0001
@@ -67,17 +72,20 @@
 
 /* table of devices that work with this driver */
 static struct usb_device_id ld_usb_table [] = {
-	{ USB_DEVICE(USB_VENDOR_ID_LD, USB_DEVICE_ID_CASSY) },
-	{ USB_DEVICE(USB_VENDOR_ID_LD, USB_DEVICE_ID_POCKETCASSY) },
-	{ USB_DEVICE(USB_VENDOR_ID_LD, USB_DEVICE_ID_MOBILECASSY) },
-	{ USB_DEVICE(USB_VENDOR_ID_LD, USB_DEVICE_ID_JWM) },
-	{ USB_DEVICE(USB_VENDOR_ID_LD, USB_DEVICE_ID_DMMP) },
-	{ USB_DEVICE(USB_VENDOR_ID_LD, USB_DEVICE_ID_UMIP) },
-	{ USB_DEVICE(USB_VENDOR_ID_LD, USB_DEVICE_ID_VIDEOCOM) },
-	{ USB_DEVICE(USB_VENDOR_ID_LD, USB_DEVICE_ID_COM3LAB) },
-	{ USB_DEVICE(USB_VENDOR_ID_LD, USB_DEVICE_ID_TELEPORT) },
-	{ USB_DEVICE(USB_VENDOR_ID_LD, USB_DEVICE_ID_NETWORKANALYSER) },
-	{ USB_DEVICE(USB_VENDOR_ID_LD, USB_DEVICE_ID_POWERCONTROL) },
+	{ USB_DEVICE(USB_VENDOR_ID_LD, USB_DEVICE_ID_LD_CASSY) },
+	{ USB_DEVICE(USB_VENDOR_ID_LD, USB_DEVICE_ID_LD_POCKETCASSY) },
+	{ USB_DEVICE(USB_VENDOR_ID_LD, USB_DEVICE_ID_LD_MOBILECASSY) },
+	{ USB_DEVICE(USB_VENDOR_ID_LD, USB_DEVICE_ID_LD_JWM) },
+	{ USB_DEVICE(USB_VENDOR_ID_LD, USB_DEVICE_ID_LD_DMMP) },
+	{ USB_DEVICE(USB_VENDOR_ID_LD, USB_DEVICE_ID_LD_UMIP) },
+	{ USB_DEVICE(USB_VENDOR_ID_LD, USB_DEVICE_ID_LD_XRAY1) },
+	{ USB_DEVICE(USB_VENDOR_ID_LD, USB_DEVICE_ID_LD_XRAY2) },
+	{ USB_DEVICE(USB_VENDOR_ID_LD, USB_DEVICE_ID_LD_VIDEOCOM) },
+	{ USB_DEVICE(USB_VENDOR_ID_LD, USB_DEVICE_ID_LD_COM3LAB) },
+	{ USB_DEVICE(USB_VENDOR_ID_LD, USB_DEVICE_ID_LD_TELEPORT) },
+	{ USB_DEVICE(USB_VENDOR_ID_LD, USB_DEVICE_ID_LD_NETWORKANALYSER) },
+	{ USB_DEVICE(USB_VENDOR_ID_LD, USB_DEVICE_ID_LD_POWERCONTROL) },
+	{ USB_DEVICE(USB_VENDOR_ID_LD, USB_DEVICE_ID_LD_MACHINETEST) },
 	{ USB_DEVICE(USB_VENDOR_ID_VERNIER, USB_DEVICE_ID_VERNIER_LABPRO) },
 	{ USB_DEVICE(USB_VENDOR_ID_VERNIER, USB_DEVICE_ID_VERNIER_GOTEMP) },
 	{ USB_DEVICE(USB_VENDOR_ID_VERNIER, USB_DEVICE_ID_VERNIER_SKIP) },
@@ -85,7 +93,7 @@ static struct usb_device_id ld_usb_table [] = {
 	{ }					/* Terminating entry */
 };
 MODULE_DEVICE_TABLE(usb, ld_usb_table);
-MODULE_VERSION("V0.12");
+MODULE_VERSION("V0.13");
 MODULE_AUTHOR("Michael Hund <mhund@ld-didactic.de>");
 MODULE_DESCRIPTION("LD USB Driver");
 MODULE_LICENSE("GPL");
@@ -165,7 +173,7 @@ struct ld_usb {
 };
 
 /* prevent races between open() and disconnect() */
-static DECLARE_MUTEX(disconnect_sem);
+static DEFINE_MUTEX(disconnect_mutex);
 
 static struct usb_driver ld_usb_driver;
 
@@ -286,7 +294,7 @@ static int ld_usb_open(struct inode *inode, struct file *file)
 	nonseekable_open(inode, file);
 	subminor = iminor(inode);
 
-	down(&disconnect_sem);
+	mutex_lock(&disconnect_mutex);
 
 	interface = usb_find_interface(&ld_usb_driver, subminor);
 
@@ -348,7 +356,7 @@ unlock_exit:
 	up(&dev->sem);
 
 unlock_disconnect_exit:
-	up(&disconnect_sem);
+	mutex_unlock(&disconnect_mutex);
 
 	return retval;
 }
@@ -593,7 +601,7 @@ static struct file_operations ld_usb_fops = {
 
 /*
  * usb class driver info in order to get a minor number from the usb core,
- * and to have the device registered with devfs and the driver core
+ * and to have the device registered with the driver core
  */
 static struct usb_class_driver ld_usb_class = {
 	.name =		"ldusb%d",
@@ -619,12 +627,11 @@ static int ld_usb_probe(struct usb_interface *intf, const struct usb_device_id *
 
 	/* allocate memory for our device state and intialize it */
 
-	dev = kmalloc(sizeof(*dev), GFP_KERNEL);
+	dev = kzalloc(sizeof(*dev), GFP_KERNEL);
 	if (dev == NULL) {
 		dev_err(&intf->dev, "Out of memory\n");
 		goto exit;
 	}
-	memset(dev, 0x00, sizeof(*dev));
 	init_MUTEX(&dev->sem);
 	dev->intf = intf;
 	init_waitqueue_head(&dev->read_wait);
@@ -632,8 +639,8 @@ static int ld_usb_probe(struct usb_interface *intf, const struct usb_device_id *
 
 	/* workaround for early firmware versions on fast computers */
 	if ((le16_to_cpu(udev->descriptor.idVendor) == USB_VENDOR_ID_LD) &&
-	    ((le16_to_cpu(udev->descriptor.idProduct) == USB_DEVICE_ID_CASSY) ||
-	     (le16_to_cpu(udev->descriptor.idProduct) == USB_DEVICE_ID_COM3LAB)) &&
+	    ((le16_to_cpu(udev->descriptor.idProduct) == USB_DEVICE_ID_LD_CASSY) ||
+	     (le16_to_cpu(udev->descriptor.idProduct) == USB_DEVICE_ID_LD_COM3LAB)) &&
 	    (le16_to_cpu(udev->descriptor.bcdDevice) <= 0x103)) {
 		buffer = kmalloc(256, GFP_KERNEL);
 		if (buffer == NULL) {
@@ -734,7 +741,7 @@ static void ld_usb_disconnect(struct usb_interface *intf)
 	struct ld_usb *dev;
 	int minor;
 
-	down(&disconnect_sem);
+	mutex_lock(&disconnect_mutex);
 
 	dev = usb_get_intfdata(intf);
 	usb_set_intfdata(intf, NULL);
@@ -755,7 +762,7 @@ static void ld_usb_disconnect(struct usb_interface *intf)
 		up(&dev->sem);
 	}
 
-	up(&disconnect_sem);
+	mutex_unlock(&disconnect_mutex);
 
 	dev_info(&intf->dev, "LD USB Device #%d now disconnected\n",
 		 (minor - USB_LD_MINOR_BASE));
@@ -763,7 +770,6 @@ static void ld_usb_disconnect(struct usb_interface *intf)
 
 /* usb specific object needed to register this driver with the usb subsystem */
 static struct usb_driver ld_usb_driver = {
-	.owner =	THIS_MODULE,
 	.name =		"ldusb",
 	.probe =	ld_usb_probe,
 	.disconnect =	ld_usb_disconnect,

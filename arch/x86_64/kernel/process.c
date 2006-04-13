@@ -35,6 +35,7 @@
 #include <linux/ptrace.h>
 #include <linux/utsname.h>
 #include <linux/random.h>
+#include <linux/notifier.h>
 #include <linux/kprobes.h>
 
 #include <asm/uaccess.h>
@@ -50,12 +51,11 @@
 #include <asm/desc.h>
 #include <asm/proto.h>
 #include <asm/ia32.h>
+#include <asm/idle.h>
 
 asmlinkage extern void ret_from_fork(void);
 
 unsigned long kernel_thread_flags = CLONE_VM | CLONE_UNTRACED;
-
-static atomic_t hlt_counter = ATOMIC_INIT(0);
 
 unsigned long boot_option_idle_override = 0;
 EXPORT_SYMBOL(boot_option_idle_override);
@@ -66,43 +66,61 @@ EXPORT_SYMBOL(boot_option_idle_override);
 void (*pm_idle)(void);
 static DEFINE_PER_CPU(unsigned int, cpu_idle_state);
 
-void disable_hlt(void)
+static ATOMIC_NOTIFIER_HEAD(idle_notifier);
+
+void idle_notifier_register(struct notifier_block *n)
 {
-	atomic_inc(&hlt_counter);
+	atomic_notifier_chain_register(&idle_notifier, n);
+}
+EXPORT_SYMBOL_GPL(idle_notifier_register);
+
+void idle_notifier_unregister(struct notifier_block *n)
+{
+	atomic_notifier_chain_unregister(&idle_notifier, n);
+}
+EXPORT_SYMBOL(idle_notifier_unregister);
+
+enum idle_state { CPU_IDLE, CPU_NOT_IDLE };
+static DEFINE_PER_CPU(enum idle_state, idle_state) = CPU_NOT_IDLE;
+
+void enter_idle(void)
+{
+	__get_cpu_var(idle_state) = CPU_IDLE;
+	atomic_notifier_call_chain(&idle_notifier, IDLE_START, NULL);
 }
 
-EXPORT_SYMBOL(disable_hlt);
-
-void enable_hlt(void)
+static void __exit_idle(void)
 {
-	atomic_dec(&hlt_counter);
+	__get_cpu_var(idle_state) = CPU_NOT_IDLE;
+	atomic_notifier_call_chain(&idle_notifier, IDLE_END, NULL);
 }
 
-EXPORT_SYMBOL(enable_hlt);
+/* Called from interrupts to signify idle end */
+void exit_idle(void)
+{
+	if (current->pid | read_pda(irqcount))
+		return;
+	__exit_idle();
+}
 
 /*
  * We use this if we don't have any better
  * idle routine..
  */
-void default_idle(void)
+static void default_idle(void)
 {
 	local_irq_enable();
 
-	if (!atomic_read(&hlt_counter)) {
-		clear_thread_flag(TIF_POLLING_NRFLAG);
-		smp_mb__after_clear_bit();
-		while (!need_resched()) {
-			local_irq_disable();
-			if (!need_resched())
-				safe_halt();
-			else
-				local_irq_enable();
-		}
-		set_thread_flag(TIF_POLLING_NRFLAG);
-	} else {
-		while (!need_resched())
-			cpu_relax();
+	clear_thread_flag(TIF_POLLING_NRFLAG);
+	smp_mb__after_clear_bit();
+	while (!need_resched()) {
+		local_irq_disable();
+		if (!need_resched())
+			safe_halt();
+		else
+			local_irq_enable();
 	}
+	set_thread_flag(TIF_POLLING_NRFLAG);
 }
 
 /*
@@ -157,7 +175,7 @@ EXPORT_SYMBOL_GPL(cpu_idle_wait);
 DECLARE_PER_CPU(int, cpu_state);
 
 #include <asm/nmi.h>
-/* We don't actually take CPU down, just spin without interrupts. */
+/* We halt the CPU with physical CPU hotplug */
 static inline void play_dead(void)
 {
 	idle_task_exit();
@@ -166,8 +184,9 @@ static inline void play_dead(void)
 	/* Ack it */
 	__get_cpu_var(cpu_state) = CPU_DEAD;
 
+	local_irq_disable();
 	while (1)
-		safe_halt();
+		halt();
 }
 #else
 static inline void play_dead(void)
@@ -200,7 +219,9 @@ void cpu_idle (void)
 				idle = default_idle;
 			if (cpu_is_offline(smp_processor_id()))
 				play_dead();
+			enter_idle();
 			idle();
+			__exit_idle();
 		}
 
 		preempt_enable_no_resched();
@@ -325,13 +346,6 @@ void exit_thread(void)
 	struct task_struct *me = current;
 	struct thread_struct *t = &me->thread;
 
-	/*
-	 * Remove function-return probe instances associated with this task
-	 * and put them back on the free list. Do not insert an exit probe for
-	 * this function, it will be disabled by kprobe_flush_task if you do.
-	 */
-	kprobe_flush_task(me);
-
 	if (me->thread.io_bitmap_ptr) { 
 		struct tss_struct *tss = &per_cpu(init_tss, get_cpu());
 
@@ -423,7 +437,7 @@ int copy_thread(int nr, unsigned long clone_flags, unsigned long rsp,
 	struct task_struct *me = current;
 
 	childregs = ((struct pt_regs *)
-			(THREAD_SIZE + (unsigned long) p->thread_info)) - 1;
+			(THREAD_SIZE + task_stack_page(p))) - 1;
 	*childregs = *regs;
 
 	childregs->rax = 0;
@@ -435,7 +449,7 @@ int copy_thread(int nr, unsigned long clone_flags, unsigned long rsp,
 	p->thread.rsp0 = (unsigned long) (childregs+1);
 	p->thread.userrsp = me->thread.userrsp; 
 
-	set_ti_thread_flag(p->thread_info, TIF_FORK);
+	set_tsk_thread_flag(p, TIF_FORK);
 
 	p->thread.fs = me->thread.fs;
 	p->thread.gs = me->thread.gs;
@@ -480,7 +494,7 @@ out:
 /*
  * This special macro can be used to load a debugging register
  */
-#define loaddebug(thread,r) set_debug(thread->debugreg ## r, r)
+#define loaddebug(thread,r) set_debugreg(thread->debugreg ## r, r)
 
 /*
  *	switch_to(x,y) should switch tasks from x to y.
@@ -488,16 +502,16 @@ out:
  * This could still be optimized: 
  * - fold all the options into a flag word and test it with a single test.
  * - could test fs/gs bitsliced
+ *
+ * Kprobes not supported here. Set the probe on schedule instead.
  */
-struct task_struct *
+__kprobes struct task_struct *
 __switch_to(struct task_struct *prev_p, struct task_struct *next_p)
 {
 	struct thread_struct *prev = &prev_p->thread,
 				 *next = &next_p->thread;
 	int cpu = smp_processor_id();  
 	struct tss_struct *tss = &per_cpu(init_tss, cpu);
-
-	unlazy_fpu(prev_p);
 
 	/*
 	 * Reload esp0, LDT and the page table pointer:
@@ -556,13 +570,16 @@ __switch_to(struct task_struct *prev_p, struct task_struct *next_p)
 	}
 
 	/* 
-	 * Switch the PDA context.
+	 * Switch the PDA and FPU contexts.
 	 */
 	prev->userrsp = read_pda(oldrsp); 
 	write_pda(oldrsp, next->userrsp); 
 	write_pda(pcurrent, next_p); 
+	/* This must be here to ensure both math_state_restore() and
+	   kernel_fpu_begin() work consistently. */
+	unlazy_fpu(prev_p);
 	write_pda(kernelstack,
-	    (unsigned long)next_p->thread_info + THREAD_SIZE - PDA_STACKOFFSET);
+		  task_stack_page(next_p) + THREAD_SIZE - PDA_STACKOFFSET);
 
 	/*
 	 * Now maybe reload the debug registers
@@ -676,7 +693,7 @@ unsigned long get_wchan(struct task_struct *p)
 
 	if (!p || p == current || p->state==TASK_RUNNING)
 		return 0; 
-	stack = (unsigned long)p->thread_info; 
+	stack = (unsigned long)task_stack_page(p);
 	if (p->thread.rsp < stack || p->thread.rsp > stack+THREAD_SIZE)
 		return 0;
 	fp = *(u64 *)(p->thread.rsp);
@@ -794,8 +811,7 @@ int dump_task_regs(struct task_struct *tsk, elf_gregset_t *regs)
 {
 	struct pt_regs *pp, ptregs;
 
-	pp = (struct pt_regs *)(tsk->thread.rsp0);
-	--pp; 
+	pp = task_pt_regs(tsk);
 
 	ptregs = *pp; 
 	ptregs.cs &= 0xffff;

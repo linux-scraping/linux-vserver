@@ -175,7 +175,8 @@ static int init_inodecache(void)
 {
 	ext2_inode_cachep = kmem_cache_create("ext2_inode_cache",
 					     sizeof(struct ext2_inode_info),
-					     0, SLAB_RECLAIM_ACCOUNT,
+					     0, (SLAB_RECLAIM_ACCOUNT|
+						SLAB_MEM_SPREAD),
 					     init_once, NULL);
 	if (ext2_inode_cachep == NULL)
 		return -ENOMEM;
@@ -210,8 +211,6 @@ static int ext2_show_options(struct seq_file *seq, struct vfsmount *vfs)
 
 	if (sbi->s_mount_opt & EXT2_MOUNT_GRPID)
 		seq_puts(seq, ",grpid");
-	else
-		seq_puts(seq, ",nogrpid");
 
 #if defined(CONFIG_QUOTA)
 	if (sbi->s_mount_opt & EXT2_MOUNT_USRQUOTA)
@@ -219,6 +218,11 @@ static int ext2_show_options(struct seq_file *seq, struct vfsmount *vfs)
 
 	if (sbi->s_mount_opt & EXT2_MOUNT_GRPQUOTA)
 		seq_puts(seq, ",grpquota");
+#endif
+
+#if defined(CONFIG_EXT2_FS_XIP)
+	if (sbi->s_mount_opt & EXT2_MOUNT_XIP)
+		seq_puts(seq, ",xip");
 #endif
 
 	return 0;
@@ -253,7 +257,6 @@ static struct super_operations ext2_sops = {
  * systems, but can be improved upon.
  * Currently only get_parent is required.
  */
-struct dentry *ext2_get_parent(struct dentry *child);
 static struct export_operations ext2_export_ops = {
 	.get_parent = ext2_get_parent,
 };
@@ -1167,7 +1170,7 @@ static ssize_t ext2_quota_write(struct super_block *sb, int type,
 	struct buffer_head tmp_bh;
 	struct buffer_head *bh;
 
-	down(&inode->i_sem);
+	mutex_lock(&inode->i_mutex);
 	while (towrite > 0) {
 		tocopy = sb->s_blocksize - offset < towrite ?
 				sb->s_blocksize - offset : towrite;
@@ -1204,7 +1207,7 @@ out:
 	inode->i_version++;
 	inode->i_mtime = inode->i_ctime = CURRENT_TIME;
 	mark_inode_dirty(inode);
-	up(&inode->i_sem);
+	mutex_unlock(&inode->i_mutex);
 	return len - towrite;
 }
 

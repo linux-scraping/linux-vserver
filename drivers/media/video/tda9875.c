@@ -30,24 +30,22 @@
 #include <linux/i2c-algo-bit.h>
 #include <linux/init.h>
 
-#include "bttv.h"
-#include <media/audiochip.h>
+
+#include <media/i2c-addr.h>
 
 static int debug; /* insmod parameter */
 module_param(debug, int, S_IRUGO | S_IWUSR);
 MODULE_LICENSE("GPL");
 
-
 /* Addresses to scan */
 static unsigned short normal_i2c[] =  {
-    I2C_TDA9875 >> 1,
+    I2C_ADDR_TDA9875 >> 1,
     I2C_CLIENT_END
 };
 I2C_CLIENT_INSMOD;
 
 /* This is a superset of the TDA9875 */
 struct tda9875 {
-	int mode;
 	int rvol, lvol;
 	int bass, treble;
 	struct i2c_client c;
@@ -197,7 +195,6 @@ static void do_tda9875_init(struct i2c_client *client)
 
 	tda9875_write(client, TDA9875_MUT, 0xcc );   /* General mute  */
 
-	t->mode=AUDIO_UNMUTE;
 	t->lvol=t->rvol =0;  	/* 0dB */
 	t->bass=0; 			/* 0dB */
 	t->treble=0;  		/* 0dB */
@@ -232,10 +229,9 @@ static int tda9875_attach(struct i2c_adapter *adap, int addr, int kind)
 	struct i2c_client *client;
 	dprintk("In tda9875_attach\n");
 
-	t = kmalloc(sizeof *t,GFP_KERNEL);
+	t = kzalloc(sizeof *t,GFP_KERNEL);
 	if (!t)
 		return -ENOMEM;
-	memset(t,0,sizeof *t);
 
 	client = &t->c;
 	memcpy(client,&client_template,sizeof(struct i2c_client));
@@ -257,13 +253,8 @@ static int tda9875_attach(struct i2c_adapter *adap, int addr, int kind)
 
 static int tda9875_probe(struct i2c_adapter *adap)
 {
-#ifdef I2C_CLASS_TV_ANALOG
 	if (adap->class & I2C_CLASS_TV_ANALOG)
 		return i2c_probe(adap, &addr_data, tda9875_attach);
-#else
-	if (adap->id == I2C_HW_B_BT848)
-		return i2c_probe(adap, &addr_data, tda9875_attach);
-#endif
 	return 0;
 }
 
@@ -372,10 +363,10 @@ static int tda9875_command(struct i2c_client *client,
 
 
 static struct i2c_driver driver = {
-	.owner          = THIS_MODULE,
-	.name           = "i2c tda9875 driver",
+	.driver = {
+		.name   = "tda9875",
+	},
 	.id             = I2C_DRIVERID_TDA9875,
-	.flags          = I2C_DF_NOTIFY,
 	.attach_adapter = tda9875_probe,
 	.detach_client  = tda9875_detach,
 	.command        = tda9875_command,

@@ -40,24 +40,24 @@ MODULE_VERSION(HVCS_ARCH_VERSION);
  * functions aren't performance sensitive, so this conversion isn't an
  * issue.
  */
-int hvcs_convert(long to_convert)
+static int hvcs_convert(long to_convert)
 {
 	switch (to_convert) {
-		case H_Success:
+		case H_SUCCESS:
 			return 0;
-		case H_Parameter:
+		case H_PARAMETER:
 			return -EINVAL;
-		case H_Hardware:
+		case H_HARDWARE:
 			return -EIO;
-		case H_Busy:
-		case H_LongBusyOrder1msec:
-		case H_LongBusyOrder10msec:
-		case H_LongBusyOrder100msec:
-		case H_LongBusyOrder1sec:
-		case H_LongBusyOrder10sec:
-		case H_LongBusyOrder100sec:
+		case H_BUSY:
+		case H_LONG_BUSY_ORDER_1_MSEC:
+		case H_LONG_BUSY_ORDER_10_MSEC:
+		case H_LONG_BUSY_ORDER_100_MSEC:
+		case H_LONG_BUSY_ORDER_1_SEC:
+		case H_LONG_BUSY_ORDER_10_SEC:
+		case H_LONG_BUSY_ORDER_100_SEC:
 			return -EBUSY;
-		case H_Function: /* fall through */
+		case H_FUNCTION: /* fall through */
 		default:
 			return -EPERM;
 	}
@@ -91,7 +91,7 @@ int hvcs_free_partner_info(struct list_head *head)
 EXPORT_SYMBOL(hvcs_free_partner_info);
 
 /* Helper function for hvcs_get_partner_info */
-int hvcs_next_partner(uint32_t unit_address,
+static int hvcs_next_partner(uint32_t unit_address,
 		unsigned long last_p_partition_ID,
 		unsigned long last_p_unit_address, unsigned long *pi_buff)
 

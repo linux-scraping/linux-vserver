@@ -17,6 +17,7 @@
 #include <linux/delay.h>
 #include <asm/uaccess.h>
 #include <asm/io_apic.h>
+#include <asm/idle.h>
 
 atomic_t irq_err_count;
 #ifdef CONFIG_X86_IO_APIC
@@ -37,9 +38,8 @@ int show_interrupts(struct seq_file *p, void *v)
 
 	if (i == 0) {
 		seq_printf(p, "           ");
-		for (j=0; j<NR_CPUS; j++)
-			if (cpu_online(j))
-				seq_printf(p, "CPU%d       ",j);
+		for_each_online_cpu(j)
+			seq_printf(p, "CPU%d       ",j);
 		seq_putc(p, '\n');
 	}
 
@@ -52,10 +52,8 @@ int show_interrupts(struct seq_file *p, void *v)
 #ifndef CONFIG_SMP
 		seq_printf(p, "%10u ", kstat_irqs(i));
 #else
-		for (j=0; j<NR_CPUS; j++)
-			if (cpu_online(j))
-			seq_printf(p, "%10u ",
-				kstat_cpu(j).irqs[i]);
+		for_each_online_cpu(j)
+			seq_printf(p, "%10u ", kstat_cpu(j).irqs[i]);
 #endif
 		seq_printf(p, " %14s", irq_desc[i].handler->typename);
 
@@ -67,15 +65,13 @@ skip:
 		spin_unlock_irqrestore(&irq_desc[i].lock, flags);
 	} else if (i == NR_IRQS) {
 		seq_printf(p, "NMI: ");
-		for (j = 0; j < NR_CPUS; j++)
-			if (cpu_online(j))
-				seq_printf(p, "%10u ", cpu_pda[j].__nmi_count);
+		for_each_online_cpu(j)
+			seq_printf(p, "%10u ", cpu_pda(j)->__nmi_count);
 		seq_putc(p, '\n');
 #ifdef CONFIG_X86_LOCAL_APIC
 		seq_printf(p, "LOC: ");
-		for (j = 0; j < NR_CPUS; j++)
-			if (cpu_online(j))
-				seq_printf(p, "%10u ", cpu_pda[j].apic_timer_irqs);
+		for_each_online_cpu(j)
+			seq_printf(p, "%10u ", cpu_pda(j)->apic_timer_irqs);
 		seq_putc(p, '\n');
 #endif
 		seq_printf(p, "ERR: %10u\n", atomic_read(&irq_err_count));
@@ -98,6 +94,7 @@ asmlinkage unsigned int do_IRQ(struct pt_regs *regs)
 	/* high bits used in ret_from_ code  */
 	unsigned irq = regs->orig_rax & 0xff;
 
+	exit_idle();
 	irq_enter();
 
 	__do_IRQ(irq, regs);

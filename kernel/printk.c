@@ -11,7 +11,7 @@
  * Ted Ts'o, 2/11/93.
  * Modified for sysctl support, 1/8/97, Chris Horn.
  * Fixed SMP synchronization, 08/08/99, Manfred Spraul
- *     manfreds@colorfullife.com
+ *     manfred@colorfullife.com
  * Rewrote bits to get rid of console_lock
  *	01Mar01 Andrew Morton <andrewm@uow.edu.au>
  */
@@ -122,44 +122,6 @@ static char __log_buf[__LOG_BUF_LEN];
 static char *log_buf = __log_buf;
 static int log_buf_len = __LOG_BUF_LEN;
 static unsigned long logged_chars; /* Number of chars produced since last read+clear operation */
-
-/*
- *	Setup a list of consoles. Called from init/main.c
- */
-static int __init console_setup(char *str)
-{
-	char name[sizeof(console_cmdline[0].name)];
-	char *s, *options;
-	int idx;
-
-	/*
-	 *	Decode str into name, index, options.
-	 */
-	if (str[0] >= '0' && str[0] <= '9') {
-		strcpy(name, "ttyS");
-		strncpy(name + 4, str, sizeof(name) - 5);
-	} else
-		strncpy(name, str, sizeof(name) - 1);
-	name[sizeof(name) - 1] = 0;
-	if ((options = strchr(str, ',')) != NULL)
-		*(options++) = 0;
-#ifdef __sparc__
-	if (!strcmp(str, "ttya"))
-		strcpy(name, "ttyS0");
-	if (!strcmp(str, "ttyb"))
-		strcpy(name, "ttyS1");
-#endif
-	for (s = name; *s; s++)
-		if ((*s >= '0' && *s <= '9') || *s == ',')
-			break;
-	idx = simple_strtoul(s, NULL, 10);
-	*s = 0;
-
-	add_preferred_console(name, idx, options);
-	return 1;
-}
-
-__setup("console=", console_setup);
 
 static int __init log_buf_len_setup(char *str)
 {
@@ -394,8 +356,7 @@ static void call_console_drivers(unsigned long start, unsigned long end)
 	unsigned long cur_index, start_print;
 	static int msg_level = -1;
 
-	if (((long)(start - end)) > 0)
-		BUG();
+	BUG_ON(((long)(start - end)) > 0);
 
 	cur_index = start;
 	start_print = start;
@@ -565,7 +526,7 @@ asmlinkage int vprintk(const char *fmt, va_list args)
 				   p[1] <= '7' && p[2] == '>') {
 					loglev_char = p[1];
 					p += 3;
-					printed_len += 3;
+					printed_len -= 3;
 				} else {
 					loglev_char = default_message_loglevel
 						+ '0';
@@ -580,7 +541,7 @@ asmlinkage int vprintk(const char *fmt, va_list args)
 
 				for (tp = tbuf; tp < tbuf + tlen; tp++)
 					emit_log_char(*tp);
-				printed_len += tlen - 3;
+				printed_len += tlen;
 			} else {
 				if (p[0] != '<' || p[1] < '0' ||
 				   p[1] > '7' || p[2] != '>') {
@@ -588,8 +549,8 @@ asmlinkage int vprintk(const char *fmt, va_list args)
 					emit_log_char(default_message_loglevel
 						+ '0');
 					emit_log_char('>');
+					printed_len += 3;
 				}
-				printed_len += 3;
 			}
 			log_level_unknown = 0;
 			if (!*p)
@@ -655,6 +616,44 @@ static void call_console_drivers(unsigned long start, unsigned long end)
 
 #endif
 
+/*
+ * Set up a list of consoles.  Called from init/main.c
+ */
+static int __init console_setup(char *str)
+{
+	char name[sizeof(console_cmdline[0].name)];
+	char *s, *options;
+	int idx;
+
+	/*
+	 * Decode str into name, index, options.
+	 */
+	if (str[0] >= '0' && str[0] <= '9') {
+		strcpy(name, "ttyS");
+		strncpy(name + 4, str, sizeof(name) - 5);
+	} else {
+		strncpy(name, str, sizeof(name) - 1);
+	}
+	name[sizeof(name) - 1] = 0;
+	if ((options = strchr(str, ',')) != NULL)
+		*(options++) = 0;
+#ifdef __sparc__
+	if (!strcmp(str, "ttya"))
+		strcpy(name, "ttyS0");
+	if (!strcmp(str, "ttyb"))
+		strcpy(name, "ttyS1");
+#endif
+	for (s = name; *s; s++)
+		if ((*s >= '0' && *s <= '9') || *s == ',')
+			break;
+	idx = simple_strtoul(s, NULL, 10);
+	*s = 0;
+
+	add_preferred_console(name, idx, options);
+	return 1;
+}
+__setup("console=", console_setup);
+
 /**
  * add_preferred_console - add a device to the list of preferred consoles.
  * @name: device name
@@ -704,8 +703,7 @@ int __init add_preferred_console(char *name, int idx, char *options)
  */
 void acquire_console_sem(void)
 {
-	if (in_interrupt())
-		BUG();
+	BUG_ON(in_interrupt());
 	down(&console_sem);
 	console_locked = 1;
 	console_may_schedule = 1;

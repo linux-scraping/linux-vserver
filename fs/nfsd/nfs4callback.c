@@ -53,7 +53,7 @@
 #define NFSPROC4_CB_COMPOUND 1
 
 /* declarations */
-static void nfs4_cb_null(struct rpc_task *task);
+static const struct rpc_call_ops nfs4_cb_null_ops;
 
 /* Index of predefined Linux callback client operations */
 
@@ -326,6 +326,8 @@ out:
         .p_encode = (kxdrproc_t) nfs4_xdr_##argtype,                    \
         .p_decode = (kxdrproc_t) nfs4_xdr_##restype,                    \
         .p_bufsiz = MAX(NFS4_##argtype##_sz,NFS4_##restype##_sz) << 2,  \
+        .p_statidx = NFSPROC4_CB_##call,				\
+	.p_name   = #proc,                                              \
 }
 
 static struct rpc_procinfo     nfs4_cb_procedures[] = {
@@ -335,7 +337,7 @@ static struct rpc_procinfo     nfs4_cb_procedures[] = {
 
 static struct rpc_version       nfs_cb_version4 = {
         .number                 = 1,
-        .nrprocs                = sizeof(nfs4_cb_procedures)/sizeof(nfs4_cb_procedures[0]),
+        .nrprocs                = ARRAY_SIZE(nfs4_cb_procedures),
         .procs                  = nfs4_cb_procedures
 };
 
@@ -411,7 +413,7 @@ nfsd4_probe_callback(struct nfs4_client *clp)
 	/* Initialize rpc_program */
 	program->name = "nfs4_cb";
 	program->number = cb->cb_prog;
-	program->nrvers = sizeof(nfs_cb_version)/sizeof(nfs_cb_version[0]);
+	program->nrvers = ARRAY_SIZE(nfs_cb_version);
 	program->version = nfs_cb_version;
 	program->stats = stat;
 
@@ -431,7 +433,6 @@ nfsd4_probe_callback(struct nfs4_client *clp)
 	}
 	clnt->cl_intr = 0;
 	clnt->cl_softrtry = 1;
-	clnt->cl_chatty = 1;
 
 	/* Kick rpciod, put the call on the wire. */
 
@@ -447,7 +448,7 @@ nfsd4_probe_callback(struct nfs4_client *clp)
 	msg.rpc_cred = nfsd4_lookupcred(clp,0);
 	if (IS_ERR(msg.rpc_cred))
 		goto out_rpciod;
-	status = rpc_call_async(clnt, &msg, RPC_TASK_ASYNC, nfs4_cb_null, NULL);
+	status = rpc_call_async(clnt, &msg, RPC_TASK_ASYNC, &nfs4_cb_null_ops, NULL);
 	put_rpccred(msg.rpc_cred);
 
 	if (status != 0) {
@@ -469,7 +470,7 @@ out_err:
 }
 
 static void
-nfs4_cb_null(struct rpc_task *task)
+nfs4_cb_null(struct rpc_task *task, void *dummy)
 {
 	struct nfs4_client *clp = (struct nfs4_client *)task->tk_msg.rpc_argp;
 	struct nfs4_callback *cb = &clp->cl_callback;
@@ -487,6 +488,10 @@ nfs4_cb_null(struct rpc_task *task)
 out:
 	put_nfs4_client(clp);
 }
+
+static const struct rpc_call_ops nfs4_cb_null_ops = {
+	.rpc_call_done = nfs4_cb_null,
+};
 
 /*
  * called with dp->dl_count inc'ed.

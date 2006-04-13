@@ -182,6 +182,12 @@ struct as_rq {
 
 static kmem_cache_t *arq_pool;
 
+static atomic_t ioc_count = ATOMIC_INIT(0);
+static struct completion *ioc_gone;
+
+static void as_move_to_dispatch(struct as_data *ad, struct as_rq *arq);
+static void as_antic_stop(struct as_data *ad);
+
 /*
  * IO Context helper functions
  */
@@ -190,6 +196,15 @@ static kmem_cache_t *arq_pool;
 static void free_as_io_context(struct as_io_context *aic)
 {
 	kfree(aic);
+	if (atomic_dec_and_test(&ioc_count) && ioc_gone)
+		complete(ioc_gone);
+}
+
+static void as_trim(struct io_context *ioc)
+{
+	if (ioc->aic)
+		free_as_io_context(ioc->aic);
+	ioc->aic = NULL;
 }
 
 /* Called when the task exits */
@@ -217,6 +232,7 @@ static struct as_io_context *alloc_as_io_context(void)
 		ret->seek_total = 0;
 		ret->seek_samples = 0;
 		ret->seek_mean = 0;
+		atomic_inc(&ioc_count);
 	}
 
 	return ret;
@@ -370,7 +386,7 @@ static struct as_rq *as_find_first_arq(struct as_data *ad, int data_dir)
  * existing request against the same sector), which can happen when using
  * direct IO, then return the alias.
  */
-static struct as_rq *as_add_arq_rb(struct as_data *ad, struct as_rq *arq)
+static struct as_rq *__as_add_arq_rb(struct as_data *ad, struct as_rq *arq)
 {
 	struct rb_node **p = &ARQ_RB_ROOT(ad, arq)->rb_node;
 	struct rb_node *parent = NULL;
@@ -395,6 +411,16 @@ static struct as_rq *as_add_arq_rb(struct as_data *ad, struct as_rq *arq)
 	rb_insert_color(&arq->rb_node, ARQ_RB_ROOT(ad, arq));
 
 	return NULL;
+}
+
+static void as_add_arq_rb(struct as_data *ad, struct as_rq *arq)
+{
+	struct as_rq *alias;
+
+	while ((unlikely(alias = __as_add_arq_rb(ad, arq)))) {
+		as_move_to_dispatch(ad, alias);
+		as_antic_stop(ad);
+	}
 }
 
 static inline void as_del_arq_rb(struct as_data *ad, struct as_rq *arq)
@@ -1133,23 +1159,6 @@ static void as_move_to_dispatch(struct as_data *ad, struct as_rq *arq)
 	/*
 	 * take it off the sort and fifo list, add to dispatch queue
 	 */
-	while (!list_empty(&rq->queuelist)) {
-		struct request *__rq = list_entry_rq(rq->queuelist.next);
-		struct as_rq *__arq = RQ_DATA(__rq);
-
-		list_del(&__rq->queuelist);
-
-		elv_dispatch_add_tail(ad->q, __rq);
-
-		if (__arq->io_context && __arq->io_context->aic)
-			atomic_inc(&__arq->io_context->aic->nr_dispatched);
-
-		WARN_ON(__arq->state != AS_RQ_QUEUED);
-		__arq->state = AS_RQ_DISPATCHED;
-
-		ad->nr_dispatched++;
-	}
-
 	as_remove_queued_request(ad->q, rq);
 	WARN_ON(arq->state != AS_RQ_QUEUED);
 
@@ -1326,49 +1335,12 @@ fifo_expired:
 }
 
 /*
- * Add arq to a list behind alias
- */
-static inline void
-as_add_aliased_request(struct as_data *ad, struct as_rq *arq,
-				struct as_rq *alias)
-{
-	struct request  *req = arq->request;
-	struct list_head *insert = alias->request->queuelist.prev;
-
-	/*
-	 * Transfer list of aliases
-	 */
-	while (!list_empty(&req->queuelist)) {
-		struct request *__rq = list_entry_rq(req->queuelist.next);
-		struct as_rq *__arq = RQ_DATA(__rq);
-
-		list_move_tail(&__rq->queuelist, &alias->request->queuelist);
-
-		WARN_ON(__arq->state != AS_RQ_QUEUED);
-	}
-
-	/*
-	 * Another request with the same start sector on the rbtree.
-	 * Link this request to that sector. They are untangled in
-	 * as_move_to_dispatch
-	 */
-	list_add(&arq->request->queuelist, insert);
-
-	/*
-	 * Don't want to have to handle merges.
-	 */
-	as_del_arq_hash(arq);
-	arq->request->flags |= REQ_NOMERGE;
-}
-
-/*
  * add arq to rbtree and fifo
  */
 static void as_add_request(request_queue_t *q, struct request *rq)
 {
 	struct as_data *ad = q->elevator->elevator_data;
 	struct as_rq *arq = RQ_DATA(rq);
-	struct as_rq *alias;
 	int data_dir;
 
 	arq->state = AS_RQ_NEW;
@@ -1387,33 +1359,17 @@ static void as_add_request(request_queue_t *q, struct request *rq)
 		atomic_inc(&arq->io_context->aic->nr_queued);
 	}
 
-	alias = as_add_arq_rb(ad, arq);
-	if (!alias) {
-		/*
-		 * set expire time (only used for reads) and add to fifo list
-		 */
-		arq->expires = jiffies + ad->fifo_expire[data_dir];
-		list_add_tail(&arq->fifo, &ad->fifo_list[data_dir]);
+	as_add_arq_rb(ad, arq);
+	if (rq_mergeable(arq->request))
+		as_add_arq_hash(ad, arq);
 
-		if (rq_mergeable(arq->request))
-			as_add_arq_hash(ad, arq);
-		as_update_arq(ad, arq); /* keep state machine up to date */
+	/*
+	 * set expire time (only used for reads) and add to fifo list
+	 */
+	arq->expires = jiffies + ad->fifo_expire[data_dir];
+	list_add_tail(&arq->fifo, &ad->fifo_list[data_dir]);
 
-	} else {
-		as_add_aliased_request(ad, arq, alias);
-
-		/*
-		 * have we been anticipating this request?
-		 * or does it come from the same process as the one we are
-		 * anticipating for?
-		 */
-		if (ad->antic_status == ANTIC_WAIT_REQ
-				|| ad->antic_status == ANTIC_WAIT_NEXT) {
-			if (as_can_break_anticipation(ad, arq))
-				as_antic_stop(ad);
-		}
-	}
-
+	as_update_arq(ad, arq); /* keep state machine up to date */
 	arq->state = AS_RQ_QUEUED;
 }
 
@@ -1536,23 +1492,8 @@ static void as_merged_request(request_queue_t *q, struct request *req)
 	 * if the merge was a front merge, we need to reposition request
 	 */
 	if (rq_rb_key(req) != arq->rb_key) {
-		struct as_rq *alias, *next_arq = NULL;
-
-		if (ad->next_arq[arq->is_sync] == arq)
-			next_arq = as_find_next_arq(ad, arq);
-
-		/*
-		 * Note! We should really be moving any old aliased requests
-		 * off this request and try to insert them into the rbtree. We
-		 * currently don't bother. Ditto the next function.
-		 */
 		as_del_arq_rb(ad, arq);
-		if ((alias = as_add_arq_rb(ad, arq))) {
-			list_del_init(&arq->fifo);
-			as_add_aliased_request(ad, arq, alias);
-			if (next_arq)
-				ad->next_arq[arq->is_sync] = next_arq;
-		}
+		as_add_arq_rb(ad, arq);
 		/*
 		 * Note! At this stage of this and the next function, our next
 		 * request may not be optimal - eg the request may have "grown"
@@ -1579,18 +1520,8 @@ static void as_merged_requests(request_queue_t *q, struct request *req,
 	as_add_arq_hash(ad, arq);
 
 	if (rq_rb_key(req) != arq->rb_key) {
-		struct as_rq *alias, *next_arq = NULL;
-
-		if (ad->next_arq[arq->is_sync] == arq)
-			next_arq = as_find_next_arq(ad, arq);
-
 		as_del_arq_rb(ad, arq);
-		if ((alias = as_add_arq_rb(ad, arq))) {
-			list_del_init(&arq->fifo);
-			as_add_aliased_request(ad, arq, alias);
-			if (next_arq)
-				ad->next_arq[arq->is_sync] = next_arq;
-		}
+		as_add_arq_rb(ad, arq);
 	}
 
 	/*
@@ -1607,18 +1538,6 @@ static void as_merged_requests(request_queue_t *q, struct request *req,
 			 */
 			swap_io_context(&arq->io_context, &anext->io_context);
 		}
-	}
-
-	/*
-	 * Transfer list of aliases
-	 */
-	while (!list_empty(&next->queuelist)) {
-		struct request *__rq = list_entry_rq(next->queuelist.next);
-		struct as_rq *__arq = RQ_DATA(__rq);
-
-		list_move_tail(&__rq->queuelist, &req->queuelist);
-
-		WARN_ON(__arq->state != AS_RQ_QUEUED);
 	}
 
 	/*
@@ -1790,11 +1709,6 @@ static int as_init_queue(request_queue_t *q, elevator_t *e)
 /*
  * sysfs parts below
  */
-struct as_fs_entry {
-	struct attribute attr;
-	ssize_t (*show)(struct as_data *, char *);
-	ssize_t (*store)(struct as_data *, const char *, size_t);
-};
 
 static ssize_t
 as_var_show(unsigned int var, char *page)
@@ -1811,8 +1725,9 @@ as_var_store(unsigned long *var, const char *page, size_t count)
 	return count;
 }
 
-static ssize_t as_est_show(struct as_data *ad, char *page)
+static ssize_t est_time_show(elevator_t *e, char *page)
 {
+	struct as_data *ad = e->elevator_data;
 	int pos = 0;
 
 	pos += sprintf(page+pos, "%lu %% exit probability\n",
@@ -1828,21 +1743,23 @@ static ssize_t as_est_show(struct as_data *ad, char *page)
 }
 
 #define SHOW_FUNCTION(__FUNC, __VAR)				\
-static ssize_t __FUNC(struct as_data *ad, char *page)		\
+static ssize_t __FUNC(elevator_t *e, char *page)		\
 {								\
+	struct as_data *ad = e->elevator_data;			\
 	return as_var_show(jiffies_to_msecs((__VAR)), (page));	\
 }
-SHOW_FUNCTION(as_readexpire_show, ad->fifo_expire[REQ_SYNC]);
-SHOW_FUNCTION(as_writeexpire_show, ad->fifo_expire[REQ_ASYNC]);
-SHOW_FUNCTION(as_anticexpire_show, ad->antic_expire);
-SHOW_FUNCTION(as_read_batchexpire_show, ad->batch_expire[REQ_SYNC]);
-SHOW_FUNCTION(as_write_batchexpire_show, ad->batch_expire[REQ_ASYNC]);
+SHOW_FUNCTION(as_read_expire_show, ad->fifo_expire[REQ_SYNC]);
+SHOW_FUNCTION(as_write_expire_show, ad->fifo_expire[REQ_ASYNC]);
+SHOW_FUNCTION(as_antic_expire_show, ad->antic_expire);
+SHOW_FUNCTION(as_read_batch_expire_show, ad->batch_expire[REQ_SYNC]);
+SHOW_FUNCTION(as_write_batch_expire_show, ad->batch_expire[REQ_ASYNC]);
 #undef SHOW_FUNCTION
 
 #define STORE_FUNCTION(__FUNC, __PTR, MIN, MAX)				\
-static ssize_t __FUNC(struct as_data *ad, const char *page, size_t count)	\
+static ssize_t __FUNC(elevator_t *e, const char *page, size_t count)	\
 {									\
-	int ret = as_var_store(__PTR, (page), count);		\
+	struct as_data *ad = e->elevator_data;				\
+	int ret = as_var_store(__PTR, (page), count);			\
 	if (*(__PTR) < (MIN))						\
 		*(__PTR) = (MIN);					\
 	else if (*(__PTR) > (MAX))					\
@@ -1850,90 +1767,26 @@ static ssize_t __FUNC(struct as_data *ad, const char *page, size_t count)	\
 	*(__PTR) = msecs_to_jiffies(*(__PTR));				\
 	return ret;							\
 }
-STORE_FUNCTION(as_readexpire_store, &ad->fifo_expire[REQ_SYNC], 0, INT_MAX);
-STORE_FUNCTION(as_writeexpire_store, &ad->fifo_expire[REQ_ASYNC], 0, INT_MAX);
-STORE_FUNCTION(as_anticexpire_store, &ad->antic_expire, 0, INT_MAX);
-STORE_FUNCTION(as_read_batchexpire_store,
+STORE_FUNCTION(as_read_expire_store, &ad->fifo_expire[REQ_SYNC], 0, INT_MAX);
+STORE_FUNCTION(as_write_expire_store, &ad->fifo_expire[REQ_ASYNC], 0, INT_MAX);
+STORE_FUNCTION(as_antic_expire_store, &ad->antic_expire, 0, INT_MAX);
+STORE_FUNCTION(as_read_batch_expire_store,
 			&ad->batch_expire[REQ_SYNC], 0, INT_MAX);
-STORE_FUNCTION(as_write_batchexpire_store,
+STORE_FUNCTION(as_write_batch_expire_store,
 			&ad->batch_expire[REQ_ASYNC], 0, INT_MAX);
 #undef STORE_FUNCTION
 
-static struct as_fs_entry as_est_entry = {
-	.attr = {.name = "est_time", .mode = S_IRUGO },
-	.show = as_est_show,
-};
-static struct as_fs_entry as_readexpire_entry = {
-	.attr = {.name = "read_expire", .mode = S_IRUGO | S_IWUSR },
-	.show = as_readexpire_show,
-	.store = as_readexpire_store,
-};
-static struct as_fs_entry as_writeexpire_entry = {
-	.attr = {.name = "write_expire", .mode = S_IRUGO | S_IWUSR },
-	.show = as_writeexpire_show,
-	.store = as_writeexpire_store,
-};
-static struct as_fs_entry as_anticexpire_entry = {
-	.attr = {.name = "antic_expire", .mode = S_IRUGO | S_IWUSR },
-	.show = as_anticexpire_show,
-	.store = as_anticexpire_store,
-};
-static struct as_fs_entry as_read_batchexpire_entry = {
-	.attr = {.name = "read_batch_expire", .mode = S_IRUGO | S_IWUSR },
-	.show = as_read_batchexpire_show,
-	.store = as_read_batchexpire_store,
-};
-static struct as_fs_entry as_write_batchexpire_entry = {
-	.attr = {.name = "write_batch_expire", .mode = S_IRUGO | S_IWUSR },
-	.show = as_write_batchexpire_show,
-	.store = as_write_batchexpire_store,
-};
+#define AS_ATTR(name) \
+	__ATTR(name, S_IRUGO|S_IWUSR, as_##name##_show, as_##name##_store)
 
-static struct attribute *default_attrs[] = {
-	&as_est_entry.attr,
-	&as_readexpire_entry.attr,
-	&as_writeexpire_entry.attr,
-	&as_anticexpire_entry.attr,
-	&as_read_batchexpire_entry.attr,
-	&as_write_batchexpire_entry.attr,
-	NULL,
-};
-
-#define to_as(atr) container_of((atr), struct as_fs_entry, attr)
-
-static ssize_t
-as_attr_show(struct kobject *kobj, struct attribute *attr, char *page)
-{
-	elevator_t *e = container_of(kobj, elevator_t, kobj);
-	struct as_fs_entry *entry = to_as(attr);
-
-	if (!entry->show)
-		return -EIO;
-
-	return entry->show(e->elevator_data, page);
-}
-
-static ssize_t
-as_attr_store(struct kobject *kobj, struct attribute *attr,
-		    const char *page, size_t length)
-{
-	elevator_t *e = container_of(kobj, elevator_t, kobj);
-	struct as_fs_entry *entry = to_as(attr);
-
-	if (!entry->store)
-		return -EIO;
-
-	return entry->store(e->elevator_data, page, length);
-}
-
-static struct sysfs_ops as_sysfs_ops = {
-	.show	= as_attr_show,
-	.store	= as_attr_store,
-};
-
-static struct kobj_type as_ktype = {
-	.sysfs_ops	= &as_sysfs_ops,
-	.default_attrs	= default_attrs,
+static struct elv_fs_entry as_attrs[] = {
+	__ATTR_RO(est_time),
+	AS_ATTR(read_expire),
+	AS_ATTR(write_expire),
+	AS_ATTR(antic_expire),
+	AS_ATTR(read_batch_expire),
+	AS_ATTR(write_batch_expire),
+	__ATTR_NULL
 };
 
 static struct elevator_type iosched_as = {
@@ -1954,9 +1807,10 @@ static struct elevator_type iosched_as = {
 		.elevator_may_queue_fn =	as_may_queue,
 		.elevator_init_fn =		as_init_queue,
 		.elevator_exit_fn =		as_exit_queue,
+		.trim =				as_trim,
 	},
 
-	.elevator_ktype = &as_ktype,
+	.elevator_attrs = as_attrs,
 	.elevator_name = "anticipatory",
 	.elevator_owner = THIS_MODULE,
 };
@@ -1987,7 +1841,13 @@ static int __init as_init(void)
 
 static void __exit as_exit(void)
 {
+	DECLARE_COMPLETION(all_gone);
 	elv_unregister(&iosched_as);
+	ioc_gone = &all_gone;
+	barrier();
+	if (atomic_read(&ioc_count))
+		complete(ioc_gone);
+	synchronize_rcu();
 	kmem_cache_destroy(arq_pool);
 }
 

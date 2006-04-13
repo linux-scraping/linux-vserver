@@ -47,12 +47,12 @@
 #include <linux/tty_flip.h>
 #include <linux/serial_core.h>
 #include <linux/serial.h>
+#include <linux/amba/bus.h>
+#include <linux/amba/serial.h>
+#include <linux/clk.h>
 
 #include <asm/io.h>
 #include <asm/sizes.h>
-#include <asm/hardware/amba.h>
-#include <asm/hardware/clock.h>
-#include <asm/hardware/amba_serial.h>
 
 #define UART_NR			14
 
@@ -120,15 +120,6 @@ pl011_rx_chars(struct uart_amba_port *uap)
 
 	status = readw(uap->port.membase + UART01x_FR);
 	while ((status & UART01x_FR_RXFE) == 0 && max_count--) {
-		if (tty->flip.count >= TTY_FLIPBUF_SIZE) {
-			if (tty->low_latency)
-				tty_flip_buffer_push(tty);
-			/*
-			 * If this failed then we will throw away the
-			 * bytes but must do so to clear interrupts
-			 */
-		}
-
 		ch = readw(uap->port.membase + UART01x_DR) | UART_DUMMY_DR_RX;
 		flag = TTY_NORMAL;
 		uap->port.icount.rx++;
@@ -160,7 +151,7 @@ pl011_rx_chars(struct uart_amba_port *uap)
 				flag = TTY_FRAME;
 		}
 
-		if (uart_handle_sysrq_char(&uap->port, ch, regs))
+		if (uart_handle_sysrq_char(&uap->port, ch & 255, regs))
 			goto ignore_char;
 
 		uart_insert_char(&uap->port, ch, UART011_DR_OE, ch, flag);
@@ -596,14 +587,12 @@ static struct uart_amba_port *amba_ports[UART_NR];
 
 #ifdef CONFIG_SERIAL_AMBA_PL011_CONSOLE
 
-static inline void
-pl011_console_write_char(struct uart_amba_port *uap, char ch)
+static void pl011_console_putchar(struct uart_port *port, int ch)
 {
-	unsigned int status;
+	struct uart_amba_port *uap = (struct uart_amba_port *)port;
 
-	do {
-		status = readw(uap->port.membase + UART01x_FR);
-	} while (status & UART01x_FR_TXFF);
+	while (readw(uap->port.membase + UART01x_FR) & UART01x_FR_TXFF)
+		barrier();
 	writew(ch, uap->port.membase + UART01x_DR);
 }
 
@@ -612,7 +601,6 @@ pl011_console_write(struct console *co, const char *s, unsigned int count)
 {
 	struct uart_amba_port *uap = amba_ports[co->index];
 	unsigned int status, old_cr, new_cr;
-	int i;
 
 	clk_enable(uap->clk);
 
@@ -624,14 +612,7 @@ pl011_console_write(struct console *co, const char *s, unsigned int count)
 	new_cr |= UART01x_CR_UARTEN | UART011_CR_TXE;
 	writew(new_cr, uap->port.membase + UART011_CR);
 
-	/*
-	 *	Now, do each character
-	 */
-	for (i = 0; i < count; i++) {
-		pl011_console_write_char(uap, s[i]);
-		if (s[i] == '\n')
-			pl011_console_write_char(uap, '\r');
-	}
+	uart_console_write(&uap->port, s, count, pl011_console_putchar);
 
 	/*
 	 *	Finally, wait for transmitter to become empty
@@ -761,10 +742,6 @@ static int pl011_probe(struct amba_device *dev, void *id)
 		goto unmap;
 	}
 
-	ret = clk_use(uap->clk);
-	if (ret)
-		goto putclk;
-
 	uap->port.dev = &dev->dev;
 	uap->port.mapbase = dev->res.start;
 	uap->port.membase = base;
@@ -782,8 +759,6 @@ static int pl011_probe(struct amba_device *dev, void *id)
 	if (ret) {
 		amba_set_drvdata(dev, NULL);
 		amba_ports[i] = NULL;
-		clk_unuse(uap->clk);
- putclk:
 		clk_put(uap->clk);
  unmap:
 		iounmap(base);
@@ -808,7 +783,6 @@ static int pl011_remove(struct amba_device *dev)
 			amba_ports[i] = NULL;
 
 	iounmap(uap->port.membase);
-	clk_unuse(uap->clk);
 	clk_put(uap->clk);
 	kfree(uap);
 	return 0;

@@ -518,8 +518,8 @@ static inline int __test_bit(unsigned long nr, const volatile unsigned long *ptr
 
 static inline int 
 __constant_test_bit(unsigned long nr, const volatile unsigned long *addr) {
-    return ((((volatile char *) addr)
-	    [(nr^(__BITOPS_WORDSIZE-8))>>3] & (1<<(nr&7)))) != 0;
+    return (((volatile char *) addr)
+	    [(nr^(__BITOPS_WORDSIZE-8))>>3] & (1<<(nr&7))) != 0;
 }
 
 #define test_bit(nr,addr) \
@@ -828,34 +828,12 @@ static inline int sched_find_first_bit(unsigned long *b)
 	return find_first_bit(b, 140);
 }
 
-/*
- * ffs: find first bit set. This is defined the same way as
- * the libc and compiler builtin ffs routines, therefore
- * differs in spirit from the above ffz (man ffs).
- */
-#define ffs(x) generic_ffs(x)
+#include <asm-generic/bitops/ffs.h>
 
-/*
- * fls: find last bit set.
- */
-#define fls(x) generic_fls(x)
+#include <asm-generic/bitops/fls.h>
+#include <asm-generic/bitops/fls64.h>
 
-/*
- * hweightN: returns the hamming weight (i.e. the number
- * of bits set) of a N-bit word
- */
-#define hweight64(x)						\
-({								\
-	unsigned long __x = (x);				\
-	unsigned int __w;					\
-	__w = generic_hweight32((unsigned int) __x);		\
-	__w += generic_hweight32((unsigned int) (__x>>32));	\
-	__w;							\
-})
-#define hweight32(x) generic_hweight32(x)
-#define hweight16(x) generic_hweight16(x)
-#define hweight8(x) generic_hweight8(x)
-
+#include <asm-generic/bitops/hweight.h>
 
 #ifdef __KERNEL__
 
@@ -870,11 +848,11 @@ static inline int sched_find_first_bit(unsigned long *b)
  */
 
 #define ext2_set_bit(nr, addr)       \
-	test_and_set_bit((nr)^(__BITOPS_WORDSIZE - 8), (unsigned long *)addr)
+	__test_and_set_bit((nr)^(__BITOPS_WORDSIZE - 8), (unsigned long *)addr)
 #define ext2_set_bit_atomic(lock, nr, addr)       \
 	test_and_set_bit((nr)^(__BITOPS_WORDSIZE - 8), (unsigned long *)addr)
 #define ext2_clear_bit(nr, addr)     \
-	test_and_clear_bit((nr)^(__BITOPS_WORDSIZE - 8), (unsigned long *)addr)
+	__test_and_clear_bit((nr)^(__BITOPS_WORDSIZE - 8), (unsigned long *)addr)
 #define ext2_clear_bit_atomic(lock, nr, addr)     \
 	test_and_clear_bit((nr)^(__BITOPS_WORDSIZE - 8), (unsigned long *)addr)
 #define ext2_test_bit(nr, addr)      \
@@ -1010,18 +988,7 @@ ext2_find_next_zero_bit(void *vaddr, unsigned long size, unsigned long offset)
 	return offset + ext2_find_first_zero_bit(p, size);
 }
 
-/* Bitmap functions for the minix filesystem.  */
-/* FIXME !!! */
-#define minix_test_and_set_bit(nr,addr) \
-	test_and_set_bit(nr,(unsigned long *)addr)
-#define minix_set_bit(nr,addr) \
-	set_bit(nr,(unsigned long *)addr)
-#define minix_test_and_clear_bit(nr,addr) \
-	test_and_clear_bit(nr,(unsigned long *)addr)
-#define minix_test_bit(nr,addr) \
-	test_bit(nr,(unsigned long *)addr)
-#define minix_find_first_zero_bit(addr,size) \
-	find_first_zero_bit(addr,size)
+#include <asm-generic/bitops/minix.h>
 
 #endif /* __KERNEL__ */
 

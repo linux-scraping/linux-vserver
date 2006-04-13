@@ -75,7 +75,7 @@ static struct bnep_session *__bnep_get_session(u8 *dst)
 
 	list_for_each(p, &bnep_session_list) {
 		s = list_entry(p, struct bnep_session, list);	
-		if (!memcmp(dst, s->eh.h_source, ETH_ALEN))
+		if (!compare_ether_addr(dst, s->eh.h_source))
 			return s;
 	}
 	return NULL;
@@ -420,10 +420,10 @@ static inline int bnep_tx_frame(struct bnep_session *s, struct sk_buff *skb)
 	iv[il++] = (struct kvec) { &type, 1 };
 	len++;
 
-	if (!memcmp(eh->h_dest, s->eh.h_source, ETH_ALEN))
+	if (!compare_ether_addr(eh->h_dest, s->eh.h_source))
 		type |= 0x01;
 
-	if (!memcmp(eh->h_source, s->eh.h_dest, ETH_ALEN))
+	if (!compare_ether_addr(eh->h_source, s->eh.h_dest))
 		type |= 0x02;
 
 	if (type)
@@ -532,8 +532,8 @@ int bnep_add_connection(struct bnep_connadd_req *req, struct socket *sock)
 	dev = alloc_netdev(sizeof(struct bnep_session),
 			   (*req->device) ? req->device : "bnep%d",
 			   bnep_net_setup);
-	if (!dev) 
-		return ENOMEM;
+	if (!dev)
+		return -ENOMEM;
 
 
 	down_write(&bnep_session_sem);

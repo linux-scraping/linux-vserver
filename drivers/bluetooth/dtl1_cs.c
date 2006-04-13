@@ -68,7 +68,7 @@ MODULE_LICENSE("GPL");
 
 
 typedef struct dtl1_info_t {
-	dev_link_t link;
+	struct pcmcia_device *p_dev;
 	dev_node_t node;
 
 	struct hci_dev *hdev;
@@ -87,16 +87,10 @@ typedef struct dtl1_info_t {
 } dtl1_info_t;
 
 
-static void dtl1_config(dev_link_t *link);
-static void dtl1_release(dev_link_t *link);
-static int dtl1_event(event_t event, int priority, event_callback_args_t *args);
+static int dtl1_config(struct pcmcia_device *link);
+static void dtl1_release(struct pcmcia_device *link);
 
-static dev_info_t dev_info = "dtl1_cs";
-
-static dev_link_t *dtl1_attach(void);
-static void dtl1_detach(dev_link_t *);
-
-static dev_link_t *dev_list = NULL;
+static void dtl1_detach(struct pcmcia_device *p_dev);
 
 
 /* Transmit states  */
@@ -159,13 +153,13 @@ static void dtl1_write_wakeup(dtl1_info_t *info)
 	}
 
 	do {
-		register unsigned int iobase = info->link.io.BasePort1;
+		register unsigned int iobase = info->p_dev->io.BasePort1;
 		register struct sk_buff *skb;
 		register int len;
 
 		clear_bit(XMIT_WAKEUP, &(info->tx_state));
 
-		if (!(info->link.state & DEV_PRESENT))
+		if (!pcmcia_dev_present(info->p_dev))
 			return;
 
 		if (!(skb = skb_dequeue(&(info->txq))))
@@ -224,7 +218,7 @@ static void dtl1_receive(dtl1_info_t *info)
 		return;
 	}
 
-	iobase = info->link.io.BasePort1;
+	iobase = info->p_dev->io.BasePort1;
 
 	do {
 		info->hdev->stat.byte_rx++;
@@ -311,7 +305,7 @@ static irqreturn_t dtl1_interrupt(int irq, void *dev_inst, struct pt_regs *regs)
 		return IRQ_NONE;
 	}
 
-	iobase = info->link.io.BasePort1;
+	iobase = info->p_dev->io.BasePort1;
 
 	spin_lock(&(info->lock));
 
@@ -464,7 +458,7 @@ static int dtl1_hci_ioctl(struct hci_dev *hdev, unsigned int cmd,  unsigned long
 static int dtl1_open(dtl1_info_t *info)
 {
 	unsigned long flags;
-	unsigned int iobase = info->link.io.BasePort1;
+	unsigned int iobase = info->p_dev->io.BasePort1;
 	struct hci_dev *hdev;
 
 	spin_lock_init(&(info->lock));
@@ -510,7 +504,7 @@ static int dtl1_open(dtl1_info_t *info)
 	outb(UART_LCR_WLEN8, iobase + UART_LCR);	/* Reset DLAB */
 	outb((UART_MCR_DTR | UART_MCR_RTS | UART_MCR_OUT2), iobase + UART_MCR);
 
-	info->ri_latch = inb(info->link.io.BasePort1 + UART_MSR) & UART_MSR_RI;
+	info->ri_latch = inb(info->p_dev->io.BasePort1 + UART_MSR) & UART_MSR_RI;
 
 	/* Turn on interrupts */
 	outb(UART_IER_RLSI | UART_IER_RDI | UART_IER_THRI, iobase + UART_IER);
@@ -535,7 +529,7 @@ static int dtl1_open(dtl1_info_t *info)
 static int dtl1_close(dtl1_info_t *info)
 {
 	unsigned long flags;
-	unsigned int iobase = info->link.io.BasePort1;
+	unsigned int iobase = info->p_dev->io.BasePort1;
 	struct hci_dev *hdev = info->hdev;
 
 	if (!hdev)
@@ -561,19 +555,16 @@ static int dtl1_close(dtl1_info_t *info)
 	return 0;
 }
 
-static dev_link_t *dtl1_attach(void)
+static int dtl1_probe(struct pcmcia_device *link)
 {
 	dtl1_info_t *info;
-	client_reg_t client_reg;
-	dev_link_t *link;
-	int ret;
 
 	/* Create new info device */
 	info = kzalloc(sizeof(*info), GFP_KERNEL);
 	if (!info)
-		return NULL;
+		return -ENOMEM;
 
-	link = &info->link;
+	info->p_dev = link;
 	link->priv = info;
 
 	link->io.Attributes1 = IO_DATA_PATH_WIDTH_8;
@@ -585,57 +576,22 @@ static dev_link_t *dtl1_attach(void)
 	link->irq.Instance = info;
 
 	link->conf.Attributes = CONF_ENABLE_IRQ;
-	link->conf.Vcc = 50;
 	link->conf.IntType = INT_MEMORY_AND_IO;
 
-	/* Register with Card Services */
-	link->next = dev_list;
-	dev_list = link;
-	client_reg.dev_info = &dev_info;
-	client_reg.Version = 0x0210;
-	client_reg.event_callback_args.client_data = link;
-
-	ret = pcmcia_register_client(&link->handle, &client_reg);
-	if (ret != CS_SUCCESS) {
-		cs_error(link->handle, RegisterClient, ret);
-		dtl1_detach(link);
-		return NULL;
-	}
-
-	return link;
+	return dtl1_config(link);
 }
 
 
-static void dtl1_detach(dev_link_t *link)
+static void dtl1_detach(struct pcmcia_device *link)
 {
 	dtl1_info_t *info = link->priv;
-	dev_link_t **linkp;
-	int ret;
 
-	/* Locate device structure */
-	for (linkp = &dev_list; *linkp; linkp = &(*linkp)->next)
-		if (*linkp == link)
-			break;
-
-	if (*linkp == NULL)
-		return;
-
-	if (link->state & DEV_CONFIG)
-		dtl1_release(link);
-
-	if (link->handle) {
-		ret = pcmcia_deregister_client(link->handle);
-		if (ret != CS_SUCCESS)
-			cs_error(link->handle, DeregisterClient, ret);
-	}
-
-	/* Unlink device structure, free bits */
-	*linkp = link->next;
+	dtl1_release(link);
 
 	kfree(info);
 }
 
-static int get_tuple(client_handle_t handle, tuple_t *tuple, cisparse_t *parse)
+static int get_tuple(struct pcmcia_device *handle, tuple_t *tuple, cisparse_t *parse)
 {
 	int i;
 
@@ -646,29 +602,27 @@ static int get_tuple(client_handle_t handle, tuple_t *tuple, cisparse_t *parse)
 	return pcmcia_parse_tuple(handle, tuple, parse);
 }
 
-static int first_tuple(client_handle_t handle, tuple_t *tuple, cisparse_t *parse)
+static int first_tuple(struct pcmcia_device *handle, tuple_t *tuple, cisparse_t *parse)
 {
 	if (pcmcia_get_first_tuple(handle, tuple) != CS_SUCCESS)
 		return CS_NO_MORE_ITEMS;
 	return get_tuple(handle, tuple, parse);
 }
 
-static int next_tuple(client_handle_t handle, tuple_t *tuple, cisparse_t *parse)
+static int next_tuple(struct pcmcia_device *handle, tuple_t *tuple, cisparse_t *parse)
 {
 	if (pcmcia_get_next_tuple(handle, tuple) != CS_SUCCESS)
 		return CS_NO_MORE_ITEMS;
 	return get_tuple(handle, tuple, parse);
 }
 
-static void dtl1_config(dev_link_t *link)
+static int dtl1_config(struct pcmcia_device *link)
 {
-	client_handle_t handle = link->handle;
 	dtl1_info_t *info = link->priv;
 	tuple_t tuple;
 	u_short buf[256];
 	cisparse_t parse;
 	cistpl_cftable_entry_t *cf = &parse.cftable_entry;
-	config_info_t config;
 	int i, last_ret, last_fn;
 
 	tuple.TupleData = (cisdata_t *)buf;
@@ -678,18 +632,13 @@ static void dtl1_config(dev_link_t *link)
 
 	/* Get configuration register information */
 	tuple.DesiredTuple = CISTPL_CONFIG;
-	last_ret = first_tuple(handle, &tuple, &parse);
+	last_ret = first_tuple(link, &tuple, &parse);
 	if (last_ret != CS_SUCCESS) {
 		last_fn = ParseTuple;
 		goto cs_failed;
 	}
 	link->conf.ConfigBase = parse.config.base;
 	link->conf.Present = parse.config.rmask[0];
-
-	/* Configure card */
-	link->state |= DEV_CONFIG;
-	i = pcmcia_get_configuration_info(handle, &config);
-	link->conf.Vcc = config.Vcc;
 
 	tuple.TupleData = (cisdata_t *)buf;
 	tuple.TupleOffset = 0;
@@ -699,34 +648,34 @@ static void dtl1_config(dev_link_t *link)
 
 	/* Look for a generic full-sized window */
 	link->io.NumPorts1 = 8;
-	i = first_tuple(handle, &tuple, &parse);
+	i = first_tuple(link, &tuple, &parse);
 	while (i != CS_NO_MORE_ITEMS) {
 		if ((i == CS_SUCCESS) && (cf->io.nwin == 1) && (cf->io.win[0].len > 8)) {
 			link->conf.ConfigIndex = cf->index;
 			link->io.BasePort1 = cf->io.win[0].base;
 			link->io.NumPorts1 = cf->io.win[0].len;	/*yo */
 			link->io.IOAddrLines = cf->io.flags & CISTPL_IO_LINES_MASK;
-			i = pcmcia_request_io(link->handle, &link->io);
+			i = pcmcia_request_io(link, &link->io);
 			if (i == CS_SUCCESS)
 				break;
 		}
-		i = next_tuple(handle, &tuple, &parse);
+		i = next_tuple(link, &tuple, &parse);
 	}
 
 	if (i != CS_SUCCESS) {
-		cs_error(link->handle, RequestIO, i);
+		cs_error(link, RequestIO, i);
 		goto failed;
 	}
 
-	i = pcmcia_request_irq(link->handle, &link->irq);
+	i = pcmcia_request_irq(link, &link->irq);
 	if (i != CS_SUCCESS) {
-		cs_error(link->handle, RequestIRQ, i);
+		cs_error(link, RequestIRQ, i);
 		link->irq.AssignedIRQ = 0;
 	}
 
-	i = pcmcia_request_configuration(link->handle, &link->conf);
+	i = pcmcia_request_configuration(link, &link->conf);
 	if (i != CS_SUCCESS) {
-		cs_error(link->handle, RequestConfiguration, i);
+		cs_error(link, RequestConfiguration, i);
 		goto failed;
 	}
 
@@ -734,75 +683,33 @@ static void dtl1_config(dev_link_t *link)
 		goto failed;
 
 	strcpy(info->node.dev_name, info->hdev->name);
-	link->dev = &info->node;
-	link->state &= ~DEV_CONFIG_PENDING;
+	link->dev_node = &info->node;
 
-	return;
+	return 0;
 
 cs_failed:
-	cs_error(link->handle, last_fn, last_ret);
+	cs_error(link, last_fn, last_ret);
 
 failed:
 	dtl1_release(link);
+	return -ENODEV;
 }
 
 
-static void dtl1_release(dev_link_t *link)
+static void dtl1_release(struct pcmcia_device *link)
 {
 	dtl1_info_t *info = link->priv;
 
-	if (link->state & DEV_PRESENT)
-		dtl1_close(info);
+	dtl1_close(info);
 
-	link->dev = NULL;
-
-	pcmcia_release_configuration(link->handle);
-	pcmcia_release_io(link->handle, &link->io);
-	pcmcia_release_irq(link->handle, &link->irq);
-
-	link->state &= ~DEV_CONFIG;
+	pcmcia_disable_device(link);
 }
 
-
-static int dtl1_event(event_t event, int priority, event_callback_args_t *args)
-{
-	dev_link_t *link = args->client_data;
-	dtl1_info_t *info = link->priv;
-
-	switch (event) {
-	case CS_EVENT_CARD_REMOVAL:
-		link->state &= ~DEV_PRESENT;
-		if (link->state & DEV_CONFIG) {
-			dtl1_close(info);
-			dtl1_release(link);
-		}
-		break;
-	case CS_EVENT_CARD_INSERTION:
-		link->state |= DEV_PRESENT | DEV_CONFIG_PENDING;
-		dtl1_config(link);
-		break;
-	case CS_EVENT_PM_SUSPEND:
-		link->state |= DEV_SUSPEND;
-		/* Fall through... */
-	case CS_EVENT_RESET_PHYSICAL:
-		if (link->state & DEV_CONFIG)
-			pcmcia_release_configuration(link->handle);
-		break;
-	case CS_EVENT_PM_RESUME:
-		link->state &= ~DEV_SUSPEND;
-		/* Fall through... */
-	case CS_EVENT_CARD_RESET:
-		if (DEV_OK(link))
-			pcmcia_request_configuration(link->handle, &link->conf);
-		break;
-	}
-
-	return 0;
-}
 
 static struct pcmcia_device_id dtl1_ids[] = {
 	PCMCIA_DEVICE_PROD_ID12("Nokia Mobile Phones", "DTL-1", 0xe1bfdd64, 0xe168480d),
 	PCMCIA_DEVICE_PROD_ID12("Socket", "CF", 0xb38bcc2e, 0x44ebf863),
+	PCMCIA_DEVICE_PROD_ID12("Socket", "CF+ Personal Network Card", 0xb38bcc2e, 0xe732bae3),
 	PCMCIA_DEVICE_NULL
 };
 MODULE_DEVICE_TABLE(pcmcia, dtl1_ids);
@@ -812,9 +719,8 @@ static struct pcmcia_driver dtl1_driver = {
 	.drv		= {
 		.name	= "dtl1_cs",
 	},
-	.attach		= dtl1_attach,
-	.event		= dtl1_event,
-	.detach		= dtl1_detach,
+	.probe		= dtl1_probe,
+	.remove		= dtl1_detach,
 	.id_table	= dtl1_ids,
 };
 
@@ -827,7 +733,6 @@ static int __init init_dtl1_cs(void)
 static void __exit exit_dtl1_cs(void)
 {
 	pcmcia_unregister_driver(&dtl1_driver);
-	BUG_ON(dev_list != NULL);
 }
 
 module_init(init_dtl1_cs);

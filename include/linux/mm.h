@@ -3,6 +3,7 @@
 
 #include <linux/sched.h>
 #include <linux/errno.h>
+#include <linux/capability.h>
 
 #ifdef __KERNEL__
 
@@ -13,6 +14,7 @@
 #include <linux/rbtree.h>
 #include <linux/prio_tree.h>
 #include <linux/fs.h>
+#include <linux/mutex.h>
 
 struct mempolicy;
 struct anon_vma;
@@ -223,24 +225,27 @@ struct page {
 					 * & limit reverse map searches.
 					 */
 	union {
-		unsigned long private;	/* Mapping-private opaque data:
-					 * usually used for buffer_heads
-					 * if PagePrivate set; used for
-					 * swp_entry_t if PageSwapCache
-					 * When page is free, this indicates
-					 * order in the buddy system.
-					 */
+	    struct {
+		unsigned long private;		/* Mapping-private opaque data:
+					 	 * usually used for buffer_heads
+						 * if PagePrivate set; used for
+						 * swp_entry_t if PageSwapCache.
+						 * When page is free, this
+						 * indicates order in the buddy
+						 * system.
+						 */
+		struct address_space *mapping;	/* If low bit clear, points to
+						 * inode address_space, or NULL.
+						 * If page mapped as anonymous
+						 * memory, low bit is set, and
+						 * it points to anon_vma object:
+						 * see PAGE_MAPPING_ANON below.
+						 */
+	    };
 #if NR_CPUS >= CONFIG_SPLIT_PTLOCK_CPUS
-		spinlock_t ptl;
+	    spinlock_t ptl;
 #endif
-	} u;
-	struct address_space *mapping;	/* If low bit clear, points to
-					 * inode address_space, or NULL.
-					 * If page mapped as anonymous
-					 * memory, low bit is set, and
-					 * it points to anon_vma object:
-					 * see PAGE_MAPPING_ANON below.
-					 */
+	};
 	pgoff_t index;			/* Our offset within mapping. */
 	struct list_head lru;		/* Pageout list, eg. active_list
 					 * protected by zone->lru_lock !
@@ -261,8 +266,8 @@ struct page {
 #endif /* WANT_PAGE_VIRTUAL */
 };
 
-#define page_private(page)		((page)->u.private)
-#define set_page_private(page, v)	((page)->u.private = (v))
+#define page_private(page)		((page)->private)
+#define set_page_private(page, v)	((page)->private = (v))
 
 /*
  * FIXME: take this include out, include page-flags.h in
@@ -281,43 +286,34 @@ struct page {
  *
  * Also, many kernel routines increase the page count before a critical
  * routine so they can be sure the page doesn't go away from under them.
- *
- * Since 2.6.6 (approx), a free page has ->_count = -1.  This is so that we
- * can use atomic_add_negative(-1, page->_count) to detect when the page
- * becomes free and so that we can also use atomic_inc_and_test to atomically
- * detect when we just tried to grab a ref on a page which some other CPU has
- * already deemed to be freeable.
- *
- * NO code should make assumptions about this internal detail!  Use the provided
- * macros which retain the old rules: page_count(page) == 0 is a free page.
  */
 
 /*
  * Drop a ref, return true if the logical refcount fell to zero (the page has
  * no users)
  */
-#define put_page_testzero(p)				\
-	({						\
-		BUG_ON(page_count(p) == 0);		\
-		atomic_add_negative(-1, &(p)->_count);	\
-	})
+static inline int put_page_testzero(struct page *page)
+{
+	BUG_ON(atomic_read(&page->_count) == 0);
+	return atomic_dec_and_test(&page->_count);
+}
 
 /*
- * Grab a ref, return true if the page previously had a logical refcount of
- * zero.  ie: returns true if we just grabbed an already-deemed-to-be-free page
+ * Try to grab a ref unless the page has a refcount of zero, return false if
+ * that is the case.
  */
-#define get_page_testone(p)	atomic_inc_and_test(&(p)->_count)
-
-#define set_page_count(p,v) 	atomic_set(&(p)->_count, v - 1)
-#define __put_page(p)		atomic_dec(&(p)->_count)
+static inline int get_page_unless_zero(struct page *page)
+{
+	return atomic_inc_not_zero(&page->_count);
+}
 
 extern void FASTCALL(__page_cache_release(struct page *));
 
 static inline int page_count(struct page *page)
 {
-	if (PageCompound(page))
+	if (unlikely(PageCompound(page)))
 		page = (struct page *)page_private(page);
-	return atomic_read(&page->_count) + 1;
+	return atomic_read(&page->_count);
 }
 
 static inline void get_page(struct page *page)
@@ -327,7 +323,18 @@ static inline void get_page(struct page *page)
 	atomic_inc(&page->_count);
 }
 
+/*
+ * Setup the page count before being freed into the page allocator for
+ * the first time (boot or memory hotplug)
+ */
+static inline void init_page_count(struct page *page)
+{
+	atomic_set(&page->_count, 1);
+}
+
 void put_page(struct page *page);
+
+void split_page(struct page *page, unsigned int order);
 
 /*
  * Multiple processes may "see" the same page. E.g. for untouched
@@ -507,7 +514,7 @@ static inline void set_page_links(struct page *page, unsigned long zone,
 extern struct page *mem_map;
 #endif
 
-static inline void *lowmem_page_address(struct page *page)
+static __always_inline void *lowmem_page_address(struct page *page)
 {
 	return __va(page_to_pfn(page) << PAGE_SHIFT);
 }
@@ -634,13 +641,37 @@ struct mempolicy *shmem_get_policy(struct vm_area_struct *vma,
 int shmem_lock(struct file *file, int lock, struct user_struct *user);
 #else
 #define shmem_nopage filemap_nopage
-#define shmem_lock(a, b, c) 	({0;})	/* always in memory, no need to lock */
-#define shmem_set_policy(a, b)	(0)
-#define shmem_get_policy(a, b)	(NULL)
+
+static inline int shmem_lock(struct file *file, int lock,
+			     struct user_struct *user)
+{
+	return 0;
+}
+
+static inline int shmem_set_policy(struct vm_area_struct *vma,
+				   struct mempolicy *new)
+{
+	return 0;
+}
+
+static inline struct mempolicy *shmem_get_policy(struct vm_area_struct *vma,
+						 unsigned long addr)
+{
+	return NULL;
+}
 #endif
 struct file *shmem_file_setup(char *name, loff_t size, unsigned long flags);
+extern int shmem_mmap(struct file *file, struct vm_area_struct *vma);
 
 int shmem_zero_setup(struct vm_area_struct *);
+
+#ifndef CONFIG_MMU
+extern unsigned long shmem_get_unmapped_area(struct file *file,
+					     unsigned long addr,
+					     unsigned long len,
+					     unsigned long pgoff,
+					     unsigned long flags);
+#endif
 
 static inline int can_do_mlock(void)
 {
@@ -690,14 +721,31 @@ static inline void unmap_shared_mapping_range(struct address_space *mapping,
 }
 
 extern int vmtruncate(struct inode * inode, loff_t offset);
+extern int vmtruncate_range(struct inode * inode, loff_t offset, loff_t end);
 extern int install_page(struct mm_struct *mm, struct vm_area_struct *vma, unsigned long addr, struct page *page, pgprot_t prot);
 extern int install_file_pte(struct mm_struct *mm, struct vm_area_struct *vma, unsigned long addr, unsigned long pgoff, pgprot_t prot);
-extern int __handle_mm_fault(struct mm_struct *mm,struct vm_area_struct *vma, unsigned long address, int write_access);
 
-static inline int handle_mm_fault(struct mm_struct *mm, struct vm_area_struct *vma, unsigned long address, int write_access)
+#ifdef CONFIG_MMU
+extern int __handle_mm_fault(struct mm_struct *mm,struct vm_area_struct *vma,
+			unsigned long address, int write_access);
+
+static inline int handle_mm_fault(struct mm_struct *mm,
+			struct vm_area_struct *vma, unsigned long address,
+			int write_access)
 {
-	return __handle_mm_fault(mm, vma, address, write_access) & (~VM_FAULT_WRITE);
+	return __handle_mm_fault(mm, vma, address, write_access) &
+				(~VM_FAULT_WRITE);
 }
+#else
+static inline int handle_mm_fault(struct mm_struct *mm,
+			struct vm_area_struct *vma, unsigned long address,
+			int write_access)
+{
+	/* should never happen if there's no MMU */
+	BUG();
+	return VM_FAULT_SIGBUS;
+}
+#endif
 
 extern int make_pages_present(unsigned long addr, unsigned long end);
 extern int access_process_vm(struct task_struct *tsk, unsigned long addr, void *buf, int len, int write);
@@ -774,7 +822,7 @@ static inline pmd_t *pmd_alloc(struct mm_struct *mm, pud_t *pud, unsigned long a
  * overflow into the next struct page (as it might with DEBUG_SPINLOCK).
  * When freeing, reset page->mapping so free_pages_check won't complain.
  */
-#define __pte_lockptr(page)	&((page)->u.ptl)
+#define __pte_lockptr(page)	&((page)->ptl)
 #define pte_lock_init(_page)	do {					\
 	spin_lock_init(__pte_lockptr(_page));				\
 } while (0)
@@ -896,6 +944,8 @@ extern unsigned long do_brk(unsigned long, unsigned long);
 /* filemap.c */
 extern unsigned long page_unuse(struct page *);
 extern void truncate_inode_pages(struct address_space *, loff_t);
+extern void truncate_inode_pages_range(struct address_space *,
+				       loff_t lstart, loff_t lend);
 
 /* generic vm_area_ops exported for stackable file systems */
 extern struct page *filemap_nopage(struct vm_area_struct *, unsigned long, int *);
@@ -978,6 +1028,9 @@ static inline void vm_stat_account(struct mm_struct *mm,
 static inline void
 kernel_map_pages(struct page *page, int numpages, int enable)
 {
+	if (!PageHighMem(page) && !enable)
+		mutex_debug_check_no_locks_freed(page_address(page),
+						 numpages * PAGE_SIZE);
 }
 #endif
 
@@ -992,6 +1045,19 @@ int in_gate_area_no_task(unsigned long addr);
 
 /* /proc/<pid>/oom_adj set to -17 protects from the oom-killer */
 #define OOM_DISABLE -17
+
+int drop_caches_sysctl_handler(struct ctl_table *, int, struct file *,
+					void __user *, size_t *, loff_t *);
+unsigned long shrink_slab(unsigned long scanned, gfp_t gfp_mask,
+			unsigned long lru_pages);
+void drop_pagecache(void);
+void drop_slab(void);
+
+#ifndef CONFIG_MMU
+#define randomize_va_space 0
+#else
+extern int randomize_va_space;
+#endif
 
 #endif /* __KERNEL__ */
 #endif /* _LINUX_MM_H */

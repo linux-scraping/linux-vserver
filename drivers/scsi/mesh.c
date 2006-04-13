@@ -1748,7 +1748,7 @@ static int mesh_host_reset(struct scsi_cmnd *cmd)
 
 static void set_mesh_power(struct mesh_state *ms, int state)
 {
-	if (_machine != _MACH_Pmac)
+	if (!machine_is(powermac))
 		return;
 	if (state) {
 		pmac_call_feature(PMAC_FTR_MESH_ENABLE, macio_get_of_node(ms->mdev), 0, 1);
@@ -1869,7 +1869,8 @@ static int mesh_probe(struct macio_dev *mdev, const struct of_device_id *match)
 
 	if (macio_resource_count(mdev) != 2 || macio_irq_count(mdev) != 2) {
        		printk(KERN_ERR "mesh: expected 2 addrs and 2 intrs"
-	       	       " (got %d,%d)\n", mesh->n_addrs, mesh->n_intrs);
+	       	       " (got %d,%d)\n", macio_resource_count(mdev),
+		       macio_irq_count(mdev));
 		return -ENODEV;
 	}
 

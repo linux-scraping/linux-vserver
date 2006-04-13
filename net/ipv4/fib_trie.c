@@ -41,9 +41,16 @@
  *		modify it under the terms of the GNU General Public License
  *		as published by the Free Software Foundation; either version
  *		2 of the License, or (at your option) any later version.
+ *
+ * Substantial contributions to this work comes from:
+ *
+ *		David S. Miller, <davem@davemloft.net>
+ *		Stephen Hemminger <shemminger@osdl.org>
+ *		Paul E. McKenney <paulmck@us.ibm.com>
+ *		Patrick McHardy <kaber@trash.net>
  */
 
-#define VERSION "0.404"
+#define VERSION "0.406"
 
 #include <linux/config.h>
 #include <asm/uaccess.h>
@@ -59,6 +66,7 @@
 #include <linux/errno.h>
 #include <linux/in.h>
 #include <linux/inet.h>
+#include <linux/inetdevice.h>
 #include <linux/netdevice.h>
 #include <linux/if_arp.h>
 #include <linux/proc_fs.h>
@@ -76,7 +84,7 @@
 #include "fib_lookup.h"
 
 #undef CONFIG_IP_FIB_TRIE_STATS
-#define MAX_CHILDS 16384
+#define MAX_STAT_DEPTH 32
 
 #define KEYLENGTH (8*sizeof(t_key))
 #define MASK_PFX(k, l) (((l)==0)?0:(k >> (KEYLENGTH-l)) << (KEYLENGTH-l))
@@ -146,7 +154,7 @@ struct trie_stat {
 	unsigned int tnodes;
 	unsigned int leaves;
 	unsigned int nullpointers;
-	unsigned int nodesizes[MAX_CHILDS];
+	unsigned int nodesizes[MAX_STAT_DEPTH];
 };
 
 struct trie {
@@ -2032,7 +2040,15 @@ rescan:
 static struct node *fib_trie_get_first(struct fib_trie_iter *iter,
 				       struct trie *t)
 {
-	struct node *n = rcu_dereference(t->trie);
+	struct node *n ;
+
+	if(!t)
+		return NULL;
+
+	n = rcu_dereference(t->trie);
+
+	if(!iter)
+		return NULL;
 
 	if (n && IS_TNODE(n)) {
 		iter->tnode = (struct tnode *) n;
@@ -2064,7 +2080,9 @@ static void trie_collect_stats(struct trie *t, struct trie_stat *s)
 			int i;
 
 			s->tnodes++;
-			s->nodesizes[tn->bits]++;
+			if(tn->bits < MAX_STAT_DEPTH)
+				s->nodesizes[tn->bits]++;
+
 			for (i = 0; i < (1<<tn->bits); i++)
 				if (!tn->child[i])
 					s->nullpointers++;
@@ -2094,8 +2112,8 @@ static void trie_show_stats(struct seq_file *seq, struct trie_stat *stat)
 	seq_printf(seq, "\tInternal nodes: %d\n\t", stat->tnodes);
 	bytes += sizeof(struct tnode) * stat->tnodes;
 
-	max = MAX_CHILDS-1;
-	while (max >= 0 && stat->nodesizes[max] == 0)
+	max = MAX_STAT_DEPTH;
+	while (max > 0 && stat->nodesizes[max-1] == 0)
 		max--;
 
 	pointers = 0;

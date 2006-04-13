@@ -1,6 +1,6 @@
 /*
  * (C) Copyright IBM Corp. 2004
- * tape_class.c ($Revision: 1.8 $)
+ * tape_class.c
  *
  * Tape class device support
  *
@@ -12,7 +12,7 @@
 MODULE_AUTHOR("Stefan Bader <shbader@de.ibm.com>");
 MODULE_DESCRIPTION(
 	"(C) Copyright IBM Corp. 2004   All Rights Reserved.\n"
-	"tape_class.c ($Revision: 1.8 $)"
+	"tape_class.c"
 );
 MODULE_LICENSE("GPL");
 
@@ -44,11 +44,10 @@ struct tape_class_device *register_tape_dev(
 	int		rc;
 	char *		s;
 
-	tcd = kmalloc(sizeof(struct tape_class_device), GFP_KERNEL);
+	tcd = kzalloc(sizeof(struct tape_class_device), GFP_KERNEL);
 	if (!tcd)
 		return ERR_PTR(-ENOMEM);
 
-	memset(tcd, 0, sizeof(struct tape_class_device));
 	strncpy(tcd->device_name, device_name, TAPECLASS_NAME_LEN);
 	for (s = strchr(tcd->device_name, '/'); s; s = strchr(s, '/'))
 		*s = '!';

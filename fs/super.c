@@ -37,6 +37,7 @@
 #include <linux/writeback.h>		/* for the emergency remount stuff */
 #include <linux/idr.h>
 #include <linux/kobject.h>
+#include <linux/mutex.h>
 #include <linux/devpts_fs.h>
 #include <linux/proc_fs.h>
 #include <asm/uaccess.h>
@@ -57,11 +58,10 @@ DEFINE_SPINLOCK(sb_lock);
  */
 static struct super_block *alloc_super(void)
 {
-	struct super_block *s = kmalloc(sizeof(struct super_block),  GFP_USER);
+	struct super_block *s = kzalloc(sizeof(struct super_block),  GFP_USER);
 	static struct super_operations default_op;
 
 	if (s) {
-		memset(s, 0, sizeof(struct super_block));
 		if (security_sb_alloc(s)) {
 			kfree(s);
 			s = NULL;
@@ -74,13 +74,13 @@ static struct super_block *alloc_super(void)
 		INIT_HLIST_HEAD(&s->s_anon);
 		INIT_LIST_HEAD(&s->s_inodes);
 		init_rwsem(&s->s_umount);
-		sema_init(&s->s_lock, 1);
+		mutex_init(&s->s_lock);
 		down_write(&s->s_umount);
 		s->s_count = S_BIAS;
 		atomic_set(&s->s_active, 1);
-		sema_init(&s->s_vfs_rename_sem,1);
-		sema_init(&s->s_dquot.dqio_sem, 1);
-		sema_init(&s->s_dquot.dqonoff_sem, 1);
+		mutex_init(&s->s_vfs_rename_mutex);
+		mutex_init(&s->s_dquot.dqio_mutex);
+		mutex_init(&s->s_dquot.dqonoff_mutex);
 		init_rwsem(&s->s_dquot.dqptr_sem);
 		init_waitqueue_head(&s->s_wait_unfrozen);
 		s->s_maxbytes = MAX_NON_LFS;
@@ -249,8 +249,9 @@ void generic_shutdown_super(struct super_block *sb)
 
 		/* Forget any remaining inodes */
 		if (invalidate_inodes(sb)) {
-			printk("VFS: Busy inodes after unmount. "
-			   "Self-destruct in 5 seconds.  Have a nice day...\n");
+			printk("VFS: Busy inodes after unmount of %s. "
+			   "Self-destruct in 5 seconds.  Have a nice day...\n",
+			   sb->s_id);
 		}
 
 		unlock_kernel();
@@ -382,9 +383,9 @@ restart:
 void sync_filesystems(int wait)
 {
 	struct super_block *sb;
-	static DECLARE_MUTEX(mutex);
+	static DEFINE_MUTEX(mutex);
 
-	down(&mutex);		/* Could be down_interruptible */
+	mutex_lock(&mutex);		/* Could be down_interruptible */
 	spin_lock(&sb_lock);
 	list_for_each_entry(sb, &super_blocks, s_list) {
 		if (!sb->s_op->sync_fs)
@@ -413,7 +414,7 @@ restart:
 			goto restart;
 	}
 	spin_unlock(&sb_lock);
-	up(&mutex);
+	mutex_unlock(&mutex);
 }
 
 /**
@@ -671,9 +672,9 @@ static void bdev_uevent(struct block_device *bdev, enum kobject_action action)
 {
 	if (bdev->bd_disk) {
 		if (bdev->bd_part)
-			kobject_uevent(&bdev->bd_part->kobj, action, NULL);
+			kobject_uevent(&bdev->bd_part->kobj, action);
 		else
-			kobject_uevent(&bdev->bd_disk->kobj, action, NULL);
+			kobject_uevent(&bdev->bd_disk->kobj, action);
 	}
 }
 
@@ -694,9 +695,9 @@ struct super_block *get_sb_bdev(struct file_system_type *fs_type,
 	 * will protect the lockfs code from trying to start a snapshot
 	 * while we are mounting
 	 */
-	down(&bdev->bd_mount_sem);
+	mutex_lock(&bdev->bd_mount_mutex);
 	s = sget(fs_type, test_bdev_super, set_bdev_super, bdev);
-	up(&bdev->bd_mount_sem);
+	mutex_unlock(&bdev->bd_mount_mutex);
 	if (IS_ERR(s))
 		goto out;
 
@@ -712,9 +713,8 @@ struct super_block *get_sb_bdev(struct file_system_type *fs_type,
 
 		s->s_flags = flags;
 		strlcpy(s->s_id, bdevname(bdev, b), sizeof(s->s_id));
-		s->s_old_blocksize = block_size(bdev);
-		sb_set_blocksize(s, s->s_old_blocksize);
-		error = fill_super(s, data, flags & MS_VERBOSE ? 1 : 0);
+		sb_set_blocksize(s, block_size(bdev));
+		error = fill_super(s, data, flags & MS_SILENT ? 1 : 0);
 		if (error) {
 			up_write(&s->s_umount);
 			deactivate_super(s);
@@ -758,7 +758,7 @@ struct super_block *get_sb_nodev(struct file_system_type *fs_type,
 
 	s->s_flags = flags;
 
-	error = fill_super(s, data, flags & MS_VERBOSE ? 1 : 0);
+	error = fill_super(s, data, flags & MS_SILENT ? 1 : 0);
 	if (error) {
 		up_write(&s->s_umount);
 		deactivate_super(s);
@@ -787,7 +787,7 @@ struct super_block *get_sb_single(struct file_system_type *fs_type,
 		return s;
 	if (!s->s_root) {
 		s->s_flags = flags;
-		error = fill_super(s, data, flags & MS_VERBOSE ? 1 : 0);
+		error = fill_super(s, data, flags & MS_SILENT ? 1 : 0);
 		if (error) {
 			up_write(&s->s_umount);
 			deactivate_super(s);

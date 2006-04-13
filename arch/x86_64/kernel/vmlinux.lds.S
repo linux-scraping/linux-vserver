@@ -8,6 +8,8 @@
 #include <asm/page.h>
 #include <linux/config.h>
 
+#undef i386	/* in case the preprocessor is a 32bit one */
+
 OUTPUT_FORMAT("elf64-x86-64", "elf64-x86-64", "elf64-x86-64")
 OUTPUT_ARCH(i386:x86-64)
 ENTRY(phys_startup_64)
@@ -18,6 +20,12 @@ SECTIONS
   phys_startup_64 = startup_64 - LOAD_OFFSET;
   _text = .;			/* Text and read-only data */
   .text :  AT(ADDR(.text) - LOAD_OFFSET) {
+	/* First the code that has to be first for bootstrapping */
+	*(.bootstrap.text)
+	/* Then all the functions that are "hot" in profiles, to group them
+           onto the same hugetlb entry */
+	#include "functionlist"
+	/* Then the rest */
 	*(.text)
 	SCHED_TEXT
 	LOCK_TEXT
@@ -170,13 +178,15 @@ SECTIONS
   . = ALIGN(4096);
   __initramfs_start = .;
   .init.ramfs : AT(ADDR(.init.ramfs) - LOAD_OFFSET) { *(.init.ramfs) }
-  __initramfs_end = .;	
-  . = ALIGN(32);
+  __initramfs_end = .;
+  /* temporary here to work around NR_CPUS. If you see this comment in 2.6.17+
+   complain */
+  . = ALIGN(4096);	
+  __init_end = .;	
+  . = ALIGN(CONFIG_X86_L1_CACHE_BYTES);
   __per_cpu_start = .;
   .data.percpu  : AT(ADDR(.data.percpu) - LOAD_OFFSET) { *(.data.percpu) }
   __per_cpu_end = .;
-  . = ALIGN(4096);
-  __init_end = .;
 
   . = ALIGN(4096);
   __nosave_begin = .;
@@ -189,7 +199,7 @@ SECTIONS
   /* Sections to be discarded */
   /DISCARD/ : {
 	*(.exitcall.exit)
-#ifndef CONFIG_DEBUG_INFO
+#ifndef CONFIG_UNWIND_INFO
 	*(.eh_frame)
 #endif
 	}

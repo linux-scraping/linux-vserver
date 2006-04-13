@@ -108,6 +108,25 @@ extern void __show_regs(struct pt_regs *);
 extern int cpu_architecture(void);
 extern void cpu_init(void);
 
+/*
+ * Intel's XScale3 core supports some v6 features (supersections, L2)
+ * but advertises itself as v5 as it does not support the v6 ISA.  For
+ * this reason, we need a way to explicitly test for this type of CPU.
+ */
+#ifndef CONFIG_CPU_XSC3
+#define cpu_is_xsc3()	0
+#else
+static inline int cpu_is_xsc3(void)
+{
+	extern unsigned int processor_id;
+
+	if ((processor_id & 0xffffe000) == 0x69056000)
+		return 1;
+
+	return 0;
+}
+#endif
+
 #define set_cr(x)					\
 	__asm__ __volatile__(				\
 	"mcr	p15, 0, %0, c1, c0, 0	@ set CR"	\
@@ -168,8 +187,18 @@ extern struct task_struct *__switch_to(struct task_struct *, struct thread_info 
 
 #define switch_to(prev,next,last)					\
 do {									\
-	last = __switch_to(prev,prev->thread_info,next->thread_info);	\
+	last = __switch_to(prev,task_thread_info(prev), task_thread_info(next));	\
 } while (0)
+
+/*
+ * On SMP systems, when the scheduler does migration-cost autodetection,
+ * it needs a way to flush as much of the CPU's caches as possible.
+ *
+ * TODO: fill this in!
+ */
+static inline void sched_cacheflush(void)
+{
+}
 
 /*
  * CPU interrupt mask handling.
@@ -404,6 +433,9 @@ static inline unsigned long __xchg(unsigned long x, volatile void *ptr, int size
 
 	return ret;
 }
+
+extern void disable_hlt(void);
+extern void enable_hlt(void);
 
 #endif /* __ASSEMBLY__ */
 

@@ -188,6 +188,11 @@ void __init MMU_init(void)
 
 	if (ppc_md.progress)
 		ppc_md.progress("MMU:exit", 0x211);
+
+	/* From now on, btext is no longer BAT mapped if it was at all */
+#ifdef CONFIG_BOOTX_TEXT
+	btext_unmap();
+#endif
 }
 
 /* This is only called until mem_init is done. */
@@ -211,7 +216,7 @@ static void free_sec(unsigned long start, unsigned long end, const char *name)
 
 	while (start < end) {
 		ClearPageReserved(virt_to_page(start));
-		set_page_count(virt_to_page(start), 1);
+		init_page_count(virt_to_page(start));
 		free_page(start);
 		cnt++;
 		start += PAGE_SIZE;
@@ -243,7 +248,7 @@ void free_initrd_mem(unsigned long start, unsigned long end)
 		printk ("Freeing initrd memory: %ldk freed\n", (end - start) >> 10);
 	for (; start < end; start += PAGE_SIZE) {
 		ClearPageReserved(virt_to_page(start));
-		set_page_count(virt_to_page(start), 1);
+		init_page_count(virt_to_page(start));
 		free_page(start);
 		totalram_pages++;
 	}

@@ -18,13 +18,14 @@ config MMU
 	bool
 	default y
 
-config UID16
-	bool
-
 config RWSEM_GENERIC_SPINLOCK
 	bool
 
 config RWSEM_XCHGADD_ALGORITHM
+	bool
+	default y
+
+config GENERIC_FIND_NEXT_BIT
 	bool
 	default y
 
@@ -39,6 +40,19 @@ config GENERIC_ISA_DMA
 config GENERIC_IOMAP
 	bool
 	default n
+
+config GENERIC_HARDIRQS
+	bool
+	default y
+
+config GENERIC_IRQ_PROBE
+	bool
+	default y
+
+config AUTO_IRQ_AFFINITY
+	bool
+	depends on SMP
+	default y
 
 source "init/Kconfig"
 
@@ -436,6 +450,10 @@ config ALPHA_IRONGATE
 	bool
 	depends on ALPHA_NAUTILUS
 	default y
+
+config GENERIC_HWEIGHT
+	bool
+	default y if !ALPHA_EV6 && !ALPHA_EV67
 
 config ALPHA_AVANTI
 	bool

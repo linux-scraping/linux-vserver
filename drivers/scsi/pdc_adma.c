@@ -131,7 +131,7 @@ static void adma_host_stop(struct ata_host_set *host_set);
 static void adma_port_stop(struct ata_port *ap);
 static void adma_phy_reset(struct ata_port *ap);
 static void adma_qc_prep(struct ata_queued_cmd *qc);
-static int adma_qc_issue(struct ata_queued_cmd *qc);
+static unsigned int adma_qc_issue(struct ata_queued_cmd *qc);
 static int adma_check_atapi_dma(struct ata_queued_cmd *qc);
 static void adma_bmdma_stop(struct ata_queued_cmd *qc);
 static u8 adma_bmdma_status(struct ata_port *ap);
@@ -147,7 +147,6 @@ static struct scsi_host_template adma_ata_sht = {
 	.can_queue		= ATA_DEF_QUEUE,
 	.this_id		= ATA_SHT_THIS_ID,
 	.sg_tablesize		= LIBATA_MAX_PRD,
-	.max_sectors		= ATA_MAX_SECTORS,
 	.cmd_per_lun		= ATA_SHT_CMD_PER_LUN,
 	.emulated		= ATA_SHT_EMULATED,
 	.use_clustering		= ENABLE_CLUSTERING,
@@ -322,7 +321,7 @@ static int adma_fill_sg(struct ata_queued_cmd *qc)
 			= (pFLAGS & pEND) ? 0 : cpu_to_le32(pp->pkt_dma + i + 4);
 		i += 4;
 
-		VPRINTK("PRD[%u] = (0x%lX, 0x%X)\n", nelem,
+		VPRINTK("PRD[%u] = (0x%lX, 0x%X)\n", i/4,
 					(unsigned long)addr, len);
 	}
 	return i;
@@ -419,7 +418,7 @@ static inline void adma_packet_start(struct ata_queued_cmd *qc)
 	writew(aPIOMD4 | aGO, chan + ADMA_CONTROL);
 }
 
-static int adma_qc_issue(struct ata_queued_cmd *qc)
+static unsigned int adma_qc_issue(struct ata_queued_cmd *qc)
 {
 	struct adma_port_priv *pp = qc->ap->private_data;
 
@@ -464,14 +463,12 @@ static inline unsigned int adma_intr_pkt(struct ata_host_set *host_set)
 			continue;
 		qc = ata_qc_from_tag(ap, ap->active_tag);
 		if (qc && (!(qc->tf.ctl & ATA_NIEN))) {
-			unsigned int err_mask = 0;
-
 			if ((status & (aPERR | aPSD | aUIRQ)))
-				err_mask = AC_ERR_OTHER;
+				qc->err_mask |= AC_ERR_OTHER;
 			else if (pp->pkt[0] != cDONE)
-				err_mask = AC_ERR_OTHER;
+				qc->err_mask |= AC_ERR_OTHER;
 
-			ata_qc_complete(qc, err_mask);
+			ata_qc_complete(qc);
 		}
 	}
 	return handled;
@@ -501,7 +498,8 @@ static inline unsigned int adma_intr_mmio(struct ata_host_set *host_set)
 		
 				/* complete taskfile transaction */
 				pp->state = adma_state_idle;
-				ata_qc_complete(qc, ac_err_mask(status));
+				qc->err_mask |= ac_err_mask(status);
+				ata_qc_complete(qc);
 				handled = 1;
 			}
 		}

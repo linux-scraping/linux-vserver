@@ -575,8 +575,11 @@ static void __init quirk_amd_8131_ioapic(struct pci_dev *dev)
 { 
         unsigned char revid, tmp;
         
-	pci_msi_quirk = 1;
-	printk(KERN_WARNING "PCI: MSI quirk detected. pci_msi_quirk set.\n");
+	if (dev->subordinate) {
+		printk(KERN_WARNING "PCI: MSI quirk detected. "
+		       "PCI_BUS_FLAGS_NO_MSI set for subordinate bus.\n");
+		dev->subordinate->bus_flags |= PCI_BUS_FLAGS_NO_MSI;
+	}
 
         if (nr_ioapics == 0) 
                 return;
@@ -934,6 +937,12 @@ static void __init asus_hides_smbus_hostbridge(struct pci_dev *dev)
 			case 0x12bd: /* HP D530 */
 				asus_hides_smbus = 1;
 			}
+		if (dev->device == PCI_DEVICE_ID_INTEL_82915GM_HB) {
+			switch (dev->subsystem_device) {
+			case 0x099c: /* HP Compaq nx6110 */
+				asus_hides_smbus = 1;
+			}
+		}
 	} else if (unlikely(dev->subsystem_vendor == PCI_VENDOR_ID_TOSHIBA)) {
 		if (dev->device == PCI_DEVICE_ID_INTEL_82855GM_HB)
 			switch(dev->subsystem_device) {
@@ -1068,6 +1077,37 @@ DECLARE_PCI_FIXUP_HEADER(PCI_VENDOR_ID_SI,	PCI_DEVICE_ID_SI_651,		quirk_sis_96x_
 DECLARE_PCI_FIXUP_HEADER(PCI_VENDOR_ID_SI,	PCI_DEVICE_ID_SI_735,		quirk_sis_96x_compatible );
 
 DECLARE_PCI_FIXUP_HEADER(PCI_VENDOR_ID_SI,	PCI_DEVICE_ID_SI_503,		quirk_sis_503 );
+/*
+ * On ASUS A8V and A8V Deluxe boards, the onboard AC97 audio controller
+ * and MC97 modem controller are disabled when a second PCI soundcard is
+ * present. This patch, tweaking the VT8237 ISA bridge, enables them.
+ * -- bjd
+ */
+static void __init asus_hides_ac97_lpc(struct pci_dev *dev)
+{
+	u8 val;
+	int asus_hides_ac97 = 0;
+
+	if (likely(dev->subsystem_vendor == PCI_VENDOR_ID_ASUSTEK)) {
+		if (dev->device == PCI_DEVICE_ID_VIA_8237)
+			asus_hides_ac97 = 1;
+	}
+
+	if (!asus_hides_ac97)
+		return;
+
+	pci_read_config_byte(dev, 0x50, &val);
+	if (val & 0xc0) {
+		pci_write_config_byte(dev, 0x50, val & (~0xc0));
+		pci_read_config_byte(dev, 0x50, &val);
+		if (val & 0xc0)
+			printk(KERN_INFO "PCI: onboard AC97/MC97 devices continue to play 'hide and seek'! 0x%x\n", val);
+		else
+			printk(KERN_INFO "PCI: enabled onboard AC97/MC97 devices\n");
+	}
+}
+DECLARE_PCI_FIXUP_HEADER(PCI_VENDOR_ID_VIA,	PCI_DEVICE_ID_VIA_8237, asus_hides_ac97_lpc );
+
 
 DECLARE_PCI_FIXUP_HEADER(PCI_VENDOR_ID_SI,	PCI_DEVICE_ID_SI_961,		quirk_sis_96x_smbus );
 DECLARE_PCI_FIXUP_HEADER(PCI_VENDOR_ID_SI,	PCI_DEVICE_ID_SI_962,		quirk_sis_96x_smbus );
@@ -1098,6 +1138,23 @@ static void __init quirk_alder_ioapic(struct pci_dev *pdev)
 DECLARE_PCI_FIXUP_HEADER(PCI_VENDOR_ID_INTEL,	PCI_DEVICE_ID_INTEL_EESSC,	quirk_alder_ioapic );
 #endif
 
+enum ide_combined_type { COMBINED = 0, IDE = 1, LIBATA = 2 };
+/* Defaults to combined */
+static enum ide_combined_type combined_mode;
+
+static int __init combined_setup(char *str)
+{
+	if (!strncmp(str, "ide", 3))
+		combined_mode = IDE;
+	else if (!strncmp(str, "libata", 6))
+		combined_mode = LIBATA;
+	else /* "combined" or anything else defaults to old behavior */
+		combined_mode = COMBINED;
+
+	return 1;
+}
+__setup("combined_mode=", combined_setup);
+
 #ifdef CONFIG_SCSI_SATA_INTEL_COMBINED
 static void __devinit quirk_intel_ide_combined(struct pci_dev *pdev)
 {
@@ -1125,6 +1182,9 @@ static void __devinit quirk_intel_ide_combined(struct pci_dev *pdev)
 	case 0x27c4:
 		ich = 7;
 		break;
+	case 0x2828:	/* ICH8M */
+		ich = 8;
+		break;
 	default:
 		/* we do not handle this PCI device */
 		return;
@@ -1144,7 +1204,7 @@ static void __devinit quirk_intel_ide_combined(struct pci_dev *pdev)
 		else
 			return;			/* not in combined mode */
 	} else {
-		WARN_ON((ich != 6) && (ich != 7));
+		WARN_ON((ich != 6) && (ich != 7) && (ich != 8));
 		tmp &= 0x3;  /* interesting bits 1:0 */
 		if (tmp & (1 << 0))
 			comb = (1 << 2);	/* PATA port 0, SATA port 1 */
@@ -1163,6 +1223,19 @@ static void __devinit quirk_intel_ide_combined(struct pci_dev *pdev)
 	/* if SATA port is in native mode, we're ok. */
 	if (prog & comb)
 		return;
+
+	/* Don't reserve any so the IDE driver can get them (but only if
+	 * combined_mode=ide).
+	 */
+	if (combined_mode == IDE)
+		return;
+
+	/* Grab them both for libata if combined_mode=libata. */
+	if (combined_mode == LIBATA) {
+		request_region(0x1f0, 8, "libata");	/* port 0 */
+		request_region(0x170, 8, "libata");	/* port 1 */
+		return;
+	}
 
 	/* SATA port is in legacy mode.  Reserve port so that
 	 * IDE driver does not attempt to use it.  If request_region
@@ -1208,6 +1281,33 @@ DECLARE_PCI_FIXUP_EARLY(PCI_VENDOR_ID_INTEL,	PCI_DEVICE_ID_INTEL_PXH_0,	quirk_pc
 DECLARE_PCI_FIXUP_EARLY(PCI_VENDOR_ID_INTEL,	PCI_DEVICE_ID_INTEL_PXH_1,	quirk_pcie_pxh);
 DECLARE_PCI_FIXUP_EARLY(PCI_VENDOR_ID_INTEL,	PCI_DEVICE_ID_INTEL_PXHV,	quirk_pcie_pxh);
 
+
+/*
+ * Fixup the cardbus bridges on the IBM Dock II docking station
+ */
+static void __devinit quirk_ibm_dock2_cardbus(struct pci_dev *dev)
+{
+	u32 val;
+
+	/*
+	 * tie the 2 interrupt pins to INTA, and configure the
+	 * multifunction routing register to handle this.
+	 */
+	if ((dev->subsystem_vendor == PCI_VENDOR_ID_IBM) &&
+		(dev->subsystem_device == 0x0148)) {
+		printk(KERN_INFO "PCI: Found IBM Dock II Cardbus Bridge "
+			"applying quirk\n");
+		pci_read_config_dword(dev, 0x8c, &val);
+		val = ((val & 0xffffff00) | 0x1002);
+		pci_write_config_dword(dev, 0x8c, val);
+		pci_read_config_dword(dev, 0x80, &val);
+		val = ((val & 0x00ffff00) | 0x2864c077);
+		pci_write_config_dword(dev, 0x80, val);
+	}
+}
+
+DECLARE_PCI_FIXUP_HEADER(PCI_VENDOR_ID_TI, PCI_DEVICE_ID_TI_1420,
+				quirk_ibm_dock2_cardbus);
 
 static void __devinit quirk_netmos(struct pci_dev *dev)
 {
@@ -1311,6 +1411,32 @@ void pci_fixup_device(enum pci_fixup_pass pass, struct pci_dev *dev)
 	}
 	pci_do_fixups(dev, start, end);
 }
+
+/* Enable 1k I/O space granularity on the Intel P64H2 */
+static void __devinit quirk_p64h2_1k_io(struct pci_dev *dev)
+{
+	u16 en1k;
+	u8 io_base_lo, io_limit_lo;
+	unsigned long base, limit;
+	struct resource *res = dev->resource + PCI_BRIDGE_RESOURCES;
+
+	pci_read_config_word(dev, 0x40, &en1k);
+
+	if (en1k & 0x200) {
+		printk(KERN_INFO "PCI: Enable I/O Space to 1 KB Granularity\n");
+
+		pci_read_config_byte(dev, PCI_IO_BASE, &io_base_lo);
+		pci_read_config_byte(dev, PCI_IO_LIMIT, &io_limit_lo);
+		base = (io_base_lo & (PCI_IO_RANGE_MASK | 0x0c)) << 8;
+		limit = (io_limit_lo & (PCI_IO_RANGE_MASK | 0x0c)) << 8;
+
+		if (base <= limit) {
+			res->start = base;
+			res->end = limit + 0x3ff;
+		}
+	}
+}
+DECLARE_PCI_FIXUP_HEADER(PCI_VENDOR_ID_INTEL,	0x1460,		quirk_p64h2_1k_io);
 
 EXPORT_SYMBOL(pcie_mch_quirk);
 #ifdef CONFIG_HOTPLUG

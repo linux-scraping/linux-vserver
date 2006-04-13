@@ -11,6 +11,8 @@
 
 #include <linux/module.h>
 #include <linux/string.h>
+#include <linux/netfilter.h>
+#include <linux/netfilter_ipv6.h>
 #include <net/dsfield.h>
 #include <net/inet_ecn.h>
 #include <net/ip.h>
@@ -26,19 +28,18 @@ static inline void ipip6_ecn_decapsulate(struct sk_buff *skb)
 		IP6_ECN_set_ce(inner_iph);
 }
 
-int xfrm6_rcv_spi(struct sk_buff **pskb, unsigned int *nhoffp, u32 spi)
+int xfrm6_rcv_spi(struct sk_buff *skb, u32 spi)
 {
-	struct sk_buff *skb = *pskb;
 	int err;
 	u32 seq;
-	struct sec_decap_state xfrm_vec[XFRM_MAX_DEPTH];
+	struct xfrm_state *xfrm_vec[XFRM_MAX_DEPTH];
 	struct xfrm_state *x;
 	int xfrm_nr = 0;
 	int decaps = 0;
 	int nexthdr;
 	unsigned int nhoff;
 
-	nhoff = *nhoffp;
+	nhoff = IP6CB(skb)->nhoff;
 	nexthdr = skb->nh.raw[nhoff];
 
 	seq = 0;
@@ -64,7 +65,7 @@ int xfrm6_rcv_spi(struct sk_buff **pskb, unsigned int *nhoffp, u32 spi)
 		if (xfrm_state_check_expire(x))
 			goto drop_unlock;
 
-		nexthdr = x->type->input(x, &(xfrm_vec[xfrm_nr].decap), skb);
+		nexthdr = x->type->input(x, skb);
 		if (nexthdr <= 0)
 			goto drop_unlock;
 
@@ -78,7 +79,7 @@ int xfrm6_rcv_spi(struct sk_buff **pskb, unsigned int *nhoffp, u32 spi)
 
 		spin_unlock(&x->lock);
 
-		xfrm_vec[xfrm_nr++].xvec = x;
+		xfrm_vec[xfrm_nr++] = x;
 
 		if (x->props.mode) { /* XXX */
 			if (nexthdr != IPPROTO_IPV6)
@@ -117,9 +118,12 @@ int xfrm6_rcv_spi(struct sk_buff **pskb, unsigned int *nhoffp, u32 spi)
 	if (xfrm_nr + skb->sp->len > XFRM_MAX_DEPTH)
 		goto drop;
 
-	memcpy(skb->sp->x+skb->sp->len, xfrm_vec, xfrm_nr*sizeof(struct sec_decap_state));
+	memcpy(skb->sp->xvec + skb->sp->len, xfrm_vec,
+	       xfrm_nr * sizeof(xfrm_vec[0]));
 	skb->sp->len += xfrm_nr;
 	skb->ip_summed = CHECKSUM_NONE;
+
+	nf_reset(skb);
 
 	if (decaps) {
 		if (!(skb->dev->flags&IFF_LOOPBACK)) {
@@ -129,7 +133,16 @@ int xfrm6_rcv_spi(struct sk_buff **pskb, unsigned int *nhoffp, u32 spi)
 		netif_rx(skb);
 		return -1;
 	} else {
+#ifdef CONFIG_NETFILTER
+		skb->nh.ipv6h->payload_len = htons(skb->len);
+		__skb_push(skb, skb->data - skb->nh.raw);
+
+		NF_HOOK(PF_INET6, NF_IP6_PRE_ROUTING, skb, skb->dev, NULL,
+		        ip6_rcv_finish);
+		return -1;
+#else
 		return 1;
+#endif
 	}
 
 drop_unlock:
@@ -137,14 +150,14 @@ drop_unlock:
 	xfrm_state_put(x);
 drop:
 	while (--xfrm_nr >= 0)
-		xfrm_state_put(xfrm_vec[xfrm_nr].xvec);
+		xfrm_state_put(xfrm_vec[xfrm_nr]);
 	kfree_skb(skb);
 	return -1;
 }
 
 EXPORT_SYMBOL(xfrm6_rcv_spi);
 
-int xfrm6_rcv(struct sk_buff **pskb, unsigned int *nhoffp)
+int xfrm6_rcv(struct sk_buff **pskb)
 {
-	return xfrm6_rcv_spi(pskb, nhoffp, 0);
+	return xfrm6_rcv_spi(*pskb, 0);
 }

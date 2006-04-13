@@ -152,7 +152,7 @@ typedef enum {
 
 #define DM_FLAGS_NDELAY		0x001	/* return EAGAIN after dm_pending() */
 #define DM_FLAGS_UNWANTED	0x002	/* event not in fsys dm_eventset_t */
-#define DM_FLAGS_ISEM		0x004	/* thread holds i_sem */
+#define DM_FLAGS_IMUX		0x004	/* thread holds i_mutex */
 #define DM_FLAGS_IALLOCSEM_RD	0x010	/* thread holds i_alloc_sem rd */
 #define DM_FLAGS_IALLOCSEM_WR	0x020	/* thread holds i_alloc_sem wr */
 
@@ -161,21 +161,21 @@ typedef enum {
  */
 #if LINUX_VERSION_CODE > KERNEL_VERSION(2,6,0)
 #define DM_SEM_FLAG_RD(ioflags) (((ioflags) & IO_ISDIRECT) ? \
-			      DM_FLAGS_ISEM : 0)
-#define DM_SEM_FLAG_WR	(DM_FLAGS_IALLOCSEM_WR | DM_FLAGS_ISEM)
+			      DM_FLAGS_IMUX : 0)
+#define DM_SEM_FLAG_WR	(DM_FLAGS_IALLOCSEM_WR | DM_FLAGS_IMUX)
 #endif
 
 #if (LINUX_VERSION_CODE < KERNEL_VERSION(2,6,0)) && \
     (LINUX_VERSION_CODE >= KERNEL_VERSION(2,4,22))
 #define DM_SEM_FLAG_RD(ioflags) (((ioflags) & IO_ISDIRECT) ? \
-			      DM_FLAGS_IALLOCSEM_RD : DM_FLAGS_ISEM)
-#define DM_SEM_FLAG_WR	(DM_FLAGS_IALLOCSEM_WR | DM_FLAGS_ISEM)
+			      DM_FLAGS_IALLOCSEM_RD : DM_FLAGS_IMUX)
+#define DM_SEM_FLAG_WR	(DM_FLAGS_IALLOCSEM_WR | DM_FLAGS_IMUX)
 #endif
 
 #if LINUX_VERSION_CODE <= KERNEL_VERSION(2,4,21)
 #define DM_SEM_FLAG_RD(ioflags) (((ioflags) & IO_ISDIRECT) ? \
-			      0 : DM_FLAGS_ISEM)
-#define DM_SEM_FLAG_WR	(DM_FLAGS_ISEM)
+			      0 : DM_FLAGS_IMUX)
+#define DM_SEM_FLAG_WR	(DM_FLAGS_IMUX)
 #endif
 
 
@@ -190,15 +190,5 @@ typedef enum {
 
 
 extern struct bhv_vfsops xfs_dmops;
-
-#ifdef CONFIG_XFS_DMAPI
-void xfs_dm_init(struct file_system_type *);
-void xfs_dm_exit(struct file_system_type *);
-#define XFS_DM_INIT(fstype)	xfs_dm_init(fstype)
-#define XFS_DM_EXIT(fstype)	xfs_dm_exit(fstype)
-#else
-#define XFS_DM_INIT(fstype)
-#define XFS_DM_EXIT(fstype)
-#endif
 
 #endif  /* __XFS_DMAPI_H__ */

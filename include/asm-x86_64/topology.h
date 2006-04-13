@@ -39,7 +39,6 @@ extern int __node_distance(int, int);
 	.max_interval		= 32,			\
 	.busy_factor		= 32,			\
 	.imbalance_pct		= 125,			\
-	.cache_hot_time		= (10*1000000),		\
 	.cache_nice_tries	= 2,			\
 	.busy_idx		= 3,			\
 	.idle_idx		= 2,			\
@@ -58,6 +57,17 @@ extern int __node_distance(int, int);
 
 #endif
 
+#ifdef CONFIG_SMP
+#define topology_physical_package_id(cpu)				\
+	(phys_proc_id[cpu] == BAD_APICID ? -1 : phys_proc_id[cpu])
+#define topology_core_id(cpu)						\
+	(cpu_core_id[cpu] == BAD_APICID ? 0 : cpu_core_id[cpu])
+#define topology_core_siblings(cpu)		(cpu_core_map[cpu])
+#define topology_thread_siblings(cpu)		(cpu_sibling_map[cpu])
+#endif
+
 #include <asm-generic/topology.h>
+
+extern cpumask_t cpu_coregroup_map(int cpu);
 
 #endif

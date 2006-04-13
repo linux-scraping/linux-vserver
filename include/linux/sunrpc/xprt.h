@@ -79,21 +79,19 @@ struct rpc_rqst {
 	void (*rq_release_snd_buf)(struct rpc_rqst *); /* release rq_enc_pages */
 	struct list_head	rq_list;
 
+	__u32 *			rq_buffer;	/* XDR encode buffer */
+	size_t			rq_bufsize;
+
 	struct xdr_buf		rq_private_buf;		/* The receive buffer
 							 * used in the softirq.
 							 */
 	unsigned long		rq_majortimeo;	/* major timeout alarm */
 	unsigned long		rq_timeout;	/* Current timeout value */
 	unsigned int		rq_retries;	/* # of retries */
-	/*
-	 * For authentication (e.g. auth_des)
-	 */
-	u32			rq_creddata[2];
 	
 	/*
 	 * Partial send handling
 	 */
-	
 	u32			rq_bytes_sent;	/* Bytes we have sent */
 
 	unsigned long		rq_xtime;	/* when transmitted */
@@ -106,13 +104,17 @@ struct rpc_xprt_ops {
 	void		(*set_buffer_size)(struct rpc_xprt *xprt, size_t sndsize, size_t rcvsize);
 	int		(*reserve_xprt)(struct rpc_task *task);
 	void		(*release_xprt)(struct rpc_xprt *xprt, struct rpc_task *task);
+	void		(*set_port)(struct rpc_xprt *xprt, unsigned short port);
 	void		(*connect)(struct rpc_task *task);
+	void *		(*buf_alloc)(struct rpc_task *task, size_t size);
+	void		(*buf_free)(struct rpc_task *task);
 	int		(*send_request)(struct rpc_task *task);
 	void		(*set_retrans_timeout)(struct rpc_task *task);
 	void		(*timer)(struct rpc_task *task);
 	void		(*release_request)(struct rpc_task *task);
 	void		(*close)(struct rpc_xprt *xprt);
 	void		(*destroy)(struct rpc_xprt *xprt);
+	void		(*print_stats)(struct rpc_xprt *xprt, struct seq_file *seq);
 };
 
 struct rpc_xprt {
@@ -186,6 +188,18 @@ struct rpc_xprt {
 
 	struct list_head	recv;
 
+	struct {
+		unsigned long		bind_count,	/* total number of binds */
+					connect_count,	/* total number of connects */
+					connect_start,	/* connect start timestamp */
+					connect_time,	/* jiffies waiting for connect */
+					sends,		/* how many complete requests */
+					recvs,		/* how many complete requests */
+					bad_xids;	/* lookup_rqst didn't find XID */
+
+		unsigned long long	req_u,		/* average requests on the wire */
+					bklog_u;	/* backlog queue utilization */
+	} stat;
 
 	void			(*old_data_ready)(struct sock *, int);
 	void			(*old_state_change)(struct sock *);
@@ -253,6 +267,7 @@ int			xs_setup_tcp(struct rpc_xprt *xprt, struct rpc_timeout *to);
 #define XPRT_LOCKED		(0)
 #define XPRT_CONNECTED		(1)
 #define XPRT_CONNECTING		(2)
+#define XPRT_CLOSE_WAIT		(3)
 
 static inline void xprt_set_connected(struct rpc_xprt *xprt)
 {

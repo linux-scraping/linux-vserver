@@ -9,6 +9,7 @@
  */
 #ifndef __ASM_POWERPC_FLOPPY_H
 #define __ASM_POWERPC_FLOPPY_H
+#ifdef __KERNEL__
 
 #include <linux/config.h>
 #include <asm/machdep.h>
@@ -34,6 +35,7 @@
 #ifdef CONFIG_PCI
 
 #include <linux/pci.h>
+#include <asm/ppc-pci.h>	/* for ppc64_isabridge_dev */
 
 #define fd_dma_setup(addr,size,mode,io) powerpc_fd_dma_setup(addr,size,mode,io)
 
@@ -51,12 +53,12 @@ static __inline__ int powerpc_fd_dma_setup(char *addr, unsigned long size,
 	if (bus_addr 
 	    && (addr != prev_addr || size != prev_size || dir != prev_dir)) {
 		/* different from last time -- unmap prev */
-		pci_unmap_single(NULL, bus_addr, prev_size, prev_dir);
+		pci_unmap_single(ppc64_isabridge_dev, bus_addr, prev_size, prev_dir);
 		bus_addr = 0;
 	}
 
 	if (!bus_addr)	/* need to map it */
-		bus_addr = pci_map_single(NULL, addr, size, dir);
+		bus_addr = pci_map_single(ppc64_isabridge_dev, addr, size, dir);
 
 	/* remember this one as prev */
 	prev_addr = addr;
@@ -102,4 +104,5 @@ static int FDC2 = -1;
 
 #define EXTRA_FLOPPY_PARAMS
 
+#endif /* __KERNEL__ */
 #endif /* __ASM_POWERPC_FLOPPY_H */

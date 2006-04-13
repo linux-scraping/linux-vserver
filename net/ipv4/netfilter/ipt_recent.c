@@ -24,10 +24,10 @@
 #define HASH_LOG 9
 
 /* Defaults, these can be overridden on the module command-line. */
-static int ip_list_tot = 100;
-static int ip_pkt_list_tot = 20;
-static int ip_list_hash_size = 0;
-static int ip_list_perms = 0644;
+static unsigned int ip_list_tot = 100;
+static unsigned int ip_pkt_list_tot = 20;
+static unsigned int ip_list_hash_size = 0;
+static unsigned int ip_list_perms = 0644;
 #ifdef DEBUG
 static int debug = 1;
 #endif
@@ -38,13 +38,13 @@ KERN_INFO RECENT_NAME " " RECENT_VER ": Stephen Frost <sfrost@snowman.net>.  htt
 MODULE_AUTHOR("Stephen Frost <sfrost@snowman.net>");
 MODULE_DESCRIPTION("IP tables recently seen matching module " RECENT_VER);
 MODULE_LICENSE("GPL");
-module_param(ip_list_tot, int, 0400);
-module_param(ip_pkt_list_tot, int, 0400);
-module_param(ip_list_hash_size, int, 0400);
-module_param(ip_list_perms, int, 0400);
+module_param(ip_list_tot, uint, 0400);
+module_param(ip_pkt_list_tot, uint, 0400);
+module_param(ip_list_hash_size, uint, 0400);
+module_param(ip_list_perms, uint, 0400);
 #ifdef DEBUG
-module_param(debug, int, 0600);
-MODULE_PARM_DESC(debug,"debugging level, defaults to 1");
+module_param(debug, bool, 0600);
+MODULE_PARM_DESC(debug,"enable debugging output");
 #endif
 MODULE_PARM_DESC(ip_list_tot,"number of IPs to remember per list");
 MODULE_PARM_DESC(ip_pkt_list_tot,"number of packets per IP to remember");
@@ -102,8 +102,10 @@ static int
 match(const struct sk_buff *skb,
       const struct net_device *in,
       const struct net_device *out,
+      const struct xt_match *match,
       const void *matchinfo,
       int offset,
+      unsigned int protoff,
       int *hotdrop);
 
 /* Function to hash a given address into the hash table of table_size size */
@@ -317,7 +319,7 @@ static int ip_recent_ctrl(struct file *file, const char __user *input, unsigned 
 	skb->nh.iph->daddr = 0;
 	/* Clear ttl since we have no way of knowing it */
 	skb->nh.iph->ttl = 0;
-	match(skb,NULL,NULL,info,0,NULL);
+	match(skb,NULL,NULL,NULL,info,0,0,NULL);
 
 	kfree(skb->nh.iph);
 out_free_skb:
@@ -355,8 +357,10 @@ static int
 match(const struct sk_buff *skb,
       const struct net_device *in,
       const struct net_device *out,
+      const struct xt_match *match,
       const void *matchinfo,
       int offset,
+      unsigned int protoff,
       int *hotdrop)
 {
 	int pkt_count, hits_found, ans;
@@ -654,7 +658,8 @@ match(const struct sk_buff *skb,
  */
 static int
 checkentry(const char *tablename,
-           const struct ipt_ip *ip,
+           const void *ip,
+	   const struct xt_match *match,
            void *matchinfo,
            unsigned int matchsize,
            unsigned int hook_mask)
@@ -667,8 +672,6 @@ checkentry(const char *tablename,
 #ifdef DEBUG
 	if(debug) printk(KERN_INFO RECENT_NAME ": checkentry() entered.\n");
 #endif
-
-	if (matchsize != IPT_ALIGN(sizeof(struct ipt_recent_info))) return 0;
 
 	/* seconds and hit_count only valid for CHECK/UPDATE */
 	if(info->check_set & IPT_RECENT_SET) { flag++; if(info->seconds || info->hit_count) return 0; }
@@ -869,7 +872,7 @@ checkentry(const char *tablename,
  * up its memory.
  */
 static void
-destroy(void *matchinfo, unsigned int matchsize)
+destroy(const struct xt_match *match, void *matchinfo, unsigned int matchsize)
 {
 	const struct ipt_recent_info *info = matchinfo;
 	struct recent_ip_tables *curr_table, *last_table;
@@ -949,16 +952,17 @@ destroy(void *matchinfo, unsigned int matchsize)
 /* This is the structure we pass to ipt_register to register our
  * module with iptables.
  */
-static struct ipt_match recent_match = { 
-  .name = "recent", 
-  .match = &match, 
-  .checkentry = &checkentry, 
-  .destroy = &destroy, 
-  .me = THIS_MODULE
+static struct ipt_match recent_match = {
+	.name		= "recent",
+	.match		= match,
+	.matchsize	= sizeof(struct ipt_recent_info),
+	.checkentry	= checkentry,
+	.destroy	= destroy,
+	.me		= THIS_MODULE
 };
 
 /* Kernel module initialization. */
-static int __init init(void)
+static int __init ipt_recent_init(void)
 {
 	int err, count;
 
@@ -991,7 +995,7 @@ static int __init init(void)
 }
 
 /* Kernel module destruction. */
-static void __exit fini(void)
+static void __exit ipt_recent_fini(void)
 {
 	ipt_unregister_match(&recent_match);
 
@@ -999,5 +1003,5 @@ static void __exit fini(void)
 }
 
 /* Register our module with the kernel. */
-module_init(init);
-module_exit(fini);
+module_init(ipt_recent_init);
+module_exit(ipt_recent_fini);

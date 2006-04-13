@@ -91,6 +91,7 @@
 #include <linux/mii.h>
 #include <linux/ip.h>
 #include <linux/tcp.h>
+#include <linux/mutex.h>
 
 #include <net/checksum.h>
 
@@ -191,12 +192,15 @@
 static char version[] __devinitdata =
 	DRV_MODULE_NAME ".c:v" DRV_MODULE_VERSION " (" DRV_MODULE_RELDATE ")\n";
 
+static int cassini_debug = -1;	/* -1 == use CAS_DEF_MSG_ENABLE as value */
+static int link_mode;
+
 MODULE_AUTHOR("Adrian Sun (asun@darksunrising.com)");
 MODULE_DESCRIPTION("Sun Cassini(+) ethernet driver");
 MODULE_LICENSE("GPL");
-MODULE_PARM(cassini_debug, "i");
+module_param(cassini_debug, int, 0);
 MODULE_PARM_DESC(cassini_debug, "Cassini bitmapped debugging message enable value");
-MODULE_PARM(link_mode, "i");
+module_param(link_mode, int, 0);
 MODULE_PARM_DESC(link_mode, "default link mode");
 
 /*
@@ -208,7 +212,7 @@ MODULE_PARM_DESC(link_mode, "default link mode");
  * Value in seconds, for user input.
  */
 static int linkdown_timeout = DEFAULT_LINKDOWN_TIMEOUT;
-MODULE_PARM(linkdown_timeout, "i");
+module_param(linkdown_timeout, int, 0);
 MODULE_PARM_DESC(linkdown_timeout,
 "min reset interval in sec. for PCS linkdown issue; disabled if not positive");
 
@@ -220,8 +224,6 @@ MODULE_PARM_DESC(linkdown_timeout,
 static int link_transition_timeout;
 
 
-static int cassini_debug = -1;	/* -1 == use CAS_DEF_MSG_ENABLE as value */
-static int link_mode;
 
 static u16 link_modes[] __devinitdata = {
 	BMCR_ANENABLE,			 /* 0 : autoneg */
@@ -333,6 +335,30 @@ static inline void cas_mask_intr(struct cas *cp)
 
 	for (i = 0; i < N_RX_COMP_RINGS; i++)
 		cas_disable_irq(cp, i);
+}
+
+static inline void cas_buffer_init(cas_page_t *cp)
+{
+	struct page *page = cp->buffer;
+	atomic_set((atomic_t *)&page->lru.next, 1);
+}
+
+static inline int cas_buffer_count(cas_page_t *cp)
+{
+	struct page *page = cp->buffer;
+	return atomic_read((atomic_t *)&page->lru.next);
+}
+
+static inline void cas_buffer_inc(cas_page_t *cp)
+{
+	struct page *page = cp->buffer;
+	atomic_inc((atomic_t *)&page->lru.next);
+}
+
+static inline void cas_buffer_dec(cas_page_t *cp)
+{
+	struct page *page = cp->buffer;
+	atomic_dec((atomic_t *)&page->lru.next);
 }
 
 static void cas_enable_irq(struct cas *cp, const int ring)
@@ -472,6 +498,7 @@ static int cas_page_free(struct cas *cp, cas_page_t *page)
 {
 	pci_unmap_page(cp->pdev, page->dma_addr, cp->page_size, 
 		       PCI_DMA_FROMDEVICE);
+	cas_buffer_dec(page);
 	__free_pages(page->buffer, cp->page_order);
 	kfree(page);
 	return 0;
@@ -501,6 +528,7 @@ static cas_page_t *cas_page_alloc(struct cas *cp, const gfp_t flags)
 	page->buffer = alloc_pages(flags, cp->page_order);
 	if (!page->buffer)
 		goto page_err;
+	cas_buffer_init(page);
 	page->dma_addr = pci_map_page(cp->pdev, page->buffer, 0,
 				      cp->page_size, PCI_DMA_FROMDEVICE);
 	return page;
@@ -579,7 +607,7 @@ static void cas_spare_recover(struct cas *cp, const gfp_t flags)
 	list_for_each_safe(elem, tmp, &list) {
 		cas_page_t *page = list_entry(elem, cas_page_t, list);
 
-		if (page_count(page->buffer) > 1) 
+		if (cas_buffer_count(page) > 1)
 			continue;
 
 		list_del(elem);
@@ -1347,7 +1375,7 @@ static inline cas_page_t *cas_page_spare(struct cas *cp, const int index)
 	cas_page_t *page = cp->rx_pages[1][index];
 	cas_page_t *new;
 
-	if (page_count(page->buffer) == 1)
+	if (cas_buffer_count(page) == 1)
 		return page;
 
 	new = cas_page_dequeue(cp);
@@ -1367,7 +1395,7 @@ static cas_page_t *cas_page_swap(struct cas *cp, const int ring,
 	cas_page_t **page1 = cp->rx_pages[1];
 
 	/* swap if buffer is in use */
-	if (page_count(page0[index]->buffer) > 1) {
+	if (cas_buffer_count(page0[index]) > 1) {
 		cas_page_t *new = cas_page_spare(cp, index);
 		if (new) {
 			page1[index] = page0[index];
@@ -1925,8 +1953,8 @@ static void cas_tx(struct net_device *dev, struct cas *cp,
 	u64 compwb = le64_to_cpu(cp->init_block->tx_compwb);
 #endif
 	if (netif_msg_intr(cp))
-		printk(KERN_DEBUG "%s: tx interrupt, status: 0x%x, %lx\n",
-			cp->dev->name, status, compwb);
+		printk(KERN_DEBUG "%s: tx interrupt, status: 0x%x, %llx\n",
+			cp->dev->name, status, (unsigned long long)compwb);
 	/* process all the rings */
 	for (ring = 0; ring < N_TX_RINGS; ring++) {
 #ifdef USE_TX_COMPWB
@@ -2039,6 +2067,7 @@ static int cas_rx_process_pkt(struct cas *cp, struct cas_rx_comp *rxc,
 		skb->len      += hlen - swivel;
 
 		get_page(page->buffer);
+		cas_buffer_inc(page);
 		frag->page = page->buffer;
 		frag->page_offset = off;
 		frag->size = hlen - swivel;
@@ -2063,6 +2092,7 @@ static int cas_rx_process_pkt(struct cas *cp, struct cas_rx_comp *rxc,
 			frag++;
 
 			get_page(page->buffer);
+			cas_buffer_inc(page);
 			frag->page = page->buffer;
 			frag->page_offset = 0;
 			frag->size = hlen;
@@ -2225,7 +2255,7 @@ static int cas_post_rxds_ringN(struct cas *cp, int ring, int num)
 	released = 0;
 	while (entry != last) {
 		/* make a new buffer if it's still in use */
-		if (page_count(page[entry]->buffer) > 1) {
+		if (cas_buffer_count(page[entry]) > 1) {
 			cas_page_t *new = cas_page_dequeue(cp);
 			if (!new) {
 				/* let the timer know that we need to 
@@ -3864,7 +3894,7 @@ static void cas_reset(struct cas *cp, int blkflag)
 	spin_unlock(&cp->stat_lock[N_TX_RINGS]);
 }
 
-/* Shut down the chip, must be called with pm_sem held.  */
+/* Shut down the chip, must be called with pm_mutex held.  */
 static void cas_shutdown(struct cas *cp)
 {
 	unsigned long flags;
@@ -4283,11 +4313,11 @@ static int cas_open(struct net_device *dev)
 	int hw_was_up, err;
 	unsigned long flags;
 
-	down(&cp->pm_sem);
+	mutex_lock(&cp->pm_mutex);
 
 	hw_was_up = cp->hw_running;
 
-	/* The power-management semaphore protects the hw_running
+	/* The power-management mutex protects the hw_running
 	 * etc. state so it is safe to do this bit without cp->lock
 	 */
 	if (!cp->hw_running) {
@@ -4336,7 +4366,7 @@ static int cas_open(struct net_device *dev)
 	cas_unlock_all_restore(cp, flags);
 
 	netif_start_queue(dev);
-	up(&cp->pm_sem);
+	mutex_unlock(&cp->pm_mutex);
 	return 0;
 
 err_spare:
@@ -4344,7 +4374,7 @@ err_spare:
 	cas_free_rxds(cp);
 err_tx_tiny:
 	cas_tx_tiny_free(cp);
-	up(&cp->pm_sem);
+	mutex_unlock(&cp->pm_mutex);
 	return err;
 }
 
@@ -4354,7 +4384,7 @@ static int cas_close(struct net_device *dev)
 	struct cas *cp = netdev_priv(dev);
 
 	/* Make sure we don't get distracted by suspend/resume */
-	down(&cp->pm_sem);
+	mutex_lock(&cp->pm_mutex);
 
 	netif_stop_queue(dev);
 
@@ -4371,7 +4401,7 @@ static int cas_close(struct net_device *dev)
 	cas_spare_free(cp);
 	cas_free_rxds(cp);
 	cas_tx_tiny_free(cp);
-	up(&cp->pm_sem);
+	mutex_unlock(&cp->pm_mutex);
 	return 0;
 }
 
@@ -4806,10 +4836,10 @@ static int cas_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
 	unsigned long flags;
 	int rc = -EOPNOTSUPP;
 	
-	/* Hold the PM semaphore while doing ioctl's or we may collide
+	/* Hold the PM mutex while doing ioctl's or we may collide
 	 * with open/close and power management and oops.
 	 */
-	down(&cp->pm_sem);
+	mutex_lock(&cp->pm_mutex);
 	switch (cmd) {
 	case SIOCGMIIPHY:		/* Get address of MII PHY in use. */
 		data->phy_id = cp->phy_addr;
@@ -4839,7 +4869,7 @@ static int cas_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
 		break;
 	};
 
-	up(&cp->pm_sem);
+	mutex_unlock(&cp->pm_mutex);
 	return rc;
 }
 
@@ -4966,7 +4996,7 @@ static int __devinit cas_init_one(struct pci_dev *pdev,
 		spin_lock_init(&cp->tx_lock[i]);
 	}
 	spin_lock_init(&cp->stat_lock[N_TX_RINGS]);
-	init_MUTEX(&cp->pm_sem);
+	mutex_init(&cp->pm_mutex);
 
 	init_timer(&cp->link_timer);
 	cp->link_timer.function = cas_link_timer;
@@ -5088,10 +5118,10 @@ err_out_free_consistent:
 			    cp->init_block, cp->block_dvma);
 
 err_out_iounmap:
-	down(&cp->pm_sem);
+	mutex_lock(&cp->pm_mutex);
 	if (cp->hw_running)
 		cas_shutdown(cp);
-	up(&cp->pm_sem);
+	mutex_unlock(&cp->pm_mutex);
 
 	iounmap(cp->regs);
 
@@ -5124,11 +5154,11 @@ static void __devexit cas_remove_one(struct pci_dev *pdev)
 	cp = netdev_priv(dev);
 	unregister_netdev(dev);
 
-	down(&cp->pm_sem);
+	mutex_lock(&cp->pm_mutex);
 	flush_scheduled_work();
 	if (cp->hw_running)
 		cas_shutdown(cp);
-	up(&cp->pm_sem);
+	mutex_unlock(&cp->pm_mutex);
 
 #if 1
 	if (cp->orig_cacheline_size) {
@@ -5155,10 +5185,7 @@ static int cas_suspend(struct pci_dev *pdev, pm_message_t state)
 	struct cas *cp = netdev_priv(dev);
 	unsigned long flags;
 
-	/* We hold the PM semaphore during entire driver
-	 * sleep time
-	 */
-	down(&cp->pm_sem);
+	mutex_lock(&cp->pm_mutex);
 	
 	/* If the driver is opened, we stop the DMA */
 	if (cp->opened) {
@@ -5178,6 +5205,7 @@ static int cas_suspend(struct pci_dev *pdev, pm_message_t state)
 
 	if (cp->hw_running)
 		cas_shutdown(cp);
+	mutex_unlock(&cp->pm_mutex);
 
 	return 0;
 }
@@ -5189,6 +5217,7 @@ static int cas_resume(struct pci_dev *pdev)
 
 	printk(KERN_INFO "%s: resuming\n", dev->name);
 
+	mutex_lock(&cp->pm_mutex);
 	cas_hard_reset(cp);
 	if (cp->opened) {
 		unsigned long flags;
@@ -5201,7 +5230,7 @@ static int cas_resume(struct pci_dev *pdev)
 
 		netif_device_attach(dev);
 	}
-	up(&cp->pm_sem);
+	mutex_unlock(&cp->pm_mutex);
 	return 0;
 }
 #endif /* CONFIG_PM */

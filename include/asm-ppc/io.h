@@ -27,6 +27,8 @@
 
 #if defined(CONFIG_4xx)
 #include <asm/ibm4xx.h>
+#elif defined(CONFIG_PPC_MPC52xx)
+#include <asm/mpc52xx.h>
 #elif defined(CONFIG_8xx)
 #include <asm/mpc8xx.h>
 #elif defined(CONFIG_8260)
@@ -572,5 +574,12 @@ extern void pci_iounmap(struct pci_dev *dev, void __iomem *);
  * Convert a virtual cached pointer to an uncached pointer
  */
 #define xlate_dev_kmem_ptr(p)	p
+
+/* access ports */
+#define setbits32(_addr, _v) out_be32((_addr), in_be32(_addr) |  (_v))
+#define clrbits32(_addr, _v) out_be32((_addr), in_be32(_addr) & ~(_v))
+
+#define setbits16(_addr, _v) out_be16((_addr), in_be16(_addr) |  (_v))
+#define clrbits16(_addr, _v) out_be16((_addr), in_be16(_addr) & ~(_v))
 
 #endif /* __KERNEL__ */

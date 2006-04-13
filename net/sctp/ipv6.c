@@ -180,8 +180,7 @@ static int sctp_v6_xmit(struct sk_buff *skb, struct sctp_transport *transport,
 	}
 
 	SCTP_DEBUG_PRINTK("%s: skb:%p, len:%d, "
-			  "src:%04x:%04x:%04x:%04x:%04x:%04x:%04x:%04x "
-			  "dst:%04x:%04x:%04x:%04x:%04x:%04x:%04x:%04x\n",
+			  "src:" NIP6_FMT " dst:" NIP6_FMT "\n",
 			  __FUNCTION__, skb, skb->len,
 			  NIP6(fl.fl6_src), NIP6(fl.fl6_dst));
 
@@ -206,13 +205,13 @@ static struct dst_entry *sctp_v6_get_dst(struct sctp_association *asoc,
 		fl.oif = daddr->v6.sin6_scope_id;
 	
 
-	SCTP_DEBUG_PRINTK("%s: DST=%04x:%04x:%04x:%04x:%04x:%04x:%04x:%04x ",
+	SCTP_DEBUG_PRINTK("%s: DST=" NIP6_FMT " ",
 			  __FUNCTION__, NIP6(fl.fl6_dst));
 
 	if (saddr) {
 		ipv6_addr_copy(&fl.fl6_src, &saddr->v6.sin6_addr);
 		SCTP_DEBUG_PRINTK(
-			"SRC=%04x:%04x:%04x:%04x:%04x:%04x:%04x:%04x - ",
+			"SRC=" NIP6_FMT " - ",
 			NIP6(fl.fl6_src));
 	}
 
@@ -221,8 +220,7 @@ static struct dst_entry *sctp_v6_get_dst(struct sctp_association *asoc,
 		struct rt6_info *rt;
 		rt = (struct rt6_info *)dst;
 		SCTP_DEBUG_PRINTK(
-			"rt6_dst:%04x:%04x:%04x:%04x:%04x:%04x:%04x:%04x "
-			"rt6_src:%04x:%04x:%04x:%04x:%04x:%04x:%04x:%04x\n",
+			"rt6_dst:" NIP6_FMT " rt6_src:" NIP6_FMT "\n",
 			NIP6(rt->rt6i_dst.addr), NIP6(rt->rt6i_src.addr));
 	} else {
 		SCTP_DEBUG_PRINTK("NO ROUTE\n");
@@ -271,13 +269,12 @@ static void sctp_v6_get_saddr(struct sctp_association *asoc,
 	__u8 bmatchlen;
 
 	SCTP_DEBUG_PRINTK("%s: asoc:%p dst:%p "
-			  "daddr:%04x:%04x:%04x:%04x:%04x:%04x:%04x:%04x ",
+			  "daddr:" NIP6_FMT " ",
 			  __FUNCTION__, asoc, dst, NIP6(daddr->v6.sin6_addr));
 
 	if (!asoc) {
 		ipv6_get_saddr(dst, &daddr->v6.sin6_addr,&saddr->v6.sin6_addr);
-		SCTP_DEBUG_PRINTK("saddr from ipv6_get_saddr: "
-				  "%04x:%04x:%04x:%04x:%04x:%04x:%04x:%04x\n",
+		SCTP_DEBUG_PRINTK("saddr from ipv6_get_saddr: " NIP6_FMT "\n",
 				  NIP6(saddr->v6.sin6_addr));
 		return;
 	}
@@ -305,13 +302,11 @@ static void sctp_v6_get_saddr(struct sctp_association *asoc,
 
 	if (baddr) {
 		memcpy(saddr, baddr, sizeof(union sctp_addr));
-		SCTP_DEBUG_PRINTK("saddr: "
-				  "%04x:%04x:%04x:%04x:%04x:%04x:%04x:%04x\n",
+		SCTP_DEBUG_PRINTK("saddr: " NIP6_FMT "\n",
 				  NIP6(saddr->v6.sin6_addr));
 	} else {
 		printk(KERN_ERR "%s: asoc:%p Could not find a valid source "
-		       "address for the "
-		       "dest:%04x:%04x:%04x:%04x:%04x:%04x:%04x:%04x\n",
+		       "address for the dest:" NIP6_FMT "\n",
 		       __FUNCTION__, asoc, NIP6(daddr->v6.sin6_addr));
 	}
 
@@ -675,8 +670,7 @@ static int sctp_v6_is_ce(const struct sk_buff *skb)
 /* Dump the v6 addr to the seq file. */
 static void sctp_v6_seq_dump_addr(struct seq_file *seq, union sctp_addr *addr)
 {
-	seq_printf(seq, "%04x:%04x:%04x:%04x:%04x:%04x:%04x:%04x ",
-		   NIP6(addr->v6.sin6_addr));
+	seq_printf(seq, NIP6_FMT " ", NIP6(addr->v6.sin6_addr));
 }
 
 /* Initialize a PF_INET6 socket msg_name. */
@@ -866,24 +860,28 @@ static int sctp_inet6_supported_addrs(const struct sctp_sock *opt,
 	return 2;
 }
 
-static struct proto_ops inet6_seqpacket_ops = {
-	.family     = PF_INET6,
-	.owner      = THIS_MODULE,
-	.release    = inet6_release,
-	.bind       = inet6_bind,
-	.connect    = inet_dgram_connect,
-	.socketpair = sock_no_socketpair,
-	.accept     = inet_accept,
-	.getname    = inet6_getname,
-	.poll       = sctp_poll,
-	.ioctl      = inet6_ioctl,
-	.listen     = sctp_inet_listen,
-	.shutdown   = inet_shutdown,
-	.setsockopt = sock_common_setsockopt,
-	.getsockopt = sock_common_getsockopt,
-	.sendmsg    = inet_sendmsg,
-	.recvmsg    = sock_common_recvmsg,
-	.mmap       = sock_no_mmap,
+static const struct proto_ops inet6_seqpacket_ops = {
+	.family		   = PF_INET6,
+	.owner		   = THIS_MODULE,
+	.release	   = inet6_release,
+	.bind		   = inet6_bind,
+	.connect	   = inet_dgram_connect,
+	.socketpair	   = sock_no_socketpair,
+	.accept		   = inet_accept,
+	.getname	   = inet6_getname,
+	.poll		   = sctp_poll,
+	.ioctl		   = inet6_ioctl,
+	.listen		   = sctp_inet_listen,
+	.shutdown	   = inet_shutdown,
+	.setsockopt	   = sock_common_setsockopt,
+	.getsockopt	   = sock_common_getsockopt,
+	.sendmsg	   = inet_sendmsg,
+	.recvmsg	   = sock_common_recvmsg,
+	.mmap		   = sock_no_mmap,
+#ifdef CONFIG_COMPAT
+	.compat_setsockopt = compat_sock_common_setsockopt,
+	.compat_getsockopt = compat_sock_common_getsockopt,
+#endif
 };
 
 static struct inet_protosw sctpv6_seqpacket_protosw = {
@@ -905,7 +903,7 @@ static struct inet_protosw sctpv6_stream_protosw = {
 	.flags         = SCTP_PROTOSW_FLAG,
 };
 
-static int sctp6_rcv(struct sk_buff **pskb, unsigned int *nhoffp)
+static int sctp6_rcv(struct sk_buff **pskb)
 {
 	return sctp_rcv(*pskb) ? -1 : 0;
 }
@@ -917,31 +915,35 @@ static struct inet6_protocol sctpv6_protocol = {
 };
 
 static struct sctp_af sctp_ipv6_specific = {
-	.sctp_xmit       = sctp_v6_xmit,
-	.setsockopt      = ipv6_setsockopt,
-	.getsockopt      = ipv6_getsockopt,
-	.get_dst	 = sctp_v6_get_dst,
-	.get_saddr	 = sctp_v6_get_saddr,
-	.copy_addrlist   = sctp_v6_copy_addrlist,
-	.from_skb        = sctp_v6_from_skb,
-	.from_sk         = sctp_v6_from_sk,
-	.to_sk_saddr     = sctp_v6_to_sk_saddr,
-	.to_sk_daddr     = sctp_v6_to_sk_daddr,
-	.from_addr_param = sctp_v6_from_addr_param,
-	.to_addr_param   = sctp_v6_to_addr_param,
-	.dst_saddr       = sctp_v6_dst_saddr,
-	.cmp_addr        = sctp_v6_cmp_addr,
-	.scope           = sctp_v6_scope,
-	.addr_valid      = sctp_v6_addr_valid,
-	.inaddr_any      = sctp_v6_inaddr_any,
-	.is_any          = sctp_v6_is_any,
-	.available       = sctp_v6_available,
-	.skb_iif         = sctp_v6_skb_iif,
-	.is_ce           = sctp_v6_is_ce,
-	.seq_dump_addr   = sctp_v6_seq_dump_addr,
-	.net_header_len  = sizeof(struct ipv6hdr),
-	.sockaddr_len    = sizeof(struct sockaddr_in6),
-	.sa_family       = AF_INET6,
+	.sa_family	   = AF_INET6,
+	.sctp_xmit	   = sctp_v6_xmit,
+	.setsockopt	   = ipv6_setsockopt,
+	.getsockopt	   = ipv6_getsockopt,
+	.get_dst	   = sctp_v6_get_dst,
+	.get_saddr	   = sctp_v6_get_saddr,
+	.copy_addrlist	   = sctp_v6_copy_addrlist,
+	.from_skb	   = sctp_v6_from_skb,
+	.from_sk	   = sctp_v6_from_sk,
+	.to_sk_saddr	   = sctp_v6_to_sk_saddr,
+	.to_sk_daddr	   = sctp_v6_to_sk_daddr,
+	.from_addr_param   = sctp_v6_from_addr_param,
+	.to_addr_param	   = sctp_v6_to_addr_param,
+	.dst_saddr	   = sctp_v6_dst_saddr,
+	.cmp_addr	   = sctp_v6_cmp_addr,
+	.scope		   = sctp_v6_scope,
+	.addr_valid	   = sctp_v6_addr_valid,
+	.inaddr_any	   = sctp_v6_inaddr_any,
+	.is_any		   = sctp_v6_is_any,
+	.available	   = sctp_v6_available,
+	.skb_iif	   = sctp_v6_skb_iif,
+	.is_ce		   = sctp_v6_is_ce,
+	.seq_dump_addr	   = sctp_v6_seq_dump_addr,
+	.net_header_len	   = sizeof(struct ipv6hdr),
+	.sockaddr_len	   = sizeof(struct sockaddr_in6),
+#ifdef CONFIG_COMPAT
+	.compat_setsockopt = compat_ipv6_setsockopt,
+	.compat_getsockopt = compat_ipv6_getsockopt,
+#endif
 };
 
 static struct sctp_pf sctp_pf_inet6_specific = {

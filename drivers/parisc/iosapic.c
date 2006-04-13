@@ -873,27 +873,23 @@ void *iosapic_register(unsigned long hpa)
 		return NULL;
 	}
 
-	isi = (struct iosapic_info *)kmalloc(sizeof(struct iosapic_info), GFP_KERNEL);
+	isi = (struct iosapic_info *)kzalloc(sizeof(struct iosapic_info), GFP_KERNEL);
 	if (!isi) {
 		BUG();
 		return NULL;
 	}
 
-	memset(isi, 0, sizeof(struct iosapic_info));
-
-	isi->addr = ioremap(hpa, 4096);
+	isi->addr = ioremap_nocache(hpa, 4096);
 	isi->isi_hpa = hpa;
 	isi->isi_version = iosapic_rd_version(isi);
 	isi->isi_num_vectors = IOSAPIC_IRDT_MAX_ENTRY(isi->isi_version) + 1;
 
 	vip = isi->isi_vector = (struct vector_info *)
-		kmalloc(sizeof(struct vector_info) * isi->isi_num_vectors, GFP_KERNEL);
+		kzalloc(sizeof(struct vector_info) * isi->isi_num_vectors, GFP_KERNEL);
 	if (vip == NULL) {
 		kfree(isi);
 		return NULL;
 	}
-
-	memset(vip, 0, sizeof(struct vector_info) * isi->isi_num_vectors);
 
 	for (cnt=0; cnt < isi->isi_num_vectors; cnt++, vip++) {
 		vip->irqline = (unsigned char) cnt;

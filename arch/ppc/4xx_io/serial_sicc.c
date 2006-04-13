@@ -1,6 +1,4 @@
 /*
- *  arch/ppc/4xx_io/serial_sicc.c
- *
  *  Driver for IBM STB3xxx SICC serial port
  *
  *  Based on drivers/char/serial_amba.c, by ARM Ltd.
@@ -47,6 +45,7 @@
 #include <linux/mm.h>
 #include <linux/slab.h>
 #include <linux/init.h>
+#include <linux/capability.h>
 #include <linux/circ_buf.h>
 #include <linux/serial.h>
 #include <linux/console.h>
@@ -214,7 +213,6 @@ static struct tty_driver *siccnormal_driver;
  * memory if large numbers of serial ports are open.
  */
 static u_char *tmp_buf;
-static DECLARE_MUTEX(tmp_buf_sem);
 
 #define HIGH_BITS_OFFSET    ((sizeof(long)-sizeof(int))*8)
 
@@ -1639,9 +1637,8 @@ static struct SICC_info *siccuart_get(int line)
     state->count++;
     if (state->info)
         return state->info;
-    info = kmalloc(sizeof(struct SICC_info), GFP_KERNEL);
+    info = kzalloc(sizeof(struct SICC_info), GFP_KERNEL);
     if (info) {
-        memset(info, 0, sizeof(struct SICC_info));
         init_waitqueue_head(&info->open_wait);
         init_waitqueue_head(&info->close_wait);
         init_waitqueue_head(&info->delta_msr_wait);

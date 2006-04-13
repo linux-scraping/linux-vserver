@@ -7,6 +7,7 @@
 
 #include <linux/config.h>
 #include <linux/compiler.h>
+#include <asm/alternative.h>
 
 /*
  * These have to be done with inline assembly: that way the bit-setting
@@ -15,12 +16,6 @@
  *
  * bit 0 is the LSB of addr; bit 32 is the LSB of (addr+1).
  */
-
-#ifdef CONFIG_SMP
-#define LOCK_PREFIX "lock ; "
-#else
-#define LOCK_PREFIX ""
-#endif
 
 #define ADDR (*(volatile long *) addr)
 
@@ -43,7 +38,7 @@ static inline void set_bit(int nr, volatile unsigned long * addr)
 {
 	__asm__ __volatile__( LOCK_PREFIX
 		"btsl %1,%0"
-		:"=m" (ADDR)
+		:"+m" (ADDR)
 		:"Ir" (nr));
 }
 
@@ -60,7 +55,7 @@ static inline void __set_bit(int nr, volatile unsigned long * addr)
 {
 	__asm__(
 		"btsl %1,%0"
-		:"=m" (ADDR)
+		:"+m" (ADDR)
 		:"Ir" (nr));
 }
 
@@ -78,7 +73,7 @@ static inline void clear_bit(int nr, volatile unsigned long * addr)
 {
 	__asm__ __volatile__( LOCK_PREFIX
 		"btrl %1,%0"
-		:"=m" (ADDR)
+		:"+m" (ADDR)
 		:"Ir" (nr));
 }
 
@@ -86,7 +81,7 @@ static inline void __clear_bit(int nr, volatile unsigned long * addr)
 {
 	__asm__ __volatile__(
 		"btrl %1,%0"
-		:"=m" (ADDR)
+		:"+m" (ADDR)
 		:"Ir" (nr));
 }
 #define smp_mb__before_clear_bit()	barrier()
@@ -105,7 +100,7 @@ static inline void __change_bit(int nr, volatile unsigned long * addr)
 {
 	__asm__ __volatile__(
 		"btcl %1,%0"
-		:"=m" (ADDR)
+		:"+m" (ADDR)
 		:"Ir" (nr));
 }
 
@@ -123,7 +118,7 @@ static inline void change_bit(int nr, volatile unsigned long * addr)
 {
 	__asm__ __volatile__( LOCK_PREFIX
 		"btcl %1,%0"
-		:"=m" (ADDR)
+		:"+m" (ADDR)
 		:"Ir" (nr));
 }
 
@@ -142,7 +137,7 @@ static inline int test_and_set_bit(int nr, volatile unsigned long * addr)
 
 	__asm__ __volatile__( LOCK_PREFIX
 		"btsl %2,%1\n\tsbbl %0,%0"
-		:"=r" (oldbit),"=m" (ADDR)
+		:"=r" (oldbit),"+m" (ADDR)
 		:"Ir" (nr) : "memory");
 	return oldbit;
 }
@@ -162,7 +157,7 @@ static inline int __test_and_set_bit(int nr, volatile unsigned long * addr)
 
 	__asm__(
 		"btsl %2,%1\n\tsbbl %0,%0"
-		:"=r" (oldbit),"=m" (ADDR)
+		:"=r" (oldbit),"+m" (ADDR)
 		:"Ir" (nr));
 	return oldbit;
 }
@@ -182,7 +177,7 @@ static inline int test_and_clear_bit(int nr, volatile unsigned long * addr)
 
 	__asm__ __volatile__( LOCK_PREFIX
 		"btrl %2,%1\n\tsbbl %0,%0"
-		:"=r" (oldbit),"=m" (ADDR)
+		:"=r" (oldbit),"+m" (ADDR)
 		:"Ir" (nr) : "memory");
 	return oldbit;
 }
@@ -202,7 +197,7 @@ static inline int __test_and_clear_bit(int nr, volatile unsigned long *addr)
 
 	__asm__(
 		"btrl %2,%1\n\tsbbl %0,%0"
-		:"=r" (oldbit),"=m" (ADDR)
+		:"=r" (oldbit),"+m" (ADDR)
 		:"Ir" (nr));
 	return oldbit;
 }
@@ -214,7 +209,7 @@ static inline int __test_and_change_bit(int nr, volatile unsigned long *addr)
 
 	__asm__ __volatile__(
 		"btcl %2,%1\n\tsbbl %0,%0"
-		:"=r" (oldbit),"=m" (ADDR)
+		:"=r" (oldbit),"+m" (ADDR)
 		:"Ir" (nr) : "memory");
 	return oldbit;
 }
@@ -233,7 +228,7 @@ static inline int test_and_change_bit(int nr, volatile unsigned long* addr)
 
 	__asm__ __volatile__( LOCK_PREFIX
 		"btcl %2,%1\n\tsbbl %0,%0"
-		:"=r" (oldbit),"=m" (ADDR)
+		:"=r" (oldbit),"+m" (ADDR)
 		:"Ir" (nr) : "memory");
 	return oldbit;
 }
@@ -247,7 +242,7 @@ static inline int test_and_change_bit(int nr, volatile unsigned long* addr)
 static int test_bit(int nr, const volatile void * addr);
 #endif
 
-static inline int constant_test_bit(int nr, const volatile unsigned long *addr)
+static __always_inline int constant_test_bit(int nr, const volatile unsigned long *addr)
 {
 	return ((1UL << (nr & 31)) & (addr[nr >> 5])) != 0;
 }
@@ -332,9 +327,9 @@ static inline unsigned long __ffs(unsigned long word)
  * Returns the bit-number of the first set bit, not the number of the byte
  * containing a bit.
  */
-static inline int find_first_bit(const unsigned long *addr, unsigned size)
+static inline unsigned find_first_bit(const unsigned long *addr, unsigned size)
 {
-	int x = 0;
+	unsigned x = 0;
 
 	while (x < size) {
 		unsigned long val = *addr++;
@@ -367,32 +362,9 @@ static inline unsigned long ffz(unsigned long word)
 	return word;
 }
 
-/*
- * fls: find last bit set.
- */
-
-#define fls(x) generic_fls(x)
-
 #ifdef __KERNEL__
 
-/*
- * Every architecture must define this function. It's the fastest
- * way of searching a 140-bit bitmap where the first 100 bits are
- * unlikely to be set. It's guaranteed that at least one of the 140
- * bits is cleared.
- */
-static inline int sched_find_first_bit(const unsigned long *b)
-{
-	if (unlikely(b[0]))
-		return __ffs(b[0]);
-	if (unlikely(b[1]))
-		return __ffs(b[1]) + 32;
-	if (unlikely(b[2]))
-		return __ffs(b[2]) + 64;
-	if (b[3])
-		return __ffs(b[3]) + 96;
-	return __ffs(b[4]) + 128;
-}
+#include <asm-generic/bitops/sched.h>
 
 /**
  * ffs - find first bit set
@@ -414,41 +386,38 @@ static inline int ffs(int x)
 }
 
 /**
- * hweightN - returns the hamming weight of a N-bit word
- * @x: the word to weigh
+ * fls - find last bit set
+ * @x: the word to search
  *
- * The Hamming Weight of a number is the total number of bits set in it.
+ * This is defined the same way as ffs.
  */
+static inline int fls(int x)
+{
+	int r;
 
-#define hweight32(x) generic_hweight32(x)
-#define hweight16(x) generic_hweight16(x)
-#define hweight8(x) generic_hweight8(x)
+	__asm__("bsrl %1,%0\n\t"
+		"jnz 1f\n\t"
+		"movl $-1,%0\n"
+		"1:" : "=r" (r) : "rm" (x));
+	return r+1;
+}
+
+#include <asm-generic/bitops/hweight.h>
 
 #endif /* __KERNEL__ */
 
+#include <asm-generic/bitops/fls64.h>
+
 #ifdef __KERNEL__
 
-#define ext2_set_bit(nr,addr) \
-	__test_and_set_bit((nr),(unsigned long*)addr)
+#include <asm-generic/bitops/ext2-non-atomic.h>
+
 #define ext2_set_bit_atomic(lock,nr,addr) \
         test_and_set_bit((nr),(unsigned long*)addr)
-#define ext2_clear_bit(nr, addr) \
-	__test_and_clear_bit((nr),(unsigned long*)addr)
 #define ext2_clear_bit_atomic(lock,nr, addr) \
 	        test_and_clear_bit((nr),(unsigned long*)addr)
-#define ext2_test_bit(nr, addr)      test_bit((nr),(unsigned long*)addr)
-#define ext2_find_first_zero_bit(addr, size) \
-	find_first_zero_bit((unsigned long*)addr, size)
-#define ext2_find_next_zero_bit(addr, size, off) \
-	find_next_zero_bit((unsigned long*)addr, size, off)
 
-/* Bitmap functions for the minix filesystem.  */
-#define minix_test_and_set_bit(nr,addr) __test_and_set_bit(nr,(void*)addr)
-#define minix_set_bit(nr,addr) __set_bit(nr,(void*)addr)
-#define minix_test_and_clear_bit(nr,addr) __test_and_clear_bit(nr,(void*)addr)
-#define minix_test_bit(nr,addr) test_bit(nr,(void*)addr)
-#define minix_find_first_zero_bit(addr,size) \
-	find_first_zero_bit((void*)addr,size)
+#include <asm-generic/bitops/minix.h>
 
 #endif /* __KERNEL__ */
 

@@ -84,8 +84,7 @@ static int dsp_buffer_init(struct saa7134_dev *dev)
 {
 	int err;
 
-	if (!dev->dmasound.bufsize)
-		BUG();
+	BUG_ON(!dev->dmasound.bufsize);
 	videobuf_dma_init(&dev->dmasound.dma);
 	err = videobuf_dma_init_kernel(&dev->dmasound.dma, PCI_DMA_FROMDEVICE,
 				       (dev->dmasound.bufsize + PAGE_SIZE) >> PAGE_SHIFT);
@@ -96,8 +95,7 @@ static int dsp_buffer_init(struct saa7134_dev *dev)
 
 static int dsp_buffer_free(struct saa7134_dev *dev)
 {
-	if (!dev->dmasound.blksize)
-		BUG();
+	BUG_ON(!dev->dmasound.blksize);
 	videobuf_dma_free(&dev->dmasound.dma);
 	dev->dmasound.blocks  = 0;
 	dev->dmasound.blksize = 0;
@@ -126,7 +124,7 @@ static int dsp_rec_start(struct saa7134_dev *dev)
 	unsigned long flags;
 
 	/* prepare buffer */
-	if (0 != (err = videobuf_dma_pci_map(dev->pci,&dev->dmasound.dma)))
+	if (0 != (err = videobuf_pci_dma_map(dev->pci,&dev->dmasound.dma)))
 		return err;
 	if (0 != (err = saa7134_pgtable_alloc(dev->pci,&dev->dmasound.pt)))
 		goto fail1;
@@ -215,7 +213,7 @@ static int dsp_rec_start(struct saa7134_dev *dev)
  fail2:
 	saa7134_pgtable_free(dev->pci,&dev->dmasound.pt);
  fail1:
-	videobuf_dma_pci_unmap(dev->pci,&dev->dmasound.dma);
+	videobuf_pci_dma_unmap(dev->pci,&dev->dmasound.dma);
 	return err;
 }
 
@@ -233,7 +231,7 @@ static int dsp_rec_stop(struct saa7134_dev *dev)
 
 	/* unlock buffer */
 	saa7134_pgtable_free(dev->pci,&dev->dmasound.pt);
-	videobuf_dma_pci_unmap(dev->pci,&dev->dmasound.dma);
+	videobuf_pci_dma_unmap(dev->pci,&dev->dmasound.dma);
 	return 0;
 }
 
@@ -254,7 +252,7 @@ static int dsp_open(struct inode *inode, struct file *file)
 	if (NULL == dev)
 		return -ENODEV;
 
-	down(&dev->dmasound.lock);
+	mutex_lock(&dev->dmasound.lock);
 	err = -EBUSY;
 	if (dev->dmasound.users_dsp)
 		goto fail1;
@@ -270,13 +268,13 @@ static int dsp_open(struct inode *inode, struct file *file)
 	if (0 != err)
 		goto fail2;
 
-	up(&dev->dmasound.lock);
+	mutex_unlock(&dev->dmasound.lock);
 	return 0;
 
  fail2:
 	dev->dmasound.users_dsp--;
  fail1:
-	up(&dev->dmasound.lock);
+	mutex_unlock(&dev->dmasound.lock);
 	return err;
 }
 
@@ -284,13 +282,13 @@ static int dsp_release(struct inode *inode, struct file *file)
 {
 	struct saa7134_dev *dev = file->private_data;
 
-	down(&dev->dmasound.lock);
+	mutex_lock(&dev->dmasound.lock);
 	if (dev->dmasound.recording_on)
 		dsp_rec_stop(dev);
 	dsp_buffer_free(dev);
 	dev->dmasound.users_dsp--;
 	file->private_data = NULL;
-	up(&dev->dmasound.lock);
+	mutex_unlock(&dev->dmasound.lock);
 	return 0;
 }
 
@@ -304,7 +302,7 @@ static ssize_t dsp_read(struct file *file, char __user *buffer,
 	int err,ret = 0;
 
 	add_wait_queue(&dev->dmasound.wq, &wait);
-	down(&dev->dmasound.lock);
+	mutex_lock(&dev->dmasound.lock);
 	while (count > 0) {
 		/* wait for data if needed */
 		if (0 == dev->dmasound.read_count) {
@@ -328,12 +326,12 @@ static ssize_t dsp_read(struct file *file, char __user *buffer,
 					ret = -EAGAIN;
 				break;
 			}
-			up(&dev->dmasound.lock);
+			mutex_unlock(&dev->dmasound.lock);
 			set_current_state(TASK_INTERRUPTIBLE);
 			if (0 == dev->dmasound.read_count)
 				schedule();
 			set_current_state(TASK_RUNNING);
-			down(&dev->dmasound.lock);
+			mutex_lock(&dev->dmasound.lock);
 			if (signal_pending(current)) {
 				if (0 == ret)
 					ret = -EINTR;
@@ -362,7 +360,7 @@ static ssize_t dsp_read(struct file *file, char __user *buffer,
 		if (dev->dmasound.read_offset == dev->dmasound.bufsize)
 			dev->dmasound.read_offset = 0;
 	}
-	up(&dev->dmasound.lock);
+	mutex_unlock(&dev->dmasound.lock);
 	remove_wait_queue(&dev->dmasound.wq, &wait);
 	return ret;
 }
@@ -371,6 +369,42 @@ static ssize_t dsp_write(struct file *file, const char __user *buffer,
 			 size_t count, loff_t *ppos)
 {
 	return -EINVAL;
+}
+
+static const char *osspcm_ioctls[] = {
+	"RESET", "SYNC", "SPEED", "STEREO", "GETBLKSIZE", "SETFMT",
+	"CHANNELS", "?", "POST", "SUBDIVIDE", "SETFRAGMENT", "GETFMTS",
+	"GETOSPACE", "GETISPACE", "NONBLOCK", "GETCAPS", "GET/SETTRIGGER",
+	"GETIPTR", "GETOPTR", "MAPINBUF", "MAPOUTBUF", "SETSYNCRO",
+	"SETDUPLEX", "GETODELAY"
+};
+#define OSSPCM_IOCTLS ARRAY_SIZE(osspcm_ioctls)
+
+static void saa7134_oss_print_ioctl(char *name, unsigned int cmd)
+{
+	char *dir;
+
+	switch (_IOC_DIR(cmd)) {
+	case _IOC_NONE:              dir = "--"; break;
+	case _IOC_READ:              dir = "r-"; break;
+	case _IOC_WRITE:             dir = "-w"; break;
+	case _IOC_READ | _IOC_WRITE: dir = "rw"; break;
+	default:                     dir = "??"; break;
+	}
+	switch (_IOC_TYPE(cmd)) {
+	case 'P':
+		printk(KERN_DEBUG "%s: ioctl 0x%08x (oss dsp, %s, SNDCTL_DSP_%s)\n",
+		       name, cmd, dir, (_IOC_NR(cmd) < OSSPCM_IOCTLS) ?
+		       osspcm_ioctls[_IOC_NR(cmd)] : "???");
+		break;
+	case 'M':
+		printk(KERN_DEBUG "%s: ioctl 0x%08x (oss mixer, %s, #%d)\n",
+		       name, cmd, dir, _IOC_NR(cmd));
+		break;
+	default:
+		printk(KERN_DEBUG "%s: ioctl 0x%08x (???, %s, #%d)\n",
+		       name, cmd, dir, _IOC_NR(cmd));
+	}
 }
 
 static int dsp_ioctl(struct inode *inode, struct file *file,
@@ -382,7 +416,7 @@ static int dsp_ioctl(struct inode *inode, struct file *file,
 	int val = 0;
 
 	if (debug > 1)
-		saa7134_print_ioctl(dev->name,cmd);
+		saa7134_oss_print_ioctl(dev->name,cmd);
 	switch (cmd) {
 	case OSS_GETVERSION:
 		return put_user(SOUND_VERSION, p);
@@ -399,13 +433,13 @@ static int dsp_ioctl(struct inode *inode, struct file *file,
 	case SNDCTL_DSP_STEREO:
 		if (get_user(val, p))
 			return -EFAULT;
-		down(&dev->dmasound.lock);
+		mutex_lock(&dev->dmasound.lock);
 		dev->dmasound.channels = val ? 2 : 1;
 		if (dev->dmasound.recording_on) {
 			dsp_rec_stop(dev);
 			dsp_rec_start(dev);
 		}
-		up(&dev->dmasound.lock);
+		mutex_unlock(&dev->dmasound.lock);
 		return put_user(dev->dmasound.channels-1, p);
 
 	case SNDCTL_DSP_CHANNELS:
@@ -413,13 +447,13 @@ static int dsp_ioctl(struct inode *inode, struct file *file,
 			return -EFAULT;
 		if (val != 1 && val != 2)
 			return -EINVAL;
-		down(&dev->dmasound.lock);
+		mutex_lock(&dev->dmasound.lock);
 		dev->dmasound.channels = val;
 		if (dev->dmasound.recording_on) {
 			dsp_rec_stop(dev);
 			dsp_rec_start(dev);
 		}
-		up(&dev->dmasound.lock);
+		mutex_unlock(&dev->dmasound.lock);
 		/* fall through */
 	case SOUND_PCM_READ_CHANNELS:
 		return put_user(dev->dmasound.channels, p);
@@ -442,13 +476,13 @@ static int dsp_ioctl(struct inode *inode, struct file *file,
 		case AFMT_U16_BE:
 		case AFMT_S16_LE:
 		case AFMT_S16_BE:
-			down(&dev->dmasound.lock);
+			mutex_lock(&dev->dmasound.lock);
 			dev->dmasound.afmt = val;
 			if (dev->dmasound.recording_on) {
 				dsp_rec_stop(dev);
 				dsp_rec_start(dev);
 			}
-			up(&dev->dmasound.lock);
+			mutex_unlock(&dev->dmasound.lock);
 			return put_user(dev->dmasound.afmt, p);
 		default:
 			return -EINVAL;
@@ -473,10 +507,10 @@ static int dsp_ioctl(struct inode *inode, struct file *file,
 		return 0;
 
 	case SNDCTL_DSP_RESET:
-		down(&dev->dmasound.lock);
+		mutex_lock(&dev->dmasound.lock);
 		if (dev->dmasound.recording_on)
 			dsp_rec_stop(dev);
-		up(&dev->dmasound.lock);
+		mutex_unlock(&dev->dmasound.lock);
 		return 0;
 	case SNDCTL_DSP_GETBLKSIZE:
 		return put_user(dev->dmasound.blksize, p);
@@ -520,10 +554,10 @@ static unsigned int dsp_poll(struct file *file, struct poll_table_struct *wait)
 	poll_wait(file, &dev->dmasound.wq, wait);
 
 	if (0 == dev->dmasound.read_count) {
-		down(&dev->dmasound.lock);
+		mutex_lock(&dev->dmasound.lock);
 		if (!dev->dmasound.recording_on)
 			dsp_rec_start(dev);
-		up(&dev->dmasound.lock);
+		mutex_unlock(&dev->dmasound.lock);
 	} else
 		mask |= (POLLIN | POLLRDNORM);
 	return mask;
@@ -678,7 +712,7 @@ static int mixer_ioctl(struct inode *inode, struct file *file,
 	int __user *p = argp;
 
 	if (debug > 1)
-		saa7134_print_ioctl(dev->name,cmd);
+		saa7134_oss_print_ioctl(dev->name,cmd);
 	switch (cmd) {
 	case OSS_GETVERSION:
 		return put_user(SOUND_VERSION, p);
@@ -816,7 +850,7 @@ int saa7134_oss_init1(struct saa7134_dev *dev)
 		return -1;
 
 	/* general */
-	init_MUTEX(&dev->dmasound.lock);
+	mutex_init(&dev->dmasound.lock);
 	init_waitqueue_head(&dev->dmasound.wq);
 
 	switch (dev->pci->device) {

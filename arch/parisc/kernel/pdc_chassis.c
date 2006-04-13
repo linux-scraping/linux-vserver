@@ -5,9 +5,8 @@
  *    Copyright (C) 2002-2004 Thibaut VARENE <varenet@parisc-linux.org>
  *
  *    This program is free software; you can redistribute it and/or modify
- *    it under the terms of the GNU General Public License as published by
- *    the Free Software Foundation; either version 2 of the License, or
- *    (at your option) any later version.
+ *    it under the terms of the GNU General Public License, version 2, as
+ *    published by the Free Software Foundation.
  *
  *    This program is distributed in the hope that it will be useful,
  *    but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -30,6 +29,7 @@
 #include <linux/kernel.h>
 #include <linux/reboot.h>
 #include <linux/notifier.h>
+#include <linux/cache.h>
 
 #include <asm/pdc_chassis.h>
 #include <asm/processor.h>
@@ -38,8 +38,8 @@
 
 
 #ifdef CONFIG_PDC_CHASSIS
-static int pdc_chassis_old = 0;	
-static unsigned int pdc_chassis_enabled = 1;
+static int pdc_chassis_old __read_mostly = 0;	
+static unsigned int pdc_chassis_enabled __read_mostly = 1;
 
 
 /**
@@ -132,7 +132,7 @@ void __init parisc_pdc_chassis_init(void)
 {
 #ifdef CONFIG_PDC_CHASSIS
 	int handle = 0;
-	if (pdc_chassis_enabled) {
+	if (likely(pdc_chassis_enabled)) {
 		DPRINTK(KERN_DEBUG "%s: parisc_pdc_chassis_init()\n", __FILE__);
 
 		/* Let see if we have something to handle... */
@@ -142,14 +142,15 @@ void __init parisc_pdc_chassis_init(void)
 			printk(KERN_INFO "Enabling PDC_PAT chassis codes support.\n");
 			handle = 1;
 		}
-		else if (pdc_chassis_old) {
+		else if (unlikely(pdc_chassis_old)) {
 			printk(KERN_INFO "Enabling old style chassis LED panel support.\n");
 			handle = 1;
 		}
 
 		if (handle) {
 			/* initialize panic notifier chain */
-			notifier_chain_register(&panic_notifier_list, &pdc_chassis_panic_block);
+			atomic_notifier_chain_register(&panic_notifier_list,
+					&pdc_chassis_panic_block);
 
 			/* initialize reboot notifier chain */
 			register_reboot_notifier(&pdc_chassis_reboot_block);
@@ -178,7 +179,7 @@ int pdc_chassis_send_status(int message)
 	/* Maybe we should do that in an other way ? */
 	int retval = 0;
 #ifdef CONFIG_PDC_CHASSIS
-	if (pdc_chassis_enabled) {
+	if (likely(pdc_chassis_enabled)) {
 
 		DPRINTK(KERN_DEBUG "%s: pdc_chassis_send_status(%d)\n", __FILE__, message);
 
@@ -214,7 +215,7 @@ int pdc_chassis_send_status(int message)
 			}
 		} else retval = -1;
 #else
-		if (pdc_chassis_old) {
+		if (unlikely(pdc_chassis_old)) {
 			switch (message) {
 				case PDC_CHASSIS_DIRECT_BSTART:
 				case PDC_CHASSIS_DIRECT_BCOMPLETE:

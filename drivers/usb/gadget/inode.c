@@ -135,6 +135,7 @@ struct dev_data {
 					setup_out_ready : 1,
 					setup_out_error : 1,
 					setup_abort : 1;
+	unsigned			setup_wLength;
 
 	/* the rest is basically write-once */
 	struct usb_config_descriptor	*config, *hs_config;
@@ -169,10 +170,9 @@ static struct dev_data *dev_new (void)
 {
 	struct dev_data		*dev;
 
-	dev = kmalloc (sizeof *dev, GFP_KERNEL);
+	dev = kzalloc(sizeof(*dev), GFP_KERNEL);
 	if (!dev)
 		return NULL;
-	memset (dev, 0, sizeof *dev);
 	dev->state = STATE_DEV_DISABLED;
 	atomic_set (&dev->count, 1);
 	spin_lock_init (&dev->lock);
@@ -942,6 +942,7 @@ static int setup_req (struct usb_ep *ep, struct usb_request *req, u16 len)
 	}
 	req->complete = ep0_complete;
 	req->length = len;
+	req->zero = 0;
 	return 0;
 }
 
@@ -1161,10 +1162,13 @@ ep0_write (struct file *fd, const char __user *buf, size_t len, loff_t *ptr)
 				spin_unlock_irq (&dev->lock);
 				if (copy_from_user (dev->req->buf, buf, len))
 					retval = -EFAULT;
-				else
+				else {
+					if (len < dev->setup_wLength)
+						dev->req->zero = 1;
 					retval = usb_ep_queue (
 						dev->gadget->ep0, dev->req,
 						GFP_KERNEL);
+				}
 				if (retval < 0) {
 					spin_lock_irq (&dev->lock);
 					clean_req (dev->gadget->ep0, dev->req);
@@ -1483,6 +1487,7 @@ unrecognized:
 delegate:
 			dev->setup_in = (ctrl->bRequestType & USB_DIR_IN)
 						? 1 : 0;
+			dev->setup_wLength = w_length;
 			dev->setup_out_ready = 0;
 			dev->setup_out_error = 0;
 			value = 0;
@@ -1562,10 +1567,10 @@ restart:
 		spin_unlock_irq (&dev->lock);
 
 		/* break link to dcache */
-		down (&parent->i_sem);
+		mutex_lock (&parent->i_mutex);
 		d_delete (dentry);
 		dput (dentry);
-		up (&parent->i_sem);
+		mutex_unlock (&parent->i_mutex);
 
 		/* fds may still be open */
 		goto restart;
@@ -1576,7 +1581,7 @@ restart:
 
 static struct inode *
 gadgetfs_create_file (struct super_block *sb, char const *name,
-		void *data, struct file_operations *fops,
+		void *data, const struct file_operations *fops,
 		struct dentry **dentry_p);
 
 static int activate_ep_files (struct dev_data *dev)
@@ -1586,10 +1591,9 @@ static int activate_ep_files (struct dev_data *dev)
 	gadget_for_each_ep (ep, dev->gadget) {
 		struct ep_data	*data;
 
-		data = kmalloc (sizeof *data, GFP_KERNEL);
+		data = kzalloc(sizeof(*data), GFP_KERNEL);
 		if (!data)
 			goto enomem;
-		memset (data, 0, sizeof data);
 		data->state = STATE_EP_DISABLED;
 		init_MUTEX (&data->lock);
 		init_waitqueue_head (&data->wait);
@@ -1738,9 +1742,6 @@ static struct usb_gadget_driver gadgetfs_driver = {
 
 	.driver 	= {
 		.name		= (char *) shortname,
-		// .shutdown = ...
-		// .suspend = ...
-		// .resume = ...
 	},
 };
 
@@ -1954,7 +1955,7 @@ module_param (default_perm, uint, 0644);
 
 static struct inode *
 gadgetfs_make_inode (struct super_block *sb,
-		void *data, struct file_operations *fops,
+		void *data, const struct file_operations *fops,
 		int mode)
 {
 	struct inode *inode = new_inode (sb);
@@ -1978,7 +1979,7 @@ gadgetfs_make_inode (struct super_block *sb,
  */
 static struct inode *
 gadgetfs_create_file (struct super_block *sb, char const *name,
-		void *data, struct file_operations *fops,
+		void *data, const struct file_operations *fops,
 		struct dentry **dentry_p)
 {
 	struct dentry	*dentry;

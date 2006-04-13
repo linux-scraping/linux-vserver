@@ -95,7 +95,7 @@ extAlloc(struct inode *ip, s64 xlen, s64 pno, xad_t * xp, boolean_t abnr)
 	txBeginAnon(ip->i_sb);
 
 	/* Avoid race with jfs_commit_inode() */
-	down(&JFS_IP(ip)->commit_sem);
+	mutex_lock(&JFS_IP(ip)->commit_mutex);
 
 	/* validate extent length */
 	if (xlen > MAXXLEN)
@@ -137,21 +137,21 @@ extAlloc(struct inode *ip, s64 xlen, s64 pno, xad_t * xp, boolean_t abnr)
 	 */
 	nxlen = xlen;
 	if ((rc = extBalloc(ip, hint ? hint : INOHINT(ip), &nxlen, &nxaddr))) {
-		up(&JFS_IP(ip)->commit_sem);
+		mutex_unlock(&JFS_IP(ip)->commit_mutex);
 		return (rc);
 	}
 
 	/* Allocate blocks to quota. */
 	if (DQUOT_ALLOC_BLOCK(ip, nxlen)) {
 		dbFree(ip, nxaddr, (s64) nxlen);
-		up(&JFS_IP(ip)->commit_sem);
+		mutex_unlock(&JFS_IP(ip)->commit_mutex);
 		return -EDQUOT;
 	}
 	/* Allocate blocks to dlimit. */
 	if (DLIMIT_ALLOC_BLOCK(ip, nxlen)) {
 		DQUOT_FREE_BLOCK(ip, nxlen);
 		dbFree(ip, nxaddr, (s64) nxlen);
-		up(&JFS_IP(ip)->commit_sem);
+		mutex_unlock(&JFS_IP(ip)->commit_mutex);
 		return -ENOSPC;
 	}
 
@@ -174,7 +174,7 @@ extAlloc(struct inode *ip, s64 xlen, s64 pno, xad_t * xp, boolean_t abnr)
 		dbFree(ip, nxaddr, nxlen);
 		DLIMIT_FREE_BLOCK(ip, nxlen);
 		DQUOT_FREE_BLOCK(ip, nxlen);
-		up(&JFS_IP(ip)->commit_sem);
+		mutex_unlock(&JFS_IP(ip)->commit_mutex);
 		return (rc);
 	}
 
@@ -186,7 +186,7 @@ extAlloc(struct inode *ip, s64 xlen, s64 pno, xad_t * xp, boolean_t abnr)
 
 	mark_inode_dirty(ip);
 
-	up(&JFS_IP(ip)->commit_sem);
+	mutex_unlock(&JFS_IP(ip)->commit_mutex);
 	/*
 	 * COMMIT_SyncList flags an anonymous tlock on page that is on
 	 * sync list.
@@ -231,7 +231,7 @@ int extRealloc(struct inode *ip, s64 nxlen, xad_t * xp, boolean_t abnr)
 	/* This blocks if we are low on resources */
 	txBeginAnon(ip->i_sb);
 
-	down(&JFS_IP(ip)->commit_sem);
+	mutex_lock(&JFS_IP(ip)->commit_mutex);
 	/* validate extent length */
 	if (nxlen > MAXXLEN)
 		nxlen = MAXXLEN;
@@ -267,7 +267,7 @@ int extRealloc(struct inode *ip, s64 nxlen, xad_t * xp, boolean_t abnr)
 	/* Allocat blocks to quota. */
 	if (DQUOT_ALLOC_BLOCK(ip, nxlen)) {
 		dbFree(ip, nxaddr, (s64) nxlen);
-		up(&JFS_IP(ip)->commit_sem);
+		mutex_unlock(&JFS_IP(ip)->commit_mutex);
 		return -EDQUOT;
 	}
 	/* Allocate blocks to dlimit. */
@@ -356,7 +356,7 @@ int extRealloc(struct inode *ip, s64 nxlen, xad_t * xp, boolean_t abnr)
 
 	mark_inode_dirty(ip);
 exit:
-	up(&JFS_IP(ip)->commit_sem);
+	mutex_unlock(&JFS_IP(ip)->commit_mutex);
 	return (rc);
 }
 #endif			/* _NOTYET */
@@ -457,12 +457,12 @@ int extRecord(struct inode *ip, xad_t * xp)
 
 	txBeginAnon(ip->i_sb);
 
-	down(&JFS_IP(ip)->commit_sem);
+	mutex_lock(&JFS_IP(ip)->commit_mutex);
 
 	/* update the extent */
 	rc = xtUpdate(0, ip, xp);
 
-	up(&JFS_IP(ip)->commit_sem);
+	mutex_unlock(&JFS_IP(ip)->commit_mutex);
 	return rc;
 }
 

@@ -99,8 +99,15 @@ prom_query_input_device(void)
 	if (!strncmp(propb, "keyboard", 8))
 		return PROMDEV_ITTYA;
 
+	if (!strncmp (propb, "rsc", 3))
+		return PROMDEV_IRSC;
+
+	if (!strncmp (propb, "virtual-console", 3))
+		return PROMDEV_IVCONS;
+
 	if (strncmp (propb, "tty", 3) || !propb[3])
 		return PROMDEV_I_UNK;
+
 	switch (propb[3]) {
 		case 'a': return PROMDEV_ITTYA;
 		case 'b': return PROMDEV_ITTYB;
@@ -136,8 +143,15 @@ prom_query_output_device(void)
 	if (!strncmp(propb, "screen", 6))
 		return PROMDEV_OTTYA;
 
+	if (!strncmp (propb, "rsc", 3))
+		return PROMDEV_ORSC;
+
+	if (!strncmp (propb, "virtual-console", 3))
+		return PROMDEV_OVCONS;
+
 	if (strncmp (propb, "tty", 3) || !propb[3])
 		return PROMDEV_O_UNK;
+
 	switch (propb[3]) {
 		case 'a': return PROMDEV_OTTYA;
 		case 'b': return PROMDEV_OTTYB;

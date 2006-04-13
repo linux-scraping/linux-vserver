@@ -106,11 +106,12 @@ static struct
 	}
 };
 
-static struct ip6t_table packet_raw = { 
+static struct xt_table packet_raw = { 
 	.name = "raw", 
 	.valid_hooks = RAW_VALID_HOOKS, 
 	.lock = RW_LOCK_UNLOCKED, 
-	.me = THIS_MODULE
+	.me = THIS_MODULE,
+	.af = AF_INET6,
 };
 
 /* The work comes in here from netfilter.c. */
@@ -141,7 +142,7 @@ static struct nf_hook_ops ip6t_ops[] = {
 	},
 };
 
-static int __init init(void)
+static int __init ip6table_raw_init(void)
 {
 	int ret;
 
@@ -169,7 +170,7 @@ static int __init init(void)
 	return ret;
 }
 
-static void __exit fini(void)
+static void __exit ip6table_raw_fini(void)
 {
 	unsigned int i;
 
@@ -179,6 +180,6 @@ static void __exit fini(void)
 	ip6t_unregister_table(&packet_raw);
 }
 
-module_init(init);
-module_exit(fini);
+module_init(ip6table_raw_init);
+module_exit(ip6table_raw_fini);
 MODULE_LICENSE("GPL");

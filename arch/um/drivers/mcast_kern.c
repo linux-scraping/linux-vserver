@@ -26,7 +26,7 @@ struct mcast_init {
 	int ttl;
 };
 
-void mcast_init(struct net_device *dev, void *data)
+static void mcast_init(struct net_device *dev, void *data)
 {
 	struct uml_net_private *pri;
 	struct mcast_data *dpri;
@@ -40,7 +40,7 @@ void mcast_init(struct net_device *dev, void *data)
 	dpri->dev = dev;
 
 	printk("mcast backend ");
-	printk("multicast adddress: %s:%u, TTL:%u ",
+	printk("multicast address: %s:%u, TTL:%u ",
 	       dpri->addr, dpri->port, dpri->ttl);
 
 	printk("\n");
@@ -124,18 +124,7 @@ static struct transport mcast_transport = {
 static int register_mcast(void)
 {
 	register_transport(&mcast_transport);
-	return(1);
+	return 0;
 }
 
 __initcall(register_mcast);
-
-/*
- * Overrides for Emacs so that we follow Linus's tabbing style.
- * Emacs will notice this stuff at the end of the file and automatically
- * adjust the settings for this buffer only.  This must remain at the end
- * of the file.
- * ---------------------------------------------------------------------------
- * Local variables:
- * c-file-style: "linux"
- * End:
- */

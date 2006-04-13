@@ -3,11 +3,6 @@
  *
  * This file is intended for the Linux kernel/module. 
  *
- * CONTACTS
- *	E-mail regarding any portion of the Linux UDF file system should be
- *	directed to the development team mailing list (run by majordomo):
- *		linux_udf@hpesjro.fc.hp.com
- *
  * COPYRIGHT
  *	This file is distributed under the terms of the GNU General Public
  *	License (GPL). Copies of the GPL can be obtained from:
@@ -19,27 +14,6 @@
 #define _UDF_FS_I_H 1
 
 #ifdef __KERNEL__
-
-#ifndef _ECMA_167_H
-typedef struct
-{
-	__u32			logicalBlockNum;
-	__u16			partitionReferenceNum;
-} __attribute__ ((packed)) lb_addr;
-
-typedef struct
-{
-	__u32			extLength;
-	__u32			extPosition;
-} __attribute__ ((packed)) short_ad;
-
-typedef struct
-{
-	__u32			extLength;
-	lb_addr			extLocation;
-	__u8			impUse[6];
-} __attribute__ ((packed)) long_ad;
-#endif
 
 struct udf_inode_info
 {

@@ -78,8 +78,8 @@
 #include <linux/string.h>
 #include <linux/delay.h>
 #include <linux/init.h>
+#include <linux/interrupt.h>
 #include <linux/blkdev.h>
-#include <asm/irq.h>
 
 #include <scsi/scsi.h>
 #include <scsi/scsi_cmnd.h>
@@ -465,7 +465,7 @@ wd33c93_execute(struct Scsi_Host *instance)
 	 */
 
 	cmd = (struct scsi_cmnd *) hostdata->input_Q;
-	prev = 0;
+	prev = NULL;
 	while (cmd) {
 		if (!(hostdata->busy[cmd->device->id] & (1 << cmd->device->lun)))
 			break;
@@ -1569,7 +1569,7 @@ wd33c93_abort(struct scsi_cmnd * cmd)
  */
 
 	tmp = (struct scsi_cmnd *) hostdata->input_Q;
-	prev = 0;
+	prev = NULL;
 	while (tmp) {
 		if (tmp == cmd) {
 			if (prev)

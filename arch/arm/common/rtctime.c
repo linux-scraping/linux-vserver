@@ -17,7 +17,10 @@
 #include <linux/proc_fs.h>
 #include <linux/miscdevice.h>
 #include <linux/spinlock.h>
+#include <linux/capability.h>
 #include <linux/device.h>
+#include <linux/mutex.h>
+#include <linux/rtc.h>
 
 #include <asm/rtc.h>
 #include <asm/semaphore.h>
@@ -34,120 +37,45 @@ static unsigned long rtc_irq_data;
 /*
  * rtc_sem protects rtc_inuse and rtc_ops
  */
-static DECLARE_MUTEX(rtc_sem);
+static DEFINE_MUTEX(rtc_mutex);
 static unsigned long rtc_inuse;
 static struct rtc_ops *rtc_ops;
 
 #define rtc_epoch 1900UL
 
-static const unsigned char days_in_month[] = {
-	31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31
-};
-
-#define LEAPS_THRU_END_OF(y) ((y)/4 - (y)/100 + (y)/400)
-#define LEAP_YEAR(year) ((!(year % 4) && (year % 100)) || !(year % 400))
-
-static int month_days(unsigned int month, unsigned int year)
-{
-	return days_in_month[month] + (LEAP_YEAR(year) && month == 1);
-}
-
-/*
- * Convert seconds since 01-01-1970 00:00:00 to Gregorian date.
- */
-void rtc_time_to_tm(unsigned long time, struct rtc_time *tm)
-{
-	int days, month, year;
-
-	days = time / 86400;
-	time -= days * 86400;
-
-	tm->tm_wday = (days + 4) % 7;
-
-	year = 1970 + days / 365;
-	days -= (year - 1970) * 365
-	        + LEAPS_THRU_END_OF(year - 1)
-	        - LEAPS_THRU_END_OF(1970 - 1);
-	if (days < 0) {
-		year -= 1;
-		days += 365 + LEAP_YEAR(year);
-	}
-	tm->tm_year = year - 1900;
-	tm->tm_yday = days + 1;
-
-	for (month = 0; month < 11; month++) {
-		int newdays;
-
-		newdays = days - month_days(month, year);
-		if (newdays < 0)
-			break;
-		days = newdays;
-	}
-	tm->tm_mon = month;
-	tm->tm_mday = days + 1;
-
-	tm->tm_hour = time / 3600;
-	time -= tm->tm_hour * 3600;
-	tm->tm_min = time / 60;
-	tm->tm_sec = time - tm->tm_min * 60;
-}
-EXPORT_SYMBOL(rtc_time_to_tm);
-
-/*
- * Does the rtc_time represent a valid date/time?
- */
-int rtc_valid_tm(struct rtc_time *tm)
-{
-	if (tm->tm_year < 70 ||
-	    tm->tm_mon >= 12 ||
-	    tm->tm_mday < 1 ||
-	    tm->tm_mday > month_days(tm->tm_mon, tm->tm_year + 1900) ||
-	    tm->tm_hour >= 24 ||
-	    tm->tm_min >= 60 ||
-	    tm->tm_sec >= 60)
-		return -EINVAL;
-
-	return 0;
-}
-EXPORT_SYMBOL(rtc_valid_tm);
-
-/*
- * Convert Gregorian date to seconds since 01-01-1970 00:00:00.
- */
-int rtc_tm_to_time(struct rtc_time *tm, unsigned long *time)
-{
-	*time = mktime(tm->tm_year + 1900, tm->tm_mon + 1, tm->tm_mday,
-		       tm->tm_hour, tm->tm_min, tm->tm_sec);
-
-	return 0;
-}
-EXPORT_SYMBOL(rtc_tm_to_time);
-
 /*
  * Calculate the next alarm time given the requested alarm time mask
  * and the current time.
- *
- * FIXME: for now, we just copy the alarm time because we're lazy (and
- * is therefore buggy - setting a 10am alarm at 8pm will not result in
- * the alarm triggering.)
  */
 void rtc_next_alarm_time(struct rtc_time *next, struct rtc_time *now, struct rtc_time *alrm)
 {
+	unsigned long next_time;
+	unsigned long now_time;
+
 	next->tm_year = now->tm_year;
 	next->tm_mon = now->tm_mon;
 	next->tm_mday = now->tm_mday;
 	next->tm_hour = alrm->tm_hour;
 	next->tm_min = alrm->tm_min;
 	next->tm_sec = alrm->tm_sec;
+
+	rtc_tm_to_time(now, &now_time);
+	rtc_tm_to_time(next, &next_time);
+
+	if (next_time < now_time) {
+		/* Advance one day */
+		next_time += 60 * 60 * 24;
+		rtc_time_to_tm(next_time, next);
+	}
 }
 
-static inline int rtc_read_time(struct rtc_ops *ops, struct rtc_time *tm)
+static inline int rtc_arm_read_time(struct rtc_ops *ops, struct rtc_time *tm)
 {
 	memset(tm, 0, sizeof(struct rtc_time));
 	return ops->read_time(tm);
 }
 
-static inline int rtc_set_time(struct rtc_ops *ops, struct rtc_time *tm)
+static inline int rtc_arm_set_time(struct rtc_ops *ops, struct rtc_time *tm)
 {
 	int ret;
 
@@ -158,7 +86,7 @@ static inline int rtc_set_time(struct rtc_ops *ops, struct rtc_time *tm)
 	return ret;
 }
 
-static inline int rtc_read_alarm(struct rtc_ops *ops, struct rtc_wkalrm *alrm)
+static inline int rtc_arm_read_alarm(struct rtc_ops *ops, struct rtc_wkalrm *alrm)
 {
 	int ret = -EINVAL;
 	if (ops->read_alarm) {
@@ -168,7 +96,7 @@ static inline int rtc_read_alarm(struct rtc_ops *ops, struct rtc_wkalrm *alrm)
 	return ret;
 }
 
-static inline int rtc_set_alarm(struct rtc_ops *ops, struct rtc_wkalrm *alrm)
+static inline int rtc_arm_set_alarm(struct rtc_ops *ops, struct rtc_wkalrm *alrm)
 {
 	int ret = -EINVAL;
 	if (ops->set_alarm)
@@ -256,7 +184,7 @@ static int rtc_ioctl(struct inode *inode, struct file *file, unsigned int cmd,
 
 	switch (cmd) {
 	case RTC_ALM_READ:
-		ret = rtc_read_alarm(ops, &alrm);
+		ret = rtc_arm_read_alarm(ops, &alrm);
 		if (ret)
 			break;
 		ret = copy_to_user(uarg, &alrm.time, sizeof(tm));
@@ -278,11 +206,11 @@ static int rtc_ioctl(struct inode *inode, struct file *file, unsigned int cmd,
 		alrm.time.tm_wday = -1;
 		alrm.time.tm_yday = -1;
 		alrm.time.tm_isdst = -1;
-		ret = rtc_set_alarm(ops, &alrm);
+		ret = rtc_arm_set_alarm(ops, &alrm);
 		break;
 
 	case RTC_RD_TIME:
-		ret = rtc_read_time(ops, &tm);
+		ret = rtc_arm_read_time(ops, &tm);
 		if (ret)
 			break;
 		ret = copy_to_user(uarg, &tm, sizeof(tm));
@@ -300,7 +228,7 @@ static int rtc_ioctl(struct inode *inode, struct file *file, unsigned int cmd,
 			ret = -EFAULT;
 			break;
 		}
-		ret = rtc_set_time(ops, &tm);
+		ret = rtc_arm_set_time(ops, &tm);
 		break;
 
 	case RTC_EPOCH_SET:
@@ -331,11 +259,11 @@ static int rtc_ioctl(struct inode *inode, struct file *file, unsigned int cmd,
 			ret = -EFAULT;
 			break;
 		}
-		ret = rtc_set_alarm(ops, &alrm);
+		ret = rtc_arm_set_alarm(ops, &alrm);
 		break;
 
 	case RTC_WKALM_RD:
-		ret = rtc_read_alarm(ops, &alrm);
+		ret = rtc_arm_read_alarm(ops, &alrm);
 		if (ret)
 			break;
 		ret = copy_to_user(uarg, &alrm, sizeof(alrm));
@@ -355,7 +283,7 @@ static int rtc_open(struct inode *inode, struct file *file)
 {
 	int ret;
 
-	down(&rtc_sem);
+	mutex_lock(&rtc_mutex);
 
 	if (rtc_inuse) {
 		ret = -EBUSY;
@@ -373,7 +301,7 @@ static int rtc_open(struct inode *inode, struct file *file)
 			rtc_inuse = 1;
 		}
 	}
-	up(&rtc_sem);
+	mutex_unlock(&rtc_mutex);
 
 	return ret;
 }
@@ -425,7 +353,7 @@ static int rtc_read_proc(char *page, char **start, off_t off, int count, int *eo
 	struct rtc_time tm;
 	char *p = page;
 
-	if (rtc_read_time(ops, &tm) == 0) {
+	if (rtc_arm_read_time(ops, &tm) == 0) {
 		p += sprintf(p,
 			"rtc_time\t: %02d:%02d:%02d\n"
 			"rtc_date\t: %04d-%02d-%02d\n"
@@ -435,7 +363,7 @@ static int rtc_read_proc(char *page, char **start, off_t off, int count, int *eo
 			rtc_epoch);
 	}
 
-	if (rtc_read_alarm(ops, &alrm) == 0) {
+	if (rtc_arm_read_alarm(ops, &alrm) == 0) {
 		p += sprintf(p, "alrm_time\t: ");
 		if ((unsigned int)alrm.time.tm_hour <= 24)
 			p += sprintf(p, "%02d:", alrm.time.tm_hour);
@@ -479,7 +407,7 @@ int register_rtc(struct rtc_ops *ops)
 {
 	int ret = -EBUSY;
 
-	down(&rtc_sem);
+	mutex_lock(&rtc_mutex);
 	if (rtc_ops == NULL) {
 		rtc_ops = ops;
 
@@ -488,7 +416,7 @@ int register_rtc(struct rtc_ops *ops)
 			create_proc_read_entry("driver/rtc", 0, NULL,
 					       rtc_read_proc, ops);
 	}
-	up(&rtc_sem);
+	mutex_unlock(&rtc_mutex);
 
 	return ret;
 }
@@ -496,12 +424,12 @@ EXPORT_SYMBOL(register_rtc);
 
 void unregister_rtc(struct rtc_ops *rtc)
 {
-	down(&rtc_sem);
+	mutex_lock(&rtc_mutex);
 	if (rtc == rtc_ops) {
 		remove_proc_entry("driver/rtc", NULL);
 		misc_deregister(&rtc_miscdev);
 		rtc_ops = NULL;
 	}
-	up(&rtc_sem);
+	mutex_unlock(&rtc_mutex);
 }
 EXPORT_SYMBOL(unregister_rtc);

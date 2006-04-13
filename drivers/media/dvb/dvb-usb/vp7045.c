@@ -38,7 +38,7 @@ int vp7045_usb_op(struct dvb_usb_device *d, u8 cmd, u8 *out, int outlen, u8 *in,
 	deb_xfer("out buffer: ");
 	debug_dump(outbuf,outlen+1,deb_xfer);
 
-	if ((ret = down_interruptible(&d->usb_sem)))
+	if ((ret = mutex_lock_interruptible(&d->usb_mutex)))
 		return ret;
 
 	if (usb_control_msg(d->udev,
@@ -68,7 +68,7 @@ int vp7045_usb_op(struct dvb_usb_device *d, u8 cmd, u8 *out, int outlen, u8 *in,
 		memcpy(in,&inbuf[1],inlen);
 
 unlock:
-	up(&d->usb_sem);
+	mutex_unlock(&d->usb_mutex);
 
 	return ret;
 }
@@ -253,7 +253,6 @@ static struct dvb_usb_properties vp7045_properties = {
 
 /* usb specific object needed to register this driver with the usb subsystem */
 static struct usb_driver vp7045_usb_driver = {
-	.owner		= THIS_MODULE,
 	.name		= "dvb_usb_vp7045",
 	.probe		= vp7045_usb_probe,
 	.disconnect = dvb_usb_device_exit,

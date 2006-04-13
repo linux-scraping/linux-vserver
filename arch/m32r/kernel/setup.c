@@ -24,6 +24,7 @@
 #include <linux/tty.h>
 #include <linux/cpu.h>
 #include <linux/nodemask.h>
+#include <linux/pfn.h>
 
 #include <asm/processor.h>
 #include <asm/pgtable.h>
@@ -35,12 +36,6 @@
 
 #ifdef CONFIG_MMU
 extern void init_mmu(void);
-#endif
-
-#if defined(CONFIG_BLK_DEV_IDE) || defined(CONFIG_BLK_DEV_HD)	\
-	|| defined(CONFIG_BLK_DEV_IDE_MODULE)			\
-	|| defined(CONFIG_BLK_DEV_HD_MODULE)
-struct drive_info_struct { char dummy[32]; } drive_info;
 #endif
 
 extern char _end[];
@@ -320,6 +315,9 @@ static int show_cpuinfo(struct seq_file *m, void *v)
 #elif defined(CONFIG_CHIP_MP)
 	seq_printf(m, "cpu family\t: M32R-MP\n"
 		"cache size\t: I-xxKB/D-xxKB\n");
+#elif  defined(CONFIG_CHIP_M32104)
+	seq_printf(m,"cpu family\t: M32104\n"
+		"cache size\t: I-8KB/D-8KB\n");
 #else
 	seq_printf(m, "cpu family\t: Unknown\n");
 #endif
@@ -340,6 +338,8 @@ static int show_cpuinfo(struct seq_file *m, void *v)
 	seq_printf(m, "Machine\t\t: uServer\n");
 #elif defined(CONFIG_PLAT_OAKS32R)
 	seq_printf(m, "Machine\t\t: OAKS32R\n");
+#elif  defined(CONFIG_PLAT_M32104UT)
+	seq_printf(m, "Machine\t\t: M3T-M32104UT uT Engine board\n");
 #else
 	seq_printf(m, "Machine\t\t: Unknown\n");
 #endif
@@ -389,7 +389,7 @@ unsigned long cpu_initialized __initdata = 0;
  */
 #if defined(CONFIG_CHIP_VDEC2) || defined(CONFIG_CHIP_XNUX2)	\
 	|| defined(CONFIG_CHIP_M32700) || defined(CONFIG_CHIP_M32102) \
-	|| defined(CONFIG_CHIP_OPSP)
+	|| defined(CONFIG_CHIP_OPSP) || defined(CONFIG_CHIP_M32104)
 void __init cpu_init (void)
 {
 	int cpu_id = smp_processor_id();

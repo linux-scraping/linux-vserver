@@ -10,6 +10,7 @@
  *
  * ------------------------------------------------------------------------- */
 
+#include <linux/capability.h>
 #include <linux/errno.h>
 #include <linux/stat.h>
 #include <linux/param.h>
@@ -25,7 +26,7 @@ static int autofs_root_rmdir(struct inode *,struct dentry *);
 static int autofs_root_mkdir(struct inode *,struct dentry *,int);
 static int autofs_root_ioctl(struct inode *, struct file *,unsigned int,unsigned long);
 
-struct file_operations autofs_root_operations = {
+const struct file_operations autofs_root_operations = {
 	.read		= generic_read_dir,
 	.readdir	= autofs_root_readdir,
 	.ioctl		= autofs_root_ioctl,
@@ -229,9 +230,9 @@ static struct dentry *autofs_root_lookup(struct inode *dir, struct dentry *dentr
 	dentry->d_flags |= DCACHE_AUTOFS_PENDING;
 	d_add(dentry, NULL);
 
-	up(&dir->i_sem);
+	mutex_unlock(&dir->i_mutex);
 	autofs_revalidate(dentry, nd);
-	down(&dir->i_sem);
+	mutex_lock(&dir->i_mutex);
 
 	/*
 	 * If we are still pending, check if we had to handle

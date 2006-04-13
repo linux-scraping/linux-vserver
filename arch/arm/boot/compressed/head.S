@@ -2,6 +2,7 @@
  *  linux/arch/arm/boot/compressed/head.S
  *
  *  Copyright (C) 1996-2002 Russell King
+ *  Copyright (C) 2004 Hyok S. Choi (MPU support)
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -84,7 +85,7 @@
 		kputc	#'\n'
 		kphex	r5, 8		/* decompressed kernel start */
 		kputc	#'-'
-		kphex	r8, 8		/* decompressed kernel end  */
+		kphex	r9, 8		/* decompressed kernel end  */
 		kputc	#'>'
 		kphex	r4, 8		/* kernel execution address */
 		kputc	#'\n'
@@ -116,7 +117,7 @@ start:
 		.word	start			@ absolute load/run zImage address
 		.word	_edata			@ zImage end address
 1:		mov	r7, r1			@ save architecture ID
-		mov	r8, #0			@ save r0
+		mov	r8, r2			@ save atags pointer
 
 #ifndef __ARM_ARCH_2__
 		/*
@@ -144,7 +145,7 @@ not_angel:
 
 		/*
 		 * some architecture specific code can be inserted
-		 * by the linker here, but it should preserve r7 and r8.
+		 * by the linker here, but it should preserve r7, r8, and r9.
 		 */
 
 		.text
@@ -249,16 +250,17 @@ not_relocated:	mov	r0, #0
  * r5     = decompressed kernel start
  * r6     = processor ID
  * r7     = architecture ID
- * r8-r14 = unused
+ * r8     = atags pointer
+ * r9-r14 = corrupted
  */
 		add	r1, r5, r0		@ end of decompressed kernel
 		adr	r2, reloc_start
 		ldr	r3, LC1
 		add	r3, r2, r3
-1:		ldmia	r2!, {r8 - r13}		@ copy relocation code
-		stmia	r1!, {r8 - r13}
-		ldmia	r2!, {r8 - r13}
-		stmia	r1!, {r8 - r13}
+1:		ldmia	r2!, {r9 - r14}		@ copy relocation code
+		stmia	r1!, {r9 - r14}
+		ldmia	r2!, {r9 - r14}
+		stmia	r1!, {r9 - r14}
 		cmp	r2, r3
 		blo	1b
 
@@ -308,15 +310,72 @@ params:		ldr	r0, =params_phys
  *  r4 = kernel execution address
  *  r6 = processor ID
  *  r7 = architecture number
- *  r8 = run-time address of "start"
+ *  r8 = atags pointer
+ *  r9 = run-time address of "start"  (???)
  * On exit,
- *  r1, r2, r3, r8, r9, r12 corrupted
+ *  r1, r2, r3, r9, r10, r12 corrupted
  * This routine must preserve:
- *  r4, r5, r6, r7
+ *  r4, r5, r6, r7, r8
  */
 		.align	5
 cache_on:	mov	r3, #8			@ cache_on function
 		b	call_cache_fn
+
+/*
+ * Initialize the highest priority protection region, PR7
+ * to cover all 32bit address and cacheable and bufferable.
+ */
+__armv4_mpu_cache_on:
+		mov	r0, #0x3f		@ 4G, the whole
+		mcr	p15, 0, r0, c6, c7, 0	@ PR7 Area Setting
+		mcr 	p15, 0, r0, c6, c7, 1
+
+		mov	r0, #0x80		@ PR7
+		mcr	p15, 0, r0, c2, c0, 0	@ D-cache on
+		mcr	p15, 0, r0, c2, c0, 1	@ I-cache on
+		mcr	p15, 0, r0, c3, c0, 0	@ write-buffer on
+
+		mov	r0, #0xc000
+		mcr	p15, 0, r0, c5, c0, 1	@ I-access permission
+		mcr	p15, 0, r0, c5, c0, 0	@ D-access permission
+
+		mov	r0, #0
+		mcr	p15, 0, r0, c7, c10, 4	@ drain write buffer
+		mcr	p15, 0, r0, c7, c5, 0	@ flush(inval) I-Cache
+		mcr	p15, 0, r0, c7, c6, 0	@ flush(inval) D-Cache
+		mrc	p15, 0, r0, c1, c0, 0	@ read control reg
+						@ ...I .... ..D. WC.M
+		orr	r0, r0, #0x002d		@ .... .... ..1. 11.1
+		orr	r0, r0, #0x1000		@ ...1 .... .... ....
+
+		mcr	p15, 0, r0, c1, c0, 0	@ write control reg
+
+		mov	r0, #0
+		mcr	p15, 0, r0, c7, c5, 0	@ flush(inval) I-Cache
+		mcr	p15, 0, r0, c7, c6, 0	@ flush(inval) D-Cache
+		mov	pc, lr
+
+__armv3_mpu_cache_on:
+		mov	r0, #0x3f		@ 4G, the whole
+		mcr	p15, 0, r0, c6, c7, 0	@ PR7 Area Setting
+
+		mov	r0, #0x80		@ PR7
+		mcr	p15, 0, r0, c2, c0, 0	@ cache on
+		mcr	p15, 0, r0, c3, c0, 0	@ write-buffer on
+
+		mov	r0, #0xc000
+		mcr	p15, 0, r0, c5, c0, 0	@ access permission
+
+		mov	r0, #0
+		mcr	p15, 0, r0, c7, c0, 0	@ invalidate whole cache v3
+		mrc	p15, 0, r0, c1, c0, 0	@ read control reg
+						@ .... .... .... WC.M
+		orr	r0, r0, #0x000d		@ .... .... .... 11.1
+		mov	r0, #0
+		mcr	p15, 0, r0, c1, c0, 0	@ write control reg
+
+		mcr	p15, 0, r0, c7, c0, 0	@ invalidate whole cache v3
+		mov	pc, lr
 
 __setup_mmu:	sub	r3, r4, #16384		@ Page directory size
 		bic	r3, r3, #0xff		@ Align the pointer
@@ -326,15 +385,15 @@ __setup_mmu:	sub	r3, r4, #16384		@ Page directory size
  * bits for the RAM area only.
  */
 		mov	r0, r3
-		mov	r8, r0, lsr #18
-		mov	r8, r8, lsl #18		@ start of RAM
-		add	r9, r8, #0x10000000	@ a reasonable RAM size
+		mov	r9, r0, lsr #18
+		mov	r9, r9, lsl #18		@ start of RAM
+		add	r10, r9, #0x10000000	@ a reasonable RAM size
 		mov	r1, #0x12
 		orr	r1, r1, #3 << 10
 		add	r2, r3, #16384
-1:		cmp	r1, r8			@ if virt > start of RAM
+1:		cmp	r1, r9			@ if virt > start of RAM
 		orrhs	r1, r1, #0x0c		@ set cacheable, bufferable
-		cmp	r1, r9			@ if virt > end of RAM
+		cmp	r1, r10			@ if virt > end of RAM
 		bichs	r1, r1, #0x0c		@ clear cacheable, bufferable
 		str	r1, [r0], #4		@ 1:1 mapping
 		add	r1, r1, #1048576
@@ -356,7 +415,7 @@ __setup_mmu:	sub	r3, r4, #16384		@ Page directory size
 		str	r1, [r0]
 		mov	pc, lr
 
-__armv4_cache_on:
+__armv4_mmu_cache_on:
 		mov	r12, lr
 		bl	__setup_mmu
 		mov	r0, #0
@@ -365,24 +424,24 @@ __armv4_cache_on:
 		mrc	p15, 0, r0, c1, c0, 0	@ read control reg
 		orr	r0, r0, #0x5000		@ I-cache enable, RR cache replacement
 		orr	r0, r0, #0x0030
-		bl	__common_cache_on
+		bl	__common_mmu_cache_on
 		mov	r0, #0
 		mcr	p15, 0, r0, c8, c7, 0	@ flush I,D TLBs
 		mov	pc, r12
 
-__arm6_cache_on:
+__arm6_mmu_cache_on:
 		mov	r12, lr
 		bl	__setup_mmu
 		mov	r0, #0
 		mcr	p15, 0, r0, c7, c0, 0	@ invalidate whole cache v3
 		mcr	p15, 0, r0, c5, c0, 0	@ invalidate whole TLB v3
 		mov	r0, #0x30
-		bl	__common_cache_on
+		bl	__common_mmu_cache_on
 		mov	r0, #0
 		mcr	p15, 0, r0, c5, c0, 0	@ invalidate whole TLB v3
 		mov	pc, r12
 
-__common_cache_on:
+__common_mmu_cache_on:
 #ifndef DEBUG
 		orr	r0, r0, #0x000d		@ Write buffer, mmu
 #endif
@@ -403,26 +462,28 @@ __common_cache_on:
  * r5     = decompressed kernel start
  * r6     = processor ID
  * r7     = architecture ID
- * r8-r14 = unused
+ * r8     = atags pointer
+ * r9-r14 = corrupted
  */
 		.align	5
-reloc_start:	add	r8, r5, r0
+reloc_start:	add	r9, r5, r0
 		debug_reloc_start
 		mov	r1, r4
 1:
 		.rept	4
-		ldmia	r5!, {r0, r2, r3, r9 - r13}	@ relocate kernel
-		stmia	r1!, {r0, r2, r3, r9 - r13}
+		ldmia	r5!, {r0, r2, r3, r10 - r14}	@ relocate kernel
+		stmia	r1!, {r0, r2, r3, r10 - r14}
 		.endr
 
-		cmp	r5, r8
+		cmp	r5, r9
 		blo	1b
 		debug_reloc_end
 
 call_kernel:	bl	cache_clean_flush
 		bl	cache_off
-		mov	r0, #0
+		mov	r0, #0			@ must be zero
 		mov	r1, r7			@ restore architecture number
+		mov	r2, r8			@ restore atags pointer
 		mov	pc, r4			@ call kernel
 
 /*
@@ -467,12 +528,12 @@ call_cache_fn:	adr	r12, proc_types
 proc_types:
 		.word	0x41560600		@ ARM6/610
 		.word	0xffffffe0
-		b	__arm6_cache_off	@ works, but slow
-		b	__arm6_cache_off
+		b	__arm6_mmu_cache_off	@ works, but slow
+		b	__arm6_mmu_cache_off
 		mov	pc, lr
-@		b	__arm6_cache_on		@ untested
-@		b	__arm6_cache_off
-@		b	__armv3_cache_flush
+@		b	__arm6_mmu_cache_on		@ untested
+@		b	__arm6_mmu_cache_off
+@		b	__armv3_mmu_cache_flush
 
 		.word	0x00000000		@ old ARM ID
 		.word	0x0000f000
@@ -482,15 +543,27 @@ proc_types:
 
 		.word	0x41007000		@ ARM7/710
 		.word	0xfff8fe00
-		b	__arm7_cache_off
-		b	__arm7_cache_off
+		b	__arm7_mmu_cache_off
+		b	__arm7_mmu_cache_off
 		mov	pc, lr
 
 		.word	0x41807200		@ ARM720T (writethrough)
 		.word	0xffffff00
-		b	__armv4_cache_on
-		b	__armv4_cache_off
+		b	__armv4_mmu_cache_on
+		b	__armv4_mmu_cache_off
 		mov	pc, lr
+
+		.word	0x41007400		@ ARM74x
+		.word	0xff00ff00
+		b	__armv3_mpu_cache_on
+		b	__armv3_mpu_cache_off
+		b	__armv3_mpu_cache_flush
+		
+		.word	0x41009400		@ ARM94x
+		.word	0xff00ff00
+		b	__armv4_mpu_cache_on
+		b	__armv4_mpu_cache_off
+		b	__armv4_mpu_cache_flush
 
 		.word	0x00007000		@ ARM7 IDs
 		.word	0x0000f000
@@ -502,41 +575,41 @@ proc_types:
 
 		.word	0x4401a100		@ sa110 / sa1100
 		.word	0xffffffe0
-		b	__armv4_cache_on
-		b	__armv4_cache_off
-		b	__armv4_cache_flush
+		b	__armv4_mmu_cache_on
+		b	__armv4_mmu_cache_off
+		b	__armv4_mmu_cache_flush
 
 		.word	0x6901b110		@ sa1110
 		.word	0xfffffff0
-		b	__armv4_cache_on
-		b	__armv4_cache_off
-		b	__armv4_cache_flush
+		b	__armv4_mmu_cache_on
+		b	__armv4_mmu_cache_off
+		b	__armv4_mmu_cache_flush
 
 		@ These match on the architecture ID
 
 		.word	0x00020000		@ ARMv4T
 		.word	0x000f0000
-		b	__armv4_cache_on
-		b	__armv4_cache_off
-		b	__armv4_cache_flush
+		b	__armv4_mmu_cache_on
+		b	__armv4_mmu_cache_off
+		b	__armv4_mmu_cache_flush
 
 		.word	0x00050000		@ ARMv5TE
 		.word	0x000f0000
-		b	__armv4_cache_on
-		b	__armv4_cache_off
-		b	__armv4_cache_flush
+		b	__armv4_mmu_cache_on
+		b	__armv4_mmu_cache_off
+		b	__armv4_mmu_cache_flush
 
 		.word	0x00060000		@ ARMv5TEJ
 		.word	0x000f0000
-		b	__armv4_cache_on
-		b	__armv4_cache_off
-		b	__armv4_cache_flush
+		b	__armv4_mmu_cache_on
+		b	__armv4_mmu_cache_off
+		b	__armv4_mmu_cache_flush
 
 		.word	0x00070000		@ ARMv6
 		.word	0x000f0000
-		b	__armv4_cache_on
-		b	__armv4_cache_off
-		b	__armv6_cache_flush
+		b	__armv4_mmu_cache_on
+		b	__armv4_mmu_cache_off
+		b	__armv6_mmu_cache_flush
 
 		.word	0			@ unrecognised type
 		.word	0
@@ -558,7 +631,25 @@ proc_types:
 cache_off:	mov	r3, #12			@ cache_off function
 		b	call_cache_fn
 
-__armv4_cache_off:
+__armv4_mpu_cache_off:
+		mrc	p15, 0, r0, c1, c0
+		bic	r0, r0, #0x000d
+		mcr	p15, 0, r0, c1, c0	@ turn MPU and cache off
+		mov	r0, #0
+		mcr	p15, 0, r0, c7, c10, 4	@ drain write buffer
+		mcr	p15, 0, r0, c7, c6, 0	@ flush D-Cache
+		mcr	p15, 0, r0, c7, c5, 0	@ flush I-Cache
+		mov	pc, lr
+
+__armv3_mpu_cache_off:
+		mrc	p15, 0, r0, c1, c0
+		bic	r0, r0, #0x000d
+		mcr	p15, 0, r0, c1, c0, 0	@ turn MPU and cache off
+		mov	r0, #0
+		mcr	p15, 0, r0, c7, c0, 0	@ invalidate whole cache v3
+		mov	pc, lr
+
+__armv4_mmu_cache_off:
 		mrc	p15, 0, r0, c1, c0
 		bic	r0, r0, #0x000d
 		mcr	p15, 0, r0, c1, c0	@ turn MMU and cache off
@@ -567,15 +658,15 @@ __armv4_cache_off:
 		mcr	p15, 0, r0, c8, c7	@ invalidate whole TLB v4
 		mov	pc, lr
 
-__arm6_cache_off:
+__arm6_mmu_cache_off:
 		mov	r0, #0x00000030		@ ARM6 control reg.
-		b	__armv3_cache_off
+		b	__armv3_mmu_cache_off
 
-__arm7_cache_off:
+__arm7_mmu_cache_off:
 		mov	r0, #0x00000070		@ ARM7 control reg.
-		b	__armv3_cache_off
+		b	__armv3_mmu_cache_off
 
-__armv3_cache_off:
+__armv3_mmu_cache_off:
 		mcr	p15, 0, r0, c1, c0, 0	@ turn MMU and cache off
 		mov	r0, #0
 		mcr	p15, 0, r0, c7, c0, 0	@ invalidate whole cache v3
@@ -597,7 +688,25 @@ cache_clean_flush:
 		mov	r3, #16
 		b	call_cache_fn
 
-__armv6_cache_flush:
+__armv4_mpu_cache_flush:
+		mov	r2, #1
+		mov	r3, #0
+		mcr	p15, 0, ip, c7, c6, 0	@ invalidate D cache
+		mov	r1, #7 << 5		@ 8 segments
+1:		orr	r3, r1, #63 << 26	@ 64 entries
+2:		mcr	p15, 0, r3, c7, c14, 2	@ clean & invalidate D index
+		subs	r3, r3, #1 << 26
+		bcs	2b			@ entries 63 to 0
+		subs 	r1, r1, #1 << 5
+		bcs	1b			@ segments 7 to 0
+
+		teq	r2, #0
+		mcrne	p15, 0, ip, c7, c5, 0	@ invalidate I cache
+		mcr	p15, 0, ip, c7, c10, 4	@ drain WB
+		mov	pc, lr
+		
+
+__armv6_mmu_cache_flush:
 		mov	r1, #0
 		mcr	p15, 0, r1, c7, c14, 0	@ clean+invalidate D
 		mcr	p15, 0, r1, c7, c5, 0	@ invalidate I+BTB
@@ -605,7 +714,7 @@ __armv6_cache_flush:
 		mcr	p15, 0, r1, c7, c10, 4	@ drain WB
 		mov	pc, lr
 
-__armv4_cache_flush:
+__armv4_mmu_cache_flush:
 		mov	r2, #64*1024		@ default: 32K dcache size (*2)
 		mov	r11, #32		@ default: 32 byte line size
 		mrc	p15, 0, r3, c0, c0, 1	@ read cache type
@@ -633,7 +742,8 @@ no_cache_id:
 		mcr	p15, 0, r1, c7, c10, 4	@ drain WB
 		mov	pc, lr
 
-__armv3_cache_flush:
+__armv3_mmu_cache_flush:
+__armv3_mpu_cache_flush:
 		mov	r1, #0
 		mcr	p15, 0, r0, c7, c0, 0	@ invalidate whole cache v3
 		mov	pc, lr

@@ -34,7 +34,7 @@ static int smb_rename(struct inode *, struct dentry *,
 static int smb_make_node(struct inode *,struct dentry *,int,dev_t);
 static int smb_link(struct dentry *, struct inode *, struct dentry *);
 
-struct file_operations smb_dir_operations =
+const struct file_operations smb_dir_operations =
 {
 	.read		= generic_read_dir,
 	.readdir	= smb_readdir,
@@ -209,6 +209,8 @@ init_cache:
 	ctl.valid  = 1;
 read_really:
 	result = server->ops->readdir(filp, dirent, filldir, &ctl);
+	if (result == -ERESTARTSYS && page)
+		ClearPageUptodate(page);
 	if (ctl.idx == -1)
 		goto invalid_cache;	/* retry */
 	ctl.head.end = ctl.fpos - 1;
@@ -217,7 +219,8 @@ finished:
 	if (page) {
 		cache->head = ctl.head;
 		kunmap(page);
-		SetPageUptodate(page);
+		if (result != -ERESTARTSYS)
+			SetPageUptodate(page);
 		unlock_page(page);
 		page_cache_release(page);
 	}

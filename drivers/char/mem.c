@@ -88,17 +88,16 @@ static inline int uncached_access(struct file *file, unsigned long addr)
 }
 
 #ifndef ARCH_HAS_VALID_PHYS_ADDR_RANGE
-static inline int valid_phys_addr_range(unsigned long addr, size_t *count)
+static inline int valid_phys_addr_range(unsigned long addr, size_t count)
 {
-	unsigned long end_mem;
-
-	end_mem = __pa(high_memory);
-	if (addr >= end_mem)
+	if (addr + count > __pa(high_memory))
 		return 0;
 
-	if (*count > end_mem - addr)
-		*count = end_mem - addr;
+	return 1;
+}
 
+static inline int valid_mmap_phys_addr_range(unsigned long addr, size_t size)
+{
 	return 1;
 }
 #endif
@@ -114,7 +113,7 @@ static ssize_t read_mem(struct file * file, char __user * buf,
 	ssize_t read, sz;
 	char *ptr;
 
-	if (!valid_phys_addr_range(p, &count))
+	if (!valid_phys_addr_range(p, count))
 		return -EFAULT;
 	read = 0;
 #ifdef __ARCH_HAS_NO_PAGE_ZERO_MAPPED
@@ -172,7 +171,7 @@ static ssize_t write_mem(struct file * file, const char __user * buf,
 	unsigned long copied;
 	void *ptr;
 
-	if (!valid_phys_addr_range(p, &count))
+	if (!valid_phys_addr_range(p, count))
 		return -EFAULT;
 
 	written = 0;
@@ -211,11 +210,9 @@ static ssize_t write_mem(struct file * file, const char __user * buf,
 
 		copied = copy_from_user(ptr, buf, sz);
 		if (copied) {
-			ssize_t ret;
-
-			ret = written + (sz - copied);
-			if (ret)
-				return ret;
+			written += sz - copied;
+			if (written)
+				break;
 			return -EFAULT;
 		}
 		buf += sz;
@@ -228,26 +225,36 @@ static ssize_t write_mem(struct file * file, const char __user * buf,
 	return written;
 }
 
+#ifndef __HAVE_PHYS_MEM_ACCESS_PROT
+static pgprot_t phys_mem_access_prot(struct file *file, unsigned long pfn,
+				     unsigned long size, pgprot_t vma_prot)
+{
+#ifdef pgprot_noncached
+	unsigned long offset = pfn << PAGE_SHIFT;
+
+	if (uncached_access(file, offset))
+		return pgprot_noncached(vma_prot);
+#endif
+	return vma_prot;
+}
+#endif
+
 static int mmap_mem(struct file * file, struct vm_area_struct * vma)
 {
-#if defined(__HAVE_PHYS_MEM_ACCESS_PROT)
-	vma->vm_page_prot = phys_mem_access_prot(file, vma->vm_pgoff,
-						 vma->vm_end - vma->vm_start,
-						 vma->vm_page_prot);
-#elif defined(pgprot_noncached)
-	unsigned long offset = vma->vm_pgoff << PAGE_SHIFT;
-	int uncached;
+	size_t size = vma->vm_end - vma->vm_start;
 
-	uncached = uncached_access(file, offset);
-	if (uncached)
-		vma->vm_page_prot = pgprot_noncached(vma->vm_page_prot);
-#endif
+	if (!valid_mmap_phys_addr_range(vma->vm_pgoff << PAGE_SHIFT, size))
+		return -EINVAL;
+
+	vma->vm_page_prot = phys_mem_access_prot(file, vma->vm_pgoff,
+						 size,
+						 vma->vm_page_prot);
 
 	/* Remap-pfn-range will mark the range VM_IO and VM_RESERVED */
 	if (remap_pfn_range(vma,
 			    vma->vm_start,
 			    vma->vm_pgoff,
-			    vma->vm_end-vma->vm_start,
+			    size,
 			    vma->vm_page_prot))
 		return -EAGAIN;
 	return 0;
@@ -441,11 +448,9 @@ do_write_kmem(void *p, unsigned long realp, const char __user * buf,
 
 		copied = copy_from_user(ptr, buf, sz);
 		if (copied) {
-			ssize_t ret;
-
-			ret = written + (sz - copied);
-			if (ret)
-				return ret;
+			written += sz - copied;
+			if (written)
+				break;
 			return -EFAULT;
 		}
 		buf += sz;
@@ -499,11 +504,10 @@ static ssize_t write_kmem(struct file * file, const char __user * buf,
 			if (len) {
 				written = copy_from_user(kbuf, buf, len);
 				if (written) {
-					ssize_t ret;
-
+					if (wrote + virtr)
+						break;
 					free_page((unsigned long)kbuf);
-					ret = wrote + virtr + (len - written);
-					return ret ? ret : -EFAULT;
+					return -EFAULT;
 				}
 			}
 			len = vwrite(kbuf, (char *)p, len);
@@ -519,7 +523,7 @@ static ssize_t write_kmem(struct file * file, const char __user * buf,
  	return virtr + wrote;
 }
 
-#if (defined(CONFIG_ISA) || !defined(__mc68000__)) && (!defined(CONFIG_PPC_ISERIES) || defined(CONFIG_PCI))
+#if defined(CONFIG_ISA) || !defined(__mc68000__)
 static ssize_t read_port(struct file * file, char __user * buf,
 			 size_t count, loff_t *ppos)
 {
@@ -548,8 +552,11 @@ static ssize_t write_port(struct file * file, const char __user * buf,
 		return -EFAULT;
 	while (count-- > 0 && i < 65536) {
 		char c;
-		if (__get_user(c, tmp)) 
+		if (__get_user(c, tmp)) {
+			if (tmp > buf)
+				break;
 			return -EFAULT; 
+		}
 		outb(c,i);
 		i++;
 		tmp++;
@@ -726,7 +733,7 @@ static loff_t memory_lseek(struct file * file, loff_t offset, int orig)
 {
 	loff_t ret;
 
-	down(&file->f_dentry->d_inode->i_sem);
+	mutex_lock(&file->f_dentry->d_inode->i_mutex);
 	switch (orig) {
 		case 0:
 			file->f_pos = offset;
@@ -741,7 +748,7 @@ static loff_t memory_lseek(struct file * file, loff_t offset, int orig)
 		default:
 			ret = -EINVAL;
 	}
-	up(&file->f_dentry->d_inode->i_sem);
+	mutex_unlock(&file->f_dentry->d_inode->i_mutex);
 	return ret;
 }
 
@@ -780,7 +787,7 @@ static struct file_operations null_fops = {
 	.write		= write_null,
 };
 
-#if (defined(CONFIG_ISA) || !defined(__mc68000__)) && (!defined(CONFIG_PPC_ISERIES) || defined(CONFIG_PCI))
+#if defined(CONFIG_ISA) || !defined(__mc68000__)
 static struct file_operations port_fops = {
 	.llseek		= memory_lseek,
 	.read		= read_port,
@@ -817,7 +824,7 @@ static ssize_t kmsg_write(struct file * file, const char __user * buf,
 			  size_t count, loff_t *ppos)
 {
 	char *tmp;
-	int ret;
+	ssize_t ret;
 
 	tmp = kmalloc(count + 1, GFP_KERNEL);
 	if (tmp == NULL)
@@ -826,6 +833,9 @@ static ssize_t kmsg_write(struct file * file, const char __user * buf,
 	if (!copy_from_user(tmp, buf, count)) {
 		tmp[count] = 0;
 		ret = printk("%s", tmp);
+		if (ret > count)
+			/* printk can add a prefix */
+			ret = count;
 	}
 	kfree(tmp);
 	return ret;
@@ -847,7 +857,7 @@ static int memory_open(struct inode * inode, struct file * filp)
 		case 3:
 			filp->f_op = &null_fops;
 			break;
-#if (defined(CONFIG_ISA) || !defined(__mc68000__)) && (!defined(CONFIG_PPC_ISERIES) || defined(CONFIG_PCI))
+#if defined(CONFIG_ISA) || !defined(__mc68000__)
 		case 4:
 			filp->f_op = &port_fops;
 			break;
@@ -889,12 +899,12 @@ static const struct {
 	unsigned int		minor;
 	char			*name;
 	umode_t			mode;
-	struct file_operations	*fops;
+	const struct file_operations	*fops;
 } devlist[] = { /* list of minor devices */
 	{1, "mem",     S_IRUSR | S_IWUSR | S_IRGRP, &mem_fops},
 	{2, "kmem",    S_IRUSR | S_IWUSR | S_IRGRP, &kmem_fops},
 	{3, "null",    S_IRUGO | S_IWUGO,           &null_fops},
-#if (defined(CONFIG_ISA) || !defined(__mc68000__)) && (!defined(CONFIG_PPC_ISERIES) || defined(CONFIG_PCI))
+#if defined(CONFIG_ISA) || !defined(__mc68000__)
 	{4, "port",    S_IRUSR | S_IWUSR | S_IRGRP, &port_fops},
 #endif
 	{5, "zero",    S_IRUGO | S_IWUGO,           &zero_fops},

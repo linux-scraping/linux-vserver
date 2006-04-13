@@ -31,6 +31,7 @@
 #include <scsi/scsi_host.h>
 #include <scsi/scsi_transport.h>
 #include <scsi/scsi_transport_fc.h>
+#include <scsi/scsi_cmnd.h>
 #include "scsi_priv.h"
 
 /*
@@ -112,7 +113,7 @@ fc_enum_name_search(port_state, fc_port_state, fc_port_state_names)
 
 
 /* Convert fc_tgtid_binding_type values to ascii string name */
-static struct {
+static const struct {
 	enum fc_tgtid_binding_type	value;
 	char				*name;
 	int				matchlen;
@@ -150,7 +151,7 @@ get_fc_##title##_names(u32 table_key, char *buf)		\
 
 
 /* Convert FC_COS bit values to ascii string name */
-static struct {
+static const struct {
 	u32 			value;
 	char			*name;
 } fc_cos_names[] = {
@@ -164,7 +165,7 @@ fc_bitfield_name_search(cos, fc_cos_names)
 
 
 /* Convert FC_PORTSPEED bit values to ascii string name */
-static struct {
+static const struct {
 	u32 			value;
 	char			*name;
 } fc_port_speed_names[] = {
@@ -190,7 +191,7 @@ show_fc_fc4s (char *buf, u8 *fc4_list)
 
 
 /* Convert FC_RPORT_ROLE bit values to ascii string name */
-static struct {
+static const struct {
 	u32 			value;
 	char			*name;
 } fc_remote_port_role_names[] = {
@@ -223,7 +224,7 @@ static void fc_rport_terminate(struct fc_rport  *rport);
  */
 #define FC_STARGET_NUM_ATTRS 	3
 #define FC_RPORT_NUM_ATTRS	9
-#define FC_HOST_NUM_ATTRS	16
+#define FC_HOST_NUM_ATTRS	17
 
 struct fc_internal {
 	struct scsi_transport_template t;
@@ -295,6 +296,7 @@ static int fc_host_setup(struct transport_container *tc, struct device *dev,
 	 */
 	fc_host_node_name(shost) = -1;
 	fc_host_port_name(shost) = -1;
+	fc_host_permanent_port_name(shost) = -1;
 	fc_host_supported_classes(shost) = FC_COS_UNSPECIFIED;
 	memset(fc_host_supported_fc4s(shost), 0,
 		sizeof(fc_host_supported_fc4s(shost)));
@@ -795,6 +797,8 @@ static FC_CLASS_DEVICE_ATTR(host, supported_speeds, S_IRUGO,
 
 fc_private_host_rd_attr_cast(node_name, "0x%llx\n", 20, unsigned long long);
 fc_private_host_rd_attr_cast(port_name, "0x%llx\n", 20, unsigned long long);
+fc_private_host_rd_attr_cast(permanent_port_name, "0x%llx\n", 20,
+			     unsigned long long);
 fc_private_host_rd_attr(symbolic_name, "%s\n", (FC_SYMBOLIC_NAME_SIZE +1));
 fc_private_host_rd_attr(maxframe_size, "%u bytes\n", 20);
 fc_private_host_rd_attr(serial_number, "%s\n", (FC_SERIAL_NUMBER_SIZE +1));
@@ -1087,33 +1091,71 @@ static int fc_rport_match(struct attribute_container *cont,
 }
 
 
+/**
+ * fc_timed_out - FC Transport I/O timeout intercept handler
+ *
+ * @scmd:	The SCSI command which timed out
+ *
+ * This routine protects against error handlers getting invoked while a
+ * rport is in a blocked state, typically due to a temporarily loss of
+ * connectivity. If the error handlers are allowed to proceed, requests
+ * to abort i/o, reset the target, etc will likely fail as there is no way
+ * to communicate with the device to perform the requested function. These
+ * failures may result in the midlayer taking the device offline, requiring
+ * manual intervention to restore operation.
+ *
+ * This routine, called whenever an i/o times out, validates the state of
+ * the underlying rport. If the rport is blocked, it returns
+ * EH_RESET_TIMER, which will continue to reschedule the timeout.
+ * Eventually, either the device will return, or devloss_tmo will fire,
+ * and when the timeout then fires, it will be handled normally.
+ * If the rport is not blocked, normal error handling continues.
+ *
+ * Notes:
+ *	This routine assumes no locks are held on entry.
+ **/
+static enum scsi_eh_timer_return
+fc_timed_out(struct scsi_cmnd *scmd)
+{
+	struct fc_rport *rport = starget_to_rport(scsi_target(scmd->device));
+
+	if (rport->port_state == FC_PORTSTATE_BLOCKED)
+		return EH_RESET_TIMER;
+
+	return EH_NOT_HANDLED;
+}
+
 /*
  * Must be called with shost->host_lock held
  */
-static struct device *fc_target_parent(struct Scsi_Host *shost,
-					int channel, uint id)
+static int fc_user_scan(struct Scsi_Host *shost, uint channel,
+		uint id, uint lun)
 {
 	struct fc_rport *rport;
 
-	list_for_each_entry(rport, &fc_host_rports(shost), peers)
-		if ((rport->channel == channel) &&
-		    (rport->scsi_target_id == id))
-			return &rport->dev;
+	list_for_each_entry(rport, &fc_host_rports(shost), peers) {
+		if (rport->scsi_target_id == -1)
+			continue;
 
-	return NULL;
+		if ((channel == SCAN_WILD_CARD || channel == rport->channel) &&
+		    (id == SCAN_WILD_CARD || id == rport->scsi_target_id)) {
+			scsi_scan_target(&rport->dev, rport->channel,
+					 rport->scsi_target_id, lun, 1);
+		}
+	}
+
+	return 0;
 }
 
 struct scsi_transport_template *
 fc_attach_transport(struct fc_function_template *ft)
 {
-	struct fc_internal *i = kmalloc(sizeof(struct fc_internal),
-					GFP_KERNEL);
 	int count;
+	struct fc_internal *i = kzalloc(sizeof(struct fc_internal),
+					GFP_KERNEL);
 
 	if (unlikely(!i))
 		return NULL;
-
-	memset(i, 0, sizeof(struct fc_internal));
 
 	i->t.target_attrs.ac.attrs = &i->starget_attrs[0];
 	i->t.target_attrs.ac.class = &fc_transport_class.class;
@@ -1139,7 +1181,9 @@ fc_attach_transport(struct fc_function_template *ft)
 	/* Transport uses the shost workq for scsi scanning */
 	i->t.create_work_queue = 1;
 
-	i->t.target_parent = fc_target_parent;
+	i->t.eh_timed_out = fc_timed_out;
+
+	i->t.user_scan = fc_user_scan;
 	
 	/*
 	 * Setup SCSI Target Attributes.
@@ -1160,6 +1204,7 @@ fc_attach_transport(struct fc_function_template *ft)
 	count=0;
 	SETUP_HOST_ATTRIBUTE_RD(node_name);
 	SETUP_HOST_ATTRIBUTE_RD(port_name);
+	SETUP_HOST_ATTRIBUTE_RD(permanent_port_name);
 	SETUP_HOST_ATTRIBUTE_RD(supported_classes);
 	SETUP_HOST_ATTRIBUTE_RD(supported_fc4s);
 	SETUP_HOST_ATTRIBUTE_RD(symbolic_name);
@@ -1295,12 +1340,11 @@ fc_rport_create(struct Scsi_Host *shost, int channel,
 	size_t size;
 
 	size = (sizeof(struct fc_rport) + fci->f->dd_fcrport_size);
-	rport = kmalloc(size, GFP_KERNEL);
+	rport = kzalloc(size, GFP_KERNEL);
 	if (unlikely(!rport)) {
 		printk(KERN_ERR "%s: allocation failure\n", __FUNCTION__);
 		return NULL;
 	}
-	memset(rport, 0, size);
 
 	rport->maxframe_size = -1;
 	rport->supported_classes = FC_COS_UNSPECIFIED;
@@ -1488,8 +1532,7 @@ fc_remote_port_add(struct Scsi_Host *shost, int channel,
 	}
 
 	/* Search the bindings array */
-	if (likely((ids->roles & FC_RPORT_ROLE_FCP_TARGET) &&
-		(fc_host_tgtid_bind_type(shost) != FC_TGTID_BIND_NONE))) {
+	if (fc_host_tgtid_bind_type(shost) != FC_TGTID_BIND_NONE) {
 
 		/* search for a matching consistent binding */
 

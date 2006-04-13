@@ -20,12 +20,13 @@
 #include <linux/root_dev.h>
 #include <linux/utsname.h>
 #include <linux/cpu.h>
+#include <linux/pfn.h>
 #include <asm/uaccess.h>
 #include <asm/io.h>
-#include <asm/io_generic.h>
 #include <asm/sections.h>
 #include <asm/irq.h>
 #include <asm/setup.h>
+#include <asm/clock.h>
 
 #ifdef CONFIG_SH_KGDB
 #include <asm/kgdb.h>
@@ -41,7 +42,7 @@ extern void * __rd_start, * __rd_end;
  * This value will be used at the very early stage of serial setup.
  * The bigger value means no problem.
  */
-struct sh_cpuinfo boot_cpu_data = { CPU_SH_NONE, 0, 10000000, };
+struct sh_cpuinfo boot_cpu_data = { CPU_SH_NONE, 10000000, };
 struct screen_info screen_info;
 
 #if defined(CONFIG_SH_UNKNOWN)
@@ -186,7 +187,7 @@ static inline void parse_cmdline (char ** cmdline_p, char mv_name[MV_NAME_SIZE],
 
 static int __init sh_mv_setup(char **cmdline_p)
 {
-#if defined(CONFIG_SH_UNKNOWN)
+#ifdef CONFIG_SH_UNKNOWN
 	extern struct sh_machine_vector mv_unknown;
 #endif
 	struct sh_machine_vector *mv = NULL;
@@ -196,7 +197,7 @@ static int __init sh_mv_setup(char **cmdline_p)
 
 	parse_cmdline(cmdline_p, mv_name, &mv, &mv_io_base, &mv_mmio_enable);
 
-#ifdef CONFIG_SH_GENERIC
+#ifdef CONFIG_SH_UNKNOWN
 	if (mv == NULL) {
 		mv = &mv_unknown;
 		if (*mv_name != '\0') {
@@ -205,9 +206,6 @@ static int __init sh_mv_setup(char **cmdline_p)
 		}
 	}
 	sh_mv = *mv;
-#endif
-#ifdef CONFIG_SH_UNKNOWN
-	sh_mv = mv_unknown;
 #endif
 
 	/*
@@ -231,10 +229,8 @@ static int __init sh_mv_setup(char **cmdline_p)
 	mv_set(readb);	mv_set(readw);	mv_set(readl);
 	mv_set(writeb);	mv_set(writew);	mv_set(writel);
 
-	mv_set(ioremap);
-	mv_set(iounmap);
-
-	mv_set(isa_port2addr);
+	mv_set(ioport_map);
+	mv_set(ioport_unmap);
 	mv_set(irq_demux);
 
 #ifdef CONFIG_SH_UNKNOWN
@@ -273,16 +269,12 @@ void __init setup_arch(char **cmdline_p)
 	init_mm.end_data = (unsigned long) _edata;
 	init_mm.brk = (unsigned long) _end;
 
-	code_resource.start = virt_to_bus(_text);
-	code_resource.end = virt_to_bus(_etext)-1;
-	data_resource.start = virt_to_bus(_etext);
-	data_resource.end = virt_to_bus(_edata)-1;
+	code_resource.start = (unsigned long)virt_to_phys(_text);
+	code_resource.end = (unsigned long)virt_to_phys(_etext)-1;
+	data_resource.start = (unsigned long)virt_to_phys(_etext);
+	data_resource.end = (unsigned long)virt_to_phys(_edata)-1;
 
 	sh_mv_setup(cmdline_p);
-
-#define PFN_UP(x)	(((x) + PAGE_SIZE-1) >> PAGE_SHIFT)
-#define PFN_DOWN(x)	((x) >> PAGE_SHIFT)
-#define PFN_PHYS(x)	((x) << PAGE_SHIFT)
 
 	/*
 	 * Find the highest page frame number we have available
@@ -409,9 +401,8 @@ static int __init topology_init(void)
 {
 	int cpu_id;
 
-	for (cpu_id = 0; cpu_id < NR_CPUS; cpu_id++)
-		if (cpu_possible(cpu_id))
-			register_cpu(&cpu[cpu_id], cpu_id, NULL);
+	for_each_possible_cpu(cpu_id)
+		register_cpu(&cpu[cpu_id], cpu_id, NULL);
 
 	return 0;
 }
@@ -435,6 +426,9 @@ static const char *cpu_name[] = {
 	[CPU_ST40GX1]	= "ST40GX1",
 	[CPU_SH4_202]	= "SH4-202",
 	[CPU_SH4_501]	= "SH4-501",
+	[CPU_SH7770]	= "SH7770",
+	[CPU_SH7780]	= "SH7780",
+	[CPU_SH7781]	= "SH7781",
 	[CPU_SH_NONE]	= "Unknown"
 };
 
@@ -445,7 +439,7 @@ const char *get_cpu_subtype(void)
 
 #ifdef CONFIG_PROC_FS
 static const char *cpu_flags[] = {
-	"none", "fpu", "p2flush", "mmuassoc", "dsp", "perfctr",
+	"none", "fpu", "p2flush", "mmuassoc", "dsp", "perfctr", "ptea", NULL
 };
 
 static void show_cpuflags(struct seq_file *m)
@@ -459,7 +453,7 @@ static void show_cpuflags(struct seq_file *m)
 		return;
 	}
 
-	for (i = 0; i < cpu_data->flags; i++)
+	for (i = 0; cpu_flags[i]; i++)
 		if ((cpu_data->flags & (1 << i)))
 			seq_printf(m, " %s", cpu_flags[i+1]);
 
@@ -472,7 +466,8 @@ static void show_cacheinfo(struct seq_file *m, const char *type, struct cache_in
 
 	cache_size = info.ways * info.sets * info.linesz;
 
-	seq_printf(m, "%s size\t: %dKiB\n", type, cache_size >> 10);
+	seq_printf(m, "%s size\t: %2dKiB (%d-way)\n",
+		   type, cache_size >> 10, info.ways);
 }
 
 /*
@@ -511,20 +506,8 @@ static int show_cpuinfo(struct seq_file *m, void *v)
 		     boot_cpu_data.loops_per_jiffy/(500000/HZ),
 		     (boot_cpu_data.loops_per_jiffy/(5000/HZ)) % 100);
 
-#define PRINT_CLOCK(name, value) \
-	seq_printf(m, name " clock\t: %d.%02dMHz\n", \
-		     ((value) / 1000000), ((value) % 1000000)/10000)
-	
-	PRINT_CLOCK("cpu", boot_cpu_data.cpu_clock);
-	PRINT_CLOCK("bus", boot_cpu_data.bus_clock);
-#ifdef CONFIG_CPU_SUBTYPE_ST40STB1
-	PRINT_CLOCK("memory", boot_cpu_data.memory_clock);
-#endif
-	PRINT_CLOCK("module", boot_cpu_data.module_clock);
-
-	return 0;
+	return show_clocks(m);
 }
-
 
 static void *c_start(struct seq_file *m, loff_t *pos)
 {
@@ -596,7 +579,7 @@ static int __init kgdb_parse_options(char *options)
 		options += map->namelen + 1;
 
 		options = (*options == ',') ? options+1 : options;
-		
+
 		/* Read optional parameters (baud/parity/bits) */
 		baud = simple_strtoul(options, &options, 10);
 		if (baud != 0) {

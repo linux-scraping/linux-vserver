@@ -100,7 +100,7 @@ static int bcm1480_pci_can_access(struct pci_bus *bus, int devfn)
 
 	if (bus->number == 0) {
 		devno = PCI_SLOT(devfn);
- 		if (bcm1480_bus_status & PCI_DEVICE_MODE)
+		if (bcm1480_bus_status & PCI_DEVICE_MODE)
 			return 0;
 		else
 			return 1;
@@ -234,11 +234,9 @@ static int __init bcm1480_pcibios_init(void)
 
 	/* turn on ExpMemEn */
 	cmdreg = READCFG32(CFGOFFSET(0, PCI_DEVFN(PCI_BRIDGE_DEVICE, 0), 0x40));
-	printk("PCIFeatureCtrl = %x\n", cmdreg);
 	WRITECFG32(CFGOFFSET(0, PCI_DEVFN(PCI_BRIDGE_DEVICE, 0), 0x40),
 			cmdreg | 0x10);
 	cmdreg = READCFG32(CFGOFFSET(0, PCI_DEVFN(PCI_BRIDGE_DEVICE, 0), 0x40));
-	printk("PCIFeatureCtrl = %x\n", cmdreg);
 
 	/*
 	 * Establish mappings in KSEG2 (kernel virtual) to PCI I/O

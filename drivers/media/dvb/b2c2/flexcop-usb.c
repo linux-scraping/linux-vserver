@@ -541,10 +541,10 @@ static struct usb_device_id flexcop_usb_table [] = {
 	    { USB_DEVICE(0x0af7, 0x0101) },
 	    { }
 };
+MODULE_DEVICE_TABLE (usb, flexcop_usb_table);
 
 /* usb specific object needed to register this driver with the usb subsystem */
 static struct usb_driver flexcop_usb_driver = {
-	.owner		= THIS_MODULE,
 	.name		= "b2c2_flexcop_usb",
 	.probe		= flexcop_usb_probe,
 	.disconnect = flexcop_usb_disconnect,

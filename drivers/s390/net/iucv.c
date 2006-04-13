@@ -1,6 +1,4 @@
 /* 
- * $Id: iucv.c,v 1.45 2005/04/26 22:59:06 braunu Exp $
- *
  * IUCV network driver
  *
  * Copyright (C) 2001 IBM Deutschland Entwicklung GmbH, IBM Corporation
@@ -29,8 +27,6 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  *
- * RELEASE-TAG: IUCV lowlevel driver $Revision: 1.45 $
- *
  */
 
 /* #define DEBUG */
@@ -54,7 +50,7 @@
 #include <asm/s390_ext.h>
 #include <asm/ebcdic.h>
 #include <asm/smp.h>
-#include <asm/ccwdev.h> //for root device stuff
+#include <asm/s390_rdev.h>
 
 /* FLAGS:
  * All flags are defined in the field IPFLAGS1 of each function
@@ -355,17 +351,7 @@ do { \
 static void
 iucv_banner(void)
 {
-	char vbuf[] = "$Revision: 1.45 $";
-	char *version = vbuf;
-
-	if ((version = strchr(version, ':'))) {
-		char *p = strchr(version + 1, '$');
-		if (p)
-			*p = '\0';
-	} else
-		version = " ??? ";
-	printk(KERN_INFO
-	       "IUCV lowlevel driver Version%s initialized\n", version);
+	printk(KERN_INFO "IUCV lowlevel driver initialized\n");
 }
 
 /**
@@ -400,7 +386,7 @@ iucv_init(void)
 	}
 
 	/* Note: GFP_DMA used used to get memory below 2G */
-	iucv_external_int_buffer = kmalloc(sizeof(iucv_GeneralInterrupt),
+	iucv_external_int_buffer = kzalloc(sizeof(iucv_GeneralInterrupt),
 					   GFP_KERNEL|GFP_DMA);
 	if (!iucv_external_int_buffer) {
 		printk(KERN_WARNING
@@ -410,10 +396,9 @@ iucv_init(void)
 		bus_unregister(&iucv_bus);
 		return -ENOMEM;
 	}
-	memset(iucv_external_int_buffer, 0, sizeof(iucv_GeneralInterrupt));
 
 	/* Initialize parameter pool */
-	iucv_param_pool = kmalloc(sizeof(iucv_param) * PARAM_POOL_SIZE,
+	iucv_param_pool = kzalloc(sizeof(iucv_param) * PARAM_POOL_SIZE,
 				  GFP_KERNEL|GFP_DMA);
 	if (!iucv_param_pool) {
 		printk(KERN_WARNING "%s: Could not allocate param pool\n",
@@ -424,7 +409,6 @@ iucv_init(void)
 		bus_unregister(&iucv_bus);
 		return -ENOMEM;
 	}
-	memset(iucv_param_pool, 0, sizeof(iucv_param) * PARAM_POOL_SIZE);
 
 	/* Initialize irq queue */
 	INIT_LIST_HEAD(&iucv_irq_queue);
@@ -477,7 +461,7 @@ grab_param(void)
 		ptr++;
 		if (ptr >= iucv_param_pool + PARAM_POOL_SIZE)
 			ptr = iucv_param_pool;
-	} while (atomic_compare_and_swap(0, 1, &ptr->in_use));
+	} while (atomic_cmpxchg(&ptr->in_use, 0, 1) != 0);
 	hint = ptr - iucv_param_pool;
 
 	memset(&ptr->param, 0, sizeof(ptr->param));
@@ -807,15 +791,14 @@ iucv_register_program (__u8 pgmname[16],
 		}
 
 		max_connections = iucv_query_maxconn();
-		iucv_pathid_table = kmalloc(max_connections * sizeof(handler *),
-				       GFP_ATOMIC);
+		iucv_pathid_table = kcalloc(max_connections, sizeof(handler *),
+					GFP_ATOMIC);
 		if (iucv_pathid_table == NULL) {
 			printk(KERN_WARNING "%s: iucv_pathid_table storage "
 			       "allocation failed\n", __FUNCTION__);
 			kfree(new_handler);
 			return NULL;
 		}
-		memset (iucv_pathid_table, 0, max_connections * sizeof(handler *));
 	}
 	memset(new_handler, 0, sizeof (handler));
 	memcpy(new_handler->id.user_data, pgmname,

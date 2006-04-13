@@ -76,8 +76,7 @@ LINUXINCLUDE    += $(LINUXINCLUDE-y)
 CHECKFLAGS	+= -m$(SZ) -D__powerpc__ -D__powerpc$(SZ)__
 
 ifeq ($(CONFIG_PPC64),y)
-GCC_VERSION     := $(call cc-version)
-GCC_BROKEN_VEC	:= $(shell if [ $(GCC_VERSION) -lt 0400 ] ; then echo "y"; fi)
+GCC_BROKEN_VEC	:= $(shell if [ $(call cc-version) -lt 0400 ] ; then echo "y"; fi)
 
 ifeq ($(CONFIG_POWER4_ONLY),y)
 ifeq ($(CONFIG_ALTIVEC),y)
@@ -130,30 +129,23 @@ core-y				+= arch/powerpc/kernel/ \
 				   arch/powerpc/lib/ \
 				   arch/powerpc/sysdev/ \
 				   arch/powerpc/platforms/
-core-$(CONFIG_PPC32)		+= arch/ppc/kernel/
-core-$(CONFIG_MATH_EMULATION)	+= arch/ppc/math-emu/
+core-$(CONFIG_MATH_EMULATION)	+= arch/powerpc/math-emu/
 core-$(CONFIG_XMON)		+= arch/powerpc/xmon/
-core-$(CONFIG_APUS)		+= arch/ppc/amiga/
-drivers-$(CONFIG_8xx)		+= arch/ppc/8xx_io/
-drivers-$(CONFIG_4xx)		+= arch/ppc/4xx_io/
-drivers-$(CONFIG_CPM2)		+= arch/ppc/8260_io/
 
 drivers-$(CONFIG_OPROFILE)	+= arch/powerpc/oprofile/
 
-defaultimage-$(CONFIG_PPC32)	:= zImage
+# Default to zImage, override when needed
+defaultimage-y			:= zImage
 defaultimage-$(CONFIG_PPC_ISERIES) := vmlinux
-defaultimage-$(CONFIG_PPC_PSERIES) := zImage
+defaultimage-$(CONFIG_DEFAULT_UIMAGE) := uImage
 KBUILD_IMAGE := $(defaultimage-y)
 all: $(KBUILD_IMAGE)
 
 CPPFLAGS_vmlinux.lds	:= -Upowerpc
 
-# All the instructions talk about "make bzImage".
-bzImage: zImage
+BOOT_TARGETS = zImage zImage.initrd znetboot znetboot.initrd vmlinux.sm uImage vmlinux.bin
 
-BOOT_TARGETS = zImage zImage.initrd znetboot znetboot.initrd vmlinux.sm
-
-.PHONY: $(BOOT_TARGETS)
+PHONY += $(BOOT_TARGETS)
 
 boot := arch/$(ARCH)/boot
 
@@ -171,6 +163,8 @@ endef
 
 archclean:
 	$(Q)$(MAKE) $(clean)=$(boot)
+
+archmrproper:
 	$(Q)rm -rf arch/$(ARCH)/include
 
 archprepare: checkbin
@@ -189,10 +183,9 @@ TOUT	:= .tmp_gas_check
 # Ensure this is binutils 2.12.1 (or 2.12.90.0.7) or later for altivec
 # instructions.
 # gcc-3.4 and binutils-2.14 are a fatal combination.
-GCC_VERSION	:= $(call cc-version)
 
 checkbin:
-	@if test "$(GCC_VERSION)" = "0304" ; then \
+	@if test "$(call cc-version)" = "0304" ; then \
 		if ! /bin/echo mftb 5 | $(AS) -v -mppc -many -o $(TOUT) >/dev/null 2>&1 ; then \
 			echo -n '*** ${VERSION}.${PATCHLEVEL} kernels no longer build '; \
 			echo 'correctly with gcc-3.4 and your version of binutils.'; \

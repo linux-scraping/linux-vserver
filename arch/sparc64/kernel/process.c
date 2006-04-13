@@ -44,82 +44,60 @@
 #include <asm/fpumacro.h>
 #include <asm/head.h>
 #include <asm/cpudata.h>
+#include <asm/mmu_context.h>
 #include <asm/unistd.h>
+#include <asm/hypervisor.h>
 
 /* #define VERBOSE_SHOWREGS */
 
-/*
- * Nothing special yet...
- */
-void default_idle(void)
+static void sparc64_yield(void)
 {
-}
+	if (tlb_type != hypervisor)
+		return;
 
-#ifndef CONFIG_SMP
+	clear_thread_flag(TIF_POLLING_NRFLAG);
+	smp_mb__after_clear_bit();
 
-/*
- * the idle loop on a Sparc... ;)
- */
-void cpu_idle(void)
-{
-	/* endless idle loop with no priority at all */
-	for (;;) {
-		/* If current->work.need_resched is zero we should really
-		 * setup for a system wakup event and execute a shutdown
-		 * instruction.
-		 *
-		 * But this requires writing back the contents of the
-		 * L2 cache etc. so implement this later. -DaveM
-		 */
-		while (!need_resched())
-			barrier();
+	while (!need_resched()) {
+		unsigned long pstate;
 
-		preempt_enable_no_resched();
-		schedule();
-		preempt_disable();
-		check_pgt_cache();
+		/* Disable interrupts. */
+		__asm__ __volatile__(
+			"rdpr %%pstate, %0\n\t"
+			"andn %0, %1, %0\n\t"
+			"wrpr %0, %%g0, %%pstate"
+			: "=&r" (pstate)
+			: "i" (PSTATE_IE));
+
+		if (!need_resched())
+			sun4v_cpu_yield();
+
+		/* Re-enable interrupts. */
+		__asm__ __volatile__(
+			"rdpr %%pstate, %0\n\t"
+			"or %0, %1, %0\n\t"
+			"wrpr %0, %%g0, %%pstate"
+			: "=&r" (pstate)
+			: "i" (PSTATE_IE));
 	}
+
+	set_thread_flag(TIF_POLLING_NRFLAG);
 }
 
-#else
-
-/*
- * the idle loop on a UltraMultiPenguin...
- *
- * TIF_POLLING_NRFLAG is set because we do not sleep the cpu
- * inside of the idler task, so an interrupt is not needed
- * to get a clean fast response.
- *
- * XXX Reverify this assumption... -DaveM
- *
- * Addendum: We do want it to do something for the signal
- *           delivery case, we detect that by just seeing
- *           if we are trying to send this to an idler or not.
- */
+/* The idle loop on sparc64. */
 void cpu_idle(void)
 {
-	cpuinfo_sparc *cpuinfo = &local_cpu_data();
 	set_thread_flag(TIF_POLLING_NRFLAG);
 
 	while(1) {
 		if (need_resched()) {
-			cpuinfo->idle_volume = 0;
 			preempt_enable_no_resched();
 			schedule();
 			preempt_disable();
-			check_pgt_cache();
 		}
-		cpuinfo->idle_volume++;
-
-		/* The store ordering is so that IRQ handlers on
-		 * other cpus see our increasing idleness for the buddy
-		 * redistribution algorithm.  -DaveM
-		 */
-		membar_storeload_storestore();
+		sparc64_yield();
 	}
 }
-
-#endif
 
 extern char reboot_command [];
 
@@ -164,6 +142,7 @@ void machine_restart(char * cmd)
 	panic("Reboot failed!");
 }
 
+#ifdef CONFIG_COMPAT
 static void show_regwindow32(struct pt_regs *regs)
 {
 	struct reg_window32 __user *rw;
@@ -189,6 +168,9 @@ static void show_regwindow32(struct pt_regs *regs)
 	       r_w.ins[0], r_w.ins[1], r_w.ins[2], r_w.ins[3],
 	       r_w.ins[4], r_w.ins[5], r_w.ins[6], r_w.ins[7]);
 }
+#else
+#define show_regwindow32(regs)	do { } while (0)
+#endif
 
 static void show_regwindow(struct pt_regs *regs)
 {
@@ -350,12 +332,14 @@ void show_regs(struct pt_regs *regs)
 	extern long etrap, etraptl1;
 #endif
 	__show_regs(regs);
+#if 0
 #ifdef CONFIG_SMP
 	{
 		extern void smp_report_regs(void);
 
 		smp_report_regs();
 	}
+#endif
 #endif
 
 #ifdef VERBOSE_SHOWREGS	
@@ -390,7 +374,7 @@ void show_regs32(struct pt_regs32 *regs)
 
 unsigned long thread_saved_pc(struct task_struct *tsk)
 {
-	struct thread_info *ti = tsk->thread_info;
+	struct thread_info *ti = task_thread_info(tsk);
 	unsigned long ret = 0xdeadbeefUL;
 	
 	if (ti && ti->ksp) {
@@ -429,30 +413,15 @@ void exit_thread(void)
 void flush_thread(void)
 {
 	struct thread_info *t = current_thread_info();
+	struct mm_struct *mm;
 
 	if (t->flags & _TIF_ABI_PENDING)
 		t->flags ^= (_TIF_ABI_PENDING | _TIF_32BIT);
 
-	if (t->task->mm) {
-		unsigned long pgd_cache = 0UL;
-		if (test_thread_flag(TIF_32BIT)) {
-			struct mm_struct *mm = t->task->mm;
-			pgd_t *pgd0 = &mm->pgd[0];
-			pud_t *pud0 = pud_offset(pgd0, 0);
+	mm = t->task->mm;
+	if (mm)
+		tsb_context_switch(mm);
 
-			if (pud_none(*pud0)) {
-				pmd_t *page = pmd_alloc_one(mm, 0);
-				pud_set(pud0, page);
-			}
-			pgd_cache = get_pgd_cache(pgd0);
-		}
-		__asm__ __volatile__("stxa %0, [%1] %2\n\t"
-				     "membar #Sync"
-				     : /* no outputs */
-				     : "r" (pgd_cache),
-				     "r" (TSB_REG),
-				     "i" (ASI_DMMU));
-	}
 	set_thread_wsaved(0);
 
 	/* Turn off performance counters if on. */
@@ -551,6 +520,18 @@ void synchronize_user_stack(void)
 	}
 }
 
+static void stack_unaligned(unsigned long sp)
+{
+	siginfo_t info;
+
+	info.si_signo = SIGBUS;
+	info.si_errno = 0;
+	info.si_code = BUS_ADRALN;
+	info.si_addr = (void __user *) sp;
+	info.si_trapno = 0;
+	force_sig_info(SIGBUS, &info, current);
+}
+
 void fault_in_user_windows(void)
 {
 	struct thread_info *t = current_thread_info();
@@ -566,13 +547,17 @@ void fault_in_user_windows(void)
 	flush_user_windows();
 	window = get_thread_wsaved();
 
-	if (window != 0) {
+	if (likely(window != 0)) {
 		window -= 1;
 		do {
 			unsigned long sp = (t->rwbuf_stkptrs[window] + bias);
 			struct reg_window *rwin = &t->reg_window[window];
 
-			if (copy_to_user((char __user *)sp, rwin, winsize))
+			if (unlikely(sp & 0x7UL))
+				stack_unaligned(sp);
+
+			if (unlikely(copy_to_user((char __user *)sp,
+						  rwin, winsize)))
 				goto barf;
 		} while (window--);
 	}
@@ -616,11 +601,11 @@ int copy_thread(int nr, unsigned long clone_flags, unsigned long sp,
 		unsigned long unused,
 		struct task_struct *p, struct pt_regs *regs)
 {
-	struct thread_info *t = p->thread_info;
+	struct thread_info *t = task_thread_info(p);
 	char *child_trap_frame;
 
 	/* Calculate offset to stack_frame & pt_regs */
-	child_trap_frame = ((char *)t) + (THREAD_SIZE - (TRACEREG_SZ+STACKFRAME_SZ));
+	child_trap_frame = task_stack_page(p) + (THREAD_SIZE - (TRACEREG_SZ+STACKFRAME_SZ));
 	memcpy(child_trap_frame, (((struct sparc_stackf *)regs)-1), (TRACEREG_SZ+STACKFRAME_SZ));
 
 	t->flags = (t->flags & ~((0xffUL << TI_FLAG_CWP_SHIFT) | (0xffUL << TI_FLAG_CURRENT_DS_SHIFT))) |
@@ -845,9 +830,9 @@ unsigned long get_wchan(struct task_struct *task)
             task->state == TASK_RUNNING)
 		goto out;
 
-	thread_info_base = (unsigned long) task->thread_info;
+	thread_info_base = (unsigned long) task_stack_page(task);
 	bias = STACK_BIAS;
-	fp = task->thread_info->ksp + bias;
+	fp = task_thread_info(task)->ksp + bias;
 
 	do {
 		/* Bogus frame pointer? */

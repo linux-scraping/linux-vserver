@@ -20,9 +20,9 @@
 */
 
 #include <linux/platform_device.h>
+#include <linux/clk.h>
 
 #include <asm/hardware.h>
-#include <asm/hardware/clock.h>
 #include <asm/arch/usb-control.h>
 
 #define valid_port(idx) ((idx) == 1 || (idx) == 2)
@@ -158,7 +158,7 @@ static int ohci_s3c2410_hub_control (
 		"s3c2410_hub_control(%p,0x%04x,0x%04x,0x%04x,%p,%04x)\n",
 		hcd, typeReq, wValue, wIndex, buf, wLength);
 
-	/* if we are only an humble host without any special capabilites
+	/* if we are only an humble host without any special capabilities
 	 * process the request straight away and exit */
 
 	if (info == NULL) {
@@ -363,7 +363,6 @@ int usb_hcd_s3c2410_probe (const struct hc_driver *driver,
 		goto err1;
 	}
 
-	clk_use(clk);
 	s3c2410_start_hc(dev, hcd);
 
 	hcd->regs = ioremap(hcd->rsrc_start, hcd->rsrc_len);
@@ -384,7 +383,6 @@ int usb_hcd_s3c2410_probe (const struct hc_driver *driver,
  err2:
 	s3c2410_stop_hc(dev);
 	iounmap(hcd->regs);
-	clk_unuse(clk);
 	clk_put(clk);
 
  err1:

@@ -1,5 +1,4 @@
 /*
- * arch/ppc64/kernel/iommu.c
  * Copyright (C) 2001 Mike Corrigan & Dave Engebretsen, IBM Corporation
  * 
  * Rewrite, cleanup, new allocation schemes, virtual merging: 
@@ -334,9 +333,6 @@ int iommu_map_sg(struct device *dev, struct iommu_table *tbl,
 
 	spin_unlock_irqrestore(&(tbl->it_lock), flags);
 
-	/* Make sure updates are seen by hardware */
-	mb();
-
 	DBG("mapped %d elements:\n", outcount);
 
 	/* For the sake of iommu_unmap_sg, we clear out the length in the
@@ -347,6 +343,10 @@ int iommu_map_sg(struct device *dev, struct iommu_table *tbl,
 		outs->dma_address = DMA_ERROR_CODE;
 		outs->dma_length = 0;
 	}
+
+	/* Make sure updates are seen by hardware */
+	mb();
+
 	return outcount;
 
  failure:
@@ -358,6 +358,8 @@ int iommu_map_sg(struct device *dev, struct iommu_table *tbl,
 			npages = (PAGE_ALIGN(s->dma_address + s->dma_length) - vaddr)
 				>> PAGE_SHIFT;
 			__iommu_free(tbl, vaddr, npages);
+			s->dma_address = DMA_ERROR_CODE;
+			s->dma_length = 0;
 		}
 	}
 	spin_unlock_irqrestore(&(tbl->it_lock), flags);

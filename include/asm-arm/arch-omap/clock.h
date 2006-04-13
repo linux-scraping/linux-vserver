@@ -19,6 +19,7 @@ struct clk {
 	struct list_head	node;
 	struct module		*owner;
 	const char		*name;
+	int			id;
 	struct clk		*parent;
 	unsigned long		rate;
 	__u32			flags;
@@ -38,8 +39,6 @@ struct clk {
 struct clk_functions {
 	int		(*clk_enable)(struct clk *clk);
 	void		(*clk_disable)(struct clk *clk);
-	int		(*clk_use)(struct clk *clk);
-	void		(*clk_unuse)(struct clk *clk);
 	long		(*clk_round_rate)(struct clk *clk, unsigned long rate);
 	int		(*clk_set_rate)(struct clk *clk, unsigned long rate);
 	int		(*clk_set_parent)(struct clk *clk, struct clk *parent);
@@ -59,6 +58,7 @@ extern void propagate_rate(struct clk *clk);
 extern void followparent_recalc(struct clk * clk);
 extern void clk_allow_idle(struct clk *clk);
 extern void clk_deny_idle(struct clk *clk);
+extern int clk_get_usecount(struct clk *clk);
 
 /* Clock flags */
 #define RATE_CKCTL		(1 << 0)	/* Main fixed ratio clocks */
@@ -82,10 +82,11 @@ extern void clk_deny_idle(struct clk *clk);
 #define CM_PLL_SEL1		(1 << 18)
 #define CM_PLL_SEL2		(1 << 19)
 #define CM_SYSCLKOUT_SEL1	(1 << 20)
-#define CLOCK_IN_OMAP730	(1 << 21)
-#define CLOCK_IN_OMAP1510	(1 << 22)
-#define CLOCK_IN_OMAP16XX	(1 << 23)
-#define CLOCK_IN_OMAP242X	(1 << 24)
-#define CLOCK_IN_OMAP243X	(1 << 25)
+#define CLOCK_IN_OMAP310	(1 << 21)
+#define CLOCK_IN_OMAP730	(1 << 22)
+#define CLOCK_IN_OMAP1510	(1 << 23)
+#define CLOCK_IN_OMAP16XX	(1 << 24)
+#define CLOCK_IN_OMAP242X	(1 << 25)
+#define CLOCK_IN_OMAP243X	(1 << 26)
 
 #endif

@@ -1,6 +1,4 @@
 /*
- * arch/ppc/syslib/ppc85xx_setup.c
- *
  * MPC85XX common board code
  *
  * Maintainer: Kumar Gala <galak@kernel.crashing.org>
@@ -90,7 +88,7 @@ mpc85xx_early_serial_map(void)
 
 #if defined(CONFIG_SERIAL_TEXT_DEBUG) || defined(CONFIG_KGDB)
 	memset(&serial_req, 0, sizeof (serial_req));
-	serial_req.iotype = SERIAL_IO_MEM;
+	serial_req.iotype = UPIO_MEM;
 	serial_req.mapbase = pdata[0].mapbase;
 	serial_req.membase = pdata[0].membase;
 	serial_req.regshift = 0;
@@ -237,7 +235,7 @@ mpc85xx_setup_pci2(struct pci_controller *hose)
 	   (__ilog2(MPC85XX_PCI2_UPPER_MEM - MPC85XX_PCI2_LOWER_MEM + 1) - 1);
 
 	/* Setup outbound IO windows @ MPC85XX_PCI2_IO_BASE */
-	pci->potar2 = (MPC85XX_PCI2_LOWER_IO >> 12) & 0x000fffff;;
+	pci->potar2 = (MPC85XX_PCI2_LOWER_IO >> 12) & 0x000fffff;
 	pci->potear2 = 0x00000000;
 	pci->powbar2 = (MPC85XX_PCI2_IO_BASE >> 12) & 0x000fffff;
 	/* Enable, IO R/W */

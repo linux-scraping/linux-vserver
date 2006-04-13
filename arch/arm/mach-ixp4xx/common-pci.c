@@ -341,6 +341,29 @@ int dma_needs_bounce(struct device *dev, dma_addr_t dma_addr, size_t size)
 	return (dev->bus == &pci_bus_type ) && ((dma_addr + size) >= SZ_64M);
 }
 
+/*
+ * Only first 64MB of memory can be accessed via PCI.
+ * We use GFP_DMA to allocate safe buffers to do map/unmap.
+ * This is really ugly and we need a better way of specifying
+ * DMA-capable regions of memory.
+ */
+void __init ixp4xx_adjust_zones(int node, unsigned long *zone_size,
+	unsigned long *zhole_size)
+{
+	unsigned int sz = SZ_64M >> PAGE_SHIFT;
+
+	/*
+	 * Only adjust if > 64M on current system
+	 */
+	if (node || (zone_size[0] <= sz))
+		return;
+
+	zone_size[1] = zone_size[0] - sz;
+	zone_size[0] = sz;
+	zhole_size[1] = zhole_size[0];
+	zhole_size[0] = 0;
+}
+
 void __init ixp4xx_pci_preinit(void)
 {  
 	unsigned long processor_id;
@@ -440,7 +463,7 @@ int ixp4xx_setup(int nr, struct pci_sys_data *sys)
 	if (nr >= 1)
 		return 0;
 
-	res = kmalloc(sizeof(*res) * 2, GFP_KERNEL);
+	res = kzalloc(sizeof(*res) * 2, GFP_KERNEL);
 	if (res == NULL) {
 		/* 
 		 * If we're out of memory this early, something is wrong,
@@ -448,7 +471,6 @@ int ixp4xx_setup(int nr, struct pci_sys_data *sys)
 		 */
 		panic("PCI: unable to allocate resources?\n");
 	}
-	memset(res, 0, sizeof(*res) * 2);
 
 	local_write_config(PCI_COMMAND, 2, PCI_COMMAND_MASTER | PCI_COMMAND_MEMORY);
 

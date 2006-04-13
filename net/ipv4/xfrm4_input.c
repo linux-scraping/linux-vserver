@@ -11,6 +11,8 @@
 
 #include <linux/module.h>
 #include <linux/string.h>
+#include <linux/netfilter.h>
+#include <linux/netfilter_ipv4.h>
 #include <net/inet_ecn.h>
 #include <net/ip.h>
 #include <net/xfrm.h>
@@ -45,11 +47,28 @@ static int xfrm4_parse_spi(struct sk_buff *skb, u8 nexthdr, u32 *spi, u32 *seq)
 	return xfrm_parse_spi(skb, nexthdr, spi, seq);
 }
 
+#ifdef CONFIG_NETFILTER
+static inline int xfrm4_rcv_encap_finish(struct sk_buff *skb)
+{
+	struct iphdr *iph = skb->nh.iph;
+
+	if (skb->dst == NULL) {
+		if (ip_route_input(skb, iph->daddr, iph->saddr, iph->tos,
+		                   skb->dev))
+			goto drop;
+	}
+	return dst_input(skb);
+drop:
+	kfree_skb(skb);
+	return NET_RX_DROP;
+}
+#endif
+
 int xfrm4_rcv_encap(struct sk_buff *skb, __u16 encap_type)
 {
 	int err;
 	u32 spi, seq;
-	struct sec_decap_state xfrm_vec[XFRM_MAX_DEPTH];
+	struct xfrm_state *xfrm_vec[XFRM_MAX_DEPTH];
 	struct xfrm_state *x;
 	int xfrm_nr = 0;
 	int decaps = 0;
@@ -71,14 +90,16 @@ int xfrm4_rcv_encap(struct sk_buff *skb, __u16 encap_type)
 		if (unlikely(x->km.state != XFRM_STATE_VALID))
 			goto drop_unlock;
 
+		if (x->encap->encap_type != encap_type)
+			goto drop_unlock;
+
 		if (x->props.replay_window && xfrm_replay_check(x, seq))
 			goto drop_unlock;
 
 		if (xfrm_state_check_expire(x))
 			goto drop_unlock;
 
-		xfrm_vec[xfrm_nr].decap.decap_type = encap_type;
-		if (x->type->input(x, &(xfrm_vec[xfrm_nr].decap), skb))
+		if (x->type->input(x, skb))
 			goto drop_unlock;
 
 		/* only the first xfrm gets the encap type */
@@ -92,7 +113,7 @@ int xfrm4_rcv_encap(struct sk_buff *skb, __u16 encap_type)
 
 		spin_unlock(&x->lock);
 
-		xfrm_vec[xfrm_nr++].xvec = x;
+		xfrm_vec[xfrm_nr++] = x;
 
 		iph = skb->nh.iph;
 
@@ -134,8 +155,11 @@ int xfrm4_rcv_encap(struct sk_buff *skb, __u16 encap_type)
 	if (xfrm_nr + skb->sp->len > XFRM_MAX_DEPTH)
 		goto drop;
 
-	memcpy(skb->sp->x+skb->sp->len, xfrm_vec, xfrm_nr*sizeof(struct sec_decap_state));
+	memcpy(skb->sp->xvec + skb->sp->len, xfrm_vec,
+	       xfrm_nr * sizeof(xfrm_vec[0]));
 	skb->sp->len += xfrm_nr;
+
+	nf_reset(skb);
 
 	if (decaps) {
 		if (!(skb->dev->flags&IFF_LOOPBACK)) {
@@ -145,7 +169,17 @@ int xfrm4_rcv_encap(struct sk_buff *skb, __u16 encap_type)
 		netif_rx(skb);
 		return 0;
 	} else {
+#ifdef CONFIG_NETFILTER
+		__skb_push(skb, skb->data - skb->nh.raw);
+		skb->nh.iph->tot_len = htons(skb->len);
+		ip_send_check(skb->nh.iph);
+
+		NF_HOOK(PF_INET, NF_IP_PRE_ROUTING, skb, skb->dev, NULL,
+		        xfrm4_rcv_encap_finish);
+		return 0;
+#else
 		return -skb->nh.iph->protocol;
+#endif
 	}
 
 drop_unlock:
@@ -153,7 +187,7 @@ drop_unlock:
 	xfrm_state_put(x);
 drop:
 	while (--xfrm_nr >= 0)
-		xfrm_state_put(xfrm_vec[xfrm_nr].xvec);
+		xfrm_state_put(xfrm_vec[xfrm_nr]);
 
 	kfree_skb(skb);
 	return 0;

@@ -19,11 +19,11 @@
 #include <linux/personality.h>
 #include <linux/ptrace.h>
 #include <linux/kallsyms.h>
+#include <linux/delay.h>
 #include <linux/init.h>
 
 #include <asm/atomic.h>
 #include <asm/cacheflush.h>
-#include <asm/io.h>
 #include <asm/system.h>
 #include <asm/uaccess.h>
 #include <asm/unistd.h>
@@ -165,7 +165,7 @@ static void dump_backtrace(struct pt_regs *regs, struct task_struct *tsk)
 	} else if (verify_stack(fp)) {
 		printk("invalid frame pointer 0x%08x", fp);
 		ok = 0;
-	} else if (fp < (unsigned long)(tsk->thread_info + 1))
+	} else if (fp < (unsigned long)end_of_stack(tsk))
 		printk("frame pointer underflow");
 	printk("\n");
 
@@ -211,7 +211,7 @@ static void __die(const char *str, int err, struct thread_info *thread, struct p
 
 	if (!user_mode(regs) || in_interrupt()) {
 		dump_mem("Stack: ", regs->ARM_sp,
-			 THREAD_SIZE + (unsigned long)tsk->thread_info);
+			 THREAD_SIZE + (unsigned long)task_stack_page(tsk));
 		dump_backtrace(regs, tsk);
 		dump_instr(regs);
 	}
@@ -232,6 +232,13 @@ NORET_TYPE void die(const char *str, struct pt_regs *regs, int err)
 	__die(str, err, thread, regs);
 	bust_spinlocks(0);
 	spin_unlock_irq(&die_lock);
+
+	if (panic_on_oops) {
+		printk(KERN_EMERG "Fatal exception: panic in 5 seconds\n");
+		ssleep(5);
+		panic("Fatal exception");
+	}
+
 	do_exit(SIGSEGV);
 }
 
@@ -405,7 +412,7 @@ asmlinkage int arm_syscall(int no, struct pt_regs *regs)
 	struct thread_info *thread = current_thread_info();
 	siginfo_t info;
 
-	if ((no >> 16) != 0x9f)
+	if ((no >> 16) != (__ARM_NR_BASE>> 16))
 		return bad_syscall(no, regs);
 
 	switch (no & 0xffff) {
@@ -499,7 +506,7 @@ asmlinkage int arm_syscall(int no, struct pt_regs *regs)
 		if (!pmd_present(*pmd))
 			goto bad_access;
 		pte = pte_offset_map_lock(mm, pmd, addr, &ptl);
-		if (!pte_present(*pte) || !pte_write(*pte)) {
+		if (!pte_present(*pte) || !pte_dirty(*pte)) {
 			pte_unmap_unlock(pte, ptl);
 			goto bad_access;
 		}
@@ -681,6 +688,7 @@ EXPORT_SYMBOL(abort);
 
 void __init trap_init(void)
 {
+	unsigned long vectors = CONFIG_VECTORS_BASE;
 	extern char __stubs_start[], __stubs_end[];
 	extern char __vectors_start[], __vectors_end[];
 	extern char __kuser_helper_start[], __kuser_helper_end[];
@@ -691,9 +699,9 @@ void __init trap_init(void)
 	 * into the vector page, mapped at 0xffff0000, and ensure these
 	 * are visible to the instruction stream.
 	 */
-	memcpy((void *)0xffff0000, __vectors_start, __vectors_end - __vectors_start);
-	memcpy((void *)0xffff0200, __stubs_start, __stubs_end - __stubs_start);
-	memcpy((void *)0xffff1000 - kuser_sz, __kuser_helper_start, kuser_sz);
+	memcpy((void *)vectors, __vectors_start, __vectors_end - __vectors_start);
+	memcpy((void *)vectors + 0x200, __stubs_start, __stubs_end - __stubs_start);
+	memcpy((void *)vectors + 0x1000 - kuser_sz, __kuser_helper_start, kuser_sz);
 
 	/*
 	 * Copy signal return handlers into the vector page, and
@@ -702,6 +710,6 @@ void __init trap_init(void)
 	memcpy((void *)KERN_SIGRETURN_CODE, sigreturn_codes,
 	       sizeof(sigreturn_codes));
 
-	flush_icache_range(0xffff0000, 0xffff0000 + PAGE_SIZE);
+	flush_icache_range(vectors, vectors + PAGE_SIZE);
 	modify_domain(DOMAIN_USER, DOMAIN_CLIENT);
 }

@@ -52,6 +52,7 @@
  */
 
 #include <linux/config.h>
+#include <linux/capability.h>
 #include <linux/module.h>
 #include <linux/if_arp.h>
 #include <linux/termios.h>	/* For TIOCOUTQ/INQ */
@@ -63,7 +64,7 @@
 #include <linux/atalk.h>
 
 struct datalink_proto *ddp_dl, *aarp_dl;
-static struct proto_ops atalk_dgram_ops;
+static const struct proto_ops atalk_dgram_ops;
 
 /**************************************************************************\
 *                                                                          *
@@ -1763,7 +1764,7 @@ static int atalk_recvmsg(struct kiocb *iocb, struct socket *sock, struct msghdr 
  */
 static int atalk_ioctl(struct socket *sock, unsigned int cmd, unsigned long arg)
 {
-	int rc = -EINVAL;
+	int rc = -ENOIOCTLCMD;
 	struct sock *sk = sock->sk;
 	void __user *argp = (void __user *)arg;
 
@@ -1813,27 +1814,26 @@ static int atalk_ioctl(struct socket *sock, unsigned int cmd, unsigned long arg)
 			rc = atif_ioctl(cmd, argp);
 			rtnl_unlock();
 			break;
-		/* Physical layer ioctl calls */
-		case SIOCSIFLINK:
-		case SIOCGIFHWADDR:
-		case SIOCSIFHWADDR:
-		case SIOCGIFFLAGS:
-		case SIOCSIFFLAGS:
-		case SIOCGIFTXQLEN:
-		case SIOCSIFTXQLEN:
-		case SIOCGIFMTU:
-		case SIOCGIFCONF:
-		case SIOCADDMULTI:
-		case SIOCDELMULTI:
-		case SIOCGIFCOUNT:
-		case SIOCGIFINDEX:
-		case SIOCGIFNAME:
-			rc = dev_ioctl(cmd, argp);
-			break;
 	}
 
 	return rc;
 }
+
+
+#ifdef CONFIG_COMPAT
+static int atalk_compat_ioctl(struct socket *sock, unsigned int cmd, unsigned long arg)
+{
+	/*
+	 * All Appletalk ioctls except SIOCATALKDIFADDR are standard.  And
+	 * SIOCATALKDIFADDR is handled by upper layer as well, so there is
+	 * nothing to do.  Eventually SIOCATALKDIFADDR should be moved
+	 * here so there is no generic SIOCPROTOPRIVATE translation in the
+	 * system.
+	 */
+	return -ENOIOCTLCMD;
+}
+#endif
+
 
 static struct net_proto_family atalk_family_ops = {
 	.family		= PF_APPLETALK,
@@ -1841,7 +1841,7 @@ static struct net_proto_family atalk_family_ops = {
 	.owner		= THIS_MODULE,
 };
 
-static struct proto_ops SOCKOPS_WRAPPED(atalk_dgram_ops) = {
+static const struct proto_ops SOCKOPS_WRAPPED(atalk_dgram_ops) = {
 	.family		= PF_APPLETALK,
 	.owner		= THIS_MODULE,
 	.release	= atalk_release,
@@ -1852,6 +1852,9 @@ static struct proto_ops SOCKOPS_WRAPPED(atalk_dgram_ops) = {
 	.getname	= atalk_getname,
 	.poll		= datagram_poll,
 	.ioctl		= atalk_ioctl,
+#ifdef CONFIG_COMPAT
+	.compat_ioctl	= atalk_compat_ioctl,
+#endif
 	.listen		= sock_no_listen,
 	.shutdown	= sock_no_shutdown,
 	.setsockopt	= sock_no_setsockopt,

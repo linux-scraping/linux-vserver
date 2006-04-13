@@ -253,7 +253,7 @@ static void prism2_clear_cmd_queue(local_info_t *local)
  * @dev: pointer to net_device
  * @entry: Prism2 command queue entry to be issued
  */
-static inline int hfa384x_cmd_issue(struct net_device *dev,
+static int hfa384x_cmd_issue(struct net_device *dev,
 				    struct hostap_cmd_queue *entry)
 {
 	struct hostap_interface *iface;
@@ -743,7 +743,7 @@ static void prism2_cmd_ev(struct net_device *dev)
 }
 
 
-static inline int hfa384x_wait_offset(struct net_device *dev, u16 o_off)
+static int hfa384x_wait_offset(struct net_device *dev, u16 o_off)
 {
 	int tries = HFA384X_BAP_BUSY_TIMEOUT;
 	int res = HFA384X_INW(o_off) & HFA384X_OFFSET_BUSY;
@@ -928,15 +928,15 @@ static int hfa384x_set_rid(struct net_device *dev, u16 rid, void *buf, int len)
 
 	res = hfa384x_cmd(dev, HFA384X_CMDCODE_ACCESS_WRITE, rid, NULL, NULL);
 	up(&local->rid_bap_sem);
+
 	if (res) {
 		printk(KERN_DEBUG "%s: hfa384x_set_rid: CMDCODE_ACCESS_WRITE "
 		       "failed (res=%d, rid=%04x, len=%d)\n",
 		       dev->name, res, rid, len);
-		return res;
-	}
 
-	if (res == -ETIMEDOUT)
-		prism2_hw_reset(dev);
+		if (res == -ETIMEDOUT)
+			prism2_hw_reset(dev);
+	}
 
 	return res;
 }
@@ -1904,7 +1904,7 @@ fail:
  * and will try to get the correct fid eventually. */
 #define EXTRA_FID_READ_TESTS
 
-static inline u16 prism2_read_fid_reg(struct net_device *dev, u16 reg)
+static u16 prism2_read_fid_reg(struct net_device *dev, u16 reg)
 {
 #ifdef EXTRA_FID_READ_TESTS
 	u16 val, val2, val3;
@@ -2581,7 +2581,7 @@ static void prism2_ev_tick(struct net_device *dev)
 
 
 /* Called only from hardware IRQ */
-static inline void prism2_check_magic(local_info_t *local)
+static void prism2_check_magic(local_info_t *local)
 {
 	/* at least PCI Prism2.5 with bus mastering seems to sometimes
 	 * return 0x0000 in SWSUPPORT0 for unknown reason, but re-reading the

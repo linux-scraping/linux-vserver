@@ -950,16 +950,8 @@ wv_82593_cmd(struct net_device *	dev,
 static inline int
 wv_diag(struct net_device *	dev)
 {
-  int		ret = FALSE;
-
-  if(wv_82593_cmd(dev, "wv_diag(): diagnose",
-		  OP0_DIAGNOSE, SR0_DIAGNOSE_PASSED))
-    ret = TRUE;
-
-#ifdef DEBUG_CONFIG_ERRORS
-  printk(KERN_INFO "wavelan_cs: i82593 Self Test failed!\n");
-#endif
-  return(ret);
+  return(wv_82593_cmd(dev, "wv_diag(): diagnose",
+		      OP0_DIAGNOSE, SR0_DIAGNOSE_PASSED));
 } /* wv_diag */
 
 /*------------------------------------------------------------------*/
@@ -1013,7 +1005,7 @@ static inline void
 wv_82593_reconfig(struct net_device *	dev)
 {
   net_local *		lp = netdev_priv(dev);
-  dev_link_t *		link = lp->link;
+  struct pcmcia_device *		link = lp->link;
   unsigned long		flags;
 
   /* Arm the flag, will be cleard in wv_82593_config() */
@@ -2280,7 +2272,7 @@ static int wavelan_get_essid(struct net_device *dev,
 	extra[IW_ESSID_MAX_SIZE] = '\0';
 
 	/* Set the length */
-	wrqu->data.length = strlen(extra) + 1;
+	wrqu->data.length = strlen(extra);
 
 	return 0;
 }
@@ -3604,8 +3596,8 @@ wv_82593_config(struct net_device *	dev)
   cfblk.lin_prio = 0;   	/* conform to 802.3 backoff algoritm */
   cfblk.exp_prio = 5;	        /* conform to 802.3 backoff algoritm */
   cfblk.bof_met = 1;	        /* conform to 802.3 backoff algoritm */
-  cfblk.ifrm_spc = 0x20;	/* 32 bit times interframe spacing */
-  cfblk.slottim_low = 0x20;	/* 32 bit times slot time */
+  cfblk.ifrm_spc = 0x20 >> 4;	/* 32 bit times interframe spacing */
+  cfblk.slottim_low = 0x20 >> 5;	/* 32 bit times slot time */
   cfblk.slottim_hi = 0x0;
   cfblk.max_retr = 15;
   cfblk.prmisc = ((lp->promiscuous) ? TRUE: FALSE);	/* Promiscuous mode */
@@ -3752,16 +3744,16 @@ wv_pcmcia_reset(struct net_device *	dev)
 {
   int		i;
   conf_reg_t	reg = { 0, CS_READ, CISREG_COR, 0 };
-  dev_link_t *	link = ((net_local *)netdev_priv(dev))->link;
+  struct pcmcia_device *	link = ((net_local *)netdev_priv(dev))->link;
 
 #ifdef DEBUG_CONFIG_TRACE
   printk(KERN_DEBUG "%s: ->wv_pcmcia_reset()\n", dev->name);
 #endif
 
-  i = pcmcia_access_configuration_register(link->handle, &reg);
+  i = pcmcia_access_configuration_register(link, &reg);
   if(i != CS_SUCCESS)
     {
-      cs_error(link->handle, AccessConfigurationRegister, i);
+      cs_error(link, AccessConfigurationRegister, i);
       return FALSE;
     }
       
@@ -3772,19 +3764,19 @@ wv_pcmcia_reset(struct net_device *	dev)
 
   reg.Action = CS_WRITE;
   reg.Value = reg.Value | COR_SW_RESET;
-  i = pcmcia_access_configuration_register(link->handle, &reg);
+  i = pcmcia_access_configuration_register(link, &reg);
   if(i != CS_SUCCESS)
     {
-      cs_error(link->handle, AccessConfigurationRegister, i);
+      cs_error(link, AccessConfigurationRegister, i);
       return FALSE;
     }
       
   reg.Action = CS_WRITE;
   reg.Value = COR_LEVEL_IRQ | COR_CONFIG;
-  i = pcmcia_access_configuration_register(link->handle, &reg);
+  i = pcmcia_access_configuration_register(link, &reg);
   if(i != CS_SUCCESS)
     {
-      cs_error(link->handle, AccessConfigurationRegister, i);
+      cs_error(link, AccessConfigurationRegister, i);
       return FALSE;
     }
 
@@ -3948,9 +3940,8 @@ wv_hw_reset(struct net_device *	dev)
  * (called by wavelan_event())
  */
 static inline int
-wv_pcmcia_config(dev_link_t *	link)
+wv_pcmcia_config(struct pcmcia_device *	link)
 {
-  client_handle_t	handle = link->handle;
   tuple_t		tuple;
   cisparse_t		parse;
   struct net_device *	dev = (struct net_device *) link->priv;
@@ -3973,16 +3964,16 @@ wv_pcmcia_config(dev_link_t *	link)
     {
       tuple.Attributes = 0;
       tuple.DesiredTuple = CISTPL_CONFIG;
-      i = pcmcia_get_first_tuple(handle, &tuple);
+      i = pcmcia_get_first_tuple(link, &tuple);
       if(i != CS_SUCCESS)
 	break;
       tuple.TupleData = (cisdata_t *)buf;
       tuple.TupleDataMax = 64;
       tuple.TupleOffset = 0;
-      i = pcmcia_get_tuple_data(handle, &tuple);
+      i = pcmcia_get_tuple_data(link, &tuple);
       if(i != CS_SUCCESS)
 	break;
-      i = pcmcia_parse_tuple(handle, &tuple, &parse);
+      i = pcmcia_parse_tuple(link, &tuple, &parse);
       if(i != CS_SUCCESS)
 	break;
       link->conf.ConfigBase = parse.config.base;
@@ -3991,19 +3982,16 @@ wv_pcmcia_config(dev_link_t *	link)
   while(0);
   if(i != CS_SUCCESS)
     {
-      cs_error(link->handle, ParseTuple, i);
-      link->state &= ~DEV_CONFIG_PENDING;
+      cs_error(link, ParseTuple, i);
       return FALSE;
     }
-    
-  /* Configure card */
-  link->state |= DEV_CONFIG;
+
   do
     {
-      i = pcmcia_request_io(link->handle, &link->io);
+      i = pcmcia_request_io(link, &link->io);
       if(i != CS_SUCCESS)
 	{
-	  cs_error(link->handle, RequestIO, i);
+	  cs_error(link, RequestIO, i);
 	  break;
 	}
 
@@ -4011,10 +3999,10 @@ wv_pcmcia_config(dev_link_t *	link)
        * Now allocate an interrupt line.  Note that this does not
        * actually assign a handler to the interrupt.
        */
-      i = pcmcia_request_irq(link->handle, &link->irq);
+      i = pcmcia_request_irq(link, &link->irq);
       if(i != CS_SUCCESS)
 	{
-	  cs_error(link->handle, RequestIRQ, i);
+	  cs_error(link, RequestIRQ, i);
 	  break;
 	}
 
@@ -4023,15 +4011,15 @@ wv_pcmcia_config(dev_link_t *	link)
        * the I/O windows and the interrupt mapping.
        */
       link->conf.ConfigIndex = 1;
-      i = pcmcia_request_configuration(link->handle, &link->conf);
+      i = pcmcia_request_configuration(link, &link->conf);
       if(i != CS_SUCCESS)
 	{
-	  cs_error(link->handle, RequestConfiguration, i);
+	  cs_error(link, RequestConfiguration, i);
 	  break;
 	}
 
       /*
-       * Allocate a small memory window.  Note that the dev_link_t
+       * Allocate a small memory window.  Note that the struct pcmcia_device
        * structure provides space for one window handle -- if your
        * device needs several windows, you'll need to keep track of
        * the handles in your private data structure, link->priv.
@@ -4039,10 +4027,10 @@ wv_pcmcia_config(dev_link_t *	link)
       req.Attributes = WIN_DATA_WIDTH_8|WIN_MEMORY_TYPE_AM|WIN_ENABLE;
       req.Base = req.Size = 0;
       req.AccessSpeed = mem_speed;
-      i = pcmcia_request_window(&link->handle, &req, &link->win);
+      i = pcmcia_request_window(&link, &req, &link->win);
       if(i != CS_SUCCESS)
 	{
-	  cs_error(link->handle, RequestWindow, i);
+	  cs_error(link, RequestWindow, i);
 	  break;
 	}
 
@@ -4054,7 +4042,7 @@ wv_pcmcia_config(dev_link_t *	link)
       i = pcmcia_map_mem_page(link->win, &mem);
       if(i != CS_SUCCESS)
 	{
-	  cs_error(link->handle, MapMemPage, i);
+	  cs_error(link, MapMemPage, i);
 	  break;
 	}
 
@@ -4068,7 +4056,7 @@ wv_pcmcia_config(dev_link_t *	link)
 	     lp->mem, dev->irq, (u_int) dev->base_addr);
 #endif
 
-      SET_NETDEV_DEV(dev, &handle_to_dev(handle));
+      SET_NETDEV_DEV(dev, &handle_to_dev(link));
       i = register_netdev(dev);
       if(i != 0)
 	{
@@ -4080,7 +4068,6 @@ wv_pcmcia_config(dev_link_t *	link)
     }
   while(0);		/* Humm... Disguised goto !!! */
 
-  link->state &= ~DEV_CONFIG_PENDING;
   /* If any step failed, release any partially configured state */
   if(i != 0)
     {
@@ -4089,7 +4076,7 @@ wv_pcmcia_config(dev_link_t *	link)
     }
 
   strcpy(((net_local *) netdev_priv(dev))->node.dev_name, dev->name);
-  link->dev = &((net_local *) netdev_priv(dev))->node;
+  link->dev_node = &((net_local *) netdev_priv(dev))->node;
 
 #ifdef DEBUG_CONFIG_TRACE
   printk(KERN_DEBUG "<-wv_pcmcia_config()\n");
@@ -4104,26 +4091,20 @@ wv_pcmcia_config(dev_link_t *	link)
  * still open, this will be postponed until it is closed.
  */
 static void
-wv_pcmcia_release(dev_link_t *link)
+wv_pcmcia_release(struct pcmcia_device *link)
 {
-  struct net_device *	dev = (struct net_device *) link->priv;
-  net_local *		lp = netdev_priv(dev);
+	struct net_device *	dev = (struct net_device *) link->priv;
+	net_local *		lp = netdev_priv(dev);
 
 #ifdef DEBUG_CONFIG_TRACE
-  printk(KERN_DEBUG "%s: -> wv_pcmcia_release(0x%p)\n", dev->name, link);
+	printk(KERN_DEBUG "%s: -> wv_pcmcia_release(0x%p)\n", dev->name, link);
 #endif
 
-  /* Don't bother checking to see if these succeed or not */
-  iounmap(lp->mem);
-  pcmcia_release_window(link->win);
-  pcmcia_release_configuration(link->handle);
-  pcmcia_release_io(link->handle, &link->io);
-  pcmcia_release_irq(link->handle, &link->irq);
-
-  link->state &= ~DEV_CONFIG;
+	iounmap(lp->mem);
+	pcmcia_disable_device(link);
 
 #ifdef DEBUG_CONFIG_TRACE
-  printk(KERN_DEBUG "%s: <- wv_pcmcia_release()\n", dev->name);
+	printk(KERN_DEBUG "%s: <- wv_pcmcia_release()\n", dev->name);
 #endif
 }
 
@@ -4487,7 +4468,7 @@ static int
 wavelan_open(struct net_device *	dev)
 {
   net_local *	lp = netdev_priv(dev);
-  dev_link_t *	link = lp->link;
+  struct pcmcia_device *	link = lp->link;
   kio_addr_t	base = dev->base_addr;
 
 #ifdef DEBUG_CALLBACK_TRACE
@@ -4541,7 +4522,7 @@ wavelan_open(struct net_device *	dev)
 static int
 wavelan_close(struct net_device *	dev)
 {
-  dev_link_t *	link = ((net_local *)netdev_priv(dev))->link;
+  struct pcmcia_device *	link = ((net_local *)netdev_priv(dev))->link;
   kio_addr_t	base = dev->base_addr;
 
 #ifdef DEBUG_CALLBACK_TRACE
@@ -4594,49 +4575,37 @@ wavelan_close(struct net_device *	dev)
  * configure the card at this point -- we wait until we receive a
  * card insertion event.
  */
-static dev_link_t *
-wavelan_attach(void)
+static int
+wavelan_probe(struct pcmcia_device *p_dev)
 {
-  client_reg_t	client_reg;	/* Register with cardmgr */
-  dev_link_t *	link;		/* Info for cardmgr */
   struct net_device *	dev;		/* Interface generic data */
   net_local *	lp;		/* Interface specific data */
-  int		ret;
+  int ret;
 
 #ifdef DEBUG_CALLBACK_TRACE
   printk(KERN_DEBUG "-> wavelan_attach()\n");
 #endif
 
-  /* Initialize the dev_link_t structure */
-  link = kzalloc(sizeof(struct dev_link_t), GFP_KERNEL);
-  if (!link) return NULL;
-
   /* The io structure describes IO port mapping */
-  link->io.NumPorts1 = 8;
-  link->io.Attributes1 = IO_DATA_PATH_WIDTH_8;
-  link->io.IOAddrLines = 3;
+  p_dev->io.NumPorts1 = 8;
+  p_dev->io.Attributes1 = IO_DATA_PATH_WIDTH_8;
+  p_dev->io.IOAddrLines = 3;
 
   /* Interrupt setup */
-  link->irq.Attributes = IRQ_TYPE_EXCLUSIVE | IRQ_HANDLE_PRESENT;
-  link->irq.IRQInfo1 = IRQ_LEVEL_ID;
-  link->irq.Handler = wavelan_interrupt;
+  p_dev->irq.Attributes = IRQ_TYPE_EXCLUSIVE | IRQ_HANDLE_PRESENT;
+  p_dev->irq.IRQInfo1 = IRQ_LEVEL_ID;
+  p_dev->irq.Handler = wavelan_interrupt;
 
   /* General socket configuration */
-  link->conf.Attributes = CONF_ENABLE_IRQ;
-  link->conf.Vcc = 50;
-  link->conf.IntType = INT_MEMORY_AND_IO;
-
-  /* Chain drivers */
-  link->next = dev_list;
-  dev_list = link;
+  p_dev->conf.Attributes = CONF_ENABLE_IRQ;
+  p_dev->conf.IntType = INT_MEMORY_AND_IO;
 
   /* Allocate the generic data structure */
   dev = alloc_etherdev(sizeof(net_local));
-  if (!dev) {
-      kfree(link);
-      return NULL;
-  }
-  link->priv = link->irq.Instance = dev;
+  if (!dev)
+      return -ENOMEM;
+
+  p_dev->priv = p_dev->irq.Instance = dev;
 
   lp = netdev_priv(dev);
 
@@ -4653,7 +4622,6 @@ wavelan_attach(void)
   spin_lock_init(&lp->spinlock);
 
   /* back links */
-  lp->link = link;
   lp->dev = dev;
 
   /* wavelan NET3 callbacks */
@@ -4679,28 +4647,24 @@ wavelan_attach(void)
   /* Other specific data */
   dev->mtu = WAVELAN_MTU;
 
-  /* Register with Card Services */
-  client_reg.dev_info = &dev_info;
-  client_reg.Version = 0x0210;
-  client_reg.event_callback_args.client_data = link;
+  ret = wv_pcmcia_config(p_dev);
+  if (ret)
+	  return ret;
 
-#ifdef DEBUG_CONFIG_INFO
-  printk(KERN_DEBUG "wavelan_attach(): almost done, calling pcmcia_register_client\n");
-#endif
+  ret = wv_hw_config(dev);
+  if (ret) {
+	  dev->irq = 0;
+	  pcmcia_disable_device(p_dev);
+	  return ret;
+  }
 
-  ret = pcmcia_register_client(&link->handle, &client_reg);
-  if(ret != 0)
-    {
-      cs_error(link->handle, RegisterClient, ret);
-      wavelan_detach(link);
-      return NULL;
-    }
+  wv_init_info(dev);
 
 #ifdef DEBUG_CALLBACK_TRACE
   printk(KERN_DEBUG "<- wavelan_attach()\n");
 #endif
 
-  return link;
+  return 0;
 }
 
 /*------------------------------------------------------------------*/
@@ -4711,48 +4675,14 @@ wavelan_attach(void)
  * is released.
  */
 static void
-wavelan_detach(dev_link_t *	link)
+wavelan_detach(struct pcmcia_device *link)
 {
 #ifdef DEBUG_CALLBACK_TRACE
   printk(KERN_DEBUG "-> wavelan_detach(0x%p)\n", link);
 #endif
 
-  /*
-   * If the device is currently configured and active, we won't
-   * actually delete it yet.  Instead, it is marked so that when the
-   * release() function is called, that will trigger a proper
-   * detach().
-   */
-  if(link->state & DEV_CONFIG)
-    {
-      /* Some others haven't done their job : give them another chance */
-      wv_pcmcia_release(link);
-    }
-
-  /* Break the link with Card Services */
-  if(link->handle)
-    pcmcia_deregister_client(link->handle);
-    
-  /* Remove the interface data from the linked list */
-  if(dev_list == link)
-    dev_list = link->next;
-  else
-    {
-      dev_link_t *	prev = dev_list;
-
-      while((prev != (dev_link_t *) NULL) && (prev->next != link))
-	prev = prev->next;
-
-      if(prev == (dev_link_t *) NULL)
-	{
-#ifdef DEBUG_CONFIG_ERRORS
-	  printk(KERN_WARNING "wavelan_detach : Attempting to remove a nonexistent device.\n");
-#endif
-	  return;
-	}
-
-      prev->next = link->next;
-    }
+  /* Some others haven't done their job : give them another chance */
+  wv_pcmcia_release(link);
 
   /* Free pieces */
   if(link->priv)
@@ -4761,79 +4691,23 @@ wavelan_detach(dev_link_t *	link)
 
       /* Remove ourselves from the kernel list of ethernet devices */
       /* Warning : can't be called from interrupt, timer or wavelan_close() */
-      if (link->dev)
+      if (link->dev_node)
 	unregister_netdev(dev);
-      link->dev = NULL;
+      link->dev_node = NULL;
       ((net_local *)netdev_priv(dev))->link = NULL;
       ((net_local *)netdev_priv(dev))->dev = NULL;
       free_netdev(dev);
     }
-  kfree(link);
 
 #ifdef DEBUG_CALLBACK_TRACE
   printk(KERN_DEBUG "<- wavelan_detach()\n");
 #endif
 }
 
-/*------------------------------------------------------------------*/
-/*
- * The card status event handler. Mostly, this schedules other stuff
- * to run after an event is received. A CARD_REMOVAL event also sets
- * some flags to discourage the net drivers from trying to talk to the
- * card any more.
- */
-static int
-wavelan_event(event_t		event,		/* The event received */
-	      int		priority,
-	      event_callback_args_t *	args)
+static int wavelan_suspend(struct pcmcia_device *link)
 {
-  dev_link_t *	link = (dev_link_t *) args->client_data;
-  struct net_device *	dev = (struct net_device *) link->priv;
+	struct net_device *	dev = (struct net_device *) link->priv;
 
-#ifdef DEBUG_CALLBACK_TRACE
-  printk(KERN_DEBUG "->wavelan_event(): %s\n",
-	 ((event == CS_EVENT_REGISTRATION_COMPLETE)?"registration complete" :
-	  ((event == CS_EVENT_CARD_REMOVAL) ? "card removal" :
-	   ((event == CS_EVENT_CARD_INSERTION) ? "card insertion" :
-	    ((event == CS_EVENT_PM_SUSPEND) ? "pm suspend" :
-	     ((event == CS_EVENT_RESET_PHYSICAL) ? "physical reset" :
-	      ((event == CS_EVENT_PM_RESUME) ? "pm resume" :
-	       ((event == CS_EVENT_CARD_RESET) ? "card reset" :
-		"unknown"))))))));
-#endif
-
-    switch(event)
-      {
-      case CS_EVENT_REGISTRATION_COMPLETE:
-#ifdef DEBUG_CONFIG_INFO
-	printk(KERN_DEBUG "wavelan_cs: registration complete\n");
-#endif
-	break;
-
-      case CS_EVENT_CARD_REMOVAL:
-	/* Oups ! The card is no more there */
-	link->state &= ~DEV_PRESENT;
-	if(link->state & DEV_CONFIG)
-	  {
-	    /* Accept no more transmissions */
-	    netif_device_detach(dev);
-
-	    /* Release the card */
-	    wv_pcmcia_release(link);
-	  }
-	break;
-
-      case CS_EVENT_CARD_INSERTION:
-	/* Reset and configure the card */
-	link->state |= DEV_PRESENT | DEV_CONFIG_PENDING;
-	if(wv_pcmcia_config(link) &&
-	   wv_hw_config(dev))
-	  wv_init_info(dev);
-	else
-	  dev->irq = 0;
-	break;
-
-      case CS_EVENT_PM_SUSPEND:
 	/* NB: wavelan_close will be called, but too late, so we are
 	 * obliged to close nicely the wavelan here. David, could you
 	 * close the device before suspending them ? And, by the way,
@@ -4843,42 +4717,27 @@ wavelan_event(event_t		event,		/* The event received */
 	/* Stop receiving new messages and wait end of transmission */
 	wv_ru_stop(dev);
 
+	if (link->open)
+		netif_device_detach(dev);
+
 	/* Power down the module */
 	hacr_write(dev->base_addr, HACR_DEFAULT & (~HACR_PWR_STAT));
 
-	/* The card is now suspended */
-	link->state |= DEV_SUSPEND;
-	/* Fall through... */
-      case CS_EVENT_RESET_PHYSICAL:
-    	if(link->state & DEV_CONFIG)
-	  {
-      	    if(link->open)
-	      netif_device_detach(dev);
-      	    pcmcia_release_configuration(link->handle);
-	  }
-	break;
+	return 0;
+}
 
-      case CS_EVENT_PM_RESUME:
-	link->state &= ~DEV_SUSPEND;
-	/* Fall through... */
-      case CS_EVENT_CARD_RESET:
-	if(link->state & DEV_CONFIG)
-	  {
-      	    pcmcia_request_configuration(link->handle, &link->conf);
-      	    if(link->open)	/* If RESET -> True, If RESUME -> False ? */
-	      {
+static int wavelan_resume(struct pcmcia_device *link)
+{
+	struct net_device *	dev = (struct net_device *) link->priv;
+
+	if (link->open) {
 		wv_hw_reset(dev);
 		netif_device_attach(dev);
-	      }
-	  }
-	break;
-    }
+	}
 
-#ifdef DEBUG_CALLBACK_TRACE
-  printk(KERN_DEBUG "<-wavelan_event()\n");
-#endif
-  return 0;
+	return 0;
 }
+
 
 static struct pcmcia_device_id wavelan_ids[] = {
 	PCMCIA_DEVICE_PROD_ID12("AT&T","WaveLAN/PCMCIA", 0xe7c5affd, 0x1bc50975),
@@ -4894,10 +4753,11 @@ static struct pcmcia_driver wavelan_driver = {
 	.drv		= {
 		.name	= "wavelan_cs",
 	},
-	.attach		= wavelan_attach,
-	.event		= wavelan_event,
-	.detach		= wavelan_detach,
+	.probe		= wavelan_probe,
+	.remove		= wavelan_detach,
 	.id_table       = wavelan_ids,
+	.suspend	= wavelan_suspend,
+	.resume		= wavelan_resume,
 };
 
 static int __init

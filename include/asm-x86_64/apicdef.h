@@ -13,6 +13,7 @@
 #define		APIC_ID		0x20
 #define			APIC_ID_MASK		(0xFFu<<24)
 #define			GET_APIC_ID(x)		(((x)>>24)&0xFFu)
+#define			SET_APIC_ID(x)		(((x)<<24))
 #define		APIC_LVR	0x30
 #define			APIC_LVR_MASK		0xFF00FF
 #define			GET_APIC_VERSION(x)	((x)&0xFFu)
@@ -38,6 +39,7 @@
 #define			APIC_SPIV_FOCUS_DISABLED	(1<<9)
 #define			APIC_SPIV_APIC_ENABLED		(1<<8)
 #define		APIC_ISR	0x100
+#define		APIC_ISR_NR	0x8	/* Number of 32 bit ISR registers. */
 #define		APIC_TMR	0x180
 #define 	APIC_IRR	0x200
 #define 	APIC_ESR	0x280

@@ -83,7 +83,8 @@ static struct ipt_table packet_raw = {
 	.name = "raw", 
 	.valid_hooks =  RAW_VALID_HOOKS, 
 	.lock = RW_LOCK_UNLOCKED, 
-	.me = THIS_MODULE
+	.me = THIS_MODULE,
+	.af = AF_INET,
 };
 
 /* The work comes in here from netfilter.c. */
@@ -115,7 +116,7 @@ static struct nf_hook_ops ipt_ops[] = {
 	},
 };
 
-static int __init init(void)
+static int __init iptable_raw_init(void)
 {
 	int ret;
 
@@ -143,7 +144,7 @@ static int __init init(void)
 	return ret;
 }
 
-static void __exit fini(void)
+static void __exit iptable_raw_fini(void)
 {
 	unsigned int i;
 
@@ -153,6 +154,6 @@ static void __exit fini(void)
 	ipt_unregister_table(&packet_raw);
 }
 
-module_init(init);
-module_exit(fini);
+module_init(iptable_raw_init);
+module_exit(iptable_raw_fini);
 MODULE_LICENSE("GPL");

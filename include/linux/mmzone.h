@@ -13,6 +13,7 @@
 #include <linux/numa.h>
 #include <linux/init.h>
 #include <linux/seqlock.h>
+#include <linux/nodemask.h>
 #include <asm/atomic.h>
 
 /* Free memory management - zoned buddy allocator.  */
@@ -38,7 +39,7 @@ struct pglist_data;
 #if defined(CONFIG_SMP)
 struct zone_padding {
 	char x[0];
-} ____cacheline_maxaligned_in_smp;
+} ____cacheline_internodealigned_in_smp;
 #define ZONE_PADDING(name)	struct zone_padding name;
 #else
 #define ZONE_PADDING(name)
@@ -46,7 +47,6 @@ struct zone_padding {
 
 struct per_cpu_pages {
 	int count;		/* number of pages in the list */
-	int low;		/* low watermark, refill needed */
 	int high;		/* high watermark, emptying needed */
 	int batch;		/* chunk size for buddy add/remove */
 	struct list_head list;	/* the list of pages */
@@ -92,14 +92,25 @@ struct per_cpu_pageset {
  * be 8 (2 ** 3) zonelists.  GFP_ZONETYPES defines the number of possible
  * combinations of zone modifiers in "zone modifier space".
  *
+ * As an optimisation any zone modifier bits which are only valid when
+ * no other zone modifier bits are set (loners) should be placed in
+ * the highest order bits of this field.  This allows us to reduce the
+ * extent of the zonelists thus saving space.  For example in the case
+ * of three zone modifier bits, we could require up to eight zonelists.
+ * If the left most zone modifier is a "loner" then the highest valid
+ * zonelist would be four allowing us to allocate only five zonelists.
+ * Use the first form for GFP_ZONETYPES when the left most bit is not
+ * a "loner", otherwise use the second.
+ *
  * NOTE! Make sure this matches the zones in <linux/gfp.h>
  */
 #define GFP_ZONEMASK	0x07
-#define GFP_ZONETYPES	5
+/* #define GFP_ZONETYPES       (GFP_ZONEMASK + 1) */           /* Non-loner */
+#define GFP_ZONETYPES  ((GFP_ZONEMASK + 1) / 2 + 1)            /* Loner */
 
 /*
  * On machines where it is needed (eg PCs) we divide physical memory
- * into multiple physical zones. On a PC we have 4 zones:
+ * into multiple physical zones. On a 32bit PC we have 4 zones:
  *
  * ZONE_DMA	  < 16 MB	ISA DMA capable memory
  * ZONE_DMA32	     0 MB 	Empty
@@ -150,13 +161,15 @@ struct zone {
 	unsigned long		pages_scanned;	   /* since last reclaim */
 	int			all_unreclaimable; /* All pages pinned */
 
-	/*
-	 * Does the allocator try to reclaim pages from the zone as soon
-	 * as it fails a watermark_ok() in __alloc_pages?
-	 */
-	int			reclaim_pages;
 	/* A count of how many reclaimers are scanning this zone */
 	atomic_t		reclaim_in_progress;
+
+	/*
+	 * timestamp (in jiffies) of the last zone reclaim that did not
+	 * result in freeing of pages. This is used to avoid repeated scans
+	 * if all memory in the zone is in use.
+	 */
+	unsigned long		last_unsuccessful_zone_reclaim;
 
 	/*
 	 * prev_priority holds the scanning priority for this zone.  It is
@@ -213,7 +226,6 @@ struct zone {
 	 * Discontig memory support fields.
 	 */
 	struct pglist_data	*zone_pgdat;
-	struct page		*zone_mem_map;
 	/* zone_start_pfn == zone_start_paddr >> PAGE_SHIFT */
 	unsigned long		zone_start_pfn;
 
@@ -234,7 +246,7 @@ struct zone {
 	 * rarely used fields:
 	 */
 	char			*name;
-} ____cacheline_maxaligned_in_smp;
+} ____cacheline_internodealigned_in_smp;
 
 
 /*
@@ -295,7 +307,6 @@ typedef struct pglist_data {
 	unsigned long node_spanned_pages; /* total size of physical page
 					     range, including holes */
 	int node_id;
-	struct pglist_data *pgdat_next;
 	wait_queue_head_t kswapd_wait;
 	struct task_struct *kswapd;
 	int kswapd_max_order;
@@ -311,8 +322,6 @@ typedef struct pglist_data {
 #define nid_page_nr(nid, pagenr) 	pgdat_page_nr(NODE_DATA(nid),(pagenr))
 
 #include <linux/memory_hotplug.h>
-
-extern struct pglist_data *pgdat_list;
 
 void __get_zone_counts(unsigned long *active, unsigned long *inactive,
 			unsigned long *free, struct pglist_data *pgdat);
@@ -338,56 +347,10 @@ unsigned long __init node_memmap_size_bytes(int, unsigned long, unsigned long);
  */
 #define zone_idx(zone)		((zone) - (zone)->zone_pgdat->node_zones)
 
-/**
- * for_each_pgdat - helper macro to iterate over all nodes
- * @pgdat - pointer to a pg_data_t variable
- *
- * Meant to help with common loops of the form
- * pgdat = pgdat_list;
- * while(pgdat) {
- * 	...
- * 	pgdat = pgdat->pgdat_next;
- * }
- */
-#define for_each_pgdat(pgdat) \
-	for (pgdat = pgdat_list; pgdat; pgdat = pgdat->pgdat_next)
-
-/*
- * next_zone - helper magic for for_each_zone()
- * Thanks to William Lee Irwin III for this piece of ingenuity.
- */
-static inline struct zone *next_zone(struct zone *zone)
+static inline int populated_zone(struct zone *zone)
 {
-	pg_data_t *pgdat = zone->zone_pgdat;
-
-	if (zone < pgdat->node_zones + MAX_NR_ZONES - 1)
-		zone++;
-	else if (pgdat->pgdat_next) {
-		pgdat = pgdat->pgdat_next;
-		zone = pgdat->node_zones;
-	} else
-		zone = NULL;
-
-	return zone;
+	return (!!zone->present_pages);
 }
-
-/**
- * for_each_zone - helper macro to iterate over all memory zones
- * @zone - pointer to struct zone variable
- *
- * The user only needs to declare the zone variable, for_each_zone
- * fills it in. This basically means for_each_zone() is an
- * easier to read version of this piece of code:
- *
- * for (pgdat = pgdat_list; pgdat; pgdat = pgdat->node_next)
- * 	for (i = 0; i < MAX_NR_ZONES; ++i) {
- * 		struct zone * z = pgdat->node_zones + i;
- * 		...
- * 	}
- * }
- */
-#define for_each_zone(zone) \
-	for (zone = pgdat_list->node_zones; zone; zone = next_zone(zone))
 
 static inline int is_highmem_idx(int idx)
 {
@@ -398,6 +361,7 @@ static inline int is_normal_idx(int idx)
 {
 	return (idx == ZONE_NORMAL);
 }
+
 /**
  * is_highmem - helper function to quickly check if a struct zone is a 
  *              highmem zone or not.  This is an attempt to keep references
@@ -414,6 +378,16 @@ static inline int is_normal(struct zone *zone)
 	return zone == zone->zone_pgdat->node_zones + ZONE_NORMAL;
 }
 
+static inline int is_dma32(struct zone *zone)
+{
+	return zone == zone->zone_pgdat->node_zones + ZONE_DMA32;
+}
+
+static inline int is_dma(struct zone *zone)
+{
+	return zone == zone->zone_pgdat->node_zones + ZONE_DMA;
+}
+
 /* These two functions are used to setup the per zone pages min values */
 struct ctl_table;
 struct file;
@@ -421,6 +395,8 @@ int min_free_kbytes_sysctl_handler(struct ctl_table *, int, struct file *,
 					void __user *, size_t *, loff_t *);
 extern int sysctl_lowmem_reserve_ratio[MAX_NR_ZONES-1];
 int lowmem_reserve_ratio_sysctl_handler(struct ctl_table *, int, struct file *,
+					void __user *, size_t *, loff_t *);
+int percpu_pagelist_fraction_sysctl_handler(struct ctl_table *, int, struct file *,
 					void __user *, size_t *, loff_t *);
 
 #include <linux/topology.h>
@@ -435,13 +411,36 @@ extern struct pglist_data contig_page_data;
 #define NODE_DATA(nid)		(&contig_page_data)
 #define NODE_MEM_MAP(nid)	mem_map
 #define MAX_NODES_SHIFT		1
-#define pfn_to_nid(pfn)		(0)
 
 #else /* CONFIG_NEED_MULTIPLE_NODES */
 
 #include <asm/mmzone.h>
 
 #endif /* !CONFIG_NEED_MULTIPLE_NODES */
+
+extern struct pglist_data *first_online_pgdat(void);
+extern struct pglist_data *next_online_pgdat(struct pglist_data *pgdat);
+extern struct zone *next_zone(struct zone *zone);
+
+/**
+ * for_each_pgdat - helper macro to iterate over all nodes
+ * @pgdat - pointer to a pg_data_t variable
+ */
+#define for_each_online_pgdat(pgdat)			\
+	for (pgdat = first_online_pgdat();		\
+	     pgdat;					\
+	     pgdat = next_online_pgdat(pgdat))
+/**
+ * for_each_zone - helper macro to iterate over all memory zones
+ * @zone - pointer to struct zone variable
+ *
+ * The user only needs to declare the zone variable, for_each_zone
+ * fills it in.
+ */
+#define for_each_zone(zone)			        \
+	for (zone = (first_online_pgdat())->node_zones; \
+	     zone;					\
+	     zone = next_zone(zone))
 
 #ifdef CONFIG_SPARSEMEM
 #include <asm/sparsemem.h>
@@ -468,6 +467,10 @@ extern struct pglist_data contig_page_data;
 
 #ifndef CONFIG_HAVE_ARCH_EARLY_PFN_TO_NID
 #define early_pfn_to_nid(nid)  (0UL)
+#endif
+
+#ifdef CONFIG_FLATMEM
+#define pfn_to_nid(pfn)		(0)
 #endif
 
 #define pfn_to_section_nr(pfn) ((pfn) >> PFN_SECTION_SHIFT)
@@ -564,26 +567,10 @@ static inline int valid_section_nr(unsigned long nr)
 	return valid_section(__nr_to_section(nr));
 }
 
-/*
- * Given a kernel address, find the home node of the underlying memory.
- */
-#define kvaddr_to_nid(kaddr)	pfn_to_nid(__pa(kaddr) >> PAGE_SHIFT)
-
 static inline struct mem_section *__pfn_to_section(unsigned long pfn)
 {
 	return __nr_to_section(pfn_to_section_nr(pfn));
 }
-
-#define pfn_to_page(pfn) 						\
-({ 									\
-	unsigned long __pfn = (pfn);					\
-	__section_mem_map_addr(__pfn_to_section(__pfn)) + __pfn;	\
-})
-#define page_to_pfn(page)						\
-({									\
-	page - __section_mem_map_addr(__nr_to_section(			\
-		page_to_section(page)));				\
-})
 
 static inline int pfn_valid(unsigned long pfn)
 {
@@ -598,13 +585,14 @@ static inline int pfn_valid(unsigned long pfn)
  * this restriction.
  */
 #ifdef CONFIG_NUMA
-#define pfn_to_nid		early_pfn_to_nid
-#endif
-
-#define pfn_to_pgdat(pfn)						\
+#define pfn_to_nid(pfn)							\
 ({									\
-	NODE_DATA(pfn_to_nid(pfn));					\
+	unsigned long __pfn_to_nid_pfn = (pfn);				\
+	page_to_nid(pfn_to_page(__pfn_to_nid_pfn));			\
 })
+#else
+#define pfn_to_nid(pfn)		(0)
+#endif
 
 #define early_pfn_valid(pfn)	pfn_valid(pfn)
 void sparse_init(void);
@@ -612,12 +600,6 @@ void sparse_init(void);
 #define sparse_init()	do {} while (0)
 #define sparse_index_init(_sec, _nid)  do {} while (0)
 #endif /* CONFIG_SPARSEMEM */
-
-#ifdef CONFIG_NODES_SPAN_OTHER_NODES
-#define early_pfn_in_nid(pfn, nid)	(early_pfn_to_nid(pfn) == (nid))
-#else
-#define early_pfn_in_nid(pfn, nid)	(1)
-#endif
 
 #ifndef early_pfn_valid
 #define early_pfn_valid(pfn)	(1)

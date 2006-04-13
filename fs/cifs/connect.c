@@ -1,7 +1,7 @@
 /*
  *   fs/cifs/connect.c
  *
- *   Copyright (C) International Business Machines  Corp., 2002,2005
+ *   Copyright (C) International Business Machines  Corp., 2002,2006
  *   Author(s): Steve French (sfrench@us.ibm.com)
  *
  *   This library is free software; you can redistribute it and/or modify
@@ -76,12 +76,19 @@ struct smb_vol {
 	unsigned setuids:1;
 	unsigned noperm:1;
 	unsigned no_psx_acl:1; /* set if posix acl support should be disabled */
+	unsigned cifs_acl:1;
 	unsigned no_xattr:1;   /* set if xattr (EA) support should be disabled*/
 	unsigned server_ino:1; /* use inode numbers from server ie UniqueId */
 	unsigned direct_io:1;
 	unsigned remap:1;   /* set to remap seven reserved chars in filenames */
 	unsigned posix_paths:1;   /* unset to not ask for posix pathnames. */
 	unsigned sfu_emul:1;
+	unsigned krb5:1;
+	unsigned ntlm:1;
+	unsigned ntlmv2:1;
+	unsigned nullauth:1; /* attempt to authenticate with null user */
+	unsigned sign:1;
+	unsigned seal:1;     /* encrypt */
 	unsigned nocase;     /* request case insensitive filenames */
 	unsigned nobrl;      /* disable sending byte range locks to srv */
 	unsigned int rsize;
@@ -508,7 +515,7 @@ cifs_demultiplex_thread(struct TCP_Server_Info *server)
 		/* else length ok */
 		reconnect = 0;
 
-		if(pdu_length > MAX_CIFS_HDR_SIZE - 4) {
+		if(pdu_length > MAX_CIFS_SMALL_BUFFER_SIZE - 4) {
 			isLargeBuf = TRUE;
 			memcpy(bigbuf, smallbuf, 4);
 			smb_buffer = bigbuf;
@@ -557,7 +564,7 @@ cifs_demultiplex_thread(struct TCP_Server_Info *server)
 	
 
 		dump_smb(smb_buffer, length);
-		if (checkSMB (smb_buffer, smb_buffer->Mid, total_read+4)) {
+		if (checkSMB(smb_buffer, smb_buffer->Mid, total_read+4)) {
 			cifs_dump_mem("Bad SMB: ", smb_buffer, 48);
 			continue;
 		}
@@ -623,7 +630,7 @@ multi_t2_fnd:
 					smallbuf = NULL;
 			}
 			wake_up_process(task_to_wake);
-		} else if ((is_valid_oplock_break(smb_buffer) == FALSE)
+		} else if ((is_valid_oplock_break(smb_buffer, server) == FALSE)
 		    && (isMultiRsp == FALSE)) {                          
 			cERROR(1, ("No task to wake, unknown frame rcvd!"));
 			cifs_dump_mem("Received Data is: ",(char *)smb_buffer,
@@ -777,7 +784,7 @@ cifs_parse_mount_options(char *options, const char *devname,struct smb_vol *vol)
 
 	/* vol->retry default is 0 (i.e. "soft" limited retry not hard retry) */
 	vol->rw = TRUE;
-
+	vol->ntlm = TRUE;
 	/* default is always to request posix paths. */
 	vol->posix_paths = 1;
 
@@ -903,6 +910,39 @@ cifs_parse_mount_options(char *options, const char *devname,struct smb_vol *vol)
 				printk(KERN_WARNING "CIFS: ip address too long\n");
 				return 1;
 			}
+                } else if (strnicmp(data, "sec", 3) == 0) { 
+                        if (!value || !*value) {
+				cERROR(1,("no security value specified"));
+                                continue;
+                        } else if (strnicmp(value, "krb5i", 5) == 0) {
+				vol->sign = 1;
+				vol->krb5 = 1;
+			} else if (strnicmp(value, "krb5p", 5) == 0) {
+				/* vol->seal = 1; 
+				   vol->krb5 = 1; */
+				cERROR(1,("Krb5 cifs privacy not supported"));
+				return 1;
+			} else if (strnicmp(value, "krb5", 4) == 0) {
+				vol->krb5 = 1;
+			} else if (strnicmp(value, "ntlmv2i", 7) == 0) {
+				vol->ntlmv2 = 1;
+				vol->sign = 1;
+			} else if (strnicmp(value, "ntlmv2", 6) == 0) {
+				vol->ntlmv2 = 1;
+			} else if (strnicmp(value, "ntlmi", 5) == 0) {
+				vol->ntlm = 1;
+				vol->sign = 1;
+			} else if (strnicmp(value, "ntlm", 4) == 0) {
+				/* ntlm is default so can be turned off too */
+				vol->ntlm = 1;
+			} else if (strnicmp(value, "nontlm", 6) == 0) {
+				vol->ntlm = 0;
+			} else if (strnicmp(value, "none", 4) == 0) {
+				vol->nullauth = 1; 
+                        } else {
+                                cERROR(1,("bad security option: %s", value));
+                                return 1;
+                        }
 		} else if ((strnicmp(data, "unc", 3) == 0)
 			   || (strnicmp(data, "target", 6) == 0)
 			   || (strnicmp(data, "path", 4) == 0)) {
@@ -1120,6 +1160,10 @@ cifs_parse_mount_options(char *options, const char *devname,struct smb_vol *vol)
 			vol->server_ino = 1;
 		} else if (strnicmp(data, "noserverino",9) == 0) {
 			vol->server_ino = 0;
+		} else if (strnicmp(data, "cifsacl",7) == 0) {
+			vol->cifs_acl = 1;
+		} else if (strnicmp(data, "nocifsacl", 9) == 0) {
+			vol->cifs_acl = 0;
 		} else if (strnicmp(data, "acl",3) == 0) {
 			vol->no_psx_acl = 0;
 		} else if (strnicmp(data, "noacl",5) == 0) {
@@ -1432,6 +1476,14 @@ ipv4_connect(struct sockaddr_in *psin_server, struct socket **csocket,
 			rc = smb_send(*csocket, smb_buf, 0x44,
 				(struct sockaddr *)psin_server);
 			kfree(ses_init_buf);
+			msleep(1); /* RFC1001 layer in at least one server 
+				      requires very short break before negprot
+				      presumably because not expecting negprot
+				      to follow so fast.  This is a simple
+				      solution that works without 
+				      complicating the code and causes no
+				      significant slowing down on mount
+				      for everyone else */
 		}
 		/* else the negprot may still work without this 
 		even though malloc failed */
@@ -1546,7 +1598,7 @@ cifs_mount(struct super_block *sb, struct cifs_sb_info *cifs_sb,
 		cFYI(1, ("Username: %s ", volume_info.username));
 
 	} else {
-		cifserror("No username specified ");
+		cifserror("No username specified");
         /* In userspace mount helper we can get user name from alternate
            locations such as env variables and files on disk */
 		kfree(volume_info.UNC);
@@ -1587,7 +1639,7 @@ cifs_mount(struct super_block *sb, struct cifs_sb_info *cifs_sb,
 		return -EINVAL;
 	} else /* which servers DFS root would we conect to */ {
 		cERROR(1,
-		       ("CIFS mount error: No UNC path (e.g. -o unc=//192.168.1.100/public) specified  "));
+		       ("CIFS mount error: No UNC path (e.g. -o unc=//192.168.1.100/public) specified"));
 		kfree(volume_info.UNC);
 		kfree(volume_info.password);
 		FreeXid(xid);
@@ -1626,7 +1678,7 @@ cifs_mount(struct super_block *sb, struct cifs_sb_info *cifs_sb,
 
 
 	if (srvTcp) {
-		cFYI(1, ("Existing tcp session with server found "));                
+		cFYI(1, ("Existing tcp session with server found"));                
 	} else {	/* create socket */
 		if(volume_info.port)
 			sin_server.sin_port = htons(volume_info.port);
@@ -1689,11 +1741,11 @@ cifs_mount(struct super_block *sb, struct cifs_sb_info *cifs_sb,
 
 	if (existingCifsSes) {
 		pSesInfo = existingCifsSes;
-		cFYI(1, ("Existing smb sess found "));
+		cFYI(1, ("Existing smb sess found"));
 		kfree(volume_info.password);
 		/* volume_info.UNC freed at end of function */
 	} else if (!rc) {
-		cFYI(1, ("Existing smb sess not found "));
+		cFYI(1, ("Existing smb sess not found"));
 		pSesInfo = sesInfoAlloc();
 		if (pSesInfo == NULL)
 			rc = -ENOMEM;
@@ -1741,17 +1793,27 @@ cifs_mount(struct super_block *sb, struct cifs_sb_info *cifs_sb,
 		} else if(volume_info.wsize)
 			cifs_sb->wsize = volume_info.wsize;
 		else
-			cifs_sb->wsize = CIFSMaxBufSize; /* default */
-		if(cifs_sb->rsize < PAGE_CACHE_SIZE) {
-			cifs_sb->rsize = PAGE_CACHE_SIZE; 
-			/* Windows ME does this */
-			cFYI(1,("Attempt to set readsize for mount to less than one page (4096)"));
+			cifs_sb->wsize = 
+				min_t(const int, PAGEVEC_SIZE * PAGE_CACHE_SIZE,
+					127*1024);
+			/* old default of CIFSMaxBufSize was too small now
+			   that SMB Write2 can send multiple pages in kvec.   
+			   RFC1001 does not describe what happens when frame
+			   bigger than 128K is sent so use that as max in
+			   conjunction with 52K kvec constraint on arch with 4K
+			   page size  */
+
+		if(cifs_sb->rsize < 2048) {
+			cifs_sb->rsize = 2048; 
+			/* Windows ME may prefer this */
+			cFYI(1,("readsize set to minimum 2048"));
 		}
 		cifs_sb->mnt_uid = volume_info.linux_uid;
 		cifs_sb->mnt_gid = volume_info.linux_gid;
 		cifs_sb->mnt_file_mode = volume_info.file_mode;
 		cifs_sb->mnt_dir_mode = volume_info.dir_mode;
-		cFYI(1,("file mode: 0x%x  dir mode: 0x%x",cifs_sb->mnt_file_mode,cifs_sb->mnt_dir_mode));
+		cFYI(1,("file mode: 0x%x  dir mode: 0x%x",
+			cifs_sb->mnt_file_mode,cifs_sb->mnt_dir_mode));
 
 		if(volume_info.noperm)
 			cifs_sb->mnt_cifs_flags |= CIFS_MOUNT_NO_PERM;
@@ -1767,6 +1829,8 @@ cifs_mount(struct super_block *sb, struct cifs_sb_info *cifs_sb,
 			cifs_sb->mnt_cifs_flags |= CIFS_MOUNT_UNX_EMUL;
 		if(volume_info.nobrl)
 			cifs_sb->mnt_cifs_flags |= CIFS_MOUNT_NO_BRL;
+		if(volume_info.cifs_acl)
+			cifs_sb->mnt_cifs_flags |= CIFS_MOUNT_CIFS_ACL;
 
 		if(volume_info.direct_io) {
 			cFYI(1,("mounting share using direct i/o"));
@@ -1777,7 +1841,7 @@ cifs_mount(struct super_block *sb, struct cifs_sb_info *cifs_sb,
 		    find_unc(sin_server.sin_addr.s_addr, volume_info.UNC,
 			     volume_info.username);
 		if (tcon) {
-			cFYI(1, ("Found match on UNC path "));
+			cFYI(1, ("Found match on UNC path"));
 			/* we can have only one retry value for a connection
 			   to a share so for resources mounted more than once
 			   to the same server share the last value passed in 
@@ -1864,27 +1928,34 @@ cifs_mount(struct super_block *sb, struct cifs_sb_info *cifs_sb,
 		cifs_sb->tcon = tcon;
 		tcon->ses = pSesInfo;
 
-		/* do not care if following two calls succeed - informational only */
+		/* do not care if following two calls succeed - informational */
 		CIFSSMBQFSDeviceInfo(xid, tcon);
 		CIFSSMBQFSAttributeInfo(xid, tcon);
+
 		if (tcon->ses->capabilities & CAP_UNIX) {
 			if(!CIFSSMBQFSUnixInfo(xid, tcon)) {
-				if(!volume_info.no_psx_acl) {
-					if(CIFS_UNIX_POSIX_ACL_CAP & 
-					   le64_to_cpu(tcon->fsUnixInfo.Capability))
-						cFYI(1,("server negotiated posix acl support"));
-						sb->s_flags |= MS_POSIXACL;
+				__u64 cap = 
+				       le64_to_cpu(tcon->fsUnixInfo.Capability);
+				cap &= CIFS_UNIX_CAP_MASK;
+				if(volume_info.no_psx_acl)
+					cap &= ~CIFS_UNIX_POSIX_ACL_CAP;
+				else if(CIFS_UNIX_POSIX_ACL_CAP & cap) {
+					cFYI(1,("negotiated posix acl support"));
+					sb->s_flags |= MS_POSIXACL;
 				}
 
-				/* Try and negotiate POSIX pathnames if we can. */
-				if (volume_info.posix_paths && (CIFS_UNIX_POSIX_PATHNAMES_CAP &
-				    le64_to_cpu(tcon->fsUnixInfo.Capability))) {
-					if (!CIFSSMBSetFSUnixInfo(xid, tcon, CIFS_UNIX_POSIX_PATHNAMES_CAP))  {
-						cFYI(1,("negotiated posix pathnames support"));
-						cifs_sb->mnt_cifs_flags |= CIFS_MOUNT_POSIX_PATHS;
-					} else {
-						cFYI(1,("posix pathnames support requested but not supported"));
-					}
+				if(volume_info.posix_paths == 0)
+					cap &= ~CIFS_UNIX_POSIX_PATHNAMES_CAP;
+				else if(cap & CIFS_UNIX_POSIX_PATHNAMES_CAP) {
+					cFYI(1,("negotiate posix pathnames"));
+					cifs_sb->mnt_cifs_flags |= 
+						CIFS_MOUNT_POSIX_PATHS;
+				}
+					
+				cFYI(1,("Negotiate caps 0x%x",(int)cap));
+
+				if (CIFSSMBSetFSUnixInfo(xid, tcon, cap)) {
+					cFYI(1,("setting capabilities failed"));
 				}
 			}
 		}
@@ -1926,7 +1997,7 @@ CIFSSessSetup(unsigned int xid, struct cifsSesInfo *ses,
 	__u32 capabilities;
 	__u16 count;
 
-	cFYI(1, ("In sesssetup "));
+	cFYI(1, ("In sesssetup"));
 	if(ses == NULL)
 		return -EINVAL;
 	user = ses->userName;
@@ -2222,6 +2293,8 @@ CIFSSpnegoSessSetup(unsigned int xid, struct cifsSesInfo *ses,
 	smb_buffer->Mid = GetNextMid(ses->server);
 	pSMB->req.hdr.Flags2 |= SMBFLG2_EXT_SEC;
 	pSMB->req.AndXCommand = 0xFF;
+	if(ses->server->maxBuf > 64*1024)
+		ses->server->maxBuf = (64*1023);
 	pSMB->req.MaxBufferSize = cpu_to_le16(ses->server->maxBuf);
 	pSMB->req.MaxMpxCount = cpu_to_le16(ses->server->maxReq);
 
@@ -2469,7 +2542,7 @@ CIFSNTLMSSPNegotiateSessSetup(unsigned int xid,
 	__u32 negotiate_flags, capabilities;
 	__u16 count;
 
-	cFYI(1, ("In NTLMSSP sesssetup (negotiate) "));
+	cFYI(1, ("In NTLMSSP sesssetup (negotiate)"));
 	if(ses == NULL)
 		return -EINVAL;
 	domain = ses->domainName;
@@ -2519,7 +2592,8 @@ CIFSNTLMSSPNegotiateSessSetup(unsigned int xid,
 	SecurityBlob->MessageType = NtLmNegotiate;
 	negotiate_flags =
 	    NTLMSSP_NEGOTIATE_UNICODE | NTLMSSP_NEGOTIATE_OEM |
-	    NTLMSSP_REQUEST_TARGET | NTLMSSP_NEGOTIATE_NTLM | 0x80000000 |
+	    NTLMSSP_REQUEST_TARGET | NTLMSSP_NEGOTIATE_NTLM |
+	    NTLMSSP_NEGOTIATE_56 |
 	    /* NTLMSSP_NEGOTIATE_ALWAYS_SIGN | */ NTLMSSP_NEGOTIATE_128;
 	if(sign_CIFS_PDUs)
 		negotiate_flags |= NTLMSSP_NEGOTIATE_SIGN;
@@ -2532,26 +2606,11 @@ CIFSNTLMSSPNegotiateSessSetup(unsigned int xid,
 	SecurityBlob->WorkstationName.Length = 0;
 	SecurityBlob->WorkstationName.MaximumLength = 0;
 
-	if (domain == NULL) {
-		SecurityBlob->DomainName.Buffer = 0;
-		SecurityBlob->DomainName.Length = 0;
-		SecurityBlob->DomainName.MaximumLength = 0;
-	} else {
-		__u16 len;
-		negotiate_flags |= NTLMSSP_NEGOTIATE_DOMAIN_SUPPLIED;
-		strncpy(bcc_ptr, domain, 63);
-		len = strnlen(domain, 64);
-		SecurityBlob->DomainName.MaximumLength =
-		    cpu_to_le16(len);
-		SecurityBlob->DomainName.Buffer =
-		    cpu_to_le32((long) &SecurityBlob->
-				DomainString -
-				(long) &SecurityBlob->Signature);
-		bcc_ptr += len;
-		SecurityBlobLength += len;
-		SecurityBlob->DomainName.Length =
-		    cpu_to_le16(len);
-	}
+	/* Domain not sent on first Sesssetup in NTLMSSP, instead it is sent
+	along with username on auth request (ie the response to challenge) */
+	SecurityBlob->DomainName.Buffer = 0;
+	SecurityBlob->DomainName.Length = 0;
+	SecurityBlob->DomainName.MaximumLength = 0;
 	if (ses->capabilities & CAP_UNICODE) {
 		if ((long) bcc_ptr % 2) {
 			*bcc_ptr = 0;
@@ -2621,7 +2680,7 @@ CIFSNTLMSSPNegotiateSessSetup(unsigned int xid,
 			      SecurityBlob2->MessageType));
 		} else if (ses) {
 			ses->Suid = smb_buffer_response->Uid; /* UID left in le format */ 
-			cFYI(1, ("UID = %d ", ses->Suid));
+			cFYI(1, ("UID = %d", ses->Suid));
 			if ((pSMBr->resp.hdr.WordCount == 3)
 			    || ((pSMBr->resp.hdr.WordCount == 4)
 				&& (blob_len <
@@ -2629,17 +2688,17 @@ CIFSNTLMSSPNegotiateSessSetup(unsigned int xid,
 
 				if (pSMBr->resp.hdr.WordCount == 4) {
 					bcc_ptr += blob_len;
-					cFYI(1,
-					     ("Security Blob Length %d ",
+					cFYI(1, ("Security Blob Length %d",
 					      blob_len));
 				}
 
-				cFYI(1, ("NTLMSSP Challenge rcvd "));
+				cFYI(1, ("NTLMSSP Challenge rcvd"));
 
 				memcpy(ses->server->cryptKey,
 				       SecurityBlob2->Challenge,
 				       CIFS_CRYPTO_KEY_SIZE);
-				if(SecurityBlob2->NegotiateFlags & cpu_to_le32(NTLMSSP_NEGOTIATE_NTLMV2))
+				if(SecurityBlob2->NegotiateFlags & 
+					cpu_to_le32(NTLMSSP_NEGOTIATE_NTLMV2))
 					*pNTLMv2_flag = TRUE;
 
 				if((SecurityBlob2->NegotiateFlags & 
@@ -2762,7 +2821,7 @@ CIFSNTLMSSPNegotiateSessSetup(unsigned int xid,
 						bcc_ptr++;
 					} else
 						cFYI(1,
-						     ("Variable field of length %d extends beyond end of smb ",
+						     ("Variable field of length %d extends beyond end of smb",
 						      len));
 				}
 			} else {
@@ -2774,7 +2833,7 @@ CIFSNTLMSSPNegotiateSessSetup(unsigned int xid,
 		}
 	} else {
 		cERROR(1,
-		       (" Invalid Word count %d: ",
+		       (" Invalid Word count %d:",
 			smb_buffer_response->WordCount));
 		rc = -EIO;
 	}
@@ -3202,9 +3261,26 @@ CIFSTCon(unsigned int xid, struct cifsSesInfo *ses,
 
 	pSMB->AndXCommand = 0xFF;
 	pSMB->Flags = cpu_to_le16(TCON_EXTENDED_SECINFO);
-	pSMB->PasswordLength = cpu_to_le16(1);	/* minimum */
 	bcc_ptr = &pSMB->Password[0];
-	bcc_ptr++;		/* skip password */
+	if((ses->server->secMode) & SECMODE_USER) {
+		pSMB->PasswordLength = cpu_to_le16(1);	/* minimum */
+		bcc_ptr++;              /* skip password */
+	} else {
+		pSMB->PasswordLength = cpu_to_le16(CIFS_SESSION_KEY_SIZE);
+		/* BB FIXME add code to fail this if NTLMv2 or Kerberos
+		   specified as required (when that support is added to
+		   the vfs in the future) as only NTLM or the much
+		   weaker LANMAN (which we do not send) is accepted
+		   by Samba (not sure whether other servers allow
+		   NTLMv2 password here) */
+		SMBNTencrypt(ses->password,
+			     ses->server->cryptKey,
+			     bcc_ptr);
+
+		bcc_ptr += CIFS_SESSION_KEY_SIZE;
+		*bcc_ptr = 0;
+		bcc_ptr++; /* align */
+	}
 
 	if(ses->server->secMode & (SECMODE_SIGN_REQUIRED | SECMODE_SIGN_ENABLED))
 		smb_buffer->Flags2 |= SMBFLG2_SECURITY_SIGNATURE;
@@ -3222,7 +3298,6 @@ CIFSTCon(unsigned int xid, struct cifsSesInfo *ses,
 		bcc_ptr += 2 * length;	/* convert num of 16 bit words to bytes */
 		bcc_ptr += 2;	/* skip trailing null */
 	} else {		/* ASCII */
-
 		strcpy(bcc_ptr, tree);
 		bcc_ptr += strlen(tree) + 1;
 	}
@@ -3375,7 +3450,7 @@ int cifs_setup_session(unsigned int xid, struct cifsSesInfo *pSesInfo,
 		if (extended_security
 				&& (pSesInfo->capabilities & CAP_EXTENDED_SECURITY)
 				&& (pSesInfo->server->secType == NTLMSSP)) {
-			cFYI(1, ("New style sesssetup "));
+			cFYI(1, ("New style sesssetup"));
 			rc = CIFSSpnegoSessSetup(xid, pSesInfo,
 				NULL /* security blob */, 
 				0 /* blob length */,
@@ -3383,7 +3458,7 @@ int cifs_setup_session(unsigned int xid, struct cifsSesInfo *pSesInfo,
 		} else if (extended_security
 			   && (pSesInfo->capabilities & CAP_EXTENDED_SECURITY)
 			   && (pSesInfo->server->secType == RawNTLMSSP)) {
-			cFYI(1, ("NTLMSSP sesssetup "));
+			cFYI(1, ("NTLMSSP sesssetup"));
 			rc = CIFSNTLMSSPNegotiateSessSetup(xid,
 						pSesInfo,
 						&ntlmv2_flag,

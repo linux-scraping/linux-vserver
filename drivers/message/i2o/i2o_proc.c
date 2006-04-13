@@ -28,7 +28,7 @@
  */
 
 #define OSM_NAME	"proc-osm"
-#define OSM_VERSION	"1.145"
+#define OSM_VERSION	"1.316"
 #define OSM_DESCRIPTION	"I2O ProcFS OSM"
 
 #define I2O_MAX_MODULES 4
@@ -56,7 +56,7 @@
 typedef struct _i2o_proc_entry_t {
 	char *name;		/* entry name */
 	mode_t mode;		/* mode */
-	struct file_operations *fops;	/* open function */
+	const struct file_operations *fops;	/* open function */
 } i2o_proc_entry;
 
 /* global I2O /proc/i2o entry */

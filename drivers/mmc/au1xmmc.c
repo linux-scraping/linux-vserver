@@ -37,7 +37,7 @@
 #include <linux/config.h>
 #include <linux/module.h>
 #include <linux/init.h>
-#include <linux/device.h>
+#include <linux/platform_device.h>
 #include <linux/mm.h>
 #include <linux/interrupt.h>
 #include <linux/dma-mapping.h>
@@ -56,12 +56,11 @@
 #define DRIVER_NAME "au1xxx-mmc"
 
 /* Set this to enable special debugging macros */
-/* #define MMC_DEBUG */
 
-#ifdef MMC_DEBUG
-#define DEBUG(fmt, idx, args...) printk("au1xx(%d): DEBUG: " fmt, idx, ##args)
+#ifdef DEBUG
+#define DBG(fmt, idx, args...) printk("au1xx(%d): DEBUG: " fmt, idx, ##args)
 #else
-#define DEBUG(fmt, idx, args...)
+#define DBG(fmt, idx, args...)
 #endif
 
 const struct {
@@ -87,7 +86,7 @@ struct au1xmmc_host *au1xmmc_hosts[AU1XMMC_CONTROLLER_COUNT];
 static int dma = 1;
 
 #ifdef MODULE
-MODULE_PARM(dma, "i");
+module_param(dma, bool, 0);
 MODULE_PARM_DESC(dma, "Use DMA engine for data transfers (0 = disabled)");
 #endif
 
@@ -194,7 +193,7 @@ static int au1xmmc_send_command(struct au1xmmc_host *host, int wait,
 
 	u32 mmccmd = (cmd->opcode << SD_CMD_CI_SHIFT);
 
-	switch(cmd->flags) {
+	switch (mmc_resp_type(cmd)) {
 	case MMC_RSP_R1:
 		mmccmd |= SD_CMD_RT_1;
 		break;
@@ -424,18 +423,18 @@ static void au1xmmc_receive_pio(struct au1xmmc_host *host)
 			break;
 
 		if (status & SD_STATUS_RC) {
-			DEBUG("RX CRC Error [%d + %d].\n", host->id,
+			DBG("RX CRC Error [%d + %d].\n", host->id,
 					host->pio.len, count);
 			break;
 		}
 
 		if (status & SD_STATUS_RO) {
-			DEBUG("RX Overrun [%d + %d]\n", host->id,
+			DBG("RX Overrun [%d + %d]\n", host->id,
 					host->pio.len, count);
 			break;
 		}
 		else if (status & SD_STATUS_RU) {
-			DEBUG("RX Underrun [%d + %d]\n", host->id,
+			DBG("RX Underrun [%d + %d]\n", host->id,
 					host->pio.len,	count);
 			break;
 		}
@@ -483,34 +482,35 @@ static void au1xmmc_cmd_complete(struct au1xmmc_host *host, u32 status)
 	cmd = mrq->cmd;
 	cmd->error = MMC_ERR_NONE;
 
-	if ((cmd->flags & MMC_RSP_MASK) == MMC_RSP_SHORT) {
+	if (cmd->flags & MMC_RSP_PRESENT) {
+		if (cmd->flags & MMC_RSP_136) {
+			u32 r[4];
+			int i;
 
-		/* Techincally, we should be getting all 48 bits of the response
-		 * (SD_RESP1 + SD_RESP2), but because our response omits the CRC,
-		 * our data ends up being shifted 8 bits to the right.  In this case,
-		 * that means that the OSR data starts at bit 31, so we can just
-		 * read RESP0 and return that
-		 */
+			r[0] = au_readl(host->iobase + SD_RESP3);
+			r[1] = au_readl(host->iobase + SD_RESP2);
+			r[2] = au_readl(host->iobase + SD_RESP1);
+			r[3] = au_readl(host->iobase + SD_RESP0);
 
-		cmd->resp[0] = au_readl(host->iobase + SD_RESP0);
-	}
-	else if ((cmd->flags & MMC_RSP_MASK) == MMC_RSP_LONG) {
-		u32 r[4];
-		int i;
+			/* The CRC is omitted from the response, so really
+			 * we only got 120 bytes, but the engine expects
+			 * 128 bits, so we have to shift things up
+			 */
 
-		r[0] = au_readl(host->iobase + SD_RESP3);
-		r[1] = au_readl(host->iobase + SD_RESP2);
-		r[2] = au_readl(host->iobase + SD_RESP1);
-		r[3] = au_readl(host->iobase + SD_RESP0);
-
-		/* The CRC is omitted from the response, so really we only got
-		 * 120 bytes, but the engine expects 128 bits, so we have to shift
-		 * things up
-		 */
-
-		for(i = 0; i < 4; i++) {
-			cmd->resp[i] = (r[i] & 0x00FFFFFF) << 8;
-			if (i != 3) cmd->resp[i] |= (r[i + 1] & 0xFF000000) >> 24;
+			for(i = 0; i < 4; i++) {
+				cmd->resp[i] = (r[i] & 0x00FFFFFF) << 8;
+				if (i != 3)
+					cmd->resp[i] |= (r[i + 1] & 0xFF000000) >> 24;
+			}
+		} else {
+			/* Techincally, we should be getting all 48 bits of
+			 * the response (SD_RESP1 + SD_RESP2), but because
+			 * our response omits the CRC, our data ends up
+			 * being shifted 8 bits to the right.  In this case,
+			 * that means that the OSR data starts at bit 31,
+			 * so we can just read RESP0 and return that
+			 */
+			cmd->resp[0] = au_readl(host->iobase + SD_RESP0);
 		}
 	}
 
@@ -720,7 +720,7 @@ static void au1xmmc_set_ios(struct mmc_host* mmc, struct mmc_ios* ios)
 {
 	struct au1xmmc_host *host = mmc_priv(mmc);
 
-	DEBUG("set_ios (power=%u, clock=%uHz, vdd=%u, mode=%u)\n",
+	DBG("set_ios (power=%u, clock=%uHz, vdd=%u, mode=%u)\n",
 	      host->id, ios->power_mode, ios->clock, ios->vdd,
 	      ios->bus_mode);
 
@@ -739,7 +739,6 @@ static void au1xmmc_set_ios(struct mmc_host* mmc, struct mmc_ios* ios)
 static void au1xmmc_dma_callback(int irq, void *dev_id, struct pt_regs *regs)
 {
 	struct au1xmmc_host *host = (struct au1xmmc_host *) dev_id;
-	u32 status;
 
 	/* Avoid spurious interrupts */
 
@@ -810,7 +809,7 @@ static irqreturn_t au1xmmc_irq(int irq, void *dev_id, struct pt_regs *regs)
 				au1xmmc_receive_pio(host);
 		}
 		else if (status & 0x203FBC70) {
-			DEBUG("Unhandled status %8.8x\n", host->id, status);
+			DBG("Unhandled status %8.8x\n", host->id, status);
 			handled = 0;
 		}
 
@@ -839,7 +838,7 @@ static void au1xmmc_poll_event(unsigned long arg)
 
 	if (host->mrq != NULL) {
 		u32 status = au_readl(HOST_STATUS(host));
-		DEBUG("PENDING - %8.8x\n", host->id, status);
+		DBG("PENDING - %8.8x\n", host->id, status);
 	}
 
 	mod_timer(&host->timer, jiffies + AU1XMMC_DETECT_TIMEOUT);
@@ -886,7 +885,7 @@ struct mmc_host_ops au1xmmc_ops = {
 	.set_ios	= au1xmmc_set_ios,
 };
 
-static int au1xmmc_probe(struct device *dev)
+static int __devinit au1xmmc_probe(struct platform_device *pdev)
 {
 
 	int i, ret = 0;
@@ -903,7 +902,7 @@ static int au1xmmc_probe(struct device *dev)
 	disable_irq(AU1100_SD_IRQ);
 
 	for(i = 0; i < AU1XMMC_CONTROLLER_COUNT; i++) {
-		struct mmc_host *mmc = mmc_alloc_host(sizeof(struct au1xmmc_host), dev);
+		struct mmc_host *mmc = mmc_alloc_host(sizeof(struct au1xmmc_host), &pdev->dev);
 		struct au1xmmc_host *host = 0;
 
 		if (!mmc) {
@@ -966,7 +965,7 @@ static int au1xmmc_probe(struct device *dev)
 	return 0;
 }
 
-static int au1xmmc_remove(struct device *dev)
+static int __devexit au1xmmc_remove(struct platform_device *pdev)
 {
 
 	int i;
@@ -996,23 +995,24 @@ static int au1xmmc_remove(struct device *dev)
 	return 0;
 }
 
-static struct device_driver au1xmmc_driver = {
-	.name          = DRIVER_NAME,
-	.bus           = &platform_bus_type,
+static struct platform_driver au1xmmc_driver = {
 	.probe         = au1xmmc_probe,
 	.remove        = au1xmmc_remove,
 	.suspend       = NULL,
-	.resume        = NULL
+	.resume        = NULL,
+	.driver        = {
+		.name  = DRIVER_NAME,
+	},
 };
 
 static int __init au1xmmc_init(void)
 {
-	return driver_register(&au1xmmc_driver);
+	return platform_driver_register(&au1xmmc_driver);
 }
 
 static void __exit au1xmmc_exit(void)
 {
-	driver_unregister(&au1xmmc_driver);
+	platform_driver_unregister(&au1xmmc_driver);
 }
 
 module_init(au1xmmc_init);

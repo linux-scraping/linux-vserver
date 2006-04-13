@@ -1,6 +1,4 @@
 /*
- *  arch/ppc/kernel/irq.c
- *
  *  Derived from arch/i386/kernel/irq.c
  *    Copyright (C) 1992 Linus Torvalds
  *  Adapted from arch/i386 by Gary Thomas
@@ -31,7 +29,6 @@
  * to reduce code space and undefined function references.
  */
 
-#include <linux/errno.h>
 #include <linux/module.h>
 #include <linux/threads.h>
 #include <linux/kernel_stat.h>
@@ -44,18 +41,12 @@
 #include <linux/config.h>
 #include <linux/init.h>
 #include <linux/slab.h>
-#include <linux/pci.h>
 #include <linux/delay.h>
 #include <linux/irq.h>
-#include <linux/proc_fs.h>
-#include <linux/random.h>
 #include <linux/seq_file.h>
 #include <linux/cpumask.h>
 #include <linux/profile.h>
 #include <linux/bitops.h>
-#ifdef CONFIG_PPC64
-#include <linux/kallsyms.h>
-#endif
 
 #include <asm/uaccess.h>
 #include <asm/system.h>
@@ -66,8 +57,7 @@
 #include <asm/prom.h>
 #include <asm/ptrace.h>
 #include <asm/machdep.h>
-#ifdef CONFIG_PPC64
-#include <asm/iseries/it_lp_queue.h>
+#ifdef CONFIG_PPC_ISERIES
 #include <asm/paca.h>
 #endif
 
@@ -77,10 +67,6 @@ EXPORT_SYMBOL(__irq_offset_value);
 #endif
 
 static int ppc_spurious_interrupts;
-
-#if defined(CONFIG_PPC_ISERIES) && defined(CONFIG_SMP)
-extern void iSeries_smp_message_recv(struct pt_regs *);
-#endif
 
 #ifdef CONFIG_PPC32
 #define NR_MASK_WORDS	((NR_IRQS + 31) / 32)
@@ -149,9 +135,8 @@ skip:
 #ifdef CONFIG_TAU_INT
 		if (tau_initialized){
 			seq_puts(p, "TAU: ");
-			for (j = 0; j < NR_CPUS; j++)
-				if (cpu_online(j))
-					seq_printf(p, "%10u ", tau_interrupts(j));
+			for_each_online_cpu(j)
+				seq_printf(p, "%10u ", tau_interrupts(j));
 			seq_puts(p, "  PowerPC             Thermal Assist (cpu temp)\n");
 		}
 #endif
@@ -194,49 +179,6 @@ void fixup_irqs(cpumask_t map)
 	local_irq_disable();
 }
 #endif
-
-#ifdef CONFIG_PPC_ISERIES
-void do_IRQ(struct pt_regs *regs)
-{
-	struct paca_struct *lpaca;
-
-	irq_enter();
-
-#ifdef CONFIG_DEBUG_STACKOVERFLOW
-	/* Debugging check for stack overflow: is there less than 2KB free? */
-	{
-		long sp;
-
-		sp = __get_SP() & (THREAD_SIZE-1);
-
-		if (unlikely(sp < (sizeof(struct thread_info) + 2048))) {
-			printk("do_IRQ: stack overflow: %ld\n",
-				sp - sizeof(struct thread_info));
-			dump_stack();
-		}
-	}
-#endif
-
-	lpaca = get_paca();
-#ifdef CONFIG_SMP
-	if (lpaca->lppaca.int_dword.fields.ipi_cnt) {
-		lpaca->lppaca.int_dword.fields.ipi_cnt = 0;
-		iSeries_smp_message_recv(regs);
-	}
-#endif /* CONFIG_SMP */
-	if (hvlpevent_is_pending())
-		process_hvlpevents(regs);
-
-	irq_exit();
-
-	if (lpaca->lppaca.int_dword.fields.decr_int) {
-		lpaca->lppaca.int_dword.fields.decr_int = 0;
-		/* Signal a fake decrementer interrupt */
-		timer_interrupt(regs);
-	}
-}
-
-#else	/* CONFIG_PPC_ISERIES */
 
 void do_IRQ(struct pt_regs *regs)
 {
@@ -286,16 +228,20 @@ void do_IRQ(struct pt_regs *regs)
 		} else
 #endif
 			__do_IRQ(irq, regs);
-	} else
-#ifdef CONFIG_PPC32
-		if (irq != -2)
-#endif
-			/* That's not SMP safe ... but who cares ? */
-			ppc_spurious_interrupts++;
-        irq_exit();
-}
+	} else if (irq != -2)
+		/* That's not SMP safe ... but who cares ? */
+		ppc_spurious_interrupts++;
 
-#endif	/* CONFIG_PPC_ISERIES */
+        irq_exit();
+
+#ifdef CONFIG_PPC_ISERIES
+	if (get_lppaca()->int_dword.fields.decr_int) {
+		get_lppaca()->int_dword.fields.decr_int = 0;
+		/* Signal a fake decrementer interrupt */
+		timer_interrupt(regs);
+	}
+#endif
+}
 
 void __init init_IRQ(void)
 {
@@ -422,6 +368,7 @@ unsigned int real_irq_to_virt_slowpath(unsigned int real_irq)
 	return NO_IRQ;
 
 }
+#endif /* CONFIG_PPC64 */
 
 #ifdef CONFIG_IRQSTACKS
 struct thread_info *softirq_ctx[NR_CPUS];
@@ -432,7 +379,7 @@ void irq_ctx_init(void)
 	struct thread_info *tp;
 	int i;
 
-	for_each_cpu(i) {
+	for_each_possible_cpu(i) {
 		memset((void *)softirq_ctx[i], 0, THREAD_SIZE);
 		tp = softirq_ctx[i];
 		tp->cpu = i;
@@ -445,10 +392,24 @@ void irq_ctx_init(void)
 	}
 }
 
+static inline void do_softirq_onstack(void)
+{
+	struct thread_info *curtp, *irqtp;
+
+	curtp = current_thread_info();
+	irqtp = softirq_ctx[smp_processor_id()];
+	irqtp->task = curtp->task;
+	call_do_softirq(irqtp);
+	irqtp->task = NULL;
+}
+
+#else
+#define do_softirq_onstack()	__do_softirq()
+#endif /* CONFIG_IRQSTACKS */
+
 void do_softirq(void)
 {
 	unsigned long flags;
-	struct thread_info *curtp, *irqtp;
 
 	if (in_interrupt())
 		return;
@@ -456,19 +417,18 @@ void do_softirq(void)
 	local_irq_save(flags);
 
 	if (local_softirq_pending()) {
-		curtp = current_thread_info();
-		irqtp = softirq_ctx[smp_processor_id()];
-		irqtp->task = curtp->task;
-		call_do_softirq(irqtp);
-		irqtp->task = NULL;
+		account_system_vtime(current);
+		local_bh_disable();
+		do_softirq_onstack();
+		account_system_vtime(current);
+		__local_bh_enable();
 	}
 
 	local_irq_restore(flags);
 }
 EXPORT_SYMBOL(do_softirq);
 
-#endif /* CONFIG_IRQSTACKS */
-
+#ifdef CONFIG_PPC64
 static int __init setup_noirqdistrib(char *str)
 {
 	distribute_irqs = 0;

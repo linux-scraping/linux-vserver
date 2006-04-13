@@ -90,6 +90,7 @@
 #include <linux/init.h>
 #include <linux/poll.h>
 #include <linux/ac97_codec.h>
+#include <linux/mutex.h>
 
 #include <asm/io.h>
 #include <asm/dma.h>
@@ -238,7 +239,7 @@ struct cs_state {
 	struct cs_card *card;	/* Card info */
 
 	/* single open lock mechanism, only used for recording */
-	struct semaphore open_sem;
+	struct mutex open_mutex;
 	wait_queue_head_t open_wait;
 
 	/* file mode */
@@ -297,7 +298,7 @@ struct cs_state {
 		unsigned subdivision;
 	} dmabuf;
 	/* Guard against mmap/write/read races */
-	struct semaphore sem;
+	struct mutex sem;
 };
 
 struct cs_card {
@@ -375,7 +376,7 @@ struct cs_card {
 		unsigned char ibuf[CS_MIDIINBUF];
 		unsigned char obuf[CS_MIDIOUTBUF];
 		mode_t open_mode;
-		struct semaphore open_sem;
+		struct mutex open_mutex;
 	} midi;
 	struct cs46xx_pm pm;
 };
@@ -390,10 +391,6 @@ static int cs461x_powerdown(struct cs_card *card, unsigned int type, int suspend
 static void cs461x_clear_serial_FIFOs(struct cs_card *card, int type);
 static int cs46xx_suspend_tbl(struct pci_dev *pcidev, pm_message_t state);
 static int cs46xx_resume_tbl(struct pci_dev *pcidev);
-
-#ifndef CS46XX_ACPI_SUPPORT
-static int cs46xx_pm_callback(struct pm_dev *dev, pm_request_t rqst, void *data);
-#endif
 
 #if CSDEBUG
 
@@ -1432,9 +1429,9 @@ static int prog_dmabuf(struct cs_state *state)
 {
 	int ret;
 	
-	down(&state->sem);
+	mutex_lock(&state->sem);
 	ret = __prog_dmabuf(state);
-	up(&state->sem);
+	mutex_unlock(&state->sem);
 	
 	return ret;
 }
@@ -1835,17 +1832,17 @@ static int cs_midi_open(struct inode *inode, struct file *file)
 
         file->private_data = card;
         /* wait for device to become free */
-        down(&card->midi.open_sem);
+        mutex_lock(&card->midi.open_mutex);
         while (card->midi.open_mode & file->f_mode) {
                 if (file->f_flags & O_NONBLOCK) {
-                        up(&card->midi.open_sem);
+                        mutex_unlock(&card->midi.open_mutex);
                         return -EBUSY;
                 }
-                up(&card->midi.open_sem);
+                mutex_unlock(&card->midi.open_mutex);
                 interruptible_sleep_on(&card->midi.open_wait);
                 if (signal_pending(current))
                         return -ERESTARTSYS;
-                down(&card->midi.open_sem);
+                mutex_lock(&card->midi.open_mutex);
         }
         spin_lock_irqsave(&card->midi.lock, flags);
         if (!(card->midi.open_mode & (FMODE_READ | FMODE_WRITE))) {
@@ -1863,7 +1860,7 @@ static int cs_midi_open(struct inode *inode, struct file *file)
         }
         spin_unlock_irqrestore(&card->midi.lock, flags);
         card->midi.open_mode |= (file->f_mode & (FMODE_READ | FMODE_WRITE));
-        up(&card->midi.open_sem);
+        mutex_unlock(&card->midi.open_mutex);
         return 0;
 }
 
@@ -1895,9 +1892,9 @@ static int cs_midi_release(struct inode *inode, struct file *file)
                 remove_wait_queue(&card->midi.owait, &wait);
                 current->state = TASK_RUNNING;
         }
-        down(&card->midi.open_sem);
+        mutex_lock(&card->midi.open_mutex);
         card->midi.open_mode &= (~(file->f_mode & (FMODE_READ | FMODE_WRITE)));
-        up(&card->midi.open_sem);
+        mutex_unlock(&card->midi.open_mutex);
         wake_up(&card->midi.open_wait);
         return 0;
 }
@@ -2085,7 +2082,7 @@ static ssize_t cs_read(struct file *file, char __user *buffer, size_t count, lof
 	if (!access_ok(VERIFY_WRITE, buffer, count))
 		return -EFAULT;
 	
-	down(&state->sem);
+	mutex_lock(&state->sem);
 	if (!dmabuf->ready && (ret = __prog_dmabuf(state)))
 		goto out2;
 
@@ -2118,13 +2115,13 @@ static ssize_t cs_read(struct file *file, char __user *buffer, size_t count, lof
 				if (!ret) ret = -EAGAIN;
 				goto out;
  			}
-			up(&state->sem);
+			mutex_unlock(&state->sem);
 			schedule();
 			if (signal_pending(current)) {
 				if(!ret) ret = -ERESTARTSYS;
 				goto out;
 			}
-			down(&state->sem);
+			mutex_lock(&state->sem);
 			if (dmabuf->mapped) 
 			{
 				if(!ret)
@@ -2159,7 +2156,7 @@ static ssize_t cs_read(struct file *file, char __user *buffer, size_t count, lof
 out:
 	remove_wait_queue(&state->dmabuf.wait, &wait);
 out2:
-	up(&state->sem);
+	mutex_unlock(&state->sem);
 	set_current_state(TASK_RUNNING);
 	CS_DBGOUT(CS_WAVE_READ | CS_FUNCTION, 4, 
 		printk("cs46xx: cs_read()- %zd\n",ret) );
@@ -2188,7 +2185,7 @@ static ssize_t cs_write(struct file *file, const char __user *buffer, size_t cou
 		return -EFAULT;
 	dmabuf = &state->dmabuf;
 
-	down(&state->sem);
+	mutex_lock(&state->sem);
 	if (dmabuf->mapped)
 	{
 		ret = -ENXIO;
@@ -2244,13 +2241,13 @@ static ssize_t cs_write(struct file *file, const char __user *buffer, size_t cou
 				if (!ret) ret = -EAGAIN;
 				goto out;
  			}
-			up(&state->sem);
+			mutex_unlock(&state->sem);
 			schedule();
  			if (signal_pending(current)) {
 				if(!ret) ret = -ERESTARTSYS;
 				goto out;
  			}
-			down(&state->sem);
+			mutex_lock(&state->sem);
 			if (dmabuf->mapped)
 			{
 				if(!ret)
@@ -2282,7 +2279,7 @@ static ssize_t cs_write(struct file *file, const char __user *buffer, size_t cou
 		start_dac(state);
 	}
 out:
-	up(&state->sem);
+	mutex_unlock(&state->sem);
 	remove_wait_queue(&state->dmabuf.wait, &wait);
 	set_current_state(TASK_RUNNING);
 
@@ -2415,7 +2412,7 @@ static int cs_mmap(struct file *file, struct vm_area_struct *vma)
 		goto out;
 	}
 
-	down(&state->sem);	
+	mutex_lock(&state->sem);
 	dmabuf = &state->dmabuf;
 	if (cs4x_pgoff(vma) != 0)
 	{
@@ -2442,7 +2439,7 @@ static int cs_mmap(struct file *file, struct vm_area_struct *vma)
 
 	CS_DBGOUT(CS_FUNCTION, 2, printk("cs46xx: cs_mmap()-\n") );
 out:
-	up(&state->sem);
+	mutex_unlock(&state->sem);
 	return ret;	
 }
 
@@ -3204,7 +3201,7 @@ static int cs_open(struct inode *inode, struct file *file)
 			if (state == NULL)
 				return -ENOMEM;
 			memset(state, 0, sizeof(struct cs_state));
-			init_MUTEX(&state->sem);
+			mutex_init(&state->sem);
 			dmabuf = &state->dmabuf;
 			dmabuf->pbuf = (void *)get_zeroed_page(GFP_KERNEL | GFP_DMA);
 			if(dmabuf->pbuf==NULL)
@@ -3245,10 +3242,10 @@ static int cs_open(struct inode *inode, struct file *file)
 		state->virt = 0;
 		state->magic = CS_STATE_MAGIC;
 		init_waitqueue_head(&dmabuf->wait);
-		init_MUTEX(&state->open_sem);
+		mutex_init(&state->open_mutex);
 		file->private_data = card;
 
-		down(&state->open_sem);
+		mutex_lock(&state->open_mutex);
 
 		/* set default sample format. According to OSS Programmer's Guide  /dev/dsp
 		   should be default to unsigned 8-bits, mono, with sample rate 8kHz and
@@ -3264,7 +3261,7 @@ static int cs_open(struct inode *inode, struct file *file)
 		cs_set_divisor(dmabuf);
 
 		state->open_mode |= FMODE_READ;
-		up(&state->open_sem);
+		mutex_unlock(&state->open_mutex);
 	}
 	if(file->f_mode & FMODE_WRITE)
 	{
@@ -3275,7 +3272,7 @@ static int cs_open(struct inode *inode, struct file *file)
 			if (state == NULL)
 				return -ENOMEM;
 			memset(state, 0, sizeof(struct cs_state));
-			init_MUTEX(&state->sem);
+			mutex_init(&state->sem);
 			dmabuf = &state->dmabuf;
 			dmabuf->pbuf = (void *)get_zeroed_page(GFP_KERNEL | GFP_DMA);
 			if(dmabuf->pbuf==NULL)
@@ -3316,10 +3313,10 @@ static int cs_open(struct inode *inode, struct file *file)
 		state->virt = 1;
 		state->magic = CS_STATE_MAGIC;
 		init_waitqueue_head(&dmabuf->wait);
-		init_MUTEX(&state->open_sem);
+		mutex_init(&state->open_mutex);
 		file->private_data = card;
 
-		down(&state->open_sem);
+		mutex_lock(&state->open_mutex);
 
 		/* set default sample format. According to OSS Programmer's Guide  /dev/dsp
 		   should be default to unsigned 8-bits, mono, with sample rate 8kHz and
@@ -3335,7 +3332,7 @@ static int cs_open(struct inode *inode, struct file *file)
 		cs_set_divisor(dmabuf);
 
 		state->open_mode |= FMODE_WRITE;
-		up(&state->open_sem);
+		mutex_unlock(&state->open_mutex);
 		if((ret = prog_dmabuf(state)))
 			return ret;
 	}
@@ -3367,14 +3364,14 @@ static int cs_release(struct inode *inode, struct file *file)
 			cs_clear_tail(state);
 			drain_dac(state, file->f_flags & O_NONBLOCK);
 			/* stop DMA state machine and free DMA buffers/channels */
-			down(&state->open_sem);
+			mutex_lock(&state->open_mutex);
 			stop_dac(state);
 			dealloc_dmabuf(state);
 			state->card->free_pcm_channel(state->card, dmabuf->channel->num);
 			free_page((unsigned long)state->dmabuf.pbuf);
 
-			/* we're covered by the open_sem */
-			up(&state->open_sem);
+			/* we're covered by the open_mutex */
+			mutex_unlock(&state->open_mutex);
 			state->card->states[state->virt] = NULL;
 			state->open_mode &= (~file->f_mode) & (FMODE_READ|FMODE_WRITE);
 
@@ -3399,14 +3396,14 @@ static int cs_release(struct inode *inode, struct file *file)
 		{
 			CS_DBGOUT(CS_RELEASE, 2, printk("cs46xx: cs_release() FMODE_READ\n") );
 			dmabuf = &state->dmabuf;
-			down(&state->open_sem);
+			mutex_lock(&state->open_mutex);
 			stop_adc(state);
 			dealloc_dmabuf(state);
 			state->card->free_pcm_channel(state->card, dmabuf->channel->num);
 			free_page((unsigned long)state->dmabuf.pbuf);
 
-			/* we're covered by the open_sem */
-			up(&state->open_sem);
+			/* we're covered by the open_mutex */
+			mutex_unlock(&state->open_mutex);
 			state->card->states[state->virt] = NULL;
 			state->open_mode &= (~file->f_mode) & (FMODE_READ|FMODE_WRITE);
 
@@ -5320,7 +5317,6 @@ static const char fndmsg[] = KERN_INFO "cs46xx: Found %d audio device(s).\n";
 static int __devinit cs46xx_probe(struct pci_dev *pci_dev,
 				  const struct pci_device_id *pciid)
 {
-	struct pm_dev *pmdev;
 	int i,j;
 	u16 ss_card, ss_vendor;
 	struct cs_card *card;
@@ -5512,7 +5508,7 @@ static int __devinit cs46xx_probe(struct pci_dev *pci_dev,
 	}
 
         init_waitqueue_head(&card->midi.open_wait);
-        init_MUTEX(&card->midi.open_sem);
+        mutex_init(&card->midi.open_mutex);
         init_waitqueue_head(&card->midi.iwait);
         init_waitqueue_head(&card->midi.owait);
         cs461x_pokeBA0(card, BA0_MIDCR, MIDCR_MRST);   
@@ -5529,22 +5525,6 @@ static int __devinit cs46xx_probe(struct pci_dev *pci_dev,
 	PCI_SET_DRIVER_DATA(pci_dev, card);
 	PCI_SET_DMA_MASK(pci_dev, dma_mask);
 	list_add(&card->list, &cs46xx_devs);
-
-	pmdev = cs_pm_register(PM_PCI_DEV, PM_PCI_ID(pci_dev), cs46xx_pm_callback);
-	if (pmdev)
-	{
-		CS_DBGOUT(CS_INIT | CS_PM, 4, printk(KERN_INFO
-			 "cs46xx: probe() pm_register() succeeded (%p).\n",
-				pmdev));
-		pmdev->data = card;
-	}
-	else
-	{
-		CS_DBGOUT(CS_INIT | CS_PM | CS_ERROR, 2, printk(KERN_INFO
-			 "cs46xx: probe() pm_register() failed (%p).\n",
-				pmdev));
-		card->pm.flags |= CS46XX_PM_NOT_REGISTERED;
-	}
 
 	CS_DBGOUT(CS_PM, 9, printk(KERN_INFO "cs46xx: pm.flags=0x%x card=%p\n",
 		(unsigned)card->pm.flags,card));
@@ -5711,7 +5691,7 @@ static int __init cs46xx_init_module(void)
 	int rtn = 0;
 	CS_DBGOUT(CS_INIT | CS_FUNCTION, 2, printk(KERN_INFO 
 		"cs46xx: cs46xx_init_module()+ \n"));
-	rtn = pci_module_init(&cs46xx_pci_driver);
+	rtn = pci_register_driver(&cs46xx_pci_driver);
 
 	if(rtn == -ENODEV)
 	{
@@ -5727,51 +5707,12 @@ static int __init cs46xx_init_module(void)
 static void __exit cs46xx_cleanup_module(void)
 {
 	pci_unregister_driver(&cs46xx_pci_driver);
-	cs_pm_unregister_all(cs46xx_pm_callback);
 	CS_DBGOUT(CS_INIT | CS_FUNCTION, 2,
 		  printk(KERN_INFO "cs46xx: cleanup_cs46xx() finished\n"));
 }
 
 module_init(cs46xx_init_module);
 module_exit(cs46xx_cleanup_module);
-
-#ifndef CS46XX_ACPI_SUPPORT
-static int cs46xx_pm_callback(struct pm_dev *dev, pm_request_t rqst, void *data)
-{
-	struct cs_card *card;
-
-	CS_DBGOUT(CS_PM, 2, printk(KERN_INFO 
-		"cs46xx: cs46xx_pm_callback dev=%p rqst=0x%x card=%p\n",
-			dev,(unsigned)rqst,data));
-	card = (struct cs_card *) dev->data;
-	if (card) {
-		switch(rqst) {
-			case PM_SUSPEND:
-				CS_DBGOUT(CS_PM, 2, printk(KERN_INFO
-					"cs46xx: PM suspend request\n"));
-				if(cs46xx_suspend(card, PMSG_SUSPEND))
-				{
-				    CS_DBGOUT(CS_ERROR, 2, printk(KERN_INFO
-					"cs46xx: PM suspend request refused\n"));
-					return 1; 
-				}
-				break;
-			case PM_RESUME:
-				CS_DBGOUT(CS_PM, 2, printk(KERN_INFO
-					"cs46xx: PM resume request\n"));
-				if(cs46xx_resume(card))
-				{
-				    CS_DBGOUT(CS_ERROR, 2, printk(KERN_INFO
-					"cs46xx: PM resume request refused\n"));
-					return 1;
-				}
-				break;
-		}
-	}
-
-	return 0;
-}
-#endif
 
 #if CS46XX_ACPI_SUPPORT
 static int cs46xx_suspend_tbl(struct pci_dev *pcidev, pm_message_t state)

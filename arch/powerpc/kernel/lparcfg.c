@@ -37,7 +37,7 @@
 #include <asm/prom.h>
 #include <asm/vdso_datapage.h>
 
-#define MODULE_VERS "1.6"
+#define MODULE_VERS "1.7"
 #define MODULE_NAME "lparcfg"
 
 /* #define LPARCFG_DEBUG */
@@ -55,15 +55,13 @@ static unsigned long get_purr(void)
 {
 	unsigned long sum_purr = 0;
 	int cpu;
-	struct paca_struct *lpaca;
 
-	for_each_cpu(cpu) {
-		lpaca = paca + cpu;
-		sum_purr += lpaca->lppaca.emulated_time_base;
+	for_each_possible_cpu(cpu) {
+		sum_purr += lppaca[cpu].emulated_time_base;
 
 #ifdef PURR_DEBUG
 		printk(KERN_INFO "get_purr for cpu (%d) has value (%ld) \n",
-			cpu, lpaca->lppaca.emulated_time_base);
+			cpu, lppaca[cpu].emulated_time_base);
 #endif
 	}
 	return sum_purr;
@@ -79,12 +77,11 @@ static int lparcfg_data(struct seq_file *m, void *v)
 	unsigned long pool_id, lp_index;
 	int shared, entitled_capacity, max_entitled_capacity;
 	int processors, max_processors;
-	struct paca_struct *lpaca = get_paca();
 	unsigned long purr = get_purr();
 
 	seq_printf(m, "%s %s \n", MODULE_NAME, MODULE_VERS);
 
-	shared = (int)(lpaca->lppaca_ptr->shared_proc);
+	shared = (int)(get_lppaca()->shared_proc);
 	seq_printf(m, "serial_number=%c%c%c%c%c%c%c\n",
 		   e2a(xItExtVpdPanel.mfgID[2]),
 		   e2a(xItExtVpdPanel.mfgID[3]),
@@ -152,17 +149,17 @@ static void log_plpar_hcall_return(unsigned long rc, char *tag)
 	if (rc == 0)		/* success, return */
 		return;
 /* check for null tag ? */
-	if (rc == H_Hardware)
+	if (rc == H_HARDWARE)
 		printk(KERN_INFO
 		       "plpar-hcall (%s) failed with hardware fault\n", tag);
-	else if (rc == H_Function)
+	else if (rc == H_FUNCTION)
 		printk(KERN_INFO
 		       "plpar-hcall (%s) failed; function not allowed\n", tag);
-	else if (rc == H_Authority)
+	else if (rc == H_AUTHORITY)
 		printk(KERN_INFO
-		       "plpar-hcall (%s) failed; not authorized to this function\n",
-		       tag);
-	else if (rc == H_Parameter)
+		       "plpar-hcall (%s) failed; not authorized to this"
+		       " function\n", tag);
+	else if (rc == H_PARAMETER)
 		printk(KERN_INFO "plpar-hcall (%s) failed; Bad parameter(s)\n",
 		       tag);
 	else
@@ -212,7 +209,7 @@ static void h_pic(unsigned long *pool_idle_time, unsigned long *num_procs)
 	unsigned long dummy;
 	rc = plpar_hcall(H_PIC, 0, 0, 0, 0, pool_idle_time, num_procs, &dummy);
 
-	if (rc != H_Authority)
+	if (rc != H_AUTHORITY)
 		log_plpar_hcall_return(rc, "H_PIC");
 }
 
@@ -225,7 +222,7 @@ static unsigned long get_purr(void)
 	int cpu;
 	struct cpu_usage *cu;
 
-	for_each_cpu(cpu) {
+	for_each_possible_cpu(cpu) {
 		cu = &per_cpu(cpu_usage_array, cpu);
 		sum_purr += cu->current_tb;
 	}
@@ -245,7 +242,7 @@ static void parse_system_parameter_string(struct seq_file *m)
 {
 	int call_status;
 
-	char *local_buffer = kmalloc(SPLPAR_MAXLENGTH, GFP_KERNEL);
+	unsigned char *local_buffer = kmalloc(SPLPAR_MAXLENGTH, GFP_KERNEL);
 	if (!local_buffer) {
 		printk(KERN_ERR "%s %s kmalloc failure at line %d \n",
 		       __FILE__, __FUNCTION__, __LINE__);
@@ -257,7 +254,8 @@ static void parse_system_parameter_string(struct seq_file *m)
 	call_status = rtas_call(rtas_token("ibm,get-system-parameter"), 3, 1,
 				NULL,
 				SPLPAR_CHARACTERISTICS_TOKEN,
-				__pa(rtas_data_buf));
+				__pa(rtas_data_buf),
+				RTAS_DATA_BUF_SIZE);
 	memcpy(local_buffer, rtas_data_buf, SPLPAR_MAXLENGTH);
 	spin_unlock(&rtas_data_buf_lock);
 
@@ -278,7 +276,7 @@ static void parse_system_parameter_string(struct seq_file *m)
 #ifdef LPARCFG_DEBUG
 		printk(KERN_INFO "success calling get-system-parameter \n");
 #endif
-		splpar_strlen = local_buffer[0] * 16 + local_buffer[1];
+		splpar_strlen = local_buffer[0] * 256 + local_buffer[1];
 		local_buffer += 2;	/* step over strlen value */
 
 		memset(workbuffer, 0, SPLPAR_MAXLENGTH);
@@ -344,7 +342,7 @@ static int lparcfg_data(struct seq_file *m, void *v)
 	const char *system_id = "";
 	unsigned int *lp_index_ptr, lp_index = 0;
 	struct device_node *rtas_node;
-	int *lrdrp;
+	int *lrdrp = NULL;
 
 	rootdn = find_path_device("/");
 	if (rootdn) {
@@ -365,7 +363,9 @@ static int lparcfg_data(struct seq_file *m, void *v)
 	seq_printf(m, "partition_id=%d\n", (int)lp_index);
 
 	rtas_node = find_path_device("/rtas");
-	lrdrp = (int *)get_property(rtas_node, "ibm,lrdr-capacity", NULL);
+	if (rtas_node)
+		lrdrp = (int *)get_property(rtas_node, "ibm,lrdr-capacity",
+		                            NULL);
 
 	if (lrdrp == NULL) {
 		partition_potential_processors = vdso_data->processorCount;
@@ -402,7 +402,7 @@ static int lparcfg_data(struct seq_file *m, void *v)
 			   (h_resource >> 0 * 8) & 0xffff);
 
 		/* pool related entries are apropriate for shared configs */
-		if (paca[0].lppaca.shared_proc) {
+		if (lppaca[0].shared_proc) {
 
 			h_pic(&pool_idle_time, &pool_procs);
 
@@ -451,7 +451,7 @@ static int lparcfg_data(struct seq_file *m, void *v)
 	seq_printf(m, "partition_potential_processors=%d\n",
 		   partition_potential_processors);
 
-	seq_printf(m, "shared_processor_mode=%d\n", paca[0].lppaca.shared_proc);
+	seq_printf(m, "shared_processor_mode=%d\n", lppaca[0].shared_proc);
 
 	return 0;
 }
@@ -530,13 +530,13 @@ static ssize_t lparcfg_write(struct file *file, const char __user * buf,
 	retval = plpar_hcall_norets(H_SET_PPP, *new_entitled_ptr,
 				    *new_weight_ptr);
 
-	if (retval == H_Success || retval == H_Constrained) {
+	if (retval == H_SUCCESS || retval == H_CONSTRAINED) {
 		retval = count;
-	} else if (retval == H_Busy) {
+	} else if (retval == H_BUSY) {
 		retval = -EBUSY;
-	} else if (retval == H_Hardware) {
+	} else if (retval == H_HARDWARE) {
 		retval = -EIO;
-	} else if (retval == H_Parameter) {
+	} else if (retval == H_PARAMETER) {
 		retval = -EINVAL;
 	} else {
 		printk(KERN_WARNING "%s: received unknown hv return code %ld",

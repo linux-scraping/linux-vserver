@@ -56,6 +56,7 @@ xfs_bulkstat_one_iget(
 {
 	xfs_dinode_core_t *dic;		/* dinode core info pointer */
 	xfs_inode_t	*ip;		/* incore inode pointer */
+	vnode_t		*vp;
 	int		error;
 
 	error = xfs_iget(mp, NULL, ino, 0, XFS_ILOCK_SHARED, &ip, bno);
@@ -72,6 +73,7 @@ xfs_bulkstat_one_iget(
 		goto out_iput;
 	}
 
+	vp = XFS_ITOV(ip);
 	dic = &ip->i_d;
 
 	/* xfs_iget returns the following without needing
@@ -85,8 +87,7 @@ xfs_bulkstat_one_iget(
 	buf->bs_gid = dic->di_gid;
 	buf->bs_xid = dic->di_xid;
 	buf->bs_size = dic->di_size;
-	buf->bs_atime.tv_sec = dic->di_atime.t_sec;
-	buf->bs_atime.tv_nsec = dic->di_atime.t_nsec;
+	vn_atime_to_bstime(vp, &buf->bs_atime);
 	buf->bs_mtime.tv_sec = dic->di_mtime.t_sec;
 	buf->bs_mtime.tv_nsec = dic->di_mtime.t_nsec;
 	buf->bs_ctime.tv_sec = dic->di_ctime.t_sec;
@@ -273,7 +274,7 @@ xfs_bulkstat(
 	size_t			statstruct_size, /* sizeof struct filling */
 	char			__user *ubuffer, /* buffer with inode stats */
 	int			flags,	/* defined in xfs_itable.h */
-	int			*done)	/* 1 if there're more stats to get */
+	int			*done)	/* 1 if there are more stats to get */
 {
 	xfs_agblock_t		agbno=0;/* allocation group block number */
 	xfs_buf_t		*agbp;	/* agi header buffer */
@@ -563,7 +564,8 @@ xfs_bulkstat(
 						if (bp)
 							xfs_buf_relse(bp);
 						error = xfs_itobp(mp, NULL, ip,
-								  &dip, &bp, bno);
+								&dip, &bp, bno,
+								XFS_IMAP_BULKSTAT);
 						if (!error)
 							clustidx = ip->i_boffset / mp->m_sb.sb_inodesize;
 						kmem_zone_free(xfs_inode_zone, ip);
@@ -571,6 +573,8 @@ xfs_bulkstat(
 								   mp, XFS_ERRTAG_BULKSTAT_READ_CHUNK,
 								   XFS_RANDOM_BULKSTAT_READ_CHUNK)) {
 							bp = NULL;
+							ubleft = 0;
+							rval = error;
 							break;
 						}
 					}
@@ -674,7 +678,7 @@ xfs_bulkstat_single(
 	xfs_mount_t		*mp,	/* mount point for filesystem */
 	xfs_ino_t		*lastinop, /* inode to return */
 	char			__user *buffer, /* buffer with inode stats */
-	int			*done)	/* 1 if there're more stats to get */
+	int			*done)	/* 1 if there are more stats to get */
 {
 	int			count;	/* count value for bulkstat call */
 	int			error;	/* return value */

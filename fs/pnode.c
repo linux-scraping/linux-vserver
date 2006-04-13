@@ -103,7 +103,7 @@ static struct vfsmount *propagation_next(struct vfsmount *m,
 		struct vfsmount *next;
 		struct vfsmount *master = m->mnt_master;
 
-		if ( master == origin->mnt_master ) {
+		if (master == origin->mnt_master) {
 			next = next_peer(m);
 			return ((next == origin) ? NULL : next);
 		} else if (m->mnt_slave.next != &master->mnt_slave_list)
@@ -130,7 +130,7 @@ static struct vfsmount *get_source(struct vfsmount *dest,
 {
 	struct vfsmount *p_last_src = NULL;
 	struct vfsmount *p_last_dest = NULL;
-	*type = CL_PROPAGATION;;
+	*type = CL_PROPAGATION;
 
 	if (IS_MNT_SHARED(dest))
 		*type |= CL_MAKE_SHARED;

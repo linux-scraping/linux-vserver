@@ -10,6 +10,6 @@
 #define L1_CACHE_SHIFT	(CONFIG_X86_L1_CACHE_SHIFT)
 #define L1_CACHE_BYTES	(1 << L1_CACHE_SHIFT)
 
-#define L1_CACHE_SHIFT_MAX 7	/* largest L1 which this arch supports */
+#define __read_mostly __attribute__((__section__(".data.read_mostly")))
 
 #endif

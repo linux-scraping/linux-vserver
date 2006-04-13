@@ -57,7 +57,7 @@ struct xfs_mount_args {
 /*
  * XFS mount option flags -- args->flags1
  */
-#define	XFSMNT_COMPAT_ATTR	0x00000001	/* do not use ATTR2 format */
+#define	XFSMNT_ATTR2		0x00000001	/* allow ATTR2 EA format */
 #define	XFSMNT_WSYNC		0x00000002	/* safe mode nfs mount
 						 * compatible */
 #define	XFSMNT_INO64		0x00000004	/* move inode numbers up
@@ -68,8 +68,7 @@ struct xfs_mount_args {
 						 * enforcement */
 #define XFSMNT_PQUOTAENF	0x00000040	/* IRIX project quota limit
 						 * enforcement */
-#define XFSMNT_NOATIME		0x00000100	/* don't modify access
-						 * times on reads */
+#define XFSMNT_QUIET		0x00000080	/* don't report mount errors */
 #define XFSMNT_NOALIGN		0x00000200	/* don't allocate at
 						 * stripe boundaries*/
 #define XFSMNT_RETERR		0x00000400	/* return error to user */

@@ -72,85 +72,85 @@ extern struct sk_buff *dn_alloc_send_skb(struct sock *sk, size_t *size, int nobl
 
 struct nsp_data_seg_msg
 {
-	unsigned char   msgflg          __attribute__((packed));
-	unsigned short  dstaddr         __attribute__((packed));
-	unsigned short  srcaddr         __attribute__((packed));
-};
+	__u8   msgflg;
+	__le16 dstaddr;
+	__le16 srcaddr;
+} __attribute__((packed));
 
 struct nsp_data_opt_msg
 {
-	unsigned short  acknum          __attribute__((packed));
-	unsigned short  segnum          __attribute__((packed));
-	unsigned short  lsflgs          __attribute__((packed));
-};
+	__le16 acknum;
+	__le16 segnum;
+	__le16 lsflgs;
+} __attribute__((packed));
 
 struct nsp_data_opt_msg1
 {
-	unsigned short  acknum          __attribute__((packed));
-	unsigned short  segnum          __attribute__((packed));
-};
+	__le16 acknum;
+	__le16 segnum;
+} __attribute__((packed));
 
 
 /* Acknowledgment Message (data/other data)                             */
 struct nsp_data_ack_msg
 {
-	unsigned char   msgflg          __attribute__((packed));
-	unsigned short  dstaddr         __attribute__((packed));
-	unsigned short  srcaddr         __attribute__((packed));
-	unsigned short  acknum          __attribute__((packed));
-};
+	__u8   msgflg;
+	__le16 dstaddr;
+	__le16 srcaddr;
+	__le16 acknum;
+} __attribute__((packed));
 
 /* Connect Acknowledgment Message */
 struct  nsp_conn_ack_msg
 {
-	unsigned char   msgflg          __attribute__((packed));
-	unsigned short  dstaddr         __attribute__((packed));
-};
+	__u8 msgflg;
+	__le16 dstaddr;
+} __attribute__((packed));
 
 
 /* Connect Initiate/Retransmit Initiate/Connect Confirm */
 struct  nsp_conn_init_msg
 {
-	unsigned char   msgflg          __attribute__((packed));
+	__u8   msgflg;
 #define NSP_CI      0x18            /* Connect Initiate     */
 #define NSP_RCI     0x68            /* Retrans. Conn Init   */
-	unsigned short  dstaddr         __attribute__((packed));
-        unsigned short  srcaddr         __attribute__((packed));
-        unsigned char   services        __attribute__((packed));
+	__le16 dstaddr;
+	__le16 srcaddr;
+	__u8   services;
 #define NSP_FC_NONE   0x00            /* Flow Control None    */
 #define NSP_FC_SRC    0x04            /* Seg Req. Count       */
 #define NSP_FC_SCMC   0x08            /* Sess. Control Mess   */
 #define NSP_FC_MASK   0x0c            /* FC type mask         */
-	unsigned char   info            __attribute__((packed));
-        unsigned short  segsize         __attribute__((packed));
-};
+	__u8   info;
+	__le16 segsize;
+} __attribute__((packed));
 
 /* Disconnect Initiate/Disconnect Confirm */
 struct  nsp_disconn_init_msg
 {
-	unsigned char   msgflg          __attribute__((packed));
-        unsigned short  dstaddr         __attribute__((packed));
-        unsigned short  srcaddr         __attribute__((packed));
-        unsigned short  reason          __attribute__((packed));
-};
+	__u8   msgflg;
+	__le16 dstaddr;
+	__le16 srcaddr;
+	__le16 reason;
+} __attribute__((packed));
 
 
 
 struct  srcobj_fmt
 {
-	char            format          __attribute__((packed));
-        unsigned char   task            __attribute__((packed));
-        unsigned short  grpcode         __attribute__((packed));
-        unsigned short  usrcode         __attribute__((packed));
-        char            dlen            __attribute__((packed));
-};
+	__u8   format;
+	__u8   task;
+	__le16 grpcode;
+	__le16 usrcode;
+	__u8   dlen;
+} __attribute__((packed));
 
 /*
  * A collection of functions for manipulating the sequence
  * numbers used in NSP. Similar in operation to the functions
  * of the same name in TCP.
  */
-static __inline__ int dn_before(unsigned short seq1, unsigned short seq2)
+static __inline__ int dn_before(__u16 seq1, __u16 seq2)
 {
         seq1 &= 0x0fff;
         seq2 &= 0x0fff;
@@ -159,7 +159,7 @@ static __inline__ int dn_before(unsigned short seq1, unsigned short seq2)
 }
 
 
-static __inline__ int dn_after(unsigned short seq1, unsigned short seq2)
+static __inline__ int dn_after(__u16 seq1, __u16 seq2)
 {
         seq1 &= 0x0fff;
         seq2 &= 0x0fff;
@@ -167,23 +167,23 @@ static __inline__ int dn_after(unsigned short seq1, unsigned short seq2)
         return (int)((seq2 - seq1) & 0x0fff) > 2048;
 }
 
-static __inline__ int dn_equal(unsigned short seq1, unsigned short seq2)
+static __inline__ int dn_equal(__u16 seq1, __u16 seq2)
 {
         return ((seq1 ^ seq2) & 0x0fff) == 0;
 }
 
-static __inline__ int dn_before_or_equal(unsigned short seq1, unsigned short seq2)
+static __inline__ int dn_before_or_equal(__u16 seq1, __u16 seq2)
 {
 	return (dn_before(seq1, seq2) || dn_equal(seq1, seq2));
 }
 
-static __inline__ void seq_add(unsigned short *seq, unsigned short off)
+static __inline__ void seq_add(__u16 *seq, __u16 off)
 {
         (*seq) += off;
         (*seq) &= 0x0fff;
 }
 
-static __inline__ int seq_next(unsigned short seq1, unsigned short seq2)
+static __inline__ int seq_next(__u16 seq1, __u16 seq2)
 {
 	return dn_equal(seq1 + 1, seq2);
 }
@@ -191,7 +191,7 @@ static __inline__ int seq_next(unsigned short seq1, unsigned short seq2)
 /*
  * Can we delay the ack ?
  */
-static __inline__ int sendack(unsigned short seq)
+static __inline__ int sendack(__u16 seq)
 {
         return (int)((seq & 0x1000) ? 0 : 1);
 }

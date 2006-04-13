@@ -8,7 +8,10 @@
  */
 
 #include <linux/buffer_head.h>
-#include "bitmap.h"
+#include <linux/jbd.h>
+#include <linux/ext3_fs.h>
+
+#ifdef EXT3FS_DEBUG
 
 static int nibblemap[] = {4, 3, 3, 2, 3, 2, 2, 1, 3, 2, 2, 1, 2, 1, 1, 0};
 
@@ -24,3 +27,6 @@ unsigned long ext3_count_free (struct buffer_head * map, unsigned int numchars)
 			nibblemap[(map->b_data[i] >> 4) & 0xf];
 	return (sum);
 }
+
+#endif  /*  EXT3FS_DEBUG  */
+

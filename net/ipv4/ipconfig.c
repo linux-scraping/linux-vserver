@@ -42,6 +42,7 @@
 #include <linux/in.h>
 #include <linux/if.h>
 #include <linux/inet.h>
+#include <linux/inetdevice.h>
 #include <linux/netdevice.h>
 #include <linux/if_arp.h>
 #include <linux/skbuff.h>
@@ -58,6 +59,7 @@
 #include <net/arp.h>
 #include <net/ip.h>
 #include <net/ipconfig.h>
+#include <net/route.h>
 
 #include <asm/uaccess.h>
 #include <net/checksum.h>
@@ -184,7 +186,7 @@ static int __init ic_open_devs(void)
 	unsigned short oflags;
 
 	last = &ic_first_dev;
-	rtnl_shlock();
+	rtnl_lock();
 
 	/* bring loopback device up first */
 	if (dev_change_flags(&loopback_dev, loopback_dev.flags | IFF_UP) < 0)
@@ -213,7 +215,7 @@ static int __init ic_open_devs(void)
 				continue;
 			}
 			if (!(d = kmalloc(sizeof(struct ic_device), GFP_KERNEL))) {
-				rtnl_shunlock();
+				rtnl_unlock();
 				return -1;
 			}
 			d->dev = dev;
@@ -230,7 +232,7 @@ static int __init ic_open_devs(void)
 				dev->name, able, d->xid));
 		}
 	}
-	rtnl_shunlock();
+	rtnl_unlock();
 
 	*last = NULL;
 
@@ -249,7 +251,7 @@ static void __init ic_close_devs(void)
 	struct ic_device *d, *next;
 	struct net_device *dev;
 
-	rtnl_shlock();
+	rtnl_lock();
 	next = ic_first_dev;
 	while ((d = next)) {
 		next = d->next;
@@ -260,7 +262,7 @@ static void __init ic_close_devs(void)
 		}
 		kfree(d);
 	}
-	rtnl_shunlock();
+	rtnl_unlock();
 }
 
 /*

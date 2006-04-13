@@ -8,6 +8,8 @@
 	(((bits)+BITS_PER_LONG-1)/BITS_PER_LONG)
 #define DECLARE_BITMAP(name,bits) \
 	unsigned long name[BITS_TO_LONGS(bits)]
+
+#define BITS_PER_BYTE 8
 #endif
 
 #include <linux/posix_types.h>
@@ -135,6 +137,10 @@ typedef		__s64		int64_t;
  */
 #ifndef HAVE_SECTOR_T
 typedef unsigned long sector_t;
+#endif
+
+#ifndef HAVE_BLKCNT_T
+typedef unsigned long blkcnt_t;
 #endif
 
 /*

@@ -49,6 +49,7 @@
 #include <linux/suspend.h>
 #include <linux/module.h>
 #include <linux/moduleparam.h>
+#include <linux/kthread.h>
 #include "jfs_incore.h"
 #include "jfs_inode.h"
 #include "jfs_filsys.h"
@@ -121,8 +122,7 @@ static DEFINE_SPINLOCK(jfsTxnLock);
 #define LAZY_LOCK(flags)	spin_lock_irqsave(&TxAnchor.LazyLock, flags)
 #define LAZY_UNLOCK(flags) spin_unlock_irqrestore(&TxAnchor.LazyLock, flags)
 
-DECLARE_WAIT_QUEUE_HEAD(jfs_sync_thread_wait);
-DECLARE_WAIT_QUEUE_HEAD(jfs_commit_thread_wait);
+static DECLARE_WAIT_QUEUE_HEAD(jfs_commit_thread_wait);
 static int jfs_commit_thread_waking;
 
 /*
@@ -207,7 +207,7 @@ static lid_t txLockAlloc(void)
 	if ((++TxAnchor.tlocksInUse > TxLockHWM) && (jfs_tlocks_low == 0)) {
 		jfs_info("txLockAlloc tlocks low");
 		jfs_tlocks_low = 1;
-		wake_up(&jfs_sync_thread_wait);
+		wake_up_process(jfsSyncThread);
 	}
 
 	return lid;
@@ -1231,10 +1231,8 @@ int txCommit(tid_t tid,		/* transaction identifier */
 		 * when we don't need to worry about it at all.
 		 *
 		 * if ((!S_ISDIR(ip->i_mode))
-		 *    && (tblk->flag & COMMIT_DELETE) == 0) {
-		 *	filemap_fdatawrite(ip->i_mapping);
-		 *	filemap_fdatawait(ip->i_mapping);
-		 * }
+		 *    && (tblk->flag & COMMIT_DELETE) == 0)
+		 *	filemap_write_and_wait(ip->i_mapping);
 		 */
 
 		/*
@@ -2745,10 +2743,6 @@ int jfs_lazycommit(void *arg)
 	unsigned long flags;
 	struct jfs_sb_info *sbi;
 
-	daemonize("jfsCommit");
-
-	complete(&jfsIOwait);
-
 	do {
 		LAZY_LOCK(flags);
 		jfs_commit_thread_waking = 0;	/* OK to wake another thread */
@@ -2808,13 +2802,13 @@ int jfs_lazycommit(void *arg)
 			current->state = TASK_RUNNING;
 			remove_wait_queue(&jfs_commit_thread_wait, &wq);
 		}
-	} while (!jfs_stop_threads);
+	} while (!kthread_should_stop());
 
 	if (!list_empty(&TxAnchor.unlock_queue))
 		jfs_err("jfs_lazycommit being killed w/pending transactions!");
 	else
 		jfs_info("jfs_lazycommit being killed\n");
-	complete_and_exit(&jfsIOwait, 0);
+	return 0;
 }
 
 void txLazyUnlock(struct tblock * tblk)
@@ -2878,10 +2872,10 @@ restart:
 		 */
 		TXN_UNLOCK();
 		tid = txBegin(ip->i_sb, COMMIT_INODE | COMMIT_FORCE);
-		down(&jfs_ip->commit_sem);
+		mutex_lock(&jfs_ip->commit_mutex);
 		txCommit(tid, 1, &ip, 0);
 		txEnd(tid);
-		up(&jfs_ip->commit_sem);
+		mutex_unlock(&jfs_ip->commit_mutex);
 		/*
 		 * Just to be safe.  I don't know how
 		 * long we can run without blocking
@@ -2934,10 +2928,6 @@ int jfs_sync(void *arg)
 	int rc;
 	tid_t tid;
 
-	daemonize("jfsSync");
-
-	complete(&jfsIOwait);
-
 	do {
 		/*
 		 * write each inode on the anonymous inode list
@@ -2954,7 +2944,7 @@ int jfs_sync(void *arg)
 				 * Inode is being freed
 				 */
 				list_del_init(&jfs_ip->anon_inode_list);
-			} else if (! down_trylock(&jfs_ip->commit_sem)) {
+			} else if (! !mutex_trylock(&jfs_ip->commit_mutex)) {
 				/*
 				 * inode will be removed from anonymous list
 				 * when it is committed
@@ -2963,7 +2953,7 @@ int jfs_sync(void *arg)
 				tid = txBegin(ip->i_sb, COMMIT_INODE);
 				rc = txCommit(tid, 1, &ip, 0);
 				txEnd(tid);
-				up(&jfs_ip->commit_sem);
+				mutex_unlock(&jfs_ip->commit_mutex);
 
 				iput(ip);
 				/*
@@ -2973,7 +2963,7 @@ int jfs_sync(void *arg)
 				cond_resched();
 				TXN_LOCK();
 			} else {
-				/* We can't get the commit semaphore.  It may
+				/* We can't get the commit mutex.  It may
 				 * be held by a thread waiting for tlock's
 				 * so let's not block here.  Save it to
 				 * put back on the anon_list.
@@ -2998,19 +2988,15 @@ int jfs_sync(void *arg)
 			TXN_UNLOCK();
 			refrigerator();
 		} else {
-			DECLARE_WAITQUEUE(wq, current);
-
-			add_wait_queue(&jfs_sync_thread_wait, &wq);
 			set_current_state(TASK_INTERRUPTIBLE);
 			TXN_UNLOCK();
 			schedule();
 			current->state = TASK_RUNNING;
-			remove_wait_queue(&jfs_sync_thread_wait, &wq);
 		}
-	} while (!jfs_stop_threads);
+	} while (!kthread_should_stop());
 
 	jfs_info("jfs_sync being killed");
-	complete_and_exit(&jfsIOwait, 0);
+	return 0;
 }
 
 #if defined(CONFIG_PROC_FS) && defined(CONFIG_JFS_DEBUG)

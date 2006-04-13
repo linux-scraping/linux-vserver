@@ -22,6 +22,7 @@
 #include <linux/cdev.h>
 #include <linux/bootmem.h>
 #include <linux/inotify.h>
+#include <linux/mount.h>
 
 /*
  * This is needed for the following functions:
@@ -55,8 +56,8 @@
 #define I_HASHBITS	i_hash_shift
 #define I_HASHMASK	i_hash_mask
 
-static unsigned int i_hash_mask;
-static unsigned int i_hash_shift;
+static unsigned int i_hash_mask __read_mostly;
+static unsigned int i_hash_shift __read_mostly;
 
 /*
  * Each inode can be on two separate lists. One is
@@ -72,7 +73,7 @@ static unsigned int i_hash_shift;
 
 LIST_HEAD(inode_in_use);
 LIST_HEAD(inode_unused);
-static struct hlist_head *inode_hashtable;
+static struct hlist_head *inode_hashtable __read_mostly;
 
 /*
  * A simple spinlock to protect the list manipulations.
@@ -83,27 +84,27 @@ static struct hlist_head *inode_hashtable;
 DEFINE_SPINLOCK(inode_lock);
 
 /*
- * iprune_sem provides exclusion between the kswapd or try_to_free_pages
+ * iprune_mutex provides exclusion between the kswapd or try_to_free_pages
  * icache shrinking path, and the umount path.  Without this exclusion,
  * by the time prune_icache calls iput for the inode whose pages it has
  * been invalidating, or by the time it calls clear_inode & destroy_inode
  * from its final dispose_list, the struct super_block they refer to
  * (for inode->i_sb->s_op) may already have been freed and reused.
  */
-DECLARE_MUTEX(iprune_sem);
+static DEFINE_MUTEX(iprune_mutex);
 
 /*
  * Statistics gathering..
  */
 struct inodes_stat_t inodes_stat;
 
-static kmem_cache_t * inode_cachep;
+static kmem_cache_t * inode_cachep __read_mostly;
 
 static struct inode *alloc_inode(struct super_block *sb)
 {
 	static struct address_space_operations empty_aops;
 	static struct inode_operations empty_iops;
-	static struct file_operations empty_fops;
+	static const struct file_operations empty_fops;
 	struct inode *inode;
 
 	if (sb->s_op->alloc_inode)
@@ -174,8 +175,7 @@ static struct inode *alloc_inode(struct super_block *sb)
 
 void destroy_inode(struct inode *inode) 
 {
-	if (inode_has_buffers(inode))
-		BUG();
+	BUG_ON(inode_has_buffers(inode));
 	security_inode_free(inode);
 	if (inode->i_sb->s_op->destroy_inode)
 		inode->i_sb->s_op->destroy_inode(inode);
@@ -195,7 +195,7 @@ void inode_init_once(struct inode *inode)
 	INIT_HLIST_NODE(&inode->i_hash);
 	INIT_LIST_HEAD(&inode->i_dentry);
 	INIT_LIST_HEAD(&inode->i_devices);
-	sema_init(&inode->i_sem, 1);
+	mutex_init(&inode->i_mutex);
 	init_rwsem(&inode->i_alloc_sem);
 	INIT_RADIX_TREE(&inode->i_data.page_tree, GFP_ATOMIC);
 	rwlock_init(&inode->i_data.tree_lock);
@@ -208,7 +208,7 @@ void inode_init_once(struct inode *inode)
 	i_size_ordered_init(inode);
 #ifdef CONFIG_INOTIFY
 	INIT_LIST_HEAD(&inode->inotify_watches);
-	sema_init(&inode->inotify_sem, 1);
+	mutex_init(&inode->inotify_mutex);
 #endif
 }
 
@@ -253,12 +253,9 @@ void clear_inode(struct inode *inode)
 	might_sleep();
 	invalidate_inode_buffers(inode);
        
-	if (inode->i_data.nrpages)
-		BUG();
-	if (!(inode->i_state & I_FREEING))
-		BUG();
-	if (inode->i_state & I_CLEAR)
-		BUG();
+	BUG_ON(inode->i_data.nrpages);
+	BUG_ON(!(inode->i_state & I_FREEING));
+	BUG_ON(inode->i_state & I_CLEAR);
 	wait_on_inode(inode);
 	DQUOT_DROP(inode);
 	if (inode->i_sb && inode->i_sb->s_op->clear_inode)
@@ -323,7 +320,7 @@ static int invalidate_list(struct list_head *head, struct list_head *dispose)
 		/*
 		 * We can reschedule here without worrying about the list's
 		 * consistency because the per-sb list of inodes must not
-		 * change during umount anymore, and because iprune_sem keeps
+		 * change during umount anymore, and because iprune_mutex keeps
 		 * shrink_icache_memory() away.
 		 */
 		cond_resched_lock(&inode_lock);
@@ -359,14 +356,14 @@ int invalidate_inodes(struct super_block * sb)
 	int busy;
 	LIST_HEAD(throw_away);
 
-	down(&iprune_sem);
+	mutex_lock(&iprune_mutex);
 	spin_lock(&inode_lock);
 	inotify_unmount_inodes(&sb->s_inodes);
 	busy = invalidate_list(&sb->s_inodes, &throw_away);
 	spin_unlock(&inode_lock);
 
 	dispose_list(&throw_away);
-	up(&iprune_sem);
+	mutex_unlock(&iprune_mutex);
 
 	return busy;
 }
@@ -381,7 +378,7 @@ int __invalidate_device(struct block_device *bdev)
 	if (sb) {
 		/*
 		 * no need to lock the super, get_super holds the
-		 * read semaphore so the filesystem cannot go away
+		 * read mutex so the filesystem cannot go away
 		 * under us (->put_super runs with the write lock
 		 * hold).
 		 */
@@ -427,7 +424,7 @@ static void prune_icache(int nr_to_scan)
 	int nr_scanned;
 	unsigned long reap = 0;
 
-	down(&iprune_sem);
+	mutex_lock(&iprune_mutex);
 	spin_lock(&inode_lock);
 	for (nr_scanned = 0; nr_scanned < nr_to_scan; nr_scanned++) {
 		struct inode *inode;
@@ -463,7 +460,7 @@ static void prune_icache(int nr_to_scan)
 	spin_unlock(&inode_lock);
 
 	dispose_list(&freeable);
-	up(&iprune_sem);
+	mutex_unlock(&iprune_mutex);
 
 	if (current_is_kswapd())
 		mod_page_state(kswapd_inodesteal, reap);
@@ -775,7 +772,7 @@ EXPORT_SYMBOL(igrab);
  *
  * Note, @test is called with the inode_lock held, so can't sleep.
  */
-static inline struct inode *ifind(struct super_block *sb,
+static struct inode *ifind(struct super_block *sb,
 		struct hlist_head *head, int (*test)(struct inode *, void *),
 		void *data, const int wait)
 {
@@ -809,7 +806,7 @@ static inline struct inode *ifind(struct super_block *sb,
  *
  * Otherwise NULL is returned.
  */
-static inline struct inode *ifind_fast(struct super_block *sb,
+static struct inode *ifind_fast(struct super_block *sb,
 		struct hlist_head *head, unsigned long ino)
 {
 	struct inode *inode;
@@ -1058,8 +1055,7 @@ void generic_delete_inode(struct inode *inode)
 	hlist_del_init(&inode->i_hash);
 	spin_unlock(&inode_lock);
 	wake_up_inode(inode);
-	if (inode->i_state != I_CLEAR)
-		BUG();
+	BUG_ON(inode->i_state != I_CLEAR);
 	destroy_inode(inode);
 }
 
@@ -1181,22 +1177,33 @@ sector_t bmap(struct inode * inode, sector_t block)
 EXPORT_SYMBOL(bmap);
 
 /**
- *	update_atime	-	update the access time
- *	@inode: inode accessed
+ *	touch_atime	-	update the access time
+ *	@mnt: mount the inode is accessed on
+ *	@dentry: dentry accessed
  *
  *	Update the accessed time on an inode and mark it for writeback.
  *	This function automatically handles read only file systems and media,
  *	as well as the "noatime" flag and inode specific "noatime" markers.
  */
-void update_atime(struct inode *inode)
+void touch_atime(struct vfsmount *mnt, struct dentry *dentry)
 {
+	struct inode *inode = dentry->d_inode;
 	struct timespec now;
 
-	if (IS_NOATIME(inode))
-		return;
-	if (IS_NODIRATIME(inode) && S_ISDIR(inode->i_mode))
-		return;
 	if (IS_RDONLY(inode))
+		return;
+
+	if ((inode->i_flags & S_NOATIME) ||
+	    (inode->i_sb->s_flags & MS_NOATIME) ||
+	    ((inode->i_sb->s_flags & MS_NODIRATIME) && S_ISDIR(inode->i_mode)))
+		return;
+
+	/*
+	 * We may have a NULL vfsmount when coming from NFSD
+	 */
+	if (mnt &&
+	    ((mnt->mnt_flags & MNT_NOATIME) ||
+	     ((mnt->mnt_flags & MNT_NODIRATIME) && S_ISDIR(inode->i_mode))))
 		return;
 
 	now = current_fs_time(inode->i_sb);
@@ -1206,19 +1213,23 @@ void update_atime(struct inode *inode)
 	}
 }
 
-EXPORT_SYMBOL(update_atime);
+EXPORT_SYMBOL(touch_atime);
 
 /**
- *	inode_update_time	-	update mtime and ctime time
- *	@inode: inode accessed
- *	@ctime_too: update ctime too
+ *	file_update_time	-	update mtime and ctime time
+ *	@file: file accessed
  *
- *	Update the mtime time on an inode and mark it for writeback.
- *	When ctime_too is specified update the ctime too.
+ *	Update the mtime and ctime members of an inode and mark the inode
+ *	for writeback.  Note that this function is meant exclusively for
+ *	usage in the file write path of filesystems, and filesystems may
+ *	choose to explicitly ignore update via this function with the
+ *	S_NOCTIME inode flag, e.g. for network filesystem where these
+ *	timestamps are handled by the server.
  */
 
-void inode_update_time(struct inode *inode, int ctime_too)
+void file_update_time(struct file *file)
 {
+	struct inode *inode = file->f_dentry->d_inode;
 	struct timespec now;
 	int sync_it = 0;
 
@@ -1232,16 +1243,15 @@ void inode_update_time(struct inode *inode, int ctime_too)
 		sync_it = 1;
 	inode->i_mtime = now;
 
-	if (ctime_too) {
-		if (!timespec_equal(&inode->i_ctime, &now))
-			sync_it = 1;
-		inode->i_ctime = now;
-	}
+	if (!timespec_equal(&inode->i_ctime, &now))
+		sync_it = 1;
+	inode->i_ctime = now;
+
 	if (sync_it)
 		mark_inode_dirty_sync(inode);
 }
 
-EXPORT_SYMBOL(inode_update_time);
+EXPORT_SYMBOL(file_update_time);
 
 int inode_needs_sync(struct inode *inode)
 {
@@ -1365,8 +1375,13 @@ void __init inode_init(unsigned long mempages)
 	int loop;
 
 	/* inode slab cache */
-	inode_cachep = kmem_cache_create("inode_cache", sizeof(struct inode),
-				0, SLAB_RECLAIM_ACCOUNT|SLAB_PANIC, init_once, NULL);
+	inode_cachep = kmem_cache_create("inode_cache",
+					 sizeof(struct inode),
+					 0,
+					 (SLAB_RECLAIM_ACCOUNT|SLAB_PANIC|
+					 SLAB_MEM_SPREAD),
+					 init_once,
+					 NULL);
 	set_shrinker(DEFAULT_SEEKS, shrink_icache_memory);
 
 	/* Hash may have been set up in inode_init_early */

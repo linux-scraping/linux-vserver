@@ -369,14 +369,11 @@ static struct usb_gadget_driver gs_gadget_driver = {
 #endif /* CONFIG_USB_GADGET_DUALSPEED */
 	.function =		GS_LONG_NAME,
 	.bind =			gs_bind,
-	.unbind =		gs_unbind,
+	.unbind =		__exit_p(gs_unbind),
 	.setup =		gs_setup,
 	.disconnect =		gs_disconnect,
 	.driver = {
 		.name =		GS_SHORT_NAME,
-		/* .shutdown = ... */
-		/* .suspend = ...  */
-		/* .resume = ...   */
 	},
 };
 
@@ -890,10 +887,12 @@ static void gs_close(struct tty_struct *tty, struct file *file)
 	/* wait for write buffer to drain, or */
 	/* at most GS_CLOSE_TIMEOUT seconds */
 	if (gs_buf_data_avail(port->port_write_buf) > 0) {
+		spin_unlock_irqrestore(&port->port_lock, flags);
 		wait_cond_interruptible_timeout(port->port_write_wait,
 		port->port_dev == NULL
 		|| gs_buf_data_avail(port->port_write_buf) == 0,
 		&port->port_lock, flags, GS_CLOSE_TIMEOUT * HZ);
+		spin_lock_irqsave(&port->port_lock, flags);
 	}
 
 	/* free disconnected port on final close */
@@ -1269,6 +1268,7 @@ static int gs_recv_packet(struct gs_dev *dev, char *packet, unsigned int size)
 	unsigned int len;
 	struct gs_port *port;
 	int ret;
+	struct tty_struct *tty;
 
 	/* TEMPORARY -- only port 0 is supported right now */
 	port = dev->dev_port[0];
@@ -1288,7 +1288,10 @@ static int gs_recv_packet(struct gs_dev *dev, char *packet, unsigned int size)
 		goto exit;
 	}
 
-	if (port->port_tty == NULL) {
+
+	tty = port->port_tty;
+
+	if (tty == NULL) {
 		printk(KERN_ERR "gs_recv_packet: port=%d, NULL tty pointer\n",
 			port->port_num);
 		ret = -EIO;
@@ -1302,20 +1305,13 @@ static int gs_recv_packet(struct gs_dev *dev, char *packet, unsigned int size)
 		goto exit;
 	}
 
-	len = (unsigned int)(TTY_FLIPBUF_SIZE - port->port_tty->flip.count);
-	if (len < size)
-		size = len;
-
-	if (size > 0) {
-		memcpy(port->port_tty->flip.char_buf_ptr, packet, size);
-		port->port_tty->flip.char_buf_ptr += size;
-		port->port_tty->flip.count += size;
+	len = tty_buffer_request_room(tty, size);
+	if (len > 0) {
+		tty_insert_flip_string(tty, packet, len);
 		tty_flip_buffer_push(port->port_tty);
 		wake_up_interruptible(&port->port_tty->read_wait);
 	}
-
 	ret = 0;
-
 exit:
 	spin_unlock(&port->port_lock);
 	return ret;
@@ -1417,7 +1413,7 @@ requeue:
  * Called on module load.  Allocates and initializes the device
  * structure and a control request.
  */
-static int gs_bind(struct usb_gadget *gadget)
+static int __init gs_bind(struct usb_gadget *gadget)
 {
 	int ret;
 	struct usb_ep *ep;
@@ -1542,7 +1538,7 @@ autoconf_fail:
  * Called on module unload.  Frees the control request and device
  * structure.
  */
-static void gs_unbind(struct usb_gadget *gadget)
+static void __exit gs_unbind(struct usb_gadget *gadget)
 {
 	struct gs_dev *dev = get_gadget_data(gadget);
 
@@ -2182,10 +2178,9 @@ static int gs_alloc_ports(struct gs_dev *dev, gfp_t kmalloc_flags)
 		return -EIO;
 
 	for (i=0; i<GS_NUM_PORTS; i++) {
-		if ((port=(struct gs_port *)kmalloc(sizeof(struct gs_port), kmalloc_flags)) == NULL)
+		if ((port=kzalloc(sizeof(struct gs_port), kmalloc_flags)) == NULL)
 			return -ENOMEM;
 
-		memset(port, 0, sizeof(struct gs_port));
 		port->port_dev = dev;
 		port->port_num = i;
 		port->port_line_coding.dwDTERate = cpu_to_le32(GS_DEFAULT_DTE_RATE);

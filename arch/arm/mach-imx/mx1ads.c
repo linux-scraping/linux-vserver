@@ -25,32 +25,44 @@
 #include <asm/mach-types.h>
 
 #include <asm/mach/arch.h>
+#include <asm/arch/mmc.h>
 #include <linux/interrupt.h>
 #include "generic.h"
-#include <asm/serial.h>
 
-static struct resource mx1ads_resources[] = {
+static struct resource cs89x0_resources[] = {
 	[0] = {
-		.start	= IMX_CS4_VIRT,
-		.end	= IMX_CS4_VIRT + 16,
+		.start	= IMX_CS4_PHYS + 0x300,
+		.end	= IMX_CS4_PHYS + 0x300 + 16,
 		.flags	= IORESOURCE_MEM,
 	},
 	[1] = {
-		.start	= 13,
-		.end	= 13,
+		.start	= IRQ_GPIOC(17),
+		.end	= IRQ_GPIOC(17),
 		.flags	= IORESOURCE_IRQ,
 	},
 };
 
-static struct platform_device mx1ads_device = {
-	.name		= "mx1ads",
-	.num_resources	= ARRAY_SIZE(mx1ads_resources),
-	.resource	= mx1ads_resources,
+static struct platform_device cs89x0_device = {
+	.name		= "cirrus-cs89x0",
+	.num_resources	= ARRAY_SIZE(cs89x0_resources),
+	.resource	= cs89x0_resources,
 };
 
 static struct platform_device *devices[] __initdata = {
-	&mx1ads_device,
+	&cs89x0_device,
 };
+
+#ifdef CONFIG_MMC_IMX
+static int mx1ads_mmc_card_present(void)
+{
+	/* MMC/SD Card Detect is PB 20 on MX1ADS V1.0.7 */
+	return (SSR(1) & (1 << 20) ? 0 : 1);
+}
+
+static struct imxmmc_platform_data mx1ads_mmc_info = {
+       .card_present = mx1ads_mmc_card_present,
+};
+#endif
 
 static void __init
 mx1ads_init(void)
@@ -58,53 +70,22 @@ mx1ads_init(void)
 #ifdef CONFIG_LEDS
 	imx_gpio_mode(GPIO_PORTA | GPIO_OUT | 2);
 #endif
+#ifdef CONFIG_MMC_IMX
+	/* SD/MMC card detect */
+	imx_gpio_mode(GPIO_PORTB | GPIO_GIUS | GPIO_IN | 20);
+	imx_set_mmc_info(&mx1ads_mmc_info);
+#endif
 	platform_add_devices(devices, ARRAY_SIZE(devices));
 }
-
-static struct map_desc mx1ads_io_desc[] __initdata = {
-	{
-		.virtual	= IMX_CS0_VIRT,
-		.pfn		= __phys_to_pfn(IMX_CS0_PHYS),
-		.length		= IMX_CS0_SIZE,
-		.type		= MT_DEVICE
-	}, {
-		.virtual	= IMX_CS1_VIRT,
-		.pfn		= __phys_to_pfn(IMX_CS1_PHYS),
-		.length		= IMX_CS1_SIZE,
-		.type		= MT_DEVICE
-	}, {
-		.virtual	= IMX_CS2_VIRT,
-		.pfn		= __phys_to_pfn(IMX_CS2_PHYS),
-		.length		= IMX_CS2_SIZE,
-		.type		= MT_DEVICE
-	}, {
-		.virtual	= IMX_CS3_VIRT,
-		.pfn		= __phys_to_pfn(IMX_CS3_PHYS),
-		.length		= IMX_CS3_SIZE,
-		.type		= MT_DEVICE
-	}, {
-		.virtual	= IMX_CS4_VIRT,
-		.pfn		= __phys_to_pfn(IMX_CS4_PHYS),
-		.length		= IMX_CS4_SIZE,
-		.type		= MT_DEVICE
-	}, {
-		.virtual	= IMX_CS5_VIRT,
-		.pfn		= __phys_to_pfn(IMX_CS5_PHYS),
-		.length		= IMX_CS5_SIZE,
-		.type		= MT_DEVICE
-	}
-};
 
 static void __init
 mx1ads_map_io(void)
 {
 	imx_map_io();
-	iotable_init(mx1ads_io_desc, ARRAY_SIZE(mx1ads_io_desc));
 }
 
 MACHINE_START(MX1ADS, "Motorola MX1ADS")
 	/* Maintainer: Sascha Hauer, Pengutronix */
-	.phys_ram	= 0x08000000,
 	.phys_io	= 0x00200000,
 	.io_pg_offst	= ((0xe0200000) >> 18) & 0xfffc,
 	.boot_params	= 0x08000100,

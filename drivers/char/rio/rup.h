@@ -37,46 +37,33 @@
 #ifndef _rup_h
 #define _rup_h 1
 
-#ifdef SCCS_LABELS
-#ifndef lint
-/* static char *_rio_rup_h_sccs = "@(#)rup.h	1.5"; */
-#endif
-#endif
-
-#if defined( HOST ) || defined( INKERNEL )
-#define MAX_RUP          ((short) 16) 
-#endif
-#ifdef RTA
-#define MAX_RUP          ((short) 1)
-#endif
-
-#define PKTS_PER_RUP     ((short) 2)     /* They are always used in pairs */
+#define MAX_RUP          ((short) 16)
+#define PKTS_PER_RUP     ((short) 2)	/* They are always used in pairs */
 
 /*************************************************
  * Define all the  packet request stuff
  ************************************************/
-#define TX_RUP_INACTIVE          0        /* Nothing to transmit */
-#define TX_PACKET_READY          1        /* Transmit packet ready */
-#define TX_LOCK_RUP              2        /* Transmit side locked */
+#define TX_RUP_INACTIVE          0	/* Nothing to transmit */
+#define TX_PACKET_READY          1	/* Transmit packet ready */
+#define TX_LOCK_RUP              2	/* Transmit side locked */
 
-#define RX_RUP_INACTIVE          0        /* Nothing received */
-#define RX_PACKET_READY          1        /* Packet received */
+#define RX_RUP_INACTIVE          0	/* Nothing received */
+#define RX_PACKET_READY          1	/* Packet received */
 
-#define RUP_NO_OWNER             0xff     /* RUP not owned by any process */
+#define RUP_NO_OWNER             0xff	/* RUP not owned by any process */
 
 struct RUP {
-             PKT_ptr    txpkt;            /* Outgoing packet */
-             PKT_ptr    rxpkt;            /* Incoming packet */
-             WORD       link;             /* Which link to send down? */
-             BYTE       rup_dest_unit[2]; /* Destination unit */
-             WORD       handshake;        /* For handshaking */
-             WORD       timeout;          /* Timeout */
-             WORD       status;           /* Status */
-             WORD       txcontrol;        /* Transmit control */
-             WORD       rxcontrol;        /* Receive control */
-           };
- 
+	u16 txpkt;		/* Outgoing packet */
+	u16 rxpkt;		/* Incoming packet */
+	u16 link;		/* Which link to send down? */
+	u8 rup_dest_unit[2];	/* Destination unit */
+	u16 handshake;		/* For handshaking */
+	u16 timeout;		/* Timeout */
+	u16 status;		/* Status */
+	u16 txcontrol;		/* Transmit control */
+	u16 rxcontrol;		/* Receive control */
+};
+
 #endif
 
 /*********** end of file ***********/
-

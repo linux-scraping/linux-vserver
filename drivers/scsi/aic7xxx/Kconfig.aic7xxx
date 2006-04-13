@@ -42,13 +42,13 @@ config AIC7XXX_CMDS_PER_DEVICE
 config AIC7XXX_RESET_DELAY_MS
 	int "Initial bus reset delay in milli-seconds"
 	depends on SCSI_AIC7XXX
-	default "15000"
+	default "5000"
 	---help---
 	The number of milliseconds to delay after an initial bus reset.
 	The bus settle delay following all error recovery actions is
 	dictated by the SCSI layer and is not affected by this value.
 
-	Default: 15000 (15 seconds)
+	Default: 5000 (5 seconds)
 
 config AIC7XXX_PROBE_EISA_VL
 	bool "Probe for EISA and VL AIC7XXX Adapters"
@@ -86,7 +86,7 @@ config AIC7XXX_DEBUG_MASK
         default "0"
         help
 	Bit mask of debug options that is only valid if the
-	CONFIG_AIC7XXX_DEBUG_ENBLE option is enabled.  The bits in this mask
+	CONFIG_AIC7XXX_DEBUG_ENABLE option is enabled.  The bits in this mask
 	are defined in the drivers/scsi/aic7xxx/aic7xxx.h - search for the
 	variable ahc_debug in that file to find them.
 

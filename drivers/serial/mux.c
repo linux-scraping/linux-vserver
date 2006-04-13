@@ -51,7 +51,7 @@
 #define MUX_BREAK(status) ((status & 0xF000) == 0x2000)
 
 #define MUX_NR 256
-static unsigned int port_cnt = 0;
+static unsigned int port_cnt __read_mostly;
 static struct uart_port mux_ports[MUX_NR];
 
 static struct uart_driver mux_driver = {
@@ -223,11 +223,6 @@ static void mux_read(struct uart_port *port)
 		if (MUX_EOFIFO(data))
 			break;
 
-		if (tty->flip.count >= TTY_FLIPBUF_SIZE)
-			continue;
-
-		*tty->flip.char_buf_ptr = data & 0xffu;
-		*tty->flip.flag_buf_ptr = TTY_NORMAL;
 		port->icount.rx++;
 
 		if (MUX_BREAK(data)) {
@@ -239,9 +234,7 @@ static void mux_read(struct uart_port *port)
 		if (uart_handle_sysrq_char(port, data & 0xffu, NULL))
 			continue;
 
-		tty->flip.flag_buf_ptr++;
-		tty->flip.char_buf_ptr++;
-		tty->flip.count++;
+		tty_insert_flip_char(tty, data & 0xFF, TTY_NORMAL);
 	}
 	
 	if (start_count != port->icount.rx) {
@@ -468,8 +461,8 @@ static int __init mux_probe(struct parisc_device *dev)
 		port->iobase	= 0;
 		port->mapbase	= dev->hpa.start + MUX_OFFSET +
 						(i * MUX_LINE_OFFSET);
-		port->membase	= ioremap(port->mapbase, MUX_LINE_OFFSET);
-		port->iotype	= SERIAL_IO_MEM;
+		port->membase	= ioremap_nocache(port->mapbase, MUX_LINE_OFFSET);
+		port->iotype	= UPIO_MEM;
 		port->type	= PORT_MUX;
 		port->irq	= NO_IRQ;
 		port->uartclk	= 0;

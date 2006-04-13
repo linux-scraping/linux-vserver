@@ -1,6 +1,9 @@
 #
 # ia64/Makefile
 #
+# This file is included by the global makefile so that you can add your own
+# architecture-specific flags and dependencies.
+#
 # This file is subject to the terms and conditions of the GNU General Public
 # License.  See the file "COPYING" in the main directory of this archive
 # for more details.
@@ -25,7 +28,6 @@ cflags-y	:= -pipe $(EXTRA) -ffixed-r13 -mfixed-range=f12-f15,f32-f127 \
 		   -falign-functions=32 -frename-registers -fno-optimize-sibling-calls
 CFLAGS_KERNEL	:= -mconstant-gp
 
-GCC_VERSION     := $(call cc-version)
 GAS_STATUS	= $(shell $(srctree)/arch/ia64/scripts/check-gas "$(CC)" "$(OBJDUMP)")
 CPPFLAGS += $(shell $(srctree)/arch/ia64/scripts/toolchain-flags "$(CC)" "$(OBJDUMP)" "$(READELF)")
 
@@ -37,11 +39,7 @@ $(error Sorry, you need a newer version of the assember, one that is built from	
 		ftp://ftp.hpl.hp.com/pub/linux-ia64/gas-030124.tar.gz)
 endif
 
-ifneq ($(shell if [ $(GCC_VERSION) -lt 0300 ] ; then echo "bad"; fi ;),)
-$(error Sorry, your compiler is too old.  GCC v2.96 is known to generate bad code.)
-endif
-
-ifeq ($(GCC_VERSION),0304)
+ifeq ($(call cc-version),0304)
 	cflags-$(CONFIG_ITANIUM)	+= -mtune=merced
 	cflags-$(CONFIG_MCKINLEY)	+= -mtune=mckinley
 endif
@@ -67,7 +65,7 @@ drivers-$(CONFIG_OPROFILE)	+= arch/ia64/oprofile/
 
 boot := arch/ia64/hp/sim/boot
 
-.PHONY: boot compressed check
+PHONY += boot compressed check
 
 all: compressed unwcheck
 

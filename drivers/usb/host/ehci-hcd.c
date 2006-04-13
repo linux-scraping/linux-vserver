@@ -17,13 +17,6 @@
  */
 
 #include <linux/config.h>
-
-#ifdef CONFIG_USB_DEBUG
-	#define DEBUG
-#else
-	#undef DEBUG
-#endif
-
 #include <linux/module.h>
 #include <linux/pci.h>
 #include <linux/dmapool.h>
@@ -624,7 +617,7 @@ static irqreturn_t ehci_irq (struct usb_hcd *hcd, struct pt_regs *regs)
 	}
 
 	/* remote wakeup [4.3.1] */
-	if ((status & STS_PCD) && hcd->remote_wakeup) {
+	if (status & STS_PCD) {
 		unsigned	i = HCS_N_PORTS (ehci->hcs_params);
 
 		/* resume root hub? */
@@ -896,8 +889,19 @@ MODULE_LICENSE ("GPL");
 
 #ifdef CONFIG_PCI
 #include "ehci-pci.c"
+#define	EHCI_BUS_GLUED
 #endif
 
-#if !defined(CONFIG_PCI)
+#ifdef CONFIG_PPC_83xx
+#include "ehci-fsl.c"
+#define	EHCI_BUS_GLUED
+#endif
+
+#ifdef CONFIG_SOC_AU1X00
+#include "ehci-au1xxx.c"
+#define	EHCI_BUS_GLUED
+#endif
+
+#ifndef	EHCI_BUS_GLUED
 #error "missing bus glue for ehci-hcd"
 #endif

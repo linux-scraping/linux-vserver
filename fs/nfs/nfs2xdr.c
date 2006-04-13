@@ -146,23 +146,23 @@ xdr_decode_fattr(u32 *p, struct nfs_fattr *fattr)
 	return p;
 }
 
-#define SATTR(p, attr, flag, field) \
-        *p++ = (attr->ia_valid & flag) ? htonl(attr->field) : ~(u32) 0
 static inline u32 *
 xdr_encode_sattr(u32 *p, struct iattr *attr)
 {
-	SATTR(p, attr, ATTR_MODE, ia_mode);
-	SATTR(p, attr, ATTR_UID, ia_uid);
-	SATTR(p, attr, ATTR_GID, ia_gid);
-	SATTR(p, attr, ATTR_SIZE, ia_size);
+	const u32 not_set = __constant_htonl(0xFFFFFFFF);
+
+	*p++ = (attr->ia_valid & ATTR_MODE) ? htonl(attr->ia_mode) : not_set;
+	*p++ = (attr->ia_valid & ATTR_UID) ? htonl(attr->ia_uid) : not_set;
+	*p++ = (attr->ia_valid & ATTR_GID) ? htonl(attr->ia_gid) : not_set;
+	*p++ = (attr->ia_valid & ATTR_SIZE) ? htonl(attr->ia_size) : not_set;
 
 	if (attr->ia_valid & ATTR_ATIME_SET) {
 		p = xdr_encode_time(p, &attr->ia_atime);
 	} else if (attr->ia_valid & ATTR_ATIME) {
 		p = xdr_encode_current_server_time(p, &attr->ia_atime);
 	} else {
-		*p++ = ~(u32) 0;
-		*p++ = ~(u32) 0;
+		*p++ = not_set;
+		*p++ = not_set;
 	}
 
 	if (attr->ia_valid & ATTR_MTIME_SET) {
@@ -170,12 +170,11 @@ xdr_encode_sattr(u32 *p, struct iattr *attr)
 	} else if (attr->ia_valid & ATTR_MTIME) {
 		p = xdr_encode_current_server_time(p, &attr->ia_mtime);
 	} else {
-		*p++ = ~(u32) 0;	
-		*p++ = ~(u32) 0;
+		*p++ = not_set;	
+		*p++ = not_set;
 	}
   	return p;
 }
-#undef SATTR
 
 /*
  * NFS encode functions
@@ -683,7 +682,9 @@ nfs_stat_to_errno(int stat)
 	.p_encode   =  (kxdrproc_t) nfs_xdr_##argtype,			\
 	.p_decode   =  (kxdrproc_t) nfs_xdr_##restype,			\
 	.p_bufsiz   =  MAX(NFS_##argtype##_sz,NFS_##restype##_sz) << 2,	\
-	.p_timer    =  timer						\
+	.p_timer    =  timer,						\
+	.p_statidx  =  NFSPROC_##proc,					\
+	.p_name     =  #proc,						\
 	}
 struct rpc_procinfo	nfs_procedures[] = {
     PROC(GETATTR,	fhandle,	attrstat, 1),
@@ -705,6 +706,6 @@ struct rpc_procinfo	nfs_procedures[] = {
 
 struct rpc_version		nfs_version2 = {
 	.number			= 2,
-	.nrprocs		= sizeof(nfs_procedures)/sizeof(nfs_procedures[0]),
+	.nrprocs		= ARRAY_SIZE(nfs_procedures),
 	.procs			= nfs_procedures
 };

@@ -9,16 +9,20 @@ config MMU
 	bool
 	default y
 
-config UID16
-	bool
-	default y
-
 config RWSEM_GENERIC_SPINLOCK
 	bool
 	default y
 
 config RWSEM_XCHGADD_ALGORITHM
 	bool
+
+config GENERIC_FIND_NEXT_BIT
+	bool
+	default y
+
+config GENERIC_HWEIGHT
+	bool
+	default y
 
 config GENERIC_CALIBRATE_DELAY
 	bool

@@ -20,13 +20,16 @@
 #include <linux/nmi.h>
 #include <linux/kexec.h>
 
-int panic_timeout;
 int panic_on_oops;
 int tainted;
+static int pause_on_oops;
+static int pause_on_oops_flag;
+static DEFINE_SPINLOCK(pause_on_oops_lock);
 
+int panic_timeout;
 EXPORT_SYMBOL(panic_timeout);
 
-struct notifier_block *panic_notifier_list;
+ATOMIC_NOTIFIER_HEAD(panic_notifier_list);
 
 EXPORT_SYMBOL(panic_notifier_list);
 
@@ -60,7 +63,7 @@ NORET_TYPE void panic(const char * fmt, ...)
 	long i;
 	static char buf[1024];
 	va_list args;
-#if defined(CONFIG_ARCH_S390)
+#if defined(CONFIG_S390)
         unsigned long caller = (unsigned long) __builtin_return_address(0);
 #endif
 
@@ -94,7 +97,7 @@ NORET_TYPE void panic(const char * fmt, ...)
 	smp_send_stop();
 #endif
 
-	notifier_call_chain(&panic_notifier_list, 0, buf);
+	atomic_notifier_call_chain(&panic_notifier_list, 0, buf);
 
 	if (!panic_blink)
 		panic_blink = no_blink;
@@ -125,11 +128,12 @@ NORET_TYPE void panic(const char * fmt, ...)
 		printk(KERN_EMERG "Press Stop-A (L1-A) to return to the boot prom\n");
 	}
 #endif
-#if defined(CONFIG_ARCH_S390)
+#if defined(CONFIG_S390)
         disabled_wait(caller);
 #endif
 	local_irq_enable();
 	for (i = 0;;) {
+		touch_softlockup_watchdog();
 		i += panic_blink(i);
 		mdelay(1);
 		i++;
@@ -173,3 +177,95 @@ void add_taint(unsigned flag)
 	tainted |= flag;
 }
 EXPORT_SYMBOL(add_taint);
+
+static int __init pause_on_oops_setup(char *str)
+{
+	pause_on_oops = simple_strtoul(str, NULL, 0);
+	return 1;
+}
+__setup("pause_on_oops=", pause_on_oops_setup);
+
+static void spin_msec(int msecs)
+{
+	int i;
+
+	for (i = 0; i < msecs; i++) {
+		touch_nmi_watchdog();
+		mdelay(1);
+	}
+}
+
+/*
+ * It just happens that oops_enter() and oops_exit() are identically
+ * implemented...
+ */
+static void do_oops_enter_exit(void)
+{
+	unsigned long flags;
+	static int spin_counter;
+
+	if (!pause_on_oops)
+		return;
+
+	spin_lock_irqsave(&pause_on_oops_lock, flags);
+	if (pause_on_oops_flag == 0) {
+		/* This CPU may now print the oops message */
+		pause_on_oops_flag = 1;
+	} else {
+		/* We need to stall this CPU */
+		if (!spin_counter) {
+			/* This CPU gets to do the counting */
+			spin_counter = pause_on_oops;
+			do {
+				spin_unlock(&pause_on_oops_lock);
+				spin_msec(MSEC_PER_SEC);
+				spin_lock(&pause_on_oops_lock);
+			} while (--spin_counter);
+			pause_on_oops_flag = 0;
+		} else {
+			/* This CPU waits for a different one */
+			while (spin_counter) {
+				spin_unlock(&pause_on_oops_lock);
+				spin_msec(1);
+				spin_lock(&pause_on_oops_lock);
+			}
+		}
+	}
+	spin_unlock_irqrestore(&pause_on_oops_lock, flags);
+}
+
+/*
+ * Return true if the calling CPU is allowed to print oops-related info.  This
+ * is a bit racy..
+ */
+int oops_may_print(void)
+{
+	return pause_on_oops_flag == 0;
+}
+
+/*
+ * Called when the architecture enters its oops handler, before it prints
+ * anything.  If this is the first CPU to oops, and it's oopsing the first time
+ * then let it proceed.
+ *
+ * This is all enabled by the pause_on_oops kernel boot option.  We do all this
+ * to ensure that oopses don't scroll off the screen.  It has the side-effect
+ * of preventing later-oopsing CPUs from mucking up the display, too.
+ *
+ * It turns out that the CPU which is allowed to print ends up pausing for the
+ * right duration, whereas all the other CPUs pause for twice as long: once in
+ * oops_enter(), once in oops_exit().
+ */
+void oops_enter(void)
+{
+	do_oops_enter_exit();
+}
+
+/*
+ * Called when the architecture exits its oops handler, after printing
+ * everything.
+ */
+void oops_exit(void)
+{
+	do_oops_enter_exit();
+}

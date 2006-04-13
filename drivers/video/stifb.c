@@ -3,7 +3,7 @@
  * Low level Frame buffer driver for HP workstations with 
  * STI (standard text interface) video firmware.
  *
- * Copyright (C) 2001-2004 Helge Deller <deller@gmx.de>
+ * Copyright (C) 2001-2006 Helge Deller <deller@gmx.de>
  * Portions Copyright (C) 2001 Thomas Bogendoerfer <tsbogend@alpha.franken.de>
  * 
  * Based on:
@@ -73,15 +73,12 @@
 #include "sticore.h"
 
 /* REGION_BASE(fb_info, index) returns the virtual address for region <index> */
-#ifdef __LP64__
-  #define REGION_BASE(fb_info, index) \
-	(fb_info->sti->glob_cfg->region_ptrs[index] | 0xffffffff00000000)
-#else
-  #define REGION_BASE(fb_info, index) \
-	fb_info->sti->glob_cfg->region_ptrs[index]
-#endif
+#define REGION_BASE(fb_info, index) \
+	F_EXTEND(fb_info->sti->glob_cfg->region_ptrs[index])
 
 #define NGLEDEVDEPROM_CRT_REGION 1
+
+#define NR_PALETTE 256
 
 typedef struct {
 	__s32	video_config_reg;
@@ -112,7 +109,7 @@ struct stifb_info {
 	ngle_rom_t ngle_rom;
 	struct sti_struct *sti;
 	int deviceSpecificConfig;
-	u32 pseudo_palette[256];
+	u32 pseudo_palette[16];
 };
 
 static int __initdata stifb_bpp_pref[MAX_STI_ROMS];
@@ -352,10 +349,10 @@ ARTIST_ENABLE_DISABLE_DISPLAY(struct stifb_info *fb, int enable)
 #define IS_888_DEVICE(fb) \
 	(!(IS_24_DEVICE(fb)))
 
-#define GET_FIFO_SLOTS(fb, cnt, numslots)			\
-{	while (cnt < numslots) 					\
+#define GET_FIFO_SLOTS(fb, cnt, numslots)	\
+{	while (cnt < numslots) 			\
 		cnt = READ_WORD(fb, REG_34);	\
-	cnt -= numslots;					\
+	cnt -= numslots;			\
 }
 
 #define	    IndexedDcd	0	/* Pixel data is indexed (pseudo) color */
@@ -517,7 +514,7 @@ rattlerSetupPlanes(struct stifb_info *fb)
 	SETUP_HW(fb);
 	WRITE_BYTE(1, fb, REG_16b1);
 
-	fb_memset(fb->info.fix.smem_start, 0xff,
+	fb_memset((void*)fb->info.fix.smem_start, 0xff,
 		fb->info.var.yres*fb->info.fix.line_length);
     
 	CRX24_SET_OVLY_MASK(fb);
@@ -911,83 +908,6 @@ SETUP_HCRX(struct stifb_info *fb)
 
 /* ------------------- driver specific functions --------------------------- */
 
-#define TMPBUFLEN 2048
-
-static ssize_t
-stifb_read(struct file *file, char *buf, size_t count, loff_t *ppos)
-{
-	unsigned long p = *ppos;
-	struct inode *inode = file->f_dentry->d_inode;
-	int fbidx = iminor(inode);
-	struct fb_info *info = registered_fb[fbidx];
-	char tmpbuf[TMPBUFLEN];
-
-	if (!info || ! info->screen_base)
-		return -ENODEV;
-
-	if (p >= info->fix.smem_len)
-	    return 0;
-	if (count >= info->fix.smem_len)
-	    count = info->fix.smem_len;
-	if (count + p > info->fix.smem_len)
-		count = info->fix.smem_len - p;
-	if (count > sizeof(tmpbuf))
-		count = sizeof(tmpbuf);
-	if (count) {
-	    char *base_addr;
-
-	    base_addr = info->screen_base;
-	    memcpy_fromio(&tmpbuf, base_addr+p, count);
-	    count -= copy_to_user(buf, &tmpbuf, count);
-	    if (!count)
-		return -EFAULT;
-	    *ppos += count;
-	}
-	return count;
-}
-
-static ssize_t
-stifb_write(struct file *file, const char *buf, size_t count, loff_t *ppos)
-{
-	struct inode *inode = file->f_dentry->d_inode;
-	int fbidx = iminor(inode);
-	struct fb_info *info = registered_fb[fbidx];
-	unsigned long p = *ppos;
-	size_t c;
-	int err;
-	char tmpbuf[TMPBUFLEN];
-
-	if (!info || !info->screen_base)
-		return -ENODEV;
-
-	if (p > info->fix.smem_len)
-	    return -ENOSPC;
-	if (count >= info->fix.smem_len)
-	    count = info->fix.smem_len;
-	err = 0;
-	if (count + p > info->fix.smem_len) {
-	    count = info->fix.smem_len - p;
-	    err = -ENOSPC;
-	}
-
-	p += (unsigned long)info->screen_base;
-	c = count;
-	while (c) {
-	    int len = c > sizeof(tmpbuf) ? sizeof(tmpbuf) : c;
-	    err = -EFAULT;
-	    if (copy_from_user(&tmpbuf, buf, len))
-		    break;
-	    memcpy_toio(p, &tmpbuf, len);
-	    c -= len;
-	    p += len;
-	    buf += len;
-	    *ppos += len;
-	}
-	if (count-c)
-		return (count-c);
-	return err;
-}
-
 static int
 stifb_setcolreg(u_int regno, u_int red, u_int green,
 	      u_int blue, u_int transp, struct fb_info *info)
@@ -995,7 +915,7 @@ stifb_setcolreg(u_int regno, u_int red, u_int green,
 	struct stifb_info *fb = (struct stifb_info *) info;
 	u32 color;
 
-	if (regno >= 256)  /* no. of hw registers */
+	if (regno >= NR_PALETTE)
 		return 1;
 
 	red   >>= 8;
@@ -1005,8 +925,8 @@ stifb_setcolreg(u_int regno, u_int red, u_int green,
 	DEBUG_OFF();
 
 	START_IMAGE_COLORMAP_ACCESS(fb);
-	
-	if (fb->info.var.grayscale) {
+
+	if (unlikely(fb->info.var.grayscale)) {
 		/* gray = 0.30*R + 0.59*G + 0.11*B */
 		color = ((red * 77) +
 			 (green * 151) +
@@ -1017,17 +937,17 @@ stifb_setcolreg(u_int regno, u_int red, u_int green,
 			 (blue));
 	}
 
-	if (info->var.bits_per_pixel == 32) {
-		((u32 *)(info->pseudo_palette))[regno] =
-			(red   << info->var.red.offset)   |
-			(green << info->var.green.offset) |
-			(blue  << info->var.blue.offset);
-	} else {
-		((u32 *)(info->pseudo_palette))[regno] = regno;
+	if (fb->info.fix.visual == FB_VISUAL_DIRECTCOLOR) {
+		struct fb_var_screeninfo *var = &fb->info.var;
+		if (regno < 16)
+			((u32 *)fb->info.pseudo_palette)[regno] =
+				regno << var->red.offset |
+				regno << var->green.offset |
+				regno << var->blue.offset;
 	}
 
 	WRITE_IMAGE_COLOR(fb, regno, color);
-	
+
 	if (fb->id == S9000_ID_HCRX) {
 		NgleLutBltCtl lutBltCtl;
 
@@ -1066,9 +986,9 @@ stifb_blank(int blank_mode, struct fb_info *info)
 	case S9000_ID_HCRX:
 		HYPER_ENABLE_DISABLE_DISPLAY(fb, enable);
 		break;
-	case S9000_ID_A1659A:;	/* fall through */
-	case S9000_ID_TIMBER:;
-	case CRX24_OVERLAY_PLANES:;
+	case S9000_ID_A1659A:	/* fall through */
+	case S9000_ID_TIMBER:
+	case CRX24_OVERLAY_PLANES:
 	default:
 		ENABLE_DISABLE_DISPLAY(fb, enable);
 		break;
@@ -1140,8 +1060,6 @@ stifb_init_display(struct stifb_info *fb)
 
 static struct fb_ops stifb_ops = {
 	.owner		= THIS_MODULE,
-	.fb_read	= stifb_read,
-	.fb_write	= stifb_write,
 	.fb_setcolreg	= stifb_setcolreg,
 	.fb_blank	= stifb_blank,
 	.fb_fillrect	= cfb_fillrect,
@@ -1165,7 +1083,7 @@ stifb_init_fb(struct sti_struct *sti, int bpp_pref)
 	char *dev_name;
 	int bpp, xres, yres;
 
-	fb = kmalloc(sizeof(*fb), GFP_ATOMIC);
+	fb = kzalloc(sizeof(*fb), GFP_ATOMIC);
 	if (!fb) {
 		printk(KERN_ERR "stifb: Could not allocate stifb structure\n");
 		return -ENODEV;
@@ -1174,7 +1092,6 @@ stifb_init_fb(struct sti_struct *sti, int bpp_pref)
 	info = &fb->info;
 
 	/* set struct to a known state */
-	memset(fb, 0, sizeof(*fb));
 	fix = &info->fix;
 	var = &info->var;
 
@@ -1237,7 +1154,7 @@ stifb_init_fb(struct sti_struct *sti, int bpp_pref)
 	case S9000_ID_TOMCAT:	/* Dual CRX, behaves else like a CRX */
 		/* FIXME: TomCat supports two heads:
 		 * fb.iobase = REGION_BASE(fb_info,3);
-		 * fb.screen_base = (void*) REGION_BASE(fb_info,2);
+		 * fb.screen_base = ioremap_nocache(REGION_BASE(fb_info,2),xxx);
 		 * for now we only support the left one ! */
 		xres = fb->ngle_rom.x_size_visible;
 		yres = fb->ngle_rom.y_size_visible;
@@ -1250,12 +1167,10 @@ stifb_init_fb(struct sti_struct *sti, int bpp_pref)
 		memset(&fb->ngle_rom, 0, sizeof(fb->ngle_rom));
 		if ((fb->sti->regions_phys[0] & 0xfc000000) ==
 		    (fb->sti->regions_phys[2] & 0xfc000000))
-			sti_rom_address = fb->sti->regions_phys[0];
+			sti_rom_address = F_EXTEND(fb->sti->regions_phys[0]);
 		else
-			sti_rom_address = fb->sti->regions_phys[1];
-#ifdef __LP64__
-	        sti_rom_address |= 0xffffffff00000000;
-#endif
+			sti_rom_address = F_EXTEND(fb->sti->regions_phys[1]);
+
 		fb->deviceSpecificConfig = gsc_readl(sti_rom_address);
 		if (IS_24_DEVICE(fb)) {
 			if (bpp_pref == 8 || bpp_pref == 32)
@@ -1315,7 +1230,7 @@ stifb_init_fb(struct sti_struct *sti, int bpp_pref)
 		break;
 	    case 32:
 		fix->type = FB_TYPE_PACKED_PIXELS;
-		fix->visual = FB_VISUAL_TRUECOLOR;
+		fix->visual = FB_VISUAL_DIRECTCOLOR;
 		var->red.length = var->green.length = var->blue.length = var->transp.length = 8;
 		var->blue.offset = 0;
 		var->green.offset = 8;
@@ -1332,12 +1247,13 @@ stifb_init_fb(struct sti_struct *sti, int bpp_pref)
 
 	strcpy(fix->id, "stifb");
 	info->fbops = &stifb_ops;
-	info->screen_base = (void*) REGION_BASE(fb,1);
+	info->screen_base = ioremap_nocache(REGION_BASE(fb,1), fix->smem_len);
+	info->screen_size = fix->smem_len;
 	info->flags = FBINFO_DEFAULT;
 	info->pseudo_palette = &fb->pseudo_palette;
 
 	/* This has to been done !!! */
-	fb_alloc_cmap(&info->cmap, 256, 0);
+	fb_alloc_cmap(&info->cmap, NR_PALETTE, 0);
 	stifb_init_display(fb);
 
 	if (!request_mem_region(fix->smem_start, fix->smem_len, "stifb fb")) {
@@ -1462,7 +1378,7 @@ stifb_setup(char *options)
 	int i;
 	
 	if (!options || !*options)
-		return 0;
+		return 1;
 	
 	if (strncmp(options, "off", 3) == 0) {
 		stifb_disabled = 1;
@@ -1477,7 +1393,7 @@ stifb_setup(char *options)
 			stifb_bpp_pref[i] = simple_strtoul(options, &options, 10);
 		}
 	}
-	return 0;
+	return 1;
 }
 
 __setup("stifb=", stifb_setup);
@@ -1488,7 +1404,3 @@ module_exit(stifb_cleanup);
 MODULE_AUTHOR("Helge Deller <deller@gmx.de>, Thomas Bogendoerfer <tsbogend@alpha.franken.de>");
 MODULE_DESCRIPTION("Framebuffer driver for HP's NGLE series graphics cards in HP PARISC machines");
 MODULE_LICENSE("GPL v2");
-
-MODULE_PARM(bpp, "i");
-MODULE_PARM_DESC(mem, "Bits per pixel (default: 8)");
-

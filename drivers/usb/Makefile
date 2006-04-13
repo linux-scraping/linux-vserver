@@ -15,13 +15,13 @@ obj-$(CONFIG_USB_OHCI_HCD)	+= host/
 obj-$(CONFIG_USB_UHCI_HCD)	+= host/
 obj-$(CONFIG_USB_SL811_HCD)	+= host/
 obj-$(CONFIG_ETRAX_USB_HOST)	+= host/
+obj-$(CONFIG_USB_OHCI_AT91)	+= host/
 
 obj-$(CONFIG_USB_ACM)		+= class/
-obj-$(CONFIG_USB_AUDIO)		+= class/
-obj-$(CONFIG_USB_MIDI)		+= class/
 obj-$(CONFIG_USB_PRINTER)	+= class/
 
 obj-$(CONFIG_USB_STORAGE)	+= storage/
+obj-$(CONFIG_USB)		+= storage/
 
 obj-$(CONFIG_USB_AIPTEK)	+= input/
 obj-$(CONFIG_USB_ATI_REMOTE)	+= input/
@@ -34,18 +34,6 @@ obj-$(CONFIG_USB_POWERMATE)	+= input/
 obj-$(CONFIG_USB_WACOM)		+= input/
 obj-$(CONFIG_USB_ACECAD)	+= input/
 obj-$(CONFIG_USB_XPAD)		+= input/
-
-obj-$(CONFIG_USB_DABUSB)	+= media/
-obj-$(CONFIG_USB_DSBR)		+= media/
-obj-$(CONFIG_USB_IBMCAM)	+= media/
-obj-$(CONFIG_USB_KONICAWC)	+= media/
-obj-$(CONFIG_USB_OV511)		+= media/
-obj-$(CONFIG_USB_PWC)		+= media/
-obj-$(CONFIG_USB_SE401)		+= media/
-obj-$(CONFIG_USB_SN9C102)	+= media/
-obj-$(CONFIG_USB_STV680)	+= media/
-obj-$(CONFIG_USB_VICAM)		+= media/
-obj-$(CONFIG_USB_W9968CF)	+= media/
 
 obj-$(CONFIG_USB_CATC)		+= net/
 obj-$(CONFIG_USB_KAWETH)	+= net/

@@ -256,9 +256,6 @@ static irqreturn_t imx_rxint(int irq, void *dev_id, struct pt_regs *regs)
 	error_return:
 		tty_insert_flip_char(tty, rx, flg);
 
-		if (tty->flip.count >= TTY_FLIPBUF_SIZE)
-			goto out;
-
 	ignore_char:
 		rx = URXD0((u32)sport->port.membase);
 	} while(rx & URXD_CHARRDY);
@@ -405,10 +402,10 @@ static int imx_startup(struct uart_port *port)
 			     DRIVER_NAME, sport);
 	if (retval) goto error_out2;
 
-	retval = request_irq(sport->rtsirq, imx_rtsint, 0,
+	retval = request_irq(sport->rtsirq, imx_rtsint,
+			     SA_TRIGGER_FALLING | SA_TRIGGER_RISING,
 			     DRIVER_NAME, sport);
 	if (retval) goto error_out3;
-	set_irq_type(sport->rtsirq, IRQT_BOTHEDGE);
 
 	/*
 	 * Finally, clear and enable interrupts
@@ -502,7 +499,7 @@ imx_set_termios(struct uart_port *port, struct termios *termios,
 		ucr2 |= UCR2_STPB;
 	if (termios->c_cflag & PARENB) {
 		ucr2 |= UCR2_PREN;
-		if (!(termios->c_cflag & PARODD))
+		if (termios->c_cflag & PARODD)
 			ucr2 |= UCR2_PROE;
 	}
 
@@ -671,13 +668,13 @@ static struct imx_port imx_ports[] = {
 	.rtsirq = UART1_MINT_RTS,
 	.port	= {
 		.type		= PORT_IMX,
-		.iotype		= SERIAL_IO_MEM,
+		.iotype		= UPIO_MEM,
 		.membase	= (void *)IMX_UART1_BASE,
 		.mapbase	= IMX_UART1_BASE, /* FIXME */
 		.irq		= UART1_MINT_RX,
 		.uartclk	= 16000000,
 		.fifosize	= 8,
-		.flags		= ASYNC_BOOT_AUTOCONF,
+		.flags		= UPF_BOOT_AUTOCONF,
 		.ops		= &imx_pops,
 		.line		= 0,
 	},
@@ -687,13 +684,13 @@ static struct imx_port imx_ports[] = {
 	.rtsirq = UART2_MINT_RTS,
 	.port	= {
 		.type		= PORT_IMX,
-		.iotype		= SERIAL_IO_MEM,
+		.iotype		= UPIO_MEM,
 		.membase	= (void *)IMX_UART2_BASE,
 		.mapbase	= IMX_UART2_BASE, /* FIXME */
 		.irq		= UART2_MINT_RX,
 		.uartclk	= 16000000,
 		.fifosize	= 8,
-		.flags		= ASYNC_BOOT_AUTOCONF,
+		.flags		= UPF_BOOT_AUTOCONF,
 		.ops		= &imx_pops,
 		.line		= 1,
 	},
@@ -746,6 +743,13 @@ static void __init imx_init_ports(void)
 }
 
 #ifdef CONFIG_SERIAL_IMX_CONSOLE
+static void imx_console_putchar(struct uart_port *port, int ch)
+{
+	struct imx_port *sport = (struct imx_port *)port;
+	while ((UTS((u32)sport->port.membase) & UTS_TXFULL))
+		barrier();
+	URTX0((u32)sport->port.membase) = ch;
+}
 
 /*
  * Interrupts are disabled on entering
@@ -754,7 +758,7 @@ static void
 imx_console_write(struct console *co, const char *s, unsigned int count)
 {
 	struct imx_port *sport = &imx_ports[co->index];
-	unsigned int old_ucr1, old_ucr2, i;
+	unsigned int old_ucr1, old_ucr2;
 
 	/*
 	 *	First, save UCR1/2 and then disable interrupts
@@ -767,22 +771,7 @@ imx_console_write(struct console *co, const char *s, unsigned int count)
 	                   & ~(UCR1_TXMPTYEN | UCR1_RRDYEN | UCR1_RTSDEN);
 	UCR2((u32)sport->port.membase) = old_ucr2 | UCR2_TXEN;
 
-	/*
-	 *	Now, do each character
-	 */
-	for (i = 0; i < count; i++) {
-
-		while ((UTS((u32)sport->port.membase) & UTS_TXFULL))
-			barrier();
-
-		URTX0((u32)sport->port.membase) = s[i];
-
-		if (s[i] == '\n') {
-			while ((UTS((u32)sport->port.membase) & UTS_TXFULL))
-				barrier();
-			URTX0((u32)sport->port.membase) = '\r';
-		}
-	}
+	uart_console_write(&sport->port, s, count, imx_console_putchar);
 
 	/*
 	 *	Finally, wait for transmitter to become empty

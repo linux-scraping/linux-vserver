@@ -3,6 +3,7 @@
  * Licensed under the GPL
  */
 
+#include <pty.h>
 #include <stdio.h>
 #include <stddef.h>
 #include <stdarg.h>
@@ -24,13 +25,11 @@
 #include "kern_util.h"
 #include "user.h"
 #include "signal_kern.h"
-#include "signal_user.h"
 #include "sysdep/ptrace.h"
 #include "sysdep/sigcontext.h"
 #include "irq_user.h"
 #include "ptrace_user.h"
 #include "mem_user.h"
-#include "time_user.h"
 #include "init.h"
 #include "os.h"
 #include "uml-config.h"
@@ -51,6 +50,7 @@ static int ptrace_child(void *arg)
 	int pid = os_getpid(), ppid = getppid();
 	int sc_result;
 
+	change_sig(SIGWINCH, 0);
 	if(ptrace(PTRACE_TRACEME, 0, 0, 0) < 0){
 		perror("ptrace");
 		os_kill_process(pid, 0);
@@ -116,16 +116,16 @@ static int stop_ptraced_child(int pid, void *stack, int exitcode,
 	if(!WIFEXITED(status) || (WEXITSTATUS(status) != exitcode)) {
 		int exit_with = WEXITSTATUS(status);
 		if (exit_with == 2)
-			printk("check_ptrace : child exited with status 2. "
+			printf("check_ptrace : child exited with status 2. "
 			       "Serious trouble happening! Try updating your "
 			       "host skas patch!\nDisabling SYSEMU support.");
-		printk("check_ptrace : child exited with exitcode %d, while "
+		printf("check_ptrace : child exited with exitcode %d, while "
 		      "expecting %d; status 0x%x", exit_with,
 		      exitcode, status);
 		if (mustpanic)
 			panic("\n");
 		else
-			printk("\n");
+			printf("\n");
 		ret = -1;
 	}
 
@@ -183,7 +183,7 @@ static void __init check_sysemu(void)
 	void *stack;
  	int pid, n, status, count=0;
 
-	printk("Checking syscall emulation patch for ptrace...");
+	printf("Checking syscall emulation patch for ptrace...");
 	sysemu_supported = 0;
 	pid = start_ptraced_child(&stack);
 
@@ -207,10 +207,10 @@ static void __init check_sysemu(void)
 		goto fail_stopped;
 
 	sysemu_supported = 1;
-	printk("OK\n");
+	printf("OK\n");
 	set_using_sysemu(!force_sysemu_disabled);
 
-	printk("Checking advanced syscall emulation patch for ptrace...");
+	printf("Checking advanced syscall emulation patch for ptrace...");
 	pid = start_ptraced_child(&stack);
 
 	if(ptrace(PTRACE_OLDSETOPTIONS, pid, 0,
@@ -246,7 +246,7 @@ static void __init check_sysemu(void)
 		goto fail_stopped;
 
 	sysemu_supported = 2;
-	printk("OK\n");
+	printf("OK\n");
 
 	if ( !force_sysemu_disabled )
 		set_using_sysemu(sysemu_supported);
@@ -255,7 +255,7 @@ static void __init check_sysemu(void)
 fail:
 	stop_ptraced_child(pid, stack, 1, 0);
 fail_stopped:
-	printk("missing\n");
+	printf("missing\n");
 }
 
 static void __init check_ptrace(void)
@@ -263,7 +263,7 @@ static void __init check_ptrace(void)
 	void *stack;
 	int pid, syscall, n, status;
 
-	printk("Checking that ptrace can change system call numbers...");
+	printf("Checking that ptrace can change system call numbers...");
 	pid = start_ptraced_child(&stack);
 
 	if(ptrace(PTRACE_OLDSETOPTIONS, pid, 0, (void *)PTRACE_O_TRACESYSGOOD) < 0)
@@ -292,7 +292,7 @@ static void __init check_ptrace(void)
 		}
 	}
 	stop_ptraced_child(pid, stack, 0, 1);
-	printk("OK\n");
+	printf("OK\n");
 	check_sysemu();
 }
 
@@ -470,23 +470,6 @@ int can_do_skas(void)
 }
 #endif
 
-int have_devanon = 0;
-
-void check_devanon(void)
-{
-	int fd;
-
-	printk("Checking for /dev/anon on the host...");
-	fd = open("/dev/anon", O_RDWR);
-	if(fd < 0){
-		printk("Not available (open failed with errno %d)\n", errno);
-		return;
-	}
-
-	printk("OK\n");
-	have_devanon = 1;
-}
-
 int __init parse_iomem(char *str, int *add)
 {
 	struct iomem_region *new;
@@ -536,5 +519,131 @@ int __init parse_iomem(char *str, int *add)
 	os_close_file(fd);
  out:
 	return(1);
+}
+
+
+/* Changed during early boot */
+int pty_output_sigio = 0;
+int pty_close_sigio = 0;
+
+/* Used as a flag during SIGIO testing early in boot */
+static volatile int got_sigio = 0;
+
+static void __init handler(int sig)
+{
+	got_sigio = 1;
+}
+
+struct openpty_arg {
+	int master;
+	int slave;
+	int err;
+};
+
+static void openpty_cb(void *arg)
+{
+	struct openpty_arg *info = arg;
+
+	info->err = 0;
+	if(openpty(&info->master, &info->slave, NULL, NULL, NULL))
+		info->err = -errno;
+}
+
+static void __init check_one_sigio(void (*proc)(int, int))
+{
+	struct sigaction old, new;
+	struct openpty_arg pty = { .master = -1, .slave = -1 };
+	int master, slave, err;
+
+	initial_thread_cb(openpty_cb, &pty);
+	if(pty.err){
+		printk("openpty failed, errno = %d\n", -pty.err);
+		return;
+	}
+
+	master = pty.master;
+	slave = pty.slave;
+
+	if((master == -1) || (slave == -1)){
+		printk("openpty failed to allocate a pty\n");
+		return;
+	}
+
+	/* Not now, but complain so we now where we failed. */
+	err = raw(master);
+	if (err < 0)
+		panic("check_sigio : __raw failed, errno = %d\n", -err);
+
+	err = os_sigio_async(master, slave);
+	if(err < 0)
+		panic("tty_fds : sigio_async failed, err = %d\n", -err);
+
+	if(sigaction(SIGIO, NULL, &old) < 0)
+		panic("check_sigio : sigaction 1 failed, errno = %d\n", errno);
+	new = old;
+	new.sa_handler = handler;
+	if(sigaction(SIGIO, &new, NULL) < 0)
+		panic("check_sigio : sigaction 2 failed, errno = %d\n", errno);
+
+	got_sigio = 0;
+	(*proc)(master, slave);
+
+	close(master);
+	close(slave);
+
+	if(sigaction(SIGIO, &old, NULL) < 0)
+		panic("check_sigio : sigaction 3 failed, errno = %d\n", errno);
+}
+
+static void tty_output(int master, int slave)
+{
+	int n;
+	char buf[512];
+
+	printk("Checking that host ptys support output SIGIO...");
+
+	memset(buf, 0, sizeof(buf));
+
+	while(os_write_file(master, buf, sizeof(buf)) > 0) ;
+	if(errno != EAGAIN)
+		panic("check_sigio : write failed, errno = %d\n", errno);
+	while(((n = os_read_file(slave, buf, sizeof(buf))) > 0) && !got_sigio) ;
+
+	if(got_sigio){
+		printk("Yes\n");
+		pty_output_sigio = 1;
+	}
+	else if(n == -EAGAIN) printk("No, enabling workaround\n");
+	else panic("check_sigio : read failed, err = %d\n", n);
+}
+
+static void tty_close(int master, int slave)
+{
+	printk("Checking that host ptys support SIGIO on close...");
+
+	close(slave);
+	if(got_sigio){
+		printk("Yes\n");
+		pty_close_sigio = 1;
+	}
+	else printk("No, enabling workaround\n");
+}
+
+void __init check_sigio(void)
+{
+	if((os_access("/dev/ptmx", OS_ACC_R_OK) < 0) &&
+	   (os_access("/dev/ptyp0", OS_ACC_R_OK) < 0)){
+		printk("No pseudo-terminals available - skipping pty SIGIO "
+		       "check\n");
+		return;
+	}
+	check_one_sigio(tty_output);
+	check_one_sigio(tty_close);
+}
+
+void os_check_bugs(void)
+{
+	check_ptrace();
+	check_sigio();
 }
 

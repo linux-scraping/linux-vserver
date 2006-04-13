@@ -20,8 +20,10 @@
  *
  * Contact Information:
  * Scott H Kilau <Scott_Kilau@digi.com>
- * Wendy Xiong   <wendyx@us.ltcfwd.linux.ibm.com>
- *
+ * Ananda Venkatarman <mansarov@us.ibm.com>
+ * Modifications:
+ * 01/19/06:	changed jsm_input routine to use the dynamically allocated
+ *		tty_buffer changes. Contributors: Scott Kilau and Ananda V.
  ***********************************************************************/
 #include <linux/tty.h>
 #include <linux/tty_flip.h>
@@ -140,12 +142,14 @@ static void jsm_tty_send_xchar(struct uart_port *port, char ch)
 {
 	unsigned long lock_flags;
 	struct jsm_channel *channel = (struct jsm_channel *)port;
+	struct termios *termios;
 
 	spin_lock_irqsave(&port->lock, lock_flags);
-	if (ch == port->info->tty->termios->c_cc[VSTART])
+	termios = port->info->tty->termios;
+	if (ch == termios->c_cc[VSTART])
 		channel->ch_bd->bd_ops->send_start_character(channel);
 
-	if (ch == port->info->tty->termios->c_cc[VSTOP])
+	if (ch == termios->c_cc[VSTOP])
 		channel->ch_bd->bd_ops->send_stop_character(channel);
 	spin_unlock_irqrestore(&port->lock, lock_flags);
 }
@@ -176,6 +180,7 @@ static int jsm_tty_open(struct uart_port *port)
 	struct jsm_board *brd;
 	int rc = 0;
 	struct jsm_channel *channel = (struct jsm_channel *)port;
+	struct termios *termios;
 
 	/* Get board pointer from our array of majors we have allocated */
 	brd = channel->ch_bd;
@@ -237,12 +242,13 @@ static int jsm_tty_open(struct uart_port *port)
 	channel->ch_cached_lsr = 0;
 	channel->ch_stops_sent = 0;
 
-	channel->ch_c_cflag	= port->info->tty->termios->c_cflag;
-	channel->ch_c_iflag	= port->info->tty->termios->c_iflag;
-	channel->ch_c_oflag	= port->info->tty->termios->c_oflag;
-	channel->ch_c_lflag	= port->info->tty->termios->c_lflag;
-	channel->ch_startc = port->info->tty->termios->c_cc[VSTART];
-	channel->ch_stopc = port->info->tty->termios->c_cc[VSTOP];
+	termios = port->info->tty->termios;
+	channel->ch_c_cflag	= termios->c_cflag;
+	channel->ch_c_iflag	= termios->c_iflag;
+	channel->ch_c_oflag	= termios->c_oflag;
+	channel->ch_c_lflag	= termios->c_lflag;
+	channel->ch_startc	= termios->c_cc[VSTART];
+	channel->ch_stopc	= termios->c_cc[VSTOP];
 
 	/* Tell UART to init itself */
 	brd->bd_ops->uart_init(channel);
@@ -497,16 +503,15 @@ void jsm_input(struct jsm_channel *ch)
 {
 	struct jsm_board *bd;
 	struct tty_struct *tp;
+	struct tty_ldisc *ld;
 	u32 rmask;
 	u16 head;
 	u16 tail;
 	int data_len;
 	unsigned long lock_flags;
-	int flip_len;
+	int flip_len = 0;
 	int len = 0;
 	int n = 0;
-	char *buf = NULL;
-	char *buf2 = NULL;
 	int s = 0;
 	int i = 0;
 
@@ -574,56 +579,50 @@ void jsm_input(struct jsm_channel *ch)
 
 	/*
 	 * If the rxbuf is empty and we are not throttled, put as much
-	 * as we can directly into the linux TTY flip buffer.
-	 * The jsm_rawreadok case takes advantage of carnal knowledge that
-	 * the char_buf and the flag_buf are next to each other and
-	 * are each of (2 * TTY_FLIPBUF_SIZE) size.
+	 * as we can directly into the linux TTY buffer.
 	 *
-	 * NOTE: if(!tty->real_raw), the call to ldisc.receive_buf
-	 *actually still uses the flag buffer, so you can't
-	 *use it for input data
 	 */
-	if (jsm_rawreadok) {
-		if (tp->real_raw)
-			flip_len = MYFLIPLEN;
-		else
-			flip_len = 2 * TTY_FLIPBUF_SIZE;
-	} else
-		flip_len = TTY_FLIPBUF_SIZE - tp->flip.count;
+	flip_len = TTY_FLIPBUF_SIZE;
 
 	len = min(data_len, flip_len);
 	len = min(len, (N_TTY_BUF_SIZE - 1) - tp->read_cnt);
+	ld = tty_ldisc_ref(tp);
+
+	/*
+	 * If the DONT_FLIP flag is on, don't flush our buffer, and act
+	 * like the ld doesn't have any space to put the data right now.
+	 */
+	if (test_bit(TTY_DONT_FLIP, &tp->flags))
+		len = 0;
+
+	/*
+	 * If we were unable to get a reference to the ld,
+	 * don't flush our buffer, and act like the ld doesn't
+	 * have any space to put the data right now.
+	 */
+	if (!ld) {
+		len = 0;
+	} else {
+		/*
+		 * If ld doesn't have a pointer to a receive_buf function,
+		 * flush the data, then act like the ld doesn't have any
+		 * space to put the data right now.
+		 */
+		if (!ld->receive_buf) {
+				ch->ch_r_head = ch->ch_r_tail;
+				len = 0;
+		}
+	}
 
 	if (len <= 0) {
 		spin_unlock_irqrestore(&ch->ch_lock, lock_flags);
 		jsm_printk(READ, INFO, &ch->ch_bd->pci_dev, "jsm_input 1\n");
+		if (ld)
+			tty_ldisc_deref(ld);
 		return;
 	}
 
-	/*
-	 * If we're bypassing flip buffers on rx, we can blast it
-	 * right into the beginning of the buffer.
-	 */
-	if (jsm_rawreadok) {
-		if (tp->real_raw) {
-			if (ch->ch_flags & CH_FLIPBUF_IN_USE) {
-				jsm_printk(READ, INFO, &ch->ch_bd->pci_dev,
-					"JSM - FLIPBUF in use. delaying input\n");
-				spin_unlock_irqrestore(&ch->ch_lock, lock_flags);
-				return;
-			}
-			ch->ch_flags |= CH_FLIPBUF_IN_USE;
-			buf = ch->ch_bd->flipbuf;
-			buf2 = NULL;
-		} else {
-			buf = tp->flip.char_buf;
-			buf2 = tp->flip.flag_buf;
-		}
-	} else {
-		buf = tp->flip.char_buf_ptr;
-		buf2 = tp->flip.flag_buf_ptr;
-	}
-
+	len = tty_buffer_request_room(tp, len);
 	n = len;
 
 	/*
@@ -638,121 +637,47 @@ void jsm_input(struct jsm_channel *ch)
 		if (s <= 0)
 			break;
 
-		memcpy(buf, ch->ch_rqueue + tail, s);
+			/*
+			 * If conditions are such that ld needs to see all
+			 * UART errors, we will have to walk each character
+			 * and error byte and send them to the buffer one at
+			 * a time.
+			 */
 
-		/* buf2 is only set when port isn't raw */
-		if (buf2)
-			memcpy(buf2, ch->ch_equeue + tail, s);
-
+		if (I_PARMRK(tp) || I_BRKINT(tp) || I_INPCK(tp)) {
+			for (i = 0; i < s; i++) {
+				/*
+				 * Give the Linux ld the flags in the
+				 * format it likes.
+				 */
+				if (*(ch->ch_equeue +tail +i) & UART_LSR_BI)
+					tty_insert_flip_char(tp, *(ch->ch_rqueue +tail +i),  TTY_BREAK);
+				else if (*(ch->ch_equeue +tail +i) & UART_LSR_PE)
+					tty_insert_flip_char(tp, *(ch->ch_rqueue +tail +i), TTY_PARITY);
+				else if (*(ch->ch_equeue +tail +i) & UART_LSR_FE)
+					tty_insert_flip_char(tp, *(ch->ch_rqueue +tail +i), TTY_FRAME);
+				else
+				tty_insert_flip_char(tp, *(ch->ch_rqueue +tail +i), TTY_NORMAL);
+			}
+		} else {
+			tty_insert_flip_string(tp, ch->ch_rqueue + tail, s) ;
+		}
 		tail += s;
-		buf += s;
-		if (buf2)
-			buf2 += s;
 		n -= s;
 		/* Flip queue if needed */
 		tail &= rmask;
 	}
 
-	/*
-	 * In high performance mode, we don't have to update
-	 * flag_buf or any of the counts or pointers into flip buf.
-	 */
-	if (!jsm_rawreadok) {
-		if (I_PARMRK(tp) || I_BRKINT(tp) || I_INPCK(tp)) {
-			for (i = 0; i < len; i++) {
-				/*
-				 * Give the Linux ld the flags in the
-				 * format it likes.
-				 */
-				if (tp->flip.flag_buf_ptr[i] & UART_LSR_BI)
-					tp->flip.flag_buf_ptr[i] = TTY_BREAK;
-				else if (tp->flip.flag_buf_ptr[i] & UART_LSR_PE)
-					tp->flip.flag_buf_ptr[i] = TTY_PARITY;
-				else if (tp->flip.flag_buf_ptr[i] & UART_LSR_FE)
-					tp->flip.flag_buf_ptr[i] = TTY_FRAME;
-				else
-					tp->flip.flag_buf_ptr[i] = TTY_NORMAL;
-			}
-		} else {
-			memset(tp->flip.flag_buf_ptr, 0, len);
-		}
+	ch->ch_r_tail = tail & rmask;
+	ch->ch_e_tail = tail & rmask;
+	jsm_check_queue_flow_control(ch);
+	spin_unlock_irqrestore(&ch->ch_lock, lock_flags);
 
-		tp->flip.char_buf_ptr += len;
-		tp->flip.flag_buf_ptr += len;
-		tp->flip.count += len;
-	}
-	else if (!tp->real_raw) {
-		if (I_PARMRK(tp) || I_BRKINT(tp) || I_INPCK(tp)) {
-			for (i = 0; i < len; i++) {
-				/*
-				 * Give the Linux ld the flags in the
-				 * format it likes.
-				 */
-				if (tp->flip.flag_buf_ptr[i] & UART_LSR_BI)
-					tp->flip.flag_buf_ptr[i] = TTY_BREAK;
-				else if (tp->flip.flag_buf_ptr[i] & UART_LSR_PE)
-					tp->flip.flag_buf_ptr[i] = TTY_PARITY;
-				else if (tp->flip.flag_buf_ptr[i] & UART_LSR_FE)
-					tp->flip.flag_buf_ptr[i] = TTY_FRAME;
-				else
-					tp->flip.flag_buf_ptr[i] = TTY_NORMAL;
-			}
-		} else
-			memset(tp->flip.flag_buf, 0, len);
-	}
+	/* Tell the tty layer its okay to "eat" the data now */
+	tty_flip_buffer_push(tp);
 
-	/*
-	 * If we're doing raw reads, jam it right into the
-	 * line disc bypassing the flip buffers.
-	 */
-	if (jsm_rawreadok) {
-		if (tp->real_raw) {
-			ch->ch_r_tail = tail & rmask;
-			ch->ch_e_tail = tail & rmask;
-
-			jsm_check_queue_flow_control(ch);
-
-			/* !!! WE *MUST* LET GO OF ALL LOCKS BEFORE CALLING RECEIVE BUF !!! */
-
-			spin_unlock_irqrestore(&ch->ch_lock, lock_flags);
-
-			jsm_printk(READ, INFO, &ch->ch_bd->pci_dev,
-				"jsm_input. %d real_raw len:%d calling receive_buf for board %d\n",
-				__LINE__, len, ch->ch_bd->boardnum);
-			tp->ldisc.receive_buf(tp, ch->ch_bd->flipbuf, NULL, len);
-
-			/* Allow use of channel flip buffer again */
-			spin_lock_irqsave(&ch->ch_lock, lock_flags);
-			ch->ch_flags &= ~CH_FLIPBUF_IN_USE;
-			spin_unlock_irqrestore(&ch->ch_lock, lock_flags);
-
-		} else {
-			ch->ch_r_tail = tail & rmask;
-			ch->ch_e_tail = tail & rmask;
-
-			jsm_check_queue_flow_control(ch);
-
-			/* !!! WE *MUST* LET GO OF ALL LOCKS BEFORE CALLING RECEIVE BUF !!! */
-			spin_unlock_irqrestore(&ch->ch_lock, lock_flags);
-
-			jsm_printk(READ, INFO, &ch->ch_bd->pci_dev,
-				"jsm_input. %d not real_raw len:%d calling receive_buf for board %d\n",
-				__LINE__, len, ch->ch_bd->boardnum);
-
-			tp->ldisc.receive_buf(tp, tp->flip.char_buf, tp->flip.flag_buf, len);
-		}
-	} else {
-		ch->ch_r_tail = tail & rmask;
-		ch->ch_e_tail = tail & rmask;
-
-		jsm_check_queue_flow_control(ch);
-
-		spin_unlock_irqrestore(&ch->ch_lock, lock_flags);
-
-		jsm_printk(READ, INFO, &ch->ch_bd->pci_dev,
-			"jsm_input. %d not jsm_read raw okay scheduling flip\n", __LINE__);
-		tty_schedule_flip(tp);
-	}
+	if (ld)
+		tty_ldisc_deref(ld);
 
 	jsm_printk(IOCTL, INFO, &ch->ch_bd->pci_dev, "finish\n");
 }
@@ -863,6 +788,7 @@ static void jsm_carrier(struct jsm_channel *ch)
 
 void jsm_check_queue_flow_control(struct jsm_channel *ch)
 {
+	struct board_ops *bd_ops = ch->ch_bd->bd_ops;
 	int qleft = 0;
 
 	/* Store how much space we have left in the queue */
@@ -888,7 +814,7 @@ void jsm_check_queue_flow_control(struct jsm_channel *ch)
 		/* HWFLOW */
 		if (ch->ch_c_cflag & CRTSCTS) {
 			if(!(ch->ch_flags & CH_RECEIVER_OFF)) {
-				ch->ch_bd->bd_ops->disable_receiver(ch);
+				bd_ops->disable_receiver(ch);
 				ch->ch_flags |= (CH_RECEIVER_OFF);
 				jsm_printk(READ, INFO, &ch->ch_bd->pci_dev,
 					"Internal queue hit hilevel mark (%d)! Turning off interrupts.\n",
@@ -898,7 +824,7 @@ void jsm_check_queue_flow_control(struct jsm_channel *ch)
 		/* SWFLOW */
 		else if (ch->ch_c_iflag & IXOFF) {
 			if (ch->ch_stops_sent <= MAX_STOPS_SENT) {
-				ch->ch_bd->bd_ops->send_stop_character(ch);
+				bd_ops->send_stop_character(ch);
 				ch->ch_stops_sent++;
 				jsm_printk(READ, INFO, &ch->ch_bd->pci_dev,
 					"Sending stop char! Times sent: %x\n", ch->ch_stops_sent);
@@ -925,7 +851,7 @@ void jsm_check_queue_flow_control(struct jsm_channel *ch)
 		/* HWFLOW */
 		if (ch->ch_c_cflag & CRTSCTS) {
 			if (ch->ch_flags & CH_RECEIVER_OFF) {
-				ch->ch_bd->bd_ops->enable_receiver(ch);
+				bd_ops->enable_receiver(ch);
 				ch->ch_flags &= ~(CH_RECEIVER_OFF);
 				jsm_printk(READ, INFO, &ch->ch_bd->pci_dev,
 					"Internal queue hit lowlevel mark (%d)! Turning on interrupts.\n",
@@ -935,7 +861,7 @@ void jsm_check_queue_flow_control(struct jsm_channel *ch)
 		/* SWFLOW */
 		else if (ch->ch_c_iflag & IXOFF && ch->ch_stops_sent) {
 			ch->ch_stops_sent = 0;
-			ch->ch_bd->bd_ops->send_start_character(ch);
+			bd_ops->send_start_character(ch);
 			jsm_printk(READ, INFO, &ch->ch_bd->pci_dev, "Sending start char!\n");
 		}
 	}

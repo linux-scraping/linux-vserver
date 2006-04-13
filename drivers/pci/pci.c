@@ -33,7 +33,7 @@ pci_bus_max_busnr(struct pci_bus* bus)
 	struct list_head *tmp;
 	unsigned char max, n;
 
-	max = bus->number;
+	max = bus->subordinate;
 	list_for_each(tmp, &bus->children) {
 		n = pci_bus_max_busnr(pci_bus_b(tmp));
 		if(n > max)
@@ -41,7 +41,9 @@ pci_bus_max_busnr(struct pci_bus* bus)
 	}
 	return max;
 }
+EXPORT_SYMBOL_GPL(pci_bus_max_busnr);
 
+#if 0
 /**
  * pci_max_busnr - returns maximum PCI bus number
  *
@@ -62,6 +64,8 @@ pci_max_busnr(void)
 	}
 	return max;
 }
+
+#endif  /*  0  */
 
 static int __pci_find_next_cap(struct pci_bus *bus, unsigned int devfn, u8 pos, int cap)
 {
@@ -160,6 +164,7 @@ int pci_bus_find_capability(struct pci_bus *bus, unsigned int devfn, int cap)
 	return __pci_bus_find_cap(bus, devfn, hdr_type & 0x7f, cap);
 }
 
+#if 0
 /**
  * pci_find_ext_capability - Find an extended capability
  * @dev: PCI device to query
@@ -207,6 +212,7 @@ int pci_find_ext_capability(struct pci_dev *dev, int cap)
 
 	return 0;
 }
+#endif  /*  0  */
 
 /**
  * pci_find_parent_resource - return resource region of parent bus of given region
@@ -490,9 +496,8 @@ pci_enable_device_bars(struct pci_dev *dev, int bars)
 int
 pci_enable_device(struct pci_dev *dev)
 {
-	int err;
-
-	if ((err = pci_enable_device_bars(dev, (1 << PCI_NUM_RESOURCES) - 1)))
+	int err = pci_enable_device_bars(dev, (1 << PCI_NUM_RESOURCES) - 1);
+	if (err)
 		return err;
 	pci_fixup_device(pci_fixup_enable, dev);
 	dev->is_enabled = 1;
@@ -587,7 +592,7 @@ pci_get_interrupt_pin(struct pci_dev *dev, struct pci_dev **bridge)
 {
 	u8 pin;
 
-	pci_read_config_byte(dev, PCI_INTERRUPT_PIN, &pin);
+	pin = dev->pin;
 	if (!pin)
 		return -1;
 	pin--;
@@ -634,7 +639,7 @@ void pci_release_region(struct pci_dev *pdev, int bar)
  *	Returns 0 on success, or %EBUSY on error.  A warning
  *	message is also printed on failure.
  */
-int pci_request_region(struct pci_dev *pdev, int bar, char *res_name)
+int pci_request_region(struct pci_dev *pdev, int bar, const char *res_name)
 {
 	if (pci_resource_len(pdev, bar) == 0)
 		return 0;
@@ -692,7 +697,7 @@ void pci_release_regions(struct pci_dev *pdev)
  *	Returns 0 on success, or %EBUSY on error.  A warning
  *	message is also printed on failure.
  */
-int pci_request_regions(struct pci_dev *pdev, char *res_name)
+int pci_request_regions(struct pci_dev *pdev, const char *res_name)
 {
 	int i;
 	
@@ -895,8 +900,12 @@ static int __devinit pci_setup(char *str)
 		if (k)
 			*k++ = 0;
 		if (*str && (str = pcibios_setup(str)) && *str) {
-			/* PCI layer options should be handled here */
-			printk(KERN_ERR "PCI: Unknown option `%s'\n", str);
+			if (!strcmp(str, "nomsi")) {
+				pci_no_msi();
+			} else {
+				printk(KERN_ERR "PCI: Unknown option `%s'\n",
+						str);
+			}
 		}
 		str = k;
 	}
@@ -917,8 +926,6 @@ EXPORT_SYMBOL_GPL(pci_restore_bars);
 EXPORT_SYMBOL(pci_enable_device_bars);
 EXPORT_SYMBOL(pci_enable_device);
 EXPORT_SYMBOL(pci_disable_device);
-EXPORT_SYMBOL(pci_max_busnr);
-EXPORT_SYMBOL(pci_bus_max_busnr);
 EXPORT_SYMBOL(pci_find_capability);
 EXPORT_SYMBOL(pci_bus_find_capability);
 EXPORT_SYMBOL(pci_release_regions);

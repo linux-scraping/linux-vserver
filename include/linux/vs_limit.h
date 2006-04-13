@@ -1,7 +1,6 @@
 #ifndef _VX_VS_LIMIT_H
 #define _VX_VS_LIMIT_H
 
-
 #include "vserver/limit.h"
 #include "vserver/debug.h"
 #include "vserver/limit_int.h"

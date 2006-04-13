@@ -18,18 +18,13 @@
 #ifndef __XFS_IOPS_H__
 #define __XFS_IOPS_H__
 
-extern struct inode_operations linvfs_file_inode_operations;
-extern struct inode_operations linvfs_dir_inode_operations;
-extern struct inode_operations linvfs_symlink_inode_operations;
+extern struct inode_operations xfs_inode_operations;
+extern struct inode_operations xfs_dir_inode_operations;
+extern struct inode_operations xfs_symlink_inode_operations;
 
-extern struct file_operations linvfs_file_operations;
-extern struct file_operations linvfs_invis_file_operations;
-extern struct file_operations linvfs_dir_operations;
-
-extern struct address_space_operations linvfs_aops;
-
-extern int linvfs_get_block(struct inode *, sector_t, struct buffer_head *, int);
-extern void linvfs_unwritten_done(struct buffer_head *, int);
+extern const struct file_operations xfs_file_operations;
+extern const struct file_operations xfs_dir_file_operations;
+extern const struct file_operations xfs_invis_file_operations;
 
 extern int xfs_ioctl(struct bhv_desc *, struct inode *, struct file *,
                         int, unsigned int, void __user *);

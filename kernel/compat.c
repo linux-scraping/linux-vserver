@@ -17,13 +17,12 @@
 #include <linux/time.h>
 #include <linux/signal.h>
 #include <linux/sched.h>	/* for MAX_SCHEDULE_TIMEOUT */
-#include <linux/futex.h>	/* for FUTEX_WAIT */
 #include <linux/syscalls.h>
 #include <linux/unistd.h>
 #include <linux/security.h>
+#include <linux/timex.h>
 
 #include <asm/uaccess.h>
-#include <asm/bug.h>
 
 int get_compat_timespec(struct timespec *ts, const struct compat_timespec __user *cts)
 {
@@ -238,28 +237,6 @@ asmlinkage long compat_sys_sigprocmask(int how, compat_old_sigset_t __user *set,
 			ret = put_user(s, oset);
 	return ret;
 }
-
-#ifdef CONFIG_FUTEX
-asmlinkage long compat_sys_futex(u32 __user *uaddr, int op, int val,
-		struct compat_timespec __user *utime, u32 __user *uaddr2,
-		int val3)
-{
-	struct timespec t;
-	unsigned long timeout = MAX_SCHEDULE_TIMEOUT;
-	int val2 = 0;
-
-	if ((op == FUTEX_WAIT) && utime) {
-		if (get_compat_timespec(&t, utime))
-			return -EFAULT;
-		timeout = timespec_to_jiffies(&t) + 1;
-	}
-	if (op >= FUTEX_REQUEUE)
-		val2 = (int) (unsigned long) utime;
-
-	return do_futex((unsigned long)uaddr, op, val, timeout,
-			(unsigned long)uaddr2, val2, val3);
-}
-#endif
 
 asmlinkage long compat_sys_setrlimit(unsigned int resource,
 		struct compat_rlimit __user *rlim)
@@ -514,6 +491,24 @@ static int put_compat_itimerspec(struct compat_itimerspec __user *dst,
 	return 0;
 } 
 
+long compat_sys_timer_create(clockid_t which_clock,
+			struct compat_sigevent __user *timer_event_spec,
+			timer_t __user *created_timer_id)
+{
+	struct sigevent __user *event = NULL;
+
+	if (timer_event_spec) {
+		struct sigevent kevent;
+
+		event = compat_alloc_user_space(sizeof(*event));
+		if (get_compat_sigevent(&kevent, timer_event_spec) ||
+		    copy_to_user(event, &kevent, sizeof(*event)))
+			return -EFAULT;
+	}
+
+	return sys_timer_create(which_clock, event, created_timer_id);
+}
+
 long compat_sys_timer_settime(timer_t timer_id, int flags,
 			  struct compat_itimerspec __user *new, 
 			  struct compat_itimerspec __user *old)
@@ -648,8 +643,6 @@ int get_compat_sigevent(struct sigevent *event,
 			&u_event->sigev_notify_thread_id))
 		? -EFAULT : 0;
 }
-
-/* timer_create is architecture specific because it needs sigevent conversion */
 
 long compat_get_bitmap(unsigned long *mask, compat_ulong_t __user *umask,
 		       unsigned long bitmap_size)
@@ -855,3 +848,89 @@ asmlinkage long compat_sys_stime(compat_time_t __user *tptr)
 }
 
 #endif /* __ARCH_WANT_COMPAT_SYS_TIME */
+
+#ifdef __ARCH_WANT_COMPAT_SYS_RT_SIGSUSPEND
+asmlinkage long compat_sys_rt_sigsuspend(compat_sigset_t __user *unewset, compat_size_t sigsetsize)
+{
+	sigset_t newset;
+	compat_sigset_t newset32;
+
+	/* XXX: Don't preclude handling different sized sigset_t's.  */
+	if (sigsetsize != sizeof(sigset_t))
+		return -EINVAL;
+
+	if (copy_from_user(&newset32, unewset, sizeof(compat_sigset_t)))
+		return -EFAULT;
+	sigset_from_compat(&newset, &newset32);
+	sigdelsetmask(&newset, sigmask(SIGKILL)|sigmask(SIGSTOP));
+
+	spin_lock_irq(&current->sighand->siglock);
+	current->saved_sigmask = current->blocked;
+	current->blocked = newset;
+	recalc_sigpending();
+	spin_unlock_irq(&current->sighand->siglock);
+
+	current->state = TASK_INTERRUPTIBLE;
+	schedule();
+	set_thread_flag(TIF_RESTORE_SIGMASK);
+	return -ERESTARTNOHAND;
+}
+#endif /* __ARCH_WANT_COMPAT_SYS_RT_SIGSUSPEND */
+
+asmlinkage long compat_sys_adjtimex(struct compat_timex __user *utp)
+{
+	struct timex txc;
+	int ret;
+
+	memset(&txc, 0, sizeof(struct timex));
+
+	if (!access_ok(VERIFY_READ, utp, sizeof(struct compat_timex)) ||
+			__get_user(txc.modes, &utp->modes) ||
+			__get_user(txc.offset, &utp->offset) ||
+			__get_user(txc.freq, &utp->freq) ||
+			__get_user(txc.maxerror, &utp->maxerror) ||
+			__get_user(txc.esterror, &utp->esterror) ||
+			__get_user(txc.status, &utp->status) ||
+			__get_user(txc.constant, &utp->constant) ||
+			__get_user(txc.precision, &utp->precision) ||
+			__get_user(txc.tolerance, &utp->tolerance) ||
+			__get_user(txc.time.tv_sec, &utp->time.tv_sec) ||
+			__get_user(txc.time.tv_usec, &utp->time.tv_usec) ||
+			__get_user(txc.tick, &utp->tick) ||
+			__get_user(txc.ppsfreq, &utp->ppsfreq) ||
+			__get_user(txc.jitter, &utp->jitter) ||
+			__get_user(txc.shift, &utp->shift) ||
+			__get_user(txc.stabil, &utp->stabil) ||
+			__get_user(txc.jitcnt, &utp->jitcnt) ||
+			__get_user(txc.calcnt, &utp->calcnt) ||
+			__get_user(txc.errcnt, &utp->errcnt) ||
+			__get_user(txc.stbcnt, &utp->stbcnt))
+		return -EFAULT;
+
+	ret = do_adjtimex(&txc);
+
+	if (!access_ok(VERIFY_WRITE, utp, sizeof(struct compat_timex)) ||
+			__put_user(txc.modes, &utp->modes) ||
+			__put_user(txc.offset, &utp->offset) ||
+			__put_user(txc.freq, &utp->freq) ||
+			__put_user(txc.maxerror, &utp->maxerror) ||
+			__put_user(txc.esterror, &utp->esterror) ||
+			__put_user(txc.status, &utp->status) ||
+			__put_user(txc.constant, &utp->constant) ||
+			__put_user(txc.precision, &utp->precision) ||
+			__put_user(txc.tolerance, &utp->tolerance) ||
+			__put_user(txc.time.tv_sec, &utp->time.tv_sec) ||
+			__put_user(txc.time.tv_usec, &utp->time.tv_usec) ||
+			__put_user(txc.tick, &utp->tick) ||
+			__put_user(txc.ppsfreq, &utp->ppsfreq) ||
+			__put_user(txc.jitter, &utp->jitter) ||
+			__put_user(txc.shift, &utp->shift) ||
+			__put_user(txc.stabil, &utp->stabil) ||
+			__put_user(txc.jitcnt, &utp->jitcnt) ||
+			__put_user(txc.calcnt, &utp->calcnt) ||
+			__put_user(txc.errcnt, &utp->errcnt) ||
+			__put_user(txc.stbcnt, &utp->stbcnt))
+		ret = -EFAULT;
+
+	return ret;
+}

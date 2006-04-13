@@ -1,4 +1,4 @@
-/* 
+/*
  *  bt819 - BT819A VideoStream Decoder (Rockwell Part)
  *
  * Copyright (C) 1999 Mike Bernson <mike@mlb.org>
@@ -6,7 +6,7 @@
  *
  * Modifications for LML33/DC10plus unified driver
  * Copyright (C) 2000 Serguei Miridonov <mirsev@cicese.mx>
- *  
+ *
  * Changes by Ronald Bultje <rbultje@ronald.bitfreak.net>
  *    - moved over to linux>=2.4.x i2c protocol (9/9/2002)
  *
@@ -53,7 +53,6 @@ MODULE_AUTHOR("Mike Bernson & Dave Perks");
 MODULE_LICENSE("GPL");
 
 #include <linux/i2c.h>
-#include <linux/i2c-dev.h>
 
 #define I2C_NAME(s) (s)->name
 
@@ -141,24 +140,21 @@ bt819_write_block (struct i2c_client *client,
 	if (i2c_check_functionality(client->adapter, I2C_FUNC_I2C)) {
 		/* do raw I2C, not smbus compatible */
 		struct bt819 *decoder = i2c_get_clientdata(client);
-		struct i2c_msg msg;
 		u8 block_data[32];
+		int block_len;
 
-		msg.addr = client->addr;
-		msg.flags = 0;
 		while (len >= 2) {
-			msg.buf = (char *) block_data;
-			msg.len = 0;
-			block_data[msg.len++] = reg = data[0];
+			block_len = 0;
+			block_data[block_len++] = reg = data[0];
 			do {
-				block_data[msg.len++] =
+				block_data[block_len++] =
 				    decoder->reg[reg++] = data[1];
 				len -= 2;
 				data += 2;
 			} while (len >= 2 && data[0] == reg &&
-				 msg.len < 32);
-			if ((ret = i2c_transfer(client->adapter,
-						&msg, 1)) < 0)
+				 block_len < 32);
+			if ((ret = i2c_master_send(client, block_data,
+						   block_len)) < 0)
 				break;
 		}
 	} else {
@@ -210,9 +206,9 @@ bt819_init (struct i2c_client *client)
 					   Bug in the bt819 stepping on my board?
 					*/
 		0x14, 0x00,	/* 0x14 Vertial Scaling lsb */
-		0x16, 0x07,	/* 0x16 Video Timing Polarity 
+		0x16, 0x07,	/* 0x16 Video Timing Polarity
 					   ACTIVE=active low
-					   FIELD: high=odd, 
+					   FIELD: high=odd,
 					   vreset=active high,
 					   hreset=active high */
 		0x18, 0x68,	/* 0x18 AGC Delay */
@@ -501,7 +497,7 @@ static unsigned short normal_i2c[] = {
 };
 
 static unsigned short ignore = I2C_CLIENT_END;
-                                                                                
+
 static struct i2c_client_address_data addr_data = {
 	.normal_i2c		= normal_i2c,
 	.probe			= &ignore,
@@ -528,22 +524,18 @@ bt819_detect_client (struct i2c_adapter *adapter,
 	if (!i2c_check_functionality(adapter, I2C_FUNC_SMBUS_BYTE_DATA))
 		return 0;
 
-	client = kmalloc(sizeof(struct i2c_client), GFP_KERNEL);
+	client = kzalloc(sizeof(struct i2c_client), GFP_KERNEL);
 	if (client == 0)
 		return -ENOMEM;
-	memset(client, 0, sizeof(struct i2c_client));
 	client->addr = address;
 	client->adapter = adapter;
 	client->driver = &i2c_driver_bt819;
-	client->flags = I2C_CLIENT_ALLOW_USE;
 
-	decoder = kmalloc(sizeof(struct bt819), GFP_KERNEL);
+	decoder = kzalloc(sizeof(struct bt819), GFP_KERNEL);
 	if (decoder == NULL) {
 		kfree(client);
 		return -ENOMEM;
 	}
-
-	memset(decoder, 0, sizeof(struct bt819));
 	decoder->norm = VIDEO_MODE_NTSC;
 	decoder->input = 0;
 	decoder->enable = 1;
@@ -623,11 +615,11 @@ bt819_detach_client (struct i2c_client *client)
 /* ----------------------------------------------------------------------- */
 
 static struct i2c_driver i2c_driver_bt819 = {
-	.owner = THIS_MODULE,
-	.name = "bt819",
+	.driver = {
+		.name = "bt819",
+	},
 
 	.id = I2C_DRIVERID_BT819,
-	.flags = I2C_DF_NOTIFY,
 
 	.attach_adapter = bt819_attach_adapter,
 	.detach_client = bt819_detach_client,

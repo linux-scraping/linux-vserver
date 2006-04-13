@@ -608,15 +608,15 @@ struct fb_ops {
 	int (*fb_sync)(struct fb_info *info);
 
 	/* perform fb specific ioctl (optional) */
-	int (*fb_ioctl)(struct inode *inode, struct file *file, unsigned int cmd,
-			unsigned long arg, struct fb_info *info);
+	int (*fb_ioctl)(struct fb_info *info, unsigned int cmd,
+			unsigned long arg);
 
 	/* Handle 32bit compat ioctl (optional) */
-	long (*fb_compat_ioctl)(struct file *f, unsigned cmd, unsigned long arg,
-			       struct fb_info *info);
+	int (*fb_compat_ioctl)(struct fb_info *info, unsigned cmd,
+			unsigned long arg);
 
 	/* perform fb specific mmap */
-	int (*fb_mmap)(struct fb_info *info, struct file *file, struct vm_area_struct *vma);
+	int (*fb_mmap)(struct fb_info *info, struct vm_area_struct *vma);
 
 	/* save current hardware state */
 	void (*fb_save_state)(struct fb_info *info);
@@ -734,7 +734,7 @@ struct fb_tile_ops {
 
 /* A driver may set this flag to indicate that it does want a set_par to be
  * called every time when fbcon_switch is executed. The advantage is that with
- * this flag set you can really be shure that set_par is always called before
+ * this flag set you can really be sure that set_par is always called before
  * any of the functions dependant on the correct hardware state or altering
  * that state, even if you are using some broken X releases. The disadvantage
  * is that it introduces unwanted delays to every console switch if set_par
@@ -839,12 +839,10 @@ struct fb_info {
 #define FB_LEFT_POS(bpp)          (32 - bpp)
 #define FB_SHIFT_HIGH(val, bits)  ((val) >> (bits))
 #define FB_SHIFT_LOW(val, bits)   ((val) << (bits))
-#define FB_BIT_NR(b)              (7 - (b))
 #else
 #define FB_LEFT_POS(bpp)          (0)
 #define FB_SHIFT_HIGH(val, bits)  ((val) << (bits))
 #define FB_SHIFT_LOW(val, bits)   ((val) >> (bits))
-#define FB_BIT_NR(b)              (b)
 #endif
 
     /*

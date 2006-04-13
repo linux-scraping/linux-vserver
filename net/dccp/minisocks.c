@@ -22,6 +22,7 @@
 #include "ackvec.h"
 #include "ccid.h"
 #include "dccp.h"
+#include "feat.h"
 
 struct inet_timewait_death_row dccp_death_row = {
 	.sysctl_max_tw_buckets = NR_FILE * 2,
@@ -40,6 +41,8 @@ struct inet_timewait_death_row dccp_death_row = {
 					    (unsigned long)&dccp_death_row),
 };
 
+EXPORT_SYMBOL_GPL(dccp_death_row);
+
 void dccp_time_wait(struct sock *sk, int state, int timeo)
 {
 	struct inet_timewait_sock *tw = NULL;
@@ -50,7 +53,18 @@ void dccp_time_wait(struct sock *sk, int state, int timeo)
 	if (tw != NULL) {
 		const struct inet_connection_sock *icsk = inet_csk(sk);
 		const int rto = (icsk->icsk_rto << 2) - (icsk->icsk_rto >> 1);
+#if defined(CONFIG_IPV6) || defined(CONFIG_IPV6_MODULE)
+		if (tw->tw_family == PF_INET6) {
+			const struct ipv6_pinfo *np = inet6_sk(sk);
+			struct inet6_timewait_sock *tw6;
 
+			tw->tw_ipv6_offset = inet6_tw_offset(sk->sk_prot);
+			tw6 = inet6_twsk((struct sock *)tw);
+			ipv6_addr_copy(&tw6->tw_v6_daddr, &np->daddr);
+			ipv6_addr_copy(&tw6->tw_v6_rcv_saddr, &np->rcv_saddr);
+			tw->tw_ipv6only = np->ipv6only;
+		}
+#endif
 		/* Linkage updates. */
 		__inet_twsk_hashdance(tw, sk, &dccp_hashinfo);
 
@@ -93,6 +107,7 @@ struct sock *dccp_create_openreq_child(struct sock *sk,
 		const struct dccp_request_sock *dreq = dccp_rsk(req);
 		struct inet_connection_sock *newicsk = inet_csk(sk);
 		struct dccp_sock *newdp = dccp_sk(newsk);
+		struct dccp_minisock *newdmsk = dccp_msk(newsk);
 
 		newdp->dccps_role	   = DCCP_ROLE_SERVER;
 		newdp->dccps_hc_rx_ackvec  = NULL;
@@ -101,27 +116,27 @@ struct sock *dccp_create_openreq_child(struct sock *sk,
 		newicsk->icsk_rto	   = DCCP_TIMEOUT_INIT;
 		do_gettimeofday(&newdp->dccps_epoch);
 
-		if (newdp->dccps_options.dccpo_send_ack_vector) {
+		if (dccp_feat_clone(sk, newsk))
+			goto out_free;
+
+		if (newdmsk->dccpms_send_ack_vector) {
 			newdp->dccps_hc_rx_ackvec =
-				dccp_ackvec_alloc(DCCP_MAX_ACKVEC_LEN,
-						  GFP_ATOMIC);
-			/*
-			 * XXX: We're using the same CCIDs set on the parent,
-			 * i.e. sk_clone copied the master sock and left the
-			 * CCID pointers for this child, that is why we do the
-			 * __ccid_get calls.
-			 */
+						dccp_ackvec_alloc(GFP_ATOMIC);
 			if (unlikely(newdp->dccps_hc_rx_ackvec == NULL))
 				goto out_free;
 		}
 
-		if (unlikely(ccid_hc_rx_init(newdp->dccps_hc_rx_ccid,
-					     newsk) != 0 ||
-			     ccid_hc_tx_init(newdp->dccps_hc_tx_ccid,
-				     	     newsk) != 0)) {
+		newdp->dccps_hc_rx_ccid =
+			    ccid_hc_rx_new(newdmsk->dccpms_rx_ccid,
+					   newsk, GFP_ATOMIC);
+		newdp->dccps_hc_tx_ccid =
+			    ccid_hc_tx_new(newdmsk->dccpms_tx_ccid,
+					   newsk, GFP_ATOMIC);
+		if (unlikely(newdp->dccps_hc_rx_ccid == NULL ||
+			     newdp->dccps_hc_tx_ccid == NULL)) {
 			dccp_ackvec_free(newdp->dccps_hc_rx_ackvec);
-			ccid_hc_rx_exit(newdp->dccps_hc_rx_ccid, newsk);
-			ccid_hc_tx_exit(newdp->dccps_hc_tx_ccid, newsk);
+			ccid_hc_rx_delete(newdp->dccps_hc_rx_ccid, newsk);
+			ccid_hc_tx_delete(newdp->dccps_hc_tx_ccid, newsk);
 out_free:
 			/* It is still raw copy of parent, so invalidate
 			 * destructor and make plain sk_free() */
@@ -129,9 +144,6 @@ out_free:
 			sk_free(newsk);
 			return NULL;
 		}
-
-		__ccid_get(newdp->dccps_hc_rx_ccid);
-		__ccid_get(newdp->dccps_hc_tx_ccid);
 
 		/*
 		 * Step 3: Process LISTEN state
@@ -142,7 +154,7 @@ out_free:
 		 */
 
 		/* See dccp_v4_conn_request */
-		newdp->dccps_options.dccpo_sequence_window = req->rcv_wnd;
+		newdmsk->dccpms_sequence_window = req->rcv_wnd;
 
 		newdp->dccps_gar = newdp->dccps_isr = dreq->dreq_isr;
 		dccp_update_gsr(newsk, dreq->dreq_isr);
@@ -169,6 +181,8 @@ out_free:
 	}
 	return newsk;
 }
+
+EXPORT_SYMBOL_GPL(dccp_create_openreq_child);
 
 /* 
  * Process an incoming packet for RESPOND sockets represented
@@ -214,7 +228,7 @@ struct sock *dccp_check_req(struct sock *sk, struct sk_buff *skb,
 		goto drop;
 	}
 
-	child = dccp_v4_request_recv_sock(sk, skb, req, NULL);
+	child = inet_csk(sk)->icsk_af_ops->syn_recv_sock(sk, skb, req, NULL);
 	if (child == NULL)
 		goto listen_overflow;
 
@@ -235,6 +249,8 @@ drop:
 	inet_csk_reqsk_queue_drop(sk, req, prev);
 	goto out;
 }
+
+EXPORT_SYMBOL_GPL(dccp_check_req);
 
 /*
  *  Queue segment on the new socket if the new socket is active,
@@ -266,3 +282,5 @@ int dccp_child_process(struct sock *parent, struct sock *child,
 	sock_put(child);
 	return ret;
 }
+
+EXPORT_SYMBOL_GPL(dccp_child_process);

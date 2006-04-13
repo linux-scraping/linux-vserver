@@ -7,9 +7,8 @@
  *  Copyright (C) 2002 by Ron Minnich <rminnich@lanl.gov>
  *
  *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License as published by
- *  the Free Software Foundation; either version 2 of the License, or
- *  (at your option) any later version.
+ *  it under the terms of the GNU General Public License version 2
+ *  as published by the Free Software Foundation.
  *
  *  This program is distributed in the hope that it will be useful,
  *  but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -37,8 +36,8 @@
 #include "debug.h"
 #include "v9fs.h"
 #include "9p.h"
-#include "v9fs_vfs.h"
 #include "conv.h"
+#include "v9fs_vfs.h"
 #include "fid.h"
 
 /**
@@ -74,19 +73,15 @@ static int v9fs_dir_readdir(struct file *filp, void *dirent, filldir_t filldir)
 	struct inode *inode = filp->f_dentry->d_inode;
 	struct v9fs_session_info *v9ses = v9fs_inode2v9ses(inode);
 	struct v9fs_fid *file = filp->private_data;
-	unsigned int i, n;
+	unsigned int i, n, s;
 	int fid = -1;
 	int ret = 0;
-	struct v9fs_stat *mi = NULL;
+	struct v9fs_stat stat;
 	int over = 0;
 
 	dprintk(DEBUG_VFS, "name %s\n", filp->f_dentry->d_name.name);
 
 	fid = file->fid;
-
-	mi = kmalloc(v9ses->maxdata, GFP_KERNEL);
-	if (!mi)
-		return -ENOMEM;
 
 	if (file->rdir_fcall && (filp->f_pos != file->rdir_pos)) {
 		kfree(file->rdir_fcall);
@@ -97,20 +92,20 @@ static int v9fs_dir_readdir(struct file *filp, void *dirent, filldir_t filldir)
 		n = file->rdir_fcall->params.rread.count;
 		i = file->rdir_fpos;
 		while (i < n) {
-			int s = v9fs_deserialize_stat(v9ses,
-				  file->rdir_fcall->params.rread.data + i,
-			          n - i, mi, v9ses->maxdata);
+			s = v9fs_deserialize_stat(
+				file->rdir_fcall->params.rread.data + i,
+				n - i, &stat, v9ses->extended);
 
 			if (s == 0) {
 				dprintk(DEBUG_ERROR,
-					"error while deserializing mistat\n");
+					"error while deserializing stat\n");
 				ret = -EIO;
 				goto FreeStructs;
 			}
 
-			over = filldir(dirent, mi->name, strlen(mi->name),
-				    filp->f_pos, v9fs_qid2ino(&mi->qid),
-				    dt_type(mi));
+			over = filldir(dirent, stat.name.str, stat.name.len,
+				    filp->f_pos, v9fs_qid2ino(&stat.qid),
+				    dt_type(&stat));
 
 			if (over) {
 				file->rdir_fpos = i;
@@ -130,7 +125,7 @@ static int v9fs_dir_readdir(struct file *filp, void *dirent, filldir_t filldir)
 
 	while (!over) {
 		ret = v9fs_t_read(v9ses, fid, filp->f_pos,
-					    v9ses->maxdata-V9FS_IOHDRSZ, &fcall);
+			v9ses->maxdata-V9FS_IOHDRSZ, &fcall);
 		if (ret < 0) {
 			dprintk(DEBUG_ERROR, "error while reading: %d: %p\n",
 				ret, fcall);
@@ -141,19 +136,18 @@ static int v9fs_dir_readdir(struct file *filp, void *dirent, filldir_t filldir)
 		n = ret;
 		i = 0;
 		while (i < n) {
-			int s = v9fs_deserialize_stat(v9ses,
-			          fcall->params.rread.data + i, n - i, mi,
-			          v9ses->maxdata);
+			s = v9fs_deserialize_stat(fcall->params.rread.data + i,
+				n - i, &stat, v9ses->extended);
 
 			if (s == 0) {
 				dprintk(DEBUG_ERROR,
-					"error while deserializing mistat\n");
+					"error while deserializing stat\n");
 				return -EIO;
 			}
 
-			over = filldir(dirent, mi->name, strlen(mi->name),
-				    filp->f_pos, v9fs_qid2ino(&mi->qid),
-				    dt_type(mi));
+			over = filldir(dirent, stat.name.str, stat.name.len,
+				    filp->f_pos, v9fs_qid2ino(&stat.qid),
+				    dt_type(&stat));
 
 			if (over) {
 				file->rdir_fcall = fcall;
@@ -172,7 +166,6 @@ static int v9fs_dir_readdir(struct file *filp, void *dirent, filldir_t filldir)
 
       FreeStructs:
 	kfree(fcall);
-	kfree(mi);
 	return ret;
 }
 
@@ -193,17 +186,14 @@ int v9fs_dir_release(struct inode *inode, struct file *filp)
 		fid->fid);
 	fidnum = fid->fid;
 
-	filemap_fdatawrite(inode->i_mapping);
-	filemap_fdatawait(inode->i_mapping);
+	filemap_write_and_wait(inode->i_mapping);
 
 	if (fidnum >= 0) {
 		dprintk(DEBUG_VFS, "fidopen: %d v9f->fid: %d\n", fid->fidopen,
 			fid->fid);
 
-		if (v9fs_t_clunk(v9ses, fidnum, NULL))
+		if (v9fs_t_clunk(v9ses, fidnum))
 			dprintk(DEBUG_ERROR, "clunk failed\n");
-
-		v9fs_put_idpool(fid->fid, &v9ses->fidpool);
 
 		kfree(fid->rdir_fcall);
 		kfree(fid);
@@ -211,11 +201,10 @@ int v9fs_dir_release(struct inode *inode, struct file *filp)
 		filp->private_data = NULL;
 	}
 
-	d_drop(filp->f_dentry);
 	return 0;
 }
 
-struct file_operations v9fs_dir_operations = {
+const struct file_operations v9fs_dir_operations = {
 	.read = generic_read_dir,
 	.readdir = v9fs_dir_readdir,
 	.open = v9fs_file_open,

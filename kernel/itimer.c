@@ -12,36 +12,48 @@
 #include <linux/syscalls.h>
 #include <linux/time.h>
 #include <linux/posix-timers.h>
+#include <linux/hrtimer.h>
 
 #include <asm/uaccess.h>
 
-static unsigned long it_real_value(struct signal_struct *sig)
+/**
+ * itimer_get_remtime - get remaining time for the timer
+ *
+ * @timer: the timer to read
+ *
+ * Returns the delta between the expiry time and now, which can be
+ * less than zero or 1usec for an pending expired timer
+ */
+static struct timeval itimer_get_remtime(struct hrtimer *timer)
 {
-	unsigned long val = 0;
-	if (timer_pending(&sig->real_timer)) {
-		val = sig->real_timer.expires - jiffies;
+	ktime_t rem = hrtimer_get_remaining(timer);
 
-		/* look out for negative/zero itimer.. */
-		if ((long) val <= 0)
-			val = 1;
-	}
-	return val;
+	/*
+	 * Racy but safe: if the itimer expires after the above
+	 * hrtimer_get_remtime() call but before this condition
+	 * then we return 0 - which is correct.
+	 */
+	if (hrtimer_active(timer)) {
+		if (rem.tv64 <= 0)
+			rem.tv64 = NSEC_PER_USEC;
+	} else
+		rem.tv64 = 0;
+
+	return ktime_to_timeval(rem);
 }
 
 int do_getitimer(int which, struct itimerval *value)
 {
 	struct task_struct *tsk = current;
-	unsigned long interval, val;
 	cputime_t cinterval, cval;
 
 	switch (which) {
 	case ITIMER_REAL:
 		spin_lock_irq(&tsk->sighand->siglock);
-		interval = tsk->signal->it_real_incr;
-		val = it_real_value(tsk->signal);
+		value->it_value = itimer_get_remtime(&tsk->signal->real_timer);
+		value->it_interval =
+			ktime_to_timeval(tsk->signal->it_real_incr);
 		spin_unlock_irq(&tsk->sighand->siglock);
-		jiffies_to_timeval(val, &value->it_value);
-		jiffies_to_timeval(interval, &value->it_interval);
 		break;
 	case ITIMER_VIRTUAL:
 		read_lock(&tasklist_lock);
@@ -113,59 +125,118 @@ asmlinkage long sys_getitimer(int which, struct itimerval __user *value)
 }
 
 
-void it_real_fn(unsigned long __data)
+/*
+ * The timer is automagically restarted, when interval != 0
+ */
+int it_real_fn(struct hrtimer *timer)
 {
-	struct task_struct * p = (struct task_struct *) __data;
-	unsigned long inc = p->signal->it_real_incr;
+	struct signal_struct *sig =
+	    container_of(timer, struct signal_struct, real_timer);
 
-	send_group_sig_info(SIGALRM, SEND_SIG_PRIV, p);
+	send_group_sig_info(SIGALRM, SEND_SIG_PRIV, sig->tsk);
 
-	/*
-	 * Now restart the timer if necessary.  We don't need any locking
-	 * here because do_setitimer makes sure we have finished running
-	 * before it touches anything.
-	 * Note, we KNOW we are (or should be) at a jiffie edge here so
-	 * we don't need the +1 stuff.  Also, we want to use the prior
-	 * expire value so as to not "slip" a jiffie if we are late.
-	 * Deal with requesting a time prior to "now" here rather than
-	 * in add_timer.
-	 */
-	if (!inc)
-		return;
-	while (time_before_eq(p->signal->real_timer.expires, jiffies))
-		p->signal->real_timer.expires += inc;
-	add_timer(&p->signal->real_timer);
+	if (sig->it_real_incr.tv64 != 0) {
+		hrtimer_forward(timer, timer->base->softirq_time,
+				sig->it_real_incr);
+		return HRTIMER_RESTART;
+	}
+	return HRTIMER_NORESTART;
+}
+
+/*
+ * We do not care about correctness. We just sanitize the values so
+ * the ktime_t operations which expect normalized values do not
+ * break. This converts negative values to long timeouts similar to
+ * the code in kernel versions < 2.6.16
+ *
+ * Print a limited number of warning messages when an invalid timeval
+ * is detected.
+ */
+static void fixup_timeval(struct timeval *tv, int interval)
+{
+	static int warnlimit = 10;
+	unsigned long tmp;
+
+	if (warnlimit > 0) {
+		warnlimit--;
+		printk(KERN_WARNING
+		       "setitimer: %s (pid = %d) provided "
+		       "invalid timeval %s: tv_sec = %ld tv_usec = %ld\n",
+		       current->comm, current->pid,
+		       interval ? "it_interval" : "it_value",
+		       tv->tv_sec, (long) tv->tv_usec);
+	}
+
+	tmp = tv->tv_usec;
+	if (tmp >= USEC_PER_SEC) {
+		tv->tv_usec = tmp % USEC_PER_SEC;
+		tv->tv_sec += tmp / USEC_PER_SEC;
+	}
+
+	tmp = tv->tv_sec;
+	if (tmp > LONG_MAX)
+		tv->tv_sec = LONG_MAX;
+}
+
+/*
+ * Returns true if the timeval is in canonical form
+ */
+#define timeval_valid(t) \
+	(((t)->tv_sec >= 0) && (((unsigned long) (t)->tv_usec) < USEC_PER_SEC))
+
+/*
+ * Check for invalid timevals, sanitize them and print a limited
+ * number of warnings.
+ */
+static void check_itimerval(struct itimerval *value) {
+
+	if (unlikely(!timeval_valid(&value->it_value)))
+		fixup_timeval(&value->it_value, 0);
+
+	if (unlikely(!timeval_valid(&value->it_interval)))
+		fixup_timeval(&value->it_interval, 1);
 }
 
 int do_setitimer(int which, struct itimerval *value, struct itimerval *ovalue)
 {
 	struct task_struct *tsk = current;
- 	unsigned long val, interval, expires;
+	struct hrtimer *timer;
+	ktime_t expires;
 	cputime_t cval, cinterval, nval, ninterval;
+
+	/*
+	 * Validate the timevals in value.
+	 *
+	 * Note: Although the spec requires that invalid values shall
+	 * return -EINVAL, we just fixup the value and print a limited
+	 * number of warnings in order not to break users of this
+	 * historical misfeature.
+	 *
+	 * Scheduled for replacement in March 2007
+	 */
+	check_itimerval(value);
 
 	switch (which) {
 	case ITIMER_REAL:
 again:
 		spin_lock_irq(&tsk->sighand->siglock);
-		interval = tsk->signal->it_real_incr;
-		val = it_real_value(tsk->signal);
+		timer = &tsk->signal->real_timer;
+		if (ovalue) {
+			ovalue->it_value = itimer_get_remtime(timer);
+			ovalue->it_interval
+				= ktime_to_timeval(tsk->signal->it_real_incr);
+		}
 		/* We are sharing ->siglock with it_real_fn() */
-		if (try_to_del_timer_sync(&tsk->signal->real_timer) < 0) {
+		if (hrtimer_try_to_cancel(timer) < 0) {
 			spin_unlock_irq(&tsk->sighand->siglock);
 			goto again;
 		}
 		tsk->signal->it_real_incr =
-			timeval_to_jiffies(&value->it_interval);
-		expires = timeval_to_jiffies(&value->it_value);
-		if (expires)
-			mod_timer(&tsk->signal->real_timer,
-				  jiffies + 1 + expires);
+			timeval_to_ktime(value->it_interval);
+		expires = timeval_to_ktime(value->it_value);
+		if (expires.tv64 != 0)
+			hrtimer_start(timer, expires, HRTIMER_REL);
 		spin_unlock_irq(&tsk->sighand->siglock);
-		if (ovalue) {
-			jiffies_to_timeval(val, &ovalue->it_value);
-			jiffies_to_timeval(interval,
-					   &ovalue->it_interval);
-		}
 		break;
 	case ITIMER_VIRTUAL:
 		nval = timeval_to_cputime(&value->it_value);
@@ -219,6 +290,43 @@ again:
 		return -EINVAL;
 	}
 	return 0;
+}
+
+/**
+ * alarm_setitimer - set alarm in seconds
+ *
+ * @seconds:	number of seconds until alarm
+ *		0 disables the alarm
+ *
+ * Returns the remaining time in seconds of a pending timer or 0 when
+ * the timer is not active.
+ *
+ * On 32 bit machines the seconds value is limited to (INT_MAX/2) to avoid
+ * negative timeval settings which would cause immediate expiry.
+ */
+unsigned int alarm_setitimer(unsigned int seconds)
+{
+	struct itimerval it_new, it_old;
+
+#if BITS_PER_LONG < 64
+	if (seconds > INT_MAX)
+		seconds = INT_MAX;
+#endif
+	it_new.it_value.tv_sec = seconds;
+	it_new.it_value.tv_usec = 0;
+	it_new.it_interval.tv_sec = it_new.it_interval.tv_usec = 0;
+
+	do_setitimer(ITIMER_REAL, &it_new, &it_old);
+
+	/*
+	 * We can't return 0 if we have an alarm pending ...  And we'd
+	 * better return too much than too little anyway
+	 */
+	if ((!it_old.it_value.tv_sec && it_old.it_value.tv_usec) ||
+	      it_old.it_value.tv_usec >= 500000)
+		it_old.it_value.tv_sec++;
+
+	return it_old.it_value.tv_sec;
 }
 
 asmlinkage long sys_setitimer(int which,

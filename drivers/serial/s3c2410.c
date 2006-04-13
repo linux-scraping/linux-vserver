@@ -72,12 +72,12 @@
 #include <linux/serial_core.h>
 #include <linux/serial.h>
 #include <linux/delay.h>
+#include <linux/clk.h>
 
 #include <asm/io.h>
 #include <asm/irq.h>
 
 #include <asm/hardware.h>
-#include <asm/hardware/clock.h>
 
 #include <asm/arch/regs-serial.h>
 #include <asm/arch/regs-gpio.h>
@@ -161,7 +161,11 @@ s3c24xx_serial_dbg(const char *fmt, ...)
 
 /* we can support 3 uarts, but not always use them */
 
+#ifdef CONFIG_CPU_S3C2400
+#define NR_PORTS (2)
+#else
 #define NR_PORTS (3)
+#endif
 
 /* port irq numbers */
 
@@ -322,16 +326,6 @@ s3c24xx_serial_rx_chars(int irq, void *dev_id, struct pt_regs *regs)
 
 		if (s3c24xx_serial_rx_fifocnt(ourport, ufstat) == 0)
 			break;
-
-		if (tty->flip.count >= TTY_FLIPBUF_SIZE) {
-			if (tty->low_latency)
-				tty_flip_buffer_push(tty);
-
-			/*
-			 * If this failed then we will throw away the
-			 * bytes but must do so to clear interrupts
-			 */
-		}
 
 		uerstat = rd_regl(port, S3C2410_UERSTAT);
 		ch = rd_regb(port, S3C2410_URXH);
@@ -782,11 +776,9 @@ static void s3c24xx_serial_set_termios(struct uart_port *port,
 
 		if (ourport->baudclk != NULL && !IS_ERR(ourport->baudclk)) {
 			clk_disable(ourport->baudclk);
-			clk_unuse(ourport->baudclk);
 			ourport->baudclk  = NULL;
 		}
 
-		clk_use(clk);
 		clk_enable(clk);
 
 		ourport->clksrc = clksrc;
@@ -1072,13 +1064,12 @@ static int s3c24xx_serial_init_port(struct s3c24xx_uart_port *ourport,
 	dbg("resource %p (%lx..%lx)\n", res, res->start, res->end);
 
 	port->mapbase	= res->start;
-	port->membase	= S3C24XX_VA_UART + (res->start - S3C2410_PA_UART);
+	port->membase	= S3C24XX_VA_UART + (res->start - S3C24XX_PA_UART);
 	port->irq	= platform_get_irq(platdev, 0);
+	if (port->irq < 0)
+		port->irq = 0;
 
 	ourport->clk	= clk_get(&platdev->dev, "uart");
-
-	if (ourport->clk != NULL && !IS_ERR(ourport->clk))
-		clk_use(ourport->clk);
 
 	dbg("port: map=%08x, mem=%08x, irq=%d, clock=%ld\n",
 	    port->mapbase, port->membase, port->irq, port->uartclk);
@@ -1595,25 +1586,19 @@ s3c24xx_serial_console_txrdy(struct uart_port *port, unsigned int ufcon)
 }
 
 static void
+s3c24xx_serial_console_putchar(struct uart_port *port, int ch)
+{
+	unsigned int ufcon = rd_regl(cons_uart, S3C2410_UFCON);
+	while (!s3c24xx_serial_console_txrdy(port, ufcon))
+		barrier();
+	wr_regb(cons_uart, S3C2410_UTXH, ch);
+}
+
+static void
 s3c24xx_serial_console_write(struct console *co, const char *s,
 			     unsigned int count)
 {
-	int i;
-	unsigned int ufcon = rd_regl(cons_uart, S3C2410_UFCON);
-
-	for (i = 0; i < count; i++) {
-		while (!s3c24xx_serial_console_txrdy(cons_uart, ufcon))
-			barrier();
-
-		wr_regb(cons_uart, S3C2410_UTXH, s[i]);
-
-		if (s[i] == '\n') {
-			while (!s3c24xx_serial_console_txrdy(cons_uart, ufcon))
-				barrier();
-
-			wr_regb(cons_uart, S3C2410_UTXH, '\r');
-		}
-	}
+	uart_console_write(cons_uart, s, count, s3c24xx_serial_console_putchar);
 }
 
 static void __init

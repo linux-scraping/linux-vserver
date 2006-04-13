@@ -7,9 +7,8 @@
  *  Copyright (C) 2002 by Ron Minnich <rminnich@lanl.gov>
  *
  *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License as published by
- *  the Free Software Foundation; either version 2 of the License, or
- *  (at your option) any later version.
+ *  it under the terms of the GNU General Public License version 2
+ *  as published by the Free Software Foundation.
  *
  *  This program is distributed in the hope that it will be useful,
  *  but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -37,7 +36,6 @@
 #include "v9fs_vfs.h"
 #include "transport.h"
 #include "mux.h"
-#include "conv.h"
 
 /* TODO: sysfs or debugfs interface */
 int v9fs_debug_level = 0;	/* feature-rific global debug level  */
@@ -52,7 +50,7 @@ enum {
 	Opt_port, Opt_msize, Opt_uid, Opt_gid, Opt_afid, Opt_debug,
 	Opt_rfdno, Opt_wfdno,
 	/* String options */
-	Opt_name, Opt_remotename,
+	Opt_uname, Opt_remotename,
 	/* Options that take no arguments */
 	Opt_legacy, Opt_nodevmap, Opt_unix, Opt_tcp, Opt_fd,
 	/* Error token */
@@ -67,8 +65,8 @@ static match_table_t tokens = {
 	{Opt_afid, "afid=%u"},
 	{Opt_rfdno, "rfdno=%u"},
 	{Opt_wfdno, "wfdno=%u"},
-	{Opt_debug, "debug=%u"},
-	{Opt_name, "name=%s"},
+	{Opt_debug, "debug=%x"},
+	{Opt_uname, "uname=%s"},
 	{Opt_remotename, "aname=%s"},
 	{Opt_unix, "proto=unix"},
 	{Opt_tcp, "proto=tcp"},
@@ -117,7 +115,7 @@ static void v9fs_parse_options(char *options, struct v9fs_session_info *v9ses)
 		if (!*p)
 			continue;
 		token = match_token(p, tokens, args);
-		if (token < Opt_name) {
+		if (token < Opt_uname) {
 			if ((ret = match_int(&args[0], &option)) < 0) {
 				dprintk(DEBUG_ERROR,
 					"integer field, but no integer?\n");
@@ -159,7 +157,7 @@ static void v9fs_parse_options(char *options, struct v9fs_session_info *v9ses)
 		case Opt_fd:
 			v9ses->proto = PROTO_FD;
 			break;
-		case Opt_name:
+		case Opt_uname:
 			match_strcpy(v9ses->name, &args[0]);
 			break;
 		case Opt_remotename:
@@ -213,7 +211,8 @@ retry:
 		return -1;
 	}
 
-	error = idr_get_new(&p->pool, NULL, &i);
+	/* no need to store exactly p, we just need something non-null */
+	error = idr_get_new(&p->pool, p, &i);
 	up(&p->lock);
 
 	if (error == -EAGAIN)
@@ -243,6 +242,16 @@ void v9fs_put_idpool(int id, struct v9fs_idpool *p)
 }
 
 /**
+ * v9fs_check_idpool - check if the specified id is available
+ * @id - id to check
+ * @p - pool
+ */
+int v9fs_check_idpool(int id, struct v9fs_idpool *p)
+{
+	return idr_find(&p->pool, id) != NULL;
+}
+
+/**
  * v9fs_session_init - initialize session
  * @v9ses: session information structure
  * @dev_name: device being mounted
@@ -259,6 +268,7 @@ v9fs_session_init(struct v9fs_session_info *v9ses,
 	int n = 0;
 	int newfid = -1;
 	int retval = -EINVAL;
+	struct v9fs_str *version;
 
 	v9ses->name = __getname();
 	if (!v9ses->name)
@@ -278,12 +288,9 @@ v9fs_session_init(struct v9fs_session_info *v9ses,
 	/* set global debug level */
 	v9fs_debug_level = v9ses->debug;
 
-	/* id pools that are session-dependent: FIDs and TIDs */
+	/* id pools that are session-dependent: fids and tags */
 	idr_init(&v9ses->fidpool.pool);
 	init_MUTEX(&v9ses->fidpool.lock);
-	idr_init(&v9ses->tidpool.pool);
-	init_MUTEX(&v9ses->tidpool.lock);
-
 
 	switch (v9ses->proto) {
 	case PROTO_TCP:
@@ -320,7 +327,12 @@ v9fs_session_init(struct v9fs_session_info *v9ses,
 	v9ses->shutdown = 0;
 	v9ses->session_hung = 0;
 
-	if ((retval = v9fs_mux_init(v9ses, dev_name)) < 0) {
+	v9ses->mux = v9fs_mux_init(v9ses->transport, v9ses->maxdata + V9FS_IOHDRSZ,
+		&v9ses->extended);
+
+	if (IS_ERR(v9ses->mux)) {
+		retval = PTR_ERR(v9ses->mux);
+		v9ses->mux = NULL;
 		dprintk(DEBUG_ERROR, "problem initializing mux\n");
 		goto SessCleanUp;
 	}
@@ -339,13 +351,16 @@ v9fs_session_init(struct v9fs_session_info *v9ses,
 			goto FreeFcall;
 		}
 
-		/* Really should check for 9P1 and report error */
-		if (!strcmp(fcall->params.rversion.version, "9P2000.u")) {
+		version = &fcall->params.rversion.version;
+		if (version->len==8 && !memcmp(version->str, "9P2000.u", 8)) {
 			dprintk(DEBUG_9P, "9P2000 UNIX extensions enabled\n");
 			v9ses->extended = 1;
-		} else {
+		} else if (version->len==6 && !memcmp(version->str, "9P2000", 6)) {
 			dprintk(DEBUG_9P, "9P2000 legacy mode enabled\n");
 			v9ses->extended = 0;
+		} else {
+			retval = -EREMOTEIO;
+			goto FreeFcall;
 		}
 
 		n = fcall->params.rversion.msize;
@@ -381,7 +396,8 @@ v9fs_session_init(struct v9fs_session_info *v9ses,
 	}
 
 	if (v9ses->afid != ~0) {
-		if (v9fs_t_clunk(v9ses, v9ses->afid, NULL))
+		dprintk(DEBUG_ERROR, "afid not equal to ~0\n");
+		if (v9fs_t_clunk(v9ses, v9ses->afid))
 			dprintk(DEBUG_ERROR, "clunk failed\n");
 	}
 
@@ -403,13 +419,16 @@ v9fs_session_init(struct v9fs_session_info *v9ses,
 
 void v9fs_session_close(struct v9fs_session_info *v9ses)
 {
-	if (v9ses->recvproc) {
-		send_sig(SIGKILL, v9ses->recvproc, 1);
-		wait_for_completion(&v9ses->proccmpl);
+	if (v9ses->mux) {
+		v9fs_mux_destroy(v9ses->mux);
+		v9ses->mux = NULL;
 	}
 
-	if (v9ses->transport)
+	if (v9ses->transport) {
 		v9ses->transport->close(v9ses->transport);
+		kfree(v9ses->transport);
+		v9ses->transport = NULL;
+	}
 
 	__putname(v9ses->name);
 	__putname(v9ses->remotename);
@@ -420,8 +439,9 @@ void v9fs_session_close(struct v9fs_session_info *v9ses)
  * 	and cancel all pending requests.
  */
 void v9fs_session_cancel(struct v9fs_session_info *v9ses) {
+	dprintk(DEBUG_ERROR, "cancel session %p\n", v9ses);
 	v9ses->transport->status = Disconnected;
-	v9fs_mux_cancel_requests(v9ses, -EIO);
+	v9fs_mux_cancel(v9ses->mux, -EIO);
 }
 
 extern int v9fs_error_init(void);
@@ -433,11 +453,17 @@ extern int v9fs_error_init(void);
 
 static int __init init_v9fs(void)
 {
+	int ret;
+
 	v9fs_error_init();
 
 	printk(KERN_INFO "Installing v9fs 9P2000 file system support\n");
 
-	return register_filesystem(&v9fs_fs_type);
+	ret = v9fs_mux_global_init();
+	if (!ret)
+		ret = register_filesystem(&v9fs_fs_type);
+
+	return ret;
 }
 
 /**
@@ -447,6 +473,7 @@ static int __init init_v9fs(void)
 
 static void __exit exit_v9fs(void)
 {
+	v9fs_mux_global_exit();
 	unregister_filesystem(&v9fs_fs_type);
 }
 

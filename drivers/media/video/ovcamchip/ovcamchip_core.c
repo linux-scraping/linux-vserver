@@ -266,17 +266,17 @@ static int ovcamchip_detect(struct i2c_client *c)
 		PDEBUG(3, "Testing for 0V6xx0");
 		c->addr = OV6xx0_SID;
 		if (init_camchip(c) < 0) {
- 			return -ENODEV;
+			return -ENODEV;
 		} else {
 			if (ov6xx0_detect(c) < 0) {
 				PERROR("Failed to init OV6xx0");
- 				return -EIO;
+				return -EIO;
 			}
 		}
 	} else {
 		if (ov7xx0_detect(c) < 0) {
 			PERROR("Failed to init OV7xx0");
- 			return -EIO;
+			return -EIO;
 		}
 	}
 
@@ -316,12 +316,11 @@ static int ovcamchip_attach(struct i2c_adapter *adap)
 	c->adapter = adap;
 	strcpy(c->name, "OV????");
 
-	ov = kmalloc(sizeof *ov, GFP_KERNEL);
+	ov = kzalloc(sizeof *ov, GFP_KERNEL);
 	if (!ov) {
 		rc = -ENOMEM;
 		goto no_ov;
 	}
-	memset(ov, 0, sizeof *ov);
 	i2c_set_clientdata(c, ov);
 
 	rc = ovcamchip_detect(c);
@@ -410,11 +409,11 @@ static int ovcamchip_command(struct i2c_client *c, unsigned int cmd, void *arg)
 /* ----------------------------------------------------------------------- */
 
 static struct i2c_driver driver = {
-	.owner =		THIS_MODULE,
-	.name =			"ovcamchip",
+	.driver = {
+		.name =		"ovcamchip",
+	},
 	.id =			I2C_DRIVERID_OVCAMCHIP,
 	.class =		I2C_CLASS_CAM_DIGITAL,
-	.flags =		I2C_DF_NOTIFY,
 	.attach_adapter =	ovcamchip_attach,
 	.detach_client =	ovcamchip_detach,
 	.command =		ovcamchip_command,

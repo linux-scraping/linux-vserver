@@ -67,14 +67,14 @@ static HLIST_HEAD(aggregate_hash);
  * imap locks
  */
 /* iag free list lock */
-#define IAGFREE_LOCK_INIT(imap)		init_MUTEX(&imap->im_freelock)
-#define IAGFREE_LOCK(imap)		down(&imap->im_freelock)
-#define IAGFREE_UNLOCK(imap)		up(&imap->im_freelock)
+#define IAGFREE_LOCK_INIT(imap)		mutex_init(&imap->im_freelock)
+#define IAGFREE_LOCK(imap)		mutex_lock(&imap->im_freelock)
+#define IAGFREE_UNLOCK(imap)		mutex_unlock(&imap->im_freelock)
 
 /* per ag iag list locks */
-#define AG_LOCK_INIT(imap,index)	init_MUTEX(&(imap->im_aglock[index]))
-#define AG_LOCK(imap,agno)		down(&imap->im_aglock[agno])
-#define AG_UNLOCK(imap,agno)		up(&imap->im_aglock[agno])
+#define AG_LOCK_INIT(imap,index)	mutex_init(&(imap->im_aglock[index]))
+#define AG_LOCK(imap,agno)		mutex_lock(&imap->im_aglock[agno])
+#define AG_UNLOCK(imap,agno)		mutex_unlock(&imap->im_aglock[agno])
 
 /*
  * forward references
@@ -266,8 +266,7 @@ int diSync(struct inode *ipimap)
 	/*
 	 * write out dirty pages of imap
 	 */
-	filemap_fdatawrite(ipimap->i_mapping);
-	filemap_fdatawait(ipimap->i_mapping);
+	filemap_write_and_wait(ipimap->i_mapping);
 
 	diWriteSpecial(ipimap, 0);
 
@@ -566,8 +565,7 @@ void diFreeSpecial(struct inode *ip)
 		jfs_err("diFreeSpecial called with NULL ip!");
 		return;
 	}
-	filemap_fdatawrite(ip->i_mapping);
-	filemap_fdatawait(ip->i_mapping);
+	filemap_write_and_wait(ip->i_mapping);
 	truncate_inode_pages(ip->i_mapping, 0);
 	iput(ip);
 }
@@ -1264,7 +1262,7 @@ int diFree(struct inode *ip)
 	 * to be freed by the transaction;  
 	 */
 	tid = txBegin(ipimap->i_sb, COMMIT_FORCE);
-	down(&JFS_IP(ipimap)->commit_sem);
+	mutex_lock(&JFS_IP(ipimap)->commit_mutex);
 
 	/* acquire tlock of the iag page of the freed ixad 
 	 * to force the page NOHOMEOK (even though no data is
@@ -1297,7 +1295,7 @@ int diFree(struct inode *ip)
 	rc = txCommit(tid, 1, &iplist[0], COMMIT_FORCE);
 
 	txEnd(tid);
-	up(&JFS_IP(ipimap)->commit_sem);
+	mutex_unlock(&JFS_IP(ipimap)->commit_mutex);
 
 	/* unlock the AG inode map information */
 	AG_UNLOCK(imap, agno);
@@ -2557,13 +2555,13 @@ diNewIAG(struct inomap * imap, int *iagnop, int agno, struct metapage ** mpp)
 		 * addressing structure pointing to the new iag page;
 		 */
 		tid = txBegin(sb, COMMIT_FORCE);
-		down(&JFS_IP(ipimap)->commit_sem);
+		mutex_lock(&JFS_IP(ipimap)->commit_mutex);
 
 		/* update the inode map addressing structure to point to it */
 		if ((rc =
 		     xtInsert(tid, ipimap, 0, blkno, xlen, &xaddr, 0))) {
 			txEnd(tid);
-			up(&JFS_IP(ipimap)->commit_sem);
+			mutex_unlock(&JFS_IP(ipimap)->commit_mutex);
 			/* Free the blocks allocated for the iag since it was
 			 * not successfully added to the inode map
 			 */
@@ -2629,7 +2627,7 @@ diNewIAG(struct inomap * imap, int *iagnop, int agno, struct metapage ** mpp)
 		rc = txCommit(tid, 1, &iplist[0], COMMIT_FORCE);
 
 		txEnd(tid);
-		up(&JFS_IP(ipimap)->commit_sem);
+		mutex_unlock(&JFS_IP(ipimap)->commit_mutex);
 
 		duplicateIXtree(sb, blkno, xlen, &xaddr);
 
@@ -2847,11 +2845,11 @@ diUpdatePMap(struct inode *ipimap,
 	 */
 	lsn = tblk->lsn;
 	log = JFS_SBI(tblk->sb)->log;
+	LOGSYNC_LOCK(log, flags);
 	if (mp->lsn != 0) {
 		/* inherit older/smaller lsn */
 		logdiff(difft, lsn, log);
 		logdiff(diffp, mp->lsn, log);
-		LOGSYNC_LOCK(log, flags);
 		if (difft < diffp) {
 			mp->lsn = lsn;
 			/* move mp after tblock in logsync list */
@@ -2863,17 +2861,15 @@ diUpdatePMap(struct inode *ipimap,
 		logdiff(diffp, mp->clsn, log);
 		if (difft > diffp)
 			mp->clsn = tblk->clsn;
-		LOGSYNC_UNLOCK(log, flags);
 	} else {
 		mp->log = log;
 		mp->lsn = lsn;
 		/* insert mp after tblock in logsync list */
-		LOGSYNC_LOCK(log, flags);
 		log->count++;
 		list_add(&mp->synclist, &tblk->synclist);
 		mp->clsn = tblk->clsn;
-		LOGSYNC_UNLOCK(log, flags);
 	}
+	LOGSYNC_UNLOCK(log, flags);
 	write_metapage(mp);
 	return (0);
 }
@@ -3079,6 +3075,7 @@ static void duplicateIXtree(struct super_block *sb, s64 blkno,
 static int copy_from_dinode(struct dinode * dip, struct inode *ip)
 {
 	struct jfs_inode_info *jfs_ip = JFS_IP(ip);
+	struct jfs_sb_info *sbi = JFS_SBI(ip->i_sb);
 	uid_t uid;
 	gid_t gid;
 
@@ -3086,13 +3083,37 @@ static int copy_from_dinode(struct dinode * dip, struct inode *ip)
 	jfs_ip->mode2 = le32_to_cpu(dip->di_mode);
 
 	ip->i_mode = le32_to_cpu(dip->di_mode) & 0xffff;
+	if (sbi->umask != -1) {
+		ip->i_mode = (ip->i_mode & ~0777) | (0777 & ~sbi->umask);
+		/* For directories, add x permission if r is allowed by umask */
+		if (S_ISDIR(ip->i_mode)) {
+			if (ip->i_mode & 0400)
+				ip->i_mode |= 0100;
+			if (ip->i_mode & 0040)
+				ip->i_mode |= 0010;
+			if (ip->i_mode & 0004)
+				ip->i_mode |= 0001;
+		}
+	}
 	ip->i_nlink = le32_to_cpu(dip->di_nlink);
 
 	uid = le32_to_cpu(dip->di_uid);
 	gid = le32_to_cpu(dip->di_gid);
-	ip->i_uid = INOXID_UID(XID_TAG(ip), uid, gid);
-	ip->i_gid = INOXID_GID(XID_TAG(ip), uid, gid);
 	ip->i_xid = INOXID_XID(XID_TAG(ip), uid, gid, 0);
+
+	jfs_ip->saved_uid = INOXID_UID(XID_TAG(ip), uid, gid);
+	if (sbi->uid == -1)
+		ip->i_uid = jfs_ip->saved_uid;
+	else {
+		ip->i_uid = sbi->uid;
+	}
+
+	jfs_ip->saved_gid = INOXID_GID(XID_TAG(ip), uid, gid);
+	if (sbi->gid == -1)
+		ip->i_gid = jfs_ip->saved_gid;
+	else {
+		ip->i_gid = sbi->gid;
+	}
 
 	ip->i_size = le64_to_cpu(dip->di_size);
 	ip->i_atime.tv_sec = le32_to_cpu(dip->di_atime.tv_sec);
@@ -3144,26 +3165,31 @@ static int copy_from_dinode(struct dinode * dip, struct inode *ip)
 static void copy_to_dinode(struct dinode * dip, struct inode *ip)
 {
 	struct jfs_inode_info *jfs_ip = JFS_IP(ip);
-	uid_t uid;
-	gid_t gid;
+	struct jfs_sb_info *sbi = JFS_SBI(ip->i_sb);
 
 	dip->di_fileset = cpu_to_le32(jfs_ip->fileset);
-	dip->di_inostamp = cpu_to_le32(JFS_SBI(ip->i_sb)->inostamp);
+	dip->di_inostamp = cpu_to_le32(sbi->inostamp);
 	dip->di_number = cpu_to_le32(ip->i_ino);
 	dip->di_gen = cpu_to_le32(ip->i_generation);
 	dip->di_size = cpu_to_le64(ip->i_size);
 	dip->di_nblocks = cpu_to_le64(PBLK2LBLK(ip->i_sb, ip->i_blocks));
 	dip->di_nlink = cpu_to_le32(ip->i_nlink);
 
-	uid = XIDINO_UID(XID_TAG(ip), ip->i_uid, ip->i_xid);
-	gid = XIDINO_GID(XID_TAG(ip), ip->i_gid, ip->i_xid);
-	dip->di_uid = cpu_to_le32(uid);
-	dip->di_gid = cpu_to_le32(gid);
+	dip->di_uid = cpu_to_le32(XIDINO_UID(XID_TAG(ip),
+		(sbi->uid == -1) ? ip->i_uid : jfs_ip->saved_uid, ip->i_xid));
+	dip->di_gid = cpu_to_le32(XIDINO_GID(XID_TAG(ip),
+		(sbi->gid == -1) ? ip->i_gid : jfs_ip->saved_gid, ip->i_xid));
+
 	/*
 	 * mode2 is only needed for storing the higher order bits.
 	 * Trust i_mode for the lower order ones
 	 */
-	dip->di_mode = cpu_to_le32((jfs_ip->mode2 & 0xffff0000) | ip->i_mode);
+	if (sbi->umask == -1)
+		dip->di_mode = cpu_to_le32((jfs_ip->mode2 & 0xffff0000) |
+					   ip->i_mode);
+	else /* Leave the original permissions alone */
+		dip->di_mode = cpu_to_le32(jfs_ip->mode2);
+
 	dip->di_atime.tv_sec = cpu_to_le32(ip->i_atime.tv_sec);
 	dip->di_atime.tv_nsec = cpu_to_le32(ip->i_atime.tv_nsec);
 	dip->di_ctime.tv_sec = cpu_to_le32(ip->i_ctime.tv_sec);

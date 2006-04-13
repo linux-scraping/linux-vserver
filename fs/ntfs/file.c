@@ -1,7 +1,7 @@
 /*
  * file.c - NTFS kernel file operations.  Part of the Linux-NTFS project.
  *
- * Copyright (c) 2001-2005 Anton Altaparmakov
+ * Copyright (c) 2001-2006 Anton Altaparmakov
  *
  * This program/include file is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License as published
@@ -106,7 +106,7 @@ static int ntfs_file_open(struct inode *vi, struct file *filp)
  * this is the case, the necessary zeroing will also have happened and that all
  * metadata is self-consistent.
  *
- * Locking: i_sem on the vfs inode corrseponsind to the ntfs inode @ni must be
+ * Locking: i_mutex on the vfs inode corrseponsind to the ntfs inode @ni must be
  *	    held by the caller.
  */
 static int ntfs_attr_extend_initialized(ntfs_inode *ni, const s64 new_init_size,
@@ -248,7 +248,7 @@ do_non_resident_extend:
 		 * enough to make ntfs_writepage() work.
 		 */
 		write_lock_irqsave(&ni->size_lock, flags);
-		ni->initialized_size = (index + 1) << PAGE_CACHE_SHIFT;
+		ni->initialized_size = (s64)(index + 1) << PAGE_CACHE_SHIFT;
 		if (ni->initialized_size > new_init_size)
 			ni->initialized_size = new_init_size;
 		write_unlock_irqrestore(&ni->size_lock, flags);
@@ -473,7 +473,7 @@ static inline int ntfs_submit_bh_for_read(struct buffer_head *bh)
  * @bytes:	number of bytes to be written
  *
  * This is called for non-resident attributes from ntfs_file_buffered_write()
- * with i_sem held on the inode (@pages[0]->mapping->host).  There are
+ * with i_mutex held on the inode (@pages[0]->mapping->host).  There are
  * @nr_pages pages in @pages which are locked but not kmap()ped.  The source
  * data has not yet been copied into the @pages.
  * 
@@ -529,8 +529,8 @@ static int ntfs_prepare_pages_for_non_resident_write(struct page **pages,
 			"index 0x%lx, nr_pages 0x%x, pos 0x%llx, bytes 0x%zx.",
 			vi->i_ino, ni->type, pages[0]->index, nr_pages,
 			(long long)pos, bytes);
-	blocksize_bits = vi->i_blkbits;
-	blocksize = 1 << blocksize_bits;
+	blocksize = vol->sb->s_blocksize;
+	blocksize_bits = vol->sb->s_blocksize_bits;
 	u = 0;
 	do {
 		struct page *page = pages[u];
@@ -943,7 +943,8 @@ rl_not_mapped_enoent:
 		}
 		ni->runlist.rl = rl;
 		status.runlist_merged = 1;
-		ntfs_debug("Allocated cluster, lcn 0x%llx.", lcn);
+		ntfs_debug("Allocated cluster, lcn 0x%llx.",
+				(unsigned long long)lcn);
 		/* Map and lock the mft record and get the attribute record. */
 		if (!NInoAttr(ni))
 			base_ni = ni;
@@ -1206,8 +1207,6 @@ rl_not_mapped_enoent:
 					"attribute runlist in error code "
 					"path.  Run chkdsk to recover the "
 					"lost cluster.");
-			make_bad_inode(vi);
-			make_bad_inode(VFS_I(base_ni));
 			NVolSetErrors(vol);
 		} else /* if (success) */ {
 			status.runlist_merged = 0;
@@ -1238,8 +1237,6 @@ rl_not_mapped_enoent:
 			ntfs_error(vol->sb, "Failed to restore attribute "
 					"record in error code path.  Run "
 					"chkdsk to recover.");
-			make_bad_inode(vi);
-			make_bad_inode(VFS_I(base_ni));
 			NVolSetErrors(vol);
 		} else /* if (success) */ {
 			if (ntfs_mapping_pairs_build(vol, (u8*)a +
@@ -1252,8 +1249,6 @@ rl_not_mapped_enoent:
 						"mapping pairs array in error "
 						"code path.  Run chkdsk to "
 						"recover.");
-				make_bad_inode(vi);
-				make_bad_inode(VFS_I(base_ni));
 				NVolSetErrors(vol);
 			}
 			flush_dcache_mft_record_page(ctx->ntfs_ino);
@@ -1525,7 +1520,7 @@ static inline int ntfs_commit_pages_after_non_resident_write(
 
 	vi = pages[0]->mapping->host;
 	ni = NTFS_I(vi);
-	blocksize = 1 << vi->i_blkbits;
+	blocksize = vi->i_sb->s_blocksize;
 	end = pos + bytes;
 	u = 0;
 	do {
@@ -1622,11 +1617,8 @@ err_out:
 		unmap_mft_record(base_ni);
 	ntfs_error(vi->i_sb, "Failed to update initialized_size/i_size (error "
 			"code %i).", err);
-	if (err != -ENOMEM) {
+	if (err != -ENOMEM)
 		NVolSetErrors(ni->vol);
-		make_bad_inode(VFS_I(base_ni));
-		make_bad_inode(vi);
-	}
 	return err;
 }
 
@@ -1637,7 +1629,7 @@ err_out:
  * @pos:	byte position in file at which the write begins
  * @bytes:	number of bytes to be written
  *
- * This is called from ntfs_file_buffered_write() with i_sem held on the inode
+ * This is called from ntfs_file_buffered_write() with i_mutex held on the inode
  * (@pages[0]->mapping->host).  There are @nr_pages pages in @pages which are
  * locked but not kmap()ped.  The source data has already been copied into the
  * @page.  ntfs_prepare_pages_for_non_resident_write() has been called before
@@ -1801,8 +1793,6 @@ err_out:
 		ntfs_error(vi->i_sb, "Resident attribute commit write failed "
 				"with error %i.", err);
 		NVolSetErrors(ni->vol);
-		make_bad_inode(VFS_I(base_ni));
-		make_bad_inode(vi);
 	}
 	if (ctx)
 		ntfs_attr_put_search_ctx(ctx);
@@ -1814,7 +1804,7 @@ err_out:
 /**
  * ntfs_file_buffered_write -
  *
- * Locking: The vfs is holding ->i_sem on the inode.
+ * Locking: The vfs is holding ->i_mutex on the inode.
  */
 static ssize_t ntfs_file_buffered_write(struct kiocb *iocb,
 		const struct iovec *iov, unsigned long nr_segs,
@@ -2173,7 +2163,7 @@ static ssize_t ntfs_file_aio_write_nolock(struct kiocb *iocb,
 	err = remove_suid(file->f_dentry);
 	if (err)
 		goto out;
-	inode_update_time(inode, 1);
+	file_update_time(file);
 	written = ntfs_file_buffered_write(iocb, iov, nr_segs, pos, ppos,
 			count);
 out:
@@ -2196,9 +2186,9 @@ static ssize_t ntfs_file_aio_write(struct kiocb *iocb, const char __user *buf,
 
 	BUG_ON(iocb->ki_pos != pos);
 
-	down(&inode->i_sem);
+	mutex_lock(&inode->i_mutex);
 	ret = ntfs_file_aio_write_nolock(iocb, &local_iov, 1, &iocb->ki_pos);
-	up(&inode->i_sem);
+	mutex_unlock(&inode->i_mutex);
 	if (ret > 0 && ((file->f_flags & O_SYNC) || IS_SYNC(inode))) {
 		int err = sync_page_range(inode, mapping, pos, ret);
 		if (err < 0)
@@ -2221,12 +2211,12 @@ static ssize_t ntfs_file_writev(struct file *file, const struct iovec *iov,
 	struct kiocb kiocb;
 	ssize_t ret;
 
-	down(&inode->i_sem);
+	mutex_lock(&inode->i_mutex);
 	init_sync_kiocb(&kiocb, file);
 	ret = ntfs_file_aio_write_nolock(&kiocb, iov, nr_segs, ppos);
 	if (ret == -EIOCBQUEUED)
 		ret = wait_on_sync_kiocb(&kiocb);
-	up(&inode->i_sem);
+	mutex_unlock(&inode->i_mutex);
 	if (ret > 0 && ((file->f_flags & O_SYNC) || IS_SYNC(inode))) {
 		int err = sync_page_range(inode, mapping, *ppos - ret, ret);
 		if (err < 0)
@@ -2269,7 +2259,7 @@ static ssize_t ntfs_file_write(struct file *file, const char __user *buf,
  * Note: In the past @filp could be NULL so we ignore it as we don't need it
  * anyway.
  *
- * Locking: Caller must hold i_sem on the inode.
+ * Locking: Caller must hold i_mutex on the inode.
  *
  * TODO: We should probably also write all attribute/index inodes associated
  * with this inode but since we have no simple way of getting to them we ignore
@@ -2304,7 +2294,7 @@ static int ntfs_file_fsync(struct file *filp, struct dentry *dentry,
 
 #endif /* NTFS_RW */
 
-struct file_operations ntfs_file_ops = {
+const struct file_operations ntfs_file_ops = {
 	.llseek		= generic_file_llseek,	 /* Seek inside file. */
 	.read		= generic_file_read,	 /* Read from file. */
 	.aio_read	= generic_file_aio_read, /* Async read from file. */
@@ -2347,6 +2337,6 @@ struct inode_operations ntfs_file_inode_ops = {
 #endif /* NTFS_RW */
 };
 
-struct file_operations ntfs_empty_file_ops = {};
+const struct file_operations ntfs_empty_file_ops = {};
 
 struct inode_operations ntfs_empty_inode_ops = {};

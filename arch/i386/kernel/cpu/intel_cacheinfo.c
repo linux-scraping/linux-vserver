@@ -43,13 +43,23 @@ static struct _cache_table cache_table[] __cpuinitdata =
 	{ 0x2c, LVL_1_DATA, 32 },	/* 8-way set assoc, 64 byte line size */
 	{ 0x30, LVL_1_INST, 32 },	/* 8-way set assoc, 64 byte line size */
 	{ 0x39, LVL_2,      128 },	/* 4-way set assoc, sectored cache, 64 byte line size */
+	{ 0x3a, LVL_2,      192 },	/* 6-way set assoc, sectored cache, 64 byte line size */
 	{ 0x3b, LVL_2,      128 },	/* 2-way set assoc, sectored cache, 64 byte line size */
 	{ 0x3c, LVL_2,      256 },	/* 4-way set assoc, sectored cache, 64 byte line size */
+	{ 0x3d, LVL_2,      384 },	/* 6-way set assoc, sectored cache, 64 byte line size */
+	{ 0x3e, LVL_2,      512 },	/* 4-way set assoc, sectored cache, 64 byte line size */
 	{ 0x41, LVL_2,      128 },	/* 4-way set assoc, 32 byte line size */
 	{ 0x42, LVL_2,      256 },	/* 4-way set assoc, 32 byte line size */
 	{ 0x43, LVL_2,      512 },	/* 4-way set assoc, 32 byte line size */
 	{ 0x44, LVL_2,      1024 },	/* 4-way set assoc, 32 byte line size */
 	{ 0x45, LVL_2,      2048 },	/* 4-way set assoc, 32 byte line size */
+	{ 0x46, LVL_3,      4096 },	/* 4-way set assoc, 64 byte line size */
+	{ 0x47, LVL_3,      8192 },	/* 8-way set assoc, 64 byte line size */
+	{ 0x49, LVL_3,      4096 },	/* 16-way set assoc, 64 byte line size */
+	{ 0x4a, LVL_3,      6144 },	/* 12-way set assoc, 64 byte line size */
+	{ 0x4b, LVL_3,      8192 },	/* 16-way set assoc, 64 byte line size */
+	{ 0x4c, LVL_3,     12288 },	/* 12-way set assoc, 64 byte line size */
+	{ 0x4d, LVL_3,     16384 },	/* 16-way set assoc, 64 byte line size */
 	{ 0x60, LVL_1_DATA, 16 },	/* 8-way set assoc, sectored cache, 64 byte line size */
 	{ 0x66, LVL_1_DATA, 8 },	/* 4-way set assoc, sectored cache, 64 byte line size */
 	{ 0x67, LVL_1_DATA, 16 },	/* 4-way set assoc, sectored cache, 64 byte line size */
@@ -57,6 +67,7 @@ static struct _cache_table cache_table[] __cpuinitdata =
 	{ 0x70, LVL_TRACE,  12 },	/* 8-way set assoc */
 	{ 0x71, LVL_TRACE,  16 },	/* 8-way set assoc */
 	{ 0x72, LVL_TRACE,  32 },	/* 8-way set assoc */
+	{ 0x73, LVL_TRACE,  64 },	/* 8-way set assoc */
 	{ 0x78, LVL_2,    1024 },	/* 4-way set assoc, 64 byte line size */
 	{ 0x79, LVL_2,     128 },	/* 8-way set assoc, sectored cache, 64 byte line size */
 	{ 0x7a, LVL_2,     256 },	/* 8-way set assoc, sectored cache, 64 byte line size */
@@ -141,6 +152,7 @@ static int __cpuinit cpuid4_cache_lookup(int index, struct _cpuid4_info *this_le
 	return 0;
 }
 
+/* will only be called once; __init is safe here */
 static int __init find_num_cache_leaves(void)
 {
 	unsigned int		eax, ebx, ecx, edx;
@@ -161,8 +173,12 @@ unsigned int __cpuinit init_intel_cacheinfo(struct cpuinfo_x86 *c)
 	unsigned int trace = 0, l1i = 0, l1d = 0, l2 = 0, l3 = 0; /* Cache sizes */
 	unsigned int new_l1d = 0, new_l1i = 0; /* Cache sizes from cpuid(4) */
 	unsigned int new_l2 = 0, new_l3 = 0, i; /* Cache sizes from cpuid(4) */
+	unsigned int l2_id = 0, l3_id = 0, num_threads_sharing, index_msb;
+#ifdef CONFIG_SMP
+	unsigned int cpu = (c == &boot_cpu_data) ? 0 : (c - cpu_data);
+#endif
 
-	if (c->cpuid_level > 4) {
+	if (c->cpuid_level > 3) {
 		static int is_initialized;
 
 		if (is_initialized == 0) {
@@ -193,9 +209,15 @@ unsigned int __cpuinit init_intel_cacheinfo(struct cpuinfo_x86 *c)
 					break;
 				    case 2:
 					new_l2 = this_leaf.size/1024;
+					num_threads_sharing = 1 + this_leaf.eax.split.num_threads_sharing;
+					index_msb = get_count_order(num_threads_sharing);
+					l2_id = c->apicid >> index_msb;
 					break;
 				    case 3:
 					new_l3 = this_leaf.size/1024;
+					num_threads_sharing = 1 + this_leaf.eax.split.num_threads_sharing;
+					index_msb = get_count_order(num_threads_sharing);
+					l3_id = c->apicid >> index_msb;
 					break;
 				    default:
 					break;
@@ -203,11 +225,19 @@ unsigned int __cpuinit init_intel_cacheinfo(struct cpuinfo_x86 *c)
 			}
 		}
 	}
-	if (c->cpuid_level > 1) {
+	/*
+	 * Don't use cpuid2 if cpuid4 is supported. For P4, we use cpuid2 for
+	 * trace cache
+	 */
+	if ((num_cache_leaves == 0 || c->x86 == 15) && c->cpuid_level > 1) {
 		/* supports eax=2  call */
 		int i, j, n;
 		int regs[4];
 		unsigned char *dp = (unsigned char *)regs;
+		int only_trace = 0;
+
+		if (num_cache_leaves != 0 && c->x86 == 15)
+			only_trace = 1;
 
 		/* Number of times to iterate */
 		n = cpuid_eax(2) & 0xFF;
@@ -229,6 +259,8 @@ unsigned int __cpuinit init_intel_cacheinfo(struct cpuinfo_x86 *c)
 				while (cache_table[k].descriptor != 0)
 				{
 					if (cache_table[k].descriptor == des) {
+						if (only_trace && cache_table[k].cache_type != LVL_TRACE)
+							break;
 						switch (cache_table[k].cache_type) {
 						case LVL_1_INST:
 							l1i += cache_table[k].size;
@@ -254,34 +286,45 @@ unsigned int __cpuinit init_intel_cacheinfo(struct cpuinfo_x86 *c)
 				}
 			}
 		}
-
-		if (new_l1d)
-			l1d = new_l1d;
-
-		if (new_l1i)
-			l1i = new_l1i;
-
-		if (new_l2)
-			l2 = new_l2;
-
-		if (new_l3)
-			l3 = new_l3;
-
-		if ( trace )
-			printk (KERN_INFO "CPU: Trace cache: %dK uops", trace);
-		else if ( l1i )
-			printk (KERN_INFO "CPU: L1 I cache: %dK", l1i);
-		if ( l1d )
-			printk(", L1 D cache: %dK\n", l1d);
-		else
-			printk("\n");
-		if ( l2 )
-			printk(KERN_INFO "CPU: L2 cache: %dK\n", l2);
-		if ( l3 )
-			printk(KERN_INFO "CPU: L3 cache: %dK\n", l3);
-
-		c->x86_cache_size = l3 ? l3 : (l2 ? l2 : (l1i+l1d));
 	}
+
+	if (new_l1d)
+		l1d = new_l1d;
+
+	if (new_l1i)
+		l1i = new_l1i;
+
+	if (new_l2) {
+		l2 = new_l2;
+#ifdef CONFIG_SMP
+		cpu_llc_id[cpu] = l2_id;
+#endif
+	}
+
+	if (new_l3) {
+		l3 = new_l3;
+#ifdef CONFIG_SMP
+		cpu_llc_id[cpu] = l3_id;
+#endif
+	}
+
+	if (trace)
+		printk (KERN_INFO "CPU: Trace cache: %dK uops", trace);
+	else if ( l1i )
+		printk (KERN_INFO "CPU: L1 I cache: %dK", l1i);
+
+	if (l1d)
+		printk(", L1 D cache: %dK\n", l1d);
+	else
+		printk("\n");
+
+	if (l2)
+		printk(KERN_INFO "CPU: L2 cache: %dK\n", l2);
+
+	if (l3)
+		printk(KERN_INFO "CPU: L3 cache: %dK\n", l3);
+
+	c->x86_cache_size = l3 ? l3 : (l2 ? l2 : (l1i+l1d));
 
 	return l2;
 }
@@ -318,7 +361,7 @@ static void __cpuinit cache_shared_cpu_map_setup(unsigned int cpu, int index)
 		}
 	}
 }
-static void __devinit cache_remove_shared_cpu_map(unsigned int cpu, int index)
+static void __cpuinit cache_remove_shared_cpu_map(unsigned int cpu, int index)
 {
 	struct _cpuid4_info	*this_leaf, *sibling_leaf;
 	int sibling;

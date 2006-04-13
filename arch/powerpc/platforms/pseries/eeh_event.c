@@ -19,8 +19,11 @@
  */
 
 #include <linux/list.h>
+#include <linux/mutex.h>
 #include <linux/pci.h>
+#include <linux/workqueue.h>
 #include <asm/eeh_event.h>
+#include <asm/ppc-pci.h>
 
 /** Overview:
  *  EEH error states may be detected within exception handlers;
@@ -36,39 +39,18 @@ LIST_HEAD(eeh_eventlist);
 static void eeh_thread_launcher(void *);
 DECLARE_WORK(eeh_event_wq, eeh_thread_launcher, NULL);
 
-/**
- * eeh_panic - call panic() for an eeh event that cannot be handled.
- * The philosophy of this routine is that it is better to panic and
- * halt the OS than it is to risk possible data corruption by
- * oblivious device drivers that don't know better.
- *
- * @dev pci device that had an eeh event
- * @reset_state current reset state of the device slot
- */
-static void eeh_panic(struct pci_dev *dev, int reset_state)
-{
-	/*
-	 * Since the panic_on_oops sysctl is used to halt the system
-	 * in light of potential corruption, we can use it here.
-	 */
-	if (panic_on_oops) {
-		panic("EEH: MMIO failure (%d) on device:%s\n", reset_state,
-		      pci_name(dev));
-	}
-	else {
-		printk(KERN_INFO "EEH: Ignored MMIO failure (%d) on device:%s\n",
-		       reset_state, pci_name(dev));
-	}
-}
+/* Serialize reset sequences for a given pci device */
+DEFINE_MUTEX(eeh_event_mutex);
 
 /**
- * eeh_event_handler - dispatch EEH events.  The detection of a frozen
- * slot can occur inside an interrupt, where it can be hard to do
- * anything about it.  The goal of this routine is to pull these
- * detection events out of the context of the interrupt handler, and
- * re-dispatch them for processing at a later time in a normal context.
- *
+ * eeh_event_handler - dispatch EEH events.
  * @dummy - unused
+ *
+ * The detection of a frozen slot can occur inside an interrupt,
+ * where it can be hard to do anything about it.  The goal of this
+ * routine is to pull these detection events out of the context
+ * of the interrupt handler, and re-dispatch them for processing
+ * at a later time in a normal context.
  */
 static int eeh_event_handler(void * dummy)
 {
@@ -82,20 +64,30 @@ static int eeh_event_handler(void * dummy)
 
 		spin_lock_irqsave(&eeh_eventlist_lock, flags);
 		event = NULL;
+
+		/* Unqueue the event, get ready to process. */
 		if (!list_empty(&eeh_eventlist)) {
 			event = list_entry(eeh_eventlist.next, struct eeh_event, list);
 			list_del(&event->list);
 		}
 		spin_unlock_irqrestore(&eeh_eventlist_lock, flags);
+
 		if (event == NULL)
 			break;
+
+		/* Serialize processing of EEH events */
+		mutex_lock(&eeh_event_mutex);
+		eeh_mark_slot(event->dn, EEH_MODE_RECOVERING);
 
 		printk(KERN_INFO "EEH: Detected PCI bus error on device %s\n",
 		       pci_name(event->dev));
 
-		eeh_panic (event->dev, event->state);
+		handle_eeh_events(event);
 
+		eeh_clear_slot(event->dn, EEH_MODE_RECOVERING);
+		pci_dev_put(event->dev);
 		kfree(event);
+		mutex_unlock(&eeh_event_mutex);
 	}
 
 	return 0;
@@ -103,7 +95,6 @@ static int eeh_event_handler(void * dummy)
 
 /**
  * eeh_thread_launcher
- *
  * @dummy - unused
  */
 static void eeh_thread_launcher(void *dummy)
@@ -122,7 +113,7 @@ static void eeh_thread_launcher(void *dummy)
  */
 int eeh_send_failure_event (struct device_node *dn,
                             struct pci_dev *dev,
-                            int state,
+                            enum pci_channel_state state,
                             int time_unavail)
 {
 	unsigned long flags;

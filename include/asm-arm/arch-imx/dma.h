@@ -17,30 +17,15 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
+
 #ifndef __ASM_ARCH_DMA_H
 #define __ASM_ARCH_DMA_H
 
-#define MAX_DMA_ADDRESS		0xffffffff
-
-#define MAX_DMA_CHANNELS	0
-
-/*
- * DMA registration
- */
-
 typedef enum {
 	DMA_PRIO_HIGH = 0,
-	DMA_PRIO_MEDIUM = 3,
-	DMA_PRIO_LOW = 6
+	DMA_PRIO_MEDIUM = 1,
+	DMA_PRIO_LOW = 2
 } imx_dma_prio;
-
-int imx_request_dma(char *name, imx_dma_prio prio,
-		    void (*irq_handler) (int, void *, struct pt_regs *),
-		    void (*err_handler) (int, void *, struct pt_regs *),
-		    void *data);
-
-void imx_free_dma(int dma_ch);
-
 
 #define DMA_REQ_UART3_T        2
 #define DMA_REQ_UART3_R        3

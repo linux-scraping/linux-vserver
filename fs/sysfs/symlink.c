@@ -66,6 +66,7 @@ static int sysfs_add_link(struct dentry * parent, const char * name, struct kobj
 	if (!error)
 		return 0;
 
+	kobject_put(target);
 	kfree(sl->link_name);
 exit2:
 	kfree(sl);
@@ -82,13 +83,14 @@ exit1:
 int sysfs_create_link(struct kobject * kobj, struct kobject * target, const char * name)
 {
 	struct dentry * dentry = kobj->dentry;
-	int error = 0;
+	int error = -EEXIST;
 
 	BUG_ON(!kobj || !kobj->dentry || !name);
 
-	down(&dentry->d_inode->i_sem);
-	error = sysfs_add_link(dentry, name, target);
-	up(&dentry->d_inode->i_sem);
+	mutex_lock(&dentry->d_inode->i_mutex);
+	if (!sysfs_dirent_exist(dentry->d_fsdata, name))
+		error = sysfs_add_link(dentry, name, target);
+	mutex_unlock(&dentry->d_inode->i_mutex);
 	return error;
 }
 
@@ -177,4 +179,3 @@ struct inode_operations sysfs_symlink_inode_operations = {
 
 EXPORT_SYMBOL_GPL(sysfs_create_link);
 EXPORT_SYMBOL_GPL(sysfs_remove_link);
-

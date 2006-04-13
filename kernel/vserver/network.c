@@ -13,7 +13,6 @@
  *
  */
 
-#include <linux/config.h>
 #include <linux/slab.h>
 #include <linux/vserver/network_cmd.h>
 #include <linux/rcupdate.h>
@@ -282,12 +281,12 @@ struct nx_info *create_nx_info(void)
 
 #endif
 
-/*	locate_nx_info()
+/*	lookup_nx_info()
 
 	* search for a nx_info and get() it
 	* negative id means current				*/
 
-struct nx_info *locate_nx_info(int id)
+struct nx_info *lookup_nx_info(int id)
 {
 	struct nx_info *nxi = NULL;
 
@@ -393,9 +392,10 @@ out:
 }
 
 
+#ifdef CONFIG_INET
+
 #include <linux/netdevice.h>
 #include <linux/inetdevice.h>
-
 
 int ifa_in_nx_info(struct in_ifaddr *ifa, struct nx_info *nxi)
 {
@@ -484,6 +484,18 @@ int nx_addr_conflict(struct nx_info *nxi, uint32_t addr, struct sock *sk)
 	}
 }
 
+#endif /* CONFIG_INET */
+
+void nx_set_persistent(struct nx_info *nxi)
+{
+	if (nx_info_flags(nxi, NXF_PERSISTENT, 0)) {
+		get_nx_info(nxi);
+		claim_nx_info(nxi, current);
+	} else {
+		release_nx_info(nxi, current);
+		put_nx_info(nxi);
+	}
+}
 
 /* vserver syscall commands below here */
 
@@ -508,7 +520,7 @@ int vc_task_nid(uint32_t id, void __user *data)
 		read_unlock(&tasklist_lock);
 	}
 	else
-		nid = current->nid;
+		nid = nx_current_nid();
 	return nid;
 }
 
@@ -523,7 +535,7 @@ int vc_nx_info(uint32_t id, void __user *data)
 	if (!capable(CAP_SYS_ADMIN) || !capable(CAP_SYS_RESOURCE))
 		return -EPERM;
 
-	nxi = locate_nx_info(id);
+	nxi = lookup_nx_info(id);
 	if (!nxi)
 		return -ESRCH;
 
@@ -561,6 +573,10 @@ int vc_net_create(uint32_t nid, void __user *data)
 	/* initial flags */
 	new_nxi->nx_flags = vc_data.flagword;
 
+	/* get a reference for persistent contexts */
+	if ((vc_data.flagword & NXF_PERSISTENT))
+		nx_set_persistent(new_nxi);
+
 	vs_net_change(new_nxi, VSC_NETUP);
 	ret = new_nxi->nx_id;
 	nx_migrate_task(current, new_nxi);
@@ -577,7 +593,7 @@ int vc_net_migrate(uint32_t id, void __user *data)
 	if (!capable(CAP_SYS_ADMIN))
 		return -EPERM;
 
-	nxi = locate_nx_info(id);
+	nxi = lookup_nx_info(id);
 	if (!nxi)
 		return -ESRCH;
 	nx_migrate_task(current, nxi);
@@ -606,7 +622,7 @@ int vc_net_add(uint32_t nid, void __user *data)
 		break;
 	}
 
-	nxi = locate_nx_info(nid);
+	nxi = lookup_nx_info(nid);
 	if (!nxi)
 		return -ESRCH;
 
@@ -648,11 +664,11 @@ int vc_net_remove(uint32_t nid, void __user *data)
 	if (data && copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
-	nxi = locate_nx_info(nid);
+	nxi = lookup_nx_info(nid);
 	if (!nxi)
 		return -ESRCH;
 
-	switch (vc_data.type) {
+	switch ((unsigned)vc_data.type) {
 	case NXA_TYPE_ANY:
 		nxi->nbipv4 = 0;
 		break;
@@ -674,7 +690,7 @@ int vc_get_nflags(uint32_t id, void __user *data)
 	if (!capable(CAP_SYS_ADMIN))
 		return -EPERM;
 
-	nxi = locate_nx_info(id);
+	nxi = lookup_nx_info(id);
 	if (!nxi)
 		return -ESRCH;
 
@@ -701,7 +717,7 @@ int vc_set_nflags(uint32_t id, void __user *data)
 	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
-	nxi = locate_nx_info(id);
+	nxi = lookup_nx_info(id);
 	if (!nxi)
 		return -ESRCH;
 
@@ -711,6 +727,9 @@ int vc_set_nflags(uint32_t id, void __user *data)
 
 	nxi->nx_flags = vx_mask_flags(nxi->nx_flags,
 		vc_data.flagword, mask);
+	if (trigger & NXF_PERSISTENT)
+		nx_set_persistent(nxi);
+
 	put_nx_info(nxi);
 	return 0;
 }
@@ -723,7 +742,7 @@ int vc_get_ncaps(uint32_t id, void __user *data)
 	if (!capable(CAP_SYS_ADMIN))
 		return -EPERM;
 
-	nxi = locate_nx_info(id);
+	nxi = lookup_nx_info(id);
 	if (!nxi)
 		return -ESRCH;
 
@@ -746,7 +765,7 @@ int vc_set_ncaps(uint32_t id, void __user *data)
 	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
-	nxi = locate_nx_info(id);
+	nxi = lookup_nx_info(id);
 	if (!nxi)
 		return -ESRCH;
 

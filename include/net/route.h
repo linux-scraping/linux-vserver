@@ -28,12 +28,14 @@
 #include <net/dst.h>
 #include <net/inetpeer.h>
 #include <net/flow.h>
+#include <net/inet_sock.h>
 #include <linux/in_route.h>
 #include <linux/rtnetlink.h>
 #include <linux/route.h>
 #include <linux/ip.h>
 #include <linux/cache.h>
 #include <linux/vs_network.h>
+#include <linux/in.h>
 
 #ifndef __KERNEL__
 #warning This file is not supposed to be used outside of kernel.
@@ -111,7 +113,7 @@ extern struct ip_rt_acct *ip_rt_acct;
 struct in_device;
 extern int		ip_rt_init(void);
 extern void		ip_rt_redirect(u32 old_gw, u32 dst, u32 new_gw,
-				       u32 src, u8 tos, struct net_device *dev);
+				       u32 src, struct net_device *dev);
 extern void		ip_rt_advice(struct rtable **rp, int advice);
 extern void		rt_cache_flush(int how);
 extern int		__ip_route_output_key(struct rtable **, const struct flowi *flp);
@@ -240,8 +242,8 @@ static inline int ip_route_connect(struct rtable **rp, u32 dst,
 	return ip_route_output_flow(rp, &fl, sk, 0);
 }
 
-static inline int ip_route_newports(struct rtable **rp, u16 sport, u16 dport,
-				    struct sock *sk)
+static inline int ip_route_newports(struct rtable **rp, u8 protocol,
+				    u16 sport, u16 dport, struct sock *sk)
 {
 	if (sport != (*rp)->fl.fl_ip_sport ||
 	    dport != (*rp)->fl.fl_ip_dport) {
@@ -250,6 +252,7 @@ static inline int ip_route_newports(struct rtable **rp, u16 sport, u16 dport,
 		memcpy(&fl, &(*rp)->fl, sizeof(fl));
 		fl.fl_ip_sport = sport;
 		fl.fl_ip_dport = dport;
+		fl.proto = protocol;
 		ip_rt_put(*rp);
 		*rp = NULL;
 		return ip_route_output_flow(rp, &fl, sk, 0);

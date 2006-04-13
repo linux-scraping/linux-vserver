@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2005 Topspin Communications.  All rights reserved.
- * Copyright (c) 2005 Cisco Systems.  All rights reserved.
+ * Copyright (c) 2005, 2006 Cisco Systems.  All rights reserved.
  * Copyright (c) 2005 Mellanox Technologies. All rights reserved.
  * Copyright (c) 2005 Voltaire, Inc. All rights reserved.
  * Copyright (c) 2005 PathScale, Inc. All rights reserved.
@@ -66,7 +66,7 @@ enum {
 
 static struct class *uverbs_class;
 
-DECLARE_MUTEX(ib_uverbs_idr_mutex);
+DEFINE_MUTEX(ib_uverbs_idr_mutex);
 DEFINE_IDR(ib_uverbs_pd_idr);
 DEFINE_IDR(ib_uverbs_mr_idr);
 DEFINE_IDR(ib_uverbs_mw_idr);
@@ -91,10 +91,12 @@ static ssize_t (*uverbs_cmd_table[])(struct ib_uverbs_file *file,
 	[IB_USER_VERBS_CMD_DEREG_MR]      	= ib_uverbs_dereg_mr,
 	[IB_USER_VERBS_CMD_CREATE_COMP_CHANNEL] = ib_uverbs_create_comp_channel,
 	[IB_USER_VERBS_CMD_CREATE_CQ]     	= ib_uverbs_create_cq,
+	[IB_USER_VERBS_CMD_RESIZE_CQ]     	= ib_uverbs_resize_cq,
 	[IB_USER_VERBS_CMD_POLL_CQ]     	= ib_uverbs_poll_cq,
 	[IB_USER_VERBS_CMD_REQ_NOTIFY_CQ]     	= ib_uverbs_req_notify_cq,
 	[IB_USER_VERBS_CMD_DESTROY_CQ]    	= ib_uverbs_destroy_cq,
 	[IB_USER_VERBS_CMD_CREATE_QP]     	= ib_uverbs_create_qp,
+	[IB_USER_VERBS_CMD_QUERY_QP]     	= ib_uverbs_query_qp,
 	[IB_USER_VERBS_CMD_MODIFY_QP]     	= ib_uverbs_modify_qp,
 	[IB_USER_VERBS_CMD_DESTROY_QP]    	= ib_uverbs_destroy_qp,
 	[IB_USER_VERBS_CMD_POST_SEND]    	= ib_uverbs_post_send,
@@ -106,6 +108,7 @@ static ssize_t (*uverbs_cmd_table[])(struct ib_uverbs_file *file,
 	[IB_USER_VERBS_CMD_DETACH_MCAST]  	= ib_uverbs_detach_mcast,
 	[IB_USER_VERBS_CMD_CREATE_SRQ]    	= ib_uverbs_create_srq,
 	[IB_USER_VERBS_CMD_MODIFY_SRQ]    	= ib_uverbs_modify_srq,
+	[IB_USER_VERBS_CMD_QUERY_SRQ]     	= ib_uverbs_query_srq,
 	[IB_USER_VERBS_CMD_DESTROY_SRQ]   	= ib_uverbs_destroy_srq,
 };
 
@@ -180,7 +183,7 @@ static int ib_uverbs_cleanup_ucontext(struct ib_uverbs_file *file,
 	if (!context)
 		return 0;
 
-	down(&ib_uverbs_idr_mutex);
+	mutex_lock(&ib_uverbs_idr_mutex);
 
 	list_for_each_entry_safe(uobj, tmp, &context->ah_list, list) {
 		struct ib_ah *ah = idr_find(&ib_uverbs_ah_idr, uobj->id);
@@ -250,7 +253,7 @@ static int ib_uverbs_cleanup_ucontext(struct ib_uverbs_file *file,
 		kfree(uobj);
 	}
 
-	up(&ib_uverbs_idr_mutex);
+	mutex_unlock(&ib_uverbs_idr_mutex);
 
 	return context->device->dealloc_ucontext(context);
 }
@@ -461,7 +464,6 @@ void ib_uverbs_cq_event_handler(struct ib_event *event, void *context_ptr)
 	ib_uverbs_async_handler(uobj->uverbs_file, uobj->uobject.user_handle,
 				event->event, &uobj->async_list,
 				&uobj->async_events_reported);
-				
 }
 
 void ib_uverbs_qp_event_handler(struct ib_event *event, void *context_ptr)
@@ -653,7 +655,7 @@ static int ib_uverbs_open(struct inode *inode, struct file *filp)
 	file->ucontext	 = NULL;
 	file->async_file = NULL;
 	kref_init(&file->ref);
-	init_MUTEX(&file->mutex);
+	mutex_init(&file->mutex);
 
 	filp->private_data = file;
 
@@ -902,6 +904,7 @@ static void __exit ib_uverbs_cleanup(void)
 	unregister_filesystem(&uverbs_event_fs);
 	class_destroy(uverbs_class);
 	unregister_chrdev_region(IB_UVERBS_BASE_DEV, IB_UVERBS_MAX_DEVICES);
+	flush_scheduled_work();
 	idr_destroy(&ib_uverbs_pd_idr);
 	idr_destroy(&ib_uverbs_mr_idr);
 	idr_destroy(&ib_uverbs_mw_idr);

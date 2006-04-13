@@ -33,6 +33,7 @@
 #include <linux/delay.h>
 #include <linux/interrupt.h>
 #include <linux/module.h>
+#include <linux/pm.h>
 
 #include <asm/cpu.h>
 #include <asm/bootinfo.h>
@@ -89,11 +90,11 @@ void __init plat_setup(void)
 	else {
 		/* Clear to obtain best system bus performance */
 		clear_c0_config(1<<19); /* Clear Config[OD] */
- 	}
+	}
 
 	argptr = prom_getcmdline();
 
-#if defined(CONFIG_SERIAL_AU1X00_CONSOLE) || defined(CONFIG_SERIAL_8250_CONSOLE)
+#ifdef CONFIG_SERIAL_8250_CONSOLE
 	if ((argptr = strstr(argptr, "console=")) == NULL) {
 		argptr = prom_getcmdline();
 		strcat(argptr, " console=ttyS0,115200");
@@ -125,7 +126,7 @@ void __init plat_setup(void)
 #endif
 	_machine_restart = au1000_restart;
 	_machine_halt = au1000_halt;
-	_machine_power_off = au1000_power_off;
+	pm_power_off = au1000_power_off;
 	board_time_init = au1xxx_time_init;
 	board_timer_setup = au1xxx_timer_setup;
 

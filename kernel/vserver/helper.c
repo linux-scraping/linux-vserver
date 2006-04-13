@@ -9,13 +9,13 @@
  *
  */
 
-#include <linux/config.h>
 #include <linux/errno.h>
 #include <linux/kmod.h>
 #include <linux/sched.h>
 #include <linux/reboot.h>
 #include <linux/vs_context.h>
 #include <linux/vs_network.h>
+#include <linux/vserver/signal.h>
 
 #include <asm/uaccess.h>
 #include <asm/unistd.h>
@@ -52,7 +52,7 @@ int do_vshelper(char *name, char *argv[], char *envp[], int sync)
  *      envp [*] = type-specific parameters
  */
 
-long vs_reboot(unsigned int cmd, void * arg)
+long vs_reboot_helper(struct vx_info *vxi, int cmd, void *arg)
 {
 	char id_buf[8], cmd_buf[16];
 	char uid_buf[16], pid_buf[16];
@@ -63,7 +63,11 @@ long vs_reboot(unsigned int cmd, void * arg)
 			"PATH=/sbin:/usr/sbin:/bin:/usr/bin",
 			uid_buf, pid_buf, cmd_buf, 0};
 
-	snprintf(id_buf, sizeof(id_buf)-1, "%d", vx_current_xid());
+	if (vx_info_state(vxi, VXS_HELPER))
+		return -EAGAIN;
+	vxi->vx_state |= VXS_HELPER;
+
+	snprintf(id_buf, sizeof(id_buf)-1, "%d", vxi->vx_id);
 
 	snprintf(cmd_buf, sizeof(cmd_buf)-1, "VS_CMD=%08x", cmd);
 	snprintf(uid_buf, sizeof(uid_buf)-1, "VS_UID=%d", current->uid);
@@ -87,6 +91,7 @@ long vs_reboot(unsigned int cmd, void * arg)
 		break;
 
 	default:
+		vxi->vx_state &= ~VXS_HELPER;
 		return 0;
 	}
 
@@ -95,7 +100,38 @@ long vs_reboot(unsigned int cmd, void * arg)
 #else
 	ret = do_vshelper(vshelper_path, argv, envp, 0);
 #endif
+	vxi->vx_state &= ~VXS_HELPER;
+	__wakeup_vx_info(vxi);
 	return (ret) ? -EPERM : 0;
+}
+
+
+long vs_reboot(unsigned int cmd, void * arg)
+{
+	struct vx_info *vxi = current->vx_info;
+	long ret = 0;
+
+	vxdprintk(VXD_CBIT(misc, 5),
+		"vs_reboot(%p[#%d],%d)",
+		vxi, vxi?vxi->vx_id:0, cmd);
+
+	ret = vs_reboot_helper(vxi, cmd, arg);
+	if (ret)
+		return ret;
+
+	vxi->reboot_cmd = cmd;
+	if (vx_info_flags(vxi, VXF_REBOOT_KILL, 0)) {
+		switch (cmd) {
+		case LINUX_REBOOT_CMD_RESTART:
+		case LINUX_REBOOT_CMD_HALT:
+		case LINUX_REBOOT_CMD_POWER_OFF:
+			vx_info_kill(vxi, 0, SIGKILL);
+			vx_info_kill(vxi, 1, SIGKILL);
+		default:
+			break;
+		}
+	}
+	return 0;
 }
 
 
@@ -114,7 +150,7 @@ long vs_state_change(struct vx_info *vxi, unsigned int cmd)
 	char *envp[] = {"HOME=/", "TERM=linux",
 			"PATH=/sbin:/usr/sbin:/bin:/usr/bin", cmd_buf, 0};
 
-	if (!vx_info_flags(vxi, VXF_STATE_HELPER, 0))
+	if (!vx_info_flags(vxi, VXF_SC_HELPER, 0))
 		return 0;
 
 	snprintf(id_buf, sizeof(id_buf)-1, "%d", vxi->vx_id);
@@ -151,7 +187,7 @@ long vs_net_change(struct nx_info *nxi, unsigned int cmd)
 	char *envp[] = {"HOME=/", "TERM=linux",
 			"PATH=/sbin:/usr/sbin:/bin:/usr/bin", cmd_buf, 0};
 
-	if (!nx_info_flags(nxi, NXF_STATE_HELPER, 0))
+	if (!nx_info_flags(nxi, NXF_SC_HELPER, 0))
 		return 0;
 
 	snprintf(id_buf, sizeof(id_buf)-1, "%d", nxi->nx_id);

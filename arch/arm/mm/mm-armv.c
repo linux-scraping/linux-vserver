@@ -19,7 +19,6 @@
 
 #include <asm/pgalloc.h>
 #include <asm/page.h>
-#include <asm/io.h>
 #include <asm/setup.h>
 #include <asm/tlbflush.h>
 
@@ -344,6 +343,12 @@ static struct mem_types mem_types[] __initdata = {
 				PMD_SECT_AP_WRITE | PMD_SECT_BUFFERABLE |
 				PMD_SECT_TEX(1),
 		.domain    = DOMAIN_IO,
+	},
+	[MT_NONSHARED_DEVICE] = {
+		.prot_l1   = PMD_TYPE_TABLE,
+		.prot_sect = PMD_TYPE_SECT | PMD_SECT_NONSHARED_DEV |
+				PMD_SECT_AP_WRITE,
+		.domain    = DOMAIN_IO,
 	}
 };
 
@@ -382,6 +387,17 @@ void __init build_mem_type_table(void)
 
 	cp = &cache_policies[cachepolicy];
 	kern_pgprot = user_pgprot = cp->pte;
+
+	/*
+	 * Enable CPU-specific coherency if supported.
+	 * (Only available on XSC3 at the moment.)
+	 */
+	if (arch_is_coherent()) {
+		if (cpu_is_xsc3()) {
+			mem_types[MT_MEMORY].prot_sect |= PMD_SECT_S;
+			mem_types[MT_MEMORY].prot_pte |= L_PTE_COHERENT;
+		}
+	}
 
 	/*
 	 * ARMv6 and above have extended page tables.
@@ -552,7 +568,8 @@ void __init create_mapping(struct map_desc *md)
 	 *	supersections are only allocated for domain 0 regardless
 	 *	of the actual domain assignments in use.
 	 */
-	if (cpu_architecture() >= CPU_ARCH_ARMv6 && domain == 0) {
+	if ((cpu_architecture() >= CPU_ARCH_ARMv6 || cpu_is_xsc3())
+		&& domain == 0) {
 		/*
 		 * Align to supersection boundary if !high pages.
 		 * High pages have already been checked for proper

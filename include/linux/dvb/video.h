@@ -135,7 +135,7 @@ typedef struct video_spu {
 
 typedef struct video_spu_palette {      /* SPU Palette information */
 	int length;
-	uint8_t *palette;
+	uint8_t __user *palette;
 } video_spu_palette_t;
 
 
@@ -199,5 +199,18 @@ typedef uint16_t video_attributes_t;
 #define VIDEO_SET_ATTRIBUTES       _IO('o', 53)
 #define VIDEO_GET_SIZE             _IOR('o', 55, video_size_t)
 #define VIDEO_GET_FRAME_RATE       _IOR('o', 56, unsigned int)
+
+/**
+ * VIDEO_GET_PTS
+ *
+ * Read the 33 bit presentation time stamp as defined
+ * in ITU T-REC-H.222.0 / ISO/IEC 13818-1.
+ *
+ * The PTS should belong to the currently played
+ * frame if possible, but may also be a value close to it
+ * like the PTS of the last decoded frame or the last PTS
+ * extracted by the PES parser.
+ */
+#define VIDEO_GET_PTS              _IOR('o', 57, __u64)
 
 #endif /*_DVBVIDEO_H_*/

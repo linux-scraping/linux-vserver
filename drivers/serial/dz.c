@@ -216,8 +216,6 @@ static inline void dz_receive_chars(struct dz_port *dport)
 
 		if (!tty)
 			break;
-		if (tty->flip.count >= TTY_FLIPBUF_SIZE)
-			break;
 
 		icount->rx++;
 
@@ -264,6 +262,7 @@ static inline void dz_receive_chars(struct dz_port *dport)
 		}
 		tty_insert_flip_char(tty, ch, flag);
 	      ignore_char:
+			;
 	} while (status & DZ_DVAL);
 
 	if (tty)
@@ -652,7 +651,7 @@ static void __init dz_init_ports(void)
 	for (i = 0, dport = dz_ports; i < DZ_NB_PORT; i++, dport++) {
 		spin_lock_init(&dport->port.lock);
 		dport->port.membase	= (char *) base;
-		dport->port.iotype	= SERIAL_IO_PORT;
+		dport->port.iotype	= UPIO_PORT;
 		dport->port.irq		= dec_interrupt[DEC_IRQ_DZ11];
 		dport->port.line	= i;
 		dport->port.fifosize	= 1;
@@ -675,11 +674,12 @@ static void dz_reset(struct dz_port *dport)
 }
 
 #ifdef CONFIG_SERIAL_DZ_CONSOLE
-static void dz_console_put_char(struct dz_port *dport, unsigned char ch)
+static void dz_console_putchar(struct uart_port *port, int ch)
 {
+	struct dz_port *dport = (struct dz_port *)uport;
 	unsigned long flags;
 	int loops = 2500;
-	unsigned short tmp = ch;
+	unsigned short tmp = (unsigned char)ch;
 	/* this code sends stuff out to serial device - spinning its
 	   wheels and waiting. */
 
@@ -695,6 +695,7 @@ static void dz_console_put_char(struct dz_port *dport, unsigned char ch)
 
 	spin_unlock_irqrestore(&dport->port.lock, flags);
 }
+
 /*
  * -------------------------------------------------------------------
  * dz_console_print ()
@@ -711,11 +712,7 @@ static void dz_console_print(struct console *cons,
 #ifdef DEBUG_DZ
 	prom_printf((char *) str);
 #endif
-	while (count--) {
-		if (*str == '\n')
-			dz_console_put_char(dport, '\r');
-		dz_console_put_char(dport, *str++);
-	}
+	uart_console_write(&dport->port, str, count, dz_console_putchar);
 }
 
 static int __init dz_console_setup(struct console *co, char *options)

@@ -226,6 +226,10 @@ ENTRY(system_call)
 	pushl %eax			# save orig_eax
 	SAVE_ALL
 	GET_THREAD_INFO(%ebp)
+	testl $TF_MASK,EFLAGS(%esp)
+	jz no_singlestep
+	orl $_TIF_SINGLESTEP,TI_flags(%ebp)
+no_singlestep:
 					# system call tracing in operation / emulation
 	/* Note, _TIF_SECCOMP is bit number 8, and so it needs testw and not testb */
 	testw $(_TIF_SYSCALL_EMU|_TIF_SYSCALL_TRACE|_TIF_SECCOMP|_TIF_SYSCALL_AUDIT),TI_flags(%ebp)
@@ -323,6 +327,7 @@ work_notifysig:				# deal with pending signals and
 
 	ALIGN
 work_notifysig_v86:
+#ifdef CONFIG_VM86
 	pushl %ecx			# save ti_flags for do_notify_resume
 	call save_v86_state		# %eax contains pt_regs pointer
 	popl %ecx
@@ -330,6 +335,7 @@ work_notifysig_v86:
 	xorl %edx, %edx
 	call do_notify_resume
 	jmp resume_userspace
+#endif
 
 	# perform syscall exit tracing
 	ALIGN
@@ -657,6 +663,7 @@ ENTRY(spurious_interrupt_bug)
 	pushl $do_spurious_interrupt_bug
 	jmp error_code
 
+.section .rodata,"a"
 #include "syscall_table.S"
 
 syscall_table_size=(.-sys_call_table)

@@ -55,8 +55,8 @@ struct sn_pci_controller {
 #define PCIIO_VENDOR_ID_NONE	(-1)
 
 struct pcidev_info {
-	uint64_t		pdi_pio_mapped_addr[7]; /* 6 BARs PLUS 1 ROM */
-	uint64_t		pdi_slot_host_handle;	/* Bus and devfn Host pci_dev */
+	u64		pdi_pio_mapped_addr[7]; /* 6 BARs PLUS 1 ROM */
+	u64		pdi_slot_host_handle;	/* Bus and devfn Host pci_dev */
 
 	struct pcibus_bussoft	*pdi_pcibus_info;	/* Kernel common bus soft */
 	struct pcidev_info	*pdi_host_pcidev_info;	/* Kernel Host pci_dev */
@@ -76,6 +76,7 @@ extern void sn_pci_controller_fixup(int segment, int busnum,
  				    struct pci_bus *bus);
 extern void sn_bus_store_sysdata(struct pci_dev *dev);
 extern void sn_bus_free_sysdata(void);
+extern void sn_generate_path(struct pci_bus *pci_bus, char *address);
 extern void sn_pci_fixup_slot(struct pci_dev *dev);
 extern void sn_pci_unfixup_slot(struct pci_dev *dev);
 extern void sn_irq_lh_init(void);

@@ -144,6 +144,8 @@ static unsigned sfq_hash(struct sfq_sched_data *q, struct sk_buff *skb)
 		if (!(iph->frag_off&htons(IP_MF|IP_OFFSET)) &&
 		    (iph->protocol == IPPROTO_TCP ||
 		     iph->protocol == IPPROTO_UDP ||
+		     iph->protocol == IPPROTO_SCTP ||
+		     iph->protocol == IPPROTO_DCCP ||
 		     iph->protocol == IPPROTO_ESP))
 			h2 ^= *(((u32*)iph) + iph->ihl);
 		break;
@@ -155,6 +157,8 @@ static unsigned sfq_hash(struct sfq_sched_data *q, struct sk_buff *skb)
 		h2 = iph->saddr.s6_addr32[3]^iph->nexthdr;
 		if (iph->nexthdr == IPPROTO_TCP ||
 		    iph->nexthdr == IPPROTO_UDP ||
+		    iph->nexthdr == IPPROTO_SCTP ||
+		    iph->nexthdr == IPPROTO_DCCP ||
 		    iph->nexthdr == IPPROTO_ESP)
 			h2 ^= *(u32*)&iph[1];
 		break;
@@ -228,6 +232,7 @@ static unsigned int sfq_drop(struct Qdisc *sch)
 		sfq_dec(q, x);
 		sch->q.qlen--;
 		sch->qstats.drops++;
+		sch->qstats.backlog -= len;
 		return len;
 	}
 
@@ -244,6 +249,7 @@ static unsigned int sfq_drop(struct Qdisc *sch)
 		sch->q.qlen--;
 		q->ht[q->hash[d]] = SFQ_DEPTH;
 		sch->qstats.drops++;
+		sch->qstats.backlog -= len;
 		return len;
 	}
 
@@ -262,6 +268,7 @@ sfq_enqueue(struct sk_buff *skb, struct Qdisc* sch)
 		q->ht[hash] = x = q->dep[SFQ_DEPTH].next;
 		q->hash[x] = hash;
 	}
+	sch->qstats.backlog += skb->len;
 	__skb_queue_tail(&q->qs[x], skb);
 	sfq_inc(q, x);
 	if (q->qs[x].qlen == 1) {		/* The flow is new */
@@ -297,6 +304,7 @@ sfq_requeue(struct sk_buff *skb, struct Qdisc* sch)
 		q->ht[hash] = x = q->dep[SFQ_DEPTH].next;
 		q->hash[x] = hash;
 	}
+	sch->qstats.backlog += skb->len;
 	__skb_queue_head(&q->qs[x], skb);
 	sfq_inc(q, x);
 	if (q->qs[x].qlen == 1) {		/* The flow is new */
@@ -340,6 +348,7 @@ sfq_dequeue(struct Qdisc* sch)
 	skb = __skb_dequeue(&q->qs[a]);
 	sfq_dec(q, a);
 	sch->q.qlen--;
+	sch->qstats.backlog -= skb->len;
 
 	/* Is the slot empty? */
 	if (q->qs[a].qlen == 0) {

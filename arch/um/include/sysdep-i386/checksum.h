@@ -36,7 +36,7 @@ unsigned int csum_partial_copy_nocheck(const unsigned char *src, unsigned char *
 				       int len, int sum)
 {
 	memcpy(dst, src, len);
-	return(csum_partial(dst, len, sum));
+	return csum_partial(dst, len, sum);
 }
 
 /*
@@ -48,7 +48,8 @@ unsigned int csum_partial_copy_nocheck(const unsigned char *src, unsigned char *
  */
 
 static __inline__
-unsigned int csum_partial_copy_from_user(const unsigned char *src, unsigned char *dst,
+unsigned int csum_partial_copy_from_user(const unsigned char __user *src,
+					 unsigned char *dst,
 					 int len, int sum, int *err_ptr)
 {
 	if(copy_from_user(dst, src, len)){
@@ -104,7 +105,7 @@ static inline unsigned short ip_fast_csum(unsigned char * iph,
 	: "=r" (sum), "=r" (iph), "=r" (ihl)
 	: "1" (iph), "2" (ihl)
 	: "memory");
-	return(sum);
+	return sum;
 }
 
 /*
@@ -192,7 +193,7 @@ static __inline__ unsigned short int csum_ipv6_magic(struct in6_addr *saddr,
  */
 #define HAVE_CSUM_COPY_USER
 static __inline__ unsigned int csum_and_copy_to_user(const unsigned char *src,
-						     unsigned char *dst,
+						     unsigned char __user *dst,
 						     int len, int sum, int *err_ptr)
 {
 	if (access_ok(VERIFY_WRITE, dst, len)){

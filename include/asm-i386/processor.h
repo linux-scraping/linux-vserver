@@ -20,6 +20,7 @@
 #include <linux/config.h>
 #include <linux/threads.h>
 #include <asm/percpu.h>
+#include <linux/cpumask.h>
 
 /* flag for disabling the tsc */
 extern int tsc_disable;
@@ -61,10 +62,15 @@ struct cpuinfo_x86 {
 	int 	x86_cache_size;  /* in KB - valid for CPUS which support this
 				    call  */
 	int 	x86_cache_alignment;	/* In bytes */
-	int	fdiv_bug;
-	int	f00f_bug;
-	int	coma_bug;
+	char	fdiv_bug;
+	char	f00f_bug;
+	char	coma_bug;
+	char	pad0;
+	int	x86_power;
 	unsigned long loops_per_jiffy;
+#ifdef CONFIG_SMP
+	cpumask_t llc_shared_map;	/* cpus sharing the last level cache */
+#endif
 	unsigned char x86_max_cores;	/* cpuid returned max cores value */
 	unsigned char booted_cores;	/* number of cores as seen by OS */
 	unsigned char apicid;
@@ -101,6 +107,7 @@ extern struct cpuinfo_x86 cpu_data[];
 
 extern	int phys_proc_id[NR_CPUS];
 extern	int cpu_core_id[NR_CPUS];
+extern	int cpu_llc_id[NR_CPUS];
 extern char ignore_fpu_irq;
 
 extern void identify_cpu(struct cpuinfo_x86 *);
@@ -279,9 +286,11 @@ static inline void clear_in_cr4 (unsigned long mask)
 	outb((data), 0x23); \
 } while (0)
 
-static inline void serialize_cpu(void)
+/* Stop speculative execution */
+static inline void sync_core(void)
 {
-	 __asm__ __volatile__ ("cpuid" : : : "ax", "bx", "cx", "dx");
+	int tmp;
+	asm volatile("cpuid" : "=a" (tmp) : "0" (1) : "ebx","ecx","edx","memory");
 }
 
 static inline void __monitor(const void *eax, unsigned long ecx,
@@ -558,10 +567,20 @@ unsigned long get_wchan(struct task_struct *p);
        (unsigned long)(&__ptr[THREAD_SIZE_LONGS]);                     \
 })
 
+/*
+ * The below -8 is to reserve 8 bytes on top of the ring0 stack.
+ * This is necessary to guarantee that the entire "struct pt_regs"
+ * is accessable even if the CPU haven't stored the SS/ESP registers
+ * on the stack (interrupt gate does not save these registers
+ * when switching to the same priv ring).
+ * Therefore beware: accessing the xss/esp fields of the
+ * "struct pt_regs" is possible, but they may contain the
+ * completely wrong values.
+ */
 #define task_pt_regs(task)                                             \
 ({                                                                     \
        struct pt_regs *__regs__;                                       \
-       __regs__ = (struct pt_regs *)KSTK_TOP((task)->thread_info);     \
+       __regs__ = (struct pt_regs *)(KSTK_TOP(task_stack_page(task))-8); \
        __regs__ - 1;                                                   \
 })
 
@@ -603,8 +622,6 @@ struct extended_sigtable {
 	unsigned int reserved[3];
 	struct extended_signature sigs[0];
 };
-/* '6' because it used to be for P6 only (but now covers Pentium 4 as well) */
-#define MICROCODE_IOCFREE	_IO('6',0)
 
 /* REP NOP (PAUSE) is a good thing to insert into busy-wait loops. */
 static inline void rep_nop(void)

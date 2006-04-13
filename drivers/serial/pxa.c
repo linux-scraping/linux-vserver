@@ -107,14 +107,6 @@ receive_chars(struct uart_pxa_port *up, int *status, struct pt_regs *regs)
 	int max_count = 256;
 
 	do {
-		if (unlikely(tty->flip.count >= TTY_FLIPBUF_SIZE)) {
-			if (tty->low_latency)
-				tty_flip_buffer_push(tty);
-			/*
-			 * If this failed then we will throw away the
-			 * bytes but must do so to clear interrupts
-			 */
-		}
 		ch = serial_in(up, UART_RX);
 		flag = TTY_NORMAL;
 		up->port.icount.rx++;
@@ -361,7 +353,7 @@ static int serial_pxa_startup(struct uart_port *port)
 	if (port->line == 3) /* HWUART */
 		up->mcr |= UART_MCR_AFE;
 	else
-	up->mcr = 0;
+		up->mcr = 0;
 
 	/*
 	 * Allocate the IRQ
@@ -627,6 +619,14 @@ static inline void wait_for_xmitr(struct uart_pxa_port *up)
 	}
 }
 
+static void serial_pxa_console_putchar(struct uart_port *port, int ch)
+{
+	struct uart_pxa_port *up = (struct uart_pxa_port *)port;
+
+	wait_for_xmitr(up);
+	serial_out(up, UART_TX, ch);
+}
+
 /*
  * Print a string to the serial port trying not to disturb
  * any possible real use of the port...
@@ -638,30 +638,14 @@ serial_pxa_console_write(struct console *co, const char *s, unsigned int count)
 {
 	struct uart_pxa_port *up = &serial_pxa_ports[co->index];
 	unsigned int ier;
-	int i;
 
 	/*
-	 *	First save the UER then disable the interrupts
+	 *	First save the IER then disable the interrupts
 	 */
 	ier = serial_in(up, UART_IER);
 	serial_out(up, UART_IER, UART_IER_UUE);
 
-	/*
-	 *	Now, do each character
-	 */
-	for (i = 0; i < count; i++, s++) {
-		wait_for_xmitr(up);
-
-		/*
-		 *	Send the character out.
-		 *	If a LF, also do CR...
-		 */
-		serial_out(up, UART_TX, *s);
-		if (*s == 10) {
-			wait_for_xmitr(up);
-			serial_out(up, UART_TX, 13);
-		}
-	}
+	uart_console_write(&up->port, s, count, serial_pxa_console_putchar);
 
 	/*
 	 *	Finally, wait for transmitter to become empty

@@ -43,6 +43,7 @@
  ********************************************************************/
 
 #include <linux/config.h>
+#include <linux/capability.h>
 #include <linux/module.h>
 #include <linux/types.h>
 #include <linux/socket.h>
@@ -62,12 +63,12 @@
 
 static int irda_create(struct socket *sock, int protocol);
 
-static struct proto_ops irda_stream_ops;
-static struct proto_ops irda_seqpacket_ops;
-static struct proto_ops irda_dgram_ops;
+static const struct proto_ops irda_stream_ops;
+static const struct proto_ops irda_seqpacket_ops;
+static const struct proto_ops irda_dgram_ops;
 
 #ifdef CONFIG_IRDA_ULTRA
-static struct proto_ops irda_ultra_ops;
+static const struct proto_ops irda_ultra_ops;
 #define ULTRA_MAX_DATA 382
 #endif /* CONFIG_IRDA_ULTRA */
 
@@ -1301,7 +1302,7 @@ static int irda_sendmsg(struct kiocb *iocb, struct socket *sock,
 	if (sk->sk_state != TCP_ESTABLISHED)
 		return -ENOTCONN;
 
-	/* Check that we don't send out to big frames */
+	/* Check that we don't send out too big frames */
 	if (len > self->max_data_size) {
 		IRDA_DEBUG(2, "%s(), Chopping frame from %zd to %d bytes!\n",
 			   __FUNCTION__, len, self->max_data_size);
@@ -1438,8 +1439,9 @@ static int irda_recvmsg_stream(struct kiocb *iocb, struct socket *sock,
 			/*
 			 *	POSIX 1003.1g mandates this order.
 			 */
-			if (sk->sk_err)
-				ret = sock_error(sk);
+			ret = sock_error(sk);
+			if (ret)
+				break;
 			else if (sk->sk_shutdown & RCV_SHUTDOWN)
 				;
 			else if (noblock)
@@ -1544,7 +1546,7 @@ static int irda_sendmsg_dgram(struct kiocb *iocb, struct socket *sock,
 	IRDA_ASSERT(self != NULL, return -1;);
 
 	/*
-	 * Check that we don't send out to big frames. This is an unreliable
+	 * Check that we don't send out too big frames. This is an unreliable
 	 * service, so we have no fragmentation and no coalescence
 	 */
 	if (len > self->max_data_size) {
@@ -1640,7 +1642,7 @@ static int irda_sendmsg_ultra(struct kiocb *iocb, struct socket *sock,
 	}
 
 	/*
-	 * Check that we don't send out to big frames. This is an unreliable
+	 * Check that we don't send out too big frames. This is an unreliable
 	 * service, so we have no fragmentation and no coalescence
 	 */
 	if (len > self->max_data_size) {
@@ -1821,12 +1823,25 @@ static int irda_ioctl(struct socket *sock, unsigned int cmd, unsigned long arg)
 		return -EINVAL;
 	default:
 		IRDA_DEBUG(1, "%s(), doing device ioctl!\n", __FUNCTION__);
-		return dev_ioctl(cmd, (void __user *) arg);
+		return -ENOIOCTLCMD;
 	}
 
 	/*NOTREACHED*/
 	return 0;
 }
+
+#ifdef CONFIG_COMPAT
+/*
+ * Function irda_ioctl (sock, cmd, arg)
+ */
+static int irda_compat_ioctl(struct socket *sock, unsigned int cmd, unsigned long arg)
+{
+	/*
+	 * All IRDA's ioctl are standard ones.
+	 */
+	return -ENOIOCTLCMD;
+}
+#endif
 
 /*
  * Function irda_setsockopt (sock, level, optname, optval, optlen)
@@ -2463,7 +2478,7 @@ static struct net_proto_family irda_family_ops = {
 	.owner	= THIS_MODULE,
 };
 
-static struct proto_ops SOCKOPS_WRAPPED(irda_stream_ops) = {
+static const struct proto_ops SOCKOPS_WRAPPED(irda_stream_ops) = {
 	.family =	PF_IRDA,
 	.owner =	THIS_MODULE,
 	.release =	irda_release,
@@ -2474,6 +2489,9 @@ static struct proto_ops SOCKOPS_WRAPPED(irda_stream_ops) = {
 	.getname =	irda_getname,
 	.poll =		irda_poll,
 	.ioctl =	irda_ioctl,
+#ifdef CONFIG_COMPAT
+	.compat_ioctl =	irda_compat_ioctl,
+#endif
 	.listen =	irda_listen,
 	.shutdown =	irda_shutdown,
 	.setsockopt =	irda_setsockopt,
@@ -2484,7 +2502,7 @@ static struct proto_ops SOCKOPS_WRAPPED(irda_stream_ops) = {
 	.sendpage =	sock_no_sendpage,
 };
 
-static struct proto_ops SOCKOPS_WRAPPED(irda_seqpacket_ops) = {
+static const struct proto_ops SOCKOPS_WRAPPED(irda_seqpacket_ops) = {
 	.family =	PF_IRDA,
 	.owner =	THIS_MODULE,
 	.release =	irda_release,
@@ -2495,6 +2513,9 @@ static struct proto_ops SOCKOPS_WRAPPED(irda_seqpacket_ops) = {
 	.getname =	irda_getname,
 	.poll =		datagram_poll,
 	.ioctl =	irda_ioctl,
+#ifdef CONFIG_COMPAT
+	.compat_ioctl =	irda_compat_ioctl,
+#endif
 	.listen =	irda_listen,
 	.shutdown =	irda_shutdown,
 	.setsockopt =	irda_setsockopt,
@@ -2505,7 +2526,7 @@ static struct proto_ops SOCKOPS_WRAPPED(irda_seqpacket_ops) = {
 	.sendpage =	sock_no_sendpage,
 };
 
-static struct proto_ops SOCKOPS_WRAPPED(irda_dgram_ops) = {
+static const struct proto_ops SOCKOPS_WRAPPED(irda_dgram_ops) = {
 	.family =	PF_IRDA,
 	.owner =	THIS_MODULE,
 	.release =	irda_release,
@@ -2516,6 +2537,9 @@ static struct proto_ops SOCKOPS_WRAPPED(irda_dgram_ops) = {
 	.getname =	irda_getname,
 	.poll =		datagram_poll,
 	.ioctl =	irda_ioctl,
+#ifdef CONFIG_COMPAT
+	.compat_ioctl =	irda_compat_ioctl,
+#endif
 	.listen =	irda_listen,
 	.shutdown =	irda_shutdown,
 	.setsockopt =	irda_setsockopt,
@@ -2527,7 +2551,7 @@ static struct proto_ops SOCKOPS_WRAPPED(irda_dgram_ops) = {
 };
 
 #ifdef CONFIG_IRDA_ULTRA
-static struct proto_ops SOCKOPS_WRAPPED(irda_ultra_ops) = {
+static const struct proto_ops SOCKOPS_WRAPPED(irda_ultra_ops) = {
 	.family =	PF_IRDA,
 	.owner =	THIS_MODULE,
 	.release =	irda_release,
@@ -2538,6 +2562,9 @@ static struct proto_ops SOCKOPS_WRAPPED(irda_ultra_ops) = {
 	.getname =	irda_getname,
 	.poll =		datagram_poll,
 	.ioctl =	irda_ioctl,
+#ifdef CONFIG_COMPAT
+	.compat_ioctl =	irda_compat_ioctl,
+#endif
 	.listen =	sock_no_listen,
 	.shutdown =	irda_shutdown,
 	.setsockopt =	irda_setsockopt,

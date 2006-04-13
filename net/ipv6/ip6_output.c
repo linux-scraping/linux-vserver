@@ -161,7 +161,7 @@ int ip6_output(struct sk_buff *skb)
 int ip6_xmit(struct sock *sk, struct sk_buff *skb, struct flowi *fl,
 	     struct ipv6_txoptions *opt, int ipfragok)
 {
-	struct ipv6_pinfo *np = sk ? inet6_sk(sk) : NULL;
+	struct ipv6_pinfo *np = inet6_sk(sk);
 	struct in6_addr *first_hop = &fl->fl6_dst;
 	struct dst_entry *dst = skb->dst;
 	struct ipv6hdr *hdr;
@@ -225,6 +225,8 @@ int ip6_xmit(struct sock *sk, struct sk_buff *skb, struct flowi *fl,
 
 	ipv6_addr_copy(&hdr->saddr, &fl->fl6_src);
 	ipv6_addr_copy(&hdr->daddr, first_hop);
+
+	skb->priority = sk->sk_priority;
 
 	mtu = dst_mtu(dst);
 	if ((skb->len <= mtu) || ipfragok) {
@@ -492,6 +494,7 @@ static int ip6_fragment(struct sk_buff *skb, int (*output)(struct sk_buff *))
 	struct net_device *dev;
 	struct sk_buff *frag;
 	struct rt6_info *rt = (struct rt6_info*)skb->dst;
+	struct ipv6_pinfo *np = skb->sk ? inet6_sk(skb->sk) : NULL;
 	struct ipv6hdr *tmp_hdr;
 	struct frag_hdr *fh;
 	unsigned int mtu, hlen, left, len;
@@ -503,7 +506,12 @@ static int ip6_fragment(struct sk_buff *skb, int (*output)(struct sk_buff *))
 	hlen = ip6_find_1stfragopt(skb, &prevhdr);
 	nexthdr = *prevhdr;
 
-	mtu = dst_mtu(&rt->u.dst) - hlen - sizeof(struct frag_hdr);
+	mtu = dst_mtu(&rt->u.dst);
+	if (np && np->frag_size < mtu) {
+		if (np->frag_size)
+			mtu = np->frag_size;
+	}
+	mtu -= hlen + sizeof(struct frag_hdr);
 
 	if (skb_shinfo(skb)->frag_list) {
 		int first_len = skb_pagelen(skb);
@@ -725,28 +733,29 @@ int ip6_dst_lookup(struct sock *sk, struct dst_entry **dst, struct flowi *fl)
 		if (*dst) {
 			struct rt6_info *rt = (struct rt6_info*)*dst;
 	
-				/* Yes, checking route validity in not connected
-				   case is not very simple. Take into account,
-				   that we do not support routing by source, TOS,
-				   and MSG_DONTROUTE 		--ANK (980726)
-	
-				   1. If route was host route, check that
-				      cached destination is current.
-				      If it is network route, we still may
-				      check its validity using saved pointer
-				      to the last used address: daddr_cache.
-				      We do not want to save whole address now,
-				      (because main consumer of this service
-				       is tcp, which has not this problem),
-				      so that the last trick works only on connected
-				      sockets.
-				   2. oif also should be the same.
-				 */
-	
+			/* Yes, checking route validity in not connected
+			 * case is not very simple. Take into account,
+			 * that we do not support routing by source, TOS,
+			 * and MSG_DONTROUTE 		--ANK (980726)
+			 *
+			 * 1. If route was host route, check that
+			 *    cached destination is current.
+			 *    If it is network route, we still may
+			 *    check its validity using saved pointer
+			 *    to the last used address: daddr_cache.
+			 *    We do not want to save whole address now,
+			 *    (because main consumer of this service
+			 *    is tcp, which has not this problem),
+			 *    so that the last trick works only on connected
+			 *    sockets.
+			 * 2. oif also should be the same.
+			 */
 			if (((rt->rt6i_dst.plen != 128 ||
-			      !ipv6_addr_equal(&fl->fl6_dst, &rt->rt6i_dst.addr))
+			      !ipv6_addr_equal(&fl->fl6_dst,
+					       &rt->rt6i_dst.addr))
 			     && (np->daddr_cache == NULL ||
-				 !ipv6_addr_equal(&fl->fl6_dst, np->daddr_cache)))
+				 !ipv6_addr_equal(&fl->fl6_dst,
+						  np->daddr_cache)))
 			    || (fl->oif && fl->oif != (*dst)->dev->ifindex)) {
 				dst_release(*dst);
 				*dst = NULL;
@@ -774,6 +783,8 @@ out_err_release:
 	*dst = NULL;
 	return err;
 }
+
+EXPORT_SYMBOL_GPL(ip6_dst_lookup);
 
 static inline int ip6_ufo_append_data(struct sock *sk,
 			int getfrag(void *from, char *to, int offset, int len,
@@ -878,7 +889,12 @@ int ip6_append_data(struct sock *sk, int getfrag(void *from, char *to,
 		inet->cork.fl = *fl;
 		np->cork.hop_limit = hlimit;
 		np->cork.tclass = tclass;
-		inet->cork.fragsize = mtu = dst_mtu(rt->u.dst.path);
+		mtu = dst_mtu(rt->u.dst.path);
+		if (np->frag_size < mtu) {
+			if (np->frag_size)
+				mtu = np->frag_size;
+		}
+		inet->cork.fragsize = mtu;
 		if (dst_allfrag(rt->u.dst.path))
 			inet->cork.flags |= IPCORK_ALLFRAG;
 		inet->cork.length = 0;
@@ -929,10 +945,11 @@ int ip6_append_data(struct sock *sk, int getfrag(void *from, char *to,
 	if (((length > mtu) && (sk->sk_protocol == IPPROTO_UDP)) &&
 	    (rt->u.dst.dev->features & NETIF_F_UFO)) {
 
-		if(ip6_ufo_append_data(sk, getfrag, from, length, hh_len,
-				fragheaderlen, transhdrlen, mtu, flags))
+		err = ip6_ufo_append_data(sk, getfrag, from, length, hh_len,
+					  fragheaderlen, transhdrlen, mtu,
+					  flags);
+		if (err)
 			goto error;
-
 		return 0;
 	}
 
@@ -1179,6 +1196,8 @@ int ip6_push_pending_frames(struct sock *sk)
 	hdr->nexthdr = proto;
 	ipv6_addr_copy(&hdr->saddr, &fl->fl6_src);
 	ipv6_addr_copy(&hdr->daddr, final_dst);
+
+	skb->priority = sk->sk_priority;
 
 	skb->dst = dst_clone(&rt->u.dst);
 	IP6_INC_STATS(IPSTATS_MIB_OUTREQUESTS);	

@@ -7,7 +7,8 @@ endif
 endif
 obj-$(CONFIG_PPC_CHRP)		+= chrp/
 obj-$(CONFIG_4xx)		+= 4xx/
-obj-$(CONFIG_85xx)		+= 85xx/
+obj-$(CONFIG_PPC_83xx)		+= 83xx/
+obj-$(CONFIG_PPC_85xx)		+= 85xx/
 obj-$(CONFIG_PPC_PSERIES)	+= pseries/
 obj-$(CONFIG_PPC_ISERIES)	+= iseries/
 obj-$(CONFIG_PPC_MAPLE)		+= maple/

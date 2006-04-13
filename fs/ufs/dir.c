@@ -491,7 +491,7 @@ int ufs_delete_entry (struct inode * inode, struct ufs_dir_entry * dir,
 	
 	UFSD(("ino %u, reclen %u, namlen %u, name %s\n",
 		fs32_to_cpu(sb, de->d_ino),
-		fs16to_cpu(sb, de->d_reclen),
+		fs16_to_cpu(sb, de->d_reclen),
 		ufs_get_de_namlen(sb, de), de->d_name))
 
 	while (i < bh->b_size) {
@@ -620,7 +620,7 @@ int ufs_empty_dir (struct inode * inode)
 	return 1;
 }
 
-struct file_operations ufs_dir_operations = {
+const struct file_operations ufs_dir_operations = {
 	.read		= generic_read_dir,
 	.readdir	= ufs_readdir,
 	.fsync		= file_fsync,

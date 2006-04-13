@@ -3,7 +3,7 @@
  * License.  See the file "COPYING" in the main directory of this archive
  * for more details.
  *
- * Copyright (c) 2004-2005 Silicon Graphics, Inc.  All Rights Reserved.
+ * Copyright (c) 2004-2006 Silicon Graphics, Inc.  All Rights Reserved.
  */
 
 
@@ -21,10 +21,36 @@
 #include <linux/sched.h>
 #include <linux/cache.h>
 #include <linux/interrupt.h>
-#include <linux/slab.h>
+#include <linux/mutex.h>
+#include <linux/completion.h>
 #include <asm/sn/bte.h>
 #include <asm/sn/sn_sal.h>
-#include "xpc.h"
+#include <asm/sn/xpc.h>
+
+
+/*
+ * Guarantee that the kzalloc'd memory is cacheline aligned.
+ */
+static void *
+xpc_kzalloc_cacheline_aligned(size_t size, gfp_t flags, void **base)
+{
+	/* see if kzalloc will give us cachline aligned memory by default */
+	*base = kzalloc(size, flags);
+	if (*base == NULL) {
+		return NULL;
+	}
+	if ((u64) *base == L1_CACHE_ALIGN((u64) *base)) {
+		return *base;
+	}
+	kfree(*base);
+
+	/* nope, we'll have to do it ourselves */
+	*base = kzalloc(size + L1_CACHE_BYTES, flags);
+	if (*base == NULL) {
+		return NULL;
+	}
+	return (void *) L1_CACHE_ALIGN((u64) *base);
+}
 
 
 /*
@@ -56,8 +82,8 @@ xpc_initialize_channels(struct xpc_partition *part, partid_t partid)
 		atomic_set(&ch->n_to_notify, 0);
 
 		spin_lock_init(&ch->lock);
-		sema_init(&ch->msg_to_pull_sema, 1);	/* mutex */
-		sema_init(&ch->wdisconnect_sema, 0);	/* event wait */
+		mutex_init(&ch->msg_to_pull_mutex);
+		init_completion(&ch->wdisconnect_wait);
 
 		atomic_set(&ch->n_on_msg_allocate_wq, 0);
 		init_waitqueue_head(&ch->msg_allocate_wq);
@@ -91,20 +117,19 @@ xpc_setup_infrastructure(struct xpc_partition *part)
 	 * Allocate all of the channel structures as a contiguous chunk of
 	 * memory.
 	 */
-	part->channels = kmalloc(sizeof(struct xpc_channel) * XPC_NCHANNELS,
+	part->channels = kzalloc(sizeof(struct xpc_channel) * XPC_NCHANNELS,
 								GFP_KERNEL);
 	if (part->channels == NULL) {
 		dev_err(xpc_chan, "can't get memory for channels\n");
 		return xpcNoMemory;
 	}
-	memset(part->channels, 0, sizeof(struct xpc_channel) * XPC_NCHANNELS);
 
 	part->nchannels = XPC_NCHANNELS;
 
 
 	/* allocate all the required GET/PUT values */
 
-	part->local_GPs = xpc_kmalloc_cacheline_aligned(XPC_GP_SIZE,
+	part->local_GPs = xpc_kzalloc_cacheline_aligned(XPC_GP_SIZE,
 					GFP_KERNEL, &part->local_GPs_base);
 	if (part->local_GPs == NULL) {
 		kfree(part->channels);
@@ -113,55 +138,51 @@ xpc_setup_infrastructure(struct xpc_partition *part)
 			"values\n");
 		return xpcNoMemory;
 	}
-	memset(part->local_GPs, 0, XPC_GP_SIZE);
 
-	part->remote_GPs = xpc_kmalloc_cacheline_aligned(XPC_GP_SIZE,
+	part->remote_GPs = xpc_kzalloc_cacheline_aligned(XPC_GP_SIZE,
 					GFP_KERNEL, &part->remote_GPs_base);
 	if (part->remote_GPs == NULL) {
-		kfree(part->channels);
-		part->channels = NULL;
-		kfree(part->local_GPs_base);
-		part->local_GPs = NULL;
 		dev_err(xpc_chan, "can't get memory for remote get/put "
 			"values\n");
+		kfree(part->local_GPs_base);
+		part->local_GPs = NULL;
+		kfree(part->channels);
+		part->channels = NULL;
 		return xpcNoMemory;
 	}
-	memset(part->remote_GPs, 0, XPC_GP_SIZE);
 
 
 	/* allocate all the required open and close args */
 
-	part->local_openclose_args = xpc_kmalloc_cacheline_aligned(
+	part->local_openclose_args = xpc_kzalloc_cacheline_aligned(
 					XPC_OPENCLOSE_ARGS_SIZE, GFP_KERNEL,
 					&part->local_openclose_args_base);
 	if (part->local_openclose_args == NULL) {
-		kfree(part->channels);
-		part->channels = NULL;
-		kfree(part->local_GPs_base);
-		part->local_GPs = NULL;
+		dev_err(xpc_chan, "can't get memory for local connect args\n");
 		kfree(part->remote_GPs_base);
 		part->remote_GPs = NULL;
-		dev_err(xpc_chan, "can't get memory for local connect args\n");
+		kfree(part->local_GPs_base);
+		part->local_GPs = NULL;
+		kfree(part->channels);
+		part->channels = NULL;
 		return xpcNoMemory;
 	}
-	memset(part->local_openclose_args, 0, XPC_OPENCLOSE_ARGS_SIZE);
 
-	part->remote_openclose_args = xpc_kmalloc_cacheline_aligned(
+	part->remote_openclose_args = xpc_kzalloc_cacheline_aligned(
 					XPC_OPENCLOSE_ARGS_SIZE, GFP_KERNEL,
 					&part->remote_openclose_args_base);
 	if (part->remote_openclose_args == NULL) {
-		kfree(part->channels);
-		part->channels = NULL;
-		kfree(part->local_GPs_base);
-		part->local_GPs = NULL;
-		kfree(part->remote_GPs_base);
-		part->remote_GPs = NULL;
+		dev_err(xpc_chan, "can't get memory for remote connect args\n");
 		kfree(part->local_openclose_args_base);
 		part->local_openclose_args = NULL;
-		dev_err(xpc_chan, "can't get memory for remote connect args\n");
+		kfree(part->remote_GPs_base);
+		part->remote_GPs = NULL;
+		kfree(part->local_GPs_base);
+		part->local_GPs = NULL;
+		kfree(part->channels);
+		part->channels = NULL;
 		return xpcNoMemory;
 	}
-	memset(part->remote_openclose_args, 0, XPC_OPENCLOSE_ARGS_SIZE);
 
 
 	xpc_initialize_channels(part, partid);
@@ -184,18 +205,18 @@ xpc_setup_infrastructure(struct xpc_partition *part)
 	ret = request_irq(SGI_XPC_NOTIFY, xpc_notify_IRQ_handler, SA_SHIRQ,
 				part->IPI_owner, (void *) (u64) partid);
 	if (ret != 0) {
-		kfree(part->channels);
-		part->channels = NULL;
-		kfree(part->local_GPs_base);
-		part->local_GPs = NULL;
-		kfree(part->remote_GPs_base);
-		part->remote_GPs = NULL;
-		kfree(part->local_openclose_args_base);
-		part->local_openclose_args = NULL;
-		kfree(part->remote_openclose_args_base);
-		part->remote_openclose_args = NULL;
 		dev_err(xpc_chan, "can't register NOTIFY IRQ handler, "
 			"errno=%d\n", -ret);
+		kfree(part->remote_openclose_args_base);
+		part->remote_openclose_args = NULL;
+		kfree(part->local_openclose_args_base);
+		part->local_openclose_args = NULL;
+		kfree(part->remote_GPs_base);
+		part->remote_GPs = NULL;
+		kfree(part->local_GPs_base);
+		part->local_GPs = NULL;
+		kfree(part->channels);
+		part->channels = NULL;
 		return xpcLackOfResources;
 	}
 
@@ -444,22 +465,20 @@ xpc_allocate_local_msgqueue(struct xpc_channel *ch)
 	for (nentries = ch->local_nentries; nentries > 0; nentries--) {
 
 		nbytes = nentries * ch->msg_size;
-		ch->local_msgqueue = xpc_kmalloc_cacheline_aligned(nbytes,
-						(GFP_KERNEL | GFP_DMA),
+		ch->local_msgqueue = xpc_kzalloc_cacheline_aligned(nbytes,
+						GFP_KERNEL,
 						&ch->local_msgqueue_base);
 		if (ch->local_msgqueue == NULL) {
 			continue;
 		}
-		memset(ch->local_msgqueue, 0, nbytes);
 
 		nbytes = nentries * sizeof(struct xpc_notify);
-		ch->notify_queue = kmalloc(nbytes, (GFP_KERNEL | GFP_DMA));
+		ch->notify_queue = kzalloc(nbytes, GFP_KERNEL);
 		if (ch->notify_queue == NULL) {
 			kfree(ch->local_msgqueue_base);
 			ch->local_msgqueue = NULL;
 			continue;
 		}
-		memset(ch->notify_queue, 0, nbytes);
 
 		spin_lock_irqsave(&ch->lock, irq_flags);
 		if (nentries < ch->local_nentries) {
@@ -499,13 +518,12 @@ xpc_allocate_remote_msgqueue(struct xpc_channel *ch)
 	for (nentries = ch->remote_nentries; nentries > 0; nentries--) {
 
 		nbytes = nentries * ch->msg_size;
-		ch->remote_msgqueue = xpc_kmalloc_cacheline_aligned(nbytes,
-						(GFP_KERNEL | GFP_DMA),
+		ch->remote_msgqueue = xpc_kzalloc_cacheline_aligned(nbytes,
+						GFP_KERNEL,
 						&ch->remote_msgqueue_base);
 		if (ch->remote_msgqueue == NULL) {
 			continue;
 		}
-		memset(ch->remote_msgqueue, 0, nbytes);
 
 		spin_lock_irqsave(&ch->lock, irq_flags);
 		if (nentries < ch->remote_nentries) {
@@ -534,7 +552,6 @@ static enum xpc_retval
 xpc_allocate_msgqueues(struct xpc_channel *ch)
 {
 	unsigned long irq_flags;
-	int i;
 	enum xpc_retval ret;
 
 
@@ -550,11 +567,6 @@ xpc_allocate_msgqueues(struct xpc_channel *ch)
 		kfree(ch->notify_queue);
 		ch->notify_queue = NULL;
 		return ret;
-	}
-
-	for (i = 0; i < ch->local_nentries; i++) {
-		/* use a semaphore as an event wait queue */
-		sema_init(&ch->notify_queue[i].sema, 0);
 	}
 
 	spin_lock_irqsave(&ch->lock, irq_flags);
@@ -742,7 +754,9 @@ xpc_process_disconnect(struct xpc_channel *ch, unsigned long *irq_flags)
 
 	/* make sure all activity has settled down first */
 
-	if (atomic_read(&ch->references) > 0) {
+	if (atomic_read(&ch->references) > 0 ||
+			((ch->flags & XPC_C_CONNECTEDCALLOUT_MADE) &&
+			!(ch->flags & XPC_C_DISCONNECTINGCALLOUT_MADE))) {
 		return;
 	}
 	DBUG_ON(atomic_read(&ch->kthreads_assigned) != 0);
@@ -779,6 +793,12 @@ xpc_process_disconnect(struct xpc_channel *ch, unsigned long *irq_flags)
 
 	/* both sides are disconnected now */
 
+	if (ch->flags & XPC_C_DISCONNECTINGCALLOUT_MADE) {
+		spin_unlock_irqrestore(&ch->lock, *irq_flags);
+		xpc_disconnect_callout(ch, xpcDisconnected);
+		spin_lock_irqsave(&ch->lock, *irq_flags);
+	}
+
 	/* it's now safe to free the channel's message queues */
 	xpc_free_msgqueues(ch);
 
@@ -793,10 +813,8 @@ xpc_process_disconnect(struct xpc_channel *ch, unsigned long *irq_flags)
 	}
 
 	if (ch->flags & XPC_C_WDISCONNECT) {
-		spin_unlock_irqrestore(&ch->lock, *irq_flags);
-		up(&ch->wdisconnect_sema);
-		spin_lock_irqsave(&ch->lock, *irq_flags);
-
+		/* we won't lose the CPU since we're holding ch->lock */
+		complete(&ch->wdisconnect_wait);
 	} else if (ch->delayed_IPI_flags) {
 		if (part->act_state != XPC_P_DEACTIVATING) {
 			/* time to take action on any delayed IPI flags */
@@ -1086,12 +1104,12 @@ xpc_connect_channel(struct xpc_channel *ch)
 	struct xpc_registration *registration = &xpc_registrations[ch->number];
 
 
-	if (down_trylock(&registration->sema) != 0) {
+	if (mutex_trylock(&registration->mutex) == 0) {
 		return xpcRetry;
 	}
 
 	if (!XPC_CHANNEL_REGISTERED(ch->number)) {
-		up(&registration->sema);
+		mutex_unlock(&registration->mutex);
 		return xpcUnregistered;
 	}
 
@@ -1102,7 +1120,7 @@ xpc_connect_channel(struct xpc_channel *ch)
 
 	if (ch->flags & XPC_C_DISCONNECTING) {
 		spin_unlock_irqrestore(&ch->lock, irq_flags);
-		up(&registration->sema);
+		mutex_unlock(&registration->mutex);
 		return ch->reason;
 	}
 
@@ -1134,7 +1152,7 @@ xpc_connect_channel(struct xpc_channel *ch)
 			 * channel lock be locked and will unlock and relock
 			 * the channel lock as needed.
 			 */
-			up(&registration->sema);
+			mutex_unlock(&registration->mutex);
 			XPC_DISCONNECT_CHANNEL(ch, xpcUnequalMsgSizes,
 								&irq_flags);
 			spin_unlock_irqrestore(&ch->lock, irq_flags);
@@ -1149,7 +1167,7 @@ xpc_connect_channel(struct xpc_channel *ch)
 		atomic_inc(&xpc_partitions[ch->partid].nchannels_active);
 	}
 
-	up(&registration->sema);
+	mutex_unlock(&registration->mutex);
 
 
 	/* initiate the connection */
@@ -1300,7 +1318,7 @@ xpc_process_msg_IPI(struct xpc_partition *part, int ch_number)
 				"delivered=%d, partid=%d, channel=%d\n",
 				nmsgs_sent, ch->partid, ch->number);
 
-			if (ch->flags & XPC_C_CONNECTCALLOUT) {
+			if (ch->flags & XPC_C_CONNECTEDCALLOUT_MADE) {
 				xpc_activate_kthreads(ch, nmsgs_sent);
 			}
 		}
@@ -1645,7 +1663,7 @@ xpc_disconnect_channel(const int line, struct xpc_channel *ch,
 
 
 void
-xpc_disconnecting_callout(struct xpc_channel *ch)
+xpc_disconnect_callout(struct xpc_channel *ch, enum xpc_retval reason)
 {
 	/*
 	 * Let the channel's registerer know that the channel is being
@@ -1654,15 +1672,13 @@ xpc_disconnecting_callout(struct xpc_channel *ch)
 	 */
 
 	if (ch->func != NULL) {
-		dev_dbg(xpc_chan, "ch->func() called, reason=xpcDisconnecting,"
-			" partid=%d, channel=%d\n", ch->partid, ch->number);
+		dev_dbg(xpc_chan, "ch->func() called, reason=%d, partid=%d, "
+			"channel=%d\n", reason, ch->partid, ch->number);
 
-		ch->func(xpcDisconnecting, ch->partid, ch->number, NULL,
-								ch->key);
+		ch->func(reason, ch->partid, ch->number, NULL, ch->key);
 
-		dev_dbg(xpc_chan, "ch->func() returned, reason="
-			"xpcDisconnecting, partid=%d, channel=%d\n",
-			ch->partid, ch->number);
+		dev_dbg(xpc_chan, "ch->func() returned, reason=%d, partid=%d, "
+			"channel=%d\n", reason, ch->partid, ch->number);
 	}
 }
 
@@ -2085,7 +2101,7 @@ xpc_pull_remote_msg(struct xpc_channel *ch, s64 get)
 	enum xpc_retval ret;
 
 
-	if (down_interruptible(&ch->msg_to_pull_sema) != 0) {
+	if (mutex_lock_interruptible(&ch->msg_to_pull_mutex) != 0) {
 		/* we were interrupted by a signal */
 		return NULL;
 	}
@@ -2121,7 +2137,7 @@ xpc_pull_remote_msg(struct xpc_channel *ch, s64 get)
 
 			XPC_DEACTIVATE_PARTITION(part, ret);
 
-			up(&ch->msg_to_pull_sema);
+			mutex_unlock(&ch->msg_to_pull_mutex);
 			return NULL;
 		}
 
@@ -2130,7 +2146,7 @@ xpc_pull_remote_msg(struct xpc_channel *ch, s64 get)
 		ch->next_msg_to_pull += nmsgs;
 	}
 
-	up(&ch->msg_to_pull_sema);
+	mutex_unlock(&ch->msg_to_pull_mutex);
 
 	/* return the message we were looking for */
 	msg_offset = (get % ch->remote_nentries) * ch->msg_size;

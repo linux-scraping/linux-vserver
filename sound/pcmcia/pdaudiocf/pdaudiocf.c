@@ -52,40 +52,27 @@ MODULE_PARM_DESC(enable, "Enable " CARD_NAME " soundcard.");
 /*
  */
 
-static dev_info_t dev_info = "snd-pdaudiocf";
-static snd_card_t *card_list[SNDRV_CARDS];
-static dev_link_t *dev_list;
+static struct snd_card *card_list[SNDRV_CARDS];
 
 /*
  * prototypes
  */
-static void pdacf_config(dev_link_t *link);
-static int pdacf_event(event_t event, int priority, event_callback_args_t *args);
-static void snd_pdacf_detach(dev_link_t *link);
+static int pdacf_config(struct pcmcia_device *link);
+static void snd_pdacf_detach(struct pcmcia_device *p_dev);
 
-static void pdacf_release(dev_link_t *link)
+static void pdacf_release(struct pcmcia_device *link)
 {
-	if (link->state & DEV_CONFIG) {
-		/* release cs resources */
-		pcmcia_release_configuration(link->handle);
-		pcmcia_release_io(link->handle, &link->io);
-		pcmcia_release_irq(link->handle, &link->irq);
-		link->state &= ~DEV_CONFIG;
-	}
+	pcmcia_disable_device(link);
 }
 
 /*
  * destructor
  */
-static int snd_pdacf_free(pdacf_t *pdacf)
+static int snd_pdacf_free(struct snd_pdacf *pdacf)
 {
-	dev_link_t *link = &pdacf->link;
+	struct pcmcia_device *link = pdacf->p_dev;
 
 	pdacf_release(link);
-
-	/* Break the link with Card Services */
-	if (link->handle)
-		pcmcia_deregister_client(link->handle);
 
 	card_list[pdacf->index] = NULL;
 	pdacf->card = NULL;
@@ -94,23 +81,21 @@ static int snd_pdacf_free(pdacf_t *pdacf)
 	return 0;
 }
 
-static int snd_pdacf_dev_free(snd_device_t *device)
+static int snd_pdacf_dev_free(struct snd_device *device)
 {
-	pdacf_t *chip = device->device_data;
+	struct snd_pdacf *chip = device->device_data;
 	return snd_pdacf_free(chip);
 }
 
 /*
  * snd_pdacf_attach - attach callback for cs
  */
-static dev_link_t *snd_pdacf_attach(void)
+static int snd_pdacf_probe(struct pcmcia_device *link)
 {
-	client_reg_t client_reg;	/* Register with cardmgr */
-	dev_link_t *link;		/* Info for cardmgr */
-	int i, ret;
-	pdacf_t *pdacf;
-	snd_card_t *card;
-	static snd_device_ops_t ops = {
+	int i;
+	struct snd_pdacf *pdacf;
+	struct snd_card *card;
+	static struct snd_device_ops ops = {
 		.dev_free =	snd_pdacf_dev_free,
 	};
 
@@ -122,32 +107,32 @@ static dev_link_t *snd_pdacf_attach(void)
 	}
 	if (i >= SNDRV_CARDS) {
 		snd_printk(KERN_ERR "pdacf: too many cards found\n");
-		return NULL;
+		return -EINVAL;
 	}
 	if (! enable[i])
-		return NULL; /* disabled explicitly */
+		return -ENODEV; /* disabled explicitly */
 
 	/* ok, create a card instance */
 	card = snd_card_new(index[i], id[i], THIS_MODULE, 0);
 	if (card == NULL) {
 		snd_printk(KERN_ERR "pdacf: cannot create a card instance\n");
-		return NULL;
+		return -ENOMEM;
 	}
 
 	pdacf = snd_pdacf_create(card);
 	if (! pdacf)
-		return NULL;
+		return -EIO;
 
 	if (snd_device_new(card, SNDRV_DEV_LOWLEVEL, pdacf, &ops) < 0) {
 		kfree(pdacf);
 		snd_card_free(card);
-		return NULL;
+		return -ENODEV;
 	}
 
 	pdacf->index = i;
 	card_list[i] = card;
 
-	link = &pdacf->link;
+	pdacf->p_dev = link;
 	link->priv = pdacf;
 
 	link->io.Attributes1 = IO_DATA_PATH_WIDTH_AUTO;
@@ -164,23 +149,7 @@ static dev_link_t *snd_pdacf_attach(void)
 	link->conf.ConfigIndex = 1;
 	link->conf.Present = PRESENT_OPTION;
 
-	/* Chain drivers */
-	link->next = dev_list;
-	dev_list = link;
-
-	/* Register with Card Services */
-	client_reg.dev_info = &dev_info;
-	client_reg.Version = 0x0210;
-	client_reg.event_callback_args.client_data = link;
-
-	ret = pcmcia_register_client(&link->handle, &client_reg);
-	if (ret != CS_SUCCESS) {
-		cs_error(link->handle, RegisterClient, ret);
-		snd_pdacf_detach(link);
-		return NULL;
-	}
-
-	return link;
+	return pdacf_config(link);
 }
 
 
@@ -194,10 +163,10 @@ static dev_link_t *snd_pdacf_attach(void)
  *
  * returns 0 if successful, or a negative error code.
  */
-static int snd_pdacf_assign_resources(pdacf_t *pdacf, int port, int irq)
+static int snd_pdacf_assign_resources(struct snd_pdacf *pdacf, int port, int irq)
 {
 	int err;
-	snd_card_t *card = pdacf->card;
+	struct snd_card *card = pdacf->card;
 
 	snd_printdd(KERN_DEBUG "pdacf assign resources: port = 0x%x, irq = %d\n", port, irq);
 	pdacf->port = port;
@@ -217,8 +186,6 @@ static int snd_pdacf_assign_resources(pdacf_t *pdacf, int port, int irq)
 	if (err < 0)
 		return err;
 
-	snd_card_set_pm_callback(card, snd_pdacf_suspend, snd_pdacf_resume, pdacf);
-
 	if ((err = snd_card_register(card)) < 0)
 		return err;
 
@@ -229,21 +196,12 @@ static int snd_pdacf_assign_resources(pdacf_t *pdacf, int port, int irq)
 /*
  * snd_pdacf_detach - detach callback for cs
  */
-static void snd_pdacf_detach(dev_link_t *link)
+static void snd_pdacf_detach(struct pcmcia_device *link)
 {
-	pdacf_t *chip = link->priv;
+	struct snd_pdacf *chip = link->priv;
 
 	snd_printdd(KERN_DEBUG "pdacf_detach called\n");
-	/* Remove the interface data from the linked list */
-	{
-		dev_link_t **linkp;
-		/* Locate device structure */
-		for (linkp = &dev_list; *linkp; linkp = &(*linkp)->next)
-			if (*linkp == link)
-				break;
-		if (*linkp)
-			*linkp = link->next;
-	}
+
 	if (chip->chip_status & PDAUDIOCF_STAT_IS_CONFIGURED)
 		snd_pdacf_powerdown(chip);
 	chip->chip_status |= PDAUDIOCF_STAT_IS_STALE; /* to be sure */
@@ -258,13 +216,11 @@ static void snd_pdacf_detach(dev_link_t *link)
 #define CS_CHECK(fn, ret) \
 do { last_fn = (fn); if ((last_ret = (ret)) != 0) goto cs_failed; } while (0)
 
-static void pdacf_config(dev_link_t *link)
+static int pdacf_config(struct pcmcia_device *link)
 {
-	client_handle_t handle = link->handle;
-	pdacf_t *pdacf = link->priv;
+	struct snd_pdacf *pdacf = link->priv;
 	tuple_t tuple;
 	cisparse_t *parse = NULL;
-	config_info_t conf;
 	u_short buf[32];
 	int last_fn, last_ret;
 
@@ -272,7 +228,7 @@ static void pdacf_config(dev_link_t *link)
 	parse = kmalloc(sizeof(*parse), GFP_KERNEL);
 	if (! parse) {
 		snd_printk(KERN_ERR "pdacf_config: cannot allocate\n");
-		return;
+		return -ENOMEM;
 	}
 	tuple.DesiredTuple = CISTPL_CFTABLE_ENTRY;
 	tuple.Attributes = 0;
@@ -280,93 +236,62 @@ static void pdacf_config(dev_link_t *link)
 	tuple.TupleDataMax = sizeof(buf);
 	tuple.TupleOffset = 0;
 	tuple.DesiredTuple = CISTPL_CONFIG;
-	CS_CHECK(GetFirstTuple, pcmcia_get_first_tuple(handle, &tuple));
-	CS_CHECK(GetTupleData, pcmcia_get_tuple_data(handle, &tuple));
-	CS_CHECK(ParseTuple, pcmcia_parse_tuple(handle, &tuple, parse));
+	CS_CHECK(GetFirstTuple, pcmcia_get_first_tuple(link, &tuple));
+	CS_CHECK(GetTupleData, pcmcia_get_tuple_data(link, &tuple));
+	CS_CHECK(ParseTuple, pcmcia_parse_tuple(link, &tuple, parse));
 	link->conf.ConfigBase = parse->config.base;
 	link->conf.ConfigIndex = 0x5;
 	kfree(parse);
 
-	CS_CHECK(GetConfigurationInfo, pcmcia_get_configuration_info(handle, &conf));
-	link->conf.Vcc = conf.Vcc;
-
-	/* Configure card */
-	link->state |= DEV_CONFIG;
-
-	CS_CHECK(RequestIO, pcmcia_request_io(handle, &link->io));
-	CS_CHECK(RequestIRQ, pcmcia_request_irq(link->handle, &link->irq));
-	CS_CHECK(RequestConfiguration, pcmcia_request_configuration(link->handle, &link->conf));
+	CS_CHECK(RequestIO, pcmcia_request_io(link, &link->io));
+	CS_CHECK(RequestIRQ, pcmcia_request_irq(link, &link->irq));
+	CS_CHECK(RequestConfiguration, pcmcia_request_configuration(link, &link->conf));
 
 	if (snd_pdacf_assign_resources(pdacf, link->io.BasePort1, link->irq.AssignedIRQ) < 0)
 		goto failed;
 
-	link->dev = &pdacf->node;
-	link->state &= ~DEV_CONFIG_PENDING;
-	return;
+	link->dev_node = &pdacf->node;
+	return 0;
 
 cs_failed:
-	cs_error(link->handle, last_fn, last_ret);
+	cs_error(link, last_fn, last_ret);
 failed:
-	pcmcia_release_configuration(link->handle);
-	pcmcia_release_io(link->handle, &link->io);
-	pcmcia_release_irq(link->handle, &link->irq);
+	pcmcia_disable_device(link);
+	return -ENODEV;
 }
 
-/*
- * event callback
- */
-static int pdacf_event(event_t event, int priority, event_callback_args_t *args)
-{
-	dev_link_t *link = args->client_data;
-	pdacf_t *chip = link->priv;
-
-	switch (event) {
-	case CS_EVENT_CARD_REMOVAL:
-		snd_printdd(KERN_DEBUG "CARD_REMOVAL..\n");
-		link->state &= ~DEV_PRESENT;
-		if (link->state & DEV_CONFIG) {
-			chip->chip_status |= PDAUDIOCF_STAT_IS_STALE;
-		}
-		break;
-	case CS_EVENT_CARD_INSERTION:
-		snd_printdd(KERN_DEBUG "CARD_INSERTION..\n");
-		link->state |= DEV_PRESENT;
-		pdacf_config(link);
-		break;
 #ifdef CONFIG_PM
-	case CS_EVENT_PM_SUSPEND:
-		snd_printdd(KERN_DEBUG "SUSPEND\n");
-		link->state |= DEV_SUSPEND;
-		if (chip) {
-			snd_printdd(KERN_DEBUG "snd_pdacf_suspend calling\n");
-			snd_pdacf_suspend(chip->card, PMSG_SUSPEND);
-		}
-		/* Fall through... */
-	case CS_EVENT_RESET_PHYSICAL:
-		snd_printdd(KERN_DEBUG "RESET_PHYSICAL\n");
-		if (link->state & DEV_CONFIG)
-			pcmcia_release_configuration(link->handle);
-		break;
-	case CS_EVENT_PM_RESUME:
-		snd_printdd(KERN_DEBUG "RESUME\n");
-		link->state &= ~DEV_SUSPEND;
-		/* Fall through... */
-	case CS_EVENT_CARD_RESET:
-		snd_printdd(KERN_DEBUG "CARD_RESET\n");
-		if (DEV_OK(link)) {
-			snd_printdd(KERN_DEBUG "requestconfig...\n");
-			pcmcia_request_configuration(link->handle, &link->conf);
-			if (chip) {
-				snd_printdd(KERN_DEBUG "calling snd_pdacf_resume\n");
-				snd_pdacf_resume(chip->card);
-			}
-		}
-		snd_printdd(KERN_DEBUG "resume done!\n");
-		break;
-#endif
+
+static int pdacf_suspend(struct pcmcia_device *link)
+{
+	struct snd_pdacf *chip = link->priv;
+
+	snd_printdd(KERN_DEBUG "SUSPEND\n");
+	if (chip) {
+		snd_printdd(KERN_DEBUG "snd_pdacf_suspend calling\n");
+		snd_pdacf_suspend(chip, PMSG_SUSPEND);
 	}
+
 	return 0;
 }
+
+static int pdacf_resume(struct pcmcia_device *link)
+{
+	struct snd_pdacf *chip = link->priv;
+
+	snd_printdd(KERN_DEBUG "RESUME\n");
+	if (pcmcia_dev_present(link)) {
+		if (chip) {
+			snd_printdd(KERN_DEBUG "calling snd_pdacf_resume\n");
+			snd_pdacf_resume(chip);
+		}
+	}
+	snd_printdd(KERN_DEBUG "resume done!\n");
+
+	return 0;
+}
+
+#endif
 
 /*
  * Module entry points
@@ -382,10 +307,14 @@ static struct pcmcia_driver pdacf_cs_driver = {
 	.drv		= {
 		.name	= "snd-pdaudiocf",
 	},
-	.attach		= snd_pdacf_attach,
-	.event		= pdacf_event,
-	.detach		= snd_pdacf_detach,
+	.probe		= snd_pdacf_probe,
+	.remove		= snd_pdacf_detach,
 	.id_table	= snd_pdacf_ids,
+#ifdef CONFIG_PM
+	.suspend	= pdacf_suspend,
+	.resume		= pdacf_resume,
+#endif
+
 };
 
 static int __init init_pdacf(void)
@@ -396,7 +325,6 @@ static int __init init_pdacf(void)
 static void __exit exit_pdacf(void)
 {
 	pcmcia_unregister_driver(&pdacf_cs_driver);
-	BUG_ON(dev_list != NULL);
 }
 
 module_init(init_pdacf);

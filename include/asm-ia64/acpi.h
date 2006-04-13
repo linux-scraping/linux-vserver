@@ -106,10 +106,16 @@ extern unsigned int can_cpei_retarget(void);
 extern unsigned int is_cpu_cpei_target(unsigned int cpu);
 extern void set_cpei_target_cpu(unsigned int cpu);
 extern unsigned int get_cpei_target_cpu(void);
+extern void prefill_possible_map(void);
+extern int additional_cpus;
 
 #ifdef CONFIG_ACPI_NUMA
 /* Proximity bitmap length; _PXM is at most 255 (8 bit)*/
+#ifdef CONFIG_IA64_NR_NODES
+#define MAX_PXM_DOMAINS CONFIG_IA64_NR_NODES
+#else
 #define MAX_PXM_DOMAINS (256)
+#endif
 extern int __devinitdata pxm_to_nid_map[MAX_PXM_DOMAINS];
 extern int __initdata nid_to_pxm_map[MAX_NUMNODES];
 #endif

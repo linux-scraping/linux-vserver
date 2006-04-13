@@ -25,8 +25,8 @@
  * Limits for PMC and PMD are set to less than maximum architected values
  * but should be sufficient for a while
  */
-#define IA64_NUM_PMC_REGS	32
-#define IA64_NUM_PMD_REGS	32
+#define IA64_NUM_PMC_REGS	64
+#define IA64_NUM_PMD_REGS	64
 
 #define DEFAULT_MAP_BASE	__IA64_UL_CONST(0x2000000000000000)
 #define DEFAULT_TASK_SIZE	__IA64_UL_CONST(0xa000000000000000)
@@ -50,7 +50,8 @@
 #define IA64_THREAD_PM_VALID	(__IA64_UL(1) << 2)	/* performance registers valid? */
 #define IA64_THREAD_UAC_NOPRINT	(__IA64_UL(1) << 3)	/* don't log unaligned accesses */
 #define IA64_THREAD_UAC_SIGBUS	(__IA64_UL(1) << 4)	/* generate SIGBUS on unaligned acc. */
-							/* bit 5 is currently unused */
+#define IA64_THREAD_MIGRATION	(__IA64_UL(1) << 5)	/* require migration
+							   sync at ctx sw */
 #define IA64_THREAD_FPEMU_NOPRINT (__IA64_UL(1) << 6)	/* don't log any fpswa faults */
 #define IA64_THREAD_FPEMU_SIGFPE  (__IA64_UL(1) << 7)	/* send a SIGFPE for fpswa faults */
 
@@ -180,7 +181,6 @@ DECLARE_PER_CPU(struct cpuinfo_ia64, cpu_info);
 #define local_cpu_data		(&__ia64_per_cpu_var(cpu_info))
 #define cpu_data(cpu)		(&per_cpu(cpu_info, cpu))
 
-extern void identify_cpu (struct cpuinfo_ia64 *);
 extern void print_cpu_info (struct cpuinfo_ia64 *);
 
 typedef struct {
@@ -352,7 +352,7 @@ extern unsigned long get_wchan (struct task_struct *p);
 /* Return instruction pointer of blocked task TSK.  */
 #define KSTK_EIP(tsk)					\
   ({							\
-	struct pt_regs *_regs = ia64_task_regs(tsk);	\
+	struct pt_regs *_regs = task_pt_regs(tsk);	\
 	_regs->cr_iip + ia64_psr(_regs)->ri;		\
   })
 
@@ -558,6 +558,23 @@ ia64_eoi (void)
 }
 
 #define cpu_relax()	ia64_hint(ia64_hint_pause)
+
+static inline int
+ia64_get_irr(unsigned int vector)
+{
+	unsigned int reg = vector / 64;
+	unsigned int bit = vector % 64;
+	u64 irr;
+
+	switch (reg) {
+	case 0: irr = ia64_getreg(_IA64_REG_CR_IRR0); break;
+	case 1: irr = ia64_getreg(_IA64_REG_CR_IRR1); break;
+	case 2: irr = ia64_getreg(_IA64_REG_CR_IRR2); break;
+	case 3: irr = ia64_getreg(_IA64_REG_CR_IRR3); break;
+	}
+
+	return test_bit(bit, &irr);
+}
 
 static inline void
 ia64_set_lrr0 (unsigned long val)

@@ -343,7 +343,7 @@ qla2x00_async_event(scsi_qla_host_t *ha, uint16_t *mb)
 
 		ha->isp_ops.fw_dump(ha, 1);
 
-		if (IS_QLA24XX(ha) || IS_QLA25XX(ha)) {
+		if (IS_QLA24XX(ha) || IS_QLA54XX(ha)) {
 			if (mb[1] == 0 && mb[2] == 0) {
 				qla_printk(KERN_ERR, ha,
 				    "Unrecoverable Hardware Error: adapter "
@@ -389,7 +389,7 @@ qla2x00_async_event(scsi_qla_host_t *ha, uint16_t *mb)
 		if (atomic_read(&ha->loop_state) != LOOP_DOWN) {
 			atomic_set(&ha->loop_state, LOOP_DOWN);
 			atomic_set(&ha->loop_down_timer, LOOP_DOWN_TIME);
-			qla2x00_mark_all_devices_lost(ha);
+			qla2x00_mark_all_devices_lost(ha, 1);
 		}
 
 		set_bit(REGISTER_FC4_NEEDED, &ha->dpc_flags);
@@ -402,9 +402,9 @@ qla2x00_async_event(scsi_qla_host_t *ha, uint16_t *mb)
 		break;
 
 	case MBA_LOOP_UP:		/* Loop Up Event */
-		ha->link_data_rate = 0;
 		if (IS_QLA2100(ha) || IS_QLA2200(ha)) {
 			link_speed = link_speeds[0];
+			ha->link_data_rate = LDR_1GB;
 		} else {
 			link_speed = link_speeds[LS_UNKNOWN];
 			if (mb[1] < 5)
@@ -432,11 +432,11 @@ qla2x00_async_event(scsi_qla_host_t *ha, uint16_t *mb)
 			atomic_set(&ha->loop_state, LOOP_DOWN);
 			atomic_set(&ha->loop_down_timer, LOOP_DOWN_TIME);
 			ha->device_flags |= DFLG_NO_CABLE;
-			qla2x00_mark_all_devices_lost(ha);
+			qla2x00_mark_all_devices_lost(ha, 1);
 		}
 
 		ha->flags.management_server_logged_in = 0;
-		ha->link_data_rate = 0;
+		ha->link_data_rate = LDR_UNKNOWN;
 		if (ql2xfdmienable)
 			set_bit(REGISTER_FDMI_NEEDED, &ha->dpc_flags);
 
@@ -453,7 +453,7 @@ qla2x00_async_event(scsi_qla_host_t *ha, uint16_t *mb)
 		if (atomic_read(&ha->loop_state) != LOOP_DOWN) {
 			atomic_set(&ha->loop_state, LOOP_DOWN);
 			atomic_set(&ha->loop_down_timer, LOOP_DOWN_TIME);
-			qla2x00_mark_all_devices_lost(ha);
+			qla2x00_mark_all_devices_lost(ha, 1);
 		}
 
 		set_bit(RESET_MARKER_NEEDED, &ha->dpc_flags);
@@ -482,7 +482,7 @@ qla2x00_async_event(scsi_qla_host_t *ha, uint16_t *mb)
 			if (!atomic_read(&ha->loop_down_timer))
 				atomic_set(&ha->loop_down_timer,
 				    LOOP_DOWN_TIME);
-			qla2x00_mark_all_devices_lost(ha);
+			qla2x00_mark_all_devices_lost(ha, 1);
 		}
 
 		if (!(test_bit(ABORT_ISP_ACTIVE, &ha->dpc_flags))) {
@@ -506,7 +506,7 @@ qla2x00_async_event(scsi_qla_host_t *ha, uint16_t *mb)
 			if (!atomic_read(&ha->loop_down_timer))
 				atomic_set(&ha->loop_down_timer,
 				    LOOP_DOWN_TIME);
-			qla2x00_mark_all_devices_lost(ha);
+			qla2x00_mark_all_devices_lost(ha, 1);
 		}
 
 		set_bit(LOOP_RESYNC_NEEDED, &ha->dpc_flags);
@@ -519,8 +519,9 @@ qla2x00_async_event(scsi_qla_host_t *ha, uint16_t *mb)
 		 * us, create a new entry in our rscn fcports list and handle
 		 * the event like an RSCN.
 		 */
-		if (!IS_QLA2100(ha) && !IS_QLA2200(ha) && !IS_QLA6312(ha) &&
-		    !IS_QLA6322(ha) && !IS_QLA24XX(ha) && !IS_QLA25XX(ha) &&
+		if (ql2xprocessrscn &&
+		    !IS_QLA2100(ha) && !IS_QLA2200(ha) && !IS_QLA6312(ha) &&
+		    !IS_QLA6322(ha) && !IS_QLA24XX(ha) && !IS_QLA54XX(ha) &&
 		    ha->flags.init_done && mb[1] != 0xffff &&
 		    ((ha->operating_mode == P2P && mb[1] != 0) ||
 		    (ha->operating_mode != P2P && mb[1] !=
@@ -579,7 +580,7 @@ qla2x00_async_event(scsi_qla_host_t *ha, uint16_t *mb)
 		 */
 		atomic_set(&ha->loop_state, LOOP_UP);
 
-		qla2x00_mark_all_devices_lost(ha);
+		qla2x00_mark_all_devices_lost(ha, 1);
 
 		ha->flags.rscn_queue_overflow = 1;
 
@@ -637,7 +638,7 @@ qla2x00_async_event(scsi_qla_host_t *ha, uint16_t *mb)
 		    "scsi(%ld): [R|Z]IO update completion.\n",
 		    ha->host_no));
 
-		if (IS_QLA24XX(ha) || IS_QLA25XX(ha))
+		if (IS_QLA24XX(ha) || IS_QLA54XX(ha))
 			qla24xx_process_response_queue(ha);
 		else
 			qla2x00_process_response_queue(ha);
@@ -809,7 +810,7 @@ qla2x00_status_entry(scsi_qla_host_t *ha, void *pkt)
 
 	sts = (sts_entry_t *) pkt;
 	sts24 = (struct sts_entry_24xx *) pkt;
-	if (IS_QLA24XX(ha) || IS_QLA25XX(ha)) {
+	if (IS_QLA24XX(ha) || IS_QLA54XX(ha)) {
 		comp_status = le16_to_cpu(sts24->comp_status);
 		scsi_status = le16_to_cpu(sts24->scsi_status) & SS_MASK;
 	} else {
@@ -837,9 +838,7 @@ qla2x00_status_entry(scsi_qla_host_t *ha, void *pkt)
 		qla_printk(KERN_WARNING, ha, "Status Entry invalid handle.\n");
 
 		set_bit(ISP_ABORT_NEEDED, &ha->dpc_flags);
-		if (ha->dpc_wait && !ha->dpc_active)
-			up(ha->dpc_wait);
-
+		qla2xxx_wake_dpc(ha);
 		return;
 	}
 	cp = sp->cmd;
@@ -861,7 +860,7 @@ qla2x00_status_entry(scsi_qla_host_t *ha, void *pkt)
 	fcport = sp->fcport;
 
 	sense_len = rsp_info_len = resid_len = 0;
-	if (IS_QLA24XX(ha) || IS_QLA25XX(ha)) {
+	if (IS_QLA24XX(ha) || IS_QLA54XX(ha)) {
 		sense_len = le32_to_cpu(sts24->sense_len);
 		rsp_info_len = le32_to_cpu(sts24->rsp_data_len);
 		resid_len = le32_to_cpu(sts24->rsp_residual_count);
@@ -879,7 +878,7 @@ qla2x00_status_entry(scsi_qla_host_t *ha, void *pkt)
 	/* Check for any FCP transport errors. */
 	if (scsi_status & SS_RESPONSE_INFO_LEN_VALID) {
 		/* Sense data lies beyond any FCP RESPONSE data. */
-		if (IS_QLA24XX(ha) || IS_QLA25XX(ha))
+		if (IS_QLA24XX(ha) || IS_QLA54XX(ha))
 			sense_data += rsp_info_len;
 		if (rsp_info_len > 3 && rsp_info[3]) {
 			DEBUG2(printk("scsi(%ld:%d:%d:%d) FCP I/O protocol "
@@ -963,15 +962,16 @@ qla2x00_status_entry(scsi_qla_host_t *ha, void *pkt)
 		break;
 
 	case CS_DATA_UNDERRUN:
-		DEBUG2(printk(KERN_INFO
-		    "scsi(%ld:%d:%d) UNDERRUN status detected 0x%x-0x%x.\n",
-		    ha->host_no, cp->device->id, cp->device->lun, comp_status,
-		    scsi_status));
-
 		resid = resid_len;
 		if (scsi_status & SS_RESIDUAL_UNDER) {
 			cp->resid = resid;
 			CMD_RESID_LEN(cp) = resid;
+		} else {
+			DEBUG2(printk(KERN_INFO
+			    "scsi(%ld:%d:%d) UNDERRUN status detected "
+			    "0x%x-0x%x.\n", ha->host_no, cp->device->id,
+			    cp->device->lun, comp_status, scsi_status));
+
 		}
 
 		/*
@@ -1089,7 +1089,7 @@ qla2x00_status_entry(scsi_qla_host_t *ha, void *pkt)
 
 		cp->result = DID_BUS_BUSY << 16;
 		if (atomic_read(&fcport->state) == FCS_ONLINE) {
-			qla2x00_mark_device_lost(ha, fcport, 1);
+			qla2x00_mark_device_lost(ha, fcport, 1, 1);
 		}
 		break;
 
@@ -1117,7 +1117,7 @@ qla2x00_status_entry(scsi_qla_host_t *ha, void *pkt)
 	case CS_TIMEOUT:
 		cp->result = DID_BUS_BUSY << 16;
 
-		if (IS_QLA24XX(ha) || IS_QLA25XX(ha)) {
+		if (IS_QLA24XX(ha) || IS_QLA54XX(ha)) {
 			DEBUG2(printk(KERN_INFO
 			    "scsi(%ld:%d:%d:%d): TIMEOUT status detected "
 			    "0x%x-0x%x\n", ha->host_no, cp->device->channel,
@@ -1133,7 +1133,7 @@ qla2x00_status_entry(scsi_qla_host_t *ha, void *pkt)
 
 		/* Check to see if logout occurred. */
 		if ((le16_to_cpu(sts->status_flags) & SF_LOGOUT_SENT))
-			qla2x00_mark_device_lost(ha, fcport, 1);
+			qla2x00_mark_device_lost(ha, fcport, 1, 1);
 		break;
 
 	case CS_QUEUE_FULL:
@@ -1197,7 +1197,7 @@ qla2x00_status_cont_entry(scsi_qla_host_t *ha, sts_cont_entry_t *pkt)
 		}
 
 		/* Move sense data. */
-		if (IS_QLA24XX(ha) || IS_QLA25XX(ha))
+		if (IS_QLA24XX(ha) || IS_QLA54XX(ha))
 			host_to_fcp_swap(pkt->data, sizeof(pkt->data));
 		memcpy(sp->request_sense_ptr, pkt->data, sense_sz);
 		DEBUG5(qla2x00_dump_buffer(sp->request_sense_ptr, sense_sz));
@@ -1269,8 +1269,7 @@ qla2x00_error_entry(scsi_qla_host_t *ha, sts_entry_t *pkt)
 		    "Error entry - invalid handle\n");
 
 		set_bit(ISP_ABORT_NEEDED, &ha->dpc_flags);
-		if (ha->dpc_wait && !ha->dpc_active)
-			up(ha->dpc_wait);
+		qla2xxx_wake_dpc(ha);
 	}
 }
 

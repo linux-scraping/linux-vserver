@@ -97,12 +97,13 @@
 #include <asm/amigahw.h>
 #include <linux/zorro.h>
 #include <asm/irq.h>
-#include <asm/semaphore.h>
+#include <linux/mutex.h>
 
 #include <linux/delay.h>
 
 #include <linux/serial.h>
 #include <linux/generic_serial.h>
+#include <linux/tty_flip.h>
 
 #include "ser_a2232.h"
 #include "ser_a2232fw.h"
@@ -194,11 +195,6 @@ static inline void a2232_receive_char(struct a2232_port *port, int ch, int err)
 */
 	struct tty_struct *tty = port->gs.tty;
 
-	if (tty->flip.count >= TTY_FLIPBUF_SIZE)
-		return;
-
-	tty->flip.count++;
-
 #if 0
 	switch(err) {
 	case TTY_BREAK:
@@ -212,8 +208,7 @@ static inline void a2232_receive_char(struct a2232_port *port, int ch, int err)
 	}
 #endif
 
-	*tty->flip.flag_buf_ptr++ = err;
-	*tty->flip.char_buf_ptr++ = ch;
+	tty_insert_flip_char(tty, ch, err);
 	tty_flip_buffer_push(tty);
 }
 
@@ -659,7 +654,7 @@ static void a2232_init_portstructs(void)
 		port->gs.closing_wait = 30 * HZ;
 		port->gs.rd = &a2232_real_driver;
 #ifdef NEW_WRITE_LOCKING
-		init_MUTEX(&(port->gs.port_write_sem));
+		init_MUTEX(&(port->gs.port_write_mutex));
 #endif
 		init_waitqueue_head(&port->gs.open_wait);
 		init_waitqueue_head(&port->gs.close_wait);

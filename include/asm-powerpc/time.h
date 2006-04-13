@@ -41,6 +41,7 @@ extern time_t last_rtc_update;
 
 extern void generic_calibrate_decr(void);
 extern void wakeup_decrementer(void);
+extern void snapshot_timebase(void);
 
 /* Some sane defaults: 125 MHz timebase, 1GHz processor */
 extern unsigned long ppc_proc_freq;
@@ -175,11 +176,10 @@ static inline void set_dec(int val)
 	set_dec_cpu6(val);
 #else
 #ifdef CONFIG_PPC_ISERIES
-	struct paca_struct *lpaca = get_paca();
 	int cur_dec;
 
-	if (lpaca->lppaca.shared_proc) {
-		lpaca->lppaca.virtual_decr = val;
+	if (get_lppaca()->shared_proc) {
+		get_lppaca()->virtual_decr = val;
 		cur_dec = get_dec();
 		if (cur_dec > val)
 			HvCall_setVirtualDecr();
@@ -221,6 +221,20 @@ struct cpu_usage {
 };
 
 DECLARE_PER_CPU(struct cpu_usage, cpu_usage_array);
+
+#ifdef CONFIG_VIRT_CPU_ACCOUNTING
+extern void account_process_vtime(struct task_struct *tsk);
+#else
+#define account_process_vtime(tsk)		do { } while (0)
+#endif
+
+#if defined(CONFIG_VIRT_CPU_ACCOUNTING) && defined(CONFIG_PPC_SPLPAR)
+extern void calculate_steal_time(void);
+extern void snapshot_timebases(void);
+#else
+#define calculate_steal_time()			do { } while (0)
+#define snapshot_timebases()			do { } while (0)
+#endif
 
 #endif /* __KERNEL__ */
 #endif /* __PPC64_TIME_H */

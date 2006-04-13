@@ -42,12 +42,12 @@ void reiserfs_delete_inode(struct inode *inode)
 
 	/* The = 0 happens when we abort creating a new inode for some reason like lack of space.. */
 	if (!(inode->i_state & I_NEW) && INODE_PKEY(inode)->k_objectid != 0) {	/* also handles bad_inode case */
-		down(&inode->i_sem);
+		mutex_lock(&inode->i_mutex);
 
 		reiserfs_delete_xattrs(inode);
 
 		if (journal_begin(&th, inode->i_sb, jbegin_count)) {
-			up(&inode->i_sem);
+			mutex_unlock(&inode->i_mutex);
 			goto out;
 		}
 		reiserfs_update_inode_transaction(inode);
@@ -62,11 +62,11 @@ void reiserfs_delete_inode(struct inode *inode)
 		DLIMIT_FREE_INODE(inode);
 
 		if (journal_end(&th, inode->i_sb, jbegin_count)) {
-			up(&inode->i_sem);
+			mutex_unlock(&inode->i_mutex);
 			goto out;
 		}
 
-		up(&inode->i_sem);
+		mutex_unlock(&inode->i_mutex);
 
 		/* check return value from reiserfs_delete_object after
 		 * ending the transaction
@@ -469,7 +469,6 @@ static int reiserfs_get_block_create_0(struct inode *inode, sector_t block,
    direct_IO request. */
 static int reiserfs_get_blocks_direct_io(struct inode *inode,
 					 sector_t iblock,
-					 unsigned long max_blocks,
 					 struct buffer_head *bh_result,
 					 int create)
 {
@@ -554,7 +553,7 @@ static int convert_tail_for_hole(struct inode *inode,
 
 	/* we don't have to make sure the conversion did not happen while
 	 ** we were locking the page because anyone that could convert
-	 ** must first take i_sem.
+	 ** must first take i_mutex.
 	 **
 	 ** We must fix the tail page for writing because it might have buffers
 	 ** that are mapped, but have a block number of 0.  This indicates tail
@@ -589,7 +588,7 @@ static inline int _allocate_block(struct reiserfs_transaction_handle *th,
 	BUG_ON(!th->t_trans_id);
 
 #ifdef REISERFS_PREALLOCATE
-	if (!(flags & GET_BLOCK_NO_ISEM)) {
+	if (!(flags & GET_BLOCK_NO_IMUX)) {
 		return reiserfs_new_unf_blocknrs2(th, inode, allocated_block_nr,
 						  path, block);
 	}
@@ -629,11 +628,6 @@ int reiserfs_get_block(struct inode *inode, sector_t block,
 	/* bad.... */
 	reiserfs_write_lock(inode->i_sb);
 	version = get_inode_item_key_version(inode);
-
-	if (block < 0) {
-		reiserfs_write_unlock(inode->i_sb);
-		return -EIO;
-	}
 
 	if (!file_capable(inode, block)) {
 		reiserfs_write_unlock(inode->i_sb);
@@ -937,12 +931,13 @@ int reiserfs_get_block(struct inode *inode, sector_t block,
 				     //pos_in_item * inode->i_sb->s_blocksize,
 				     TYPE_INDIRECT, 3);	// key type is unimportant
 
+			RFALSE(cpu_key_k_offset(&tmp_key) > cpu_key_k_offset(&key),
+			       "green-805: invalid offset");
 			blocks_needed =
 			    1 +
 			    ((cpu_key_k_offset(&key) -
 			      cpu_key_k_offset(&tmp_key)) >> inode->i_sb->
 			     s_blocksize_bits);
-			RFALSE(blocks_needed < 0, "green-805: invalid offset");
 
 			if (blocks_needed == 1) {
 				un = &unf_single;
@@ -2338,7 +2333,7 @@ static int map_block_for_writepage(struct inode *inode,
 	/* this is where we fill in holes in the file. */
 	if (use_get_block) {
 		retval = reiserfs_get_block(inode, block, bh_result,
-					    GET_BLOCK_CREATE | GET_BLOCK_NO_ISEM
+					    GET_BLOCK_CREATE | GET_BLOCK_NO_IMUX
 					    | GET_BLOCK_NO_DANGLE);
 		if (!retval) {
 			if (!buffer_mapped(bh_result)
@@ -2382,6 +2377,13 @@ static int reiserfs_write_full_page(struct page *page,
 	struct super_block *s = inode->i_sb;
 	int bh_per_page = PAGE_CACHE_SIZE / s->s_blocksize;
 	th.t_trans_id = 0;
+
+	/* no logging allowed when nonblocking or from PF_MEMALLOC */
+	if (checked && (current->flags & PF_MEMALLOC)) {
+		redirty_page_for_writepage(wbc, page);
+		unlock_page(page);
+		return 0;
+	}
 
 	/* The page dirty bit is cleared before writepage is called, which
 	 * means we have to tell create_empty_buffers to make dirty buffers
@@ -2779,6 +2781,7 @@ static int invalidatepage_can_drop(struct inode *inode, struct buffer_head *bh)
 	int ret = 1;
 	struct reiserfs_journal *j = SB_JOURNAL(inode->i_sb);
 
+	lock_buffer(bh);
 	spin_lock(&j->j_dirty_buffers_lock);
 	if (!buffer_mapped(bh)) {
 		goto free_jh;
@@ -2794,7 +2797,7 @@ static int invalidatepage_can_drop(struct inode *inode, struct buffer_head *bh)
 		if (buffer_journaled(bh) || buffer_journal_dirty(bh)) {
 			ret = 0;
 		}
-	} else if (buffer_dirty(bh) || buffer_locked(bh)) {
+	} else  if (buffer_dirty(bh)) {
 		struct reiserfs_journal_list *jl;
 		struct reiserfs_jh *jh = bh->b_private;
 
@@ -2820,11 +2823,12 @@ static int invalidatepage_can_drop(struct inode *inode, struct buffer_head *bh)
 		reiserfs_free_jh(bh);
 	}
 	spin_unlock(&j->j_dirty_buffers_lock);
+	unlock_buffer(bh);
 	return ret;
 }
 
 /* clm -- taken from fs/buffer.c:block_invalidate_page */
-static int reiserfs_invalidatepage(struct page *page, unsigned long offset)
+static void reiserfs_invalidatepage(struct page *page, unsigned long offset)
 {
 	struct buffer_head *head, *bh, *next;
 	struct inode *inode = page->mapping->host;
@@ -2863,10 +2867,12 @@ static int reiserfs_invalidatepage(struct page *page, unsigned long offset)
 	 * The get_block cached value has been unconditionally invalidated,
 	 * so real IO is not possible anymore.
 	 */
-	if (!offset && ret)
+	if (!offset && ret) {
 		ret = try_to_release_page(page, 0);
+		/* maybe should BUG_ON(!ret); - neilb */
+	}
       out:
-	return ret;
+	return;
 }
 
 static int reiserfs_set_page_dirty(struct page *page)
@@ -2935,17 +2941,15 @@ int reiserfs_sync_flags(struct inode *inode)
 {
 	u16 oldflags, newflags;
 
-	reiserfs_write_lock(inode->i_sb);
-	oldflags = REISERFS_I(inode)->i_flags;
+	oldflags = REISERFS_I(inode)->i_attrs;
 	newflags = oldflags;
 	i_attrs_to_sd_attrs(inode, &newflags);
 
 	if (oldflags ^ newflags) {
-		REISERFS_I(inode)->i_flags = newflags;
-		inode->i_ctime = CURRENT_TIME;
+		REISERFS_I(inode)->i_attrs = newflags;
+		inode->i_ctime = CURRENT_TIME_SEC;
 		mark_inode_dirty(inode);
 	}
-	reiserfs_write_unlock(inode->i_sb);
 	return 0;
 }
 

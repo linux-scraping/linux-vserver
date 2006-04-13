@@ -29,6 +29,7 @@
  */
 
 #include <linux/config.h>
+#include <linux/capability.h>
 #include <linux/errno.h>
 #include <linux/if_arp.h>
 #include <linux/if_ether.h>
@@ -75,7 +76,7 @@ static struct datalink_proto *pEII_datalink;
 static struct datalink_proto *p8023_datalink;
 static struct datalink_proto *pSNAP_datalink;
 
-static struct proto_ops ipx_dgram_ops;
+static const struct proto_ops ipx_dgram_ops;
 
 LIST_HEAD(ipx_interfaces);
 DEFINE_SPINLOCK(ipx_interfaces_lock);
@@ -1884,12 +1885,35 @@ static int ipx_ioctl(struct socket *sock, unsigned int cmd, unsigned long arg)
 		rc = -EINVAL;
 		break;
 	default:
-		rc = dev_ioctl(cmd, argp);
+		rc = -ENOIOCTLCMD;
 		break;
 	}
 
 	return rc;
 }
+
+
+#ifdef CONFIG_COMPAT
+static int ipx_compat_ioctl(struct socket *sock, unsigned int cmd, unsigned long arg)
+{
+	/*
+	 * These 4 commands use same structure on 32bit and 64bit.  Rest of IPX
+	 * commands is handled by generic ioctl code.  As these commands are
+	 * SIOCPROTOPRIVATE..SIOCPROTOPRIVATE+3, they cannot be handled by generic
+	 * code.
+	 */
+	switch (cmd) {
+	case SIOCAIPXITFCRT:
+	case SIOCAIPXPRISLT:
+	case SIOCIPXCFGDATA:
+	case SIOCIPXNCPCONN:
+		return ipx_ioctl(sock, cmd, arg);
+	default:
+		return -ENOIOCTLCMD;
+	}
+}
+#endif
+
 
 /*
  * Socket family declarations
@@ -1901,7 +1925,7 @@ static struct net_proto_family ipx_family_ops = {
 	.owner		= THIS_MODULE,
 };
 
-static struct proto_ops SOCKOPS_WRAPPED(ipx_dgram_ops) = {
+static const struct proto_ops SOCKOPS_WRAPPED(ipx_dgram_ops) = {
 	.family		= PF_IPX,
 	.owner		= THIS_MODULE,
 	.release	= ipx_release,
@@ -1912,6 +1936,9 @@ static struct proto_ops SOCKOPS_WRAPPED(ipx_dgram_ops) = {
 	.getname	= ipx_getname,
 	.poll		= datagram_poll,
 	.ioctl		= ipx_ioctl,
+#ifdef CONFIG_COMPAT
+	.compat_ioctl	= ipx_compat_ioctl,
+#endif
 	.listen		= sock_no_listen,
 	.shutdown	= sock_no_shutdown, /* FIXME: support shutdown */
 	.setsockopt	= ipx_setsockopt,

@@ -104,8 +104,6 @@ static irqreturn_t clps711xuart_int_rx(int irq, void *dev_id, struct pt_regs *re
 	while (!(status & SYSFLG_URXFE)) {
 		ch = clps_readl(UARTDR(port));
 
-		if (tty->flip.count >= TTY_FLIPBUF_SIZE)
-			goto ignore_char;
 		port->icount.rx++;
 
 		flg = TTY_NORMAL;
@@ -412,7 +410,7 @@ static struct uart_port clps711x_ports[UART_NR] = {
 		.fifosize	= 16,
 		.ops		= &clps711x_pops,
 		.line		= 0,
-		.flags		= ASYNC_BOOT_AUTOCONF,
+		.flags		= UPF_BOOT_AUTOCONF,
 	},
 	{
 		.iobase		= SYSCON2,
@@ -421,11 +419,18 @@ static struct uart_port clps711x_ports[UART_NR] = {
 		.fifosize	= 16,
 		.ops		= &clps711x_pops,
 		.line		= 1,
-		.flags		= ASYNC_BOOT_AUTOCONF,
+		.flags		= UPF_BOOT_AUTOCONF,
 	}
 };
 
 #ifdef CONFIG_SERIAL_CLPS711X_CONSOLE
+static void clps711xuart_console_putchar(struct uart_port *port, int ch)
+{
+	while (clps_readl(SYSFLG(port)) & SYSFLG_UTXFF)
+		barrier();
+	clps_writel(ch, UARTDR(port));
+}
+
 /*
  *	Print a string to the serial port trying not to disturb
  *	any possible real use of the port...
@@ -440,7 +445,6 @@ clps711xuart_console_write(struct console *co, const char *s,
 {
 	struct uart_port *port = clps711x_ports + co->index;
 	unsigned int status, syscon;
-	int i;
 
 	/*
 	 *	Ensure that the port is enabled.
@@ -448,21 +452,7 @@ clps711xuart_console_write(struct console *co, const char *s,
 	syscon = clps_readl(SYSCON(port));
 	clps_writel(syscon | SYSCON_UARTEN, SYSCON(port));
 
-	/*
-	 *	Now, do each character
-	 */
-	for (i = 0; i < count; i++) {
-		do {
-			status = clps_readl(SYSFLG(port));
-		} while (status & SYSFLG_UTXFF);
-		clps_writel(s[i], UARTDR(port));
-		if (s[i] == '\n') {
-			do {
-				status = clps_readl(SYSFLG(port));
-			} while (status & SYSFLG_UTXFF);
-			clps_writel('\r', UARTDR(port));
-		}
-	}
+	uart_console_write(port, s, count, clps711xuart_console_putchar);
 
 	/*
 	 *	Finally, wait for transmitter to become empty

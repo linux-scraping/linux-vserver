@@ -232,8 +232,8 @@ static void anubis_nand_select(struct s3c2410_nand_set *set, int slot)
 
 static struct s3c2410_platform_nand anubis_nand_info = {
 	.tacls		= 25,
-	.twrph0		= 80,
-	.twrph1		= 80,
+	.twrph0		= 55,
+	.twrph1		= 40,
 	.nr_sets	= ARRAY_SIZE(anubis_nand_sets),
 	.sets		= anubis_nand_sets,
 	.select_chip	= anubis_nand_select,
@@ -294,7 +294,6 @@ static void __init anubis_map_io(void)
 
 MACHINE_START(ANUBIS, "Simtec-Anubis")
 	/* Maintainer: Ben Dooks <ben@simtec.co.uk> */
-	.phys_ram	= S3C2410_SDRAM_PA,
 	.phys_io	= S3C2410_PA_UART,
 	.io_pg_offst	= (((u32)S3C24XX_VA_UART) >> 18) & 0xfffc,
 	.boot_params	= S3C2410_SDRAM_PA + 0x100,

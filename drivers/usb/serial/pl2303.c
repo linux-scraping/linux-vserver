@@ -43,8 +43,6 @@ static int debug;
 #define PL2303_BUF_SIZE		1024
 #define PL2303_TMP_BUF_SIZE	1024
 
-static DECLARE_MUTEX(pl2303_tmp_buf_sem);
-
 struct pl2303_buf {
 	unsigned int	buf_size;
 	char		*buf_buf;
@@ -75,18 +73,22 @@ static struct usb_device_id id_table [] = {
 	{ USB_DEVICE(SIEMENS_VENDOR_ID, SIEMENS_PRODUCT_ID_X65) },
 	{ USB_DEVICE(SIEMENS_VENDOR_ID, SIEMENS_PRODUCT_ID_X75) },
 	{ USB_DEVICE(SYNTECH_VENDOR_ID, SYNTECH_PRODUCT_ID) },
-	{ USB_DEVICE( NOKIA_CA42_VENDOR_ID, NOKIA_CA42_PRODUCT_ID ) },
+	{ USB_DEVICE(NOKIA_CA42_VENDOR_ID, NOKIA_CA42_PRODUCT_ID) },
+	{ USB_DEVICE(CA_42_CA42_VENDOR_ID, CA_42_CA42_PRODUCT_ID) },
+	{ USB_DEVICE(SAGEM_VENDOR_ID, SAGEM_PRODUCT_ID) },
+	{ USB_DEVICE(LEADTEK_VENDOR_ID, LEADTEK_9531_PRODUCT_ID) },
+	{ USB_DEVICE(SPEEDDRAGON_VENDOR_ID, SPEEDDRAGON_PRODUCT_ID) },
 	{ }					/* Terminating entry */
 };
 
 MODULE_DEVICE_TABLE (usb, id_table);
 
 static struct usb_driver pl2303_driver = {
-	.owner =	THIS_MODULE,
 	.name =		"pl2303",
 	.probe =	usb_serial_probe,
 	.disconnect =	usb_serial_disconnect,
 	.id_table =	id_table,
+	.no_dynamic_id = 	1,
 };
 
 #define SET_LINE_REQUEST_TYPE		0x21
@@ -217,10 +219,9 @@ static int pl2303_startup (struct usb_serial *serial)
 	dbg("device type: %d", type);
 
 	for (i = 0; i < serial->num_ports; ++i) {
-		priv = kmalloc (sizeof (struct pl2303_private), GFP_KERNEL);
+		priv = kzalloc(sizeof(struct pl2303_private), GFP_KERNEL);
 		if (!priv)
 			goto cleanup;
-		memset (priv, 0x00, sizeof (struct pl2303_private));
 		spin_lock_init(&priv->lock);
 		priv->buf = pl2303_buf_alloc(PL2303_BUF_SIZE);
 		if (priv->buf == NULL) {
@@ -382,12 +383,11 @@ static void pl2303_set_termios (struct usb_serial_port *port, struct termios *ol
 		}
 	}
 
-	buf = kmalloc (7, GFP_KERNEL);
+	buf = kzalloc (7, GFP_KERNEL);
 	if (!buf) {
 		dev_err(&port->dev, "%s - out of memory.\n", __FUNCTION__);
 		return;
 	}
-	memset (buf, 0x00, 0x07);
 	
 	i = usb_control_msg (serial->dev, usb_rcvctrlpipe (serial->dev, 0),
 			     GET_LINE_REQUEST, GET_LINE_REQUEST_TYPE,
@@ -810,7 +810,7 @@ static void pl2303_update_line_status(struct usb_serial_port *port,
 	struct pl2303_private *priv = usb_get_serial_port_data(port);
 	unsigned long flags;
 	u8 status_idx = UART_STATE;
-	u8 length = UART_STATE;
+	u8 length = UART_STATE + 1;
 
 	if ((le16_to_cpu(port->serial->dev->descriptor.idVendor) == SIEMENS_VENDOR_ID) &&
 	    (le16_to_cpu(port->serial->dev->descriptor.idProduct) == SIEMENS_PRODUCT_ID_X65 ||
@@ -827,6 +827,7 @@ static void pl2303_update_line_status(struct usb_serial_port *port,
 	spin_lock_irqsave(&priv->lock, flags);
 	priv->line_status = data[status_idx];
 	spin_unlock_irqrestore(&priv->lock, flags);
+	wake_up_interruptible (&priv->delta_msr_wait);
 
 exit:
 	return;
@@ -924,16 +925,12 @@ static void pl2303_read_bulk_callback (struct urb *urb, struct pt_regs *regs)
 
 	tty = port->tty;
 	if (tty && urb->actual_length) {
+		tty_buffer_request_room(tty, urb->actual_length + 1);
 		/* overrun is special, not associated with a char */
 		if (status & UART_OVERRUN_ERROR)
 			tty_insert_flip_char(tty, 0, TTY_OVERRUN);
-
-		for (i = 0; i < urb->actual_length; ++i) {
-			if (tty->flip.count >= TTY_FLIPBUF_SIZE) {
-				tty_flip_buffer_push(tty);
-			}
+		for (i = 0; i < urb->actual_length; ++i)
 			tty_insert_flip_char (tty, data[i], tty_flag);
-		}
 		tty_flip_buffer_push (tty);
 	}
 

@@ -7,6 +7,7 @@
  *  Based on the work of:
  *	Andree Borrmann		John Dahlstrom
  *	David Kuder		Nathan Hand
+ *	Raphael Assenat
  */
 
 /*
@@ -36,6 +37,7 @@
 #include <linux/init.h>
 #include <linux/parport.h>
 #include <linux/input.h>
+#include <linux/mutex.h>
 
 MODULE_AUTHOR("Vojtech Pavlik <vojtech@ucw.cz>");
 MODULE_DESCRIPTION("NES, SNES, N64, MultiSystem, PSX gamepad driver");
@@ -72,8 +74,9 @@ __obsolete_setup("gc_3=");
 #define GC_N64		6
 #define GC_PSX		7
 #define GC_DDR		8
+#define GC_SNESMOUSE	9
 
-#define GC_MAX		8
+#define GC_MAX		9
 
 #define GC_REFRESH_TIME	HZ/100
 
@@ -83,7 +86,7 @@ struct gc {
 	struct timer_list timer;
 	unsigned char pads[GC_MAX + 1];
 	int used;
-	struct semaphore sem;
+	struct mutex mutex;
 	char phys[GC_MAX_DEVICES][32];
 };
 
@@ -93,7 +96,7 @@ static int gc_status_bit[] = { 0x40, 0x80, 0x20, 0x10, 0x08 };
 
 static char *gc_names[] = { NULL, "SNES pad", "NES pad", "NES FourPort", "Multisystem joystick",
 				"Multisystem 2-button joystick", "N64 controller", "PSX controller",
-				"PSX DDR controller" };
+				"PSX DDR controller", "SNES mouse" };
 /*
  * N64 support.
  */
@@ -159,13 +162,58 @@ static void gc_n64_read_packet(struct gc *gc, unsigned char *data)
 
 }
 
+static void gc_n64_process_packet(struct gc *gc)
+{
+	unsigned char data[GC_N64_LENGTH];
+	signed char axes[2];
+	struct input_dev *dev;
+	int i, j, s;
+
+	gc_n64_read_packet(gc, data);
+
+	for (i = 0; i < GC_MAX_DEVICES; i++) {
+
+		dev = gc->dev[i];
+		if (!dev)
+			continue;
+
+		s = gc_status_bit[i];
+
+		if (s & gc->pads[GC_N64] & ~(data[8] | data[9])) {
+
+			axes[0] = axes[1] = 0;
+
+			for (j = 0; j < 8; j++) {
+				if (data[23 - j] & s)
+					axes[0] |= 1 << j;
+				if (data[31 - j] & s)
+					axes[1] |= 1 << j;
+			}
+
+			input_report_abs(dev, ABS_X,  axes[0]);
+			input_report_abs(dev, ABS_Y, -axes[1]);
+
+			input_report_abs(dev, ABS_HAT0X, !(s & data[6]) - !(s & data[7]));
+			input_report_abs(dev, ABS_HAT0Y, !(s & data[4]) - !(s & data[5]));
+
+			for (j = 0; j < 10; j++)
+				input_report_key(dev, gc_n64_btn[j], s & data[gc_n64_bytes[j]]);
+
+			input_sync(dev);
+		}
+	}
+}
+
 /*
  * NES/SNES support.
  */
 
-#define GC_NES_DELAY	6	/* Delay between bits - 6us */
-#define GC_NES_LENGTH	8	/* The NES pads use 8 bits of data */
-#define GC_SNES_LENGTH	12	/* The SNES true length is 16, but the last 4 bits are unused */
+#define GC_NES_DELAY		6	/* Delay between bits - 6us */
+#define GC_NES_LENGTH		8	/* The NES pads use 8 bits of data */
+#define GC_SNES_LENGTH		12	/* The SNES true length is 16, but the
+					   last 4 bits are unused */
+#define GC_SNESMOUSE_LENGTH	32	/* The SNES mouse uses 32 bits, the first
+					   16 bits are equivalent to a gamepad */
 
 #define GC_NES_POWER	0xfc
 #define GC_NES_CLOCK	0x01
@@ -198,6 +246,81 @@ static void gc_nes_read_packet(struct gc *gc, int length, unsigned char *data)
 	}
 }
 
+static void gc_nes_process_packet(struct gc *gc)
+{
+	unsigned char data[GC_SNESMOUSE_LENGTH];
+	struct input_dev *dev;
+	int i, j, s, len;
+	char x_rel, y_rel;
+
+	len = gc->pads[GC_SNESMOUSE] ? GC_SNESMOUSE_LENGTH :
+			(gc->pads[GC_SNES] ? GC_SNES_LENGTH : GC_NES_LENGTH);
+
+	gc_nes_read_packet(gc, len, data);
+
+	for (i = 0; i < GC_MAX_DEVICES; i++) {
+
+		dev = gc->dev[i];
+		if (!dev)
+			continue;
+
+		s = gc_status_bit[i];
+
+		if (s & (gc->pads[GC_NES] | gc->pads[GC_SNES])) {
+			input_report_abs(dev, ABS_X, !(s & data[6]) - !(s & data[7]));
+			input_report_abs(dev, ABS_Y, !(s & data[4]) - !(s & data[5]));
+		}
+
+		if (s & gc->pads[GC_NES])
+			for (j = 0; j < 4; j++)
+				input_report_key(dev, gc_snes_btn[j], s & data[gc_nes_bytes[j]]);
+
+		if (s & gc->pads[GC_SNES])
+			for (j = 0; j < 8; j++)
+				input_report_key(dev, gc_snes_btn[j], s & data[gc_snes_bytes[j]]);
+
+		if (s & gc->pads[GC_SNESMOUSE]) {
+			/*
+			 * The 4 unused bits from SNES controllers appear to be ID bits
+			 * so use them to make sure iwe are dealing with a mouse.
+			 * gamepad is connected. This is important since
+			 * my SNES gamepad sends 1's for bits 16-31, which
+			 * cause the mouse pointer to quickly move to the
+			 * upper left corner of the screen.
+			 */
+			if (!(s & data[12]) && !(s & data[13]) &&
+			    !(s & data[14]) && (s & data[15])) {
+				input_report_key(dev, BTN_LEFT, s & data[9]);
+				input_report_key(dev, BTN_RIGHT, s & data[8]);
+
+				x_rel = y_rel = 0;
+				for (j = 0; j < 7; j++) {
+					x_rel <<= 1;
+					if (data[25 + j] & s)
+						x_rel |= 1;
+
+					y_rel <<= 1;
+					if (data[17 + j] & s)
+						y_rel |= 1;
+				}
+
+				if (x_rel) {
+					if (data[24] & s)
+						x_rel = -x_rel;
+					input_report_rel(dev, REL_X, x_rel);
+				}
+
+				if (y_rel) {
+					if (data[16] & s)
+						y_rel = -y_rel;
+					input_report_rel(dev, REL_Y, y_rel);
+				}
+			}
+		}
+		input_sync(dev);
+	}
+}
+
 /*
  * Multisystem joystick support
  */
@@ -216,6 +339,35 @@ static void gc_multi_read_packet(struct gc *gc, int length, unsigned char *data)
 	for (i = 0; i < length; i++) {
 		parport_write_data(gc->pd->port, ~(1 << i));
 		data[i] = parport_read_status(gc->pd->port) ^ 0x7f;
+	}
+}
+
+static void gc_multi_process_packet(struct gc *gc)
+{
+	unsigned char data[GC_MULTI2_LENGTH];
+	struct input_dev *dev;
+	int i, s;
+
+	gc_multi_read_packet(gc, gc->pads[GC_MULTI2] ? GC_MULTI2_LENGTH : GC_MULTI_LENGTH, data);
+
+	for (i = 0; i < GC_MAX_DEVICES; i++) {
+
+		dev = gc->dev[i];
+		if (!dev)
+			continue;
+
+		s = gc_status_bit[i];
+
+		if (s & (gc->pads[GC_MULTI] | gc->pads[GC_MULTI2])) {
+			input_report_abs(dev, ABS_X,  !(s & data[2]) - !(s & data[3]));
+			input_report_abs(dev, ABS_Y,  !(s & data[0]) - !(s & data[1]));
+			input_report_key(dev, BTN_TRIGGER, s & data[4]);
+		}
+
+		if (s & gc->pads[GC_MULTI2])
+			input_report_key(dev, BTN_THUMB, s & data[5]);
+
+		input_sync(dev);
 	}
 }
 
@@ -263,10 +415,11 @@ static short gc_psx_ddr_btn[] = { BTN_0, BTN_1, BTN_2, BTN_3 };
  * the psx pad.
  */
 
-static void gc_psx_command(struct gc *gc, int b, unsigned char data[5])
+static void gc_psx_command(struct gc *gc, int b, unsigned char data[GC_MAX_DEVICES])
 {
 	int i, j, cmd, read;
-	for (i = 0; i < 5; i++)
+
+	for (i = 0; i < GC_MAX_DEVICES; i++)
 		data[i] = 0;
 
 	for (i = 0; i < GC_PSX_LENGTH; i++, b >>= 1) {
@@ -274,7 +427,7 @@ static void gc_psx_command(struct gc *gc, int b, unsigned char data[5])
 		parport_write_data(gc->pd->port, cmd | GC_PSX_POWER);
 		udelay(gc_psx_delay);
 		read = parport_read_status(gc->pd->port) ^ 0x80;
-		for (j = 0; j < 5; j++)
+		for (j = 0; j < GC_MAX_DEVICES; j++)
 			data[j] |= (read & gc_status_bit[j] & (gc->pads[GC_PSX] | gc->pads[GC_DDR])) ? (1 << i) : 0;
 		parport_write_data(gc->pd->port, cmd | GC_PSX_CLOCK | GC_PSX_POWER);
 		udelay(gc_psx_delay);
@@ -286,11 +439,12 @@ static void gc_psx_command(struct gc *gc, int b, unsigned char data[5])
  * device identifier code.
  */
 
-static void gc_psx_read_packet(struct gc *gc, unsigned char data[5][GC_PSX_BYTES], unsigned char id[5])
+static void gc_psx_read_packet(struct gc *gc, unsigned char data[GC_MAX_DEVICES][GC_PSX_BYTES],
+			       unsigned char id[GC_MAX_DEVICES])
 {
 	int i, j, max_len = 0;
 	unsigned long flags;
-	unsigned char data2[5];
+	unsigned char data2[GC_MAX_DEVICES];
 
 	parport_write_data(gc->pd->port, GC_PSX_CLOCK | GC_PSX_SELECT | GC_PSX_POWER);	/* Select pad */
 	udelay(gc_psx_delay);
@@ -303,7 +457,7 @@ static void gc_psx_read_packet(struct gc *gc, unsigned char data[5][GC_PSX_BYTES
 	gc_psx_command(gc, 0x42, id);							/* Get device ids */
 	gc_psx_command(gc, 0, data2);							/* Dump status */
 
-	for (i =0; i < 5; i++)								/* Find the longest pad */
+	for (i =0; i < GC_MAX_DEVICES; i++)								/* Find the longest pad */
 		if((gc_status_bit[i] & (gc->pads[GC_PSX] | gc->pads[GC_DDR]))
 			&& (GC_PSX_LEN(id[i]) > max_len)
 			&& (GC_PSX_LEN(id[i]) <= GC_PSX_BYTES))
@@ -311,7 +465,7 @@ static void gc_psx_read_packet(struct gc *gc, unsigned char data[5][GC_PSX_BYTES
 
 	for (i = 0; i < max_len; i++) {						/* Read in all the data */
 		gc_psx_command(gc, 0, data2);
-		for (j = 0; j < 5; j++)
+		for (j = 0; j < GC_MAX_DEVICES; j++)
 			data[j][i] = data2[j];
 	}
 
@@ -319,185 +473,124 @@ static void gc_psx_read_packet(struct gc *gc, unsigned char data[5][GC_PSX_BYTES
 
 	parport_write_data(gc->pd->port, GC_PSX_CLOCK | GC_PSX_SELECT | GC_PSX_POWER);
 
-	for(i = 0; i < 5; i++)								/* Set id's to the real value */
+	for(i = 0; i < GC_MAX_DEVICES; i++)								/* Set id's to the real value */
 		id[i] = GC_PSX_ID(id[i]);
 }
 
-/*
- * gc_timer() reads and analyzes console pads data.
- */
+static void gc_psx_process_packet(struct gc *gc)
+{
+	unsigned char data[GC_MAX_DEVICES][GC_PSX_BYTES];
+	unsigned char id[GC_MAX_DEVICES];
+	struct input_dev *dev;
+	int i, j;
 
-#define GC_MAX_LENGTH GC_N64_LENGTH
+	gc_psx_read_packet(gc, data, id);
+
+	for (i = 0; i < GC_MAX_DEVICES; i++) {
+
+		dev = gc->dev[i];
+		if (!dev)
+			continue;
+
+		switch (id[i]) {
+
+			case GC_PSX_RUMBLE:
+
+				input_report_key(dev, BTN_THUMBL, ~data[i][0] & 0x04);
+				input_report_key(dev, BTN_THUMBR, ~data[i][0] & 0x02);
+
+			case GC_PSX_NEGCON:
+			case GC_PSX_ANALOG:
+
+				if (gc->pads[GC_DDR] & gc_status_bit[i]) {
+					for(j = 0; j < 4; j++)
+						input_report_key(dev, gc_psx_ddr_btn[j], ~data[i][0] & (0x10 << j));
+				} else {
+					for (j = 0; j < 4; j++)
+						input_report_abs(dev, gc_psx_abs[j + 2], data[i][j + 2]);
+
+					input_report_abs(dev, ABS_X, 128 + !(data[i][0] & 0x20) * 127 - !(data[i][0] & 0x80) * 128);
+					input_report_abs(dev, ABS_Y, 128 + !(data[i][0] & 0x40) * 127 - !(data[i][0] & 0x10) * 128);
+				}
+
+				for (j = 0; j < 8; j++)
+					input_report_key(dev, gc_psx_btn[j], ~data[i][1] & (1 << j));
+
+				input_report_key(dev, BTN_START,  ~data[i][0] & 0x08);
+				input_report_key(dev, BTN_SELECT, ~data[i][0] & 0x01);
+
+				input_sync(dev);
+
+				break;
+
+			case GC_PSX_NORMAL:
+				if (gc->pads[GC_DDR] & gc_status_bit[i]) {
+					for(j = 0; j < 4; j++)
+						input_report_key(dev, gc_psx_ddr_btn[j], ~data[i][0] & (0x10 << j));
+				} else {
+					input_report_abs(dev, ABS_X, 128 + !(data[i][0] & 0x20) * 127 - !(data[i][0] & 0x80) * 128);
+					input_report_abs(dev, ABS_Y, 128 + !(data[i][0] & 0x40) * 127 - !(data[i][0] & 0x10) * 128);
+
+					/* for some reason if the extra axes are left unset they drift */
+					/* for (j = 0; j < 4; j++)
+						input_report_abs(dev, gc_psx_abs[j + 2], 128);
+					 * This needs to be debugged properly,
+					 * maybe fuzz processing needs to be done in input_sync()
+					 *				 --vojtech
+					 */
+				}
+
+				for (j = 0; j < 8; j++)
+					input_report_key(dev, gc_psx_btn[j], ~data[i][1] & (1 << j));
+
+				input_report_key(dev, BTN_START,  ~data[i][0] & 0x08);
+				input_report_key(dev, BTN_SELECT, ~data[i][0] & 0x01);
+
+				input_sync(dev);
+
+				break;
+
+			case 0: /* not a pad, ignore */
+				break;
+		}
+	}
+}
+
+/*
+ * gc_timer() initiates reads of console pads data.
+ */
 
 static void gc_timer(unsigned long private)
 {
 	struct gc *gc = (void *) private;
-	unsigned char data[GC_MAX_LENGTH];
-	unsigned char data_psx[5][GC_PSX_BYTES];
-	int i, j, s;
 
 /*
  * N64 pads - must be read first, any read confuses them for 200 us
  */
 
-	if (gc->pads[GC_N64]) {
-
-		gc_n64_read_packet(gc, data);
-
-		for (i = 0; i < 5; i++) {
-
-			s = gc_status_bit[i];
-
-			if (s & gc->pads[GC_N64] & ~(data[8] | data[9])) {
-
-				signed char axes[2];
-				axes[0] = axes[1] = 0;
-
-				for (j = 0; j < 8; j++) {
-					if (data[23 - j] & s) axes[0] |= 1 << j;
-					if (data[31 - j] & s) axes[1] |= 1 << j;
-				}
-
-				input_report_abs(gc->dev[i], ABS_X,  axes[0]);
-				input_report_abs(gc->dev[i], ABS_Y, -axes[1]);
-
-				input_report_abs(gc->dev[i], ABS_HAT0X, !(s & data[6]) - !(s & data[7]));
-				input_report_abs(gc->dev[i], ABS_HAT0Y, !(s & data[4]) - !(s & data[5]));
-
-				for (j = 0; j < 10; j++)
-					input_report_key(gc->dev[i], gc_n64_btn[j], s & data[gc_n64_bytes[j]]);
-
-				input_sync(gc->dev[i]);
-			}
-		}
-	}
+	if (gc->pads[GC_N64])
+		gc_n64_process_packet(gc);
 
 /*
- * NES and SNES pads
+ * NES and SNES pads or mouse
  */
 
-	if (gc->pads[GC_NES] || gc->pads[GC_SNES]) {
-
-		gc_nes_read_packet(gc, gc->pads[GC_SNES] ? GC_SNES_LENGTH : GC_NES_LENGTH, data);
-
-		for (i = 0; i < 5; i++) {
-
-			s = gc_status_bit[i];
-
-			if (s & (gc->pads[GC_NES] | gc->pads[GC_SNES])) {
-				input_report_abs(gc->dev[i], ABS_X, !(s & data[6]) - !(s & data[7]));
-				input_report_abs(gc->dev[i], ABS_Y, !(s & data[4]) - !(s & data[5]));
-			}
-
-			if (s & gc->pads[GC_NES])
-				for (j = 0; j < 4; j++)
-					input_report_key(gc->dev[i], gc_snes_btn[j], s & data[gc_nes_bytes[j]]);
-
-			if (s & gc->pads[GC_SNES])
-				for (j = 0; j < 8; j++)
-					input_report_key(gc->dev[i], gc_snes_btn[j], s & data[gc_snes_bytes[j]]);
-
-			input_sync(gc->dev[i]);
-		}
-	}
+	if (gc->pads[GC_NES] || gc->pads[GC_SNES] || gc->pads[GC_SNESMOUSE])
+		gc_nes_process_packet(gc);
 
 /*
  * Multi and Multi2 joysticks
  */
 
-	if (gc->pads[GC_MULTI] || gc->pads[GC_MULTI2]) {
-
-		gc_multi_read_packet(gc, gc->pads[GC_MULTI2] ? GC_MULTI2_LENGTH : GC_MULTI_LENGTH, data);
-
-		for (i = 0; i < 5; i++) {
-
-			s = gc_status_bit[i];
-
-			if (s & (gc->pads[GC_MULTI] | gc->pads[GC_MULTI2])) {
-				input_report_abs(gc->dev[i], ABS_X,  !(s & data[2]) - !(s & data[3]));
-				input_report_abs(gc->dev[i], ABS_Y,  !(s & data[0]) - !(s & data[1]));
-				input_report_key(gc->dev[i], BTN_TRIGGER, s & data[4]);
-			}
-
-			if (s & gc->pads[GC_MULTI2])
-				input_report_key(gc->dev[i], BTN_THUMB, s & data[5]);
-
-			input_sync(gc->dev[i]);
-		}
-	}
+	if (gc->pads[GC_MULTI] || gc->pads[GC_MULTI2])
+		gc_multi_process_packet(gc);
 
 /*
  * PSX controllers
  */
 
-	if (gc->pads[GC_PSX] || gc->pads[GC_DDR]) {
-
-		gc_psx_read_packet(gc, data_psx, data);
-
-		for (i = 0; i < 5; i++) {
-			switch (data[i]) {
-
-				case GC_PSX_RUMBLE:
-
-					input_report_key(gc->dev[i], BTN_THUMBL, ~data_psx[i][0] & 0x04);
-					input_report_key(gc->dev[i], BTN_THUMBR, ~data_psx[i][0] & 0x02);
-
-				case GC_PSX_NEGCON:
-				case GC_PSX_ANALOG:
-
-					if (gc->pads[GC_DDR] & gc_status_bit[i]) {
-						for(j = 0; j < 4; j++)
-							input_report_key(gc->dev[i], gc_psx_ddr_btn[j], ~data_psx[i][0] & (0x10 << j));
-					} else {
-						for (j = 0; j < 4; j++)
-							input_report_abs(gc->dev[i], gc_psx_abs[j+2], data_psx[i][j + 2]);
-
-						input_report_abs(gc->dev[i], ABS_X, 128 + !(data_psx[i][0] & 0x20) * 127 - !(data_psx[i][0] & 0x80) * 128);
-						input_report_abs(gc->dev[i], ABS_Y, 128 + !(data_psx[i][0] & 0x40) * 127 - !(data_psx[i][0] & 0x10) * 128);
-					}
-
-					for (j = 0; j < 8; j++)
-						input_report_key(gc->dev[i], gc_psx_btn[j], ~data_psx[i][1] & (1 << j));
-
-					input_report_key(gc->dev[i], BTN_START,  ~data_psx[i][0] & 0x08);
-					input_report_key(gc->dev[i], BTN_SELECT, ~data_psx[i][0] & 0x01);
-
-					input_sync(gc->dev[i]);
-
-					break;
-
-				case GC_PSX_NORMAL:
-					if (gc->pads[GC_DDR] & gc_status_bit[i]) {
-						for(j = 0; j < 4; j++)
-							input_report_key(gc->dev[i], gc_psx_ddr_btn[j], ~data_psx[i][0] & (0x10 << j));
-					} else {
-						input_report_abs(gc->dev[i], ABS_X, 128 + !(data_psx[i][0] & 0x20) * 127 - !(data_psx[i][0] & 0x80) * 128);
-						input_report_abs(gc->dev[i], ABS_Y, 128 + !(data_psx[i][0] & 0x40) * 127 - !(data_psx[i][0] & 0x10) * 128);
-
-						/* for some reason if the extra axes are left unset they drift */
-						/* for (j = 0; j < 4; j++)
-							input_report_abs(gc->dev[i], gc_psx_abs[j+2], 128);
-						 * This needs to be debugged properly,
-						 * maybe fuzz processing needs to be done in input_sync()
-						 *				 --vojtech
-						 */
-					}
-
-					for (j = 0; j < 8; j++)
-						input_report_key(gc->dev[i], gc_psx_btn[j], ~data_psx[i][1] & (1 << j));
-
-					input_report_key(gc->dev[i], BTN_START,  ~data_psx[i][0] & 0x08);
-					input_report_key(gc->dev[i], BTN_SELECT, ~data_psx[i][0] & 0x01);
-
-					input_sync(gc->dev[i]);
-
-					break;
-
-				case 0: /* not a pad, ignore */
-					break;
-			}
-		}
-	}
+	if (gc->pads[GC_PSX] || gc->pads[GC_DDR])
+		gc_psx_process_packet(gc);
 
 	mod_timer(&gc->timer, jiffies + GC_REFRESH_TIME);
 }
@@ -507,7 +600,7 @@ static int gc_open(struct input_dev *dev)
 	struct gc *gc = dev->private;
 	int err;
 
-	err = down_interruptible(&gc->sem);
+	err = mutex_lock_interruptible(&gc->mutex);
 	if (err)
 		return err;
 
@@ -517,7 +610,7 @@ static int gc_open(struct input_dev *dev)
 		mod_timer(&gc->timer, jiffies + GC_REFRESH_TIME);
 	}
 
-	up(&gc->sem);
+	mutex_unlock(&gc->mutex);
 	return 0;
 }
 
@@ -525,13 +618,13 @@ static void gc_close(struct input_dev *dev)
 {
 	struct gc *gc = dev->private;
 
-	down(&gc->sem);
+	mutex_lock(&gc->mutex);
 	if (!--gc->used) {
 		del_timer_sync(&gc->timer);
 		parport_write_control(gc->pd->port, 0x00);
 		parport_release(gc->pd);
 	}
-	up(&gc->sem);
+	mutex_unlock(&gc->mutex);
 }
 
 static int __init gc_setup_pad(struct gc *gc, int idx, int pad_type)
@@ -564,10 +657,13 @@ static int __init gc_setup_pad(struct gc *gc, int idx, int pad_type)
 	input_dev->open = gc_open;
 	input_dev->close = gc_close;
 
-	input_dev->evbit[0] = BIT(EV_KEY) | BIT(EV_ABS);
+	if (pad_type != GC_SNESMOUSE) {
+		input_dev->evbit[0] = BIT(EV_KEY) | BIT(EV_ABS);
 
-	for (i = 0; i < 2; i++)
-		input_set_abs_params(input_dev, ABS_X + i, -1, 1, 0, 0);
+		for (i = 0; i < 2; i++)
+			input_set_abs_params(input_dev, ABS_X + i, -1, 1, 0, 0);
+	} else
+		input_dev->evbit[0] = BIT(EV_KEY) | BIT(EV_REL);
 
 	gc->pads[0] |= gc_status_bit[idx];
 	gc->pads[pad_type] |= gc_status_bit[idx];
@@ -583,6 +679,13 @@ static int __init gc_setup_pad(struct gc *gc, int idx, int pad_type)
 				input_set_abs_params(input_dev, ABS_HAT0X + i, -1, 1, 0, 0);
 			}
 
+			break;
+
+		case GC_SNESMOUSE:
+			set_bit(BTN_LEFT, input_dev->keybit);
+			set_bit(BTN_RIGHT, input_dev->keybit);
+			set_bit(REL_X, input_dev->relbit);
+			set_bit(REL_Y, input_dev->relbit);
 			break;
 
 		case GC_SNES:
@@ -648,22 +751,24 @@ static struct gc __init *gc_probe(int parport, int *pads, int n_pads)
 		goto err_unreg_pardev;
 	}
 
-	init_MUTEX(&gc->sem);
+	mutex_init(&gc->mutex);
 	gc->pd = pd;
 	init_timer(&gc->timer);
 	gc->timer.data = (long) gc;
 	gc->timer.function = gc_timer;
 
-	for (i = 0; i < n_pads; i++) {
+	for (i = 0; i < n_pads && i < GC_MAX_DEVICES; i++) {
 		if (!pads[i])
 			continue;
 
 		sprintf(gc->phys[i], "%s/input%d", gc->pd->port->name, i);
 		err = gc_setup_pad(gc, i, pads[i]);
 		if (err)
-			goto err_free_devs;
+			goto err_unreg_devs;
 
-		input_register_device(gc->dev[i]);
+		err = input_register_device(gc->dev[i]);
+		if (err)
+			goto err_free_dev;
 	}
 
 	if (!gc->pads[0]) {
@@ -675,9 +780,12 @@ static struct gc __init *gc_probe(int parport, int *pads, int n_pads)
 	parport_put_port(pp);
 	return gc;
 
- err_free_devs:
+ err_free_dev:
+	input_free_device(gc->dev[i]);
+ err_unreg_devs:
 	while (--i >= 0)
-		input_unregister_device(gc->dev[i]);
+		if (gc->dev[i])
+			input_unregister_device(gc->dev[i]);
  err_free_gc:
 	kfree(gc);
  err_unreg_pardev:
@@ -688,7 +796,7 @@ static struct gc __init *gc_probe(int parport, int *pads, int n_pads)
 	return ERR_PTR(err);
 }
 
-static void __exit gc_remove(struct gc *gc)
+static void gc_remove(struct gc *gc)
 {
 	int i;
 
@@ -726,7 +834,8 @@ static int __init gc_init(void)
 
 	if (err) {
 		while (--i >= 0)
-			gc_remove(gc_base[i]);
+			if (gc_base[i])
+				gc_remove(gc_base[i]);
 		return err;
 	}
 

@@ -463,8 +463,7 @@ static int handle_recv_skb(struct capiminor *mp, struct sk_buff *skb)
 #endif
 		goto bad;
 	}
-	if (ld->receive_room &&
-	    ld->receive_room(mp->tty) < datalen) {
+	if (mp->tty->receive_room < datalen) {
 #if defined(_DEBUG_DATAFLOW) || defined(_DEBUG_TTYFUNCS)
 		printk(KERN_DEBUG "capi: no room in tty\n");
 #endif
@@ -1486,6 +1485,7 @@ static int __init capi_init(void)
 {
 	char *p;
 	char *compileinfo;
+	int major_ret;
 
 	if ((p = strchr(revision, ':')) != 0 && p[1]) {
 		strlcpy(rev, p + 2, sizeof(rev));
@@ -1494,11 +1494,12 @@ static int __init capi_init(void)
 	} else
 		strcpy(rev, "1.0");
 
-	if (register_chrdev(capi_major, "capi20", &capi_fops)) {
+	major_ret = register_chrdev(capi_major, "capi20", &capi_fops);
+	if (major_ret < 0) {
 		printk(KERN_ERR "capi20: unable to get major %d\n", capi_major);
-		return -EIO;
+		return major_ret;
 	}
-
+	capi_major = major_ret;
 	capi_class = class_create(THIS_MODULE, "capi");
 	if (IS_ERR(capi_class)) {
 		unregister_chrdev(capi_major, "capi20");

@@ -40,6 +40,7 @@
  *	  v4wb		- ARMv4 with writeback cache, without minicache
  *	  v4_mc		- ARMv4 with minicache
  *	  xscale	- Xscale
+ *	  xsc3		- XScalev3
  */
 #undef _USER
 #undef MULTI_USER
@@ -81,6 +82,14 @@
 #  define MULTI_USER 1
 # else
 #  define _USER xscale_mc
+# endif
+#endif
+
+#ifdef CONFIG_CPU_XSC3
+# ifdef _USER
+#  define MULTI_USER 1
+# else
+#  define _USER xsc3_mc
 # endif
 #endif
 
@@ -169,6 +178,13 @@ extern pmd_t *top_pmd;
 
 #define VM_DATA_DEFAULT_FLAGS	(VM_READ | VM_WRITE | VM_EXEC | \
 				 VM_MAYREAD | VM_MAYWRITE | VM_MAYEXEC)
+
+/*
+ * With EABI on ARMv5 and above we must have 64-bit aligned slab pointers.
+ */
+#if defined(CONFIG_AEABI) && (__LINUX_ARM_ARCH__ >= 5)
+#define ARCH_SLAB_MINALIGN 8
+#endif
 
 #endif /* __KERNEL__ */
 

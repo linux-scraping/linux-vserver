@@ -363,7 +363,7 @@ xfs_qm_init(void)
 		KERN_INFO "SGI XFS Quota Management subsystem\n";
 
 	printk(message);
-	mutex_init(&xfs_Gqm_lock, MUTEX_DEFAULT, "xfs_qmlock");
+	mutex_init(&xfs_Gqm_lock);
 	vfs_bhv_set_custom(&xfs_qmops, &xfs_qmcore_xfs);
 	xfs_qm_init_procfs();
 }
@@ -374,7 +374,7 @@ xfs_qm_exit(void)
 	vfs_bhv_clr_custom(&xfs_qmops);
 	xfs_qm_cleanup_procfs();
 	if (qm_dqzone)
-		kmem_cache_destroy(qm_dqzone);
+		kmem_zone_destroy(qm_dqzone);
 	if (qm_dqtrxzone)
-		kmem_cache_destroy(qm_dqtrxzone);
+		kmem_zone_destroy(qm_dqtrxzone);
 }

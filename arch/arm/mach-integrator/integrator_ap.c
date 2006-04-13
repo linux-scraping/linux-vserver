@@ -25,6 +25,8 @@
 #include <linux/slab.h>
 #include <linux/string.h>
 #include <linux/sysdev.h>
+#include <linux/amba/bus.h>
+#include <linux/amba/kmi.h>
 
 #include <asm/hardware.h>
 #include <asm/io.h>
@@ -32,8 +34,6 @@
 #include <asm/setup.h>
 #include <asm/param.h>		/* HZ */
 #include <asm/mach-types.h>
-#include <asm/hardware/amba.h>
-#include <asm/hardware/amba_kmi.h>
 
 #include <asm/arch/lm.h>
 
@@ -319,11 +319,9 @@ static void __init ap_init(void)
 		if ((sc_dec & (16 << i)) == 0)
 			continue;
 
-		lmdev = kmalloc(sizeof(struct lm_device), GFP_KERNEL);
+		lmdev = kzalloc(sizeof(struct lm_device), GFP_KERNEL);
 		if (!lmdev)
 			continue;
-
-		memset(lmdev, 0, sizeof(struct lm_device));
 
 		lmdev->resource.start = 0xc0000000 + 0x10000000 * i;
 		lmdev->resource.end = lmdev->resource.start + 0x0fffffff;
@@ -347,7 +345,6 @@ static struct sys_timer ap_timer = {
 
 MACHINE_START(INTEGRATOR, "ARM-Integrator")
 	/* Maintainer: ARM Ltd/Deep Blue Solutions Ltd */
-	.phys_ram	= 0x00000000,
 	.phys_io	= 0x16000000,
 	.io_pg_offst	= ((0xf1600000) >> 18) & 0xfffc,
 	.boot_params	= 0x00000100,

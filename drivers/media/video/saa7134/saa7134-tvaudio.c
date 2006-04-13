@@ -140,6 +140,12 @@ static struct saa7134_tvaudio tvaudio[] = {
 		.carr2         = 5850,
 		.mode          = TVAUDIO_NICAM_AM,
 	},{
+		.name          = "SECAM-L MONO",
+		.std           = V4L2_STD_SECAM,
+		.carr1         = 6500,
+		.carr2         = -1,
+		.mode          = TVAUDIO_AM_MONO,
+	},{
 		.name          = "SECAM-D/K",
 		.std           = V4L2_STD_SECAM,
 		.carr1         = 6500,
@@ -180,8 +186,8 @@ static void tvaudio_init(struct saa7134_dev *dev)
 	saa_writeb(SAA7134_AUDIO_CLOCK0,      clock        & 0xff);
 	saa_writeb(SAA7134_AUDIO_CLOCK1,     (clock >>  8) & 0xff);
 	saa_writeb(SAA7134_AUDIO_CLOCK2,     (clock >> 16) & 0xff);
-	// frame locked audio was reported not to be reliable
-	saa_writeb(SAA7134_AUDIO_PLL_CTRL,   0x02);
+	/* frame locked audio is mandatory for NICAM */
+	saa_writeb(SAA7134_AUDIO_PLL_CTRL,   0x01);
 
 	saa_writeb(SAA7134_NICAM_ERROR_LOW,  0x14);
 	saa_writeb(SAA7134_NICAM_ERROR_HIGH, 0x50);
@@ -334,6 +340,12 @@ static void tvaudio_setmode(struct saa7134_dev *dev,
 		saa_writeb(SAA7134_STEREO_DAC_OUTPUT_SELECT,  0xa1);
 		saa_writeb(SAA7134_NICAM_CONFIG,              0x00);
 		break;
+	case TVAUDIO_AM_MONO:
+		saa_writeb(SAA7134_DEMODULATOR,               0x12);
+		saa_writeb(SAA7134_DCXO_IDENT_CTRL,           0x00);
+		saa_writeb(SAA7134_FM_DEEMPHASIS,             0x44);
+		saa_writeb(SAA7134_STEREO_DAC_OUTPUT_SELECT,  0xa0);
+		break;
 	case TVAUDIO_FM_SAT_STEREO:
 		/* not implemented (yet) */
 		break;
@@ -414,6 +426,7 @@ static int tvaudio_getstereo(struct saa7134_dev *dev, struct saa7134_tvaudio *au
 
 	switch (audio->mode) {
 	case TVAUDIO_FM_MONO:
+	case TVAUDIO_AM_MONO:
 		return V4L2_TUNER_SUB_MONO;
 	case TVAUDIO_FM_K_STEREO:
 	case TVAUDIO_FM_BG_STEREO:
@@ -469,17 +482,20 @@ static int tvaudio_setstereo(struct saa7134_dev *dev, struct saa7134_tvaudio *au
 		[ V4L2_TUNER_MODE_STEREO ] = "stereo",
 		[ V4L2_TUNER_MODE_LANG1  ] = "lang1",
 		[ V4L2_TUNER_MODE_LANG2  ] = "lang2",
+		[ V4L2_TUNER_MODE_LANG1_LANG2  ] = "lang1+lang2",
 	};
 	static u32 fm[] = {
 		[ V4L2_TUNER_MODE_MONO   ] = 0x00,  /* ch1  */
 		[ V4L2_TUNER_MODE_STEREO ] = 0x80,  /* auto */
 		[ V4L2_TUNER_MODE_LANG1  ] = 0x00,  /* ch1  */
 		[ V4L2_TUNER_MODE_LANG2  ] = 0x01,  /* ch2  */
+		[ V4L2_TUNER_MODE_LANG1_LANG2 ] = 0x80,  /* auto */
 	};
 	u32 reg;
 
 	switch (audio->mode) {
 	case TVAUDIO_FM_MONO:
+	case TVAUDIO_AM_MONO:
 		/* nothing to do ... */
 		break;
 	case TVAUDIO_FM_K_STEREO:
@@ -809,7 +825,12 @@ static int tvaudio_thread_ddep(void *data)
 			dprintk("ddep override: %s\n",stdres[audio_ddep]);
 		} else if (&card(dev).radio == dev->input) {
 			dprintk("FM Radio\n");
-			norms = (0x0f << 2) | 0x01;
+			if (dev->tuner_type == TUNER_PHILIPS_TDA8290) {
+				norms = (0x11 << 2) | 0x01;
+				saa_dsp_writel(dev, 0x42c >> 2, 0x729555);
+			} else {
+				norms = (0x0f << 2) | 0x01;
+			}
 		} else {
 			/* (let chip) scan for sound carrier */
 			norms = 0;

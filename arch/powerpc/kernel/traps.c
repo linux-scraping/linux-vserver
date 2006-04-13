@@ -31,6 +31,7 @@
 #include <linux/prctl.h>
 #include <linux/delay.h>
 #include <linux/kprobes.h>
+#include <linux/kexec.h>
 
 #include <asm/kdebug.h>
 #include <asm/pgtable.h>
@@ -73,19 +74,19 @@ EXPORT_SYMBOL(__debugger_dabr_match);
 EXPORT_SYMBOL(__debugger_fault_handler);
 #endif
 
-struct notifier_block *powerpc_die_chain;
-static DEFINE_SPINLOCK(die_notifier_lock);
+ATOMIC_NOTIFIER_HEAD(powerpc_die_chain);
 
 int register_die_notifier(struct notifier_block *nb)
 {
-	int err = 0;
-	unsigned long flags;
-
-	spin_lock_irqsave(&die_notifier_lock, flags);
-	err = notifier_chain_register(&powerpc_die_chain, nb);
-	spin_unlock_irqrestore(&die_notifier_lock, flags);
-	return err;
+	return atomic_notifier_chain_register(&powerpc_die_chain, nb);
 }
+EXPORT_SYMBOL(register_die_notifier);
+
+int unregister_die_notifier(struct notifier_block *nb)
+{
+	return atomic_notifier_chain_unregister(&powerpc_die_chain, nb);
+}
+EXPORT_SYMBOL(unregister_die_notifier);
 
 /*
  * Trap & Exception support
@@ -95,8 +96,7 @@ static DEFINE_SPINLOCK(die_lock);
 
 int die(const char *str, struct pt_regs *regs, long err)
 {
-	static int die_counter;
-	int nl = 0;
+	static int die_counter, crash_dump_start = 0;
 
 	if (debugger(regs))
 		return 1;
@@ -105,7 +105,7 @@ int die(const char *str, struct pt_regs *regs, long err)
 	spin_lock_irq(&die_lock);
 	bust_spinlocks(1);
 #ifdef CONFIG_PMAC_BACKLIGHT
-	if (_machine == _MACH_Pmac) {
+	if (machine_is(powermac)) {
 		set_backlight_enable(1);
 		set_backlight_level(BACKLIGHT_MAX);
 	}
@@ -113,50 +113,36 @@ int die(const char *str, struct pt_regs *regs, long err)
 	printk("Oops: %s, sig: %ld [#%d]\n", str, err, ++die_counter);
 #ifdef CONFIG_PREEMPT
 	printk("PREEMPT ");
-	nl = 1;
 #endif
 #ifdef CONFIG_SMP
 	printk("SMP NR_CPUS=%d ", NR_CPUS);
-	nl = 1;
 #endif
 #ifdef CONFIG_DEBUG_PAGEALLOC
 	printk("DEBUG_PAGEALLOC ");
-	nl = 1;
 #endif
 #ifdef CONFIG_NUMA
 	printk("NUMA ");
-	nl = 1;
 #endif
-#ifdef CONFIG_PPC64
-	switch (_machine) {
-	case PLATFORM_PSERIES:
-		printk("PSERIES ");
-		nl = 1;
-		break;
-	case PLATFORM_PSERIES_LPAR:
-		printk("PSERIES LPAR ");
-		nl = 1;
-		break;
-	case PLATFORM_ISERIES_LPAR:
-		printk("ISERIES LPAR ");
-		nl = 1;
-		break;
-	case PLATFORM_POWERMAC:
-		printk("POWERMAC ");
-		nl = 1;
-		break;
-	case PLATFORM_CELL:
-		printk("CELL ");
-		nl = 1;
-		break;
-	}
-#endif
-	if (nl)
-		printk("\n");
+	printk("%s\n", ppc_md.name ? "" : ppc_md.name);
+
 	print_modules();
 	show_regs(regs);
 	bust_spinlocks(0);
+
+	if (!crash_dump_start && kexec_should_crash(current)) {
+		crash_dump_start = 1;
+		spin_unlock_irq(&die_lock);
+		crash_kexec(regs);
+		/* NOTREACHED */
+	}
 	spin_unlock_irq(&die_lock);
+	if (crash_dump_start)
+		/*
+		 * Only for soft-reset: Other CPUs will be responded to an IPI
+		 * sent by first kexec CPU.
+		 */
+		for(;;)
+			;
 
 	if (in_interrupt())
 		panic("Fatal exception in interrupt");
@@ -215,8 +201,10 @@ void _exception(int signr, struct pt_regs *regs, int code, unsigned long addr)
 void system_reset_exception(struct pt_regs *regs)
 {
 	/* See if any machine dependent calls */
-	if (ppc_md.system_reset_exception)
-		ppc_md.system_reset_exception(regs);
+	if (ppc_md.system_reset_exception) {
+		if (ppc_md.system_reset_exception(regs))
+			return;
+	}
 
 	die("System Reset", regs, SIGABRT);
 
@@ -240,7 +228,7 @@ void system_reset_exception(struct pt_regs *regs)
  */
 static inline int check_io_access(struct pt_regs *regs)
 {
-#ifdef CONFIG_PPC_PMAC
+#if defined(CONFIG_PPC_PMAC) && defined(CONFIG_PPC32)
 	unsigned long msr = regs->msr;
 	const struct exception_table_entry *entry;
 	unsigned int *nip = (unsigned int *)regs->nip;
@@ -273,7 +261,7 @@ static inline int check_io_access(struct pt_regs *regs)
 			return 1;
 		}
 	}
-#endif /* CONFIG_PPC_PMAC */
+#endif /* CONFIG_PPC_PMAC && CONFIG_PPC32 */
 	return 0;
 }
 
@@ -320,8 +308,8 @@ platform_machine_check(struct pt_regs *regs)
 
 void machine_check_exception(struct pt_regs *regs)
 {
-#ifdef CONFIG_PPC64
 	int recover = 0;
+	unsigned long reason = get_mc_reason(regs);
 
 	/* See if any machine dependent calls */
 	if (ppc_md.machine_check_exception)
@@ -329,8 +317,6 @@ void machine_check_exception(struct pt_regs *regs)
 
 	if (recover)
 		return;
-#else
-	unsigned long reason = get_mc_reason(regs);
 
 	if (user_mode(regs)) {
 		regs->msr |= MSR_RI;
@@ -474,7 +460,6 @@ void machine_check_exception(struct pt_regs *regs)
 	 * additional info, e.g. bus error registers.
 	 */
 	platform_machine_check(regs);
-#endif /* CONFIG_PPC64 */
 
 	if (debugger_fault_handler(regs))
 		return;
@@ -797,6 +782,8 @@ void __kprobes program_check_exception(struct pt_regs *regs)
 		return;
 	}
 
+	local_irq_enable();
+
 	/* Try to emulate it if we should. */
 	if (reason & (REASON_ILLEGAL | REASON_PRIVILEGED)) {
 		switch (emulate_instruction(regs)) {
@@ -886,12 +873,10 @@ void altivec_unavailable_exception(struct pt_regs *regs)
 	die("Unrecoverable VMX/Altivec Unavailable Exception", regs, SIGABRT);
 }
 
-#if defined(CONFIG_PPC64) || defined(CONFIG_E500)
 void performance_monitor_exception(struct pt_regs *regs)
 {
 	perf_irq(regs);
 }
-#endif
 
 #ifdef CONFIG_8xx
 void SoftwareEmulation(struct pt_regs *regs)

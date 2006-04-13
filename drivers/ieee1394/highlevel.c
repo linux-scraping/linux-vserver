@@ -101,11 +101,9 @@ void *hpsb_create_hostinfo(struct hpsb_highlevel *hl, struct hpsb_host *host,
 		return NULL;
 	}
 
-	hi = kmalloc(sizeof(*hi) + data_size, GFP_ATOMIC);
+	hi = kzalloc(sizeof(*hi) + data_size, GFP_ATOMIC);
 	if (!hi)
 		return NULL;
-
-	memset(hi, 0, sizeof(*hi) + data_size);
 
 	if (data_size) {
 		data = hi->data = hi + 1;
@@ -308,8 +306,7 @@ u64 hpsb_allocate_and_register_addrspace(struct hpsb_highlevel *hl,
 	u64 align_mask = ~(alignment - 1);
 
 	if ((alignment & 3) || (alignment > 0x800000000000ULL) ||
-	    ((hweight32(alignment >> 32) +
-	      hweight32(alignment & 0xffffffff) != 1))) {
+	    (hweight64(alignment) != 1)) {
 		HPSB_ERR("%s called with invalid alignment: 0x%048llx",
 			 __FUNCTION__, (unsigned long long)alignment);
 		return retval;
@@ -326,11 +323,9 @@ u64 hpsb_allocate_and_register_addrspace(struct hpsb_highlevel *hl,
 		return retval;
 	}
 
-	as = (struct hpsb_address_serve *)
-		kmalloc(sizeof(struct hpsb_address_serve), GFP_KERNEL);
-	if (as == NULL) {
+	as = kmalloc(sizeof(*as), GFP_KERNEL);
+	if (!as)
 		return retval;
-	}
 
 	INIT_LIST_HEAD(&as->host_list);
 	INIT_LIST_HEAD(&as->hl_list);
@@ -383,11 +378,9 @@ int hpsb_register_addrspace(struct hpsb_highlevel *hl, struct hpsb_host *host,
                 return 0;
         }
 
-        as = (struct hpsb_address_serve *)
-                kmalloc(sizeof(struct hpsb_address_serve), GFP_ATOMIC);
-        if (as == NULL) {
-                return 0;
-        }
+	as = kmalloc(sizeof(*as), GFP_ATOMIC);
+	if (!as)
+		return 0;
 
         INIT_LIST_HEAD(&as->host_list);
         INIT_LIST_HEAD(&as->hl_list);

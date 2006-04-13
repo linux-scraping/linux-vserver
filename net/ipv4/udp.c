@@ -86,6 +86,7 @@
 #include <linux/module.h>
 #include <linux/socket.h>
 #include <linux/sockios.h>
+#include <linux/igmp.h>
 #include <linux/in.h>
 #include <linux/errno.h>
 #include <linux/timer.h>
@@ -870,20 +871,7 @@ out:
 csum_copy_err:
 	UDP_INC_STATS_BH(UDP_MIB_INERRORS);
 
-	/* Clear queue. */
-	if (flags&MSG_PEEK) {
-		int clear = 0;
-		spin_lock_bh(&sk->sk_receive_queue.lock);
-		if (skb == skb_peek(&sk->sk_receive_queue)) {
-			__skb_unlink(skb, &sk->sk_receive_queue);
-			clear = 1;
-		}
-		spin_unlock_bh(&sk->sk_receive_queue.lock);
-		if (clear)
-			kfree_skb(skb);
-	}
-
-	skb_free_datagram(sk, skb);
+	skb_kill_datagram(sk, skb, flags);
 
 	if (noblock)
 		return -EAGAIN;	
@@ -1025,6 +1013,7 @@ static int udp_queue_rcv_skb(struct sock * sk, struct sk_buff *skb)
 		kfree_skb(skb);
 		return -1;
 	}
+	nf_reset(skb);
 
 	if (up->encap_type) {
 		/*
@@ -1118,7 +1107,7 @@ static int udp_v4_mcast_deliver(struct sk_buff *skb, struct udphdr *uh,
  * Otherwise, csum completion requires chacksumming packet body,
  * including udp header and folding it to skb->csum.
  */
-static int udp_checksum_init(struct sk_buff *skb, struct udphdr *uh,
+static void udp_checksum_init(struct sk_buff *skb, struct udphdr *uh,
 			     unsigned short ulen, u32 saddr, u32 daddr)
 {
 	if (uh->check == 0) {
@@ -1132,7 +1121,6 @@ static int udp_checksum_init(struct sk_buff *skb, struct udphdr *uh,
 	/* Probably, we should checksum udp header (it should be in cache
 	 * in any case) and data in tiny packets (< rx copybreak).
 	 */
-	return 0;
 }
 
 /*
@@ -1165,8 +1153,7 @@ int udp_rcv(struct sk_buff *skb)
 	if (pskb_trim_rcsum(skb, ulen))
 		goto short_packet;
 
-	if (udp_checksum_init(skb, uh, ulen, saddr, daddr) < 0)
-		goto csum_error;
+	udp_checksum_init(skb, uh, ulen, saddr, daddr);
 
 	if(rt->rt_flags & (RTCF_BROADCAST|RTCF_MULTICAST))
 		return udp_v4_mcast_deliver(skb, uh, saddr, daddr);
@@ -1187,6 +1174,7 @@ int udp_rcv(struct sk_buff *skb)
 
 	if (!xfrm4_policy_check(NULL, XFRM_POLICY_IN, skb))
 		goto drop;
+	nf_reset(skb);
 
 	/* No socket. Drop packet silently, if checksum is wrong */
 	if (udp_checksum_complete(skb))
@@ -1243,15 +1231,12 @@ static int udp_destroy_sock(struct sock *sk)
 /*
  *	Socket option code for UDP
  */
-static int udp_setsockopt(struct sock *sk, int level, int optname, 
+static int do_udp_setsockopt(struct sock *sk, int level, int optname,
 			  char __user *optval, int optlen)
 {
 	struct udp_sock *up = udp_sk(sk);
 	int val;
 	int err = 0;
-
-	if (level != SOL_UDP)
-		return ip_setsockopt(sk, level, optname, optval, optlen);
 
 	if(optlen<sizeof(int))
 		return -EINVAL;
@@ -1292,14 +1277,29 @@ static int udp_setsockopt(struct sock *sk, int level, int optname,
 	return err;
 }
 
-static int udp_getsockopt(struct sock *sk, int level, int optname, 
+static int udp_setsockopt(struct sock *sk, int level, int optname,
+			  char __user *optval, int optlen)
+{
+	if (level != SOL_UDP)
+		return ip_setsockopt(sk, level, optname, optval, optlen);
+	return do_udp_setsockopt(sk, level, optname, optval, optlen);
+}
+
+#ifdef CONFIG_COMPAT
+static int compat_udp_setsockopt(struct sock *sk, int level, int optname,
+				 char __user *optval, int optlen)
+{
+	if (level != SOL_UDP)
+		return compat_ip_setsockopt(sk, level, optname, optval, optlen);
+	return do_udp_setsockopt(sk, level, optname, optval, optlen);
+}
+#endif
+
+static int do_udp_getsockopt(struct sock *sk, int level, int optname,
 			  char __user *optval, int __user *optlen)
 {
 	struct udp_sock *up = udp_sk(sk);
 	int val, len;
-
-	if (level != SOL_UDP)
-		return ip_getsockopt(sk, level, optname, optval, optlen);
 
 	if(get_user(len,optlen))
 		return -EFAULT;
@@ -1329,6 +1329,23 @@ static int udp_getsockopt(struct sock *sk, int level, int optname,
   	return 0;
 }
 
+static int udp_getsockopt(struct sock *sk, int level, int optname,
+			  char __user *optval, int __user *optlen)
+{
+	if (level != SOL_UDP)
+		return ip_getsockopt(sk, level, optname, optval, optlen);
+	return do_udp_getsockopt(sk, level, optname, optval, optlen);
+}
+
+#ifdef CONFIG_COMPAT
+static int compat_udp_getsockopt(struct sock *sk, int level, int optname,
+				 char __user *optval, int __user *optlen)
+{
+	if (level != SOL_UDP)
+		return compat_ip_getsockopt(sk, level, optname, optval, optlen);
+	return do_udp_getsockopt(sk, level, optname, optval, optlen);
+}
+#endif
 /**
  * 	udp_poll - wait for a UDP event.
  *	@file - file struct
@@ -1377,23 +1394,27 @@ unsigned int udp_poll(struct file *file, struct socket *sock, poll_table *wait)
 }
 
 struct proto udp_prot = {
- 	.name =		"UDP",
-	.owner =	THIS_MODULE,
-	.close =	udp_close,
-	.connect =	ip4_datagram_connect,
-	.disconnect =	udp_disconnect,
-	.ioctl =	udp_ioctl,
-	.destroy =	udp_destroy_sock,
-	.setsockopt =	udp_setsockopt,
-	.getsockopt =	udp_getsockopt,
-	.sendmsg =	udp_sendmsg,
-	.recvmsg =	udp_recvmsg,
-	.sendpage =	udp_sendpage,
-	.backlog_rcv =	udp_queue_rcv_skb,
-	.hash =		udp_v4_hash,
-	.unhash =	udp_v4_unhash,
-	.get_port =	udp_v4_get_port,
-	.obj_size =	sizeof(struct udp_sock),
+ 	.name		   = "UDP",
+	.owner		   = THIS_MODULE,
+	.close		   = udp_close,
+	.connect	   = ip4_datagram_connect,
+	.disconnect	   = udp_disconnect,
+	.ioctl		   = udp_ioctl,
+	.destroy	   = udp_destroy_sock,
+	.setsockopt	   = udp_setsockopt,
+	.getsockopt	   = udp_getsockopt,
+	.sendmsg	   = udp_sendmsg,
+	.recvmsg	   = udp_recvmsg,
+	.sendpage	   = udp_sendpage,
+	.backlog_rcv	   = udp_queue_rcv_skb,
+	.hash		   = udp_v4_hash,
+	.unhash		   = udp_v4_unhash,
+	.get_port	   = udp_v4_get_port,
+	.obj_size	   = sizeof(struct udp_sock),
+#ifdef CONFIG_COMPAT
+	.compat_setsockopt = compat_udp_setsockopt,
+	.compat_getsockopt = compat_udp_getsockopt,
+#endif
 };
 
 /* ------------------------------------------------------------------------ */

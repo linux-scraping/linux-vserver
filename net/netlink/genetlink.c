@@ -13,26 +13,27 @@
 #include <linux/socket.h>
 #include <linux/string.h>
 #include <linux/skbuff.h>
+#include <linux/mutex.h>
 #include <net/sock.h>
 #include <net/genetlink.h>
 
 struct sock *genl_sock = NULL;
 
-static DECLARE_MUTEX(genl_sem); /* serialization of message processing */
+static DEFINE_MUTEX(genl_mutex); /* serialization of message processing */
 
 static void genl_lock(void)
 {
-	down(&genl_sem);
+	mutex_lock(&genl_mutex);
 }
 
 static int genl_trylock(void)
 {
-	return down_trylock(&genl_sem);
+	return !mutex_trylock(&genl_mutex);
 }
 
 static void genl_unlock(void)
 {
-	up(&genl_sem);
+	mutex_unlock(&genl_mutex);
 
 	if (genl_sock && genl_sock->sk_receive_queue.qlen)
 		genl_sock->sk_data_ready(genl_sock, 0);
@@ -222,11 +223,6 @@ int genl_register_family(struct genl_family *family)
 		goto errout_locked;
 	}
 
-	if (!try_module_get(family->owner)) {
-		err = -EBUSY;
-		goto errout_locked;
-	}
-
 	if (family->id == GENL_ID_GENERATE) {
 		u16 newid = genl_generate_id();
 
@@ -243,7 +239,7 @@ int genl_register_family(struct genl_family *family)
 					sizeof(struct nlattr *), GFP_KERNEL);
 		if (family->attrbuf == NULL) {
 			err = -ENOMEM;
-			goto errout;
+			goto errout_locked;
 		}
 	} else
 		family->attrbuf = NULL;
@@ -283,7 +279,6 @@ int genl_unregister_family(struct genl_family *family)
 		INIT_LIST_HEAD(&family->ops_list);
 		genl_unlock();
 
-		module_put(family->owner);
 		kfree(family->attrbuf);
 		genl_ctrl_event(CTRL_CMD_DELFAMILY, family);
 		return 0;
@@ -294,7 +289,7 @@ int genl_unregister_family(struct genl_family *family)
 	return -ENOENT;
 }
 
-static inline int genl_rcv_msg(struct sk_buff *skb, struct nlmsghdr *nlh,
+static int genl_rcv_msg(struct sk_buff *skb, struct nlmsghdr *nlh,
 			       int *errp)
 {
 	struct genl_ops *ops;
@@ -381,7 +376,7 @@ static void genl_rcv(struct sock *sk, int len)
 	do {
 		if (genl_trylock())
 			return;
-		netlink_run_queue(sk, &qlen, &genl_rcv_msg);
+		netlink_run_queue(sk, &qlen, genl_rcv_msg);
 		genl_unlock();
 	} while (qlen && genl_sock && genl_sock->sk_receive_queue.qlen);
 }
@@ -441,7 +436,7 @@ errout:
 }
 
 static struct sk_buff *ctrl_build_msg(struct genl_family *family, u32 pid,
-				      int seq, int cmd)
+				      int seq, u8 cmd)
 {
 	struct sk_buff *skb;
 	int err;
@@ -535,7 +530,6 @@ static struct genl_family genl_ctrl = {
 	.name = "nlctrl",
 	.version = 0x1,
 	.maxattr = CTRL_ATTR_MAX,
-	.owner = THIS_MODULE,
 };
 
 static int __init genl_init(void)
@@ -556,10 +550,8 @@ static int __init genl_init(void)
 	netlink_set_nonroot(NETLINK_GENERIC, NL_NONROOT_RECV);
 	genl_sock = netlink_kernel_create(NETLINK_GENERIC, GENL_MAX_ID,
 					  genl_rcv, THIS_MODULE);
-	if (genl_sock == NULL) {
+	if (genl_sock == NULL)
 		panic("GENL: Cannot initialize generic netlink\n");
-		return -ENOMEM;
-	}
 
 	return 0;
 
@@ -567,7 +559,6 @@ errout_register:
 	genl_unregister_family(&genl_ctrl);
 errout:
 	panic("GENL: Cannot register controller: %d\n", err);
-	return err;
 }
 
 subsys_initcall(genl_init);

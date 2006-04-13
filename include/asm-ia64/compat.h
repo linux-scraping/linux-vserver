@@ -189,10 +189,16 @@ compat_ptr (compat_uptr_t uptr)
 	return (void __user *) (unsigned long) uptr;
 }
 
+static inline compat_uptr_t
+ptr_to_compat(void __user *uptr)
+{
+	return (u32)(unsigned long)uptr;
+}
+
 static __inline__ void __user *
 compat_alloc_user_space (long len)
 {
-	struct pt_regs *regs = ia64_task_regs(current);
+	struct pt_regs *regs = task_pt_regs(current);
 	return (void __user *) (((regs->r12 & 0xffffffff) & -16) - len);
 }
 

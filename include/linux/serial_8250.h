@@ -26,7 +26,7 @@ struct plat_serial8250_port {
 	unsigned char	regshift;	/* register shift */
 	unsigned char	iotype;		/* UPIO_* */
 	unsigned char	hub6;
-	unsigned int	flags;		/* UPF_* flags */
+	upf_t		flags;		/* UPF_* flags */
 };
 
 /*
@@ -37,6 +37,7 @@ enum {
 	PLAT8250_DEV_LEGACY = -1,
 	PLAT8250_DEV_PLATFORM,
 	PLAT8250_DEV_PLATFORM1,
+	PLAT8250_DEV_PLATFORM2,
 	PLAT8250_DEV_FOURPORT,
 	PLAT8250_DEV_ACCENT,
 	PLAT8250_DEV_BOCA,

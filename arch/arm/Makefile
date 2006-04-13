@@ -1,6 +1,9 @@
 #
 # arch/arm/Makefile
 #
+# This file is included by the global makefile so that you can add your own
+# architecture-specific flags and dependencies.
+#
 # This file is subject to the terms and conditions of the GNU General Public
 # License.  See the file "COPYING" in the main directory of this archive
 # for more details.
@@ -8,7 +11,7 @@
 # Copyright (C) 1995-2001 by Russell King
 
 LDFLAGS_vmlinux	:=-p --no-undefined -X
-CPPFLAGS_vmlinux.lds = -DKERNEL_RAM_ADDR=$(TEXTADDR)
+CPPFLAGS_vmlinux.lds = -DTEXT_OFFSET=$(TEXT_OFFSET)
 OBJCOPYFLAGS	:=-O binary -R .note -R .comment -S
 GZFLAGS		:=-9
 #CFLAGS		+=-pipe
@@ -16,6 +19,11 @@ GZFLAGS		:=-9
 # Do not use arch/arm/defconfig - it's always outdated.
 # Select a platform tht is kept up-to-date
 KBUILD_DEFCONFIG := versatile_defconfig
+
+# defines filename extension depending memory manement type.
+ifeq ($(CONFIG_MMU),)
+MMUEXT		:= -nommu
+endif
 
 ifeq ($(CONFIG_FRAME_POINTER),y)
 CFLAGS		+=-fno-omit-frame-pointer -mapcs -mno-sched-prolog
@@ -54,18 +62,24 @@ tune-$(CONFIG_CPU_ARM926T)	:=-mtune=arm9tdmi
 tune-$(CONFIG_CPU_SA110)	:=-mtune=strongarm110
 tune-$(CONFIG_CPU_SA1100)	:=-mtune=strongarm1100
 tune-$(CONFIG_CPU_XSCALE)	:=$(call cc-option,-mtune=xscale,-mtune=strongarm110) -Wa,-mcpu=xscale
+tune-$(CONFIG_CPU_XSC3)		:=$(call cc-option,-mtune=xscale,-mtune=strongarm110) -Wa,-mcpu=xscale
 tune-$(CONFIG_CPU_V6)		:=$(call cc-option,-mtune=arm1136j-s,-mtune=strongarm)
 
-# Need -Uarm for gcc < 3.x
+ifeq ($(CONFIG_AEABI),y)
+CFLAGS_ABI	:=-mabi=aapcs -mno-thumb-interwork
+else
 CFLAGS_ABI	:=$(call cc-option,-mapcs-32,-mabi=apcs-gnu) $(call cc-option,-mno-thumb-interwork,)
+endif
+
+# Need -Uarm for gcc < 3.x
 CFLAGS		+=$(CFLAGS_ABI) $(arch-y) $(tune-y) $(call cc-option,-mshort-load-bytes,$(call cc-option,-malignment-traps,)) -msoft-float -Uarm
 AFLAGS		+=$(CFLAGS_ABI) $(arch-y) $(tune-y) -msoft-float
 
 CHECKFLAGS	+= -D__arm__
 
 #Default value
-head-y		:= arch/arm/kernel/head.o arch/arm/kernel/init_task.o
-textaddr-y	:= 0xC0008000
+head-y		:= arch/arm/kernel/head$(MMUEXT).o arch/arm/kernel/init_task.o
+textofs-y	:= 0x00008000
 
  machine-$(CONFIG_ARCH_RPC)	   := rpc
  machine-$(CONFIG_ARCH_EBSA110)	   := ebsa110
@@ -73,25 +87,23 @@ textaddr-y	:= 0xC0008000
   incdir-$(CONFIG_ARCH_CLPS7500)   := cl7500
  machine-$(CONFIG_FOOTBRIDGE)	   := footbridge
   incdir-$(CONFIG_FOOTBRIDGE)	   := ebsa285
-textaddr-$(CONFIG_ARCH_CO285)	   := 0x60008000
  machine-$(CONFIG_ARCH_CO285)	   := footbridge
   incdir-$(CONFIG_ARCH_CO285)	   := ebsa285
  machine-$(CONFIG_ARCH_SHARK)	   := shark
  machine-$(CONFIG_ARCH_SA1100)	   := sa1100
 ifeq ($(CONFIG_ARCH_SA1100),y)
 # SA1111 DMA bug: we don't want the kernel to live in precious DMA-able memory
-textaddr-$(CONFIG_SA1111)	   := 0xc0208000
+ textofs-$(CONFIG_SA1111)	   := 0x00208000
 endif
  machine-$(CONFIG_ARCH_PXA)	   := pxa
  machine-$(CONFIG_ARCH_L7200)	   := l7200
  machine-$(CONFIG_ARCH_INTEGRATOR) := integrator
- machine-$(CONFIG_ARCH_CAMELOT)	   := epxa10db
-textaddr-$(CONFIG_ARCH_CLPS711X)   := 0xc0028000
+ textofs-$(CONFIG_ARCH_CLPS711X)   := 0x00028000
  machine-$(CONFIG_ARCH_CLPS711X)   := clps711x
-textaddr-$(CONFIG_ARCH_FORTUNET)   := 0xc0008000
  machine-$(CONFIG_ARCH_IOP3XX)	   := iop3xx
  machine-$(CONFIG_ARCH_IXP4XX)	   := ixp4xx
  machine-$(CONFIG_ARCH_IXP2000)    := ixp2000
+ machine-$(CONFIG_ARCH_IXP23XX)    := ixp23xx
  machine-$(CONFIG_ARCH_OMAP1)	   := omap1
  machine-$(CONFIG_ARCH_OMAP2)	   := omap2
   incdir-$(CONFIG_ARCH_OMAP)	   := omap
@@ -102,6 +114,8 @@ textaddr-$(CONFIG_ARCH_FORTUNET)   := 0xc0008000
  machine-$(CONFIG_ARCH_H720X)	   := h720x
  machine-$(CONFIG_ARCH_AAEC2000)   := aaec2000
  machine-$(CONFIG_ARCH_REALVIEW)   := realview
+ machine-$(CONFIG_ARCH_AT91RM9200) := at91rm9200
+ machine-$(CONFIG_ARCH_EP93XX)     := ep93xx
 
 ifeq ($(CONFIG_ARCH_EBSA110),y)
 # This is what happens if you forget the IOCS16 line.
@@ -110,7 +124,8 @@ CFLAGS_3c589_cs.o :=-DISA_SIXTEEN_BIT_PERIPHERAL
 export CFLAGS_3c589_cs.o
 endif
 
-TEXTADDR := $(textaddr-y)
+# The byte offset of the kernel image in RAM from the start of RAM.
+TEXT_OFFSET := $(textofs-y)
 
 ifeq ($(incdir-y),)
 incdir-y := $(machine-y)
@@ -123,7 +138,7 @@ else
 MACHINE  :=
 endif
   
-export	TEXTADDR GZFLAGS
+export	TEXT_OFFSET GZFLAGS MMUEXT
 
 # Do we have FASTFPE?
 FASTFPE		:=arch/arm/fastfpe
@@ -172,7 +187,7 @@ endif
 
 archprepare: maketools
 
-.PHONY: maketools FORCE
+PHONY += maketools FORCE
 maketools: include/linux/version.h include/asm-arm/.arch FORCE
 	$(Q)$(MAKE) $(build)=arch/arm/tools include/asm-arm/mach-types.h
 

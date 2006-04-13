@@ -769,7 +769,7 @@ typedef struct {
 				compressed.  (This effectively limits the
 				compression unit size to be a power of two
 				clusters.)  WinNT4 only uses a value of 4.
-				Sparse files also have this set to 4. */
+				Sparse files have this set to 0 on XPSP2. */
 /* 35*/			u8 reserved[5];		/* Align to 8-byte boundary. */
 /* The sizes below are only used when lowest_vcn is zero, as otherwise it would
    be difficult to keep them up-to-date.*/
@@ -801,13 +801,16 @@ typedef struct {
 typedef ATTR_RECORD ATTR_REC;
 
 /*
- * File attribute flags (32-bit).
+ * File attribute flags (32-bit) appearing in the file_attributes fields of the
+ * STANDARD_INFORMATION attribute of MFT_RECORDs and the FILENAME_ATTR
+ * attributes of MFT_RECORDs and directory index entries.
+ *
+ * All of the below flags appear in the directory index entries but only some
+ * appear in the STANDARD_INFORMATION attribute whilst only some others appear
+ * in the FILENAME_ATTR attribute of MFT_RECORDs.  Unless otherwise stated the
+ * flags appear in all of the above.
  */
 enum {
-	/*
-	 * The following flags are only present in the STANDARD_INFORMATION
-	 * attribute (in the field file_attributes).
-	 */
 	FILE_ATTR_READONLY		= const_cpu_to_le32(0x00000001),
 	FILE_ATTR_HIDDEN		= const_cpu_to_le32(0x00000002),
 	FILE_ATTR_SYSTEM		= const_cpu_to_le32(0x00000004),
@@ -838,10 +841,10 @@ enum {
 	   F_A_DEVICE, F_A_DIRECTORY, F_A_SPARSE_FILE, F_A_REPARSE_POINT,
 	   F_A_COMPRESSED, and F_A_ENCRYPTED and preserves the rest.  This mask
 	   is used to to obtain all flags that are valid for setting. */
-
 	/*
-	 * The following flags are only present in the FILE_NAME attribute (in
-	 * the field file_attributes).
+	 * The flag FILE_ATTR_DUP_FILENAME_INDEX_PRESENT is present in all
+	 * FILENAME_ATTR attributes but not in the STANDARD_INFORMATION
+	 * attribute of an mft record.
 	 */
 	FILE_ATTR_DUP_FILE_NAME_INDEX_PRESENT	= const_cpu_to_le32(0x10000000),
 	/* Note, this is a copy of the corresponding bit from the mft record,
@@ -887,7 +890,7 @@ typedef struct {
 					   Windows this is only updated when
 					   accessed if some time delta has
 					   passed since the last update. Also,
-					   last access times updates can be
+					   last access time updates can be
 					   disabled altogether for speed. */
 /* 32*/	FILE_ATTR_FLAGS file_attributes; /* Flags describing the file. */
 /* 36*/	union {
@@ -1071,11 +1074,22 @@ typedef struct {
 					   modified. */
 /* 20*/	sle64 last_access_time;		/* Time this mft record was last
 					   accessed. */
-/* 28*/	sle64 allocated_size;		/* Byte size of allocated space for the
-					   data attribute. NOTE: Is a multiple
-					   of the cluster size. */
-/* 30*/	sle64 data_size;		/* Byte size of actual data in data
-					   attribute. */
+/* 28*/	sle64 allocated_size;		/* Byte size of on-disk allocated space
+					   for the unnamed data attribute.  So
+					   for normal $DATA, this is the
+					   allocated_size from the unnamed
+					   $DATA attribute and for compressed
+					   and/or sparse $DATA, this is the
+					   compressed_size from the unnamed
+					   $DATA attribute.  For a directory or
+					   other inode without an unnamed $DATA
+					   attribute, this is always 0.  NOTE:
+					   This is a multiple of the cluster
+					   size. */
+/* 30*/	sle64 data_size;		/* Byte size of actual data in unnamed
+					   data attribute.  For a directory or
+					   other inode without an unnamed $DATA
+					   attribute, this is always 0. */
 /* 38*/	FILE_ATTR_FLAGS file_attributes;	/* Flags describing the file. */
 /* 3c*/	union {
 	/* 3c*/	struct {
@@ -1904,12 +1918,13 @@ enum {
 	VOLUME_DELETE_USN_UNDERWAY	= const_cpu_to_le16(0x0010),
 	VOLUME_REPAIR_OBJECT_ID		= const_cpu_to_le16(0x0020),
 
+	VOLUME_CHKDSK_UNDERWAY		= const_cpu_to_le16(0x4000),
 	VOLUME_MODIFIED_BY_CHKDSK	= const_cpu_to_le16(0x8000),
 
-	VOLUME_FLAGS_MASK		= const_cpu_to_le16(0x803f),
+	VOLUME_FLAGS_MASK		= const_cpu_to_le16(0xc03f),
 
 	/* To make our life easier when checking if we must mount read-only. */
-	VOLUME_MUST_MOUNT_RO_MASK	= const_cpu_to_le16(0x8027),
+	VOLUME_MUST_MOUNT_RO_MASK	= const_cpu_to_le16(0xc027),
 } __attribute__ ((__packed__));
 
 typedef le16 VOLUME_FLAGS;

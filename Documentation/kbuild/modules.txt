@@ -13,15 +13,20 @@ In this document you will find information about:
 	   --- 2.2 Available targets
 	   --- 2.3 Available options
 	   --- 2.4 Preparing the kernel tree for module build
+	   --- 2.5 Building separate files for a module
 	=== 3. Example commands
 	=== 4. Creating a kbuild file for an external module
 	=== 5. Include files
 	   --- 5.1 How to include files from the kernel include dir
 	   --- 5.2 External modules using an include/ dir
+	   --- 5.3 External modules using several directories
 	=== 6. Module installation
 	   --- 6.1 INSTALL_MOD_PATH
 	   --- 6.2 INSTALL_MOD_DIR
-	=== 7. Module versioning
+	=== 7. Module versioning & Module.symvers
+	   --- 7.1 Symbols fron the kernel (vmlinux + modules)
+	   --- 7.2 Symbols and external modules
+	   --- 7.3 Symbols from another external module
 	=== 8. Tips & Tricks
 	   --- 8.1 Testing for CONFIG_FOO_BAR
 
@@ -38,7 +43,7 @@ included in the kernel tree.
 What is covered within this file is mainly information to authors
 of modules. The author of an external modules should supply
 a makefile that hides most of the complexity so one only has to type
-'make' to buld the module. A complete example will be present in
+'make' to build the module. A complete example will be present in
 chapter ¤. Creating a kbuild file for an external module".
 
 
@@ -69,7 +74,7 @@ when building an external module.
 
 --- 2.2 Available targets
 
-	$KDIR refers to path to kernel source top-level directory
+	$KDIR refers to the path to the kernel source top-level directory
 
 	make -C $KDIR M=`pwd`
 		Will build the module(s) located in current directory.
@@ -87,11 +92,12 @@ when building an external module.
 	make -C $KDIR M=$PWD modules_install
 		Install the external module(s).
 		Installation default is in /lib/modules/<kernel-version>/extra,
-		but may be prefixed with INSTALL_MOD_PATH - see separate chater.
+		but may be prefixed with INSTALL_MOD_PATH - see separate
+		chapter.
 
 	make -C $KDIR M=$PWD clean
 		Remove all generated files for the module - the kernel
-		source directory is not moddified.
+		source directory is not modified.
 
 	make -C $KDIR M=`pwd` help
 		help will list the available target when building external
@@ -99,7 +105,7 @@ when building an external module.
 
 --- 2.3 Available options:
 
-	$KDIR refer to path to kernel src
+	$KDIR refers to the path to the kernel source top-level directory
 
 	make -C $KDIR
 		Used to specify where to find the kernel source.
@@ -130,6 +136,16 @@ when building an external module.
 	      Therefore a full kernel build needs to be executed to make
 	      module versioning work.
 
+--- 2.5 Building separate files for a module
+	It is possible to build single files which is part of a module.
+	This works equal for the kernel, a module and even for external
+	modules.
+	Examples (module foo.ko, consist of bar.o, baz.o):
+		make -C $KDIR M=`pwd` bar.lst
+		make -C $KDIR M=`pwd` bar.o
+		make -C $KDIR M=`pwd` foo.ko
+		make -C $KDIR M=`pwd` /
+	
 
 === 3. Example commands
 
@@ -206,11 +222,11 @@ following files:
 
 		KERNELDIR := /lib/modules/`uname -r`/build
 		all::
-			$(MAKE) -C $KERNELDIR M=`pwd` $@
+			$(MAKE) -C $(KERNELDIR) M=`pwd` $@
 
 		# Module specific targets
 		genbin:
-			echo "X" > 8123_bini.o_shipped
+			echo "X" > 8123_bin.o_shipped
 
 		endif
 
@@ -341,13 +357,52 @@ directory and therefore needs to deal with this in their kbuild file.
 		EXTRA_CFLAGS := -Iinclude
 		8123-y := 8123_if.o 8123_pci.o 8123_bin.o
 
-	Note that in the assingment there is no space between -I and the path.
-	This is a kbuild limitation and no space must be present.
+	Note that in the assignment there is no space between -I and the path.
+	This is a kbuild limitation:  there must be no space present.
 
+--- 5.3 External modules using several directories
+
+	If an external module does not follow the usual kernel style but
+	decide to spread files over several directories then kbuild can
+	support this too.
+
+	Consider the following example:
+	
+	|
+	+- src/complex_main.c
+	|   +- hal/hardwareif.c
+	|   +- hal/include/hardwareif.h
+	+- include/complex.h
+	
+	To build a single module named complex.ko we then need the following
+	kbuild file:
+
+	Kbuild:
+		obj-m := complex.o
+		complex-y := src/complex_main.o
+		complex-y += src/hal/hardwareif.o
+
+		EXTRA_CFLAGS := -I$(src)/include
+		EXTRA_CFLAGS += -I$(src)src/hal/include
+
+
+	kbuild knows how to handle .o files located in another directory -
+	although this is NOT reccommended practice. The syntax is to specify
+	the directory relative to the directory where the Kbuild file is
+	located.
+
+	To find the .h files we have to explicitly tell kbuild where to look
+	for the .h files. When kbuild executes current directory is always
+	the root of the kernel tree (argument to -C) and therefore we have to
+	tell kbuild how to find the .h files using absolute paths.
+	$(src) will specify the absolute path to the directory where the
+	Kbuild file are located when being build as an external module.
+	Therefore -I$(src)/ is used to point out the directory of the Kbuild
+	file and any additional path are just appended.
 
 === 6. Module installation
 
-Modules which are included in the kernel is installed in the directory:
+Modules which are included in the kernel are installed in the directory:
 
 	/lib/modules/$(KERNELRELEASE)/kernel
 
@@ -365,7 +420,7 @@ External modules are installed in the directory:
 		=> Install dir: /frodo/lib/modules/$(KERNELRELEASE)/kernel
 
 	INSTALL_MOD_PATH may be set as an ordinary shell variable or as in the
-	example above be specified on the commandline when calling make.
+	example above be specified on the command line when calling make.
 	INSTALL_MOD_PATH has effect both when installing modules included in
 	the kernel as well as when installing external modules.
 
@@ -382,9 +437,9 @@ External modules are installed in the directory:
 		=> Install dir: /lib/modules/$(KERNELRELEASE)/gandalf
 
 
-=== 7. Module versioning
+=== 7. Module versioning & Module.symvers
 
-Module versioning are enabled by the CONFIG_MODVERSIONS tag.
+Module versioning is enabled by the CONFIG_MODVERSIONS tag.
 
 Module versioning is used as a simple ABI consistency check. The Module
 versioning creates a CRC value of the full prototype for an exported symbol and
@@ -392,11 +447,80 @@ when a module is loaded/used then the CRC values contained in the kernel are
 compared with similar values in the module. If they are not equal then the
 kernel refuses to load the module.
 
-During a kernel build a file named Module.symvers will be generated. This
-file includes the symbol version of all symbols within the kernel. If the 
-Module.symvers file is saved from the last full kernel compile one does not
-have to do a full kernel compile to build a module version's compatible module.
+Module.symvers contains a list of all exported symbols from a kernel build.
 
+--- 7.1 Symbols fron the kernel (vmlinux + modules)
+
+	During a kernel build a file named Module.symvers will be generated.
+	Module.symvers contains all exported symbols from the kernel and
+	compiled modules. For each symbols the corresponding CRC value
+	is stored too.
+
+	The syntax of the Module.symvers file is:
+		<CRC>       <Symbol>           <module>
+	Sample:
+		0x2d036834  scsi_remove_host   drivers/scsi/scsi_mod
+
+	For a kernel build without CONFIG_MODVERSIONING enabled the crc
+	would read: 0x00000000
+
+	Module.symvers serve two purposes.
+	1) It list all exported symbols both from vmlinux and all modules
+	2) It list CRC if CONFIG_MODVERSION is enabled
+
+--- 7.2 Symbols and external modules
+
+	When building an external module the build system needs access to
+	the symbols from the kernel to check if all external symbols are
+	defined. This is done in the MODPOST step and to obtain all
+	symbols modpost reads Module.symvers from the kernel.
+	If a Module.symvers file is present in the directory where
+	the external module is being build this file will be read too.
+	During the MODPOST step a new Module.symvers file will be written
+	containing all exported symbols that was not defined in the kernel.
+	
+--- 7.3 Symbols from another external module
+
+	Sometimes one external module uses exported symbols from another
+	external module. Kbuild needs to have full knowledge on all symbols
+	to avoid spitting out warnings about undefined symbols.
+	Two solutions exist to let kbuild know all symbols of more than
+	one external module.
+	The method with a top-level kbuild file is recommended but may be
+	impractical in certain situations.
+
+	Use a top-level Kbuild file
+		If you have two modules: 'foo', 'bar' and 'foo' needs symbols
+		from 'bar' then one can use a common top-level kbuild file so
+		both modules are compiled in same build.
+
+		Consider following directory layout:
+		./foo/ <= contains the foo module
+		./bar/ <= contains the bar module
+		The top-level Kbuild file would then look like:
+		
+		#./Kbuild: (this file may also be named Makefile)
+			obj-y := foo/ bar/
+
+		Executing:
+			make -C $KDIR M=`pwd`
+
+		will then do the expected and compile both modules with full
+		knowledge on symbols from both modules.
+
+	Use an extra Module.symvers file
+		When an external module is build a Module.symvers file is
+		generated containing all exported symbols which are not
+		defined in the kernel.
+		To get access to symbols from module 'bar' one can copy the
+		Module.symvers file from the compilation of the 'bar' module
+		to the directory where the 'foo' module is build.
+		During the module build kbuild will read the Module.symvers
+		file in the directory of the external module and when the
+		build is finished a new Module.symvers file is created
+		containing the sum of all symbols defined and not part of the
+		kernel.
+		
 === 8. Tips & Tricks
 
 --- 8.1 Testing for CONFIG_FOO_BAR

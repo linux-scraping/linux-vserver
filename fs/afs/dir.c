@@ -32,7 +32,7 @@ static int afs_d_delete(struct dentry *dentry);
 static int afs_dir_lookup_filldir(void *_cookie, const char *name, int nlen,
 				  loff_t fpos, ino_t ino, unsigned dtype);
 
-struct file_operations afs_dir_file_operations = {
+const struct file_operations afs_dir_file_operations = {
 	.open		= afs_dir_open,
 	.readdir	= afs_dir_readdir,
 };
@@ -137,7 +137,7 @@ static inline void afs_dir_check_page(struct inode *dir, struct page *page)
 #endif
 
 	/* determine how many magic numbers there should be in this page */
-	latter = dir->i_size - (page->index << PAGE_CACHE_SHIFT);
+	latter = dir->i_size - page_offset(page);
 	if (latter >= PAGE_SIZE)
 		qty = PAGE_SIZE;
 	else

@@ -46,11 +46,11 @@
 #include <linux/device.h>
 #include <linux/init.h>
 #include <linux/bitops.h>
+#include <linux/jiffies.h>
 
 #include <asm/system.h>
 #include <asm/ecard.h>
 #include <asm/io.h>
-#include <asm/irq.h>
 
 #include "../8390.h"
 
@@ -356,7 +356,7 @@ etherh_block_output (struct net_device *dev, int count, const unsigned char *buf
 	dma_start = jiffies;
 
 	while ((readb (addr + EN0_ISR) & ENISR_RDC) == 0)
-		if (jiffies - dma_start > 2*HZ/100) { /* 20ms */
+		if (time_after(jiffies, dma_start + 2*HZ/100)) { /* 20ms */
 			printk(KERN_ERR "%s: timeout waiting for TX RDC\n",
 				dev->name);
 			etherh_reset (dev);

@@ -1,6 +1,4 @@
 /*
- * arch/ppc/syslib/mpc52xx_setup.c
- *
  * Common code for the boards based on Freescale MPC52xx embedded CPU.
  *
  * 
@@ -25,6 +23,8 @@
 #include <asm/mpc52xx_psc.h>
 #include <asm/pgtable.h>
 #include <asm/ppcboot.h>
+
+#include <syslib/mpc52xx_pci.h>
 
 extern bd_t __res;
 
@@ -84,9 +84,11 @@ mpc52xx_set_bat(void)
 void __init
 mpc52xx_map_io(void)
 {
-	/* Here we only map the MBAR */
+	/* Here we map the MBAR and the whole upper zone. MBAR is only
+	   64k but we can't map only 64k with BATs. Map the whole
+	   0xf0000000 range is ok and helps eventual lpb devices placed there */
 	io_block_mapping(
-		MPC52xx_MBAR_VIRT, MPC52xx_MBAR, MPC52xx_MBAR_SIZE, _PAGE_IO);
+		MPC52xx_MBAR_VIRT, MPC52xx_MBAR, 0x10000000, _PAGE_IO);
 }
 
 
@@ -215,6 +217,52 @@ mpc52xx_calibrate_decr(void)
 	tb_ticks_per_jiffy = xlbfreq / HZ / divisor;
 	tb_to_us = mulhwu_scale_factor(xlbfreq / divisor, 1000000);
 }
+
+
+void __init
+mpc52xx_setup_cpu(void)
+{
+	struct mpc52xx_cdm  __iomem *cdm;
+	struct mpc52xx_xlb  __iomem *xlb;
+
+	/* Map zones */
+	cdm  = ioremap(MPC52xx_PA(MPC52xx_CDM_OFFSET), MPC52xx_CDM_SIZE);
+	xlb  = ioremap(MPC52xx_PA(MPC52xx_XLB_OFFSET), MPC52xx_XLB_SIZE);
+
+	if (!cdm || !xlb) {
+		printk(KERN_ERR __FILE__ ": "
+			"Error while mapping CDM/XLB during "
+			"mpc52xx_setup_cpu\n");
+		goto unmap_regs;
+	}
+
+	/* Use internal 48 Mhz */
+	out_8(&cdm->ext_48mhz_en, 0x00);
+	out_8(&cdm->fd_enable, 0x01);
+	if (in_be32(&cdm->rstcfg) & 0x40)	/* Assumes 33Mhz clock */
+		out_be16(&cdm->fd_counters, 0x0001);
+	else
+		out_be16(&cdm->fd_counters, 0x5555);
+
+	/* Configure the XLB Arbiter priorities */
+	out_be32(&xlb->master_pri_enable, 0xff);
+	out_be32(&xlb->master_priority, 0x11111111);
+
+	/* Enable ram snooping for 1GB window */
+	out_be32(&xlb->config, in_be32(&xlb->config) | MPC52xx_XLB_CFG_SNOOP);
+	out_be32(&xlb->snoop_window, MPC52xx_PCI_TARGET_MEM | 0x1d);
+
+	/* Disable XLB pipelining */
+	/* (cfr errate 292. We could do this only just before ATA PIO
+	    transaction and re-enable it after ...) */
+	out_be32(&xlb->config, in_be32(&xlb->config) | MPC52xx_XLB_CFG_PLDIS);
+
+	/* Unmap reg zone */
+unmap_regs:
+	if (cdm)  iounmap(cdm);
+	if (xlb)  iounmap(xlb);
+}
+
 
 int mpc52xx_match_psc_function(int psc_idx, const char *func)
 {

@@ -1,5 +1,5 @@
 /*
-   em28xx-cards.c - driver for Empia EM2800/EM2820/2840 USB video capture devices
+   em28xx.h - driver for Empia EM2800/EM2820/2840 USB video capture devices
 
    Copyright (C) 2005 Markus Rechberger <mrechberger@gmail.com>
 		      Ludovico Cavedon <cavedon@sssup.it>
@@ -27,6 +27,7 @@
 
 #include <linux/videodev.h>
 #include <linux/i2c.h>
+#include <linux/mutex.h>
 #include <media/ir-kbd-i2c.h>
 
 /* Boards supported by driver */
@@ -41,6 +42,10 @@
 #define EM2800_BOARD_LEADTEK_WINFAST_USBII      7
 #define EM2800_BOARD_KWORLD_USB2800             8
 #define EM2820_BOARD_PINNACLE_DVC_90		9
+#define EM2880_BOARD_HAUPPAUGE_WINTV_HVR_900	10
+#define EM2880_BOARD_TERRATEC_HYBRID_XS		11
+#define EM2820_BOARD_KWORLD_PVRTV2800RF		12
+#define EM2880_BOARD_TERRATEC_PRODIGY_XS	13
 
 #define UNSET -1
 
@@ -209,12 +214,15 @@ struct em28xx {
 	/* generic device properties */
 	char name[30];		/* name (including minor) of the device */
 	int model;		/* index in the device_data struct */
+	int devno;		/* marks the number of this device */
 	unsigned int is_em2800;
 	int video_inputs;	/* number of video inputs */
 	struct list_head	devlist;
 	unsigned int has_tuner:1;
 	unsigned int has_msp34xx:1;
 	unsigned int has_tda9887:1;
+
+	u32 i2s_speed;		/* I2S speed for audio digital stream */
 
 	enum em28xx_decoder decoder;
 
@@ -254,7 +262,7 @@ struct em28xx {
 	enum em28xx_stream_state stream;
 	enum em28xx_io_method io;
 	/* locks */
-	struct semaphore lock, fileop_lock;
+	struct mutex lock, fileop_lock;
 	spinlock_t queue_lock;
 	struct list_head inqueue, outqueue;
 	wait_queue_head_t open, wait_frame, wait_stream;
@@ -293,8 +301,6 @@ void em28xx_set_ir(struct em28xx * dev,struct IR_i2c *ir);
 
 /* Provided by em28xx-core.c */
 
-void em28xx_print_ioctl(char *name, unsigned int cmd);
-
 u32 em28xx_request_buffers(struct em28xx *dev, u32 count);
 void em28xx_queue_unusedframes(struct em28xx *dev);
 void em28xx_release_buffers(struct em28xx *dev);
@@ -326,6 +332,7 @@ int em28xx_set_alternate(struct em28xx *dev);
 
 /* Provided by em28xx-cards.c */
 extern int em2800_variant_detect(struct usb_device* udev,int model);
+extern void em28xx_pre_card_setup(struct em28xx *dev);
 extern void em28xx_card_setup(struct em28xx *dev);
 extern struct em28xx_board em28xx_boards[];
 extern struct usb_device_id em28xx_id_table[];

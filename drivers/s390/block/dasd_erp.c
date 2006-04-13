@@ -7,7 +7,6 @@
  * Bugreports.to..: <Linux390@de.ibm.com>
  * (C) IBM Corporation, IBM Deutschland Entwicklung GmbH, 1999-2001
  *
- * $Revision: 1.14 $
  */
 
 #include <linux/config.h>
@@ -33,9 +32,8 @@ dasd_alloc_erp_request(char *magic, int cplength, int datasize,
 	int size;
 
 	/* Sanity checks */
-	if ( magic == NULL || datasize > PAGE_SIZE ||
-	     (cplength*sizeof(struct ccw1)) > PAGE_SIZE)
-		BUG();
+	BUG_ON( magic == NULL || datasize > PAGE_SIZE ||
+	     (cplength*sizeof(struct ccw1)) > PAGE_SIZE);
 
 	size = (sizeof(struct dasd_ccw_req) + 7L) & -8L;
 	if (cplength > 0)
@@ -126,8 +124,7 @@ dasd_default_erp_postaction(struct dasd_ccw_req * cqr)
 	struct dasd_device *device;
 	int success;
 
-	if (cqr->refers == NULL || cqr->function == NULL)
-		BUG();
+	BUG_ON(cqr->refers == NULL || cqr->function == NULL);
 
 	device = cqr->device;
 	success = cqr->status == DASD_CQR_DONE;

@@ -106,12 +106,11 @@ static int led_probe(struct usb_interface *interface, const struct usb_device_id
 	struct usb_led *dev = NULL;
 	int retval = -ENOMEM;
 
-	dev = kmalloc(sizeof(struct usb_led), GFP_KERNEL);
+	dev = kzalloc(sizeof(struct usb_led), GFP_KERNEL);
 	if (dev == NULL) {
 		dev_err(&interface->dev, "Out of memory\n");
 		goto error;
 	}
-	memset (dev, 0x00, sizeof (*dev));
 
 	dev->udev = usb_get_dev(udev);
 
@@ -148,7 +147,6 @@ static void led_disconnect(struct usb_interface *interface)
 }
 
 static struct usb_driver led_driver = {
-	.owner =	THIS_MODULE,
 	.name =		"usbled",
 	.probe =	led_probe,
 	.disconnect =	led_disconnect,

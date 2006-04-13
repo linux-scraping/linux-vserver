@@ -34,7 +34,6 @@
 #include <asm/mach/irq.h>
 
 #include <asm/arch/pxa-regs.h>
-#include <asm/arch/irq.h>
 #include <asm/arch/tosa.h>
 
 #include <asm/hardware/scoop.h>
@@ -252,10 +251,19 @@ static struct platform_device tosakbd_device = {
 	.id		= -1,
 };
 
+/*
+ * Tosa LEDs
+ */
+static struct platform_device tosaled_device = {
+    .name   = "tosa-led",
+    .id     = -1,
+};
+
 static struct platform_device *devices[] __initdata = {
 	&tosascoop_device,
 	&tosascoop_jc_device,
 	&tosakbd_device,
+	&tosaled_device,
 };
 
 static void __init tosa_init(void)
@@ -295,7 +303,6 @@ static void __init fixup_tosa(struct machine_desc *desc,
 }
 
 MACHINE_START(TOSA, "SHARP Tosa")
-	.phys_ram	= 0xa0000000,
 	.phys_io	= 0x40000000,
 	.io_pg_offst	= (io_p2v(0x40000000) >> 18) & 0xfffc,
 	.fixup          = fixup_tosa,

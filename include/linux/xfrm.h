@@ -27,6 +27,22 @@ struct xfrm_id
 	__u8		proto;
 };
 
+struct xfrm_sec_ctx {
+	__u8	ctx_doi;
+	__u8	ctx_alg;
+	__u16	ctx_len;
+	__u32	ctx_sid;
+	char	ctx_str[0];
+};
+
+/* Security Context Domains of Interpretation */
+#define XFRM_SC_DOI_RESERVED 0
+#define XFRM_SC_DOI_LSM 1
+
+/* Security Context Algorithms */
+#define XFRM_SC_ALG_RESERVED 0
+#define XFRM_SC_ALG_SELINUX 1
+
 /* Selector, used as selector both on policy rules (SPD) and SAs. */
 
 struct xfrm_selector
@@ -140,11 +156,27 @@ enum {
 	XFRM_MSG_FLUSHPOLICY,
 #define XFRM_MSG_FLUSHPOLICY XFRM_MSG_FLUSHPOLICY
 
+	XFRM_MSG_NEWAE,
+#define XFRM_MSG_NEWAE XFRM_MSG_NEWAE
+	XFRM_MSG_GETAE,
+#define XFRM_MSG_GETAE XFRM_MSG_GETAE
 	__XFRM_MSG_MAX
 };
 #define XFRM_MSG_MAX (__XFRM_MSG_MAX - 1)
 
 #define XFRM_NR_MSGTYPES (XFRM_MSG_MAX + 1 - XFRM_MSG_BASE)
+
+/*
+ * Generic LSM security context for comunicating to user space
+ * NOTE: Same format as sadb_x_sec_ctx
+ */
+struct xfrm_user_sec_ctx {
+	__u16			len;
+	__u16			exttype;
+	__u8			ctx_alg;  /* LSMs: e.g., selinux == 1 */
+	__u8			ctx_doi;
+	__u16			ctx_len;
+};
 
 struct xfrm_user_tmpl {
 	struct xfrm_id		id;
@@ -166,6 +198,21 @@ struct xfrm_encap_tmpl {
 	xfrm_address_t	encap_oa;
 };
 
+/* AEVENT flags  */
+enum xfrm_ae_ftype_t {
+	XFRM_AE_UNSPEC,
+	XFRM_AE_RTHR=1,	/* replay threshold*/
+	XFRM_AE_RVAL=2, /* replay value */
+	XFRM_AE_LVAL=4, /* lifetime value */
+	XFRM_AE_ETHR=8, /* expiry timer threshold */
+	XFRM_AE_CR=16, /* Event cause is replay update */
+	XFRM_AE_CE=32, /* Event cause is timer expiry */
+	XFRM_AE_CU=64, /* Event cause is policy update */
+	__XFRM_AE_MAX
+
+#define XFRM_AE_MAX (__XFRM_AE_MAX - 1)
+};
+
 /* Netlink message attributes.  */
 enum xfrm_attr_type_t {
 	XFRMA_UNSPEC,
@@ -176,6 +223,11 @@ enum xfrm_attr_type_t {
 	XFRMA_TMPL,		/* 1 or more struct xfrm_user_tmpl */
 	XFRMA_SA,
 	XFRMA_POLICY,
+	XFRMA_SEC_CTX,		/* struct xfrm_sec_ctx */
+	XFRMA_LTIME_VAL,
+	XFRMA_REPLAY_VAL,
+	XFRMA_REPLAY_THRESH,
+	XFRMA_ETIMER_THRESH,
 	__XFRMA_MAX
 
 #define XFRMA_MAX (__XFRMA_MAX - 1)
@@ -204,6 +256,11 @@ struct xfrm_usersa_id {
 	__u32				spi;
 	__u16				family;
 	__u8				proto;
+};
+
+struct xfrm_aevent_id {
+	struct xfrm_usersa_id		sa_id;
+	__u32				flags;
 };
 
 struct xfrm_userspi_info {
@@ -277,6 +334,8 @@ enum xfrm_nlgroups {
 #define XFRMNLGRP_SA		XFRMNLGRP_SA
 	XFRMNLGRP_POLICY,
 #define XFRMNLGRP_POLICY	XFRMNLGRP_POLICY
+	XFRMNLGRP_AEVENTS,
+#define XFRMNLGRP_AEVENTS	XFRMNLGRP_AEVENTS
 	__XFRMNLGRP_MAX
 };
 #define XFRMNLGRP_MAX	(__XFRMNLGRP_MAX - 1)

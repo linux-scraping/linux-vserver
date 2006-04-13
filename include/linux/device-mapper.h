@@ -91,12 +91,13 @@ struct target_type {
 };
 
 struct io_restrictions {
-	unsigned short		max_sectors;
+	unsigned int		max_sectors;
 	unsigned short		max_phys_segments;
 	unsigned short		max_hw_segments;
 	unsigned short		hardsect_size;
 	unsigned int		max_segment_size;
 	unsigned long		seg_boundary_mask;
+	unsigned char		no_cluster; /* inverted so that 0 is default */
 };
 
 struct dm_target {

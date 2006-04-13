@@ -28,6 +28,7 @@
 #include <linux/video_decoder.h>
 
 #include "em28xx.h"
+#include <media/v4l2-common.h>
 #include <media/tuner.h>
 
 /* ----------------------------------------------------------- */
@@ -77,7 +78,7 @@ static int em2800_i2c_send_max4(struct em28xx *dev, unsigned char addr,
 		ret = dev->em28xx_read_reg(dev, 0x05);
 		if (ret == 0x80 + len - 1)
 			return len;
-		mdelay(5);
+		msleep(5);
 	}
 	em28xx_warn("i2c write timed out\n");
 	return -EIO;
@@ -137,7 +138,7 @@ static int em2800_i2c_check_for_device(struct em28xx *dev, unsigned char addr)
 			return -ENODEV;
 		else if (msg == 0x84)
 			return 0;
-		mdelay(5);
+		msleep(5);
 	}
 	return -ENODEV;
 }
@@ -277,9 +278,9 @@ static int em28xx_i2c_xfer(struct i2c_adapter *i2c_adap,
 							   msgs[i].buf,
 							   msgs[i].len,
 							   i == num - 1);
-			if (rc < 0)
-				goto err;
 		}
+		if (rc < 0)
+			goto err;
 		if (i2c_debug>=2)
 			printk("\n");
 	}
@@ -419,7 +420,6 @@ static int em28xx_set_tuner(int check_eeprom, struct i2c_client *client)
 		tun_setup.mode_mask = T_ANALOG_TV | T_RADIO;
 		tun_setup.type = dev->tuner_type;
 		tun_setup.addr = dev->tuner_addr;
-
 		em28xx_i2c_call_clients(dev, TUNER_SET_TYPE_ADDR, &tun_setup);
 	}
 
@@ -486,9 +486,7 @@ static struct i2c_adapter em28xx_adap_template = {
 	.inc_use = inc_use,
 	.dec_use = dec_use,
 #endif
-#ifdef I2C_CLASS_TV_ANALOG
 	.class = I2C_CLASS_TV_ANALOG,
-#endif
 	.name = "em28xx",
 	.id = I2C_HW_B_EM28XX,
 	.algo = &em28xx_algo,
@@ -497,7 +495,6 @@ static struct i2c_adapter em28xx_adap_template = {
 
 static struct i2c_client em28xx_client_template = {
 	.name = "em28xx internal",
-	.flags = I2C_CLIENT_ALLOW_USE,
 };
 
 /* ----------------------------------------------------------- */

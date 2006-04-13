@@ -102,6 +102,12 @@ get_key(const void *p, const void *end, struct crypto_tfm **res, int *resalg)
 			alg_mode = CRYPTO_TFM_MODE_CBC;
 			setkey = 1;
 			break;
+		case NID_cast5_cbc:
+			/* XXXX here in name only, not used */
+			alg_name = "cast5";
+			alg_mode = CRYPTO_TFM_MODE_CBC;
+			setkey = 0; /* XXX will need to set to 1 */
+			break;
 		case NID_md5:
 			if (key.len == 0) {
 				dprintk("RPC: SPKM3 get_key: NID_md5 zero Key length\n");
@@ -111,14 +117,18 @@ get_key(const void *p, const void *end, struct crypto_tfm **res, int *resalg)
 			setkey = 0;
 			break;
 		default:
-			dprintk("RPC: SPKM3 get_key: unsupported algorithm %d", *resalg);
+			dprintk("gss_spkm3_mech: unsupported algorithm %d\n", *resalg);
 			goto out_err_free_key;
 	}
-	if (!(*res = crypto_alloc_tfm(alg_name, alg_mode)))
+	if (!(*res = crypto_alloc_tfm(alg_name, alg_mode))) {
+		printk("gss_spkm3_mech: unable to initialize crypto algorthm %s\n", alg_name);
 		goto out_err_free_key;
+	}
 	if (setkey) {
-		if (crypto_cipher_setkey(*res, key.data, key.len))
+		if (crypto_cipher_setkey(*res, key.data, key.len)) {
+			printk("gss_spkm3_mech: error setting key for crypto algorthm %s\n", alg_name);
 			goto out_err_free_tfm;
+		}
 	}
 
 	if(key.len > 0)

@@ -8,8 +8,8 @@
 
 #include <linux/moduleparam.h>
 #include <linux/vmalloc.h>
-#include <linux/smp_lock.h>
 #include <linux/delay.h>
+#include <linux/kthread.h>
 
 #include <scsi/scsi_tcq.h>
 #include <scsi/scsicam.h>
@@ -54,10 +54,12 @@ module_param(ql2xloginretrycount, int, S_IRUGO|S_IRUSR);
 MODULE_PARM_DESC(ql2xloginretrycount,
 		"Specify an alternate value for the NVRAM login retry count.");
 
-int ql2xfwloadbin=1;
-module_param(ql2xfwloadbin, int, S_IRUGO|S_IRUSR);
-MODULE_PARM_DESC(ql2xfwloadbin,
-		"Load ISP2xxx firmware image via hotplug.");
+#if defined(CONFIG_SCSI_QLA2XXX_EMBEDDED_FIRMWARE)
+int ql2xfwloadflash;
+module_param(ql2xfwloadflash, int, S_IRUGO|S_IRUSR);
+MODULE_PARM_DESC(ql2xfwloadflash,
+		"Load ISP24xx firmware image from FLASH (onboard memory).");
+#endif
 
 static void qla2x00_free_device(scsi_qla_host_t *);
 
@@ -68,6 +70,12 @@ module_param(ql2xfdmienable, int, S_IRUGO|S_IRUSR);
 MODULE_PARM_DESC(ql2xfdmienable,
 		"Enables FDMI registratons "
 		"Default is 0 - no FDMI. 1 - perfom FDMI.");
+
+int ql2xprocessrscn;
+module_param(ql2xprocessrscn, int, S_IRUGO|S_IRUSR);
+MODULE_PARM_DESC(ql2xprocessrscn,
+		"Option to enable port RSCN handling via a series of less"
+		"fabric intrusive ADISCs and PLOGIs.");
 
 /*
  * SCSI host template entry points
@@ -358,6 +366,12 @@ qla2x00_queuecommand(struct scsi_cmnd *cmd, void (*done)(struct scsi_cmnd *))
 		goto qc_fail_command;
 	}
 
+	/* Close window on fcport/rport state-transitioning. */
+	if (!*(fc_port_t **)rport->dd_data) {
+		cmd->result = DID_IMM_RETRY << 16;
+		goto qc_fail_command;
+	}
+
 	if (atomic_read(&fcport->state) != FCS_ONLINE) {
 		if (atomic_read(&fcport->state) == FCS_DEVICE_DEAD ||
 		    atomic_read(&ha->loop_state) == LOOP_DEAD) {
@@ -410,6 +424,12 @@ qla24xx_queuecommand(struct scsi_cmnd *cmd, void (*done)(struct scsi_cmnd *))
 	rval = fc_remote_port_chkready(rport);
 	if (rval) {
 		cmd->result = rval;
+		goto qc24_fail_command;
+	}
+
+	/* Close window on fcport/rport state-transitioning. */
+	if (!*(fc_port_t **)rport->dd_data) {
+		cmd->result = DID_IMM_RETRY << 16;
 		goto qc24_fail_command;
 	}
 
@@ -505,7 +525,7 @@ qla2x00_eh_wait_on_command(scsi_qla_host_t *ha, struct scsi_cmnd *cmd)
  *    Success (Adapter is online) : 0
  *    Failed  (Adapter is offline/disabled) : 1
  */
-static int
+int
 qla2x00_wait_for_hba_online(scsi_qla_host_t *ha)
 {
 	int		return_status;
@@ -748,7 +768,7 @@ qla2xxx_eh_device_reset(struct scsi_cmnd *cmd)
 		if (ret == SUCCESS) {
 			if (fcport->flags & FC_FABRIC_DEVICE) {
 				ha->isp_ops.fabric_logout(ha, fcport->loop_id);
-				qla2x00_mark_device_lost(ha, fcport);
+				qla2x00_mark_device_lost(ha, fcport, 0, 0);
 			}
 		}
 #endif
@@ -1126,6 +1146,57 @@ qla2x00_config_dma_addressing(scsi_qla_host_t *ha)
 	pci_set_consistent_dma_mask(ha->pdev, DMA_32BIT_MASK);
 }
 
+static inline void
+qla2x00_set_isp_flags(scsi_qla_host_t *ha)
+{
+	ha->device_type = DT_EXTENDED_IDS;
+	switch (ha->pdev->device) {
+	case PCI_DEVICE_ID_QLOGIC_ISP2100:
+		ha->device_type |= DT_ISP2100;
+		ha->device_type &= ~DT_EXTENDED_IDS;
+		break;
+	case PCI_DEVICE_ID_QLOGIC_ISP2200:
+		ha->device_type |= DT_ISP2200;
+		ha->device_type &= ~DT_EXTENDED_IDS;
+		break;
+	case PCI_DEVICE_ID_QLOGIC_ISP2300:
+		ha->device_type |= DT_ISP2300;
+		ha->device_type |= DT_ZIO_SUPPORTED;
+		break;
+	case PCI_DEVICE_ID_QLOGIC_ISP2312:
+		ha->device_type |= DT_ISP2312;
+		ha->device_type |= DT_ZIO_SUPPORTED;
+		break;
+	case PCI_DEVICE_ID_QLOGIC_ISP2322:
+		ha->device_type |= DT_ISP2322;
+		ha->device_type |= DT_ZIO_SUPPORTED;
+		if (ha->pdev->subsystem_vendor == 0x1028 &&
+		    ha->pdev->subsystem_device == 0x0170)
+			ha->device_type |= DT_OEM_001;
+		break;
+	case PCI_DEVICE_ID_QLOGIC_ISP6312:
+		ha->device_type |= DT_ISP6312;
+		break;
+	case PCI_DEVICE_ID_QLOGIC_ISP6322:
+		ha->device_type |= DT_ISP6322;
+		break;
+	case PCI_DEVICE_ID_QLOGIC_ISP2422:
+		ha->device_type |= DT_ISP2422;
+		ha->device_type |= DT_ZIO_SUPPORTED;
+		break;
+	case PCI_DEVICE_ID_QLOGIC_ISP2432:
+		ha->device_type |= DT_ISP2432;
+		ha->device_type |= DT_ZIO_SUPPORTED;
+		break;
+	case PCI_DEVICE_ID_QLOGIC_ISP5422:
+		ha->device_type |= DT_ISP5422;
+		break;
+	case PCI_DEVICE_ID_QLOGIC_ISP5432:
+		ha->device_type |= DT_ISP5432;
+		break;
+	}
+}
+
 static int
 qla2x00_iospace_config(scsi_qla_host_t *ha)
 {
@@ -1261,12 +1332,16 @@ int qla2x00_probe_one(struct pci_dev *pdev, struct qla_board_info *brd_info)
 	char pci_info[20];
 	char fw_str[30];
 	fc_port_t *fcport;
+	struct scsi_host_template *sht;
 
 	if (pci_enable_device(pdev))
 		goto probe_out;
 
-	host = scsi_host_alloc(brd_info->sht ? brd_info->sht:
-	    &qla2x00_driver_template, sizeof(scsi_qla_host_t));
+	sht = &qla2x00_driver_template;
+	if (pdev->device == PCI_DEVICE_ID_QLOGIC_ISP2422 ||
+	    pdev->device == PCI_DEVICE_ID_QLOGIC_ISP2432)
+		sht = &qla24xx_driver_template;
+	host = scsi_host_alloc(sht, sizeof(scsi_qla_host_t));
 	if (host == NULL) {
 		printk(KERN_WARNING
 		    "qla2xxx: Couldn't allocate host from scsi layer!\n");
@@ -1283,7 +1358,8 @@ int qla2x00_probe_one(struct pci_dev *pdev, struct qla_board_info *brd_info)
 	ha->brd_info = brd_info;
 	sprintf(ha->host_str, "%s_%ld", ha->brd_info->drv_name, ha->host_no);
 
-	ha->dpc_pid = -1;
+	/* Set ISP-type information. */
+	qla2x00_set_isp_flags(ha);
 
 	/* Configure PCI I/O space */
 	ret = qla2x00_iospace_config(ha);
@@ -1291,8 +1367,8 @@ int qla2x00_probe_one(struct pci_dev *pdev, struct qla_board_info *brd_info)
 		goto probe_failed;
 
 	qla_printk(KERN_INFO, ha,
-	    "Found an %s, irq %d, iobase 0x%p\n", ha->brd_info->isp_name,
-	    pdev->irq, ha->iobase);
+	    "Found an ISP%04X, irq %d, iobase 0x%p\n", pdev->device, pdev->irq,
+	    ha->iobase);
 
 	spin_lock_init(&ha->hardware_lock);
 
@@ -1300,6 +1376,8 @@ int qla2x00_probe_one(struct pci_dev *pdev, struct qla_board_info *brd_info)
 	ha->ports = MAX_BUSES;
 	ha->init_cb_size = sizeof(init_cb_t);
 	ha->mgmt_svr_loop_id = MANAGEMENT_SERVER;
+	ha->link_data_rate = LDR_UNKNOWN;
+	ha->optrom_size = OPTROM_SIZE_2300;
 
 	/* Assign ISP specific operations. */
 	ha->isp_ops.pci_config		= qla2100_pci_config;
@@ -1327,6 +1405,8 @@ int qla2x00_probe_one(struct pci_dev *pdev, struct qla_board_info *brd_info)
 	ha->isp_ops.write_nvram		= qla2x00_write_nvram_data;
 	ha->isp_ops.fw_dump		= qla2100_fw_dump;
 	ha->isp_ops.ascii_fw_dump	= qla2100_ascii_fw_dump;
+	ha->isp_ops.read_optrom		= qla2x00_read_optrom_data;
+	ha->isp_ops.write_optrom	= qla2x00_write_optrom_data;
 	if (IS_QLA2100(ha)) {
 		host->max_id = MAX_TARGETS_2100;
 		ha->mbx_count = MAILBOX_REGISTER_COUNT_2100;
@@ -1352,8 +1432,13 @@ int qla2x00_probe_one(struct pci_dev *pdev, struct qla_board_info *brd_info)
 		ha->isp_ops.intr_handler = qla2300_intr_handler;
 		ha->isp_ops.fw_dump = qla2300_fw_dump;
 		ha->isp_ops.ascii_fw_dump = qla2300_ascii_fw_dump;
+		ha->isp_ops.beacon_on = qla2x00_beacon_on;
+		ha->isp_ops.beacon_off = qla2x00_beacon_off;
+		ha->isp_ops.beacon_blink = qla2x00_beacon_blink;
 		ha->gid_list_info_size = 6;
-	} else if (IS_QLA24XX(ha) || IS_QLA25XX(ha)) {
+		if (IS_QLA2322(ha) || IS_QLA6322(ha))
+			ha->optrom_size = OPTROM_SIZE_2322;
+	} else if (IS_QLA24XX(ha) || IS_QLA54XX(ha)) {
 		host->max_id = MAX_TARGETS_2200;
 		ha->mbx_count = MAILBOX_REGISTER_COUNT;
 		ha->request_q_length = REQUEST_ENTRY_CNT_24XX;
@@ -1368,9 +1453,11 @@ int qla2x00_probe_one(struct pci_dev *pdev, struct qla_board_info *brd_info)
 		ha->isp_ops.reset_adapter = qla24xx_reset_adapter;
 		ha->isp_ops.nvram_config = qla24xx_nvram_config;
 		ha->isp_ops.update_fw_options = qla24xx_update_fw_options;
-		ha->isp_ops.load_risc = qla24xx_load_risc_flash;
-		if (ql2xfwloadbin)
-			ha->isp_ops.load_risc = qla24xx_load_risc_hotplug;
+		ha->isp_ops.load_risc = qla24xx_load_risc;
+#if defined(CONFIG_SCSI_QLA2XXX_EMBEDDED_FIRMWARE)
+		if (ql2xfwloadflash)
+			ha->isp_ops.load_risc = qla24xx_load_risc_flash;
+#endif
 		ha->isp_ops.pci_info_str = qla24xx_pci_info_str;
 		ha->isp_ops.fw_version_str = qla24xx_fw_version_str;
 		ha->isp_ops.intr_handler = qla24xx_intr_handler;
@@ -1386,7 +1473,13 @@ int qla2x00_probe_one(struct pci_dev *pdev, struct qla_board_info *brd_info)
 		ha->isp_ops.write_nvram = qla24xx_write_nvram_data;
 		ha->isp_ops.fw_dump = qla24xx_fw_dump;
 		ha->isp_ops.ascii_fw_dump = qla24xx_ascii_fw_dump;
+		ha->isp_ops.read_optrom	= qla24xx_read_optrom_data;
+		ha->isp_ops.write_optrom = qla24xx_write_optrom_data;
+		ha->isp_ops.beacon_on = qla24xx_beacon_on;
+		ha->isp_ops.beacon_off = qla24xx_beacon_off;
+		ha->isp_ops.beacon_blink = qla24xx_beacon_blink;
 		ha->gid_list_info_size = 8;
+		ha->optrom_size = OPTROM_SIZE_24XX;
 	}
 	host->can_queue = ha->request_q_length + 128;
 
@@ -1407,9 +1500,6 @@ int qla2x00_probe_one(struct pci_dev *pdev, struct qla_board_info *brd_info)
 	 * contention for these locks.
 	 */
 	spin_lock_init(&ha->mbx_reg_lock);
-
-	init_completion(&ha->dpc_inited);
-	init_completion(&ha->dpc_exited);
 
 	qla2x00_config_dma_addressing(ha);
 	if (qla2x00_mem_alloc(ha)) {
@@ -1437,16 +1527,14 @@ int qla2x00_probe_one(struct pci_dev *pdev, struct qla_board_info *brd_info)
 	/*
 	 * Startup the kernel thread for this host adapter
 	 */
-	ha->dpc_should_die = 0;
-	ha->dpc_pid = kernel_thread(qla2x00_do_dpc, ha, 0);
-	if (ha->dpc_pid < 0) {
+	ha->dpc_thread = kthread_create(qla2x00_do_dpc, ha,
+			"%s_dpc", ha->host_str);
+	if (IS_ERR(ha->dpc_thread)) {
 		qla_printk(KERN_WARNING, ha,
 		    "Unable to start DPC thread!\n");
-
-		ret = -ENODEV;
+		ret = PTR_ERR(ha->dpc_thread);
 		goto probe_failed;
 	}
-	wait_for_completion(&ha->dpc_inited);
 
 	host->this_id = 255;
 	host->cmd_per_lun = 3;
@@ -1476,7 +1564,7 @@ int qla2x00_probe_one(struct pci_dev *pdev, struct qla_board_info *brd_info)
 
 	spin_lock_irqsave(&ha->hardware_lock, flags);
 	reg = ha->iobase;
-	if (IS_QLA24XX(ha) || IS_QLA25XX(ha)) {
+	if (IS_QLA24XX(ha) || IS_QLA54XX(ha)) {
 		WRT_REG_DWORD(&reg->isp24.hccr, HCCRX_CLR_HOST_INT);
 		WRT_REG_DWORD(&reg->isp24.hccr, HCCRX_CLR_RISC_INT);
 	} else {
@@ -1531,11 +1619,12 @@ int qla2x00_probe_one(struct pci_dev *pdev, struct qla_board_info *brd_info)
 	qla_printk(KERN_INFO, ha, "\n"
 	    " QLogic Fibre Channel HBA Driver: %s\n"
 	    "  QLogic %s - %s\n"
-	    "  %s: %s @ %s hdma%c, host#=%ld, fw=%s\n", qla2x00_version_str,
-	    ha->model_number, ha->model_desc ? ha->model_desc: "",
-	    ha->brd_info->isp_name, ha->isp_ops.pci_info_str(ha, pci_info),
-	    pci_name(pdev), ha->flags.enable_64bit_addressing ? '+': '-',
-	    ha->host_no, ha->isp_ops.fw_version_str(ha, fw_str));
+	    "  ISP%04X: %s @ %s hdma%c, host#=%ld, fw=%s\n",
+	    qla2x00_version_str, ha->model_number,
+	    ha->model_desc ? ha->model_desc: "", pdev->device,
+	    ha->isp_ops.pci_info_str(ha, pci_info), pci_name(pdev),
+	    ha->flags.enable_64bit_addressing ? '+': '-', ha->host_no,
+	    ha->isp_ops.fw_version_str(ha, fw_str));
 
 	/* Go with fc_rport registration. */
 	list_for_each_entry(fcport, &ha->fcports, list)
@@ -1579,8 +1668,6 @@ EXPORT_SYMBOL_GPL(qla2x00_remove_one);
 static void
 qla2x00_free_device(scsi_qla_host_t *ha)
 {
-	int ret;
-
 	/* Abort any outstanding IO descriptors. */
 	if (!IS_QLA2100(ha) && !IS_QLA2200(ha))
 		qla2x00_cancel_io_descriptors(ha);
@@ -1590,18 +1677,15 @@ qla2x00_free_device(scsi_qla_host_t *ha)
 		qla2x00_stop_timer(ha);
 
 	/* Kill the kernel thread for this host */
-	if (ha->dpc_pid >= 0) {
-		ha->dpc_should_die = 1;
-		wmb();
-		ret = kill_proc(ha->dpc_pid, SIGHUP, 1);
-		if (ret) {
-			qla_printk(KERN_ERR, ha,
-			    "Unable to signal DPC thread -- (%d)\n", ret);
+	if (ha->dpc_thread) {
+		struct task_struct *t = ha->dpc_thread;
 
-			/* TODO: SOMETHING MORE??? */
-		} else {
-			wait_for_completion(&ha->dpc_exited);
-		}
+		/*
+		 * qla2xxx_wake_dpc checks for ->dpc_thread
+		 * so we need to zero it out.
+		 */
+		ha->dpc_thread = NULL;
+		kthread_stop(t);
 	}
 
 	/* Stop currently executing firmware. */
@@ -1627,6 +1711,33 @@ qla2x00_free_device(scsi_qla_host_t *ha)
 	pci_disable_device(ha->pdev);
 }
 
+static inline void
+qla2x00_schedule_rport_del(struct scsi_qla_host *ha, fc_port_t *fcport,
+    int defer)
+{
+	unsigned long flags;
+	struct fc_rport *rport;
+
+	if (!fcport->rport)
+		return;
+
+	rport = fcport->rport;
+	if (defer) {
+		spin_lock_irqsave(&fcport->rport_lock, flags);
+		fcport->drport = rport;
+		fcport->rport = NULL;
+		*(fc_port_t **)rport->dd_data = NULL;
+		spin_unlock_irqrestore(&fcport->rport_lock, flags);
+		set_bit(FCPORT_UPDATE_NEEDED, &ha->dpc_flags);
+	} else {
+		spin_lock_irqsave(&fcport->rport_lock, flags);
+		fcport->rport = NULL;
+		*(fc_port_t **)rport->dd_data = NULL;
+		spin_unlock_irqrestore(&fcport->rport_lock, flags);
+		fc_remote_port_delete(rport);
+	}
+}
+
 /*
  * qla2x00_mark_device_lost Updates fcport state when device goes offline.
  *
@@ -1637,10 +1748,10 @@ qla2x00_free_device(scsi_qla_host_t *ha)
  * Context:
  */
 void qla2x00_mark_device_lost(scsi_qla_host_t *ha, fc_port_t *fcport,
-    int do_login)
+    int do_login, int defer)
 {
-	if (atomic_read(&fcport->state) == FCS_ONLINE && fcport->rport)
-		schedule_work(&fcport->rport_del_work);
+	if (atomic_read(&fcport->state) == FCS_ONLINE)
+		qla2x00_schedule_rport_del(ha, fcport, defer);
 
 	/*
 	 * We may need to retry the login, so don't change the state of the
@@ -1687,7 +1798,7 @@ void qla2x00_mark_device_lost(scsi_qla_host_t *ha, fc_port_t *fcport,
  * Context:
  */
 void
-qla2x00_mark_all_devices_lost(scsi_qla_host_t *ha)
+qla2x00_mark_all_devices_lost(scsi_qla_host_t *ha, int defer)
 {
 	fc_port_t *fcport;
 
@@ -1701,10 +1812,13 @@ qla2x00_mark_all_devices_lost(scsi_qla_host_t *ha)
 		 */
 		if (atomic_read(&fcport->state) == FCS_DEVICE_DEAD)
 			continue;
-		if (atomic_read(&fcport->state) == FCS_ONLINE && fcport->rport)
-			schedule_work(&fcport->rport_del_work);
+		if (atomic_read(&fcport->state) == FCS_ONLINE)
+			qla2x00_schedule_rport_del(ha, fcport, defer);
 		atomic_set(&fcport->state, FCS_DEVICE_LOST);
 	}
+
+	if (defer)
+		qla2xxx_wake_dpc(ha);
 }
 
 /*
@@ -1921,18 +2035,12 @@ qla2x00_mem_free(scsi_qla_host_t *ha)
 {
 	struct list_head	*fcpl, *fcptemp;
 	fc_port_t	*fcport;
-	unsigned int	wtime;/* max wait time if mbx cmd is busy. */
 
 	if (ha == NULL) {
 		/* error */
 		DEBUG2(printk("%s(): ERROR invalid ha pointer.\n", __func__));
 		return;
 	}
-
-	/* Make sure all other threads are stopped. */
-	wtime = 60 * 1000;
-	while (ha->dpc_wait && wtime)
-		wtime = msleep_interruptible(wtime);
 
 	/* free ioctl memory */
 	qla2x00_free_ioctl_mem(ha);
@@ -2023,6 +2131,8 @@ qla2x00_mem_free(scsi_qla_host_t *ha)
 	ha->fw_dumped = 0;
 	ha->fw_dump_reading = 0;
 	ha->fw_dump_buffer = NULL;
+
+	vfree(ha->optrom_buffer);
 }
 
 /*
@@ -2044,8 +2154,7 @@ qla2x00_allocate_sp_pool(scsi_qla_host_t *ha)
 	int      rval;
 
 	rval = QLA_SUCCESS;
-	ha->srb_mempool = mempool_create(SRB_MIN_REQ, mempool_alloc_slab,
-	    mempool_free_slab, srb_cachep);
+	ha->srb_mempool = mempool_create_slab_pool(SRB_MIN_REQ, srb_cachep);
 	if (ha->srb_mempool == NULL) {
 		qla_printk(KERN_INFO, ha, "Unable to allocate SRB mempool.\n");
 		rval = QLA_FUNCTION_FAILED;
@@ -2082,7 +2191,6 @@ qla2x00_free_sp_pool( scsi_qla_host_t *ha)
 static int
 qla2x00_do_dpc(void *data)
 {
-	DECLARE_MUTEX_LOCKED(sem);
 	scsi_qla_host_t *ha;
 	fc_port_t	*fcport;
 	uint8_t		status;
@@ -2090,32 +2198,19 @@ qla2x00_do_dpc(void *data)
 
 	ha = (scsi_qla_host_t *)data;
 
-	lock_kernel();
-
-	daemonize("%s_dpc", ha->host_str);
-	allow_signal(SIGHUP);
-
-	ha->dpc_wait = &sem;
-
 	set_user_nice(current, -20);
 
-	unlock_kernel();
-
-	complete(&ha->dpc_inited);
-
-	while (1) {
+	while (!kthread_should_stop()) {
 		DEBUG3(printk("qla2x00: DPC handler sleeping\n"));
 
-		if (down_interruptible(&sem))
-			break;
-
-		if (ha->dpc_should_die)
-			break;
+		set_current_state(TASK_INTERRUPTIBLE);
+		schedule();
+		__set_current_state(TASK_RUNNING);
 
 		DEBUG3(printk("qla2x00: DPC handler waking up\n"));
 
 		/* Initialization not yet finished. Don't do anything yet. */
-		if (!ha->flags.init_done || ha->dpc_active)
+		if (!ha->flags.init_done)
 			continue;
 
 		DEBUG3(printk("scsi(%ld): DPC handler\n", ha->host_no));
@@ -2145,6 +2240,9 @@ qla2x00_do_dpc(void *data)
 			DEBUG(printk("scsi(%ld): dpc: qla2x00_abort_isp end\n",
 			    ha->host_no));
 		}
+
+		if (test_and_clear_bit(FCPORT_UPDATE_NEEDED, &ha->dpc_flags))
+			qla2x00_update_fcports(ha);
 
 		if (test_and_clear_bit(LOOP_RESET_NEEDED, &ha->dpc_flags)) {
 			DEBUG(printk("scsi(%ld): dpc: sched loop_reset()\n",
@@ -2196,7 +2294,7 @@ qla2x00_do_dpc(void *data)
 					} else
 						status =
 						    qla2x00_local_device_login(
-							ha, fcport->loop_id);
+							ha, fcport);
 
 					if (status == QLA_SUCCESS) {
 						fcport->old_loop_id = fcport->loop_id;
@@ -2204,13 +2302,8 @@ qla2x00_do_dpc(void *data)
 						DEBUG(printk("scsi(%ld): port login OK: logged in ID 0x%x\n",
 						    ha->host_no, fcport->loop_id));
 
-						fcport->port_login_retry_count =
-						    ha->port_down_retry_count * PORT_RETRY_TIME;
-						atomic_set(&fcport->state, FCS_ONLINE);
-						atomic_set(&fcport->port_down_timer,
-						    ha->port_down_retry_count * PORT_RETRY_TIME);
-
-						fcport->login_retry = 0;
+						qla2x00_update_fcport(ha,
+						    fcport);
 					} else if (status == 1) {
 						set_bit(RELOGIN_NEEDED, &ha->dpc_flags);
 						/* retry the login again */
@@ -2273,6 +2366,9 @@ qla2x00_do_dpc(void *data)
 		if (!ha->interrupts_on)
 			ha->isp_ops.enable_intrs(ha);
 
+		if (test_and_clear_bit(BEACON_BLINK_NEEDED, &ha->dpc_flags))
+			ha->isp_ops.beacon_blink(ha);
+
 		ha->dpc_active = 0;
 	} /* End of while(1) */
 
@@ -2281,10 +2377,16 @@ qla2x00_do_dpc(void *data)
 	/*
 	 * Make sure that nobody tries to wake us up again.
 	 */
-	ha->dpc_wait = NULL;
 	ha->dpc_active = 0;
 
-	complete_and_exit(&ha->dpc_exited, 0);
+	return 0;
+}
+
+void
+qla2xxx_wake_dpc(scsi_qla_host_t *ha)
+{
+	if (ha->dpc_thread)
+		wake_up_process(ha->dpc_thread);
 }
 
 /*
@@ -2450,18 +2552,23 @@ qla2x00_timer(scsi_qla_host_t *ha)
 		    atomic_read(&ha->loop_down_timer)));
 	}
 
+	/* Check if beacon LED needs to be blinked */
+	if (ha->beacon_blink_led == 1) {
+		set_bit(BEACON_BLINK_NEEDED, &ha->dpc_flags);
+		start_dpc++;
+	}
+
 	/* Schedule the DPC routine if needed */
 	if ((test_bit(ISP_ABORT_NEEDED, &ha->dpc_flags) ||
 	    test_bit(LOOP_RESYNC_NEEDED, &ha->dpc_flags) ||
 	    test_bit(LOOP_RESET_NEEDED, &ha->dpc_flags) ||
+	    test_bit(FCPORT_UPDATE_NEEDED, &ha->dpc_flags) ||
 	    start_dpc ||
 	    test_bit(LOGIN_RETRY_NEEDED, &ha->dpc_flags) ||
 	    test_bit(RESET_MARKER_NEEDED, &ha->dpc_flags) ||
-	    test_bit(RELOGIN_NEEDED, &ha->dpc_flags)) &&
-	    ha->dpc_wait && !ha->dpc_active) {
-
-		up(ha->dpc_wait);
-	}
+	    test_bit(BEACON_BLINK_NEEDED, &ha->dpc_flags) ||
+	    test_bit(RELOGIN_NEEDED, &ha->dpc_flags)))
+		qla2xxx_wake_dpc(ha);
 
 	qla2x00_restart_timer(ha, WATCH_INTERVAL);
 }
@@ -2483,45 +2590,115 @@ qla2x00_down_timeout(struct semaphore *sema, unsigned long timeout)
 	return -ETIMEDOUT;
 }
 
-static struct qla_board_info qla_board_tbl[] = {
-	{
-		.drv_name	= "qla2400",
-		.isp_name	= "ISP2422",
-		.fw_fname	= "ql2400_fw.bin",
-		.sht		= &qla24xx_driver_template,
-	},
-	{
-		.drv_name	= "qla2400",
-		.isp_name	= "ISP2432",
-		.fw_fname	= "ql2400_fw.bin",
-		.sht		= &qla24xx_driver_template,
-	},
+#if defined(CONFIG_SCSI_QLA2XXX_EMBEDDED_FIRMWARE)
+
+#define qla2x00_release_firmware()	do { } while (0)
+#define qla2x00_pci_module_init()	(0)
+#define qla2x00_pci_module_exit()	do { } while (0)
+
+#else	/* !defined(CONFIG_SCSI_QLA2XXX_EMBEDDED_FIRMWARE) */
+
+/* Firmware interface routines. */
+
+#define FW_BLOBS	5
+#define FW_ISP21XX	0
+#define FW_ISP22XX	1
+#define FW_ISP2300	2
+#define FW_ISP2322	3
+#define FW_ISP24XX	4
+
+static DECLARE_MUTEX(qla_fw_lock);
+
+static struct fw_blob qla_fw_blobs[FW_BLOBS] = {
+	{ .name = "ql2100_fw.bin", .segs = { 0x1000, 0 }, },
+	{ .name = "ql2200_fw.bin", .segs = { 0x1000, 0 }, },
+	{ .name = "ql2300_fw.bin", .segs = { 0x800, 0 }, },
+	{ .name = "ql2322_fw.bin", .segs = { 0x800, 0x1c000, 0x1e000, 0 }, },
+	{ .name = "ql2400_fw.bin", },
+};
+
+struct fw_blob *
+qla2x00_request_firmware(scsi_qla_host_t *ha)
+{
+	struct fw_blob *blob;
+
+	blob = NULL;
+	if (IS_QLA2100(ha)) {
+		blob = &qla_fw_blobs[FW_ISP21XX];
+	} else if (IS_QLA2200(ha)) {
+		blob = &qla_fw_blobs[FW_ISP22XX];
+	} else if (IS_QLA2300(ha) || IS_QLA2312(ha) || IS_QLA6312(ha)) {
+		blob = &qla_fw_blobs[FW_ISP2300];
+	} else if (IS_QLA2322(ha) || IS_QLA6322(ha)) {
+		blob = &qla_fw_blobs[FW_ISP2322];
+	} else if (IS_QLA24XX(ha) || IS_QLA54XX(ha)) {
+		blob = &qla_fw_blobs[FW_ISP24XX];
+	}
+
+	down(&qla_fw_lock);
+	if (blob->fw)
+		goto out;
+
+	if (request_firmware(&blob->fw, blob->name, &ha->pdev->dev)) {
+		DEBUG2(printk("scsi(%ld): Failed to load firmware image "
+		    "(%s).\n", ha->host_no, blob->name));
+		blob->fw = NULL;
+		blob = NULL;
+		goto out;
+	}
+
+out:
+	up(&qla_fw_lock);
+	return blob;
+}
+
+static void
+qla2x00_release_firmware(void)
+{
+	int idx;
+
+	down(&qla_fw_lock);
+	for (idx = 0; idx < FW_BLOBS; idx++)
+		if (qla_fw_blobs[idx].fw)
+			release_firmware(qla_fw_blobs[idx].fw);
+	up(&qla_fw_lock);
+}
+
+static struct qla_board_info qla_board_tbl = {
+	.drv_name       = "qla2xxx",
 };
 
 static struct pci_device_id qla2xxx_pci_tbl[] = {
-	{
-		.vendor		= PCI_VENDOR_ID_QLOGIC,
-		.device		= PCI_DEVICE_ID_QLOGIC_ISP2422,
-		.subvendor	= PCI_ANY_ID,
-		.subdevice	= PCI_ANY_ID,
-		.driver_data	= (unsigned long)&qla_board_tbl[0],
-	},
-	{
-		.vendor		= PCI_VENDOR_ID_QLOGIC,
-		.device		= PCI_DEVICE_ID_QLOGIC_ISP2432,
-		.subvendor	= PCI_ANY_ID,
-		.subdevice	= PCI_ANY_ID,
-		.driver_data	= (unsigned long)&qla_board_tbl[1],
-	},
-	{0, 0},
+	{ PCI_VENDOR_ID_QLOGIC, PCI_DEVICE_ID_QLOGIC_ISP2100,
+		PCI_ANY_ID, PCI_ANY_ID, },
+	{ PCI_VENDOR_ID_QLOGIC, PCI_DEVICE_ID_QLOGIC_ISP2200,
+		PCI_ANY_ID, PCI_ANY_ID, },
+	{ PCI_VENDOR_ID_QLOGIC, PCI_DEVICE_ID_QLOGIC_ISP2300,
+		PCI_ANY_ID, PCI_ANY_ID, },
+	{ PCI_VENDOR_ID_QLOGIC, PCI_DEVICE_ID_QLOGIC_ISP2312,
+		PCI_ANY_ID, PCI_ANY_ID, },
+	{ PCI_VENDOR_ID_QLOGIC, PCI_DEVICE_ID_QLOGIC_ISP2322,
+		PCI_ANY_ID, PCI_ANY_ID, },
+	{ PCI_VENDOR_ID_QLOGIC, PCI_DEVICE_ID_QLOGIC_ISP6312,
+		PCI_ANY_ID, PCI_ANY_ID, },
+	{ PCI_VENDOR_ID_QLOGIC, PCI_DEVICE_ID_QLOGIC_ISP6322,
+		PCI_ANY_ID, PCI_ANY_ID, },
+	{ PCI_VENDOR_ID_QLOGIC, PCI_DEVICE_ID_QLOGIC_ISP2422,
+		PCI_ANY_ID, PCI_ANY_ID, },
+	{ PCI_VENDOR_ID_QLOGIC, PCI_DEVICE_ID_QLOGIC_ISP2432,
+		PCI_ANY_ID, PCI_ANY_ID, },
+	{ PCI_VENDOR_ID_QLOGIC, PCI_DEVICE_ID_QLOGIC_ISP5422,
+		PCI_ANY_ID, PCI_ANY_ID, },
+	{ PCI_VENDOR_ID_QLOGIC, PCI_DEVICE_ID_QLOGIC_ISP5432,
+		PCI_ANY_ID, PCI_ANY_ID, },
+	{ 0 },
 };
 MODULE_DEVICE_TABLE(pci, qla2xxx_pci_tbl);
 
 static int __devinit
 qla2xxx_probe_one(struct pci_dev *pdev, const struct pci_device_id *id)
 {
-	return qla2x00_probe_one(pdev,
-	    (struct qla_board_info *)id->driver_data);
+	return qla2x00_probe_one(pdev, &qla_board_tbl);
 }
 
 static void __devexit
@@ -2532,10 +2709,27 @@ qla2xxx_remove_one(struct pci_dev *pdev)
 
 static struct pci_driver qla2xxx_pci_driver = {
 	.name		= "qla2xxx",
+	.driver		= {
+		.owner		= THIS_MODULE,
+	},
 	.id_table	= qla2xxx_pci_tbl,
 	.probe		= qla2xxx_probe_one,
 	.remove		= __devexit_p(qla2xxx_remove_one),
 };
+
+static inline int
+qla2x00_pci_module_init(void)
+{
+	return pci_module_init(&qla2xxx_pci_driver);
+}
+
+static inline void
+qla2x00_pci_module_exit(void)
+{
+	pci_unregister_driver(&qla2xxx_pci_driver);
+}
+
+#endif
 
 /**
  * qla2x00_module_init - Module initialization.
@@ -2556,6 +2750,9 @@ qla2x00_module_init(void)
 
 	/* Derive version string. */
 	strcpy(qla2x00_version_str, QLA2XXX_VERSION);
+#if defined(CONFIG_SCSI_QLA2XXX_EMBEDDED_FIRMWARE)
+	strcat(qla2x00_version_str, "-fw");
+#endif
 #if DEBUG_QLA2100
 	strcat(qla2x00_version_str, "-debug");
 #endif
@@ -2565,7 +2762,7 @@ qla2x00_module_init(void)
 		return -ENODEV;
 
 	printk(KERN_INFO "QLogic Fibre Channel HBA Driver\n");
-	ret = pci_module_init(&qla2xxx_pci_driver);
+	ret = qla2x00_pci_module_init();
 	if (ret) {
 		kmem_cache_destroy(srb_cachep);
 		fc_release_transport(qla2xxx_transport_template);
@@ -2579,7 +2776,8 @@ qla2x00_module_init(void)
 static void __exit
 qla2x00_module_exit(void)
 {
-	pci_unregister_driver(&qla2xxx_pci_driver);
+	qla2x00_pci_module_exit();
+	qla2x00_release_firmware();
 	kmem_cache_destroy(srb_cachep);
 	fc_release_transport(qla2xxx_transport_template);
 }

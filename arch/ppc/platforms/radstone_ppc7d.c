@@ -1,6 +1,4 @@
 /*
- * arch/ppc/platforms/radstone_ppc7d.c
- *
  * Board setup routines for the Radstone PPC7D boards.
  *
  * Author: James Chapman <jchapman@katalix.com>
@@ -100,7 +98,7 @@ static void __init ppc7d_early_serial_map(void)
 	serial_req.uartclk = UART_CLK;
 	serial_req.irq = 4;
 	serial_req.flags = STD_COM_FLAGS;
-	serial_req.iotype = SERIAL_IO_MEM;
+	serial_req.iotype = UPIO_MEM;
 	serial_req.membase = (u_char *) PPC7D_SERIAL_0;
 
 	gen550_init(0, &serial_req);
@@ -685,11 +683,10 @@ ppc7d_fixup_i2c_pdata(struct platform_device *pdev)
 
 	pdata = pdev->dev.platform_data;
 	if (pdata == NULL) {
-		pdata = kmalloc(sizeof(*pdata), GFP_KERNEL);
+		pdata = kzalloc(sizeof(*pdata), GFP_KERNEL);
 		if (pdata == NULL)
 			return;
 
-		memset(pdata, 0, sizeof(*pdata));
 		pdev->dev.platform_data = pdata;
 	}
 
@@ -712,7 +709,7 @@ ppc7d_fixup_i2c_pdata(struct platform_device *pdev)
 }
 #endif
 
-static int __init ppc7d_platform_notify(struct device *dev)
+static int ppc7d_platform_notify(struct device *dev)
 {
 	static struct {
 		char *bus_id;

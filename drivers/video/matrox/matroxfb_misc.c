@@ -84,7 +84,6 @@
  *
  */
 
-/* make checkconfig does not check includes for this... */
 #include <linux/config.h>
 
 #include "matroxfb_misc.h"
@@ -192,10 +191,7 @@ int matroxfb_vgaHWinit(WPMINFO struct my_timming* m) {
 	unsigned int wd;
 	unsigned int divider;
 	int i;
-	int fwidth;
 	struct matrox_hw_state * const hw = &ACCESS_FBINFO(hw);
-
-	fwidth = 8;
 
 	DBG(__FUNCTION__)
 
@@ -235,10 +231,7 @@ int matroxfb_vgaHWinit(WPMINFO struct my_timming* m) {
 	hw->ATTR[16] = 0x41;
 	hw->ATTR[17] = 0xFF;
 	hw->ATTR[18] = 0x0F;
-	if (fwidth == 9)
-		hw->ATTR[19] = 0x08;
-	else
-		hw->ATTR[19] = 0x00;
+	hw->ATTR[19] = 0x00;
 	hw->ATTR[20] = 0x00;
 
 	hd = m->HDisplay >> 3;

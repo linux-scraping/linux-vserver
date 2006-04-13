@@ -203,7 +203,7 @@ static inline void frag_free_queue(struct frag_queue *fq, int *work)
 
 static inline struct frag_queue *frag_alloc_queue(void)
 {
-	struct frag_queue *fq = kmalloc(sizeof(struct frag_queue), GFP_ATOMIC);
+	struct frag_queue *fq = kzalloc(sizeof(struct frag_queue), GFP_ATOMIC);
 
 	if(!fq)
 		return NULL;
@@ -288,6 +288,7 @@ static void ip6_evictor(void)
 static void ip6_frag_expire(unsigned long data)
 {
 	struct frag_queue *fq = (struct frag_queue *) data;
+	struct net_device *dev;
 
 	spin_lock(&fq->lock);
 
@@ -299,22 +300,22 @@ static void ip6_frag_expire(unsigned long data)
 	IP6_INC_STATS_BH(IPSTATS_MIB_REASMTIMEOUT);
 	IP6_INC_STATS_BH(IPSTATS_MIB_REASMFAILS);
 
-	/* Send error only if the first segment arrived. */
-	if (fq->last_in&FIRST_IN && fq->fragments) {
-		struct net_device *dev = dev_get_by_index(fq->iif);
+	/* Don't send error if the first segment did not arrive. */
+	if (!(fq->last_in&FIRST_IN) || !fq->fragments)
+		goto out;
 
-		/*
-		   But use as source device on which LAST ARRIVED
-		   segment was received. And do not use fq->dev
-		   pointer directly, device might already disappeared.
-		 */
-		if (dev) {
-			fq->fragments->dev = dev;
-			icmpv6_send(fq->fragments, ICMPV6_TIME_EXCEED, ICMPV6_EXC_FRAGTIME, 0,
-				    dev);
-			dev_put(dev);
-		}
-	}
+	dev = dev_get_by_index(fq->iif);
+	if (!dev)
+		goto out;
+
+	/*
+	   But use as source device on which LAST ARRIVED
+	   segment was received. And do not use fq->dev
+	   pointer directly, device might already disappeared.
+	 */
+	fq->fragments->dev = dev;
+	icmpv6_send(fq->fragments, ICMPV6_TIME_EXCEED, ICMPV6_EXC_FRAGTIME, 0, dev);
+	dev_put(dev);
 out:
 	spin_unlock(&fq->lock);
 	fq_put(fq, NULL);
@@ -367,8 +368,6 @@ ip6_frag_create(unsigned int hash, u32 id, struct in6_addr *src, struct in6_addr
 
 	if ((fq = frag_alloc_queue()) == NULL)
 		goto oom;
-
-	memset(fq, 0, sizeof(struct frag_queue));
 
 	fq->id = id;
 	ipv6_addr_copy(&fq->saddr, src);
@@ -581,7 +580,6 @@ err:
  *	the last and the first frames arrived and all the bits are here.
  */
 static int ip6_frag_reasm(struct frag_queue *fq, struct sk_buff **skb_in,
-			  unsigned int *nhoffp,
 			  struct net_device *dev)
 {
 	struct sk_buff *fp, *head = fq->fragments;
@@ -654,6 +652,7 @@ static int ip6_frag_reasm(struct frag_queue *fq, struct sk_buff **skb_in,
 	head->dev = dev;
 	skb_set_timestamp(head, &fq->stamp);
 	head->nh.ipv6h->payload_len = htons(payload_len);
+	IP6CB(head)->nhoff = nhoff;
 
 	*skb_in = head;
 
@@ -663,7 +662,6 @@ static int ip6_frag_reasm(struct frag_queue *fq, struct sk_buff **skb_in,
 
 	IP6_INC_STATS_BH(IPSTATS_MIB_REASMOKS);
 	fq->fragments = NULL;
-	*nhoffp = nhoff;
 	return 1;
 
 out_oversize:
@@ -678,7 +676,7 @@ out_fail:
 	return -1;
 }
 
-static int ipv6_frag_rcv(struct sk_buff **skbp, unsigned int *nhoffp)
+static int ipv6_frag_rcv(struct sk_buff **skbp)
 {
 	struct sk_buff *skb = *skbp; 
 	struct net_device *dev = skb->dev;
@@ -710,7 +708,7 @@ static int ipv6_frag_rcv(struct sk_buff **skbp, unsigned int *nhoffp)
 		skb->h.raw += sizeof(struct frag_hdr);
 		IP6_INC_STATS_BH(IPSTATS_MIB_REASMOKS);
 
-		*nhoffp = (u8*)fhdr - skb->nh.raw;
+		IP6CB(skb)->nhoff = (u8*)fhdr - skb->nh.raw;
 		return 1;
 	}
 
@@ -722,11 +720,11 @@ static int ipv6_frag_rcv(struct sk_buff **skbp, unsigned int *nhoffp)
 
 		spin_lock(&fq->lock);
 
-		ip6_frag_queue(fq, skb, fhdr, *nhoffp);
+		ip6_frag_queue(fq, skb, fhdr, IP6CB(skb)->nhoff);
 
 		if (fq->last_in == (FIRST_IN|LAST_IN) &&
 		    fq->meat == fq->len)
-			ret = ip6_frag_reasm(fq, skbp, nhoffp, dev);
+			ret = ip6_frag_reasm(fq, skbp, dev);
 
 		spin_unlock(&fq->lock);
 		fq_put(fq, NULL);

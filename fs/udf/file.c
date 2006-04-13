@@ -4,11 +4,6 @@
  * PURPOSE
  *  File handling routines for the OSTA-UDF(tm) filesystem.
  *
- * CONTACTS
- *  E-mail regarding any portion of the Linux UDF file system should be
- *  directed to the development team mailing list (run by majordomo):
- *    linux_udf@hpesjro.fc.hp.com
- *
  * COPYRIGHT
  *  This file is distributed under the terms of the GNU General Public
  *  License (GPL). Copies of the GPL can be obtained from:
@@ -36,6 +31,7 @@
 #include <asm/uaccess.h>
 #include <linux/kernel.h>
 #include <linux/string.h> /* memset */
+#include <linux/capability.h>
 #include <linux/errno.h>
 #include <linux/smp_lock.h>
 #include <linux/pagemap.h>
@@ -252,7 +248,7 @@ static int udf_release_file(struct inode * inode, struct file * filp)
 	return 0;
 }
 
-struct file_operations udf_file_operations = {
+const struct file_operations udf_file_operations = {
 	.read			= generic_file_read,
 	.ioctl			= udf_ioctl,
 	.open			= generic_file_open,

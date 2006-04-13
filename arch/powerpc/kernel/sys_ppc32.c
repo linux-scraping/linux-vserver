@@ -24,7 +24,6 @@
 #include <linux/resource.h>
 #include <linux/times.h>
 #include <linux/utsname.h>
-#include <linux/timex.h>
 #include <linux/smp.h>
 #include <linux/smp_lock.h>
 #include <linux/sem.h>
@@ -159,82 +158,6 @@ int cp_compat_stat(struct kstat *stat, struct compat_stat __user *statbuf)
 asmlinkage long compat_sys_sysfs(u32 option, u32 arg1, u32 arg2)
 {
 	return sys_sysfs((int)option, arg1, arg2);
-}
-
-/* Handle adjtimex compatibility. */
-struct timex32 {
-	u32 modes;
-	s32 offset, freq, maxerror, esterror;
-	s32 status, constant, precision, tolerance;
-	struct compat_timeval time;
-	s32 tick;
-	s32 ppsfreq, jitter, shift, stabil;
-	s32 jitcnt, calcnt, errcnt, stbcnt;
-	s32  :32; s32  :32; s32  :32; s32  :32;
-	s32  :32; s32  :32; s32  :32; s32  :32;
-	s32  :32; s32  :32; s32  :32; s32  :32;
-};
-
-extern int do_adjtimex(struct timex *);
-extern void ppc_adjtimex(void);
-
-asmlinkage long compat_sys_adjtimex(struct timex32 __user *utp)
-{
-	struct timex txc;
-	int ret;
-	
-	memset(&txc, 0, sizeof(struct timex));
-
-	if(get_user(txc.modes, &utp->modes) ||
-	   __get_user(txc.offset, &utp->offset) ||
-	   __get_user(txc.freq, &utp->freq) ||
-	   __get_user(txc.maxerror, &utp->maxerror) ||
-	   __get_user(txc.esterror, &utp->esterror) ||
-	   __get_user(txc.status, &utp->status) ||
-	   __get_user(txc.constant, &utp->constant) ||
-	   __get_user(txc.precision, &utp->precision) ||
-	   __get_user(txc.tolerance, &utp->tolerance) ||
-	   __get_user(txc.time.tv_sec, &utp->time.tv_sec) ||
-	   __get_user(txc.time.tv_usec, &utp->time.tv_usec) ||
-	   __get_user(txc.tick, &utp->tick) ||
-	   __get_user(txc.ppsfreq, &utp->ppsfreq) ||
-	   __get_user(txc.jitter, &utp->jitter) ||
-	   __get_user(txc.shift, &utp->shift) ||
-	   __get_user(txc.stabil, &utp->stabil) ||
-	   __get_user(txc.jitcnt, &utp->jitcnt) ||
-	   __get_user(txc.calcnt, &utp->calcnt) ||
-	   __get_user(txc.errcnt, &utp->errcnt) ||
-	   __get_user(txc.stbcnt, &utp->stbcnt))
-		return -EFAULT;
-
-	ret = do_adjtimex(&txc);
-
-	/* adjust the conversion of TB to time of day to track adjtimex */
-	ppc_adjtimex();
-
-	if(put_user(txc.modes, &utp->modes) ||
-	   __put_user(txc.offset, &utp->offset) ||
-	   __put_user(txc.freq, &utp->freq) ||
-	   __put_user(txc.maxerror, &utp->maxerror) ||
-	   __put_user(txc.esterror, &utp->esterror) ||
-	   __put_user(txc.status, &utp->status) ||
-	   __put_user(txc.constant, &utp->constant) ||
-	   __put_user(txc.precision, &utp->precision) ||
-	   __put_user(txc.tolerance, &utp->tolerance) ||
-	   __put_user(txc.time.tv_sec, &utp->time.tv_sec) ||
-	   __put_user(txc.time.tv_usec, &utp->time.tv_usec) ||
-	   __put_user(txc.tick, &utp->tick) ||
-	   __put_user(txc.ppsfreq, &utp->ppsfreq) ||
-	   __put_user(txc.jitter, &utp->jitter) ||
-	   __put_user(txc.shift, &utp->shift) ||
-	   __put_user(txc.stabil, &utp->stabil) ||
-	   __put_user(txc.jitcnt, &utp->jitcnt) ||
-	   __put_user(txc.calcnt, &utp->calcnt) ||
-	   __put_user(txc.errcnt, &utp->errcnt) ||
-	   __put_user(txc.stbcnt, &utp->stbcnt))
-		ret = -EFAULT;
-
-	return ret;
 }
 
 asmlinkage long compat_sys_pause(void)
@@ -551,30 +474,6 @@ asmlinkage long compat_sys_sched_rr_get_interval(u32 pid, struct compat_timespec
 		return -EFAULT;
 	return ret;
 }
-
-asmlinkage int compat_sys_pciconfig_read(u32 bus, u32 dfn, u32 off, u32 len, u32 ubuf)
-{
-	return sys_pciconfig_read((unsigned long) bus,
-				  (unsigned long) dfn,
-				  (unsigned long) off,
-				  (unsigned long) len,
-				  compat_ptr(ubuf));
-}
-
-asmlinkage int compat_sys_pciconfig_write(u32 bus, u32 dfn, u32 off, u32 len, u32 ubuf)
-{
-	return sys_pciconfig_write((unsigned long) bus,
-				   (unsigned long) dfn,
-				   (unsigned long) off,
-				   (unsigned long) len,
-				   compat_ptr(ubuf));
-}
-
-asmlinkage int compat_sys_pciconfig_iobase(u32 which, u32 in_bus, u32 in_devfn)
-{
-	return sys_pciconfig_iobase(which, in_bus, in_devfn);
-}
-
 
 /* Note: it is necessary to treat mode as an unsigned int,
  * with the corresponding cast to a signed int to insure that the 
@@ -954,38 +853,6 @@ long ppc32_fadvise64(int fd, u32 unused, u32 offset_high, u32 offset_low,
 {
 	return sys_fadvise64(fd, (u64)offset_high << 32 | offset_low, len,
 			     advice);
-}
-
-long ppc32_timer_create(clockid_t clock,
-			struct compat_sigevent __user *ev32,
-			timer_t __user *timer_id)
-{
-	sigevent_t event;
-	timer_t t;
-	long err;
-	mm_segment_t savefs;
-
-	if (ev32 == NULL)
-		return sys_timer_create(clock, NULL, timer_id);
-
-	if (get_compat_sigevent(&event, ev32))
-		return -EFAULT;
-
-	if (!access_ok(VERIFY_WRITE, timer_id, sizeof(timer_t)))
-		return -EFAULT;
-
-	savefs = get_fs();
-	set_fs(KERNEL_DS);
-	/* The __user pointer casts are valid due to the set_fs() */
-	err = sys_timer_create(clock,
-		(sigevent_t __user *) &event,
-		(timer_t __user *) &t);
-	set_fs(savefs);
-
-	if (err == 0)
-		err = __put_user(t, timer_id);
-
-	return err;
 }
 
 asmlinkage long compat_sys_add_key(const char __user *_type,

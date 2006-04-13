@@ -91,10 +91,8 @@ MODULE_SUPPORTED_DEVICE("Atmel at76c50x PCMCIA cards");
    event handler. 
 */
 
-static void atmel_config(dev_link_t *link);
-static void atmel_release(dev_link_t *link);
-static int atmel_event(event_t event, int priority,
-		       event_callback_args_t *args);
+static int atmel_config(struct pcmcia_device *link);
+static void atmel_release(struct pcmcia_device *link);
 
 /*
    The attach() and detach() entry points are used to create and destroy
@@ -102,8 +100,7 @@ static int atmel_event(event_t event, int priority,
    needed to manage one actual PCMCIA card.
 */
 
-static dev_link_t *atmel_attach(void);
-static void atmel_detach(dev_link_t *);
+static void atmel_detach(struct pcmcia_device *p_dev);
 
 /*
    You'll also need to prototype all the functions that will actually
@@ -113,38 +110,22 @@ static void atmel_detach(dev_link_t *);
 */
 
 /*
-   The dev_info variable is the "key" that is used to match up this
-   device driver with appropriate cards, through the card configuration
-   database.
-*/
-
-static dev_info_t dev_info = "atmel_cs";
-
-/*
    A linked list of "instances" of the  atmelnet device.  Each actual
    PCMCIA card corresponds to one device instance, and is described
-   by one dev_link_t structure (defined in ds.h).
+   by one struct pcmcia_device structure (defined in ds.h).
 
    You may not want to use a linked list for this -- for example, the
-   memory card driver uses an array of dev_link_t pointers, where minor
+   memory card driver uses an array of struct pcmcia_device pointers, where minor
    device numbers are used to derive the corresponding array index.
 */
 
-static dev_link_t *dev_list = NULL;
-
 /*
-   A dev_link_t structure has fields for most things that are needed
-   to keep track of a socket, but there will usually be some device
-   specific information that also needs to be kept track of.  The
-   'priv' pointer in a dev_link_t structure can be used to point to
-   a device-specific private data structure, like this.
-
    A driver needs to provide a dev_node_t structure for each device
    on a card.  In some cases, there is only one device per card (for
    example, ethernet cards, modems).  In other cases, there may be
    many actual or logical devices (SCSI adapters, memory cards with
    multiple partitions).  The dev_node_t structures need to be kept
-   in a linked list starting at the 'dev' field of a dev_link_t
+   in a linked list starting at the 'dev' field of a struct pcmcia_device
    structure.  We allocate them in the card's private data structure,
    because they generally shouldn't be allocated dynamically.
 
@@ -171,27 +152,17 @@ typedef struct local_info_t {
   
   ======================================================================*/
 
-static dev_link_t *atmel_attach(void)
+static int atmel_probe(struct pcmcia_device *p_dev)
 {
-	client_reg_t client_reg;
-	dev_link_t *link;
 	local_info_t *local;
-	int ret;
-	
+
 	DEBUG(0, "atmel_attach()\n");
 
-	/* Initialize the dev_link_t structure */
-	link = kzalloc(sizeof(struct dev_link_t), GFP_KERNEL);
-	if (!link) {
-		printk(KERN_ERR "atmel_cs: no memory for new device\n");
-		return NULL;
-	}
-	
 	/* Interrupt setup */
-	link->irq.Attributes = IRQ_TYPE_EXCLUSIVE;
-	link->irq.IRQInfo1 = IRQ_LEVEL_ID;
-	link->irq.Handler = NULL;
-	
+	p_dev->irq.Attributes = IRQ_TYPE_EXCLUSIVE;
+	p_dev->irq.IRQInfo1 = IRQ_LEVEL_ID;
+	p_dev->irq.Handler = NULL;
+
 	/*
 	  General socket configuration defaults can go here.  In this
 	  client, we assume very little, and rely on the CIS for almost
@@ -199,33 +170,18 @@ static dev_link_t *atmel_attach(void)
 	  and attributes of IO windows) are fixed by the nature of the
 	  device, and can be hard-wired here.
 	*/
-	link->conf.Attributes = 0;
-	link->conf.Vcc = 50;
-	link->conf.IntType = INT_MEMORY_AND_IO;
-	
+	p_dev->conf.Attributes = 0;
+	p_dev->conf.IntType = INT_MEMORY_AND_IO;
+
 	/* Allocate space for private device-specific data */
 	local = kzalloc(sizeof(local_info_t), GFP_KERNEL);
 	if (!local) {
 		printk(KERN_ERR "atmel_cs: no memory for new device\n");
-		kfree (link);
-		return NULL;
+		return -ENOMEM;
 	}
-	link->priv = local;
-	
-	/* Register with Card Services */
-	link->next = dev_list;
-	dev_list = link;
-	client_reg.dev_info = &dev_info;
-	client_reg.Version = 0x0210;
-	client_reg.event_callback_args.client_data = link;
-	ret = pcmcia_register_client(&link->handle, &client_reg);
-	if (ret != 0) {
-		cs_error(link->handle, RegisterClient, ret);
-		atmel_detach(link);
-		return NULL;
-	}
-	
-	return link;
+	p_dev->priv = local;
+
+	return atmel_config(p_dev);
 } /* atmel_attach */
 
 /*======================================================================
@@ -237,29 +193,13 @@ static dev_link_t *atmel_attach(void)
   
   ======================================================================*/
 
-static void atmel_detach(dev_link_t *link)
+static void atmel_detach(struct pcmcia_device *link)
 {
-	dev_link_t **linkp;
-	
 	DEBUG(0, "atmel_detach(0x%p)\n", link);
-	
-	/* Locate device structure */
-	for (linkp = &dev_list; *linkp; linkp = &(*linkp)->next)
-		if (*linkp == link) break;
-	if (*linkp == NULL)
-		return;
 
-	if (link->state & DEV_CONFIG)
-		atmel_release(link);
-		
-	/* Break the link with Card Services */
-	if (link->handle)
-		pcmcia_deregister_client(link->handle);
+	atmel_release(link);
 
-	/* Unlink device structure, free pieces */
-	*linkp = link->next;
 	kfree(link->priv);
-	kfree(link);
 }
 
 /*======================================================================
@@ -276,19 +216,17 @@ do { last_fn = (fn); if ((last_ret = (ret)) != 0) goto cs_failed; } while (0)
 /* Call-back function to interrogate PCMCIA-specific information
    about the current existance of the card */
 static int card_present(void *arg)
-{ 
-	dev_link_t *link = (dev_link_t *)arg;
-	if (link->state & DEV_SUSPEND)
-		return 0;
-	else if (link->state & DEV_PRESENT)
+{
+	struct pcmcia_device *link = (struct pcmcia_device *)arg;
+
+	if (pcmcia_dev_present(link))
 		return 1;
-	
+
 	return 0;
 }
 
-static void atmel_config(dev_link_t *link)
+static int atmel_config(struct pcmcia_device *link)
 {
-	client_handle_t handle;
 	tuple_t tuple;
 	cisparse_t parse;
 	local_info_t *dev;
@@ -296,9 +234,8 @@ static void atmel_config(dev_link_t *link)
 	u_char buf[64];
 	struct pcmcia_device_id *did;
 
-	handle = link->handle;
 	dev = link->priv;
-	did = handle_to_dev(handle).driver_data;
+	did = handle_to_dev(link).driver_data;
 
 	DEBUG(0, "atmel_config(0x%p)\n", link);
 	
@@ -312,15 +249,12 @@ static void atmel_config(dev_link_t *link)
 	  registers.
 	*/
 	tuple.DesiredTuple = CISTPL_CONFIG;
-	CS_CHECK(GetFirstTuple, pcmcia_get_first_tuple(handle, &tuple));
-	CS_CHECK(GetTupleData, pcmcia_get_tuple_data(handle, &tuple));
-	CS_CHECK(ParseTuple, pcmcia_parse_tuple(handle, &tuple, &parse));
+	CS_CHECK(GetFirstTuple, pcmcia_get_first_tuple(link, &tuple));
+	CS_CHECK(GetTupleData, pcmcia_get_tuple_data(link, &tuple));
+	CS_CHECK(ParseTuple, pcmcia_parse_tuple(link, &tuple, &parse));
 	link->conf.ConfigBase = parse.config.base;
 	link->conf.Present = parse.config.rmask[0];
-	
-	/* Configure card */
-	link->state |= DEV_CONFIG;
-	
+
 	/*
 	  In this loop, we scan the CIS for configuration table entries,
 	  each of which describes a valid card configuration, including
@@ -334,12 +268,12 @@ static void atmel_config(dev_link_t *link)
 	  will only use the CIS to fill in implementation-defined details.
 	*/
 	tuple.DesiredTuple = CISTPL_CFTABLE_ENTRY;
-	CS_CHECK(GetFirstTuple, pcmcia_get_first_tuple(handle, &tuple));
+	CS_CHECK(GetFirstTuple, pcmcia_get_first_tuple(link, &tuple));
 	while (1) {
 		cistpl_cftable_entry_t dflt = { 0 };
 		cistpl_cftable_entry_t *cfg = &(parse.cftable_entry);
-		if (pcmcia_get_tuple_data(handle, &tuple) != 0 ||
-				pcmcia_parse_tuple(handle, &tuple, &parse) != 0)
+		if (pcmcia_get_tuple_data(link, &tuple) != 0 ||
+				pcmcia_parse_tuple(link, &tuple, &parse) != 0)
 			goto next_entry;
 		
 		if (cfg->flags & CISTPL_CFTABLE_DEFAULT) dflt = *cfg;
@@ -354,16 +288,11 @@ static void atmel_config(dev_link_t *link)
 		
 		/* Use power settings for Vcc and Vpp if present */
 		/*  Note that the CIS values need to be rescaled */
-		if (cfg->vcc.present & (1<<CISTPL_POWER_VNOM))
-			link->conf.Vcc = cfg->vcc.param[CISTPL_POWER_VNOM]/10000;
-		else if (dflt.vcc.present & (1<<CISTPL_POWER_VNOM))
-			link->conf.Vcc = dflt.vcc.param[CISTPL_POWER_VNOM]/10000;
-		
 		if (cfg->vpp1.present & (1<<CISTPL_POWER_VNOM))
-			link->conf.Vpp1 = link->conf.Vpp2 =
+			link->conf.Vpp =
 				cfg->vpp1.param[CISTPL_POWER_VNOM]/10000;
 		else if (dflt.vpp1.present & (1<<CISTPL_POWER_VNOM))
-			link->conf.Vpp1 = link->conf.Vpp2 =
+			link->conf.Vpp =
 				dflt.vpp1.param[CISTPL_POWER_VNOM]/10000;
 		
 		/* Do we need to allocate an interrupt? */
@@ -389,14 +318,14 @@ static void atmel_config(dev_link_t *link)
 		}
 		
 		/* This reserves IO space but doesn't actually enable it */
-		if (pcmcia_request_io(link->handle, &link->io) != 0)
+		if (pcmcia_request_io(link, &link->io) != 0)
 			goto next_entry;
 
 		/* If we got this far, we're cool! */
 		break;
 		
 	next_entry:
-		CS_CHECK(GetNextTuple, pcmcia_get_next_tuple(handle, &tuple));
+		CS_CHECK(GetNextTuple, pcmcia_get_next_tuple(link, &tuple));
 	}
 	
 	/*
@@ -405,14 +334,14 @@ static void atmel_config(dev_link_t *link)
 	  irq structure is initialized.
 	*/
 	if (link->conf.Attributes & CONF_ENABLE_IRQ)
-		CS_CHECK(RequestIRQ, pcmcia_request_irq(link->handle, &link->irq));
+		CS_CHECK(RequestIRQ, pcmcia_request_irq(link, &link->irq));
 	
 	/*
 	  This actually configures the PCMCIA socket -- setting up
 	  the I/O windows and the interrupt mapping, and putting the
 	  card and host interface into "Memory and IO" mode.
 	*/
-	CS_CHECK(RequestConfiguration, pcmcia_request_configuration(link->handle, &link->conf));
+	CS_CHECK(RequestConfiguration, pcmcia_request_configuration(link, &link->conf));
 	
 	if (link->irq.AssignedIRQ == 0) {
 		printk(KERN_ALERT 
@@ -424,7 +353,7 @@ static void atmel_config(dev_link_t *link)
 		init_atmel_card(link->irq.AssignedIRQ,
 				link->io.BasePort1,
 				did ? did->driver_info : ATMEL_FW_TYPE_NONE,
-				&handle_to_dev(handle),
+				&handle_to_dev(link),
 				card_present, 
 				link);
 	if (!((local_info_t*)link->priv)->eth_dev) 
@@ -433,18 +362,18 @@ static void atmel_config(dev_link_t *link)
 	
 	/*
 	  At this point, the dev_node_t structure(s) need to be
-	  initialized and arranged in a linked list at link->dev.
+	  initialized and arranged in a linked list at link->dev_node.
 	*/
 	strcpy(dev->node.dev_name, ((local_info_t*)link->priv)->eth_dev->name );
 	dev->node.major = dev->node.minor = 0;
-	link->dev = &dev->node;
-			
-	link->state &= ~DEV_CONFIG_PENDING;
-	return;
-	
+	link->dev_node = &dev->node;
+
+	return 0;
+
  cs_failed:
-	cs_error(link->handle, last_fn, last_ret);
+	cs_error(link, last_fn, last_ret);
 	atmel_release(link);
+	return -ENODEV;
 }
 
 /*======================================================================
@@ -455,82 +384,37 @@ static void atmel_config(dev_link_t *link)
   
   ======================================================================*/
 
-static void atmel_release(dev_link_t *link)
+static void atmel_release(struct pcmcia_device *link)
 {
 	struct net_device *dev = ((local_info_t*)link->priv)->eth_dev;
-		
+
 	DEBUG(0, "atmel_release(0x%p)\n", link);
-	
-	/* Unlink the device chain */
-	link->dev = NULL;
-	
-	if (dev) 
+
+	if (dev)
 		stop_atmel_card(dev);
-	((local_info_t*)link->priv)->eth_dev = NULL; 
-	
-	/* Don't bother checking to see if these succeed or not */
-	pcmcia_release_configuration(link->handle);
-	if (link->io.NumPorts1)
-		pcmcia_release_io(link->handle, &link->io);
-	if (link->irq.AssignedIRQ)
-		pcmcia_release_irq(link->handle, &link->irq);
-	link->state &= ~DEV_CONFIG;
+	((local_info_t*)link->priv)->eth_dev = NULL;
+
+	pcmcia_disable_device(link);
 }
 
-/*======================================================================
-  
-  The card status event handler.  Mostly, this schedules other
-  stuff to run after an event is received.
-
-  When a CARD_REMOVAL event is received, we immediately set a
-  private flag to block future accesses to this device.  All the
-  functions that actually access the device should check this flag
-  to make sure the card is still present.
-  
-  ======================================================================*/
-
-static int atmel_event(event_t event, int priority,
-		      event_callback_args_t *args)
+static int atmel_suspend(struct pcmcia_device *link)
 {
-	dev_link_t *link = args->client_data;
 	local_info_t *local = link->priv;
-	
-	DEBUG(1, "atmel_event(0x%06x)\n", event);
-	
-	switch (event) {
-	case CS_EVENT_CARD_REMOVAL:
-		link->state &= ~DEV_PRESENT;
-		if (link->state & DEV_CONFIG) {
-			netif_device_detach(local->eth_dev);
-			atmel_release(link);
-		}
-		break;
-	case CS_EVENT_CARD_INSERTION:
-		link->state |= DEV_PRESENT | DEV_CONFIG_PENDING;
-		atmel_config(link);
-		break;
-	case CS_EVENT_PM_SUSPEND:
-		link->state |= DEV_SUSPEND;
-		/* Fall through... */
-	case CS_EVENT_RESET_PHYSICAL:
-		if (link->state & DEV_CONFIG) {
-			netif_device_detach(local->eth_dev);
-			pcmcia_release_configuration(link->handle);
-		}
-		break;
-	case CS_EVENT_PM_RESUME:
-		link->state &= ~DEV_SUSPEND;
-		/* Fall through... */
-	case CS_EVENT_CARD_RESET:
-		if (link->state & DEV_CONFIG) {
-			pcmcia_request_configuration(link->handle, &link->conf);
-			atmel_open(local->eth_dev);
-			netif_device_attach(local->eth_dev);
-		}
-		break;
-	}
+
+	netif_device_detach(local->eth_dev);
+
 	return 0;
-} /* atmel_event */
+}
+
+static int atmel_resume(struct pcmcia_device *link)
+{
+	local_info_t *local = link->priv;
+
+	atmel_open(local->eth_dev);
+	netif_device_attach(local->eth_dev);
+
+	return 0;
+}
 
 /*====================================================================*/
 /* We use the driver_info field to store the correct firmware type for a card. */
@@ -581,10 +465,11 @@ static struct pcmcia_driver atmel_driver = {
 	.drv		= {
 		.name	= "atmel_cs",
         },
-	.attach         = atmel_attach,
-	.event		= atmel_event,
-	.detach		= atmel_detach,
+	.probe          = atmel_probe,
+	.remove		= atmel_detach,
 	.id_table	= atmel_ids,
+	.suspend	= atmel_suspend,
+	.resume		= atmel_resume,
 };
 
 static int atmel_cs_init(void)
@@ -595,7 +480,6 @@ static int atmel_cs_init(void)
 static void atmel_cs_cleanup(void)
 {
         pcmcia_unregister_driver(&atmel_driver);
-	BUG_ON(dev_list != NULL);
 }
 
 /*

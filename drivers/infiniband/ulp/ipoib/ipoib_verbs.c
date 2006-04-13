@@ -65,9 +65,9 @@ int ipoib_mcast_attach(struct net_device *dev, u16 mlid, union ib_gid *mgid)
 	}
 
 	/* attach QP to multicast group */
-	down(&priv->mcast_mutex);
+	mutex_lock(&priv->mcast_mutex);
 	ret = ib_attach_mcast(priv->qp, mgid, mlid);
-	up(&priv->mcast_mutex);
+	mutex_unlock(&priv->mcast_mutex);
 	if (ret)
 		ipoib_warn(priv, "failed to attach to multicast group, ret = %d\n", ret);
 
@@ -81,9 +81,9 @@ int ipoib_mcast_detach(struct net_device *dev, u16 mlid, union ib_gid *mgid)
 	struct ipoib_dev_priv *priv = netdev_priv(dev);
 	int ret;
 
-	down(&priv->mcast_mutex);
+	mutex_lock(&priv->mcast_mutex);
 	ret = ib_detach_mcast(priv->qp, mgid, mlid);
-	up(&priv->mcast_mutex);
+	mutex_unlock(&priv->mcast_mutex);
 	if (ret)
 		ipoib_warn(priv, "ib_detach_mcast failed (result = %d)\n", ret);
 
@@ -251,10 +251,12 @@ void ipoib_event(struct ib_event_handler *handler,
 	struct ipoib_dev_priv *priv =
 		container_of(handler, struct ipoib_dev_priv, event_handler);
 
-	if (record->event == IB_EVENT_PORT_ACTIVE ||
+	if (record->event == IB_EVENT_PORT_ERR    ||
+	    record->event == IB_EVENT_PKEY_CHANGE ||
+	    record->event == IB_EVENT_PORT_ACTIVE ||
 	    record->event == IB_EVENT_LID_CHANGE  ||
 	    record->event == IB_EVENT_SM_CHANGE) {
-		ipoib_dbg(priv, "Port active event\n");
-		schedule_work(&priv->flush_task);
+		ipoib_dbg(priv, "Port state change event\n");
+		queue_work(ipoib_workqueue, &priv->flush_task);
 	}
 }

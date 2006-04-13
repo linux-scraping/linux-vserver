@@ -62,7 +62,7 @@ MODULE_DESCRIPTION(DRV_DESCRIPTION);
 MODULE_AUTHOR(DRV_COPYRIGHT);
 MODULE_LICENSE("GPL");
 
-static inline int ieee80211_networks_allocate(struct ieee80211_device *ieee)
+static int ieee80211_networks_allocate(struct ieee80211_device *ieee)
 {
 	if (ieee->networks)
 		return 0;
@@ -82,15 +82,33 @@ static inline int ieee80211_networks_allocate(struct ieee80211_device *ieee)
 	return 0;
 }
 
+void ieee80211_network_reset(struct ieee80211_network *network)
+{
+	if (!network)
+		return;
+
+	if (network->ibss_dfs) {
+		kfree(network->ibss_dfs);
+		network->ibss_dfs = NULL;
+	}
+}
+
 static inline void ieee80211_networks_free(struct ieee80211_device *ieee)
 {
+	int i;
+
 	if (!ieee->networks)
 		return;
+
+	for (i = 0; i < MAX_NETWORK_COUNT; i++)
+		if (ieee->networks[i].ibss_dfs)
+			kfree(ieee->networks[i].ibss_dfs);
+
 	kfree(ieee->networks);
 	ieee->networks = NULL;
 }
 
-static inline void ieee80211_networks_initialize(struct ieee80211_device *ieee)
+static void ieee80211_networks_initialize(struct ieee80211_device *ieee)
 {
 	int i;
 
@@ -195,7 +213,7 @@ void free_ieee80211(struct net_device *dev)
 
 static int debug = 0;
 u32 ieee80211_debug_level = 0;
-struct proc_dir_entry *ieee80211_proc = NULL;
+static struct proc_dir_entry *ieee80211_proc = NULL;
 
 static int show_debug_level(char *page, char **start, off_t offset,
 			    int count, int *eof, void *data)

@@ -207,7 +207,7 @@ struct aaci_runtime {
 	int			pcm_open;
 
 	u32			cr;
-	snd_pcm_substream_t	*substream;
+	struct snd_pcm_substream	*substream;
 
 	/*
 	 * PIO support
@@ -222,12 +222,12 @@ struct aaci_runtime {
 
 struct aaci {
 	struct amba_device	*dev;
-	snd_card_t		*card;
+	struct snd_card		*card;
 	void			__iomem *base;
 	unsigned int		fifosize;
 
 	/* AC'97 */
-	struct semaphore	ac97_sem;
+	struct mutex		ac97_sem;
 	ac97_bus_t		*ac97_bus;
 
 	u32			maincr;
@@ -236,7 +236,7 @@ struct aaci {
 	struct aaci_runtime	playback;
 	struct aaci_runtime	capture;
 
-	snd_pcm_t		*pcm;
+	struct snd_pcm		*pcm;
 };
 
 #define ACSTREAM_FRONT		0

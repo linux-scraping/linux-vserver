@@ -26,16 +26,44 @@
  */
 #define IXP4XX_EXP_BUS_BASE_PHYS	(0x50000000)
 
-#define	IXP4XX_EXP_BUS_CSX_REGION_SIZE	(0x01000000)
+/*
+ * The expansion bus on the IXP4xx can be configured for either 16 or
+ * 32MB windows and the CS offset for each region changes based on the
+ * current configuration. This means that we cannot simply hardcode
+ * each offset. ixp4xx_sys_init() looks at the expansion bus configuration
+ * as setup by the bootloader to determine our window size.
+ */
+extern unsigned long ixp4xx_exp_bus_size;
 
-#define IXP4XX_EXP_BUS_CS0_BASE_PHYS	(IXP4XX_EXP_BUS_BASE_PHYS + 0x00000000)
-#define IXP4XX_EXP_BUS_CS1_BASE_PHYS	(IXP4XX_EXP_BUS_BASE_PHYS + 0x01000000)
-#define IXP4XX_EXP_BUS_CS2_BASE_PHYS	(IXP4XX_EXP_BUS_BASE_PHYS + 0x02000000)
-#define IXP4XX_EXP_BUS_CS3_BASE_PHYS	(IXP4XX_EXP_BUS_BASE_PHYS + 0x03000000)
-#define IXP4XX_EXP_BUS_CS4_BASE_PHYS	(IXP4XX_EXP_BUS_BASE_PHYS + 0x04000000)
-#define IXP4XX_EXP_BUS_CS5_BASE_PHYS	(IXP4XX_EXP_BUS_BASE_PHYS + 0x05000000)
-#define IXP4XX_EXP_BUS_CS6_BASE_PHYS	(IXP4XX_EXP_BUS_BASE_PHYS + 0x06000000)
-#define IXP4XX_EXP_BUS_CS7_BASE_PHYS	(IXP4XX_EXP_BUS_BASE_PHYS + 0x07000000)
+#define	IXP4XX_EXP_BUS_BASE(region)\
+		(IXP4XX_EXP_BUS_BASE_PHYS + ((region) * ixp4xx_exp_bus_size))
+
+#define IXP4XX_EXP_BUS_END(region)\
+		(IXP4XX_EXP_BUS_BASE(region) + ixp4xx_exp_bus_size - 1)
+
+/* Those macros can be used to adjust timing and configure
+ * other features for each region.
+ */
+
+#define IXP4XX_EXP_BUS_RECOVERY_T(x)	(((x) & 0x0f) << 16)
+#define IXP4XX_EXP_BUS_HOLD_T(x)	(((x) & 0x03) << 20)
+#define IXP4XX_EXP_BUS_STROBE_T(x)	(((x) & 0x0f) << 22)
+#define IXP4XX_EXP_BUS_SETUP_T(x)	(((x) & 0x03) << 26)
+#define IXP4XX_EXP_BUS_ADDR_T(x)	(((x) & 0x03) << 28)
+#define IXP4XX_EXP_BUS_SIZE(x)		(((x) & 0x0f) << 10)
+#define IXP4XX_EXP_BUS_CYCLES(x)	(((x) & 0x03) << 14)
+
+#define IXP4XX_EXP_BUS_CS_EN		(1L << 31)
+#define IXP4XX_EXP_BUS_BYTE_RD16	(1L << 6)
+#define IXP4XX_EXP_BUS_HRDY_POL		(1L << 5)
+#define IXP4XX_EXP_BUS_MUX_EN		(1L << 4)
+#define IXP4XX_EXP_BUS_SPLT_EN		(1L << 3)
+#define IXP4XX_EXP_BUS_WR_EN		(1L << 1)
+#define IXP4XX_EXP_BUS_BYTE_EN		(1L << 0)
+
+#define IXP4XX_EXP_BUS_CYCLES_INTEL	0x00
+#define IXP4XX_EXP_BUS_CYCLES_MOTOROLA	0x01
+#define IXP4XX_EXP_BUS_CYCLES_HPI	0x02
 
 #define IXP4XX_FLASH_WRITABLE	(0x2)
 #define IXP4XX_FLASH_DEFAULT	(0xbcd23c40)
@@ -110,11 +138,6 @@ static inline void gpio_line_set(u8 line, int value)
 	    *IXP4XX_GPIO_GPOUTR |= (1 << line);
 	else if (value == IXP4XX_GPIO_LOW)
 	    *IXP4XX_GPIO_GPOUTR &= ~(1 << line);
-}
-
-static inline void gpio_line_isr_clear(u8 line)
-{
-	*IXP4XX_GPIO_GPISR = (1 << line);
 }
 
 #endif // __ASSEMBLY__

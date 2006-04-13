@@ -1,6 +1,4 @@
 /*
- * arch/ppc64/mm/slb_low.S
- *
  * Low-level SLB routines
  *
  * Copyright (C) 2004 David Gibson <dwg@au.ibm.com>, IBM
@@ -37,9 +35,9 @@ _GLOBAL(slb_allocate_realmode)
 
 	srdi	r9,r3,60		/* get region */
 	srdi	r10,r3,28		/* get esid */
-	cmpldi	cr7,r9,0xc		/* cmp KERNELBASE for later use */
+	cmpldi	cr7,r9,0xc		/* cmp PAGE_OFFSET for later use */
 
-	/* r3 = address, r10 = esid, cr7 = <>KERNELBASE */
+	/* r3 = address, r10 = esid, cr7 = <> PAGE_OFFSET */
 	blt	cr7,0f			/* user or kernel? */
 
 	/* kernel address: proto-VSID = ESID */
@@ -166,7 +164,7 @@ _GLOBAL(slb_allocate_user)
 /*
  * Finish loading of an SLB entry and return
  *
- * r3 = EA, r10 = proto-VSID, r11 = flags, clobbers r9, cr7 = <>KERNELBASE
+ * r3 = EA, r10 = proto-VSID, r11 = flags, clobbers r9, cr7 = <> PAGE_OFFSET
  */
 slb_finish_load:
 	ASM_VSID_SCRAMBLE(r10,r9)

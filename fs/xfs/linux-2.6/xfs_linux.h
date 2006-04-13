@@ -73,6 +73,9 @@
 #include <linux/list.h>
 #include <linux/proc_fs.h>
 #include <linux/sort.h>
+#include <linux/cpu.h>
+#include <linux/notifier.h>
+#include <linux/delay.h>
 
 #include <asm/page.h>
 #include <asm/div64.h>
@@ -100,6 +103,12 @@
  */
 #undef  HAVE_REFCACHE	/* reference cache not needed for NFS in 2.6 */
 #define HAVE_SENDFILE	/* sendfile(2) exists in 2.6, but not in 2.4 */
+#define HAVE_SPLICE	/* a splice(2) exists in 2.6, but not in 2.4 */
+#ifdef CONFIG_SMP
+#define HAVE_PERCPU_SB	/* per cpu superblock counters are a 2.6 feature */
+#else
+#undef  HAVE_PERCPU_SB	/* per cpu superblock counters are a 2.6 feature */
+#endif
 
 /*
  * State flag for unwritten extent buffers.
@@ -110,10 +119,6 @@
  * delalloc and these ondisk-uninitialised buffers.
  */
 BUFFER_FNS(PrivateStart, unwritten);
-static inline void set_buffer_unwritten_io(struct buffer_head *bh)
-{
-	bh->b_end_io = linvfs_unwritten_done;
-}
 
 #define restricted_chown	xfs_params.restrict_chown.val
 #define irix_sgid_inherit	xfs_params.sgid_inherit.val
@@ -137,7 +142,7 @@ static inline void set_buffer_unwritten_io(struct buffer_head *bh)
 #define current_pid()		(current->pid)
 #define current_fsuid(cred)	(current->fsuid)
 #define current_fsgid(cred)	(current->fsgid)
-#define current_fsxid(cred,vp)	(vx_current_fsxid(LINVFS_GET_IP(vp)->i_sb))
+#define current_fsxid(cred,vp)	(vx_current_fsxid(vn_to_inode(vp)->i_sb))
 
 #define NBPP		PAGE_SIZE
 #define DPPSHFT		(PAGE_SHIFT - 9)
@@ -231,9 +236,9 @@ static inline void set_buffer_unwritten_io(struct buffer_head *bh)
 #define xfs_sort(a,n,s,fn)	sort(a,n,s,fn,NULL)
 #define xfs_stack_trace()	dump_stack()
 #define xfs_itruncate_data(ip, off)	\
-	(-vmtruncate(LINVFS_GET_IP(XFS_ITOV(ip)), (off)))
+	(-vmtruncate(vn_to_inode(XFS_ITOV(ip)), (off)))
 #define xfs_statvfs_fsid(statp, mp)	\
-	({ u64 id = huge_encode_dev((mp)->m_dev);	\
+	({ u64 id = huge_encode_dev((mp)->m_ddev_targp->bt_dev); \
 	   __kernel_fsid_t *fsid = &(statp)->f_fsid;	\
 	(fsid->val[0] = (u32)id, fsid->val[1] = (u32)(id >> 32)); })
 

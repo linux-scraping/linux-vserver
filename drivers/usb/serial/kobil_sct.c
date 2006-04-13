@@ -97,11 +97,11 @@ static struct usb_device_id id_table [] = {
 MODULE_DEVICE_TABLE (usb, id_table);
 
 static struct usb_driver kobil_driver = {
-	.owner =	THIS_MODULE,
 	.name =		"kobil",
 	.probe =	usb_serial_probe,
 	.disconnect =	usb_serial_disconnect,
 	.id_table =	id_table,
+	.no_dynamic_id = 	1,
 };
 
 
@@ -255,11 +255,9 @@ static int kobil_open (struct usb_serial_port *port, struct file *filp)
 	}
 	
 	// allocate memory for transfer buffer
-	transfer_buffer = (unsigned char *) kmalloc(transfer_buffer_length, GFP_KERNEL);  
+	transfer_buffer = kzalloc(transfer_buffer_length, GFP_KERNEL);
 	if (! transfer_buffer) {
 		return -ENOMEM;
-	} else {
-		memset(transfer_buffer, 0, transfer_buffer_length);
 	}
 	
 	// allocate write_urb
@@ -365,7 +363,6 @@ static void kobil_close (struct usb_serial_port *port, struct file *filp)
 
 static void kobil_read_int_callback( struct urb *purb, struct pt_regs *regs)
 {
-	int i;
 	int result;
 	struct usb_serial_port *port = (struct usb_serial_port *) purb->context;
 	struct tty_struct *tty;
@@ -384,11 +381,10 @@ static void kobil_read_int_callback( struct urb *purb, struct pt_regs *regs)
 		
 		// BEGIN DEBUG
 		/*
-		  dbg_data = (unsigned char *) kmalloc((3 *  purb->actual_length + 10) * sizeof(char), GFP_KERNEL);
+		  dbg_data = kzalloc((3 *  purb->actual_length + 10) * sizeof(char), GFP_KERNEL);
 		  if (! dbg_data) {
 		  return;
 		  }
-		  memset(dbg_data, 0, (3 *  purb->actual_length + 10));
 		  for (i = 0; i < purb->actual_length; i++) { 
 		  sprintf(dbg_data +3*i, "%02X ", data[i]); 
 		  }
@@ -397,14 +393,8 @@ static void kobil_read_int_callback( struct urb *purb, struct pt_regs *regs)
 		*/
 		// END DEBUG
 
-		for (i = 0; i < purb->actual_length; ++i) {
-			// if we insert more than TTY_FLIPBUF_SIZE characters, we drop them.
-			if(tty->flip.count >= TTY_FLIPBUF_SIZE) {
-				tty_flip_buffer_push(tty);
-			}
-			// this doesn't actually push the data through unless tty->low_latency is set
-			tty_insert_flip_char(tty, data[i], 0);
-		}
+		tty_buffer_request_room(tty, purb->actual_length);
+		tty_insert_flip_string(tty, data, purb->actual_length);
 		tty_flip_buffer_push(tty);
 	}
 
@@ -525,11 +515,10 @@ static int kobil_tiocmget(struct usb_serial_port *port, struct file *file)
 	}
 
 	// allocate memory for transfer buffer
-	transfer_buffer = (unsigned char *) kmalloc(transfer_buffer_length, GFP_KERNEL);  
+	transfer_buffer = kzalloc(transfer_buffer_length, GFP_KERNEL);
 	if (!transfer_buffer) {
 		return -ENOMEM;
 	}
-	memset(transfer_buffer, 0, transfer_buffer_length);
 
 	result = usb_control_msg( port->serial->dev, 
 				  usb_rcvctrlpipe(port->serial->dev, 0 ), 
@@ -571,11 +560,10 @@ static int  kobil_tiocmset(struct usb_serial_port *port, struct file *file,
 	}
 
 	// allocate memory for transfer buffer
-	transfer_buffer = (unsigned char *) kmalloc(transfer_buffer_length, GFP_KERNEL);
+	transfer_buffer = kzalloc(transfer_buffer_length, GFP_KERNEL);
 	if (! transfer_buffer) {
 		return -ENOMEM;
 	}
-	memset(transfer_buffer, 0, transfer_buffer_length);
 
 	if (set & TIOCM_RTS)
 		rts = 1;
@@ -662,11 +650,10 @@ static int  kobil_ioctl(struct usb_serial_port *port, struct file *file,
 						   (struct termios __user *)arg))
 			return -EFAULT;
 		
-		settings = (unsigned char *) kmalloc(50, GFP_KERNEL);  
+		settings = kzalloc(50, GFP_KERNEL);
 		if (! settings) {
 			return -ENOBUFS;
 		}
-		memset(settings, 0, 50);
 
 		switch (priv->internal_termios.c_cflag & CBAUD) {
 		case B1200:

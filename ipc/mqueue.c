@@ -11,6 +11,7 @@
  * This file is released under the GPL.
  */
 
+#include <linux/capability.h>
 #include <linux/init.h>
 #include <linux/pagemap.h>
 #include <linux/file.h>
@@ -24,8 +25,10 @@
 #include <linux/netlink.h>
 #include <linux/syscalls.h>
 #include <linux/signal.h>
+#include <linux/mutex.h>
 #include <linux/vs_context.h>
 #include <linux/vs_limit.h>
+
 #include <net/sock.h>
 #include "util.h"
 
@@ -52,7 +55,6 @@
 #define HARD_MSGMAX 	(131072/sizeof(void*))
 #define DFLT_MSGSIZEMAX 8192	/* max message size */
 
-#define NOTIFY_COOKIE_LEN	32
 
 struct ext_wait_queue {		/* queue of sleeping tasks */
 	struct task_struct *task;
@@ -260,7 +262,7 @@ static void mqueue_delete_inode(struct inode *inode)
 		   (info->attr.mq_maxmsg * info->attr.mq_msgsize));
 	user = info->user;
 	if (user) {
-		struct vx_info *vxi = locate_vx_info(user->xid);
+		struct vx_info *vxi = lookup_vx_info(user->xid);
 
 		spin_lock(&mq_lock);
 		user->mq_bytes -= mq_bytes;
@@ -607,15 +609,16 @@ static int mq_attr_ok(struct mq_attr *attr)
 static struct file *do_create(struct dentry *dir, struct dentry *dentry,
 			int oflag, mode_t mode, struct mq_attr __user *u_attr)
 {
-	struct file *filp;
 	struct mq_attr attr;
 	int ret;
 
-	if (u_attr != NULL) {
+	if (u_attr) {
+		ret = -EFAULT;
 		if (copy_from_user(&attr, u_attr, sizeof(attr)))
-			return ERR_PTR(-EFAULT);
+			goto out;
+		ret = -EINVAL;
 		if (!mq_attr_ok(&attr))
-			return ERR_PTR(-EINVAL);
+			goto out;
 		/* store for use during create */
 		dentry->d_fsdata = &attr;
 	}
@@ -624,13 +627,14 @@ static struct file *do_create(struct dentry *dir, struct dentry *dentry,
 	ret = vfs_create(dir->d_inode, dentry, mode, NULL);
 	dentry->d_fsdata = NULL;
 	if (ret)
-		return ERR_PTR(ret);
+		goto out;
 
-	filp = dentry_open(dentry, mqueue_mnt, oflag);
-	if (!IS_ERR(filp))
-		dget(dentry);
+	return dentry_open(dentry, mqueue_mnt, oflag);
 
-	return filp;
+out:
+	dput(dentry);
+	mntput(mqueue_mnt);
+	return ERR_PTR(ret);
 }
 
 /* Opens existing queue */
@@ -638,20 +642,20 @@ static struct file *do_open(struct dentry *dentry, int oflag)
 {
 static int oflag2acc[O_ACCMODE] = { MAY_READ, MAY_WRITE,
 					MAY_READ | MAY_WRITE };
-	struct file *filp;
 
-	if ((oflag & O_ACCMODE) == (O_RDWR | O_WRONLY))
+	if ((oflag & O_ACCMODE) == (O_RDWR | O_WRONLY)) {
+		dput(dentry);
+		mntput(mqueue_mnt);
 		return ERR_PTR(-EINVAL);
+	}
 
-	if (permission(dentry->d_inode, oflag2acc[oflag & O_ACCMODE], NULL))
+	if (permission(dentry->d_inode, oflag2acc[oflag & O_ACCMODE], NULL)) {
+		dput(dentry);
+		mntput(mqueue_mnt);
 		return ERR_PTR(-EACCES);
+	}
 
-	filp = dentry_open(dentry, mqueue_mnt, oflag);
-
-	if (!IS_ERR(filp))
-		dget(dentry);
-
-	return filp;
+	return dentry_open(dentry, mqueue_mnt, oflag);
 }
 
 asmlinkage long sys_mq_open(const char __user *u_name, int oflag, mode_t mode,
@@ -669,7 +673,7 @@ asmlinkage long sys_mq_open(const char __user *u_name, int oflag, mode_t mode,
 	if (fd < 0)
 		goto out_putname;
 
-	down(&mqueue_mnt->mnt_root->d_inode->i_sem);
+	mutex_lock(&mqueue_mnt->mnt_root->d_inode->i_mutex);
 	dentry = lookup_one_len(name, mqueue_mnt->mnt_root, strlen(name));
 	if (IS_ERR(dentry)) {
 		error = PTR_ERR(dentry);
@@ -679,17 +683,20 @@ asmlinkage long sys_mq_open(const char __user *u_name, int oflag, mode_t mode,
 
 	if (oflag & O_CREAT) {
 		if (dentry->d_inode) {	/* entry already exists */
-			filp = (oflag & O_EXCL) ? ERR_PTR(-EEXIST) :
-					do_open(dentry, oflag);
+			error = -EEXIST;
+			if (oflag & O_EXCL)
+				goto out;
+			filp = do_open(dentry, oflag);
 		} else {
 			filp = do_create(mqueue_mnt->mnt_root, dentry,
 						oflag, mode, u_attr);
 		}
-	} else
-		filp = (dentry->d_inode) ? do_open(dentry, oflag) :
-					ERR_PTR(-ENOENT);
-
-	dput(dentry);
+	} else {
+		error = -ENOENT;
+		if (!dentry->d_inode)
+			goto out;
+		filp = do_open(dentry, oflag);
+	}
 
 	if (IS_ERR(filp)) {
 		error = PTR_ERR(filp);
@@ -700,13 +707,15 @@ asmlinkage long sys_mq_open(const char __user *u_name, int oflag, mode_t mode,
 	fd_install(fd, filp);
 	goto out_upsem;
 
-out_putfd:
+out:
+	dput(dentry);
 	mntput(mqueue_mnt);
+out_putfd:
 	put_unused_fd(fd);
 out_err:
 	fd = error;
 out_upsem:
-	up(&mqueue_mnt->mnt_root->d_inode->i_sem);
+	mutex_unlock(&mqueue_mnt->mnt_root->d_inode->i_mutex);
 out_putname:
 	putname(name);
 	return fd;
@@ -723,7 +732,7 @@ asmlinkage long sys_mq_unlink(const char __user *u_name)
 	if (IS_ERR(name))
 		return PTR_ERR(name);
 
-	down(&mqueue_mnt->mnt_root->d_inode->i_sem);
+	mutex_lock(&mqueue_mnt->mnt_root->d_inode->i_mutex);
 	dentry = lookup_one_len(name, mqueue_mnt->mnt_root, strlen(name));
 	if (IS_ERR(dentry)) {
 		err = PTR_ERR(dentry);
@@ -739,12 +748,12 @@ asmlinkage long sys_mq_unlink(const char __user *u_name)
 	if (inode)
 		atomic_inc(&inode->i_count);
 
-	err = vfs_unlink(dentry->d_parent->d_inode, dentry);
+	err = vfs_unlink(dentry->d_parent->d_inode, dentry, NULL);
 out_err:
 	dput(dentry);
 
 out_unlock:
-	up(&mqueue_mnt->mnt_root->d_inode->i_sem);
+	mutex_unlock(&mqueue_mnt->mnt_root->d_inode->i_mutex);
 	putname(name);
 	if (inode)
 		iput(inode);
@@ -762,7 +771,7 @@ out_unlock:
  * The receiver accepts the message and returns without grabbing the queue
  * spinlock. Therefore an intermediate STATE_PENDING state and memory barriers
  * are necessary. The same algorithm is used for sysv semaphores, see
- * ipc/sem.c fore more details.
+ * ipc/sem.c for more details.
  *
  * The same algorithm is used for senders.
  */
@@ -1019,7 +1028,8 @@ retry:
 				goto out;
 			}
 
-			ret = netlink_attachskb(sock, nc, 0, MAX_SCHEDULE_TIMEOUT);
+			ret = netlink_attachskb(sock, nc, 0,
+					MAX_SCHEDULE_TIMEOUT, NULL);
 			if (ret == 1)
 		       		goto retry;
 			if (ret) {

@@ -43,8 +43,6 @@ int reiserfs_delete_xattrs(struct inode *inode);
 int reiserfs_chown_xattrs(struct inode *inode, struct iattr *attrs);
 int reiserfs_xattr_init(struct super_block *sb, int mount_flags);
 int reiserfs_permission(struct inode *inode, int mask, struct nameidata *nd);
-int reiserfs_permission_locked(struct inode *inode, int mask,
-			       struct nameidata *nd);
 
 int reiserfs_xattr_del(struct inode *, const char *);
 int reiserfs_xattr_get(const struct inode *, const char *, void *, size_t);
@@ -103,13 +101,13 @@ static inline void reiserfs_mark_inode_private(struct inode *inode)
 #else
 
 #define is_reiserfs_priv_object(inode) 0
-#define reiserfs_mark_inode_private(inode)
+#define reiserfs_mark_inode_private(inode) do {;} while(0)
 #define reiserfs_getxattr NULL
 #define reiserfs_setxattr NULL
 #define reiserfs_listxattr NULL
 #define reiserfs_removexattr NULL
-#define reiserfs_write_lock_xattrs(sb)
-#define reiserfs_write_unlock_xattrs(sb)
+#define reiserfs_write_lock_xattrs(sb) do {;} while(0)
+#define reiserfs_write_unlock_xattrs(sb) do {;} while(0)
 #define reiserfs_read_lock_xattrs(sb)
 #define reiserfs_read_unlock_xattrs(sb)
 

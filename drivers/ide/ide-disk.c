@@ -60,6 +60,8 @@
 #include <linux/genhd.h>
 #include <linux/slab.h>
 #include <linux/delay.h>
+#include <linux/mutex.h>
+#include <linux/leds.h>
 
 #define _IDE_DISK
 
@@ -78,7 +80,7 @@ struct ide_disk_obj {
 	struct kref	kref;
 };
 
-static DECLARE_MUTEX(idedisk_ref_sem);
+static DEFINE_MUTEX(idedisk_ref_mutex);
 
 #define to_ide_disk(obj) container_of(obj, struct ide_disk_obj, kref)
 
@@ -89,11 +91,11 @@ static struct ide_disk_obj *ide_disk_get(struct gendisk *disk)
 {
 	struct ide_disk_obj *idkp = NULL;
 
-	down(&idedisk_ref_sem);
+	mutex_lock(&idedisk_ref_mutex);
 	idkp = ide_disk_g(disk);
 	if (idkp)
 		kref_get(&idkp->kref);
-	up(&idedisk_ref_sem);
+	mutex_unlock(&idedisk_ref_mutex);
 	return idkp;
 }
 
@@ -101,9 +103,9 @@ static void ide_disk_release(struct kref *);
 
 static void ide_disk_put(struct ide_disk_obj *idkp)
 {
-	down(&idedisk_ref_sem);
+	mutex_lock(&idedisk_ref_mutex);
 	kref_put(&idkp->kref, ide_disk_release);
-	up(&idedisk_ref_sem);
+	mutex_unlock(&idedisk_ref_mutex);
 }
 
 /*
@@ -190,7 +192,8 @@ static ide_startstop_t __ide_do_rw_disk(ide_drive_t *drive, struct request *rq, 
 		if (lba48) {
 			task_ioreg_t tasklets[10];
 
-			pr_debug("%s: LBA=0x%012llx\n", drive->name, block);
+			pr_debug("%s: LBA=0x%012llx\n", drive->name,
+					(unsigned long long)block);
 
 			tasklets[0] = 0;
 			tasklets[1] = 0;
@@ -315,9 +318,12 @@ static ide_startstop_t ide_do_rw_disk (ide_drive_t *drive, struct request *rq, s
 		return ide_stopped;
 	}
 
+	ledtrig_ide_activity();
+
 	pr_debug("%s: %sing: block=%llu, sectors=%lu, buffer=0x%08lx\n",
 		 drive->name, rq_data_dir(rq) == READ ? "read" : "writ",
-		 block, rq->nr_sectors, (unsigned long)rq->buffer);
+		 (unsigned long long)block, rq->nr_sectors,
+		 (unsigned long)rq->buffer);
 
 	if (hwif->rw_disk)
 		hwif->rw_disk(drive, rq);
@@ -477,7 +483,7 @@ static inline int idedisk_supports_lba48(const struct hd_driveid *id)
 	       && id->lba_capacity_2;
 }
 
-static inline void idedisk_check_hpa(ide_drive_t *drive)
+static void idedisk_check_hpa(ide_drive_t *drive)
 {
 	unsigned long long capacity, set_max;
 	int lba48 = idedisk_supports_lba48(drive->id);
@@ -681,50 +687,9 @@ static ide_proc_entry_t idedisk_proc[] = {
 
 #endif	/* CONFIG_PROC_FS */
 
-static void idedisk_end_flush(request_queue_t *q, struct request *flush_rq)
+static void idedisk_prepare_flush(request_queue_t *q, struct request *rq)
 {
 	ide_drive_t *drive = q->queuedata;
-	struct request *rq = flush_rq->end_io_data;
-	int good_sectors = rq->hard_nr_sectors;
-	int bad_sectors;
-	sector_t sector;
-
-	if (flush_rq->errors & ABRT_ERR) {
-		printk(KERN_ERR "%s: barrier support doesn't work\n", drive->name);
-		blk_queue_ordered(drive->queue, QUEUE_ORDERED_NONE);
-		blk_queue_issue_flush_fn(drive->queue, NULL);
-		good_sectors = 0;
-	} else if (flush_rq->errors) {
-		good_sectors = 0;
-		if (blk_barrier_preflush(rq)) {
-			sector = ide_get_error_location(drive,flush_rq->buffer);
-			if ((sector >= rq->hard_sector) &&
-			    (sector < rq->hard_sector + rq->hard_nr_sectors))
-				good_sectors = sector - rq->hard_sector;
-		}
-	}
-
-	if (flush_rq->errors)
-		printk(KERN_ERR "%s: failed barrier write: "
-				"sector=%Lx(good=%d/bad=%d)\n",
-				drive->name, (unsigned long long)rq->sector,
-				good_sectors,
-				(int) (rq->hard_nr_sectors-good_sectors));
-
-	bad_sectors = rq->hard_nr_sectors - good_sectors;
-
-	if (good_sectors)
-		__ide_end_request(drive, rq, 1, good_sectors);
-	if (bad_sectors)
-		__ide_end_request(drive, rq, 0, bad_sectors);
-}
-
-static int idedisk_prepare_flush(request_queue_t *q, struct request *rq)
-{
-	ide_drive_t *drive = q->queuedata;
-
-	if (!drive->wcache)
-		return 0;
 
 	memset(rq->cmd, 0, sizeof(rq->cmd));
 
@@ -735,9 +700,8 @@ static int idedisk_prepare_flush(request_queue_t *q, struct request *rq)
 		rq->cmd[0] = WIN_FLUSH_CACHE;
 
 
-	rq->flags |= REQ_DRIVE_TASK | REQ_SOFTBARRIER;
+	rq->flags |= REQ_DRIVE_TASK;
 	rq->buffer = rq->cmd;
-	return 1;
 }
 
 static int idedisk_issue_flush(request_queue_t *q, struct gendisk *disk,
@@ -794,27 +758,64 @@ static int set_nowerr(ide_drive_t *drive, int arg)
 	return 0;
 }
 
+static void update_ordered(ide_drive_t *drive)
+{
+	struct hd_driveid *id = drive->id;
+	unsigned ordered = QUEUE_ORDERED_NONE;
+	prepare_flush_fn *prep_fn = NULL;
+	issue_flush_fn *issue_fn = NULL;
+
+	if (drive->wcache) {
+		unsigned long long capacity;
+		int barrier;
+		/*
+		 * We must avoid issuing commands a drive does not
+		 * understand or we may crash it. We check flush cache
+		 * is supported. We also check we have the LBA48 flush
+		 * cache if the drive capacity is too large. By this
+		 * time we have trimmed the drive capacity if LBA48 is
+		 * not available so we don't need to recheck that.
+		 */
+		capacity = idedisk_capacity(drive);
+		barrier = ide_id_has_flush_cache(id) &&
+			(drive->addressing == 0 || capacity <= (1ULL << 28) ||
+			 ide_id_has_flush_cache_ext(id));
+
+		printk(KERN_INFO "%s: cache flushes %ssupported\n",
+		       drive->name, barrier ? "" : "not ");
+
+		if (barrier) {
+			ordered = QUEUE_ORDERED_DRAIN_FLUSH;
+			prep_fn = idedisk_prepare_flush;
+			issue_fn = idedisk_issue_flush;
+		}
+	} else
+		ordered = QUEUE_ORDERED_DRAIN;
+
+	blk_queue_ordered(drive->queue, ordered, prep_fn);
+	blk_queue_issue_flush_fn(drive->queue, issue_fn);
+}
+
 static int write_cache(ide_drive_t *drive, int arg)
 {
 	ide_task_t args;
-	int err;
+	int err = 1;
 
-	if (!ide_id_has_flush_cache(drive->id))
-		return 1;
-
-	memset(&args, 0, sizeof(ide_task_t));
-	args.tfRegister[IDE_FEATURE_OFFSET]	= (arg) ?
+	if (ide_id_has_flush_cache(drive->id)) {
+		memset(&args, 0, sizeof(ide_task_t));
+		args.tfRegister[IDE_FEATURE_OFFSET]	= (arg) ?
 			SETFEATURES_EN_WCACHE : SETFEATURES_DIS_WCACHE;
-	args.tfRegister[IDE_COMMAND_OFFSET]	= WIN_SETFEATURES;
-	args.command_type			= IDE_DRIVE_TASK_NO_DATA;
-	args.handler				= &task_no_data_intr;
+		args.tfRegister[IDE_COMMAND_OFFSET]	= WIN_SETFEATURES;
+		args.command_type		= IDE_DRIVE_TASK_NO_DATA;
+		args.handler			= &task_no_data_intr;
+		err = ide_raw_taskfile(drive, &args, NULL);
+		if (err == 0)
+			drive->wcache = arg;
+	}
 
-	err = ide_raw_taskfile(drive, &args, NULL);
-	if (err)
-		return err;
+	update_ordered(drive);
 
-	drive->wcache = arg;
-	return 0;
+	return err;
 }
 
 static int do_idedisk_flushcache (ide_drive_t *drive)
@@ -888,18 +889,13 @@ static void idedisk_setup (ide_drive_t *drive)
 {
 	struct hd_driveid *id = drive->id;
 	unsigned long long capacity;
-	int barrier;
 
 	idedisk_add_settings(drive);
 
 	if (drive->id_read == 0)
 		return;
 
-	/*
-	 * CompactFlash cards and their brethern look just like hard drives
-	 * to us, but they are removable and don't have a doorlock mechanism.
-	 */
-	if (drive->removable && !(drive->is_flash)) {
+	if (drive->removable) {
 		/*
 		 * Removable disks (eg. SYQUEST); ignore 'WD' drives 
 		 */
@@ -985,38 +981,11 @@ static void idedisk_setup (ide_drive_t *drive)
 		ide_dma_verbose(drive);
 	printk("\n");
 
-	drive->no_io_32bit = id->dword_io ? 1 : 0;
-
 	/* write cache enabled? */
 	if ((id->csfo & 1) || (id->cfs_enable_1 & (1 << 5)))
 		drive->wcache = 1;
 
 	write_cache(drive, 1);
-
-	/*
-	 * We must avoid issuing commands a drive does not understand
-	 * or we may crash it. We check flush cache is supported. We also
-	 * check we have the LBA48 flush cache if the drive capacity is
-	 * too large. By this time we have trimmed the drive capacity if
-	 * LBA48 is not available so we don't need to recheck that.
-	 */
-	barrier = 0;
-	if (ide_id_has_flush_cache(id))
-		barrier = 1;
-	if (drive->addressing == 1) {
-		/* Can't issue the correct flush ? */
-		if (capacity > (1ULL << 28) && !ide_id_has_flush_cache_ext(id))
-			barrier = 0;
-	}
-
-	printk(KERN_INFO "%s: cache flushes %ssupported\n",
-		drive->name, barrier ? "" : "not ");
-	if (barrier) {
-		blk_queue_ordered(drive->queue, QUEUE_ORDERED_FLUSH);
-		drive->queue->prepare_flush_fn = idedisk_prepare_flush;
-		drive->queue->end_flush_fn = idedisk_end_flush;
-		blk_queue_issue_flush_fn(drive->queue, idedisk_issue_flush);
-	}
 }
 
 static void ide_cacheflush_p(ide_drive_t *drive)
@@ -1028,9 +997,8 @@ static void ide_cacheflush_p(ide_drive_t *drive)
 		printk(KERN_INFO "%s: wcache flush failed!\n", drive->name);
 }
 
-static int ide_disk_remove(struct device *dev)
+static void ide_disk_remove(ide_drive_t *drive)
 {
-	ide_drive_t *drive = to_ide_device(dev);
 	struct ide_disk_obj *idkp = drive->driver_data;
 	struct gendisk *g = idkp->disk;
 
@@ -1041,8 +1009,6 @@ static int ide_disk_remove(struct device *dev)
 	ide_cacheflush_p(drive);
 
 	ide_disk_put(idkp);
-
-	return 0;
 }
 
 static void ide_disk_release(struct kref *kref)
@@ -1058,12 +1024,10 @@ static void ide_disk_release(struct kref *kref)
 	kfree(idkp);
 }
 
-static int ide_disk_probe(struct device *dev);
+static int ide_disk_probe(ide_drive_t *drive);
 
-static void ide_device_shutdown(struct device *dev)
+static void ide_device_shutdown(ide_drive_t *drive)
 {
-	ide_drive_t *drive = container_of(dev, ide_drive_t, gendev);
-
 #ifdef	CONFIG_ALPHA
 	/* On Alpha, halt(8) doesn't actually turn the machine off,
 	   it puts you into the sort of firmware monitor. Typically,
@@ -1085,7 +1049,7 @@ static void ide_device_shutdown(struct device *dev)
 	}
 
 	printk("Shutdown: %s\n", drive->name);
-	dev->bus->suspend(dev, PMSG_SUSPEND);
+	drive->gendev.bus->suspend(&drive->gendev, PMSG_SUSPEND);
 }
 
 static ide_driver_t idedisk_driver = {
@@ -1093,10 +1057,10 @@ static ide_driver_t idedisk_driver = {
 		.owner		= THIS_MODULE,
 		.name		= "ide-disk",
 		.bus		= &ide_bus_type,
-		.probe		= ide_disk_probe,
-		.remove		= ide_disk_remove,
-		.shutdown	= ide_device_shutdown,
 	},
+	.probe			= ide_disk_probe,
+	.remove			= ide_disk_remove,
+	.shutdown		= ide_device_shutdown,
 	.version		= IDEDISK_VERSION,
 	.media			= ide_disk,
 	.supports_dsc_overlap	= 0,
@@ -1161,6 +1125,17 @@ static int idedisk_release(struct inode *inode, struct file *filp)
 	return 0;
 }
 
+static int idedisk_getgeo(struct block_device *bdev, struct hd_geometry *geo)
+{
+	struct ide_disk_obj *idkp = ide_disk_g(bdev->bd_disk);
+	ide_drive_t *drive = idkp->drive;
+
+	geo->heads = drive->bios_head;
+	geo->sectors = drive->bios_sect;
+	geo->cylinders = (u16)drive->bios_cyl; /* truncate */
+	return 0;
+}
+
 static int idedisk_ioctl(struct inode *inode, struct file *file,
 			unsigned int cmd, unsigned long arg)
 {
@@ -1195,15 +1170,15 @@ static struct block_device_operations idedisk_ops = {
 	.open		= idedisk_open,
 	.release	= idedisk_release,
 	.ioctl		= idedisk_ioctl,
+	.getgeo		= idedisk_getgeo,
 	.media_changed	= idedisk_media_changed,
 	.revalidate_disk= idedisk_revalidate_disk
 };
 
 MODULE_DESCRIPTION("ATA DISK Driver");
 
-static int ide_disk_probe(struct device *dev)
+static int ide_disk_probe(ide_drive_t *drive)
 {
-	ide_drive_t *drive = to_ide_device(dev);
 	struct ide_disk_obj *idkp;
 	struct gendisk *g;
 
@@ -1271,6 +1246,7 @@ static int __init idedisk_init(void)
 	return driver_register(&idedisk_driver.gen_driver);
 }
 
+MODULE_ALIAS("ide:*m-disk*");
 module_init(idedisk_init);
 module_exit(idedisk_exit);
 MODULE_LICENSE("GPL");

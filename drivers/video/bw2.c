@@ -35,9 +35,8 @@
 
 static int bw2_blank(int, struct fb_info *);
 
-static int bw2_mmap(struct fb_info *, struct file *, struct vm_area_struct *);
-static int bw2_ioctl(struct inode *, struct file *, unsigned int,
-		     unsigned long, struct fb_info *);
+static int bw2_mmap(struct fb_info *, struct vm_area_struct *);
+static int bw2_ioctl(struct fb_info *, unsigned int, unsigned long);
 
 /*
  *  Frame buffer operations
@@ -169,7 +168,7 @@ static struct sbus_mmap_map bw2_mmap_map[] = {
 	{ .size = 0 }
 };
 
-static int bw2_mmap(struct fb_info *info, struct file *file, struct vm_area_struct *vma)
+static int bw2_mmap(struct fb_info *info, struct vm_area_struct *vma)
 {
 	struct bw2_par *par = (struct bw2_par *)info->par;
 
@@ -181,8 +180,7 @@ static int bw2_mmap(struct fb_info *info, struct file *file, struct vm_area_stru
 				  vma);
 }
 
-static int bw2_ioctl(struct inode *inode, struct file *file, unsigned int cmd,
-		     unsigned long arg, struct fb_info *info)
+static int bw2_ioctl(struct fb_info *info, unsigned int cmd, unsigned long arg)
 {
 	struct bw2_par *par = (struct bw2_par *) info->par;
 
@@ -329,8 +327,7 @@ static void bw2_init_one(struct sbus_dev *sdev)
 	} else
 #else
 	{
-		if (!sdev)
-			BUG();
+		BUG_ON(!sdev);
 		all->par.physbase = sdev->reg_addrs[0].phys_addr;
 		resp = &sdev->resource[0];
 		sbusfb_fill_var(&all->info.var, (sdev ? sdev->prom_node : 0), 1);

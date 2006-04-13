@@ -79,6 +79,7 @@
 #include <linux/string.h>
 #include <linux/sockios.h>
 #include <linux/net.h>
+#include <linux/capability.h>
 #include <linux/fcntl.h>
 #include <linux/mm.h>
 #include <linux/interrupt.h>
@@ -93,6 +94,7 @@
 #include <linux/smp_lock.h>
 #include <linux/inet.h>
 #include <linux/igmp.h>
+#include <linux/inetdevice.h>
 #include <linux/netdevice.h>
 #include <net/ip.h>
 #include <net/protocol.h>
@@ -305,6 +307,7 @@ override:
 		sk->sk_reuse = 1;
 
 	inet = inet_sk(sk);
+	inet->is_icsk = INET_PROTOSW_ICSK & answer_flags;
 
 	if (SOCK_RAW == sock->type) {
 		inet->num = protocol;
@@ -816,80 +819,92 @@ int inet_ioctl(struct socket *sock, unsigned int cmd, unsigned long arg)
 			err = devinet_ioctl(cmd, (void __user *)arg);
 			break;
 		default:
-			if (!sk->sk_prot->ioctl ||
-			    (err = sk->sk_prot->ioctl(sk, cmd, arg)) ==
-			    					-ENOIOCTLCMD)
-				err = dev_ioctl(cmd, (void __user *)arg);
+			if (sk->sk_prot->ioctl)
+				err = sk->sk_prot->ioctl(sk, cmd, arg);
+			else
+				err = -ENOIOCTLCMD;
 			break;
 	}
 	return err;
 }
 
-struct proto_ops inet_stream_ops = {
-	.family =	PF_INET,
-	.owner =	THIS_MODULE,
-	.release =	inet_release,
-	.bind =		inet_bind,
-	.connect =	inet_stream_connect,
-	.socketpair =	sock_no_socketpair,
-	.accept =	inet_accept,
-	.getname =	inet_getname,
-	.poll =		tcp_poll,
-	.ioctl =	inet_ioctl,
-	.listen =	inet_listen,
-	.shutdown =	inet_shutdown,
-	.setsockopt =	sock_common_setsockopt,
-	.getsockopt =	sock_common_getsockopt,
-	.sendmsg =	inet_sendmsg,
-	.recvmsg =	sock_common_recvmsg,
-	.mmap =		sock_no_mmap,
-	.sendpage =	tcp_sendpage
+const struct proto_ops inet_stream_ops = {
+	.family		   = PF_INET,
+	.owner		   = THIS_MODULE,
+	.release	   = inet_release,
+	.bind		   = inet_bind,
+	.connect	   = inet_stream_connect,
+	.socketpair	   = sock_no_socketpair,
+	.accept		   = inet_accept,
+	.getname	   = inet_getname,
+	.poll		   = tcp_poll,
+	.ioctl		   = inet_ioctl,
+	.listen		   = inet_listen,
+	.shutdown	   = inet_shutdown,
+	.setsockopt	   = sock_common_setsockopt,
+	.getsockopt	   = sock_common_getsockopt,
+	.sendmsg	   = inet_sendmsg,
+	.recvmsg	   = sock_common_recvmsg,
+	.mmap		   = sock_no_mmap,
+	.sendpage	   = tcp_sendpage,
+#ifdef CONFIG_COMPAT
+	.compat_setsockopt = compat_sock_common_setsockopt,
+	.compat_getsockopt = compat_sock_common_getsockopt,
+#endif
 };
 
-struct proto_ops inet_dgram_ops = {
-	.family =	PF_INET,
-	.owner =	THIS_MODULE,
-	.release =	inet_release,
-	.bind =		inet_bind,
-	.connect =	inet_dgram_connect,
-	.socketpair =	sock_no_socketpair,
-	.accept =	sock_no_accept,
-	.getname =	inet_getname,
-	.poll =		udp_poll,
-	.ioctl =	inet_ioctl,
-	.listen =	sock_no_listen,
-	.shutdown =	inet_shutdown,
-	.setsockopt =	sock_common_setsockopt,
-	.getsockopt =	sock_common_getsockopt,
-	.sendmsg =	inet_sendmsg,
-	.recvmsg =	sock_common_recvmsg,
-	.mmap =		sock_no_mmap,
-	.sendpage =	inet_sendpage,
+const struct proto_ops inet_dgram_ops = {
+	.family		   = PF_INET,
+	.owner		   = THIS_MODULE,
+	.release	   = inet_release,
+	.bind		   = inet_bind,
+	.connect	   = inet_dgram_connect,
+	.socketpair	   = sock_no_socketpair,
+	.accept		   = sock_no_accept,
+	.getname	   = inet_getname,
+	.poll		   = udp_poll,
+	.ioctl		   = inet_ioctl,
+	.listen		   = sock_no_listen,
+	.shutdown	   = inet_shutdown,
+	.setsockopt	   = sock_common_setsockopt,
+	.getsockopt	   = sock_common_getsockopt,
+	.sendmsg	   = inet_sendmsg,
+	.recvmsg	   = sock_common_recvmsg,
+	.mmap		   = sock_no_mmap,
+	.sendpage	   = inet_sendpage,
+#ifdef CONFIG_COMPAT
+	.compat_setsockopt = compat_sock_common_setsockopt,
+	.compat_getsockopt = compat_sock_common_getsockopt,
+#endif
 };
 
 /*
  * For SOCK_RAW sockets; should be the same as inet_dgram_ops but without
  * udp_poll
  */
-static struct proto_ops inet_sockraw_ops = {
-	.family =	PF_INET,
-	.owner =	THIS_MODULE,
-	.release =	inet_release,
-	.bind =		inet_bind,
-	.connect =	inet_dgram_connect,
-	.socketpair =	sock_no_socketpair,
-	.accept =	sock_no_accept,
-	.getname =	inet_getname,
-	.poll =		datagram_poll,
-	.ioctl =	inet_ioctl,
-	.listen =	sock_no_listen,
-	.shutdown =	inet_shutdown,
-	.setsockopt =	sock_common_setsockopt,
-	.getsockopt =	sock_common_getsockopt,
-	.sendmsg =	inet_sendmsg,
-	.recvmsg =	sock_common_recvmsg,
-	.mmap =		sock_no_mmap,
-	.sendpage =	inet_sendpage,
+static const struct proto_ops inet_sockraw_ops = {
+	.family		   = PF_INET,
+	.owner		   = THIS_MODULE,
+	.release	   = inet_release,
+	.bind		   = inet_bind,
+	.connect	   = inet_dgram_connect,
+	.socketpair	   = sock_no_socketpair,
+	.accept		   = sock_no_accept,
+	.getname	   = inet_getname,
+	.poll		   = datagram_poll,
+	.ioctl		   = inet_ioctl,
+	.listen		   = sock_no_listen,
+	.shutdown	   = inet_shutdown,
+	.setsockopt	   = sock_common_setsockopt,
+	.getsockopt	   = sock_common_getsockopt,
+	.sendmsg	   = inet_sendmsg,
+	.recvmsg	   = sock_common_recvmsg,
+	.mmap		   = sock_no_mmap,
+	.sendpage	   = inet_sendpage,
+#ifdef CONFIG_COMPAT
+	.compat_setsockopt = compat_sock_common_setsockopt,
+	.compat_getsockopt = compat_sock_common_getsockopt,
+#endif
 };
 
 static struct net_proto_family inet_family_ops = {
@@ -910,7 +925,8 @@ static struct inet_protosw inetsw_array[] =
                 .ops =        &inet_stream_ops,
                 .capability = -1,
                 .no_check =   0,
-                .flags =      INET_PROTOSW_PERMANENT,
+                .flags =      INET_PROTOSW_PERMANENT |
+			      INET_PROTOSW_ICSK,
         },
 
         {

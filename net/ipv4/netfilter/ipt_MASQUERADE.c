@@ -11,6 +11,7 @@
 
 #include <linux/config.h>
 #include <linux/types.h>
+#include <linux/inetdevice.h>
 #include <linux/ip.h>
 #include <linux/timer.h>
 #include <linux/module.h>
@@ -18,6 +19,7 @@
 #include <net/protocol.h>
 #include <net/ip.h>
 #include <net/checksum.h>
+#include <net/route.h>
 #include <linux/netfilter_ipv4.h>
 #include <linux/netfilter_ipv4/ip_nat_rule.h>
 #include <linux/netfilter_ipv4/ip_tables.h>
@@ -38,26 +40,14 @@ static DEFINE_RWLOCK(masq_lock);
 /* FIXME: Multiple targets. --RR */
 static int
 masquerade_check(const char *tablename,
-		 const struct ipt_entry *e,
+		 const void *e,
+		 const struct xt_target *target,
 		 void *targinfo,
 		 unsigned int targinfosize,
 		 unsigned int hook_mask)
 {
 	const struct ip_nat_multi_range_compat *mr = targinfo;
 
-	if (strcmp(tablename, "nat") != 0) {
-		DEBUGP("masquerade_check: bad table `%s'.\n", tablename);
-		return 0;
-	}
-	if (targinfosize != IPT_ALIGN(sizeof(*mr))) {
-		DEBUGP("masquerade_check: size %u != %u.\n",
-		       targinfosize, sizeof(*mr));
-		return 0;
-	}
-	if (hook_mask & ~(1 << NF_IP_POST_ROUTING)) {
-		DEBUGP("masquerade_check: bad hooks %x.\n", hook_mask);
-		return 0;
-	}
 	if (mr->range[0].flags & IP_NAT_RANGE_MAP_IPS) {
 		DEBUGP("masquerade_check: bad MAP_IPS.\n");
 		return 0;
@@ -74,6 +64,7 @@ masquerade_target(struct sk_buff **pskb,
 		  const struct net_device *in,
 		  const struct net_device *out,
 		  unsigned int hooknum,
+		  const struct xt_target *target,
 		  const void *targinfo,
 		  void *userinfo)
 {
@@ -177,11 +168,14 @@ static struct notifier_block masq_inet_notifier = {
 static struct ipt_target masquerade = {
 	.name		= "MASQUERADE",
 	.target		= masquerade_target,
+	.targetsize	= sizeof(struct ip_nat_multi_range_compat),
+	.table		= "nat",
+	.hooks		= 1 << NF_IP_POST_ROUTING,
 	.checkentry	= masquerade_check,
 	.me		= THIS_MODULE,
 };
 
-static int __init init(void)
+static int __init ipt_masquerade_init(void)
 {
 	int ret;
 
@@ -197,12 +191,12 @@ static int __init init(void)
 	return ret;
 }
 
-static void __exit fini(void)
+static void __exit ipt_masquerade_fini(void)
 {
 	ipt_unregister_target(&masquerade);
 	unregister_netdevice_notifier(&masq_dev_notifier);
 	unregister_inetaddr_notifier(&masq_inet_notifier);	
 }
 
-module_init(init);
-module_exit(fini);
+module_init(ipt_masquerade_init);
+module_exit(ipt_masquerade_fini);

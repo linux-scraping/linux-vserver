@@ -11,9 +11,8 @@
  *  Copyright (C) 2002 by Ron Minnich <rminnich@lanl.gov>
  *
  *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License as published by
- *  the Free Software Foundation; either version 2 of the License, or
- *  (at your option) any later version.
+ *  it under the terms of the GNU General Public License version 2
+ *  as published by the Free Software Foundation.
  *
  *  This program is distributed in the hope that it will be useful,
  *  but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -33,7 +32,6 @@
 
 #include <linux/list.h>
 #include <linux/jhash.h>
-#include <linux/string.h>
 
 #include "debug.h"
 #include "error.h"
@@ -55,7 +53,8 @@ int v9fs_error_init(void)
 
 	/* load initial error map into hash table */
 	for (c = errmap; c->name != NULL; c++) {
-		bucket = jhash(c->name, strlen(c->name), 0) % ERRHASHSZ;
+		c->namelen = strlen(c->name);
+		bucket = jhash(c->name, c->namelen, 0) % ERRHASHSZ;
 		INIT_HLIST_NODE(&c->list);
 		hlist_add_head(&c->list, &hash_errmap[bucket]);
 	}
@@ -69,15 +68,15 @@ int v9fs_error_init(void)
  *
  */
 
-int v9fs_errstr2errno(char *errstr)
+int v9fs_errstr2errno(char *errstr, int len)
 {
 	int errno = 0;
 	struct hlist_node *p = NULL;
 	struct errormap *c = NULL;
-	int bucket = jhash(errstr, strlen(errstr), 0) % ERRHASHSZ;
+	int bucket = jhash(errstr, len, 0) % ERRHASHSZ;
 
 	hlist_for_each_entry(c, p, &hash_errmap[bucket], list) {
-		if (!strcmp(c->name, errstr)) {
+		if (c->namelen==len && !memcmp(c->name, errstr, len)) {
 			errno = c->val;
 			break;
 		}

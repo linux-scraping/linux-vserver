@@ -36,6 +36,7 @@
 #include <linux/ipv6.h>
 #include <linux/icmpv6.h>
 #include <linux/init.h>
+#include <linux/skbuff.h>
 #include <asm/uaccess.h>
 
 #include <net/sock.h>
@@ -300,20 +301,7 @@ out:
 	return err;
 
 csum_copy_err:
-	/* Clear queue. */
-	if (flags&MSG_PEEK) {
-		int clear = 0;
-		spin_lock_bh(&sk->sk_receive_queue.lock);
-		if (skb == skb_peek(&sk->sk_receive_queue)) {
-			__skb_unlink(skb, &sk->sk_receive_queue);
-			clear = 1;
-		}
-		spin_unlock_bh(&sk->sk_receive_queue.lock);
-		if (clear)
-			kfree_skb(skb);
-	}
-
-	skb_free_datagram(sk, skb);
+	skb_kill_datagram(sk, skb, flags);
 
 	if (flags & MSG_DONTWAIT) {
 		UDP6_INC_STATS_USER(UDP_MIB_INERRORS);
@@ -447,7 +435,7 @@ out:
 	read_unlock(&udp_hash_lock);
 }
 
-static int udpv6_rcv(struct sk_buff **pskb, unsigned int *nhoffp)
+static int udpv6_rcv(struct sk_buff **pskb)
 {
 	struct sk_buff *skb = *pskb;
 	struct sock *sk;
@@ -892,15 +880,12 @@ static int udpv6_destroy_sock(struct sock *sk)
 /*
  *	Socket option code for UDP
  */
-static int udpv6_setsockopt(struct sock *sk, int level, int optname, 
+static int do_udpv6_setsockopt(struct sock *sk, int level, int optname,
 			  char __user *optval, int optlen)
 {
 	struct udp_sock *up = udp_sk(sk);
 	int val;
 	int err = 0;
-
-	if (level != SOL_UDP)
-		return ipv6_setsockopt(sk, level, optname, optval, optlen);
 
 	if(optlen<sizeof(int))
 		return -EINVAL;
@@ -939,14 +924,30 @@ static int udpv6_setsockopt(struct sock *sk, int level, int optname,
 	return err;
 }
 
-static int udpv6_getsockopt(struct sock *sk, int level, int optname, 
+static int udpv6_setsockopt(struct sock *sk, int level, int optname,
+			  char __user *optval, int optlen)
+{
+	if (level != SOL_UDP)
+		return ipv6_setsockopt(sk, level, optname, optval, optlen);
+	return do_udpv6_setsockopt(sk, level, optname, optval, optlen);
+}
+
+#ifdef CONFIG_COMPAT
+static int compat_udpv6_setsockopt(struct sock *sk, int level, int optname,
+				   char __user *optval, int optlen)
+{
+	if (level != SOL_UDP)
+		return compat_ipv6_setsockopt(sk, level, optname,
+					      optval, optlen);
+	return do_udpv6_setsockopt(sk, level, optname, optval, optlen);
+}
+#endif
+
+static int do_udpv6_getsockopt(struct sock *sk, int level, int optname,
 			  char __user *optval, int __user *optlen)
 {
 	struct udp_sock *up = udp_sk(sk);
 	int val, len;
-
-	if (level != SOL_UDP)
-		return ipv6_getsockopt(sk, level, optname, optval, optlen);
 
 	if(get_user(len,optlen))
 		return -EFAULT;
@@ -975,6 +976,25 @@ static int udpv6_getsockopt(struct sock *sk, int level, int optname,
 		return -EFAULT;
   	return 0;
 }
+
+static int udpv6_getsockopt(struct sock *sk, int level, int optname,
+			  char __user *optval, int __user *optlen)
+{
+	if (level != SOL_UDP)
+		return ipv6_getsockopt(sk, level, optname, optval, optlen);
+	return do_udpv6_getsockopt(sk, level, optname, optval, optlen);
+}
+
+#ifdef CONFIG_COMPAT
+static int compat_udpv6_getsockopt(struct sock *sk, int level, int optname,
+				   char __user *optval, int __user *optlen)
+{
+	if (level != SOL_UDP)
+		return compat_ipv6_getsockopt(sk, level, optname,
+					      optval, optlen);
+	return do_udpv6_getsockopt(sk, level, optname, optval, optlen);
+}
+#endif
 
 static struct inet6_protocol udpv6_protocol = {
 	.handler	=	udpv6_rcv,
@@ -1049,22 +1069,26 @@ void udp6_proc_exit(void) {
 /* ------------------------------------------------------------------------ */
 
 struct proto udpv6_prot = {
-	.name =		"UDPv6",
-	.owner =	THIS_MODULE,
-	.close =	udpv6_close,
-	.connect =	ip6_datagram_connect,
-	.disconnect =	udp_disconnect,
-	.ioctl =	udp_ioctl,
-	.destroy =	udpv6_destroy_sock,
-	.setsockopt =	udpv6_setsockopt,
-	.getsockopt =	udpv6_getsockopt,
-	.sendmsg =	udpv6_sendmsg,
-	.recvmsg =	udpv6_recvmsg,
-	.backlog_rcv =	udpv6_queue_rcv_skb,
-	.hash =		udp_v6_hash,
-	.unhash =	udp_v6_unhash,
-	.get_port =	udp_v6_get_port,
-	.obj_size =	sizeof(struct udp6_sock),
+	.name		   = "UDPv6",
+	.owner		   = THIS_MODULE,
+	.close		   = udpv6_close,
+	.connect	   = ip6_datagram_connect,
+	.disconnect	   = udp_disconnect,
+	.ioctl		   = udp_ioctl,
+	.destroy	   = udpv6_destroy_sock,
+	.setsockopt	   = udpv6_setsockopt,
+	.getsockopt	   = udpv6_getsockopt,
+	.sendmsg	   = udpv6_sendmsg,
+	.recvmsg	   = udpv6_recvmsg,
+	.backlog_rcv	   = udpv6_queue_rcv_skb,
+	.hash		   = udp_v6_hash,
+	.unhash		   = udp_v6_unhash,
+	.get_port	   = udp_v6_get_port,
+	.obj_size	   = sizeof(struct udp6_sock),
+#ifdef CONFIG_COMPAT
+	.compat_setsockopt = compat_udpv6_setsockopt,
+	.compat_getsockopt = compat_udpv6_getsockopt,
+#endif
 };
 
 static struct inet_protosw udpv6_protosw = {

@@ -150,7 +150,7 @@ static void __init hplance_init(struct net_device *dev, struct dio_dev *d)
         lp->lance.name = (char*)d->name;                /* discards const, shut up gcc */
         lp->lance.base = va;
         lp->lance.init_block = (struct lance_init_block *)(va + HPLANCE_MEMOFF); /* CPU addr */
-        lp->lance.lance_init_block = 0;                 /* LANCE addr of same RAM */
+        lp->lance.lance_init_block = NULL;              /* LANCE addr of same RAM */
         lp->lance.busmaster_regval = LE_C3_BSWP;        /* we're bigendian */
         lp->lance.irq = d->ipl;
         lp->lance.writerap = hplance_writerap;
@@ -217,7 +217,7 @@ static int hplance_close(struct net_device *dev)
 
 int __init hplance_init_module(void)
 {
-	return dio_module_init(&hplance_driver);
+	return dio_register_driver(&hplance_driver);
 }
 
 void __exit hplance_cleanup_module(void)

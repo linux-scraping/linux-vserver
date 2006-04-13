@@ -25,12 +25,12 @@
 #include <linux/skbuff.h>
 #include <linux/ip.h>
 #include <linux/icmp.h>
+#include <linux/inetdevice.h>
 #include <linux/netdevice.h>
 #include <net/sock.h>
 #include <net/ip.h>
 #include <net/icmp.h>
-#include <net/tcp.h>
-#include <linux/tcp.h>
+#include <net/tcp_states.h>
 #include <linux/udp.h>
 #include <linux/igmp.h>
 #include <linux/netfilter.h>
@@ -50,6 +50,7 @@
 #define IP_CMSG_TOS		4
 #define IP_CMSG_RECVOPTS	8
 #define IP_CMSG_RETOPTS		16
+#define IP_CMSG_PASSSEC		32
 
 /*
  *	SOL_IP control messages.
@@ -109,6 +110,19 @@ static void ip_cmsg_recv_retopts(struct msghdr *msg, struct sk_buff *skb)
 	put_cmsg(msg, SOL_IP, IP_RETOPTS, opt->optlen, opt->__data);
 }
 
+static void ip_cmsg_recv_security(struct msghdr *msg, struct sk_buff *skb)
+{
+	char *secdata;
+	u32 seclen;
+	int err;
+
+	err = security_socket_getpeersec_dgram(skb, &secdata, &seclen);
+	if (err)
+		return;
+
+	put_cmsg(msg, SOL_IP, SCM_SECURITY, seclen, secdata);
+}
+
 
 void ip_cmsg_recv(struct msghdr *msg, struct sk_buff *skb)
 {
@@ -138,6 +152,11 @@ void ip_cmsg_recv(struct msghdr *msg, struct sk_buff *skb)
 
 	if (flags & 1)
 		ip_cmsg_recv_retopts(msg, skb);
+	if ((flags>>=1) == 0)
+		return;
+
+	if (flags & 1)
+		ip_cmsg_recv_security(msg, skb);
 }
 
 int ip_cmsg_send(struct msghdr *msg, struct ipcm_cookie *ipc)
@@ -380,20 +399,19 @@ out:
  *	an IP socket.
  */
 
-int ip_setsockopt(struct sock *sk, int level, int optname, char __user *optval, int optlen)
+static int do_ip_setsockopt(struct sock *sk, int level,
+		int optname, char __user *optval, int optlen)
 {
 	struct inet_sock *inet = inet_sk(sk);
 	int val=0,err;
-
-	if (level != SOL_IP)
-		return -ENOPROTOOPT;
 
 	if (((1<<optname) & ((1<<IP_PKTINFO) | (1<<IP_RECVTTL) | 
 			    (1<<IP_RECVOPTS) | (1<<IP_RECVTOS) | 
 			    (1<<IP_RETOPTS) | (1<<IP_TOS) | 
 			    (1<<IP_TTL) | (1<<IP_HDRINCL) | 
 			    (1<<IP_MTU_DISCOVER) | (1<<IP_RECVERR) | 
-			    (1<<IP_ROUTER_ALERT) | (1<<IP_FREEBIND))) || 
+			    (1<<IP_ROUTER_ALERT) | (1<<IP_FREEBIND) |
+			    (1<<IP_PASSSEC))) ||
 				optname == IP_MULTICAST_TTL || 
 				optname == IP_MULTICAST_LOOP) { 
 		if (optlen >= sizeof(int)) {
@@ -427,8 +445,8 @@ int ip_setsockopt(struct sock *sk, int level, int optname, char __user *optval, 
 			err = ip_options_get_from_user(&opt, optval, optlen);
 			if (err)
 				break;
-			if (sk->sk_type == SOCK_STREAM) {
-				struct tcp_sock *tp = tcp_sk(sk);
+			if (inet->is_icsk) {
+				struct inet_connection_sock *icsk = inet_csk(sk);
 #if defined(CONFIG_IPV6) || defined(CONFIG_IPV6_MODULE)
 				if (sk->sk_family == PF_INET ||
 				    (!((1 << sk->sk_state) &
@@ -436,10 +454,10 @@ int ip_setsockopt(struct sock *sk, int level, int optname, char __user *optval, 
 				     inet->daddr != LOOPBACK4_IPV6)) {
 #endif
 					if (inet->opt)
-						tp->ext_header_len -= inet->opt->optlen;
+						icsk->icsk_ext_hdr_len -= inet->opt->optlen;
 					if (opt)
-						tp->ext_header_len += opt->optlen;
-					tcp_sync_mss(sk, tp->pmtu_cookie);
+						icsk->icsk_ext_hdr_len += opt->optlen;
+					icsk->icsk_sync_mss(sk, icsk->icsk_pmtu_cookie);
 #if defined(CONFIG_IPV6) || defined(CONFIG_IPV6_MODULE)
 				}
 #endif
@@ -477,6 +495,12 @@ int ip_setsockopt(struct sock *sk, int level, int optname, char __user *optval, 
 				inet->cmsg_flags |= IP_CMSG_RETOPTS;
 			else
 				inet->cmsg_flags &= ~IP_CMSG_RETOPTS;
+			break;
+		case IP_PASSSEC:
+			if (val)
+				inet->cmsg_flags |= IP_CMSG_PASSSEC;
+			else
+				inet->cmsg_flags &= ~IP_CMSG_PASSSEC;
 			break;
 		case IP_TOS:	/* This sets both TOS and Precedence */
 			if (sk->sk_type == SOCK_STREAM) {
@@ -621,7 +645,7 @@ int ip_setsockopt(struct sock *sk, int level, int optname, char __user *optval, 
 				err = -ENOBUFS;
 				break;
 			}
-			msf = (struct ip_msfilter *)kmalloc(optlen, GFP_KERNEL);
+			msf = kmalloc(optlen, GFP_KERNEL);
 			if (msf == 0) {
 				err = -ENOBUFS;
 				break;
@@ -778,7 +802,7 @@ int ip_setsockopt(struct sock *sk, int level, int optname, char __user *optval, 
 				err = -ENOBUFS;
 				break;
 			}
-			gsf = (struct group_filter *)kmalloc(optlen,GFP_KERNEL);
+			gsf = kmalloc(optlen,GFP_KERNEL);
 			if (gsf == 0) {
 				err = -ENOBUFS;
 				break;
@@ -798,7 +822,7 @@ int ip_setsockopt(struct sock *sk, int level, int optname, char __user *optval, 
 				goto mc_msf_out;
 			}
 			msize = IP_MSFILTER_SIZE(gsf->gf_numsrc);
-			msf = (struct ip_msfilter *)kmalloc(msize,GFP_KERNEL);
+			msf = kmalloc(msize,GFP_KERNEL);
 			if (msf == 0) {
 				err = -ENOBUFS;
 				goto mc_msf_out;
@@ -849,12 +873,7 @@ mc_msf_out:
 			break;
 
 		default:
-#ifdef CONFIG_NETFILTER
-			err = nf_setsockopt(sk, PF_INET, optname, optval, 
-					    optlen);
-#else
 			err = -ENOPROTOOPT;
-#endif
 			break;
 	}
 	release_sock(sk);
@@ -865,12 +884,68 @@ e_inval:
 	return -EINVAL;
 }
 
+int ip_setsockopt(struct sock *sk, int level,
+		int optname, char __user *optval, int optlen)
+{
+	int err;
+
+	if (level != SOL_IP)
+		return -ENOPROTOOPT;
+
+	err = do_ip_setsockopt(sk, level, optname, optval, optlen);
+#ifdef CONFIG_NETFILTER
+	/* we need to exclude all possible ENOPROTOOPTs except default case */
+	if (err == -ENOPROTOOPT && optname != IP_HDRINCL &&
+		optname != IP_IPSEC_POLICY && optname != IP_XFRM_POLICY
+#ifdef CONFIG_IP_MROUTE
+		&& (optname < MRT_BASE || optname > (MRT_BASE + 10))
+#endif
+	   ) {
+		lock_sock(sk);
+		err = nf_setsockopt(sk, PF_INET, optname, optval, optlen);
+		release_sock(sk);
+	}
+#endif
+	return err;
+}
+
+#ifdef CONFIG_COMPAT
+int compat_ip_setsockopt(struct sock *sk, int level, int optname,
+			 char __user *optval, int optlen)
+{
+	int err;
+
+	if (level != SOL_IP)
+		return -ENOPROTOOPT;
+
+	err = do_ip_setsockopt(sk, level, optname, optval, optlen);
+#ifdef CONFIG_NETFILTER
+	/* we need to exclude all possible ENOPROTOOPTs except default case */
+	if (err == -ENOPROTOOPT && optname != IP_HDRINCL &&
+	    optname != IP_IPSEC_POLICY && optname != IP_XFRM_POLICY
+#ifdef CONFIG_IP_MROUTE
+	    && (optname < MRT_BASE || optname > (MRT_BASE + 10))
+#endif
+	   ) {
+		lock_sock(sk);
+		err = compat_nf_setsockopt(sk, PF_INET, optname,
+					   optval, optlen);
+		release_sock(sk);
+	}
+#endif
+	return err;
+}
+
+EXPORT_SYMBOL(compat_ip_setsockopt);
+#endif
+
 /*
  *	Get the options. Note for future reference. The GET of IP options gets the
  *	_received_ ones. The set sets the _sent_ ones.
  */
 
-int ip_getsockopt(struct sock *sk, int level, int optname, char __user *optval, int __user *optlen)
+static int do_ip_getsockopt(struct sock *sk, int level, int optname,
+		char __user *optval, int __user *optlen)
 {
 	struct inet_sock *inet = inet_sk(sk);
 	int val;
@@ -931,6 +1006,9 @@ int ip_getsockopt(struct sock *sk, int level, int optname, char __user *optval, 
 			break;
 		case IP_RETOPTS:
 			val = (inet->cmsg_flags & IP_CMSG_RETOPTS) != 0;
+			break;
+		case IP_PASSSEC:
+			val = (inet->cmsg_flags & IP_CMSG_PASSSEC) != 0;
 			break;
 		case IP_TOS:
 			val = inet->tos;
@@ -1051,17 +1129,8 @@ int ip_getsockopt(struct sock *sk, int level, int optname, char __user *optval, 
 			val = inet->freebind; 
 			break; 
 		default:
-#ifdef CONFIG_NETFILTER
-			val = nf_getsockopt(sk, PF_INET, optname, optval, 
-					    &len);
-			release_sock(sk);
-			if (val >= 0)
-				val = put_user(len, optlen);
-			return val;
-#else
 			release_sock(sk);
 			return -ENOPROTOOPT;
-#endif
 	}
 	release_sock(sk);
 	
@@ -1081,6 +1150,67 @@ int ip_getsockopt(struct sock *sk, int level, int optname, char __user *optval, 
 	}
 	return 0;
 }
+
+int ip_getsockopt(struct sock *sk, int level,
+		int optname, char __user *optval, int __user *optlen)
+{
+	int err;
+
+	err = do_ip_getsockopt(sk, level, optname, optval, optlen);
+#ifdef CONFIG_NETFILTER
+	/* we need to exclude all possible ENOPROTOOPTs except default case */
+	if (err == -ENOPROTOOPT && optname != IP_PKTOPTIONS
+#ifdef CONFIG_IP_MROUTE
+		&& (optname < MRT_BASE || optname > MRT_BASE+10)
+#endif
+	   ) {
+	   	int len;
+
+		if(get_user(len,optlen))
+			return -EFAULT;
+
+		lock_sock(sk);
+		err = nf_getsockopt(sk, PF_INET, optname, optval,
+				&len);
+		release_sock(sk);
+		if (err >= 0)
+			err = put_user(len, optlen);
+		return err;
+	}
+#endif
+	return err;
+}
+
+#ifdef CONFIG_COMPAT
+int compat_ip_getsockopt(struct sock *sk, int level, int optname,
+			 char __user *optval, int __user *optlen)
+{
+	int err = do_ip_getsockopt(sk, level, optname, optval, optlen);
+#ifdef CONFIG_NETFILTER
+	/* we need to exclude all possible ENOPROTOOPTs except default case */
+	if (err == -ENOPROTOOPT && optname != IP_PKTOPTIONS
+#ifdef CONFIG_IP_MROUTE
+	    && (optname < MRT_BASE || optname > MRT_BASE+10)
+#endif
+	   ) {
+	   	int len;
+
+		if (get_user(len, optlen))
+			return -EFAULT;
+
+		lock_sock(sk);
+		err = compat_nf_getsockopt(sk, PF_INET, optname, optval, &len);
+		release_sock(sk);
+		if (err >= 0)
+			err = put_user(len, optlen);
+		return err;
+	}
+#endif
+	return err;
+}
+
+EXPORT_SYMBOL(compat_ip_getsockopt);
+#endif
 
 EXPORT_SYMBOL(ip_cmsg_recv);
 

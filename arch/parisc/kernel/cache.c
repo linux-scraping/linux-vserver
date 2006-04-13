@@ -29,9 +29,9 @@
 #include <asm/processor.h>
 #include <asm/sections.h>
 
-int split_tlb;
-int dcache_stride;
-int icache_stride;
+int split_tlb __read_mostly;
+int dcache_stride __read_mostly;
+int icache_stride __read_mostly;
 EXPORT_SYMBOL(dcache_stride);
 
 
@@ -45,29 +45,29 @@ DEFINE_SPINLOCK(pa_tlb_lock);
 EXPORT_SYMBOL(pa_tlb_lock);
 #endif
 
-struct pdc_cache_info cache_info;
+struct pdc_cache_info cache_info __read_mostly;
 #ifndef CONFIG_PA20
-static struct pdc_btlb_info btlb_info;
+static struct pdc_btlb_info btlb_info __read_mostly;
 #endif
 
 #ifdef CONFIG_SMP
 void
 flush_data_cache(void)
 {
-	on_each_cpu((void (*)(void *))flush_data_cache_local, NULL, 1, 1);
+	on_each_cpu(flush_data_cache_local, NULL, 1, 1);
 }
 void 
 flush_instruction_cache(void)
 {
-	on_each_cpu((void (*)(void *))flush_instruction_cache_local, NULL, 1, 1);
+	on_each_cpu(flush_instruction_cache_local, NULL, 1, 1);
 }
 #endif
 
 void
 flush_cache_all_local(void)
 {
-	flush_instruction_cache_local();
-	flush_data_cache_local();
+	flush_instruction_cache_local(NULL);
+	flush_data_cache_local(NULL);
 }
 EXPORT_SYMBOL(flush_cache_all_local);
 
@@ -89,7 +89,7 @@ update_mmu_cache(struct vm_area_struct *vma, unsigned long address, pte_t pte)
 	if (pfn_valid(page_to_pfn(page)) && page_mapping(page) &&
 	    test_bit(PG_dcache_dirty, &page->flags)) {
 
-		flush_kernel_dcache_page(page_address(page));
+		flush_kernel_dcache_page(page);
 		clear_bit(PG_dcache_dirty, &page->flags);
 	}
 }
@@ -278,7 +278,7 @@ void flush_dcache_page(struct page *page)
 		return;
 	}
 
-	flush_kernel_dcache_page(page_address(page));
+	flush_kernel_dcache_page(page);
 
 	if (!mapping)
 		return;
@@ -317,7 +317,7 @@ EXPORT_SYMBOL(flush_dcache_page);
 
 /* Defined in arch/parisc/kernel/pacache.S */
 EXPORT_SYMBOL(flush_kernel_dcache_range_asm);
-EXPORT_SYMBOL(flush_kernel_dcache_page);
+EXPORT_SYMBOL(flush_kernel_dcache_page_asm);
 EXPORT_SYMBOL(flush_data_cache_local);
 EXPORT_SYMBOL(flush_kernel_icache_range_asm);
 
@@ -332,7 +332,7 @@ void clear_user_page_asm(void *page, unsigned long vaddr)
 }
 
 #define FLUSH_THRESHOLD 0x80000 /* 0.5MB */
-int parisc_cache_flush_threshold = FLUSH_THRESHOLD;
+int parisc_cache_flush_threshold __read_mostly = FLUSH_THRESHOLD;
 
 void parisc_setup_cache_timing(void)
 {

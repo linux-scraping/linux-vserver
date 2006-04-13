@@ -44,7 +44,7 @@ void diag10(unsigned long addr)
 {
         if (addr >= 0x7ff00000)
                 return;
-#ifdef __s390x__
+#ifdef CONFIG_64BIT
         asm volatile (
 		"   sam31\n"
 		"   diag %0,%0,0x10\n"
@@ -106,7 +106,7 @@ extern unsigned long __initdata zholes_size[];
  * paging_init() sets up the page tables
  */
 
-#ifndef CONFIG_ARCH_S390X
+#ifndef CONFIG_64BIT
 void __init paging_init(void)
 {
         pgd_t * pg_dir;
@@ -175,7 +175,7 @@ void __init paging_init(void)
         return;
 }
 
-#else /* CONFIG_ARCH_S390X */
+#else /* CONFIG_64BIT */
 void __init paging_init(void)
 {
         pgd_t * pg_dir;
@@ -256,7 +256,7 @@ void __init paging_init(void)
 
         return;
 }
-#endif /* CONFIG_ARCH_S390X */
+#endif /* CONFIG_64BIT */
 
 void __init mem_init(void)
 {
@@ -292,7 +292,7 @@ void free_initmem(void)
         addr = (unsigned long)(&__init_begin);
         for (; addr < (unsigned long)(&__init_end); addr += PAGE_SIZE) {
 		ClearPageReserved(virt_to_page(addr));
-		set_page_count(virt_to_page(addr), 1);
+		init_page_count(virt_to_page(addr));
 		free_page(addr);
 		totalram_pages++;
         }
@@ -307,7 +307,7 @@ void free_initrd_mem(unsigned long start, unsigned long end)
                 printk ("Freeing initrd memory: %ldk freed\n", (end - start) >> 10);
         for (; start < end; start += PAGE_SIZE) {
                 ClearPageReserved(virt_to_page(start));
-                set_page_count(virt_to_page(start), 1);
+                init_page_count(virt_to_page(start));
                 free_page(start);
                 totalram_pages++;
         }

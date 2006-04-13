@@ -2,21 +2,6 @@
 # Linux VServer configuration
 #
 
-config	VSERVER
-	bool
-	default y
-
-config	VSERVER_SECURITY
-	bool
-	depends on SECURITY
-	default y
-	select SECURITY_CAPABILITIES
-
-config	VSERVER_LEGACYNET
-	bool
-	depends on !VSERVER_NGNET
-	default y
-
 menu "Linux VServer"
 
 config	VSERVER_LEGACY
@@ -176,4 +161,20 @@ config	VSERVER_HISTORY_SIZE
 	  the per-CPU history buffer.
 
 endmenu
+
+
+config	VSERVER
+	bool
+	default y
+
+config	VSERVER_SECURITY
+	bool
+	depends on SECURITY
+	default y
+	select SECURITY_CAPABILITIES
+
+config	VSERVER_LEGACYNET
+	bool
+	depends on !VSERVER_NGNET
+	default y
 

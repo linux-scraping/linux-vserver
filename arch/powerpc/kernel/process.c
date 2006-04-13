@@ -1,6 +1,4 @@
 /*
- *  arch/ppc/kernel/process.c
- *
  *  Derived from "arch/i386/kernel/process.c"
  *    Copyright (C) 1995  Linus Torvalds
  *
@@ -37,7 +35,6 @@
 #include <linux/mqueue.h>
 #include <linux/hardirq.h>
 #include <linux/utsname.h>
-#include <linux/kprobes.h>
 
 #include <asm/pgtable.h>
 #include <asm/uaccess.h>
@@ -47,9 +44,10 @@
 #include <asm/mmu.h>
 #include <asm/prom.h>
 #include <asm/machdep.h>
+#include <asm/time.h>
+#include <asm/syscalls.h>
 #ifdef CONFIG_PPC64
 #include <asm/firmware.h>
-#include <asm/time.h>
 #endif
 
 extern unsigned long _get_SP(void);
@@ -201,13 +199,13 @@ int dump_spe(struct pt_regs *regs, elf_vrregset_t *evrregs)
 }
 #endif /* CONFIG_SPE */
 
+#ifndef CONFIG_SMP
 /*
  * If we are doing lazy switching of CPU state (FP, altivec or SPE),
  * and the current task has some state, discard it.
  */
-static inline void discard_lazy_cpu_state(void)
+void discard_lazy_cpu_state(void)
 {
-#ifndef CONFIG_SMP
 	preempt_disable();
 	if (last_task_used_math == current)
 		last_task_used_math = NULL;
@@ -220,9 +218,10 @@ static inline void discard_lazy_cpu_state(void)
 		last_task_used_spe = NULL;
 #endif
 	preempt_enable();
-#endif /* CONFIG_SMP */
 }
+#endif /* CONFIG_SMP */
 
+#ifdef CONFIG_PPC_MERGE		/* XXX for now */
 int set_dabr(unsigned long dabr)
 {
 	if (ppc_md.set_dabr)
@@ -231,6 +230,7 @@ int set_dabr(unsigned long dabr)
 	mtspr(SPRN_DABR, dabr);
 	return 0;
 }
+#endif
 
 #ifdef CONFIG_PPC64
 DEFINE_PER_CPU(struct cpu_usage, cpu_usage_array);
@@ -328,6 +328,11 @@ struct task_struct *__switch_to(struct task_struct *prev,
 #endif
 
 	local_irq_save(flags);
+
+	account_system_vtime(current);
+	account_process_vtime(current);
+	calculate_steal_time();
+
 	last = _switch(old_thread, new_thread);
 
 	local_irq_restore(flags);
@@ -358,7 +363,11 @@ static void show_instructions(struct pt_regs *regs)
 		if (!(i % 8))
 			printk("\n");
 
-		if (BAD_PC(pc) || __get_user(instr, (unsigned int *)pc)) {
+		/* We use __get_user here *only* to avoid an OOPS on a
+		 * bad address because the pc *should* only be a
+		 * kernel address.
+		 */
+		if (BAD_PC(pc) || __get_user(instr, (unsigned int __user *)pc)) {
 			printk("XXXXXXXX ");
 		} else {
 			if (regs->nip == pc)
@@ -423,8 +432,9 @@ void show_regs(struct pt_regs * regs)
 	trap = TRAP(regs);
 	if (trap == 0x300 || trap == 0x600)
 		printk("DAR: "REG", DSISR: "REG"\n", regs->dar, regs->dsisr);
-	printk("TASK = %p[%d] '%s' THREAD: %p",
-	       current, current->pid, current->comm, current->thread_info);
+	printk("TASK = %p[%d,#%u] '%s' THREAD: %p",
+	       current, current->pid, current->xid,
+	       current->comm, task_thread_info(current));
 
 #ifdef CONFIG_SMP
 	printk(" CPU: %d", smp_processor_id());
@@ -455,7 +465,6 @@ void show_regs(struct pt_regs * regs)
 
 void exit_thread(void)
 {
-	kprobe_flush_task(current);
 	discard_lazy_cpu_state();
 }
 
@@ -503,7 +512,7 @@ int copy_thread(int nr, unsigned long clone_flags, unsigned long usp,
 {
 	struct pt_regs *childregs, *kregs;
 	extern void ret_from_fork(void);
-	unsigned long sp = (unsigned long)p->thread_info + THREAD_SIZE;
+	unsigned long sp = (unsigned long)task_stack_page(p) + THREAD_SIZE;
 
 	CHECK_FULL_REGS(regs);
 	/* Copy registers */
@@ -516,7 +525,7 @@ int copy_thread(int nr, unsigned long clone_flags, unsigned long usp,
 #ifdef CONFIG_PPC32
 		childregs->gpr[2] = (unsigned long) p;
 #else
-		clear_ti_thread_flag(p->thread_info, TIF_32BIT);
+		clear_tsk_thread_flag(p, TIF_32BIT);
 #endif
 		p->thread.regs = NULL;	/* no user register state */
 	} else {
@@ -588,10 +597,8 @@ void start_thread(struct pt_regs *regs, unsigned long start, unsigned long sp)
 	 * set.  Do it now.
 	 */
 	if (!current->thread.regs) {
-		unsigned long childregs = (unsigned long)current->thread_info +
-						THREAD_SIZE;
-		childregs -= sizeof(struct pt_regs);
-		current->thread.regs = (struct pt_regs *)childregs;
+		struct pt_regs *regs = task_stack_page(current) + THREAD_SIZE;
+		current->thread.regs = regs - 1;
 	}
 
 	memset(regs->gpr, 0, sizeof(regs->gpr));
@@ -764,10 +771,10 @@ out:
 	return error;
 }
 
-static int validate_sp(unsigned long sp, struct task_struct *p,
+int validate_sp(unsigned long sp, struct task_struct *p,
 		       unsigned long nbytes)
 {
-	unsigned long stack_page = (unsigned long)p->thread_info;
+	unsigned long stack_page = (unsigned long)task_stack_page(p);
 
 	if (sp >= stack_page + sizeof(struct thread_struct)
 	    && sp <= stack_page + THREAD_SIZE - nbytes)
@@ -802,6 +809,8 @@ static int validate_sp(unsigned long sp, struct task_struct *p,
 #define FRAME_MARKER	2
 #endif
 
+EXPORT_SYMBOL(validate_sp);
+
 unsigned long get_wchan(struct task_struct *p)
 {
 	unsigned long ip, sp;
@@ -826,7 +835,6 @@ unsigned long get_wchan(struct task_struct *p)
 	} while (count++ < 16);
 	return 0;
 }
-EXPORT_SYMBOL(get_wchan);
 
 static int kstack_depth_to_print = 64;
 
@@ -888,3 +896,35 @@ void dump_stack(void)
 	show_stack(current, NULL);
 }
 EXPORT_SYMBOL(dump_stack);
+
+#ifdef CONFIG_PPC64
+void ppc64_runlatch_on(void)
+{
+	unsigned long ctrl;
+
+	if (cpu_has_feature(CPU_FTR_CTRL) && !test_thread_flag(TIF_RUNLATCH)) {
+		HMT_medium();
+
+		ctrl = mfspr(SPRN_CTRLF);
+		ctrl |= CTRL_RUNLATCH;
+		mtspr(SPRN_CTRLT, ctrl);
+
+		set_thread_flag(TIF_RUNLATCH);
+	}
+}
+
+void ppc64_runlatch_off(void)
+{
+	unsigned long ctrl;
+
+	if (cpu_has_feature(CPU_FTR_CTRL) && test_thread_flag(TIF_RUNLATCH)) {
+		HMT_medium();
+
+		clear_thread_flag(TIF_RUNLATCH);
+
+		ctrl = mfspr(SPRN_CTRLF);
+		ctrl &= ~CTRL_RUNLATCH;
+		mtspr(SPRN_CTRLT, ctrl);
+	}
+}
+#endif

@@ -15,18 +15,13 @@
 int init_new_context(struct task_struct *tsk, struct mm_struct *mm);
 void destroy_context(struct mm_struct *mm);
 
-#ifdef CONFIG_SMP
-
 static inline void enter_lazy_tlb(struct mm_struct *mm, struct task_struct *tsk)
 {
+#ifdef CONFIG_SMP
 	if (read_pda(mmu_state) == TLBSTATE_OK) 
 		write_pda(mmu_state, TLBSTATE_LAZY);
-}
-#else
-static inline void enter_lazy_tlb(struct mm_struct *mm, struct task_struct *tsk)
-{
-}
 #endif
+}
 
 static inline void load_cr3(pgd_t *pgd)
 {
@@ -39,12 +34,12 @@ static inline void switch_mm(struct mm_struct *prev, struct mm_struct *next,
 	unsigned cpu = smp_processor_id();
 	if (likely(prev != next)) {
 		/* stop flush ipis for the previous mm */
-		clear_bit(cpu, &prev->cpu_vm_mask);
+		cpu_clear(cpu, prev->cpu_vm_mask);
 #ifdef CONFIG_SMP
 		write_pda(mmu_state, TLBSTATE_OK);
 		write_pda(active_mm, next);
 #endif
-		set_bit(cpu, &next->cpu_vm_mask);
+		cpu_set(cpu, next->cpu_vm_mask);
 		load_cr3(next->pgd);
 
 		if (unlikely(next->context.ldt != prev->context.ldt)) 
@@ -55,7 +50,7 @@ static inline void switch_mm(struct mm_struct *prev, struct mm_struct *next,
 		write_pda(mmu_state, TLBSTATE_OK);
 		if (read_pda(active_mm) != next)
 			out_of_line_bug();
-		if(!test_and_set_bit(cpu, &next->cpu_vm_mask)) {
+		if (!cpu_test_and_set(cpu, next->cpu_vm_mask)) {
 			/* We were in lazy tlb mode and leave_mm disabled 
 			 * tlb flush IPI delivery. We must reload CR3
 			 * to make sure to use no freed page tables.

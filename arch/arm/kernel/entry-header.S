@@ -19,6 +19,7 @@
 @
 @ Most of the stack format comes from struct pt_regs, but with
 @ the addition of 8 bytes for storing syscall args 5 and 6.
+@ This _must_ remain a multiple of 8 for EABI.
 @
 #define S_OFF		8
 
@@ -35,24 +36,6 @@
 	mov	fp, #0
 #endif
 	.endm
-
-#if __LINUX_ARM_ARCH__ >= 6
-	.macro	disable_irq
-	cpsid	i
-	.endm
-
-	.macro	enable_irq
-	cpsie	i
-	.endm
-#else
-	.macro	disable_irq
-	msr	cpsr_c, #PSR_I_BIT | SVC_MODE
-	.endm
-
-	.macro	enable_irq
-	msr	cpsr_c, #SVC_MODE
-	.endm
-#endif
 
 	.macro	get_thread_info, rd
 	mov	\rd, sp, lsr #13

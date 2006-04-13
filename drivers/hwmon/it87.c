@@ -41,12 +41,12 @@
 #include <linux/hwmon-sysfs.h>
 #include <linux/hwmon-vid.h>
 #include <linux/err.h>
+#include <linux/mutex.h>
 #include <asm/io.h>
 
 
 /* Addresses to scan */
-static unsigned short normal_i2c[] = { 0x28, 0x29, 0x2a, 0x2b, 0x2c, 0x2d,
-					0x2e, 0x2f, I2C_CLIENT_END };
+static unsigned short normal_i2c[] = { 0x2d, I2C_CLIENT_END };
 static unsigned short isa_address;
 
 /* Insmod parameters */
@@ -195,10 +195,10 @@ static int DIV_TO_REG(int val)
 struct it87_data {
 	struct i2c_client client;
 	struct class_device *class_dev;
-	struct semaphore lock;
+	struct mutex lock;
 	enum chips type;
 
-	struct semaphore update_lock;
+	struct mutex update_lock;
 	char valid;		/* !=0 if following fields are valid */
 	unsigned long last_updated;	/* In jiffies */
 
@@ -213,7 +213,7 @@ struct it87_data {
 	u8 sensor;		/* Register value */
 	u8 fan_div[3];		/* Register encoding, shifted right */
 	u8 vid;			/* Register encoding, combined */
-	int vrm;
+	u8 vrm;
 	u32 alarms;		/* Register encoding, combined */
 	u8 fan_main_ctrl;	/* Register value */
 	u8 manual_pwm_ctl[3];   /* manual PWM value set by user */
@@ -225,26 +225,26 @@ static int it87_isa_attach_adapter(struct i2c_adapter *adapter);
 static int it87_detect(struct i2c_adapter *adapter, int address, int kind);
 static int it87_detach_client(struct i2c_client *client);
 
-static int it87_read_value(struct i2c_client *client, u8 register);
-static int it87_write_value(struct i2c_client *client, u8 register,
-			u8 value);
+static int it87_read_value(struct i2c_client *client, u8 reg);
+static int it87_write_value(struct i2c_client *client, u8 reg, u8 value);
 static struct it87_data *it87_update_device(struct device *dev);
 static int it87_check_pwm(struct i2c_client *client);
 static void it87_init_client(struct i2c_client *client, struct it87_data *data);
 
 
 static struct i2c_driver it87_driver = {
-	.owner		= THIS_MODULE,
-	.name		= "it87",
+	.driver = {
+		.name	= "it87",
+	},
 	.id		= I2C_DRIVERID_IT87,
-	.flags		= I2C_DF_NOTIFY,
 	.attach_adapter	= it87_attach_adapter,
 	.detach_client	= it87_detach_client,
 };
 
 static struct i2c_driver it87_isa_driver = {
-	.owner		= THIS_MODULE,
-	.name		= "it87-isa",
+	.driver = {
+		.name	= "it87-isa",
+	},
 	.attach_adapter	= it87_isa_attach_adapter,
 	.detach_client	= it87_detach_client,
 };
@@ -290,11 +290,11 @@ static ssize_t set_in_min(struct device *dev, struct device_attribute *attr,
 	struct it87_data *data = i2c_get_clientdata(client);
 	unsigned long val = simple_strtoul(buf, NULL, 10);
 
-	down(&data->update_lock);
+	mutex_lock(&data->update_lock);
 	data->in_min[nr] = IN_TO_REG(val);
 	it87_write_value(client, IT87_REG_VIN_MIN(nr), 
 			data->in_min[nr]);
-	up(&data->update_lock);
+	mutex_unlock(&data->update_lock);
 	return count;
 }
 static ssize_t set_in_max(struct device *dev, struct device_attribute *attr,
@@ -307,11 +307,11 @@ static ssize_t set_in_max(struct device *dev, struct device_attribute *attr,
 	struct it87_data *data = i2c_get_clientdata(client);
 	unsigned long val = simple_strtoul(buf, NULL, 10);
 
-	down(&data->update_lock);
+	mutex_lock(&data->update_lock);
 	data->in_max[nr] = IN_TO_REG(val);
 	it87_write_value(client, IT87_REG_VIN_MAX(nr), 
 			data->in_max[nr]);
-	up(&data->update_lock);
+	mutex_unlock(&data->update_lock);
 	return count;
 }
 
@@ -381,10 +381,10 @@ static ssize_t set_temp_max(struct device *dev, struct device_attribute *attr,
 	struct it87_data *data = i2c_get_clientdata(client);
 	int val = simple_strtol(buf, NULL, 10);
 
-	down(&data->update_lock);
+	mutex_lock(&data->update_lock);
 	data->temp_high[nr] = TEMP_TO_REG(val);
 	it87_write_value(client, IT87_REG_TEMP_HIGH(nr), data->temp_high[nr]);
-	up(&data->update_lock);
+	mutex_unlock(&data->update_lock);
 	return count;
 }
 static ssize_t set_temp_min(struct device *dev, struct device_attribute *attr,
@@ -397,10 +397,10 @@ static ssize_t set_temp_min(struct device *dev, struct device_attribute *attr,
 	struct it87_data *data = i2c_get_clientdata(client);
 	int val = simple_strtol(buf, NULL, 10);
 
-	down(&data->update_lock);
+	mutex_lock(&data->update_lock);
 	data->temp_low[nr] = TEMP_TO_REG(val);
 	it87_write_value(client, IT87_REG_TEMP_LOW(nr), data->temp_low[nr]);
-	up(&data->update_lock);
+	mutex_unlock(&data->update_lock);
 	return count;
 }
 #define show_temp_offset(offset)					\
@@ -440,7 +440,7 @@ static ssize_t set_sensor(struct device *dev, struct device_attribute *attr,
 	struct it87_data *data = i2c_get_clientdata(client);
 	int val = simple_strtol(buf, NULL, 10);
 
-	down(&data->update_lock);
+	mutex_lock(&data->update_lock);
 
 	data->sensor &= ~(1 << nr);
 	data->sensor &= ~(8 << nr);
@@ -450,11 +450,11 @@ static ssize_t set_sensor(struct device *dev, struct device_attribute *attr,
 	else if (val == 2)
 	    data->sensor |= 8 << nr;
 	else if (val != 0) {
-		up(&data->update_lock);
+		mutex_unlock(&data->update_lock);
 		return -EINVAL;
 	}
 	it87_write_value(client, IT87_REG_TEMP_ENABLE, data->sensor);
-	up(&data->update_lock);
+	mutex_unlock(&data->update_lock);
 	return count;
 }
 #define show_sensor_offset(offset)					\
@@ -524,7 +524,7 @@ static ssize_t set_fan_min(struct device *dev, struct device_attribute *attr,
 	int val = simple_strtol(buf, NULL, 10);
 	u8 reg = it87_read_value(client, IT87_REG_FAN_DIV);
 
-	down(&data->update_lock);
+	mutex_lock(&data->update_lock);
 	switch (nr) {
 	case 0: data->fan_div[nr] = reg & 0x07; break;
 	case 1: data->fan_div[nr] = (reg >> 3) & 0x07; break;
@@ -533,7 +533,7 @@ static ssize_t set_fan_min(struct device *dev, struct device_attribute *attr,
 
 	data->fan_min[nr] = FAN_TO_REG(val, DIV_FROM_REG(data->fan_div[nr]));
 	it87_write_value(client, IT87_REG_FAN_MIN(nr), data->fan_min[nr]);
-	up(&data->update_lock);
+	mutex_unlock(&data->update_lock);
 	return count;
 }
 static ssize_t set_fan_div(struct device *dev, struct device_attribute *attr,
@@ -548,7 +548,7 @@ static ssize_t set_fan_div(struct device *dev, struct device_attribute *attr,
 	int i, min[3];
 	u8 old;
 
-	down(&data->update_lock);
+	mutex_lock(&data->update_lock);
 	old = it87_read_value(client, IT87_REG_FAN_DIV);
 
 	for (i = 0; i < 3; i++)
@@ -576,7 +576,7 @@ static ssize_t set_fan_div(struct device *dev, struct device_attribute *attr,
 		data->fan_min[i]=FAN_TO_REG(min[i], DIV_FROM_REG(data->fan_div[i]));
 		it87_write_value(client, IT87_REG_FAN_MIN(i), data->fan_min[i]);
 	}
-	up(&data->update_lock);
+	mutex_unlock(&data->update_lock);
 	return count;
 }
 static ssize_t set_pwm_enable(struct device *dev,
@@ -589,7 +589,7 @@ static ssize_t set_pwm_enable(struct device *dev,
 	struct it87_data *data = i2c_get_clientdata(client);
 	int val = simple_strtol(buf, NULL, 10);
 
-	down(&data->update_lock);
+	mutex_lock(&data->update_lock);
 
 	if (val == 0) {
 		int tmp;
@@ -606,11 +606,11 @@ static ssize_t set_pwm_enable(struct device *dev,
 		/* set saved pwm value, clear FAN_CTLX PWM mode bit */
 		it87_write_value(client, IT87_REG_PWM(nr), PWM_TO_REG(data->manual_pwm_ctl[nr]));
 	} else {
-		up(&data->update_lock);
+		mutex_unlock(&data->update_lock);
 		return -EINVAL;
 	}
 
-	up(&data->update_lock);
+	mutex_unlock(&data->update_lock);
 	return count;
 }
 static ssize_t set_pwm(struct device *dev, struct device_attribute *attr,
@@ -626,11 +626,11 @@ static ssize_t set_pwm(struct device *dev, struct device_attribute *attr,
 	if (val < 0 || val > 255)
 		return -EINVAL;
 
-	down(&data->update_lock);
+	mutex_lock(&data->update_lock);
 	data->manual_pwm_ctl[nr] = val;
 	if (data->fan_main_ctrl & (1 << nr))
 		it87_write_value(client, IT87_REG_PWM(nr), PWM_TO_REG(data->manual_pwm_ctl[nr]));
-	up(&data->update_lock);
+	mutex_unlock(&data->update_lock);
 	return count;
 }
 
@@ -668,7 +668,7 @@ static ssize_t
 show_vrm_reg(struct device *dev, struct device_attribute *attr, char *buf)
 {
 	struct it87_data *data = it87_update_device(dev);
-	return sprintf(buf, "%ld\n", (long) data->vrm);
+	return sprintf(buf, "%u\n", data->vrm);
 }
 static ssize_t
 store_vrm_reg(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
@@ -761,7 +761,8 @@ static int it87_detect(struct i2c_adapter *adapter, int address, int kind)
 
 	/* Reserve the ISA region */
 	if (is_isa)
-		if (!request_region(address, IT87_EXTENT, it87_isa_driver.name))
+		if (!request_region(address, IT87_EXTENT,
+				    it87_isa_driver.driver.name))
 			goto ERROR0;
 
 	/* For now, we presume we have a valid client. We create the
@@ -775,7 +776,7 @@ static int it87_detect(struct i2c_adapter *adapter, int address, int kind)
 
 	new_client = &data->client;
 	if (is_isa)
-		init_MUTEX(&data->lock);
+		mutex_init(&data->lock);
 	i2c_set_clientdata(new_client, data);
 	new_client->addr = address;
 	new_client->adapter = adapter;
@@ -822,11 +823,16 @@ static int it87_detect(struct i2c_adapter *adapter, int address, int kind)
 	strlcpy(new_client->name, name, I2C_NAME_SIZE);
 	data->type = kind;
 	data->valid = 0;
-	init_MUTEX(&data->update_lock);
+	mutex_init(&data->update_lock);
 
 	/* Tell the I2C layer a new client has arrived */
 	if ((err = i2c_attach_client(new_client)))
 		goto ERROR2;
+
+	if (!is_isa)
+		dev_info(&new_client->dev, "The I2C interface to IT87xxF "
+			 "hardware monitoring chips is deprecated. Please "
+			 "report if you still rely on it.\n");
 
 	/* Check PWM configuration */
 	enable_pwm_interface = it87_check_pwm(new_client);
@@ -944,10 +950,10 @@ static int it87_read_value(struct i2c_client *client, u8 reg)
 
 	int res;
 	if (i2c_is_isa_client(client)) {
-		down(&data->lock);
+		mutex_lock(&data->lock);
 		outb_p(reg, client->addr + IT87_ADDR_REG_OFFSET);
 		res = inb_p(client->addr + IT87_DATA_REG_OFFSET);
-		up(&data->lock);
+		mutex_unlock(&data->lock);
 		return res;
 	} else
 		return i2c_smbus_read_byte_data(client, reg);
@@ -963,10 +969,10 @@ static int it87_write_value(struct i2c_client *client, u8 reg, u8 value)
 	struct it87_data *data = i2c_get_clientdata(client);
 
 	if (i2c_is_isa_client(client)) {
-		down(&data->lock);
+		mutex_lock(&data->lock);
 		outb_p(reg, client->addr + IT87_ADDR_REG_OFFSET);
 		outb_p(value, client->addr + IT87_DATA_REG_OFFSET);
-		up(&data->lock);
+		mutex_unlock(&data->lock);
 		return 0;
 	} else
 		return i2c_smbus_write_byte_data(client, reg, value);
@@ -1092,7 +1098,7 @@ static struct it87_data *it87_update_device(struct device *dev)
 	struct it87_data *data = i2c_get_clientdata(client);
 	int i;
 
-	down(&data->update_lock);
+	mutex_lock(&data->update_lock);
 
 	if (time_after(jiffies, data->last_updated + HZ + HZ / 2)
 	    || !data->valid) {
@@ -1154,7 +1160,7 @@ static struct it87_data *it87_update_device(struct device *dev)
 		data->valid = 1;
 	}
 
-	up(&data->update_lock);
+	mutex_unlock(&data->update_lock);
 
 	return data;
 }
@@ -1180,7 +1186,8 @@ static int __init sm_it87_init(void)
 
 static void __exit sm_it87_exit(void)
 {
-	i2c_isa_del_driver(&it87_isa_driver);
+	if (isa_address)
+		i2c_isa_del_driver(&it87_isa_driver);
 	i2c_del_driver(&it87_driver);
 }
 

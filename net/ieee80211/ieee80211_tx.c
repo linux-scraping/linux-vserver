@@ -56,7 +56,18 @@ Desc. | ctrl | dura |  DA/RA  |   TA    |    SA   | Sequ |  Frame  |  fcs |
       `--------------------------------------------------|         |------'
 Total: 28 non-data bytes                                 `----.----'
                                                               |
-       .- 'Frame data' expands to <---------------------------'
+       .- 'Frame data' expands, if WEP enabled, to <----------'
+       |
+       V
+      ,-----------------------.
+Bytes |  4  |   0-2296  |  4  |
+      |-----|-----------|-----|
+Desc. | IV  | Encrypted | ICV |
+      |     | Packet    |     |
+      `-----|           |-----'
+            `-----.-----'
+                  |
+       .- 'Encrypted Packet' expands to
        |
        V
       ,---------------------------------------------------.
@@ -65,18 +76,7 @@ Bytes |  1   |  1   |    1    |    3     |  2   |  0-2304 |
 Desc. | SNAP | SNAP | Control |Eth Tunnel| Type | IP      |
       | DSAP | SSAP |         |          |      | Packet  |
       | 0xAA | 0xAA |0x03 (UI)|0x00-00-F8|      |         |
-      `-----------------------------------------|         |
-Total: 8 non-data bytes                         `----.----'
-                                                     |
-       .- 'IP Packet' expands, if WEP enabled, to <--'
-       |
-       V
-      ,-----------------------.
-Bytes |  4  |   0-2296  |  4  |
-      |-----|-----------|-----|
-Desc. | IV  | Encrypted | ICV |
-      |     | IP Packet |     |
-      `-----------------------'
+      `----------------------------------------------------
 Total: 8 non-data bytes
 
 802.3 Ethernet Data Frame
@@ -127,7 +127,7 @@ payload of each frame is reduced to 492 bytes.
 static u8 P802_1H_OUI[P80211_OUI_LEN] = { 0x00, 0x00, 0xf8 };
 static u8 RFC1042_OUI[P80211_OUI_LEN] = { 0x00, 0x00, 0x00 };
 
-static inline int ieee80211_copy_snap(u8 * data, u16 h_proto)
+static int ieee80211_copy_snap(u8 * data, u16 h_proto)
 {
 	struct ieee80211_snap_hdr *snap;
 	u8 *oui;
@@ -150,7 +150,7 @@ static inline int ieee80211_copy_snap(u8 * data, u16 h_proto)
 	return SNAP_SIZE + sizeof(u16);
 }
 
-static inline int ieee80211_encrypt_fragment(struct ieee80211_device *ieee,
+static int ieee80211_encrypt_fragment(struct ieee80211_device *ieee,
 					     struct sk_buff *frag, int hdr_len)
 {
 	struct ieee80211_crypt_data *crypt = ieee->crypt[ieee->tx_keyidx];
@@ -288,7 +288,7 @@ int ieee80211_xmit(struct sk_buff *skb, struct net_device *dev)
 	/* Determine total amount of storage required for TXB packets */
 	bytes = skb->len + SNAP_SIZE + sizeof(u16);
 
-	if (host_encrypt)
+	if (host_encrypt || host_build_iv)
 		fc = IEEE80211_FTYPE_DATA | IEEE80211_STYPE_DATA |
 		    IEEE80211_FCTL_PROTECTED;
 	else
@@ -470,7 +470,9 @@ int ieee80211_xmit(struct sk_buff *skb, struct net_device *dev)
 			atomic_inc(&crypt->refcnt);
 			if (crypt->ops->build_iv)
 				crypt->ops->build_iv(skb_frag, hdr_len,
-						     crypt->priv);
+				      ieee->sec.keys[ieee->sec.active_key],
+				      ieee->sec.key_sizes[ieee->sec.active_key],
+				      crypt->priv);
 			atomic_dec(&crypt->refcnt);
 		}
 

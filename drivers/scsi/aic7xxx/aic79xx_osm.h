@@ -36,7 +36,7 @@
  * IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGES.
  *
- * $Id: //depot/aic7xxx/linux/drivers/scsi/aic7xxx/aic79xx_osm.h#137 $
+ * $Id: //depot/aic7xxx/linux/drivers/scsi/aic7xxx/aic79xx_osm.h#166 $
  *
  */
 #ifndef _AIC79XX_LINUX_H_
@@ -228,7 +228,6 @@ typedef struct timer_list ahd_timer_t;
 typedef void ahd_linux_callback_t (u_long);  
 static __inline void ahd_timer_reset(ahd_timer_t *timer, int usec,
 				     ahd_callback_t *func, void *arg);
-static __inline void ahd_scb_timer_reset(struct scb *scb, u_int usec);
 
 static __inline void
 ahd_timer_reset(ahd_timer_t *timer, int usec, ahd_callback_t *func, void *arg)
@@ -243,16 +242,10 @@ ahd_timer_reset(ahd_timer_t *timer, int usec, ahd_callback_t *func, void *arg)
 	add_timer(timer);
 }
 
-static __inline void
-ahd_scb_timer_reset(struct scb *scb, u_int usec)
-{
-	mod_timer(&scb->io_ctx->eh_timeout, jiffies + (usec * HZ)/1000000);
-}
-
 /***************************** SMP support ************************************/
 #include <linux/spinlock.h>
 
-#define AIC79XX_DRIVER_VERSION "1.3.11"
+#define AIC79XX_DRIVER_VERSION "3.0"
 
 /*************************** Device Data Structures ***************************/
 /*
@@ -388,16 +381,12 @@ struct ahd_platform_data {
 	struct scsi_target *starget[AHD_NUM_TARGETS]; 
 
 	spinlock_t		 spin_lock;
-	u_int			 qfrozen;
-	struct timer_list	 reset_timer;
-	struct semaphore	 eh_sem;
+	struct completion	*eh_done;
 	struct Scsi_Host        *host;		/* pointer to scsi host */
 #define AHD_LINUX_NOIRQ	((uint32_t)~0)
 	uint32_t		 irq;		/* IRQ for this adapter */
 	uint32_t		 bios_address;
 	uint32_t		 mem_busaddr;	/* Mem Base Addr */
-#define	AHD_SCB_UP_EH_SEM 0x1
-	uint32_t		 flags;
 };
 
 /************************** OS Utility Wrappers *******************************/
@@ -883,8 +872,6 @@ int	ahd_platform_abort_scbs(struct ahd_softc *ahd, int target,
 				role_t role, uint32_t status);
 irqreturn_t
 	ahd_linux_isr(int irq, void *dev_id, struct pt_regs * regs);
-void	ahd_platform_flushwork(struct ahd_softc *ahd);
-int	ahd_softc_comp(struct ahd_softc *, struct ahd_softc *);
 void	ahd_done(struct ahd_softc*, struct scb*);
 void	ahd_send_async(struct ahd_softc *, char channel,
 		       u_int target, u_int lun, ac_code, void *);

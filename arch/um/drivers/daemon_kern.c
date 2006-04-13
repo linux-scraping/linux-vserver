@@ -18,7 +18,7 @@ struct daemon_init {
 	char *ctl_sock;
 };
 
-void daemon_init(struct net_device *dev, void *data)
+static void daemon_init(struct net_device *dev, void *data)
 {
 	struct uml_net_private *pri;
 	struct daemon_data *dpri;
@@ -31,6 +31,10 @@ void daemon_init(struct net_device *dev, void *data)
 	dpri->fd = -1;
 	dpri->control = -1;
 	dpri->dev = dev;
+	/* We will free this pointer. If it contains crap we're burned. */
+	dpri->ctl_addr = NULL;
+	dpri->data_addr = NULL;
+	dpri->local_addr = NULL;
 
 	printk("daemon backend (uml_switch version %d) - %s:%s", 
 	       SWITCH_VERSION, dpri->sock_type, dpri->ctl_sock);
@@ -60,7 +64,7 @@ static struct net_kern_info daemon_kern_info = {
 	.write			= daemon_write,
 };
 
-int daemon_setup(char *str, char **mac_out, void *data)
+static int daemon_setup(char *str, char **mac_out, void *data)
 {
 	struct daemon_init *init = data;
 	char *remain;
@@ -91,18 +95,7 @@ static struct transport daemon_transport = {
 static int register_daemon(void)
 {
 	register_transport(&daemon_transport);
-	return(1);
+	return 0;
 }
 
 __initcall(register_daemon);
-
-/*
- * Overrides for Emacs so that we follow Linus's tabbing style.
- * Emacs will notice this stuff at the end of the file and automatically
- * adjust the settings for this buffer only.  This must remain at the end
- * of the file.
- * ---------------------------------------------------------------------------
- * Local variables:
- * c-file-style: "linux"
- * End:
- */

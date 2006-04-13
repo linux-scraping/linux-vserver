@@ -35,9 +35,6 @@
 #define dprint(flg, fmt, args...) \
 	if (flg & DBG_MASK) printk(fmt , ## args)
 
-#define hfs_warn(format, args...) printk(KERN_WARNING format , ## args)
-#define hfs_error(format, args...) printk(KERN_ERR format , ## args)
-
 /*
  * struct hfs_inode_info
  *
@@ -172,7 +169,7 @@ extern int hfs_cat_move(u32, struct inode *, struct qstr *,
 extern void hfs_cat_build_key(struct super_block *, btree_key *, u32, struct qstr *);
 
 /* dir.c */
-extern struct file_operations hfs_dir_operations;
+extern const struct file_operations hfs_dir_operations;
 extern struct inode_operations hfs_dir_inode_operations;
 
 /* extent.c */

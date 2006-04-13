@@ -23,10 +23,14 @@
 #define jfs_debug jbd_debug
 #else
 
+#include <linux/types.h>
 #include <linux/buffer_head.h>
 #include <linux/journal-head.h>
 #include <linux/stddef.h>
 #include <linux/bit_spinlock.h>
+#include <linux/mutex.h>
+#include <linux/timer.h>
+
 #include <asm/semaphore.h>
 #endif
 
@@ -238,7 +242,6 @@ typedef struct journal_superblock_s
 
 #include <linux/fs.h>
 #include <linux/sched.h>
-#include <asm/bug.h>
 
 #define JBD_ASSERTIONS
 #ifdef JBD_ASSERTIONS
@@ -575,7 +578,7 @@ struct transaction_s
  * @j_wait_checkpoint:  Wait queue to trigger checkpointing
  * @j_wait_commit: Wait queue to trigger commit
  * @j_wait_updates: Wait queue to wait for updates to complete
- * @j_checkpoint_sem: Semaphore for locking against concurrent checkpoints
+ * @j_checkpoint_mutex: Mutex for locking against concurrent checkpoints
  * @j_head: Journal head - identifies the first unused block in the journal
  * @j_tail: Journal tail - identifies the oldest still-used block in the
  *  journal.
@@ -612,6 +615,7 @@ struct transaction_s
  * @j_wbuf: array of buffer_heads for journal_commit_transaction
  * @j_wbufsize: maximum number of buffer_heads allowed in j_wbuf, the
  *	number that will fit in j_blocksize
+ * @j_last_sync_writer: most recent pid which did a synchronous write
  * @j_private: An opaque pointer to fs-private information.
  */
 
@@ -644,7 +648,7 @@ struct journal_s
 	int			j_barrier_count;
 
 	/* The barrier lock itself */
-	struct semaphore	j_barrier;
+	struct mutex		j_barrier;
 
 	/*
 	 * Transactions: The current running transaction...
@@ -686,7 +690,7 @@ struct journal_s
 	wait_queue_head_t	j_wait_updates;
 
 	/* Semaphore for locking against concurrent checkpoints */
-	struct semaphore 	j_checkpoint_sem;
+	struct mutex	 	j_checkpoint_mutex;
 
 	/*
 	 * Journal head: identifies the first unused block in the journal.
@@ -785,7 +789,7 @@ struct journal_s
 	unsigned long		j_commit_interval;
 
 	/* The timer used to wakeup the commit thread: */
-	struct timer_list	*j_commit_timer;
+	struct timer_list	j_commit_timer;
 
 	/*
 	 * The revoke table: maintains the list of revoked blocks in the
@@ -800,6 +804,8 @@ struct journal_s
 	 */
 	struct buffer_head	**j_wbuf;
 	int			j_wbufsize;
+
+	pid_t			j_last_sync_writer;
 
 	/*
 	 * An opaque pointer to fs-private information.  ext3 puts its
@@ -889,7 +895,7 @@ extern int	 journal_dirty_metadata (handle_t *, struct buffer_head *);
 extern void	 journal_release_buffer (handle_t *, struct buffer_head *);
 extern int	 journal_forget (handle_t *, struct buffer_head *);
 extern void	 journal_sync_buffer (struct buffer_head *);
-extern int	 journal_invalidatepage(journal_t *,
+extern void	 journal_invalidatepage(journal_t *,
 				struct page *, unsigned long);
 extern int	 journal_try_to_free_buffers(journal_t *, struct page *, gfp_t);
 extern int	 journal_stop(handle_t *);

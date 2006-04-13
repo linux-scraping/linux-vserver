@@ -1320,7 +1320,7 @@ static int __devinit emu10k1_probe(struct pci_dev *pci_dev, const struct pci_dev
 	card->is_aps = (subsysvid == EMU_APS_SUBID);
 
 	spin_lock_init(&card->lock);
-	init_MUTEX(&card->open_sem);
+	mutex_init(&card->open_sem);
 	card->open_mode = 0;
 	init_waitqueue_head(&card->open_wait);
 
@@ -1428,7 +1428,7 @@ static int __init emu10k1_init_module(void)
 {
 	printk(KERN_INFO "Creative EMU10K1 PCI Audio Driver, version " DRIVER_VERSION ", " __TIME__ " " __DATE__ "\n");
 
-	return pci_module_init(&emu10k1_pci_driver);
+	return pci_register_driver(&emu10k1_pci_driver);
 }
 
 static void __exit emu10k1_cleanup_module(void)

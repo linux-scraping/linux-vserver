@@ -93,6 +93,7 @@ enum
 	KERN_CAP_BSET=14,	/* int: capability bounding set */
 	KERN_PANIC=15,		/* int: panic timeout */
 	KERN_REALROOTDEV=16,	/* real root device to mount after initrd */
+	KERN_VSHELPER=17,	/* string: path to vshelper policy agent */
 
 	KERN_SPARC_REBOOT=21,	/* reboot command on Sparc */
 	KERN_CTLALTDEL=22,	/* int: allow ctl-alt-del to reboot */
@@ -124,7 +125,7 @@ enum
 	KERN_OVERFLOWUID=46,	/* int: overflow UID */
 	KERN_OVERFLOWGID=47,	/* int: overflow GID */
 	KERN_SHMPATH=48,	/* string: path to shm fs */
-	KERN_HOTPLUG=49,	/* string: path to hotplug policy agent */
+	KERN_HOTPLUG=49,	/* string: path to uevent helper (deprecated) */
 	KERN_IEEE_EMULATION_WARNINGS=50, /* int: unimplemented ieee instructions */
 	KERN_S390_USER_DEBUG_LOGGING=51,  /* int: dumps of user faults */
 	KERN_CORE_USES_PID=52,		/* int: use core or core.%pid */
@@ -146,7 +147,8 @@ enum
 	KERN_RANDOMIZE=68, /* int: randomize virtual address space */
 	KERN_SETUID_DUMPABLE=69, /* int: behaviour of dumps for setuid core */
 	KERN_SPIN_RETRY=70,	/* int: number of spinlock retries */
-	KERN_VSHELPER=71,	/* string: path to vshelper policy agent */
+	KERN_ACPI_VIDEO_FLAGS=71, /* int: flags for setting up video after ACPI sleep */
+	KERN_IA64_UNALIGNED=72, /* int: ia64 unaligned userland trap enable */
 };
 
 
@@ -181,6 +183,10 @@ enum
 	VM_VFS_CACHE_PRESSURE=26, /* dcache/icache reclaim pressure */
 	VM_LEGACY_VA_LAYOUT=27, /* legacy/compatibility virtual address space layout */
 	VM_SWAP_TOKEN_TIMEOUT=28, /* default time for token time out */
+	VM_DROP_PAGECACHE=29,	/* int: nuke lots of pagecache */
+	VM_PERCPU_PAGELIST_FRACTION=30,/* int: fraction of pages in each percpu_pagelist */
+	VM_ZONE_RECLAIM_MODE=31, /* reclaim local zone memory before going off node */
+	VM_ZONE_RECLAIM_INTERVAL=32, /* time period to wait after reclaim failure */
 };
 
 
@@ -206,6 +212,7 @@ enum
 	NET_SCTP=17,
 	NET_LLC=18,
 	NET_NETFILTER=19,
+	NET_DCCP=20,
 };
 
 /* /proc/sys/kernel/random */
@@ -256,6 +263,8 @@ enum
 	NET_CORE_DEV_WEIGHT=17,
 	NET_CORE_SOMAXCONN=18,
 	NET_CORE_BUDGET=19,
+	NET_CORE_AEVENT_ETIME=20,
+	NET_CORE_AEVENT_RSEQTH=21,
 };
 
 /* /proc/sys/net/ethernet */
@@ -391,6 +400,10 @@ enum
 	NET_IPV4_ICMP_ERRORS_USE_INBOUND_IFADDR=109,
 	NET_TCP_CONG_CONTROL=110,
 	NET_TCP_ABC=111,
+	NET_IPV4_IPFRAG_MAX_DIST=112,
+ 	NET_TCP_MTU_PROBING=113,
+	NET_TCP_BASE_MSS=114,
+	NET_IPV4_TCP_WORKAROUND_SIGNED_WINDOWS=115,
 };
 
 enum {
@@ -445,6 +458,7 @@ enum
 	NET_IPV4_CONF_ARP_ANNOUNCE=18,
 	NET_IPV4_CONF_ARP_IGNORE=19,
 	NET_IPV4_CONF_PROMOTE_SECONDARIES=20,
+	NET_IPV4_CONF_ARP_ACCEPT=21,
 	__NET_IPV4_CONF_MAX
 };
 
@@ -525,6 +539,11 @@ enum {
 	NET_IPV6_MAX_DESYNC_FACTOR=15,
 	NET_IPV6_MAX_ADDRESSES=16,
 	NET_IPV6_FORCE_MLD_VERSION=17,
+	NET_IPV6_ACCEPT_RA_DEFRTR=18,
+	NET_IPV6_ACCEPT_RA_PINFO=19,
+	NET_IPV6_ACCEPT_RA_RTR_PREF=20,
+	NET_IPV6_RTR_PROBE_INTERVAL=21,
+	NET_IPV6_ACCEPT_RA_RT_INFO_MAX_PLEN=22,
 	__NET_IPV6_MAX
 };
 
@@ -554,6 +573,21 @@ enum {
 	NET_NEIGH_RETRANS_TIME_MS=17,
 	NET_NEIGH_REACHABLE_TIME_MS=18,
 	__NET_NEIGH_MAX
+};
+
+/* /proc/sys/net/dccp */
+enum {
+	NET_DCCP_DEFAULT=1,
+};
+
+/* /proc/sys/net/dccp/default */
+enum {
+	NET_DCCP_DEFAULT_SEQ_WINDOW  = 1,
+	NET_DCCP_DEFAULT_RX_CCID     = 2,
+	NET_DCCP_DEFAULT_TX_CCID     = 3,
+	NET_DCCP_DEFAULT_ACK_RATIO   = 4,
+	NET_DCCP_DEFAULT_SEND_ACKVEC = 5,
+	NET_DCCP_DEFAULT_SEND_NDP    = 6,
 };
 
 /* /proc/sys/net/ipx */

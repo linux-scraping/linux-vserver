@@ -125,11 +125,11 @@ static struct usb_device_id id_table_combined [] = {
 MODULE_DEVICE_TABLE (usb, id_table_combined);
 
 static struct usb_driver mct_u232_driver = {
-	.owner =	THIS_MODULE,
 	.name =		"mct_u232",
 	.probe =	usb_serial_probe,
 	.disconnect =	usb_serial_disconnect,
 	.id_table =	id_table_combined,
+	.no_dynamic_id = 	1,
 };
 
 static struct usb_serial_driver mct_u232_device = {
@@ -348,10 +348,9 @@ static int mct_u232_startup (struct usb_serial *serial)
 	struct mct_u232_private *priv;
 	struct usb_serial_port *port, *rport;
 
-	priv = kmalloc(sizeof(struct mct_u232_private), GFP_KERNEL);
+	priv = kzalloc(sizeof(struct mct_u232_private), GFP_KERNEL);
 	if (!priv)
 		return -ENOMEM;
-	memset(priv, 0, sizeof(struct mct_u232_private));
 	spin_lock_init(&priv->lock);
 	usb_set_serial_port_data(serial->port[0], priv);
 

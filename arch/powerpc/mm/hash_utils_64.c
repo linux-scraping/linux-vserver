@@ -88,6 +88,7 @@ static unsigned long _SDR1;
 struct mmu_psize_def mmu_psize_defs[MMU_PAGE_COUNT];
 
 hpte_t *htab_address;
+unsigned long htab_size_bytes;
 unsigned long htab_hash_mask;
 int mmu_linear_psize = MMU_PAGE_4K;
 int mmu_virtual_psize = MMU_PAGE_4K;
@@ -166,18 +167,18 @@ int htab_bolt_mapping(unsigned long vstart, unsigned long vend,
 		 * normal insert callback here.
 		 */
 #ifdef CONFIG_PPC_ISERIES
-		if (_machine == PLATFORM_ISERIES_LPAR)
+		if (machine_is(iseries))
 			ret = iSeries_hpte_insert(hpteg, va,
-						  virt_to_abs(paddr),
+						  paddr,
 						  tmp_mode,
 						  HPTE_V_BOLTED,
 						  psize);
 		else
 #endif
 #ifdef CONFIG_PPC_PSERIES
-		if (_machine & PLATFORM_LPAR)
+		if (machine_is(pseries) && firmware_has_feature(FW_FEATURE_LPAR))
 			ret = pSeries_lpar_hpte_insert(hpteg, va,
-						       virt_to_abs(paddr),
+						       paddr,
 						       tmp_mode,
 						       HPTE_V_BOLTED,
 						       psize);
@@ -185,7 +186,7 @@ int htab_bolt_mapping(unsigned long vstart, unsigned long vend,
 #endif
 #ifdef CONFIG_PPC_MULTIPLATFORM
 			ret = native_hpte_insert(hpteg, va,
-						 virt_to_abs(paddr),
+						 paddr,
 						 tmp_mode, HPTE_V_BOLTED,
 						 psize);
 #endif
@@ -294,8 +295,7 @@ static void __init htab_init_page_sizes(void)
 	 * Not in the device-tree, let's fallback on known size
 	 * list for 16M capable GP & GR
 	 */
-	if ((_machine != PLATFORM_ISERIES_LPAR) &&
-	    cpu_has_feature(CPU_FTR_16M_PAGE))
+	if (cpu_has_feature(CPU_FTR_16M_PAGE) && !machine_is(iseries))
 		memcpy(mmu_psize_defs, mmu_psize_defaults_gp,
 		       sizeof(mmu_psize_defaults_gp));
  found:
@@ -368,7 +368,7 @@ static unsigned long __init htab_get_table_size(void)
 	unsigned long mem_size, rnd_mem_size, pteg_count;
 
 	/* If hash size isn't already provided by the platform, we try to
-	 * retreive it from the device-tree. If it's not there neither, we
+	 * retrieve it from the device-tree. If it's not there neither, we
 	 * calculate it now based on the total RAM size
 	 */
 	if (ppc64_pft_size == 0)
@@ -391,7 +391,7 @@ static unsigned long __init htab_get_table_size(void)
 #ifdef CONFIG_MEMORY_HOTPLUG
 void create_section_mapping(unsigned long start, unsigned long end)
 {
-		BUG_ON(htab_bolt_mapping(start, end, start,
+		BUG_ON(htab_bolt_mapping(start, end, __pa(start),
 			_PAGE_ACCESSED | _PAGE_DIRTY | _PAGE_COHERENT | PP_RWXX,
 			mmu_linear_psize));
 }
@@ -399,7 +399,7 @@ void create_section_mapping(unsigned long start, unsigned long end)
 
 void __init htab_initialize(void)
 {
-	unsigned long table, htab_size_bytes;
+	unsigned long table;
 	unsigned long pteg_count;
 	unsigned long mode_rw;
 	unsigned long base = 0, size = 0;
@@ -421,7 +421,7 @@ void __init htab_initialize(void)
 
 	htab_hash_mask = pteg_count - 1;
 
-	if (platform_is_lpar()) {
+	if (firmware_has_feature(FW_FEATURE_LPAR)) {
 		/* Using a hypervisor which owns the htab */
 		htab_address = NULL;
 		_SDR1 = 0; 
@@ -430,7 +430,6 @@ void __init htab_initialize(void)
 		 * the absolute address space.
 		 */
 		table = lmb_alloc(htab_size_bytes, htab_size_bytes);
-		BUG_ON(table == 0);
 
 		DBG("Hash table allocated at %lx, size: %lx\n", table,
 		    htab_size_bytes);
@@ -456,7 +455,7 @@ void __init htab_initialize(void)
 
 	/* create bolted the linear mapping in the hash table */
 	for (i=0; i < lmb.memory.cnt; i++) {
-		base = lmb.memory.region[i].base + KERNELBASE;
+		base = (unsigned long)__va(lmb.memory.region[i].base);
 		size = lmb.memory.region[i].size;
 
 		DBG("creating mapping for region: %lx : %lx\n", base, size);
@@ -473,21 +472,22 @@ void __init htab_initialize(void)
 
 		if (dart_tablebase != 0 && dart_tablebase >= base
 		    && dart_tablebase < (base + size)) {
+			unsigned long dart_table_end = dart_tablebase + 16 * MB;
 			if (base != dart_tablebase)
 				BUG_ON(htab_bolt_mapping(base, dart_tablebase,
-							 base, mode_rw,
-							 mmu_linear_psize));
-			if ((base + size) > (dart_tablebase + 16*MB))
+							__pa(base), mode_rw,
+							mmu_linear_psize));
+			if ((base + size) > dart_table_end)
 				BUG_ON(htab_bolt_mapping(dart_tablebase+16*MB,
-							 base + size,
-							 dart_tablebase+16*MB,
+							base + size,
+							__pa(dart_table_end),
 							 mode_rw,
 							 mmu_linear_psize));
 			continue;
 		}
 #endif /* CONFIG_U3_DART */
-		BUG_ON(htab_bolt_mapping(base, base + size, base,
-					 mode_rw, mmu_linear_psize));
+		BUG_ON(htab_bolt_mapping(base, base + size, __pa(base),
+					mode_rw, mmu_linear_psize));
        }
 
 	/*
@@ -498,14 +498,14 @@ void __init htab_initialize(void)
 	 * for either 4K or 16MB pages.
 	 */
 	if (tce_alloc_start) {
-		tce_alloc_start += KERNELBASE;
-		tce_alloc_end += KERNELBASE;
+		tce_alloc_start = (unsigned long)__va(tce_alloc_start);
+		tce_alloc_end = (unsigned long)__va(tce_alloc_end);
 
 		if (base + size >= tce_alloc_start)
 			tce_alloc_start = base + size + 1;
 
- 		BUG_ON(htab_bolt_mapping(tce_alloc_start, tce_alloc_end,
- 					 tce_alloc_start, mode_rw,
+		BUG_ON(htab_bolt_mapping(tce_alloc_start, tce_alloc_end,
+					 __pa(tce_alloc_start), mode_rw,
 					 mmu_linear_psize));
 	}
 
@@ -514,9 +514,9 @@ void __init htab_initialize(void)
 #undef KB
 #undef MB
 
-void __init htab_initialize_secondary(void)
+void htab_initialize_secondary(void)
 {
-	if (!platform_is_lpar())
+	if (!firmware_has_feature(FW_FEATURE_LPAR))
 		mtspr(SPRN_SDR1, _SDR1);
 }
 
@@ -644,6 +644,7 @@ int hash_page(unsigned long ea, unsigned long access, unsigned long trap)
 	DBG_LOW(" -> rc=%d\n", rc);
 	return rc;
 }
+EXPORT_SYMBOL_GPL(hash_page);
 
 void hash_preload(struct mm_struct *mm, unsigned long ea,
 		  unsigned long access, unsigned long trap)

@@ -10,11 +10,13 @@
 *.a
 *.s
 *.ko
+*.so
 *.mod.c
 
 #
 # Top-level generic files
 #
+tags
 vmlinux*
 System.map
 Module.symvers
@@ -23,8 +25,11 @@ Module.symvers
 # Generated include files
 #
 include/asm
+include/asm-*/asm-offsets.h
 include/config
 include/linux/autoconf.h
 include/linux/compile.h
 include/linux/version.h
 
+# stgit generated dirs
+patches-*

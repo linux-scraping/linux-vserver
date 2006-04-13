@@ -36,15 +36,14 @@
 #include <linux/file.h>
 #include <linux/init.h>
 #include <linux/personality.h>
+#include <linux/vs_cvirt.h>
 
 #include <asm/uaccess.h>
 #include <asm/ipc.h>
 #include <asm/semaphore.h>
+#include <asm/syscalls.h>
 #include <asm/time.h>
 #include <asm/unistd.h>
-
-extern unsigned long wall_jiffies;
-
 
 /*
  * sys_ipc() is the de-multiplexer for the SysV IPC calls..
@@ -262,7 +261,7 @@ long ppc_newuname(struct new_utsname __user * name)
 	int err = 0;
 
 	down_read(&uts_sem);
-	if (copy_to_user(name, &system_utsname, sizeof(*name)))
+	if (copy_to_user(name, vx_new_utsname(), sizeof(*name)))
 		err = -EFAULT;
 	up_read(&uts_sem);
 	if (!err)
@@ -275,7 +274,7 @@ int sys_uname(struct old_utsname __user *name)
 	int err = 0;
 	
 	down_read(&uts_sem);
-	if (copy_to_user(name, &system_utsname, sizeof(*name)))
+	if (copy_to_user(name, vx_new_utsname(), sizeof(*name)))
 		err = -EFAULT;
 	up_read(&uts_sem);
 	if (!err)
@@ -286,55 +285,27 @@ int sys_uname(struct old_utsname __user *name)
 int sys_olduname(struct oldold_utsname __user *name)
 {
 	int error;
+	struct new_utsname *ptr;
 
 	if (!access_ok(VERIFY_WRITE, name, sizeof(struct oldold_utsname)))
 		return -EFAULT;
   
 	down_read(&uts_sem);
-	error = __copy_to_user(&name->sysname, &system_utsname.sysname,
-			       __OLD_UTS_LEN);
+	ptr = vx_new_utsname();
+	error = __copy_to_user(&name->sysname, ptr->sysname, __OLD_UTS_LEN);
 	error |= __put_user(0, name->sysname + __OLD_UTS_LEN);
-	error |= __copy_to_user(&name->nodename, &system_utsname.nodename,
-				__OLD_UTS_LEN);
+	error |= __copy_to_user(&name->nodename, ptr->nodename, __OLD_UTS_LEN);
 	error |= __put_user(0, name->nodename + __OLD_UTS_LEN);
-	error |= __copy_to_user(&name->release, &system_utsname.release,
-				__OLD_UTS_LEN);
+	error |= __copy_to_user(&name->release, ptr->release, __OLD_UTS_LEN);
 	error |= __put_user(0, name->release + __OLD_UTS_LEN);
-	error |= __copy_to_user(&name->version, &system_utsname.version,
-				__OLD_UTS_LEN);
+	error |= __copy_to_user(&name->version, ptr->version, __OLD_UTS_LEN);
 	error |= __put_user(0, name->version + __OLD_UTS_LEN);
-	error |= __copy_to_user(&name->machine, &system_utsname.machine,
-				__OLD_UTS_LEN);
+	error |= __copy_to_user(&name->machine, ptr->machine, __OLD_UTS_LEN);
 	error |= override_machine(name->machine);
 	up_read(&uts_sem);
 
 	return error? -EFAULT: 0;
 }
-
-#ifdef CONFIG_PPC64
-time_t sys64_time(time_t __user * tloc)
-{
-	time_t secs;
-	time_t usecs;
-
-	long tb_delta = tb_ticks_since(tb_last_stamp);
-	tb_delta += (jiffies - wall_jiffies) * tb_ticks_per_jiffy;
-
-	secs  = xtime.tv_sec;  
-	usecs = (xtime.tv_nsec/1000) + tb_delta / tb_ticks_per_usec;
-	while (usecs >= USEC_PER_SEC) {
-		++secs;
-		usecs -= USEC_PER_SEC;
-	}
-
-	if (tloc) {
-		if (put_user(secs,tloc))
-			secs = -EFAULT;
-	}
-
-	return secs;
-}
-#endif
 
 long ppc_fadvise64_64(int fd, int advice, u32 offset_high, u32 offset_low,
 		      u32 len_high, u32 len_low)

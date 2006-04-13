@@ -51,6 +51,13 @@ config UNIX98_PTY_COUNT
 	  When not in use, each additional set of 256 PTYs occupy
 	  approximately 8 KB of kernel memory on 32-bit architectures.
 
+config HANGCHECK_TIMER
+	tristate "Hangcheck timer"
+	help
+	  The hangcheck-timer module detects when the system has gone
+	  out to lunch past a certain margin.  It can reboot the system
+	  or merely print a warning.
+
 source "drivers/char/watchdog/Kconfig"
 
 comment "S/390 character device drivers"
@@ -176,7 +183,13 @@ config S390_TAPE_34XX
 	  tape subsystems and 100% compatibles.
 	  It is safe to say "Y" here.
 
-
+config S390_TAPE_3590
+	tristate "Support for 3590 tape hardware"
+	depends on S390_TAPE
+	help
+	  Select this option if you want to access IBM 3590 magnetic
+	  tape subsystems and 100% compatibles.
+	  It is safe to say "Y" here.
 
 config VMLOGRDR
 	tristate "Support for the z/VM recording system services (VM only)"

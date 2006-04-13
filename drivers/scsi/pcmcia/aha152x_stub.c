@@ -89,35 +89,29 @@ MODULE_LICENSE("Dual MPL/GPL");
 /*====================================================================*/
 
 typedef struct scsi_info_t {
-    dev_link_t		link;
+	struct pcmcia_device	*p_dev;
     dev_node_t		node;
     struct Scsi_Host	*host;
 } scsi_info_t;
 
-static void aha152x_release_cs(dev_link_t *link);
-static int aha152x_event(event_t event, int priority,
-			 event_callback_args_t *args);
+static void aha152x_release_cs(struct pcmcia_device *link);
+static void aha152x_detach(struct pcmcia_device *p_dev);
+static int aha152x_config_cs(struct pcmcia_device *link);
 
-static dev_link_t *aha152x_attach(void);
-static void aha152x_detach(dev_link_t *);
+static struct pcmcia_device *dev_list;
 
-static dev_link_t *dev_list;
-static dev_info_t dev_info = "aha152x_cs";
-
-static dev_link_t *aha152x_attach(void)
+static int aha152x_probe(struct pcmcia_device *link)
 {
     scsi_info_t *info;
-    client_reg_t client_reg;
-    dev_link_t *link;
-    int ret;
-    
+
     DEBUG(0, "aha152x_attach()\n");
 
     /* Create new SCSI device */
     info = kmalloc(sizeof(*info), GFP_KERNEL);
-    if (!info) return NULL;
+    if (!info) return -ENOMEM;
     memset(info, 0, sizeof(*info));
-    link = &info->link; link->priv = info;
+    info->p_dev = link;
+    link->priv = info;
 
     link->io.NumPorts1 = 0x20;
     link->io.Attributes1 = IO_DATA_PATH_WIDTH_AUTO;
@@ -125,50 +119,22 @@ static dev_link_t *aha152x_attach(void)
     link->irq.Attributes = IRQ_TYPE_EXCLUSIVE;
     link->irq.IRQInfo1 = IRQ_LEVEL_ID;
     link->conf.Attributes = CONF_ENABLE_IRQ;
-    link->conf.Vcc = 50;
     link->conf.IntType = INT_MEMORY_AND_IO;
     link->conf.Present = PRESENT_OPTION;
 
-    /* Register with Card Services */
-    link->next = dev_list;
-    dev_list = link;
-    client_reg.dev_info = &dev_info;
-    client_reg.Version = 0x0210;
-    client_reg.event_callback_args.client_data = link;
-    ret = pcmcia_register_client(&link->handle, &client_reg);
-    if (ret != 0) {
-	cs_error(link->handle, RegisterClient, ret);
-	aha152x_detach(link);
-	return NULL;
-    }
-    
-    return link;
+    return aha152x_config_cs(link);
 } /* aha152x_attach */
 
 /*====================================================================*/
 
-static void aha152x_detach(dev_link_t *link)
+static void aha152x_detach(struct pcmcia_device *link)
 {
-    dev_link_t **linkp;
-
     DEBUG(0, "aha152x_detach(0x%p)\n", link);
-    
-    /* Locate device structure */
-    for (linkp = &dev_list; *linkp; linkp = &(*linkp)->next)
-	if (*linkp == link) break;
-    if (*linkp == NULL)
-	return;
 
-    if (link->state & DEV_CONFIG)
-	aha152x_release_cs(link);
+    aha152x_release_cs(link);
 
-    if (link->handle)
-	pcmcia_deregister_client(link->handle);
-    
     /* Unlink device structure, free bits */
-    *linkp = link->next;
     kfree(link->priv);
-    
 } /* aha152x_detach */
 
 /*====================================================================*/
@@ -176,9 +142,8 @@ static void aha152x_detach(dev_link_t *link)
 #define CS_CHECK(fn, ret) \
 do { last_fn = (fn); if ((last_ret = (ret)) != 0) goto cs_failed; } while (0)
 
-static void aha152x_config_cs(dev_link_t *link)
+static int aha152x_config_cs(struct pcmcia_device *link)
 {
-    client_handle_t handle = link->handle;
     scsi_info_t *info = link->priv;
     struct aha152x_setup s;
     tuple_t tuple;
@@ -193,19 +158,16 @@ static void aha152x_config_cs(dev_link_t *link)
     tuple.TupleData = tuple_data;
     tuple.TupleDataMax = 64;
     tuple.TupleOffset = 0;
-    CS_CHECK(GetFirstTuple, pcmcia_get_first_tuple(handle, &tuple));
-    CS_CHECK(GetTupleData, pcmcia_get_tuple_data(handle, &tuple));
-    CS_CHECK(ParseTuple, pcmcia_parse_tuple(handle, &tuple, &parse));
+    CS_CHECK(GetFirstTuple, pcmcia_get_first_tuple(link, &tuple));
+    CS_CHECK(GetTupleData, pcmcia_get_tuple_data(link, &tuple));
+    CS_CHECK(ParseTuple, pcmcia_parse_tuple(link, &tuple, &parse));
     link->conf.ConfigBase = parse.config.base;
 
-    /* Configure card */
-    link->state |= DEV_CONFIG;
-
     tuple.DesiredTuple = CISTPL_CFTABLE_ENTRY;
-    CS_CHECK(GetFirstTuple, pcmcia_get_first_tuple(handle, &tuple));
+    CS_CHECK(GetFirstTuple, pcmcia_get_first_tuple(link, &tuple));
     while (1) {
-	if (pcmcia_get_tuple_data(handle, &tuple) != 0 ||
-		pcmcia_parse_tuple(handle, &tuple, &parse) != 0)
+	if (pcmcia_get_tuple_data(link, &tuple) != 0 ||
+		pcmcia_parse_tuple(link, &tuple, &parse) != 0)
 	    goto next_entry;
 	/* For New Media T&J, look for a SCSI window */
 	if (parse.cftable_entry.io.win[0].len >= 0x20)
@@ -216,15 +178,15 @@ static void aha152x_config_cs(dev_link_t *link)
 	if ((parse.cftable_entry.io.nwin > 0) &&
 	    (link->io.BasePort1 < 0xffff)) {
 	    link->conf.ConfigIndex = parse.cftable_entry.index;
-	    i = pcmcia_request_io(handle, &link->io);
+	    i = pcmcia_request_io(link, &link->io);
 	    if (i == CS_SUCCESS) break;
 	}
     next_entry:
-	CS_CHECK(GetNextTuple, pcmcia_get_next_tuple(handle, &tuple));
+	CS_CHECK(GetNextTuple, pcmcia_get_next_tuple(link, &tuple));
     }
     
-    CS_CHECK(RequestIRQ, pcmcia_request_irq(handle, &link->irq));
-    CS_CHECK(RequestConfiguration, pcmcia_request_configuration(handle, &link->conf));
+    CS_CHECK(RequestIRQ, pcmcia_request_irq(link, &link->irq));
+    CS_CHECK(RequestConfiguration, pcmcia_request_configuration(link, &link->conf));
     
     /* Set configuration options for the aha152x driver */
     memset(&s, 0, sizeof(s));
@@ -246,70 +208,32 @@ static void aha152x_config_cs(dev_link_t *link)
     }
 
     sprintf(info->node.dev_name, "scsi%d", host->host_no);
-    link->dev = &info->node;
+    link->dev_node = &info->node;
     info->host = host;
 
-    link->state &= ~DEV_CONFIG_PENDING;
-    return;
-    
+    return 0;
+
 cs_failed:
-    cs_error(link->handle, last_fn, last_ret);
+    cs_error(link, last_fn, last_ret);
     aha152x_release_cs(link);
-    return;
+    return -ENODEV;
 }
 
-static void aha152x_release_cs(dev_link_t *link)
+static void aha152x_release_cs(struct pcmcia_device *link)
 {
 	scsi_info_t *info = link->priv;
 
 	aha152x_release(info->host);
-	link->dev = NULL;
-    
-	pcmcia_release_configuration(link->handle);
-	pcmcia_release_io(link->handle, &link->io);
-	pcmcia_release_irq(link->handle, &link->irq);
-    
-	link->state &= ~DEV_CONFIG;
+	pcmcia_disable_device(link);
 }
 
-static int aha152x_event(event_t event, int priority,
-			 event_callback_args_t *args)
+static int aha152x_resume(struct pcmcia_device *link)
 {
-    dev_link_t *link = args->client_data;
-    scsi_info_t *info = link->priv;
-    
-    DEBUG(0, "aha152x_event(0x%06x)\n", event);
-    
-    switch (event) {
-    case CS_EVENT_CARD_REMOVAL:
-	link->state &= ~DEV_PRESENT;
-	if (link->state & DEV_CONFIG)
-	    aha152x_release_cs(link);
-	break;
-    case CS_EVENT_CARD_INSERTION:
-	link->state |= DEV_PRESENT | DEV_CONFIG_PENDING;
-	aha152x_config_cs(link);
-	break;
-    case CS_EVENT_PM_SUSPEND:
-	link->state |= DEV_SUSPEND;
-	/* Fall through... */
-    case CS_EVENT_RESET_PHYSICAL:
-	if (link->state & DEV_CONFIG)
-	    pcmcia_release_configuration(link->handle);
-	break;
-    case CS_EVENT_PM_RESUME:
-	link->state &= ~DEV_SUSPEND;
-	/* Fall through... */
-    case CS_EVENT_CARD_RESET:
-	if (link->state & DEV_CONFIG) {
-	    Scsi_Cmnd tmp;
-	    pcmcia_request_configuration(link->handle, &link->conf);
-	    tmp.device->host = info->host;
-	    aha152x_host_reset(&tmp);
-	}
-	break;
-    }
-    return 0;
+	scsi_info_t *info = link->priv;
+
+	aha152x_host_reset_host(info->host);
+
+	return 0;
 }
 
 static struct pcmcia_device_id aha152x_ids[] = {
@@ -327,10 +251,10 @@ static struct pcmcia_driver aha152x_cs_driver = {
 	.drv		= {
 		.name	= "aha152x_cs",
 	},
-	.attach		= aha152x_attach,
-	.event		= aha152x_event,
-	.detach		= aha152x_detach,
+	.probe		= aha152x_probe,
+	.remove		= aha152x_detach,
 	.id_table       = aha152x_ids,
+	.resume		= aha152x_resume,
 };
 
 static int __init init_aha152x_cs(void)
@@ -346,4 +270,3 @@ static void __exit exit_aha152x_cs(void)
 
 module_init(init_aha152x_cs);
 module_exit(exit_aha152x_cs);
- 

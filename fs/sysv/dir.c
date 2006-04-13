@@ -20,7 +20,7 @@
 
 static int sysv_readdir(struct file *, void *, filldir_t);
 
-struct file_operations sysv_dir_operations = {
+const struct file_operations sysv_dir_operations = {
 	.read		= generic_read_dir,
 	.readdir	= sysv_readdir,
 	.fsync		= sysv_sync_file,
@@ -103,7 +103,7 @@ static int sysv_readdir(struct file * filp, void * dirent, filldir_t filldir)
 			offset = (char *)de - kaddr;
 
 			over = filldir(dirent, name, strnlen(name,SYSV_NAMELEN),
-					(n<<PAGE_CACHE_SHIFT) | offset,
+					((loff_t)n<<PAGE_CACHE_SHIFT) | offset,
 					fs16_to_cpu(SYSV_SB(sb), de->inode),
 					DT_UNKNOWN);
 			if (over) {
@@ -115,7 +115,7 @@ static int sysv_readdir(struct file * filp, void * dirent, filldir_t filldir)
 	}
 
 done:
-	filp->f_pos = (n << PAGE_CACHE_SHIFT) | offset;
+	filp->f_pos = ((loff_t)n << PAGE_CACHE_SHIFT) | offset;
 	unlock_kernel();
 	return 0;
 }
@@ -253,8 +253,7 @@ int sysv_delete_entry(struct sysv_dir_entry *de, struct page *page)
 
 	lock_page(page);
 	err = mapping->a_ops->prepare_write(NULL, page, from, to);
-	if (err)
-		BUG();
+	BUG_ON(err);
 	de->inode = 0;
 	err = dir_commit_chunk(page, from, to);
 	dir_put_page(page);
@@ -353,8 +352,7 @@ void sysv_set_link(struct sysv_dir_entry *de, struct page *page,
 
 	lock_page(page);
 	err = page->mapping->a_ops->prepare_write(NULL, page, from, to);
-	if (err)
-		BUG();
+	BUG_ON(err);
 	de->inode = cpu_to_fs16(SYSV_SB(inode->i_sb), inode->i_ino);
 	err = dir_commit_chunk(page, from, to);
 	dir_put_page(page);

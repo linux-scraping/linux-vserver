@@ -33,7 +33,7 @@
 #include <linux/workqueue.h>
 #include <linux/string.h>
 #include <linux/slab.h>
-#include <linux/sched.h>   /* wait_event_interruptible_timeout() needs this */
+#include <linux/sched.h>	/* wait_event_interruptible_timeout() needs this */
 #include <asm/param.h>		/* HZ */
 #include "core.h"
 
@@ -57,6 +57,13 @@ struct i2o_exec_wait {
 	struct list_head list;	/* node in global wait list */
 };
 
+/* Work struct needed to handle LCT NOTIFY replies */
+struct i2o_exec_lct_notify_work {
+	struct work_struct work;	/* work struct */
+	struct i2o_controller *c;	/* controller on which the LCT NOTIFY
+					   was received */
+};
+
 /* Exec OSM class handling definition */
 static struct i2o_class_id i2o_exec_class_id[] = {
 	{I2O_CLASS_EXECUTIVE},
@@ -75,11 +82,9 @@ static struct i2o_exec_wait *i2o_exec_wait_alloc(void)
 {
 	struct i2o_exec_wait *wait;
 
-	wait = kmalloc(sizeof(*wait), GFP_KERNEL);
+	wait = kzalloc(sizeof(*wait), GFP_KERNEL);
 	if (!wait)
-		return ERR_PTR(-ENOMEM);
-
-	memset(wait, 0, sizeof(*wait));
+		return NULL;
 
 	INIT_LIST_HEAD(&wait->list);
 
@@ -114,13 +119,12 @@ static void i2o_exec_wait_free(struct i2o_exec_wait *wait)
  *	Returns 0 on success, negative error code on timeout or positive error
  *	code from reply.
  */
-int i2o_msg_post_wait_mem(struct i2o_controller *c, u32 m, unsigned long
-			  timeout, struct i2o_dma *dma)
+int i2o_msg_post_wait_mem(struct i2o_controller *c, struct i2o_message *msg,
+			  unsigned long timeout, struct i2o_dma *dma)
 {
 	DECLARE_WAIT_QUEUE_HEAD(wq);
 	struct i2o_exec_wait *wait;
 	static u32 tcntxt = 0x80000000;
-	struct i2o_message __iomem *msg = i2o_msg_in_to_virt(c, m);
 	int rc = 0;
 
 	wait = i2o_exec_wait_alloc();
@@ -138,15 +142,15 @@ int i2o_msg_post_wait_mem(struct i2o_controller *c, u32 m, unsigned long
 	 * We will only use transaction contexts >= 0x80000000 for POST WAIT,
 	 * so we could find a POST WAIT reply easier in the reply handler.
 	 */
-	writel(i2o_exec_driver.context, &msg->u.s.icntxt);
+	msg->u.s.icntxt = cpu_to_le32(i2o_exec_driver.context);
 	wait->tcntxt = tcntxt++;
-	writel(wait->tcntxt, &msg->u.s.tcntxt);
+	msg->u.s.tcntxt = cpu_to_le32(wait->tcntxt);
 
 	/*
 	 * Post the message to the controller. At some point later it will
 	 * return. If we time out before it returns then complete will be zero.
 	 */
-	i2o_msg_post(c, m);
+	i2o_msg_post(c, msg);
 
 	if (!wait->complete) {
 		wait->wq = &wq;
@@ -266,13 +270,14 @@ static int i2o_msg_post_wait_complete(struct i2o_controller *c, u32 m,
  *
  *	Returns number of bytes printed into buffer.
  */
-static ssize_t i2o_exec_show_vendor_id(struct device *d, struct device_attribute *attr, char *buf)
+static ssize_t i2o_exec_show_vendor_id(struct device *d,
+				       struct device_attribute *attr, char *buf)
 {
 	struct i2o_device *dev = to_i2o_device(d);
 	u16 id;
 
-	if (i2o_parm_field_get(dev, 0x0000, 0, &id, 2)) {
-		sprintf(buf, "0x%04x", id);
+	if (!i2o_parm_field_get(dev, 0x0000, 0, &id, 2)) {
+		sprintf(buf, "0x%04x", le16_to_cpu(id));
 		return strlen(buf) + 1;
 	}
 
@@ -286,13 +291,15 @@ static ssize_t i2o_exec_show_vendor_id(struct device *d, struct device_attribute
  *
  *	Returns number of bytes printed into buffer.
  */
-static ssize_t i2o_exec_show_product_id(struct device *d, struct device_attribute *attr, char *buf)
+static ssize_t i2o_exec_show_product_id(struct device *d,
+					struct device_attribute *attr,
+					char *buf)
 {
 	struct i2o_device *dev = to_i2o_device(d);
 	u16 id;
 
-	if (i2o_parm_field_get(dev, 0x0000, 1, &id, 2)) {
-		sprintf(buf, "0x%04x", id);
+	if (!i2o_parm_field_get(dev, 0x0000, 1, &id, 2)) {
+		sprintf(buf, "0x%04x", le16_to_cpu(id));
 		return strlen(buf) + 1;
 	}
 
@@ -355,14 +362,19 @@ static int i2o_exec_remove(struct device *dev)
  *	new LCT and if the buffer for the LCT was to small sends a LCT NOTIFY
  *	again, otherwise send LCT NOTIFY to get informed on next LCT change.
  */
-static void i2o_exec_lct_modified(struct i2o_controller *c)
+static void i2o_exec_lct_modified(struct i2o_exec_lct_notify_work *work)
 {
 	u32 change_ind = 0;
+	struct i2o_controller *c = work->c;
+
+	kfree(work);
 
 	if (i2o_device_parse_lct(c) != -EAGAIN)
 		change_ind = c->lct->change_ind + 1;
 
+#ifdef CONFIG_I2O_LCT_NOTIFY_ON_CHANGES
 	i2o_exec_lct_notify(c, change_ind);
+#endif
 };
 
 /**
@@ -385,23 +397,22 @@ static int i2o_exec_reply(struct i2o_controller *c, u32 m,
 	u32 context;
 
 	if (le32_to_cpu(msg->u.head[0]) & MSG_FAIL) {
+		struct i2o_message __iomem *pmsg;
+		u32 pm;
+
 		/*
 		 * If Fail bit is set we must take the transaction context of
 		 * the preserved message to find the right request again.
 		 */
-		struct i2o_message __iomem *pmsg;
-		u32 pm;
 
 		pm = le32_to_cpu(msg->body[3]);
-
 		pmsg = i2o_msg_in_to_virt(c, pm);
+		context = readl(&pmsg->u.s.tcntxt);
 
 		i2o_report_status(KERN_INFO, "i2o_core", msg);
 
-		context = readl(&pmsg->u.s.tcntxt);
-
 		/* Release the preserved msg */
-		i2o_msg_nop(c, pm);
+		i2o_msg_nop_mfa(c, pm);
 	} else
 		context = le32_to_cpu(msg->u.s.tcntxt);
 
@@ -409,7 +420,7 @@ static int i2o_exec_reply(struct i2o_controller *c, u32 m,
 		return i2o_msg_post_wait_complete(c, m, msg, context);
 
 	if ((le32_to_cpu(msg->u.head[1]) >> 24) == I2O_CMD_LCT_NOTIFY) {
-		struct work_struct *work;
+		struct i2o_exec_lct_notify_work *work;
 
 		pr_debug("%s: LCT notify received\n", c->name);
 
@@ -417,8 +428,11 @@ static int i2o_exec_reply(struct i2o_controller *c, u32 m,
 		if (!work)
 			return -ENOMEM;
 
-		INIT_WORK(work, (void (*)(void *))i2o_exec_lct_modified, c);
-		queue_work(i2o_exec_driver.event_queue, work);
+		work->c = c;
+
+		INIT_WORK(&work->work, (void (*)(void *))i2o_exec_lct_modified,
+			  work);
+		queue_work(i2o_exec_driver.event_queue, &work->work);
 		return 1;
 	}
 
@@ -462,25 +476,26 @@ static void i2o_exec_event(struct i2o_event *evt)
  */
 int i2o_exec_lct_get(struct i2o_controller *c)
 {
-	struct i2o_message __iomem *msg;
-	u32 m;
+	struct i2o_message *msg;
 	int i = 0;
 	int rc = -EAGAIN;
 
 	for (i = 1; i <= I2O_LCT_GET_TRIES; i++) {
-		m = i2o_msg_get_wait(c, &msg, I2O_TIMEOUT_MESSAGE_GET);
-		if (m == I2O_QUEUE_EMPTY)
-			return -ETIMEDOUT;
+		msg = i2o_msg_get_wait(c, I2O_TIMEOUT_MESSAGE_GET);
+		if (IS_ERR(msg))
+			return PTR_ERR(msg);
 
-		writel(EIGHT_WORD_MSG_SIZE | SGL_OFFSET_6, &msg->u.head[0]);
-		writel(I2O_CMD_LCT_NOTIFY << 24 | HOST_TID << 12 | ADAPTER_TID,
-		       &msg->u.head[1]);
-		writel(0xffffffff, &msg->body[0]);
-		writel(0x00000000, &msg->body[1]);
-		writel(0xd0000000 | c->dlct.len, &msg->body[2]);
-		writel(c->dlct.phys, &msg->body[3]);
+		msg->u.head[0] =
+		    cpu_to_le32(EIGHT_WORD_MSG_SIZE | SGL_OFFSET_6);
+		msg->u.head[1] =
+		    cpu_to_le32(I2O_CMD_LCT_NOTIFY << 24 | HOST_TID << 12 |
+				ADAPTER_TID);
+		msg->body[0] = cpu_to_le32(0xffffffff);
+		msg->body[1] = cpu_to_le32(0x00000000);
+		msg->body[2] = cpu_to_le32(0xd0000000 | c->dlct.len);
+		msg->body[3] = cpu_to_le32(c->dlct.phys);
 
-		rc = i2o_msg_post_wait(c, m, I2O_TIMEOUT_LCT_GET);
+		rc = i2o_msg_post_wait(c, msg, I2O_TIMEOUT_LCT_GET);
 		if (rc < 0)
 			break;
 
@@ -506,29 +521,29 @@ static int i2o_exec_lct_notify(struct i2o_controller *c, u32 change_ind)
 {
 	i2o_status_block *sb = c->status_block.virt;
 	struct device *dev;
-	struct i2o_message __iomem *msg;
-	u32 m;
+	struct i2o_message *msg;
 
 	dev = &c->pdev->dev;
 
-	if (i2o_dma_realloc(dev, &c->dlct, sb->expected_lct_size, GFP_KERNEL))
+	if (i2o_dma_realloc
+	    (dev, &c->dlct, le32_to_cpu(sb->expected_lct_size), GFP_KERNEL))
 		return -ENOMEM;
 
-	m = i2o_msg_get_wait(c, &msg, I2O_TIMEOUT_MESSAGE_GET);
-	if (m == I2O_QUEUE_EMPTY)
-		return -ETIMEDOUT;
+	msg = i2o_msg_get_wait(c, I2O_TIMEOUT_MESSAGE_GET);
+	if (IS_ERR(msg))
+		return PTR_ERR(msg);
 
-	writel(EIGHT_WORD_MSG_SIZE | SGL_OFFSET_6, &msg->u.head[0]);
-	writel(I2O_CMD_LCT_NOTIFY << 24 | HOST_TID << 12 | ADAPTER_TID,
-	       &msg->u.head[1]);
-	writel(i2o_exec_driver.context, &msg->u.s.icntxt);
-	writel(0, &msg->u.s.tcntxt);	/* FIXME */
-	writel(0xffffffff, &msg->body[0]);
-	writel(change_ind, &msg->body[1]);
-	writel(0xd0000000 | c->dlct.len, &msg->body[2]);
-	writel(c->dlct.phys, &msg->body[3]);
+	msg->u.head[0] = cpu_to_le32(EIGHT_WORD_MSG_SIZE | SGL_OFFSET_6);
+	msg->u.head[1] = cpu_to_le32(I2O_CMD_LCT_NOTIFY << 24 | HOST_TID << 12 |
+				     ADAPTER_TID);
+	msg->u.s.icntxt = cpu_to_le32(i2o_exec_driver.context);
+	msg->u.s.tcntxt = cpu_to_le32(0x00000000);
+	msg->body[0] = cpu_to_le32(0xffffffff);
+	msg->body[1] = cpu_to_le32(change_ind);
+	msg->body[2] = cpu_to_le32(0xd0000000 | c->dlct.len);
+	msg->body[3] = cpu_to_le32(c->dlct.phys);
 
-	i2o_msg_post(c, m);
+	i2o_msg_post(c, msg);
 
 	return 0;
 };

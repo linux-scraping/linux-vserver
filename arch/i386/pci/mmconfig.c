@@ -36,8 +36,7 @@ static u32 get_base_addr(unsigned int seg, int bus, unsigned devfn)
 	while (1) {
 		++cfg_num;
 		if (cfg_num >= pci_mmcfg_config_num) {
-			/* Not found - fallback to type 1 */
-			return 0;
+			break;
 		}
 		cfg = &pci_mmcfg_config[cfg_num];
 		if (cfg->pci_segment_group_number != seg)
@@ -46,6 +45,18 @@ static u32 get_base_addr(unsigned int seg, int bus, unsigned devfn)
 		    (cfg->end_bus_number >= bus))
 			return cfg->base_address;
 	}
+
+	/* Handle more broken MCFG tables on Asus etc.
+	   They only contain a single entry for bus 0-0. Assume
+ 	   this applies to all busses. */
+	cfg = &pci_mmcfg_config[0];
+	if (pci_mmcfg_config_num == 1 &&
+		cfg->pci_segment_group_number == 0 &&
+		(cfg->start_bus_number | cfg->end_bus_number) == 0)
+		return cfg->base_address;
+
+	/* Fall back to type 0 */
+	return 0;
 }
 
 static inline void pci_exp_set_dev_base(unsigned int base, int bus, int devfn)
@@ -161,25 +172,20 @@ static __init void unreachable_devices(void)
 	}
 }
 
-static int __init pci_mmcfg_init(void)
+void __init pci_mmcfg_init(void)
 {
 	if ((pci_probe & PCI_PROBE_MMCONF) == 0)
-		goto out;
+		return;
 
 	acpi_table_parse(ACPI_MCFG, acpi_parse_mcfg);
 	if ((pci_mmcfg_config_num == 0) ||
 	    (pci_mmcfg_config == NULL) ||
 	    (pci_mmcfg_config[0].base_address == 0))
-		goto out;
+		return;
 
 	printk(KERN_INFO "PCI: Using MMCONFIG\n");
 	raw_pci_ops = &pci_mmcfg;
 	pci_probe = (pci_probe & ~PCI_PROBE_MASK) | PCI_PROBE_MMCONF;
 
 	unreachable_devices();
-
- out:
-	return 0;
 }
-
-arch_initcall(pci_mmcfg_init);

@@ -44,6 +44,7 @@
 #include <linux/interrupt.h>
 #include <linux/init.h>
 #include <linux/blkdev.h>
+#include <linux/mutex.h>
 #include <asm/uaccess.h>
 
 #include <scsi/scsi.h>
@@ -59,6 +60,10 @@
 #include "sr.h"
 
 
+MODULE_DESCRIPTION("SCSI cdrom (sr) driver");
+MODULE_LICENSE("GPL");
+MODULE_ALIAS_BLOCKDEV_MAJOR(SCSI_CDROM_MAJOR);
+
 #define SR_DISKS	256
 
 #define MAX_RETRIES	3
@@ -66,7 +71,7 @@
 #define SR_CAPABILITIES \
 	(CDC_CLOSE_TRAY|CDC_OPEN_TRAY|CDC_LOCK|CDC_SELECT_SPEED| \
 	 CDC_SELECT_DISC|CDC_MULTI_SESSION|CDC_MCN|CDC_MEDIA_CHANGED| \
-	 CDC_PLAY_AUDIO|CDC_RESET|CDC_IOCTLS|CDC_DRIVE_STATUS| \
+	 CDC_PLAY_AUDIO|CDC_RESET|CDC_DRIVE_STATUS| \
 	 CDC_CD_R|CDC_CD_RW|CDC_DVD|CDC_DVD_R|CDC_DVD_RAM|CDC_GENERIC_PACKET| \
 	 CDC_MRW|CDC_MRW_W|CDC_RAM)
 
@@ -90,7 +95,7 @@ static DEFINE_SPINLOCK(sr_index_lock);
 /* This semaphore is used to mediate the 0->1 reference get in the
  * face of object destruction (i.e. we can't allow a get on an
  * object after last put) */
-static DECLARE_MUTEX(sr_ref_sem);
+static DEFINE_MUTEX(sr_ref_mutex);
 
 static int sr_open(struct cdrom_device_info *, int);
 static void sr_release(struct cdrom_device_info *);
@@ -113,7 +118,6 @@ static struct cdrom_device_ops sr_dops = {
 	.get_mcn		= sr_get_mcn,
 	.reset			= sr_reset,
 	.audio_ioctl		= sr_audio_ioctl,
-	.dev_ioctl		= sr_dev_ioctl,
 	.capability		= SR_CAPABILITIES,
 	.generic_packet		= sr_packet,
 };
@@ -133,7 +137,7 @@ static inline struct scsi_cd *scsi_cd_get(struct gendisk *disk)
 {
 	struct scsi_cd *cd = NULL;
 
-	down(&sr_ref_sem);
+	mutex_lock(&sr_ref_mutex);
 	if (disk->private_data == NULL)
 		goto out;
 	cd = scsi_cd(disk);
@@ -146,18 +150,18 @@ static inline struct scsi_cd *scsi_cd_get(struct gendisk *disk)
 	kref_put(&cd->kref, sr_kref_release);
 	cd = NULL;
  out:
-	up(&sr_ref_sem);
+	mutex_unlock(&sr_ref_mutex);
 	return cd;
 }
 
-static inline void scsi_cd_put(struct scsi_cd *cd)
+static void scsi_cd_put(struct scsi_cd *cd)
 {
 	struct scsi_device *sdev = cd->device;
 
-	down(&sr_ref_sem);
+	mutex_lock(&sr_ref_mutex);
 	kref_put(&cd->kref, sr_kref_release);
 	scsi_device_put(sdev);
-	up(&sr_ref_sem);
+	mutex_unlock(&sr_ref_mutex);
 }
 
 /*
@@ -237,8 +241,6 @@ static void rw_intr(struct scsi_cmnd * SCpnt)
 		case ILLEGAL_REQUEST:
 			if (!(SCpnt->sense_buffer[0] & 0x90))
 				break;
-			if (!blk_fs_request(SCpnt->request))
-				break;
 			error_sector = (SCpnt->sense_buffer[3] << 24) |
 				(SCpnt->sense_buffer[4] << 16) |
 				(SCpnt->sense_buffer[5] << 8) |
@@ -313,23 +315,6 @@ static int sr_init_command(struct scsi_cmnd * SCpnt)
 		 * quietly refuse to do anything to a changed disc until the
 		 * changed bit has been reset
 		 */
-		return 0;
-	}
-
-	/*
-	 * these are already setup, just copy cdb basically
-	 */
-	if (SCpnt->request->flags & REQ_BLOCK_PC) {
-		scsi_setup_blk_pc_cmnd(SCpnt, MAX_RETRIES);
-
-		if (SCpnt->timeout_per_command)
-			timeout = SCpnt->timeout_per_command;
-
-		goto queue;
-	}
-
-	if (!(SCpnt->request->flags & REQ_CMD)) {
-		blk_dump_rq_flags(SCpnt->request, "sr unsup command");
 		return 0;
 	}
 
@@ -421,8 +406,6 @@ static int sr_init_command(struct scsi_cmnd * SCpnt)
 	 */
 	SCpnt->transfersize = cd->device->sector_size;
 	SCpnt->underflow = this_count << 9;
-
-queue:
 	SCpnt->allowed = MAX_RETRIES;
 	SCpnt->timeout_per_command = timeout;
 
@@ -472,17 +455,33 @@ static int sr_block_ioctl(struct inode *inode, struct file *file, unsigned cmd,
 {
 	struct scsi_cd *cd = scsi_cd(inode->i_bdev->bd_disk);
 	struct scsi_device *sdev = cd->device;
+	void __user *argp = (void __user *)arg;
+	int ret;
 
-        /*
-         * Send SCSI addressing ioctls directly to mid level, send other
-         * ioctls to cdrom/block level.
-         */
-        switch (cmd) {
-                case SCSI_IOCTL_GET_IDLUN:
-                case SCSI_IOCTL_GET_BUS_NUMBER:
-                        return scsi_ioctl(sdev, cmd, (void __user *)arg);
+	/*
+	 * Send SCSI addressing ioctls directly to mid level, send other
+	 * ioctls to cdrom/block level.
+	 */
+	switch (cmd) {
+	case SCSI_IOCTL_GET_IDLUN:
+	case SCSI_IOCTL_GET_BUS_NUMBER:
+		return scsi_ioctl(sdev, cmd, argp);
 	}
-	return cdrom_ioctl(file, &cd->cdi, inode, cmd, arg);
+
+	ret = cdrom_ioctl(file, &cd->cdi, inode, cmd, arg);
+	if (ret != ENOSYS)
+		return ret;
+
+	/*
+	 * ENODEV means that we didn't recognise the ioctl, or that we
+	 * cannot execute it in the current device state.  In either
+	 * case fall through to scsi_ioctl, which will return ENDOEV again
+	 * if it doesn't recognise the ioctl
+	 */
+	ret = scsi_nonblockable_ioctl(sdev, cmd, argp, NULL);
+	if (ret != -ENODEV)
+		return ret;
+	return scsi_ioctl(sdev, cmd, argp);
 }
 
 static int sr_block_media_changed(struct gendisk *disk)
@@ -545,10 +544,9 @@ static int sr_probe(struct device *dev)
 		goto fail;
 
 	error = -ENOMEM;
-	cd = kmalloc(sizeof(*cd), GFP_KERNEL);
+	cd = kzalloc(sizeof(*cd), GFP_KERNEL);
 	if (!cd)
 		goto fail;
-	memset(cd, 0, sizeof(*cd));
 
 	kref_init(&cd->kref);
 
@@ -594,8 +592,6 @@ static int sr_probe(struct device *dev)
 	get_capabilities(cd);
 	sr_vendor_init(cd);
 
-	snprintf(disk->devfs_name, sizeof(disk->devfs_name),
-			"%s/cd", sdev->devfs_name);
 	disk->driverfs_dev = &sdev->sdev_gendev;
 	set_capacity(disk, cd->capacity);
 	disk->private_data = &cd->driver;
@@ -716,7 +712,7 @@ static void get_capabilities(struct scsi_cd *cd)
 	unsigned int the_result;
 	int retries, rc, n;
 
-	static char *loadmech[] =
+	static const char *loadmech[] =
 	{
 		"caddy",
 		"tray",
@@ -762,8 +758,9 @@ static void get_capabilities(struct scsi_cd *cd)
 		/* failed, drive doesn't have capabilities mode page */
 		cd->cdi.speed = 1;
 		cd->cdi.mask |= (CDC_CD_R | CDC_CD_RW | CDC_DVD_R |
-					 CDC_DVD | CDC_DVD_RAM |
-					 CDC_SELECT_DISC | CDC_SELECT_SPEED);
+				 CDC_DVD | CDC_DVD_RAM |
+				 CDC_SELECT_DISC | CDC_SELECT_SPEED |
+				 CDC_MRW | CDC_MRW_W | CDC_RAM);
 		kfree(buffer);
 		printk("%s: scsi-1 drive\n", cd->cdi.name);
 		return;
@@ -845,7 +842,7 @@ static int sr_packet(struct cdrom_device_info *cdi,
  *	sr_kref_release - Called to free the scsi_cd structure
  *	@kref: pointer to embedded kref
  *
- *	sr_ref_sem must be held entering this routine.  Because it is
+ *	sr_ref_mutex must be held entering this routine.  Because it is
  *	called on last put, you should always use the scsi_cd_get()
  *	scsi_cd_put() helpers which manipulate the semaphore directly
  *	and never do a direct kref_put().
@@ -874,9 +871,9 @@ static int sr_remove(struct device *dev)
 
 	del_gendisk(cd->disk);
 
-	down(&sr_ref_sem);
+	mutex_lock(&sr_ref_mutex);
 	kref_put(&cd->kref, sr_kref_release);
-	up(&sr_ref_sem);
+	mutex_unlock(&sr_ref_mutex);
 
 	return 0;
 }

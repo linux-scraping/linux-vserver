@@ -184,17 +184,18 @@ struct cx88_board cx88_boards[] = {
 		.input          = {{
 			.type   = CX88_VMUX_TELEVISION,
 			.vmux   = 0,
-			.gpio1  = 0x309f,
+			.gpio1  = 0xe09f,
 		},{
 			.type   = CX88_VMUX_COMPOSITE1,
 			.vmux   = 1,
-			.gpio1  = 0x305f,
+			.gpio1  = 0xe05f,
 		},{
 			.type   = CX88_VMUX_SVIDEO,
 			.vmux   = 2,
-			.gpio1  = 0x305f,
+			.gpio1  = 0xe05f,
 		}},
 		.radio = {
+			.gpio1  = 0xe0df,
 			.type   = CX88_RADIO,
 		},
 	},
@@ -322,19 +323,19 @@ struct cx88_board cx88_boards[] = {
 		.input          = {{
 			.type   = CX88_VMUX_TELEVISION,
 			.vmux   = 0,
-			.gpio0  = 0xff00,
+			.gpio0  = 0xbff0,
 		},{
 			.type   = CX88_VMUX_COMPOSITE1,
 			.vmux   = 1,
-			.gpio0  = 0xff03,
+			.gpio0  = 0xbff3,
 		},{
 			.type   = CX88_VMUX_SVIDEO,
 			.vmux   = 2,
-			.gpio0  = 0xff03,
+			.gpio0  = 0xbff3,
 		}},
 		.radio = {
 			.type   = CX88_RADIO,
-			.gpio0  = 0xff00,
+			.gpio0  = 0xbff0,
 		},
 	},
 	[CX88_BOARD_ASUS_PVR_416] = {
@@ -611,12 +612,12 @@ struct cx88_board cx88_boards[] = {
 		.input          = {{
 			.type   = CX88_VMUX_TELEVISION,
 			.vmux   = 0,
-			.gpio0  = 0xed12,  /* internal decoder */
+			.gpio0  = 0xed1a,
 			.gpio2  = 0x00ff,
 		},{
 			.type   = CX88_VMUX_DEBUG,
 			.vmux   = 0,
-			.gpio0  = 0xff01,  /* mono from tuner chip */
+			.gpio0  = 0xff01,
 		},{
 			.type   = CX88_VMUX_COMPOSITE1,
 			.vmux   = 1,
@@ -708,7 +709,7 @@ struct cx88_board cx88_boards[] = {
 	},
 	[CX88_BOARD_DVICO_FUSIONHDTV_3_GOLD_T] = {
 		.name           = "DViCO FusionHDTV 3 Gold-T",
-		.tuner_type     = TUNER_THOMSON_DTT7611,
+		.tuner_type     = TUNER_THOMSON_DTT761X,
 		.radio_type     = UNSET,
 		.tuner_addr	= ADDR_UNSET,
 		.radio_addr	= ADDR_UNSET,
@@ -897,6 +898,202 @@ struct cx88_board cx88_boards[] = {
 			.gpio3  = 0x0000,
 		}},
 	},
+	[CX88_BOARD_HAUPPAUGE_NOVASPLUS_S1] = {
+		.name		= "Hauppauge Nova-S-Plus DVB-S",
+		.tuner_type	= TUNER_ABSENT,
+		.radio_type	= UNSET,
+		.tuner_addr	= ADDR_UNSET,
+		.radio_addr	= ADDR_UNSET,
+		.input		= {{
+			.type	= CX88_VMUX_DVB,
+			.vmux	= 0,
+		},{
+			.type	= CX88_VMUX_COMPOSITE1,
+			.vmux	= 1,
+		},{
+			.type	= CX88_VMUX_SVIDEO,
+			.vmux	= 2,
+		}},
+		.dvb		= 1,
+	},
+	[CX88_BOARD_HAUPPAUGE_NOVASE2_S1] = {
+		.name		= "Hauppauge Nova-SE2 DVB-S",
+		.tuner_type	= TUNER_ABSENT,
+		.radio_type	= UNSET,
+		.tuner_addr	= ADDR_UNSET,
+		.radio_addr	= ADDR_UNSET,
+		.input		= {{
+			.type	= CX88_VMUX_DVB,
+			.vmux	= 0,
+		}},
+		.dvb		= 1,
+	},
+	[CX88_BOARD_KWORLD_DVBS_100] = {
+		.name		= "KWorld DVB-S 100",
+		.tuner_type	= TUNER_ABSENT,
+		.radio_type	= UNSET,
+		.tuner_addr	= ADDR_UNSET,
+		.radio_addr	= ADDR_UNSET,
+		.input		= {{
+			.type	= CX88_VMUX_DVB,
+			.vmux	= 0,
+		},{
+			.type	= CX88_VMUX_COMPOSITE1,
+			.vmux	= 1,
+		},{
+			.type	= CX88_VMUX_SVIDEO,
+			.vmux	= 2,
+		}},
+		.dvb		= 1,
+	},
+	[CX88_BOARD_HAUPPAUGE_HVR1100] = {
+		.name		= "Hauppauge WinTV-HVR1100 DVB-T/Hybrid",
+		.tuner_type     = TUNER_PHILIPS_FMD1216ME_MK3,
+		.radio_type	= UNSET,
+		.tuner_addr	= ADDR_UNSET,
+		.radio_addr	= ADDR_UNSET,
+		.tda9887_conf   = TDA9887_PRESENT,
+		.input		= {{
+			.type   = CX88_VMUX_TELEVISION,
+			.vmux   = 0,
+		},{
+			.type	= CX88_VMUX_COMPOSITE1,
+			.vmux	= 1,
+		},{
+			.type	= CX88_VMUX_SVIDEO,
+			.vmux	= 2,
+		}},
+		/* fixme: Add radio support */
+		.dvb		= 1,
+	},
+	[CX88_BOARD_HAUPPAUGE_HVR1100LP] = {
+		.name		= "Hauppauge WinTV-HVR1100 DVB-T/Hybrid (Low Profile)",
+		.tuner_type     = TUNER_PHILIPS_FMD1216ME_MK3,
+		.radio_type	= UNSET,
+		.tuner_addr	= ADDR_UNSET,
+		.radio_addr	= ADDR_UNSET,
+		.tda9887_conf   = TDA9887_PRESENT,
+		.input		= {{
+			.type   = CX88_VMUX_TELEVISION,
+			.vmux   = 0,
+		},{
+			.type	= CX88_VMUX_COMPOSITE1,
+			.vmux	= 1,
+		}},
+		/* fixme: Add radio support */
+		.dvb		= 1,
+	},
+	[CX88_BOARD_DNTV_LIVE_DVB_T_PRO] = {
+		.name           = "digitalnow DNTV Live! DVB-T Pro",
+		.tuner_type     = TUNER_PHILIPS_FMD1216ME_MK3,
+		.radio_type     = UNSET,
+		.tuner_addr	= ADDR_UNSET,
+		.radio_addr	= ADDR_UNSET,
+		.tda9887_conf   = TDA9887_PRESENT | TDA9887_PORT1_ACTIVE |
+				  TDA9887_PORT2_ACTIVE,
+		.input          = {{
+			.type   = CX88_VMUX_TELEVISION,
+			.vmux   = 0,
+			.gpio0  = 0xf80808,
+		},{
+			.type   = CX88_VMUX_COMPOSITE1,
+			.vmux   = 1,
+			.gpio0	= 0xf80808,
+		},{
+			.type   = CX88_VMUX_SVIDEO,
+			.vmux   = 2,
+			.gpio0	= 0xf80808,
+		}},
+		.radio = {
+			 .type  = CX88_RADIO,
+			 .gpio0 = 0xf80808,
+		},
+		.dvb            = 1,
+	},
+	[CX88_BOARD_KWORLD_DVB_T_CX22702] = {
+		/* Kworld V-stream Xpert DVB-T with Thomson tuner */
+		/* DTT 7579 Conexant CX22702-19 Conexant CX2388x  */
+		/* Manenti Marco <marco_manenti@colman.it> */
+		.name           = "KWorld/VStream XPert DVB-T with cx22702",
+		.tuner_type     = TUNER_ABSENT,
+		.radio_type     = UNSET,
+		.tuner_addr	= ADDR_UNSET,
+		.radio_addr	= ADDR_UNSET,
+		.input          = {{
+			.type   = CX88_VMUX_COMPOSITE1,
+			.vmux   = 1,
+			.gpio0  = 0x0700,
+			.gpio2  = 0x0101,
+		},{
+			.type   = CX88_VMUX_SVIDEO,
+			.vmux   = 2,
+			.gpio0  = 0x0700,
+			.gpio2  = 0x0101,
+		}},
+		.dvb            = 1,
+	},
+	[CX88_BOARD_DVICO_FUSIONHDTV_DVB_T_DUAL] = {
+		.name           = "DViCO FusionHDTV DVB-T Dual Digital",
+		.tuner_type     = TUNER_ABSENT, /* No analog tuner */
+		.radio_type     = UNSET,
+		.tuner_addr	= ADDR_UNSET,
+		.radio_addr	= ADDR_UNSET,
+		.input          = {{
+			.type   = CX88_VMUX_COMPOSITE1,
+			.vmux   = 1,
+			.gpio0  = 0x000027df,
+		 },{
+			.type   = CX88_VMUX_SVIDEO,
+			.vmux   = 2,
+			.gpio0  = 0x000027df,
+		}},
+		.dvb            = 1,
+	},
+	[CX88_BOARD_KWORLD_HARDWARE_MPEG_TV_XPERT] = {
+		/* FIXME: Standard video using the cx88 broadcast decoder is
+		 * working, but blackbird isn't working yet, audio is only
+		 * working correctly for television mode. S-Video and Composite
+		 * are working for video-only, so I have them disabled for now.
+		 */
+		.name           = "KWorld HardwareMpegTV XPert",
+		.tuner_type     = TUNER_PHILIPS_TDA8290,
+		.radio_type     = UNSET,
+		.tuner_addr	= ADDR_UNSET,
+		.radio_addr	= ADDR_UNSET,
+		.input          = {{
+			.type   = CX88_VMUX_TELEVISION,
+			.vmux   = 0,
+			.gpio0  = 0x3de2,
+			.gpio2  = 0x00ff,
+		}},
+		.radio = {
+			.type   = CX88_RADIO,
+			.gpio0  = 0x3de6,
+			.gpio2  = 0x00ff,
+		},
+	},
+	[CX88_BOARD_DVICO_FUSIONHDTV_DVB_T_HYBRID] = {
+		.name           = "DViCO FusionHDTV DVB-T Hybrid",
+		.tuner_type     = TUNER_THOMSON_FE6600,
+		.radio_type     = UNSET,
+		.tuner_addr	= ADDR_UNSET,
+		.radio_addr	= ADDR_UNSET,
+		.input          = {{
+			.type   = CX88_VMUX_TELEVISION,
+			.vmux   = 0,
+			.gpio0  = 0x0000a75f,
+		},{
+			.type   = CX88_VMUX_COMPOSITE1,
+			.vmux   = 1,
+			.gpio0  = 0x0000a75b,
+		},{
+			.type   = CX88_VMUX_SVIDEO,
+			.vmux   = 2,
+			.gpio0  = 0x0000a75b,
+		}},
+		.dvb            = 1,
+	},
+
 };
 const unsigned int cx88_bcount = ARRAY_SIZE(cx88_boards);
 
@@ -1044,6 +1241,76 @@ struct cx88_subid cx88_subids[] = {
 		.subvendor = 0x1461,
 		.subdevice = 0x000a,
 		.card      = CX88_BOARD_AVERTV_303,
+	},{
+		.subvendor = 0x0070,
+		.subdevice = 0x9200,
+		.card      = CX88_BOARD_HAUPPAUGE_NOVASE2_S1,
+	},{
+		.subvendor = 0x0070,
+		.subdevice = 0x9201,
+		.card      = CX88_BOARD_HAUPPAUGE_NOVASPLUS_S1,
+	},{
+		.subvendor = 0x0070,
+		.subdevice = 0x9202,
+		.card      = CX88_BOARD_HAUPPAUGE_NOVASPLUS_S1,
+	},{
+		.subvendor = 0x17de,
+		.subdevice = 0x08b2,
+		.card      = CX88_BOARD_KWORLD_DVBS_100,
+	},{
+		.subvendor = 0x0070,
+		.subdevice = 0x9400,
+		.card      = CX88_BOARD_HAUPPAUGE_HVR1100,
+	},{
+		.subvendor = 0x0070,
+		.subdevice = 0x9402,
+		.card      = CX88_BOARD_HAUPPAUGE_HVR1100,
+	},{
+		.subvendor = 0x0070,
+		.subdevice = 0x9800,
+		.card      = CX88_BOARD_HAUPPAUGE_HVR1100LP,
+	},{
+		.subvendor = 0x0070,
+		.subdevice = 0x9802,
+		.card      = CX88_BOARD_HAUPPAUGE_HVR1100LP,
+	},{
+		.subvendor = 0x0070,
+		.subdevice = 0x9001,
+		.card      = CX88_BOARD_HAUPPAUGE_DVB_T1,
+	},{
+		.subvendor = 0x1822,
+		.subdevice = 0x0025,
+		.card      = CX88_BOARD_DNTV_LIVE_DVB_T_PRO,
+	},{
+		.subvendor = 0x17de,
+		.subdevice = 0x08a1,
+		.card      = CX88_BOARD_KWORLD_DVB_T_CX22702,
+	},{
+		.subvendor = 0x18ac,
+		.subdevice = 0xdb50,
+		.card      = CX88_BOARD_DVICO_FUSIONHDTV_DVB_T_DUAL,
+	},{
+		.subvendor = 0x18ac,
+		.subdevice = 0xdb54,
+		.card      = CX88_BOARD_DVICO_FUSIONHDTV_DVB_T_DUAL,
+		/* Re-branded DViCO: DigitalNow DVB-T Dual */
+	},{
+		.subvendor = 0x18ac,
+		.subdevice = 0xdb11,
+		.card      = CX88_BOARD_DVICO_FUSIONHDTV_DVB_T_PLUS,
+		/* Re-branded DViCO: UltraView DVB-T Plus */
+	},{
+		.subvendor = 0x17de,
+		.subdevice = 0x0840,
+		.card      = CX88_BOARD_KWORLD_HARDWARE_MPEG_TV_XPERT,
+	},{
+		.subvendor = 0x18ac,
+		.subdevice = 0xdb40,
+		.card      = CX88_BOARD_DVICO_FUSIONHDTV_DVB_T_HYBRID,
+	},{
+		.subvendor = 0x18ac,
+		.subdevice = 0xdb44,
+		.card      = CX88_BOARD_DVICO_FUSIONHDTV_DVB_T_HYBRID,
 	},
 };
 const unsigned int cx88_idcount = ARRAY_SIZE(cx88_subids);
@@ -1075,20 +1342,20 @@ static void __devinit leadtek_eeprom(struct cx88_core *core, u8 *eeprom_data)
 	       core->name, core->tuner_type, eeprom_data[0]);
 }
 
-
-/* ----------------------------------------------------------------------- */
-
 static void hauppauge_eeprom(struct cx88_core *core, u8 *eeprom_data)
 {
 	struct tveeprom tv;
 
 	tveeprom_hauppauge_analog(&core->i2c_client, &tv, eeprom_data);
 	core->tuner_type = tv.tuner_type;
+	core->tuner_formats = tv.tuner_formats;
 	core->has_radio  = tv.has_radio;
 
 	/* Make sure we support the board model */
 	switch (tv.model)
 	{
+	case 28552: /* WinTV-PVR 'Roslyn' (No IR) */
+	case 34519: /* WinTV-PCI-FM */
 	case 90002: /* Nova-T-PCI (9002) */
 	case 92001: /* Nova-S-Plus (Video and IR) */
 	case 92002: /* Nova-S-Plus (Video and IR) */
@@ -1096,7 +1363,9 @@ static void hauppauge_eeprom(struct cx88_core *core, u8 *eeprom_data)
 	case 90500: /* Nova-T-PCI (oem) */
 	case 90501: /* Nova-T-PCI (oem/IR) */
 	case 92000: /* Nova-SE2 (OEM, No Video or IR) */
-
+	case 94009: /* WinTV-HVR1100 (Video and IR Retail) */
+	case 94501: /* WinTV-HVR1100 (Video and IR OEM) */
+	case 98559: /* WinTV-HVR1100LP (Video no IR, Retail - Low Profile) */
 		/* known */
 		break;
 	default:
@@ -1161,6 +1430,40 @@ static void gdi_eeprom(struct cx88_core *core, u8 *eeprom_data)
 }
 
 /* ----------------------------------------------------------------------- */
+/* some DViCO specific stuff                                               */
+
+static void dvico_fusionhdtv_hybrid_init(struct cx88_core *core)
+{
+	struct i2c_msg msg = { .addr = 0x45, .flags = 0 };
+	int i, err;
+	static u8 init_bufs[13][5] = {
+		{ 0x10, 0x00, 0x20, 0x01, 0x03 },
+		{ 0x10, 0x10, 0x01, 0x00, 0x21 },
+		{ 0x10, 0x10, 0x10, 0x00, 0xCA },
+		{ 0x10, 0x10, 0x12, 0x00, 0x08 },
+		{ 0x10, 0x10, 0x13, 0x00, 0x0A },
+		{ 0x10, 0x10, 0x16, 0x01, 0xC0 },
+		{ 0x10, 0x10, 0x22, 0x01, 0x3D },
+		{ 0x10, 0x10, 0x73, 0x01, 0x2E },
+		{ 0x10, 0x10, 0x72, 0x00, 0xC5 },
+		{ 0x10, 0x10, 0x71, 0x01, 0x97 },
+		{ 0x10, 0x10, 0x70, 0x00, 0x0F },
+		{ 0x10, 0x10, 0xB0, 0x00, 0x01 },
+		{ 0x03, 0x0C },
+	};
+
+	for (i = 0; i < 13; i++) {
+		msg.buf = init_bufs[i];
+		msg.len = (i != 12 ? 5 : 2);
+		err = i2c_transfer(&core->i2c_adap, &msg, 1);
+		if (err != 1) {
+			printk("dvico_fusionhdtv_hybrid_init buf %d failed (err = %d)!\n", i, err);
+			return;
+		}
+	}
+}
+
+/* ----------------------------------------------------------------------- */
 
 void cx88_card_list(struct cx88_core *core, struct pci_dev *pci)
 {
@@ -1211,17 +1514,30 @@ void cx88_card_setup(struct cx88_core *core)
 		if (0 == core->i2c_rc)
 			leadtek_eeprom(core,eeprom);
 		break;
+	case CX88_BOARD_HAUPPAUGE_NOVASPLUS_S1:
+	case CX88_BOARD_HAUPPAUGE_NOVASE2_S1:
 	case CX88_BOARD_HAUPPAUGE_DVB_T1:
+	case CX88_BOARD_HAUPPAUGE_HVR1100:
+	case CX88_BOARD_HAUPPAUGE_HVR1100LP:
 		if (0 == core->i2c_rc)
 			hauppauge_eeprom(core,eeprom);
 		break;
+	case CX88_BOARD_KWORLD_DVBS_100:
+		cx_write(MO_GP0_IO, 0x000007f8);
+		cx_write(MO_GP1_IO, 0x00000001);
+		break;
 	case CX88_BOARD_DVICO_FUSIONHDTV_DVB_T1:
 	case CX88_BOARD_DVICO_FUSIONHDTV_DVB_T_PLUS:
+	case CX88_BOARD_DVICO_FUSIONHDTV_DVB_T_DUAL:
+	case CX88_BOARD_DVICO_FUSIONHDTV_DVB_T_HYBRID:
 		/* GPIO0:0 is hooked to mt352 reset pin */
 		cx_set(MO_GP0_IO, 0x00000101);
 		cx_clear(MO_GP0_IO, 0x00000001);
 		msleep(1);
 		cx_set(MO_GP0_IO, 0x00000101);
+		if (0 == core->i2c_rc &&
+		    core->board == CX88_BOARD_DVICO_FUSIONHDTV_DVB_T_HYBRID)
+			dvico_fusionhdtv_hybrid_init(core);
 		break;
 	case CX88_BOARD_KWORLD_DVB_T:
 	case CX88_BOARD_DNTV_LIVE_DVB_T:
@@ -1232,11 +1548,14 @@ void cx88_card_setup(struct cx88_core *core)
 		cx_clear(MO_GP0_IO, 0x00000007);
 		cx_set(MO_GP2_IO, 0x00000101);
 		break;
+	case CX88_BOARD_DNTV_LIVE_DVB_T_PRO:
+		cx_write(MO_GP0_IO, 0x00080808);
+		break;
 	case CX88_BOARD_ATI_HDTVWONDER:
 		if (0 == core->i2c_rc) {
 			/* enable tuner */
 			int i;
-			u8 buffer [] = { 0x10,0x12,0x13,0x04,0x16,0x00,0x14,0x04,0x017,0x00 };
+			static const u8 buffer [] = { 0x10,0x12,0x13,0x04,0x16,0x00,0x14,0x04,0x017,0x00 };
 			core->i2c_client.addr = 0x0a;
 
 			for (i = 0; i < 5; i++)

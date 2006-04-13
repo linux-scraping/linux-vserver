@@ -45,9 +45,11 @@
 #define _USB_H_
 
 #include <linux/usb.h>
+#include <linux/usb_usual.h>
 #include <linux/blkdev.h>
 #include <linux/smp_lock.h>
 #include <linux/completion.h>
+#include <linux/mutex.h>
 #include <scsi/scsi_host.h>
 
 struct us_data;
@@ -63,38 +65,8 @@ struct us_unusual_dev {
 	__u8  useProtocol;
 	__u8  useTransport;
 	int (*initFunction)(struct us_data *);
-	unsigned int flags;
 };
 
-/*
- * Static flag definitions.  We use this roundabout technique so that the
- * proc_info() routine can automatically display a message for each flag.
- */
-#define US_DO_ALL_FLAGS						\
-	US_FLAG(SINGLE_LUN,	0x00000001)			\
-		/* allow access to only LUN 0 */		\
-	US_FLAG(NEED_OVERRIDE,	0x00000002)			\
-		/* unusual_devs entry is necessary */		\
-	US_FLAG(SCM_MULT_TARG,	0x00000004)			\
-		/* supports multiple targets */			\
-	US_FLAG(FIX_INQUIRY,	0x00000008)			\
-		/* INQUIRY response needs faking */		\
-	US_FLAG(FIX_CAPACITY,	0x00000010)			\
-		/* READ CAPACITY response too big */		\
-	US_FLAG(IGNORE_RESIDUE,	0x00000020)			\
-		/* reported residue is wrong */			\
-	US_FLAG(BULK32,		0x00000040)			\
-		/* Uses 32-byte CBW length */			\
-	US_FLAG(NOT_LOCKABLE,	0x00000080)			\
-		/* PREVENT/ALLOW not supported */		\
-	US_FLAG(GO_SLOW,	0x00000100)			\
-		/* Need delay after Command phase */		\
-	US_FLAG(NO_WP_DETECT,	0x00000200)			\
-		/* Don't check for write-protect */		\
-
-#define US_FLAG(name, value)	US_FL_##name = value ,
-enum { US_DO_ALL_FLAGS };
-#undef US_FLAG
 
 /* Dynamic flag definitions: used in set_bit() etc. */
 #define US_FLIDX_URB_ACTIVE	18  /* 0x00040000  current_urb is in use  */
@@ -122,15 +94,19 @@ enum { US_DO_ALL_FLAGS };
 typedef int (*trans_cmnd)(struct scsi_cmnd *, struct us_data*);
 typedef int (*trans_reset)(struct us_data*);
 typedef void (*proto_cmnd)(struct scsi_cmnd*, struct us_data*);
-typedef void (*extra_data_destructor)(void *);	 /* extra data destructor   */
+typedef void (*extra_data_destructor)(void *);	/* extra data destructor */
+typedef void (*pm_hook)(struct us_data *, int);	/* power management hook */
+
+#define US_SUSPEND	0
+#define US_RESUME	1
 
 /* we allocate one of these for every device that we remember */
 struct us_data {
 	/* The device we're working with
 	 * It's important to note:
-	 *    (o) you must hold dev_semaphore to change pusb_dev
+	 *    (o) you must hold dev_mutex to change pusb_dev
 	 */
-	struct semaphore	dev_semaphore;	 /* protect pusb_dev */
+	struct mutex		dev_mutex;	 /* protect pusb_dev */
 	struct usb_device	*pusb_dev;	 /* this usb_device */
 	struct usb_interface	*pusb_intf;	 /* this interface */
 	struct us_unusual_dev   *unusual_dev;	 /* device-filter entry     */
@@ -178,6 +154,9 @@ struct us_data {
 	/* subdriver information */
 	void			*extra;		 /* Any extra data          */
 	extra_data_destructor	extra_destructor;/* extra data destructor   */
+#ifdef CONFIG_PM
+	pm_hook			suspend_resume_hook;
+#endif
 };
 
 /* Convert between us_data and the corresponding Scsi_Host */

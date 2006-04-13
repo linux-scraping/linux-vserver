@@ -82,6 +82,16 @@ EXPORT_SYMBOL(num_physpages);
 EXPORT_SYMBOL(high_memory);
 EXPORT_SYMBOL(vmalloc_earlyreserve);
 
+int randomize_va_space __read_mostly = 1;
+
+static int __init disable_randmaps(char *s)
+{
+	randomize_va_space = 0;
+	return 1;
+}
+__setup("norandmaps", disable_randmaps);
+
+
 /*
  * If a p?d_bad entry is found while walking page tables, report
  * the error, before resetting entry to p?d_none.  Usually (but
@@ -267,7 +277,7 @@ void free_pgtables(struct mmu_gather **tlb, struct vm_area_struct *vma,
 		anon_vma_unlink(vma);
 		unlink_file_vma(vma);
 
-		if (is_hugepage_only_range(vma->vm_mm, addr, HPAGE_SIZE)) {
+		if (is_vm_hugetlb_page(vma)) {
 			hugetlb_free_pgd_range(tlb, addr, vma->vm_end,
 				floor, next? next->vm_start: ceiling);
 		} else {
@@ -275,8 +285,7 @@ void free_pgtables(struct mmu_gather **tlb, struct vm_area_struct *vma,
 			 * Optimization: gather nearby vmas into one call down
 			 */
 			while (next && next->vm_start <= vma->vm_end + PMD_SIZE
-			  && !is_hugepage_only_range(vma->vm_mm, next->vm_start,
-							HPAGE_SIZE)) {
+			       && !is_vm_hugetlb_page(next)) {
 				vma = next;
 				next = vma->vm_next;
 				anon_vma_unlink(vma);
@@ -378,7 +387,7 @@ struct page *vm_normal_page(struct vm_area_struct *vma, unsigned long addr, pte_
 {
 	unsigned long pfn = pte_pfn(pte);
 
-	if (vma->vm_flags & VM_PFNMAP) {
+	if (unlikely(vma->vm_flags & VM_PFNMAP)) {
 		unsigned long off = (addr - vma->vm_start) >> PAGE_SHIFT;
 		if (pfn == vma->vm_pgoff + off)
 			return NULL;
@@ -391,8 +400,6 @@ struct page *vm_normal_page(struct vm_area_struct *vma, unsigned long addr, pte_
 	 * we should just do "return pfn_to_page(pfn)", but
 	 * in the meantime we check that we get a valid pfn,
 	 * and that the resulting page looks ok.
-	 *
-	 * Remove this test eventually!
 	 */
 	if (unlikely(!pfn_valid(pfn))) {
 		print_bad_pte(vma, pte, addr);
@@ -613,10 +620,11 @@ static unsigned long zap_pte_range(struct mmu_gather *tlb,
 			(*zap_work)--;
 			continue;
 		}
+
+		(*zap_work) -= PAGE_SIZE;
+
 		if (pte_present(ptent)) {
 			struct page *page;
-
-			(*zap_work) -= PAGE_SIZE;
 
 			page = vm_normal_page(vma, addr, ptent);
 			if (unlikely(details) && page) {
@@ -1063,6 +1071,8 @@ int get_user_pages(struct task_struct *tsk, struct mm_struct *mm,
 			}
 			if (pages) {
 				pages[i] = page;
+
+				flush_anon_page(page, start);
 				flush_dcache_page(page);
 			}
 			if (vmas)
@@ -1210,9 +1220,7 @@ out:
  * The page has to be a nice clean _individual_ kernel allocation.
  * If you allocate a compound page, you need to have marked it as
  * such (__GFP_COMP), or manually just split the page up yourself
- * (which is mainly an issue of doing "set_page_count(page, 1)" for
- * each sub-page, and then freeing them one by one when you free
- * them rather than freeing it as a compound page).
+ * (see split_page()).
  *
  * NOTE! Traditionally this was done with "remap_pfn_range()" which
  * took an arbitrary page protection parameter. This doesn't allow
@@ -1498,7 +1506,7 @@ gotten:
 		update_mmu_cache(vma, address, entry);
 		lazy_mmu_prot_update(entry);
 		lru_cache_add_active(new_page);
-		page_add_anon_rmap(new_page, vma, address);
+		page_add_new_anon_rmap(new_page, vma, address);
 
 		/* Free the old page.. */
 		new_page = old_page;
@@ -1770,8 +1778,31 @@ out_big:
 out_busy:
 	return -ETXTBSY;
 }
-
 EXPORT_SYMBOL(vmtruncate);
+
+int vmtruncate_range(struct inode *inode, loff_t offset, loff_t end)
+{
+	struct address_space *mapping = inode->i_mapping;
+
+	/*
+	 * If the underlying filesystem is not going to provide
+	 * a way to truncate a range of blocks (punch a hole) -
+	 * we should return failure right now.
+	 */
+	if (!inode->i_op || !inode->i_op->truncate_range)
+		return -ENOSYS;
+
+	mutex_lock(&inode->i_mutex);
+	down_write(&inode->i_alloc_sem);
+	unmap_mapping_range(mapping, offset, (end - offset), 1);
+	truncate_inode_pages_range(mapping, offset, end);
+	inode->i_op->truncate_range(inode, offset, end);
+	up_write(&inode->i_alloc_sem);
+	mutex_unlock(&inode->i_mutex);
+
+	return 0;
+}
+EXPORT_SYMBOL(vmtruncate_range);
 
 /* 
  * Primitive swap readahead code. We simply read an aligned block of
@@ -1848,6 +1879,7 @@ static int do_swap_page(struct mm_struct *mm, struct vm_area_struct *vma,
 		goto out;
 
 	entry = pte_to_swp_entry(orig_pte);
+again:
 	page = lookup_swap_cache(entry);
 	if (!page) {
  		swapin_readahead(entry, address, vma);
@@ -1875,6 +1907,12 @@ static int do_swap_page(struct mm_struct *mm, struct vm_area_struct *vma,
 	}
 	mark_page_accessed(page);
 	lock_page(page);
+	if (!PageSwapCache(page)) {
+		/* Page migration has occured */
+		unlock_page(page);
+		page_cache_release(page);
+		goto again;
+	}
 
 	/*
 	 * Back out if somebody else already faulted in this pte.
@@ -1960,8 +1998,7 @@ static int do_anonymous_page(struct mm_struct *mm, struct vm_area_struct *vma,
 			goto release;
 		inc_mm_counter(mm, anon_rss);
 		lru_cache_add_active(page);
-		SetPageReferenced(page);
-		page_add_anon_rmap(page, vma, address);
+		page_add_new_anon_rmap(page, vma, address);
 	} else {
 		/* Map the ZERO_PAGE - vm_page_prot is readonly */
 		page = ZERO_PAGE(address);
@@ -2095,7 +2132,7 @@ retry:
 		if (anon) {
 			inc_mm_counter(mm, anon_rss);
 			lru_cache_add_active(new_page);
-			page_add_anon_rmap(new_page, vma, address);
+			page_add_new_anon_rmap(new_page, vma, address);
 		} else {
 			inc_mm_counter(mm, file_rss);
 			page_add_file_rmap(new_page);
@@ -2254,6 +2291,8 @@ int __handle_mm_fault(struct mm_struct *mm, struct vm_area_struct *vma,
 	return handle_pte_fault(mm, vma, address, pte, pmd, write_access);
 }
 
+EXPORT_SYMBOL_GPL(__handle_mm_fault);
+
 #ifndef __PAGETABLE_PUD_FOLDED
 /*
  * Allocate page upper directory.
@@ -2324,10 +2363,8 @@ int make_pages_present(unsigned long addr, unsigned long end)
 	if (!vma)
 		return -1;
 	write = (vma->vm_flags & VM_WRITE) != 0;
-	if (addr >= end)
-		BUG();
-	if (end > vma->vm_end)
-		BUG();
+	BUG_ON(addr >= end);
+	BUG_ON(end > vma->vm_end);
 	len = (end+PAGE_SIZE-1)/PAGE_SIZE-addr/PAGE_SIZE;
 	ret = get_user_pages(current, current->mm, addr,
 			len, write, 0, NULL, NULL);

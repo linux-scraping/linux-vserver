@@ -9,6 +9,9 @@
  *      as published by the Free Software Foundation; either version
  *      2 of the License, or (at your option) any later version.
  */
+
+#undef DEBUG
+
 #include <linux/config.h>
 #include <linux/module.h>
 #include <linux/string.h>
@@ -18,6 +21,7 @@
 #include <linux/reboot.h>
 #include <linux/delay.h>
 #include <linux/initrd.h>
+#include <linux/platform_device.h>
 #include <linux/ide.h>
 #include <linux/seq_file.h>
 #include <linux/ioport.h>
@@ -41,6 +45,7 @@
 #include <asm/time.h>
 #include <asm/cputable.h>
 #include <asm/sections.h>
+#include <asm/firmware.h>
 #include <asm/btext.h>
 #include <asm/nvram.h>
 #include <asm/setup.h>
@@ -56,8 +61,6 @@
 
 #include "setup.h"
 
-#undef DEBUG
-
 #ifdef DEBUG
 #include <asm/udbg.h>
 #define DBG(fmt...) udbg_printf(fmt)
@@ -65,10 +68,12 @@
 #define DBG(fmt...)
 #endif
 
-#ifdef CONFIG_PPC_MULTIPLATFORM
-int _machine = 0;
-EXPORT_SYMBOL(_machine);
-#endif
+/* The main machine-dep calls structure
+ */
+struct machdep_calls ppc_md;
+EXPORT_SYMBOL(ppc_md);
+struct machdep_calls *machine_id;
+EXPORT_SYMBOL(machine_id);
 
 unsigned long klimit = (unsigned long) _end;
 
@@ -93,14 +98,15 @@ EXPORT_SYMBOL(ppc_do_canonicalize_irqs);
 /* also used by kexec */
 void machine_shutdown(void)
 {
-	if (ppc_md.nvram_sync)
-		ppc_md.nvram_sync();
+	if (ppc_md.machine_shutdown)
+		ppc_md.machine_shutdown();
 }
 
 void machine_restart(char *cmd)
 {
 	machine_shutdown();
-	ppc_md.restart(cmd);
+	if (ppc_md.restart)
+		ppc_md.restart(cmd);
 #ifdef CONFIG_SMP
 	smp_send_stop();
 #endif
@@ -112,7 +118,8 @@ void machine_restart(char *cmd)
 void machine_power_off(void)
 {
 	machine_shutdown();
-	ppc_md.power_off();
+	if (ppc_md.power_off)
+		ppc_md.power_off();
 #ifdef CONFIG_SMP
 	smp_send_stop();
 #endif
@@ -129,7 +136,8 @@ EXPORT_SYMBOL_GPL(pm_power_off);
 void machine_halt(void)
 {
 	machine_shutdown();
-	ppc_md.halt();
+	if (ppc_md.halt)
+		ppc_md.halt();
 #ifdef CONFIG_SMP
 	smp_send_stop();
 #endif
@@ -159,14 +167,14 @@ static int show_cpuinfo(struct seq_file *m, void *v)
 #if defined(CONFIG_SMP) && defined(CONFIG_PPC32)
 		unsigned long bogosum = 0;
 		int i;
-		for (i = 0; i < NR_CPUS; ++i)
-			if (cpu_online(i))
-				bogosum += loops_per_jiffy;
+		for_each_online_cpu(i)
+			bogosum += loops_per_jiffy;
 		seq_printf(m, "total bogomips\t: %lu.%02lu\n",
 			   bogosum/(500000/HZ), bogosum/(5000/HZ) % 100);
 #endif /* CONFIG_SMP && CONFIG_PPC32 */
 		seq_printf(m, "timebase\t: %lu\n", ppc_tb_freq);
-
+		if (ppc_md.name)
+			seq_printf(m, "platform\t: %s\n", ppc_md.name);
 		if (ppc_md.show_cpuinfo != NULL)
 			ppc_md.show_cpuinfo(m);
 
@@ -294,129 +302,6 @@ struct seq_operations cpuinfo_op = {
 	.show =	show_cpuinfo,
 };
 
-#ifdef CONFIG_PPC_MULTIPLATFORM
-static int __init set_preferred_console(void)
-{
-	struct device_node *prom_stdout = NULL;
-	char *name;
-	u32 *spd;
-	int offset = 0;
-
-	DBG(" -> set_preferred_console()\n");
-
-	/* The user has requested a console so this is already set up. */
-	if (strstr(saved_command_line, "console=")) {
-		DBG(" console was specified !\n");
-		return -EBUSY;
-	}
-
-	if (!of_chosen) {
-		DBG(" of_chosen is NULL !\n");
-		return -ENODEV;
-	}
-	/* We are getting a weird phandle from OF ... */
-	/* ... So use the full path instead */
-	name = (char *)get_property(of_chosen, "linux,stdout-path", NULL);
-	if (name == NULL) {
-		DBG(" no linux,stdout-path !\n");
-		return -ENODEV;
-	}
-	prom_stdout = of_find_node_by_path(name);
-	if (!prom_stdout) {
-		DBG(" can't find stdout package %s !\n", name);
-		return -ENODEV;
-	}	
-	DBG("stdout is %s\n", prom_stdout->full_name);
-
-	name = (char *)get_property(prom_stdout, "name", NULL);
-	if (!name) {
-		DBG(" stdout package has no name !\n");
-		goto not_found;
-	}
-	spd = (u32 *)get_property(prom_stdout, "current-speed", NULL);
-
-	if (0)
-		;
-#ifdef CONFIG_SERIAL_8250_CONSOLE
-	else if (strcmp(name, "serial") == 0) {
-		int i;
-		u32 *reg = (u32 *)get_property(prom_stdout, "reg", &i);
-		if (i > 8) {
-			switch (reg[1]) {
-				case 0x3f8:
-					offset = 0;
-					break;
-				case 0x2f8:
-					offset = 1;
-					break;
-				case 0x898:
-					offset = 2;
-					break;
-				case 0x890:
-					offset = 3;
-					break;
-				default:
-					/* We dont recognise the serial port */
-					goto not_found;
-			}
-		}
-	}
-#endif /* CONFIG_SERIAL_8250_CONSOLE */
-#ifdef CONFIG_PPC_PSERIES
-	else if (strcmp(name, "vty") == 0) {
- 		u32 *reg = (u32 *)get_property(prom_stdout, "reg", NULL);
- 		char *compat = (char *)get_property(prom_stdout, "compatible", NULL);
-
- 		if (reg && compat && (strcmp(compat, "hvterm-protocol") == 0)) {
- 			/* Host Virtual Serial Interface */
- 			switch (reg[0]) {
- 				case 0x30000000:
- 					offset = 0;
- 					break;
- 				case 0x30000001:
- 					offset = 1;
- 					break;
- 				default:
-					goto not_found;
- 			}
-			of_node_put(prom_stdout);
-			DBG("Found hvsi console at offset %d\n", offset);
- 			return add_preferred_console("hvsi", offset, NULL);
- 		} else {
- 			/* pSeries LPAR virtual console */
-			of_node_put(prom_stdout);
-			DBG("Found hvc console\n");
- 			return add_preferred_console("hvc", 0, NULL);
- 		}
-	}
-#endif /* CONFIG_PPC_PSERIES */
-#ifdef CONFIG_SERIAL_PMACZILOG_CONSOLE
-	else if (strcmp(name, "ch-a") == 0)
-		offset = 0;
-	else if (strcmp(name, "ch-b") == 0)
-		offset = 1;
-#endif /* CONFIG_SERIAL_PMACZILOG_CONSOLE */
-	else
-		goto not_found;
-	of_node_put(prom_stdout);
-
-	DBG("Found serial console at ttyS%d\n", offset);
-
-	if (spd) {
-		static char __initdata opt[16];
-		sprintf(opt, "%d", *spd);
-		return add_preferred_console("ttyS", offset, opt);
-	} else
-		return add_preferred_console("ttyS", offset, NULL);
-
- not_found:
-	DBG("No preferred console found !\n");
-	of_node_put(prom_stdout);
-	return -ENODEV;
-}
-console_initcall(set_preferred_console);
-#endif /* CONFIG_PPC_MULTIPLATFORM */
-
 void __init check_for_initrd(void)
 {
 #ifdef CONFIG_BLK_DEV_INITRD
@@ -442,7 +327,7 @@ void __init check_for_initrd(void)
 	/* If we were passed an initrd, set the ROOT_DEV properly if the values
 	 * look sensible. If not, clear initrd reference.
 	 */
-	if (initrd_start >= KERNELBASE && initrd_end >= KERNELBASE &&
+	if (is_kernel_addr(initrd_start) && is_kernel_addr(initrd_end) &&
 	    initrd_end > initrd_start)
 		ROOT_DEV = Root_RAM0;
 	else
@@ -473,12 +358,13 @@ void __init check_for_initrd(void)
  * must be called before using this.
  *
  * While we're here, we may as well set the "physical" cpu ids in the paca.
+ *
+ * NOTE: This must match the parsing done in early_init_dt_scan_cpus.
  */
 void __init smp_setup_cpu_maps(void)
 {
 	struct device_node *dn = NULL;
 	int cpu = 0;
-	int swap_cpuid = 0;
 
 	while ((dn = of_find_node_by_type(dn, "cpu")) && cpu < NR_CPUS) {
 		int *intserv;
@@ -497,22 +383,9 @@ void __init smp_setup_cpu_maps(void)
 		for (j = 0; j < nthreads && cpu < NR_CPUS; j++) {
 			cpu_set(cpu, cpu_present_map);
 			set_hard_smp_processor_id(cpu, intserv[j]);
-
-			if (intserv[j] == boot_cpuid_phys)
-				swap_cpuid = cpu;
 			cpu_set(cpu, cpu_possible_map);
 			cpu++;
 		}
-	}
-
-	/* Swap CPU id 0 with boot_cpuid_phys, so we can always assume that
-	 * boot cpu is logical 0.
-	 */
-	if (boot_cpuid_phys != get_hard_smp_processor_id(0)) {
-		u32 tmp;
-		tmp = get_hard_smp_processor_id(0);
-		set_hard_smp_processor_id(0, boot_cpuid_phys);
-		set_hard_smp_processor_id(swap_cpuid, tmp);
 	}
 
 #ifdef CONFIG_PPC64
@@ -520,7 +393,7 @@ void __init smp_setup_cpu_maps(void)
 	 * On pSeries LPAR, we need to know how many cpus
 	 * could possibly be added to this partition.
 	 */
-	if (_machine == PLATFORM_PSERIES_LPAR &&
+	if (machine_is(pseries) && firmware_has_feature(FW_FEATURE_LPAR) &&
 	    (dn = of_find_node_by_path("/rtas"))) {
 		int num_addr_cell, num_size_cell, maxcpus;
 		unsigned int *ireg;
@@ -559,7 +432,7 @@ void __init smp_setup_cpu_maps(void)
 	/*
 	 * Do the sibling map; assume only two threads per processor.
 	 */
-	for_each_cpu(cpu) {
+	for_each_possible_cpu(cpu) {
 		cpu_set(cpu, cpu_sibling_map[cpu]);
 		if (cpu_has_feature(CPU_FTR_SMT))
 			cpu_set(cpu ^ 0x1, cpu_sibling_map[cpu]);
@@ -589,3 +462,57 @@ static int __init early_xmon(char *p)
 }
 early_param("xmon", early_xmon);
 #endif
+
+static __init int add_pcspkr(void)
+{
+	struct device_node *np;
+	struct platform_device *pd;
+	int ret;
+
+	np = of_find_compatible_node(NULL, NULL, "pnpPNP,100");
+	of_node_put(np);
+	if (!np)
+		return -ENODEV;
+
+	pd = platform_device_alloc("pcspkr", -1);
+	if (!pd)
+		return -ENOMEM;
+
+	ret = platform_device_add(pd);
+	if (ret)
+		platform_device_put(pd);
+
+	return ret;
+}
+device_initcall(add_pcspkr);
+
+void probe_machine(void)
+{
+	extern struct machdep_calls __machine_desc_start;
+	extern struct machdep_calls __machine_desc_end;
+
+	/*
+	 * Iterate all ppc_md structures until we find the proper
+	 * one for the current machine type
+	 */
+	DBG("Probing machine type ...\n");
+
+	for (machine_id = &__machine_desc_start;
+	     machine_id < &__machine_desc_end;
+	     machine_id++) {
+		DBG("  %s ...", machine_id->name);
+		memcpy(&ppc_md, machine_id, sizeof(struct machdep_calls));
+		if (ppc_md.probe()) {
+			DBG(" match !\n");
+			break;
+		}
+		DBG("\n");
+	}
+	/* What can we do if we didn't find ? */
+	if (machine_id >= &__machine_desc_end) {
+		DBG("No suitable machine found !\n");
+		for (;;);
+	}
+
+	printk(KERN_INFO "Using %s machine description\n", ppc_md.name);
+}

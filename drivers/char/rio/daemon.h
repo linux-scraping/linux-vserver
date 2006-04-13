@@ -44,18 +44,16 @@ static char *_daemon_h_sccs_ = "@(#)daemon.h	1.3";
 ** structures used on /dev/rio
 */
 
-struct Error
-{
-	uint	Error;
-	uint	Entry;
-	uint	Other;
+struct Error {
+	unsigned int Error;
+	unsigned int Entry;
+	unsigned int Other;
 };
 
-struct DownLoad
-{
-	char	*DataP;
-	uint	Count;
-	uint	ProductCode;
+struct DownLoad {
+	char *DataP;
+	unsigned int Count;
+	unsigned int ProductCode;
 };
 
 /*
@@ -66,117 +64,98 @@ struct DownLoad
 #endif
 
 #ifndef MAX_XP_CTRL_LEN
-#define	MAX_XP_CTRL_LEN 16		/* ALSO IN PORT.H */
+#define	MAX_XP_CTRL_LEN 16	/* ALSO IN PORT.H */
 #endif
 
-struct	PortSetup
-{
-	uint	From;	/* Set/Clear XP & IXANY Control from this port.... */
-	uint	To;	/* .... to this port */
-	uint	XpCps;			/* at this speed */
-	char	XpOn[MAX_XP_CTRL_LEN];	/* this is the start string */
-	char	XpOff[MAX_XP_CTRL_LEN];	/* this is the stop string */
-	uchar	IxAny;			/* enable/disable IXANY */
-	uchar	IxOn;			/* enable/disable IXON */
-	uchar	Lock;			/* lock port params */
-	uchar	Store;			/* store params across closes */
-	uchar	Drain;			/* close only when drained */
+struct PortSetup {
+	unsigned int From;		/* Set/Clear XP & IXANY Control from this port.... */
+	unsigned int To;		/* .... to this port */
+	unsigned int XpCps;		/* at this speed */
+	char XpOn[MAX_XP_CTRL_LEN];	/* this is the start string */
+	char XpOff[MAX_XP_CTRL_LEN];	/* this is the stop string */
+	u8 IxAny;			/* enable/disable IXANY */
+	u8 IxOn;			/* enable/disable IXON */
+	u8 Lock;			/* lock port params */
+	u8 Store;			/* store params across closes */
+	u8 Drain;			/* close only when drained */
 };
 
-struct	LpbReq
-{
-	uint	Host;
-	uint	Link;
-	struct  LPB     *LpbP;
+struct LpbReq {
+	unsigned int Host;
+	unsigned int Link;
+	struct LPB *LpbP;
 };
 
-struct	RupReq
-{
-	uint	HostNum;
-	uint	RupNum;
-	struct  RUP 	*RupP;
+struct RupReq {
+	unsigned int HostNum;
+	unsigned int RupNum;
+	struct RUP *RupP;
 };
 
-struct	PortReq
-{
-	uint	SysPort;
-	struct  Port 	*PortP;
+struct PortReq {
+	unsigned int SysPort;
+	struct Port *PortP;
 };
 
-struct  StreamInfo
-{
-	uint	SysPort;
-#if 0
-	queue_t RQueue;
-	queue_t WQueue;
-#else
+struct StreamInfo {
+	unsigned int SysPort;
 	int RQueue;
 	int WQueue;
-#endif
 };
 
-struct	HostReq
-{
-	uint	HostNum;
-	struct  Host 	*HostP;
+struct HostReq {
+	unsigned int HostNum;
+	struct Host *HostP;
 };
 
-struct	HostDpRam
-{
-	uint	HostNum;
-	struct	DpRam	*DpRamP;
+struct HostDpRam {
+	unsigned int HostNum;
+	struct DpRam *DpRamP;
 };
 
-struct	DebugCtrl
-{
-	uint	SysPort;
-	uint	Debug;
-	uint	Wait;
+struct DebugCtrl {
+	unsigned int SysPort;
+	unsigned int Debug;
+	unsigned int Wait;
 };
 
-struct	MapInfo
-{
-	uint	FirstPort;	/* 8 ports, starting from this (tty) number */
-	uint	RtaUnique;	/* reside on this RTA (unique number) */
+struct MapInfo {
+	unsigned int FirstPort;		/* 8 ports, starting from this (tty) number */
+	unsigned int RtaUnique;		/* reside on this RTA (unique number) */
 };
 
-struct	MapIn
-{
-	uint	NumEntries;		/* How many port sets are we mapping? */
-	struct  MapInfo	*MapInfoP;	/* Pointer to (user space) info */
+struct MapIn {
+	unsigned int NumEntries;	/* How many port sets are we mapping? */
+	struct MapInfo *MapInfoP;	/* Pointer to (user space) info */
 };
 
-struct  SendPack
-{
-        unsigned int	PortNum;
-	unsigned char	Len;
-	unsigned char	Data[PKT_MAX_DATA_LEN];
+struct SendPack {
+	unsigned int PortNum;
+	unsigned char Len;
+	unsigned char Data[PKT_MAX_DATA_LEN];
 };
 
-struct SpecialRupCmd
-{
-	struct	PKT		Packet;
-	unsigned short	Host;
-	unsigned short	RupNum;
+struct SpecialRupCmd {
+	struct PKT Packet;
+	unsigned short Host;
+	unsigned short RupNum;
 };
 
-struct	IdentifyRta
-{
-	ulong	RtaUnique;
-	uchar	ID;
+struct IdentifyRta {
+	unsigned long RtaUnique;
+	u8 ID;
 };
 
-struct	KillNeighbour
-{
-	ulong	UniqueNum;
-	uchar	Link;
+struct KillNeighbour {
+	unsigned long UniqueNum;
+	u8 Link;
 };
 
 struct rioVersion {
-    char        version[MAX_VERSION_LEN];
-    char        relid[MAX_VERSION_LEN];
-    int         buildLevel;
-    char        buildDate[MAX_VERSION_LEN];
+	char version[MAX_VERSION_LEN];
+	char relid[MAX_VERSION_LEN];
+	int buildLevel;
+	char buildDate[MAX_VERSION_LEN];
 };
 
 
@@ -316,16 +295,16 @@ struct rioVersion {
 #define	RIO_SET_XP_CPS    rIOCW(155,int)
 #define RIO_GET_IXANY     rIOCR(156,int)	/* ixany allowed? */
 #define RIO_SET_IXANY     rIOCW(157,int)
-#define RIO_SET_IXANY_ON  rIOCN(158)		/* allow ixany */
-#define RIO_SET_IXANY_OFF rIOCN(159)		/* disallow ixany */
+#define RIO_SET_IXANY_ON  rIOCN(158)	/* allow ixany */
+#define RIO_SET_IXANY_OFF rIOCN(159)	/* disallow ixany */
 #define RIO_GET_MODEM     rIOCR(160,int)	/* port is modem/direct line? */
 #define RIO_SET_MODEM     rIOCW(161,int)
-#define RIO_SET_MODEM_ON  rIOCN(162)		/* port is a modem */
-#define RIO_SET_MODEM_OFF rIOCN(163)		/* port is direct */
+#define RIO_SET_MODEM_ON  rIOCN(162)	/* port is a modem */
+#define RIO_SET_MODEM_OFF rIOCN(163)	/* port is direct */
 #define RIO_GET_IXON      rIOCR(164,int)	/* ixon allowed? */
 #define RIO_SET_IXON      rIOCW(165,int)
-#define RIO_SET_IXON_ON   rIOCN(166)		/* allow ixon */
-#define RIO_SET_IXON_OFF  rIOCN(167)		/* disallow ixon */
+#define RIO_SET_IXON_ON   rIOCN(166)	/* allow ixon */
+#define RIO_SET_IXON_OFF  rIOCN(167)	/* disallow ixon */
 
 #define RIO_GET_SIVIEW	  ((('s')<<8) | 106)	/* backwards compatible with SI */
 

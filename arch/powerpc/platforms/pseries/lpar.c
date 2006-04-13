@@ -24,6 +24,7 @@
 #include <linux/config.h>
 #include <linux/kernel.h>
 #include <linux/dma-mapping.h>
+#include <linux/console.h>
 #include <asm/processor.h>
 #include <asm/mmu.h>
 #include <asm/page.h>
@@ -53,14 +54,15 @@ EXPORT_SYMBOL(plpar_hcall);
 EXPORT_SYMBOL(plpar_hcall_4out);
 EXPORT_SYMBOL(plpar_hcall_norets);
 EXPORT_SYMBOL(plpar_hcall_8arg_2ret);
-
+EXPORT_SYMBOL(plpar_hcall_7arg_7ret);
+EXPORT_SYMBOL(plpar_hcall_9arg_9ret);
 extern void pSeries_find_serial_port(void);
 
 
 int vtermno;	/* virtual terminal# for udbg  */
 
 #define __ALIGNED__ __attribute__((__aligned__(sizeof(long))))
-static void udbg_hvsi_putc(unsigned char c)
+static void udbg_hvsi_putc(char c)
 {
 	/* packet's seqno isn't used anyways */
 	uint8_t packet[] __ALIGNED__ = { 0xff, 5, 0, 0, c };
@@ -71,7 +73,7 @@ static void udbg_hvsi_putc(unsigned char c)
 
 	do {
 		rc = plpar_put_term_char(vtermno, sizeof(packet), packet);
-	} while (rc == H_Busy);
+	} while (rc == H_BUSY);
 }
 
 static long hvsi_udbg_buf_len;
@@ -84,7 +86,7 @@ static int udbg_hvsi_getc_poll(void)
 
 	if (hvsi_udbg_buf_len == 0) {
 		rc = plpar_get_term_char(vtermno, &hvsi_udbg_buf_len, hvsi_udbg_buf);
-		if (rc != H_Success || hvsi_udbg_buf[0] != 0xff) {
+		if (rc != H_SUCCESS || hvsi_udbg_buf[0] != 0xff) {
 			/* bad read or non-data packet */
 			hvsi_udbg_buf_len = 0;
 		} else {
@@ -111,7 +113,7 @@ static int udbg_hvsi_getc_poll(void)
 	return ch;
 }
 
-static unsigned char udbg_hvsi_getc(void)
+static int udbg_hvsi_getc(void)
 {
 	int ch;
 	for (;;) {
@@ -127,7 +129,7 @@ static unsigned char udbg_hvsi_getc(void)
 	}
 }
 
-static void udbg_putcLP(unsigned char c)
+static void udbg_putcLP(char c)
 {
 	char buf[16];
 	unsigned long rc;
@@ -138,7 +140,7 @@ static void udbg_putcLP(unsigned char c)
 	buf[0] = c;
 	do {
 		rc = plpar_put_term_char(vtermno, 1, buf);
-	} while(rc == H_Busy);
+	} while(rc == H_BUSY);
 }
 
 /* Buffered chars getc */
@@ -157,7 +159,7 @@ static int udbg_getc_pollLP(void)
 		/* get some more chars. */
 		inbuflen = 0;
 		rc = plpar_get_term_char(vtermno, &inbuflen, buf);
-		if (rc != H_Success)
+		if (rc != H_SUCCESS)
 			inbuflen = 0;	/* otherwise inbuflen is garbage */
 	}
 	if (inbuflen <= 0 || inbuflen > 16) {
@@ -172,7 +174,7 @@ static int udbg_getc_pollLP(void)
 	return ch;
 }
 
-static unsigned char udbg_getcLP(void)
+static int udbg_getcLP(void)
 {
 	int ch;
 	for (;;) {
@@ -191,7 +193,7 @@ static unsigned char udbg_getcLP(void)
 /* call this from early_init() for a working debug console on
  * vterm capable LPAR machines
  */
-void udbg_init_debug_lpar(void)
+void __init udbg_init_debug_lpar(void)
 {
 	vtermno = 0;
 	udbg_putc = udbg_putcLP;
@@ -200,73 +202,64 @@ void udbg_init_debug_lpar(void)
 }
 
 /* returns 0 if couldn't find or use /chosen/stdout as console */
-int find_udbg_vterm(void)
+void __init find_udbg_vterm(void)
 {
 	struct device_node *stdout_node;
 	u32 *termno;
 	char *name;
-	int found = 0;
+	int add_console;
 
 	/* find the boot console from /chosen/stdout */
 	if (!of_chosen)
-		return 0;
+		return;
 	name = (char *)get_property(of_chosen, "linux,stdout-path", NULL);
 	if (name == NULL)
-		return 0;
+		return;
 	stdout_node = of_find_node_by_path(name);
 	if (!stdout_node)
-		return 0;
-
-	/* now we have the stdout node; figure out what type of device it is. */
+		return;
 	name = (char *)get_property(stdout_node, "name", NULL);
 	if (!name) {
 		printk(KERN_WARNING "stdout node missing 'name' property!\n");
 		goto out;
 	}
+	/* The user has requested a console so this is already set up. */
+	add_console = !strstr(cmd_line, "console=");
 
-	if (strncmp(name, "vty", 3) == 0) {
-		if (device_is_compatible(stdout_node, "hvterm1")) {
-			termno = (u32 *)get_property(stdout_node, "reg", NULL);
-			if (termno) {
-				vtermno = termno[0];
-				udbg_putc = udbg_putcLP;
-				udbg_getc = udbg_getcLP;
-				udbg_getc_poll = udbg_getc_pollLP;
-				found = 1;
-			}
-		} else if (device_is_compatible(stdout_node, "hvterm-protocol")) {
-			termno = (u32 *)get_property(stdout_node, "reg", NULL);
-			if (termno) {
-				vtermno = termno[0];
-				udbg_putc = udbg_hvsi_putc;
-				udbg_getc = udbg_hvsi_getc;
-				udbg_getc_poll = udbg_hvsi_getc_poll;
-				found = 1;
-			}
-		}
-	} else if (strncmp(name, "serial", 6)) {
-		/* XXX fix ISA serial console */
-		printk(KERN_WARNING "serial stdout on LPAR ('%s')! "
-				"can't print udbg messages\n",
-		       stdout_node->full_name);
-	} else {
-		printk(KERN_WARNING "don't know how to print to stdout '%s'\n",
-		       stdout_node->full_name);
+	/* Check if it's a virtual terminal */
+	if (strncmp(name, "vty", 3) != 0)
+		goto out;
+	termno = (u32 *)get_property(stdout_node, "reg", NULL);
+	if (termno == NULL)
+		goto out;
+	vtermno = termno[0];
+
+	if (device_is_compatible(stdout_node, "hvterm1")) {
+		udbg_putc = udbg_putcLP;
+		udbg_getc = udbg_getcLP;
+		udbg_getc_poll = udbg_getc_pollLP;
+		if (add_console)
+			add_preferred_console("hvc", termno[0] & 0xff, NULL);
+	} else if (device_is_compatible(stdout_node, "hvterm-protocol")) {
+		vtermno = termno[0];
+		udbg_putc = udbg_hvsi_putc;
+		udbg_getc = udbg_hvsi_getc;
+		udbg_getc_poll = udbg_hvsi_getc_poll;
+		if (add_console)
+			add_preferred_console("hvsi", termno[0] & 0xff, NULL);
 	}
-
 out:
 	of_node_put(stdout_node);
-	return found;
 }
 
 void vpa_init(int cpu)
 {
 	int hwcpu = get_hard_smp_processor_id(cpu);
-	unsigned long vpa = __pa(&paca[cpu].lppaca);
+	unsigned long vpa = __pa(&lppaca[cpu]);
 	long ret;
 
 	if (cpu_has_feature(CPU_FTR_ALTIVEC))
-		paca[cpu].lppaca.vmxregs_in_use = 1;
+		lppaca[cpu].vmxregs_in_use = 1;
 
 	ret = register_vpa(hwcpu, vpa);
 
@@ -312,7 +305,7 @@ long pSeries_lpar_hpte_insert(unsigned long hpte_group,
 
 	lpar_rc = plpar_hcall(H_ENTER, flags, hpte_group, hpte_v,
 			      hpte_r, &slot, &dummy0, &dummy1);
-	if (unlikely(lpar_rc == H_PTEG_Full)) {
+	if (unlikely(lpar_rc == H_PTEG_FULL)) {
 		if (!(vflags & HPTE_V_BOLTED))
 			DBG_LOW(" full\n");
 		return -1;
@@ -323,7 +316,7 @@ long pSeries_lpar_hpte_insert(unsigned long hpte_group,
 	 * will fail. However we must catch the failure in hash_page
 	 * or we will loop forever, so return -2 in this case.
 	 */
-	if (unlikely(lpar_rc != H_Success)) {
+	if (unlikely(lpar_rc != H_SUCCESS)) {
 		if (!(vflags & HPTE_V_BOLTED))
 			DBG_LOW(" lpar err %d\n", lpar_rc);
 		return -2;
@@ -354,9 +347,9 @@ static long pSeries_lpar_hpte_remove(unsigned long hpte_group)
 		/* don't remove a bolted entry */
 		lpar_rc = plpar_pte_remove(H_ANDCOND, hpte_group + slot_offset,
 					   (0x1UL << 4), &dummy1, &dummy2);
-		if (lpar_rc == H_Success)
+		if (lpar_rc == H_SUCCESS)
 			return i;
-		BUG_ON(lpar_rc != H_Not_Found);
+		BUG_ON(lpar_rc != H_NOT_FOUND);
 
 		slot_offset++;
 		slot_offset &= 0x7;
@@ -399,14 +392,14 @@ static long pSeries_lpar_hpte_updatepp(unsigned long slot,
 
 	lpar_rc = plpar_pte_protect(flags, slot, want_v & HPTE_V_AVPN);
 
-	if (lpar_rc == H_Not_Found) {
+	if (lpar_rc == H_NOT_FOUND) {
 		DBG_LOW("not found !\n");
 		return -1;
 	}
 
 	DBG_LOW("ok\n");
 
-	BUG_ON(lpar_rc != H_Success);
+	BUG_ON(lpar_rc != H_SUCCESS);
 
 	return 0;
 }
@@ -425,7 +418,7 @@ static unsigned long pSeries_lpar_hpte_getword0(unsigned long slot)
 
 	lpar_rc = plpar_pte_read(flags, slot, &dword0, &dummy_word1);
 
-	BUG_ON(lpar_rc != H_Success);
+	BUG_ON(lpar_rc != H_SUCCESS);
 
 	return dword0;
 }
@@ -476,7 +469,7 @@ static void pSeries_lpar_hpte_updateboltedpp(unsigned long newpp,
 	flags = newpp & 7;
 	lpar_rc = plpar_pte_protect(flags, slot, 0);
 
-	BUG_ON(lpar_rc != H_Success);
+	BUG_ON(lpar_rc != H_SUCCESS);
 }
 
 static void pSeries_lpar_hpte_invalidate(unsigned long slot, unsigned long va,
@@ -492,10 +485,10 @@ static void pSeries_lpar_hpte_invalidate(unsigned long slot, unsigned long va,
 	want_v = hpte_encode_v(va, psize);
 	lpar_rc = plpar_pte_remove(H_AVPN, slot, want_v & HPTE_V_AVPN,
 				   &dummy1, &dummy2);
-	if (lpar_rc == H_Not_Found)
+	if (lpar_rc == H_NOT_FOUND)
 		return;
 
-	BUG_ON(lpar_rc != H_Success);
+	BUG_ON(lpar_rc != H_SUCCESS);
 }
 
 /*

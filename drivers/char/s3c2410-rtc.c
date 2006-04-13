@@ -24,6 +24,7 @@
 #include <linux/interrupt.h>
 #include <linux/rtc.h>
 #include <linux/bcd.h>
+#include <linux/clk.h>
 
 #include <asm/hardware.h>
 #include <asm/uaccess.h>
@@ -33,7 +34,6 @@
 
 #include <asm/mach/time.h>
 
-#include <asm/hardware/clock.h>
 #include <asm/arch/regs-rtc.h>
 
 /* need this for the RTC_AF definitions */
@@ -448,13 +448,13 @@ static int s3c2410_rtc_probe(struct platform_device *pdev)
 	/* find the IRQs */
 
 	s3c2410_rtc_tickno = platform_get_irq(pdev, 1);
-	if (s3c2410_rtc_tickno <= 0) {
+	if (s3c2410_rtc_tickno < 0) {
 		dev_err(&pdev->dev, "no irq for rtc tick\n");
 		return -ENOENT;
 	}
 
 	s3c2410_rtc_alarmno = platform_get_irq(pdev, 0);
-	if (s3c2410_rtc_alarmno <= 0) {
+	if (s3c2410_rtc_alarmno < 0) {
 		dev_err(&pdev->dev, "no irq for alarm\n");
 		return -ENOENT;
 	}

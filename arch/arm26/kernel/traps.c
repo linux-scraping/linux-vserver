@@ -34,7 +34,7 @@
 #include <asm/system.h>
 #include <asm/uaccess.h>
 #include <asm/unistd.h>
-#include <asm/semaphore.h>
+#include <linux/mutex.h>
 
 #include "ptrace.h"
 
@@ -132,7 +132,7 @@ static void dump_instr(struct pt_regs *regs)
 
 /*static*/ void __dump_stack(struct task_struct *tsk, unsigned long sp)
 {
-	dump_mem("Stack: ", sp, 8192+(unsigned long)tsk->thread_info);
+	dump_mem("Stack: ", sp, 8192+(unsigned long)task_stack_page(tsk));
 }
 
 void dump_stack(void)
@@ -158,7 +158,7 @@ void dump_backtrace(struct pt_regs *regs, struct task_struct *tsk)
 	} else if (verify_stack(fp)) {
 		printk("invalid frame pointer 0x%08x", fp);
 		ok = 0;
-	} else if (fp < (unsigned long)(tsk->thread_info + 1))
+	} else if (fp < (unsigned long)end_of_stack(tsk))
 		printk("frame pointer underflow");
 	printk("\n");
 
@@ -168,7 +168,7 @@ void dump_backtrace(struct pt_regs *regs, struct task_struct *tsk)
 
 /* FIXME - this is probably wrong.. */
 void show_stack(struct task_struct *task, unsigned long *sp) {
-	dump_mem("Stack: ", (unsigned long)sp, 8192+(unsigned long)task->thread_info);
+	dump_mem("Stack: ", (unsigned long)sp, 8192+(unsigned long)task_stack_page(task));
 }
 
 DEFINE_SPINLOCK(die_lock);
@@ -186,8 +186,9 @@ NORET_TYPE void die(const char *str, struct pt_regs *regs, int err)
 	printk("Internal error: %s: %x\n", str, err);
 	printk("CPU: %d\n", smp_processor_id());
 	show_regs(regs);
-	printk("Process %s (pid: %d, stack limit = 0x%p)\n",
-		current->comm, current->pid, tsk->thread_info + 1);
+	printk("Process %s (pid: %d[#%u], stack limit = 0x%p)\n",
+		current->comm, current->pid,
+		current->xid, end_of_stack(tsk));
 
 	if (!user_mode(regs) || in_interrupt()) {
 		__dump_stack(tsk, (unsigned long)(regs + 1));
@@ -207,19 +208,19 @@ void die_if_kernel(const char *str, struct pt_regs *regs, int err)
     	die(str, regs, err);
 }
 
-static DECLARE_MUTEX(undef_sem);
+static DEFINE_MUTEX(undef_mutex);
 static int (*undef_hook)(struct pt_regs *);
 
 int request_undef_hook(int (*fn)(struct pt_regs *))
 {
 	int ret = -EBUSY;
 
-	down(&undef_sem);
+	mutex_lock(&undef_mutex);
 	if (undef_hook == NULL) {
 		undef_hook = fn;
 		ret = 0;
 	}
-	up(&undef_sem);
+	mutex_unlock(&undef_mutex);
 
 	return ret;
 }
@@ -228,12 +229,12 @@ int release_undef_hook(int (*fn)(struct pt_regs *))
 {
 	int ret = -EINVAL;
 
-	down(&undef_sem);
+	mutex_lock(&undef_mutex);
 	if (undef_hook == fn) {
 		undef_hook = NULL;
 		ret = 0;
 	}
-	up(&undef_sem);
+	mutex_unlock(&undef_mutex);
 
 	return ret;
 }

@@ -50,8 +50,10 @@
 #include <asm/iseries/hv_call_xm.h>
 #include <asm/iseries/it_lp_queue.h>
 #include <asm/iseries/mf.h>
+#include <asm/iseries/it_exp_vpd_panel.h>
 #include <asm/iseries/hv_lp_event.h>
 #include <asm/iseries/lpar_map.h>
+#include <asm/udbg.h>
 
 #include "naca.h"
 #include "setup.h"
@@ -62,10 +64,8 @@
 #include "call_sm.h"
 #include "call_hpt.h"
 
-extern void hvlog(char *fmt, ...);
-
 #ifdef DEBUG
-#define DBG(fmt...) hvlog(fmt)
+#define DBG(fmt...) udbg_printf(fmt)
 #else
 #define DBG(fmt...)
 #endif
@@ -89,8 +89,6 @@ extern unsigned long embedded_sysmap_end;
 
 extern unsigned long iSeries_recal_tb;
 extern unsigned long iSeries_recal_titan;
-
-static int mf_initialized;
 
 static unsigned long cmd_mem_limit;
 
@@ -304,8 +302,6 @@ static void __init iSeries_init_early(void)
 {
 	DBG(" -> iSeries_init_early()\n");
 
-	ppc64_firmware_features = FW_FEATURE_ISERIES;
-
 	ppc64_interrupt_controller = IC_ISERIES;
 
 #if defined(CONFIG_BLK_DEV_INITRD)
@@ -350,8 +346,6 @@ static void __init iSeries_init_early(void)
 	HvCallEvent_setLpEventQueueInterruptProc(0, 0);
 
 	mf_init();
-	mf_initialized = 1;
-	mb();
 
 	/* If we were passed an initrd, set the ROOT_DEV properly if the values
 	 * look sensible. If not, clear initrd reference.
@@ -474,14 +468,6 @@ static unsigned long __init build_iSeries_Memory_Map(void)
 	printk("HPT absolute addr = %016lx, size = %dK\n",
 			chunk_to_addr(hptFirstChunk), hptSizeChunks * 256);
 
-	ppc64_pft_size = __ilog2(hptSizePages * HW_PAGE_SIZE);
-
-	/*
-	 * The actual hashed page table is in the hypervisor,
-	 * we have no direct access
-	 */
-	htab_address = NULL;
-
 	/*
 	 * Determine if absolute memory has any
 	 * holes so that we can interpret the
@@ -547,7 +533,7 @@ static unsigned long __init build_iSeries_Memory_Map(void)
  */
 static void __init iSeries_setup_arch(void)
 {
-	if (get_paca()->lppaca.shared_proc) {
+	if (get_lppaca()->shared_proc) {
 		ppc_md.idle_loop = iseries_shared_idle;
 		printk(KERN_INFO "Using shared processor idle loop\n");
 	} else {
@@ -569,49 +555,10 @@ static void iSeries_show_cpuinfo(struct seq_file *m)
 	seq_printf(m, "machine\t\t: 64-bit iSeries Logical Partition\n");
 }
 
-/*
- * Document me.
- * and Implement me.
- */
-static int iSeries_get_irq(struct pt_regs *regs)
-{
-	/* -2 means ignore this interrupt */
-	return -2;
-}
-
-/*
- * Document me.
- */
-static void iSeries_restart(char *cmd)
-{
-	mf_reboot();
-}
-
-/*
- * Document me.
- */
-static void iSeries_power_off(void)
-{
-	mf_power_off();
-}
-
-/*
- * Document me.
- */
-static void iSeries_halt(void)
-{
-	mf_power_off();
-}
-
 static void __init iSeries_progress(char * st, unsigned short code)
 {
 	printk("Progress: [%04x] - %s\n", (unsigned)code, st);
-	if (!piranha_simulator && mf_initialized) {
-		if (code != 0xffff)
-			mf_display_progress(code);
-		else
-			mf_clear_src();
-	}
+	mf_display_progress(code);
 }
 
 static void __init iSeries_fixup_klimit(void)
@@ -666,7 +613,8 @@ static void yield_shared_processor(void)
 	 * The decrementer stops during the yield.  Force a fake decrementer
 	 * here and let the timer_interrupt code sort out the actual time.
 	 */
-	get_paca()->lppaca.int_dword.fields.decr_int = 1;
+	get_lppaca()->int_dword.fields.decr_int = 1;
+	ppc64_runlatch_on();
 	process_iSeries_events();
 }
 
@@ -727,21 +675,29 @@ static void iseries_dedicated_idle(void)
 void __init iSeries_init_IRQ(void) { }
 #endif
 
-static int __init iseries_probe(int platform)
+static int __init iseries_probe(void)
 {
-	return PLATFORM_ISERIES_LPAR == platform;
+	unsigned long root = of_get_flat_dt_root();
+	if (!of_flat_dt_is_compatible(root, "IBM,iSeries"))
+		return 0;
+
+	powerpc_firmware_features |= FW_FEATURE_ISERIES;
+	powerpc_firmware_features |= FW_FEATURE_LPAR;
+
+	return 1;
 }
 
-struct machdep_calls __initdata iseries_md = {
+define_machine(iseries) {
+	.name		= "iSeries",
 	.setup_arch	= iSeries_setup_arch,
 	.show_cpuinfo	= iSeries_show_cpuinfo,
 	.init_IRQ	= iSeries_init_IRQ,
 	.get_irq	= iSeries_get_irq,
 	.init_early	= iSeries_init_early,
 	.pcibios_fixup	= iSeries_pci_final_fixup,
-	.restart	= iSeries_restart,
-	.power_off	= iSeries_power_off,
-	.halt		= iSeries_halt,
+	.restart	= mf_reboot,
+	.power_off	= mf_power_off,
+	.halt		= mf_power_off,
 	.get_boot_time	= iSeries_get_boot_time,
 	.set_rtc_time	= iSeries_set_rtc_time,
 	.get_rtc_time	= iSeries_get_rtc_time,
@@ -871,6 +827,11 @@ void dt_prop_u64_list(struct iseries_flat_dt *dt, char *name, u64 *data, int n)
 	dt_prop(dt, name, (char *)data, sizeof(u64) * n);
 }
 
+void dt_prop_u32_list(struct iseries_flat_dt *dt, char *name, u32 *data, int n)
+{
+	dt_prop(dt, name, (char *)data, sizeof(u32) * n);
+}
+
 void dt_prop_empty(struct iseries_flat_dt *dt, char *name)
 {
 	dt_prop(dt, name, NULL, 0);
@@ -882,6 +843,7 @@ void dt_cpus(struct iseries_flat_dt *dt)
 	unsigned char *p;
 	unsigned int i, index;
 	struct IoHriProcessorVpd *d;
+	u32 pft_size[2];
 
 	/* yuck */
 	snprintf(buf, 32, "PowerPC,%s", cur_cpu_spec->cpu_name);
@@ -892,8 +854,11 @@ void dt_cpus(struct iseries_flat_dt *dt)
 	dt_prop_u32(dt, "#address-cells", 1);
 	dt_prop_u32(dt, "#size-cells", 0);
 
+	pft_size[0] = 0; /* NUMA CEC cookie, 0 for non NUMA  */
+	pft_size[1] = __ilog2(HvCallHpt_getHptPages() * HW_PAGE_SIZE);
+
 	for (i = 0; i < NR_CPUS; i++) {
-		if (paca[i].lppaca.dyn_proc_status >= 2)
+		if (lppaca[i].dyn_proc_status >= 2)
 			continue;
 
 		snprintf(p, 32 - (p - buf), "@%d", i);
@@ -901,7 +866,7 @@ void dt_cpus(struct iseries_flat_dt *dt)
 
 		dt_prop_str(dt, "device_type", "cpu");
 
-		index = paca[i].lppaca.dyn_hv_phys_proc_index;
+		index = lppaca[i].dyn_hv_phys_proc_index;
 		d = &xIoHriProcessorVpd[index];
 
 		dt_prop_u32(dt, "i-cache-size", d->xInstCacheSize * 1024);
@@ -918,10 +883,30 @@ void dt_cpus(struct iseries_flat_dt *dt)
 
 		dt_prop_u32(dt, "reg", i);
 
+		dt_prop_u32_list(dt, "ibm,pft-size", pft_size, 2);
+
 		dt_end_node(dt);
 	}
 
 	dt_end_node(dt);
+}
+
+void dt_model(struct iseries_flat_dt *dt)
+{
+	char buf[16] = "IBM,";
+
+	/* "IBM," + mfgId[2:3] + systemSerial[1:5] */
+	strne2a(buf + 4, xItExtVpdPanel.mfgID + 2, 2);
+	strne2a(buf + 6, xItExtVpdPanel.systemSerial + 1, 5);
+	buf[11] = '\0';
+	dt_prop_str(dt, "system-id", buf);
+
+	/* "IBM," + machineType[0:4] */
+	strne2a(buf + 4, xItExtVpdPanel.machineType, 4);
+	buf[8] = '\0';
+	dt_prop_str(dt, "model", buf);
+
+	dt_prop_str(dt, "compatible", "IBM,iSeries");
 }
 
 void build_flat_dt(struct iseries_flat_dt *dt, unsigned long phys_mem_size)
@@ -934,6 +919,7 @@ void build_flat_dt(struct iseries_flat_dt *dt, unsigned long phys_mem_size)
 
 	dt_prop_u32(dt, "#address-cells", 2);
 	dt_prop_u32(dt, "#size-cells", 2);
+	dt_model(dt);
 
 	/* /memory */
 	dt_start_node(dt, "memory@0");
@@ -946,7 +932,7 @@ void build_flat_dt(struct iseries_flat_dt *dt, unsigned long phys_mem_size)
 
 	/* /chosen */
 	dt_start_node(dt, "chosen");
-	dt_prop_u32(dt, "linux,platform", PLATFORM_ISERIES_LPAR);
+	dt_prop_str(dt, "bootargs", cmd_line);
 	if (cmd_mem_limit)
 		dt_prop_u64(dt, "linux,memory-limit", cmd_mem_limit);
 	dt_end_node(dt);
@@ -994,3 +980,16 @@ static int __init early_parsemem(char *p)
 	return 0;
 }
 early_param("mem", early_parsemem);
+
+static void hvputc(char c)
+{
+	if (c == '\n')
+		hvputc('\r');
+
+	HvCall_writeLogBuffer(&c, 1);
+}
+
+void __init udbg_init_iseries(void)
+{
+	udbg_putc = hvputc;
+}

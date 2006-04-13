@@ -23,11 +23,17 @@
 #ifndef IEEE80211_CRYPT_H
 #define IEEE80211_CRYPT_H
 
-#include <linux/skbuff.h>
+#include <linux/types.h>
+#include <linux/list.h>
+#include <net/ieee80211.h>
+#include <asm/atomic.h>
 
 enum {
 	IEEE80211_CRYPTO_TKIP_COUNTERMEASURES = (1 << 0),
 };
+
+struct sk_buff;
+struct module;
 
 struct ieee80211_crypto_ops {
 	const char *name;
@@ -41,7 +47,8 @@ struct ieee80211_crypto_ops {
 	/* deinitialize crypto context and free allocated private data */
 	void (*deinit) (void *priv);
 
-	int (*build_iv) (struct sk_buff * skb, int hdr_len, void *priv);
+	int (*build_iv) (struct sk_buff * skb, int hdr_len,
+			 u8 *key, int keylen, void *priv);
 
 	/* encrypt/decrypt return < 0 on error or >= 0 on success. The return
 	 * value from decrypt_mpdu is passed as the keyidx value for
@@ -86,6 +93,8 @@ struct ieee80211_crypt_data {
 	void *priv;
 	atomic_t refcnt;
 };
+
+struct ieee80211_device;
 
 int ieee80211_register_crypto_ops(struct ieee80211_crypto_ops *ops);
 int ieee80211_unregister_crypto_ops(struct ieee80211_crypto_ops *ops);

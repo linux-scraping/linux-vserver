@@ -3,7 +3,7 @@
  * License.  See the file "COPYING" in the main directory of this archive
  * for more details.
  *
- * Copyright (c) 2000-2005 Silicon Graphics, Inc.  All Rights Reserved.
+ * Copyright (c) 2000-2006 Silicon Graphics, Inc.  All Rights Reserved.
  */
 
 #include <linux/config.h>
@@ -36,7 +36,7 @@ static struct bteinfo_s *bte_if_on_node(nasid_t nasid, int interface)
 	nodepda_t *tmp_nodepda;
 
 	if (nasid_to_cnodeid(nasid) == -1)
-		return (struct bteinfo_s *)NULL;;
+		return (struct bteinfo_s *)NULL;
 
 	tmp_nodepda = NODEPDA(nasid_to_cnodeid(nasid));
 	return &tmp_nodepda->bte_if[interface];
@@ -186,18 +186,13 @@ retry_bteop:
 
 	/* Initialize the notification to a known value. */
 	*bte->most_rcnt_na = BTE_WORD_BUSY;
-	notif_phys_addr = TO_PHYS(ia64_tpa((unsigned long)bte->most_rcnt_na));
+	notif_phys_addr = (u64)bte->most_rcnt_na;
 
-	if (is_shub2()) {
-		src = SH2_TIO_PHYS_TO_DMA(src);
-		dest = SH2_TIO_PHYS_TO_DMA(dest);
-		notif_phys_addr = SH2_TIO_PHYS_TO_DMA(notif_phys_addr);
-	}
 	/* Set the source and destination registers */
-	BTE_PRINTKV(("IBSA = 0x%lx)\n", (TO_PHYS(src))));
-	BTE_SRC_STORE(bte, TO_PHYS(src));
-	BTE_PRINTKV(("IBDA = 0x%lx)\n", (TO_PHYS(dest))));
-	BTE_DEST_STORE(bte, TO_PHYS(dest));
+	BTE_PRINTKV(("IBSA = 0x%lx)\n", src));
+	BTE_SRC_STORE(bte, src);
+	BTE_PRINTKV(("IBDA = 0x%lx)\n", dest));
+	BTE_DEST_STORE(bte, dest);
 
 	/* Set the notification register */
 	BTE_PRINTKV(("IBNA = 0x%lx)\n", notif_phys_addr));

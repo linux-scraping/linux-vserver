@@ -55,7 +55,7 @@
 
 #define FBPIXMAPSIZE	(1024 * 8)
 
-static struct notifier_block *fb_notifier_list;
+static BLOCKING_NOTIFIER_HEAD(fb_notifier_list);
 struct fb_info *registered_fb[FB_MAX];
 int num_registered_fb;
 
@@ -589,17 +589,19 @@ fb_read(struct file *file, char __user *buf, size_t count, loff_t *ppos)
 		return info->fbops->fb_read(file, buf, count, ppos);
 	
 	total_size = info->screen_size;
+
 	if (total_size == 0)
 		total_size = info->fix.smem_len;
 
 	if (p >= total_size)
-	    return 0;
+		return 0;
+
 	if (count >= total_size)
-	    count = total_size;
+		count = total_size;
+
 	if (count + p > total_size)
 		count = total_size - p;
 
-	cnt = 0;
 	buffer = kmalloc((count > PAGE_SIZE) ? PAGE_SIZE : count,
 			 GFP_KERNEL);
 	if (!buffer)
@@ -636,6 +638,7 @@ fb_read(struct file *file, char __user *buf, size_t count, loff_t *ppos)
 	}
 
 	kfree(buffer);
+
 	return (err) ? err : cnt;
 }
 
@@ -648,7 +651,7 @@ fb_write(struct file *file, const char __user *buf, size_t count, loff_t *ppos)
 	struct fb_info *info = registered_fb[fbidx];
 	u32 *buffer, *src;
 	u32 __iomem *dst;
-	int c, i, cnt = 0, err;
+	int c, i, cnt = 0, err = 0;
 	unsigned long total_size;
 
 	if (!info || !info->screen_base)
@@ -661,19 +664,19 @@ fb_write(struct file *file, const char __user *buf, size_t count, loff_t *ppos)
 		return info->fbops->fb_write(file, buf, count, ppos);
 	
 	total_size = info->screen_size;
+
 	if (total_size == 0)
 		total_size = info->fix.smem_len;
 
 	if (p > total_size)
-	    return -ENOSPC;
+		return 0;
+
 	if (count >= total_size)
-	    count = total_size;
-	err = 0;
-	if (count + p > total_size) {
-	    count = total_size - p;
-	    err = -ENOSPC;
-	}
-	cnt = 0;
+		count = total_size;
+
+	if (count + p > total_size)
+		count = total_size - p;
+
 	buffer = kmalloc((count > PAGE_SIZE) ? PAGE_SIZE : count,
 			 GFP_KERNEL);
 	if (!buffer)
@@ -687,12 +690,15 @@ fb_write(struct file *file, const char __user *buf, size_t count, loff_t *ppos)
 	while (count) {
 		c = (count > PAGE_SIZE) ? PAGE_SIZE : count;
 		src = buffer;
+
 		if (copy_from_user(src, buf, c)) {
 			err = -EFAULT;
 			break;
 		}
+
 		for (i = c >> 2; i--; )
 			fb_writel(*src++, dst++);
+
 		if (c & 3) {
 			u8 *src8 = (u8 *) src;
 			u8 __iomem *dst8 = (u8 __iomem *) dst;
@@ -702,11 +708,13 @@ fb_write(struct file *file, const char __user *buf, size_t count, loff_t *ppos)
 
 			dst = (u32 __iomem *) dst8;
 		}
+
 		*ppos += c;
 		buf += c;
 		cnt += c;
 		count -= c;
 	}
+
 	kfree(buffer);
 
 	return (err) ? err : cnt;
@@ -776,7 +784,7 @@ fb_set_var(struct fb_info *info, struct fb_var_screeninfo *var)
 
 		    event.info = info;
 		    event.data = &mode1;
-		    ret = notifier_call_chain(&fb_notifier_list,
+		    ret = blocking_notifier_call_chain(&fb_notifier_list,
 					      FB_EVENT_MODE_DELETE, &event);
 		}
 
@@ -822,8 +830,8 @@ fb_set_var(struct fb_info *info, struct fb_var_screeninfo *var)
 
 				info->flags &= ~FBINFO_MISC_USEREVENT;
 				event.info = info;
-				notifier_call_chain(&fb_notifier_list, evnt,
-						    &event);
+				blocking_notifier_call_chain(&fb_notifier_list,
+						evnt, &event);
 			}
 		}
 	}
@@ -846,7 +854,8 @@ fb_blank(struct fb_info *info, int blank)
 
 		event.info = info;
 		event.data = &blank;
-		notifier_call_chain(&fb_notifier_list, FB_EVENT_BLANK, &event);
+		blocking_notifier_call_chain(&fb_notifier_list,
+				FB_EVENT_BLANK, &event);
 	}
 
  	return ret;
@@ -917,7 +926,7 @@ fb_ioctl(struct inode *inode, struct file *file, unsigned int cmd,
 		con2fb.framebuffer = -1;
 		event.info = info;
 		event.data = &con2fb;
-		notifier_call_chain(&fb_notifier_list,
+		blocking_notifier_call_chain(&fb_notifier_list,
 				    FB_EVENT_GET_CONSOLE_MAP, &event);
 		return copy_to_user(argp, &con2fb,
 				    sizeof(con2fb)) ? -EFAULT : 0;
@@ -936,7 +945,7 @@ fb_ioctl(struct inode *inode, struct file *file, unsigned int cmd,
 		    return -EINVAL;
 		event.info = info;
 		event.data = &con2fb;
-		return notifier_call_chain(&fb_notifier_list,
+		return blocking_notifier_call_chain(&fb_notifier_list,
 					   FB_EVENT_SET_CONSOLE_MAP,
 					   &event);
 	case FBIOBLANK:
@@ -949,7 +958,7 @@ fb_ioctl(struct inode *inode, struct file *file, unsigned int cmd,
 	default:
 		if (fb->fb_ioctl == NULL)
 			return -EINVAL;
-		return fb->fb_ioctl(inode, file, cmd, arg, info);
+		return fb->fb_ioctl(info, cmd, arg);
 	}
 }
 
@@ -1099,7 +1108,7 @@ fb_compat_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 
 	default:
 		if (fb->fb_compat_ioctl)
-			ret = fb->fb_compat_ioctl(file, cmd, arg, info);
+			ret = fb->fb_compat_ioctl(info, cmd, arg);
 		break;
 	}
 	unlock_kernel();
@@ -1127,7 +1136,7 @@ fb_mmap(struct file *file, struct vm_area_struct * vma)
 	if (fb->fb_mmap) {
 		int res;
 		lock_kernel();
-		res = fb->fb_mmap(info, file, vma);
+		res = fb->fb_mmap(info, vma);
 		unlock_kernel();
 		return res;
 	}
@@ -1161,11 +1170,6 @@ fb_mmap(struct file *file, struct vm_area_struct * vma)
 	vma->vm_pgoff = off >> PAGE_SHIFT;
 	/* This is an IO map - tell maydump to skip this VMA */
 	vma->vm_flags |= VM_IO | VM_RESERVED;
-#if defined(__sparc_v9__)
-	if (io_remap_pfn_range(vma, vma->vm_start, off >> PAGE_SHIFT,
-				vma->vm_end - vma->vm_start, vma->vm_page_prot))
-		return -EAGAIN;
-#else
 #if defined(__mc68000__)
 #if defined(CONFIG_SUN3)
 	pgprot_val(vma->vm_page_prot) |= SUN3_PAGE_NOCACHE;
@@ -1187,7 +1191,7 @@ fb_mmap(struct file *file, struct vm_area_struct * vma)
 #elif defined(__i386__) || defined(__x86_64__)
 	if (boot_cpu_data.x86 > 3)
 		pgprot_val(vma->vm_page_prot) |= _PAGE_PCD;
-#elif defined(__mips__)
+#elif defined(__mips__) || defined(__sparc_v9__)
 	vma->vm_page_prot = pgprot_noncached(vma->vm_page_prot);
 #elif defined(__hppa__)
 	pgprot_val(vma->vm_page_prot) |= _PAGE_NO_CACHE;
@@ -1204,7 +1208,6 @@ fb_mmap(struct file *file, struct vm_area_struct * vma)
 	if (io_remap_pfn_range(vma, vma->vm_start, off >> PAGE_SHIFT,
 			     vma->vm_end - vma->vm_start, vma->vm_page_prot))
 		return -EAGAIN;
-#endif /* !__sparc_v9__ */
 	return 0;
 #endif /* !sparc32 */
 }
@@ -1226,6 +1229,7 @@ fb_open(struct inode *inode, struct file *file)
 		return -ENODEV;
 	if (!try_module_get(info->fbops->owner))
 		return -ENODEV;
+	file->private_data = info;
 	if (info->fbops->fb_open) {
 		res = info->fbops->fb_open(info,1);
 		if (res)
@@ -1237,11 +1241,9 @@ fb_open(struct inode *inode, struct file *file)
 static int 
 fb_release(struct inode *inode, struct file *file)
 {
-	int fbidx = iminor(inode);
-	struct fb_info *info;
+	struct fb_info * const info = file->private_data;
 
 	lock_kernel();
-	info = registered_fb[fbidx];
 	if (info->fbops->fb_release)
 		info->fbops->fb_release(info,1);
 	module_put(info->fbops->owner);
@@ -1323,7 +1325,7 @@ register_framebuffer(struct fb_info *fb_info)
 	devfs_mk_cdev(MKDEV(FB_MAJOR, i),
 			S_IFCHR | S_IRUGO | S_IWUGO, "fb/%d", i);
 	event.info = fb_info;
-	notifier_call_chain(&fb_notifier_list,
+	blocking_notifier_call_chain(&fb_notifier_list,
 			    FB_EVENT_FB_REGISTERED, &event);
 	return 0;
 }
@@ -1365,7 +1367,7 @@ unregister_framebuffer(struct fb_info *fb_info)
  */
 int fb_register_client(struct notifier_block *nb)
 {
-	return notifier_chain_register(&fb_notifier_list, nb);
+	return blocking_notifier_chain_register(&fb_notifier_list, nb);
 }
 
 /**
@@ -1374,7 +1376,7 @@ int fb_register_client(struct notifier_block *nb)
  */
 int fb_unregister_client(struct notifier_block *nb)
 {
-	return notifier_chain_unregister(&fb_notifier_list, nb);
+	return blocking_notifier_chain_unregister(&fb_notifier_list, nb);
 }
 
 /**
@@ -1392,11 +1394,13 @@ void fb_set_suspend(struct fb_info *info, int state)
 
 	event.info = info;
 	if (state) {
-		notifier_call_chain(&fb_notifier_list, FB_EVENT_SUSPEND, &event);
+		blocking_notifier_call_chain(&fb_notifier_list,
+				FB_EVENT_SUSPEND, &event);
 		info->state = FBINFO_STATE_SUSPENDED;
 	} else {
 		info->state = FBINFO_STATE_RUNNING;
-		notifier_call_chain(&fb_notifier_list, FB_EVENT_RESUME, &event);
+		blocking_notifier_call_chain(&fb_notifier_list,
+				FB_EVENT_RESUME, &event);
 	}
 }
 
@@ -1468,7 +1472,7 @@ int fb_new_modelist(struct fb_info *info)
 
 	if (!list_empty(&info->modelist)) {
 		event.info = info;
-		err = notifier_call_chain(&fb_notifier_list,
+		err = blocking_notifier_call_chain(&fb_notifier_list,
 					   FB_EVENT_NEW_MODELIST,
 					   &event);
 	}
@@ -1494,7 +1498,7 @@ int fb_con_duit(struct fb_info *info, int event, void *data)
 	evnt.info = info;
 	evnt.data = data;
 
-	return notifier_call_chain(&fb_notifier_list, event, &evnt);
+	return blocking_notifier_call_chain(&fb_notifier_list, event, &evnt);
 }
 EXPORT_SYMBOL(fb_con_duit);
 
@@ -1543,6 +1547,7 @@ int fb_get_options(char *name, char **option)
 	return retval;
 }
 
+#ifndef MODULE
 /**
  *	video_setup - process command line options
  *	@options: string of options
@@ -1583,9 +1588,10 @@ static int __init video_setup(char *options)
 		}
 	}
 
-	return 0;
+	return 1;
 }
 __setup("video=", video_setup);
+#endif
 
     /*
      *  Visible symbols for modules

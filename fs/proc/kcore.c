@@ -14,6 +14,7 @@
 #include <linux/proc_fs.h>
 #include <linux/user.h>
 #include <linux/a.out.h>
+#include <linux/capability.h>
 #include <linux/elf.h>
 #include <linux/elfcore.h>
 #include <linux/vmalloc.h>
@@ -30,7 +31,7 @@ static int open_kcore(struct inode * inode, struct file * filp)
 
 static ssize_t read_kcore(struct file *, char __user *, size_t, loff_t *);
 
-struct file_operations proc_kcore_operations = {
+const struct file_operations proc_kcore_operations = {
 	.read		= read_kcore,
 	.open		= open_kcore,
 };

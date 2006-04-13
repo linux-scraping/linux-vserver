@@ -34,6 +34,7 @@
 #include <linux/hwmon.h>
 #include <linux/err.h>
 #include <linux/init.h>
+#include <linux/mutex.h>
 #include <asm/io.h>
 
 /* Address is autodetected, there is no default value */
@@ -102,9 +103,9 @@ superio_exit(void)
 struct smsc47m1_data {
 	struct i2c_client client;
 	struct class_device *class_dev;
-	struct semaphore lock;
+	struct mutex lock;
 
-	struct semaphore update_lock;
+	struct mutex update_lock;
 	unsigned long last_updated;	/* In jiffies */
 
 	u8 fan[2];		/* Register value */
@@ -126,8 +127,9 @@ static struct smsc47m1_data *smsc47m1_update_device(struct device *dev,
 
 
 static struct i2c_driver smsc47m1_driver = {
-	.owner		= THIS_MODULE,
-	.name		= "smsc47m1",
+	.driver = {
+		.name	= "smsc47m1",
+	},
 	.attach_adapter	= smsc47m1_detect,
 	.detach_client	= smsc47m1_detach_client,
 };
@@ -187,18 +189,18 @@ static ssize_t set_fan_min(struct device *dev, const char *buf,
 	struct smsc47m1_data *data = i2c_get_clientdata(client);
 	long rpmdiv, val = simple_strtol(buf, NULL, 10);
 
-	down(&data->update_lock);
+	mutex_lock(&data->update_lock);
 	rpmdiv = val * DIV_FROM_REG(data->fan_div[nr]);
 
 	if (983040 > 192 * rpmdiv || 2 * rpmdiv > 983040) {
-		up(&data->update_lock);
+		mutex_unlock(&data->update_lock);
 		return -EINVAL;
 	}
 
 	data->fan_preload[nr] = 192 - ((983040 + rpmdiv / 2) / rpmdiv);
 	smsc47m1_write_value(client, SMSC47M1_REG_FAN_PRELOAD(nr),
 			     data->fan_preload[nr]);
-	up(&data->update_lock);
+	mutex_unlock(&data->update_lock);
 
 	return count;
 }
@@ -219,14 +221,14 @@ static ssize_t set_fan_div(struct device *dev, const char *buf,
 	if (new_div == old_div) /* No change */
 		return count;
 
-	down(&data->update_lock);
+	mutex_lock(&data->update_lock);
 	switch (new_div) {
 	case 1: data->fan_div[nr] = 0; break;
 	case 2: data->fan_div[nr] = 1; break;
 	case 4: data->fan_div[nr] = 2; break;
 	case 8: data->fan_div[nr] = 3; break;
 	default:
-		up(&data->update_lock);
+		mutex_unlock(&data->update_lock);
 		return -EINVAL;
 	}
 
@@ -240,7 +242,7 @@ static ssize_t set_fan_div(struct device *dev, const char *buf,
 	data->fan_preload[nr] = SENSORS_LIMIT(tmp, 0, 191);
 	smsc47m1_write_value(client, SMSC47M1_REG_FAN_PRELOAD(nr),
 			     data->fan_preload[nr]);
-	up(&data->update_lock);
+	mutex_unlock(&data->update_lock);
 
 	return count;
 }
@@ -256,12 +258,12 @@ static ssize_t set_pwm(struct device *dev, const char *buf,
 	if (val < 0 || val > 255)
 		return -EINVAL;
 
-	down(&data->update_lock);
+	mutex_lock(&data->update_lock);
 	data->pwm[nr] &= 0x81; /* Preserve additional bits */
 	data->pwm[nr] |= PWM_TO_REG(val);
 	smsc47m1_write_value(client, SMSC47M1_REG_PWM(nr),
 			     data->pwm[nr]);
-	up(&data->update_lock);
+	mutex_unlock(&data->update_lock);
 
 	return count;
 }
@@ -277,12 +279,12 @@ static ssize_t set_pwm_en(struct device *dev, const char *buf,
 	if (val != 0 && val != 1)
 		return -EINVAL;
 
-	down(&data->update_lock);
+	mutex_lock(&data->update_lock);
 	data->pwm[nr] &= 0xFE; /* preserve the other bits */
 	data->pwm[nr] |= !val;
 	smsc47m1_write_value(client, SMSC47M1_REG_PWM(nr),
 			     data->pwm[nr]);
-	up(&data->update_lock);
+	mutex_unlock(&data->update_lock);
 
 	return count;
 }
@@ -394,7 +396,7 @@ static int smsc47m1_detect(struct i2c_adapter *adapter)
 	int err = 0;
 	int fan1, fan2, pwm1, pwm2;
 
-	if (!request_region(address, SMSC_EXTENT, smsc47m1_driver.name)) {
+	if (!request_region(address, SMSC_EXTENT, smsc47m1_driver.driver.name)) {
 		dev_err(&adapter->dev, "Region 0x%x already in use!\n", address);
 		return -EBUSY;
 	}
@@ -407,13 +409,13 @@ static int smsc47m1_detect(struct i2c_adapter *adapter)
 	new_client = &data->client;
 	i2c_set_clientdata(new_client, data);
 	new_client->addr = address;
-	init_MUTEX(&data->lock);
+	mutex_init(&data->lock);
 	new_client->adapter = adapter;
 	new_client->driver = &smsc47m1_driver;
 	new_client->flags = 0;
 
 	strlcpy(new_client->name, "smsc47m1", I2C_NAME_SIZE);
-	init_MUTEX(&data->update_lock);
+	mutex_init(&data->update_lock);
 
 	/* If no function is properly configured, there's no point in
 	   actually registering the chip. */
@@ -511,17 +513,17 @@ static int smsc47m1_read_value(struct i2c_client *client, u8 reg)
 {
 	int res;
 
-	down(&((struct smsc47m1_data *) i2c_get_clientdata(client))->lock);
+	mutex_lock(&((struct smsc47m1_data *) i2c_get_clientdata(client))->lock);
 	res = inb_p(client->addr + reg);
-	up(&((struct smsc47m1_data *) i2c_get_clientdata(client))->lock);
+	mutex_unlock(&((struct smsc47m1_data *) i2c_get_clientdata(client))->lock);
 	return res;
 }
 
 static void smsc47m1_write_value(struct i2c_client *client, u8 reg, u8 value)
 {
-	down(&((struct smsc47m1_data *) i2c_get_clientdata(client))->lock);
+	mutex_lock(&((struct smsc47m1_data *) i2c_get_clientdata(client))->lock);
 	outb_p(value, client->addr + reg);
-	up(&((struct smsc47m1_data *) i2c_get_clientdata(client))->lock);
+	mutex_unlock(&((struct smsc47m1_data *) i2c_get_clientdata(client))->lock);
 }
 
 static struct smsc47m1_data *smsc47m1_update_device(struct device *dev,
@@ -530,7 +532,7 @@ static struct smsc47m1_data *smsc47m1_update_device(struct device *dev,
  	struct i2c_client *client = to_i2c_client(dev);
 	struct smsc47m1_data *data = i2c_get_clientdata(client);
 
-	down(&data->update_lock);
+	mutex_lock(&data->update_lock);
 
 	if (time_after(jiffies, data->last_updated + HZ + HZ / 2) || init) {
 		int i;
@@ -557,7 +559,7 @@ static struct smsc47m1_data *smsc47m1_update_device(struct device *dev,
 		data->last_updated = jiffies;
 	}
 
-	up(&data->update_lock);
+	mutex_unlock(&data->update_lock);
 	return data;
 }
 

@@ -233,6 +233,7 @@ config MACH_JAZZ
 	select ARC32
 	select ARCH_MAY_HAVE_PC_FDC
 	select GENERIC_ISA_DMA
+	select I8253
 	select I8259
 	select ISA
 	select SYS_HAS_CPU_R4X00
@@ -530,6 +531,7 @@ config QEMU
 	select DMA_COHERENT
 	select GENERIC_ISA_DMA
 	select HAVE_STD_PC_SERIAL_PORT
+	select I8253
 	select I8259
 	select ISA
 	select SWAP_IO_SPACE
@@ -595,13 +597,14 @@ config SGI_IP32
 	select SYS_HAS_CPU_R5000
 	select SYS_HAS_CPU_R10000 if BROKEN
 	select SYS_HAS_CPU_RM7000
+	select SYS_HAS_CPU_NEVADA
 	select SYS_SUPPORTS_64BIT_KERNEL
 	select SYS_SUPPORTS_BIG_ENDIAN
 	help
 	  If you want this kernel to run on SGI O2 workstation, say Y here.
 
 config SIBYTE_BIGSUR
-	bool "Support for Sibyte BigSur"
+	bool "Support for Sibyte BCM91480B-BigSur"
 	select BOOT_ELF32
 	select DMA_COHERENT
 	select PCI_DOMAINS
@@ -713,6 +716,7 @@ config SNI_RM200_PCI
 	select HAVE_STD_PC_SERIAL_PORT
 	select HW_HAS_EISA
 	select HW_HAS_PCI
+	select I8253
 	select I8259
 	select ISA
 	select SYS_HAS_CPU_R4X00
@@ -789,6 +793,7 @@ source "arch/mips/tx4927/Kconfig"
 source "arch/mips/tx4938/Kconfig"
 source "arch/mips/vr41xx/Kconfig"
 source "arch/mips/philips/pnx8550/common/Kconfig"
+source "arch/mips/cobalt/Kconfig"
 
 endmenu
 
@@ -798,6 +803,14 @@ config RWSEM_GENERIC_SPINLOCK
 
 config RWSEM_XCHGADD_ALGORITHM
 	bool
+
+config GENERIC_FIND_NEXT_BIT
+	bool
+	default y
+
+config GENERIC_HWEIGHT
+	bool
+	default y
 
 config GENERIC_CALIBRATE_DELAY
 	bool
@@ -1052,6 +1065,7 @@ config CPU_MIPS32_R1
 	depends on SYS_HAS_CPU_MIPS32_R1
 	select CPU_HAS_PREFETCH
 	select CPU_SUPPORTS_32BIT_KERNEL
+	select CPU_SUPPORTS_HIGHMEM
 	help
 	  Choose this option to build a kernel for release 1 or later of the
 	  MIPS32 architecture.  Most modern embedded systems with a 32-bit
@@ -1068,6 +1082,7 @@ config CPU_MIPS32_R2
 	depends on SYS_HAS_CPU_MIPS32_R2
 	select CPU_HAS_PREFETCH
 	select CPU_SUPPORTS_32BIT_KERNEL
+	select CPU_SUPPORTS_HIGHMEM
 	help
 	  Choose this option to build a kernel for release 2 or later of the
 	  MIPS32 architecture.  Most modern embedded systems with a 32-bit
@@ -1081,6 +1096,7 @@ config CPU_MIPS64_R1
 	select CPU_HAS_PREFETCH
 	select CPU_SUPPORTS_32BIT_KERNEL
 	select CPU_SUPPORTS_64BIT_KERNEL
+	select CPU_SUPPORTS_HIGHMEM
 	help
 	  Choose this option to build a kernel for release 1 or later of the
 	  MIPS64 architecture.  Many modern embedded systems with a 64-bit
@@ -1098,6 +1114,7 @@ config CPU_MIPS64_R2
 	select CPU_HAS_PREFETCH
 	select CPU_SUPPORTS_32BIT_KERNEL
 	select CPU_SUPPORTS_64BIT_KERNEL
+	select CPU_SUPPORTS_HIGHMEM
 	help
 	  Choose this option to build a kernel for release 2 or later of the
 	  MIPS64 architecture.  Many modern embedded systems with a 64-bit
@@ -1154,6 +1171,7 @@ config CPU_R4X00
 config CPU_TX49XX
 	bool "R49XX"
 	depends on SYS_HAS_CPU_TX49XX
+	select CPU_HAS_PREFETCH
 	select CPU_SUPPORTS_32BIT_KERNEL
 	select CPU_SUPPORTS_64BIT_KERNEL
 
@@ -1471,7 +1489,7 @@ config SB1_PASS_2_1_WORKAROUNDS
 
 config 64BIT_PHYS_ADDR
 	bool "Support for 64-bit physical address space"
-	depends on (CPU_R4X00 || CPU_R5000 || CPU_RM7000 || CPU_RM9000 || CPU_R10000 || CPU_SB1 || CPU_MIPS32_R1 || CPU_MIPS64_R1) && 32BIT
+	depends on (CPU_R4X00 || CPU_R5000 || CPU_RM7000 || CPU_RM9000 || CPU_R10000 || CPU_SB1 || CPU_MIPS32 || CPU_MIPS64) && 32BIT
 
 config CPU_ADVANCED
 	bool "Override CPU Options"
@@ -1491,14 +1509,6 @@ config CPU_HAS_LLSC
 	  Say Y here if your CPU has the ll and sc instructions.  Say Y here
 	  for better performance, N if you don't know.  You must say Y here
 	  for multiprocessor machines.
-
-config CPU_HAS_LLDSCD
-	bool "lld/scd Instructions available" if CPU_ADVANCED
-	default y if !CPU_ADVANCED && !CPU_R3000 && !CPU_VR41XX && !CPU_TX39XX && !CPU_MIPS32_R1
-	help
-	  Say Y here if your CPU has the lld and scd instructions, the 64-bit
-	  equivalents of ll and sc.  Say Y here for better performance, N if
-	  you don't know.  You must say Y here for multiprocessor machines.
 
 config CPU_HAS_WB
 	bool "Writeback Buffer available" if CPU_ADVANCED
@@ -1584,7 +1594,7 @@ source "mm/Kconfig"
 
 config SMP
 	bool "Multi-Processing support"
-	depends on CPU_RM9000 || ((SIBYTE_BCM1x80 || SIBYTE_BCM1x55 || SIBYTE_SB1250) && !SIBYTE_STANDALONE) || SGI_IP27 || MIPS_MT_SMP
+	depends on CPU_RM9000 || ((SIBYTE_BCM1x80 || SIBYTE_BCM1x55 || SIBYTE_SB1250 || QEMU) && !SIBYTE_STANDALONE) || SGI_IP27 || MIPS_MT_SMP
 	---help---
 	  This enables support for systems with more than one CPU. If you have
 	  a system with only one CPU, like most personal computers, say N. If
@@ -1713,6 +1723,9 @@ config TC
 config MMU
 	bool
 	default y
+
+config I8253
+	bool
 
 source "drivers/pcmcia/Kconfig"
 

@@ -13,6 +13,7 @@
  *      2 of the License, or (at your option) any later version.
  */
 
+#include <linux/capability.h>
 #include <linux/config.h>
 #include <linux/module.h>
 #include <linux/errno.h>
@@ -307,7 +308,7 @@ int ipv6_dev_ac_inc(struct net_device *dev, struct in6_addr *addr)
 	 *	not found: create a new one.
 	 */
 
-	aca = kmalloc(sizeof(struct ifacaddr6), GFP_ATOMIC);
+	aca = kzalloc(sizeof(struct ifacaddr6), GFP_ATOMIC);
 
 	if (aca == NULL) {
 		err = -ENOMEM;
@@ -320,8 +321,6 @@ int ipv6_dev_ac_inc(struct net_device *dev, struct in6_addr *addr)
 		err = PTR_ERR(rt);
 		goto out;
 	}
-
-	memset(aca, 0, sizeof(struct ifacaddr6));
 
 	ipv6_addr_copy(&aca->aca_addr, addr);
 	aca->aca_idev = idev;
@@ -531,9 +530,7 @@ static int ac6_seq_show(struct seq_file *seq, void *v)
 	struct ac6_iter_state *state = ac6_seq_private(seq);
 
 	seq_printf(seq,
-		   "%-4d %-15s "
-		   "%04x%04x%04x%04x%04x%04x%04x%04x "
-		   "%5d\n",
+		   "%-4d %-15s " NIP6_SEQFMT " %5d\n",
 		   state->dev->ifindex, state->dev->name,
 		   NIP6(im->aca_addr),
 		   im->aca_users);
@@ -551,7 +548,7 @@ static int ac6_seq_open(struct inode *inode, struct file *file)
 {
 	struct seq_file *seq;
 	int rc = -ENOMEM;
-	struct ac6_iter_state *s = kmalloc(sizeof(*s), GFP_KERNEL);
+	struct ac6_iter_state *s = kzalloc(sizeof(*s), GFP_KERNEL);
 
 	if (!s)
 		goto out;
@@ -562,7 +559,6 @@ static int ac6_seq_open(struct inode *inode, struct file *file)
 
 	seq = file->private_data;
 	seq->private = s;
-	memset(s, 0, sizeof(*s));
 out:
 	return rc;
 out_kfree:

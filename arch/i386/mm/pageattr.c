@@ -13,6 +13,7 @@
 #include <asm/processor.h>
 #include <asm/tlbflush.h>
 #include <asm/pgalloc.h>
+#include <asm/sections.h>
 
 static DEFINE_SPINLOCK(cpa_lock);
 static struct list_head df_list = LIST_HEAD_INIT(df_list);
@@ -36,7 +37,8 @@ pte_t *lookup_address(unsigned long address)
         return pte_offset_kernel(pmd, address);
 } 
 
-static struct page *split_large_page(unsigned long address, pgprot_t prot)
+static struct page *split_large_page(unsigned long address, pgprot_t prot,
+					pgprot_t ref_prot)
 { 
 	int i; 
 	unsigned long addr;
@@ -49,12 +51,19 @@ static struct page *split_large_page(unsigned long address, pgprot_t prot)
 	if (!base) 
 		return NULL;
 
+	/*
+	 * page_private is used to track the number of entries in
+	 * the page table page that have non standard attributes.
+	 */
+	SetPagePrivate(base);
+	page_private(base) = 0;
+
 	address = __pa(address);
 	addr = address & LARGE_PAGE_MASK; 
 	pbase = (pte_t *)page_address(base);
 	for (i = 0; i < PTRS_PER_PTE; i++, addr += PAGE_SIZE) {
                set_pte(&pbase[i], pfn_pte(addr >> PAGE_SHIFT,
-                                          addr == address ? prot : PAGE_KERNEL));
+                                          addr == address ? prot : ref_prot));
 	}
 	return base;
 } 
@@ -98,11 +107,18 @@ static void set_pmd_pte(pte_t *kpte, unsigned long address, pte_t pte)
  */
 static inline void revert_page(struct page *kpte_page, unsigned long address)
 {
-	pte_t *linear = (pte_t *) 
+	pgprot_t ref_prot;
+	pte_t *linear;
+
+	ref_prot =
+	((address & LARGE_PAGE_MASK) < (unsigned long)&_etext)
+		? PAGE_KERNEL_LARGE_EXEC : PAGE_KERNEL_LARGE;
+
+	linear = (pte_t *)
 		pmd_offset(pud_offset(pgd_offset_k(address), address), address);
 	set_pmd_pte(linear,  address,
 		    pfn_pte((__pa(address) & LARGE_PAGE_MASK) >> PAGE_SHIFT,
-			    PAGE_KERNEL_LARGE));
+			    ref_prot));
 }
 
 static int
@@ -123,16 +139,23 @@ __change_page_attr(struct page *page, pgprot_t prot)
 		if ((pte_val(*kpte) & _PAGE_PSE) == 0) { 
 			set_pte_atomic(kpte, mk_pte(page, prot)); 
 		} else {
-			struct page *split = split_large_page(address, prot); 
+			pgprot_t ref_prot;
+			struct page *split;
+
+			ref_prot =
+			((address & LARGE_PAGE_MASK) < (unsigned long)&_etext)
+				? PAGE_KERNEL_EXEC : PAGE_KERNEL;
+			split = split_large_page(address, prot, ref_prot);
 			if (!split)
 				return -ENOMEM;
-			set_pmd_pte(kpte,address,mk_pte(split, PAGE_KERNEL));
+			set_pmd_pte(kpte,address,mk_pte(split, ref_prot));
 			kpte_page = split;
-		}	
-		get_page(kpte_page);
+		}
+		page_private(kpte_page)++;
 	} else if ((pte_val(*kpte) & _PAGE_PSE) == 0) { 
 		set_pte_atomic(kpte, mk_pte(page, PAGE_KERNEL));
-		__put_page(kpte_page);
+		BUG_ON(page_private(kpte_page) == 0);
+		page_private(kpte_page)--;
 	} else
 		BUG();
 
@@ -142,10 +165,8 @@ __change_page_attr(struct page *page, pgprot_t prot)
 	 * replace it with a largepage.
 	 */
 	if (!PageReserved(kpte_page)) {
-		/* memleak and potential failed 2M page regeneration */
-		BUG_ON(!page_count(kpte_page));
-
-		if (cpu_has_pse && (page_count(kpte_page) == 1)) {
+		if (cpu_has_pse && (page_private(kpte_page) == 0)) {
+			ClearPagePrivate(kpte_page);
 			list_add(&kpte_page->lru, &df_list);
 			revert_page(kpte_page, address);
 		}
@@ -207,6 +228,10 @@ void kernel_map_pages(struct page *page, int numpages, int enable)
 {
 	if (PageHighMem(page))
 		return;
+	if (!enable)
+		mutex_debug_check_no_locks_freed(page_address(page),
+						 numpages * PAGE_SIZE);
+
 	/* the return value is ignored - the calls cannot fail,
 	 * large pages are disabled at boot time.
 	 */

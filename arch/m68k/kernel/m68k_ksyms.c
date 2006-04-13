@@ -23,8 +23,6 @@ asmlinkage long long __lshrdi3 (long long, int);
 asmlinkage long long __muldi3 (long long, long long);
 extern char m68k_debug_device[];
 
-extern void dump_thread(struct pt_regs *, struct user *);
-
 /* platform dependent support */
 
 EXPORT_SYMBOL(m68k_machtype);
@@ -81,4 +79,3 @@ EXPORT_SYMBOL(__down_failed_interruptible);
 EXPORT_SYMBOL(__down_failed_trylock);
 EXPORT_SYMBOL(__up_wakeup);
 
-EXPORT_SYMBOL(get_wchan);

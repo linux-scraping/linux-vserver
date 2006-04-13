@@ -29,6 +29,7 @@
 #include "saa7134.h"
 
 #include <media/saa6752hs.h>
+#include <media/v4l2-common.h>
 
 /* ------------------------------------------------------------------ */
 
@@ -88,7 +89,7 @@ static int ts_open(struct inode *inode, struct file *file)
 
 	dprintk("open minor=%d\n",minor);
 	err = -EBUSY;
-	if (down_trylock(&dev->empress_tsq.lock))
+	if (!mutex_trylock(&dev->empress_tsq.lock))
 		goto done;
 	if (dev->empress_users)
 		goto done_up;
@@ -98,7 +99,7 @@ static int ts_open(struct inode *inode, struct file *file)
 	err = 0;
 
 done_up:
-	up(&dev->empress_tsq.lock);
+	mutex_unlock(&dev->empress_tsq.lock);
 done:
 	return err;
 }
@@ -109,7 +110,7 @@ static int ts_release(struct inode *inode, struct file *file)
 
 	if (dev->empress_tsq.streaming)
 		videobuf_streamoff(&dev->empress_tsq);
-	down(&dev->empress_tsq.lock);
+	mutex_lock(&dev->empress_tsq.lock);
 	if (dev->empress_tsq.reading)
 		videobuf_read_stop(&dev->empress_tsq);
 	videobuf_mmap_free(&dev->empress_tsq);
@@ -118,7 +119,7 @@ static int ts_release(struct inode *inode, struct file *file)
 	/* stop the encoder */
 	ts_reset_encoder(dev);
 
-	up(&dev->empress_tsq.lock);
+	mutex_unlock(&dev->empress_tsq.lock);
 	return 0;
 }
 
@@ -163,7 +164,7 @@ static int ts_do_ioctl(struct inode *inode, struct file *file,
 	struct saa7134_dev *dev = file->private_data;
 
 	if (debug > 1)
-		saa7134_print_ioctl(dev->name,cmd);
+		v4l_print_ioctl(dev->name,cmd);
 	switch (cmd) {
 	case VIDIOC_QUERYCAP:
 	{

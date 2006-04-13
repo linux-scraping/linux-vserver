@@ -112,7 +112,7 @@ static ssize_t state_show(struct ib_port *p, struct port_attribute *unused,
 		return ret;
 
 	return sprintf(buf, "%d: %s\n", attr.state,
-		       attr.state >= 0 && attr.state <= ARRAY_SIZE(state_name) ?
+		       attr.state >= 0 && attr.state < ARRAY_SIZE(state_name) ?
 		       state_name[attr.state] : "UNKNOWN");
 }
 
@@ -434,24 +434,18 @@ static void ib_device_release(struct class_device *cdev)
 	kfree(dev);
 }
 
-static int ib_device_hotplug(struct class_device *cdev, char **envp,
-			     int num_envp, char *buf, int size)
+static int ib_device_uevent(struct class_device *cdev, char **envp,
+			    int num_envp, char *buf, int size)
 {
 	struct ib_device *dev = container_of(cdev, struct ib_device, class_dev);
 	int i = 0, len = 0;
 
-	if (add_hotplug_env_var(envp, num_envp, &i, buf, size, &len,
-				"NAME=%s", dev->name))
+	if (add_uevent_var(envp, num_envp, &i, buf, size, &len,
+			   "NAME=%s", dev->name))
 		return -ENOMEM;
 
 	/*
-	 * It might be nice to pass the node GUID to hotplug, but
-	 * right now the only way to get it is to query the device
-	 * provider, and this can crash during device removal because
-	 * we are will be running after driver removal has started.
-	 * We could add a node_guid field to struct ib_device, or we
-	 * could just let the hotplug script read the node GUID from
-	 * sysfs when devices are added.
+	 * It would be nice to pass the node GUID with the event...
 	 */
 
 	envp[i] = NULL;
@@ -478,8 +472,10 @@ alloc_group_attrs(ssize_t (*show)(struct ib_port *,
 			goto err;
 
 		if (snprintf(element->name, sizeof(element->name),
-			     "%d", i) >= sizeof(element->name))
+			     "%d", i) >= sizeof(element->name)) {
+			kfree(element);
 			goto err;
+		}
 
 		element->attr.attr.name  = element->name;
 		element->attr.attr.mode  = S_IRUGO;
@@ -623,37 +619,59 @@ static ssize_t show_sys_image_guid(struct class_device *cdev, char *buf)
 static ssize_t show_node_guid(struct class_device *cdev, char *buf)
 {
 	struct ib_device *dev = container_of(cdev, struct ib_device, class_dev);
-	struct ib_device_attr attr;
-	ssize_t ret;
 
 	if (!ibdev_is_alive(dev))
 		return -ENODEV;
 
-	ret = ib_query_device(dev, &attr);
+	return sprintf(buf, "%04x:%04x:%04x:%04x\n",
+		       be16_to_cpu(((__be16 *) &dev->node_guid)[0]),
+		       be16_to_cpu(((__be16 *) &dev->node_guid)[1]),
+		       be16_to_cpu(((__be16 *) &dev->node_guid)[2]),
+		       be16_to_cpu(((__be16 *) &dev->node_guid)[3]));
+}
+
+static ssize_t show_node_desc(struct class_device *cdev, char *buf)
+{
+	struct ib_device *dev = container_of(cdev, struct ib_device, class_dev);
+
+	return sprintf(buf, "%.64s\n", dev->node_desc);
+}
+
+static ssize_t set_node_desc(struct class_device *cdev, const char *buf,
+			      size_t count)
+{
+	struct ib_device *dev = container_of(cdev, struct ib_device, class_dev);
+	struct ib_device_modify desc = {};
+	int ret;
+
+	if (!dev->modify_device)
+		return -EIO;
+
+	memcpy(desc.node_desc, buf, min_t(int, count, 64));
+	ret = ib_modify_device(dev, IB_DEVICE_MODIFY_NODE_DESC, &desc);
 	if (ret)
 		return ret;
 
-	return sprintf(buf, "%04x:%04x:%04x:%04x\n",
-		       be16_to_cpu(((__be16 *) &attr.node_guid)[0]),
-		       be16_to_cpu(((__be16 *) &attr.node_guid)[1]),
-		       be16_to_cpu(((__be16 *) &attr.node_guid)[2]),
-		       be16_to_cpu(((__be16 *) &attr.node_guid)[3]));
+	return count;
 }
 
 static CLASS_DEVICE_ATTR(node_type, S_IRUGO, show_node_type, NULL);
 static CLASS_DEVICE_ATTR(sys_image_guid, S_IRUGO, show_sys_image_guid, NULL);
 static CLASS_DEVICE_ATTR(node_guid, S_IRUGO, show_node_guid, NULL);
+static CLASS_DEVICE_ATTR(node_desc, S_IRUGO | S_IWUSR, show_node_desc,
+			 set_node_desc);
 
 static struct class_device_attribute *ib_class_attributes[] = {
 	&class_device_attr_node_type,
 	&class_device_attr_sys_image_guid,
-	&class_device_attr_node_guid
+	&class_device_attr_node_guid,
+	&class_device_attr_node_desc
 };
 
 static struct class ib_class = {
 	.name    = "infiniband",
 	.release = ib_device_release,
-	.hotplug = ib_device_hotplug,
+	.uevent = ib_device_uevent,
 };
 
 int ib_device_register_sysfs(struct ib_device *device)

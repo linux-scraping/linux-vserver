@@ -20,6 +20,7 @@
 #include <linux/time.h>
 #include <linux/kernel.h>
 #include <linux/kernel_stat.h>
+#include <linux/fs.h>
 #include <linux/tty.h>
 #include <linux/string.h>
 #include <linux/mman.h>
@@ -64,7 +65,6 @@
  */
 extern int get_hardware_list(char *);
 extern int get_stram_list(char *);
-extern int get_chrdev_list(char *);
 extern int get_filesystem_list(char *);
 extern int get_exec_domain_list(char *);
 extern int get_dma_list(char *);
@@ -163,7 +163,7 @@ static int meminfo_read_proc(char *page, char **start, off_t off,
 		* sysctl_overcommit_ratio / 100) + total_swap_pages;
 
 	cached = get_page_cache_size() - total_swapcache_pages - i.bufferram;
-	if (cached < 0)
+	if (cached < 0 || vx_flags(VXF_VIRT_MEM, 0))
 		cached = 0;
 
 	get_vmalloc_info(&vmi);
@@ -269,8 +269,65 @@ static int cpuinfo_open(struct inode *inode, struct file *file)
 {
 	return seq_open(file, &cpuinfo_op);
 }
+
 static struct file_operations proc_cpuinfo_operations = {
 	.open		= cpuinfo_open,
+	.read		= seq_read,
+	.llseek		= seq_lseek,
+	.release	= seq_release,
+};
+
+static int devinfo_show(struct seq_file *f, void *v)
+{
+	int i = *(loff_t *) v;
+
+	if (i < CHRDEV_MAJOR_HASH_SIZE) {
+		if (i == 0)
+			seq_printf(f, "Character devices:\n");
+		chrdev_show(f, i);
+	} else {
+		i -= CHRDEV_MAJOR_HASH_SIZE;
+		if (i == 0)
+			seq_printf(f, "\nBlock devices:\n");
+		blkdev_show(f, i);
+	}
+	return 0;
+}
+
+static void *devinfo_start(struct seq_file *f, loff_t *pos)
+{
+	if (*pos < (BLKDEV_MAJOR_HASH_SIZE + CHRDEV_MAJOR_HASH_SIZE))
+		return pos;
+	return NULL;
+}
+
+static void *devinfo_next(struct seq_file *f, void *v, loff_t *pos)
+{
+	(*pos)++;
+	if (*pos >= (BLKDEV_MAJOR_HASH_SIZE + CHRDEV_MAJOR_HASH_SIZE))
+		return NULL;
+	return pos;
+}
+
+static void devinfo_stop(struct seq_file *f, void *v)
+{
+	/* Nothing to do */
+}
+
+static struct seq_operations devinfo_ops = {
+	.start = devinfo_start,
+	.next  = devinfo_next,
+	.stop  = devinfo_stop,
+	.show  = devinfo_show
+};
+
+static int devinfo_open(struct inode *inode, struct file *filp)
+{
+	return seq_open(filp, &devinfo_ops);
+}
+
+static struct file_operations proc_devinfo_operations = {
+	.open		= devinfo_open,
 	.read		= seq_read,
 	.llseek		= seq_lseek,
 	.release	= seq_release,
@@ -344,6 +401,7 @@ static struct file_operations proc_modules_operations = {
 };
 #endif
 
+#ifdef CONFIG_SLAB
 extern struct seq_operations slabinfo_op;
 extern ssize_t slabinfo_write(struct file *, const char __user *, size_t, loff_t *);
 static int slabinfo_open(struct inode *inode, struct file *file)
@@ -358,6 +416,41 @@ static struct file_operations proc_slabinfo_operations = {
 	.release	= seq_release,
 };
 
+#ifdef CONFIG_DEBUG_SLAB_LEAK
+extern struct seq_operations slabstats_op;
+static int slabstats_open(struct inode *inode, struct file *file)
+{
+	unsigned long *n = kzalloc(PAGE_SIZE, GFP_KERNEL);
+	int ret = -ENOMEM;
+	if (n) {
+		ret = seq_open(file, &slabstats_op);
+		if (!ret) {
+			struct seq_file *m = file->private_data;
+			*n = PAGE_SIZE / (2 * sizeof(unsigned long));
+			m->private = n;
+			n = NULL;
+		}
+		kfree(n);
+	}
+	return ret;
+}
+
+static int slabstats_release(struct inode *inode, struct file *file)
+{
+	struct seq_file *m = file->private_data;
+	kfree(m->private);
+	return seq_release(inode, file);
+}
+
+static struct file_operations proc_slabstats_operations = {
+	.open		= slabstats_open,
+	.read		= seq_read,
+	.llseek		= seq_lseek,
+	.release	= slabstats_release,
+};
+#endif
+#endif
+
 static int show_stat(struct seq_file *p, void *v)
 {
 	int i;
@@ -371,7 +464,7 @@ static int show_stat(struct seq_file *p, void *v)
 	if (wall_to_monotonic.tv_nsec)
 		--jif;
 
-	for_each_cpu(i) {
+	for_each_possible_cpu(i) {
 		int j;
 
 		user = cputime64_add(user, kstat_cpu(i).cpustat.user);
@@ -419,7 +512,7 @@ static int show_stat(struct seq_file *p, void *v)
 	}
 	seq_printf(p, "intr %llu", (unsigned long long)sum);
 
-#if !defined(CONFIG_PPC64) && !defined(CONFIG_ALPHA)
+#if !defined(CONFIG_PPC64) && !defined(CONFIG_ALPHA) && !defined(CONFIG_IA64)
 	for (i = 0; i < NR_IRQS; i++)
 		seq_printf(p, " %u", kstat_irqs(i));
 #endif
@@ -468,14 +561,6 @@ static struct file_operations proc_stat_operations = {
 	.llseek		= seq_lseek,
 	.release	= single_release,
 };
-
-static int devices_read_proc(char *page, char **start, off_t off,
-				 int count, int *eof, void *data)
-{
-	int len = get_chrdev_list(page);
-	len += get_blkdev_list(page+len, len);
-	return proc_calc_metrics(page, start, off, count, eof, len);
-}
 
 /*
  * /proc/interrupts
@@ -576,7 +661,7 @@ static struct file_operations proc_sysrq_trigger_operations = {
 
 struct proc_dir_entry *proc_root_kcore;
 
-void create_seq_entry(char *name, mode_t mode, struct file_operations *f)
+void create_seq_entry(char *name, mode_t mode, const struct file_operations *f)
 {
 	struct proc_dir_entry *entry;
 	entry = create_proc_entry(name, mode, NULL);
@@ -601,7 +686,6 @@ void __init proc_misc_init(void)
 #ifdef CONFIG_STRAM_PROC
 		{"stram",	stram_read_proc},
 #endif
-		{"devices",	devices_read_proc},
 		{"filesystems",	filesystems_read_proc},
 		{"cmdline",	cmdline_read_proc},
 		{"locks",	locks_read_proc},
@@ -617,11 +701,17 @@ void __init proc_misc_init(void)
 	entry = create_proc_entry("kmsg", S_IRUSR, &proc_root);
 	if (entry)
 		entry->proc_fops = &proc_kmsg_operations;
+	create_seq_entry("devices", 0, &proc_devinfo_operations);
 	create_seq_entry("cpuinfo", 0, &proc_cpuinfo_operations);
 	create_seq_entry("partitions", 0, &proc_partitions_operations);
 	create_seq_entry("stat", 0, &proc_stat_operations);
 	create_seq_entry("interrupts", 0, &proc_interrupts_operations);
+#ifdef CONFIG_SLAB
 	create_seq_entry("slabinfo",S_IWUSR|S_IRUGO,&proc_slabinfo_operations);
+#ifdef CONFIG_DEBUG_SLAB_LEAK
+	create_seq_entry("slab_allocators", 0 ,&proc_slabstats_operations);
+#endif
+#endif
 	create_seq_entry("buddyinfo",S_IRUGO, &fragmentation_file_operations);
 	create_seq_entry("vmstat",S_IRUGO, &proc_vmstat_file_operations);
 	create_seq_entry("zoneinfo",S_IRUGO, &proc_zoneinfo_file_operations);

@@ -329,7 +329,7 @@ static struct mii_chip_info {
 	{ NULL, }
 };
 
-const static struct {
+static const struct {
 	const char *name;
 } sis_chip_info[] = {
 	{ "SiS 190 PCI Fast Ethernet adapter" },
@@ -366,7 +366,7 @@ static const u32 sis190_intr_mask =
  * Maximum number of multicast addresses to filter (vs. Rx-all-multicast).
  * The chips use a 64 element hash table based on the Ethernet CRC.
  */
-static int multicast_filter_limit = 32;
+static const int multicast_filter_limit = 32;
 
 static void __mdio_cmd(void __iomem *ioaddr, u32 ctl)
 {
@@ -1791,6 +1791,8 @@ static int __devinit sis190_init_one(struct pci_dev *pdev,
 		goto out;
 	}
 
+	pci_set_drvdata(pdev, dev);
+
 	tp = netdev_priv(dev);
 	ioaddr = tp->mmio_addr;
 
@@ -1826,8 +1828,6 @@ static int __devinit sis190_init_one(struct pci_dev *pdev,
 	rc = register_netdev(dev);
 	if (rc < 0)
 		goto err_remove_mii;
-
-	pci_set_drvdata(pdev, dev);
 
 	net_probe(tp, KERN_INFO "%s: %s at %p (IRQ: %d), "
 	       "%2.2x:%2.2x:%2.2x:%2.2x:%2.2x:%2.2x\n",

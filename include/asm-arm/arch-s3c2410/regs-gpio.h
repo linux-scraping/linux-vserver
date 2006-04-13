@@ -22,6 +22,7 @@
  *    28-Mar-2005    LCVR    Fixed definition of GPB10
  *    26-Oct-2005    BJD     Added generic configuration types
  *    27-Nov-2005    LCVR    Added definitions to S3C2400 registers
+ *    15-Jan-2006    LCVR    Written S3C24XX_GPIO_BASE() macro
 */
 
 
@@ -38,6 +39,27 @@
 #define S3C2410_GPIO_BANKF   (32*5)
 #define S3C2410_GPIO_BANKG   (32*6)
 #define S3C2410_GPIO_BANKH   (32*7)
+
+#ifdef CONFIG_CPU_S3C2400
+#define S3C24XX_GPIO_BASE(x)  S3C2400_GPIO_BASE(x)
+#define S3C24XX_MISCCR        S3C2400_MISCCR
+#else
+#define S3C24XX_GPIO_BASE(x)  S3C2410_GPIO_BASE(x)
+#define S3C24XX_MISCCR        S3C2410_MISCCR
+#endif /* CONFIG_CPU_S3C2400 */
+
+
+/* S3C2400 doesn't have a 1:1 mapping to S3C2410 gpio base pins */
+
+#define S3C2400_BANKNUM(pin)     (((pin) & ~31) / 32)
+#define S3C2400_BASEA2B(pin)     ((((pin) & ~31) >> 2))
+#define S3C2400_BASEC2H(pin)     ((S3C2400_BANKNUM(pin) * 10) + \
+                                 (2 * (S3C2400_BANKNUM(pin)-2)))
+
+#define S3C2400_GPIO_BASE(pin)   (pin < S3C2410_GPIO_BANKC ? \
+                                 S3C2400_BASEA2B(pin)+S3C24XX_VA_GPIO : \
+                                 S3C2400_BASEC2H(pin)+S3C24XX_VA_GPIO)
+
 
 #define S3C2410_GPIO_BASE(pin)   ((((pin) & ~31) >> 1) + S3C24XX_VA_GPIO)
 #define S3C2410_GPIO_OFFSET(pin) ((pin) & 31)
@@ -957,6 +979,7 @@
 #define S3C2410_MISCCR_CLK0_HCLK    (3<<4)
 #define S3C2410_MISCCR_CLK0_PCLK    (4<<4)
 #define S3C2410_MISCCR_CLK0_DCLK0   (5<<4)
+#define S3C2410_MISCCR_CLK0_MASK    (7<<4)
 
 #define S3C2410_MISCCR_CLK1_MPLL    (0<<8)
 #define S3C2410_MISCCR_CLK1_UPLL    (1<<8)
@@ -964,6 +987,7 @@
 #define S3C2410_MISCCR_CLK1_HCLK    (3<<8)
 #define S3C2410_MISCCR_CLK1_PCLK    (4<<8)
 #define S3C2410_MISCCR_CLK1_DCLK1   (5<<8)
+#define S3C2410_MISCCR_CLK1_MASK    (7<<8)
 
 #define S3C2410_MISCCR_USBSUSPND0   (1<<12)
 #define S3C2410_MISCCR_USBSUSPND1   (1<<13)

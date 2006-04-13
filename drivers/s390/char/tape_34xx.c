@@ -2,8 +2,7 @@
  *  drivers/s390/char/tape_34xx.c
  *    tape device discipline for 3480/3490 tapes.
  *
- *  S390 and zSeries version
- *    Copyright (C) 2001,2002 IBM Deutschland Entwicklung GmbH, IBM Corporation
+ *    Copyright (C) IBM Corp. 2001,2006
  *    Author(s): Carsten Otte <cotte@de.ibm.com>
  *		 Tuan Ngo-Anh <ngoanh@de.ibm.com>
  *		 Martin Schwidefsky <schwidefsky@de.ibm.com>
@@ -27,11 +26,6 @@
  */
 debug_info_t *TAPE_DBF_AREA = NULL;
 EXPORT_SYMBOL(TAPE_DBF_AREA);
-
-enum tape_34xx_type {
-	tape_3480,
-	tape_3490,
-};
 
 #define TAPE34XX_FMT_3480	0
 #define TAPE34XX_FMT_3480_2_XF	1
@@ -1357,7 +1351,7 @@ tape_34xx_init (void)
 	debug_set_level(TAPE_DBF_AREA, 6);
 #endif
 
-	DBF_EVENT(3, "34xx init: $Revision: 1.23 $\n");
+	DBF_EVENT(3, "34xx init\n");
 	/* Register driver for 3480/3490 tapes. */
 	rc = ccw_driver_register(&tape_34xx_driver);
 	if (rc)
@@ -1377,8 +1371,7 @@ tape_34xx_exit(void)
 
 MODULE_DEVICE_TABLE(ccw, tape_34xx_ids);
 MODULE_AUTHOR("(C) 2001-2002 IBM Deutschland Entwicklung GmbH");
-MODULE_DESCRIPTION("Linux on zSeries channel attached 3480 tape "
-		   "device driver ($Revision: 1.23 $)");
+MODULE_DESCRIPTION("Linux on zSeries channel attached 3480 tape device driver");
 MODULE_LICENSE("GPL");
 
 module_init(tape_34xx_init);

@@ -1,3 +1,18 @@
+#include "hostap_80211.h"
+#include "hostap_common.h"
+#include "hostap_wlan.h"
+#include "hostap.h"
+#include "hostap_ap.h"
+
+/* See IEEE 802.1H for LLC/SNAP encapsulation/decapsulation */
+/* Ethernet-II snap header (RFC1042 for most EtherTypes) */
+static unsigned char rfc1042_header[] =
+{ 0xaa, 0xaa, 0x03, 0x00, 0x00, 0x00 };
+/* Bridge-Tunnel header (for EtherTypes ETH_P_AARP and ETH_P_IPX) */
+static unsigned char bridge_tunnel_header[] =
+{ 0xaa, 0xaa, 0x03, 0x00, 0x00, 0xf8 };
+/* No encapsulation header if EtherType < 0x600 (=length) */
+
 void hostap_dump_tx_80211(const char *name, struct sk_buff *skb)
 {
 	struct ieee80211_hdr_4addr *hdr;
@@ -284,8 +299,8 @@ int hostap_mgmt_start_xmit(struct sk_buff *skb, struct net_device *dev)
 
 
 /* Called only from software IRQ */
-struct sk_buff * hostap_tx_encrypt(struct sk_buff *skb,
-				   struct ieee80211_crypt_data *crypt)
+static struct sk_buff * hostap_tx_encrypt(struct sk_buff *skb,
+					  struct ieee80211_crypt_data *crypt)
 {
 	struct hostap_interface *iface;
 	local_info_t *local;
@@ -302,7 +317,7 @@ struct sk_buff * hostap_tx_encrypt(struct sk_buff *skb,
 	}
 
 	if (local->tkip_countermeasures &&
-	    crypt && crypt->ops && strcmp(crypt->ops->name, "TKIP") == 0) {
+	    strcmp(crypt->ops->name, "TKIP") == 0) {
 		hdr = (struct ieee80211_hdr_4addr *) skb->data;
 		if (net_ratelimit()) {
 			printk(KERN_DEBUG "%s: TKIP countermeasures: dropped "
@@ -454,7 +469,7 @@ int hostap_master_start_xmit(struct sk_buff *skb, struct net_device *dev)
 	}
 
 	if (local->ieee_802_1x && meta->ethertype == ETH_P_PAE && tx.crypt &&
-	    !(fc & IEEE80211_FCTL_VERS)) {
+	    !(fc & IEEE80211_FCTL_PROTECTED)) {
 		no_encrypt = 1;
 		PDEBUG(DEBUG_EXTRA2, "%s: TX: IEEE 802.1X - passing "
 		       "unencrypted EAPOL frame\n", dev->name);
@@ -520,5 +535,4 @@ int hostap_master_start_xmit(struct sk_buff *skb, struct net_device *dev)
 
 
 EXPORT_SYMBOL(hostap_dump_tx_80211);
-EXPORT_SYMBOL(hostap_tx_encrypt);
 EXPORT_SYMBOL(hostap_master_start_xmit);

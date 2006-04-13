@@ -80,15 +80,13 @@
 #include <linux/kmod.h>
 #include <linux/interrupt.h>
 #include <linux/input.h>
-#include <asm/semaphore.h>
+#include <linux/mutex.h>
 #ifdef CONFIG_ADB_CUDA
 #include <linux/cuda.h>
 #endif
 #ifdef CONFIG_ADB_PMU
 #include <linux/pmu.h>
 #endif
-
-#include <linux/i2c-dev.h>
 
 #include <asm/uaccess.h>
 #include <asm/prom.h>
@@ -125,11 +123,12 @@ static int awacs_rate_index;
 static int awacs_subframe;
 static struct device_node* awacs_node;
 static struct device_node* i2s_node;
+static struct resource awacs_rsrc[3];
 
 static char awacs_name[64];
 static int awacs_revision;
 static int awacs_sleeping;
-static DECLARE_MUTEX(dmasound_sem);
+static DEFINE_MUTEX(dmasound_mutex);
 
 static int sound_device_id;		/* exists after iMac revA */
 static int hw_can_byteswap = 1 ;	/* most pmac sound h/w can */
@@ -311,11 +310,11 @@ extern int daca_enter_sleep(void);
 extern int daca_leave_sleep(void);
 
 #define TRY_LOCK()	\
-	if ((rc = down_interruptible(&dmasound_sem)) != 0)	\
+	if ((rc = mutex_lock_interruptible(&dmasound_mutex)) != 0)	\
 		return rc;
-#define LOCK()		down(&dmasound_sem);
+#define LOCK()		mutex_lock(&dmasound_mutex);
 
-#define UNLOCK()	up(&dmasound_sem);
+#define UNLOCK()	mutex_unlock(&dmasound_mutex);
 
 /* We use different versions that the ones provided in dmasound.h
  * 
@@ -667,9 +666,12 @@ static void PMacIrqCleanup(void)
 	iounmap(awacs_txdma);
 	iounmap(awacs_rxdma);
 
-	release_OF_resource(awacs_node, 0);
-	release_OF_resource(awacs_node, 1);
-	release_OF_resource(awacs_node, 2);
+	release_mem_region(awacs_rsrc[0].start,
+			   awacs_rsrc[0].end - awacs_rsrc[0].start + 1);
+	release_mem_region(awacs_rsrc[1].start,
+			   awacs_rsrc[1].end - awacs_rsrc[1].start + 1);
+	release_mem_region(awacs_rsrc[2].start,
+			   awacs_rsrc[2].end - awacs_rsrc[2].start + 1);
 
 	kfree(awacs_tx_cmd_space);
 	kfree(awacs_rx_cmd_space);
@@ -2796,7 +2798,7 @@ __init setup_beep(void)
 			DBDMA_ALIGN(beep_dbdma_cmd_space);
 	/* set up emergency dbdma cmd */
 	emergency_dbdma_cmd = beep_dbdma_cmd+1 ;
-	beep_buf = (short *) kmalloc(BEEP_BUFLEN * 4, GFP_KERNEL);
+	beep_buf = kmalloc(BEEP_BUFLEN * 4, GFP_KERNEL);
 	if (beep_buf == NULL) {
 		printk(KERN_ERR "dmasound_pmac: no memory for beep buffer\n");
 		kfree(beep_dbdma_cmd_space) ;
@@ -2812,7 +2814,7 @@ int __init dmasound_awacs_init(void)
 	struct device_node *io = NULL, *info = NULL;
 	int vol, res;
 
-	if (_machine != _MACH_Pmac)
+	if (!machine_is(powermac))
 		return -ENODEV;
 
 	awacs_subframe = 0;
@@ -2863,46 +2865,58 @@ printk("dmasound_pmac: couldn't find a Codec we can handle\n");
 	 * other info if necessary (early AWACS we want to read chip ids)
 	 */
 
-	if (io->n_addrs < 3 || io->n_intrs < 3) {
+	if (of_get_address(io, 2, NULL, NULL) == NULL || io->n_intrs < 3) {
 		/* OK - maybe we need to use the 'awacs' node (on earlier
 		 * machines).
-		*/
+		 */
 		if (awacs_node) {
 			io = awacs_node ;
-			if (io->n_addrs < 3 || io->n_intrs < 3) {
-				printk("dmasound_pmac: can't use %s"
-					" (%d addrs, %d intrs)\n",
-		      		 io->full_name, io->n_addrs, io->n_intrs);
+			if (of_get_address(io, 2, NULL, NULL) == NULL ||
+			    io->n_intrs < 3) {
+				printk("dmasound_pmac: can't use %s\n",
+				       io->full_name);
 				return -ENODEV;
 			}
-		} else {
-			printk("dmasound_pmac: can't use %s (%d addrs, %d intrs)\n",
-		 	      io->full_name, io->n_addrs, io->n_intrs);
-		}
+		} else
+			printk("dmasound_pmac: can't use %s\n", io->full_name);
 	}
 
-	if (!request_OF_resource(io, 0, NULL)) {
+	if (of_address_to_resource(io, 0, &awacs_rsrc[0]) ||
+	    request_mem_region(awacs_rsrc[0].start,
+			       awacs_rsrc[0].end - awacs_rsrc[0].start + 1,
+			       " (IO)") == NULL) {
 		printk(KERN_ERR "dmasound: can't request IO resource !\n");
 		return -ENODEV;
 	}
-	if (!request_OF_resource(io, 1, " (tx dma)")) {
-		release_OF_resource(io, 0);
-		printk(KERN_ERR "dmasound: can't request TX DMA resource !\n");
+	if (of_address_to_resource(io, 1, &awacs_rsrc[1]) ||
+	    request_mem_region(awacs_rsrc[1].start,
+			       awacs_rsrc[1].end - awacs_rsrc[1].start + 1,
+			       " (tx dma)") == NULL) {
+		release_mem_region(awacs_rsrc[0].start,
+				   awacs_rsrc[0].end - awacs_rsrc[0].start + 1);
+		printk(KERN_ERR "dmasound: can't request Tx DMA resource !\n");
 		return -ENODEV;
 	}
-
-	if (!request_OF_resource(io, 2, " (rx dma)")) {
-		release_OF_resource(io, 0);
-		release_OF_resource(io, 1);
-		printk(KERN_ERR "dmasound: can't request RX DMA resource !\n");
+	if (of_address_to_resource(io, 2, &awacs_rsrc[2]) ||
+	    request_mem_region(awacs_rsrc[2].start,
+			       awacs_rsrc[2].end - awacs_rsrc[2].start + 1,
+			       " (rx dma)") == NULL) {
+		release_mem_region(awacs_rsrc[0].start,
+				   awacs_rsrc[0].end - awacs_rsrc[0].start + 1);
+		release_mem_region(awacs_rsrc[1].start,
+				   awacs_rsrc[1].end - awacs_rsrc[1].start + 1);
+		printk(KERN_ERR "dmasound: can't request Rx DMA resource !\n");
 		return -ENODEV;
 	}
 
 	awacs_beep_dev = input_allocate_device();
 	if (!awacs_beep_dev) {
-		release_OF_resource(io, 0);
-		release_OF_resource(io, 1);
-		release_OF_resource(io, 2);
+		release_mem_region(awacs_rsrc[0].start,
+				   awacs_rsrc[0].end - awacs_rsrc[0].start + 1);
+		release_mem_region(awacs_rsrc[1].start,
+				   awacs_rsrc[1].end - awacs_rsrc[1].start + 1);
+		release_mem_region(awacs_rsrc[2].start,
+				   awacs_rsrc[2].end - awacs_rsrc[2].start + 1);
 		printk(KERN_ERR "dmasound: can't allocate input device !\n");
 		return -ENOMEM;
 	}
@@ -2916,11 +2930,11 @@ printk("dmasound_pmac: couldn't find a Codec we can handle\n");
 
 	/* all OF versions I've seen use this value */
 	if (i2s_node)
-		i2s = ioremap(io->addrs[0].address, 0x1000);
+		i2s = ioremap(awacs_rsrc[0].start, 0x1000);
 	else
-		awacs = ioremap(io->addrs[0].address, 0x1000);
-	awacs_txdma = ioremap(io->addrs[1].address, 0x100);
-	awacs_rxdma = ioremap(io->addrs[2].address, 0x100);
+		awacs = ioremap(awacs_rsrc[0].start, 0x1000);
+	awacs_txdma = ioremap(awacs_rsrc[1].start, 0x100);
+	awacs_rxdma = ioremap(awacs_rsrc[2].start, 0x100);
 
 	/* first of all make sure that the chip is powered up....*/
 	pmac_call_feature(PMAC_FTR_SOUND_CHIP_ENABLE, io, 0, 1);
@@ -3083,9 +3097,10 @@ printk("dmasound_pmac: Awacs/Screamer Codec Mfct: %d Rev %d\n", mfg, rev);
 		struct device_node* mio;
 		macio_base = NULL;
 		for (mio = io->parent; mio; mio = mio->parent) {
-			if (strcmp(mio->name, "mac-io") == 0
-			    && mio->n_addrs > 0) {
-				macio_base = ioremap(mio->addrs[0].address, 0x40);
+			if (strcmp(mio->name, "mac-io") == 0) {
+				struct resource r;
+				if (of_address_to_resource(mio, 0, &r) == 0)
+					macio_base = ioremap(r.start, 0x40);
 				break;
 			}
 		}

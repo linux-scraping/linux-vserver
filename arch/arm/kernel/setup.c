@@ -23,11 +23,10 @@
 #include <linux/root_dev.h>
 #include <linux/cpu.h>
 #include <linux/interrupt.h>
+#include <linux/smp.h>
 
 #include <asm/cpu.h>
 #include <asm/elf.h>
-#include <asm/hardware.h>
-#include <asm/io.h>
 #include <asm/procinfo.h>
 #include <asm/setup.h>
 #include <asm/mach-types.h>
@@ -37,6 +36,8 @@
 #include <asm/mach/arch.h>
 #include <asm/mach/irq.h>
 #include <asm/mach/time.h>
+
+#include "compat.h"
 
 #ifndef MEM_SIZE
 #define MEM_SIZE	(16*1024*1024)
@@ -54,10 +55,7 @@ static int __init fpe_setup(char *line)
 __setup("fpe=", fpe_setup);
 #endif
 
-extern unsigned int mem_fclk_21285;
 extern void paging_init(struct meminfo *, struct machine_desc *desc);
-extern void convert_to_tag_list(struct tag *tags);
-extern void squash_mem_tags(struct tag *tag);
 extern void reboot_setup(char *str);
 extern int root_mountflags;
 extern void _stext, _text, _etext, __data_start, _edata, _end;
@@ -207,7 +205,7 @@ static const char *proc_arch[] = {
 	"5TE",
 	"5TEJ",
 	"6TEJ",
-	"?(10)",
+	"7",
 	"?(11)",
 	"?(12)",
 	"?(13)",
@@ -254,20 +252,26 @@ static void __init dump_cpu_info(int cpu)
 			dump_cache("cache", cpu, CACHE_ISIZE(info));
 		}
 	}
+
+	if (arch_is_coherent())
+		printk("Cache coherency enabled\n");
 }
 
 int cpu_architecture(void)
 {
 	int cpu_arch;
 
-	if ((processor_id & 0x0000f000) == 0) {
+	if ((processor_id & 0x0008f000) == 0) {
 		cpu_arch = CPU_ARCH_UNKNOWN;
-	} else if ((processor_id & 0x0000f000) == 0x00007000) {
+	} else if ((processor_id & 0x0008f000) == 0x00007000) {
 		cpu_arch = (processor_id & (1 << 23)) ? CPU_ARCH_ARMv4T : CPU_ARCH_ARMv3;
-	} else {
+	} else if ((processor_id & 0x00080000) == 0x00000000) {
 		cpu_arch = (processor_id >> 16) & 7;
 		if (cpu_arch)
 			cpu_arch += CPU_ARCH_ARMv3;
+	} else {
+		/* the revised CPUID */
+		cpu_arch = ((processor_id >> 12) & 0xf) - 0xb + CPU_ARCH_ARMv6;
 	}
 
 	return cpu_arch;
@@ -277,7 +281,7 @@ int cpu_architecture(void)
  * These functions re-use the assembly code in head.S, which
  * already provide the required functionality.
  */
-extern struct proc_info_list *lookup_processor_type(void);
+extern struct proc_info_list *lookup_processor_type(unsigned int);
 extern struct machine_desc *lookup_machine_type(unsigned int);
 
 static void __init setup_processor(void)
@@ -289,7 +293,7 @@ static void __init setup_processor(void)
 	 * types.  The linker builds this table for us from the
 	 * entries in arch/arm/mm/proc-*.S
 	 */
-	list = lookup_processor_type();
+	list = lookup_processor_type(processor_id);
 	if (!list) {
 		printk("CPU configuration botched (ID %08x), unable "
 		       "to continue.\n", processor_id);
@@ -770,6 +774,10 @@ void __init setup_arch(char **cmdline_p)
 	paging_init(&meminfo, mdesc);
 	request_standard_resources(&meminfo, mdesc);
 
+#ifdef CONFIG_SMP
+	smp_init_cpus();
+#endif
+
 	cpu_init();
 
 	/*
@@ -865,11 +873,11 @@ static int c_show(struct seq_file *m, void *v)
 	seq_printf(m, "\nCPU implementer\t: 0x%02x\n", processor_id >> 24);
 	seq_printf(m, "CPU architecture: %s\n", proc_arch[cpu_architecture()]);
 
-	if ((processor_id & 0x0000f000) == 0x00000000) {
+	if ((processor_id & 0x0008f000) == 0x00000000) {
 		/* pre-ARM7 */
 		seq_printf(m, "CPU part\t\t: %07x\n", processor_id >> 4);
 	} else {
-		if ((processor_id & 0x0000f000) == 0x00007000) {
+		if ((processor_id & 0x0008f000) == 0x00007000) {
 			/* ARM7 */
 			seq_printf(m, "CPU variant\t: 0x%02x\n",
 				   (processor_id >> 16) & 127);

@@ -81,7 +81,7 @@ static int vfb_setcolreg(u_int regno, u_int red, u_int green, u_int blue,
 			 u_int transp, struct fb_info *info);
 static int vfb_pan_display(struct fb_var_screeninfo *var,
 			   struct fb_info *info);
-static int vfb_mmap(struct fb_info *info, struct file *file,
+static int vfb_mmap(struct fb_info *info,
 		    struct vm_area_struct *vma);
 
 static struct fb_ops vfb_ops = {
@@ -368,7 +368,7 @@ static int vfb_pan_display(struct fb_var_screeninfo *var,
      *  Most drivers don't need their own mmap function 
      */
 
-static int vfb_mmap(struct fb_info *info, struct file *file,
+static int vfb_mmap(struct fb_info *info,
 		    struct vm_area_struct *vma)
 {
 	return -EINVAL;
@@ -401,6 +401,7 @@ static int __init vfb_setup(char *options)
 static void vfb_platform_release(struct device *device)
 {
 	// This is called when the reference count goes to zero.
+	dev_err(device, "This driver is broken, please bug the authors so they will fix it.\n");
 }
 
 static int __init vfb_probe(struct platform_device *dev)

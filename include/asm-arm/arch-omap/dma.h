@@ -21,9 +21,6 @@
 #ifndef __ASM_ARCH_DMA_H
 #define __ASM_ARCH_DMA_H
 
-#define MAX_DMA_ADDRESS			0xffffffff
-#define MAX_DMA_CHANNELS		0
-
 /* Hardware registers for omap1 */
 #define OMAP_DMA_BASE			(0xfffed800)
 #define OMAP_DMA_GCR			(OMAP_DMA_BASE + 0x400)
@@ -407,6 +404,7 @@ extern void omap_free_lcd_dma(void);
 extern void omap_setup_lcd_dma(void);
 extern void omap_enable_lcd_dma(void);
 extern void omap_stop_lcd_dma(void);
+extern int  omap_lcd_dma_ext_running(void);
 extern void omap_set_lcd_dma_ext_controller(int external);
 extern void omap_set_lcd_dma_single_transfer(int single);
 extern void omap_set_lcd_dma_b1(unsigned long addr, u16 fb_xres, u16 fb_yres,

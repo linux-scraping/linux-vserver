@@ -135,23 +135,21 @@ void skb_under_panic(struct sk_buff *skb, int sz, void *here)
 struct sk_buff *__alloc_skb(unsigned int size, gfp_t gfp_mask,
 			    int fclone)
 {
+	kmem_cache_t *cache;
+	struct skb_shared_info *shinfo;
 	struct sk_buff *skb;
 	u8 *data;
 
-	/* Get the HEAD */
-	if (fclone)
-		skb = kmem_cache_alloc(skbuff_fclone_cache,
-				       gfp_mask & ~__GFP_DMA);
-	else
-		skb = kmem_cache_alloc(skbuff_head_cache,
-				       gfp_mask & ~__GFP_DMA);
+	cache = fclone ? skbuff_fclone_cache : skbuff_head_cache;
 
+	/* Get the HEAD */
+	skb = kmem_cache_alloc(cache, gfp_mask & ~__GFP_DMA);
 	if (!skb)
 		goto out;
 
 	/* Get the DATA. Size must match skb_add_mtu(). */
 	size = SKB_DATA_ALIGN(size);
-	data = kmalloc(size + sizeof(struct skb_shared_info), gfp_mask);
+	data = ____kmalloc(size + sizeof(struct skb_shared_info), gfp_mask);
 	if (!data)
 		goto nodata;
 
@@ -162,6 +160,16 @@ struct sk_buff *__alloc_skb(unsigned int size, gfp_t gfp_mask,
 	skb->data = data;
 	skb->tail = data;
 	skb->end  = data + size;
+	/* make sure we initialize shinfo sequentially */
+	shinfo = skb_shinfo(skb);
+	atomic_set(&shinfo->dataref, 1);
+	shinfo->nr_frags  = 0;
+	shinfo->tso_size = 0;
+	shinfo->tso_segs = 0;
+	shinfo->ufo_size = 0;
+	shinfo->ip6_frag_id = 0;
+	shinfo->frag_list = NULL;
+
 	if (fclone) {
 		struct sk_buff *child = skb + 1;
 		atomic_t *fclone_ref = (atomic_t *) (child + 1);
@@ -171,17 +179,10 @@ struct sk_buff *__alloc_skb(unsigned int size, gfp_t gfp_mask,
 
 		child->fclone = SKB_FCLONE_UNAVAILABLE;
 	}
-	atomic_set(&(skb_shinfo(skb)->dataref), 1);
-	skb_shinfo(skb)->nr_frags  = 0;
-	skb_shinfo(skb)->tso_size = 0;
-	skb_shinfo(skb)->tso_segs = 0;
-	skb_shinfo(skb)->frag_list = NULL;
-	skb_shinfo(skb)->ufo_size = 0;
-	skb_shinfo(skb)->ip6_frag_id = 0;
 out:
 	return skb;
 nodata:
-	kmem_cache_free(skbuff_head_cache, skb);
+	kmem_cache_free(cache, skb);
 	skb = NULL;
 	goto out;
 }
@@ -355,6 +356,24 @@ void __kfree_skb(struct sk_buff *skb)
 }
 
 /**
+ *	kfree_skb - free an sk_buff
+ *	@skb: buffer to free
+ *
+ *	Drop a reference to the buffer and free it if the usage count has
+ *	hit zero.
+ */
+void kfree_skb(struct sk_buff *skb)
+{
+	if (unlikely(!skb))
+		return;
+	if (likely(atomic_read(&skb->users) == 1))
+		smp_rmb();
+	else if (likely(!atomic_dec_and_test(&skb->users)))
+		return;
+	__kfree_skb(skb);
+}
+
+/**
  *	skb_clone	-	duplicate an sk_buff
  *	@skb: buffer to clone
  *	@gfp_mask: allocation priority
@@ -410,6 +429,9 @@ struct sk_buff *skb_clone(struct sk_buff *skb, gfp_t gfp_mask)
 	C(pkt_type);
 	C(ip_summed);
 	C(priority);
+#if defined(CONFIG_IP_VS) || defined(CONFIG_IP_VS_MODULE)
+	C(ipvs_property);
+#endif
 	C(protocol);
 	n->destructor = NULL;
 #ifdef CONFIG_NETFILTER
@@ -417,13 +439,6 @@ struct sk_buff *skb_clone(struct sk_buff *skb, gfp_t gfp_mask)
 	C(nfct);
 	nf_conntrack_get(skb->nfct);
 	C(nfctinfo);
-#if defined(CONFIG_NF_CONNTRACK) || defined(CONFIG_NF_CONNTRACK_MODULE)
-	C(nfct_reasm);
-	nf_conntrack_get_reasm(skb->nfct_reasm);
-#endif
-#if defined(CONFIG_IP_VS) || defined(CONFIG_IP_VS_MODULE)
-	C(ipvs_property);
-#endif
 #if defined(CONFIG_NF_CONNTRACK) || defined(CONFIG_NF_CONNTRACK_MODULE)
 	C(nfct_reasm);
 	nf_conntrack_get_reasm(skb->nfct_reasm);
@@ -792,8 +807,7 @@ int ___pskb_trim(struct sk_buff *skb, unsigned int len, int realloc)
 		int end = offset + skb_shinfo(skb)->frags[i].size;
 		if (end > len) {
 			if (skb_cloned(skb)) {
-				if (!realloc)
-					BUG();
+				BUG_ON(!realloc);
 				if (pskb_expand_head(skb, 0, 0, GFP_ATOMIC))
 					return -ENOMEM;
 			}
@@ -895,8 +909,7 @@ unsigned char *__pskb_pull_tail(struct sk_buff *skb, int delta)
 		struct sk_buff *insp = NULL;
 
 		do {
-			if (!list)
-				BUG();
+			BUG_ON(!list);
 
 			if (list->len <= eat) {
 				/* Eaten as whole. */
@@ -1200,8 +1213,7 @@ unsigned int skb_checksum(const struct sk_buff *skb, int offset,
 			start = end;
 		}
 	}
-	if (len)
-		BUG();
+	BUG_ON(len);
 
 	return csum;
 }
@@ -1283,8 +1295,7 @@ unsigned int skb_copy_and_csum_bits(const struct sk_buff *skb, int offset,
 			start = end;
 		}
 	}
-	if (len)
-		BUG();
+	BUG_ON(len);
 	return csum;
 }
 
@@ -1298,8 +1309,7 @@ void skb_copy_and_csum_dev(const struct sk_buff *skb, u8 *to)
 	else
 		csstart = skb_headlen(skb);
 
-	if (csstart > skb_headlen(skb))
-		BUG();
+	BUG_ON(csstart > skb_headlen(skb));
 
 	memcpy(to, skb->data, csstart);
 
@@ -1785,6 +1795,29 @@ int skb_append_datato_frags(struct sock *sk, struct sk_buff *skb,
 	return 0;
 }
 
+/**
+ *	skb_pull_rcsum - pull skb and update receive checksum
+ *	@skb: buffer to update
+ *	@start: start of data before pull
+ *	@len: length of data pulled
+ *
+ *	This function performs an skb_pull on the packet and updates
+ *	update the CHECKSUM_HW checksum.  It should be used on receive
+ *	path processing instead of skb_pull unless you know that the
+ *	checksum difference is zero (e.g., a valid IP header) or you
+ *	are setting ip_summed to CHECKSUM_NONE.
+ */
+unsigned char *skb_pull_rcsum(struct sk_buff *skb, unsigned int len)
+{
+	BUG_ON(len > skb->len);
+	skb->len -= len;
+	BUG_ON(skb->len < skb->data_len);
+	skb_postpull_rcsum(skb, skb->data, len);
+	return skb->data += len;
+}
+
+EXPORT_SYMBOL_GPL(skb_pull_rcsum);
+
 void __init skb_init(void)
 {
 	skbuff_head_cache = kmem_cache_create("skbuff_head_cache",
@@ -1807,6 +1840,7 @@ void __init skb_init(void)
 
 EXPORT_SYMBOL(___pskb_trim);
 EXPORT_SYMBOL(__kfree_skb);
+EXPORT_SYMBOL(kfree_skb);
 EXPORT_SYMBOL(__pskb_pull_tail);
 EXPORT_SYMBOL(__alloc_skb);
 EXPORT_SYMBOL(pskb_copy);

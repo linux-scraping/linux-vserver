@@ -1,7 +1,7 @@
 /*******************************************************************
  * This file is part of the Emulex Linux Device Driver for         *
  * Fibre Channel Host Bus Adapters.                                *
- * Copyright (C) 2004-2005 Emulex.  All rights reserved.           *
+ * Copyright (C) 2004-2006 Emulex.  All rights reserved.           *
  * EMULEX and SLI are trademarks of Emulex.                        *
  * www.emulex.com                                                  *
  *                                                                 *
@@ -266,9 +266,11 @@ struct lpfc_name {
 		struct {
 #ifdef __BIG_ENDIAN_BITFIELD
 			uint8_t nameType:4;	/* FC Word 0, bit 28:31 */
-			uint8_t IEEEextMsn:4;	/* FC Word 0, bit 24:27, bit 8:11 of IEEE ext */
+			uint8_t IEEEextMsn:4;	/* FC Word 0, bit 24:27, bit
+						   8:11 of IEEE ext */
 #else	/*  __LITTLE_ENDIAN_BITFIELD */
-			uint8_t IEEEextMsn:4;	/* FC Word 0, bit 24:27, bit 8:11 of IEEE ext */
+			uint8_t IEEEextMsn:4;	/* FC Word 0, bit 24:27, bit
+						   8:11 of IEEE ext */
 			uint8_t nameType:4;	/* FC Word 0, bit 28:31 */
 #endif
 
@@ -278,7 +280,8 @@ struct lpfc_name {
 #define NAME_IP_TYPE        0x4	/* IP address */
 #define NAME_CCITT_TYPE     0xC
 #define NAME_CCITT_GR_TYPE  0xE
-			uint8_t IEEEextLsb;	/* FC Word 0, bit 16:23, IEEE extended Lsb */
+			uint8_t IEEEextLsb;	/* FC Word 0, bit 16:23, IEEE
+						   extended Lsb */
 			uint8_t IEEE[6];	/* FC IEEE address */
 		} s;
 		uint8_t wwn[8];
@@ -451,10 +454,13 @@ struct serv_parm {	/* Structure is in Big Endian format */
 #define ELS_CMD_ADISC     0x52000000
 #define ELS_CMD_FARP      0x54000000
 #define ELS_CMD_FARPR     0x55000000
+#define ELS_CMD_RPS       0x56000000
+#define ELS_CMD_RPL       0x57000000
 #define ELS_CMD_FAN       0x60000000
 #define ELS_CMD_RSCN      0x61040000
 #define ELS_CMD_SCR       0x62000000
 #define ELS_CMD_RNID      0x78000000
+#define ELS_CMD_LIRR      0x7A000000
 #else	/*  __LITTLE_ENDIAN_BITFIELD */
 #define ELS_CMD_MASK      0xffff
 #define ELS_RSP_MASK      0xff
@@ -483,10 +489,13 @@ struct serv_parm {	/* Structure is in Big Endian format */
 #define ELS_CMD_ADISC     0x52
 #define ELS_CMD_FARP      0x54
 #define ELS_CMD_FARPR     0x55
+#define ELS_CMD_RPS       0x56
+#define ELS_CMD_RPL       0x57
 #define ELS_CMD_FAN       0x60
 #define ELS_CMD_RSCN      0x0461
 #define ELS_CMD_SCR       0x62
 #define ELS_CMD_RNID      0x78
+#define ELS_CMD_LIRR      0x7A
 #endif
 
 /*
@@ -755,12 +764,40 @@ typedef struct _RNID {		/* Structure is in Big Endian format */
 	} un;
 } RNID;
 
-typedef struct _RRQ {		/* Structure is in Big Endian format */
-	uint32_t SID;
-	uint16_t Oxid;
-	uint16_t Rxid;
-	uint8_t resv[32];	/* optional association hdr */
-} RRQ;
+typedef struct  _RPS {  	/* Structure is in Big Endian format */
+	union {
+		uint32_t portNum;
+		struct lpfc_name portName;
+	} un;
+} RPS;
+
+typedef struct  _RPS_RSP {	/* Structure is in Big Endian format */
+	uint16_t rsvd1;
+	uint16_t portStatus;
+	uint32_t linkFailureCnt;
+	uint32_t lossSyncCnt;
+	uint32_t lossSignalCnt;
+	uint32_t primSeqErrCnt;
+	uint32_t invalidXmitWord;
+	uint32_t crcCnt;
+} RPS_RSP;
+
+typedef struct  _RPL {  	/* Structure is in Big Endian format */
+	uint32_t maxsize;
+	uint32_t index;
+} RPL;
+
+typedef struct  _PORT_NUM_BLK {
+	uint32_t portNum;
+	uint32_t portID;
+	struct lpfc_name portName;
+} PORT_NUM_BLK;
+
+typedef struct  _RPL_RSP { 	/* Structure is in Big Endian format */
+	uint32_t listLen;
+	uint32_t index;
+	PORT_NUM_BLK port_num_blk;
+} RPL_RSP;
 
 /* This is used for RSCN command */
 typedef struct _D_ID {		/* Structure is in Big Endian format */
@@ -801,7 +838,6 @@ typedef struct _ELS_PKT {	/* Structure is in Big Endian format */
 		FARP farp;	/* Payload for FARP/ACC */
 		FAN fan;	/* Payload for FAN */
 		SCR scr;	/* Payload for SCR/ACC */
-		RRQ rrq;	/* Payload for RRQ */
 		RNID rnid;	/* Payload for RNID */
 		uint8_t pad[128 - 4];	/* Pad out to payload of 128 bytes */
 	} un;
@@ -1024,23 +1060,38 @@ typedef struct {
 /* Start FireFly Register definitions */
 #define PCI_VENDOR_ID_EMULEX        0x10df
 #define PCI_DEVICE_ID_FIREFLY       0x1ae5
-#define PCI_DEVICE_ID_SUPERFLY      0xf700
-#define PCI_DEVICE_ID_DRAGONFLY     0xf800
 #define PCI_DEVICE_ID_RFLY          0xf095
 #define PCI_DEVICE_ID_PFLY          0xf098
+#define PCI_DEVICE_ID_LP101         0xf0a1
 #define PCI_DEVICE_ID_TFLY          0xf0a5
+#define PCI_DEVICE_ID_BSMB          0xf0d1
+#define PCI_DEVICE_ID_BMID          0xf0d5
+#define PCI_DEVICE_ID_ZSMB          0xf0e1
+#define PCI_DEVICE_ID_ZMID          0xf0e5
+#define PCI_DEVICE_ID_NEPTUNE       0xf0f5
+#define PCI_DEVICE_ID_NEPTUNE_SCSP  0xf0f6
+#define PCI_DEVICE_ID_NEPTUNE_DCSP  0xf0f7
+#define PCI_DEVICE_ID_SUPERFLY      0xf700
+#define PCI_DEVICE_ID_DRAGONFLY     0xf800
 #define PCI_DEVICE_ID_CENTAUR       0xf900
 #define PCI_DEVICE_ID_PEGASUS       0xf980
 #define PCI_DEVICE_ID_THOR          0xfa00
 #define PCI_DEVICE_ID_VIPER         0xfb00
+#define PCI_DEVICE_ID_LP10000S      0xfc00
+#define PCI_DEVICE_ID_LP11000S      0xfc10
+#define PCI_DEVICE_ID_LPE11000S     0xfc20
 #define PCI_DEVICE_ID_HELIOS        0xfd00
-#define PCI_DEVICE_ID_BMID          0xf0d5
-#define PCI_DEVICE_ID_BSMB          0xf0d1
+#define PCI_DEVICE_ID_HELIOS_SCSP   0xfd11
+#define PCI_DEVICE_ID_HELIOS_DCSP   0xfd12
 #define PCI_DEVICE_ID_ZEPHYR        0xfe00
-#define PCI_DEVICE_ID_ZMID          0xf0e5
-#define PCI_DEVICE_ID_ZSMB          0xf0e1
-#define PCI_DEVICE_ID_LP101	    0xf0a1
-#define PCI_DEVICE_ID_LP10000S	    0xfc00
+#define PCI_DEVICE_ID_ZEPHYR_SCSP   0xfe11
+#define PCI_DEVICE_ID_ZEPHYR_DCSP   0xfe12
+
+#define PCI_SUBSYSTEM_ID_LP11000S      0xfc11
+#define PCI_SUBSYSTEM_ID_LP11002S      0xfc12
+#define PCI_SUBSYSTEM_ID_LPE11000S     0xfc21
+#define PCI_SUBSYSTEM_ID_LPE11002S     0xfc22
+#define PCI_SUBSYSTEM_ID_LPE11010S     0xfc2A
 
 #define JEDEC_ID_ADDRESS            0x0080001c
 #define FIREFLY_JEDEC_ID            0x1ACC
@@ -1182,7 +1233,9 @@ typedef struct {		/* FireFly BIU registers */
 #define MBX_SET_MASK        0x20
 #define MBX_SET_SLIM        0x21
 #define MBX_UNREG_D_ID      0x23
+#define MBX_KILL_BOARD      0x24
 #define MBX_CONFIG_FARP     0x25
+#define MBX_BEACON          0x2A
 
 #define MBX_LOAD_AREA       0x81
 #define MBX_RUN_BIU_DIAG64  0x84
@@ -1658,13 +1711,13 @@ typedef struct {
 	uint32_t rttov;
 	uint32_t altov;
 	uint32_t lmt;
-#define LMT_RESERVED    0x0    /* Not used */
-#define LMT_266_10bit   0x1    /* 265.625 Mbaud 10 bit iface  */
-#define LMT_532_10bit   0x2    /* 531.25  Mbaud 10 bit iface  */
-#define LMT_1063_20bit  0x3    /* 1062.5   Mbaud 20 bit iface */
-#define LMT_1063_10bit  0x4    /* 1062.5   Mbaud 10 bit iface */
-#define LMT_2125_10bit  0x8    /* 2125     Mbaud 10 bit iface */
-#define LMT_4250_10bit  0x40   /* 4250     Mbaud 10 bit iface */
+#define LMT_RESERVED  0x000    /* Not used */
+#define LMT_1Gb       0x004
+#define LMT_2Gb       0x008
+#define LMT_4Gb       0x040
+#define LMT_8Gb       0x080
+#define LMT_10Gb      0x100
+
 
 	uint32_t rsvd2;
 	uint32_t rsvd3;

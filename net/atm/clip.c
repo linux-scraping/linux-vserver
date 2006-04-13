@@ -19,6 +19,7 @@
 #include <linux/atmdev.h>
 #include <linux/atmclip.h>
 #include <linux/atmarp.h>
+#include <linux/capability.h>
 #include <linux/ip.h> /* for net/route.h */
 #include <linux/in.h> /* for struct sockaddr_in */
 #include <linux/if.h> /* for IFF_UP */
@@ -288,7 +289,6 @@ static void clip_neigh_error(struct neighbour *neigh,struct sk_buff *skb)
 
 static struct neigh_ops clip_neigh_ops = {
 	.family =		AF_INET,
-	.destructor =		clip_neigh_destroy,
 	.solicit =		clip_neigh_solicit,
 	.error_report =		clip_neigh_error,
 	.output =		dev_queue_xmit,
@@ -346,6 +346,7 @@ static struct neigh_table clip_tbl = {
 	/* parameters are copied from ARP ... */
 	.parms = {
 		.tbl 			= &clip_tbl,
+		.neigh_destructor	= clip_neigh_destroy,
 		.base_reachable_time 	= 30 * HZ,
 		.retrans_time 		= 1 * HZ,
 		.gc_staletime 		= 60 * HZ,

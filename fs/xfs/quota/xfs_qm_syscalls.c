@@ -15,6 +15,9 @@
  * along with this program; if not, write the Free Software Foundation,
  * Inc.,  51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
+
+#include <linux/capability.h>
+
 #include "xfs.h"
 #include "xfs_fs.h"
 #include "xfs_bit.h"
@@ -212,7 +215,7 @@ xfs_qm_scall_quotaoff(
 	xfs_qoff_logitem_t	*qoffstart;
 	int			nculprits;
 
-	if (!force && !capable(CAP_SYS_ADMIN))
+	if (!force && !capable(CAP_SYS_ADMIN) && !vx_ccaps(VXC_QUOTA_CTL))
 		return XFS_ERROR(EPERM);
 	/*
 	 * No file system can have quotas enabled on disk but not in core.
@@ -233,7 +236,7 @@ xfs_qm_scall_quotaoff(
 	 */
 	ASSERT(mp->m_quotainfo);
 	if (mp->m_quotainfo)
-		mutex_lock(&(XFS_QI_QOFFLOCK(mp)), PINOD);
+		mutex_lock(&(XFS_QI_QOFFLOCK(mp)));
 
 	ASSERT(mp->m_quotainfo);
 
@@ -381,7 +384,7 @@ xfs_qm_scall_trunc_qfiles(
 	int		error;
 	xfs_inode_t	*qip;
 
-	if (!capable(CAP_SYS_ADMIN))
+	if (!capable(CAP_SYS_ADMIN) && !vx_ccaps(VXC_QUOTA_CTL))
 		return XFS_ERROR(EPERM);
 	error = 0;
 	if (!XFS_SB_VERSION_HASQUOTA(&mp->m_sb) || flags == 0) {
@@ -426,7 +429,7 @@ xfs_qm_scall_quotaon(
 	uint		accflags;
 	__int64_t	sbflags;
 
-	if (!capable(CAP_SYS_ADMIN))
+	if (!capable(CAP_SYS_ADMIN) && !vx_ccaps(VXC_QUOTA_CTL))
 		return XFS_ERROR(EPERM);
 
 	flags &= (XFS_ALL_QUOTA_ACCT | XFS_ALL_QUOTA_ENFD);
@@ -508,7 +511,7 @@ xfs_qm_scall_quotaon(
 	/*
 	 * Switch on quota enforcement in core.
 	 */
-	mutex_lock(&(XFS_QI_QOFFLOCK(mp)), PINOD);
+	mutex_lock(&(XFS_QI_QOFFLOCK(mp)));
 	mp->m_qflags |= (flags & XFS_ALL_QUOTA_ENFD);
 	mutex_unlock(&(XFS_QI_QOFFLOCK(mp)));
 
@@ -597,7 +600,7 @@ xfs_qm_scall_setqlim(
 	int			error;
 	xfs_qcnt_t		hard, soft;
 
-	if (!capable(CAP_SYS_ADMIN))
+	if (!capable(CAP_SYS_ADMIN) && !vx_ccaps(VXC_QUOTA_CTL))
 		return XFS_ERROR(EPERM);
 
 	if ((newlim->d_fieldmask &
@@ -617,7 +620,7 @@ xfs_qm_scall_setqlim(
 	 * a quotaoff from happening). (XXXThis doesn't currently happen
 	 * because we take the vfslock before calling xfs_qm_sysent).
 	 */
-	mutex_lock(&(XFS_QI_QOFFLOCK(mp)), PINOD);
+	mutex_lock(&(XFS_QI_QOFFLOCK(mp)));
 
 	/*
 	 * Get the dquot (locked), and join it to the transaction.
@@ -909,7 +912,7 @@ xfs_qm_export_dquot(
 
 	/*
 	 * Internally, we don't reset all the timers when quota enforcement
-	 * gets turned off. No need to confuse the userlevel code,
+	 * gets turned off. No need to confuse the user level code,
 	 * so return zeroes in that case.
 	 */
 	if (! XFS_IS_QUOTA_ENFORCED(mp)) {
@@ -1426,7 +1429,7 @@ xfs_qm_internalqcheck(
 	xfs_log_force(mp, (xfs_lsn_t)0, XFS_LOG_FORCE | XFS_LOG_SYNC);
 	XFS_bflush(mp->m_ddev_targp);
 
-	mutex_lock(&qcheck_lock, PINOD);
+	mutex_lock(&qcheck_lock);
 	/* There should be absolutely no quota activity while this
 	   is going on. */
 	qmtest_udqtab = kmem_zalloc(qmtest_hashmask *

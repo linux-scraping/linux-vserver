@@ -97,7 +97,6 @@
 #define PARAM_VESAPM_OFF	0x30
 #define PARAM_LFB_PAGES		0x32
 #define PARAM_VESA_ATTRIB	0x34
-#define PARAM_CAPABILITIES      0x36
 
 /* Define DO_STORE according to CONFIG_VIDEO_RETAIN */
 #ifdef CONFIG_VIDEO_RETAIN
@@ -233,10 +232,6 @@ mopar_gr:
 	xorl	%eax, %eax
 	movw	18(%di), %ax
 	movl	%eax, %fs:(PARAM_LFB_SIZE)
-
-# store mode capabilities
-	movl    10(%di), %eax
-	movl    %eax, %fs:(PARAM_CAPABILITIES)
 
 # switching the DAC to 8-bit is for <= 8 bpp only
 	movw	%fs:(PARAM_LFB_DEPTH), %ax
@@ -1929,6 +1924,7 @@ skip10:	movb	%ah, %al
 	ret
 
 store_edid:
+#ifdef CONFIG_FB_FIRMWARE_EDID
 	pushw	%es				# just save all registers
 	pushw	%ax
 	pushw	%bx
@@ -1959,6 +1955,7 @@ store_edid:
 	popw	%bx
 	popw	%ax
 	popw	%es
+#endif
 	ret
 
 # VIDEO_SELECT-only variables

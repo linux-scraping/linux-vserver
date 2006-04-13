@@ -941,18 +941,6 @@ static void* mgsl_get_text_ptr(void)
 	return mgsl_get_text_ptr;
 }
 
-/*
- * tmp_buf is used as a temporary buffer by mgsl_write.  We need to
- * lock it in case the COPY_FROM_USER blocks while swapping in a page,
- * and some other program tries to do a serial write at the same time.
- * Since the lock will only come under contention when the system is
- * swapping and available memory is low, it makes sense to share one
- * buffer across all the serial ioports, since it significantly saves
- * memory if large numbers of serial ports are open.
- */
-static unsigned char *tmp_buf;
-static DECLARE_MUTEX(tmp_buf_sem);
-
 static inline int mgsl_paranoia_check(struct mgsl_struct *info,
 					char *name, const char *routine)
 {
@@ -1467,6 +1455,7 @@ static void mgsl_isr_receive_data( struct mgsl_struct *info )
 {
 	int Fifocount;
 	u16 status;
+	int work = 0;
 	unsigned char DataByte;
  	struct tty_struct *tty = info->tty;
  	struct	mgsl_icount *icount = &info->icount;
@@ -1487,6 +1476,8 @@ static void mgsl_isr_receive_data( struct mgsl_struct *info )
 	/* flush the receive FIFO */
 
 	while( (Fifocount = (usc_InReg(info,RICR) >> 8)) ) {
+		int flag;
+
 		/* read one byte from RxFIFO */
 		outw( (inw(info->io_base + CCAR) & 0x0780) | (RDR+LSBONLY),
 		      info->io_base + CCAR );
@@ -1498,13 +1489,9 @@ static void mgsl_isr_receive_data( struct mgsl_struct *info )
 				RXSTATUS_OVERRUN + RXSTATUS_BREAK_RECEIVED) )
 			usc_UnlatchRxstatusBits(info,RXSTATUS_ALL);
 		
-		if (tty->flip.count >= TTY_FLIPBUF_SIZE)
-			continue;
-			
-		*tty->flip.char_buf_ptr = DataByte;
 		icount->rx++;
 		
-		*tty->flip.flag_buf_ptr = 0;
+		flag = 0;
 		if ( status & (RXSTATUS_FRAMING_ERROR + RXSTATUS_PARITY_ERROR +
 				RXSTATUS_OVERRUN + RXSTATUS_BREAK_RECEIVED) ) {
 			printk("rxerr=%04X\n",status);					
@@ -1530,41 +1517,31 @@ static void mgsl_isr_receive_data( struct mgsl_struct *info )
 			status &= info->read_status_mask;
 		
 			if (status & RXSTATUS_BREAK_RECEIVED) {
-				*tty->flip.flag_buf_ptr = TTY_BREAK;
+				flag = TTY_BREAK;
 				if (info->flags & ASYNC_SAK)
 					do_SAK(tty);
 			} else if (status & RXSTATUS_PARITY_ERROR)
-				*tty->flip.flag_buf_ptr = TTY_PARITY;
+				flag = TTY_PARITY;
 			else if (status & RXSTATUS_FRAMING_ERROR)
-				*tty->flip.flag_buf_ptr = TTY_FRAME;
-			if (status & RXSTATUS_OVERRUN) {
-				/* Overrun is special, since it's
-				 * reported immediately, and doesn't
-				 * affect the current character
-				 */
-				if (tty->flip.count < TTY_FLIPBUF_SIZE) {
-					tty->flip.count++;
-					tty->flip.flag_buf_ptr++;
-					tty->flip.char_buf_ptr++;
-					*tty->flip.flag_buf_ptr = TTY_OVERRUN;
-				}
-			}
+				flag = TTY_FRAME;
 		}	/* end of if (error) */
-		
-		tty->flip.flag_buf_ptr++;
-		tty->flip.char_buf_ptr++;
-		tty->flip.count++;
+		tty_insert_flip_char(tty, DataByte, flag);
+		if (status & RXSTATUS_OVERRUN) {
+			/* Overrun is special, since it's
+			 * reported immediately, and doesn't
+			 * affect the current character
+			 */
+			work += tty_insert_flip_char(tty, 0, TTY_OVERRUN);
+		}
 	}
 
 	if ( debug_level >= DEBUG_LEVEL_ISR ) {
-		printk("%s(%d):mgsl_isr_receive_data flip count=%d\n",
-			__FILE__,__LINE__,tty->flip.count);
 		printk("%s(%d):rx=%d brk=%d parity=%d frame=%d overrun=%d\n",
 			__FILE__,__LINE__,icount->rx,icount->brk,
 			icount->parity,icount->frame,icount->overrun);
 	}
 			
-	if ( tty->flip.count )
+	if(work)
 		tty_flip_buffer_push(tty);
 }
 
@@ -2162,7 +2139,7 @@ static int mgsl_write(struct tty_struct * tty,
 	if (mgsl_paranoia_check(info, tty->name, "mgsl_write"))
 		goto cleanup;
 
-	if (!tty || !info->xmit_buf || !tmp_buf)
+	if (!tty || !info->xmit_buf)
 		goto cleanup;
 
 	if ( info->params.mode == MGSL_MODE_HDLC ||
@@ -3450,7 +3427,6 @@ static int mgsl_open(struct tty_struct *tty, struct file * filp)
 {
 	struct mgsl_struct	*info;
 	int 			retval, line;
-	unsigned long		page;
 	unsigned long flags;
 
 	/* verify range of specified line number */	
@@ -3482,18 +3458,6 @@ static int mgsl_open(struct tty_struct *tty, struct file * filp)
 		retval = ((info->flags & ASYNC_HUP_NOTIFY) ?
 			-EAGAIN : -ERESTARTSYS);
 		goto cleanup;
-	}
-	
-	if (!tmp_buf) {
-		page = get_zeroed_page(GFP_KERNEL);
-		if (!page) {
-			retval = -ENOMEM;
-			goto cleanup;
-		}
-		if (tmp_buf)
-			free_page(page);
-		else
-			tmp_buf = (unsigned char *) page;
 	}
 	
 	info->tty->low_latency = (info->flags & ASYNC_LOW_LATENCY) ? 1 : 0;
@@ -4512,11 +4476,6 @@ static void synclink_cleanup(void)
 		tmp = info;
 		info = info->next_device;
 		kfree(tmp);
-	}
-	
-	if (tmp_buf) {
-		free_page((unsigned long) tmp_buf);
-		tmp_buf = NULL;
 	}
 	
 	if (pci_registered)
@@ -6037,7 +5996,7 @@ static void usc_set_async_mode( struct mgsl_struct *info )
 	 * <15..8>	?		RxFIFO IRQ Request Level
 	 *
 	 * Note: For async mode the receive FIFO level must be set
-	 * to 0 to aviod the situation where the FIFO contains fewer bytes
+	 * to 0 to avoid the situation where the FIFO contains fewer bytes
 	 * than the trigger level and no more data is expected.
 	 *
 	 * <7>		0		Exited Hunt IA (Interrupt Arm)
@@ -7058,7 +7017,7 @@ static BOOLEAN mgsl_register_test( struct mgsl_struct *info )
 {
 	static unsigned short BitPatterns[] =
 		{ 0x0000, 0xffff, 0xaaaa, 0x5555, 0x1234, 0x6969, 0x9696, 0x0f0f };
-	static unsigned int Patterncount = sizeof(BitPatterns)/sizeof(unsigned short);
+	static unsigned int Patterncount = ARRAY_SIZE(BitPatterns);
 	unsigned int i;
 	BOOLEAN rc = TRUE;
 	unsigned long flags;
@@ -7501,9 +7460,9 @@ static int mgsl_adapter_test( struct mgsl_struct *info )
  */
 static BOOLEAN mgsl_memory_test( struct mgsl_struct *info )
 {
-	static unsigned long BitPatterns[] = { 0x0, 0x55555555, 0xaaaaaaaa,
-											0x66666666, 0x99999999, 0xffffffff, 0x12345678 };
-	unsigned long Patterncount = sizeof(BitPatterns)/sizeof(unsigned long);
+	static unsigned long BitPatterns[] =
+		{ 0x0, 0x55555555, 0xaaaaaaaa, 0x66666666, 0x99999999, 0xffffffff, 0x12345678 };
+	unsigned long Patterncount = ARRAY_SIZE(BitPatterns);
 	unsigned long i;
 	unsigned long TestLimit = SHARED_MEM_ADDRESS_SIZE/sizeof(unsigned long);
 	unsigned long * TestAddr;
@@ -7782,7 +7741,7 @@ static int hdlcdev_attach(struct net_device *dev, unsigned short encoding,
 	}
 
 	info->params.encoding = new_encoding;
-	info->params.crc_type = new_crctype;;
+	info->params.crc_type = new_crctype;
 
 	/* if network interface up, reprogram hardware */
 	if (info->netcount)

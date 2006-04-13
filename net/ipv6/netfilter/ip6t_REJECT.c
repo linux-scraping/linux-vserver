@@ -160,6 +160,8 @@ static void send_reset(struct sk_buff *oldskb)
 				      csum_partial((char *)tcph,
 						   sizeof(struct tcphdr), 0));
 
+	nf_ct_attach(nskb, oldskb);
+
 	NF_HOOK(PF_INET6, NF_IP6_LOCAL_OUT, nskb, NULL, nskb->dst->dev,
 		dst_output);
 }
@@ -177,6 +179,7 @@ static unsigned int reject6_target(struct sk_buff **pskb,
 			   const struct net_device *in,
 			   const struct net_device *out,
 			   unsigned int hooknum,
+			   const struct xt_target *target,
 			   const void *targinfo,
 			   void *userinfo)
 {
@@ -218,30 +221,14 @@ static unsigned int reject6_target(struct sk_buff **pskb,
 }
 
 static int check(const char *tablename,
-		 const struct ip6t_entry *e,
+		 const void *entry,
+		 const struct xt_target *target,
 		 void *targinfo,
 		 unsigned int targinfosize,
 		 unsigned int hook_mask)
 {
  	const struct ip6t_reject_info *rejinfo = targinfo;
-
- 	if (targinfosize != IP6T_ALIGN(sizeof(struct ip6t_reject_info))) {
-  		DEBUGP("ip6t_REJECT: targinfosize %u != 0\n", targinfosize);
-  		return 0;
-  	}
-
-	/* Only allow these for packet filtering. */
-	if (strcmp(tablename, "filter") != 0) {
-		DEBUGP("ip6t_REJECT: bad table `%s'.\n", tablename);
-		return 0;
-	}
-
-	if ((hook_mask & ~((1 << NF_IP6_LOCAL_IN)
-			   | (1 << NF_IP6_FORWARD)
-			   | (1 << NF_IP6_LOCAL_OUT))) != 0) {
-		DEBUGP("ip6t_REJECT: bad hook mask %X\n", hook_mask);
-		return 0;
-	}
+	const struct ip6t_entry *e = entry;
 
 	if (rejinfo->with == IP6T_ICMP6_ECHOREPLY) {
 		printk("ip6t_REJECT: ECHOREPLY is not supported.\n");
@@ -254,28 +241,31 @@ static int check(const char *tablename,
 			return 0;
 		}
 	}
-
 	return 1;
 }
 
 static struct ip6t_target ip6t_reject_reg = {
 	.name		= "REJECT",
 	.target		= reject6_target,
+	.targetsize	= sizeof(struct ip6t_reject_info),
+	.table		= "filter",
+	.hooks		= (1 << NF_IP6_LOCAL_IN) | (1 << NF_IP6_FORWARD) |
+			  (1 << NF_IP6_LOCAL_OUT),
 	.checkentry	= check,
 	.me		= THIS_MODULE
 };
 
-static int __init init(void)
+static int __init ip6t_reject_init(void)
 {
 	if (ip6t_register_target(&ip6t_reject_reg))
 		return -EINVAL;
 	return 0;
 }
 
-static void __exit fini(void)
+static void __exit ip6t_reject_fini(void)
 {
 	ip6t_unregister_target(&ip6t_reject_reg);
 }
 
-module_init(init);
-module_exit(fini);
+module_init(ip6t_reject_init);
+module_exit(ip6t_reject_fini);

@@ -1,7 +1,7 @@
 /*
  *   fs/cifs/cifsglob.h
  *
- *   Copyright (C) International Business Machines  Corp., 2002,2005
+ *   Copyright (C) International Business Machines  Corp., 2002,2006
  *   Author(s): Steve French (sfrench@us.ibm.com)
  *
  *   This library is free software; you can redistribute it and/or modify
@@ -233,6 +233,8 @@ struct cifsTconInfo {
 	atomic_t num_hardlinks;
 	atomic_t num_symlinks;
 	atomic_t num_locks;
+	atomic_t num_acl_get;
+	atomic_t num_acl_set;
 #ifdef CONFIG_CIFS_STATS2
 	unsigned long long time_writes;
 	unsigned long long time_reads;
@@ -285,6 +287,7 @@ struct cifs_search_info {
 	unsigned endOfSearch:1;
 	unsigned emptyDir:1;
 	unsigned unicode:1;
+	unsigned smallBuf:1; /* so we know which buf_release function to call */
 };
 
 struct cifsFileInfo {
@@ -420,7 +423,21 @@ struct dir_notify_req {
 #define   MID_RESPONSE_RECEIVED 4
 #define   MID_RETRY_NEEDED      8 /* session closed while this request out */
 #define   MID_NO_RESP_NEEDED 0x10
-#define   MID_SMALL_BUFFER   0x20 /* 112 byte response buffer instead of 4K */
+
+/* Types of response buffer returned from SendReceive2 */
+#define   CIFS_NO_BUFFER        0    /* Response buffer not returned */
+#define   CIFS_SMALL_BUFFER     1
+#define   CIFS_LARGE_BUFFER     2
+#define   CIFS_IOVEC            4    /* array of response buffers */
+
+/* Type of session setup needed */
+#define   CIFS_PLAINTEXT	0
+#define   CIFS_LANMAN		1
+#define   CIFS_NTLM		2
+#define   CIFS_NTLMSSP_NEG	3
+#define   CIFS_NTLMSSP_AUTH	4
+#define   CIFS_SPNEGO_INIT	5
+#define   CIFS_SPNEGO_TARG	6
 
 /*
  *****************************************************************
@@ -505,8 +522,12 @@ GLOBAL_EXTERN atomic_t tcpSesReconnectCount;
 GLOBAL_EXTERN atomic_t tconInfoReconnectCount;
 
 /* Various Debug counters to remove someday (BB) */
-GLOBAL_EXTERN atomic_t bufAllocCount;
-GLOBAL_EXTERN atomic_t smBufAllocCount;      
+GLOBAL_EXTERN atomic_t bufAllocCount;    /* current number allocated  */
+#ifdef CONFIG_CIFS_STATS2
+GLOBAL_EXTERN atomic_t totBufAllocCount; /* total allocated over all time */
+GLOBAL_EXTERN atomic_t totSmBufAllocCount;
+#endif
+GLOBAL_EXTERN atomic_t smBufAllocCount;
 GLOBAL_EXTERN atomic_t midCount;
 
 /* Misc globals */

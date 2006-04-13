@@ -38,7 +38,7 @@ MODULE_LICENSE("GPL");
 /* MACROS                                                             */
 /*====================================================================*/
 
-#if defined(DEBUG) || defined(CONFIG_USB_DEBUG) || defined(PCMCIA_DEBUG)
+#if defined(DEBUG) || defined(PCMCIA_DEBUG)
 
 static int pc_debug = 0;
 module_param(pc_debug, int, 0644);
@@ -66,12 +66,12 @@ module_param(pc_debug, int, 0644);
 
 static const char driver_name[DEV_NAME_LEN]  = "sl811_cs";
 
-static dev_link_t *dev_list = NULL;
-
 typedef struct local_info_t {
-	dev_link_t		link;
+	struct pcmcia_device	*p_dev;
 	dev_node_t		node;
 } local_info_t;
+
+static void sl811_cs_release(struct pcmcia_device * link);
 
 /*====================================================================*/
 
@@ -101,7 +101,7 @@ static struct resource resources[] = {
 	},
 };
 
-extern struct device_driver sl811h_driver;
+extern struct platform_driver sl811h_driver;
 
 static struct platform_device platform_dev = {
 	.id			= -1,
@@ -129,69 +129,36 @@ static int sl811_hc_init(struct device *parent, ioaddr_t base_addr, int irq)
 	resources[2].end   = base_addr + 1;
 
 	/* The driver core will probe for us.  We know sl811-hcd has been
-	 * initialized already because of the link order dependency.
+	 * initialized already because of the link order dependency created
+	 * by referencing "sl811h_driver".
 	 */
-	platform_dev.name = sl811h_driver.name;
+	platform_dev.name = sl811h_driver.driver.name;
 	return platform_device_register(&platform_dev);
 }
 
 /*====================================================================*/
 
-static void sl811_cs_detach(dev_link_t *link)
+static void sl811_cs_detach(struct pcmcia_device *link)
 {
-	dev_link_t **linkp;
-
 	DBG(0, "sl811_cs_detach(0x%p)\n", link);
 
-	/* Locate device structure */
-	for (linkp = &dev_list; *linkp; linkp = &(*linkp)->next) {
-		if (*linkp == link)
-			break;
-	}
-	if (*linkp == NULL)
-		return;
+	sl811_cs_release(link);
 
-	/* Break the link with Card Services */
-	if (link->handle)
-		pcmcia_deregister_client(link->handle);
-
-	/* Unlink device structure, and free it */
-	*linkp = link->next;
 	/* This points to the parent local_info_t struct */
 	kfree(link->priv);
 }
 
-static void sl811_cs_release(dev_link_t * link)
+static void sl811_cs_release(struct pcmcia_device * link)
 {
-
 	DBG(0, "sl811_cs_release(0x%p)\n", link);
 
-	if (link->open) {
-		DBG(1, "sl811_cs: release postponed, '%s' still open\n",
-		    link->dev->dev_name);
-		link->state |= DEV_STALE_CONFIG;
-		return;
-	}
-
-	/* Unlink the device chain */
-	link->dev = NULL;
-
+	pcmcia_disable_device(link);
 	platform_device_unregister(&platform_dev);
-	pcmcia_release_configuration(link->handle);
-	if (link->io.NumPorts1)
-		pcmcia_release_io(link->handle, &link->io);
-	if (link->irq.AssignedIRQ)
-		pcmcia_release_irq(link->handle, &link->irq);
-	link->state &= ~DEV_CONFIG;
-
-	if (link->state & DEV_STALE_LINK)
-		sl811_cs_detach(link);
 }
 
-static void sl811_cs_config(dev_link_t *link)
+static int sl811_cs_config(struct pcmcia_device *link)
 {
-	client_handle_t		handle = link->handle;
-	struct device		*parent = &handle_to_dev(handle);
+	struct device		*parent = &handle_to_dev(link);
 	local_info_t		*dev = link->priv;
 	tuple_t			tuple;
 	cisparse_t		parse;
@@ -207,27 +174,23 @@ static void sl811_cs_config(dev_link_t *link)
 	tuple.TupleData = buf;
 	tuple.TupleDataMax = sizeof(buf);
 	tuple.TupleOffset = 0;
-	CS_CHECK(GetFirstTuple, pcmcia_get_first_tuple(handle, &tuple));
-	CS_CHECK(GetTupleData, pcmcia_get_tuple_data(handle, &tuple));
-	CS_CHECK(ParseTuple, pcmcia_parse_tuple(handle, &tuple, &parse));
+	CS_CHECK(GetFirstTuple, pcmcia_get_first_tuple(link, &tuple));
+	CS_CHECK(GetTupleData, pcmcia_get_tuple_data(link, &tuple));
+	CS_CHECK(ParseTuple, pcmcia_parse_tuple(link, &tuple, &parse));
 	link->conf.ConfigBase = parse.config.base;
 	link->conf.Present = parse.config.rmask[0];
 
-	/* Configure card */
-	link->state |= DEV_CONFIG;
-
 	/* Look up the current Vcc */
 	CS_CHECK(GetConfigurationInfo,
-			pcmcia_get_configuration_info(handle, &conf));
-	link->conf.Vcc = conf.Vcc;
+			pcmcia_get_configuration_info(link, &conf));
 
 	tuple.DesiredTuple = CISTPL_CFTABLE_ENTRY;
-	CS_CHECK(GetFirstTuple, pcmcia_get_first_tuple(handle, &tuple));
+	CS_CHECK(GetFirstTuple, pcmcia_get_first_tuple(link, &tuple));
 	while (1) {
 		cistpl_cftable_entry_t	*cfg = &(parse.cftable_entry);
 
-		if (pcmcia_get_tuple_data(handle, &tuple) != 0
-				|| pcmcia_parse_tuple(handle, &tuple, &parse)
+		if (pcmcia_get_tuple_data(link, &tuple) != 0
+				|| pcmcia_parse_tuple(link, &tuple, &parse)
 						!= 0)
 			goto next_entry;
 
@@ -253,10 +216,10 @@ static void sl811_cs_config(dev_link_t *link)
 		}
 
 		if (cfg->vpp1.present & (1<<CISTPL_POWER_VNOM))
-			link->conf.Vpp1 = link->conf.Vpp2 =
+			link->conf.Vpp =
 				cfg->vpp1.param[CISTPL_POWER_VNOM]/10000;
 		else if (dflt.vpp1.present & (1<<CISTPL_POWER_VNOM))
-			link->conf.Vpp1 = link->conf.Vpp2 =
+			link->conf.Vpp =
 				dflt.vpp1.param[CISTPL_POWER_VNOM]/10000;
 
 		/* we need an interrupt */
@@ -273,15 +236,14 @@ static void sl811_cs_config(dev_link_t *link)
 			link->io.BasePort1 = io->win[0].base;
 			link->io.NumPorts1 = io->win[0].len;
 
-			if (pcmcia_request_io(link->handle, &link->io) != 0)
+			if (pcmcia_request_io(link, &link->io) != 0)
 				goto next_entry;
 		}
 		break;
 
 next_entry:
-		if (link->io.NumPorts1)
-			pcmcia_release_io(link->handle, &link->io);
-		last_ret = pcmcia_get_next_tuple(handle, &tuple);
+		pcmcia_disable_device(link);
+		last_ret = pcmcia_get_next_tuple(link, &tuple);
 	}
 
 	/* require an IRQ and two registers */
@@ -289,90 +251,46 @@ next_entry:
 		goto cs_failed;
 	if (link->conf.Attributes & CONF_ENABLE_IRQ)
 		CS_CHECK(RequestIRQ,
-			pcmcia_request_irq(link->handle, &link->irq));
+			pcmcia_request_irq(link, &link->irq));
 	else
 		goto cs_failed;
 
 	CS_CHECK(RequestConfiguration,
-		pcmcia_request_configuration(link->handle, &link->conf));
+		pcmcia_request_configuration(link, &link->conf));
 
 	sprintf(dev->node.dev_name, driver_name);
 	dev->node.major = dev->node.minor = 0;
-	link->dev = &dev->node;
+	link->dev_node = &dev->node;
 
-	printk(KERN_INFO "%s: index 0x%02x: Vcc %d.%d",
-	       dev->node.dev_name, link->conf.ConfigIndex,
-	       link->conf.Vcc/10, link->conf.Vcc%10);
-	if (link->conf.Vpp1)
-		printk(", Vpp %d.%d", link->conf.Vpp1/10, link->conf.Vpp1%10);
+	printk(KERN_INFO "%s: index 0x%02x: ",
+	       dev->node.dev_name, link->conf.ConfigIndex);
+	if (link->conf.Vpp)
+		printk(", Vpp %d.%d", link->conf.Vpp/10, link->conf.Vpp%10);
 	printk(", irq %d", link->irq.AssignedIRQ);
 	printk(", io 0x%04x-0x%04x", link->io.BasePort1,
 	       link->io.BasePort1+link->io.NumPorts1-1);
 	printk("\n");
 
-	link->state &= ~DEV_CONFIG_PENDING;
-
 	if (sl811_hc_init(parent, link->io.BasePort1, link->irq.AssignedIRQ)
 			< 0) {
 cs_failed:
 		printk("sl811_cs_config failed\n");
-		cs_error(link->handle, last_fn, last_ret);
+		cs_error(link, last_fn, last_ret);
 		sl811_cs_release(link);
-		link->state &= ~DEV_CONFIG_PENDING;
-	}
-}
-
-static int
-sl811_cs_event(event_t event, int priority, event_callback_args_t *args)
-{
-	dev_link_t *link = args->client_data;
-
-	DBG(1, "sl811_cs_event(0x%06x)\n", event);
-
-	switch (event) {
-	case CS_EVENT_CARD_REMOVAL:
-		link->state &= ~DEV_PRESENT;
-		if (link->state & DEV_CONFIG)
-			sl811_cs_release(link);
-		break;
-
-	case CS_EVENT_CARD_INSERTION:
-		link->state |= DEV_PRESENT | DEV_CONFIG_PENDING;
-		sl811_cs_config(link);
-		break;
-
-	case CS_EVENT_PM_SUSPEND:
-		link->state |= DEV_SUSPEND;
-		/* Fall through... */
-	case CS_EVENT_RESET_PHYSICAL:
-		if (link->state & DEV_CONFIG)
-			pcmcia_release_configuration(link->handle);
-		break;
-
-	case CS_EVENT_PM_RESUME:
-		link->state &= ~DEV_SUSPEND;
-		/* Fall through... */
-	case CS_EVENT_CARD_RESET:
-		if (link->state & DEV_CONFIG)
-			pcmcia_request_configuration(link->handle, &link->conf);
-		DBG(0, "reset sl811-hcd here?\n");
-		break;
+		return  -ENODEV;
 	}
 	return 0;
 }
 
-static dev_link_t *sl811_cs_attach(void)
+static int sl811_cs_probe(struct pcmcia_device *link)
 {
 	local_info_t *local;
-	dev_link_t *link;
-	client_reg_t client_reg;
-	int ret;
 
 	local = kmalloc(sizeof(local_info_t), GFP_KERNEL);
 	if (!local)
-		return NULL;
+		return -ENOMEM;
 	memset(local, 0, sizeof(local_info_t));
-	link = &local->link;
+	local->p_dev = link;
 	link->priv = local;
 
 	/* Initialize */
@@ -381,24 +299,9 @@ static dev_link_t *sl811_cs_attach(void)
 	link->irq.Handler = NULL;
 
 	link->conf.Attributes = 0;
-	link->conf.Vcc = 33;
 	link->conf.IntType = INT_MEMORY_AND_IO;
 
-	/* Register with Card Services */
-	link->next = dev_list;
-	dev_list = link;
-	client_reg.dev_info = (dev_info_t *) &driver_name;
-	client_reg.Attributes = INFO_IO_CLIENT | INFO_CARD_SHARE;
-	client_reg.Version = 0x0210;
-	client_reg.event_callback_args.client_data = link;
-	ret = pcmcia_register_client(&link->handle, &client_reg);
-	if (ret != CS_SUCCESS) {
-		cs_error(link->handle, RegisterClient, ret);
-		sl811_cs_detach(link);
-		return NULL;
-	}
-
-	return link;
+	return sl811_cs_config(link);
 }
 
 static struct pcmcia_device_id sl811_ids[] = {
@@ -412,9 +315,8 @@ static struct pcmcia_driver sl811_cs_driver = {
 	.drv		= {
 		.name	= (char *)driver_name,
 	},
-	.attach		= sl811_cs_attach,
-	.event		= sl811_cs_event,
-	.detach		= sl811_cs_detach,
+	.probe		= sl811_cs_probe,
+	.remove		= sl811_cs_detach,
 	.id_table	= sl811_ids,
 };
 

@@ -1,6 +1,4 @@
 /*
- *  arch/ppc/mm/fault.c
- *
  *  PowerPC version
  *    Copyright (C) 1995-1996 Gary Thomas (gdt@linuxppc.org)
  *
@@ -81,7 +79,8 @@ static int store_updates_sp(struct pt_regs *regs)
 }
 
 #if !(defined(CONFIG_4xx) || defined(CONFIG_BOOKE))
-static void do_dabr(struct pt_regs *regs, unsigned long error_code)
+static void do_dabr(struct pt_regs *regs, unsigned long address,
+		    unsigned long error_code)
 {
 	siginfo_t info;
 
@@ -99,7 +98,7 @@ static void do_dabr(struct pt_regs *regs, unsigned long error_code)
 	info.si_signo = SIGTRAP;
 	info.si_errno = 0;
 	info.si_code = TRAP_HWBKPT;
-	info.si_addr = (void __user *)regs->nip;
+	info.si_addr = (void __user *)address;
 	force_sig_info(SIGTRAP, &info, current);
 }
 #endif /* !(CONFIG_4xx || CONFIG_BOOKE)*/
@@ -159,7 +158,7 @@ int __kprobes do_page_fault(struct pt_regs *regs, unsigned long address,
 #if !(defined(CONFIG_4xx) || defined(CONFIG_BOOKE))
   	if (error_code & DSISR_DABRMATCH) {
 		/* DABR match */
-		do_dabr(regs, error_code);
+		do_dabr(regs, address, error_code);
 		return 0;
 	}
 #endif /* !(CONFIG_4xx || CONFIG_BOOKE)*/
@@ -178,15 +177,15 @@ int __kprobes do_page_fault(struct pt_regs *regs, unsigned long address,
 
 	/* When running in the kernel we expect faults to occur only to
 	 * addresses in user space.  All other faults represent errors in the
-	 * kernel and should generate an OOPS.  Unfortunatly, in the case of an
-	 * erroneous fault occuring in a code path which already holds mmap_sem
+	 * kernel and should generate an OOPS.  Unfortunately, in the case of an
+	 * erroneous fault occurring in a code path which already holds mmap_sem
 	 * we will deadlock attempting to validate the fault against the
 	 * address space.  Luckily the kernel only validly references user
 	 * space from well defined areas of code, which are listed in the
 	 * exceptions table.
 	 *
 	 * As the vast majority of faults will be valid we will only perform
-	 * the source reference check when there is a possibilty of a deadlock.
+	 * the source reference check when there is a possibility of a deadlock.
 	 * Attempt to lock the address space, if we cannot we then validate the
 	 * source.  If this is invalid we can skip the address space check,
 	 * thus avoiding the deadlock.
@@ -268,25 +267,29 @@ good_area:
 #endif
 #if defined(CONFIG_4xx) || defined(CONFIG_BOOKE)
 		pte_t *ptep;
+		pmd_t *pmdp;
 
 		/* Since 4xx/Book-E supports per-page execute permission,
 		 * we lazily flush dcache to icache. */
 		ptep = NULL;
-		if (get_pteptr(mm, address, &ptep) && pte_present(*ptep)) {
-			struct page *page = pte_page(*ptep);
+		if (get_pteptr(mm, address, &ptep, &pmdp)) {
+			spinlock_t *ptl = pte_lockptr(mm, pmdp);
+			spin_lock(ptl);
+			if (pte_present(*ptep)) {
+				struct page *page = pte_page(*ptep);
 
-			if (! test_bit(PG_arch_1, &page->flags)) {
-				flush_dcache_icache_page(page);
-				set_bit(PG_arch_1, &page->flags);
+				if (!test_bit(PG_arch_1, &page->flags)) {
+					flush_dcache_icache_page(page);
+					set_bit(PG_arch_1, &page->flags);
+				}
+				pte_update(ptep, 0, _PAGE_HWEXEC);
+				_tlbie(address);
+				pte_unmap_unlock(ptep, ptl);
+				up_read(&mm->mmap_sem);
+				return 0;
 			}
-			pte_update(ptep, 0, _PAGE_HWEXEC);
-			_tlbie(address);
-			pte_unmap(ptep);
-			up_read(&mm->mmap_sem);
-			return 0;
+			pte_unmap_unlock(ptep, ptl);
 		}
-		if (ptep != NULL)
-			pte_unmap(ptep);
 #endif
 	/* a write */
 	} else if (is_write) {

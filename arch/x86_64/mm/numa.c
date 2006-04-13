@@ -25,8 +25,7 @@
 struct pglist_data *node_data[MAX_NUMNODES] __read_mostly;
 bootmem_data_t plat_node_bdata[MAX_NUMNODES];
 
-int memnode_shift;
-u8  memnodemap[NODEMAPSIZE];
+struct memnode memnode;
 
 unsigned char cpu_to_node[NR_CPUS] __read_mostly = {
 	[0 ... NR_CPUS-1] = NUMA_NO_NODE
@@ -46,8 +45,8 @@ int numa_off __initdata;
  * 0 if memnodmap[] too small (of shift too small)
  * -1 if node overlap or lost ram (shift too big)
  */
-static int __init populate_memnodemap(
-	const struct node *nodes, int numnodes, int shift)
+static int __init
+populate_memnodemap(const struct bootnode *nodes, int numnodes, int shift)
 {
 	int i; 
 	int res = -1;
@@ -74,14 +73,14 @@ static int __init populate_memnodemap(
 	return res;
 }
 
-int __init compute_hash_shift(struct node *nodes, int numnodes)
+int __init compute_hash_shift(struct bootnode *nodes, int numnodes)
 {
 	int shift = 20;
 
 	while (populate_memnodemap(nodes, numnodes, shift + 1) >= 0)
 		shift++;
 
-	printk(KERN_DEBUG "Using %d for the hash shift.\n",
+	printk(KERN_DEBUG "NUMA: Using %d for the hash shift.\n",
 		shift);
 
 	if (populate_memnodemap(nodes, numnodes, shift) != 1) {
@@ -110,7 +109,7 @@ void __init setup_node_bootmem(int nodeid, unsigned long start, unsigned long en
 
 	start = round_up(start, ZONE_ALIGN); 
 
-	printk("Bootmem setup node %d %016lx-%016lx\n", nodeid, start, end);
+	printk(KERN_INFO "Bootmem setup node %d %016lx-%016lx\n", nodeid, start, end);
 
 	start_pfn = start >> PAGE_SHIFT;
 	end_pfn = end >> PAGE_SHIFT;
@@ -149,15 +148,25 @@ void __init setup_node_bootmem(int nodeid, unsigned long start, unsigned long en
 /* Initialize final allocator for a zone */
 void __init setup_node_zones(int nodeid)
 { 
-	unsigned long start_pfn, end_pfn; 
+	unsigned long start_pfn, end_pfn, memmapsize, limit;
 	unsigned long zones[MAX_NR_ZONES];
 	unsigned long holes[MAX_NR_ZONES];
 
  	start_pfn = node_start_pfn(nodeid);
  	end_pfn = node_end_pfn(nodeid);
 
-	Dprintk(KERN_INFO "setting up node %d %lx-%lx\n",
+	Dprintk(KERN_INFO "Setting up node %d %lx-%lx\n",
 		nodeid, start_pfn, end_pfn);
+
+	/* Try to allocate mem_map at end to not fill up precious <4GB
+	   memory. */
+	memmapsize = sizeof(struct page) * (end_pfn-start_pfn);
+	limit = end_pfn << PAGE_SHIFT;
+	NODE_DATA(nodeid)->node_mem_map = 
+		__alloc_bootmem_core(NODE_DATA(nodeid)->bdata, 
+				memmapsize, SMP_CACHE_BYTES, 
+				round_down(limit - memmapsize, PAGE_SIZE), 
+				limit);
 
 	size_zones(zones, holes, start_pfn, end_pfn);
 	free_area_init_node(nodeid, NODE_DATA(nodeid), zones,
@@ -191,7 +200,7 @@ int numa_fake __initdata = 0;
 static int numa_emulation(unsigned long start_pfn, unsigned long end_pfn)
 {
  	int i;
- 	struct node nodes[MAX_NUMNODES];
+ 	struct bootnode nodes[MAX_NUMNODES];
  	unsigned long sz = ((end_pfn - start_pfn)<<PAGE_SHIFT) / numa_fake;
 
  	/* Kludge needed for the hash function */
@@ -200,7 +209,7 @@ static int numa_emulation(unsigned long start_pfn, unsigned long end_pfn)
  		while ((x << 1) < sz)
  			x <<= 1;
  		if (x < sz/2)
- 			printk("Numa emulation unbalanced. Complain to maintainer\n");
+ 			printk(KERN_ERR "Numa emulation unbalanced. Complain to maintainer\n");
  		sz = x;
  	}
 
@@ -272,7 +281,7 @@ __cpuinit void numa_add_cpu(int cpu)
 
 void __cpuinit numa_set_node(int cpu, int node)
 {
-	cpu_pda[cpu].nodenumber = node;
+	cpu_pda(cpu)->nodenumber = node;
 	cpu_to_node[cpu] = node;
 }
 
@@ -330,8 +339,53 @@ __init int numa_setup(char *opt)
 	return 1;
 } 
 
+/*
+ * Setup early cpu_to_node.
+ *
+ * Populate cpu_to_node[] only if x86_cpu_to_apicid[],
+ * and apicid_to_node[] tables have valid entries for a CPU.
+ * This means we skip cpu_to_node[] initialisation for NUMA
+ * emulation and faking node case (when running a kernel compiled
+ * for NUMA on a non NUMA box), which is OK as cpu_to_node[]
+ * is already initialized in a round robin manner at numa_init_array,
+ * prior to this call, and this initialization is good enough
+ * for the fake NUMA cases.
+ */
+void __init init_cpu_to_node(void)
+{
+	int i;
+ 	for (i = 0; i < NR_CPUS; i++) {
+		u8 apicid = x86_cpu_to_apicid[i];
+		if (apicid == BAD_APICID)
+			continue;
+		if (apicid_to_node[apicid] == NUMA_NO_NODE)
+			continue;
+		numa_set_node(i,apicid_to_node[apicid]);
+	}
+}
+
 EXPORT_SYMBOL(cpu_to_node);
 EXPORT_SYMBOL(node_to_cpumask);
-EXPORT_SYMBOL(memnode_shift);
-EXPORT_SYMBOL(memnodemap);
+EXPORT_SYMBOL(memnode);
 EXPORT_SYMBOL(node_data);
+
+#ifdef CONFIG_DISCONTIGMEM
+/*
+ * Functions to convert PFNs from/to per node page addresses.
+ * These are out of line because they are quite big.
+ * They could be all tuned by pre caching more state.
+ * Should do that.
+ */
+
+int pfn_valid(unsigned long pfn)
+{
+	unsigned nid;
+	if (pfn >= num_physpages)
+		return 0;
+	nid = pfn_to_nid(pfn);
+	if (nid == 0xff)
+		return 0;
+	return pfn >= node_start_pfn(nid) && (pfn) < node_end_pfn(nid);
+}
+EXPORT_SYMBOL(pfn_valid);
+#endif

@@ -1,9 +1,12 @@
 #ifndef _VX_NAMESPACE_CMD_H
 #define _VX_NAMESPACE_CMD_H
 
+
 #define VCMD_enter_namespace	VC_CMD(PROCALT, 1, 0)
 #define VCMD_cleanup_namespace	VC_CMD(PROCALT, 2, 0)
-#define VCMD_set_namespace	VC_CMD(PROCALT, 3, 0)
+
+#define VCMD_set_namespace_v0	VC_CMD(PROCALT, 3, 0)
+#define VCMD_set_namespace	VC_CMD(PROCALT, 3, 1)
 
 
 #ifdef	__KERNEL__

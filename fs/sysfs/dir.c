@@ -50,6 +50,32 @@ static struct sysfs_dirent * sysfs_new_dirent(struct sysfs_dirent * parent_sd,
 	return sd;
 }
 
+/*
+ *
+ * Return -EEXIST if there is already a sysfs element with the same name for
+ * the same parent.
+ *
+ * called with parent inode's i_mutex held
+ */
+int sysfs_dirent_exist(struct sysfs_dirent *parent_sd,
+			  const unsigned char *new)
+{
+	struct sysfs_dirent * sd;
+
+	list_for_each_entry(sd, &parent_sd->s_children, s_sibling) {
+		if (sd->s_element) {
+			const unsigned char *existing = sysfs_get_name(sd);
+			if (strcmp(existing, new))
+				continue;
+			else
+				return -EEXIST;
+		}
+	}
+
+	return 0;
+}
+
+
 int sysfs_make_dirent(struct sysfs_dirent * parent_sd, struct dentry * dentry,
 			void * element, umode_t mode, int type)
 {
@@ -99,10 +125,14 @@ static int create_dir(struct kobject * k, struct dentry * p,
 	int error;
 	umode_t mode = S_IFDIR| S_IRWXU | S_IRUGO | S_IXUGO;
 
-	down(&p->d_inode->i_sem);
+	mutex_lock(&p->d_inode->i_mutex);
 	*d = lookup_one_len(n, p, strlen(n));
 	if (!IS_ERR(*d)) {
-		error = sysfs_make_dirent(p->d_fsdata, *d, k, mode, SYSFS_DIR);
+ 		if (sysfs_dirent_exist(p->d_fsdata, n))
+  			error = -EEXIST;
+  		else
+			error = sysfs_make_dirent(p->d_fsdata, *d, k, mode,
+								SYSFS_DIR);
 		if (!error) {
 			error = sysfs_create(*d, mode, init_dir);
 			if (!error) {
@@ -112,13 +142,17 @@ static int create_dir(struct kobject * k, struct dentry * p,
 			}
 		}
 		if (error && (error != -EEXIST)) {
-			sysfs_put((*d)->d_fsdata);
+			struct sysfs_dirent *sd = (*d)->d_fsdata;
+			if (sd) {
+ 				list_del_init(&sd->s_sibling);
+				sysfs_put(sd);
+			}
 			d_drop(*d);
 		}
 		dput(*d);
 	} else
 		error = PTR_ERR(*d);
-	up(&p->d_inode->i_sem);
+	mutex_unlock(&p->d_inode->i_mutex);
 	return error;
 }
 
@@ -242,7 +276,7 @@ static void remove_dir(struct dentry * d)
 	struct dentry * parent = dget(d->d_parent);
 	struct sysfs_dirent * sd;
 
-	down(&parent->d_inode->i_sem);
+	mutex_lock(&parent->d_inode->i_mutex);
 	d_delete(d);
 	sd = d->d_fsdata;
  	list_del_init(&sd->s_sibling);
@@ -253,7 +287,7 @@ static void remove_dir(struct dentry * d)
 	pr_debug(" o %s removing done (%d)\n",d->d_name.name,
 		 atomic_read(&d->d_count));
 
-	up(&parent->d_inode->i_sem);
+	mutex_unlock(&parent->d_inode->i_mutex);
 	dput(parent);
 }
 
@@ -282,7 +316,7 @@ void sysfs_remove_dir(struct kobject * kobj)
 		return;
 
 	pr_debug("sysfs %s: removing dir\n",dentry->d_name.name);
-	down(&dentry->d_inode->i_sem);
+	mutex_lock(&dentry->d_inode->i_mutex);
 	parent_sd = dentry->d_fsdata;
 	list_for_each_entry_safe(sd, tmp, &parent_sd->s_children, s_sibling) {
 		if (!sd->s_element || !(sd->s_type & SYSFS_NOT_PINNED))
@@ -291,13 +325,14 @@ void sysfs_remove_dir(struct kobject * kobj)
 		sysfs_drop_dentry(sd, dentry);
 		sysfs_put(sd);
 	}
-	up(&dentry->d_inode->i_sem);
+	mutex_unlock(&dentry->d_inode->i_mutex);
 
 	remove_dir(dentry);
 	/**
 	 * Drop reference from dget() on entrance.
 	 */
 	dput(dentry);
+	kobj->dentry = NULL;
 }
 
 int sysfs_rename_dir(struct kobject * kobj, const char *new_name)
@@ -314,7 +349,7 @@ int sysfs_rename_dir(struct kobject * kobj, const char *new_name)
 	down_write(&sysfs_rename_sem);
 	parent = kobj->parent->dentry;
 
-	down(&parent->d_inode->i_sem);
+	mutex_lock(&parent->d_inode->i_mutex);
 
 	new_dentry = lookup_one_len(new_name, parent, strlen(new_name));
 	if (!IS_ERR(new_dentry)) {
@@ -330,7 +365,7 @@ int sysfs_rename_dir(struct kobject * kobj, const char *new_name)
 			error = -EEXIST;
 		dput(new_dentry);
 	}
-	up(&parent->d_inode->i_sem);	
+	mutex_unlock(&parent->d_inode->i_mutex);
 	up_write(&sysfs_rename_sem);
 
 	return error;
@@ -341,9 +376,9 @@ static int sysfs_dir_open(struct inode *inode, struct file *file)
 	struct dentry * dentry = file->f_dentry;
 	struct sysfs_dirent * parent_sd = dentry->d_fsdata;
 
-	down(&dentry->d_inode->i_sem);
+	mutex_lock(&dentry->d_inode->i_mutex);
 	file->private_data = sysfs_new_dirent(parent_sd, NULL);
-	up(&dentry->d_inode->i_sem);
+	mutex_unlock(&dentry->d_inode->i_mutex);
 
 	return file->private_data ? 0 : -ENOMEM;
 
@@ -354,9 +389,9 @@ static int sysfs_dir_close(struct inode *inode, struct file *file)
 	struct dentry * dentry = file->f_dentry;
 	struct sysfs_dirent * cursor = file->private_data;
 
-	down(&dentry->d_inode->i_sem);
+	mutex_lock(&dentry->d_inode->i_mutex);
 	list_del_init(&cursor->s_sibling);
-	up(&dentry->d_inode->i_sem);
+	mutex_unlock(&dentry->d_inode->i_mutex);
 
 	release_sysfs_dirent(cursor);
 
@@ -432,7 +467,7 @@ static loff_t sysfs_dir_lseek(struct file * file, loff_t offset, int origin)
 {
 	struct dentry * dentry = file->f_dentry;
 
-	down(&dentry->d_inode->i_sem);
+	mutex_lock(&dentry->d_inode->i_mutex);
 	switch (origin) {
 		case 1:
 			offset += file->f_pos;
@@ -440,7 +475,7 @@ static loff_t sysfs_dir_lseek(struct file * file, loff_t offset, int origin)
 			if (offset >= 0)
 				break;
 		default:
-			up(&file->f_dentry->d_inode->i_sem);
+			mutex_unlock(&file->f_dentry->d_inode->i_mutex);
 			return -EINVAL;
 	}
 	if (offset != file->f_pos) {
@@ -464,19 +499,14 @@ static loff_t sysfs_dir_lseek(struct file * file, loff_t offset, int origin)
 			list_add_tail(&cursor->s_sibling, p);
 		}
 	}
-	up(&dentry->d_inode->i_sem);
+	mutex_unlock(&dentry->d_inode->i_mutex);
 	return offset;
 }
 
-struct file_operations sysfs_dir_operations = {
+const struct file_operations sysfs_dir_operations = {
 	.open		= sysfs_dir_open,
 	.release	= sysfs_dir_close,
 	.llseek		= sysfs_dir_lseek,
 	.read		= generic_read_dir,
 	.readdir	= sysfs_readdir,
 };
-
-EXPORT_SYMBOL_GPL(sysfs_create_dir);
-EXPORT_SYMBOL_GPL(sysfs_remove_dir);
-EXPORT_SYMBOL_GPL(sysfs_rename_dir);
-

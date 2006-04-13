@@ -1,4 +1,4 @@
-/* 
+/*
  * bt856 - BT856A Digital Video Encoder (Rockwell Part)
  *
  * Copyright (C) 1999 Mike Bernson <mike@mlb.org>
@@ -53,7 +53,6 @@ MODULE_AUTHOR("Mike Bernson & Dave Perks");
 MODULE_LICENSE("GPL");
 
 #include <linux/i2c.h>
-#include <linux/i2c-dev.h>
 
 #define I2C_NAME(s) (s)->name
 
@@ -71,17 +70,14 @@ MODULE_PARM_DESC(debug, "Debug level (0-1)");
 
 /* ----------------------------------------------------------------------- */
 
-#define REG_OFFSET  0xCE
+#define REG_OFFSET	0xDA
+#define BT856_NR_REG	6
 
 struct bt856 {
-	unsigned char reg[32];
+	unsigned char reg[BT856_NR_REG];
 
 	int norm;
 	int enable;
-	int bright;
-	int contrast;
-	int hue;
-	int sat;
 };
 
 #define   I2C_BT856        0x88
@@ -120,8 +116,8 @@ bt856_dump (struct i2c_client *client)
 	struct bt856 *encoder = i2c_get_clientdata(client);
 
 	printk(KERN_INFO "%s: register dump:", I2C_NAME(client));
-	for (i = 0xd6; i <= 0xde; i += 2)
-		printk(" %02x", encoder->reg[i - REG_OFFSET]);
+	for (i = 0; i < BT856_NR_REG; i += 2)
+		printk(" %02x", encoder->reg[i]);
 	printk("\n");
 }
 
@@ -289,7 +285,7 @@ bt856_command (struct i2c_client *client,
 static unsigned short normal_i2c[] = { I2C_BT856 >> 1, I2C_CLIENT_END };
 
 static unsigned short ignore = I2C_CLIENT_END;
-                                                                                
+
 static struct i2c_client_address_data addr_data = {
 	.normal_i2c		= normal_i2c,
 	.probe			= &ignore,
@@ -316,22 +312,19 @@ bt856_detect_client (struct i2c_adapter *adapter,
 	if (!i2c_check_functionality(adapter, I2C_FUNC_SMBUS_BYTE_DATA))
 		return 0;
 
-	client = kmalloc(sizeof(struct i2c_client), GFP_KERNEL);
+	client = kzalloc(sizeof(struct i2c_client), GFP_KERNEL);
 	if (client == 0)
 		return -ENOMEM;
-	memset(client, 0, sizeof(struct i2c_client));
 	client->addr = address;
 	client->adapter = adapter;
 	client->driver = &i2c_driver_bt856;
-	client->flags = I2C_CLIENT_ALLOW_USE;
 	strlcpy(I2C_NAME(client), "bt856", sizeof(I2C_NAME(client)));
 
-	encoder = kmalloc(sizeof(struct bt856), GFP_KERNEL);
+	encoder = kzalloc(sizeof(struct bt856), GFP_KERNEL);
 	if (encoder == NULL) {
 		kfree(client);
 		return -ENOMEM;
 	}
-	memset(encoder, 0, sizeof(struct bt856));
 	encoder->norm = VIDEO_MODE_NTSC;
 	encoder->enable = 1;
 	i2c_set_clientdata(client, encoder);
@@ -405,11 +398,11 @@ bt856_detach_client (struct i2c_client *client)
 /* ----------------------------------------------------------------------- */
 
 static struct i2c_driver i2c_driver_bt856 = {
-	.owner = THIS_MODULE,
-	.name = "bt856",
+	.driver = {
+		.name = "bt856",
+	},
 
 	.id = I2C_DRIVERID_BT856,
-	.flags = I2C_DF_NOTIFY,
 
 	.attach_adapter = bt856_attach_adapter,
 	.detach_client = bt856_detach_client,

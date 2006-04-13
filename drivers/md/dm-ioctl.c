@@ -15,6 +15,7 @@
 #include <linux/slab.h>
 #include <linux/devfs_fs_kernel.h>
 #include <linux/dm-ioctl.h>
+#include <linux/hdreg.h>
 
 #include <asm/uaccess.h>
 
@@ -244,9 +245,9 @@ static void __hash_remove(struct hash_cell *hc)
 		dm_table_put(table);
 	}
 
-	dm_put(hc->md);
 	if (hc->new_map)
 		dm_table_put(hc->new_map);
+	dm_put(hc->md);
 	free_cell(hc);
 }
 
@@ -270,6 +271,7 @@ static int dm_hash_rename(const char *old, const char *new)
 {
 	char *new_name, *old_name;
 	struct hash_cell *hc;
+	struct dm_table *table;
 
 	/*
 	 * duplicate new.
@@ -316,6 +318,15 @@ static int dm_hash_rename(const char *old, const char *new)
 
 	/* rename the device node in devfs */
 	register_with_devfs(hc);
+
+	/*
+	 * Wake up any dm event waiters.
+	 */
+	table = dm_get_table(hc->md);
+	if (table) {
+		dm_table_event(table);
+		dm_table_put(table);
+	}
 
 	up_write(&_hash_lock);
 	kfree(old_name);
@@ -588,17 +599,27 @@ static int dev_create(struct dm_ioctl *param, size_t param_size)
 /*
  * Always use UUID for lookups if it's present, otherwise use name or dev.
  */
-static inline struct hash_cell *__find_device_hash_cell(struct dm_ioctl *param)
+static struct hash_cell *__find_device_hash_cell(struct dm_ioctl *param)
 {
+	struct mapped_device *md;
+	void *mdptr = NULL;
+
 	if (*param->uuid)
 		return __get_uuid_cell(param->uuid);
-	else if (*param->name)
+
+	if (*param->name)
 		return __get_name_cell(param->name);
-	else
-		return dm_get_mdptr(huge_decode_dev(param->dev));
+
+	md = dm_get_md(huge_decode_dev(param->dev));
+	if (md) {
+		mdptr = dm_get_mdptr(md);
+		dm_put(md);
+	}
+
+	return mdptr;
 }
 
-static inline struct mapped_device *find_device(struct dm_ioctl *param)
+static struct mapped_device *find_device(struct dm_ioctl *param)
 {
 	struct hash_cell *hc;
 	struct mapped_device *md = NULL;
@@ -680,17 +701,69 @@ static int dev_rename(struct dm_ioctl *param, size_t param_size)
 	return dm_hash_rename(param->name, new_name);
 }
 
+static int dev_set_geometry(struct dm_ioctl *param, size_t param_size)
+{
+	int r = -EINVAL, x;
+	struct mapped_device *md;
+	struct hd_geometry geometry;
+	unsigned long indata[4];
+	char *geostr = (char *) param + param->data_start;
+
+	md = find_device(param);
+	if (!md)
+		return -ENXIO;
+
+	if (geostr < (char *) (param + 1) ||
+	    invalid_str(geostr, (void *) param + param_size)) {
+		DMWARN("Invalid geometry supplied.");
+		goto out;
+	}
+
+	x = sscanf(geostr, "%lu %lu %lu %lu", indata,
+		   indata + 1, indata + 2, indata + 3);
+
+	if (x != 4) {
+		DMWARN("Unable to interpret geometry settings.");
+		goto out;
+	}
+
+	if (indata[0] > 65535 || indata[1] > 255 ||
+	    indata[2] > 255 || indata[3] > ULONG_MAX) {
+		DMWARN("Geometry exceeds range limits.");
+		goto out;
+	}
+
+	geometry.cylinders = indata[0];
+	geometry.heads = indata[1];
+	geometry.sectors = indata[2];
+	geometry.start = indata[3];
+
+	r = dm_set_geometry(md, &geometry);
+	if (!r)
+		r = __dev_status(md, param);
+
+	param->data_size = 0;
+
+out:
+	dm_put(md);
+	return r;
+}
+
 static int do_suspend(struct dm_ioctl *param)
 {
 	int r = 0;
+	int do_lockfs = 1;
 	struct mapped_device *md;
 
 	md = find_device(param);
 	if (!md)
 		return -ENXIO;
 
+	if (param->flags & DM_SKIP_LOCKFS_FLAG)
+		do_lockfs = 0;
+
 	if (!dm_suspended(md))
-		r = dm_suspend(md);
+		r = dm_suspend(md, do_lockfs);
 
 	if (!r)
 		r = __dev_status(md, param);
@@ -702,6 +775,7 @@ static int do_suspend(struct dm_ioctl *param)
 static int do_resume(struct dm_ioctl *param)
 {
 	int r = 0;
+	int do_lockfs = 1;
 	struct hash_cell *hc;
 	struct mapped_device *md;
 	struct dm_table *new_map;
@@ -727,8 +801,10 @@ static int do_resume(struct dm_ioctl *param)
 	/* Do we need to load a new map ? */
 	if (new_map) {
 		/* Suspend if it isn't already suspended */
+		if (param->flags & DM_SKIP_LOCKFS_FLAG)
+			do_lockfs = 0;
 		if (!dm_suspended(md))
-			dm_suspend(md);
+			dm_suspend(md, do_lockfs);
 
 		r = dm_swap_table(md, new_map);
 		if (r) {
@@ -958,33 +1034,43 @@ static int table_load(struct dm_ioctl *param, size_t param_size)
 	int r;
 	struct hash_cell *hc;
 	struct dm_table *t;
+	struct mapped_device *md;
 
-	r = dm_table_create(&t, get_mode(param), param->target_count);
+	md = find_device(param);
+	if (!md)
+		return -ENXIO;
+
+	r = dm_table_create(&t, get_mode(param), param->target_count, md);
 	if (r)
-		return r;
+		goto out;
 
 	r = populate_table(t, param, param_size);
 	if (r) {
 		dm_table_put(t);
-		return r;
+		goto out;
 	}
 
 	down_write(&_hash_lock);
-	hc = __find_device_hash_cell(param);
-	if (!hc) {
-		DMWARN("device doesn't appear to be in the dev hash table.");
-		up_write(&_hash_lock);
+	hc = dm_get_mdptr(md);
+	if (!hc || hc->md != md) {
+		DMWARN("device has been removed from the dev hash table.");
 		dm_table_put(t);
-		return -ENXIO;
+		up_write(&_hash_lock);
+		r = -ENXIO;
+		goto out;
 	}
 
 	if (hc->new_map)
 		dm_table_put(hc->new_map);
 	hc->new_map = t;
-	param->flags |= DM_INACTIVE_PRESENT_FLAG;
-
-	r = __dev_status(hc->md, param);
 	up_write(&_hash_lock);
+
+	param->flags |= DM_INACTIVE_PRESENT_FLAG;
+	r = __dev_status(md, param);
+
+out:
+	dm_put(md);
+
 	return r;
 }
 
@@ -1197,7 +1283,8 @@ static ioctl_fn lookup_ioctl(unsigned int cmd)
 
 		{DM_LIST_VERSIONS_CMD, list_versions},
 
-		{DM_TARGET_MSG_CMD, target_message}
+		{DM_TARGET_MSG_CMD, target_message},
+		{DM_DEV_SET_GEOMETRY_CMD, dev_set_geometry}
 	};
 
 	return (cmd >= ARRAY_SIZE(_ioctls)) ? NULL : _ioctls[cmd].fn;
@@ -1342,16 +1429,11 @@ static int ctl_ioctl(struct inode *inode, struct file *file,
 	 * Copy the parameters into kernel space.
 	 */
 	r = copy_params(user, &param);
-	if (r) {
-		current->flags &= ~PF_MEMALLOC;
-		return r;
-	}
 
-	/*
-	 * FIXME: eventually we will remove the PF_MEMALLOC flag
-	 * here.  However the tools still do nasty things like
-	 * 'load' while a device is suspended.
-	 */
+	current->flags &= ~PF_MEMALLOC;
+
+	if (r)
+		return r;
 
 	r = validate_params(cmd, param);
 	if (r)
@@ -1369,7 +1451,6 @@ static int ctl_ioctl(struct inode *inode, struct file *file,
 
  out:
 	free_params(param);
-	current->flags &= ~PF_MEMALLOC;
 	return r;
 }
 

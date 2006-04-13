@@ -44,7 +44,7 @@ static unsigned int ports_c;
 module_param_array(ports, ushort, &ports_c, 0400);
 
 static int loose;
-module_param(loose, int, 0600);
+module_param(loose, bool, 0600);
 
 unsigned int (*nf_nat_ftp_hook)(struct sk_buff **pskb,
 				enum ip_conntrack_info ctinfo,
@@ -440,7 +440,7 @@ static int help(struct sk_buff **pskb,
 	u32 seq;
 	int dir = CTINFO2DIR(ctinfo);
 	unsigned int matchlen, matchoff;
-	struct ip_ct_ftp_master *ct_ftp_info = &ct->help->ct_ftp_info;
+	struct ip_ct_ftp_master *ct_ftp_info = &nfct_help(ct)->help.ct_ftp_info;
 	struct nf_conntrack_expect *exp;
 	struct nf_conntrack_man cmd = {};
 
@@ -545,11 +545,11 @@ static int help(struct sk_buff **pskb,
                    different IP address.  Simply don't record it for
                    NAT. */
 		if (cmd.l3num == PF_INET) {
-                	DEBUGP("conntrack_ftp: NOT RECORDING: %u,%u,%u,%u != %u.%u.%u.%u\n",
+                	DEBUGP("conntrack_ftp: NOT RECORDING: " NIPQUAD_FMT " != " NIPQUAD_FMT "\n",
 			       NIPQUAD(cmd.u3.ip),
 			       NIPQUAD(ct->tuplehash[dir].tuple.src.u3.ip));
 		} else {
-			DEBUGP("conntrack_ftp: NOT RECORDING: %x:%x:%x:%x:%x:%x:%x:%x != %x:%x:%x:%x:%x:%x:%x:%x\n",
+			DEBUGP("conntrack_ftp: NOT RECORDING: " NIP6_FMT " != " NIP6_FMT "\n",
 			       NIP6(*((struct in6_addr *)cmd.u3.ip6)),
 			       NIP6(*((struct in6_addr *)ct->tuplehash[dir]
 							.tuple.src.u3.ip6)));
@@ -624,7 +624,7 @@ static struct nf_conntrack_helper ftp[MAX_PORTS][2];
 static char ftp_names[MAX_PORTS][2][sizeof("ftp-65535")];
 
 /* don't make this __exit, since it's called from __init ! */
-static void fini(void)
+static void nf_conntrack_ftp_fini(void)
 {
 	int i, j;
 	for (i = 0; i < ports_c; i++) {
@@ -642,7 +642,7 @@ static void fini(void)
 	kfree(ftp_buffer);
 }
 
-static int __init init(void)
+static int __init nf_conntrack_ftp_init(void)
 {
 	int i, j = -1, ret = 0;
 	char *tmpname;
@@ -657,8 +657,6 @@ static int __init init(void)
 	/* FIXME should be configurable whether IPv4 and IPv6 FTP connections
 		 are tracked or not - YK */
 	for (i = 0; i < ports_c; i++) {
-		memset(&ftp[i], 0, sizeof(struct nf_conntrack_helper));
-
 		ftp[i][0].tuple.src.l3num = PF_INET;
 		ftp[i][1].tuple.src.l3num = PF_INET6;
 		for (j = 0; j < 2; j++) {
@@ -685,7 +683,7 @@ static int __init init(void)
 				printk("nf_ct_ftp: failed to register helper "
 				       " for pf: %d port: %d\n",
 					ftp[i][j].tuple.src.l3num, ports[i]);
-				fini();
+				nf_conntrack_ftp_fini();
 				return ret;
 			}
 		}
@@ -694,5 +692,5 @@ static int __init init(void)
 	return 0;
 }
 
-module_init(init);
-module_exit(fini);
+module_init(nf_conntrack_ftp_init);
+module_exit(nf_conntrack_ftp_fini);

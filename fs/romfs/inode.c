@@ -418,7 +418,7 @@ static int
 romfs_readpage(struct file *file, struct page * page)
 {
 	struct inode *inode = page->mapping->host;
-	unsigned long offset, avail, readlen;
+	loff_t offset, avail, readlen;
 	void *buf;
 	int result = -EIO;
 
@@ -429,8 +429,8 @@ romfs_readpage(struct file *file, struct page * page)
 		goto err_out;
 
 	/* 32 bit warning -- but not for us :) */
-	offset = page->index << PAGE_CACHE_SHIFT;
-	if (offset < inode->i_size) {
+	offset = page_offset(page);
+	if (offset < i_size_read(inode)) {
 		avail = inode->i_size-offset;
 		readlen = min_t(unsigned long, avail, PAGE_SIZE);
 		if (romfs_copyfrom(inode, buf, ROMFS_I(inode)->i_dataoffset+offset, readlen) == readlen) {
@@ -463,7 +463,7 @@ static struct address_space_operations romfs_aops = {
 	.readpage = romfs_readpage
 };
 
-static struct file_operations romfs_dir_operations = {
+static const struct file_operations romfs_dir_operations = {
 	.read		= generic_read_dir,
 	.readdir	= romfs_readdir,
 };
@@ -579,7 +579,8 @@ static int init_inodecache(void)
 {
 	romfs_inode_cachep = kmem_cache_create("romfs_inode_cache",
 					     sizeof(struct romfs_inode_info),
-					     0, SLAB_RECLAIM_ACCOUNT,
+					     0, (SLAB_RECLAIM_ACCOUNT|
+						SLAB_MEM_SPREAD),
 					     init_once, NULL);
 	if (romfs_inode_cachep == NULL)
 		return -ENOMEM;

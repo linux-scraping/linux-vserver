@@ -14,6 +14,10 @@
 #include <linux/sunrpc/svc.h>
 #include <linux/sunrpc/svcsock.h>
 #include <linux/nfs_fs.h>
+#include <linux/mutex.h>
+
+#include <net/inet_sock.h>
+
 #include "nfs4_fs.h"
 #include "callback.h"
 
@@ -28,9 +32,10 @@ struct nfs_callback_data {
 };
 
 static struct nfs_callback_data nfs_callback_info;
-static DECLARE_MUTEX(nfs_callback_sema);
+static DEFINE_MUTEX(nfs_callback_mutex);
 static struct svc_program nfs4_callback_program;
 
+unsigned int nfs_callback_set_tcpport;
 unsigned short nfs_callback_tcpport;
 
 /*
@@ -51,7 +56,12 @@ static void nfs_callback_svc(struct svc_rqst *rqstp)
 
 	complete(&nfs_callback_info.started);
 
-	while (nfs_callback_info.users != 0 || !signalled()) {
+	for(;;) {
+		if (signalled()) {
+			if (nfs_callback_info.users == 0)
+				break;
+			flush_signals(current);
+		}
 		/*
 		 * Listen for a request on the socket
 		 */
@@ -69,6 +79,7 @@ static void nfs_callback_svc(struct svc_rqst *rqstp)
 		svc_process(serv, rqstp);
 	}
 
+	svc_exit_thread(rqstp);
 	nfs_callback_info.pid = 0;
 	complete(&nfs_callback_info.stopped);
 	unlock_kernel();
@@ -85,7 +96,7 @@ int nfs_callback_up(void)
 	int ret = 0;
 
 	lock_kernel();
-	down(&nfs_callback_sema);
+	mutex_lock(&nfs_callback_mutex);
 	if (nfs_callback_info.users++ || nfs_callback_info.pid != 0)
 		goto out;
 	init_completion(&nfs_callback_info.started);
@@ -95,7 +106,7 @@ int nfs_callback_up(void)
 	if (!serv)
 		goto out_err;
 	/* FIXME: We don't want to register this socket with the portmapper */
-	ret = svc_makesock(serv, IPPROTO_TCP, 0);
+	ret = svc_makesock(serv, IPPROTO_TCP, nfs_callback_set_tcpport);
 	if (ret < 0)
 		goto out_destroy;
 	if (!list_empty(&serv->sv_permsocks)) {
@@ -111,7 +122,7 @@ int nfs_callback_up(void)
 	nfs_callback_info.serv = serv;
 	wait_for_completion(&nfs_callback_info.started);
 out:
-	up(&nfs_callback_sema);
+	mutex_unlock(&nfs_callback_mutex);
 	unlock_kernel();
 	return ret;
 out_destroy:
@@ -129,13 +140,15 @@ int nfs_callback_down(void)
 	int ret = 0;
 
 	lock_kernel();
-	down(&nfs_callback_sema);
-	if (--nfs_callback_info.users || nfs_callback_info.pid == 0)
-		goto out;
-	kill_proc(nfs_callback_info.pid, SIGKILL, 1);
-	wait_for_completion(&nfs_callback_info.stopped);
-out:
-	up(&nfs_callback_sema);
+	mutex_lock(&nfs_callback_mutex);
+	nfs_callback_info.users--;
+	do {
+		if (nfs_callback_info.users != 0 || nfs_callback_info.pid == 0)
+			break;
+		if (kill_proc(nfs_callback_info.pid, SIGKILL, 1) < 0)
+			break;
+	} while (wait_for_completion_timeout(&nfs_callback_info.stopped, 5*HZ) == 0);
+	mutex_unlock(&nfs_callback_mutex);
 	unlock_kernel();
 	return ret;
 }

@@ -384,7 +384,7 @@ int hostfs_fsync(struct file *file, struct dentry *dentry, int datasync)
 	return fsync_file(HOSTFS_I(dentry->d_inode)->fd, datasync);
 }
 
-static struct file_operations hostfs_file_fops = {
+static const struct file_operations hostfs_file_fops = {
 	.llseek		= generic_file_llseek,
 	.read		= generic_file_read,
 	.sendfile	= generic_file_sendfile,
@@ -399,7 +399,7 @@ static struct file_operations hostfs_file_fops = {
 	.fsync		= hostfs_fsync,
 };
 
-static struct file_operations hostfs_dir_fops = {
+static const struct file_operations hostfs_dir_fops = {
 	.llseek		= generic_file_llseek,
 	.readdir	= hostfs_readdir,
 	.read		= generic_read_dir,
@@ -501,11 +501,16 @@ int hostfs_commit_write(struct file *file, struct page *page, unsigned from,
 	long long start;
 	int err = 0;
 
-	start = (long long) (page->index << PAGE_CACHE_SHIFT) + from;
+	start = (((long long) page->index) << PAGE_CACHE_SHIFT) + from;
 	buffer = kmap(page);
 	err = write_file(FILE_HOSTFS_I(file)->fd, &start, buffer + from,
 			 to - from);
 	if(err > 0) err = 0;
+
+	/* Actually, if !err, write_file has added to-from to start, so, despite
+	 * the appearance, we are comparing i_size against the _last_ written
+	 * location, as we should. */
+
 	if(!err && (start > inode->i_size))
 		inode->i_size = start;
 
@@ -910,10 +915,8 @@ static struct inode_operations hostfs_dir_iops = {
 int hostfs_link_readpage(struct file *file, struct page *page)
 {
 	char *buffer, *name;
-	long long start;
 	int err;
 
-	start = page->index << PAGE_CACHE_SHIFT;
 	buffer = kmap(page);
 	name = inode_name(page->mapping->host, 0);
 	if(name == NULL) return(-ENOMEM);

@@ -4,7 +4,7 @@
  *  Copyright (C) 1994  Linus Torvalds
  *
  *  29 dec 2001 - Fixed oopses caused by unchecked access to the vm86
- *                stack - Manfred Spraul <manfreds@colorfullife.com>
+ *                stack - Manfred Spraul <manfred@colorfullife.com>
  *
  *  22 mar 2002 - Manfred detected the stackfaults, but didn't handle
  *                them correctly. Now the emulation will be in a
@@ -30,6 +30,7 @@
  *
  */
 
+#include <linux/capability.h>
 #include <linux/config.h>
 #include <linux/errno.h>
 #include <linux/interrupt.h>
@@ -42,6 +43,7 @@
 #include <linux/smp_lock.h>
 #include <linux/highmem.h>
 #include <linux/ptrace.h>
+#include <linux/audit.h>
 
 #include <asm/uaccess.h>
 #include <asm/io.h>
@@ -251,6 +253,7 @@ out:
 static void do_sys_vm86(struct kernel_vm86_struct *info, struct task_struct *tsk)
 {
 	struct tss_struct *tss;
+	long eax;
 /*
  * make sure the vm86() system call doesn't try to do anything silly
  */
@@ -304,13 +307,19 @@ static void do_sys_vm86(struct kernel_vm86_struct *info, struct task_struct *tsk
 	tsk->thread.screen_bitmap = info->screen_bitmap;
 	if (info->flags & VM86_SCREEN_BITMAP)
 		mark_screen_rdonly(tsk->mm);
+	__asm__ __volatile__("xorl %eax,%eax; movl %eax,%fs; movl %eax,%gs\n\t");
+	__asm__ __volatile__("movl %%eax, %0\n" :"=r"(eax));
+
+	/*call audit_syscall_exit since we do not exit via the normal paths */
+	if (unlikely(current->audit_context))
+		audit_syscall_exit(current, AUDITSC_RESULT(eax), eax);
+
 	__asm__ __volatile__(
-		"xorl %%eax,%%eax; movl %%eax,%%fs; movl %%eax,%%gs\n\t"
 		"movl %0,%%esp\n\t"
 		"movl %1,%%ebp\n\t"
 		"jmp resume_userspace"
 		: /* no outputs */
-		:"r" (&info->regs), "r" (tsk->thread_info) : "ax");
+		:"r" (&info->regs), "r" (task_thread_info(tsk)));
 	/* we never return here */
 }
 

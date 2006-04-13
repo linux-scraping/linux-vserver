@@ -1,7 +1,7 @@
 /*
  * Copyright (c) 2004, 2005 Topspin Communications.  All rights reserved.
  * Copyright (c) 2005 Sun Microsystems, Inc. All rights reserved.
- * Copyright (c) 2005 Cisco Systems. All rights reserved.
+ * Copyright (c) 2005, 2006 Cisco Systems.  All rights reserved.
  * Copyright (c) 2005 Mellanox Technologies. All rights reserved.
  * Copyright (c) 2004 Voltaire, Inc. All rights reserved.
  *
@@ -33,7 +33,7 @@
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  *
- * $Id: mthca_provider.c 1397 2004-12-28 05:09:00Z roland $
+ * $Id: mthca_provider.c 4859 2006-01-09 21:55:10Z roland $
  */
 
 #include <rdma/ib_smi.h>
@@ -45,6 +45,14 @@
 #include "mthca_user.h"
 #include "mthca_memfree.h"
 
+static void init_query_mad(struct ib_smp *mad)
+{
+	mad->base_version  = 1;
+	mad->mgmt_class    = IB_MGMT_CLASS_SUBN_LID_ROUTED;
+	mad->class_version = 1;
+	mad->method    	   = IB_MGMT_METHOD_GET;
+}
+
 static int mthca_query_device(struct ib_device *ibdev,
 			      struct ib_device_attr *props)
 {
@@ -55,7 +63,7 @@ static int mthca_query_device(struct ib_device *ibdev,
 
 	u8 status;
 
-	in_mad  = kmalloc(sizeof *in_mad, GFP_KERNEL);
+	in_mad  = kzalloc(sizeof *in_mad, GFP_KERNEL);
 	out_mad = kmalloc(sizeof *out_mad, GFP_KERNEL);
 	if (!in_mad || !out_mad)
 		goto out;
@@ -64,12 +72,8 @@ static int mthca_query_device(struct ib_device *ibdev,
 
 	props->fw_ver              = mdev->fw_ver;
 
-	memset(in_mad, 0, sizeof *in_mad);
-	in_mad->base_version       = 1;
-	in_mad->mgmt_class     	   = IB_MGMT_CLASS_SUBN_LID_ROUTED;
-	in_mad->class_version  	   = 1;
-	in_mad->method         	   = IB_MGMT_METHOD_GET;
-	in_mad->attr_id   	   = IB_SMP_ATTR_NODE_INFO;
+	init_query_mad(in_mad);
+	in_mad->attr_id = IB_SMP_ATTR_NODE_INFO;
 
 	err = mthca_MAD_IFC(mdev, 1, 1,
 			    1, NULL, NULL, in_mad, out_mad,
@@ -87,7 +91,6 @@ static int mthca_query_device(struct ib_device *ibdev,
 	props->vendor_part_id      = be16_to_cpup((__be16 *) (out_mad->data + 30));
 	props->hw_ver              = be32_to_cpup((__be32 *) (out_mad->data + 32));
 	memcpy(&props->sys_image_guid, out_mad->data +  4, 8);
-	memcpy(&props->node_guid,      out_mad->data + 12, 8);
 
 	props->max_mr_size         = ~0ull;
 	props->page_size_cap       = mdev->limits.page_size_cap;
@@ -105,12 +108,12 @@ static int mthca_query_device(struct ib_device *ibdev,
 	props->max_srq_wr          = mdev->limits.max_srq_wqes;
 	props->max_srq_sge         = mdev->limits.max_sg;
 	props->local_ca_ack_delay  = mdev->limits.local_ca_ack_delay;
-	props->atomic_cap          = mdev->limits.flags & DEV_LIM_FLAG_ATOMIC ? 
+	props->atomic_cap          = mdev->limits.flags & DEV_LIM_FLAG_ATOMIC ?
 					IB_ATOMIC_HCA : IB_ATOMIC_NONE;
 	props->max_pkeys           = mdev->limits.pkey_table_len;
 	props->max_mcast_grp       = mdev->limits.num_mgms + mdev->limits.num_amgms;
 	props->max_mcast_qp_attach = MTHCA_QP_PER_MGM;
-	props->max_total_mcast_qp_attach = props->max_mcast_qp_attach * 
+	props->max_total_mcast_qp_attach = props->max_mcast_qp_attach *
 					   props->max_mcast_grp;
 
 	err = 0;
@@ -128,20 +131,16 @@ static int mthca_query_port(struct ib_device *ibdev,
 	int err = -ENOMEM;
 	u8 status;
 
-	in_mad  = kmalloc(sizeof *in_mad, GFP_KERNEL);
+	in_mad  = kzalloc(sizeof *in_mad, GFP_KERNEL);
 	out_mad = kmalloc(sizeof *out_mad, GFP_KERNEL);
 	if (!in_mad || !out_mad)
 		goto out;
 
 	memset(props, 0, sizeof *props);
 
-	memset(in_mad, 0, sizeof *in_mad);
-	in_mad->base_version       = 1;
-	in_mad->mgmt_class     	   = IB_MGMT_CLASS_SUBN_LID_ROUTED;
-	in_mad->class_version  	   = 1;
-	in_mad->method         	   = IB_MGMT_METHOD_GET;
-	in_mad->attr_id   	   = IB_SMP_ATTR_PORT_INFO;
-	in_mad->attr_mod           = cpu_to_be32(port);
+	init_query_mad(in_mad);
+	in_mad->attr_id  = IB_SMP_ATTR_PORT_INFO;
+	in_mad->attr_mod = cpu_to_be32(port);
 
 	err = mthca_MAD_IFC(to_mdev(ibdev), 1, 1,
 			    port, NULL, NULL, in_mad, out_mad,
@@ -177,6 +176,23 @@ static int mthca_query_port(struct ib_device *ibdev,
 	return err;
 }
 
+static int mthca_modify_device(struct ib_device *ibdev,
+			       int mask,
+			       struct ib_device_modify *props)
+{
+	if (mask & ~IB_DEVICE_MODIFY_NODE_DESC)
+		return -EOPNOTSUPP;
+
+	if (mask & IB_DEVICE_MODIFY_NODE_DESC) {
+		if (mutex_lock_interruptible(&to_mdev(ibdev)->cap_mask_mutex))
+			return -ERESTARTSYS;
+		memcpy(ibdev->node_desc, props->node_desc, 64);
+		mutex_unlock(&to_mdev(ibdev)->cap_mask_mutex);
+	}
+
+	return 0;
+}
+
 static int mthca_modify_port(struct ib_device *ibdev,
 			     u8 port, int port_modify_mask,
 			     struct ib_port_modify *props)
@@ -186,7 +202,7 @@ static int mthca_modify_port(struct ib_device *ibdev,
 	int err;
 	u8 status;
 
-	if (down_interruptible(&to_mdev(ibdev)->cap_mask_mutex))
+	if (mutex_lock_interruptible(&to_mdev(ibdev)->cap_mask_mutex))
 		return -ERESTARTSYS;
 
 	err = mthca_query_port(ibdev, port, &attr);
@@ -208,7 +224,7 @@ static int mthca_modify_port(struct ib_device *ibdev,
 	}
 
 out:
-	up(&to_mdev(ibdev)->cap_mask_mutex);
+	mutex_unlock(&to_mdev(ibdev)->cap_mask_mutex);
 	return err;
 }
 
@@ -220,18 +236,14 @@ static int mthca_query_pkey(struct ib_device *ibdev,
 	int err = -ENOMEM;
 	u8 status;
 
-	in_mad  = kmalloc(sizeof *in_mad, GFP_KERNEL);
+	in_mad  = kzalloc(sizeof *in_mad, GFP_KERNEL);
 	out_mad = kmalloc(sizeof *out_mad, GFP_KERNEL);
 	if (!in_mad || !out_mad)
 		goto out;
 
-	memset(in_mad, 0, sizeof *in_mad);
-	in_mad->base_version       = 1;
-	in_mad->mgmt_class     	   = IB_MGMT_CLASS_SUBN_LID_ROUTED;
-	in_mad->class_version  	   = 1;
-	in_mad->method         	   = IB_MGMT_METHOD_GET;
-	in_mad->attr_id   	   = IB_SMP_ATTR_PKEY_TABLE;
-	in_mad->attr_mod           = cpu_to_be32(index / 32);
+	init_query_mad(in_mad);
+	in_mad->attr_id  = IB_SMP_ATTR_PKEY_TABLE;
+	in_mad->attr_mod = cpu_to_be32(index / 32);
 
 	err = mthca_MAD_IFC(to_mdev(ibdev), 1, 1,
 			    port, NULL, NULL, in_mad, out_mad,
@@ -259,18 +271,14 @@ static int mthca_query_gid(struct ib_device *ibdev, u8 port,
 	int err = -ENOMEM;
 	u8 status;
 
-	in_mad  = kmalloc(sizeof *in_mad, GFP_KERNEL);
+	in_mad  = kzalloc(sizeof *in_mad, GFP_KERNEL);
 	out_mad = kmalloc(sizeof *out_mad, GFP_KERNEL);
 	if (!in_mad || !out_mad)
 		goto out;
 
-	memset(in_mad, 0, sizeof *in_mad);
-	in_mad->base_version       = 1;
-	in_mad->mgmt_class     	   = IB_MGMT_CLASS_SUBN_LID_ROUTED;
-	in_mad->class_version  	   = 1;
-	in_mad->method         	   = IB_MGMT_METHOD_GET;
-	in_mad->attr_id   	   = IB_SMP_ATTR_PORT_INFO;
-	in_mad->attr_mod           = cpu_to_be32(port);
+	init_query_mad(in_mad);
+	in_mad->attr_id  = IB_SMP_ATTR_PORT_INFO;
+	in_mad->attr_mod = cpu_to_be32(port);
 
 	err = mthca_MAD_IFC(to_mdev(ibdev), 1, 1,
 			    port, NULL, NULL, in_mad, out_mad,
@@ -284,13 +292,9 @@ static int mthca_query_gid(struct ib_device *ibdev, u8 port,
 
 	memcpy(gid->raw, out_mad->data + 8, 8);
 
-	memset(in_mad, 0, sizeof *in_mad);
-	in_mad->base_version       = 1;
-	in_mad->mgmt_class     	   = IB_MGMT_CLASS_SUBN_LID_ROUTED;
-	in_mad->class_version  	   = 1;
-	in_mad->method         	   = IB_MGMT_METHOD_GET;
-	in_mad->attr_id   	   = IB_SMP_ATTR_GUID_INFO;
-	in_mad->attr_mod           = cpu_to_be32(index / 8);
+	init_query_mad(in_mad);
+	in_mad->attr_id  = IB_SMP_ATTR_GUID_INFO;
+	in_mad->attr_mod = cpu_to_be32(index / 8);
 
 	err = mthca_MAD_IFC(to_mdev(ibdev), 1, 1,
 			    port, NULL, NULL, in_mad, out_mad,
@@ -458,8 +462,10 @@ static struct ib_srq *mthca_create_srq(struct ib_pd *pd,
 	if (pd->uobject) {
 		context = to_mucontext(pd->uobject->context);
 
-		if (ib_copy_from_udata(&ucmd, udata, sizeof ucmd))
-			return ERR_PTR(-EFAULT);
+		if (ib_copy_from_udata(&ucmd, udata, sizeof ucmd)) {
+			err = -EFAULT;
+			goto err_free;
+		}
 
 		err = mthca_map_user_db(to_mdev(pd->device), &context->uar,
 					context->db_tab, ucmd.db_index,
@@ -535,8 +541,10 @@ static struct ib_qp *mthca_create_qp(struct ib_pd *pd,
 		if (pd->uobject) {
 			context = to_mucontext(pd->uobject->context);
 
-			if (ib_copy_from_udata(&ucmd, udata, sizeof ucmd))
+			if (ib_copy_from_udata(&ucmd, udata, sizeof ucmd)) {
+				kfree(qp);
 				return ERR_PTR(-EFAULT);
+			}
 
 			err = mthca_map_user_db(to_mdev(pd->device), &context->uar,
 						context->db_tab,
@@ -678,9 +686,9 @@ static struct ib_cq *mthca_create_cq(struct ib_device *ibdev, int entries,
 	}
 
 	if (context) {
-		cq->mr.ibmr.lkey    = ucmd.lkey;
-		cq->set_ci_db_index = ucmd.set_db_index;
-		cq->arm_db_index    = ucmd.arm_db_index;
+		cq->buf.mr.ibmr.lkey = ucmd.lkey;
+		cq->set_ci_db_index  = ucmd.set_db_index;
+		cq->arm_db_index     = ucmd.arm_db_index;
 	}
 
 	for (nent = 1; nent <= entries; nent <<= 1)
@@ -698,6 +706,8 @@ static struct ib_cq *mthca_create_cq(struct ib_device *ibdev, int entries,
 		goto err_free;
 	}
 
+	cq->resize_buf = NULL;
+
 	return &cq->ibcq;
 
 err_free:
@@ -714,6 +724,121 @@ err_unmap_set:
 				    to_mucontext(context)->db_tab, ucmd.set_db_index);
 
 	return ERR_PTR(err);
+}
+
+static int mthca_alloc_resize_buf(struct mthca_dev *dev, struct mthca_cq *cq,
+				  int entries)
+{
+	int ret;
+
+	spin_lock_irq(&cq->lock);
+	if (cq->resize_buf) {
+		ret = -EBUSY;
+		goto unlock;
+	}
+
+	cq->resize_buf = kmalloc(sizeof *cq->resize_buf, GFP_ATOMIC);
+	if (!cq->resize_buf) {
+		ret = -ENOMEM;
+		goto unlock;
+	}
+
+	cq->resize_buf->state = CQ_RESIZE_ALLOC;
+
+	ret = 0;
+
+unlock:
+	spin_unlock_irq(&cq->lock);
+
+	if (ret)
+		return ret;
+
+	ret = mthca_alloc_cq_buf(dev, &cq->resize_buf->buf, entries);
+	if (ret) {
+		spin_lock_irq(&cq->lock);
+		kfree(cq->resize_buf);
+		cq->resize_buf = NULL;
+		spin_unlock_irq(&cq->lock);
+		return ret;
+	}
+
+	cq->resize_buf->cqe = entries - 1;
+
+	spin_lock_irq(&cq->lock);
+	cq->resize_buf->state = CQ_RESIZE_READY;
+	spin_unlock_irq(&cq->lock);
+
+	return 0;
+}
+
+static int mthca_resize_cq(struct ib_cq *ibcq, int entries, struct ib_udata *udata)
+{
+	struct mthca_dev *dev = to_mdev(ibcq->device);
+	struct mthca_cq *cq = to_mcq(ibcq);
+	struct mthca_resize_cq ucmd;
+	u32 lkey;
+	u8 status;
+	int ret;
+
+	if (entries < 1 || entries > dev->limits.max_cqes)
+		return -EINVAL;
+
+	entries = roundup_pow_of_two(entries + 1);
+	if (entries == ibcq->cqe + 1)
+		return 0;
+
+	if (cq->is_kernel) {
+		ret = mthca_alloc_resize_buf(dev, cq, entries);
+		if (ret)
+			return ret;
+		lkey = cq->resize_buf->buf.mr.ibmr.lkey;
+	} else {
+		if (ib_copy_from_udata(&ucmd, udata, sizeof ucmd))
+			return -EFAULT;
+		lkey = ucmd.lkey;
+	}
+
+	ret = mthca_RESIZE_CQ(dev, cq->cqn, lkey, long_log2(entries), &status);
+	if (status)
+		ret = -EINVAL;
+
+	if (ret) {
+		if (cq->resize_buf) {
+			mthca_free_cq_buf(dev, &cq->resize_buf->buf,
+					  cq->resize_buf->cqe);
+			kfree(cq->resize_buf);
+			spin_lock_irq(&cq->lock);
+			cq->resize_buf = NULL;
+			spin_unlock_irq(&cq->lock);
+		}
+		return ret;
+	}
+
+	if (cq->is_kernel) {
+		struct mthca_cq_buf tbuf;
+		int tcqe;
+
+		spin_lock_irq(&cq->lock);
+		if (cq->resize_buf->state == CQ_RESIZE_READY) {
+			mthca_cq_resize_copy_cqes(cq);
+			tbuf         = cq->buf;
+			tcqe         = cq->ibcq.cqe;
+			cq->buf      = cq->resize_buf->buf;
+			cq->ibcq.cqe = cq->resize_buf->cqe;
+		} else {
+			tbuf = cq->resize_buf->buf;
+			tcqe = cq->resize_buf->cqe;
+		}
+
+		kfree(cq->resize_buf);
+		cq->resize_buf = NULL;
+		spin_unlock_irq(&cq->lock);
+
+		mthca_free_cq_buf(dev, &tbuf, tcqe);
+	} else
+		ibcq->cqe = entries - 1;
+
+	return 0;
 }
 
 static int mthca_destroy_cq(struct ib_cq *cq)
@@ -783,23 +908,19 @@ static struct ib_mr *mthca_reg_phys_mr(struct ib_pd       *pd,
 	if ((*iova_start & ~PAGE_MASK) != (buffer_list[0].addr & ~PAGE_MASK))
 		return ERR_PTR(-EINVAL);
 
-	if (num_phys_buf > 1 &&
-	    ((buffer_list[0].addr + buffer_list[0].size) & ~PAGE_MASK))
-		return ERR_PTR(-EINVAL);
-
 	mask = 0;
 	total_size = 0;
 	for (i = 0; i < num_phys_buf; ++i) {
-		if (i != 0 && buffer_list[i].addr & ~PAGE_MASK)
-			return ERR_PTR(-EINVAL);
-		if (i != 0 && i != num_phys_buf - 1 &&
-		    (buffer_list[i].size & ~PAGE_MASK))
-			return ERR_PTR(-EINVAL);
+		if (i != 0)
+			mask |= buffer_list[i].addr;
+		if (i != num_phys_buf - 1)
+			mask |= buffer_list[i].addr + buffer_list[i].size;
 
 		total_size += buffer_list[i].size;
-		if (i > 0)
-			mask |= buffer_list[i].addr;
 	}
+
+	if (mask & ~PAGE_MASK)
+		return ERR_PTR(-EINVAL);
 
 	/* Find largest page shift we can use to cover buffers */
 	for (shift = PAGE_SHIFT; shift < 31; ++shift)
@@ -1070,10 +1191,61 @@ static struct class_device_attribute *mthca_class_attributes[] = {
 	&class_device_attr_board_id
 };
 
+static int mthca_init_node_data(struct mthca_dev *dev)
+{
+	struct ib_smp *in_mad  = NULL;
+	struct ib_smp *out_mad = NULL;
+	int err = -ENOMEM;
+	u8 status;
+
+	in_mad  = kzalloc(sizeof *in_mad, GFP_KERNEL);
+	out_mad = kmalloc(sizeof *out_mad, GFP_KERNEL);
+	if (!in_mad || !out_mad)
+		goto out;
+
+	init_query_mad(in_mad);
+	in_mad->attr_id = IB_SMP_ATTR_NODE_DESC;
+
+	err = mthca_MAD_IFC(dev, 1, 1,
+			    1, NULL, NULL, in_mad, out_mad,
+			    &status);
+	if (err)
+		goto out;
+	if (status) {
+		err = -EINVAL;
+		goto out;
+	}
+
+	memcpy(dev->ib_dev.node_desc, out_mad->data, 64);
+
+	in_mad->attr_id = IB_SMP_ATTR_NODE_INFO;
+
+	err = mthca_MAD_IFC(dev, 1, 1,
+			    1, NULL, NULL, in_mad, out_mad,
+			    &status);
+	if (err)
+		goto out;
+	if (status) {
+		err = -EINVAL;
+		goto out;
+	}
+
+	memcpy(&dev->ib_dev.node_guid, out_mad->data + 12, 8);
+
+out:
+	kfree(in_mad);
+	kfree(out_mad);
+	return err;
+}
+
 int mthca_register_device(struct mthca_dev *dev)
 {
 	int ret;
 	int i;
+
+	ret = mthca_init_node_data(dev);
+	if (ret)
+		return ret;
 
 	strlcpy(dev->ib_dev.name, "mthca%d", IB_DEVICE_NAME_MAX);
 	dev->ib_dev.owner                = THIS_MODULE;
@@ -1089,14 +1261,17 @@ int mthca_register_device(struct mthca_dev *dev)
 		(1ull << IB_USER_VERBS_CMD_DEREG_MR)		|
 		(1ull << IB_USER_VERBS_CMD_CREATE_COMP_CHANNEL)	|
 		(1ull << IB_USER_VERBS_CMD_CREATE_CQ)		|
+		(1ull << IB_USER_VERBS_CMD_RESIZE_CQ)		|
 		(1ull << IB_USER_VERBS_CMD_DESTROY_CQ)		|
 		(1ull << IB_USER_VERBS_CMD_CREATE_QP)		|
+		(1ull << IB_USER_VERBS_CMD_QUERY_QP)		|
 		(1ull << IB_USER_VERBS_CMD_MODIFY_QP)		|
 		(1ull << IB_USER_VERBS_CMD_DESTROY_QP)		|
 		(1ull << IB_USER_VERBS_CMD_ATTACH_MCAST)	|
 		(1ull << IB_USER_VERBS_CMD_DETACH_MCAST)	|
 		(1ull << IB_USER_VERBS_CMD_CREATE_SRQ)		|
 		(1ull << IB_USER_VERBS_CMD_MODIFY_SRQ)		|
+		(1ull << IB_USER_VERBS_CMD_QUERY_SRQ)		|
 		(1ull << IB_USER_VERBS_CMD_DESTROY_SRQ);
 	dev->ib_dev.node_type            = IB_NODE_CA;
 	dev->ib_dev.phys_port_cnt        = dev->limits.num_ports;
@@ -1104,6 +1279,7 @@ int mthca_register_device(struct mthca_dev *dev)
 	dev->ib_dev.class_dev.dev        = &dev->pdev->dev;
 	dev->ib_dev.query_device         = mthca_query_device;
 	dev->ib_dev.query_port           = mthca_query_port;
+	dev->ib_dev.modify_device        = mthca_modify_device;
 	dev->ib_dev.modify_port          = mthca_modify_port;
 	dev->ib_dev.query_pkey           = mthca_query_pkey;
 	dev->ib_dev.query_gid            = mthca_query_gid;
@@ -1113,11 +1289,13 @@ int mthca_register_device(struct mthca_dev *dev)
 	dev->ib_dev.alloc_pd             = mthca_alloc_pd;
 	dev->ib_dev.dealloc_pd           = mthca_dealloc_pd;
 	dev->ib_dev.create_ah            = mthca_ah_create;
+	dev->ib_dev.query_ah             = mthca_ah_query;
 	dev->ib_dev.destroy_ah           = mthca_ah_destroy;
 
 	if (dev->mthca_flags & MTHCA_FLAG_SRQ) {
 		dev->ib_dev.create_srq           = mthca_create_srq;
-		dev->ib_dev.modify_srq		 = mthca_modify_srq;
+		dev->ib_dev.modify_srq           = mthca_modify_srq;
+		dev->ib_dev.query_srq            = mthca_query_srq;
 		dev->ib_dev.destroy_srq          = mthca_destroy_srq;
 
 		if (mthca_is_memfree(dev))
@@ -1128,8 +1306,10 @@ int mthca_register_device(struct mthca_dev *dev)
 
 	dev->ib_dev.create_qp            = mthca_create_qp;
 	dev->ib_dev.modify_qp            = mthca_modify_qp;
+	dev->ib_dev.query_qp             = mthca_query_qp;
 	dev->ib_dev.destroy_qp           = mthca_destroy_qp;
 	dev->ib_dev.create_cq            = mthca_create_cq;
+	dev->ib_dev.resize_cq            = mthca_resize_cq;
 	dev->ib_dev.destroy_cq           = mthca_destroy_cq;
 	dev->ib_dev.poll_cq              = mthca_poll_cq;
 	dev->ib_dev.get_dma_mr           = mthca_get_dma_mr;
@@ -1161,7 +1341,7 @@ int mthca_register_device(struct mthca_dev *dev)
 		dev->ib_dev.post_recv     = mthca_tavor_post_receive;
 	}
 
-	init_MUTEX(&dev->cap_mask_mutex);
+	mutex_init(&dev->cap_mask_mutex);
 
 	ret = ib_register_device(&dev->ib_dev);
 	if (ret)

@@ -22,6 +22,8 @@ enum {
 	ND_OPT_PREFIX_INFO = 3,		/* RFC2461 */
 	ND_OPT_REDIRECT_HDR = 4,	/* RFC2461 */
 	ND_OPT_MTU = 5,			/* RFC2461 */
+	__ND_OPT_ARRAY_MAX,
+	ND_OPT_ROUTE_INFO = 24,		/* RFC4191 */
 	__ND_OPT_MAX
 };
 
@@ -35,11 +37,20 @@ enum {
 
 #ifdef __KERNEL__
 
-#include <linux/skbuff.h>
-#include <linux/netdevice.h>
+#include <linux/config.h>
+#include <linux/compiler.h>
 #include <linux/icmpv6.h>
+#include <linux/in6.h>
+#include <linux/types.h>
+
 #include <net/neighbour.h>
-#include <asm/atomic.h>
+
+struct ctl_table;
+struct file;
+struct inet6_dev;
+struct net_device;
+struct net_proto_family;
+struct sk_buff;
 
 extern struct neigh_table nd_tbl;
 
@@ -108,7 +119,7 @@ extern int			igmp6_event_report(struct sk_buff *skb);
 extern void			igmp6_cleanup(void);
 
 #ifdef CONFIG_SYSCTL
-extern int 			ndisc_ifinfo_sysctl_change(ctl_table *ctl,
+extern int 			ndisc_ifinfo_sysctl_change(struct ctl_table *ctl,
 							   int write,
 							   struct file * filp,
 							   void __user *buffer,

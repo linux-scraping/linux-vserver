@@ -39,6 +39,7 @@
 #include <linux/string.h>
 #include <linux/parser.h>
 #include <linux/random.h>
+#include <linux/jiffies.h>
 
 #include <asm/atomic.h>
 
@@ -356,9 +357,9 @@ static void srp_remove_work(void *target_ptr)
 	target->state = SRP_TARGET_REMOVED;
 	spin_unlock_irq(target->scsi_host->host_lock);
 
-	down(&target->srp_host->target_mutex);
+	mutex_lock(&target->srp_host->target_mutex);
 	list_del(&target->list);
-	up(&target->srp_host->target_mutex);
+	mutex_unlock(&target->srp_host->target_mutex);
 
 	scsi_remove_host(target->scsi_host);
 	ib_destroy_cm_id(target->cm_id);
@@ -502,8 +503,10 @@ err:
 static int srp_map_data(struct scsi_cmnd *scmnd, struct srp_target_port *target,
 			struct srp_request *req)
 {
+	struct scatterlist *scat;
 	struct srp_cmd *cmd = req->cmd->buf;
-	int len;
+	int len, nents, count;
+	int i;
 	u8 fmt;
 
 	if (!scmnd->request_buffer || scmnd->sc_data_direction == DMA_NONE)
@@ -516,89 +519,72 @@ static int srp_map_data(struct scsi_cmnd *scmnd, struct srp_target_port *target,
 		return -EINVAL;
 	}
 
-	if (scmnd->use_sg) {
-		struct scatterlist *scat = scmnd->request_buffer;
-		int n;
-		int i;
-
-		n = dma_map_sg(target->srp_host->dev->dma_device,
-			       scat, scmnd->use_sg, scmnd->sc_data_direction);
-
-		if (n == 1) {
-			struct srp_direct_buf *buf = (void *) cmd->add_data;
-
-			fmt = SRP_DATA_DESC_DIRECT;
-
-			buf->va  = cpu_to_be64(sg_dma_address(scat));
-			buf->key = cpu_to_be32(target->srp_host->mr->rkey);
-			buf->len = cpu_to_be32(sg_dma_len(scat));
-
-			len = sizeof (struct srp_cmd) +
-				sizeof (struct srp_direct_buf);
-		} else {
-			struct srp_indirect_buf *buf = (void *) cmd->add_data;
-			u32 datalen = 0;
-
-			fmt = SRP_DATA_DESC_INDIRECT;
-
-			if (scmnd->sc_data_direction == DMA_TO_DEVICE)
-				cmd->data_out_desc_cnt = n;
-			else
-				cmd->data_in_desc_cnt = n;
-
-			buf->table_desc.va  = cpu_to_be64(req->cmd->dma +
-							  sizeof *cmd +
-							  sizeof *buf);
-			buf->table_desc.key =
-				cpu_to_be32(target->srp_host->mr->rkey);
-			buf->table_desc.len =
-				cpu_to_be32(n * sizeof (struct srp_direct_buf));
-
-			for (i = 0; i < n; ++i) {
-				buf->desc_list[i].va  = cpu_to_be64(sg_dma_address(&scat[i]));
-				buf->desc_list[i].key =
-					cpu_to_be32(target->srp_host->mr->rkey);
-				buf->desc_list[i].len = cpu_to_be32(sg_dma_len(&scat[i]));
-
-				datalen += sg_dma_len(&scat[i]);
-			}
-
-			buf->len = cpu_to_be32(datalen);
-
-			len = sizeof (struct srp_cmd) +
-				sizeof (struct srp_indirect_buf) +
-				n * sizeof (struct srp_direct_buf);
-		}
+	/*
+	 * This handling of non-SG commands can be killed when the
+	 * SCSI midlayer no longer generates non-SG commands.
+	 */
+	if (likely(scmnd->use_sg)) {
+		nents = scmnd->use_sg;
+		scat  = scmnd->request_buffer;
 	} else {
+		nents = 1;
+		scat  = &req->fake_sg;
+		sg_init_one(scat, scmnd->request_buffer, scmnd->request_bufflen);
+	}
+
+	count = dma_map_sg(target->srp_host->dev->dma_device, scat, nents,
+			   scmnd->sc_data_direction);
+
+	if (count == 1) {
 		struct srp_direct_buf *buf = (void *) cmd->add_data;
-		dma_addr_t dma;
-
-		dma = dma_map_single(target->srp_host->dev->dma_device,
-				     scmnd->request_buffer, scmnd->request_bufflen,
-				     scmnd->sc_data_direction);
-		if (dma_mapping_error(dma)) {
-			printk(KERN_WARNING PFX "unable to map %p/%d (dir %d)\n",
-			       scmnd->request_buffer, (int) scmnd->request_bufflen,
-			       scmnd->sc_data_direction);
-			return -EINVAL;
-		}
-
-		pci_unmap_addr_set(req, direct_mapping, dma);
-
-		buf->va  = cpu_to_be64(dma);
-		buf->key = cpu_to_be32(target->srp_host->mr->rkey);
-		buf->len = cpu_to_be32(scmnd->request_bufflen);
 
 		fmt = SRP_DATA_DESC_DIRECT;
 
-		len = sizeof (struct srp_cmd) + sizeof (struct srp_direct_buf);
+		buf->va  = cpu_to_be64(sg_dma_address(scat));
+		buf->key = cpu_to_be32(target->srp_host->mr->rkey);
+		buf->len = cpu_to_be32(sg_dma_len(scat));
+
+		len = sizeof (struct srp_cmd) +
+			sizeof (struct srp_direct_buf);
+	} else {
+		struct srp_indirect_buf *buf = (void *) cmd->add_data;
+		u32 datalen = 0;
+
+		fmt = SRP_DATA_DESC_INDIRECT;
+
+		if (scmnd->sc_data_direction == DMA_TO_DEVICE)
+			cmd->data_out_desc_cnt = count;
+		else
+			cmd->data_in_desc_cnt = count;
+
+		buf->table_desc.va  = cpu_to_be64(req->cmd->dma +
+						  sizeof *cmd +
+						  sizeof *buf);
+		buf->table_desc.key =
+			cpu_to_be32(target->srp_host->mr->rkey);
+		buf->table_desc.len =
+			cpu_to_be32(count * sizeof (struct srp_direct_buf));
+
+		for (i = 0; i < count; ++i) {
+			buf->desc_list[i].va  = cpu_to_be64(sg_dma_address(&scat[i]));
+			buf->desc_list[i].key =
+				cpu_to_be32(target->srp_host->mr->rkey);
+			buf->desc_list[i].len = cpu_to_be32(sg_dma_len(&scat[i]));
+
+			datalen += sg_dma_len(&scat[i]);
+		}
+
+		buf->len = cpu_to_be32(datalen);
+
+		len = sizeof (struct srp_cmd) +
+			sizeof (struct srp_indirect_buf) +
+			count * sizeof (struct srp_direct_buf);
 	}
 
 	if (scmnd->sc_data_direction == DMA_TO_DEVICE)
 		cmd->buf_fmt = fmt << 4;
 	else
 		cmd->buf_fmt = fmt;
-
 
 	return len;
 }
@@ -607,20 +593,28 @@ static void srp_unmap_data(struct scsi_cmnd *scmnd,
 			   struct srp_target_port *target,
 			   struct srp_request *req)
 {
+	struct scatterlist *scat;
+	int nents;
+
 	if (!scmnd->request_buffer ||
 	    (scmnd->sc_data_direction != DMA_TO_DEVICE &&
 	     scmnd->sc_data_direction != DMA_FROM_DEVICE))
-	    return;
+		return;
 
-	if (scmnd->use_sg)
-		dma_unmap_sg(target->srp_host->dev->dma_device,
-			     (struct scatterlist *) scmnd->request_buffer,
-			     scmnd->use_sg, scmnd->sc_data_direction);
-	else
-		dma_unmap_single(target->srp_host->dev->dma_device,
-				 pci_unmap_addr(req, direct_mapping),
-				 scmnd->request_bufflen,
-				 scmnd->sc_data_direction);
+	/*
+	 * This handling of non-SG commands can be killed when the
+	 * SCSI midlayer no longer generates non-SG commands.
+	 */
+	if (likely(scmnd->use_sg)) {
+		nents = scmnd->use_sg;
+		scat  = scmnd->request_buffer;
+	} else {
+		nents = 1;
+		scat  = &req->fake_sg;
+	}
+
+	dma_unmap_sg(target->srp_host->dev->dma_device, scat, nents,
+		     scmnd->sc_data_direction);
 }
 
 static void srp_process_rsp(struct srp_target_port *target, struct srp_rsp *rsp)
@@ -1154,6 +1148,12 @@ static int srp_send_tsk_mgmt(struct scsi_cmnd *scmnd, u8 func)
 
 	spin_lock_irq(target->scsi_host->host_lock);
 
+	if (target->state == SRP_TARGET_DEAD ||
+	    target->state == SRP_TARGET_REMOVED) {
+		scmnd->result = DID_BAD_TARGET << 16;
+		goto out;
+	}
+
 	if (scmnd->host_scribble == (void *) -1L)
 		goto out;
 
@@ -1230,6 +1230,87 @@ static int srp_reset_host(struct scsi_cmnd *scmnd)
 	return ret;
 }
 
+static ssize_t show_id_ext(struct class_device *cdev, char *buf)
+{
+	struct srp_target_port *target = host_to_target(class_to_shost(cdev));
+
+	if (target->state == SRP_TARGET_DEAD ||
+	    target->state == SRP_TARGET_REMOVED)
+		return -ENODEV;
+
+	return sprintf(buf, "0x%016llx\n",
+		       (unsigned long long) be64_to_cpu(target->id_ext));
+}
+
+static ssize_t show_ioc_guid(struct class_device *cdev, char *buf)
+{
+	struct srp_target_port *target = host_to_target(class_to_shost(cdev));
+
+	if (target->state == SRP_TARGET_DEAD ||
+	    target->state == SRP_TARGET_REMOVED)
+		return -ENODEV;
+
+	return sprintf(buf, "0x%016llx\n",
+		       (unsigned long long) be64_to_cpu(target->ioc_guid));
+}
+
+static ssize_t show_service_id(struct class_device *cdev, char *buf)
+{
+	struct srp_target_port *target = host_to_target(class_to_shost(cdev));
+
+	if (target->state == SRP_TARGET_DEAD ||
+	    target->state == SRP_TARGET_REMOVED)
+		return -ENODEV;
+
+	return sprintf(buf, "0x%016llx\n",
+		       (unsigned long long) be64_to_cpu(target->service_id));
+}
+
+static ssize_t show_pkey(struct class_device *cdev, char *buf)
+{
+	struct srp_target_port *target = host_to_target(class_to_shost(cdev));
+
+	if (target->state == SRP_TARGET_DEAD ||
+	    target->state == SRP_TARGET_REMOVED)
+		return -ENODEV;
+
+	return sprintf(buf, "0x%04x\n", be16_to_cpu(target->path.pkey));
+}
+
+static ssize_t show_dgid(struct class_device *cdev, char *buf)
+{
+	struct srp_target_port *target = host_to_target(class_to_shost(cdev));
+
+	if (target->state == SRP_TARGET_DEAD ||
+	    target->state == SRP_TARGET_REMOVED)
+		return -ENODEV;
+
+	return sprintf(buf, "%04x:%04x:%04x:%04x:%04x:%04x:%04x:%04x\n",
+		       be16_to_cpu(((__be16 *) target->path.dgid.raw)[0]),
+		       be16_to_cpu(((__be16 *) target->path.dgid.raw)[1]),
+		       be16_to_cpu(((__be16 *) target->path.dgid.raw)[2]),
+		       be16_to_cpu(((__be16 *) target->path.dgid.raw)[3]),
+		       be16_to_cpu(((__be16 *) target->path.dgid.raw)[4]),
+		       be16_to_cpu(((__be16 *) target->path.dgid.raw)[5]),
+		       be16_to_cpu(((__be16 *) target->path.dgid.raw)[6]),
+		       be16_to_cpu(((__be16 *) target->path.dgid.raw)[7]));
+}
+
+static CLASS_DEVICE_ATTR(id_ext,	S_IRUGO, show_id_ext,		NULL);
+static CLASS_DEVICE_ATTR(ioc_guid,	S_IRUGO, show_ioc_guid,		NULL);
+static CLASS_DEVICE_ATTR(service_id,	S_IRUGO, show_service_id,	NULL);
+static CLASS_DEVICE_ATTR(pkey,		S_IRUGO, show_pkey,		NULL);
+static CLASS_DEVICE_ATTR(dgid,		S_IRUGO, show_dgid,		NULL);
+
+static struct class_device_attribute *srp_host_attrs[] = {
+	&class_device_attr_id_ext,
+	&class_device_attr_ioc_guid,
+	&class_device_attr_service_id,
+	&class_device_attr_pkey,
+	&class_device_attr_dgid,
+	NULL
+};
+
 static struct scsi_host_template srp_template = {
 	.module				= THIS_MODULE,
 	.name				= DRV_NAME,
@@ -1242,7 +1323,8 @@ static struct scsi_host_template srp_template = {
 	.this_id			= -1,
 	.sg_tablesize			= SRP_MAX_INDIRECT,
 	.cmd_per_lun			= SRP_SQ_SIZE,
-	.use_clustering			= ENABLE_CLUSTERING
+	.use_clustering			= ENABLE_CLUSTERING,
+	.shost_attrs			= srp_host_attrs
 };
 
 static int srp_add_target(struct srp_host *host, struct srp_target_port *target)
@@ -1253,9 +1335,9 @@ static int srp_add_target(struct srp_host *host, struct srp_target_port *target)
 	if (scsi_add_host(target->scsi_host, host->dev->dma_device))
 		return -ENODEV;
 
-	down(&host->target_mutex);
+	mutex_lock(&host->target_mutex);
 	list_add_tail(&target->list, &host->target_list);
-	up(&host->target_mutex);
+	mutex_unlock(&host->target_mutex);
 
 	target->state = SRP_TARGET_LIVE;
 
@@ -1359,6 +1441,7 @@ static int srp_parse_options(const char *buf, struct srp_target_port *target)
 				strlcpy(dgid, p + i * 2, 3);
 				target->path.dgid.raw[i] = simple_strtoul(dgid, NULL, 16);
 			}
+			kfree(p);
 			break;
 
 		case SRP_OPT_PKEY:
@@ -1515,8 +1598,7 @@ static ssize_t show_port(struct class_device *class_dev, char *buf)
 
 static CLASS_DEVICE_ATTR(port, S_IRUGO, show_port, NULL);
 
-static struct srp_host *srp_add_port(struct ib_device *device,
-				     __be64 node_guid, u8 port)
+static struct srp_host *srp_add_port(struct ib_device *device, u8 port)
 {
 	struct srp_host *host;
 
@@ -1525,13 +1607,13 @@ static struct srp_host *srp_add_port(struct ib_device *device,
 		return NULL;
 
 	INIT_LIST_HEAD(&host->target_list);
-	init_MUTEX(&host->target_mutex);
+	mutex_init(&host->target_mutex);
 	init_completion(&host->released);
 	host->dev  = device;
 	host->port = port;
 
 	host->initiator_port_id[7] = port;
-	memcpy(host->initiator_port_id + 8, &node_guid, 8);
+	memcpy(host->initiator_port_id + 8, &device->node_guid, 8);
 
 	host->pd   = ib_alloc_pd(device);
 	if (IS_ERR(host->pd))
@@ -1579,22 +1661,11 @@ static void srp_add_one(struct ib_device *device)
 {
 	struct list_head *dev_list;
 	struct srp_host *host;
-	struct ib_device_attr *dev_attr;
 	int s, e, p;
-
-	dev_attr = kmalloc(sizeof *dev_attr, GFP_KERNEL);
-	if (!dev_attr)
-		return;
-
-	if (ib_query_device(device, dev_attr)) {
-		printk(KERN_WARNING PFX "Couldn't query node GUID for %s.\n",
-		       device->name);
-		goto out;
-	}
 
 	dev_list = kmalloc(sizeof *dev_list, GFP_KERNEL);
 	if (!dev_list)
-		goto out;
+		return;
 
 	INIT_LIST_HEAD(dev_list);
 
@@ -1607,15 +1678,12 @@ static void srp_add_one(struct ib_device *device)
 	}
 
 	for (p = s; p <= e; ++p) {
-		host = srp_add_port(device, dev_attr->node_guid, p);
+		host = srp_add_port(device, p);
 		if (host)
 			list_add_tail(&host->list, dev_list);
 	}
 
 	ib_set_client_data(device, &srp_client, dev_list);
-
-out:
-	kfree(dev_attr);
 }
 
 static void srp_remove_one(struct ib_device *device)
@@ -1640,7 +1708,7 @@ static void srp_remove_one(struct ib_device *device)
 		 * Mark all target ports as removed, so we stop queueing
 		 * commands and don't try to reconnect.
 		 */
-		down(&host->target_mutex);
+		mutex_lock(&host->target_mutex);
 		list_for_each_entry_safe(target, tmp_target,
 					 &host->target_list, list) {
 			spin_lock_irqsave(target->scsi_host->host_lock, flags);
@@ -1648,7 +1716,7 @@ static void srp_remove_one(struct ib_device *device)
 				target->state = SRP_TARGET_REMOVED;
 			spin_unlock_irqrestore(target->scsi_host->host_lock, flags);
 		}
-		up(&host->target_mutex);
+		mutex_unlock(&host->target_mutex);
 
 		/*
 		 * Wait for any reconnection tasks that may have

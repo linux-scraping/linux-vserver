@@ -180,7 +180,7 @@
 #define __NR_sched_get_affinity 161 /* Linux specific, getfh under SunOS           */
 #define __NR_getdomainname      162 /* SunOS Specific                              */
 #define __NR_setdomainname      163 /* Common                                      */
-/* #define __NR_ni_syscall	164    ENOSYS under SunOS			   */
+/* #define __NR_utrap_install   164    Linux sparc64 specific			   */
 #define __NR_quotactl           165 /* Common                                      */
 #define __NR_set_tid_address    166 /* Linux specific, exportfs under SunOS        */
 #define __NR_mount              167 /* Common                                      */
@@ -248,7 +248,7 @@
 #define __NR_setfsgid           229 /* Linux Specific                              */
 #define __NR__newselect         230 /* Linux Specific                              */
 #define __NR_time               231 /* Linux Specific                              */
-/* #define __NR_oldstat         232    Linux Specific                              */
+#define __NR_sys_splice         232 /* Linux Specific                              */
 #define __NR_stime              233 /* Linux Specific                              */
 #define __NR_statfs64           234 /* Linux Specific                              */
 #define __NR_fstatfs64          235 /* Linux Specific                              */
@@ -271,7 +271,7 @@
 #define __NR_getsid             252
 #define __NR_fdatasync          253
 #define __NR_nfsservctl         254
-#define __NR_aplib              255
+#define __NR_sys_sync_file_range 255
 #define __NR_clock_settime	256
 #define __NR_clock_gettime	257
 #define __NR_clock_getres	258
@@ -300,11 +300,27 @@
 #define __NR_add_key		281
 #define __NR_request_key	282
 #define __NR_keyctl		283
+#define __NR_openat		284
+#define __NR_mkdirat		285
+#define __NR_mknodat		286
+#define __NR_fchownat		287
+#define __NR_futimesat		288
+#define __NR_fstatat64		289
+#define __NR_unlinkat		290
+#define __NR_renameat		291
+#define __NR_linkat		292
+#define __NR_symlinkat		293
+#define __NR_readlinkat		294
+#define __NR_fchmodat		295
+#define __NR_faccessat		296
+#define __NR_pselect6		297
+#define __NR_ppoll		298
+#define __NR_unshare		299
 
-/* WARNING: You MAY NOT add syscall numbers larger than 283, since
+/* WARNING: You MAY NOT add syscall numbers larger than 299, since
  *          all of the syscall tables in the Sparc kernel are
- *          sized to have 283 entries (starting at zero).  Therefore
- *          find a free slot in the 0-282 range.
+ *          sized to have 299 entries (starting at zero).  Therefore
+ *          find a free slot in the 0-299 range.
  */
 
 #define _syscall0(type,name) \
@@ -458,6 +474,7 @@ return -1; \
 #define __ARCH_WANT_SYS_OLDUMOUNT
 #define __ARCH_WANT_SYS_SIGPENDING
 #define __ARCH_WANT_SYS_SIGPROCMASK
+#define __ARCH_WANT_SYS_RT_SIGSUSPEND
 #endif
 
 #ifdef __KERNEL_SYSCALLS__

@@ -1,6 +1,4 @@
 /*
- * arch/ppc/platforms/4xx/ibm440sp.c
- *
  * PPC440SP I/O descriptions
  *
  * Matt Porter <mporter@kernel.crashing.org>
@@ -31,7 +29,6 @@ static struct ocp_func_emac_data ibm440sp_emac0_def = {
 	.wol_irq        = 61,  		/* WOL interrupt number */
 	.mdio_idx       = -1,           /* No shared MDIO */
 	.tah_idx	= -1,		/* No TAH */
-	.jumbo		= 1,		/* Jumbo frames supported */
 };
 OCP_SYSFS_EMAC_DATA()
 

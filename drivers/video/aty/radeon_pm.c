@@ -20,7 +20,7 @@
 #include <linux/agp_backend.h>
 
 #ifdef CONFIG_PPC_PMAC
-#include <asm/processor.h>
+#include <asm/machdep.h>
 #include <asm/prom.h>
 #include <asm/pmac_feature.h>
 #endif
@@ -1321,8 +1321,6 @@ static void radeon_pm_full_reset_sdram(struct radeonfb_info *rinfo)
 	mdelay( 15);
 }
 
-#ifdef CONFIG_PPC_OF
-
 static void radeon_pm_reset_pad_ctlr_strength(struct radeonfb_info *rinfo)
 {
 	u32 tmp, tmp2;
@@ -1836,6 +1834,8 @@ static void radeon_reinitialize_M10(struct radeonfb_info *rinfo)
 	radeon_pm_m10_enable_lvds_spread_spectrum(rinfo);
 }
 
+#ifdef CONFIG_PPC_OF
+
 static void radeon_pm_m9p_reconfigure_mc(struct radeonfb_info *rinfo)
 {
 	OUTREG(MC_CNTL, rinfo->save_regs[46]);
@@ -2080,7 +2080,7 @@ static void radeon_reinitialize_M9P(struct radeonfb_info *rinfo)
 	OUTREG(0x2ec, 0x6332a3f0);
 	mdelay(17);
 
-	OUTPLL(pllPPLL_REF_DIV, rinfo->pll.ref_div);;
+	OUTPLL(pllPPLL_REF_DIV, rinfo->pll.ref_div);
 	OUTPLL(pllPPLL_DIV_0, rinfo->save_regs[92]);
 
 	mdelay(40);
@@ -2728,14 +2728,24 @@ void radeonfb_pm_init(struct radeonfb_info *rinfo, int dynclk)
 		printk("radeonfb: Dynamic Clock Power Management disabled\n");
 	}
 
+#if defined(CONFIG_PM)
 	/* Check if we can power manage on suspend/resume. We can do
 	 * D2 on M6, M7 and M9, and we can resume from D3 cold a few other
 	 * "Mac" cards, but that's all. We need more infos about what the
 	 * BIOS does tho. Right now, all this PM stuff is pmac-only for that
 	 * reason. --BenH
 	 */
-#if defined(CONFIG_PM) && defined(CONFIG_PPC_OF)
-	if (_machine == _MACH_Pmac && rinfo->of_node) {
+	/* Special case for Samsung P35 laptops
+	 */
+	if ((rinfo->pdev->vendor == PCI_VENDOR_ID_ATI) &&
+	    (rinfo->pdev->device == PCI_CHIP_RV350_NP) &&
+	    (rinfo->pdev->subsystem_vendor == PCI_VENDOR_ID_SAMSUNG) &&
+	    (rinfo->pdev->subsystem_device == 0xc00c)) {
+		rinfo->reinit_func = radeon_reinitialize_M10;
+		rinfo->pm_mode |= radeon_pm_off;
+	}
+#if defined(CONFIG_PPC_PMAC)
+	if (machine_is(powermac) && rinfo->of_node) {
 		if (rinfo->is_mobility && rinfo->pm_reg &&
 		    rinfo->family <= CHIP_FAMILY_RV250)
 			rinfo->pm_mode |= radeon_pm_d2;
@@ -2778,12 +2788,13 @@ void radeonfb_pm_init(struct radeonfb_info *rinfo, int dynclk)
 		OUTREG(TV_DAC_CNTL, INREG(TV_DAC_CNTL) | 0x07000000);
 #endif
 	}
-#endif /* defined(CONFIG_PM) && defined(CONFIG_PPC_OF) */
+#endif /* defined(CONFIG_PPC_PMAC) */
+#endif /* defined(CONFIG_PM) */
 }
 
 void radeonfb_pm_exit(struct radeonfb_info *rinfo)
 {
-#if defined(CONFIG_PM) && defined(CONFIG_PPC_OF)
+#if defined(CONFIG_PM) && defined(CONFIG_PPC_PMAC)
 	if (rinfo->pm_mode != radeon_pm_none)
 		pmac_set_early_video_resume(NULL, NULL);
 #endif

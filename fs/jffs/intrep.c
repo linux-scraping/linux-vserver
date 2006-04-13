@@ -62,7 +62,7 @@
 #include <linux/fs.h>
 #include <linux/stat.h>
 #include <linux/pagemap.h>
-#include <asm/semaphore.h>
+#include <linux/mutex.h>
 #include <asm/byteorder.h>
 #include <linux/smp_lock.h>
 #include <linux/time.h>
@@ -1965,7 +1965,7 @@ retry:
 		iovec_cnt++;
 
 		if (JFFS_GET_PAD_BYTES(raw_inode->nsize)) {
-			static char allff[3]={255,255,255};
+			static unsigned char allff[3]={255,255,255};
 			/* Add some extra padding if necessary */
 			node_iovec[iovec_cnt].iov_base = allff;
 			node_iovec[iovec_cnt].iov_len =
@@ -3416,7 +3416,7 @@ jffs_garbage_collect_thread(void *ptr)
 		D1(printk (KERN_NOTICE "jffs_garbage_collect_thread(): collecting.\n"));
 
 		D3(printk (KERN_NOTICE "g_c_thread(): down biglock\n"));
-		down(&fmc->biglock);
+		mutex_lock(&fmc->biglock);
 		
 		D1(printk("***jffs_garbage_collect_thread(): round #%u, "
 			  "fmc->dirty_size = %u\n", i++, fmc->dirty_size));
@@ -3447,6 +3447,6 @@ jffs_garbage_collect_thread(void *ptr)
 		
 	gc_end:
 		D3(printk (KERN_NOTICE "g_c_thread(): up biglock\n"));
-		up(&fmc->biglock);
+		mutex_unlock(&fmc->biglock);
 	} /* for (;;) */
 } /* jffs_garbage_collect_thread() */

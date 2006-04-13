@@ -47,8 +47,11 @@ struct bus_type {
 	struct driver_attribute	* drv_attrs;
 
 	int		(*match)(struct device * dev, struct device_driver * drv);
-	int		(*hotplug) (struct device *dev, char **envp, 
-				    int num_envp, char *buffer, int buffer_size);
+	int		(*uevent)(struct device *dev, char **envp,
+				  int num_envp, char *buffer, int buffer_size);
+	int		(*probe)(struct device * dev);
+	int		(*remove)(struct device * dev);
+	void		(*shutdown)(struct device * dev);
 	int		(*suspend)(struct device * dev, pm_message_t state);
 	int		(*resume)(struct device * dev);
 };
@@ -151,7 +154,7 @@ struct class {
 	struct class_attribute		* class_attrs;
 	struct class_device_attribute	* class_dev_attrs;
 
-	int	(*hotplug)(struct class_device *dev, char **envp, 
+	int	(*uevent)(struct class_device *dev, char **envp,
 			   int num_envp, char *buffer, int buffer_size);
 
 	void	(*release)(struct class_device *dev);
@@ -209,9 +212,9 @@ extern int class_device_create_file(struct class_device *,
  * set, this will be called instead of the class specific release function.
  * Only use this if you want to override the default release function, like
  * when you are nesting class_device structures.
- * @hotplug: pointer to a hotplug function for this struct class_device.  If
- * set, this will be called instead of the class specific hotplug function.
- * Only use this if you want to override the default hotplug function, like
+ * @uevent: pointer to a uevent function for this struct class_device.  If
+ * set, this will be called instead of the class specific uevent function.
+ * Only use this if you want to override the default uevent function, like
  * when you are nesting class_device structures.
  */
 struct class_device {
@@ -227,7 +230,7 @@ struct class_device {
 	struct class_device	*parent;	/* parent of this child device, if there is one */
 
 	void	(*release)(struct class_device *dev);
-	int	(*hotplug)(struct class_device *dev, char **envp,
+	int	(*uevent)(struct class_device *dev, char **envp,
 			   int num_envp, char *buffer, int buffer_size);
 	char	class_id[BUS_ID_SIZE];	/* unique to this class */
 };
@@ -375,6 +378,7 @@ extern void device_bind_driver(struct device * dev);
 extern void device_release_driver(struct device * dev);
 extern int  device_attach(struct device * dev);
 extern void driver_attach(struct device_driver * drv);
+extern void device_reprobe(struct device *dev);
 
 
 /*
@@ -396,7 +400,7 @@ extern struct device * get_device(struct device * dev);
 extern void put_device(struct device * dev);
 
 
-/* drivers/base/power.c */
+/* drivers/base/power/shutdown.c */
 extern void device_shutdown(void);
 
 
@@ -421,6 +425,8 @@ extern void firmware_unregister(struct subsystem *);
 	dev_printk(KERN_INFO , dev , format , ## arg)
 #define dev_warn(dev, format, arg...)		\
 	dev_printk(KERN_WARNING , dev , format , ## arg)
+#define dev_notice(dev, format, arg...)		\
+	dev_printk(KERN_NOTICE , dev , format , ## arg)
 
 /* Create alias, so I can be autoloaded. */
 #define MODULE_ALIAS_CHARDEV(major,minor) \

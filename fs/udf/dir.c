@@ -4,11 +4,6 @@
  * PURPOSE
  *  Directory handling routines for the OSTA-UDF(tm) filesystem.
  *
- * CONTACTS
- *	E-mail regarding any portion of the Linux UDF file system should be
- *	directed to the development team mailing list (run by majordomo):
- *		linux_udf@hpesjro.fc.hp.com
- *
  * COPYRIGHT
  *	This file is distributed under the terms of the GNU General Public
  *	License (GPL). Copies of the GPL can be obtained from:
@@ -47,7 +42,7 @@ static int do_udf_readdir(struct inode *, struct file *, filldir_t, void *);
 
 /* readdir and lookup functions */
 
-struct file_operations udf_dir_operations = {
+const struct file_operations udf_dir_operations = {
 	.read			= generic_read_dir,
 	.readdir		= udf_readdir,
 	.ioctl			= udf_ioctl,

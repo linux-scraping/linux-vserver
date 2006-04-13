@@ -238,8 +238,8 @@ static void pcie_device_init(struct pci_dev *parent, struct pcie_device *dev,
 	device->driver = NULL;
 	device->driver_data = NULL;
 	device->release = release_pcie_device;	/* callback to free pcie dev */
-	sprintf(&device->bus_id[0], "pcie%02x",
-		get_descriptor_id(port_type, service_type));
+	snprintf(device->bus_id, sizeof(device->bus_id), "%s:pcie%02x",
+		 pci_name(parent), get_descriptor_id(port_type, service_type));
 	device->parent = &parent->dev;
 }
 
@@ -248,11 +248,10 @@ static struct pcie_device* alloc_pcie_device(struct pci_dev *parent,
 {
 	struct pcie_device *device;
 
-	device = kmalloc(sizeof(struct pcie_device), GFP_KERNEL);
+	device = kzalloc(sizeof(struct pcie_device), GFP_KERNEL);
 	if (!device)
 		return NULL;
 
-	memset(device, 0, sizeof(struct pcie_device));
 	pcie_device_init(parent, device, port_type, service_type, irq,irq_mode);
 	printk(KERN_DEBUG "Allocate Port Service[%s]\n", device->device.bus_id);
 	return device;

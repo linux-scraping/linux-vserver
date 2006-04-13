@@ -81,7 +81,7 @@ static int init_inodecache(void)
 {
 	efs_inode_cachep = kmem_cache_create("efs_inode_cache",
 				sizeof(struct efs_inode_info),
-				0, SLAB_RECLAIM_ACCOUNT,
+				0, SLAB_RECLAIM_ACCOUNT|SLAB_MEM_SPREAD,
 				init_once, NULL);
 	if (efs_inode_cachep == NULL)
 		return -ENOMEM;
@@ -222,12 +222,13 @@ static efs_block_t efs_validate_vh(struct volume_header *vh) {
 			sblock);
 #endif
 	}
-	return(sblock);
+	return sblock;
 }
 
 static int efs_validate_super(struct efs_sb_info *sb, struct efs_super *super) {
 
-	if (!IS_EFS_MAGIC(be32_to_cpu(super->fs_magic))) return -1;
+	if (!IS_EFS_MAGIC(be32_to_cpu(super->fs_magic)))
+		return -1;
 
 	sb->fs_magic     = be32_to_cpu(super->fs_magic);
 	sb->total_blocks = be32_to_cpu(super->fs_size);

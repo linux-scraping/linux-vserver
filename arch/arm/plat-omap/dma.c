@@ -64,7 +64,7 @@ static int dma_chan_count;
 static spinlock_t dma_chan_lock;
 static struct omap_dma_lch dma_chan[OMAP_LOGICAL_DMA_CH_COUNT];
 
-const static u8 omap1_dma_irq[OMAP_LOGICAL_DMA_CH_COUNT] = {
+static const u8 omap1_dma_irq[OMAP_LOGICAL_DMA_CH_COUNT] = {
 	INT_DMA_CH0_6, INT_DMA_CH1_7, INT_DMA_CH2_8, INT_DMA_CH3,
 	INT_DMA_CH4, INT_DMA_CH5, INT_1610_DMA_CH6, INT_1610_DMA_CH7,
 	INT_1610_DMA_CH8, INT_1610_DMA_CH9, INT_1610_DMA_CH10,
@@ -1258,6 +1258,11 @@ void omap_stop_lcd_dma(void)
 	omap_writew(w, OMAP1610_DMA_LCD_CTRL);
 }
 
+int omap_lcd_dma_ext_running(void)
+{
+	return lcd_dma.ext_ctrl && lcd_dma.active;
+}
+
 /*----------------------------------------------------------------------------*/
 
 static int __init omap_init_dma(void)
@@ -1389,6 +1394,7 @@ EXPORT_SYMBOL(omap_free_lcd_dma);
 EXPORT_SYMBOL(omap_enable_lcd_dma);
 EXPORT_SYMBOL(omap_setup_lcd_dma);
 EXPORT_SYMBOL(omap_stop_lcd_dma);
+EXPORT_SYMBOL(omap_lcd_dma_ext_running);
 EXPORT_SYMBOL(omap_set_lcd_dma_b1);
 EXPORT_SYMBOL(omap_set_lcd_dma_single_transfer);
 EXPORT_SYMBOL(omap_set_lcd_dma_ext_controller);

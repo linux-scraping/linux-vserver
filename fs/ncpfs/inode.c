@@ -63,7 +63,7 @@ static void init_once(void * foo, kmem_cache_t * cachep, unsigned long flags)
 
 	if ((flags & (SLAB_CTOR_VERIFY|SLAB_CTOR_CONSTRUCTOR)) ==
 	    SLAB_CTOR_CONSTRUCTOR) {
-		init_MUTEX(&ei->open_sem);
+		mutex_init(&ei->open_mutex);
 		inode_init_once(&ei->vfs_inode);
 	}
 }
@@ -72,7 +72,8 @@ static int init_inodecache(void)
 {
 	ncp_inode_cachep = kmem_cache_create("ncp_inode_cache",
 					     sizeof(struct ncp_inode_info),
-					     0, SLAB_RECLAIM_ACCOUNT,
+					     0, (SLAB_RECLAIM_ACCOUNT|
+						SLAB_MEM_SPREAD),
 					     init_once, NULL);
 	if (ncp_inode_cachep == NULL)
 		return -ENOMEM;
@@ -520,7 +521,7 @@ static int ncp_fill_super(struct super_block *sb, void *raw_data, int silent)
 	}
 
 /*	server->lock = 0;	*/
-	init_MUTEX(&server->sem);
+	mutex_init(&server->mutex);
 	server->packet = NULL;
 /*	server->buffer_size = 0;	*/
 /*	server->conn_status = 0;	*/
@@ -557,7 +558,7 @@ static int ncp_fill_super(struct super_block *sb, void *raw_data, int silent)
 	server->dentry_ttl = 0;	/* no caching */
 
 	INIT_LIST_HEAD(&server->tx.requests);
-	init_MUTEX(&server->rcv.creq_sem);
+	mutex_init(&server->rcv.creq_mutex);
 	server->tx.creq		= NULL;
 	server->rcv.creq	= NULL;
 	server->data_ready	= sock->sk->sk_data_ready;
@@ -716,10 +717,8 @@ static void ncp_put_super(struct super_block *sb)
 	fput(server->ncp_filp);
 	kill_proc(server->m.wdog_pid, SIGTERM, 1);
 
-	if (server->priv.data) 
-		ncp_kfree_s(server->priv.data, server->priv.len);
-	if (server->auth.object_name)
-		ncp_kfree_s(server->auth.object_name, server->auth.object_name_len);
+	kfree(server->priv.data);
+	kfree(server->auth.object_name);
 	vfree(server->packet);
 	sb->s_fs_info = NULL;
 	kfree(server);
@@ -958,11 +957,6 @@ out:
 	return result;
 }
 
-#ifdef DEBUG_NCP_MALLOC
-int ncp_malloced;
-int ncp_current_malloced;
-#endif
-
 static struct super_block *ncp_get_sb(struct file_system_type *fs_type,
 	int flags, const char *dev_name, void *data)
 {
@@ -981,10 +975,6 @@ static int __init init_ncp_fs(void)
 	int err;
 	DPRINTK("ncpfs: init_module called\n");
 
-#ifdef DEBUG_NCP_MALLOC
-	ncp_malloced = 0;
-	ncp_current_malloced = 0;
-#endif
 	err = init_inodecache();
 	if (err)
 		goto out1;
@@ -1003,10 +993,6 @@ static void __exit exit_ncp_fs(void)
 	DPRINTK("ncpfs: cleanup_module called\n");
 	unregister_filesystem(&ncp_fs_type);
 	destroy_inodecache();
-#ifdef DEBUG_NCP_MALLOC
-	PRINTK("ncp_malloced: %d\n", ncp_malloced);
-	PRINTK("ncp_current_malloced: %d\n", ncp_current_malloced);
-#endif
 }
 
 module_init(init_ncp_fs)

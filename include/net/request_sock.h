@@ -145,7 +145,7 @@ static inline struct request_sock *
 {
 	struct request_sock *req = queue->rskq_accept_head;
 
-	queue->rskq_accept_head = queue->rskq_accept_head = NULL;
+	queue->rskq_accept_head = NULL;
 	return req;
 }
 
@@ -244,7 +244,7 @@ static inline int reqsk_queue_is_full(const struct request_sock_queue *queue)
 
 static inline void reqsk_queue_hash_req(struct request_sock_queue *queue,
 					u32 hash, struct request_sock *req,
-					unsigned timeout)
+					unsigned long timeout)
 {
 	struct listen_sock *lopt = queue->listen_opt;
 

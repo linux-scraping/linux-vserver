@@ -18,11 +18,13 @@
  *
  */
 
+#include <linux/in.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/netfilter.h>
 #include <linux/ip.h>
 #include <linux/moduleparam.h>
+#include <linux/udp.h>
 #include <net/checksum.h>
 #include <net/udp.h>
 
@@ -34,7 +36,7 @@ static unsigned int master_timeout = 300;
 MODULE_AUTHOR("Brian J. Murrell <netfilter@interlinx.bc.ca>");
 MODULE_DESCRIPTION("Amanda connection tracking module");
 MODULE_LICENSE("GPL");
-module_param(master_timeout, int, 0600);
+module_param(master_timeout, uint, 0600);
 MODULE_PARM_DESC(master_timeout, "timeout for the master connection");
 
 static const char *conns[] = { "DATA ", "MESG ", "INDEX " };
@@ -151,13 +153,13 @@ static struct ip_conntrack_helper amanda_helper = {
 	},
 };
 
-static void __exit fini(void)
+static void __exit ip_conntrack_amanda_fini(void)
 {
 	ip_conntrack_helper_unregister(&amanda_helper);
 	kfree(amanda_buffer);
 }
 
-static int __init init(void)
+static int __init ip_conntrack_amanda_init(void)
 {
 	int ret;
 
@@ -175,5 +177,5 @@ static int __init init(void)
 
 }
 
-module_init(init);
-module_exit(fini);
+module_init(ip_conntrack_amanda_init);
+module_exit(ip_conntrack_amanda_fini);

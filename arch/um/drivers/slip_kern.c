@@ -21,13 +21,14 @@ void slip_init(struct net_device *dev, void *data)
 
 	private = dev->priv;
 	spri = (struct slip_data *) private->user;
-	*spri = ((struct slip_data)
-		{ .name 	= { '\0' },
-		  .addr		= NULL,
-		  .gate_addr 	= init->gate_addr,
-		  .slave  	= -1,
-		  .slip		= SLIP_PROTO_INIT,
-		  .dev 		= dev });
+
+	memset(spri->name, 0, sizeof(spri->name));
+	spri->addr = NULL;
+	spri->gate_addr = init->gate_addr;
+	spri->slave = -1;
+	spri->dev = dev;
+
+	slip_proto_init(&spri->slip);
 
 	dev->init = NULL;
 	dev->header_cache_update = NULL;
@@ -92,18 +93,7 @@ static struct transport slip_transport = {
 static int register_slip(void)
 {
 	register_transport(&slip_transport);
-	return(1);
+	return 0;
 }
 
 __initcall(register_slip);
-
-/*
- * Overrides for Emacs so that we follow Linus's tabbing style.
- * Emacs will notice this stuff at the end of the file and automatically
- * adjust the settings for this buffer only.  This must remain at the end
- * of the file.
- * ---------------------------------------------------------------------------
- * Local variables:
- * c-file-style: "linux"
- * End:
- */

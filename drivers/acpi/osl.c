@@ -156,12 +156,10 @@ acpi_status acpi_os_get_root_pointer(u32 flags, struct acpi_pointer *addr)
 {
 	if (efi_enabled) {
 		addr->pointer_type = ACPI_PHYSICAL_POINTER;
-		if (efi.acpi20)
-			addr->pointer.physical =
-			    (acpi_physical_address) virt_to_phys(efi.acpi20);
-		else if (efi.acpi)
-			addr->pointer.physical =
-			    (acpi_physical_address) virt_to_phys(efi.acpi);
+		if (efi.acpi20 != EFI_INVALID_TABLE_ADDR)
+			addr->pointer.physical = efi.acpi20;
+		else if (efi.acpi != EFI_INVALID_TABLE_ADDR)
+			addr->pointer.physical = efi.acpi;
 		else {
 			printk(KERN_ERR PREFIX
 			       "System description tables not found\n");
@@ -182,33 +180,27 @@ acpi_status
 acpi_os_map_memory(acpi_physical_address phys, acpi_size size,
 		   void __iomem ** virt)
 {
-	if (efi_enabled) {
-		if (EFI_MEMORY_WB & efi_mem_attributes(phys)) {
-			*virt = (void __iomem *)phys_to_virt(phys);
-		} else {
-			*virt = ioremap(phys, size);
-		}
-	} else {
-		if (phys > ULONG_MAX) {
-			printk(KERN_ERR PREFIX "Cannot map memory that high\n");
-			return AE_BAD_PARAMETER;
-		}
-		/*
-		 * ioremap checks to ensure this is in reserved space
-		 */
-		*virt = ioremap((unsigned long)phys, size);
+	if (phys > ULONG_MAX) {
+		printk(KERN_ERR PREFIX "Cannot map memory that high\n");
+		return AE_BAD_PARAMETER;
 	}
+	/*
+	 * ioremap checks to ensure this is in reserved space
+	 */
+	*virt = ioremap((unsigned long)phys, size);
 
 	if (!*virt)
 		return AE_NO_MEMORY;
 
 	return AE_OK;
 }
+EXPORT_SYMBOL_GPL(acpi_os_map_memory);
 
 void acpi_os_unmap_memory(void __iomem * virt, acpi_size size)
 {
 	iounmap(virt);
 }
+EXPORT_SYMBOL_GPL(acpi_os_unmap_memory);
 
 #ifdef ACPI_FUTURE_USAGE
 acpi_status
@@ -407,18 +399,8 @@ acpi_os_read_memory(acpi_physical_address phys_addr, u32 * value, u32 width)
 {
 	u32 dummy;
 	void __iomem *virt_addr;
-	int iomem = 0;
 
-	if (efi_enabled) {
-		if (EFI_MEMORY_WB & efi_mem_attributes(phys_addr)) {
-			/* HACK ALERT! We can use readb/w/l on real memory too.. */
-			virt_addr = (void __iomem *)phys_to_virt(phys_addr);
-		} else {
-			iomem = 1;
-			virt_addr = ioremap(phys_addr, width);
-		}
-	} else
-		virt_addr = (void __iomem *)phys_to_virt(phys_addr);
+	virt_addr = ioremap(phys_addr, width);
 	if (!value)
 		value = &dummy;
 
@@ -436,10 +418,7 @@ acpi_os_read_memory(acpi_physical_address phys_addr, u32 * value, u32 width)
 		BUG();
 	}
 
-	if (efi_enabled) {
-		if (iomem)
-			iounmap(virt_addr);
-	}
+	iounmap(virt_addr);
 
 	return AE_OK;
 }
@@ -448,18 +427,8 @@ acpi_status
 acpi_os_write_memory(acpi_physical_address phys_addr, u32 value, u32 width)
 {
 	void __iomem *virt_addr;
-	int iomem = 0;
 
-	if (efi_enabled) {
-		if (EFI_MEMORY_WB & efi_mem_attributes(phys_addr)) {
-			/* HACK ALERT! We can use writeb/w/l on real memory too */
-			virt_addr = (void __iomem *)phys_to_virt(phys_addr);
-		} else {
-			iomem = 1;
-			virt_addr = ioremap(phys_addr, width);
-		}
-	} else
-		virt_addr = (void __iomem *)phys_to_virt(phys_addr);
+	virt_addr = ioremap(phys_addr, width);
 
 	switch (width) {
 	case 8:
@@ -475,8 +444,7 @@ acpi_os_write_memory(acpi_physical_address phys_addr, u32 value, u32 width)
 		BUG();
 	}
 
-	if (iomem)
-		iounmap(virt_addr);
+	iounmap(virt_addr);
 
 	return AE_OK;
 }
@@ -836,7 +804,7 @@ acpi_status acpi_os_wait_semaphore(acpi_handle handle, u32 units, u16 timeout)
 			static const int quantum_ms = 1000 / HZ;
 
 			ret = down_trylock(sem);
-			for (i = timeout; (i > 0 && ret < 0); i -= quantum_ms) {
+			for (i = timeout; (i > 0 && ret != 0); i -= quantum_ms) {
 				schedule_timeout_interruptible(1);
 				ret = down_trylock(sem);
 			}
@@ -1058,13 +1026,11 @@ EXPORT_SYMBOL(max_cstate);
  * Acquire a spinlock.
  *
  * handle is a pointer to the spinlock_t.
- * flags is *not* the result of save_flags - it is an ACPI-specific flag variable
- *   that indicates whether we are at interrupt level.
  */
 
-unsigned long acpi_os_acquire_lock(acpi_handle handle)
+acpi_cpu_flags acpi_os_acquire_lock(acpi_handle handle)
 {
-	unsigned long flags;
+	acpi_cpu_flags flags;
 	spin_lock_irqsave((spinlock_t *) handle, flags);
 	return flags;
 }
@@ -1073,7 +1039,7 @@ unsigned long acpi_os_acquire_lock(acpi_handle handle)
  * Release a spinlock. See above.
  */
 
-void acpi_os_release_lock(acpi_handle handle, unsigned long flags)
+void acpi_os_release_lock(acpi_handle handle, acpi_cpu_flags flags)
 {
 	spin_unlock_irqrestore((spinlock_t *) handle, flags);
 }

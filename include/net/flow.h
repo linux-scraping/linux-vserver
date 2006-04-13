@@ -30,8 +30,8 @@ struct flowi {
 		} ip6_u;
 
 		struct {
-			__u16			daddr;
-			__u16			saddr;
+			__le16			daddr;
+			__le16			saddr;
 			__u32			fwmark;
 			__u8			scope;
 		} dn_u;
@@ -64,8 +64,8 @@ struct flowi {
 		} icmpt;
 
 		struct {
-			__u16	sport;
-			__u16	dport;
+			__le16	sport;
+			__le16	dport;
 			__u8	objnum;
 			__u8	objnamel; /* Not 16 bits since max val is 16 */
 			__u8	objname[16]; /* Not zero terminated */
@@ -84,11 +84,12 @@ struct flowi {
 #define FLOW_DIR_OUT	1
 #define FLOW_DIR_FWD	2
 
-typedef void (*flow_resolve_t)(struct flowi *key, u16 family, u8 dir,
+struct sock;
+typedef void (*flow_resolve_t)(struct flowi *key, u32 sk_sid, u16 family, u8 dir,
 			       void **objp, atomic_t **obj_refp);
 
-extern void *flow_cache_lookup(struct flowi *key, u16 family, u8 dir,
-			       flow_resolve_t resolver);
+extern void *flow_cache_lookup(struct flowi *key, u32 sk_sid, u16 family, u8 dir,
+	 		       flow_resolve_t resolver);
 extern void flow_cache_flush(void);
 extern atomic_t flow_cache_genid;
 

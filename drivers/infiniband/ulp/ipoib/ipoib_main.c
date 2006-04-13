@@ -47,6 +47,8 @@
 #include <linux/ip.h>
 #include <linux/in.h>
 
+#include <net/dst.h>
+
 MODULE_AUTHOR("Roland Dreier");
 MODULE_DESCRIPTION("IP-over-InfiniBand net driver");
 MODULE_LICENSE("Dual BSD/GPL");
@@ -103,7 +105,7 @@ int ipoib_open(struct net_device *dev)
 		struct ipoib_dev_priv *cpriv;
 
 		/* Bring up any child interfaces too */
-		down(&priv->vlan_mutex);
+		mutex_lock(&priv->vlan_mutex);
 		list_for_each_entry(cpriv, &priv->child_intfs, list) {
 			int flags;
 
@@ -113,7 +115,7 @@ int ipoib_open(struct net_device *dev)
 
 			dev_change_flags(cpriv->dev, flags | IFF_UP);
 		}
-		up(&priv->vlan_mutex);
+		mutex_unlock(&priv->vlan_mutex);
 	}
 
 	netif_start_queue(dev);
@@ -131,14 +133,20 @@ static int ipoib_stop(struct net_device *dev)
 
 	netif_stop_queue(dev);
 
-	ipoib_ib_dev_down(dev);
+	/*
+	 * Now flush workqueue to make sure a scheduled task doesn't
+	 * bring our internal state back up.
+	 */
+	flush_workqueue(ipoib_workqueue);
+
+	ipoib_ib_dev_down(dev, 1);
 	ipoib_ib_dev_stop(dev);
 
 	if (!test_bit(IPOIB_FLAG_SUBINTERFACE, &priv->flags)) {
 		struct ipoib_dev_priv *cpriv;
 
 		/* Bring down any child interfaces too */
-		down(&priv->vlan_mutex);
+		mutex_lock(&priv->vlan_mutex);
 		list_for_each_entry(cpriv, &priv->child_intfs, list) {
 			int flags;
 
@@ -148,7 +156,7 @@ static int ipoib_stop(struct net_device *dev)
 
 			dev_change_flags(cpriv->dev, flags & ~IFF_UP);
 		}
-		up(&priv->vlan_mutex);
+		mutex_unlock(&priv->vlan_mutex);
 	}
 
 	return 0;
@@ -245,7 +253,6 @@ static void path_free(struct net_device *dev, struct ipoib_path *path)
 		if (neigh->ah)
 			ipoib_put_ah(neigh->ah);
 		*to_ipoib_neigh(neigh->neighbour) = NULL;
-		neigh->neighbour->ops->destructor = NULL;
 		kfree(neigh);
 	}
 
@@ -503,7 +510,7 @@ static void neigh_add_path(struct sk_buff *skb, struct net_device *dev)
 
 	list_add_tail(&neigh->list, &path->neigh_list);
 
-	if (path->pathrec.dlid) {
+	if (path->ah) {
 		kref_get(&path->ah->ref);
 		neigh->ah = path->ah;
 
@@ -511,12 +518,7 @@ static void neigh_add_path(struct sk_buff *skb, struct net_device *dev)
 			   be32_to_cpup((__be32 *) skb->dst->neighbour->ha));
 	} else {
 		neigh->ah  = NULL;
-		if (skb_queue_len(&neigh->queue) < IPOIB_MAX_PATH_REC_QUEUE) {
-			__skb_queue_tail(&neigh->queue, skb);
-		} else {
-			++priv->stats.tx_dropped;
-			dev_kfree_skb_any(skb);
-		}
+		__skb_queue_tail(&neigh->queue, skb);
 
 		if (!path->query && path_rec_start(dev, path))
 			goto err;
@@ -528,7 +530,6 @@ static void neigh_add_path(struct sk_buff *skb, struct net_device *dev)
 err:
 	*to_ipoib_neigh(skb->dst->neighbour) = NULL;
 	list_del(&neigh->list);
-	neigh->neighbour->ops->destructor = NULL;
 	kfree(neigh);
 
 	++priv->stats.tx_dropped;
@@ -589,7 +590,7 @@ static void unicast_arp_send(struct sk_buff *skb, struct net_device *dev,
 		return;
 	}
 
-	if (path->pathrec.dlid) {
+	if (path->ah) {
 		ipoib_dbg(priv, "Send unicast ARP to %04x\n",
 			  be16_to_cpu(path->pathrec.dlid));
 
@@ -722,7 +723,7 @@ static int ipoib_hard_header(struct sk_buff *skb,
 	 * destination address onto the front of the skb so we can
 	 * figure out where to send the packet later.
 	 */
-	if (!skb->dst || !skb->dst->neighbour) {
+	if ((!skb->dst || !skb->dst->neighbour) && daddr) {
 		struct ipoib_pseudoheader *phdr =
 			(struct ipoib_pseudoheader *) skb_push(skb, sizeof *phdr);
 		memcpy(phdr->hwaddr, daddr, INFINIBAND_ALEN);
@@ -734,6 +735,11 @@ static int ipoib_hard_header(struct sk_buff *skb,
 static void ipoib_set_mcast_list(struct net_device *dev)
 {
 	struct ipoib_dev_priv *priv = netdev_priv(dev);
+
+	if (!test_bit(IPOIB_FLAG_OPER_UP, &priv->flags)) {
+		ipoib_dbg(priv, "IPOIB_FLAG_OPER_UP not set");
+		return;
+	}
 
 	queue_work(ipoib_workqueue, &priv->restart_task);
 }
@@ -767,21 +773,9 @@ static void ipoib_neigh_destructor(struct neighbour *n)
 		ipoib_put_ah(ah);
 }
 
-static int ipoib_neigh_setup(struct neighbour *neigh)
-{
-	/*
-	 * Is this kosher?  I can't find anybody in the kernel that
-	 * sets neigh->destructor, so we should be able to set it here
-	 * without trouble.
-	 */
-	neigh->ops->destructor = ipoib_neigh_destructor;
-
-	return 0;
-}
-
 static int ipoib_neigh_setup_dev(struct net_device *dev, struct neigh_parms *parms)
 {
-	parms->neigh_setup = ipoib_neigh_setup;
+	parms->neigh_destructor = ipoib_neigh_destructor;
 
 	return 0;
 }
@@ -890,8 +884,8 @@ static void ipoib_setup(struct net_device *dev)
 	spin_lock_init(&priv->lock);
 	spin_lock_init(&priv->tx_lock);
 
-	init_MUTEX(&priv->mcast_mutex);
-	init_MUTEX(&priv->vlan_mutex);
+	mutex_init(&priv->mcast_mutex);
+	mutex_init(&priv->vlan_mutex);
 
 	INIT_LIST_HEAD(&priv->path_list);
 	INIT_LIST_HEAD(&priv->child_intfs);

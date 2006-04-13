@@ -40,7 +40,6 @@
 #include <asm/unistd.h>
 
 extern struct hwrpb_struct *hwrpb;
-extern void dump_thread(struct pt_regs *, struct user *);
 extern spinlock_t rtc_lock;
 
 /* these are C runtime functions with special calling conventions: */
@@ -175,7 +174,6 @@ EXPORT_SYMBOL(up);
  */
 
 #ifdef CONFIG_SMP
-EXPORT_SYMBOL(synchronize_irq);
 EXPORT_SYMBOL(flush_tlb_mm);
 EXPORT_SYMBOL(flush_tlb_range);
 EXPORT_SYMBOL(flush_tlb_page);
@@ -217,8 +215,6 @@ EXPORT_SYMBOL(__remqu);
 EXPORT_SYMBOL(memcpy);
 EXPORT_SYMBOL(memset);
 EXPORT_SYMBOL(memchr);
-
-EXPORT_SYMBOL(get_wchan);
 
 #ifdef CONFIG_ALPHA_IRONGATE
 EXPORT_SYMBOL(irongate_ioremap);

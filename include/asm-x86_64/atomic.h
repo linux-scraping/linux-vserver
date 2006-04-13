@@ -2,6 +2,7 @@
 #define __ARCH_X86_64_ATOMIC__
 
 #include <linux/config.h>
+#include <asm/types.h>
 
 /* atomic_t should be 32 bit signed type */
 
@@ -389,6 +390,7 @@ static __inline__ long atomic64_sub_return(long i, atomic64_t *v)
 #define atomic64_dec_return(v)  (atomic64_sub_return(1,v))
 
 #define atomic_cmpxchg(v, old, new) ((int)cmpxchg(&((v)->counter), old, new))
+#define atomic_xchg(v, new) (xchg(&((v)->counter), new))
 
 /**
  * atomic_add_unless - add unless the number is a given value
@@ -403,8 +405,14 @@ static __inline__ long atomic64_sub_return(long i, atomic64_t *v)
 ({								\
 	int c, old;						\
 	c = atomic_read(v);					\
-	while (c != (u) && (old = atomic_cmpxchg((v), c, c + (a))) != c) \
+	for (;;) {						\
+		if (unlikely(c == (u)))				\
+			break;					\
+		old = atomic_cmpxchg((v), c, c + (a));		\
+		if (likely(old == c))				\
+			break;					\
 		c = old;					\
+	}							\
 	c != (u);						\
 })
 #define atomic_inc_not_zero(v) atomic_add_unless((v), 1, 0)
@@ -424,4 +432,5 @@ __asm__ __volatile__(LOCK "orl %0,%1" \
 #define smp_mb__before_atomic_inc()	barrier()
 #define smp_mb__after_atomic_inc()	barrier()
 
+#include <asm-generic/atomic.h>
 #endif

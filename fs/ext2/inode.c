@@ -67,8 +67,6 @@ void ext2_put_inode(struct inode *inode)
 		ext2_discard_prealloc(inode);
 }
 
-static void ext2_truncate_nocheck (struct inode * inode);
-
 /*
  * Called at the last iput() if i_nlink is zero.
  */
@@ -84,7 +82,7 @@ void ext2_delete_inode (struct inode * inode)
 
 	inode->i_size = 0;
 	if (inode->i_blocks)
-		ext2_truncate_nocheck(inode);
+		ext2_truncate (inode);
 	ext2_free_inode (inode);
 
 	return;
@@ -670,18 +668,6 @@ static sector_t ext2_bmap(struct address_space *mapping, sector_t block)
 	return generic_block_bmap(mapping,block,ext2_get_block);
 }
 
-static int
-ext2_get_blocks(struct inode *inode, sector_t iblock, unsigned long max_blocks,
-			struct buffer_head *bh_result, int create)
-{
-	int ret;
-
-	ret = ext2_get_block(inode, iblock, bh_result, create);
-	if (ret == 0)
-		bh_result->b_size = (1 << inode->i_blkbits);
-	return ret;
-}
-
 static ssize_t
 ext2_direct_IO(int rw, struct kiocb *iocb, const struct iovec *iov,
 			loff_t offset, unsigned long nr_segs)
@@ -690,7 +676,7 @@ ext2_direct_IO(int rw, struct kiocb *iocb, const struct iovec *iov,
 	struct inode *inode = file->f_mapping->host;
 
 	return blockdev_direct_IO(rw, iocb, inode, inode->i_sb->s_bdev, iov,
-				offset, nr_segs, ext2_get_blocks, NULL);
+				offset, nr_segs, ext2_get_block, NULL);
 }
 
 static int
@@ -709,6 +695,7 @@ struct address_space_operations ext2_aops = {
 	.bmap			= ext2_bmap,
 	.direct_IO		= ext2_direct_IO,
 	.writepages		= ext2_writepages,
+	.migratepage		= buffer_migrate_page,
 };
 
 struct address_space_operations ext2_aops_xip = {
@@ -726,6 +713,7 @@ struct address_space_operations ext2_nobh_aops = {
 	.bmap			= ext2_bmap,
 	.direct_IO		= ext2_direct_IO,
 	.writepages		= ext2_writepages,
+	.migratepage		= buffer_migrate_page,
 };
 
 /*
@@ -909,7 +897,7 @@ static void ext2_free_branches(struct inode *inode, __le32 *p, __le32 *q, int de
 		ext2_free_data(inode, p, q);
 }
 
-static void ext2_truncate_nocheck(struct inode * inode)
+void ext2_truncate (struct inode * inode)
 {
 	__le32 *i_data = EXT2_I(inode)->i_data;
 	int addr_per_block = EXT2_ADDR_PER_BLOCK(inode->i_sb);
@@ -925,6 +913,8 @@ static void ext2_truncate_nocheck(struct inode * inode)
 	    S_ISLNK(inode->i_mode)))
 		return;
 	if (ext2_inode_is_fast_symlink(inode))
+		return;
+	if (IS_APPEND(inode) || IS_IMMUTABLE(inode))
 		return;
 
 	ext2_discard_prealloc(inode);
@@ -1047,13 +1037,6 @@ Eio:
 		   (unsigned long) ino, block);
 Egdp:
 	return ERR_PTR(-EIO);
-}
-
-void ext2_truncate (struct inode * inode)
-{
-	if (IS_APPEND(inode) || IS_IMMUTABLE(inode))
-		return;
-	ext2_truncate_nocheck(inode);
 }
 
 void ext2_set_inode_flags(struct inode *inode)

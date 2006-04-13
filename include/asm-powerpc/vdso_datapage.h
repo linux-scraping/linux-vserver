@@ -1,5 +1,6 @@
 #ifndef _VDSO_DATAPAGE_H
 #define _VDSO_DATAPAGE_H
+#ifdef __KERNEL__
 
 /*
  * Copyright (C) 2002 Peter Bergner <bergner@vnet.ibm.com>, IBM
@@ -54,6 +55,9 @@ struct vdso_data {
 		__u32 minor;		/* Minor number			0x14 */
 	} version;
 
+	/* Note about the platform flags: it now only contains the lpar
+	 * bit. The actual platform number is dead and burried
+	 */
 	__u32 platform;			/* Platform flags		0x18 */
 	__u32 processor;		/* Processor type		0x1C */
 	__u64 processorCount;		/* # of physical processors	0x20 */
@@ -105,4 +109,5 @@ extern struct vdso_data *vdso_data;
 
 #endif /* __ASSEMBLY__ */
 
+#endif /* __KERNEL__ */
 #endif /* _SYSTEMCFG_H */

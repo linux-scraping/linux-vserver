@@ -30,7 +30,6 @@
 #include <linux/efi.h>
 #include <linux/interrupt.h>
 #include <linux/delay.h>
-#include <linux/kprobes.h>
 
 #include <asm/cpu.h>
 #include <asm/delay.h>
@@ -328,7 +327,7 @@ ia64_save_extra (struct task_struct *task)
 #endif
 
 #ifdef CONFIG_IA32_SUPPORT
-	if (IS_IA32_PROCESS(ia64_task_regs(task)))
+	if (IS_IA32_PROCESS(task_pt_regs(task)))
 		ia32_save_state(task);
 #endif
 }
@@ -353,7 +352,7 @@ ia64_load_extra (struct task_struct *task)
 #endif
 
 #ifdef CONFIG_IA32_SUPPORT
-	if (IS_IA32_PROCESS(ia64_task_regs(task)))
+	if (IS_IA32_PROCESS(task_pt_regs(task)))
 		ia32_load_state(task);
 #endif
 }
@@ -488,7 +487,7 @@ copy_thread (int nr, unsigned long clone_flags,
 	 * If we're cloning an IA32 task then save the IA32 extra
 	 * state from the current task to the new task
 	 */
-	if (IS_IA32_PROCESS(ia64_task_regs(current))) {
+	if (IS_IA32_PROCESS(task_pt_regs(current))) {
 		ia32_save_state(p);
 		if (clone_flags & CLONE_SETTLS)
 			retval = ia32_clone_tls(p, child_ptregs);
@@ -701,7 +700,7 @@ int
 kernel_thread_helper (int (*fn)(void *), void *arg)
 {
 #ifdef CONFIG_IA32_SUPPORT
-	if (IS_IA32_PROCESS(ia64_task_regs(current))) {
+	if (IS_IA32_PROCESS(task_pt_regs(current))) {
 		/* A kernel thread is always a 64-bit process. */
 		current->thread.map_base  = DEFAULT_MAP_BASE;
 		current->thread.task_size = DEFAULT_TASK_SIZE;
@@ -722,7 +721,7 @@ flush_thread (void)
 	current->thread.flags &= ~(IA64_THREAD_FPH_VALID | IA64_THREAD_DBG_VALID);
 	ia64_drop_fpu(current);
 #ifdef CONFIG_IA32_SUPPORT
-	if (IS_IA32_PROCESS(ia64_task_regs(current))) {
+	if (IS_IA32_PROCESS(task_pt_regs(current))) {
 		ia32_drop_partial_page_list(current);
 		current->thread.task_size = IA32_PAGE_OFFSET;
 		set_fs(USER_DS);
@@ -738,13 +737,6 @@ void
 exit_thread (void)
 {
 
-	/*
-	 * Remove function-return probe instances associated with this task
-	 * and put them back on the free list. Do not insert an exit probe for
-	 * this function, it will be disabled by kprobe_flush_task if you do.
-	 */
-	kprobe_flush_task(current);
-
 	ia64_drop_fpu(current);
 #ifdef CONFIG_PERFMON
        /* if needed, stop monitoring and flush state to perfmon context */
@@ -755,7 +747,7 @@ exit_thread (void)
 	if (current->thread.flags & IA64_THREAD_DBG_VALID)
 		pfm_release_debug_registers(current);
 #endif
-	if (IS_IA32_PROCESS(ia64_task_regs(current)))
+	if (IS_IA32_PROCESS(task_pt_regs(current)))
 		ia32_drop_partial_page_list(current);
 }
 

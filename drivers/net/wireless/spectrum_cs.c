@@ -57,40 +57,22 @@ module_param(ignore_cis_vcc, int, 0);
 MODULE_PARM_DESC(ignore_cis_vcc, "Allow voltage mismatch between card and socket");
 
 /********************************************************************/
-/* Magic constants						    */
-/********************************************************************/
-
-/*
- * The dev_info variable is the "key" that is used to match up this
- * device driver with appropriate cards, through the card
- * configuration database.
- */
-static dev_info_t dev_info = DRIVER_NAME;
-
-/********************************************************************/
 /* Data structures						    */
 /********************************************************************/
 
 /* PCMCIA specific device information (goes in the card field of
  * struct orinoco_private */
 struct orinoco_pccard {
-	dev_link_t link;
+	struct pcmcia_device	*p_dev;
 	dev_node_t node;
 };
-
-/*
- * A linked list of "instances" of the device.  Each actual PCMCIA
- * card corresponds to one device instance, and is described by one
- * dev_link_t structure (defined in ds.h).
- */
-static dev_link_t *dev_list; /* = NULL */
 
 /********************************************************************/
 /* Function prototypes						    */
 /********************************************************************/
 
-static void spectrum_cs_release(dev_link_t *link);
-static void spectrum_cs_detach(dev_link_t *link);
+static int spectrum_cs_config(struct pcmcia_device *link);
+static void spectrum_cs_release(struct pcmcia_device *link);
 
 /********************************************************************/
 /* Firmware downloader						    */
@@ -165,7 +147,7 @@ struct pdi {
 	__le16 _len;		/* length of ID and data, in words */
 	__le16 _id;		/* record ID */
 	char data[0];		/* plug data */
-} __attribute__ ((packed));;
+} __attribute__ ((packed));
 
 
 /* Functions for access to little-endian data */
@@ -256,14 +238,14 @@ spectrum_aux_open(hermes_t *hw)
  * If IDLE is 1, stop the firmware, so that it can be safely rewritten.
  */
 static int
-spectrum_reset(dev_link_t *link, int idle)
+spectrum_reset(struct pcmcia_device *link, int idle)
 {
 	int last_ret, last_fn;
 	conf_reg_t reg;
 	u_int save_cor;
 
 	/* Doing it if hardware is gone is guaranteed crash */
-	if (!(link->state & DEV_CONFIG))
+	if (pcmcia_dev_present(link))
 		return -ENODEV;
 
 	/* Save original COR value */
@@ -271,7 +253,7 @@ spectrum_reset(dev_link_t *link, int idle)
 	reg.Action = CS_READ;
 	reg.Offset = CISREG_COR;
 	CS_CHECK(AccessConfigurationRegister,
-		 pcmcia_access_configuration_register(link->handle, &reg));
+		 pcmcia_access_configuration_register(link, &reg));
 	save_cor = reg.Value;
 
 	/* Soft-Reset card */
@@ -279,14 +261,14 @@ spectrum_reset(dev_link_t *link, int idle)
 	reg.Offset = CISREG_COR;
 	reg.Value = (save_cor | COR_SOFT_RESET);
 	CS_CHECK(AccessConfigurationRegister,
-		 pcmcia_access_configuration_register(link->handle, &reg));
+		 pcmcia_access_configuration_register(link, &reg));
 	udelay(1000);
 
 	/* Read CCSR */
 	reg.Action = CS_READ;
 	reg.Offset = CISREG_CCSR;
 	CS_CHECK(AccessConfigurationRegister,
-		 pcmcia_access_configuration_register(link->handle, &reg));
+		 pcmcia_access_configuration_register(link, &reg));
 
 	/*
 	 * Start or stop the firmware.  Memory width bit should be
@@ -296,7 +278,7 @@ spectrum_reset(dev_link_t *link, int idle)
 	reg.Offset = CISREG_CCSR;
 	reg.Value = (idle ? HCR_IDLE : HCR_RUN) | (reg.Value & HCR_MEM16);
 	CS_CHECK(AccessConfigurationRegister,
-		 pcmcia_access_configuration_register(link->handle, &reg));
+		 pcmcia_access_configuration_register(link, &reg));
 	udelay(1000);
 
 	/* Restore original COR configuration index */
@@ -304,12 +286,12 @@ spectrum_reset(dev_link_t *link, int idle)
 	reg.Offset = CISREG_COR;
 	reg.Value = (save_cor & ~COR_SOFT_RESET);
 	CS_CHECK(AccessConfigurationRegister,
-		 pcmcia_access_configuration_register(link->handle, &reg));
+		 pcmcia_access_configuration_register(link, &reg));
 	udelay(1000);
 	return 0;
 
       cs_failed:
-	cs_error(link->handle, last_fn, last_ret);
+	cs_error(link, last_fn, last_ret);
 	return -ENODEV;
 }
 
@@ -459,7 +441,7 @@ spectrum_load_blocks(hermes_t *hw, const struct dblock *first_block)
  * care of the PDA - read it and then write it on top of the firmware.
  */
 static int
-spectrum_dl_image(hermes_t *hw, dev_link_t *link,
+spectrum_dl_image(hermes_t *hw, struct pcmcia_device *link,
 		  const unsigned char *image)
 {
 	int ret;
@@ -523,14 +505,13 @@ spectrum_dl_image(hermes_t *hw, dev_link_t *link,
  * reset on the card, to make sure it's in a sane state.
  */
 static int
-spectrum_dl_firmware(hermes_t *hw, dev_link_t *link)
+spectrum_dl_firmware(hermes_t *hw, struct pcmcia_device *link)
 {
 	int ret;
-	client_handle_t handle = link->handle;
 	const struct firmware *fw_entry;
 
 	if (request_firmware(&fw_entry, primary_fw_name,
-			     &handle_to_dev(handle)) == 0) {
+			     &handle_to_dev(link)) == 0) {
 		primsym = fw_entry->data;
 	} else {
 		printk(KERN_ERR PFX "Cannot find firmware: %s\n",
@@ -539,7 +520,7 @@ spectrum_dl_firmware(hermes_t *hw, dev_link_t *link)
 	}
 
 	if (request_firmware(&fw_entry, secondary_fw_name,
-			     &handle_to_dev(handle)) == 0) {
+			     &handle_to_dev(link)) == 0) {
 		secsym = fw_entry->data;
 	} else {
 		printk(KERN_ERR PFX "Cannot find firmware: %s\n",
@@ -572,12 +553,12 @@ static int
 spectrum_cs_hard_reset(struct orinoco_private *priv)
 {
 	struct orinoco_pccard *card = priv->card;
-	dev_link_t *link = &card->link;
+	struct pcmcia_device *link = card->p_dev;
 	int err;
 
 	if (!hermes_present(&priv->hw)) {
 		/* The firmware needs to be reloaded */
-		if (spectrum_dl_firmware(&priv->hw, &card->link) != 0) {
+		if (spectrum_dl_firmware(&priv->hw, link) != 0) {
 			printk(KERN_ERR PFX "Firmware download failed\n");
 			err = -ENODEV;
 		}
@@ -601,24 +582,21 @@ spectrum_cs_hard_reset(struct orinoco_private *priv)
  * The dev_link structure is initialized, but we don't actually
  * configure the card at this point -- we wait until we receive a card
  * insertion event.  */
-static dev_link_t *
-spectrum_cs_attach(void)
+static int
+spectrum_cs_probe(struct pcmcia_device *link)
 {
 	struct net_device *dev;
 	struct orinoco_private *priv;
 	struct orinoco_pccard *card;
-	dev_link_t *link;
-	client_reg_t client_reg;
-	int ret;
 
 	dev = alloc_orinocodev(sizeof(*card), spectrum_cs_hard_reset);
 	if (! dev)
-		return NULL;
+		return -ENOMEM;
 	priv = netdev_priv(dev);
 	card = priv->card;
 
 	/* Link both structures together */
-	link = &card->link;
+	card->p_dev = link;
 	link->priv = dev;
 
 	/* Interrupt setup */
@@ -635,23 +613,7 @@ spectrum_cs_attach(void)
 	link->conf.Attributes = 0;
 	link->conf.IntType = INT_MEMORY_AND_IO;
 
-	/* Register with Card Services */
-	/* FIXME: need a lock? */
-	link->next = dev_list;
-	dev_list = link;
-
-	client_reg.dev_info = &dev_info;
-	client_reg.Version = 0x0210; /* FIXME: what does this mean? */
-	client_reg.event_callback_args.client_data = link;
-
-	ret = pcmcia_register_client(&link->handle, &client_reg);
-	if (ret != CS_SUCCESS) {
-		cs_error(link->handle, RegisterClient, ret);
-		spectrum_cs_detach(link);
-		return NULL;
-	}
-
-	return link;
+	return spectrum_cs_config(link);
 }				/* spectrum_cs_attach */
 
 /*
@@ -660,29 +622,14 @@ spectrum_cs_attach(void)
  * are freed.  Otherwise, the structures will be freed when the device
  * is released.
  */
-static void spectrum_cs_detach(dev_link_t *link)
+static void spectrum_cs_detach(struct pcmcia_device *link)
 {
-	dev_link_t **linkp;
 	struct net_device *dev = link->priv;
 
-	/* Locate device structure */
-	for (linkp = &dev_list; *linkp; linkp = &(*linkp)->next)
-		if (*linkp == link)
-			break;
+	spectrum_cs_release(link);
 
-	BUG_ON(*linkp == NULL);
-
-	if (link->state & DEV_CONFIG)
-		spectrum_cs_release(link);
-
-	/* Break the link with Card Services */
-	if (link->handle)
-		pcmcia_deregister_client(link->handle);
-
-	/* Unlink device structure, and free it */
-	*linkp = link->next;
-	DEBUG(0, PFX "detach: link=%p link->dev=%p\n", link, link->dev);
-	if (link->dev) {
+	DEBUG(0, PFX "detach: link=%p link->dev_node=%p\n", link, link->dev_node);
+	if (link->dev_node) {
 		DEBUG(0, PFX "About to unregister net device %p\n",
 		      dev);
 		unregister_netdev(dev);
@@ -696,11 +643,10 @@ static void spectrum_cs_detach(dev_link_t *link)
  * device available to the system.
  */
 
-static void
-spectrum_cs_config(dev_link_t *link)
+static int
+spectrum_cs_config(struct pcmcia_device *link)
 {
 	struct net_device *dev = link->priv;
-	client_handle_t handle = link->handle;
 	struct orinoco_private *priv = netdev_priv(dev);
 	struct orinoco_pccard *card = priv->card;
 	hermes_t *hw = &priv->hw;
@@ -712,7 +658,7 @@ spectrum_cs_config(dev_link_t *link)
 	cisparse_t parse;
 	void __iomem *mem;
 
-	CS_CHECK(ValidateCIS, pcmcia_validate_cis(handle, &info));
+	CS_CHECK(ValidateCIS, pcmcia_validate_cis(link, &info));
 
 	/*
 	 * This reads the card's CONFIG tuple to find its
@@ -723,19 +669,15 @@ spectrum_cs_config(dev_link_t *link)
 	tuple.TupleData = buf;
 	tuple.TupleDataMax = sizeof(buf);
 	tuple.TupleOffset = 0;
-	CS_CHECK(GetFirstTuple, pcmcia_get_first_tuple(handle, &tuple));
-	CS_CHECK(GetTupleData, pcmcia_get_tuple_data(handle, &tuple));
-	CS_CHECK(ParseTuple, pcmcia_parse_tuple(handle, &tuple, &parse));
+	CS_CHECK(GetFirstTuple, pcmcia_get_first_tuple(link, &tuple));
+	CS_CHECK(GetTupleData, pcmcia_get_tuple_data(link, &tuple));
+	CS_CHECK(ParseTuple, pcmcia_parse_tuple(link, &tuple, &parse));
 	link->conf.ConfigBase = parse.config.base;
 	link->conf.Present = parse.config.rmask[0];
 
-	/* Configure card */
-	link->state |= DEV_CONFIG;
-
 	/* Look up the current Vcc */
 	CS_CHECK(GetConfigurationInfo,
-		 pcmcia_get_configuration_info(handle, &conf));
-	link->conf.Vcc = conf.Vcc;
+		 pcmcia_get_configuration_info(link, &conf));
 
 	/*
 	 * In this loop, we scan the CIS for configuration table
@@ -752,13 +694,13 @@ spectrum_cs_config(dev_link_t *link)
 	 * implementation-defined details.
 	 */
 	tuple.DesiredTuple = CISTPL_CFTABLE_ENTRY;
-	CS_CHECK(GetFirstTuple, pcmcia_get_first_tuple(handle, &tuple));
+	CS_CHECK(GetFirstTuple, pcmcia_get_first_tuple(link, &tuple));
 	while (1) {
 		cistpl_cftable_entry_t *cfg = &(parse.cftable_entry);
 		cistpl_cftable_entry_t dflt = { .index = 0 };
 
-		if ( (pcmcia_get_tuple_data(handle, &tuple) != 0)
-		    || (pcmcia_parse_tuple(handle, &tuple, &parse) != 0))
+		if ( (pcmcia_get_tuple_data(link, &tuple) != 0)
+		    || (pcmcia_parse_tuple(link, &tuple, &parse) != 0))
 			goto next_entry;
 
 		if (cfg->flags & CISTPL_CFTABLE_DEFAULT)
@@ -790,10 +732,10 @@ spectrum_cs_config(dev_link_t *link)
 		}
 
 		if (cfg->vpp1.present & (1 << CISTPL_POWER_VNOM))
-			link->conf.Vpp1 = link->conf.Vpp2 =
+			link->conf.Vpp =
 			    cfg->vpp1.param[CISTPL_POWER_VNOM] / 10000;
 		else if (dflt.vpp1.present & (1 << CISTPL_POWER_VNOM))
-			link->conf.Vpp1 = link->conf.Vpp2 =
+			link->conf.Vpp =
 			    dflt.vpp1.param[CISTPL_POWER_VNOM] / 10000;
 		
 		/* Do we need to allocate an interrupt? */
@@ -823,7 +765,7 @@ spectrum_cs_config(dev_link_t *link)
 			}
 
 			/* This reserves IO space but doesn't actually enable it */
-			if (pcmcia_request_io(link->handle, &link->io) != 0)
+			if (pcmcia_request_io(link, &link->io) != 0)
 				goto next_entry;
 		}
 
@@ -833,9 +775,8 @@ spectrum_cs_config(dev_link_t *link)
 		break;
 		
 	next_entry:
-		if (link->io.NumPorts1)
-			pcmcia_release_io(link->handle, &link->io);
-		last_ret = pcmcia_get_next_tuple(handle, &tuple);
+		pcmcia_disable_device(link);
+		last_ret = pcmcia_get_next_tuple(link, &tuple);
 		if (last_ret  == CS_NO_MORE_ITEMS) {
 			printk(KERN_ERR PFX "GetNextTuple(): No matching "
 			       "CIS configuration.  Maybe you need the "
@@ -849,7 +790,7 @@ spectrum_cs_config(dev_link_t *link)
 	 * a handler to the interrupt, unless the 'Handler' member of
 	 * the irq structure is initialized.
 	 */
-	CS_CHECK(RequestIRQ, pcmcia_request_irq(link->handle, &link->irq));
+	CS_CHECK(RequestIRQ, pcmcia_request_irq(link, &link->irq));
 
 	/* We initialize the hermes structure before completing PCMCIA
 	 * configuration just in case the interrupt handler gets
@@ -866,7 +807,7 @@ spectrum_cs_config(dev_link_t *link)
 	 * card and host interface into "Memory and IO" mode.
 	 */
 	CS_CHECK(RequestConfiguration,
-		 pcmcia_request_configuration(link->handle, &link->conf));
+		 pcmcia_request_configuration(link, &link->conf));
 
 	/* Ok, we have the configuration, prepare to register the netdev */
 	dev->base_addr = link->io.BasePort1;
@@ -879,7 +820,7 @@ spectrum_cs_config(dev_link_t *link)
 		goto failed;
 	}
 
-	SET_NETDEV_DEV(dev, &handle_to_dev(handle));
+	SET_NETDEV_DEV(dev, &handle_to_dev(link));
 	/* Tell the stack we exist */
 	if (register_netdev(dev) != 0) {
 		printk(KERN_ERR PFX "register_netdev() failed\n");
@@ -887,20 +828,18 @@ spectrum_cs_config(dev_link_t *link)
 	}
 
 	/* At this point, the dev_node_t structure(s) needs to be
-	 * initialized and arranged in a linked list at link->dev. */
+	 * initialized and arranged in a linked list at link->dev_node. */
 	strcpy(card->node.dev_name, dev->name);
-	link->dev = &card->node; /* link->dev being non-NULL is also
+	link->dev_node = &card->node; /* link->dev_node being non-NULL is also
                                     used to indicate that the
                                     net_device has been registered */
-	link->state &= ~DEV_CONFIG_PENDING;
 
 	/* Finally, report what we've done */
-	printk(KERN_DEBUG "%s: index 0x%02x: Vcc %d.%d",
-	       dev->name, link->conf.ConfigIndex,
-	       link->conf.Vcc / 10, link->conf.Vcc % 10);
-	if (link->conf.Vpp1)
-		printk(", Vpp %d.%d", link->conf.Vpp1 / 10,
-		       link->conf.Vpp1 % 10);
+	printk(KERN_DEBUG "%s: index 0x%02x: ",
+	       dev->name, link->conf.ConfigIndex);
+	if (link->conf.Vpp)
+		printk(", Vpp %d.%d", link->conf.Vpp / 10,
+		       link->conf.Vpp % 10);
 	printk(", irq %d", link->irq.AssignedIRQ);
 	if (link->io.NumPorts1)
 		printk(", io 0x%04x-0x%04x", link->io.BasePort1,
@@ -910,13 +849,14 @@ spectrum_cs_config(dev_link_t *link)
 		       link->io.BasePort2 + link->io.NumPorts2 - 1);
 	printk("\n");
 
-	return;
+	return 0;
 
  cs_failed:
-	cs_error(link->handle, last_fn, last_ret);
+	cs_error(link, last_fn, last_ret);
 
  failed:
 	spectrum_cs_release(link);
+	return -ENODEV;
 }				/* spectrum_cs_config */
 
 /*
@@ -925,7 +865,7 @@ spectrum_cs_config(dev_link_t *link)
  * still open, this will be postponed until it is closed.
  */
 static void
-spectrum_cs_release(dev_link_t *link)
+spectrum_cs_release(struct pcmcia_device *link)
 {
 	struct net_device *dev = link->priv;
 	struct orinoco_private *priv = netdev_priv(dev);
@@ -937,93 +877,49 @@ spectrum_cs_release(dev_link_t *link)
 	priv->hw_unavailable++;
 	spin_unlock_irqrestore(&priv->lock, flags);
 
-	/* Don't bother checking to see if these succeed or not */
-	pcmcia_release_configuration(link->handle);
-	if (link->io.NumPorts1)
-		pcmcia_release_io(link->handle, &link->io);
-	if (link->irq.AssignedIRQ)
-		pcmcia_release_irq(link->handle, &link->irq);
-	link->state &= ~DEV_CONFIG;
+	pcmcia_disable_device(link);
 	if (priv->hw.iobase)
 		ioport_unmap(priv->hw.iobase);
 }				/* spectrum_cs_release */
 
-/*
- * The card status event handler.  Mostly, this schedules other stuff
- * to run after an event is received.
- */
+
 static int
-spectrum_cs_event(event_t event, int priority,
-		       event_callback_args_t * args)
+spectrum_cs_suspend(struct pcmcia_device *link)
 {
-	dev_link_t *link = args->client_data;
 	struct net_device *dev = link->priv;
 	struct orinoco_private *priv = netdev_priv(dev);
-	int err = 0;
 	unsigned long flags;
+	int err = 0;
 
-	switch (event) {
-	case CS_EVENT_CARD_REMOVAL:
-		link->state &= ~DEV_PRESENT;
-		if (link->state & DEV_CONFIG) {
-			unsigned long flags;
+	/* Mark the device as stopped, to block IO until later */
+	spin_lock_irqsave(&priv->lock, flags);
 
-			spin_lock_irqsave(&priv->lock, flags);
-			netif_device_detach(dev);
-			priv->hw_unavailable++;
-			spin_unlock_irqrestore(&priv->lock, flags);
-		}
-		break;
+	err = __orinoco_down(dev);
+	if (err)
+		printk(KERN_WARNING "%s: Error %d downing interface\n",
+		       dev->name, err);
 
-	case CS_EVENT_CARD_INSERTION:
-		link->state |= DEV_PRESENT | DEV_CONFIG_PENDING;
-		spectrum_cs_config(link);
-		break;
+	netif_device_detach(dev);
+	priv->hw_unavailable++;
 
-	case CS_EVENT_PM_SUSPEND:
-		link->state |= DEV_SUSPEND;
-		/* Fall through... */
-	case CS_EVENT_RESET_PHYSICAL:
-		/* Mark the device as stopped, to block IO until later */
-		if (link->state & DEV_CONFIG) {
-			/* This is probably racy, but I can't think of
-                           a better way, short of rewriting the PCMCIA
-                           layer to not suck :-( */
-			spin_lock_irqsave(&priv->lock, flags);
+	spin_unlock_irqrestore(&priv->lock, flags);
 
-			err = __orinoco_down(dev);
-			if (err)
-				printk(KERN_WARNING "%s: %s: Error %d downing interface\n",
-				       dev->name,
-				       event == CS_EVENT_PM_SUSPEND ? "SUSPEND" : "RESET_PHYSICAL",
-				       err);
+	return 0;
+}
 
-			netif_device_detach(dev);
-			priv->hw_unavailable++;
+static int
+spectrum_cs_resume(struct pcmcia_device *link)
+{
+	struct net_device *dev = link->priv;
+	struct orinoco_private *priv = netdev_priv(dev);
 
-			spin_unlock_irqrestore(&priv->lock, flags);
+	netif_device_attach(dev);
+	priv->hw_unavailable--;
+	schedule_work(&priv->reset_work);
 
-			pcmcia_release_configuration(link->handle);
-		}
-		break;
+	return 0;
+}
 
-	case CS_EVENT_PM_RESUME:
-		link->state &= ~DEV_SUSPEND;
-		/* Fall through... */
-	case CS_EVENT_CARD_RESET:
-		if (link->state & DEV_CONFIG) {
-			/* FIXME: should we double check that this is
-			 * the same card as we had before */
-			pcmcia_request_configuration(link->handle, &link->conf);
-			netif_device_attach(dev);
-			priv->hw_unavailable--;
-			schedule_work(&priv->reset_work);
-		}
-		break;
-	}
-
-	return err;
-}				/* spectrum_cs_event */
 
 /********************************************************************/
 /* Module initialization					    */
@@ -1048,9 +944,10 @@ static struct pcmcia_driver orinoco_driver = {
 	.drv		= {
 		.name	= DRIVER_NAME,
 	},
-	.attach		= spectrum_cs_attach,
-	.detach		= spectrum_cs_detach,
-	.event		= spectrum_cs_event,
+	.probe		= spectrum_cs_probe,
+	.remove		= spectrum_cs_detach,
+	.suspend	= spectrum_cs_suspend,
+	.resume		= spectrum_cs_resume,
 	.id_table       = spectrum_cs_ids,
 };
 
@@ -1066,7 +963,6 @@ static void __exit
 exit_spectrum_cs(void)
 {
 	pcmcia_unregister_driver(&orinoco_driver);
-	BUG_ON(dev_list != NULL);
 }
 
 module_init(init_spectrum_cs);

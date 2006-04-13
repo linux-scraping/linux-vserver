@@ -78,7 +78,32 @@ static inline void free_buf(unsigned char *buf)
 		free_page((unsigned long) buf);
 }
 
-static inline void put_tty_queue_nolock(unsigned char c, struct tty_struct *tty)
+/**
+ *	n_tty_set__room	-	receive space
+ *	@tty: terminal
+ *
+ *	Called by the driver to find out how much data it is
+ *	permitted to feed to the line discipline without any being lost
+ *	and thus to manage flow control. Not serialized. Answers for the
+ *	"instant".
+ */
+
+static void n_tty_set_room(struct tty_struct *tty)
+{
+	int	left = N_TTY_BUF_SIZE - tty->read_cnt - 1;
+
+	/*
+	 * If we are doing input canonicalization, and there are no
+	 * pending newlines, let characters through without limit, so
+	 * that erase characters will be handled.  Other excess
+	 * characters will be beeped.
+	 */
+	if (left <= 0)
+		left = tty->icanon && !tty->canon_data;
+	tty->receive_room = left;
+}
+
+static void put_tty_queue_nolock(unsigned char c, struct tty_struct *tty)
 {
 	if (tty->read_cnt < N_TTY_BUF_SIZE) {
 		tty->read_buf[tty->read_head] = c;
@@ -87,7 +112,7 @@ static inline void put_tty_queue_nolock(unsigned char c, struct tty_struct *tty)
 	}
 }
 
-static inline void put_tty_queue(unsigned char c, struct tty_struct *tty)
+static void put_tty_queue(unsigned char c, struct tty_struct *tty)
 {
 	unsigned long flags;
 	/*
@@ -107,7 +132,7 @@ static inline void put_tty_queue(unsigned char c, struct tty_struct *tty)
  *	We test the TTY_THROTTLED bit first so that it always
  *	indicates the current state. The decision about whether
  *	it is worth allowing more input has been taken by the caller.
- *	Can sleep, may be called under the atomic_read semaphore but
+ *	Can sleep, may be called under the atomic_read_lock mutex but
  *	this is not guaranteed.
  */
  
@@ -136,6 +161,7 @@ static void reset_buffer_flags(struct tty_struct *tty)
 	spin_unlock_irqrestore(&tty->read_lock, flags);
 	tty->canon_head = tty->canon_data = tty->erasing = 0;
 	memset(&tty->read_flags, 0, sizeof tty->read_flags);
+	n_tty_set_room(tty);
 	check_unthrottle(tty);
 }
 
@@ -838,30 +864,6 @@ send_signal:
 	put_tty_queue(c, tty);
 }	
 
-/**
- *	n_tty_receive_room	-	receive space
- *	@tty: terminal
- *
- *	Called by the driver to find out how much data it is
- *	permitted to feed to the line discipline without any being lost
- *	and thus to manage flow control. Not serialized. Answers for the
- *	"instant".
- */
- 
-static int n_tty_receive_room(struct tty_struct *tty)
-{
-	int	left = N_TTY_BUF_SIZE - tty->read_cnt - 1;
-
-	/*
-	 * If we are doing input canonicalization, and there are no
-	 * pending newlines, let characters through without limit, so
-	 * that erase characters will be handled.  Other excess
-	 * characters will be beeped.
-	 */
-	if (left <= 0)
-		left = tty->icanon && !tty->canon_data;
-	return left;
-}
 
 /**
  *	n_tty_write_wakeup	-	asynchronous I/O notifier
@@ -953,6 +955,8 @@ static void n_tty_receive_buf(struct tty_struct *tty, const unsigned char *cp,
 			tty->driver->flush_chars(tty);
 	}
 
+	n_tty_set_room(tty);
+
 	if (!tty->icanon && (tty->read_cnt >= tty->minimum_to_wake)) {
 		kill_fasync(&tty->fasync, SIGIO, POLL_IN);
 		if (waitqueue_active(&tty->read_wait))
@@ -964,7 +968,7 @@ static void n_tty_receive_buf(struct tty_struct *tty, const unsigned char *cp,
 	 * mode.  We don't want to throttle the driver if we're in
 	 * canonical mode and don't have a newline yet!
 	 */
-	if (n_tty_receive_room(tty) < TTY_THRESHOLD_THROTTLE) {
+	if (tty->receive_room < TTY_THRESHOLD_THROTTLE) {
 		/* check TTY_THROTTLED first so it indicates our state */
 		if (!test_and_set_bit(TTY_THROTTLED, &tty->flags) &&
 		    tty->driver->throttle)
@@ -999,6 +1003,7 @@ static void n_tty_set_termios(struct tty_struct *tty, struct termios * old)
 	if (test_bit(TTY_HW_COOK_IN, &tty->flags)) {
 		tty->raw = 1;
 		tty->real_raw = 1;
+		n_tty_set_room(tty);
 		return;
 	}
 	if (I_ISTRIP(tty) || I_IUCLC(tty) || I_IGNCR(tty) ||
@@ -1051,6 +1056,7 @@ static void n_tty_set_termios(struct tty_struct *tty, struct termios * old)
 		else
 			tty->real_raw = 0;
 	}
+	n_tty_set_room(tty);
 }
 
 /**
@@ -1126,11 +1132,11 @@ static inline int input_available_p(struct tty_struct *tty, int amt)
  *	buffer, and once to drain the space from the (physical) beginning of
  *	the buffer to head pointer.
  *
- *	Called under the tty->atomic_read sem and with TTY_DONT_FLIP set
+ *	Called under the tty->atomic_read_lock sem and with TTY_DONT_FLIP set
  *
  */
  
-static inline int copy_from_read_buf(struct tty_struct *tty,
+static int copy_from_read_buf(struct tty_struct *tty,
 				      unsigned char __user **b,
 				      size_t *nr)
 
@@ -1256,11 +1262,11 @@ do_it_again:
 	 *	Internal serialization of reads.
 	 */
 	if (file->f_flags & O_NONBLOCK) {
-		if (down_trylock(&tty->atomic_read))
+		if (!mutex_trylock(&tty->atomic_read_lock))
 			return -EAGAIN;
 	}
 	else {
-		if (down_interruptible(&tty->atomic_read))
+		if (mutex_lock_interruptible(&tty->atomic_read_lock))
 			return -ERESTARTSYS;
 	}
 
@@ -1308,6 +1314,7 @@ do_it_again:
 				retval = -ERESTARTSYS;
 				break;
 			}
+			n_tty_set_room(tty);
 			clear_bit(TTY_DONT_FLIP, &tty->flags);
 			timeout = schedule_timeout(timeout);
 			set_bit(TTY_DONT_FLIP, &tty->flags);
@@ -1386,7 +1393,7 @@ do_it_again:
 			timeout = time;
 	}
 	clear_bit(TTY_DONT_FLIP, &tty->flags);
-	up(&tty->atomic_read);
+	mutex_unlock(&tty->atomic_read_lock);
 	remove_wait_queue(&tty->read_wait, &wait);
 
 	if (!waitqueue_active(&tty->read_wait))
@@ -1400,6 +1407,8 @@ do_it_again:
 	       		clear_bit(TTY_PUSH, &tty->flags);
 	} else if (test_and_clear_bit(TTY_PUSH, &tty->flags))
 		 goto do_it_again;
+
+	n_tty_set_room(tty);
 
 	return retval;
 }
@@ -1553,7 +1562,6 @@ struct tty_ldisc tty_ldisc_N_TTY = {
 	normal_poll,		/* poll */
 	NULL,			/* hangup */
 	n_tty_receive_buf,	/* receive_buf */
-	n_tty_receive_room,	/* receive_room */
 	n_tty_write_wakeup	/* write_wakeup */
 };
 

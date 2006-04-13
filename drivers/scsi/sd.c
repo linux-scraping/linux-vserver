@@ -47,8 +47,8 @@
 #include <linux/init.h>
 #include <linux/blkdev.h>
 #include <linux/blkpg.h>
-#include <linux/kref.h>
 #include <linux/delay.h>
+#include <linux/mutex.h>
 #include <asm/uaccess.h>
 
 #include <scsi/scsi.h>
@@ -70,6 +70,27 @@
  */
 #define SD_MAJORS	16
 
+MODULE_AUTHOR("Eric Youngdale");
+MODULE_DESCRIPTION("SCSI disk (sd) driver");
+MODULE_LICENSE("GPL");
+
+MODULE_ALIAS_BLOCKDEV_MAJOR(SCSI_DISK0_MAJOR);
+MODULE_ALIAS_BLOCKDEV_MAJOR(SCSI_DISK1_MAJOR);
+MODULE_ALIAS_BLOCKDEV_MAJOR(SCSI_DISK2_MAJOR);
+MODULE_ALIAS_BLOCKDEV_MAJOR(SCSI_DISK3_MAJOR);
+MODULE_ALIAS_BLOCKDEV_MAJOR(SCSI_DISK4_MAJOR);
+MODULE_ALIAS_BLOCKDEV_MAJOR(SCSI_DISK5_MAJOR);
+MODULE_ALIAS_BLOCKDEV_MAJOR(SCSI_DISK6_MAJOR);
+MODULE_ALIAS_BLOCKDEV_MAJOR(SCSI_DISK7_MAJOR);
+MODULE_ALIAS_BLOCKDEV_MAJOR(SCSI_DISK8_MAJOR);
+MODULE_ALIAS_BLOCKDEV_MAJOR(SCSI_DISK9_MAJOR);
+MODULE_ALIAS_BLOCKDEV_MAJOR(SCSI_DISK10_MAJOR);
+MODULE_ALIAS_BLOCKDEV_MAJOR(SCSI_DISK11_MAJOR);
+MODULE_ALIAS_BLOCKDEV_MAJOR(SCSI_DISK12_MAJOR);
+MODULE_ALIAS_BLOCKDEV_MAJOR(SCSI_DISK13_MAJOR);
+MODULE_ALIAS_BLOCKDEV_MAJOR(SCSI_DISK14_MAJOR);
+MODULE_ALIAS_BLOCKDEV_MAJOR(SCSI_DISK15_MAJOR);
+
 /*
  * This is limited by the naming scheme enforced in sd_probe,
  * add another character to it if you really need more disks.
@@ -88,12 +109,15 @@
 #define SD_MAX_RETRIES		5
 #define SD_PASSTHROUGH_RETRIES	1
 
-static void scsi_disk_release(struct kref *kref);
+/*
+ * Size of the initial data buffer for mode and read capacity data
+ */
+#define SD_BUF_SIZE		512
 
 struct scsi_disk {
 	struct scsi_driver *driver;	/* always &sd_template */
 	struct scsi_device *device;
-	struct kref	kref;
+	struct class_device cdev;
 	struct gendisk	*disk;
 	unsigned int	openers;	/* protected by BKL for now, yuck */
 	sector_t	capacity;	/* size in 512-byte sectors */
@@ -102,7 +126,9 @@ struct scsi_disk {
 	u8		write_prot;
 	unsigned	WCE : 1;	/* state of disk WCE bit */
 	unsigned	RCD : 1;	/* state of disk RCD bit, unused */
+	unsigned	DPOFUA : 1;	/* state of disk DPOFUA bit */
 };
+#define to_scsi_disk(obj) container_of(obj,struct scsi_disk,cdev)
 
 static DEFINE_IDR(sd_index_idr);
 static DEFINE_SPINLOCK(sd_index_lock);
@@ -110,7 +136,7 @@ static DEFINE_SPINLOCK(sd_index_lock);
 /* This semaphore is used to mediate the 0->1 reference get in the
  * face of object destruction (i.e. we can't allow a get on an
  * object after last put) */
-static DECLARE_MUTEX(sd_ref_sem);
+static DEFINE_MUTEX(sd_ref_mutex);
 
 static int sd_revalidate_disk(struct gendisk *disk);
 static void sd_rw_intr(struct scsi_cmnd * SCpnt);
@@ -121,10 +147,95 @@ static void sd_shutdown(struct device *dev);
 static void sd_rescan(struct device *);
 static int sd_init_command(struct scsi_cmnd *);
 static int sd_issue_flush(struct device *, sector_t *);
-static void sd_end_flush(request_queue_t *, struct request *);
-static int sd_prepare_flush(request_queue_t *, struct request *);
+static void sd_prepare_flush(request_queue_t *, struct request *);
 static void sd_read_capacity(struct scsi_disk *sdkp, char *diskname,
 			     unsigned char *buffer);
+static void scsi_disk_release(struct class_device *cdev);
+
+static const char *sd_cache_types[] = {
+	"write through", "none", "write back",
+	"write back, no read (daft)"
+};
+
+static ssize_t sd_store_cache_type(struct class_device *cdev, const char *buf,
+				   size_t count)
+{
+	int i, ct = -1, rcd, wce, sp;
+	struct scsi_disk *sdkp = to_scsi_disk(cdev);
+	struct scsi_device *sdp = sdkp->device;
+	char buffer[64];
+	char *buffer_data;
+	struct scsi_mode_data data;
+	struct scsi_sense_hdr sshdr;
+	int len;
+
+	if (sdp->type != TYPE_DISK)
+		/* no cache control on RBC devices; theoretically they
+		 * can do it, but there's probably so many exceptions
+		 * it's not worth the risk */
+		return -EINVAL;
+
+	for (i = 0; i < sizeof(sd_cache_types)/sizeof(sd_cache_types[0]); i++) {
+		const int len = strlen(sd_cache_types[i]);
+		if (strncmp(sd_cache_types[i], buf, len) == 0 &&
+		    buf[len] == '\n') {
+			ct = i;
+			break;
+		}
+	}
+	if (ct < 0)
+		return -EINVAL;
+	rcd = ct & 0x01 ? 1 : 0;
+	wce = ct & 0x02 ? 1 : 0;
+	if (scsi_mode_sense(sdp, 0x08, 8, buffer, sizeof(buffer), SD_TIMEOUT,
+			    SD_MAX_RETRIES, &data, NULL))
+		return -EINVAL;
+	len = min_t(size_t, sizeof(buffer), data.length - data.header_length -
+		  data.block_descriptor_length);
+	buffer_data = buffer + data.header_length +
+		data.block_descriptor_length;
+	buffer_data[2] &= ~0x05;
+	buffer_data[2] |= wce << 2 | rcd;
+	sp = buffer_data[0] & 0x80 ? 1 : 0;
+
+	if (scsi_mode_select(sdp, 1, sp, 8, buffer_data, len, SD_TIMEOUT,
+			     SD_MAX_RETRIES, &data, &sshdr)) {
+		if (scsi_sense_valid(&sshdr))
+			scsi_print_sense_hdr(sdkp->disk->disk_name, &sshdr);
+		return -EINVAL;
+	}
+	sd_revalidate_disk(sdkp->disk);
+	return count;
+}
+
+static ssize_t sd_show_cache_type(struct class_device *cdev, char *buf)
+{
+	struct scsi_disk *sdkp = to_scsi_disk(cdev);
+	int ct = sdkp->RCD + 2*sdkp->WCE;
+
+	return snprintf(buf, 40, "%s\n", sd_cache_types[ct]);
+}
+
+static ssize_t sd_show_fua(struct class_device *cdev, char *buf)
+{
+	struct scsi_disk *sdkp = to_scsi_disk(cdev);
+
+	return snprintf(buf, 20, "%u\n", sdkp->DPOFUA);
+}
+
+static struct class_device_attribute sd_disk_attrs[] = {
+	__ATTR(cache_type, S_IRUGO|S_IWUSR, sd_show_cache_type,
+	       sd_store_cache_type),
+	__ATTR(FUA, S_IRUGO, sd_show_fua, NULL),
+	__ATTR_NULL,
+};
+
+static struct class sd_disk_class = {
+	.name		= "scsi_disk",
+	.owner		= THIS_MODULE,
+	.release	= scsi_disk_release,
+	.class_dev_attrs = sd_disk_attrs,
+};
 
 static struct scsi_driver sd_template = {
 	.owner			= THIS_MODULE,
@@ -137,8 +248,6 @@ static struct scsi_driver sd_template = {
 	.rescan			= sd_rescan,
 	.init_command		= sd_init_command,
 	.issue_flush		= sd_issue_flush,
-	.prepare_flush		= sd_prepare_flush,
-	.end_flush		= sd_end_flush,
 };
 
 /*
@@ -170,8 +279,6 @@ static int sd_major(int major_idx)
 	}
 }
 
-#define to_scsi_disk(obj) container_of(obj,struct scsi_disk,kref)
-
 static inline struct scsi_disk *scsi_disk(struct gendisk *disk)
 {
 	return container_of(disk->private_data, struct scsi_disk, driver);
@@ -184,7 +291,7 @@ static struct scsi_disk *__scsi_disk_get(struct gendisk *disk)
 	if (disk->private_data) {
 		sdkp = scsi_disk(disk);
 		if (scsi_device_get(sdkp->device) == 0)
-			kref_get(&sdkp->kref);
+			class_device_get(&sdkp->cdev);
 		else
 			sdkp = NULL;
 	}
@@ -195,9 +302,9 @@ static struct scsi_disk *scsi_disk_get(struct gendisk *disk)
 {
 	struct scsi_disk *sdkp;
 
-	down(&sd_ref_sem);
+	mutex_lock(&sd_ref_mutex);
 	sdkp = __scsi_disk_get(disk);
-	up(&sd_ref_sem);
+	mutex_unlock(&sd_ref_mutex);
 	return sdkp;
 }
 
@@ -205,11 +312,11 @@ static struct scsi_disk *scsi_disk_get_from_dev(struct device *dev)
 {
 	struct scsi_disk *sdkp;
 
-	down(&sd_ref_sem);
+	mutex_lock(&sd_ref_mutex);
 	sdkp = dev_get_drvdata(dev);
 	if (sdkp)
 		sdkp = __scsi_disk_get(sdkp->disk);
-	up(&sd_ref_sem);
+	mutex_unlock(&sd_ref_mutex);
 	return sdkp;
 }
 
@@ -217,10 +324,10 @@ static void scsi_disk_put(struct scsi_disk *sdkp)
 {
 	struct scsi_device *sdev = sdkp->device;
 
-	down(&sd_ref_sem);
-	kref_put(&sdkp->kref, scsi_disk_release);
+	mutex_lock(&sd_ref_mutex);
+	class_device_put(&sdkp->cdev);
 	scsi_device_put(sdev);
-	up(&sd_ref_sem);
+	mutex_unlock(&sd_ref_mutex);
 }
 
 /**
@@ -233,34 +340,12 @@ static void scsi_disk_put(struct scsi_disk *sdkp)
  **/
 static int sd_init_command(struct scsi_cmnd * SCpnt)
 {
-	unsigned int this_count, timeout;
-	struct gendisk *disk;
-	sector_t block;
 	struct scsi_device *sdp = SCpnt->device;
 	struct request *rq = SCpnt->request;
-
-	timeout = sdp->timeout;
-
-	/*
-	 * SG_IO from block layer already setup, just copy cdb basically
-	 */
-	if (blk_pc_request(rq)) {
-		scsi_setup_blk_pc_cmnd(SCpnt, SD_PASSTHROUGH_RETRIES);
-		if (rq->timeout)
-			timeout = rq->timeout;
-
-		goto queue;
-	}
-
-	/*
-	 * we only do REQ_CMD and REQ_BLOCK_PC
-	 */
-	if (!blk_fs_request(rq))
-		return 0;
-
-	disk = rq->rq_disk;
-	block = rq->sector;
-	this_count = SCpnt->request_bufflen >> 9;
+	struct gendisk *disk = rq->rq_disk;
+	sector_t block = rq->sector;
+	unsigned int this_count = SCpnt->request_bufflen >> 9;
+	unsigned int timeout = sdp->timeout;
 
 	SCSI_LOG_HLQUEUE(1, printk("sd_init_command: disk=%s, block=%llu, "
 			    "count=%d\n", disk->disk_name,
@@ -346,6 +431,7 @@ static int sd_init_command(struct scsi_cmnd * SCpnt)
 	
 	if (block > 0xffffffff) {
 		SCpnt->cmnd[0] += READ_16 - READ_6;
+		SCpnt->cmnd[1] |= blk_fua_rq(rq) ? 0x8 : 0;
 		SCpnt->cmnd[2] = sizeof(block) > 4 ? (unsigned char) (block >> 56) & 0xff : 0;
 		SCpnt->cmnd[3] = sizeof(block) > 4 ? (unsigned char) (block >> 48) & 0xff : 0;
 		SCpnt->cmnd[4] = sizeof(block) > 4 ? (unsigned char) (block >> 40) & 0xff : 0;
@@ -365,6 +451,7 @@ static int sd_init_command(struct scsi_cmnd * SCpnt)
 			this_count = 0xffff;
 
 		SCpnt->cmnd[0] += READ_10 - READ_6;
+		SCpnt->cmnd[1] |= blk_fua_rq(rq) ? 0x8 : 0;
 		SCpnt->cmnd[2] = (unsigned char) (block >> 24) & 0xff;
 		SCpnt->cmnd[3] = (unsigned char) (block >> 16) & 0xff;
 		SCpnt->cmnd[4] = (unsigned char) (block >> 8) & 0xff;
@@ -373,6 +460,17 @@ static int sd_init_command(struct scsi_cmnd * SCpnt)
 		SCpnt->cmnd[7] = (unsigned char) (this_count >> 8) & 0xff;
 		SCpnt->cmnd[8] = (unsigned char) this_count & 0xff;
 	} else {
+		if (unlikely(blk_fua_rq(rq))) {
+			/*
+			 * This happens only if this drive failed
+			 * 10byte rw command with ILLEGAL_REQUEST
+			 * during operation and thus turned off
+			 * use_10_for_rw.
+			 */
+			printk(KERN_ERR "sd: FUA write on READ/WRITE(6) drive\n");
+			return 0;
+		}
+
 		SCpnt->cmnd[1] |= (unsigned char) ((block >> 16) & 0x1f);
 		SCpnt->cmnd[2] = (unsigned char) ((block >> 8) & 0xff);
 		SCpnt->cmnd[3] = (unsigned char) block & 0xff;
@@ -390,8 +488,6 @@ static int sd_init_command(struct scsi_cmnd * SCpnt)
 	SCpnt->transfersize = sdp->sector_size;
 	SCpnt->underflow = this_count << 9;
 	SCpnt->allowed = SD_MAX_RETRIES;
-
-queue:
 	SCpnt->timeout_per_command = timeout;
 
 	/*
@@ -516,7 +612,7 @@ static int sd_release(struct inode *inode, struct file *filp)
 	return 0;
 }
 
-static int sd_hdio_getgeo(struct block_device *bdev, struct hd_geometry __user *loc)
+static int sd_getgeo(struct block_device *bdev, struct hd_geometry *geo)
 {
 	struct scsi_disk *sdkp = scsi_disk(bdev->bd_disk);
 	struct scsi_device *sdp = sdkp->device;
@@ -534,15 +630,9 @@ static int sd_hdio_getgeo(struct block_device *bdev, struct hd_geometry __user *
 	else
 		scsicam_bios_param(bdev, sdkp->capacity, diskinfo);
 
-	if (put_user(diskinfo[0], &loc->heads))
-		return -EFAULT;
-	if (put_user(diskinfo[1], &loc->sectors))
-		return -EFAULT;
-	if (put_user(diskinfo[2], &loc->cylinders))
-		return -EFAULT;
-	if (put_user((unsigned)get_start_sect(bdev),
-	             (unsigned long __user *)&loc->start))
-		return -EFAULT;
+	geo->heads = diskinfo[0];
+	geo->sectors = diskinfo[1];
+	geo->cylinders = diskinfo[2];
 	return 0;
 }
 
@@ -581,12 +671,6 @@ static int sd_ioctl(struct inode * inode, struct file * filp,
 	error = scsi_nonblockable_ioctl(sdp, cmd, p, filp);
 	if (!scsi_block_when_processing_errors(sdp) || !error)
 		return error;
-
-	if (cmd == HDIO_GETGEO) {
-		if (!arg)
-			return -EINVAL;
-		return sd_hdio_getgeo(bdev, p);
-	}
 
 	/*
 	 * Send SCSI addressing ioctls directly to mid level, send other
@@ -729,42 +813,13 @@ static int sd_issue_flush(struct device *dev, sector_t *error_sector)
 	return ret;
 }
 
-static void sd_end_flush(request_queue_t *q, struct request *flush_rq)
+static void sd_prepare_flush(request_queue_t *q, struct request *rq)
 {
-	struct request *rq = flush_rq->end_io_data;
-	struct scsi_cmnd *cmd = rq->special;
-	unsigned int bytes = rq->hard_nr_sectors << 9;
-
-	if (!flush_rq->errors) {
-		spin_unlock(q->queue_lock);
-		scsi_io_completion(cmd, bytes, 0);
-		spin_lock(q->queue_lock);
-	} else if (blk_barrier_postflush(rq)) {
-		spin_unlock(q->queue_lock);
-		scsi_io_completion(cmd, 0, bytes);
-		spin_lock(q->queue_lock);
-	} else {
-		/*
-		 * force journal abort of barriers
-		 */
-		end_that_request_first(rq, -EOPNOTSUPP, rq->hard_nr_sectors);
-		end_that_request_last(rq);
-	}
-}
-
-static int sd_prepare_flush(request_queue_t *q, struct request *rq)
-{
-	struct scsi_device *sdev = q->queuedata;
-	struct scsi_disk *sdkp = dev_get_drvdata(&sdev->sdev_gendev);
-
-	if (!sdkp || !sdkp->WCE)
-		return 0;
-
 	memset(rq->cmd, 0, sizeof(rq->cmd));
-	rq->flags |= REQ_BLOCK_PC | REQ_SOFTBARRIER;
+	rq->flags |= REQ_BLOCK_PC;
 	rq->timeout = SD_TIMEOUT;
 	rq->cmd[0] = SYNCHRONIZE_CACHE;
-	return 1;
+	rq->cmd_len = 10;
 }
 
 static void sd_rescan(struct device *dev)
@@ -818,6 +873,7 @@ static struct block_device_operations sd_fops = {
 	.open			= sd_open,
 	.release		= sd_release,
 	.ioctl			= sd_ioctl,
+	.getgeo			= sd_getgeo,
 #ifdef CONFIG_COMPAT
 	.compat_ioctl		= sd_compat_ioctl,
 #endif
@@ -865,15 +921,7 @@ static void sd_rw_intr(struct scsi_cmnd * SCpnt)
 	   relatively rare error condition, no care is taken to avoid
 	   unnecessary additional work such as memcpy's that could be avoided.
 	 */
-
-	/* 
-	 * If SG_IO from block layer then set good_bytes to stop retries;
-	 * else if errors, check them, and if necessary prepare for
-	 * (partial) retries.
-	 */
-	if (blk_pc_request(SCpnt->request))
-		good_bytes = this_count;
-	else if (driver_byte(result) != 0 &&
+	if (driver_byte(result) != 0 &&
 		 sense_valid && !sense_deferred) {
 		switch (sshdr.sense_key) {
 		case MEDIUM_ERROR:
@@ -1299,7 +1347,7 @@ sd_do_mode_sense(struct scsi_device *sdp, int dbd, int modepage,
 
 /*
  * read write protect setting, if possible - called only in sd_revalidate_disk()
- * called with buffer of length 512
+ * called with buffer of length SD_BUF_SIZE
  */
 static void
 sd_read_write_protect_flag(struct scsi_disk *sdkp, char *diskname,
@@ -1357,7 +1405,7 @@ sd_read_write_protect_flag(struct scsi_disk *sdkp, char *diskname,
 
 /*
  * sd_read_cache_type - called only from sd_revalidate_disk()
- * called with buffer of length 512
+ * called with buffer of length SD_BUF_SIZE
  */
 static void
 sd_read_cache_type(struct scsi_disk *sdkp, char *diskname,
@@ -1388,6 +1436,12 @@ sd_read_cache_type(struct scsi_disk *sdkp, char *diskname,
 	if (!scsi_status_is_good(res))
 		goto bad_sense;
 
+	if (!data.header_length) {
+		modepage = 6;
+		printk(KERN_ERR "%s: missing header in MODE_SENSE response\n",
+		       diskname);
+	}
+
 	/* that went OK, now ask for the proper length */
 	len = data.length;
 
@@ -1402,17 +1456,21 @@ sd_read_cache_type(struct scsi_disk *sdkp, char *diskname,
 
 	/* Take headers and block descriptors into account */
 	len += data.header_length + data.block_descriptor_length;
+	if (len > SD_BUF_SIZE)
+		goto bad_sense;
 
 	/* Get the data */
 	res = sd_do_mode_sense(sdp, dbd, modepage, buffer, len, &data, &sshdr);
 
 	if (scsi_status_is_good(res)) {
-		const char *types[] = {
-			"write through", "none", "write back",
-			"write back, no read (daft)"
-		};
 		int ct = 0;
 		int offset = data.header_length + data.block_descriptor_length;
+
+		if (offset >= SD_BUF_SIZE - 2) {
+			printk(KERN_ERR "%s: malformed MODE SENSE response",
+				diskname);
+			goto defaults;
+		}
 
 		if ((buffer[offset] & 0x3f) != modepage) {
 			printk(KERN_ERR "%s: got wrong page\n", diskname);
@@ -1427,10 +1485,18 @@ sd_read_cache_type(struct scsi_disk *sdkp, char *diskname,
 			sdkp->RCD = 0;
 		}
 
+		sdkp->DPOFUA = (data.device_specific & 0x10) != 0;
+		if (sdkp->DPOFUA && !sdkp->device->use_10_for_rw) {
+			printk(KERN_NOTICE "SCSI device %s: uses "
+			       "READ/WRITE(6), disabling FUA\n", diskname);
+			sdkp->DPOFUA = 0;
+		}
+
 		ct =  sdkp->RCD + 2*sdkp->WCE;
 
-		printk(KERN_NOTICE "SCSI device %s: drive cache: %s\n",
-		       diskname, types[ct]);
+		printk(KERN_NOTICE "SCSI device %s: drive cache: %s%s\n",
+		       diskname, sd_cache_types[ct],
+		       sdkp->DPOFUA ? " w/ FUA" : "");
 
 		return;
 	}
@@ -1450,6 +1516,7 @@ defaults:
 	       diskname);
 	sdkp->WCE = 0;
 	sdkp->RCD = 0;
+	sdkp->DPOFUA = 0;
 }
 
 /**
@@ -1462,6 +1529,7 @@ static int sd_revalidate_disk(struct gendisk *disk)
 	struct scsi_disk *sdkp = scsi_disk(disk);
 	struct scsi_device *sdp = sdkp->device;
 	unsigned char *buffer;
+	unsigned ordered;
 
 	SCSI_LOG_HLQUEUE(3, printk("sd_revalidate_disk: disk=%s\n", disk->disk_name));
 
@@ -1472,7 +1540,7 @@ static int sd_revalidate_disk(struct gendisk *disk)
 	if (!scsi_device_online(sdp))
 		goto out;
 
-	buffer = kmalloc(512, GFP_KERNEL | __GFP_DMA);
+	buffer = kmalloc(SD_BUF_SIZE, GFP_KERNEL | __GFP_DMA);
 	if (!buffer) {
 		printk(KERN_WARNING "(sd_revalidate_disk:) Memory allocation "
 		       "failure.\n");
@@ -1495,12 +1563,24 @@ static int sd_revalidate_disk(struct gendisk *disk)
 	 */
 	if (sdkp->media_present) {
 		sd_read_capacity(sdkp, disk->disk_name, buffer);
-		if (sdp->removable)
-			sd_read_write_protect_flag(sdkp, disk->disk_name,
-						   buffer);
+		sd_read_write_protect_flag(sdkp, disk->disk_name, buffer);
 		sd_read_cache_type(sdkp, disk->disk_name, buffer);
 	}
-		
+
+	/*
+	 * We now have all cache related info, determine how we deal
+	 * with ordered requests.  Note that as the current SCSI
+	 * dispatch function can alter request order, we cannot use
+	 * QUEUE_ORDERED_TAG_* even when ordered tag is supported.
+	 */
+	if (sdkp->WCE)
+		ordered = sdkp->DPOFUA
+			? QUEUE_ORDERED_DRAIN_FUA : QUEUE_ORDERED_DRAIN_FLUSH;
+	else
+		ordered = QUEUE_ORDERED_DRAIN;
+
+	blk_queue_ordered(sdkp->disk->queue, ordered, sd_prepare_flush);
+
 	set_capacity(disk, sdkp->capacity);
 	kfree(buffer);
 
@@ -1542,12 +1622,9 @@ static int sd_probe(struct device *dev)
 					"sd_attach\n"));
 
 	error = -ENOMEM;
-	sdkp = kmalloc(sizeof(*sdkp), GFP_KERNEL);
+	sdkp = kzalloc(sizeof(*sdkp), GFP_KERNEL);
 	if (!sdkp)
 		goto out;
-
-	memset (sdkp, 0, sizeof(*sdkp));
-	kref_init(&sdkp->kref);
 
 	gd = alloc_disk(16);
 	if (!gd)
@@ -1565,7 +1642,16 @@ static int sd_probe(struct device *dev)
 	if (error)
 		goto out_put;
 
+	class_device_initialize(&sdkp->cdev);
+	sdkp->cdev.dev = &sdp->sdev_gendev;
+	sdkp->cdev.class = &sd_disk_class;
+	strncpy(sdkp->cdev.class_id, sdp->sdev_gendev.bus_id, BUS_ID_SIZE);
+
+	if (class_device_add(&sdkp->cdev))
+		goto out_put;
+
 	get_device(&sdp->sdev_gendev);
+
 	sdkp->device = sdp;
 	sdkp->driver = &sd_template;
 	sdkp->disk = gd;
@@ -1597,9 +1683,8 @@ static int sd_probe(struct device *dev)
 			'a' + m1, 'a' + m2, 'a' + m3);
 	}
 
-	strcpy(gd->devfs_name, sdp->devfs_name);
-
 	gd->private_data = &sdkp->driver;
+	gd->queue = sdkp->device->request_queue;
 
 	sd_revalidate_disk(gd);
 
@@ -1607,7 +1692,6 @@ static int sd_probe(struct device *dev)
 	gd->flags = GENHD_FL_DRIVERFS;
 	if (sdp->removable)
 		gd->flags |= GENHD_FL_REMOVABLE;
-	gd->queue = sdkp->device->request_queue;
 
 	dev_set_drvdata(dev, sdkp);
 	add_disk(gd);
@@ -1617,11 +1701,11 @@ static int sd_probe(struct device *dev)
 
 	return 0;
 
-out_put:
+ out_put:
 	put_disk(gd);
-out_free:
+ out_free:
 	kfree(sdkp);
-out:
+ out:
 	return error;
 }
 
@@ -1640,29 +1724,30 @@ static int sd_remove(struct device *dev)
 {
 	struct scsi_disk *sdkp = dev_get_drvdata(dev);
 
+	class_device_del(&sdkp->cdev);
 	del_gendisk(sdkp->disk);
 	sd_shutdown(dev);
 
-	down(&sd_ref_sem);
+	mutex_lock(&sd_ref_mutex);
 	dev_set_drvdata(dev, NULL);
-	kref_put(&sdkp->kref, scsi_disk_release);
-	up(&sd_ref_sem);
+	class_device_put(&sdkp->cdev);
+	mutex_unlock(&sd_ref_mutex);
 
 	return 0;
 }
 
 /**
  *	scsi_disk_release - Called to free the scsi_disk structure
- *	@kref: pointer to embedded kref
+ *	@cdev: pointer to embedded class device
  *
- *	sd_ref_sem must be held entering this routine.  Because it is
+ *	sd_ref_mutex must be held entering this routine.  Because it is
  *	called on last put, you should always use the scsi_disk_get()
  *	scsi_disk_put() helpers which manipulate the semaphore directly
- *	and never do a direct kref_put().
+ *	and never do a direct class_device_put().
  **/
-static void scsi_disk_release(struct kref *kref)
+static void scsi_disk_release(struct class_device *cdev)
 {
-	struct scsi_disk *sdkp = to_scsi_disk(kref);
+	struct scsi_disk *sdkp = to_scsi_disk(cdev);
 	struct gendisk *disk = sdkp->disk;
 	
 	spin_lock(&sd_index_lock);
@@ -1716,6 +1801,8 @@ static int __init init_sd(void)
 	if (!majors)
 		return -ENODEV;
 
+	class_register(&sd_disk_class);
+
 	return scsi_register_driver(&sd_template.gendrv);
 }
 
@@ -1733,11 +1820,9 @@ static void __exit exit_sd(void)
 	scsi_unregister_driver(&sd_template.gendrv);
 	for (i = 0; i < SD_MAJORS; i++)
 		unregister_blkdev(sd_major(i), "sd");
-}
 
-MODULE_LICENSE("GPL");
-MODULE_AUTHOR("Eric Youngdale");
-MODULE_DESCRIPTION("SCSI disk (sd) driver");
+	class_unregister(&sd_disk_class);
+}
 
 module_init(init_sd);
 module_exit(exit_sd);

@@ -34,10 +34,12 @@
 
 #include <linux/init.h>
 #include <linux/pci.h>
+#include <linux/dma-mapping.h>
 #include <linux/slab.h>
 #include <linux/interrupt.h>
 #include <linux/compiler.h>
 #include <linux/delay.h>
+#include <linux/dma-mapping.h>
 
 #include <sound/driver.h>
 #include <sound/core.h>
@@ -50,7 +52,7 @@
 #include "ad1889.h"
 #include "ac97/ac97_id.h"
 
-#define	AD1889_DRVVER	"$Revision: 1.4 $"
+#define	AD1889_DRVVER	"Version: 1.7"
 
 MODULE_AUTHOR("Kyle McMartin <kyle@parisc-linux.org>, Thibaut Varene <t-bone@parisc-linux.org>");
 MODULE_DESCRIPTION("Analog Devices AD1889 ALSA sound driver");
@@ -87,20 +89,20 @@ struct ad1889_register_state {
 };
 
 struct snd_ad1889 {
-	snd_card_t *card;
+	struct snd_card *card;
 	struct pci_dev *pci;
 
 	int irq;
 	unsigned long bar;
 	void __iomem *iobase;
 
-	ac97_t *ac97;
-	ac97_bus_t *ac97_bus;
-	snd_pcm_t *pcm;
-	snd_info_entry_t *proc;
+	struct snd_ac97 *ac97;
+	struct snd_ac97_bus *ac97_bus;
+	struct snd_pcm *pcm;
+	struct snd_info_entry *proc;
 
-	snd_pcm_substream_t *psubs;
-	snd_pcm_substream_t *csubs;
+	struct snd_pcm_substream *psubs;
+	struct snd_pcm_substream *csubs;
 
 	/* playback register state */
 	struct ad1889_register_state wave;
@@ -241,14 +243,14 @@ ad1889_channel_reset(struct snd_ad1889 *chip, unsigned int channel)
 }
 
 static inline u16
-snd_ad1889_ac97_read(ac97_t *ac97, unsigned short reg)
+snd_ad1889_ac97_read(struct snd_ac97 *ac97, unsigned short reg)
 {
 	struct snd_ad1889 *chip = ac97->private_data;
 	return ad1889_readw(chip, AD_AC97_BASE + reg);
 }
 
 static inline void
-snd_ad1889_ac97_write(ac97_t *ac97, unsigned short reg, unsigned short val)
+snd_ad1889_ac97_write(struct snd_ac97 *ac97, unsigned short reg, unsigned short val)
 {
 	struct snd_ad1889 *chip = ac97->private_data;
 	ad1889_writew(chip, AD_AC97_BASE + reg, val);
@@ -273,20 +275,20 @@ snd_ad1889_ac97_ready(struct snd_ad1889 *chip)
 }
 
 static int 
-snd_ad1889_hw_params(snd_pcm_substream_t *substream,
-			snd_pcm_hw_params_t *hw_params)
+snd_ad1889_hw_params(struct snd_pcm_substream *substream,
+			struct snd_pcm_hw_params *hw_params)
 {
 	return snd_pcm_lib_malloc_pages(substream, 
 					params_buffer_bytes(hw_params));
 }
 
 static int
-snd_ad1889_hw_free(snd_pcm_substream_t *substream)
+snd_ad1889_hw_free(struct snd_pcm_substream *substream)
 {
 	return snd_pcm_lib_free_pages(substream);
 }
 
-static snd_pcm_hardware_t snd_ad1889_playback_hw = {
+static struct snd_pcm_hardware snd_ad1889_playback_hw = {
 	.info = SNDRV_PCM_INFO_MMAP | SNDRV_PCM_INFO_INTERLEAVED |
 		SNDRV_PCM_INFO_MMAP_VALID | SNDRV_PCM_INFO_BLOCK_TRANSFER,
 	.formats = SNDRV_PCM_FMTBIT_S16_LE,
@@ -303,7 +305,7 @@ static snd_pcm_hardware_t snd_ad1889_playback_hw = {
 	/*.fifo_size = 0,*/
 };
 
-static snd_pcm_hardware_t snd_ad1889_capture_hw = {
+static struct snd_pcm_hardware snd_ad1889_capture_hw = {
 	.info = SNDRV_PCM_INFO_MMAP | SNDRV_PCM_INFO_INTERLEAVED |
 		SNDRV_PCM_INFO_MMAP_VALID | SNDRV_PCM_INFO_BLOCK_TRANSFER,
 	.formats = SNDRV_PCM_FMTBIT_S16_LE,
@@ -321,10 +323,10 @@ static snd_pcm_hardware_t snd_ad1889_capture_hw = {
 };
 
 static int
-snd_ad1889_playback_open(snd_pcm_substream_t *ss)
+snd_ad1889_playback_open(struct snd_pcm_substream *ss)
 {
 	struct snd_ad1889 *chip = snd_pcm_substream_chip(ss);
-	snd_pcm_runtime_t *rt = ss->runtime;
+	struct snd_pcm_runtime *rt = ss->runtime;
 
 	chip->psubs = ss;
 	rt->hw = snd_ad1889_playback_hw;
@@ -333,10 +335,10 @@ snd_ad1889_playback_open(snd_pcm_substream_t *ss)
 }
 
 static int
-snd_ad1889_capture_open(snd_pcm_substream_t *ss)
+snd_ad1889_capture_open(struct snd_pcm_substream *ss)
 {
 	struct snd_ad1889 *chip = snd_pcm_substream_chip(ss);
-	snd_pcm_runtime_t *rt = ss->runtime;
+	struct snd_pcm_runtime *rt = ss->runtime;
 
 	chip->csubs = ss;
 	rt->hw = snd_ad1889_capture_hw;
@@ -345,7 +347,7 @@ snd_ad1889_capture_open(snd_pcm_substream_t *ss)
 }
 
 static int
-snd_ad1889_playback_close(snd_pcm_substream_t *ss)
+snd_ad1889_playback_close(struct snd_pcm_substream *ss)
 {
 	struct snd_ad1889 *chip = snd_pcm_substream_chip(ss);
 	chip->psubs = NULL;
@@ -353,7 +355,7 @@ snd_ad1889_playback_close(snd_pcm_substream_t *ss)
 }
 
 static int
-snd_ad1889_capture_close(snd_pcm_substream_t *ss)
+snd_ad1889_capture_close(struct snd_pcm_substream *ss)
 {
 	struct snd_ad1889 *chip = snd_pcm_substream_chip(ss);
 	chip->csubs = NULL;
@@ -361,10 +363,10 @@ snd_ad1889_capture_close(snd_pcm_substream_t *ss)
 }
 
 static int
-snd_ad1889_playback_prepare(snd_pcm_substream_t *ss)
+snd_ad1889_playback_prepare(struct snd_pcm_substream *ss)
 {
 	struct snd_ad1889 *chip = snd_pcm_substream_chip(ss);
-	snd_pcm_runtime_t *rt = ss->runtime;
+	struct snd_pcm_runtime *rt = ss->runtime;
 	unsigned int size = snd_pcm_lib_buffer_bytes(ss);
 	unsigned int count = snd_pcm_lib_period_bytes(ss);
 	u16 reg;
@@ -411,10 +413,10 @@ snd_ad1889_playback_prepare(snd_pcm_substream_t *ss)
 }
 
 static int
-snd_ad1889_capture_prepare(snd_pcm_substream_t *ss)
+snd_ad1889_capture_prepare(struct snd_pcm_substream *ss)
 {
 	struct snd_ad1889 *chip = snd_pcm_substream_chip(ss);
-	snd_pcm_runtime_t *rt = ss->runtime;
+	struct snd_pcm_runtime *rt = ss->runtime;
 	unsigned int size = snd_pcm_lib_buffer_bytes(ss);
 	unsigned int count = snd_pcm_lib_period_bytes(ss);
 	u16 reg;
@@ -462,7 +464,7 @@ snd_ad1889_capture_prepare(snd_pcm_substream_t *ss)
    DMA should be *triggered* by this call.
    The WSMC "WAEN" bit triggers DMA Wave On/Off */
 static int
-snd_ad1889_playback_trigger(snd_pcm_substream_t *ss, int cmd)
+snd_ad1889_playback_trigger(struct snd_pcm_substream *ss, int cmd)
 {
 	u16 wsmc;
 	struct snd_ad1889 *chip = snd_pcm_substream_chip(ss);
@@ -503,7 +505,7 @@ snd_ad1889_playback_trigger(snd_pcm_substream_t *ss, int cmd)
    DMA should be *triggered* by this call.
    The RAMC "ADEN" bit triggers DMA ADC On/Off */
 static int
-snd_ad1889_capture_trigger(snd_pcm_substream_t *ss, int cmd)
+snd_ad1889_capture_trigger(struct snd_pcm_substream *ss, int cmd)
 {
 	u16 ramc;
 	struct snd_ad1889 *chip = snd_pcm_substream_chip(ss);
@@ -538,7 +540,7 @@ snd_ad1889_capture_trigger(snd_pcm_substream_t *ss, int cmd)
 
 /* Called in atomic context with IRQ disabled */
 static snd_pcm_uframes_t
-snd_ad1889_playback_pointer(snd_pcm_substream_t *ss)
+snd_ad1889_playback_pointer(struct snd_pcm_substream *ss)
 {
 	size_t ptr = 0;
 	struct snd_ad1889 *chip = snd_pcm_substream_chip(ss);
@@ -556,7 +558,7 @@ snd_ad1889_playback_pointer(snd_pcm_substream_t *ss)
 
 /* Called in atomic context with IRQ disabled */
 static snd_pcm_uframes_t
-snd_ad1889_capture_pointer(snd_pcm_substream_t *ss)
+snd_ad1889_capture_pointer(struct snd_pcm_substream *ss)
 {
 	size_t ptr = 0;
 	struct snd_ad1889 *chip = snd_pcm_substream_chip(ss);
@@ -572,7 +574,7 @@ snd_ad1889_capture_pointer(snd_pcm_substream_t *ss)
 	return bytes_to_frames(ss->runtime, ptr);
 }
 
-static snd_pcm_ops_t snd_ad1889_playback_ops = {
+static struct snd_pcm_ops snd_ad1889_playback_ops = {
 	.open = snd_ad1889_playback_open,
 	.close = snd_ad1889_playback_close,
 	.ioctl = snd_pcm_lib_ioctl,
@@ -583,7 +585,7 @@ static snd_pcm_ops_t snd_ad1889_playback_ops = {
 	.pointer = snd_ad1889_playback_pointer, 
 };
 
-static snd_pcm_ops_t snd_ad1889_capture_ops = {
+static struct snd_pcm_ops snd_ad1889_capture_ops = {
 	.open = snd_ad1889_capture_open,
 	.close = snd_ad1889_capture_close,
 	.ioctl = snd_pcm_lib_ioctl,
@@ -623,19 +625,11 @@ snd_ad1889_interrupt(int irq,
 	return IRQ_HANDLED;
 }
 
-static void 
-snd_ad1889_pcm_free(snd_pcm_t *pcm)
-{
-	struct snd_ad1889 *chip = pcm->private_data;
-	chip->pcm = NULL;
-	snd_pcm_lib_preallocate_free_for_all(pcm);
-}
-
 static int __devinit
-snd_ad1889_pcm_init(struct snd_ad1889 *chip, int device, snd_pcm_t **rpcm)
+snd_ad1889_pcm_init(struct snd_ad1889 *chip, int device, struct snd_pcm **rpcm)
 {
 	int err;
-	snd_pcm_t *pcm;
+	struct snd_pcm *pcm;
 
 	if (rpcm)
 		*rpcm = NULL;
@@ -650,7 +644,6 @@ snd_ad1889_pcm_init(struct snd_ad1889 *chip, int device, snd_pcm_t **rpcm)
 			&snd_ad1889_capture_ops);
 
 	pcm->private_data = chip;
-	pcm->private_free = snd_ad1889_pcm_free;
 	pcm->info_flags = 0;
 	strcpy(pcm->name, chip->card->shortname);
 	
@@ -675,7 +668,7 @@ snd_ad1889_pcm_init(struct snd_ad1889 *chip, int device, snd_pcm_t **rpcm)
 }
 
 static void
-snd_ad1889_proc_read(snd_info_entry_t *entry, snd_info_buffer_t *buffer)
+snd_ad1889_proc_read(struct snd_info_entry *entry, struct snd_info_buffer *buffer)
 {
 	struct snd_ad1889 *chip = entry->private_data;
 	u16 reg;
@@ -758,7 +751,7 @@ snd_ad1889_proc_read(snd_info_entry_t *entry, snd_info_buffer_t *buffer)
 static void __devinit
 snd_ad1889_proc_init(struct snd_ad1889 *chip)
 {
-	snd_info_entry_t *entry;
+	struct snd_info_entry *entry;
 
 	if (!snd_card_proc_new(chip->card, chip->card->driver, &entry))
 		snd_info_set_text_ops(entry, chip, 1024, snd_ad1889_proc_read);
@@ -800,14 +793,14 @@ snd_ad1889_ac97_xinit(struct snd_ad1889 *chip)
 }
 
 static void
-snd_ad1889_ac97_bus_free(ac97_bus_t *bus)
+snd_ad1889_ac97_bus_free(struct snd_ac97_bus *bus)
 {
 	struct snd_ad1889 *chip = bus->private_data;
 	chip->ac97_bus = NULL;
 }
 
 static void
-snd_ad1889_ac97_free(ac97_t *ac97)
+snd_ad1889_ac97_free(struct snd_ac97 *ac97)
 {
 	struct snd_ad1889 *chip = ac97->private_data;
 	chip->ac97 = NULL;
@@ -817,8 +810,8 @@ static int __devinit
 snd_ad1889_ac97_init(struct snd_ad1889 *chip, const char *quirk_override)
 {
 	int err;
-	ac97_template_t ac97;
-	static ac97_bus_ops_t ops = {
+	struct snd_ac97_template ac97;
+	static struct snd_ac97_bus_ops ops = {
 		.write = snd_ad1889_ac97_write,
 		.read = snd_ad1889_ac97_read,
 	};
@@ -882,7 +875,7 @@ skip_hw:
 }
 
 static inline int
-snd_ad1889_dev_free(snd_device_t *device) 
+snd_ad1889_dev_free(struct snd_device *device) 
 {
 	struct snd_ad1889 *chip = device->device_data;
 	return snd_ad1889_free(chip);
@@ -903,14 +896,14 @@ snd_ad1889_init(struct snd_ad1889 *chip)
 }
 
 static int __devinit
-snd_ad1889_create(snd_card_t *card,
+snd_ad1889_create(struct snd_card *card,
 		  struct pci_dev *pci,
 		  struct snd_ad1889 **rchip)
 {
 	int err;
 
 	struct snd_ad1889 *chip;
-	static snd_device_ops_t ops = {
+	static struct snd_device_ops ops = {
 		.dev_free = snd_ad1889_dev_free,
 	};
 
@@ -918,10 +911,10 @@ snd_ad1889_create(snd_card_t *card,
 
 	if ((err = pci_enable_device(pci)) < 0)
 		return err;
-	
+
 	/* check PCI availability (32bit DMA) */
-	if (pci_set_dma_mask(pci, 0xffffffff) < 0 ||
-	    pci_set_consistent_dma_mask(pci, 0xffffffff) < 0) {
+	if (pci_set_dma_mask(pci, DMA_32BIT_MASK) < 0 ||
+	    pci_set_consistent_dma_mask(pci, DMA_32BIT_MASK) < 0) {
 		printk(KERN_ERR PFX "error setting 32-bit DMA mask.\n");
 		pci_disable_device(pci);
 		return -ENXIO;
@@ -994,7 +987,7 @@ snd_ad1889_probe(struct pci_dev *pci,
 {
 	int err;
 	static int devno;
-	snd_card_t *card;
+	struct snd_card *card;
 	struct snd_ad1889 *chip;
 
 	/* (1) */

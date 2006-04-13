@@ -9,7 +9,7 @@
  */
 
 #include <linux/kernel.h>
-#include <linux/module.h> 
+#include <linux/module.h>
 #include <linux/moduleparam.h>
 #include <linux/init.h>
 #include <linux/cpufreq.h>
@@ -36,8 +36,8 @@ static unsigned int pentium3_get_frequency (unsigned int processor)
         /* See table 14 of p3_ds.pdf and table 22 of 29834003.pdf */
 	struct {
 		unsigned int ratio;	/* Frequency Multiplier (x10) */
-		u8 bitmap;	        /* power on configuration bits
-					   [27, 25:22] (in MSR 0x2a) */
+		u8 bitmap;		/* power on configuration bits
+					[27, 25:22] (in MSR 0x2a) */
 	} msr_decode_mult [] = {
 		{ 30, 0x01 },
 		{ 35, 0x05 },
@@ -58,9 +58,9 @@ static unsigned int pentium3_get_frequency (unsigned int processor)
 
 	/* PIII(-M) FSB settings: see table b1-b of 24547206.pdf */
 	struct {
-		unsigned int value;     /* Front Side Bus speed in MHz */
-		u8 bitmap;              /* power on configuration bits [18: 19]
-					   (in MSR 0x2a) */
+		unsigned int value;	/* Front Side Bus speed in MHz */
+		u8 bitmap;		/* power on configuration bits [18: 19]
+					(in MSR 0x2a) */
 	} msr_decode_fsb [] = {
 		{  66, 0x0 },
 		{ 100, 0x2 },
@@ -68,8 +68,8 @@ static unsigned int pentium3_get_frequency (unsigned int processor)
 		{   0, 0xff}
 	};
 
-	u32     msr_lo, msr_tmp;
-	int     i = 0, j = 0;
+	u32 msr_lo, msr_tmp;
+	int i = 0, j = 0;
 
 	/* read MSR 0x2a - we only need the low 32 bits */
 	rdmsr(MSR_IA32_EBL_CR_POWERON, msr_lo, msr_tmp);
@@ -106,7 +106,7 @@ static unsigned int pentium3_get_frequency (unsigned int processor)
 
 static unsigned int pentiumM_get_frequency(void)
 {
-	u32     msr_lo, msr_tmp;
+	u32 msr_lo, msr_tmp;
 
 	rdmsr(MSR_IA32_EBL_CR_POWERON, msr_lo, msr_tmp);
 	dprintk("PM - MSR_IA32_EBL_CR_POWERON: 0x%x 0x%x\n", msr_lo, msr_tmp);
@@ -134,7 +134,7 @@ static unsigned int pentium4_get_frequency(void)
 
 	dprintk("P4 - MSR_EBC_FREQUENCY_ID: 0x%x 0x%x\n", msr_lo, msr_hi);
 
-	/* decode the FSB: see IA-32 Intel (C) Architecture Software 
+	/* decode the FSB: see IA-32 Intel (C) Architecture Software
 	 * Developer's Manual, Volume 3: System Prgramming Guide,
 	 * revision #12 in Table B-1: MSRs in the Pentium 4 and
 	 * Intel Xeon Processors, on page B-4 and B-5.
@@ -170,7 +170,7 @@ static unsigned int pentium4_get_frequency(void)
 	return (fsb * mult);
 }
 
- 
+
 unsigned int speedstep_get_processor_frequency(unsigned int processor)
 {
 	switch (processor) {
@@ -198,11 +198,11 @@ EXPORT_SYMBOL_GPL(speedstep_get_processor_frequency);
 unsigned int speedstep_detect_processor (void)
 {
 	struct cpuinfo_x86 *c = cpu_data;
-	u32			ebx, msr_lo, msr_hi;
+	u32 ebx, msr_lo, msr_hi;
 
 	dprintk("x86: %x, model: %x\n", c->x86, c->x86_model);
 
-	if ((c->x86_vendor != X86_VENDOR_INTEL) || 
+	if ((c->x86_vendor != X86_VENDOR_INTEL) ||
 	    ((c->x86 != 6) && (c->x86 != 0xF)))
 		return 0;
 
@@ -218,15 +218,15 @@ unsigned int speedstep_detect_processor (void)
 		dprintk("ebx value is %x, x86_mask is %x\n", ebx, c->x86_mask);
 
 		switch (c->x86_mask) {
-		case 4: 
+		case 4:
 			/*
-			 * B-stepping [M-P4-M] 
+			 * B-stepping [M-P4-M]
 			 * sample has ebx = 0x0f, production has 0x0e.
 			 */
 			if ((ebx == 0x0e) || (ebx == 0x0f))
 				return SPEEDSTEP_PROCESSOR_P4M;
 			break;
-		case 7: 
+		case 7:
 			/*
 			 * C-stepping [M-P4-M]
 			 * needs to have ebx=0x0e, else it's a celeron:
@@ -253,7 +253,7 @@ unsigned int speedstep_detect_processor (void)
 			 * also, M-P4M HTs have ebx=0x8, too
 			 * For now, they are distinguished by the model_id string
 			 */
-		        if ((ebx == 0x0e) || (strstr(c->x86_model_id,"Mobile Intel(R) Pentium(R) 4") != NULL)) 
+			if ((ebx == 0x0e) || (strstr(c->x86_model_id,"Mobile Intel(R) Pentium(R) 4") != NULL))
 				return SPEEDSTEP_PROCESSOR_P4M;
 			break;
 		default:
@@ -264,8 +264,7 @@ unsigned int speedstep_detect_processor (void)
 
 	switch (c->x86_model) {
 	case 0x0B: /* Intel PIII [Tualatin] */
-		/* cpuid_ebx(1) is 0x04 for desktop PIII, 
-		                   0x06 for mobile PIII-M */
+		/* cpuid_ebx(1) is 0x04 for desktop PIII, 0x06 for mobile PIII-M */
 		ebx = cpuid_ebx(0x00000001);
 		dprintk("ebx is %x\n", ebx);
 
@@ -275,9 +274,8 @@ unsigned int speedstep_detect_processor (void)
 			return 0;
 
 		/* So far all PIII-M processors support SpeedStep. See
-		 * Intel's 24540640.pdf of June 2003 
+		 * Intel's 24540640.pdf of June 2003
 		 */
-
 		return SPEEDSTEP_PROCESSOR_PIII_T;
 
 	case 0x08: /* Intel PIII [Coppermine] */
@@ -320,11 +318,13 @@ EXPORT_SYMBOL_GPL(speedstep_detect_processor);
 unsigned int speedstep_get_freqs(unsigned int processor,
 				  unsigned int *low_speed,
 				  unsigned int *high_speed,
+				  unsigned int *transition_latency,
 				  void (*set_state) (unsigned int state))
 {
 	unsigned int prev_speed;
 	unsigned int ret = 0;
 	unsigned long flags;
+	struct timeval tv1, tv2;
 
 	if ((!processor) || (!low_speed) || (!high_speed) || (!set_state))
 		return -EINVAL;
@@ -337,7 +337,7 @@ unsigned int speedstep_get_freqs(unsigned int processor,
 		return -EIO;
 
 	dprintk("previous speed is %u\n", prev_speed);
-	
+
 	local_irq_save(flags);
 
 	/* switch to low state */
@@ -350,8 +350,17 @@ unsigned int speedstep_get_freqs(unsigned int processor,
 
 	dprintk("low speed is %u\n", *low_speed);
 
+	/* start latency measurement */
+	if (transition_latency)
+		do_gettimeofday(&tv1);
+
 	/* switch to high state */
 	set_state(SPEEDSTEP_HIGH);
+
+	/* end latency measurement */
+	if (transition_latency)
+		do_gettimeofday(&tv2);
+
 	*high_speed = speedstep_get_processor_frequency(processor);
 	if (!*high_speed) {
 		ret = -EIO;
@@ -369,7 +378,26 @@ unsigned int speedstep_get_freqs(unsigned int processor,
 	if (*high_speed != prev_speed)
 		set_state(SPEEDSTEP_LOW);
 
- out:
+	if (transition_latency) {
+		*transition_latency = (tv2.tv_sec - tv1.tv_sec) * USEC_PER_SEC +
+			tv2.tv_usec - tv1.tv_usec;
+		dprintk("transition latency is %u uSec\n", *transition_latency);
+
+		/* convert uSec to nSec and add 20% for safety reasons */
+		*transition_latency *= 1200;
+
+		/* check if the latency measurement is too high or too low
+		 * and set it to a safe value (500uSec) in that case
+		 */
+		if (*transition_latency > 10000000 || *transition_latency < 50000) {
+			printk (KERN_WARNING "speedstep: frequency transition measured seems out of "
+					"range (%u nSec), falling back to a safe one of %u nSec.\n",
+					*transition_latency, 500000);
+			*transition_latency = 500000;
+		}
+	}
+
+out:
 	local_irq_restore(flags);
 	return (ret);
 }

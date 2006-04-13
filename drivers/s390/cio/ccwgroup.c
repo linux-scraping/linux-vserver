@@ -1,12 +1,11 @@
 /*
  *  drivers/s390/cio/ccwgroup.c
  *  bus driver for ccwgroup
- *   $Revision: 1.32 $
  *
  *    Copyright (C) 2002 IBM Deutschland Entwicklung GmbH,
  *                       IBM Corporation
  *    Author(s): Arnd Bergmann (arndb@de.ibm.com)
- *               Cornelia Huck (cohuck@de.ibm.com)
+ *               Cornelia Huck (cornelia.huck@de.ibm.com)
  */
 #include <linux/module.h>
 #include <linux/errno.h>
@@ -45,18 +44,14 @@ ccwgroup_bus_match (struct device * dev, struct device_driver * drv)
 	return 0;
 }
 static int
-ccwgroup_hotplug (struct device *dev, char **envp, int num_envp, char *buffer,
+ccwgroup_uevent (struct device *dev, char **envp, int num_envp, char *buffer,
 		  int buffer_size)
 {
 	/* TODO */
 	return 0;
 }
 
-static struct bus_type ccwgroup_bus_type = {
-	.name    = "ccwgroup",
-	.match   = ccwgroup_bus_match,
-	.hotplug = ccwgroup_hotplug,
-};
+static struct bus_type ccwgroup_bus_type;
 
 static inline void
 __ccwgroup_remove_symlinks(struct ccwgroup_device *gdev)
@@ -162,11 +157,10 @@ ccwgroup_create(struct device *root,
 	if (argc > 256) /* disallow dumb users */
 		return -EINVAL;
 
-	gdev = kmalloc(sizeof(*gdev) + argc*sizeof(gdev->cdev[0]), GFP_KERNEL);
+	gdev = kzalloc(sizeof(*gdev) + argc*sizeof(gdev->cdev[0]), GFP_KERNEL);
 	if (!gdev)
 		return -ENOMEM;
 
-	memset(gdev, 0, sizeof(*gdev) + argc*sizeof(gdev->cdev[0]));
 	atomic_set(&gdev->onoff, 0);
 
 	del_drvdata = 0;
@@ -263,7 +257,7 @@ ccwgroup_set_online(struct ccwgroup_device *gdev)
 	struct ccwgroup_driver *gdrv;
 	int ret;
 
-	if (atomic_compare_and_swap(0, 1, &gdev->onoff))
+	if (atomic_cmpxchg(&gdev->onoff, 0, 1) != 0)
 		return -EAGAIN;
 	if (gdev->state == CCWGROUP_ONLINE) {
 		ret = 0;
@@ -289,7 +283,7 @@ ccwgroup_set_offline(struct ccwgroup_device *gdev)
 	struct ccwgroup_driver *gdrv;
 	int ret;
 
-	if (atomic_compare_and_swap(0, 1, &gdev->onoff))
+	if (atomic_cmpxchg(&gdev->onoff, 0, 1) != 0)
 		return -EAGAIN;
 	if (gdev->state == CCWGROUP_OFFLINE) {
 		ret = 0;
@@ -389,6 +383,14 @@ ccwgroup_remove (struct device *dev)
 	return 0;
 }
 
+static struct bus_type ccwgroup_bus_type = {
+	.name   = "ccwgroup",
+	.match  = ccwgroup_bus_match,
+	.uevent = ccwgroup_uevent,
+	.probe  = ccwgroup_probe,
+	.remove = ccwgroup_remove,
+};
+
 int
 ccwgroup_driver_register (struct ccwgroup_driver *cdriver)
 {
@@ -396,8 +398,6 @@ ccwgroup_driver_register (struct ccwgroup_driver *cdriver)
 	cdriver->driver = (struct device_driver) {
 		.bus = &ccwgroup_bus_type,
 		.name = cdriver->name,
-		.probe = ccwgroup_probe,
-		.remove = ccwgroup_remove,
 	};
 
 	return driver_register(&cdriver->driver);

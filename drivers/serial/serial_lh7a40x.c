@@ -148,15 +148,6 @@ lh7a40xuart_rx_chars (struct uart_port* port)
 	unsigned int data, flag;/* Received data and status */
 
 	while (!(UR (port, UART_R_STATUS) & nRxRdy) && --cbRxMax) {
-		if (tty->flip.count >= TTY_FLIPBUF_SIZE) {
-			if (tty->low_latency)
-				tty_flip_buffer_push(tty);
-			/*
-			 * If this failed then we will throw away the
-			 * bytes but must do so to clear interrupts
-			 */
-		}
-
 		data = UR (port, UART_R_DATA);
 		flag = TTY_NORMAL;
 		++port->icount.rx;
@@ -510,12 +501,12 @@ static struct uart_port_lh7a40x lh7a40x_ports[DEV_NR] = {
 		.port = {
 			.membase	= (void*) io_p2v (UART1_PHYS),
 			.mapbase	= UART1_PHYS,
-			.iotype		= SERIAL_IO_MEM,
+			.iotype		= UPIO_MEM,
 			.irq		= IRQ_UART1INTR,
 			.uartclk	= 14745600/2,
 			.fifosize	= 16,
 			.ops		= &lh7a40x_uart_ops,
-			.flags		= ASYNC_BOOT_AUTOCONF,
+			.flags		= UPF_BOOT_AUTOCONF,
 			.line		= 0,
 		},
 	},
@@ -523,12 +514,12 @@ static struct uart_port_lh7a40x lh7a40x_ports[DEV_NR] = {
 		.port = {
 			.membase	= (void*) io_p2v (UART2_PHYS),
 			.mapbase	= UART2_PHYS,
-			.iotype		= SERIAL_IO_MEM,
+			.iotype		= UPIO_MEM,
 			.irq		= IRQ_UART2INTR,
 			.uartclk	= 14745600/2,
 			.fifosize	= 16,
 			.ops		= &lh7a40x_uart_ops,
-			.flags		= ASYNC_BOOT_AUTOCONF,
+			.flags		= UPF_BOOT_AUTOCONF,
 			.line		= 1,
 		},
 	},
@@ -536,12 +527,12 @@ static struct uart_port_lh7a40x lh7a40x_ports[DEV_NR] = {
 		.port = {
 			.membase	= (void*) io_p2v (UART3_PHYS),
 			.mapbase	= UART3_PHYS,
-			.iotype		= SERIAL_IO_MEM,
+			.iotype		= UPIO_MEM,
 			.irq		= IRQ_UART3INTR,
 			.uartclk	= 14745600/2,
 			.fifosize	= 16,
 			.ops		= &lh7a40x_uart_ops,
-			.flags		= ASYNC_BOOT_AUTOCONF,
+			.flags		= UPF_BOOT_AUTOCONF,
 			.line		= 2,
 		},
 	},
@@ -552,6 +543,12 @@ static struct uart_port_lh7a40x lh7a40x_ports[DEV_NR] = {
 #else
 # define LH7A40X_CONSOLE &lh7a40x_console
 
+static void lh7a40xuart_console_putchar(struct uart_port *port, int ch)
+{
+	while (UR(port, UART_R_STATUS) & nTxRdy)
+		;
+	UR(port, UART_R_DATA) = ch;
+}
 
 static void lh7a40xuart_console_write (struct console* co,
 				       const char* s,
@@ -565,16 +562,7 @@ static void lh7a40xuart_console_write (struct console* co,
 	UR (port, UART_R_INTEN) = 0;		/* Disable all interrupts */
 	BIT_SET (port, UART_R_CON, UARTEN | SIRDIS); /* Enable UART */
 
-	for (; count-- > 0; ++s) {
-		while (UR (port, UART_R_STATUS) & nTxRdy)
-			;
-		UR (port, UART_R_DATA) = *s;
-		if (*s == '\n') {
-			while ((UR (port, UART_R_STATUS) & TxBusy))
-				;
-			UR (port, UART_R_DATA) = '\r';
-		}
-	}
+	uart_console_write(port, s, count, lh7a40xuart_console_putchar);
 
 				/* Wait until all characters are sent */
 	while (UR (port, UART_R_STATUS) & TxBusy)

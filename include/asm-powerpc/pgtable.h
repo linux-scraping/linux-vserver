@@ -1,5 +1,6 @@
 #ifndef _ASM_POWERPC_PGTABLE_H
 #define _ASM_POWERPC_PGTABLE_H
+#ifdef __KERNEL__
 
 #ifndef CONFIG_PPC64
 #include <asm-ppc/pgtable.h>
@@ -56,6 +57,17 @@ struct mm_struct;
 #define PHBS_IO_BASE	VMALLOC_END
 #define IMALLOC_BASE	(PHBS_IO_BASE + 0x80000000ul)	/* Reserve 2 gigs for PHBs */
 #define IMALLOC_END	(VMALLOC_START + PGTABLE_RANGE)
+
+/*
+ * Region IDs
+ */
+#define REGION_SHIFT		60UL
+#define REGION_MASK		(0xfUL << REGION_SHIFT)
+#define REGION_ID(ea)		(((unsigned long)(ea)) >> REGION_SHIFT)
+
+#define VMALLOC_REGION_ID	(REGION_ID(VMALLOC_START))
+#define KERNEL_REGION_ID	(REGION_ID(PAGE_OFFSET))
+#define USER_REGION_ID		(0UL)
 
 /*
  * Common bits in a linux-style PTE.  These match the bits in the
@@ -176,9 +188,13 @@ static inline pte_t pfn_pte(unsigned long pfn, pgprot_t pgprot)
 #define pte_pfn(x)		((unsigned long)((pte_val(x)>>PTE_RPN_SHIFT)))
 #define pte_page(x)		pfn_to_page(pte_pfn(x))
 
+#define PMD_BAD_BITS		(PTE_TABLE_SIZE-1)
+#define PUD_BAD_BITS		(PMD_TABLE_SIZE-1)
+
 #define pmd_set(pmdp, pmdval) 	(pmd_val(*(pmdp)) = (pmdval))
 #define pmd_none(pmd)		(!pmd_val(pmd))
-#define	pmd_bad(pmd)		(pmd_val(pmd) == 0)
+#define	pmd_bad(pmd)		(!is_kernel_addr(pmd_val(pmd)) \
+				 || (pmd_val(pmd) & PMD_BAD_BITS))
 #define	pmd_present(pmd)	(pmd_val(pmd) != 0)
 #define	pmd_clear(pmdp)		(pmd_val(*(pmdp)) = 0)
 #define pmd_page_kernel(pmd)	(pmd_val(pmd) & ~PMD_MASKED_BITS)
@@ -186,7 +202,8 @@ static inline pte_t pfn_pte(unsigned long pfn, pgprot_t pgprot)
 
 #define pud_set(pudp, pudval)	(pud_val(*(pudp)) = (pudval))
 #define pud_none(pud)		(!pud_val(pud))
-#define pud_bad(pud)		((pud_val(pud)) == 0)
+#define	pud_bad(pud)		(!is_kernel_addr(pud_val(pud)) \
+				 || (pud_val(pud) & PUD_BAD_BITS))
 #define pud_present(pud)	(pud_val(pud) != 0)
 #define pud_clear(pudp)		(pud_val(*(pudp)) = 0)
 #define pud_page(pud)		(pud_val(pud) & ~PUD_MASKED_BITS)
@@ -456,11 +473,6 @@ extern pgd_t swapper_pg_dir[];
 
 extern void paging_init(void);
 
-#ifdef CONFIG_HUGETLB_PAGE
-#define hugetlb_free_pgd_range(tlb, addr, end, floor, ceiling) \
-	free_pgd_range(tlb, addr, end, floor, ceiling)
-#endif
-
 /*
  * This gets called at the end of handling a page fault, when
  * the kernel has put a new PTE into the page table for the process.
@@ -521,4 +533,5 @@ void pgtable_cache_init(void);
 #endif /* __ASSEMBLY__ */
 
 #endif /* CONFIG_PPC64 */
+#endif /* __KERNEL__ */
 #endif /* _ASM_POWERPC_PGTABLE_H */

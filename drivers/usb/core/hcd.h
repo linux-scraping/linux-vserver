@@ -78,8 +78,6 @@ struct usb_hcd {	/* usb_bus.hcpriv points to this */
 #define HCD_FLAG_HW_ACCESSIBLE	0x00000001
 #define HCD_FLAG_SAW_IRQ	0x00000002
 
-	unsigned		can_wakeup:1;	/* hw supports wakeup? */
-	unsigned		remote_wakeup:1;/* sw should use wakeup? */
 	unsigned		rh_registered:1;/* is root hub registered? */
 
 	/* The next flag is a stopgap, to be removed when all the HCDs
@@ -364,7 +362,7 @@ extern void usb_set_device_state(struct usb_device *udev,
 /* exported only within usbcore */
 
 extern struct list_head usb_bus_list;
-extern struct semaphore usb_bus_list_lock;
+extern struct mutex usb_bus_list_lock;
 extern wait_queue_head_t usb_kill_urb_queue;
 
 extern struct usb_bus *usb_bus_get (struct usb_bus *bus);
@@ -380,6 +378,7 @@ extern int usb_find_interface_driver (struct usb_device *dev,
 #ifdef CONFIG_PM
 extern void usb_hcd_suspend_root_hub (struct usb_hcd *hcd);
 extern void usb_hcd_resume_root_hub (struct usb_hcd *hcd);
+extern void usb_root_hub_lost_power (struct usb_device *rhdev);
 extern int hcd_bus_suspend (struct usb_bus *bus);
 extern int hcd_bus_resume (struct usb_bus *bus);
 #else

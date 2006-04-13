@@ -61,7 +61,7 @@ futex_atomic_op_inuser (int encoded_op, int __user *uaddr)
 	if (op == FUTEX_OP_SET)
 		__futex_atomic_op1("xchgl %0, %2", ret, oldval, uaddr, oparg);
 	else {
-#if !defined(CONFIG_X86_BSWAP) && !defined(CONFIG_UML)
+#ifndef CONFIG_X86_BSWAP
 		if (boot_cpu_data.x86 == 3)
 			ret = -ENOSYS;
 		else
@@ -102,6 +102,33 @@ futex_atomic_op_inuser (int encoded_op, int __user *uaddr)
 		}
 	}
 	return ret;
+}
+
+static inline int
+futex_atomic_cmpxchg_inatomic(int __user *uaddr, int oldval, int newval)
+{
+	if (!access_ok(VERIFY_WRITE, uaddr, sizeof(int)))
+		return -EFAULT;
+
+	__asm__ __volatile__(
+		"1:	" LOCK_PREFIX "cmpxchgl %3, %1		\n"
+
+		"2:	.section .fixup, \"ax\"			\n"
+		"3:	mov     %2, %0				\n"
+		"	jmp     2b				\n"
+		"	.previous				\n"
+
+		"	.section __ex_table, \"a\"		\n"
+		"	.align  8				\n"
+		"	.long   1b,3b				\n"
+		"	.previous				\n"
+
+		: "=a" (oldval), "=m" (*uaddr)
+		: "i" (-EFAULT), "r" (newval), "0" (oldval)
+		: "memory"
+	);
+
+	return oldval;
 }
 
 #endif

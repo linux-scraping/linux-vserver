@@ -107,18 +107,19 @@ struct dvb_pll_desc dvb_pll_microtune_4042 = {
 };
 EXPORT_SYMBOL(dvb_pll_microtune_4042);
 
-struct dvb_pll_desc dvb_pll_thomson_dtt7611 = {
-	.name  = "Thomson dtt7611",
-	.min   =  44000000,
-	.max   = 958000000,
+struct dvb_pll_desc dvb_pll_thomson_dtt761x = {
+	/* DTT 7611 7611A 7612 7613 7613A 7614 7615 7615A */
+	.name  = "Thomson dtt761x",
+	.min   =  57000000,
+	.max   = 863000000,
 	.count = 3,
 	.entries = {
-		{ 157250000, 44000000, 62500, 0x8e, 0x39 },
-		{ 454000000, 44000000, 62500, 0x8e, 0x3a },
+		{ 147000000, 44000000, 62500, 0x8e, 0x39 },
+		{ 417000000, 44000000, 62500, 0x8e, 0x3a },
 		{ 999999999, 44000000, 62500, 0x8e, 0x3c },
 	},
 };
-EXPORT_SYMBOL(dvb_pll_thomson_dtt7611);
+EXPORT_SYMBOL(dvb_pll_thomson_dtt761x);
 
 struct dvb_pll_desc dvb_pll_unknown_1 = {
 	.name  = "unknown 1", /* used by dntv live dvb-t */
@@ -325,14 +326,14 @@ struct dvb_pll_desc dvb_pll_tuv1236d = {
 };
 EXPORT_SYMBOL(dvb_pll_tuv1236d);
 
-/* Samsung TBMV30111IN
+/* Samsung TBMV30111IN / TBMV30712IN1
  * used in Air2PC ATSC - 2nd generation (nxt2002)
  */
-struct dvb_pll_desc dvb_pll_tbmv30111in = {
-	.name = "Samsung TBMV30111IN",
+struct dvb_pll_desc dvb_pll_samsung_tbmv = {
+	.name = "Samsung TBMV30111IN / TBMV30712IN1",
 	.min = 54000000,
 	.max = 860000000,
-	.count = 4,
+	.count = 6,
 	.entries = {
 		{ 172000000, 44000000, 166666, 0xb4, 0x01 },
 		{ 214000000, 44000000, 166666, 0xb4, 0x02 },
@@ -342,7 +343,81 @@ struct dvb_pll_desc dvb_pll_tbmv30111in = {
 		{ 999999999, 44000000, 166666, 0xfc, 0x02 },
 	}
 };
-EXPORT_SYMBOL(dvb_pll_tbmv30111in);
+EXPORT_SYMBOL(dvb_pll_samsung_tbmv);
+
+/*
+ * Philips SD1878 Tuner.
+ */
+struct dvb_pll_desc dvb_pll_philips_sd1878_tda8261 = {
+	.name  = "Philips SD1878",
+	.min   =  950000,
+	.max   = 2150000,
+	.count = 4,
+	.entries = {
+		{ 1250000, 499, 500, 0xc4, 0x00},
+		{ 1550000, 499, 500, 0xc4, 0x40},
+		{ 2050000, 499, 500, 0xc4, 0x80},
+		{ 2150000, 499, 500, 0xc4, 0xc0},
+	},
+};
+EXPORT_SYMBOL(dvb_pll_philips_sd1878_tda8261);
+
+/*
+ * Philips TD1316 Tuner.
+ */
+static void td1316_bw(u8 *buf, u32 freq, int bandwidth)
+{
+	u8 band;
+
+	/* determine band */
+	if (freq < 161000000)
+		band = 1;
+	else if (freq < 444000000)
+		band = 2;
+	else
+		band = 4;
+
+	buf[3] |= band;
+
+	/* setup PLL filter */
+	if (bandwidth == BANDWIDTH_8_MHZ)
+		buf[3] |= 1 << 3;
+}
+
+struct dvb_pll_desc dvb_pll_philips_td1316 = {
+	.name  = "Philips TD1316",
+	.min   =  87000000,
+	.max   = 895000000,
+	.setbw = td1316_bw,
+	.count = 9,
+	.entries = {
+		{  93834000, 36166000, 166666, 0xca, 0x60},
+		{ 123834000, 36166000, 166666, 0xca, 0xa0},
+		{ 163834000, 36166000, 166666, 0xca, 0xc0},
+		{ 253834000, 36166000, 166666, 0xca, 0x60},
+		{ 383834000, 36166000, 166666, 0xca, 0xa0},
+		{ 443834000, 36166000, 166666, 0xca, 0xc0},
+		{ 583834000, 36166000, 166666, 0xca, 0x60},
+		{ 793834000, 36166000, 166666, 0xca, 0xa0},
+		{ 858834000, 36166000, 166666, 0xca, 0xe0},
+	},
+};
+EXPORT_SYMBOL(dvb_pll_philips_td1316);
+
+/* FE6600 used on DViCO Hybrid */
+struct dvb_pll_desc dvb_pll_thomson_fe6600 = {
+	.name = "Thomson FE6600",
+	.min =  44250000,
+	.max = 858000000,
+	.count = 4,
+	.entries = {
+		{ 250000000, 36213333, 166667, 0xb4, 0x12 },
+		{ 455000000, 36213333, 166667, 0xfe, 0x11 },
+		{ 775500000, 36213333, 166667, 0xbc, 0x18 },
+		{ 999999999, 36213333, 166667, 0xf4, 0x18 },
+	}
+};
+EXPORT_SYMBOL(dvb_pll_thomson_fe6600);
 
 /* ----------------------------------------------------------- */
 /* code                                                        */
@@ -373,8 +448,8 @@ int dvb_pll_configure(struct dvb_pll_desc *desc, u8 *buf,
 	div = (freq + desc->entries[i].offset) / desc->entries[i].stepsize;
 	buf[0] = div >> 8;
 	buf[1] = div & 0xff;
-	buf[2] = desc->entries[i].cb1;
-	buf[3] = desc->entries[i].cb2;
+	buf[2] = desc->entries[i].config;
+	buf[3] = desc->entries[i].cb;
 
 	if (desc->setbw)
 		desc->setbw(buf, freq, bandwidth);

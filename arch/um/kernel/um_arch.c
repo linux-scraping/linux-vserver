@@ -1,4 +1,4 @@
-/* 
+/*
  * Copyright (C) 2000, 2002 Jeff Dike (jdike@karaya.com)
  * Licensed under the GPL
  */
@@ -146,8 +146,8 @@ void set_cmdline(char *cmd)
 
 	if(CHOOSE_MODE(honeypot, 0)) return;
 
-	umid = get_umid(1);
-	if(umid != NULL){
+	umid = get_umid();
+	if(*umid != '\0'){
 		snprintf(argv1_begin, 
 			 (argv1_end - argv1_begin) * sizeof(*ptr), 
 			 "(%s) ", umid);
@@ -192,6 +192,24 @@ __uml_setup("root=", uml_root_setup,
 "    would use something like:\n"
 "        root=/dev/ubd5\n\n"
 );
+
+#ifndef CONFIG_MODE_TT
+
+static int __init no_skas_debug_setup(char *line, int *add)
+{
+	printf("'debug' is not necessary to gdb UML in skas mode - run \n");
+	printf("'gdb linux' and disable CONFIG_CMDLINE_ON_HOST if gdb \n");
+	printf("doesn't work as expected\n");
+
+	return 0;
+}
+
+__uml_setup("debug", no_skas_debug_setup,
+"debug\n"
+"    this flag is not needed to run gdb on UML in skas mode\n\n"
+);
+
+#endif
 
 #ifdef CONFIG_SMP
 static int __init uml_ncpus_setup(char *line, int *add)
@@ -242,10 +260,6 @@ static int __init mode_tt_setup(char *line, int *add)
 	printf("CONFIG_MODE_SKAS disabled - 'mode=tt' redundant\n");
 	return(0);
 }
-
-#else
-
-#error Either CONFIG_MODE_TT or CONFIG_MODE_SKAS must be enabled
 
 #endif
 #endif
@@ -363,6 +377,11 @@ int linux_main(int argc, char **argv)
 	uml_start = CHOOSE_MODE_PROC(set_task_sizes_tt, set_task_sizes_skas, 0,
 				     &host_task_size, &task_size);
 
+	/*
+ 	 * Setting up handlers to 'sig_info' struct
+ 	 */
+	os_fill_handlinfo(handlinfo_kern);
+
 	brk_start = (unsigned long) sbrk(0);
 	CHOOSE_MODE_PROC(before_mem_tt, before_mem_skas, brk_start);
 	/* Increase physical memory size for exec-shield users
@@ -402,7 +421,7 @@ int linux_main(int argc, char **argv)
 #ifndef CONFIG_HIGHMEM
 		highmem = 0;
 		printf("CONFIG_HIGHMEM not enabled - physical memory shrunk "
-		       "to %lu bytes\n", physmem_size);
+		       "to %Lu bytes\n", physmem_size);
 #endif
 	}
 
@@ -414,8 +433,8 @@ int linux_main(int argc, char **argv)
 
 	setup_physmem(uml_physmem, uml_reserved, physmem_size, highmem);
 	if(init_maps(physmem_size, iomem_size, highmem)){
-		printf("Failed to allocate mem_map for %lu bytes of physical "
-		       "memory and %lu bytes of highmem\n", physmem_size,
+		printf("Failed to allocate mem_map for %Lu bytes of physical "
+		       "memory and %Lu bytes of highmem\n", physmem_size,
 		       highmem);
 		exit(1);
 	}
@@ -458,7 +477,8 @@ static struct notifier_block panic_exit_notifier = {
 
 void __init setup_arch(char **cmdline_p)
 {
-	notifier_chain_register(&panic_notifier_list, &panic_exit_notifier);
+	atomic_notifier_chain_register(&panic_notifier_list,
+			&panic_exit_notifier);
 	paging_init();
         strlcpy(saved_command_line, command_line, COMMAND_LINE_SIZE);
  	*cmdline_p = command_line;
@@ -468,10 +488,19 @@ void __init setup_arch(char **cmdline_p)
 void __init check_bugs(void)
 {
 	arch_check_bugs();
-	check_sigio();
-	check_devanon();
+ 	os_check_bugs();
 }
 
-void apply_alternatives(void *start, void *end)
+void apply_alternatives(struct alt_instr *start, struct alt_instr *end)
+{
+}
+
+void alternatives_smp_module_add(struct module *mod, char *name,
+				 void *locks, void *locks_end,
+				 void *text,  void *text_end)
+{
+}
+
+void alternatives_smp_module_del(struct module *mod)
 {
 }

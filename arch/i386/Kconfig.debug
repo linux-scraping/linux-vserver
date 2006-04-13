@@ -31,16 +31,35 @@ config DEBUG_STACK_USAGE
 
 	  This option will slow down process creation somewhat.
 
+config STACK_BACKTRACE_COLS
+	int "Stack backtraces per line" if DEBUG_KERNEL
+	range 1 3
+	default 2
+	help
+	  Selects how many stack backtrace entries per line to display.
+
+	  This can save screen space when displaying traces.
+
 comment "Page alloc debug is incompatible with Software Suspend on i386"
 	depends on DEBUG_KERNEL && SOFTWARE_SUSPEND
 
 config DEBUG_PAGEALLOC
-	bool "Page alloc debugging"
-	depends on DEBUG_KERNEL && !SOFTWARE_SUSPEND
+	bool "Debug page memory allocations"
+	depends on DEBUG_KERNEL && !SOFTWARE_SUSPEND && !HUGETLBFS
 	help
 	  Unmap pages from the kernel linear mapping after free_pages().
 	  This results in a large slowdown, but helps to find certain types
 	  of memory corruptions.
+
+config DEBUG_RODATA
+	bool "Write protect kernel read-only data structures"
+	depends on DEBUG_KERNEL
+	help
+	  Mark the kernel read-only data as write-protected in the pagetables,
+	  in order to catch accidental (and incorrect) writes to such const
+	  data. This option may have a slight performance impact because a
+	  portion of the kernel code won't be covered by a 2MB TLB anymore.
+	  If in doubt, say "N".
 
 config 4KSTACKS
 	bool "Use 4Kb for kernel stacks instead of 8Kb"

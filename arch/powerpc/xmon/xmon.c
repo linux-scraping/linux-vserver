@@ -191,6 +191,7 @@ Commands:\n\
   di	dump instructions\n\
   df	dump float values\n\
   dd	dump double values\n\
+  dr	dump stream of raw bytes\n\
   e	print exception information\n\
   f	flush cache\n\
   la	lookup symbol+offset of specified address\n\
@@ -311,7 +312,7 @@ static void release_output_lock(void)
 }
 #endif
 
-int xmon_core(struct pt_regs *regs, int fromipi)
+static int xmon_core(struct pt_regs *regs, int fromipi)
 {
 	int cmd = 0;
 	unsigned long msr;
@@ -450,7 +451,6 @@ int xmon_core(struct pt_regs *regs, int fromipi)
  leave:
 	cpu_clear(cpu, cpus_in_xmon);
 	xmon_fault_jmp[cpu] = NULL;
-
 #else
 	/* UP is simple... */
 	if (in_xmon) {
@@ -529,7 +529,7 @@ xmon_irq(int irq, void *d, struct pt_regs *regs)
 	return IRQ_HANDLED;
 }
 
-int xmon_bpt(struct pt_regs *regs)
+static int xmon_bpt(struct pt_regs *regs)
 {
 	struct bpt *bp;
 	unsigned long offset;
@@ -555,7 +555,7 @@ int xmon_bpt(struct pt_regs *regs)
 	return 1;
 }
 
-int xmon_sstep(struct pt_regs *regs)
+static int xmon_sstep(struct pt_regs *regs)
 {
 	if (user_mode(regs))
 		return 0;
@@ -563,7 +563,7 @@ int xmon_sstep(struct pt_regs *regs)
 	return 1;
 }
 
-int xmon_dabr_match(struct pt_regs *regs)
+static int xmon_dabr_match(struct pt_regs *regs)
 {
 	if ((regs->msr & (MSR_IR|MSR_PR|MSR_SF)) != (MSR_IR|MSR_SF))
 		return 0;
@@ -573,7 +573,7 @@ int xmon_dabr_match(struct pt_regs *regs)
 	return 1;
 }
 
-int xmon_iabr_match(struct pt_regs *regs)
+static int xmon_iabr_match(struct pt_regs *regs)
 {
 	if ((regs->msr & (MSR_IR|MSR_PR|MSR_SF)) != (MSR_IR|MSR_SF))
 		return 0;
@@ -583,7 +583,7 @@ int xmon_iabr_match(struct pt_regs *regs)
 	return 1;
 }
 
-int xmon_ipi(struct pt_regs *regs)
+static int xmon_ipi(struct pt_regs *regs)
 {
 #ifdef CONFIG_SMP
 	if (in_xmon && !cpu_isset(smp_processor_id(), cpus_in_xmon))
@@ -592,7 +592,7 @@ int xmon_ipi(struct pt_regs *regs)
 	return 0;
 }
 
-int xmon_fault_handler(struct pt_regs *regs)
+static int xmon_fault_handler(struct pt_regs *regs)
 {
 	struct bpt *bp;
 	unsigned long offset;
@@ -805,7 +805,10 @@ cmds(struct pt_regs *excp)
 			break;
 		case 'x':
 		case 'X':
+			return cmd;
 		case EOF:
+			printf(" <no input ...>\n");
+			mdelay(2000);
 			return cmd;
 		case '?':
 			printf(help_string);
@@ -1011,7 +1014,7 @@ static long check_bp_loc(unsigned long addr)
 	unsigned int instr;
 
 	addr &= ~3;
-	if (addr < KERNELBASE) {
+	if (!is_kernel_addr(addr)) {
 		printf("Breakpoints may only be placed at kernel addresses\n");
 		return 0;
 	}
@@ -1062,7 +1065,7 @@ bpt_cmds(void)
 		dabr.address = 0;
 		dabr.enabled = 0;
 		if (scanhex(&dabr.address)) {
-			if (dabr.address < KERNELBASE) {
+			if (!is_kernel_addr(dabr.address)) {
 				printf(badaddr);
 				break;
 			}
@@ -1936,6 +1939,28 @@ bsesc(void)
 	return c;
 }
 
+static void xmon_rawdump (unsigned long adrs, long ndump)
+{
+	long n, m, r, nr;
+	unsigned char temp[16];
+
+	for (n = ndump; n > 0;) {
+		r = n < 16? n: 16;
+		nr = mread(adrs, temp, r);
+		adrs += nr;
+		for (m = 0; m < r; ++m) {
+			if (m < nr)
+				printf("%.2x", temp[m]);
+			else
+				printf("%s", fault_chars[fault_type]);
+		}
+		n -= r;
+		if (nr < r)
+			break;
+	}
+	printf("\n");
+}
+
 #define isxdigit(c)	(('0' <= (c) && (c) <= '9') \
 			 || ('a' <= (c) && (c) <= 'f') \
 			 || ('A' <= (c) && (c) <= 'F'))
@@ -1958,6 +1983,13 @@ dump(void)
 			nidump = MAX_DUMP;
 		adrs += ppc_inst_dump(adrs, nidump, 1);
 		last_cmd = "di\n";
+	} else if (c == 'r') {
+		scanhex(&ndump);
+		if (ndump == 0)
+			ndump = 64;
+		xmon_rawdump(adrs, ndump);
+		adrs += ndump;
+		last_cmd = "dr\n";
 	} else {
 		scanhex(&ndump);
 		if (ndump == 0)

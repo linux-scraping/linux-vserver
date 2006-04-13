@@ -10,6 +10,7 @@
  */
 
 
+#include <linux/version.h>
 #include <linux/module.h>
 #include <linux/mm.h>
 #include <linux/suspend.h>
@@ -33,7 +34,37 @@
 
 #include "power.h"
 
+struct pbe *pagedir_nosave;
+static unsigned int nr_copy_pages;
+static unsigned int nr_meta_pages;
+static unsigned long *buffer;
+
 #ifdef CONFIG_HIGHMEM
+unsigned int count_highmem_pages(void)
+{
+	struct zone *zone;
+	unsigned long zone_pfn;
+	unsigned int n = 0;
+
+	for_each_zone (zone)
+		if (is_highmem(zone)) {
+			mark_free_pages(zone);
+			for (zone_pfn = 0; zone_pfn < zone->spanned_pages; zone_pfn++) {
+				struct page *page;
+				unsigned long pfn = zone_pfn + zone->zone_start_pfn;
+				if (!pfn_valid(pfn))
+					continue;
+				page = pfn_to_page(pfn);
+				if (PageReserved(page))
+					continue;
+				if (PageNosaveFree(page))
+					continue;
+				n++;
+			}
+		}
+	return n;
+}
+
 struct highmem_page {
 	char *data;
 	struct page *page;
@@ -52,7 +83,7 @@ static int save_highmem_zone(struct zone *zone)
 		void *kaddr;
 		unsigned long pfn = zone_pfn + zone->zone_start_pfn;
 
-		if (!(pfn%1000))
+		if (!(pfn%10000))
 			printk(".");
 		if (!pfn_valid(pfn))
 			continue;
@@ -63,10 +94,8 @@ static int save_highmem_zone(struct zone *zone)
 		 * corrected eventually when the cases giving rise to this
 		 * are better understood.
 		 */
-		if (PageReserved(page)) {
-			printk("highmem reserved page?!\n");
+		if (PageReserved(page))
 			continue;
-		}
 		BUG_ON(PageNosave(page));
 		if (PageNosaveFree(page))
 			continue;
@@ -93,13 +122,15 @@ int save_highmem(void)
 	struct zone *zone;
 	int res = 0;
 
-	pr_debug("swsusp: Saving Highmem\n");
+	pr_debug("swsusp: Saving Highmem");
+	drain_local_pages();
 	for_each_zone (zone) {
 		if (is_highmem(zone))
 			res = save_highmem_zone(zone);
 		if (res)
 			return res;
 	}
+	printk("\n");
 	return 0;
 }
 
@@ -149,17 +180,15 @@ static int saveable(struct zone *zone, unsigned long *zone_pfn)
 	BUG_ON(PageReserved(page) && PageNosave(page));
 	if (PageNosave(page))
 		return 0;
-	if (PageReserved(page) && pfn_is_nosave(pfn)) {
-		pr_debug("[nosave pfn 0x%lx]", pfn);
+	if (PageReserved(page) && pfn_is_nosave(pfn))
 		return 0;
-	}
 	if (PageNosaveFree(page))
 		return 0;
 
 	return 1;
 }
 
-static unsigned count_data_pages(void)
+unsigned int count_data_pages(void)
 {
 	struct zone *zone;
 	unsigned long zone_pfn;
@@ -211,7 +240,7 @@ static void copy_data_pages(struct pbe *pblist)
  *	free_pagedir - free pages allocated with alloc_pagedir()
  */
 
-void free_pagedir(struct pbe *pblist)
+static void free_pagedir(struct pbe *pblist)
 {
 	struct pbe *pbe;
 
@@ -244,7 +273,7 @@ static inline void fill_pb_page(struct pbe *pbpage)
  *	of memory pages allocated with alloc_pagedir()
  */
 
-void create_pbe_list(struct pbe *pblist, unsigned int nr_pages)
+static inline void create_pbe_list(struct pbe *pblist, unsigned int nr_pages)
 {
 	struct pbe *pbpage, *p;
 	unsigned int num = PBES_PER_PAGE;
@@ -261,7 +290,35 @@ void create_pbe_list(struct pbe *pblist, unsigned int nr_pages)
 			p->next = p + 1;
 		p->next = NULL;
 	}
-	pr_debug("create_pbe_list(): initialized %d PBEs\n", num);
+}
+
+/**
+ *	On resume it is necessary to trace and eventually free the unsafe
+ *	pages that have been allocated, because they are needed for I/O
+ *	(on x86-64 we likely will "eat" these pages once again while
+ *	creating the temporary page translation tables)
+ */
+
+struct eaten_page {
+	struct eaten_page *next;
+	char padding[PAGE_SIZE - sizeof(void *)];
+};
+
+static struct eaten_page *eaten_pages = NULL;
+
+static void release_eaten_pages(void)
+{
+	struct eaten_page *p, *q;
+
+	p = eaten_pages;
+	while (p) {
+		q = p->next;
+		/* We don't want swsusp_free() to free this page again */
+		ClearPageNosave(virt_to_page(p));
+		free_page((unsigned long)p);
+		p = q;
+	}
+	eaten_pages = NULL;
 }
 
 /**
@@ -282,9 +339,12 @@ static inline void *alloc_image_page(gfp_t gfp_mask, int safe_needed)
 	if (safe_needed)
 		do {
 			res = (void *)get_zeroed_page(gfp_mask);
-			if (res && PageNosaveFree(virt_to_page(res)))
+			if (res && PageNosaveFree(virt_to_page(res))) {
 				/* This is for swsusp_free() */
 				SetPageNosave(virt_to_page(res));
+				((struct eaten_page *)res)->next = eaten_pages;
+				eaten_pages = res;
+			}
 		} while (res && PageNosaveFree(virt_to_page(res)));
 	else
 		res = (void *)get_zeroed_page(gfp_mask);
@@ -321,7 +381,6 @@ struct pbe *alloc_pagedir(unsigned int nr_pages, gfp_t gfp_mask, int safe_needed
 	if (!nr_pages)
 		return NULL;
 
-	pr_debug("alloc_pagedir(): nr_pages = %d\n", nr_pages);
 	pblist = alloc_image_page(gfp_mask, safe_needed);
 	/* FIXME: rewrite this ugly loop */
 	for (pbe = pblist, num = PBES_PER_PAGE; pbe && num < nr_pages;
@@ -332,7 +391,8 @@ struct pbe *alloc_pagedir(unsigned int nr_pages, gfp_t gfp_mask, int safe_needed
 	if (!pbe) { /* get_zeroed_page() failed */
 		free_pagedir(pblist);
 		pblist = NULL;
-        }
+        } else
+		create_pbe_list(pblist, nr_pages);
 	return pblist;
 }
 
@@ -358,6 +418,10 @@ void swsusp_free(void)
 				}
 			}
 	}
+	nr_copy_pages = 0;
+	nr_meta_pages = 0;
+	pagedir_nosave = NULL;
+	buffer = NULL;
 }
 
 
@@ -370,12 +434,18 @@ void swsusp_free(void)
 
 static int enough_free_mem(unsigned int nr_pages)
 {
-	pr_debug("swsusp: available memory: %u pages\n", nr_free_pages());
-	return nr_free_pages() > (nr_pages + PAGES_FOR_IO +
+	struct zone *zone;
+	unsigned int n = 0;
+
+	for_each_zone (zone)
+		if (!is_highmem(zone))
+			n += zone->free_pages;
+	pr_debug("swsusp: available memory: %u pages\n", n);
+	return n > (nr_pages + PAGES_FOR_IO +
 		(nr_pages + PBES_PER_PAGE - 1) / PBES_PER_PAGE);
 }
 
-int alloc_data_pages(struct pbe *pblist, gfp_t gfp_mask, int safe_needed)
+static int alloc_data_pages(struct pbe *pblist, gfp_t gfp_mask, int safe_needed)
 {
 	struct pbe *p;
 
@@ -395,7 +465,6 @@ static struct pbe *swsusp_alloc(unsigned int nr_pages)
 		printk(KERN_ERR "suspend: Allocating pagedir failed.\n");
 		return NULL;
 	}
-	create_pbe_list(pblist, nr_pages);
 
 	if (alloc_data_pages(pblist, GFP_ATOMIC | __GFP_COLD, 0)) {
 		printk(KERN_ERR "suspend: Allocating image pages failed.\n");
@@ -421,10 +490,6 @@ asmlinkage int swsusp_save(void)
 		 (nr_pages + PBES_PER_PAGE - 1) / PBES_PER_PAGE,
 		 PAGES_FOR_IO, nr_free_pages());
 
-	/* This is needed because of the fixed size of swsusp_info */
-	if (MAX_PBES < (nr_pages + PBES_PER_PAGE - 1) / PBES_PER_PAGE)
-		return -ENOSPC;
-
 	if (!enough_free_mem(nr_pages)) {
 		printk(KERN_ERR "swsusp: Not enough free memory\n");
 		return -ENOMEM;
@@ -447,7 +512,318 @@ asmlinkage int swsusp_save(void)
 	 */
 
 	nr_copy_pages = nr_pages;
+	nr_meta_pages = (nr_pages * sizeof(long) + PAGE_SIZE - 1) >> PAGE_SHIFT;
 
 	printk("swsusp: critical section/: done (%d pages copied)\n", nr_pages);
 	return 0;
+}
+
+static void init_header(struct swsusp_info *info)
+{
+	memset(info, 0, sizeof(struct swsusp_info));
+	info->version_code = LINUX_VERSION_CODE;
+	info->num_physpages = num_physpages;
+	memcpy(&info->uts, &system_utsname, sizeof(system_utsname));
+	info->cpus = num_online_cpus();
+	info->image_pages = nr_copy_pages;
+	info->pages = nr_copy_pages + nr_meta_pages + 1;
+	info->size = info->pages;
+	info->size <<= PAGE_SHIFT;
+}
+
+/**
+ *	pack_orig_addresses - the .orig_address fields of the PBEs from the
+ *	list starting at @pbe are stored in the array @buf[] (1 page)
+ */
+
+static inline struct pbe *pack_orig_addresses(unsigned long *buf, struct pbe *pbe)
+{
+	int j;
+
+	for (j = 0; j < PAGE_SIZE / sizeof(long) && pbe; j++) {
+		buf[j] = pbe->orig_address;
+		pbe = pbe->next;
+	}
+	if (!pbe)
+		for (; j < PAGE_SIZE / sizeof(long); j++)
+			buf[j] = 0;
+	return pbe;
+}
+
+/**
+ *	snapshot_read_next - used for reading the system memory snapshot.
+ *
+ *	On the first call to it @handle should point to a zeroed
+ *	snapshot_handle structure.  The structure gets updated and a pointer
+ *	to it should be passed to this function every next time.
+ *
+ *	The @count parameter should contain the number of bytes the caller
+ *	wants to read from the snapshot.  It must not be zero.
+ *
+ *	On success the function returns a positive number.  Then, the caller
+ *	is allowed to read up to the returned number of bytes from the memory
+ *	location computed by the data_of() macro.  The number returned
+ *	may be smaller than @count, but this only happens if the read would
+ *	cross a page boundary otherwise.
+ *
+ *	The function returns 0 to indicate the end of data stream condition,
+ *	and a negative number is returned on error.  In such cases the
+ *	structure pointed to by @handle is not updated and should not be used
+ *	any more.
+ */
+
+int snapshot_read_next(struct snapshot_handle *handle, size_t count)
+{
+	if (handle->page > nr_meta_pages + nr_copy_pages)
+		return 0;
+	if (!buffer) {
+		/* This makes the buffer be freed by swsusp_free() */
+		buffer = alloc_image_page(GFP_ATOMIC, 0);
+		if (!buffer)
+			return -ENOMEM;
+	}
+	if (!handle->offset) {
+		init_header((struct swsusp_info *)buffer);
+		handle->buffer = buffer;
+		handle->pbe = pagedir_nosave;
+	}
+	if (handle->prev < handle->page) {
+		if (handle->page <= nr_meta_pages) {
+			handle->pbe = pack_orig_addresses(buffer, handle->pbe);
+			if (!handle->pbe)
+				handle->pbe = pagedir_nosave;
+		} else {
+			handle->buffer = (void *)handle->pbe->address;
+			handle->pbe = handle->pbe->next;
+		}
+		handle->prev = handle->page;
+	}
+	handle->buf_offset = handle->page_offset;
+	if (handle->page_offset + count >= PAGE_SIZE) {
+		count = PAGE_SIZE - handle->page_offset;
+		handle->page_offset = 0;
+		handle->page++;
+	} else {
+		handle->page_offset += count;
+	}
+	handle->offset += count;
+	return count;
+}
+
+/**
+ *	mark_unsafe_pages - mark the pages that cannot be used for storing
+ *	the image during resume, because they conflict with the pages that
+ *	had been used before suspend
+ */
+
+static int mark_unsafe_pages(struct pbe *pblist)
+{
+	struct zone *zone;
+	unsigned long zone_pfn;
+	struct pbe *p;
+
+	if (!pblist) /* a sanity check */
+		return -EINVAL;
+
+	/* Clear page flags */
+	for_each_zone (zone) {
+		for (zone_pfn = 0; zone_pfn < zone->spanned_pages; ++zone_pfn)
+			if (pfn_valid(zone_pfn + zone->zone_start_pfn))
+				ClearPageNosaveFree(pfn_to_page(zone_pfn +
+					zone->zone_start_pfn));
+	}
+
+	/* Mark orig addresses */
+	for_each_pbe (p, pblist) {
+		if (virt_addr_valid(p->orig_address))
+			SetPageNosaveFree(virt_to_page(p->orig_address));
+		else
+			return -EFAULT;
+	}
+
+	return 0;
+}
+
+static void copy_page_backup_list(struct pbe *dst, struct pbe *src)
+{
+	/* We assume both lists contain the same number of elements */
+	while (src) {
+		dst->orig_address = src->orig_address;
+		dst = dst->next;
+		src = src->next;
+	}
+}
+
+static int check_header(struct swsusp_info *info)
+{
+	char *reason = NULL;
+
+	if (info->version_code != LINUX_VERSION_CODE)
+		reason = "kernel version";
+	if (info->num_physpages != num_physpages)
+		reason = "memory size";
+	if (strcmp(info->uts.sysname,system_utsname.sysname))
+		reason = "system type";
+	if (strcmp(info->uts.release,system_utsname.release))
+		reason = "kernel release";
+	if (strcmp(info->uts.version,system_utsname.version))
+		reason = "version";
+	if (strcmp(info->uts.machine,system_utsname.machine))
+		reason = "machine";
+	if (reason) {
+		printk(KERN_ERR "swsusp: Resume mismatch: %s\n", reason);
+		return -EPERM;
+	}
+	return 0;
+}
+
+/**
+ *	load header - check the image header and copy data from it
+ */
+
+static int load_header(struct snapshot_handle *handle,
+                              struct swsusp_info *info)
+{
+	int error;
+	struct pbe *pblist;
+
+	error = check_header(info);
+	if (!error) {
+		pblist = alloc_pagedir(info->image_pages, GFP_ATOMIC, 0);
+		if (!pblist)
+			return -ENOMEM;
+		pagedir_nosave = pblist;
+		handle->pbe = pblist;
+		nr_copy_pages = info->image_pages;
+		nr_meta_pages = info->pages - info->image_pages - 1;
+	}
+	return error;
+}
+
+/**
+ *	unpack_orig_addresses - copy the elements of @buf[] (1 page) to
+ *	the PBEs in the list starting at @pbe
+ */
+
+static inline struct pbe *unpack_orig_addresses(unsigned long *buf,
+                                                struct pbe *pbe)
+{
+	int j;
+
+	for (j = 0; j < PAGE_SIZE / sizeof(long) && pbe; j++) {
+		pbe->orig_address = buf[j];
+		pbe = pbe->next;
+	}
+	return pbe;
+}
+
+/**
+ *	create_image - use metadata contained in the PBE list
+ *	pointed to by pagedir_nosave to mark the pages that will
+ *	be overwritten in the process of restoring the system
+ *	memory state from the image and allocate memory for
+ *	the image avoiding these pages
+ */
+
+static int create_image(struct snapshot_handle *handle)
+{
+	int error = 0;
+	struct pbe *p, *pblist;
+
+	p = pagedir_nosave;
+	error = mark_unsafe_pages(p);
+	if (!error) {
+		pblist = alloc_pagedir(nr_copy_pages, GFP_ATOMIC, 1);
+		if (pblist)
+			copy_page_backup_list(pblist, p);
+		free_pagedir(p);
+		if (!pblist)
+			error = -ENOMEM;
+	}
+	if (!error)
+		error = alloc_data_pages(pblist, GFP_ATOMIC, 1);
+	if (!error) {
+		release_eaten_pages();
+		pagedir_nosave = pblist;
+	} else {
+		pagedir_nosave = NULL;
+		handle->pbe = NULL;
+		nr_copy_pages = 0;
+		nr_meta_pages = 0;
+	}
+	return error;
+}
+
+/**
+ *	snapshot_write_next - used for writing the system memory snapshot.
+ *
+ *	On the first call to it @handle should point to a zeroed
+ *	snapshot_handle structure.  The structure gets updated and a pointer
+ *	to it should be passed to this function every next time.
+ *
+ *	The @count parameter should contain the number of bytes the caller
+ *	wants to write to the image.  It must not be zero.
+ *
+ *	On success the function returns a positive number.  Then, the caller
+ *	is allowed to write up to the returned number of bytes to the memory
+ *	location computed by the data_of() macro.  The number returned
+ *	may be smaller than @count, but this only happens if the write would
+ *	cross a page boundary otherwise.
+ *
+ *	The function returns 0 to indicate the "end of file" condition,
+ *	and a negative number is returned on error.  In such cases the
+ *	structure pointed to by @handle is not updated and should not be used
+ *	any more.
+ */
+
+int snapshot_write_next(struct snapshot_handle *handle, size_t count)
+{
+	int error = 0;
+
+	if (handle->prev && handle->page > nr_meta_pages + nr_copy_pages)
+		return 0;
+	if (!buffer) {
+		/* This makes the buffer be freed by swsusp_free() */
+		buffer = alloc_image_page(GFP_ATOMIC, 0);
+		if (!buffer)
+			return -ENOMEM;
+	}
+	if (!handle->offset)
+		handle->buffer = buffer;
+	if (handle->prev < handle->page) {
+		if (!handle->prev) {
+			error = load_header(handle, (struct swsusp_info *)buffer);
+			if (error)
+				return error;
+		} else if (handle->prev <= nr_meta_pages) {
+			handle->pbe = unpack_orig_addresses(buffer, handle->pbe);
+			if (!handle->pbe) {
+				error = create_image(handle);
+				if (error)
+					return error;
+				handle->pbe = pagedir_nosave;
+				handle->buffer = (void *)handle->pbe->address;
+			}
+		} else {
+			handle->pbe = handle->pbe->next;
+			handle->buffer = (void *)handle->pbe->address;
+		}
+		handle->prev = handle->page;
+	}
+	handle->buf_offset = handle->page_offset;
+	if (handle->page_offset + count >= PAGE_SIZE) {
+		count = PAGE_SIZE - handle->page_offset;
+		handle->page_offset = 0;
+		handle->page++;
+	} else {
+		handle->page_offset += count;
+	}
+	handle->offset += count;
+	return count;
+}
+
+int snapshot_image_loaded(struct snapshot_handle *handle)
+{
+	return !(!handle->pbe || handle->pbe->next || !nr_copy_pages ||
+		handle->page <= nr_meta_pages + nr_copy_pages);
 }

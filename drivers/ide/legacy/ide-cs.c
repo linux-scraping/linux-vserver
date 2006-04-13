@@ -81,22 +81,19 @@ static const char ide_major[] = {
 };
 
 typedef struct ide_info_t {
-    dev_link_t	link;
+	struct pcmcia_device	*p_dev;
     int		ndev;
     dev_node_t	node;
     int		hd;
 } ide_info_t;
 
-static void ide_release(dev_link_t *);
-static int ide_event(event_t event, int priority,
-		     event_callback_args_t *args);
+static void ide_release(struct pcmcia_device *);
+static int ide_config(struct pcmcia_device *);
 
-static dev_info_t dev_info = "ide-cs";
+static void ide_detach(struct pcmcia_device *p_dev);
 
-static dev_link_t *ide_attach(void);
-static void ide_detach(dev_link_t *);
 
-static dev_link_t *dev_list = NULL;
+
 
 /*======================================================================
 
@@ -106,19 +103,19 @@ static dev_link_t *dev_list = NULL;
 
 ======================================================================*/
 
-static dev_link_t *ide_attach(void)
+static int ide_probe(struct pcmcia_device *link)
 {
     ide_info_t *info;
-    dev_link_t *link;
-    client_reg_t client_reg;
-    int ret;
-    
+
     DEBUG(0, "ide_attach()\n");
 
     /* Create new ide device */
     info = kzalloc(sizeof(*info), GFP_KERNEL);
-    if (!info) return NULL;
-    link = &info->link; link->priv = info;
+    if (!info)
+	return -ENOMEM;
+
+    info->p_dev = link;
+    link->priv = info;
 
     link->io.Attributes1 = IO_DATA_PATH_WIDTH_AUTO;
     link->io.Attributes2 = IO_DATA_PATH_WIDTH_8;
@@ -126,23 +123,9 @@ static dev_link_t *ide_attach(void)
     link->irq.Attributes = IRQ_TYPE_EXCLUSIVE;
     link->irq.IRQInfo1 = IRQ_LEVEL_ID;
     link->conf.Attributes = CONF_ENABLE_IRQ;
-    link->conf.Vcc = 50;
     link->conf.IntType = INT_MEMORY_AND_IO;
-    
-    /* Register with Card Services */
-    link->next = dev_list;
-    dev_list = link;
-    client_reg.dev_info = &dev_info;
-    client_reg.Version = 0x0210;
-    client_reg.event_callback_args.client_data = link;
-    ret = pcmcia_register_client(&link->handle, &client_reg);
-    if (ret != CS_SUCCESS) {
-	cs_error(link->handle, RegisterClient, ret);
-	ide_detach(link);
-	return NULL;
-    }
-    
-    return link;
+
+    return ide_config(link);
 } /* ide_attach */
 
 /*======================================================================
@@ -154,32 +137,13 @@ static dev_link_t *ide_attach(void)
 
 ======================================================================*/
 
-static void ide_detach(dev_link_t *link)
+static void ide_detach(struct pcmcia_device *link)
 {
-    dev_link_t **linkp;
-    int ret;
-
     DEBUG(0, "ide_detach(0x%p)\n", link);
-    
-    /* Locate device structure */
-    for (linkp = &dev_list; *linkp; linkp = &(*linkp)->next)
-	if (*linkp == link) break;
-    if (*linkp == NULL)
-	return;
 
-    if (link->state & DEV_CONFIG)
-	ide_release(link);
-    
-    if (link->handle) {
-	ret = pcmcia_deregister_client(link->handle);
-	if (ret != CS_SUCCESS)
-	    cs_error(link->handle, DeregisterClient, ret);
-    }
-    
-    /* Unlink, free device structure */
-    *linkp = link->next;
+    ide_release(link);
+
     kfree(link->priv);
-    
 } /* ide_detach */
 
 static int idecs_register(unsigned long io, unsigned long ctl, unsigned long irq, struct pcmcia_device *handle)
@@ -204,9 +168,8 @@ static int idecs_register(unsigned long io, unsigned long ctl, unsigned long irq
 #define CS_CHECK(fn, ret) \
 do { last_fn = (fn); if ((last_ret = (ret)) != 0) goto cs_failed; } while (0)
 
-static void ide_config(dev_link_t *link)
+static int ide_config(struct pcmcia_device *link)
 {
-    client_handle_t handle = link->handle;
     ide_info_t *info = link->priv;
     tuple_t tuple;
     struct {
@@ -230,34 +193,30 @@ static void ide_config(dev_link_t *link)
     tuple.TupleDataMax = 255;
     tuple.Attributes = 0;
     tuple.DesiredTuple = CISTPL_CONFIG;
-    CS_CHECK(GetFirstTuple, pcmcia_get_first_tuple(handle, &tuple));
-    CS_CHECK(GetTupleData, pcmcia_get_tuple_data(handle, &tuple));
-    CS_CHECK(ParseTuple, pcmcia_parse_tuple(handle, &tuple, &stk->parse));
+    CS_CHECK(GetFirstTuple, pcmcia_get_first_tuple(link, &tuple));
+    CS_CHECK(GetTupleData, pcmcia_get_tuple_data(link, &tuple));
+    CS_CHECK(ParseTuple, pcmcia_parse_tuple(link, &tuple, &stk->parse));
     link->conf.ConfigBase = stk->parse.config.base;
     link->conf.Present = stk->parse.config.rmask[0];
 
     tuple.DesiredTuple = CISTPL_MANFID;
-    if (!pcmcia_get_first_tuple(handle, &tuple) &&
-	!pcmcia_get_tuple_data(handle, &tuple) &&
-	!pcmcia_parse_tuple(handle, &tuple, &stk->parse))
+    if (!pcmcia_get_first_tuple(link, &tuple) &&
+	!pcmcia_get_tuple_data(link, &tuple) &&
+	!pcmcia_parse_tuple(link, &tuple, &stk->parse))
 	is_kme = ((stk->parse.manfid.manf == MANFID_KME) &&
 		  ((stk->parse.manfid.card == PRODID_KME_KXLC005_A) ||
 		   (stk->parse.manfid.card == PRODID_KME_KXLC005_B)));
 
-    /* Configure card */
-    link->state |= DEV_CONFIG;
-
     /* Not sure if this is right... look up the current Vcc */
-    CS_CHECK(GetConfigurationInfo, pcmcia_get_configuration_info(handle, &stk->conf));
-    link->conf.Vcc = stk->conf.Vcc;
+    CS_CHECK(GetConfigurationInfo, pcmcia_get_configuration_info(link, &stk->conf));
 
     pass = io_base = ctl_base = 0;
     tuple.DesiredTuple = CISTPL_CFTABLE_ENTRY;
     tuple.Attributes = 0;
-    CS_CHECK(GetFirstTuple, pcmcia_get_first_tuple(handle, &tuple));
+    CS_CHECK(GetFirstTuple, pcmcia_get_first_tuple(link, &tuple));
     while (1) {
-    	if (pcmcia_get_tuple_data(handle, &tuple) != 0) goto next_entry;
-	if (pcmcia_parse_tuple(handle, &tuple, &stk->parse) != 0) goto next_entry;
+    	if (pcmcia_get_tuple_data(link, &tuple) != 0) goto next_entry;
+	if (pcmcia_parse_tuple(link, &tuple, &stk->parse) != 0) goto next_entry;
 
 	/* Check for matching Vcc, unless we're desperate */
 	if (!pass) {
@@ -271,10 +230,10 @@ static void ide_config(dev_link_t *link)
 	}
 
 	if (cfg->vpp1.present & (1 << CISTPL_POWER_VNOM))
-	    link->conf.Vpp1 = link->conf.Vpp2 =
+	    link->conf.Vpp =
 		cfg->vpp1.param[CISTPL_POWER_VNOM] / 10000;
 	else if (stk->dflt.vpp1.present & (1 << CISTPL_POWER_VNOM))
-	    link->conf.Vpp1 = link->conf.Vpp2 =
+	    link->conf.Vpp =
 		stk->dflt.vpp1.param[CISTPL_POWER_VNOM] / 10000;
 
 	if ((cfg->io.nwin > 0) || (stk->dflt.io.nwin > 0)) {
@@ -288,14 +247,14 @@ static void ide_config(dev_link_t *link)
 		link->io.NumPorts1 = 8;
 		link->io.BasePort2 = io->win[1].base;
 		link->io.NumPorts2 = (is_kme) ? 2 : 1;
-		if (pcmcia_request_io(link->handle, &link->io) != 0)
+		if (pcmcia_request_io(link, &link->io) != 0)
 			goto next_entry;
 		io_base = link->io.BasePort1;
 		ctl_base = link->io.BasePort2;
 	    } else if ((io->nwin == 1) && (io->win[0].len >= 16)) {
 		link->io.NumPorts1 = io->win[0].len;
 		link->io.NumPorts2 = 0;
-		if (pcmcia_request_io(link->handle, &link->io) != 0)
+		if (pcmcia_request_io(link, &link->io) != 0)
 			goto next_entry;
 		io_base = link->io.BasePort1;
 		ctl_base = link->io.BasePort1 + 0x0e;
@@ -308,16 +267,16 @@ static void ide_config(dev_link_t *link)
 	if (cfg->flags & CISTPL_CFTABLE_DEFAULT)
 	    memcpy(&stk->dflt, cfg, sizeof(stk->dflt));
 	if (pass) {
-	    CS_CHECK(GetNextTuple, pcmcia_get_next_tuple(handle, &tuple));
-	} else if (pcmcia_get_next_tuple(handle, &tuple) != 0) {
-	    CS_CHECK(GetFirstTuple, pcmcia_get_first_tuple(handle, &tuple));
+	    CS_CHECK(GetNextTuple, pcmcia_get_next_tuple(link, &tuple));
+	} else if (pcmcia_get_next_tuple(link, &tuple) != 0) {
+	    CS_CHECK(GetFirstTuple, pcmcia_get_first_tuple(link, &tuple));
 	    memset(&stk->dflt, 0, sizeof(stk->dflt));
 	    pass++;
 	}
     }
 
-    CS_CHECK(RequestIRQ, pcmcia_request_irq(handle, &link->irq));
-    CS_CHECK(RequestConfiguration, pcmcia_request_configuration(handle, &link->conf));
+    CS_CHECK(RequestIRQ, pcmcia_request_irq(link, &link->irq));
+    CS_CHECK(RequestConfiguration, pcmcia_request_configuration(link, &link->conf));
 
     /* disable drive interrupts during IDE probe */
     outb(0x02, ctl_base);
@@ -328,12 +287,12 @@ static void ide_config(dev_link_t *link)
 
     /* retry registration in case device is still spinning up */
     for (hd = -1, i = 0; i < 10; i++) {
-	hd = idecs_register(io_base, ctl_base, link->irq.AssignedIRQ, handle);
+	hd = idecs_register(io_base, ctl_base, link->irq.AssignedIRQ, link);
 	if (hd >= 0) break;
 	if (link->io.NumPorts1 == 0x20) {
 	    outb(0x02, ctl_base + 0x10);
 	    hd = idecs_register(io_base + 0x10, ctl_base + 0x10,
-				link->irq.AssignedIRQ, handle);
+				link->irq.AssignedIRQ, link);
 	    if (hd >= 0) {
 		io_base += 0x10;
 		ctl_base += 0x10;
@@ -355,25 +314,23 @@ static void ide_config(dev_link_t *link)
     info->node.major = ide_major[hd];
     info->node.minor = 0;
     info->hd = hd;
-    link->dev = &info->node;
-    printk(KERN_INFO "ide-cs: %s: Vcc = %d.%d, Vpp = %d.%d\n",
-	   info->node.dev_name, link->conf.Vcc / 10, link->conf.Vcc % 10,
-	   link->conf.Vpp1 / 10, link->conf.Vpp1 % 10);
+    link->dev_node = &info->node;
+    printk(KERN_INFO "ide-cs: %s: Vpp = %d.%d\n",
+	   info->node.dev_name, link->conf.Vpp / 10, link->conf.Vpp % 10);
 
-    link->state &= ~DEV_CONFIG_PENDING;
     kfree(stk);
-    return;
+    return 0;
 
 err_mem:
     printk(KERN_NOTICE "ide-cs: ide_config failed memory allocation\n");
     goto failed;
 
 cs_failed:
-    cs_error(link->handle, last_fn, last_ret);
+    cs_error(link, last_fn, last_ret);
 failed:
     kfree(stk);
     ide_release(link);
-    link->state &= ~DEV_CONFIG_PENDING;
+    return -ENODEV;
 } /* ide_config */
 
 /*======================================================================
@@ -384,7 +341,7 @@ failed:
     
 ======================================================================*/
 
-void ide_release(dev_link_t *link)
+void ide_release(struct pcmcia_device *link)
 {
     ide_info_t *info = link->priv;
     
@@ -396,15 +353,10 @@ void ide_release(dev_link_t *link)
 	ide_unregister(info->hd);
     }
     info->ndev = 0;
-    link->dev = NULL;
-    
-    pcmcia_release_configuration(link->handle);
-    pcmcia_release_io(link->handle, &link->io);
-    pcmcia_release_irq(link->handle, &link->irq);
-    
-    link->state &= ~DEV_CONFIG;
 
+    pcmcia_disable_device(link);
 } /* ide_release */
+
 
 /*======================================================================
 
@@ -415,48 +367,15 @@ void ide_release(dev_link_t *link)
     
 ======================================================================*/
 
-int ide_event(event_t event, int priority,
-	      event_callback_args_t *args)
-{
-    dev_link_t *link = args->client_data;
-
-    DEBUG(1, "ide_event(0x%06x)\n", event);
-    
-    switch (event) {
-    case CS_EVENT_CARD_REMOVAL:
-	link->state &= ~DEV_PRESENT;
-	if (link->state & DEV_CONFIG)
-		ide_release(link);
-	break;
-    case CS_EVENT_CARD_INSERTION:
-	link->state |= DEV_PRESENT | DEV_CONFIG_PENDING;
-	ide_config(link);
-	break;
-    case CS_EVENT_PM_SUSPEND:
-	link->state |= DEV_SUSPEND;
-	/* Fall through... */
-    case CS_EVENT_RESET_PHYSICAL:
-	if (link->state & DEV_CONFIG)
-	    pcmcia_release_configuration(link->handle);
-	break;
-    case CS_EVENT_PM_RESUME:
-	link->state &= ~DEV_SUSPEND;
-	/* Fall through... */
-    case CS_EVENT_CARD_RESET:
-	if (DEV_OK(link))
-	    pcmcia_request_configuration(link->handle, &link->conf);
-	break;
-    }
-    return 0;
-} /* ide_event */
-
 static struct pcmcia_device_id ide_ids[] = {
 	PCMCIA_DEVICE_FUNC_ID(4),
+	PCMCIA_DEVICE_MANF_CARD(0x0007, 0x0000),	/* Hitachi */
 	PCMCIA_DEVICE_MANF_CARD(0x0032, 0x0704),
 	PCMCIA_DEVICE_MANF_CARD(0x0045, 0x0401),
 	PCMCIA_DEVICE_MANF_CARD(0x0098, 0x0000),	/* Toshiba */
 	PCMCIA_DEVICE_MANF_CARD(0x00a4, 0x002d),
 	PCMCIA_DEVICE_MANF_CARD(0x00ce, 0x0000),	/* Samsung */
+ 	PCMCIA_DEVICE_MANF_CARD(0x0319, 0x0000),	/* Hitachi */
 	PCMCIA_DEVICE_MANF_CARD(0x2080, 0x0001),
 	PCMCIA_DEVICE_MANF_CARD(0x4e01, 0x0200),	/* Lexar */
 	PCMCIA_DEVICE_PROD_ID123("Caravelle", "PSC-IDE ", "PSC000", 0x8c36137c, 0xd0693ab8, 0x2768a9f0),
@@ -471,6 +390,8 @@ static struct pcmcia_device_id ide_ids[] = {
 	PCMCIA_DEVICE_PROD_ID12("EXP   ", "CD-ROM", 0x0a5c52fd, 0x66536591),
 	PCMCIA_DEVICE_PROD_ID12("EXP   ", "PnPIDE", 0x0a5c52fd, 0x0c694728),
 	PCMCIA_DEVICE_PROD_ID12("FREECOM", "PCCARD-IDE", 0x5714cbf7, 0x48e0ab8e),
+	PCMCIA_DEVICE_PROD_ID12("HITACHI", "FLASH", 0xf4f43949, 0x9eb86aae),
+	PCMCIA_DEVICE_PROD_ID12("HITACHI", "microdrive", 0xf4f43949, 0xa6d76178),
 	PCMCIA_DEVICE_PROD_ID12("IBM", "IBM17JSSFP20", 0xb569a6e5, 0xf2508753),
 	PCMCIA_DEVICE_PROD_ID12("IO DATA", "CBIDE2      ", 0x547e66dc, 0x8671043b),
 	PCMCIA_DEVICE_PROD_ID12("IO DATA", "PCIDE", 0x547e66dc, 0x5c5ab149),
@@ -481,6 +402,7 @@ static struct pcmcia_device_id ide_ids[] = {
 	PCMCIA_DEVICE_PROD_ID12("PCMCIA", "PnPIDE", 0x281f1c5d, 0x0c694728),
 	PCMCIA_DEVICE_PROD_ID12("SHUTTLE TECHNOLOGY LTD.", "PCCARD-IDE/ATAPI Adapter", 0x4a3f0ba0, 0x322560e1),
 	PCMCIA_DEVICE_PROD_ID12("TOSHIBA", "MK2001MPL", 0xb4585a1a, 0x3489e003),
+	PCMCIA_DEVICE_PROD_ID1("TRANSCEND    512M   ", 0xd0909443),
 	PCMCIA_DEVICE_PROD_ID12("WIT", "IDE16", 0x244e5994, 0x3e232852),
 	PCMCIA_DEVICE_PROD_ID1("STI Flash", 0xe4a13209),
 	PCMCIA_DEVICE_PROD_ID12("STI", "Flash 5.0", 0xbf2df18d, 0x8cb57a0e),
@@ -494,9 +416,8 @@ static struct pcmcia_driver ide_cs_driver = {
 	.drv		= {
 		.name	= "ide-cs",
 	},
-	.attach		= ide_attach,
-	.event		= ide_event,
-	.detach		= ide_detach,
+	.probe		= ide_probe,
+	.remove		= ide_detach,
 	.id_table       = ide_ids,
 };
 
@@ -508,7 +429,6 @@ static int __init init_ide_cs(void)
 static void __exit exit_ide_cs(void)
 {
 	pcmcia_unregister_driver(&ide_cs_driver);
-	BUG_ON(dev_list != NULL);
 }
 
 late_initcall(init_ide_cs);

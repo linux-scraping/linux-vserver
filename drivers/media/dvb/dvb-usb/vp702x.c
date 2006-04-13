@@ -53,7 +53,8 @@ int vp702x_usb_in_op(struct dvb_usb_device *d, u8 req, u16 value, u16 index, u8 
 	return ret;
 }
 
-int vp702x_usb_out_op(struct dvb_usb_device *d, u8 req, u16 value, u16 index, u8 *b, int blen)
+static int vp702x_usb_out_op(struct dvb_usb_device *d, u8 req, u16 value,
+			     u16 index, u8 *b, int blen)
 {
 	deb_xfer("out: req. %x, val: %x, ind: %x, buffer: ",req,value,index);
 	debug_dump(b,blen,deb_xfer);
@@ -74,7 +75,7 @@ int vp702x_usb_inout_op(struct dvb_usb_device *d, u8 *o, int olen, u8 *i, int il
 {
 	int ret;
 
-	if ((ret = down_interruptible(&d->usb_sem)))
+	if ((ret = mutex_lock_interruptible(&d->usb_mutex)))
 		return ret;
 
 	if ((ret = vp702x_usb_out_op(d,REQUEST_OUT,0,0,o,olen)) < 0)
@@ -83,12 +84,13 @@ int vp702x_usb_inout_op(struct dvb_usb_device *d, u8 *o, int olen, u8 *i, int il
 	ret = vp702x_usb_in_op(d,REQUEST_IN,0,0,i,ilen);
 
 unlock:
-	up(&d->usb_sem);
+	mutex_unlock(&d->usb_mutex);
 
 	return ret;
 }
 
-int vp702x_usb_inout_cmd(struct dvb_usb_device *d, u8 cmd, u8 *o, int olen, u8 *i, int ilen, int msec)
+static int vp702x_usb_inout_cmd(struct dvb_usb_device *d, u8 cmd, u8 *o,
+				int olen, u8 *i, int ilen, int msec)
 {
 	u8 bout[olen+2];
 	u8 bin[ilen+1];
@@ -256,7 +258,6 @@ static struct dvb_usb_properties vp702x_properties = {
 
 /* usb specific object needed to register this driver with the usb subsystem */
 static struct usb_driver vp702x_usb_driver = {
-	.owner		= THIS_MODULE,
 	.name		= "dvb-usb-vp702x",
 	.probe 		= vp702x_usb_probe,
 	.disconnect = dvb_usb_device_exit,

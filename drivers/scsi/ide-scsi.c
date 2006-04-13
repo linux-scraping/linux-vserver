@@ -47,6 +47,7 @@
 #include <linux/ide.h>
 #include <linux/scatterlist.h>
 #include <linux/delay.h>
+#include <linux/mutex.h>
 
 #include <asm/io.h>
 #include <asm/bitops.h>
@@ -109,7 +110,7 @@ typedef struct ide_scsi_obj {
 	unsigned long log;			/* log flags */
 } idescsi_scsi_t;
 
-static DECLARE_MUTEX(idescsi_ref_sem);
+static DEFINE_MUTEX(idescsi_ref_mutex);
 
 #define ide_scsi_g(disk) \
 	container_of((disk)->private_data, struct ide_scsi_obj, driver)
@@ -118,19 +119,19 @@ static struct ide_scsi_obj *ide_scsi_get(struct gendisk *disk)
 {
 	struct ide_scsi_obj *scsi = NULL;
 
-	down(&idescsi_ref_sem);
+	mutex_lock(&idescsi_ref_mutex);
 	scsi = ide_scsi_g(disk);
 	if (scsi)
 		scsi_host_get(scsi->host);
-	up(&idescsi_ref_sem);
+	mutex_unlock(&idescsi_ref_mutex);
 	return scsi;
 }
 
 static void ide_scsi_put(struct ide_scsi_obj *scsi)
 {
-	down(&idescsi_ref_sem);
+	mutex_lock(&idescsi_ref_mutex);
 	scsi_host_put(scsi->host);
-	up(&idescsi_ref_sem);
+	mutex_unlock(&idescsi_ref_mutex);
 }
 
 static inline idescsi_scsi_t *scsihost_to_idescsi(struct Scsi_Host *host)
@@ -751,9 +752,8 @@ static void idescsi_setup (ide_drive_t *drive, idescsi_scsi_t *scsi)
 	idescsi_add_settings(drive);
 }
 
-static int ide_scsi_remove(struct device *dev)
+static void ide_scsi_remove(ide_drive_t *drive)
 {
-	ide_drive_t *drive = to_ide_device(dev);
 	struct Scsi_Host *scsihost = drive->driver_data;
 	struct ide_scsi_obj *scsi = scsihost_to_idescsi(scsihost);
 	struct gendisk *g = scsi->disk;
@@ -768,11 +768,9 @@ static int ide_scsi_remove(struct device *dev)
 
 	scsi_remove_host(scsihost);
 	ide_scsi_put(scsi);
-
-	return 0;
 }
 
-static int ide_scsi_probe(struct device *);
+static int ide_scsi_probe(ide_drive_t *);
 
 #ifdef CONFIG_PROC_FS
 static ide_proc_entry_t idescsi_proc[] = {
@@ -788,9 +786,9 @@ static ide_driver_t idescsi_driver = {
 		.owner		= THIS_MODULE,
 		.name		= "ide-scsi",
 		.bus		= &ide_bus_type,
-		.probe		= ide_scsi_probe,
-		.remove		= ide_scsi_remove,
 	},
+	.probe			= ide_scsi_probe,
+	.remove			= ide_scsi_remove,
 	.version		= IDESCSI_VERSION,
 	.media			= ide_scsi,
 	.supports_dsc_overlap	= 0,
@@ -1046,7 +1044,7 @@ static int idescsi_eh_reset (struct scsi_cmnd *cmd)
 
 	/* kill current request */
 	blkdev_dequeue_request(req);
-	end_that_request_last(req);
+	end_that_request_last(req, 0);
 	if (req->flags & REQ_SENSE)
 		kfree(scsi->pc->buffer);
 	kfree(scsi->pc);
@@ -1056,7 +1054,7 @@ static int idescsi_eh_reset (struct scsi_cmnd *cmd)
 	/* now nuke the drive queue */
 	while ((req = elv_next_request(drive->queue))) {
 		blkdev_dequeue_request(req);
-		end_that_request_last(req);
+		end_that_request_last(req, 0);
 	}
 
 	HWGROUP(drive)->rq = NULL;
@@ -1119,9 +1117,8 @@ static struct scsi_host_template idescsi_template = {
 	.proc_name		= "ide-scsi",
 };
 
-static int ide_scsi_probe(struct device *dev)
+static int ide_scsi_probe(ide_drive_t *drive)
 {
-	ide_drive_t *drive = to_ide_device(dev);
 	idescsi_scsi_t *idescsi;
 	struct Scsi_Host *host;
 	struct gendisk *g;

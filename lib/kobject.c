@@ -72,6 +72,8 @@ static int get_kobj_path_length(struct kobject *kobj)
 	 * Add 1 to strlen for leading '/' of each level.
 	 */
 	do {
+		if (kobject_name(parent) == NULL)
+			return 0;
 		length += strlen(kobject_name(parent)) + 1;
 		parent = parent->parent;
 	} while (parent);
@@ -107,6 +109,8 @@ char *kobject_get_path(struct kobject *kobj, gfp_t gfp_mask)
 	int len;
 
 	len = get_kobj_path_length(kobj);
+	if (len == 0)
+		return NULL;
 	path = kmalloc(len, gfp_mask);
 	if (!path)
 		return NULL;
@@ -162,6 +166,11 @@ int kobject_add(struct kobject * kobj)
 		return -ENOENT;
 	if (!kobj->k_name)
 		kobj->k_name = kobj->name;
+	if (!kobj->k_name) {
+		pr_debug("kobject attempted to be registered with no name!\n");
+		WARN_ON(1);
+		return -EINVAL;
+	}
 	parent = kobject_get(kobj->parent);
 
 	pr_debug("kobject %s: registering. parent: %s, set: %s\n",
@@ -185,6 +194,17 @@ int kobject_add(struct kobject * kobj)
 		unlink(kobj);
 		if (parent)
 			kobject_put(parent);
+
+		/* be noisy on error issues */
+		if (error == -EEXIST)
+			printk("kobject_add failed for %s with -EEXIST, "
+			       "don't try to register things with the "
+			       "same name in the same directory.\n",
+			       kobject_name(kobj));
+		else
+			printk("kobject_add failed for %s (%d)\n",
+			       kobject_name(kobj), error);
+		dump_stack();
 	}
 
 	return error;
@@ -198,18 +218,13 @@ int kobject_add(struct kobject * kobj)
 
 int kobject_register(struct kobject * kobj)
 {
-	int error = 0;
+	int error = -EINVAL;
 	if (kobj) {
 		kobject_init(kobj);
 		error = kobject_add(kobj);
-		if (error) {
-			printk("kobject_register failed for %s (%d)\n",
-			       kobject_name(kobj),error);
-			dump_stack();
-		} else
-			kobject_hotplug(kobj, KOBJ_ADD);
-	} else
-		error = -EINVAL;
+		if (!error)
+			kobject_uevent(kobj, KOBJ_ADD);
+	}
 	return error;
 }
 
@@ -312,7 +327,7 @@ void kobject_del(struct kobject * kobj)
 void kobject_unregister(struct kobject * kobj)
 {
 	pr_debug("kobject %s: unregistering\n",kobject_name(kobj));
-	kobject_hotplug(kobj, KOBJ_REMOVE);
+	kobject_uevent(kobj, KOBJ_REMOVE);
 	kobject_del(kobj);
 	kobject_put(kobj);
 }
@@ -369,6 +384,44 @@ void kobject_put(struct kobject * kobj)
 		kref_put(&kobj->kref, kobject_release);
 }
 
+
+static void dir_release(struct kobject *kobj)
+{
+	kfree(kobj);
+}
+
+static struct kobj_type dir_ktype = {
+	.release	= dir_release,
+	.sysfs_ops	= NULL,
+	.default_attrs	= NULL,
+};
+
+/**
+ *	kobject_add_dir - add sub directory of object.
+ *	@parent:	object in which a directory is created.
+ *	@name:	directory name.
+ *
+ *	Add a plain directory object as child of given object.
+ */
+struct kobject *kobject_add_dir(struct kobject *parent, const char *name)
+{
+	struct kobject *k;
+
+	if (!parent)
+		return NULL;
+
+	k = kzalloc(sizeof(*k), GFP_KERNEL);
+	if (!k)
+		return NULL;
+
+	k->parent = parent;
+	k->ktype = &dir_ktype;
+	kobject_set_name(k, name);
+	kobject_register(k);
+
+	return k;
+}
+EXPORT_SYMBOL_GPL(kobject_add_dir);
 
 /**
  *	kset_init - initialize a kset for use

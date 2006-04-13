@@ -62,15 +62,15 @@ static const char *sctp_conntrack_names[] = {
 #define HOURS * 60 MINS
 #define DAYS  * 24 HOURS
 
-static unsigned long nf_ct_sctp_timeout_closed            =  10 SECS;
-static unsigned long nf_ct_sctp_timeout_cookie_wait       =   3 SECS;
-static unsigned long nf_ct_sctp_timeout_cookie_echoed     =   3 SECS;
-static unsigned long nf_ct_sctp_timeout_established       =   5 DAYS;
-static unsigned long nf_ct_sctp_timeout_shutdown_sent     = 300 SECS / 1000;
-static unsigned long nf_ct_sctp_timeout_shutdown_recd     = 300 SECS / 1000;
-static unsigned long nf_ct_sctp_timeout_shutdown_ack_sent =   3 SECS;
+static unsigned int nf_ct_sctp_timeout_closed            =  10 SECS;
+static unsigned int nf_ct_sctp_timeout_cookie_wait       =   3 SECS;
+static unsigned int nf_ct_sctp_timeout_cookie_echoed     =   3 SECS;
+static unsigned int nf_ct_sctp_timeout_established       =   5 DAYS;
+static unsigned int nf_ct_sctp_timeout_shutdown_sent     = 300 SECS / 1000;
+static unsigned int nf_ct_sctp_timeout_shutdown_recd     = 300 SECS / 1000;
+static unsigned int nf_ct_sctp_timeout_shutdown_ack_sent =   3 SECS;
 
-static unsigned long * sctp_timeouts[]
+static unsigned int * sctp_timeouts[]
 = { NULL,                                  /* SCTP_CONNTRACK_NONE  */
     &nf_ct_sctp_timeout_closed,	           /* SCTP_CONNTRACK_CLOSED */
     &nf_ct_sctp_timeout_cookie_wait,       /* SCTP_CONNTRACK_COOKIE_WAIT */
@@ -615,7 +615,7 @@ static ctl_table nf_ct_net_table[] = {
 static struct ctl_table_header *nf_ct_sysctl_header;
 #endif
 
-int __init init(void)
+int __init nf_conntrack_proto_sctp_init(void)
 {
 	int ret;
 
@@ -652,7 +652,7 @@ int __init init(void)
 	return ret;
 }
 
-void __exit fini(void)
+void __exit nf_conntrack_proto_sctp_fini(void)
 {
 	nf_conntrack_protocol_unregister(&nf_conntrack_protocol_sctp6);
 	nf_conntrack_protocol_unregister(&nf_conntrack_protocol_sctp4);
@@ -662,8 +662,8 @@ void __exit fini(void)
 	DEBUGP("SCTP conntrack module unloaded\n");
 }
 
-module_init(init);
-module_exit(fini);
+module_init(nf_conntrack_proto_sctp_init);
+module_exit(nf_conntrack_proto_sctp_fini);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Kiran Kumar Immidi");

@@ -178,11 +178,9 @@ smb_writepage(struct page *page, struct writeback_control *wbc)
 	unsigned offset = PAGE_CACHE_SIZE;
 	int err;
 
-	if (!mapping)
-		BUG();
+	BUG_ON(!mapping);
 	inode = mapping->host;
-	if (!inode)
-		BUG();
+	BUG_ON(!inode);
 
 	end_index = inode->i_size >> PAGE_CACHE_SHIFT;
 
@@ -209,8 +207,8 @@ smb_updatepage(struct file *file, struct page *page, unsigned long offset,
 {
 	struct dentry *dentry = file->f_dentry;
 
-	DEBUG1("(%s/%s %d@%ld)\n", DENTRY_PATH(dentry), 
-	       count, (page->index << PAGE_CACHE_SHIFT)+offset);
+	DEBUG1("(%s/%s %d@%lld)\n", DENTRY_PATH(dentry), count,
+		((unsigned long long)page->index << PAGE_CACHE_SHIFT) + offset);
 
 	return smb_writepage_sync(dentry->d_inode, page, offset, count);
 }
@@ -374,8 +372,7 @@ smb_file_release(struct inode *inode, struct file * file)
 		/* We must flush any dirty pages now as we won't be able to
 		   write anything after close. mmap can trigger this.
 		   "openers" should perhaps include mmap'ers ... */
-		filemap_fdatawrite(inode->i_mapping);
-		filemap_fdatawait(inode->i_mapping);
+		filemap_write_and_wait(inode->i_mapping);
 		smb_close(inode);
 	}
 	unlock_kernel();
@@ -402,7 +399,7 @@ smb_file_permission(struct inode *inode, int mask, struct nameidata *nd)
 	return error;
 }
 
-struct file_operations smb_file_operations =
+const struct file_operations smb_file_operations =
 {
 	.llseek		= remote_llseek,
 	.read		= smb_file_read,

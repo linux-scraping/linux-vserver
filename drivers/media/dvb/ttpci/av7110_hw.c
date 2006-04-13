@@ -146,52 +146,52 @@ static int load_dram(struct av7110 *av7110, u32 *data, int len)
 {
 	int i;
 	int blocks, rest;
-	u32 base, bootblock = BOOT_BLOCK;
+	u32 base, bootblock = AV7110_BOOT_BLOCK;
 
 	dprintk(4, "%p\n", av7110);
 
-	blocks = len / BOOT_MAX_SIZE;
-	rest = len % BOOT_MAX_SIZE;
+	blocks = len / AV7110_BOOT_MAX_SIZE;
+	rest = len % AV7110_BOOT_MAX_SIZE;
 	base = DRAM_START_CODE;
 
 	for (i = 0; i < blocks; i++) {
-		if (waitdebi(av7110, BOOT_STATE, BOOTSTATE_BUFFER_EMPTY) < 0) {
+		if (waitdebi(av7110, AV7110_BOOT_STATE, BOOTSTATE_BUFFER_EMPTY) < 0) {
 			printk(KERN_ERR "dvb-ttpci: load_dram(): timeout at block %d\n", i);
 			return -ETIMEDOUT;
 		}
 		dprintk(4, "writing DRAM block %d\n", i);
 		mwdebi(av7110, DEBISWAB, bootblock,
-		       ((char*)data) + i * BOOT_MAX_SIZE, BOOT_MAX_SIZE);
+		       ((char*)data) + i * AV7110_BOOT_MAX_SIZE, AV7110_BOOT_MAX_SIZE);
 		bootblock ^= 0x1400;
-		iwdebi(av7110, DEBISWAB, BOOT_BASE, swab32(base), 4);
-		iwdebi(av7110, DEBINOSWAP, BOOT_SIZE, BOOT_MAX_SIZE, 2);
-		iwdebi(av7110, DEBINOSWAP, BOOT_STATE, BOOTSTATE_BUFFER_FULL, 2);
-		base += BOOT_MAX_SIZE;
+		iwdebi(av7110, DEBISWAB, AV7110_BOOT_BASE, swab32(base), 4);
+		iwdebi(av7110, DEBINOSWAP, AV7110_BOOT_SIZE, AV7110_BOOT_MAX_SIZE, 2);
+		iwdebi(av7110, DEBINOSWAP, AV7110_BOOT_STATE, BOOTSTATE_BUFFER_FULL, 2);
+		base += AV7110_BOOT_MAX_SIZE;
 	}
 
 	if (rest > 0) {
-		if (waitdebi(av7110, BOOT_STATE, BOOTSTATE_BUFFER_EMPTY) < 0) {
+		if (waitdebi(av7110, AV7110_BOOT_STATE, BOOTSTATE_BUFFER_EMPTY) < 0) {
 			printk(KERN_ERR "dvb-ttpci: load_dram(): timeout at last block\n");
 			return -ETIMEDOUT;
 		}
 		if (rest > 4)
 			mwdebi(av7110, DEBISWAB, bootblock,
-			       ((char*)data) + i * BOOT_MAX_SIZE, rest);
+			       ((char*)data) + i * AV7110_BOOT_MAX_SIZE, rest);
 		else
 			mwdebi(av7110, DEBISWAB, bootblock,
-			       ((char*)data) + i * BOOT_MAX_SIZE - 4, rest + 4);
+			       ((char*)data) + i * AV7110_BOOT_MAX_SIZE - 4, rest + 4);
 
-		iwdebi(av7110, DEBISWAB, BOOT_BASE, swab32(base), 4);
-		iwdebi(av7110, DEBINOSWAP, BOOT_SIZE, rest, 2);
-		iwdebi(av7110, DEBINOSWAP, BOOT_STATE, BOOTSTATE_BUFFER_FULL, 2);
+		iwdebi(av7110, DEBISWAB, AV7110_BOOT_BASE, swab32(base), 4);
+		iwdebi(av7110, DEBINOSWAP, AV7110_BOOT_SIZE, rest, 2);
+		iwdebi(av7110, DEBINOSWAP, AV7110_BOOT_STATE, BOOTSTATE_BUFFER_FULL, 2);
 	}
-	if (waitdebi(av7110, BOOT_STATE, BOOTSTATE_BUFFER_EMPTY) < 0) {
+	if (waitdebi(av7110, AV7110_BOOT_STATE, BOOTSTATE_BUFFER_EMPTY) < 0) {
 		printk(KERN_ERR "dvb-ttpci: load_dram(): timeout after last block\n");
 		return -ETIMEDOUT;
 	}
-	iwdebi(av7110, DEBINOSWAP, BOOT_SIZE, 0, 2);
-	iwdebi(av7110, DEBINOSWAP, BOOT_STATE, BOOTSTATE_BUFFER_FULL, 2);
-	if (waitdebi(av7110, BOOT_STATE, BOOTSTATE_BOOT_COMPLETE) < 0) {
+	iwdebi(av7110, DEBINOSWAP, AV7110_BOOT_SIZE, 0, 2);
+	iwdebi(av7110, DEBINOSWAP, AV7110_BOOT_STATE, BOOTSTATE_BUFFER_FULL, 2);
+	if (waitdebi(av7110, AV7110_BOOT_STATE, BOOTSTATE_AV7110_BOOT_COMPLETE) < 0) {
 		printk(KERN_ERR "dvb-ttpci: load_dram(): final handshake timeout\n");
 		return -ETIMEDOUT;
 	}
@@ -230,6 +230,8 @@ int av7110_bootarm(struct av7110 *av7110)
 
 	dprintk(4, "%p\n", av7110);
 
+	av7110->arm_ready = 0;
+
 	saa7146_setgpio(dev, RESET_LINE, SAA7146_GPIO_OUTLO);
 
 	/* Disable DEBI and GPIO irq */
@@ -243,6 +245,9 @@ int av7110_bootarm(struct av7110 *av7110)
 
 	/* test DEBI */
 	iwdebi(av7110, DEBISWAP, DPRAM_BASE, 0x76543210, 4);
+	/* FIXME: Why does Nexus CA require 2x iwdebi for first init? */
+	iwdebi(av7110, DEBISWAP, DPRAM_BASE, 0x76543210, 4);
+
 	if ((ret=irdebi(av7110, DEBINOSWAP, DPRAM_BASE, 0, 4)) != 0x10325476) {
 		printk(KERN_ERR "dvb-ttpci: debi test in av7110_bootarm() failed: "
 		       "%08x != %08x (check your BIOS 'Plug&Play OS' settings)\n",
@@ -260,7 +265,7 @@ int av7110_bootarm(struct av7110 *av7110)
 	//saa7146_setgpio(dev, 3, SAA7146_GPIO_INPUT);
 
 	mwdebi(av7110, DEBISWAB, DPRAM_BASE, bootcode, sizeof(bootcode));
-	iwdebi(av7110, DEBINOSWAP, BOOT_STATE, BOOTSTATE_BUFFER_FULL, 2);
+	iwdebi(av7110, DEBINOSWAP, AV7110_BOOT_STATE, BOOTSTATE_BUFFER_FULL, 2);
 
 	if (saa7146_wait_for_debi_done(av7110->dev, 1)) {
 		printk(KERN_ERR "dvb-ttpci: av7110_bootarm(): "
@@ -322,10 +327,10 @@ int av7110_wait_msgstate(struct av7110 *av7110, u16 flags)
 	start = jiffies;
 	for (;;) {
 		err = time_after(jiffies, start + ARM_WAIT_FREE);
-		if (down_interruptible(&av7110->dcomlock))
+		if (mutex_lock_interruptible(&av7110->dcomlock))
 			return -ERESTARTSYS;
 		stat = rdebi(av7110, DEBINOSWAP, MSGSTATE, 0, 2);
-		up(&av7110->dcomlock);
+		mutex_unlock(&av7110->dcomlock);
 		if ((stat & flags) == 0)
 			break;
 		if (err) {
@@ -361,6 +366,7 @@ static int __av7110_send_fw_cmd(struct av7110 *av7110, u16* buf, int length)
 			break;
 		if (err) {
 			printk(KERN_ERR "dvb-ttpci: %s(): timeout waiting for COMMAND idle\n", __FUNCTION__);
+			av7110->arm_errors++;
 			return -ETIMEDOUT;
 		}
 		msleep(1);
@@ -481,11 +487,11 @@ static int av7110_send_fw_cmd(struct av7110 *av7110, u16* buf, int length)
 		dprintk(1, "arm not ready.\n");
 		return -1;
 	}
-	if (down_interruptible(&av7110->dcomlock))
+	if (mutex_lock_interruptible(&av7110->dcomlock))
 		return -ERESTARTSYS;
 
 	ret = __av7110_send_fw_cmd(av7110, buf, length);
-	up(&av7110->dcomlock);
+	mutex_unlock(&av7110->dcomlock);
 	if (ret && ret!=-ERESTARTSYS)
 		printk(KERN_ERR "dvb-ttpci: %s(): av7110_send_fw_cmd error %d\n",
 		       __FUNCTION__, ret);
@@ -557,11 +563,11 @@ int av7110_fw_request(struct av7110 *av7110, u16 *request_buf,
 		return -1;
 	}
 
-	if (down_interruptible(&av7110->dcomlock))
+	if (mutex_lock_interruptible(&av7110->dcomlock))
 		return -ERESTARTSYS;
 
 	if ((err = __av7110_send_fw_cmd(av7110, request_buf, request_buf_len)) < 0) {
-		up(&av7110->dcomlock);
+		mutex_unlock(&av7110->dcomlock);
 		printk(KERN_ERR "dvb-ttpci: av7110_fw_request error %d\n", err);
 		return err;
 	}
@@ -573,7 +579,7 @@ int av7110_fw_request(struct av7110 *av7110, u16 *request_buf,
 			break;
 		if (err) {
 			printk(KERN_ERR "%s: timeout waiting for COMMAND to complete\n", __FUNCTION__);
-			up(&av7110->dcomlock);
+			mutex_unlock(&av7110->dcomlock);
 			return -ETIMEDOUT;
 		}
 #ifdef _NOHANDSHAKE
@@ -589,7 +595,7 @@ int av7110_fw_request(struct av7110 *av7110, u16 *request_buf,
 			break;
 		if (err) {
 			printk(KERN_ERR "%s: timeout waiting for HANDSHAKE_REG\n", __FUNCTION__);
-			up(&av7110->dcomlock);
+			mutex_unlock(&av7110->dcomlock);
 			return -ETIMEDOUT;
 		}
 		msleep(1);
@@ -600,12 +606,12 @@ int av7110_fw_request(struct av7110 *av7110, u16 *request_buf,
 	stat = rdebi(av7110, DEBINOSWAP, MSGSTATE, 0, 2);
 	if (stat & GPMQOver) {
 		printk(KERN_ERR "%s: GPMQOver\n", __FUNCTION__);
-		up(&av7110->dcomlock);
+		mutex_unlock(&av7110->dcomlock);
 		return -1;
 	}
 	else if (stat & OSDQOver) {
 		printk(KERN_ERR "%s: OSDQOver\n", __FUNCTION__);
-		up(&av7110->dcomlock);
+		mutex_unlock(&av7110->dcomlock);
 		return -1;
 	}
 #endif
@@ -613,7 +619,7 @@ int av7110_fw_request(struct av7110 *av7110, u16 *request_buf,
 	for (i = 0; i < reply_buf_len; i++)
 		reply_buf[i] = rdebi(av7110, DEBINOSWAP, COM_BUFF + 2 * i, 0, 2);
 
-	up(&av7110->dcomlock);
+	mutex_unlock(&av7110->dcomlock);
 	return 0;
 }
 
@@ -729,7 +735,7 @@ static int FlushText(struct av7110 *av7110)
 	unsigned long start;
 	int err;
 
-	if (down_interruptible(&av7110->dcomlock))
+	if (mutex_lock_interruptible(&av7110->dcomlock))
 		return -ERESTARTSYS;
 	start = jiffies;
 	while (1) {
@@ -739,12 +745,12 @@ static int FlushText(struct av7110 *av7110)
 		if (err) {
 			printk(KERN_ERR "dvb-ttpci: %s(): timeout waiting for BUFF1_BASE == 0\n",
 			       __FUNCTION__);
-			up(&av7110->dcomlock);
+			mutex_unlock(&av7110->dcomlock);
 			return -ETIMEDOUT;
 		}
 		msleep(1);
 	}
-	up(&av7110->dcomlock);
+	mutex_unlock(&av7110->dcomlock);
 	return 0;
 }
 
@@ -755,7 +761,7 @@ static int WriteText(struct av7110 *av7110, u8 win, u16 x, u16 y, u8* buf)
 	int length = strlen(buf) + 1;
 	u16 cbuf[5] = { (COMTYPE_OSD << 8) + DText, 3, win, x, y };
 
-	if (down_interruptible(&av7110->dcomlock))
+	if (mutex_lock_interruptible(&av7110->dcomlock))
 		return -ERESTARTSYS;
 
 	start = jiffies;
@@ -766,7 +772,7 @@ static int WriteText(struct av7110 *av7110, u8 win, u16 x, u16 y, u8* buf)
 		if (ret) {
 			printk(KERN_ERR "dvb-ttpci: %s: timeout waiting for BUFF1_BASE == 0\n",
 			       __FUNCTION__);
-			up(&av7110->dcomlock);
+			mutex_unlock(&av7110->dcomlock);
 			return -ETIMEDOUT;
 		}
 		msleep(1);
@@ -780,7 +786,7 @@ static int WriteText(struct av7110 *av7110, u8 win, u16 x, u16 y, u8* buf)
 		if (ret) {
 			printk(KERN_ERR "dvb-ttpci: %s: timeout waiting for HANDSHAKE_REG\n",
 			       __FUNCTION__);
-			up(&av7110->dcomlock);
+			mutex_unlock(&av7110->dcomlock);
 			return -ETIMEDOUT;
 		}
 		msleep(1);
@@ -792,7 +798,7 @@ static int WriteText(struct av7110 *av7110, u8 win, u16 x, u16 y, u8* buf)
 	if (length & 1)
 		wdebi(av7110, DEBINOSWAP, BUFF1_BASE + i * 2, 0, 2);
 	ret = __av7110_send_fw_cmd(av7110, cbuf, 5);
-	up(&av7110->dcomlock);
+	mutex_unlock(&av7110->dcomlock);
 	if (ret && ret!=-ERESTARTSYS)
 		printk(KERN_ERR "dvb-ttpci: WriteText error %d\n", ret);
 	return ret;
@@ -1056,7 +1062,7 @@ int av7110_osd_cmd(struct av7110 *av7110, osd_cmd_t *dc)
 {
 	int ret;
 
-	if (down_interruptible(&av7110->osd_sema))
+	if (mutex_lock_interruptible(&av7110->osd_mutex))
 		return -ERESTARTSYS;
 
 	switch (dc->cmd) {
@@ -1192,7 +1198,7 @@ int av7110_osd_cmd(struct av7110 *av7110, osd_cmd_t *dc)
 		break;
 	}
 
-	up(&av7110->osd_sema);
+	mutex_unlock(&av7110->osd_mutex);
 	if (ret==-ERESTARTSYS)
 		dprintk(1, "av7110_osd_cmd(%d) returns with -ERESTARTSYS\n",dc->cmd);
 	else if (ret)
@@ -1206,9 +1212,9 @@ int av7110_osd_capability(struct av7110 *av7110, osd_cap_t *cap)
 	switch (cap->cmd) {
 	case OSD_CAP_MEMSIZE:
 		if (FW_4M_SDRAM(av7110->arm_app))
-		        cap->val = 1000000;
+			cap->val = 1000000;
 		else
-		        cap->val = 92000;
+			cap->val = 92000;
 		return 0;
 	default:
 		return -EINVAL;

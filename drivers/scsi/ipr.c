@@ -2132,7 +2132,7 @@ restart:
 	}
 
 	spin_unlock_irqrestore(ioa_cfg->host->host_lock, lock_flags);
-	kobject_uevent(&ioa_cfg->host->shost_classdev.kobj, KOBJ_CHANGE, NULL);
+	kobject_uevent(&ioa_cfg->host->shost_classdev.kobj, KOBJ_CHANGE);
 	LEAVE;
 }
 
@@ -4236,35 +4236,6 @@ static void ipr_scsi_done(struct ipr_cmnd *ipr_cmd)
 }
 
 /**
- * ipr_save_ioafp_mode_select - Save adapters mode select data
- * @ioa_cfg:	ioa config struct
- * @scsi_cmd:	scsi command struct
- *
- * This function saves mode select data for the adapter to
- * use following an adapter reset.
- *
- * Return value:
- *	0 on success / SCSI_MLQUEUE_HOST_BUSY on failure
- **/
-static int ipr_save_ioafp_mode_select(struct ipr_ioa_cfg *ioa_cfg,
-				       struct scsi_cmnd *scsi_cmd)
-{
-	if (!ioa_cfg->saved_mode_pages) {
-		ioa_cfg->saved_mode_pages  = kmalloc(sizeof(struct ipr_mode_pages),
-						     GFP_ATOMIC);
-		if (!ioa_cfg->saved_mode_pages) {
-			dev_err(&ioa_cfg->pdev->dev,
-				"IOA mode select buffer allocation failed\n");
-			return SCSI_MLQUEUE_HOST_BUSY;
-		}
-	}
-
-	memcpy(ioa_cfg->saved_mode_pages, scsi_cmd->buffer, scsi_cmd->cmnd[4]);
-	ioa_cfg->saved_mode_page_len = scsi_cmd->cmnd[4];
-	return 0;
-}
-
-/**
  * ipr_queuecommand - Queue a mid-layer request
  * @scsi_cmd:	scsi command struct
  * @done:		done function
@@ -4337,9 +4308,6 @@ static int ipr_queuecommand(struct scsi_cmnd *scsi_cmd,
 	if (scsi_cmd->cmnd[0] >= 0xC0 &&
 	    (!ipr_is_gscsi(res) || scsi_cmd->cmnd[0] == IPR_QUERY_RSRC_STATE))
 		ioarcb->cmd_pkt.request_type = IPR_RQTYPE_IOACMD;
-
-	if (ipr_is_ioa_resource(res) && scsi_cmd->cmnd[0] == MODE_SELECT)
-		rc = ipr_save_ioafp_mode_select(ioa_cfg, scsi_cmd);
 
 	if (likely(rc == 0))
 		rc = ipr_build_ioadl(ioa_cfg, ipr_cmd);
@@ -4829,17 +4797,11 @@ static int ipr_ioafp_mode_select_page28(struct ipr_cmnd *ipr_cmd)
 	int length;
 
 	ENTER;
-	if (ioa_cfg->saved_mode_pages) {
-		memcpy(mode_pages, ioa_cfg->saved_mode_pages,
-		       ioa_cfg->saved_mode_page_len);
-		length = ioa_cfg->saved_mode_page_len;
-	} else {
-		ipr_scsi_bus_speed_limit(ioa_cfg);
-		ipr_check_term_power(ioa_cfg, mode_pages);
-		ipr_modify_ioafp_mode_page_28(ioa_cfg, mode_pages);
-		length = mode_pages->hdr.length + 1;
-		mode_pages->hdr.length = 0;
-	}
+	ipr_scsi_bus_speed_limit(ioa_cfg);
+	ipr_check_term_power(ioa_cfg, mode_pages);
+	ipr_modify_ioafp_mode_page_28(ioa_cfg, mode_pages);
+	length = mode_pages->hdr.length + 1;
+	mode_pages->hdr.length = 0;
 
 	ipr_build_mode_select(ipr_cmd, cpu_to_be32(IPR_IOA_RES_HANDLE), 0x11,
 			      ioa_cfg->vpd_cbs_dma + offsetof(struct ipr_misc_cbs, mode_pages),
@@ -5869,6 +5831,109 @@ static void ipr_initiate_ioa_reset(struct ipr_ioa_cfg *ioa_cfg,
 }
 
 /**
+ * ipr_reset_freeze - Hold off all I/O activity
+ * @ipr_cmd:	ipr command struct
+ *
+ * Description: If the PCI slot is frozen, hold off all I/O
+ * activity; then, as soon as the slot is available again,
+ * initiate an adapter reset.
+ */
+static int ipr_reset_freeze(struct ipr_cmnd *ipr_cmd)
+{
+	/* Disallow new interrupts, avoid loop */
+	ipr_cmd->ioa_cfg->allow_interrupts = 0;
+	list_add_tail(&ipr_cmd->queue, &ipr_cmd->ioa_cfg->pending_q);
+	ipr_cmd->done = ipr_reset_ioa_job;
+	return IPR_RC_JOB_RETURN;
+}
+
+/**
+ * ipr_pci_frozen - Called when slot has experienced a PCI bus error.
+ * @pdev:	PCI device struct
+ *
+ * Description: This routine is called to tell us that the PCI bus
+ * is down. Can't do anything here, except put the device driver
+ * into a holding pattern, waiting for the PCI bus to come back.
+ */
+static void ipr_pci_frozen(struct pci_dev *pdev)
+{
+	unsigned long flags = 0;
+	struct ipr_ioa_cfg *ioa_cfg = pci_get_drvdata(pdev);
+
+	spin_lock_irqsave(ioa_cfg->host->host_lock, flags);
+	_ipr_initiate_ioa_reset(ioa_cfg, ipr_reset_freeze, IPR_SHUTDOWN_NONE);
+	spin_unlock_irqrestore(ioa_cfg->host->host_lock, flags);
+}
+
+/**
+ * ipr_pci_slot_reset - Called when PCI slot has been reset.
+ * @pdev:	PCI device struct
+ *
+ * Description: This routine is called by the pci error recovery
+ * code after the PCI slot has been reset, just before we
+ * should resume normal operations.
+ */
+static pci_ers_result_t ipr_pci_slot_reset(struct pci_dev *pdev)
+{
+	unsigned long flags = 0;
+	struct ipr_ioa_cfg *ioa_cfg = pci_get_drvdata(pdev);
+
+	spin_lock_irqsave(ioa_cfg->host->host_lock, flags);
+	_ipr_initiate_ioa_reset(ioa_cfg, ipr_reset_restore_cfg_space,
+	                                 IPR_SHUTDOWN_NONE);
+	spin_unlock_irqrestore(ioa_cfg->host->host_lock, flags);
+	return PCI_ERS_RESULT_RECOVERED;
+}
+
+/**
+ * ipr_pci_perm_failure - Called when PCI slot is dead for good.
+ * @pdev:	PCI device struct
+ *
+ * Description: This routine is called when the PCI bus has
+ * permanently failed.
+ */
+static void ipr_pci_perm_failure(struct pci_dev *pdev)
+{
+	unsigned long flags = 0;
+	struct ipr_ioa_cfg *ioa_cfg = pci_get_drvdata(pdev);
+
+	spin_lock_irqsave(ioa_cfg->host->host_lock, flags);
+	if (ioa_cfg->sdt_state == WAIT_FOR_DUMP)
+		ioa_cfg->sdt_state = ABORT_DUMP;
+	ioa_cfg->reset_retries = IPR_NUM_RESET_RELOAD_RETRIES;
+	ioa_cfg->in_ioa_bringdown = 1;
+	ipr_initiate_ioa_reset(ioa_cfg, IPR_SHUTDOWN_NONE);
+	spin_unlock_irqrestore(ioa_cfg->host->host_lock, flags);
+}
+
+/**
+ * ipr_pci_error_detected - Called when a PCI error is detected.
+ * @pdev:	PCI device struct
+ * @state:	PCI channel state
+ *
+ * Description: Called when a PCI error is detected.
+ *
+ * Return value:
+ * 	PCI_ERS_RESULT_NEED_RESET or PCI_ERS_RESULT_DISCONNECT
+ */
+static pci_ers_result_t ipr_pci_error_detected(struct pci_dev *pdev,
+					       pci_channel_state_t state)
+{
+	switch (state) {
+	case pci_channel_io_frozen:
+		ipr_pci_frozen(pdev);
+		return PCI_ERS_RESULT_NEED_RESET;
+	case pci_channel_io_perm_failure:
+		ipr_pci_perm_failure(pdev);
+		return PCI_ERS_RESULT_DISCONNECT;
+		break;
+	default:
+		break;
+	}
+	return PCI_ERS_RESULT_NEED_RESET;
+}
+
+/**
  * ipr_probe_ioa_part2 - Initializes IOAs found in ipr_probe_ioa(..)
  * @ioa_cfg:	ioa cfg struct
  *
@@ -5887,7 +5952,12 @@ static int __devinit ipr_probe_ioa_part2(struct ipr_ioa_cfg *ioa_cfg)
 	ENTER;
 	spin_lock_irqsave(ioa_cfg->host->host_lock, host_lock_flags);
 	dev_dbg(&ioa_cfg->pdev->dev, "ioa_cfg adx: 0x%p\n", ioa_cfg);
-	_ipr_initiate_ioa_reset(ioa_cfg, ipr_reset_enable_ioa, IPR_SHUTDOWN_NONE);
+	if (ioa_cfg->needs_hard_reset) {
+		ioa_cfg->needs_hard_reset = 0;
+		ipr_initiate_ioa_reset(ioa_cfg, IPR_SHUTDOWN_NONE);
+	} else
+		_ipr_initiate_ioa_reset(ioa_cfg, ipr_reset_enable_ioa,
+					IPR_SHUTDOWN_NONE);
 
 	spin_unlock_irqrestore(ioa_cfg->host->host_lock, host_lock_flags);
 	wait_event(ioa_cfg->reset_wait_q, !ioa_cfg->in_reset_reload);
@@ -5964,7 +6034,6 @@ static void ipr_free_mem(struct ipr_ioa_cfg *ioa_cfg)
 	}
 
 	ipr_free_dump(ioa_cfg);
-	kfree(ioa_cfg->saved_mode_pages);
 	kfree(ioa_cfg->trace);
 }
 
@@ -6264,6 +6333,7 @@ static int __devinit ipr_probe_ioa(struct pci_dev *pdev,
 	unsigned long ipr_regs_pci;
 	void __iomem *ipr_regs;
 	u32 rc = PCIBIOS_SUCCESSFUL;
+	volatile u32 mask, uproc;
 
 	ENTER;
 
@@ -6355,6 +6425,15 @@ static int __devinit ipr_probe_ioa(struct pci_dev *pdev,
 			"Couldn't allocate enough memory for device driver!\n");
 		goto cleanup_nomem;
 	}
+
+	/*
+	 * If HRRQ updated interrupt is not masked, or reset alert is set,
+	 * the card is in an unknown state and needs a hard reset
+	 */
+	mask = readl(ioa_cfg->regs.sense_interrupt_mask_reg);
+	uproc = readl(ioa_cfg->regs.sense_uproc_interrupt_reg);
+	if ((mask & IPR_PCII_HRRQ_UPDATED) == 0 || (uproc & IPR_UPROCI_RESET_ALERT))
+		ioa_cfg->needs_hard_reset = 1;
 
 	ipr_mask_and_clear_interrupts(ioa_cfg, ~IPR_PCII_IOA_TRANS_TO_OPER);
 	rc = request_irq(pdev->irq, ipr_isr, SA_SHIRQ, IPR_NAME, ioa_cfg);
@@ -6625,12 +6704,18 @@ static struct pci_device_id ipr_pci_table[] __devinitdata = {
 };
 MODULE_DEVICE_TABLE(pci, ipr_pci_table);
 
+static struct pci_error_handlers ipr_err_handler = {
+	.error_detected = ipr_pci_error_detected,
+	.slot_reset = ipr_pci_slot_reset,
+};
+
 static struct pci_driver ipr_driver = {
 	.name = IPR_NAME,
 	.id_table = ipr_pci_table,
 	.probe = ipr_probe,
 	.remove = ipr_remove,
 	.shutdown = ipr_shutdown,
+	.err_handler = &ipr_err_handler,
 };
 
 /**

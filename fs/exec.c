@@ -128,7 +128,7 @@ asmlinkage long sys_uselib(const char __user * library)
 	struct nameidata nd;
 	int error;
 
-	error = __user_path_lookup_open(library, LOOKUP_FOLLOW, &nd, FMODE_READ);
+	error = __user_path_lookup_open(library, LOOKUP_FOLLOW, &nd, FMODE_READ|FMODE_EXEC);
 	if (error)
 		goto out;
 
@@ -325,7 +325,7 @@ void install_arg_page(struct vm_area_struct *vma,
 	lru_cache_add_active(page);
 	set_pte_at(mm, address, pte, pte_mkdirty(pte_mkwrite(mk_pte(
 					page, vma->vm_page_prot))));
-	page_add_anon_rmap(page, vma, address);
+	page_add_new_anon_rmap(page, vma, address);
 	pte_unmap_unlock(pte, ptl);
 
 	/* no need for flush_tlb */
@@ -479,7 +479,7 @@ struct file *open_exec(const char *name)
 	int err;
 	struct file *file;
 
-	err = path_lookup_open(name, LOOKUP_FOLLOW, &nd, FMODE_READ);
+	err = path_lookup_open(AT_FDCWD, name, LOOKUP_FOLLOW, &nd, FMODE_READ|FMODE_EXEC);
 	file = ERR_PTR(err);
 
 	if (!err) {
@@ -563,7 +563,7 @@ static int exec_mmap(struct mm_struct *mm)
 	arch_pick_mmap_layout(mm);
 	if (old_mm) {
 		up_read(&old_mm->mmap_sem);
-		if (active_mm != old_mm) BUG();
+		BUG_ON(active_mm != old_mm);
 		mmput(old_mm);
 		return 0;
 	}
@@ -577,7 +577,7 @@ static int exec_mmap(struct mm_struct *mm)
  * disturbing other processes.  (Other processes might share the signal
  * table via the CLONE_SIGHAND option to clone().)
  */
-static inline int de_thread(struct task_struct *tsk)
+static int de_thread(struct task_struct *tsk)
 {
 	struct signal_struct *sig = tsk->signal;
 	struct sighand_struct *newsighand, *oldsighand = tsk->sighand;
@@ -618,6 +618,15 @@ static inline int de_thread(struct task_struct *tsk)
 		kmem_cache_free(sighand_cachep, newsighand);
 		return -EAGAIN;
 	}
+
+	/*
+	 * child_reaper ignores SIGKILL, change it now.
+	 * Reparenting needs write_lock on tasklist_lock,
+	 * so it is safe to do it under read_lock.
+	 */
+	if (unlikely(current->group_leader == child_reaper))
+		child_reaper = current;
+
 	zap_other_threads(current);
 	read_unlock(&tasklist_lock);
 
@@ -634,10 +643,10 @@ static inline int de_thread(struct task_struct *tsk)
 		 * synchronize with any firing (by calling del_timer_sync)
 		 * before we can safely let the old group leader die.
 		 */
-		sig->real_timer.data = (unsigned long)current;
+		sig->tsk = current;
 		spin_unlock_irq(lock);
-		if (del_timer_sync(&sig->real_timer))
-			add_timer(&sig->real_timer);
+		if (hrtimer_cancel(&sig->real_timer))
+			hrtimer_restart(&sig->real_timer);
 		spin_lock_irq(lock);
 	}
 	while (atomic_read(&sig->count) > count) {
@@ -701,22 +710,30 @@ static inline int de_thread(struct task_struct *tsk)
 		remove_parent(current);
 		remove_parent(leader);
 
-		switch_exec_pids(leader, current);
+
+		/* Become a process group leader with the old leader's pid.
+		 * Note: The old leader also uses thispid until release_task
+		 *       is called.  Odd but simple and correct.
+		 */
+		detach_pid(current, PIDTYPE_PID);
+		current->pid = leader->pid;
+		attach_pid(current, PIDTYPE_PID,  current->pid);
+		attach_pid(current, PIDTYPE_PGID, current->signal->pgrp);
+		attach_pid(current, PIDTYPE_SID,  current->signal->session);
+		list_add_tail(&current->tasks, &init_task.tasks);
 
 		current->parent = current->real_parent = leader->real_parent;
 		leader->parent = leader->real_parent = child_reaper;
 		current->group_leader = current;
 		leader->group_leader = leader;
 
-		add_parent(current, current->parent);
-		add_parent(leader, leader->parent);
+		add_parent(current);
+		add_parent(leader);
 		if (ptrace) {
 			current->ptrace = ptrace;
 			__ptrace_link(current, parent);
 		}
 
-		list_del(&current->tasks);
-		list_add_tail(&current->tasks, &init_task.tasks);
 		current->exit_signal = SIGCHLD;
 
 		BUG_ON(leader->exit_state != EXIT_ZOMBIE);
@@ -753,7 +770,6 @@ no_thread_group:
 		/*
 		 * Move our state over to newsighand and switch it in.
 		 */
-		spin_lock_init(&newsighand->siglock);
 		atomic_set(&newsighand->count, 1);
 		memcpy(newsighand->action, oldsighand->action,
 		       sizeof(newsighand->action));
@@ -762,7 +778,7 @@ no_thread_group:
 		spin_lock(&oldsighand->siglock);
 		spin_lock(&newsighand->siglock);
 
-		current->sighand = newsighand;
+		rcu_assign_pointer(current->sighand, newsighand);
 		recalc_sigpending();
 
 		spin_unlock(&newsighand->siglock);
@@ -782,7 +798,7 @@ no_thread_group:
  * so that a new one can be started
  */
 
-static inline void flush_old_files(struct files_struct * files)
+static void flush_old_files(struct files_struct * files)
 {
 	long j = -1;
 	struct fdtable *fdt;
@@ -887,6 +903,12 @@ int flush_old_exec(struct linux_binprm * bprm)
 	current->flags &= ~PF_RANDOMIZE;
 	flush_thread();
 
+	/* Set the new mm task size. We have to do that late because it may
+	 * depend on TIF_32BIT which is only updated in flush_thread() on
+	 * some architectures like powerpc
+	 */
+	current->mm->task_size = TASK_SIZE;
+
 	if (bprm->e_uid != current->euid || bprm->e_gid != current->egid || 
 	    file_permission(bprm->file, MAY_READ) ||
 	    (bprm->interp_flags & BINPRM_FLAGS_ENFORCE_NONDUMP)) {
@@ -966,7 +988,7 @@ int prepare_binprm(struct linux_binprm *bprm)
 
 EXPORT_SYMBOL(prepare_binprm);
 
-static inline int unsafe_exec(struct task_struct *p)
+static int unsafe_exec(struct task_struct *p)
 {
 	int unsafe = 0;
 	if (p->ptrace & PT_PTRACED) {
@@ -1139,10 +1161,9 @@ int do_execve(char * filename,
 	int i;
 
 	retval = -ENOMEM;
-	bprm = kmalloc(sizeof(*bprm), GFP_KERNEL);
+	bprm = kzalloc(sizeof(*bprm), GFP_KERNEL);
 	if (!bprm)
 		goto out_ret;
-	memset(bprm, 0, sizeof(*bprm));
 
 	file = open_exec(filename);
 	retval = PTR_ERR(file);
@@ -1405,7 +1426,7 @@ static void zap_threads (struct mm_struct *mm)
 		do_each_thread(g,p) {
 			if (mm == p->mm && p != tsk &&
 			    p->ptrace && p->parent->mm == mm) {
-				__ptrace_unlink(p);
+				__ptrace_detach(p, 0);
 			}
 		} while_each_thread(g,p);
 		write_unlock_irq(&tasklist_lock);
@@ -1464,6 +1485,7 @@ int do_coredump(long signr, int exit_code, struct pt_regs * regs)
 	if (!(current->signal->flags & SIGNAL_GROUP_EXIT)) {
 		current->signal->flags = SIGNAL_GROUP_EXIT;
 		current->signal->group_exit_code = exit_code;
+		current->signal->group_stop_count = 0;
 		retval = 0;
 	}
 	spin_unlock_irq(&current->sighand->siglock);
@@ -1479,7 +1501,6 @@ int do_coredump(long signr, int exit_code, struct pt_regs * regs)
 	 * Clear any false indication of pending signals that might
 	 * be seen by the filesystem code called to write the core file.
 	 */
-	current->signal->group_stop_count = 0;
 	clear_thread_flag(TIF_SIGPENDING);
 
 	if (current->signal->rlim[RLIMIT_CORE].rlim_cur < binfmt->min_coredump)
@@ -1507,7 +1528,7 @@ int do_coredump(long signr, int exit_code, struct pt_regs * regs)
 		goto close_fail;
 	if (!file->f_op->write)
 		goto close_fail;
-	if (do_truncate(file->f_dentry, 0, file) != 0)
+	if (do_truncate(file->f_dentry, 0, 0, file) != 0)
 		goto close_fail;
 
 	retval = binfmt->core_dump(signr, regs, file);

@@ -29,6 +29,8 @@
 #include <linux/init.h>
 #include <linux/profile.h>
 #include <linux/smp.h>
+#include <linux/module.h>
+#include <linux/bcd.h>
 
 #include <asm/registers.h>	 /* required by inline __asm__ stmt. */
 
@@ -103,14 +105,6 @@
 #define RMONAR  	rtc_base+0x34
 #define RCR1    	rtc_base+0x38
 #define RCR2    	rtc_base+0x3c
-
-#ifndef BCD_TO_BIN
-#define BCD_TO_BIN(val) ((val)=((val)&15) + ((val)>>4)*10)
-#endif
-
-#ifndef BIN_TO_BCD
-#define BIN_TO_BCD(val) ((val)=(((val)/10)<<4) + (val)%10)
-#endif
 
 #define TICK_SIZE (tick_nsec / 1000)
 
@@ -417,7 +411,7 @@ static __init unsigned int get_cpu_hz(void)
 	/*
 	** Regardless the toolchain, force the compiler to use the
 	** arbitrary register r3 as a clock tick counter.
-	** NOTE: r3 must be in accordance with rtc_interrupt()
+	** NOTE: r3 must be in accordance with sh64_rtc_interrupt()
 	*/
 	register unsigned long long  __rtc_irq_flag __asm__ ("r3");
 
@@ -482,7 +476,8 @@ static __init unsigned int get_cpu_hz(void)
 #endif
 }
 
-static irqreturn_t rtc_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t sh64_rtc_interrupt(int irq, void *dev_id,
+				      struct pt_regs *regs)
 {
 	ctrl_outb(0, RCR1);	/* Disable Carry Interrupts */
 	regs->regs[3] = 1;	/* Using r3 */
@@ -491,7 +486,7 @@ static irqreturn_t rtc_interrupt(int irq, void *dev_id, struct pt_regs *regs)
 }
 
 static struct irqaction irq0  = { timer_interrupt, SA_INTERRUPT, CPU_MASK_NONE, "timer", NULL, NULL};
-static struct irqaction irq1  = { rtc_interrupt, SA_INTERRUPT, CPU_MASK_NONE, "rtc", NULL, NULL};
+static struct irqaction irq1  = { sh64_rtc_interrupt, SA_INTERRUPT, CPU_MASK_NONE, "rtc", NULL, NULL};
 
 void __init time_init(void)
 {

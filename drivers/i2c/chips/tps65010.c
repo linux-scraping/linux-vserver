@@ -32,6 +32,7 @@
 #include <linux/suspend.h>
 #include <linux/debugfs.h>
 #include <linux/seq_file.h>
+#include <linux/mutex.h>
 
 #include <asm/irq.h>
 #include <asm/mach-types.h>
@@ -81,7 +82,7 @@ enum tps_model {
 
 struct tps65010 {
 	struct i2c_client	client;
-	struct semaphore	lock;
+	struct mutex		lock;
 	int			irq;
 	struct work_struct	work;
 	struct dentry		*file;
@@ -218,7 +219,7 @@ static int dbg_show(struct seq_file *s, void *_)
 	seq_printf(s, "driver  %s\nversion %s\nchip    %s\n\n",
 			DRIVER_NAME, DRIVER_VERSION, chip);
 
-	down(&tps->lock);
+	mutex_lock(&tps->lock);
 
 	/* FIXME how can we tell whether a battery is present?
 	 * likely involves a charge gauging chip (like BQ26501).
@@ -300,7 +301,7 @@ static int dbg_show(struct seq_file *s, void *_)
 				(v2 & (1 << (4 + i))) ? "rising" : "falling");
 	}
 
-	up(&tps->lock);
+	mutex_unlock(&tps->lock);
 	return 0;
 }
 
@@ -416,7 +417,7 @@ static void tps65010_work(void *_tps)
 {
 	struct tps65010		*tps = _tps;
 
-	down(&tps->lock);
+	mutex_lock(&tps->lock);
 
 	tps65010_interrupt(tps);
 
@@ -444,7 +445,7 @@ static void tps65010_work(void *_tps)
 	if (test_and_clear_bit(FLAG_IRQ_ENABLE, &tps->flags))
 		enable_irq(tps->irq);
 
-	up(&tps->lock);
+	mutex_unlock(&tps->lock);
 }
 
 static irqreturn_t tps65010_irq(int irq, void *_tps, struct pt_regs *regs)
@@ -494,6 +495,7 @@ tps65010_probe(struct i2c_adapter *bus, int address, int kind)
 {
 	struct tps65010		*tps;
 	int			status;
+	unsigned long		irqflags;
 
 	if (the_tps) {
 		dev_dbg(&bus->dev, "only one %s for now\n", DRIVER_NAME);
@@ -504,7 +506,7 @@ tps65010_probe(struct i2c_adapter *bus, int address, int kind)
 	if (!tps)
 		return 0;
 
-	init_MUTEX(&tps->lock);
+	mutex_init(&tps->lock);
 	INIT_WORK(&tps->work, tps65010_work, tps);
 	tps->irq = -1;
 	tps->client.addr = address;
@@ -520,13 +522,14 @@ tps65010_probe(struct i2c_adapter *bus, int address, int kind)
 	}
 
 #ifdef	CONFIG_ARM
+	irqflags = SA_SAMPLE_RANDOM | SA_TRIGGER_LOW;
 	if (machine_is_omap_h2()) {
 		tps->model = TPS65010;
 		omap_cfg_reg(W4_GPIO58);
 		tps->irq = OMAP_GPIO_IRQ(58);
 		omap_request_gpio(58);
 		omap_set_gpio_direction(58, 1);
-		set_irq_type(tps->irq, IRQT_FALLING);
+		irqflags |= SA_TRIGGER_FALLING;
 	}
 	if (machine_is_omap_osk()) {
 		tps->model = TPS65010;
@@ -534,7 +537,7 @@ tps65010_probe(struct i2c_adapter *bus, int address, int kind)
 		tps->irq = OMAP_GPIO_IRQ(OMAP_MPUIO(1));
 		omap_request_gpio(OMAP_MPUIO(1));
 		omap_set_gpio_direction(OMAP_MPUIO(1), 1);
-		set_irq_type(tps->irq, IRQT_FALLING);
+		irqflags |= SA_TRIGGER_FALLING;
 	}
 	if (machine_is_omap_h3()) {
 		tps->model = TPS65013;
@@ -542,13 +545,12 @@ tps65010_probe(struct i2c_adapter *bus, int address, int kind)
 		// FIXME set up this board's IRQ ...
 	}
 #else
-#define set_irq_type(num,trigger)	do{}while(0)
+	irqflags = SA_SAMPLE_RANDOM;
 #endif
 
 	if (tps->irq > 0) {
-		set_irq_type(tps->irq, IRQT_LOW);
 		status = request_irq(tps->irq, tps65010_irq,
-			SA_SAMPLE_RANDOM, DRIVER_NAME, tps);
+			irqflags, DRIVER_NAME, tps);
 		if (status < 0) {
 			dev_dbg(&tps->client.dev, "can't get IRQ %d, err %d\n",
 					tps->irq, status);
@@ -637,9 +639,9 @@ static int __init tps65010_scan_bus(struct i2c_adapter *bus)
 }
 
 static struct i2c_driver tps65010_driver = {
-	.owner		= THIS_MODULE,
-	.name		= "tps65010",
-	.flags		= I2C_DF_NOTIFY,
+	.driver = {
+		.name	= "tps65010",
+	},
 	.attach_adapter	= tps65010_scan_bus,
 	.detach_client	= __exit_p(tps65010_detach_client),
 };
@@ -694,7 +696,7 @@ int tps65010_set_gpio_out_value(unsigned gpio, unsigned value)
 	if ((gpio < GPIO1) || (gpio > GPIO4))
 		return -EINVAL;
 
-	down(&the_tps->lock);
+	mutex_lock(&the_tps->lock);
 
 	defgpio = i2c_smbus_read_byte_data(&the_tps->client, TPS_DEFGPIO);
 
@@ -719,7 +721,7 @@ int tps65010_set_gpio_out_value(unsigned gpio, unsigned value)
 		gpio, value ? "high" : "low",
 		i2c_smbus_read_byte_data(&the_tps->client, TPS_DEFGPIO));
 
-	up(&the_tps->lock);
+	mutex_unlock(&the_tps->lock);
 	return status;
 }
 EXPORT_SYMBOL(tps65010_set_gpio_out_value);
@@ -744,7 +746,7 @@ int tps65010_set_led(unsigned led, unsigned mode)
 		led = LED2;
 	}
 
-	down(&the_tps->lock);
+	mutex_lock(&the_tps->lock);
 
 	pr_debug("%s: led%i_on   0x%02x\n", DRIVER_NAME, led,
 		i2c_smbus_read_byte_data(&the_tps->client,
@@ -770,7 +772,7 @@ int tps65010_set_led(unsigned led, unsigned mode)
 	default:
 		printk(KERN_ERR "%s: Wrong mode parameter for set_led()\n",
 		       DRIVER_NAME);
-		up(&the_tps->lock);
+		mutex_unlock(&the_tps->lock);
 		return -EINVAL;
 	}
 
@@ -780,7 +782,7 @@ int tps65010_set_led(unsigned led, unsigned mode)
 	if (status != 0) {
 		printk(KERN_ERR "%s: Failed to write led%i_on register\n",
 		       DRIVER_NAME, led);
-		up(&the_tps->lock);
+		mutex_unlock(&the_tps->lock);
 		return status;
 	}
 
@@ -793,7 +795,7 @@ int tps65010_set_led(unsigned led, unsigned mode)
 	if (status != 0) {
 		printk(KERN_ERR "%s: Failed to write led%i_per register\n",
 		       DRIVER_NAME, led);
-		up(&the_tps->lock);
+		mutex_unlock(&the_tps->lock);
 		return status;
 	}
 
@@ -801,7 +803,7 @@ int tps65010_set_led(unsigned led, unsigned mode)
 		i2c_smbus_read_byte_data(&the_tps->client,
 				TPS_LED1_PER + offs));
 
-	up(&the_tps->lock);
+	mutex_unlock(&the_tps->lock);
 
 	return status;
 }
@@ -819,7 +821,7 @@ int tps65010_set_vib(unsigned value)
 	if (!the_tps)
 		return -ENODEV;
 
-	down(&the_tps->lock);
+	mutex_lock(&the_tps->lock);
 
 	vdcdc2 = i2c_smbus_read_byte_data(&the_tps->client, TPS_VDCDC2);
 	vdcdc2 &= ~(1 << 1);
@@ -830,7 +832,7 @@ int tps65010_set_vib(unsigned value)
 
 	pr_debug("%s: vibrator %s\n", DRIVER_NAME, value ? "on" : "off");
 
-	up(&the_tps->lock);
+	mutex_unlock(&the_tps->lock);
 	return status;
 }
 EXPORT_SYMBOL(tps65010_set_vib);
@@ -847,7 +849,7 @@ int tps65010_set_low_pwr(unsigned mode)
 	if (!the_tps)
 		return -ENODEV;
 
-	down(&the_tps->lock);
+	mutex_lock(&the_tps->lock);
 
 	pr_debug("%s: %s low_pwr, vdcdc1 0x%02x\n", DRIVER_NAME,
 		mode ? "enable" : "disable",
@@ -875,7 +877,7 @@ int tps65010_set_low_pwr(unsigned mode)
 		pr_debug("%s: vdcdc1 0x%02x\n", DRIVER_NAME,
 			i2c_smbus_read_byte_data(&the_tps->client, TPS_VDCDC1));
 
-	up(&the_tps->lock);
+	mutex_unlock(&the_tps->lock);
 
 	return status;
 }
@@ -893,7 +895,7 @@ int tps65010_config_vregs1(unsigned value)
 	if (!the_tps)
 		return -ENODEV;
 
-	down(&the_tps->lock);
+	mutex_lock(&the_tps->lock);
 
 	pr_debug("%s: vregs1 0x%02x\n", DRIVER_NAME,
 			i2c_smbus_read_byte_data(&the_tps->client, TPS_VREGS1));
@@ -908,7 +910,7 @@ int tps65010_config_vregs1(unsigned value)
 		pr_debug("%s: vregs1 0x%02x\n", DRIVER_NAME,
 			i2c_smbus_read_byte_data(&the_tps->client, TPS_VREGS1));
 
-	up(&the_tps->lock);
+	mutex_unlock(&the_tps->lock);
 
 	return status;
 }
@@ -930,7 +932,7 @@ int tps65013_set_low_pwr(unsigned mode)
 	if (!the_tps || the_tps->por)
 		return -ENODEV;
 
-	down(&the_tps->lock);
+	mutex_lock(&the_tps->lock);
 
 	pr_debug("%s: %s low_pwr, chgconfig 0x%02x vdcdc1 0x%02x\n",
 		DRIVER_NAME,
@@ -958,7 +960,7 @@ int tps65013_set_low_pwr(unsigned mode)
 	if (status != 0) {
 		printk(KERN_ERR "%s: Failed to write chconfig register\n",
 	 DRIVER_NAME);
-		up(&the_tps->lock);
+		mutex_unlock(&the_tps->lock);
 		return status;
 	}
 
@@ -976,7 +978,7 @@ int tps65013_set_low_pwr(unsigned mode)
 		pr_debug("%s: vdcdc1 0x%02x\n", DRIVER_NAME,
 			i2c_smbus_read_byte_data(&the_tps->client, TPS_VDCDC1));
 
-	up(&the_tps->lock);
+	mutex_unlock(&the_tps->lock);
 
 	return status;
 }

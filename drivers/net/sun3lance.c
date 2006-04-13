@@ -71,7 +71,7 @@ static int lance_debug = LANCE_DEBUG;
 #else
 static int lance_debug = 1;
 #endif
-MODULE_PARM(lance_debug, "i");
+module_param(lance_debug, int, 0);
 MODULE_PARM_DESC(lance_debug, "SUN3 Lance debug level (0-3)");
 MODULE_LICENSE("GPL");
 
@@ -389,7 +389,7 @@ static int __init lance_probe( struct net_device *dev)
 	dev->stop = &lance_close;
 	dev->get_stats = &lance_get_stats;
 	dev->set_multicast_list = &set_multicast_list;
-	dev->set_mac_address = 0;
+	dev->set_mac_address = NULL;
 //	KLUDGE -- REMOVE ME
 	set_bit(__LINK_STATE_PRESENT, &dev->state);
 

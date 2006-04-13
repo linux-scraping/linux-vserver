@@ -36,7 +36,7 @@
 static u16 llc_ui_sap_last_autoport = LLC_SAP_DYN_START;
 static u16 llc_ui_sap_link_no_max[256];
 static struct sockaddr_llc llc_ui_addrnull;
-static struct proto_ops llc_ui_ops;
+static const struct proto_ops llc_ui_ops;
 
 static int llc_ui_wait_for_conn(struct sock *sk, long timeout);
 static int llc_ui_wait_for_disc(struct sock *sk, long timeout);
@@ -54,7 +54,7 @@ static int llc_ui_wait_for_busy_core(struct sock *sk, long timeout);
  *
  *	Return the next unused link number for a given sap.
  */
-static __inline__ u16 llc_ui_next_link_no(int sap)
+static inline u16 llc_ui_next_link_no(int sap)
 {
 	return llc_ui_sap_link_no_max[sap]++;
 }
@@ -65,7 +65,7 @@ static __inline__ u16 llc_ui_next_link_no(int sap)
  *
  *	Given an ARP header type return the corresponding ethernet protocol.
  */
-static __inline__ u16 llc_proto_type(u16 arphrd)
+static inline u16 llc_proto_type(u16 arphrd)
 {
 	return arphrd == ARPHRD_IEEE802_TR ?
 		         htons(ETH_P_TR_802_2) : htons(ETH_P_802_2);
@@ -75,7 +75,7 @@ static __inline__ u16 llc_proto_type(u16 arphrd)
  *	llc_ui_addr_null - determines if a address structure is null
  *	@addr: Address to test if null.
  */
-static __inline__ u8 llc_ui_addr_null(struct sockaddr_llc *addr)
+static inline u8 llc_ui_addr_null(struct sockaddr_llc *addr)
 {
 	return !memcmp(addr, &llc_ui_addrnull, sizeof(*addr));
 }
@@ -89,8 +89,7 @@ static __inline__ u8 llc_ui_addr_null(struct sockaddr_llc *addr)
  *	operation the user would like to perform and the type of socket.
  *	Returns the correct llc header length.
  */
-static __inline__ u8 llc_ui_header_len(struct sock *sk,
-				       struct sockaddr_llc *addr)
+static inline u8 llc_ui_header_len(struct sock *sk, struct sockaddr_llc *addr)
 {
 	u8 rc = LLC_PDU_LEN_U;
 
@@ -138,7 +137,7 @@ static void llc_ui_sk_init(struct socket *sock, struct sock *sk)
 }
 
 static struct proto llc_proto = {
-	.name	  = "DDP",
+	.name	  = "LLC",
 	.owner	  = THIS_MODULE,
 	.obj_size = sizeof(struct llc_sock),
 };
@@ -188,8 +187,10 @@ static int llc_ui_release(struct socket *sock)
 		llc->laddr.lsap, llc->daddr.lsap);
 	if (!llc_send_disc(sk))
 		llc_ui_wait_for_disc(sk, sk->sk_rcvtimeo);
-	if (!sock_flag(sk, SOCK_ZAPPED))
+	if (!sock_flag(sk, SOCK_ZAPPED)) {
+		llc_sap_put(llc->sap);
 		llc_sap_remove_socket(llc->sap, sk);
+	}
 	release_sock(sk);
 	if (llc->dev)
 		dev_put(llc->dev);
@@ -566,10 +567,9 @@ static int llc_wait_data(struct sock *sk, long timeo)
 		/*
 		 * POSIX 1003.1g mandates this order.
 		 */
-		if (sk->sk_err) {
-			rc = sock_error(sk);
+		rc = sock_error(sk);
+		if (rc)
 			break;
-		}
 		rc = 0;
 		if (sk->sk_shutdown & RCV_SHUTDOWN)
 			break;
@@ -960,7 +960,7 @@ out:
 static int llc_ui_ioctl(struct socket *sock, unsigned int cmd,
 			unsigned long arg)
 {
-	return dev_ioctl(cmd, (void __user *)arg);
+	return -ENOIOCTLCMD;
 }
 
 /**
@@ -1099,7 +1099,7 @@ static struct net_proto_family llc_ui_family_ops = {
 	.owner	= THIS_MODULE,
 };
 
-static struct proto_ops llc_ui_ops = {
+static const struct proto_ops llc_ui_ops = {
 	.family	     = PF_LLC,
 	.owner       = THIS_MODULE,
 	.release     = llc_ui_release,

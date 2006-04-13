@@ -1,6 +1,4 @@
 /*
- *  linux/arch/ppc64/kernel/ptrace-common.h
- *
  *    Copyright (c) 2002 Stephen Rothwell, IBM Coproration
  *    Extracted from ptrace.c and ptrace32.c
  *
@@ -62,7 +60,7 @@ static inline void set_single_step(struct task_struct *task)
 	struct pt_regs *regs = task->thread.regs;
 	if (regs != NULL)
 		regs->msr |= MSR_SE;
-	set_ti_thread_flag(task->thread_info, TIF_SINGLESTEP);
+	set_tsk_thread_flag(task, TIF_SINGLESTEP);
 }
 
 static inline void clear_single_step(struct task_struct *task)
@@ -70,7 +68,7 @@ static inline void clear_single_step(struct task_struct *task)
 	struct pt_regs *regs = task->thread.regs;
 	if (regs != NULL)
 		regs->msr &= ~MSR_SE;
-	clear_ti_thread_flag(task->thread_info, TIF_SINGLESTEP);
+	clear_tsk_thread_flag(task, TIF_SINGLESTEP);
 }
 
 #ifdef CONFIG_ALTIVEC

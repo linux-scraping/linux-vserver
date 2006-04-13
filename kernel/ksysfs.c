@@ -22,33 +22,39 @@ static struct subsys_attribute _name##_attr = __ATTR_RO(_name)
 static struct subsys_attribute _name##_attr = \
 	__ATTR(_name, 0644, _name##_show, _name##_store)
 
-#ifdef CONFIG_HOTPLUG
-static ssize_t hotplug_seqnum_show(struct subsystem *subsys, char *page)
+#if defined(CONFIG_HOTPLUG) && defined(CONFIG_NET)
+/* current uevent sequence number */
+static ssize_t uevent_seqnum_show(struct subsystem *subsys, char *page)
 {
-	return sprintf(page, "%llu\n", (unsigned long long)hotplug_seqnum);
+	return sprintf(page, "%llu\n", (unsigned long long)uevent_seqnum);
 }
-KERNEL_ATTR_RO(hotplug_seqnum);
-#endif
+KERNEL_ATTR_RO(uevent_seqnum);
 
-#ifdef CONFIG_KEXEC
-#include <asm/kexec.h>
-
-static ssize_t crash_notes_show(struct subsystem *subsys, char *page)
+/* uevent helper program, used during early boo */
+static ssize_t uevent_helper_show(struct subsystem *subsys, char *page)
 {
-	return sprintf(page, "%p\n", (void *)crash_notes);
+	return sprintf(page, "%s\n", uevent_helper);
 }
-KERNEL_ATTR_RO(crash_notes);
+static ssize_t uevent_helper_store(struct subsystem *subsys, const char *page, size_t count)
+{
+	if (count+1 > UEVENT_HELPER_PATH_LEN)
+		return -ENOENT;
+	memcpy(uevent_helper, page, count);
+	uevent_helper[count] = '\0';
+	if (count && uevent_helper[count-1] == '\n')
+		uevent_helper[count-1] = '\0';
+	return count;
+}
+KERNEL_ATTR_RW(uevent_helper);
 #endif
 
 decl_subsys(kernel, NULL, NULL);
 EXPORT_SYMBOL_GPL(kernel_subsys);
 
 static struct attribute * kernel_attrs[] = {
-#ifdef CONFIG_HOTPLUG
-	&hotplug_seqnum_attr.attr,
-#endif
-#ifdef CONFIG_KEXEC
-	&crash_notes_attr.attr,
+#if defined(CONFIG_HOTPLUG) && defined(CONFIG_NET)
+	&uevent_seqnum_attr.attr,
+	&uevent_helper_attr.attr,
 #endif
 	NULL
 };

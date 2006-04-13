@@ -25,6 +25,7 @@
 #include <linux/config.h>
 #include <linux/compiler.h>
 #include <asm/arch/memory.h>
+#include <asm/sizes.h>
 
 #ifndef TASK_SIZE
 /*
@@ -48,6 +49,14 @@
 #endif
 
 /*
+ * Size of DMA-consistent memory region.  Must be multiple of 2M,
+ * between 2MB and 14MB inclusive.
+ */
+#ifndef CONSISTENT_DMA_SIZE
+#define CONSISTENT_DMA_SIZE SZ_2M
+#endif
+
+/*
  * Physical vs virtual RAM address space conversion.  These are
  * private definitions which should NOT be used outside memory.h
  * files.  Use virt_to_phys/phys_to_virt/__pa/__va instead.
@@ -56,6 +65,12 @@
 #define __virt_to_phys(x)	((x) - PAGE_OFFSET + PHYS_OFFSET)
 #define __phys_to_virt(x)	((x) - PHYS_OFFSET + PAGE_OFFSET)
 #endif
+
+/*
+ * Convert a physical address to a Page Frame Number and back
+ */
+#define	__phys_to_pfn(paddr)	((paddr) >> PAGE_SHIFT)
+#define	__pfn_to_phys(pfn)	((pfn) << PAGE_SHIFT)
 
 /*
  * The module space lives between the addresses given by TASK_SIZE
@@ -157,9 +172,7 @@ static inline __deprecated void *bus_to_virt(unsigned long x)
  *  virt_addr_valid(k)	indicates whether a virtual address is valid
  */
 #ifndef CONFIG_DISCONTIGMEM
-
-#define page_to_pfn(page)	(((page) - mem_map) + PHYS_PFN_OFFSET)
-#define pfn_to_page(pfn)	((mem_map + (pfn)) - PHYS_PFN_OFFSET)
+#define ARCH_PFN_OFFSET		(PHYS_PFN_OFFSET)
 #define pfn_valid(pfn)		((pfn) >= PHYS_PFN_OFFSET && (pfn) < (PHYS_PFN_OFFSET + max_mapnr))
 
 #define virt_to_page(kaddr)	(pfn_to_page(__pa(kaddr) >> PAGE_SHIFT))
@@ -174,13 +187,8 @@ static inline __deprecated void *bus_to_virt(unsigned long x)
  * around in memory.
  */
 #include <linux/numa.h>
-
-#define page_to_pfn(page)					\
-	(( (page) - page_zone(page)->zone_mem_map)		\
-	  + page_zone(page)->zone_start_pfn)
-
-#define pfn_to_page(pfn)					\
-	(PFN_TO_MAPBASE(pfn) + LOCAL_MAP_NR((pfn) << PAGE_SHIFT))
+#define arch_pfn_to_nid(pfn)	(PFN_TO_NID(pfn))
+#define arch_local_page_offset(pfn, nid) (LOCAL_MAP_NR((pfn) << PAGE_OFFSET))
 
 #define pfn_valid(pfn)						\
 	({							\
@@ -226,6 +234,16 @@ static inline __deprecated void *bus_to_virt(unsigned long x)
 #define virt_to_dma(dev, addr)		(__arch_virt_to_dma(dev, addr))
 #endif
 
+/*
+ * Optional coherency support.  Currently used only by selected
+ * Intel XSC3-based systems.
+ */
+#ifndef arch_is_coherent
+#define arch_is_coherent()		0
 #endif
+
+#endif
+
+#include <asm-generic/memory_model.h>
 
 #endif

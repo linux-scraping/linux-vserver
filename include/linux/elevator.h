@@ -48,9 +48,16 @@ struct elevator_ops
 
 	elevator_init_fn *elevator_init_fn;
 	elevator_exit_fn *elevator_exit_fn;
+	void (*trim)(struct io_context *);
 };
 
 #define ELV_NAME_MAX	(16)
+
+struct elv_fs_entry {
+	struct attribute attr;
+	ssize_t (*show)(elevator_t *, char *);
+	ssize_t (*store)(elevator_t *, const char *, size_t);
+};
 
 /*
  * identifies an elevator type, such as AS or deadline
@@ -60,13 +67,13 @@ struct elevator_type
 	struct list_head list;
 	struct elevator_ops ops;
 	struct elevator_type *elevator_type;
-	struct kobj_type *elevator_ktype;
+	struct elv_fs_entry *elevator_attrs;
 	char elevator_name[ELV_NAME_MAX];
 	struct module *elevator_owner;
 };
 
 /*
- * each queue has an elevator_queue assoicated with it
+ * each queue has an elevator_queue associated with it
  */
 struct elevator_queue
 {
@@ -74,6 +81,7 @@ struct elevator_queue
 	void *elevator_data;
 	struct kobject kobj;
 	struct elevator_type *elevator_type;
+	struct mutex sysfs_lock;
 };
 
 /*
@@ -82,6 +90,7 @@ struct elevator_queue
 extern void elv_dispatch_sort(request_queue_t *, struct request *);
 extern void elv_add_request(request_queue_t *, struct request *, int, int);
 extern void __elv_add_request(request_queue_t *, struct request *, int, int);
+extern void elv_insert(request_queue_t *, struct request *, int);
 extern int elv_merge(request_queue_t *, struct request **, struct bio *);
 extern void elv_merge_requests(request_queue_t *, struct request *,
 			       struct request *);
@@ -114,8 +123,6 @@ extern ssize_t elv_iosched_store(request_queue_t *, const char *, size_t);
 extern int elevator_init(request_queue_t *, char *);
 extern void elevator_exit(elevator_t *);
 extern int elv_rq_merge_ok(struct request *, struct bio *);
-extern int elv_try_merge(struct request *, struct bio *);
-extern int elv_try_last_merge(request_queue_t *, struct bio *);
 
 /*
  * Return values from elevator merger
@@ -130,6 +137,7 @@ extern int elv_try_last_merge(request_queue_t *, struct bio *);
 #define ELEVATOR_INSERT_FRONT	1
 #define ELEVATOR_INSERT_BACK	2
 #define ELEVATOR_INSERT_SORT	3
+#define ELEVATOR_INSERT_REQUEUE	4
 
 /*
  * return values from elevator_may_queue_fn

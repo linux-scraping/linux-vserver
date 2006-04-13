@@ -222,6 +222,7 @@ typedef union {
 #	define R300_WAIT_3D  		0x2
 #	define R300_WAIT_2D_CLEAN  	0x3
 #	define R300_WAIT_3D_CLEAN  	0x4
+#define R300_CMD_SCRATCH		8
 
 typedef union {
 	unsigned int u;
@@ -247,6 +248,9 @@ typedef union {
 	struct {
 		unsigned char cmd_type, flags, pad0, pad1;
 	} wait;
+	struct {
+		unsigned char cmd_type, reg, n_bufs, flags;
+	} scratch;
 } drm_r300_cmd_header_t;
 
 #define RADEON_FRONT			0x1
@@ -624,6 +628,11 @@ typedef struct drm_radeon_indirect {
 	int discard;
 } drm_radeon_indirect_t;
 
+/* enum for card type parameters */
+#define RADEON_CARD_PCI 0
+#define RADEON_CARD_AGP 1
+#define RADEON_CARD_PCIE 2
+
 /* 1.3: An ioctl to get parameters that aren't available to the 3d
  * client any other way.
  */
@@ -640,6 +649,7 @@ typedef struct drm_radeon_indirect {
 #define RADEON_PARAM_SAREA_HANDLE          9
 #define RADEON_PARAM_GART_TEX_HANDLE       10
 #define RADEON_PARAM_SCRATCH_OFFSET        11
+#define RADEON_PARAM_CARD_TYPE             12
 
 typedef struct drm_radeon_getparam {
 	int param;
@@ -691,6 +701,7 @@ typedef struct drm_radeon_setparam {
 #define RADEON_SETPARAM_FB_LOCATION    1	/* determined framebuffer location */
 #define RADEON_SETPARAM_SWITCH_TILING  2	/* enable/disable color tiling */
 #define RADEON_SETPARAM_PCIGART_LOCATION 3	/* PCI Gart Location */
+#define RADEON_SETPARAM_NEW_MEMMAP 4		/* Use new memory map */
 
 /* 1.14: Clients can allocate/free a surface
  */

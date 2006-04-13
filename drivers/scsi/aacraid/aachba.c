@@ -32,6 +32,7 @@
 #include <linux/slab.h>
 #include <linux/completion.h>
 #include <linux/blkdev.h>
+#include <linux/dma-mapping.h>
 #include <asm/semaphore.h>
 #include <asm/uaccess.h>
 
@@ -173,10 +174,10 @@ int aac_get_config_status(struct aac_dev *dev)
 	int status = 0;
 	struct fib * fibptr;
 
-	if (!(fibptr = fib_alloc(dev)))
+	if (!(fibptr = aac_fib_alloc(dev)))
 		return -ENOMEM;
 
-	fib_init(fibptr);
+	aac_fib_init(fibptr);
 	{
 		struct aac_get_config_status *dinfo;
 		dinfo = (struct aac_get_config_status *) fib_data(fibptr);
@@ -186,7 +187,7 @@ int aac_get_config_status(struct aac_dev *dev)
 		dinfo->count = cpu_to_le32(sizeof(((struct aac_get_config_status_resp *)NULL)->data));
 	}
 
-	status = fib_send(ContainerCommand,
+	status = aac_fib_send(ContainerCommand,
 			    fibptr,
 			    sizeof (struct aac_get_config_status),
 			    FsaNormal,
@@ -209,30 +210,30 @@ int aac_get_config_status(struct aac_dev *dev)
 			status = -EINVAL;
 		}
 	}
-	fib_complete(fibptr);
+	aac_fib_complete(fibptr);
 	/* Send a CT_COMMIT_CONFIG to enable discovery of devices */
 	if (status >= 0) {
 		if (commit == 1) {
 			struct aac_commit_config * dinfo;
-			fib_init(fibptr);
+			aac_fib_init(fibptr);
 			dinfo = (struct aac_commit_config *) fib_data(fibptr);
 	
 			dinfo->command = cpu_to_le32(VM_ContainerConfig);
 			dinfo->type = cpu_to_le32(CT_COMMIT_CONFIG);
 	
-			status = fib_send(ContainerCommand,
+			status = aac_fib_send(ContainerCommand,
 				    fibptr,
 				    sizeof (struct aac_commit_config),
 				    FsaNormal,
 				    1, 1,
 				    NULL, NULL);
-			fib_complete(fibptr);
+			aac_fib_complete(fibptr);
 		} else if (commit == 0) {
 			printk(KERN_WARNING
 			  "aac_get_config_status: Foreign device configurations are being ignored\n");
 		}
 	}
-	fib_free(fibptr);
+	aac_fib_free(fibptr);
 	return status;
 }
 
@@ -255,15 +256,15 @@ int aac_get_containers(struct aac_dev *dev)
 
 	instance = dev->scsi_host_ptr->unique_id;
 
-	if (!(fibptr = fib_alloc(dev)))
+	if (!(fibptr = aac_fib_alloc(dev)))
 		return -ENOMEM;
 
-	fib_init(fibptr);
+	aac_fib_init(fibptr);
 	dinfo = (struct aac_get_container_count *) fib_data(fibptr);
 	dinfo->command = cpu_to_le32(VM_ContainerConfig);
 	dinfo->type = cpu_to_le32(CT_GET_CONTAINER_COUNT);
 
-	status = fib_send(ContainerCommand,
+	status = aac_fib_send(ContainerCommand,
 		    fibptr,
 		    sizeof (struct aac_get_container_count),
 		    FsaNormal,
@@ -272,7 +273,7 @@ int aac_get_containers(struct aac_dev *dev)
 	if (status >= 0) {
 		dresp = (struct aac_get_container_count_resp *)fib_data(fibptr);
 		maximum_num_containers = le32_to_cpu(dresp->ContainerSwitchEntries);
-		fib_complete(fibptr);
+		aac_fib_complete(fibptr);
 	}
 
 	if (maximum_num_containers < MAXIMUM_NUM_CONTAINERS)
@@ -280,7 +281,7 @@ int aac_get_containers(struct aac_dev *dev)
 	fsa_dev_ptr = (struct fsa_dev_info *) kmalloc(
 	  sizeof(*fsa_dev_ptr) * maximum_num_containers, GFP_KERNEL);
 	if (!fsa_dev_ptr) {
-		fib_free(fibptr);
+		aac_fib_free(fibptr);
 		return -ENOMEM;
 	}
 	memset(fsa_dev_ptr, 0, sizeof(*fsa_dev_ptr) * maximum_num_containers);
@@ -294,14 +295,14 @@ int aac_get_containers(struct aac_dev *dev)
 
 		fsa_dev_ptr[index].devname[0] = '\0';
 
-		fib_init(fibptr);
+		aac_fib_init(fibptr);
 		dinfo = (struct aac_query_mount *) fib_data(fibptr);
 
 		dinfo->command = cpu_to_le32(VM_NameServe);
 		dinfo->count = cpu_to_le32(index);
 		dinfo->type = cpu_to_le32(FT_FILESYS);
 
-		status = fib_send(ContainerCommand,
+		status = aac_fib_send(ContainerCommand,
 				    fibptr,
 				    sizeof (struct aac_query_mount),
 				    FsaNormal,
@@ -319,7 +320,7 @@ int aac_get_containers(struct aac_dev *dev)
 			dinfo->count = cpu_to_le32(index);
 			dinfo->type = cpu_to_le32(FT_FILESYS);
 
-			if (fib_send(ContainerCommand,
+			if (aac_fib_send(ContainerCommand,
 				    fibptr,
 				    sizeof(struct aac_query_mount),
 				    FsaNormal,
@@ -347,7 +348,7 @@ int aac_get_containers(struct aac_dev *dev)
 			if (le32_to_cpu(dresp->mnt[0].state) & FSCS_READONLY)
 				    fsa_dev_ptr[index].ro = 1;
 		}
-		fib_complete(fibptr);
+		aac_fib_complete(fibptr);
 		/*
 		 *	If there are no more containers, then stop asking.
 		 */
@@ -355,7 +356,7 @@ int aac_get_containers(struct aac_dev *dev)
 			break;
 		}
 	}
-	fib_free(fibptr);
+	aac_fib_free(fibptr);
 	return status;
 }
 
@@ -413,8 +414,8 @@ static void get_container_name_callback(void *context, struct fib * fibptr)
 
 	scsicmd->result = DID_OK << 16 | COMMAND_COMPLETE << 8 | SAM_STAT_GOOD;
 
-	fib_complete(fibptr);
-	fib_free(fibptr);
+	aac_fib_complete(fibptr);
+	aac_fib_free(fibptr);
 	scsicmd->scsi_done(scsicmd);
 }
 
@@ -430,10 +431,10 @@ static int aac_get_container_name(struct scsi_cmnd * scsicmd, int cid)
 
 	dev = (struct aac_dev *)scsicmd->device->host->hostdata;
 
-	if (!(cmd_fibcontext = fib_alloc(dev)))
+	if (!(cmd_fibcontext = aac_fib_alloc(dev)))
 		return -ENOMEM;
 
-	fib_init(cmd_fibcontext);
+	aac_fib_init(cmd_fibcontext);
 	dinfo = (struct aac_get_name *) fib_data(cmd_fibcontext);
 
 	dinfo->command = cpu_to_le32(VM_ContainerConfig);
@@ -441,7 +442,7 @@ static int aac_get_container_name(struct scsi_cmnd * scsicmd, int cid)
 	dinfo->cid = cpu_to_le32(cid);
 	dinfo->count = cpu_to_le32(sizeof(((struct aac_get_name_resp *)NULL)->data));
 
-	status = fib_send(ContainerCommand, 
+	status = aac_fib_send(ContainerCommand,
 		  cmd_fibcontext, 
 		  sizeof (struct aac_get_name),
 		  FsaNormal, 
@@ -455,14 +456,14 @@ static int aac_get_container_name(struct scsi_cmnd * scsicmd, int cid)
 	if (status == -EINPROGRESS) 
 		return 0;
 		
-	printk(KERN_WARNING "aac_get_container_name: fib_send failed with status: %d.\n", status);
-	fib_complete(cmd_fibcontext);
-	fib_free(cmd_fibcontext);
+	printk(KERN_WARNING "aac_get_container_name: aac_fib_send failed with status: %d.\n", status);
+	aac_fib_complete(cmd_fibcontext);
+	aac_fib_free(cmd_fibcontext);
 	return -1;
 }
 
 /**
- *	probe_container		-	query a logical volume
+ *	aac_probe_container		-	query a logical volume
  *	@dev: device to query
  *	@cid: container identifier
  *
@@ -470,7 +471,7 @@ static int aac_get_container_name(struct scsi_cmnd * scsicmd, int cid)
  *	is updated in the struct fsa_dev_info structure rather than returned.
  */
  
-int probe_container(struct aac_dev *dev, int cid)
+int aac_probe_container(struct aac_dev *dev, int cid)
 {
 	struct fsa_dev_info *fsa_dev_ptr;
 	int status;
@@ -482,10 +483,10 @@ int probe_container(struct aac_dev *dev, int cid)
 	fsa_dev_ptr = dev->fsa_dev;
 	instance = dev->scsi_host_ptr->unique_id;
 
-	if (!(fibptr = fib_alloc(dev)))
+	if (!(fibptr = aac_fib_alloc(dev)))
 		return -ENOMEM;
 
-	fib_init(fibptr);
+	aac_fib_init(fibptr);
 
 	dinfo = (struct aac_query_mount *)fib_data(fibptr);
 
@@ -493,14 +494,14 @@ int probe_container(struct aac_dev *dev, int cid)
 	dinfo->count = cpu_to_le32(cid);
 	dinfo->type = cpu_to_le32(FT_FILESYS);
 
-	status = fib_send(ContainerCommand,
+	status = aac_fib_send(ContainerCommand,
 			    fibptr,
 			    sizeof(struct aac_query_mount),
 			    FsaNormal,
 			    1, 1,
 			    NULL, NULL);
 	if (status < 0) {
-		printk(KERN_WARNING "aacraid: probe_container query failed.\n");
+		printk(KERN_WARNING "aacraid: aac_probe_container query failed.\n");
 		goto error;
 	}
 
@@ -512,7 +513,7 @@ int probe_container(struct aac_dev *dev, int cid)
 		dinfo->count = cpu_to_le32(cid);
 		dinfo->type = cpu_to_le32(FT_FILESYS);
 
-		if (fib_send(ContainerCommand,
+		if (aac_fib_send(ContainerCommand,
 			    fibptr,
 			    sizeof(struct aac_query_mount),
 			    FsaNormal,
@@ -535,8 +536,8 @@ int probe_container(struct aac_dev *dev, int cid)
 	}
 
 error:
-	fib_complete(fibptr);
-	fib_free(fibptr);
+	aac_fib_complete(fibptr);
+	aac_fib_free(fibptr);
 
 	return status;
 }
@@ -700,14 +701,14 @@ int aac_get_adapter_info(struct aac_dev* dev)
 	struct aac_bus_info *command;
 	struct aac_bus_info_response *bus_info;
 
-	if (!(fibptr = fib_alloc(dev)))
+	if (!(fibptr = aac_fib_alloc(dev)))
 		return -ENOMEM;
 
-	fib_init(fibptr);
+	aac_fib_init(fibptr);
 	info = (struct aac_adapter_info *) fib_data(fibptr);
 	memset(info,0,sizeof(*info));
 
-	rcode = fib_send(RequestAdapterInfo,
+	rcode = aac_fib_send(RequestAdapterInfo,
 			 fibptr, 
 			 sizeof(*info),
 			 FsaNormal, 
@@ -716,8 +717,8 @@ int aac_get_adapter_info(struct aac_dev* dev)
 			 NULL);
 
 	if (rcode < 0) {
-		fib_complete(fibptr);
-		fib_free(fibptr);
+		aac_fib_complete(fibptr);
+		aac_fib_free(fibptr);
 		return rcode;
 	}
 	memcpy(&dev->adapter_info, info, sizeof(*info));
@@ -725,13 +726,13 @@ int aac_get_adapter_info(struct aac_dev* dev)
 	if (dev->adapter_info.options & AAC_OPT_SUPPLEMENT_ADAPTER_INFO) {
 		struct aac_supplement_adapter_info * info;
 
-		fib_init(fibptr);
+		aac_fib_init(fibptr);
 
 		info = (struct aac_supplement_adapter_info *) fib_data(fibptr);
 
 		memset(info,0,sizeof(*info));
 
-		rcode = fib_send(RequestSupplementAdapterInfo,
+		rcode = aac_fib_send(RequestSupplementAdapterInfo,
 				 fibptr,
 				 sizeof(*info),
 				 FsaNormal,
@@ -748,7 +749,7 @@ int aac_get_adapter_info(struct aac_dev* dev)
 	 * GetBusInfo 
 	 */
 
-	fib_init(fibptr);
+	aac_fib_init(fibptr);
 
 	bus_info = (struct aac_bus_info_response *) fib_data(fibptr);
 
@@ -761,7 +762,7 @@ int aac_get_adapter_info(struct aac_dev* dev)
 	command->MethodId = cpu_to_le32(1);
 	command->CtlCmd = cpu_to_le32(GetBusInfo);
 
-	rcode = fib_send(ContainerCommand,
+	rcode = aac_fib_send(ContainerCommand,
 			 fibptr,
 			 sizeof (*bus_info),
 			 FsaNormal,
@@ -891,8 +892,8 @@ int aac_get_adapter_info(struct aac_dev* dev)
 		}
 	}
 
-	fib_complete(fibptr);
-	fib_free(fibptr);
+	aac_fib_complete(fibptr);
+	aac_fib_free(fibptr);
 
 	return rcode;
 }
@@ -976,8 +977,8 @@ static void io_callback(void *context, struct fib * fibptr)
 		    ? sizeof(scsicmd->sense_buffer)
 		    : sizeof(dev->fsa_dev[cid].sense_data));
 	}
-	fib_complete(fibptr);
-	fib_free(fibptr);
+	aac_fib_complete(fibptr);
+	aac_fib_free(fibptr);
 
 	scsicmd->scsi_done(scsicmd);
 }
@@ -1062,11 +1063,11 @@ static int aac_read(struct scsi_cmnd * scsicmd, int cid)
 	/*
 	 *	Alocate and initialize a Fib
 	 */
-	if (!(cmd_fibcontext = fib_alloc(dev))) {
+	if (!(cmd_fibcontext = aac_fib_alloc(dev))) {
 		return -1;
 	}
 
-	fib_init(cmd_fibcontext);
+	aac_fib_init(cmd_fibcontext);
 
 	if (dev->raw_io_interface) {
 		struct aac_raw_io *readcmd;
@@ -1086,7 +1087,7 @@ static int aac_read(struct scsi_cmnd * scsicmd, int cid)
 		/*
 		 *	Now send the Fib to the adapter
 		 */
-		status = fib_send(ContainerRawIo,
+		status = aac_fib_send(ContainerRawIo,
 			  cmd_fibcontext, 
 			  fibsize, 
 			  FsaNormal, 
@@ -1112,7 +1113,7 @@ static int aac_read(struct scsi_cmnd * scsicmd, int cid)
 		/*
 		 *	Now send the Fib to the adapter
 		 */
-		status = fib_send(ContainerCommand64, 
+		status = aac_fib_send(ContainerCommand64,
 			  cmd_fibcontext, 
 			  fibsize, 
 			  FsaNormal, 
@@ -1136,7 +1137,7 @@ static int aac_read(struct scsi_cmnd * scsicmd, int cid)
 		/*
 		 *	Now send the Fib to the adapter
 		 */
-		status = fib_send(ContainerCommand, 
+		status = aac_fib_send(ContainerCommand,
 			  cmd_fibcontext, 
 			  fibsize, 
 			  FsaNormal, 
@@ -1153,14 +1154,14 @@ static int aac_read(struct scsi_cmnd * scsicmd, int cid)
 	if (status == -EINPROGRESS) 
 		return 0;
 		
-	printk(KERN_WARNING "aac_read: fib_send failed with status: %d.\n", status);
+	printk(KERN_WARNING "aac_read: aac_fib_send failed with status: %d.\n", status);
 	/*
 	 *	For some reason, the Fib didn't queue, return QUEUE_FULL
 	 */
 	scsicmd->result = DID_OK << 16 | COMMAND_COMPLETE << 8 | SAM_STAT_TASK_SET_FULL;
 	scsicmd->scsi_done(scsicmd);
-	fib_complete(cmd_fibcontext);
-	fib_free(cmd_fibcontext);
+	aac_fib_complete(cmd_fibcontext);
+	aac_fib_free(cmd_fibcontext);
 	return 0;
 }
 
@@ -1228,12 +1229,12 @@ static int aac_write(struct scsi_cmnd * scsicmd, int cid)
 	/*
 	 *	Allocate and initialize a Fib then setup a BlockWrite command
 	 */
-	if (!(cmd_fibcontext = fib_alloc(dev))) {
+	if (!(cmd_fibcontext = aac_fib_alloc(dev))) {
 		scsicmd->result = DID_ERROR << 16;
 		scsicmd->scsi_done(scsicmd);
 		return 0;
 	}
-	fib_init(cmd_fibcontext);
+	aac_fib_init(cmd_fibcontext);
 
 	if (dev->raw_io_interface) {
 		struct aac_raw_io *writecmd;
@@ -1253,7 +1254,7 @@ static int aac_write(struct scsi_cmnd * scsicmd, int cid)
 		/*
 		 *	Now send the Fib to the adapter
 		 */
-		status = fib_send(ContainerRawIo,
+		status = aac_fib_send(ContainerRawIo,
 			  cmd_fibcontext, 
 			  fibsize, 
 			  FsaNormal, 
@@ -1279,7 +1280,7 @@ static int aac_write(struct scsi_cmnd * scsicmd, int cid)
 		/*
 		 *	Now send the Fib to the adapter
 		 */
-		status = fib_send(ContainerCommand64, 
+		status = aac_fib_send(ContainerCommand64,
 			  cmd_fibcontext, 
 			  fibsize, 
 			  FsaNormal, 
@@ -1305,7 +1306,7 @@ static int aac_write(struct scsi_cmnd * scsicmd, int cid)
 		/*
 		 *	Now send the Fib to the adapter
 		 */
-		status = fib_send(ContainerCommand, 
+		status = aac_fib_send(ContainerCommand,
 			  cmd_fibcontext, 
 			  fibsize, 
 			  FsaNormal, 
@@ -1322,15 +1323,15 @@ static int aac_write(struct scsi_cmnd * scsicmd, int cid)
 		return 0;
 	}
 
-	printk(KERN_WARNING "aac_write: fib_send failed with status: %d\n", status);
+	printk(KERN_WARNING "aac_write: aac_fib_send failed with status: %d\n", status);
 	/*
 	 *	For some reason, the Fib didn't queue, return QUEUE_FULL
 	 */
 	scsicmd->result = DID_OK << 16 | COMMAND_COMPLETE << 8 | SAM_STAT_TASK_SET_FULL;
 	scsicmd->scsi_done(scsicmd);
 
-	fib_complete(cmd_fibcontext);
-	fib_free(cmd_fibcontext);
+	aac_fib_complete(cmd_fibcontext);
+	aac_fib_free(cmd_fibcontext);
 	return 0;
 }
 
@@ -1369,8 +1370,8 @@ static void synchronize_callback(void *context, struct fib *fibptr)
 			  sizeof(cmd->sense_buffer)));
 	}
 
-	fib_complete(fibptr);
-	fib_free(fibptr);
+	aac_fib_complete(fibptr);
+	aac_fib_free(fibptr);
 	cmd->scsi_done(cmd);
 }
 
@@ -1407,10 +1408,10 @@ static int aac_synchronize(struct scsi_cmnd *scsicmd, int cid)
 	 *	Allocate and initialize a Fib
 	 */
 	if (!(cmd_fibcontext = 
-	    fib_alloc((struct aac_dev *)scsicmd->device->host->hostdata))) 
+	    aac_fib_alloc((struct aac_dev *)scsicmd->device->host->hostdata)))
 		return SCSI_MLQUEUE_HOST_BUSY;
 
-	fib_init(cmd_fibcontext);
+	aac_fib_init(cmd_fibcontext);
 
 	synchronizecmd = fib_data(cmd_fibcontext);
 	synchronizecmd->command = cpu_to_le32(VM_ContainerConfig);
@@ -1422,7 +1423,7 @@ static int aac_synchronize(struct scsi_cmnd *scsicmd, int cid)
 	/*
 	 *	Now send the Fib to the adapter
 	 */
-	status = fib_send(ContainerCommand,
+	status = aac_fib_send(ContainerCommand,
 		  cmd_fibcontext,
 		  sizeof(struct aac_synchronize),
 		  FsaNormal,
@@ -1437,9 +1438,9 @@ static int aac_synchronize(struct scsi_cmnd *scsicmd, int cid)
 		return 0;
 
 	printk(KERN_WARNING 
-		"aac_synchronize: fib_send failed with status: %d.\n", status);
-	fib_complete(cmd_fibcontext);
-	fib_free(cmd_fibcontext);
+		"aac_synchronize: aac_fib_send failed with status: %d.\n", status);
+	aac_fib_complete(cmd_fibcontext);
+	aac_fib_free(cmd_fibcontext);
 	return SCSI_MLQUEUE_HOST_BUSY;
 }
 
@@ -1465,7 +1466,7 @@ int aac_scsi_cmd(struct scsi_cmnd * scsicmd)
 	 *	itself.
 	 */
 	if (scmd_id(scsicmd) != host->this_id) {
-		if ((scsicmd->device->channel == 0) ){
+		if ((scsicmd->device->channel == CONTAINER_CHANNEL)) {
 			if( (scsicmd->device->id >= dev->maximum_num_containers) || (scsicmd->device->lun != 0)){ 
 				scsicmd->result = DID_NO_CONNECT << 16;
 				scsicmd->scsi_done(scsicmd);
@@ -1488,7 +1489,7 @@ int aac_scsi_cmd(struct scsi_cmnd * scsicmd)
 				case READ_CAPACITY:
 				case TEST_UNIT_READY:
 					spin_unlock_irq(host->host_lock);
-					probe_container(dev, cid);
+					aac_probe_container(dev, cid);
 					if ((fsa_dev_ptr[cid].valid & 1) == 0)
 						fsa_dev_ptr[cid].valid = 0;
 					spin_lock_irq(host->host_lock);
@@ -1935,33 +1936,7 @@ static void aac_srb_callback(void *context, struct fib * fibptr)
 	case SRB_STATUS_ERROR_RECOVERY:
 	case SRB_STATUS_PENDING:
 	case SRB_STATUS_SUCCESS:
-		if(scsicmd->cmnd[0] == INQUIRY ){
-			u8 b;
-			u8 b1;
-			/* We can't expose disk devices because we can't tell whether they
-			 * are the raw container drives or stand alone drives.  If they have
-			 * the removable bit set then we should expose them though.
-			 */
-			b = (*(u8*)scsicmd->buffer)&0x1f;
-			b1 = ((u8*)scsicmd->buffer)[1];
-			if( b==TYPE_TAPE || b==TYPE_WORM || b==TYPE_ROM || b==TYPE_MOD|| b==TYPE_MEDIUM_CHANGER 
-					|| (b==TYPE_DISK && (b1&0x80)) ){
-				scsicmd->result = DID_OK << 16 | COMMAND_COMPLETE << 8;
-			/*
-			 * We will allow disk devices if in RAID/SCSI mode and
-			 * the channel is 2
-			 */
-			} else if ((dev->raid_scsi_mode) &&
-					(scmd_channel(scsicmd) == 2)) {
-				scsicmd->result = DID_OK << 16 | 
-						COMMAND_COMPLETE << 8;
-			} else {
-				scsicmd->result = DID_NO_CONNECT << 16 | 
-						COMMAND_COMPLETE << 8;
-			}
-		} else {
-			scsicmd->result = DID_OK << 16 | COMMAND_COMPLETE << 8;
-		}
+		scsicmd->result = DID_OK << 16 | COMMAND_COMPLETE << 8;
 		break;
 	case SRB_STATUS_DATA_OVERRUN:
 		switch(scsicmd->cmnd[0]){
@@ -1981,28 +1956,7 @@ static void aac_srb_callback(void *context, struct fib * fibptr)
 			scsicmd->result = DID_ERROR << 16 | COMMAND_COMPLETE << 8;
 			break;
 		case INQUIRY: {
-			u8 b;
-			u8 b1;
-			/* We can't expose disk devices because we can't tell whether they
-			* are the raw container drives or stand alone drives
-			*/
-			b = (*(u8*)scsicmd->buffer)&0x0f;
-			b1 = ((u8*)scsicmd->buffer)[1];
-			if( b==TYPE_TAPE || b==TYPE_WORM || b==TYPE_ROM || b==TYPE_MOD|| b==TYPE_MEDIUM_CHANGER
-					|| (b==TYPE_DISK && (b1&0x80)) ){
-				scsicmd->result = DID_OK << 16 | COMMAND_COMPLETE << 8;
-			/*
-			 * We will allow disk devices if in RAID/SCSI mode and
-			 * the channel is 2
-			 */
-			} else if ((dev->raid_scsi_mode) &&
-					(scmd_channel(scsicmd) == 2)) {
-				scsicmd->result = DID_OK << 16 | 
-						COMMAND_COMPLETE << 8;
-			} else {
-				scsicmd->result = DID_NO_CONNECT << 16 | 
-						COMMAND_COMPLETE << 8;
-			}
+			scsicmd->result = DID_OK << 16 | COMMAND_COMPLETE << 8;
 			break;
 		}
 		default:
@@ -2089,8 +2043,8 @@ static void aac_srb_callback(void *context, struct fib * fibptr)
 	 */
 	scsicmd->result |= le32_to_cpu(srbreply->scsi_status);
 
-	fib_complete(fibptr);
-	fib_free(fibptr);
+	aac_fib_complete(fibptr);
+	aac_fib_free(fibptr);
 	scsicmd->scsi_done(scsicmd);
 }
 
@@ -2142,10 +2096,10 @@ static int aac_send_srb_fib(struct scsi_cmnd* scsicmd)
 	/*
 	 *	Allocate and initialize a Fib then setup a BlockWrite command
 	 */
-	if (!(cmd_fibcontext = fib_alloc(dev))) {
+	if (!(cmd_fibcontext = aac_fib_alloc(dev))) {
 		return -1;
 	}
-	fib_init(cmd_fibcontext);
+	aac_fib_init(cmd_fibcontext);
 
 	srbcmd = (struct aac_srb*) fib_data(cmd_fibcontext);
 	srbcmd->function = cpu_to_le32(SRBF_ExecuteScsi);
@@ -2179,7 +2133,7 @@ static int aac_send_srb_fib(struct scsi_cmnd* scsicmd)
 		/*
 		 *	Now send the Fib to the adapter
 		 */
-		status = fib_send(ScsiPortCommand64, cmd_fibcontext, 
+		status = aac_fib_send(ScsiPortCommand64, cmd_fibcontext,
 				fibsize, FsaNormal, 0, 1,
 				  (fib_callback) aac_srb_callback, 
 				  (void *) scsicmd);
@@ -2201,7 +2155,7 @@ static int aac_send_srb_fib(struct scsi_cmnd* scsicmd)
 		/*
 		 *	Now send the Fib to the adapter
 		 */
-		status = fib_send(ScsiPortCommand, cmd_fibcontext, fibsize, FsaNormal, 0, 1,
+		status = aac_fib_send(ScsiPortCommand, cmd_fibcontext, fibsize, FsaNormal, 0, 1,
 				  (fib_callback) aac_srb_callback, (void *) scsicmd);
 	}
 	/*
@@ -2211,9 +2165,9 @@ static int aac_send_srb_fib(struct scsi_cmnd* scsicmd)
 		return 0;
 	}
 
-	printk(KERN_WARNING "aac_srb: fib_send failed with status: %d\n", status);
-	fib_complete(cmd_fibcontext);
-	fib_free(cmd_fibcontext);
+	printk(KERN_WARNING "aac_srb: aac_fib_send failed with status: %d\n", status);
+	aac_fib_complete(cmd_fibcontext);
+	aac_fib_free(cmd_fibcontext);
 
 	return -1;
 }

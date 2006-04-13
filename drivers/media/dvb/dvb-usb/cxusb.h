@@ -6,6 +6,8 @@
 
 extern int dvb_usb_cxusb_debug;
 #define deb_info(args...)   dprintk(dvb_usb_cxusb_debug,0x01,args)
+#define deb_i2c(args...)    if (d->udev->descriptor.idVendor == USB_VID_MEDION) \
+				dprintk(dvb_usb_cxusb_debug,0x01,args)
 
 /* usb commands - some of it are guesses, don't have a reference yet */
 #define CMD_I2C_WRITE     0x08
@@ -20,6 +22,8 @@ extern int dvb_usb_cxusb_debug;
 
 #define CMD_STREAMING_ON  0x36
 #define CMD_STREAMING_OFF 0x37
+
+#define CMD_GET_IR_CODE   0x47
 
 #define CMD_ANALOG        0x50
 #define CMD_DIGITAL       0x51

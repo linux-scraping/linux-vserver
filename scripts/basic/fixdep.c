@@ -130,6 +130,9 @@ void usage(void)
 	exit(1);
 }
 
+/*
+ * Print out the commandline prefixed with cmd_<target filename> :=
+ */
 void print_cmdline(void)
 {
 	printf("cmd_%s := %s\n\n", target, cmdline);

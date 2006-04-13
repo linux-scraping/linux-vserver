@@ -15,9 +15,11 @@
 #ifndef _INET_CONNECTION_SOCK_H
 #define _INET_CONNECTION_SOCK_H
 
-#include <linux/ip.h>
+#include <linux/compiler.h>
 #include <linux/string.h>
 #include <linux/timer.h>
+
+#include <net/inet_sock.h>
 #include <net/request_sock.h>
 
 #define INET_CSK_DEBUG 1
@@ -29,6 +31,35 @@ struct inet_bind_bucket;
 struct inet_hashinfo;
 struct tcp_congestion_ops;
 
+/*
+ * Pointers to address related TCP functions
+ * (i.e. things that depend on the address family)
+ */
+struct inet_connection_sock_af_ops {
+	int	    (*queue_xmit)(struct sk_buff *skb, int ipfragok);
+	void	    (*send_check)(struct sock *sk, int len,
+				  struct sk_buff *skb);
+	int	    (*rebuild_header)(struct sock *sk);
+	int	    (*conn_request)(struct sock *sk, struct sk_buff *skb);
+	struct sock *(*syn_recv_sock)(struct sock *sk, struct sk_buff *skb,
+				      struct request_sock *req,
+				      struct dst_entry *dst);
+	int	    (*remember_stamp)(struct sock *sk);
+	__u16	    net_header_len;
+	int	    (*setsockopt)(struct sock *sk, int level, int optname, 
+				  char __user *optval, int optlen);
+	int	    (*getsockopt)(struct sock *sk, int level, int optname, 
+				  char __user *optval, int __user *optlen);
+	int	    (*compat_setsockopt)(struct sock *sk,
+				int level, int optname,
+				char __user *optval, int optlen);
+	int	    (*compat_getsockopt)(struct sock *sk,
+				int level, int optname,
+				char __user *optval, int __user *optlen);
+	void	    (*addr2sockaddr)(struct sock *sk, struct sockaddr *);
+	int sockaddr_len;
+};
+
 /** inet_connection_sock - INET connection oriented sock
  *
  * @icsk_accept_queue:	   FIFO of established children 
@@ -36,14 +67,18 @@ struct tcp_congestion_ops;
  * @icsk_timeout:	   Timeout
  * @icsk_retransmit_timer: Resend (no ack)
  * @icsk_rto:		   Retransmit timeout
+ * @icsk_pmtu_cookie	   Last pmtu seen by socket
  * @icsk_ca_ops		   Pluggable congestion control hook
+ * @icsk_af_ops		   Operations which are AF_INET{4,6} specific
  * @icsk_ca_state:	   Congestion control state
  * @icsk_retransmits:	   Number of unrecovered [RTO] timeouts
  * @icsk_pending:	   Scheduled timer event
  * @icsk_backoff:	   Backoff
  * @icsk_syn_retries:      Number of allowed SYN (or equivalent) retries
  * @icsk_probes_out:	   unanswered 0 window probes
+ * @icsk_ext_hdr_len:	   Network protocol overhead (IP/IPv6 options)
  * @icsk_ack:		   Delayed ACK control data
+ * @icsk_mtup;		   MTU probing control data
  */
 struct inet_connection_sock {
 	/* inet_sock has to be the first member! */
@@ -54,14 +89,17 @@ struct inet_connection_sock {
  	struct timer_list	  icsk_retransmit_timer;
  	struct timer_list	  icsk_delack_timer;
 	__u32			  icsk_rto;
-	struct tcp_congestion_ops *icsk_ca_ops;
+	__u32			  icsk_pmtu_cookie;
+	const struct tcp_congestion_ops *icsk_ca_ops;
+	const struct inet_connection_sock_af_ops *icsk_af_ops;
+	unsigned int		  (*icsk_sync_mss)(struct sock *sk, u32 pmtu);
 	__u8			  icsk_ca_state;
 	__u8			  icsk_retransmits;
 	__u8			  icsk_pending;
 	__u8			  icsk_backoff;
 	__u8			  icsk_syn_retries;
 	__u8			  icsk_probes_out;
-	/* 2 BYTES HOLE, TRY TO PACK! */
+	__u16			  icsk_ext_hdr_len;
 	struct {
 		__u8		  pending;	 /* ACK is pending			   */
 		__u8		  quick;	 /* Scheduled number of quick acks	   */
@@ -73,6 +111,16 @@ struct inet_connection_sock {
 		__u16		  last_seg_size; /* Size of last incoming segment	   */
 		__u16		  rcv_mss;	 /* MSS used for delayed ACK decisions	   */ 
 	} icsk_ack;
+	struct {
+		int		  enabled;
+
+		/* Range of MTUs to search */
+		int		  search_high;
+		int		  search_low;
+
+		/* Information on the current probe. */
+		int		  probe_size;
+	} icsk_mtup;
 	u32			  icsk_ca_priv[16];
 #define ICSK_CA_PRIV_SIZE	(16 * sizeof(u32))
 };
@@ -192,8 +240,12 @@ extern struct request_sock *inet_csk_search_req(const struct sock *sk,
 						const __u16 rport,
 						const __u32 raddr,
 						const __u32 laddr);
+extern int inet_csk_bind_conflict(const struct sock *sk,
+				  const struct inet_bind_bucket *tb);
 extern int inet_csk_get_port(struct inet_hashinfo *hashinfo,
-			     struct sock *sk, unsigned short snum);
+			     struct sock *sk, unsigned short snum,
+			     int (*bind_conflict)(const struct sock *sk,
+						  const struct inet_bind_bucket *tb));
 
 extern struct dst_entry* inet_csk_route_req(struct sock *sk,
 					    const struct request_sock *req);
@@ -207,7 +259,7 @@ static inline void inet_csk_reqsk_queue_add(struct sock *sk,
 
 extern void inet_csk_reqsk_queue_hash_add(struct sock *sk,
 					  struct request_sock *req,
-					  const unsigned timeout);
+					  unsigned long timeout);
 
 static inline void inet_csk_reqsk_queue_removed(struct sock *sk,
 						struct request_sock *req)
@@ -273,4 +325,15 @@ static inline unsigned int inet_csk_listen_poll(const struct sock *sk)
 extern int  inet_csk_listen_start(struct sock *sk, const int nr_table_entries);
 extern void inet_csk_listen_stop(struct sock *sk);
 
+extern void inet_csk_addr2sockaddr(struct sock *sk, struct sockaddr *uaddr);
+
+extern int inet_csk_ctl_sock_create(struct socket **sock,
+				    unsigned short family,
+				    unsigned short type,
+				    unsigned char protocol);
+
+extern int inet_csk_compat_getsockopt(struct sock *sk, int level, int optname,
+				      char __user *optval, int __user *optlen);
+extern int inet_csk_compat_setsockopt(struct sock *sk, int level, int optname,
+				      char __user *optval, int optlen);
 #endif /* _INET_CONNECTION_SOCK_H */

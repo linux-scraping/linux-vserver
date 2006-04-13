@@ -29,17 +29,22 @@ CHECKFLAGS      += -D__x86_64__ -m64
 
 cflags-$(CONFIG_MK8) += $(call cc-option,-march=k8)
 cflags-$(CONFIG_MPSC) += $(call cc-option,-march=nocona)
+cflags-$(CONFIG_GENERIC_CPU) += $(call cc-option,-mtune=generic)
 CFLAGS += $(cflags-y)
 
+CFLAGS += -m64
 CFLAGS += -mno-red-zone
 CFLAGS += -mcmodel=kernel
 CFLAGS += -pipe
+cflags-$(CONFIG_REORDER) += -ffunction-sections
 # this makes reading assembly source easier, but produces worse code
 # actually it makes the kernel smaller too.
 CFLAGS += -fno-reorder-blocks	
 CFLAGS += -Wno-sign-compare
-ifneq ($(CONFIG_DEBUG_INFO),y)
+ifneq ($(CONFIG_UNWIND_INFO),y)
 CFLAGS += -fno-asynchronous-unwind-tables
+endif
+ifneq ($(CONFIG_DEBUG_INFO),y)
 # -fweb shrinks the kernel a bit, but the difference is very small
 # it also messes up debugging, so don't use it for now.
 #CFLAGS += $(call cc-option,-fweb)
@@ -49,6 +54,8 @@ endif
 CFLAGS += $(call cc-option,-funit-at-a-time)
 # prevent gcc from generating any FP code by mistake
 CFLAGS += $(call cc-option,-mno-sse -mno-mmx -mno-sse2 -mno-3dnow,)
+
+AFLAGS += -m64
 
 head-y := arch/x86_64/kernel/head.o arch/x86_64/kernel/head64.o arch/x86_64/kernel/init_task.o
 
@@ -62,8 +69,8 @@ drivers-$(CONFIG_OPROFILE)		+= arch/x86_64/oprofile/
 
 boot := arch/x86_64/boot
 
-.PHONY: bzImage bzlilo install archmrproper \
-	fdimage fdimage144 fdimage288 archclean
+PHONY += bzImage bzlilo install archmrproper \
+	 fdimage fdimage144 fdimage288 isoimage archclean
 
 #Default target when executing "make"
 all: bzImage
@@ -80,8 +87,11 @@ bzlilo: vmlinux
 bzdisk: vmlinux
 	$(Q)$(MAKE) $(build)=$(boot) BOOTIMAGE=$(BOOTIMAGE) zdisk
 
-install fdimage fdimage144 fdimage288: vmlinux
+fdimage fdimage144 fdimage288 isoimage: vmlinux
 	$(Q)$(MAKE) $(build)=$(boot) BOOTIMAGE=$(BOOTIMAGE) $@
+
+install:
+	$(Q)$(MAKE) $(build)=$(boot) BOOTIMAGE=$(BOOTIMAGE) $@ 
 
 archclean:
 	$(Q)$(MAKE) $(clean)=$(boot)
@@ -89,11 +99,16 @@ archclean:
 define archhelp
   echo  '* bzImage	- Compressed kernel image (arch/$(ARCH)/boot/bzImage)'
   echo  '  install	- Install kernel using'
-  echo  '                  (your) ~/bin/installkernel or'
-  echo  '                  (distribution) /sbin/installkernel or'
-  echo  '        	  install to $$(INSTALL_PATH) and run lilo'
+  echo  '		   (your) ~/bin/installkernel or'
+  echo  '		   (distribution) /sbin/installkernel or'
+  echo  '		   install to $$(INSTALL_PATH) and run lilo'
+  echo  '  bzdisk       - Create a boot floppy in /dev/fd0'
+  echo  '  fdimage      - Create a boot floppy image'
+  echo  '  isoimage     - Create a boot CD-ROM image'
 endef
 
-CLEAN_FILES += arch/$(ARCH)/boot/fdimage arch/$(ARCH)/boot/mtools.conf
+CLEAN_FILES += arch/$(ARCH)/boot/fdimage \
+	       arch/$(ARCH)/boot/image.iso \
+	       arch/$(ARCH)/boot/mtools.conf
 
 

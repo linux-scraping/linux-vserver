@@ -10,7 +10,7 @@
 #ifdef MODULE
 #define MODULE_PARAM_PREFIX /* empty */
 #else
-#define MODULE_PARAM_PREFIX __stringify(KBUILD_MODNAME) "."
+#define MODULE_PARAM_PREFIX KBUILD_MODNAME "."
 #endif
 
 #ifdef MODULE
@@ -161,13 +161,6 @@ extern int param_array_get(char *buffer, struct kernel_param *kp);
 
 extern int param_set_copystring(const char *val, struct kernel_param *kp);
 extern int param_get_string(char *buffer, struct kernel_param *kp);
-
-int param_array(const char *name,
-		const char *val,
-		unsigned int min, unsigned int max,
-		void *elem, int elemsize,
-		int (*set)(const char *, struct kernel_param *kp),
-		int *num);
 
 /* for exporting parameters in /sys/parameters */
 

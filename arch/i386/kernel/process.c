@@ -38,7 +38,6 @@
 #include <linux/kallsyms.h>
 #include <linux/ptrace.h>
 #include <linux/random.h>
-#include <linux/kprobes.h>
 
 #include <asm/uaccess.h>
 #include <asm/pgtable.h>
@@ -48,6 +47,7 @@
 #include <asm/processor.h>
 #include <asm/i387.h>
 #include <asm/desc.h>
+#include <asm/vm86.h>
 #ifdef CONFIG_MATH_EMULATION
 #include <asm/math_emu.h>
 #endif
@@ -294,10 +294,12 @@ void show_regs(struct pt_regs * regs)
 	printk("EIP: %04x:[<%08lx>] CPU: %d\n",0xffff & regs->xcs,regs->eip, smp_processor_id());
 	print_symbol("EIP is at %s\n", regs->eip);
 
-	if (user_mode(regs))
+	if (user_mode_vm(regs))
 		printk(" ESP: %04x:%08lx",0xffff & regs->xss,regs->esp);
-	printk(" EFLAGS: %08lx    %s  (%s)\n",
-	       regs->eflags, print_tainted(), system_utsname.release);
+	printk(" EFLAGS: %08lx    %s  (%s %.*s)\n",
+	       regs->eflags, print_tainted(), system_utsname.release,
+	       (int)strcspn(system_utsname.version, " "),
+	       system_utsname.version);
 	printk("EAX: %08lx EBX: %08lx ECX: %08lx EDX: %08lx\n",
 		regs->eax,regs->ebx,regs->ecx,regs->edx);
 	printk("ESI: %08lx EDI: %08lx EBP: %08lx",
@@ -308,9 +310,7 @@ void show_regs(struct pt_regs * regs)
 	cr0 = read_cr0();
 	cr2 = read_cr2();
 	cr3 = read_cr3();
-	if (current_cpu_data.x86 > 4) {
-		cr4 = read_cr4();
-	}
+	cr4 = read_cr4_safe();
 	printk("CR0: %08lx CR2: %08lx CR3: %08lx CR4: %08lx\n", cr0, cr2, cr3, cr4);
 	show_trace(NULL, &regs->esp);
 }
@@ -363,13 +363,6 @@ void exit_thread(void)
 	struct task_struct *tsk = current;
 	struct thread_struct *t = &tsk->thread;
 
-	/*
-	 * Remove function-return probe instances associated with this task
-	 * and put them back on the free list. Do not insert an exit probe for
-	 * this function, it will be disabled by kprobe_flush_task if you do.
-	 */
-	kprobe_flush_task(tsk);
-
 	/* The process may have allocated an io port bitmap... nuke it. */
 	if (unlikely(NULL != t->io_bitmap_ptr)) {
 		int cpu = get_cpu();
@@ -404,17 +397,7 @@ void flush_thread(void)
 
 void release_thread(struct task_struct *dead_task)
 {
-	if (dead_task->mm) {
-		// temporary debugging check
-		if (dead_task->mm->context.size) {
-			printk("WARNING: dead process %8s still has LDT? <%p/%d>\n",
-					dead_task->comm,
-					dead_task->mm->context.ldt,
-					dead_task->mm->context.size);
-			BUG();
-		}
-	}
-
+	BUG_ON(dead_task->mm);
 	release_vm86_irqs(dead_task);
 }
 
@@ -435,18 +418,7 @@ int copy_thread(int nr, unsigned long clone_flags, unsigned long esp,
 	struct task_struct *tsk;
 	int err;
 
-	childregs = ((struct pt_regs *) (THREAD_SIZE + (unsigned long) p->thread_info)) - 1;
-	/*
-	 * The below -8 is to reserve 8 bytes on top of the ring0 stack.
-	 * This is necessary to guarantee that the entire "struct pt_regs"
-	 * is accessable even if the CPU haven't stored the SS/ESP registers
-	 * on the stack (interrupt gate does not save these registers
-	 * when switching to the same priv ring).
-	 * Therefore beware: accessing the xss/esp fields of the
-	 * "struct pt_regs" is possible, but they may contain the
-	 * completely wrong values.
-	 */
-	childregs = (struct pt_regs *) ((unsigned long) childregs - 8);
+	childregs = task_pt_regs(p);
 	*childregs = *regs;
 	childregs->eax = 0;
 	childregs->esp = esp;
@@ -551,10 +523,7 @@ EXPORT_SYMBOL(dump_thread);
  */
 int dump_task_regs(struct task_struct *tsk, elf_gregset_t *regs)
 {
-	struct pt_regs ptregs;
-	
-	ptregs = *(struct pt_regs *)
-		((unsigned long)tsk->thread_info+THREAD_SIZE - sizeof(ptregs));
+	struct pt_regs ptregs = *task_pt_regs(tsk);
 	ptregs.xcs &= 0xffff;
 	ptregs.xds &= 0xffff;
 	ptregs.xes &= 0xffff;
@@ -610,8 +579,8 @@ static inline void disable_tsc(struct task_struct *prev_p,
 	 * gcc should eliminate the ->thread_info dereference if
 	 * has_secure_computing returns 0 at compile time (SECCOMP=n).
 	 */
-	prev = prev_p->thread_info;
-	next = next_p->thread_info;
+	prev = task_thread_info(prev_p);
+	next = task_thread_info(next_p);
 
 	if (has_secure_computing(prev) || has_secure_computing(next)) {
 		/* slow path here */
@@ -796,7 +765,7 @@ unsigned long get_wchan(struct task_struct *p)
 	int count = 0;
 	if (!p || p == current || p->state == TASK_RUNNING)
 		return 0;
-	stack_page = (unsigned long)p->thread_info;
+	stack_page = (unsigned long)task_stack_page(p);
 	esp = p->thread.esp;
 	if (!stack_page || esp < stack_page || esp > top_esp+stack_page)
 		return 0;
@@ -812,7 +781,6 @@ unsigned long get_wchan(struct task_struct *p)
 	} while (count++ < 16);
 	return 0;
 }
-EXPORT_SYMBOL(get_wchan);
 
 /*
  * sys_alloc_thread_area: get a yet unused TLS descriptor index.

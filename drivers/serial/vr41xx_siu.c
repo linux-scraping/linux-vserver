@@ -1,7 +1,7 @@
 /*
  *  Driver for NEC VR4100 series Serial Interface Unit.
  *
- *  Copyright (C) 2004-2005  Yoichi Yuasa <yuasa@hh.iij4u.or.jp>
+ *  Copyright (C) 2004-2005  Yoichi Yuasa <yoichi_yuasa@tripeaks.co.jp>
  *
  *  Based on drivers/serial/8250.c, by Russell King.
  *
@@ -371,11 +371,6 @@ static inline void receive_chars(struct uart_port *port, uint8_t *status,
 	lsr = *status;
 
 	do {
-		if (unlikely(tty->flip.count >= TTY_FLIPBUF_SIZE)) {
-			if (tty->low_latency)
-				tty_flip_buffer_push(tty);
-		}
-
 		ch = siu_read(port, UART_RX);
 		port->icount.rx++;
 		flag = TTY_NORMAL;
@@ -826,25 +821,23 @@ static void wait_for_xmitr(struct uart_port *port)
 	}
 }
 
+static void siu_console_putchar(struct uart_port *port, int ch)
+{
+	wait_for_xmitr(port);
+	siu_write(port, UART_TX, ch);
+}
+
 static void siu_console_write(struct console *con, const char *s, unsigned count)
 {
 	struct uart_port *port;
 	uint8_t ier;
-	unsigned i;
 
 	port = &siu_uart_ports[con->index];
 
 	ier = siu_read(port, UART_IER);
 	siu_write(port, UART_IER, 0);
 
-	for (i = 0; i < count && *s != '\0'; i++, s++) {
-		wait_for_xmitr(port);
-		siu_write(port, UART_TX, *s);
-		if (*s == '\n') {
-			wait_for_xmitr(port);
-			siu_write(port, UART_TX, '\r');
-		}
-	}
+	uart_console_write(port, s, count, siu_console_putchar);
 
 	wait_for_xmitr(port);
 	siu_write(port, UART_IER, ier);
@@ -924,7 +917,7 @@ static struct uart_driver siu_uart_driver = {
 	.cons		= SERIAL_VR41XX_CONSOLE,
 };
 
-static int siu_probe(struct platform_device *dev)
+static int __devinit siu_probe(struct platform_device *dev)
 {
 	struct uart_port *port;
 	int num, i, retval;
@@ -958,7 +951,7 @@ static int siu_probe(struct platform_device *dev)
 	return 0;
 }
 
-static int siu_remove(struct platform_device *dev)
+static int __devexit siu_remove(struct platform_device *dev)
 {
 	struct uart_port *port;
 	int i;
@@ -1011,21 +1004,28 @@ static struct platform_device *siu_platform_device;
 
 static struct platform_driver siu_device_driver = {
 	.probe		= siu_probe,
-	.remove		= siu_remove,
+	.remove		= __devexit_p(siu_remove),
 	.suspend	= siu_suspend,
 	.resume		= siu_resume,
 	.driver		= {
 		.name	= "SIU",
+		.owner	= THIS_MODULE,
 	},
 };
 
-static int __devinit vr41xx_siu_init(void)
+static int __init vr41xx_siu_init(void)
 {
 	int retval;
 
-	siu_platform_device = platform_device_register_simple("SIU", -1, NULL, 0);
-	if (IS_ERR(siu_platform_device))
-		return PTR_ERR(siu_platform_device);
+	siu_platform_device = platform_device_alloc("SIU", -1);
+	if (!siu_platform_device)
+		return -ENOMEM;
+
+	retval = platform_device_add(siu_platform_device);
+	if (retval < 0) {
+		platform_device_put(siu_platform_device);
+		return retval;
+	}
 
 	retval = platform_driver_register(&siu_device_driver);
 	if (retval < 0)
@@ -1034,10 +1034,9 @@ static int __devinit vr41xx_siu_init(void)
 	return retval;
 }
 
-static void __devexit vr41xx_siu_exit(void)
+static void __exit vr41xx_siu_exit(void)
 {
 	platform_driver_unregister(&siu_device_driver);
-
 	platform_device_unregister(siu_platform_device);
 }
 

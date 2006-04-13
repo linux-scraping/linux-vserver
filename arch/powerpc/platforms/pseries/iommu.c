@@ -1,6 +1,4 @@
 /*
- * arch/ppc64/kernel/pSeries_iommu.c
- *
  * Copyright (C) 2001 Mike Corrigan & Dave Engebretsen, IBM Corporation
  *
  * Rewrite, cleanup: 
@@ -50,8 +48,6 @@
 #include "plpar_wrappers.h"
 
 #define DBG(fmt...)
-
-extern int is_python(struct device_node *);
 
 static void tce_build_pSeries(struct iommu_table *tbl, long index, 
 			      long npages, unsigned long uaddr, 
@@ -436,7 +432,7 @@ static void iommu_bus_setup_pSeriesLP(struct pci_bus *bus)
 		return;
 	}
 
-	ppci = pdn->data;
+	ppci = PCI_DN(pdn);
 	if (!ppci->iommu_table) {
 		/* Bussubno hasn't been copied yet.
 		 * Do it now because iommu_table_setparms_lpar needs it.
@@ -483,10 +479,10 @@ static void iommu_dev_setup_pSeries(struct pci_dev *dev)
 	 * an already allocated iommu table is found and use that.
 	 */
 
-	while (dn && dn->data && PCI_DN(dn)->iommu_table == NULL)
+	while (dn && PCI_DN(dn) && PCI_DN(dn)->iommu_table == NULL)
 		dn = dn->parent;
 
-	if (dn && dn->data) {
+	if (dn && PCI_DN(dn)) {
 		PCI_DN(mydn)->iommu_table = PCI_DN(dn)->iommu_table;
 	} else {
 		DBG("iommu_dev_setup_pSeries, dev %p (%s) has no iommu table\n", dev, pci_name(dev));
@@ -497,7 +493,7 @@ static int iommu_reconfig_notifier(struct notifier_block *nb, unsigned long acti
 {
 	int err = NOTIFY_OK;
 	struct device_node *np = node;
-	struct pci_dn *pci = np->data;
+	struct pci_dn *pci = PCI_DN(np);
 
 	switch (action) {
 	case PSERIES_RECONFIG_REMOVE:
@@ -533,7 +529,7 @@ static void iommu_dev_setup_pSeriesLP(struct pci_dev *dev)
 	 */
 	dn = pci_device_to_OF_node(dev);
 
-	for (pdn = dn; pdn && pdn->data && !PCI_DN(pdn)->iommu_table;
+	for (pdn = dn; pdn && PCI_DN(pdn) && !PCI_DN(pdn)->iommu_table;
 	     pdn = pdn->parent) {
 		dma_window = (unsigned int *)
 			get_property(pdn, "ibm,dma-window", NULL);
@@ -552,7 +548,7 @@ static void iommu_dev_setup_pSeriesLP(struct pci_dev *dev)
 		DBG("Found DMA window, allocating table\n");
 	}
 
-	pci = pdn->data;
+	pci = PCI_DN(pdn);
 	if (!pci->iommu_table) {
 		/* iommu_table_setparms_lpar needs bussubno. */
 		pci->bussubno = pci->phb->bus->number;
@@ -584,7 +580,7 @@ void iommu_init_early_pSeries(void)
 		return;
 	}
 
-	if (platform_is_lpar()) {
+	if (firmware_has_feature(FW_FEATURE_LPAR)) {
 		if (firmware_has_feature(FW_FEATURE_MULTITCE)) {
 			ppc_md.tce_build = tce_buildmulti_pSeriesLP;
 			ppc_md.tce_free	 = tce_freemulti_pSeriesLP;

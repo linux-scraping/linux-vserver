@@ -25,7 +25,6 @@
 #include <linux/resource.h>
 #include <linux/times.h>
 #include <linux/utsname.h>
-#include <linux/timex.h>
 #include <linux/smp.h>
 #include <linux/smp_lock.h>
 #include <linux/sem.h>
@@ -48,12 +47,13 @@
 #include <linux/ptrace.h>
 #include <linux/stat.h>
 #include <linux/ipc.h>
+#include <linux/capability.h>
 #include <linux/compat.h>
 #include <linux/vfs.h>
 #include <linux/mman.h>
+#include <linux/mutex.h>
 
 #include <asm/intrinsics.h>
-#include <asm/semaphore.h>
 #include <asm/types.h>
 #include <asm/uaccess.h>
 #include <asm/unistd.h>
@@ -85,7 +85,7 @@
  * while doing so.
  */
 /* XXX make per-mm: */
-static DECLARE_MUTEX(ia32_mmap_sem);
+static DEFINE_MUTEX(ia32_mmap_mutex);
 
 asmlinkage long
 sys32_execve (char __user *name, compat_uptr_t __user *argv, compat_uptr_t __user *envp,
@@ -894,11 +894,11 @@ ia32_do_mmap (struct file *file, unsigned long addr, unsigned long len, int prot
 	prot = get_prot32(prot);
 
 #if PAGE_SHIFT > IA32_PAGE_SHIFT
-	down(&ia32_mmap_sem);
+	mutex_lock(&ia32_mmap_mutex);
 	{
 		addr = emulate_mmap(file, addr, len, prot, flags, offset);
 	}
-	up(&ia32_mmap_sem);
+	mutex_unlock(&ia32_mmap_mutex);
 #else
 	down_write(&current->mm->mmap_sem);
 	{
@@ -999,11 +999,9 @@ sys32_munmap (unsigned int start, unsigned int len)
 	if (start >= end)
 		return 0;
 
-	down(&ia32_mmap_sem);
-	{
-		ret = sys_munmap(start, end - start);
-	}
-	up(&ia32_mmap_sem);
+	mutex_lock(&ia32_mmap_mutex);
+	ret = sys_munmap(start, end - start);
+	mutex_unlock(&ia32_mmap_mutex);
 #endif
 	return ret;
 }
@@ -1055,7 +1053,7 @@ sys32_mprotect (unsigned int start, unsigned int len, int prot)
 	if (retval < 0)
 		return retval;
 
-	down(&ia32_mmap_sem);
+	mutex_lock(&ia32_mmap_mutex);
 	{
 		if (offset_in_page(start)) {
 			/* start address is 4KB aligned but not page aligned. */
@@ -1079,7 +1077,7 @@ sys32_mprotect (unsigned int start, unsigned int len, int prot)
 		retval = sys_mprotect(start, end - start, prot);
 	}
   out:
-	up(&ia32_mmap_sem);
+	mutex_unlock(&ia32_mmap_mutex);
 	return retval;
 #endif
 }
@@ -1123,11 +1121,9 @@ sys32_mremap (unsigned int addr, unsigned int old_len, unsigned int new_len,
 	old_len = PAGE_ALIGN(old_end) - addr;
 	new_len = PAGE_ALIGN(new_end) - addr;
 
-	down(&ia32_mmap_sem);
-	{
-		ret = sys_mremap(addr, old_len, new_len, flags, new_addr);
-	}
-	up(&ia32_mmap_sem);
+	mutex_lock(&ia32_mmap_mutex);
+	ret = sys_mremap(addr, old_len, new_len, flags, new_addr);
+	mutex_unlock(&ia32_mmap_mutex);
 
 	if ((ret >= 0) && (old_len < new_len)) {
 		/* mremap expanded successfully */
@@ -1169,19 +1165,7 @@ put_tv32 (struct compat_timeval __user *o, struct timeval *i)
 asmlinkage unsigned long
 sys32_alarm (unsigned int seconds)
 {
-	struct itimerval it_new, it_old;
-	unsigned int oldalarm;
-
-	it_new.it_interval.tv_sec = it_new.it_interval.tv_usec = 0;
-	it_new.it_value.tv_sec = seconds;
-	it_new.it_value.tv_usec = 0;
-	do_setitimer(ITIMER_REAL, &it_new, &it_old);
-	oldalarm = it_old.it_value.tv_sec;
-	/* ehhh.. We can't return 0 if we have an alarm pending.. */
-	/* And we'd better return too much than too little anyway */
-	if (it_old.it_value.tv_usec)
-		oldalarm++;
-	return oldalarm;
+	return alarm_setitimer(seconds);
 }
 
 /* Translations due to time_t size differences.  Which affects all
@@ -1481,7 +1465,7 @@ getreg (struct task_struct *child, int regno)
 {
 	struct pt_regs *child_regs;
 
-	child_regs = ia64_task_regs(child);
+	child_regs = task_pt_regs(child);
 	switch (regno / sizeof(int)) {
 	      case PT_EBX: return child_regs->r11;
 	      case PT_ECX: return child_regs->r9;
@@ -1509,7 +1493,7 @@ putreg (struct task_struct *child, int regno, unsigned int value)
 {
 	struct pt_regs *child_regs;
 
-	child_regs = ia64_task_regs(child);
+	child_regs = task_pt_regs(child);
 	switch (regno / sizeof(int)) {
 	      case PT_EBX: child_regs->r11 = value; break;
 	      case PT_ECX: child_regs->r9 = value; break;
@@ -1625,7 +1609,7 @@ save_ia32_fpstate (struct task_struct *tsk, struct ia32_user_i387_struct __user 
 	 *  Stack frames start with 16-bytes of temp space
 	 */
 	swp = (struct switch_stack *)(tsk->thread.ksp + 16);
-	ptp = ia64_task_regs(tsk);
+	ptp = task_pt_regs(tsk);
 	tos = (tsk->thread.fsr >> 11) & 7;
 	for (i = 0; i < 8; i++)
 		put_fpreg(i, &save->st_space[i], ptp, swp, tos);
@@ -1658,7 +1642,7 @@ restore_ia32_fpstate (struct task_struct *tsk, struct ia32_user_i387_struct __us
 	 *  Stack frames start with 16-bytes of temp space
 	 */
 	swp = (struct switch_stack *)(tsk->thread.ksp + 16);
-	ptp = ia64_task_regs(tsk);
+	ptp = task_pt_regs(tsk);
 	tos = (tsk->thread.fsr >> 11) & 7;
 	for (i = 0; i < 8; i++)
 		get_fpreg(i, &save->st_space[i], ptp, swp, tos);
@@ -1689,7 +1673,7 @@ save_ia32_fpxstate (struct task_struct *tsk, struct ia32_user_fxsr_struct __user
          *  Stack frames start with 16-bytes of temp space
          */
         swp = (struct switch_stack *)(tsk->thread.ksp + 16);
-        ptp = ia64_task_regs(tsk);
+        ptp = task_pt_regs(tsk);
 	tos = (tsk->thread.fsr >> 11) & 7;
         for (i = 0; i < 8; i++)
 		put_fpreg(i, (struct _fpreg_ia32 __user *)&save->st_space[4*i], ptp, swp, tos);
@@ -1733,7 +1717,7 @@ restore_ia32_fpxstate (struct task_struct *tsk, struct ia32_user_fxsr_struct __u
 	 *  Stack frames start with 16-bytes of temp space
 	 */
 	swp = (struct switch_stack *)(tsk->thread.ksp + 16);
-	ptp = ia64_task_regs(tsk);
+	ptp = task_pt_regs(tsk);
 	tos = (tsk->thread.fsr >> 11) & 7;
 	for (i = 0; i < 8; i++)
 	get_fpreg(i, (struct _fpreg_ia32 __user *)&save->st_space[4*i], ptp, swp, tos);
@@ -1761,21 +1745,15 @@ sys32_ptrace (int request, pid_t pid, unsigned int addr, unsigned int data)
 
 	lock_kernel();
 	if (request == PTRACE_TRACEME) {
-		ret = sys_ptrace(request, pid, addr, data);
+		ret = ptrace_traceme();
 		goto out;
 	}
 
-	ret = -ESRCH;
-	read_lock(&tasklist_lock);
-	child = find_task_by_pid(pid);
-	if (child)
-		get_task_struct(child);
-	read_unlock(&tasklist_lock);
-	if (!child)
+	child = ptrace_get_task_struct(pid);
+	if (IS_ERR(child)) {
+		ret = PTR_ERR(child);
 		goto out;
-	ret = -EPERM;
-	if (pid == 1)		/* no messing around with init! */
-		goto out_tsk;
+	}
 
 	if (request == PTRACE_ATTACH) {
 		ret = sys_ptrace(request, pid, addr, data);
@@ -2559,34 +2537,6 @@ sys32_get_thread_area (struct ia32_user_desc __user *u_info)
 	return 0;
 }
 
-asmlinkage long
-sys32_timer_create(u32 clock, struct compat_sigevent __user *se32, timer_t __user *timer_id)
-{
-	struct sigevent se;
-	mm_segment_t oldfs;
-	timer_t t;
-	long err;
-
-	if (se32 == NULL)
-		return sys_timer_create(clock, NULL, timer_id);
-
-	if (get_compat_sigevent(&se, se32))
-		return -EFAULT;
-
-	if (!access_ok(VERIFY_WRITE,timer_id,sizeof(timer_t)))
-		return -EFAULT;
-
-	oldfs = get_fs();
-	set_fs(KERNEL_DS);
-	err = sys_timer_create(clock, (struct sigevent __user *) &se, (timer_t __user *) &t);
-	set_fs(oldfs);
-
-	if (!err)
-		err = __put_user (t, timer_id);
-
-	return err;
-}
-
 long sys32_fadvise64_64(int fd, __u32 offset_low, __u32 offset_high, 
 			__u32 len_low, __u32 len_high, int advice)
 { 
@@ -2639,79 +2589,5 @@ sys32_setresgid(compat_gid_t rgid, compat_gid_t egid,
 	segid = (egid == (compat_gid_t)-1) ? ((gid_t)-1) : ((gid_t)egid);
 	ssgid = (sgid == (compat_gid_t)-1) ? ((gid_t)-1) : ((gid_t)sgid);
 	return sys_setresgid(srgid, segid, ssgid);
-}
-
-/* Handle adjtimex compatibility. */
-
-struct timex32 {
-	u32 modes;
-	s32 offset, freq, maxerror, esterror;
-	s32 status, constant, precision, tolerance;
-	struct compat_timeval time;
-	s32 tick;
-	s32 ppsfreq, jitter, shift, stabil;
-	s32 jitcnt, calcnt, errcnt, stbcnt;
-	s32  :32; s32  :32; s32  :32; s32  :32;
-	s32  :32; s32  :32; s32  :32; s32  :32;
-	s32  :32; s32  :32; s32  :32; s32  :32;
-};
-
-extern int do_adjtimex(struct timex *);
-
-asmlinkage long
-sys32_adjtimex(struct timex32 *utp)
-{
-	struct timex txc;
-	int ret;
-
-	memset(&txc, 0, sizeof(struct timex));
-
-	if(get_user(txc.modes, &utp->modes) ||
-	   __get_user(txc.offset, &utp->offset) ||
-	   __get_user(txc.freq, &utp->freq) ||
-	   __get_user(txc.maxerror, &utp->maxerror) ||
-	   __get_user(txc.esterror, &utp->esterror) ||
-	   __get_user(txc.status, &utp->status) ||
-	   __get_user(txc.constant, &utp->constant) ||
-	   __get_user(txc.precision, &utp->precision) ||
-	   __get_user(txc.tolerance, &utp->tolerance) ||
-	   __get_user(txc.time.tv_sec, &utp->time.tv_sec) ||
-	   __get_user(txc.time.tv_usec, &utp->time.tv_usec) ||
-	   __get_user(txc.tick, &utp->tick) ||
-	   __get_user(txc.ppsfreq, &utp->ppsfreq) ||
-	   __get_user(txc.jitter, &utp->jitter) ||
-	   __get_user(txc.shift, &utp->shift) ||
-	   __get_user(txc.stabil, &utp->stabil) ||
-	   __get_user(txc.jitcnt, &utp->jitcnt) ||
-	   __get_user(txc.calcnt, &utp->calcnt) ||
-	   __get_user(txc.errcnt, &utp->errcnt) ||
-	   __get_user(txc.stbcnt, &utp->stbcnt))
-		return -EFAULT;
-
-	ret = do_adjtimex(&txc);
-
-	if(put_user(txc.modes, &utp->modes) ||
-	   __put_user(txc.offset, &utp->offset) ||
-	   __put_user(txc.freq, &utp->freq) ||
-	   __put_user(txc.maxerror, &utp->maxerror) ||
-	   __put_user(txc.esterror, &utp->esterror) ||
-	   __put_user(txc.status, &utp->status) ||
-	   __put_user(txc.constant, &utp->constant) ||
-	   __put_user(txc.precision, &utp->precision) ||
-	   __put_user(txc.tolerance, &utp->tolerance) ||
-	   __put_user(txc.time.tv_sec, &utp->time.tv_sec) ||
-	   __put_user(txc.time.tv_usec, &utp->time.tv_usec) ||
-	   __put_user(txc.tick, &utp->tick) ||
-	   __put_user(txc.ppsfreq, &utp->ppsfreq) ||
-	   __put_user(txc.jitter, &utp->jitter) ||
-	   __put_user(txc.shift, &utp->shift) ||
-	   __put_user(txc.stabil, &utp->stabil) ||
-	   __put_user(txc.jitcnt, &utp->jitcnt) ||
-	   __put_user(txc.calcnt, &utp->calcnt) ||
-	   __put_user(txc.errcnt, &utp->errcnt) ||
-	   __put_user(txc.stbcnt, &utp->stbcnt))
-		ret = -EFAULT;
-
-	return ret;
 }
 #endif /* NOTYET */

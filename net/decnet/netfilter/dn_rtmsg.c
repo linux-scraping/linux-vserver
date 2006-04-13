@@ -26,8 +26,6 @@
 #include <net/dn.h>
 #include <net/dn_route.h>
 
-#include <linux/netfilter_decnet.h>
-
 static struct sock *dnrmg = NULL;
 
 
@@ -135,7 +133,7 @@ static struct nf_hook_ops dnrmg_ops = {
 	.priority	= NF_DN_PRI_DNRTMSG,
 };
 
-static int __init init(void)
+static int __init dn_rtmsg_init(void)
 {
 	int rv = 0;
 
@@ -154,7 +152,7 @@ static int __init init(void)
 	return rv;
 }
 
-static void __exit fini(void)
+static void __exit dn_rtmsg_fini(void)
 {
 	nf_unregister_hook(&dnrmg_ops);
 	sock_release(dnrmg->sk_socket);
@@ -166,6 +164,6 @@ MODULE_AUTHOR("Steven Whitehouse <steve@chygwyn.com>");
 MODULE_LICENSE("GPL");
 MODULE_ALIAS_NET_PF_PROTO(PF_NETLINK, NETLINK_DNRTMSG);
 
-module_init(init);
-module_exit(fini);
+module_init(dn_rtmsg_init);
+module_exit(dn_rtmsg_fini);
 

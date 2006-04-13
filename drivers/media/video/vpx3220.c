@@ -1,4 +1,4 @@
-/* 
+/*
  * vpx3220a, vpx3216b & vpx3214c video decoder driver version 0.0.1
  *
  * Copyright (C) 2001 Laurent Pinchart <lpinchart@freegates.be>
@@ -30,7 +30,6 @@
 #include <asm/uaccess.h>
 
 #include <linux/i2c.h>
-#include <linux/i2c-dev.h>
 
 #define I2C_NAME(x) (x)->name
 
@@ -177,8 +176,8 @@ vpx3220_write_block (struct i2c_client *client,
 
 static int
 vpx3220_write_fp_block (struct i2c_client *client,
-		        const u16         *data,
-		        unsigned int       len)
+			const u16         *data,
+			unsigned int       len)
 {
 	u8 reg;
 	int ret = 0;
@@ -317,7 +316,7 @@ vpx3220_command (struct i2c_client *client,
 		vpx3220_write_fp_block(client, init_fp,
 				       sizeof(init_fp) >> 1);
 		switch (decoder->norm) {
-			
+
 		case VIDEO_MODE_NTSC:
 			vpx3220_write_fp_block(client, init_ntsc,
 					       sizeof(init_ntsc) >> 1);
@@ -325,7 +324,7 @@ vpx3220_command (struct i2c_client *client,
 
 		case VIDEO_MODE_PAL:
 			vpx3220_write_fp_block(client, init_pal,
-				       	       sizeof(init_pal) >> 1);
+					       sizeof(init_pal) >> 1);
 			break;
 		case VIDEO_MODE_SECAM:
 			vpx3220_write_fp_block(client, init_secam,
@@ -333,10 +332,10 @@ vpx3220_command (struct i2c_client *client,
 			break;
 		default:
 			vpx3220_write_fp_block(client, init_pal,
-				       	       sizeof(init_pal) >> 1);
+					       sizeof(init_pal) >> 1);
 			break;
 		}
-	}		
+	}
 		break;
 
 	case DECODER_DUMP:
@@ -412,7 +411,7 @@ vpx3220_command (struct i2c_client *client,
 
 		/* Here we back up the input selection because it gets
 		   overwritten when we fill the registers with the
-                   choosen video norm */
+		   choosen video norm */
 		temp_input = vpx3220_fp_read(client, 0xf2);
 
 		dprintk(1, KERN_DEBUG "%s: DECODER_SET_NORM %d\n",
@@ -579,7 +578,7 @@ static unsigned short normal_i2c[] =
 };
 
 static unsigned short ignore = I2C_CLIENT_END;
-                                                                                
+
 static struct i2c_client_address_data addr_data = {
 	.normal_i2c		= normal_i2c,
 	.probe			= &ignore,
@@ -621,17 +620,14 @@ vpx3220_detect_client (struct i2c_adapter *adapter,
 	    (adapter, I2C_FUNC_SMBUS_BYTE_DATA | I2C_FUNC_SMBUS_WORD_DATA))
 		return 0;
 
-	client = kmalloc(sizeof(struct i2c_client), GFP_KERNEL);
+	client = kzalloc(sizeof(struct i2c_client), GFP_KERNEL);
 	if (client == NULL) {
 		return -ENOMEM;
 	}
 
-	memset(client, 0, sizeof(struct i2c_client));
-
 	client->addr = address;
 	client->adapter = adapter;
 	client->driver = &vpx3220_i2c_driver;
-	client->flags = I2C_CLIENT_ALLOW_USE;
 
 	/* Check for manufacture ID and part number */
 	if (kind < 0) {
@@ -665,7 +661,7 @@ vpx3220_detect_client (struct i2c_adapter *adapter,
 			break;
 		default:
 			dprintk(1,
-				KERN_INFO 
+				KERN_INFO
 				"%s: Wrong part number (0x%04x)\n",
 				__func__, pn);
 			kfree(client);
@@ -676,12 +672,11 @@ vpx3220_detect_client (struct i2c_adapter *adapter,
 			sizeof(I2C_NAME(client)));
 	}
 
-	decoder = kmalloc(sizeof(struct vpx3220), GFP_KERNEL);
+	decoder = kzalloc(sizeof(struct vpx3220), GFP_KERNEL);
 	if (decoder == NULL) {
 		kfree(client);
 		return -ENOMEM;
 	}
-	memset(decoder, 0, sizeof(struct vpx3220));
 	decoder->norm = VIDEO_MODE_PAL;
 	decoder->input = 0;
 	decoder->enable = 1;
@@ -722,11 +717,11 @@ vpx3220_attach_adapter (struct i2c_adapter *adapter)
  */
 
 static struct i2c_driver vpx3220_i2c_driver = {
-	.owner = THIS_MODULE,
-	.name = "vpx3220",
+	.driver = {
+		.name = "vpx3220",
+	},
 
 	.id = I2C_DRIVERID_VPX3220,
-	.flags = I2C_DF_NOTIFY,
 
 	.attach_adapter = vpx3220_attach_adapter,
 	.detach_client = vpx3220_detach_client,

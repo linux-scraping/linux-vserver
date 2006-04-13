@@ -13,13 +13,11 @@
 #include "asm/ptrace.h"
 #include "asm/tlbflush.h"
 #include "irq_user.h"
-#include "signal_user.h"
 #include "kern_util.h"
 #include "user_util.h"
 #include "os.h"
 #include "kern.h"
 #include "sigcontext.h"
-#include "time_user.h"
 #include "mem_user.h"
 #include "tlb.h"
 #include "mode.h"
@@ -37,7 +35,7 @@ void switch_to_tt(void *prev, void *next)
 	from = prev;
 	to = next;
 
-	cpu = from->thread_info->cpu;
+	cpu = task_thread_info(from)->cpu;
 	if(cpu == 0)
 		forward_interrupts(to->thread.mode.tt.extern_pid);
 #ifdef CONFIG_SMP
@@ -52,6 +50,13 @@ void switch_to_tt(void *prev, void *next)
 	forward_pending_sigio(to->thread.mode.tt.extern_pid);
 
 	c = 0;
+
+	/* Notice that here we "up" the semaphore on which "to" is waiting, and
+	 * below (the read) we wait on this semaphore (which is implemented by
+	 * switch_pipe) and go sleeping. Thus, after that, we have resumed in
+	 * "to", and can't use any more the value of "from" (which is outdated),
+	 * nor the value in "to" (since it was the task which stole us the CPU,
+	 * which we don't care about). */
 
 	err = os_write_file(to->thread.mode.tt.switch_pipe[1], &c, sizeof(c));
 	if(err != sizeof(c))
@@ -79,7 +84,7 @@ void switch_to_tt(void *prev, void *next)
 	change_sig(SIGALRM, alrm);
 	change_sig(SIGPROF, prof);
 
-	arch_switch();
+	arch_switch_to_tt(prev_sched, current);
 
 	flush_tlb_all();
 	local_irq_restore(flags);
@@ -143,7 +148,6 @@ static void new_thread_handler(int sig)
 	set_cmdline("(kernel thread)");
 
 	change_sig(SIGUSR1, 1);
-	change_sig(SIGVTALRM, 1);
 	change_sig(SIGPROF, 1);
 	local_irq_enable();
 	if(!run_kernel_thread(fn, arg, &current->thread.exec_buf))
@@ -254,7 +258,7 @@ int copy_thread_tt(int nr, unsigned long clone_flags, unsigned long sp,
 
 	clone_flags &= CLONE_VM;
 	p->thread.temp_stack = stack;
-	new_pid = start_fork_tramp(p->thread_info, stack, clone_flags, tramp);
+	new_pid = start_fork_tramp(task_stack_page(p), stack, clone_flags, tramp);
 	if(new_pid < 0){
 		printk(KERN_ERR "copy_thread : clone failed - errno = %d\n", 
 		       -new_pid);
@@ -344,7 +348,7 @@ int do_proc_op(void *t, int proc_id)
 		pid = thread->request.u.exec.pid;
 		do_exec(thread->mode.tt.extern_pid, pid);
 		thread->mode.tt.extern_pid = pid;
-		cpu_tasks[task->thread_info->cpu].pid = pid;
+		cpu_tasks[task_thread_info(task)->cpu].pid = pid;
 		break;
 	case OP_FORK:
 		attach_process(thread->request.u.fork.pid);
@@ -426,7 +430,7 @@ int start_uml_tt(void)
 	int pages;
 
 	pages = (1 << CONFIG_KERNEL_STACK_ORDER);
-	sp = (void *) ((unsigned long) init_task.thread_info) +
+	sp = task_stack_page(&init_task) +
 		pages * PAGE_SIZE - sizeof(unsigned long);
 	return(tracer(start_kernel_proc, sp));
 }

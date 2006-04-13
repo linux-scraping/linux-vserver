@@ -36,7 +36,7 @@
 DEFINE_PER_CPU(struct ppc64_tlb_batch, ppc64_tlb_batch);
 
 /* This is declared as we are using the more or less generic
- * include/asm-ppc64/tlb.h file -- tgall
+ * include/asm-powerpc/tlb.h file -- tgall
  */
 DEFINE_PER_CPU(struct mmu_gather, mmu_gathers);
 DEFINE_PER_CPU(struct pte_freelist_batch *, pte_freelist_cur);
@@ -168,7 +168,7 @@ void hpte_update(struct mm_struct *mm, unsigned long addr,
 		batch->mm = mm;
 		batch->psize = psize;
 	}
-	if (addr < KERNELBASE) {
+	if (!is_kernel_addr(addr)) {
 		vsid = get_vsid(mm->context.id, addr);
 		WARN_ON(vsid == 0);
 	} else

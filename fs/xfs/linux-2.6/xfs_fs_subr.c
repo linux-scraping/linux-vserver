@@ -57,7 +57,7 @@ fs_tosspages(
 	int		fiopt)
 {
 	vnode_t		*vp = BHV_TO_VNODE(bdp);
-	struct inode	*ip = LINVFS_GET_IP(vp);
+	struct inode	*ip = vn_to_inode(vp);
 
 	if (VN_CACHED(vp))
 		truncate_inode_pages(ip->i_mapping, first);
@@ -76,11 +76,10 @@ fs_flushinval_pages(
 	int		fiopt)
 {
 	vnode_t		*vp = BHV_TO_VNODE(bdp);
-	struct inode	*ip = LINVFS_GET_IP(vp);
+	struct inode	*ip = vn_to_inode(vp);
 
 	if (VN_CACHED(vp)) {
-		filemap_fdatawrite(ip->i_mapping);
-		filemap_fdatawait(ip->i_mapping);
+		filemap_write_and_wait(ip->i_mapping);
 
 		truncate_inode_pages(ip->i_mapping, first);
 	}
@@ -99,7 +98,7 @@ fs_flush_pages(
 	int		fiopt)
 {
 	vnode_t		*vp = BHV_TO_VNODE(bdp);
-	struct inode	*ip = LINVFS_GET_IP(vp);
+	struct inode	*ip = vn_to_inode(vp);
 
 	if (VN_CACHED(vp)) {
 		filemap_fdatawrite(ip->i_mapping);

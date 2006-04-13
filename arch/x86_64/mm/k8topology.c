@@ -43,7 +43,7 @@ static __init int find_northbridge(void)
 int __init k8_scan_nodes(unsigned long start, unsigned long end)
 { 
 	unsigned long prevbase;
-	struct node nodes[8];
+	struct bootnode nodes[8];
 	int nodeid, i, nb; 
 	unsigned char nodeids[8];
 	int found = 0;
@@ -155,7 +155,7 @@ int __init k8_scan_nodes(unsigned long start, unsigned long end)
 	if (!found)
 		return -1; 
 
-	memnode_shift = compute_hash_shift(nodes, numnodes);
+	memnode_shift = compute_hash_shift(nodes, 8);
 	if (memnode_shift < 0) { 
 		printk(KERN_ERR "No NUMA node hash function found. Contact maintainer\n"); 
 		return -1; 

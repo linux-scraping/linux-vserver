@@ -1,6 +1,9 @@
 #
 # m32r/Makefile
 #
+# This file is included by the global makefile so that you can add your own
+# architecture-specific flags and dependencies.
+#
 
 LDFLAGS		:=
 OBJCOPYFLAGS	:= -O binary -R .note -R .comment -S
@@ -12,14 +15,14 @@ CFLAGS_MODULE += -mmodel=large
 
 ifdef CONFIG_CHIP_VDEC2
 cflags-$(CONFIG_ISA_M32R2)	+= -DNO_FPU -Wa,-bitinst
-aflags-$(CONFIG_ISA_M32R2)	+= -DNO_FPU -Wa,-bitinst
+aflags-$(CONFIG_ISA_M32R2)	+= -DNO_FPU -O2 -Wa,-bitinst -Wa,-no-parallel
 else
 cflags-$(CONFIG_ISA_M32R2)	+= -DNO_FPU -m32r2
-aflags-$(CONFIG_ISA_M32R2)	+= -DNO_FPU -m32r2
+aflags-$(CONFIG_ISA_M32R2)	+= -DNO_FPU -m32r2 -O2
 endif
 
 cflags-$(CONFIG_ISA_M32R)	+= -DNO_FPU
-aflags-$(CONFIG_ISA_M32R)	+= -DNO_FPU -Wa,-no-bitinst
+aflags-$(CONFIG_ISA_M32R)	+= -DNO_FPU -O2 -Wa,-no-bitinst
 
 CFLAGS += $(cflags-y)
 AFLAGS += $(aflags-y)
@@ -39,7 +42,7 @@ drivers-$(CONFIG_OPROFILE)	+= arch/m32r/oprofile/
 
 boot := arch/m32r/boot
 
-.PHONY: zImage
+PHONY += zImage
 
 all: zImage
 

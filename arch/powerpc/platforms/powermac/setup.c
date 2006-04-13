@@ -60,6 +60,7 @@
 #include <asm/system.h>
 #include <asm/pgtable.h>
 #include <asm/io.h>
+#include <asm/kexec.h>
 #include <asm/pci-bridge.h>
 #include <asm/ohare.h>
 #include <asm/mediabay.h>
@@ -74,24 +75,21 @@
 #include <asm/iommu.h>
 #include <asm/smu.h>
 #include <asm/pmc.h>
-#include <asm/mpic.h>
 #include <asm/lmb.h>
+#include <asm/udbg.h>
 
 #include "pmac.h"
 
 #undef SHOW_GATWICK_IRQS
 
-unsigned char drive_info;
-
 int ppc_override_l2cr = 0;
 int ppc_override_l2cr_value;
 int has_l2cache = 0;
 
-int pmac_newworld = 1;
+int pmac_newworld;
 
 static int current_root_goodness = -1;
 
-extern int pmac_newworld;
 extern struct machdep_calls pmac_md;
 
 #define DEFAULT_ROOT_DEVICE Root_SDA1	/* sda1 - slightly silly choice */
@@ -277,7 +275,7 @@ static void __init l2cr_init(void)
 }
 #endif
 
-void __init pmac_setup_arch(void)
+static void __init pmac_setup_arch(void)
 {
 	struct device_node *cpu, *ic;
 	int *fp;
@@ -309,9 +307,10 @@ void __init pmac_setup_arch(void)
 	for (ic = NULL; (ic = of_find_all_nodes(ic)) != NULL; )
 		if (get_property(ic, "interrupt-controller", NULL))
 			break;
-	pmac_newworld = (ic != NULL);
-	if (ic)
+	if (ic) {
+		pmac_newworld = 1;
 		of_node_put(ic);
+	}
 
 	/* Lookup PCI hosts */
 	pmac_pci_init();
@@ -320,16 +319,6 @@ void __init pmac_setup_arch(void)
 	ohare_init();
 	l2cr_init();
 #endif /* CONFIG_PPC32 */
-
-#ifdef CONFIG_PPC64
-	/* Probe motherboard chipset */
-	/* this is done earlier in setup_arch for 32-bit */
-	pmac_feature_init();
-
-	/* We can NAP */
-	powersave_nap = 1;
-	printk(KERN_INFO "Using native/NAP idle loop\n");
-#endif
 
 #ifdef CONFIG_KGDB
 	zs_kgdb_hook(0);
@@ -354,13 +343,20 @@ void __init pmac_setup_arch(void)
 
 #ifdef CONFIG_SMP
 	/* Check for Core99 */
-	if (find_devices("uni-n") || find_devices("u3"))
+	if (find_devices("uni-n") || find_devices("u3") || find_devices("u4"))
 		smp_ops = &core99_smp_ops;
 #ifdef CONFIG_PPC32
 	else
 		smp_ops = &psurge_smp_ops;
 #endif
 #endif /* CONFIG_SMP */
+
+#ifdef CONFIG_ADB
+	if (strstr(cmd_line, "adb_sync")) {
+		extern int __adb_probe_sync;
+		__adb_probe_sync = 1;
+	}
+#endif /* CONFIG_ADB */
 }
 
 char *bootpath;
@@ -587,30 +583,6 @@ pmac_halt(void)
 	pmac_power_off();
 }
 
-#ifdef CONFIG_PPC32
-void __init pmac_init(void)
-{
-	/* isa_io_base gets set in pmac_pci_init */
-	isa_mem_base = PMAC_ISA_MEM_BASE;
-	pci_dram_offset = PMAC_PCI_DRAM_OFFSET;
-	ISA_DMA_THRESHOLD = ~0L;
-	DMA_MODE_READ = 1;
-	DMA_MODE_WRITE = 2;
-
-	ppc_md = pmac_md;
-
-#if defined(CONFIG_BLK_DEV_IDE) || defined(CONFIG_BLK_DEV_IDE_MODULE)
-#ifdef CONFIG_BLK_DEV_IDE_PMAC
-        ppc_ide_md.ide_init_hwif	= pmac_ide_init_hwif_ports;
-        ppc_ide_md.default_io_base	= pmac_ide_get_base;
-#endif /* CONFIG_BLK_DEV_IDE_PMAC */
-#endif /* defined(CONFIG_BLK_DEV_IDE) || defined(CONFIG_BLK_DEV_IDE_MODULE) */
-
-	if (ppc_md.progress) ppc_md.progress("pmac_init(): exit", 0);
-
-}
-#endif
-
 /* 
  * Early initialization.
  */
@@ -621,35 +593,27 @@ static void __init pmac_init_early(void)
 	 * and call ioremap
 	 */
 	hpte_init_native();
+#endif
 
-	/* Init SCC */
-	if (strstr(cmd_line, "sccdbg")) {
-		sccdbg = 1;
-		udbg_init_scc(NULL);
+	/* Enable early btext debug if requested */
+	if (strstr(cmd_line, "btextdbg")) {
+		udbg_adb_init_early();
+		register_early_udbg_console();
 	}
 
+	/* Probe motherboard chipset */
+	pmac_feature_init();
+
+	/* Initialize debug stuff */
+	udbg_scc_init(!!strstr(cmd_line, "sccdbg"));
+	udbg_adb_init(!!strstr(cmd_line, "btextdbg"));
+
+#ifdef CONFIG_PPC64
 	/* Setup interrupt mapping options */
 	ppc64_interrupt_controller = IC_OPEN_PIC;
 
-	iommu_init_early_u3();
+	iommu_init_early_dart();
 #endif
-}
-
-static void __init pmac_progress(char *s, unsigned short hex)
-{
-#ifdef CONFIG_PPC64
-	if (sccdbg) {
-		udbg_puts(s);
-		udbg_puts("\n");
-		return;
-	}
-#endif
-#ifdef CONFIG_BOOTX_TEXT
-	if (boot_text_mapped) {
-		btext_drawstring(s);
-		btext_drawchar('\n');
-	}
-#endif /* CONFIG_BOOTX_TEXT */
 }
 
 /*
@@ -663,35 +627,20 @@ static int pmac_check_legacy_ioport(unsigned int baseport)
 
 static int __init pmac_declare_of_platform_devices(void)
 {
-	struct device_node *np, *npp;
+	struct device_node *np;
 
-	np = find_devices("uni-n");
-	if (np) {
-		for (np = np->child; np != NULL; np = np->sibling)
-			if (strncmp(np->name, "i2c", 3) == 0) {
-				of_platform_device_create(np, "uni-n-i2c",
-							  NULL);
-				break;
-			}
-	}
-	np = find_devices("valkyrie");
+	if (machine_is(chrp))
+		return -1;
+
+	if (!machine_is(powermac))
+		return 0;
+
+	np = of_find_node_by_name(NULL, "valkyrie");
 	if (np)
 		of_platform_device_create(np, "valkyrie", NULL);
-	np = find_devices("platinum");
+	np = of_find_node_by_name(NULL, "platinum");
 	if (np)
 		of_platform_device_create(np, "platinum", NULL);
-
-	npp = of_find_node_by_name(NULL, "u3");
-	if (npp) {
-		for (np = NULL; (np = of_get_next_child(npp, np)) != NULL;) {
-			if (strncmp(np->name, "i2c", 3) == 0) {
-				of_platform_device_create(np, "u3-i2c", NULL);
-				of_node_put(np);
-				break;
-			}
-		}
-		of_node_put(npp);
-	}
         np = of_find_node_by_type(NULL, "smu");
         if (np) {
 		of_platform_device_create(np, "smu", NULL);
@@ -706,20 +655,40 @@ device_initcall(pmac_declare_of_platform_devices);
 /*
  * Called very early, MMU is off, device-tree isn't unflattened
  */
-static int __init pmac_probe(int platform)
+static int __init pmac_probe(void)
 {
-#ifdef CONFIG_PPC64
-	if (platform != PLATFORM_POWERMAC)
+	unsigned long root = of_get_flat_dt_root();
+
+	if (!of_flat_dt_is_compatible(root, "Power Macintosh") &&
+	    !of_flat_dt_is_compatible(root, "MacRISC"))
 		return 0;
 
+#ifdef CONFIG_PPC64
 	/*
 	 * On U3, the DART (iommu) must be allocated now since it
 	 * has an impact on htab_initialize (due to the large page it
 	 * occupies having to be broken up so the DART itself is not
 	 * part of the cacheable linar mapping
 	 */
-	alloc_u3_dart_table();
+	alloc_dart_table();
 #endif
+
+#ifdef CONFIG_PPC32
+	/* isa_io_base gets set in pmac_pci_init */
+	isa_mem_base = PMAC_ISA_MEM_BASE;
+	pci_dram_offset = PMAC_PCI_DRAM_OFFSET;
+	ISA_DMA_THRESHOLD = ~0L;
+	DMA_MODE_READ = 1;
+	DMA_MODE_WRITE = 2;
+
+#if defined(CONFIG_BLK_DEV_IDE) || defined(CONFIG_BLK_DEV_IDE_MODULE)
+#ifdef CONFIG_BLK_DEV_IDE_PMAC
+        ppc_ide_md.ide_init_hwif	= pmac_ide_init_hwif_ports;
+        ppc_ide_md.default_io_base	= pmac_ide_get_base;
+#endif /* CONFIG_BLK_DEV_IDE_PMAC */
+#endif /* defined(CONFIG_BLK_DEV_IDE) || defined(CONFIG_BLK_DEV_IDE_MODULE) */
+
+#endif /* CONFIG_PPC32 */
 
 #ifdef CONFIG_PMAC_SMU
 	/*
@@ -734,29 +703,29 @@ static int __init pmac_probe(int platform)
 }
 
 #ifdef CONFIG_PPC64
-static int pmac_probe_mode(struct pci_bus *bus)
+/* Move that to pci.c */
+static int pmac_pci_probe_mode(struct pci_bus *bus)
 {
 	struct device_node *node = bus->sysdata;
 
 	/* We need to use normal PCI probing for the AGP bus,
-	   since the device for the AGP bridge isn't in the tree. */
-	if (bus->self == NULL && device_is_compatible(node, "u3-agp"))
+	 * since the device for the AGP bridge isn't in the tree.
+	 */
+	if (bus->self == NULL && (device_is_compatible(node, "u3-agp") ||
+				  device_is_compatible(node, "u4-pcie")))
 		return PCI_PROBE_NORMAL;
-
 	return PCI_PROBE_DEVTREE;
 }
 #endif
 
-struct machdep_calls __initdata pmac_md = {
-#if defined(CONFIG_HOTPLUG_CPU) && defined(CONFIG_PPC64)
-	.cpu_die		= generic_mach_cpu_die,
-#endif
+define_machine(powermac) {
+	.name			= "PowerMac",
 	.probe			= pmac_probe,
 	.setup_arch		= pmac_setup_arch,
 	.init_early		= pmac_init_early,
 	.show_cpuinfo		= pmac_show_cpuinfo,
 	.init_IRQ		= pmac_pic_init,
-	.get_irq		= mpic_get_irq,	/* changed later */
+	.get_irq		= NULL,	/* changed later */
 	.pcibios_fixup		= pmac_pcibios_fixup,
 	.restart		= pmac_restart,
 	.power_off		= pmac_power_off,
@@ -768,15 +737,23 @@ struct machdep_calls __initdata pmac_md = {
 	.calibrate_decr		= pmac_calibrate_decr,
 	.feature_call		= pmac_do_feature_call,
 	.check_legacy_ioport	= pmac_check_legacy_ioport,
-	.progress		= pmac_progress,
+	.progress		= udbg_progress,
 #ifdef CONFIG_PPC64
-	.pci_probe_mode		= pmac_probe_mode,
-	.idle_loop		= native_idle,
+	.pci_probe_mode		= pmac_pci_probe_mode,
+	.power_save		= power4_idle,
 	.enable_pmcs		= power4_enable_pmcs,
+#ifdef CONFIG_KEXEC
+	.machine_kexec		= default_machine_kexec,
+	.machine_kexec_prepare	= default_machine_kexec_prepare,
+	.machine_crash_shutdown	= default_machine_crash_shutdown,
 #endif
+#endif /* CONFIG_PPC64 */
 #ifdef CONFIG_PPC32
 	.pcibios_enable_device_hook = pmac_pci_enable_device_hook,
 	.pcibios_after_init	= pmac_pcibios_after_init,
 	.phys_mem_access_prot	= pci_phys_mem_access_prot,
+#endif
+#if defined(CONFIG_HOTPLUG_CPU) && defined(CONFIG_PPC64)
+	.cpu_die		= generic_mach_cpu_die,
 #endif
 };

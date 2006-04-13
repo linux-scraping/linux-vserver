@@ -92,9 +92,8 @@ int main(void)
 
 	DEFINE(TI_FLAGS, offsetof(struct thread_info, flags));
 	DEFINE(TI_PREEMPT, offsetof(struct thread_info, preempt_count));
-	DEFINE(TI_SC_NOERR, offsetof(struct thread_info, syscall_noerror));
-#ifdef CONFIG_PPC32
 	DEFINE(TI_TASK, offsetof(struct thread_info, task));
+#ifdef CONFIG_PPC32
 	DEFINE(TI_EXECDOMAIN, offsetof(struct thread_info, exec_domain));
 	DEFINE(TI_CPU, offsetof(struct thread_info, cpu));
 #endif /* CONFIG_PPC32 */
@@ -106,8 +105,6 @@ int main(void)
 	DEFINE(ICACHEL1LINESIZE, offsetof(struct ppc64_caches, iline_size));
 	DEFINE(ICACHEL1LOGLINESIZE, offsetof(struct ppc64_caches, log_iline_size));
 	DEFINE(ICACHEL1LINESPERPAGE, offsetof(struct ppc64_caches, ilines_per_page));
-	DEFINE(PLATFORM_LPAR, PLATFORM_LPAR);
-
 	/* paca */
 	DEFINE(PACA_SIZE, sizeof(struct paca_struct));
 	DEFINE(PACAPACAINDEX, offsetof(struct paca_struct, paca_index));
@@ -131,14 +128,15 @@ int main(void)
 	DEFINE(PACALOWHTLBAREAS, offsetof(struct paca_struct, context.low_htlb_areas));
 	DEFINE(PACAHIGHHTLBAREAS, offsetof(struct paca_struct, context.high_htlb_areas));
 #endif /* CONFIG_HUGETLB_PAGE */
-	DEFINE(PACADEFAULTDECR, offsetof(struct paca_struct, default_decr));
 	DEFINE(PACA_EXGEN, offsetof(struct paca_struct, exgen));
 	DEFINE(PACA_EXMC, offsetof(struct paca_struct, exmc));
 	DEFINE(PACA_EXSLB, offsetof(struct paca_struct, exslb));
-	DEFINE(PACA_EXDSI, offsetof(struct paca_struct, exdsi));
 	DEFINE(PACAEMERGSP, offsetof(struct paca_struct, emergency_sp));
-	DEFINE(PACALPPACA, offsetof(struct paca_struct, lppaca));
+	DEFINE(PACALPPACAPTR, offsetof(struct paca_struct, lppaca_ptr));
 	DEFINE(PACAHWCPUID, offsetof(struct paca_struct, hw_cpu_id));
+	DEFINE(PACA_STARTPURR, offsetof(struct paca_struct, startpurr));
+	DEFINE(PACA_USER_TIME, offsetof(struct paca_struct, user_time));
+	DEFINE(PACA_SYSTEM_TIME, offsetof(struct paca_struct, system_time));
 
 	DEFINE(LPPACASRR0, offsetof(struct lppaca, saved_srr0));
 	DEFINE(LPPACASRR1, offsetof(struct lppaca, saved_srr1));

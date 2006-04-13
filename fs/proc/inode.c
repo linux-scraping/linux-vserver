@@ -19,7 +19,7 @@
 #include <asm/system.h>
 #include <asm/uaccess.h>
 
-extern void free_proc_entry(struct proc_dir_entry *);
+#include "internal.h"
 
 static inline struct proc_dir_entry * de_get(struct proc_dir_entry *de)
 {
@@ -121,7 +121,8 @@ int __init proc_init_inodecache(void)
 {
 	proc_inode_cachep = kmem_cache_create("proc_inode_cache",
 					     sizeof(struct proc_inode),
-					     0, SLAB_RECLAIM_ACCOUNT,
+					     0, (SLAB_RECLAIM_ACCOUNT|
+						SLAB_MEM_SPREAD),
 					     init_once, NULL);
 	if (proc_inode_cachep == NULL)
 		return -ENOMEM;
@@ -206,10 +207,6 @@ int proc_fill_super(struct super_block *s, void *data, int silent)
 	root_inode = proc_get_inode(s, PROC_ROOT_INO, &proc_root);
 	if (!root_inode)
 		goto out_no_root;
-	/*
-	 * Fixup the root inode's nlink value
-	 */
-	root_inode->i_nlink += nr_processes();
 	root_inode->i_uid = 0;
 	root_inode->i_gid = 0;
 	s->s_root = d_alloc_root(root_inode);

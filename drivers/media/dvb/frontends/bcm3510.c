@@ -39,6 +39,7 @@
 #include <linux/jiffies.h>
 #include <linux/string.h>
 #include <linux/slab.h>
+#include <linux/mutex.h>
 
 #include "dvb_frontend.h"
 #include "bcm3510.h"
@@ -52,7 +53,7 @@ struct bcm3510_state {
 	struct dvb_frontend frontend;
 
 	/* demodulator private data */
-	struct semaphore hab_sem;
+	struct mutex hab_mutex;
 	u8 firmware_loaded:1;
 
 	unsigned long next_status_check;
@@ -213,7 +214,7 @@ static int bcm3510_do_hab_cmd(struct bcm3510_state *st, u8 cmd, u8 msgid, u8 *ob
 	dbufout(ob,olen+2,deb_hab);
 	deb_hab("\n");
 
-	if (down_interruptible(&st->hab_sem) < 0)
+	if (mutex_lock_interruptible(&st->hab_mutex) < 0)
 		return -EAGAIN;
 
 	if ((ret = bcm3510_hab_send_request(st, ob, olen+2)) < 0 ||
@@ -226,7 +227,7 @@ static int bcm3510_do_hab_cmd(struct bcm3510_state *st, u8 cmd, u8 msgid, u8 *ob
 
 	memcpy(ibuf,&ib[2],ilen);
 error:
-	up(&st->hab_sem);
+	mutex_unlock(&st->hab_mutex);
 	return ret;
 }
 
@@ -255,7 +256,7 @@ static int bcm3510_bert_reset(struct bcm3510_state *st)
 	bcm3510_register_value b;
 	int ret;
 
-	if ((ret < bcm3510_readB(st,0xfa,&b)) < 0)
+	if ((ret = bcm3510_readB(st,0xfa,&b)) < 0)
 		return ret;
 
 	b.BERCTL_fa.RESYNC = 0; bcm3510_writeB(st,0xfa,b);
@@ -623,13 +624,13 @@ static int bcm3510_download_firmware(struct dvb_frontend* fe)
 		err("could not load firmware (%s): %d",BCM3510_DEFAULT_FIRMWARE,ret);
 		return ret;
 	}
-	deb_info("got firmware: %d\n",fw->size);
+	deb_info("got firmware: %zd\n",fw->size);
 
 	b = fw->data;
 	for (i = 0; i < fw->size;) {
 		addr = le16_to_cpu( *( (u16 *)&b[i] ) );
 		len  = le16_to_cpu( *( (u16 *)&b[i+2] ) );
-		deb_info("firmware chunk, addr: 0x%04x, len: 0x%04x, total length: 0x%04x\n",addr,len,fw->size);
+		deb_info("firmware chunk, addr: 0x%04x, len: 0x%04x, total length: 0x%04zx\n",addr,len,fw->size);
 		if ((ret = bcm3510_write_ram(st,addr,&b[i+4],len)) < 0) {
 			err("firmware download failed: %d\n",ret);
 			return ret;
@@ -782,10 +783,9 @@ struct dvb_frontend* bcm3510_attach(const struct bcm3510_config *config,
 	bcm3510_register_value v;
 
 	/* allocate memory for the internal state */
-	state = kmalloc(sizeof(struct bcm3510_state), GFP_KERNEL);
+	state = kzalloc(sizeof(struct bcm3510_state), GFP_KERNEL);
 	if (state == NULL)
 		goto error;
-	memset(state,0,sizeof(struct bcm3510_state));
 
 	/* setup the state */
 
@@ -797,7 +797,7 @@ struct dvb_frontend* bcm3510_attach(const struct bcm3510_config *config,
 	state->frontend.ops = &state->ops;
 	state->frontend.demodulator_priv = state;
 
-	sema_init(&state->hab_sem, 1);
+	mutex_init(&state->hab_mutex);
 
 	if ((ret = bcm3510_readB(state,0xe0,&v)) < 0)
 		goto error;

@@ -53,7 +53,8 @@
 #include "clock.h"
 #include "devs.h"
 #include "cpu.h"
-#include "pm.h"
+
+#include "common-smdk.h"
 
 static struct map_desc smdk2440_iodesc[] __initdata = {
 	/* ISA IO Space map (memory space selected by A24) */
@@ -197,26 +198,13 @@ static void __init smdk2440_map_io(void)
 
 static void __init smdk2440_machine_init(void)
 {
-	/* Configure the LEDs (even if we have no LED support)*/
-
-	s3c2410_gpio_cfgpin(S3C2410_GPF4, S3C2410_GPF4_OUTP);
-	s3c2410_gpio_cfgpin(S3C2410_GPF5, S3C2410_GPF5_OUTP);
-	s3c2410_gpio_cfgpin(S3C2410_GPF6, S3C2410_GPF6_OUTP);
-	s3c2410_gpio_cfgpin(S3C2410_GPF7, S3C2410_GPF7_OUTP);
-
-	s3c2410_gpio_setpin(S3C2410_GPF4, 0);
-	s3c2410_gpio_setpin(S3C2410_GPF5, 0);
-	s3c2410_gpio_setpin(S3C2410_GPF6, 0);
-	s3c2410_gpio_setpin(S3C2410_GPF7, 0);
-
 	s3c24xx_fb_set_platdata(&smdk2440_lcd_cfg);
 
-	s3c2410_pm_init();
+	smdk_machine_init();
 }
 
 MACHINE_START(S3C2440, "SMDK2440")
 	/* Maintainer: Ben Dooks <ben@fluff.org> */
-	.phys_ram	= S3C2410_SDRAM_PA,
 	.phys_io	= S3C2410_PA_UART,
 	.io_pg_offst	= (((u32)S3C24XX_VA_UART) >> 18) & 0xfffc,
 	.boot_params	= S3C2410_SDRAM_PA + 0x100,

@@ -1,4 +1,7 @@
-# 
+#
+# This file is included by the global makefile so that you can add your own
+# architecture-specific flags and dependencies.
+#
 # Copyright (C) 2002 Jeff Dike (jdike@karaya.com)
 # Licensed under the GPL
 #
@@ -17,7 +20,7 @@ core-y			+= $(ARCH_DIR)/kernel/		\
 
 # Have to precede the include because the included Makefiles reference them.
 SYMLINK_HEADERS := archparam.h system.h sigcontext.h processor.h ptrace.h \
-	module.h vm-flags.h elf.h ldt.h
+	module.h vm-flags.h elf.h host_ldt.h
 SYMLINK_HEADERS := $(foreach header,$(SYMLINK_HEADERS),include/asm-um/$(header))
 
 # XXX: The "os" symlink is only used by arch/um/include/os.h, which includes
@@ -32,7 +35,7 @@ um-modes-$(CONFIG_MODE_TT) += tt
 um-modes-$(CONFIG_MODE_SKAS) += skas
 
 MODE_INCLUDE	+= $(foreach mode,$(um-modes-y),\
-		   -I$(srctree)/$(ARCH_DIR)/kernel/$(mode)/include)
+		   -I$(srctree)/$(ARCH_DIR)/include/$(mode))
 
 MAKEFILES-INCL	+= $(foreach mode,$(um-modes-y),\
 		   $(srctree)/$(ARCH_DIR)/Makefile-$(mode))
@@ -47,13 +50,16 @@ ARCH_INCLUDE	+= -I$(srctree)/$(ARCH_DIR)/include
 endif
 SYS_DIR		:= $(ARCH_DIR)/include/sysdep-$(SUBARCH)
 
-# -Dvmap=kernel_vmap affects everything, and prevents anything from
-# referencing the libpcap.o symbol so named.
+# -Dvmap=kernel_vmap prevents anything from referencing the libpcap.o symbol so
+# named - it's a common symbol in libpcap, so we get a binary which crashes.
 #
-# Same things for in6addr_loopback - found in libc.
+# Same things for in6addr_loopback and mktime - found in libc. For these two we
+# only get link-time error, luckily.
+#
+# These apply to USER_CFLAGS to.
 
-CFLAGS += $(CFLAGS-y) -D__arch_um__ -DSUBARCH=\"$(SUBARCH)\" \
-	$(ARCH_INCLUDE) $(MODE_INCLUDE) -Dvmap=kernel_vmap \
+CFLAGS += $(CFLAGS-y) -D__arch_um__ -DSUBARCH=\"$(SUBARCH)\"	\
+	$(ARCH_INCLUDE) $(MODE_INCLUDE) -Dvmap=kernel_vmap	\
 	-Din6addr_loopback=kernel_in6addr_loopback
 
 AFLAGS += $(ARCH_INCLUDE)
@@ -66,8 +72,10 @@ USER_CFLAGS := $(patsubst -D__KERNEL__,,$(USER_CFLAGS)) $(ARCH_INCLUDE) \
 # kernel_errno to separate them from the libc errno.  This allows -fno-common
 # in CFLAGS.  Otherwise, it would cause ld to complain about the two different
 # errnos.
+# These apply to kernelspace only.
 
-CFLAGS += -Derrno=kernel_errno -Dsigprocmask=kernel_sigprocmask
+CFLAGS += -Derrno=kernel_errno -Dsigprocmask=kernel_sigprocmask \
+	-Dmktime=kernel_mktime
 CFLAGS += $(call cc-option,-fno-unit-at-a-time,)
 
 include $(srctree)/$(ARCH_DIR)/Makefile-$(SUBARCH)
@@ -83,7 +91,7 @@ CONFIG_KERNEL_HALF_GIGS ?= 0
 
 SIZE = (($(CONFIG_NEST_LEVEL) + $(CONFIG_KERNEL_HALF_GIGS)) * 0x20000000)
 
-.PHONY: linux
+PHONY += linux
 
 all: linux
 
@@ -121,7 +129,7 @@ CPPFLAGS_vmlinux.lds = -U$(SUBARCH) \
 	-DSTART=$(START) -DELF_ARCH=$(ELF_ARCH) \
 	-DELF_FORMAT="$(ELF_FORMAT)" $(CPP_MODE-y) \
 	-DKERNEL_STACK_SIZE=$(STACK_SIZE) \
-	-DUNMAP_PATH=arch/um/sys-$(SUBARCH)/unmap_fin.o
+	-DUNMAP_PATH=arch/um/sys-$(SUBARCH)/unmap.o
 
 #The wrappers will select whether using "malloc" or the kernel allocator.
 LINK_WRAPS = -Wl,--wrap,malloc -Wl,--wrap,free -Wl,--wrap,calloc
@@ -142,8 +150,7 @@ CLEAN_FILES += linux x.i gmon.out $(ARCH_DIR)/include/uml-config.h \
 	$(ARCH_DIR)/include/user_constants.h \
 	$(ARCH_DIR)/include/kern_constants.h $(ARCH_DIR)/Kconfig.arch
 
-MRPROPER_FILES += $(SYMLINK_HEADERS) $(ARCH_SYMLINKS) \
-	$(addprefix $(ARCH_DIR)/kernel/,$(KERN_SYMLINKS)) $(ARCH_DIR)/os
+MRPROPER_FILES += $(ARCH_SYMLINKS)
 
 archclean:
 	@find . \( -name '*.bb' -o -name '*.bbg' -o -name '*.da' \
@@ -167,10 +174,13 @@ else
 	$(Q)cd $(TOPDIR)/include/asm-um && ln -sf ../asm-$(SUBARCH) arch
 endif
 
-$(ARCH_DIR)/include/sysdep:
+$(objtree)/$(ARCH_DIR)/include:
+	@echo '  MKDIR $@'
+	$(Q)mkdir -p $@
+
+$(ARCH_DIR)/include/sysdep: $(objtree)/$(ARCH_DIR)/include
 	@echo '  SYMLINK $@'
 ifneq ($(KBUILD_SRC),)
-	$(Q)mkdir -p $(ARCH_DIR)/include
 	$(Q)ln -fsn $(srctree)/$(ARCH_DIR)/include/sysdep-$(SUBARCH) $(ARCH_DIR)/include/sysdep
 else
 	$(Q)cd $(ARCH_DIR)/include && ln -sf sysdep-$(SUBARCH) sysdep
@@ -189,6 +199,12 @@ define filechk_umlconfig
 	sed 's/ CONFIG/ UML_CONFIG/'
 endef
 
+$(ARCH_DIR)/include/uml-config.h : include/linux/autoconf.h
+	$(call filechk,umlconfig)
+
+$(ARCH_DIR)/user-offsets.s: $(ARCH_DIR)/sys-$(SUBARCH)/user-offsets.c
+	$(CC) $(USER_CFLAGS) -S -o $@ $<
+
 define filechk_gen-asm-offsets
         (set -e; \
          echo "/*"; \
@@ -202,24 +218,13 @@ define filechk_gen-asm-offsets
          echo ""; )
 endef
 
-$(ARCH_DIR)/include/uml-config.h : include/linux/autoconf.h
-	$(call filechk,umlconfig)
-
-$(ARCH_DIR)/user-offsets.s: $(ARCH_DIR)/sys-$(SUBARCH)/user-offsets.c
-	$(CC) $(USER_CFLAGS) -S -o $@ $<
-
 $(ARCH_DIR)/include/user_constants.h: $(ARCH_DIR)/user-offsets.s
 	$(call filechk,gen-asm-offsets)
 
 CLEAN_FILES += $(ARCH_DIR)/user-offsets.s
 
-$(ARCH_DIR)/kernel-offsets.s: $(ARCH_DIR)/sys-$(SUBARCH)/kernel-offsets.c \
-				   archprepare
-	$(CC) $(CFLAGS) $(NOSTDINC_FLAGS) $(CPPFLAGS) -S -o $@ $<
-
-$(ARCH_DIR)/include/kern_constants.h: $(ARCH_DIR)/kernel-offsets.s
-	$(call filechk,gen-asm-offsets)
-
-CLEAN_FILES += $(ARCH_DIR)/kernel-offsets.s
+$(ARCH_DIR)/include/kern_constants.h: $(objtree)/$(ARCH_DIR)/include
+	@echo '  SYMLINK $@'
+	$(Q) ln -sf ../../../include/asm-um/asm-offsets.h $@
 
 export SUBARCH USER_CFLAGS OS

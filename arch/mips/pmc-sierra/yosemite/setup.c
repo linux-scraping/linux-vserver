@@ -185,7 +185,7 @@ static void __init py_uart_setup(void)
 	up.uartclk      = TITAN_UART_CLK;
 	up.regshift     = 0;
 	up.iotype       = UPIO_MEM;
-	up.flags        = ASYNC_BOOT_AUTOCONF | ASYNC_SKIP_TEST;
+	up.flags        = UPF_BOOT_AUTOCONF | UPF_SKIP_TEST;
 	up.line         = 0;
 
 	if (early_serial_setup(&up))
@@ -198,8 +198,8 @@ static void __init py_rtc_setup(void)
 	if (!m48t37_base)
 		printk(KERN_ERR "Mapping the RTC failed\n");
 
-	rtc_get_time = m48t37y_get_time;
-	rtc_set_time = m48t37y_set_time;
+	rtc_mips_get_time = m48t37y_get_time;
+	rtc_mips_set_time = m48t37y_set_time;
 
 	write_seqlock(&xtime_lock);
 	xtime.tv_sec = m48t37y_get_time();

@@ -35,7 +35,8 @@ static int v2_check_quota_file(struct super_block *sb, int type)
  
 	size = sb->s_op->quota_read(sb, type, (char *)&dqhead, sizeof(struct v2_disk_dqheader), 0);
 	if (size != sizeof(struct v2_disk_dqheader)) {
-		printk("failed read\n");
+		printk("quota_v2: failed read expected=%zd got=%zd\n",
+			sizeof(struct v2_disk_dqheader), size);
 		return 0;
 	}
 	if (le32_to_cpu(dqhead.dqh_magic) != quota_magics[type] ||
@@ -393,7 +394,7 @@ static int v2_write_dquot(struct dquot *dquot)
 	ssize_t ret;
 	struct v2_disk_dqblk ddquot, empty;
 
-	/* dq_off is guarded by dqio_sem */
+	/* dq_off is guarded by dqio_mutex */
 	if (!dquot->dq_off)
 		if ((ret = dq_insert_tree(dquot)) < 0) {
 			printk(KERN_ERR "VFS: Error %zd occurred while creating quota.\n", ret);

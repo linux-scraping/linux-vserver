@@ -163,9 +163,9 @@ int cifs_get_inode_info_unix(struct inode **pinode,
 
 		if (num_of_bytes < end_of_file)
 			cFYI(1, ("allocation size less than end of file"));
-		cFYI(1,
-		     ("Size %ld and blocks %ld",
-		      (unsigned long) inode->i_size, inode->i_blocks));
+		cFYI(1, ("Size %ld and blocks %llu",
+			(unsigned long) inode->i_size,
+			(unsigned long long)inode->i_blocks));
 		if (S_ISREG(inode->i_mode)) {
 			cFYI(1, ("File inode"));
 			inode->i_op = &cifs_file_inode_ops;
@@ -229,11 +229,12 @@ static int decode_sfu_inode(struct inode * inode, __u64 size,
 			 cifs_sb->mnt_cifs_flags &
 				CIFS_MOUNT_MAP_SPECIAL_CHR);
 	if (rc==0) {
+		int buf_type = CIFS_NO_BUFFER;
 			/* Read header */
 		rc = CIFSSMBRead(xid, pTcon,
 			         netfid,
 				 24 /* length */, 0 /* offset */,
-				 &bytes_read, &pbuf);
+				 &bytes_read, &pbuf, &buf_type);
 		if((rc == 0) && (bytes_read >= 8)) {
 			if(memcmp("IntxBLK", pbuf, 8) == 0) {
 				cFYI(1,("Block device"));
@@ -267,7 +268,7 @@ static int decode_sfu_inode(struct inode * inode, __u64 size,
 		} else {
 			inode->i_mode |= S_IFREG; /* then it is a file */
 			rc = -EOPNOTSUPP; /* or some unknown SFU type */	
-		}
+		}		
 		CIFSSMBClose(xid, pTcon, netfid);
 	}
 	return rc;
@@ -564,18 +565,21 @@ int cifs_unlink(struct inode *inode, struct dentry *direntry)
 	struct cifsInodeInfo *cifsInode;
 	FILE_BASIC_INFO *pinfo_buf;
 
-	cFYI(1, ("cifs_unlink, inode = 0x%p with ", inode));
+	cFYI(1, ("cifs_unlink, inode = 0x%p", inode));
 
 	xid = GetXid();
 
-	cifs_sb = CIFS_SB(inode->i_sb);
+	if(inode)
+		cifs_sb = CIFS_SB(inode->i_sb);
+	else
+		cifs_sb = CIFS_SB(direntry->d_sb);
 	pTcon = cifs_sb->tcon;
 
 	/* Unlink can be called from rename so we can not grab the sem here
 	   since we deadlock otherwise */
-/*	down(&direntry->d_sb->s_vfs_rename_sem);*/
+/*	mutex_lock(&direntry->d_sb->s_vfs_rename_mutex);*/
 	full_path = build_path_from_dentry(direntry);
-/*	up(&direntry->d_sb->s_vfs_rename_sem);*/
+/*	mutex_unlock(&direntry->d_sb->s_vfs_rename_mutex);*/
 	if (full_path == NULL) {
 		FreeXid(xid);
 		return -ENOMEM;
@@ -608,9 +612,8 @@ int cifs_unlink(struct inode *inode, struct dentry *direntry)
 		}
 	} else if (rc == -EACCES) {
 		/* try only if r/o attribute set in local lookup data? */
-		pinfo_buf = kmalloc(sizeof(FILE_BASIC_INFO), GFP_KERNEL);
+		pinfo_buf = kzalloc(sizeof(FILE_BASIC_INFO), GFP_KERNEL);
 		if (pinfo_buf) {
-			memset(pinfo_buf, 0, sizeof(FILE_BASIC_INFO));
 			/* ATTRS set to normal clears r/o bit */
 			pinfo_buf->Attributes = cpu_to_le32(ATTR_NORMAL);
 			if (!(pTcon->ses->flags & CIFS_SES_NT4))
@@ -692,9 +695,11 @@ int cifs_unlink(struct inode *inode, struct dentry *direntry)
 					   when needed */
 		direntry->d_inode->i_ctime = current_fs_time(inode->i_sb);
 	}
-	inode->i_ctime = inode->i_mtime = current_fs_time(inode->i_sb);
-	cifsInode = CIFS_I(inode);
-	cifsInode->time = 0;	/* force revalidate of dir as well */
+	if(inode) {
+		inode->i_ctime = inode->i_mtime = current_fs_time(inode->i_sb);
+		cifsInode = CIFS_I(inode);
+		cifsInode->time = 0;	/* force revalidate of dir as well */
+	}
 
 	kfree(full_path);
 	FreeXid(xid);
@@ -717,9 +722,9 @@ int cifs_mkdir(struct inode *inode, struct dentry *direntry, int mode)
 	cifs_sb = CIFS_SB(inode->i_sb);
 	pTcon = cifs_sb->tcon;
 
-	down(&inode->i_sb->s_vfs_rename_sem);
+	mutex_lock(&inode->i_sb->s_vfs_rename_mutex);
 	full_path = build_path_from_dentry(direntry);
-	up(&inode->i_sb->s_vfs_rename_sem);
+	mutex_unlock(&inode->i_sb->s_vfs_rename_mutex);
 	if (full_path == NULL) {
 		FreeXid(xid);
 		return -ENOMEM;
@@ -750,8 +755,8 @@ int cifs_mkdir(struct inode *inode, struct dentry *direntry, int mode)
 			if (cifs_sb->mnt_cifs_flags & CIFS_MOUNT_SET_UID) {
 				CIFSSMBUnixSetPerms(xid, pTcon, full_path,
 						    mode,
-						    (__u64)current->euid,
-						    (__u64)current->egid,
+						    (__u64)current->fsuid,
+						    (__u64)current->fsgid,
 						    0 /* dev_t */,
 						    cifs_sb->local_nls,
 						    cifs_sb->mnt_cifs_flags &
@@ -802,9 +807,9 @@ int cifs_rmdir(struct inode *inode, struct dentry *direntry)
 	cifs_sb = CIFS_SB(inode->i_sb);
 	pTcon = cifs_sb->tcon;
 
-	down(&inode->i_sb->s_vfs_rename_sem);
+	mutex_lock(&inode->i_sb->s_vfs_rename_mutex);
 	full_path = build_path_from_dentry(direntry);
-	up(&inode->i_sb->s_vfs_rename_sem);
+	mutex_unlock(&inode->i_sb->s_vfs_rename_mutex);
 	if (full_path == NULL) {
 		FreeXid(xid);
 		return -ENOMEM;
@@ -1040,9 +1045,9 @@ int cifs_revalidate(struct dentry *direntry)
 	}
 
 	/* can not grab this sem since kernel filesys locking documentation
-	   indicates i_sem may be taken by the kernel on lookup and rename
-	   which could deadlock if we grab the i_sem here as well */
-/*	down(&direntry->d_inode->i_sem);*/
+	   indicates i_mutex may be taken by the kernel on lookup and rename
+	   which could deadlock if we grab the i_mutex here as well */
+/*	mutex_lock(&direntry->d_inode->i_mutex);*/
 	/* need to write out dirty pages here  */
 	if (direntry->d_inode->i_mapping) {
 		/* do we need to lock inode until after invalidate completes
@@ -1066,7 +1071,7 @@ int cifs_revalidate(struct dentry *direntry)
 			}
 		}
 	}
-/*	up(&direntry->d_inode->i_sem); */
+/*	mutex_unlock(&direntry->d_inode->i_mutex); */
 	
 	kfree(full_path);
 	FreeXid(xid);
@@ -1136,9 +1141,9 @@ int cifs_setattr(struct dentry *direntry, struct iattr *attrs)
 			rc = 0;
 	}
 		
-	down(&direntry->d_sb->s_vfs_rename_sem);
+	mutex_lock(&direntry->d_sb->s_vfs_rename_mutex);
 	full_path = build_path_from_dentry(direntry);
-	up(&direntry->d_sb->s_vfs_rename_sem);
+	mutex_unlock(&direntry->d_sb->s_vfs_rename_mutex);
 	if (full_path == NULL) {
 		FreeXid(xid);
 		return -ENOMEM;
@@ -1148,8 +1153,7 @@ int cifs_setattr(struct dentry *direntry, struct iattr *attrs)
 	/* BB check if we need to refresh inode from server now ? BB */
 
 	/* need to flush data before changing file size on server */
-	filemap_fdatawrite(direntry->d_inode->i_mapping);
-	filemap_fdatawait(direntry->d_inode->i_mapping);
+	filemap_write_and_wait(direntry->d_inode->i_mapping);
 
 	if (attrs->ia_valid & ATTR_SIZE) {
 		/* To avoid spurious oplock breaks from server, in the case of
@@ -1167,7 +1171,7 @@ int cifs_setattr(struct dentry *direntry, struct iattr *attrs)
 						nfid, npid, FALSE);
 			atomic_dec(&open_file->wrtPending);
 			cFYI(1,("SetFSize for attrs rc = %d", rc));
-			if(rc == -EINVAL) {
+			if((rc == -EINVAL) || (rc == -EOPNOTSUPP)) {
 				int bytes_written;
 				rc = CIFSSMBWrite(xid, pTcon,
 						  nfid, 0, attrs->ia_size,
@@ -1189,7 +1193,7 @@ int cifs_setattr(struct dentry *direntry, struct iattr *attrs)
 					   cifs_sb->mnt_cifs_flags &
 						CIFS_MOUNT_MAP_SPECIAL_CHR);
 			cFYI(1, ("SetEOF by path (setattrs) rc = %d", rc));
-			if(rc == -EINVAL) {
+			if((rc == -EINVAL) || (rc == -EOPNOTSUPP)) {
 				__u16 netfid;
 				int oplock = FALSE;
 

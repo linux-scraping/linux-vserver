@@ -80,7 +80,7 @@
 #include <asm/serial.h>
 
 /* Standard COM flags */
-#define STD_COM_FLAGS (ASYNC_BOOT_AUTOCONF | ASYNC_SKIP_TEST)
+#define STD_COM_FLAGS (UPF_BOOT_AUTOCONF | UPF_SKIP_TEST)
 
 /*
  * SERIAL_PORT_DFNS tells us about built-in ports that have no
@@ -248,17 +248,17 @@ static void sio_error(int *status)
 
 #endif /* CONFIG_SERIAL_M32R_PLDSIO */
 
-static _INLINE_ unsigned int sio_in(struct uart_sio_port *up, int offset)
+static unsigned int sio_in(struct uart_sio_port *up, int offset)
 {
 	return __sio_in(up->port.iobase + offset);
 }
 
-static _INLINE_ void sio_out(struct uart_sio_port *up, int offset, int value)
+static void sio_out(struct uart_sio_port *up, int offset, int value)
 {
 	__sio_out(value, up->port.iobase + offset);
 }
 
-static _INLINE_ unsigned int serial_in(struct uart_sio_port *up, int offset)
+static unsigned int serial_in(struct uart_sio_port *up, int offset)
 {
 	if (!offset)
 		return 0;
@@ -266,8 +266,7 @@ static _INLINE_ unsigned int serial_in(struct uart_sio_port *up, int offset)
 	return __sio_in(offset);
 }
 
-static _INLINE_ void
-serial_out(struct uart_sio_port *up, int offset, int value)
+static void serial_out(struct uart_sio_port *up, int offset, int value)
 {
 	if (!offset)
 		return;
@@ -326,22 +325,17 @@ static void m32r_sio_enable_ms(struct uart_port *port)
 	serial_out(up, UART_IER, up->ier);
 }
 
-static _INLINE_ void receive_chars(struct uart_sio_port *up, int *status,
-	struct pt_regs *regs)
+static void receive_chars(struct uart_sio_port *up, int *status,
+			  struct pt_regs *regs)
 {
 	struct tty_struct *tty = up->port.info->tty;
 	unsigned char ch;
+	unsigned char flag;
 	int max_count = 256;
 
 	do {
-		if (unlikely(tty->flip.count >= TTY_FLIPBUF_SIZE)) {
-			tty->flip.work.func((void *)tty);
-			if (tty->flip.count >= TTY_FLIPBUF_SIZE)
-				return; // if TTY_DONT_FLIP is set
-		}
 		ch = sio_in(up, SIORXB);
-		*tty->flip.char_buf_ptr = ch;
-		*tty->flip.flag_buf_ptr = TTY_NORMAL;
+		flag = TTY_NORMAL;
 		up->port.icount.rx++;
 
 		if (unlikely(*status & (UART_LSR_BI | UART_LSR_PE |
@@ -380,30 +374,24 @@ static _INLINE_ void receive_chars(struct uart_sio_port *up, int *status,
 
 			if (*status & UART_LSR_BI) {
 				DEBUG_INTR("handling break....");
-				*tty->flip.flag_buf_ptr = TTY_BREAK;
+				flag = TTY_BREAK;
 			} else if (*status & UART_LSR_PE)
-				*tty->flip.flag_buf_ptr = TTY_PARITY;
+				flag = TTY_PARITY;
 			else if (*status & UART_LSR_FE)
-				*tty->flip.flag_buf_ptr = TTY_FRAME;
+				flag = TTY_FRAME;
 		}
 		if (uart_handle_sysrq_char(&up->port, ch, regs))
 			goto ignore_char;
-		if ((*status & up->port.ignore_status_mask) == 0) {
-			tty->flip.flag_buf_ptr++;
-			tty->flip.char_buf_ptr++;
-			tty->flip.count++;
-		}
-		if ((*status & UART_LSR_OE) &&
-		    tty->flip.count < TTY_FLIPBUF_SIZE) {
+		if ((*status & up->port.ignore_status_mask) == 0)
+			tty_insert_flip_char(tty, ch, flag);
+
+		if (*status & UART_LSR_OE) {
 			/*
 			 * Overrun is special, since it's reported
 			 * immediately, and doesn't affect the current
 			 * character.
 			 */
-			*tty->flip.flag_buf_ptr = TTY_OVERRUN;
-			tty->flip.flag_buf_ptr++;
-			tty->flip.char_buf_ptr++;
-			tty->flip.count++;
+			tty_insert_flip_char(tty, 0, TTY_OVERRUN);
 		}
 	ignore_char:
 		*status = serial_in(up, UART_LSR);
@@ -411,7 +399,7 @@ static _INLINE_ void receive_chars(struct uart_sio_port *up, int *status,
 	tty_flip_buffer_push(tty);
 }
 
-static _INLINE_ void transmit_chars(struct uart_sio_port *up)
+static void transmit_chars(struct uart_sio_port *up)
 {
 	struct circ_buf *xmit = &up->port.info->xmit;
 	int count;
@@ -1050,6 +1038,14 @@ static inline void wait_for_xmitr(struct uart_sio_port *up)
 	}
 }
 
+static void m32r_sio_console_putchar(struct uart_port *port, int ch)
+{
+	struct uart_sio_port *up = (struct uart_sio_port *)port;
+
+	wait_for_xmitr(up);
+	sio_out(up, SIOTXB, ch);
+}
+
 /*
  *	Print a string to the serial port trying not to disturb
  *	any possible real use of the port...
@@ -1069,23 +1065,7 @@ static void m32r_sio_console_write(struct console *co, const char *s,
 	ier = sio_in(up, SIOTRCR);
 	sio_out(up, SIOTRCR, 0);
 
-	/*
-	 *	Now, do each character
-	 */
-	for (i = 0; i < count; i++, s++) {
-		wait_for_xmitr(up);
-
-		/*
-		 *	Send the character out.
-		 *	If a LF, also do CR...
-		 */
-		sio_out(up, SIOTXB, *s);
-
-		if (*s == 10) {
-			wait_for_xmitr(up);
-			sio_out(up, SIOTXB, 13);
-		}
-	}
+	uart_console_write(&up->port, s, count, m32r_sio_console_putchar);
 
 	/*
 	 *	Finally, wait for transmitter to become empty

@@ -31,10 +31,6 @@
 #include <linux/tty.h>
 #include <linux/tty_flip.h>
 
-#ifdef SERIAL_INLINE
-#define _INLINE_ inline
-#endif
-
 #define SERIAL_MAX_NUM_LINES 1
 #define SERIAL_TIMER_VALUE (20 * HZ)
 
@@ -128,9 +124,7 @@ static void rs_poll(unsigned long priv)
 
 	while (__simc(SYS_select_one, 0, XTISS_SELECT_ONE_READ, (int)&tv,0,0)){
 		__simc (SYS_read, 0, (unsigned long)&c, 1, 0, 0);
-		tty->flip.count++;
-		*tty->flip.char_buf_ptr++ = c;
-		*tty->flip.flag_buf_ptr++ = TTY_NORMAL;
+		tty_insert_flip_char(tty, c, TTY_NORMAL);
 		i++;
 	}
 

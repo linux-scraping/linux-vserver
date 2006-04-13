@@ -106,11 +106,11 @@ static int __init mpf_checksum(unsigned char *mp, int len)
 	return sum & 0xFF;
 }
 
-static void __init MP_processor_info (struct mpc_config_processor *m)
+static void __cpuinit MP_processor_info (struct mpc_config_processor *m)
 {
 	int cpu;
 	unsigned char ver;
-	static int found_bsp=0;
+	cpumask_t tmp_map;
 
 	if (!(m->mpc_cpuflag & CPU_ENABLED)) {
 		disabled_cpus++;
@@ -133,8 +133,10 @@ static void __init MP_processor_info (struct mpc_config_processor *m)
 		return;
 	}
 
-	cpu = num_processors++;
-	
+	num_processors++;
+	cpus_complement(tmp_map, cpu_present_map);
+	cpu = first_cpu(tmp_map);
+
 #if MAX_APICS < 255	
 	if ((int)m->mpc_apicid > MAX_APICS) {
 		printk(KERN_ERR "Processor #%d INVALID. (Max ID: %d).\n",
@@ -160,12 +162,7 @@ static void __init MP_processor_info (struct mpc_config_processor *m)
  		 * entry is BSP, and so on.
  		 */
 		cpu = 0;
-
- 		bios_cpu_apicid[0] = m->mpc_apicid;
- 		x86_cpu_to_apicid[0] = m->mpc_apicid;
- 		found_bsp = 1;
- 	} else
-		cpu = num_processors - found_bsp;
+ 	}
 	bios_cpu_apicid[cpu] = m->mpc_apicid;
 	x86_cpu_to_apicid[cpu] = m->mpc_apicid;
 
@@ -288,9 +285,9 @@ static int __init smp_read_mpc(struct mp_config_table *mpc)
 
 	memcpy(str,mpc->mpc_productid,12);
 	str[12]=0;
-	printk(KERN_INFO "Product ID: %s ",str);
+	printk("Product ID: %s ",str);
 
-	printk(KERN_INFO "APIC at: 0x%X\n",mpc->mpc_lapic);
+	printk("APIC at: 0x%X\n",mpc->mpc_lapic);
 
 	/* save the local APIC address, it might be non-default */
 	if (!acpi_lapic)
@@ -691,7 +688,7 @@ void __init mp_register_lapic_address (
 }
 
 
-void __init mp_register_lapic (
+void __cpuinit mp_register_lapic (
 	u8			id, 
 	u8			enabled)
 {
@@ -915,7 +912,7 @@ void __init mp_config_acpi_legacy_irqs (void)
 
 #define MAX_GSI_NUM	4096
 
-int mp_register_gsi(u32 gsi, int edge_level, int active_high_low)
+int mp_register_gsi(u32 gsi, int triggering, int polarity)
 {
 	int			ioapic = -1;
 	int			ioapic_pin = 0;
@@ -964,7 +961,7 @@ int mp_register_gsi(u32 gsi, int edge_level, int active_high_low)
 
 	mp_ioapic_routing[ioapic].pin_programmed[idx] |= (1<<bit);
 
-	if (edge_level) {
+	if (triggering == ACPI_LEVEL_SENSITIVE) {
 		/*
 		 * For PCI devices assign IRQs in order, avoiding gaps
 		 * due to unused I/O APIC pins.
@@ -986,8 +983,8 @@ int mp_register_gsi(u32 gsi, int edge_level, int active_high_low)
 	}
 
 	io_apic_set_pci_routing(ioapic, ioapic_pin, gsi,
-		edge_level == ACPI_EDGE_SENSITIVE ? 0 : 1,
-		active_high_low == ACPI_ACTIVE_HIGH ? 0 : 1);
+		triggering == ACPI_EDGE_SENSITIVE ? 0 : 1,
+		polarity == ACPI_ACTIVE_HIGH ? 0 : 1);
 	return gsi;
 }
 

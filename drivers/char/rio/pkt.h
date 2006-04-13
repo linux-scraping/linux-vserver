@@ -37,14 +37,6 @@
 #ifndef _pkt_h
 #define _pkt_h 1
 
-
-#ifdef SCCS_LABELS
-#ifndef lint
-/* static char *_rio_pkt_h_sccs = "@(#)pkt.h	1.8"; */
-#endif
-#endif
-
-#define MAX_TTL         0xf
 #define PKT_CMD_BIT     ((ushort) 0x080)
 #define PKT_CMD_DATA    ((ushort) 0x080)
 
@@ -69,52 +61,17 @@
 #define CONTROL_PKT_TTL_MASK (PKT_TTL_MASK << 8)
 #define CONTROL_DATA_WNDW  (DATA_WNDW << 8)
 
-struct PKT    {
-#ifdef INKERNEL
-                   BYTE    dest_unit ;    /* Destination Unit Id */
-                   BYTE    dest_port ;    /* Destination POrt */
-                   BYTE    src_unit ;     /* Source Unit Id */
-                   BYTE    src_port ;     /* Source POrt */
-#else
-                   union       
-                   {
-                       ushort destination;         /* Complete destination */
-                       struct
-                       {
-                           unsigned char unit;     /* Destination unit */
-                           unsigned char port;     /* Destination port */
-                       } s1;
-                   } u1;
-                   union       
-                   {
-                       ushort source;              /* Complete source */
-                       struct
-                       {
-                           unsigned char unit;     /* Source unit */
-                           unsigned char port;     /* Source port */
-                       } s2;
-                   } u2;
-#endif
-#ifdef INKERNEL
-                   BYTE len ;
-                   BYTE control;
-#else
-                   union
-                   {
-                        ushort      control;
-                        struct
-                        {
-                            unsigned char len;
-                            unsigned char control;
-                        } s3;
-                    } u3;
-#endif
-                   BYTE    data[PKT_MAX_DATA_LEN] ;     
-                                                   /* Actual data :-) */
-                   WORD  csum ;                  /* C-SUM */
-               } ;
+struct PKT {
+	u8 dest_unit;		/* Destination Unit Id */
+	u8 dest_port;		/* Destination POrt */
+	u8 src_unit;		/* Source Unit Id */
+	u8 src_port;		/* Source POrt */
+	u8 len;
+	u8 control;
+	u8 data[PKT_MAX_DATA_LEN];
+	/* Actual data :-) */
+	u16 csum;		/* C-SUM */
+};
 #endif
 
 /*********** end of file ***********/
-
-

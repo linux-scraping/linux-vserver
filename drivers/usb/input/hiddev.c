@@ -35,7 +35,6 @@
 #include <linux/usb.h>
 #include "hid.h"
 #include <linux/hiddev.h>
-#include <linux/devfs_fs_kernel.h>
 
 #ifdef CONFIG_USB_DYNAMIC_MINORS
 #define HIDDEV_MINOR_BASE	0
@@ -258,9 +257,8 @@ static int hiddev_open(struct inode * inode, struct file * file) {
 	if (i >= HIDDEV_MINORS || !hiddev_table[i])
 		return -ENODEV;
 
-	if (!(list = kmalloc(sizeof(struct hiddev_list), GFP_KERNEL)))
+	if (!(list = kzalloc(sizeof(struct hiddev_list), GFP_KERNEL)))
 		return -ENOMEM;
-	memset(list, 0, sizeof(struct hiddev_list));
 
 	list->hiddev = hiddev_table[i];
 	list->next = hiddev_table[i]->list;
@@ -632,7 +630,7 @@ static int hiddev_ioctl(struct inode *inode, struct file *file, unsigned int cmd
 
 			else if ((cmd == HIDIOCGUSAGES || cmd == HIDIOCSUSAGES) &&
 				 (uref_multi->num_values > HID_MAX_MULTI_USAGES ||
-				  uref->usage_index + uref_multi->num_values >= field->report_count))
+				  uref->usage_index + uref_multi->num_values > field->report_count))
 				goto inval;
 			}
 
@@ -755,9 +753,8 @@ int hiddev_connect(struct hid_device *hid)
 	if (i == hid->maxcollection && (hid->quirks & HID_QUIRK_HIDDEV) == 0)
 		return -1;
 
-	if (!(hiddev = kmalloc(sizeof(struct hiddev), GFP_KERNEL)))
+	if (!(hiddev = kzalloc(sizeof(struct hiddev), GFP_KERNEL)))
 		return -1;
-	memset(hiddev, 0, sizeof(struct hiddev));
 
 	retval = usb_register_dev(hid->intf, &hiddev_class);
 	if (retval) {
@@ -826,19 +823,16 @@ static int hiddev_usbd_probe(struct usb_interface *intf,
 
 
 static /* const */ struct usb_driver hiddev_driver = {
-	.owner =	THIS_MODULE,
 	.name =		"hiddev",
 	.probe =	hiddev_usbd_probe,
 };
 
 int __init hiddev_init(void)
 {
-	devfs_mk_dir("usb/hid");
 	return usb_register(&hiddev_driver);
 }
 
 void hiddev_exit(void)
 {
 	usb_deregister(&hiddev_driver);
-	devfs_remove("usb/hid");
 }

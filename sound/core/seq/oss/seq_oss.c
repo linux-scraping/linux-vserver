@@ -24,6 +24,7 @@
 #include <linux/init.h>
 #include <linux/smp_lock.h>
 #include <linux/moduleparam.h>
+#include <linux/mutex.h>
 #include <sound/core.h>
 #include <sound/minors.h>
 #include <sound/initval.h>
@@ -52,8 +53,13 @@ int seq_oss_debug = 0;
  */
 static int register_device(void);
 static void unregister_device(void);
+#ifdef CONFIG_PROC_FS
 static int register_proc(void);
 static void unregister_proc(void);
+#else
+static inline int register_proc(void) { return 0; }
+static inline void unregister_proc(void) {}
+#endif
 
 static int odev_open(struct inode *inode, struct file *file);
 static int odev_release(struct inode *inode, struct file *file);
@@ -61,9 +67,6 @@ static ssize_t odev_read(struct file *file, char __user *buf, size_t count, loff
 static ssize_t odev_write(struct file *file, const char __user *buf, size_t count, loff_t *offset);
 static long odev_ioctl(struct file *file, unsigned int cmd, unsigned long arg);
 static unsigned int odev_poll(struct file *file, poll_table * wait);
-#ifdef CONFIG_PROC_FS
-static void info_read(snd_info_entry_t *entry, snd_info_buffer_t *buf);
-#endif
 
 
 /*
@@ -73,7 +76,7 @@ static void info_read(snd_info_entry_t *entry, snd_info_buffer_t *buf);
 static int __init alsa_seq_oss_init(void)
 {
 	int rc;
-	static snd_seq_dev_ops_t ops = {
+	static struct snd_seq_dev_ops ops = {
 		snd_seq_oss_synth_register,
 		snd_seq_oss_synth_unregister,
 	};
@@ -92,7 +95,7 @@ static int __init alsa_seq_oss_init(void)
 	}
 
 	if ((rc = snd_seq_device_register_driver(SNDRV_SEQ_DEV_ID_OSS, &ops,
-						 sizeof(snd_seq_oss_reg_t))) < 0) {
+						 sizeof(struct snd_seq_oss_reg))) < 0) {
 		snd_seq_oss_delete_client();
 		unregister_proc();
 		unregister_device();
@@ -122,7 +125,7 @@ module_exit(alsa_seq_oss_exit)
  * ALSA minor device interface
  */
 
-static DECLARE_MUTEX(register_mutex);
+static DEFINE_MUTEX(register_mutex);
 
 static int
 odev_open(struct inode *inode, struct file *file)
@@ -134,9 +137,9 @@ odev_open(struct inode *inode, struct file *file)
 	else
 		level = SNDRV_SEQ_OSS_MODE_SYNTH;
 
-	down(&register_mutex);
+	mutex_lock(&register_mutex);
 	rc = snd_seq_oss_open(file, level);
-	up(&register_mutex);
+	mutex_unlock(&register_mutex);
 
 	return rc;
 }
@@ -144,16 +147,16 @@ odev_open(struct inode *inode, struct file *file)
 static int
 odev_release(struct inode *inode, struct file *file)
 {
-	seq_oss_devinfo_t *dp;
+	struct seq_oss_devinfo *dp;
 
 	if ((dp = file->private_data) == NULL)
 		return 0;
 
 	snd_seq_oss_drain_write(dp);
 
-	down(&register_mutex);
+	mutex_lock(&register_mutex);
 	snd_seq_oss_release(dp);
-	up(&register_mutex);
+	mutex_unlock(&register_mutex);
 
 	return 0;
 }
@@ -161,7 +164,7 @@ odev_release(struct inode *inode, struct file *file)
 static ssize_t
 odev_read(struct file *file, char __user *buf, size_t count, loff_t *offset)
 {
-	seq_oss_devinfo_t *dp;
+	struct seq_oss_devinfo *dp;
 	dp = file->private_data;
 	snd_assert(dp != NULL, return -EIO);
 	return snd_seq_oss_read(dp, buf, count);
@@ -171,7 +174,7 @@ odev_read(struct file *file, char __user *buf, size_t count, loff_t *offset)
 static ssize_t
 odev_write(struct file *file, const char __user *buf, size_t count, loff_t *offset)
 {
-	seq_oss_devinfo_t *dp;
+	struct seq_oss_devinfo *dp;
 	dp = file->private_data;
 	snd_assert(dp != NULL, return -EIO);
 	return snd_seq_oss_write(dp, buf, count, file);
@@ -180,7 +183,7 @@ odev_write(struct file *file, const char __user *buf, size_t count, loff_t *offs
 static long
 odev_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
-	seq_oss_devinfo_t *dp;
+	struct seq_oss_devinfo *dp;
 	dp = file->private_data;
 	snd_assert(dp != NULL, return -EIO);
 	return snd_seq_oss_ioctl(dp, cmd, arg);
@@ -195,7 +198,7 @@ odev_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 static unsigned int
 odev_poll(struct file *file, poll_table * wait)
 {
-	seq_oss_devinfo_t *dp;
+	struct seq_oss_devinfo *dp;
 	dp = file->private_data;
 	snd_assert(dp != NULL, return 0);
 	return snd_seq_oss_poll(dp, file, wait);
@@ -217,49 +220,44 @@ static struct file_operations seq_oss_f_ops =
 	.compat_ioctl =	odev_ioctl_compat,
 };
 
-static snd_minor_t seq_oss_reg = {
-	.comment =	"sequencer",
-	.f_ops =	&seq_oss_f_ops,
-};
-
 static int __init
 register_device(void)
 {
 	int rc;
 
-	down(&register_mutex);
+	mutex_lock(&register_mutex);
 	if ((rc = snd_register_oss_device(SNDRV_OSS_DEVICE_TYPE_SEQUENCER,
 					  NULL, 0,
-					  &seq_oss_reg,
+					  &seq_oss_f_ops, NULL,
 					  SNDRV_SEQ_OSS_DEVNAME)) < 0) {
 		snd_printk(KERN_ERR "can't register device seq\n");
-		up(&register_mutex);
+		mutex_unlock(&register_mutex);
 		return rc;
 	}
 	if ((rc = snd_register_oss_device(SNDRV_OSS_DEVICE_TYPE_MUSIC,
 					  NULL, 0,
-					  &seq_oss_reg,
+					  &seq_oss_f_ops, NULL,
 					  SNDRV_SEQ_OSS_DEVNAME)) < 0) {
 		snd_printk(KERN_ERR "can't register device music\n");
 		snd_unregister_oss_device(SNDRV_OSS_DEVICE_TYPE_SEQUENCER, NULL, 0);
-		up(&register_mutex);
+		mutex_unlock(&register_mutex);
 		return rc;
 	}
 	debug_printk(("device registered\n"));
-	up(&register_mutex);
+	mutex_unlock(&register_mutex);
 	return 0;
 }
 
 static void
 unregister_device(void)
 {
-	down(&register_mutex);
+	mutex_lock(&register_mutex);
 	debug_printk(("device unregistered\n"));
 	if (snd_unregister_oss_device(SNDRV_OSS_DEVICE_TYPE_MUSIC, NULL, 0) < 0)		
 		snd_printk(KERN_ERR "error unregister device music\n");
 	if (snd_unregister_oss_device(SNDRV_OSS_DEVICE_TYPE_SEQUENCER, NULL, 0) < 0)
 		snd_printk(KERN_ERR "error unregister device seq\n");
-	up(&register_mutex);
+	mutex_unlock(&register_mutex);
 }
 
 /*
@@ -268,26 +266,24 @@ unregister_device(void)
 
 #ifdef CONFIG_PROC_FS
 
-static snd_info_entry_t *info_entry;
+static struct snd_info_entry *info_entry;
 
 static void
-info_read(snd_info_entry_t *entry, snd_info_buffer_t *buf)
+info_read(struct snd_info_entry *entry, struct snd_info_buffer *buf)
 {
-	down(&register_mutex);
+	mutex_lock(&register_mutex);
 	snd_iprintf(buf, "OSS sequencer emulation version %s\n", SNDRV_SEQ_OSS_VERSION_STR);
 	snd_seq_oss_system_info_read(buf);
 	snd_seq_oss_synth_info_read(buf);
 	snd_seq_oss_midi_info_read(buf);
-	up(&register_mutex);
+	mutex_unlock(&register_mutex);
 }
 
-#endif /* CONFIG_PROC_FS */
 
 static int __init
 register_proc(void)
 {
-#ifdef CONFIG_PROC_FS
-	snd_info_entry_t *entry;
+	struct snd_info_entry *entry;
 
 	entry = snd_info_create_module_entry(THIS_MODULE, SNDRV_SEQ_OSS_PROCNAME, snd_seq_root);
 	if (entry == NULL)
@@ -302,16 +298,14 @@ register_proc(void)
 		return -ENOMEM;
 	}
 	info_entry = entry;
-#endif
 	return 0;
 }
 
 static void
 unregister_proc(void)
 {
-#ifdef CONFIG_PROC_FS
 	if (info_entry)
 		snd_info_unregister(info_entry);
 	info_entry = NULL;
-#endif
 }
+#endif /* CONFIG_PROC_FS */

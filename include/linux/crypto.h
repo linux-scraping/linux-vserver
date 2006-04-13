@@ -3,6 +3,7 @@
  *
  * Copyright (c) 2002 James Morris <jmorris@intercode.com.au>
  * Copyright (c) 2002 David S. Miller (davem@redhat.com)
+ * Copyright (c) 2005 Herbert Xu <herbert@gondor.apana.org.au>
  *
  * Portions derived from Cryptoapi, by Alexander Kjeldaas <astor@fast.no>
  * and Nettle, by Niels Möller.
@@ -126,7 +127,11 @@ struct crypto_alg {
 	unsigned int cra_blocksize;
 	unsigned int cra_ctxsize;
 	unsigned int cra_alignmask;
+
+	int cra_priority;
+
 	const char cra_name[CRYPTO_MAX_ALG_NAME];
+	const char cra_driver_name[CRYPTO_MAX_ALG_NAME];
 
 	union {
 		struct cipher_alg cipher;
@@ -224,6 +229,8 @@ struct crypto_tfm {
 	} crt_u;
 	
 	struct crypto_alg *__crt_alg;
+
+	char __crt_ctx[] __attribute__ ((__aligned__));
 };
 
 /* 
@@ -296,7 +303,13 @@ static inline unsigned int crypto_tfm_alg_alignmask(struct crypto_tfm *tfm)
 
 static inline void *crypto_tfm_ctx(struct crypto_tfm *tfm)
 {
-	return (void *)&tfm[1];
+	return tfm->__crt_ctx;
+}
+
+static inline unsigned int crypto_tfm_ctx_alignment(void)
+{
+	struct crypto_tfm *tfm;
+	return __alignof__(tfm->__crt_ctx);
 }
 
 /*

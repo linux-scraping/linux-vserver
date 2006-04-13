@@ -81,7 +81,7 @@ static int dst_ci_command(struct dst_state* state, u8 * data, u8 *ca_string, u8 
 {
 	u8 reply;
 
-	down(&state->dst_mutex);
+	mutex_lock(&state->dst_mutex);
 	dst_comm_init(state);
 	msleep(65);
 
@@ -110,11 +110,11 @@ static int dst_ci_command(struct dst_state* state, u8 * data, u8 *ca_string, u8 
 			goto error;
 		}
 	}
-	up(&state->dst_mutex);
+	mutex_unlock(&state->dst_mutex);
 	return 0;
 
 error:
-	up(&state->dst_mutex);
+	mutex_unlock(&state->dst_mutex);
 	return -EIO;
 }
 
@@ -283,15 +283,16 @@ static int handle_dst_tag(struct dst_state *state, struct ca_msg *p_ca_message, 
 		hw_buffer->msg[4] = 0x03;
 		hw_buffer->msg[5] = length & 0xff;
 		hw_buffer->msg[6] = 0x00;
+
 		/*
 		 *	Need to compute length for EN50221 section 8.3.2, for the time being
 		 *	assuming 8.3.2 is not applicable
 		 */
 		memcpy(&hw_buffer->msg[7], &p_ca_message->msg[4], length);
 	}
+
 	return 0;
 }
-
 
 static int write_to_8820(struct dst_state *state, struct ca_msg *hw_buffer, u8 length, u8 reply)
 {

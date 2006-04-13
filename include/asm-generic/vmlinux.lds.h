@@ -10,6 +10,8 @@
 #define ALIGN_FUNCTION()  . = ALIGN(8)
 
 #define RODATA								\
+	. = ALIGN(4096);						\
+	__start_rodata = .;						\
 	.rodata           : AT(ADDR(.rodata) - LOAD_OFFSET) {		\
 		*(.rodata) *(.rodata.*)					\
 		*(__vermagic)		/* Kernel version magic */	\
@@ -56,6 +58,13 @@
 		VMLINUX_SYMBOL(__stop___ksymtab_gpl) = .;		\
 	}								\
 									\
+	/* Kernel symbol table: GPL-future-only symbols */		\
+	__ksymtab_gpl_future : AT(ADDR(__ksymtab_gpl_future) - LOAD_OFFSET) { \
+		VMLINUX_SYMBOL(__start___ksymtab_gpl_future) = .;	\
+		*(__ksymtab_gpl_future)					\
+		VMLINUX_SYMBOL(__stop___ksymtab_gpl_future) = .;	\
+	}								\
+									\
 	/* Kernel symbol table: Normal symbols */			\
 	__kcrctab         : AT(ADDR(__kcrctab) - LOAD_OFFSET) {		\
 		VMLINUX_SYMBOL(__start___kcrctab) = .;			\
@@ -70,10 +79,19 @@
 		VMLINUX_SYMBOL(__stop___kcrctab_gpl) = .;		\
 	}								\
 									\
+	/* Kernel symbol table: GPL-future-only symbols */		\
+	__kcrctab_gpl_future : AT(ADDR(__kcrctab_gpl_future) - LOAD_OFFSET) { \
+		VMLINUX_SYMBOL(__start___kcrctab_gpl_future) = .;	\
+		*(__kcrctab_gpl_future)					\
+		VMLINUX_SYMBOL(__stop___kcrctab_gpl_future) = .;	\
+	}								\
+									\
 	/* Kernel symbol table: strings */				\
         __ksymtab_strings : AT(ADDR(__ksymtab_strings) - LOAD_OFFSET) {	\
 		*(__ksymtab_strings)					\
 	}								\
+	__end_rodata = .;						\
+	. = ALIGN(4096);						\
 									\
 	/* Built-in module parameters. */				\
 	__param : AT(ADDR(__param) - LOAD_OFFSET) {			\

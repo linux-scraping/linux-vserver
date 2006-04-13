@@ -10,7 +10,6 @@
  *
  */
 
-#include <linux/config.h>
 #include <linux/utsname.h>
 #include <linux/sched.h>
 #include <linux/vs_context.h>
@@ -57,7 +56,7 @@ int vc_enter_namespace(uint32_t id, void *data)
 	if (!vx_check(0, VX_ADMIN))
 		return -ENOSYS;
 
-	vxi = locate_vx_info(id);
+	vxi = lookup_vx_info(id);
 	if (!vxi)
 		return -ESRCH;
 
@@ -103,11 +102,11 @@ int vc_set_namespace(uint32_t id, void __user *data)
 	struct vx_info *vxi;
 	int ret;
 
-	if (vx_check(0, VX_ADMIN|VX_WATCH))
-		return -ENOSYS;
+	vxi = lookup_vx_info(id);
+	if (!vxi)
+		return -ESRCH;
 
 	task_lock(current);
-	vxi = get_vx_info(current->vx_info);
 	fs = current->fs;
 	atomic_inc(&fs->count);
 	ns = current->namespace;

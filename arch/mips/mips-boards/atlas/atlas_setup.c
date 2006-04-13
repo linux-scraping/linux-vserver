@@ -65,7 +65,7 @@ void __init plat_setup(void)
 
 	board_time_init = mips_time_init;
 	board_timer_setup = mips_timer_setup;
-	rtc_get_time = mips_rtc_get_time;
+	rtc_mips_get_time = mips_rtc_get_time;
 }
 
 static void __init serial_init(void)
@@ -82,8 +82,8 @@ static void __init serial_init(void)
 #endif
 	s.irq = ATLASINT_UART;
 	s.uartclk = ATLAS_BASE_BAUD * 16;
-	s.flags = ASYNC_BOOT_AUTOCONF | ASYNC_SKIP_TEST | ASYNC_AUTO_IRQ;
-	s.iotype = SERIAL_IO_PORT;
+	s.flags = UPF_BOOT_AUTOCONF | UPF_SKIP_TEST | UPF_AUTO_IRQ;
+	s.iotype = UPIO_PORT;
 	s.regshift = 3;
 
 	if (early_serial_setup(&s) != 0) {

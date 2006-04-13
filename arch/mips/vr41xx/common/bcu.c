@@ -3,7 +3,7 @@
  *
  *  Copyright (C) 2002  MontaVista Software Inc.
  *    Author: Yoichi Yuasa <yyuasa@mvista.com, or source@mvista.com>
- *  Copyright (C) 2003-2005  Yoichi Yuasa <yuasa@hh.iij4u.or.jp>
+ *  Copyright (C) 2003-2005  Yoichi Yuasa <yoichi_yuasa@tripeaks.co.jp>
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -25,7 +25,7 @@
  *  - New creation, NEC VR4122 and VR4131 are supported.
  *  - Added support for NEC VR4111 and VR4121.
  *
- *  Yoichi Yuasa <yuasa@hh.iij4u.or.jp>
+ *  Yoichi Yuasa <yoichi_yuasa@tripeaks.co.jp>
  *  - Added support for NEC VR4133.
  */
 #include <linux/kernel.h>
@@ -183,11 +183,11 @@ static inline unsigned long calculate_tclock(uint16_t clkspeed, unsigned long pc
 	switch (current_cpu_data.cputype) {
 	case CPU_VR4111:
 		if (!(clkspeed & DIV2B))
-        		tclock = pclock / 2;
+			tclock = pclock / 2;
 		else if (!(clkspeed & DIV3B))
-        		tclock = pclock / 3;
+			tclock = pclock / 3;
 		else if (!(clkspeed & DIV4B))
-        		tclock = pclock / 4;
+			tclock = pclock / 4;
 		break;
 	case CPU_VR4121:
 		tclock = pclock / DIVT(clkspeed);

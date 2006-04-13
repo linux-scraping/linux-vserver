@@ -126,7 +126,7 @@ __mb_cache_entry_is_hashed(struct mb_cache_entry *ce)
 }
 
 
-static inline void
+static void
 __mb_cache_entry_unhash(struct mb_cache_entry *ce)
 {
 	int n;
@@ -139,7 +139,7 @@ __mb_cache_entry_unhash(struct mb_cache_entry *ce)
 }
 
 
-static inline void
+static void
 __mb_cache_entry_forget(struct mb_cache_entry *ce, gfp_t gfp_mask)
 {
 	struct mb_cache *cache = ce->e_cache;
@@ -158,7 +158,7 @@ __mb_cache_entry_forget(struct mb_cache_entry *ce, gfp_t gfp_mask)
 }
 
 
-static inline void
+static void
 __mb_cache_entry_release_unlock(struct mb_cache_entry *ce)
 {
 	/* Wake up all processes queuing for this cache entry. */
@@ -288,7 +288,7 @@ mb_cache_create(const char *name, struct mb_cache_op *cache_op,
 			INIT_LIST_HEAD(&cache->c_indexes_hash[m][n]);
 	}
 	cache->c_entry_cache = kmem_cache_create(name, entry_size, 0,
-		SLAB_RECLAIM_ACCOUNT, NULL, NULL);
+		SLAB_RECLAIM_ACCOUNT|SLAB_MEM_SPREAD, NULL, NULL);
 	if (!cache->c_entry_cache)
 		goto fail;
 
@@ -311,7 +311,7 @@ fail:
 /*
  * mb_cache_shrink()
  *
- * Removes all cache entires of a device from the cache. All cache entries
+ * Removes all cache entries of a device from the cache. All cache entries
  * currently in use cannot be freed, and thus remain in the cache. All others
  * are freed.
  *

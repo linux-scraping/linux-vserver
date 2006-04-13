@@ -29,8 +29,6 @@
  * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
-#define ZFCP_AUX_REVISION "$Revision: 1.145 $"
-
 #include "zfcp_ext.h"
 
 /* accumulated log level (module parameter) */
@@ -831,18 +829,6 @@ zfcp_unit_dequeue(struct zfcp_unit *unit)
 	device_unregister(&unit->sysfs_device);
 }
 
-static void *
-zfcp_mempool_alloc(gfp_t gfp_mask, void *size)
-{
-	return kmalloc((size_t) size, gfp_mask);
-}
-
-static void
-zfcp_mempool_free(void *element, void *size)
-{
-	kfree(element);
-}
-
 /*
  * Allocates a combined QTCB/fsf_req buffer for erp actions and fcp/SCSI
  * commands.
@@ -855,51 +841,39 @@ static int
 zfcp_allocate_low_mem_buffers(struct zfcp_adapter *adapter)
 {
 	adapter->pool.fsf_req_erp =
-		mempool_create(ZFCP_POOL_FSF_REQ_ERP_NR,
-			       zfcp_mempool_alloc, zfcp_mempool_free, (void *)
-			       sizeof(struct zfcp_fsf_req_pool_element));
-
-	if (NULL == adapter->pool.fsf_req_erp)
+		mempool_create_kmalloc_pool(ZFCP_POOL_FSF_REQ_ERP_NR,
+				sizeof(struct zfcp_fsf_req_pool_element));
+	if (!adapter->pool.fsf_req_erp)
 		return -ENOMEM;
 
 	adapter->pool.fsf_req_scsi =
-		mempool_create(ZFCP_POOL_FSF_REQ_SCSI_NR,
-			       zfcp_mempool_alloc, zfcp_mempool_free, (void *)
-			       sizeof(struct zfcp_fsf_req_pool_element));
-
-	if (NULL == adapter->pool.fsf_req_scsi)
+		mempool_create_kmalloc_pool(ZFCP_POOL_FSF_REQ_SCSI_NR,
+				sizeof(struct zfcp_fsf_req_pool_element));
+	if (!adapter->pool.fsf_req_scsi)
 		return -ENOMEM;
 
 	adapter->pool.fsf_req_abort =
-		mempool_create(ZFCP_POOL_FSF_REQ_ABORT_NR,
-			       zfcp_mempool_alloc, zfcp_mempool_free, (void *)
-			       sizeof(struct zfcp_fsf_req_pool_element));
-
-	if (NULL == adapter->pool.fsf_req_abort)
+		mempool_create_kmalloc_pool(ZFCP_POOL_FSF_REQ_ABORT_NR,
+				sizeof(struct zfcp_fsf_req_pool_element));
+	if (!adapter->pool.fsf_req_abort)
 		return -ENOMEM;
 
 	adapter->pool.fsf_req_status_read =
-		mempool_create(ZFCP_POOL_STATUS_READ_NR,
-			       zfcp_mempool_alloc, zfcp_mempool_free,
-			       (void *) sizeof(struct zfcp_fsf_req));
-
-	if (NULL == adapter->pool.fsf_req_status_read)
+		mempool_create_kmalloc_pool(ZFCP_POOL_STATUS_READ_NR,
+					    sizeof(struct zfcp_fsf_req));
+	if (!adapter->pool.fsf_req_status_read)
 		return -ENOMEM;
 
 	adapter->pool.data_status_read =
-		mempool_create(ZFCP_POOL_STATUS_READ_NR,
-			       zfcp_mempool_alloc, zfcp_mempool_free,
-			       (void *) sizeof(struct fsf_status_read_buffer));
-
-	if (NULL == adapter->pool.data_status_read)
+		mempool_create_kmalloc_pool(ZFCP_POOL_STATUS_READ_NR,
+					sizeof(struct fsf_status_read_buffer));
+	if (!adapter->pool.data_status_read)
 		return -ENOMEM;
 
 	adapter->pool.data_gid_pn =
-		mempool_create(ZFCP_POOL_DATA_GID_PN_NR,
-			       zfcp_mempool_alloc, zfcp_mempool_free, (void *)
-			       sizeof(struct zfcp_gid_pn_data));
-
-	if (NULL == adapter->pool.data_gid_pn)
+		mempool_create_kmalloc_pool(ZFCP_POOL_DATA_GID_PN_NR,
+					    sizeof(struct zfcp_gid_pn_data));
+	if (!adapter->pool.data_gid_pn)
 		return -ENOMEM;
 
 	return 0;
@@ -1125,6 +1099,8 @@ zfcp_adapter_dequeue(struct zfcp_adapter *adapter)
 	zfcp_free_low_mem_buffers(adapter);
 	/* free memory of adapter data structure and queues */
 	zfcp_qdio_free_queues(adapter);
+	kfree(adapter->fc_stats);
+	kfree(adapter->stats_reset_data);
 	ZFCP_LOG_TRACE("freeing adapter structure\n");
 	kfree(adapter);
  out:

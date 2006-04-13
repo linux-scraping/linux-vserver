@@ -49,8 +49,8 @@
 #ifdef __KERNEL__
 
 #include <asm/atomic.h>
-#include <linux/skbuff.h>
 #include <linux/netdevice.h>
+#include <linux/skbuff.h>
 #include <linux/rcupdate.h>
 #include <linux/seq_file.h>
 
@@ -68,6 +68,7 @@ struct neigh_parms
 	struct net_device *dev;
 	struct neigh_parms *next;
 	int	(*neigh_setup)(struct neighbour *);
+	void	(*neigh_destructor)(struct neighbour *);
 	struct neigh_table *tbl;
 
 	void	*sysctl_table;
@@ -145,7 +146,6 @@ struct neighbour
 struct neigh_ops
 {
 	int			family;
-	void			(*destructor)(struct neighbour *);
 	void			(*solicit)(struct neighbour *, struct sk_buff*);
 	void			(*error_report)(struct neighbour *, struct sk_buff*);
 	int			(*output)(struct sk_buff*);

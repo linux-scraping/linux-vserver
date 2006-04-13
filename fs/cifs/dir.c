@@ -3,7 +3,7 @@
  *
  *   vfs operations that deal with dentries
  * 
- *   Copyright (C) International Business Machines  Corp., 2002,2003
+ *   Copyright (C) International Business Machines  Corp., 2002,2005
  *   Author(s): Steve French (sfrench@us.ibm.com)
  *
  *   This library is free software; you can redistribute it and/or modify
@@ -48,13 +48,14 @@ build_path_from_dentry(struct dentry *direntry)
 	struct dentry *temp;
 	int namelen = 0;
 	char *full_path;
-	char dirsep = CIFS_DIR_SEP(CIFS_SB(direntry->d_sb));
+	char dirsep;
 
 	if(direntry == NULL)
 		return NULL;  /* not much we can do if dentry is freed and
 		we need to reopen the file after it was closed implicitly
 		when the server crashed */
 
+	dirsep = CIFS_DIR_SEP(CIFS_SB(direntry->d_sb));
 cifs_bp_rename_retry:
 	for (temp = direntry; !IS_ROOT(temp);) {
 		namelen += (1 + temp->d_name.len);
@@ -138,9 +139,9 @@ cifs_create(struct inode *inode, struct dentry *direntry, int mode,
 	cifs_sb = CIFS_SB(inode->i_sb);
 	pTcon = cifs_sb->tcon;
 
-	down(&direntry->d_sb->s_vfs_rename_sem);
+	mutex_lock(&direntry->d_sb->s_vfs_rename_mutex);
 	full_path = build_path_from_dentry(direntry);
-	up(&direntry->d_sb->s_vfs_rename_sem);
+	mutex_unlock(&direntry->d_sb->s_vfs_rename_mutex);
 	if(full_path == NULL) {
 		FreeXid(xid);
 		return -ENOMEM;
@@ -200,8 +201,8 @@ cifs_create(struct inode *inode, struct dentry *direntry, int mode,
 			(oplock & CIFS_CREATE_ACTION))
 			if(cifs_sb->mnt_cifs_flags & CIFS_MOUNT_SET_UID) {
 				CIFSSMBUnixSetPerms(xid, pTcon, full_path, mode,
-					(__u64)current->euid,
-					(__u64)current->egid,
+					(__u64)current->fsuid,
+					(__u64)current->fsgid,
 					0 /* dev */,
 					cifs_sb->local_nls, 
 					cifs_sb->mnt_cifs_flags & 
@@ -255,12 +256,10 @@ cifs_create(struct inode *inode, struct dentry *direntry, int mode,
 			CIFSSMBClose(xid, pTcon, fileHandle);
 		} else if(newinode) {
 			pCifsFile =
-			   kmalloc(sizeof (struct cifsFileInfo), GFP_KERNEL);
+			   kzalloc(sizeof (struct cifsFileInfo), GFP_KERNEL);
 			
 			if(pCifsFile == NULL)
 				goto cifs_create_out;
-			memset((char *)pCifsFile, 0,
-			       sizeof (struct cifsFileInfo));
 			pCifsFile->netfid = fileHandle;
 			pCifsFile->pid = current->tgid;
 			pCifsFile->pInode = newinode;
@@ -317,15 +316,15 @@ int cifs_mknod(struct inode *inode, struct dentry *direntry, int mode,
 	cifs_sb = CIFS_SB(inode->i_sb);
 	pTcon = cifs_sb->tcon;
 
-	down(&direntry->d_sb->s_vfs_rename_sem);
+	mutex_lock(&direntry->d_sb->s_vfs_rename_mutex);
 	full_path = build_path_from_dentry(direntry);
-	up(&direntry->d_sb->s_vfs_rename_sem);
+	mutex_unlock(&direntry->d_sb->s_vfs_rename_mutex);
 	if(full_path == NULL)
 		rc = -ENOMEM;
 	else if (pTcon->ses->capabilities & CAP_UNIX) {
 		if(cifs_sb->mnt_cifs_flags & CIFS_MOUNT_SET_UID) {
 			rc = CIFSSMBUnixSetPerms(xid, pTcon, full_path,
-				mode,(__u64)current->euid,(__u64)current->egid,
+				mode,(__u64)current->fsuid,(__u64)current->fsgid,
 				device_number, cifs_sb->local_nls,
 				cifs_sb->mnt_cifs_flags & 
 					CIFS_MOUNT_MAP_SPECIAL_CHR);

@@ -27,6 +27,8 @@
 #include <linux/coda_cache.h>
 #include <linux/coda_proc.h>
 
+#include "coda_int.h"
+
 /* dir inode-ops */
 static int coda_create(struct inode *dir, struct dentry *new, int mode, struct nameidata *nd);
 static struct dentry *coda_lookup(struct inode *dir, struct dentry *target, struct nameidata *nd);
@@ -50,7 +52,6 @@ static int coda_dentry_delete(struct dentry *);
 /* support routines */
 static int coda_venus_readdir(struct file *filp, filldir_t filldir,
 			      void *dirent, struct dentry *dir);
-int coda_fsync(struct file *, struct dentry *dentry, int datasync);
 
 /* same as fs/bad_inode.c */
 static int coda_return_EIO(void)
@@ -81,7 +82,7 @@ struct inode_operations coda_dir_inode_operations =
 	.setattr	= coda_setattr,
 };
 
-struct file_operations coda_dir_operations = {
+const struct file_operations coda_dir_operations = {
 	.llseek		= generic_file_llseek,
 	.read		= generic_read_dir,
 	.readdir	= coda_readdir,
@@ -453,7 +454,7 @@ int coda_readdir(struct file *coda_file, void *dirent, filldir_t filldir)
 	coda_vfs_stat.readdir++;
 
 	host_inode = host_file->f_dentry->d_inode;
-	down(&host_inode->i_sem);
+	mutex_lock(&host_inode->i_mutex);
 	host_file->f_pos = coda_file->f_pos;
 
 	if (!host_file->f_op->readdir) {
@@ -475,7 +476,7 @@ int coda_readdir(struct file *coda_file, void *dirent, filldir_t filldir)
 	}
 out:
 	coda_file->f_pos = host_file->f_pos;
-	up(&host_inode->i_sem);
+	mutex_unlock(&host_inode->i_mutex);
 
 	return ret;
 }

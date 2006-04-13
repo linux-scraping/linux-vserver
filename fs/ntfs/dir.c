@@ -69,7 +69,7 @@ ntfschar I30[5] = { const_cpu_to_le16('$'), const_cpu_to_le16('I'),
  * work but we don't care for how quickly one can access them. This also fixes
  * the dcache aliasing issues.
  *
- * Locking:  - Caller must hold i_sem on the directory.
+ * Locking:  - Caller must hold i_mutex on the directory.
  *	     - Each page cache page in the index allocation mapping must be
  *	       locked whilst being accessed otherwise we may find a corrupt
  *	       page due to it being under ->writepage at the moment which
@@ -1085,11 +1085,11 @@ static inline int ntfs_filldir(ntfs_volume *vol, loff_t fpos,
  * While this will return the names in random order this doesn't matter for
  * ->readdir but OTOH results in a faster ->readdir.
  *
- * VFS calls ->readdir without BKL but with i_sem held. This protects the VFS
+ * VFS calls ->readdir without BKL but with i_mutex held. This protects the VFS
  * parts (e.g. ->f_pos and ->i_size, and it also protects against directory
  * modifications).
  *
- * Locking:  - Caller must hold i_sem on the directory.
+ * Locking:  - Caller must hold i_mutex on the directory.
  *	     - Each page cache page in the index allocation mapping must be
  *	       locked whilst being accessed otherwise we may find a corrupt
  *	       page due to it being under ->writepage at the moment which
@@ -1136,7 +1136,7 @@ static int ntfs_readdir(struct file *filp, void *dirent, filldir_t filldir)
 	if (fpos == 1) {
 		ntfs_debug("Calling filldir for .. with len 2, fpos 0x1, "
 				"inode 0x%lx, DT_DIR.",
-				parent_ino(filp->f_dentry));
+				(unsigned long)parent_ino(filp->f_dentry));
 		rc = filldir(dirent, "..", 2, fpos,
 				parent_ino(filp->f_dentry), DT_DIR);
 		if (rc)
@@ -1520,7 +1520,7 @@ static int ntfs_dir_open(struct inode *vi, struct file *filp)
  * Note: In the past @filp could be NULL so we ignore it as we don't need it
  * anyway.
  *
- * Locking: Caller must hold i_sem on the inode.
+ * Locking: Caller must hold i_mutex on the inode.
  *
  * TODO: We should probably also write all attribute/index inodes associated
  * with this inode but since we have no simple way of getting to them we ignore
@@ -1553,7 +1553,7 @@ static int ntfs_dir_fsync(struct file *filp, struct dentry *dentry,
 
 #endif /* NTFS_RW */
 
-struct file_operations ntfs_dir_ops = {
+const struct file_operations ntfs_dir_ops = {
 	.llseek		= generic_file_llseek,	/* Seek inside directory. */
 	.read		= generic_read_dir,	/* Return -EISDIR. */
 	.readdir	= ntfs_readdir,		/* Read directory contents. */

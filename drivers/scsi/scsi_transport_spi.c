@@ -18,12 +18,13 @@
  *  along with this program; if not, write to the Free Software
  *  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
+#include <linux/config.h>
 #include <linux/ctype.h>
 #include <linux/init.h>
 #include <linux/module.h>
 #include <linux/workqueue.h>
 #include <linux/blkdev.h>
-#include <asm/semaphore.h>
+#include <linux/mutex.h>
 #include <scsi/scsi.h>
 #include "scsi_priv.h"
 #include <scsi/scsi_device.h>
@@ -47,7 +48,7 @@
 
 /* Private data accessors (keep these out of the header file) */
 #define spi_dv_pending(x) (((struct spi_transport_attrs *)&(x)->starget_data)->dv_pending)
-#define spi_dv_sem(x) (((struct spi_transport_attrs *)&(x)->starget_data)->dv_sem)
+#define spi_dv_mutex(x) (((struct spi_transport_attrs *)&(x)->starget_data)->dv_mutex)
 
 struct spi_internal {
 	struct scsi_transport_template t;
@@ -241,7 +242,7 @@ static int spi_setup_transport_attrs(struct transport_container *tc,
 	spi_hold_mcs(starget) = 0;
 	spi_dv_pending(starget) = 0;
 	spi_initial_dv(starget) = 0;
-	init_MUTEX(&spi_dv_sem(starget));
+	mutex_init(&spi_dv_mutex(starget));
 
 	return 0;
 }
@@ -378,9 +379,7 @@ static CLASS_DEVICE_ATTR(revalidate, S_IWUSR, NULL, store_spi_revalidate);
 
 /* Translate the period into ns according to the current spec
  * for SDTR/PPR messages */
-static ssize_t
-show_spi_transport_period_helper(struct class_device *cdev, char *buf,
-				 int period)
+static int period_to_str(char *buf, int period)
 {
 	int len, picosec;
 
@@ -398,6 +397,13 @@ show_spi_transport_period_helper(struct class_device *cdev, char *buf,
 		len = sprint_frac(buf, picosec, 1000);
 	}
 
+	return len;
+}
+
+static ssize_t
+show_spi_transport_period_helper(char *buf, int period)
+{
+	int len = period_to_str(buf, period);
 	buf[len++] = '\n';
 	buf[len] = '\0';
 	return len;
@@ -452,7 +458,7 @@ show_spi_transport_period(struct class_device *cdev, char *buf)
 	if (i->f->get_period)
 		i->f->get_period(starget);
 
-	return show_spi_transport_period_helper(cdev, buf, tp->period);
+	return show_spi_transport_period_helper(buf, tp->period);
 }
 
 static ssize_t
@@ -487,7 +493,7 @@ show_spi_transport_min_period(struct class_device *cdev, char *buf)
 	struct spi_transport_attrs *tp =
 		(struct spi_transport_attrs *)&starget->starget_data;
 
-	return show_spi_transport_period_helper(cdev, buf, tp->min_period);
+	return show_spi_transport_period_helper(buf, tp->min_period);
 }
 
 static ssize_t
@@ -893,12 +899,10 @@ spi_dv_device(struct scsi_device *sdev)
 	if (unlikely(scsi_device_get(sdev)))
 		return;
 
-	buffer = kmalloc(len, GFP_KERNEL);
+	buffer = kzalloc(len, GFP_KERNEL);
 
 	if (unlikely(!buffer))
 		goto out_put;
-
-	memset(buffer, 0, len);
 
 	/* We need to verify that the actual device will quiesce; the
 	 * later target quiesce is just a nice to have */
@@ -908,7 +912,7 @@ spi_dv_device(struct scsi_device *sdev)
 	scsi_target_quiesce(starget);
 
 	spi_dv_pending(starget) = 1;
-	down(&spi_dv_sem(starget));
+	mutex_lock(&spi_dv_mutex(starget));
 
 	starget_printk(KERN_INFO, starget, "Beginning Domain Validation\n");
 
@@ -916,7 +920,7 @@ spi_dv_device(struct scsi_device *sdev)
 
 	starget_printk(KERN_INFO, starget, "Ending Domain Validation\n");
 
-	up(&spi_dv_sem(starget));
+	mutex_unlock(&spi_dv_mutex(starget));
 	spi_dv_pending(starget) = 0;
 
 	scsi_target_resume(starget);
@@ -1041,11 +1045,182 @@ void spi_display_xfer_agreement(struct scsi_target *starget)
 			 tp->hold_mcs ? " HMCS" : "",
 			 tmp, tp->offset);
 	} else {
-		dev_info(&starget->dev, "%sasynchronous.\n",
+		dev_info(&starget->dev, "%sasynchronous\n",
 				tp->width ? "wide " : "");
 	}
 }
 EXPORT_SYMBOL(spi_display_xfer_agreement);
+
+int spi_populate_width_msg(unsigned char *msg, int width)
+{
+	msg[0] = EXTENDED_MESSAGE;
+	msg[1] = 2;
+	msg[2] = EXTENDED_WDTR;
+	msg[3] = width;
+	return 4;
+}
+EXPORT_SYMBOL_GPL(spi_populate_width_msg);
+
+int spi_populate_sync_msg(unsigned char *msg, int period, int offset)
+{
+	msg[0] = EXTENDED_MESSAGE;
+	msg[1] = 3;
+	msg[2] = EXTENDED_SDTR;
+	msg[3] = period;
+	msg[4] = offset;
+	return 5;
+}
+EXPORT_SYMBOL_GPL(spi_populate_sync_msg);
+
+int spi_populate_ppr_msg(unsigned char *msg, int period, int offset,
+		int width, int options)
+{
+	msg[0] = EXTENDED_MESSAGE;
+	msg[1] = 6;
+	msg[2] = EXTENDED_PPR;
+	msg[3] = period;
+	msg[4] = 0;
+	msg[5] = offset;
+	msg[6] = width;
+	msg[7] = options;
+	return 8;
+}
+EXPORT_SYMBOL_GPL(spi_populate_ppr_msg);
+
+#ifdef CONFIG_SCSI_CONSTANTS
+static const char * const one_byte_msgs[] = {
+/* 0x00 */ "Task Complete", NULL /* Extended Message */, "Save Pointers",
+/* 0x03 */ "Restore Pointers", "Disconnect", "Initiator Error", 
+/* 0x06 */ "Abort Task Set", "Message Reject", "Nop", "Message Parity Error",
+/* 0x0a */ "Linked Command Complete", "Linked Command Complete w/flag",
+/* 0x0c */ "Target Reset", "Abort Task", "Clear Task Set", 
+/* 0x0f */ "Initiate Recovery", "Release Recovery",
+/* 0x11 */ "Terminate Process", "Continue Task", "Target Transfer Disable",
+/* 0x14 */ NULL, NULL, "Clear ACA", "LUN Reset"
+};
+
+static const char * const two_byte_msgs[] = {
+/* 0x20 */ "Simple Queue Tag", "Head of Queue Tag", "Ordered Queue Tag",
+/* 0x23 */ "Ignore Wide Residue", "ACA"
+};
+
+static const char * const extended_msgs[] = {
+/* 0x00 */ "Modify Data Pointer", "Synchronous Data Transfer Request",
+/* 0x02 */ "SCSI-I Extended Identify", "Wide Data Transfer Request",
+/* 0x04 */ "Parallel Protocol Request", "Modify Bidirectional Data Pointer"
+};
+
+static void print_nego(const unsigned char *msg, int per, int off, int width)
+{
+	if (per) {
+		char buf[20];
+		period_to_str(buf, msg[per]);
+		printk("period = %s ns ", buf);
+	}
+
+	if (off)
+		printk("offset = %d ", msg[off]);
+	if (width)
+		printk("width = %d ", 8 << msg[width]);
+}
+
+static void print_ptr(const unsigned char *msg, int msb, const char *desc)
+{
+	int ptr = (msg[msb] << 24) | (msg[msb+1] << 16) | (msg[msb+2] << 8) |
+			msg[msb+3];
+	printk("%s = %d ", desc, ptr);
+}
+
+int spi_print_msg(const unsigned char *msg)
+{
+	int len = 1, i;
+	if (msg[0] == EXTENDED_MESSAGE) {
+		len = 2 + msg[1];
+		if (len == 2)
+			len += 256;
+		if (msg[2] < ARRAY_SIZE(extended_msgs))
+			printk ("%s ", extended_msgs[msg[2]]); 
+		else 
+			printk ("Extended Message, reserved code (0x%02x) ",
+				(int) msg[2]);
+		switch (msg[2]) {
+		case EXTENDED_MODIFY_DATA_POINTER:
+			print_ptr(msg, 3, "pointer");
+			break;
+		case EXTENDED_SDTR:
+			print_nego(msg, 3, 4, 0);
+			break;
+		case EXTENDED_WDTR:
+			print_nego(msg, 0, 0, 3);
+			break;
+		case EXTENDED_PPR:
+			print_nego(msg, 3, 5, 6);
+			break;
+		case EXTENDED_MODIFY_BIDI_DATA_PTR:
+			print_ptr(msg, 3, "out");
+			print_ptr(msg, 7, "in");
+			break;
+		default:
+		for (i = 2; i < len; ++i) 
+			printk("%02x ", msg[i]);
+		}
+	/* Identify */
+	} else if (msg[0] & 0x80) {
+		printk("Identify disconnect %sallowed %s %d ",
+			(msg[0] & 0x40) ? "" : "not ",
+			(msg[0] & 0x20) ? "target routine" : "lun",
+			msg[0] & 0x7);
+	/* Normal One byte */
+	} else if (msg[0] < 0x1f) {
+		if (msg[0] < ARRAY_SIZE(one_byte_msgs) && one_byte_msgs[msg[0]])
+			printk("%s ", one_byte_msgs[msg[0]]);
+		else
+			printk("reserved (%02x) ", msg[0]);
+	} else if (msg[0] == 0x55) {
+		printk("QAS Request ");
+	/* Two byte */
+	} else if (msg[0] <= 0x2f) {
+		if ((msg[0] - 0x20) < ARRAY_SIZE(two_byte_msgs))
+			printk("%s %02x ", two_byte_msgs[msg[0] - 0x20], 
+				msg[1]);
+		else 
+			printk("reserved two byte (%02x %02x) ", 
+				msg[0], msg[1]);
+		len = 2;
+	} else 
+		printk("reserved ");
+	return len;
+}
+EXPORT_SYMBOL(spi_print_msg);
+
+#else  /* ifndef CONFIG_SCSI_CONSTANTS */
+
+int spi_print_msg(const unsigned char *msg)
+{
+	int len = 1, i;
+
+	if (msg[0] == EXTENDED_MESSAGE) {
+		len = 2 + msg[1];
+		if (len == 2)
+			len += 256;
+		for (i = 0; i < len; ++i)
+			printk("%02x ", msg[i]);
+	/* Identify */
+	} else if (msg[0] & 0x80) {
+		printk("%02x ", msg[0]);
+	/* Normal One byte */
+	} else if ((msg[0] < 0x1f) || (msg[0] == 0x55)) {
+		printk("%02x ", msg[0]);
+	/* Two byte */
+	} else if (msg[0] <= 0x2f) {
+		printk("%02x %02x", msg[0], msg[1]);
+		len = 2;
+	} else 
+		printk("%02x ", msg[0]);
+	return len;
+}
+EXPORT_SYMBOL(spi_print_msg);
+#endif /* ! CONFIG_SCSI_CONSTANTS */
 
 #define SETUP_ATTRIBUTE(field)						\
 	i->private_attrs[count] = class_device_attr_##field;		\
@@ -1137,14 +1312,12 @@ static DECLARE_ANON_TRANSPORT_CLASS(spi_device_class,
 struct scsi_transport_template *
 spi_attach_transport(struct spi_function_template *ft)
 {
-	struct spi_internal *i = kmalloc(sizeof(struct spi_internal),
-					 GFP_KERNEL);
 	int count = 0;
+	struct spi_internal *i = kzalloc(sizeof(struct spi_internal),
+					 GFP_KERNEL);
+
 	if (unlikely(!i))
 		return NULL;
-
-	memset(i, 0, sizeof(struct spi_internal));
-
 
 	i->t.target_attrs.ac.class = &spi_transport_class.class;
 	i->t.target_attrs.ac.attrs = &i->attrs[0];

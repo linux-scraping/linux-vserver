@@ -5,9 +5,8 @@
  *  Copyright (C) 2002 by Ron Minnich <rminnich@lanl.gov>
  *
  *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License as published by
- *  the Free Software Foundation; either version 2 of the License, or
- *  (at your option) any later version.
+ *  it under the terms of the GNU General Public License version 2
+ *  as published by the Free Software Foundation.
  *
  *  This program is distributed in the hope that it will be useful,
  *  but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -30,6 +29,7 @@
 #define DEBUG_MUX		(1<<5)
 #define DEBUG_TRANS		(1<<6)
 #define DEBUG_SLABS	      	(1<<7)
+#define DEBUG_FCALL		(1<<8)
 
 #define DEBUG_DUMP_PKT		0
 
@@ -51,16 +51,23 @@ do { \
 #if DEBUG_DUMP_PKT
 static inline void dump_data(const unsigned char *data, unsigned int datalen)
 {
-	int i, j;
-	int len = datalen;
+	int i, n;
+	char buf[5*8];
 
-	printk(KERN_DEBUG "data ");
-	for (i = 0; i < len; i += 4) {
-		for (j = 0; (j < 4) && (i + j < len); j++)
-			printk(KERN_DEBUG "%02x", data[i + j]);
-		printk(KERN_DEBUG " ");
+	n = 0;
+	i = 0;
+	while (i < datalen) {
+		n += snprintf(buf+n, sizeof(buf)-n, "%02x", data[i++]);
+		if (i%4 == 0)
+			n += snprintf(buf+n, sizeof(buf)-n, " ");
+
+		if (i%16 == 0) {
+			dprintk(DEBUG_ERROR, "%s\n", buf);
+			n = 0;
+		}
 	}
-	printk(KERN_DEBUG "\n");
+
+	dprintk(DEBUG_ERROR, "%s\n", buf);
 }
 #else				/* DEBUG_DUMP_PKT */
 static inline void dump_data(const unsigned char *data, unsigned int datalen)

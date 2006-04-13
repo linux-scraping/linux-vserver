@@ -36,7 +36,7 @@
 #define MAX_PORTS 8
 static unsigned short ports[MAX_PORTS];
 static int ports_c;
-static int max_dcc_channels = 8;
+static unsigned int max_dcc_channels = 8;
 static unsigned int dcc_timeout = 300;
 /* This is slow, but it's simple. --RR */
 static char *irc_buffer;
@@ -54,9 +54,9 @@ MODULE_DESCRIPTION("IRC (DCC) connection tracking helper");
 MODULE_LICENSE("GPL");
 module_param_array(ports, ushort, &ports_c, 0400);
 MODULE_PARM_DESC(ports, "port numbers of IRC servers");
-module_param(max_dcc_channels, int, 0400);
+module_param(max_dcc_channels, uint, 0400);
 MODULE_PARM_DESC(max_dcc_channels, "max number of expected DCC channels per IRC session");
-module_param(dcc_timeout, int, 0400);
+module_param(dcc_timeout, uint, 0400);
 MODULE_PARM_DESC(dcc_timeout, "timeout on for unestablished DCC channels");
 
 static const char *dccprotos[] = { "SEND ", "CHAT ", "MOVE ", "TSEND ", "SCHAT " };
@@ -242,9 +242,9 @@ static int help(struct sk_buff **pskb,
 static struct ip_conntrack_helper irc_helpers[MAX_PORTS];
 static char irc_names[MAX_PORTS][sizeof("irc-65535")];
 
-static void fini(void);
+static void ip_conntrack_irc_fini(void);
 
-static int __init init(void)
+static int __init ip_conntrack_irc_init(void)
 {
 	int i, ret;
 	struct ip_conntrack_helper *hlpr;
@@ -252,10 +252,6 @@ static int __init init(void)
 
 	if (max_dcc_channels < 1) {
 		printk("ip_conntrack_irc: max_dcc_channels must be a positive integer\n");
-		return -EBUSY;
-	}
-	if (dcc_timeout < 0) {
-		printk("ip_conntrack_irc: dcc_timeout must be a positive integer\n");
 		return -EBUSY;
 	}
 
@@ -292,7 +288,7 @@ static int __init init(void)
 		if (ret) {
 			printk("ip_conntrack_irc: ERROR registering port %d\n",
 				ports[i]);
-			fini();
+			ip_conntrack_irc_fini();
 			return -EBUSY;
 		}
 	}
@@ -301,7 +297,7 @@ static int __init init(void)
 
 /* This function is intentionally _NOT_ defined as __exit, because 
  * it is needed by the init function */
-static void fini(void)
+static void ip_conntrack_irc_fini(void)
 {
 	int i;
 	for (i = 0; i < ports_c; i++) {
@@ -312,5 +308,5 @@ static void fini(void)
 	kfree(irc_buffer);
 }
 
-module_init(init);
-module_exit(fini);
+module_init(ip_conntrack_irc_init);
+module_exit(ip_conntrack_irc_fini);

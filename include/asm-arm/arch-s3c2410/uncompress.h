@@ -35,13 +35,13 @@
 #undef S3C2410_GPIOREG
 #undef S3C2410_WDOGREG
 
-#define S3C2410_GPIOREG(x) ((S3C2410_PA_GPIO + (x)))
-#define S3C2410_WDOGREG(x) ((S3C2410_PA_WATCHDOG + (x)))
+#define S3C2410_GPIOREG(x) ((S3C24XX_PA_GPIO + (x)))
+#define S3C2410_WDOGREG(x) ((S3C24XX_PA_WATCHDOG + (x)))
 
 /* how many bytes we allow into the FIFO at a time in FIFO mode */
 #define FIFO_MAX	 (14)
 
-#define uart_base S3C2410_PA_UART + (0x4000*CONFIG_S3C2410_LOWLEVEL_UART_PORT)
+#define uart_base S3C24XX_PA_UART + (0x4000*CONFIG_S3C2410_LOWLEVEL_UART_PORT)
 
 static __inline__ void
 uart_wr(unsigned int reg, unsigned int val)
@@ -67,8 +67,7 @@ uart_rd(unsigned int reg)
  * waiting for tx to happen...
 */
 
-static void
-putc(char ch)
+static void putc(int ch)
 {
 	int cpuid = S3C2410_GSTATUS1_2410;
 
@@ -76,9 +75,6 @@ putc(char ch)
 	cpuid = *((volatile unsigned int *)S3C2410_GSTATUS1);
 	cpuid &= S3C2410_GSTATUS1_IDMASK;
 #endif
-
-	if (ch == '\n')
-		putc('\r');    /* expand newline to \r\n */
 
 	if (uart_rd(S3C2410_UFCON) & S3C2410_UFCON_FIFOMODE) {
 		int level;
@@ -101,19 +97,16 @@ putc(char ch)
 	} else {
 		/* not using fifos */
 
-		while ((uart_rd(S3C2410_UTRSTAT) & S3C2410_UTRSTAT_TXE) != S3C2410_UTRSTAT_TXE);
+		while ((uart_rd(S3C2410_UTRSTAT) & S3C2410_UTRSTAT_TXE) != S3C2410_UTRSTAT_TXE)
+			barrier();
 	}
 
 	/* write byte to transmission register */
 	uart_wr(S3C2410_UTXH, ch);
 }
 
-static void
-putstr(const char *ptr)
+static inline void flush(void)
 {
-	for (; *ptr != '\0'; ptr++) {
-		putc(*ptr);
-	}
 }
 
 #define __raw_writel(d,ad) do { *((volatile unsigned int *)(ad)) = (d); } while(0)

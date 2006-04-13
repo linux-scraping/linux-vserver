@@ -439,8 +439,8 @@ static void __devinit init_hwif_via82cxxx(ide_hwif_t *hwif)
 	hwif->speedproc = &via_set_drive;
 
 
-#if defined(CONFIG_PPC_MULTIPLATFORM) && defined(CONFIG_PPC32)
-	if(_machine == _MACH_chrp && _chrp_type == _CHRP_Pegasos) {
+#if defined(CONFIG_PPC_CHRP) && defined(CONFIG_PPC32)
+	if(machine_is(chrp) && _chrp_type == _CHRP_Pegasos) {
 		hwif->irq = hwif->channel ? 15 : 14;
 	}
 #endif

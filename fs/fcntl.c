@@ -9,6 +9,7 @@
 #include <linux/mm.h>
 #include <linux/fs.h>
 #include <linux/file.h>
+#include <linux/capability.h>
 #include <linux/dnotify.h>
 #include <linux/smp_lock.h>
 #include <linux/slab.h>
@@ -36,7 +37,7 @@ void fastcall set_close_on_exec(unsigned int fd, int flag)
 	spin_unlock(&files->file_lock);
 }
 
-static inline int get_close_on_exec(unsigned int fd)
+static int get_close_on_exec(unsigned int fd)
 {
 	struct files_struct *files = current->files;
 	struct fdtable *fdt;
@@ -73,8 +74,8 @@ repeat:
 	 * orig_start..fdt->next_fd
 	 */
 	start = orig_start;
-	if (start < fdt->next_fd)
-		start = fdt->next_fd;
+	if (start < files->next_fd)
+		start = files->next_fd;
 
 	newfd = start;
 	if (start < fdt->max_fdset) {
@@ -104,9 +105,8 @@ repeat:
 	 * we reacquire the fdtable pointer and use it while holding
 	 * the lock, no one can free it during that time.
 	 */
-	fdt = files_fdtable(files);
-	if (start <= fdt->next_fd)
-		fdt->next_fd = newfd + 1;
+	if (start <= files->next_fd)
+		files->next_fd = newfd + 1;
 
 	error = newfd;
 	
@@ -214,8 +214,11 @@ static int setfl(int fd, struct file * filp, unsigned long arg)
 	struct inode * inode = filp->f_dentry->d_inode;
 	int error = 0;
 
-	/* O_APPEND cannot be cleared if the file is marked as append-only */
-	if (!(arg & O_APPEND) && IS_APPEND(inode))
+	/*
+	 * O_APPEND cannot be cleared if the file is marked as append-only
+	 * and the file is open for write.
+	 */
+	if (((arg ^ filp->f_flags) & O_APPEND) && IS_APPEND(inode))
 		return -EPERM;
 
 	/* O_NOATIME can only be set by the owner or superuser */
@@ -416,7 +419,7 @@ out:
 
 /* Table to convert sigio signal codes into poll band bitmaps */
 
-static long band_table[NSIGPOLL] = {
+static const long band_table[NSIGPOLL] = {
 	POLLIN | POLLRDNORM,			/* POLL_IN */
 	POLLOUT | POLLWRNORM | POLLWRBAND,	/* POLL_OUT */
 	POLLIN | POLLRDNORM | POLLMSG,		/* POLL_MSG */
@@ -457,18 +460,17 @@ static void send_sigio_to_task(struct task_struct *p,
 			/* Make sure we are called with one of the POLL_*
 			   reasons, otherwise we could leak kernel stack into
 			   userspace.  */
-			if ((reason & __SI_MASK) != __SI_POLL)
-				BUG();
+			BUG_ON((reason & __SI_MASK) != __SI_POLL);
 			if (reason - POLL_IN >= NSIGPOLL)
 				si.si_band  = ~0L;
 			else
 				si.si_band = band_table[reason - POLL_IN];
 			si.si_fd    = fd;
-			if (!send_group_sig_info(fown->signum, &si, p))
+			if (!group_send_sig_info(fown->signum, &si, p))
 				break;
 		/* fall-through: fall back on the old plain SIGIO signal */
 		case 0:
-			send_group_sig_info(SIGIO, SEND_SIG_PRIV, p);
+			group_send_sig_info(SIGIO, SEND_SIG_PRIV, p);
 	}
 }
 
@@ -502,7 +504,7 @@ static void send_sigurg_to_task(struct task_struct *p,
                                 struct fown_struct *fown)
 {
 	if (sigio_perm(p, fown, SIGURG))
-		send_group_sig_info(SIGURG, SEND_SIG_PRIV, p);
+		group_send_sig_info(SIGURG, SEND_SIG_PRIV, p);
 }
 
 int send_sigurg(struct fown_struct *fown)
@@ -535,7 +537,7 @@ int send_sigurg(struct fown_struct *fown)
 }
 
 static DEFINE_RWLOCK(fasync_lock);
-static kmem_cache_t *fasync_cache;
+static kmem_cache_t *fasync_cache __read_mostly;
 
 /*
  * fasync_helper() is used by some character device drivers (mainly mice)

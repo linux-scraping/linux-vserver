@@ -11,6 +11,7 @@
 #include <linux/pagemap.h>
 #include <linux/namei.h>
 #include <linux/backing-dev.h>
+#include <linux/capability.h>
 #include "sysfs.h"
 
 extern struct super_block * sysfs_sb;
@@ -53,11 +54,10 @@ int sysfs_setattr(struct dentry * dentry, struct iattr * iattr)
 
 	if (!sd_iattr) {
 		/* setting attributes for the first time, allocate now */
-		sd_iattr = kmalloc(sizeof(struct iattr), GFP_KERNEL);
+		sd_iattr = kzalloc(sizeof(struct iattr), GFP_KERNEL);
 		if (!sd_iattr)
 			return -ENOMEM;
 		/* assign default attributes */
-		memset(sd_iattr, 0, sizeof(struct iattr));
 		sd_iattr->ia_mode = sd->s_mode;
 		sd_iattr->ia_uid = 0;
 		sd_iattr->ia_gid = 0;
@@ -175,8 +175,7 @@ const unsigned char * sysfs_get_name(struct sysfs_dirent *sd)
 	struct bin_attribute * bin_attr;
 	struct sysfs_symlink  * sl;
 
-	if (!sd || !sd->s_element)
-		BUG();
+	BUG_ON(!sd || !sd->s_element);
 
 	switch (sd->s_type) {
 		case SYSFS_DIR:
@@ -201,7 +200,7 @@ const unsigned char * sysfs_get_name(struct sysfs_dirent *sd)
 
 /*
  * Unhashes the dentry corresponding to given sysfs_dirent
- * Called with parent inode's i_sem held.
+ * Called with parent inode's i_mutex held.
  */
 void sysfs_drop_dentry(struct sysfs_dirent * sd, struct dentry * parent)
 {
@@ -226,13 +225,17 @@ void sysfs_drop_dentry(struct sysfs_dirent * sd, struct dentry * parent)
 void sysfs_hash_and_remove(struct dentry * dir, const char * name)
 {
 	struct sysfs_dirent * sd;
-	struct sysfs_dirent * parent_sd = dir->d_fsdata;
+	struct sysfs_dirent * parent_sd;
+
+	if (!dir)
+		return;
 
 	if (dir->d_inode == NULL)
 		/* no inode means this hasn't been made visible yet */
 		return;
 
-	down(&dir->d_inode->i_sem);
+	parent_sd = dir->d_fsdata;
+	mutex_lock(&dir->d_inode->i_mutex);
 	list_for_each_entry(sd, &parent_sd->s_children, s_sibling) {
 		if (!sd->s_element)
 			continue;
@@ -243,7 +246,5 @@ void sysfs_hash_and_remove(struct dentry * dir, const char * name)
 			break;
 		}
 	}
-	up(&dir->d_inode->i_sem);
+	mutex_unlock(&dir->d_inode->i_mutex);
 }
-
-

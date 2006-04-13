@@ -14,7 +14,6 @@
 #include <linux/sched.h>
 #include <linux/mm.h>
 
-#include <asm/mman.h>
 #include <asm/glue.h>
 #include <asm/shmparam.h>
 
@@ -69,6 +68,14 @@
 #  define MULTI_CACHE 1
 # else
 #  define _CACHE xscale
+# endif
+#endif
+
+#if defined(CONFIG_CPU_XSC3)
+# ifdef _CACHE
+#  define MULTI_CACHE 1
+# else
+#  define _CACHE xsc3
 # endif
 #endif
 

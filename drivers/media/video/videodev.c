@@ -29,7 +29,6 @@
 #include <linux/devfs_fs_kernel.h>
 #include <asm/uaccess.h>
 #include <asm/system.h>
-#include <asm/semaphore.h>
 
 #include <linux/videodev.h>
 
@@ -52,10 +51,7 @@ struct video_device *video_device_alloc(void)
 {
 	struct video_device *vfd;
 
-	vfd = kmalloc(sizeof(*vfd),GFP_KERNEL);
-	if (NULL == vfd)
-		return NULL;
-	memset(vfd,0,sizeof(*vfd));
+	vfd = kzalloc(sizeof(*vfd),GFP_KERNEL);
 	return vfd;
 }
 
@@ -68,7 +64,8 @@ static void video_release(struct class_device *cd)
 {
 	struct video_device *vfd = container_of(cd, struct video_device, class_dev);
 
-#if 1 /* needed until all drivers are fixed */
+#if 1
+	/* needed until all drivers are fixed */
 	if (!vfd->release)
 		return;
 #endif
@@ -85,7 +82,7 @@ static struct class video_class = {
  */
 
 static struct video_device *video_device[VIDEO_NUM_DEVICES];
-static DECLARE_MUTEX(videodev_lock);
+static DEFINE_MUTEX(videodev_lock);
 
 struct video_device* video_devdata(struct file *file)
 {
@@ -100,19 +97,19 @@ static int video_open(struct inode *inode, struct file *file)
 	unsigned int minor = iminor(inode);
 	int err = 0;
 	struct video_device *vfl;
-	struct file_operations *old_fops;
+	const struct file_operations *old_fops;
 
 	if(minor>=VIDEO_NUM_DEVICES)
 		return -ENODEV;
-	down(&videodev_lock);
+	mutex_lock(&videodev_lock);
 	vfl=video_device[minor];
 	if(vfl==NULL) {
-		up(&videodev_lock);
+		mutex_unlock(&videodev_lock);
 		request_module("char-major-%d-%d", VIDEO_MAJOR, minor);
-		down(&videodev_lock);
+		mutex_lock(&videodev_lock);
 		vfl=video_device[minor];
 		if (vfl==NULL) {
-			up(&videodev_lock);
+			mutex_unlock(&videodev_lock);
 			return -ENODEV;
 		}
 	}
@@ -125,7 +122,7 @@ static int video_open(struct inode *inode, struct file *file)
 		file->f_op = fops_get(old_fops);
 	}
 	fops_put(old_fops);
-	up(&videodev_lock);
+	mutex_unlock(&videodev_lock);
 	return err;
 }
 
@@ -227,13 +224,13 @@ int video_exclusive_open(struct inode *inode, struct file *file)
 	struct  video_device *vfl = video_devdata(file);
 	int retval = 0;
 
-	down(&vfl->lock);
+	mutex_lock(&vfl->lock);
 	if (vfl->users) {
 		retval = -EBUSY;
 	} else {
 		vfl->users++;
 	}
-	up(&vfl->lock);
+	mutex_unlock(&vfl->lock);
 	return retval;
 }
 
@@ -282,23 +279,23 @@ int video_register_device(struct video_device *vfd, int type, int nr)
 	switch(type)
 	{
 		case VFL_TYPE_GRABBER:
-			base=0;
-			end=64;
+			base=MINOR_VFL_TYPE_GRABBER_MIN;
+			end=MINOR_VFL_TYPE_GRABBER_MAX+1;
 			name_base = "video";
 			break;
 		case VFL_TYPE_VTX:
-			base=192;
-			end=224;
+			base=MINOR_VFL_TYPE_VTX_MIN;
+			end=MINOR_VFL_TYPE_VTX_MAX+1;
 			name_base = "vtx";
 			break;
 		case VFL_TYPE_VBI:
-			base=224;
-			end=256;
+			base=MINOR_VFL_TYPE_VBI_MIN;
+			end=MINOR_VFL_TYPE_VBI_MAX+1;
 			name_base = "vbi";
 			break;
 		case VFL_TYPE_RADIO:
-			base=64;
-			end=128;
+			base=MINOR_VFL_TYPE_RADIO_MIN;
+			end=MINOR_VFL_TYPE_RADIO_MAX+1;
 			name_base = "radio";
 			break;
 		default:
@@ -306,12 +303,12 @@ int video_register_device(struct video_device *vfd, int type, int nr)
 	}
 
 	/* pick a minor number */
-	down(&videodev_lock);
+	mutex_lock(&videodev_lock);
 	if (nr >= 0  &&  nr < end-base) {
 		/* use the one the driver asked for */
 		i = base+nr;
 		if (NULL != video_device[i]) {
-			up(&videodev_lock);
+			mutex_unlock(&videodev_lock);
 			return -ENFILE;
 		}
 	} else {
@@ -320,31 +317,32 @@ int video_register_device(struct video_device *vfd, int type, int nr)
 			if (NULL == video_device[i])
 				break;
 		if (i == end) {
-			up(&videodev_lock);
+			mutex_unlock(&videodev_lock);
 			return -ENFILE;
 		}
 	}
 	video_device[i]=vfd;
 	vfd->minor=i;
-	up(&videodev_lock);
+	mutex_unlock(&videodev_lock);
 
 	sprintf(vfd->devfs_name, "v4l/%s%d", name_base, i - base);
 	devfs_mk_cdev(MKDEV(VIDEO_MAJOR, vfd->minor),
 			S_IFCHR | S_IRUSR | S_IWUSR, vfd->devfs_name);
-	init_MUTEX(&vfd->lock);
+	mutex_init(&vfd->lock);
 
 	/* sysfs class */
 	memset(&vfd->class_dev, 0x00, sizeof(vfd->class_dev));
 	if (vfd->dev)
 		vfd->class_dev.dev = vfd->dev;
 	vfd->class_dev.class       = &video_class;
-	vfd->class_dev.devt       = MKDEV(VIDEO_MAJOR, vfd->minor);
+	vfd->class_dev.devt        = MKDEV(VIDEO_MAJOR, vfd->minor);
 	strlcpy(vfd->class_dev.class_id, vfd->devfs_name + 4, BUS_ID_SIZE);
 	class_device_register(&vfd->class_dev);
 	class_device_create_file(&vfd->class_dev,
-				 &class_device_attr_name);
+				&class_device_attr_name);
 
-#if 1 /* needed until all drivers are fixed */
+#if 1
+	/* needed until all drivers are fixed */
 	if (!vfd->release)
 		printk(KERN_WARNING "videodev: \"%s\" has no release callback. "
 		       "Please fix your driver for proper sysfs support, see "
@@ -363,14 +361,14 @@ int video_register_device(struct video_device *vfd, int type, int nr)
 
 void video_unregister_device(struct video_device *vfd)
 {
-	down(&videodev_lock);
+	mutex_lock(&videodev_lock);
 	if(video_device[vfd->minor]!=vfd)
 		panic("videodev: bad unregister");
 
 	devfs_remove(vfd->devfs_name);
 	video_device[vfd->minor]=NULL;
 	class_device_unregister(&vfd->class_dev);
-	up(&videodev_lock);
+	mutex_unlock(&videodev_lock);
 }
 
 

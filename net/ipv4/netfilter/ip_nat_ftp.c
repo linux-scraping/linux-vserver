@@ -154,14 +154,14 @@ static unsigned int ip_nat_ftp(struct sk_buff **pskb,
 	return NF_ACCEPT;
 }
 
-static void __exit fini(void)
+static void __exit ip_nat_ftp_fini(void)
 {
 	ip_nat_ftp_hook = NULL;
 	/* Make sure noone calls it, meanwhile. */
 	synchronize_net();
 }
 
-static int __init init(void)
+static int __init ip_nat_ftp_init(void)
 {
 	BUG_ON(ip_nat_ftp_hook);
 	ip_nat_ftp_hook = ip_nat_ftp;
@@ -171,11 +171,11 @@ static int __init init(void)
 /* Prior to 2.6.11, we had a ports param.  No longer, but don't break users. */
 static int warn_set(const char *val, struct kernel_param *kp)
 {
-	printk(KERN_INFO __stringify(KBUILD_MODNAME)
+	printk(KERN_INFO KBUILD_MODNAME
 	       ": kernel >= 2.6.10 only uses 'ports' for conntrack modules\n");
 	return 0;
 }
 module_param_call(ports, warn_set, NULL, NULL, 0);
 
-module_init(init);
-module_exit(fini);
+module_init(ip_nat_ftp_init);
+module_exit(ip_nat_ftp_fini);

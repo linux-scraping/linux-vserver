@@ -79,9 +79,11 @@ xfs_qm_dquot_logitem_format(
 
 	logvec->i_addr = (xfs_caddr_t)&logitem->qli_format;
 	logvec->i_len  = sizeof(xfs_dq_logformat_t);
+	XLOG_VEC_SET_TYPE(logvec, XLOG_REG_TYPE_QFORMAT);
 	logvec++;
 	logvec->i_addr = (xfs_caddr_t)&logitem->qli_dquot->q_core;
 	logvec->i_len  = sizeof(xfs_disk_dquot_t);
+	XLOG_VEC_SET_TYPE(logvec, XLOG_REG_TYPE_DQUOT);
 
 	ASSERT(2 == logitem->qli_item.li_desc->lid_size);
 	logitem->qli_format.qlf_size = 2;
@@ -219,7 +221,7 @@ xfs_qm_dqunpin_wait(
  * as possible.
  *
  * We must not be holding the AIL_LOCK at this point. Calling incore() to
- * search the buffercache can be a time consuming thing, and AIL_LOCK is a
+ * search the buffer cache can be a time consuming thing, and AIL_LOCK is a
  * spinlock.
  */
 STATIC void
@@ -239,7 +241,7 @@ xfs_qm_dquot_logitem_pushbuf(
 	 * trying to duplicate our effort.
 	 */
 	ASSERT(qip->qli_pushbuf_flag != 0);
-	ASSERT(qip->qli_push_owner == get_thread_id());
+	ASSERT(qip->qli_push_owner == current_pid());
 
 	/*
 	 * If flushlock isn't locked anymore, chances are that the
@@ -333,7 +335,7 @@ xfs_qm_dquot_logitem_trylock(
 			qip->qli_pushbuf_flag = 1;
 			ASSERT(qip->qli_format.qlf_blkno == dqp->q_blkno);
 #ifdef DEBUG
-			qip->qli_push_owner = get_thread_id();
+			qip->qli_push_owner = current_pid();
 #endif
 			/*
 			 * The dquot is left locked.

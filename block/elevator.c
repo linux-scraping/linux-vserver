@@ -33,6 +33,7 @@
 #include <linux/init.h>
 #include <linux/compiler.h>
 #include <linux/delay.h>
+#include <linux/blktrace_api.h>
 
 #include <asm/uaccess.h>
 
@@ -64,7 +65,7 @@ inline int elv_rq_merge_ok(struct request *rq, struct bio *bio)
 }
 EXPORT_SYMBOL(elv_rq_merge_ok);
 
-inline int elv_try_merge(struct request *__rq, struct bio *bio)
+static inline int elv_try_merge(struct request *__rq, struct bio *bio)
 {
 	int ret = ELEVATOR_NO_MERGE;
 
@@ -80,7 +81,6 @@ inline int elv_try_merge(struct request *__rq, struct bio *bio)
 
 	return ret;
 }
-EXPORT_SYMBOL(elv_try_merge);
 
 static struct elevator_type *elevator_find(const char *name)
 {
@@ -121,14 +121,9 @@ static struct elevator_type *elevator_get(const char *name)
 	return e;
 }
 
-static int elevator_attach(request_queue_t *q, struct elevator_type *e,
-			   struct elevator_queue *eq)
+static int elevator_attach(request_queue_t *q, struct elevator_queue *eq)
 {
 	int ret = 0;
-
-	memset(eq, 0, sizeof(*eq));
-	eq->ops = &e->ops;
-	eq->elevator_type = e;
 
 	q->elevator = eq;
 
@@ -140,32 +135,46 @@ static int elevator_attach(request_queue_t *q, struct elevator_type *e,
 
 static char chosen_elevator[16];
 
-static void elevator_setup_default(void)
-{
-	struct elevator_type *e;
-
-	/*
-	 * If default has not been set, use the compiled-in selection.
-	 */
-	if (!chosen_elevator[0])
-		strcpy(chosen_elevator, CONFIG_DEFAULT_IOSCHED);
-
- 	/*
- 	 * If the given scheduler is not available, fall back to no-op.
- 	 */
- 	if ((e = elevator_find(chosen_elevator)))
-		elevator_put(e);
-	else
- 		strcpy(chosen_elevator, "noop");
-}
-
 static int __init elevator_setup(char *str)
 {
-	strncpy(chosen_elevator, str, sizeof(chosen_elevator) - 1);
-	return 0;
+	/*
+	 * Be backwards-compatible with previous kernels, so users
+	 * won't get the wrong elevator.
+	 */
+	if (!strcmp(str, "as"))
+		strcpy(chosen_elevator, "anticipatory");
+	else
+		strncpy(chosen_elevator, str, sizeof(chosen_elevator) - 1);
+	return 1;
 }
 
 __setup("elevator=", elevator_setup);
+
+static struct kobj_type elv_ktype;
+
+static elevator_t *elevator_alloc(struct elevator_type *e)
+{
+	elevator_t *eq = kmalloc(sizeof(elevator_t), GFP_KERNEL);
+	if (eq) {
+		memset(eq, 0, sizeof(*eq));
+		eq->ops = &e->ops;
+		eq->elevator_type = e;
+		kobject_init(&eq->kobj);
+		snprintf(eq->kobj.name, KOBJ_NAME_LEN, "%s", "iosched");
+		eq->kobj.ktype = &elv_ktype;
+		mutex_init(&eq->sysfs_lock);
+	} else {
+		elevator_put(e);
+	}
+	return eq;
+}
+
+static void elevator_release(struct kobject *kobj)
+{
+	elevator_t *e = container_of(kobj, elevator_t, kobj);
+	elevator_put(e->elevator_type);
+	kfree(e);
+}
 
 int elevator_init(request_queue_t *q, char *name)
 {
@@ -178,38 +187,37 @@ int elevator_init(request_queue_t *q, char *name)
 	q->end_sector = 0;
 	q->boundary_rq = NULL;
 
-	elevator_setup_default();
-
-	if (!name)
-		name = chosen_elevator;
-
-	e = elevator_get(name);
-	if (!e)
+	if (name && !(e = elevator_get(name)))
 		return -EINVAL;
 
-	eq = kmalloc(sizeof(struct elevator_queue), GFP_KERNEL);
-	if (!eq) {
-		elevator_put(e);
-		return -ENOMEM;
+	if (!e && *chosen_elevator && !(e = elevator_get(chosen_elevator)))
+		printk("I/O scheduler %s not found\n", chosen_elevator);
+
+	if (!e && !(e = elevator_get(CONFIG_DEFAULT_IOSCHED))) {
+		printk("Default I/O scheduler not found, using no-op\n");
+		e = elevator_get("noop");
 	}
 
-	ret = elevator_attach(q, e, eq);
-	if (ret) {
-		kfree(eq);
-		elevator_put(e);
-	}
+	eq = elevator_alloc(e);
+	if (!eq)
+		return -ENOMEM;
+
+	ret = elevator_attach(q, eq);
+	if (ret)
+		kobject_put(&eq->kobj);
 
 	return ret;
 }
 
 void elevator_exit(elevator_t *e)
 {
+	mutex_lock(&e->sysfs_lock);
 	if (e->ops->elevator_exit_fn)
 		e->ops->elevator_exit_fn(e);
+	e->ops = NULL;
+	mutex_unlock(&e->sysfs_lock);
 
-	elevator_put(e->elevator_type);
-	e->elevator_type = NULL;
-	kfree(e);
+	kobject_put(&e->kobj);
 }
 
 /*
@@ -304,15 +312,7 @@ void elv_requeue_request(request_queue_t *q, struct request *rq)
 
 	rq->flags &= ~REQ_STARTED;
 
-	/*
-	 * if this is the flush, requeue the original instead and drop the flush
-	 */
-	if (rq->flags & REQ_BAR_FLUSH) {
-		clear_bit(QUEUE_FLAG_FLUSH, &q->queue_flags);
-		rq = rq->end_io_data;
-	}
-
-	__elv_add_request(q, rq, ELEVATOR_INSERT_FRONT, 0);
+	elv_insert(q, rq, ELEVATOR_INSERT_REQUEUE);
 }
 
 static void elv_drain_elevator(request_queue_t *q)
@@ -329,28 +329,12 @@ static void elv_drain_elevator(request_queue_t *q)
 	}
 }
 
-void __elv_add_request(request_queue_t *q, struct request *rq, int where,
-		       int plug)
+void elv_insert(request_queue_t *q, struct request *rq, int where)
 {
-	if (rq->flags & (REQ_SOFTBARRIER | REQ_HARDBARRIER)) {
-		/*
-		 * barriers implicitly indicate back insertion
-		 */
-		if (where == ELEVATOR_INSERT_SORT)
-			where = ELEVATOR_INSERT_BACK;
+	struct list_head *pos;
+	unsigned ordseq;
 
-		/*
-		 * this request is scheduling boundary, update end_sector
-		 */
-		if (blk_fs_request(rq)) {
-			q->end_sector = rq_end_sector(rq);
-			q->boundary_rq = rq;
-		}
-	} else if (!(rq->flags & REQ_ELVPRIV) && where == ELEVATOR_INSERT_SORT)
-		where = ELEVATOR_INSERT_BACK;
-
-	if (plug)
-		blk_plug_device(q);
+	blk_add_trace_rq(q, rq, BLK_TA_INSERT);
 
 	rq->q = q;
 
@@ -393,6 +377,30 @@ void __elv_add_request(request_queue_t *q, struct request *rq, int where,
 		q->elevator->ops->elevator_add_req_fn(q, rq);
 		break;
 
+	case ELEVATOR_INSERT_REQUEUE:
+		/*
+		 * If ordered flush isn't in progress, we do front
+		 * insertion; otherwise, requests should be requeued
+		 * in ordseq order.
+		 */
+		rq->flags |= REQ_SOFTBARRIER;
+
+		if (q->ordseq == 0) {
+			list_add(&rq->queuelist, &q->queue_head);
+			break;
+		}
+
+		ordseq = blk_ordered_req_seq(rq);
+
+		list_for_each(pos, &q->queue_head) {
+			struct request *pos_rq = list_entry_rq(pos);
+			if (ordseq <= blk_ordered_req_seq(pos_rq))
+				break;
+		}
+
+		list_add_tail(&rq->queuelist, pos);
+		break;
+
 	default:
 		printk(KERN_ERR "%s: bad insertion point %d\n",
 		       __FUNCTION__, where);
@@ -406,6 +414,42 @@ void __elv_add_request(request_queue_t *q, struct request *rq, int where,
 		if (nrq >= q->unplug_thresh)
 			__generic_unplug_device(q);
 	}
+}
+
+void __elv_add_request(request_queue_t *q, struct request *rq, int where,
+		       int plug)
+{
+	if (q->ordcolor)
+		rq->flags |= REQ_ORDERED_COLOR;
+
+	if (rq->flags & (REQ_SOFTBARRIER | REQ_HARDBARRIER)) {
+		/*
+		 * toggle ordered color
+		 */
+		if (blk_barrier_rq(rq))
+			q->ordcolor ^= 1;
+
+		/*
+		 * barriers implicitly indicate back insertion
+		 */
+		if (where == ELEVATOR_INSERT_SORT)
+			where = ELEVATOR_INSERT_BACK;
+
+		/*
+		 * this request is scheduling boundary, update
+		 * end_sector
+		 */
+		if (blk_fs_request(rq)) {
+			q->end_sector = rq_end_sector(rq);
+			q->boundary_rq = rq;
+		}
+	} else if (!(rq->flags & REQ_ELVPRIV) && where == ELEVATOR_INSERT_SORT)
+		where = ELEVATOR_INSERT_BACK;
+
+	if (plug)
+		blk_plug_device(q);
+
+	elv_insert(q, rq, where);
 }
 
 void elv_add_request(request_queue_t *q, struct request *rq, int where,
@@ -422,25 +466,16 @@ static inline struct request *__elv_next_request(request_queue_t *q)
 {
 	struct request *rq;
 
-	if (unlikely(list_empty(&q->queue_head) &&
-		     !q->elevator->ops->elevator_dispatch_fn(q, 0)))
-		return NULL;
+	while (1) {
+		while (!list_empty(&q->queue_head)) {
+			rq = list_entry_rq(q->queue_head.next);
+			if (blk_do_ordered(q, &rq))
+				return rq;
+		}
 
-	rq = list_entry_rq(q->queue_head.next);
-
-	/*
-	 * if this is a barrier write and the device has to issue a
-	 * flush sequence to support it, check how far we are
-	 */
-	if (blk_fs_request(rq) && blk_barrier_rq(rq)) {
-		BUG_ON(q->ordered == QUEUE_ORDERED_NONE);
-
-		if (q->ordered == QUEUE_ORDERED_FLUSH &&
-		    !blk_barrier_preflush(rq))
-			rq = blk_start_pre_flush(q, rq);
+		if (!q->elevator->ops->elevator_dispatch_fn(q, 0))
+			return NULL;
 	}
-
-	return rq;
 }
 
 struct request *elv_next_request(request_queue_t *q)
@@ -467,6 +502,7 @@ struct request *elv_next_request(request_queue_t *q)
 			 * not be passed by new incoming requests
 			 */
 			rq->flags |= REQ_STARTED;
+			blk_add_trace_rq(q, rq, BLK_TA_ISSUE);
 		}
 
 		if (!q->boundary_rq || q->boundary_rq == rq) {
@@ -498,7 +534,7 @@ struct request *elv_next_request(request_queue_t *q)
 			blkdev_dequeue_request(rq);
 			rq->flags |= REQ_QUIET;
 			end_that_request_chunk(rq, 0, nr_bytes);
-			end_that_request_last(rq);
+			end_that_request_last(rq, 0);
 		} else {
 			printk(KERN_ERR "%s: bad return=%d\n", __FUNCTION__,
 								ret);
@@ -597,42 +633,110 @@ void elv_completed_request(request_queue_t *q, struct request *rq)
 		if (blk_sorted_rq(rq) && e->ops->elevator_completed_req_fn)
 			e->ops->elevator_completed_req_fn(q, rq);
 	}
+
+	/*
+	 * Check if the queue is waiting for fs requests to be
+	 * drained for flush sequence.
+	 */
+	if (unlikely(q->ordseq)) {
+		struct request *first_rq = list_entry_rq(q->queue_head.next);
+		if (q->in_flight == 0 &&
+		    blk_ordered_cur_seq(q) == QUEUE_ORDSEQ_DRAIN &&
+		    blk_ordered_req_seq(first_rq) > QUEUE_ORDSEQ_DRAIN) {
+			blk_ordered_complete_seq(q, QUEUE_ORDSEQ_DRAIN, 0);
+			q->request_fn(q);
+		}
+	}
 }
+
+#define to_elv(atr) container_of((atr), struct elv_fs_entry, attr)
+
+static ssize_t
+elv_attr_show(struct kobject *kobj, struct attribute *attr, char *page)
+{
+	elevator_t *e = container_of(kobj, elevator_t, kobj);
+	struct elv_fs_entry *entry = to_elv(attr);
+	ssize_t error;
+
+	if (!entry->show)
+		return -EIO;
+
+	mutex_lock(&e->sysfs_lock);
+	error = e->ops ? entry->show(e, page) : -ENOENT;
+	mutex_unlock(&e->sysfs_lock);
+	return error;
+}
+
+static ssize_t
+elv_attr_store(struct kobject *kobj, struct attribute *attr,
+	       const char *page, size_t length)
+{
+	elevator_t *e = container_of(kobj, elevator_t, kobj);
+	struct elv_fs_entry *entry = to_elv(attr);
+	ssize_t error;
+
+	if (!entry->store)
+		return -EIO;
+
+	mutex_lock(&e->sysfs_lock);
+	error = e->ops ? entry->store(e, page, length) : -ENOENT;
+	mutex_unlock(&e->sysfs_lock);
+	return error;
+}
+
+static struct sysfs_ops elv_sysfs_ops = {
+	.show	= elv_attr_show,
+	.store	= elv_attr_store,
+};
+
+static struct kobj_type elv_ktype = {
+	.sysfs_ops	= &elv_sysfs_ops,
+	.release	= elevator_release,
+};
 
 int elv_register_queue(struct request_queue *q)
 {
 	elevator_t *e = q->elevator;
+	int error;
 
-	e->kobj.parent = kobject_get(&q->kobj);
-	if (!e->kobj.parent)
-		return -EBUSY;
+	e->kobj.parent = &q->kobj;
 
-	snprintf(e->kobj.name, KOBJ_NAME_LEN, "%s", "iosched");
-	e->kobj.ktype = e->elevator_type->elevator_ktype;
-
-	return kobject_register(&e->kobj);
+	error = kobject_add(&e->kobj);
+	if (!error) {
+		struct elv_fs_entry *attr = e->elevator_type->elevator_attrs;
+		if (attr) {
+			while (attr->attr.name) {
+				if (sysfs_create_file(&e->kobj, &attr->attr))
+					break;
+				attr++;
+			}
+		}
+		kobject_uevent(&e->kobj, KOBJ_ADD);
+	}
+	return error;
 }
 
 void elv_unregister_queue(struct request_queue *q)
 {
 	if (q) {
 		elevator_t *e = q->elevator;
-		kobject_unregister(&e->kobj);
-		kobject_put(&q->kobj);
+		kobject_uevent(&e->kobj, KOBJ_REMOVE);
+		kobject_del(&e->kobj);
 	}
 }
 
 int elv_register(struct elevator_type *e)
 {
 	spin_lock_irq(&elv_list_lock);
-	if (elevator_find(e->elevator_name))
-		BUG();
+	BUG_ON(elevator_find(e->elevator_name));
 	list_add_tail(&e->list, &elv_list);
 	spin_unlock_irq(&elv_list_lock);
 
 	printk(KERN_INFO "io scheduler %s registered", e->elevator_name);
-	if (!strcmp(e->elevator_name, chosen_elevator))
-		printk(" (default)");
+	if (!strcmp(e->elevator_name, chosen_elevator) ||
+			(!*chosen_elevator &&
+			 !strcmp(e->elevator_name, CONFIG_DEFAULT_IOSCHED)))
+				printk(" (default)");
 	printk("\n");
 	return 0;
 }
@@ -645,21 +749,15 @@ void elv_unregister(struct elevator_type *e)
 	/*
 	 * Iterate every thread in the process to remove the io contexts.
 	 */
-	read_lock(&tasklist_lock);
-	do_each_thread(g, p) {
-		struct io_context *ioc = p->io_context;
-		if (ioc && ioc->cic) {
-			ioc->cic->exit(ioc->cic);
-			ioc->cic->dtor(ioc->cic);
-			ioc->cic = NULL;
-		}
-		if (ioc && ioc->aic) {
-			ioc->aic->exit(ioc->aic);
-			ioc->aic->dtor(ioc->aic);
-			ioc->aic = NULL;
-		}
-	} while_each_thread(g, p);
-	read_unlock(&tasklist_lock);
+	if (e->ops.trim) {
+		read_lock(&tasklist_lock);
+		do_each_thread(g, p) {
+			task_lock(p);
+			e->ops.trim(p->io_context);
+			task_unlock(p);
+		} while_each_thread(g, p);
+		read_unlock(&tasklist_lock);
+	}
 
 	spin_lock_irq(&elv_list_lock);
 	list_del_init(&e->list);
@@ -673,16 +771,16 @@ EXPORT_SYMBOL_GPL(elv_unregister);
  * need for the new one. this way we have a chance of going back to the old
  * one, if the new one fails init for some reason.
  */
-static void elevator_switch(request_queue_t *q, struct elevator_type *new_e)
+static int elevator_switch(request_queue_t *q, struct elevator_type *new_e)
 {
 	elevator_t *old_elevator, *e;
 
 	/*
 	 * Allocate new elevator
 	 */
-	e = kmalloc(sizeof(elevator_t), GFP_KERNEL);
+	e = elevator_alloc(new_e);
 	if (!e)
-		goto error;
+		return 0;
 
 	/*
 	 * Turn on BYPASS and drain all requests w/ elevator private data
@@ -713,7 +811,7 @@ static void elevator_switch(request_queue_t *q, struct elevator_type *new_e)
 	/*
 	 * attach and start new elevator
 	 */
-	if (elevator_attach(q, new_e, e))
+	if (elevator_attach(q, e))
 		goto fail;
 
 	if (elv_register_queue(q))
@@ -724,7 +822,7 @@ static void elevator_switch(request_queue_t *q, struct elevator_type *new_e)
 	 */
 	elevator_exit(old_elevator);
 	clear_bit(QUEUE_FLAG_ELVSWITCH, &q->queue_flags);
-	return;
+	return 1;
 
 fail_register:
 	/*
@@ -737,10 +835,9 @@ fail:
 	q->elevator = old_elevator;
 	elv_register_queue(q);
 	clear_bit(QUEUE_FLAG_ELVSWITCH, &q->queue_flags);
-	kfree(e);
-error:
-	elevator_put(new_e);
-	printk(KERN_ERR "elevator: switch to %s failed\n",new_e->elevator_name);
+	if (e)
+		kobject_put(&e->kobj);
+	return 0;
 }
 
 ssize_t elv_iosched_store(request_queue_t *q, const char *name, size_t count)
@@ -767,7 +864,8 @@ ssize_t elv_iosched_store(request_queue_t *q, const char *name, size_t count)
 		return count;
 	}
 
-	elevator_switch(q, e);
+	if (!elevator_switch(q, e))
+		printk(KERN_ERR "elevator: switch to %s failed\n",elevator_name);
 	return count;
 }
 

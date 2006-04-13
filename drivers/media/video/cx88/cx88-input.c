@@ -5,7 +5,7 @@
  *
  * Copyright (c) 2003 Pavel Machek
  * Copyright (c) 2004 Gerd Knorr
- * Copyright (c) 2004 Chris Pascoe
+ * Copyright (c) 2004, 2005 Chris Pascoe
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -29,232 +29,8 @@
 #include <linux/module.h>
 #include <linux/moduleparam.h>
 
-#include <media/ir-common.h>
-
 #include "cx88.h"
-
-/* ---------------------------------------------------------------------- */
-
-/* DigitalNow DNTV Live DVB-T Remote */
-static IR_KEYTAB_TYPE ir_codes_dntv_live_dvb_t[IR_KEYTAB_SIZE] = {
-	[0x00] = KEY_ESC,		/* 'go up a level?' */
-	/* Keys 0 to 9 */
-	[0x0a] = KEY_KP0,
-	[0x01] = KEY_KP1,
-	[0x02] = KEY_KP2,
-	[0x03] = KEY_KP3,
-	[0x04] = KEY_KP4,
-	[0x05] = KEY_KP5,
-	[0x06] = KEY_KP6,
-	[0x07] = KEY_KP7,
-	[0x08] = KEY_KP8,
-	[0x09] = KEY_KP9,
-
-	[0x0b] = KEY_TUNER,		/* tv/fm */
-	[0x0c] = KEY_SEARCH,		/* scan */
-	[0x0d] = KEY_STOP,
-	[0x0e] = KEY_PAUSE,
-	[0x0f] = KEY_LIST,		/* source */
-
-	[0x10] = KEY_MUTE,
-	[0x11] = KEY_REWIND,		/* backward << */
-	[0x12] = KEY_POWER,
-	[0x13] = KEY_S,			/* snap */
-	[0x14] = KEY_AUDIO,		/* stereo */
-	[0x15] = KEY_CLEAR,		/* reset */
-	[0x16] = KEY_PLAY,
-	[0x17] = KEY_ENTER,
-	[0x18] = KEY_ZOOM,		/* full screen */
-	[0x19] = KEY_FASTFORWARD,	/* forward >> */
-	[0x1a] = KEY_CHANNELUP,
-	[0x1b] = KEY_VOLUMEUP,
-	[0x1c] = KEY_INFO,		/* preview */
-	[0x1d] = KEY_RECORD,		/* record */
-	[0x1e] = KEY_CHANNELDOWN,
-	[0x1f] = KEY_VOLUMEDOWN,
-};
-
-/* ---------------------------------------------------------------------- */
-
-/* IO-DATA BCTV7E Remote */
-static IR_KEYTAB_TYPE ir_codes_iodata_bctv7e[IR_KEYTAB_SIZE] = {
-	[0x40] = KEY_TV,
-	[0x20] = KEY_RADIO,		/* FM */
-	[0x60] = KEY_EPG,
-	[0x00] = KEY_POWER,
-
-	/* Keys 0 to 9 */
-	[0x44] = KEY_KP0,		/* 10 */
-	[0x50] = KEY_KP1,
-	[0x30] = KEY_KP2,
-	[0x70] = KEY_KP3,
-	[0x48] = KEY_KP4,
-	[0x28] = KEY_KP5,
-	[0x68] = KEY_KP6,
-	[0x58] = KEY_KP7,
-	[0x38] = KEY_KP8,
-	[0x78] = KEY_KP9,
-
-	[0x10] = KEY_L,			/* Live */
-	[0x08] = KEY_T,			/* Time Shift */
-
-	[0x18] = KEY_PLAYPAUSE,		/* Play */
-
-	[0x24] = KEY_ENTER,		/* 11 */
-	[0x64] = KEY_ESC,		/* 12 */
-	[0x04] = KEY_M,			/* Multi */
-
-	[0x54] = KEY_VIDEO,
-	[0x34] = KEY_CHANNELUP,
-	[0x74] = KEY_VOLUMEUP,
-	[0x14] = KEY_MUTE,
-
-	[0x4c] = KEY_S,			/* SVIDEO */
-	[0x2c] = KEY_CHANNELDOWN,
-	[0x6c] = KEY_VOLUMEDOWN,
-	[0x0c] = KEY_ZOOM,
-
-	[0x5c] = KEY_PAUSE,
-	[0x3c] = KEY_C,			/* || (red) */
-	[0x7c] = KEY_RECORD,		/* recording */
-	[0x1c] = KEY_STOP,
-
-	[0x41] = KEY_REWIND,		/* backward << */
-	[0x21] = KEY_PLAY,
-	[0x61] = KEY_FASTFORWARD,	/* forward >> */
-	[0x01] = KEY_NEXT,		/* skip >| */
-};
-
-/* ---------------------------------------------------------------------- */
-
-/* ADS Tech Instant TV DVB-T PCI Remote */
-static IR_KEYTAB_TYPE ir_codes_adstech_dvb_t_pci[IR_KEYTAB_SIZE] = {
-	/* Keys 0 to 9 */
-	[0x4d] = KEY_0,
-	[0x57] = KEY_1,
-	[0x4f] = KEY_2,
-	[0x53] = KEY_3,
-	[0x56] = KEY_4,
-	[0x4e] = KEY_5,
-	[0x5e] = KEY_6,
-	[0x54] = KEY_7,
-	[0x4c] = KEY_8,
-	[0x5c] = KEY_9,
-
-	[0x5b] = KEY_POWER,
-	[0x5f] = KEY_MUTE,
-	[0x55] = KEY_GOTO,
-	[0x5d] = KEY_SEARCH,
-	[0x17] = KEY_EPG,		/* Guide */
-	[0x1f] = KEY_MENU,
-	[0x0f] = KEY_UP,
-	[0x46] = KEY_DOWN,
-	[0x16] = KEY_LEFT,
-	[0x1e] = KEY_RIGHT,
-	[0x0e] = KEY_SELECT,		/* Enter */
-	[0x5a] = KEY_INFO,
-	[0x52] = KEY_EXIT,
-	[0x59] = KEY_PREVIOUS,
-	[0x51] = KEY_NEXT,
-	[0x58] = KEY_REWIND,
-	[0x50] = KEY_FORWARD,
-	[0x44] = KEY_PLAYPAUSE,
-	[0x07] = KEY_STOP,
-	[0x1b] = KEY_RECORD,
-	[0x13] = KEY_TUNER,		/* Live */
-	[0x0a] = KEY_A,
-	[0x12] = KEY_B,
-	[0x03] = KEY_PROG1,		/* 1 */
-	[0x01] = KEY_PROG2,		/* 2 */
-	[0x00] = KEY_PROG3,		/* 3 */
-	[0x06] = KEY_DVD,
-	[0x48] = KEY_AUX,		/* Photo */
-	[0x40] = KEY_VIDEO,
-	[0x19] = KEY_AUDIO,		/* Music */
-	[0x0b] = KEY_CHANNELUP,
-	[0x08] = KEY_CHANNELDOWN,
-	[0x15] = KEY_VOLUMEUP,
-	[0x1c] = KEY_VOLUMEDOWN,
-};
-
-/* ---------------------------------------------------------------------- */
-
-/* MSI TV@nywhere remote */
-static IR_KEYTAB_TYPE ir_codes_msi_tvanywhere[IR_KEYTAB_SIZE] = {
-	/* Keys 0 to 9 */
-	[0x00] = KEY_0,
-	[0x01] = KEY_1,
-	[0x02] = KEY_2,
-	[0x03] = KEY_3,
-	[0x04] = KEY_4,
-	[0x05] = KEY_5,
-	[0x06] = KEY_6,
-	[0x07] = KEY_7,
-	[0x08] = KEY_8,
-	[0x09] = KEY_9,
-
-	[0x0c] = KEY_MUTE,
-	[0x0f] = KEY_SCREEN,		/* Full Screen */
-	[0x10] = KEY_F,			/* Funtion */
-	[0x11] = KEY_T,			/* Time shift */
-	[0x12] = KEY_POWER,
-	[0x13] = KEY_MEDIA,		/* MTS */
-	[0x14] = KEY_SLOW,
-	[0x16] = KEY_REWIND,		/* backward << */
-	[0x17] = KEY_ENTER,		/* Return */
-	[0x18] = KEY_FASTFORWARD,	/* forward >> */
-	[0x1a] = KEY_CHANNELUP,
-	[0x1b] = KEY_VOLUMEUP,
-	[0x1e] = KEY_CHANNELDOWN,
-	[0x1f] = KEY_VOLUMEDOWN,
-};
-
-/* ---------------------------------------------------------------------- */
-
-/* Cinergy 1400 DVB-T */
-static IR_KEYTAB_TYPE ir_codes_cinergy_1400[IR_KEYTAB_SIZE] = {
-	[0x01] = KEY_POWER,
-	[0x02] = KEY_1,
-	[0x03] = KEY_2,
-	[0x04] = KEY_3,
-	[0x05] = KEY_4,
-	[0x06] = KEY_5,
-	[0x07] = KEY_6,
-	[0x08] = KEY_7,
-	[0x09] = KEY_8,
-	[0x0a] = KEY_9,
-	[0x0c] = KEY_0,
-
-	[0x0b] = KEY_VIDEO,
-	[0x0d] = KEY_REFRESH,
-	[0x0e] = KEY_SELECT,
-	[0x0f] = KEY_EPG,
-	[0x10] = KEY_UP,
-	[0x11] = KEY_LEFT,
-	[0x12] = KEY_OK,
-	[0x13] = KEY_RIGHT,
-	[0x14] = KEY_DOWN,
-	[0x15] = KEY_TEXT,
-	[0x16] = KEY_INFO,
-
-	[0x17] = KEY_RED,
-	[0x18] = KEY_GREEN,
-	[0x19] = KEY_YELLOW,
-	[0x1a] = KEY_BLUE,
-
-	[0x1b] = KEY_CHANNELUP,
-	[0x1c] = KEY_VOLUMEUP,
-	[0x1d] = KEY_MUTE,
-	[0x1e] = KEY_VOLUMEDOWN,
-	[0x1f] = KEY_CHANNELDOWN,
-
-	[0x40] = KEY_PAUSE,
-	[0x4c] = KEY_PLAY,
-	[0x58] = KEY_RECORD,
-	[0x54] = KEY_PREVIOUS,
-	[0x48] = KEY_STOP,
-	[0x5c] = KEY_NEXT,
-};
+#include <media/ir-common.h>
 
 /* ---------------------------------------------------------------------- */
 
@@ -266,7 +42,7 @@ struct cx88_IR {
 	char phys[32];
 
 	/* sample from gpio pin 16 */
-	int sampling;
+	u32 sampling;
 	u32 samples[16];
 	int scount;
 	unsigned long release;
@@ -375,6 +151,7 @@ int cx88_ir_init(struct cx88_core *core, struct pci_dev *pci)
 	switch (core->board) {
 	case CX88_BOARD_DNTV_LIVE_DVB_T:
 	case CX88_BOARD_KWORLD_DVB_T:
+	case CX88_BOARD_KWORLD_DVB_T_CX22702:
 		ir_codes = ir_codes_dntv_live_dvb_t;
 		ir->gpio_addr = MO_GP1_IO;
 		ir->mask_keycode = 0x1f;
@@ -384,10 +161,13 @@ int cx88_ir_init(struct cx88_core *core, struct pci_dev *pci)
 	case CX88_BOARD_TERRATEC_CINERGY_1400_DVB_T1:
 		ir_codes = ir_codes_cinergy_1400;
 		ir_type = IR_TYPE_PD;
-		ir->sampling = 1;
+		ir->sampling = 0xeb04; /* address */
 		break;
 	case CX88_BOARD_HAUPPAUGE:
 	case CX88_BOARD_HAUPPAUGE_DVB_T1:
+	case CX88_BOARD_HAUPPAUGE_NOVASE2_S1:
+	case CX88_BOARD_HAUPPAUGE_NOVASPLUS_S1:
+	case CX88_BOARD_HAUPPAUGE_HVR1100:
 		ir_codes = ir_codes_hauppauge_new;
 		ir_type = IR_TYPE_RC5;
 		ir->sampling = 1;
@@ -406,11 +186,19 @@ int cx88_ir_init(struct cx88_core *core, struct pci_dev *pci)
 		ir->mask_keydown = 0x02;
 		ir->polling = 5; /* ms */
 		break;
+       case CX88_BOARD_PROLINK_PLAYTVPVR:
 	case CX88_BOARD_PIXELVIEW_PLAYTV_ULTRA_PRO:
 		ir_codes = ir_codes_pixelview;
 		ir->gpio_addr = MO_GP1_IO;
 		ir->mask_keycode = 0x1f;
 		ir->mask_keyup = 0x80;
+		ir->polling = 1; /* ms */
+		break;
+	case CX88_BOARD_KWORLD_LTV883:
+		ir_codes = ir_codes_pixelview;
+		ir->gpio_addr = MO_GP1_IO;
+		ir->mask_keycode = 0x1f;
+		ir->mask_keyup = 0x60;
 		ir->polling = 1; /* ms */
 		break;
 	case CX88_BOARD_ADSTECH_DVB_T_PCI:
@@ -426,6 +214,19 @@ int cx88_ir_init(struct cx88_core *core, struct pci_dev *pci)
 		ir->mask_keycode = 0x1f;
 		ir->mask_keyup = 0x40;
 		ir->polling = 1; /* ms */
+		break;
+	case CX88_BOARD_AVERTV_303:
+	case CX88_BOARD_AVERTV_STUDIO_303:
+		ir_codes         = ir_codes_avertv_303;
+		ir->gpio_addr    = MO_GP2_IO;
+		ir->mask_keycode = 0xfb;
+		ir->mask_keydown = 0x02;
+		ir->polling      = 50; /* ms */
+		break;
+	case CX88_BOARD_DNTV_LIVE_DVB_T_PRO:
+		ir_codes = ir_codes_dntv_live_dvbt_pro;
+		ir_type = IR_TYPE_PD;
+		ir->sampling = 0xff00; /* address */
 		break;
 	}
 
@@ -484,6 +285,10 @@ int cx88_ir_fini(struct cx88_core *core)
 	if (NULL == ir)
 		return 0;
 
+	if (ir->sampling) {
+		cx_write(MO_DDSCFG_IO, 0x0);
+		core->pci_irqmask &= ~(1 << 18);
+	}
 	if (ir->polling) {
 		del_timer(&ir->timer);
 		flush_scheduled_work();
@@ -535,6 +340,7 @@ void cx88_ir_irq(struct cx88_core *core)
 	/* decode it */
 	switch (core->board) {
 	case CX88_BOARD_TERRATEC_CINERGY_1400_DVB_T1:
+	case CX88_BOARD_DNTV_LIVE_DVB_T_PRO:
 		ircode = ir_decode_pulsedistance(ir->samples, ir->scount, 1, 4);
 
 		if (ircode == 0xffffffff) { /* decoding error */
@@ -550,7 +356,7 @@ void cx88_ir_irq(struct cx88_core *core)
 			break;
 		}
 
-		if ((ircode & 0xffff) != 0xeb04) { /* wrong address */
+		if ((ircode & 0xffff) != (ir->sampling & 0xffff)) { /* wrong address */
 			ir_dprintk("pulse distance decoded wrong address\n");
 			break;
 		}
@@ -567,6 +373,9 @@ void cx88_ir_irq(struct cx88_core *core)
 		break;
 	case CX88_BOARD_HAUPPAUGE:
 	case CX88_BOARD_HAUPPAUGE_DVB_T1:
+	case CX88_BOARD_HAUPPAUGE_NOVASE2_S1:
+	case CX88_BOARD_HAUPPAUGE_NOVASPLUS_S1:
+	case CX88_BOARD_HAUPPAUGE_HVR1100:
 		ircode = ir_decode_biphase(ir->samples, ir->scount, 5, 7);
 		ir_dprintk("biphase decoded: %x\n", ircode);
 		if ((ircode & 0xfffff000) != 0x3000)

@@ -1,5 +1,5 @@
 /*
- * Common pmac/prep/chrp pci routines. -- Cort
+ * Common prep/chrp pci routines. -- Cort
  */
 
 #include <linux/config.h>
@@ -46,12 +46,8 @@ static void pcibios_fixup_resources(struct pci_dev* dev);
 static void fixup_broken_pcnet32(struct pci_dev* dev);
 static int reparent_resources(struct resource *parent, struct resource *res);
 static void fixup_cpc710_pci64(struct pci_dev* dev);
-#ifdef CONFIG_PPC_OF
-static u8* pci_to_OF_bus_map;
-#endif
 
-/* By default, we don't re-assign bus numbers. We do this only on
- * some pmacs
+/* By default, we don't re-assign bus numbers.
  */
 int pci_assign_all_buses;
 
@@ -503,7 +499,7 @@ pcibios_allocate_resources(int pass)
 	u16 command;
 	struct resource *r;
 
-	while ((dev = pci_find_device(PCI_ANY_ID, PCI_ANY_ID, dev)) != NULL) {
+	for_each_pci_dev(dev) {
 		pci_read_config_word(dev, PCI_COMMAND, &command);
 		for (idx = 0; idx < 6; idx++) {
 			r = &dev->resource[idx];
@@ -540,7 +536,7 @@ pcibios_assign_resources(void)
 	int idx;
 	struct resource *r;
 
-	while ((dev = pci_find_device(PCI_ANY_ID, PCI_ANY_ID, dev)) != NULL) {
+	for_each_pci_dev(dev) {
 		int class = dev->class >> 8;
 
 		/* Don't touch classless devices and host bridges */
@@ -626,623 +622,15 @@ pcibios_alloc_controller(void)
 	return hose;
 }
 
-#ifdef CONFIG_PPC_OF
-/*
- * Functions below are used on OpenFirmware machines.
- */
-static void
-make_one_node_map(struct device_node* node, u8 pci_bus)
-{
-	int *bus_range;
-	int len;
-
-	if (pci_bus >= pci_bus_count)
-		return;
-	bus_range = (int *) get_property(node, "bus-range", &len);
-	if (bus_range == NULL || len < 2 * sizeof(int)) {
-		printk(KERN_WARNING "Can't get bus-range for %s, "
-		       "assuming it starts at 0\n", node->full_name);
-		pci_to_OF_bus_map[pci_bus] = 0;
-	} else
-		pci_to_OF_bus_map[pci_bus] = bus_range[0];
-
-	for (node=node->child; node != 0;node = node->sibling) {
-		struct pci_dev* dev;
-		unsigned int *class_code, *reg;
-	
-		class_code = (unsigned int *) get_property(node, "class-code", NULL);
-		if (!class_code || ((*class_code >> 8) != PCI_CLASS_BRIDGE_PCI &&
-			(*class_code >> 8) != PCI_CLASS_BRIDGE_CARDBUS))
-			continue;
-		reg = (unsigned int *)get_property(node, "reg", NULL);
-		if (!reg)
-			continue;
-		dev = pci_find_slot(pci_bus, ((reg[0] >> 8) & 0xff));
-		if (!dev || !dev->subordinate)
-			continue;
-		make_one_node_map(node, dev->subordinate->number);
-	}
-}
-	
-void
-pcibios_make_OF_bus_map(void)
-{
-	int i;
-	struct pci_controller* hose;
-	u8* of_prop_map;
-
-	pci_to_OF_bus_map = (u8*)kmalloc(pci_bus_count, GFP_KERNEL);
-	if (!pci_to_OF_bus_map) {
-		printk(KERN_ERR "Can't allocate OF bus map !\n");
-		return;
-	}
-
-	/* We fill the bus map with invalid values, that helps
-	 * debugging.
-	 */
-	for (i=0; i<pci_bus_count; i++)
-		pci_to_OF_bus_map[i] = 0xff;
-
-	/* For each hose, we begin searching bridges */
-	for(hose=hose_head; hose; hose=hose->next) {
-		struct device_node* node;	
-		node = (struct device_node *)hose->arch_data;
-		if (!node)
-			continue;
-		make_one_node_map(node, hose->first_busno);
-	}
-	of_prop_map = get_property(find_path_device("/"), "pci-OF-bus-map", NULL);
-	if (of_prop_map)
-		memcpy(of_prop_map, pci_to_OF_bus_map, pci_bus_count);
-#ifdef DEBUG
-	printk("PCI->OF bus map:\n");
-	for (i=0; i<pci_bus_count; i++) {
-		if (pci_to_OF_bus_map[i] == 0xff)
-			continue;
-		printk("%d -> %d\n", i, pci_to_OF_bus_map[i]);
-	}
-#endif
-}
-
-typedef int (*pci_OF_scan_iterator)(struct device_node* node, void* data);
-
-static struct device_node*
-scan_OF_pci_childs(struct device_node* node, pci_OF_scan_iterator filter, void* data)
-{
-	struct device_node* sub_node;
-
-	for (; node != 0;node = node->sibling) {
-		unsigned int *class_code;
-	
-		if (filter(node, data))
-			return node;
-
-		/* For PCI<->PCI bridges or CardBus bridges, we go down
-		 * Note: some OFs create a parent node "multifunc-device" as
-		 * a fake root for all functions of a multi-function device,
-		 * we go down them as well.
-		 */
-		class_code = (unsigned int *) get_property(node, "class-code", NULL);
-		if ((!class_code || ((*class_code >> 8) != PCI_CLASS_BRIDGE_PCI &&
-			(*class_code >> 8) != PCI_CLASS_BRIDGE_CARDBUS)) &&
-			strcmp(node->name, "multifunc-device"))
-			continue;
-		sub_node = scan_OF_pci_childs(node->child, filter, data);
-		if (sub_node)
-			return sub_node;
-	}
-	return NULL;
-}
-
-static int
-scan_OF_pci_childs_iterator(struct device_node* node, void* data)
-{
-	unsigned int *reg;
-	u8* fdata = (u8*)data;
-	
-	reg = (unsigned int *) get_property(node, "reg", NULL);
-	if (reg && ((reg[0] >> 8) & 0xff) == fdata[1]
-		&& ((reg[0] >> 16) & 0xff) == fdata[0])
-		return 1;
-	return 0;
-}
-
-static struct device_node*
-scan_OF_childs_for_device(struct device_node* node, u8 bus, u8 dev_fn)
-{
-	u8 filter_data[2] = {bus, dev_fn};
-
-	return scan_OF_pci_childs(node, scan_OF_pci_childs_iterator, filter_data);
-}
-
-/*
- * Scans the OF tree for a device node matching a PCI device
- */
-struct device_node *
-pci_busdev_to_OF_node(struct pci_bus *bus, int devfn)
-{
-	struct pci_controller *hose;
-	struct device_node *node;
-	int busnr;
-
-	if (!have_of)
-		return NULL;
-	
-	/* Lookup the hose */
-	busnr = bus->number;
-	hose = pci_bus_to_hose(busnr);
-	if (!hose)
-		return NULL;
-
-	/* Check it has an OF node associated */
-	node = (struct device_node *) hose->arch_data;
-	if (!node)
-		return NULL;
-
-	/* Fixup bus number according to what OF think it is. */
-#ifdef CONFIG_PPC_PMAC
-	/* The G5 need a special case here. Basically, we don't remap all
-	 * busses on it so we don't create the pci-OF-map. However, we do
-	 * remap the AGP bus and so have to deal with it. A future better
-	 * fix has to be done by making the remapping per-host and always
-	 * filling the pci_to_OF map. --BenH
-	 */
-	if (_machine == _MACH_Pmac && busnr >= 0xf0)
-		busnr -= 0xf0;
-	else
-#endif
-	if (pci_to_OF_bus_map)
-		busnr = pci_to_OF_bus_map[busnr];
-	if (busnr == 0xff)
-		return NULL;
-	
-	/* Now, lookup childs of the hose */
-	return scan_OF_childs_for_device(node->child, busnr, devfn);
-}
-EXPORT_SYMBOL(pci_busdev_to_OF_node);
-
-struct device_node*
-pci_device_to_OF_node(struct pci_dev *dev)
-{
-	return pci_busdev_to_OF_node(dev->bus, dev->devfn);
-}
-EXPORT_SYMBOL(pci_device_to_OF_node);
-
-/* This routine is meant to be used early during boot, when the
- * PCI bus numbers have not yet been assigned, and you need to
- * issue PCI config cycles to an OF device.
- * It could also be used to "fix" RTAS config cycles if you want
- * to set pci_assign_all_buses to 1 and still use RTAS for PCI
- * config cycles.
- */
-struct pci_controller*
-pci_find_hose_for_OF_device(struct device_node* node)
-{
-	if (!have_of)
-		return NULL;
-	while(node) {
-		struct pci_controller* hose;
-		for (hose=hose_head;hose;hose=hose->next)
-			if (hose->arch_data == node)
-				return hose;
-		node=node->parent;
-	}
-	return NULL;
-}
-
-static int
-find_OF_pci_device_filter(struct device_node* node, void* data)
-{
-	return ((void *)node == data);
-}
-
-/*
- * Returns the PCI device matching a given OF node
- */
-int
-pci_device_from_OF_node(struct device_node* node, u8* bus, u8* devfn)
-{
-	unsigned int *reg;
-	struct pci_controller* hose;
-	struct pci_dev* dev = NULL;
-	
-	if (!have_of)
-		return -ENODEV;
-	/* Make sure it's really a PCI device */
-	hose = pci_find_hose_for_OF_device(node);
-	if (!hose || !hose->arch_data)
-		return -ENODEV;
-	if (!scan_OF_pci_childs(((struct device_node*)hose->arch_data)->child,
-			find_OF_pci_device_filter, (void *)node))
-		return -ENODEV;
-	reg = (unsigned int *) get_property(node, "reg", NULL);
-	if (!reg)
-		return -ENODEV;
-	*bus = (reg[0] >> 16) & 0xff;
-	*devfn = ((reg[0] >> 8) & 0xff);
-
-	/* Ok, here we need some tweak. If we have already renumbered
-	 * all busses, we can't rely on the OF bus number any more.
-	 * the pci_to_OF_bus_map is not enough as several PCI busses
-	 * may match the same OF bus number.
-	 */
-	if (!pci_to_OF_bus_map)
-		return 0;
-	while ((dev = pci_find_device(PCI_ANY_ID, PCI_ANY_ID, dev)) != NULL) {
-		if (pci_to_OF_bus_map[dev->bus->number] != *bus)
-			continue;
-		if (dev->devfn != *devfn)
-			continue;
-		*bus = dev->bus->number;
-		return 0;
-	}
-	return -ENODEV;
-}
-EXPORT_SYMBOL(pci_device_from_OF_node);
-
-void __init
-pci_process_bridge_OF_ranges(struct pci_controller *hose,
-			   struct device_node *dev, int primary)
-{
-	static unsigned int static_lc_ranges[256] __initdata;
-	unsigned int *dt_ranges, *lc_ranges, *ranges, *prev;
-	unsigned int size;
-	int rlen = 0, orig_rlen;
-	int memno = 0;
-	struct resource *res;
-	int np, na = prom_n_addr_cells(dev);
-	np = na + 5;
-
-	/* First we try to merge ranges to fix a problem with some pmacs
-	 * that can have more than 3 ranges, fortunately using contiguous
-	 * addresses -- BenH
-	 */
-	dt_ranges = (unsigned int *) get_property(dev, "ranges", &rlen);
-	if (!dt_ranges)
-		return;
-	/* Sanity check, though hopefully that never happens */
-	if (rlen > sizeof(static_lc_ranges)) {
-		printk(KERN_WARNING "OF ranges property too large !\n");
-		rlen = sizeof(static_lc_ranges);
-	}
-	lc_ranges = static_lc_ranges;
-	memcpy(lc_ranges, dt_ranges, rlen);
-	orig_rlen = rlen;
-
-	/* Let's work on a copy of the "ranges" property instead of damaging
-	 * the device-tree image in memory
-	 */
-	ranges = lc_ranges;
-	prev = NULL;
-	while ((rlen -= np * sizeof(unsigned int)) >= 0) {
-		if (prev) {
-			if (prev[0] == ranges[0] && prev[1] == ranges[1] &&
-				(prev[2] + prev[na+4]) == ranges[2] &&
-				(prev[na+2] + prev[na+4]) == ranges[na+2]) {
-				prev[na+4] += ranges[na+4];
-				ranges[0] = 0;
-				ranges += np;
-				continue;
-			}
-		}
-		prev = ranges;
-		ranges += np;
-	}
-
-	/*
-	 * The ranges property is laid out as an array of elements,
-	 * each of which comprises:
-	 *   cells 0 - 2:	a PCI address
-	 *   cells 3 or 3+4:	a CPU physical address
-	 *			(size depending on dev->n_addr_cells)
-	 *   cells 4+5 or 5+6:	the size of the range
-	 */
-	ranges = lc_ranges;
-	rlen = orig_rlen;
-	while (ranges && (rlen -= np * sizeof(unsigned int)) >= 0) {
-		res = NULL;
-		size = ranges[na+4];
-		switch (ranges[0] >> 24) {
-		case 1:		/* I/O space */
-			if (ranges[2] != 0)
-				break;
-			hose->io_base_phys = ranges[na+2];
-			/* limit I/O space to 16MB */
-			if (size > 0x01000000)
-				size = 0x01000000;
-			hose->io_base_virt = ioremap(ranges[na+2], size);
-			if (primary)
-				isa_io_base = (unsigned long) hose->io_base_virt;
-			res = &hose->io_resource;
-			res->flags = IORESOURCE_IO;
-			res->start = ranges[2];
-			break;
-		case 2:		/* memory space */
-			memno = 0;
-			if (ranges[1] == 0 && ranges[2] == 0
-			    && ranges[na+4] <= (16 << 20)) {
-				/* 1st 16MB, i.e. ISA memory area */
-				if (primary)
-					isa_mem_base = ranges[na+2];
-				memno = 1;
-			}
-			while (memno < 3 && hose->mem_resources[memno].flags)
-				++memno;
-			if (memno == 0)
-				hose->pci_mem_offset = ranges[na+2] - ranges[2];
-			if (memno < 3) {
-				res = &hose->mem_resources[memno];
-				res->flags = IORESOURCE_MEM;
-				res->start = ranges[na+2];
-			}
-			break;
-		}
-		if (res != NULL) {
-			res->name = dev->full_name;
-			res->end = res->start + size - 1;
-			res->parent = NULL;
-			res->sibling = NULL;
-			res->child = NULL;
-		}
-		ranges += np;
-	}
-}
-
-/* We create the "pci-OF-bus-map" property now so it appears in the
- * /proc device tree
- */
-void __init
-pci_create_OF_bus_map(void)
-{
-	struct property* of_prop;
-	
-	of_prop = (struct property*) alloc_bootmem(sizeof(struct property) + 256);
-	if (of_prop && find_path_device("/")) {
-		memset(of_prop, -1, sizeof(struct property) + 256);
-		of_prop->name = "pci-OF-bus-map";
-		of_prop->length = 256;
-		of_prop->value = (unsigned char *)&of_prop[1];
-		prom_add_property(find_path_device("/"), of_prop);
-	}
-}
-
-static ssize_t pci_show_devspec(struct device *dev, struct device_attribute *attr, char *buf)
-{
-	struct pci_dev *pdev;
-	struct device_node *np;
-
-	pdev = to_pci_dev (dev);
-	np = pci_device_to_OF_node(pdev);
-	if (np == NULL || np->full_name == NULL)
-		return 0;
-	return sprintf(buf, "%s", np->full_name);
-}
-static DEVICE_ATTR(devspec, S_IRUGO, pci_show_devspec, NULL);
-
-#else /* CONFIG_PPC_OF */
 void pcibios_make_OF_bus_map(void)
 {
 }
-#endif /* CONFIG_PPC_OF */
 
 /* Add sysfs properties */
 void pcibios_add_platform_entries(struct pci_dev *pdev)
 {
-#ifdef CONFIG_PPC_OF
-	device_create_file(&pdev->dev, &dev_attr_devspec);
-#endif /* CONFIG_PPC_OF */
 }
 
-
-#ifdef CONFIG_PPC_PMAC
-/*
- * This set of routines checks for PCI<->PCI bridges that have closed
- * IO resources and have child devices. It tries to re-open an IO
- * window on them.
- *
- * This is a _temporary_ fix to workaround a problem with Apple's OF
- * closing IO windows on P2P bridges when the OF drivers of cards
- * below this bridge don't claim any IO range (typically ATI or
- * Adaptec).
- *
- * A more complete fix would be to use drivers/pci/setup-bus.c, which
- * involves a working pcibios_fixup_pbus_ranges(), some more care about
- * ordering when creating the host bus resources, and maybe a few more
- * minor tweaks
- */
-
-/* Initialize bridges with base/limit values we have collected */
-static void __init
-do_update_p2p_io_resource(struct pci_bus *bus, int enable_vga)
-{
-	struct pci_dev *bridge = bus->self;
-	struct pci_controller* hose = (struct pci_controller *)bridge->sysdata;
-	u32 l;
-	u16 w;
-	struct resource res;
-
-	if (bus->resource[0] == NULL)
-		return;
- 	res = *(bus->resource[0]);
-
-	DBG("Remapping Bus %d, bridge: %s\n", bus->number, pci_name(bridge));
-	res.start -= ((unsigned long) hose->io_base_virt - isa_io_base);
-	res.end -= ((unsigned long) hose->io_base_virt - isa_io_base);
-	DBG("  IO window: %08lx-%08lx\n", res.start, res.end);
-
-	/* Set up the top and bottom of the PCI I/O segment for this bus. */
-	pci_read_config_dword(bridge, PCI_IO_BASE, &l);
-	l &= 0xffff000f;
-	l |= (res.start >> 8) & 0x00f0;
-	l |= res.end & 0xf000;
-	pci_write_config_dword(bridge, PCI_IO_BASE, l);
-
-	if ((l & PCI_IO_RANGE_TYPE_MASK) == PCI_IO_RANGE_TYPE_32) {
-		l = (res.start >> 16) | (res.end & 0xffff0000);
-		pci_write_config_dword(bridge, PCI_IO_BASE_UPPER16, l);
-	}
-
-	pci_read_config_word(bridge, PCI_COMMAND, &w);
-	w |= PCI_COMMAND_IO;
-	pci_write_config_word(bridge, PCI_COMMAND, w);
-
-#if 0 /* Enabling this causes XFree 4.2.0 to hang during PCI probe */
-	if (enable_vga) {
-		pci_read_config_word(bridge, PCI_BRIDGE_CONTROL, &w);
-		w |= PCI_BRIDGE_CTL_VGA;
-		pci_write_config_word(bridge, PCI_BRIDGE_CONTROL, w);
-	}
-#endif
-}
-
-/* This function is pretty basic and actually quite broken for the
- * general case, it's enough for us right now though. It's supposed
- * to tell us if we need to open an IO range at all or not and what
- * size.
- */
-static int __init
-check_for_io_childs(struct pci_bus *bus, struct resource* res, int *found_vga)
-{
-	struct pci_dev *dev;
-	int	i;
-	int	rc = 0;
-
-#define push_end(res, size) do { unsigned long __sz = (size) ; \
-	res->end = ((res->end + __sz) / (__sz + 1)) * (__sz + 1) + __sz; \
-    } while (0)
-
-	list_for_each_entry(dev, &bus->devices, bus_list) {
-		u16 class = dev->class >> 8;
-
-		if (class == PCI_CLASS_DISPLAY_VGA ||
-		    class == PCI_CLASS_NOT_DEFINED_VGA)
-			*found_vga = 1;
-		if (class >> 8 == PCI_BASE_CLASS_BRIDGE && dev->subordinate)
-			rc |= check_for_io_childs(dev->subordinate, res, found_vga);
-		if (class == PCI_CLASS_BRIDGE_CARDBUS)
-			push_end(res, 0xfff);
-
-		for (i=0; i<PCI_NUM_RESOURCES; i++) {
-			struct resource *r;
-			unsigned long r_size;
-
-			if (dev->class >> 8 == PCI_CLASS_BRIDGE_PCI
-			    && i >= PCI_BRIDGE_RESOURCES)
-				continue;
-			r = &dev->resource[i];
-			r_size = r->end - r->start;
-			if (r_size < 0xfff)
-				r_size = 0xfff;
-			if (r->flags & IORESOURCE_IO && (r_size) != 0) {
-				rc = 1;
-				push_end(res, r_size);
-			}
-		}
-	}
-
-	return rc;
-}
-
-/* Here we scan all P2P bridges of a given level that have a closed
- * IO window. Note that the test for the presence of a VGA card should
- * be improved to take into account already configured P2P bridges,
- * currently, we don't see them and might end up configuring 2 bridges
- * with VGA pass through enabled
- */
-static void __init
-do_fixup_p2p_level(struct pci_bus *bus)
-{
-	struct pci_bus *b;
-	int i, parent_io;
-	int has_vga = 0;
-
-	for (parent_io=0; parent_io<4; parent_io++)
-		if (bus->resource[parent_io]
-		    && bus->resource[parent_io]->flags & IORESOURCE_IO)
-			break;
-	if (parent_io >= 4)
-		return;
-
-	list_for_each_entry(b, &bus->children, node) {
-		struct pci_dev *d = b->self;
-		struct pci_controller* hose = (struct pci_controller *)d->sysdata;
-		struct resource *res = b->resource[0];
-		struct resource tmp_res;
-		unsigned long max;
-		int found_vga = 0;
-
-		memset(&tmp_res, 0, sizeof(tmp_res));
-		tmp_res.start = bus->resource[parent_io]->start;
-
-		/* We don't let low addresses go through that closed P2P bridge, well,
-		 * that may not be necessary but I feel safer that way
-		 */
-		if (tmp_res.start == 0)
-			tmp_res.start = 0x1000;
-	
-		if (!list_empty(&b->devices) && res && res->flags == 0 &&
-		    res != bus->resource[parent_io] &&
-		    (d->class >> 8) == PCI_CLASS_BRIDGE_PCI &&
-		    check_for_io_childs(b, &tmp_res, &found_vga)) {
-			u8 io_base_lo;
-
-			printk(KERN_INFO "Fixing up IO bus %s\n", b->name);
-
-			if (found_vga) {
-				if (has_vga) {
-					printk(KERN_WARNING "Skipping VGA, already active"
-					    " on bus segment\n");
-					found_vga = 0;
-				} else
-					has_vga = 1;
-			}
-			pci_read_config_byte(d, PCI_IO_BASE, &io_base_lo);
-
-			if ((io_base_lo & PCI_IO_RANGE_TYPE_MASK) == PCI_IO_RANGE_TYPE_32)
-				max = ((unsigned long) hose->io_base_virt
-					- isa_io_base) + 0xffffffff;
-			else
-				max = ((unsigned long) hose->io_base_virt
-					- isa_io_base) + 0xffff;
-
-			*res = tmp_res;
-			res->flags = IORESOURCE_IO;
-			res->name = b->name;
-		
-			/* Find a resource in the parent where we can allocate */
-			for (i = 0 ; i < 4; i++) {
-				struct resource *r = bus->resource[i];
-				if (!r)
-					continue;
-				if ((r->flags & IORESOURCE_IO) == 0)
-					continue;
-				DBG("Trying to allocate from %08lx, size %08lx from parent"
-				    " res %d: %08lx -> %08lx\n",
-					res->start, res->end, i, r->start, r->end);
-			
-				if (allocate_resource(r, res, res->end + 1, res->start, max,
-				    res->end + 1, NULL, NULL) < 0) {
-					DBG("Failed !\n");
-					continue;
-				}
-				do_update_p2p_io_resource(b, found_vga);
-				break;
-			}
-		}
-		do_fixup_p2p_level(b);
-	}
-}
-
-static void
-pcibios_fixup_p2p_bridges(void)
-{
-	struct pci_bus *b;
-
-	list_for_each_entry(b, &pci_root_buses, node)
-		do_fixup_p2p_level(b);
-}
-
-#endif /* CONFIG_PPC_PMAC */
 
 static int __init
 pcibios_init(void)
@@ -1284,9 +672,6 @@ pcibios_init(void)
 	pcibios_allocate_bus_resources(&pci_root_buses);
 	pcibios_allocate_resources(0);
 	pcibios_allocate_resources(1);
-#ifdef CONFIG_PPC_PMAC
-	pcibios_fixup_p2p_bridges();
-#endif /* CONFIG_PPC_PMAC */
 	pcibios_assign_resources();
 
 	/* Call machine dependent post-init code */
@@ -1716,17 +1101,6 @@ long sys_pciconfig_iobase(long which, unsigned long bus, unsigned long devfn)
 	struct pci_controller* hose;
 	long result = -EOPNOTSUPP;
 
-	/* Argh ! Please forgive me for that hack, but that's the
-	 * simplest way to get existing XFree to not lockup on some
-	 * G5 machines... So when something asks for bus 0 io base
-	 * (bus 0 is HT root), we return the AGP one instead.
-	 */
-#ifdef CONFIG_PPC_PMAC
-	if (_machine == _MACH_Pmac && machine_is_compatible("MacRISC4"))
-		if (bus == 0)
-			bus = 0xf0;
-#endif /* CONFIG_PPC_PMAC */
-
 	hose = pci_bus_to_hose(bus);
 	if (!hose)
 		return -ENODEV;
@@ -1806,6 +1180,23 @@ void pci_iounmap(struct pci_dev *dev, void __iomem *addr)
 EXPORT_SYMBOL(pci_iomap);
 EXPORT_SYMBOL(pci_iounmap);
 
+unsigned long pci_address_to_pio(phys_addr_t address)
+{
+	struct pci_controller* hose = hose_head;
+
+	for (; hose; hose = hose->next) {
+		unsigned int size = hose->io_resource.end -
+			hose->io_resource.start + 1;
+		if (address >= hose->io_base_phys &&
+		    address < (hose->io_base_phys + size)) {
+			unsigned long base =
+				(unsigned long)hose->io_base_virt - _IO_BASE;
+			return base + (address - hose->io_base_phys);
+		}
+	}
+	return (unsigned int)-1;
+}
+EXPORT_SYMBOL(pci_address_to_pio);
 
 /*
  * Null PCI config access functions, for the case when we can't

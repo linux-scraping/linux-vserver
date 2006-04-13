@@ -10,6 +10,7 @@
 #include <linux/types.h>
 #include <linux/sched.h>
 #include <linux/slab.h>
+#include <linux/capability.h>
 #include <linux/fs.h>
 #include <linux/namei.h>
 #include <linux/mm.h>
@@ -362,7 +363,7 @@ static int report_statvfs(struct vfsmount *mnt, struct inode *inode, u32 buf)
 		int j = strlen (p);
 		
 		if (j > 15) j = 15;
-		if (IS_RDONLY(inode)) i = 1;
+		if (IS_RDONLY(inode) || MNT_IS_RDONLY(mnt)) i = 1;
 		if (mnt->mnt_flags & MNT_NOSUID) i |= 2;
 		if (!sysv_valid_dev(inode->i_sb->s_dev))
 			return -EOVERFLOW;
@@ -398,7 +399,7 @@ static int report_statvfs64(struct vfsmount *mnt, struct inode *inode, u32 buf)
 		int j = strlen (p);
 		
 		if (j > 15) j = 15;
-		if (IS_RDONLY(inode)) i = 1;
+		if (IS_RDONLY(inode) || MNT_IS_RDONLY(mnt)) i = 1;
 		if (mnt->mnt_flags & MNT_NOSUID) i |= 2;
 		if (!sysv_valid_dev(inode->i_sb->s_dev))
 			return -EOVERFLOW;

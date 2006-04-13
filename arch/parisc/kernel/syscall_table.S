@@ -207,7 +207,7 @@
 	/* struct sockaddr... */
 	ENTRY_SAME(recvfrom)
 	/* struct timex contains longs */
-	ENTRY_DIFF(adjtimex)
+	ENTRY_COMP(adjtimex)
 	ENTRY_SAME(mprotect)		/* 125 */
 	/* old_sigset_t forced to 32 bits.  Beware glibc sigset_t */
 	ENTRY_COMP(sigprocmask)
@@ -287,7 +287,7 @@
 	ENTRY_SAME(chown)		/* 180 */
 	/* setsockopt() used by iptables: SO_SET_REPLACE/SO_SET_ADD_COUNTERS */
 	ENTRY_COMP(setsockopt)
-	ENTRY_SAME(getsockopt)
+	ENTRY_COMP(getsockopt)
 	ENTRY_COMP(sendmsg)
 	ENTRY_COMP(recvmsg)
 	ENTRY_SAME(semop)		/* 185 */
@@ -374,5 +374,24 @@
 	ENTRY_SAME(keyctl)
 	ENTRY_SAME(ioprio_set)
 	ENTRY_SAME(ioprio_get)
+	ENTRY_SAME(inotify_init)
+	ENTRY_SAME(inotify_add_watch)	/* 270 */
+	ENTRY_SAME(inotify_rm_watch)
+	ENTRY_SAME(ni_syscall)		/* 271 ENTRY_COMP(pselect6) */
+	ENTRY_SAME(ni_syscall)		/* 272 ENTRY_COMP(ppoll) */
+	ENTRY_SAME(migrate_pages)
+	ENTRY_COMP(openat)		/* 275 */
+	ENTRY_SAME(mkdirat)
+	ENTRY_SAME(mknodat)
+	ENTRY_SAME(fchownat)
+	ENTRY_COMP(futimesat)
+	ENTRY_SAME(fstatat64)		/* 280 */
+	ENTRY_SAME(unlinkat)
+	ENTRY_SAME(renameat)
+	ENTRY_SAME(linkat)
+	ENTRY_SAME(symlinkat)
+	ENTRY_SAME(readlinkat)		/* 285 */
+	ENTRY_SAME(fchmodat)
+	ENTRY_SAME(faccessat)
 	/* Nothing yet */
 

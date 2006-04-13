@@ -72,10 +72,6 @@
 #include <linux/mii.h>
 #include <linux/ethtool.h>
 #include <linux/if_vlan.h>
-#ifdef CONFIG_E1000_MQ
-#include <linux/cpu.h>
-#include <linux/smp.h>
-#endif
 
 #define BAR_0		0
 #define BAR_1		1
@@ -169,6 +165,7 @@ struct e1000_buffer {
 	uint16_t next_to_watch;
 };
 
+
 struct e1000_ps_page { struct page *ps_page[PS_PAGE_BUFFERS]; };
 struct e1000_ps_page_dma { uint64_t ps_page_dma[PS_PAGE_BUFFERS]; };
 
@@ -188,11 +185,10 @@ struct e1000_tx_ring {
 	/* array of buffer information structs */
 	struct e1000_buffer *buffer_info;
 
-	struct e1000_buffer previous_buffer_info;
 	spinlock_t tx_lock;
 	uint16_t tdh;
 	uint16_t tdt;
-	uint64_t pkt;
+	boolean_t last_tx_tso;
 };
 
 struct e1000_rx_ring {
@@ -214,9 +210,11 @@ struct e1000_rx_ring {
 	struct e1000_ps_page *ps_page;
 	struct e1000_ps_page_dma *ps_page_dma;
 
+	/* cpu for rx queue */
+	int cpu;
+
 	uint16_t rdh;
 	uint16_t rdt;
-	uint64_t pkt;
 };
 
 #define E1000_DESC_UNUSED(R) \
@@ -244,14 +242,18 @@ struct e1000_adapter {
 	uint32_t rx_buffer_len;
 	uint32_t part_num;
 	uint32_t wol;
+	uint32_t ksp3_port_a;
 	uint32_t smartspeed;
 	uint32_t en_mng_pt;
 	uint16_t link_speed;
 	uint16_t link_duplex;
 	spinlock_t stats_lock;
+#ifdef CONFIG_E1000_NAPI
+	spinlock_t tx_queue_lock;
+#endif
 	atomic_t irq_sem;
-	struct work_struct tx_timeout_task;
 	struct work_struct watchdog_task;
+	struct work_struct reset_task;
 	uint8_t fc_autoneg;
 
 	struct timer_list blink_timer;
@@ -259,9 +261,7 @@ struct e1000_adapter {
 
 	/* TX */
 	struct e1000_tx_ring *tx_ring;      /* One per active queue */
-#ifdef CONFIG_E1000_MQ
-	struct e1000_tx_ring **cpu_tx_ring; /* per-cpu */
-#endif
+	unsigned long tx_queue_len;
 	uint32_t txd_cmd;
 	uint32_t tx_int_delay;
 	uint32_t tx_abs_int_delay;
@@ -269,9 +269,11 @@ struct e1000_adapter {
 	uint64_t gotcl_old;
 	uint64_t tpt_old;
 	uint64_t colc_old;
+	uint32_t tx_timeout_count;
 	uint32_t tx_fifo_head;
 	uint32_t tx_head_addr;
 	uint32_t tx_fifo_size;
+	uint8_t  tx_timeout_factor;
 	atomic_t tx_fifo_stall;
 	boolean_t pcix_82544;
 	boolean_t detect_tx_hung;
@@ -286,21 +288,19 @@ struct e1000_adapter {
 			       struct e1000_rx_ring *rx_ring);
 #endif
 	void (*alloc_rx_buf) (struct e1000_adapter *adapter,
-			      struct e1000_rx_ring *rx_ring);
+			      struct e1000_rx_ring *rx_ring,
+				int cleaned_count);
 	struct e1000_rx_ring *rx_ring;      /* One per active queue */
 #ifdef CONFIG_E1000_NAPI
 	struct net_device *polling_netdev;  /* One per active queue */
 #endif
-#ifdef CONFIG_E1000_MQ
-	struct net_device **cpu_netdev;     /* per-cpu */
-	struct call_async_data_struct rx_sched_call_data;
-	int cpu_for_queue[4];
-#endif
-	int num_queues;
+	int num_tx_queues;
+	int num_rx_queues;
 
 	uint64_t hw_csum_err;
 	uint64_t hw_csum_good;
 	uint64_t rx_hdr_split;
+	uint32_t alloc_rx_buff_failed;
 	uint32_t rx_int_delay;
 	uint32_t rx_abs_int_delay;
 	boolean_t rx_csum;
@@ -328,9 +328,37 @@ struct e1000_adapter {
 	struct e1000_rx_ring test_rx_ring;
 
 
+	uint32_t *config_space;
 	int msg_enable;
 #ifdef CONFIG_PCI_MSI
 	boolean_t have_msi;
 #endif
+	/* to not mess up cache alignment, always add to the bottom */
+	boolean_t txb2b;
+#ifdef NETIF_F_TSO
+	boolean_t tso_force;
+#endif
 };
+
+
+/*  e1000_main.c  */
+extern char e1000_driver_name[];
+extern char e1000_driver_version[];
+int e1000_up(struct e1000_adapter *adapter);
+void e1000_down(struct e1000_adapter *adapter);
+void e1000_reset(struct e1000_adapter *adapter);
+int e1000_setup_all_tx_resources(struct e1000_adapter *adapter);
+void e1000_free_all_tx_resources(struct e1000_adapter *adapter);
+int e1000_setup_all_rx_resources(struct e1000_adapter *adapter);
+void e1000_free_all_rx_resources(struct e1000_adapter *adapter);
+void e1000_update_stats(struct e1000_adapter *adapter);
+int e1000_set_spd_dplx(struct e1000_adapter *adapter, uint16_t spddplx);
+
+/*  e1000_ethtool.c  */
+void e1000_set_ethtool_ops(struct net_device *netdev);
+
+/*  e1000_param.c  */
+void e1000_check_options(struct e1000_adapter *adapter);
+
+
 #endif /* _E1000_H_ */

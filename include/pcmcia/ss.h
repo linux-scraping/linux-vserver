@@ -18,6 +18,7 @@
 #include <linux/config.h>
 #include <linux/device.h>
 #include <linux/sched.h>	/* task_struct, completion */
+#include <linux/mutex.h>
 
 #include <pcmcia/cs_types.h>
 #include <pcmcia/cs.h>
@@ -118,16 +119,14 @@ struct pcmcia_socket;
 struct pccard_operations {
 	int (*init)(struct pcmcia_socket *sock);
 	int (*suspend)(struct pcmcia_socket *sock);
-	int (*register_callback)(struct pcmcia_socket *sock, void (*handler)(void *, unsigned int), void * info);
 	int (*get_status)(struct pcmcia_socket *sock, u_int *value);
-	int (*get_socket)(struct pcmcia_socket *sock, socket_state_t *state);
 	int (*set_socket)(struct pcmcia_socket *sock, socket_state_t *state);
 	int (*set_io_map)(struct pcmcia_socket *sock, struct pccard_io_map *io);
 	int (*set_mem_map)(struct pcmcia_socket *sock, struct pccard_mem_map *mem);
 };
 
 struct pccard_resource_ops {
-	void	(*validate_mem)		(struct pcmcia_socket *s);
+	int	(*validate_mem)		(struct pcmcia_socket *s);
 	int	(*adjust_io_region)	(struct resource *res,
 					 unsigned long r_start,
 					 unsigned long r_end,
@@ -148,14 +147,15 @@ extern struct pccard_resource_ops pccard_static_ops;
 /* !SS_CAP_STATIC_MAP */
 extern struct pccard_resource_ops pccard_nonstatic_ops;
 
+/* static mem, dynamic IO sockets */
+extern struct pccard_resource_ops pccard_iodyn_ops;
+
 /*
  *  Calls to set up low-level "Socket Services" drivers
  */
 struct pcmcia_socket;
 
 typedef struct io_window_t {
-	u_int			Attributes;
-	kio_addr_t		BasePort, NumPorts;
 	kio_addr_t		InUse, Config;
 	struct resource		*res;
 } io_window_t;
@@ -164,7 +164,7 @@ typedef struct io_window_t {
 typedef struct window_t {
 	u_short			magic;
 	u_short			index;
-	client_handle_t		handle;
+	struct pcmcia_device	*handle;
 	struct pcmcia_socket 	*sock;
 	pccard_mem_map		ctl;
 } window_t;
@@ -188,7 +188,6 @@ struct pcmcia_socket {
 	u_short				lock_count;
 	pccard_mem_map			cis_mem;
 	void __iomem 			*cis_virt;
-	struct config_t			*config;
 	struct {
 		u_int			AssignedIRQ;
 		u_int			Config;
@@ -243,7 +242,7 @@ struct pcmcia_socket {
 #endif
 
 	/* state thread */
-	struct semaphore		skt_sem;	/* protects socket h/w state */
+	struct mutex			skt_mutex;	/* protects socket h/w state */
 
 	struct task_struct		*thread;
 	struct completion		thread_done;

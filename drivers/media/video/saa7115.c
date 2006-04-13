@@ -1,4 +1,4 @@
-/* saa7115 - Philips SAA7114/SAA7115 video decoder driver
+/* saa7115 - Philips SAA7113/SAA7114/SAA7115 video decoder driver
  *
  * Based on saa7114 driver by Maxim Yevtyushkin, which is based on
  * the saa7111 driver by Dave Perks.
@@ -16,6 +16,7 @@
  * (2/17/2003)
  *
  * VBI support (2004) and cleanups (2005) by Hans Verkuil <hverkuil@xs4all.nl>
+ * SAA7113 support by Mauro Carvalho Chehab <mchehab@infradead.org>
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -39,31 +40,23 @@
 #include <linux/i2c.h>
 #include <linux/videodev2.h>
 #include <media/v4l2-common.h>
+#include <media/saa7115.h>
+#include <asm/div64.h>
 
-MODULE_DESCRIPTION("Philips SAA7114/SAA7115 video decoder driver");
-MODULE_AUTHOR("Maxim Yevtyushkin, Kevin Thayer, Chris Kennedy, Hans Verkuil");
+MODULE_DESCRIPTION("Philips SAA7113/SAA7114/SAA7115 video decoder driver");
+MODULE_AUTHOR(  "Maxim Yevtyushkin, Kevin Thayer, Chris Kennedy, "
+		"Hans Verkuil, Mauro Carvalho Chehab");
 MODULE_LICENSE("GPL");
 
 static int debug = 0;
-module_param(debug, int, 0644);
+module_param(debug, bool, 0644);
 
 MODULE_PARM_DESC(debug, "Debug level (0-1)");
 
-#define saa7115_dbg(fmt,arg...) \
-	do { \
-		if (debug) \
-			printk(KERN_INFO "%s debug %d-%04x: " fmt, client->driver->name, \
-			       i2c_adapter_id(client->adapter), client->addr , ## arg); \
-	} while (0)
-
-#define saa7115_err(fmt, arg...) do { \
-	printk(KERN_ERR "%s %d-%04x: " fmt, client->driver->name, \
-	       i2c_adapter_id(client->adapter), client->addr , ## arg); } while (0)
-#define saa7115_info(fmt, arg...) do { \
-	printk(KERN_INFO "%s %d-%04x: " fmt, client->driver->name, \
-	       i2c_adapter_id(client->adapter), client->addr , ## arg); } while (0)
-
-static unsigned short normal_i2c[] = { 0x42 >> 1, 0x40 >> 1, I2C_CLIENT_END };
+static unsigned short normal_i2c[] = {
+		0x4a >> 1, 0x48 >> 1,	/* SAA7113 */
+		0x42 >> 1, 0x40 >> 1,	/* SAA7114 and SAA7115 */
+		I2C_CLIENT_END };
 
 
 I2C_CLIENT_INSMOD;
@@ -72,12 +65,13 @@ struct saa7115_state {
 	v4l2_std_id std;
 	int input;
 	int enable;
+	int radio;
 	int bright;
 	int contrast;
 	int hue;
 	int sat;
 	enum v4l2_chip_ident ident;
-	enum v4l2_audio_clock_freq audclk_freq;
+	u32 audclk_freq;
 };
 
 /* ----------------------------------------------------------------------- */
@@ -112,10 +106,12 @@ static inline int saa7115_read(struct i2c_client *client, u8 reg)
    Hauppauge driver sets. */
 
 static const unsigned char saa7115_init_auto_input[] = {
+		/* Front-End Part */
 	0x01, 0x48,		/* white peak control disabled */
 	0x03, 0x20,		/* was 0x30. 0x20: long vertical blanking */
 	0x04, 0x90,		/* analog gain set to 0 */
 	0x05, 0x90,		/* analog gain set to 0 */
+		/* Decoder Part */
 	0x06, 0xeb,		/* horiz sync begin = -21 */
 	0x07, 0xe0,		/* horiz sync stop = -17 */
 	0x0a, 0x80,		/* was 0x88. decoder brightness, 0x80 is itu standard */
@@ -134,6 +130,8 @@ static const unsigned char saa7115_init_auto_input[] = {
 	0x1b, 0x42,		/* misc chroma control 0x42 = recommended */
 	0x1c, 0xa9,		/* combfilter control 0xA9 = recommended */
 	0x1d, 0x01,		/* combfilter control 0x01 = recommended */
+
+		/* Power Device Control */
 	0x88, 0xd0,		/* reset device */
 	0x88, 0xf0,		/* set device programmed, all in operational mode */
 	0x00, 0x00
@@ -349,6 +347,33 @@ static const unsigned char saa7115_cfg_vbi_off[] = {
 	0x00, 0x00
 };
 
+static const unsigned char saa7113_init_auto_input[] = {
+	0x01, 0x08,	/* PH7113_INCREMENT_DELAY - (1) (1) (1) (1) IDEL3 IDEL2 IDELL1 IDEL0 */
+	0x02, 0xc2,	/* PH7113_ANALOG_INPUT_CONTR_1 - FUSE1 FUSE0 GUDL1 GUDL0 MODE3 MODE2 MODE1 MODE0 */
+	0x03, 0x30,	/* PH7113_ANALOG_INPUT_CONTR_2 - (1) HLNRS VBSL WPOFF HOLDG GAFIX GAI28 GAI18 */
+	0x04, 0x00,	/* PH7113_ANALOG_INPUT_CONTR_3 - GAI17 GAI16 GAI15 GAI14 GAI13 GAI12 GAI11 GAI10 */
+	0x05, 0x00,	/* PH7113_ANALOG_INPUT_CONTR_4 - GAI27 GAI26 GAI25 GAI24 GAI23 GAI22 GAI21 GAI20 */
+	0x06, 0x89,	/* PH7113_HORIZONTAL_SYNC_START - HSB7 HSB6 HSB5 HSB4 HSB3 HSB2 HSB1 HSB0 */
+	0x07, 0x0d,	/* PH7113_HORIZONTAL_SYNC_STOP - HSS7 HSS6 HSS5 HSS4 HSS3 HSS2 HSS1 HSS0 */
+	0x08, 0x88,	/* PH7113_SYNC_CONTROL - AUFD FSEL FOET HTC1 HTC0 HPLL VNOI1 VNOI0 */
+	0x09, 0x01,	/* PH7113_LUMINANCE_CONTROL - BYPS PREF BPSS1 BPSS0 VBLB UPTCV APER1 APER0 */
+	0x0a, 0x80,	/* PH7113_LUMINANCE_BRIGHTNESS - BRIG7 BRIG6 BRIG5 BRIG4 BRIG3 BRIG2 BRIG1 BRIG0 */
+	0x0b, 0x47,	/* PH7113_LUMINANCE_CONTRAST - CONT7 CONT6 CONT5 CONT4 CONT3 CONT2 CONT1 CONT0 */
+	0x0c, 0x40,	/* PH7113_CHROMA_SATURATION - SATN7 SATN6 SATN5 SATN4 SATN3 SATN2 SATN1 SATN0 */
+	0x0d, 0x00,	/* PH7113_CHROMA_HUE_CONTROL - HUEC7 HUEC6 HUEC5 HUEC4 HUEC3 HUEC2 HUEC1 HUEC0 */
+	0x0e, 0x01,	/* PH7113_CHROMA_CONTROL - CDTO CSTD2 CSTD1 CSTD0 DCCF FCTC CHBW1 CHBW0 */
+	0x0f, 0x2a,	/* PH7113_CHROMA_GAIN_CONTROL - ACGC CGAIN6 CGAIN5 CGAIN4 CGAIN3 CGAIN2 CGAIN1 CGAIN0 */
+	0x10, 0x08,	/* PH7113_FORMAT_DELAY_CONTROL - OFTS1 OFTS0 HDEL1 HDEL0 VRLN YDEL2 YDEL1 YDEL0 */
+	0x11, 0x0c,	/* PH7113_OUTPUT_CONTROL_1 - GPSW1 CM99 GPSW0 HLSEL OEYC OERT VIPB COLO */
+	0x12, 0x07,	/* PH7113_OUTPUT_CONTROL_2 - RTSE13 RTSE12 RTSE11 RTSE10 RTSE03 RTSE02 RTSE01 RTSE00 */
+	0x13, 0x00,	/* PH7113_OUTPUT_CONTROL_3 - ADLSB (1) (1) OLDSB FIDP (1) AOSL1 AOSL0 */
+	0x14, 0x00,	/* RESERVED 14 - (1) (1) (1) (1) (1) (1) (1) (1) */
+	0x15, 0x00,	/* PH7113_V_GATE1_START - VSTA7 VSTA6 VSTA5 VSTA4 VSTA3 VSTA2 VSTA1 VSTA0 */
+	0x16, 0x00,	/* PH7113_V_GATE1_STOP - VSTO7 VSTO6 VSTO5 VSTO4 VSTO3 VSTO2 VSTO1 VSTO0 */
+	0x17, 0x00,	/* PH7113_V_GATE1_MSB - (1) (1) (1) (1) (1) (1) VSTO8 VSTA8 */
+	0x00, 0x00
+};
+
 static const unsigned char saa7115_init_misc[] = {
 	0x38, 0x03,		/* audio stuff */
 	0x39, 0x10,
@@ -468,80 +493,6 @@ static const unsigned char saa7115_init_misc[] = {
 	0x00, 0x00
 };
 
-/* ============== SAA7715 AUDIO settings ============= */
-
-/* 48.0 kHz */
-static const unsigned char saa7115_cfg_48_audio[] = {
-	0x34, 0xce,
-	0x35, 0xfb,
-	0x36, 0x30,
-	0x00, 0x00
-};
-
-/* 44.1 kHz */
-static const unsigned char saa7115_cfg_441_audio[] = {
-	0x34, 0xf2,
-	0x35, 0x00,
-	0x36, 0x2d,
-	0x00, 0x00
-};
-
-/* 32.0 kHz */
-static const unsigned char saa7115_cfg_32_audio[] = {
-	0x34, 0xdf,
-	0x35, 0xa7,
-	0x36, 0x20,
-	0x00, 0x00
-};
-
-/* 48.0 kHz 60hz */
-static const unsigned char saa7115_cfg_60hz_48_audio[] = {
-	0x30, 0xcd,
-	0x31, 0x20,
-	0x32, 0x03,
-	0x00, 0x00
-};
-
-/* 48.0 kHz 50hz */
-static const unsigned char saa7115_cfg_50hz_48_audio[] = {
-	0x30, 0x00,
-	0x31, 0xc0,
-	0x32, 0x03,
-	0x00, 0x00
-};
-
-/* 44.1 kHz 60hz */
-static const unsigned char saa7115_cfg_60hz_441_audio[] = {
-	0x30, 0xbc,
-	0x31, 0xdf,
-	0x32, 0x02,
-	0x00, 0x00
-};
-
-/* 44.1 kHz 50hz */
-static const unsigned char saa7115_cfg_50hz_441_audio[] = {
-	0x30, 0x00,
-	0x31, 0x72,
-	0x32, 0x03,
-	0x00, 0x00
-};
-
-/* 32.0 kHz 60hz */
-static const unsigned char saa7115_cfg_60hz_32_audio[] = {
-	0x30, 0xde,
-	0x31, 0x15,
-	0x32, 0x02,
-	0x00, 0x00
-};
-
-/* 32.0 kHz 50hz */
-static const unsigned char saa7115_cfg_50hz_32_audio[] = {
-	0x30, 0x00,
-	0x31, 0x80,
-	0x32, 0x02,
-	0x00, 0x00
-};
-
 static int saa7115_odd_parity(u8 c)
 {
 	c ^= (c >> 4);
@@ -626,40 +577,38 @@ static int saa7115_decode_wss(u8 * p)
 }
 
 
-static int saa7115_set_audio_clock_freq(struct i2c_client *client, enum v4l2_audio_clock_freq freq)
+static int saa7115_set_audio_clock_freq(struct i2c_client *client, u32 freq)
 {
 	struct saa7115_state *state = i2c_get_clientdata(client);
+	u32 acpf;
+	u32 acni;
+	u32 hz;
+	u64 f;
 
-	saa7115_dbg("set audio clock freq: %d\n", freq);
-	switch (freq) {
-		case V4L2_AUDCLK_32_KHZ:
-			saa7115_writeregs(client, saa7115_cfg_32_audio);
-			if (state->std & V4L2_STD_525_60) {
-				saa7115_writeregs(client, saa7115_cfg_60hz_32_audio);
-			} else {
-				saa7115_writeregs(client, saa7115_cfg_50hz_32_audio);
-			}
-			break;
-		case V4L2_AUDCLK_441_KHZ:
-			saa7115_writeregs(client, saa7115_cfg_441_audio);
-			if (state->std & V4L2_STD_525_60) {
-				saa7115_writeregs(client, saa7115_cfg_60hz_441_audio);
-			} else {
-				saa7115_writeregs(client, saa7115_cfg_50hz_441_audio);
-			}
-			break;
-		case V4L2_AUDCLK_48_KHZ:
-			saa7115_writeregs(client, saa7115_cfg_48_audio);
-			if (state->std & V4L2_STD_525_60) {
-				saa7115_writeregs(client, saa7115_cfg_60hz_48_audio);
-			} else {
-				saa7115_writeregs(client, saa7115_cfg_50hz_48_audio);
-			}
-			break;
-		default:
-			saa7115_dbg("invalid audio setting %d\n", freq);
-			return -EINVAL;
-	}
+	v4l_dbg(1, debug, client, "set audio clock freq: %d\n", freq);
+
+	/* sanity check */
+	if (freq < 32000 || freq > 48000)
+		return -EINVAL;
+
+	/* hz is the refresh rate times 100 */
+	hz = (state->std & V4L2_STD_525_60) ? 5994 : 5000;
+	/* acpf = (256 * freq) / field_frequency == (256 * 100 * freq) / hz */
+	acpf = (25600 * freq) / hz;
+	/* acni = (256 * freq * 2^23) / crystal_frequency =
+		  (freq * 2^(8+23)) / crystal_frequency =
+		  (freq << 31) / 32.11 MHz */
+	f = freq;
+	f = f << 31;
+	do_div(f, 32110000);
+	acni = f;
+
+	saa7115_write(client, 0x30, acpf & 0xff);
+	saa7115_write(client, 0x31, (acpf >> 8) & 0xff);
+	saa7115_write(client, 0x32, (acpf >> 16) & 0x03);
+	saa7115_write(client, 0x34, acni & 0xff);
+	saa7115_write(client, 0x35, (acni >> 8) & 0xff);
+	saa7115_write(client, 0x36, (acni >> 16) & 0x3f);
 	state->audclk_freq = freq;
 	return 0;
 }
@@ -671,7 +620,7 @@ static int saa7115_set_v4lctrl(struct i2c_client *client, struct v4l2_control *c
 	switch (ctrl->id) {
 	case V4L2_CID_BRIGHTNESS:
 		if (ctrl->value < 0 || ctrl->value > 255) {
-			saa7115_err("invalid brightness setting %d\n", ctrl->value);
+			v4l_err(client, "invalid brightness setting %d\n", ctrl->value);
 			return -ERANGE;
 		}
 
@@ -681,7 +630,7 @@ static int saa7115_set_v4lctrl(struct i2c_client *client, struct v4l2_control *c
 
 	case V4L2_CID_CONTRAST:
 		if (ctrl->value < 0 || ctrl->value > 127) {
-			saa7115_err("invalid contrast setting %d\n", ctrl->value);
+			v4l_err(client, "invalid contrast setting %d\n", ctrl->value);
 			return -ERANGE;
 		}
 
@@ -691,7 +640,7 @@ static int saa7115_set_v4lctrl(struct i2c_client *client, struct v4l2_control *c
 
 	case V4L2_CID_SATURATION:
 		if (ctrl->value < 0 || ctrl->value > 127) {
-			saa7115_err("invalid saturation setting %d\n", ctrl->value);
+			v4l_err(client, "invalid saturation setting %d\n", ctrl->value);
 			return -ERANGE;
 		}
 
@@ -701,13 +650,16 @@ static int saa7115_set_v4lctrl(struct i2c_client *client, struct v4l2_control *c
 
 	case V4L2_CID_HUE:
 		if (ctrl->value < -127 || ctrl->value > 127) {
-			saa7115_err("invalid hue setting %d\n", ctrl->value);
+			v4l_err(client, "invalid hue setting %d\n", ctrl->value);
 			return -ERANGE;
 		}
 
 		state->hue = ctrl->value;
 		saa7115_write(client, 0x0d, state->hue);
 		break;
+
+	default:
+		return -EINVAL;
 	}
 
 	return 0;
@@ -742,19 +694,54 @@ static void saa7115_set_v4lstd(struct i2c_client *client, v4l2_std_id std)
 	struct saa7115_state *state = i2c_get_clientdata(client);
 	int taskb = saa7115_read(client, 0x80) & 0x10;
 
+	/* Prevent unnecessary standard changes. During a standard
+	   change the I-Port is temporarily disabled. Any devices
+	   reading from that port can get confused.
+	   Note that VIDIOC_S_STD is also used to switch from
+	   radio to TV mode, so if a VIDIOC_S_STD is broadcast to
+	   all I2C devices then you do not want to have an unwanted
+	   side-effect here. */
+	if (std == state->std)
+		return;
+
 	// This works for NTSC-M, SECAM-L and the 50Hz PAL variants.
 	if (std & V4L2_STD_525_60) {
-		saa7115_dbg("decoder set standard 60 Hz\n");
+		v4l_dbg(1, debug, client, "decoder set standard 60 Hz\n");
 		saa7115_writeregs(client, saa7115_cfg_60hz_video);
 	} else {
-		saa7115_dbg("decoder set standard 50 Hz\n");
+		v4l_dbg(1, debug, client, "decoder set standard 50 Hz\n");
 		saa7115_writeregs(client, saa7115_cfg_50hz_video);
 	}
+
+	/* Register 0E - Bits D6-D4 on NO-AUTO mode
+		(SAA7113 doesn't have auto mode)
+	    50 Hz / 625 lines           60 Hz / 525 lines
+	000 PAL BGDHI (4.43Mhz)         NTSC M (3.58MHz)
+	001 NTSC 4.43 (50 Hz)           PAL 4.43 (60 Hz)
+	010 Combination-PAL N (3.58MHz) NTSC 4.43 (60 Hz)
+	011 NTSC N (3.58MHz)            PAL M (3.58MHz)
+	100 reserved                    NTSC-Japan (3.58MHz)
+	*/
+	if (state->ident == V4L2_IDENT_SAA7113) {
+		u8 reg = saa7115_read(client, 0x0e) & 0x8f;
+
+		if (std == V4L2_STD_PAL_M) {
+			reg |= 0x30;
+		} else if (std == V4L2_STD_PAL_N) {
+			reg |= 0x20;
+		} else if (std == V4L2_STD_PAL_60) {
+			reg |= 0x10;
+		} else if (std == V4L2_STD_NTSC_M_JP) {
+			reg |= 0x40;
+		}
+		saa7115_write(client, 0x0e, reg);
+	}
+
 
 	state->std = std;
 
 	/* restart task B if needed */
-	if (taskb && state->ident == V4L2_IDENT_SAA7114) {
+	if (taskb && state->ident != V4L2_IDENT_SAA7115) {
 		saa7115_writeregs(client, saa7115_cfg_vbi_on);
 	}
 
@@ -772,24 +759,17 @@ static v4l2_std_id saa7115_get_v4lstd(struct i2c_client *client)
 static void saa7115_log_status(struct i2c_client *client)
 {
 	struct saa7115_state *state = i2c_get_clientdata(client);
-	char *audfreq = "undefined";
 	int reg1e, reg1f;
 	int signalOk;
 	int vcr;
 
-	switch (state->audclk_freq) {
-		case V4L2_AUDCLK_32_KHZ:  audfreq = "32 kHz"; break;
-		case V4L2_AUDCLK_441_KHZ: audfreq = "44.1 kHz"; break;
-		case V4L2_AUDCLK_48_KHZ:  audfreq = "48 kHz"; break;
-	}
-
-	saa7115_info("Audio frequency: %s\n", audfreq);
-	if (client->name[6] == '4') {
+	v4l_info(client, "Audio frequency: %d Hz\n", state->audclk_freq);
+	if (state->ident != V4L2_IDENT_SAA7115) {
 		/* status for the saa7114 */
 		reg1f = saa7115_read(client, 0x1f);
 		signalOk = (reg1f & 0xc1) == 0x81;
-		saa7115_info("Video signal:    %s\n", signalOk ? "ok" : "bad");
-		saa7115_info("Frequency:       %s\n", (reg1f & 0x20) ? "60Hz" : "50Hz");
+		v4l_info(client, "Video signal:    %s\n", signalOk ? "ok" : "bad");
+		v4l_info(client, "Frequency:       %s\n", (reg1f & 0x20) ? "60 Hz" : "50 Hz");
 		return;
 	}
 
@@ -800,21 +780,26 @@ static void saa7115_log_status(struct i2c_client *client)
 	signalOk = (reg1f & 0xc1) == 0x81 && (reg1e & 0xc0) == 0x80;
 	vcr = !(reg1f & 0x10);
 
-	saa7115_info("Video signal:    %s\n", signalOk ? (vcr ? "VCR" : "broadcast/DVD") : "bad");
-	saa7115_info("Frequency:       %s\n", (reg1f & 0x20) ? "60Hz" : "50Hz");
+	if (state->input >= 6) {
+		v4l_info(client, "Input:           S-Video %d\n", state->input - 6);
+	} else {
+		v4l_info(client, "Input:           Composite %d\n", state->input);
+	}
+	v4l_info(client, "Video signal:    %s\n", signalOk ? (vcr ? "VCR" : "broadcast/DVD") : "bad");
+	v4l_info(client, "Frequency:       %s\n", (reg1f & 0x20) ? "60 Hz" : "50 Hz");
 
 	switch (reg1e & 0x03) {
 		case 1:
-			saa7115_info("Detected format: NTSC\n");
+			v4l_info(client, "Detected format: NTSC\n");
 			break;
 		case 2:
-			saa7115_info("Detected format: PAL\n");
+			v4l_info(client, "Detected format: PAL\n");
 			break;
 		case 3:
-			saa7115_info("Detected format: SECAM\n");
+			v4l_info(client, "Detected format: SECAM\n");
 			break;
 		default:
-			saa7115_info("Detected format: BW/No color\n");
+			v4l_info(client, "Detected format: BW/No color\n");
 			break;
 	}
 }
@@ -827,8 +812,8 @@ static void saa7115_set_lcr(struct i2c_client *client, struct v4l2_sliced_vbi_fo
 	u8 lcr[24];
 	int i, x;
 
-	/* saa7114 doesn't yet support VBI */
-	if (state->ident == V4L2_IDENT_SAA7114)
+	/* saa7113/7114 doesn't yet support VBI */
+	if (state->ident != V4L2_IDENT_SAA7115)
 		return;
 
 	for (i = 0; i <= 23; i++)
@@ -939,7 +924,7 @@ static int saa7115_set_v4lfmt(struct i2c_client *client, struct v4l2_format *fmt
 
 	pix = &(fmt->fmt.pix);
 
-	saa7115_dbg("decoder set size\n");
+	v4l_dbg(1, debug, client, "decoder set size\n");
 
 	/* FIXME need better bounds checking here */
 	if ((pix->width < 1) || (pix->width > 1440))
@@ -965,7 +950,7 @@ static int saa7115_set_v4lfmt(struct i2c_client *client, struct v4l2_format *fmt
 		HPSC = HPSC ? HPSC : 1;
 		HFSC = (int)((1024 * 720) / (HPSC * pix->width));
 
-		saa7115_dbg("Hpsc: 0x%05x, Hfsc: 0x%05x\n", HPSC, HFSC);
+		v4l_dbg(1, debug, client, "Hpsc: 0x%05x, Hfsc: 0x%05x\n", HPSC, HFSC);
 		/* FIXME hardcodes to "Task B"
 		 * write H prescaler integer */
 		saa7115_write(client, 0xd0, (u8) (HPSC & 0x3f));
@@ -979,10 +964,10 @@ static int saa7115_set_v4lfmt(struct i2c_client *client, struct v4l2_format *fmt
 		saa7115_write(client, 0xDD, (u8) ((HFSC >> 9) & 0xff));
 	} else {
 		if (is_50hz) {
-			saa7115_dbg("Setting full 50hz width\n");
+			v4l_dbg(1, debug, client, "Setting full 50hz width\n");
 			saa7115_writeregs(client, saa7115_cfg_50hz_fullres_x);
 		} else {
-			saa7115_dbg("Setting full 60hz width\n");
+			v4l_dbg(1, debug, client, "Setting full 60hz width\n");
 			saa7115_writeregs(client, saa7115_cfg_60hz_fullres_x);
 		}
 	}
@@ -991,7 +976,7 @@ static int saa7115_set_v4lfmt(struct i2c_client *client, struct v4l2_format *fmt
 
 	if (pix->height != Vsrc) {
 		VSCY = (int)((1024 * Vsrc) / pix->height);
-		saa7115_dbg("Vsrc: %d, Vscy: 0x%05x\n", Vsrc, VSCY);
+		v4l_dbg(1, debug, client, "Vsrc: %d, Vscy: 0x%05x\n", Vsrc, VSCY);
 
 		/* Correct Contrast and Luminance */
 		saa7115_write(client, 0xd5, (u8) (64 * 1024 / VSCY));
@@ -1005,10 +990,10 @@ static int saa7115_set_v4lfmt(struct i2c_client *client, struct v4l2_format *fmt
 		saa7115_write(client, 0xe3, (u8) ((VSCY >> 8) & 0xff));
 	} else {
 		if (is_50hz) {
-			saa7115_dbg("Setting full 50Hz height\n");
+			v4l_dbg(1, debug, client, "Setting full 50Hz height\n");
 			saa7115_writeregs(client, saa7115_cfg_50hz_fullres_y);
 		} else {
-			saa7115_dbg("Setting full 60hz height\n");
+			v4l_dbg(1, debug, client, "Setting full 60hz height\n");
 			saa7115_writeregs(client, saa7115_cfg_60hz_fullres_y);
 		}
 	}
@@ -1088,6 +1073,48 @@ static void saa7115_decode_vbi_line(struct i2c_client *client,
 
 /* ============ SAA7115 AUDIO settings (end) ============= */
 
+static struct v4l2_queryctrl saa7115_qctrl[] = {
+	{
+		.id            = V4L2_CID_BRIGHTNESS,
+		.type          = V4L2_CTRL_TYPE_INTEGER,
+		.name          = "Brightness",
+		.minimum       = 0,
+		.maximum       = 255,
+		.step          = 1,
+		.default_value = 128,
+		.flags         = 0,
+	}, {
+		.id            = V4L2_CID_CONTRAST,
+		.type          = V4L2_CTRL_TYPE_INTEGER,
+		.name          = "Contrast",
+		.minimum       = 0,
+		.maximum       = 127,
+		.step          = 1,
+		.default_value = 64,
+		.flags         = 0,
+	}, {
+		.id            = V4L2_CID_SATURATION,
+		.type          = V4L2_CTRL_TYPE_INTEGER,
+		.name          = "Saturation",
+		.minimum       = 0,
+		.maximum       = 127,
+		.step          = 1,
+		.default_value = 64,
+		.flags         = 0,
+	}, {
+		.id            = V4L2_CID_HUE,
+		.type          = V4L2_CTRL_TYPE_INTEGER,
+		.name          = "Hue",
+		.minimum       = -128,
+		.maximum       = 127,
+		.step          = 1,
+		.default_value = 0,
+		.flags 	       = 0,
+	},
+};
+
+/* ----------------------------------------------------------------------- */
+
 static int saa7115_command(struct i2c_client *client, unsigned int cmd, void *arg)
 {
 	struct saa7115_state *state = i2c_get_clientdata(client);
@@ -1102,16 +1129,18 @@ static int saa7115_command(struct i2c_client *client, unsigned int cmd, void *ar
 		return saa7115_get_v4lfmt(client, (struct v4l2_format *)arg);
 
 	case VIDIOC_INT_AUDIO_CLOCK_FREQ:
-		return saa7115_set_audio_clock_freq(client, *(enum v4l2_audio_clock_freq *)arg);
+		return saa7115_set_audio_clock_freq(client, *(u32 *)arg);
 
 	case VIDIOC_G_TUNER:
 	{
 		struct v4l2_tuner *vt = arg;
 		int status;
 
+		if (state->radio)
+			break;
 		status = saa7115_read(client, 0x1f);
 
-		saa7115_dbg("status: 0x%02x\n", status);
+		v4l_dbg(1, debug, client, "status: 0x%02x\n", status);
 		vt->signal = ((status & (1 << 6)) == 0) ? 0xffff : 0x0;
 		break;
 	}
@@ -1126,20 +1155,78 @@ static int saa7115_command(struct i2c_client *client, unsigned int cmd, void *ar
 	case VIDIOC_S_CTRL:
 		return saa7115_set_v4lctrl(client, (struct v4l2_control *)arg);
 
+	case VIDIOC_QUERYCTRL:
+	{
+		struct v4l2_queryctrl *qc = arg;
+		int i;
+
+		for (i = 0; i < ARRAY_SIZE(saa7115_qctrl); i++)
+			if (qc->id && qc->id == saa7115_qctrl[i].id) {
+				memcpy(qc, &saa7115_qctrl[i], sizeof(*qc));
+				return 0;
+			}
+		return -EINVAL;
+	}
+
 	case VIDIOC_G_STD:
 		*(v4l2_std_id *)arg = saa7115_get_v4lstd(client);
 		break;
 
 	case VIDIOC_S_STD:
+		state->radio = 0;
 		saa7115_set_v4lstd(client, *(v4l2_std_id *)arg);
 		break;
+
+	case AUDC_SET_RADIO:
+		state->radio = 1;
+		break;
+
+	case VIDIOC_INT_G_VIDEO_ROUTING:
+	{
+		struct v4l2_routing *route = arg;
+
+		route->input = state->input;
+		route->output = 0;
+		break;
+	}
+
+	case VIDIOC_INT_S_VIDEO_ROUTING:
+	{
+		struct v4l2_routing *route = arg;
+
+		v4l_dbg(1, debug, client, "decoder set input %d\n", route->input);
+		/* saa7113 does not have these inputs */
+		if (state->ident == V4L2_IDENT_SAA7113 &&
+		    (route->input == SAA7115_COMPOSITE4 ||
+		     route->input == SAA7115_COMPOSITE5)) {
+			return -EINVAL;
+		}
+		if (route->input > SAA7115_SVIDEO3)
+			return -EINVAL;
+		if (state->input == route->input)
+			break;
+		v4l_dbg(1, debug, client, "now setting %s input\n",
+			(route->input >= SAA7115_SVIDEO0) ? "S-Video" : "Composite");
+		state->input = route->input;
+
+		/* select mode */
+		saa7115_write(client, 0x02,
+			      (saa7115_read(client, 0x02) & 0xf0) |
+			       state->input);
+
+		/* bypass chrominance trap for S-Video modes */
+		saa7115_write(client, 0x09,
+			      (saa7115_read(client, 0x09) & 0x7f) |
+			       (state->input >= SAA7115_SVIDEO0 ? 0x80 : 0x0));
+		break;
+	}
 
 	case VIDIOC_G_INPUT:
 		*(int *)arg = state->input;
 		break;
 
 	case VIDIOC_S_INPUT:
-		saa7115_dbg("decoder set input %d\n", *iarg);
+		v4l_dbg(1, debug, client, "decoder set input %d\n", *iarg);
 		/* inputs from 0-9 are available */
 		if (*iarg < 0 || *iarg > 9) {
 			return -EINVAL;
@@ -1147,7 +1234,7 @@ static int saa7115_command(struct i2c_client *client, unsigned int cmd, void *ar
 
 		if (state->input == *iarg)
 			break;
-		saa7115_dbg("now setting %s input\n",
+		v4l_dbg(1, debug, client, "now setting %s input\n",
 			*iarg >= 6 ? "S-Video" : "Composite");
 		state->input = *iarg;
 
@@ -1164,7 +1251,7 @@ static int saa7115_command(struct i2c_client *client, unsigned int cmd, void *ar
 
 	case VIDIOC_STREAMON:
 	case VIDIOC_STREAMOFF:
-		saa7115_dbg("%s output\n",
+		v4l_dbg(1, debug, client, "%s output\n",
 			(cmd == VIDIOC_STREAMON) ? "enable" : "disable");
 
 		if (state->enable != (cmd == VIDIOC_STREAMON)) {
@@ -1178,7 +1265,7 @@ static int saa7115_command(struct i2c_client *client, unsigned int cmd, void *ar
 		break;
 
 	case VIDIOC_INT_RESET:
-		saa7115_dbg("decoder RESET\n");
+		v4l_dbg(1, debug, client, "decoder RESET\n");
 		saa7115_writeregs(client, saa7115_cfg_reset_scaler);
 		break;
 
@@ -1263,62 +1350,71 @@ static int saa7115_attach(struct i2c_adapter *adapter, int address, int kind)
 	if (!i2c_check_functionality(adapter, I2C_FUNC_SMBUS_BYTE_DATA))
 		return 0;
 
-	client = kmalloc(sizeof(struct i2c_client), GFP_KERNEL);
+	client = kzalloc(sizeof(struct i2c_client), GFP_KERNEL);
 	if (client == 0)
 		return -ENOMEM;
-	memset(client, 0, sizeof(struct i2c_client));
 	client->addr = address;
 	client->adapter = adapter;
 	client->driver = &i2c_driver_saa7115;
-	client->flags = I2C_CLIENT_ALLOW_USE;
 	snprintf(client->name, sizeof(client->name) - 1, "saa7115");
 
-	saa7115_dbg("detecting saa7115 client on address 0x%x\n", address << 1);
+	v4l_dbg(1, debug, client, "detecting saa7115 client on address 0x%x\n", address << 1);
 
 	saa7115_write(client, 0, 5);
 	chip_id = saa7115_read(client, 0) & 0x0f;
-	if (chip_id != 4 && chip_id != 5) {
-		saa7115_dbg("saa7115 not found\n");
+	if (chip_id < 3 && chip_id > 5) {
+		v4l_dbg(1, debug, client, "saa7115 not found\n");
 		kfree(client);
 		return 0;
 	}
-	if (chip_id == 4) {
-		snprintf(client->name, sizeof(client->name) - 1, "saa7114");
-	}
-	saa7115_info("saa711%d found @ 0x%x (%s)\n", chip_id, address << 1, adapter->name);
+	snprintf(client->name, sizeof(client->name) - 1, "saa711%d",chip_id);
+	v4l_info(client, "saa711%d found @ 0x%x (%s)\n", chip_id, address << 1, adapter->name);
 
-	state = kmalloc(sizeof(struct saa7115_state), GFP_KERNEL);
+	state = kzalloc(sizeof(struct saa7115_state), GFP_KERNEL);
 	i2c_set_clientdata(client, state);
 	if (state == NULL) {
 		kfree(client);
 		return -ENOMEM;
 	}
-	memset(state, 0, sizeof(struct saa7115_state));
 	state->std = V4L2_STD_NTSC;
 	state->input = -1;
 	state->enable = 1;
+	state->radio = 0;
 	state->bright = 128;
 	state->contrast = 64;
 	state->hue = 0;
 	state->sat = 64;
-	state->ident = (chip_id == 4) ? V4L2_IDENT_SAA7114 : V4L2_IDENT_SAA7115;
-	state->audclk_freq = V4L2_AUDCLK_48_KHZ;
+	switch (chip_id) {
+	case 3:
+		state->ident = V4L2_IDENT_SAA7113;
+		break;
+	case 4:
+		state->ident = V4L2_IDENT_SAA7114;
+		break;
+	default:
+		state->ident = V4L2_IDENT_SAA7115;
+		break;
+	}
 
-	saa7115_dbg("writing init values\n");
+	state->audclk_freq = 48000;
+
+	v4l_dbg(1, debug, client, "writing init values\n");
 
 	/* init to 60hz/48khz */
-	saa7115_writeregs(client, saa7115_init_auto_input);
+	if (state->ident == V4L2_IDENT_SAA7113)
+		saa7115_writeregs(client, saa7113_init_auto_input);
+	else
+		saa7115_writeregs(client, saa7115_init_auto_input);
 	saa7115_writeregs(client, saa7115_init_misc);
 	saa7115_writeregs(client, saa7115_cfg_60hz_fullres_x);
 	saa7115_writeregs(client, saa7115_cfg_60hz_fullres_y);
 	saa7115_writeregs(client, saa7115_cfg_60hz_video);
-	saa7115_writeregs(client, saa7115_cfg_48_audio);
-	saa7115_writeregs(client, saa7115_cfg_60hz_48_audio);
+	saa7115_set_audio_clock_freq(client, state->audclk_freq);
 	saa7115_writeregs(client, saa7115_cfg_reset_scaler);
 
 	i2c_attach_client(client);
 
-	saa7115_dbg("status: (1E) 0x%02x, (1F) 0x%02x\n",
+	v4l_dbg(1, debug, client, "status: (1E) 0x%02x, (1F) 0x%02x\n",
 		saa7115_read(client, 0x1e), saa7115_read(client, 0x1f));
 
 	return 0;
@@ -1326,11 +1422,7 @@ static int saa7115_attach(struct i2c_adapter *adapter, int address, int kind)
 
 static int saa7115_probe(struct i2c_adapter *adapter)
 {
-#ifdef I2C_CLASS_TV_ANALOG
 	if (adapter->class & I2C_CLASS_TV_ANALOG)
-#else
-	if (adapter->id == I2C_HW_B_BT848)
-#endif
 		return i2c_probe(adapter, &addr_data, &saa7115_attach);
 	return 0;
 }
@@ -1354,13 +1446,13 @@ static int saa7115_detach(struct i2c_client *client)
 
 /* i2c implementation */
 static struct i2c_driver i2c_driver_saa7115 = {
-	.name = "saa7115",
+	.driver = {
+		.name = "saa7115",
+	},
 	.id = I2C_DRIVERID_SAA711X,
-	.flags = I2C_DF_NOTIFY,
 	.attach_adapter = saa7115_probe,
 	.detach_client = saa7115_detach,
 	.command = saa7115_command,
-	.owner = THIS_MODULE,
 };
 
 

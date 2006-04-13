@@ -24,14 +24,14 @@
 #include <linux/dma-mapping.h>
 #include <linux/sysdev.h>
 #include <linux/interrupt.h>
+#include <linux/amba/bus.h>
+#include <linux/amba/clcd.h>
 
 #include <asm/system.h>
 #include <asm/hardware.h>
 #include <asm/io.h>
 #include <asm/irq.h>
 #include <asm/leds.h>
-#include <asm/hardware/amba.h>
-#include <asm/hardware/amba_clcd.h>
 #include <asm/hardware/arm_timer.h>
 #include <asm/hardware/icst307.h>
 
@@ -182,7 +182,7 @@ static const struct icst307_params realview_oscvco_params = {
 static void realview_oscvco_set(struct clk *clk, struct icst307_vco vco)
 {
 	void __iomem *sys_lock = __io_address(REALVIEW_SYS_BASE) + REALVIEW_SYS_LOCK_OFFSET;
-	void __iomem *sys_osc = __io_address(REALVIEW_SYS_BASE) + REALVIEW_SYS_OSC1_OFFSET;
+	void __iomem *sys_osc = __io_address(REALVIEW_SYS_BASE) + REALVIEW_SYS_OSC4_OFFSET;
 	u32 val;
 
 	val = readl(sys_osc) & ~0x7ffff;
@@ -202,11 +202,6 @@ struct clk realview_clcd_clk = {
 /*
  * CLCD support.
  */
-#define SYS_CLCD_MODE_MASK	(3 << 0)
-#define SYS_CLCD_MODE_888	(0 << 0)
-#define SYS_CLCD_MODE_5551	(1 << 0)
-#define SYS_CLCD_MODE_565_RLSB	(2 << 0)
-#define SYS_CLCD_MODE_565_BLSB	(3 << 0)
 #define SYS_CLCD_NLCDIOON	(1 << 2)
 #define SYS_CLCD_VDDPOSSWITCH	(1 << 3)
 #define SYS_CLCD_PWR3V5SWITCH	(1 << 4)
@@ -360,29 +355,10 @@ static void realview_clcd_enable(struct clcd_fb *fb)
 	void __iomem *sys_clcd = __io_address(REALVIEW_SYS_BASE) + REALVIEW_SYS_CLCD_OFFSET;
 	u32 val;
 
+	/*
+	 * Enable the PSUs
+	 */
 	val = readl(sys_clcd);
-	val &= ~SYS_CLCD_MODE_MASK;
-
-	switch (fb->fb.var.green.length) {
-	case 5:
-		val |= SYS_CLCD_MODE_5551;
-		break;
-	case 6:
-		val |= SYS_CLCD_MODE_565_RLSB;
-		break;
-	case 8:
-		val |= SYS_CLCD_MODE_888;
-		break;
-	}
-
-	/*
-	 * Set the MUX
-	 */
-	writel(val, sys_clcd);
-
-	/*
-	 * And now enable the PSUs
-	 */
 	val |= SYS_CLCD_NLCDIOON | SYS_CLCD_PWR3V5SWITCH;
 	writel(val, sys_clcd);
 }

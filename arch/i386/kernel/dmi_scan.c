@@ -3,8 +3,10 @@
 #include <linux/init.h>
 #include <linux/module.h>
 #include <linux/dmi.h>
+#include <linux/efi.h>
 #include <linux/bootmem.h>
-
+#include <linux/slab.h>
+#include <asm/dmi.h>
 
 static char * __init dmi_string(struct dmi_header *dm, u8 s)
 {
@@ -19,7 +21,7 @@ static char * __init dmi_string(struct dmi_header *dm, u8 s)
 		}
 
 		if (*bp != 0) {
-			str = alloc_bootmem(strlen(bp) + 1);
+			str = dmi_alloc(strlen(bp) + 1);
 			if (str != NULL)
 				strcpy(str, bp);
 			else
@@ -40,7 +42,7 @@ static int __init dmi_table(u32 base, int len, int num,
 	u8 *buf, *data;
 	int i = 0;
 		
-	buf = bt_ioremap(base, len);
+	buf = dmi_ioremap(base, len);
 	if (buf == NULL)
 		return -1;
 
@@ -65,7 +67,7 @@ static int __init dmi_table(u32 base, int len, int num,
 		data += 2;
 		i++;
 	}
-	bt_iounmap(buf, len);
+	dmi_iounmap(buf, len);
 	return 0;
 }
 
@@ -106,13 +108,13 @@ static void __init dmi_save_devices(struct dmi_header *dm)
 	struct dmi_device *dev;
 
 	for (i = 0; i < count; i++) {
-		char *d = ((char *) dm) + (i * 2);
+		char *d = (char *)(dm + 1) + (i * 2);
 
 		/* Skip disabled device */
 		if ((*d & 0x80) == 0)
 			continue;
 
-		dev = alloc_bootmem(sizeof(*dev));
+		dev = dmi_alloc(sizeof(*dev));
 		if (!dev) {
 			printk(KERN_ERR "dmi_save_devices: out of memory.\n");
 			break;
@@ -131,7 +133,7 @@ static void __init dmi_save_ipmi_device(struct dmi_header *dm)
 	struct dmi_device *dev;
 	void * data;
 
-	data = alloc_bootmem(dm->length);
+	data = dmi_alloc(dm->length);
 	if (data == NULL) {
 		printk(KERN_ERR "dmi_save_ipmi_device: out of memory.\n");
 		return;
@@ -139,7 +141,7 @@ static void __init dmi_save_ipmi_device(struct dmi_header *dm)
 
 	memcpy(data, dm, dm->length);
 
-	dev = alloc_bootmem(sizeof(*dev));
+	dev = dmi_alloc(sizeof(*dev));
 	if (!dev) {
 		printk(KERN_ERR "dmi_save_ipmi_device: out of memory.\n");
 		return;
@@ -184,46 +186,71 @@ static void __init dmi_decode(struct dmi_header *dm)
 	}
 }
 
-void __init dmi_scan_machine(void)
+static int __init dmi_present(char __iomem *p)
 {
 	u8 buf[15];
+	memcpy_fromio(buf, p, 15);
+	if ((memcmp(buf, "_DMI_", 5) == 0) && dmi_checksum(buf)) {
+		u16 num = (buf[13] << 8) | buf[12];
+		u16 len = (buf[7] << 8) | buf[6];
+		u32 base = (buf[11] << 24) | (buf[10] << 16) |
+			(buf[9] << 8) | buf[8];
+
+		/*
+		 * DMI version 0.0 means that the real version is taken from
+		 * the SMBIOS version, which we don't know at this point.
+		 */
+		if (buf[14] != 0)
+			printk(KERN_INFO "DMI %d.%d present.\n",
+			       buf[14] >> 4, buf[14] & 0xF);
+		else
+			printk(KERN_INFO "DMI present.\n");
+		if (dmi_table(base,len, num, dmi_decode) == 0)
+			return 0;
+	}
+	return 1;
+}
+
+void __init dmi_scan_machine(void)
+{
 	char __iomem *p, *q;
+	int rc;
 
-	/*
-	 * no iounmap() for that ioremap(); it would be a no-op, but it's
-	 * so early in setup that sucker gets confused into doing what
-	 * it shouldn't if we actually call it.
-	 */
-	p = ioremap(0xF0000, 0x10000);
-	if (p == NULL)
-		goto out;
+	if (efi_enabled) {
+		if (efi.smbios == EFI_INVALID_TABLE_ADDR)
+			goto out;
 
-	for (q = p; q < p + 0x10000; q += 16) {
-		memcpy_fromio(buf, q, 15);
-		if ((memcmp(buf, "_DMI_", 5) == 0) && dmi_checksum(buf)) {
-			u16 num = (buf[13] << 8) | buf[12];
-			u16 len = (buf[7] << 8) | buf[6];
-			u32 base = (buf[11] << 24) | (buf[10] << 16) |
-				   (buf[9] << 8) | buf[8];
+               /* This is called as a core_initcall() because it isn't
+                * needed during early boot.  This also means we can
+                * iounmap the space when we're done with it.
+		*/
+		p = dmi_ioremap(efi.smbios, 32);
+		if (p == NULL)
+			goto out;
 
-			/*
-			 * DMI version 0.0 means that the real version is taken from
-			 * the SMBIOS version, which we don't know at this point.
-			 */
-			if (buf[14] != 0)
-				printk(KERN_INFO "DMI %d.%d present.\n",
-					buf[14] >> 4, buf[14] & 0xF);
-			else
-				printk(KERN_INFO "DMI present.\n");
+		rc = dmi_present(p + 0x10); /* offset of _DMI_ string */
+		dmi_iounmap(p, 32);
+		if (!rc)
+			return;
+	}
+	else {
+		/*
+		 * no iounmap() for that ioremap(); it would be a no-op, but
+		 * it's so early in setup that sucker gets confused into doing
+		 * what it shouldn't if we actually call it.
+		 */
+		p = dmi_ioremap(0xF0000, 0x10000);
+		if (p == NULL)
+			goto out;
 
-			if (dmi_table(base,len, num, dmi_decode) == 0)
+		for (q = p; q < p + 0x10000; q += 16) {
+			rc = dmi_present(q);
+			if (!rc)
 				return;
 		}
 	}
-
-out:	printk(KERN_INFO "DMI not present.\n");
+ out:	printk(KERN_INFO "DMI not present or invalid.\n");
 }
-
 
 /**
  *	dmi_check_system - check system DMI data
@@ -299,3 +326,33 @@ struct dmi_device * dmi_find_device(int type, const char *name,
 	return NULL;
 }
 EXPORT_SYMBOL(dmi_find_device);
+
+/**
+ *	dmi_get_year - Return year of a DMI date
+ *	@field:	data index (like dmi_get_system_info)
+ *
+ *	Returns -1 when the field doesn't exist. 0 when it is broken.
+ */
+int dmi_get_year(int field)
+{
+	int year;
+	char *s = dmi_get_system_info(field);
+
+	if (!s)
+		return -1;
+	if (*s == '\0')
+		return 0;
+	s = strrchr(s, '/');
+	if (!s)
+		return 0;
+
+	s += 1;
+	year = simple_strtoul(s, NULL, 0);
+	if (year && year < 100) {	/* 2-digit year */
+		year += 1900;
+		if (year < 1996)	/* no dates < spec 1.0 */
+			year += 100;
+	}
+
+	return year;
+}

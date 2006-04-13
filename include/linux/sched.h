@@ -15,6 +15,7 @@
 #include <linux/cpumask.h>
 #include <linux/errno.h>
 #include <linux/nodemask.h>
+#include <linux/vs_base.h>
 
 #include <asm/system.h>
 #include <asm/semaphore.h>
@@ -34,7 +35,8 @@
 #include <linux/percpu.h>
 #include <linux/topology.h>
 #include <linux/seccomp.h>
-#include <linux/vs_base.h>
+#include <linux/rcupdate.h>
+#include <linux/futex.h>
 
 #include <linux/auxvec.h>	/* For AT_VECTOR_SIZE */
 
@@ -99,12 +101,14 @@ DECLARE_PER_CPU(unsigned long, process_counts);
 extern int nr_processes(void);
 extern unsigned long nr_running(void);
 extern unsigned long nr_uninterruptible(void);
+extern unsigned long nr_active(void);
 extern unsigned long nr_iowait(void);
 
 #include <linux/time.h>
 #include <linux/param.h>
 #include <linux/resource.h>
 #include <linux/timer.h>
+#include <linux/hrtimer.h>
 
 #include <asm/processor.h>
 
@@ -160,6 +164,7 @@ extern unsigned long nr_iowait(void);
 #define SCHED_NORMAL		0
 #define SCHED_FIFO		1
 #define SCHED_RR		2
+#define SCHED_BATCH		3
 
 struct sched_param {
 	int sched_priority;
@@ -205,11 +210,11 @@ extern void update_process_times(int user);
 extern void scheduler_tick(void);
 
 #ifdef CONFIG_DETECT_SOFTLOCKUP
-extern void softlockup_tick(struct pt_regs *regs);
+extern void softlockup_tick(void);
 extern void spawn_softlockup_task(void);
 extern void touch_softlockup_watchdog(void);
 #else
-static inline void softlockup_tick(struct pt_regs *regs)
+static inline void softlockup_tick(void)
 {
 }
 static inline void spawn_softlockup_task(void)
@@ -256,29 +261,11 @@ extern void arch_unmap_area_topdown(struct mm_struct *, unsigned long);
  * The mm counters are not protected by its page_table_lock,
  * so must be incremented atomically.
  */
-#ifdef ATOMIC64_INIT
-typedef atomic64_t mm_counter_t;
-#define __set_mm_counter(mm, member, value) atomic64_set(&(mm)->_##member, value)
-#define set_mm_counter(mm, member, value) vx_ ## member ## pages64_sub((mm), \
-	(get_mm_counter(mm, member) - value))
-#define get_mm_counter(mm, member) ((unsigned long)atomic64_read(&(mm)->_##member))
-#define add_mm_counter(mm, member, value) vx_ ## member ## pages64_add((mm), (value))
-#define inc_mm_counter(mm, member) vx_ ## member ## pages64_inc((mm))
-#define dec_mm_counter(mm, member) vx_ ## member ## pages64_dec((mm))
-#else /* !ATOMIC64_INIT */
-/*
- * The counters wrap back to 0 at 2^32 * PAGE_SIZE,
- * that is, at 16TB if using 4kB page size.
- */
-typedef atomic_t mm_counter_t;
-#define __set_mm_counter(mm, member, value) atomic_set(&(mm)->_##member, value)
-#define set_mm_counter(mm, member, value) vx_ ## member ## pages_sub((mm), \
-	(get_mm_counter(mm, member) - value))
-#define get_mm_counter(mm, member) ((unsigned long)atomic_read(&(mm)->_##member))
-#define add_mm_counter(mm, member, value) vx_ ## member ## pages_add((mm), (value))
-#define inc_mm_counter(mm, member) vx_ ## member ## pages_inc((mm))
-#define dec_mm_counter(mm, member) vx_ ## member ## pages_dec((mm))
-#endif /* !ATOMIC64_INIT */
+typedef atomic_long_t mm_counter_t;
+#define __set_mm_counter(mm, member, value) \
+	atomic_long_set(&(mm)->_##member, value)
+#define get_mm_counter(mm, member) \
+	((unsigned long)atomic_long_read(&(mm)->_##member))
 
 #else  /* NR_CPUS < CONFIG_SPLIT_PTLOCK_CPUS */
 /*
@@ -287,14 +274,16 @@ typedef atomic_t mm_counter_t;
  */
 typedef unsigned long mm_counter_t;
 #define __set_mm_counter(mm, member, value) (mm)->_##member = (value)
-#define set_mm_counter(mm, member, value) vx_ ## member ## pages_sub((mm), \
-	(get_mm_counter(mm, member) - value))
 #define get_mm_counter(mm, member) ((mm)->_##member)
-#define add_mm_counter(mm, member, value) vx_ ## member ## pages_add((mm), (value))
-#define inc_mm_counter(mm, member) vx_ ## member ## pages_inc((mm))
-#define dec_mm_counter(mm, member) vx_ ## member ## pages_dec((mm))
 
 #endif /* NR_CPUS < CONFIG_SPLIT_PTLOCK_CPUS */
+
+#define set_mm_counter(mm, member, value) \
+	vx_ ## member ## pages_sub((mm), (get_mm_counter(mm, member) - value))
+#define add_mm_counter(mm, member, value) \
+	vx_ ## member ## pages_add((mm), (value))
+#define inc_mm_counter(mm, member) vx_ ## member ## pages_inc((mm))
+#define dec_mm_counter(mm, member) vx_ ## member ## pages_dec((mm))
 
 #define get_mm_rss(mm)					\
 	(get_mm_counter(mm, file_rss) + get_mm_counter(mm, anon_rss))
@@ -316,8 +305,9 @@ struct mm_struct {
 				unsigned long addr, unsigned long len,
 				unsigned long pgoff, unsigned long flags);
 	void (*unmap_area) (struct mm_struct *mm, unsigned long addr);
-        unsigned long mmap_base;		/* base of mmap area */
-        unsigned long cached_hole_size;         /* if non-zero, the largest hole below free_area_cache */
+	unsigned long mmap_base;		/* base of mmap area */
+	unsigned long task_size;		/* size of task vm space */
+	unsigned long cached_hole_size;         /* if non-zero, the largest hole below free_area_cache */
 	unsigned long free_area_cache;		/* first hole of size cached_hole_size or larger */
 	pgd_t * pgd;
 	atomic_t mm_users;			/* How many users with user space? */
@@ -411,8 +401,9 @@ struct signal_struct {
 	struct list_head posix_timers;
 
 	/* ITIMER_REAL timer for the process */
-	struct timer_list real_timer;
-	unsigned long it_real_value, it_real_incr;
+	struct hrtimer real_timer;
+	struct task_struct *tsk;
+	ktime_t it_real_incr;
 
 	/* ITIMER_PROF and ITIMER_VIRTUAL timers for the process */
 	cputime_t it_prof_expires, it_virt_expires;
@@ -482,9 +473,9 @@ struct signal_struct {
 
 /*
  * Priority of a process goes from 0..MAX_PRIO-1, valid RT
- * priority is 0..MAX_RT_PRIO-1, and SCHED_NORMAL tasks are
- * in the range MAX_RT_PRIO..MAX_PRIO-1. Priority values
- * are inverted: lower p->prio value means higher priority.
+ * priority is 0..MAX_RT_PRIO-1, and SCHED_NORMAL/SCHED_BATCH
+ * tasks are in the range MAX_RT_PRIO..MAX_PRIO-1. Priority
+ * values are inverted: lower p->prio value means higher priority.
  *
  * The MAX_USER_RT_PRIO value allows the actual maximum
  * RT priority to be separate from the value exported to
@@ -499,6 +490,7 @@ struct signal_struct {
 #define MAX_PRIO		(MAX_RT_PRIO + 40)
 
 #define rt_task(p)		(unlikely((p)->prio < MAX_RT_PRIO))
+#define batch_task(p)		(unlikely((p)->policy == SCHED_BATCH))
 
 /*
  * Some day this will be a full-fledged user tracking system..
@@ -644,7 +636,14 @@ struct sched_domain {
 
 extern void partition_sched_domains(cpumask_t *partition1,
 				    cpumask_t *partition2);
-#endif /* CONFIG_SMP */
+
+/*
+ * Maximum cache size the migration-costs auto-tuning code will
+ * search from:
+ */
+extern unsigned int max_cache_size;
+
+#endif	/* CONFIG_SMP */
 
 
 struct io_context;			/* See blkdev.h */
@@ -693,6 +692,13 @@ static inline void prefetch_stack(struct task_struct *t) { }
 struct audit_context;		/* See audit.c */
 struct mempolicy;
 
+enum sleep_type {
+	SLEEP_NORMAL,
+	SLEEP_NONINTERACTIVE,
+	SLEEP_INTERACTIVE,
+	SLEEP_INTERRUPTED,
+};
+
 struct task_struct {
 	volatile long state;	/* -1 unrunnable, 0 runnable, >0 stopped */
 	struct thread_info *thread_info;
@@ -710,11 +716,12 @@ struct task_struct {
 	prio_array_t *array;
 
 	unsigned short ioprio;
+	unsigned int btrace_seq;
 
 	unsigned long sleep_avg;
 	unsigned long long timestamp, last_ran;
 	unsigned long long sched_time; /* sched_clock time spent running */
-	int activated;
+	enum sleep_type sleep_type;
 
 	unsigned long policy;
 	cpumask_t cpus_allowed;
@@ -760,7 +767,8 @@ struct task_struct {
 	struct task_struct *group_leader;	/* threadgroup leader */
 
 	/* PID/PID hash table linkage. */
-	struct pid pids[PIDTYPE_MAX];
+	struct pid_link pids[PIDTYPE_MAX];
+	struct list_head thread_group;
 
 	struct completion *vfork_done;		/* for vfork() */
 	int __user *set_child_tid;		/* CLONE_CHILD_SETTID */
@@ -785,6 +793,7 @@ struct task_struct {
 	unsigned keep_capabilities:1;
 	struct user_struct *user;
 #ifdef CONFIG_KEYS
+	struct key *request_key_auth;	/* assumed request_key authority */
 	struct key *thread_keyring;	/* keyring private to this thread */
 	unsigned char jit_keyring;	/* default keyring to attach requested keys to */
 #endif
@@ -810,6 +819,7 @@ struct task_struct {
 	struct sighand_struct *sighand;
 
 	sigset_t blocked, real_blocked;
+	sigset_t saved_sigmask;		/* To be restored with TIF_RESTORE_SIGMASK */
 	struct sigpending pending;
 
 	unsigned long sas_ss_sp;
@@ -820,15 +830,15 @@ struct task_struct {
 	
 	void *security;
 	struct audit_context *audit_context;
-	seccomp_t seccomp;
 
 /* vserver context data */
-	xid_t xid;
 	struct vx_info *vx_info;
-
-/* vserver network data */
-	nid_t nid;
 	struct nx_info *nx_info;
+
+	xid_t xid;
+	nid_t nid;
+
+	seccomp_t seccomp;
 
 /* Thread group tracking */
    	u32 parent_exec_id;
@@ -837,6 +847,11 @@ struct task_struct {
 	spinlock_t alloc_lock;
 /* Protection of proc_dentry: nesting proc_lock, dcache_lock, write_lock_irq(&tasklist_lock); */
 	spinlock_t proc_lock;
+
+#ifdef CONFIG_DEBUG_MUTEXES
+	/* mutex deadlock detection */
+	struct mutex_waiter *blocked_on;
+#endif
 
 /* journalling filesystem info */
 	void *journal_info;
@@ -873,8 +888,15 @@ struct task_struct {
 	struct cpuset *cpuset;
 	nodemask_t mems_allowed;
 	int cpuset_mems_generation;
+	int cpuset_mem_spread_rotor;
 #endif
+	struct robust_list_head __user *robust_list;
+#ifdef CONFIG_COMPAT
+	struct compat_robust_list_head __user *compat_robust_list;
+#endif
+
 	atomic_t fs_excl;	/* holding fs exclusive resources */
+	struct rcu_head rcu;
 };
 
 static inline pid_t process_group(struct task_struct *tsk)
@@ -892,14 +914,20 @@ static inline pid_t process_group(struct task_struct *tsk)
  */
 static inline int pid_alive(struct task_struct *p)
 {
-	return p->pids[PIDTYPE_PID].nr != 0;
+	return p->pids[PIDTYPE_PID].pid != NULL;
 }
 
 extern void free_task(struct task_struct *tsk);
-extern void __put_task_struct(struct task_struct *tsk);
 #define get_task_struct(tsk) do { atomic_inc(&(tsk)->usage); } while(0)
-#define put_task_struct(tsk) \
-do { if (atomic_dec_and_test(&(tsk)->usage)) __put_task_struct(tsk); } while(0)
+
+extern void __put_task_struct_cb(struct rcu_head *rhp);
+extern void __put_task_struct(struct task_struct *t);
+
+static inline void put_task_struct(struct task_struct *t)
+{
+	if (atomic_dec_and_test(&t->usage))
+		__put_task_struct(t);
+}
 
 /*
  * Per process flags
@@ -926,6 +954,10 @@ do { if (atomic_dec_and_test(&(tsk)->usage)) __put_task_struct(tsk); } while(0)
 #define PF_SYNCWRITE	0x00200000	/* I am doing a sync write */
 #define PF_BORROWED_MM	0x00400000	/* I am a kthread doing use_mm */
 #define PF_RANDOMIZE	0x00800000	/* randomize virtual address space */
+#define PF_SWAPWRITE	0x01000000	/* Allowed to write to swap */
+#define PF_SPREAD_PAGE	0x04000000	/* Spread page cache over cpuset */
+#define PF_SPREAD_SLAB	0x08000000	/* Spread some slab caches over cpuset */
+#define PF_MEMPOLICY	0x10000000	/* Non-default NUMA mempolicy */
 
 /*
  * Only the _current_ task can read/write to tsk->flags, but other
@@ -1093,13 +1125,12 @@ extern void force_sig_specific(int, struct task_struct *);
 extern int send_sig(int, struct task_struct *, int);
 extern void zap_other_threads(struct task_struct *p);
 extern int kill_pg(pid_t, int, int);
-extern int kill_sl(pid_t, int, int);
 extern int kill_proc(pid_t, int, int);
 extern struct sigqueue *sigqueue_alloc(void);
 extern void sigqueue_free(struct sigqueue *);
 extern int send_sigqueue(int, struct sigqueue *,  struct task_struct *);
 extern int send_group_sigqueue(int, struct sigqueue *,  struct task_struct *);
-extern int do_sigaction(int, const struct k_sigaction *, struct k_sigaction *);
+extern int do_sigaction(int, struct k_sigaction *, struct k_sigaction *);
 extern int do_sigaltstack(const stack_t __user *, stack_t __user *, unsigned long);
 
 /* These can be the second arg to send_sig_info/send_group_sig_info.  */
@@ -1124,34 +1155,6 @@ static inline int sas_ss_flags(unsigned long sp)
 	return (current->sas_ss_size == 0 ? SS_DISABLE
 		: on_sig_stack(sp) ? SS_ONSTACK : 0);
 }
-
-
-#ifdef CONFIG_SECURITY
-/* code is in security.c */
-extern int capable(int cap);
-extern int vx_capable(int cap, int ccap);
-#else
-static inline int capable(int cap)
-{
-	if (vx_check_bit(VXC_CAP_MASK, cap) && !vx_mcaps(1L << cap))
-		return 0;
-	if (cap_raised(current->cap_effective, cap)) {
-		current->flags |= PF_SUPERPRIV;
-		return 1;
-	}
-	return 0;
-}
-
-static inline int vx_capable(int cap, int ccap)
-{
-	if (cap_raised(current->cap_effective, cap) &&
-		vx_ccaps(ccap)) {
-		current->flags |= PF_SUPERPRIV;
-		return 1;
-	}
-	return 0;
-}
-#endif
 
 /*
  * Routines for handling mm_structs
@@ -1178,10 +1181,8 @@ extern void flush_thread(void);
 extern void exit_thread(void);
 
 extern void exit_files(struct task_struct *);
-extern void exit_signal(struct task_struct *);
-extern void __exit_signal(struct task_struct *);
-extern void exit_sighand(struct task_struct *);
-extern void __exit_sighand(struct task_struct *);
+extern void __cleanup_signal(struct signal_struct *);
+extern void __cleanup_sighand(struct sighand_struct *);
 extern void exit_itimers(struct signal_struct *);
 
 extern NORET_TYPE void do_group_exit(int);
@@ -1205,19 +1206,7 @@ extern void wait_task_inactive(task_t * p);
 #endif
 
 #define remove_parent(p)	list_del_init(&(p)->sibling)
-#define add_parent(p, parent)	list_add_tail(&(p)->sibling,&(parent)->children)
-
-#define REMOVE_LINKS(p) do {					\
-	if (thread_group_leader(p))				\
-		list_del_init(&(p)->tasks);			\
-	remove_parent(p);					\
-	} while (0)
-
-#define SET_LINKS(p) do {					\
-	if (thread_group_leader(p))				\
-		list_add_tail(&(p)->tasks,&init_task.tasks);	\
-	add_parent(p, (p)->parent);				\
-	} while (0)
+#define add_parent(p)		list_add_tail(&(p)->sibling,&(p)->parent->children)
 
 #define next_task(p)	list_entry((p)->tasks.next, struct task_struct, tasks)
 #define prev_task(p)	list_entry((p)->tasks.prev, struct task_struct, tasks)
@@ -1235,19 +1224,21 @@ extern void wait_task_inactive(task_t * p);
 #define while_each_thread(g, t) \
 	while ((t = next_thread(t)) != g)
 
-extern task_t * FASTCALL(next_thread(const task_t *p));
-
 #define thread_group_leader(p)	(p->pid == p->tgid)
+
+static inline task_t *next_thread(task_t *p)
+{
+	return list_entry(rcu_dereference(p->thread_group.next),
+				task_t, thread_group);
+}
 
 static inline int thread_group_empty(task_t *p)
 {
-	return list_empty(&p->pids[PIDTYPE_TGID].pid_list);
+	return list_empty(&p->thread_group);
 }
 
 #define delay_group_leader(p) \
 		(thread_group_leader(p) && !thread_group_empty(p))
-
-extern void unhash_process(struct task_struct *p);
 
 /*
  * Protects ->fs, ->files, ->mm, ->ptrace, ->group_info, ->comm, keyring
@@ -1268,9 +1259,19 @@ static inline void task_unlock(struct task_struct *p)
 	spin_unlock(&p->alloc_lock);
 }
 
+extern struct sighand_struct *lock_task_sighand(struct task_struct *tsk,
+							unsigned long *flags);
+
+static inline void unlock_task_sighand(struct task_struct *tsk,
+						unsigned long *flags)
+{
+	spin_unlock_irqrestore(&tsk->sighand->siglock, *flags);
+}
+
 #ifndef __HAVE_THREAD_FUNCTIONS
 
 #define task_thread_info(task) (task)->thread_info
+#define task_stack_page(task) ((void*)((task)->thread_info))
 
 static inline void setup_thread_stack(struct task_struct *p, struct task_struct *org)
 {
@@ -1416,11 +1417,7 @@ static inline void arch_pick_mmap_layout(struct mm_struct *mm)
 extern long sched_setaffinity(pid_t pid, cpumask_t new_mask);
 extern long sched_getaffinity(pid_t pid, cpumask_t *mask);
 
-#ifdef CONFIG_MAGIC_SYSRQ
-
 extern void normalize_rt_tasks(void);
-
-#endif
 
 #ifdef CONFIG_PM
 /*

@@ -80,6 +80,32 @@ int pmtimer_mark_offset(void)
 	return lost - 1;
 }
 
+static unsigned pmtimer_wait_tick(void)
+{
+	u32 a, b;
+	for (a = b = inl(pmtmr_ioport) & ACPI_PM_MASK;
+	     a == b;
+	     b = inl(pmtmr_ioport) & ACPI_PM_MASK)
+		cpu_relax();
+	return b;
+}
+
+/* note: wait time is rounded up to one tick */
+void pmtimer_wait(unsigned us)
+{
+	u32 a, b;
+	a = pmtimer_wait_tick();
+	do {
+		b = inl(pmtmr_ioport);
+		cpu_relax();
+	} while (cyc2us(b - a) < us);
+}
+
+void pmtimer_resume(void)
+{
+	last_pmtmr_tick = inl(pmtmr_ioport);
+}
+
 unsigned int do_gettimeoffset_pm(void)
 {
 	u32 now, offset, delta = 0;
@@ -95,7 +121,7 @@ unsigned int do_gettimeoffset_pm(void)
 static int __init nopmtimer_setup(char *s)
 {
 	pmtmr_ioport = 0;
-	return 0;
+	return 1;
 }
 
 __setup("nopmtimer", nopmtimer_setup);

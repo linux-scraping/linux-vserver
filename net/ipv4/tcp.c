@@ -257,6 +257,8 @@
 #include <linux/fs.h>
 #include <linux/random.h>
 #include <linux/bootmem.h>
+#include <linux/cache.h>
+#include <linux/in.h>
 
 #include <net/icmp.h>
 #include <net/tcp.h>
@@ -275,9 +277,9 @@ atomic_t tcp_orphan_count = ATOMIC_INIT(0);
 
 EXPORT_SYMBOL_GPL(tcp_orphan_count);
 
-int sysctl_tcp_mem[3];
-int sysctl_tcp_wmem[3] = { 4 * 1024, 16 * 1024, 128 * 1024 };
-int sysctl_tcp_rmem[3] = { 4 * 1024, 87380, 87380 * 2 };
+int sysctl_tcp_mem[3] __read_mostly;
+int sysctl_tcp_wmem[3] __read_mostly;
+int sysctl_tcp_rmem[3] __read_mostly;
 
 EXPORT_SYMBOL(sysctl_tcp_mem);
 EXPORT_SYMBOL(sysctl_tcp_rmem);
@@ -365,7 +367,7 @@ unsigned int tcp_poll(struct file *file, struct socket *sock, poll_table *wait)
 	if (sk->sk_shutdown == SHUTDOWN_MASK || sk->sk_state == TCP_CLOSE)
 		mask |= POLLHUP;
 	if (sk->sk_shutdown & RCV_SHUTDOWN)
-		mask |= POLLIN | POLLRDNORM;
+		mask |= POLLIN | POLLRDNORM | POLLRDHUP;
 
 	/* Connected? */
 	if ((1 << sk->sk_state) & ~(TCPF_SYN_SENT | TCPF_SYN_RECV)) {
@@ -1687,17 +1689,13 @@ int tcp_disconnect(struct sock *sk, int flags)
 /*
  *	Socket option code for TCP.
  */
-int tcp_setsockopt(struct sock *sk, int level, int optname, char __user *optval,
-		   int optlen)
+static int do_tcp_setsockopt(struct sock *sk, int level,
+		int optname, char __user *optval, int optlen)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
 	struct inet_connection_sock *icsk = inet_csk(sk);
 	int val;
 	int err = 0;
-
-	if (level != SOL_TCP)
-		return tp->af_specific->setsockopt(sk, level, optname,
-						   optval, optlen);
 
 	/* This is a string value all the others are int's */
 	if (optname == TCP_CONGESTION) {
@@ -1871,6 +1869,30 @@ int tcp_setsockopt(struct sock *sk, int level, int optname, char __user *optval,
 	return err;
 }
 
+int tcp_setsockopt(struct sock *sk, int level, int optname, char __user *optval,
+		   int optlen)
+{
+	struct inet_connection_sock *icsk = inet_csk(sk);
+
+	if (level != SOL_TCP)
+		return icsk->icsk_af_ops->setsockopt(sk, level, optname,
+						     optval, optlen);
+	return do_tcp_setsockopt(sk, level, optname, optval, optlen);
+}
+
+#ifdef CONFIG_COMPAT
+int compat_tcp_setsockopt(struct sock *sk, int level, int optname,
+			  char __user *optval, int optlen)
+{
+	if (level != SOL_TCP)
+		return inet_csk_compat_setsockopt(sk, level, optname,
+						  optval, optlen);
+	return do_tcp_setsockopt(sk, level, optname, optval, optlen);
+}
+
+EXPORT_SYMBOL(compat_tcp_setsockopt);
+#endif
+
 /* Return information about state of tcp endpoint in API format. */
 void tcp_get_info(struct sock *sk, struct tcp_info *info)
 {
@@ -1914,7 +1936,7 @@ void tcp_get_info(struct sock *sk, struct tcp_info *info)
 	info->tcpi_last_data_recv = jiffies_to_msecs(now - icsk->icsk_ack.lrcvtime);
 	info->tcpi_last_ack_recv = jiffies_to_msecs(now - tp->rcv_tstamp);
 
-	info->tcpi_pmtu = tp->pmtu_cookie;
+	info->tcpi_pmtu = icsk->icsk_pmtu_cookie;
 	info->tcpi_rcv_ssthresh = tp->rcv_ssthresh;
 	info->tcpi_rtt = jiffies_to_usecs(tp->srtt)>>3;
 	info->tcpi_rttvar = jiffies_to_usecs(tp->mdev)>>2;
@@ -1931,16 +1953,12 @@ void tcp_get_info(struct sock *sk, struct tcp_info *info)
 
 EXPORT_SYMBOL_GPL(tcp_get_info);
 
-int tcp_getsockopt(struct sock *sk, int level, int optname, char __user *optval,
-		   int __user *optlen)
+static int do_tcp_getsockopt(struct sock *sk, int level,
+		int optname, char __user *optval, int __user *optlen)
 {
 	struct inet_connection_sock *icsk = inet_csk(sk);
 	struct tcp_sock *tp = tcp_sk(sk);
 	int val, len;
-
-	if (level != SOL_TCP)
-		return tp->af_specific->getsockopt(sk, level, optname,
-						   optval, optlen);
 
 	if (get_user(len, optlen))
 		return -EFAULT;
@@ -2025,6 +2043,29 @@ int tcp_getsockopt(struct sock *sk, int level, int optname, char __user *optval,
 	return 0;
 }
 
+int tcp_getsockopt(struct sock *sk, int level, int optname, char __user *optval,
+		   int __user *optlen)
+{
+	struct inet_connection_sock *icsk = inet_csk(sk);
+
+	if (level != SOL_TCP)
+		return icsk->icsk_af_ops->getsockopt(sk, level, optname,
+						     optval, optlen);
+	return do_tcp_getsockopt(sk, level, optname, optval, optlen);
+}
+
+#ifdef CONFIG_COMPAT
+int compat_tcp_getsockopt(struct sock *sk, int level, int optname,
+			  char __user *optval, int __user *optlen)
+{
+	if (level != SOL_TCP)
+		return inet_csk_compat_getsockopt(sk, level, optname,
+						  optval, optlen);
+	return do_tcp_getsockopt(sk, level, optname, optval, optlen);
+}
+
+EXPORT_SYMBOL(compat_tcp_getsockopt);
+#endif
 
 extern void __skb_cb_too_small_for_tcp(int, int);
 extern struct tcp_congestion_ops tcp_reno;
@@ -2042,7 +2083,8 @@ __setup("thash_entries=", set_thash_entries);
 void __init tcp_init(void)
 {
 	struct sk_buff *skb = NULL;
-	int order, i;
+	unsigned long limit;
+	int order, i, max_share;
 
 	if (sizeof(struct tcp_skb_cb) > sizeof(skb->cb))
 		__skb_cb_too_small_for_tcp(sizeof(struct tcp_skb_cb),
@@ -2116,12 +2158,16 @@ void __init tcp_init(void)
 	sysctl_tcp_mem[1] = 1024 << order;
 	sysctl_tcp_mem[2] = 1536 << order;
 
-	if (order < 3) {
-		sysctl_tcp_wmem[2] = 64 * 1024;
-		sysctl_tcp_rmem[0] = PAGE_SIZE;
-		sysctl_tcp_rmem[1] = 43689;
-		sysctl_tcp_rmem[2] = 2 * 43689;
-	}
+	limit = ((unsigned long)sysctl_tcp_mem[1]) << (PAGE_SHIFT - 7);
+	max_share = min(4UL*1024*1024, limit);
+
+	sysctl_tcp_wmem[0] = SK_STREAM_MEM_QUANTUM;
+	sysctl_tcp_wmem[1] = 16*1024;
+	sysctl_tcp_wmem[2] = max(64*1024, max_share);
+
+	sysctl_tcp_rmem[0] = SK_STREAM_MEM_QUANTUM;
+	sysctl_tcp_rmem[1] = 87380;
+	sysctl_tcp_rmem[2] = max(87380, max_share);
 
 	printk(KERN_INFO "TCP: Hash tables configured "
 	       "(established %d bind %d)\n",

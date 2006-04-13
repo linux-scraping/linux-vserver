@@ -42,7 +42,7 @@
  */
 void phy_print_status(struct phy_device *phydev)
 {
-	pr_info("%s: Link is %s", phydev->dev.bus_id,
+	pr_info("PHY: %s - Link is %s", phydev->dev.bus_id,
 			phydev->link ? "Up" : "Down");
 	if (phydev->link)
 		printk(" - %d/%s", phydev->speed,
@@ -132,7 +132,7 @@ struct phy_setting {
 };
 
 /* A mapping of all SUPPORTED settings to speed/duplex */
-static struct phy_setting settings[] = {
+static const struct phy_setting settings[] = {
 	{
 		.speed = 10000,
 		.duplex = DUPLEX_FULL,

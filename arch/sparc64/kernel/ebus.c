@@ -277,10 +277,9 @@ static inline void *ebus_alloc(size_t size)
 {
 	void *mem;
 
-	mem = kmalloc(size, GFP_ATOMIC);
+	mem = kzalloc(size, GFP_ATOMIC);
 	if (!mem)
 		panic("ebus_alloc: out of memory");
-	memset((char *)mem, 0, size);
 	return mem;
 }
 
@@ -527,18 +526,12 @@ static struct pci_dev *find_next_ebus(struct pci_dev *start, int *is_rio_p)
 {
 	struct pci_dev *pdev = start;
 
-	do {
-		pdev = pci_find_device(PCI_VENDOR_ID_SUN, PCI_ANY_ID, pdev);
-		if (pdev &&
-		    (pdev->device == PCI_DEVICE_ID_SUN_EBUS ||
-		     pdev->device == PCI_DEVICE_ID_SUN_RIO_EBUS))
+	while ((pdev = pci_get_device(PCI_VENDOR_ID_SUN, PCI_ANY_ID, pdev)))
+		if (pdev->device == PCI_DEVICE_ID_SUN_EBUS ||
+			pdev->device == PCI_DEVICE_ID_SUN_RIO_EBUS)
 			break;
-	} while (pdev != NULL);
 
-	if (pdev && (pdev->device == PCI_DEVICE_ID_SUN_RIO_EBUS))
-		*is_rio_p = 1;
-	else
-		*is_rio_p = 0;
+	*is_rio_p = !!(pdev && (pdev->device == PCI_DEVICE_ID_SUN_RIO_EBUS));
 
 	return pdev;
 }
@@ -637,6 +630,7 @@ void __init ebus_init(void)
 		ebus->is_rio = is_rio;
 		++num_ebus;
 	}
+	pci_dev_put(pdev); /* XXX for the case, when ebusnd is 0, is it OK? */
 
 #ifdef CONFIG_SUN_AUXIO
 	auxio_probe();

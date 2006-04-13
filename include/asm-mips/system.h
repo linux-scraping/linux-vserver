@@ -159,10 +159,20 @@ struct task_struct;
 do {									\
 	if (cpu_has_dsp)						\
 		__save_dsp(prev);					\
-	(last) = resume(prev, next, next->thread_info);			\
+	(last) = resume(prev, next, task_thread_info(next));		\
 	if (cpu_has_dsp)						\
 		__restore_dsp(current);					\
 } while(0)
+
+/*
+ * On SMP systems, when the scheduler does migration-cost autodetection,
+ * it needs a way to flush as much of the CPU's caches as possible.
+ *
+ * TODO: fill this in!
+ */
+static inline void sched_cacheflush(void)
+{
+}
 
 static inline unsigned long __xchg_u32(volatile int * m, unsigned int val)
 {
@@ -276,10 +286,10 @@ extern void __xchg_called_with_bad_pointer(void);
 static inline unsigned long __xchg(unsigned long x, volatile void * ptr, int size)
 {
 	switch (size) {
-		case 4:
-			return __xchg_u32(ptr, x);
-		case 8:
-			return __xchg_u64(ptr, x);
+	case 4:
+		return __xchg_u32(ptr, x);
+	case 8:
+		return __xchg_u64(ptr, x);
 	}
 	__xchg_called_with_bad_pointer();
 	return x;
@@ -312,7 +322,7 @@ static inline unsigned long __cmpxchg_u32(volatile int * m, unsigned long old,
 #endif
 		"2:							\n"
 		"	.set	pop					\n"
-		: "=&r" (retval), "=m" (*m)
+		: "=&r" (retval), "=R" (*m)
 		: "R" (*m), "Jr" (old), "Jr" (new)
 		: "memory");
 	} else if (cpu_has_llsc) {
@@ -332,7 +342,7 @@ static inline unsigned long __cmpxchg_u32(volatile int * m, unsigned long old,
 #endif
 		"2:							\n"
 		"	.set	pop					\n"
-		: "=&r" (retval), "=m" (*m)
+		: "=&r" (retval), "=R" (*m)
 		: "R" (*m), "Jr" (old), "Jr" (new)
 		: "memory");
 	} else {
@@ -369,7 +379,7 @@ static inline unsigned long __cmpxchg_u64(volatile int * m, unsigned long old,
 #endif
 		"2:							\n"
 		"	.set	pop					\n"
-		: "=&r" (retval), "=m" (*m)
+		: "=&r" (retval), "=R" (*m)
 		: "R" (*m), "Jr" (old), "Jr" (new)
 		: "memory");
 	} else if (cpu_has_llsc) {
@@ -387,7 +397,7 @@ static inline unsigned long __cmpxchg_u64(volatile int * m, unsigned long old,
 #endif
 		"2:							\n"
 		"	.set	pop					\n"
-		: "=&r" (retval), "=m" (*m)
+		: "=&r" (retval), "=R" (*m)
 		: "R" (*m), "Jr" (old), "Jr" (new)
 		: "memory");
 	} else {

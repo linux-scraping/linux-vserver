@@ -3,11 +3,6 @@
  * 
  * This include file is for the Linux kernel/module.
  *
- * CONTACTS
- *	E-mail regarding any portion of the Linux UDF file system should be
- *	directed to the development team mailing list (run by majordomo):
- *		linux_udf@hpesjro.fc.hp.com
- *
  * COPYRIGHT
  *	This file is distributed under the terms of the GNU General Public
  *	License (GPL). Copies of the GPL can be obtained from:
@@ -18,7 +13,7 @@
 #ifndef _UDF_FS_SB_H
 #define _UDF_FS_SB_H 1
 
-#include <asm/semaphore.h>
+#include <linux/mutex.h>
 
 #pragma pack(1)
 
@@ -116,7 +111,7 @@ struct udf_sb_info
 	/* VAT inode */
 	struct inode		*s_vat;
 
-	struct semaphore	s_alloc_sem;
+	struct mutex		s_alloc_mutex;
 };
 
 #endif /* _UDF_FS_SB_H */

@@ -54,6 +54,11 @@
 !Ekernel/sched.c
 !Ekernel/timer.c
      </sect1>
+     <sect1><title>High-resolution timers</title>
+!Iinclude/linux/ktime.h
+!Iinclude/linux/hrtimer.h
+!Ekernel/hrtimer.c
+     </sect1>
      <sect1><title>Internal Functions</title>
 !Ikernel/exit.c
 !Ikernel/signal.c
@@ -317,7 +322,6 @@ X!Earch/i386/kernel/mca.c
   <chapter id="sysfs">
      <title>The Filesystem for Exporting Kernel Objects</title>
 !Efs/sysfs/file.c
-!Efs/sysfs/dir.c
 !Efs/sysfs/symlink.c
 !Efs/sysfs/bin.c
   </chapter>
@@ -369,6 +373,7 @@ X!Edrivers/acpi/motherboard.c
 X!Edrivers/acpi/bus.c
 -->
 !Edrivers/acpi/scan.c
+!Idrivers/acpi/scan.c
 <!-- No correct structured comments
 X!Edrivers/acpi/pci_bind.c
 -->

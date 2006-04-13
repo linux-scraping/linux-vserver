@@ -23,6 +23,7 @@
 #include <asm/io.h>
 #include <asm/proto.h>
 #include <asm/pci-direct.h>
+#include <asm/dma.h>
 
 int iommu_aperture;
 int iommu_aperture_disabled __initdata = 0;
@@ -59,7 +60,7 @@ static u32 __init allocate_aperture(void)
 		printk("Cannot allocate aperture memory hole (%p,%uK)\n",
 		       p, aper_size>>10);
 		if (p)
-			free_bootmem_node(nd0, (unsigned long)p, aper_size); 
+			free_bootmem_node(nd0, __pa(p), aper_size); 
 		return 0;
 	}
 	printk("Mapping aperture over %d KB of RAM @ %lx\n",
@@ -160,7 +161,7 @@ static __u32 __init search_agp_bridge(u32 *order, int *valid_agp)
 	int num, slot, func;
 
 	/* Poor man's PCI discovery */
-	for (num = 0; num < 32; num++) { 
+	for (num = 0; num < 256; num++) { 
 		for (slot = 0; slot < 32; slot++) { 
 			for (func = 0; func < 8; func++) { 
 				u32 class, cap;
@@ -247,7 +248,7 @@ void __init iommu_hole_init(void)
 		/* Got the aperture from the AGP bridge */
 	} else if (swiotlb && !valid_agp) {
 		/* Do nothing */
-	} else if ((!no_iommu && end_pfn >= 0xffffffff>>PAGE_SHIFT) ||
+	} else if ((!no_iommu && end_pfn > MAX_DMA32_PFN) ||
 		   force_iommu ||
 		   valid_agp ||
 		   fallback_aper_force) { 

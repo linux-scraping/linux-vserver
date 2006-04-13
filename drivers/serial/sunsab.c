@@ -159,21 +159,14 @@ receive_chars(struct uart_sunsab_port *up,
 		saw_console_brk = 1;
 
 	for (i = 0; i < count; i++) {
-		unsigned char ch = buf[i];
+		unsigned char ch = buf[i], flag;
 
 		if (tty == NULL) {
 			uart_handle_sysrq_char(&up->port, ch, regs);
 			continue;
 		}
 
-		if (unlikely(tty->flip.count >= TTY_FLIPBUF_SIZE)) {
-			tty->flip.work.func((void *)tty);
-			if (tty->flip.count >= TTY_FLIPBUF_SIZE)
-				return tty; // if TTY_DONT_FLIP is set
-		}
-
-		*tty->flip.char_buf_ptr = ch;
-		*tty->flip.flag_buf_ptr = TTY_NORMAL;
+		flag = TTY_NORMAL;
 		up->port.icount.rx++;
 
 		if (unlikely(stat->sreg.isr0 & (SAB82532_ISR0_PERR |
@@ -209,34 +202,21 @@ receive_chars(struct uart_sunsab_port *up,
 			stat->sreg.isr1 &= ((up->port.read_status_mask >> 8) & 0xff);
 
 			if (stat->sreg.isr1 & SAB82532_ISR1_BRK) {
-				*tty->flip.flag_buf_ptr = TTY_BREAK;
+				flag = TTY_BREAK;
 			} else if (stat->sreg.isr0 & SAB82532_ISR0_PERR)
-				*tty->flip.flag_buf_ptr = TTY_PARITY;
+				flag = TTY_PARITY;
 			else if (stat->sreg.isr0 & SAB82532_ISR0_FERR)
-				*tty->flip.flag_buf_ptr = TTY_FRAME;
+				flag = TTY_FRAME;
 		}
 
 		if (uart_handle_sysrq_char(&up->port, ch, regs))
 			continue;
 
 		if ((stat->sreg.isr0 & (up->port.ignore_status_mask & 0xff)) == 0 &&
-		    (stat->sreg.isr1 & ((up->port.ignore_status_mask >> 8) & 0xff)) == 0){
-			tty->flip.flag_buf_ptr++;
-			tty->flip.char_buf_ptr++;
-			tty->flip.count++;
-		}
-		if ((stat->sreg.isr0 & SAB82532_ISR0_RFO) &&
-		    tty->flip.count < TTY_FLIPBUF_SIZE) {
-			/*
-			 * Overrun is special, since it's reported
-			 * immediately, and doesn't affect the current
-			 * character.
-			 */
-			*tty->flip.flag_buf_ptr = TTY_OVERRUN;
-			tty->flip.flag_buf_ptr++;
-			tty->flip.char_buf_ptr++;
-			tty->flip.count++;
-		}
+		    (stat->sreg.isr1 & ((up->port.ignore_status_mask >> 8) & 0xff)) == 0)
+			tty_insert_flip_char(tty, ch, flag);
+		if (stat->sreg.isr0 & SAB82532_ISR0_RFO)
+			tty_insert_flip_char(tty, 0, TTY_OVERRUN);
 	}
 
 	if (saw_console_brk)
@@ -881,8 +861,9 @@ static int num_channels;
 
 #ifdef CONFIG_SERIAL_SUNSAB_CONSOLE
 
-static __inline__ void sunsab_console_putchar(struct uart_sunsab_port *up, char c)
+static void sunsab_console_putchar(struct uart_port *port, int c)
 {
+	struct uart_sunsab_port *up = (struct uart_sunsab_port *)port;
 	unsigned long flags;
 
 	spin_lock_irqsave(&up->port.lock, flags);
@@ -896,13 +877,8 @@ static __inline__ void sunsab_console_putchar(struct uart_sunsab_port *up, char 
 static void sunsab_console_write(struct console *con, const char *s, unsigned n)
 {
 	struct uart_sunsab_port *up = &sunsab_ports[con->index];
-	int i;
 
-	for (i = 0; i < n; i++) {
-		if (*s == '\n')
-			sunsab_console_putchar(up, '\r');
-		sunsab_console_putchar(up, *s++);
-	}
+	uart_console_write(&up->port, s, n, sunsab_console_putchar);
 	sunsab_tec_wait(up);
 }
 
@@ -917,9 +893,6 @@ static int sunsab_console_setup(struct console *con, char *options)
 
 	sunserial_console_termios(con);
 
-	/* Firmware console speed is limited to 150-->38400 baud so
-	 * this hackish cflag thing is OK.
-	 */
 	switch (con->cflag & CBAUD) {
 	case B150: baud = 150; break;
 	case B300: baud = 300; break;
@@ -930,6 +903,10 @@ static int sunsab_console_setup(struct console *con, char *options)
 	default: case B9600: baud = 9600; break;
 	case B19200: baud = 19200; break;
 	case B38400: baud = 38400; break;
+	case B57600: baud = 57600; break;
+	case B115200: baud = 115200; break;
+	case B230400: baud = 230400; break;
+	case B460800: baud = 460800; break;
 	};
 
 	/*
@@ -974,14 +951,13 @@ static struct console sunsab_console = {
 	.index	=	-1,
 	.data	=	&sunsab_reg,
 };
-#define SUNSAB_CONSOLE	(&sunsab_console)
 
-static void __init sunsab_console_init(void)
+static inline struct console *SUNSAB_CONSOLE(void)
 {
 	int i;
 
 	if (con_is_present())
-		return;
+		return NULL;
 
 	for (i = 0; i < num_channels; i++) {
 		int this_minor = sunsab_reg.minor + i;
@@ -990,13 +966,14 @@ static void __init sunsab_console_init(void)
 			break;
 	}
 	if (i == num_channels)
-		return;
+		return NULL;
 
 	sunsab_console.index = i;
-	register_console(&sunsab_console);
+
+	return &sunsab_console;
 }
 #else
-#define SUNSAB_CONSOLE		(NULL)
+#define SUNSAB_CONSOLE()	(NULL)
 #define sunsab_console_init()	do { } while (0)
 #endif
 
@@ -1055,7 +1032,7 @@ static void __init sab_attach_callback(struct linux_ebus_device *edev, void *arg
 		up->port.irq = edev->irqs[0];
 		up->port.fifosize = SAB82532_XMIT_FIFO_SIZE;
 		up->port.mapbase = (unsigned long)up->regs;
-		up->port.iotype = SERIAL_IO_MEM;
+		up->port.iotype = UPIO_MEM;
 
 		writeb(SAB82532_IPC_IC_ACT_LOW, &up->regs->w.ipc);
 
@@ -1143,7 +1120,6 @@ static int __init sunsab_init(void)
 
 	sunsab_reg.minor = sunserial_current_minor;
 	sunsab_reg.nr = num_channels;
-	sunsab_reg.cons = SUNSAB_CONSOLE;
 
 	ret = uart_register_driver(&sunsab_reg);
 	if (ret < 0) {
@@ -1162,10 +1138,12 @@ static int __init sunsab_init(void)
 		return ret;
 	}
 
+	sunsab_reg.tty_driver->name_base = sunsab_reg.minor - 64;
+
+	sunsab_reg.cons = SUNSAB_CONSOLE();
+
 	sunserial_current_minor += num_channels;
 	
-	sunsab_console_init();
-
 	for (i = 0; i < num_channels; i++) {
 		struct uart_sunsab_port *up = &sunsab_ports[i];
 

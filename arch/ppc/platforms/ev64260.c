@@ -1,6 +1,4 @@
 /*
- * arch/ppc/platforms/ev64260.c
- *
  * Board setup routines for the Marvell/Galileo EV-64260-BP Evaluation Board.
  *
  * Author: Mark A. Greer <mgreer@mvista.com>
@@ -330,7 +328,7 @@ ev64260_early_serial_map(void)
 		port.irq = EV64260_UART_0_IRQ;
 		port.uartclk = BASE_BAUD * 16;
 		port.regshift = 2;
-		port.iotype = SERIAL_IO_MEM;
+		port.iotype = UPIO_MEM;
 		port.flags = STD_COM_FLAGS;
 
 #if defined(CONFIG_SERIAL_TEXT_DEBUG) || defined(CONFIG_KGDB)
@@ -416,7 +414,7 @@ ev64260_fixup_mpsc_pdata(struct platform_device *pdev)
 	return;
 }
 
-static int __init
+static int
 ev64260_platform_notify(struct device *dev)
 {
 	static struct {

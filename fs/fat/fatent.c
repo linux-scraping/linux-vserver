@@ -267,19 +267,19 @@ static struct fatent_operations fat32_ops = {
 
 static inline void lock_fat(struct msdos_sb_info *sbi)
 {
-	down(&sbi->fat_lock);
+	mutex_lock(&sbi->fat_lock);
 }
 
 static inline void unlock_fat(struct msdos_sb_info *sbi)
 {
-	up(&sbi->fat_lock);
+	mutex_unlock(&sbi->fat_lock);
 }
 
 void fat_ent_access_init(struct super_block *sb)
 {
 	struct msdos_sb_info *sbi = MSDOS_SB(sb);
 
-	init_MUTEX(&sbi->fat_lock);
+	mutex_init(&sbi->fat_lock);
 
 	switch (sbi->fat_bits) {
 	case 32:
@@ -476,6 +476,7 @@ int fat_alloc_clusters(struct inode *inode, int *cluster, int nr_cluster)
 				sbi->prev_free = entry;
 				if (sbi->free_clusters != -1)
 					sbi->free_clusters--;
+				sb->s_dirt = 1;
 
 				cluster[idx_clus] = entry;
 				idx_clus++;
@@ -496,6 +497,7 @@ int fat_alloc_clusters(struct inode *inode, int *cluster, int nr_cluster)
 
 	/* Couldn't allocate the free entries */
 	sbi->free_clusters = 0;
+	sb->s_dirt = 1;
 	err = -ENOSPC;
 
 out:
@@ -509,7 +511,6 @@ out:
 	}
 	for (i = 0; i < nr_bhs; i++)
 		brelse(bhs[i]);
-	fat_clusters_flush(sb);
 
 	if (err && idx_clus)
 		fat_free_clusters(inode, cluster[0]);
@@ -542,8 +543,10 @@ int fat_free_clusters(struct inode *inode, int cluster)
 		}
 
 		ops->ent_put(&fatent, FAT_ENT_FREE);
-		if (sbi->free_clusters != -1)
+		if (sbi->free_clusters != -1) {
 			sbi->free_clusters++;
+			sb->s_dirt = 1;
+		}
 
 		if (nr_bhs + fatent.nr_bhs > MAX_BUF_PER_PAGE) {
 			if (sb->s_flags & MS_SYNCHRONOUS) {
@@ -578,7 +581,7 @@ error:
 	return err;
 }
 
-EXPORT_SYMBOL(fat_free_clusters);
+EXPORT_SYMBOL_GPL(fat_free_clusters);
 
 int fat_count_free_clusters(struct super_block *sb)
 {
@@ -605,6 +608,7 @@ int fat_count_free_clusters(struct super_block *sb)
 		} while (fat_ent_next(sbi, &fatent));
 	}
 	sbi->free_clusters = free;
+	sb->s_dirt = 1;
 	fatent_brelse(&fatent);
 out:
 	unlock_fat(sbi);

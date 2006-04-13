@@ -15,12 +15,11 @@
 #include <linux/kmod.h>
 #include <linux/kobj_map.h>
 #include <linux/buffer_head.h>
-
-#define MAX_PROBE_HASH 255	/* random */
+#include <linux/mutex.h>
 
 static struct subsystem block_subsys;
 
-static DECLARE_MUTEX(block_subsys_sem);
+static DEFINE_MUTEX(block_subsys_lock);
 
 /*
  * Can be deleted altogether. Later.
@@ -30,49 +29,36 @@ static struct blk_major_name {
 	struct blk_major_name *next;
 	int major;
 	char name[16];
-} *major_names[MAX_PROBE_HASH];
+} *major_names[BLKDEV_MAJOR_HASH_SIZE];
 
 /* index in the above - for now: assume no multimajor ranges */
 static inline int major_to_index(int major)
 {
-	return major % MAX_PROBE_HASH;
+	return major % BLKDEV_MAJOR_HASH_SIZE;
 }
 
 #ifdef CONFIG_PROC_FS
-/* get block device names in somewhat random order */
-int get_blkdev_list(char *p, int used)
+
+void blkdev_show(struct seq_file *f, off_t offset)
 {
-	struct blk_major_name *n;
-	int i, len;
+	struct blk_major_name *dp;
 
-	len = snprintf(p, (PAGE_SIZE-used), "\nBlock devices:\n");
-
-	down(&block_subsys_sem);
-	for (i = 0; i < ARRAY_SIZE(major_names); i++) {
-		for (n = major_names[i]; n; n = n->next) {
-			/*
-			 * If the curent string plus the 5 extra characters
-			 * in the line would run us off the page, then we're done
-			 */
-			if ((len + used + strlen(n->name) + 5) >= PAGE_SIZE)
-				goto page_full;
-			len += sprintf(p+len, "%3d %s\n",
-				       n->major, n->name);
-		}
+	if (offset < BLKDEV_MAJOR_HASH_SIZE) {
+		mutex_lock(&block_subsys_lock);
+		for (dp = major_names[offset]; dp; dp = dp->next)
+			seq_printf(f, "%3d %s\n", dp->major, dp->name);
+		mutex_unlock(&block_subsys_lock);
 	}
-page_full:
-	up(&block_subsys_sem);
-
-	return len;
 }
-#endif
+
+#endif /* CONFIG_PROC_FS */
 
 int register_blkdev(unsigned int major, const char *name)
 {
 	struct blk_major_name **n, *p;
 	int index, ret = 0;
 
-	down(&block_subsys_sem);
+	mutex_lock(&block_subsys_lock);
 
 	/* temporary */
 	if (major == 0) {
@@ -117,7 +103,7 @@ int register_blkdev(unsigned int major, const char *name)
 		kfree(p);
 	}
 out:
-	up(&block_subsys_sem);
+	mutex_unlock(&block_subsys_lock);
 	return ret;
 }
 
@@ -131,7 +117,7 @@ int unregister_blkdev(unsigned int major, const char *name)
 	int index = major_to_index(major);
 	int ret = 0;
 
-	down(&block_subsys_sem);
+	mutex_lock(&block_subsys_lock);
 	for (n = &major_names[index]; *n; n = &(*n)->next)
 		if ((*n)->major == major)
 			break;
@@ -141,7 +127,7 @@ int unregister_blkdev(unsigned int major, const char *name)
 		p = *n;
 		*n = p->next;
 	}
-	up(&block_subsys_sem);
+	mutex_unlock(&block_subsys_lock);
 	kfree(p);
 
 	return ret;
@@ -235,7 +221,7 @@ static void *part_start(struct seq_file *part, loff_t *pos)
 	struct list_head *p;
 	loff_t l = *pos;
 
-	down(&block_subsys_sem);
+	mutex_lock(&block_subsys_lock);
 	list_for_each(p, &block_subsys.kset.list)
 		if (!l--)
 			return list_entry(p, struct gendisk, kobj.entry);
@@ -252,7 +238,7 @@ static void *part_next(struct seq_file *part, void *v, loff_t *pos)
 
 static void part_stop(struct seq_file *part, void *v)
 {
-	up(&block_subsys_sem);
+	mutex_unlock(&block_subsys_lock);
 }
 
 static int show_partition(struct seq_file *part, void *v)
@@ -311,7 +297,7 @@ static struct kobject *base_probe(dev_t dev, int *part, void *data)
 
 static int __init genhd_device_init(void)
 {
-	bdev_map = kobj_map_init(base_probe, &block_subsys_sem);
+	bdev_map = kobj_map_init(base_probe, &block_subsys_lock);
 	blk_dev_init();
 	subsystem_register(&block_subsys);
 	return 0;
@@ -358,7 +344,7 @@ static struct sysfs_ops disk_sysfs_ops = {
 static ssize_t disk_uevent_store(struct gendisk * disk,
 				 const char *buf, size_t count)
 {
-	kobject_hotplug(&disk->kobj, KOBJ_ADD);
+	kobject_uevent(&disk->kobj, KOBJ_ADD);
 	return count;
 }
 static ssize_t disk_dev_read(struct gendisk * disk, char *page)
@@ -387,8 +373,8 @@ static ssize_t disk_stats_read(struct gendisk * disk, char *page)
 	disk_round_stats(disk);
 	preempt_enable();
 	return sprintf(page,
-		"%8u %8u %8llu %8u "
-		"%8u %8u %8llu %8u "
+		"%8lu %8lu %8llu %8u "
+		"%8lu %8lu %8llu %8u "
 		"%8u %8u %8u"
 		"\n",
 		disk_stat_read(disk, ios[READ]),
@@ -455,14 +441,14 @@ static struct kobj_type ktype_block = {
 
 extern struct kobj_type ktype_part;
 
-static int block_hotplug_filter(struct kset *kset, struct kobject *kobj)
+static int block_uevent_filter(struct kset *kset, struct kobject *kobj)
 {
 	struct kobj_type *ktype = get_ktype(kobj);
 
 	return ((ktype == &ktype_block) || (ktype == &ktype_part));
 }
 
-static int block_hotplug(struct kset *kset, struct kobject *kobj, char **envp,
+static int block_uevent(struct kset *kset, struct kobject *kobj, char **envp,
 			 int num_envp, char *buffer, int buffer_size)
 {
 	struct kobj_type *ktype = get_ktype(kobj);
@@ -474,40 +460,40 @@ static int block_hotplug(struct kset *kset, struct kobject *kobj, char **envp,
 
 	if (ktype == &ktype_block) {
 		disk = container_of(kobj, struct gendisk, kobj);
-		add_hotplug_env_var(envp, num_envp, &i, buffer, buffer_size,
-				    &length, "MINOR=%u", disk->first_minor);
+		add_uevent_var(envp, num_envp, &i, buffer, buffer_size,
+			       &length, "MINOR=%u", disk->first_minor);
 	} else if (ktype == &ktype_part) {
 		disk = container_of(kobj->parent, struct gendisk, kobj);
 		part = container_of(kobj, struct hd_struct, kobj);
-		add_hotplug_env_var(envp, num_envp, &i, buffer, buffer_size,
-				    &length, "MINOR=%u",
-				    disk->first_minor + part->partno);
+		add_uevent_var(envp, num_envp, &i, buffer, buffer_size,
+			       &length, "MINOR=%u",
+			       disk->first_minor + part->partno);
 	} else
 		return 0;
 
-	add_hotplug_env_var(envp, num_envp, &i, buffer, buffer_size, &length,
-			    "MAJOR=%u", disk->major);
+	add_uevent_var(envp, num_envp, &i, buffer, buffer_size, &length,
+		       "MAJOR=%u", disk->major);
 
 	/* add physical device, backing this device  */
 	physdev = disk->driverfs_dev;
 	if (physdev) {
 		char *path = kobject_get_path(&physdev->kobj, GFP_KERNEL);
 
-		add_hotplug_env_var(envp, num_envp, &i, buffer, buffer_size,
-				    &length, "PHYSDEVPATH=%s", path);
+		add_uevent_var(envp, num_envp, &i, buffer, buffer_size,
+			       &length, "PHYSDEVPATH=%s", path);
 		kfree(path);
 
 		if (physdev->bus)
-			add_hotplug_env_var(envp, num_envp, &i,
-					    buffer, buffer_size, &length,
-					    "PHYSDEVBUS=%s",
-					    physdev->bus->name);
+			add_uevent_var(envp, num_envp, &i,
+				       buffer, buffer_size, &length,
+				       "PHYSDEVBUS=%s",
+				       physdev->bus->name);
 
 		if (physdev->driver)
-			add_hotplug_env_var(envp, num_envp, &i,
-					    buffer, buffer_size, &length,
-					    "PHYSDEVDRIVER=%s",
-					    physdev->driver->name);
+			add_uevent_var(envp, num_envp, &i,
+				       buffer, buffer_size, &length,
+				       "PHYSDEVDRIVER=%s",
+				       physdev->driver->name);
 	}
 
 	/* terminate, set to next free slot, shrink available space */
@@ -520,13 +506,13 @@ static int block_hotplug(struct kset *kset, struct kobject *kobj, char **envp,
 	return 0;
 }
 
-static struct kset_hotplug_ops block_hotplug_ops = {
-	.filter		= block_hotplug_filter,
-	.hotplug	= block_hotplug,
+static struct kset_uevent_ops block_uevent_ops = {
+	.filter		= block_uevent_filter,
+	.uevent		= block_uevent,
 };
 
 /* declare block_subsys. */
-static decl_subsys(block, &ktype_block, &block_hotplug_ops);
+static decl_subsys(block, &ktype_block, &block_uevent_ops);
 
 
 /*
@@ -545,7 +531,7 @@ static void *diskstats_start(struct seq_file *part, loff_t *pos)
 	loff_t k = *pos;
 	struct list_head *p;
 
-	down(&block_subsys_sem);
+	mutex_lock(&block_subsys_lock);
 	list_for_each(p, &block_subsys.kset.list)
 		if (!k--)
 			return list_entry(p, struct gendisk, kobj.entry);
@@ -562,7 +548,7 @@ static void *diskstats_next(struct seq_file *part, void *v, loff_t *pos)
 
 static void diskstats_stop(struct seq_file *part, void *v)
 {
-	up(&block_subsys_sem);
+	mutex_unlock(&block_subsys_lock);
 }
 
 static int diskstats_show(struct seq_file *s, void *v)
@@ -582,7 +568,7 @@ static int diskstats_show(struct seq_file *s, void *v)
 	preempt_disable();
 	disk_round_stats(gp);
 	preempt_enable();
-	seq_printf(s, "%4d %4d %s %u %u %llu %u %u %u %llu %u %u %u %u\n",
+	seq_printf(s, "%4d %4d %s %lu %lu %llu %u %lu %lu %llu %u %u %u %u\n",
 		gp->major, n + gp->first_minor, disk_name(gp, n, buf),
 		disk_stat_read(gp, ios[0]), disk_stat_read(gp, merges[0]),
 		(unsigned long long)disk_stat_read(gp, sectors[0]),

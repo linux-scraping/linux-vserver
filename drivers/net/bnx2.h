@@ -1,6 +1,6 @@
 /* bnx2.h: Broadcom NX2 network driver.
  *
- * Copyright (c) 2004, 2005 Broadcom Corporation
+ * Copyright (c) 2004, 2005, 2006 Broadcom Corporation
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -12,45 +12,6 @@
 
 #ifndef BNX2_H
 #define BNX2_H
-
-#include <linux/config.h>
-
-#include <linux/module.h>
-#include <linux/moduleparam.h>
-
-#include <linux/kernel.h>
-#include <linux/timer.h>
-#include <linux/errno.h>
-#include <linux/ioport.h>
-#include <linux/slab.h>
-#include <linux/interrupt.h>
-#include <linux/pci.h>
-#include <linux/init.h>
-#include <linux/netdevice.h>
-#include <linux/etherdevice.h>
-#include <linux/skbuff.h>
-#include <linux/dma-mapping.h>
-#include <asm/bitops.h>
-#include <asm/io.h>
-#include <asm/irq.h>
-#include <linux/delay.h>
-#include <asm/byteorder.h>
-#include <linux/time.h>
-#include <linux/ethtool.h>
-#include <linux/mii.h>
-#ifdef NETIF_F_HW_VLAN_TX
-#include <linux/if_vlan.h>
-#define BCM_VLAN 1
-#endif
-#ifdef NETIF_F_TSO
-#include <net/ip.h>
-#include <net/tcp.h>
-#include <net/checksum.h>
-#define BCM_TSO 1
-#endif
-#include <linux/workqueue.h>
-#include <linux/crc32.h>
-#include <linux/prefetch.h>
 
 /* Hardware data structures and register definitions automatically
  * generated from RTL code. Do not modify.
@@ -277,19 +238,7 @@ struct statistics_block {
  *  l2_fhdr definition
  */
 struct l2_fhdr {
-#if defined(__BIG_ENDIAN)
-	u16 l2_fhdr_errors;
-	u16 l2_fhdr_status;
-#elif defined(__LITTLE_ENDIAN)
-	u16 l2_fhdr_status;
-	u16 l2_fhdr_errors;
-#endif
-		#define L2_FHDR_ERRORS_BAD_CRC		(1<<1)
-		#define L2_FHDR_ERRORS_PHY_DECODE	(1<<2)
-		#define L2_FHDR_ERRORS_ALIGNMENT	(1<<3)
-		#define L2_FHDR_ERRORS_TOO_SHORT	(1<<4)
-		#define L2_FHDR_ERRORS_GIANT_FRAME	(1<<5)
-
+	u32 l2_fhdr_status;
 		#define L2_FHDR_STATUS_RULE_CLASS	(0x7<<0)
 		#define L2_FHDR_STATUS_RULE_P2		(1<<3)
 		#define L2_FHDR_STATUS_RULE_P3		(1<<4)
@@ -300,6 +249,14 @@ struct l2_fhdr {
 		#define L2_FHDR_STATUS_IP_DATAGRAM	(1<<13)
 		#define L2_FHDR_STATUS_TCP_SEGMENT	(1<<14)
 		#define L2_FHDR_STATUS_UDP_DATAGRAM	(1<<15)
+
+		#define L2_FHDR_ERRORS_BAD_CRC		(1<<17)
+		#define L2_FHDR_ERRORS_PHY_DECODE	(1<<18)
+		#define L2_FHDR_ERRORS_ALIGNMENT	(1<<19)
+		#define L2_FHDR_ERRORS_TOO_SHORT	(1<<20)
+		#define L2_FHDR_ERRORS_GIANT_FRAME	(1<<21)
+		#define L2_FHDR_ERRORS_TCP_XSUM		(1<<28)
+		#define L2_FHDR_ERRORS_UDP_XSUM		(1<<31)
 
 	u32 l2_fhdr_hash;
 #if defined(__BIG_ENDIAN)
@@ -3796,8 +3753,10 @@ struct l2_fhdr {
 #define TX_DESC_CNT  (BCM_PAGE_SIZE / sizeof(struct tx_bd))
 #define MAX_TX_DESC_CNT (TX_DESC_CNT - 1)
 
+#define MAX_RX_RINGS	4
 #define RX_DESC_CNT  (BCM_PAGE_SIZE / sizeof(struct rx_bd))
 #define MAX_RX_DESC_CNT (RX_DESC_CNT - 1)
+#define MAX_TOTAL_RX_DESC_CNT (MAX_RX_DESC_CNT * MAX_RX_RINGS)
 
 #define NEXT_TX_BD(x) (((x) & (MAX_TX_DESC_CNT - 1)) ==			\
 		(MAX_TX_DESC_CNT - 1)) ?				\
@@ -3809,8 +3768,10 @@ struct l2_fhdr {
 		(MAX_RX_DESC_CNT - 1)) ?				\
 	(x) + 2 : (x) + 1
 
-#define RX_RING_IDX(x) ((x) & MAX_RX_DESC_CNT)
+#define RX_RING_IDX(x) ((x) & bp->rx_max_ring_idx)
 
+#define RX_RING(x) (((x) & ~MAX_RX_DESC_CNT) >> 8)
+#define RX_IDX(x) ((x) & MAX_RX_DESC_CNT)
 
 /* Context size. */
 #define CTX_SHIFT                   7
@@ -3907,15 +3868,26 @@ struct bnx2 {
 	struct status_block	*status_blk;
 	u32 			last_status_idx;
 
-	struct tx_bd		*tx_desc_ring;
-	struct sw_bd		*tx_buf_ring;
-	u32			tx_prod_bseq;
-	u16			tx_prod;
-	u16			tx_cons;
-	int			tx_ring_size;
+	u32			flags;
+#define PCIX_FLAG			1
+#define PCI_32BIT_FLAG			2
+#define ONE_TDMA_FLAG			4	/* no longer used */
+#define NO_WOL_FLAG			8
+#define USING_DAC_FLAG			0x10
+#define USING_MSI_FLAG			0x20
+#define ASF_ENABLE_FLAG			0x40
 
-	u16			hw_tx_cons;
-	u16			hw_rx_cons;
+	/* Put tx producer and consumer fields in separate cache lines. */
+
+	u32		tx_prod_bseq __attribute__((aligned(L1_CACHE_BYTES)));
+	u16		tx_prod;
+
+	struct tx_bd	*tx_desc_ring;
+	struct sw_bd	*tx_buf_ring;
+	int		tx_ring_size;
+
+	u16		tx_cons __attribute__((aligned(L1_CACHE_BYTES)));
+	u16		hw_tx_cons;
 
 #ifdef BCM_VLAN 
 	struct			vlan_group *vlgrp;
@@ -3924,19 +3896,23 @@ struct bnx2 {
 	u32			rx_offset;
 	u32			rx_buf_use_size;	/* useable size */
 	u32			rx_buf_size;		/* with alignment */
-	struct rx_bd		*rx_desc_ring;
-	struct sw_bd		*rx_buf_ring;
+	u32			rx_max_ring_idx;
+
 	u32			rx_prod_bseq;
 	u16			rx_prod;
 	u16			rx_cons;
+	u16			hw_rx_cons;
 
 	u32			rx_csum;
+
+	struct sw_bd		*rx_buf_ring;
+	struct rx_bd		*rx_desc_ring[MAX_RX_RINGS];
 
 	/* Only used to synchronize netif_stop_queue/wake_queue when tx */
 	/* ring is full */
 	spinlock_t		tx_lock;
 
-	/* End of fileds used in the performance code paths. */
+	/* End of fields used in the performance code paths. */
 
 	char			*name;
 
@@ -3948,14 +3924,6 @@ struct bnx2 {
 
 	/* Used to synchronize phy accesses. */
 	spinlock_t		phy_lock;
-
-	u32			flags;
-#define PCIX_FLAG			1
-#define PCI_32BIT_FLAG			2
-#define ONE_TDMA_FLAG			4	/* no longer used */
-#define NO_WOL_FLAG			8
-#define USING_DAC_FLAG			0x10
-#define USING_MSI_FLAG			0x20
 
 	u32			phy_flags;
 #define PHY_SERDES_FLAG			1
@@ -3986,6 +3954,7 @@ struct bnx2 {
 #define CHIP_ID_5706_A2			0x57060020
 #define CHIP_ID_5708_A0			0x57080000
 #define CHIP_ID_5708_B0			0x57081000
+#define CHIP_ID_5708_B1			0x57081010
 
 #define CHIP_BOND_ID(bp)		(((bp)->chip_id) & 0xf)
 
@@ -3998,7 +3967,7 @@ struct bnx2 {
 	u16			bus_speed_mhz;
 	u8			wol;
 
-	u8			fw_timed_out;
+	u8			pad;
 
 	u16			fw_wr_seq;
 	u16			fw_drv_pulse_wr_seq;
@@ -4006,8 +3975,9 @@ struct bnx2 {
 	dma_addr_t		tx_desc_mapping;
 
 
+	int			rx_max_ring;
 	int			rx_ring_size;
-	dma_addr_t		rx_desc_mapping;
+	dma_addr_t		rx_desc_mapping[MAX_RX_RINGS];
 
 	u16			tx_quick_cons_trip;
 	u16			tx_quick_cons_trip_int;
@@ -4031,6 +4001,7 @@ struct bnx2 {
 	struct statistics_block	*stats_blk;
 	dma_addr_t		stats_blk_mapping;
 
+	u32			hc_cmd;
 	u32			rx_mode;
 
 	u16			req_line_speed;
@@ -4074,6 +4045,9 @@ struct bnx2 {
 	struct net_device_stats net_stats;
 
 	struct flash_spec	*flash_info;
+	u32			flash_size;
+
+	int			status_stats_size;
 };
 
 static u32 bnx2_reg_rd_ind(struct bnx2 *bp, u32 offset);
@@ -4172,7 +4146,7 @@ struct fw_info {
  * the firmware has timed out, the driver will assume there is no firmware
  * running and there won't be any firmware-driver synchronization during a
  * driver reset. */
-#define FW_ACK_TIME_OUT_MS                  50
+#define FW_ACK_TIME_OUT_MS                  100
 
 
 #define BNX2_DRV_RESET_SIGNATURE		0x00000000
@@ -4274,6 +4248,9 @@ struct fw_info {
 #define BNX2_SHARED_HW_CFG_LED_MODE_MAC		 0
 #define BNX2_SHARED_HW_CFG_LED_MODE_GPHY1	 0x100
 #define BNX2_SHARED_HW_CFG_LED_MODE_GPHY2	 0x200
+
+#define BNX2_SHARED_HW_CFG_CONFIG2		0x00000040
+#define BNX2_SHARED_HW_CFG2_NVM_SIZE_MASK	 0x00fff000
 
 #define BNX2_DEV_INFO_BC_REV			0x0000004c
 

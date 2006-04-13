@@ -191,6 +191,12 @@ nfnetlink_check_attributes(struct nfnetlink_subsystem *subsys,
         return 0;
 }
 
+int nfnetlink_has_listeners(unsigned int group)
+{
+	return netlink_has_listeners(nfnl, group);
+}
+EXPORT_SYMBOL_GPL(nfnetlink_has_listeners);
+
 int nfnetlink_send(struct sk_buff *skb, u32 pid, unsigned group, int echo)
 {
 	gfp_t allocation = in_interrupt() ? GFP_ATOMIC : GFP_KERNEL;
@@ -212,7 +218,7 @@ int nfnetlink_unicast(struct sk_buff *skb, u_int32_t pid, int flags)
 }
 
 /* Process one complete nfnetlink message. */
-static inline int nfnetlink_rcv_msg(struct sk_buff *skb,
+static int nfnetlink_rcv_msg(struct sk_buff *skb,
 				    struct nlmsghdr *nlh, int *errp)
 {
 	struct nfnl_callback *nc;

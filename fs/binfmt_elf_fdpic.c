@@ -187,7 +187,7 @@ static int load_elf_fdpic_binary(struct linux_binprm *bprm, struct pt_regs *regs
 				goto error;
 
 			/* read the name of the interpreter into memory */
-			interpreter_name = (char *) kmalloc(phdr->p_filesz, GFP_KERNEL);
+			interpreter_name = kmalloc(phdr->p_filesz, GFP_KERNEL);
 			if (!interpreter_name)
 				goto error;
 
@@ -572,8 +572,7 @@ static int create_elf_fdpic_tables(struct linux_binprm *bprm,
 	csp -= sizeof(unsigned long);
 	__put_user(bprm->argc, (unsigned long *) csp);
 
-	if (csp != sp)
-		BUG();
+	BUG_ON(csp != sp);
 
 	/* fill in the argv[] array */
 #ifdef CONFIG_MMU

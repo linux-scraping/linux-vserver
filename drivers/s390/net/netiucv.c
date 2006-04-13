@@ -1,12 +1,11 @@
 /*
- * $Id: netiucv.c,v 1.66 2005/05/11 08:10:17 holzheu Exp $
- *
  * IUCV network driver
  *
  * Copyright (C) 2001 IBM Deutschland Entwicklung GmbH, IBM Corporation
  * Author(s): Fritz Elfert (elfert@de.ibm.com, felfert@millenux.com)
  *
- * Driverfs integration and all bugs therein by Cornelia Huck(cohuck@de.ibm.com)
+ * Sysfs integration and all bugs therein by Cornelia Huck
+ * (cornelia.huck@de.ibm.com)
  *
  * Documentation used:
  *  the source of the original IUCV driver by:
@@ -29,8 +28,6 @@
  * You should have received a copy of the GNU General Public License
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
- *
- * RELEASE-TAG: IUCV network driver $Revision: 1.66 $
  *
  */
 
@@ -1731,14 +1728,13 @@ static int
 netiucv_register_device(struct net_device *ndev)
 {
 	struct netiucv_priv *priv = ndev->priv;
-	struct device *dev = kmalloc(sizeof(struct device), GFP_KERNEL);
+	struct device *dev = kzalloc(sizeof(struct device), GFP_KERNEL);
 	int ret;
 
 
 	IUCV_DBF_TEXT(trace, 3, __FUNCTION__);
 
 	if (dev) {
-		memset(dev, 0, sizeof(struct device));
 		snprintf(dev->bus_id, BUS_ID_SIZE, "net%s", ndev->name);
 		dev->bus = &iucv_bus;
 		dev->parent = iucv_root;
@@ -1787,11 +1783,9 @@ netiucv_new_connection(struct net_device *dev, char *username)
 {
 	struct iucv_connection **clist = &iucv_connections;
 	struct iucv_connection *conn =
-		(struct iucv_connection *)
-		kmalloc(sizeof(struct iucv_connection), GFP_KERNEL);
+		kzalloc(sizeof(struct iucv_connection), GFP_KERNEL);
 
 	if (conn) {
-		memset(conn, 0, sizeof(struct iucv_connection));
 		skb_queue_head_init(&conn->collect_queue);
 		skb_queue_head_init(&conn->commit_queue);
 		conn->max_buffsize = NETIUCV_BUFSIZE_DEFAULT;
@@ -2076,16 +2070,7 @@ DRIVER_ATTR(remove, 0200, NULL, remove_write);
 static void
 netiucv_banner(void)
 {
-	char vbuf[] = "$Revision: 1.66 $";
-	char *version = vbuf;
-
-	if ((version = strchr(version, ':'))) {
-		char *p = strchr(version + 1, '$');
-		if (p)
-			*p = '\0';
-	} else
-		version = " ??? ";
-	PRINT_INFO("NETIUCV driver Version%s initialized\n", version);
+	PRINT_INFO("NETIUCV driver initialized\n");
 }
 
 static void __exit

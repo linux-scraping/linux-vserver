@@ -14,12 +14,24 @@
 #define PHYSICAL_PAGE_MASK	(~(PAGE_SIZE-1) & __PHYSICAL_MASK)
 
 #define THREAD_ORDER 1 
-#ifdef __ASSEMBLY__
-#define THREAD_SIZE  (1 << (PAGE_SHIFT + THREAD_ORDER))
-#else
-#define THREAD_SIZE  (1UL << (PAGE_SHIFT + THREAD_ORDER))
-#endif
+#define THREAD_SIZE  (PAGE_SIZE << THREAD_ORDER)
 #define CURRENT_MASK (~(THREAD_SIZE-1))
+
+#define EXCEPTION_STACK_ORDER 0
+#define EXCEPTION_STKSZ (PAGE_SIZE << EXCEPTION_STACK_ORDER)
+
+#define DEBUG_STACK_ORDER EXCEPTION_STACK_ORDER
+#define DEBUG_STKSZ (PAGE_SIZE << DEBUG_STACK_ORDER)
+
+#define IRQSTACK_ORDER 2
+#define IRQSTACKSIZE (PAGE_SIZE << IRQSTACK_ORDER)
+
+#define STACKFAULT_STACK 1
+#define DOUBLEFAULT_STACK 2
+#define NMI_STACK 3
+#define DEBUG_STACK 4
+#define MCE_STACK 5
+#define N_EXCEPTION_STACKS 5  /* hw limit: 7 */
 
 #define LARGE_PAGE_MASK (~(LARGE_PAGE_SIZE-1))
 #define LARGE_PAGE_SIZE (1UL << PMD_SHIFT)
@@ -111,8 +123,6 @@ typedef struct { unsigned long pgprot; } pgprot_t;
 #define __boot_va(x)		__va(x)
 #define __boot_pa(x)		__pa(x)
 #ifdef CONFIG_FLATMEM
-#define pfn_to_page(pfn)	(mem_map + (pfn))
-#define page_to_pfn(page)	((unsigned long)((page) - mem_map))
 #define pfn_valid(pfn)		((pfn) < end_pfn)
 #endif
 
@@ -128,6 +138,7 @@ typedef struct { unsigned long pgprot; } pgprot_t;
 
 #endif /* __KERNEL__ */
 
+#include <asm-generic/memory_model.h>
 #include <asm-generic/page.h>
 
 #endif /* _X86_64_PAGE_H */

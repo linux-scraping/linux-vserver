@@ -45,6 +45,7 @@
 enum {
 	MTHCA_NUM_ASYNC_EQE = 0x80,
 	MTHCA_NUM_CMD_EQE   = 0x80,
+	MTHCA_NUM_SPARE_EQE = 0x80,
 	MTHCA_EQ_ENTRY_SIZE = 0x20
 };
 
@@ -277,11 +278,10 @@ static int mthca_eq_int(struct mthca_dev *dev, struct mthca_eq *eq)
 {
 	struct mthca_eqe *eqe;
 	int disarm_cqn;
-	int  eqes_found = 0;
+	int eqes_found = 0;
+	int set_ci = 0;
 
 	while ((eqe = next_eqe_sw(eq))) {
-		int set_ci = 0;
-
 		/*
 		 * Make sure we read EQ entry contents after we've
 		 * checked the ownership bit.
@@ -345,12 +345,6 @@ static int mthca_eq_int(struct mthca_dev *dev, struct mthca_eq *eq)
 					be16_to_cpu(eqe->event.cmd.token),
 					eqe->event.cmd.status,
 					be64_to_cpu(eqe->event.cmd.out_param));
-			/*
-			 * cmd_event() may add more commands.
-			 * The card will think the queue has overflowed if
-			 * we don't tell it we've been processing events.
-			 */
-			set_ci = 1;
 			break;
 
 		case MTHCA_EVENT_TYPE_PORT_CHANGE:
@@ -385,8 +379,16 @@ static int mthca_eq_int(struct mthca_dev *dev, struct mthca_eq *eq)
 		set_eqe_hw(eqe);
 		++eq->cons_index;
 		eqes_found = 1;
+		++set_ci;
 
-		if (unlikely(set_ci)) {
+		/*
+		 * The HCA will think the queue has overflowed if we
+		 * don't tell it we've been processing events.  We
+		 * create our EQs with MTHCA_NUM_SPARE_EQE extra
+		 * entries, so we must update our consumer index at
+		 * least that often.
+		 */
+		if (unlikely(set_ci >= MTHCA_NUM_SPARE_EQE)) {
 			/*
 			 * Conditional on hca_type is OK here because
 			 * this is a rare case, not the fast path.
@@ -484,8 +486,7 @@ static int __devinit mthca_create_eq(struct mthca_dev *dev,
 				     u8 intr,
 				     struct mthca_eq *eq)
 {
-	int npages = (nent * MTHCA_EQ_ENTRY_SIZE + PAGE_SIZE - 1) /
-		PAGE_SIZE;
+	int npages;
 	u64 *dma_list = NULL;
 	dma_addr_t t;
 	struct mthca_mailbox *mailbox;
@@ -496,6 +497,7 @@ static int __devinit mthca_create_eq(struct mthca_dev *dev,
 
 	eq->dev  = dev;
 	eq->nent = roundup_pow_of_two(max(nent, 2));
+	npages = ALIGN(eq->nent * MTHCA_EQ_ENTRY_SIZE, PAGE_SIZE) / PAGE_SIZE;
 
 	eq->page_list = kmalloc(npages * sizeof *eq->page_list,
 				GFP_KERNEL);
@@ -763,7 +765,7 @@ static int __devinit mthca_map_eq_regs(struct mthca_dev *dev)
 
 }
 
-static void __devexit mthca_unmap_eq_regs(struct mthca_dev *dev)
+static void mthca_unmap_eq_regs(struct mthca_dev *dev)
 {
 	if (mthca_is_memfree(dev)) {
 		mthca_unmap_reg(dev, (pci_resource_len(dev->pdev, 0) - 1) &
@@ -819,11 +821,11 @@ int __devinit mthca_map_eq_icm(struct mthca_dev *dev, u64 icm_virt)
 	return ret;
 }
 
-void __devexit mthca_unmap_eq_icm(struct mthca_dev *dev)
+void mthca_unmap_eq_icm(struct mthca_dev *dev)
 {
 	u8 status;
 
-	mthca_UNMAP_ICM(dev, dev->eq_table.icm_virt, PAGE_SIZE / 4096, &status);
+	mthca_UNMAP_ICM(dev, dev->eq_table.icm_virt, 1, &status);
 	pci_unmap_page(dev->pdev, dev->eq_table.icm_dma, PAGE_SIZE,
 		       PCI_DMA_BIDIRECTIONAL);
 	__free_page(dev->eq_table.icm_page);
@@ -862,19 +864,19 @@ int __devinit mthca_init_eq_table(struct mthca_dev *dev)
 	intr = (dev->mthca_flags & MTHCA_FLAG_MSI) ?
 		128 : dev->eq_table.inta_pin;
 
-	err = mthca_create_eq(dev, dev->limits.num_cqs,
+	err = mthca_create_eq(dev, dev->limits.num_cqs + MTHCA_NUM_SPARE_EQE,
 			      (dev->mthca_flags & MTHCA_FLAG_MSI_X) ? 128 : intr,
 			      &dev->eq_table.eq[MTHCA_EQ_COMP]);
 	if (err)
 		goto err_out_unmap;
 
-	err = mthca_create_eq(dev, MTHCA_NUM_ASYNC_EQE,
+	err = mthca_create_eq(dev, MTHCA_NUM_ASYNC_EQE + MTHCA_NUM_SPARE_EQE,
 			      (dev->mthca_flags & MTHCA_FLAG_MSI_X) ? 129 : intr,
 			      &dev->eq_table.eq[MTHCA_EQ_ASYNC]);
 	if (err)
 		goto err_out_comp;
 
-	err = mthca_create_eq(dev, MTHCA_NUM_CMD_EQE,
+	err = mthca_create_eq(dev, MTHCA_NUM_CMD_EQE + MTHCA_NUM_SPARE_EQE,
 			      (dev->mthca_flags & MTHCA_FLAG_MSI_X) ? 130 : intr,
 			      &dev->eq_table.eq[MTHCA_EQ_CMD]);
 	if (err)
@@ -926,7 +928,7 @@ int __devinit mthca_init_eq_table(struct mthca_dev *dev)
 		mthca_warn(dev, "MAP_EQ for cmd EQ %d returned status 0x%02x\n",
 			   dev->eq_table.eq[MTHCA_EQ_CMD].eqn, status);
 
-	for (i = 0; i < MTHCA_EQ_CMD; ++i)
+	for (i = 0; i < MTHCA_NUM_EQ; ++i)
 		if (mthca_is_memfree(dev))
 			arbel_eq_req_not(dev, dev->eq_table.eq[i].eqn_mask);
 		else
@@ -952,7 +954,7 @@ err_out_free:
 	return err;
 }
 
-void __devexit mthca_cleanup_eq_table(struct mthca_dev *dev)
+void mthca_cleanup_eq_table(struct mthca_dev *dev)
 {
 	u8 status;
 	int i;

@@ -1,6 +1,4 @@
 /*
- *  arch/ppc/kernel/traps.c
- *
  *  Copyright (C) 1995-1996  Gary Thomas (gdt@linuxppc.org)
  *
  *  This program is free software; you can redistribute it and/or
@@ -38,9 +36,6 @@
 #include <asm/io.h>
 #include <asm/reg.h>
 #include <asm/xmon.h>
-#ifdef CONFIG_PMAC_BACKLIGHT
-#include <asm/backlight.h>
-#endif
 #include <asm/pmc.h>
 
 #ifdef CONFIG_XMON
@@ -85,12 +80,6 @@ int die(const char * str, struct pt_regs * fp, long err)
 	int nl = 0;
 	console_verbose();
 	spin_lock_irq(&die_lock);
-#ifdef CONFIG_PMAC_BACKLIGHT
-	if (_machine == _MACH_Pmac) {
-		set_backlight_enable(1);
-		set_backlight_level(BACKLIGHT_MAX);
-	}
-#endif
 	printk("Oops: %s, sig: %ld [#%d]\n", str, err, ++die_counter);
 #ifdef CONFIG_PREEMPT
 	printk("PREEMPT ");
@@ -159,7 +148,7 @@ void _exception(int signr, struct pt_regs *regs, int code, unsigned long addr)
  */
 static inline int check_io_access(struct pt_regs *regs)
 {
-#if defined CONFIG_PPC_PMAC || defined CONFIG_8xx
+#if defined CONFIG_8xx
 	unsigned long msr = regs->msr;
 	const struct exception_table_entry *entry;
 	unsigned int *nip = (unsigned int *)regs->nip;
@@ -196,7 +185,7 @@ static inline int check_io_access(struct pt_regs *regs)
 			return 1;
 		}
 	}
-#endif /* CONFIG_PPC_PMAC */
+#endif /* CONFIG_8xx */
 	return 0;
 }
 

@@ -32,9 +32,9 @@
 #include <linux/icmpv6.h>
 #include <linux/netfilter.h>
 #include <linux/netfilter_ipv6.h>
+#include <linux/skbuff.h>
 #include <asm/uaccess.h>
 #include <asm/ioctls.h>
-#include <asm/bug.h>
 
 #include <net/ip.h>
 #include <net/sock.h>
@@ -433,25 +433,14 @@ out:
 	return err;
 
 csum_copy_err:
-	/* Clear queue. */
-	if (flags&MSG_PEEK) {
-		int clear = 0;
-		spin_lock_bh(&sk->sk_receive_queue.lock);
-		if (skb == skb_peek(&sk->sk_receive_queue)) {
-			__skb_unlink(skb, &sk->sk_receive_queue);
-			clear = 1;
-		}
-		spin_unlock_bh(&sk->sk_receive_queue.lock);
-		if (clear)
-			kfree_skb(skb);
-	}
+	skb_kill_datagram(sk, skb, flags);
 
 	/* Error for blocking case is chosen to masquerade
 	   as some normal condition.
 	 */
 	err = (flags&MSG_DONTWAIT) ? -EAGAIN : -EHOSTUNREACH;
 	/* FIXME: increment a raw6 drops counter here */
-	goto out_free;
+	goto out;
 }
 
 static int rawv6_push_pending_frames(struct sock *sk, struct flowi *fl,
@@ -814,10 +803,7 @@ back_from_confirm:
 			err = rawv6_push_pending_frames(sk, &fl, rp);
 	}
 done:
-	ip6_dst_store(sk, dst,
-		      ipv6_addr_equal(&fl.fl6_dst, &np->daddr) ?
-		      &np->daddr : NULL);
-
+	dst_release(dst);
 	release_sock(sk);
 out:	
 	fl6_sock_release(flowlabel);
@@ -873,28 +859,11 @@ static int rawv6_geticmpfilter(struct sock *sk, int level, int optname,
 }
 
 
-static int rawv6_setsockopt(struct sock *sk, int level, int optname, 
+static int do_rawv6_setsockopt(struct sock *sk, int level, int optname,
 			    char __user *optval, int optlen)
 {
 	struct raw6_sock *rp = raw6_sk(sk);
 	int val;
-
-	switch(level) {
-		case SOL_RAW:
-			break;
-
-		case SOL_ICMPV6:
-			if (inet_sk(sk)->num != IPPROTO_ICMPV6)
-				return -EOPNOTSUPP;
-			return rawv6_seticmpfilter(sk, level, optname, optval,
-						   optlen);
-		case SOL_IPV6:
-			if (optname == IPV6_CHECKSUM)
-				break;
-		default:
-			return ipv6_setsockopt(sk, level, optname, optval,
-					       optlen);
-	};
 
   	if (get_user(val, (int __user *)optval))
 		return -EFAULT;
@@ -920,12 +889,9 @@ static int rawv6_setsockopt(struct sock *sk, int level, int optname,
 	}
 }
 
-static int rawv6_getsockopt(struct sock *sk, int level, int optname, 
-			    char __user *optval, int __user *optlen)
+static int rawv6_setsockopt(struct sock *sk, int level, int optname,
+			  char __user *optval, int optlen)
 {
-	struct raw6_sock *rp = raw6_sk(sk);
-	int val, len;
-
 	switch(level) {
 		case SOL_RAW:
 			break;
@@ -933,15 +899,45 @@ static int rawv6_getsockopt(struct sock *sk, int level, int optname,
 		case SOL_ICMPV6:
 			if (inet_sk(sk)->num != IPPROTO_ICMPV6)
 				return -EOPNOTSUPP;
-			return rawv6_geticmpfilter(sk, level, optname, optval,
+			return rawv6_seticmpfilter(sk, level, optname, optval,
 						   optlen);
 		case SOL_IPV6:
 			if (optname == IPV6_CHECKSUM)
 				break;
 		default:
-			return ipv6_getsockopt(sk, level, optname, optval,
+			return ipv6_setsockopt(sk, level, optname, optval,
 					       optlen);
 	};
+	return do_rawv6_setsockopt(sk, level, optname, optval, optlen);
+}
+
+#ifdef CONFIG_COMPAT
+static int compat_rawv6_setsockopt(struct sock *sk, int level, int optname,
+				   char __user *optval, int optlen)
+{
+	switch (level) {
+	case SOL_RAW:
+		break;
+	case SOL_ICMPV6:
+		if (inet_sk(sk)->num != IPPROTO_ICMPV6)
+			return -EOPNOTSUPP;
+		return rawv6_seticmpfilter(sk, level, optname, optval, optlen);
+	case SOL_IPV6:
+		if (optname == IPV6_CHECKSUM)
+			break;
+	default:
+		return compat_ipv6_setsockopt(sk, level, optname,
+					      optval, optlen);
+	};
+	return do_rawv6_setsockopt(sk, level, optname, optval, optlen);
+}
+#endif
+
+static int do_rawv6_getsockopt(struct sock *sk, int level, int optname,
+			    char __user *optval, int __user *optlen)
+{
+	struct raw6_sock *rp = raw6_sk(sk);
+	int val, len;
 
 	if (get_user(len,optlen))
 		return -EFAULT;
@@ -966,6 +962,50 @@ static int rawv6_getsockopt(struct sock *sk, int level, int optname,
 		return -EFAULT;
 	return 0;
 }
+
+static int rawv6_getsockopt(struct sock *sk, int level, int optname,
+			  char __user *optval, int __user *optlen)
+{
+	switch(level) {
+		case SOL_RAW:
+			break;
+
+		case SOL_ICMPV6:
+			if (inet_sk(sk)->num != IPPROTO_ICMPV6)
+				return -EOPNOTSUPP;
+			return rawv6_geticmpfilter(sk, level, optname, optval,
+						   optlen);
+		case SOL_IPV6:
+			if (optname == IPV6_CHECKSUM)
+				break;
+		default:
+			return ipv6_getsockopt(sk, level, optname, optval,
+					       optlen);
+	};
+	return do_rawv6_getsockopt(sk, level, optname, optval, optlen);
+}
+
+#ifdef CONFIG_COMPAT
+static int compat_rawv6_getsockopt(struct sock *sk, int level, int optname,
+				   char __user *optval, int __user *optlen)
+{
+	switch (level) {
+	case SOL_RAW:
+		break;
+	case SOL_ICMPV6:
+		if (inet_sk(sk)->num != IPPROTO_ICMPV6)
+			return -EOPNOTSUPP;
+		return rawv6_geticmpfilter(sk, level, optname, optval, optlen);
+	case SOL_IPV6:
+		if (optname == IPV6_CHECKSUM)
+			break;
+	default:
+		return compat_ipv6_getsockopt(sk, level, optname,
+					      optval, optlen);
+	};
+	return do_rawv6_getsockopt(sk, level, optname, optval, optlen);
+}
+#endif
 
 static int rawv6_ioctl(struct sock *sk, int cmd, unsigned long arg)
 {
@@ -1012,23 +1052,27 @@ static int rawv6_init_sk(struct sock *sk)
 }
 
 struct proto rawv6_prot = {
-	.name =		"RAWv6",
-	.owner =	THIS_MODULE,
-	.close =	rawv6_close,
-	.connect =	ip6_datagram_connect,
-	.disconnect =	udp_disconnect,
-	.ioctl =	rawv6_ioctl,
-	.init =		rawv6_init_sk,
-	.destroy =	inet6_destroy_sock,
-	.setsockopt =	rawv6_setsockopt,
-	.getsockopt =	rawv6_getsockopt,
-	.sendmsg =	rawv6_sendmsg,
-	.recvmsg =	rawv6_recvmsg,
-	.bind =		rawv6_bind,
-	.backlog_rcv =	rawv6_rcv_skb,
-	.hash =		raw_v6_hash,
-	.unhash =	raw_v6_unhash,
-	.obj_size =	sizeof(struct raw6_sock),
+	.name		   = "RAWv6",
+	.owner		   = THIS_MODULE,
+	.close		   = rawv6_close,
+	.connect	   = ip6_datagram_connect,
+	.disconnect	   = udp_disconnect,
+	.ioctl		   = rawv6_ioctl,
+	.init		   = rawv6_init_sk,
+	.destroy	   = inet6_destroy_sock,
+	.setsockopt	   = rawv6_setsockopt,
+	.getsockopt	   = rawv6_getsockopt,
+	.sendmsg	   = rawv6_sendmsg,
+	.recvmsg	   = rawv6_recvmsg,
+	.bind		   = rawv6_bind,
+	.backlog_rcv	   = rawv6_rcv_skb,
+	.hash		   = raw_v6_hash,
+	.unhash		   = raw_v6_unhash,
+	.obj_size	   = sizeof(struct raw6_sock),
+#ifdef CONFIG_COMPAT
+	.compat_setsockopt = compat_rawv6_setsockopt,
+	.compat_getsockopt = compat_rawv6_getsockopt,
+#endif
 };
 
 #ifdef CONFIG_PROC_FS
@@ -1154,7 +1198,7 @@ static int raw6_seq_open(struct inode *inode, struct file *file)
 {
 	struct seq_file *seq;
 	int rc = -ENOMEM;
-	struct raw6_iter_state *s = kmalloc(sizeof(*s), GFP_KERNEL);
+	struct raw6_iter_state *s = kzalloc(sizeof(*s), GFP_KERNEL);
 	if (!s)
 		goto out;
 	rc = seq_open(file, &raw6_seq_ops);
@@ -1162,7 +1206,6 @@ static int raw6_seq_open(struct inode *inode, struct file *file)
 		goto out_kfree;
 	seq = file->private_data;
 	seq->private = s;
-	memset(s, 0, sizeof(*s));
 out:
 	return rc;
 out_kfree:

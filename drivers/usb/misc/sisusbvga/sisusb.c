@@ -863,9 +863,6 @@ static int sisusb_write_mem_bulk(struct sisusb_usb_data *sisusb, u32 addr,
 
 	    switch (length) {
 
-		case 0:
-			return ret;
-
 		case 1:
 			if (userbuffer) {
 				if (get_user(swap8, (u8 __user *)userbuffer))
@@ -1220,9 +1217,6 @@ static int sisusb_read_mem_bulk(struct sisusb_usb_data *sisusb, u32 addr,
 	while (length) {
 
 	    switch (length) {
-
-		case 0:
-			return ret;
 
 		case 1:
 
@@ -2443,8 +2437,8 @@ sisusb_reset_text_mode(struct sisusb_usb_data *sisusb, int init)
 	u8 *tempbuf;
 	u16 *tempbufb;
 	size_t written;
-	static char bootstring[] = "SiSUSB VGA text console, (C) 2005 Thomas Winischhofer.";
-	static char bootlogo[] = "(o_ //\\ V_/_";
+	static const char bootstring[] = "SiSUSB VGA text console, (C) 2005 Thomas Winischhofer.";
+	static const char bootlogo[] = "(o_ //\\ V_/_";
 
 	/* sisusb->lock is down */
 
@@ -3194,7 +3188,7 @@ sisusb_ioctl(struct inode *inode, struct file *file, unsigned int cmd,
 			break;
 
 		default:
-			retval = -EINVAL;
+			retval = -ENOTTY;
 			break;
 	}
 
@@ -3257,12 +3251,11 @@ static int sisusb_probe(struct usb_interface *intf,
 		dev->devnum);
 
 	/* Allocate memory for our private */
-	if (!(sisusb = kmalloc(sizeof(*sisusb), GFP_KERNEL))) {
+	if (!(sisusb = kzalloc(sizeof(*sisusb), GFP_KERNEL))) {
 		printk(KERN_ERR
 			"sisusb: Failed to allocate memory for private data\n");
 		return -ENOMEM;
 	}
-	memset(sisusb, 0, sizeof(*sisusb));
 	kref_init(&sisusb->kref);
 
 	init_MUTEX(&(sisusb->lock));
@@ -3489,7 +3482,6 @@ static struct usb_device_id sisusb_table [] = {
 MODULE_DEVICE_TABLE (usb, sisusb_table);
 
 static struct usb_driver sisusb_driver = {
-	.owner =	THIS_MODULE,
 	.name =		"sisusb",
 	.probe =	sisusb_probe,
 	.disconnect =	sisusb_disconnect,

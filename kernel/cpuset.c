@@ -4,15 +4,14 @@
  *  Processor and Memory placement constraints for sets of tasks.
  *
  *  Copyright (C) 2003 BULL SA.
- *  Copyright (C) 2004 Silicon Graphics, Inc.
+ *  Copyright (C) 2004-2006 Silicon Graphics, Inc.
  *
  *  Portions derived from Patrick Mochel's sysfs code.
  *  sysfs is Copyright (c) 2001-3 Patrick Mochel
- *  Portions Copyright (c) 2004 Silicon Graphics, Inc.
  *
- *  2003-10-10 Written by Simon Derr <simon.derr@bull.net>
+ *  2003-10-10 Written by Simon Derr.
  *  2003-10-22 Updates by Stephen Hemminger.
- *  2004 May-July Rework by Paul Jackson <pj@sgi.com>
+ *  2004 May-July Rework by Paul Jackson.
  *
  *  This file is subject to the terms and conditions of the GNU General Public
  *  License.  See the file COPYING in the main directory of the Linux
@@ -39,6 +38,7 @@
 #include <linux/namei.h>
 #include <linux/pagemap.h>
 #include <linux/proc_fs.h>
+#include <linux/rcupdate.h>
 #include <linux/sched.h>
 #include <linux/seq_file.h>
 #include <linux/slab.h>
@@ -53,9 +53,25 @@
 
 #include <asm/uaccess.h>
 #include <asm/atomic.h>
-#include <asm/semaphore.h>
+#include <linux/mutex.h>
 
-#define CPUSET_SUPER_MAGIC 		0x27e0eb
+#define CPUSET_SUPER_MAGIC		0x27e0eb
+
+/*
+ * Tracks how many cpusets are currently defined in system.
+ * When there is only one cpuset (the root cpuset) we can
+ * short circuit some hooks.
+ */
+int number_of_cpusets __read_mostly;
+
+/* See "Frequency meter" comments, below. */
+
+struct fmeter {
+	int cnt;		/* unprocessed events count */
+	int val;		/* most recent output value */
+	time_t time;		/* clock (secs) when val computed */
+	spinlock_t lock;	/* guards read or write of above */
+};
 
 struct cpuset {
 	unsigned long flags;		/* "unsigned long" so bitops work */
@@ -81,40 +97,60 @@ struct cpuset {
 	 * Copy of global cpuset_mems_generation as of the most
 	 * recent time this cpuset changed its mems_allowed.
 	 */
-	 int mems_generation;
+	int mems_generation;
+
+	struct fmeter fmeter;		/* memory_pressure filter */
 };
 
 /* bits in struct cpuset flags field */
 typedef enum {
 	CS_CPU_EXCLUSIVE,
 	CS_MEM_EXCLUSIVE,
+	CS_MEMORY_MIGRATE,
 	CS_REMOVED,
-	CS_NOTIFY_ON_RELEASE
+	CS_NOTIFY_ON_RELEASE,
+	CS_SPREAD_PAGE,
+	CS_SPREAD_SLAB,
 } cpuset_flagbits_t;
 
 /* convenient tests for these bits */
 static inline int is_cpu_exclusive(const struct cpuset *cs)
 {
-	return !!test_bit(CS_CPU_EXCLUSIVE, &cs->flags);
+	return test_bit(CS_CPU_EXCLUSIVE, &cs->flags);
 }
 
 static inline int is_mem_exclusive(const struct cpuset *cs)
 {
-	return !!test_bit(CS_MEM_EXCLUSIVE, &cs->flags);
+	return test_bit(CS_MEM_EXCLUSIVE, &cs->flags);
 }
 
 static inline int is_removed(const struct cpuset *cs)
 {
-	return !!test_bit(CS_REMOVED, &cs->flags);
+	return test_bit(CS_REMOVED, &cs->flags);
 }
 
 static inline int notify_on_release(const struct cpuset *cs)
 {
-	return !!test_bit(CS_NOTIFY_ON_RELEASE, &cs->flags);
+	return test_bit(CS_NOTIFY_ON_RELEASE, &cs->flags);
+}
+
+static inline int is_memory_migrate(const struct cpuset *cs)
+{
+	return test_bit(CS_MEMORY_MIGRATE, &cs->flags);
+}
+
+static inline int is_spread_page(const struct cpuset *cs)
+{
+	return test_bit(CS_SPREAD_PAGE, &cs->flags);
+}
+
+static inline int is_spread_slab(const struct cpuset *cs)
+{
+	return test_bit(CS_SPREAD_SLAB, &cs->flags);
 }
 
 /*
- * Increment this atomic integer everytime any cpuset changes its
+ * Increment this integer everytime any cpuset changes its
  * mems_allowed value.  Users of cpusets can track this generation
  * number, and avoid having to lock and reload mems_allowed unless
  * the cpuset they're using changes generation.
@@ -128,8 +164,11 @@ static inline int notify_on_release(const struct cpuset *cs)
  * on every visit to __alloc_pages(), to efficiently check whether
  * its current->cpuset->mems_allowed has changed, requiring an update
  * of its current->mems_allowed.
+ *
+ * Since cpuset_mems_generation is guarded by manage_mutex,
+ * there is no need to mark it atomic.
  */
-static atomic_t cpuset_mems_generation = ATOMIC_INIT(1);
+static int cpuset_mems_generation;
 
 static struct cpuset top_cpuset = {
 	.flags = ((1 << CS_CPU_EXCLUSIVE) | (1 << CS_MEM_EXCLUSIVE)),
@@ -138,72 +177,63 @@ static struct cpuset top_cpuset = {
 	.count = ATOMIC_INIT(0),
 	.sibling = LIST_HEAD_INIT(top_cpuset.sibling),
 	.children = LIST_HEAD_INIT(top_cpuset.children),
-	.parent = NULL,
-	.dentry = NULL,
-	.mems_generation = 0,
 };
 
 static struct vfsmount *cpuset_mount;
-static struct super_block *cpuset_sb = NULL;
+static struct super_block *cpuset_sb;
 
 /*
- * We have two global cpuset semaphores below.  They can nest.
- * It is ok to first take manage_sem, then nest callback_sem.  We also
+ * We have two global cpuset mutexes below.  They can nest.
+ * It is ok to first take manage_mutex, then nest callback_mutex.  We also
  * require taking task_lock() when dereferencing a tasks cpuset pointer.
  * See "The task_lock() exception", at the end of this comment.
  *
- * A task must hold both semaphores to modify cpusets.  If a task
- * holds manage_sem, then it blocks others wanting that semaphore,
- * ensuring that it is the only task able to also acquire callback_sem
+ * A task must hold both mutexes to modify cpusets.  If a task
+ * holds manage_mutex, then it blocks others wanting that mutex,
+ * ensuring that it is the only task able to also acquire callback_mutex
  * and be able to modify cpusets.  It can perform various checks on
  * the cpuset structure first, knowing nothing will change.  It can
- * also allocate memory while just holding manage_sem.  While it is
+ * also allocate memory while just holding manage_mutex.  While it is
  * performing these checks, various callback routines can briefly
- * acquire callback_sem to query cpusets.  Once it is ready to make
- * the changes, it takes callback_sem, blocking everyone else.
+ * acquire callback_mutex to query cpusets.  Once it is ready to make
+ * the changes, it takes callback_mutex, blocking everyone else.
  *
  * Calls to the kernel memory allocator can not be made while holding
- * callback_sem, as that would risk double tripping on callback_sem
+ * callback_mutex, as that would risk double tripping on callback_mutex
  * from one of the callbacks into the cpuset code from within
  * __alloc_pages().
  *
- * If a task is only holding callback_sem, then it has read-only
+ * If a task is only holding callback_mutex, then it has read-only
  * access to cpusets.
  *
  * The task_struct fields mems_allowed and mems_generation may only
  * be accessed in the context of that task, so require no locks.
  *
  * Any task can increment and decrement the count field without lock.
- * So in general, code holding manage_sem or callback_sem can't rely
+ * So in general, code holding manage_mutex or callback_mutex can't rely
  * on the count field not changing.  However, if the count goes to
- * zero, then only attach_task(), which holds both semaphores, can
+ * zero, then only attach_task(), which holds both mutexes, can
  * increment it again.  Because a count of zero means that no tasks
  * are currently attached, therefore there is no way a task attached
  * to that cpuset can fork (the other way to increment the count).
- * So code holding manage_sem or callback_sem can safely assume that
+ * So code holding manage_mutex or callback_mutex can safely assume that
  * if the count is zero, it will stay zero.  Similarly, if a task
- * holds manage_sem or callback_sem on a cpuset with zero count, it
+ * holds manage_mutex or callback_mutex on a cpuset with zero count, it
  * knows that the cpuset won't be removed, as cpuset_rmdir() needs
- * both of those semaphores.
- *
- * A possible optimization to improve parallelism would be to make
- * callback_sem a R/W semaphore (rwsem), allowing the callback routines
- * to proceed in parallel, with read access, until the holder of
- * manage_sem needed to take this rwsem for exclusive write access
- * and modify some cpusets.
+ * both of those mutexes.
  *
  * The cpuset_common_file_write handler for operations that modify
- * the cpuset hierarchy holds manage_sem across the entire operation,
+ * the cpuset hierarchy holds manage_mutex across the entire operation,
  * single threading all such cpuset modifications across the system.
  *
- * The cpuset_common_file_read() handlers only hold callback_sem across
+ * The cpuset_common_file_read() handlers only hold callback_mutex across
  * small pieces of code, such as when reading out possibly multi-word
  * cpumasks and nodemasks.
  *
  * The fork and exit callbacks cpuset_fork() and cpuset_exit(), don't
- * (usually) take either semaphore.  These are the two most performance
+ * (usually) take either mutex.  These are the two most performance
  * critical pieces of code here.  The exception occurs on cpuset_exit(),
- * when a task in a notify_on_release cpuset exits.  Then manage_sem
+ * when a task in a notify_on_release cpuset exits.  Then manage_mutex
  * is taken, and if the cpuset count is zero, a usermode call made
  * to /sbin/cpuset_release_agent with the name of the cpuset (path
  * relative to the root of cpuset file system) as the argument.
@@ -221,17 +251,22 @@ static struct super_block *cpuset_sb = NULL;
  *
  * The need for this exception arises from the action of attach_task(),
  * which overwrites one tasks cpuset pointer with another.  It does
- * so using both semaphores, however there are several performance
+ * so using both mutexes, however there are several performance
  * critical places that need to reference task->cpuset without the
- * expense of grabbing a system global semaphore.  Therefore except as
+ * expense of grabbing a system global mutex.  Therefore except as
  * noted below, when dereferencing or, as in attach_task(), modifying
  * a tasks cpuset pointer we use task_lock(), which acts on a spinlock
  * (task->alloc_lock) already in the task_struct routinely used for
  * such matters.
+ *
+ * P.S.  One more locking exception.  RCU is used to guard the
+ * update of a tasks cpuset pointer by attach_task() and the
+ * access of task->cpuset->mems_generation via that pointer in
+ * the routine cpuset_update_task_memory_state().
  */
 
-static DECLARE_MUTEX(manage_sem);
-static DECLARE_MUTEX(callback_sem);
+static DEFINE_MUTEX(manage_mutex);
+static DEFINE_MUTEX(callback_mutex);
 
 /*
  * A couple of forward declarations required, due to cyclic reference loop:
@@ -305,7 +340,7 @@ static void cpuset_d_remove_dir(struct dentry *dentry)
 	spin_lock(&dcache_lock);
 	node = dentry->d_subdirs.next;
 	while (node != &dentry->d_subdirs) {
-		struct dentry *d = list_entry(node, struct dentry, d_child);
+		struct dentry *d = list_entry(node, struct dentry, d_u.d_child);
 		list_del_init(node);
 		if (d->d_inode) {
 			d = dget_locked(d);
@@ -317,7 +352,7 @@ static void cpuset_d_remove_dir(struct dentry *dentry)
 		}
 		node = dentry->d_subdirs.next;
 	}
-	list_del_init(&dentry->d_child);
+	list_del_init(&dentry->d_u.d_child);
 	spin_unlock(&dcache_lock);
 	remove_dir(dentry);
 }
@@ -406,7 +441,7 @@ static inline struct cftype *__d_cft(struct dentry *dentry)
 }
 
 /*
- * Call with manage_sem held.  Writes path of cpuset into buf.
+ * Call with manage_mutex held.  Writes path of cpuset into buf.
  * Returns 0 on success, -errno on error.
  */
 
@@ -458,11 +493,11 @@ static int cpuset_path(const struct cpuset *cs, char *buf, int buflen)
  * status of the /sbin/cpuset_release_agent task, so no sense holding
  * our caller up for that.
  *
- * When we had only one cpuset semaphore, we had to call this
+ * When we had only one cpuset mutex, we had to call this
  * without holding it, to avoid deadlock when call_usermodehelper()
  * allocated memory.  With two locks, we could now call this while
- * holding manage_sem, but we still don't, so as to minimize
- * the time manage_sem is held.
+ * holding manage_mutex, but we still don't, so as to minimize
+ * the time manage_mutex is held.
  */
 
 static void cpuset_release_agent(const char *pathbuf)
@@ -494,15 +529,15 @@ static void cpuset_release_agent(const char *pathbuf)
  * cs is notify_on_release() and now both the user count is zero and
  * the list of children is empty, prepare cpuset path in a kmalloc'd
  * buffer, to be returned via ppathbuf, so that the caller can invoke
- * cpuset_release_agent() with it later on, once manage_sem is dropped.
- * Call here with manage_sem held.
+ * cpuset_release_agent() with it later on, once manage_mutex is dropped.
+ * Call here with manage_mutex held.
  *
  * This check_for_release() routine is responsible for kmalloc'ing
  * pathbuf.  The above cpuset_release_agent() is responsible for
  * kfree'ing pathbuf.  The caller of these routines is responsible
  * for providing a pathbuf pointer, initialized to NULL, then
- * calling check_for_release() with manage_sem held and the address
- * of the pathbuf pointer, then dropping manage_sem, then calling
+ * calling check_for_release() with manage_mutex held and the address
+ * of the pathbuf pointer, then dropping manage_mutex, then calling
  * cpuset_release_agent() with pathbuf, as set by check_for_release().
  */
 
@@ -533,7 +568,7 @@ static void check_for_release(struct cpuset *cs, char **ppathbuf)
  * One way or another, we guarantee to return some non-empty subset
  * of cpu_online_map.
  *
- * Call with callback_sem held.
+ * Call with callback_mutex held.
  */
 
 static void guarantee_online_cpus(const struct cpuset *cs, cpumask_t *pmask)
@@ -557,7 +592,7 @@ static void guarantee_online_cpus(const struct cpuset *cs, cpumask_t *pmask)
  * One way or another, we guarantee to return some non-empty subset
  * of node_online_map.
  *
- * Call with callback_sem held.
+ * Call with callback_mutex held.
  */
 
 static void guarantee_online_mems(const struct cpuset *cs, nodemask_t *pmask)
@@ -571,20 +606,41 @@ static void guarantee_online_mems(const struct cpuset *cs, nodemask_t *pmask)
 	BUG_ON(!nodes_intersects(*pmask, node_online_map));
 }
 
-/*
- * Refresh current tasks mems_allowed and mems_generation from current
- * tasks cpuset.
+/**
+ * cpuset_update_task_memory_state - update task memory placement
  *
- * Call without callback_sem or task_lock() held.  May be called with
- * or without manage_sem held.  Will acquire task_lock() and might
- * acquire callback_sem during call.
+ * If the current tasks cpusets mems_allowed changed behind our
+ * backs, update current->mems_allowed, mems_generation and task NUMA
+ * mempolicy to the new value.
  *
- * The task_lock() is required to dereference current->cpuset safely.
- * Without it, we could pick up the pointer value of current->cpuset
- * in one instruction, and then attach_task could give us a different
- * cpuset, and then the cpuset we had could be removed and freed,
- * and then on our next instruction, we could dereference a no longer
- * valid cpuset pointer to get its mems_generation field.
+ * Task mempolicy is updated by rebinding it relative to the
+ * current->cpuset if a task has its memory placement changed.
+ * Do not call this routine if in_interrupt().
+ *
+ * Call without callback_mutex or task_lock() held.  May be
+ * called with or without manage_mutex held.  Thanks in part to
+ * 'the_top_cpuset_hack', the tasks cpuset pointer will never
+ * be NULL.  This routine also might acquire callback_mutex and
+ * current->mm->mmap_sem during call.
+ *
+ * Reading current->cpuset->mems_generation doesn't need task_lock
+ * to guard the current->cpuset derefence, because it is guarded
+ * from concurrent freeing of current->cpuset by attach_task(),
+ * using RCU.
+ *
+ * The rcu_dereference() is technically probably not needed,
+ * as I don't actually mind if I see a new cpuset pointer but
+ * an old value of mems_generation.  However this really only
+ * matters on alpha systems using cpusets heavily.  If I dropped
+ * that rcu_dereference(), it would save them a memory barrier.
+ * For all other arch's, rcu_dereference is a no-op anyway, and for
+ * alpha systems not using cpusets, another planned optimization,
+ * avoiding the rcu critical section for tasks in the root cpuset
+ * which is statically allocated, so can't vanish, will make this
+ * irrelevant.  Better to use RCU as intended, than to engage in
+ * some cute trick to save a memory barrier that is impossible to
+ * test, for alpha systems using cpusets heavily, which might not
+ * even exist.
  *
  * This routine is needed to update the per-task mems_allowed data,
  * within the tasks context, when it is trying to allocate memory
@@ -592,27 +648,39 @@ static void guarantee_online_mems(const struct cpuset *cs, nodemask_t *pmask)
  * task has been modifying its cpuset.
  */
 
-static void refresh_mems(void)
+void cpuset_update_task_memory_state(void)
 {
 	int my_cpusets_mem_gen;
+	struct task_struct *tsk = current;
+	struct cpuset *cs;
 
-	task_lock(current);
-	my_cpusets_mem_gen = current->cpuset->mems_generation;
-	task_unlock(current);
+	if (tsk->cpuset == &top_cpuset) {
+		/* Don't need rcu for top_cpuset.  It's never freed. */
+		my_cpusets_mem_gen = top_cpuset.mems_generation;
+	} else {
+		rcu_read_lock();
+		cs = rcu_dereference(tsk->cpuset);
+		my_cpusets_mem_gen = cs->mems_generation;
+		rcu_read_unlock();
+	}
 
-	if (current->cpuset_mems_generation != my_cpusets_mem_gen) {
-		struct cpuset *cs;
-		nodemask_t oldmem = current->mems_allowed;
-
-		down(&callback_sem);
-		task_lock(current);
-		cs = current->cpuset;
-		guarantee_online_mems(cs, &current->mems_allowed);
-		current->cpuset_mems_generation = cs->mems_generation;
-		task_unlock(current);
-		up(&callback_sem);
-		if (!nodes_equal(oldmem, current->mems_allowed))
-			numa_policy_rebind(&oldmem, &current->mems_allowed);
+	if (my_cpusets_mem_gen != tsk->cpuset_mems_generation) {
+		mutex_lock(&callback_mutex);
+		task_lock(tsk);
+		cs = tsk->cpuset;	/* Maybe changed when task not locked */
+		guarantee_online_mems(cs, &tsk->mems_allowed);
+		tsk->cpuset_mems_generation = cs->mems_generation;
+		if (is_spread_page(cs))
+			tsk->flags |= PF_SPREAD_PAGE;
+		else
+			tsk->flags &= ~PF_SPREAD_PAGE;
+		if (is_spread_slab(cs))
+			tsk->flags |= PF_SPREAD_SLAB;
+		else
+			tsk->flags &= ~PF_SPREAD_SLAB;
+		task_unlock(tsk);
+		mutex_unlock(&callback_mutex);
+		mpol_rebind_task(tsk, &tsk->mems_allowed);
 	}
 }
 
@@ -621,7 +689,7 @@ static void refresh_mems(void)
  *
  * One cpuset is a subset of another if all its allowed CPUs and
  * Memory Nodes are a subset of the other, and its exclusive flags
- * are only set if the other's are set.  Call holding manage_sem.
+ * are only set if the other's are set.  Call holding manage_mutex.
  */
 
 static int is_cpuset_subset(const struct cpuset *p, const struct cpuset *q)
@@ -639,7 +707,7 @@ static int is_cpuset_subset(const struct cpuset *p, const struct cpuset *q)
  * If we replaced the flag and mask values of the current cpuset
  * (cur) with those values in the trial cpuset (trial), would
  * our various subset and exclusive rules still be valid?  Presumes
- * manage_sem held.
+ * manage_mutex held.
  *
  * 'cur' is the address of an actual, in-use cpuset.  Operations
  * such as list traversal that depend on the actual address of the
@@ -693,7 +761,7 @@ static int validate_change(const struct cpuset *cur, const struct cpuset *trial)
  *    exclusive child cpusets
  * Build these two partitions by calling partition_sched_domains
  *
- * Call with manage_sem held.  May nest a call to the
+ * Call with manage_mutex held.  May nest a call to the
  * lock_cpu_hotplug()/unlock_cpu_hotplug() pair.
  */
 
@@ -739,7 +807,7 @@ static void update_cpu_domains(struct cpuset *cur)
 }
 
 /*
- * Call with manage_sem held.  May take callback_sem during call.
+ * Call with manage_mutex held.  May take callback_mutex during call.
  */
 
 static int update_cpumask(struct cpuset *cs, char *buf)
@@ -758,49 +826,210 @@ static int update_cpumask(struct cpuset *cs, char *buf)
 	if (retval < 0)
 		return retval;
 	cpus_unchanged = cpus_equal(cs->cpus_allowed, trialcs.cpus_allowed);
-	down(&callback_sem);
+	mutex_lock(&callback_mutex);
 	cs->cpus_allowed = trialcs.cpus_allowed;
-	up(&callback_sem);
+	mutex_unlock(&callback_mutex);
 	if (is_cpu_exclusive(cs) && !cpus_unchanged)
 		update_cpu_domains(cs);
 	return 0;
 }
 
 /*
- * Call with manage_sem held.  May take callback_sem during call.
+ * cpuset_migrate_mm
+ *
+ *    Migrate memory region from one set of nodes to another.
+ *
+ *    Temporarilly set tasks mems_allowed to target nodes of migration,
+ *    so that the migration code can allocate pages on these nodes.
+ *
+ *    Call holding manage_mutex, so our current->cpuset won't change
+ *    during this call, as manage_mutex holds off any attach_task()
+ *    calls.  Therefore we don't need to take task_lock around the
+ *    call to guarantee_online_mems(), as we know no one is changing
+ *    our tasks cpuset.
+ *
+ *    Hold callback_mutex around the two modifications of our tasks
+ *    mems_allowed to synchronize with cpuset_mems_allowed().
+ *
+ *    While the mm_struct we are migrating is typically from some
+ *    other task, the task_struct mems_allowed that we are hacking
+ *    is for our current task, which must allocate new pages for that
+ *    migrating memory region.
+ *
+ *    We call cpuset_update_task_memory_state() before hacking
+ *    our tasks mems_allowed, so that we are assured of being in
+ *    sync with our tasks cpuset, and in particular, callbacks to
+ *    cpuset_update_task_memory_state() from nested page allocations
+ *    won't see any mismatch of our cpuset and task mems_generation
+ *    values, so won't overwrite our hacked tasks mems_allowed
+ *    nodemask.
+ */
+
+static void cpuset_migrate_mm(struct mm_struct *mm, const nodemask_t *from,
+							const nodemask_t *to)
+{
+	struct task_struct *tsk = current;
+
+	cpuset_update_task_memory_state();
+
+	mutex_lock(&callback_mutex);
+	tsk->mems_allowed = *to;
+	mutex_unlock(&callback_mutex);
+
+	do_migrate_pages(mm, from, to, MPOL_MF_MOVE_ALL);
+
+	mutex_lock(&callback_mutex);
+	guarantee_online_mems(tsk->cpuset, &tsk->mems_allowed);
+	mutex_unlock(&callback_mutex);
+}
+
+/*
+ * Handle user request to change the 'mems' memory placement
+ * of a cpuset.  Needs to validate the request, update the
+ * cpusets mems_allowed and mems_generation, and for each
+ * task in the cpuset, rebind any vma mempolicies and if
+ * the cpuset is marked 'memory_migrate', migrate the tasks
+ * pages to the new memory.
+ *
+ * Call with manage_mutex held.  May take callback_mutex during call.
+ * Will take tasklist_lock, scan tasklist for tasks in cpuset cs,
+ * lock each such tasks mm->mmap_sem, scan its vma's and rebind
+ * their mempolicies to the cpusets new mems_allowed.
  */
 
 static int update_nodemask(struct cpuset *cs, char *buf)
 {
 	struct cpuset trialcs;
+	nodemask_t oldmem;
+	struct task_struct *g, *p;
+	struct mm_struct **mmarray;
+	int i, n, ntasks;
+	int migrate;
+	int fudge;
 	int retval;
 
 	trialcs = *cs;
 	retval = nodelist_parse(buf, trialcs.mems_allowed);
 	if (retval < 0)
-		return retval;
+		goto done;
 	nodes_and(trialcs.mems_allowed, trialcs.mems_allowed, node_online_map);
-	if (nodes_empty(trialcs.mems_allowed))
-		return -ENOSPC;
-	retval = validate_change(cs, &trialcs);
-	if (retval == 0) {
-		down(&callback_sem);
-		cs->mems_allowed = trialcs.mems_allowed;
-		atomic_inc(&cpuset_mems_generation);
-		cs->mems_generation = atomic_read(&cpuset_mems_generation);
-		up(&callback_sem);
+	oldmem = cs->mems_allowed;
+	if (nodes_equal(oldmem, trialcs.mems_allowed)) {
+		retval = 0;		/* Too easy - nothing to do */
+		goto done;
 	}
+	if (nodes_empty(trialcs.mems_allowed)) {
+		retval = -ENOSPC;
+		goto done;
+	}
+	retval = validate_change(cs, &trialcs);
+	if (retval < 0)
+		goto done;
+
+	mutex_lock(&callback_mutex);
+	cs->mems_allowed = trialcs.mems_allowed;
+	cs->mems_generation = cpuset_mems_generation++;
+	mutex_unlock(&callback_mutex);
+
+	set_cpuset_being_rebound(cs);		/* causes mpol_copy() rebind */
+
+	fudge = 10;				/* spare mmarray[] slots */
+	fudge += cpus_weight(cs->cpus_allowed);	/* imagine one fork-bomb/cpu */
+	retval = -ENOMEM;
+
+	/*
+	 * Allocate mmarray[] to hold mm reference for each task
+	 * in cpuset cs.  Can't kmalloc GFP_KERNEL while holding
+	 * tasklist_lock.  We could use GFP_ATOMIC, but with a
+	 * few more lines of code, we can retry until we get a big
+	 * enough mmarray[] w/o using GFP_ATOMIC.
+	 */
+	while (1) {
+		ntasks = atomic_read(&cs->count);	/* guess */
+		ntasks += fudge;
+		mmarray = kmalloc(ntasks * sizeof(*mmarray), GFP_KERNEL);
+		if (!mmarray)
+			goto done;
+		write_lock_irq(&tasklist_lock);		/* block fork */
+		if (atomic_read(&cs->count) <= ntasks)
+			break;				/* got enough */
+		write_unlock_irq(&tasklist_lock);	/* try again */
+		kfree(mmarray);
+	}
+
+	n = 0;
+
+	/* Load up mmarray[] with mm reference for each task in cpuset. */
+	do_each_thread(g, p) {
+		struct mm_struct *mm;
+
+		if (n >= ntasks) {
+			printk(KERN_WARNING
+				"Cpuset mempolicy rebind incomplete.\n");
+			continue;
+		}
+		if (p->cpuset != cs)
+			continue;
+		mm = get_task_mm(p);
+		if (!mm)
+			continue;
+		mmarray[n++] = mm;
+	} while_each_thread(g, p);
+	write_unlock_irq(&tasklist_lock);
+
+	/*
+	 * Now that we've dropped the tasklist spinlock, we can
+	 * rebind the vma mempolicies of each mm in mmarray[] to their
+	 * new cpuset, and release that mm.  The mpol_rebind_mm()
+	 * call takes mmap_sem, which we couldn't take while holding
+	 * tasklist_lock.  Forks can happen again now - the mpol_copy()
+	 * cpuset_being_rebound check will catch such forks, and rebind
+	 * their vma mempolicies too.  Because we still hold the global
+	 * cpuset manage_mutex, we know that no other rebind effort will
+	 * be contending for the global variable cpuset_being_rebound.
+	 * It's ok if we rebind the same mm twice; mpol_rebind_mm()
+	 * is idempotent.  Also migrate pages in each mm to new nodes.
+	 */
+	migrate = is_memory_migrate(cs);
+	for (i = 0; i < n; i++) {
+		struct mm_struct *mm = mmarray[i];
+
+		mpol_rebind_mm(mm, &cs->mems_allowed);
+		if (migrate)
+			cpuset_migrate_mm(mm, &oldmem, &cs->mems_allowed);
+		mmput(mm);
+	}
+
+	/* We're done rebinding vma's to this cpusets new mems_allowed. */
+	kfree(mmarray);
+	set_cpuset_being_rebound(NULL);
+	retval = 0;
+done:
 	return retval;
+}
+
+/*
+ * Call with manage_mutex held.
+ */
+
+static int update_memory_pressure_enabled(struct cpuset *cs, char *buf)
+{
+	if (simple_strtoul(buf, NULL, 10) != 0)
+		cpuset_memory_pressure_enabled = 1;
+	else
+		cpuset_memory_pressure_enabled = 0;
+	return 0;
 }
 
 /*
  * update_flag - read a 0 or a 1 in a file and update associated flag
  * bit:	the bit to update (CS_CPU_EXCLUSIVE, CS_MEM_EXCLUSIVE,
- *						CS_NOTIFY_ON_RELEASE)
+ *				CS_NOTIFY_ON_RELEASE, CS_MEMORY_MIGRATE,
+ *				CS_SPREAD_PAGE, CS_SPREAD_SLAB)
  * cs:	the cpuset to update
  * buf:	the buffer where we read the 0 or 1
  *
- * Call with manage_sem held.
+ * Call with manage_mutex held.
  */
 
 static int update_flag(cpuset_flagbits_t bit, struct cpuset *cs, char *buf)
@@ -822,12 +1051,12 @@ static int update_flag(cpuset_flagbits_t bit, struct cpuset *cs, char *buf)
 		return err;
 	cpu_exclusive_changed =
 		(is_cpu_exclusive(cs) != is_cpu_exclusive(&trialcs));
-	down(&callback_sem);
+	mutex_lock(&callback_mutex);
 	if (turning_on)
 		set_bit(bit, &cs->flags);
 	else
 		clear_bit(bit, &cs->flags);
-	up(&callback_sem);
+	mutex_unlock(&callback_mutex);
 
 	if (cpu_exclusive_changed)
                 update_cpu_domains(cs);
@@ -835,11 +1064,109 @@ static int update_flag(cpuset_flagbits_t bit, struct cpuset *cs, char *buf)
 }
 
 /*
+ * Frequency meter - How fast is some event occuring?
+ *
+ * These routines manage a digitally filtered, constant time based,
+ * event frequency meter.  There are four routines:
+ *   fmeter_init() - initialize a frequency meter.
+ *   fmeter_markevent() - called each time the event happens.
+ *   fmeter_getrate() - returns the recent rate of such events.
+ *   fmeter_update() - internal routine used to update fmeter.
+ *
+ * A common data structure is passed to each of these routines,
+ * which is used to keep track of the state required to manage the
+ * frequency meter and its digital filter.
+ *
+ * The filter works on the number of events marked per unit time.
+ * The filter is single-pole low-pass recursive (IIR).  The time unit
+ * is 1 second.  Arithmetic is done using 32-bit integers scaled to
+ * simulate 3 decimal digits of precision (multiplied by 1000).
+ *
+ * With an FM_COEF of 933, and a time base of 1 second, the filter
+ * has a half-life of 10 seconds, meaning that if the events quit
+ * happening, then the rate returned from the fmeter_getrate()
+ * will be cut in half each 10 seconds, until it converges to zero.
+ *
+ * It is not worth doing a real infinitely recursive filter.  If more
+ * than FM_MAXTICKS ticks have elapsed since the last filter event,
+ * just compute FM_MAXTICKS ticks worth, by which point the level
+ * will be stable.
+ *
+ * Limit the count of unprocessed events to FM_MAXCNT, so as to avoid
+ * arithmetic overflow in the fmeter_update() routine.
+ *
+ * Given the simple 32 bit integer arithmetic used, this meter works
+ * best for reporting rates between one per millisecond (msec) and
+ * one per 32 (approx) seconds.  At constant rates faster than one
+ * per msec it maxes out at values just under 1,000,000.  At constant
+ * rates between one per msec, and one per second it will stabilize
+ * to a value N*1000, where N is the rate of events per second.
+ * At constant rates between one per second and one per 32 seconds,
+ * it will be choppy, moving up on the seconds that have an event,
+ * and then decaying until the next event.  At rates slower than
+ * about one in 32 seconds, it decays all the way back to zero between
+ * each event.
+ */
+
+#define FM_COEF 933		/* coefficient for half-life of 10 secs */
+#define FM_MAXTICKS ((time_t)99) /* useless computing more ticks than this */
+#define FM_MAXCNT 1000000	/* limit cnt to avoid overflow */
+#define FM_SCALE 1000		/* faux fixed point scale */
+
+/* Initialize a frequency meter */
+static void fmeter_init(struct fmeter *fmp)
+{
+	fmp->cnt = 0;
+	fmp->val = 0;
+	fmp->time = 0;
+	spin_lock_init(&fmp->lock);
+}
+
+/* Internal meter update - process cnt events and update value */
+static void fmeter_update(struct fmeter *fmp)
+{
+	time_t now = get_seconds();
+	time_t ticks = now - fmp->time;
+
+	if (ticks == 0)
+		return;
+
+	ticks = min(FM_MAXTICKS, ticks);
+	while (ticks-- > 0)
+		fmp->val = (FM_COEF * fmp->val) / FM_SCALE;
+	fmp->time = now;
+
+	fmp->val += ((FM_SCALE - FM_COEF) * fmp->cnt) / FM_SCALE;
+	fmp->cnt = 0;
+}
+
+/* Process any previous ticks, then bump cnt by one (times scale). */
+static void fmeter_markevent(struct fmeter *fmp)
+{
+	spin_lock(&fmp->lock);
+	fmeter_update(fmp);
+	fmp->cnt = min(FM_MAXCNT, fmp->cnt + FM_SCALE);
+	spin_unlock(&fmp->lock);
+}
+
+/* Process any previous ticks, then return current value. */
+static int fmeter_getrate(struct fmeter *fmp)
+{
+	int val;
+
+	spin_lock(&fmp->lock);
+	fmeter_update(fmp);
+	val = fmp->val;
+	spin_unlock(&fmp->lock);
+	return val;
+}
+
+/*
  * Attack task specified by pid in 'pidbuf' to cpuset 'cs', possibly
  * writing the path of the old cpuset in 'ppathbuf' if it needs to be
  * notified on release.
  *
- * Call holding manage_sem.  May take callback_sem and task_lock of
+ * Call holding manage_mutex.  May take callback_mutex and task_lock of
  * the task 'pid' during call.
  */
 
@@ -849,6 +1176,8 @@ static int attach_task(struct cpuset *cs, char *pidbuf, char **ppathbuf)
 	struct task_struct *tsk;
 	struct cpuset *oldcs;
 	cpumask_t cpus;
+	nodemask_t from, to;
+	struct mm_struct *mm;
 
 	if (sscanf(pidbuf, "%d", &pid) != 1)
 		return -EIO;
@@ -877,25 +1206,38 @@ static int attach_task(struct cpuset *cs, char *pidbuf, char **ppathbuf)
 		get_task_struct(tsk);
 	}
 
-	down(&callback_sem);
+	mutex_lock(&callback_mutex);
 
 	task_lock(tsk);
 	oldcs = tsk->cpuset;
 	if (!oldcs) {
 		task_unlock(tsk);
-		up(&callback_sem);
+		mutex_unlock(&callback_mutex);
 		put_task_struct(tsk);
 		return -ESRCH;
 	}
 	atomic_inc(&cs->count);
-	tsk->cpuset = cs;
+	rcu_assign_pointer(tsk->cpuset, cs);
 	task_unlock(tsk);
 
 	guarantee_online_cpus(cs, &cpus);
 	set_cpus_allowed(tsk, cpus);
 
-	up(&callback_sem);
+	from = oldcs->mems_allowed;
+	to = cs->mems_allowed;
+
+	mutex_unlock(&callback_mutex);
+
+	mm = get_task_mm(tsk);
+	if (mm) {
+		mpol_rebind_mm(mm, &to);
+		if (is_memory_migrate(cs))
+			cpuset_migrate_mm(mm, &from, &to);
+		mmput(mm);
+	}
+
 	put_task_struct(tsk);
+	synchronize_rcu();
 	if (atomic_dec_and_test(&oldcs->count))
 		check_for_release(oldcs, ppathbuf);
 	return 0;
@@ -906,11 +1248,16 @@ static int attach_task(struct cpuset *cs, char *pidbuf, char **ppathbuf)
 typedef enum {
 	FILE_ROOT,
 	FILE_DIR,
+	FILE_MEMORY_MIGRATE,
 	FILE_CPULIST,
 	FILE_MEMLIST,
 	FILE_CPU_EXCLUSIVE,
 	FILE_MEM_EXCLUSIVE,
 	FILE_NOTIFY_ON_RELEASE,
+	FILE_MEMORY_PRESSURE_ENABLED,
+	FILE_MEMORY_PRESSURE,
+	FILE_SPREAD_PAGE,
+	FILE_SPREAD_SLAB,
 	FILE_TASKLIST,
 } cpuset_filetype_t;
 
@@ -938,7 +1285,7 @@ static ssize_t cpuset_common_file_write(struct file *file, const char __user *us
 	}
 	buffer[nbytes] = 0;	/* nul-terminate */
 
-	down(&manage_sem);
+	mutex_lock(&manage_mutex);
 
 	if (is_removed(cs)) {
 		retval = -ENODEV;
@@ -961,6 +1308,23 @@ static ssize_t cpuset_common_file_write(struct file *file, const char __user *us
 	case FILE_NOTIFY_ON_RELEASE:
 		retval = update_flag(CS_NOTIFY_ON_RELEASE, cs, buffer);
 		break;
+	case FILE_MEMORY_MIGRATE:
+		retval = update_flag(CS_MEMORY_MIGRATE, cs, buffer);
+		break;
+	case FILE_MEMORY_PRESSURE_ENABLED:
+		retval = update_memory_pressure_enabled(cs, buffer);
+		break;
+	case FILE_MEMORY_PRESSURE:
+		retval = -EACCES;
+		break;
+	case FILE_SPREAD_PAGE:
+		retval = update_flag(CS_SPREAD_PAGE, cs, buffer);
+		cs->mems_generation = cpuset_mems_generation++;
+		break;
+	case FILE_SPREAD_SLAB:
+		retval = update_flag(CS_SPREAD_SLAB, cs, buffer);
+		cs->mems_generation = cpuset_mems_generation++;
+		break;
 	case FILE_TASKLIST:
 		retval = attach_task(cs, buffer, &pathbuf);
 		break;
@@ -972,7 +1336,7 @@ static ssize_t cpuset_common_file_write(struct file *file, const char __user *us
 	if (retval == 0)
 		retval = nbytes;
 out2:
-	up(&manage_sem);
+	mutex_unlock(&manage_mutex);
 	cpuset_release_agent(pathbuf);
 out1:
 	kfree(buffer);
@@ -1012,9 +1376,9 @@ static int cpuset_sprintf_cpulist(char *page, struct cpuset *cs)
 {
 	cpumask_t mask;
 
-	down(&callback_sem);
+	mutex_lock(&callback_mutex);
 	mask = cs->cpus_allowed;
-	up(&callback_sem);
+	mutex_unlock(&callback_mutex);
 
 	return cpulist_scnprintf(page, PAGE_SIZE, mask);
 }
@@ -1023,9 +1387,9 @@ static int cpuset_sprintf_memlist(char *page, struct cpuset *cs)
 {
 	nodemask_t mask;
 
-	down(&callback_sem);
+	mutex_lock(&callback_mutex);
 	mask = cs->mems_allowed;
-	up(&callback_sem);
+	mutex_unlock(&callback_mutex);
 
 	return nodelist_scnprintf(page, PAGE_SIZE, mask);
 }
@@ -1060,6 +1424,21 @@ static ssize_t cpuset_common_file_read(struct file *file, char __user *buf,
 		break;
 	case FILE_NOTIFY_ON_RELEASE:
 		*s++ = notify_on_release(cs) ? '1' : '0';
+		break;
+	case FILE_MEMORY_MIGRATE:
+		*s++ = is_memory_migrate(cs) ? '1' : '0';
+		break;
+	case FILE_MEMORY_PRESSURE_ENABLED:
+		*s++ = cpuset_memory_pressure_enabled ? '1' : '0';
+		break;
+	case FILE_MEMORY_PRESSURE:
+		s += sprintf(s, "%d", fmeter_getrate(&cs->fmeter));
+		break;
+	case FILE_SPREAD_PAGE:
+		*s++ = is_spread_page(cs) ? '1' : '0';
+		break;
+	case FILE_SPREAD_SLAB:
+		*s++ = is_spread_slab(cs) ? '1' : '0';
 		break;
 	default:
 		retval = -EINVAL;
@@ -1179,7 +1558,7 @@ static int cpuset_create_file(struct dentry *dentry, int mode)
 
 /*
  *	cpuset_create_dir - create a directory for an object.
- *	cs: 	the cpuset we create the directory for.
+ *	cs:	the cpuset we create the directory for.
  *		It must have a valid ->parent field
  *		And we are going to fill its ->dentry field.
  *	name:	The name to give to the cpuset directory. Will be copied.
@@ -1212,7 +1591,7 @@ static int cpuset_add_file(struct dentry *dir, const struct cftype *cft)
 	struct dentry *dentry;
 	int error;
 
-	down(&dir->d_inode->i_sem);
+	mutex_lock(&dir->d_inode->i_mutex);
 	dentry = cpuset_get_dentry(dir, cft->name);
 	if (!IS_ERR(dentry)) {
 		error = cpuset_create_file(dentry, 0644 | S_IFREG);
@@ -1221,7 +1600,7 @@ static int cpuset_add_file(struct dentry *dir, const struct cftype *cft)
 		dput(dentry);
 	} else
 		error = PTR_ERR(dentry);
-	up(&dir->d_inode->i_sem);
+	mutex_unlock(&dir->d_inode->i_mutex);
 	return error;
 }
 
@@ -1253,7 +1632,7 @@ struct ctr_struct {
  * when reading out p->cpuset, as we don't really care if it changes
  * on the next cycle, and we are not going to try to dereference it.
  */
-static inline int pid_array_load(pid_t *pidarray, int npids, struct cpuset *cs)
+static int pid_array_load(pid_t *pidarray, int npids, struct cpuset *cs)
 {
 	int n = 0;
 	struct task_struct *g, *p;
@@ -1297,7 +1676,7 @@ static int pid_array_to_buf(char *buf, int sz, pid_t *a, int npids)
  * Handle an open on 'tasks' file.  Prepare a buffer listing the
  * process id's of tasks currently attached to the cpuset being opened.
  *
- * Does not require any specific cpuset semaphores, and does not take any.
+ * Does not require any specific cpuset mutexes, and does not take any.
  */
 static int cpuset_tasks_open(struct inode *unused, struct file *file)
 {
@@ -1409,6 +1788,31 @@ static struct cftype cft_notify_on_release = {
 	.private = FILE_NOTIFY_ON_RELEASE,
 };
 
+static struct cftype cft_memory_migrate = {
+	.name = "memory_migrate",
+	.private = FILE_MEMORY_MIGRATE,
+};
+
+static struct cftype cft_memory_pressure_enabled = {
+	.name = "memory_pressure_enabled",
+	.private = FILE_MEMORY_PRESSURE_ENABLED,
+};
+
+static struct cftype cft_memory_pressure = {
+	.name = "memory_pressure",
+	.private = FILE_MEMORY_PRESSURE,
+};
+
+static struct cftype cft_spread_page = {
+	.name = "memory_spread_page",
+	.private = FILE_SPREAD_PAGE,
+};
+
+static struct cftype cft_spread_slab = {
+	.name = "memory_spread_slab",
+	.private = FILE_SPREAD_SLAB,
+};
+
 static int cpuset_populate_dir(struct dentry *cs_dentry)
 {
 	int err;
@@ -1423,6 +1827,14 @@ static int cpuset_populate_dir(struct dentry *cs_dentry)
 		return err;
 	if ((err = cpuset_add_file(cs_dentry, &cft_notify_on_release)) < 0)
 		return err;
+	if ((err = cpuset_add_file(cs_dentry, &cft_memory_migrate)) < 0)
+		return err;
+	if ((err = cpuset_add_file(cs_dentry, &cft_memory_pressure)) < 0)
+		return err;
+	if ((err = cpuset_add_file(cs_dentry, &cft_spread_page)) < 0)
+		return err;
+	if ((err = cpuset_add_file(cs_dentry, &cft_spread_slab)) < 0)
+		return err;
 	if ((err = cpuset_add_file(cs_dentry, &cft_tasks)) < 0)
 		return err;
 	return 0;
@@ -1434,7 +1846,7 @@ static int cpuset_populate_dir(struct dentry *cs_dentry)
  *	name:		name of the new cpuset. Will be strcpy'ed.
  *	mode:		mode to set on new inode
  *
- *	Must be called with the semaphore on the parent inode held
+ *	Must be called with the mutex on the parent inode held
  */
 
 static long cpuset_create(struct cpuset *parent, const char *name, int mode)
@@ -1446,42 +1858,47 @@ static long cpuset_create(struct cpuset *parent, const char *name, int mode)
 	if (!cs)
 		return -ENOMEM;
 
-	down(&manage_sem);
-	refresh_mems();
+	mutex_lock(&manage_mutex);
+	cpuset_update_task_memory_state();
 	cs->flags = 0;
 	if (notify_on_release(parent))
 		set_bit(CS_NOTIFY_ON_RELEASE, &cs->flags);
+	if (is_spread_page(parent))
+		set_bit(CS_SPREAD_PAGE, &cs->flags);
+	if (is_spread_slab(parent))
+		set_bit(CS_SPREAD_SLAB, &cs->flags);
 	cs->cpus_allowed = CPU_MASK_NONE;
 	cs->mems_allowed = NODE_MASK_NONE;
 	atomic_set(&cs->count, 0);
 	INIT_LIST_HEAD(&cs->sibling);
 	INIT_LIST_HEAD(&cs->children);
-	atomic_inc(&cpuset_mems_generation);
-	cs->mems_generation = atomic_read(&cpuset_mems_generation);
+	cs->mems_generation = cpuset_mems_generation++;
+	fmeter_init(&cs->fmeter);
 
 	cs->parent = parent;
 
-	down(&callback_sem);
+	mutex_lock(&callback_mutex);
 	list_add(&cs->sibling, &cs->parent->children);
-	up(&callback_sem);
+	number_of_cpusets++;
+	mutex_unlock(&callback_mutex);
 
 	err = cpuset_create_dir(cs, name, mode);
 	if (err < 0)
 		goto err;
 
 	/*
-	 * Release manage_sem before cpuset_populate_dir() because it
-	 * will down() this new directory's i_sem and if we race with
+	 * Release manage_mutex before cpuset_populate_dir() because it
+	 * will down() this new directory's i_mutex and if we race with
 	 * another mkdir, we might deadlock.
 	 */
-	up(&manage_sem);
+	mutex_unlock(&manage_mutex);
 
 	err = cpuset_populate_dir(cs->dentry);
 	/* If err < 0, we have a half-filled directory - oh well ;) */
 	return 0;
 err:
 	list_del(&cs->sibling);
-	up(&manage_sem);
+	mutex_unlock(&manage_mutex);
 	kfree(cs);
 	return err;
 }
@@ -1490,7 +1907,7 @@ static int cpuset_mkdir(struct inode *dir, struct dentry *dentry, int mode)
 {
 	struct cpuset *c_parent = dentry->d_parent->d_fsdata;
 
-	/* the vfs holds inode->i_sem already */
+	/* the vfs holds inode->i_mutex already */
 	return cpuset_create(c_parent, dentry->d_name.name, mode | S_IFDIR);
 }
 
@@ -1501,20 +1918,20 @@ static int cpuset_rmdir(struct inode *unused_dir, struct dentry *dentry)
 	struct cpuset *parent;
 	char *pathbuf = NULL;
 
-	/* the vfs holds both inode->i_sem already */
+	/* the vfs holds both inode->i_mutex already */
 
-	down(&manage_sem);
-	refresh_mems();
+	mutex_lock(&manage_mutex);
+	cpuset_update_task_memory_state();
 	if (atomic_read(&cs->count) > 0) {
-		up(&manage_sem);
+		mutex_unlock(&manage_mutex);
 		return -EBUSY;
 	}
 	if (!list_empty(&cs->children)) {
-		up(&manage_sem);
+		mutex_unlock(&manage_mutex);
 		return -EBUSY;
 	}
 	parent = cs->parent;
-	down(&callback_sem);
+	mutex_lock(&callback_mutex);
 	set_bit(CS_REMOVED, &cs->flags);
 	if (is_cpu_exclusive(cs))
 		update_cpu_domains(cs);
@@ -1525,11 +1942,27 @@ static int cpuset_rmdir(struct inode *unused_dir, struct dentry *dentry)
 	spin_unlock(&d->d_lock);
 	cpuset_d_remove_dir(d);
 	dput(d);
-	up(&callback_sem);
+	number_of_cpusets--;
+	mutex_unlock(&callback_mutex);
 	if (list_empty(&parent->children))
 		check_for_release(parent, &pathbuf);
-	up(&manage_sem);
+	mutex_unlock(&manage_mutex);
 	cpuset_release_agent(pathbuf);
+	return 0;
+}
+
+/*
+ * cpuset_init_early - just enough so that the calls to
+ * cpuset_update_task_memory_state() in early init code
+ * are harmless.
+ */
+
+int __init cpuset_init_early(void)
+{
+	struct task_struct *tsk = current;
+
+	tsk->cpuset = &top_cpuset;
+	tsk->cpuset->mems_generation = cpuset_mems_generation++;
 	return 0;
 }
 
@@ -1547,8 +1980,8 @@ int __init cpuset_init(void)
 	top_cpuset.cpus_allowed = CPU_MASK_ALL;
 	top_cpuset.mems_allowed = NODE_MASK_ALL;
 
-	atomic_inc(&cpuset_mems_generation);
-	top_cpuset.mems_generation = atomic_read(&cpuset_mems_generation);
+	fmeter_init(&top_cpuset.fmeter);
+	top_cpuset.mems_generation = cpuset_mems_generation++;
 
 	init_task.cpuset = &top_cpuset;
 
@@ -1567,7 +2000,11 @@ int __init cpuset_init(void)
 	root->d_inode->i_nlink++;
 	top_cpuset.dentry = root;
 	root->d_inode->i_op = &cpuset_dir_inode_operations;
+	number_of_cpusets = 1;
 	err = cpuset_populate_dir(root);
+	/* memory_pressure_enabled is in root cpuset only */
+	if (err == 0)
+		err = cpuset_add_file(root, &cft_memory_pressure_enabled);
 out:
 	return err;
 }
@@ -1617,41 +2054,72 @@ void cpuset_fork(struct task_struct *child)
  * Description: Detach cpuset from @tsk and release it.
  *
  * Note that cpusets marked notify_on_release force every task in
- * them to take the global manage_sem semaphore when exiting.
+ * them to take the global manage_mutex mutex when exiting.
  * This could impact scaling on very large systems.  Be reluctant to
  * use notify_on_release cpusets where very high task exit scaling
  * is required on large systems.
  *
  * Don't even think about derefencing 'cs' after the cpuset use count
- * goes to zero, except inside a critical section guarded by manage_sem
- * or callback_sem.   Otherwise a zero cpuset use count is a license to
+ * goes to zero, except inside a critical section guarded by manage_mutex
+ * or callback_mutex.   Otherwise a zero cpuset use count is a license to
  * any other task to nuke the cpuset immediately, via cpuset_rmdir().
  *
- * This routine has to take manage_sem, not callback_sem, because
- * it is holding that semaphore while calling check_for_release(),
- * which calls kmalloc(), so can't be called holding callback__sem().
+ * This routine has to take manage_mutex, not callback_mutex, because
+ * it is holding that mutex while calling check_for_release(),
+ * which calls kmalloc(), so can't be called holding callback_mutex().
  *
  * We don't need to task_lock() this reference to tsk->cpuset,
  * because tsk is already marked PF_EXITING, so attach_task() won't
- * mess with it.
+ * mess with it, or task is a failed fork, never visible to attach_task.
+ *
+ * the_top_cpuset_hack:
+ *
+ *    Set the exiting tasks cpuset to the root cpuset (top_cpuset).
+ *
+ *    Don't leave a task unable to allocate memory, as that is an
+ *    accident waiting to happen should someone add a callout in
+ *    do_exit() after the cpuset_exit() call that might allocate.
+ *    If a task tries to allocate memory with an invalid cpuset,
+ *    it will oops in cpuset_update_task_memory_state().
+ *
+ *    We call cpuset_exit() while the task is still competent to
+ *    handle notify_on_release(), then leave the task attached to
+ *    the root cpuset (top_cpuset) for the remainder of its exit.
+ *
+ *    To do this properly, we would increment the reference count on
+ *    top_cpuset, and near the very end of the kernel/exit.c do_exit()
+ *    code we would add a second cpuset function call, to drop that
+ *    reference.  This would just create an unnecessary hot spot on
+ *    the top_cpuset reference count, to no avail.
+ *
+ *    Normally, holding a reference to a cpuset without bumping its
+ *    count is unsafe.   The cpuset could go away, or someone could
+ *    attach us to a different cpuset, decrementing the count on
+ *    the first cpuset that we never incremented.  But in this case,
+ *    top_cpuset isn't going away, and either task has PF_EXITING set,
+ *    which wards off any attach_task() attempts, or task is a failed
+ *    fork, never visible to attach_task.
+ *
+ *    Another way to do this would be to set the cpuset pointer
+ *    to NULL here, and check in cpuset_update_task_memory_state()
+ *    for a NULL pointer.  This hack avoids that NULL check, for no
+ *    cost (other than this way too long comment ;).
  **/
 
 void cpuset_exit(struct task_struct *tsk)
 {
 	struct cpuset *cs;
 
-	BUG_ON(!(tsk->flags & PF_EXITING));
-
 	cs = tsk->cpuset;
-	tsk->cpuset = NULL;
+	tsk->cpuset = &top_cpuset;	/* the_top_cpuset_hack - see above */
 
 	if (notify_on_release(cs)) {
 		char *pathbuf = NULL;
 
-		down(&manage_sem);
+		mutex_lock(&manage_mutex);
 		if (atomic_dec_and_test(&cs->count))
 			check_for_release(cs, &pathbuf);
-		up(&manage_sem);
+		mutex_unlock(&manage_mutex);
 		cpuset_release_agent(pathbuf);
 	} else {
 		atomic_dec(&cs->count);
@@ -1668,15 +2136,15 @@ void cpuset_exit(struct task_struct *tsk)
  * tasks cpuset.
  **/
 
-cpumask_t cpuset_cpus_allowed(const struct task_struct *tsk)
+cpumask_t cpuset_cpus_allowed(struct task_struct *tsk)
 {
 	cpumask_t mask;
 
-	down(&callback_sem);
-	task_lock((struct task_struct *)tsk);
+	mutex_lock(&callback_mutex);
+	task_lock(tsk);
 	guarantee_online_cpus(tsk->cpuset, &mask);
-	task_unlock((struct task_struct *)tsk);
-	up(&callback_sem);
+	task_unlock(tsk);
+	mutex_unlock(&callback_mutex);
 
 	return mask;
 }
@@ -1687,43 +2155,26 @@ void cpuset_init_current_mems_allowed(void)
 }
 
 /**
- * cpuset_update_current_mems_allowed - update mems parameters to new values
+ * cpuset_mems_allowed - return mems_allowed mask from a tasks cpuset.
+ * @tsk: pointer to task_struct from which to obtain cpuset->mems_allowed.
  *
- * If the current tasks cpusets mems_allowed changed behind our backs,
- * update current->mems_allowed and mems_generation to the new value.
- * Do not call this routine if in_interrupt().
- *
- * Call without callback_sem or task_lock() held.  May be called
- * with or without manage_sem held.  Unless exiting, it will acquire
- * task_lock().  Also might acquire callback_sem during call to
- * refresh_mems().
- */
+ * Description: Returns the nodemask_t mems_allowed of the cpuset
+ * attached to the specified @tsk.  Guaranteed to return some non-empty
+ * subset of node_online_map, even if this means going outside the
+ * tasks cpuset.
+ **/
 
-void cpuset_update_current_mems_allowed(void)
+nodemask_t cpuset_mems_allowed(struct task_struct *tsk)
 {
-	struct cpuset *cs;
-	int need_to_refresh = 0;
+	nodemask_t mask;
 
-	task_lock(current);
-	cs = current->cpuset;
-	if (!cs)
-		goto done;
-	if (current->cpuset_mems_generation != cs->mems_generation)
-		need_to_refresh = 1;
-done:
-	task_unlock(current);
-	if (need_to_refresh)
-		refresh_mems();
-}
+	mutex_lock(&callback_mutex);
+	task_lock(tsk);
+	guarantee_online_mems(tsk->cpuset, &mask);
+	task_unlock(tsk);
+	mutex_unlock(&callback_mutex);
 
-/**
- * cpuset_restrict_to_mems_allowed - limit nodes to current mems_allowed
- * @nodes: pointer to a node bitmap that is and-ed with mems_allowed
- */
-void cpuset_restrict_to_mems_allowed(unsigned long *nodes)
-{
-	bitmap_and(nodes, nodes, nodes_addr(current->mems_allowed),
-							MAX_NUMNODES);
+	return mask;
 }
 
 /**
@@ -1747,7 +2198,7 @@ int cpuset_zonelist_valid_mems_allowed(struct zonelist *zl)
 
 /*
  * nearest_exclusive_ancestor() - Returns the nearest mem_exclusive
- * ancestor to the specified cpuset.  Call holding callback_sem.
+ * ancestor to the specified cpuset.  Call holding callback_mutex.
  * If no ancestor is mem_exclusive (an unusual configuration), then
  * returns the root cpuset.
  */
@@ -1774,12 +2225,12 @@ static const struct cpuset *nearest_exclusive_ancestor(const struct cpuset *cs)
  * GFP_KERNEL allocations are not so marked, so can escape to the
  * nearest mem_exclusive ancestor cpuset.
  *
- * Scanning up parent cpusets requires callback_sem.  The __alloc_pages()
+ * Scanning up parent cpusets requires callback_mutex.  The __alloc_pages()
  * routine only calls here with __GFP_HARDWALL bit _not_ set if
  * it's a GFP_KERNEL allocation, and all nodes in the current tasks
  * mems_allowed came up empty on the first pass over the zonelist.
  * So only GFP_KERNEL allocations, if all nodes in the cpuset are
- * short of memory, might require taking the callback_sem semaphore.
+ * short of memory, might require taking the callback_mutex mutex.
  *
  * The first loop over the zonelist in mm/page_alloc.c:__alloc_pages()
  * calls here with __GFP_HARDWALL always set in gfp_mask, enforcing
@@ -1796,11 +2247,11 @@ static const struct cpuset *nearest_exclusive_ancestor(const struct cpuset *cs)
  *	GFP_USER     - only nodes in current tasks mems allowed ok.
  **/
 
-int cpuset_zone_allowed(struct zone *z, gfp_t gfp_mask)
+int __cpuset_zone_allowed(struct zone *z, gfp_t gfp_mask)
 {
 	int node;			/* node that zone z is on */
 	const struct cpuset *cs;	/* current cpuset ancestors */
-	int allowed = 1;		/* is allocation in zone z allowed? */
+	int allowed;			/* is allocation in zone z allowed? */
 
 	if (in_interrupt())
 		return 1;
@@ -1814,16 +2265,81 @@ int cpuset_zone_allowed(struct zone *z, gfp_t gfp_mask)
 		return 1;
 
 	/* Not hardwall and node outside mems_allowed: scan up cpusets */
-	down(&callback_sem);
+	mutex_lock(&callback_mutex);
 
 	task_lock(current);
 	cs = nearest_exclusive_ancestor(current->cpuset);
 	task_unlock(current);
 
 	allowed = node_isset(node, cs->mems_allowed);
-	up(&callback_sem);
+	mutex_unlock(&callback_mutex);
 	return allowed;
 }
+
+/**
+ * cpuset_lock - lock out any changes to cpuset structures
+ *
+ * The out of memory (oom) code needs to mutex_lock cpusets
+ * from being changed while it scans the tasklist looking for a
+ * task in an overlapping cpuset.  Expose callback_mutex via this
+ * cpuset_lock() routine, so the oom code can lock it, before
+ * locking the task list.  The tasklist_lock is a spinlock, so
+ * must be taken inside callback_mutex.
+ */
+
+void cpuset_lock(void)
+{
+	mutex_lock(&callback_mutex);
+}
+
+/**
+ * cpuset_unlock - release lock on cpuset changes
+ *
+ * Undo the lock taken in a previous cpuset_lock() call.
+ */
+
+void cpuset_unlock(void)
+{
+	mutex_unlock(&callback_mutex);
+}
+
+/**
+ * cpuset_mem_spread_node() - On which node to begin search for a page
+ *
+ * If a task is marked PF_SPREAD_PAGE or PF_SPREAD_SLAB (as for
+ * tasks in a cpuset with is_spread_page or is_spread_slab set),
+ * and if the memory allocation used cpuset_mem_spread_node()
+ * to determine on which node to start looking, as it will for
+ * certain page cache or slab cache pages such as used for file
+ * system buffers and inode caches, then instead of starting on the
+ * local node to look for a free page, rather spread the starting
+ * node around the tasks mems_allowed nodes.
+ *
+ * We don't have to worry about the returned node being offline
+ * because "it can't happen", and even if it did, it would be ok.
+ *
+ * The routines calling guarantee_online_mems() are careful to
+ * only set nodes in task->mems_allowed that are online.  So it
+ * should not be possible for the following code to return an
+ * offline node.  But if it did, that would be ok, as this routine
+ * is not returning the node where the allocation must be, only
+ * the node where the search should start.  The zonelist passed to
+ * __alloc_pages() will include all nodes.  If the slab allocator
+ * is passed an offline node, it will fall back to the local node.
+ * See kmem_cache_alloc_node().
+ */
+
+int cpuset_mem_spread_node(void)
+{
+	int node;
+
+	node = next_node(current->cpuset_mem_spread_rotor, current->mems_allowed);
+	if (node == MAX_NUMNODES)
+		node = first_node(current->mems_allowed);
+	current->cpuset_mem_spread_rotor = node;
+	return node;
+}
+EXPORT_SYMBOL_GPL(cpuset_mem_spread_node);
 
 /**
  * cpuset_excl_nodes_overlap - Do we overlap @p's mem_exclusive ancestors?
@@ -1834,15 +2350,13 @@ int cpuset_zone_allowed(struct zone *z, gfp_t gfp_mask)
  * determine if task @p's memory usage might impact the memory
  * available to the current task.
  *
- * Acquires callback_sem - not suitable for calling from a fast path.
+ * Call while holding callback_mutex.
  **/
 
 int cpuset_excl_nodes_overlap(const struct task_struct *p)
 {
 	const struct cpuset *cs1, *cs2;	/* my and p's cpuset ancestors */
 	int overlap = 0;		/* do cpusets overlap? */
-
-	down(&callback_sem);
 
 	task_lock(current);
 	if (current->flags & PF_EXITING) {
@@ -1862,9 +2376,43 @@ int cpuset_excl_nodes_overlap(const struct task_struct *p)
 
 	overlap = nodes_intersects(cs1->mems_allowed, cs2->mems_allowed);
 done:
-	up(&callback_sem);
-
 	return overlap;
+}
+
+/*
+ * Collection of memory_pressure is suppressed unless
+ * this flag is enabled by writing "1" to the special
+ * cpuset file 'memory_pressure_enabled' in the root cpuset.
+ */
+
+int cpuset_memory_pressure_enabled __read_mostly;
+
+/**
+ * cpuset_memory_pressure_bump - keep stats of per-cpuset reclaims.
+ *
+ * Keep a running average of the rate of synchronous (direct)
+ * page reclaim efforts initiated by tasks in each cpuset.
+ *
+ * This represents the rate at which some task in the cpuset
+ * ran low on memory on all nodes it was allowed to use, and
+ * had to enter the kernels page reclaim code in an effort to
+ * create more free memory by tossing clean pages or swapping
+ * or writing dirty pages.
+ *
+ * Display to user space in the per-cpuset read-only file
+ * "memory_pressure".  Value displayed is an integer
+ * representing the recent rate of entry into the synchronous
+ * (direct) page reclaim by any task attached to the cpuset.
+ **/
+
+void __cpuset_memory_pressure_bump(void)
+{
+	struct cpuset *cs;
+
+	task_lock(current);
+	cs = current->cpuset;
+	fmeter_markevent(&cs->fmeter);
+	task_unlock(current);
 }
 
 /*
@@ -1873,13 +2421,13 @@ done:
  *  - Used for /proc/<pid>/cpuset.
  *  - No need to task_lock(tsk) on this tsk->cpuset reference, as it
  *    doesn't really matter if tsk->cpuset changes after we read it,
- *    and we take manage_sem, keeping attach_task() from changing it
- *    anyway.
+ *    and we take manage_mutex, keeping attach_task() from changing it
+ *    anyway.  No need to check that tsk->cpuset != NULL, thanks to
+ *    the_top_cpuset_hack in cpuset_exit(), which sets an exiting tasks
+ *    cpuset to top_cpuset.
  */
-
 static int proc_cpuset_show(struct seq_file *m, void *v)
 {
-	struct cpuset *cs;
 	struct task_struct *tsk;
 	char *buf;
 	int retval = 0;
@@ -1889,20 +2437,14 @@ static int proc_cpuset_show(struct seq_file *m, void *v)
 		return -ENOMEM;
 
 	tsk = m->private;
-	down(&manage_sem);
-	cs = tsk->cpuset;
-	if (!cs) {
-		retval = -EINVAL;
-		goto out;
-	}
-
-	retval = cpuset_path(cs, buf, PAGE_SIZE);
+	mutex_lock(&manage_mutex);
+	retval = cpuset_path(tsk->cpuset, buf, PAGE_SIZE);
 	if (retval < 0)
 		goto out;
 	seq_puts(m, buf);
 	seq_putc(m, '\n');
 out:
-	up(&manage_sem);
+	mutex_unlock(&manage_mutex);
 	kfree(buf);
 	return retval;
 }

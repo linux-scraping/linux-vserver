@@ -31,7 +31,7 @@ The following people helped with review comments and inputs for this
 document:
 	Christoph Hellwig <hch@infradead.org>
 	Arjan van de Ven <arjanv@redhat.com>
-	Randy Dunlap <rddunlap@osdl.org>
+	Randy Dunlap <rdunlap@xenotime.net>
 	Andre Hedrick <andre@linux-ide.org>
 
 The following people helped with fixes/contributions to the bio patches
@@ -132,8 +132,18 @@ Some new queue property settings:
 		limit. No highmem default.
 
 	blk_queue_max_sectors(q, max_sectors)
-		Maximum size request you can handle in units of 512 byte
-		sectors. 255 default.
+		Sets two variables that limit the size of the request.
+
+		- The request queue's max_sectors, which is a soft size in
+		in units of 512 byte sectors, and could be dynamically varied
+		by the core kernel.
+
+		- The request queue's max_hw_sectors, which is a hard limit
+		and reflects the maximum size request a driver can handle
+		in units of 512 byte sectors.
+
+		The default for both max_sectors and max_hw_sectors is
+		255. The upper limit of max_sectors is 1024.
 
 	blk_queue_max_phys_segments(q, max_segments)
 		Maximum physical segments you can handle in a request. 128
@@ -263,14 +273,8 @@ A flag in the bio structure, BIO_BARRIER is used to identify a barrier i/o.
 The generic i/o scheduler would make sure that it places the barrier request and
 all other requests coming after it after all the previous requests in the
 queue. Barriers may be implemented in different ways depending on the
-driver. A SCSI driver for example could make use of ordered tags to
-preserve the necessary ordering with a lower impact on throughput. For IDE
-this might be two sync cache flush: a pre and post flush when encountering
-a barrier write.
-
-There is a provision for queues to indicate what kind of barriers they
-can provide. This is as of yet unmerged, details will be added here once it
-is in the kernel.
+driver. For more details regarding I/O barriers, please read barrier.txt
+in this directory.
 
 1.2.2 Request Priority/Latency
 

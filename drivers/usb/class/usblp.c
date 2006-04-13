@@ -3,10 +3,11 @@
  *
  * Copyright (c) 1999 Michael Gee	<michael@linuxspecific.com>
  * Copyright (c) 1999 Pavel Machek	<pavel@suse.cz>
- * Copyright (c) 2000 Randy Dunlap	<rddunlap@osdl.org>
+ * Copyright (c) 2000 Randy Dunlap	<rdunlap@xenotime.net>
  * Copyright (c) 2000 Vojtech Pavlik	<vojtech@suse.cz>
  # Copyright (c) 2001 Pete Zaitcev	<zaitcev@redhat.com>
  # Copyright (c) 2001 David Paschal	<paschal@rcsis.com>
+ * Copyright (c) 2006 Oliver Neukum	<oliver@neukum.name>
  *
  * USB Printer Device Class driver for USB printers and printer cables
  *
@@ -54,6 +55,7 @@
 #include <linux/init.h>
 #include <linux/slab.h>
 #include <linux/lp.h>
+#include <linux/mutex.h>
 #undef DEBUG
 #include <linux/usb.h>
 
@@ -199,7 +201,7 @@ struct quirk_printer_struct {
 #define USBLP_QUIRK_BIDIR	0x1	/* reports bidir but requires unidirectional mode (no INs/reads) */
 #define USBLP_QUIRK_USB_INIT	0x2	/* needs vendor USB init string */
 
-static struct quirk_printer_struct quirk_printers[] = {
+static const struct quirk_printer_struct quirk_printers[] = {
 	{ 0x03f0, 0x0004, USBLP_QUIRK_BIDIR }, /* HP DeskJet 895C */
 	{ 0x03f0, 0x0104, USBLP_QUIRK_BIDIR }, /* HP DeskJet 880C */
 	{ 0x03f0, 0x0204, USBLP_QUIRK_BIDIR }, /* HP DeskJet 815C */
@@ -222,7 +224,7 @@ static int usblp_cache_device_id_string(struct usblp *usblp);
 
 /* forward reference to make our lives easier */
 static struct usb_driver usblp_driver;
-static DECLARE_MUTEX(usblp_sem);	/* locks the existence of usblp's */
+static DEFINE_MUTEX(usblp_mutex);	/* locks the existence of usblp's */
 
 /*
  * Functions for usblp control messages.
@@ -273,13 +275,16 @@ static void usblp_bulk_read(struct urb *urb, struct pt_regs *regs)
 {
 	struct usblp *usblp = urb->context;
 
-	if (!usblp || !usblp->dev || !usblp->used || !usblp->present)
+	if (unlikely(!usblp || !usblp->dev || !usblp->used))
 		return;
 
+	if (unlikely(!usblp->present))
+		goto unplug;
 	if (unlikely(urb->status))
 		warn("usblp%d: nonzero read/write bulk status received: %d",
 			usblp->minor, urb->status);
 	usblp->rcomplete = 1;
+unplug:
 	wake_up_interruptible(&usblp->wait);
 }
 
@@ -287,13 +292,15 @@ static void usblp_bulk_write(struct urb *urb, struct pt_regs *regs)
 {
 	struct usblp *usblp = urb->context;
 
-	if (!usblp || !usblp->dev || !usblp->used || !usblp->present)
+	if (unlikely(!usblp || !usblp->dev || !usblp->used))
 		return;
-
+	if (unlikely(!usblp->present))
+		goto unplug;
 	if (unlikely(urb->status))
 		warn("usblp%d: nonzero read/write bulk status received: %d",
 			usblp->minor, urb->status);
 	usblp->wcomplete = 1;
+unplug:
 	wake_up_interruptible(&usblp->wait);
 }
 
@@ -301,7 +308,7 @@ static void usblp_bulk_write(struct urb *urb, struct pt_regs *regs)
  * Get and print printer errors.
  */
 
-static char *usblp_messages[] = { "ok", "out of paper", "off-line", "on fire" };
+static const char *usblp_messages[] = { "ok", "out of paper", "off-line", "on fire" };
 
 static int usblp_check_status(struct usblp *usblp, int err)
 {
@@ -345,7 +352,7 @@ static int usblp_open(struct inode *inode, struct file *file)
 	if (minor < 0)
 		return -ENODEV;
 
-	down (&usblp_sem);
+	mutex_lock (&usblp_mutex);
 
 	retval = -ENODEV;
 	intf = usb_find_interface(&usblp_driver, minor);
@@ -393,7 +400,7 @@ static int usblp_open(struct inode *inode, struct file *file)
 		}
 	}
 out:
-	up (&usblp_sem);
+	mutex_unlock (&usblp_mutex);
 	return retval;
 }
 
@@ -419,13 +426,13 @@ static int usblp_release(struct inode *inode, struct file *file)
 {
 	struct usblp *usblp = file->private_data;
 
-	down (&usblp_sem);
+	mutex_lock (&usblp_mutex);
 	usblp->used = 0;
 	if (usblp->present) {
 		usblp_unlink_urbs(usblp);
 	} else 		/* finish cleanup from disconnect */
 		usblp_cleanup (usblp);
-	up (&usblp_sem);
+	mutex_unlock (&usblp_mutex);
 	return 0;
 }
 
@@ -438,7 +445,7 @@ static unsigned int usblp_poll(struct file *file, struct poll_table_struct *wait
  			       | (!usblp->wcomplete ? 0 : POLLOUT | POLLWRNORM);
 }
 
-static int usblp_ioctl(struct inode *inode, struct file *file, unsigned int cmd, unsigned long arg)
+static long usblp_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
 	struct usblp *usblp = file->private_data;
 	int length, err, i;
@@ -627,9 +634,8 @@ done:
 
 static ssize_t usblp_write(struct file *file, const char __user *buffer, size_t count, loff_t *ppos)
 {
-	DECLARE_WAITQUEUE(wait, current);
 	struct usblp *usblp = file->private_data;
-	int timeout, err = 0, transfer_length = 0;
+	int timeout, rv, err = 0, transfer_length = 0;
 	size_t writecount = 0;
 
 	while (writecount < count) {
@@ -641,24 +647,11 @@ static ssize_t usblp_write(struct file *file, const char __user *buffer, size_t 
 			}
 
 			timeout = USBLP_WRITE_TIMEOUT;
-			add_wait_queue(&usblp->wait, &wait);
-			while ( 1==1 ) {
 
-				if (signal_pending(current)) {
-					remove_wait_queue(&usblp->wait, &wait);
-					return writecount ? writecount : -EINTR;
-				}
-				set_current_state(TASK_INTERRUPTIBLE);
-				if (timeout && !usblp->wcomplete) {
-					timeout = schedule_timeout(timeout);
-				} else {
-					set_current_state(TASK_RUNNING);
-					break;
-				}
-			}
-			remove_wait_queue(&usblp->wait, &wait);
+			rv = wait_event_interruptible_timeout(usblp->wait, usblp->wcomplete || !usblp->present , timeout);
+			if (rv < 0)
+				return writecount ? writecount : -EINTR;
 		}
-
 		down (&usblp->sem);
 		if (!usblp->present) {
 			up (&usblp->sem);
@@ -724,7 +717,7 @@ static ssize_t usblp_write(struct file *file, const char __user *buffer, size_t 
 static ssize_t usblp_read(struct file *file, char __user *buffer, size_t count, loff_t *ppos)
 {
 	struct usblp *usblp = file->private_data;
-	DECLARE_WAITQUEUE(wait, current);
+	int rv;
 
 	if (!usblp->bidir)
 		return -EINVAL;
@@ -742,26 +735,13 @@ static ssize_t usblp_read(struct file *file, char __user *buffer, size_t count, 
 			count = -EAGAIN;
 			goto done;
 		}
-
-		add_wait_queue(&usblp->wait, &wait);
-		while (1==1) {
-			if (signal_pending(current)) {
-				count = -EINTR;
-				remove_wait_queue(&usblp->wait, &wait);
-				goto done;
-			}
-			up (&usblp->sem);
-			set_current_state(TASK_INTERRUPTIBLE);
-			if (!usblp->rcomplete) {
-				schedule();
-			} else {
-				set_current_state(TASK_RUNNING);
-				down(&usblp->sem);
-				break;
-			}
-			down (&usblp->sem);
+		up(&usblp->sem);
+		rv = wait_event_interruptible(usblp->wait, usblp->rcomplete || !usblp->present);
+		down(&usblp->sem);
+		if (rv < 0) {
+			count = -EINTR;
+			goto done;
 		}
-		remove_wait_queue(&usblp->wait, &wait);
 	}
 
 	if (!usblp->present) {
@@ -838,7 +818,8 @@ static struct file_operations usblp_fops = {
 	.read =		usblp_read,
 	.write =	usblp_write,
 	.poll =		usblp_poll,
-	.ioctl =	usblp_ioctl,
+	.unlocked_ioctl =	usblp_ioctl,
+	.compat_ioctl =		usblp_ioctl,
 	.open =		usblp_open,
 	.release =	usblp_release,
 };
@@ -848,6 +829,20 @@ static struct usb_class_driver usblp_class = {
 	.fops =		&usblp_fops,
 	.minor_base =	USBLP_MINOR_BASE,
 };
+
+static ssize_t usblp_show_ieee1284_id(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	struct usb_interface *intf = to_usb_interface(dev);
+	struct usblp *usblp = usb_get_intfdata (intf);
+
+	if (usblp->device_id_string[0] == 0 &&
+	    usblp->device_id_string[1] == 0)
+		return 0;
+
+	return sprintf(buf, "%s", usblp->device_id_string+2);
+}
+
+static DEVICE_ATTR(ieee1284_id, S_IRUGO, usblp_show_ieee1284_id, NULL);
 
 static int usblp_probe(struct usb_interface *intf,
 		       const struct usb_device_id *id)
@@ -859,11 +854,10 @@ static int usblp_probe(struct usb_interface *intf,
 
 	/* Malloc and start initializing usblp structure so we can use it
 	 * directly. */
-	if (!(usblp = kmalloc(sizeof(struct usblp), GFP_KERNEL))) {
+	if (!(usblp = kzalloc(sizeof(struct usblp), GFP_KERNEL))) {
 		err("out of memory for usblp");
 		goto abort;
 	}
-	memset(usblp, 0, sizeof(struct usblp));
 	usblp->dev = dev;
 	init_MUTEX (&usblp->sem);
 	init_waitqueue_head(&usblp->wait);
@@ -933,19 +927,11 @@ static int usblp_probe(struct usb_interface *intf,
 
 	/* Retrieve and store the device ID string. */
 	usblp_cache_device_id_string(usblp);
+	device_create_file(&intf->dev, &dev_attr_ieee1284_id);
 
 #ifdef DEBUG
 	usblp_check_status(usblp, 0);
 #endif
-
-	info("usblp%d: USB %sdirectional printer dev %d "
-		"if %d alt %d proto %d vid 0x%4.4X pid 0x%4.4X",
-		usblp->minor, usblp->bidir ? "Bi" : "Uni", dev->devnum,
-		usblp->ifnum,
-		usblp->protocol[usblp->current_protocol].alt_setting,
-		usblp->current_protocol,
-		le16_to_cpu(usblp->dev->descriptor.idVendor),
-		le16_to_cpu(usblp->dev->descriptor.idProduct));
 
 	usb_set_intfdata (intf, usblp);
 
@@ -957,11 +943,20 @@ static int usblp_probe(struct usb_interface *intf,
 		goto abort_intfdata;
 	}
 	usblp->minor = intf->minor;
+	info("usblp%d: USB %sdirectional printer dev %d "
+		"if %d alt %d proto %d vid 0x%4.4X pid 0x%4.4X",
+		usblp->minor, usblp->bidir ? "Bi" : "Uni", dev->devnum,
+		usblp->ifnum,
+		usblp->protocol[usblp->current_protocol].alt_setting,
+		usblp->current_protocol,
+		le16_to_cpu(usblp->dev->descriptor.idVendor),
+		le16_to_cpu(usblp->dev->descriptor.idProduct));
 
 	return 0;
 
 abort_intfdata:
 	usb_set_intfdata (intf, NULL);
+	device_remove_file(&intf->dev, &dev_attr_ieee1284_id);
 abort:
 	if (usblp) {
 		if (usblp->writebuf)
@@ -1156,7 +1151,9 @@ static void usblp_disconnect(struct usb_interface *intf)
 		BUG ();
 	}
 
-	down (&usblp_sem);
+	device_remove_file(&intf->dev, &dev_attr_ieee1284_id);
+
+	mutex_lock (&usblp_mutex);
 	down (&usblp->sem);
 	usblp->present = 0;
 	usb_set_intfdata (intf, NULL);
@@ -1170,7 +1167,7 @@ static void usblp_disconnect(struct usb_interface *intf)
 
 	if (!usblp->used)
 		usblp_cleanup (usblp);
-	up (&usblp_sem);
+	mutex_unlock (&usblp_mutex);
 }
 
 static struct usb_device_id usblp_ids [] = {
@@ -1186,7 +1183,6 @@ static struct usb_device_id usblp_ids [] = {
 MODULE_DEVICE_TABLE (usb, usblp_ids);
 
 static struct usb_driver usblp_driver = {
-	.owner =	THIS_MODULE,
 	.name =		"usblp",
 	.probe =	usblp_probe,
 	.disconnect =	usblp_disconnect,
@@ -1197,10 +1193,9 @@ static int __init usblp_init(void)
 {
 	int retval;
 	retval = usb_register(&usblp_driver);
-	if (retval)
-		goto out;
-	info(DRIVER_VERSION ": " DRIVER_DESC);
-out:
+	if (!retval)
+		info(DRIVER_VERSION ": " DRIVER_DESC);
+
 	return retval;
 }
 

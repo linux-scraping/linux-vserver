@@ -309,17 +309,6 @@ static void lance_tx_timeout (struct net_device *dev);
 
 
 
-static void cleanup_card(struct net_device *dev)
-{
-	struct lance_private *lp = dev->priv;
-	if (dev->dma != 4)
-		free_dma(dev->dma);
-	release_region(dev->base_addr, LANCE_TOTAL_SIZE);
-	kfree(lp->tx_bounce_buffs);
-	kfree((void*)lp->rx_buffs);
-	kfree(lp);
-}
-
 #ifdef MODULE
 #define MAX_CARDS		8	/* Max number of interfaces (cards) per module */
 
@@ -365,6 +354,17 @@ int init_module(void)
 	if (found != 0)
 		return 0;
 	return -ENXIO;
+}
+
+static void cleanup_card(struct net_device *dev)
+{
+	struct lance_private *lp = dev->priv;
+	if (dev->dma != 4)
+		free_dma(dev->dma);
+	release_region(dev->base_addr, LANCE_TOTAL_SIZE);
+	kfree(lp->tx_bounce_buffs);
+	kfree((void*)lp->rx_buffs);
+	kfree(lp);
 }
 
 void cleanup_module(void)
@@ -464,20 +464,25 @@ static int __init lance_probe1(struct net_device *dev, int ioaddr, int irq, int 
 	static int did_version;			/* Already printed version info. */
 	unsigned long flags;
 	int err = -ENOMEM;
+	void __iomem *bios;
 
 	/* First we look for special cases.
 	   Check for HP's on-board ethernet by looking for 'HP' in the BIOS.
 	   There are two HP versions, check the BIOS for the configuration port.
 	   This method provided by L. Julliard, Laurent_Julliard@grenoble.hp.com.
 	   */
-	if (isa_readw(0x000f0102) == 0x5048)  {
+	bios = ioremap(0xf00f0, 0x14);
+	if (!bios)
+		return -ENOMEM;
+	if (readw(bios + 0x12) == 0x5048)  {
 		static const short ioaddr_table[] = { 0x300, 0x320, 0x340, 0x360};
-		int hp_port = (isa_readl(0x000f00f1) & 1)  ? 0x499 : 0x99;
+		int hp_port = (readl(bios + 1) & 1)  ? 0x499 : 0x99;
 		/* We can have boards other than the built-in!  Verify this is on-board. */
 		if ((inb(hp_port) & 0xc0) == 0x80
 			&& ioaddr_table[inb(hp_port) & 3] == ioaddr)
 			hp_builtin = hp_port;
 	}
+	iounmap(bios);
 	/* We also recognize the HP Vectra on-board here, but check below. */
 	hpJ2405A = (inb(ioaddr) == 0x08 && inb(ioaddr+1) == 0x00
 				&& inb(ioaddr+2) == 0x09);

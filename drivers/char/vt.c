@@ -2328,6 +2328,10 @@ int tioclinux(struct tty_struct *tty, unsigned long arg)
 		case TIOCL_SETVESABLANK:
 			set_vesa_blanking(p);
 			break;
+		case TIOCL_GETKMSGREDIRECT:
+			data = kmsg_redirect;
+			ret = __put_user(data, p);
+			break;
 		case TIOCL_SETKMSGREDIRECT:
 			if (!capable(CAP_SYS_ADMIN)) {
 				ret = -EPERM;
@@ -2489,7 +2493,7 @@ static int con_open(struct tty_struct *tty, struct file *filp)
 }
 
 /*
- * We take tty_sem in here to prevent another thread from coming in via init_dev
+ * We take tty_mutex in here to prevent another thread from coming in via init_dev
  * and taking a ref against the tty while we're in the process of forgetting
  * about it and cleaning things up.
  *
@@ -2497,7 +2501,7 @@ static int con_open(struct tty_struct *tty, struct file *filp)
  */
 static void con_close(struct tty_struct *tty, struct file *filp)
 {
-	down(&tty_sem);
+	mutex_lock(&tty_mutex);
 	acquire_console_sem();
 	if (tty && tty->count == 1) {
 		struct vc_data *vc = tty->driver_data;
@@ -2507,15 +2511,15 @@ static void con_close(struct tty_struct *tty, struct file *filp)
 		tty->driver_data = NULL;
 		release_console_sem();
 		vcs_remove_devfs(tty);
-		up(&tty_sem);
+		mutex_unlock(&tty_mutex);
 		/*
-		 * tty_sem is released, but we still hold BKL, so there is
+		 * tty_mutex is released, but we still hold BKL, so there is
 		 * still exclusion against init_dev()
 		 */
 		return;
 	}
 	release_console_sem();
-	up(&tty_sem);
+	mutex_unlock(&tty_mutex);
 }
 
 static void vc_init(struct vc_data *vc, unsigned int rows,
@@ -2758,29 +2762,6 @@ static void set_vesa_blanking(char __user *p)
     vesa_blank_mode = (mode < 4) ? mode : 0;
 }
 
-/*
- * This is called by a timer handler
- */
-static void vesa_powerdown(void)
-{
-    struct vc_data *c = vc_cons[fg_console].d;
-    /*
-     *  Power down if currently suspended (1 or 2),
-     *  suspend if currently blanked (0),
-     *  else do nothing (i.e. already powered down (3)).
-     *  Called only if powerdown features are allowed.
-     */
-    switch (vesa_blank_mode) {
-    case VESA_NO_BLANKING:
-	    c->vc_sw->con_blank(c, VESA_VSYNC_SUSPEND+1, 0);
-	    break;
-    case VESA_VSYNC_SUSPEND:
-    case VESA_HSYNC_SUSPEND:
-	    c->vc_sw->con_blank(c, VESA_POWERDOWN+1, 0);
-	    break;
-    }
-}
-
 void do_blank_screen(int entering_gfx)
 {
 	struct vc_data *vc = vc_cons[fg_console].d;
@@ -2791,8 +2772,7 @@ void do_blank_screen(int entering_gfx)
 	if (console_blanked) {
 		if (blank_state == blank_vesa_wait) {
 			blank_state = blank_off;
-			vesa_powerdown();
-
+			vc->vc_sw->con_blank(vc, vesa_blank_mode + 1, 0);
 		}
 		return;
 	}
@@ -2822,7 +2802,7 @@ void do_blank_screen(int entering_gfx)
 
 	save_screen(vc);
 	/* In case we need to reset origin, blanking hook returns 1 */
-	i = vc->vc_sw->con_blank(vc, 1, 0);
+	i = vc->vc_sw->con_blank(vc, vesa_off_interval ? 1 : (vesa_blank_mode + 1), 0);
 	console_blanked = fg_console + 1;
 	if (i)
 		set_origin(vc);
@@ -2830,13 +2810,10 @@ void do_blank_screen(int entering_gfx)
 	if (console_blank_hook && console_blank_hook(1))
 		return;
 
-	if (vesa_off_interval) {
+	if (vesa_off_interval && vesa_blank_mode) {
 		blank_state = blank_vesa_wait;
 		mod_timer(&console_timer, jiffies + vesa_off_interval);
 	}
-
-    	if (vesa_blank_mode)
-		vc->vc_sw->con_blank(vc, vesa_blank_mode + 1, 0);
 }
 EXPORT_SYMBOL(do_blank_screen);
 
@@ -2896,9 +2873,9 @@ void unblank_screen(void)
 }
 
 /*
- * We defer the timer blanking to work queue so it can take the console semaphore
+ * We defer the timer blanking to work queue so it can take the console mutex
  * (console operations can still happen at irq time, but only from printk which
- * has the console semaphore. Not perfect yet, but better than no locking
+ * has the console mutex. Not perfect yet, but better than no locking
  */
 static void blank_screen_t(unsigned long dummy)
 {
@@ -3240,6 +3217,7 @@ void getconsxy(struct vc_data *vc, unsigned char *p)
 
 void putconsxy(struct vc_data *vc, unsigned char *p)
 {
+	hide_cursor(vc);
 	gotoxy(vc, p[0], p[1]);
 	set_cursor(vc);
 }
@@ -3258,6 +3236,14 @@ void vcs_scr_writew(struct vc_data *vc, u16 val, u16 *org)
 		softcursor_original = -1;
 		add_softcursor(vc);
 	}
+}
+
+int is_console_suspend_safe(void)
+{
+	/* It is unsafe to suspend devices while X has control of the
+	 * hardware. Make sure we are running on a kernel-controlled console.
+	 */
+	return vc_cons[fg_console].d->vc_mode == KD_TEXT;
 }
 
 /*

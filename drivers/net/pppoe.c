@@ -85,7 +85,7 @@ static int pppoe_ioctl(struct socket *sock, unsigned int cmd, unsigned long arg)
 static int pppoe_xmit(struct ppp_channel *chan, struct sk_buff *skb);
 static int __pppoe_xmit(struct sock *sk, struct sk_buff *skb);
 
-static struct proto_ops pppoe_ops;
+static const struct proto_ops pppoe_ops;
 static DEFINE_RWLOCK(pppoe_hash_lock);
 
 static struct ppp_channel_ops pppoe_chan_ops;
@@ -337,8 +337,7 @@ static int pppoe_rcv_core(struct sock *sk, struct sk_buff *skb)
 	if (sk->sk_state & PPPOX_BOUND) {
 		struct pppoe_hdr *ph = (struct pppoe_hdr *) skb->nh.raw;
 		int len = ntohs(ph->length);
-		skb_pull(skb, sizeof(struct pppoe_hdr));
-		skb_postpull_rcsum(skb, ph, sizeof(*ph));
+		skb_pull_rcsum(skb, sizeof(struct pppoe_hdr));
 		if (pskb_trim_rcsum(skb, len))
 			goto abort_kfree;
 
@@ -383,8 +382,6 @@ static int pppoe_rcv(struct sk_buff *skb,
 {
 	struct pppoe_hdr *ph;
 	struct pppox_sock *po;
-	struct sock *sk;
-	int ret;
 
 	if (!pskb_may_pull(skb, sizeof(struct pppoe_hdr)))
 		goto drop;
@@ -395,24 +392,8 @@ static int pppoe_rcv(struct sk_buff *skb,
 	ph = (struct pppoe_hdr *) skb->nh.raw;
 
 	po = get_item((unsigned long) ph->sid, eth_hdr(skb)->h_source);
-	if (!po) 
-		goto drop;
-
-	sk = sk_pppox(po);
-	bh_lock_sock(sk);
-
-	/* Socket state is unknown, must put skb into backlog. */
-	if (sock_owned_by_user(sk) != 0) {
-		sk_add_backlog(sk, skb);
-		ret = NET_RX_SUCCESS;
-	} else {
-		ret = pppoe_rcv_core(sk, skb);
-	}
-
-	bh_unlock_sock(sk);
-	sock_put(sk);
-
-	return ret;
+	if (po != NULL) 
+		return sk_receive_skb(sk_pppox(po), skb);
 drop:
 	kfree_skb(skb);
 out:
@@ -1081,9 +1062,7 @@ static int __init pppoe_proc_init(void)
 static inline int pppoe_proc_init(void) { return 0; }
 #endif /* CONFIG_PROC_FS */
 
-/* ->ioctl are set at pppox_create */
-
-static struct proto_ops pppoe_ops = {
+static const struct proto_ops pppoe_ops = {
     .family		= AF_PPPOX,
     .owner		= THIS_MODULE,
     .release		= pppoe_release,
@@ -1099,7 +1078,8 @@ static struct proto_ops pppoe_ops = {
     .getsockopt		= sock_no_getsockopt,
     .sendmsg		= pppoe_sendmsg,
     .recvmsg		= pppoe_recvmsg,
-    .mmap		= sock_no_mmap
+    .mmap		= sock_no_mmap,
+    .ioctl		= pppox_ioctl,
 };
 
 static struct pppox_proto pppoe_proto = {

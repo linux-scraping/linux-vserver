@@ -26,6 +26,7 @@
 #include <linux/fcntl.h>
 #include <linux/mm.h>
 #include <linux/slab.h>
+#include <linux/capability.h>
 #include <linux/console.h>
 #include <linux/module.h>
 #include <linux/serial.h>
@@ -45,11 +46,6 @@
 #define KEYBOARD_INTR	3	/* must match with simulator! */
 
 #define NR_PORTS	1	/* only one port for now */
-#define SERIAL_INLINE	1
-
-#ifdef SERIAL_INLINE
-#define _INLINE_ inline
-#endif
 
 #define IRQ_T(info) ((info->flags & ASYNC_SHARE_IRQ) ? SA_SHIRQ : SA_INTERRUPT)
 
@@ -107,7 +103,6 @@ static struct async_struct *IRQ_ports[NR_IRQS];
 static struct console *console;
 
 static unsigned char *tmp_buf;
-static DECLARE_MUTEX(tmp_buf_sem);
 
 extern struct console *console_drivers; /* from kernel/printk.c */
 
@@ -166,15 +161,9 @@ static  void receive_chars(struct tty_struct *tty, struct pt_regs *regs)
 			}
 		}
 		seen_esc = 0;
-		if (tty->flip.count >= TTY_FLIPBUF_SIZE) break;
 
-		*tty->flip.char_buf_ptr = ch;
-
-		*tty->flip.flag_buf_ptr = 0;
-
-		tty->flip.flag_buf_ptr++;
-		tty->flip.char_buf_ptr++;
-		tty->flip.count++;
+		if (tty_insert_flip_char(tty, ch, TTY_NORMAL) == 0)
+			break;
 	}
 	tty_flip_buffer_push(tty);
 }
@@ -243,7 +232,7 @@ static void rs_put_char(struct tty_struct *tty, unsigned char ch)
 	local_irq_restore(flags);
 }
 
-static _INLINE_ void transmit_chars(struct async_struct *info, int *intr_done)
+static void transmit_chars(struct async_struct *info, int *intr_done)
 {
 	int count;
 	unsigned long flags;

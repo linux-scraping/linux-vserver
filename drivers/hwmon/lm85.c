@@ -31,6 +31,7 @@
 #include <linux/hwmon.h>
 #include <linux/hwmon-vid.h>
 #include <linux/err.h>
+#include <linux/mutex.h>
 
 /* Addresses to scan */
 static unsigned short normal_i2c[] = { 0x2c, 0x2d, 0x2e, I2C_CLIENT_END };
@@ -331,10 +332,10 @@ struct lm85_autofan {
 struct lm85_data {
 	struct i2c_client client;
 	struct class_device *class_dev;
-	struct semaphore lock;
+	struct mutex lock;
 	enum chips type;
 
-	struct semaphore update_lock;
+	struct mutex update_lock;
 	int valid;		/* !=0 if following fields are valid */
 	unsigned long last_reading;	/* In jiffies */
 	unsigned long last_config;	/* In jiffies */
@@ -373,17 +374,17 @@ static int lm85_detect(struct i2c_adapter *adapter, int address,
 			int kind);
 static int lm85_detach_client(struct i2c_client *client);
 
-static int lm85_read_value(struct i2c_client *client, u8 register);
-static int lm85_write_value(struct i2c_client *client, u8 register, int value);
+static int lm85_read_value(struct i2c_client *client, u8 reg);
+static int lm85_write_value(struct i2c_client *client, u8 reg, int value);
 static struct lm85_data *lm85_update_device(struct device *dev);
 static void lm85_init_client(struct i2c_client *client);
 
 
 static struct i2c_driver lm85_driver = {
-	.owner          = THIS_MODULE,
-	.name           = "lm85",
+	.driver = {
+		.name   = "lm85",
+	},
 	.id             = I2C_DRIVERID_LM85,
-	.flags          = I2C_DF_NOTIFY,
 	.attach_adapter = lm85_attach_adapter,
 	.detach_client  = lm85_detach_client,
 };
@@ -407,10 +408,10 @@ static ssize_t set_fan_min(struct device *dev, const char *buf,
 	struct lm85_data *data = i2c_get_clientdata(client);
 	long val = simple_strtol(buf, NULL, 10);
 
-	down(&data->update_lock);
+	mutex_lock(&data->update_lock);
 	data->fan_min[nr] = FAN_TO_REG(val);
 	lm85_write_value(client, LM85_REG_FAN_MIN(nr), data->fan_min[nr]);
-	up(&data->update_lock);
+	mutex_unlock(&data->update_lock);
 	return count;
 }
 
@@ -443,7 +444,17 @@ show_fan_offset(4);
 static ssize_t show_vid_reg(struct device *dev, struct device_attribute *attr, char *buf)
 {
 	struct lm85_data *data = lm85_update_device(dev);
-	return sprintf(buf, "%ld\n", (long) vid_from_reg(data->vid, data->vrm));
+	int vid;
+
+	if (data->type == adt7463 && (data->vid & 0x80)) {
+		/* 6-pin VID (VRM 10) */
+		vid = vid_from_reg(data->vid & 0x3f, data->vrm);
+	} else {
+		/* 5-pin VID (VRM 9) */
+		vid = vid_from_reg(data->vid & 0x1f, data->vrm);
+	}
+
+	return sprintf(buf, "%d\n", vid);
 }
 
 static DEVICE_ATTR(cpu0_vid, S_IRUGO, show_vid_reg, NULL);
@@ -489,10 +500,10 @@ static ssize_t set_pwm(struct device *dev, const char *buf,
 	struct lm85_data *data = i2c_get_clientdata(client);
 	long val = simple_strtol(buf, NULL, 10);
 
-	down(&data->update_lock);
+	mutex_lock(&data->update_lock);
 	data->pwm[nr] = PWM_TO_REG(val);
 	lm85_write_value(client, LM85_REG_PWM(nr), data->pwm[nr]);
-	up(&data->update_lock);
+	mutex_unlock(&data->update_lock);
 	return count;
 }
 static ssize_t show_pwm_enable(struct device *dev, char *buf, int nr)
@@ -549,10 +560,10 @@ static ssize_t set_in_min(struct device *dev, const char *buf,
 	struct lm85_data *data = i2c_get_clientdata(client);
 	long val = simple_strtol(buf, NULL, 10);
 
-	down(&data->update_lock);
+	mutex_lock(&data->update_lock);
 	data->in_min[nr] = INS_TO_REG(nr, val);
 	lm85_write_value(client, LM85_REG_IN_MIN(nr), data->in_min[nr]);
-	up(&data->update_lock);
+	mutex_unlock(&data->update_lock);
 	return count;
 }
 static ssize_t show_in_max(struct device *dev, char *buf, int nr)
@@ -567,10 +578,10 @@ static ssize_t set_in_max(struct device *dev, const char *buf,
 	struct lm85_data *data = i2c_get_clientdata(client);
 	long val = simple_strtol(buf, NULL, 10);
 
-	down(&data->update_lock);
+	mutex_lock(&data->update_lock);
 	data->in_max[nr] = INS_TO_REG(nr, val);
 	lm85_write_value(client, LM85_REG_IN_MAX(nr), data->in_max[nr]);
-	up(&data->update_lock);
+	mutex_unlock(&data->update_lock);
 	return count;
 }
 #define show_in_reg(offset)						\
@@ -630,10 +641,10 @@ static ssize_t set_temp_min(struct device *dev, const char *buf,
 	struct lm85_data *data = i2c_get_clientdata(client);
 	long val = simple_strtol(buf, NULL, 10);
 
-	down(&data->update_lock);
+	mutex_lock(&data->update_lock);
 	data->temp_min[nr] = TEMP_TO_REG(val);
 	lm85_write_value(client, LM85_REG_TEMP_MIN(nr), data->temp_min[nr]);
-	up(&data->update_lock);
+	mutex_unlock(&data->update_lock);
 	return count;
 }
 static ssize_t show_temp_max(struct device *dev, char *buf, int nr)
@@ -648,10 +659,10 @@ static ssize_t set_temp_max(struct device *dev, const char *buf,
 	struct lm85_data *data = i2c_get_clientdata(client);
 	long val = simple_strtol(buf, NULL, 10);	
 
-	down(&data->update_lock);
+	mutex_lock(&data->update_lock);
 	data->temp_max[nr] = TEMP_TO_REG(val);
 	lm85_write_value(client, LM85_REG_TEMP_MAX(nr), data->temp_max[nr]);
-	up(&data->update_lock);
+	mutex_unlock(&data->update_lock);
 	return count;
 }
 #define show_temp_reg(offset)						\
@@ -703,12 +714,12 @@ static ssize_t set_pwm_auto_channels(struct device *dev, const char *buf,
 	struct lm85_data *data = i2c_get_clientdata(client);
 	long val = simple_strtol(buf, NULL, 10);   
 
-	down(&data->update_lock);
+	mutex_lock(&data->update_lock);
 	data->autofan[nr].config = (data->autofan[nr].config & (~0xe0))
 		| ZONE_TO_REG(val) ;
 	lm85_write_value(client, LM85_REG_AFAN_CONFIG(nr),
 		data->autofan[nr].config);
-	up(&data->update_lock);
+	mutex_unlock(&data->update_lock);
 	return count;
 }
 static ssize_t show_pwm_auto_pwm_min(struct device *dev, char *buf, int nr)
@@ -723,11 +734,11 @@ static ssize_t set_pwm_auto_pwm_min(struct device *dev, const char *buf,
 	struct lm85_data *data = i2c_get_clientdata(client);
 	long val = simple_strtol(buf, NULL, 10);
 
-	down(&data->update_lock);
+	mutex_lock(&data->update_lock);
 	data->autofan[nr].min_pwm = PWM_TO_REG(val);
 	lm85_write_value(client, LM85_REG_AFAN_MINPWM(nr),
 		data->autofan[nr].min_pwm);
-	up(&data->update_lock);
+	mutex_unlock(&data->update_lock);
 	return count;
 }
 static ssize_t show_pwm_auto_pwm_minctl(struct device *dev, char *buf, int nr)
@@ -742,7 +753,7 @@ static ssize_t set_pwm_auto_pwm_minctl(struct device *dev, const char *buf,
 	struct lm85_data *data = i2c_get_clientdata(client);
 	long val = simple_strtol(buf, NULL, 10);
 
-	down(&data->update_lock);
+	mutex_lock(&data->update_lock);
 	data->autofan[nr].min_off = val;
 	lm85_write_value(client, LM85_REG_AFAN_SPIKE1, data->smooth[0]
 		| data->syncpwm3
@@ -750,7 +761,7 @@ static ssize_t set_pwm_auto_pwm_minctl(struct device *dev, const char *buf,
 		| (data->autofan[1].min_off ? 0x40 : 0)
 		| (data->autofan[2].min_off ? 0x80 : 0)
 	);
-	up(&data->update_lock);
+	mutex_unlock(&data->update_lock);
 	return count;
 }
 static ssize_t show_pwm_auto_pwm_freq(struct device *dev, char *buf, int nr)
@@ -765,13 +776,13 @@ static ssize_t set_pwm_auto_pwm_freq(struct device *dev, const char *buf,
 	struct lm85_data *data = i2c_get_clientdata(client);
 	long val = simple_strtol(buf, NULL, 10);
 
-	down(&data->update_lock);
+	mutex_lock(&data->update_lock);
 	data->autofan[nr].freq = FREQ_TO_REG(val);
 	lm85_write_value(client, LM85_REG_AFAN_RANGE(nr),
 		(data->zone[nr].range << 4)
 		| data->autofan[nr].freq
 	); 
-	up(&data->update_lock);
+	mutex_unlock(&data->update_lock);
 	return count;
 }
 #define pwm_auto(offset)						\
@@ -847,7 +858,7 @@ static ssize_t set_temp_auto_temp_off(struct device *dev, const char *buf,
 	int min;
 	long val = simple_strtol(buf, NULL, 10);
 
-	down(&data->update_lock);
+	mutex_lock(&data->update_lock);
 	min = TEMP_FROM_REG(data->zone[nr].limit);
 	data->zone[nr].off_desired = TEMP_TO_REG(val);
 	data->zone[nr].hyst = HYST_TO_REG(min - val);
@@ -861,7 +872,7 @@ static ssize_t set_temp_auto_temp_off(struct device *dev, const char *buf,
 			(data->zone[2].hyst << 4)
 		);
 	}
-	up(&data->update_lock);
+	mutex_unlock(&data->update_lock);
 	return count;
 }
 static ssize_t show_temp_auto_temp_min(struct device *dev, char *buf, int nr)
@@ -876,7 +887,7 @@ static ssize_t set_temp_auto_temp_min(struct device *dev, const char *buf,
 	struct lm85_data *data = i2c_get_clientdata(client);
 	long val = simple_strtol(buf, NULL, 10);
 
-	down(&data->update_lock);
+	mutex_lock(&data->update_lock);
 	data->zone[nr].limit = TEMP_TO_REG(val);
 	lm85_write_value(client, LM85_REG_AFAN_LIMIT(nr),
 		data->zone[nr].limit);
@@ -903,7 +914,7 @@ static ssize_t set_temp_auto_temp_min(struct device *dev, const char *buf,
 			(data->zone[2].hyst << 4)
 		);
 	}
-	up(&data->update_lock);
+	mutex_unlock(&data->update_lock);
 	return count;
 }
 static ssize_t show_temp_auto_temp_max(struct device *dev, char *buf, int nr)
@@ -920,7 +931,7 @@ static ssize_t set_temp_auto_temp_max(struct device *dev, const char *buf,
 	int min;
 	long val = simple_strtol(buf, NULL, 10);
 
-	down(&data->update_lock);
+	mutex_lock(&data->update_lock);
 	min = TEMP_FROM_REG(data->zone[nr].limit);
 	data->zone[nr].max_desired = TEMP_TO_REG(val);
 	data->zone[nr].range = RANGE_TO_REG(
@@ -928,7 +939,7 @@ static ssize_t set_temp_auto_temp_max(struct device *dev, const char *buf,
 	lm85_write_value(client, LM85_REG_AFAN_RANGE(nr),
 		((data->zone[nr].range & 0x0f) << 4)
 		| (data->autofan[nr].freq & 0x07));
-	up(&data->update_lock);
+	mutex_unlock(&data->update_lock);
 	return count;
 }
 static ssize_t show_temp_auto_temp_crit(struct device *dev, char *buf, int nr)
@@ -943,11 +954,11 @@ static ssize_t set_temp_auto_temp_crit(struct device *dev, const char *buf,
 	struct lm85_data *data = i2c_get_clientdata(client);
 	long val = simple_strtol(buf, NULL, 10);
 
-	down(&data->update_lock);
+	mutex_lock(&data->update_lock);
 	data->zone[nr].critical = TEMP_TO_REG(val);
 	lm85_write_value(client, LM85_REG_AFAN_CRITICAL(nr),
 		data->zone[nr].critical);
-	up(&data->update_lock);
+	mutex_unlock(&data->update_lock);
 	return count;
 }
 #define temp_auto(offset)						\
@@ -1139,7 +1150,7 @@ static int lm85_detect(struct i2c_adapter *adapter, int address,
 	/* Fill in the remaining client fields */
 	data->type = kind;
 	data->valid = 0;
-	init_MUTEX(&data->update_lock);
+	mutex_init(&data->update_lock);
 
 	/* Tell the I2C layer a new client has arrived */
 	if ((err = i2c_attach_client(new_client)))
@@ -1176,17 +1187,14 @@ static int lm85_detect(struct i2c_adapter *adapter, int address,
 	device_create_file(&new_client->dev, &dev_attr_in1_input);
 	device_create_file(&new_client->dev, &dev_attr_in2_input);
 	device_create_file(&new_client->dev, &dev_attr_in3_input);
-	device_create_file(&new_client->dev, &dev_attr_in4_input);
 	device_create_file(&new_client->dev, &dev_attr_in0_min);
 	device_create_file(&new_client->dev, &dev_attr_in1_min);
 	device_create_file(&new_client->dev, &dev_attr_in2_min);
 	device_create_file(&new_client->dev, &dev_attr_in3_min);
-	device_create_file(&new_client->dev, &dev_attr_in4_min);
 	device_create_file(&new_client->dev, &dev_attr_in0_max);
 	device_create_file(&new_client->dev, &dev_attr_in1_max);
 	device_create_file(&new_client->dev, &dev_attr_in2_max);
 	device_create_file(&new_client->dev, &dev_attr_in3_max);
-	device_create_file(&new_client->dev, &dev_attr_in4_max);
 	device_create_file(&new_client->dev, &dev_attr_temp1_input);
 	device_create_file(&new_client->dev, &dev_attr_temp2_input);
 	device_create_file(&new_client->dev, &dev_attr_temp3_input);
@@ -1223,6 +1231,15 @@ static int lm85_detect(struct i2c_adapter *adapter, int address,
 	device_create_file(&new_client->dev, &dev_attr_temp1_auto_temp_crit);
 	device_create_file(&new_client->dev, &dev_attr_temp2_auto_temp_crit);
 	device_create_file(&new_client->dev, &dev_attr_temp3_auto_temp_crit);
+
+	/* The ADT7463 has an optional VRM 10 mode where pin 21 is used
+	   as a sixth digital VID input rather than an analog input. */
+	data->vid = lm85_read_value(new_client, LM85_REG_VID);
+	if (!(kind == adt7463 && (data->vid & 0x80))) {
+		device_create_file(&new_client->dev, &dev_attr_in4_input);
+		device_create_file(&new_client->dev, &dev_attr_in4_min);
+		device_create_file(&new_client->dev, &dev_attr_in4_max);
+	}
 
 	return 0;
 
@@ -1352,7 +1369,7 @@ static struct lm85_data *lm85_update_device(struct device *dev)
 	struct lm85_data *data = i2c_get_clientdata(client);
 	int i;
 
-	down(&data->update_lock);
+	mutex_lock(&data->update_lock);
 
 	if ( !data->valid ||
 	     time_after(jiffies, data->last_reading + LM85_DATA_INTERVAL) ) {
@@ -1382,9 +1399,16 @@ static struct lm85_data *lm85_update_device(struct device *dev)
 		   irrelevant. So it is left in 4*/
 		data->adc_scale = (data->type == emc6d102 ) ? 16 : 4;
 
-		for (i = 0; i <= 4; ++i) {
+		data->vid = lm85_read_value(client, LM85_REG_VID);
+
+		for (i = 0; i <= 3; ++i) {
 			data->in[i] =
 			    lm85_read_value(client, LM85_REG_IN(i));
+		}
+
+		if (!(data->type == adt7463 && (data->vid & 0x80))) {
+			data->in[4] = lm85_read_value(client,
+				      LM85_REG_IN(4));
 		}
 
 		for (i = 0; i <= 3; ++i) {
@@ -1450,11 +1474,18 @@ static struct lm85_data *lm85_update_device(struct device *dev)
 		/* Things that don't change often */
 		dev_dbg(&client->dev, "Reading config values\n");
 
-		for (i = 0; i <= 4; ++i) {
+		for (i = 0; i <= 3; ++i) {
 			data->in_min[i] =
 			    lm85_read_value(client, LM85_REG_IN_MIN(i));
 			data->in_max[i] =
 			    lm85_read_value(client, LM85_REG_IN_MAX(i));
+		}
+
+		if (!(data->type == adt7463 && (data->vid & 0x80))) {
+			data->in_min[4] = lm85_read_value(client,
+					  LM85_REG_IN_MIN(4));
+			data->in_max[4] = lm85_read_value(client,
+					  LM85_REG_IN_MAX(4));
 		}
 
 		if ( data->type == emc6d100 ) {
@@ -1477,8 +1508,6 @@ static struct lm85_data *lm85_update_device(struct device *dev)
 			data->temp_max[i] =
 			    lm85_read_value(client, LM85_REG_TEMP_MAX(i));
 		}
-
-		data->vid = lm85_read_value(client, LM85_REG_VID);
 
 		for (i = 0; i <= 2; ++i) {
 			int val ;
@@ -1543,7 +1572,7 @@ static struct lm85_data *lm85_update_device(struct device *dev)
 
 	data->valid = 1;
 
-	up(&data->update_lock);
+	mutex_unlock(&data->update_lock);
 
 	return data;
 }

@@ -72,14 +72,21 @@ extern int atomic64_sub_ret(int, atomic64_t *);
 #define atomic64_add_negative(i, v) (atomic64_add_ret(i, v) < 0)
 
 #define atomic_cmpxchg(v, o, n) ((int)cmpxchg(&((v)->counter), (o), (n)))
+#define atomic_xchg(v, new) (xchg(&((v)->counter), new))
 
 #define atomic_add_unless(v, a, u)				\
 ({								\
 	int c, old;						\
 	c = atomic_read(v);					\
-	while (c != (u) && (old = atomic_cmpxchg((v), c, c + (a))) != c) \
+	for (;;) {						\
+		if (unlikely(c == (u)))				\
+			break;					\
+		old = atomic_cmpxchg((v), c, c + (a));		\
+		if (likely(old == c))				\
+			break;					\
 		c = old;					\
-	c != (u);						\
+	}							\
+	likely(c != (u));					\
 })
 #define atomic_inc_not_zero(v) atomic_add_unless((v), 1, 0)
 
@@ -96,4 +103,5 @@ extern int atomic64_sub_ret(int, atomic64_t *);
 #define smp_mb__after_atomic_inc()	barrier()
 #endif
 
+#include <asm-generic/atomic.h>
 #endif /* !(__ARCH_SPARC64_ATOMIC__) */

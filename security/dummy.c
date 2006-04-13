@@ -14,6 +14,7 @@
 
 #undef DEBUG
 
+#include <linux/capability.h>
 #include <linux/config.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
@@ -377,7 +378,7 @@ static int dummy_inode_removexattr (struct dentry *dentry, char *name)
 	return 0;
 }
 
-static int dummy_inode_getsecurity(struct inode *inode, const char *name, void *buffer, size_t size, int err)
+static int dummy_inode_getsecurity(const struct inode *inode, const char *name, void *buffer, size_t size, int err)
 {
 	return -EOPNOTSUPP;
 }
@@ -390,6 +391,11 @@ static int dummy_inode_setsecurity(struct inode *inode, const char *name, const 
 static int dummy_inode_listsecurity(struct inode *inode, char *buffer, size_t buffer_size)
 {
 	return 0;
+}
+
+static const char *dummy_inode_xattr_getsuffix(void)
+{
+	return NULL;
 }
 
 static int dummy_file_permission (struct file *file, int mask)
@@ -555,6 +561,11 @@ static void dummy_task_to_inode(struct task_struct *p, struct inode *inode)
 static int dummy_ipc_permission (struct kern_ipc_perm *ipcp, short flag)
 {
 	return 0;
+}
+
+static int dummy_ipc_getsecurity(struct kern_ipc_perm *ipcp, void *buffer, size_t size)
+{
+	return -EOPNOTSUPP;
 }
 
 static int dummy_msg_msg_alloc_security (struct msg_msg *msg)
@@ -762,8 +773,14 @@ static int dummy_socket_sock_rcv_skb (struct sock *sk, struct sk_buff *skb)
 	return 0;
 }
 
-static int dummy_socket_getpeersec(struct socket *sock, char __user *optval,
-				   int __user *optlen, unsigned len)
+static int dummy_socket_getpeersec_stream(struct socket *sock, char __user *optval,
+					  int __user *optlen, unsigned len)
+{
+	return -ENOPROTOOPT;
+}
+
+static int dummy_socket_getpeersec_dgram(struct sk_buff *skb, char **secdata,
+					 u32 *seclen)
 {
 	return -ENOPROTOOPT;
 }
@@ -776,8 +793,42 @@ static inline int dummy_sk_alloc_security (struct sock *sk, int family, gfp_t pr
 static inline void dummy_sk_free_security (struct sock *sk)
 {
 }
+
+static unsigned int dummy_sk_getsid(struct sock *sk, struct flowi *fl, u8 dir)
+{
+	return 0;
+}
 #endif	/* CONFIG_SECURITY_NETWORK */
 
+#ifdef CONFIG_SECURITY_NETWORK_XFRM
+static int dummy_xfrm_policy_alloc_security(struct xfrm_policy *xp, struct xfrm_user_sec_ctx *sec_ctx)
+{
+	return 0;
+}
+
+static inline int dummy_xfrm_policy_clone_security(struct xfrm_policy *old, struct xfrm_policy *new)
+{
+	return 0;
+}
+
+static void dummy_xfrm_policy_free_security(struct xfrm_policy *xp)
+{
+}
+
+static int dummy_xfrm_state_alloc_security(struct xfrm_state *x, struct xfrm_user_sec_ctx *sec_ctx)
+{
+	return 0;
+}
+
+static void dummy_xfrm_state_free_security(struct xfrm_state *x)
+{
+}
+
+static int dummy_xfrm_policy_lookup(struct xfrm_policy *xp, u32 sk_sid, u8 dir)
+{
+	return 0;
+}
+#endif /* CONFIG_SECURITY_NETWORK_XFRM */
 static int dummy_register_security (const char *name, struct security_operations *ops)
 {
 	return -EINVAL;
@@ -890,6 +941,7 @@ void security_fixup_ops (struct security_operations *ops)
 	set_to_dummy_if_null(ops, inode_getxattr);
 	set_to_dummy_if_null(ops, inode_listxattr);
 	set_to_dummy_if_null(ops, inode_removexattr);
+	set_to_dummy_if_null(ops, inode_xattr_getsuffix);
 	set_to_dummy_if_null(ops, inode_getsecurity);
 	set_to_dummy_if_null(ops, inode_setsecurity);
 	set_to_dummy_if_null(ops, inode_listsecurity);
@@ -924,6 +976,7 @@ void security_fixup_ops (struct security_operations *ops)
 	set_to_dummy_if_null(ops, task_reparent_to_init);
  	set_to_dummy_if_null(ops, task_to_inode);
 	set_to_dummy_if_null(ops, ipc_permission);
+	set_to_dummy_if_null(ops, ipc_getsecurity);
 	set_to_dummy_if_null(ops, msg_msg_alloc_security);
 	set_to_dummy_if_null(ops, msg_msg_free_security);
 	set_to_dummy_if_null(ops, msg_queue_alloc_security);
@@ -967,10 +1020,20 @@ void security_fixup_ops (struct security_operations *ops)
 	set_to_dummy_if_null(ops, socket_getsockopt);
 	set_to_dummy_if_null(ops, socket_shutdown);
 	set_to_dummy_if_null(ops, socket_sock_rcv_skb);
-	set_to_dummy_if_null(ops, socket_getpeersec);
+	set_to_dummy_if_null(ops, socket_getpeersec_stream);
+	set_to_dummy_if_null(ops, socket_getpeersec_dgram);
 	set_to_dummy_if_null(ops, sk_alloc_security);
 	set_to_dummy_if_null(ops, sk_free_security);
-#endif	/* CONFIG_SECURITY_NETWORK */
+	set_to_dummy_if_null(ops, sk_getsid);
+ #endif	/* CONFIG_SECURITY_NETWORK */
+#ifdef  CONFIG_SECURITY_NETWORK_XFRM
+	set_to_dummy_if_null(ops, xfrm_policy_alloc_security);
+	set_to_dummy_if_null(ops, xfrm_policy_clone_security);
+	set_to_dummy_if_null(ops, xfrm_policy_free_security);
+	set_to_dummy_if_null(ops, xfrm_state_alloc_security);
+	set_to_dummy_if_null(ops, xfrm_state_free_security);
+	set_to_dummy_if_null(ops, xfrm_policy_lookup);
+#endif	/* CONFIG_SECURITY_NETWORK_XFRM */
 #ifdef CONFIG_KEYS
 	set_to_dummy_if_null(ops, key_alloc);
 	set_to_dummy_if_null(ops, key_free);

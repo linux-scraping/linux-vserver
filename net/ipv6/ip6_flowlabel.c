@@ -9,6 +9,7 @@
  *	Authors:	Alexey Kuznetsov, <kuznet@ms2.inr.ac.ru>
  */
 
+#include <linux/capability.h>
 #include <linux/config.h>
 #include <linux/errno.h>
 #include <linux/types.h>
@@ -200,6 +201,8 @@ struct ip6_flowlabel * fl6_sock_lookup(struct sock *sk, u32 label)
 	return NULL;
 }
 
+EXPORT_SYMBOL_GPL(fl6_sock_lookup);
+
 void fl6_free_socklist(struct sock *sk)
 {
 	struct ipv6_pinfo *np = inet6_sk(sk);
@@ -284,10 +287,9 @@ fl_create(struct in6_flowlabel_req *freq, char __user *optval, int optlen, int *
 	int err;
 
 	err = -ENOMEM;
-	fl = kmalloc(sizeof(*fl), GFP_KERNEL);
+	fl = kzalloc(sizeof(*fl), GFP_KERNEL);
 	if (fl == NULL)
 		goto done;
-	memset(fl, 0, sizeof(*fl));
 
 	olen = optlen - CMSG_ALIGN(sizeof(*freq));
 	if (olen > 0) {
@@ -626,9 +628,7 @@ static void ip6fl_fl_seq_show(struct seq_file *seq, struct ip6_flowlabel *fl)
 {
 	while(fl) {
 		seq_printf(seq,
-			   "%05X %-1d %-6d %-6d %-6ld %-8ld "
-			   "%02x%02x%02x%02x%02x%02x%02x%02x "
-			   "%-4d\n",
+			   "%05X %-1d %-6d %-6d %-6ld %-8ld " NIP6_SEQFMT " %-4d\n",
 			   (unsigned)ntohl(fl->label),
 			   fl->share,
 			   (unsigned)fl->owner,
@@ -644,8 +644,8 @@ static void ip6fl_fl_seq_show(struct seq_file *seq, struct ip6_flowlabel *fl)
 static int ip6fl_seq_show(struct seq_file *seq, void *v)
 {
 	if (v == SEQ_START_TOKEN)
-		seq_puts(seq, "Label S Owner  Users  Linger Expires  "
-			      "Dst                              Opt\n");
+		seq_printf(seq, "%-5s %-1s %-6s %-6s %-6s %-8s %-32s %s\n",
+			   "Label", "S", "Owner", "Users", "Linger", "Expires", "Dst", "Opt");
 	else
 		ip6fl_fl_seq_show(seq, v);
 	return 0;
@@ -662,7 +662,7 @@ static int ip6fl_seq_open(struct inode *inode, struct file *file)
 {
 	struct seq_file *seq;
 	int rc = -ENOMEM;
-	struct ip6fl_iter_state *s = kmalloc(sizeof(*s), GFP_KERNEL);
+	struct ip6fl_iter_state *s = kzalloc(sizeof(*s), GFP_KERNEL);
 
 	if (!s)
 		goto out;
@@ -673,7 +673,6 @@ static int ip6fl_seq_open(struct inode *inode, struct file *file)
 
 	seq = file->private_data;
 	seq->private = s;
-	memset(s, 0, sizeof(*s));
 out:
 	return rc;
 out_kfree:

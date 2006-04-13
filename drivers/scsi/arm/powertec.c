@@ -22,7 +22,6 @@
 #include <asm/dma.h>
 #include <asm/ecard.h>
 #include <asm/io.h>
-#include <asm/irq.h>
 #include <asm/pgtable.h>
 
 #include "../scsi.h"
@@ -467,6 +466,6 @@ module_exit(powertecscsi_exit);
 
 MODULE_AUTHOR("Russell King");
 MODULE_DESCRIPTION("Powertec SCSI driver");
-MODULE_PARM(term, "1-8i");
+module_param_array(term, int, NULL, 0);
 MODULE_PARM_DESC(term, "SCSI bus termination");
 MODULE_LICENSE("GPL");
