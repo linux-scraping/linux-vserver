@@ -1012,6 +1012,9 @@ static int dtSplitUp(tid_t tid,
 
 		DT_PUTPAGE(smp);
 
+		if (!DO_INDEX(ip))
+			ip->i_size = xlen << sbi->l2bsize;
+
 		goto freeKeyName;
 	}
 
@@ -1068,7 +1071,9 @@ static int dtSplitUp(tid_t tid,
 				xaddr = addressPXD(pxd) + xlen;
 				dbFree(ip, xaddr, (s64) n);
 			}
-		}
+		} else if (!DO_INDEX(ip))
+			ip->i_size = lengthPXD(pxd) << sbi->l2bsize;
+
 
 	      extendOut:
 		DT_PUTPAGE(smp);
@@ -1110,6 +1115,9 @@ static int dtSplitUp(tid_t tid,
 		/* undo allocation */
 		goto splitOut;
 	}
+
+	if (!DO_INDEX(ip))
+		ip->i_size += PSIZE;
 
 	/*
 	 * propagate up the router entry for the leaf page just split
@@ -2455,6 +2463,9 @@ static int dtDeleteUp(tid_t tid, struct inode *ip,
 		/* exit propagation up */
 		break;
 	}
+
+	if (!DO_INDEX(ip))
+		ip->i_size -= PSIZE;
 
 	return 0;
 }

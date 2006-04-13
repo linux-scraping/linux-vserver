@@ -106,7 +106,7 @@ long sys_pipe(unsigned long __user * fildes)
 }
 
 
-long sys_uname(struct old_utsname * name)
+long sys_uname(struct old_utsname __user * name)
 {
 	long err;
 	if (!name)
@@ -117,7 +117,7 @@ long sys_uname(struct old_utsname * name)
 	return err?-EFAULT:0;
 }
 
-long sys_olduname(struct oldold_utsname * name)
+long sys_olduname(struct oldold_utsname __user * name)
 {
 	long error;
 	struct new_utsname *ptr;

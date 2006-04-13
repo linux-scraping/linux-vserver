@@ -81,6 +81,7 @@
 #include <linux/types.h>
 #include <linux/kernel.h>
 #include <linux/sched.h>
+#include <linux/mutex.h>
 #include <linux/string.h>
 #include <linux/mm.h>
 #include <linux/socket.h>
@@ -110,12 +111,11 @@
 #include <linux/netpoll.h>
 #include <linux/rcupdate.h>
 #include <linux/delay.h>
-#ifdef CONFIG_NET_RADIO
-#include <linux/wireless.h>		/* Note : will define WIRELESS_EXT */
+#include <linux/wireless.h>
 #include <net/iw_handler.h>
-#endif	/* CONFIG_NET_RADIO */
-#include <linux/vs_network.h>
 #include <asm/current.h>
+#include <linux/audit.h>
+#include <linux/vs_network.h>
 
 /*
  *	The list of packet types we will receive (as opposed to discard)
@@ -194,7 +194,7 @@ static inline struct hlist_head *dev_index_hash(int ifindex)
  *	Our notifier list
  */
 
-static struct notifier_block *netdev_chain;
+static BLOCKING_NOTIFIER_HEAD(netdev_chain);
 
 /*
  *	Device drivers call our routines to queue packets here. We empty the
@@ -737,7 +737,8 @@ int dev_change_name(struct net_device *dev, char *newname)
 	if (!err) {
 		hlist_del(&dev->name_hlist);
 		hlist_add_head(&dev->name_hlist, dev_name_hash(dev->name));
-		notifier_call_chain(&netdev_chain, NETDEV_CHANGENAME, dev);
+		blocking_notifier_call_chain(&netdev_chain,
+				NETDEV_CHANGENAME, dev);
 	}
 
 	return err;
@@ -751,7 +752,7 @@ int dev_change_name(struct net_device *dev, char *newname)
  */
 void netdev_features_change(struct net_device *dev)
 {
-	notifier_call_chain(&netdev_chain, NETDEV_FEAT_CHANGE, dev);
+	blocking_notifier_call_chain(&netdev_chain, NETDEV_FEAT_CHANGE, dev);
 }
 EXPORT_SYMBOL(netdev_features_change);
 
@@ -766,7 +767,8 @@ EXPORT_SYMBOL(netdev_features_change);
 void netdev_state_change(struct net_device *dev)
 {
 	if (dev->flags & IFF_UP) {
-		notifier_call_chain(&netdev_chain, NETDEV_CHANGE, dev);
+		blocking_notifier_call_chain(&netdev_chain,
+				NETDEV_CHANGE, dev);
 		rtmsg_ifinfo(RTM_NEWLINK, dev, 0);
 	}
 }
@@ -863,7 +865,7 @@ int dev_open(struct net_device *dev)
 		/*
 		 *	... and announce new interface.
 		 */
-		notifier_call_chain(&netdev_chain, NETDEV_UP, dev);
+		blocking_notifier_call_chain(&netdev_chain, NETDEV_UP, dev);
 	}
 	return ret;
 }
@@ -886,7 +888,7 @@ int dev_close(struct net_device *dev)
 	 *	Tell people we are going down, so that they can
 	 *	prepare to death, when device is still operating.
 	 */
-	notifier_call_chain(&netdev_chain, NETDEV_GOING_DOWN, dev);
+	blocking_notifier_call_chain(&netdev_chain, NETDEV_GOING_DOWN, dev);
 
 	dev_deactivate(dev);
 
@@ -923,7 +925,7 @@ int dev_close(struct net_device *dev)
 	/*
 	 * Tell people we are down
 	 */
-	notifier_call_chain(&netdev_chain, NETDEV_DOWN, dev);
+	blocking_notifier_call_chain(&netdev_chain, NETDEV_DOWN, dev);
 
 	return 0;
 }
@@ -954,7 +956,7 @@ int register_netdevice_notifier(struct notifier_block *nb)
 	int err;
 
 	rtnl_lock();
-	err = notifier_chain_register(&netdev_chain, nb);
+	err = blocking_notifier_chain_register(&netdev_chain, nb);
 	if (!err) {
 		for (dev = dev_base; dev; dev = dev->next) {
 			nb->notifier_call(nb, NETDEV_REGISTER, dev);
@@ -979,7 +981,12 @@ int register_netdevice_notifier(struct notifier_block *nb)
 
 int unregister_netdevice_notifier(struct notifier_block *nb)
 {
-	return notifier_chain_unregister(&netdev_chain, nb);
+	int err;
+
+	rtnl_lock();
+	err = blocking_notifier_chain_unregister(&netdev_chain, nb);
+	rtnl_unlock();
+	return err;
 }
 
 /**
@@ -988,12 +995,12 @@ int unregister_netdevice_notifier(struct notifier_block *nb)
  *      @v:   pointer passed unmodified to notifier function
  *
  *	Call all network notifier blocks.  Parameters and return value
- *	are as for notifier_call_chain().
+ *	are as for blocking_notifier_call_chain().
  */
 
 int call_netdevice_notifiers(unsigned long val, void *v)
 {
-	return notifier_call_chain(&netdev_chain, val, v);
+	return blocking_notifier_call_chain(&netdev_chain, val, v);
 }
 
 /* When > 0 there are consumers of rx skb time stamps */
@@ -1073,6 +1080,70 @@ void dev_queue_xmit_nit(struct sk_buff *skb, struct net_device *dev)
 	}
 	rcu_read_unlock();
 }
+
+
+void __netif_schedule(struct net_device *dev)
+{
+	if (!test_and_set_bit(__LINK_STATE_SCHED, &dev->state)) {
+		unsigned long flags;
+		struct softnet_data *sd;
+
+		local_irq_save(flags);
+		sd = &__get_cpu_var(softnet_data);
+		dev->next_sched = sd->output_queue;
+		sd->output_queue = dev;
+		raise_softirq_irqoff(NET_TX_SOFTIRQ);
+		local_irq_restore(flags);
+	}
+}
+EXPORT_SYMBOL(__netif_schedule);
+
+void __netif_rx_schedule(struct net_device *dev)
+{
+	unsigned long flags;
+
+	local_irq_save(flags);
+	dev_hold(dev);
+	list_add_tail(&dev->poll_list, &__get_cpu_var(softnet_data).poll_list);
+	if (dev->quota < 0)
+		dev->quota += dev->weight;
+	else
+		dev->quota = dev->weight;
+	__raise_softirq_irqoff(NET_RX_SOFTIRQ);
+	local_irq_restore(flags);
+}
+EXPORT_SYMBOL(__netif_rx_schedule);
+
+void dev_kfree_skb_any(struct sk_buff *skb)
+{
+	if (in_irq() || irqs_disabled())
+		dev_kfree_skb_irq(skb);
+	else
+		dev_kfree_skb(skb);
+}
+EXPORT_SYMBOL(dev_kfree_skb_any);
+
+
+/* Hot-plugging. */
+void netif_device_detach(struct net_device *dev)
+{
+	if (test_and_clear_bit(__LINK_STATE_PRESENT, &dev->state) &&
+	    netif_running(dev)) {
+		netif_stop_queue(dev);
+	}
+}
+EXPORT_SYMBOL(netif_device_detach);
+
+void netif_device_attach(struct net_device *dev)
+{
+	if (!test_and_set_bit(__LINK_STATE_PRESENT, &dev->state) &&
+	    netif_running(dev)) {
+		netif_wake_queue(dev);
+ 		__netdev_watchdog_up(dev);
+	}
+}
+EXPORT_SYMBOL(netif_device_attach);
+
 
 /*
  * Invalidate hardware checksum when packet is to be mangled, and
@@ -1449,8 +1520,29 @@ static inline struct net_device *skb_bond(struct sk_buff *skb)
 {
 	struct net_device *dev = skb->dev;
 
-	if (dev->master)
+	if (dev->master) {
+		/*
+		 * On bonding slaves other than the currently active
+		 * slave, suppress duplicates except for 802.3ad
+		 * ETH_P_SLOW and alb non-mcast/bcast.
+		 */
+		if (dev->priv_flags & IFF_SLAVE_INACTIVE) {
+			if (dev->master->priv_flags & IFF_MASTER_ALB) {
+				if (skb->pkt_type != PACKET_BROADCAST &&
+				    skb->pkt_type != PACKET_MULTICAST)
+					goto keep;
+			}
+
+			if (dev->master->priv_flags & IFF_MASTER_8023AD &&
+			    skb->protocol == __constant_htons(ETH_P_SLOW))
+				goto keep;
+		
+			kfree_skb(skb);
+			return NULL;
+		}
+keep:
 		skb->dev = dev->master;
+	}
 
 	return dev;
 }
@@ -1593,6 +1685,9 @@ int netif_receive_skb(struct sk_buff *skb)
 		skb->input_dev = skb->dev;
 
 	orig_dev = skb_bond(skb);
+
+	if (!orig_dev)
+		return NET_RX_DROP;
 
 	__get_cpu_var(netdev_rx_stat).total++;
 
@@ -1738,8 +1833,7 @@ static void net_rx_action(struct softirq_action *h)
 		if (dev->quota <= 0 || dev->poll(dev, &budget)) {
 			netpoll_poll_unlock(have);
 			local_irq_disable();
-			list_del(&dev->poll_list);
-			list_add_tail(&dev->poll_list, &queue->poll_list);
+			list_move_tail(&dev->poll_list, &queue->poll_list);
 			if (dev->quota < 0)
 				dev->quota += dev->weight;
 			else
@@ -2036,7 +2130,7 @@ static struct file_operations softnet_seq_fops = {
 	.release = seq_release,
 };
 
-#ifdef WIRELESS_EXT
+#ifdef CONFIG_WIRELESS_EXT
 extern int wireless_proc_init(void);
 #else
 #define wireless_proc_init() 0
@@ -2128,6 +2222,12 @@ void dev_set_promiscuity(struct net_device *dev, int inc)
 		printk(KERN_INFO "device %s %s promiscuous mode\n",
 		       dev->name, (dev->flags & IFF_PROMISC) ? "entered" :
 		       					       "left");
+		audit_log(current->audit_context, GFP_ATOMIC,
+			AUDIT_ANOM_PROMISCUOUS,
+			"dev=%s prom=%d old_prom=%d auid=%u",
+			dev->name, (dev->flags & IFF_PROMISC),
+			(old_flags & IFF_PROMISC),
+			audit_get_loginuid(current->audit_context)); 
 	}
 }
 
@@ -2160,12 +2260,20 @@ unsigned dev_get_flags(const struct net_device *dev)
 
 	flags = (dev->flags & ~(IFF_PROMISC |
 				IFF_ALLMULTI |
-				IFF_RUNNING)) | 
+				IFF_RUNNING |
+				IFF_LOWER_UP |
+				IFF_DORMANT)) |
 		(dev->gflags & (IFF_PROMISC |
 				IFF_ALLMULTI));
 
-	if (netif_running(dev) && netif_carrier_ok(dev))
-		flags |= IFF_RUNNING;
+	if (netif_running(dev)) {
+		if (netif_oper_up(dev))
+			flags |= IFF_RUNNING;
+		if (netif_carrier_ok(dev))
+			flags |= IFF_LOWER_UP;
+		if (netif_dormant(dev))
+			flags |= IFF_DORMANT;
+	}
 
 	return flags;
 }
@@ -2208,7 +2316,8 @@ int dev_change_flags(struct net_device *dev, unsigned flags)
 	if (dev->flags & IFF_UP &&
 	    ((old_flags ^ dev->flags) &~ (IFF_UP | IFF_PROMISC | IFF_ALLMULTI |
 					  IFF_VOLATILE)))
-		notifier_call_chain(&netdev_chain, NETDEV_CHANGE, dev);
+		blocking_notifier_call_chain(&netdev_chain,
+				NETDEV_CHANGE, dev);
 
 	if ((flags ^ dev->gflags) & IFF_PROMISC) {
 		int inc = (flags & IFF_PROMISC) ? +1 : -1;
@@ -2252,8 +2361,8 @@ int dev_set_mtu(struct net_device *dev, int new_mtu)
 	else
 		dev->mtu = new_mtu;
 	if (!err && dev->flags & IFF_UP)
-		notifier_call_chain(&netdev_chain,
-				    NETDEV_CHANGEMTU, dev);
+		blocking_notifier_call_chain(&netdev_chain,
+				NETDEV_CHANGEMTU, dev);
 	return err;
 }
 
@@ -2269,7 +2378,8 @@ int dev_set_mac_address(struct net_device *dev, struct sockaddr *sa)
 		return -ENODEV;
 	err = dev->set_mac_address(dev, sa);
 	if (!err)
-		notifier_call_chain(&netdev_chain, NETDEV_CHANGEADDR, dev);
+		blocking_notifier_call_chain(&netdev_chain,
+				NETDEV_CHANGEADDR, dev);
 	return err;
 }
 
@@ -2325,7 +2435,7 @@ static int dev_ifsioc(struct ifreq *ifr, unsigned int cmd)
 				return -EINVAL;
 			memcpy(dev->broadcast, ifr->ifr_hwaddr.sa_data,
 			       min(sizeof ifr->ifr_hwaddr.sa_data, (size_t) dev->addr_len));
-			notifier_call_chain(&netdev_chain,
+			blocking_notifier_call_chain(&netdev_chain,
 					    NETDEV_CHANGEADDR, dev);
 			return 0;
 
@@ -2444,9 +2554,9 @@ int dev_ioctl(unsigned int cmd, void __user *arg)
 	 */
 
 	if (cmd == SIOCGIFCONF) {
-		rtnl_shlock();
+		rtnl_lock();
 		ret = dev_ifconf((char __user *) arg);
-		rtnl_shunlock();
+		rtnl_unlock();
 		return ret;
 	}
 	if (cmd == SIOCGIFNAME)
@@ -2590,7 +2700,7 @@ int dev_ioctl(unsigned int cmd, void __user *arg)
 					ret = -EFAULT;
 				return ret;
 			}
-#ifdef WIRELESS_EXT
+#ifdef CONFIG_WIRELESS_EXT
 			/* Take care of Wireless Extensions */
 			if (cmd >= SIOCIWFIRST && cmd <= SIOCIWLAST) {
 				/* If command is `set a parameter', or
@@ -2611,7 +2721,7 @@ int dev_ioctl(unsigned int cmd, void __user *arg)
 					ret = -EFAULT;
 				return ret;
 			}
-#endif	/* WIRELESS_EXT */
+#endif	/* CONFIG_WIRELESS_EXT */
 			return -EINVAL;
 	}
 }
@@ -2779,7 +2889,7 @@ int register_netdevice(struct net_device *dev)
 	write_unlock_bh(&dev_base_lock);
 
 	/* Notify protocols, that a new device appeared. */
-	notifier_call_chain(&netdev_chain, NETDEV_REGISTER, dev);
+	blocking_notifier_call_chain(&netdev_chain, NETDEV_REGISTER, dev);
 
 	/* Finish registration after unlock */
 	net_set_todo(dev);
@@ -2855,10 +2965,10 @@ static void netdev_wait_allrefs(struct net_device *dev)
 	rebroadcast_time = warning_time = jiffies;
 	while (atomic_read(&dev->refcnt) != 0) {
 		if (time_after(jiffies, rebroadcast_time + 1 * HZ)) {
-			rtnl_shlock();
+			rtnl_lock();
 
 			/* Rebroadcast unregister notification */
-			notifier_call_chain(&netdev_chain,
+			blocking_notifier_call_chain(&netdev_chain,
 					    NETDEV_UNREGISTER, dev);
 
 			if (test_bit(__LINK_STATE_LINKWATCH_PENDING,
@@ -2872,7 +2982,7 @@ static void netdev_wait_allrefs(struct net_device *dev)
 				linkwatch_run_queue();
 			}
 
-			rtnl_shunlock();
+			__rtnl_unlock();
 
 			rebroadcast_time = jiffies;
 		}
@@ -2910,7 +3020,7 @@ static void netdev_wait_allrefs(struct net_device *dev)
  * 2) Since we run with the RTNL semaphore not held, we can sleep
  *    safely in order to wait for the netdev refcnt to drop to zero.
  */
-static DECLARE_MUTEX(net_todo_run_mutex);
+static DEFINE_MUTEX(net_todo_run_mutex);
 void netdev_run_todo(void)
 {
 	struct list_head list = LIST_HEAD_INIT(list);
@@ -2918,7 +3028,7 @@ void netdev_run_todo(void)
 
 
 	/* Need to guard against multiple cpu's getting out of order. */
-	down(&net_todo_run_mutex);
+	mutex_lock(&net_todo_run_mutex);
 
 	/* Not safe to do outside the semaphore.  We must not return
 	 * until all unregister events invoked by the local processor
@@ -2975,7 +3085,7 @@ void netdev_run_todo(void)
 	}
 
 out:
-	up(&net_todo_run_mutex);
+	mutex_unlock(&net_todo_run_mutex);
 }
 
 /**
@@ -3114,7 +3224,7 @@ int unregister_netdevice(struct net_device *dev)
 	/* Notify protocols, that we are about to destroy
 	   this device. They should clean all the things.
 	*/
-	notifier_call_chain(&netdev_chain, NETDEV_UNREGISTER, dev);
+	blocking_notifier_call_chain(&netdev_chain, NETDEV_UNREGISTER, dev);
 	
 	/*
 	 *	Flush the multicast chain

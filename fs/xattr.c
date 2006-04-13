@@ -17,6 +17,7 @@
 #include <linux/syscalls.h>
 #include <linux/module.h>
 #include <linux/fsnotify.h>
+#include <linux/audit.h>
 #include <linux/mount.h>
 #include <asm/uaccess.h>
 
@@ -238,12 +239,15 @@ sys_fsetxattr(int fd, char __user *name, void __user *value,
 	      size_t size, int flags)
 {
 	struct file *f;
+	struct dentry *dentry;
 	int error = -EBADF;
 
 	f = fget(fd);
 	if (!f)
 		return error;
-	error = setxattr(f->f_dentry, name, value, size, flags, f->f_vfsmnt);
+	dentry = f->f_dentry;
+	audit_inode(NULL, dentry->d_inode, 0);
+	error = setxattr(dentry, name, value, size, flags, f->f_vfsmnt);
 	fput(f);
 	return error;
 }
@@ -465,12 +469,15 @@ asmlinkage long
 sys_fremovexattr(int fd, char __user *name)
 {
 	struct file *f;
+	struct dentry *dentry;
 	int error = -EBADF;
 
 	f = fget(fd);
 	if (!f)
 		return error;
-	error = removexattr(f->f_dentry, name, f->f_vfsmnt);
+	dentry = f->f_dentry;
+	audit_inode(NULL, dentry->d_inode, 0);
+	error = removexattr(dentry, name, f->f_vfsmnt);
 	fput(f);
 	return error;
 }

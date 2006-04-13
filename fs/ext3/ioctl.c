@@ -189,7 +189,7 @@ flags_err:
 		 * need to allocate reservation structure for this inode
 		 * before set the window size
 		 */
-		down(&ei->truncate_sem);
+		mutex_lock(&ei->truncate_mutex);
 		if (!ei->i_block_alloc_info)
 			ext3_init_block_alloc_info(inode);
 
@@ -197,7 +197,7 @@ flags_err:
 			struct ext3_reserve_window_node *rsv = &ei->i_block_alloc_info->rsv_window_node;
 			rsv->rsv_goal_size = rsv_window_size;
 		}
-		up(&ei->truncate_sem);
+		mutex_unlock(&ei->truncate_mutex);
 		return 0;
 	}
 	case EXT3_IOC_GROUP_EXTEND: {
