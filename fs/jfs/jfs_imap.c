@@ -45,7 +45,7 @@
 #include <linux/buffer_head.h>
 #include <linux/pagemap.h>
 #include <linux/quotaops.h>
-#include <linux/vserver/xid.h>
+#include <linux/vserver/tag.h>
 
 #include "jfs_incore.h"
 #include "jfs_inode.h"
@@ -3099,16 +3099,16 @@ static int copy_from_dinode(struct dinode * dip, struct inode *ip)
 
 	uid = le32_to_cpu(dip->di_uid);
 	gid = le32_to_cpu(dip->di_gid);
-	ip->i_xid = INOXID_XID(XID_TAG(ip), uid, gid, 0);
+	ip->i_tag = INOTAG_TAG(DX_TAG(ip), uid, gid, 0);
 
-	jfs_ip->saved_uid = INOXID_UID(XID_TAG(ip), uid, gid);
+	jfs_ip->saved_uid = INOTAG_UID(DX_TAG(ip), uid, gid);
 	if (sbi->uid == -1)
 		ip->i_uid = jfs_ip->saved_uid;
 	else {
 		ip->i_uid = sbi->uid;
 	}
 
-	jfs_ip->saved_gid = INOXID_GID(XID_TAG(ip), uid, gid);
+	jfs_ip->saved_gid = INOTAG_GID(DX_TAG(ip), uid, gid);
 	if (sbi->gid == -1)
 		ip->i_gid = jfs_ip->saved_gid;
 	else {
@@ -3175,10 +3175,10 @@ static void copy_to_dinode(struct dinode * dip, struct inode *ip)
 	dip->di_nblocks = cpu_to_le64(PBLK2LBLK(ip->i_sb, ip->i_blocks));
 	dip->di_nlink = cpu_to_le32(ip->i_nlink);
 
-	dip->di_uid = cpu_to_le32(XIDINO_UID(XID_TAG(ip),
-		(sbi->uid == -1) ? ip->i_uid : jfs_ip->saved_uid, ip->i_xid));
-	dip->di_gid = cpu_to_le32(XIDINO_GID(XID_TAG(ip),
-		(sbi->gid == -1) ? ip->i_gid : jfs_ip->saved_gid, ip->i_xid));
+	dip->di_uid = cpu_to_le32(TAGINO_UID(DX_TAG(ip),
+		(sbi->uid == -1) ? ip->i_uid : jfs_ip->saved_uid, ip->i_tag));
+	dip->di_gid = cpu_to_le32(TAGINO_GID(DX_TAG(ip),
+		(sbi->gid == -1) ? ip->i_gid : jfs_ip->saved_gid, ip->i_tag));
 
 	/*
 	 * mode2 is only needed for storing the higher order bits.

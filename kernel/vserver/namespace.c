@@ -46,15 +46,12 @@ int vx_set_namespace(struct vx_info *vxi, struct namespace *ns, struct fs_struct
 	return 0;
 }
 
-int vc_enter_namespace(uint32_t id, void *data)
+int vc_enter_namespace(uint32_t id, void __user *data)
 {
 	struct vx_info *vxi;
 	struct fs_struct *old_fs, *fs;
 	struct namespace *old_ns;
 	int ret = 0;
-
-	if (!vx_check(0, VX_ADMIN))
-		return -ENOSYS;
 
 	vxi = lookup_vx_info(id);
 	if (!vxi)
@@ -85,7 +82,7 @@ out_put:
 	return ret;
 }
 
-int vc_cleanup_namespace(uint32_t id, void *data)
+int vc_cleanup_namespace(uint32_t id, void __user *data)
 {
 	// down_write(&current->namespace->sem);
 	spin_lock(&vfsmount_lock);

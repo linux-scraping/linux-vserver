@@ -85,7 +85,7 @@ xfs_bulkstat_one_iget(
 	buf->bs_mode = dic->di_mode;
 	buf->bs_uid = dic->di_uid;
 	buf->bs_gid = dic->di_gid;
-	buf->bs_xid = dic->di_xid;
+	buf->bs_tag = dic->di_tag;
 	buf->bs_size = dic->di_size;
 	vn_atime_to_bstime(vp, &buf->bs_atime);
 	buf->bs_mtime.tv_sec = dic->di_mtime.t_sec;
@@ -160,7 +160,7 @@ xfs_bulkstat_one_dinode(
 	buf->bs_mode = INT_GET(dic->di_mode, ARCH_CONVERT);
 	buf->bs_uid = INT_GET(dic->di_uid, ARCH_CONVERT);
 	buf->bs_gid = INT_GET(dic->di_gid, ARCH_CONVERT);
-	buf->bs_xid = INT_GET(dic->di_xid, ARCH_CONVERT);
+	buf->bs_tag = INT_GET(dic->di_tag, ARCH_CONVERT);
 	buf->bs_size = INT_GET(dic->di_size, ARCH_CONVERT);
 	buf->bs_atime.tv_sec = INT_GET(dic->di_atime.t_sec, ARCH_CONVERT);
 	buf->bs_atime.tv_nsec = INT_GET(dic->di_atime.t_nsec, ARCH_CONVERT);

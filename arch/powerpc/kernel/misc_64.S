@@ -684,7 +684,7 @@ _GLOBAL(kernel_thread)
 	mr	r29,r3
 	mr	r30,r4
 	ori	r3,r5,CLONE_VM	/* flags */
-	oris	r3,r3,(CLONE_UNTRACED>>16)
+	oris	r3,r3,(CLONE_UNTRACED|CLONE_KTHREAD)>>16
 	li	r4,0		/* new sp (unused) */
 	li	r0,__NR_clone
 	sc

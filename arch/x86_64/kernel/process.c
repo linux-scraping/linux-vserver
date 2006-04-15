@@ -55,7 +55,8 @@
 
 asmlinkage extern void ret_from_fork(void);
 
-unsigned long kernel_thread_flags = CLONE_VM | CLONE_UNTRACED;
+unsigned long kernel_thread_flags =
+	CLONE_VM | CLONE_UNTRACED | CLONE_KTHREAD;
 
 unsigned long boot_option_idle_override = 0;
 EXPORT_SYMBOL(boot_option_idle_override);
@@ -290,8 +291,8 @@ void __show_regs(struct pt_regs * regs)
 
 	printk("\n");
 	print_modules();
-	printk("Pid: %d, comm: %.20s %s %s %.*s\n",
-		current->pid, current->comm, print_tainted(),
+	printk("Pid: %d[#%u], comm: %.20s %s %s %.*s\n",
+		current->pid, current->xid, current->comm, print_tainted(),
 		system_utsname.release,
 		(int)strcspn(system_utsname.version, " "),
 		system_utsname.version);

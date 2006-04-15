@@ -5,7 +5,12 @@
 
 
 #define MAX_S_CONTEXT	65535	/* Arbitrary limit */
+
+#ifdef	CONFIG_VSERVER_DYNAMIC_IDS
 #define MIN_D_CONTEXT	49152	/* dynamic contexts start here */
+#else
+#define MIN_D_CONTEXT	65536
+#endif
 
 #define VX_DYNAMIC_ID	((uint32_t)-1)		/* id for dynamic context */
 
@@ -93,6 +98,11 @@ enum {
 #include "sched_def.h"
 #include "cvirt_def.h"
 
+struct _vx_info_pc {
+	struct _vx_sched_pc sched_pc;
+	struct _vx_cvirt_pc cvirt_pc;
+};
+
 struct vx_info {
 	struct hlist_node vx_hlist;		/* linked list of contexts */
 	xid_t vx_id;				/* context id */
@@ -115,6 +125,12 @@ struct vx_info {
 	struct _vx_cvirt cvirt;			/* virtual/bias stuff */
 	struct _vx_cacct cacct;			/* context accounting */
 
+#ifndef CONFIG_SMP
+	struct _vx_info_pc info_pc;		/* per cpu data */
+#else
+	struct _vx_info_pc *ptr_pc;		/* per cpu array */
+#endif
+
 	wait_queue_head_t vx_wait;		/* context exit waitqueue */
 	int reboot_cmd;				/* last sys_reboot() cmd */
 	int exit_code;				/* last process exit code */
@@ -122,12 +138,27 @@ struct vx_info {
 	char vx_name[65];			/* vserver name */
 };
 
+#ifndef CONFIG_SMP
+#define	vx_ptr_pc(vxi)		(&(vxi)->info_pc)
+#define	vx_per_cpu(vxi, v, id)	vx_ptr_pc(vxi)->v
+#else
+#define	vx_ptr_pc(vxi)		((vxi)->ptr_pc)
+#define	vx_per_cpu(vxi, v, id)	per_cpu_ptr(vx_ptr_pc(vxi), id)->v
+#endif
+
+#define	vx_cpu(vxi, v)		vx_per_cpu(vxi, v, smp_processor_id())
+
+
+struct vx_info_save {
+	struct vx_info *vxi;
+	xid_t xid;
+};
+
 
 /* status flags */
 
 #define VXS_HASHED	0x0001
 #define VXS_PAUSED	0x0010
-#define VXS_ONHOLD	0x0020
 #define VXS_SHUTDOWN	0x0100
 #define VXS_HELPER	0x1000
 #define VXS_RELEASED	0x8000

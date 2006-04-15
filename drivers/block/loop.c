@@ -74,6 +74,7 @@
 #include <linux/completion.h>
 #include <linux/highmem.h>
 #include <linux/gfp.h>
+#include <linux/vs_context.h>
 
 #include <asm/uaccess.h>
 
@@ -743,10 +744,12 @@ static int loop_set_fd(struct loop_device *lo, struct file *lo_file,
 	struct file	*file, *f;
 	struct inode	*inode;
 	struct address_space *mapping;
+	struct vx_info_save vxis;
 	unsigned lo_blocksize;
 	int		lo_flags = 0;
 	int		error;
 	loff_t		size;
+	pid_t		pid;
 
 	/* This is safe, since we have a reference from open(). */
 	__module_get(THIS_MODULE);
@@ -839,12 +842,16 @@ static int loop_set_fd(struct loop_device *lo, struct file *lo_file,
 
 	set_blocksize(bdev, lo_blocksize);
 
+	__enter_vx_admin(&vxis);
 	error = kernel_thread(loop_thread, lo, CLONE_KERNEL);
+	__leave_vx_admin(&vxis);
 	if (error < 0)
 		goto out_putf;
 	wait_for_completion(&lo->lo_done);
 	return 0;
 
+ out_err:
+	error = (int)pid;
  out_putf:
 	fput(file);
  out:

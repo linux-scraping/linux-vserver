@@ -10,6 +10,7 @@
 #include <linux/ctype.h>
 #include <linux/capability.h>
 #include <linux/time.h>
+#include <linux/mount.h>
 #include <asm/current.h>
 #include <asm/uaccess.h>
 
@@ -65,7 +66,8 @@ int jfs_ioctl(struct inode * inode, struct file * filp, unsigned int cmd,
 	case JFS_IOC_SETFLAGS: {
 		unsigned int oldflags;
 
-		if (IS_RDONLY(inode))
+		if (IS_RDONLY(inode) ||
+			(filp && MNT_IS_RDONLY(filp->f_vfsmnt)))
 			return -EROFS;
 
 		if ((current->fsuid != inode->i_uid) && !capable(CAP_FOWNER))
@@ -85,8 +87,8 @@ int jfs_ioctl(struct inode * inode, struct file * filp, unsigned int cmd,
 		 * the relevant capability.
 		 */
 		if ((oldflags & JFS_IMMUTABLE_FL) ||
-			((flags ^ oldflags) &
-			(JFS_APPEND_FL | JFS_IMMUTABLE_FL))) {
+			((flags ^ oldflags) & (JFS_APPEND_FL |
+			JFS_IMMUTABLE_FL | JFS_IUNLINK_FL))) {
 			if (!capable(CAP_LINUX_IMMUTABLE))
 				return -EPERM;
 		}

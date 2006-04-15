@@ -118,7 +118,7 @@ static struct inode *alloc_inode(struct super_block *sb)
 		inode->i_sb = sb;
 
 		/* essential because of inode slab reuse */
-		inode->i_xid = 0;
+		inode->i_tag = 0;
 		inode->i_blkbits = sb->s_blocksize_bits;
 		inode->i_flags = 0;
 		atomic_set(&inode->i_count, 1);
@@ -131,6 +131,7 @@ static struct inode *alloc_inode(struct super_block *sb)
 		inode->i_bytes = 0;
 		inode->i_generation = 0;
 #ifdef CONFIG_QUOTA
+		inode->i_dqh = dqhget(sb->s_dqh);
 		memset(&inode->i_dquot, 0, sizeof(inode->i_dquot));
 #endif
 		inode->i_pipe = NULL;
@@ -177,6 +178,8 @@ void destroy_inode(struct inode *inode)
 {
 	BUG_ON(inode_has_buffers(inode));
 	security_inode_free(inode);
+	if (dqhash_valid(inode->i_dqh))
+		dqhput(inode->i_dqh);
 	if (inode->i_sb->s_op->destroy_inode)
 		inode->i_sb->s_op->destroy_inode(inode);
 	else
@@ -1272,12 +1275,13 @@ EXPORT_SYMBOL(inode_needs_sync);
 /* Function back in dquot.c */
 int remove_inode_dquot_ref(struct inode *, int, struct list_head *);
 
-void remove_dquot_ref(struct super_block *sb, int type,
+void remove_dquot_ref(struct dqhash *hash, int type,
 			struct list_head *tofree_head)
 {
 	struct inode *inode;
+	struct super_block *sb = hash->dqh_sb;
 
-	if (!sb->dq_op)
+	if (!hash->dqh_qop)
 		return;	/* nothing to do */
 	spin_lock(&inode_lock);	/* This lock is for inodes code */
 

@@ -162,13 +162,15 @@ struct dinode {
 #define JFS_APPEND_FL		0x01000000 /* writes to file may only append */
 #define JFS_IMMUTABLE_FL	0x02000000 /* Immutable file */
 
-#define JFS_FL_USER_VISIBLE	0x03F80000
+#define	JFS_BARRIER_FL		0x04000000 /* Barrier for chroot() */
+#define	JFS_IUNLINK_FL		0x08000000 /* Immutable unlink */
+
+#define JFS_FL_USER_VISIBLE	0x0FF80000
 #define JFS_FL_USER_MODIFIABLE	0x03F80000
-#define JFS_FL_INHERIT		0x03C80000
+#define JFS_FL_INHERIT		0x0BC80000
 
 /* These are identical to EXT[23]_IOC_GETFLAGS/SETFLAGS */
 #define JFS_IOC_GETFLAGS	_IOR('f', 1, long)
 #define JFS_IOC_SETFLAGS	_IOW('f', 2, long)
-
 
 #endif /*_H_JFS_DINODE */

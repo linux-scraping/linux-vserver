@@ -120,12 +120,12 @@ static int mount_port __initdata = 0;		/* Mount daemon port number */
 enum {
 	/* Options that take integer arguments */
 	Opt_port, Opt_rsize, Opt_wsize, Opt_timeo, Opt_retrans, Opt_acregmin,
-	Opt_acregmax, Opt_acdirmin, Opt_acdirmax,
+	Opt_acregmax, Opt_acdirmin, Opt_acdirmax, Opt_tagid,
 	/* Options that take no arguments */
 	Opt_soft, Opt_hard, Opt_intr,
 	Opt_nointr, Opt_posix, Opt_noposix, Opt_cto, Opt_nocto, Opt_ac, 
 	Opt_noac, Opt_lock, Opt_nolock, Opt_v2, Opt_v3, Opt_udp, Opt_tcp,
-	Opt_acl, Opt_noacl, Opt_tagxid,
+	Opt_acl, Opt_noacl, Opt_tag, Opt_notag,
 	/* Error token */
 	Opt_err
 };
@@ -162,7 +162,10 @@ static match_table_t __initdata tokens = {
 	{Opt_tcp, "tcp"},
 	{Opt_acl, "acl"},
 	{Opt_noacl, "noacl"},
-	{Opt_tagxid, "tagxid"},
+	{Opt_tag, "tag"},
+	{Opt_notag, "notag"},
+	{Opt_tagid, "tagid=%u"},
+	{Opt_tag, "tagxid"},
 	{Opt_err, NULL}
 	
 };
@@ -277,9 +280,18 @@ static int __init root_nfs_parse(char *name, char *buf)
 			case Opt_noacl:
 				nfs_data.flags |= NFS_MOUNT_NOACL;
 				break;
-#ifndef CONFIG_INOXID_NONE
-			case Opt_tagxid:
-				nfs_data.flags |= NFS_MOUNT_TAGXID;
+#ifndef CONFIG_TAGGING_NONE
+			case Opt_tag:
+				nfs_data.flags |= NFS_MOUNT_TAGGED;
+				break;
+			case Opt_notag:
+				nfs_data.flags &= ~NFS_MOUNT_TAGGED;
+				break;
+#endif
+#ifdef CONFIG_PROPAGATE
+			case Opt_tagid:
+				/* use args[0] */
+				nfs_data.flags |= NFS_MOUNT_TAGGED;
 				break;
 #endif
 			default:

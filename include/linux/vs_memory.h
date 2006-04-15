@@ -6,47 +6,47 @@
 #include "vserver/limit_int.h"
 
 
-#define __vx_add_long(a,v)	(*(v) += (a))
-#define __vx_inc_long(v)	(++*(v))
-#define __vx_dec_long(v)	(--*(v))
+#define __acc_add_long(a,v)	(*(v) += (a))
+#define __acc_inc_long(v)	(++*(v))
+#define __acc_dec_long(v)	(--*(v))
 
 #if	NR_CPUS >= CONFIG_SPLIT_PTLOCK_CPUS
-#define __vx_add_value(a,v)	atomic_long_add(a,v)
-#define __vx_inc_value(v)	atomic_long_inc(v)
-#define __vx_dec_value(v)	atomic_long_dec(v)
+#define __acc_add_atomic(a,v)	atomic_long_add(a,v)
+#define __acc_inc_atomic(v)	atomic_long_inc(v)
+#define __acc_dec_atomic(v)	atomic_long_dec(v)
 #else  /* NR_CPUS < CONFIG_SPLIT_PTLOCK_CPUS */
-#define __vx_add_value(a,v)	__vx_add_long(a,v)
-#define __vx_inc_value(v)	__vx_inc_long(v)
-#define __vx_dec_value(v)	__vx_dec_long(v)
+#define __acc_add_atomic(a,v)	__acc_add_long(a,v)
+#define __acc_inc_atomic(v)	__acc_inc_long(v)
+#define __acc_dec_atomic(v)	__acc_dec_long(v)
 #endif /* NR_CPUS < CONFIG_SPLIT_PTLOCK_CPUS */
 
 
 #define vx_acc_page(m,d,v,r) do {					\
 	if ((d) > 0)							\
-		__vx_inc_long(&(m->v));					\
+		__acc_inc_long(&(m->v));				\
 	else								\
-		__vx_dec_long(&(m->v));					\
+		__acc_dec_long(&(m->v));				\
 	__vx_acc_cres(m->mm_vx_info, r, d, m, __FILE__, __LINE__);	\
 } while (0)
 
 #define vx_acc_page_atomic(m,d,v,r) do {				\
 	if ((d) > 0)							\
-		__vx_inc_value(&(m->v));				\
+		__acc_inc_atomic(&(m->v));				\
 	else								\
-		__vx_dec_value(&(m->v));				\
+		__acc_dec_atomic(&(m->v));				\
 	__vx_acc_cres(m->mm_vx_info, r, d, m, __FILE__, __LINE__);	\
 } while (0)
 
 
 #define vx_acc_pages(m,p,v,r) do {					\
 	unsigned long __p = (p);					\
-	__vx_add_long(__p, &(m->v));					\
+	__acc_add_long(__p, &(m->v));					\
 	__vx_add_cres(m->mm_vx_info, r, __p, m, __FILE__, __LINE__);	\
 } while (0)
 
 #define vx_acc_pages_atomic(m,p,v,r) do {				\
 	unsigned long __p = (p);					\
-	__vx_add_value(__p, &(m->v));					\
+	__acc_add_atomic(__p, &(m->v));					\
 	__vx_add_cres(m->mm_vx_info, r, __p, m, __FILE__, __LINE__);	\
 } while (0)
 
@@ -101,6 +101,48 @@
 #define vx_vmlocked_avail(m,p)	vx_pages_avail(m, p, RLIMIT_MEMLOCK)
 #define vx_rsspages_avail(m,p)	vx_pages_avail(m, p, RLIMIT_RSS)
 #define vx_anonpages_avail(m,p)	vx_pages_avail(m, p, VLIMIT_ANON)
+
+enum {
+	VXPT_UNKNOWN = 0,
+	VXPT_ANON,
+	VXPT_NONE,
+	VXPT_FILE,
+	VXPT_SWAP,
+	VXPT_WRITE
+};
+
+#if 0
+#define	vx_page_fault(mm,vma,type,ret)
+#else
+
+static inline
+void __vx_page_fault(struct mm_struct *mm,
+	struct vm_area_struct *vma, int type, int ret)
+{
+	struct vx_info *vxi = mm->mm_vx_info;
+	int what;
+/*
+	static char *page_type[6] =
+		{ "UNKNOWN", "ANON","NONE", "FILE", "SWAP", "WRITE" };
+	static char *page_what[4] =
+		{ "FAULT_OOM", "FAULT_SIGBUS", "FAULT_MINOR", "FAULT_MAJOR" };
+*/
+
+	if (!vxi)
+		return;
+
+	what = (ret & 0x3);
+
+/*	printk("[%d] page[%d][%d] %2x %s %s\n", vxi->vx_id,
+		type, what, ret, page_type[type], page_what[what]);
+*/
+	if (ret & VM_FAULT_WRITE)
+		what |= 0x4;
+	atomic_inc(&vxi->cacct.page[type][what]);
+}
+
+#define	vx_page_fault(mm,vma,type,ret)	__vx_page_fault(mm,vma,type,ret)
+#endif
 
 #else
 #warning duplicate inclusion
