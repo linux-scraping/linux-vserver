@@ -445,7 +445,7 @@ typedef struct xfs_mount {
 #define XFS_MOUNT_NO_PERCPU_SB	(1ULL << 23)	/* don't use per-cpu superblock
 						   counters */
 
-#define XFS_MOUNT_TAGXID	(1ULL << 31)	/* context xid tagging */
+#define XFS_MOUNT_TAGGED	(1ULL << 31)	/* context tagging */
 
 /*
  * Default minimum read and write sizes.

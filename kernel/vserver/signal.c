@@ -75,8 +75,6 @@ int vc_ctx_kill(uint32_t id, void __user *data)
 	struct vcmd_ctx_kill_v0 vc_data;
 	struct vx_info *vxi;
 
-	if (!vx_check(0, VX_ADMIN))
-		return -ENOSYS;
 	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 

@@ -220,6 +220,7 @@ static struct nx_info * __create_nx_info(int id)
 
 	/* dynamic context requested */
 	if (id == NX_DYNAMIC_ID) {
+#ifdef	CONFIG_VSERVER_DYNAMIC_IDS
 		id = __nx_dynamic_id();
 		if (!id) {
 			printk(KERN_ERR "no dynamic context available.\n");
@@ -227,6 +228,11 @@ static struct nx_info * __create_nx_info(int id)
 			goto out_unlock;
 		}
 		new->nx_id = id;
+#else
+		printk(KERN_ERR "dynamic contexts disabled.\n");
+		nxi = ERR_PTR(-EINVAL);
+		goto out_unlock;
+#endif
 	}
 	/* static context requested */
 	else if ((nxi = __lookup_nx_info(id))) {
@@ -317,9 +323,22 @@ int nid_is_hashed(nid_t nid)
 
 #ifdef	CONFIG_PROC_FS
 
+/*	get_nid_list()
+
+	* get a subset of hashed nids for proc
+	* assumes size is at least one				*/
+
 int get_nid_list(int index, unsigned int *nids, int size)
 {
 	int hindex, nr_nids = 0;
+
+	/* only show current and children */
+	if (!nx_check(0, VX_ADMIN|VX_WATCH)) {
+		if (index > 0)
+			return 0;
+		nids[nr_nids] = nx_current_nid();
+		return 1;
+	}
 
 	for (hindex = 0; hindex < NX_HASH_SIZE; hindex++) {
 		struct hlist_head *head = &nx_info_hash[hindex];
@@ -530,9 +549,7 @@ int vc_nx_info(uint32_t id, void __user *data)
 	struct nx_info *nxi;
 	struct vcmd_nx_info_v0 vc_data;
 
-	if (!vx_check(0, VX_ADMIN))
-		return -ENOSYS;
-	if (!capable(CAP_SYS_ADMIN) || !capable(CAP_SYS_RESOURCE))
+	if (!capable(CAP_SYS_RESOURCE))
 		return -EPERM;
 
 	nxi = lookup_nx_info(id);
@@ -556,8 +573,6 @@ int vc_net_create(uint32_t nid, void __user *data)
 	struct nx_info *new_nxi;
 	int ret;
 
-	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
 	if (data && copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
@@ -590,9 +605,6 @@ int vc_net_migrate(uint32_t id, void __user *data)
 {
 	struct nx_info *nxi;
 
-	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
-
 	nxi = lookup_nx_info(id);
 	if (!nxi)
 		return -ESRCH;
@@ -607,8 +619,6 @@ int vc_net_add(uint32_t nid, void __user *data)
 	struct nx_info *nxi;
 	int index, pos, ret = 0;
 
-	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
 	if (data && copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
@@ -659,8 +669,6 @@ int vc_net_remove(uint32_t nid, void __user *data)
 	struct nx_info *nxi;
 	int ret = 0;
 
-	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
 	if (data && copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
@@ -687,9 +695,6 @@ int vc_get_nflags(uint32_t id, void __user *data)
 	struct nx_info *nxi;
 	struct vcmd_net_flags_v0 vc_data;
 
-	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
-
 	nxi = lookup_nx_info(id);
 	if (!nxi)
 		return -ESRCH;
@@ -712,8 +717,6 @@ int vc_set_nflags(uint32_t id, void __user *data)
 	struct vcmd_net_flags_v0 vc_data;
 	uint64_t mask, trigger;
 
-	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
 	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
@@ -739,9 +742,6 @@ int vc_get_ncaps(uint32_t id, void __user *data)
 	struct nx_info *nxi;
 	struct vcmd_net_caps_v0 vc_data;
 
-	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
-
 	nxi = lookup_nx_info(id);
 	if (!nxi)
 		return -ESRCH;
@@ -760,8 +760,6 @@ int vc_set_ncaps(uint32_t id, void __user *data)
 	struct nx_info *nxi;
 	struct vcmd_net_caps_v0 vc_data;
 
-	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
 	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 

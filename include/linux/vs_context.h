@@ -3,6 +3,7 @@
 
 #include <linux/kernel.h>
 #include "vserver/debug.h"
+#include "vserver/history.h"
 
 
 #define get_vx_info(i)	__get_vx_info(i,__FILE__,__LINE__,__HERE__)
@@ -170,7 +171,49 @@ static inline void __wakeup_vx_info(struct vx_info *vxi)
 		wake_up_interruptible(&vxi->vx_wait);
 }
 
+
+#define enter_vx_info(v,s)	__enter_vx_info(v,s,__FILE__,__LINE__)
+
+static inline void __enter_vx_info(struct vx_info *vxi,
+	struct vx_info_save *vxis, const char *_file, int _line)
+{
+	vxlprintk(VXD_CBIT(xid, 5), "enter_vx_info(%p[#%d],%p) %p[#%d,%p]",
+		vxi, vxi ? vxi->vx_id : 0, vxis, current,
+		current->xid, current->vx_info, _file, _line);
+	vxis->vxi = xchg(&current->vx_info, vxi);
+	vxis->xid = current->xid;
+	current->xid = vxi ? vxi->vx_id : 0;
+}
+
+#define leave_vx_info(s)	__leave_vx_info(s,__FILE__,__LINE__)
+
+static inline void __leave_vx_info(struct vx_info_save *vxis,
+	const char *_file, int _line)
+{
+	vxlprintk(VXD_CBIT(xid, 5), "leave_vx_info(%p[#%d,%p]) %p[#%d,%p]",
+		vxis, vxis->xid, vxis->vxi, current,
+		current->xid, current->vx_info, _file, _line);
+	xchg(&current->vx_info, vxis->vxi);
+	current->xid = vxis->xid;
+}
+
+
+static inline void __enter_vx_admin(struct vx_info_save *vxis)
+{
+	vxis->vxi = xchg(&current->vx_info, NULL);
+	vxis->xid = current->xid;
+	current->xid = 0;
+}
+
+static inline void __leave_vx_admin(struct vx_info_save *vxis)
+{
+	if (vxis->vxi)
+		xchg(&current->vx_info, vxis->vxi);
+	current->xid = vxis->xid;
+}
+
 extern void exit_vx_info(struct task_struct *, int);
+
 
 static inline
 struct task_struct *vx_child_reaper(struct task_struct *p)

@@ -21,7 +21,7 @@
 #include <linux/binfmts.h>
 #include <linux/unistd.h>
 #include <linux/wait.h>
-#include <linux/vs_cvirt.h>
+#include <linux/vs_pid.h>
 
 #include <asm/ia32.h>
 #include <asm/intrinsics.h>

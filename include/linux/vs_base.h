@@ -97,7 +97,6 @@ static inline int __vx_check(xid_t cid, xid_t id, unsigned int mode)
 	(current->vx_info && \
 	(current->vx_info->vx_initpid == (n)))
 
-
 #else
 #warning duplicate inclusion
 #endif

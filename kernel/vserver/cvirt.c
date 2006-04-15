@@ -217,8 +217,6 @@ int vc_set_vhi_name(uint32_t id, void __user *data)
 	struct vcmd_vhi_name_v0 vc_data;
 	char *name;
 
-	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
 	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 

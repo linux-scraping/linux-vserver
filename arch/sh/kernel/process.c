@@ -112,7 +112,8 @@ void machine_power_off(void)
 void show_regs(struct pt_regs * regs)
 {
 	printk("\n");
-	printk("Pid : %d, Comm: %20s\n", current->pid, current->comm);
+	printk("Pid : %d[#%u], Comm: %20s\n",
+		current->pid, current->xid, current->comm);
 	print_symbol("PC is at %s\n", regs->pc);
 	printk("PC  : %08lx SP  : %08lx SR  : %08lx ",
 	       regs->pc, regs->regs[15], regs->sr);
@@ -180,7 +181,8 @@ int kernel_thread(int (*fn)(void *), void * arg, unsigned long flags)
 	regs.sr = (1 << 30);
 
 	/* Ok, create the new process.. */
-	return do_fork(flags | CLONE_VM | CLONE_UNTRACED, 0, &regs, 0, NULL, NULL);
+	return do_fork(flags | CLONE_VM | CLONE_UNTRACED | CLONE_KTHREAD,
+		0, &regs, 0, NULL, NULL);
 }
 
 /*

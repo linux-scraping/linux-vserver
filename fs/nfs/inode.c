@@ -36,7 +36,7 @@
 #include <linux/mount.h>
 #include <linux/nfs_idmap.h>
 #include <linux/vfs.h>
-#include <linux/vserver/xid.h>
+#include <linux/vserver/tag.h>
 
 #include <asm/system.h>
 #include <asm/uaccess.h>
@@ -344,8 +344,8 @@ nfs_sb_init(struct super_block *sb, rpc_authflavor_t authflavor)
 	}
 	server->backing_dev_info.ra_pages = server->rpages * NFS_MAX_READAHEAD;
 
-	if (server->flags & NFS_MOUNT_TAGXID)
-		sb->s_flags |= MS_TAGXID;
+	if (server->flags & NFS_MOUNT_TAGGED)
+		sb->s_flags |= MS_TAGGED;
 
 	sb->s_maxbytes = fsinfo.maxfilesize;
 	if (sb->s_maxbytes > MAX_LFS_FILESIZE) 
@@ -353,7 +353,7 @@ nfs_sb_init(struct super_block *sb, rpc_authflavor_t authflavor)
 
 	server->client->cl_intr = (server->flags & NFS_MOUNT_INTR) ? 1 : 0;
 	server->client->cl_softrtry = (server->flags & NFS_MOUNT_SOFT) ? 1 : 0;
-	server->client->cl_tagxid = (server->flags & NFS_MOUNT_TAGXID) ? 1 : 0;
+	server->client->cl_tag = (server->flags & NFS_MOUNT_TAGGED) ? 1 : 0;
 
 	/* We're airborne Set socket buffersize */
 	rpc_setbufsize(server->client, server->wsize + 100, server->rsize + 100);
@@ -428,7 +428,7 @@ nfs_create_client(struct nfs_server *server, const struct nfs_mount_data *data)
 
 	clnt->cl_intr     = 1;
 	clnt->cl_softrtry = 1;
-	clnt->cl_tagxid   = 1;
+	clnt->cl_tag      = 1;
 
 	return clnt;
 
@@ -608,7 +608,7 @@ static void nfs_show_mount_options(struct seq_file *m, struct nfs_server *nfss, 
 		{ NFS_MOUNT_NOAC, ",noac", "" },
 		{ NFS_MOUNT_NONLM, ",nolock", "" },
 		{ NFS_MOUNT_NOACL, ",noacl", "" },
-		{ NFS_MOUNT_TAGXID, ",tagxid", "" },
+		{ NFS_MOUNT_TAGGED, ",tag", "" },
 		{ 0, NULL, NULL }
 	};
 	struct proc_nfs_info *nfs_infop;
@@ -913,9 +913,9 @@ nfs_fhget(struct super_block *sb, struct nfs_fh *fh, struct nfs_fattr *fattr)
 			nfsi->change_attr = fattr->change_attr;
 		inode->i_size = nfs_size_to_loff_t(fattr->size);
 		inode->i_nlink = fattr->nlink;
-		inode->i_uid = INOXID_UID(XID_TAG(inode), fattr->uid, fattr->gid);
-		inode->i_gid = INOXID_GID(XID_TAG(inode), fattr->uid, fattr->gid);
-		inode->i_xid = INOXID_XID(XID_TAG(inode), fattr->uid, fattr->gid, 0);
+		inode->i_uid = INOTAG_UID(DX_TAG(inode), fattr->uid, fattr->gid);
+		inode->i_gid = INOTAG_GID(DX_TAG(inode), fattr->uid, fattr->gid);
+		inode->i_tag = INOTAG_TAG(DX_TAG(inode), fattr->uid, fattr->gid, 0);
 					 /* maybe fattr->xid someday */
 		if (fattr->valid & (NFS_ATTR_FATTR_V3 | NFS_ATTR_FATTR_V4)) {
 			/*
@@ -1007,8 +1007,8 @@ void nfs_setattr_update_inode(struct inode *inode, struct iattr *attr)
 			inode->i_uid = attr->ia_uid;
 		if ((attr->ia_valid & ATTR_GID) != 0)
 			inode->i_gid = attr->ia_gid;
-		if ((attr->ia_valid & ATTR_XID) && IS_TAGXID(inode))
-			inode->i_xid = attr->ia_xid;
+		if ((attr->ia_valid & ATTR_TAG) && IS_TAGGED(inode))
+			inode->i_tag = attr->ia_tag;
 		spin_lock(&inode->i_lock);
 		NFS_I(inode)->cache_validity |= NFS_INO_INVALID_ACCESS|NFS_INO_INVALID_ACL;
 		spin_unlock(&inode->i_lock);
@@ -1413,7 +1413,7 @@ static int nfs_check_inode_attributes(struct inode *inode, struct nfs_fattr *fat
 	int data_unstable;
 	uid_t uid;
 	gid_t gid;
-	xid_t xid;
+	tag_t tag;
 
 
 	if ((fattr->valid & NFS_ATTR_FATTR) == 0)
@@ -1451,15 +1451,15 @@ static int nfs_check_inode_attributes(struct inode *inode, struct nfs_fattr *fat
 	if (cur_size != new_isize && nfsi->npages == 0)
 		nfsi->cache_validity |= NFS_INO_INVALID_ATTR|NFS_INO_REVAL_PAGECACHE;
 
-	uid = INOXID_UID(XID_TAG(inode), fattr->uid, fattr->gid);
-	gid = INOXID_GID(XID_TAG(inode), fattr->uid, fattr->gid);
-	xid = INOXID_XID(XID_TAG(inode), fattr->uid, fattr->gid, 0);
+	uid = INOTAG_UID(DX_TAG(inode), fattr->uid, fattr->gid);
+	gid = INOTAG_GID(DX_TAG(inode), fattr->uid, fattr->gid);
+	tag = INOTAG_TAG(DX_TAG(inode), fattr->uid, fattr->gid, 0);
 
 	/* Have any file permissions changed? */
 	if ((inode->i_mode & S_IALLUGO) != (fattr->mode & S_IALLUGO)
 			|| inode->i_uid != uid
 			|| inode->i_gid != gid
-			|| inode->i_xid != xid)
+			|| inode->i_tag != tag)
 		nfsi->cache_validity |= NFS_INO_INVALID_ATTR | NFS_INO_INVALID_ACCESS | NFS_INO_INVALID_ACL;
 
 	/* Has the link count changed? */
@@ -1546,7 +1546,7 @@ static int nfs_update_inode(struct inode *inode, struct nfs_fattr *fattr)
 	int data_stable;
 	uid_t uid;
 	gid_t gid;
-	xid_t xid;
+	tag_t tag;
 
 	dfprintk(VFS, "NFS: %s(%s/%ld ct=%d info=0x%x)\n",
 			__FUNCTION__, inode->i_sb->s_id, inode->i_ino,
@@ -1616,21 +1616,21 @@ static int nfs_update_inode(struct inode *inode, struct nfs_fattr *fattr)
 	}
 	memcpy(&inode->i_atime, &fattr->atime, sizeof(inode->i_atime));
 
-	uid = INOXID_UID(XID_TAG(inode), fattr->uid, fattr->gid);
-	gid = INOXID_GID(XID_TAG(inode), fattr->uid, fattr->gid);
-	xid = INOXID_XID(XID_TAG(inode), fattr->uid, fattr->gid, 0);
+	uid = INOTAG_UID(DX_TAG(inode), fattr->uid, fattr->gid);
+	gid = INOTAG_GID(DX_TAG(inode), fattr->uid, fattr->gid);
+	tag = INOTAG_TAG(DX_TAG(inode), fattr->uid, fattr->gid, 0);
 
 	if ((inode->i_mode & S_IALLUGO) != (fattr->mode & S_IALLUGO) ||
 	    inode->i_uid != uid ||
 	    inode->i_gid != gid ||
-	    inode->i_xid != xid)
+	    inode->i_tag != tag)
 		invalid |= NFS_INO_INVALID_ATTR|NFS_INO_INVALID_ACCESS|NFS_INO_INVALID_ACL;
 
 	inode->i_mode = fattr->mode;
 	inode->i_nlink = fattr->nlink;
 	inode->i_uid = uid;
 	inode->i_gid = gid;
-	inode->i_xid = xid;
+	inode->i_tag = tag;
 
 	if (fattr->valid & (NFS_ATTR_FATTR_V3 | NFS_ATTR_FATTR_V4)) {
 		/*

@@ -24,7 +24,6 @@
 #include <linux/smp_lock.h>
 #include <linux/user.h>
 #include <linux/security.h>
-#include <linux/vs_cvirt.h>
 
 #include <asm/cpu.h>
 #include <asm/dsp.h>

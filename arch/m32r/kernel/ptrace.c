@@ -25,7 +25,6 @@
 #include <linux/user.h>
 #include <linux/string.h>
 #include <linux/signal.h>
-#include <linux/vs_cvirt.h>
 
 #include <asm/cacheflush.h>
 #include <asm/io.h>

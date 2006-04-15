@@ -19,7 +19,7 @@
 #include <linux/reiserfs_xattr.h>
 #include <linux/smp_lock.h>
 #include <linux/quotaops.h>
-#include <linux/vserver/xid.h>
+#include <linux/vs_tag.h>
 
 #define INC_DIR_INODE_NLINK(i) if (i->i_nlink != 1) { i->i_nlink++; if (i->i_nlink >= REISERFS_LINK_MAX) i->i_nlink=1; }
 #define DEC_DIR_INODE_NLINK(i) if (i->i_nlink != 1) i->i_nlink--;
@@ -366,7 +366,7 @@ static struct dentry *reiserfs_lookup(struct inode *dir, struct dentry *dentry,
 			reiserfs_write_unlock(dir->i_sb);
 			return ERR_PTR(-EACCES);
 		}
-		vx_propagate_xid(nd, inode);
+		dx_propagate_tag(nd, inode);
 
 		/* Propogate the priv_object flag so we know we're in the priv tree */
 		if (is_reiserfs_priv_object(dir))
@@ -602,7 +602,7 @@ static int new_inode_init(struct inode *inode, struct inode *dir, int mode)
 	} else {
 		inode->i_gid = current->fsgid;
 	}
-	inode->i_xid = vx_current_fsxid(inode->i_sb);
+	inode->i_tag = dx_current_fstag(inode->i_sb);
 	DQUOT_INIT(inode);
 	return 0;
 }

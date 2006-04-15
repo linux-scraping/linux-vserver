@@ -195,7 +195,7 @@ enum {
 	Opt_integrity, Opt_nointegrity, Opt_iocharset, Opt_resize,
 	Opt_resize_nosize, Opt_errors, Opt_ignore, Opt_err, Opt_quota,
 	Opt_usrquota, Opt_grpquota, Opt_uid, Opt_gid, Opt_umask,
-	Opt_tagxid
+	Opt_tag, Opt_notag, Opt_tagid
 };
 
 static match_table_t tokens = {
@@ -205,7 +205,10 @@ static match_table_t tokens = {
 	{Opt_resize, "resize=%u"},
 	{Opt_resize_nosize, "resize"},
 	{Opt_errors, "errors=%s"},
-	{Opt_tagxid, "tagxid"},
+	{Opt_tag, "tag"},
+	{Opt_notag, "notag"},
+	{Opt_tagid, "tagid=%u"},
+	{Opt_tag, "tagxid"},
 	{Opt_ignore, "noquota"},
 	{Opt_ignore, "quota"},
 	{Opt_usrquota, "usrquota"},
@@ -340,9 +343,18 @@ static int parse_options(char *options, struct super_block *sb, s64 *newLVSize,
 			}
 			break;
 		}
-#ifndef CONFIG_INOXID_NONE
-		case Opt_tagxid:
-			*flag |= JFS_TAGXID;
+#ifndef CONFIG_TAGGING_NONE
+		case Opt_tag:
+			*flag |= JFS_TAGGED;
+			break;
+		case Opt_notag:
+			*flag &= JFS_TAGGED;
+			break;
+#endif
+#ifdef CONFIG_PROPAGATE
+		case Opt_tagid:
+			/* use args[0] */
+			*flag |= JFS_TAGGED;
 			break;
 #endif
 		default:
@@ -376,8 +388,8 @@ static int jfs_remount(struct super_block *sb, int *flags, char *data)
 		return -EINVAL;
 	}
 
-	if ((flag & JFS_TAGXID) && !(sb->s_flags & MS_TAGXID)) {
-		printk(KERN_ERR "JFS: %s: tagxid not permitted on remount.\n",
+	if ((flag & JFS_TAGGED) && !(sb->s_flags & MS_TAGGED)) {
+		printk(KERN_ERR "JFS: %s: tagging not permitted on remount.\n",
 			sb->s_id);
 		return -EINVAL;
 	}
@@ -454,8 +466,8 @@ static int jfs_fill_super(struct super_block *sb, void *data, int silent)
 	sb->s_flags |= MS_POSIXACL;
 #endif
 	/* map mount option tagxid */
-	if (sbi->flag & JFS_TAGXID)
-		sb->s_flags |= MS_TAGXID;
+	if (sbi->flag & JFS_TAGGED)
+		sb->s_flags |= MS_TAGGED;
 
 	if (newLVSize) {
 		printk(KERN_ERR "resize option for remount only\n");
