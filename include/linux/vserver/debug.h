@@ -60,10 +60,12 @@ extern unsigned int vx_debug_misc;
 			printk(VX_WARNLEVEL f "\n" , ##x);	\
 	} while (0)
 
-
 #define vxd_path(d,m)						\
 	({ static char _buffer[PATH_MAX];			\
 	   d_path((d), (m), _buffer, sizeof(_buffer)); })
+
+#define vxd_cond_path(n)					\
+	((n) ? vxd_path((n)->dentry, (n)->mnt) : "<null>" )
 
 #else	/* CONFIG_VSERVER_DEBUG */
 
@@ -82,6 +84,7 @@ extern unsigned int vx_debug_misc;
 #define vxwprintk(x...) do { } while (0)
 
 #define vxd_path	"<none>"
+#define vxd_cond_path	vxd_path
 
 #endif	/* CONFIG_VSERVER_DEBUG */
 

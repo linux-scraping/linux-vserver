@@ -242,7 +242,7 @@ static inline int xid_permission(struct inode *inode, int mask, struct nameidata
 
 	vxwprintk(1, "xid=%d denied access to %p[#%d,%lu] »%s«.",
 		vx_current_xid(), inode, inode->i_xid, inode->i_ino,
-		vxd_path(nd->dentry, nd->mnt));
+		vxd_cond_path(nd));
 	return -EACCES;
 }
 
