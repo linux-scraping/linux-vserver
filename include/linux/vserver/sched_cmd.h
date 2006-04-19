@@ -48,7 +48,9 @@ struct	vcmd_set_sched_v4 {
 #define VXSM_TOKENS_MIN		0x0020
 #define VXSM_TOKENS_MAX		0x0040
 #define VXSM_PRIO_BIAS		0x0100
+
 #define VXSM_IDLE_TIME		0x0200
+#define VXSM_FORCE		0x0400
 
 #define	VXSM_V3_MASK		0x0173
 #define	VXSM_SET_MASK		0x01FF

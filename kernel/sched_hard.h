@@ -7,6 +7,7 @@
 static inline
 void vx_idle_resched(runqueue_t *rq)
 {
+	/* maybe have a better criterion for paused */
 	if (!--rq->idle_tokens && !list_empty(&rq->hold_queue))
 		set_need_resched();
 }
@@ -177,7 +178,7 @@ void vx_try_unhold(runqueue_t *rq, int cpu)
 	int maxidle = HZ;
 	int minskip = 0;
 
-	/* nothing to do? */
+	/* nothing to do? what about pause? */
 	if (list_empty(&rq->hold_queue))
 		return;
 
@@ -187,6 +188,7 @@ void vx_try_unhold(runqueue_t *rq, int cpu)
 		struct task_struct *p;
 
 		p = list_entry(l, task_t, run_list);
+		/* don't bother with same context */
 		if (vxi == p->vx_info)
 			continue;
 

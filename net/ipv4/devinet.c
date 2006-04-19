@@ -529,33 +529,6 @@ static __inline__ int inet_abc_len(u32 addr)
   	return rc;
 }
 
-/*
-	Check that a device is not member of the ipv4root assigned to the process
-	Return true if this is the case
-
-	If the process is not bound to specific IP, then it returns 0 (all
-	interface are fine).
-*/
-static inline int devinet_notiproot (struct in_ifaddr *ifa)
-{
-	int ret = 0;
-	struct nx_info *nxi;
-
-	if ((nxi = current->nx_info)) {
-		int i;
-		int nbip = nxi->nbipv4;
-		__u32 addr = ifa->ifa_local;
-		ret = 1;
-		for (i=0; i<nbip; i++) {
-			if(nxi->ipv4[i] == addr) {
-				ret = 0;
-				break;
-			}
-		}
-	}
-	return ret;
-}
-
 
 int devinet_ioctl(unsigned int cmd, void __user *arg)
 {
@@ -634,6 +607,9 @@ int devinet_ioctl(unsigned int cmd, void __user *arg)
 		*colon = ':';
 
 	if ((in_dev = __in_dev_get_rtnl(dev)) != NULL) {
+		struct nx_info *nxi = current->nx_info;
+		int hide_netif = vx_flags(VXF_HIDE_NETIF, 0);
+
 		if (tryaddrmatch) {
 			/* Matthias Andree */
 			/* compare label and address (4.4BSD style) */
@@ -642,6 +618,8 @@ int devinet_ioctl(unsigned int cmd, void __user *arg)
 			   This is checked above. */
 			for (ifap = &in_dev->ifa_list; (ifa = *ifap) != NULL;
 			     ifap = &ifa->ifa_next) {
+				if (hide_netif && !ifa_in_nx_info(ifa, nxi))
+					continue;
 				if (!strcmp(ifr.ifr_name, ifa->ifa_label) &&
 				    sin_orig.sin_addr.s_addr ==
 							ifa->ifa_address) {
@@ -654,17 +632,17 @@ int devinet_ioctl(unsigned int cmd, void __user *arg)
 		   comparing just the label */
 		if (!ifa) {
 			for (ifap = &in_dev->ifa_list; (ifa = *ifap) != NULL;
-			     ifap = &ifa->ifa_next)
+			     ifap = &ifa->ifa_next) {
+				if (hide_netif && !ifa_in_nx_info(ifa, nxi))
+					continue;
 				if (!strcmp(ifr.ifr_name, ifa->ifa_label))
 					break;
+			}
 		}
 	}
 
 	ret = -EADDRNOTAVAIL;
 	if (!ifa && cmd != SIOCSIFADDR && cmd != SIOCSIFFLAGS)
-		goto done;
-	if (vx_flags(VXF_HIDE_NETIF, 0) &&
-		!ifa_in_nx_info(ifa, current->nx_info))
 		goto done;
 
 	switch(cmd) {

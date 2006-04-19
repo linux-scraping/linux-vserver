@@ -159,7 +159,9 @@ on_hold:
 
 #ifdef	CONFIG_VSERVER_HARDCPU
 	/* next interval? */
-	if (tokens > sched_pc->fill_rate[0])
+	if (!sched_pc->fill_rate[0])
+		delta_min[0] = HZ;
+	else if (tokens > sched_pc->fill_rate[0])
 		delta_min[0] += sched_pc->interval[0] *
 			tokens / sched_pc->fill_rate[0];
 	vxd_check_range(delta_min[0], 0, INT_MAX);
@@ -169,7 +171,9 @@ on_hold:
 		return -1;
 
 	/* next interval? */
-	if (tokens > sched_pc->fill_rate[1])
+	if (!sched_pc->fill_rate[1])
+		delta_min[1] = HZ;
+	else if (tokens > sched_pc->fill_rate[1])
 		delta_min[1] += sched_pc->interval[1] *
 			tokens / sched_pc->fill_rate[1];
 	vxd_check_range(delta_min[1], 0, INT_MAX);
@@ -234,6 +238,14 @@ int do_set_sched(struct vx_info *vxi, struct vcmd_set_sched_v4 *data)
 		vxi->sched.update = cpumask_of_cpu(data->cpu_id);
 	else
 		vxi->sched.update = CPU_MASK_ALL;
+	/* forced reload? */
+	if (set_mask & VXSM_FORCE) {
+		int cpu;
+
+		for_each_cpu(cpu)
+			vx_update_sched_param(&vxi->sched,
+				&vx_per_cpu(vxi, sched_pc, cpu));
+	}
 #else
 	/* on UP we update immediately */
 	vx_update_sched_param(&vxi->sched,
