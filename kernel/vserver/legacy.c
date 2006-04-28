@@ -31,6 +31,7 @@ static int vx_set_initpid(struct vx_info *vxi, int pid)
 	if (!init)
 		return -ESRCH;
 
+	vxi->vx_flags &= ~VXF_STATE_INIT;
 	return vx_set_init(vxi, init);
 }
 
@@ -88,7 +89,7 @@ int vc_new_s_context(uint32_t ctx, void __user *data)
 		vx_info_flags(new_vxi, VX_INFO_PRIVATE, 0))
 		goto out_put;
 
-	new_vxi->vx_flags &= ~(VXF_STATE_SETUP|VXF_STATE_INIT);
+	new_vxi->vx_flags &= ~VXF_STATE_SETUP;
 
 	ret = vx_migrate_task(current, new_vxi);
 	if (ret == 0) {
@@ -102,6 +103,9 @@ int vc_new_s_context(uint32_t ctx, void __user *data)
 		if (vc_data.flags & VX_INFO_NPROC)
 			new_vxi->limit.rlim[RLIMIT_NPROC] =
 				current->signal->rlim[RLIMIT_NPROC].rlim_max;
+
+		/* tweak some defaults for legacy */
+		new_vxi->vx_flags |= (VXF_HIDE_NETIF|VXF_INFO_INIT);
 		ret = new_vxi->vx_id;
 	}
 out_put:

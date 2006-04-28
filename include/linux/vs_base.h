@@ -97,6 +97,9 @@ static inline int __vx_check(xid_t cid, xid_t id, unsigned int mode)
 	(current->vx_info && \
 	(current->vx_info->vx_initpid == (n)))
 
+#define vx_capable(b,c) (capable(b) || \
+	((current->euid == 0) && vx_ccaps(c)))
+
 
 #else
 #warning duplicate inclusion

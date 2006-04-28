@@ -84,11 +84,11 @@ static int generic_quotactl_valid(struct super_block *sb, int type, int cmd, qid
 	if (cmd == Q_GETQUOTA) {
 		if (((type == USRQUOTA && current->euid != id) ||
 		     (type == GRPQUOTA && !in_egroup_p(id))) &&
-		    !capable(CAP_SYS_ADMIN) && !vx_ccaps(VXC_QUOTA_CTL))
+		    !vx_capable(CAP_SYS_ADMIN, VXC_QUOTA_CTL))
 			return -EPERM;
 	}
 	else if (cmd != Q_GETFMT && cmd != Q_SYNC && cmd != Q_GETINFO)
-		if (!capable(CAP_SYS_ADMIN) && !vx_ccaps(VXC_QUOTA_CTL))
+		if (!vx_capable(CAP_SYS_ADMIN, VXC_QUOTA_CTL))
 			return -EPERM;
 
 	return 0;
@@ -135,10 +135,10 @@ static int xqm_quotactl_valid(struct super_block *sb, int type, int cmd, qid_t i
 	if (cmd == Q_XGETQUOTA) {
 		if (((type == XQM_USRQUOTA && current->euid != id) ||
 		     (type == XQM_GRPQUOTA && !in_egroup_p(id))) &&
-		     !capable(CAP_SYS_ADMIN) && !vx_ccaps(VXC_QUOTA_CTL))
+		     !vx_capable(CAP_SYS_ADMIN, VXC_QUOTA_CTL))
 			return -EPERM;
 	} else if (cmd != Q_XGETQSTAT && cmd != Q_XQUOTASYNC) {
-		if (!capable(CAP_SYS_ADMIN) && !vx_ccaps(VXC_QUOTA_CTL))
+		if (!vx_capable(CAP_SYS_ADMIN, VXC_QUOTA_CTL))
 			return -EPERM;
 	}
 

@@ -607,6 +607,9 @@ int devinet_ioctl(unsigned int cmd, void __user *arg)
 		*colon = ':';
 
 	if ((in_dev = __in_dev_get_rtnl(dev)) != NULL) {
+		struct nx_info *nxi = current->nx_info;
+		int hide_netif = vx_flags(VXF_HIDE_NETIF, 0);
+
 		if (tryaddrmatch) {
 			/* Matthias Andree */
 			/* compare label and address (4.4BSD style) */
@@ -615,6 +618,8 @@ int devinet_ioctl(unsigned int cmd, void __user *arg)
 			   This is checked above. */
 			for (ifap = &in_dev->ifa_list; (ifa = *ifap) != NULL;
 			     ifap = &ifa->ifa_next) {
+				if (hide_netif && !ifa_in_nx_info(ifa, nxi))
+					continue;
 				if (!strcmp(ifr.ifr_name, ifa->ifa_label) &&
 				    sin_orig.sin_addr.s_addr ==
 							ifa->ifa_address) {
@@ -627,17 +632,17 @@ int devinet_ioctl(unsigned int cmd, void __user *arg)
 		   comparing just the label */
 		if (!ifa) {
 			for (ifap = &in_dev->ifa_list; (ifa = *ifap) != NULL;
-			     ifap = &ifa->ifa_next)
+			     ifap = &ifa->ifa_next) {
+				if (hide_netif && !ifa_in_nx_info(ifa, nxi))
+					continue;
 				if (!strcmp(ifr.ifr_name, ifa->ifa_label))
 					break;
+			}
 		}
 	}
 
 	ret = -EADDRNOTAVAIL;
 	if (!ifa && cmd != SIOCSIFADDR && cmd != SIOCSIFFLAGS)
-		goto done;
-	if (vx_flags(VXF_HIDE_NETIF, 0) &&
-		!ifa_in_nx_info(ifa, current->nx_info))
 		goto done;
 
 	switch(cmd) {

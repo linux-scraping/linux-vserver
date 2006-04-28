@@ -1547,7 +1547,7 @@ asmlinkage long sys_sethostname(char __user *name, int len)
 	int errno;
 	char tmp[__NEW_UTS_LEN];
 
-	if (!capable(CAP_SYS_ADMIN) && !vx_ccaps(VXC_SET_UTSNAME))
+	if (!vx_capable(CAP_SYS_ADMIN, VXC_SET_UTSNAME))
 		return -EPERM;
 	if (len < 0 || len > __NEW_UTS_LEN)
 		return -EINVAL;
@@ -1596,7 +1596,7 @@ asmlinkage long sys_setdomainname(char __user *name, int len)
 	int errno;
 	char tmp[__NEW_UTS_LEN];
 
-	if (!capable(CAP_SYS_ADMIN) && !vx_ccaps(VXC_SET_UTSNAME))
+	if (!vx_capable(CAP_SYS_ADMIN, VXC_SET_UTSNAME))
 		return -EPERM;
 	if (len < 0 || len > __NEW_UTS_LEN)
 		return -EINVAL;
@@ -1664,7 +1664,7 @@ asmlinkage long sys_setrlimit(unsigned int resource, struct rlimit __user *rlim)
                return -EINVAL;
 	old_rlim = current->signal->rlim + resource;
 	if ((new_rlim.rlim_max > old_rlim->rlim_max) &&
-	    !capable(CAP_SYS_RESOURCE) && !vx_ccaps(VXC_SET_RLIMIT))
+	    !vx_capable(CAP_SYS_RESOURCE, VXC_SET_RLIMIT))
 		return -EPERM;
 	if (resource == RLIMIT_NOFILE && new_rlim.rlim_max > NR_OPEN)
 			return -EPERM;

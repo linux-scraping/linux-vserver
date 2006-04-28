@@ -117,7 +117,7 @@ int vx_effective_vavavoom(struct vx_info *vxi, int max_prio)
 		vavavoom = 0;
 
 	vxi->sched.vavavoom = vavavoom;
-	return vavavoom;
+	return vavavoom + vxi->sched.priority_bias;
 }
 
 
