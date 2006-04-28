@@ -656,7 +656,7 @@ static int dummy_sem_semop (struct sem_array *sma,
 
 static int dummy_netlink_send (struct sock *sk, struct sk_buff *skb)
 {
-	NETLINK_CB(skb).eff_cap = current->cap_effective;
+	cap_t(NETLINK_CB(skb).eff_cap) = vx_mbcap(cap_effective);
 	return 0;
 }
 

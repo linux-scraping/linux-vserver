@@ -107,6 +107,7 @@ static struct vx_info *__alloc_vx_info(xid_t xid)
 	new->vx_flags = VXF_INIT_SET;
 	new->vx_bcaps = CAP_INIT_EFF_SET;
 	new->vx_ccaps = 0;
+	new->vx_cap_bset = cap_bset;
 
 	new->reboot_cmd = 0;
 	new->exit_code = 0;
@@ -590,11 +591,11 @@ int vx_migrate_user(struct task_struct *p, struct vx_info *vxi)
 	return 0;
 }
 
-void vx_mask_bcaps(struct vx_info *vxi, struct task_struct *p)
+void vx_mask_cap_bset(struct vx_info *vxi, struct task_struct *p)
 {
-	p->cap_effective &= vxi->vx_bcaps;
-	p->cap_inheritable &= vxi->vx_bcaps;
-	p->cap_permitted &= vxi->vx_bcaps;
+	p->cap_effective &= vxi->vx_cap_bset;
+	p->cap_inheritable &= vxi->vx_cap_bset;
+	p->cap_permitted &= vxi->vx_cap_bset;
 }
 
 
@@ -673,7 +674,7 @@ int vx_migrate_task(struct task_struct *p, struct vx_info *vxi)
 			"moved task %p into vxi:%p[#%d]",
 			p, vxi, vxi->vx_id);
 
-		vx_mask_bcaps(vxi, p);
+		vx_mask_cap_bset(vxi, p);
 		task_unlock(p);
 	}
 out:
@@ -914,7 +915,7 @@ int vc_set_cflags(uint32_t id, void __user *data)
 
 	if (vxi == current->vx_info) {
 		if (trigger & VXF_STATE_SETUP)
-			vx_mask_bcaps(vxi, current);
+			vx_mask_cap_bset(vxi, current);
 		if (trigger & VXF_STATE_INIT) {
 			vx_set_init(vxi, current);
 			vx_set_reaper(vxi, current);

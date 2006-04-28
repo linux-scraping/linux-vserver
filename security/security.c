@@ -198,24 +198,10 @@ int capable(int cap)
 	return 1;
 }
 
-int vx_capable(int cap, int ccap)
-{
-	if (security_ops->capable(current, cap)) {
-		/* capability denied */
-		return 0;
-	}
-	if (!vx_ccaps(ccap))
-		return 0;
-
-	/* capability granted */
-	current->flags |= PF_SUPERPRIV;
-	return 1;
-}
 
 EXPORT_SYMBOL_GPL(register_security);
 EXPORT_SYMBOL_GPL(unregister_security);
 EXPORT_SYMBOL_GPL(mod_reg_security);
 EXPORT_SYMBOL_GPL(mod_unreg_security);
 EXPORT_SYMBOL(capable);
-EXPORT_SYMBOL(vx_capable);
 EXPORT_SYMBOL(security_ops);

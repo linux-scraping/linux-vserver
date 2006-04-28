@@ -815,7 +815,7 @@ do_kern_mount(const char *fstype, int flags, const char *name, void *data)
 
 	sb = ERR_PTR(-EPERM);
 	if ((type->fs_flags & FS_BINARY_MOUNTDATA) &&
-		!capable(CAP_SYS_ADMIN) && !vx_ccaps(VXC_BINARY_MOUNT))
+		!vx_capable(CAP_SYS_ADMIN, VXC_BINARY_MOUNT))
 		goto out;
 
 	sb = ERR_PTR(-ENOMEM);

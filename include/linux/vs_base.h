@@ -88,9 +88,37 @@ static inline int __vx_check(xid_t cid, xid_t id, unsigned int mode)
 #define vx_mcaps(c)	vx_info_mcaps(current->vx_info,(c))
 
 
-#define vx_current_bcaps() \
-	(((current->vx_info) && !vx_flags(VXF_STATE_SETUP, 0)) ? \
-	current->vx_info->vx_bcaps : cap_bset)
+/* context bcap mask */
+
+#define __vx_bcaps(v)	((v) ? (v)->vx_bcaps : ~0 )
+
+#define vx_current_bcaps()	__vx_bcaps(current->vx_info)
+
+#define vx_info_bcaps(v,c)	(__vx_bcaps(v) & (c))
+
+#define vx_bcaps(c)	vx_info_bcaps(current->vx_info,(c))
+
+
+#define vx_info_cap_bset(v)	((v) ? (v)->vx_cap_bset : cap_bset)
+
+#define vx_current_cap_bset()	vx_info_cap_bset(current->vx_info)
+
+
+#define __vx_info_mbcap(v,b) \
+	(!vx_info_flags(v, VXF_STATE_SETUP, 0) ? \
+	vx_info_bcaps(v, b) : (b))
+
+#define vx_info_mbcap(v,b)	__vx_info_mbcap(v,cap_t(b))
+
+#define task_vx_mbcap(t,b) \
+	vx_info_mbcap((t)->vx_info, (t)->b)
+
+#define vx_mbcap(b)	task_vx_mbcap(current,b)
+
+#define vx_cap_raised(v,c,f)	(vx_info_mbcap(v,c) & CAP_TO_MASK(f))
+
+#define vx_capable(b,c) (capable(b) || \
+	(cap_raised(current->cap_effective,b) && vx_ccaps(c)))
 
 
 #define vx_current_initpid(n) \
