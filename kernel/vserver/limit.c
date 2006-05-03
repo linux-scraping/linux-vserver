@@ -71,7 +71,7 @@ static inline uint64_t vc_get_rlim(struct vx_info *vxi, int id)
 	return limit;
 }
 
-int do_get_rlimit(xid_t xid, uint32_t id,
+static int do_get_rlimit(xid_t xid, uint32_t id,
 	uint64_t *minimum, uint64_t *softlimit, uint64_t *maximum)
 {
 	struct vx_info *vxi;
@@ -111,7 +111,7 @@ int vc_get_rlimit(uint32_t id, void __user *data)
 	return 0;
 }
 
-int do_set_rlimit(xid_t xid, uint32_t id,
+static int do_set_rlimit(xid_t xid, uint32_t id,
 	uint64_t minimum, uint64_t softlimit, uint64_t maximum)
 {
 	struct vx_info *vxi;

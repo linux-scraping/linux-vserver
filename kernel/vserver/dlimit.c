@@ -182,7 +182,7 @@ void rcu_free_dl_info(struct rcu_head *head)
 
 
 
-int do_addrem_dlimit(uint32_t id, const char __user *name,
+static int do_addrem_dlimit(uint32_t id, const char __user *name,
 	uint32_t flags, int add)
 {
 	struct nameidata nd;

@@ -483,7 +483,7 @@ void kernel_power_off(void)
 }
 EXPORT_SYMBOL_GPL(kernel_power_off);
 
-long vs_reboot(unsigned int, void *);
+long vs_reboot(unsigned int, void __user *);
 
 /*
  * Reboot system call: for obvious reasons only root may call it,

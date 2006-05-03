@@ -24,7 +24,7 @@
 char vshelper_path[255] = "/sbin/vshelper";
 
 
-int do_vshelper(char *name, char *argv[], char *envp[], int sync)
+static int do_vshelper(char *name, char *argv[], char *envp[], int sync)
 {
 	int ret;
 
@@ -52,7 +52,7 @@ int do_vshelper(char *name, char *argv[], char *envp[], int sync)
  *      envp [*] = type-specific parameters
  */
 
-long vs_reboot_helper(struct vx_info *vxi, int cmd, void *arg)
+long vs_reboot_helper(struct vx_info *vxi, int cmd, void __user *arg)
 {
 	char id_buf[8], cmd_buf[16];
 	char uid_buf[16], pid_buf[16];
@@ -106,7 +106,7 @@ long vs_reboot_helper(struct vx_info *vxi, int cmd, void *arg)
 }
 
 
-long vs_reboot(unsigned int cmd, void * arg)
+long vs_reboot(unsigned int cmd, void __user *arg)
 {
 	struct vx_info *vxi = current->vx_info;
 	long ret = 0;

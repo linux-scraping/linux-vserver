@@ -22,7 +22,6 @@
 #include <linux/seccomp.h>
 #include <linux/audit.h>
 #include <linux/signal.h>
-#include <linux/vs_cvirt.h>
 
 #include <asm/asi.h>
 #include <asm/pgtable.h>

@@ -275,7 +275,7 @@ int vx_proc_ioctl(struct inode * inode, struct file * filp,
 		error = -EPERM;
 		flags = entry->vx_flags;
 		if (capable(CAP_CONTEXT))
-			error = put_user(flags, (int *) arg);
+			error = put_user(flags, (int __user *) arg);
 		break;
 	}
 	case FIOC_SETXFLG: {
@@ -287,7 +287,7 @@ int vx_proc_ioctl(struct inode * inode, struct file * filp,
 		if (IS_RDONLY(inode))
 			break;
 		error = -EFAULT;
-		if (get_user(flags, (int *) arg))
+		if (get_user(flags, (int __user *) arg))
 			break;
 		error = 0;
 		entry->vx_flags = flags;
