@@ -260,7 +260,7 @@ flags_err:
 			return -EROFS;
 		if (!(inode->i_sb->s_flags & MS_TAGGED))
 			return -ENOSYS;
-		if (get_user(tag, (int *) arg))
+		if (get_user(tag, (int __user *) arg))
 			return -EFAULT;
 
 		handle = ext3_journal_start(inode, 1);

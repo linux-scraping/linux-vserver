@@ -48,6 +48,7 @@ static inline int vx_info_proc_limit(struct _vx_limit *limit, char *buffer)
 		"SHM"	VX_LIMIT_FMT
 		"SEMA"	VX_LIMIT_FMT
 		"SEMS"	VX_LIMIT_FMT
+		"DENT"	VX_LIMIT_FMT
 		VX_LIMIT_ARG(RLIMIT_NPROC)
 		VX_LIMIT_ARG(RLIMIT_AS)
 		VX_LIMIT_ARG(RLIMIT_MEMLOCK)
@@ -61,6 +62,7 @@ static inline int vx_info_proc_limit(struct _vx_limit *limit, char *buffer)
 		VX_LIMIT_ARG(VLIMIT_SHMEM)
 		VX_LIMIT_ARG(VLIMIT_SEMARY)
 		VX_LIMIT_ARG(VLIMIT_NSEMS)
+		VX_LIMIT_ARG(VLIMIT_DENTRY)
 		);
 }
 

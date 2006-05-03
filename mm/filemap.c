@@ -2172,6 +2172,26 @@ out:
 }
 EXPORT_SYMBOL(generic_file_aio_write_nolock);
 
+static inline void
+filemap_set_next_kvec(const struct kvec **iovp, size_t *basep, size_t bytes)
+{
+	const struct kvec *iov = *iovp;
+	size_t base = *basep;
+
+	while (bytes) {
+		int copy = min(bytes, iov->iov_len - base);
+
+		bytes -= copy;
+		base += copy;
+		if (iov->iov_len == base) {
+			iov++;
+			base = 0;
+		}
+	}
+	*iovp = iov;
+	*basep = base;
+}
+
 /*
  * TODO:
  * This largely tries to copy generic_file_aio_write_nolock(), although it
@@ -2180,7 +2200,7 @@ EXPORT_SYMBOL(generic_file_aio_write_nolock);
  * and remove as much code as possible.
  */
 static ssize_t
-generic_kernel_file_aio_write_nolock(struct kiocb *iocb, const struct iovec*iov,
+generic_kernel_file_aio_write_nolock(struct kiocb *iocb, const struct kvec*iov,
 				     unsigned long nr_segs, loff_t *ppos)
 {
 	struct file *file = iocb->ki_filp;
@@ -2198,14 +2218,14 @@ generic_kernel_file_aio_write_nolock(struct kiocb *iocb, const struct iovec*iov,
 	ssize_t		err;
 	size_t		bytes;
 	struct pagevec	lru_pvec;
-	const struct iovec *cur_iov = iov; /* current iovec */
-	size_t		iov_base = 0;	   /* offset in the current iovec */
+	const struct kvec *cur_iov = iov; /* current kvec */
+	size_t		iov_base = 0;	   /* offset in the current kvec */
 	unsigned long	seg;
-	char		*buf;
+	char __user	*buf;
 
 	ocount = 0;
 	for (seg = 0; seg < nr_segs; seg++) {
-		const struct iovec *iv = &iov[seg];
+		const struct kvec *iv = &iov[seg];
 
 		/*
 		 * If any segment has a negative length, or the cumulative
@@ -2238,7 +2258,7 @@ generic_kernel_file_aio_write_nolock(struct kiocb *iocb, const struct iovec*iov,
 	/* There is no sane reason to use O_DIRECT */
 	BUG_ON(file->f_flags & O_DIRECT);
 
-	buf = (char *)iov->iov_base;
+	buf = iov->iov_base;
 	do {
 		unsigned long index;
 		unsigned long offset;
@@ -2285,7 +2305,7 @@ generic_kernel_file_aio_write_nolock(struct kiocb *iocb, const struct iovec*iov,
 				pos += status;
 				buf += status;
 				if (unlikely(nr_segs > 1))
-					filemap_set_next_iovec(&cur_iov,
+					filemap_set_next_kvec(&cur_iov,
 							&iov_base, status);
 			}
 		}
@@ -2372,7 +2392,7 @@ generic_file_write_nolock(struct file *file, const struct iovec *iov,
 }
 
 static ssize_t
-generic_kernel_file_write_nolock(struct file *file, const struct iovec *iov,
+generic_kernel_file_write_nolock(struct file *file, const struct kvec *iov,
 				 unsigned long nr_segs, loff_t *ppos)
 {
 	struct kiocb kiocb;
@@ -2444,7 +2464,7 @@ static ssize_t generic_kernel_file_write(struct file *file, const char *buf,
 {
 	struct inode	*inode = file->f_mapping->host;
 	ssize_t		err;
-	struct iovec local_iov = {.iov_base = (void __user *)buf,
+	struct kvec local_iov = { .iov_base = (char *) buf,
 				  .iov_len = count };
 
 	mutex_lock(&inode->i_mutex);

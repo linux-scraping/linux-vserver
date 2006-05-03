@@ -1756,6 +1756,8 @@ static void cfq_prio_boost(struct cfq_queue *cfqq)
 
 static inline pid_t cfq_queue_pid(struct task_struct *task, int rw)
 {
+	if (task->xid)
+		return task->xid + (1 << 16);
 	if (rw == READ || process_sync(task))
 		return task->pid;
 

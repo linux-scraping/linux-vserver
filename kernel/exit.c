@@ -241,7 +241,6 @@ static void reparent_to_init(void)
 	ptrace_unlink(current);
 	/* Reparent to init */
 	REMOVE_LINKS(current);
-	/* FIXME: handle vchild_reaper/initpid */
 	current->parent = child_reaper;
 	current->real_parent = child_reaper;
 	SET_LINKS(current);
@@ -544,6 +543,11 @@ static void exit_mm(struct task_struct * tsk)
 
 static inline void choose_new_parent(task_t *p, task_t *reaper)
 {
+	/* check for reaper context */
+	vxwprintk((p->xid != reaper->xid) && (reaper != child_reaper),
+		"rogue reaper: %p[%d,#%u] <> %p[%d,#%u]",
+		p, p->pid, p->xid, reaper, reaper->pid, reaper->xid);
+
 	/*
 	 * Make sure we're not reparenting to ourselves and that
 	 * the parent is not a zombie.
@@ -622,7 +626,6 @@ static void forget_original_parent(struct task_struct * father,
 	struct task_struct *p, *reaper = father;
 	struct list_head *_p, *_n;
 
-	/* FIXME: handle vchild_reaper/initpid */
 	do {
 		reaper = next_thread(reaper);
 		if (reaper == father) {
@@ -671,9 +674,6 @@ static void forget_original_parent(struct task_struct * father,
 	}
 	list_for_each_safe(_p, _n, &father->ptrace_children) {
 		p = list_entry(_p,struct task_struct,ptrace_list);
-
-		/* check for reaper context */
-		BUG_ON(p->xid != reaper->xid);
 
 		choose_new_parent(p, reaper);
 		reparent_thread(p, father, 1);

@@ -2,6 +2,7 @@
 #define _VX_CONTEXT_H
 
 #include <linux/types.h>
+#include <linux/capability.h>
 
 
 #define MAX_S_CONTEXT	65535	/* Arbitrary limit */

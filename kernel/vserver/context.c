@@ -655,12 +655,16 @@ int vx_migrate_task(struct task_struct *p, struct vx_info *vxi)
 			__rlim_dec(&old_vxi->limit, RLIMIT_NPROC);
 			/* FIXME: what about the struct files here? */
 			__rlim_sub(&old_vxi->limit, VLIMIT_OPENFD, openfd);
+			/* account for the executable */
+			__rlim_dec(&old_vxi->limit, VLIMIT_DENTRY);
 		}
 		atomic_inc(&vxi->cvirt.nr_threads);
 		atomic_inc(&vxi->cvirt.nr_running);
 		__rlim_inc(&vxi->limit, RLIMIT_NPROC);
 		/* FIXME: what about the struct files here? */
 		__rlim_add(&vxi->limit, VLIMIT_OPENFD, openfd);
+		/* account for the executable */
+		__rlim_inc(&vxi->limit, VLIMIT_DENTRY);
 
 		if (old_vxi) {
 			release_vx_info(old_vxi, p);
@@ -931,7 +935,7 @@ int vc_set_cflags(uint32_t id, void __user *data)
 	return 0;
 }
 
-int do_get_caps(xid_t xid, uint64_t *bcaps, uint64_t *ccaps)
+static int do_get_caps(xid_t xid, uint64_t *bcaps, uint64_t *ccaps)
 {
 	struct vx_info *vxi;
 
@@ -978,7 +982,7 @@ int vc_get_ccaps(uint32_t id, void __user *data)
 	return 0;
 }
 
-int do_set_caps(xid_t xid, uint64_t bcaps, uint64_t bmask,
+static int do_set_caps(xid_t xid, uint64_t bcaps, uint64_t bmask,
 	uint64_t ccaps, uint64_t cmask)
 {
 	struct vx_info *vxi;

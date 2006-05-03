@@ -8,6 +8,7 @@
 #define VLIMIT_SHMEM	19
 #define VLIMIT_SEMARY	20
 #define VLIMIT_NSEMS	21
+#define VLIMIT_DENTRY	22
 
 #ifdef	__KERNEL__
 

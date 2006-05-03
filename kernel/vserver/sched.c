@@ -188,7 +188,7 @@ on_hold:
 }
 
 
-int do_set_sched(struct vx_info *vxi, struct vcmd_set_sched_v4 *data)
+static int do_set_sched(struct vx_info *vxi, struct vcmd_set_sched_v4 *data)
 {
 	unsigned int set_mask = data->set_mask;
 	unsigned int update_mask;
