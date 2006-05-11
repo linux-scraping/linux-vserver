@@ -20,6 +20,7 @@
 #include <linux/root_dev.h>
 #include <linux/utsname.h>
 #include <linux/cpu.h>
+#include <linux/vs_cvirt.h>
 #include <asm/uaccess.h>
 #include <asm/io.h>
 #include <asm/sections.h>
@@ -485,7 +486,7 @@ static int show_cpuinfo(struct seq_file *m, void *v)
 		seq_printf(m, "machine\t\t: %s\n", get_system_type());
 
 	seq_printf(m, "processor\t: %d\n", cpu);
-	seq_printf(m, "cpu family\t: %s\n", system_utsname.machine);
+	seq_printf(m, "cpu family\t: %s\n", vx_new_uts(machine));
 	seq_printf(m, "cpu type\t: %s\n", get_cpu_subtype());
 
 	show_cpuflags(m);

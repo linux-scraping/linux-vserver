@@ -2221,7 +2221,7 @@ generic_kernel_file_aio_write_nolock(struct kiocb *iocb, const struct kvec*iov,
 	const struct kvec *cur_iov = iov; /* current kvec */
 	size_t		iov_base = 0;	   /* offset in the current kvec */
 	unsigned long	seg;
-	char __user	*buf;
+	char		*buf;
 
 	ocount = 0;
 	for (seg = 0; seg < nr_segs; seg++) {
