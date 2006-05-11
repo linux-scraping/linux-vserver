@@ -39,6 +39,7 @@
 #include <linux/syscalls.h>
 #include <linux/random.h>
 #include <linux/vs_memory.h>
+#include <linux/vs_cvirt.h>
 
 #include <asm/uaccess.h>
 #include <asm/param.h>

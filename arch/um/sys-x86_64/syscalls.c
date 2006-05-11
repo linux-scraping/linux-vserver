@@ -9,6 +9,7 @@
 #include "linux/shm.h"
 #include "linux/utsname.h"
 #include "linux/personality.h"
+#include "linux/vs_cvirt.h"
 #include "asm/uaccess.h"
 #define __FRAME_OFFSETS
 #include "asm/ptrace.h"
@@ -21,7 +22,7 @@ asmlinkage long sys_uname64(struct new_utsname __user * name)
 {
 	int err;
 	down_read(&uts_sem);
-	err = copy_to_user(name, &system_utsname, sizeof (*name));
+	err = copy_to_user(name, vx_new_utsname(), sizeof (*name));
 	up_read(&uts_sem);
 	if (personality(current->personality) == PER_LINUX32)
 		err |= copy_to_user(&name->machine, "i686", 5);

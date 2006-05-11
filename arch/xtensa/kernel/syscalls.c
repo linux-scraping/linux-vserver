@@ -35,6 +35,7 @@
 #include <linux/msg.h>
 #include <linux/shm.h>
 #include <linux/errno.h>
+#include <linux/vs_cvirt.h>
 #include <asm/ptrace.h>
 #include <asm/signal.h>
 #include <asm/uaccess.h>
@@ -129,7 +130,7 @@ out:
 
 int sys_uname(struct old_utsname * name)
 {
-	if (name && !copy_to_user(name, &system_utsname, sizeof (*name)))
+	if (name && !copy_to_user(name, vx_new_utsname(), sizeof (*name)))
 		return 0;
 	return -EFAULT;
 }

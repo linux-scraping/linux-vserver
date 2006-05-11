@@ -617,6 +617,10 @@ int udp_sendmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
 				goto out;
 			if (daddr == IPI_LOOPBACK && !vx_check(0, VX_ADMIN))
 				daddr = fl.fl4_dst = nxi->ipv4[0];
+#ifdef VSERVER_REMAP_SADDR
+			if (saddr == IPI_LOOPBACK && !vx_check(0, VX_ADMIN))
+				saddr = fl.fl4_src = nxi->ipv4[0];
+#endif
 		}
 		err = ip_route_output_flow(&rt, &fl, sk, !(msg->msg_flags&MSG_DONTWAIT));
 		if (err)

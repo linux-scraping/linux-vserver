@@ -29,6 +29,7 @@
 #include <linux/file.h>
 #include <linux/utsname.h>
 #include <linux/syscalls.h>
+#include <linux/vs_cvirt.h>
 #include <asm/uaccess.h>
 #include <asm/ipc.h>
 #include <asm/ptrace.h>
@@ -279,7 +280,7 @@ asmlinkage int sys_uname(struct old_utsname * name)
 	if (!name)
 		return -EFAULT;
 	down_read(&uts_sem);
-	err=copy_to_user(name, &system_utsname, sizeof (*name));
+	err=copy_to_user(name, vx_new_utsname(), sizeof (*name));
 	up_read(&uts_sem);
 	return err?-EFAULT:0;
 }
