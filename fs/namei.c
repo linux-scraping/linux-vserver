@@ -1536,8 +1536,12 @@ int may_open(struct nameidata *nd, int acc_mode, int flag)
 		return -EISDIR;
 
 #ifdef	CONFIG_VSERVER_COWBL
-	if (IS_COW_LINK(inode) && (flag & FMODE_WRITE))
-		return -EMLINK;
+	if (IS_COW(inode) && (flag & FMODE_WRITE)) {
+		if (IS_COW_LINK(inode))
+			return -EMLINK;
+		inode->i_flags &= ~(S_IUNLINK|S_IMMUTABLE);
+		mark_inode_dirty(inode);
+	}
 #endif
 	error = vfs_permission(nd, acc_mode);
 	if (error)

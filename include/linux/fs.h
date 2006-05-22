@@ -176,9 +176,8 @@ extern int dir_notify_enable;
 #define IS_SWAPFILE(inode)	((inode)->i_flags & S_SWAPFILE)
 #define IS_PRIVATE(inode)	((inode)->i_flags & S_PRIVATE)
 
-#define IS_COW_LINK(inode)	(S_ISREG((inode)->i_mode) && \
-					((inode)->i_nlink > 1) && \
-					IS_IUNLINK(inode) && IS_IMMUTABLE(inode))
+#define IS_COW(inode)		(IS_IUNLINK(inode) && IS_IMMUTABLE(inode))
+#define IS_COW_LINK(inode)	(S_ISREG((inode)->i_mode) && ((inode)->i_nlink > 1))
 
 /* the read-only stuff doesn't really belong here, but any other place is
    probably as bad and I don't want to create yet another include file. */
