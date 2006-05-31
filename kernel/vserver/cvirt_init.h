@@ -11,6 +11,8 @@ static inline void vx_info_init_cvirt(struct _vx_cvirt *cvirt)
 	nsuptime = (unsigned long long)cvirt->bias_uptime.tv_sec
 		* NSEC_PER_SEC + cvirt->bias_uptime.tv_nsec;
 	cvirt->bias_clock = nsec_to_clock_t(nsuptime);
+	cvirt->bias_tv.tv_sec = 0;
+	cvirt->bias_tv.tv_usec = 0;
 
 	jiffies_to_timespec(idle_jiffies, &cvirt->bias_idle);
 	atomic_set(&cvirt->nr_threads, 0);

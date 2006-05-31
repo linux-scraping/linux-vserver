@@ -25,7 +25,6 @@
 #include <linux/signal.h>
 #include <linux/audit.h>
 #include <linux/capability.h>
-#include <linux/vs_pid.h>
 #include <asm/param.h>
 #include <asm/uaccess.h>
 #include <asm/unistd.h>
@@ -878,7 +877,6 @@ __group_complete_signal(int sig, struct task_struct *p)
 		if (t == NULL)
 			/* restart balancing at this thread */
 			t = p->signal->curr_target = p;
-		BUG_ON(t->tgid != p->tgid);
 
 		while (!wants_signal(sig, t)) {
 			t = next_thread(t);
@@ -1765,9 +1763,9 @@ relock:
 			/* Let the debugger run.  */
 			ptrace_stop(signr, signr, info);
 
-			/* We're back.  Did the debugger cancel the sig or group_exit? */
+			/* We're back.  Did the debugger cancel the sig?  */
 			signr = current->exit_code;
-			if (signr == 0 || current->signal->flags & SIGNAL_GROUP_EXIT)
+			if (signr == 0)
 				continue;
 
 			current->exit_code = 0;

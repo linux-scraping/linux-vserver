@@ -38,6 +38,7 @@
 #include <linux/uio.h>
 #include <linux/vfs.h>
 #include <linux/rcupdate.h>
+#include <linux/vs_cvirt.h>
 
 #include <asm/fpu.h>
 #include <asm/io.h>
@@ -399,18 +400,20 @@ asmlinkage int
 osf_utsname(char __user *name)
 {
 	int error;
+	struct new_utsname *ptr;
 
 	down_read(&uts_sem);
+	ptr = vx_new_utsname();
 	error = -EFAULT;
-	if (copy_to_user(name + 0, system_utsname.sysname, 32))
+	if (copy_to_user(name + 0, ptr->sysname, 32))
 		goto out;
-	if (copy_to_user(name + 32, system_utsname.nodename, 32))
+	if (copy_to_user(name + 32, ptr->nodename, 32))
 		goto out;
-	if (copy_to_user(name + 64, system_utsname.release, 32))
+	if (copy_to_user(name + 64, ptr->release, 32))
 		goto out;
-	if (copy_to_user(name + 96, system_utsname.version, 32))
+	if (copy_to_user(name + 96, ptr->version, 32))
 		goto out;
-	if (copy_to_user(name + 128, system_utsname.machine, 32))
+	if (copy_to_user(name + 128, ptr->machine, 32))
 		goto out;
 
 	error = 0;
@@ -439,6 +442,7 @@ osf_getdomainname(char __user *name, int namelen)
 {
 	unsigned len;
 	int i;
+	char *domainname;
 
 	if (!access_ok(VERIFY_WRITE, name, namelen))
 		return -EFAULT;
@@ -448,9 +452,10 @@ osf_getdomainname(char __user *name, int namelen)
 		len = 32;
 
 	down_read(&uts_sem);
+	domainname = vx_new_uts(domainname);
 	for (i = 0; i < len; ++i) {
-		__put_user(system_utsname.domainname[i], name + i);
-		if (system_utsname.domainname[i] == '\0')
+		__put_user(domainname[i], name + i);
+		if (domainname[i] == '\0')
 			break;
 	}
 	up_read(&uts_sem);
@@ -607,30 +612,30 @@ osf_sigstack(struct sigstack __user *uss, struct sigstack __user *uoss)
 asmlinkage long
 osf_sysinfo(int command, char __user *buf, long count)
 {
-	static char * sysinfo_table[] = {
-		system_utsname.sysname,
-		system_utsname.nodename,
-		system_utsname.release,
-		system_utsname.version,
-		system_utsname.machine,
-		"alpha",	/* instruction set architecture */
-		"dummy",	/* hardware serial number */
-		"dummy",	/* hardware manufacturer */
-		"dummy",	/* secure RPC domain */
-	};
 	unsigned long offset;
 	char *res;
 	long len, err = -EINVAL;
 
 	offset = command-1;
-	if (offset >= sizeof(sysinfo_table)/sizeof(char *)) {
+	if (offset >= 9) {
 		/* Digital UNIX has a few unpublished interfaces here */
 		printk("sysinfo(%d)", command);
 		goto out;
 	}
 	
 	down_read(&uts_sem);
-	res = sysinfo_table[offset];
+	switch (offset)
+	{
+	case 0:	res = vx_new_uts(sysname);  break;
+	case 1:	res = vx_new_uts(nodename); break;
+	case 2:	res = vx_new_uts(release);  break;
+	case 3:	res = vx_new_uts(version);  break;
+	case 4: res = vx_new_uts(machine);  break;
+	case 5:	res = "alpha";              break;
+	default:
+		res = "dummy";
+		break;
+	}
 	len = strlen(res)+1;
 	if (len > count)
 		len = count;
@@ -881,7 +886,7 @@ osf_gettimeofday(struct timeval32 __user *tv, struct timezone __user *tz)
 {
 	if (tv) {
 		struct timeval ktv;
-		do_gettimeofday(&ktv);
+		vx_gettimeofday(&ktv);
 		if (put_tv32(tv, &ktv))
 			return -EFAULT;
 	}

@@ -216,16 +216,6 @@ static void udp_v4_unhash(struct sock *sk)
 	write_unlock_bh(&udp_hash_lock);
 }
 
-static inline int udp_in_list(struct nx_info *nx_info, u32 addr)
-{
-	int n = nx_info->nbipv4;
-	int i;
-
-	for (i=0; i<n; i++)
-		if (nx_info->ipv4[i] == addr)
-			return 1;
-	return 0;
-}
 
 /* UDP is nearly always wildcards out the wazoo, it makes no sense to try
  * harder than this. -DaveM
@@ -248,7 +238,7 @@ static struct sock *udp_v4_lookup_longway(u32 saddr, u16 sport,
 					continue;
 				score+=2;
 			} else if (sk->sk_nx_info) {
-				if (udp_in_list(sk->sk_nx_info, daddr))
+				if (addr_in_nx_info(sk->sk_nx_info, daddr))
 					score+=2;
 				else
 					continue;
@@ -627,6 +617,10 @@ int udp_sendmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
 				goto out;
 			if (daddr == IPI_LOOPBACK && !vx_check(0, VX_ADMIN))
 				daddr = fl.fl4_dst = nxi->ipv4[0];
+#ifdef CONFIG_VSERVER_REMAP_SADDR
+			if (saddr == IPI_LOOPBACK && !vx_check(0, VX_ADMIN))
+				saddr = fl.fl4_src = nxi->ipv4[0];
+#endif
 		}
 		err = ip_route_output_flow(&rt, &fl, sk, !(msg->msg_flags&MSG_DONTWAIT));
 		if (err)

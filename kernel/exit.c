@@ -34,10 +34,11 @@
 #include <linux/mutex.h>
 #include <linux/futex.h>
 #include <linux/compat.h>
+#include <linux/pipe_fs_i.h>
+#include <linux/audit.h> /* for audit_free() */
 #include <linux/vs_limit.h>
 #include <linux/vs_context.h>
 #include <linux/vs_network.h>
-#include <linux/vs_pid.h>
 
 #include <asm/uaccess.h>
 #include <asm/unistd.h>
@@ -59,7 +60,7 @@ static void __unhash_process(struct task_struct *p)
 		detach_pid(p, PIDTYPE_PGID);
 		detach_pid(p, PIDTYPE_SID);
 
-		list_del_init(&p->tasks);
+		list_del_rcu(&p->tasks);
 		__get_cpu_var(process_counts)--;
 	}
 	list_del_rcu(&p->thread_group);
@@ -595,6 +596,11 @@ static void exit_mm(struct task_struct * tsk)
 
 static inline void choose_new_parent(task_t *p, task_t *reaper)
 {
+	/* check for reaper context */
+	vxwprintk((p->xid != reaper->xid) && (reaper != child_reaper),
+		"rogue reaper: %p[%d,#%u] <> %p[%d,#%u]",
+		p, p->pid, p->xid, reaper, reaper->pid, reaper->xid);
+
 	/*
 	 * Make sure we're not reparenting to ourselves and that
 	 * the parent is not a zombie.
@@ -673,7 +679,6 @@ static void forget_original_parent(struct task_struct * father,
 	struct task_struct *p, *reaper = father;
 	struct list_head *_p, *_n;
 
-	/* FIXME: handle vchild_reaper/initpid */
 	do {
 		reaper = next_thread(reaper);
 		if (reaper == father) {
@@ -918,6 +923,8 @@ fastcall NORET_TYPE void do_exit(long code)
 	if (unlikely(tsk->compat_robust_list))
 		compat_exit_robust_list(tsk);
 #endif
+	if (unlikely(tsk->audit_context))
+		audit_free(tsk);
 	exit_mm(tsk);
 
 	exit_sem(tsk);
@@ -951,6 +958,9 @@ fastcall NORET_TYPE void do_exit(long code)
 
 	if (tsk->io_context)
 		exit_io_context();
+
+	if (tsk->splice_pipe)
+		__free_pipe_info(tsk->splice_pipe);
 
 	/* PF_DEAD causes final put_task_struct after we schedule. */
 	preempt_disable();

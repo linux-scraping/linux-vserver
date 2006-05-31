@@ -406,7 +406,7 @@ static int show_vfsmnt(struct seq_file *m, void *v)
 
 	if (vx_flags(VXF_HIDE_MOUNT, 0))
 		return 0;
-	if (!mnt_is_reachable(mnt))
+	if (!mnt_is_reachable(mnt) && !vx_check(0, VX_WATCH))
 		return 0;
 
 	if (!vx_check(0, VX_ADMIN|VX_WATCH) &&
@@ -714,7 +714,7 @@ asmlinkage long sys_umount(char __user * name, int flags)
 		goto dput_and_out;
 
 	retval = -EPERM;
-	if (!capable(CAP_SYS_ADMIN) && !vx_ccaps(VXC_SECURE_MOUNT))
+	if (!vx_capable(CAP_SYS_ADMIN, VXC_SECURE_MOUNT))
 		goto dput_and_out;
 
 	retval = do_umount(nd.mnt, flags);
@@ -738,9 +738,7 @@ asmlinkage long sys_oldumount(char __user * name)
 
 static int mount_is_safe(struct nameidata *nd)
 {
-	if (capable(CAP_SYS_ADMIN))
-		return 0;
-	if (vx_ccaps(VXC_SECURE_MOUNT))
+	if (vx_capable(CAP_SYS_ADMIN, VXC_SECURE_MOUNT))
 		return 0;
 	return -EPERM;
 #ifdef notyet
@@ -1034,7 +1032,7 @@ static int do_remount(struct nameidata *nd, int flags, int mnt_flags,
 	int err;
 	struct super_block *sb = nd->mnt->mnt_sb;
 
-	if (!capable(CAP_SYS_ADMIN) && !vx_ccaps(VXC_SECURE_REMOUNT))
+	if (!vx_capable(CAP_SYS_ADMIN, VXC_SECURE_REMOUNT))
 		return -EPERM;
 
 	if (!check_mnt(nd->mnt))
@@ -1068,7 +1066,7 @@ static int do_move_mount(struct nameidata *nd, char *old_name)
 	struct nameidata old_nd, parent_nd;
 	struct vfsmount *p;
 	int err = 0;
-	if (!capable(CAP_SYS_ADMIN) && !vx_ccaps(VXC_SECURE_MOUNT))
+	if (!vx_capable(CAP_SYS_ADMIN, VXC_SECURE_MOUNT))
 		return -EPERM;
 	if (!old_name || !*old_name)
 		return -EINVAL;
@@ -1148,7 +1146,7 @@ static int do_new_mount(struct nameidata *nd, char *type, int flags,
 		return -EINVAL;
 
 	/* we need capabilities... */
-	if (!capable(CAP_SYS_ADMIN) && !vx_ccaps(VXC_SECURE_MOUNT))
+	if (!vx_capable(CAP_SYS_ADMIN, VXC_SECURE_MOUNT))
 		return -EPERM;
 
 	mnt = do_kern_mount(type, flags, name, data);
@@ -1542,7 +1540,7 @@ int copy_namespace(int flags, struct task_struct *tsk)
 	if (!(flags & CLONE_NEWNS))
 		return 0;
 
-	if (!capable(CAP_SYS_ADMIN) && !vx_ccaps(VXC_SECURE_MOUNT)) {
+	if (!vx_capable(CAP_SYS_ADMIN, VXC_SECURE_MOUNT)) {
 		err = -EPERM;
 		goto out;
 	}

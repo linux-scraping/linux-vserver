@@ -120,7 +120,8 @@ static int not_dead_yet(char *dir)
 
 	dead = 0;
 	fd = open(file, O_RDONLY);
-	if(fd < 0){
+	if(fd < 0) {
+		fd = -errno;
 		if(fd != -ENOENT){
 			printk("not_dead_yet : couldn't open pid file '%s', "
 			       "err = %d\n", file, -fd);
@@ -130,9 +131,13 @@ static int not_dead_yet(char *dir)
 
 	err = 0;
 	n = read(fd, pid, sizeof(pid));
-	if(n <= 0){
+	if(n < 0){
 		printk("not_dead_yet : couldn't read pid file '%s', "
-		       "err = %d\n", file, -n);
+		       "err = %d\n", file, errno);
+		goto out_close;
+	} else if(n == 0){
+		printk("not_dead_yet : couldn't read pid file '%s', "
+		       "0-byte read\n", file);
 		goto out_close;
 	}
 
@@ -155,9 +160,9 @@ static int not_dead_yet(char *dir)
 
 	return err;
 
- out_close:
+out_close:
 	close(fd);
- out:
+out:
 	return 0;
 }
 
@@ -173,14 +178,14 @@ static void __init create_pid_file(void)
 	fd = open(file, O_RDWR | O_CREAT | O_EXCL, 0644);
 	if(fd < 0){
 		printk("Open of machine pid file \"%s\" failed: %s\n",
-		       file, strerror(-fd));
+		       file, strerror(errno));
 		return;
 	}
 
 	snprintf(pid, sizeof(pid), "%d\n", getpid());
 	n = write(fd, pid, strlen(pid));
 	if(n != strlen(pid))
-		printk("Write of pid file failed - err = %d\n", -n);
+		printk("Write of pid file failed - err = %d\n", errno);
 
 	close(fd);
 }

@@ -1194,15 +1194,9 @@ S: Brecksville, OH  44141-1334
 S: USA
 
 N: Tristan Greaves
-E: Tristan.Greaves@icl.com
-E: tmg296@ecs.soton.ac.uk
-W: http://www.ecs.soton.ac.uk/~tmg296
+E: tristan@extricate.org
+W: http://www.extricate.org/
 D: Miscellaneous ipv4 sysctl patches
-S: 15 Little Mead
-S: Denmead
-S: Hampshire
-S: PO7 6HS
-S: United Kingdom
 
 N: Michael A. Griffith
 E: grif@cs.ucr.edu
@@ -3247,14 +3241,9 @@ S: 12725 SW Millikan Way, Suite 400
 S: Beaverton, Oregon 97005
 S: USA
 
-N: Marcelo W. Tosatti
-E: marcelo.tosatti@cyclades.com
-D: Miscellaneous kernel hacker
+N: Marcelo Tosatti
+E: marcelo@kvack.org
 D: v2.4 kernel maintainer
-D: Current pc300/cyclades maintainer
-S: Cyclades Corporation
-S: Av Cristovao Colombo, 462. Floresta.
-S: Porto Alegre
 S: Brazil
 
 N: Stefan Traby
@@ -3382,7 +3371,7 @@ S: Germany
 
 N: Geert Uytterhoeven
 E: geert@linux-m68k.org
-W: http://home.tvd.be/cr26864/
+W: http://users.telenet.be/geertu/
 P: 1024/862678A6 C51D 361C 0BD1 4C90 B275  C553 6EEA 11BA 8626 78A6
 D: m68k/Amiga and PPC/CHRP Longtrail coordinator
 D: Frame buffer device and XF68_FBDev maintainer
@@ -3392,8 +3381,8 @@ D: Amiga Buddha and Catweasel chipset IDE
 D: Atari Falcon chipset IDE
 D: Amiga Gayle chipset IDE
 D: mipsel NEC DDB Vrc-5074
-S: Emiel Vlieberghlaan 2A/21
-S: B-3010 Kessel-Lo
+S: Haterbeekstraat 55B
+S: B-3200 Aarschot
 S: Belgium
 
 N: Chris Vance

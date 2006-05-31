@@ -2,7 +2,7 @@
 static inline
 void vx_slab_alloc(struct kmem_cache *cachep, gfp_t flags)
 {
-	int what = cachep->gfpflags & GFP_ZONEMASK;
+	int what = gfp_zone(cachep->gfpflags);
 
 	if (!current->vx_info)
 		return;
@@ -13,7 +13,7 @@ void vx_slab_alloc(struct kmem_cache *cachep, gfp_t flags)
 static inline
 void vx_slab_free(struct kmem_cache *cachep)
 {
-	int what = cachep->gfpflags & GFP_ZONEMASK;
+	int what = gfp_zone(cachep->gfpflags);
 
 	if (!current->vx_info)
 		return;

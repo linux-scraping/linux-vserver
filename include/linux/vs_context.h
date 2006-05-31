@@ -193,7 +193,7 @@ static inline void __leave_vx_info(struct vx_info_save *vxis,
 	vxlprintk(VXD_CBIT(xid, 5), "leave_vx_info(%p[#%d,%p]) %p[#%d,%p]",
 		vxis, vxis->xid, vxis->vxi, current,
 		current->xid, current->vx_info, _file, _line);
-	xchg(&current->vx_info, vxis->vxi);
+	(void)xchg(&current->vx_info, vxis->vxi);
 	current->xid = vxis->xid;
 }
 
@@ -208,7 +208,7 @@ static inline void __enter_vx_admin(struct vx_info_save *vxis)
 static inline void __leave_vx_admin(struct vx_info_save *vxis)
 {
 	if (vxis->vxi)
-		xchg(&current->vx_info, vxis->vxi);
+		(void)xchg(&current->vx_info, vxis->vxi);
 	current->xid = vxis->xid;
 }
 

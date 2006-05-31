@@ -1469,6 +1469,7 @@ void tcp_close(struct sock *sk, long timeout)
 {
 	struct sk_buff *skb;
 	int data_was_unread = 0;
+	int state;
 
 	lock_sock(sk);
 	sk->sk_shutdown = SHUTDOWN_MASK;
@@ -1545,6 +1546,11 @@ void tcp_close(struct sock *sk, long timeout)
 	sk_stream_wait_close(sk, timeout);
 
 adjudge_to_death:
+	state = sk->sk_state;
+	sock_hold(sk);
+	sock_orphan(sk);
+	atomic_inc(sk->sk_prot->orphan_count);
+
 	/* It is the last release_sock in its life. It will remove backlog. */
 	release_sock(sk);
 
@@ -1556,8 +1562,9 @@ adjudge_to_death:
 	bh_lock_sock(sk);
 	BUG_TRAP(!sock_owned_by_user(sk));
 
-	sock_hold(sk);
-	sock_orphan(sk);
+	/* Have we already been destroyed by a softirq or backlog? */
+	if (state != TCP_CLOSE && sk->sk_state == TCP_CLOSE)
+		goto out;
 
 	/*	This is a (useful) BSD violating of the RFC. There is a
 	 *	problem with TCP as specified in that the other end could
@@ -1585,7 +1592,6 @@ adjudge_to_death:
 			if (tmo > TCP_TIMEWAIT_LEN) {
 				inet_csk_reset_keepalive_timer(sk, tcp_fin_time(sk));
 			} else {
-				atomic_inc(sk->sk_prot->orphan_count);
 				tcp_time_wait(sk, TCP_FIN_WAIT2, tmo);
 				goto out;
 			}
@@ -1604,7 +1610,6 @@ adjudge_to_death:
 			NET_INC_STATS_BH(LINUX_MIB_TCPABORTONMEMORY);
 		}
 	}
-	atomic_inc(sk->sk_prot->orphan_count);
 
 	if (sk->sk_state == TCP_CLOSE)
 		inet_csk_destroy_sock(sk);

@@ -31,7 +31,6 @@
 #include <linux/socket.h>
 #include <linux/security.h>
 #include <linux/syscalls.h>
-#include <linux/vs_pid.h>
 
 #include <asm/ptrace.h>
 #include <asm/page.h>
@@ -885,7 +884,7 @@ asmlinkage int irix_getdomainname(char __user *name, int len)
 	down_read(&uts_sem);
 	if (len > __NEW_UTS_LEN)
 		len = __NEW_UTS_LEN;
-	err = copy_to_user(name, system_utsname.domainname, len) ? -EFAULT : 0;
+	err = copy_to_user(name, vx_new_uts(domainname), len) ? -EFAULT : 0;
 	up_read(&uts_sem);
 
 	return err;
@@ -1128,11 +1127,11 @@ struct iuname {
 asmlinkage int irix_uname(struct iuname __user *buf)
 {
 	down_read(&uts_sem);
-	if (copy_from_user(system_utsname.sysname, buf->sysname, 65)
-	    || copy_from_user(system_utsname.nodename, buf->nodename, 65)
-	    || copy_from_user(system_utsname.release, buf->release, 65)
-	    || copy_from_user(system_utsname.version, buf->version, 65)
-	    || copy_from_user(system_utsname.machine, buf->machine, 65)) {
+	if (copy_from_user(vx_new_uts(sysname), buf->sysname, 65)
+	    || copy_from_user(vx_new_uts(nodename), buf->nodename, 65)
+	    || copy_from_user(vx_new_uts(release), buf->release, 65)
+	    || copy_from_user(vx_new_uts(version), buf->version, 65)
+	    || copy_from_user(vx_new_uts(machine), buf->machine, 65)) {
 		return -EFAULT;
 	}
 	up_read(&uts_sem);

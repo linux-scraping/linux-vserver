@@ -183,9 +183,8 @@ extern int dir_notify_enable;
 #define IS_SWAPFILE(inode)	((inode)->i_flags & S_SWAPFILE)
 #define IS_PRIVATE(inode)	((inode)->i_flags & S_PRIVATE)
 
-#define IS_COW_LINK(inode)	(S_ISREG((inode)->i_mode) && \
-					((inode)->i_nlink > 1) && \
-					IS_IUNLINK(inode) && IS_IMMUTABLE(inode))
+#define IS_COW(inode)		(IS_IUNLINK(inode) && IS_IMMUTABLE(inode))
+#define IS_COW_LINK(inode)	(S_ISREG((inode)->i_mode) && ((inode)->i_nlink > 1))
 
 /* the read-only stuff doesn't really belong here, but any other place is
    probably as bad and I don't want to create yet another include file. */
@@ -224,6 +223,10 @@ extern int dir_notify_enable;
 #define BMAP_IOCTL 1		/* obsolete - kept for compatibility */
 #define FIBMAP	   _IO(0x00,1)	/* bmap access */
 #define FIGETBSZ   _IO(0x00,2)	/* get the block size used for bmap */
+
+#define SYNC_FILE_RANGE_WAIT_BEFORE	1
+#define SYNC_FILE_RANGE_WRITE		2
+#define SYNC_FILE_RANGE_WAIT_AFTER	4
 
 #ifdef __KERNEL__
 
@@ -779,11 +782,8 @@ extern int fcntl_setlease(unsigned int fd, struct file *filp, long arg);
 extern int fcntl_getlease(struct file *filp);
 
 /* fs/sync.c */
-#define SYNC_FILE_RANGE_WAIT_BEFORE	1
-#define SYNC_FILE_RANGE_WRITE		2
-#define SYNC_FILE_RANGE_WAIT_AFTER	4
 extern int do_sync_file_range(struct file *file, loff_t offset, loff_t endbyte,
-			int flags);
+			unsigned int flags);
 
 /* fs/locks.c */
 extern void locks_init_lock(struct file_lock *);
@@ -1060,8 +1060,8 @@ struct file_operations {
 	int (*check_flags)(int);
 	int (*dir_notify)(struct file *filp, unsigned long arg);
 	int (*flock) (struct file *, int, struct file_lock *);
-	ssize_t (*splice_write)(struct inode *, struct file *, size_t, unsigned int);
-	ssize_t (*splice_read)(struct file *, struct inode *, size_t, unsigned int);
+	ssize_t (*splice_write)(struct pipe_inode_info *, struct file *, loff_t *, size_t, unsigned int);
+	ssize_t (*splice_read)(struct file *, loff_t *, struct pipe_inode_info *, size_t, unsigned int);
 };
 
 struct inode_operations {
@@ -1635,8 +1635,17 @@ extern ssize_t generic_file_sendpage(struct file *, struct page *, int, size_t, 
 extern void do_generic_mapping_read(struct address_space *mapping,
 				    struct file_ra_state *, struct file *,
 				    loff_t *, read_descriptor_t *, read_actor_t);
-extern ssize_t generic_file_splice_read(struct file *, struct inode *, size_t, unsigned int);
-extern ssize_t generic_file_splice_write(struct inode *, struct file *, size_t, unsigned int);
+
+/* fs/splice.c */
+extern ssize_t generic_file_splice_read(struct file *, loff_t *,
+		struct pipe_inode_info *, size_t, unsigned int);
+extern ssize_t generic_file_splice_write(struct pipe_inode_info *,
+		struct file *, loff_t *, size_t, unsigned int);
+extern ssize_t generic_splice_sendpage(struct pipe_inode_info *pipe,
+		struct file *out, loff_t *, size_t len, unsigned int flags);
+extern long do_splice_direct(struct file *in, loff_t *ppos, struct file *out,
+		size_t len, unsigned int flags);
+
 extern void
 file_ra_state_init(struct file_ra_state *ra, struct address_space *mapping);
 extern ssize_t generic_file_readv(struct file *filp, const struct iovec *iov, 

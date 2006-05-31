@@ -422,7 +422,7 @@ static int svc_export_parse(struct cache_detail *cd, char *mesg, int mlen)
 	if ((len=qword_get(&mesg, buf, PAGE_SIZE)) <= 0)
 		goto out;
 	err = path_lookup(buf, 0, &nd);
-	if (err) goto out;
+	if (err) goto out_no_path;
 
 	exp.h.flags = 0;
 	exp.ex_client = dom;
@@ -475,6 +475,7 @@ static int svc_export_parse(struct cache_detail *cd, char *mesg, int mlen)
  out:
 	if (nd.dentry)
 		path_release(&nd);
+ out_no_path:
 	if (dom)
 		auth_domain_put(dom);
 	kfree(buf);
@@ -1065,9 +1066,11 @@ exp_pseudoroot(struct auth_domain *clp, struct svc_fh *fhp,
 		rv = nfserr_perm;
 	else if (IS_ERR(exp))
 		rv = nfserrno(PTR_ERR(exp));
-	else
+	else {
 		rv = fh_compose(fhp, exp,
 				fsid_key->ek_dentry, NULL);
+		exp_put(exp);
+	}
 	cache_put(&fsid_key->h, &svc_expkey_cache);
 	return rv;
 }

@@ -46,6 +46,8 @@
 #include <linux/mempolicy.h>
 #include <linux/namei.h>
 #include <linux/ctype.h>
+#include <linux/migrate.h>
+
 #include <asm/uaccess.h>
 #include <asm/div64.h>
 #include <asm/pgtable.h>
@@ -2172,6 +2174,7 @@ static struct address_space_operations shmem_aops = {
 	.prepare_write	= shmem_prepare_write,
 	.commit_write	= simple_commit_write,
 #endif
+	.migratepage	= migrate_page,
 };
 
 static struct file_operations shmem_file_operations = {

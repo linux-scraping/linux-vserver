@@ -160,27 +160,27 @@ static int sa1100_rtc_open(struct device *dev)
 	ret = request_irq(IRQ_RTC1Hz, sa1100_rtc_interrupt, SA_INTERRUPT,
 				"rtc 1Hz", dev);
 	if (ret) {
-		printk(KERN_ERR "rtc: IRQ%d already in use.\n", IRQ_RTC1Hz);
+		dev_err(dev, "IRQ %d already in use.\n", IRQ_RTC1Hz);
 		goto fail_ui;
 	}
 	ret = request_irq(IRQ_RTCAlrm, sa1100_rtc_interrupt, SA_INTERRUPT,
 				"rtc Alrm", dev);
 	if (ret) {
-		printk(KERN_ERR "rtc: IRQ%d already in use.\n", IRQ_RTCAlrm);
+		dev_err(dev, "IRQ %d already in use.\n", IRQ_RTCAlrm);
 		goto fail_ai;
 	}
 	ret = request_irq(IRQ_OST1, timer1_interrupt, SA_INTERRUPT,
 				"rtc timer", dev);
 	if (ret) {
-		printk(KERN_ERR "rtc: IRQ%d already in use.\n", IRQ_OST1);
+		dev_err(dev, "IRQ %d already in use.\n", IRQ_OST1);
 		goto fail_pi;
 	}
 	return 0;
 
  fail_pi:
-	free_irq(IRQ_RTCAlrm, NULL);
+	free_irq(IRQ_RTCAlrm, dev);
  fail_ai:
-	free_irq(IRQ_RTC1Hz, NULL);
+	free_irq(IRQ_RTC1Hz, dev);
  fail_ui:
 	return ret;
 }
@@ -247,7 +247,7 @@ static int sa1100_rtc_ioctl(struct device *dev, unsigned int cmd,
 		rtc_freq = arg;
 		return 0;
 	}
-	return -EINVAL;
+	return -ENOIOCTLCMD;
 }
 
 static int sa1100_rtc_read_time(struct device *dev, struct rtc_time *tm)
@@ -295,7 +295,7 @@ static int sa1100_rtc_set_alarm(struct device *dev, struct rtc_wkalrm *alrm)
 
 static int sa1100_rtc_proc(struct device *dev, struct seq_file *seq)
 {
-	seq_printf(seq, "trim/divider\t: 0x%08x\n", RTTR);
+	seq_printf(seq, "trim/divider\t: 0x%08lx\n", RTTR);
 	seq_printf(seq, "alarm_IRQ\t: %s\n",
 			(RTSR & RTSR_ALE) ? "yes" : "no" );
 	seq_printf(seq, "update_IRQ\t: %s\n",
@@ -332,7 +332,7 @@ static int sa1100_rtc_probe(struct platform_device *pdev)
 	 */
 	if (RTTR == 0) {
 		RTTR = RTC_DEF_DIVIDER + (RTC_DEF_TRIM << 16);
-		printk(KERN_WARNING "rtc: warning: initializing default clock divider/trim value\n");
+		dev_warn(&pdev->dev, "warning: initializing default clock divider/trim value\n");
 		/* The current RTC value probably doesn't make sense either */
 		RCNR = 0;
 	}
@@ -340,14 +340,10 @@ static int sa1100_rtc_probe(struct platform_device *pdev)
 	rtc = rtc_device_register(pdev->name, &pdev->dev, &sa1100_rtc_ops,
 				THIS_MODULE);
 
-	if (IS_ERR(rtc)) {
-		dev_err(&pdev->dev, "Unable to register the RTC device\n");
+	if (IS_ERR(rtc))
 		return PTR_ERR(rtc);
-	}
 
 	platform_set_drvdata(pdev, rtc);
-
-	dev_info(&pdev->dev, "SA11xx/PXA2xx RTC Registered\n");
 
 	return 0;
 }

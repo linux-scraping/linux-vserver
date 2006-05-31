@@ -333,6 +333,7 @@ void elv_insert(request_queue_t *q, struct request *rq, int where)
 {
 	struct list_head *pos;
 	unsigned ordseq;
+	int unplug_it = 1;
 
 	blk_add_trace_rq(q, rq, BLK_TA_INSERT);
 
@@ -399,6 +400,11 @@ void elv_insert(request_queue_t *q, struct request *rq, int where)
 		}
 
 		list_add_tail(&rq->queuelist, pos);
+		/*
+		 * most requeues happen because of a busy condition, don't
+		 * force unplug of the queue for that case.
+		 */
+		unplug_it = 0;
 		break;
 
 	default:
@@ -407,7 +413,7 @@ void elv_insert(request_queue_t *q, struct request *rq, int where)
 		BUG();
 	}
 
-	if (blk_queue_plugged(q)) {
+	if (unplug_it && blk_queue_plugged(q)) {
 		int nrq = q->rq.count[READ] + q->rq.count[WRITE]
 			- q->in_flight;
 
@@ -895,10 +901,8 @@ ssize_t elv_iosched_show(request_queue_t *q, char *name)
 EXPORT_SYMBOL(elv_dispatch_sort);
 EXPORT_SYMBOL(elv_add_request);
 EXPORT_SYMBOL(__elv_add_request);
-EXPORT_SYMBOL(elv_requeue_request);
 EXPORT_SYMBOL(elv_next_request);
 EXPORT_SYMBOL(elv_dequeue_request);
 EXPORT_SYMBOL(elv_queue_empty);
-EXPORT_SYMBOL(elv_completed_request);
 EXPORT_SYMBOL(elevator_exit);
 EXPORT_SYMBOL(elevator_init);

@@ -61,7 +61,7 @@ asmlinkage long sys_time(time_t __user * tloc)
 	time_t i;
 	struct timeval tv;
 
-	do_gettimeofday(&tv);
+	vx_gettimeofday(&tv);
 	i = tv.tv_sec;
 
 	if (tloc) {
@@ -92,7 +92,7 @@ asmlinkage long sys_stime(time_t __user *tptr)
 	if (err)
 		return err;
 
-	do_settimeofday(&tv);
+	vx_settimeofday(&tv);
 	return 0;
 }
 
@@ -102,7 +102,7 @@ asmlinkage long sys_gettimeofday(struct timeval __user *tv, struct timezone __us
 {
 	if (likely(tv != NULL)) {
 		struct timeval ktv;
-		do_gettimeofday(&ktv);
+		vx_gettimeofday(&ktv);
 		if (copy_to_user(tv, &ktv, sizeof(ktv)))
 			return -EFAULT;
 	}
@@ -176,7 +176,7 @@ int do_sys_settimeofday(struct timespec *tv, struct timezone *tz)
 		/* SMP safe, again the code in arch/foo/time.c should
 		 * globally block out interrupts when it runs.
 		 */
-		return do_settimeofday(tv);
+		return vx_settimeofday(tv);
 	}
 	return 0;
 }
@@ -531,7 +531,7 @@ void getnstimeofday(struct timespec *tv)
 {
 	struct timeval x;
 
-	do_gettimeofday(&x);
+	vx_gettimeofday(&x);
 	tv->tv_sec = x.tv_sec;
 	tv->tv_nsec = x.tv_usec * NSEC_PER_USEC;
 }

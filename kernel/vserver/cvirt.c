@@ -255,3 +255,43 @@ out_put:
 	put_vx_info(vxi);
 	return (name ? 0 : -EFAULT);
 }
+
+#ifdef CONFIG_VSERVER_VTIME
+
+/* virtualized time base */
+
+void vx_gettimeofday(struct timeval *tv)
+{
+	do_gettimeofday(tv);
+	if (!vx_flags(VXF_VIRT_TIME, 0))
+		return;
+
+	tv->tv_sec += current->vx_info->cvirt.bias_tv.tv_sec;
+	tv->tv_usec += current->vx_info->cvirt.bias_tv.tv_usec;
+
+	if (tv->tv_usec >= USEC_PER_SEC) {
+		tv->tv_sec++;
+		tv->tv_usec -= USEC_PER_SEC;
+	} else if (tv->tv_usec < 0) {
+		tv->tv_sec--;
+		tv->tv_usec += USEC_PER_SEC;
+	}
+}
+
+int vx_settimeofday(struct timespec *ts)
+{
+	struct timeval tv;
+
+	if (!vx_flags(VXF_VIRT_TIME, 0))
+		return do_settimeofday(ts);
+
+	do_gettimeofday(&tv);
+	current->vx_info->cvirt.bias_tv.tv_sec =
+		ts->tv_sec - tv.tv_sec;
+	current->vx_info->cvirt.bias_tv.tv_usec =
+		(ts->tv_nsec/NSEC_PER_USEC) - tv.tv_usec;
+	return 0;
+}
+
+#endif
+

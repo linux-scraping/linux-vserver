@@ -22,7 +22,6 @@
 #include <linux/seccomp.h>
 #include <linux/audit.h>
 #include <linux/signal.h>
-#include <linux/vs_pid.h>
 
 #include <asm/asi.h>
 #include <asm/pgtable.h>
@@ -249,6 +248,13 @@ asmlinkage void do_ptrace(struct pt_regs *regs)
 	}
 
 	switch(request) {
+	case PTRACE_PEEKUSR:
+		if (addr != 0)
+			pt_error_return(regs, EIO);
+		else
+			pt_succ_return(regs, 0);
+		goto out_tsk;
+
 	case PTRACE_PEEKTEXT: /* read word at location addr. */ 
 	case PTRACE_PEEKDATA: {
 		unsigned long tmp64;
@@ -607,6 +613,22 @@ asmlinkage void do_ptrace(struct pt_regs *regs)
 
 	/* PTRACE_DUMPCORE unsupported... */
 
+	case PTRACE_GETEVENTMSG: {
+		int err;
+
+		if (test_thread_flag(TIF_32BIT))
+			err = put_user(child->ptrace_message,
+				       (unsigned int __user *) data);
+		else
+			err = put_user(child->ptrace_message,
+				       (unsigned long __user *) data);
+		if (err)
+			pt_error_return(regs, -err);
+		else
+			pt_succ_return(regs, 0);
+		break;
+	}
+
 	default: {
 		int err = ptrace_request(child, request, addr, data);
 		if (err)
@@ -635,7 +657,7 @@ asmlinkage void syscall_trace(struct pt_regs *regs, int syscall_exit_p)
 		if (unlikely(tstate & (TSTATE_XCARRY | TSTATE_ICARRY)))
 			result = AUDITSC_FAILURE;
 
-		audit_syscall_exit(current, result, regs->u_regs[UREG_I0]);
+		audit_syscall_exit(result, regs->u_regs[UREG_I0]);
 	}
 
 	if (!(current->ptrace & PT_PTRACED))
@@ -659,8 +681,7 @@ asmlinkage void syscall_trace(struct pt_regs *regs, int syscall_exit_p)
 
 out:
 	if (unlikely(current->audit_context) && !syscall_exit_p)
-		audit_syscall_entry(current,
-				    (test_thread_flag(TIF_32BIT) ?
+		audit_syscall_entry((test_thread_flag(TIF_32BIT) ?
 				     AUDIT_ARCH_SPARC :
 				     AUDIT_ARCH_SPARC64),
 				    regs->u_regs[UREG_G1],

@@ -101,6 +101,8 @@ static int __init selinux_enabled_setup(char *str)
 	return 1;
 }
 __setup("selinux=", selinux_enabled_setup);
+#else
+int selinux_enabled = 1;
 #endif
 
 /* Original (dummy) security module. */
@@ -3230,7 +3232,7 @@ static int selinux_socket_sock_rcv_skb(struct sock *sk, struct sk_buff *skb)
 		goto out;
 
 	/* Handle mapped IPv4 packets arriving via IPv6 sockets */
-	if (family == PF_INET6 && skb->protocol == ntohs(ETH_P_IP))
+	if (family == PF_INET6 && skb->protocol == htons(ETH_P_IP))
 		family = PF_INET;
 
  	read_lock_bh(&sk->sk_callback_lock);
@@ -4053,13 +4055,6 @@ static int selinux_ipc_permission(struct kern_ipc_perm *ipcp, short flag)
 	return ipc_has_perm(ipcp, av);
 }
 
-static int selinux_ipc_getsecurity(struct kern_ipc_perm *ipcp, void *buffer, size_t size)
-{
-	struct ipc_security_struct *isec = ipcp->security;
-
-	return selinux_getsecurity(isec->sid, buffer, size);
-}
-
 /* module stacking operations */
 static int selinux_register_security (const char *name, struct security_operations *ops)
 {
@@ -4322,7 +4317,6 @@ static struct security_operations selinux_ops = {
 	.task_to_inode =                selinux_task_to_inode,
 
 	.ipc_permission =		selinux_ipc_permission,
-	.ipc_getsecurity =		selinux_ipc_getsecurity,
 
 	.msg_msg_alloc_security =	selinux_msg_msg_alloc_security,
 	.msg_msg_free_security =	selinux_msg_msg_free_security,
@@ -4544,6 +4538,7 @@ int selinux_disable(void)
 	printk(KERN_INFO "SELinux:  Disabled at runtime.\n");
 
 	selinux_disabled = 1;
+	selinux_enabled = 0;
 
 	/* Reset security_ops to the secondary module, dummy or capability. */
 	security_ops = secondary_ops;

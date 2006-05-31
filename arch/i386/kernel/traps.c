@@ -132,9 +132,8 @@ static inline int print_addr_and_symbol(unsigned long addr, char *log_lvl,
 	print_symbol("%s", addr);
 
 	printed = (printed + 1) % CONFIG_STACK_BACKTRACE_COLS;
-
 	if (printed)
-		printk("  ");
+		printk(" ");
 	else
 		printk("\n");
 
@@ -214,7 +213,6 @@ static void show_stack_log_lvl(struct task_struct *task, unsigned long *esp,
 	}
 
 	stack = esp;
-	printk(log_lvl);
 	for(i = 0; i < kstack_depth_to_print; i++) {
 		if (kstack_end(stack))
 			break;
@@ -370,6 +368,9 @@ void die(const char * str, struct pt_regs * regs, long err)
 
 	if (++die.lock_owner_depth < 3) {
 		int nl = 0;
+		unsigned long esp;
+		unsigned short ss;
+
 		handle_BUG(regs);
 		printk(KERN_EMERG "%s: %04lx [#%d]\n", str, err & 0xffff, ++die_counter);
 #ifdef CONFIG_PREEMPT
@@ -394,6 +395,16 @@ void die(const char * str, struct pt_regs * regs, long err)
 			current->thread.trap_no, SIGSEGV) != NOTIFY_STOP) {
 			show_registers(regs);
 			vxh_dump_history();
+			/* Executive summary in case the oops scrolled away */
+			esp = (unsigned long) (&regs->esp);
+			savesegment(ss, ss);
+			if (user_mode(regs)) {
+				esp = regs->esp;
+				ss = regs->xss & 0xffff;
+			}
+			printk(KERN_EMERG "EIP: [<%08lx>] ", regs->eip);
+			print_symbol("%s", regs->eip);
+			printk(" SS:ESP %04x:%08lx\n", ss, esp);
 		} else
 			regs = NULL;
   	} else

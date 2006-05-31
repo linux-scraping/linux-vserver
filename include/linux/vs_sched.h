@@ -58,7 +58,7 @@ int vx_adjust_prio(struct task_struct *p, int prio, int max_user)
 	struct vx_info *vxi = p->vx_info;
 
 	if (!vxi)
-		return 0;
+		return prio;
 
 	if (vx_info_flags(vxi, VXF_SCHED_PRIO, 0)) {
 		struct _vx_sched_pc *sched_pc = &vx_cpu(vxi, sched_pc);
@@ -78,10 +78,8 @@ int vx_adjust_prio(struct task_struct *p, int prio, int max_user)
 {
 	struct vx_info *vxi = p->vx_info;
 
-	if (!vxi)
-		return 0;
-
-	prio += vxi->sched.prio_bias;
+	if (vxi)
+		prio += vxi->sched.prio_bias;
 	return prio;
 }
 
