@@ -77,7 +77,6 @@
 #include <linux/rcupdate.h>
 #include <linux/vs_context.h>
 #include <linux/vs_network.h>
-#include <linux/vs_pid.h>
 
 #include <asm/uaccess.h>
 #include <asm/pgtable.h>
@@ -295,12 +294,15 @@ static inline char * task_sig(struct task_struct *p, char *buffer)
 
 static inline char *task_cap(struct task_struct *p, char *buffer)
 {
-    return buffer + sprintf(buffer, "CapInh:\t%016x\n"
-			    "CapPrm:\t%016x\n"
-			    "CapEff:\t%016x\n",
-			    cap_t(p->cap_inheritable),
-			    cap_t(p->cap_permitted),
-			    cap_t(p->cap_effective));
+	struct vx_info *vxi = p->vx_info;
+
+	return buffer + sprintf(buffer,
+		"CapInh:\t%016x\n"
+		"CapPrm:\t%016x\n"
+		"CapEff:\t%016x\n",
+		(unsigned)vx_info_mbcap(vxi, p->cap_inheritable),
+		(unsigned)vx_info_mbcap(vxi, p->cap_permitted),
+		(unsigned)vx_info_mbcap(vxi, p->cap_effective));
 }
 
 int proc_pid_status(struct task_struct *task, char * buffer)

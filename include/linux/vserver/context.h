@@ -2,6 +2,7 @@
 #define _VX_CONTEXT_H
 
 #include <linux/types.h>
+#include <linux/capability.h>
 
 
 #define MAX_S_CONTEXT	65535	/* Arbitrary limit */
@@ -34,6 +35,7 @@
 #define VXF_VIRT_UPTIME		0x00020000
 #define VXF_VIRT_CPU		0x00040000
 #define VXF_VIRT_LOAD		0x00080000
+#define VXF_VIRT_TIME		0x00100000
 
 #define VXF_HIDE_MOUNT		0x01000000
 #define VXF_HIDE_NETIF		0x02000000
@@ -116,6 +118,7 @@ struct vx_info {
 	uint64_t vx_flags;			/* context flags */
 	uint64_t vx_bcaps;			/* bounding caps (system) */
 	uint64_t vx_ccaps;			/* context caps (vserver) */
+	kernel_cap_t vx_cap_bset;		/* the guest's bset */
 
 	struct task_struct *vx_reaper;		/* guest reaper process */
 	pid_t vx_initpid;			/* PID of guest init */

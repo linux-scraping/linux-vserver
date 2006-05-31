@@ -429,7 +429,6 @@ static int load_flat_file(struct linux_binprm * bprm,
 	loff_t fpos;
 	unsigned long start_code, end_code;
 	int ret;
-	int exec_fileno;
 
 	hdr = ((struct flat_hdr *) bprm->buf);		/* exec-header */
 	inode = bprm->file->f_dentry->d_inode;
@@ -503,21 +502,12 @@ static int load_flat_file(struct linux_binprm * bprm,
 		goto err;
 	}
 
-	/* check file descriptor */
-	exec_fileno = get_unused_fd();
-	if (exec_fileno < 0) {
-		ret = -EMFILE;
-		goto err;
-	}
-	get_file(bprm->file);
-	fd_install(exec_fileno, bprm->file);
-
 	/* Flush all traces of the currently running executable */
 	if (id == 0) {
 		result = flush_old_exec(bprm);
 		if (result) {
 			ret = result;
-			goto err_close;
+			goto err;
 		}
 
 		/* OK, This is the point of no return */
@@ -549,7 +539,7 @@ static int load_flat_file(struct linux_binprm * bprm,
 				textpos = (unsigned long) -ENOMEM;
 			printk("Unable to mmap process text, errno %d\n", (int)-textpos);
 			ret = textpos;
-			goto err_close;
+			goto err;
 		}
 
 		down_write(&current->mm->mmap_sem);
@@ -565,7 +555,7 @@ static int load_flat_file(struct linux_binprm * bprm,
 					(int)-datapos);
 			do_munmap(current->mm, textpos, text_len);
 			ret = realdatastart;
-			goto err_close;
+			goto err;
 		}
 		datapos = realdatastart + MAX_SHARED_LIBS * sizeof(unsigned long);
 
@@ -588,7 +578,7 @@ static int load_flat_file(struct linux_binprm * bprm,
 			do_munmap(current->mm, textpos, text_len);
 			do_munmap(current->mm, realdatastart, data_len + extra);
 			ret = result;
-			goto err_close;
+			goto err;
 		}
 
 		reloc = (unsigned long *) (datapos+(ntohl(hdr->reloc_start)-text_len));
@@ -607,7 +597,7 @@ static int load_flat_file(struct linux_binprm * bprm,
 			printk("Unable to allocate RAM for process text/data, errno %d\n",
 					(int)-textpos);
 			ret = textpos;
-			goto err_close;
+			goto err;
 		}
 
 		realdatastart = textpos + ntohl(hdr->data_start);
@@ -653,7 +643,7 @@ static int load_flat_file(struct linux_binprm * bprm,
 			do_munmap(current->mm, textpos, text_len + data_len + extra +
 				MAX_SHARED_LIBS * sizeof(unsigned long));
 			ret = result;
-			goto err_close;
+			goto err;
 		}
 	}
 
@@ -718,7 +708,7 @@ static int load_flat_file(struct linux_binprm * bprm,
 				addr = calc_reloc(*rp, libinfo, id, 0);
 				if (addr == RELOC_FAILED) {
 					ret = -ENOEXEC;
-					goto err_close;
+					goto err;
 				}
 				*rp = addr;
 			}
@@ -748,7 +738,7 @@ static int load_flat_file(struct linux_binprm * bprm,
 			rp = (unsigned long *) calc_reloc(addr, libinfo, id, 1);
 			if (rp == (unsigned long *)RELOC_FAILED) {
 				ret = -ENOEXEC;
-				goto err_close;
+				goto err;
 			}
 
 			/* Get the pointer's value.  */
@@ -763,7 +753,7 @@ static int load_flat_file(struct linux_binprm * bprm,
 				addr = calc_reloc(addr, libinfo, id, 0);
 				if (addr == RELOC_FAILED) {
 					ret = -ENOEXEC;
-					goto err_close;
+					goto err;
 				}
 
 				/* Write back the relocated pointer.  */
@@ -784,8 +774,6 @@ static int load_flat_file(struct linux_binprm * bprm,
 			stack_len);
 
 	return 0;
-err_close:
-	sys_close(exec_fileno);
 err:
 	return ret;
 }

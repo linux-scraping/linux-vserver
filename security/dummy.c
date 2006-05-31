@@ -563,11 +563,6 @@ static int dummy_ipc_permission (struct kern_ipc_perm *ipcp, short flag)
 	return 0;
 }
 
-static int dummy_ipc_getsecurity(struct kern_ipc_perm *ipcp, void *buffer, size_t size)
-{
-	return -EOPNOTSUPP;
-}
-
 static int dummy_msg_msg_alloc_security (struct msg_msg *msg)
 {
 	return 0;
@@ -666,7 +661,7 @@ static int dummy_sem_semop (struct sem_array *sma,
 
 static int dummy_netlink_send (struct sock *sk, struct sk_buff *skb)
 {
-	NETLINK_CB(skb).eff_cap = current->cap_effective;
+	cap_t(NETLINK_CB(skb).eff_cap) = vx_mbcap(cap_effective);
 	return 0;
 }
 
@@ -976,7 +971,6 @@ void security_fixup_ops (struct security_operations *ops)
 	set_to_dummy_if_null(ops, task_reparent_to_init);
  	set_to_dummy_if_null(ops, task_to_inode);
 	set_to_dummy_if_null(ops, ipc_permission);
-	set_to_dummy_if_null(ops, ipc_getsecurity);
 	set_to_dummy_if_null(ops, msg_msg_alloc_security);
 	set_to_dummy_if_null(ops, msg_msg_free_security);
 	set_to_dummy_if_null(ops, msg_queue_alloc_security);

@@ -1,8 +1,8 @@
 VERSION = 2
 PATCHLEVEL = 6
 SUBLEVEL = 17
-EXTRAVERSION = -rc1-vs2.1.1-rc16
-NAME=Sliding Snow Leopard
+EXTRAVERSION = -rc5.-vs2.1.1-rc21.3
+NAME=Lordi Rules
 
 # *DOCUMENTATION*
 # To see a list of typical targets execute "make help"
@@ -344,16 +344,14 @@ scripts_basic:
 scripts/basic/%: scripts_basic ;
 
 PHONY += outputmakefile
-# outputmakefile generate a Makefile to be placed in output directory, if
-# using a seperate output directory. This allows convinient use
-# of make in output directory
+# outputmakefile generates a Makefile in the output directory, if using a
+# separate output directory. This allows convenient use of make in the
+# output directory.
 outputmakefile:
-	$(Q)if test ! $(srctree) -ef $(objtree); then \
-	$(CONFIG_SHELL) $(srctree)/scripts/mkmakefile              \
-	    $(srctree) $(objtree) $(VERSION) $(PATCHLEVEL)         \
-	    > $(objtree)/Makefile;                                 \
-	    echo '  GEN    $(objtree)/Makefile';                   \
-	fi
+ifneq ($(KBUILD_SRC),)
+	$(Q)$(CONFIG_SHELL) $(srctree)/scripts/mkmakefile \
+	    $(srctree) $(objtree) $(VERSION) $(PATCHLEVEL)
+endif
 
 # To make sure we do not include .config for any of the *config targets
 # catch them early, and hand them over to scripts/kconfig/Makefile
@@ -796,8 +794,8 @@ prepare2: prepare3 outputmakefile
 prepare1: prepare2 include/linux/version.h include/asm \
                    include/config/MARKER
 ifneq ($(KBUILD_MODULES),)
-	$(Q)rm -rf $(MODVERDIR)
 	$(Q)mkdir -p $(MODVERDIR)
+	$(Q)rm -f $(MODVERDIR)/*
 endif
 
 archprepare: prepare1 scripts_basic
@@ -1086,8 +1084,8 @@ else # KBUILD_EXTMOD
 KBUILD_MODULES := 1
 PHONY += crmodverdir
 crmodverdir:
-	$(Q)rm -rf $(MODVERDIR)
 	$(Q)mkdir -p $(MODVERDIR)
+	$(Q)rm -f $(MODVERDIR)/*
 
 PHONY += $(objtree)/Module.symvers
 $(objtree)/Module.symvers:
@@ -1112,7 +1110,6 @@ modules_install: _emodinst_ _emodinst_post
 install-dir := $(if $(INSTALL_MOD_DIR),$(INSTALL_MOD_DIR),extra)
 PHONY += _emodinst_
 _emodinst_:
-	$(Q)rm -rf $(MODLIB)/$(install-dir)
 	$(Q)mkdir -p $(MODLIB)/$(install-dir)
 	$(Q)$(MAKE) -rR -f $(srctree)/scripts/Makefile.modinst
 
@@ -1275,40 +1272,43 @@ kernelversion:
 
 # Single targets
 # ---------------------------------------------------------------------------
-# The directory part is taken from first prerequisite, so this
-# works even with external modules
-%.s: %.c prepare scripts FORCE
-	$(Q)$(MAKE) $(build)=$(dir $<) $(dir $<)$(notdir $@)
-%.i: %.c prepare scripts FORCE
-	$(Q)$(MAKE) $(build)=$(dir $<) $(dir $<)$(notdir $@)
-%.o: %.c prepare scripts FORCE
-	$(Q)$(MAKE) $(build)=$(dir $<) $(dir $<)$(notdir $@)
-%.lst: %.c prepare scripts FORCE
-	$(Q)$(MAKE) $(build)=$(dir $<) $(dir $<)$(notdir $@)
-%.s: %.S prepare scripts FORCE
-	$(Q)$(MAKE) $(build)=$(dir $<) $(dir $<)$(notdir $@)
-%.o: %.S prepare scripts FORCE
-	$(Q)$(MAKE) $(build)=$(dir $<) $(dir $<)$(notdir $@)
+# Single targets are compatible with:
+# - build whith mixed source and output
+# - build with separate output dir 'make O=...'
+# - external modules
+#
+#  target-dir => where to store outputfile
+#  build-dir  => directory in kernel source tree to use
 
-# For external modules we shall include any directory of the target,
-# but usual case there is no directory part.
-# make M=`pwd` module.o     => $(dir $@)=./
-# make M=`pwd` foo/module.o => $(dir $@)=foo/
-# make M=`pwd` /            => $(dir $@)=/
- 
 ifeq ($(KBUILD_EXTMOD),)
-        target-dir = $(@D)
+        build-dir  = $(patsubst %/,%,$(dir $@))
+        target-dir = $(dir $@)
 else
         zap-slash=$(filter-out .,$(patsubst %/,%,$(dir $@)))
-        target-dir = $(KBUILD_EXTMOD)$(if $(zap-slash),/$(zap-slash))
+        build-dir  = $(KBUILD_EXTMOD)$(if $(zap-slash),/$(zap-slash))
+        target-dir = $(if $(KBUILD_EXTMOD),$(dir $<),$(dir $@))
 endif
 
-/ %/:      scripts prepare FORCE
+%.s: %.c prepare scripts FORCE
+	$(Q)$(MAKE) $(build)=$(build-dir) $(target-dir)$(notdir $@)
+%.i: %.c prepare scripts FORCE
+	$(Q)$(MAKE) $(build)=$(build-dir) $(target-dir)$(notdir $@)
+%.o: %.c prepare scripts FORCE
+	$(Q)$(MAKE) $(build)=$(build-dir) $(target-dir)$(notdir $@)
+%.lst: %.c prepare scripts FORCE
+	$(Q)$(MAKE) $(build)=$(build-dir) $(target-dir)$(notdir $@)
+%.s: %.S prepare scripts FORCE
+	$(Q)$(MAKE) $(build)=$(build-dir) $(target-dir)$(notdir $@)
+%.o: %.S prepare scripts FORCE
+	$(Q)$(MAKE) $(build)=$(build-dir) $(target-dir)$(notdir $@)
+
+# Modules
+/ %/: prepare scripts FORCE
 	$(Q)$(MAKE) KBUILD_MODULES=$(if $(CONFIG_MODULES),1) \
-	$(build)=$(target-dir)
-%.ko: scripts FORCE
+	$(build)=$(build-dir)
+%.ko: prepare scripts FORCE
 	$(Q)$(MAKE) KBUILD_MODULES=$(if $(CONFIG_MODULES),1)   \
-	$(build)=$(target-dir) $(@:.ko=.o)
+	$(build)=$(build-dir) $(@:.ko=.o)
 	$(Q)$(MAKE) -rR -f $(srctree)/scripts/Makefile.modpost
 
 # FIXME Should go into a make.lib or something 

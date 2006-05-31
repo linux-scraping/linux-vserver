@@ -203,9 +203,6 @@ static int proc_vnet_info(int vid, char *buffer)
 		);
 }
 
-#define atoquad(a) \
-	(((a)>>0) & 0xff), (((a)>>8) & 0xff), \
-	(((a)>>16) & 0xff), (((a)>>24) & 0xff)
 
 int proc_nid_info (int vid, char *buffer)
 {
@@ -223,9 +220,8 @@ int proc_nid_info (int vid, char *buffer)
 		);
 	for (i=0; i<nxi->nbipv4; i++) {
 		length += sprintf(buffer + length,
-			"%d:\t%d.%d.%d.%d/%d.%d.%d.%d\n", i,
-			atoquad(nxi->ipv4[i]),
-			atoquad(nxi->mask[i]));
+			"%d:\t" NIPQUAD_FMT "/" NIPQUAD_FMT "\n", i,
+			NIPQUAD(nxi->ipv4[i]), NIPQUAD(nxi->mask[i]));
 	}
 	put_nx_info(nxi);
 	return length;
@@ -302,7 +298,7 @@ static int proc_vid_revalidate(struct dentry * dentry, struct nameidata *nd)
 
 #define PROC_BLOCK_SIZE (PAGE_SIZE - 1024)
 
-static ssize_t proc_vid_info_read(struct file * file, char * buf,
+static ssize_t proc_vid_info_read(struct file * file, char __user * buf,
 			  size_t count, loff_t *ppos)
 {
 	struct inode * inode = file->f_dentry->d_inode;
@@ -332,11 +328,11 @@ static ssize_t proc_vid_info_read(struct file * file, char * buf,
 /* here comes the lower level (vid) */
 
 static struct file_operations proc_vid_info_file_operations = {
-	read:		proc_vid_info_read,
+	.read =		proc_vid_info_read,
 };
 
 static struct dentry_operations proc_vid_dentry_operations = {
-	d_revalidate:	proc_vid_revalidate,
+	.d_revalidate =	proc_vid_revalidate,
 };
 
 
@@ -504,12 +500,12 @@ static int proc_vid_readdir(struct file * filp,
 /* now the upper level (virtual) */
 
 static struct file_operations proc_vid_file_operations = {
-	read:		generic_read_dir,
-	readdir:	proc_vid_readdir,
+	.read =		generic_read_dir,
+	.readdir =	proc_vid_readdir,
 };
 
 static struct inode_operations proc_vid_inode_operations = {
-	lookup:		proc_vid_lookup,
+	.lookup =	proc_vid_lookup,
 };
 
 
@@ -771,12 +767,12 @@ int proc_virtual_readdir(struct file * filp,
 
 
 static struct file_operations proc_virtual_dir_operations = {
-	read:		generic_read_dir,
-	readdir:	proc_virtual_readdir,
+	.read =		generic_read_dir,
+	.readdir =	proc_virtual_readdir,
 };
 
 static struct inode_operations proc_virtual_dir_inode_operations = {
-	lookup:		proc_virtual_lookup,
+	.lookup =	proc_virtual_lookup,
 };
 
 
@@ -832,12 +828,12 @@ int proc_vnet_readdir(struct file * filp,
 
 
 static struct file_operations proc_vnet_dir_operations = {
-	read:		generic_read_dir,
-	readdir:	proc_vnet_readdir,
+	.read =		generic_read_dir,
+	.readdir =	proc_vnet_readdir,
 };
 
 static struct inode_operations proc_vnet_dir_inode_operations = {
-	lookup:		proc_vnet_lookup,
+	.lookup =	proc_vnet_lookup,
 };
 
 

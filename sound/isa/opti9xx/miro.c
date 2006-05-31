@@ -1179,20 +1179,17 @@ static int __init snd_card_miro_aci_detect(struct snd_card *card, struct snd_mir
         /* force ACI into a known state */
 	for (i = 0; i < 3; i++)
 		if (aci_cmd(miro, ACI_ERROR_OP, -1, -1) < 0) {
-			snd_card_free(card);
 			snd_printk(KERN_ERR "can't force aci into known state.\n");
 			return -ENXIO;
 		}
 
 	if ((miro->aci_vendor=aci_cmd(miro, ACI_READ_IDCODE, -1, -1)) < 0 ||
 	    (miro->aci_product=aci_cmd(miro, ACI_READ_IDCODE, -1, -1)) < 0) {
-		snd_card_free(card);
 		snd_printk(KERN_ERR "can't read aci id on 0x%lx.\n", miro->aci_port);
 		return -ENXIO;
 	}
 
 	if ((miro->aci_version=aci_cmd(miro, ACI_READ_VERSION, -1, -1)) < 0) {
-		snd_card_free(card);
 		snd_printk(KERN_ERR "can't read aci version on 0x%lx.\n", 
 			   miro->aci_port);
 		return -ENXIO;
@@ -1436,8 +1433,11 @@ static int __init alsa_card_miro_init(void)
 	if ((error = platform_driver_register(&snd_miro_driver)) < 0)
 		return error;
 	device = platform_device_register_simple(DRIVER_NAME, -1, NULL, 0);
-	if (! IS_ERR(device))
-		return 0;
+	if (! IS_ERR(device)) {
+		if (platform_get_drvdata(device))
+			return 0;
+		platform_device_unregister(device);
+	}
 #ifdef MODULE
 	printk(KERN_ERR "no miro soundcard found\n");
 #endif

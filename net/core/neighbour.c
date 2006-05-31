@@ -284,14 +284,11 @@ static struct neighbour **neigh_hash_alloc(unsigned int entries)
 	struct neighbour **ret;
 
 	if (size <= PAGE_SIZE) {
-		ret = kmalloc(size, GFP_ATOMIC);
+		ret = kzalloc(size, GFP_ATOMIC);
 	} else {
 		ret = (struct neighbour **)
-			__get_free_pages(GFP_ATOMIC, get_order(size));
+		      __get_free_pages(GFP_ATOMIC|__GFP_ZERO, get_order(size));
 	}
-	if (ret)
-		memset(ret, 0, size);
-
 	return ret;
 }
 
@@ -1089,8 +1086,7 @@ static void neigh_hh_init(struct neighbour *n, struct dst_entry *dst,
 		if (hh->hh_type == protocol)
 			break;
 
-	if (!hh && (hh = kmalloc(sizeof(*hh), GFP_ATOMIC)) != NULL) {
-		memset(hh, 0, sizeof(struct hh_cache));
+	if (!hh && (hh = kzalloc(sizeof(*hh), GFP_ATOMIC)) != NULL) {
 		rwlock_init(&hh->hh_lock);
 		hh->hh_type = protocol;
 		atomic_set(&hh->hh_refcnt, 0);
@@ -1330,8 +1326,7 @@ void neigh_parms_destroy(struct neigh_parms *parms)
 	kfree(parms);
 }
 
-
-void neigh_table_init(struct neigh_table *tbl)
+void neigh_table_init_no_netlink(struct neigh_table *tbl)
 {
 	unsigned long now = jiffies;
 	unsigned long phsize;
@@ -1366,12 +1361,10 @@ void neigh_table_init(struct neigh_table *tbl)
 	tbl->hash_buckets = neigh_hash_alloc(tbl->hash_mask + 1);
 
 	phsize = (PNEIGH_HASHMASK + 1) * sizeof(struct pneigh_entry *);
-	tbl->phash_buckets = kmalloc(phsize, GFP_KERNEL);
+	tbl->phash_buckets = kzalloc(phsize, GFP_KERNEL);
 
 	if (!tbl->hash_buckets || !tbl->phash_buckets)
 		panic("cannot allocate neighbour cache hashes");
-
-	memset(tbl->phash_buckets, 0, phsize);
 
 	get_random_bytes(&tbl->hash_rnd, sizeof(tbl->hash_rnd));
 
@@ -1389,10 +1382,27 @@ void neigh_table_init(struct neigh_table *tbl)
 
 	tbl->last_flush = now;
 	tbl->last_rand	= now + tbl->parms.reachable_time * 20;
+}
+
+void neigh_table_init(struct neigh_table *tbl)
+{
+	struct neigh_table *tmp;
+
+	neigh_table_init_no_netlink(tbl);
 	write_lock(&neigh_tbl_lock);
+	for (tmp = neigh_tables; tmp; tmp = tmp->next) {
+		if (tmp->family == tbl->family)
+			break;
+	}
 	tbl->next	= neigh_tables;
 	neigh_tables	= tbl;
 	write_unlock(&neigh_tbl_lock);
+
+	if (unlikely(tmp)) {
+		printk(KERN_ERR "NEIGH: Registering multiple tables for "
+		       "family %d\n", tbl->family);
+		dump_stack();
+	}
 }
 
 int neigh_table_clear(struct neigh_table *tbl)
@@ -1633,7 +1643,7 @@ static int neightbl_fill_info(struct neigh_table *tbl, struct sk_buff *skb,
 
 		memset(&ndst, 0, sizeof(ndst));
 
-		for_each_cpu(cpu) {
+		for_each_possible_cpu(cpu) {
 			struct neigh_statistics	*st;
 
 			st = per_cpu_ptr(tbl->stats, cpu);
@@ -2663,6 +2673,7 @@ EXPORT_SYMBOL(neigh_rand_reach_time);
 EXPORT_SYMBOL(neigh_resolve_output);
 EXPORT_SYMBOL(neigh_table_clear);
 EXPORT_SYMBOL(neigh_table_init);
+EXPORT_SYMBOL(neigh_table_init_no_netlink);
 EXPORT_SYMBOL(neigh_update);
 EXPORT_SYMBOL(neigh_update_hhs);
 EXPORT_SYMBOL(pneigh_enqueue);

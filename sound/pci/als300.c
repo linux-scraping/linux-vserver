@@ -35,6 +35,7 @@
 #include <linux/init.h>
 #include <linux/moduleparam.h>
 #include <linux/pci.h>
+#include <linux/dma-mapping.h>
 #include <linux/interrupt.h>
 #include <linux/slab.h>
 
@@ -145,7 +146,7 @@ struct snd_als300_substream_data {
 	int block_counter_register;
 };
 
-static struct pci_device_id snd_als300_ids[] = {
+static struct pci_device_id snd_als300_ids[] __devinitdata = {
 	{ 0x4005, 0x0300, PCI_ANY_ID, PCI_ANY_ID, 0, 0, DEVICE_ALS300 },
 	{ 0x4005, 0x0308, PCI_ANY_ID, PCI_ANY_ID, 0, 0, DEVICE_ALS300_PLUS },
 	{ 0, }
@@ -691,8 +692,8 @@ static int __devinit snd_als300_create(snd_card_t *card,
 	if ((err = pci_enable_device(pci)) < 0)
 		return err;
 
-	if (pci_set_dma_mask(pci, 0x0fffffff) < 0 ||
-		pci_set_consistent_dma_mask(pci, 0x0fffffff) < 0) {
+	if (pci_set_dma_mask(pci, DMA_28BIT_MASK) < 0 ||
+		pci_set_consistent_dma_mask(pci, DMA_28BIT_MASK) < 0) {
 		printk(KERN_ERR "error setting 28bit DMA mask\n");
 		pci_disable_device(pci);
 		return -ENXIO;

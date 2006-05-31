@@ -51,6 +51,7 @@ int ext3_ioctl (struct inode * inode, struct file * filp, unsigned int cmd,
 		if (!S_ISDIR(inode->i_mode))
 			flags &= ~EXT3_DIRSYNC_FL;
 
+		mutex_lock(&inode->i_mutex);
 		oldflags = ei->i_flags;
 
 		/* The JOURNAL_DATA flag is modifiable only by root */
@@ -65,8 +66,10 @@ int ext3_ioctl (struct inode * inode, struct file * filp, unsigned int cmd,
 		if ((oldflags & EXT3_IMMUTABLE_FL) ||
 			((flags ^ oldflags) & (EXT3_APPEND_FL |
 			EXT3_IMMUTABLE_FL | EXT3_IUNLINK_FL))) {
-			if (!capable(CAP_LINUX_IMMUTABLE))
+			if (!capable(CAP_LINUX_IMMUTABLE)) {
+				mutex_unlock(&inode->i_mutex);
 				return -EPERM;
+			}
 		}
 
 		/*
@@ -74,14 +77,18 @@ int ext3_ioctl (struct inode * inode, struct file * filp, unsigned int cmd,
 		 * the relevant capability.
 		 */
 		if ((jflag ^ oldflags) & (EXT3_JOURNAL_DATA_FL)) {
-			if (!capable(CAP_SYS_RESOURCE))
+			if (!capable(CAP_SYS_RESOURCE)) {
+				mutex_unlock(&inode->i_mutex);
 				return -EPERM;
+			}
 		}
 
 
 		handle = ext3_journal_start(inode, 1);
-		if (IS_ERR(handle))
+		if (IS_ERR(handle)) {
+			mutex_unlock(&inode->i_mutex);
 			return PTR_ERR(handle);
+		}
 		if (IS_SYNC(inode))
 			handle->h_sync = 1;
 		err = ext3_reserve_inode_write(handle, inode, &iloc);
@@ -98,11 +105,14 @@ int ext3_ioctl (struct inode * inode, struct file * filp, unsigned int cmd,
 		err = ext3_mark_iloc_dirty(handle, inode, &iloc);
 flags_err:
 		ext3_journal_stop(handle);
-		if (err)
+		if (err) {
+			mutex_unlock(&inode->i_mutex);
 			return err;
+		}
 
 		if ((jflag ^ oldflags) & (EXT3_JOURNAL_DATA_FL))
 			err = ext3_change_inode_journal_flag(inode, jflag);
+		mutex_unlock(&inode->i_mutex);
 		return err;
 	}
 	case EXT3_IOC_GETVERSION:
@@ -260,7 +270,7 @@ flags_err:
 			return -EROFS;
 		if (!(inode->i_sb->s_flags & MS_TAGGED))
 			return -ENOSYS;
-		if (get_user(tag, (int *) arg))
+		if (get_user(tag, (int __user *) arg))
 			return -EFAULT;
 
 		handle = ext3_journal_start(inode, 1);

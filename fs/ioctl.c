@@ -164,7 +164,7 @@ int vfs_ioctl(struct file *filp, unsigned int fd, unsigned int cmd, unsigned lon
 			/* fixme: if stealth, return -ENOTTY */
 			error = -EPERM;
 			if (capable(CAP_CONTEXT))
-				error = put_user(inode->i_tag, (int *) arg);
+				error = put_user(inode->i_tag, (int __user *) arg);
 			break;
 		}
 		case FIOC_SETTAG: {
@@ -182,7 +182,7 @@ int vfs_ioctl(struct file *filp, unsigned int fd, unsigned int cmd, unsigned lon
 			if (!(inode->i_sb->s_flags & MS_TAGGED))
 				break;
 			error = -EFAULT;
-			if (get_user(tag, (int *) arg))
+			if (get_user(tag, (int __user *) arg))
 				break;
 			error = 0;
 			inode->i_tag = (tag & 0xFFFF);

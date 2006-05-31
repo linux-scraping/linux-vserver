@@ -80,7 +80,7 @@ struct kcore_list {
 struct vmcore {
 	struct list_head list;
 	unsigned long long paddr;
-	unsigned long size;
+	unsigned long long size;
 	loff_t offset;
 };
 

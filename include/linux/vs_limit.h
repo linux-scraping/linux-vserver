@@ -50,6 +50,7 @@
 #define vx_openfd_dec(f) \
 	vx_acc_cres(current->vx_info,-1, (void *)(long)(f), VLIMIT_OPENFD)
 
+
 #define vx_cres_avail(v,n,r) \
 	__vx_cres_avail(v, r, n, __FILE__, __LINE__)
 
@@ -65,6 +66,22 @@
 
 #define vx_openfd_avail(n) \
 	vx_cres_avail(current->vx_info, n, VLIMIT_OPENFD)
+
+
+/* dentry limits */
+
+#define vx_dentry_inc(d) do {						\
+	if (atomic_read(&d->d_count) == 1)				\
+		vx_acc_cres(current->vx_info, 1, d, VLIMIT_DENTRY); 	\
+	} while (0)
+
+#define vx_dentry_dec(d) do {						\
+	if (atomic_read(&d->d_count) == 0)				\
+		vx_acc_cres(current->vx_info,-1, d, VLIMIT_DENTRY);	\
+	} while (0)
+
+#define vx_dentry_avail(n) \
+	vx_cres_avail(current->vx_info, n, VLIMIT_DENTRY)
 
 
 /* socket limits */

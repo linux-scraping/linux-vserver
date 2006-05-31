@@ -310,6 +310,9 @@ static struct hda_board_config stac922x_cfg_tbl[] = {
 	  .pci_subdevice = 0x0b0b,
 	  .config = STAC_D945GTP3 },	/* Intel D945PSN - 3 Stack, 9221 A1 */
 	{ .pci_subvendor = PCI_VENDOR_ID_INTEL,
+	  .pci_subdevice = 0x0707,
+	  .config = STAC_D945GTP5 },	/* Intel D945PSV - 5 Stack */
+       { .pci_subvendor = PCI_VENDOR_ID_INTEL,
 	  .pci_subdevice = 0x0404,
 	  .config = STAC_D945GTP5 },	/* Intel D945GTP - 5 Stack */
 	{ .pci_subvendor = PCI_VENDOR_ID_INTEL,
@@ -1209,8 +1212,8 @@ static hda_nid_t vaio_mux_nids[] = { 0x15 };
 static struct hda_input_mux vaio_mux = {
 	.num_items = 2,
 	.items = {
-		/* { "HP", 0x0 },
-		   { "Unknown", 0x1 }, */
+		/* { "HP", 0x0 }, */
+		{ "Line", 0x1 },
 		{ "Mic", 0x2 },
 		{ "PCM", 0x3 },
 	}

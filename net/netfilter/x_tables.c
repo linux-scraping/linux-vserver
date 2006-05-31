@@ -289,7 +289,7 @@ int xt_compat_match(void *match, void **dstptr, int *size, int convert)
 		case COMPAT_TO_USER:
 			pm = (struct xt_entry_match *)match;
 			msize = pm->u.user.match_size;
-			if (__copy_to_user(*dstptr, pm, msize)) {
+			if (copy_to_user(*dstptr, pm, msize)) {
 				ret = -EFAULT;
 				break;
 			}
@@ -366,7 +366,7 @@ int xt_compat_target(void *target, void **dstptr, int *size, int convert)
 		case COMPAT_TO_USER:
 			pt = (struct xt_entry_target *)target;
 			tsize = pt->u.user.target_size;
-			if (__copy_to_user(*dstptr, pt, tsize)) {
+			if (copy_to_user(*dstptr, pt, tsize)) {
 				ret = -EFAULT;
 				break;
 			}
@@ -413,7 +413,7 @@ struct xt_table_info *xt_alloc_table_info(unsigned int size)
 
 	newinfo->size = size;
 
-	for_each_cpu(cpu) {
+	for_each_possible_cpu(cpu) {
 		if (size <= PAGE_SIZE)
 			newinfo->entries[cpu] = kmalloc_node(size,
 							GFP_KERNEL,
@@ -436,7 +436,7 @@ void xt_free_table_info(struct xt_table_info *info)
 {
 	int cpu;
 
-	for_each_cpu(cpu) {
+	for_each_possible_cpu(cpu) {
 		if (info->size <= PAGE_SIZE)
 			kfree(info->entries[cpu]);
 		else
@@ -529,6 +529,7 @@ int xt_register_table(struct xt_table *table,
 
 	/* Simplifies replace_table code. */
 	table->private = bootstrap;
+	rwlock_init(&table->lock);
 	if (!xt_replace_table(table, 0, newinfo, &ret))
 		goto unlock;
 
@@ -538,7 +539,6 @@ int xt_register_table(struct xt_table *table,
 	/* save number of initial entries */
 	private->initial_entries = private->number;
 
-	rwlock_init(&table->lock);
 	list_prepend(&xt[table->af].tables, table);
 
 	ret = 0;
