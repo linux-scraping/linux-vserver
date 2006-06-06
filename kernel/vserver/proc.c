@@ -182,9 +182,6 @@ static int proc_vnet_info(int vid, char *buffer)
 		);
 }
 
-#define atoquad(a) \
-	(((a)>>0) & 0xff), (((a)>>8) & 0xff), \
-	(((a)>>16) & 0xff), (((a)>>24) & 0xff)
 
 int proc_nid_info (int vid, char *buffer)
 {
@@ -202,9 +199,8 @@ int proc_nid_info (int vid, char *buffer)
 		);
 	for (i=0; i<nxi->nbipv4; i++) {
 		length += sprintf(buffer + length,
-			"%d:\t%d.%d.%d.%d/%d.%d.%d.%d\n", i,
-			atoquad(nxi->ipv4[i]),
-			atoquad(nxi->mask[i]));
+			"%d:\t" NIPQUAD_FMT "/" NIPQUAD_FMT "\n", i,
+			NIPQUAD(nxi->ipv4[i]), NIPQUAD(nxi->mask[i]));
 	}
 	put_nx_info(nxi);
 	return length;
