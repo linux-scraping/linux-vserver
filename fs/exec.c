@@ -1323,7 +1323,7 @@ static void format_corename(char *corename, const char *pattern, long signr)
 			/* UNIX time of coredump */
 			case 't': {
 				struct timeval tv;
-				do_gettimeofday(&tv);
+				vx_gettimeofday(&tv);
 				rc = snprintf(out_ptr, out_end - out_ptr,
 					      "%lu", tv.tv_sec);
 				if (rc > out_end - out_ptr)

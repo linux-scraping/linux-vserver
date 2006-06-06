@@ -147,6 +147,8 @@ extern struct timespec ns_to_timespec(const nsec_t nsec);
  */
 extern struct timeval ns_to_timeval(const nsec_t nsec);
 
+#include <linux/vs_time.h>
+
 #endif /* __KERNEL__ */
 
 #define NFDBITS			__NFDBITS

@@ -66,6 +66,16 @@ config	VSERVER_COWBL
 	  when writing to them (which will implicitely break the
 	  link and create a copy of the unified file)
 
+config	VSERVER_VTIME
+	bool	"Enable Virtualized Guest Time"
+	depends on EXPERIMENTAL
+	default n
+	help
+	  This enables per guest time offsets to allow for
+	  adjusting the system clock individually per guest.
+	  this adds some overhead to the time functions and
+	  therefore should not be enabled without good reason.
+
 config	VSERVER_PROC_SECURE
 	bool	"Enable Proc Security"
 	depends on PROC_FS

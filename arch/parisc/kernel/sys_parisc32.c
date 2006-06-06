@@ -203,11 +203,11 @@ static inline long get_ts32(struct timespec *o, struct compat_timeval __user *i)
 asmlinkage int
 sys32_gettimeofday(struct compat_timeval __user *tv, struct timezone __user *tz)
 {
-    extern void do_gettimeofday(struct timeval *tv);
+    extern void vx_gettimeofday(struct timeval *tv);
 
     if (tv) {
 	    struct timeval ktv;
-	    do_gettimeofday(&ktv);
+	    vx_gettimeofday(&ktv);
 	    if (put_compat_timeval(tv, &ktv))
 		    return -EFAULT;
     }

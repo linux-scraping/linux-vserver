@@ -841,7 +841,7 @@ asmlinkage long compat_sys_time(compat_time_t __user * tloc)
 	compat_time_t i;
 	struct timeval tv;
 
-	do_gettimeofday(&tv);
+	vx_gettimeofday(&tv);
 	i = tv.tv_sec;
 
 	if (tloc) {
@@ -865,7 +865,7 @@ asmlinkage long compat_sys_stime(compat_time_t __user *tptr)
 	if (err)
 		return err;
 
-	do_settimeofday(&tv);
+	vx_settimeofday(&tv);
 	return 0;
 }
 

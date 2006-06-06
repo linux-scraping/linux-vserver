@@ -617,7 +617,7 @@ osf_sysinfo(int command, char __user *buf, long count)
 	long len, err = -EINVAL;
 
 	offset = command-1;
-	if (offset >= sizeof(sysinfo_table)/sizeof(char *)) {
+	if (offset >= 9) {
 		/* Digital UNIX has a few unpublished interfaces here */
 		printk("sysinfo(%d)", command);
 		goto out;
@@ -887,7 +887,7 @@ osf_gettimeofday(struct timeval32 __user *tv, struct timezone __user *tz)
 {
 	if (tv) {
 		struct timeval ktv;
-		do_gettimeofday(&ktv);
+		vx_gettimeofday(&ktv);
 		if (put_tv32(tv, &ktv))
 			return -EFAULT;
 	}
