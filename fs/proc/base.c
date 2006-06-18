@@ -73,6 +73,7 @@
 #include <linux/audit.h>
 #include <linux/poll.h>
 #include <linux/vs_network.h>
+#include <linux/vs_pid.h>
 #include "internal.h"
 
 /*

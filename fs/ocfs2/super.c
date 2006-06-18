@@ -374,7 +374,8 @@ static int ocfs2_remount(struct super_block *sb, int *flags, char *data)
 		goto out;
 	}
 
-	if ((osb->s_mount_opt & OCFS2_MOUNT_TAGGED) &&
+	printk("ocfs2_remount: %lx,%lx\n", osb->s_mount_opt, sb->s_flags);
+	if ((parsed_options & OCFS2_MOUNT_TAGGED) &&
 		!(sb->s_flags & MS_TAGGED)) {
 		ret = -EINVAL;
 		mlog(ML_ERROR, "Cannot change tagging on remount\n");

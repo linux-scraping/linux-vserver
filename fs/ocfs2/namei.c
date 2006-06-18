@@ -545,7 +545,6 @@ static int ocfs2_mknod_locked(struct ocfs2_super *osb,
 	fe->i_uid = cpu_to_le32(TAGINO_UID(DX_TAG(inode), uid, tag));
 	fe->i_gid = cpu_to_le32(TAGINO_GID(DX_TAG(inode), gid, tag));
 	inode->i_tag = tag;
-	printk("··· [ocfs2_mknod_locked] inode %p [#%d]\n", inode, inode->i_tag);
 	fe->i_mode = cpu_to_le16(mode);
 	if (S_ISCHR(mode) || S_ISBLK(mode))
 		fe->id1.dev1.i_rdev = cpu_to_le64(huge_encode_dev(dev));
@@ -2276,4 +2275,5 @@ struct inode_operations ocfs2_dir_iops = {
 	.rename		= ocfs2_rename,
 	.setattr	= ocfs2_setattr,
 	.getattr	= ocfs2_getattr,
+	.sync_flags     = ocfs2_sync_flags,
 };
