@@ -48,8 +48,6 @@
 #include <asm/proto.h>
 #include <asm/nmi.h>
 
-extern struct gate_struct idt_table[256]; 
-
 asmlinkage void divide_error(void);
 asmlinkage void debug(void);
 asmlinkage void nmi(void);
@@ -72,18 +70,20 @@ asmlinkage void alignment_check(void);
 asmlinkage void machine_check(void);
 asmlinkage void spurious_interrupt_bug(void);
 
-struct notifier_block *die_chain;
-static DEFINE_SPINLOCK(die_notifier_lock);
+ATOMIC_NOTIFIER_HEAD(die_chain);
 
 int register_die_notifier(struct notifier_block *nb)
 {
-	int err = 0;
-	unsigned long flags;
-	spin_lock_irqsave(&die_notifier_lock, flags);
-	err = notifier_chain_register(&die_chain, nb);
-	spin_unlock_irqrestore(&die_notifier_lock, flags);
-	return err;
+	vmalloc_sync_all();
+	return atomic_notifier_chain_register(&die_chain, nb);
 }
+EXPORT_SYMBOL(register_die_notifier);
+
+int unregister_die_notifier(struct notifier_block *nb)
+{
+	return atomic_notifier_chain_unregister(&die_chain, nb);
+}
+EXPORT_SYMBOL(unregister_die_notifier);
 
 static inline void conditional_sti(struct pt_regs *regs)
 {
@@ -102,6 +102,8 @@ static inline void preempt_conditional_cli(struct pt_regs *regs)
 {
 	if (regs->eflags & X86_EFLAGS_IF)
 		local_irq_disable();
+	/* Make sure to not schedule here because we could be running
+	   on an exception stack. */
 	preempt_enable_no_resched();
 }
 
@@ -123,7 +125,7 @@ int printk_address(unsigned long address)
 	if (!modname) 
 		modname = delim = ""; 		
         return printk("<%016lx>{%s%s%s%s%+ld}",
-		      address,delim,modname,delim,symname,offset); 
+		      address, delim, modname, delim, symname, offset); 
 } 
 #else
 int printk_address(unsigned long address)
@@ -336,13 +338,12 @@ void show_registers(struct pt_regs *regs)
 		show_stack(NULL, (unsigned long*)rsp);
 
 		printk("\nCode: ");
-		if(regs->rip < PAGE_OFFSET)
+		if (regs->rip < PAGE_OFFSET)
 			goto bad;
 
-		for(i=0;i<20;i++)
-		{
+		for (i=0; i<20; i++) {
 			unsigned char c;
-			if(__get_user(c, &((unsigned char*)regs->rip)[i])) {
+			if (__get_user(c, &((unsigned char*)regs->rip)[i])) {
 bad:
 				printk(" Bad RIP value.");
 				break;
@@ -387,6 +388,7 @@ void out_of_line_bug(void)
 
 static DEFINE_SPINLOCK(die_lock);
 static int die_owner = -1;
+static unsigned int die_nest_count;
 
 unsigned __kprobes long oops_begin(void)
 {
@@ -401,6 +403,7 @@ unsigned __kprobes long oops_begin(void)
 		else
 			spin_lock(&die_lock);
 	}
+	die_nest_count++;
 	die_owner = cpu;
 	console_verbose();
 	bust_spinlocks(1);
@@ -411,7 +414,13 @@ void __kprobes oops_end(unsigned long flags)
 { 
 	die_owner = -1;
 	bust_spinlocks(0);
-	spin_unlock_irqrestore(&die_lock, flags);
+	die_nest_count--;
+	if (die_nest_count)
+		/* We still own the lock */
+		local_irq_restore(flags);
+	else
+		/* Nest count reaches zero, release the lock. */
+		spin_unlock_irqrestore(&die_lock, flags);
 	if (panic_on_oops)
 		panic("Oops");
 }
@@ -466,6 +475,8 @@ void __kprobes die_nmi(char *str, struct pt_regs *regs)
 		panic("nmi watchdog");
 	printk("console shuts up ...\n");
 	oops_end(flags);
+	nmi_exit();
+	local_irq_enable();
 	do_exit(SIGSEGV);
 }
 
@@ -475,8 +486,6 @@ static void __kprobes do_trap(int trapnr, int signr, char *str,
 {
 	struct task_struct *tsk = current;
 
-	conditional_sti(regs);
-
 	tsk->thread.error_code = error_code;
 	tsk->thread.trap_no = trapnr;
 
@@ -485,7 +494,7 @@ static void __kprobes do_trap(int trapnr, int signr, char *str,
 			printk(KERN_INFO
 			       "%s[%d] trap %s rip:%lx rsp:%lx error:%lx\n",
 			       tsk->comm, tsk->pid, str,
-			       regs->rip,regs->rsp,error_code); 
+			       regs->rip, regs->rsp, error_code); 
 
 		if (info)
 			force_sig_info(signr, info, tsk);
@@ -499,9 +508,9 @@ static void __kprobes do_trap(int trapnr, int signr, char *str,
 	{	     
 		const struct exception_table_entry *fixup;
 		fixup = search_exception_tables(regs->rip);
-		if (fixup) {
+		if (fixup)
 			regs->rip = fixup->fixup;
-		} else	
+		else	
 			die(str, regs, error_code);
 		return;
 	}
@@ -513,6 +522,7 @@ asmlinkage void do_##name(struct pt_regs * regs, long error_code) \
 	if (notify_die(DIE_TRAP, str, regs, error_code, trapnr, signr) \
 							== NOTIFY_STOP) \
 		return; \
+	conditional_sti(regs);						\
 	do_trap(trapnr, signr, str, regs, error_code, NULL); \
 }
 
@@ -527,6 +537,7 @@ asmlinkage void do_##name(struct pt_regs * regs, long error_code) \
 	if (notify_die(DIE_TRAP, str, regs, error_code, trapnr, signr) \
 							== NOTIFY_STOP) \
 		return; \
+	conditional_sti(regs);						\
 	do_trap(trapnr, signr, str, regs, error_code, &info); \
 }
 
@@ -540,7 +551,17 @@ DO_ERROR(10, SIGSEGV, "invalid TSS", invalid_TSS)
 DO_ERROR(11, SIGBUS,  "segment not present", segment_not_present)
 DO_ERROR_INFO(17, SIGBUS, "alignment check", alignment_check, BUS_ADRALN, 0)
 DO_ERROR(18, SIGSEGV, "reserved", reserved)
-DO_ERROR(12, SIGBUS,  "stack segment", stack_segment)
+
+/* Runs on IST stack */
+asmlinkage void do_stack_segment(struct pt_regs *regs, long error_code)
+{
+	if (notify_die(DIE_TRAP, "stack segment", regs, error_code,
+			12, SIGBUS) == NOTIFY_STOP)
+		return;
+	preempt_conditional_sti(regs);
+	do_trap(12, SIGBUS, "stack segment", regs, error_code, NULL);
+	preempt_conditional_cli(regs);
+}
 
 asmlinkage void do_double_fault(struct pt_regs * regs, long error_code)
 {
@@ -574,7 +595,7 @@ asmlinkage void __kprobes do_general_protection(struct pt_regs * regs,
 			printk(KERN_INFO
 		       "%s[%d] general protection rip:%lx rsp:%lx error:%lx\n",
 			       tsk->comm, tsk->pid,
-			       regs->rip,regs->rsp,error_code); 
+			       regs->rip, regs->rsp, error_code); 
 
 		force_sig(SIGSEGV, tsk);
 		return;
@@ -674,8 +695,9 @@ asmlinkage void __kprobes do_int3(struct pt_regs * regs, long error_code)
 	if (notify_die(DIE_INT3, "int3", regs, error_code, 3, SIGTRAP) == NOTIFY_STOP) {
 		return;
 	}
+	preempt_conditional_sti(regs);
 	do_trap(3, SIGTRAP, "int3", regs, error_code, NULL);
-	return;
+	preempt_conditional_cli(regs);
 }
 
 /* Help handler running on IST stack to switch back to user stack
@@ -980,14 +1002,14 @@ void __init trap_init(void)
 static int __init oops_dummy(char *s)
 { 
 	panic_on_oops = 1;
-	return -1; 
+	return 1;
 } 
 __setup("oops=", oops_dummy); 
 
 static int __init kstack_setup(char *s)
 {
 	kstack_depth_to_print = simple_strtoul(s,NULL,0);
-	return 0;
+	return 1;
 }
 __setup("kstack=", kstack_setup);
 

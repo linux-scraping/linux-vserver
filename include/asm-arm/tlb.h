@@ -19,6 +19,14 @@
 
 #include <asm/cacheflush.h>
 #include <asm/tlbflush.h>
+
+#ifndef CONFIG_MMU
+
+#include <linux/pagemap.h>
+#include <asm-generic/tlb.h>
+
+#else /* !CONFIG_MMU */
+
 #include <asm/pgalloc.h>
 #include <linux/vs_memory.h>
 
@@ -83,4 +91,5 @@ tlb_end_vma(struct mmu_gather *tlb, struct vm_area_struct *vma)
 
 #define tlb_migrate_finish(mm)		do { } while (0)
 
+#endif /* CONFIG_MMU */
 #endif

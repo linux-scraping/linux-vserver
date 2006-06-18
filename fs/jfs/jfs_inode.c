@@ -64,6 +64,13 @@ struct inode *ialloc(struct inode *parent, umode_t mode)
 	} else
 		inode->i_gid = current->fsgid;
 
+	/*
+	 * New inodes need to save sane values on disk when
+	 * uid & gid mount options are used
+	 */
+	jfs_inode->saved_uid = inode->i_uid;
+	jfs_inode->saved_gid = inode->i_gid;
+
 	inode->i_xid = vx_current_fsxid(sb);
 	if (DLIMIT_ALLOC_INODE(inode)) {
 		iput(inode);
@@ -83,10 +90,20 @@ struct inode *ialloc(struct inode *parent, umode_t mode)
 	}
 
 	inode->i_mode = mode;
-	if (S_ISDIR(mode))
-		jfs_inode->mode2 = IDIRECTORY | mode;
-	else
-		jfs_inode->mode2 = INLINEEA | ISPARSE | mode;
+	/* inherit flags from parent */
+	jfs_inode->mode2 = JFS_IP(parent)->mode2 & JFS_FL_INHERIT;
+
+	if (S_ISDIR(mode)) {
+		jfs_inode->mode2 |= IDIRECTORY;
+		jfs_inode->mode2 &= ~JFS_DIRSYNC_FL;
+	}
+	else {
+		jfs_inode->mode2 |= INLINEEA | ISPARSE;
+		if (S_ISLNK(mode))
+			jfs_inode->mode2 &= ~(JFS_IMMUTABLE_FL|JFS_APPEND_FL);
+	}
+	jfs_inode->mode2 |= mode;
+
 	inode->i_blksize = sb->s_blocksize;
 	inode->i_blocks = 0;
 	inode->i_mtime = inode->i_atime = inode->i_ctime = CURRENT_TIME;

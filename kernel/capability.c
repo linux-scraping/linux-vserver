@@ -234,3 +234,23 @@ out:
 
      return ret;
 }
+
+int __capable(struct task_struct *t, int cap)
+{
+	if (security_capable(t, cap) == 0) {
+		t->flags |= PF_SUPERPRIV;
+		return 1;
+	}
+	return 0;
+}
+EXPORT_SYMBOL(__capable);
+
+int capable(int cap)
+{
+	/* here for now so we don't require task locking */
+	if (vx_check_bit(VXC_CAP_MASK, cap) && !vx_mcaps(1L << cap))
+		return 0;
+	return __capable(current, cap);
+}
+EXPORT_SYMBOL(capable);
+

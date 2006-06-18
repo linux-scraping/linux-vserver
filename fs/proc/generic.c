@@ -19,6 +19,7 @@
 #include <linux/idr.h>
 #include <linux/namei.h>
 #include <linux/bitops.h>
+#include <linux/spinlock.h>
 #include <linux/vserver/inode.h>
 #include <asm/uaccess.h>
 
@@ -29,6 +30,8 @@ static ssize_t proc_file_read(struct file *file, char __user *buf,
 static ssize_t proc_file_write(struct file *file, const char __user *buffer,
 			       size_t count, loff_t *ppos);
 static loff_t proc_file_lseek(struct file *, loff_t, int);
+
+DEFINE_SPINLOCK(proc_subdir_lock);
 
 int proc_match(int len, const char *name, struct proc_dir_entry *de)
 {
@@ -278,7 +281,9 @@ static int xlate_proc_name(const char *name,
 	const char     		*cp = name, *next;
 	struct proc_dir_entry	*de;
 	int			len;
+	int 			rtn = 0;
 
+	spin_lock(&proc_subdir_lock);
 	de = &proc_root;
 	while (1) {
 		next = strchr(cp, '/');
@@ -290,13 +295,17 @@ static int xlate_proc_name(const char *name,
 			if (proc_match(len, cp, de))
 				break;
 		}
-		if (!de)
-			return -ENOENT;
+		if (!de) {
+			rtn = -ENOENT;
+			goto out;
+		}
 		cp += len + 1;
 	}
 	*residual = cp;
 	*ret = de;
-	return 0;
+out:
+	spin_unlock(&proc_subdir_lock);
+	return rtn;
 }
 
 static DEFINE_IDR(proc_inum_idr);
@@ -381,6 +390,7 @@ struct dentry *proc_lookup(struct inode * dir, struct dentry *dentry, struct nam
 	int error = -ENOENT;
 
 	lock_kernel();
+	spin_lock(&proc_subdir_lock);
 	de = PDE(dir);
 	if (de) {
 		for (de = de->subdir; de ; de = de->next) {
@@ -391,14 +401,17 @@ struct dentry *proc_lookup(struct inode * dir, struct dentry *dentry, struct nam
 			if (!memcmp(dentry->d_name.name, de->name, de->namelen)) {
 				unsigned int ino = de->low_ino;
 
+				spin_unlock(&proc_subdir_lock);
 				error = -EINVAL;
 				inode = proc_get_inode(dir->i_sb, ino, de);
 				/* generic proc entries belong to the host */
 				inode->i_xid = 0;
+				spin_lock(&proc_subdir_lock);
 				break;
 			}
 		}
 	}
+	spin_unlock(&proc_subdir_lock);
 	unlock_kernel();
 
 	if (inode) {
@@ -452,11 +465,13 @@ int proc_readdir(struct file * filp,
 			filp->f_pos++;
 			/* fall through */
 		default:
+			spin_lock(&proc_subdir_lock);
 			de = de->subdir;
 			i -= 2;
 			for (;;) {
 				if (!de) {
 					ret = 1;
+					spin_unlock(&proc_subdir_lock);
 					goto out;
 				}
 				if (!i)
@@ -468,13 +483,17 @@ int proc_readdir(struct file * filp,
 			do {
 				if (!vx_hide_check(0, de->vx_flags))
 					goto skip;
+				/* filldir passes info to user space */
+				spin_unlock(&proc_subdir_lock);
 				if (filldir(dirent, de->name, de->namelen, filp->f_pos,
 					    de->low_ino, de->mode >> 12) < 0)
 					goto out;
+				spin_lock(&proc_subdir_lock);
 			skip:
 				filp->f_pos++;
 				de = de->next;
 			} while (de);
+			spin_unlock(&proc_subdir_lock);
 	}
 	ret = 1;
 out:	unlock_kernel();
@@ -508,9 +527,13 @@ static int proc_register(struct proc_dir_entry * dir, struct proc_dir_entry * dp
 	if (i == 0)
 		return -EAGAIN;
 	dp->low_ino = i;
+
+	spin_lock(&proc_subdir_lock);
 	dp->next = dir->subdir;
 	dp->parent = dir;
 	dir->subdir = dp;
+	spin_unlock(&proc_subdir_lock);
+
 	if (S_ISDIR(dp->mode)) {
 		if (dp->proc_iops == NULL) {
 			dp->proc_fops = &proc_dir_operations;
@@ -545,7 +568,7 @@ static void proc_kill_inodes(struct proc_dir_entry *de)
 		struct file * filp = list_entry(p, struct file, f_u.fu_list);
 		struct dentry * dentry = filp->f_dentry;
 		struct inode * inode;
-		struct file_operations *fops;
+		const struct file_operations *fops;
 
 		if (dentry->d_op != &proc_dentry_operations)
 			continue;
@@ -704,6 +727,8 @@ void remove_proc_entry(const char *name, struct proc_dir_entry *parent)
 	if (!parent && xlate_proc_name(name, &parent, &fn) != 0)
 		goto out;
 	len = strlen(fn);
+
+	spin_lock(&proc_subdir_lock);
 	for (p = &parent->subdir; *p; p=&(*p)->next ) {
 		if (!proc_match(len, fn, *p))
 			continue;
@@ -724,6 +749,7 @@ void remove_proc_entry(const char *name, struct proc_dir_entry *parent)
 		}
 		break;
 	}
+	spin_unlock(&proc_subdir_lock);
 out:
 	return;
 }
