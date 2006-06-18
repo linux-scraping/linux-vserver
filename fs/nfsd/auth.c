@@ -51,13 +51,13 @@ int nfsd_setuser(struct svc_rqst *rqstp, struct svc_export *exp)
 		current->fsgid = exp->ex_anon_gid;
 
 	/* this desperately needs a tag :) */
-	current->xid = (xid_t)INOTAG_TAG(DX_TAG_NFSD, cred->cr_uid, cred->cr_gid, 0);
+	current->xid = (xid_t)INOTAG_TAG(DX_TAG_NFSD, cred.cr_uid, cred.cr_gid, 0);
 
 	if (!cred.cr_group_info)
 		return -ENOMEM;
 	ret = set_current_groups(cred.cr_group_info);
 	put_group_info(cred.cr_group_info);
-	if (INOTAG_UID(DX_TAG_NFSD, cred.cr_uid cred.cr_gid)) {
+	if (INOTAG_UID(DX_TAG_NFSD, cred.cr_uid, cred.cr_gid)) {
 		cap_t(current->cap_effective) &= ~CAP_NFSD_MASK;
 	} else {
 		cap_t(current->cap_effective) |= (CAP_NFSD_MASK &

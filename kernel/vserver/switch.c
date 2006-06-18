@@ -156,6 +156,8 @@ long do_vserver(uint32_t cmd, uint32_t id, void __user *data, int compat)
 #endif
 	case VCMD_get_rlimit_mask:
 		return vc_get_rlimit_mask(id, data);
+	case VCMD_reset_minmax:
+		return vc_reset_minmax(id, data);
 
 	case VCMD_get_vhi_name:
 		return vc_get_vhi_name(id, data);

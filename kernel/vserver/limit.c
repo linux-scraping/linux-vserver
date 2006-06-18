@@ -220,6 +220,36 @@ int vc_get_rlimit_mask(uint32_t id, void __user *data)
 }
 
 
+static inline void vx_reset_minmax(struct _vx_limit *limit)
+{
+	rlim_t value;
+	int lim;
+
+	for (lim=0; lim<NUM_LIMITS; lim++) {
+		value = __rlim_get(limit, lim);
+		__rlim_rmax(limit, lim) = value;
+		__rlim_rmin(limit, lim) = value;
+	}
+}
+
+
+int vc_reset_minmax(uint32_t id, void __user *data)
+{
+	struct vx_info *vxi;
+
+	if (!capable(CAP_SYS_RESOURCE))
+		return -EPERM;
+
+	vxi = lookup_vx_info(id);
+	if (!vxi)
+		return -ESRCH;
+
+	vx_reset_minmax(&vxi->limit);
+	put_vx_info(vxi);
+	return 0;
+}
+
+
 void vx_vsi_meminfo(struct sysinfo *val)
 {
 	struct vx_info *vxi = current->vx_info;

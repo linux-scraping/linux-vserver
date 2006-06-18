@@ -40,6 +40,7 @@
 #include <linux/types.h>
 #include <linux/slab.h>
 #include <linux/highmem.h>
+#include <linux/vs_tag.h>
 
 #define MLOG_MASK_PREFIX ML_NAMEI
 #include <cluster/masklog.h>
@@ -469,6 +470,9 @@ static int ocfs2_mknod_locked(struct ocfs2_super *osb,
 	u64 fe_blkno = 0;
 	u16 suballoc_bit;
 	struct inode *inode = NULL;
+	uid_t uid;
+	gid_t gid;
+	tag_t tag;
 
 	mlog_entry("(0x%p, 0x%p, %d, %lu, '%.*s')\n", dir, dentry, mode,
 		   (unsigned long)dev, dentry->d_name.len,
@@ -528,13 +532,20 @@ static int ocfs2_mknod_locked(struct ocfs2_super *osb,
 	fe->i_blkno = cpu_to_le64(fe_blkno);
 	fe->i_suballoc_bit = cpu_to_le16(suballoc_bit);
 	fe->i_suballoc_slot = cpu_to_le16(osb->slot_num);
-	fe->i_uid = cpu_to_le32(current->fsuid);
+
+	tag = dx_current_fstag(osb->sb);
+	uid = current->fsuid;
 	if (dir->i_mode & S_ISGID) {
-		fe->i_gid = cpu_to_le32(dir->i_gid);
+		gid = dir->i_gid;
 		if (S_ISDIR(mode))
 			mode |= S_ISGID;
 	} else
-		fe->i_gid = cpu_to_le32(current->fsgid);
+		gid = current->fsgid;
+
+	fe->i_uid = cpu_to_le32(TAGINO_UID(DX_TAG(inode), uid, tag));
+	fe->i_gid = cpu_to_le32(TAGINO_GID(DX_TAG(inode), gid, tag));
+	inode->i_tag = tag;
+	printk("··· [ocfs2_mknod_locked] inode %p [#%d]\n", inode, inode->i_tag);
 	fe->i_mode = cpu_to_le16(mode);
 	if (S_ISCHR(mode) || S_ISBLK(mode))
 		fe->id1.dev1.i_rdev = cpu_to_le64(huge_encode_dev(dev));
