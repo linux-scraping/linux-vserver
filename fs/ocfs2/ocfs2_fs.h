@@ -114,6 +114,30 @@
 #define OCFS2_CHAIN_FL		(0x00000400)	/* Chain allocator */
 #define OCFS2_DEALLOC_FL	(0x00000800)	/* Truncate log */
 
+/* Inode attributes */
+#define OCFS2_SECRM_FL		(0x00010000)	/* Secure deletion */
+#define OCFS2_UNRM_FL		(0x00020000)	/* Undelete */
+#define OCFS2_COMPR_FL		(0x00040000)	/* Compress file */
+#define OCFS2_SYNC_FL		(0x00080000)	/* Synchronous updates */
+#define OCFS2_IMMUTABLE_FL	(0x00100000)	/* Immutable file */
+#define OCFS2_APPEND_FL		(0x00200000)	/* writes to file may only append */
+#define OCFS2_NODUMP_FL		(0x00400000)	/* do not dump file */
+#define OCFS2_NOATIME_FL	(0x00800000)	/* do not update atime */
+#define OCFS2_DIRSYNC_FL	(0x01000000)	/* dirsync behaviour (directories only) */
+
+#define OCFS2_BARRIER_FL	(0x04000000)	/* Barrier for chroot() */
+#define OCFS2_IUNLINK_FL	(0x08000000)	/* Immutable unlink */
+
+#define OCFS2_FL_VISIBLE	(0x01FF0000)	/* User visible flags */
+#define OCFS2_FL_MODIFIABLE	(0x01FF0000)	/* User modifiable flags */
+#define OCFS2_FL_MASK		(0x0FFF0000)	/* ext2 flag mask */
+
+/*
+ * ioctl commands
+ */
+#define OCFS2_IOC_GETFLAGS	_IOR('f', 1, long)
+#define OCFS2_IOC_SETFLAGS	_IOW('f', 2, long)
+
 /*
  * Journal Flags (ocfs2_dinode.id1.journal1.i_flags)
  */

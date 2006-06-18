@@ -49,6 +49,7 @@
 #include <linux/workqueue.h>
 #include <linux/module.h>
 #include <linux/vs_context.h>
+#include <linux/vs_pid.h>
 
 /*
  * Management arrays for POSIX timers.	 Timers are kept in slab memory

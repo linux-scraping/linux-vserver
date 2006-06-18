@@ -422,7 +422,7 @@ int ifa_in_nx_info(struct in_ifaddr *ifa, struct nx_info *nxi)
 		return 1;
 	if (!ifa)
 		return 0;
-	return addr_in_nx_info(nxi, ifa->ifa_address);
+	return addr_in_nx_info(nxi, ifa->ifa_local);
 }
 
 int dev_in_nx_info(struct net_device *dev, struct nx_info *nxi)
@@ -441,7 +441,7 @@ int dev_in_nx_info(struct net_device *dev, struct nx_info *nxi)
 
 	for (ifap = &in_dev->ifa_list; (ifa = *ifap) != NULL;
 		ifap = &ifa->ifa_next) {
-		if (addr_in_nx_info(nxi, ifa->ifa_address)) {
+		if (addr_in_nx_info(nxi, ifa->ifa_local)) {
 			ret = 1;
 			break;
 		}

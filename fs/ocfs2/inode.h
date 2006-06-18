@@ -142,4 +142,7 @@ int ocfs2_mark_inode_dirty(struct ocfs2_journal_handle *handle,
 int ocfs2_aio_read(struct file *file, struct kiocb *req, struct iocb *iocb);
 int ocfs2_aio_write(struct file *file, struct kiocb *req, struct iocb *iocb);
 
+void ocfs2_set_inode_flags(struct inode *inode);
+int ocfs2_sync_flags(struct inode *inode);
+
 #endif /* OCFS2_INODE_H */

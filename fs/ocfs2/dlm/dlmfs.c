@@ -337,7 +337,6 @@ static struct inode *dlmfs_get_root_inode(struct super_block *sb)
 		inode->i_uid = current->fsuid;
 		inode->i_gid = current->fsgid;
 		inode->i_tag = dx_current_fstag(sb);
-		printk("··· [dlmfs_get_root_inode] inode %p [#%d]\n", inode, inode->i_tag);
 		inode->i_blksize = PAGE_CACHE_SIZE;
 		inode->i_blocks = 0;
 		inode->i_mapping->backing_dev_info = &dlmfs_backing_dev_info;
@@ -366,7 +365,6 @@ static struct inode *dlmfs_get_inode(struct inode *parent,
 	inode->i_uid = current->fsuid;
 	inode->i_gid = current->fsgid;
 	inode->i_tag = dx_current_fstag(sb);
-	printk("··· [dlmfs_get_inode] inode %p [#%d]\n", inode, inode->i_tag);
 	inode->i_blksize = PAGE_CACHE_SIZE;
 	inode->i_blocks = 0;
 	inode->i_mapping->backing_dev_info = &dlmfs_backing_dev_info;

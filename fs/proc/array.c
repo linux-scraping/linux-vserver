@@ -77,6 +77,7 @@
 #include <linux/rcupdate.h>
 #include <linux/vs_context.h>
 #include <linux/vs_network.h>
+#include <linux/vs_pid.h>
 
 #include <asm/uaccess.h>
 #include <asm/pgtable.h>

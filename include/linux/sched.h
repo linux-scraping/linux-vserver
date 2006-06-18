@@ -37,7 +37,6 @@
 #include <linux/seccomp.h>
 #include <linux/rcupdate.h>
 #include <linux/futex.h>
-#include <linux/vs_pid.h>
 
 #include <linux/auxvec.h>	/* For AT_VECTOR_SIZE */
 
