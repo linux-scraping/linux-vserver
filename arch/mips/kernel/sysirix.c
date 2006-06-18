@@ -31,6 +31,7 @@
 #include <linux/socket.h>
 #include <linux/security.h>
 #include <linux/syscalls.h>
+#include <linux/vs_cvirt.h>
 
 #include <asm/ptrace.h>
 #include <asm/page.h>

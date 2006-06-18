@@ -568,7 +568,7 @@ we_slept:
 		/* We have more than one user... nothing to do */
 		atomic_dec(&dquot->dq_count);
 		/* Releasing dquot during quotaoff phase? */
-		if (!dqh_has_quota_enabled(dquot->dq_dqh, dquot->dq_type) &&
+		if (!sb_has_quota_enabled(dquot->dq_sb, dquot->dq_type) &&
 		    atomic_read(&dquot->dq_count) == 1)
 			wake_up(&dquot->dq_wait_unused);
 		spin_unlock(&dq_list_lock);
@@ -666,9 +666,8 @@ we_slept:
 		return NODQUOT;
 	}
 #ifdef __DQUOT_PARANOIA
-	BUG_ON(!dquot->dq_sb)	/* Has somebody invalidated entry under us? */
+	BUG_ON(!dquot->dq_sb);	/* Has somebody invalidated entry under us? */
 #endif
-
 	return dquot;
 }
 

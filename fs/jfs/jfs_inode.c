@@ -27,6 +27,66 @@
 #include "jfs_dinode.h"
 #include "jfs_debug.h"
 
+
+void jfs_set_inode_flags(struct inode *inode)
+{
+	unsigned int flags = JFS_IP(inode)->mode2;
+
+	inode->i_flags &= ~(S_IMMUTABLE | S_IUNLINK | S_BARRIER |
+		S_SYNC | S_APPEND | S_NOATIME | S_DIRSYNC);
+
+	if (flags & JFS_IMMUTABLE_FL)
+		inode->i_flags |= S_IMMUTABLE;
+	if (flags & JFS_IUNLINK_FL)
+		inode->i_flags |= S_IUNLINK;
+	if (flags & JFS_BARRIER_FL)
+		inode->i_flags |= S_BARRIER;
+
+	if (flags & JFS_SYNC_FL)
+		inode->i_flags |= S_SYNC;
+	if (flags & JFS_APPEND_FL)
+		inode->i_flags |= S_APPEND;
+	if (flags & JFS_NOATIME_FL)
+		inode->i_flags |= S_NOATIME;
+	if (flags & JFS_DIRSYNC_FL)
+		inode->i_flags |= S_DIRSYNC;
+}
+
+int jfs_sync_flags(struct inode *inode)
+{
+	unsigned int oldflags, newflags;
+
+	oldflags = JFS_IP(inode)->mode2;
+	newflags = oldflags & ~(JFS_APPEND_FL |
+		JFS_IMMUTABLE_FL | JFS_IUNLINK_FL |
+		JFS_BARRIER_FL | JFS_NOATIME_FL |
+		JFS_SYNC_FL | JFS_DIRSYNC_FL);
+
+	if (IS_APPEND(inode))
+		newflags |= JFS_APPEND_FL;
+	if (IS_IMMUTABLE(inode))
+		newflags |= JFS_IMMUTABLE_FL;
+	if (IS_IUNLINK(inode))
+		newflags |= JFS_IUNLINK_FL;
+	if (IS_BARRIER(inode))
+		newflags |= JFS_BARRIER_FL;
+
+	/* we do not want to copy superblock flags */
+	if (inode->i_flags & S_NOATIME)
+		newflags |= JFS_NOATIME_FL;
+	if (inode->i_flags & S_SYNC)
+		newflags |= JFS_SYNC_FL;
+	if (inode->i_flags & S_DIRSYNC)
+		newflags |= JFS_DIRSYNC_FL;
+
+	if (oldflags ^ newflags) {
+		JFS_IP(inode)->mode2 = newflags;
+		inode->i_ctime = CURRENT_TIME;
+		mark_inode_dirty(inode);
+	}
+	return 0;
+}
+
 /*
  * NAME:	ialloc()
  *
@@ -124,6 +184,7 @@ struct inode *ialloc(struct inode *parent, umode_t mode)
 	jfs_inode->atlhead = 0;
 	jfs_inode->atltail = 0;
 	jfs_inode->xtlid = 0;
+	jfs_set_inode_flags(inode);
 
 	jfs_info("ialloc returns inode = 0x%p\n", inode);
 
