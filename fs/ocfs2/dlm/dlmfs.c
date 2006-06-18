@@ -44,6 +44,7 @@
 #include <linux/string.h>
 #include <linux/smp_lock.h>
 #include <linux/backing-dev.h>
+#include <linux/vs_tag.h>
 
 #include <asm/uaccess.h>
 
@@ -335,6 +336,8 @@ static struct inode *dlmfs_get_root_inode(struct super_block *sb)
 		inode->i_mode = mode;
 		inode->i_uid = current->fsuid;
 		inode->i_gid = current->fsgid;
+		inode->i_tag = dx_current_fstag(sb);
+		printk("··· [dlmfs_get_root_inode] inode %p [#%d]\n", inode, inode->i_tag);
 		inode->i_blksize = PAGE_CACHE_SIZE;
 		inode->i_blocks = 0;
 		inode->i_mapping->backing_dev_info = &dlmfs_backing_dev_info;
@@ -362,6 +365,8 @@ static struct inode *dlmfs_get_inode(struct inode *parent,
 	inode->i_mode = mode;
 	inode->i_uid = current->fsuid;
 	inode->i_gid = current->fsgid;
+	inode->i_tag = dx_current_fstag(sb);
+	printk("··· [dlmfs_get_inode] inode %p [#%d]\n", inode, inode->i_tag);
 	inode->i_blksize = PAGE_CACHE_SIZE;
 	inode->i_blocks = 0;
 	inode->i_mapping->backing_dev_info = &dlmfs_backing_dev_info;

@@ -788,13 +788,15 @@ int ocfs2_setattr(struct dentry *dentry, struct iattr *attr)
 		mlog(0, "uid change: %d\n", attr->ia_uid);
 	if (attr->ia_valid & ATTR_GID)
 		mlog(0, "gid change: %d\n", attr->ia_gid);
+	if (attr->ia_valid & ATTR_TAG)
+		mlog(0, "tag change: %d\n", attr->ia_tag);
 	if (attr->ia_valid & ATTR_SIZE)
 		mlog(0, "size change...\n");
 	if (attr->ia_valid & (ATTR_ATIME | ATTR_MTIME | ATTR_CTIME))
 		mlog(0, "time change...\n");
 
 #define OCFS2_VALID_ATTRS (ATTR_ATIME | ATTR_MTIME | ATTR_CTIME | ATTR_SIZE \
-			   | ATTR_GID | ATTR_UID | ATTR_MODE)
+			   | ATTR_GID | ATTR_UID | ATTR_TAG | ATTR_MODE)
 	if (!(attr->ia_valid & OCFS2_VALID_ATTRS)) {
 		mlog(0, "can't handle attrs: 0x%x\n", attr->ia_valid);
 		return 0;

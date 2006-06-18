@@ -1321,6 +1321,7 @@ out_activate:
 #endif /* CONFIG_SMP */
 	if (old_state == TASK_UNINTERRUPTIBLE) {
 		rq->nr_uninterruptible--;
+		vx_uninterruptible_dec(p);
 		/*
 		 * Tasks on involuntary sleep don't earn
 		 * sleep_avg beyond just interactive state.

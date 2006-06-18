@@ -29,6 +29,7 @@
 #include <linux/highmem.h>
 #include <linux/pagemap.h>
 #include <linux/smp_lock.h>
+#include <linux/vs_tag.h>
 
 #include <asm/byteorder.h>
 
@@ -218,6 +219,8 @@ int ocfs2_populate_inode(struct inode *inode, struct ocfs2_dinode *fe,
 	struct super_block *sb;
 	struct ocfs2_super *osb;
 	int status = -EINVAL;
+	uid_t uid;
+	gid_t gid;
 
 	mlog_entry("(0x%p, size:%llu)\n", inode,
 		   (unsigned long long)fe->i_size);
@@ -249,8 +252,13 @@ int ocfs2_populate_inode(struct inode *inode, struct ocfs2_dinode *fe,
 	inode->i_generation = le32_to_cpu(fe->i_generation);
 	inode->i_rdev = huge_decode_dev(le64_to_cpu(fe->id1.dev1.i_rdev));
 	inode->i_mode = le16_to_cpu(fe->i_mode);
-	inode->i_uid = le32_to_cpu(fe->i_uid);
-	inode->i_gid = le32_to_cpu(fe->i_gid);
+	uid = le32_to_cpu(fe->i_uid);
+	gid = le32_to_cpu(fe->i_gid);
+	inode->i_uid = INOTAG_UID(DX_TAG(inode), uid, gid);
+	inode->i_gid = INOTAG_GID(DX_TAG(inode), uid, gid);
+	inode->i_tag = INOTAG_TAG(DX_TAG(inode), uid, gid,
+		/* le16_to_cpu(raw_inode->i_raw_tag)i */ 0);
+	printk("··· [ocfs2_populate_inode] inode %p [#%d]\n", inode, inode->i_tag);
 	inode->i_blksize = (u32)osb->s_clustersize;
 
 	/* Fast symlinks will have i_size but no allocated clusters. */
@@ -331,6 +339,7 @@ int ocfs2_populate_inode(struct inode *inode, struct ocfs2_dinode *fe,
 				  OCFS2_LOCK_TYPE_DATA, inode);
 
 	status = 0;
+
 bail:
 	mlog_exit(status);
 	return status;
@@ -1135,8 +1144,11 @@ int ocfs2_mark_inode_dirty(struct ocfs2_journal_handle *handle,
 
 	fe->i_size = cpu_to_le64(i_size_read(inode));
 	fe->i_links_count = cpu_to_le16(inode->i_nlink);
-	fe->i_uid = cpu_to_le32(inode->i_uid);
-	fe->i_gid = cpu_to_le32(inode->i_gid);
+	fe->i_uid = cpu_to_le32(TAGINO_UID(DX_TAG(inode),
+		inode->i_uid, inode->i_tag));
+	fe->i_gid = cpu_to_le32(TAGINO_GID(DX_TAG(inode),
+		inode->i_gid, inode->i_tag));
+	/* i_tag = = cpu_to_le16(inode->i_tag); */
 	fe->i_mode = cpu_to_le16(inode->i_mode);
 	fe->i_atime = cpu_to_le64(inode->i_atime.tv_sec);
 	fe->i_atime_nsec = cpu_to_le32(inode->i_atime.tv_nsec);
@@ -1165,14 +1177,20 @@ void ocfs2_refresh_inode(struct inode *inode,
 			 struct ocfs2_dinode *fe)
 {
 	struct ocfs2_super *osb = OCFS2_SB(inode->i_sb);
+	uid_t uid;
+	gid_t gid;
 
 	spin_lock(&OCFS2_I(inode)->ip_lock);
 
 	OCFS2_I(inode)->ip_clusters = le32_to_cpu(fe->i_clusters);
 	i_size_write(inode, le64_to_cpu(fe->i_size));
 	inode->i_nlink = le16_to_cpu(fe->i_links_count);
-	inode->i_uid = le32_to_cpu(fe->i_uid);
-	inode->i_gid = le32_to_cpu(fe->i_gid);
+	uid = le32_to_cpu(fe->i_uid);
+	gid = le32_to_cpu(fe->i_gid);
+	inode->i_uid = INOTAG_UID(DX_TAG(inode), uid, gid);
+	inode->i_gid = INOTAG_GID(DX_TAG(inode), uid, gid);
+	inode->i_tag = INOTAG_TAG(DX_TAG(inode), uid, gid,
+		/* le16_to_cpu(raw_inode->i_raw_tag)i */ 0);
 	inode->i_mode = le16_to_cpu(fe->i_mode);
 	inode->i_blksize = (u32) osb->s_clustersize;
 	if (S_ISLNK(inode->i_mode) && le32_to_cpu(fe->i_clusters) == 0)
