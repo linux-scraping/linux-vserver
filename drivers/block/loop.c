@@ -845,8 +845,6 @@ static int loop_set_fd(struct loop_device *lo, struct file *lo_file,
 	wait_for_completion(&lo->lo_done);
 	return 0;
 
- out_err:
-	error = (int)pid;
  out_putf:
 	fput(file);
  out:

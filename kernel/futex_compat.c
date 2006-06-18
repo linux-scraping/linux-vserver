@@ -9,7 +9,6 @@
 #include <linux/linkage.h>
 #include <linux/compat.h>
 #include <linux/futex.h>
-#include <linux/vs_pid.h>
 #include <linux/vs_cvirt.h>
 
 #include <asm/uaccess.h>
