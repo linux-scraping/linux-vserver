@@ -321,10 +321,9 @@ extern unsigned int mca_pentium_flag;
 extern int bootloader_type;
 
 /*
- * User space process size: (3GB default).
+ * User space process size: 3GB (default).
  */
-#define __TASK_SIZE		(__PAGE_OFFSET)
-#define TASK_SIZE		((unsigned long)__TASK_SIZE)
+#define TASK_SIZE	(PAGE_OFFSET)
 
 /* This decides where the kernel will search for a free chunk of vm
  * space during mmap's.

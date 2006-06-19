@@ -109,15 +109,19 @@ extern int page_is_ram(unsigned long pagenr);
 
 #endif /* __ASSEMBLY__ */
 
+#ifdef __ASSEMBLY__
 #define __PAGE_OFFSET		CONFIG_PAGE_OFFSET
 #define __PHYSICAL_START	CONFIG_PHYSICAL_START
+#else
+#define __PAGE_OFFSET		((unsigned long)CONFIG_PAGE_OFFSET)
+#define __PHYSICAL_START	((unsigned long)CONFIG_PHYSICAL_START)
+#endif
 #define __KERNEL_START		(__PAGE_OFFSET + __PHYSICAL_START)
-#define __MAXMEM		(-__PAGE_OFFSET-__VMALLOC_RESERVE)
+
 
 #define PAGE_OFFSET		((unsigned long)__PAGE_OFFSET)
-#define PHYSICAL_START		((unsigned long)__PHYSICAL_START)
 #define VMALLOC_RESERVE		((unsigned long)__VMALLOC_RESERVE)
-#define MAXMEM			((unsigned long)__MAXMEM)
+#define MAXMEM			(-__PAGE_OFFSET-__VMALLOC_RESERVE)
 #define __pa(x)			((unsigned long)(x)-PAGE_OFFSET)
 #define __va(x)			((void *)((unsigned long)(x)+PAGE_OFFSET))
 #define pfn_to_kaddr(pfn)      __va((pfn) << PAGE_SHIFT)
