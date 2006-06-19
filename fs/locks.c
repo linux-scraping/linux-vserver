@@ -797,6 +797,7 @@ static int flock_lock_file(struct file *filp, struct file_lock *request)
 		goto out;
 	}
 	locks_copy_lock(new_fl, request);
+	vx_locks_inc(new_fl);
 	locks_insert_lock(&inode->i_flock, new_fl);
 	new_fl = NULL;
 	error = 0;
