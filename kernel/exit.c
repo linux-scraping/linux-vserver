@@ -729,7 +729,6 @@ static void forget_original_parent(struct task_struct * father,
 	list_for_each_safe(_p, _n, &father->ptrace_children) {
 		p = list_entry(_p,struct task_struct,ptrace_list);
 		/* check for reaper context */
-		BUG_ON(p->xid != reaper->xid);
 		choose_new_parent(p, reaper);
 		reparent_thread(p, father, 1);
 	}
@@ -912,7 +911,7 @@ fastcall NORET_TYPE void do_exit(long code)
 	}
 	if (unlikely(tsk->robust_list))
 		exit_robust_list(tsk);
-#ifdef CONFIG_COMPAT
+#if defined(CONFIG_FUTEX) && defined(CONFIG_COMPAT)
 	if (unlikely(tsk->compat_robust_list))
 		compat_exit_robust_list(tsk);
 #endif
