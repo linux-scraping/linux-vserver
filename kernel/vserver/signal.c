@@ -3,9 +3,10 @@
  *
  *  Virtual Server: Signal Support
  *
- *  Copyright (C) 2003-2005  Herbert Pötzl
+ *  Copyright (C) 2003-2006  Herbert Pötzl
  *
  *  V0.01  broken out from vcontext V0.05
+ *  V0.02  changed vcmds to vxi arg
  *
  */
 
@@ -69,22 +70,14 @@ int vx_info_kill(struct vx_info *vxi, int pid, int sig)
 	return retval;
 }
 
-int vc_ctx_kill(uint32_t id, void __user *data)
+int vc_ctx_kill(struct vx_info *vxi, void __user *data)
 {
-	int retval;
 	struct vcmd_ctx_kill_v0 vc_data;
-	struct vx_info *vxi;
 
 	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
-	vxi = lookup_vx_info(id);
-	if (!vxi)
-		return -ESRCH;
-
-	retval = vx_info_kill(vxi, vc_data.pid, vc_data.sig);
-	put_vx_info(vxi);
-	return retval;
+	return vx_info_kill(vxi, vc_data.pid, vc_data.sig);
 }
 
 
@@ -115,20 +108,14 @@ out:
 
 
 
-int vc_wait_exit(uint32_t id, void __user *data)
+int vc_wait_exit(struct vx_info *vxi, void __user *data)
 {
-	struct vx_info *vxi;
 	struct vcmd_wait_exit_v0 vc_data;
 	int ret;
-
-	vxi = lookup_vx_info(id);
-	if (!vxi)
-		return -ESRCH;
 
 	ret = __wait_exit(vxi);
 	vc_data.reboot_cmd = vxi->reboot_cmd;
 	vc_data.exit_code = vxi->exit_code;
-	put_vx_info(vxi);
 
 	if (copy_to_user (data, &vc_data, sizeof(vc_data)))
 		ret = -EFAULT;

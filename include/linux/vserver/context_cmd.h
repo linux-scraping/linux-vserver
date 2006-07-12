@@ -20,7 +20,7 @@ struct	vcmd_vx_info_v0 {
 };
 
 #ifdef	__KERNEL__
-extern int vc_vx_info(uint32_t, void __user *);
+extern int vc_vx_info(struct vx_info *, void __user *);
 
 #endif	/* __KERNEL__ */
 
@@ -43,7 +43,7 @@ struct	vcmd_ctx_migrate {
 
 #ifdef	__KERNEL__
 extern int vc_ctx_create(uint32_t, void __user *);
-extern int vc_ctx_migrate(uint32_t, void __user *);
+extern int vc_ctx_migrate(struct vx_info *, void __user *);
 
 #endif	/* __KERNEL__ */
 
@@ -59,8 +59,8 @@ struct	vcmd_ctx_flags_v0 {
 };
 
 #ifdef	__KERNEL__
-extern int vc_get_cflags(uint32_t, void __user *);
-extern int vc_set_cflags(uint32_t, void __user *);
+extern int vc_get_cflags(struct vx_info *, void __user *);
+extern int vc_set_cflags(struct vx_info *, void __user *);
 
 #endif	/* __KERNEL__ */
 
@@ -85,10 +85,10 @@ struct	vcmd_ctx_caps_v1 {
 };
 
 #ifdef	__KERNEL__
-extern int vc_get_ccaps_v0(uint32_t, void __user *);
-extern int vc_set_ccaps_v0(uint32_t, void __user *);
-extern int vc_get_ccaps(uint32_t, void __user *);
-extern int vc_set_ccaps(uint32_t, void __user *);
+extern int vc_get_ccaps_v0(struct vx_info *, void __user *);
+extern int vc_set_ccaps_v0(struct vx_info *, void __user *);
+extern int vc_get_ccaps(struct vx_info *, void __user *);
+extern int vc_set_ccaps(struct vx_info *, void __user *);
 
 #endif	/* __KERNEL__ */
 
@@ -104,8 +104,8 @@ struct	vcmd_bcaps {
 };
 
 #ifdef	__KERNEL__
-extern int vc_get_bcaps(uint32_t, void __user *);
-extern int vc_set_bcaps(uint32_t, void __user *);
+extern int vc_get_bcaps(struct vx_info *, void __user *);
+extern int vc_set_bcaps(struct vx_info *, void __user *);
 
 #endif	/* __KERNEL__ */
 #endif	/* _VX_CONTEXT_CMD_H */

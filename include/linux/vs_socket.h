@@ -10,12 +10,14 @@
 
 static inline int vx_sock_type(int family)
 {
-	int type = 4;
+	int type = 5;
 
-	if (family > 0 && family < 3)
+	if (family >= 0 && family < 3)
 		type = family;
 	else if (family == PF_INET6)
 		type = 3;
+	else if (family == PF_PACKET)
+		type = 4;
 	return type;
 }
 

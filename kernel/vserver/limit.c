@@ -3,9 +3,10 @@
  *
  *  Virtual Server: Context Limits
  *
- *  Copyright (C) 2004-2005  Herbert Pötzl
+ *  Copyright (C) 2004-2006  Herbert Pötzl
  *
  *  V0.01  broken out from vcontext V0.05
+ *  V0.02  changed vcmds to vxi arg
  *
  */
 
@@ -77,17 +78,11 @@ static inline uint64_t vc_get_hard(struct vx_info *vxi, int id)
 	return VX_VLIM(limit);
 }
 
-static int do_get_rlimit(xid_t xid, uint32_t id,
+static int do_get_rlimit(struct vx_info *vxi, uint32_t id,
 	uint64_t *minimum, uint64_t *softlimit, uint64_t *maximum)
 {
-	struct vx_info *vxi;
-
 	if (!is_valid_rlimit(id))
 		return -EINVAL;
-
-	vxi = lookup_vx_info(xid);
-	if (!vxi)
-		return -ESRCH;
 
 	if (minimum)
 		*minimum = CRLIM_UNSET;
@@ -95,11 +90,10 @@ static int do_get_rlimit(xid_t xid, uint32_t id,
 		*softlimit = vc_get_soft(vxi, id);
 	if (maximum)
 		*maximum = vc_get_hard(vxi, id);
-	put_vx_info(vxi);
 	return 0;
 }
 
-int vc_get_rlimit(uint32_t id, void __user *data)
+int vc_get_rlimit(struct vx_info *vxi, void __user *data)
 {
 	struct vcmd_ctx_rlimit_v0 vc_data;
 	int ret;
@@ -107,7 +101,7 @@ int vc_get_rlimit(uint32_t id, void __user *data)
 	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
-	ret = do_get_rlimit(id, vc_data.id,
+	ret = do_get_rlimit(vxi, vc_data.id,
 		&vc_data.minimum, &vc_data.softlimit, &vc_data.maximum);
 	if (ret)
 		return ret;
@@ -117,17 +111,11 @@ int vc_get_rlimit(uint32_t id, void __user *data)
 	return 0;
 }
 
-static int do_set_rlimit(xid_t xid, uint32_t id,
+static int do_set_rlimit(struct vx_info *vxi, uint32_t id,
 	uint64_t minimum, uint64_t softlimit, uint64_t maximum)
 {
-	struct vx_info *vxi;
-
 	if (!is_valid_rlimit(id))
 		return -EINVAL;
-
-	vxi = lookup_vx_info(xid);
-	if (!vxi)
-		return -ESRCH;
 
 	if (maximum != CRLIM_KEEP)
 		__rlim_hard(&vxi->limit, id) = VX_RLIM(maximum);
@@ -138,39 +126,34 @@ static int do_set_rlimit(xid_t xid, uint32_t id,
 	if (__rlim_soft(&vxi->limit, id) > __rlim_hard(&vxi->limit, id))
 		__rlim_soft(&vxi->limit, id) = __rlim_hard(&vxi->limit, id);
 
-	put_vx_info(vxi);
 	return 0;
 }
 
-int vc_set_rlimit(uint32_t id, void __user *data)
+int vc_set_rlimit(struct vx_info *vxi, void __user *data)
 {
 	struct vcmd_ctx_rlimit_v0 vc_data;
 
-	if (!capable(CAP_SYS_RESOURCE))
-		return -EPERM;
 	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
-	return do_set_rlimit(id, vc_data.id,
+	return do_set_rlimit(vxi, vc_data.id,
 		vc_data.minimum, vc_data.softlimit, vc_data.maximum);
 }
 
 #ifdef	CONFIG_IA32_EMULATION
 
-int vc_set_rlimit_x32(uint32_t id, void __user *data)
+int vc_set_rlimit_x32(struct vx_info *vxi, void __user *data)
 {
 	struct vcmd_ctx_rlimit_v0_x32 vc_data;
 
-	if (!capable(CAP_SYS_RESOURCE))
-		return -EPERM;
 	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
-	return do_set_rlimit(id, vc_data.id,
+	return do_set_rlimit(vxi, vc_data.id,
 		vc_data.minimum, vc_data.softlimit, vc_data.maximum);
 }
 
-int vc_get_rlimit_x32(uint32_t id, void __user *data)
+int vc_get_rlimit_x32(struct vx_info *vxi, void __user *data)
 {
 	struct vcmd_ctx_rlimit_v0_x32 vc_data;
 	int ret;
@@ -178,7 +161,7 @@ int vc_get_rlimit_x32(uint32_t id, void __user *data)
 	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
-	ret = do_get_rlimit(id, vc_data.id,
+	ret = do_get_rlimit(vxi, vc_data.id,
 		&vc_data.minimum, &vc_data.softlimit, &vc_data.maximum);
 	if (ret)
 		return ret;
@@ -212,8 +195,6 @@ int vc_get_rlimit_mask(uint32_t id, void __user *data)
 		0
 		};
 
-	if (!capable(CAP_SYS_RESOURCE))
-		return -EPERM;
 	if (copy_to_user(data, &mask, sizeof(mask)))
 		return -EFAULT;
 	return 0;
@@ -233,19 +214,9 @@ static inline void vx_reset_minmax(struct _vx_limit *limit)
 }
 
 
-int vc_reset_minmax(uint32_t id, void __user *data)
+int vc_reset_minmax(struct vx_info *vxi, void __user *data)
 {
-	struct vx_info *vxi;
-
-	if (!capable(CAP_SYS_RESOURCE))
-		return -EPERM;
-
-	vxi = lookup_vx_info(id);
-	if (!vxi)
-		return -ESRCH;
-
 	vx_reset_minmax(&vxi->limit);
-	put_vx_info(vxi);
 	return 0;
 }
 

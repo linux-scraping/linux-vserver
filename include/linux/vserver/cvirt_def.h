@@ -90,7 +90,7 @@ struct _vx_sock_acc {
 /* context sub struct */
 
 struct _vx_cacct {
-	struct _vx_sock_acc sock[5][3];
+	struct _vx_sock_acc sock[6][3];
 	atomic_t slab[8];
 	atomic_t page[6][8];
 };
@@ -102,7 +102,7 @@ static inline void __dump_vx_cacct(struct _vx_cacct *cacct)
 	int i,j;
 
 	printk("\t_vx_cacct:");
-	for (i=0; i<5; i++) {
+	for (i=0; i<6; i++) {
 		struct _vx_sock_acc *ptr = cacct->sock[i];
 
 		printk("\t [%d] =", i);

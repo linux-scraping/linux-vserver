@@ -46,27 +46,18 @@ int vx_set_namespace(struct vx_info *vxi, struct namespace *ns, struct fs_struct
 	return 0;
 }
 
-int vc_enter_namespace(uint32_t id, void __user *data)
+int vc_enter_namespace(struct vx_info *vxi, void __user *data)
 {
-	struct vx_info *vxi;
 	struct fs_struct *old_fs, *fs;
 	struct namespace *old_ns;
-	int ret = 0;
 
-	vxi = lookup_vx_info(id);
-	if (!vxi)
-		return -ESRCH;
-
-	ret = -EINVAL;
 	if (!vxi->vx_namespace)
-		goto out_put;
+		return -EINVAL;
 
-	ret = -ENOMEM;
 	fs = copy_fs_struct(vxi->vx_fs);
 	if (!fs)
-		goto out_put;
+		return -ENOMEM;
 
-	ret = 0;
 	task_lock(current);
 	old_ns = current->namespace;
 	old_fs = current->fs;
@@ -77,31 +68,14 @@ int vc_enter_namespace(uint32_t id, void __user *data)
 
 	put_namespace(old_ns);
 	put_fs_struct(old_fs);
-out_put:
-	put_vx_info(vxi);
-	return ret;
-}
-
-int vc_cleanup_namespace(uint32_t id, void __user *data)
-{
-	// down_write(&current->namespace->sem);
-	spin_lock(&vfsmount_lock);
-	umount_unused(current->namespace->root, current->fs);
-	spin_unlock(&vfsmount_lock);
-	// up_write(&current->namespace->sem);
 	return 0;
 }
 
-int vc_set_namespace(uint32_t id, void __user *data)
+int vc_set_namespace(struct vx_info *vxi, void __user *data)
 {
 	struct fs_struct *fs;
 	struct namespace *ns;
-	struct vx_info *vxi;
 	int ret;
-
-	vxi = lookup_vx_info(id);
-	if (!vxi)
-		return -ESRCH;
 
 	task_lock(current);
 	fs = current->fs;
@@ -114,7 +88,6 @@ int vc_set_namespace(uint32_t id, void __user *data)
 
 	put_namespace(ns);
 	put_fs_struct(fs);
-	put_vx_info(vxi);
 	return ret;
 }
 

@@ -11,9 +11,8 @@
 
 #ifdef	__KERNEL__
 
-extern int vc_enter_namespace(uint32_t, void __user *);
-extern int vc_cleanup_namespace(uint32_t, void __user *);
-extern int vc_set_namespace(uint32_t, void __user *);
+extern int vc_enter_namespace(struct vx_info *, void __user *);
+extern int vc_set_namespace(struct vx_info *, void __user *);
 
 #endif	/* __KERNEL__ */
 #endif	/* _VX_NAMESPACE_CMD_H */

@@ -3,10 +3,11 @@
  *
  *  Virtual Server: Scheduler Support
  *
- *  Copyright (C) 2004-2005  Herbert Pötzl
+ *  Copyright (C) 2004-2006  Herbert Pötzl
  *
  *  V0.01  adapted Sam Vilains version to 2.6.3
  *  V0.02  removed legacy interface
+ *  V0.03  changed vcmds to vxi arg
  *
  */
 
@@ -265,18 +266,13 @@ static int do_set_sched(struct vx_info *vxi, struct vcmd_set_sched_v4 *data)
 		vc_data_v4.set_mask |= mask;		\
 	}
 
-int vc_set_sched_v2(uint32_t xid, void __user *data)
+int vc_set_sched_v2(struct vx_info *vxi, void __user *data)
 {
 	struct vcmd_set_sched_v2 vc_data;
 	struct vcmd_set_sched_v4 vc_data_v4 = { .set_mask = 0 };
-	struct vx_info *vxi;
 
 	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
-
-	vxi = lookup_vx_info(xid);
-	if (!vxi)
-		return -ESRCH;
 
 	COPY_MASK_V2(fill_rate,  VXSM_FILL_RATE);
 	COPY_MASK_V2(interval,	 VXSM_INTERVAL);
@@ -286,49 +282,33 @@ int vc_set_sched_v2(uint32_t xid, void __user *data)
 	vc_data_v4.bucket_id = 0;
 
 	do_set_sched(vxi, &vc_data_v4);
-	put_vx_info(vxi);
 	return 0;
 }
 #endif
 
-int vc_set_sched_v3(uint32_t xid, void __user *data)
+int vc_set_sched_v3(struct vx_info *vxi, void __user *data)
 {
 	struct vcmd_set_sched_v3 vc_data;
 	struct vcmd_set_sched_v4 vc_data_v4;
-	struct vx_info *vxi;
-	int ret;
 
 	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
-
-	vxi = lookup_vx_info(xid);
-	if (!vxi)
-		return -ESRCH;
 
 	/* structures are binary compatible */
 	memcpy(&vc_data_v4, &vc_data, sizeof(vc_data));
 	vc_data_v4.set_mask &= VXSM_V3_MASK;
 	vc_data_v4.bucket_id = 0;
-	ret = do_set_sched(vxi, &vc_data_v4);
-	put_vx_info(vxi);
-	return ret;
+
+	return do_set_sched(vxi, &vc_data_v4);
 }
 
-int vc_set_sched(uint32_t xid, void __user *data)
+int vc_set_sched(struct vx_info *vxi, void __user *data)
 {
 	struct vcmd_set_sched_v4 vc_data;
-	struct vx_info *vxi;
-	int ret;
 
 	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
-	vxi = lookup_vx_info(xid);
-	if (!vxi)
-		return -ESRCH;
-
-	ret = do_set_sched(vxi, &vc_data);
-	put_vx_info(vxi);
-	return ret;
+	return do_set_sched(vxi, &vc_data);
 }
 
