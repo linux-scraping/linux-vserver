@@ -12,6 +12,8 @@
 
 #ifdef	__KERNEL__
 
+#define	VLIM_NOCHECK	(1L << VLIMIT_DENTRY)
+
 /*	keep in sync with CRLIM_INFINITY */
 
 #define	VLIM_INFINITY	(~0ULL)

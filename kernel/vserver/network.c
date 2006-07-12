@@ -3,22 +3,23 @@
  *
  *  Virtual Server: Network Support
  *
- *  Copyright (C) 2003-2005  Herbert Pötzl
+ *  Copyright (C) 2003-2006  Herbert Pötzl
  *
  *  V0.01  broken out from vcontext V0.05
  *  V0.02  cleaned up implementation
  *  V0.03  added equiv nx commands
  *  V0.04  switch to RCU based hash
  *  V0.05  and back to locking again
+ *  V0.06  changed vcmds to nxi arg
  *
  */
 
 #include <linux/slab.h>
-#include <linux/vserver/network_cmd.h>
 #include <linux/rcupdate.h>
 #include <net/tcp.h>
 
 #include <asm/errno.h>
+#include <linux/vserver/network_cmd.h>
 
 
 /*	__alloc_nx_info()
@@ -544,20 +545,11 @@ int vc_task_nid(uint32_t id, void __user *data)
 }
 
 
-int vc_nx_info(uint32_t id, void __user *data)
+int vc_nx_info(struct nx_info *nxi, void __user *data)
 {
-	struct nx_info *nxi;
 	struct vcmd_nx_info_v0 vc_data;
 
-	if (!capable(CAP_SYS_RESOURCE))
-		return -EPERM;
-
-	nxi = lookup_nx_info(id);
-	if (!nxi)
-		return -ESRCH;
-
 	vc_data.nid = nxi->nx_id;
-	put_nx_info(nxi);
 
 	if (copy_to_user (data, &vc_data, sizeof(vc_data)))
 		return -EFAULT;
@@ -601,22 +593,15 @@ int vc_net_create(uint32_t nid, void __user *data)
 }
 
 
-int vc_net_migrate(uint32_t id, void __user *data)
+int vc_net_migrate(struct nx_info *nxi, void __user *data)
 {
-	struct nx_info *nxi;
-
-	nxi = lookup_nx_info(id);
-	if (!nxi)
-		return -ESRCH;
 	nx_migrate_task(current, nxi);
-	put_nx_info(nxi);
 	return 0;
 }
 
-int vc_net_add(uint32_t nid, void __user *data)
+int vc_net_add(struct nx_info *nxi, void __user *data)
 {
 	struct vcmd_net_addr_v0 vc_data;
-	struct nx_info *nxi;
 	int index, pos, ret = 0;
 
 	if (data && copy_from_user (&vc_data, data, sizeof(vc_data)))
@@ -631,10 +616,6 @@ int vc_net_add(uint32_t nid, void __user *data)
 	default:
 		break;
 	}
-
-	nxi = lookup_nx_info(nid);
-	if (!nxi)
-		return -ESRCH;
 
 	switch (vc_data.type) {
 	case NXA_TYPE_IPV4:
@@ -658,23 +639,15 @@ int vc_net_add(uint32_t nid, void __user *data)
 		ret = -EINVAL;
 		break;
 	}
-
-	put_nx_info(nxi);
 	return ret;
 }
 
-int vc_net_remove(uint32_t nid, void __user *data)
+int vc_net_remove(struct nx_info * nxi, void __user *data)
 {
 	struct vcmd_net_addr_v0 vc_data;
-	struct nx_info *nxi;
-	int ret = 0;
 
 	if (data && copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
-
-	nxi = lookup_nx_info(nid);
-	if (!nxi)
-		return -ESRCH;
 
 	switch ((unsigned)vc_data.type) {
 	case NXA_TYPE_ANY:
@@ -682,47 +655,32 @@ int vc_net_remove(uint32_t nid, void __user *data)
 		break;
 
 	default:
-		ret = -EINVAL;
-		break;
+		return -EINVAL;
 	}
-
-	put_nx_info(nxi);
-	return ret;
+	return 0;
 }
 
-int vc_get_nflags(uint32_t id, void __user *data)
+int vc_get_nflags(struct nx_info *nxi, void __user *data)
 {
-	struct nx_info *nxi;
 	struct vcmd_net_flags_v0 vc_data;
-
-	nxi = lookup_nx_info(id);
-	if (!nxi)
-		return -ESRCH;
 
 	vc_data.flagword = nxi->nx_flags;
 
 	/* special STATE flag handling */
 	vc_data.mask = vx_mask_flags(~0UL, nxi->nx_flags, NXF_ONE_TIME);
 
-	put_nx_info(nxi);
-
 	if (copy_to_user (data, &vc_data, sizeof(vc_data)))
 		return -EFAULT;
 	return 0;
 }
 
-int vc_set_nflags(uint32_t id, void __user *data)
+int vc_set_nflags(struct nx_info *nxi, void __user *data)
 {
-	struct nx_info *nxi;
 	struct vcmd_net_flags_v0 vc_data;
 	uint64_t mask, trigger;
 
 	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
-
-	nxi = lookup_nx_info(id);
-	if (!nxi)
-		return -ESRCH;
 
 	/* special STATE flag handling */
 	mask = vx_mask_mask(vc_data.mask, nxi->nx_flags, NXF_ONE_TIME);
@@ -733,43 +691,30 @@ int vc_set_nflags(uint32_t id, void __user *data)
 	if (trigger & NXF_PERSISTENT)
 		nx_set_persistent(nxi);
 
-	put_nx_info(nxi);
 	return 0;
 }
 
-int vc_get_ncaps(uint32_t id, void __user *data)
+int vc_get_ncaps(struct nx_info *nxi, void __user *data)
 {
-	struct nx_info *nxi;
 	struct vcmd_net_caps_v0 vc_data;
-
-	nxi = lookup_nx_info(id);
-	if (!nxi)
-		return -ESRCH;
 
 	vc_data.ncaps = nxi->nx_ncaps;
 	vc_data.cmask = ~0UL;
-	put_nx_info(nxi);
 
 	if (copy_to_user (data, &vc_data, sizeof(vc_data)))
 		return -EFAULT;
 	return 0;
 }
 
-int vc_set_ncaps(uint32_t id, void __user *data)
+int vc_set_ncaps(struct nx_info *nxi, void __user *data)
 {
-	struct nx_info *nxi;
 	struct vcmd_net_caps_v0 vc_data;
 
 	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
-	nxi = lookup_nx_info(id);
-	if (!nxi)
-		return -ESRCH;
-
 	nxi->nx_ncaps = vx_mask_flags(nxi->nx_ncaps,
 		vc_data.ncaps, vc_data.cmask);
-	put_nx_info(nxi);
 	return 0;
 }
 

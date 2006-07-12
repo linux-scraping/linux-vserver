@@ -64,9 +64,9 @@ struct	vcmd_set_sched_v4 {
 
 #include <linux/compiler.h>
 
-extern int vc_set_sched_v2(uint32_t, void __user *);
-extern int vc_set_sched_v3(uint32_t, void __user *);
-extern int vc_set_sched(uint32_t, void __user *);
+extern int vc_set_sched_v2(struct vx_info *, void __user *);
+extern int vc_set_sched_v3(struct vx_info *, void __user *);
+extern int vc_set_sched(struct vx_info *, void __user *);
 
 #endif	/* __KERNEL__ */
 #endif	/* _VX_SCHED_CMD_H */

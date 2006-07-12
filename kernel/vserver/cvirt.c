@@ -3,10 +3,11 @@
  *
  *  Virtual Server: Context Virtualization
  *
- *  Copyright (C) 2004-2005  Herbert Pötzl
+ *  Copyright (C) 2004-2006  Herbert Pötzl
  *
  *  V0.01  broken out from limit.c
  *  V0.02  added utsname stuff
+ *  V0.03  changed vcmds to vxi arg
  *
  */
 
@@ -211,49 +212,38 @@ static char * vx_vhi_name(struct vx_info *vxi, int id)
 	return NULL;
 }
 
-int vc_set_vhi_name(uint32_t id, void __user *data)
+int vc_set_vhi_name(struct vx_info *vxi, void __user *data)
 {
-	struct vx_info *vxi;
 	struct vcmd_vhi_name_v0 vc_data;
 	char *name;
 
 	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
-
-	vxi = lookup_vx_info(id);
-	if (!vxi)
-		return -ESRCH;
-
-	name = vx_vhi_name(vxi, vc_data.field);
-	if (name)
-		memcpy(name, vc_data.name, 65);
-	put_vx_info(vxi);
-	return (name ? 0 : -EFAULT);
-}
-
-int vc_get_vhi_name(uint32_t id, void __user *data)
-{
-	struct vx_info *vxi;
-	struct vcmd_vhi_name_v0 vc_data;
-	char *name;
-
-	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
-		return -EFAULT;
-
-	vxi = lookup_vx_info(id);
-	if (!vxi)
-		return -ESRCH;
 
 	name = vx_vhi_name(vxi, vc_data.field);
 	if (!name)
-		goto out_put;
+		return -EFAULT;
+
+	memcpy(name, vc_data.name, 65);
+	return 0;
+}
+
+int vc_get_vhi_name(struct vx_info *vxi, void __user *data)
+{
+	struct vcmd_vhi_name_v0 vc_data;
+	char *name;
+
+	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
+		return -EFAULT;
+
+	name = vx_vhi_name(vxi, vc_data.field);
+	if (!name)
+		return -EFAULT;
 
 	memcpy(vc_data.name, name, 65);
 	if (copy_to_user (data, &vc_data, sizeof(vc_data)))
 		return -EFAULT;
-out_put:
-	put_vx_info(vxi);
-	return (name ? 0 : -EFAULT);
+	return 0;
 }
 
 #ifdef CONFIG_VSERVER_VTIME

@@ -3,7 +3,7 @@
  *
  *  Virtual Server: Context Support
  *
- *  Copyright (C) 2003-2005  Herbert Pötzl
+ *  Copyright (C) 2003-2006  Herbert Pötzl
  *
  *  V0.01  context helper
  *  V0.02  vx_ctx_kill syscall command
@@ -18,6 +18,7 @@
  *  V0.11  and back to locking again
  *  V0.12  referenced context store
  *  V0.13  separate per cpu data
+ *  V0.14  changed vcmds to vxi arg
  *
  */
 
@@ -794,21 +795,12 @@ int vc_task_xid(uint32_t id, void __user *data)
 }
 
 
-int vc_vx_info(uint32_t id, void __user *data)
+int vc_vx_info(struct vx_info *vxi, void __user *data)
 {
-	struct vx_info *vxi;
 	struct vcmd_vx_info_v0 vc_data;
-
-	if (!capable(CAP_SYS_RESOURCE))
-		return -EPERM;
-
-	vxi = lookup_vx_info(id);
-	if (!vxi)
-		return -ESRCH;
 
 	vc_data.xid = vxi->vx_id;
 	vc_data.initpid = vxi->vx_initpid;
-	put_vx_info(vxi);
 
 	if (copy_to_user (data, &vc_data, sizeof(vc_data)))
 		return -EFAULT;
@@ -852,66 +844,43 @@ int vc_ctx_create(uint32_t xid, void __user *data)
 }
 
 
-int vc_ctx_migrate(uint32_t id, void __user *data)
+int vc_ctx_migrate(struct vx_info *vxi, void __user *data)
 {
 	struct vcmd_ctx_migrate vc_data = { .flagword = 0 };
-	struct vx_info *vxi;
 
 	if (data && copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
-	/* dirty hack until Spectator becomes a cap */
-	if (id == 1) {
-		current->xid = 1;
-		return 0;
-	}
-
-	vxi = lookup_vx_info(id);
-	if (!vxi)
-		return -ESRCH;
 	vx_migrate_task(current, vxi);
 	if (vc_data.flagword & VXM_SET_INIT)
 		vx_set_init(vxi, current);
 	if (vc_data.flagword & VXM_SET_REAPER)
 		vx_set_reaper(vxi, current);
-	put_vx_info(vxi);
 	return 0;
 }
 
 
-int vc_get_cflags(uint32_t id, void __user *data)
+int vc_get_cflags(struct vx_info *vxi, void __user *data)
 {
-	struct vx_info *vxi;
 	struct vcmd_ctx_flags_v0 vc_data;
-
-	vxi = lookup_vx_info(id);
-	if (!vxi)
-		return -ESRCH;
 
 	vc_data.flagword = vxi->vx_flags;
 
 	/* special STATE flag handling */
 	vc_data.mask = vx_mask_flags(~0UL, vxi->vx_flags, VXF_ONE_TIME);
 
-	put_vx_info(vxi);
-
 	if (copy_to_user (data, &vc_data, sizeof(vc_data)))
 		return -EFAULT;
 	return 0;
 }
 
-int vc_set_cflags(uint32_t id, void __user *data)
+int vc_set_cflags(struct vx_info *vxi, void __user *data)
 {
-	struct vx_info *vxi;
 	struct vcmd_ctx_flags_v0 vc_data;
 	uint64_t mask, trigger;
 
 	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
-
-	vxi = lookup_vx_info(id);
-	if (!vxi)
-		return -ESRCH;
 
 	/* special STATE flag handling */
 	mask = vx_mask_mask(vc_data.mask, vxi->vx_flags, VXF_ONE_TIME);
@@ -931,33 +900,25 @@ int vc_set_cflags(uint32_t id, void __user *data)
 	if (trigger & VXF_PERSISTENT)
 		vx_set_persistent(vxi);
 
-	put_vx_info(vxi);
 	return 0;
 }
 
-static int do_get_caps(xid_t xid, uint64_t *bcaps, uint64_t *ccaps)
+static int do_get_caps(struct vx_info *vxi, uint64_t *bcaps, uint64_t *ccaps)
 {
-	struct vx_info *vxi;
-
-	vxi = lookup_vx_info(xid);
-	if (!vxi)
-		return -ESRCH;
-
 	if (bcaps)
 		*bcaps = vxi->vx_bcaps;
 	if (ccaps)
 		*ccaps = vxi->vx_ccaps;
 
-	put_vx_info(vxi);
 	return 0;
 }
 
-int vc_get_ccaps_v0(uint32_t id, void __user *data)
+int vc_get_ccaps_v0(struct vx_info *vxi, void __user *data)
 {
 	struct vcmd_ctx_caps_v0 vc_data;
 	int ret;
 
-	ret = do_get_caps(id, &vc_data.bcaps, &vc_data.ccaps);
+	ret = do_get_caps(vxi, &vc_data.bcaps, &vc_data.ccaps);
 	if (ret)
 		return ret;
 	vc_data.cmask = ~0UL;
@@ -967,12 +928,12 @@ int vc_get_ccaps_v0(uint32_t id, void __user *data)
 	return 0;
 }
 
-int vc_get_ccaps(uint32_t id, void __user *data)
+int vc_get_ccaps(struct vx_info *vxi, void __user *data)
 {
 	struct vcmd_ctx_caps_v1 vc_data;
 	int ret;
 
-	ret = do_get_caps(id, NULL, &vc_data.ccaps);
+	ret = do_get_caps(vxi, NULL, &vc_data.ccaps);
 	if (ret)
 		return ret;
 	vc_data.cmask = ~0UL;
@@ -982,23 +943,16 @@ int vc_get_ccaps(uint32_t id, void __user *data)
 	return 0;
 }
 
-static int do_set_caps(xid_t xid, uint64_t bcaps, uint64_t bmask,
-	uint64_t ccaps, uint64_t cmask)
+static int do_set_caps(struct vx_info *vxi,
+	uint64_t bcaps, uint64_t bmask, uint64_t ccaps, uint64_t cmask)
 {
-	struct vx_info *vxi;
-
-	vxi = lookup_vx_info(xid);
-	if (!vxi)
-		return -ESRCH;
-
 	vxi->vx_bcaps = vx_mask_flags(vxi->vx_bcaps, bcaps, bmask);
 	vxi->vx_ccaps = vx_mask_flags(vxi->vx_ccaps, ccaps, cmask);
 
-	put_vx_info(vxi);
 	return 0;
 }
 
-int vc_set_ccaps_v0(uint32_t id, void __user *data)
+int vc_set_ccaps_v0(struct vx_info *vxi, void __user *data)
 {
 	struct vcmd_ctx_caps_v0 vc_data;
 
@@ -1006,26 +960,26 @@ int vc_set_ccaps_v0(uint32_t id, void __user *data)
 		return -EFAULT;
 
 	/* simulate old &= behaviour for bcaps */
-	return do_set_caps(id, 0, ~vc_data.bcaps,
+	return do_set_caps(vxi, 0, ~vc_data.bcaps,
 		vc_data.ccaps, vc_data.cmask);
 }
 
-int vc_set_ccaps(uint32_t id, void __user *data)
+int vc_set_ccaps(struct vx_info *vxi, void __user *data)
 {
 	struct vcmd_ctx_caps_v1 vc_data;
 
 	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
-	return do_set_caps(id, 0, 0, vc_data.ccaps, vc_data.cmask);
+	return do_set_caps(vxi, 0, 0, vc_data.ccaps, vc_data.cmask);
 }
 
-int vc_get_bcaps(uint32_t id, void __user *data)
+int vc_get_bcaps(struct vx_info *vxi, void __user *data)
 {
 	struct vcmd_bcaps vc_data;
 	int ret;
 
-	ret = do_get_caps(id, &vc_data.bcaps, NULL);
+	ret = do_get_caps(vxi, &vc_data.bcaps, NULL);
 	if (ret)
 		return ret;
 	vc_data.bmask = ~0UL;
@@ -1035,14 +989,14 @@ int vc_get_bcaps(uint32_t id, void __user *data)
 	return 0;
 }
 
-int vc_set_bcaps(uint32_t id, void __user *data)
+int vc_set_bcaps(struct vx_info *vxi, void __user *data)
 {
 	struct vcmd_bcaps vc_data;
 
 	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
-	return do_set_caps(id, vc_data.bcaps, vc_data.bmask, 0, 0);
+	return do_set_caps(vxi, vc_data.bcaps, vc_data.bmask, 0, 0);
 }
 
 #include <linux/module.h>

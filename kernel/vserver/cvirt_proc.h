@@ -82,10 +82,11 @@ static inline long vx_sock_total(struct _vx_cacct *cacct, int type, int pos)
 static inline int vx_info_proc_cacct(struct _vx_cacct *cacct, char *buffer)
 {
 	int i,j, length = 0;
-	static char *type[] = { "UNSPEC", "UNIX", "INET", "INET6", "OTHER" };
+	static char *type[] = {
+		"UNSPEC", "UNIX", "INET", "INET6", "PACKET", "OTHER" };
 
 	length += sprintf(buffer + length, VX_SOCKA_TOP);
-	for (i=0; i<5; i++) {
+	for (i=0; i<6; i++) {
 		length += sprintf(buffer + length,
 			"%s:", type[i]);
 		for (j=0; j<3; j++) {

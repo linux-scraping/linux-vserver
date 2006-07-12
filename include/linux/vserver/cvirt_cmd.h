@@ -28,8 +28,8 @@ enum vhi_name_field {
 
 #include <linux/compiler.h>
 
-extern int vc_set_vhi_name(uint32_t, void __user *);
-extern int vc_get_vhi_name(uint32_t, void __user *);
+extern int vc_set_vhi_name(struct vx_info *, void __user *);
+extern int vc_get_vhi_name(struct vx_info *, void __user *);
 
 #endif	/* __KERNEL__ */
 #endif	/* _VX_CVIRT_CMD_H */
