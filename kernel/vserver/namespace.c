@@ -85,16 +85,6 @@ out_put:
 	return ret;
 }
 
-int vc_cleanup_namespace(uint32_t id, void __user *data)
-{
-	// down_write(&current->namespace->sem);
-	spin_lock(&vfsmount_lock);
-	umount_unused(current->namespace->root, current->fs);
-	spin_unlock(&vfsmount_lock);
-	// up_write(&current->namespace->sem);
-	return 0;
-}
-
 int vc_set_namespace(uint32_t id, void __user *data)
 {
 	struct fs_struct *fs;

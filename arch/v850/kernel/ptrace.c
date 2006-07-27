@@ -117,6 +117,9 @@ long arch_ptrace(struct task_struct *child, long request, long addr, long data)
 {
 	int rval;
 
+	if (!vx_check(vx_task_xid(child), VX_WATCH|VX_IDENT))
+		goto out;
+
 	switch (request) {
 		unsigned long val, copied;
 
@@ -137,8 +140,6 @@ long arch_ptrace(struct task_struct *child, long request, long addr, long data)
 			break;
 		rval = -EIO;
 		goto out;
-	if (!vx_check(vx_task_xid(child), VX_WATCH|VX_IDENT))
-		goto out_tsk;
 
 	/* Read/write the word at location ADDR in the registers.  */
 	case PTRACE_PEEKUSR:

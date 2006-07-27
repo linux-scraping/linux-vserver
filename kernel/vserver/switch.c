@@ -111,8 +111,6 @@ long do_vserver(uint32_t cmd, uint32_t id, void __user *data, int compat)
 		return vc_set_namespace(-1, data);
 	case VCMD_set_namespace:
 		return vc_set_namespace(id, data);
-	case VCMD_cleanup_namespace:
-		return vc_cleanup_namespace(id, data);
 	}
 
 	/* those are allowed while in setup too */

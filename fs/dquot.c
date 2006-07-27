@@ -458,7 +458,6 @@ restart:
 	spin_unlock(&dq_list_lock);
 }
 
-
 int vfs_quota_sync(struct super_block *sb, int type)
 {
 	struct list_head *dirty;
@@ -668,6 +667,7 @@ we_slept:
 #ifdef __DQUOT_PARANOIA
 	BUG_ON(!dquot->dq_sb);	/* Has somebody invalidated entry under us? */
 #endif
+
 	return dquot;
 }
 
