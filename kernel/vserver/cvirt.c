@@ -69,8 +69,9 @@ void vx_update_load(struct vx_info *vxi)
 	uint32_t now, last, delta;
 	unsigned int nr_running, nr_uninterruptible;
 	unsigned int total;
+	unsigned long flags;
 
-	spin_lock(&vxi->cvirt.load_lock);
+	spin_lock_irqsave(&vxi->cvirt.load_lock, flags);
 
 	now = jiffies;
 	last = vxi->cvirt.load_last;
@@ -93,7 +94,7 @@ void vx_update_load(struct vx_info *vxi)
 	vxi->cvirt.load_last = now;
 out:
 	atomic_inc(&vxi->cvirt.load_updates);
-	spin_unlock(&vxi->cvirt.load_lock);
+	spin_unlock_irqrestore(&vxi->cvirt.load_lock, flags);
 }
 
 
