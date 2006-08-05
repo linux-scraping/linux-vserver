@@ -77,6 +77,10 @@ int vc_ctx_kill(struct vx_info *vxi, void __user *data)
 	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
+	/* special check to allow guest shutdown */
+	if (!vx_info_flags(vxi, VXF_STATE_ADMIN, 0) && (vc_data.pid != 1))
+		return -EACCES;
+
 	return vx_info_kill(vxi, vc_data.pid, vc_data.sig);
 }
 

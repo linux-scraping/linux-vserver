@@ -41,6 +41,7 @@
 #include <asm/errno.h>
 
 #include "cvirt_init.h"
+#include "cacct_init.h"
 #include "limit_init.h"
 #include "sched_init.h"
 
@@ -578,6 +579,10 @@ int vx_migrate_user(struct task_struct *p, struct vx_info *vxi)
 
 	if (!p || !vxi)
 		BUG();
+
+	if (vx_info_flags(vxi, VXF_INFO_LOCK, 0))
+		return -EACCES;
+
 	new_user = alloc_uid(vxi->vx_id, p->uid);
 	if (!new_user)
 		return -ENOMEM;
@@ -636,13 +641,16 @@ int vx_migrate_task(struct task_struct *p, struct vx_info *vxi)
 	if (!p || !vxi)
 		BUG();
 
-	old_vxi = task_get_vx_info(p);
-	if (old_vxi == vxi)
-		goto out;
-
 	vxdprintk(VXD_CBIT(xid, 5),
 		"vx_migrate_task(%p,%p[#%d.%d])", p, vxi,
 		vxi->vx_id, atomic_read(&vxi->vx_usecnt));
+
+	if (vx_info_flags(vxi, VXF_INFO_LOCK, 0))
+		return -EACCES;
+
+	old_vxi = task_get_vx_info(p);
+	if (old_vxi == vxi)
+		goto out;
 
 	if (!(ret = vx_migrate_user(p, vxi))) {
 		int openfd;
@@ -836,9 +844,10 @@ int vc_ctx_create(uint32_t xid, void __user *data)
 		vx_set_persistent(new_vxi);
 
 	vs_state_change(new_vxi, VSC_STARTUP);
-	ret = new_vxi->vx_id;
-	vx_migrate_task(current, new_vxi);
+	ret = vx_migrate_task(current, new_vxi);
 	/* if this fails, we might end up with a hashed vx_info */
+	if (ret == 0)
+		ret = new_vxi->vx_id;
 	put_vx_info(new_vxi);
 	return ret;
 }
@@ -847,16 +856,21 @@ int vc_ctx_create(uint32_t xid, void __user *data)
 int vc_ctx_migrate(struct vx_info *vxi, void __user *data)
 {
 	struct vcmd_ctx_migrate vc_data = { .flagword = 0 };
+	int ret;
 
 	if (data && copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
-	vx_migrate_task(current, vxi);
+	ret = vx_migrate_task(current, vxi);
+	if (ret)
+		return ret;
 	if (vc_data.flagword & VXM_SET_INIT)
-		vx_set_init(vxi, current);
+		ret = vx_set_init(vxi, current);
+	if (ret)
+		return ret;
 	if (vc_data.flagword & VXM_SET_REAPER)
-		vx_set_reaper(vxi, current);
-	return 0;
+		ret = vx_set_reaper(vxi, current);
+	return ret;
 }
 
 
@@ -890,8 +904,14 @@ int vc_set_cflags(struct vx_info *vxi, void __user *data)
 		if (trigger & VXF_STATE_SETUP)
 			vx_mask_cap_bset(vxi, current);
 		if (trigger & VXF_STATE_INIT) {
-			vx_set_init(vxi, current);
-			vx_set_reaper(vxi, current);
+			int ret;
+
+			ret = vx_set_init(vxi, current);
+			if (ret)
+				return ret;
+			ret = vx_set_reaper(vxi, current);
+			if (ret)
+				return ret;
 		}
 	}
 

@@ -12,6 +12,7 @@
 #include <linux/module.h>
 
 #include <linux/vserver/cvirt_def.h>
+#include <linux/vserver/cacct_def.h>
 #include <linux/vserver/limit_def.h>
 #include <linux/vserver/sched_def.h>
 

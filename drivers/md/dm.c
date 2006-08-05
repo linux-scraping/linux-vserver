@@ -66,6 +66,7 @@ struct mapped_device {
 	struct semaphore suspend_lock;
 	rwlock_t map_lock;
 	atomic_t holders;
+	xid_t xid;
 
 	unsigned long flags;
 
@@ -219,6 +220,8 @@ static int dm_blk_open(struct inode *inode, struct file *file)
 	struct mapped_device *md;
 
 	md = inode->i_bdev->bd_disk->private_data;
+	if (!vx_check(md->xid, VX_IDENT|VX_HOSTID))
+		return -EACCES;
 	dm_get(md);
 	return 0;
 }
@@ -850,6 +853,7 @@ static struct mapped_device *alloc_dev(unsigned int minor, int persistent)
 	rwlock_init(&md->map_lock);
 	atomic_set(&md->holders, 1);
 	atomic_set(&md->event_nr, 0);
+	md->xid = vx_current_xid();
 
 	md->queue = blk_alloc_queue(GFP_KERNEL);
 	if (!md->queue)

@@ -387,6 +387,9 @@ int nx_migrate_task(struct task_struct *p, struct nx_info *nxi)
 		atomic_read(&nxi->nx_usecnt),
 		atomic_read(&nxi->nx_tasks));
 
+	if (nx_info_flags(nxi, NXF_INFO_LOCK, 0))
+		return -EACCES;
+
 	/* maybe disallow this completely? */
 	old_nxi = task_get_nx_info(p);
 	if (old_nxi == nxi)
@@ -595,8 +598,7 @@ int vc_net_create(uint32_t nid, void __user *data)
 
 int vc_net_migrate(struct nx_info *nxi, void __user *data)
 {
-	nx_migrate_task(current, nxi);
-	return 0;
+	return nx_migrate_task(current, nxi);
 }
 
 int vc_net_add(struct nx_info *nxi, void __user *data)

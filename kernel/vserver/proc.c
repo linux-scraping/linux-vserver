@@ -29,6 +29,7 @@
 #include <asm/unistd.h>
 
 #include "cvirt_proc.h"
+#include "cacct_proc.h"
 #include "limit_proc.h"
 #include "sched_proc.h"
 #include "vci_config.h"

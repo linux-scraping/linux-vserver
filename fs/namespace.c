@@ -449,17 +449,27 @@ static int show_vfsstat(struct seq_file *m, void *v)
 	struct vfsmount *mnt = v;
 	int err = 0;
 
-	/* device */
-	if (mnt->mnt_devname) {
-		seq_puts(m, "device ");
-		mangle(m, mnt->mnt_devname);
-	} else
-		seq_puts(m, "no device");
+	if (vx_flags(VXF_HIDE_MOUNT, 0))
+		return 0;
+	if (!mnt_is_reachable(mnt) && !vx_check(0, VX_WATCH))
+		return 0;
 
-	/* mount point */
-	seq_puts(m, " mounted on ");
-	seq_path(m, mnt, mnt->mnt_root, " \t\n\\");
-	seq_putc(m, ' ');
+	if (!vx_check(0, VX_ADMIN|VX_WATCH) &&
+		mnt == current->fs->rootmnt) {
+		seq_puts(m, "device /dev/root mounted on / ");
+	} else {
+		/* device */
+		if (mnt->mnt_devname) {
+			seq_puts(m, "device ");
+			mangle(m, mnt->mnt_devname);
+		} else
+			seq_puts(m, "no device");
+
+		/* mount point */
+		seq_puts(m, " mounted on ");
+		seq_path(m, mnt, mnt->mnt_root, " \t\n\\");
+		seq_putc(m, ' ');
+	}
 
 	/* file system type */
 	seq_puts(m, "with fstype ");

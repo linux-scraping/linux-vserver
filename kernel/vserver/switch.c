@@ -45,6 +45,7 @@ int vc_get_vci(uint32_t id)
 
 #include <linux/vserver/context_cmd.h>
 #include <linux/vserver/cvirt_cmd.h>
+#include <linux/vserver/cacct_cmd.h>
 #include <linux/vserver/limit_cmd.h>
 #include <linux/vserver/network_cmd.h>
 #include <linux/vserver/sched_cmd.h>
@@ -335,7 +336,7 @@ long do_vserver(uint32_t cmd, uint32_t id, void __user *data, int compat)
 		VC_VERSION(cmd), id, data, compat,
 		perm, args, flags);
 
-	ret = -EPERM;
+	ret = -ENOSYS;
 	if (perm < 0)
 		goto out;
 
@@ -413,17 +414,34 @@ long do_vserver(uint32_t cmd, uint32_t id, void __user *data, int compat)
 		vxi = lookup_vx_info(id);
 		if (!vxi)
 			goto out;
+
+		if ((flags & VCF_ADMIN) &&
+			/* special case kill for shutdown */
+			(cmd != VCMD_ctx_kill) &&
+			/* can context be administrated? */
+			!vx_info_flags(vxi, VXF_STATE_ADMIN, 0)) {
+			ret = -EACCES;
+			goto out_vxi;
+		}
 	}
 	state = 7;
 	if (args & VCA_NXI) {
 		nxi = lookup_nx_info(id);
 		if (!nxi)
 			goto out_vxi;
+
+		if ((flags & VCF_ADMIN) &&
+			/* can context be administrated? */
+			!nx_info_flags(nxi, NXF_STATE_ADMIN, 0)) {
+			ret = -EACCES;
+			goto out_nxi;
+		}
 	}
 
 	state = 8;
 	ret = do_vcmd(cmd, id, vxi, nxi, data, compat);
 
+out_nxi:
 	if (args & VCA_NXI)
 		put_nx_info(nxi);
 out_vxi:

@@ -34,7 +34,7 @@
   DISK   |       |       |       |       |DLIMIT |       | |INODE  |       |
   VFS    |     32|     33|     34|     35|     36|     37| |     38|     39|
   -------+-------+-------+-------+-------+-------+-------+ +-------+-------+
-  OTHER  |       |       |       |       |       |       | |VINFO  |       |
+  OTHER  |VSTAT  |       |       |       |       |       | |VINFO  |       |
 	 |     40|     41|     42|     43|     44|     45| |     46|     47|
   =======+=======+=======+=======+=======+=======+=======+ +=======+=======+
   SPECIAL|EVENT  |       |       |       |FLAGS  |       | |       |       |
@@ -66,6 +66,7 @@
 #define VC_CAT_DLIMIT		36
 #define VC_CAT_INODE		38
 
+#define VC_CAT_VSTAT		40
 #define VC_CAT_VINFO		46
 #define VC_CAT_EVENT		48
 
@@ -78,7 +79,7 @@
 
 /*  interface version */
 
-#define VCI_VERSION		0x00020101
+#define VCI_VERSION		0x00020102
 #define VCI_LEGACY_VERSION	0x000100FF
 
 /*  query version */

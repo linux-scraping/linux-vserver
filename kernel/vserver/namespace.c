@@ -3,10 +3,11 @@
  *
  *  Virtual Server: Context Namespace Support
  *
- *  Copyright (C) 2003-2005  Herbert Pötzl
+ *  Copyright (C) 2003-2006  Herbert Pötzl
  *
  *  V0.01  broken out from context.c 0.07
  *  V0.02  added task locking for namespace
+ *  V0.03  broken out vx_enter_namespace
  *
  */
 
@@ -26,6 +27,33 @@
 /* namespace functions */
 
 #include <linux/namespace.h>
+
+int vx_enter_namespace(struct vx_info *vxi)
+{
+	struct fs_struct *old_fs, *fs;
+	struct namespace *old_ns;
+
+	if (vx_info_flags(vxi, VXF_INFO_LOCK, 0))
+		return -EACCES;
+	if (!vxi->vx_namespace)
+		return -EINVAL;
+
+	fs = copy_fs_struct(vxi->vx_fs);
+	if (!fs)
+		return -ENOMEM;
+
+	task_lock(current);
+	old_ns = current->namespace;
+	old_fs = current->fs;
+	get_namespace(vxi->vx_namespace);
+	current->namespace = vxi->vx_namespace;
+	current->fs = fs;
+	task_unlock(current);
+
+	put_namespace(old_ns);
+	put_fs_struct(old_fs);
+	return 0;
+}
 
 int vx_set_namespace(struct vx_info *vxi, struct namespace *ns, struct fs_struct *fs)
 {
@@ -48,27 +76,7 @@ int vx_set_namespace(struct vx_info *vxi, struct namespace *ns, struct fs_struct
 
 int vc_enter_namespace(struct vx_info *vxi, void __user *data)
 {
-	struct fs_struct *old_fs, *fs;
-	struct namespace *old_ns;
-
-	if (!vxi->vx_namespace)
-		return -EINVAL;
-
-	fs = copy_fs_struct(vxi->vx_fs);
-	if (!fs)
-		return -ENOMEM;
-
-	task_lock(current);
-	old_ns = current->namespace;
-	old_fs = current->fs;
-	get_namespace(vxi->vx_namespace);
-	current->namespace = vxi->vx_namespace;
-	current->fs = fs;
-	task_unlock(current);
-
-	put_namespace(old_ns);
-	put_fs_struct(old_fs);
-	return 0;
+	return vx_enter_namespace(vxi);
 }
 
 int vc_set_namespace(struct vx_info *vxi, void __user *data)
