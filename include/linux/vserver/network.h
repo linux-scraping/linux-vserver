@@ -13,14 +13,17 @@
 
 /* network flags */
 
+#define NXF_INFO_LOCK		0x00000001
+
 #define NXF_STATE_SETUP		(1ULL<<32)
+#define NXF_STATE_ADMIN		(1ULL<<34)
 
 #define NXF_SC_HELPER		(1ULL<<36)
 #define NXF_PERSISTENT		(1ULL<<38)
 
-#define NXF_ONE_TIME		(0x0001ULL<<32)
+#define NXF_ONE_TIME		(0x0005ULL<<32)
 
-#define NXF_INIT_SET		(0)
+#define NXF_INIT_SET		(NXF_STATE_ADMIN)
 
 
 /* address types */

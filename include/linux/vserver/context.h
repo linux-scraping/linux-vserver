@@ -42,6 +42,7 @@
 
 #define VXF_STATE_SETUP		(1ULL<<32)
 #define VXF_STATE_INIT		(1ULL<<33)
+#define VXF_STATE_ADMIN		(1ULL<<34)
 
 #define VXF_SC_HELPER		(1ULL<<36)
 #define VXF_REBOOT_KILL		(1ULL<<37)
@@ -52,9 +53,9 @@
 
 #define VXF_IGNEG_NICE		(1ULL<<52)
 
-#define VXF_ONE_TIME		(0x0003ULL<<32)
+#define VXF_ONE_TIME		(0x0007ULL<<32)
 
-#define VXF_INIT_SET		(VXF_STATE_SETUP|VXF_STATE_INIT)
+#define VXF_INIT_SET		(VXF_STATE_SETUP|VXF_STATE_INIT|VXF_STATE_ADMIN)
 
 
 /* context migration */
@@ -99,6 +100,7 @@ enum {
 #include "limit_def.h"
 #include "sched_def.h"
 #include "cvirt_def.h"
+#include "cacct_def.h"
 
 struct _vx_info_pc {
 	struct _vx_sched_pc sched_pc;

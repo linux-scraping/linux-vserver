@@ -749,7 +749,6 @@ static int loop_set_fd(struct loop_device *lo, struct file *lo_file,
 	int		lo_flags = 0;
 	int		error;
 	loff_t		size;
-	pid_t		pid;
 
 	/* This is safe, since we have a reference from open(). */
 	__module_get(THIS_MODULE);
@@ -820,6 +819,7 @@ static int loop_set_fd(struct loop_device *lo, struct file *lo_file,
 	lo->lo_blocksize = lo_blocksize;
 	lo->lo_device = bdev;
 	lo->lo_flags = lo_flags;
+	lo->lo_xid = vx_current_xid();
 	lo->lo_backing_file = file;
 	lo->transfer = NULL;
 	lo->ioctl = NULL;
@@ -850,8 +850,6 @@ static int loop_set_fd(struct loop_device *lo, struct file *lo_file,
 	wait_for_completion(&lo->lo_done);
 	return 0;
 
- out_err:
-	error = (int)pid;
  out_putf:
 	fput(file);
  out:
@@ -931,6 +929,7 @@ static int loop_clr_fd(struct loop_device *lo, struct block_device *bdev)
 	lo->lo_sizelimit = 0;
 	lo->lo_encrypt_key_size = 0;
 	lo->lo_flags = 0;
+	lo->lo_xid = 0;
 	memset(lo->lo_encrypt_key, 0, LO_KEY_SIZE);
 	memset(lo->lo_crypt_name, 0, LO_NAME_SIZE);
 	memset(lo->lo_file_name, 0, LO_NAME_SIZE);
@@ -1186,6 +1185,9 @@ static int lo_ioctl(struct inode * inode, struct file * file,
 static int lo_open(struct inode *inode, struct file *file)
 {
 	struct loop_device *lo = inode->i_bdev->bd_disk->private_data;
+
+	if (!vx_check(lo->lo_xid, VX_IDENT|VX_HOSTID))
+		return -EACCES;
 
 	mutex_lock(&lo->lo_ctl_mutex);
 	lo->lo_refcnt++;

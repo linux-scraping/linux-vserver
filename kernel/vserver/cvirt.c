@@ -18,6 +18,7 @@
 #include <linux/vs_cvirt.h>
 #include <linux/vserver/switch.h>
 #include <linux/vserver/cvirt_cmd.h>
+#include <linux/vserver/cacct_cmd.h>
 
 #include <asm/errno.h>
 #include <asm/uaccess.h>
