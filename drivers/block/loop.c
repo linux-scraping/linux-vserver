@@ -951,7 +951,7 @@ loop_set_status(struct loop_device *lo, const struct loop_info64 *info)
 	struct loop_func_table *xfer;
 
 	if (lo->lo_encrypt_key_size && lo->lo_key_owner != current->uid &&
-	    !capable(CAP_SYS_ADMIN))
+	    !vx_capable(CAP_SYS_ADMIN, VXC_ADMIN_CLOOP))
 		return -EPERM;
 	if (lo->lo_state != Lo_bound)
 		return -ENXIO;
@@ -1031,7 +1031,8 @@ loop_get_status(struct loop_device *lo, struct loop_info64 *info)
 	memcpy(info->lo_crypt_name, lo->lo_crypt_name, LO_NAME_SIZE);
 	info->lo_encrypt_type =
 		lo->lo_encryption ? lo->lo_encryption->number : 0;
-	if (lo->lo_encrypt_key_size && capable(CAP_SYS_ADMIN)) {
+	if (lo->lo_encrypt_key_size &&
+		vx_capable(CAP_SYS_ADMIN, VXC_ADMIN_CLOOP)) {
 		info->lo_encrypt_key_size = lo->lo_encrypt_key_size;
 		memcpy(info->lo_encrypt_key, lo->lo_encrypt_key,
 		       lo->lo_encrypt_key_size);
@@ -1186,7 +1187,7 @@ static int lo_open(struct inode *inode, struct file *file)
 {
 	struct loop_device *lo = inode->i_bdev->bd_disk->private_data;
 
-	if (!vx_check(lo->lo_xid, VX_IDENT|VX_HOSTID))
+	if (!vx_check(lo->lo_xid, VX_WATCH_P|VX_IDENT))
 		return -EACCES;
 
 	mutex_lock(&lo->lo_ctl_mutex);

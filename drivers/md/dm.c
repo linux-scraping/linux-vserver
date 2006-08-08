@@ -220,7 +220,7 @@ static int dm_blk_open(struct inode *inode, struct file *file)
 	struct mapped_device *md;
 
 	md = inode->i_bdev->bd_disk->private_data;
-	if (!vx_check(md->xid, VX_IDENT|VX_HOSTID))
+	if (!vx_check(md->xid, VX_IDENT))
 		return -EACCES;
 	dm_get(md);
 	return 0;
@@ -353,6 +353,14 @@ int dm_set_geometry(struct mapped_device *md, struct hd_geometry *geo)
 	md->geometry = *geo;
 
 	return 0;
+}
+
+/*
+ * Get the xid associated with a dm device
+ */
+xid_t dm_get_xid(struct mapped_device *md)
+{
+	return md->xid;
 }
 
 /*-----------------------------------------------------------------

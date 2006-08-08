@@ -51,6 +51,12 @@ int vx_info_kill(struct vx_info *vxi, int pid, int sig)
 	case 1:
 		if (vxi->vx_initpid) {
 			pid = vxi->vx_initpid;
+			printk("··· tasks left: %d\n", atomic_read(&vxi->vx_tasks));
+			/* for now, only SIGINT to private init ... */
+			if (!vx_info_flags(vxi, VXF_STATE_ADMIN, 0) &&
+				/* ... as long as there are tasks left */
+				(atomic_read(&vxi->vx_tasks) > 1))
+				sig = SIGINT;
 			priv = 1;
 		}
 		/* fallthrough */
@@ -78,7 +84,10 @@ int vc_ctx_kill(struct vx_info *vxi, void __user *data)
 		return -EFAULT;
 
 	/* special check to allow guest shutdown */
-	if (!vx_info_flags(vxi, VXF_STATE_ADMIN, 0) && (vc_data.pid != 1))
+	if (!vx_info_flags(vxi, VXF_STATE_ADMIN, 0) &&
+		/* forbid killall pid=0 when init is present */
+		(((vc_data.pid < 1) && vxi->vx_initpid) ||
+		(vc_data.pid > 1)))
 		return -EACCES;
 
 	return vx_info_kill(vxi, vc_data.pid, vc_data.sig);

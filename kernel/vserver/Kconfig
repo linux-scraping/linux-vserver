@@ -191,6 +191,14 @@ config	PROPAGATE
 	  a tagid which is to be used for the entire mount
 	  tree.
 
+config	VSERVER_PRIVACY
+	bool	"Honor Privacy Aspects of Guests"
+	default y
+	help
+	  When enabled, most context checks will disallow
+	  access to structures assigned to a specific context,
+	  like ptys or loop devices.
+
 config	VSERVER_DEBUG
 	bool	"VServer Debugging Code"
 	default n

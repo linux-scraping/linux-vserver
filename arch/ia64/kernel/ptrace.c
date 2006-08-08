@@ -1444,7 +1444,7 @@ sys_ptrace (long request, pid_t pid, unsigned long addr, unsigned long data)
 	read_unlock(&tasklist_lock);
 	if (!child)
 		goto out;
-	if (!vx_check(vx_task_xid(child), VX_WATCH|VX_IDENT))
+	if (!vx_check(vx_task_xid(child), VX_WATCH_P|VX_IDENT))
 		goto out_tsk;
 
 	ret = -EPERM;

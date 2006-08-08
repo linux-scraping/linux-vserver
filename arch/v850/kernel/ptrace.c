@@ -117,7 +117,7 @@ long arch_ptrace(struct task_struct *child, long request, long addr, long data)
 {
 	int rval;
 
-	if (!vx_check(vx_task_xid(child), VX_WATCH|VX_IDENT))
+	if (!vx_check(vx_task_xid(child), VX_WATCH_P|VX_IDENT))
 		goto out;
 
 	switch (request) {
