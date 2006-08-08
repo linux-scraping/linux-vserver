@@ -406,7 +406,7 @@ static int show_vfsmnt(struct seq_file *m, void *v)
 
 	if (vx_flags(VXF_HIDE_MOUNT, 0))
 		return 0;
-	if (!mnt_is_reachable(mnt) && !vx_check(0, VX_WATCH))
+	if (!mnt_is_reachable(mnt) && !vx_check(0, VX_WATCH_P))
 		return 0;
 
 	if (!vx_check(0, VX_ADMIN|VX_WATCH) &&
@@ -451,7 +451,7 @@ static int show_vfsstat(struct seq_file *m, void *v)
 
 	if (vx_flags(VXF_HIDE_MOUNT, 0))
 		return 0;
-	if (!mnt_is_reachable(mnt) && !vx_check(0, VX_WATCH))
+	if (!mnt_is_reachable(mnt) && !vx_check(0, VX_WATCH_P))
 		return 0;
 
 	if (!vx_check(0, VX_ADMIN|VX_WATCH) &&

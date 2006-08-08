@@ -276,7 +276,7 @@ long do_vserver(uint32_t cmd, uint32_t id, void __user *data, int compat)
 	__VCMD(get_dlimit,	 3, VCA_NONE,	VCF_INFO);
 
 	/* lower admin commands */
-	__VCMD(wait_exit,	 4, VCA_VXI,	VCF_ADMIN);
+	__VCMD(wait_exit,	 4, VCA_VXI,	VCF_INFO);
 	__VCMD(ctx_create_v0,	 5, VCA_NONE,	0);
 	__VCMD(ctx_create,	 5, VCA_NONE,	0);
 	__VCMD(ctx_migrate_v0,	 5, VCA_VXI,	VCF_ADMIN);

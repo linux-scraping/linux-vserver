@@ -78,6 +78,8 @@
 #define VXC_BINARY_MOUNT	0x00040000
 
 #define VXC_QUOTA_CTL		0x00100000
+#define VXC_ADMIN_MAPPER	0x00200000
+#define VXC_ADMIN_CLOOP		0x00400000
 
 
 /* context state changes */
@@ -187,6 +189,14 @@ struct vx_info_save {
 
 #define VX_ATR_MASK	0x0F00
 
+
+#ifdef	CONFIG_VSERVER_PRIVACY
+#define VX_ADMIN_P	(0)
+#define VX_WATCH_P	(0)
+#else
+#define VX_ADMIN_P	VX_ADMIN
+#define VX_WATCH_P	VX_WATCH
+#endif
 
 extern void claim_vx_info(struct vx_info *, struct task_struct *);
 extern void release_vx_info(struct vx_info *, struct task_struct *);

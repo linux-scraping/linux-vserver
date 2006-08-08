@@ -490,7 +490,7 @@ asmlinkage void do_syscall_trace(struct pt_regs *regs, int entryexit)
 		goto out;
 	if (!test_thread_flag(TIF_SYSCALL_TRACE))
 		goto out;
-	if (!vx_check(vx_task_xid(child), VX_WATCH|VX_IDENT))
+	if (!vx_check(vx_task_xid(child), VX_WATCH_P|VX_IDENT))
 		goto out_tsk;
 
 	/* The 0x80 provides a way for the tracing parent to distinguish

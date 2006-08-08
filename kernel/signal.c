@@ -591,7 +591,7 @@ static int check_kill_permission(int sig, struct siginfo *info,
 		return error;
 
 	error = -ESRCH;
-	if (user && !vx_check(vx_task_xid(t), VX_ADMIN|VX_IDENT))
+	if (user && !vx_check(vx_task_xid(t), VX_WATCH_P|VX_IDENT))
 		return error;
 
 	error = security_task_kill(t, info, sig);
