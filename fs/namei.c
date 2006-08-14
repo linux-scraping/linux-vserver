@@ -2635,7 +2635,6 @@ int vfs_follow_link(struct nameidata *nd, const char *link)
 	return __vfs_follow_link(nd, link);
 }
 
-
 /* get the link contents into pagecache */
 static char *page_getlink(struct dentry * dentry, struct page **ppage)
 {

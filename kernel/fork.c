@@ -1360,7 +1360,6 @@ long do_fork(unsigned long clone_flags,
 
 	if (!pid)
 		return -EAGAIN;
-
 	nr = pid->nr;
 	if (unlikely(current->ptrace)) {
 		trace = fork_traceflag (clone_flags);

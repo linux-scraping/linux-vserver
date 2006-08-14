@@ -36,7 +36,6 @@ static int zap_pte(struct mm_struct *mm, struct vm_area_struct *vma,
 				set_page_dirty(page);
 			page_remove_rmap(page);
 			page_cache_release(page);
-			// dec_mm_counter(mm, file_rss);
 		}
 	} else {
 		if (!pte_file(pte))

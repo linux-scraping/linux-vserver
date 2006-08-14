@@ -1251,7 +1251,7 @@ xtSplitPage(tid_t tid, struct inode *ip,
 	rbn = addressPXD(pxd);
 
 	/* Allocate blocks to quota. */
-	if (DQUOT_ALLOC_BLOCK(ip, lengthPXD(pxd))) {
+       if (DQUOT_ALLOC_BLOCK(ip, lengthPXD(pxd))) {
 	       rc = -EDQUOT;
 	       goto clean_up;
 	}

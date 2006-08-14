@@ -331,7 +331,6 @@ int ocfs2_populate_inode(struct inode *inode, struct ocfs2_dinode *fe,
 				  OCFS2_LOCK_TYPE_DATA, inode);
 
 	status = 0;
-
 bail:
 	mlog_exit(status);
 	return status;

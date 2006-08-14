@@ -310,10 +310,9 @@ int posix_timer_event(struct k_itimer *timr,int si_private)
 
 	if (timr->it_sigev_notify & SIGEV_THREAD_ID) {
 		struct task_struct *leader;
-		int ret;
+		int ret = send_sigqueue(timr->it_sigev_signo, timr->sigq,
+					timr->it_process);
 
-		ret = send_sigqueue(timr->it_sigev_signo, timr->sigq,
-				    timr->it_process);
 		if (likely(ret >= 0))
 			return ret;
 
