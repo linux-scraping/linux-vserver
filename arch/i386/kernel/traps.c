@@ -405,7 +405,8 @@ void die(const char * str, struct pt_regs * regs, long err)
 			printk(KERN_EMERG "EIP: [<%08lx>] ", regs->eip);
 			print_symbol("%s", regs->eip);
 			printk(" SS:ESP %04x:%08lx\n", ss, esp);
-		} else
+		}
+		else
 			regs = NULL;
   	} else
 		printk(KERN_EMERG "Recursive die() failure, output suppressed\n");

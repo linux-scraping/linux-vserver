@@ -135,9 +135,6 @@ static inline struct dl_info *__lookup_dl_info(struct super_block *sb, tag_t tag
 	struct dl_info *dli;
 
 	hlist_for_each_entry_rcu(dli, pos, head, dl_hlist) {
-//	hlist_for_each_rcu(pos, head) {
-//		struct dl_info *dli =
-//			hlist_entry(pos, struct dl_info, dl_hlist);
 
 		if (dli->dl_tag == tag && dli->dl_sb == sb) {
 			return dli;

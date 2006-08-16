@@ -294,7 +294,6 @@ static void reparent_to_init(void)
 	ptrace_unlink(current);
 	/* Reparent to init */
 	remove_parent(current);
-	/* FIXME: handle vchild_reaper/initpid */
 	current->parent = child_reaper;
 	current->real_parent = child_reaper;
 	add_parent(current);
@@ -728,7 +727,6 @@ static void forget_original_parent(struct task_struct * father,
 	}
 	list_for_each_safe(_p, _n, &father->ptrace_children) {
 		p = list_entry(_p,struct task_struct,ptrace_list);
-		/* check for reaper context */
 		choose_new_parent(p, reaper);
 		reparent_thread(p, father, 1);
 	}
