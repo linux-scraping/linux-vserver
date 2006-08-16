@@ -15,7 +15,6 @@
 #include <linux/vs_context.h>
 #include <linux/vs_network.h>
 #include <linux/vserver/legacy.h>
-// #include <linux/vserver/namespace.h>
 #include <linux/namespace.h>
 #include <linux/err.h>
 

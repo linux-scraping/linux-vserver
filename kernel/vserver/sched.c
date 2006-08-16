@@ -165,6 +165,8 @@ on_hold:
 	else if (tokens > sched_pc->fill_rate[0])
 		delta_min[0] += sched_pc->interval[0] *
 			tokens / sched_pc->fill_rate[0];
+	else
+		delta_min[0] = sched_pc->interval[0] - delta_min[0];
 	vxd_check_range(delta_min[0], 0, INT_MAX);
 
 #ifdef	CONFIG_VSERVER_IDLETIME
@@ -177,6 +179,8 @@ on_hold:
 	else if (tokens > sched_pc->fill_rate[1])
 		delta_min[1] += sched_pc->interval[1] *
 			tokens / sched_pc->fill_rate[1];
+	else
+		delta_min[1] = sched_pc->interval[1] - delta_min[1];
 	vxd_check_range(delta_min[1], 0, INT_MAX);
 
 	return -2;

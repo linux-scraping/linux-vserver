@@ -937,8 +937,7 @@ int dtInsert(tid_t tid, struct inode *ip,
 static int dtSplitUp(tid_t tid,
 	  struct inode *ip, struct dtsplit * split, struct btstack * btstack)
 {
-	struct super_block *sb = ip->i_sb;
-	struct jfs_sb_info *sbi = JFS_SBI(sb);
+	struct jfs_sb_info *sbi = JFS_SBI(ip->i_sb);
 	int rc = 0;
 	struct metapage *smp;
 	dtpage_t *sp;		/* split page */

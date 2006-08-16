@@ -264,7 +264,7 @@ int permission(struct inode *inode, int mask, struct nameidata *nd)
 		/*
 		 * Nobody gets write access to an immutable file.
 		 */
-		if (IS_IMMUTABLE(inode))
+		if (IS_IMMUTABLE(inode) && !IS_COW(inode))
 			return -EACCES;
 	}
 
@@ -1746,6 +1746,7 @@ ok:
 		error = cow_break_link(path.dentry, pathname);
 		if (error)
 			goto exit;
+		release_open_intent(nd);
 		path_release(nd);
 		vxdprintk(VXD_CBIT(misc, 2), "restarting open_namei() ...");
 		flag = rflag;
