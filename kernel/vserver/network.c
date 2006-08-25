@@ -668,7 +668,7 @@ int vc_net_remove(uint32_t nid, void __user *data)
 	if (!nxi)
 		return -ESRCH;
 
-	switch ((unsigned)vc_data.type) {
+	switch (vc_data.type) {
 	case NXA_TYPE_ANY:
 		nxi->nbipv4 = 0;
 		break;
