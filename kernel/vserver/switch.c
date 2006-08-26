@@ -117,6 +117,11 @@ long do_vcmd(uint32_t cmd, uint32_t id,
 	case VCMD_set_vhi_name:
 		return vc_set_vhi_name(vxi, data);
 
+	case VCMD_sock_stat:
+		return vc_sock_stat(vxi, data);
+	case VCMD_rlimit_stat:
+		return vc_rlimit_stat(vxi, data);
+
 	case VCMD_set_cflags:
 		return vc_set_cflags(vxi, data);
 	case VCMD_get_cflags:
@@ -219,7 +224,7 @@ long do_vcmd(uint32_t cmd, uint32_t id,
 #endif
 	default:
 		vxwprintk(1, "unimplemented VCMD_%02d_%d[%d]",
-		VC_CATEGORY(cmd), VC_COMMAND(cmd), VC_VERSION(cmd));
+			VC_CATEGORY(cmd), VC_COMMAND(cmd), VC_VERSION(cmd));
 	}
 	return -ENOSYS;
 }
@@ -266,6 +271,9 @@ long do_vserver(uint32_t cmd, uint32_t id, void __user *data, int compat)
 	__VCMD(get_cflags,	 3, VCA_VXI,	VCF_INFO);
 	__VCMD(get_vhi_name,	 3, VCA_VXI,	VCF_INFO);
 	__VCMD(get_rlimit,	 3, VCA_VXI,	VCF_INFO);
+
+	__VCMD(sock_stat,	 3, VCA_VXI,	VCF_INFO);
+	__VCMD(rlimit_stat,	 3, VCA_VXI,	VCF_INFO);
 
 	__VCMD(task_nid,	 2, VCA_NONE,	0);
 	__VCMD(nx_info,		 3, VCA_NXI,	VCF_INFO);

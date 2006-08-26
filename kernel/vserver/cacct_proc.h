@@ -1,17 +1,7 @@
 #ifndef _VX_CACCT_PROC_H
 #define _VX_CACCT_PROC_H
 
-
-static inline long vx_sock_count(struct _vx_cacct *cacct, int type, int pos)
-{
-	return atomic_read(&cacct->sock[type][pos].count);
-}
-
-
-static inline long vx_sock_total(struct _vx_cacct *cacct, int type, int pos)
-{
-	return atomic_read(&cacct->sock[type][pos].total);
-}
+#include <linux/vserver/cacct_int.h>
 
 
 #define VX_SOCKA_TOP	\
@@ -20,11 +10,11 @@ static inline long vx_sock_total(struct _vx_cacct *cacct, int type, int pos)
 static inline int vx_info_proc_cacct(struct _vx_cacct *cacct, char *buffer)
 {
 	int i,j, length = 0;
-	static char *type[] = {
+	static char *type[VXA_SOCK_SIZE] = {
 		"UNSPEC", "UNIX", "INET", "INET6", "PACKET", "OTHER" };
 
 	length += sprintf(buffer + length, VX_SOCKA_TOP);
-	for (i=0; i<6; i++) {
+	for (i=0; i<VXA_SOCK_SIZE; i++) {
 		length += sprintf(buffer + length,
 			"%s:", type[i]);
 		for (j=0; j<3; j++) {

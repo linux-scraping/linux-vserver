@@ -2,6 +2,7 @@
 #define _VX_CACCT_DEF_H
 
 #include <asm/atomic.h>
+#include <linux/vserver/cacct.h>
 
 
 struct _vx_sock_acc {
@@ -12,7 +13,7 @@ struct _vx_sock_acc {
 /* context sub struct */
 
 struct _vx_cacct {
-	struct _vx_sock_acc sock[6][3];
+	struct _vx_sock_acc sock[VXA_SOCK_SIZE][3];
 	atomic_t slab[8];
 	atomic_t page[6][8];
 };

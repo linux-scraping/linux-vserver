@@ -522,8 +522,10 @@ struct inode {
 	struct file_lock	*i_flock;
 	struct address_space	*i_mapping;
 	struct address_space	i_data;
-#ifdef CONFIG_QUOTA
+#ifdef CONFIG_QUOTACTL
 	struct dqhash		*i_dqh;
+#endif
+#ifdef CONFIG_QUOTA
 	struct dquot		*i_dquot[MAXQUOTAS];
 #endif
 	/* These three should probably be a union */

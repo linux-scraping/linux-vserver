@@ -167,8 +167,7 @@ long vs_state_change(struct vx_info *vxi, unsigned int cmd)
 		return 0;
 	}
 
-	do_vshelper(vshelper_path, argv, envp, 1);
-	return 0;
+	return do_vshelper(vshelper_path, argv, envp, 1);
 }
 
 
@@ -204,7 +203,6 @@ long vs_net_change(struct nx_info *nxi, unsigned int cmd)
 		return 0;
 	}
 
-	do_vshelper(vshelper_path, argv, envp, 1);
-	return 0;
+	return do_vshelper(vshelper_path, argv, envp, 1);
 }
 

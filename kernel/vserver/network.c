@@ -511,13 +511,25 @@ int nx_addr_conflict(struct nx_info *nxi, uint32_t addr, struct sock *sk)
 
 void nx_set_persistent(struct nx_info *nxi)
 {
-	if (nx_info_flags(nxi, NXF_PERSISTENT, 0)) {
-		get_nx_info(nxi);
-		claim_nx_info(nxi, current);
-	} else {
-		release_nx_info(nxi, current);
-		put_nx_info(nxi);
-	}
+	get_nx_info(nxi);
+	claim_nx_info(nxi, current);
+}
+
+void nx_clear_persistent(struct nx_info *nxi)
+{
+	vxdprintk(VXD_CBIT(nid, 6),
+		"nx_clear_persistent(%p[#%d])", nxi, nxi->nx_id);
+
+	release_nx_info(nxi, current);
+	put_nx_info(nxi);
+}
+
+void nx_update_persistent(struct nx_info *nxi)
+{
+	if (nx_info_flags(nxi, NXF_PERSISTENT, 0))
+		nx_set_persistent(nxi);
+	else
+		nx_clear_persistent(nxi);
 }
 
 /* vserver syscall commands below here */
@@ -587,10 +599,22 @@ int vc_net_create(uint32_t nid, void __user *data)
 	if ((vc_data.flagword & NXF_PERSISTENT))
 		nx_set_persistent(new_nxi);
 
-	vs_net_change(new_nxi, VSC_NETUP);
-	ret = new_nxi->nx_id;
-	nx_migrate_task(current, new_nxi);
-	/* if this fails, we might end up with a hashed nx_info */
+	ret = -ENOEXEC;
+	if (vs_net_change(new_nxi, VSC_NETUP))
+		goto out_unhash;
+	ret = nx_migrate_task(current, new_nxi);
+	if (!ret) {
+		/* return context id on success */
+		ret = new_nxi->nx_id;
+		goto out;
+	}
+out_unhash:
+	/* prepare for context disposal */
+	new_nxi->nx_state |= NXS_SHUTDOWN;
+	if ((vc_data.flagword & NXF_PERSISTENT))
+		nx_clear_persistent(new_nxi);
+	__unhash_nx_info(new_nxi);
+out:
 	put_nx_info(new_nxi);
 	return ret;
 }
@@ -651,7 +675,7 @@ int vc_net_remove(struct nx_info * nxi, void __user *data)
 	if (data && copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
-	switch ((unsigned)vc_data.type) {
+	switch (vc_data.type) {
 	case NXA_TYPE_ANY:
 		nxi->nbipv4 = 0;
 		break;
@@ -691,7 +715,7 @@ int vc_set_nflags(struct nx_info *nxi, void __user *data)
 	nxi->nx_flags = vx_mask_flags(nxi->nx_flags,
 		vc_data.flagword, mask);
 	if (trigger & NXF_PERSISTENT)
-		nx_set_persistent(nxi);
+		nx_update_persistent(nxi);
 
 	return 0;
 }

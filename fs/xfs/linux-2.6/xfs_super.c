@@ -859,7 +859,7 @@ xfs_fs_fill_super(
 	sb->s_export_op = &xfs_export_operations;
 #endif
 	sb->s_qcop = &xfs_quotactl_operations;
-#ifdef CONFIG_QUOTA
+#ifdef CONFIG_QUOTACTL
 	sb->s_dqh->dqh_qcop = &xfs_quotactl_operations;
 #endif
 	sb->s_op = &xfs_super_operations;

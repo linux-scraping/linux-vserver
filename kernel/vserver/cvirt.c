@@ -18,7 +18,7 @@
 #include <linux/vs_cvirt.h>
 #include <linux/vserver/switch.h>
 #include <linux/vserver/cvirt_cmd.h>
-#include <linux/vserver/cacct_cmd.h>
+//#include <linux/vserver/cacct_cmd.h>
 
 #include <asm/errno.h>
 #include <asm/uaccess.h>
@@ -224,7 +224,7 @@ int vc_set_vhi_name(struct vx_info *vxi, void __user *data)
 
 	name = vx_vhi_name(vxi, vc_data.field);
 	if (!name)
-		return -EFAULT;
+		return -EINVAL;
 
 	memcpy(name, vc_data.name, 65);
 	return 0;
@@ -240,7 +240,7 @@ int vc_get_vhi_name(struct vx_info *vxi, void __user *data)
 
 	name = vx_vhi_name(vxi, vc_data.field);
 	if (!name)
-		return -EFAULT;
+		return -EINVAL;
 
 	memcpy(vc_data.name, name, 65);
 	if (copy_to_user (data, &vc_data, sizeof(vc_data)))
