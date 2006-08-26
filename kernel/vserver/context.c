@@ -634,13 +634,25 @@ void vx_set_persistent(struct vx_info *vxi)
 	vxdprintk(VXD_CBIT(xid, 6),
 		"vx_set_persistent(%p[#%d])", vxi, vxi->vx_id);
 
-	if (vx_info_flags(vxi, VXF_PERSISTENT, 0)) {
-		get_vx_info(vxi);
-		claim_vx_info(vxi, current);
-	} else {
-		release_vx_info(vxi, current);
-		put_vx_info(vxi);
-	}
+	get_vx_info(vxi);
+	claim_vx_info(vxi, current);
+}
+
+void vx_clear_persistent(struct vx_info *vxi)
+{
+	vxdprintk(VXD_CBIT(xid, 6),
+		"vx_clear_persistent(%p[#%d])", vxi, vxi->vx_id);
+
+	release_vx_info(vxi, current);
+	put_vx_info(vxi);
+}
+
+void vx_update_persistent(struct vx_info *vxi)
+{
+	if (vx_info_flags(vxi, VXF_PERSISTENT, 0))
+		vx_set_persistent(vxi);
+	else
+		vx_clear_persistent(vxi);
 }
 
 
@@ -745,10 +757,22 @@ int vc_ctx_create(uint32_t xid, void __user *data)
 	if ((vc_data.flagword & VXF_PERSISTENT))
 		vx_set_persistent(new_vxi);
 
-	vs_state_change(new_vxi, VSC_STARTUP);
-	ret = new_vxi->vx_id;
-	vx_migrate_task(current, new_vxi);
-	/* if this fails, we might end up with a hashed vx_info */
+	ret = -ENOEXEC;
+	if (vs_state_change(new_vxi, VSC_STARTUP))
+		goto out_unhash;
+	ret = vx_migrate_task(current, new_vxi);
+	if (!ret) {
+		/* return context id on success */
+		ret = new_vxi->vx_id;
+		goto out;
+	}
+out_unhash:
+	/* prepare for context disposal */
+	new_vxi->vx_state |= VXS_SHUTDOWN;
+	if ((vc_data.flagword & VXF_PERSISTENT))
+		vx_clear_persistent(new_vxi);
+	__unhash_vx_info(new_vxi);
+out:
 	put_vx_info(new_vxi);
 	return ret;
 }
@@ -838,7 +862,7 @@ int vc_set_cflags(uint32_t id, void __user *data)
 	vxi->vx_flags = vx_mask_flags(vxi->vx_flags,
 		vc_data.flagword, mask);
 	if (trigger & VXF_PERSISTENT)
-		vx_set_persistent(vxi);
+		vx_update_persistent(vxi);
 
 	put_vx_info(vxi);
 	return 0;
