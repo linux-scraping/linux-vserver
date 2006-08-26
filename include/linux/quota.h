@@ -338,8 +338,7 @@ struct dqhash {
 	struct hlist_head *dqh_hash;
 };
 
-#if defined(CONFIG_QUOTA)
-
+#ifdef CONFIG_QUOTACTL
 
 struct dqhash *new_dqhash(struct super_block *, unsigned int);
 void destroy_dqhash(struct dqhash *);
@@ -359,7 +358,7 @@ static inline struct dqhash *dqhget(struct dqhash *hash)
 	return hash;
 }
 
-#else /* CONFIG_QUOTA */
+#else /* CONFIG_QUOTACTL */
 
 #define new_dqhash(sb, dqdom)		(0)
 #define find_dqhash(dqdom)		(0)
@@ -368,7 +367,7 @@ static inline struct dqhash *dqhget(struct dqhash *hash)
 #define dqhput(hash)			do { } while(0)
 #define dqhget(hash)			(hash)
 
-#endif /* CONFIG_QUOTA */
+#endif /* CONFIG_QUOTACTL */
 
 #else
 

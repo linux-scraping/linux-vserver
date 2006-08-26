@@ -221,6 +221,30 @@ int vc_reset_minmax(struct vx_info *vxi, void __user *data)
 }
 
 
+int vc_rlimit_stat(struct vx_info *vxi, void __user *data)
+{
+	struct vcmd_rlimit_stat_v0 vc_data;
+	struct _vx_limit *limit = &vxi->limit;
+	int id;
+
+	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
+		return -EFAULT;
+
+	id = vc_data.id;
+	if (!is_valid_rlimit(id))
+		return -EINVAL;
+
+	vc_data.hits = atomic_read(&__rlim_lhit(limit, id));
+	vc_data.value = __rlim_get(limit, id);
+	vc_data.minimum = __rlim_rmin(limit, id);
+	vc_data.maximum = __rlim_rmax(limit, id);
+
+	if (copy_to_user (data, &vc_data, sizeof(vc_data)))
+		return -EFAULT;
+	return 0;
+}
+
+
 void vx_vsi_meminfo(struct sysinfo *val)
 {
 	struct vx_info *vxi = current->vx_info;

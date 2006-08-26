@@ -328,7 +328,7 @@ int proc_pid_status(struct task_struct *task, char * buffer)
 	buffer = task_cap(task, buffer);
 	buffer = cpuset_task_status_allowed(task, buffer);
 
-	if (task_vx_flags(task, VXF_INFO_HIDE, 0))
+	if (task_vx_flags(task, VXF_HIDE_VINFO, 0))
 		goto skip;
 #ifdef	CONFIG_VSERVER_LEGACY
 	buffer += sprintf (buffer,"s_context: %d\n", vx_task_xid(task));

@@ -8,18 +8,8 @@
 
 struct	vcmd_sock_stat_v0 {
 	uint32_t field;
-	uint32_t count;
-	uint64_t total;
-};
-
-
-enum sock_stat_field {
-	SOCK_UNSPEC=0,
-	SOCK_UNIX,
-	SOCK_INET,
-	SOCK_INET6,
-	SOCK_PACKET,
-	SOCK_OTHER,
+	uint32_t count[3];
+	uint64_t total[3];
 };
 
 

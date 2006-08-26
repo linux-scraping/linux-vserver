@@ -870,8 +870,6 @@ int proc_pid_vx_info(struct task_struct *p, char *buffer)
 	char * orig = buffer;
 
 	buffer += sprintf (buffer,"XID:\t%d\n", vx_task_xid(p));
-	if (vx_flags(VXF_INFO_HIDE, 0))
-		goto out;
 
 	vxi = task_get_vx_info(p);
 	if (!vxi)
@@ -899,8 +897,7 @@ int proc_pid_nx_info(struct task_struct *p, char *buffer)
 	int i;
 
 	buffer += sprintf (buffer,"NID:\t%d\n", nx_task_nid(p));
-	if (vx_flags(VXF_INFO_HIDE, 0))
-		goto out;
+
 	nxi = task_get_nx_info(p);
 	if (!nxi)
 		goto out;
