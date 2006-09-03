@@ -7,6 +7,7 @@
 #include <linux/sched.h>
 #include <linux/cpumask.h>
 #include <linux/interrupt.h>
+#include <linux/vs_cvirt.h>
 
 #include <asm/cpu.h>
 #include <asm/processor.h>

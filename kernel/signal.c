@@ -25,7 +25,7 @@
 #include <linux/signal.h>
 #include <linux/audit.h>
 #include <linux/capability.h>
-#include <linux/vs_pid.h>
+#include <linux/vs_cvirt.h>
 #include <asm/param.h>
 #include <asm/uaccess.h>
 #include <asm/unistd.h>
@@ -591,7 +591,7 @@ static int check_kill_permission(int sig, struct siginfo *info,
 		return error;
 
 	error = -ESRCH;
-	if (user && !vx_check(vx_task_xid(t), VX_WATCH_P|VX_IDENT))
+	if (user && !vx_check(vx_task_xid(t), VX_ADMIN|VX_IDENT))
 		return error;
 
 	error = security_task_kill(t, info, sig);

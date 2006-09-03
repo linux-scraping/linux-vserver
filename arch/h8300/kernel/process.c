@@ -135,7 +135,7 @@ int kernel_thread(int (*fn)(void *), void * arg, unsigned long flags)
 
 	fs = get_fs();
 	set_fs (KERNEL_DS);
-	clone_arg = flags | CLONE_VM | CLONE_KTHREAD;
+	clone_arg = flags | CLONE_VM;
 	__asm__("mov.l sp,er3\n\t"
 		"sub.l er2,er2\n\t"
 		"mov.l %2,er1\n\t"

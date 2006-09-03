@@ -448,7 +448,7 @@ sys32_gettimeofday(struct compat_timeval __user *tv, struct timezone __user *tz)
 {
 	if (tv) {
 		struct timeval ktv;
-		vx_gettimeofday(&ktv);
+		do_gettimeofday(&ktv);
 		if (put_tv32(tv, &ktv))
 			return -EFAULT;
 	}

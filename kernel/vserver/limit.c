@@ -3,10 +3,9 @@
  *
  *  Virtual Server: Context Limits
  *
- *  Copyright (C) 2004-2006  Herbert Pötzl
+ *  Copyright (C) 2004-2005  Herbert Pötzl
  *
  *  V0.01  broken out from vcontext V0.05
- *  V0.02  changed vcmds to vxi arg
  *
  */
 
@@ -36,7 +35,6 @@ const char *vlimit_name[NUM_LIMITS] = {
 	[VLIMIT_OPENFD]		= "OPENFD",
 	[VLIMIT_ANON]		= "ANON",
 	[VLIMIT_SHMEM]		= "SHMEM",
-	[VLIMIT_DENTRY]		= "DENTRY",
 };
 
 EXPORT_SYMBOL_GPL(vlimit_name);
@@ -52,48 +50,50 @@ static int is_valid_rlimit(int id)
 	case RLIMIT_NOFILE:
 	case RLIMIT_MEMLOCK:
 	case RLIMIT_AS:
-	case RLIMIT_LOCKS:
-	case RLIMIT_MSGQUEUE:
 
 	case VLIMIT_NSOCK:
 	case VLIMIT_OPENFD:
 	case VLIMIT_ANON:
 	case VLIMIT_SHMEM:
-	case VLIMIT_DENTRY:
 		valid = 1;
 		break;
 	}
 	return valid;
 }
 
-static inline uint64_t vc_get_soft(struct vx_info *vxi, int id)
+static inline uint64_t vc_get_rlim(struct vx_info *vxi, int id)
 {
-	rlim_t limit = __rlim_soft(&vxi->limit, id);
-	return VX_VLIM(limit);
+	unsigned long limit;
+
+	limit = vxi->limit.rlim[id];
+	if (limit == RLIM_INFINITY)
+		return CRLIM_INFINITY;
+	return limit;
 }
 
-static inline uint64_t vc_get_hard(struct vx_info *vxi, int id)
-{
-	rlim_t limit = __rlim_hard(&vxi->limit, id);
-	return VX_VLIM(limit);
-}
-
-static int do_get_rlimit(struct vx_info *vxi, uint32_t id,
+static int do_get_rlimit(xid_t xid, uint32_t id,
 	uint64_t *minimum, uint64_t *softlimit, uint64_t *maximum)
 {
+	struct vx_info *vxi;
+
 	if (!is_valid_rlimit(id))
 		return -EINVAL;
+
+	vxi = lookup_vx_info(xid);
+	if (!vxi)
+		return -ESRCH;
 
 	if (minimum)
 		*minimum = CRLIM_UNSET;
 	if (softlimit)
-		*softlimit = vc_get_soft(vxi, id);
+		*softlimit = CRLIM_UNSET;
 	if (maximum)
-		*maximum = vc_get_hard(vxi, id);
+		*maximum = vc_get_rlim(vxi, id);
+	put_vx_info(vxi);
 	return 0;
 }
 
-int vc_get_rlimit(struct vx_info *vxi, void __user *data)
+int vc_get_rlimit(uint32_t id, void __user *data)
 {
 	struct vcmd_ctx_rlimit_v0 vc_data;
 	int ret;
@@ -101,7 +101,7 @@ int vc_get_rlimit(struct vx_info *vxi, void __user *data)
 	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
-	ret = do_get_rlimit(vxi, vc_data.id,
+	ret = do_get_rlimit(id, vc_data.id,
 		&vc_data.minimum, &vc_data.softlimit, &vc_data.maximum);
 	if (ret)
 		return ret;
@@ -111,49 +111,54 @@ int vc_get_rlimit(struct vx_info *vxi, void __user *data)
 	return 0;
 }
 
-static int do_set_rlimit(struct vx_info *vxi, uint32_t id,
+static int do_set_rlimit(xid_t xid, uint32_t id,
 	uint64_t minimum, uint64_t softlimit, uint64_t maximum)
 {
+	struct vx_info *vxi;
+
 	if (!is_valid_rlimit(id))
 		return -EINVAL;
 
+	vxi = lookup_vx_info(xid);
+	if (!vxi)
+		return -ESRCH;
+
 	if (maximum != CRLIM_KEEP)
-		__rlim_hard(&vxi->limit, id) = VX_RLIM(maximum);
-	if (softlimit != CRLIM_KEEP)
-		__rlim_soft(&vxi->limit, id) = VX_RLIM(softlimit);
+		vxi->limit.rlim[id] = maximum;
 
-	/* clamp soft limit */
-	if (__rlim_soft(&vxi->limit, id) > __rlim_hard(&vxi->limit, id))
-		__rlim_soft(&vxi->limit, id) = __rlim_hard(&vxi->limit, id);
-
+	put_vx_info(vxi);
 	return 0;
 }
 
-int vc_set_rlimit(struct vx_info *vxi, void __user *data)
+int vc_set_rlimit(uint32_t id, void __user *data)
 {
 	struct vcmd_ctx_rlimit_v0 vc_data;
 
+	if (!capable(CAP_SYS_ADMIN) || !capable(CAP_SYS_RESOURCE))
+		return -EPERM;
 	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
-	return do_set_rlimit(vxi, vc_data.id,
+	return do_set_rlimit(id, vc_data.id,
 		vc_data.minimum, vc_data.softlimit, vc_data.maximum);
 }
 
 #ifdef	CONFIG_IA32_EMULATION
 
-int vc_set_rlimit_x32(struct vx_info *vxi, void __user *data)
+int vc_set_rlimit_x32(uint32_t id, void __user *data)
 {
 	struct vcmd_ctx_rlimit_v0_x32 vc_data;
 
+	if (!capable(CAP_SYS_ADMIN) || !capable(CAP_SYS_RESOURCE))
+		return -EPERM;
 	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
-	return do_set_rlimit(vxi, vc_data.id,
+	return do_set_rlimit(id, vc_data.id,
 		vc_data.minimum, vc_data.softlimit, vc_data.maximum);
 }
 
-int vc_get_rlimit_x32(struct vx_info *vxi, void __user *data)
+int vc_get_rlimit_x32(uint32_t id, void __user *data)
 {
 	struct vcmd_ctx_rlimit_v0_x32 vc_data;
 	int ret;
@@ -161,7 +166,7 @@ int vc_get_rlimit_x32(struct vx_info *vxi, void __user *data)
 	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
-	ret = do_get_rlimit(vxi, vc_data.id,
+	ret = do_get_rlimit(id, vc_data.id,
 		&vc_data.minimum, &vc_data.softlimit, &vc_data.maximum);
 	if (ret)
 		return ret;
@@ -180,8 +185,6 @@ int vc_get_rlimit_mask(uint32_t id, void __user *data)
 			/* minimum */
 		0
 		,	/* softlimit */
-		(1 << RLIMIT_RSS) |
-		(1 << VLIMIT_ANON) |
 		0
 		,	/* maximum */
 		(1 << RLIMIT_RSS) |
@@ -191,55 +194,12 @@ int vc_get_rlimit_mask(uint32_t id, void __user *data)
 		(1 << RLIMIT_LOCKS) |
 		(1 << RLIMIT_AS) |
 		(1 << VLIMIT_ANON) |
-		(1 << VLIMIT_DENTRY) |
 		0
 		};
 
+	if (!capable(CAP_SYS_ADMIN) || !capable(CAP_SYS_RESOURCE))
+		return -EPERM;
 	if (copy_to_user(data, &mask, sizeof(mask)))
-		return -EFAULT;
-	return 0;
-}
-
-
-static inline void vx_reset_minmax(struct _vx_limit *limit)
-{
-	rlim_t value;
-	int lim;
-
-	for (lim=0; lim<NUM_LIMITS; lim++) {
-		value = __rlim_get(limit, lim);
-		__rlim_rmax(limit, lim) = value;
-		__rlim_rmin(limit, lim) = value;
-	}
-}
-
-
-int vc_reset_minmax(struct vx_info *vxi, void __user *data)
-{
-	vx_reset_minmax(&vxi->limit);
-	return 0;
-}
-
-
-int vc_rlimit_stat(struct vx_info *vxi, void __user *data)
-{
-	struct vcmd_rlimit_stat_v0 vc_data;
-	struct _vx_limit *limit = &vxi->limit;
-	int id;
-
-	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
-		return -EFAULT;
-
-	id = vc_data.id;
-	if (!is_valid_rlimit(id))
-		return -EINVAL;
-
-	vc_data.hits = atomic_read(&__rlim_lhit(limit, id));
-	vc_data.value = __rlim_get(limit, id);
-	vc_data.minimum = __rlim_rmin(limit, id);
-	vc_data.maximum = __rlim_rmax(limit, id);
-
-	if (copy_to_user (data, &vc_data, sizeof(vc_data)))
 		return -EFAULT;
 	return 0;
 }
@@ -248,19 +208,13 @@ int vc_rlimit_stat(struct vx_info *vxi, void __user *data)
 void vx_vsi_meminfo(struct sysinfo *val)
 {
 	struct vx_info *vxi = current->vx_info;
-	unsigned long totalram, freeram;
-	rlim_t v;
+	unsigned long v;
 
-	/* we blindly accept the max */
-	v = __rlim_soft(&vxi->limit, RLIMIT_RSS);
-	totalram = (v != RLIM_INFINITY) ? v : val->totalram;
-
-	/* total minus used equals free */
-	v = __rlim_get(&vxi->limit, RLIMIT_RSS);
-	freeram = (v < totalram) ? totalram - v : 0;
-
-	val->totalram = totalram;
-	val->freeram = freeram;
+	v = vxi->limit.rlim[RLIMIT_RSS];
+	if (v != RLIM_INFINITY)
+		val->totalram = min(val->totalram, v);
+	v = atomic_read(&vxi->limit.rcur[RLIMIT_RSS]);
+	val->freeram = (v < val->totalram) ? val->totalram - v : 0;
 	val->bufferram = 0;
 	val->totalhigh = 0;
 	val->freehigh = 0;
@@ -270,28 +224,15 @@ void vx_vsi_meminfo(struct sysinfo *val)
 void vx_vsi_swapinfo(struct sysinfo *val)
 {
 	struct vx_info *vxi = current->vx_info;
-	unsigned long totalswap, freeswap;
-	rlim_t v, w;
+	unsigned long v, w;
 
-	v = __rlim_soft(&vxi->limit, RLIMIT_RSS);
-	if (v == RLIM_INFINITY) {
-		val->freeswap = val->totalswap;
-		return;
-	}
-
-	/* we blindly accept the max */
-	w = __rlim_hard(&vxi->limit, RLIMIT_RSS);
-	totalswap = (w != RLIM_INFINITY) ? (w - v) : val->totalswap;
-
-	/* currently 'used' swap */
-	w = __rlim_get(&vxi->limit, RLIMIT_RSS);
-	w -= (w > v) ? v : w;
-
-	/* total minus used equals free */
-	freeswap = (w < totalswap) ? totalswap - w : 0;
-
-	val->totalswap = totalswap;
-	val->freeswap = freeswap;
+	v = vxi->limit.rlim[RLIMIT_RSS];
+	w = vxi->limit.rlim[RLIMIT_AS];
+	if (w != RLIM_INFINITY)
+		val->totalswap = min(val->totalswap, w -
+		((v != RLIM_INFINITY) ? v : 0));
+	w = atomic_read(&vxi->limit.rcur[RLIMIT_AS]);
+	val->freeswap = (w < val->totalswap) ? val->totalswap - w : 0;
 	return;
 }
 

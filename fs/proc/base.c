@@ -72,9 +72,8 @@
 #include <linux/cpuset.h>
 #include <linux/audit.h>
 #include <linux/poll.h>
-#include <linux/vs_context.h>
+#include <linux/vs_cvirt.h>
 #include <linux/vs_network.h>
-#include <linux/vs_pid.h>
 #include "internal.h"
 
 /*
@@ -1333,7 +1332,7 @@ static int proc_pident_readdir(struct file *filp,
 			goto out;
 		}
 		p = ents + i;
-		hide = vx_flags(VXF_HIDE_VINFO, 0);
+		hide = vx_flags(VXF_INFO_HIDE, 0);
 		while (p->name) {
 			if (hide) {
 				switch (p->type) {
@@ -1421,8 +1420,7 @@ static struct inode *proc_pid_make_inode(struct super_block * sb, struct task_st
 		inode->i_uid = task->euid;
 		inode->i_gid = task->egid;
 	}
-	/* procfs is xid tagged */
-	inode->i_tag = (tag_t)vx_task_xid(task);
+	inode->i_xid = vx_task_xid(task);
 	security_task_to_inode(task, inode);
 
 out:
@@ -1449,10 +1447,11 @@ static int pid_revalidate(struct dentry *dentry, struct nameidata *nd)
 	struct inode *inode = dentry->d_inode;
 	struct task_struct *task = proc_task(inode);
 
-	if (pid_alive(task)) {
-		if (!vx_check(vx_task_xid(task), VX_IDENT))
-			goto out_drop;
+	if (!vx_check(vx_task_xid(task), VX_IDENT))
+		goto out_drop;
+	/* discard wrong fakeinit */
 
+	if (pid_alive(task)) {
 		if (proc_type(inode) == PROC_TGID_INO || proc_type(inode) == PROC_TID_INO || task_dumpable(task)) {
 			inode->i_uid = task->euid;
 			inode->i_gid = task->egid;
@@ -1903,14 +1902,14 @@ static struct dentry *proc_pident_lookup(struct inode *dir,
 #endif
 		case PROC_TID_VX_INFO:
 		case PROC_TGID_VX_INFO:
-			if (task_vx_flags(task, VXF_HIDE_VINFO, 0))
+			if (task_vx_flags(task, VXF_INFO_HIDE, 0))
 				goto out_noent;
 			inode->i_fop = &proc_info_file_operations;
 			ei->op.proc_read = proc_pid_vx_info;
 			break;
 		case PROC_TID_IP_INFO:
 		case PROC_TGID_IP_INFO:
-			if (task_vx_flags(task, VXF_HIDE_VINFO, 0))
+			if (task_vx_flags(task, VXF_INFO_HIDE, 0))
 				goto out_noent;
 			inode->i_fop = &proc_info_file_operations;
 			ei->op.proc_read = proc_pid_nx_info;

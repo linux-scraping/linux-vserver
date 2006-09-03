@@ -7,8 +7,7 @@
 #define LOAD_INT(x) ((x) >> FSHIFT)
 #define LOAD_FRAC(x) LOAD_INT(((x) & (FIXED_1-1)) * 100)
 
-static inline
-int vx_info_proc_cvirt(struct _vx_cvirt *cvirt, char *buffer)
+static inline int vx_info_proc_cvirt(struct _vx_cvirt *cvirt, char *buffer)
 {
 	int length = 0;
 	int a, b, c;
@@ -56,11 +55,37 @@ int vx_info_proc_cvirt(struct _vx_cvirt *cvirt, char *buffer)
 	return length;
 }
 
-static inline
-int vx_info_proc_cvirt_pc(struct _vx_cvirt_pc *cvirt_pc,
-	char *buffer, int cpu)
+
+static inline long vx_sock_count(struct _vx_cacct *cacct, int type, int pos)
 {
-	int length = 0;
+	return atomic_read(&cacct->sock[type][pos].count);
+}
+
+
+static inline long vx_sock_total(struct _vx_cacct *cacct, int type, int pos)
+{
+	return atomic_read(&cacct->sock[type][pos].total);
+}
+
+static inline int vx_info_proc_cacct(struct _vx_cacct *cacct, char *buffer)
+{
+	int i,j, length = 0;
+	static char *type[] = { "UNSPEC", "UNIX", "INET", "INET6", "OTHER" };
+
+	for (i=0; i<5; i++) {
+		length += sprintf(buffer + length,
+			"%s:", type[i]);
+		for (j=0; j<3; j++) {
+			length += sprintf(buffer + length,
+				"\t%12lu/%-12lu"
+				,vx_sock_count(cacct, i, j)
+				,vx_sock_total(cacct, i, j)
+				);
+		}
+		buffer[length++] = '\n';
+	}
+	length += sprintf(buffer + length,
+		"forks:\t%lu\n", cacct->total_forks);
 	return length;
 }
 

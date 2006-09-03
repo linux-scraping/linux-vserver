@@ -57,7 +57,7 @@
 #include <linux/nfsd_idmap.h>
 #include <linux/nfs4.h>
 #include <linux/nfs4_acl.h>
-#include <linux/vserver/tag.h>
+#include <linux/vserver/xid.h>
 
 #define NFSDDBG_FACILITY		NFSDDBG_XDR
 
@@ -1562,8 +1562,8 @@ out_acl:
 	}
 	if (bmval1 & FATTR4_WORD1_OWNER) {
 		status = nfsd4_encode_user(rqstp,
-			TAGINO_UID(DX_TAG(dentry->d_inode),
-			stat.uid, stat.tag), &p, &buflen);
+			XIDINO_UID(XID_TAG(dentry->d_inode),
+			stat.uid, stat.xid), &p, &buflen);
 		if (status == nfserr_resource)
 			goto out_resource;
 		if (status)
@@ -1571,8 +1571,8 @@ out_acl:
 	}
 	if (bmval1 & FATTR4_WORD1_OWNER_GROUP) {
 		status = nfsd4_encode_group(rqstp,
-			TAGINO_GID(DX_TAG(dentry->d_inode),
-			stat.gid, stat.tag), &p, &buflen);
+			XIDINO_GID(XID_TAG(dentry->d_inode),
+			stat.gid, stat.xid), &p, &buflen);
 		if (status == nfserr_resource)
 			goto out_resource;
 		if (status)

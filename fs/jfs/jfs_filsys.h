@@ -84,7 +84,7 @@
 #define JFS_DIR_INDEX		0x00200000	/* Persistant index for */
 						/* directory entries    */
 
-#define JFS_TAGGED		0x00800000	/* Context Tagging */
+#define JFS_TAGXID		0x00800000	/* xid tagging */
 
 /*
  *	buffer cache configuration

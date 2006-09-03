@@ -229,8 +229,8 @@ static int ext2_show_options(struct seq_file *seq, struct vfsmount *vfs)
 }
 
 #ifdef CONFIG_QUOTA
-static ssize_t ext2_quota_read(struct dqhash *hash, int type, char *data, size_t len, loff_t off);
-static ssize_t ext2_quota_write(struct dqhash *hash, int type, const char *data, size_t len, loff_t off);
+static ssize_t ext2_quota_read(struct super_block *sb, int type, char *data, size_t len, loff_t off);
+static ssize_t ext2_quota_write(struct super_block *sb, int type, const char *data, size_t len, loff_t off);
 #endif
 
 static struct super_operations ext2_sops = {
@@ -287,7 +287,7 @@ enum {
 	Opt_err_ro, Opt_nouid32, Opt_nocheck, Opt_debug,
 	Opt_oldalloc, Opt_orlov, Opt_nobh, Opt_user_xattr, Opt_nouser_xattr,
 	Opt_acl, Opt_noacl, Opt_xip, Opt_ignore, Opt_err, Opt_quota,
-	Opt_usrquota, Opt_grpquota, Opt_tag, Opt_notag, Opt_tagid
+	Opt_usrquota, Opt_grpquota, Opt_tagxid
 };
 
 static match_table_t tokens = {
@@ -315,10 +315,7 @@ static match_table_t tokens = {
 	{Opt_acl, "acl"},
 	{Opt_noacl, "noacl"},
 	{Opt_xip, "xip"},
-	{Opt_tag, "tag"},
-	{Opt_notag, "notag"},
-	{Opt_tagid, "tagid=%u"},
-	{Opt_tag, "tagxid"},
+	{Opt_tagxid, "tagxid"},
 	{Opt_grpquota, "grpquota"},
 	{Opt_ignore, "noquota"},
 	{Opt_quota, "quota"},
@@ -382,18 +379,9 @@ static int parse_options (char * options,
 		case Opt_nouid32:
 			set_opt (sbi->s_mount_opt, NO_UID32);
 			break;
-#ifndef CONFIG_TAGGING_NONE
-		case Opt_tag:
-			set_opt (sbi->s_mount_opt, TAGGED);
-			break;
-		case Opt_notag:
-			clear_opt (sbi->s_mount_opt, TAGGED);
-			break;
-#endif
-#ifdef CONFIG_PROPAGATE
-		case Opt_tagid:
-			/* use args[0] */
-			set_opt (sbi->s_mount_opt, TAGGED);
+#ifndef CONFIG_INOXID_NONE
+		case Opt_tagxid:
+			set_opt (sbi->s_mount_opt, TAGXID);
 			break;
 #endif
 		case Opt_nocheck:
@@ -697,8 +685,8 @@ static int ext2_fill_super(struct super_block *sb, void *data, int silent)
 	if (!parse_options ((char *) data, sbi))
 		goto failed_mount;
 
-	if (EXT2_SB(sb)->s_mount_opt & EXT2_MOUNT_TAGGED)
-		sb->s_flags |= MS_TAGGED;
+	if (EXT2_SB(sb)->s_mount_opt & EXT2_MOUNT_TAGXID)
+		sb->s_flags |= MS_TAGXID;
 	sb->s_flags = (sb->s_flags & ~MS_POSIXACL) |
 		((EXT2_SB(sb)->s_mount_opt & EXT2_MOUNT_POSIX_ACL) ?
 		 MS_POSIXACL : 0);
@@ -1008,9 +996,9 @@ static int ext2_remount (struct super_block * sb, int * flags, char * data)
 		goto restore_opts;
 	}
 
-	if ((sbi->s_mount_opt & EXT2_MOUNT_TAGGED) &&
-		!(sb->s_flags & MS_TAGGED)) {
-		printk("EXT2-fs: %s: tagging not permitted on remount.\n",
+	if ((sbi->s_mount_opt & EXT2_MOUNT_TAGXID) &&
+		!(sb->s_flags & MS_TAGXID)) {
+		printk("EXT2-fs: %s: tagxid not permitted on remount.\n",
 		       sb->s_id);
 		return -EINVAL;
 	}
@@ -1126,11 +1114,10 @@ static struct super_block *ext2_get_sb(struct file_system_type *fs_type,
  * acquiring the locks... As quota files are never truncated and quota code
  * itself serializes the operations (and noone else should touch the files)
  * we don't have to be afraid of races */
-static ssize_t ext2_quota_read(struct dqhash *hash, int type, char *data,
+static ssize_t ext2_quota_read(struct super_block *sb, int type, char *data,
 			       size_t len, loff_t off)
 {
-	struct inode *inode = dqh_dqopt(hash)->files[type];
-	struct super_block *sb = hash->dqh_sb;
+	struct inode *inode = sb_dqopt(sb)->files[type];
 	sector_t blk = off >> EXT2_BLOCK_SIZE_BITS(sb);
 	int err = 0;
 	int offset = off & (sb->s_blocksize - 1);
@@ -1171,11 +1158,10 @@ static ssize_t ext2_quota_read(struct dqhash *hash, int type, char *data,
 }
 
 /* Write to quotafile */
-static ssize_t ext2_quota_write(struct dqhash *hash, int type,
+static ssize_t ext2_quota_write(struct super_block *sb, int type,
 				const char *data, size_t len, loff_t off)
 {
-	struct inode *inode = dqh_dqopt(hash)->files[type];
-	struct super_block *sb = hash->dqh_sb;
+	struct inode *inode = sb_dqopt(sb)->files[type];
 	sector_t blk = off >> EXT2_BLOCK_SIZE_BITS(sb);
 	int err = 0;
 	int offset = off & (sb->s_blocksize - 1);

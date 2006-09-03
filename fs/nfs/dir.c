@@ -32,7 +32,7 @@
 #include <linux/pagemap.h>
 #include <linux/smp_lock.h>
 #include <linux/namei.h>
-#include <linux/vserver/tag.h>
+#include <linux/vserver/xid.h>
 
 #include "nfs4_fs.h"
 #include "delegation.h"
@@ -906,7 +906,7 @@ static struct dentry *nfs_lookup(struct inode *dir, struct dentry * dentry, stru
 	res = (struct dentry *)inode;
 	if (IS_ERR(res))
 		goto out_unlock;
-	dx_propagate_tag(nd, inode);
+	vx_propagate_xid(nd, inode);
 no_entry:
 	res = d_add_unique(dentry, inode);
 	if (res != NULL)

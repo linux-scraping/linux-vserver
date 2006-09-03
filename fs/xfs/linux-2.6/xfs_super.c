@@ -160,7 +160,7 @@ xfs_revalidate_inode(
 	inode->i_nlink	= ip->i_d.di_nlink;
 	inode->i_uid	= ip->i_d.di_uid;
 	inode->i_gid	= ip->i_d.di_gid;
-	inode->i_tag	= ip->i_d.di_tag;
+	inode->i_xid	= ip->i_d.di_xid;
 
 	switch (inode->i_mode & S_IFMT) {
 	case S_IFBLK:
@@ -733,9 +733,9 @@ xfs_fs_remount(
 	int			error;
 
 	VFS_PARSEARGS(vfsp, options, args, 1, error);
-	if ((args->flags2 & XFSMNT2_TAGGED) &&
-		!(sb->s_flags & MS_TAGGED)) {
-		printk("XFS: %s: tagging not permitted on remount.\n",
+	if ((args->flags2 & XFSMNT2_TAGXID) &&
+		!(sb->s_flags & MS_TAGXID)) {
+		printk("XFS: %s: tagxid not permitted on remount.\n",
 			sb->s_id);
 		error = EINVAL;
 	}
@@ -766,10 +766,9 @@ xfs_fs_show_options(
 
 STATIC int
 xfs_fs_quotasync(
-	struct dqhash		*hash,
+	struct super_block	*sb,
 	int			type)
 {
-	struct super_block	*sb = hash->dqh_sb;
 	struct vfs		*vfsp = vfs_from_sb(sb);
 	int			error;
 
@@ -779,10 +778,10 @@ xfs_fs_quotasync(
 
 STATIC int
 xfs_fs_getxstate(
-	struct dqhash		*hash,
+	struct super_block	*sb,
 	struct fs_quota_stat	*fqs)
 {
-	struct vfs		*vfsp = vfs_from_sb(hash->dqh_sb);
+	struct vfs		*vfsp = vfs_from_sb(sb);
 	int			error;
 
 	VFS_QUOTACTL(vfsp, Q_XGETQSTAT, 0, (caddr_t)fqs, error);
@@ -791,11 +790,11 @@ xfs_fs_getxstate(
 
 STATIC int
 xfs_fs_setxstate(
-	struct dqhash		*hash,
+	struct super_block	*sb,
 	unsigned int		flags,
 	int			op)
 {
-	struct vfs		*vfsp = vfs_from_sb(hash->dqh_sb);
+	struct vfs		*vfsp = vfs_from_sb(sb);
 	int			error;
 
 	VFS_QUOTACTL(vfsp, op, 0, (caddr_t)&flags, error);
@@ -804,12 +803,12 @@ xfs_fs_setxstate(
 
 STATIC int
 xfs_fs_getxquota(
-	struct dqhash		*hash,
+	struct super_block	*sb,
 	int			type,
 	qid_t			id,
 	struct fs_disk_quota	*fdq)
 {
-	struct vfs		*vfsp = vfs_from_sb(hash->dqh_sb);
+	struct vfs		*vfsp = vfs_from_sb(sb);
 	int			error, getmode;
 
 	getmode = (type == USRQUOTA) ? Q_XGETQUOTA :
@@ -820,12 +819,12 @@ xfs_fs_getxquota(
 
 STATIC int
 xfs_fs_setxquota(
-	struct dqhash		*hash,
+	struct super_block	*sb,
 	int			type,
 	qid_t			id,
 	struct fs_disk_quota	*fdq)
 {
-	struct vfs		*vfsp = vfs_from_sb(hash->dqh_sb);
+	struct vfs		*vfsp = vfs_from_sb(sb);
 	int			error, setmode;
 
 	setmode = (type == USRQUOTA) ? Q_XSETQLIM :
@@ -859,9 +858,6 @@ xfs_fs_fill_super(
 	sb->s_export_op = &xfs_export_operations;
 #endif
 	sb->s_qcop = &xfs_quotactl_operations;
-#ifdef CONFIG_QUOTACTL
-	sb->s_dqh->dqh_qcop = &xfs_quotactl_operations;
-#endif
 	sb->s_op = &xfs_super_operations;
 
 	VFS_MOUNT(vfsp, args, NULL, error);

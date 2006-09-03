@@ -106,7 +106,7 @@ long vs_reboot_helper(struct vx_info *vxi, int cmd, void __user *arg)
 }
 
 
-long vs_reboot(unsigned int cmd, void __user * arg)
+long vs_reboot(unsigned int cmd, void __user *arg)
 {
 	struct vx_info *vxi = current->vx_info;
 	long ret = 0;
@@ -167,7 +167,8 @@ long vs_state_change(struct vx_info *vxi, unsigned int cmd)
 		return 0;
 	}
 
-	return do_vshelper(vshelper_path, argv, envp, 1);
+	do_vshelper(vshelper_path, argv, envp, 1);
+	return 0;
 }
 
 
@@ -203,6 +204,7 @@ long vs_net_change(struct nx_info *nxi, unsigned int cmd)
 		return 0;
 	}
 
-	return do_vshelper(vshelper_path, argv, envp, 1);
+	do_vshelper(vshelper_path, argv, envp, 1);
+	return 0;
 }
 

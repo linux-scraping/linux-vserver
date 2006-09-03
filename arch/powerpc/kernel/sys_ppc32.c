@@ -267,7 +267,7 @@ asmlinkage long compat_sys_gettimeofday(struct compat_timeval __user *tv, struct
 {
 	if (tv) {
 		struct timeval ktv;
-		vx_gettimeofday(&ktv);
+		do_gettimeofday(&ktv);
 		if (put_tv32(tv, &ktv))
 			return -EFAULT;
 	}

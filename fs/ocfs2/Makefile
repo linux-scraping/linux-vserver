@@ -16,7 +16,6 @@ ocfs2-objs := \
 	file.o 			\
 	heartbeat.o 		\
 	inode.o 		\
-	ioctl.o 		\
 	journal.o 		\
 	localalloc.o 		\
 	mmap.o 			\

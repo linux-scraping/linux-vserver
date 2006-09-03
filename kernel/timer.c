@@ -35,7 +35,6 @@
 #include <linux/syscalls.h>
 #include <linux/delay.h>
 #include <linux/vs_cvirt.h>
-#include <linux/vs_pid.h>
 #include <linux/vserver/sched.h>
 
 #include <asm/uaccess.h>
@@ -980,6 +979,7 @@ asmlinkage long sys_getpid(void)
 asmlinkage long sys_getppid(void)
 {
 	int pid;
+
 	rcu_read_lock();
 	pid = rcu_dereference(current->real_parent)->tgid;
 	rcu_read_unlock();

@@ -30,8 +30,6 @@ static int vx_set_initpid(struct vx_info *vxi, int pid)
 	init = find_task_by_real_pid(pid);
 	if (!init)
 		return -ESRCH;
-
-	vxi->vx_flags &= ~VXF_STATE_INIT;
 	return vx_set_init(vxi, init);
 }
 
@@ -101,8 +99,8 @@ int vc_new_s_context(uint32_t ctx, void __user *data)
 			vx_set_namespace(new_vxi,
 				current->namespace, current->fs);
 		if (vc_data.flags & VX_INFO_NPROC)
-			__rlim_set(&new_vxi->limit, RLIMIT_NPROC,
-				current->signal->rlim[RLIMIT_NPROC].rlim_max);
+			new_vxi->limit.rlim[RLIMIT_NPROC] =
+				current->signal->rlim[RLIMIT_NPROC].rlim_max;
 
 		/* tweak some defaults for legacy */
 		new_vxi->vx_flags |= (VXF_HIDE_NETIF|VXF_INFO_INIT);

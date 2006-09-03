@@ -21,7 +21,6 @@
 #include <asm/unistd.h>
 
 #include <linux/vserver/debug.h>
-#include <linux/vserver/history.h>
 
 
 #ifdef	CONFIG_VSERVER_HISTORY
