@@ -471,14 +471,11 @@ __attribute__((weak)) unsigned long long printk_clock(void)
 
 asmlinkage int printk(const char *fmt, ...)
 {
-	struct vx_info_save vxis;
 	va_list args;
 	int r;
 
 	va_start(args, fmt);
-	__enter_vx_admin(&vxis);
 	r = vprintk(fmt, args);
-	__leave_vx_admin(&vxis);
 	va_end(args);
 
 	return r;
@@ -494,8 +491,10 @@ asmlinkage int vprintk(const char *fmt, va_list args)
 	char *p;
 	static char printk_buf[1024];
 	static int log_level_unknown = 1;
+	struct vx_info_save vxis;
 
 	preempt_disable();
+	__enter_vx_admin(&vxis);
 	if (unlikely(oops_in_progress) && printk_cpu == smp_processor_id())
 		/* If a crash is occurring during printk() on this CPU,
 		 * make sure we can't deadlock */
@@ -596,6 +595,7 @@ asmlinkage int vprintk(const char *fmt, va_list args)
 		spin_unlock_irqrestore(&logbuf_lock, flags);
 	}
 out:
+	__leave_vx_admin(&vxis);
 	preempt_enable();
 	return printed_len;
 }

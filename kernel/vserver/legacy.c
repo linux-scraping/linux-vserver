@@ -30,8 +30,6 @@ static int vx_set_initpid(struct vx_info *vxi, int pid)
 	init = find_task_by_real_pid(pid);
 	if (!init)
 		return -ESRCH;
-
-	vxi->vx_flags &= ~VXF_STATE_INIT;
 	return vx_set_init(vxi, init);
 }
 

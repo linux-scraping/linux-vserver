@@ -420,7 +420,7 @@ static int do_quotactl(struct dqhash *hash, int type, int cmd, qid_t id, void __
 #include <linux/vroot.h>
 #include <linux/kallsyms.h>
 
-static vroot_grb_func *vroot_get_real_bdev = NULL;
+vroot_grb_func *vroot_get_real_bdev = NULL;
 
 static spinlock_t vroot_grb_lock = SPIN_LOCK_UNLOCKED;
 
