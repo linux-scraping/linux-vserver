@@ -615,6 +615,7 @@ int vx_set_init(struct vx_info *vxi, struct task_struct *p)
 		"vx_set_init(%p[#%d],%p[#%d,%d,%d])",
 		vxi, vxi->vx_id, p, p->xid, p->pid, p->tgid);
 
+	vxi->vx_flags &= ~VXF_STATE_INIT;
 	vxi->vx_initpid = p->tgid;
 	return 0;
 }

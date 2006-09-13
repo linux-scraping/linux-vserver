@@ -228,13 +228,20 @@ int generic_permission(struct inode *inode, int mask,
 	return -EACCES;
 }
 
-static inline int xid_permission(struct inode *inode, int mask, struct nameidata *nd)
+static inline int vx_barrier(struct inode *inode)
 {
 	if (IS_BARRIER(inode) && !vx_check(0, VX_ADMIN)) {
 		vxwprintk(1, "xid=%d did hit the barrier.",
 			vx_current_xid());
-		return -EACCES;
+		return 1;
 	}
+	return 0;
+}
+
+static inline int xid_permission(struct inode *inode, int mask, struct nameidata *nd)
+{
+	if (vx_barrier(inode))
+		return -EACCES;
 	if (inode->i_xid == 0)
 		return 0;
 	if (vx_check(inode->i_xid, VX_ADMIN|VX_WATCH|VX_IDENT))
@@ -426,6 +433,8 @@ static int exec_permission_lite(struct inode *inode,
 {
 	umode_t	mode = inode->i_mode;
 
+	if (vx_barrier(inode))
+		return -EACCES;
 	if (inode->i_op && inode->i_op->permission)
 		return -EAGAIN;
 

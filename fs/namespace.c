@@ -1409,7 +1409,7 @@ long do_mount(char *dev_name, char *dir_name, char *type_page,
 	if (flags & MS_NODIRATIME)
 		mnt_flags |= MNT_NODIRATIME;
 
-	if (vx_ccaps(VXC_SECURE_MOUNT))
+	if (!capable(CAP_SYS_ADMIN))
 		mnt_flags |= MNT_NODEV;
 	flags &= ~(MS_NOSUID | MS_NOEXEC | MS_NODEV | MS_ACTIVE |
 		   MS_NOATIME | MS_NODIRATIME);

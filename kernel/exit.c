@@ -457,6 +457,7 @@ static void close_files(struct files_struct * files)
 			}
 			i++;
 			set >>= 1;
+			cond_resched();
 		}
 	}
 }
