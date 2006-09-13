@@ -489,6 +489,8 @@ struct kmem_cache {
 #define STATS_INC_FREEMISS(x)	do { } while (0)
 #endif
 
+#include "slab_vs.h"
+
 #if DEBUG
 /*
  * Magic nums for obj red zoning.
@@ -2891,6 +2893,7 @@ static __always_inline void *__cache_alloc(struct kmem_cache *cachep,
 
 	local_irq_save(save_flags);
 	objp = ____cache_alloc(cachep, flags);
+	vx_slab_alloc(cachep, flags);
 	local_irq_restore(save_flags);
 	objp = cache_alloc_debugcheck_after(cachep, flags, objp,
 					    caller);
@@ -2959,6 +2962,7 @@ retry:
 
 	obj = slab_get_obj(cachep, slabp, nodeid);
 	check_slabp(cachep, slabp);
+	vx_slab_alloc(cachep, flags);
 	l3->free_objects--;
 	/* move slabp to correct slabp list: */
 	list_del(&slabp->list);
@@ -2993,6 +2997,7 @@ static void free_block(struct kmem_cache *cachep, void **objpp, int nr_objects,
 	int i;
 	struct kmem_list3 *l3;
 
+	// printk("·· free_block(%x) = %dx%x\n", cachep->gfpflags, nr_objects, cachep->objsize);
 	for (i = 0; i < nr_objects; i++) {
 		void *objp = objpp[i];
 		struct slab *slabp;
@@ -3086,6 +3091,7 @@ static inline void __cache_free(struct kmem_cache *cachep, void *objp)
 
 	check_irq_off();
 	objp = cache_free_debugcheck(cachep, objp, __builtin_return_address(0));
+	vx_slab_free(cachep);
 
 	/* Make sure we are not freeing a object from another
 	 * node to the array cache on this cpu.

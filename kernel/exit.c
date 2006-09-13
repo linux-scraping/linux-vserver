@@ -39,7 +39,7 @@
 #include <linux/vs_limit.h>
 #include <linux/vs_context.h>
 #include <linux/vs_network.h>
-#include <linux/vs_cvirt.h>
+#include <linux/vs_pid.h>
 
 #include <asm/uaccess.h>
 #include <asm/unistd.h>
@@ -457,7 +457,6 @@ static void close_files(struct files_struct * files)
 			}
 			i++;
 			set >>= 1;
-			cond_resched();
 		}
 	}
 }

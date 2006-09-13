@@ -822,7 +822,7 @@ static struct sock *raw_get_first(struct seq_file *seq)
 
 		sk_for_each(sk, node, &raw_v4_htable[state->bucket])
 			if (sk->sk_family == PF_INET &&
-				vx_check(sk->sk_xid, VX_IDENT|VX_WATCH))
+				vx_check(sk->sk_xid, VX_WATCH_P|VX_IDENT))
 				goto found;
 	}
 	sk = NULL;
@@ -839,7 +839,7 @@ static struct sock *raw_get_next(struct seq_file *seq, struct sock *sk)
 try_again:
 		;
 	} while (sk && (sk->sk_family != PF_INET ||
-		!vx_check(sk->sk_xid, VX_IDENT|VX_WATCH)));
+		!vx_check(sk->sk_xid, VX_WATCH_P|VX_IDENT)));
 
 	if (!sk && ++state->bucket < RAWV4_HTABLE_SIZE) {
 		sk = sk_head(&raw_v4_htable[state->bucket]);

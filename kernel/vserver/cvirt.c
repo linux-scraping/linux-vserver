@@ -3,10 +3,11 @@
  *
  *  Virtual Server: Context Virtualization
  *
- *  Copyright (C) 2004-2005  Herbert Pötzl
+ *  Copyright (C) 2004-2006  Herbert Pötzl
  *
  *  V0.01  broken out from limit.c
  *  V0.02  added utsname stuff
+ *  V0.03  changed vcmds to vxi arg
  *
  */
 
@@ -17,6 +18,7 @@
 #include <linux/vs_cvirt.h>
 #include <linux/vserver/switch.h>
 #include <linux/vserver/cvirt_cmd.h>
+//#include <linux/vserver/cacct_cmd.h>
 
 #include <asm/errno.h>
 #include <asm/uaccess.h>
@@ -212,49 +214,76 @@ static char * vx_vhi_name(struct vx_info *vxi, int id)
 	return NULL;
 }
 
-int vc_set_vhi_name(uint32_t id, void __user *data)
+int vc_set_vhi_name(struct vx_info *vxi, void __user *data)
 {
-	struct vx_info *vxi;
-	struct vcmd_vhi_name_v0 vc_data;
-	char *name;
-
-	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
-	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
-		return -EFAULT;
-
-	vxi = lookup_vx_info(id);
-	if (!vxi)
-		return -ESRCH;
-
-	name = vx_vhi_name(vxi, vc_data.field);
-	if (name)
-		memcpy(name, vc_data.name, 65);
-	put_vx_info(vxi);
-	return (name ? 0 : -EFAULT);
-}
-
-int vc_get_vhi_name(uint32_t id, void __user *data)
-{
-	struct vx_info *vxi;
 	struct vcmd_vhi_name_v0 vc_data;
 	char *name;
 
 	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
-
-	vxi = lookup_vx_info(id);
-	if (!vxi)
-		return -ESRCH;
 
 	name = vx_vhi_name(vxi, vc_data.field);
 	if (!name)
-		goto out_put;
+		return -EINVAL;
+
+	memcpy(name, vc_data.name, 65);
+	return 0;
+}
+
+int vc_get_vhi_name(struct vx_info *vxi, void __user *data)
+{
+	struct vcmd_vhi_name_v0 vc_data;
+	char *name;
+
+	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
+		return -EFAULT;
+
+	name = vx_vhi_name(vxi, vc_data.field);
+	if (!name)
+		return -EINVAL;
 
 	memcpy(vc_data.name, name, 65);
 	if (copy_to_user (data, &vc_data, sizeof(vc_data)))
 		return -EFAULT;
-out_put:
-	put_vx_info(vxi);
-	return (name ? 0 : -EFAULT);
+	return 0;
 }
+
+#ifdef CONFIG_VSERVER_VTIME
+
+/* virtualized time base */
+
+void vx_gettimeofday(struct timeval *tv)
+{
+	do_gettimeofday(tv);
+	if (!vx_flags(VXF_VIRT_TIME, 0))
+		return;
+
+	tv->tv_sec += current->vx_info->cvirt.bias_tv.tv_sec;
+	tv->tv_usec += current->vx_info->cvirt.bias_tv.tv_usec;
+
+	if (tv->tv_usec >= USEC_PER_SEC) {
+		tv->tv_sec++;
+		tv->tv_usec -= USEC_PER_SEC;
+	} else if (tv->tv_usec < 0) {
+		tv->tv_sec--;
+		tv->tv_usec += USEC_PER_SEC;
+	}
+}
+
+int vx_settimeofday(struct timespec *ts)
+{
+	struct timeval tv;
+
+	if (!vx_flags(VXF_VIRT_TIME, 0))
+		return do_settimeofday(ts);
+
+	do_gettimeofday(&tv);
+	current->vx_info->cvirt.bias_tv.tv_sec =
+		ts->tv_sec - tv.tv_sec;
+	current->vx_info->cvirt.bias_tv.tv_usec =
+		(ts->tv_nsec/NSEC_PER_USEC) - tv.tv_usec;
+	return 0;
+}
+
+#endif
+

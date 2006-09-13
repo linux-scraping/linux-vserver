@@ -42,7 +42,7 @@
 #include <linux/rcupdate.h>
 #include <linux/completion.h>
 #include <linux/vs_memory.h>
-#include <linux/vs_cvirt.h>
+#include <linux/vs_pid.h>
 
 #include <asm/errno.h>
 #include <asm/intrinsics.h>

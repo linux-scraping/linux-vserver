@@ -18,6 +18,7 @@
 #include <linux/unistd.h>
 #include <linux/mm.h>
 #include <linux/ptrace.h>
+#include <linux/vs_pid.h>
 #include <asm/ptrace.h>
 #include <asm/compat.h>
 #include <asm/uaccess.h>

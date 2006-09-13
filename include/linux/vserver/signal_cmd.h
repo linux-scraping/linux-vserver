@@ -19,8 +19,8 @@ struct	vcmd_wait_exit_v0 {
 
 #ifdef	__KERNEL__
 
-extern int vc_ctx_kill(uint32_t, void __user *);
-extern int vc_wait_exit(uint32_t, void __user *);
+extern int vc_ctx_kill(struct vx_info *, void __user *);
+extern int vc_wait_exit(struct vx_info *, void __user *);
 
 #endif	/* __KERNEL__ */
 #endif	/* _VX_SIGNAL_CMD_H */

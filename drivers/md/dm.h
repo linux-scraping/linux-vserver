@@ -92,6 +92,8 @@ int dm_suspended(struct mapped_device *md);
 int dm_get_geometry(struct mapped_device *md, struct hd_geometry *geo);
 int dm_set_geometry(struct mapped_device *md, struct hd_geometry *geo);
 
+xid_t dm_get_xid(struct mapped_device *md);
+
 /*-----------------------------------------------------------------
  * Functions for manipulating a table.  Tables are also reference
  * counted.

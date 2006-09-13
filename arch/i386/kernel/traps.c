@@ -54,6 +54,7 @@
 
 #include <linux/module.h>
 #include <linux/vserver/debug.h>
+#include <linux/vserver/history.h>
 
 #include "mach_traps.h"
 

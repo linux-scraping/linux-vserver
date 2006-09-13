@@ -192,6 +192,7 @@ void foo(void)
     /* for assembly files which can't include sched.h: */
 	DEFINE(IA64_CLONE_VFORK, CLONE_VFORK);
 	DEFINE(IA64_CLONE_VM, CLONE_VM);
+	DEFINE(IA64_CLONE_KTHREAD, CLONE_KTHREAD);
 
 	BLANK();
 	DEFINE(IA64_CPUINFO_NSEC_PER_CYC_OFFSET,

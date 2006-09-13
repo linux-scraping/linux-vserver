@@ -103,7 +103,7 @@
 #include <linux/vt_kern.h>
 #include <linux/selection.h>
 #include <linux/devfs_fs_kernel.h>
-#include <linux/vs_cvirt.h>
+#include <linux/vs_pid.h>
 
 #include <linux/kmod.h>
 

@@ -1360,7 +1360,7 @@ static void *listening_get_next(struct seq_file *seq, void *cur)
 					"sk,req: %p [#%d] (from %d)", req->sk,
 					(req->sk)?req->sk->sk_xid:0, vx_current_xid());
 				if (req->sk &&
-					!vx_check(req->sk->sk_xid, VX_IDENT|VX_WATCH))
+					!vx_check(req->sk->sk_xid, VX_WATCH_P|VX_IDENT))
 					continue;
 				if (req->rsk_ops->family == st->family) {
 					cur = req;
@@ -1388,7 +1388,7 @@ get_sk:
 	sk_for_each_from(sk, node) {
 		vxdprintk(VXD_CBIT(net, 6), "sk: %p [#%d] (from %d)",
 			sk, sk->sk_xid, vx_current_xid());
-		if (!vx_check(sk->sk_xid, VX_IDENT|VX_WATCH))
+		if (!vx_check(sk->sk_xid, VX_WATCH_P|VX_IDENT))
 			continue;
 		if (sk->sk_family == st->family) {
 			cur = sk;
@@ -1444,7 +1444,7 @@ static void *established_get_first(struct seq_file *seq)
 			vxdprintk(VXD_CBIT(net, 6),
 				"sk,egf: %p [#%d] (from %d)",
 				sk, sk->sk_xid, vx_current_xid());
-			if (!vx_check(sk->sk_xid, VX_IDENT|VX_WATCH))
+			if (!vx_check(sk->sk_xid, VX_WATCH_P|VX_IDENT))
 				continue;
 			if (sk->sk_family != st->family)
 				continue;
@@ -1457,7 +1457,7 @@ static void *established_get_first(struct seq_file *seq)
 			vxdprintk(VXD_CBIT(net, 6),
 				"tw: %p [#%d] (from %d)",
 				tw, tw->tw_xid, vx_current_xid());
-			if (!vx_check(tw->tw_xid, VX_IDENT|VX_WATCH))
+			if (!vx_check(tw->tw_xid, VX_WATCH_P|VX_IDENT))
 				continue;
 			if (tw->tw_family != st->family)
 				continue;
@@ -1485,7 +1485,7 @@ static void *established_get_next(struct seq_file *seq, void *cur)
 		tw = tw_next(tw);
 get_tw:
 		while (tw && (tw->tw_family != st->family ||
-			!vx_check(tw->tw_xid, VX_IDENT|VX_WATCH))) {
+			!vx_check(tw->tw_xid, VX_WATCH_P|VX_IDENT))) {
 			tw = tw_next(tw);
 		}
 		if (tw) {
@@ -1512,7 +1512,7 @@ get_tw:
 		vxdprintk(VXD_CBIT(net, 6),
 			"sk,egn: %p [#%d] (from %d)",
 			sk, sk->sk_xid, vx_current_xid());
-		if (!vx_check(sk->sk_xid, VX_IDENT|VX_WATCH))
+		if (!vx_check(sk->sk_xid, VX_WATCH_P|VX_IDENT))
 			continue;
 		if (sk->sk_family == st->family)
 			goto found;

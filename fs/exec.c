@@ -49,8 +49,8 @@
 #include <linux/rmap.h>
 #include <linux/acct.h>
 #include <linux/cn_proc.h>
-#include <linux/vs_memory.h>
 #include <linux/vs_cvirt.h>
+#include <linux/vs_memory.h>
 
 #include <asm/uaccess.h>
 #include <asm/mmu_context.h>
@@ -1328,7 +1328,7 @@ static void format_corename(char *corename, const char *pattern, long signr)
 			/* UNIX time of coredump */
 			case 't': {
 				struct timeval tv;
-				do_gettimeofday(&tv);
+				vx_gettimeofday(&tv);
 				rc = snprintf(out_ptr, out_end - out_ptr,
 					      "%lu", tv.tv_sec);
 				if (rc > out_end - out_ptr)

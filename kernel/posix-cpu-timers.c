@@ -6,7 +6,7 @@
 #include <linux/posix-timers.h>
 #include <asm/uaccess.h>
 #include <linux/errno.h>
-#include <linux/vs_cvirt.h>
+#include <linux/vs_pid.h>
 
 static int check_clock(const clockid_t which_clock)
 {

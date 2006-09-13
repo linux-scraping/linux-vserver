@@ -17,6 +17,7 @@
 #include <linux/kthread.h>
 #include <linux/rcupdate.h>
 #include <linux/smp.h>
+#include <linux/vs_context.h>
 
 #include <asm/irq.h>
 /*
@@ -74,6 +75,7 @@ static inline void wakeup_softirqd(void)
 
 asmlinkage void __do_softirq(void)
 {
+	struct vx_info_save vxis;
 	struct softirq_action *h;
 	__u32 pending;
 	int max_restart = MAX_SOFTIRQ_RESTART;
@@ -82,6 +84,7 @@ asmlinkage void __do_softirq(void)
 	pending = local_softirq_pending();
 
 	local_bh_disable();
+	__enter_vx_admin(&vxis);
 	cpu = smp_processor_id();
 restart:
 	/* Reset the pending bitmask before enabling irqs */
@@ -109,6 +112,7 @@ restart:
 	if (pending)
 		wakeup_softirqd();
 
+	__leave_vx_admin(&vxis);
 	__local_bh_enable();
 }
 

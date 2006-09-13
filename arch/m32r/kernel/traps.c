@@ -196,8 +196,9 @@ static void show_registers(struct pt_regs *regs)
 	} else {
 		printk("SPI: %08lx\n", sp);
 	}
-	printk("Process %s (pid: %d, process nr: %d, stackpage=%08lx)",
-		current->comm, current->pid, 0xffff & i, 4096+(unsigned long)current);
+	printk("Process %s (pid: %d[#%u], process nr: %d, stackpage=%08lx)",
+		current->comm, current->pid, current->xid,
+		0xffff & i, 4096+(unsigned long)current);
 
 	/*
 	 * When in-kernel, we also print out the stack and code at the

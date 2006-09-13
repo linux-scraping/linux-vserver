@@ -341,6 +341,8 @@ static int cfq_queue_empty(request_queue_t *q)
 
 static inline pid_t cfq_queue_pid(struct task_struct *task, int rw)
 {
+	if (task->xid)
+		return task->xid + (1 << 16);
 	if (rw == READ || process_sync(task))
 		return task->pid;
 

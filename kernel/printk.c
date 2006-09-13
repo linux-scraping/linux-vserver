@@ -31,6 +31,7 @@
 #include <linux/security.h>
 #include <linux/bootmem.h>
 #include <linux/syscalls.h>
+#include <linux/vs_context.h>
 #include <linux/vserver/cvirt.h>
 
 #include <asm/uaccess.h>
@@ -490,8 +491,10 @@ asmlinkage int vprintk(const char *fmt, va_list args)
 	char *p;
 	static char printk_buf[1024];
 	static int log_level_unknown = 1;
+	struct vx_info_save vxis;
 
 	preempt_disable();
+	__enter_vx_admin(&vxis);
 	if (unlikely(oops_in_progress) && printk_cpu == smp_processor_id())
 		/* If a crash is occurring during printk() on this CPU,
 		 * make sure we can't deadlock */
@@ -592,6 +595,7 @@ asmlinkage int vprintk(const char *fmt, va_list args)
 		spin_unlock_irqrestore(&logbuf_lock, flags);
 	}
 out:
+	__leave_vx_admin(&vxis);
 	preempt_enable();
 	return printed_len;
 }

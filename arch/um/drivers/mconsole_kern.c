@@ -23,7 +23,7 @@
 #include "linux/list.h"
 #include "linux/mm.h"
 #include "linux/console.h"
-#include "linux/vs_cvirt.h"
+#include "linux/vs_pid.h"
 #include "asm/irq.h"
 #include "asm/uaccess.h"
 #include "user_util.h"

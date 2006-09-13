@@ -74,6 +74,7 @@
 #include <linux/completion.h>
 #include <linux/highmem.h>
 #include <linux/gfp.h>
+#include <linux/vs_context.h>
 
 #include <asm/uaccess.h>
 
@@ -743,6 +744,7 @@ static int loop_set_fd(struct loop_device *lo, struct file *lo_file,
 	struct file	*file, *f;
 	struct inode	*inode;
 	struct address_space *mapping;
+	struct vx_info_save vxis;
 	unsigned lo_blocksize;
 	int		lo_flags = 0;
 	int		error;
@@ -817,6 +819,7 @@ static int loop_set_fd(struct loop_device *lo, struct file *lo_file,
 	lo->lo_blocksize = lo_blocksize;
 	lo->lo_device = bdev;
 	lo->lo_flags = lo_flags;
+	lo->lo_xid = vx_current_xid();
 	lo->lo_backing_file = file;
 	lo->transfer = NULL;
 	lo->ioctl = NULL;
@@ -839,7 +842,9 @@ static int loop_set_fd(struct loop_device *lo, struct file *lo_file,
 
 	set_blocksize(bdev, lo_blocksize);
 
+	__enter_vx_admin(&vxis);
 	error = kernel_thread(loop_thread, lo, CLONE_KERNEL);
+	__leave_vx_admin(&vxis);
 	if (error < 0)
 		goto out_putf;
 	wait_for_completion(&lo->lo_done);
@@ -924,6 +929,7 @@ static int loop_clr_fd(struct loop_device *lo, struct block_device *bdev)
 	lo->lo_sizelimit = 0;
 	lo->lo_encrypt_key_size = 0;
 	lo->lo_flags = 0;
+	lo->lo_xid = 0;
 	memset(lo->lo_encrypt_key, 0, LO_KEY_SIZE);
 	memset(lo->lo_crypt_name, 0, LO_NAME_SIZE);
 	memset(lo->lo_file_name, 0, LO_NAME_SIZE);
@@ -945,7 +951,7 @@ loop_set_status(struct loop_device *lo, const struct loop_info64 *info)
 	struct loop_func_table *xfer;
 
 	if (lo->lo_encrypt_key_size && lo->lo_key_owner != current->uid &&
-	    !capable(CAP_SYS_ADMIN))
+	    !vx_capable(CAP_SYS_ADMIN, VXC_ADMIN_CLOOP))
 		return -EPERM;
 	if (lo->lo_state != Lo_bound)
 		return -ENXIO;
@@ -1025,7 +1031,8 @@ loop_get_status(struct loop_device *lo, struct loop_info64 *info)
 	memcpy(info->lo_crypt_name, lo->lo_crypt_name, LO_NAME_SIZE);
 	info->lo_encrypt_type =
 		lo->lo_encryption ? lo->lo_encryption->number : 0;
-	if (lo->lo_encrypt_key_size && capable(CAP_SYS_ADMIN)) {
+	if (lo->lo_encrypt_key_size &&
+		vx_capable(CAP_SYS_ADMIN, VXC_ADMIN_CLOOP)) {
 		info->lo_encrypt_key_size = lo->lo_encrypt_key_size;
 		memcpy(info->lo_encrypt_key, lo->lo_encrypt_key,
 		       lo->lo_encrypt_key_size);
@@ -1179,6 +1186,9 @@ static int lo_ioctl(struct inode * inode, struct file * file,
 static int lo_open(struct inode *inode, struct file *file)
 {
 	struct loop_device *lo = inode->i_bdev->bd_disk->private_data;
+
+	if (!vx_check(lo->lo_xid, VX_WATCH_P|VX_IDENT))
+		return -EACCES;
 
 	mutex_lock(&lo->lo_ctl_mutex);
 	lo->lo_refcnt++;

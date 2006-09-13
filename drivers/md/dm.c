@@ -70,6 +70,7 @@ struct mapped_device {
 	struct semaphore suspend_lock;
 	rwlock_t map_lock;
 	atomic_t holders;
+	xid_t xid;
 
 	unsigned long flags;
 
@@ -222,23 +223,11 @@ static int dm_blk_open(struct inode *inode, struct file *file)
 {
 	struct mapped_device *md;
 
-	spin_lock(&_minor_lock);
-
 	md = inode->i_bdev->bd_disk->private_data;
-	if (!md)
-		goto out;
-
-	if (test_bit(DMF_FREEING, &md->flags)) {
-		md = NULL;
-		goto out;
-	}
-
+	if (!vx_check(md->xid, VX_IDENT))
+		return -EACCES;
 	dm_get(md);
-
-out:
-	spin_unlock(&_minor_lock);
-
-	return md ? 0 : -ENXIO;
+	return 0;
 }
 
 static int dm_blk_close(struct inode *inode, struct file *file)
@@ -368,6 +357,14 @@ int dm_set_geometry(struct mapped_device *md, struct hd_geometry *geo)
 	md->geometry = *geo;
 
 	return 0;
+}
+
+/*
+ * Get the xid associated with a dm device
+ */
+xid_t dm_get_xid(struct mapped_device *md)
+{
+	return md->xid;
 }
 
 /*-----------------------------------------------------------------
@@ -866,6 +863,7 @@ static struct mapped_device *alloc_dev(unsigned int minor, int persistent)
 	rwlock_init(&md->map_lock);
 	atomic_set(&md->holders, 1);
 	atomic_set(&md->event_nr, 0);
+	md->xid = vx_current_xid();
 
 	md->queue = blk_alloc_queue(GFP_KERNEL);
 	if (!md->queue)

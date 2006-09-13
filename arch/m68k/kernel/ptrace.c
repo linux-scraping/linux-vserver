@@ -280,7 +280,7 @@ long arch_ptrace(struct task_struct *child, long request, long addr, long data)
 		ret = ptrace_request(child, request, addr, data);
 		break;
 	}
-	if (!vx_check(vx_task_xid(child), VX_WATCH|VX_IDENT))
+	if (!vx_check(vx_task_xid(child), VX_WATCH_P|VX_IDENT))
 		goto out_tsk;
 
 	return ret;

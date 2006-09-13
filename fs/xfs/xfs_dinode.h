@@ -53,7 +53,7 @@ typedef struct xfs_dinode_core
 	__uint32_t	di_gid;		/* owner's group id */
 	__uint32_t	di_nlink;	/* number of links to file */
 	__uint16_t	di_projid;	/* owner's project id */
-	__uint16_t	di_xid;		/* vserver context id */
+	__uint16_t	di_tag;		/* context tagging */
 	__uint8_t	di_pad[6];	/* unused, zeroed space */
 	__uint16_t	di_flushiter;	/* incremented on flush */
 	xfs_timestamp_t	di_atime;	/* time last accessed */

@@ -18,6 +18,7 @@
 #include <linux/buffer_head.h>
 #include <linux/capability.h>
 #include <linux/vs_dlimit.h>
+#include <linux/vs_tag.h>
 
 /*
  * balloc.c contains the blocks allocation and deallocation routines
@@ -110,7 +111,7 @@ static int reserve_blocks(struct super_block *sb, int count)
 	free_blocks = percpu_counter_read_positive(&sbi->s_freeblocks_counter);
 	root_blocks = le32_to_cpu(es->s_r_blocks_count);
 
-	DLIMIT_ADJUST_BLOCK(sb, vx_current_xid(), &free_blocks, &root_blocks);
+	DLIMIT_ADJUST_BLOCK(sb, dx_current_tag(), &free_blocks, &root_blocks);
 
 	if (free_blocks < count)
 		count = free_blocks;

@@ -34,7 +34,9 @@
 #include <linux/cpu.h>
 #include <linux/syscalls.h>
 #include <linux/delay.h>
+#include <linux/vs_context.h>
 #include <linux/vs_cvirt.h>
+#include <linux/vs_pid.h>
 #include <linux/vserver/sched.h>
 
 #include <asm/uaccess.h>
@@ -438,6 +440,7 @@ static inline void __run_timers(tvec_base_t *base)
 		while (!list_empty(head)) {
 			void (*fn)(unsigned long);
 			unsigned long data;
+			// struct vx_info_save vxis;
 
 			timer = list_entry(head->next,struct timer_list,entry);
  			fn = timer->function;
@@ -445,6 +448,9 @@ static inline void __run_timers(tvec_base_t *base)
 
 			set_running_timer(base, timer);
 			detach_timer(timer, 1);
+			vxfprintk(current->xid, "non admin context %p[#%d]\n",
+				current->vx_info, current->xid, __FUNC__, __FILE__, __LINE__);
+			// __enter_vx_admin(&vxis);
 			spin_unlock_irq(&base->lock);
 			{
 				int preempt_count = preempt_count();
@@ -459,6 +465,7 @@ static inline void __run_timers(tvec_base_t *base)
 				}
 			}
 			spin_lock_irq(&base->lock);
+			// __leave_vx_admin(&vxis);
 		}
 	}
 	set_running_timer(base, NULL);
@@ -979,7 +986,6 @@ asmlinkage long sys_getpid(void)
 asmlinkage long sys_getppid(void)
 {
 	int pid;
-
 	rcu_read_lock();
 	pid = rcu_dereference(current->real_parent)->tgid;
 	rcu_read_unlock();
