@@ -222,12 +222,25 @@ static void __exit dm_exit(void)
 static int dm_blk_open(struct inode *inode, struct file *file)
 {
 	struct mapped_device *md;
+	int ret = -ENXIO;
 
+	spin_lock(&_minor_lock);
 	md = inode->i_bdev->bd_disk->private_data;
+	if (!md)
+		goto out;
+
+	if (test_bit(DMF_FREEING, &md->flags))
+		goto out;
+
+	ret = -EACCES;
 	if (!vx_check(md->xid, VX_IDENT))
-		return -EACCES;
+		goto out;
+
 	dm_get(md);
-	return 0;
+	ret = 0;
+out:
+	spin_unlock(&_minor_lock);
+	return ret;
 }
 
 static int dm_blk_close(struct inode *inode, struct file *file)

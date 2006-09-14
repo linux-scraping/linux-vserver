@@ -103,8 +103,10 @@ static struct hash_cell *__get_name_cell(const char *str)
 
 	list_for_each_entry (hc, _name_buckets + h, name_list)
 		if (vx_check(dm_get_xid(hc->md), VX_WATCH_P|VX_IDENT) &&
-			!strcmp(hc->name, str))
+			!strcmp(hc->name, str)) {
+			dm_get(hc->md);
 			return hc;
+		}
 
 	return NULL;
 }
@@ -116,8 +118,10 @@ static struct hash_cell *__get_uuid_cell(const char *str)
 
 	list_for_each_entry (hc, _uuid_buckets + h, uuid_list)
 		if (vx_check(dm_get_xid(hc->md), VX_WATCH_P|VX_IDENT) &&
-			!strcmp(hc->uuid, str))
+			!strcmp(hc->uuid, str)) {
+			dm_get(hc->md);
 			return hc;
+		}
 
 	return NULL;
 }
