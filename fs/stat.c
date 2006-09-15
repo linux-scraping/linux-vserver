@@ -15,8 +15,6 @@
 #include <linux/namei.h>
 #include <linux/security.h>
 #include <linux/syscalls.h>
-#include <linux/major.h>
-#include <linux/vroot.h>
 
 #include <asm/uaccess.h>
 #include <asm/unistd.h>
@@ -37,21 +35,6 @@ void generic_fillattr(struct inode *inode, struct kstat *stat)
 	stat->size = i_size_read(inode);
 	stat->blocks = inode->i_blocks;
 	stat->blksize = inode->i_blksize;
-
-	if ((MAJOR(inode->i_rdev) == VROOT_MAJOR) && !vx_check(0, VX_ADMIN)) {
-		struct block_device *bdev = bdget(inode->i_rdev);
-
-		if (bdev) {
-			struct block_device *bdnew = vroot_get_real_bdev(bdev);
-
-			if (bdnew && !IS_ERR(bdnew)) {
-				printk("··· vroot mapping: %p -> %p\n", bdev, bdnew);
-				stat->rdev = bdnew->bd_inode->i_rdev;
-				bdput(bdnew);
-			}
-			bdput(bdev);
-		}
-	}
 }
 
 EXPORT_SYMBOL(generic_fillattr);
