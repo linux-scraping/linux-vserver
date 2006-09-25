@@ -247,7 +247,7 @@ static int do_set_sched(struct vx_info *vxi, struct vcmd_set_sched_v4 *data)
 	if (set_mask & VXSM_FORCE) {
 		int cpu;
 
-		for_each_cpu(cpu)
+		for_each_possible_cpu(cpu)
 			vx_update_sched_param(&vxi->sched,
 				&vx_per_cpu(vxi, sched_pc, cpu));
 	}

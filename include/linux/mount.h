@@ -17,6 +17,11 @@
 #include <linux/spinlock.h>
 #include <asm/atomic.h>
 
+struct super_block;
+struct vfsmount;
+struct dentry;
+struct namespace;
+
 #define MNT_NOSUID	0x01
 #define MNT_NODEV	0x02
 #define MNT_NOEXEC	0x04
@@ -25,6 +30,8 @@
 #define MNT_RDONLY	0x20
 
 #define MNT_IS_RDONLY(m)	((m) && ((m)->mnt_flags & MNT_RDONLY))
+
+#define MNT_SHRINKABLE	0x100
 
 #define MNT_SHARED	0x1000	/* if the vfsmount is a shared mount */
 #define MNT_UNBINDABLE	0x2000	/* if the vfsmount is a unbindable mount */
@@ -78,12 +85,18 @@ extern struct vfsmount *alloc_vfsmnt(const char *name);
 extern struct vfsmount *do_kern_mount(const char *fstype, int flags,
 				      const char *name, void *data);
 
+struct file_system_type;
+extern struct vfsmount *vfs_kern_mount(struct file_system_type *type,
+				      int flags, const char *name,
+				      void *data);
+
 struct nameidata;
 
 extern int do_add_mount(struct vfsmount *newmnt, struct nameidata *nd,
 			int mnt_flags, struct list_head *fslist);
 
 extern void mark_mounts_for_expiry(struct list_head *mounts);
+extern void shrink_submounts(struct vfsmount *mountpoint, struct list_head *mounts);
 
 extern spinlock_t vfsmount_lock;
 extern dev_t name_to_dev_t(char *name);

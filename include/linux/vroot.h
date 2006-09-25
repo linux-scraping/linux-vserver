@@ -34,8 +34,6 @@ struct vroot_device {
 
 typedef struct block_device *(vroot_grb_func)(struct block_device *);
 
-extern vroot_grb_func *vroot_get_real_bdev;
-
 extern int register_vroot_grb(vroot_grb_func *);
 extern int unregister_vroot_grb(vroot_grb_func *);
 
