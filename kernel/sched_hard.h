@@ -5,7 +5,7 @@
  * vx_idle_resched - reschedule after maxidle
  */
 static inline
-void vx_idle_resched(runqueue_t *rq)
+void vx_idle_resched(struct rq *rq)
 {
 	/* maybe have a better criterion for paused */
 	if (!--rq->idle_tokens && !list_empty(&rq->hold_queue))
@@ -38,7 +38,7 @@ void __vx_save_min_skip(int ret, int *min, int val)
 }
 
 static inline
-int vx_try_skip(runqueue_t *rq, int cpu)
+int vx_try_skip(struct rq *rq, int cpu)
 {
 	/* artificially advance time */
 	if (rq->idle_skip > 0) {
@@ -59,7 +59,7 @@ int vx_try_skip(runqueue_t *rq, int cpu)
 #define vx_save_min_skip(ret, min, val)
 
 static inline
-int vx_try_skip(runqueue_t *rq, int cpu)
+int vx_try_skip(struct rq *rq, int cpu)
 {
 	return 0;
 }
@@ -88,7 +88,7 @@ void __vx_save_max_idle(int ret, int *min, int val)
  * vx_hold_task - put a task on the hold queue
  */
 static inline
-void vx_hold_task(struct task_struct *p, runqueue_t *rq)
+void vx_hold_task(struct task_struct *p, struct rq *rq)
 {
 	__deactivate_task(p, rq);
 	p->state |= TASK_ONHOLD;
@@ -102,14 +102,14 @@ void vx_hold_task(struct task_struct *p, runqueue_t *rq)
  * vx_unhold_task - put a task back to the runqueue
  */
 static inline
-void vx_unhold_task(struct task_struct *p, runqueue_t *rq)
+void vx_unhold_task(struct task_struct *p, struct rq *rq)
 {
 	list_del(&p->run_list);
 	/* one less waiting */
 	rq->nr_onhold--;
 	p->state &= ~TASK_ONHOLD;
 	enqueue_task(p, rq->expired);
-	rq->nr_running++;
+	inc_nr_running(p, rq);
 	vxm_unhold_task(p, rq);
 
 	if (p->static_prio < rq->best_expired_prio)
@@ -171,7 +171,7 @@ int vx_need_resched(struct task_struct *p, int slice, int cpu)
 
 
 static inline
-void vx_try_unhold(runqueue_t *rq, int cpu)
+void vx_try_unhold(struct rq *rq, int cpu)
 {
 	struct vx_info *vxi = NULL;
 	struct list_head *l, *n;
@@ -187,7 +187,7 @@ void vx_try_unhold(runqueue_t *rq, int cpu)
 		struct _vx_sched_pc *sched_pc;
 		struct task_struct *p;
 
-		p = list_entry(l, task_t, run_list);
+		p = list_entry(l, struct task_struct, run_list);
 		/* don't bother with same context */
 		if (vxi == p->vx_info)
 			continue;
@@ -220,7 +220,7 @@ void vx_try_unhold(runqueue_t *rq, int cpu)
 
 
 static inline
-int vx_schedule(struct task_struct *next, runqueue_t *rq, int cpu)
+int vx_schedule(struct task_struct *next, struct rq *rq, int cpu)
 {
 	struct vx_info *vxi = next->vx_info;
 	struct _vx_sched_pc *sched_pc;
@@ -269,13 +269,13 @@ int vx_schedule(struct task_struct *next, runqueue_t *rq, int cpu)
 #else /* CONFIG_VSERVER_HARDCPU */
 
 static inline
-void vx_hold_task(struct task_struct *p, runqueue_t *rq)
+void vx_hold_task(struct task_struct *p, struct rq *rq)
 {
 	return;
 }
 
 static inline
-void vx_unhold_task(struct task_struct *p, runqueue_t *rq)
+void vx_unhold_task(struct task_struct *p, struct rq *rq)
 {
 	return;
 }
@@ -296,13 +296,13 @@ int vx_need_resched(struct task_struct *p, int slice, int cpu)
 #define vx_set_rq_time(rq, time)
 
 static inline
-void vx_try_unhold(runqueue_t *rq, int cpu)
+void vx_try_unhold(struct rq *rq, int cpu)
 {
 	return;
 }
 
 static inline
-int vx_schedule(struct task_struct *next, runqueue_t *rq, int cpu)
+int vx_schedule(struct task_struct *next, struct rq *rq, int cpu)
 {
 	struct vx_info *vxi = next->vx_info;
 	struct _vx_sched_pc *sched_pc;

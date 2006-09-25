@@ -99,7 +99,7 @@ static struct vx_info *__alloc_vx_info(xid_t xid)
 	vx_info_init_cacct(&new->cacct);
 
 	/* per cpu data structures */
-	for_each_cpu(cpu) {
+	for_each_possible_cpu(cpu) {
 		vx_info_init_sched_pc(
 			&vx_per_cpu(new, sched_pc, cpu), cpu);
 		vx_info_init_cvirt_pc(
@@ -145,7 +145,7 @@ static void __dealloc_vx_info(struct vx_info *vxi)
 	vx_info_exit_cvirt(&vxi->cvirt);
 	vx_info_exit_cacct(&vxi->cacct);
 
-	for_each_cpu(cpu) {
+	for_each_possible_cpu(cpu) {
 		vx_info_exit_sched_pc(
 			&vx_per_cpu(vxi, sched_pc, cpu), cpu);
 		vx_info_exit_cvirt_pc(

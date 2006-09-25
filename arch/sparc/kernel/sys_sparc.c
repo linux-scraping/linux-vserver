@@ -469,21 +469,23 @@ sys_rt_sigaction(int sig,
 
 asmlinkage int sys_getdomainname(char __user *name, int len)
 {
- 	int nlen;
- 	int err = -EFAULT;
+ 	int nlen, err;
  	
+	if (len < 0)
+		return -EINVAL;
+
  	down_read(&uts_sem);
  	
 	nlen = strlen(vx_new_uts(domainname)) + 1;
+	err = -EINVAL;
+	if (nlen > len)
+		goto out;
 
-	if (nlen < len)
-		len = nlen;
-	if (len > __NEW_UTS_LEN)
-		goto done;
-	if (copy_to_user(name, vx_new_uts(domainname), len))
-		goto done;
-	err = 0;
-done:
+	err = -EFAULT;
+	if (!copy_to_user(name, vx_new_uts(domainname), nlen))
+		err = 0;
+
+out:
 	up_read(&uts_sem);
 	return err;
 }

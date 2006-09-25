@@ -185,7 +185,6 @@ struct ocfs2_journal;
 struct ocfs2_journal_handle;
 struct ocfs2_super
 {
-	u32 osb_id;		/* id used by the proc interface */
 	struct task_struct *commit_task;
 	struct super_block *sb;
 	struct inode *root_inode;
@@ -199,7 +198,6 @@ struct ocfs2_super
 	struct ocfs2_node_map recovery_map;
 	struct ocfs2_node_map umount_map;
 
-	u32 num_clusters;
 	u64 root_blkno;
 	u64 system_dir_blkno;
 	u64 bitmap_blkno;
@@ -223,13 +221,11 @@ struct ocfs2_super
 	unsigned long s_mount_opt;
 
 	u16 max_slots;
-	u16 num_nodes;
 	s16 node_num;
 	s16 slot_num;
 	int s_sectsize_bits;
 	int s_clustersize;
 	int s_clustersize_bits;
-	struct proc_dir_entry *proc_sub_dir; /* points to /proc/fs/ocfs2/<maj_min> */
 
 	atomic_t vol_state;
 	struct mutex recovery_lock;
@@ -241,6 +237,7 @@ struct ocfs2_super
 
 	enum ocfs2_local_alloc_state local_alloc_state;
 	struct buffer_head *local_alloc_bh;
+	u64 la_last_gd;
 
 	/* Next two fields are for local node slot recovery during
 	 * mount. */
@@ -295,7 +292,6 @@ struct ocfs2_super
 };
 
 #define OCFS2_SB(sb)	    ((struct ocfs2_super *)(sb)->s_fs_info)
-#define OCFS2_MAX_OSB_ID             65536
 
 static inline int ocfs2_should_order_data(struct inode *inode)
 {

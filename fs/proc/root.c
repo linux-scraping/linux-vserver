@@ -12,7 +12,6 @@
 #include <linux/time.h>
 #include <linux/proc_fs.h>
 #include <linux/stat.h>
-#include <linux/config.h>
 #include <linux/init.h>
 #include <linux/module.h>
 #include <linux/bitops.h>
@@ -29,10 +28,10 @@ struct proc_dir_entry *proc_virtual;
 
 extern void proc_vx_init(void);
 
-static struct super_block *proc_get_sb(struct file_system_type *fs_type,
-	int flags, const char *dev_name, void *data)
+static int proc_get_sb(struct file_system_type *fs_type,
+	int flags, const char *dev_name, void *data, struct vfsmount *mnt)
 {
-	return get_sb_single(fs_type, flags, data, proc_fill_super);
+	return get_sb_single(fs_type, flags, data, proc_fill_super, mnt);
 }
 
 static struct file_system_type proc_fs_type = {
