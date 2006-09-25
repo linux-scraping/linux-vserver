@@ -45,7 +45,7 @@ void	__vxm_sched(struct _vx_sched_pc *s, struct vx_info *vxi, int cpu)
 }
 
 static inline
-void	__vxm_rqinfo1(runqueue_t *q, int cpu)
+void	__vxm_rqinfo1(struct rq *q, int cpu)
 {
 	struct _vx_mon_entry *entry = vxm_advance(cpu);
 
@@ -59,7 +59,7 @@ void	__vxm_rqinfo1(runqueue_t *q, int cpu)
 }
 
 static inline
-void	__vxm_rqinfo2(runqueue_t *q, int cpu)
+void	__vxm_rqinfo2(struct rq *q, int cpu)
 {
 	struct _vx_mon_entry *entry = vxm_advance(cpu);
 
@@ -109,7 +109,7 @@ void	__vxm_update2(struct _vx_sched_pc *s, struct vx_info *vxi, int cpu)
 #define	vxm_unhold_task(p,q)		__vxm_task(p, VXM_UNHOLD)
 
 static inline
-void	vxm_migrate_task(struct task_struct *p, runqueue_t *rq, int dest)
+void	vxm_migrate_task(struct task_struct *p, struct rq *rq, int dest)
 {
 	__vxm_task(p, VXM_MIGRATE);
 	__vxm_rqinfo1(rq, task_cpu(p));
@@ -117,7 +117,7 @@ void	vxm_migrate_task(struct task_struct *p, runqueue_t *rq, int dest)
 }
 
 static inline
-void	vxm_idle_skip(runqueue_t *rq, int cpu)
+void	vxm_idle_skip(struct rq *rq, int cpu)
 {
 	__vxm_rqinfo1(rq, cpu);
 	__vxm_rqinfo2(rq, cpu);
@@ -145,7 +145,7 @@ void	vxm_sync(unsigned long now, int cpu)
 #define	vxm_sched_info(s,v,c)		__vxm_sched(s,v,c)
 
 static inline
-void	vxm_tokens_recalc(struct _vx_sched_pc *s, runqueue_t *rq,
+void	vxm_tokens_recalc(struct _vx_sched_pc *s, struct rq *rq,
 	struct vx_info *vxi, int cpu)
 {
 	__vxm_sched(s, vxi, cpu);
@@ -162,7 +162,7 @@ void	vxm_update_sched(struct _vx_sched_pc *s, struct vx_info *vxi, int cpu)
 }
 
 static inline
-void	vxm_rq_max_min(runqueue_t *rq, int cpu)
+void	vxm_rq_max_min(struct rq *rq, int cpu)
 {
 	__vxm_rqinfo1(rq, cpu);
 	__vxm_rqinfo2(rq, cpu);

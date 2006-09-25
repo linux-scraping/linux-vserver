@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2001, 2002 Sistina Software (UK) Limited.
- * Copyright (C) 2004 Red Hat, Inc. All rights reserved.
+ * Copyright (C) 2004-2006 Red Hat, Inc. All rights reserved.
  *
  * This file is released under the GPL.
  */
@@ -20,6 +20,8 @@
 #include <linux/idr.h>
 #include <linux/hdreg.h>
 #include <linux/blktrace_api.h>
+
+#define DM_MSG_PREFIX "core"
 
 static const char *_name = DM_NAME;
 
@@ -50,9 +52,9 @@ struct target_io {
 
 union map_info *dm_get_mapinfo(struct bio *bio)
 {
-        if (bio && bio->bi_private)
-                return &((struct target_io *)bio->bi_private)->info;
-        return NULL;
+	if (bio && bio->bi_private)
+		return &((struct target_io *)bio->bi_private)->info;
+	return NULL;
 }
 
 #define MINOR_ALLOCED ((void *)-1)
@@ -64,12 +66,14 @@ union map_info *dm_get_mapinfo(struct bio *bio)
 #define DMF_SUSPENDED 1
 #define DMF_FROZEN 2
 #define DMF_FREEING 3
+#define DMF_DELETING 4
 
 struct mapped_device {
 	struct rw_semaphore io_lock;
 	struct semaphore suspend_lock;
 	rwlock_t map_lock;
 	atomic_t holders;
+	atomic_t open_count;
 	xid_t xid;
 
 	unsigned long flags;
@@ -164,7 +168,7 @@ static void local_exit(void)
 	bioset_free(dm_set);
 
 	if (unregister_blkdev(_major, _name) < 0)
-		DMERR("devfs_unregister_blkdev failed");
+		DMERR("unregister_blkdev failed");
 
 	_major = 0;
 
@@ -225,11 +229,13 @@ static int dm_blk_open(struct inode *inode, struct file *file)
 	int ret = -ENXIO;
 
 	spin_lock(&_minor_lock);
+
 	md = inode->i_bdev->bd_disk->private_data;
 	if (!md)
 		goto out;
 
-	if (test_bit(DMF_FREEING, &md->flags))
+	if (test_bit(DMF_FREEING, &md->flags) ||
+	    test_bit(DMF_DELETING, &md->flags))
 		goto out;
 
 	ret = -EACCES;
@@ -237,6 +243,7 @@ static int dm_blk_open(struct inode *inode, struct file *file)
 		goto out;
 
 	dm_get(md);
+	atomic_inc(&md->open_count);
 	ret = 0;
 out:
 	spin_unlock(&_minor_lock);
@@ -248,8 +255,33 @@ static int dm_blk_close(struct inode *inode, struct file *file)
 	struct mapped_device *md;
 
 	md = inode->i_bdev->bd_disk->private_data;
+	atomic_dec(&md->open_count);
 	dm_put(md);
 	return 0;
+}
+
+int dm_open_count(struct mapped_device *md)
+{
+	return atomic_read(&md->open_count);
+}
+
+/*
+ * Guarantees nothing is using the device before it's deleted.
+ */
+int dm_lock_for_deletion(struct mapped_device *md)
+{
+	int r = 0;
+
+	spin_lock(&_minor_lock);
+
+	if (dm_open_count(md))
+		r = -EBUSY;
+	else
+		set_bit(DMF_DELETING, &md->flags);
+
+	spin_unlock(&_minor_lock);
+
+	return r;
 }
 
 static int dm_blk_getgeo(struct block_device *bdev, struct hd_geometry *geo)
@@ -484,8 +516,8 @@ static void __map_bio(struct dm_target *ti, struct bio *clone,
 	if (r > 0) {
 		/* the bio has been remapped so dispatch it */
 
-		blk_add_trace_remap(bdev_get_queue(clone->bi_bdev), clone, 
-				    tio->io->bio->bi_bdev->bd_dev, sector, 
+		blk_add_trace_remap(bdev_get_queue(clone->bi_bdev), clone,
+				    tio->io->bio->bi_bdev->bd_dev, sector,
 				    clone->bi_sector);
 
 		generic_make_request(clone);
@@ -774,7 +806,7 @@ static int dm_any_congested(void *congested_data, int bdi_bits)
  *---------------------------------------------------------------*/
 static DEFINE_IDR(_minor_idr);
 
-static void free_minor(unsigned int minor)
+static void free_minor(int minor)
 {
 	spin_lock(&_minor_lock);
 	idr_remove(&_minor_idr, minor);
@@ -784,7 +816,7 @@ static void free_minor(unsigned int minor)
 /*
  * See if the device with a specific minor # is free.
  */
-static int specific_minor(struct mapped_device *md, unsigned int minor)
+static int specific_minor(struct mapped_device *md, int minor)
 {
 	int r, m;
 
@@ -817,10 +849,9 @@ out:
 	return r;
 }
 
-static int next_free_minor(struct mapped_device *md, unsigned int *minor)
+static int next_free_minor(struct mapped_device *md, int *minor)
 {
-	int r;
-	unsigned int m;
+	int r, m;
 
 	r = idr_pre_get(&_minor_idr, GFP_KERNEL);
 	if (!r)
@@ -851,7 +882,7 @@ static struct block_device_operations dm_blk_dops;
 /*
  * Allocate and initialise a blank device with a given minor.
  */
-static struct mapped_device *alloc_dev(unsigned int minor, int persistent)
+static struct mapped_device *alloc_dev(int minor)
 {
 	int r;
 	struct mapped_device *md = kmalloc(sizeof(*md), GFP_KERNEL);
@@ -866,7 +897,10 @@ static struct mapped_device *alloc_dev(unsigned int minor, int persistent)
 		goto bad0;
 
 	/* get a minor number for the dev */
-	r = persistent ? specific_minor(md, minor) : next_free_minor(md, &minor);
+	if (minor == DM_ANY_MINOR)
+		r = next_free_minor(md, &minor);
+	else
+		r = specific_minor(md, minor);
 	if (r < 0)
 		goto bad1;
 
@@ -875,6 +909,7 @@ static struct mapped_device *alloc_dev(unsigned int minor, int persistent)
 	init_MUTEX(&md->suspend_lock);
 	rwlock_init(&md->map_lock);
 	atomic_set(&md->holders, 1);
+	atomic_set(&md->open_count, 0);
 	atomic_set(&md->event_nr, 0);
 	md->xid = vx_current_xid();
 
@@ -940,7 +975,7 @@ static struct mapped_device *alloc_dev(unsigned int minor, int persistent)
 
 static void free_dev(struct mapped_device *md)
 {
-	unsigned int minor = md->disk->first_minor;
+	int minor = md->disk->first_minor;
 
 	if (md->suspended_bdev) {
 		thaw_bdev(md->suspended_bdev, NULL);
@@ -1026,27 +1061,16 @@ static void __unbind(struct mapped_device *md)
 /*
  * Constructor for a new device.
  */
-static int create_aux(unsigned int minor, int persistent,
-		      struct mapped_device **result)
+int dm_create(int minor, struct mapped_device **result)
 {
 	struct mapped_device *md;
 
-	md = alloc_dev(minor, persistent);
+	md = alloc_dev(minor);
 	if (!md)
 		return -ENXIO;
 
 	*result = md;
 	return 0;
-}
-
-int dm_create(struct mapped_device **result)
-{
-	return create_aux(0, 0, result);
-}
-
-int dm_create_with_minor(unsigned int minor, struct mapped_device **result)
-{
-	return create_aux(minor, 1, result);
 }
 
 static struct mapped_device *dm_find_md(dev_t dev)
@@ -1062,7 +1086,7 @@ static struct mapped_device *dm_find_md(dev_t dev)
 	md = idr_find(&_minor_idr, minor);
 	if (md && (md == MINOR_ALLOCED ||
 		   (dm_disk(md)->first_minor != minor) ||
-	           test_bit(DMF_FREEING, &md->flags))) {
+		   test_bit(DMF_FREEING, &md->flags))) {
 		md = NULL;
 		goto out;
 	}
@@ -1097,6 +1121,12 @@ void dm_get(struct mapped_device *md)
 {
 	atomic_inc(&md->holders);
 }
+
+const char *dm_device_name(struct mapped_device *md)
+{
+	return md->name;
+}
+EXPORT_SYMBOL_GPL(dm_device_name);
 
 void dm_put(struct mapped_device *md)
 {

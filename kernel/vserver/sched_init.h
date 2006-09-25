@@ -33,7 +33,6 @@ void vx_info_init_sched_pc(struct _vx_sched_pc *sched_pc, int cpu)
 	sched_pc->hold_ticks = 0;
 }
 
-
 static inline void vx_info_exit_sched(struct _vx_sched *sched)
 {
 	return;
@@ -44,4 +43,3 @@ void vx_info_exit_sched_pc(struct _vx_sched_pc *sched_pc, int cpu)
 {
 	return;
 }
-

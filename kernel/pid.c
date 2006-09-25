@@ -218,7 +218,7 @@ struct pid * fastcall find_pid(int nr)
 	return NULL;
 }
 
-int fastcall attach_pid(task_t *task, enum pid_type type, int nr)
+int fastcall attach_pid(struct task_struct *task, enum pid_type type, int nr)
 {
 	struct pid_link *link;
 	struct pid *pid;
@@ -233,7 +233,7 @@ int fastcall attach_pid(task_t *task, enum pid_type type, int nr)
 	return 0;
 }
 
-void fastcall detach_pid(task_t *task, enum pid_type type)
+void fastcall detach_pid(struct task_struct *task, enum pid_type type)
 {
 	struct pid_link *link;
 	struct pid *pid;
@@ -260,6 +260,8 @@ struct task_struct * fastcall pid_task(struct pid *pid, enum pid_type type)
 		first = rcu_dereference(pid->tasks[type].first);
 		if (first)
 			result = hlist_entry(first, struct task_struct, pids[(type)].node);
+		if (result && !vx_check(vx_task_xid(result), VX_WATCH|VX_ADMIN|VX_IDENT))
+			result = NULL;
 	}
 	return result;
 }
@@ -267,7 +269,7 @@ struct task_struct * fastcall pid_task(struct pid *pid, enum pid_type type)
 /*
  * Must be called under rcu_read_lock() or with tasklist_lock read-held.
  */
-task_t *find_task_by_pid_type(int type, int nr)
+struct task_struct *find_task_by_pid_type(int type, int nr)
 {
 	return pid_task(find_pid(nr), type);
 }
