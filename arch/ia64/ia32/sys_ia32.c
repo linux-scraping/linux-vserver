@@ -50,7 +50,6 @@
 #include <linux/compat.h>
 #include <linux/vfs.h>
 #include <linux/mman.h>
-#include <linux/vs_pid.h>
 #include <linux/mutex.h>
 
 #include <asm/intrinsics.h>

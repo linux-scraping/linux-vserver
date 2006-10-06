@@ -12,6 +12,7 @@
  *  V0.05  added debug/history stuff
  *  V0.06  added compat32 layer
  *  V0.07  vcmd args and perms
+ *  V0.08  added status commands
  *
  */
 
@@ -117,6 +118,10 @@ long do_vcmd(uint32_t cmd, uint32_t id,
 	case VCMD_set_vhi_name:
 		return vc_set_vhi_name(vxi, data);
 
+	case VCMD_ctx_stat:
+		return vc_ctx_stat(vxi, data);
+	case VCMD_virt_stat:
+		return vc_virt_stat(vxi, data);
 	case VCMD_sock_stat:
 		return vc_sock_stat(vxi, data);
 	case VCMD_rlimit_stat:
@@ -272,6 +277,8 @@ long do_vserver(uint32_t cmd, uint32_t id, void __user *data, int compat)
 	__VCMD(get_vhi_name,	 3, VCA_VXI,	VCF_INFO);
 	__VCMD(get_rlimit,	 3, VCA_VXI,	VCF_INFO);
 
+	__VCMD(ctx_stat,	 3, VCA_VXI,	VCF_INFO);
+	__VCMD(virt_stat,	 3, VCA_VXI,	VCF_INFO);
 	__VCMD(sock_stat,	 3, VCA_VXI,	VCF_INFO);
 	__VCMD(rlimit_stat,	 3, VCA_VXI,	VCF_INFO);
 

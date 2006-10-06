@@ -1,0 +1,2 @@
+kernel/vserver/context.c __alloc_vx_info 98 vx_info_init_cvirt(&new->cvirt);
+kernel/vserver/cvirt_init.h vx_info_init_cvirt 5 static inline void vx_info_init_cvirt(struct _vx_cvirt *cvirt)
