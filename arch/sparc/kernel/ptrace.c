@@ -19,7 +19,6 @@
 #include <linux/smp_lock.h>
 #include <linux/security.h>
 #include <linux/signal.h>
-#include <linux/vs_pid.h>
 
 #include <asm/pgtable.h>
 #include <asm/system.h>

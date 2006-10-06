@@ -19,6 +19,7 @@
  *  V0.12  referenced context store
  *  V0.13  separate per cpu data
  *  V0.14  changed vcmds to vxi arg
+ *  V0.15  added context stat
  *
  */
 
@@ -823,6 +824,19 @@ int vc_vx_info(struct vx_info *vxi, void __user *data)
 
 	vc_data.xid = vxi->vx_id;
 	vc_data.initpid = vxi->vx_initpid;
+
+	if (copy_to_user (data, &vc_data, sizeof(vc_data)))
+		return -EFAULT;
+	return 0;
+}
+
+
+int vc_ctx_stat(struct vx_info *vxi, void __user *data)
+{
+	struct vcmd_ctx_stat_v0 vc_data;
+
+	vc_data.usecnt = atomic_read(&vxi->vx_usecnt);
+	vc_data.tasks = atomic_read(&vxi->vx_tasks);
 
 	if (copy_to_user (data, &vc_data, sizeof(vc_data)))
 		return -EFAULT;

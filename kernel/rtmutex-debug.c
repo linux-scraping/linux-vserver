@@ -27,7 +27,7 @@
 #include <linux/plist.h>
 #include <linux/fs.h>
 #include <linux/debug_locks.h>
-#include <linux/vs_cvirt.h>
+#include <linux/vs_pid.h>
 
 #include "rtmutex_common.h"
 

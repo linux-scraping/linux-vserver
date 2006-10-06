@@ -52,7 +52,7 @@ struct _vx_cvirt {
 
 	spinlock_t load_lock;		/* lock for the load averages */
 	atomic_t load_updates;		/* nr of load updates done so far */
-	uint32_t load_last;		/* last time load was cacled */
+	uint32_t load_last;		/* last time load was calculated */
 	uint32_t load[3];		/* load averages 1,5,15 */
 
 	atomic_t total_forks;		/* number of forks so far */

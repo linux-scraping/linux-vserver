@@ -8,7 +8,7 @@
 #include <linux/cpumask.h>
 #include <linux/interrupt.h>
 #include <linux/security.h>
-#include <linux/vs_cvirt.h>
+#include <linux/vs_pid.h>
 
 #include <asm/cpu.h>
 #include <asm/processor.h>
