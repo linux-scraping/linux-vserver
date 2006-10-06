@@ -24,6 +24,18 @@ extern int vc_vx_info(struct vx_info *, void __user *);
 
 #endif	/* __KERNEL__ */
 
+#define VCMD_ctx_stat		VC_CMD(VSTAT, 0, 0)
+
+struct	vcmd_ctx_stat_v0 {
+	uint32_t usecnt;
+	uint32_t tasks;
+	/* more to come */
+};
+
+#ifdef	__KERNEL__
+extern int vc_ctx_stat(struct vx_info *, void __user *);
+
+#endif	/* __KERNEL__ */
 
 /* context commands */
 

@@ -248,6 +248,35 @@ int vc_get_vhi_name(struct vx_info *vxi, void __user *data)
 	return 0;
 }
 
+
+int vc_virt_stat(struct vx_info *vxi, void __user *data)
+{
+	struct vcmd_virt_stat_v0 vc_data;
+	struct _vx_cvirt *cvirt = &vxi->cvirt;
+	struct timespec uptime;
+
+	do_posix_clock_monotonic_gettime(&uptime);
+	set_normalized_timespec(&uptime,
+		uptime.tv_sec - cvirt->bias_uptime.tv_sec,
+		uptime.tv_nsec - cvirt->bias_uptime.tv_nsec);
+
+	vc_data.offset = timeval_to_ns(&cvirt->bias_tv);
+	vc_data.uptime = timespec_to_ns(&uptime);
+	vc_data.nr_threads = atomic_read(&cvirt->nr_threads);
+	vc_data.nr_running = atomic_read(&cvirt->nr_running);
+	vc_data.nr_uninterruptible = atomic_read(&cvirt->nr_uninterruptible);
+	vc_data.nr_onhold = atomic_read(&cvirt->nr_onhold);
+	vc_data.nr_forks = atomic_read(&cvirt->total_forks);
+	vc_data.load[0] = cvirt->load[0];
+	vc_data.load[1] = cvirt->load[1];
+	vc_data.load[2] = cvirt->load[2];
+
+	if (copy_to_user (data, &vc_data, sizeof(vc_data)))
+		return -EFAULT;
+	return 0;
+}
+
+
 #ifdef CONFIG_VSERVER_VTIME
 
 /* virtualized time base */
