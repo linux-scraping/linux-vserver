@@ -12,7 +12,6 @@
 #include <linux/module.h>
 #include <linux/security.h>
 #include <linux/syscalls.h>
-#include <linux/vs_pid.h>
 #include <asm/uaccess.h>
 
 unsigned securebits = SECUREBITS_DEFAULT; /* systemwide security settings */
