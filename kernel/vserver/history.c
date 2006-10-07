@@ -21,6 +21,7 @@
 #include <asm/unistd.h>
 
 #include <linux/vserver/debug.h>
+#include <linux/vserver/debug_cmd.h>
 #include <linux/vserver/history.h>
 
 
@@ -62,6 +63,8 @@ struct _vx_hist_entry *vxh_advance(void *loc)
 	entry->loc = loc;
 	return entry;
 }
+
+EXPORT_SYMBOL_GPL(vxh_advance);
 
 
 #define VXH_LOC_FMTS	"(#%04x,*%d):%p"
@@ -171,7 +174,7 @@ void	vxh_dump_history(void)
 /* vserver syscall commands below here */
 
 
-int	vc_dump_history(uint32_t id)
+int vc_dump_history(uint32_t id)
 {
 	vxh_active = 0;
 	__vxh_dump_history();
@@ -180,5 +183,81 @@ int	vc_dump_history(uint32_t id)
 	return 0;
 }
 
-EXPORT_SYMBOL_GPL(vxh_advance);
+
+int do_read_history(struct __user _vx_hist_entry *data,
+	int cpu, uint32_t *index, uint32_t *count)
+{
+	int pos, ret = 0;
+	struct _vx_history *hist = &per_cpu(vx_history_buffer, cpu);
+	int end = hist->counter;
+	int start = end - VXH_SIZE + 2;
+	int delta = *index;
+
+	/* special case: get current pos */
+	if (!*count) {
+		*index = end;
+		return 0;
+	}
+
+	/* have we lost some data? */
+	if (delta < start)
+		delta = start;
+
+	for (pos = 0; (pos < *count) && (delta <= end); pos++) {
+		struct _vx_hist_entry *entry =
+			&hist->entry[(delta + pos) & VXH_SIZE];
+
+		/* send entry to userspace */
+		ret = copy_to_user (&data[pos], entry, sizeof(*entry));
+		if (ret)
+			break;
+	}
+	/* save new index and count */
+	*index = delta + pos;
+	*count = pos;
+	return ret ? ret : (*index < end);
+}
+
+int vc_read_history(uint32_t id, void __user *data)
+{
+	struct vcmd_read_history_v0 vc_data;
+	int ret;
+
+	if (id >= NR_CPUS)
+		return -EINVAL;
+
+	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
+		return -EFAULT;
+
+	ret = do_read_history((struct __user _vx_hist_entry *)vc_data.data,
+		id, &vc_data.index, &vc_data.count);
+
+	if (copy_to_user (data, &vc_data, sizeof(vc_data)))
+		return -EFAULT;
+	return ret;
+}
+
+#ifdef	CONFIG_COMPAT
+
+int vc_read_history_x32(uint32_t id, void __user *data)
+{
+	struct vcmd_read_history_v0_x32 vc_data;
+	int ret;
+
+	if (id >= NR_CPUS)
+		return -EINVAL;
+
+	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
+		return -EFAULT;
+
+	ret = do_read_history((struct __user _vx_hist_entry *)
+		compat_ptr(vc_data.data_ptr),
+		id, &vc_data.index, &vc_data.count);
+
+	if (copy_to_user (data, &vc_data, sizeof(vc_data)))
+		return -EFAULT;
+	return ret;
+}
+
+#endif	/* CONFIG_COMPAT */
 

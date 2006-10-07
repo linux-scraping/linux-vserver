@@ -21,7 +21,6 @@
 #include <linux/delayacct.h>
 #include <linux/cpumask.h>
 #include <linux/percpu.h>
-#include <linux/vs_pid.h>
 #include <net/genetlink.h>
 #include <asm/atomic.h>
 
