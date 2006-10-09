@@ -1,24 +1,6 @@
 #ifndef _VX_HISTORY_H
 #define _VX_HISTORY_H
 
-#ifdef	CONFIG_VSERVER_HISTORY
-
-extern unsigned volatile int vxh_active;
-
-struct _vxhe_vxi {
-	struct vx_info *ptr;
-	unsigned xid;
-	unsigned usecnt;
-	unsigned tasks;
-};
-
-struct _vxhe_set_clr {
-	void *data;
-};
-
-struct _vxhe_loc_lookup {
-	unsigned arg;
-};
 
 enum {
 	VXH_UNUSED=0,
@@ -40,6 +22,21 @@ enum {
 	VXH_CREATE_VX_INFO,
 };
 
+struct _vxhe_vxi {
+	struct vx_info *ptr;
+	unsigned xid;
+	unsigned usecnt;
+	unsigned tasks;
+};
+
+struct _vxhe_set_clr {
+	void *data;
+};
+
+struct _vxhe_loc_lookup {
+	unsigned arg;
+};
+
 struct _vx_hist_entry {
 	void *loc;
 	unsigned short seq;
@@ -50,6 +47,10 @@ struct _vx_hist_entry {
 		struct _vxhe_loc_lookup ll;
 	};
 };
+
+#ifdef	CONFIG_VSERVER_HISTORY
+
+extern unsigned volatile int vxh_active;
 
 struct _vx_hist_entry *vxh_advance(void *loc);
 
