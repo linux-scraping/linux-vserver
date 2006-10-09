@@ -848,7 +848,7 @@ vfs_kern_mount(struct file_system_type *type, int flags, const char *name, void 
 
 	sb = mnt->mnt_sb;
 	error = -EPERM;
-	if (!capable(CAP_SYS_ADMIN) && !sb->s_bdev &&
+	if (!vx_capable(CAP_SYS_ADMIN, VXC_BINARY_MOUNT) && !sb->s_bdev &&
 		(sb->s_magic != PROC_SUPER_MAGIC) &&
 		(sb->s_magic != DEVPTS_SUPER_MAGIC))
 		goto out_sb;

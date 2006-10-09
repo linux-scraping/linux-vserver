@@ -30,13 +30,13 @@ struct  vcmd_read_history_v0_x32 {
 	uint32_t index;
 	uint32_t count;
 	compat_uptr_t data_ptr;
-}
+};
 
 struct  vcmd_read_monitor_v0_x32 {
 	uint32_t index;
 	uint32_t count;
 	compat_uptr_t data_ptr;
-}
+};
 
 #endif  /* CONFIG_COMPAT */
 
