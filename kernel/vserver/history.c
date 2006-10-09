@@ -191,7 +191,7 @@ int do_read_history(struct __user _vx_hist_entry *data,
 	struct _vx_history *hist = &per_cpu(vx_history_buffer, cpu);
 	int end = hist->counter;
 	int start = end - VXH_SIZE + 2;
-	int delta = *index;
+	int idx = *index;
 
 	/* special case: get current pos */
 	if (!*count) {
@@ -200,12 +200,12 @@ int do_read_history(struct __user _vx_hist_entry *data,
 	}
 
 	/* have we lost some data? */
-	if (delta < start)
-		delta = start;
+	if (idx < start)
+		idx = start;
 
-	for (pos = 0; (pos < *count) && (delta <= end); pos++) {
+	for (pos = 0; (pos < *count) && (idx < end); pos++, idx++) {
 		struct _vx_hist_entry *entry =
-			&hist->entry[(delta + pos) & VXH_SIZE];
+			&hist->entry[idx % VXH_SIZE];
 
 		/* send entry to userspace */
 		ret = copy_to_user (&data[pos], entry, sizeof(*entry));
@@ -213,7 +213,7 @@ int do_read_history(struct __user _vx_hist_entry *data,
 			break;
 	}
 	/* save new index and count */
-	*index = delta + pos;
+	*index = idx;
 	*count = pos;
 	return ret ? ret : (*index < end);
 }

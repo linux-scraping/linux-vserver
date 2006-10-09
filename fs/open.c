@@ -31,6 +31,7 @@
 #include <linux/vs_limit.h>
 #include <linux/vs_dlimit.h>
 #include <linux/vserver/tag.h>
+#include <linux/vs_cowbl.h>
 
 #include <asm/unistd.h>
 
@@ -446,6 +447,13 @@ long do_utimes(int dfd, char __user *filename, struct timeval *times)
 	if (IS_RDONLY(inode) || MNT_IS_RDONLY(nd.mnt))
 		goto dput_and_out;
 
+#ifdef CONFIG_VSERVER_COWBL
+	error = cow_break_link_vfsmount(&nd.dentry, nd.mnt);
+	if (error)
+		goto dput_and_out;
+	inode = nd.dentry->d_inode;
+#endif
+
 	/* Don't worry, the checks are done in inode_change_ok() */
 	newattrs.ia_valid = ATTR_CTIME | ATTR_MTIME | ATTR_ATIME;
 	if (times) {
@@ -680,6 +688,13 @@ asmlinkage long sys_fchmodat(int dfd, const char __user *filename,
 	if (IS_RDONLY(inode) || MNT_IS_RDONLY(nd.mnt))
 		goto dput_and_out;
 
+#ifdef CONFIG_VSERVER_COWBL
+	error = cow_break_link_vfsmount(&nd.dentry, nd.mnt);
+	if (error)
+		goto dput_and_out;
+	inode = nd.dentry->d_inode;
+#endif
+
 	error = -EPERM;
 	if (IS_IMMUTABLE(inode) || IS_APPEND(inode))
 		goto dput_and_out;
@@ -704,7 +719,7 @@ asmlinkage long sys_chmod(const char __user *filename, mode_t mode)
 }
 
 static int chown_common(struct dentry *dentry, struct vfsmount *mnt,
-	uid_t user, gid_t group)
+	uid_t user, gid_t group, int allow_cow)
 {
 	struct inode * inode;
 	int error;
@@ -718,6 +733,14 @@ static int chown_common(struct dentry *dentry, struct vfsmount *mnt,
 	error = -EROFS;
 	if (IS_RDONLY(inode) || MNT_IS_RDONLY(mnt))
 		goto out;
+#ifdef CONFIG_VSERVER_COWBL
+	if (allow_cow) {
+		error = cow_break_link_vfsmount(&dentry, mnt);
+		if (error)
+			goto out;
+		inode = dentry->d_inode;
+	}
+#endif
 	error = -EPERM;
 	if (IS_IMMUTABLE(inode) || IS_APPEND(inode))
 		goto out;
@@ -746,7 +769,7 @@ asmlinkage long sys_chown(const char __user * filename, uid_t user, gid_t group)
 
 	error = user_path_walk(filename, &nd);
 	if (!error) {
-		error = chown_common(nd.dentry, nd.mnt, user, group);
+		error = chown_common(nd.dentry, nd.mnt, user, group, 1);
 		path_release(&nd);
 	}
 	return error;
@@ -765,7 +788,7 @@ asmlinkage long sys_fchownat(int dfd, const char __user *filename, uid_t user,
 	follow = (flag & AT_SYMLINK_NOFOLLOW) ? 0 : LOOKUP_FOLLOW;
 	error = __user_walk_fd(dfd, filename, follow, &nd);
 	if (!error) {
-		error = chown_common(nd.dentry, nd.mnt, user, group);
+		error = chown_common(nd.dentry, nd.mnt, user, group, 1);
 		path_release(&nd);
 	}
 out:
@@ -779,7 +802,7 @@ asmlinkage long sys_lchown(const char __user * filename, uid_t user, gid_t group
 
 	error = user_path_walk_link(filename, &nd);
 	if (!error) {
-		error = chown_common(nd.dentry, nd.mnt, user, group);
+		error = chown_common(nd.dentry, nd.mnt, user, group, 1);
 		path_release(&nd);
 	}
 	return error;
@@ -796,7 +819,7 @@ asmlinkage long sys_fchown(unsigned int fd, uid_t user, gid_t group)
 		struct dentry * dentry;
 		dentry = file->f_dentry;
 		audit_inode(NULL, dentry->d_inode);
-		error = chown_common(dentry, file->f_vfsmnt, user, group);
+		error = chown_common(dentry, file->f_vfsmnt, user, group, 0);
 		fput(file);
 	}
 	return error;

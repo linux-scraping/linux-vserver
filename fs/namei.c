@@ -36,6 +36,7 @@
 #include <linux/vserver/inode.h>
 #include <linux/vs_tag.h>
 #include <linux/vserver/debug.h>
+#include <linux/vs_cowbl.h>
 #include <asm/namei.h>
 #include <asm/uaccess.h>
 
@@ -1629,7 +1630,6 @@ int may_open(struct nameidata *nd, int acc_mode, int flag)
 	return 0;
 }
 
-int cow_break_link(struct dentry *dentry, const char *pathname);
 
 /*
  *	open_namei()
@@ -1761,9 +1761,13 @@ ok:
 	error = may_open(nd, acc_mode, flag);
 #ifdef	CONFIG_VSERVER_COWBL
 	if (error == -EMLINK) {
-		error = cow_break_link(path.dentry, pathname);
-		if (error)
+		struct dentry *dentry;
+		dentry = cow_break_link(pathname);
+		if (IS_ERR(dentry)) {
+			error = PTR_ERR(dentry);
 			goto exit;
+		}
+		dput(dentry);
 		release_open_intent(nd);
 		path_release(nd);
 		vxdprintk(VXD_CBIT(misc, 2), "restarting open_namei() ...");
@@ -2691,12 +2695,12 @@ int vfs_follow_link(struct nameidata *nd, const char *link)
 
 #include <linux/file.h>
 
-int cow_break_link(struct dentry *dentry, const char *pathname)
+struct dentry *cow_break_link(const char *pathname)
 {
-	int err = -EMLINK;
 	int ret, mode, pathlen;
 	struct nameidata old_nd, dir_nd;
 	struct dentry *old_dentry, *new_dentry;
+	struct dentry *res = ERR_PTR(-EMLINK);
 	struct vfsmount *old_mnt, *new_mnt;
 	struct file *old_file;
 	struct file *new_file;
@@ -2704,7 +2708,7 @@ int cow_break_link(struct dentry *dentry, const char *pathname)
 	loff_t size;
 
 	vxdprintk(VXD_CBIT(misc, 2),
-		"cow_break_link(%p,»%s«)", dentry, pathname);
+		"cow_break_link(»%s«)", pathname);
 	path = kmalloc(PATH_MAX, GFP_KERNEL);
 
 	ret = path_lookup(pathname, LOOKUP_FOLLOW, &old_nd);
@@ -2777,8 +2781,10 @@ retry:
 	ret = vfs_rename(dir_nd.dentry->d_inode, new_dentry,
 		old_nd.dentry->d_parent->d_inode, old_dentry);
 	vxdprintk(VXD_CBIT(misc, 2), "vfs_rename: %d", ret);
-	if (!ret)
-		err = 0;
+	if (!ret) {
+		res = new_dentry;
+		dget(new_dentry);
+	}
 
 out_fput_both:
 	vxdprintk(VXD_CBIT(misc, 3),
@@ -2800,7 +2806,7 @@ out_rel_both:
 out_rel_old:
 	path_release(&old_nd);
 	kfree(path);
-	return err;
+	return res;
 }
 
 #endif

@@ -61,3 +61,6 @@ unifdef-y += acct.h adb.h adfs_fs.h agpgart.h apm_bios.h atalk.h	\
 	wanrouter.h watchdog.h xfrm.h zftape.h
 
 objhdr-y := version.h
+
+header-y += vserver/
+

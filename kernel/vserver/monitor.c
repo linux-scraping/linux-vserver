@@ -71,7 +71,7 @@ int do_read_monitor(struct __user _vx_mon_entry *data,
 	struct _vx_monitor *mon = &per_cpu(vx_monitor_buffer, cpu);
 	int end = mon->counter;
 	int start = end - VXM_SIZE + 2;
-	int delta = *index;
+	int idx = *index;
 
 	/* special case: get current pos */
 	if (!*count) {
@@ -80,12 +80,12 @@ int do_read_monitor(struct __user _vx_mon_entry *data,
 	}
 
 	/* have we lost some data? */
-	if (delta < start)
-		delta = start;
+	if (idx < start)
+		idx = start;
 
-	for (pos = 0; (pos < *count) && (delta <= end); pos++) {
+	for (pos = 0; (pos < *count) && (idx < end); pos++, idx++) {
 		struct _vx_mon_entry *entry =
-			&mon->entry[(delta + pos) & VXM_SIZE];
+			&mon->entry[idx % VXM_SIZE];
 
 		/* send entry to userspace */
 		ret = copy_to_user (&data[pos], entry, sizeof(*entry));
@@ -93,7 +93,7 @@ int do_read_monitor(struct __user _vx_mon_entry *data,
 			break;
 	}
 	/* save new index and count */
-	*index = delta + pos;
+	*index = idx;
 	*count = pos;
 	return ret ? ret : (*index < end);
 }
