@@ -18,6 +18,7 @@
 #include <linux/interrupt.h>
 #include <linux/irq.h>
 #include <linux/kernel_stat.h>
+#include <linux/vs_context.h>
 
 #include <asm/uaccess.h>
 #include <asm/platform.h>
@@ -48,6 +49,8 @@ void ack_bad_irq(unsigned int irq)
 
 unsigned int  do_IRQ(int irq, struct pt_regs *regs)
 {
+	struct vx_info_save vxis;
+
 	irq_enter();
 
 #ifdef CONFIG_DEBUG_STACKOVERFLOW
@@ -63,9 +66,9 @@ unsigned int  do_IRQ(int irq, struct pt_regs *regs)
 			       sp - sizeof(struct thread_info));
 	}
 #endif
-
+	__enter_vx_admin(&vxis);
 	__do_IRQ(irq, regs);
-
+	__leave_vx_admin(&vxis);
 	irq_exit();
 
 	return 1;
