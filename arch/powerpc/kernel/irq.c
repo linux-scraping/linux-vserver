@@ -52,6 +52,7 @@
 #include <linux/radix-tree.h>
 #include <linux/mutex.h>
 #include <linux/bootmem.h>
+#include <linux/vs_context.h>
 
 #include <asm/uaccess.h>
 #include <asm/system.h>
@@ -218,6 +219,9 @@ void do_IRQ(struct pt_regs *regs)
 	irq = ppc_md.get_irq(regs);
 
 	if (irq != NO_IRQ && irq != NO_IRQ_IGNORE) {
+		struct vx_info_save vxis;
+
+		__enter_vx_admin(&vxis);
 #ifdef CONFIG_IRQSTACKS
 		/* Switch to the irq stack to handle this */
 		curtp = current_thread_info();
@@ -236,6 +240,7 @@ void do_IRQ(struct pt_regs *regs)
 		} else
 #endif
 			generic_handle_irq(irq, regs);
+		__leave_vx_admin(&vxis);
 	} else if (irq != NO_IRQ_IGNORE)
 		/* That's not SMP safe ... but who cares ? */
 		ppc_spurious_interrupts++;
@@ -244,9 +249,13 @@ void do_IRQ(struct pt_regs *regs)
 
 #ifdef CONFIG_PPC_ISERIES
 	if (get_lppaca()->int_dword.fields.decr_int) {
+		struct vx_info_save vxis;
+
 		get_lppaca()->int_dword.fields.decr_int = 0;
 		/* Signal a fake decrementer interrupt */
+		__enter_vx_admin(&vxis);
 		timer_interrupt(regs);
+		__leave_vx_admin(&vxis);
 	}
 #endif
 }

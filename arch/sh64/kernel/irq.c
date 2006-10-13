@@ -37,6 +37,7 @@
 #include <asm/delay.h>
 #include <asm/irq.h>
 #include <linux/irq.h>
+#include <linux/vs_context.h>
 
 void ack_bad_irq(unsigned int irq)
 {
@@ -102,7 +103,11 @@ asmlinkage int do_IRQ(unsigned long vector_num, struct pt_regs * regs)
 	irq = irq_demux(vector_num);
 
 	if (irq >= 0) {
+		struct vx_info_save vxis;
+
+		__enter_vx_admin(&vxis);
 		__do_IRQ(irq, regs);
+		__leave_vx_admin(&vxis);
 	} else {
 		printk("unexpected IRQ trap at vector %03lx\n", vector_num);
 	}

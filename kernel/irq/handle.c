@@ -174,6 +174,8 @@ fastcall unsigned int __do_IRQ(unsigned int irq, struct pt_regs *regs)
 	struct vx_info_save vxis;
 	unsigned int status;
 
+	WARN_ON(current->xid);
+
 	kstat_this_cpu.irqs[irq]++;
 	if (CHECK_IRQ_PER_CPU(desc->status)) {
 		irqreturn_t action_ret;

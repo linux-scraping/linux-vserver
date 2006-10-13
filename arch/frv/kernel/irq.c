@@ -32,6 +32,7 @@
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
 #include <linux/module.h>
+#include <linux/vs_context.h>
 
 #include <asm/atomic.h>
 #include <asm/io.h>
@@ -282,6 +283,7 @@ EXPORT_SYMBOL(enable_irq);
 asmlinkage void do_IRQ(void)
 {
 	struct irq_source *source;
+	struct vx_info_save vxis;
 	int level, cpu;
 
 	irq_enter();
@@ -298,8 +300,10 @@ asmlinkage void do_IRQ(void)
 
 	kstat_this_cpu.irqs[level]++;
 
+	__enter_vx_admin(&vxis);
 	for (source = frv_irq_levels[level].sources; source; source = source->next)
 		source->doirq(source);
+	__leave_vx_admin(&vxis);
 
 	__clr_MASK(level);
 

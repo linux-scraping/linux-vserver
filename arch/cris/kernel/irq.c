@@ -35,6 +35,7 @@
 #include <linux/seq_file.h>
 #include <linux/errno.h>
 #include <linux/spinlock.h>
+#include <linux/vs_context.h>
 
 #include <asm/io.h>
 
@@ -92,13 +93,17 @@ skip:
 asmlinkage void do_IRQ(int irq, struct pt_regs * regs)
 {
 	unsigned long sp;
+	struct vx_info_save vxis;
+
 	irq_enter();
 	sp = rdsp();
 	if (unlikely((sp & (PAGE_SIZE - 1)) < (PAGE_SIZE/8))) {
 		printk("do_IRQ: stack overflow: %lX\n", sp);
 		show_stack(NULL, (unsigned long *)sp);
 	}
+	__enter_vx_admin(&vxis);
 	__do_IRQ(irq, regs);
+	__leave_vx_admin(&vxis);
         irq_exit();
 }
 
