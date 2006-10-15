@@ -74,6 +74,8 @@
 #include <linux/vs_context.h>
 #include <linux/vs_network.h>
 #include <linux/vs_pid.h>
+#include <linux/init_task.h>
+
 #include "internal.h"
 
 /* NOTE:
@@ -85,6 +87,9 @@
  *	The classic example of a problem is opening file descriptors
  *	in /proc for a task before it execs a suid executable.
  */
+
+struct pid fake_init_pid = { .nr = 1, .count = ATOMIC_INIT(1) };
+struct task_struct fake_init = FAKE_INIT_TASK(fake_init);
 
 /*
  * For hysterical raisins we keep the same inumbers as in the old procfs.
@@ -2076,8 +2081,6 @@ out:
 	return;
 }
 
-#define VXF_FAKE_INIT	(VXF_INFO_INIT|VXF_STATE_INIT)
-
 static inline int proc_pid_visible(struct task_struct *task, int pid)
 {
 	if ((pid == 1) &&
@@ -2118,6 +2121,13 @@ struct dentry *proc_pid_lookup(struct inode *dir, struct dentry * dentry, struct
 	if (tgid == ~0U)
 		goto out;
 
+	if ((tgid == 1) && !vx_flags(VXF_FAKE_INIT, VXF_FAKE_INIT)) {
+		// printk("··· providing fake init\n");
+		task = &fake_init;
+		get_task_struct(task);
+		goto found;
+	}
+
 	rcu_read_lock();
 	task = find_task_by_pid(tgid);
 	if (task)
@@ -2126,6 +2136,8 @@ struct dentry *proc_pid_lookup(struct inode *dir, struct dentry * dentry, struct
 	if (!task)
 		goto out;
 
+found:
+	// printk("··· proc_pid_lookup %p[#%d]\n", task, task?task->pid:0);
 	inode = proc_pid_make_inode(dir->i_sb, task, PROC_TGID_INO);
 	if (!inode)
 		goto out_put_task;
@@ -2171,6 +2183,13 @@ static struct dentry *proc_task_lookup(struct inode *dir, struct dentry * dentry
 	if (vx_current_initpid(tid))
 		goto out;
 
+	if ((tid == 1) && !vx_flags(VXF_FAKE_INIT, VXF_FAKE_INIT)) {
+		// printk("··· task_lookup: providing fake init\n");
+		task = &fake_init;
+		get_task_struct(task);
+		goto found;
+	}
+
 	rcu_read_lock();
 	task = find_task_by_pid(tid);
 	if (task)
@@ -2181,8 +2200,11 @@ static struct dentry *proc_task_lookup(struct inode *dir, struct dentry * dentry
 	if (leader->tgid != task->tgid)
 		goto out_drop_task;
 
+found:
+	//printk("··· proc_task_lookup %p[#%d]\n", task, task?task->pid:0);
 	inode = proc_pid_make_inode(dir->i_sb, task, PROC_TID_INO);
-
+	/* if (tid==1)
+		printk("··· proc_task_lookup %p[#%d] = %p\n", task, task?task->pid:0, inode); */
 
 	if (!inode)
 		goto out_drop_task;
