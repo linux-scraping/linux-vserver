@@ -10,6 +10,7 @@ enum {
 	VCI_KCBIT_IDLETIME,
 
 	VCI_KCBIT_COWBL,
+	VCI_KCBIT_FULLCOWBL,
 
 	VCI_KCBIT_LEGACY_VERSION = 15,
 	VCI_KCBIT_DEBUG = 16,
@@ -47,6 +48,7 @@ static inline uint32_t vci_kernel_config(void)
 #endif
 #ifdef	CONFIG_VSERVER_COWBL
 	(1 << VCI_KCBIT_COWBL) |
+	(1 << VCI_KCBIT_FULLCOWBL) |
 #endif
 
 	/* debug options */

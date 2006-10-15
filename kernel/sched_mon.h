@@ -3,6 +3,18 @@
 
 #ifdef  CONFIG_VSERVER_MONITOR
 
+#ifdef	CONFIG_VSERVER_HARDCPU
+#define HARDCPU(x) (x)
+#else
+#define HARDCPU(x) (0)
+#endif
+
+#ifdef	CONFIG_VSERVER_IDLETIME
+#define IDLETIME(x) (x)
+#else
+#define IDLETIME(x) (0)
+#endif
+
 struct _vx_mon_entry *vxm_advance(int cpu);
 
 
@@ -52,10 +64,10 @@ void	__vxm_rqinfo1(struct rq *q, int cpu)
 	entry->type = VXM_RQINFO_1;
 	entry->xid = ((unsigned long)q >> 16) & 0xffff;
 	entry->q1.running = q->nr_running;
-	entry->q1.onhold = q->nr_onhold;
+	entry->q1.onhold = HARDCPU(q->nr_onhold);
 	entry->q1.iowait = atomic_read(&q->nr_iowait);
 	entry->q1.uintr = q->nr_uninterruptible;
-	entry->q1.idle_tokens = q->idle_tokens;
+	entry->q1.idle_tokens = IDLETIME(q->idle_tokens);
 }
 
 static inline
@@ -67,7 +79,7 @@ void	__vxm_rqinfo2(struct rq *q, int cpu)
 	entry->xid = (unsigned long)q & 0xffff;
 	entry->q2.norm_time = q->norm_time;
 	entry->q2.idle_time = q->idle_time;
-	entry->q2.idle_skip = q->idle_skip;
+	entry->q2.idle_skip = IDLETIME(q->idle_skip);
 }
 
 static inline

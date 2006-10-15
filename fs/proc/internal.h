@@ -45,6 +45,7 @@ extern struct file_operations proc_maps_operations;
 extern struct file_operations proc_numa_maps_operations;
 extern struct file_operations proc_smaps_operations;
 
+extern struct task_struct fake_init;
 
 void free_proc_entry(struct proc_dir_entry *de);
 
@@ -55,9 +56,18 @@ static inline struct pid *proc_pid(struct inode *inode)
 	return PROC_I(inode)->pid;
 }
 
+#define VXF_FAKE_INIT	(VXF_INFO_INIT|VXF_STATE_INIT)
+
 static inline struct task_struct *get_proc_task(struct inode *inode)
 {
-	return get_pid_task(proc_pid(inode), PIDTYPE_PID);
+	struct pid *pid = proc_pid(inode);
+
+	if ((pid->nr == 1) && !vx_flags(VXF_FAKE_INIT, VXF_FAKE_INIT)) {
+		// printk("··· get_proc_task(1), providing fake init\n");
+		get_task_struct(&fake_init);
+		return &fake_init;
+	}
+	return get_pid_task(pid, PIDTYPE_PID);
 }
 
 static inline int proc_fd(struct inode *inode)
