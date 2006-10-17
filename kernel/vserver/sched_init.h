@@ -16,7 +16,7 @@ static inline void vx_info_init_sched(struct _vx_sched *sched)
 	sched->priority_bias	= 0;
 	sched->vavavoom		= 0;
 
-	for_each_cpu(i) {
+	for_each_possible_cpu(i) {
 		sched->cpu[i].user_ticks	= 0;
 		sched->cpu[i].sys_ticks		= 0;
 		sched->cpu[i].hold_ticks	= 0;

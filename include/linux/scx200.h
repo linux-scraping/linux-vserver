@@ -32,7 +32,7 @@ extern unsigned scx200_cb_base;
 
 /* High Resolution Timer */
 #define SCx200_TIMER_OFFSET 0x08
-#define SCx200_TIMER_SIZE 0x05
+#define SCx200_TIMER_SIZE 0x06
 
 /* Clock Generators */
 #define SCx200_CLOCKGEN_OFFSET 0x10
@@ -49,10 +49,3 @@ extern unsigned scx200_cb_base;
 #define SCx200_REV 0x3d		/* Revision Register */
 #define SCx200_CBA 0x3e		/* Configuration Base Address Register */
 #define SCx200_CBA_SCRATCH 0x64	/* Configuration Base Address Scratchpad */
-
-/*
-    Local variables:
-        compile-command: "make -C ../.. bzImage modules"
-        c-basic-offset: 8
-    End:
-*/

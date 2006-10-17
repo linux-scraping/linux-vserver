@@ -9,7 +9,6 @@
 #ifndef _ASM_IRQ_H
 #define _ASM_IRQ_H
 
-#include <linux/config.h>
 #include <linux/linkage.h>
 
 #include <asm/mipsmtregs.h>
@@ -58,9 +57,13 @@ do {									\
  */
 #define do_IRQ(irq, regs)						\
 do {									\
+	struct vx_info_save vxis;					\
+									\
 	irq_enter();							\
 	__DO_IRQ_SMTC_HOOK();						\
+	__enter_vx_admin(&vxis);					\
 	__do_IRQ((irq), (regs));					\
+	__leave_vx_admin(&vxis);					\
 	irq_exit();							\
 } while (0)
 
@@ -76,5 +79,9 @@ extern unsigned long irq_hwmask[];
 extern int setup_irq_smtc(unsigned int irq, struct irqaction * new,
                           unsigned long hwmask);
 #endif /* CONFIG_MIPS_MT_SMTC */
+
+#ifdef CONFIG_SMP
+#define ARCH_HAS_IRQ_PER_CPU
+#endif
 
 #endif /* _ASM_IRQ_H */

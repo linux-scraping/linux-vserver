@@ -246,7 +246,7 @@ sys_fsetxattr(int fd, char __user *name, void __user *value,
 	if (!f)
 		return error;
 	dentry = f->f_dentry;
-	audit_inode(NULL, dentry->d_inode, 0);
+	audit_inode(NULL, dentry->d_inode);
 	error = setxattr(dentry, name, value, size, flags, f->f_vfsmnt);
 	fput(f);
 	return error;
@@ -476,7 +476,7 @@ sys_fremovexattr(int fd, char __user *name)
 	if (!f)
 		return error;
 	dentry = f->f_dentry;
-	audit_inode(NULL, dentry->d_inode, 0);
+	audit_inode(NULL, dentry->d_inode);
 	error = removexattr(dentry, name, f->f_vfsmnt);
 	fput(f);
 	return error;

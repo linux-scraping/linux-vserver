@@ -1,7 +1,6 @@
 #ifndef _ASM_M32R_PAGE_H
 #define _ASM_M32R_PAGE_H
 
-#include <linux/config.h>
 
 /* PAGE_SHIFT determines the page size */
 #define PAGE_SHIFT	12
@@ -88,10 +87,9 @@ typedef struct { unsigned long pgprot; } pgprot_t;
 
 #define devmem_is_allowed(x) 1
 
-#endif /* __KERNEL__ */
-
 #include <asm-generic/memory_model.h>
 #include <asm-generic/page.h>
 
+#endif /* __KERNEL__ */
 #endif /* _ASM_M32R_PAGE_H */
 

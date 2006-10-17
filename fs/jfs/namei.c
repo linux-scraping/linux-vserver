@@ -166,8 +166,8 @@ static int jfs_create(struct inode *dip, struct dentry *dentry, int mode,
 
       out3:
 	txEnd(tid);
-	mutex_unlock(&JFS_IP(dip)->commit_mutex);
 	mutex_unlock(&JFS_IP(ip)->commit_mutex);
+	mutex_unlock(&JFS_IP(dip)->commit_mutex);
 	if (rc) {
 		free_ea_wmap(ip);
 		ip->i_nlink = 0;
@@ -301,8 +301,8 @@ static int jfs_mkdir(struct inode *dip, struct dentry *dentry, int mode)
 
       out3:
 	txEnd(tid);
-	mutex_unlock(&JFS_IP(dip)->commit_mutex);
 	mutex_unlock(&JFS_IP(ip)->commit_mutex);
+	mutex_unlock(&JFS_IP(dip)->commit_mutex);
 	if (rc) {
 		free_ea_wmap(ip);
 		ip->i_nlink = 0;
@@ -385,8 +385,8 @@ static int jfs_rmdir(struct inode *dip, struct dentry *dentry)
 		if (rc == -EIO)
 			txAbort(tid, 1);
 		txEnd(tid);
-		mutex_unlock(&JFS_IP(dip)->commit_mutex);
 		mutex_unlock(&JFS_IP(ip)->commit_mutex);
+		mutex_unlock(&JFS_IP(dip)->commit_mutex);
 
 		goto out2;
 	}
@@ -423,8 +423,8 @@ static int jfs_rmdir(struct inode *dip, struct dentry *dentry)
 
 	txEnd(tid);
 
-	mutex_unlock(&JFS_IP(dip)->commit_mutex);
 	mutex_unlock(&JFS_IP(ip)->commit_mutex);
+	mutex_unlock(&JFS_IP(dip)->commit_mutex);
 
 	/*
 	 * Truncating the directory index table is not guaranteed.  It
@@ -504,8 +504,8 @@ static int jfs_unlink(struct inode *dip, struct dentry *dentry)
 		if (rc == -EIO)
 			txAbort(tid, 1);	/* Marks FS Dirty */
 		txEnd(tid);
-		mutex_unlock(&JFS_IP(dip)->commit_mutex);
 		mutex_unlock(&JFS_IP(ip)->commit_mutex);
+		mutex_unlock(&JFS_IP(dip)->commit_mutex);
 		IWRITE_UNLOCK(ip);
 		goto out1;
 	}
@@ -528,8 +528,8 @@ static int jfs_unlink(struct inode *dip, struct dentry *dentry)
 		if ((new_size = commitZeroLink(tid, ip)) < 0) {
 			txAbort(tid, 1);	/* Marks FS Dirty */
 			txEnd(tid);
-			mutex_unlock(&JFS_IP(dip)->commit_mutex);
 			mutex_unlock(&JFS_IP(ip)->commit_mutex);
+			mutex_unlock(&JFS_IP(dip)->commit_mutex);
 			IWRITE_UNLOCK(ip);
 			rc = new_size;
 			goto out1;
@@ -557,9 +557,8 @@ static int jfs_unlink(struct inode *dip, struct dentry *dentry)
 
 	txEnd(tid);
 
-	mutex_unlock(&JFS_IP(dip)->commit_mutex);
 	mutex_unlock(&JFS_IP(ip)->commit_mutex);
-
+	mutex_unlock(&JFS_IP(dip)->commit_mutex);
 
 	while (new_size && (rc == 0)) {
 		tid = txBegin(dip->i_sb, 0);
@@ -848,8 +847,8 @@ static int jfs_link(struct dentry *old_dentry,
       out:
 	txEnd(tid);
 
-	mutex_unlock(&JFS_IP(dir)->commit_mutex);
 	mutex_unlock(&JFS_IP(ip)->commit_mutex);
+	mutex_unlock(&JFS_IP(dir)->commit_mutex);
 
 	jfs_info("jfs_link: rc:%d", rc);
 	return rc;
@@ -1038,8 +1037,8 @@ static int jfs_symlink(struct inode *dip, struct dentry *dentry,
 
       out3:
 	txEnd(tid);
-	mutex_unlock(&JFS_IP(dip)->commit_mutex);
 	mutex_unlock(&JFS_IP(ip)->commit_mutex);
+	mutex_unlock(&JFS_IP(dip)->commit_mutex);
 	if (rc) {
 		free_ea_wmap(ip);
 		ip->i_nlink = 0;
@@ -1161,10 +1160,11 @@ static int jfs_rename(struct inode *old_dir, struct dentry *old_dentry,
 		if (S_ISDIR(new_ip->i_mode)) {
 			new_ip->i_nlink--;
 			if (new_ip->i_nlink) {
-				mutex_unlock(&JFS_IP(new_dir)->commit_mutex);
-				mutex_unlock(&JFS_IP(old_ip)->commit_mutex);
+				mutex_unlock(&JFS_IP(new_ip)->commit_mutex);
 				if (old_dir != new_dir)
 					mutex_unlock(&JFS_IP(old_dir)->commit_mutex);
+				mutex_unlock(&JFS_IP(old_ip)->commit_mutex);
+				mutex_unlock(&JFS_IP(new_dir)->commit_mutex);
 				if (!S_ISDIR(old_ip->i_mode) && new_ip)
 					IWRITE_UNLOCK(new_ip);
 				jfs_error(new_ip->i_sb,
@@ -1282,13 +1282,12 @@ static int jfs_rename(struct inode *old_dir, struct dentry *old_dentry,
 
       out4:
 	txEnd(tid);
-
-	mutex_unlock(&JFS_IP(new_dir)->commit_mutex);
-	mutex_unlock(&JFS_IP(old_ip)->commit_mutex);
-	if (old_dir != new_dir)
-		mutex_unlock(&JFS_IP(old_dir)->commit_mutex);
 	if (new_ip)
 		mutex_unlock(&JFS_IP(new_ip)->commit_mutex);
+	if (old_dir != new_dir)
+		mutex_unlock(&JFS_IP(old_dir)->commit_mutex);
+	mutex_unlock(&JFS_IP(old_ip)->commit_mutex);
+	mutex_unlock(&JFS_IP(new_dir)->commit_mutex);
 
 	while (new_size && (rc == 0)) {
 		tid = txBegin(new_ip->i_sb, 0);

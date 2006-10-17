@@ -7,7 +7,6 @@
  */
 
 #include <linux/blkdev.h>
-#include <linux/config.h>
 #include <linux/ctype.h>
 #include <linux/device-mapper.h>
 #include <linux/fs.h>
@@ -22,6 +21,8 @@
 #include "dm-snap.h"
 #include "dm-bio-list.h"
 #include "kcopyd.h"
+
+#define DM_MSG_PREFIX "snapshots"
 
 /*
  * The percentage increment we will wake up users at
@@ -117,7 +118,7 @@ static int init_origin_hash(void)
 	_origins = kmalloc(ORIGIN_HASH_SIZE * sizeof(struct list_head),
 			   GFP_KERNEL);
 	if (!_origins) {
-		DMERR("Device mapper: Snapshot: unable to allocate memory");
+		DMERR("unable to allocate memory");
 		return -ENOMEM;
 	}
 
@@ -412,7 +413,7 @@ static int snapshot_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	int blocksize;
 
 	if (argc < 4) {
-		ti->error = "dm-snapshot: requires exactly 4 arguments";
+		ti->error = "requires exactly 4 arguments";
 		r = -EINVAL;
 		goto bad1;
 	}
@@ -1127,7 +1128,7 @@ static int origin_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	struct dm_dev *dev;
 
 	if (argc != 1) {
-		ti->error = "dm-origin: incorrect number of arguments";
+		ti->error = "origin: incorrect number of arguments";
 		return -EINVAL;
 	}
 
@@ -1236,7 +1237,7 @@ static int __init dm_snapshot_init(void)
 
 	r = dm_register_target(&origin_target);
 	if (r < 0) {
-		DMERR("Device mapper: Origin: register failed %d\n", r);
+		DMERR("Origin target register failed %d", r);
 		goto bad1;
 	}
 

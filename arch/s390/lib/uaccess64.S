@@ -40,7 +40,17 @@ __copy_from_user_asm:
 	# move with the reduced length which is < 256
 5:	mvcp	0(%r5,%r2),0(%r4),%r0
 	slgr	%r3,%r5
-6:	lgr	%r2,%r3
+	algr	%r2,%r5
+6:	lgr	%r5,%r3		# copy remaining size
+	aghi	%r5,-1		# subtract 1 for xc loop
+	bras	%r4,8f
+	xc	0(1,%r2),0(%r2)
+7:	xc	0(256,%r2),0(%r2)
+	la	%r2,256(%r2)
+8:	aghi	%r5,-256
+	jnm	7b
+	ex	%r5,0(%r2)
+9:	lgr	%r2,%r3
 	br	%r14
         .section __ex_table,"a"
 	.quad	0b,4b
@@ -88,30 +98,31 @@ __copy_to_user_asm:
         .globl __copy_in_user_asm
 	# %r2 = from, %r3 = n, %r4 = to
 __copy_in_user_asm:
+	aghi	%r3,-1
+	jo	6f
 	sacf	256
-	bras	1,1f
-	mvc	0(1,%r4),0(%r2)
-0:	mvc	0(256,%r4),0(%r2)
-	la	%r2,256(%r2)
-	la	%r4,256(%r4)
-1:	aghi	%r3,-256
-	jnm	0b
-2:	ex	%r3,0(%r1)
-	sacf	0
-	slgr	%r2,%r2
-	br	14
-3:	mvc	0(1,%r4),0(%r2)
+	bras	%r1,4f
+0:	aghi	%r3,257
+1:	mvc	0(1,%r4),0(%r2)
 	la	%r2,1(%r2)
 	la	%r4,1(%r4)
 	aghi	%r3,-1
-	jnm	3b
-4:	lgr	%r2,%r3
-	sacf	0
+	jnz	1b
+2:	lgr	%r2,%r3
 	br	%r14
+3:	mvc	0(256,%r4),0(%r2)
+	la	%r2,256(%r2)
+	la	%r4,256(%r4)
+4:	aghi	%r3,-256
+	jnm	3b
+5:	ex	%r3,4(%r1)
+	sacf	0
+6:	slgr	%r2,%r2
+	br	14
         .section __ex_table,"a"
-	.quad	0b,3b
-	.quad	2b,3b
-	.quad	3b,4b
+	.quad	1b,2b
+	.quad	3b,0b
+	.quad	5b,0b
         .previous
 
         .align 4

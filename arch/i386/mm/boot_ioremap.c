@@ -15,7 +15,6 @@
  * boot_pte_t is defined only if this all works correctly
  */
 
-#include <linux/config.h>
 #undef CONFIG_X86_PAE
 #include <asm/page.h>
 #include <asm/pgtable.h>
@@ -30,8 +29,11 @@
  */
 
 #define BOOT_PTE_PTRS (PTRS_PER_PTE*2)
-#define boot_pte_index(address) \
-	     (((address) >> PAGE_SHIFT) & (BOOT_PTE_PTRS - 1))
+
+static unsigned long boot_pte_index(unsigned long vaddr)
+{
+	return __pa(vaddr) >> PAGE_SHIFT;
+}
 
 static inline boot_pte_t* boot_vaddr_to_pte(void *address)
 {

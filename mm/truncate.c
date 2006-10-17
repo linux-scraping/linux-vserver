@@ -68,10 +68,10 @@ invalidate_complete_page(struct address_space *mapping, struct page *page)
 		return 0;
 
 	write_lock_irq(&mapping->tree_lock);
-	if (PageDirty(page)) {
-		write_unlock_irq(&mapping->tree_lock);
-		return 0;
-	}
+	if (PageDirty(page))
+		goto failed;
+	if (page_count(page) != 2)	/* caller's ref + pagecache ref */
+		goto failed;
 
 	BUG_ON(PagePrivate(page));
 	__remove_from_page_cache(page);
@@ -79,6 +79,9 @@ invalidate_complete_page(struct address_space *mapping, struct page *page)
 	ClearPageUptodate(page);
 	page_cache_release(page);	/* pagecache ref */
 	return 1;
+failed:
+	write_unlock_irq(&mapping->tree_lock);
+	return 0;
 }
 
 /**
@@ -230,14 +233,24 @@ unsigned long invalidate_mapping_pages(struct address_space *mapping,
 			pagevec_lookup(&pvec, mapping, next, PAGEVEC_SIZE)) {
 		for (i = 0; i < pagevec_count(&pvec); i++) {
 			struct page *page = pvec.pages[i];
+			pgoff_t index;
+			int lock_failed;
 
-			if (TestSetPageLocked(page)) {
-				next++;
-				continue;
-			}
-			if (page->index > next)
-				next = page->index;
+			lock_failed = TestSetPageLocked(page);
+
+			/*
+			 * We really shouldn't be looking at the ->index of an
+			 * unlocked page.  But we're not allowed to lock these
+			 * pages.  So we rely upon nobody altering the ->index
+			 * of this (pinned-by-us) page.
+			 */
+			index = page->index;
+			if (index > next)
+				next = index;
 			next++;
+			if (lock_failed)
+				continue;
+
 			if (PageDirty(page) || PageWriteback(page))
 				goto unlock;
 			if (page_mapped(page))
@@ -257,8 +270,38 @@ unsigned long invalidate_inode_pages(struct address_space *mapping)
 {
 	return invalidate_mapping_pages(mapping, 0, ~0UL);
 }
-
 EXPORT_SYMBOL(invalidate_inode_pages);
+
+/*
+ * This is like invalidate_complete_page(), except it ignores the page's
+ * refcount.  We do this because invalidate_inode_pages2() needs stronger
+ * invalidation guarantees, and cannot afford to leave pages behind because
+ * shrink_list() has a temp ref on them, or because they're transiently sitting
+ * in the lru_cache_add() pagevecs.
+ */
+static int
+invalidate_complete_page2(struct address_space *mapping, struct page *page)
+{
+	if (page->mapping != mapping)
+		return 0;
+
+	if (PagePrivate(page) && !try_to_release_page(page, 0))
+		return 0;
+
+	write_lock_irq(&mapping->tree_lock);
+	if (PageDirty(page))
+		goto failed;
+
+	BUG_ON(PagePrivate(page));
+	__remove_from_page_cache(page);
+	write_unlock_irq(&mapping->tree_lock);
+	ClearPageUptodate(page);
+	page_cache_release(page);	/* pagecache ref */
+	return 1;
+failed:
+	write_unlock_irq(&mapping->tree_lock);
+	return 0;
+}
 
 /**
  * invalidate_inode_pages2_range - remove range of pages from an address_space
@@ -326,7 +369,7 @@ int invalidate_inode_pages2_range(struct address_space *mapping,
 				}
 			}
 			was_dirty = test_clear_page_dirty(page);
-			if (!invalidate_complete_page(mapping, page)) {
+			if (!invalidate_complete_page2(mapping, page)) {
 				if (was_dirty)
 					set_page_dirty(page);
 				ret = -EIO;

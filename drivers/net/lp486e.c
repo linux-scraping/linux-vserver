@@ -442,16 +442,16 @@ init_rx_bufs(struct net_device *dev, int num) {
 		if (rbd) {
 			rbd->pad = 0;
 			rbd->count = 0;
-			rbd->skb = dev_alloc_skb(RX_SKB_SIZE);
+			rbd->skb = dev_alloc_skb(RX_SKBSIZE);
 			if (!rbd->skb) {
 				printk("dev_alloc_skb failed");
 			}
 			rbd->next = rfd->rbd;
 			if (i) {
 				rfd->rbd->prev = rbd;
-				rbd->size = RX_SKB_SIZE;
+				rbd->size = RX_SKBSIZE;
 			} else {
-				rbd->size = (RX_SKB_SIZE | RBD_EL);
+				rbd->size = (RX_SKBSIZE | RBD_EL);
 				lp->rbd_tail = rbd;
 			}
 
@@ -851,7 +851,7 @@ static int i596_open(struct net_device *dev)
 {
 	int i;
 
-	i = request_irq(dev->irq, &i596_interrupt, SA_SHIRQ, dev->name, dev);
+	i = request_irq(dev->irq, &i596_interrupt, IRQF_SHARED, dev->name, dev);
 	if (i) {
 		printk(KERN_ERR "%s: IRQ %d not free\n", dev->name, dev->irq);
 		return i;
@@ -877,8 +877,7 @@ static int i596_start_xmit (struct sk_buff *skb, struct net_device *dev) {
 	length = skb->len;
 	
 	if (length < ETH_ZLEN) {
-		skb = skb_padto(skb, ETH_ZLEN);
-		if (skb == NULL)
+		if (skb_padto(skb, ETH_ZLEN))
 			return 0;
 		length = ETH_ZLEN;
 	}

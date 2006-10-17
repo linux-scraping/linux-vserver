@@ -19,7 +19,6 @@
  * Naturally it's not a 1:1 relation, but there are similarities.
  */
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/ptrace.h>
 #include <linux/irq.h>
@@ -36,6 +35,7 @@
 #include <linux/seq_file.h>
 #include <linux/errno.h>
 #include <linux/spinlock.h>
+#include <linux/vs_context.h>
 
 #include <asm/io.h>
 
@@ -69,7 +69,7 @@ int show_interrupts(struct seq_file *p, void *v)
 		for_each_online_cpu(j)
 			seq_printf(p, "%10u ", kstat_cpu(j).irqs[i]);
 #endif
-		seq_printf(p, " %14s", irq_desc[i].handler->typename);
+		seq_printf(p, " %14s", irq_desc[i].chip->typename);
 		seq_printf(p, "  %s", action->name);
 
 		for (action=action->next; action; action = action->next)
@@ -86,20 +86,24 @@ skip:
 /* called by the assembler IRQ entry functions defined in irq.h
  * to dispatch the interrupts to registred handlers
  * interrupts are disabled upon entry - depending on if the
- * interrupt was registred with SA_INTERRUPT or not, interrupts
+ * interrupt was registred with IRQF_DISABLED or not, interrupts
  * are re-enabled or not.
  */
 
 asmlinkage void do_IRQ(int irq, struct pt_regs * regs)
 {
 	unsigned long sp;
+	struct vx_info_save vxis;
+
 	irq_enter();
 	sp = rdsp();
 	if (unlikely((sp & (PAGE_SIZE - 1)) < (PAGE_SIZE/8))) {
 		printk("do_IRQ: stack overflow: %lX\n", sp);
 		show_stack(NULL, (unsigned long *)sp);
 	}
+	__enter_vx_admin(&vxis);
 	__do_IRQ(irq, regs);
+	__leave_vx_admin(&vxis);
         irq_exit();
 }
 

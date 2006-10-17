@@ -15,7 +15,6 @@
  * Naturally it's not a 1:1 relation, but there are similarities.
  */
 
-#include <linux/config.h>
 #include <linux/errno.h>
 #include <linux/kernel_stat.h>
 #include <linux/signal.h>
@@ -38,6 +37,7 @@
 #include <asm/delay.h>
 #include <asm/irq.h>
 #include <linux/irq.h>
+#include <linux/vs_context.h>
 
 void ack_bad_irq(unsigned int irq)
 {
@@ -65,7 +65,7 @@ int show_interrupts(struct seq_file *p, void *v)
 			goto unlock;
 		seq_printf(p, "%3d: ",i);
 		seq_printf(p, "%10u ", kstat_irqs(i));
-		seq_printf(p, " %14s", irq_desc[i].handler->typename);
+		seq_printf(p, " %14s", irq_desc[i].chip->typename);
 		seq_printf(p, "  %s", action->name);
 
 		for (action=action->next; action; action = action->next)
@@ -103,7 +103,11 @@ asmlinkage int do_IRQ(unsigned long vector_num, struct pt_regs * regs)
 	irq = irq_demux(vector_num);
 
 	if (irq >= 0) {
+		struct vx_info_save vxis;
+
+		__enter_vx_admin(&vxis);
 		__do_IRQ(irq, regs);
+		__leave_vx_admin(&vxis);
 	} else {
 		printk("unexpected IRQ trap at vector %03lx\n", vector_num);
 	}

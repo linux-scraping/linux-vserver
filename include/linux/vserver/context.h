@@ -123,6 +123,12 @@ struct vx_info {
 };
 
 
+struct vx_info_save {
+	struct vx_info *vxi;
+	xid_t xid;
+};
+
+
 /* status flags */
 
 #define VXS_HASHED	0x0001

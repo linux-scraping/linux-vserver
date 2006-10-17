@@ -245,7 +245,7 @@ do_osf_statfs(struct dentry * dentry, struct osf_statfs __user *buffer,
 	      unsigned long bufsiz)
 {
 	struct kstatfs linux_stat;
-	int error = vfs_statfs(dentry->d_inode->i_sb, &linux_stat);
+	int error = vfs_statfs(dentry, &linux_stat);
 	if (!error)
 		error = linux_to_osf_statfs(&linux_stat, buffer, bufsiz);
 	return error;	
@@ -622,7 +622,7 @@ osf_sysinfo(int command, char __user *buf, long count)
 		printk("sysinfo(%d)", command);
 		goto out;
 	}
-	
+
 	down_read(&uts_sem);
 	switch (offset)
 	{

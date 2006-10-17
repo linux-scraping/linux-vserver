@@ -2901,7 +2901,7 @@ static __inline__ void pktgen_xmit(struct pktgen_dev *pkt_dev)
 		}
 	}
 
-	spin_lock_bh(&odev->xmit_lock);
+	netif_tx_lock_bh(odev);
 	if (!netif_queue_stopped(odev)) {
 
 		atomic_inc(&(pkt_dev->skb->users));
@@ -2946,7 +2946,7 @@ static __inline__ void pktgen_xmit(struct pktgen_dev *pkt_dev)
 		pkt_dev->next_tx_ns = 0;
 	}
 
-	spin_unlock_bh(&odev->xmit_lock);
+	netif_tx_unlock_bh(odev);
 
 	/* If pkt_dev->count is zero, then run forever */
 	if ((pkt_dev->count != 0) && (pkt_dev->sofar >= pkt_dev->count)) {

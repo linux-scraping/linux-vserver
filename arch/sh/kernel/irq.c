@@ -12,6 +12,7 @@
 #include <linux/interrupt.h>
 #include <linux/kernel_stat.h>
 #include <linux/seq_file.h>
+#include <linux/vs_context.h>
 #include <asm/irq.h>
 #include <asm/processor.h>
 #include <asm/cpu/mmu_context.h>
@@ -47,7 +48,7 @@ int show_interrupts(struct seq_file *p, void *v)
 			goto unlock;
 		seq_printf(p, "%3d: ",i);
 		seq_printf(p, "%10u ", kstat_irqs(i));
-		seq_printf(p, " %14s", irq_desc[i].handler->typename);
+		seq_printf(p, " %14s", irq_desc[i].chip->typename);
 		seq_printf(p, "  %s", action->name);
 
 		for (action=action->next; action; action = action->next)
@@ -66,6 +67,7 @@ asmlinkage int do_IRQ(unsigned long r4, unsigned long r5,
 		      struct pt_regs regs)
 {
 	int irq = r4;
+	struct vx_info_save vxis;
 
 	irq_enter();
 
@@ -87,7 +89,9 @@ asmlinkage int do_IRQ(unsigned long r4, unsigned long r5,
 #endif
 
 	irq = irq_demux(irq);
+	__enter_vx_admin(&vxis);
 	__do_IRQ(irq, &regs);
+	__leave_vx_admin(&vxis);
 	irq_exit();
 	return 1;
 }
