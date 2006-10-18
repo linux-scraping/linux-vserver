@@ -134,49 +134,6 @@ extern struct group_info init_groups;
 	.nx_info	= NULL,						\
 }
 
-/*
- * fake INIT_TASK
- */
-#define FAKE_INIT_TASK(tsk)	\
-{									\
-	.pid		= 1,						\
-	.comm		= "init (fake)",				\
-	.thread_info	= &init_thread_info,				\
-	.group_info	= &init_groups,					\
-	.pids[PIDTYPE_PID] = { .pid = &fake_init_pid },			\
-	.state		= TASK_INTERRUPTIBLE,				\
-	.usage		= ATOMIC_INIT(2),				\
-	.lock_depth	= -1,						\
-	.time_slice	= HZ,						\
-	.prio		= MAX_PRIO-20,					\
-	.static_prio	= MAX_PRIO-20,					\
-	.normal_prio	= MAX_PRIO-20,					\
-	.policy		= SCHED_NORMAL,					\
-	.cpus_allowed	= CPU_MASK_ALL,					\
-	.run_list	= LIST_HEAD_INIT(tsk.run_list),			\
-	.tasks		= LIST_HEAD_INIT(tsk.tasks),			\
-	.ptrace_children= LIST_HEAD_INIT(tsk.ptrace_children),		\
-	.ptrace_list	= LIST_HEAD_INIT(tsk.ptrace_list),		\
-	.children	= LIST_HEAD_INIT(tsk.children),			\
-	.sibling	= LIST_HEAD_INIT(tsk.sibling),			\
-	.real_parent	= &tsk,						\
-	.parent		= &tsk,						\
-	.group_leader	= &tsk,						\
-	.cap_effective	= CAP_INIT_EFF_SET,				\
-	.cap_inheritable = CAP_INIT_INH_SET,				\
-	.cap_permitted	= CAP_FULL_SET,					\
-	.user		= INIT_USER,					\
-	.thread		= INIT_THREAD,					\
-	.pending	= {						\
-		.list = LIST_HEAD_INIT(tsk.pending.list),		\
-		.signal = {{0}}},					\
-	.alloc_lock	= __SPIN_LOCK_UNLOCKED(tsk.alloc_lock),		\
-	.cpu_timers	= INIT_CPU_TIMERS(tsk.cpu_timers),		\
-	.fs_excl	= ATOMIC_INIT(0),				\
-	.pi_lock	= SPIN_LOCK_UNLOCKED,				\
-	INIT_TRACE_IRQFLAGS						\
-	INIT_LOCKDEP							\
-}
 
 #define INIT_CPU_TIMERS(cpu_timers)					\
 {									\

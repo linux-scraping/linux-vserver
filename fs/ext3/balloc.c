@@ -1175,7 +1175,7 @@ static int ext3_has_free_blocks(struct super_block *sb)
 	root_blocks = le32_to_cpu(sbi->s_es->s_r_blocks_count);
 
 	vxdprintk(VXD_CBIT(dlim, 3),
-		"ext3_has_free_blocks(%p): free=%u, root=%u",
+		"ext3_has_free_blocks(%p): free=%lu, root=%lu",
 		sb, free_blocks, root_blocks);
 
 	DLIMIT_ADJUST_BLOCK(sb, dx_current_tag(), &free_blocks, &root_blocks);
@@ -1186,7 +1186,7 @@ static int ext3_has_free_blocks(struct super_block *sb)
 		(sbi->s_resgid == 0 || !in_group_p (sbi->s_resgid)));
 
 	vxdprintk(VXD_CBIT(dlim, 3),
-		"ext3_has_free_blocks(%p): %u<%u+1, %c, %u!=%u r=%d",
+		"ext3_has_free_blocks(%p): %lu<%lu+1, %c, %u!=%u r=%d",
 		sb, free_blocks, root_blocks,
 		!capable(CAP_SYS_RESOURCE)?'1':'0',
 		sbi->s_resuid, current->fsuid, cond?0:1);
