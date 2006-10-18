@@ -144,7 +144,7 @@ out:
 }
 
 static inline void __dl_adjust_block(struct super_block *sb, tag_t tag,
-	unsigned int *free_blocks, unsigned int *root_blocks,
+	unsigned long *free_blocks, unsigned long *root_blocks,
 	const char *_file, int _line)
 {
 	struct dl_info *dli;
@@ -163,7 +163,7 @@ static inline void __dl_adjust_block(struct super_block *sb, tag_t tag,
 	spin_unlock(&dli->dl_lock);
 
 	vxlprintk(VXD_CBIT(dlim, 2),
-		"ADJUST: %lld,%lld on %d,%d [mult=%d]",
+		"ADJUST: %lld,%lld on %ld,%ld [mult=%d]",
 		(long long)bfree, (long long)broot,
 		*free_blocks, *root_blocks, dli->dl_nrlmult,
 		_file, _line);
