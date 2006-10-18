@@ -89,7 +89,6 @@
 #include <linux/migrate.h>
 #include <linux/rmap.h>
 #include <linux/security.h>
-#include <linux/vs_cvirt.h>
 
 #include <asm/tlbflush.h>
 #include <asm/uaccess.h>

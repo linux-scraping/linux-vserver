@@ -28,7 +28,6 @@
 #include <linux/mempolicy.h>
 #include <linux/vmalloc.h>
 #include <linux/security.h>
-#include <linux/vs_cvirt.h>
 
 #include "internal.h"
 

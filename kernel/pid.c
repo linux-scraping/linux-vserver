@@ -261,11 +261,9 @@ struct task_struct * fastcall pid_task(struct pid *pid, enum pid_type type)
 		first = rcu_dereference(pid->tasks[type].first);
 		if (first)
 			result = hlist_entry(first, struct task_struct, pids[(type)].node);
-		// if (result && (pid->nr != 1) &&
-		if (result && (type == PIDTYPE_PID) && (pid->nr != 1) &&
-			// !vx_check(vx_task_xid(result), VX_WATCH|VX_IDENT)) {
+		if (result && (pid->nr != 1) &&
 			!vx_check(vx_task_xid(result), VX_WATCH|VX_ADMIN|VX_IDENT)) {
-			int warn = (current->xid);
+			int warn = ((type == PIDTYPE_PID) && (current->xid));
 
 			vxwprintk(warn , "[#%u] pid_task(%d,%d) = %p[#%u]",
 				current->xid, pid->nr, type, result, vx_task_xid(result));

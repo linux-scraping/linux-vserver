@@ -17,7 +17,6 @@
 #include <linux/security.h>
 #include <linux/audit.h>
 #include <linux/signal.h>
-#include <linux/vs_cvirt.h>
 
 #include <asm/pgtable.h>
 #include <asm/processor.h>

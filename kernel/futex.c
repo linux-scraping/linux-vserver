@@ -48,7 +48,6 @@
 #include <linux/pagemap.h>
 #include <linux/syscalls.h>
 #include <linux/signal.h>
-#include <linux/vs_cvirt.h>
 #include <asm/futex.h>
 
 #include "rtmutex_common.h"

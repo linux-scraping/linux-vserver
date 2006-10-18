@@ -25,7 +25,6 @@
 #include <linux/capability.h>
 #include <linux/syscalls.h>
 #include <linux/security.h>
-#include <linux/vs_cvirt.h>
 
 static int set_task_ioprio(struct task_struct *task, int ioprio)
 {
