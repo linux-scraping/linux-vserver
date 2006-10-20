@@ -138,19 +138,19 @@ void	vxh_dump_entry(struct _vx_hist_entry *e, unsigned cpu)
 
 static void __vxh_dump_history(void)
 {
-	unsigned int i,j;
+	unsigned int i, cpu;
 
 	printk("History:\tSEQ: %8x\tNR_CPUS: %d\n",
 		atomic_read(&sequence), NR_CPUS);
 
 	for (i=0; i < VXH_SIZE; i++) {
-		for (j=0; j < NR_CPUS; j++) {
+		for_each_online_cpu(cpu) {
 			struct _vx_history *hist =
-				&per_cpu(vx_history_buffer, j);
+				&per_cpu(vx_history_buffer, cpu);
 			unsigned int index = (hist->counter-i) % VXH_SIZE;
 			struct _vx_hist_entry *entry = &hist->entry[index];
 
-			vxh_dump_entry(entry, j);
+			vxh_dump_entry(entry, cpu);
 		}
 	}
 }

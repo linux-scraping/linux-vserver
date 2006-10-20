@@ -210,6 +210,7 @@ static inline void __leave_vx_admin(struct vx_info_save *vxis)
 }
 
 extern void exit_vx_info(struct task_struct *, int);
+extern void exit_vx_info_early(struct task_struct *, int);
 
 
 static inline
@@ -229,6 +230,9 @@ struct task_struct *vx_child_reaper(struct task_struct *p)
 
 	reaper = vxi->vx_reaper;
 out:
+	vxdprintk(VXD_CBIT(xid, 3),
+		"vx_child_reaper(%p[#%u,%u]) = %p[#%u,%u]\n",
+		p, p->xid, p->pid, reaper, reaper->xid, reaper->pid);
 	return reaper;
 }
 

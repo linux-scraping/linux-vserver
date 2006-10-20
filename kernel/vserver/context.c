@@ -668,11 +668,19 @@ void	exit_vx_info(struct task_struct *p, int code)
 		vx_nproc_dec(p);
 
 		vxi->exit_code = code;
+		release_vx_info(vxi, p);
+	}
+}
+
+void	exit_vx_info_early(struct task_struct *p, int code)
+{
+	struct vx_info *vxi = p->vx_info;
+
+	if (vxi) {
 		if (vxi->vx_initpid == p->tgid)
 			vx_exit_init(vxi, p, code);
 		if (vxi->vx_reaper == p)
 			vx_set_reaper(vxi, child_reaper);
-		release_vx_info(vxi, p);
 	}
 }
 
