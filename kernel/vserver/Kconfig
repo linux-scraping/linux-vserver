@@ -38,14 +38,14 @@ config	VSERVER_DYNAMIC_IDS
 	  which is deprecated and will probably be removed in the
 	  next release.
 
-config	VSERVER_NGNET
-	bool	"Disable Legacy Networking Kernel API"
-	depends on EXPERIMENTAL
-	default n
+config	VSERVER_LEGACYNET
+	bool	"Enable Legacy Networking Kernel API"
+	default y
 	help
-	  This disables the legacy networking API which is required
-	  by the chbind tool. Do not disable it unless you exactly
-	  know what you are doing.
+	  This enables the legacy networking API which is required
+	  by the chbind tool (for util-vserver versions prior to
+	  0.30.210). If you use an older version, don't disable
+	  this option.
 
 config	VSERVER_REMAP_SADDR
 	bool	"Remap Source IP Address"
@@ -266,8 +266,8 @@ config	VSERVER_SECURITY
 	default y
 	select SECURITY_CAPABILITIES
 
-config	VSERVER_LEGACYNET
+config	VSERVER_NGNET
 	bool
-	depends on !VSERVER_NGNET
+	depends on EXPERIMENTAL && !VSERVER_LEGACYNET
 	default y
 
