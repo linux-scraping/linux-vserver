@@ -51,7 +51,6 @@ int vx_info_kill(struct vx_info *vxi, int pid, int sig)
 	case 1:
 		if (vxi->vx_initpid) {
 			pid = vxi->vx_initpid;
-			printk("··· tasks left: %d\n", atomic_read(&vxi->vx_tasks));
 			/* for now, only SIGINT to private init ... */
 			if (!vx_info_flags(vxi, VXF_STATE_ADMIN, 0) &&
 				/* ... as long as there are tasks left */
