@@ -73,7 +73,6 @@
 #include <linux/poll.h>
 #include <linux/vs_context.h>
 #include <linux/vs_network.h>
-#include <linux/vs_pid.h>
 
 #include "internal.h"
 
@@ -2077,20 +2076,6 @@ out:
 	return;
 }
 
-#define VXF_FAKE_INIT	(VXF_INFO_INIT|VXF_STATE_INIT)
-
-static inline int proc_pid_visible(struct task_struct *task, int pid)
-{
-	if ((pid == 1) &&
-		!vx_flags(VXF_FAKE_INIT, VXF_FAKE_INIT))
-		goto visible;
-	if (vx_check(vx_task_xid(task), VX_WATCH|VX_IDENT))
-		goto visible;
-	return 0;
-visible:
-	return 1;
-}
-
 /* SMP-safe */
 struct dentry *proc_pid_lookup(struct inode *dir, struct dentry * dentry, struct nameidata *nd)
 {
@@ -2120,7 +2105,7 @@ struct dentry *proc_pid_lookup(struct inode *dir, struct dentry * dentry, struct
 		goto out;
 
 	rcu_read_lock();
-	task = find_task_by_pid(tgid);
+	task = find_proc_task_by_pid(tgid);
 	if (task)
 		get_task_struct(task);
 	rcu_read_unlock();
@@ -2173,7 +2158,7 @@ static struct dentry *proc_task_lookup(struct inode *dir, struct dentry * dentry
 		goto out;
 
 	rcu_read_lock();
-	task = find_task_by_pid(tid);
+	task = find_proc_task_by_pid(tid);
 	if (task)
 		get_task_struct(task);
 	rcu_read_unlock();
@@ -2229,7 +2214,7 @@ static struct task_struct *first_tgid(int tgid, unsigned int nr)
 	struct task_struct *pos;
 	rcu_read_lock();
 	if (tgid && nr) {
-		pos = find_task_by_pid(tgid);
+		pos = find_proc_task_by_pid(tgid);
 		if (pos && thread_group_leader(pos))
 			goto found;
 	}
@@ -2343,7 +2328,7 @@ static struct task_struct *first_tid(struct task_struct *leader,
 	rcu_read_lock();
 	/* Attempt to start with the pid of a thread */
 	if (tid && (nr > 0)) {
-		pos = find_task_by_pid(tid);
+		pos = find_proc_task_by_pid(tid);
 		if (pos && (pos->group_leader == leader))
 			goto found;
 	}

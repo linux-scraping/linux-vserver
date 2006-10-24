@@ -10,6 +10,7 @@
  */
 
 #include <linux/proc_fs.h>
+#include <linux/vs_pid.h>
 
 struct vmalloc_info {
 	unsigned long	used;
@@ -57,7 +58,7 @@ static inline struct pid *proc_pid(struct inode *inode)
 
 static inline struct task_struct *get_proc_task(struct inode *inode)
 {
-	return get_pid_task(proc_pid(inode), PIDTYPE_PID);
+	return vx_get_proc_task(inode, proc_pid(inode));
 }
 
 static inline int proc_fd(struct inode *inode)

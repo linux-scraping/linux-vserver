@@ -26,6 +26,7 @@
 #include <linux/seq_file.h>
 #include <linux/profile.h>
 #include <linux/bitops.h>
+#include <linux/vs_context.h>
 
 #include <asm/system.h>
 #include <asm/io.h>
@@ -140,6 +141,7 @@ handle_irq(int irq, struct pt_regs * regs)
 	 * handled by some other CPU. (or is disabled)
 	 */
 	static unsigned int illegal_count=0;
+	struct vx_info_save vxis;
 	
 	if ((unsigned) irq > ACTUAL_NR_IRQS && illegal_count < MAX_ILLEGAL_IRQS ) {
 		irq_err_count++;
@@ -157,6 +159,8 @@ handle_irq(int irq, struct pt_regs * regs)
 	 * at IPL 0.
 	 */
 	local_irq_disable();
+	__enter_vx_admin(&vxis);
 	__do_IRQ(irq, regs);
+	__leave_vx_admin(&vxis);
 	irq_exit();
 }
