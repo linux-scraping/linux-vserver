@@ -1378,11 +1378,12 @@ static int pid_revalidate(struct dentry *dentry, struct nameidata *nd)
 	int ret = 0;
 
 	if (task) {
-		ret = 1;
-		/* discard wrong fakeinit */
-		if (!vx_check(vx_task_xid(task), VX_IDENT))
+		int pid = (inode->i_ino >> 16) & 0xFFFF;
+
+		if (!proc_pid_visible(task, pid))
 			goto out_drop;
 
+		ret = 1;
 		if ((inode->i_mode == (S_IFDIR|S_IRUGO|S_IXUGO)) ||
 		    task_dumpable(task)) {
 			inode->i_uid = task->euid;

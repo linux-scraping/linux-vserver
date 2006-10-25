@@ -1146,6 +1146,8 @@ void iput(struct inode *inode)
 	if (inode) {
 		struct super_operations *op = inode->i_sb->s_op;
 
+		if (inode->i_state == I_CLEAR)
+			printk("inode = %p[#%u,%lu]\n", inode, inode->i_tag, inode->i_ino);
 		BUG_ON(inode->i_state == I_CLEAR);
 
 		if (op && op->put_inode)
