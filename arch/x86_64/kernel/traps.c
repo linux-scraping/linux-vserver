@@ -604,8 +604,8 @@ static void __kprobes do_trap(int trapnr, int signr, char *str,
 	if (user_mode(regs)) {
 		if (exception_trace && unhandled_signal(tsk, signr))
 			printk(KERN_INFO
-			       "%s[%d] trap %s rip:%lx rsp:%lx error:%lx\n",
-			       tsk->comm, tsk->pid, str,
+			       "%s[%d:#%u] trap %s rip:%lx rsp:%lx error:%lx\n",
+			       tsk->comm, tsk->pid, tsk->xid, str,
 			       regs->rip, regs->rsp, error_code); 
 
 		if (info)
@@ -705,8 +705,8 @@ asmlinkage void __kprobes do_general_protection(struct pt_regs * regs,
 	if (user_mode(regs)) {
 		if (exception_trace && unhandled_signal(tsk, SIGSEGV))
 			printk(KERN_INFO
-		       "%s[%d] general protection rip:%lx rsp:%lx error:%lx\n",
-			       tsk->comm, tsk->pid,
+		       "%s[%d:#%u] general protection rip:%lx rsp:%lx error:%lx\n",
+			       tsk->comm, tsk->pid, tsk->xid,
 			       regs->rip, regs->rsp, error_code); 
 
 		force_sig(SIGSEGV, tsk);

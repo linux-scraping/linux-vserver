@@ -209,6 +209,7 @@ static int __init vs_debug_setup(char *str)
 		HANDLE_CASE(SWITCH, switch, value);
 		HANDLE_CASE(XID,    xid,    value);
 		HANDLE_CASE(NID,    nid,    value);
+		HANDLE_CASE(TAG,    tag,    value);
 		HANDLE_CASE(NET,    net,    value);
 		HANDLE_CASE(LIMIT,  limit,  value);
 		HANDLE_CASE(CRES,   cres,   value);

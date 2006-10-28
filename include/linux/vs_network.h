@@ -154,6 +154,9 @@ static __inline__ struct nx_info *__task_get_nx_info(struct task_struct *p,
 
 #define nx_current_nid() nx_task_nid(current)
 
+#define current_nx_info() (current->nx_info)
+
+
 #define nx_check(c,m)	__nx_check(nx_current_nid(),c,m)
 
 #define nx_weak_check(c,m)	((m) ? nx_check(c,m) : 1)

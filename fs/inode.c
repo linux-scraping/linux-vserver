@@ -22,6 +22,7 @@
 #include <linux/bootmem.h>
 #include <linux/inotify.h>
 #include <linux/mount.h>
+#include <linux/vserver/debug.h>
 
 /*
  * This is needed for the following functions:
@@ -268,6 +269,9 @@ void clear_inode(struct inode *inode)
 		bd_forget(inode);
 	if (inode->i_cdev)
 		cd_forget(inode);
+
+	vxdprintk(VXD_CBIT(tag, 0), "clear_inode(%p[#%u,%8lx,%8lx])",
+		inode, inode->i_tag, inode->i_ino, inode->i_sb->s_magic);
 	inode->i_state = I_CLEAR;
 }
 
@@ -1146,8 +1150,9 @@ void iput(struct inode *inode)
 	if (inode) {
 		struct super_operations *op = inode->i_sb->s_op;
 
-		if (inode->i_state == I_CLEAR)
-			printk("inode = %p[#%u,%lu]\n", inode, inode->i_tag, inode->i_ino);
+		vxdprintk(VXD_CBIT(tag, 1) && (inode->i_state == I_CLEAR),
+			"iput(%p[#%u,%8lx,%8lx])",
+			inode, inode->i_tag, inode->i_ino, inode->i_sb->s_magic);
 		BUG_ON(inode->i_state == I_CLEAR);
 
 		if (op && op->put_inode)

@@ -567,20 +567,6 @@ struct dentry *proc_virtual_lookup(struct inode *dir,
 	len = dentry->d_name.len;
 	ret = -ENOMEM;
 
-#if 0
-	if (len == 7 && !memcmp(name, "current", 7)) {
-		inode = new_inode(dir->i_sb);
-		if (!inode)
-			goto out;
-		inode->i_mtime = inode->i_atime =
-			inode->i_ctime = CURRENT_TIME;
-		inode->i_ino = fake_ino(1, PROC_XID_INO);
-		inode->i_mode = S_IFLNK|S_IRWXUGO;
-		inode->i_uid = inode->i_gid = 0;
-		d_add(dentry, inode);
-		return NULL;
-	}
-#endif
 	if (len == 4 && !memcmp(name, "info", 4)) {
 		inode = proc_vid_make_inode(dir->i_sb, 0, PROC_XID_INFO);
 		if (!inode)
@@ -645,20 +631,7 @@ struct dentry *proc_vnet_lookup(struct inode *dir,
 	name = dentry->d_name.name;
 	len = dentry->d_name.len;
 	ret = -ENOMEM;
-#if 0
-	if (len == 7 && !memcmp(name, "current", 7)) {
-		inode = new_inode(dir->i_sb);
-		if (!inode)
-			goto out;
-		inode->i_mtime = inode->i_atime =
-			inode->i_ctime = CURRENT_TIME;
-		inode->i_ino = fake_ino(1, PROC_NID_INO);
-		inode->i_mode = S_IFLNK|S_IRWXUGO;
-		inode->i_uid = inode->i_gid = 0;
-		d_add(dentry, inode);
-		return NULL;
-	}
-#endif
+
 	if (len == 4 && !memcmp(name, "info", 4)) {
 		inode = proc_vid_make_inode(dir->i_sb, 0, PROC_NID_INFO);
 		if (!inode)
