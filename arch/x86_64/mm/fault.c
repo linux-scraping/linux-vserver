@@ -520,10 +520,10 @@ bad_area_nosemaphore:
 
 		if (exception_trace && unhandled_signal(tsk, SIGSEGV)) {
 			printk(
-		       "%s%s[%d]: segfault at %016lx rip %016lx rsp %016lx error %lx\n",
+		       "%s%s[%d:#%u]: segfault at %016lx rip %016lx rsp %016lx error %lx\n",
 					tsk->pid > 1 ? KERN_INFO : KERN_EMERG,
-					tsk->comm, tsk->pid, address, regs->rip,
-					regs->rsp, error_code);
+					tsk->comm, tsk->pid, tsk->xid, address,
+					regs->rip, regs->rsp, error_code);
 		}
        
 		tsk->thread.cr2 = address;

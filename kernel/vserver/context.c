@@ -185,6 +185,8 @@ static void __shutdown_vx_info(struct vx_info *vxi)
 
 void free_vx_info(struct vx_info *vxi)
 {
+	unsigned long flags;
+
 	/* context shutdown is mandatory */
 	BUG_ON(!vx_info_state(vxi, VXS_SHUTDOWN));
 
@@ -196,9 +198,9 @@ void free_vx_info(struct vx_info *vxi)
 	BUG_ON(vxi->vx_namespace);
 	BUG_ON(vxi->vx_fs);
 
-	spin_lock(&vx_info_inactive_lock);
+	spin_lock_irqsave(&vx_info_inactive_lock, flags);
 	hlist_del(&vxi->vx_hlist);
-	spin_unlock(&vx_info_inactive_lock);
+	spin_unlock_irqrestore(&vx_info_inactive_lock, flags);
 
 	__dealloc_vx_info(vxi);
 }
@@ -251,6 +253,8 @@ static inline void __hash_vx_info(struct vx_info *vxi)
 
 static inline void __unhash_vx_info(struct vx_info *vxi)
 {
+	unsigned long flags;
+
 	vxd_assert_lock(&vx_info_hash_lock);
 	vxdprintk(VXD_CBIT(xid, 4),
 		"__unhash_vx_info: %p[#%d]", vxi, vxi->vx_id);
@@ -261,9 +265,9 @@ static inline void __unhash_vx_info(struct vx_info *vxi)
 
 	vxi->vx_state &= ~VXS_HASHED;
 	hlist_del_init(&vxi->vx_hlist);
-	spin_lock(&vx_info_inactive_lock);
+	spin_lock_irqsave(&vx_info_inactive_lock, flags);
 	hlist_add_head(&vxi->vx_hlist, &vx_info_inactive);
-	spin_unlock(&vx_info_inactive_lock);
+	spin_unlock_irqrestore(&vx_info_inactive_lock, flags);
 	atomic_dec(&vx_global_cactive);
 }
 
