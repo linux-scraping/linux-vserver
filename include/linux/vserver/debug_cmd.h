@@ -26,6 +26,8 @@ struct  vcmd_read_monitor_v0 {
 
 #ifdef	CONFIG_COMPAT
 
+#include <asm/compat.h>
+
 struct  vcmd_read_history_v0_x32 {
 	uint32_t index;
 	uint32_t count;

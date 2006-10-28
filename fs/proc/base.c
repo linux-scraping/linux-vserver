@@ -1704,6 +1704,17 @@ static struct dentry *proc_pident_lookup(struct inode *dir,
 	if (!p->name)
 		goto out;
 
+	switch(p->type) {
+		case PROC_TID_VX_INFO:
+		case PROC_TGID_VX_INFO:
+		case PROC_TID_IP_INFO:
+		case PROC_TGID_IP_INFO:
+			if (task_vx_flags(task, VXF_HIDE_VINFO, 0))
+				goto out;
+		default:
+			break;
+	}
+
 	error = ERR_PTR(-EINVAL);
 	inode = proc_pid_make_inode(dir->i_sb, task, p->type);
 	if (!inode)
@@ -1872,35 +1883,25 @@ static struct dentry *proc_pident_lookup(struct inode *dir,
 #endif
 		case PROC_TID_VX_INFO:
 		case PROC_TGID_VX_INFO:
-			if (task_vx_flags(task, VXF_HIDE_VINFO, 0))
-				goto out_noent;
 			inode->i_fop = &proc_info_file_operations;
 			ei->op.proc_read = proc_pid_vx_info;
 			break;
 		case PROC_TID_IP_INFO:
 		case PROC_TGID_IP_INFO:
-			if (task_vx_flags(task, VXF_HIDE_VINFO, 0))
-				goto out_noent;
 			inode->i_fop = &proc_info_file_operations;
 			ei->op.proc_read = proc_pid_nx_info;
 			break;
 		default:
 			printk("procfs: impossible type (%d)",p->type);
+			iput(inode);
 			error = ERR_PTR(-EINVAL);
-			goto out_put;
+			goto out;
 	}
 	dentry->d_op = &pid_dentry_operations;
 	d_add(dentry, inode);
 	/* Close the race of the process dying before we return the dentry */
-	if (pid_revalidate(dentry, NULL)) {
+	if (pid_revalidate(dentry, NULL))
 		error = NULL;
-		goto out;
-	}
-
-out_noent:
-	error=ERR_PTR(-ENOENT);
-out_put:
-	iput(inode);
 out:
 	put_task_struct(task);
 out_no_task:

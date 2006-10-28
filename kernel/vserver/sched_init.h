@@ -1,6 +1,8 @@
 
 static inline void vx_info_init_sched(struct _vx_sched *sched)
 {
+	static struct lock_class_key tokens_lock_key;
+
 	/* scheduling; hard code starting values as constants */
 	sched->fill_rate[0]	= 1;
 	sched->interval[0]	= 4;
@@ -12,6 +14,8 @@ static inline void vx_info_init_sched(struct _vx_sched *sched)
 	sched->tokens_lock	= SPIN_LOCK_UNLOCKED;
 	sched->prio_bias	= 0;
 	sched->vavavoom		= 0;
+
+	lockdep_set_class(&sched->tokens_lock, &tokens_lock_key);
 }
 
 static inline

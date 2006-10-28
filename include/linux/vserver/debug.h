@@ -71,6 +71,8 @@ extern unsigned int vx_debug_misc;
 	((n) ? vxd_path((n)->dentry, (n)->mnt) : "<null>" )
 
 
+struct vx_info;
+
 void dump_vx_info(struct vx_info *, int);
 void dump_vx_info_inactive(int);
 
