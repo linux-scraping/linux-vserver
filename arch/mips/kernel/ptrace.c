@@ -171,6 +171,9 @@ long arch_ptrace(struct task_struct *child, long request, long addr, long data)
 {
 	int ret;
 
+	if (!vx_check(vx_task_xid(child), VX_WATCH_P|VX_IDENT))
+		goto out;
+
 	switch (request) {
 	/* when I and D space are separate, these will need to be fixed. */
 	case PTRACE_PEEKTEXT: /* read word at location addr. */
@@ -479,8 +482,6 @@ asmlinkage void do_syscall_trace(struct pt_regs *regs, int entryexit)
 		goto out;
 	if (!test_thread_flag(TIF_SYSCALL_TRACE))
 		goto out;
-	if (!vx_check(vx_task_xid(child), VX_WATCH_P|VX_IDENT))
-		goto out_tsk;
 
 	/* The 0x80 provides a way for the tracing parent to distinguish
 	   between a syscall stop and SIGTRAP delivery */

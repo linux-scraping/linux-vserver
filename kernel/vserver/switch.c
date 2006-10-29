@@ -480,7 +480,7 @@ out:
 	return ret;
 }
 
-extern asmlinkage long
+asmlinkage long
 sys_vserver(uint32_t cmd, uint32_t id, void __user *data)
 {
 	return do_vserver(cmd, id, data, 0);
@@ -488,7 +488,7 @@ sys_vserver(uint32_t cmd, uint32_t id, void __user *data)
 
 #ifdef	CONFIG_COMPAT
 
-extern asmlinkage long
+asmlinkage long
 sys32_vserver(uint32_t cmd, uint32_t id, void __user *data)
 {
 	return do_vserver(cmd, id, data, 1);
