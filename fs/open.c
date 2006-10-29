@@ -443,12 +443,8 @@ long do_utimes(int dfd, char __user *filename, struct timeval *times)
 		goto out;
 	inode = nd.dentry->d_inode;
 
-	error = -EROFS;
-	if (IS_RDONLY(inode) || MNT_IS_RDONLY(nd.mnt))
-		goto dput_and_out;
-
 #ifdef CONFIG_VSERVER_COWBL
-	error = cow_break_link_vfsmount(&nd.dentry, nd.mnt);
+	error = cow_check_and_break(&nd);
 	if (error)
 		goto dput_and_out;
 	inode = nd.dentry->d_inode;
@@ -684,12 +680,8 @@ asmlinkage long sys_fchmodat(int dfd, const char __user *filename,
 		goto out;
 	inode = nd.dentry->d_inode;
 
-	error = -EROFS;
-	if (IS_RDONLY(inode) || MNT_IS_RDONLY(nd.mnt))
-		goto dput_and_out;
-
 #ifdef CONFIG_VSERVER_COWBL
-	error = cow_break_link_vfsmount(&nd.dentry, nd.mnt);
+	error = cow_check_and_break(&nd);
 	if (error)
 		goto dput_and_out;
 	inode = nd.dentry->d_inode;
@@ -719,7 +711,7 @@ asmlinkage long sys_chmod(const char __user *filename, mode_t mode)
 }
 
 static int chown_common(struct dentry *dentry, struct vfsmount *mnt,
-	uid_t user, gid_t group, int allow_cow)
+	uid_t user, gid_t group)
 {
 	struct inode * inode;
 	int error;
@@ -733,14 +725,6 @@ static int chown_common(struct dentry *dentry, struct vfsmount *mnt,
 	error = -EROFS;
 	if (IS_RDONLY(inode) || MNT_IS_RDONLY(mnt))
 		goto out;
-#ifdef CONFIG_VSERVER_COWBL
-	if (allow_cow) {
-		error = cow_break_link_vfsmount(&dentry, mnt);
-		if (error)
-			goto out;
-		inode = dentry->d_inode;
-	}
-#endif
 	error = -EPERM;
 	if (IS_IMMUTABLE(inode) || IS_APPEND(inode))
 		goto out;
@@ -769,7 +753,11 @@ asmlinkage long sys_chown(const char __user * filename, uid_t user, gid_t group)
 
 	error = user_path_walk(filename, &nd);
 	if (!error) {
-		error = chown_common(nd.dentry, nd.mnt, user, group, 1);
+#ifdef CONFIG_VSERVER_COWBL
+		error = cow_check_and_break(&nd);
+		if (!error)
+#endif
+			error = chown_common(nd.dentry, nd.mnt, user, group);
 		path_release(&nd);
 	}
 	return error;
@@ -788,7 +776,11 @@ asmlinkage long sys_fchownat(int dfd, const char __user *filename, uid_t user,
 	follow = (flag & AT_SYMLINK_NOFOLLOW) ? 0 : LOOKUP_FOLLOW;
 	error = __user_walk_fd(dfd, filename, follow, &nd);
 	if (!error) {
-		error = chown_common(nd.dentry, nd.mnt, user, group, 1);
+#ifdef CONFIG_VSERVER_COWBL
+		error = cow_check_and_break(&nd);
+		if (!error)
+#endif
+			error = chown_common(nd.dentry, nd.mnt, user, group);
 		path_release(&nd);
 	}
 out:
@@ -802,7 +794,11 @@ asmlinkage long sys_lchown(const char __user * filename, uid_t user, gid_t group
 
 	error = user_path_walk_link(filename, &nd);
 	if (!error) {
-		error = chown_common(nd.dentry, nd.mnt, user, group, 1);
+#ifdef CONFIG_VSERVER_COWBL
+		error = cow_check_and_break(&nd);
+		if (!error)
+#endif
+			error = chown_common(nd.dentry, nd.mnt, user, group);
 		path_release(&nd);
 	}
 	return error;
@@ -819,7 +815,7 @@ asmlinkage long sys_fchown(unsigned int fd, uid_t user, gid_t group)
 		struct dentry * dentry;
 		dentry = file->f_dentry;
 		audit_inode(NULL, dentry->d_inode);
-		error = chown_common(dentry, file->f_vfsmnt, user, group, 0);
+		error = chown_common(dentry, file->f_vfsmnt, user, group);
 		fput(file);
 	}
 	return error;
