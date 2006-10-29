@@ -1,6 +1,7 @@
 
 static inline void vx_info_init_sched(struct _vx_sched *sched)
 {
+	static struct lock_class_key tokens_lock_key;
 	int i;
 
 	/* scheduling; hard code starting values as constants */
@@ -10,6 +11,8 @@ static inline void vx_info_init_sched(struct _vx_sched *sched)
 	sched->tokens_max	= HZ >> 1;
 	sched->jiffies		= jiffies;
 	sched->tokens_lock	= SPIN_LOCK_UNLOCKED;
+
+	lockdep_set_class(&sched->tokens_lock, &tokens_lock_key);
 
 	atomic_set(&sched->tokens, HZ >> 2);
 	sched->cpus_allowed	= CPU_MASK_ALL;

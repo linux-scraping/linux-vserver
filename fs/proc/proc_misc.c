@@ -52,8 +52,6 @@
 #include <asm/div64.h>
 #include "internal.h"
 
-#include <linux/vs_cvirt.h>
-
 #define LOAD_INT(x) ((x) >> FSHIFT)
 #define LOAD_FRAC(x) LOAD_INT(((x) & (FIXED_1-1)) * 100)
 /*

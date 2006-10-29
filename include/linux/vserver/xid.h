@@ -1,8 +1,6 @@
 #ifndef _VX_XID_H
 #define _VX_XID_H
 
-#include <linux/config.h>
-
 
 #define XID_TAG(in)	(IS_TAGXID(in))
 

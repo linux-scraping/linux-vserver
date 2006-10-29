@@ -71,8 +71,9 @@
 #include <linux/cpuset.h>
 #include <linux/audit.h>
 #include <linux/poll.h>
-#include <linux/vs_cvirt.h>
+#include <linux/vs_context.h>
 #include <linux/vs_network.h>
+
 #include "internal.h"
 
 /* NOTE:
@@ -1376,11 +1377,12 @@ static int pid_revalidate(struct dentry *dentry, struct nameidata *nd)
 	int ret = 0;
 
 	if (task) {
-		ret = 1;
-		/* discard wrong fakeinit */
-		if (!vx_check(vx_task_xid(task), VX_IDENT))
+		int pid = (inode->i_ino >> 16) & 0xFFFF;
+
+		if (!proc_pid_visible(task, pid))
 			goto out_drop;
 
+		ret = 1;
 		if ((inode->i_mode == (S_IFDIR|S_IRUGO|S_IXUGO)) ||
 		    task_dumpable(task)) {
 			inode->i_uid = task->euid;
@@ -1701,6 +1703,17 @@ static struct dentry *proc_pident_lookup(struct inode *dir,
 	if (!p->name)
 		goto out;
 
+	switch(p->type) {
+		case PROC_TID_VX_INFO:
+		case PROC_TGID_VX_INFO:
+		case PROC_TID_IP_INFO:
+		case PROC_TGID_IP_INFO:
+			if (task_vx_flags(task, VXF_INFO_HIDE, 0))
+				goto out;
+		default:
+			break;
+	}
+
 	error = ERR_PTR(-EINVAL);
 	inode = proc_pid_make_inode(dir->i_sb, task, p->type);
 	if (!inode)
@@ -1869,35 +1882,25 @@ static struct dentry *proc_pident_lookup(struct inode *dir,
 #endif
 		case PROC_TID_VX_INFO:
 		case PROC_TGID_VX_INFO:
-			if (task_vx_flags(task, VXF_INFO_HIDE, 0))
-				goto out_noent;
 			inode->i_fop = &proc_info_file_operations;
 			ei->op.proc_read = proc_pid_vx_info;
 			break;
 		case PROC_TID_IP_INFO:
 		case PROC_TGID_IP_INFO:
-			if (task_vx_flags(task, VXF_INFO_HIDE, 0))
-				goto out_noent;
 			inode->i_fop = &proc_info_file_operations;
 			ei->op.proc_read = proc_pid_nx_info;
 			break;
 		default:
 			printk("procfs: impossible type (%d)",p->type);
+			iput(inode);
 			error = ERR_PTR(-EINVAL);
-			goto out_put;
+			goto out;
 	}
 	dentry->d_op = &pid_dentry_operations;
 	d_add(dentry, inode);
 	/* Close the race of the process dying before we return the dentry */
-	if (pid_revalidate(dentry, NULL)) {
+	if (pid_revalidate(dentry, NULL))
 		error = NULL;
-		goto out;
-	}
-
-out_noent:
-	error=ERR_PTR(-ENOENT);
-out_put:
-	iput(inode);
 out:
 	put_task_struct(task);
 out_no_task:
@@ -2074,20 +2077,6 @@ out:
 	return;
 }
 
-#define VXF_FAKE_INIT	(VXF_INFO_INIT|VXF_STATE_INIT)
-
-static inline int proc_pid_visible(struct task_struct *task, int pid)
-{
-	if ((pid == 1) &&
-		!vx_flags(VXF_FAKE_INIT, VXF_FAKE_INIT))
-		goto visible;
-	if (vx_check(vx_task_xid(task), VX_WATCH|VX_IDENT))
-		goto visible;
-	return 0;
-visible:
-	return 1;
-}
-
 /* SMP-safe */
 struct dentry *proc_pid_lookup(struct inode *dir, struct dentry * dentry, struct nameidata *nd)
 {
@@ -2117,7 +2106,7 @@ struct dentry *proc_pid_lookup(struct inode *dir, struct dentry * dentry, struct
 		goto out;
 
 	rcu_read_lock();
-	task = find_task_by_pid(tgid);
+	task = find_proc_task_by_pid(tgid);
 	if (task)
 		get_task_struct(task);
 	rcu_read_unlock();
@@ -2170,7 +2159,7 @@ static struct dentry *proc_task_lookup(struct inode *dir, struct dentry * dentry
 		goto out;
 
 	rcu_read_lock();
-	task = find_task_by_pid(tid);
+	task = find_proc_task_by_pid(tid);
 	if (task)
 		get_task_struct(task);
 	rcu_read_unlock();
@@ -2226,7 +2215,7 @@ static struct task_struct *first_tgid(int tgid, unsigned int nr)
 	struct task_struct *pos;
 	rcu_read_lock();
 	if (tgid && nr) {
-		pos = find_task_by_pid(tgid);
+		pos = find_proc_task_by_pid(tgid);
 		if (pos && thread_group_leader(pos))
 			goto found;
 	}
@@ -2340,7 +2329,7 @@ static struct task_struct *first_tid(struct task_struct *leader,
 	rcu_read_lock();
 	/* Attempt to start with the pid of a thread */
 	if (tid && (nr > 0)) {
-		pos = find_task_by_pid(tid);
+		pos = find_proc_task_by_pid(tid);
 		if (pos && (pos->group_leader == leader))
 			goto found;
 	}

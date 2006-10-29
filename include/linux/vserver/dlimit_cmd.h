@@ -30,6 +30,8 @@ struct	vcmd_ctx_dlimit_v0 {
 
 #ifdef	CONFIG_COMPAT
 
+#include <asm/compat.h>
+
 struct	vcmd_ctx_dlimit_base_v0_x32 {
 	compat_uptr_t name_ptr;
 	uint32_t flags;

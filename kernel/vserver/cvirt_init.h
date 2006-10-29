@@ -1,8 +1,5 @@
 
 
-#include <linux/config.h>
-
-
 extern uint64_t vx_idle_jiffies(void);
 
 static inline void vx_info_init_cvirt(struct _vx_cvirt *cvirt)
