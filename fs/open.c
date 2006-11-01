@@ -441,14 +441,11 @@ long do_utimes(int dfd, char __user *filename, struct timeval *times)
 
 	if (error)
 		goto out;
-	inode = nd.dentry->d_inode;
 
-#ifdef CONFIG_VSERVER_COWBL
 	error = cow_check_and_break(&nd);
 	if (error)
 		goto dput_and_out;
 	inode = nd.dentry->d_inode;
-#endif
 
 	/* Don't worry, the checks are done in inode_change_ok() */
 	newattrs.ia_valid = ATTR_CTIME | ATTR_MTIME | ATTR_ATIME;
@@ -678,14 +675,11 @@ asmlinkage long sys_fchmodat(int dfd, const char __user *filename,
 	error = __user_walk_fd(dfd, filename, LOOKUP_FOLLOW, &nd);
 	if (error)
 		goto out;
-	inode = nd.dentry->d_inode;
 
-#ifdef CONFIG_VSERVER_COWBL
 	error = cow_check_and_break(&nd);
 	if (error)
 		goto dput_and_out;
 	inode = nd.dentry->d_inode;
-#endif
 
 	error = -EPERM;
 	if (IS_IMMUTABLE(inode) || IS_APPEND(inode))
