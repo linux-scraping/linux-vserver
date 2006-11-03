@@ -1329,6 +1329,7 @@ asmlinkage long sys_getpid(void)
 asmlinkage long sys_getppid(void)
 {
 	int pid;
+
 	rcu_read_lock();
 	pid = rcu_dereference(current->real_parent)->tgid;
 	rcu_read_unlock();
