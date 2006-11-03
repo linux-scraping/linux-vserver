@@ -1630,7 +1630,6 @@ int may_open(struct nameidata *nd, int acc_mode, int flag)
 	return 0;
 }
 
-
 /*
  *	open_namei()
  *
@@ -1770,7 +1769,6 @@ ok:
 		dput(dentry);
 		release_open_intent(nd);
 		path_release(nd);
-		vxdprintk(VXD_CBIT(misc, 2), "restarting open_namei() ...");
 		flag = rflag;
 		mode = rmode;
 		goto restart;
@@ -2707,8 +2705,7 @@ struct dentry *cow_break_link(const char *pathname)
 	char *to, *path, pad='\251';
 	loff_t size;
 
-	vxdprintk(VXD_CBIT(misc, 2),
-		"cow_break_link(»%s«)", pathname);
+	vxdprintk(VXD_CBIT(misc, 1), "cow_break_link(»%s«)", pathname);
 	path = kmalloc(PATH_MAX, GFP_KERNEL);
 
 	ret = path_lookup(pathname, LOOKUP_FOLLOW, &old_nd);
@@ -2727,7 +2724,7 @@ retry:
 	if (pad <= '\240')
 		goto out_rel_old;
 
-	vxdprintk(VXD_CBIT(misc, 2), "temp copy »%s«", to);
+	vxdprintk(VXD_CBIT(misc, 1), "temp copy »%s«", to);
 	ret = path_lookup(to,
 		LOOKUP_PARENT|LOOKUP_OPEN|LOOKUP_CREATE, &dir_nd);
 
