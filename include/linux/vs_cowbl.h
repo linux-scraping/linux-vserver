@@ -32,6 +32,7 @@ static inline int cow_check_and_break(struct nameidata *nd)
 				error = PTR_ERR(new_dentry);
 		} else {
 			inode->i_flags &= ~(S_IUNLINK|S_IMMUTABLE);
+			inode->i_ctime = CURRENT_TIME;
 			mark_inode_dirty(inode);
 		}
 	}
