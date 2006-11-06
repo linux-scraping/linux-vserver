@@ -914,7 +914,7 @@ void ext2_truncate (struct inode * inode)
 		return;
 	if (ext2_inode_is_fast_symlink(inode))
 		return;
-	if (IS_APPEND(inode) || IS_IMMUTABLE(inode))
+	if (IS_APPEND(inode) || IS_IXORUNLINK(inode))
 		return;
 
 	ext2_discard_prealloc(inode);

@@ -2246,7 +2246,7 @@ void ext3_truncate(struct inode *inode)
 		return;
 	if (ext3_inode_is_fast_symlink(inode))
 		return;
-	if (IS_APPEND(inode) || IS_IMMUTABLE(inode))
+	if (IS_APPEND(inode) || IS_IXORUNLINK(inode))
 		return;
 
 	/*

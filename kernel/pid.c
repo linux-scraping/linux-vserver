@@ -263,13 +263,10 @@ struct task_struct * fastcall pid_task(struct pid *pid, enum pid_type type)
 			result = hlist_entry(first, struct task_struct, pids[(type)].node);
 		if (result && (pid->nr != 1) &&
 			!vx_check(vx_task_xid(result), VX_WATCH|VX_ADMIN|VX_IDENT)) {
-			int warn = ((type == PIDTYPE_PID) && (current->xid));
-
-			vxwprintk(warn ,
+			vxwprintk((type == PIDTYPE_PID) && (current->xid),
 				"pid_task(%d,%d): task %p[#%u,%u] did lookup %p[#%u,%u]",
 				pid->nr, type, current, vx_current_xid(), current->pid,
 				result, vx_task_xid(result), result->pid);
-			WARN_ON(warn);
 			result = NULL;
 		}
 	}
