@@ -84,7 +84,7 @@ static int dummy_sysctl (ctl_table * table, int op)
 	return 0;
 }
 
-static int dummy_quotactl (int cmds, int type, int id, struct super_block *sb)
+static int dummy_quotactl (int cmds, int type, int id, struct dqhash *hash)
 {
 	return 0;
 }

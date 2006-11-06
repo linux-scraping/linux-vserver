@@ -322,8 +322,7 @@ static int rtnetlink_dump_ifinfo(struct sk_buff *skb, struct netlink_callback *c
 	for (dev=dev_base, idx=0; dev; dev = dev->next, idx++) {
 		if (idx < s_idx)
 			continue;
-		if (vx_info_flags(skb->sk->sk_vx_info, VXF_HIDE_NETIF, 0) &&
-			!dev_in_nx_info(dev, skb->sk->sk_nx_info))
+		if (!nx_dev_visible(skb->sk->sk_nx_info, dev))
 			continue;
 		if (rtnetlink_fill_ifinfo(skb, dev, RTM_NEWLINK,
 					  NETLINK_CB(cb->skb).pid,
@@ -615,8 +614,7 @@ void rtmsg_ifinfo(int type, struct net_device *dev, unsigned change)
 			       sizeof(struct rtnl_link_ifmap) +
 			       sizeof(struct rtnl_link_stats) + 128);
 
-	if (vx_flags(VXF_HIDE_NETIF, 0) &&
-		!dev_in_nx_info(dev, current->nx_info))
+	if (!nx_dev_visible(current->nx_info, dev))
 		return;
 	skb = alloc_skb(size, GFP_KERNEL);
 	if (!skb)

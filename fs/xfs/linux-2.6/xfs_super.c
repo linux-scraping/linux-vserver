@@ -747,36 +747,40 @@ xfs_fs_show_options(
 
 STATIC int
 xfs_fs_quotasync(
-	struct super_block	*sb,
+	struct dqhash		*hash,
 	int			type)
 {
+	struct super_block	*sb = hash->dqh_sb;
 	return -bhv_vfs_quotactl(vfs_from_sb(sb), Q_XQUOTASYNC, 0, NULL);
 }
 
 STATIC int
 xfs_fs_getxstate(
-	struct super_block	*sb,
+	struct dqhash		*hash,
 	struct fs_quota_stat	*fqs)
 {
+	struct super_block	*sb = hash->dqh_sb;
 	return -bhv_vfs_quotactl(vfs_from_sb(sb), Q_XGETQSTAT, 0, (caddr_t)fqs);
 }
 
 STATIC int
 xfs_fs_setxstate(
-	struct super_block	*sb,
+	struct dqhash		*hash,
 	unsigned int		flags,
 	int			op)
 {
+	struct super_block	*sb = hash->dqh_sb;
 	return -bhv_vfs_quotactl(vfs_from_sb(sb), op, 0, (caddr_t)&flags);
 }
 
 STATIC int
 xfs_fs_getxquota(
-	struct super_block	*sb,
+	struct dqhash		*hash,
 	int			type,
 	qid_t			id,
 	struct fs_disk_quota	*fdq)
 {
+	struct super_block	*sb = hash->dqh_sb;
 	return -bhv_vfs_quotactl(vfs_from_sb(sb),
 				 (type == USRQUOTA) ? Q_XGETQUOTA :
 				  ((type == GRPQUOTA) ? Q_XGETGQUOTA :
@@ -785,11 +789,12 @@ xfs_fs_getxquota(
 
 STATIC int
 xfs_fs_setxquota(
-	struct super_block	*sb,
+	struct dqhash		*hash,
 	int			type,
 	qid_t			id,
 	struct fs_disk_quota	*fdq)
 {
+	struct super_block	*sb = hash->dqh_sb;
 	return -bhv_vfs_quotactl(vfs_from_sb(sb),
 				 (type == USRQUOTA) ? Q_XSETQLIM :
 				  ((type == GRPQUOTA) ? Q_XSETGQLIM :
@@ -819,6 +824,9 @@ xfs_fs_fill_super(
 	sb_min_blocksize(sb, BBSIZE);
 	sb->s_export_op = &xfs_export_operations;
 	sb->s_qcop = &xfs_quotactl_operations;
+#ifdef CONFIG_QUOTACTL
+	sb->s_dqh->dqh_qcop = &xfs_quotactl_operations;
+#endif
 	sb->s_op = &xfs_super_operations;
 
 	error = bhv_vfs_mount(vfsp, args, NULL);

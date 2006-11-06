@@ -102,27 +102,6 @@ static void raw_v4_unhash(struct sock *sk)
 	write_unlock_bh(&raw_v4_lock);
 }
 
-
-/*
- *	Check if a given address matches for a socket
- *
- *	nxi:		the socket's nx_info if any
- *	addr:		to be verified address
- *	saddr/baddr:	socket addresses
- */
-static inline int raw_addr_match (
-	struct nx_info *nxi,
-	uint32_t addr,
-	uint32_t saddr,
-	uint32_t baddr)
-{
-	if (addr && (saddr == addr || baddr == addr))
-		return 1;
-	if (!saddr)
-		return addr_in_nx_info(nxi, addr);
-	return 0;
-}
-
 struct sock *__raw_v4_lookup(struct sock *sk, unsigned short num,
 			     __be32 raddr, __be32 laddr,
 			     int dif)

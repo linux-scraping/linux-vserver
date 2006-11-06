@@ -96,6 +96,15 @@ void free_nx_info(struct nx_info *nxi)
 }
 
 
+void __nx_set_lback(struct nx_info *nxi)
+{
+	int nid = nxi->nx_id;
+	uint32_t lback = htonl(INADDR_LOOPBACK ^ ((nid & 0xFFFF) << 8));
+
+	nxi->v4_lback = lback;
+}
+
+
 /*	hash table for nx_info hash */
 
 #define NX_HASH_SIZE	13
@@ -256,6 +265,7 @@ static struct nx_info * __create_nx_info(int id)
 	/* new context */
 	vxdprintk(VXD_CBIT(nid, 0),
 		"create_nx_info(%d) = %p (new)", id, new);
+	__nx_set_lback(new);
 	__hash_nx_info(get_nx_info(new));
 	nxi = new, new = NULL;
 
@@ -279,7 +289,7 @@ void unhash_nx_info(struct nx_info *nxi)
 	spin_unlock(&nx_info_hash_lock);
 }
 
-#ifdef  CONFIG_VSERVER_LEGACYNET
+#ifdef	CONFIG_VSERVER_LEGACYNET
 
 struct nx_info *create_nx_info(void)
 {
@@ -414,100 +424,6 @@ out:
 	return ret;
 }
 
-
-#ifdef CONFIG_INET
-
-#include <linux/netdevice.h>
-#include <linux/inetdevice.h>
-
-int ifa_in_nx_info(struct in_ifaddr *ifa, struct nx_info *nxi)
-{
-	if (!nxi)
-		return 1;
-	if (!ifa)
-		return 0;
-	return addr_in_nx_info(nxi, ifa->ifa_local);
-}
-
-int dev_in_nx_info(struct net_device *dev, struct nx_info *nxi)
-{
-	struct in_device *in_dev;
-	struct in_ifaddr **ifap;
-	struct in_ifaddr *ifa;
-	int ret = 0;
-
-	if (!nxi)
-		return 1;
-
-	in_dev = in_dev_get(dev);
-	if (!in_dev)
-		goto out;
-
-	for (ifap = &in_dev->ifa_list; (ifa = *ifap) != NULL;
-		ifap = &ifa->ifa_next) {
-		if (addr_in_nx_info(nxi, ifa->ifa_local)) {
-			ret = 1;
-			break;
-		}
-	}
-	in_dev_put(in_dev);
-out:
-	return ret;
-}
-
-/*
- *	check if address is covered by socket
- *
- *	sk:	the socket to check against
- *	addr:	the address in question (must be != 0)
- */
-static inline int __addr_in_socket(struct sock *sk, uint32_t addr)
-{
-	struct nx_info *nxi = sk->sk_nx_info;
-	uint32_t saddr = inet_rcv_saddr(sk);
-
-	vxdprintk(VXD_CBIT(net, 5),
-		"__addr_in_socket(%p,%d.%d.%d.%d) %p:%d.%d.%d.%d %p;%lx",
-		sk, VXD_QUAD(addr), nxi, VXD_QUAD(saddr), sk->sk_socket,
-		(sk->sk_socket?sk->sk_socket->flags:0));
-
-	if (saddr) {
-		/* direct address match */
-		return (saddr == addr);
-	} else if (nxi) {
-		/* match against nx_info */
-		return addr_in_nx_info(nxi, addr);
-	} else {
-		/* unrestricted any socket */
-		return 1;
-	}
-}
-
-
-int nx_addr_conflict(struct nx_info *nxi, uint32_t addr, struct sock *sk)
-{
-	vxdprintk(VXD_CBIT(net, 2),
-		"nx_addr_conflict(%p,%p) %d.%d,%d.%d",
-		nxi, sk, VXD_QUAD(addr));
-
-	if (addr) {
-		/* check real address */
-		return __addr_in_socket(sk, addr);
-	} else if (nxi) {
-		/* check against nx_info */
-		int i, n = nxi->nbipv4;
-
-		for (i=0; i<n; i++)
-			if (__addr_in_socket(sk, nxi->ipv4[i]))
-				return 1;
-		return 0;
-	} else {
-		/* check against any */
-		return 1;
-	}
-}
-
-#endif /* CONFIG_INET */
 
 void nx_set_persistent(struct nx_info *nxi)
 {
@@ -657,6 +573,11 @@ int vc_net_add(struct nx_info *nxi, void __user *data)
 		break;
 
 	case NXA_TYPE_IPV4|NXA_MOD_BCAST:
+		nxi->v4_bcast = vc_data.ip[0];
+		ret = 1;
+		break;
+
+	case NXA_TYPE_IPV4|NXA_MOD_LBACK:
 		nxi->v4_bcast = vc_data.ip[0];
 		ret = 1;
 		break;

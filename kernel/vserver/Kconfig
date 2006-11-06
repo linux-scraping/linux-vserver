@@ -4,6 +4,40 @@
 
 menu "Linux VServer"
 
+config	VSERVER_LEGACY
+	bool	"Enable Legacy Kernel API"
+	default y
+	help
+	  This enables the legacy API used in vs1.xx, maintaining
+	  compatibility with older vserver tools, and guest images
+	  that are configured using the legacy method.  This is
+	  probably a good idea for now, for migration purposes.
+
+	  Note that some tools have not yet been altered to use
+	  this API, so disabling this option may reduce some
+	  functionality.
+
+config	VSERVER_LEGACY_VERSION
+	bool	"Show a Legacy Version ID"
+	depends on VSERVER_LEGACY
+	default n
+	help
+	  This shows a special legacy version to very old tools
+	  which do not handle the current version correctly.
+
+	  This will probably disable some features of newer tools
+	  so better avoid it, unless you really, really need it
+	  for backwards compatibility.
+
+config	VSERVER_DYNAMIC_IDS
+	bool	"Enable dynamic context IDs"
+	depends on VSERVER_LEGACY
+	default y
+	help
+	  This enables support of in kernel dynamic context IDs,
+	  which is deprecated and will probably be removed in the
+	  next release.
+
 config	VSERVER_LEGACYNET
 	bool	"Enable Legacy Networking Kernel API"
 	default y
@@ -15,12 +49,24 @@ config	VSERVER_LEGACYNET
 
 config	VSERVER_REMAP_SADDR
 	bool	"Remap Source IP Address"
-	depends on EXPERIMENTAL
+	depends on EXPERIMENTAL && !VSERVER_LEGACY
 	default n
 	help
 	  This allows to remap the source IP address of 'local'
 	  connections from 127.0.0.1 to the first assigned
 	  guest IP.
+
+config	VSERVER_SINGLE_IP
+	bool	"Single IP Special Casing"
+	depends on EXPERIMENTAL && !VSERVER_LEGACY
+	default n
+	help
+	  This allows to have network contexts with a single
+	  IP to remap 0.0.0.0 bindings to that IP, avoiding
+	  further network checks and improving performance.
+
+	  (note: such guests do not allow to change the ip
+	   on the fly and do not show loopback addresses)
 
 config	VSERVER_COWBL
 	bool	"Enable COW Immutable Link Breaking"

@@ -546,6 +546,9 @@ struct inode {
 	struct file_lock	*i_flock;
 	struct address_space	*i_mapping;
 	struct address_space	i_data;
+#ifdef CONFIG_QUOTACTL
+	struct dqhash		*i_dqh;
+#endif
 #ifdef CONFIG_QUOTA
 	struct dquot		*i_dquot[MAXQUOTAS];
 #endif
@@ -890,7 +893,7 @@ struct super_block {
 	unsigned long long	s_maxbytes;	/* Max file size */
 	struct file_system_type	*s_type;
 	struct super_operations	*s_op;
-	struct dquot_operations	*dq_op;
+	struct dquot_operations	*s_qop;
  	struct quotactl_ops	*s_qcop;
 	struct export_operations *s_export_op;
 	unsigned long		s_flags;
@@ -913,7 +916,7 @@ struct super_block {
 
 	struct block_device	*s_bdev;
 	struct list_head	s_instances;
-	struct quota_info	s_dquot;	/* Diskquota specific options */
+	struct dqhash		*s_dqh;		/* Diskquota hash */
 
 	int			s_frozen;
 	wait_queue_head_t	s_wait_unfrozen;
@@ -1171,8 +1174,8 @@ struct super_operations {
 	int (*show_options)(struct seq_file *, struct vfsmount *);
 	int (*show_stats)(struct seq_file *, struct vfsmount *);
 
-	ssize_t (*quota_read)(struct super_block *, int, char *, size_t, loff_t);
-	ssize_t (*quota_write)(struct super_block *, int, const char *, size_t, loff_t);
+	ssize_t (*quota_read)(struct dqhash *, int, char *, size_t, loff_t);
+	ssize_t (*quota_write)(struct dqhash *, int, const char *, size_t, loff_t);
 };
 
 /* Inode state bits.  Protected by inode_lock. */
@@ -1644,7 +1647,7 @@ extern void clear_inode(struct inode *);
 extern void destroy_inode(struct inode *);
 extern struct inode *new_inode(struct super_block *);
 extern int remove_suid(struct dentry *);
-extern void remove_dquot_ref(struct super_block *, int, struct list_head *);
+extern void remove_dquot_ref(struct dqhash *, int, struct list_head *);
 
 extern void __insert_inode_hash(struct inode *, unsigned long hashval);
 extern void remove_inode_hash(struct inode *);

@@ -23,8 +23,14 @@ static inline uint32_t vci_kernel_config(void)
 {
 	return
 	/* various legacy options */
+#ifdef	CONFIG_VSERVER_LEGACY
+	(1 << VCI_KCBIT_LEGACY) |
+#endif
 #ifdef	CONFIG_VSERVER_LEGACYNET
 	(1 << VCI_KCBIT_LEGACYNET) |
+#endif
+#ifdef	CONFIG_VSERVER_LEGACY_VERSION
+	(1 << VCI_KCBIT_LEGACY_VERSION) |
 #endif
 
 	/* configured features */

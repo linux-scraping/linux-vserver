@@ -15,6 +15,10 @@
 
 #define NXF_INFO_LOCK		0x00000001
 
+#define NXF_SINGLE_IP		0x00000100
+
+#define NXF_HIDE_NETIF		0x02000000
+
 #define NXF_STATE_SETUP		(1ULL<<32)
 #define NXF_STATE_ADMIN		(1ULL<<34)
 
@@ -32,6 +36,7 @@
 #define NXA_TYPE_IPV6		2
 
 #define NXA_MOD_BCAST		(1<<8)
+#define NXA_MOD_LBACK		(2<<8)
 
 #define NXA_TYPE_ANY		((uint16_t)-1)
 
@@ -63,6 +68,7 @@ struct nx_info {
 					/* Used to select the proper source */
 					/* address for sockets */
 	__u32 v4_bcast;			/* Broadcast address to receive UDP  */
+	__u32 v4_lback;			/* Loopback address */
 
 	char nx_name[65];		/* network context name */
 };
@@ -103,38 +109,7 @@ extern int nx_migrate_task(struct task_struct *, struct nx_info *);
 
 extern long vs_net_change(struct nx_info *, unsigned int);
 
-struct in_ifaddr;
-struct net_device;
-
-#ifdef CONFIG_INET
-int ifa_in_nx_info(struct in_ifaddr *, struct nx_info *);
-int dev_in_nx_info(struct net_device *, struct nx_info *);
-
-#else /* CONFIG_INET */
-static inline
-int ifa_in_nx_info(struct in_ifaddr *a, struct nx_info *n)
-{
-	return 1;
-}
-
-static inline
-int dev_in_nx_info(struct net_device *d, struct nx_info *n)
-{
-	return 1;
-}
-#endif /* CONFIG_INET */
-
 struct sock;
-
-#ifdef CONFIG_INET
-int nx_addr_conflict(struct nx_info *, uint32_t, struct sock *);
-#else /* CONFIG_INET */
-static inline
-int nx_addr_conflict(struct nx_info *n, uint32_t a, struct sock *s)
-{
-	return 1;
-}
-#endif /* CONFIG_INET */
 
 #endif	/* __KERNEL__ */
 #else	/* _VX_NETWORK_H */

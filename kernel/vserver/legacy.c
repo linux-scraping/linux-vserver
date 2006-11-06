@@ -103,7 +103,7 @@ int vc_new_s_context(uint32_t ctx, void __user *data)
 				current->signal->rlim[RLIMIT_NPROC].rlim_max);
 
 		/* tweak some defaults for legacy */
-		new_vxi->vx_flags |= (VXF_HIDE_NETIF|VXF_INFO_INIT);
+		new_vxi->vx_flags |= (VXF_INFO_INIT);
 		ret = new_vxi->vx_id;
 	}
 out_put:

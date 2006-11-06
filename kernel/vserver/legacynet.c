@@ -73,6 +73,9 @@ int vc_set_ipv4root(uint32_t nbip, void __user *data)
 		new_nxi->mask[i] = vc_data.nx_mask_pair[i].mask;
 	}
 	new_nxi->v4_bcast = vc_data.broadcast;
+	/* tweak some defaults for legacy */
+	new_nxi->nx_flags |= (NXF_HIDE_NETIF);
+
 	if (nxi)
 		printk("!!! switching nx_info %p->%p\n", nxi, new_nxi);
 

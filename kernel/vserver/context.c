@@ -323,6 +323,74 @@ static inline xid_t __vx_dynamic_id(void)
 	return 0;
 }
 
+#ifdef	CONFIG_VSERVER_LEGACY
+
+/*	__loc_vx_info()
+
+	* locate or create the requested context
+	* get() it and if new hash it				*/
+
+static struct vx_info * __loc_vx_info(int id, int *err)
+{
+	struct vx_info *new, *vxi = NULL;
+
+	vxdprintk(VXD_CBIT(xid, 1), "loc_vx_info(%d)*", id);
+
+	if (!(new = __alloc_vx_info(id))) {
+		*err = -ENOMEM;
+		return NULL;
+	}
+
+	/* required to make dynamic xids unique */
+	spin_lock(&vx_info_hash_lock);
+
+	/* dynamic context requested */
+	if (id == VX_DYNAMIC_ID) {
+#ifdef	CONFIG_VSERVER_DYNAMIC_IDS
+		id = __vx_dynamic_id();
+		if (!id) {
+			printk(KERN_ERR "no dynamic context available.\n");
+			goto out_unlock;
+		}
+		new->vx_id = id;
+#else
+		printk(KERN_ERR "dynamic contexts disabled.\n");
+		goto out_unlock;
+#endif
+	}
+	/* existing context requested */
+	else if ((vxi = __lookup_vx_info(id))) {
+		/* context in setup is not available */
+		if (vxi->vx_flags & VXF_STATE_SETUP) {
+			vxdprintk(VXD_CBIT(xid, 0),
+				"loc_vx_info(%d) = %p (not available)", id, vxi);
+			vxi = NULL;
+			*err = -EBUSY;
+		} else {
+			vxdprintk(VXD_CBIT(xid, 0),
+				"loc_vx_info(%d) = %p (found)", id, vxi);
+			get_vx_info(vxi);
+			*err = 0;
+		}
+		goto out_unlock;
+	}
+
+	/* new context requested */
+	vxdprintk(VXD_CBIT(xid, 0),
+		"loc_vx_info(%d) = %p (new)", id, new);
+	__hash_vx_info(get_vx_info(new));
+	vxi = new, new = NULL;
+	*err = 1;
+
+out_unlock:
+	spin_unlock(&vx_info_hash_lock);
+	vxh_loc_vx_info(vxi, id);
+	if (new)
+		__dealloc_vx_info(new);
+	return vxi;
+}
+
+#endif
 
 /*	__create_vx_info()
 
@@ -437,6 +505,17 @@ int xid_is_hashed(xid_t xid)
 	spin_unlock(&vx_info_hash_lock);
 	return hashed;
 }
+
+#ifdef	CONFIG_VSERVER_LEGACY
+
+struct vx_info *lookup_or_create_vx_info(int id)
+{
+	int err;
+
+	return __loc_vx_info(id, &err);
+}
+
+#endif
 
 #ifdef	CONFIG_PROC_FS
 
