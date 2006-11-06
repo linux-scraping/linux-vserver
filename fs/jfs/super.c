@@ -644,11 +644,10 @@ static int jfs_show_options(struct seq_file *seq, struct vfsmount *vfs)
  * acquiring the locks... As quota files are never truncated and quota code
  * itself serializes the operations (and noone else should touch the files)
  * we don't have to be afraid of races */
-static ssize_t jfs_quota_read(struct dqhash *hash, int type, char *data,
+static ssize_t jfs_quota_read(struct super_block *sb, int type, char *data,
 			      size_t len, loff_t off)
 {
-	struct inode *inode = dqh_dqopt(hash)->files[type];
-	struct super_block *sb = hash->dqh_sb;
+	struct inode *inode = sb_dqopt(sb)->files[type];
 	sector_t blk = off >> sb->s_blocksize_bits;
 	int err = 0;
 	int offset = off & (sb->s_blocksize - 1);
@@ -690,11 +689,10 @@ static ssize_t jfs_quota_read(struct dqhash *hash, int type, char *data,
 }
 
 /* Write to quotafile */
-static ssize_t jfs_quota_write(struct dqhash *hash, int type,
+static ssize_t jfs_quota_write(struct super_block *sb, int type,
 			       const char *data, size_t len, loff_t off)
 {
-	struct inode *inode = dqh_dqopt(hash)->files[type];
-	struct super_block *sb = hash->dqh_sb;
+	struct inode *inode = sb_dqopt(sb)->files[type];
 	sector_t blk = off >> sb->s_blocksize_bits;
 	int err = 0;
 	int offset = off & (sb->s_blocksize - 1);
