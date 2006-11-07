@@ -23,6 +23,7 @@
 #include <linux/random.h>
 #include <linux/bootmem.h>
 #include <linux/hardirq.h>
+#include <linux/vs_context.h>
 
 #include <asm/system.h>
 #include <asm/irq.h>
@@ -216,7 +217,10 @@ void disable_irq(unsigned int irq)
 
 asmlinkage void process_int(int irq, struct pt_regs *fp)
 {
+	struct vx_info_save vxis;
+
 	irq_enter();
+	__enter_vx_admin(&vxis);
 	h8300_clear_isr(irq);
 	if (irq >= NR_TRAPS && irq < NR_IRQS) {
 		if (irq_list[irq]) {
@@ -228,6 +232,7 @@ asmlinkage void process_int(int irq, struct pt_regs *fp)
 	} else {
 		BUG();
 	}
+	__leave_vx_admin(&vxis);
 	irq_exit();
 }
 

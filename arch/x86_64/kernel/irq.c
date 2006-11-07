@@ -15,7 +15,6 @@
 #include <linux/seq_file.h>
 #include <linux/module.h>
 #include <linux/delay.h>
-#include <linux/vs_context.h>
 #include <asm/uaccess.h>
 #include <asm/io_apic.h>
 #include <asm/idle.h>
@@ -118,7 +117,6 @@ asmlinkage unsigned int do_IRQ(struct pt_regs *regs)
 {	
 	/* high bit used in ret_from_ code  */
 	unsigned irq = ~regs->orig_rax;
-	struct vx_info_save vxis;
 
 	if (unlikely(irq >= NR_IRQS)) {
 		printk(KERN_EMERG "%s: cannot handle IRQ %d\n",
@@ -131,9 +129,7 @@ asmlinkage unsigned int do_IRQ(struct pt_regs *regs)
 #ifdef CONFIG_DEBUG_STACKOVERFLOW
 	stack_overflow_check(regs);
 #endif
-	__enter_vx_admin(&vxis);
 	__do_IRQ(irq, regs);
-	__leave_vx_admin(&vxis);
 	irq_exit();
 
 	return 1;

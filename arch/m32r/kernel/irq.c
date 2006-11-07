@@ -20,7 +20,6 @@
 #include <linux/interrupt.h>
 #include <linux/seq_file.h>
 #include <linux/module.h>
-#include <linux/vs_context.h>
 #include <asm/uaccess.h>
 
 atomic_t irq_err_count;
@@ -78,16 +77,12 @@ skip:
  */
 asmlinkage unsigned int do_IRQ(int irq, struct pt_regs *regs)
 {
-	struct vx_info_save vxis;
-
 	irq_enter();
 
 #ifdef CONFIG_DEBUG_STACKOVERFLOW
 	/* FIXME M32R */
 #endif
-	__enter_vx_admin(&vxis);
 	__do_IRQ(irq, regs);
-	__leave_vx_admin(&vxis);
 	irq_exit();
 
 	return 1;

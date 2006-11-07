@@ -23,6 +23,7 @@
 #include <linux/bootmem.h>
 #include <linux/random.h>
 #include <linux/hardirq.h>
+#include <linux/vs_context.h>
 
 #include <asm/system.h>
 #include <asm/irq.h>
@@ -261,9 +262,12 @@ void disable_irq(unsigned int irq)
 
 asmlinkage void process_int(unsigned long vec, struct pt_regs *fp)
 {
+	struct vx_info_save vxis;
+
 	irq_enter();
 	/* ISR clear       */
 	/* compatible i386 */
+	__enter_vx_admin(&vxis);
 	if (vec >= EXT_IRQ0 && vec <= EXT_IRQ15)
 		*(volatile unsigned short *)ISR &= ~(1 << (vec - EXT_IRQ0));
 	if (vec < NR_IRQS) {
@@ -276,6 +280,7 @@ asmlinkage void process_int(unsigned long vec, struct pt_regs *fp)
 	} else {
 		BUG();
 	}
+	__leave_vx_admin(&vxis);
 	irq_exit();
 }
 

@@ -131,7 +131,6 @@ struct task_struct *find_proc_task_by_pid(int pid)
 			"dropping task %p[#%u,%u] for %p[#%u,%u]",
 			task, task->xid, task->pid,
 			current, current->xid, current->pid);
-		put_task_struct(task);
 		task = NULL;
 	}
 	return task;

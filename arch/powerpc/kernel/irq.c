@@ -249,13 +249,10 @@ void do_IRQ(struct pt_regs *regs)
 
 #ifdef CONFIG_PPC_ISERIES
 	if (get_lppaca()->int_dword.fields.decr_int) {
-		struct vx_info_save vxis;
 
 		get_lppaca()->int_dword.fields.decr_int = 0;
 		/* Signal a fake decrementer interrupt */
-		__enter_vx_admin(&vxis);
 		timer_interrupt(regs);
-		__leave_vx_admin(&vxis);
 	}
 #endif
 }

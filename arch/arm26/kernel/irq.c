@@ -31,6 +31,7 @@
 #include <linux/init.h>
 #include <linux/seq_file.h>
 #include <linux/errno.h>
+#include <linux/vs_context.h>
 
 #include <asm/irq.h>
 #include <asm/system.h>
@@ -331,6 +332,7 @@ do_level_IRQ(unsigned int irq, struct irqdesc *desc, struct pt_regs *regs)
 asmlinkage void asm_do_IRQ(int irq, struct pt_regs *regs)
 {
 	struct irqdesc *desc = irq_desc + irq;
+	struct vx_info_save vxis;
 
 	/*
 	 * Some hardware gives randomly wrong interrupts.  Rather
@@ -341,7 +343,9 @@ asmlinkage void asm_do_IRQ(int irq, struct pt_regs *regs)
 
 	irq_enter();
 	spin_lock(&irq_controller_lock);
+	__enter_vx_admin(&vxis);
 	desc->handle(irq, desc, regs);
+	__leave_vx_admin(&vxis);
 	spin_unlock(&irq_controller_lock);
 	irq_exit();
 }

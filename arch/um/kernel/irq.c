@@ -19,7 +19,6 @@
 #include "linux/seq_file.h"
 #include "linux/profile.h"
 #include "linux/hardirq.h"
-#include "linux/vs_context.h"
 #include "asm/irq.h"
 #include "asm/hw_irq.h"
 #include "asm/atomic.h"
@@ -371,13 +370,9 @@ void forward_interrupts(int pid)
  */
 unsigned int do_IRQ(int irq, union uml_pt_regs *regs)
 {
-	struct vx_info_save vxis;
-
 	irq_enter();
 
-	__enter_vx_admin(&vxis);
 	__do_IRQ(irq, (struct pt_regs *)regs);
-	__leave_vx_admin(&vxis);
 	irq_exit();
 	return 1;
 }
