@@ -731,6 +731,9 @@ xfs_setattr(
 		 * Change the ownerships and register quota modifications
 		 * in the transaction.
 		 */
+		if (itag != tag) {
+			ip->i_d.di_tag = tag;
+		}
 		if (iuid != uid) {
 			if (XFS_IS_UQUOTA_ON(mp)) {
 				ASSERT(mask & XFS_AT_UID);

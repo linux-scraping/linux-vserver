@@ -29,10 +29,6 @@
 static inline
 int vc_get_version(uint32_t id)
 {
-#ifdef	CONFIG_VSERVER_LEGACY_VERSION
-	if (id == 63)
-		return VCI_LEGACY_VERSION;
-#endif
 	return VCI_VERSION;
 }
 
@@ -157,10 +153,6 @@ long do_vcmd(uint32_t cmd, uint32_t id,
 	case VCMD_get_ncaps:
 		return vc_get_ncaps(nxi, data);
 
-#ifdef	CONFIG_VSERVER_LEGACY
-	case VCMD_set_sched_v2:
-		return vc_set_sched_v2(vxi, data);
-#endif
 	case VCMD_set_sched_v3:
 		return vc_set_sched_v3(vxi, data);
 	/* this is version 4 */
@@ -181,11 +173,6 @@ long do_vcmd(uint32_t cmd, uint32_t id,
 
 	case VCMD_wait_exit:
 		return vc_wait_exit(vxi, data);
-
-#ifdef	CONFIG_VSERVER_LEGACY
-	case VCMD_create_context:
-		return vc_ctx_create(id, NULL);
-#endif
 
 	case VCMD_get_iattr:
 		return __COMPAT(vc_get_iattr, id, data, compat);
@@ -224,10 +211,6 @@ long do_vcmd(uint32_t cmd, uint32_t id,
 #ifdef	CONFIG_VSERVER_MONITOR
 	case VCMD_read_monitor:
 		return __COMPAT(vc_read_monitor, id, data, compat);
-#endif
-#ifdef	CONFIG_VSERVER_LEGACY
-	case VCMD_new_s_context:
-		return vc_new_s_context(id, data);
 #endif
 #ifdef	CONFIG_VSERVER_LEGACYNET
 	case VCMD_set_ipv4root:
@@ -344,10 +327,6 @@ long do_vserver(uint32_t cmd, uint32_t id, void __user *data, int compat)
 #endif
 
 	/* legacy commands */
-#ifdef	CONFIG_VSERVER_LEGACY
-	__VCMD(create_context,	 5, VCA_NONE,	0);
-	__VCMD(new_s_context,	 5, VCA_NONE,	0);
-#endif
 #ifdef	CONFIG_VSERVER_LEGACYNET
 	__VCMD(set_ipv4root,	 5, VCA_NONE,	0);
 #endif
@@ -366,15 +345,8 @@ long do_vserver(uint32_t cmd, uint32_t id, void __user *data, int compat)
 		goto out;
 
 	state = 1;
-#ifdef	CONFIG_VSERVER_LEGACY
-	if (!capable(CAP_CONTEXT) &&
-		/* dirty hack for capremove */
-		!(cmd==VCMD_new_s_context && id==-2))
-		goto out;
-#else
 	if (!capable(CAP_CONTEXT))
 		goto out;
-#endif
 
 	state = 2;
 	/* moved here from the individual commands */
@@ -391,16 +363,7 @@ long do_vserver(uint32_t cmd, uint32_t id, void __user *data, int compat)
 	state = 4;
 	/* various legacy exceptions */
 	switch (cmd) {
-#ifdef	CONFIG_VSERVER_LEGACY
-	case VCMD_set_cflags:
-	case VCMD_set_ccaps_v0:
-		ret = 0;
-		if (vx_check(0, VX_WATCH))
-			goto out;
-		break;
 
-	case VCMD_ctx_create_v0:
-#endif
 	/* will go away when admin is a cap */
 	case VCMD_ctx_migrate_v0:
 	case VCMD_ctx_migrate:

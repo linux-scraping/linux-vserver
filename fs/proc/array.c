@@ -308,9 +308,6 @@ static inline char *task_cap(struct task_struct *p, char *buffer)
 int proc_pid_status(struct task_struct *task, char * buffer)
 {
 	char * orig = buffer;
-#ifdef	CONFIG_VSERVER_LEGACY
-	struct vx_info *vxi;
-#endif
 #ifdef	CONFIG_VSERVER_LEGACYNET
 	struct nx_info *nxi;
 #endif
@@ -329,22 +326,7 @@ int proc_pid_status(struct task_struct *task, char * buffer)
 
 	if (task_vx_flags(task, VXF_HIDE_VINFO, 0))
 		goto skip;
-#ifdef	CONFIG_VSERVER_LEGACY
-	buffer += sprintf (buffer,"s_context: %d\n", vx_task_xid(task));
-	vxi = task_get_vx_info(task);
-	if (vxi) {
-		buffer += sprintf (buffer,"ctxflags: %08llx\n"
-			,(unsigned long long)vxi->vx_flags);
-		buffer += sprintf (buffer,"initpid: %d\n"
-			,vxi->vx_initpid);
-	} else {
-		buffer += sprintf (buffer,"ctxflags: none\n");
-		buffer += sprintf (buffer,"initpid: none\n");
-	}
-	put_vx_info(vxi);
-#else
 	buffer += sprintf (buffer,"VxID: %d\n", vx_task_xid(task));
-#endif
 #ifdef	CONFIG_VSERVER_LEGACYNET
 	nxi = task_get_nx_info(task);
 	if (nxi) {
