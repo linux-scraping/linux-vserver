@@ -99,32 +99,6 @@ out:
 }
 
 
-int vx_uts_virt_handler(struct ctl_table *ctl, int write, xid_t xid,
-	void **datap, size_t *lenp)
-{
-	switch (ctl->ctl_name) {
-	case KERN_OSTYPE:
-		*datap = vx_new_uts(sysname);
-		break;
-	case KERN_OSRELEASE:
-		*datap = vx_new_uts(release);
-		break;
-	case KERN_VERSION:
-		*datap = vx_new_uts(version);
-		break;
-	case KERN_NODENAME:
-		*datap = vx_new_uts(nodename);
-		break;
-	case KERN_DOMAINNAME:
-		*datap = vx_new_uts(domainname);
-		break;
-	}
-
-	return 0;
-}
-
-
-
 /*
  * Commands to do_syslog:
  *
@@ -193,21 +167,34 @@ int vx_do_syslog(int type, char __user *buf, int len)
 
 static char * vx_vhi_name(struct vx_info *vxi, int id)
 {
-	switch (id) {
-	case VHIN_CONTEXT:
+	struct nsproxy *nsproxy;
+	struct uts_namespace *uts;
+
+
+	if (id == VHIN_CONTEXT)
 		return vxi->vx_name;
+
+	nsproxy = vxi->vx_nsproxy;
+	if (!nsproxy)
+		return NULL;
+
+	uts = nsproxy->uts_ns;
+	if (!uts)
+		return NULL;
+
+	switch (id) {
 	case VHIN_SYSNAME:
-		return vxi->cvirt.utsname.sysname;
+		return uts->name.sysname;
 	case VHIN_NODENAME:
-		return vxi->cvirt.utsname.nodename;
+		return uts->name.nodename;
 	case VHIN_RELEASE:
-		return vxi->cvirt.utsname.release;
+		return uts->name.release;
 	case VHIN_VERSION:
-		return vxi->cvirt.utsname.version;
+		return uts->name.version;
 	case VHIN_MACHINE:
-		return vxi->cvirt.utsname.machine;
+		return uts->name.machine;
 	case VHIN_DOMAINNAME:
-		return vxi->cvirt.utsname.domainname;
+		return uts->name.domainname;
 	default:
 		return NULL;
 	}

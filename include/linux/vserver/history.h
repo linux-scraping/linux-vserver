@@ -1,6 +1,7 @@
 #ifndef _VX_HISTORY_H
 #define _VX_HISTORY_H
 
+#include <linux/vs_base.h>
 
 enum {
 	VXH_UNUSED=0,

@@ -60,6 +60,7 @@
 #include <linux/highuid.h>
 #include <linux/vmalloc.h>
 #include <linux/fsnotify.h>
+#include <linux/sysctl.h>
 #include <linux/vs_cvirt.h>
 #include <asm/mman.h>
 #include <asm/types.h>
@@ -76,6 +77,8 @@
 
 int cp_compat_stat(struct kstat *kbuf, struct compat_stat __user *ubuf)
 {
+	compat_ino_t ino;
+
 	typeof(ubuf->st_uid) uid = 0;
 	typeof(ubuf->st_gid) gid = 0;
 	SET_UID(uid, kbuf->uid);
@@ -84,9 +87,12 @@ int cp_compat_stat(struct kstat *kbuf, struct compat_stat __user *ubuf)
 		return -EOVERFLOW;
 	if (kbuf->size >= 0x7fffffff)
 		return -EOVERFLOW;
+	ino = kbuf->ino;
+	if (sizeof(ino) < sizeof(kbuf->ino) && ino != kbuf->ino)
+		return -EOVERFLOW;
 	if (!access_ok(VERIFY_WRITE, ubuf, sizeof(struct compat_stat)) ||
 	    __put_user (old_encode_dev(kbuf->dev), &ubuf->st_dev) ||
-	    __put_user (kbuf->ino, &ubuf->st_ino) ||
+	    __put_user (ino, &ubuf->st_ino) ||
 	    __put_user (kbuf->mode, &ubuf->st_mode) ||
 	    __put_user (kbuf->nlink, &ubuf->st_nlink) ||
 	    __put_user (uid, &ubuf->st_uid) ||
@@ -390,7 +396,9 @@ sys32_rt_sigprocmask(int how, compat_sigset_t __user *set,
 		}
 	}
 	set_fs (KERNEL_DS);
-	ret = sys_rt_sigprocmask(how, set ? &s : NULL, oset ? &s : NULL,
+	ret = sys_rt_sigprocmask(how,
+				 set ? (sigset_t __user *)&s : NULL,
+				 oset ? (sigset_t __user *)&s : NULL,
 				 sigsetsize); 
 	set_fs (old_fs);
 	if (ret) return ret;
@@ -542,7 +550,7 @@ sys32_sysinfo(struct sysinfo32 __user *info)
 	int bitcount = 0;
 	
 	set_fs (KERNEL_DS);
-	ret = sys_sysinfo(&s);
+	ret = sys_sysinfo((struct sysinfo __user *)&s);
 	set_fs (old_fs);
 
         /* Check to see if any memory value is too large for 32-bit and scale
@@ -590,7 +598,7 @@ sys32_sched_rr_get_interval(compat_pid_t pid, struct compat_timespec __user *int
 	mm_segment_t old_fs = get_fs ();
 	
 	set_fs (KERNEL_DS);
-	ret = sys_sched_rr_get_interval(pid, &t);
+	ret = sys_sched_rr_get_interval(pid, (struct timespec __user *)&t);
 	set_fs (old_fs);
 	if (put_compat_timespec(&t, interval))
 		return -EFAULT;
@@ -606,7 +614,7 @@ sys32_rt_sigpending(compat_sigset_t __user *set, compat_size_t sigsetsize)
 	mm_segment_t old_fs = get_fs();
 		
 	set_fs (KERNEL_DS);
-	ret = sys_rt_sigpending(&s, sigsetsize);
+	ret = sys_rt_sigpending((sigset_t __user *)&s, sigsetsize);
 	set_fs (old_fs);
 	if (!ret) {
 		switch (_NSIG_WORDS) {
@@ -631,7 +639,7 @@ sys32_rt_sigqueueinfo(int pid, int sig, compat_siginfo_t __user *uinfo)
 	if (copy_siginfo_from_user32(&info, uinfo))
 		return -EFAULT;
 	set_fs (KERNEL_DS);
-	ret = sys_rt_sigqueueinfo(pid, sig, &info);
+	ret = sys_rt_sigqueueinfo(pid, sig, (siginfo_t __user *)&info);
 	set_fs (old_fs);
 	return ret;
 }
@@ -646,7 +654,7 @@ sys32_pause(void)
 }
 
 
-#ifdef CONFIG_SYSCTL
+#ifdef CONFIG_SYSCTL_SYSCALL
 struct sysctl_ia32 {
 	unsigned int	name;
 	int		nlen;
@@ -667,9 +675,6 @@ sys32_sysctl(struct sysctl_ia32 __user *args32)
 	size_t oldlen;
 	int __user *namep;
 	long ret;
-	extern int do_sysctl(int *name, int nlen, void *oldval, size_t *oldlenp,
-		     void *newval, size_t newlen);
-
 
 	if (copy_from_user(&a32, args32, sizeof (a32)))
 		return -EFAULT;
@@ -693,7 +698,8 @@ sys32_sysctl(struct sysctl_ia32 __user *args32)
 
 	set_fs(KERNEL_DS);
 	lock_kernel();
-	ret = do_sysctl(namep, a32.nlen, oldvalp, &oldlen, newvalp, (size_t) a32.newlen);
+	ret = do_sysctl(namep, a32.nlen, oldvalp, (size_t __user *)&oldlen,
+			newvalp, (size_t) a32.newlen);
 	unlock_kernel();
 	set_fs(old_fs);
 
@@ -744,7 +750,8 @@ sys32_sendfile(int out_fd, int in_fd, compat_off_t __user *offset, s32 count)
 		return -EFAULT;
 		
 	set_fs(KERNEL_DS);
-	ret = sys_sendfile(out_fd, in_fd, offset ? &of : NULL, count);
+	ret = sys_sendfile(out_fd, in_fd, offset ? (off_t __user *)&of : NULL,
+			   count);
 	set_fs(old_fs);
 	
 	if (offset && put_user(of, offset))
@@ -779,38 +786,40 @@ asmlinkage long sys32_mmap2(unsigned long addr, unsigned long len,
 
 asmlinkage long sys32_olduname(struct oldold_utsname __user * name)
 {
-	int error;
-	struct new_utsname *ptr;
+	int err;
 
 	if (!name)
 		return -EFAULT;
-	if (!access_ok(VERIFY_WRITE,name,sizeof(struct oldold_utsname)))
+	if (!access_ok(VERIFY_WRITE, name, sizeof(struct oldold_utsname)))
 		return -EFAULT;
   
   	down_read(&uts_sem);
-	
-	ptr = vx_new_utsname();
-	error = __copy_to_user(&name->sysname,ptr->sysname,__OLD_UTS_LEN);
-	 __put_user(0,name->sysname+__OLD_UTS_LEN);
-	 __copy_to_user(&name->nodename,ptr->nodename,__OLD_UTS_LEN);
-	 __put_user(0,name->nodename+__OLD_UTS_LEN);
-	 __copy_to_user(&name->release,ptr->release,__OLD_UTS_LEN);
-	 __put_user(0,name->release+__OLD_UTS_LEN);
-	 __copy_to_user(&name->version,ptr->version,__OLD_UTS_LEN);
-	 __put_user(0,name->version+__OLD_UTS_LEN);
-	 { 
-		 char *arch = "x86_64";
-		 if (personality(current->personality) == PER_LINUX32)
-			 arch = "i686";
+
+	err = __copy_to_user(&name->sysname,&utsname()->sysname,
+				__OLD_UTS_LEN);
+	err |= __put_user(0,name->sysname+__OLD_UTS_LEN);
+	err |= __copy_to_user(&name->nodename,&utsname()->nodename,
+				__OLD_UTS_LEN);
+	err |= __put_user(0,name->nodename+__OLD_UTS_LEN);
+	err |= __copy_to_user(&name->release,&utsname()->release,
+				__OLD_UTS_LEN);
+	err |= __put_user(0,name->release+__OLD_UTS_LEN);
+	err |= __copy_to_user(&name->version,&utsname()->version,
+				__OLD_UTS_LEN);
+	err |= __put_user(0,name->version+__OLD_UTS_LEN);
+	{
+		char *arch = "x86_64";
+		if (personality(current->personality) == PER_LINUX32)
+			arch = "i686";
 		 
-		 __copy_to_user(&name->machine,arch,strlen(arch)+1);
-	 }
-	
-	 up_read(&uts_sem);
-	 
-	 error = error ? -EFAULT : 0;
-	 
-	 return error;
+		err |= __copy_to_user(&name->machine, arch, strlen(arch)+1);
+	}
+
+	up_read(&uts_sem);
+
+	err = err ? -EFAULT : 0;
+
+	return err;
 }
 
 long sys32_uname(struct old_utsname __user * name)
@@ -819,7 +828,7 @@ long sys32_uname(struct old_utsname __user * name)
 	if (!name)
 		return -EFAULT;
 	down_read(&uts_sem);
-	err=copy_to_user(name, vx_new_utsname(), sizeof (*name));
+	err = copy_to_user(name, utsname(), sizeof (*name));
 	up_read(&uts_sem);
 	if (personality(current->personality) == PER_LINUX32) 
 		err |= copy_to_user(&name->machine, "i686", 5);
@@ -834,7 +843,7 @@ long sys32_ustat(unsigned dev, struct ustat32 __user *u32p)
 	
 	seg = get_fs(); 
 	set_fs(KERNEL_DS); 
-	ret = sys_ustat(dev,&u); 
+	ret = sys_ustat(dev, (struct ustat __user *)&u);
 	set_fs(seg);
 	if (ret >= 0) { 
 		if (!access_ok(VERIFY_WRITE,u32p,sizeof(struct ustat32)) || 

@@ -267,16 +267,21 @@ static int hpux_uname(struct hpux_utsname *name)
 
 	down_read(&uts_sem);
 
-	error = __copy_to_user(&name->sysname,vx_new_uts(sysname),HPUX_UTSLEN-1);
-	error |= __put_user(0,name->sysname+HPUX_UTSLEN-1);
-	error |= __copy_to_user(&name->nodename,vx_new_uts(nodename),HPUX_UTSLEN-1);
-	error |= __put_user(0,name->nodename+HPUX_UTSLEN-1);
-	error |= __copy_to_user(&name->release,vx_new_uts(release),HPUX_UTSLEN-1);
-	error |= __put_user(0,name->release+HPUX_UTSLEN-1);
-	error |= __copy_to_user(&name->version,vx_new_uts(version),HPUX_UTSLEN-1);
-	error |= __put_user(0,name->version+HPUX_UTSLEN-1);
-	error |= __copy_to_user(&name->machine,vx_new_uts(machine),HPUX_UTSLEN-1);
-	error |= __put_user(0,name->machine+HPUX_UTSLEN-1);
+	error = __copy_to_user(&name->sysname, &utsname()->sysname,
+			       HPUX_UTSLEN - 1);
+	error |= __put_user(0, name->sysname + HPUX_UTSLEN - 1);
+	error |= __copy_to_user(&name->nodename, &utsname()->nodename,
+				HPUX_UTSLEN - 1);
+	error |= __put_user(0, name->nodename + HPUX_UTSLEN - 1);
+	error |= __copy_to_user(&name->release, &utsname()->release,
+				HPUX_UTSLEN - 1);
+	error |= __put_user(0, name->release + HPUX_UTSLEN - 1);
+	error |= __copy_to_user(&name->version, &utsname()->version,
+				HPUX_UTSLEN - 1);
+	error |= __put_user(0, name->version + HPUX_UTSLEN - 1);
+	error |= __copy_to_user(&name->machine, &utsname()->machine,
+				HPUX_UTSLEN - 1);
+	error |= __put_user(0, name->machine + HPUX_UTSLEN - 1);
 
 	up_read(&uts_sem);
 
@@ -374,8 +379,8 @@ int hpux_utssys(char *ubuf, int n, int type)
 		/*  TODO:  print a warning about using this?  */
 		down_write(&uts_sem);
 		error = -EFAULT;
-		if (!copy_from_user(vx_new_uts(sysname), ubuf, len)) {
-			vx_new_uts(sysname)[len] = 0;
+		if (!copy_from_user(utsname()->sysname, ubuf, len)) {
+			utsname()->sysname[len] = 0;
 			error = 0;
 		}
 		up_write(&uts_sem);
@@ -401,8 +406,8 @@ int hpux_utssys(char *ubuf, int n, int type)
 		/*  TODO:  print a warning about this?  */
 		down_write(&uts_sem);
 		error = -EFAULT;
-		if (!copy_from_user(vx_new_uts(release), ubuf, len)) {
-			vx_new_uts(release)[len] = 0;
+		if (!copy_from_user(utsname()->release, ubuf, len)) {
+			utsname()->release[len] = 0;
 			error = 0;
 		}
 		up_write(&uts_sem);
@@ -423,13 +428,13 @@ int hpux_getdomainname(char *name, int len)
  	
  	down_read(&uts_sem);
  	
-	nlen = strlen(vx_new_uts(domainname)) + 1;
+	nlen = strlen(utsname()->domainname) + 1;
 
 	if (nlen < len)
 		len = nlen;
 	if(len > __NEW_UTS_LEN)
 		goto done;
-	if(copy_to_user(name, vx_new_uts(domainname), len))
+	if(copy_to_user(name, utsname()->domainname, len))
 		goto done;
 	err = 0;
 done:

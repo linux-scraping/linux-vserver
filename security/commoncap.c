@@ -23,6 +23,7 @@
 #include <linux/ptrace.h>
 #include <linux/xattr.h>
 #include <linux/hugetlb.h>
+#include <linux/vs_base.h>
 
 int cap_netlink_send(struct sock *sk, struct sk_buff *skb)
 {
@@ -170,7 +171,7 @@ void cap_bprm_apply_creds (struct linux_binprm *bprm, int unsafe)
 	/* For init, we want to retain the capabilities set
 	 * in the init_task struct. Thus we skip the usual
 	 * capability rules */
-	if (current->pid != 1) {
+	if (!is_init(current)) {
 		current->cap_permitted = new_permitted;
 		current->cap_effective =
 		    cap_intersect (new_permitted, bprm->cap_effective);

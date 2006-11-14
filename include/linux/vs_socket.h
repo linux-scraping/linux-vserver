@@ -2,6 +2,7 @@
 #define _VX_VS_SOCKET_H
 
 #include "vserver/debug.h"
+#include "vserver/cacct.h"
 
 
 /* socket accounting */

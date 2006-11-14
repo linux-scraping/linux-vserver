@@ -22,7 +22,7 @@
 #define vxd_check_range(val, min, max) do {		\
 	vxlprintk((val<min) || (val>max),		\
 		"check_range(%ld,%ld,%ld)",		\
-		(long)val, (long)min, (long)max, 	\
+		(long)val, (long)min, (long)max,	\
 		__FILE__, __LINE__);			\
 	} while (0)
 

@@ -118,8 +118,9 @@ struct vx_info {
 	struct vx_info *vx_parent;		/* parent context */
 	int vx_state;				/* context state */
 
-	struct namespace *vx_namespace;		/* private namespace */
+	struct nsproxy *vx_nsproxy;		/* private namespace */
 	struct fs_struct *vx_fs;		/* private namespace fs */
+
 	uint64_t vx_flags;			/* context flags */
 	uint64_t vx_bcaps;			/* bounding caps (system) */
 	uint64_t vx_ccaps;			/* context caps (vserver) */
@@ -215,5 +216,5 @@ extern long vs_state_change(struct vx_info *, unsigned int);
 
 #endif	/* __KERNEL__ */
 #else	/* _VX_CONTEXT_H */
-#warning duplicate inclusion
+// #warning duplicate inclusion
 #endif	/* _VX_CONTEXT_H */

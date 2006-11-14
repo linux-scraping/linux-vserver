@@ -846,6 +846,9 @@ static void print_warning(struct dquot *dquot, const char warntype)
 	if (!need_print_warning(dquot) || (flag && test_and_set_bit(flag, &dquot->dq_flags)))
 		return;
 
+	mutex_lock(&tty_mutex);
+	if (!current->signal->tty)
+		goto out_lock;
 	tty_write_message(current->signal->tty, dquot->dq_dqh->dqh_sb->s_id);
 	if (warntype == ISOFTWARN || warntype == BSOFTWARN)
 		tty_write_message(current->signal->tty, ": warning, ");
@@ -873,6 +876,8 @@ static void print_warning(struct dquot *dquot, const char warntype)
 			break;
 	}
 	tty_write_message(current->signal->tty, msg);
+out_lock:
+	mutex_unlock(&tty_mutex);
 }
 
 static inline void flush_warnings(struct dquot **dquots, char *warntype)

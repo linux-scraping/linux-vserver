@@ -44,6 +44,7 @@
 #include <asm/idprom.h> /* for gethostid() */
 #include <asm/unistd.h>
 #include <asm/system.h>
+#include <asm/compat_signal.h>
 
 /* For the nfs mount emulation */
 #include <linux/socket.h>
@@ -281,16 +282,20 @@ static int sunos_filldir(void * __buf, const char * name, int namlen,
 	struct sunos_dirent __user *dirent;
 	struct sunos_dirent_callback * buf = (struct sunos_dirent_callback *) __buf;
 	int reclen = ROUND_UP(NAME_OFFSET(dirent) + namlen + 1);
+	u32 d_ino;
 
 	buf->error = -EINVAL;	/* only used if we fail.. */
 	if (reclen > buf->count)
 		return -EINVAL;
+	d_ino = ino;
+	if (sizeof(d_ino) < sizeof(ino) && d_ino != ino)
+		return -EOVERFLOW;
 	dirent = buf->previous;
 	if (dirent)
 		put_user(offset, &dirent->d_off);
 	dirent = buf->curr;
 	buf->previous = dirent;
-	put_user(ino, &dirent->d_ino);
+	put_user(d_ino, &dirent->d_ino);
 	put_user(namlen, &dirent->d_namlen);
 	put_user(reclen, &dirent->d_reclen);
 	if (copy_to_user(dirent->d_name, name, namlen))
@@ -364,14 +369,18 @@ static int sunos_filldirentry(void * __buf, const char * name, int namlen,
 	struct sunos_direntry_callback * buf =
 		(struct sunos_direntry_callback *) __buf;
 	int reclen = ROUND_UP(NAME_OFFSET(dirent) + namlen + 1);
+	u32 d_ino;
 
 	buf->error = -EINVAL;	/* only used if we fail.. */
 	if (reclen > buf->count)
 		return -EINVAL;
+	d_ino = ino;
+	if (sizeof(d_ino) < sizeof(ino) && d_ino != ino)
+		return -EOVERFLOW;
 	dirent = buf->previous;
 	dirent = buf->curr;
 	buf->previous = dirent;
-	put_user(ino, &dirent->d_ino);
+	put_user(d_ino, &dirent->d_ino);
 	put_user(namlen, &dirent->d_namlen);
 	put_user(reclen, &dirent->d_reclen);
 	if (copy_to_user(dirent->d_name, name, namlen))
@@ -438,20 +447,18 @@ struct sunos_utsname {
 asmlinkage int sunos_uname(struct sunos_utsname __user *name)
 {
 	int ret;
-	struct new_utsname *ptr;
 
 	down_read(&uts_sem);
-	ptr = vx_new_utsname();
-	ret = copy_to_user(&name->sname[0], ptr->sysname,
+	ret = copy_to_user(&name->sname[0], &utsname()->sysname[0],
 			   sizeof(name->sname) - 1);
-	ret |= copy_to_user(&name->nname[0], ptr->nodename,
+	ret |= copy_to_user(&name->nname[0], &utsname()->nodename[0],
 			    sizeof(name->nname) - 1);
 	ret |= put_user('\0', &name->nname[8]);
-	ret |= copy_to_user(&name->rel[0], ptr->release,
+	ret |= copy_to_user(&name->rel[0], &utsname()->release[0],
 			    sizeof(name->rel) - 1);
-	ret |= copy_to_user(&name->ver[0], ptr->version,
+	ret |= copy_to_user(&name->ver[0], &utsname()->version[0],
 			    sizeof(name->ver) - 1);
-	ret |= copy_to_user(&name->mach[0], ptr->machine,
+	ret |= copy_to_user(&name->mach[0], &utsname()->machine[0],
 			    sizeof(name->mach) - 1);
 	up_read(&uts_sem);
 	return (ret ? -EFAULT : 0);

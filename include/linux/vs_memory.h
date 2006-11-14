@@ -3,6 +3,7 @@
 
 #include "vserver/limit.h"
 #include "vserver/debug.h"
+#include "vserver/context.h"
 #include "vserver/limit_int.h"
 
 

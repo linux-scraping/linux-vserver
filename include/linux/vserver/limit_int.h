@@ -1,6 +1,7 @@
 #ifndef _VX_LIMIT_INT_H
 #define _VX_LIMIT_INT_H
 
+#include "context.h"
 
 #ifdef	__KERNEL__
 

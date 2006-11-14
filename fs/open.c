@@ -6,7 +6,6 @@
 
 #include <linux/string.h>
 #include <linux/mm.h>
-#include <linux/utime.h>
 #include <linux/file.h>
 #include <linux/smp_lock.h>
 #include <linux/quotaops.h>
@@ -28,12 +27,11 @@
 #include <linux/syscalls.h>
 #include <linux/rcupdate.h>
 #include <linux/audit.h>
+#include <linux/vs_base.h>
 #include <linux/vs_limit.h>
 #include <linux/vs_dlimit.h>
 #include <linux/vserver/tag.h>
 #include <linux/vs_cowbl.h>
-
-#include <asm/unistd.h>
 
 int vfs_statfs(struct dentry *dentry, struct kstatfs *buf)
 {
@@ -361,137 +359,6 @@ asmlinkage long sys_ftruncate64(unsigned int fd, loff_t length)
 }
 #endif
 
-#ifdef __ARCH_WANT_SYS_UTIME
-
-/*
- * sys_utime() can be implemented in user-level using sys_utimes().
- * Is this for backwards compatibility?  If so, why not move it
- * into the appropriate arch directory (for those architectures that
- * need it).
- */
-
-/* If times==NULL, set access and modification to current time,
- * must be owner or have write permission.
- * Else, update from *times, must be owner or super user.
- */
-asmlinkage long sys_utime(char __user * filename, struct utimbuf __user * times)
-{
-	int error;
-	struct nameidata nd;
-	struct inode * inode;
-	struct iattr newattrs;
-
-	error = user_path_walk(filename, &nd);
-	if (error)
-		goto out;
-	inode = nd.dentry->d_inode;
-
-	error = -EROFS;
-	if (IS_RDONLY(inode) || MNT_IS_RDONLY(nd.mnt))
-		goto dput_and_out;
-
-	/* Don't worry, the checks are done in inode_change_ok() */
-	newattrs.ia_valid = ATTR_CTIME | ATTR_MTIME | ATTR_ATIME;
-	if (times) {
-		error = -EPERM;
-		if (IS_APPEND(inode) || IS_IMMUTABLE(inode))
-			goto dput_and_out;
-
-		error = get_user(newattrs.ia_atime.tv_sec, &times->actime);
-		newattrs.ia_atime.tv_nsec = 0;
-		if (!error)
-			error = get_user(newattrs.ia_mtime.tv_sec, &times->modtime);
-		newattrs.ia_mtime.tv_nsec = 0;
-		if (error)
-			goto dput_and_out;
-
-		newattrs.ia_valid |= ATTR_ATIME_SET | ATTR_MTIME_SET;
-	} else {
-                error = -EACCES;
-                if (IS_IMMUTABLE(inode))
-                        goto dput_and_out;
-
-		if (current->fsuid != inode->i_uid &&
-		    (error = vfs_permission(&nd, MAY_WRITE)) != 0)
-			goto dput_and_out;
-	}
-	mutex_lock(&inode->i_mutex);
-	error = notify_change(nd.dentry, &newattrs);
-	mutex_unlock(&inode->i_mutex);
-dput_and_out:
-	path_release(&nd);
-out:
-	return error;
-}
-
-#endif
-
-/* If times==NULL, set access and modification to current time,
- * must be owner or have write permission.
- * Else, update from *times, must be owner or super user.
- */
-long do_utimes(int dfd, char __user *filename, struct timeval *times)
-{
-	int error;
-	struct nameidata nd;
-	struct inode * inode;
-	struct iattr newattrs;
-
-	error = __user_walk_fd(dfd, filename, LOOKUP_FOLLOW, &nd);
-
-	if (error)
-		goto out;
-
-	error = cow_check_and_break(&nd);
-	if (error)
-		goto dput_and_out;
-	inode = nd.dentry->d_inode;
-
-	/* Don't worry, the checks are done in inode_change_ok() */
-	newattrs.ia_valid = ATTR_CTIME | ATTR_MTIME | ATTR_ATIME;
-	if (times) {
-		error = -EPERM;
-                if (IS_APPEND(inode) || IS_IMMUTABLE(inode))
-                        goto dput_and_out;
-
-		newattrs.ia_atime.tv_sec = times[0].tv_sec;
-		newattrs.ia_atime.tv_nsec = times[0].tv_usec * 1000;
-		newattrs.ia_mtime.tv_sec = times[1].tv_sec;
-		newattrs.ia_mtime.tv_nsec = times[1].tv_usec * 1000;
-		newattrs.ia_valid |= ATTR_ATIME_SET | ATTR_MTIME_SET;
-	} else {
-		error = -EACCES;
-                if (IS_IMMUTABLE(inode))
-                        goto dput_and_out;
-
-		if (current->fsuid != inode->i_uid &&
-		    (error = vfs_permission(&nd, MAY_WRITE)) != 0)
-			goto dput_and_out;
-	}
-	mutex_lock(&inode->i_mutex);
-	error = notify_change(nd.dentry, &newattrs);
-	mutex_unlock(&inode->i_mutex);
-dput_and_out:
-	path_release(&nd);
-out:
-	return error;
-}
-
-asmlinkage long sys_futimesat(int dfd, char __user *filename, struct timeval __user *utimes)
-{
-	struct timeval times[2];
-
-	if (utimes && copy_from_user(&times, utimes, sizeof(times)))
-		return -EFAULT;
-	return do_utimes(dfd, filename, utimes ? times : NULL);
-}
-
-asmlinkage long sys_utimes(char __user *filename, struct timeval __user *utimes)
-{
-	return sys_futimesat(AT_FDCWD, filename, utimes);
-}
-
-
 /*
  * access() needs to use the real uid/gid, not the effective uid/gid.
  * We do this by temporarily clearing all FS-related capabilities and
@@ -528,16 +395,21 @@ asmlinkage long sys_faccessat(int dfd, const char __user *filename, int mode)
 		current->cap_effective = current->cap_permitted;
 
 	res = __user_walk_fd(dfd, filename, LOOKUP_FOLLOW|LOOKUP_ACCESS, &nd);
-	if (!res) {
-		res = vfs_permission(&nd, mode);
-		/* SuS v2 requires we report a read only fs too */
-		if(!res && (mode & S_IWOTH)
-		   && (IS_RDONLY(nd.dentry->d_inode) || MNT_IS_RDONLY(nd.mnt))
-		   && !special_file(nd.dentry->d_inode->i_mode))
-			res = -EROFS;
-		path_release(&nd);
-	}
+	if (res)
+		goto out;
 
+	res = vfs_permission(&nd, mode);
+	/* SuS v2 requires we report a read only fs too */
+	if(res || !(mode & S_IWOTH) ||
+	   special_file(nd.dentry->d_inode->i_mode))
+		goto out_path_release;
+
+	if(IS_RDONLY(nd.dentry->d_inode) || MNT_IS_RDONLY(nd.mnt))
+		res = -EROFS;
+
+out_path_release:
+	path_release(&nd);
+out:
 	current->fsuid = old_fsuid;
 	current->fsgid = old_fsgid;
 	current->cap_effective = old_cap;
@@ -555,7 +427,8 @@ asmlinkage long sys_chdir(const char __user * filename)
 	struct nameidata nd;
 	int error;
 
-	error = __user_walk(filename, LOOKUP_FOLLOW|LOOKUP_DIRECTORY, &nd);
+	error = __user_walk(filename,
+			    LOOKUP_FOLLOW|LOOKUP_DIRECTORY|LOOKUP_CHDIR, &nd);
 	if (error)
 		goto out;
 
@@ -746,14 +619,15 @@ asmlinkage long sys_chown(const char __user * filename, uid_t user, gid_t group)
 	int error;
 
 	error = user_path_walk(filename, &nd);
-	if (!error) {
+	if (error)
+		goto out;
 #ifdef CONFIG_VSERVER_COWBL
-		error = cow_check_and_break(&nd);
-		if (!error)
+	error = cow_check_and_break(&nd);
+	if (!error)
 #endif
-			error = chown_common(nd.dentry, nd.mnt, user, group);
-		path_release(&nd);
-	}
+		error = chown_common(nd.dentry, nd.mnt, user, group);
+	path_release(&nd);
+out:
 	return error;
 }
 
@@ -769,14 +643,14 @@ asmlinkage long sys_fchownat(int dfd, const char __user *filename, uid_t user,
 
 	follow = (flag & AT_SYMLINK_NOFOLLOW) ? 0 : LOOKUP_FOLLOW;
 	error = __user_walk_fd(dfd, filename, follow, &nd);
-	if (!error) {
+	if (error)
+		goto out;
 #ifdef CONFIG_VSERVER_COWBL
-		error = cow_check_and_break(&nd);
-		if (!error)
+	error = cow_check_and_break(&nd);
+	if (!error)
 #endif
-			error = chown_common(nd.dentry, nd.mnt, user, group);
-		path_release(&nd);
-	}
+		error = chown_common(nd.dentry, nd.mnt, user, group);
+	path_release(&nd);
 out:
 	return error;
 }
@@ -787,14 +661,15 @@ asmlinkage long sys_lchown(const char __user * filename, uid_t user, gid_t group
 	int error;
 
 	error = user_path_walk_link(filename, &nd);
-	if (!error) {
+	if (error)
+		goto out;
 #ifdef CONFIG_VSERVER_COWBL
-		error = cow_check_and_break(&nd);
-		if (!error)
+	error = cow_check_and_break(&nd);
+	if (!error)
 #endif
-			error = chown_common(nd.dentry, nd.mnt, user, group);
-		path_release(&nd);
-	}
+		error = chown_common(nd.dentry, nd.mnt, user, group);
+	path_release(&nd);
+out:
 	return error;
 }
 
@@ -803,15 +678,17 @@ asmlinkage long sys_fchown(unsigned int fd, uid_t user, gid_t group)
 {
 	struct file * file;
 	int error = -EBADF;
+	struct dentry * dentry;
 
 	file = fget(fd);
-	if (file) {
-		struct dentry * dentry;
-		dentry = file->f_dentry;
-		audit_inode(NULL, dentry->d_inode);
-		error = chown_common(dentry, file->f_vfsmnt, user, group);
-		fput(file);
-	}
+	if (!file)
+		goto out;
+
+	dentry = file->f_dentry;
+	audit_inode(NULL, dentry->d_inode);
+	error = chown_common(dentry, file->f_vfsmnt, user, group);
+	fput(file);
+out:
 	return error;
 }
 
@@ -1196,6 +1073,7 @@ asmlinkage long sys_close(unsigned int fd)
 	struct file * filp;
 	struct files_struct *files = current->files;
 	struct fdtable *fdt;
+	int retval;
 
 	spin_lock(&files->file_lock);
 	fdt = files_fdtable(files);
@@ -1208,7 +1086,16 @@ asmlinkage long sys_close(unsigned int fd)
 	FD_CLR(fd, fdt->close_on_exec);
 	__put_unused_fd(files, fd);
 	spin_unlock(&files->file_lock);
-	return filp_close(filp, files);
+	retval = filp_close(filp, files);
+
+	/* can't restart close syscall because file table entry was cleared */
+	if (unlikely(retval == -ERESTARTSYS ||
+		     retval == -ERESTARTNOINTR ||
+		     retval == -ERESTARTNOHAND ||
+		     retval == -ERESTART_RESTARTBLOCK))
+		retval = -EINTR;
+
+	return retval;
 
 out_unlock:
 	spin_unlock(&files->file_lock);

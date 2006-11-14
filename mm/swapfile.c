@@ -31,6 +31,7 @@
 #include <asm/pgtable.h>
 #include <asm/tlbflush.h>
 #include <linux/swapops.h>
+#include <linux/vs_base.h>
 #include <linux/vs_memory.h>
 
 DEFINE_SPINLOCK(swap_lock);
@@ -1726,13 +1727,14 @@ get_swap_info_struct(unsigned type)
  */
 int valid_swaphandles(swp_entry_t entry, unsigned long *offset)
 {
-	int ret = 0, i = 1 << page_cluster;
+	int our_page_cluster = page_cluster;
+	int ret = 0, i = 1 << our_page_cluster;
 	unsigned long toff;
 	struct swap_info_struct *swapdev = swp_type(entry) + swap_info;
 
-	if (!page_cluster)	/* no readahead */
+	if (!our_page_cluster)	/* no readahead */
 		return 0;
-	toff = (swp_offset(entry) >> page_cluster) << page_cluster;
+	toff = (swp_offset(entry) >> our_page_cluster) << our_page_cluster;
 	if (!toff)		/* first page is swap header */
 		toff++, i--;
 	*offset = toff;

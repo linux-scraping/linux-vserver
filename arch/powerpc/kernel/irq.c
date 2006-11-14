@@ -52,6 +52,7 @@
 #include <linux/radix-tree.h>
 #include <linux/mutex.h>
 #include <linux/bootmem.h>
+#include <linux/pci.h>
 #include <linux/vs_context.h>
 
 #include <asm/uaccess.h>
@@ -187,6 +188,7 @@ void fixup_irqs(cpumask_t map)
 
 void do_IRQ(struct pt_regs *regs)
 {
+	struct pt_regs *old_regs = set_irq_regs(regs);
 	unsigned int irq;
 #ifdef CONFIG_IRQSTACKS
 	struct thread_info *curtp, *irqtp;
@@ -216,7 +218,7 @@ void do_IRQ(struct pt_regs *regs)
 	 * The value -2 is for buggy hardware and means that this IRQ
 	 * has already been handled. -- Tom
 	 */
-	irq = ppc_md.get_irq(regs);
+	irq = ppc_md.get_irq();
 
 	if (irq != NO_IRQ && irq != NO_IRQ_IGNORE) {
 		struct vx_info_save vxis;
@@ -233,19 +235,20 @@ void do_IRQ(struct pt_regs *regs)
 				handler = &__do_IRQ;
 			irqtp->task = curtp->task;
 			irqtp->flags = 0;
-			call_handle_irq(irq, desc, regs, irqtp, handler);
+			call_handle_irq(irq, desc, irqtp, handler);
 			irqtp->task = NULL;
 			if (irqtp->flags)
 				set_bits(irqtp->flags, &curtp->flags);
 		} else
 #endif
-			generic_handle_irq(irq, regs);
+			generic_handle_irq(irq);
 		__leave_vx_admin(&vxis);
 	} else if (irq != NO_IRQ_IGNORE)
 		/* That's not SMP safe ... but who cares ? */
 		ppc_spurious_interrupts++;
 
         irq_exit();
+	set_irq_regs(old_regs);
 
 #ifdef CONFIG_PPC_ISERIES
 	if (get_lppaca()->int_dword.fields.decr_int) {
@@ -578,8 +581,8 @@ unsigned int irq_create_mapping(struct irq_host *host,
 }
 EXPORT_SYMBOL_GPL(irq_create_mapping);
 
-extern unsigned int irq_create_of_mapping(struct device_node *controller,
-					  u32 *intspec, unsigned int intsize)
+unsigned int irq_create_of_mapping(struct device_node *controller,
+				   u32 *intspec, unsigned int intsize)
 {
 	struct irq_host *host;
 	irq_hw_number_t hwirq;
@@ -785,7 +788,6 @@ unsigned int irq_alloc_virt(struct irq_host *host,
 {
 	unsigned long flags;
 	unsigned int i, j, found = NO_IRQ;
-	unsigned int limit = irq_virq_count - count;
 
 	if (count == 0 || count > (irq_virq_count - NUM_ISA_INTERRUPTS))
 		return NO_IRQ;
@@ -802,14 +804,16 @@ unsigned int irq_alloc_virt(struct irq_host *host,
 	/* Look for count consecutive numbers in the allocatable
 	 * (non-legacy) space
 	 */
-	for (i = NUM_ISA_INTERRUPTS; i <= limit; ) {
-		for (j = i; j < (i + count); j++)
-			if (irq_map[j].host != NULL) {
-				i = j + 1;
-				continue;
-			}
-		found = i;
-		break;
+	for (i = NUM_ISA_INTERRUPTS, j = 0; i < irq_virq_count; i++) {
+		if (irq_map[i].host != NULL)
+			j = 0;
+		else
+			j++;
+
+		if (j == count) {
+			found = i - count + 1;
+			break;
+		}
 	}
 	if (found == NO_IRQ) {
 		spin_unlock_irqrestore(&irq_big_lock, flags);
@@ -884,12 +888,14 @@ int pci_enable_msi(struct pci_dev * pdev)
 	else
 		return -1;
 }
+EXPORT_SYMBOL(pci_enable_msi);
 
 void pci_disable_msi(struct pci_dev * pdev)
 {
 	if (ppc_md.disable_msi)
 		ppc_md.disable_msi(pdev);
 }
+EXPORT_SYMBOL(pci_disable_msi);
 
 void pci_scan_msi_device(struct pci_dev *dev) {}
 int pci_enable_msix(struct pci_dev* dev, struct msix_entry *entries, int nvec) {return -1;}
@@ -897,6 +903,8 @@ void pci_disable_msix(struct pci_dev *dev) {}
 void msi_remove_pci_irq_vectors(struct pci_dev *dev) {}
 void disable_msi_mode(struct pci_dev *dev, int pos, int type) {}
 void pci_no_msi(void) {}
+EXPORT_SYMBOL(pci_enable_msix);
+EXPORT_SYMBOL(pci_disable_msix);
 
 #endif
 

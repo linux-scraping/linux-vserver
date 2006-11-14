@@ -1,6 +1,7 @@
 #ifndef _VX_VS_PID_H
 #define _VX_VS_PID_H
 
+#include "vs_base.h"
 #include "vserver/debug.h"
 
 

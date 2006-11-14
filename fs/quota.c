@@ -415,42 +415,33 @@ static int do_quotactl(struct dqhash *hash, int type, int cmd, qid_t id, void __
 	return 0;
 }
 
-#if defined(CONFIG_BLK_DEV_VROOT) || defined(CONFIG_BLK_DEV_VROOT_MODULE)
+/*
+ * look up a superblock on which quota ops will be performed
+ * - use the name of a block device to find the superblock thereon
+ */
+static inline struct super_block *quotactl_block(const char __user *special)
+{
+#ifdef CONFIG_BLOCK
+	struct block_device *bdev;
+	struct super_block *sb;
+	char *tmp = getname(special);
 
-#include <linux/vroot.h>
-#include <linux/kallsyms.h>
+	if (IS_ERR(tmp))
+		return ERR_PTR(PTR_ERR(tmp));
+	bdev = lookup_bdev(tmp);
+	putname(tmp);
+	if (IS_ERR(bdev))
+		return ERR_PTR(PTR_ERR(bdev));
+	sb = get_super(bdev);
+	bdput(bdev);
+	if (!sb)
+		return ERR_PTR(-ENODEV);
 
-static vroot_grb_func *vroot_get_real_bdev = NULL;
-
-static spinlock_t vroot_grb_lock = SPIN_LOCK_UNLOCKED;
-
-int register_vroot_grb(vroot_grb_func *func) {
-	int ret = -EBUSY;
-
-	spin_lock(&vroot_grb_lock);
-	if (!vroot_get_real_bdev) {
-		vroot_get_real_bdev = func;
-		ret = 0;
-	}
-	spin_unlock(&vroot_grb_lock);
-	return ret;
-}
-EXPORT_SYMBOL(register_vroot_grb);
-
-int unregister_vroot_grb(vroot_grb_func *func) {
-	int ret = -EINVAL;
-
-	spin_lock(&vroot_grb_lock);
-	if (vroot_get_real_bdev) {
-		vroot_get_real_bdev = NULL;
-		ret = 0;
-	}
-	spin_unlock(&vroot_grb_lock);
-	return ret;
-}
-EXPORT_SYMBOL(unregister_vroot_grb);
-
+	return sb;
+#else
+	return ERR_PTR(-ENODEV);
 #endif
+}
 
 /*
  * This is the system call interface. This communicates with
@@ -462,44 +453,18 @@ asmlinkage long sys_quotactl(unsigned int cmd, const char __user *special, qid_t
 {
 	uint cmds, type;
 	struct super_block *sb = NULL;
-	struct dqhash *dqh = NULL;
-	struct block_device *bdev;
-	char *tmp;
++	struct dqhash *dqh = NULL;
 	int ret;
 
 	cmds = cmd >> SUBCMDSHIFT;
 	type = cmd & SUBCMDMASK;
 
 	if (cmds != Q_SYNC || special) {
-		tmp = getname(special);
-		if (IS_ERR(tmp))
-			return PTR_ERR(tmp);
-		bdev = lookup_bdev(tmp);
-		putname(tmp);
-		if (IS_ERR(bdev))
-			return PTR_ERR(bdev);
-#if defined(CONFIG_BLK_DEV_VROOT) || defined(CONFIG_BLK_DEV_VROOT_MODULE)
-		if (bdev && bdev->bd_inode &&
-			imajor(bdev->bd_inode) == VROOT_MAJOR) {
-			struct block_device *bdnew = (void *)-EINVAL;
-
-			if (vroot_get_real_bdev)
-				bdnew = vroot_get_real_bdev(bdev);
-			else
-				vxdprintk(VXD_CBIT(misc, 0),
-					"vroot_get_real_bdev not set");
-
-			bdput(bdev);
-			if (IS_ERR(bdnew))
-				return PTR_ERR(bdnew);
-			bdev = bdnew;
-		}
-#endif
-		sb = get_super(bdev);
-		bdput(bdev);
-		if (!sb)
-			return -ENODEV;
+		sb = quotactl_block(special);
+		if (IS_ERR(sb))
+			return PTR_ERR(sb);
 	}
+
 	if (sb)
 		dqh = sb->s_dqh;
 	ret = check_quotactl_valid(dqh, type, cmds, id);

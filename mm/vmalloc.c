@@ -24,6 +24,9 @@
 DEFINE_RWLOCK(vmlist_lock);
 struct vm_struct *vmlist;
 
+static void *__vmalloc_node(unsigned long size, gfp_t gfp_mask, pgprot_t prot,
+			    int node);
+
 static void vunmap_pte_range(pmd_t *pmd, unsigned long addr, unsigned long end)
 {
 	pte_t *pte;
@@ -157,13 +160,15 @@ int map_vm_area(struct vm_struct *area, pgprot_t prot, struct page ***pages)
 	return err;
 }
 
-struct vm_struct *__get_vm_area_node(unsigned long size, unsigned long flags,
-				unsigned long start, unsigned long end, int node)
+static struct vm_struct *__get_vm_area_node(unsigned long size, unsigned long flags,
+					    unsigned long start, unsigned long end,
+					    int node, gfp_t gfp_mask)
 {
 	struct vm_struct **p, *tmp, *area;
 	unsigned long align = 1;
 	unsigned long addr;
 
+	BUG_ON(in_interrupt());
 	if (flags & VM_IOREMAP) {
 		int bit = fls(size);
 
@@ -177,7 +182,7 @@ struct vm_struct *__get_vm_area_node(unsigned long size, unsigned long flags,
 	addr = ALIGN(start, align);
 	size = PAGE_ALIGN(size);
 
-	area = kmalloc_node(sizeof(*area), GFP_KERNEL, node);
+	area = kmalloc_node(sizeof(*area), gfp_mask & GFP_LEVEL_MASK, node);
 	if (unlikely(!area))
 		return NULL;
 
@@ -233,12 +238,11 @@ out:
 struct vm_struct *__get_vm_area(unsigned long size, unsigned long flags,
 				unsigned long start, unsigned long end)
 {
-	return __get_vm_area_node(size, flags, start, end, -1);
+	return __get_vm_area_node(size, flags, start, end, -1, GFP_KERNEL);
 }
 
 /**
  *	get_vm_area  -  reserve a contingous kernel virtual area
- *
  *	@size:		size of the area
  *	@flags:		%VM_IOREMAP for I/O mappings or VM_ALLOC
  *
@@ -251,9 +255,11 @@ struct vm_struct *get_vm_area(unsigned long size, unsigned long flags)
 	return __get_vm_area(size, flags, VMALLOC_START, VMALLOC_END);
 }
 
-struct vm_struct *get_vm_area_node(unsigned long size, unsigned long flags, int node)
+struct vm_struct *get_vm_area_node(unsigned long size, unsigned long flags,
+				   int node, gfp_t gfp_mask)
 {
-	return __get_vm_area_node(size, flags, VMALLOC_START, VMALLOC_END, node);
+	return __get_vm_area_node(size, flags, VMALLOC_START, VMALLOC_END, node,
+				  gfp_mask);
 }
 
 /* Caller must hold vmlist_lock */
@@ -270,7 +276,7 @@ static struct vm_struct *__find_vm_area(void *addr)
 }
 
 /* Caller must hold vmlist_lock */
-struct vm_struct *__remove_vm_area(void *addr)
+static struct vm_struct *__remove_vm_area(void *addr)
 {
 	struct vm_struct **p, *tmp;
 
@@ -293,7 +299,6 @@ found:
 
 /**
  *	remove_vm_area  -  find and remove a contingous kernel virtual area
- *
  *	@addr:		base address
  *
  *	Search for the kernel VM area starting at @addr, and remove it.
@@ -352,7 +357,6 @@ void __vunmap(void *addr, int deallocate_pages)
 
 /**
  *	vfree  -  release memory allocated by vmalloc()
- *
  *	@addr:		memory base address
  *
  *	Free the virtually contiguous memory area starting at @addr, as
@@ -370,7 +374,6 @@ EXPORT_SYMBOL(vfree);
 
 /**
  *	vunmap  -  release virtual mapping obtained by vmap()
- *
  *	@addr:		memory base address
  *
  *	Free the virtually contiguous memory area starting at @addr,
@@ -387,7 +390,6 @@ EXPORT_SYMBOL(vunmap);
 
 /**
  *	vmap  -  map an array of pages into virtually contiguous space
- *
  *	@pages:		array of page pointers
  *	@count:		number of pages to map
  *	@flags:		vm_area->flags
@@ -430,8 +432,11 @@ void *__vmalloc_area_node(struct vm_struct *area, gfp_t gfp_mask,
 	if (array_size > PAGE_SIZE) {
 		pages = __vmalloc_node(array_size, gfp_mask, PAGE_KERNEL, node);
 		area->flags |= VM_VPAGES;
-	} else
-		pages = kmalloc_node(array_size, (gfp_mask & ~__GFP_HIGHMEM), node);
+	} else {
+		pages = kmalloc_node(array_size,
+				(gfp_mask & ~(__GFP_HIGHMEM | __GFP_ZERO)),
+				node);
+	}
 	area->pages = pages;
 	if (!area->pages) {
 		remove_vm_area(area->addr);
@@ -468,7 +473,6 @@ void *__vmalloc_area(struct vm_struct *area, gfp_t gfp_mask, pgprot_t prot)
 
 /**
  *	__vmalloc_node  -  allocate virtually contiguous memory
- *
  *	@size:		allocation size
  *	@gfp_mask:	flags for the page level allocator
  *	@prot:		protection mask for the allocated pages
@@ -478,8 +482,8 @@ void *__vmalloc_area(struct vm_struct *area, gfp_t gfp_mask, pgprot_t prot)
  *	allocator with @gfp_mask flags.  Map them into contiguous
  *	kernel virtual space, using a pagetable protection of @prot.
  */
-void *__vmalloc_node(unsigned long size, gfp_t gfp_mask, pgprot_t prot,
-			int node)
+static void *__vmalloc_node(unsigned long size, gfp_t gfp_mask, pgprot_t prot,
+			    int node)
 {
 	struct vm_struct *area;
 
@@ -487,13 +491,12 @@ void *__vmalloc_node(unsigned long size, gfp_t gfp_mask, pgprot_t prot,
 	if (!size || (size >> PAGE_SHIFT) > num_physpages)
 		return NULL;
 
-	area = get_vm_area_node(size, VM_ALLOC, node);
+	area = get_vm_area_node(size, VM_ALLOC, node, gfp_mask);
 	if (!area)
 		return NULL;
 
 	return __vmalloc_area_node(area, gfp_mask, prot, node);
 }
-EXPORT_SYMBOL(__vmalloc_node);
 
 void *__vmalloc(unsigned long size, gfp_t gfp_mask, pgprot_t prot)
 {
@@ -503,13 +506,11 @@ EXPORT_SYMBOL(__vmalloc);
 
 /**
  *	vmalloc  -  allocate virtually contiguous memory
- *
  *	@size:		allocation size
- *
  *	Allocate enough pages to cover @size from the page level
  *	allocator and map them into contiguous kernel virtual space.
  *
- *	For tight cotrol over page level allocator and protection flags
+ *	For tight control over page level allocator and protection flags
  *	use __vmalloc() instead.
  */
 void *vmalloc(unsigned long size)
@@ -519,11 +520,11 @@ void *vmalloc(unsigned long size)
 EXPORT_SYMBOL(vmalloc);
 
 /**
- *	vmalloc_user  -  allocate virtually contiguous memory which has
- *			   been zeroed so it can be mapped to userspace without
- *			   leaking data.
+ * vmalloc_user - allocate zeroed virtually contiguous memory for userspace
+ * @size: allocation size
  *
- *	@size:		allocation size
+ * The resulting memory area is zeroed so it can be mapped to userspace
+ * without leaking data.
  */
 void *vmalloc_user(unsigned long size)
 {
@@ -542,14 +543,13 @@ EXPORT_SYMBOL(vmalloc_user);
 
 /**
  *	vmalloc_node  -  allocate memory on a specific node
- *
  *	@size:		allocation size
  *	@node:		numa node
  *
  *	Allocate enough pages to cover @size from the page level
  *	allocator and map them into contiguous kernel virtual space.
  *
- *	For tight cotrol over page level allocator and protection flags
+ *	For tight control over page level allocator and protection flags
  *	use __vmalloc() instead.
  */
 void *vmalloc_node(unsigned long size, int node)
@@ -564,14 +564,13 @@ EXPORT_SYMBOL(vmalloc_node);
 
 /**
  *	vmalloc_exec  -  allocate virtually contiguous, executable memory
- *
  *	@size:		allocation size
  *
  *	Kernel-internal function to allocate enough pages to cover @size
  *	the page level allocator and map them into contiguous and
  *	executable kernel virtual space.
  *
- *	For tight cotrol over page level allocator and protection flags
+ *	For tight control over page level allocator and protection flags
  *	use __vmalloc() instead.
  */
 
@@ -582,7 +581,6 @@ void *vmalloc_exec(unsigned long size)
 
 /**
  *	vmalloc_32  -  allocate virtually contiguous memory (32bit addressable)
- *
  *	@size:		allocation size
  *
  *	Allocate enough 32bit PA addressable pages to cover @size from the
@@ -595,11 +593,11 @@ void *vmalloc_32(unsigned long size)
 EXPORT_SYMBOL(vmalloc_32);
 
 /**
- *	vmalloc_32_user  -  allocate virtually contiguous memory (32bit
- *			      addressable) which is zeroed so it can be
- *			      mapped to userspace without leaking data.
- *
+ * vmalloc_32_user - allocate zeroed virtually contiguous 32bit memory
  *	@size:		allocation size
+ *
+ * The resulting memory area is 32bit addressable and zeroed so it can be
+ * mapped to userspace without leaking data.
  */
 void *vmalloc_32_user(unsigned long size)
 {
@@ -693,7 +691,6 @@ finished:
 
 /**
  *	remap_vmalloc_range  -  map vmalloc pages to userspace
- *
  *	@vma:		vma to cover (map full range of vma)
  *	@addr:		vmalloc memory
  *	@pgoff:		number of pages into addr before first page to map
