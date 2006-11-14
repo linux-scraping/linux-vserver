@@ -28,14 +28,69 @@
 
 #include <linux/namespace.h>
 
-int vx_enter_namespace(struct vx_info *vxi)
+
+/*
+ *	build a new nsproxy mix
+ *      task must be locked
+ */
+
+struct nsproxy *vx_mix_nsproxy(struct nsproxy *old_nsproxy,
+	struct nsproxy *new_nsproxy, unsigned long mask)
+{
+	struct namespace *old_ns;
+	struct uts_namespace *old_uts;
+	struct ipc_namespace *old_ipc;
+	struct nsproxy *nsproxy;
+
+	old_ns = old_nsproxy->namespace;
+	old_uts = old_nsproxy->uts_ns;
+	old_ipc = old_nsproxy->ipc_ns;
+
+	nsproxy = dup_namespaces(old_nsproxy);
+	if (!nsproxy)
+		goto out;
+
+	if (mask & CLONE_NEWNS) {
+		nsproxy->namespace = new_nsproxy->namespace;
+		if (nsproxy->namespace)
+			get_namespace(nsproxy->namespace);
+	} else
+		old_ns = NULL;
+
+	if (mask & CLONE_NEWUTS) {
+		nsproxy->uts_ns = new_nsproxy->uts_ns;
+		if (nsproxy->uts_ns)
+			get_uts_ns(nsproxy->uts_ns);
+	} else
+		old_uts = NULL;
+
+	if (mask & CLONE_NEWIPC) {
+		nsproxy->ipc_ns = new_nsproxy->ipc_ns;
+		if (nsproxy->ipc_ns)
+			get_ipc_ns(nsproxy->ipc_ns);
+	} else
+		old_ipc = NULL;
+
+	if (old_ns)
+		put_namespace(old_ns);
+	if (old_uts)
+		put_uts_ns(old_uts);
+	if (old_ipc)
+		put_ipc_ns(old_ipc);
+out:
+	return nsproxy;
+}
+
+int vx_enter_namespace(struct vx_info *vxi, unsigned long mask)
 {
 	struct fs_struct *old_fs, *fs;
-	struct namespace *old_ns;
+	struct nsproxy *old_nsproxy, *vxi_nsproxy;
 
-	if (vx_info_flags(vxi, VXF_INFO_LOCK, 0))
+	if (vx_info_flags(vxi, VXF_INFO_PRIVATE, 0))
 		return -EACCES;
-	if (!vxi->vx_namespace)
+
+	vxi_nsproxy = vxi->vx_nsproxy;
+	if (!vxi_nsproxy)
 		return -EINVAL;
 
 	fs = copy_fs_struct(vxi->vx_fs);
@@ -43,59 +98,81 @@ int vx_enter_namespace(struct vx_info *vxi)
 		return -ENOMEM;
 
 	task_lock(current);
-	old_ns = current->namespace;
 	old_fs = current->fs;
-	get_namespace(vxi->vx_namespace);
-	current->namespace = vxi->vx_namespace;
-	current->fs = fs;
+	old_nsproxy = current->nsproxy;
+
+	if (mask) {
+		current->nsproxy = vx_mix_nsproxy(old_nsproxy,
+			vxi->vx_nsproxy, mask);
+
+		if (mask & CLONE_FS)
+			current->fs = fs;
+		else
+			old_fs = fs;
+	} else {
+		current->nsproxy = vxi_nsproxy;
+		get_nsproxy(vxi_nsproxy);
+		current->fs = fs;
+	}
 	task_unlock(current);
 
-	put_namespace(old_ns);
-	put_fs_struct(old_fs);
+	if (old_fs)
+		put_fs_struct(old_fs);
+	put_nsproxy(old_nsproxy);
 	return 0;
 }
 
-int vx_set_namespace(struct vx_info *vxi, struct namespace *ns, struct fs_struct *fs)
+int vx_set_namespace(struct vx_info *vxi, unsigned long mask)
 {
-	struct fs_struct *fs_copy;
-
-	if (vxi->vx_namespace)
-		return -EPERM;
-	if (!ns || !fs)
-		return -EINVAL;
-
-	fs_copy = copy_fs_struct(fs);
-	if (!fs_copy)
-		return -ENOMEM;
-
-	get_namespace(ns);
-	vxi->vx_namespace = ns;
-	vxi->vx_fs = fs_copy;
-	return 0;
-}
-
-int vc_enter_namespace(struct vx_info *vxi, void __user *data)
-{
-	return vx_enter_namespace(vxi);
-}
-
-int vc_set_namespace(struct vx_info *vxi, void __user *data)
-{
-	struct fs_struct *fs;
-	struct namespace *ns;
+	struct fs_struct *fs_copy, *fs;
+	struct nsproxy *nsproxy;
+	struct nsproxy null_proxy = { .namespace = NULL };
 	int ret;
+
+	if (vxi->vx_nsproxy)
+		return -EPERM;
 
 	task_lock(current);
 	fs = current->fs;
 	atomic_inc(&fs->count);
-	ns = current->namespace;
-	get_namespace(current->namespace);
+	nsproxy = current->nsproxy;
+	get_nsproxy(nsproxy);
 	task_unlock(current);
 
-	ret = vx_set_namespace(vxi, ns, fs);
+	ret = -ENOMEM;
+	fs_copy = copy_fs_struct(fs);
+	if (!fs_copy)
+		goto out_put;
 
-	put_namespace(ns);
+	if (mask) {
+		vxi->vx_nsproxy = vx_mix_nsproxy(&null_proxy,
+			nsproxy, mask);
+		if (!vxi->vx_nsproxy)
+			goto out_put;
+
+		if (mask & CLONE_FS)
+			vxi->vx_fs = fs_copy;
+		else
+			put_fs_struct(fs_copy);
+	} else {
+		vxi->vx_nsproxy = nsproxy;
+		get_nsproxy(nsproxy);
+		vxi->vx_fs = fs_copy;
+	}
+	ret = 0;
+out_put:
 	put_fs_struct(fs);
+	put_nsproxy(nsproxy);
 	return ret;
+}
+
+int vc_enter_namespace(struct vx_info *vxi, void __user *data)
+{
+	return vx_enter_namespace(vxi, 0);
+}
+
+int vc_set_namespace(struct vx_info *vxi, void __user *data)
+{
+	return vx_set_namespace(vxi, 0);
 }
 

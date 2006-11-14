@@ -2,19 +2,8 @@
 #define _VX_VS_CVIRT_H
 
 #include "vserver/cvirt.h"
+#include "vserver/context.h"
 #include "vserver/debug.h"
-
-
-/* utsname virtualization */
-
-static inline struct new_utsname *vx_new_utsname(void)
-{
-	if (current->vx_info)
-		return &current->vx_info->cvirt.utsname;
-	return &system_utsname;
-}
-
-#define vx_new_uts(x)		((vx_new_utsname())->x)
 
 
 static inline void vx_activate_task(struct task_struct *p)

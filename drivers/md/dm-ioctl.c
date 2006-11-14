@@ -15,6 +15,7 @@
 #include <linux/slab.h>
 #include <linux/dm-ioctl.h>
 #include <linux/hdreg.h>
+#include <linux/vs_base.h>
 
 #include <asm/uaccess.h>
 

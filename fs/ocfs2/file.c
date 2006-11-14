@@ -30,6 +30,7 @@
 #include <linux/highmem.h>
 #include <linux/pagemap.h>
 #include <linux/uio.h>
+#include <linux/sched.h>
 
 #define MLOG_MASK_PREFIX ML_INODE
 #include <cluster/masklog.h>
@@ -691,6 +692,12 @@ static int ocfs2_zero_extend(struct inode *inode,
 		}
 
 		start_off += sb->s_blocksize;
+
+		/*
+		 * Very large extends have the potential to lock up
+		 * the cpu for extended periods of time.
+		 */
+		cond_resched();
 	}
 
 out:
@@ -728,31 +735,36 @@ static int ocfs2_extend_file(struct inode *inode,
 	clusters_to_add = ocfs2_clusters_for_bytes(inode->i_sb, new_i_size) - 
 		OCFS2_I(inode)->ip_clusters;
 
-	if (clusters_to_add) {
-		/* 
-		 * protect the pages that ocfs2_zero_extend is going to
-		 * be pulling into the page cache.. we do this before the
-		 * metadata extend so that we don't get into the situation
-		 * where we've extended the metadata but can't get the data
-		 * lock to zero.
-		 */
-		ret = ocfs2_data_lock(inode, 1);
-		if (ret < 0) {
-			mlog_errno(ret);
-			goto out;
-		}
+	/* 
+	 * protect the pages that ocfs2_zero_extend is going to be
+	 * pulling into the page cache.. we do this before the
+	 * metadata extend so that we don't get into the situation
+	 * where we've extended the metadata but can't get the data
+	 * lock to zero.
+	 */
+	ret = ocfs2_data_lock(inode, 1);
+	if (ret < 0) {
+		mlog_errno(ret);
+		goto out;
+	}
 
+	if (clusters_to_add) {
 		ret = ocfs2_extend_allocation(inode, clusters_to_add);
 		if (ret < 0) {
 			mlog_errno(ret);
 			goto out_unlock;
 		}
+	}
 
-		ret = ocfs2_zero_extend(inode, (u64)new_i_size - tail_to_skip);
-		if (ret < 0) {
-			mlog_errno(ret);
-			goto out_unlock;
-		}
+	/*
+	 * Call this even if we don't add any clusters to the tree. We
+	 * still need to zero the area between the old i_size and the
+	 * new i_size.
+	 */
+	ret = ocfs2_zero_extend(inode, (u64)new_i_size - tail_to_skip);
+	if (ret < 0) {
+		mlog_errno(ret);
+		goto out_unlock;
 	}
 
 	if (!tail_to_skip) {
@@ -764,8 +776,7 @@ static int ocfs2_extend_file(struct inode *inode,
 	}
 
 out_unlock:
-	if (clusters_to_add) /* this is the only case in which we lock */
-		ocfs2_data_unlock(inode, 1);
+	ocfs2_data_unlock(inode, 1);
 
 out:
 	return ret;
@@ -963,25 +974,23 @@ static inline int ocfs2_write_should_remove_suid(struct inode *inode)
 }
 
 static ssize_t ocfs2_file_aio_write(struct kiocb *iocb,
-				    const char __user *buf,
-				    size_t count,
+				    const struct iovec *iov,
+				    unsigned long nr_segs,
 				    loff_t pos)
 {
-	struct iovec local_iov = { .iov_base = (void __user *)buf,
-				   .iov_len = count };
 	int ret, rw_level = -1, meta_level = -1, have_alloc_sem = 0;
 	u32 clusters;
 	struct file *filp = iocb->ki_filp;
 	struct inode *inode = filp->f_dentry->d_inode;
 	loff_t newsize, saved_pos;
 
-	mlog_entry("(0x%p, 0x%p, %u, '%.*s')\n", filp, buf,
-		   (unsigned int)count,
+	mlog_entry("(0x%p, %u, '%.*s')\n", filp,
+		   (unsigned int)nr_segs,
 		   filp->f_dentry->d_name.len,
 		   filp->f_dentry->d_name.name);
 
 	/* happy write of zero bytes */
-	if (count == 0)
+	if (iocb->ki_left == 0)
 		return 0;
 
 	if (!inode) {
@@ -1050,7 +1059,7 @@ static ssize_t ocfs2_file_aio_write(struct kiocb *iocb,
 		} else {
 			saved_pos = iocb->ki_pos;
 		}
-		newsize = count + saved_pos;
+		newsize = iocb->ki_left + saved_pos;
 
 		mlog(0, "pos=%lld newsize=%lld cursize=%lld\n",
 		     (long long) saved_pos, (long long) newsize,
@@ -1083,7 +1092,7 @@ static ssize_t ocfs2_file_aio_write(struct kiocb *iocb,
 		if (!clusters)
 			break;
 
-		ret = ocfs2_extend_file(inode, NULL, newsize, count);
+		ret = ocfs2_extend_file(inode, NULL, newsize, iocb->ki_left);
 		if (ret < 0) {
 			if (ret != -ENOSPC)
 				mlog_errno(ret);
@@ -1100,7 +1109,7 @@ static ssize_t ocfs2_file_aio_write(struct kiocb *iocb,
 	/* communicate with ocfs2_dio_end_io */
 	ocfs2_iocb_set_rw_locked(iocb);
 
-	ret = generic_file_aio_write_nolock(iocb, &local_iov, 1, &iocb->ki_pos);
+	ret = generic_file_aio_write_nolock(iocb, iov, nr_segs, iocb->ki_pos);
 
 	/* buffered aio wouldn't have proper lock coverage today */
 	BUG_ON(ret == -EIOCBQUEUED && !(filp->f_flags & O_DIRECT));
@@ -1134,16 +1143,16 @@ out:
 }
 
 static ssize_t ocfs2_file_aio_read(struct kiocb *iocb,
-				   char __user *buf,
-				   size_t count,
+				   const struct iovec *iov,
+				   unsigned long nr_segs,
 				   loff_t pos)
 {
 	int ret = 0, rw_level = -1, have_alloc_sem = 0;
 	struct file *filp = iocb->ki_filp;
 	struct inode *inode = filp->f_dentry->d_inode;
 
-	mlog_entry("(0x%p, 0x%p, %u, '%.*s')\n", filp, buf,
-		   (unsigned int)count,
+	mlog_entry("(0x%p, %u, '%.*s')\n", filp,
+		   (unsigned int)nr_segs,
 		   filp->f_dentry->d_name.len,
 		   filp->f_dentry->d_name.name);
 
@@ -1187,7 +1196,7 @@ static ssize_t ocfs2_file_aio_read(struct kiocb *iocb,
 	}
 	ocfs2_meta_unlock(inode, 0);
 
-	ret = generic_file_aio_read(iocb, buf, count, iocb->ki_pos);
+	ret = generic_file_aio_read(iocb, iov, nr_segs, iocb->ki_pos);
 	if (ret == -EINVAL)
 		mlog(ML_ERROR, "generic_file_aio_read returned -EINVAL\n");
 

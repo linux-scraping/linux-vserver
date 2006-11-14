@@ -190,13 +190,13 @@ static struct lock_class_key af_callback_keys[AF_MAX];
 #define SK_RMEM_MAX		(_SK_MEM_OVERHEAD * _SK_MEM_PACKETS)
 
 /* Run time adjustable parameters. */
-__u32 sysctl_wmem_max = SK_WMEM_MAX;
-__u32 sysctl_rmem_max = SK_RMEM_MAX;
-__u32 sysctl_wmem_default = SK_WMEM_MAX;
-__u32 sysctl_rmem_default = SK_RMEM_MAX;
+__u32 sysctl_wmem_max __read_mostly = SK_WMEM_MAX;
+__u32 sysctl_rmem_max __read_mostly = SK_RMEM_MAX;
+__u32 sysctl_wmem_default __read_mostly = SK_WMEM_MAX;
+__u32 sysctl_rmem_default __read_mostly = SK_RMEM_MAX;
 
 /* Maximal space eaten by iovec or ancilliary data plus some space */
-int sysctl_optmem_max = sizeof(unsigned long)*(2*UIO_MAXIOV + 512);
+int sysctl_optmem_max __read_mostly = sizeof(unsigned long)*(2*UIO_MAXIOV+512);
 
 static int sock_set_timeout(long *timeo_p, char __user *optval, int optlen)
 {
@@ -250,11 +250,7 @@ int sock_queue_rcv_skb(struct sock *sk, struct sk_buff *skb)
 		goto out;
 	}
 
-	/* It would be deadlock, if sock_queue_rcv_skb is used
-	   with socket lock! We assume that users of this
-	   function are lock free.
-	*/
-	err = sk_filter(sk, skb, 1);
+	err = sk_filter(sk, skb);
 	if (err)
 		goto out;
 
@@ -281,7 +277,7 @@ int sk_receive_skb(struct sock *sk, struct sk_buff *skb)
 {
 	int rc = NET_RX_SUCCESS;
 
-	if (sk_filter(sk, skb, 0))
+	if (sk_filter(sk, skb))
 		goto discard_and_relse;
 
 	skb->dev = NULL;
@@ -609,15 +605,15 @@ set_rcvbuf:
 			break;
 
 		case SO_DETACH_FILTER:
-			spin_lock_bh(&sk->sk_lock.slock);
-			filter = sk->sk_filter;
+			rcu_read_lock_bh();
+			filter = rcu_dereference(sk->sk_filter);
                         if (filter) {
-				sk->sk_filter = NULL;
-				spin_unlock_bh(&sk->sk_lock.slock);
+				rcu_assign_pointer(sk->sk_filter, NULL);
 				sk_filter_release(sk, filter);
+				rcu_read_unlock_bh();
 				break;
 			}
-			spin_unlock_bh(&sk->sk_lock.slock);
+			rcu_read_unlock_bh();
 			ret = -ENONET;
 			break;
 
@@ -830,7 +826,7 @@ static void inline sock_lock_init(struct sock *sk)
 				   af_family_slock_key_strings[sk->sk_family]);
 	lockdep_init_map(&sk->sk_lock.dep_map,
 			 af_family_key_strings[sk->sk_family],
-			 af_family_keys + sk->sk_family);
+			 af_family_keys + sk->sk_family, 0);
 }
 
 /**
@@ -889,10 +885,10 @@ void sk_free(struct sock *sk)
 	if (sk->sk_destruct)
 		sk->sk_destruct(sk);
 
-	filter = sk->sk_filter;
+	filter = rcu_dereference(sk->sk_filter);
 	if (filter) {
 		sk_filter_release(sk, filter);
-		sk->sk_filter = NULL;
+		rcu_assign_pointer(sk->sk_filter, NULL);
 	}
 
 	sock_disable_timestamp(sk);
@@ -921,7 +917,7 @@ struct sock *sk_clone(const struct sock *sk, const gfp_t priority)
 	if (newsk != NULL) {
 		struct sk_filter *filter;
 
-		memcpy(newsk, sk, sk->sk_prot->obj_size);
+		sock_copy(newsk, sk);
 
 		/* SANITY */
 		sock_vx_init(newsk);
@@ -1182,7 +1178,7 @@ static struct sk_buff *sock_alloc_send_pskb(struct sock *sk,
 			goto failure;
 
 		if (atomic_read(&sk->sk_wmem_alloc) < sk->sk_sndbuf) {
-			skb = alloc_skb(header_len, sk->sk_allocation);
+			skb = alloc_skb(header_len, gfp_mask);
 			if (skb) {
 				int npages;
 				int i;

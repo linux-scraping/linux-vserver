@@ -17,6 +17,7 @@
 #include <linux/security.h>
 #include <linux/proc_fs.h>
 #include <linux/devpts_fs.h>
+#include <linux/vs_base.h>
 #include <linux/vserver/debug.h>
 
 /* Taken over from the old code... */

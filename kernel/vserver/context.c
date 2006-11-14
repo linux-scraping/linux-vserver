@@ -164,7 +164,7 @@ static void __dealloc_vx_info(struct vx_info *vxi)
 
 static void __shutdown_vx_info(struct vx_info *vxi)
 {
-	struct namespace *namespace;
+	struct nsproxy *nsproxy;
 	struct fs_struct *fs;
 
 	might_sleep();
@@ -172,9 +172,9 @@ static void __shutdown_vx_info(struct vx_info *vxi)
 	vxi->vx_state |= VXS_SHUTDOWN;
 	vs_state_change(vxi, VSC_SHUTDOWN);
 
-	namespace = xchg(&vxi->vx_namespace, NULL);
-	if (namespace)
-		put_namespace(namespace);
+	nsproxy = xchg(&vxi->vx_nsproxy, NULL);
+	if (nsproxy)
+		put_nsproxy(nsproxy);
 
 	fs = xchg(&vxi->vx_fs, NULL);
 	if (fs)
@@ -195,7 +195,7 @@ void free_vx_info(struct vx_info *vxi)
 
 	BUG_ON(vx_info_state(vxi, VXS_HASHED));
 
-	BUG_ON(vxi->vx_namespace);
+	BUG_ON(vxi->vx_nsproxy);
 	BUG_ON(vxi->vx_fs);
 
 	spin_lock_irqsave(&vx_info_inactive_lock, flags);

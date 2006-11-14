@@ -45,6 +45,7 @@ enum vid_directory_inos {
 	PROC_XID_STATUS,
 	PROC_XID_LIMIT,
 	PROC_XID_SCHED,
+	PROC_XID_NSPROXY,
 	PROC_XID_CVIRT,
 	PROC_XID_CACCT,
 
@@ -156,6 +157,19 @@ int proc_xid_sched (int vid, char *buffer)
 			&vx_per_cpu(vxi, sched_pc, cpu),
 			buffer + length, cpu);
 	}
+	put_vx_info(vxi);
+	return length;
+}
+
+int proc_xid_nsproxy (int vid, char *buffer)
+{
+	struct vx_info *vxi;
+	int length;
+
+	vxi = lookup_vx_info(vid);
+	if (!vxi)
+		return 0;
+	length = vx_info_proc_nsproxy(vxi->vx_nsproxy, buffer);
 	put_vx_info(vxi);
 	return length;
 }
@@ -338,19 +352,28 @@ static struct dentry_operations proc_vid_dentry_operations = {
 
 
 struct vid_entry {
-	int type;
 	int len;
 	char *name;
 	mode_t mode;
+	struct file_operations *fop;
+	union proc_op op;
 };
 
-#define E(type,name,mode) {(type),sizeof(name)-1,(name),(mode)}
+#define REG(NAME, MODE, OTYPE)			\
+	NOD(NAME, (S_IFREG|(MODE)),		\
+		 &proc_##OTYPE##_operations, {})
 
+#define INF(NAME, MODE, OTYPE)			\
+	NOD(NAME, (S_IFREG|(MODE)),		\
+		 &proc_##OTYPE##_operations, {})
+
+#define (type,name,mode) {(type),sizeof(name)-1,(name),(mode)}
 static struct vid_entry vx_base_stuff[] = {
 	E(PROC_XID_INFO,	"info",		S_IFREG|S_IRUGO),
 	E(PROC_XID_STATUS,	"status",	S_IFREG|S_IRUGO),
 	E(PROC_XID_LIMIT,	"limit",	S_IFREG|S_IRUGO),
 	E(PROC_XID_SCHED,	"sched",	S_IFREG|S_IRUGO),
+	E(PROC_XID_NSPROXY,	"nsproxy",	S_IFREG|S_IRUGO),
 	E(PROC_XID_CVIRT,	"cvirt",	S_IFREG|S_IRUGO),
 	E(PROC_XID_CACCT,	"cacct",	S_IFREG|S_IRUGO),
 	{0,0,NULL,0}
@@ -411,6 +434,9 @@ static struct dentry *proc_vid_lookup(struct inode *dir,
 		break;
 	case PROC_XID_SCHED:
 		PROC_I(inode)->op.proc_vid_read = proc_xid_sched;
+		break;
+	case PROC_XID_NSPROXY:
+		PROC_I(inode)->op.proc_vid_read = proc_xid_nsproxy;
 		break;
 	case PROC_XID_CVIRT:
 		PROC_I(inode)->op.proc_vid_read = proc_xid_cvirt;

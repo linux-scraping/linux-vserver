@@ -128,7 +128,7 @@ unlock:
 #define MAX_ILLEGAL_IRQS 16
 
 void
-handle_irq(int irq, struct pt_regs * regs)
+handle_irq(int irq)
 {	
 	/* 
 	 * We ack quickly, we don't want the irq controller
@@ -160,7 +160,7 @@ handle_irq(int irq, struct pt_regs * regs)
 	 */
 	local_irq_disable();
 	__enter_vx_admin(&vxis);
-	__do_IRQ(irq, regs);
+	__do_IRQ(irq);
 	__leave_vx_admin(&vxis);
 	irq_exit();
 }

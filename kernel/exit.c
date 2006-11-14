@@ -18,8 +18,10 @@
 #include <linux/security.h>
 #include <linux/cpu.h>
 #include <linux/acct.h>
+#include <linux/tsacct_kern.h>
 #include <linux/file.h>
 #include <linux/binfmts.h>
+#include <linux/nsproxy.h>
 #include <linux/ptrace.h>
 #include <linux/profile.h>
 #include <linux/mount.h>
@@ -38,6 +40,7 @@
 #include <linux/pipe_fs_i.h>
 #include <linux/audit.h> /* for audit_free() */
 #include <linux/resource.h>
+#include <linux/blkdev.h>
 #include <linux/vs_limit.h>
 #include <linux/vs_context.h>
 #include <linux/vs_network.h>
@@ -128,6 +131,7 @@ static void __exit_signal(struct task_struct *tsk)
 	flush_sigqueue(&tsk->pending);
 	if (sig) {
 		flush_sigqueue(&sig->shared_pending);
+		taskstats_tgid_free(sig);
 		__cleanup_signal(sig);
 	}
 }
@@ -222,7 +226,7 @@ static int will_become_orphaned_pgrp(int pgrp, struct task_struct *ignored_task)
 	do_each_task_pid(pgrp, PIDTYPE_PGID, p) {
 		if (p == ignored_task
 				|| p->exit_state
-				|| p->real_parent->pid == 1)
+				|| is_init(p->real_parent))
 			continue;
 		if (process_group(p->real_parent) != pgrp
 			    && p->real_parent->signal->session == p->signal->session) {
@@ -252,17 +256,6 @@ static int has_stopped_jobs(int pgrp)
 	do_each_task_pid(pgrp, PIDTYPE_PGID, p) {
 		if (p->state != TASK_STOPPED)
 			continue;
-
-		/* If p is stopped by a debugger on a signal that won't
-		   stop it, then don't count p as stopped.  This isn't
-		   perfect but it's a good approximation.  */
-		if (unlikely (p->ptrace)
-		    && p->exit_code != SIGSTOP
-		    && p->exit_code != SIGTSTP
-		    && p->exit_code != SIGTTOU
-		    && p->exit_code != SIGTTIN)
-			continue;
-
 		retval = 1;
 		break;
 	} while_each_task_pid(pgrp, PIDTYPE_PGID, p);
@@ -295,9 +288,7 @@ static void reparent_to_init(void)
 	/* Set the exit signal to SIGCHLD so we signal init on exit */
 	current->exit_signal = SIGCHLD;
 
-	if ((current->policy == SCHED_NORMAL ||
-			current->policy == SCHED_BATCH)
-				&& (task_nice(current) < 0))
+	if (!has_rt_policy(current) && (task_nice(current) < 0))
 		set_user_nice(current, 0);
 	/* cpus_allowed? */
 	/* rt_priority? */
@@ -411,9 +402,11 @@ void daemonize(const char *name, ...)
 	fs = init_task.fs;
 	current->fs = fs;
 	atomic_inc(&fs->count);
-	exit_namespace(current);
-	current->namespace = init_task.namespace;
-	get_namespace(current->namespace);
+
+	exit_task_namespaces(current);
+	current->nsproxy = init_task.nsproxy;
+	get_task_namespaces(current);
+
  	exit_files(current);
 	current->files = init_task.files;
 	atomic_inc(&current->files->count);
@@ -491,6 +484,18 @@ void fastcall put_files_struct(struct files_struct *files)
 }
 
 EXPORT_SYMBOL(put_files_struct);
+
+void reset_files_struct(struct task_struct *tsk, struct files_struct *files)
+{
+	struct files_struct *old;
+
+	old = tsk->files;
+	task_lock(tsk);
+	tsk->files = files;
+	task_unlock(tsk);
+	put_files_struct(old);
+}
+EXPORT_SYMBOL(reset_files_struct);
 
 static inline void __exit_files(struct task_struct *tsk)
 {
@@ -926,7 +931,6 @@ fastcall NORET_TYPE void do_exit(long code)
 	exit_sem(tsk);
 	__exit_files(tsk);
 	__exit_fs(tsk);
-	exit_namespace(tsk);
 	exit_thread();
 	cpuset_exit(tsk);
 	exit_keys(tsk);
@@ -943,6 +947,7 @@ fastcall NORET_TYPE void do_exit(long code)
 	/* needs to stay before exit_notify() */
 	exit_vx_info_early(tsk, code);
 	exit_notify(tsk);
+	exit_task_namespaces(tsk);
 #ifdef CONFIG_NUMA
 	mpol_free(tsk->mempolicy);
 	tsk->mempolicy = NULL;
@@ -970,15 +975,15 @@ fastcall NORET_TYPE void do_exit(long code)
 	exit_vx_info(tsk, code);
 	exit_nx_info(tsk);
 
-	/* PF_DEAD causes final put_task_struct after we schedule. */
 	preempt_disable();
-	BUG_ON(tsk->flags & PF_DEAD);
-	tsk->flags |= PF_DEAD;
+	/* causes final put_task_struct in finish_task_switch(). */
+	tsk->state = TASK_DEAD;
 
 	schedule();
 	BUG();
 	/* Avoid "noreturn function does return".  */
-	for (;;) ;
+	for (;;)
+		cpu_relax();	/* For when BUG is null */
 }
 
 EXPORT_SYMBOL_GPL(do_exit);
@@ -987,7 +992,7 @@ NORET_TYPE void complete_and_exit(struct completion *comp, long code)
 {
 	if (comp)
 		complete(comp);
-	
+
 	do_exit(code);
 }
 

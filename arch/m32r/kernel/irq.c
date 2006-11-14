@@ -78,17 +78,20 @@ skip:
  */
 asmlinkage unsigned int do_IRQ(int irq, struct pt_regs *regs)
 {
+	struct pt_regs *old_regs;
 	struct vx_info_save vxis;
 
+	old_regs = set_irq_regs(regs);
 	irq_enter();
 
 #ifdef CONFIG_DEBUG_STACKOVERFLOW
 	/* FIXME M32R */
 #endif
 	__enter_vx_admin(&vxis);
-	__do_IRQ(irq, regs);
+	__do_IRQ(irq);
 	__leave_vx_admin(&vxis);
 	irq_exit();
+	set_irq_regs(old_regs);
 
 	return 1;
 }

@@ -10,6 +10,7 @@
 #include <linux/errno.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
+#include <linux/vs_base.h>
 
 #include <linux/vserver/cvirt_def.h>
 #include <linux/vserver/cacct_def.h>
