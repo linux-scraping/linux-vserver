@@ -1,8 +1,92 @@
 #ifndef _VX_CVIRT_PROC_H
 #define _VX_CVIRT_PROC_H
 
-#include <linux/sched.h>
+#include <linux/nsproxy.h>
+#include <linux/namespace.h>
+#include <linux/utsname.h>
+#include <linux/ipc.h>
 
+
+static inline
+int vx_info_proc_nsproxy(struct nsproxy *nsproxy, char *buffer)
+{
+	struct namespace *ns;
+	struct uts_namespace *uts;
+	struct ipc_namespace *ipc;
+	struct vfsmount *mnt;
+	char *path, *root;
+	int length = 0;
+
+	if (!nsproxy)
+		goto out;
+
+	length += sprintf(buffer + length,
+		"NSProxy:\t%p [%p,%p,%p]\n",
+		nsproxy, nsproxy->namespace,
+		nsproxy->uts_ns, nsproxy->ipc_ns);
+
+	ns = nsproxy->namespace;
+	if (!ns)
+		goto skip_ns;
+
+	path = kmalloc(PATH_MAX, GFP_KERNEL);
+	if (!path)
+		goto skip_ns;
+
+	mnt = ns->root;
+	root = d_path(mnt->mnt_root, mnt->mnt_parent, path, PATH_MAX-2);
+	length += sprintf(buffer + length,
+		"Namespace:\t%p [#%u]\n"
+		"RootPath:\t%s\n"
+		,ns , atomic_read(&ns->count)
+		,root);
+	kfree(path);
+skip_ns:
+
+	uts = nsproxy->uts_ns;
+	if (!uts)
+		goto skip_uts;
+
+	length += sprintf(buffer + length,
+		"SysName:\t%.*s\n"
+		"NodeName:\t%.*s\n"
+		"Release:\t%.*s\n"
+		"Version:\t%.*s\n"
+		"Machine:\t%.*s\n"
+		"DomainName:\t%.*s\n"
+		,__NEW_UTS_LEN, uts->name.sysname
+		,__NEW_UTS_LEN, uts->name.nodename
+		,__NEW_UTS_LEN, uts->name.release
+		,__NEW_UTS_LEN, uts->name.version
+		,__NEW_UTS_LEN, uts->name.machine
+		,__NEW_UTS_LEN, uts->name.domainname
+		);
+skip_uts:
+
+	ipc = nsproxy->ipc_ns;
+	if (!ipc)
+		goto skip_ipc;
+
+	length += sprintf(buffer + length,
+		"SEMS:\t\t%d %d %d %d  %d\n"
+		"MSG:\t\t%d %d %d\n"
+		"SHM:\t\t%lu %lu  %d %d\n"
+		,ipc->sem_ctls[0], ipc->sem_ctls[1]
+		,ipc->sem_ctls[2], ipc->sem_ctls[3]
+		,ipc->used_sems
+		,ipc->msg_ctlmax, ipc->msg_ctlmnb, ipc->msg_ctlmni
+		,(unsigned long)ipc->shm_ctlmax
+		,(unsigned long)ipc->shm_ctlall
+		,ipc->shm_ctlmni, ipc->shm_tot
+		);
+skip_ipc:
+
+out:
+	return length;
+}
+
+
+#include <linux/sched.h>
 
 #define LOAD_INT(x) ((x) >> FSHIFT)
 #define LOAD_FRAC(x) LOAD_INT(((x) & (FIXED_1-1)) * 100)
@@ -17,20 +101,6 @@ int vx_info_proc_cvirt(struct _vx_cvirt *cvirt, char *buffer)
 		"BiasUptime:\t%lu.%02lu\n",
 			(unsigned long)cvirt->bias_uptime.tv_sec,
 			(cvirt->bias_uptime.tv_nsec / (NSEC_PER_SEC / 100)));
-	length += sprintf(buffer + length,
-		"SysName:\t%.*s\n"
-		"NodeName:\t%.*s\n"
-		"Release:\t%.*s\n"
-		"Version:\t%.*s\n"
-		"Machine:\t%.*s\n"
-		"DomainName:\t%.*s\n"
-		,__NEW_UTS_LEN, cvirt->utsname.sysname
-		,__NEW_UTS_LEN, cvirt->utsname.nodename
-		,__NEW_UTS_LEN, cvirt->utsname.release
-		,__NEW_UTS_LEN, cvirt->utsname.version
-		,__NEW_UTS_LEN, cvirt->utsname.machine
-		,__NEW_UTS_LEN, cvirt->utsname.domainname
-		);
 
 	a = cvirt->load[0] + (FIXED_1/200);
 	b = cvirt->load[1] + (FIXED_1/200);
@@ -53,6 +123,7 @@ int vx_info_proc_cvirt(struct _vx_cvirt *cvirt, char *buffer)
 		,LOAD_INT(c), LOAD_FRAC(c)
 		,atomic_read(&cvirt->total_forks)
 		);
+
 	return length;
 }
 

@@ -2,10 +2,10 @@
 #define _VX_CVIRT_DEF_H
 
 #include <linux/jiffies.h>
-#include <linux/utsname.h>
 #include <linux/spinlock.h>
 #include <linux/wait.h>
 #include <linux/time.h>
+#include <linux/utsname.h>
 #include <asm/atomic.h>
 
 
@@ -47,8 +47,6 @@ struct _vx_cvirt {
 	struct timespec bias_idle;
 	struct timespec bias_uptime;	/* context creation point */
 	uint64_t bias_clock;		/* offset in clock_t */
-
-	struct new_utsname utsname;
 
 	spinlock_t load_lock;		/* lock for the load averages */
 	atomic_t load_updates;		/* nr of load updates done so far */

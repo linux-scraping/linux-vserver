@@ -25,9 +25,7 @@ static inline int irq_canonicalize(int irq)
 #define irq_canonicalize(irq) (irq)	/* Sane hardware, sane code ... */
 #endif
 
-struct pt_regs;
-
-extern asmlinkage unsigned int do_IRQ(unsigned int irq, struct pt_regs *regs);
+extern asmlinkage unsigned int do_IRQ(unsigned int irq);
 
 #ifdef CONFIG_MIPS_MT_SMTC
 /*
@@ -56,14 +54,14 @@ do {									\
  * Ideally there should be away to get this into kernel/irq/handle.c to
  * avoid the overhead of a call for just a tiny function ...
  */
-#define do_IRQ(irq, regs)						\
+#define do_IRQ(irq)							\
 do {									\
 	struct vx_info_save vxis;					\
 									\
 	irq_enter();							\
-	__DO_IRQ_SMTC_HOOK();						\
 	__enter_vx_admin(&vxis);					\
-	__do_IRQ((irq), (regs));					\
+	__DO_IRQ_SMTC_HOOK();						\
+	__do_IRQ((irq));						\
 	__leave_vx_admin(&vxis);					\
 	irq_exit();							\
 } while (0)
@@ -71,7 +69,7 @@ do {									\
 #endif
 
 extern void arch_init_irq(void);
-extern void spurious_interrupt(struct pt_regs *regs);
+extern void spurious_interrupt(void);
 
 #ifdef CONFIG_MIPS_MT_SMTC
 struct irqaction;
@@ -81,8 +79,8 @@ extern int setup_irq_smtc(unsigned int irq, struct irqaction * new,
                           unsigned long hwmask);
 #endif /* CONFIG_MIPS_MT_SMTC */
 
-#ifdef CONFIG_SMP
-#define ARCH_HAS_IRQ_PER_CPU
-#endif
+extern int allocate_irqno(void);
+extern void alloc_legacy_irqno(void);
+extern void free_irqno(unsigned int irq);
 
 #endif /* _ASM_IRQ_H */

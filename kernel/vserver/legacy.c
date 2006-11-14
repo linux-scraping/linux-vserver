@@ -61,7 +61,7 @@ int vc_new_s_context(uint32_t ctx, void __user *data)
 
 	if (!vx_check(0, VX_ADMIN) || !capable(CAP_SYS_ADMIN)
 		/* might make sense in the future, or not ... */
-		|| vx_flags(VX_INFO_LOCK, 0))
+		|| vx_flags(VX_INFO_PRIVATE, 0))
 		return -EPERM;
 
 	/* ugly hack for Spectator */
@@ -95,9 +95,10 @@ int vc_new_s_context(uint32_t ctx, void __user *data)
 		new_vxi->vx_flags |= vc_data.flags;
 		if (vc_data.flags & VX_INFO_INIT)
 			vx_set_initpid(new_vxi, current->tgid);
+		/* FIXME: nsproxy
 		if (vc_data.flags & VX_INFO_NAMESPACE)
 			vx_set_namespace(new_vxi,
-				current->namespace, current->fs);
+				current->namespace, current->fs); */
 		if (vc_data.flags & VX_INFO_NPROC)
 			__rlim_set(&new_vxi->limit, RLIMIT_NPROC,
 				current->signal->rlim[RLIMIT_NPROC].rlim_max);

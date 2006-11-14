@@ -8,7 +8,7 @@ struct vx_info;
 struct namespace;
 struct fs_struct;
 
-extern int vx_set_namespace(struct vx_info *, struct namespace *, struct fs_struct *);
+int vx_set_namespace(struct vx_info *vxi, unsigned long mask);
 
 #else	/* _VX_NAMESPACE_H */
 #warning duplicate inclusion

@@ -20,10 +20,6 @@ static inline void vx_info_init_cvirt(struct _vx_cvirt *cvirt)
 	atomic_set(&cvirt->nr_uninterruptible, 0);
 	atomic_set(&cvirt->nr_onhold, 0);
 
-	down_read(&uts_sem);
-	cvirt->utsname = system_utsname;
-	up_read(&uts_sem);
-
 	spin_lock_init(&cvirt->load_lock);
 	cvirt->load_last = jiffies;
 	atomic_set(&cvirt->load_updates, 0);

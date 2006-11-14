@@ -27,6 +27,48 @@
 #include <asm/system.h>
 #include <asm/uaccess.h>
 
+static unsigned long irq_map[NR_IRQS / BITS_PER_LONG];
+
+int __devinit allocate_irqno(void)
+{
+	int irq;
+
+again:
+	irq = find_first_zero_bit(irq_map, NR_IRQS);
+
+	if (irq >= NR_IRQS)
+		return -ENOSPC;
+
+	if (test_and_set_bit(irq, irq_map))
+		goto again;
+
+	return irq;
+}
+
+EXPORT_SYMBOL_GPL(allocate_irqno);
+
+/*
+ * Allocate the 16 legacy interrupts for i8259 devices.  This happens early
+ * in the kernel initialization so treating allocation failure as BUG() is
+ * ok.
+ */
+void __init alloc_legacy_irqno(void)
+{
+	int i;
+
+	for (i = 0; i <= 16; i++)
+		BUG_ON(test_and_set_bit(i, irq_map));
+}
+
+void __devinit free_irqno(unsigned int irq)
+{
+	smp_mb__before_clear_bit();
+	clear_bit(irq, irq_map);
+	smp_mb__after_clear_bit();
+}
+
+EXPORT_SYMBOL_GPL(free_irqno);
+
 /*
  * 'what should we do if we get a hw irq event on an illegal vector'.
  * each architecture has to answer this themselves.
@@ -54,7 +96,7 @@ unsigned long irq_hwmask[NR_IRQS];
  * SMP cross-CPU interrupts have their own specific
  * handlers).
  */
-asmlinkage unsigned int do_IRQ(unsigned int irq, struct pt_regs *regs)
+asmlinkage unsigned int do_IRQ(unsigned int irq)
 {
 	struct vx_info_save vxis;
 
@@ -62,7 +104,7 @@ asmlinkage unsigned int do_IRQ(unsigned int irq, struct pt_regs *regs)
 
 	__enter_vx_admin(&vxis);
 	__DO_IRQ_SMTC_HOOK();
-	__do_IRQ(irq, regs);
+	__do_IRQ(irq);
 	__leave_vx_admin(&vxis);
 
 	irq_exit();
@@ -115,7 +157,7 @@ skip:
 	return 0;
 }
 
-asmlinkage void spurious_interrupt(struct pt_regs *regs)
+asmlinkage void spurious_interrupt(void)
 {
 	atomic_inc(&irq_err_count);
 }

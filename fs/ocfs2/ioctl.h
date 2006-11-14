@@ -10,7 +10,6 @@
 #ifndef OCFS2_IOCTL_H
 #define OCFS2_IOCTL_H
 
-int ocfs2_set_iflags(struct inode *inode, unsigned flags, unsigned mask);
 int ocfs2_ioctl(struct inode * inode, struct file * filp,
 	unsigned int cmd, unsigned long arg);
 

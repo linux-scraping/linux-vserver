@@ -19,6 +19,7 @@
 #include <linux/tty.h>
 #include <linux/devpts_fs.h>
 #include <linux/parser.h>
+#include <linux/vs_base.h>
 
 
 static int devpts_permission(struct inode *inode, int mask, struct nameidata *nd)
@@ -145,7 +146,6 @@ devpts_fill_super(struct super_block *s, void *data, int silent)
 	inode->i_ino = 1;
 	inode->i_mtime = inode->i_atime = inode->i_ctime = CURRENT_TIME;
 	inode->i_blocks = 0;
-	inode->i_blksize = 1024;
 	inode->i_uid = inode->i_gid = 0;
 	inode->i_mode = S_IFDIR | S_IRUGO | S_IXUGO | S_IWUSR;
 	inode->i_op = &simple_dir_inode_operations;
@@ -206,7 +206,6 @@ int devpts_pty_new(struct tty_struct *tty)
 		return -ENOMEM;
 
 	inode->i_ino = number+2;
-	inode->i_blksize = 1024;
 	inode->i_uid = config.setuid ? config.uid : current->fsuid;
 	inode->i_gid = config.setgid ? config.gid : current->fsgid;
 	inode->i_mtime = inode->i_atime = inode->i_ctime = CURRENT_TIME;
@@ -214,7 +213,7 @@ int devpts_pty_new(struct tty_struct *tty)
 	/* devpts is xid tagged */
 	inode->i_tag = (tag_t)vx_current_xid();
 	inode->i_op = &devpts_file_inode_operations;
-	inode->u.generic_ip = tty;
+	inode->i_private = tty;
 
 	dentry = get_node(number);
 	if (!IS_ERR(dentry) && !dentry->d_inode)
@@ -233,7 +232,7 @@ struct tty_struct *devpts_get_tty(int number)
 	tty = NULL;
 	if (!IS_ERR(dentry)) {
 		if (dentry->d_inode)
-			tty = dentry->d_inode->u.generic_ip;
+			tty = dentry->d_inode->i_private;
 		dput(dentry);
 	}
 

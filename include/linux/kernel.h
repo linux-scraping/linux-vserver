@@ -32,8 +32,9 @@ extern const char vx_linux_banner[];
 #define STACK_MAGIC	0xdeadbeef
 
 #define ARRAY_SIZE(x) (sizeof(x) / sizeof((x)[0]))
-#define ALIGN(x,a) (((x)+(a)-1)&~((a)-1))
+#define ALIGN(x,a) (((x)+(a)-1UL)&~((a)-1UL))
 #define FIELD_SIZEOF(t, f) (sizeof(((t*)0)->f))
+#define DIV_ROUND_UP(n,d) (((n) + (d) - 1) / (d))
 #define roundup(x, y) ((((x) + ((y) - 1)) / (y)) * (y))
 
 #define	KERN_EMERG	"<0>"	/* system is unusable			*/
@@ -171,6 +172,8 @@ __attribute_const__ roundup_pow_of_two(unsigned long x)
 
 extern int printk_ratelimit(void);
 extern int __printk_ratelimit(int ratelimit_jiffies, int ratelimit_burst);
+extern bool printk_timed_ratelimit(unsigned long *caller_jiffies,
+				unsigned int interval_msec);
 
 static inline void console_silent(void)
 {
@@ -187,6 +190,7 @@ extern void bust_spinlocks(int yes);
 extern int oops_in_progress;		/* If set, an oops, panic(), BUG() or die() is in progress */
 extern int panic_timeout;
 extern int panic_on_oops;
+extern int panic_on_unrecovered_nmi;
 extern int tainted;
 extern const char *print_tainted(void);
 extern void add_taint(unsigned);
@@ -215,8 +219,10 @@ extern void dump_stack(void);
 #define pr_debug(fmt,arg...) \
 	printk(KERN_DEBUG fmt,##arg)
 #else
-#define pr_debug(fmt,arg...) \
-	do { } while (0)
+static inline int __attribute__ ((format (printf, 1, 2))) pr_debug(const char * fmt, ...)
+{
+	return 0;
+}
 #endif
 
 #define pr_info(fmt,arg...) \
@@ -348,5 +354,12 @@ struct sysinfo {
 
 /* Trap pasters of __FUNCTION__ at compile-time */
 #define __FUNCTION__ (__func__)
+
+/* This helps us to avoid #ifdef CONFIG_NUMA */
+#ifdef CONFIG_NUMA
+#define NUMA_BUILD 1
+#else
+#define NUMA_BUILD 0
+#endif
 
 #endif
