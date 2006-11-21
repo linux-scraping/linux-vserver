@@ -36,7 +36,7 @@
 #include <linux/quotaops.h>
 #include <linux/buffer_head.h>
 #include <linux/smp_lock.h>
-#include <linux/vs_tag.h>
+#include <linux/vserver/tag.h>
 
 #include "namei.h"
 #include "xattr.h"

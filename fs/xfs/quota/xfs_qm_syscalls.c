@@ -17,7 +17,6 @@
  */
 
 #include <linux/capability.h>
-#include <linux/vs_context.h>
 
 #include "xfs.h"
 #include "xfs_fs.h"
@@ -214,7 +213,7 @@ xfs_qm_scall_quotaoff(
 	xfs_qoff_logitem_t	*qoffstart;
 	int			nculprits;
 
-	if (!force && !vx_capable(CAP_SYS_ADMIN, VXC_QUOTA_CTL))
+	if (!force && !capable(CAP_SYS_ADMIN))
 		return XFS_ERROR(EPERM);
 	/*
 	 * No file system can have quotas enabled on disk but not in core.

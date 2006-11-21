@@ -35,7 +35,6 @@
 #include <linux/skbuff.h>
 #include <linux/netlink.h>
 #include <linux/init.h>
-#include <linux/vs_context.h>
 
 #include <net/ip.h>
 #include <net/protocol.h>

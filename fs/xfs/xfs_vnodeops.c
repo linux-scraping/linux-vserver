@@ -732,9 +732,6 @@ xfs_setattr(
 		 * in the transaction.
 		 */
 		if (itag != tag) {
-			if (XFS_IS_GQUOTA_ON(mp)) {
-				/* FIXME: handle tag quota? */
-			}
 			ip->i_d.di_tag = tag;
 		}
 		if (iuid != uid) {

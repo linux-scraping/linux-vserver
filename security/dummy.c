@@ -28,7 +28,6 @@
 #include <linux/hugetlb.h>
 #include <linux/ptrace.h>
 #include <linux/file.h>
-#include <linux/vs_context.h>
 
 static int dummy_ptrace (struct task_struct *parent, struct task_struct *child)
 {
@@ -85,7 +84,7 @@ static int dummy_sysctl (ctl_table * table, int op)
 	return 0;
 }
 
-static int dummy_quotactl (int cmds, int type, int id, struct dqhash *hash)
+static int dummy_quotactl (int cmds, int type, int id, struct super_block *sb)
 {
 	return 0;
 }

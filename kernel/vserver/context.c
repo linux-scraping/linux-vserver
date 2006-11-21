@@ -20,7 +20,6 @@
  *  V0.13  separate per cpu data
  *  V0.14  changed vcmds to vxi arg
  *  V0.15  added context stat
- *  V0.16  have __create claim() the vxi
  *
  */
 
@@ -29,7 +28,6 @@
 #include <linux/namespace.h>
 
 #include <linux/sched.h>
-#include <linux/vserver/context.h>
 #include <linux/vserver/network.h>
 #include <linux/vserver/legacy.h>
 #include <linux/vserver/limit.h>
@@ -326,79 +324,11 @@ static inline xid_t __vx_dynamic_id(void)
 	return 0;
 }
 
-#ifdef	CONFIG_VSERVER_LEGACY
-
-/*	__loc_vx_info()
-
-	* locate or create the requested context
-	* get() it and if new hash it				*/
-
-static struct vx_info * __loc_vx_info(int id, int *err)
-{
-	struct vx_info *new, *vxi = NULL;
-
-	vxdprintk(VXD_CBIT(xid, 1), "loc_vx_info(%d)*", id);
-
-	if (!(new = __alloc_vx_info(id))) {
-		*err = -ENOMEM;
-		return NULL;
-	}
-
-	/* required to make dynamic xids unique */
-	spin_lock(&vx_info_hash_lock);
-
-	/* dynamic context requested */
-	if (id == VX_DYNAMIC_ID) {
-#ifdef	CONFIG_VSERVER_DYNAMIC_IDS
-		id = __vx_dynamic_id();
-		if (!id) {
-			printk(KERN_ERR "no dynamic context available.\n");
-			goto out_unlock;
-		}
-		new->vx_id = id;
-#else
-		printk(KERN_ERR "dynamic contexts disabled.\n");
-		goto out_unlock;
-#endif
-	}
-	/* existing context requested */
-	else if ((vxi = __lookup_vx_info(id))) {
-		/* context in setup is not available */
-		if (vxi->vx_flags & VXF_STATE_SETUP) {
-			vxdprintk(VXD_CBIT(xid, 0),
-				"loc_vx_info(%d) = %p (not available)", id, vxi);
-			vxi = NULL;
-			*err = -EBUSY;
-		} else {
-			vxdprintk(VXD_CBIT(xid, 0),
-				"loc_vx_info(%d) = %p (found)", id, vxi);
-			get_vx_info(vxi);
-			*err = 0;
-		}
-		goto out_unlock;
-	}
-
-	/* new context requested */
-	vxdprintk(VXD_CBIT(xid, 0),
-		"loc_vx_info(%d) = %p (new)", id, new);
-	__hash_vx_info(get_vx_info(new));
-	vxi = new, new = NULL;
-	*err = 1;
-
-out_unlock:
-	spin_unlock(&vx_info_hash_lock);
-	vxh_loc_vx_info(vxi, id);
-	if (new)
-		__dealloc_vx_info(new);
-	return vxi;
-}
-
-#endif
 
 /*	__create_vx_info()
 
 	* create the requested context
-	* get(), claim() and hash it				*/
+	* get() and hash it					*/
 
 static struct vx_info * __create_vx_info(int id)
 {
@@ -451,7 +381,6 @@ static struct vx_info * __create_vx_info(int id)
 	/* new context */
 	vxdprintk(VXD_CBIT(xid, 0),
 		"create_vx_info(%d) = %p (new)", id, new);
-	claim_vx_info(new, NULL);
 	__hash_vx_info(get_vx_info(new));
 	vxi = new, new = NULL;
 
@@ -508,17 +437,6 @@ int xid_is_hashed(xid_t xid)
 	return hashed;
 }
 
-#ifdef	CONFIG_VSERVER_LEGACY
-
-struct vx_info *lookup_or_create_vx_info(int id)
-{
-	int err;
-
-	return __loc_vx_info(id, &err);
-}
-
-#endif
-
 #ifdef	CONFIG_PROC_FS
 
 /*	get_xid_list()
@@ -531,7 +449,7 @@ int get_xid_list(int index, unsigned int *xids, int size)
 	int hindex, nr_xids = 0;
 
 	/* only show current and children */
-	if (!vx_check(0, VS_ADMIN|VS_WATCH)) {
+	if (!vx_check(0, VX_ADMIN|VX_WATCH)) {
 		if (index > 0)
 			return 0;
 		xids[nr_xids] = vx_current_xid();
@@ -652,8 +570,7 @@ int vx_migrate_task(struct task_struct *p, struct vx_info *vxi)
 		"vx_migrate_task(%p,%p[#%d.%d])", p, vxi,
 		vxi->vx_id, atomic_read(&vxi->vx_usecnt));
 
-	if (vx_info_flags(vxi, VXF_INFO_PRIVATE, 0) &&
-		!vx_info_flags(vxi, VXF_STATE_SETUP, 0))
+	if (vx_info_flags(vxi, VXF_INFO_PRIVATE, 0))
 		return -EACCES;
 
 	old_vxi = task_get_vx_info(p);
@@ -756,7 +673,7 @@ void vx_set_persistent(struct vx_info *vxi)
 		"vx_set_persistent(%p[#%d])", vxi, vxi->vx_id);
 
 	get_vx_info(vxi);
-	claim_vx_info(vxi, NULL);
+	claim_vx_info(vxi, current);
 }
 
 void vx_clear_persistent(struct vx_info *vxi)
@@ -764,7 +681,7 @@ void vx_clear_persistent(struct vx_info *vxi)
 	vxdprintk(VXD_CBIT(xid, 6),
 		"vx_clear_persistent(%p[#%d])", vxi, vxi->vx_id);
 
-	release_vx_info(vxi, NULL);
+	release_vx_info(vxi, current);
 	put_vx_info(vxi);
 }
 
@@ -819,7 +736,7 @@ int vc_task_xid(uint32_t id, void __user *data)
 	if (id) {
 		struct task_struct *tsk;
 
-		if (!vx_check(0, VS_ADMIN|VS_WATCH))
+		if (!vx_check(0, VX_ADMIN|VX_WATCH))
 			return -EPERM;
 
 		read_lock(&tasklist_lock);
@@ -882,22 +799,26 @@ int vc_ctx_create(uint32_t xid, void __user *data)
 	/* initial flags */
 	new_vxi->vx_flags = vc_data.flagword;
 
-	ret = -ENOEXEC;
-	if (vs_state_change(new_vxi, VSC_STARTUP))
-		goto out;
-
-	ret = vx_migrate_task(current, new_vxi);
-	if (ret)
-		goto out;
-
-	/* return context id on success */
-	ret = new_vxi->vx_id;
-
 	/* get a reference for persistent contexts */
 	if ((vc_data.flagword & VXF_PERSISTENT))
 		vx_set_persistent(new_vxi);
+
+	ret = -ENOEXEC;
+	if (vs_state_change(new_vxi, VSC_STARTUP))
+		goto out_unhash;
+	ret = vx_migrate_task(current, new_vxi);
+	if (!ret) {
+		/* return context id on success */
+		ret = new_vxi->vx_id;
+		goto out;
+	}
+out_unhash:
+	/* prepare for context disposal */
+	new_vxi->vx_state |= VXS_SHUTDOWN;
+	if ((vc_data.flagword & VXF_PERSISTENT))
+		vx_clear_persistent(new_vxi);
+	__unhash_vx_info(new_vxi);
 out:
-	release_vx_info(new_vxi, NULL);
 	put_vx_info(new_vxi);
 	return ret;
 }
@@ -931,7 +852,7 @@ int vc_get_cflags(struct vx_info *vxi, void __user *data)
 	vc_data.flagword = vxi->vx_flags;
 
 	/* special STATE flag handling */
-	vc_data.mask = vs_mask_flags(~0UL, vxi->vx_flags, VXF_ONE_TIME);
+	vc_data.mask = vx_mask_flags(~0UL, vxi->vx_flags, VXF_ONE_TIME);
 
 	if (copy_to_user (data, &vc_data, sizeof(vc_data)))
 		return -EFAULT;
@@ -947,7 +868,7 @@ int vc_set_cflags(struct vx_info *vxi, void __user *data)
 		return -EFAULT;
 
 	/* special STATE flag handling */
-	mask = vs_mask_mask(vc_data.mask, vxi->vx_flags, VXF_ONE_TIME);
+	mask = vx_mask_mask(vc_data.mask, vxi->vx_flags, VXF_ONE_TIME);
 	trigger = (mask & vxi->vx_flags) ^ (mask & vc_data.flagword);
 
 	if (vxi == current->vx_info) {
@@ -965,7 +886,7 @@ int vc_set_cflags(struct vx_info *vxi, void __user *data)
 		}
 	}
 
-	vxi->vx_flags = vs_mask_flags(vxi->vx_flags,
+	vxi->vx_flags = vx_mask_flags(vxi->vx_flags,
 		vc_data.flagword, mask);
 	if (trigger & VXF_PERSISTENT)
 		vx_update_persistent(vxi);
@@ -1016,8 +937,8 @@ int vc_get_ccaps(struct vx_info *vxi, void __user *data)
 static int do_set_caps(struct vx_info *vxi,
 	uint64_t bcaps, uint64_t bmask, uint64_t ccaps, uint64_t cmask)
 {
-	vxi->vx_bcaps = vs_mask_flags(vxi->vx_bcaps, bcaps, bmask);
-	vxi->vx_ccaps = vs_mask_flags(vxi->vx_ccaps, ccaps, cmask);
+	vxi->vx_bcaps = vx_mask_flags(vxi->vx_bcaps, bcaps, bmask);
+	vxi->vx_ccaps = vx_mask_flags(vxi->vx_ccaps, ccaps, cmask);
 
 	return 0;
 }

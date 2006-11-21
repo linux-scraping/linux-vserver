@@ -1,9 +1,7 @@
-#ifndef _VS_CVIRT_H
-#define _VS_CVIRT_H
+#ifndef _VX_VS_CVIRT_H
+#define _VX_VS_CVIRT_H
 
 #include "vserver/cvirt.h"
-#include "vserver/context.h"
-#include "vserver/base.h"
 #include "vserver/debug.h"
 
 

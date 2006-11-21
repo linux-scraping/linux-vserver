@@ -19,7 +19,6 @@
 #include <linux/smp_lock.h>
 #include <linux/security.h>
 #include <linux/signal.h>
-#include <linux/vs_base.h>
 
 #include <asm/pgtable.h>
 #include <asm/system.h>
@@ -300,7 +299,7 @@ asmlinkage void do_ptrace(struct pt_regs *regs)
 		pt_error_return(regs, -ret);
 		goto out;
 	}
-	if (!vx_check(vx_task_xid(child), VS_WATCH_P|VS_IDENT)) {
+	if (!vx_check(vx_task_xid(child), VX_WATCH_P|VX_IDENT)) {
 		pt_error_return(regs, ESRCH);
 		goto out_tsk;
 	}

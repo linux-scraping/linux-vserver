@@ -162,7 +162,7 @@ EXPORT_SYMBOL(sync_blockdev);
 static void __fsync_super(struct super_block *sb)
 {
 	sync_inodes_sb(sb, 0);
-	DQUOT_SYNC(sb->s_dqh);
+	DQUOT_SYNC(sb);
 	lock_super(sb);
 	if (sb->s_dirt && sb->s_op->write_super)
 		sb->s_op->write_super(sb);

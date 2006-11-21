@@ -20,7 +20,6 @@
 #include <linux/idr.h>
 #include <linux/hdreg.h>
 #include <linux/blktrace_api.h>
-#include <linux/vs_base.h>
 
 #define DM_MSG_PREFIX "core"
 
@@ -240,7 +239,7 @@ static int dm_blk_open(struct inode *inode, struct file *file)
 		goto out;
 
 	ret = -EACCES;
-	if (!vx_check(md->xid, VS_IDENT))
+	if (!vx_check(md->xid, VX_IDENT))
 		goto out;
 
 	dm_get(md);

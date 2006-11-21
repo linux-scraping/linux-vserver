@@ -17,6 +17,7 @@
 #include <linux/kthread.h>
 #include <linux/rcupdate.h>
 #include <linux/smp.h>
+#include <linux/vs_context.h>
 
 #include <asm/irq.h>
 /*
@@ -205,6 +206,7 @@ EXPORT_SYMBOL(local_bh_enable_ip);
 
 asmlinkage void __do_softirq(void)
 {
+	struct vx_info_save vxis;
 	struct softirq_action *h;
 	__u32 pending;
 	int max_restart = MAX_SOFTIRQ_RESTART;
@@ -214,6 +216,7 @@ asmlinkage void __do_softirq(void)
 	account_system_vtime(current);
 
 	__local_bh_disable((unsigned long)__builtin_return_address(0));
+	__enter_vx_admin(&vxis);
 	trace_softirq_enter();
 
 	cpu = smp_processor_id();
@@ -245,6 +248,7 @@ restart:
 
 	trace_softirq_exit();
 
+	__leave_vx_admin(&vxis);
 	account_system_vtime(current);
 	_local_bh_enable();
 }

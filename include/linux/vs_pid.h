@@ -1,8 +1,6 @@
-#ifndef _VS_PID_H
-#define _VS_PID_H
+#ifndef _VX_VS_PID_H
+#define _VX_VS_PID_H
 
-#include "vserver/base.h"
-#include "vserver/context.h"
 #include "vserver/debug.h"
 
 
@@ -64,7 +62,7 @@ int proc_pid_visible(struct task_struct *task, int pid)
 		!vx_flags(VXF_FAKE_INIT, VXF_FAKE_INIT))
 		/* show a blend through init */
 		goto visible;
-	if (vx_check(vx_task_xid(task), VS_WATCH|VS_IDENT))
+	if (vx_check(vx_task_xid(task), VX_WATCH|VX_IDENT))
 		goto visible;
 	return 0;
 visible:

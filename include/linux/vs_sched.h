@@ -1,8 +1,6 @@
-#ifndef _VS_SCHED_H
-#define _VS_SCHED_H
+#ifndef _VX_VS_SCHED_H
+#define _VX_VS_SCHED_H
 
-#include "vserver/base.h"
-#include "vserver/context.h"
 #include "vserver/sched.h"
 
 

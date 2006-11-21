@@ -132,12 +132,6 @@ static inline gid_t dx_map_gid(gid_t gid)
 }
 
 
-#ifdef	CONFIG_VSERVER_LEGACY
-#define FIOC_GETTAG	_IOR('x', 1, long)
-#define FIOC_SETTAG	_IOW('x', 2, long)
-#define FIOC_SETTAGJ	_IOW('x', 3, long)
-#endif
-
 #ifdef	CONFIG_PROPAGATE
 
 int dx_parse_tag(char *string, tag_t *tag, int remove);

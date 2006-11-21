@@ -117,7 +117,6 @@
 #include <linux/dmaengine.h>
 #include <linux/err.h>
 #include <linux/ctype.h>
-#include <linux/vs_context.h> /* remove with NXF_HIDE_NETIF */
 #include <linux/vs_network.h>
 
 /*

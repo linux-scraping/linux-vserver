@@ -5,10 +5,19 @@
 #include <linux/capability.h>
 
 
+#define MAX_S_CONTEXT	65535	/* Arbitrary limit */
+
+#ifdef	CONFIG_VSERVER_DYNAMIC_IDS
+#define MIN_D_CONTEXT	49152	/* dynamic contexts start here */
+#else
+#define MIN_D_CONTEXT	65536
+#endif
+
 #define VX_DYNAMIC_ID	((uint32_t)-1)		/* id for dynamic context */
 
 /* context flags */
 
+#define VXF_INFO_LOCK		0x00000001
 #define VXF_INFO_SCHED		0x00000002
 #define VXF_INFO_NPROC		0x00000004
 #define VXF_INFO_PRIVATE	0x00000008
@@ -72,6 +81,17 @@
 #define VXC_QUOTA_CTL		0x00100000
 #define VXC_ADMIN_MAPPER	0x00200000
 #define VXC_ADMIN_CLOOP		0x00400000
+
+
+/* context state changes */
+
+enum {
+	VSC_STARTUP = 1,
+	VSC_SHUTDOWN,
+
+	VSC_NETUP,
+	VSC_NETDOWN,
+};
 
 
 #ifdef	__KERNEL__
@@ -151,6 +171,33 @@ struct vx_info_save {
 #define VXS_HELPER	0x1000
 #define VXS_RELEASED	0x8000
 
+/* check conditions */
+
+#define VX_ADMIN	0x0001
+#define VX_WATCH	0x0002
+#define VX_HIDE		0x0004
+#define VX_HOSTID	0x0008
+
+#define VX_IDENT	0x0010
+#define VX_EQUIV	0x0020
+#define VX_PARENT	0x0040
+#define VX_CHILD	0x0080
+
+#define VX_ARG_MASK	0x00F0
+
+#define VX_DYNAMIC	0x0100
+#define VX_STATIC	0x0200
+
+#define VX_ATR_MASK	0x0F00
+
+
+#ifdef	CONFIG_VSERVER_PRIVACY
+#define VX_ADMIN_P	(0)
+#define VX_WATCH_P	(0)
+#else
+#define VX_ADMIN_P	VX_ADMIN
+#define VX_WATCH_P	VX_WATCH
+#endif
 
 extern void claim_vx_info(struct vx_info *, struct task_struct *);
 extern void release_vx_info(struct vx_info *, struct task_struct *);
@@ -167,4 +214,6 @@ extern long vs_state_change(struct vx_info *, unsigned int);
 
 
 #endif	/* __KERNEL__ */
+#else	/* _VX_CONTEXT_H */
+#warning duplicate inclusion
 #endif	/* _VX_CONTEXT_H */

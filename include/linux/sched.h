@@ -53,6 +53,7 @@ struct sched_param {
 #include <linux/cpumask.h>
 #include <linux/errno.h>
 #include <linux/nodemask.h>
+#include <linux/vs_base.h>
 
 #include <asm/system.h>
 #include <asm/semaphore.h>

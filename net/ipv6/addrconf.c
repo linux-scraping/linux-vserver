@@ -83,7 +83,6 @@
 
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
-#include <linux/vs_base.h>
 
 /* Set to 3 to get tracing... */
 #define ACONF_DEBUG 2
@@ -2701,7 +2700,7 @@ static int if6_seq_show(struct seq_file *seq, void *v)
 	struct inet6_ifaddr *ifp = (struct inet6_ifaddr *)v;
 
 	/* no ipv6 inside a vserver for now */
-	if (vx_check(0, VS_ADMIN|VS_WATCH))
+	if (vx_check(0, VX_ADMIN|VX_WATCH))
 		seq_printf(seq,
 		   NIP6_SEQFMT " %02x %02x %02x %02x %8s\n",
 		   NIP6(ifp->addr),

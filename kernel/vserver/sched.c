@@ -261,35 +261,6 @@ static int do_set_sched(struct vx_info *vxi, struct vcmd_set_sched_v4 *data)
 	return 0;
 }
 
-
-#ifdef	CONFIG_VSERVER_LEGACY
-
-#define COPY_MASK_V2(name, mask)			\
-	if (vc_data.name != SCHED_KEEP) {		\
-		vc_data_v4.name = vc_data.name;		\
-		vc_data_v4.set_mask |= mask;		\
-	}
-
-int vc_set_sched_v2(struct vx_info *vxi, void __user *data)
-{
-	struct vcmd_set_sched_v2 vc_data;
-	struct vcmd_set_sched_v4 vc_data_v4 = { .set_mask = 0 };
-
-	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
-		return -EFAULT;
-
-	COPY_MASK_V2(fill_rate,  VXSM_FILL_RATE);
-	COPY_MASK_V2(interval,	 VXSM_INTERVAL);
-	COPY_MASK_V2(tokens,	 VXSM_TOKENS);
-	COPY_MASK_V2(tokens_min, VXSM_TOKENS_MIN);
-	COPY_MASK_V2(tokens_max, VXSM_TOKENS_MAX);
-	vc_data_v4.bucket_id = 0;
-
-	do_set_sched(vxi, &vc_data_v4);
-	return 0;
-}
-#endif
-
 int vc_set_sched_v3(struct vx_info *vxi, void __user *data)
 {
 	struct vcmd_set_sched_v3 vc_data;

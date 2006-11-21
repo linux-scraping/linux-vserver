@@ -711,7 +711,7 @@ asmlinkage long sys_reboot(int magic1, int magic2, unsigned int cmd, void __user
 	if ((cmd == LINUX_REBOOT_CMD_POWER_OFF) && !pm_power_off)
 		cmd = LINUX_REBOOT_CMD_HALT;
 
-	if (!vx_check(0, VS_ADMIN|VS_WATCH))
+	if (!vx_check(0, VX_ADMIN|VX_WATCH))
 		return vs_reboot(cmd, arg);
 
 	lock_kernel();

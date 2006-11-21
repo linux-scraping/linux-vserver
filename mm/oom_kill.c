@@ -21,7 +21,6 @@
 #include <linux/timex.h>
 #include <linux/jiffies.h>
 #include <linux/cpuset.h>
-#include <linux/vs_memory.h>
 
 int sysctl_panic_on_oom;
 /* #define DEBUG */
@@ -64,15 +63,11 @@ unsigned long badness(struct task_struct *p, unsigned long uptime)
 	points = mm->total_vm;
 
 	/*
-	 * add points for context badness
-	 */
-
-	points += vx_badness(p, mm);
-
-	/*
 	 * After this unlock we can no longer dereference local variable `mm'
 	 */
 	task_unlock(p);
+
+	/* FIXME: add vserver badness ;) */
 
 	/*
 	 * Processes which fork a lot of child processes are likely

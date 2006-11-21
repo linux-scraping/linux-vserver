@@ -24,7 +24,6 @@
 #include <linux/smp_lock.h>
 #include <linux/ptrace.h>
 #include <linux/signal.h>
-#include <linux/vs_base.h>
 
 #include <asm/errno.h>
 #include <asm/ptrace.h>
@@ -118,7 +117,7 @@ long arch_ptrace(struct task_struct *child, long request, long addr, long data)
 {
 	int rval;
 
-	if (!vx_check(vx_task_xid(child), VS_WATCH_P|VS_IDENT))
+	if (!vx_check(vx_task_xid(child), VX_WATCH_P|VX_IDENT))
 		goto out;
 
 	switch (request) {
