@@ -1414,6 +1414,10 @@ long do_fork(unsigned long clone_flags,
 		return -EPERM;
 	}
 
+	/* fake ipc/uts on namespace */
+	if (clone_flags & CLONE_NEWNS)
+		clone_flags |= CLONE_NEWUTS|CLONE_NEWIPC;
+
 	nr = pid->nr;
 	if (unlikely(current->ptrace)) {
 		trace = fork_traceflag (clone_flags);

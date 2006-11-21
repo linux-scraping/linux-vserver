@@ -616,12 +616,15 @@ static struct hash_cell *__find_device_hash_cell(struct dm_ioctl *param)
 		return __get_name_cell(param->name);
 
 	md = dm_get_md(huge_decode_dev(param->dev));
-	if (md) {
-		if (vx_check(dm_get_xid(md), VX_WATCH_P|VX_IDENT))
-			mdptr = dm_get_mdptr(md);
-		else
-			dm_put(md);
-	}
+	if (!md)
+		goto out;
+
+	if (vx_check(dm_get_xid(md), VX_WATCH_P|VX_IDENT))
+		mdptr = dm_get_mdptr(md);
+
+	if (!mdptr)
+		dm_put(md);
+out:
 	return mdptr;
 }
 
