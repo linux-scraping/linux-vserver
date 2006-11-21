@@ -82,7 +82,7 @@ static inline void print_vma(struct vm_area_struct *vma)
 
 static inline void print_task(struct task_struct *tsk)
 {
-	printk("Task pid %d\n", tsk->pid);
+	printk("Task pid %d:#%u\n", tsk->pid, tsk->xid);
 }
 
 static pte_t *lookup_pte(struct mm_struct *mm, unsigned long address)

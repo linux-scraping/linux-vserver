@@ -3,10 +3,11 @@
  *
  *  Virtual Server: Context Namespace Support
  *
- *  Copyright (C) 2003-2005  Herbert Pötzl
+ *  Copyright (C) 2003-2006  Herbert Pötzl
  *
  *  V0.01  broken out from context.c 0.07
  *  V0.02  added task locking for namespace
+ *  V0.03  broken out vx_enter_namespace
  *
  */
 
@@ -27,6 +28,33 @@
 
 #include <linux/namespace.h>
 
+int vx_enter_namespace(struct vx_info *vxi)
+{
+	struct fs_struct *old_fs, *fs;
+	struct namespace *old_ns;
+
+	if (vx_info_flags(vxi, VXF_INFO_PRIVATE, 0))
+		return -EACCES;
+	if (!vxi->vx_namespace)
+		return -EINVAL;
+
+	fs = copy_fs_struct(vxi->vx_fs);
+	if (!fs)
+		return -ENOMEM;
+
+	task_lock(current);
+	old_ns = current->namespace;
+	old_fs = current->fs;
+	get_namespace(vxi->vx_namespace);
+	current->namespace = vxi->vx_namespace;
+	current->fs = fs;
+	task_unlock(current);
+
+	put_namespace(old_ns);
+	put_fs_struct(old_fs);
+	return 0;
+}
+
 int vx_set_namespace(struct vx_info *vxi, struct namespace *ns, struct fs_struct *fs)
 {
 	struct fs_struct *fs_copy;
@@ -46,55 +74,16 @@ int vx_set_namespace(struct vx_info *vxi, struct namespace *ns, struct fs_struct
 	return 0;
 }
 
-int vc_enter_namespace(uint32_t id, void __user *data)
+int vc_enter_namespace(struct vx_info *vxi, void __user *data)
 {
-	struct vx_info *vxi;
-	struct fs_struct *old_fs, *fs;
-	struct namespace *old_ns;
-	int ret = 0;
-
-	if (!vx_check(0, VX_ADMIN))
-		return -ENOSYS;
-
-	vxi = lookup_vx_info(id);
-	if (!vxi)
-		return -ESRCH;
-
-	ret = -EINVAL;
-	if (!vxi->vx_namespace)
-		goto out_put;
-
-	ret = -ENOMEM;
-	fs = copy_fs_struct(vxi->vx_fs);
-	if (!fs)
-		goto out_put;
-
-	ret = 0;
-	task_lock(current);
-	old_ns = current->namespace;
-	old_fs = current->fs;
-	get_namespace(vxi->vx_namespace);
-	current->namespace = vxi->vx_namespace;
-	current->fs = fs;
-	task_unlock(current);
-
-	put_namespace(old_ns);
-	put_fs_struct(old_fs);
-out_put:
-	put_vx_info(vxi);
-	return ret;
+	return vx_enter_namespace(vxi);
 }
 
-int vc_set_namespace(uint32_t id, void __user *data)
+int vc_set_namespace(struct vx_info *vxi, void __user *data)
 {
 	struct fs_struct *fs;
 	struct namespace *ns;
-	struct vx_info *vxi;
 	int ret;
-
-	vxi = lookup_vx_info(id);
-	if (!vxi)
-		return -ESRCH;
 
 	task_lock(current);
 	fs = current->fs;
@@ -107,7 +96,6 @@ int vc_set_namespace(uint32_t id, void __user *data)
 
 	put_namespace(ns);
 	put_fs_struct(fs);
-	put_vx_info(vxi);
 	return ret;
 }
 

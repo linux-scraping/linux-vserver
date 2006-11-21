@@ -68,8 +68,8 @@ __down_failed(struct semaphore *sem)
 	DECLARE_WAITQUEUE(wait, tsk);
 
 #ifdef CONFIG_DEBUG_SEMAPHORE
-	printk("%s(%d): down failed(%p)\n",
-	       tsk->comm, tsk->pid, sem);
+	printk("%s(%d:#%u): down failed(%p)\n",
+	       tsk->comm, tsk->pid, tsk->xid, sem);
 #endif
 
 	tsk->state = TASK_UNINTERRUPTIBLE;
@@ -97,8 +97,8 @@ __down_failed(struct semaphore *sem)
 	wake_up(&sem->wait);
 
 #ifdef CONFIG_DEBUG_SEMAPHORE
-	printk("%s(%d): down acquired(%p)\n",
-	       tsk->comm, tsk->pid, sem);
+	printk("%s(%d:#%u): down acquired(%p)\n",
+	       tsk->comm, tsk->pid, tsk->xid, sem);
 #endif
 }
 
@@ -110,8 +110,8 @@ __down_failed_interruptible(struct semaphore *sem)
 	long ret = 0;
 
 #ifdef CONFIG_DEBUG_SEMAPHORE
-	printk("%s(%d): down failed(%p)\n",
-	       tsk->comm, tsk->pid, sem);
+	printk("%s(%d:#%u): down failed(%p)\n",
+	       tsk->comm, tsk->pid, tsk->xid, sem);
 #endif
 
 	tsk->state = TASK_INTERRUPTIBLE;

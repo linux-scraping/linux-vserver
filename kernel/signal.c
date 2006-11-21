@@ -23,6 +23,7 @@
 #include <linux/ptrace.h>
 #include <linux/signal.h>
 #include <linux/capability.h>
+#include <linux/vserver/debug.h>
 #include <asm/param.h>
 #include <asm/uaccess.h>
 #include <asm/unistd.h>
@@ -571,17 +572,17 @@ static int rm_from_queue(unsigned long mask, struct sigpending *s)
 static int check_kill_permission(int sig, struct siginfo *info,
 				 struct task_struct *t)
 {
-	int user;
 	int error = -EINVAL;
 
 	if (!valid_signal(sig))
 		return error;
 
-	user = ((info == SEND_SIG_NOINFO) ||
-		(!is_si_special(info) && SI_FROMUSER(info)));
+	if ((info != SEND_SIG_NOINFO) &&
+		(is_si_special(info) || !SI_FROMUSER(info)))
+		goto skip;
 
 	error = -EPERM;
-	if (user && ((sig != SIGCONT) ||
+	if (((sig != SIGCONT) ||
 		(current->signal->session != t->signal->session))
 	    && (current->euid ^ t->suid) && (current->euid ^ t->uid)
 	    && (current->uid ^ t->suid) && (current->uid ^ t->uid)
@@ -589,9 +590,13 @@ static int check_kill_permission(int sig, struct siginfo *info,
 		return error;
 
 	error = -ESRCH;
-	if (user && !vx_check(vx_task_xid(t), VX_ADMIN|VX_IDENT))
+	if (!vx_check(vx_task_xid(t), VX_WATCH_P|VX_IDENT)) {
+		vxwprintk(current->xid,
+			"signal xid mismatch %p[#%u,%u] xid=#%u\n",
+			t, vx_task_xid(t), t->pid, current->xid);
 		return error;
-
+	}
+skip:
 	error = security_task_kill(t, info, sig, 0);
 	if (!error)
 		audit_signal_info(sig, t); /* Let audit system see the signal */
@@ -1176,7 +1181,7 @@ static int kill_something_info(int sig, struct siginfo *info, int pid)
 
 		read_lock(&tasklist_lock);
 		for_each_process(p) {
-			if (vx_check(vx_task_xid(p), VX_ADMIN|VX_IDENT) &&
+			if (vx_check(vx_task_xid(p), VX_ADMIN_P|VX_IDENT) &&
 				p->pid > 1 && p->tgid != current->tgid) {
 				int err = group_send_sig_info(sig, info, p);
 				++count;

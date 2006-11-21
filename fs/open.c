@@ -30,7 +30,8 @@
 #include <linux/audit.h>
 #include <linux/vs_limit.h>
 #include <linux/vs_dlimit.h>
-#include <linux/vserver/xid.h>
+#include <linux/vserver/tag.h>
+#include <linux/vs_cowbl.h>
 
 #include <asm/unistd.h>
 
@@ -440,11 +441,11 @@ long do_utimes(int dfd, char __user *filename, struct timeval *times)
 
 	if (error)
 		goto out;
-	inode = nd.dentry->d_inode;
 
-	error = -EROFS;
-	if (IS_RDONLY(inode) || MNT_IS_RDONLY(nd.mnt))
+	error = cow_check_and_break(&nd);
+	if (error)
 		goto dput_and_out;
+	inode = nd.dentry->d_inode;
 
 	/* Don't worry, the checks are done in inode_change_ok() */
 	newattrs.ia_valid = ATTR_CTIME | ATTR_MTIME | ATTR_ATIME;
@@ -674,11 +675,11 @@ asmlinkage long sys_fchmodat(int dfd, const char __user *filename,
 	error = __user_walk_fd(dfd, filename, LOOKUP_FOLLOW, &nd);
 	if (error)
 		goto out;
-	inode = nd.dentry->d_inode;
 
-	error = -EROFS;
-	if (IS_RDONLY(inode) || MNT_IS_RDONLY(nd.mnt))
+	error = cow_check_and_break(&nd);
+	if (error)
 		goto dput_and_out;
+	inode = nd.dentry->d_inode;
 
 	error = -EPERM;
 	if (IS_IMMUTABLE(inode) || IS_APPEND(inode))
@@ -724,11 +725,11 @@ static int chown_common(struct dentry *dentry, struct vfsmount *mnt,
 	newattrs.ia_valid =  ATTR_CTIME;
 	if (user != (uid_t) -1) {
 		newattrs.ia_valid |= ATTR_UID;
-		newattrs.ia_uid = vx_map_uid(user);
+		newattrs.ia_uid = dx_map_uid(user);
 	}
 	if (group != (gid_t) -1) {
 		newattrs.ia_valid |= ATTR_GID;
-		newattrs.ia_gid = vx_map_gid(group);
+		newattrs.ia_gid = dx_map_gid(group);
 	}
 	if (!S_ISDIR(inode->i_mode))
 		newattrs.ia_valid |= ATTR_KILL_SUID|ATTR_KILL_SGID;
@@ -746,7 +747,11 @@ asmlinkage long sys_chown(const char __user * filename, uid_t user, gid_t group)
 
 	error = user_path_walk(filename, &nd);
 	if (!error) {
-		error = chown_common(nd.dentry, nd.mnt, user, group);
+#ifdef CONFIG_VSERVER_COWBL
+		error = cow_check_and_break(&nd);
+		if (!error)
+#endif
+			error = chown_common(nd.dentry, nd.mnt, user, group);
 		path_release(&nd);
 	}
 	return error;
@@ -765,7 +770,11 @@ asmlinkage long sys_fchownat(int dfd, const char __user *filename, uid_t user,
 	follow = (flag & AT_SYMLINK_NOFOLLOW) ? 0 : LOOKUP_FOLLOW;
 	error = __user_walk_fd(dfd, filename, follow, &nd);
 	if (!error) {
-		error = chown_common(nd.dentry, nd.mnt, user, group);
+#ifdef CONFIG_VSERVER_COWBL
+		error = cow_check_and_break(&nd);
+		if (!error)
+#endif
+			error = chown_common(nd.dentry, nd.mnt, user, group);
 		path_release(&nd);
 	}
 out:
@@ -779,7 +788,11 @@ asmlinkage long sys_lchown(const char __user * filename, uid_t user, gid_t group
 
 	error = user_path_walk_link(filename, &nd);
 	if (!error) {
-		error = chown_common(nd.dentry, nd.mnt, user, group);
+#ifdef CONFIG_VSERVER_COWBL
+		error = cow_check_and_break(&nd);
+		if (!error)
+#endif
+			error = chown_common(nd.dentry, nd.mnt, user, group);
 		path_release(&nd);
 	}
 	return error;

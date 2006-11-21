@@ -26,7 +26,7 @@
 
 int cap_netlink_send(struct sock *sk, struct sk_buff *skb)
 {
-	NETLINK_CB(skb).eff_cap = current->cap_effective;
+	cap_t(NETLINK_CB(skb).eff_cap) = vx_mbcap(cap_effective);
 	return 0;
 }
 
@@ -44,7 +44,7 @@ EXPORT_SYMBOL(cap_netlink_recv);
 int cap_capable (struct task_struct *tsk, int cap)
 {
 	/* Derived from include/linux/sched.h:capable. */
-	if (cap_raised(tsk->cap_effective, cap))
+       if (vx_cap_raised(tsk->vx_info, tsk->cap_effective, cap))
 		return 0;
 	return -EPERM;
 }
@@ -142,7 +142,8 @@ void cap_bprm_apply_creds (struct linux_binprm *bprm, int unsafe)
 	/* Derived from fs/exec.c:compute_creds. */
 	kernel_cap_t new_permitted, working;
 
-	new_permitted = cap_intersect (bprm->cap_permitted, vx_current_bcaps());
+	new_permitted = cap_intersect (bprm->cap_permitted,
+					vx_current_cap_bset());
 	working = cap_intersect (bprm->cap_inheritable,
 				 current->cap_inheritable);
 	new_permitted = cap_combine (new_permitted, working);

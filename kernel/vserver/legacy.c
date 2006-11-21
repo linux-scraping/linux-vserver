@@ -59,7 +59,9 @@ int vc_new_s_context(uint32_t ctx, void __user *data)
 		return ret;
 	}
 
-	if (!vx_check(0, VX_ADMIN) || !capable(CAP_SYS_ADMIN))
+	if (!vx_check(0, VX_ADMIN) || !capable(CAP_SYS_ADMIN)
+		/* might make sense in the future, or not ... */
+		|| vx_flags(VX_INFO_LOCK, 0))
 		return -EPERM;
 
 	/* ugly hack for Spectator */
@@ -97,8 +99,8 @@ int vc_new_s_context(uint32_t ctx, void __user *data)
 			vx_set_namespace(new_vxi,
 				current->namespace, current->fs);
 		if (vc_data.flags & VX_INFO_NPROC)
-			new_vxi->limit.rlim[RLIMIT_NPROC] =
-				current->signal->rlim[RLIMIT_NPROC].rlim_max;
+			__rlim_set(&new_vxi->limit, RLIMIT_NPROC,
+				current->signal->rlim[RLIMIT_NPROC].rlim_max);
 
 		/* tweak some defaults for legacy */
 		new_vxi->vx_flags |= (VXF_HIDE_NETIF|VXF_INFO_INIT);

@@ -139,8 +139,8 @@ unsigned long badness(struct task_struct *p, unsigned long uptime)
 	}
 
 #ifdef DEBUG
-	printk(KERN_DEBUG "OOMkill: task %d (%s) got %d points\n",
-	p->pid, p->comm, points);
+	printk(KERN_DEBUG "OOMkill: task %d:#%u (%s) got %d points\n",
+		p->pid, p->xid, p->comm, points);
 #endif
 	return points;
 }
@@ -243,8 +243,8 @@ static void __oom_kill_task(struct task_struct *p, const char *message)
 		return;
 	}
 	task_unlock(p);
-	printk(KERN_ERR "%s: Killed process %d (%s).\n",
-				message, p->pid, p->comm);
+	printk(KERN_ERR "%s: Killed process %d:#%u (%s).\n",
+		message, p->pid, p->xid, p->comm);
 
 	/*
 	 * We give our sacrificial lamb high priority and access to
@@ -295,8 +295,8 @@ static int oom_kill_process(struct task_struct *p, unsigned long points,
 	struct task_struct *c;
 	struct list_head *tsk;
 
-	printk(KERN_ERR "Out of Memory: Kill process %d (%s) score %li and "
-		"children.\n", p->pid, p->comm, points);
+	printk(KERN_ERR "Out of Memory: Kill process %d:#%u (%s) score %li "
+		"and children.\n", p->pid, p->xid, p->comm, points);
 	/* Try to kill a child first */
 	list_for_each(tsk, &p->children) {
 		c = list_entry(tsk, struct task_struct, sibling);

@@ -7,7 +7,6 @@
 /* socket accounting */
 
 #include <linux/socket.h>
-#include <linux/vserver/cacct.h>
 
 static inline int vx_sock_type(int family)
 {

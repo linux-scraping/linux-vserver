@@ -500,6 +500,8 @@ struct kmem_cache {
 #define STATS_INC_FREEMISS(x)	do { } while (0)
 #endif
 
+#include "slab_vs.h"
+
 #if DEBUG
 
 /*
@@ -2999,6 +3001,7 @@ static __always_inline void *__cache_alloc(struct kmem_cache *cachep,
 
 	local_irq_save(save_flags);
 	objp = ____cache_alloc(cachep, flags);
+	vx_slab_alloc(cachep, flags);
 	local_irq_restore(save_flags);
 	objp = cache_alloc_debugcheck_after(cachep, flags, objp,
 					    caller);
@@ -3067,6 +3070,7 @@ retry:
 
 	obj = slab_get_obj(cachep, slabp, nodeid);
 	check_slabp(cachep, slabp);
+	vx_slab_alloc(cachep, flags);
 	l3->free_objects--;
 	/* move slabp to correct slabp list: */
 	list_del(&slabp->list);
@@ -3194,6 +3198,7 @@ static inline void __cache_free(struct kmem_cache *cachep, void *objp)
 
 	check_irq_off();
 	objp = cache_free_debugcheck(cachep, objp, __builtin_return_address(0));
+	vx_slab_free(cachep);
 
 	if (cache_free_alien(cachep, objp))
 		return;

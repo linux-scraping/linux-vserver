@@ -13,7 +13,7 @@
 #include <linux/errno.h>
 #include <linux/sunrpc/clnt.h>
 #include <linux/spinlock.h>
-#include <linux/vserver/xid.h>
+#include <linux/vs_tag.h>
 
 #ifdef RPC_DEBUG
 # define RPCDBG_FACILITY	RPCDBG_AUTH
@@ -264,7 +264,7 @@ rpcauth_lookupcred(struct rpc_auth *auth, int flags)
 	struct auth_cred acred = {
 		.uid = current->fsuid,
 		.gid = current->fsgid,
-		.xid = vx_current_xid(),
+		.tag = dx_current_tag(),
 		.group_info = current->group_info,
 	};
 	struct rpc_cred *ret;
@@ -284,7 +284,7 @@ rpcauth_bindcred(struct rpc_task *task)
 	struct auth_cred acred = {
 		.uid = current->fsuid,
 		.gid = current->fsgid,
-		.xid = vx_current_xid(),
+		.tag = dx_current_tag(),
 		.group_info = current->group_info,
 	};
 	struct rpc_cred *ret;

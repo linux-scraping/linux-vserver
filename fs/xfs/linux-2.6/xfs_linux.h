@@ -139,7 +139,7 @@ BUFFER_FNS(PrivateStart, unwritten);
 #define current_pid()		(current->pid)
 #define current_fsuid(cred)	(current->fsuid)
 #define current_fsgid(cred)	(current->fsgid)
-#define current_fsxid(cred,vp)	(vx_current_fsxid(vn_to_inode(vp)->i_sb))
+#define current_fstag(cred,vp)	(dx_current_fstag(vn_to_inode(vp)->i_sb))
 #define current_test_flags(f)	(current->flags & (f))
 #define current_set_flags_nested(sp, f)		\
 		(*(sp) = current->flags, current->flags |= (f))

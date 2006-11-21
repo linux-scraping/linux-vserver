@@ -10,7 +10,7 @@
  */
 
 #include <linux/proc_fs.h>
-#include <linux/vs_cvirt.h>
+#include <linux/vs_pid.h>
 
 struct vmalloc_info {
 	unsigned long	used;

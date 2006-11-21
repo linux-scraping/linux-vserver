@@ -723,7 +723,7 @@ sys_ptrace(long request, long pid, long addr, long data)
 		goto out;
 	}
 
-	if (!vx_check(vx_task_xid(child), VX_WATCH|VX_IDENT)) {
+	if (!vx_check(vx_task_xid(child), VX_WATCH_P|VX_IDENT)) {
 		ret = -EPERM;
 		goto out_tsk;
 	}
