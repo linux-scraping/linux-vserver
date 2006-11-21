@@ -20,6 +20,7 @@
 #include <linux/major.h>
 #include <linux/blkdev.h>
 #include <linux/vserver/debug.h>
+#include <linux/vs_base.h>
 
 
 /* Dquota Hash Management Functions */
@@ -453,7 +454,7 @@ asmlinkage long sys_quotactl(unsigned int cmd, const char __user *special, qid_t
 {
 	uint cmds, type;
 	struct super_block *sb = NULL;
-+	struct dqhash *dqh = NULL;
+	struct dqhash *dqh = NULL;
 	int ret;
 
 	cmds = cmd >> SUBCMDSHIFT;

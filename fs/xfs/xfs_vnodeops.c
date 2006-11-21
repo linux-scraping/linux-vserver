@@ -1031,7 +1031,7 @@ xfs_readlink(
 	pathlen = (int)ip->i_d.di_size;
 
 	if (ip->i_df.if_flags & XFS_IFINLINE) {
-		error = uio_read(ip->i_df.if_u1.if_data, pathlen, uiop);
+		error = xfs_uio_read(ip->i_df.if_u1.if_data, pathlen, uiop);
 	}
 	else {
 		/*
@@ -1062,7 +1062,7 @@ xfs_readlink(
 				byte_cnt = pathlen;
 			pathlen -= byte_cnt;
 
-			error = uio_read(XFS_BUF_PTR(bp), byte_cnt, uiop);
+			error = xfs_uio_read(XFS_BUF_PTR(bp), byte_cnt, uiop);
 			xfs_buf_relse (bp);
 		}
 
@@ -3845,11 +3845,16 @@ xfs_reclaim(
 	 */
 	xfs_synchronize_atime(ip);
 
-	/* If we have nothing to flush with this inode then complete the
-	 * teardown now, otherwise break the link between the xfs inode
-	 * and the linux inode and clean up the xfs inode later. This
-	 * avoids flushing the inode to disk during the delete operation
-	 * itself.
+	/*
+	 * If we have nothing to flush with this inode then complete the
+	 * teardown now, otherwise break the link between the xfs inode and the
+	 * linux inode and clean up the xfs inode later. This avoids flushing
+	 * the inode to disk during the delete operation itself.
+	 *
+	 * When breaking the link, we need to set the XFS_IRECLAIMABLE flag
+	 * first to ensure that xfs_iunpin() will never see an xfs inode
+	 * that has a linux inode being reclaimed. Synchronisation is provided
+	 * by the i_flags_lock.
 	 */
 	if (!ip->i_update_core && (ip->i_itemp == NULL)) {
 		xfs_ilock(ip, XFS_ILOCK_EXCL);
@@ -3858,13 +3863,13 @@ xfs_reclaim(
 	} else {
 		xfs_mount_t	*mp = ip->i_mount;
 
-		/* Protect sync from us */
+		/* Protect sync and unpin from us */
 		XFS_MOUNT_ILOCK(mp);
-		vn_bhv_remove(VN_BHV_HEAD(vp), XFS_ITOBHV(ip));
-		list_add_tail(&ip->i_reclaim, &mp->m_del_inodes);
 		spin_lock(&ip->i_flags_lock);
-		ip->i_flags |= XFS_IRECLAIMABLE;
+		__xfs_iflags_set(ip, XFS_IRECLAIMABLE);
+		vn_bhv_remove(VN_BHV_HEAD(vp), XFS_ITOBHV(ip));
 		spin_unlock(&ip->i_flags_lock);
+		list_add_tail(&ip->i_reclaim, &mp->m_del_inodes);
 		XFS_MOUNT_IUNLOCK(mp);
 	}
 	return 0;
@@ -3890,8 +3895,8 @@ xfs_finish_reclaim(
 	 */
 	write_lock(&ih->ih_lock);
 	spin_lock(&ip->i_flags_lock);
-	if ((ip->i_flags & XFS_IRECLAIM) ||
-	    (!(ip->i_flags & XFS_IRECLAIMABLE) && vp == NULL)) {
+	if (__xfs_iflags_test(ip, XFS_IRECLAIM) ||
+	    (!__xfs_iflags_test(ip, XFS_IRECLAIMABLE) && vp == NULL)) {
 		spin_unlock(&ip->i_flags_lock);
 		write_unlock(&ih->ih_lock);
 		if (locked) {
@@ -3900,7 +3905,7 @@ xfs_finish_reclaim(
 		}
 		return 1;
 	}
-	ip->i_flags |= XFS_IRECLAIM;
+	__xfs_iflags_set(ip, XFS_IRECLAIM);
 	spin_unlock(&ip->i_flags_lock);
 	write_unlock(&ih->ih_lock);
 
