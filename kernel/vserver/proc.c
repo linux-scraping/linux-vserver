@@ -217,8 +217,10 @@ int proc_nid_status (int vid, char *buffer)
 	length = sprintf(buffer,
 		"UseCnt:\t%d\n"
 		"Tasks:\t%d\n"
+		"Flags:\t%016llx\n"
 		,atomic_read(&nxi->nx_usecnt)
 		,atomic_read(&nxi->nx_tasks)
+		,(unsigned long long)nxi->nx_flags
 		);
 	put_nx_info(nxi);
 	return length;

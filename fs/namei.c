@@ -230,7 +230,7 @@ int generic_permission(struct inode *inode, int mask,
 
 static inline int vx_barrier(struct inode *inode)
 {
-	if (IS_BARRIER(inode) && !vx_check(0, VX_ADMIN)) {
+	if (IS_BARRIER(inode) && !vx_check(0, VX_ADMIN|VX_WATCH)) {
 		vxwprintk(1, "xid=%d did hit the barrier.",
 			vx_current_xid());
 		return 1;

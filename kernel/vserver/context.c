@@ -195,9 +195,9 @@ static inline void __hash_vx_info(struct vx_info *vxi)
 
 static inline void __unhash_vx_info(struct vx_info *vxi)
 {
-	vxd_assert_lock(&vx_info_hash_lock);
 	vxdprintk(VXD_CBIT(xid, 4),
 		"__unhash_vx_info: %p[#%d]", vxi, vxi->vx_id);
+	spin_lock(&vx_info_hash_lock);
 	vxh_unhash_vx_info(vxi);
 
 	/* context must be hashed */
@@ -205,6 +205,7 @@ static inline void __unhash_vx_info(struct vx_info *vxi)
 
 	vxi->vx_state &= ~VXS_HASHED;
 	hlist_del(&vxi->vx_hlist);
+	spin_unlock(&vx_info_hash_lock);
 }
 
 
@@ -389,9 +390,7 @@ out_unlock:
 void unhash_vx_info(struct vx_info *vxi)
 {
 	__shutdown_vx_info(vxi);
-	spin_lock(&vx_info_hash_lock);
 	__unhash_vx_info(vxi);
-	spin_unlock(&vx_info_hash_lock);
 	__wakeup_vx_info(vxi);
 }
 

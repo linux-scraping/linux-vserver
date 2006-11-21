@@ -7,16 +7,24 @@
 /* socket accounting */
 
 #include <linux/socket.h>
+#include <linux/vserver/cacct.h>
 
 static inline int vx_sock_type(int family)
 {
-	int type = 4;
-
-	if (family > 0 && family < 3)
-		type = family;
-	else if (family == PF_INET6)
-		type = 3;
-	return type;
+	switch (family) {
+	case PF_UNSPEC:
+		return VXA_SOCK_UNSPEC;
+	case PF_UNIX:
+		return VXA_SOCK_UNIX;
+	case PF_INET:
+		return VXA_SOCK_INET;
+	case PF_INET6:
+		return VXA_SOCK_INET6;
+	case PF_PACKET:
+		return VXA_SOCK_PACKET;
+	default:
+		return VXA_SOCK_OTHER;
+	}
 }
 
 #define vx_acc_sock(v,f,p,s) \

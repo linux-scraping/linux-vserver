@@ -3,7 +3,7 @@
  *
  *  Virtual Server: Network Support
  *
- *  Copyright (C) 2003-2005  Herbert Pötzl
+ *  Copyright (C) 2003-2006  Herbert Pötzl
  *
  *  V0.01  broken out from vcontext V0.05
  *  V0.02  cleaned up implementation
@@ -139,15 +139,16 @@ static inline void __hash_nx_info(struct nx_info *nxi)
 
 static inline void __unhash_nx_info(struct nx_info *nxi)
 {
-	vxd_assert_lock(&nx_info_hash_lock);
 	vxdprintk(VXD_CBIT(nid, 4),
 		"__unhash_nx_info: %p[#%d]", nxi, nxi->nx_id);
 
+	spin_lock(&nx_info_hash_lock);
 	/* context must be hashed */
 	BUG_ON(!nx_info_state(nxi, NXS_HASHED));
 
 	nxi->nx_state &= ~NXS_HASHED;
 	hlist_del(&nxi->nx_hlist);
+	spin_unlock(&nx_info_hash_lock);
 }
 
 
@@ -267,9 +268,7 @@ out_unlock:
 void unhash_nx_info(struct nx_info *nxi)
 {
 	__shutdown_nx_info(nxi);
-	spin_lock(&nx_info_hash_lock);
 	__unhash_nx_info(nxi);
-	spin_unlock(&nx_info_hash_lock);
 }
 
 #ifdef  CONFIG_VSERVER_LEGACYNET
@@ -370,6 +369,10 @@ int nx_migrate_task(struct task_struct *p, struct nx_info *nxi)
 	/* maybe disallow this completely? */
 	old_nxi = task_get_nx_info(p);
 	if (old_nxi == nxi)
+		goto out;
+
+	ret =-EACCES;
+	if (nx_info_flags(nxi, NXF_INFO_PRIVATE, 0))
 		goto out;
 
 	task_lock(p);
