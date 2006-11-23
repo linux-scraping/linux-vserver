@@ -13,7 +13,6 @@
 
 /* network flags */
 
-#define NXF_INFO_LOCK		0x00000001
 #define NXF_INFO_PRIVATE	0x00000008
 
 #define NXF_STATE_SETUP		(1ULL<<32)
