@@ -10,6 +10,7 @@
  *  V0.03  added equiv nx commands
  *  V0.04  switch to RCU based hash
  *  V0.05  and back to locking again
+ *  V0.06  have __create claim() the nxi
  *
  */
 
@@ -205,7 +206,7 @@ static inline nid_t __nx_dynamic_id(void)
 /*	__create_nx_info()
 
 	* create the requested context
-	* get() and hash it					*/
+	* get(), claim() and hash it				*/
 
 static struct nx_info * __create_nx_info(int id)
 {
@@ -250,6 +251,7 @@ static struct nx_info * __create_nx_info(int id)
 	/* new context */
 	vxdprintk(VXD_CBIT(nid, 0),
 		"create_nx_info(%d) = %p (new)", id, new);
+	claim_nx_info(new, NULL);
 	__hash_nx_info(get_nx_info(new));
 	nxi = new, new = NULL;
 
@@ -389,6 +391,7 @@ int nx_migrate_task(struct task_struct *p, struct nx_info *nxi)
 
 	if (old_nxi)
 		release_nx_info(old_nxi, p);
+	ret = 0;
 out:
 	put_nx_info(old_nxi);
 	return ret;
@@ -491,8 +494,11 @@ int nx_addr_conflict(struct nx_info *nxi, uint32_t addr, struct sock *sk)
 
 void nx_set_persistent(struct nx_info *nxi)
 {
+	vxdprintk(VXD_CBIT(nid, 6),
+		"nx_set_persistent(%p[#%d])", nxi, nxi->nx_id);
+
 	get_nx_info(nxi);
-	claim_nx_info(nxi, current);
+	claim_nx_info(nxi, NULL);
 }
 
 void nx_clear_persistent(struct nx_info *nxi)
@@ -500,7 +506,7 @@ void nx_clear_persistent(struct nx_info *nxi)
 	vxdprintk(VXD_CBIT(nid, 6),
 		"nx_clear_persistent(%p[#%d])", nxi, nxi->nx_id);
 
-	release_nx_info(nxi, current);
+	release_nx_info(nxi, NULL);
 	put_nx_info(nxi);
 }
 
@@ -588,26 +594,22 @@ int vc_net_create(uint32_t nid, void __user *data)
 	/* initial flags */
 	new_nxi->nx_flags = vc_data.flagword;
 
+	ret = -ENOEXEC;
+	if (vs_net_change(new_nxi, VSC_NETUP))
+		goto out;
+
+	ret = nx_migrate_task(current, new_nxi);
+	if (ret)
+		goto out;
+
+	/* return context id on success */
+	ret = new_nxi->nx_id;
+
 	/* get a reference for persistent contexts */
 	if ((vc_data.flagword & NXF_PERSISTENT))
 		nx_set_persistent(new_nxi);
-
-	ret = -ENOEXEC;
-	if (vs_net_change(new_nxi, VSC_NETUP))
-		goto out_unhash;
-	ret = nx_migrate_task(current, new_nxi);
-	if (!ret) {
-		/* return context id on success */
-		ret = new_nxi->nx_id;
-		goto out;
-	}
-out_unhash:
-	/* prepare for context disposal */
-	new_nxi->nx_state |= NXS_SHUTDOWN;
-	if ((vc_data.flagword & NXF_PERSISTENT))
-		nx_clear_persistent(new_nxi);
-	__unhash_nx_info(new_nxi);
 out:
+	release_nx_info(new_nxi, NULL);
 	put_nx_info(new_nxi);
 	return ret;
 }

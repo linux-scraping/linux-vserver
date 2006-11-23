@@ -59,9 +59,7 @@ int vc_new_s_context(uint32_t ctx, void __user *data)
 		return ret;
 	}
 
-	if (!vx_check(0, VX_ADMIN) || !capable(CAP_SYS_ADMIN)
-		/* might make sense in the future, or not ... */
-		|| vx_flags(VX_INFO_LOCK, 0))
+	if (!vx_check(0, VX_ADMIN) || !capable(CAP_SYS_ADMIN))
 		return -EPERM;
 
 	/* ugly hack for Spectator */
