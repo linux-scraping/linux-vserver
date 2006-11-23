@@ -17,7 +17,6 @@
 
 /* context flags */
 
-#define VXF_INFO_LOCK		0x00000001
 #define VXF_INFO_SCHED		0x00000002
 #define VXF_INFO_NPROC		0x00000004
 #define VXF_INFO_PRIVATE	0x00000008
