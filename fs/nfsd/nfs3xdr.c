@@ -21,7 +21,7 @@
 #include <linux/sunrpc/svc.h>
 #include <linux/nfsd/nfsd.h>
 #include <linux/nfsd/xdr3.h>
-#include <linux/vserver/tag.h>
+#include <linux/vs_tag.h>
 
 #define NFSDDBG_FACILITY		NFSDDBG_XDR
 

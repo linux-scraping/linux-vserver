@@ -1,7 +1,8 @@
-#ifndef _VX_VS_DLIMIT_H
-#define _VX_VS_DLIMIT_H
+#ifndef _VS_DLIMIT_H
+#define _VS_DLIMIT_H
 
 #include "vserver/dlimit.h"
+#include "vserver/base.h"
 #include "vserver/debug.h"
 
 

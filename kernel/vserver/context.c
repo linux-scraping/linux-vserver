@@ -29,6 +29,7 @@
 #include <linux/namespace.h>
 
 #include <linux/sched.h>
+#include <linux/vserver/context.h>
 #include <linux/vserver/network.h>
 #include <linux/vserver/legacy.h>
 #include <linux/vserver/limit.h>
@@ -530,7 +531,7 @@ int get_xid_list(int index, unsigned int *xids, int size)
 	int hindex, nr_xids = 0;
 
 	/* only show current and children */
-	if (!vx_check(0, VX_ADMIN|VX_WATCH)) {
+	if (!vx_check(0, VS_ADMIN|VS_WATCH)) {
 		if (index > 0)
 			return 0;
 		xids[nr_xids] = vx_current_xid();
@@ -818,7 +819,7 @@ int vc_task_xid(uint32_t id, void __user *data)
 	if (id) {
 		struct task_struct *tsk;
 
-		if (!vx_check(0, VX_ADMIN|VX_WATCH))
+		if (!vx_check(0, VS_ADMIN|VS_WATCH))
 			return -EPERM;
 
 		read_lock(&tasklist_lock);
@@ -930,7 +931,7 @@ int vc_get_cflags(struct vx_info *vxi, void __user *data)
 	vc_data.flagword = vxi->vx_flags;
 
 	/* special STATE flag handling */
-	vc_data.mask = vx_mask_flags(~0UL, vxi->vx_flags, VXF_ONE_TIME);
+	vc_data.mask = vs_mask_flags(~0UL, vxi->vx_flags, VXF_ONE_TIME);
 
 	if (copy_to_user (data, &vc_data, sizeof(vc_data)))
 		return -EFAULT;
@@ -946,7 +947,7 @@ int vc_set_cflags(struct vx_info *vxi, void __user *data)
 		return -EFAULT;
 
 	/* special STATE flag handling */
-	mask = vx_mask_mask(vc_data.mask, vxi->vx_flags, VXF_ONE_TIME);
+	mask = vs_mask_mask(vc_data.mask, vxi->vx_flags, VXF_ONE_TIME);
 	trigger = (mask & vxi->vx_flags) ^ (mask & vc_data.flagword);
 
 	if (vxi == current->vx_info) {
@@ -964,7 +965,7 @@ int vc_set_cflags(struct vx_info *vxi, void __user *data)
 		}
 	}
 
-	vxi->vx_flags = vx_mask_flags(vxi->vx_flags,
+	vxi->vx_flags = vs_mask_flags(vxi->vx_flags,
 		vc_data.flagword, mask);
 	if (trigger & VXF_PERSISTENT)
 		vx_update_persistent(vxi);
@@ -1015,8 +1016,8 @@ int vc_get_ccaps(struct vx_info *vxi, void __user *data)
 static int do_set_caps(struct vx_info *vxi,
 	uint64_t bcaps, uint64_t bmask, uint64_t ccaps, uint64_t cmask)
 {
-	vxi->vx_bcaps = vx_mask_flags(vxi->vx_bcaps, bcaps, bmask);
-	vxi->vx_ccaps = vx_mask_flags(vxi->vx_ccaps, ccaps, cmask);
+	vxi->vx_bcaps = vs_mask_flags(vxi->vx_bcaps, bcaps, bmask);
+	vxi->vx_ccaps = vs_mask_flags(vxi->vx_ccaps, ccaps, cmask);
 
 	return 0;
 }

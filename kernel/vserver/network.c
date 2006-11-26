@@ -20,6 +20,7 @@
 #include <net/tcp.h>
 
 #include <asm/errno.h>
+#include <linux/vserver/base.h>
 #include <linux/vserver/network_cmd.h>
 
 
@@ -335,7 +336,7 @@ int get_nid_list(int index, unsigned int *nids, int size)
 	int hindex, nr_nids = 0;
 
 	/* only show current and children */
-	if (!nx_check(0, VX_ADMIN|VX_WATCH)) {
+	if (!nx_check(0, VS_ADMIN|VS_WATCH)) {
 		if (index > 0)
 			return 0;
 		nids[nr_nids] = nx_current_nid();
@@ -552,7 +553,7 @@ int vc_task_nid(uint32_t id, void __user *data)
 	if (id) {
 		struct task_struct *tsk;
 
-		if (!vx_check(0, VX_ADMIN|VX_WATCH))
+		if (!vx_check(0, VS_ADMIN|VS_WATCH))
 			return -EPERM;
 
 		read_lock(&tasklist_lock);
@@ -589,7 +590,7 @@ int vc_net_create(uint32_t nid, void __user *data)
 	if (data && copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
-	if ((nid > MAX_S_CONTEXT) && (nid != VX_DYNAMIC_ID))
+	if ((nid > MAX_S_CONTEXT) && (nid != NX_DYNAMIC_ID))
 		return -EINVAL;
 	if (nid < 2)
 		return -EINVAL;
@@ -695,7 +696,7 @@ int vc_get_nflags(struct nx_info *nxi, void __user *data)
 	vc_data.flagword = nxi->nx_flags;
 
 	/* special STATE flag handling */
-	vc_data.mask = vx_mask_flags(~0UL, nxi->nx_flags, NXF_ONE_TIME);
+	vc_data.mask = vs_mask_flags(~0UL, nxi->nx_flags, NXF_ONE_TIME);
 
 	if (copy_to_user (data, &vc_data, sizeof(vc_data)))
 		return -EFAULT;
@@ -711,10 +712,10 @@ int vc_set_nflags(struct nx_info *nxi, void __user *data)
 		return -EFAULT;
 
 	/* special STATE flag handling */
-	mask = vx_mask_mask(vc_data.mask, nxi->nx_flags, NXF_ONE_TIME);
+	mask = vs_mask_mask(vc_data.mask, nxi->nx_flags, NXF_ONE_TIME);
 	trigger = (mask & nxi->nx_flags) ^ (mask & vc_data.flagword);
 
-	nxi->nx_flags = vx_mask_flags(nxi->nx_flags,
+	nxi->nx_flags = vs_mask_flags(nxi->nx_flags,
 		vc_data.flagword, mask);
 	if (trigger & NXF_PERSISTENT)
 		nx_update_persistent(nxi);
@@ -741,7 +742,7 @@ int vc_set_ncaps(struct nx_info *nxi, void __user *data)
 	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
-	nxi->nx_ncaps = vx_mask_flags(nxi->nx_ncaps,
+	nxi->nx_ncaps = vs_mask_flags(nxi->nx_ncaps,
 		vc_data.ncaps, vc_data.cmask);
 	return 0;
 }

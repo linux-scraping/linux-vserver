@@ -212,7 +212,7 @@ asmlinkage void do_ptrace(struct pt_regs *regs)
 		pt_error_return(regs, -ret);
 		goto out;
 	}
-	if (!vx_check(vx_task_xid(child), VX_WATCH_P|VX_IDENT)) {
+	if (!vx_check(vx_task_xid(child), VS_WATCH_P|VS_IDENT)) {
 		pt_error_return(regs, ESRCH);
 		goto out_tsk;
 	}

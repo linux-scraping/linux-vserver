@@ -1,4 +1,6 @@
 
+#include <linux/vs_context.h>
+
 static inline
 void vx_slab_alloc(struct kmem_cache *cachep, gfp_t flags)
 {

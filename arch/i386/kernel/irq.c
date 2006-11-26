@@ -18,7 +18,6 @@
 #include <linux/notifier.h>
 #include <linux/cpu.h>
 #include <linux/delay.h>
-#include <linux/vs_context.h>
 
 DEFINE_PER_CPU(irq_cpustat_t, irq_stat) ____cacheline_internodealigned_in_smp;
 EXPORT_PER_CPU_SYMBOL(irq_stat);
@@ -56,7 +55,6 @@ fastcall unsigned int do_IRQ(struct pt_regs *regs)
 {	
 	/* high bit used in ret_from_ code */
 	int irq = ~regs->orig_eax;
-	struct vx_info_save vxis;
 #ifdef CONFIG_4KSTACKS
 	union irq_ctx *curctx, *irqctx;
 	u32 *isp;
@@ -83,7 +81,6 @@ fastcall unsigned int do_IRQ(struct pt_regs *regs)
 		}
 	}
 #endif
-	__enter_vx_admin(&vxis);
 #ifdef CONFIG_4KSTACKS
 
 	curctx = (union irq_ctx *) current_thread_info();
@@ -122,7 +119,6 @@ fastcall unsigned int do_IRQ(struct pt_regs *regs)
 	} else
 #endif
 		__do_IRQ(irq, regs);
-	__leave_vx_admin(&vxis);
 
 	irq_exit();
 

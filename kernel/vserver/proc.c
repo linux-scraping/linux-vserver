@@ -599,7 +599,7 @@ struct dentry *proc_virtual_lookup(struct inode *dir,
 		goto out;
 
 	inode = NULL;
-	if (vx_check(xid, VX_ADMIN|VX_WATCH|VX_IDENT))
+	if (vx_check(xid, VS_ADMIN|VS_WATCH|VS_IDENT))
 		inode = proc_vid_make_inode(dir->i_sb,
 			vxi->vx_id, PROC_XID_INO);
 	if (!inode)
@@ -689,7 +689,7 @@ int proc_virtual_readdir(struct file * filp,
 	char buf[PROC_NUMBUF];
 	unsigned int nr = filp->f_pos-3;
 	unsigned int nr_xids, i;
-	int visible = vx_check(0, VX_ADMIN|VX_WATCH);
+	int visible = vx_check(0, VS_ADMIN|VS_WATCH);
 	ino_t ino;
 
 	switch ((long)filp->f_pos) {
@@ -759,7 +759,7 @@ int proc_vnet_readdir(struct file * filp,
 	char buf[PROC_NUMBUF];
 	unsigned int nr = filp->f_pos-2;
 	unsigned int nr_nids, i;
-//	int visible = vx_check(0, VX_ADMIN|VX_WATCH);
+//	int visible = vx_check(0, VS_ADMIN|VS_WATCH);
 	ino_t ino;
 
 	switch ((long)filp->f_pos) {

@@ -31,7 +31,7 @@
  */
 
 #include <linux/pagemap.h>
-#include <linux/vserver/tag.h>
+#include <linux/vs_tag.h>
 #include "ext2.h"
 #include "xattr.h"
 #include "acl.h"

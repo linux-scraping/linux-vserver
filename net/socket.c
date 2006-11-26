@@ -1160,7 +1160,7 @@ static int __sock_create(int family, int type, int protocol, struct socket **res
 		return -EINVAL;
 
 	/* disable IPv6 inside vservers for now */
-	if (family == PF_INET6 && !vx_check(0, VX_ADMIN))
+	if (family == PF_INET6 && !vx_check(0, VS_ADMIN))
 		return -EAFNOSUPPORT;
 
 	/* Compatibility.

@@ -200,7 +200,6 @@ extern void unexpected_irq(int, void *, struct pt_regs *);
 void sun4d_handler_irq(int irq, struct pt_regs * regs)
 {
 	struct irqaction * action;
-	struct vx_info_save vxis;
 	int cpu = smp_processor_id();
 	/* SBUS IRQ level (1 - 7) */
 	int sbusl = pil_to_sbus[irq];
@@ -212,7 +211,6 @@ void sun4d_handler_irq(int irq, struct pt_regs * regs)
 	
 	irq_enter();
 	kstat_cpu(cpu).irqs[irq]++;
-	__enter_vx_admin(&vxis);
 	if (!sbusl) {
 		action = *(irq + irq_action);
 		if (!action)
@@ -252,7 +250,6 @@ void sun4d_handler_irq(int irq, struct pt_regs * regs)
 					}
 			}
 	}
-	__leave_vx_admin(&vxis);
 	irq_exit();
 }
 

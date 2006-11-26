@@ -31,8 +31,7 @@
 #include <linux/security.h>
 #include <linux/bootmem.h>
 #include <linux/syscalls.h>
-#include <linux/vs_context.h>
-#include <linux/vserver/cvirt.h>
+#include <linux/vs_cvirt.h>
 
 #include <asm/uaccess.h>
 
@@ -204,7 +203,7 @@ int do_syslog(int type, char __user *buf, int len)
 			goto out;
 		}
 	}
-	if (!vx_check(0, VX_ADMIN|VX_WATCH))
+	if (!vx_check(0, VS_ADMIN|VS_WATCH))
 		return vx_do_syslog(type, buf, len);
 
 	switch (type) {
@@ -507,10 +506,8 @@ asmlinkage int vprintk(const char *fmt, va_list args)
 	char *p;
 	static char printk_buf[1024];
 	static int log_level_unknown = 1;
-	struct vx_info_save vxis;
 
 	preempt_disable();
-	__enter_vx_admin(&vxis);
 	if (unlikely(oops_in_progress) && printk_cpu == smp_processor_id())
 		/* If a crash is occurring during printk() on this CPU,
 		 * make sure we can't deadlock */
@@ -619,7 +616,6 @@ asmlinkage int vprintk(const char *fmt, va_list args)
 		local_irq_restore(flags);
 	}
 
-	__leave_vx_admin(&vxis);
 	preempt_enable();
 	return printed_len;
 }

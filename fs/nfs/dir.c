@@ -32,7 +32,7 @@
 #include <linux/pagemap.h>
 #include <linux/smp_lock.h>
 #include <linux/namei.h>
-#include <linux/vserver/tag.h>
+#include <linux/vs_tag.h>
 
 #include "nfs4_fs.h"
 #include "delegation.h"

@@ -613,10 +613,10 @@ int udp_sendmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
 			err = ip_find_src(nxi, &rt, &fl);
 			if (err)
 				goto out;
-			if (daddr == IPI_LOOPBACK && !vx_check(0, VX_ADMIN))
+			if (daddr == IPI_LOOPBACK && !vx_check(0, VS_ADMIN))
 				daddr = fl.fl4_dst = nxi->ipv4[0];
 #ifdef CONFIG_VSERVER_REMAP_SADDR
-			if (saddr == IPI_LOOPBACK && !vx_check(0, VX_ADMIN))
+			if (saddr == IPI_LOOPBACK && !vx_check(0, VS_ADMIN))
 				saddr = fl.fl4_src = nxi->ipv4[0];
 #endif
 		}
@@ -1422,7 +1422,7 @@ static struct sock *udp_get_first(struct seq_file *seq)
 
 		sk_for_each(sk, node, &udp_hash[state->bucket]) {
 			if (sk->sk_family == state->family &&
-				vx_check(sk->sk_xid, VX_WATCH_P|VX_IDENT))
+				vx_check(sk->sk_xid, VS_WATCH_P|VS_IDENT))
 				goto found;
 		}
 	}
@@ -1440,7 +1440,7 @@ static struct sock *udp_get_next(struct seq_file *seq, struct sock *sk)
 try_again:
 		;
 	} while (sk && (sk->sk_family != state->family ||
-		!vx_check(sk->sk_xid, VX_WATCH_P|VX_IDENT)));
+		!vx_check(sk->sk_xid, VS_WATCH_P|VS_IDENT)));
 
 	if (!sk && ++state->bucket < UDP_HTABLE_SIZE) {
 		sk = sk_head(&udp_hash[state->bucket]);

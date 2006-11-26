@@ -1,7 +1,9 @@
-#ifndef _VX_VS_MEMORY_H
-#define _VX_VS_MEMORY_H
+#ifndef _VS_MEMORY_H
+#define _VS_MEMORY_H
 
 #include "vserver/limit.h"
+#include "vserver/base.h"
+#include "vserver/context.h"
 #include "vserver/debug.h"
 #include "vserver/limit_int.h"
 
@@ -57,7 +59,7 @@
 #define vx_acc_vmlpage(m,d) \
 	vx_acc_page(m, d, locked_vm, RLIMIT_MEMLOCK)
 #define vx_acc_file_rsspage(m,d) \
-	vx_acc_page_atomic(m, d, _file_rss, RLIMIT_RSS)
+	vx_acc_page_atomic(m, d, _file_rss, VLIMIT_MAPPED)
 #define vx_acc_anon_rsspage(m,d) \
 	vx_acc_page_atomic(m, d, _anon_rss, VLIMIT_ANON)
 
@@ -66,7 +68,7 @@
 #define vx_acc_vmlpages(m,p) \
 	vx_acc_pages(m, p, locked_vm, RLIMIT_MEMLOCK)
 #define vx_acc_file_rsspages(m,p) \
-	vx_acc_pages_atomic(m, p, _file_rss, RLIMIT_RSS)
+	vx_acc_pages_atomic(m, p, _file_rss, VLIMIT_MAPPED)
 #define vx_acc_anon_rsspages(m,p) \
 	vx_acc_pages_atomic(m, p, _anon_rss, VLIMIT_ANON)
 
@@ -99,8 +101,12 @@
 
 #define vx_vmpages_avail(m,p)	vx_pages_avail(m, p, RLIMIT_AS)
 #define vx_vmlocked_avail(m,p)	vx_pages_avail(m, p, RLIMIT_MEMLOCK)
-#define vx_rsspages_avail(m,p)	vx_pages_avail(m, p, RLIMIT_RSS)
-#define vx_anonpages_avail(m,p)	vx_pages_avail(m, p, VLIMIT_ANON)
+#define vx_anon_avail(m,p)	vx_pages_avail(m, p, VLIMIT_ANON)
+#define vx_mapped_avail(m,p)	vx_pages_avail(m, p, VLIMIT_MAPPED)
+
+#define vx_rss_avail(m,p) \
+	__vx_cres_array_avail((m)->mm_vx_info, VLA_RSS, p, __FILE__, __LINE__)
+
 
 enum {
 	VXPT_UNKNOWN = 0,
