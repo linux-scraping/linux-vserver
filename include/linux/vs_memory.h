@@ -150,6 +150,9 @@ void __vx_page_fault(struct mm_struct *mm,
 #define	vx_page_fault(mm,vma,type,ret)	__vx_page_fault(mm,vma,type,ret)
 #endif
 
+
+extern unsigned long vx_badness(struct task_struct *task, struct mm_struct *mm);
+
 #else
 #warning duplicate inclusion
 #endif
