@@ -39,7 +39,6 @@ enum {
 #define VS_STATIC	0x0200
 
 #define VS_ATR_MASK	0x0F00
-#define VS_IRQ_MASK	0xF000
 
 #ifdef	CONFIG_VSERVER_PRIVACY
 #define VS_ADMIN_P	(0)
@@ -51,7 +50,9 @@ enum {
 
 #define	VS_HARDIRQ	0x1000
 #define	VS_SOFTIRQ	0x2000
-#define	VS_INIRQ	(VS_HARDIRQ|VS_SOFTIRQ)
+#define	VS_IRQ		0x4000
+
+#define VS_IRQ_MASK	0xF000
 
 #include <linux/hardirq.h>
 
@@ -76,8 +77,11 @@ static inline int __vs_check(int cid, int id, unsigned int mode)
 			return 1;
 	}
 	if (mode & VS_IRQ_MASK) {
-		if (((mode & VS_HARDIRQ) && unlikely(in_irq())) ||
-		    ((mode & VS_SOFTIRQ) && unlikely(in_softirq())))
+		if ((mode & VS_IRQ) && unlikely(in_interrupt()))
+			return 1;
+		if ((mode & VS_HARDIRQ) && unlikely(in_irq()))
+			return 1;
+		if ((mode & VS_SOFTIRQ) && unlikely(in_softirq()))
 			return 1;
 	}
 	return (((mode & VS_ADMIN) && (cid == 0)) ||
@@ -92,7 +96,7 @@ static inline int __vs_check(int cid, int id, unsigned int mode)
 #define current_vx_info() (current->vx_info)
 
 
-#define vx_check(c,m)	__vs_check(vx_current_xid(),c,(m)|VS_INIRQ)
+#define vx_check(c,m)	__vs_check(vx_current_xid(),c,(m)|VS_IRQ)
 
 #define vx_weak_check(c,m)	((m) ? vx_check(c,m) : 1)
 

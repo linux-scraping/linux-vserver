@@ -19,6 +19,7 @@
 #include <linux/quotaops.h>
 #include <linux/major.h>
 #include <linux/blkdev.h>
+#include <linux/vs_context.h>
 #include <linux/vserver/debug.h>
 
 

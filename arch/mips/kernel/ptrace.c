@@ -26,6 +26,7 @@
 #include <linux/user.h>
 #include <linux/security.h>
 #include <linux/signal.h>
+#include <linux/vs_base.h>
 
 #include <asm/byteorder.h>
 #include <asm/cpu.h>

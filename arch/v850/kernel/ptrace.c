@@ -24,6 +24,7 @@
 #include <linux/smp_lock.h>
 #include <linux/ptrace.h>
 #include <linux/signal.h>
+#include <linux/vs_base.h>
 
 #include <asm/errno.h>
 #include <asm/ptrace.h>

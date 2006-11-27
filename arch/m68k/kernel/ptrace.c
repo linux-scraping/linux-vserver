@@ -19,6 +19,7 @@
 #include <linux/ptrace.h>
 #include <linux/user.h>
 #include <linux/signal.h>
+#include <linux/vs_base.h>
 
 #include <asm/uaccess.h>
 #include <asm/page.h>

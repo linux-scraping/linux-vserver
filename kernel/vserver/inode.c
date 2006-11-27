@@ -20,6 +20,7 @@
 #include <linux/vserver/inode_cmd.h>
 #include <linux/vserver/debug.h>
 #include <linux/vs_tag.h>
+#include <linux/vs_base.h>
 
 #include <asm/errno.h>
 #include <asm/uaccess.h>

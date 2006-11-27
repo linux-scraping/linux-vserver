@@ -18,6 +18,7 @@
 #include <linux/cache.h>
 #include <linux/init.h>
 #include <linux/time.h>
+#include <linux/vs_base.h>
 
 #include <net/icmp.h>
 #include <net/tcp.h>

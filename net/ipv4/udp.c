@@ -108,6 +108,7 @@
 #include <net/inet_common.h>
 #include <net/checksum.h>
 #include <net/xfrm.h>
+#include <linux/vs_base.h>
 
 /*
  *	Snmp MIB for the UDP layer
