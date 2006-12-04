@@ -33,6 +33,7 @@
 #include <linux/security.h>
 #include <linux/audit.h>
 #include <linux/signal.h>
+#include <linux/vs_base.h>
 
 #include <asm/segment.h>
 #include <asm/page.h>
@@ -723,7 +724,7 @@ sys_ptrace(long request, long pid, long addr, long data)
 		goto out;
 	}
 
-	if (!vx_check(vx_task_xid(child), VX_WATCH_P|VX_IDENT)) {
+	if (!vx_check(vx_task_xid(child), VS_WATCH_P|VS_IDENT)) {
 		ret = -EPERM;
 		goto out_tsk;
 	}

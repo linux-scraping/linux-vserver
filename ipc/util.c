@@ -29,6 +29,7 @@
 #include <linux/seq_file.h>
 #include <linux/proc_fs.h>
 #include <linux/audit.h>
+#include <linux/vs_base.h>
 
 #include <asm/unistd.h>
 
@@ -159,7 +160,7 @@ int ipc_findkey(struct ipc_ids* ids, key_t key)
 		p = ids->entries->p[id];
 		if (p==NULL)
 			continue;
-		if (!vx_check(p->xid, VX_WATCH_P|VX_IDENT))
+		if (!vx_check(p->xid, VS_WATCH_P|VS_IDENT))
 			continue;
 		if (key == p->key)
 			return id;
@@ -473,7 +474,7 @@ int ipcperms (struct kern_ipc_perm *ipcp, short flag)
 	if (unlikely((err = audit_ipc_obj(ipcp))))
 		return err;
 
-	if (!vx_check(ipcp->xid, VX_WATCH_P|VX_IDENT)) /* maybe just VX_IDENT? */
+	if (!vx_check(ipcp->xid, VS_WATCH_P|VS_IDENT)) /* maybe just VS_IDENT? */
 		return -1;
 	requested_mode = (flag >> 6) | (flag >> 3) | flag;
 	granted_mode = ipcp->mode;

@@ -262,7 +262,7 @@ struct task_struct * fastcall pid_task(struct pid *pid, enum pid_type type)
 		if (first)
 			result = hlist_entry(first, struct task_struct, pids[(type)].node);
 		if (result && (pid->nr != 1) &&
-			!vx_check(vx_task_xid(result), VX_WATCH|VX_ADMIN|VX_IDENT)) {
+			!vx_check(vx_task_xid(result), VS_WATCH|VS_ADMIN|VS_IDENT)) {
 			vxwprintk((type == PIDTYPE_PID) && (current->xid),
 				"pid_task(%d,%d): task %p[#%u,%u] did lookup %p[#%u,%u]",
 				pid->nr, type, current, vx_current_xid(), current->pid,

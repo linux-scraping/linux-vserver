@@ -9,10 +9,12 @@
 #define VLIMIT_SEMARY	20
 #define VLIMIT_NSEMS	21
 #define VLIMIT_DENTRY	22
+#define VLIMIT_MAPPED	23
+
 
 #ifdef	__KERNEL__
 
-#define	VLIM_NOCHECK	(1L << VLIMIT_DENTRY)
+#define	VLIM_NOCHECK	((1L << VLIMIT_DENTRY) | (1L << RLIMIT_RSS))
 
 /*	keep in sync with CRLIM_INFINITY */
 

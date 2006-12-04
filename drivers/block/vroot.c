@@ -19,6 +19,7 @@
 #include <linux/blkdev.h>
 
 #include <linux/vroot.h>
+#include <linux/vs_context.h>
 #include <linux/vserver/debug.h>
 
 

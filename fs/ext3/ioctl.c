@@ -14,7 +14,7 @@
 #include <linux/ext3_fs.h>
 #include <linux/ext3_jbd.h>
 #include <linux/time.h>
-#include <linux/vserver/tag.h>
+#include <linux/vs_tag.h>
 #include <asm/uaccess.h>
 
 

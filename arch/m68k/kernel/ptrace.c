@@ -19,6 +19,7 @@
 #include <linux/ptrace.h>
 #include <linux/user.h>
 #include <linux/signal.h>
+#include <linux/vs_base.h>
 
 #include <asm/uaccess.h>
 #include <asm/page.h>
@@ -279,7 +280,7 @@ long arch_ptrace(struct task_struct *child, long request, long addr, long data)
 		ret = ptrace_request(child, request, addr, data);
 		break;
 	}
-	if (!vx_check(vx_task_xid(child), VX_WATCH_P|VX_IDENT))
+	if (!vx_check(vx_task_xid(child), VS_WATCH_P|VS_IDENT))
 		goto out_tsk;
 
 	return ret;

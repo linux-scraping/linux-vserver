@@ -17,7 +17,7 @@
 #include <linux/writeback.h>
 #include <linux/quotaops.h>
 #include <linux/vs_dlimit.h>
-#include <linux/vserver/tag.h>
+#include <linux/vs_tag.h>
 
 extern int reiserfs_default_io_size;	/* default io size devuned in super.c */
 

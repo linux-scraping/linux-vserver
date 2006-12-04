@@ -23,6 +23,7 @@
 #include <linux/ptrace.h>
 #include <linux/signal.h>
 #include <linux/capability.h>
+#include <linux/vs_context.h>
 #include <linux/vserver/debug.h>
 #include <asm/param.h>
 #include <asm/uaccess.h>
@@ -590,7 +591,7 @@ static int check_kill_permission(int sig, struct siginfo *info,
 		return error;
 
 	error = -ESRCH;
-	if (!vx_check(vx_task_xid(t), VX_WATCH_P|VX_IDENT)) {
+	if (!vx_check(vx_task_xid(t), VS_WATCH_P|VS_IDENT)) {
 		vxwprintk(current->xid,
 			"signal xid mismatch %p[#%u,%u] xid=#%u\n",
 			t, vx_task_xid(t), t->pid, current->xid);
@@ -1119,7 +1120,7 @@ kill_proc_info(int sig, struct siginfo *info, pid_t pid)
 	}
 	p = find_task_by_pid(pid);
 	error = -ESRCH;
-	if (p && vx_check(vx_task_xid(p), VX_IDENT))
+	if (p && vx_check(vx_task_xid(p), VS_IDENT))
 		error = group_send_sig_info(sig, info, p);
 	if (unlikely(acquired_tasklist_lock))
 		read_unlock(&tasklist_lock);
@@ -1181,7 +1182,7 @@ static int kill_something_info(int sig, struct siginfo *info, int pid)
 
 		read_lock(&tasklist_lock);
 		for_each_process(p) {
-			if (vx_check(vx_task_xid(p), VX_ADMIN_P|VX_IDENT) &&
+			if (vx_check(vx_task_xid(p), VS_ADMIN_P|VS_IDENT) &&
 				p->pid > 1 && p->tgid != current->tgid) {
 				int err = group_send_sig_info(sig, info, p);
 				++count;

@@ -385,7 +385,7 @@ long do_vserver(uint32_t cmd, uint32_t id, void __user *data, int compat)
 
 	/* admin type vcmds require admin ... */
 	if (flags & VCF_ADMIN)
-		permit = vx_check(0, VX_ADMIN) ? 1 : 0;
+		permit = vx_check(0, VS_ADMIN) ? 1 : 0;
 
 	/* ... but setup type vcmds override that */
 	if (!permit && (flags & VCF_SETUP))

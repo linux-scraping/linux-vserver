@@ -23,6 +23,7 @@
 #include <linux/ptrace.h>
 #include <linux/xattr.h>
 #include <linux/hugetlb.h>
+#include <linux/vs_context.h>
 
 int cap_netlink_send(struct sock *sk, struct sk_buff *skb)
 {

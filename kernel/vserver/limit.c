@@ -259,7 +259,7 @@ void vx_vsi_meminfo(struct sysinfo *val)
 	totalram = (v != RLIM_INFINITY) ? v : val->totalram;
 
 	/* total minus used equals free */
-	v = __rlim_get(&vxi->limit, RLIMIT_RSS);
+	v = __vx_cres_array_fixup(&vxi->limit, VLA_RSS);
 	freeram = (v < totalram) ? totalram - v : 0;
 
 	val->totalram = totalram;
@@ -287,7 +287,7 @@ void vx_vsi_swapinfo(struct sysinfo *val)
 	totalswap = (w != RLIM_INFINITY) ? (w - v) : val->totalswap;
 
 	/* currently 'used' swap */
-	w = __rlim_get(&vxi->limit, RLIMIT_RSS);
+	w = __vx_cres_array_fixup(&vxi->limit, VLA_RSS);
 	w -= (w > v) ? v : w;
 
 	/* total minus used equals free */
@@ -296,5 +296,22 @@ void vx_vsi_swapinfo(struct sysinfo *val)
 	val->totalswap = totalswap;
 	val->freeswap = freeswap;
 	return;
+}
+
+
+unsigned long vx_badness(struct task_struct *task, struct mm_struct *mm)
+{
+	struct vx_info *vxi = mm->mm_vx_info;
+	unsigned long points;
+	rlim_t v, w;
+
+	if (!vxi)
+		return 0;
+
+	v = __vx_cres_array_fixup(&vxi->limit, VLA_RSS);
+	w = __rlim_soft(&vxi->limit, RLIMIT_RSS);
+	points = (v > w) ? (v - w) : 0;
+
+	return points;
 }
 
