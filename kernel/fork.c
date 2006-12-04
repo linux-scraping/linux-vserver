@@ -1004,7 +1004,7 @@ static struct task_struct *copy_process(unsigned long clone_flags,
 			goto bad_fork_free;
 	}
 	if (p->mm && vx_flags(VXF_FORK_RSS, 0)) {
-		if (!vx_rsspages_avail(p->mm, get_mm_counter(p->mm, file_rss)))
+		if (!vx_rss_avail(p->mm, get_mm_counter(p->mm, file_rss)))
 			goto bad_fork_cleanup_vm;
 	}
 
@@ -1396,6 +1396,15 @@ long do_fork(unsigned long clone_flags,
 
 	if (!pid)
 		return -EAGAIN;
+
+	/* kernel threads are host only */
+	if ((clone_flags & CLONE_KTHREAD) && !vx_check(0, VS_ADMIN)) {
+		vxwprintk(1, "xid=%d tried to spawn a kernel thread.",
+			vx_current_xid());
+		free_pid(pid);
+		return -EPERM;
+	}
+
 	nr = pid->nr;
 	if (unlikely(current->ptrace)) {
 		trace = fork_traceflag (clone_flags);

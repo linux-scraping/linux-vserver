@@ -9,7 +9,7 @@
 #include <linux/sunrpc/svc.h>
 #include <linux/sunrpc/svcauth.h>
 #include <linux/nfsd/nfsd.h>
-#include <linux/vserver/xid.h>
+#include <linux/vs_tag.h>
 
 #define	CAP_NFSD_MASK (CAP_FS_MASK|CAP_TO_MASK(CAP_SYS_RESOURCE))
 
@@ -42,22 +42,22 @@ int nfsd_setuser(struct svc_rqst *rqstp, struct svc_export *exp)
 		get_group_info(cred.cr_group_info);
 
 	if (cred.cr_uid != (uid_t) -1)
-		current->fsuid = INOXID_UID(XID_TAG_NFSD, cred.cr_uid, cred.cr_gid);
+		current->fsuid = INOTAG_UID(DX_TAG_NFSD, cred.cr_uid, cred.cr_gid);
 	else
 		current->fsuid = exp->ex_anon_uid;
 	if (cred.cr_gid != (gid_t) -1)
-		current->fsgid = INOXID_GID(XID_TAG_NFSD, cred.cr_uid, cred.cr_gid);
+		current->fsgid = INOTAG_GID(DX_TAG_NFSD, cred.cr_uid, cred.cr_gid);
 	else
 		current->fsgid = exp->ex_anon_gid;
 
 	/* this desperately needs a tag :) */
-	current->xid = INOXID_XID(XID_TAG_NFSD, cred.cr_uid, cred.cr_gid, 0);
+	current->xid = (xid_t)INOTAG_TAG(DX_TAG_NFSD, cred.cr_uid, cred.cr_gid, 0);
 
 	if (!cred.cr_group_info)
 		return -ENOMEM;
 	ret = set_current_groups(cred.cr_group_info);
 	put_group_info(cred.cr_group_info);
-	if (INOXID_UID(XID_TAG_NFSD, cred.cr_uid, cred.cr_gid)) {
+	if (INOTAG_UID(DX_TAG_NFSD, cred.cr_uid, cred.cr_gid)) {
 		cap_t(current->cap_effective) &= ~CAP_NFSD_MASK;
 	} else {
 		cap_t(current->cap_effective) |= (CAP_NFSD_MASK &

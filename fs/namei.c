@@ -34,7 +34,10 @@
 #include <linux/namei.h>
 #include <linux/proc_fs.h>
 #include <linux/vserver/inode.h>
+#include <linux/vs_base.h>
+#include <linux/vs_tag.h>
 #include <linux/vserver/debug.h>
+#include <linux/vs_cowbl.h>
 #include <asm/namei.h>
 #include <asm/uaccess.h>
 
@@ -228,9 +231,9 @@ int generic_permission(struct inode *inode, int mask,
 	return -EACCES;
 }
 
-static inline int vx_barrier(struct inode *inode)
+static inline int dx_barrier(struct inode *inode)
 {
-	if (IS_BARRIER(inode) && !vx_check(0, VX_ADMIN|VX_WATCH)) {
+	if (IS_BARRIER(inode) && !vx_check(0, VS_ADMIN|VS_WATCH)) {
 		vxwprintk(1, "xid=%d did hit the barrier.",
 			vx_current_xid());
 		return 1;
@@ -238,17 +241,17 @@ static inline int vx_barrier(struct inode *inode)
 	return 0;
 }
 
-static inline int xid_permission(struct inode *inode, int mask, struct nameidata *nd)
+static inline int dx_permission(struct inode *inode, int mask, struct nameidata *nd)
 {
-	if (vx_barrier(inode))
+	if (dx_barrier(inode))
 		return -EACCES;
-	if (inode->i_xid == 0)
+	if (inode->i_tag == 0)
 		return 0;
-	if (vx_check(inode->i_xid, VX_ADMIN|VX_WATCH|VX_IDENT))
+	if (dx_check(inode->i_tag, DX_ADMIN|DX_WATCH|DX_IDENT))
 		return 0;
 
 	vxwprintk(1, "xid=%d denied access to %p[#%d,%lu] »%s«.",
-		vx_current_xid(), inode, inode->i_xid, inode->i_ino,
+		vx_current_xid(), inode, inode->i_tag, inode->i_ino,
 		vxd_cond_path(nd));
 	return -EACCES;
 }
@@ -270,7 +273,7 @@ int permission(struct inode *inode, int mask, struct nameidata *nd)
 		/*
 		 * Nobody gets write access to an immutable file.
 		 */
-		if (IS_IMMUTABLE(inode))
+		if (IS_IMMUTABLE(inode) && !IS_COW(inode))
 			return -EACCES;
 	}
 
@@ -284,7 +287,7 @@ int permission(struct inode *inode, int mask, struct nameidata *nd)
 
 	/* Ordinary permission routines do not understand MAY_APPEND. */
 	submask = mask & ~MAY_APPEND;
-	if ((retval = xid_permission(inode, mask, nd)))
+	if ((retval = dx_permission(inode, mask, nd)))
 		return retval;
 	if (inode->i_op && inode->i_op->permission)
 		retval = inode->i_op->permission(inode, submask, nd);
@@ -440,7 +443,7 @@ static int exec_permission_lite(struct inode *inode,
 {
 	umode_t	mode = inode->i_mode;
 
-	if (vx_barrier(inode))
+	if (dx_barrier(inode))
 		return -EACCES;
 	if (inode->i_op && inode->i_op->permission)
 		return -EAGAIN;
@@ -788,26 +791,25 @@ static int do_lookup(struct nameidata *nd, struct qstr *name,
 		goto need_lookup;
 	if (dentry->d_op && dentry->d_op->d_revalidate)
 		goto need_revalidate;
-done:
 	inode = dentry->d_inode;
 	if (!inode)
-		goto no_inode;
-	if (!vx_check(inode->i_xid, VX_WATCH|VX_ADMIN|VX_HOSTID|VX_IDENT))
-		goto hidden;
+		goto done;
 	if (inode->i_sb->s_magic == PROC_SUPER_MAGIC) {
 		struct proc_dir_entry *de = PDE(inode);
 
 		if (de && !vx_hide_check(0, de->vx_flags))
 			goto hidden;
 	}
-no_inode:
+	if (!dx_check(inode->i_tag, DX_WATCH|DX_ADMIN|DX_HOSTID|DX_IDENT))
+		goto hidden;
+done:
 	path->mnt = mnt;
 	path->dentry = dentry;
 	__follow_mount(path);
 	return 0;
 hidden:
 	vxwprintk(1, "xid=%d did lookup hidden %p[#%d,%lu] »%s«.",
-		vx_current_xid(), inode, inode->i_xid, inode->i_ino,
+		vx_current_xid(), inode, inode->i_tag, inode->i_ino,
 		vxd_path(dentry, mnt));
 	dput(dentry);
 	return -ENOENT;
@@ -1556,6 +1558,14 @@ int may_open(struct nameidata *nd, int acc_mode, int flag)
 	if (S_ISDIR(inode->i_mode) && (flag & FMODE_WRITE))
 		return -EISDIR;
 
+#ifdef	CONFIG_VSERVER_COWBL
+	if (IS_COW(inode) && (flag & FMODE_WRITE)) {
+		if (IS_COW_LINK(inode))
+			return -EMLINK;
+		inode->i_flags &= ~(S_IUNLINK|S_IMMUTABLE);
+		mark_inode_dirty(inode);
+	}
+#endif
 	error = vfs_permission(nd, acc_mode);
 	if (error)
 		return error;
@@ -1643,6 +1653,11 @@ int open_namei(int dfd, const char *pathname, int flag,
 	struct dentry *dir;
 	int count = 0;
 
+#ifdef	CONFIG_VSERVER_COWBL
+	int rflag = flag;
+	int rmode = mode;
+restart:
+#endif
 	acc_mode = ACC_MODE(flag);
 
 	/* O_TRUNC implies we need access checks for write permissions */
@@ -1744,6 +1759,22 @@ do_last:
 		goto exit;
 ok:
 	error = may_open(nd, acc_mode, flag);
+#ifdef	CONFIG_VSERVER_COWBL
+	if (error == -EMLINK) {
+		struct dentry *dentry;
+		dentry = cow_break_link(pathname);
+		if (IS_ERR(dentry)) {
+			error = PTR_ERR(dentry);
+			goto exit;
+		}
+		dput(dentry);
+		release_open_intent(nd);
+		path_release(nd);
+		flag = rflag;
+		mode = rmode;
+		goto restart;
+	}
+#endif
 	if (error)
 		goto exit;
 	return 0;
@@ -2657,6 +2688,126 @@ int vfs_follow_link(struct nameidata *nd, const char *link)
 {
 	return __vfs_follow_link(nd, link);
 }
+
+
+#ifdef	CONFIG_VSERVER_COWBL
+
+#include <linux/file.h>
+
+struct dentry *cow_break_link(const char *pathname)
+{
+	int ret, mode, pathlen;
+	struct nameidata old_nd, dir_nd;
+	struct dentry *old_dentry, *new_dentry;
+	struct dentry *res = ERR_PTR(-EMLINK);
+	struct vfsmount *old_mnt, *new_mnt;
+	struct file *old_file;
+	struct file *new_file;
+	char *to, *path, pad='\251';
+	loff_t size;
+
+	vxdprintk(VXD_CBIT(misc, 1), "cow_break_link(»%s«)", pathname);
+	path = kmalloc(PATH_MAX, GFP_KERNEL);
+
+	ret = path_lookup(pathname, LOOKUP_FOLLOW, &old_nd);
+	vxdprintk(VXD_CBIT(misc, 2), "path_lookup(old): %d", ret);
+	old_dentry = old_nd.dentry;
+	old_mnt = old_nd.mnt;
+	mode = old_dentry->d_inode->i_mode;
+
+	to = d_path(old_dentry, old_mnt, path, PATH_MAX-2);
+	pathlen = strlen(to);
+	vxdprintk(VXD_CBIT(misc, 2), "old path »%s«", to);
+
+	to[pathlen+1] = 0;
+retry:
+	to[pathlen] = pad--;
+	if (pad <= '\240')
+		goto out_rel_old;
+
+	vxdprintk(VXD_CBIT(misc, 1), "temp copy »%s«", to);
+	ret = path_lookup(to,
+		LOOKUP_PARENT|LOOKUP_OPEN|LOOKUP_CREATE, &dir_nd);
+
+	/* this puppy downs the inode sem */
+	new_dentry = lookup_create(&dir_nd, 0);
+	vxdprintk(VXD_CBIT(misc, 2),
+		"lookup_create(new): %p", new_dentry);
+	if (!new_dentry) {
+		path_release(&dir_nd);
+		goto retry;
+	}
+
+	ret = vfs_create(dir_nd.dentry->d_inode, new_dentry, mode, &dir_nd);
+	vxdprintk(VXD_CBIT(misc, 2),
+		"vfs_create(new): %d", ret);
+	if (ret == -EEXIST) {
+
+		mutex_unlock(&dir_nd.dentry->d_inode->i_mutex);
+		dput(new_dentry);
+		path_release(&dir_nd);
+		goto retry;
+	}
+
+	new_mnt = dir_nd.mnt;
+
+	dget(old_dentry);
+	mntget(old_mnt);
+	/* this one cleans up the dentry in case of failure */
+	old_file = dentry_open(old_dentry, old_mnt, O_RDONLY);
+	vxdprintk(VXD_CBIT(misc, 2),
+		"dentry_open(old): %p", old_file);
+	if (!old_file)
+		goto out_rel_both;
+
+	dget(new_dentry);
+	mntget(new_mnt);
+	/* this one cleans up the dentry in case of failure */
+	new_file = dentry_open(new_dentry, new_mnt, O_WRONLY);
+	vxdprintk(VXD_CBIT(misc, 2),
+		"dentry_open(new): %p", new_file);
+	if (!new_file)
+		goto out_fput_old;
+
+	size = i_size_read(old_file->f_dentry->d_inode);
+	ret = vfs_sendfile(new_file, old_file, NULL, size, 0);
+	vxdprintk(VXD_CBIT(misc, 2), "vfs_sendfile: %d", ret);
+
+	if (ret < 0)
+		goto out_fput_both;
+
+	ret = vfs_rename(dir_nd.dentry->d_inode, new_dentry,
+		old_nd.dentry->d_parent->d_inode, old_dentry);
+	vxdprintk(VXD_CBIT(misc, 2), "vfs_rename: %d", ret);
+	if (!ret) {
+		res = new_dentry;
+		dget(new_dentry);
+	}
+
+out_fput_both:
+	vxdprintk(VXD_CBIT(misc, 3),
+		"fput(new_file=%p[#%d])", new_file,
+		atomic_read(&new_file->f_count));
+	fput(new_file);
+
+out_fput_old:
+	vxdprintk(VXD_CBIT(misc, 3),
+		"fput(old_file=%p[#%d])", old_file,
+		atomic_read(&old_file->f_count));
+	fput(old_file);
+
+out_rel_both:
+	mutex_unlock(&dir_nd.dentry->d_inode->i_mutex);
+	dput(new_dentry);
+
+	path_release(&dir_nd);
+out_rel_old:
+	path_release(&old_nd);
+	kfree(path);
+	return res;
+}
+
+#endif
 
 /* get the link contents into pagecache */
 static char *page_getlink(struct dentry * dentry, struct page **ppage)

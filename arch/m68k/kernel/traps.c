@@ -899,8 +899,8 @@ void show_registers(struct pt_regs *regs)
 	printk("d4: %08lx    d5: %08lx    a0: %08lx    a1: %08lx\n",
 	       regs->d4, regs->d5, regs->a0, regs->a1);
 
-	printk("Process %s (pid: %d, task=%p)\n",
-		current->comm, current->pid, current);
+	printk("Process %s (pid: %d[#%u], task=%p)\n",
+		current->comm, current->pid, current->xid, current);
 	addr = (unsigned long)&fp->un;
 	printk("Frame format=%X ", regs->format);
 	switch (regs->format) {

@@ -1,7 +1,9 @@
-#ifndef _VX_VS_CONTEXT_H
-#define _VX_VS_CONTEXT_H
+#ifndef _VS_CONTEXT_H
+#define _VS_CONTEXT_H
 
-#include <linux/kernel.h>
+#include "vserver/base.h"
+#include "vserver/context.h"
+#include "vserver/history.h"
 #include "vserver/debug.h"
 
 

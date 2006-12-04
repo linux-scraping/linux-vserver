@@ -53,7 +53,8 @@
 #include <asm/kdebug.h>
 
 #include <linux/module.h>
-#include <linux/vserver/debug.h>
+#include <linux/vs_context.h>
+#include <linux/vserver/history.h>
 
 #include "mach_traps.h"
 

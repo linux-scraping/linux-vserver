@@ -31,7 +31,7 @@
 #include <linux/security.h>
 #include <linux/bootmem.h>
 #include <linux/syscalls.h>
-#include <linux/vserver/cvirt.h>
+#include <linux/vs_cvirt.h>
 
 #include <asm/uaccess.h>
 
@@ -203,7 +203,7 @@ int do_syslog(int type, char __user *buf, int len)
 			goto out;
 		}
 	}
-	if (!vx_check(0, VX_ADMIN|VX_WATCH))
+	if (!vx_check(0, VS_ADMIN|VS_WATCH))
 		return vx_do_syslog(type, buf, len);
 
 	switch (type) {

@@ -103,7 +103,7 @@
 #include <linux/selection.h>
 
 #include <linux/kmod.h>
-#include <linux/vs_cvirt.h>
+#include <linux/vs_pid.h>
 
 #undef TTY_DEBUG_HANGUP
 

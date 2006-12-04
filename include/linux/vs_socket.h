@@ -1,13 +1,15 @@
-#ifndef _VX_VS_SOCKET_H
-#define _VX_VS_SOCKET_H
+#ifndef _VS_SOCKET_H
+#define _VS_SOCKET_H
 
 #include "vserver/debug.h"
+#include "vserver/base.h"
+#include "vserver/cacct.h"
+#include "vserver/context.h"
 
 
 /* socket accounting */
 
 #include <linux/socket.h>
-#include <linux/vserver/cacct.h>
 
 static inline int vx_sock_type(int family)
 {

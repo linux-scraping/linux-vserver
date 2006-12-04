@@ -20,6 +20,7 @@
 #include <linux/idr.h>
 #include <linux/hdreg.h>
 #include <linux/blktrace_api.h>
+#include <linux/vs_base.h>
 
 #define DM_MSG_PREFIX "core"
 
@@ -74,6 +75,7 @@ struct mapped_device {
 	rwlock_t map_lock;
 	atomic_t holders;
 	atomic_t open_count;
+	xid_t xid;
 
 	unsigned long flags;
 
@@ -225,6 +227,7 @@ static void __exit dm_exit(void)
 static int dm_blk_open(struct inode *inode, struct file *file)
 {
 	struct mapped_device *md;
+	int ret = -ENXIO;
 
 	spin_lock(&_minor_lock);
 
@@ -233,18 +236,19 @@ static int dm_blk_open(struct inode *inode, struct file *file)
 		goto out;
 
 	if (test_bit(DMF_FREEING, &md->flags) ||
-	    test_bit(DMF_DELETING, &md->flags)) {
-		md = NULL;
+	    test_bit(DMF_DELETING, &md->flags))
 		goto out;
-	}
+
+	ret = -EACCES;
+	if (!vx_check(md->xid, VS_IDENT))
+		goto out;
 
 	dm_get(md);
 	atomic_inc(&md->open_count);
-
+	ret = 0;
 out:
 	spin_unlock(&_minor_lock);
-
-	return md ? 0 : -ENXIO;
+	return ret;
 }
 
 static int dm_blk_close(struct inode *inode, struct file *file)
@@ -399,6 +403,14 @@ int dm_set_geometry(struct mapped_device *md, struct hd_geometry *geo)
 	md->geometry = *geo;
 
 	return 0;
+}
+
+/*
+ * Get the xid associated with a dm device
+ */
+xid_t dm_get_xid(struct mapped_device *md)
+{
+	return md->xid;
 }
 
 /*-----------------------------------------------------------------
@@ -900,6 +912,7 @@ static struct mapped_device *alloc_dev(int minor)
 	atomic_set(&md->holders, 1);
 	atomic_set(&md->open_count, 0);
 	atomic_set(&md->event_nr, 0);
+	md->xid = vx_current_xid();
 
 	md->queue = blk_alloc_queue(GFP_KERNEL);
 	if (!md->queue)

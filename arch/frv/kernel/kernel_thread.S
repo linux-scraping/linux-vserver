@@ -13,6 +13,8 @@
 #include <asm/unistd.h>
 
 #define CLONE_VM	0x00000100	/* set if VM shared between processes */
+#define CLONE_KTHREAD	0x10000000	/* kernel thread */
+#define CLONE_KT	(CLONE_VM | CLONE_KTHREAD)	/* kernel thread flags */
 #define	KERN_ERR	"<3>"
 
 	.section .rodata
@@ -37,7 +39,7 @@ kernel_thread:
 
 	# start by forking the current process, but with shared VM
 	setlos.p	#__NR_clone,gr7		; syscall number
-	ori		gr10,#CLONE_VM,gr8	; first syscall arg	[clone_flags]
+	ori		gr10,#CLONE_KT,gr8	; first syscall arg	[clone_flags]
 	sethi.p		#0xe4e4,gr9		; second syscall arg	[newsp]
 	setlo		#0xe4e4,gr9
 	setlos.p	#0,gr10			; third syscall arg	[parent_tidptr]

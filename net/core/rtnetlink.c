@@ -35,6 +35,7 @@
 #include <linux/init.h>
 #include <linux/security.h>
 #include <linux/mutex.h>
+#include <linux/vs_context.h> /* remove with NXF_HIDE_NETIF */
 
 #include <asm/uaccess.h>
 #include <asm/system.h>

@@ -341,3 +341,6 @@ unifdef-y += xfrm.h
 unifdef-y += zftape.h
 
 objhdr-y += version.h
+
+header-y += vserver/
+

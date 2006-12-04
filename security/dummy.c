@@ -28,6 +28,7 @@
 #include <linux/hugetlb.h>
 #include <linux/ptrace.h>
 #include <linux/file.h>
+#include <linux/vs_context.h>
 
 static int dummy_ptrace (struct task_struct *parent, struct task_struct *child)
 {
@@ -84,7 +85,7 @@ static int dummy_sysctl (ctl_table * table, int op)
 	return 0;
 }
 
-static int dummy_quotactl (int cmds, int type, int id, struct super_block *sb)
+static int dummy_quotactl (int cmds, int type, int id, struct dqhash *hash)
 {
 	return 0;
 }
@@ -678,7 +679,7 @@ static int dummy_sem_semop (struct sem_array *sma,
 
 static int dummy_netlink_send (struct sock *sk, struct sk_buff *skb)
 {
-	NETLINK_CB(skb).eff_cap = current->cap_effective;
+	cap_t(NETLINK_CB(skb).eff_cap) = vx_mbcap(cap_effective);
 	return 0;
 }
 

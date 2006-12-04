@@ -40,7 +40,7 @@
 #include <linux/vfs.h>
 #include <linux/inet.h>
 #include <linux/nfs_xdr.h>
-#include <linux/vserver/xid.h>
+#include <linux/vs_tag.h>
 
 #include <asm/system.h>
 #include <asm/uaccess.h>
@@ -368,7 +368,7 @@ static void nfs_show_mount_options(struct seq_file *m, struct nfs_server *nfss, 
 		{ NFS_MOUNT_NOAC, ",noac", "" },
 		{ NFS_MOUNT_NONLM, ",nolock", "" },
 		{ NFS_MOUNT_NOACL, ",noacl", "" },
-		{ NFS_MOUNT_TAGXID, ",tagxid", "" },
+		{ NFS_MOUNT_TAGGED, ",tag", "" },
 		{ 0, NULL, NULL }
 	};
 	struct proc_nfs_info *nfs_infop;
@@ -633,14 +633,14 @@ nfs_sb_init(struct super_block *sb, rpc_authflavor_t authflavor)
 	}
 	server->backing_dev_info.ra_pages = server->rpages * NFS_MAX_READAHEAD;
 
-	if (server->flags & NFS_MOUNT_TAGXID)
-		sb->s_flags |= MS_TAGXID;
+	if (server->flags & NFS_MOUNT_TAGGED)
+		sb->s_flags |= MS_TAGGED;
 
 	nfs_super_set_maxbytes(sb, fsinfo.maxfilesize);
 
 	server->client->cl_intr = (server->flags & NFS_MOUNT_INTR) ? 1 : 0;
 	server->client->cl_softrtry = (server->flags & NFS_MOUNT_SOFT) ? 1 : 0;
-	server->client->cl_tagxid = (server->flags & NFS_MOUNT_TAGXID) ? 1 : 0;
+	server->client->cl_tag = (server->flags & NFS_MOUNT_TAGGED) ? 1 : 0;
 
 	/* We're airborne Set socket buffersize */
 	rpc_setbufsize(server->client, server->wsize + 100, server->rsize + 100);
@@ -718,7 +718,7 @@ nfs_create_client(struct nfs_server *server, const struct nfs_mount_data *data)
 
 	clnt->cl_intr     = 1;
 	clnt->cl_softrtry = 1;
-	clnt->cl_tagxid   = 1;
+	clnt->cl_tag      = 1;
 
 	return clnt;
 

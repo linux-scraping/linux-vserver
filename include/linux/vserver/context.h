@@ -2,10 +2,8 @@
 #define _VX_CONTEXT_H
 
 #include <linux/types.h>
+#include <linux/capability.h>
 
-
-#define MAX_S_CONTEXT	65535	/* Arbitrary limit */
-#define MIN_D_CONTEXT	49152	/* dynamic contexts start here */
 
 #define VX_DYNAMIC_ID	((uint32_t)-1)		/* id for dynamic context */
 
@@ -28,12 +26,15 @@
 #define VXF_VIRT_UPTIME		0x00020000
 #define VXF_VIRT_CPU		0x00040000
 #define VXF_VIRT_LOAD		0x00080000
+#define VXF_VIRT_TIME		0x00100000
 
 #define VXF_HIDE_MOUNT		0x01000000
 #define VXF_HIDE_NETIF		0x02000000
+#define VXF_HIDE_VINFO		0x04000000
 
 #define VXF_STATE_SETUP		(1ULL<<32)
 #define VXF_STATE_INIT		(1ULL<<33)
+#define VXF_STATE_ADMIN		(1ULL<<34)
 
 #define VXF_SC_HELPER		(1ULL<<36)
 #define VXF_REBOOT_KILL		(1ULL<<37)
@@ -44,9 +45,9 @@
 
 #define VXF_IGNEG_NICE		(1ULL<<52)
 
-#define VXF_ONE_TIME		(0x0003ULL<<32)
+#define VXF_ONE_TIME		(0x0007ULL<<32)
 
-#define VXF_INIT_SET		(VXF_STATE_SETUP|VXF_STATE_INIT)
+#define VXF_INIT_SET		(VXF_STATE_SETUP|VXF_STATE_INIT|VXF_STATE_ADMIN)
 
 
 /* context migration */
@@ -69,17 +70,8 @@
 #define VXC_BINARY_MOUNT	0x00040000
 
 #define VXC_QUOTA_CTL		0x00100000
-
-
-/* context state changes */
-
-enum {
-	VSC_STARTUP = 1,
-	VSC_SHUTDOWN,
-
-	VSC_NETUP,
-	VSC_NETDOWN,
-};
+#define VXC_ADMIN_MAPPER	0x00200000
+#define VXC_ADMIN_CLOOP		0x00400000
 
 
 #ifdef	__KERNEL__
@@ -91,6 +83,12 @@ enum {
 #include "limit_def.h"
 #include "sched_def.h"
 #include "cvirt_def.h"
+#include "cacct_def.h"
+
+struct _vx_info_pc {
+	struct _vx_sched_pc sched_pc;
+	struct _vx_cvirt_pc cvirt_pc;
+};
 
 struct vx_info {
 	struct hlist_node vx_hlist;		/* linked list of contexts */
@@ -105,6 +103,7 @@ struct vx_info {
 	uint64_t vx_flags;			/* context flags */
 	uint64_t vx_bcaps;			/* bounding caps (system) */
 	uint64_t vx_ccaps;			/* context caps (vserver) */
+	kernel_cap_t vx_cap_bset;		/* the guest's bset */
 
 	struct task_struct *vx_reaper;		/* guest reaper process */
 	pid_t vx_initpid;			/* PID of guest init */
@@ -114,12 +113,28 @@ struct vx_info {
 	struct _vx_cvirt cvirt;			/* virtual/bias stuff */
 	struct _vx_cacct cacct;			/* context accounting */
 
+#ifndef CONFIG_SMP
+	struct _vx_info_pc info_pc;		/* per cpu data */
+#else
+	struct _vx_info_pc *ptr_pc;		/* per cpu array */
+#endif
+
 	wait_queue_head_t vx_wait;		/* context exit waitqueue */
 	int reboot_cmd;				/* last sys_reboot() cmd */
 	int exit_code;				/* last process exit code */
 
 	char vx_name[65];			/* vserver name */
 };
+
+#ifndef CONFIG_SMP
+#define	vx_ptr_pc(vxi)		(&(vxi)->info_pc)
+#define	vx_per_cpu(vxi, v, id)	vx_ptr_pc(vxi)->v
+#else
+#define	vx_ptr_pc(vxi)		((vxi)->ptr_pc)
+#define	vx_per_cpu(vxi, v, id)	per_cpu_ptr(vx_ptr_pc(vxi), id)->v
+#endif
+
+#define	vx_cpu(vxi, v)		vx_per_cpu(vxi, v, smp_processor_id())
 
 
 struct vx_info_save {
@@ -132,29 +147,9 @@ struct vx_info_save {
 
 #define VXS_HASHED	0x0001
 #define VXS_PAUSED	0x0010
-#define VXS_ONHOLD	0x0020
 #define VXS_SHUTDOWN	0x0100
 #define VXS_HELPER	0x1000
 #define VXS_RELEASED	0x8000
-
-/* check conditions */
-
-#define VX_ADMIN	0x0001
-#define VX_WATCH	0x0002
-#define VX_HIDE		0x0004
-#define VX_HOSTID	0x0008
-
-#define VX_IDENT	0x0010
-#define VX_EQUIV	0x0020
-#define VX_PARENT	0x0040
-#define VX_CHILD	0x0080
-
-#define VX_ARG_MASK	0x00F0
-
-#define VX_DYNAMIC	0x0100
-#define VX_STATIC	0x0200
-
-#define VX_ATR_MASK	0x0F00
 
 
 extern void claim_vx_info(struct vx_info *, struct task_struct *);
@@ -172,6 +167,4 @@ extern long vs_state_change(struct vx_info *, unsigned int);
 
 
 #endif	/* __KERNEL__ */
-#else	/* _VX_CONTEXT_H */
-#warning duplicate inclusion
 #endif	/* _VX_CONTEXT_H */

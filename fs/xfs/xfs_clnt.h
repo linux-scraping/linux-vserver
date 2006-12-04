@@ -99,7 +99,7 @@ struct xfs_mount_args {
  */
 #define XFSMNT2_COMPAT_IOSIZE	0x00000001	/* don't report large preferred
 						 * I/O size in stat(2) */
-#define XFSMNT2_TAGXID		0x80000000	/* context xid tagging */
+#define XFSMNT2_TAGGED		0x80000000	/* context tagging */
 
 
 #endif	/* __XFS_CLNT_H__ */

@@ -1257,7 +1257,7 @@ static int proc_pident_readdir(struct file *filp,
 			goto out;
 		}
 		p = ents + i;
-		hide = vx_flags(VXF_INFO_HIDE, 0);
+		hide = vx_flags(VXF_HIDE_VINFO, 0);
 		while (p->name) {
 			if (hide) {
 				switch (p->type) {
@@ -1342,7 +1342,8 @@ static struct inode *proc_pid_make_inode(struct super_block * sb, struct task_st
 		inode->i_uid = task->euid;
 		inode->i_gid = task->egid;
 	}
-	inode->i_xid = vx_task_xid(task);
+	/* procfs is xid tagged */
+	inode->i_tag = (tag_t)vx_task_xid(task);
 	security_task_to_inode(task, inode);
 
 out:
@@ -1708,7 +1709,7 @@ static struct dentry *proc_pident_lookup(struct inode *dir,
 		case PROC_TGID_VX_INFO:
 		case PROC_TID_IP_INFO:
 		case PROC_TGID_IP_INFO:
-			if (task_vx_flags(task, VXF_INFO_HIDE, 0))
+			if (task_vx_flags(task, VXF_HIDE_VINFO, 0))
 				goto out;
 		default:
 			break;

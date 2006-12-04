@@ -16,6 +16,7 @@
 #include <linux/device.h>
 #include <linux/kernel_stat.h>
 #include <linux/interrupt.h>
+#include <linux/vs_context.h>
 
 #include <asm/cio.h>
 #include <asm/delay.h>
@@ -639,6 +640,7 @@ do_IRQ (struct pt_regs *regs)
 			spin_lock(&sch->lock);
 		/* Store interrupt response block to lowcore. */
 		if (tsch (tpi_info->schid, irb) == 0 && sch) {
+
 			/* Keep subchannel information word up to date. */
 			memcpy (&sch->schib.scsw, &irb->scsw,
 				sizeof (irb->scsw));
