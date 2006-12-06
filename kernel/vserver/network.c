@@ -659,8 +659,8 @@ int vc_net_add(struct nx_info *nxi, void __user *data)
 		index = 0;
 		while ((index < vc_data.count) &&
 			((pos = nxi->nbipv4) < NB_IPV4ROOT)) {
-			nxi->ipv4[pos] = vc_data.ip[index].s_addr;
-			nxi->mask[pos] = vc_data.mask[index].s_addr;
+			nxi->ipv4[pos] = vc_data.ip[index];
+			nxi->mask[pos] = vc_data.mask[index];
 			index++;
 			nxi->nbipv4++;
 		}
@@ -668,7 +668,7 @@ int vc_net_add(struct nx_info *nxi, void __user *data)
 		break;
 
 	case NXA_TYPE_IPV4|NXA_MOD_BCAST:
-		nxi->v4_bcast = vc_data.ip[0].s_addr;
+		nxi->v4_bcast = vc_data.ip[0];
 		ret = 1;
 		break;
 
