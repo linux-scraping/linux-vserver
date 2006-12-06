@@ -39,11 +39,10 @@ const struct vcmd_space_mask space_mask = {
 
 /*
  *	build a new nsproxy mix
- *      assumes that both proxies are 'const'
- *	does not touch nsproxy refcounts
+ *      task must be locked
  */
 
-struct nsproxy *vs_mix_nsproxy(struct nsproxy *old_nsproxy,
+struct nsproxy *vx_mix_nsproxy(struct nsproxy *old_nsproxy,
 	struct nsproxy *new_nsproxy, unsigned long mask)
 {
 	struct namespace *old_ns;
@@ -90,81 +89,53 @@ out:
 	return nsproxy;
 }
 
-static inline
-void __vs_merge_nsproxy(struct nsproxy **ptr,
-	struct nsproxy *nsproxy, unsigned long mask)
-{
-	struct nsproxy *old = *ptr;
-	struct nsproxy null_proxy = { .namespace = NULL };
-
-	BUG_ON(!nsproxy);
-
-	if (mask)
-		*ptr = vs_mix_nsproxy(old ? old : &null_proxy,
-			nsproxy, mask);
-	else {
-		*ptr = nsproxy;
-		get_nsproxy(nsproxy);
-	}
-	if (old)
-		put_nsproxy(old);
-}
-
-static inline
-void __vs_merge_fs(struct fs_struct **ptr, struct fs_struct *fs)
-{
-	struct fs_struct *old = *ptr;
-
-	*ptr = fs;
-	atomic_inc(&fs->count);
-	if (old)
-		put_fs_struct(old);
-}
-
-
 int vx_enter_space(struct vx_info *vxi, unsigned long mask)
 {
-	struct fs_struct *fs = NULL;
-	struct nsproxy *nsproxy;
+	struct fs_struct *old_fs, *fs;
+	struct nsproxy *old_nsproxy, *vxi_nsproxy;
 
 	if (vx_info_flags(vxi, VXF_INFO_PRIVATE, 0))
 		return -EACCES;
 
-	if (!mask)
-		mask = vxi->vx_nsmask;
-
-	if ((mask & vxi->vx_nsmask) != mask)
+	vxi_nsproxy = vxi->vx_nsproxy;
+	if (!vxi_nsproxy)
 		return -EINVAL;
 
-	nsproxy = vxi->vx_nsproxy;
-	if ((mask & CLONE_FS)) {
-		BUG_ON(!vxi->vx_fs);
-		fs = copy_fs_struct(vxi->vx_fs);
-		if (!fs)
-			return -ENOMEM;
-	}
+	fs = copy_fs_struct(vxi->vx_fs);
+	if (!fs)
+		return -ENOMEM;
 
 	task_lock(current);
-	if (nsproxy)
-		__vs_merge_nsproxy(&current->nsproxy, nsproxy, mask);
-	if (fs)
-		__vs_merge_fs(&current->fs, fs);
+	old_fs = current->fs;
+	old_nsproxy = current->nsproxy;
+
+	if (mask) {
+		current->nsproxy = vx_mix_nsproxy(old_nsproxy,
+			vxi->vx_nsproxy, mask);
+
+		if (mask & CLONE_FS)
+			current->fs = fs;
+		else
+			old_fs = fs;
+	} else {
+		current->nsproxy = vxi_nsproxy;
+		get_nsproxy(vxi_nsproxy);
+		current->fs = fs;
+	}
 	task_unlock(current);
+
+	if (old_fs)
+		put_fs_struct(old_fs);
+	put_nsproxy(old_nsproxy);
 	return 0;
 }
 
-
 int vx_set_space(struct vx_info *vxi, unsigned long mask)
 {
-	struct fs_struct *fs, *fs_copy = NULL;
+	struct fs_struct *fs_copy, *fs;
 	struct nsproxy *nsproxy;
+	struct nsproxy null_proxy = { .namespace = NULL };
 	int ret;
-
-	if (!mask)
-		mask = space_mask.mask;
-
-	if ((mask & space_mask.mask) != mask)
-		return -EINVAL;
 
 	task_lock(current);
 	fs = current->fs;
@@ -174,18 +145,25 @@ int vx_set_space(struct vx_info *vxi, unsigned long mask)
 	task_unlock(current);
 
 	ret = -ENOMEM;
-	if ((mask & CLONE_FS)) {
-		fs_copy = copy_fs_struct(fs);
-		if (!fs_copy)
+	fs_copy = copy_fs_struct(fs);
+	if (!fs_copy)
+		goto out_put;
+
+	if (mask) {
+		vxi->vx_nsproxy = vx_mix_nsproxy(&null_proxy,
+			nsproxy, mask);
+		if (!vxi->vx_nsproxy)
 			goto out_put;
+
+		if (mask & CLONE_FS)
+			vxi->vx_fs = fs_copy;
+		else
+			put_fs_struct(fs_copy);
+	} else {
+		vxi->vx_nsproxy = nsproxy;
+		get_nsproxy(nsproxy);
+		vxi->vx_fs = fs_copy;
 	}
-
-	if (nsproxy)
-		__vs_merge_nsproxy(&vxi->vx_nsproxy, nsproxy, mask);
-	if (fs_copy)
-		__vs_merge_fs(&vxi->vx_fs, fs_copy);
-	vxi->vx_nsmask |= mask;
-
 	ret = 0;
 out_put:
 	put_fs_struct(fs);
