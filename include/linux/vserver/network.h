@@ -28,17 +28,12 @@
 
 /* address types */
 
-#define NXA_TYPE_IPV4		0x0001
-#define NXA_TYPE_IPV6		0x0002
+#define NXA_TYPE_IPV4		1
+#define NXA_TYPE_IPV6		2
 
-#define NXA_MOD_BCAST		0x0100
-#define NXA_MOD_LBACK		0x0200
+#define NXA_MOD_BCAST		(1<<8)
 
 #define NXA_TYPE_ANY		((uint16_t)-1)
-
-#define	NXA_TYPE_ADDR		0x0003
-#define NXA_TYPE_MASK		0x0013
-#define NXA_TYPE_RANGE		0x0023
 
 
 #ifdef	__KERNEL__
@@ -60,14 +55,14 @@ struct nx_info {
 	uint64_t nx_ncaps;		/* network capabilities */
 
 	int nbipv4;
-	__be32 ipv4[NB_IPV4ROOT];	/* Process can only bind to these IPs */
+	__u32 ipv4[NB_IPV4ROOT];	/* Process can only bind to these IPs */
 					/* The first one is used to connect */
 					/* and for bind any service */
 					/* The other must be used explicity */
-	__be32 mask[NB_IPV4ROOT];	/* Netmask for each ipv4 */
+	__u32 mask[NB_IPV4ROOT];	/* Netmask for each ipv4 */
 					/* Used to select the proper source */
 					/* address for sockets */
-	__be32 v4_bcast;		/* Broadcast address to receive UDP  */
+	__u32 v4_bcast;			/* Broadcast address to receive UDP  */
 
 	char nx_name[65];		/* network context name */
 };
