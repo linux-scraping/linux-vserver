@@ -5,7 +5,7 @@
 
 obj-y		+= vserver.o
 
-vserver-y	:= switch.o context.o namespace.o sched.o network.o inode.o \
+vserver-y	:= switch.o context.o space.o sched.o network.o inode.o \
 		   limit.o cvirt.o cacct.o signal.o helper.o init.o dlimit.o
 
 vserver-$(CONFIG_PROC_FS) += proc.o
