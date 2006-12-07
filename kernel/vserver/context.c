@@ -707,7 +707,7 @@ int vx_migrate_task(struct task_struct *p, struct vx_info *vxi, int unshare)
 		/* hack for *spaces to provide compatibility */
 		if (unshare) {
 			ret = sys_unshare(CLONE_NEWUTS|CLONE_NEWIPC);
-			vx_set_space(vxi, 0);
+			vx_set_space(vxi, CLONE_NEWUTS|CLONE_NEWIPC);
 		}
 	}
 out:
