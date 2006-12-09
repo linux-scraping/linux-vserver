@@ -248,6 +248,7 @@ extern void kclist_add(struct kcore_list *, void *, size_t);
 union proc_op {
 	int (*proc_get_link)(struct inode *, struct dentry **, struct vfsmount **);
 	int (*proc_read)(struct task_struct *task, char *page);
+	int (*proc_vs_read)(char *page);
 	int (*proc_vxi_read)(struct vx_info *vxi, char *page);
 	int (*proc_nxi_read)(struct nx_info *nxi, char *page);
 };

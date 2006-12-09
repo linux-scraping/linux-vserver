@@ -98,6 +98,7 @@ struct vx_info {
 	struct vx_info *vx_parent;		/* parent context */
 	int vx_state;				/* context state */
 
+	unsigned long vx_nsmask;		/* assignment mask */
 	struct nsproxy *vx_nsproxy;		/* private namespace */
 	struct fs_struct *vx_fs;		/* private namespace fs */
 
