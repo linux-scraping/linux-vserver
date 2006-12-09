@@ -64,7 +64,6 @@ static inline uint32_t vci_kernel_config(void)
 #ifdef	CONFIG_VSERVER_HISTORY
 	(1 << VCI_KCBIT_HISTORY) |
 #endif
-	(1 << VCI_KCBIT_SPACES) |
 
 	/* inode context tagging */
 #if	defined(CONFIG_TAGGING_NONE)
