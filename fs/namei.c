@@ -33,10 +33,9 @@
 #include <linux/fcntl.h>
 #include <linux/namei.h>
 #include <linux/proc_fs.h>
-#include <linux/vs_base.h>
 #include <linux/vserver/inode.h>
+#include <linux/vs_base.h>
 #include <linux/vs_tag.h>
-#include <linux/vserver/debug.h>
 #include <linux/vs_cowbl.h>
 #include <asm/namei.h>
 #include <asm/uaccess.h>
@@ -233,7 +232,7 @@ int generic_permission(struct inode *inode, int mask,
 
 static inline int dx_barrier(struct inode *inode)
 {
-	if (IS_BARRIER(inode) && !vx_check(0, VX_ADMIN)) {
+	if (IS_BARRIER(inode) && !vx_check(0, VS_ADMIN)) {
 		vxwprintk(1, "xid=%d did hit the barrier.",
 			vx_current_xid());
 		return 1;

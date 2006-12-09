@@ -18,7 +18,6 @@
 #include <linux/proc_fs.h>
 #include <linux/devpts_fs.h>
 #include <linux/vs_base.h>
-#include <linux/vserver/debug.h>
 
 /* Taken over from the old code... */
 
@@ -62,7 +61,7 @@ int inode_change_ok(struct inode *inode, struct iattr *attr)
 	}
 
 	/* Check for evil vserver activity */
-	if (vx_check(0, VX_ADMIN))
+	if (vx_check(0, VS_ADMIN))
 		goto fine;
 
 	if (IS_BARRIER(inode)) {
@@ -78,7 +77,7 @@ int inode_change_ok(struct inode *inode, struct iattr *attr)
 			goto error;
 		case DEVPTS_SUPER_MAGIC:
 			/* devpts is xid tagged */
-			if (vx_check((xid_t)inode->i_tag, VX_IDENT))
+			if (vx_check((xid_t)inode->i_tag, VS_IDENT))
 				goto fine;
 			vxwprintk(1, "xid=%d messing with the devpts.",
 				vx_current_xid());

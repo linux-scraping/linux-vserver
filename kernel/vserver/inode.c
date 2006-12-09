@@ -10,7 +10,6 @@
  */
 
 #include <linux/sched.h>
-#include <linux/vs_context.h>
 #include <linux/proc_fs.h>
 #include <linux/devpts_fs.h>
 #include <linux/namei.h>
@@ -19,7 +18,8 @@
 #include <linux/compat.h>
 #include <linux/vserver/inode.h>
 #include <linux/vserver/inode_cmd.h>
-#include <linux/vserver/tag.h>
+#include <linux/vs_base.h>
+#include <linux/vs_tag.h>
 
 #include <asm/errno.h>
 #include <asm/uaccess.h>
@@ -101,7 +101,7 @@ int vc_get_iattr_x32(uint32_t id, void __user *data)
 	struct vcmd_ctx_iattr_v1_x32 vc_data = { .xid = -1 };
 	int ret;
 
-	if (!vx_check(0, VX_ADMIN))
+	if (!vx_check(0, VS_ADMIN))
 		return -ENOSYS;
 	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;

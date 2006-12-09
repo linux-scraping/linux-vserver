@@ -37,7 +37,7 @@
 #include <linux/vfs.h>
 #include <linux/inet.h>
 #include <linux/nfs_xdr.h>
-#include <linux/vserver/tag.h>
+#include <linux/vs_tag.h>
 
 #include <asm/system.h>
 #include <asm/uaccess.h>

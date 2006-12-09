@@ -26,8 +26,8 @@ extern int vc_wait_exit(struct vx_info *, void __user *);
 
 /*  process alteration commands */
 
-#define VCMD_get_pflags		VC_CMD(PROCALT, 1, 0)
-#define VCMD_set_pflags		VC_CMD(PROCALT, 2, 0)
+#define VCMD_get_pflags		VC_CMD(PROCALT, 5, 0)
+#define VCMD_set_pflags		VC_CMD(PROCALT, 6, 0)
 
 struct	vcmd_pflags_v0 {
 	uint32_t flagword;

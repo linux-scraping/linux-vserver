@@ -80,6 +80,10 @@ void ocfs2_set_inode_flags(struct inode *inode)
 
 	if (flags & OCFS2_IMMUTABLE_FL)
 		inode->i_flags |= S_IMMUTABLE;
+	if (flags & OCFS2_IUNLINK_FL)
+		inode->i_flags |= S_IUNLINK;
+	if (flags & OCFS2_BARRIER_FL)
+		inode->i_flags |= S_BARRIER;
 
 	if (flags & OCFS2_SYNC_FL)
 		inode->i_flags |= S_SYNC;
@@ -89,6 +93,39 @@ void ocfs2_set_inode_flags(struct inode *inode)
 		inode->i_flags |= S_NOATIME;
 	if (flags & OCFS2_DIRSYNC_FL)
 		inode->i_flags |= S_DIRSYNC;
+}
+
+int ocfs2_sync_flags(struct inode *inode)
+{
+	unsigned int oldflags, newflags;
+
+	oldflags = OCFS2_I(inode)->ip_flags;
+	newflags = oldflags & ~(OCFS2_APPEND_FL |
+		OCFS2_IMMUTABLE_FL | OCFS2_IUNLINK_FL |
+		OCFS2_BARRIER_FL | OCFS2_NOATIME_FL |
+		OCFS2_SYNC_FL | OCFS2_DIRSYNC_FL);
+
+	if (IS_APPEND(inode))
+		newflags |= OCFS2_APPEND_FL;
+	if (IS_IMMUTABLE(inode))
+		newflags |= OCFS2_IMMUTABLE_FL;
+	if (IS_IUNLINK(inode))
+		newflags |= OCFS2_IUNLINK_FL;
+	if (IS_BARRIER(inode))
+		newflags |= OCFS2_BARRIER_FL;
+
+	/* we do not want to copy superblock flags */
+	if (inode->i_flags & S_NOATIME)
+		newflags |= OCFS2_NOATIME_FL;
+	if (inode->i_flags & S_SYNC)
+		newflags |= OCFS2_SYNC_FL;
+	if (inode->i_flags & S_DIRSYNC)
+		newflags |= OCFS2_DIRSYNC_FL;
+
+	if (oldflags ^ newflags)
+		return ocfs2_set_inode_attr(inode,
+			newflags, OCFS2_FL_MASK);
+	return 0;
 }
 
 struct inode *ocfs2_ilookup_for_vote(struct ocfs2_super *osb,
@@ -1231,8 +1268,6 @@ int ocfs2_mark_inode_dirty(struct ocfs2_journal_handle *handle,
 
 	spin_lock(&OCFS2_I(inode)->ip_lock);
 	fe->i_clusters = cpu_to_le32(OCFS2_I(inode)->ip_clusters);
-	/* fe->i_flags &= cpu_to_le32(~OCFS2_FL_MASK);
-	   fe->i_flags |= cpu_to_le32(OCFS2_I(inode)->ip_flags & OCFS2_FL_MASK); */
 	fe->i_attr = cpu_to_le32(OCFS2_I(inode)->ip_attr);
 	spin_unlock(&OCFS2_I(inode)->ip_lock);
 
@@ -1270,6 +1305,9 @@ leave:
 void ocfs2_refresh_inode(struct inode *inode,
 			 struct ocfs2_dinode *fe)
 {
+	uid_t uid;
+	gid_t gid;
+
 	spin_lock(&OCFS2_I(inode)->ip_lock);
 
 	OCFS2_I(inode)->ip_clusters = le32_to_cpu(fe->i_clusters);

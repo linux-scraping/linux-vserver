@@ -13,7 +13,6 @@
 #include <linux/sunrpc/svc.h>
 #include <linux/lockd/lockd.h>
 #include <linux/lockd/sm_inter.h>
-#include <linux/vs_cvirt.h>
 
 
 #define NLMDBG_FACILITY		NLMDBG_MONITOR

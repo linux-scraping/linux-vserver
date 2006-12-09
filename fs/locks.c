@@ -2162,7 +2162,7 @@ int get_locks_status(char *buffer, char **start, off_t offset, int length)
 		struct list_head *btmp;
 		struct file_lock *fl = list_entry(tmp, struct file_lock, fl_link);
 
-		if (!vx_check(fl->fl_xid, VX_WATCH_P|VX_IDENT))
+		if (!vx_check(fl->fl_xid, VS_WATCH_P|VS_IDENT))
 			continue;
 
 		lock_get_status(q, fl, ++i, "");

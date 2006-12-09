@@ -33,7 +33,6 @@
 #include <linux/utsname.h>
 #include <linux/vfs.h>
 #include <linux/vmalloc.h>
-#include <linux/vs_cvirt.h>
 
 #include <asm/errno.h>
 #include <asm/pgalloc.h>

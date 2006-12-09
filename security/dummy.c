@@ -28,7 +28,7 @@
 #include <linux/hugetlb.h>
 #include <linux/ptrace.h>
 #include <linux/file.h>
-#include <linux/vs_base.h>
+#include <linux/vs_context.h>
 
 static int dummy_ptrace (struct task_struct *parent, struct task_struct *child)
 {

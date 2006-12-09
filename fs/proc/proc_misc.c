@@ -46,7 +46,6 @@
 #include <linux/vmalloc.h>
 #include <linux/crash_dump.h>
 #include <linux/pspace.h>
-// #include <linux/utsname.h>
 #include <asm/uaccess.h>
 #include <asm/pgtable.h>
 #include <asm/io.h>
@@ -273,7 +272,7 @@ static int version_read_proc(char *page, char **start, off_t off,
 {
 	int len;
 
-	len = sprintf(page, vx_linux_banner,
+	len = sprintf(page, linux_banner,
 		utsname()->release, utsname()->version);
 	return proc_calc_metrics(page, start, off, count, eof, len);
 }

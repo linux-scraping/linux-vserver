@@ -8,6 +8,7 @@
  */
 
 #include <linux/fs.h>
+#include <linux/mount.h>
 #include <linux/jbd2.h>
 #include <linux/capability.h>
 #include <linux/ext4_fs.h>
@@ -15,6 +16,7 @@
 #include <linux/time.h>
 #include <linux/compat.h>
 #include <linux/smp_lock.h>
+#include <linux/vs_tag.h>
 #include <asm/uaccess.h>
 
 int ext4_ioctl (struct inode * inode, struct file * filp, unsigned int cmd,
@@ -37,7 +39,8 @@ int ext4_ioctl (struct inode * inode, struct file * filp, unsigned int cmd,
 		unsigned int oldflags;
 		unsigned int jflag;
 
-		if (IS_RDONLY(inode))
+		if (IS_RDONLY(inode) ||
+			(filp && MNT_IS_RDONLY(filp->f_vfsmnt)))
 			return -EROFS;
 
 		if ((current->fsuid != inode->i_uid) && !capable(CAP_FOWNER))
@@ -61,7 +64,9 @@ int ext4_ioctl (struct inode * inode, struct file * filp, unsigned int cmd,
 		 *
 		 * This test looks nicer. Thanks to Pauline Middelink
 		 */
-		if ((flags ^ oldflags) & (EXT4_APPEND_FL | EXT4_IMMUTABLE_FL)) {
+		if ((oldflags & EXT4_IMMUTABLE_FL) ||
+			((flags ^ oldflags) & (EXT4_APPEND_FL |
+			EXT4_IMMUTABLE_FL | EXT4_IUNLINK_FL))) {
 			if (!capable(CAP_LINUX_IMMUTABLE)) {
 				mutex_unlock(&inode->i_mutex);
 				return -EPERM;
@@ -123,7 +128,8 @@ flags_err:
 
 		if ((current->fsuid != inode->i_uid) && !capable(CAP_FOWNER))
 			return -EPERM;
-		if (IS_RDONLY(inode))
+		if (IS_RDONLY(inode) ||
+			(filp && MNT_IS_RDONLY(filp->f_vfsmnt)))
 			return -EROFS;
 		if (get_user(generation, (int __user *) arg))
 			return -EFAULT;
@@ -177,7 +183,8 @@ flags_err:
 		if (!test_opt(inode->i_sb, RESERVATION) ||!S_ISREG(inode->i_mode))
 			return -ENOTTY;
 
-		if (IS_RDONLY(inode))
+		if (IS_RDONLY(inode) ||
+			(filp && MNT_IS_RDONLY(filp->f_vfsmnt)))
 			return -EROFS;
 
 		if ((current->fsuid != inode->i_uid) && !capable(CAP_FOWNER))
@@ -212,7 +219,8 @@ flags_err:
 		if (!capable(CAP_SYS_RESOURCE))
 			return -EPERM;
 
-		if (IS_RDONLY(inode))
+		if (IS_RDONLY(inode) ||
+			(filp && MNT_IS_RDONLY(filp->f_vfsmnt)))
 			return -EROFS;
 
 		if (get_user(n_blocks_count, (__u32 __user *)arg))
@@ -233,7 +241,8 @@ flags_err:
 		if (!capable(CAP_SYS_RESOURCE))
 			return -EPERM;
 
-		if (IS_RDONLY(inode))
+		if (IS_RDONLY(inode) ||
+			(filp && MNT_IS_RDONLY(filp->f_vfsmnt)))
 			return -EROFS;
 
 		if (copy_from_user(&input, (struct ext4_new_group_input __user *)arg,
@@ -247,6 +256,39 @@ flags_err:
 
 		return err;
 	}
+
+#if defined(CONFIG_VSERVER_LEGACY) && !defined(CONFIG_TAGGING_NONE)
+	case EXT4_IOC_SETTAG: {
+		handle_t *handle;
+		struct ext4_iloc iloc;
+		int tag;
+		int err;
+
+		/* fixme: if stealth, return -ENOTTY */
+		if (!capable(CAP_CONTEXT))
+			return -EPERM;
+		if (IS_RDONLY(inode))
+			return -EROFS;
+		if (!(inode->i_sb->s_flags & MS_TAGGED))
+			return -ENOSYS;
+		if (get_user(tag, (int __user *) arg))
+			return -EFAULT;
+
+		handle = ext4_journal_start(inode, 1);
+		if (IS_ERR(handle))
+			return PTR_ERR(handle);
+		err = ext4_reserve_inode_write(handle, inode, &iloc);
+		if (err)
+			return err;
+
+		inode->i_tag = (tag & 0xFFFF);
+		inode->i_ctime = CURRENT_TIME;
+
+		err = ext4_mark_iloc_dirty(handle, inode, &iloc);
+		ext4_journal_stop(handle);
+		return err;
+	}
+#endif
 
 	default:
 		return -ENOTTY;

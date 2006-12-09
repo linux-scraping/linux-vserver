@@ -1326,6 +1326,7 @@ static void __ocfs2_stuff_meta_lvb(struct inode *inode)
 	lvb->lvb_iclusters = cpu_to_be32(oi->ip_clusters);
 	lvb->lvb_iuid      = cpu_to_be32(inode->i_uid);
 	lvb->lvb_igid      = cpu_to_be32(inode->i_gid);
+	lvb->lvb_itag      = cpu_to_be16(inode->i_tag);
 	lvb->lvb_imode     = cpu_to_be16(inode->i_mode);
 	lvb->lvb_inlink    = cpu_to_be16(inode->i_nlink);
 	lvb->lvb_iatime_packed  =
@@ -1376,9 +1377,6 @@ static void ocfs2_refresh_inode_from_lvb(struct inode *inode)
 	else
 		inode->i_blocks =
 			ocfs2_align_bytes_to_sectors(i_size_read(inode));
-
-	oi->ip_flags &= ~OCFS2_FL_MASK;
-	oi->ip_flags |= be32_to_cpu(lvb->lvb_iflags) & OCFS2_FL_MASK;
 
 	inode->i_uid     = be32_to_cpu(lvb->lvb_iuid);
 	inode->i_gid     = be32_to_cpu(lvb->lvb_igid);

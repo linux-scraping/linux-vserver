@@ -1329,7 +1329,7 @@ static int lo_open(struct inode *inode, struct file *file)
 {
 	struct loop_device *lo = inode->i_bdev->bd_disk->private_data;
 
-	if (!vx_check(lo->lo_xid, VX_WATCH_P|VX_IDENT))
+	if (!vx_check(lo->lo_xid, VS_WATCH_P|VS_IDENT))
 		return -EACCES;
 
 	mutex_lock(&lo->lo_ctl_mutex);

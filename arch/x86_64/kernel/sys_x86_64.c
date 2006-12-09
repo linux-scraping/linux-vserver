@@ -16,7 +16,6 @@
 #include <linux/file.h>
 #include <linux/utsname.h>
 #include <linux/personality.h>
-#include <linux/vs_cvirt.h>
 
 #include <asm/uaccess.h>
 #include <asm/ia32.h>

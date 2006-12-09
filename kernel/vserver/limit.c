@@ -41,30 +41,52 @@ const char *vlimit_name[NUM_LIMITS] = {
 
 EXPORT_SYMBOL_GPL(vlimit_name);
 
+#define MASK_ENTRY(x)	(1 << (x))
 
-static int is_valid_rlimit(int id)
+const struct vcmd_ctx_rlimit_mask_v0 vlimit_mask = {
+		/* minimum */
+	0
+	,	/* softlimit */
+	MASK_ENTRY( RLIMIT_RSS		) |
+	MASK_ENTRY( VLIMIT_ANON		) |
+	0
+	,       /* maximum */
+	MASK_ENTRY( RLIMIT_RSS		) |
+	MASK_ENTRY( RLIMIT_NPROC	) |
+	MASK_ENTRY( RLIMIT_NOFILE	) |
+	MASK_ENTRY( RLIMIT_MEMLOCK	) |
+	MASK_ENTRY( RLIMIT_AS		) |
+	MASK_ENTRY( RLIMIT_LOCKS	) |
+	MASK_ENTRY( RLIMIT_MSGQUEUE	) |
+
+	MASK_ENTRY( VLIMIT_NSOCK	) |
+	MASK_ENTRY( VLIMIT_OPENFD	) |
+	MASK_ENTRY( VLIMIT_ANON		) |
+	MASK_ENTRY( VLIMIT_SHMEM	) |
+	MASK_ENTRY( VLIMIT_DENTRY	) |
+	0
+};
+		/* accounting only */
+uint32_t account_mask =
+	MASK_ENTRY( VLIMIT_SEMARY	) |
+	MASK_ENTRY( VLIMIT_NSEMS	) |
+	0;
+
+
+static int is_valid_vlimit(int id)
 {
-	int valid = 0;
-
-	switch (id) {
-	case RLIMIT_RSS:
-	case RLIMIT_NPROC:
-	case RLIMIT_NOFILE:
-	case RLIMIT_MEMLOCK:
-	case RLIMIT_AS:
-	case RLIMIT_LOCKS:
-	case RLIMIT_MSGQUEUE:
-
-	case VLIMIT_NSOCK:
-	case VLIMIT_OPENFD:
-	case VLIMIT_ANON:
-	case VLIMIT_SHMEM:
-	case VLIMIT_DENTRY:
-		valid = 1;
-		break;
-	}
-	return valid;
+	uint32_t mask = vlimit_mask.minimum |
+		vlimit_mask.softlimit | vlimit_mask.maximum;
+	return mask & (1 << id);
 }
+
+static int is_accounted_vlimit(int id)
+{
+	if (is_valid_vlimit(id))
+		return 1;
+	return account_mask & (1 << id);
+}
+
 
 static inline uint64_t vc_get_soft(struct vx_info *vxi, int id)
 {
@@ -81,7 +103,7 @@ static inline uint64_t vc_get_hard(struct vx_info *vxi, int id)
 static int do_get_rlimit(struct vx_info *vxi, uint32_t id,
 	uint64_t *minimum, uint64_t *softlimit, uint64_t *maximum)
 {
-	if (!is_valid_rlimit(id))
+	if (!is_valid_vlimit(id))
 		return -EINVAL;
 
 	if (minimum)
@@ -114,7 +136,7 @@ int vc_get_rlimit(struct vx_info *vxi, void __user *data)
 static int do_set_rlimit(struct vx_info *vxi, uint32_t id,
 	uint64_t minimum, uint64_t softlimit, uint64_t maximum)
 {
-	if (!is_valid_rlimit(id))
+	if (!is_valid_vlimit(id))
 		return -EINVAL;
 
 	if (maximum != CRLIM_KEEP)
@@ -176,26 +198,7 @@ int vc_get_rlimit_x32(struct vx_info *vxi, void __user *data)
 
 int vc_get_rlimit_mask(uint32_t id, void __user *data)
 {
-	static struct vcmd_ctx_rlimit_mask_v0 mask = {
-			/* minimum */
-		0
-		,	/* softlimit */
-		(1 << RLIMIT_RSS) |
-		(1 << VLIMIT_ANON) |
-		0
-		,	/* maximum */
-		(1 << RLIMIT_RSS) |
-		(1 << RLIMIT_NPROC) |
-		(1 << RLIMIT_NOFILE) |
-		(1 << RLIMIT_MEMLOCK) |
-		(1 << RLIMIT_LOCKS) |
-		(1 << RLIMIT_AS) |
-		(1 << VLIMIT_ANON) |
-		(1 << VLIMIT_DENTRY) |
-		0
-		};
-
-	if (copy_to_user(data, &mask, sizeof(mask)))
+	if (copy_to_user(data, &vlimit_mask, sizeof(vlimit_mask)))
 		return -EFAULT;
 	return 0;
 }
@@ -231,7 +234,7 @@ int vc_rlimit_stat(struct vx_info *vxi, void __user *data)
 		return -EFAULT;
 
 	id = vc_data.id;
-	if (!is_valid_rlimit(id))
+	if (!is_accounted_vlimit(id))
 		return -EINVAL;
 
 	vc_data.hits = atomic_read(&__rlim_lhit(limit, id));
@@ -256,7 +259,7 @@ void vx_vsi_meminfo(struct sysinfo *val)
 	totalram = (v != RLIM_INFINITY) ? v : val->totalram;
 
 	/* total minus used equals free */
-	v = __rlim_get(&vxi->limit, RLIMIT_RSS);
+	v = __vx_cres_array_fixup(&vxi->limit, VLA_RSS);
 	freeram = (v < totalram) ? totalram - v : 0;
 
 	val->totalram = totalram;
@@ -284,7 +287,7 @@ void vx_vsi_swapinfo(struct sysinfo *val)
 	totalswap = (w != RLIM_INFINITY) ? (w - v) : val->totalswap;
 
 	/* currently 'used' swap */
-	w = __rlim_get(&vxi->limit, RLIMIT_RSS);
+	w = __vx_cres_array_fixup(&vxi->limit, VLA_RSS);
 	w -= (w > v) ? v : w;
 
 	/* total minus used equals free */
@@ -293,5 +296,22 @@ void vx_vsi_swapinfo(struct sysinfo *val)
 	val->totalswap = totalswap;
 	val->freeswap = freeswap;
 	return;
+}
+
+
+unsigned long vx_badness(struct task_struct *task, struct mm_struct *mm)
+{
+	struct vx_info *vxi = mm->mm_vx_info;
+	unsigned long points;
+	rlim_t v, w;
+
+	if (!vxi)
+		return 0;
+
+	v = __vx_cres_array_fixup(&vxi->limit, VLA_RSS);
+	w = __rlim_soft(&vxi->limit, RLIMIT_RSS);
+	points = (v > w) ? (v - w) : 0;
+
+	return points;
 }
 

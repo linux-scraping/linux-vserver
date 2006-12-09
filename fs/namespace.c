@@ -26,8 +26,9 @@
 #include <linux/mount.h>
 #include <linux/ramfs.h>
 #include <linux/vs_base.h>
-#include <linux/vserver/namespace.h>
-#include <linux/vserver/tag.h>
+#include <linux/vserver/space.h>
+#include <linux/vs_context.h>
+#include <linux/vs_tag.h>
 #include <asm/uaccess.h>
 #include <asm/unistd.h>
 #include "pnode.h"
@@ -407,10 +408,10 @@ static int show_vfsmnt(struct seq_file *m, void *v)
 
 	if (vx_flags(VXF_HIDE_MOUNT, 0))
 		return 0;
-	if (!mnt_is_reachable(mnt) && !vx_check(0, VX_WATCH_P))
+	if (!mnt_is_reachable(mnt) && !vx_check(0, VS_WATCH_P))
 		return 0;
 
-	if (!vx_check(0, VX_ADMIN|VX_WATCH) &&
+	if (!vx_check(0, VS_ADMIN|VS_WATCH) &&
 		mnt == current->fs->rootmnt) {
 		seq_puts(m, "/dev/root / ");
 	} else {
@@ -452,10 +453,10 @@ static int show_vfsstat(struct seq_file *m, void *v)
 
 	if (vx_flags(VXF_HIDE_MOUNT, 0))
 		return 0;
-	if (!mnt_is_reachable(mnt) && !vx_check(0, VX_WATCH_P))
+	if (!mnt_is_reachable(mnt) && !vx_check(0, VS_WATCH_P))
 		return 0;
 
-	if (!vx_check(0, VX_ADMIN|VX_WATCH) &&
+	if (!vx_check(0, VS_ADMIN|VS_WATCH) &&
 		mnt == current->fs->rootmnt) {
 		seq_puts(m, "device /dev/root mounted on / ");
 	} else {

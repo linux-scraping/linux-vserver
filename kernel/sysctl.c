@@ -45,7 +45,6 @@
 #include <linux/syscalls.h>
 #include <linux/nfs_fs.h>
 #include <linux/acpi.h>
-#include <linux/vserver/cvirt.h>
 
 #include <asm/uaccess.h>
 #include <asm/processor.h>
