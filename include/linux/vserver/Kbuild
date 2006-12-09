@@ -1,5 +1,5 @@
 
-unifdef-y += context_cmd.h network_cmd.h namespace_cmd.h \
+unifdef-y += context_cmd.h network_cmd.h space_cmd.h \
 	cacct_cmd.h cvirt_cmd.h limit_cmd.h dlimit_cmd.h \
 	inode_cmd.h sched_cmd.h signal_cmd.h debug_cmd.h
 

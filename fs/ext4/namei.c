@@ -37,6 +37,7 @@
 #include <linux/buffer_head.h>
 #include <linux/bio.h>
 #include <linux/smp_lock.h>
+#include <linux/vs_tag.h>
 
 #include "namei.h"
 #include "xattr.h"
@@ -1008,6 +1009,7 @@ static struct dentry *ext4_lookup(struct inode * dir, struct dentry *dentry, str
 
 		if (!inode)
 			return ERR_PTR(-EACCES);
+		dx_propagate_tag(nd, inode);
 	}
 	return d_splice_alias(inode, dentry);
 }
@@ -2381,6 +2383,7 @@ struct inode_operations ext4_dir_inode_operations = {
 	.removexattr	= generic_removexattr,
 #endif
 	.permission	= ext4_permission,
+	.sync_flags	= ext4_sync_flags,
 };
 
 struct inode_operations ext4_special_inode_operations = {
@@ -2392,4 +2395,5 @@ struct inode_operations ext4_special_inode_operations = {
 	.removexattr	= generic_removexattr,
 #endif
 	.permission	= ext4_permission,
+	.sync_flags	= ext4_sync_flags,
 };

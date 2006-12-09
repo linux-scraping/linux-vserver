@@ -15,7 +15,6 @@
 #include <linux/random.h>
 #include <linux/interrupt.h>
 #include <linux/kernel_stat.h>
-#include <linux/vs_context.h>
 
 #include "internals.h"
 
@@ -169,7 +168,6 @@ fastcall unsigned int __do_IRQ(unsigned int irq)
 {
 	struct irq_desc *desc = irq_desc + irq;
 	struct irqaction *action;
-	struct vx_info_save vxis;
 	unsigned int status;
 
 	kstat_this_cpu.irqs[irq]++;
@@ -179,17 +177,14 @@ fastcall unsigned int __do_IRQ(unsigned int irq)
 		/*
 		 * No locking required for CPU-local interrupts:
 		 */
-		__enter_vx_admin(&vxis);
 		if (desc->chip->ack)
 			desc->chip->ack(irq);
 		action_ret = handle_IRQ_event(irq, desc->action);
-		__leave_vx_admin(&vxis);
 		desc->chip->end(irq);
 		return 1;
 	}
 
 	spin_lock(&desc->lock);
-	__enter_vx_admin(&vxis);
 	if (desc->chip->ack)
 		desc->chip->ack(irq);
 	/*
@@ -236,10 +231,10 @@ fastcall unsigned int __do_IRQ(unsigned int irq)
 		spin_unlock(&desc->lock);
 
 		action_ret = handle_IRQ_event(irq, action);
-
-		spin_lock(&desc->lock);
 		if (!noirqdebug)
 			note_interrupt(irq, desc, action_ret);
+
+		spin_lock(&desc->lock);
 		if (likely(!(desc->status & IRQ_PENDING)))
 			break;
 		desc->status &= ~IRQ_PENDING;
@@ -252,7 +247,6 @@ out:
 	 * disabled while the handler was running.
 	 */
 	desc->chip->end(irq);
-	__leave_vx_admin(&vxis);
 	spin_unlock(&desc->lock);
 
 	return 1;

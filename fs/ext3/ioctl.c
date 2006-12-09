@@ -16,7 +16,7 @@
 #include <linux/time.h>
 #include <linux/compat.h>
 #include <linux/smp_lock.h>
-#include <linux/vserver/tag.h>
+#include <linux/vs_tag.h>
 #include <asm/uaccess.h>
 
 int ext3_ioctl (struct inode * inode, struct file * filp, unsigned int cmd,

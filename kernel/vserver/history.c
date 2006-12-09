@@ -20,6 +20,7 @@
 #include <asm/atomic.h>
 #include <asm/unistd.h>
 
+#include <linux/vserver/context.h>
 #include <linux/vserver/debug.h>
 #include <linux/vserver/debug_cmd.h>
 #include <linux/vserver/history.h>

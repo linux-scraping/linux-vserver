@@ -498,6 +498,9 @@ static int copy_pte_range(struct mm_struct *dst_mm, struct mm_struct *src_mm,
 	int progress = 0;
 	int rss[2];
 
+	if (!vx_rss_avail(dst_mm, ((end - addr)/PAGE_SIZE + 1)))
+		return -ENOMEM;
+
 again:
 	rss[1] = rss[0] = 0;
 	dst_pte = pte_alloc_map_lock(dst_mm, dst_pmd, addr, &dst_ptl);
@@ -2011,7 +2014,7 @@ static int do_swap_page(struct mm_struct *mm, struct vm_area_struct *vma,
 		grab_swap_token();
 	}
 
-	if (!vx_rsspages_avail(mm, 1)) {
+	if (!vx_rss_avail(mm, 1)) {
 		ret = VM_FAULT_OOM;
 		goto out;
 	}
@@ -2088,7 +2091,7 @@ static int do_anonymous_page(struct mm_struct *mm, struct vm_area_struct *vma,
 		/* Allocate our own private page. */
 		pte_unmap(page_table);
 
-		if (!vx_rsspages_avail(mm, 1))
+		if (!vx_rss_avail(mm, 1))
 			goto oom;
 		if (unlikely(anon_vma_prepare(vma)))
 			goto oom;
@@ -2163,15 +2166,15 @@ static int do_no_page(struct mm_struct *mm, struct vm_area_struct *vma,
 	pte_unmap(page_table);
 	BUG_ON(vma->vm_flags & VM_PFNMAP);
 
+	if (!vx_rss_avail(mm, 1))
+		return VM_FAULT_OOM;
+
 	if (vma->vm_file) {
 		mapping = vma->vm_file->f_mapping;
 		sequence = mapping->truncate_count;
 		smp_rmb(); /* serializes i_size against truncate_count */
 	}
 retry:
-	/* FIXME: is that check useful here? */
-	if (!vx_rsspages_avail(mm, 1))
-		return VM_FAULT_OOM;
 	new_page = vma->vm_ops->nopage(vma, address & PAGE_MASK, &ret);
 	/*
 	 * No smp_rmb is needed here as long as there's a full

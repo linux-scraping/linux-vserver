@@ -17,7 +17,6 @@
 #include <linux/timex.h>
 #include <linux/major.h>
 #include <linux/compat.h>
-#include <linux/vs_cvirt.h>
 
 #include <asm/uaccess.h>
 #include <asm/string.h>

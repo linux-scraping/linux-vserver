@@ -21,7 +21,6 @@
 #include <linux/cpu.h>
 #include <linux/pfn.h>
 #include <linux/fs.h>
-#include <linux/vs_cvirt.h>
 #include <asm/uaccess.h>
 #include <asm/io.h>
 #include <asm/sections.h>

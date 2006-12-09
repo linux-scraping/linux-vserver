@@ -3,6 +3,7 @@
 
 #include "vserver/context.h"
 #include "vserver/network.h"
+#include "vserver/base.h"
 #include "vserver/debug.h"
 
 
@@ -151,72 +152,6 @@ static __inline__ struct nx_info *__task_get_nx_info(struct task_struct *p,
 }
 
 
-#define nx_task_nid(t)	((t)->nid)
-
-#define nx_current_nid() nx_task_nid(current)
-
-#define current_nx_info() (current->nx_info)
-
-
-#define nx_check(c,m)	__nx_check(nx_current_nid(),c,m)
-
-#define nx_weak_check(c,m)	((m) ? nx_check(c,m) : 1)
-
-
-/*
- * check current context for ADMIN/WATCH and
- * optionally against supplied argument
- */
-static inline int __nx_check(nid_t cid, nid_t id, unsigned int mode)
-{
-	if (mode & NX_ARG_MASK) {
-		if ((mode & NX_IDENT) &&
-			(id == cid))
-			return 1;
-	}
-	if (mode & NX_ATR_MASK) {
-		if ((mode & NX_DYNAMIC) &&
-			(id >= MIN_D_CONTEXT) &&
-			(id <= MAX_S_CONTEXT))
-			return 1;
-		if ((mode & NX_STATIC) &&
-			(id > 1) && (id < MIN_D_CONTEXT))
-			return 1;
-	}
-	return (((mode & NX_ADMIN) && (cid == 0)) ||
-		((mode & NX_WATCH) && (cid == 1)) ||
-		((mode & NX_BLEND) && (id == 1)) ||
-		((mode & NX_HOSTID) && (id == 0)));
-}
-
-
-#define __nx_state(v)	((v) ? ((v)->nx_state) : 0)
-
-#define nx_info_state(v,m)	(__nx_state(v) & (m))
-
-
-#define __nx_flags(v)	((v) ? (v)->nx_flags : 0)
-
-#define nx_current_flags()	__nx_flags(current->nx_info)
-
-#define nx_info_flags(v,m,f) \
-	vx_check_flags(__nx_flags(v),(m),(f))
-
-#define task_nx_flags(t,m,f) \
-	((t) && nx_info_flags((t)->nx_info, (m), (f)))
-
-#define nx_flags(m,f)	nx_info_flags(current->nx_info,(m),(f))
-
-
-/* context caps */
-
-#define __nx_ncaps(v)	((v) ? (v)->nx_ncaps : 0)
-
-#define nx_current_ncaps()	__nx_ncaps(current->nx_info)
-
-#define nx_info_ncaps(v,c)	(__nx_ncaps(v) & (c))
-
-#define nx_ncaps(c)	nx_info_ncaps(current->nx_info,(c))
 
 
 static inline int addr_in_nx_info(struct nx_info *nxi, uint32_t addr)

@@ -28,11 +28,13 @@
 #include <linux/namespace.h>
 
 #include <linux/sched.h>
+#include <linux/vserver/context.h>
 #include <linux/vserver/network.h>
 #include <linux/vserver/legacy.h>
-#include <linux/vserver/limit.h>
 #include <linux/vserver/debug.h>
+#include <linux/vserver/limit.h>
 #include <linux/vserver/limit_int.h>
+#include <linux/vserver/space.h>
 
 #include <linux/vs_context.h>
 #include <linux/vs_limit.h>
@@ -529,7 +531,7 @@ int get_xid_list(int index, unsigned int *xids, int size)
 	int hindex, nr_xids = 0;
 
 	/* only show current and children */
-	if (!vx_check(0, VX_ADMIN|VX_WATCH)) {
+	if (!vx_check(0, VS_ADMIN|VS_WATCH)) {
 		if (index > 0)
 			return 0;
 		xids[nr_xids] = vx_current_xid();
@@ -585,7 +587,7 @@ int vx_migrate_user(struct task_struct *p, struct vx_info *vxi)
 	if (!p || !vxi)
 		BUG();
 
-	if (vx_info_flags(vxi, VXF_INFO_LOCK, 0))
+	if (vx_info_flags(vxi, VXF_INFO_PRIVATE, 0))
 		return -EACCES;
 
 	new_user = alloc_uid(vxi->vx_id, p->uid);
@@ -633,12 +635,18 @@ static int vx_openfd_task(struct task_struct *tsk)
 	return total;
 }
 
+
+/* 	for *space compatibility */
+
+asmlinkage long sys_unshare(unsigned long);
+
 /*
  *	migrate task to new context
  *	gets vxi, puts old_vxi on change
+ *	optionally unshares namespaces (hack)
  */
 
-int vx_migrate_task(struct task_struct *p, struct vx_info *vxi)
+int vx_migrate_task(struct task_struct *p, struct vx_info *vxi, int unshare)
 {
 	struct vx_info *old_vxi;
 	int ret = 0;
@@ -650,7 +658,8 @@ int vx_migrate_task(struct task_struct *p, struct vx_info *vxi)
 		"vx_migrate_task(%p,%p[#%d.%d])", p, vxi,
 		vxi->vx_id, atomic_read(&vxi->vx_usecnt));
 
-	if (vx_info_flags(vxi, VXF_INFO_LOCK, 0))
+	if (vx_info_flags(vxi, VXF_INFO_PRIVATE, 0) &&
+		!vx_info_flags(vxi, VXF_STATE_SETUP, 0))
 		return -EACCES;
 
 	old_vxi = task_get_vx_info(p);
@@ -694,6 +703,12 @@ int vx_migrate_task(struct task_struct *p, struct vx_info *vxi)
 
 		vx_mask_cap_bset(vxi, p);
 		task_unlock(p);
+
+		/* hack for *spaces to provide compatibility */
+		if (unshare) {
+			ret = sys_unshare(CLONE_NEWUTS|CLONE_NEWIPC);
+			vx_set_space(vxi, CLONE_NEWUTS|CLONE_NEWIPC);
+		}
 	}
 out:
 	put_vx_info(old_vxi);
@@ -816,7 +831,7 @@ int vc_task_xid(uint32_t id, void __user *data)
 	if (id) {
 		struct task_struct *tsk;
 
-		if (!vx_check(0, VX_ADMIN|VX_WATCH))
+		if (!vx_check(0, VS_ADMIN|VS_WATCH))
 			return -EPERM;
 
 		read_lock(&tasklist_lock);
@@ -886,7 +901,7 @@ int vc_ctx_create(uint32_t xid, void __user *data)
 	ret = -ENOEXEC;
 	if (vs_state_change(new_vxi, VSC_STARTUP))
 		goto out_unhash;
-	ret = vx_migrate_task(current, new_vxi);
+	ret = vx_migrate_task(current, new_vxi, (!data));
 	if (!ret) {
 		/* return context id on success */
 		ret = new_vxi->vx_id;
@@ -912,7 +927,7 @@ int vc_ctx_migrate(struct vx_info *vxi, void __user *data)
 	if (data && copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
-	ret = vx_migrate_task(current, vxi);
+	ret = vx_migrate_task(current, vxi, 0);
 	if (ret)
 		return ret;
 	if (vc_data.flagword & VXM_SET_INIT)
@@ -932,7 +947,7 @@ int vc_get_cflags(struct vx_info *vxi, void __user *data)
 	vc_data.flagword = vxi->vx_flags;
 
 	/* special STATE flag handling */
-	vc_data.mask = vx_mask_flags(~0UL, vxi->vx_flags, VXF_ONE_TIME);
+	vc_data.mask = vs_mask_flags(~0UL, vxi->vx_flags, VXF_ONE_TIME);
 
 	if (copy_to_user (data, &vc_data, sizeof(vc_data)))
 		return -EFAULT;
@@ -948,7 +963,7 @@ int vc_set_cflags(struct vx_info *vxi, void __user *data)
 		return -EFAULT;
 
 	/* special STATE flag handling */
-	mask = vx_mask_mask(vc_data.mask, vxi->vx_flags, VXF_ONE_TIME);
+	mask = vs_mask_mask(vc_data.mask, vxi->vx_flags, VXF_ONE_TIME);
 	trigger = (mask & vxi->vx_flags) ^ (mask & vc_data.flagword);
 
 	if (vxi == current->vx_info) {
@@ -966,7 +981,7 @@ int vc_set_cflags(struct vx_info *vxi, void __user *data)
 		}
 	}
 
-	vxi->vx_flags = vx_mask_flags(vxi->vx_flags,
+	vxi->vx_flags = vs_mask_flags(vxi->vx_flags,
 		vc_data.flagword, mask);
 	if (trigger & VXF_PERSISTENT)
 		vx_update_persistent(vxi);
@@ -1017,8 +1032,8 @@ int vc_get_ccaps(struct vx_info *vxi, void __user *data)
 static int do_set_caps(struct vx_info *vxi,
 	uint64_t bcaps, uint64_t bmask, uint64_t ccaps, uint64_t cmask)
 {
-	vxi->vx_bcaps = vx_mask_flags(vxi->vx_bcaps, bcaps, bmask);
-	vxi->vx_ccaps = vx_mask_flags(vxi->vx_ccaps, ccaps, cmask);
+	vxi->vx_bcaps = vs_mask_flags(vxi->vx_bcaps, bcaps, bmask);
+	vxi->vx_ccaps = vs_mask_flags(vxi->vx_ccaps, ccaps, cmask);
 
 	return 0;
 }

@@ -19,8 +19,7 @@
 #include <linux/quotaops.h>
 #include <linux/major.h>
 #include <linux/blkdev.h>
-#include <linux/vserver/debug.h>
-#include <linux/vs_base.h>
+#include <linux/vs_context.h>
 
 
 /* Dquota Hash Management Functions */
@@ -443,6 +442,43 @@ static inline struct super_block *quotactl_block(const char __user *special)
 	return ERR_PTR(-ENODEV);
 #endif
 }
+
+#if defined(CONFIG_BLK_DEV_VROOT) || defined(CONFIG_BLK_DEV_VROOT_MODULE)
+
+#include <linux/vroot.h>
+#include <linux/kallsyms.h>
+
+static vroot_grb_func *vroot_get_real_bdev = NULL;
+
+static spinlock_t vroot_grb_lock = SPIN_LOCK_UNLOCKED;
+
+int register_vroot_grb(vroot_grb_func *func) {
+	int ret = -EBUSY;
+
+	spin_lock(&vroot_grb_lock);
+	if (!vroot_get_real_bdev) {
+		vroot_get_real_bdev = func;
+		ret = 0;
+	}
+	spin_unlock(&vroot_grb_lock);
+	return ret;
+}
+EXPORT_SYMBOL(register_vroot_grb);
+
+int unregister_vroot_grb(vroot_grb_func *func) {
+	int ret = -EINVAL;
+
+	spin_lock(&vroot_grb_lock);
+	if (vroot_get_real_bdev) {
+		vroot_get_real_bdev = NULL;
+		ret = 0;
+	}
+	spin_unlock(&vroot_grb_lock);
+	return ret;
+}
+EXPORT_SYMBOL(unregister_vroot_grb);
+
+#endif
 
 /*
  * This is the system call interface. This communicates with

@@ -30,7 +30,7 @@
 #include <linux/vs_base.h>
 #include <linux/vs_limit.h>
 #include <linux/vs_dlimit.h>
-#include <linux/vserver/tag.h>
+#include <linux/vs_tag.h>
 #include <linux/vs_cowbl.h>
 
 int vfs_statfs(struct dentry *dentry, struct kstatfs *buf)
@@ -50,7 +50,7 @@ int vfs_statfs(struct dentry *dentry, struct kstatfs *buf)
 			if (retval == 0 && buf->f_frsize == 0)
 				buf->f_frsize = buf->f_bsize;
 		}
-		if (!vx_check(0, VX_ADMIN|VX_WATCH))
+		if (!vx_check(0, VS_ADMIN|VS_WATCH))
 			vx_vsi_statfs(sb, buf);
 	}
 	return retval;

@@ -31,7 +31,7 @@
 #include <linux/writeback.h>
 #include <linux/buffer_head.h>
 #include <linux/mpage.h>
-#include <linux/vserver/tag.h>
+#include <linux/vs_tag.h>
 #include "ext2.h"
 #include "acl.h"
 #include "xip.h"

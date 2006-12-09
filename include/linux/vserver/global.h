@@ -5,4 +5,7 @@
 extern atomic_t vx_global_ctotal;
 extern atomic_t vx_global_cactive;
 
+extern atomic_t nx_global_ctotal;
+extern atomic_t nx_global_cactive;
+
 #endif /* _VX_GLOBAL_H */

@@ -232,9 +232,9 @@ int vx_schedule(struct task_struct *next, struct rq *rq, int cpu)
 
 	flags = vxi->vx_flags;
 
-	if (unlikely(vx_check_flags(flags , VXF_SCHED_PAUSE, 0)))
+	if (unlikely(vs_check_flags(flags , VXF_SCHED_PAUSE, 0)))
 		goto put_on_hold;
-	if (!vx_check_flags(flags , VXF_SCHED_HARD|VXF_SCHED_PRIO, 0))
+	if (!vs_check_flags(flags , VXF_SCHED_HARD|VXF_SCHED_PRIO, 0))
 		return 1;
 
 	sched_pc = &vx_per_cpu(vxi, sched_pc, cpu);
@@ -251,7 +251,7 @@ int vx_schedule(struct task_struct *next, struct rq *rq, int cpu)
 		&rq->norm_time, &rq->idle_time, delta_min);
 	vxm_tokens_recalc(sched_pc, rq, vxi, cpu);
 
-	if (!vx_check_flags(flags , VXF_SCHED_HARD, 0))
+	if (!vs_check_flags(flags , VXF_SCHED_HARD, 0))
 		return 1;
 
 	if (unlikely(ret < 0)) {

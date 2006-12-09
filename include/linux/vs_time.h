@@ -1,5 +1,5 @@
-#ifndef _VX_VS_TIME_H
-#define _VX_VS_TIME_H
+#ifndef _VS_TIME_H
+#define _VS_TIME_H
 
 
 /* time faking stuff */

@@ -22,7 +22,7 @@
 #include <linux/nfs3.h>
 #include <linux/nfs_fs.h>
 #include <linux/nfsacl.h>
-#include <linux/vserver/tag.h>
+#include <linux/vs_tag.h>
 #include "internal.h"
 
 #define NFSDBG_FACILITY		NFSDBG_XDR

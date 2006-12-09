@@ -1,7 +1,8 @@
-#ifndef _VX_VS_DLIMIT_H
-#define _VX_VS_DLIMIT_H
+#ifndef _VS_DLIMIT_H
+#define _VS_DLIMIT_H
 
 #include "vserver/dlimit.h"
+#include "vserver/base.h"
 #include "vserver/debug.h"
 
 
@@ -144,7 +145,7 @@ out:
 }
 
 static inline void __dl_adjust_block(struct super_block *sb, tag_t tag,
-	unsigned long *free_blocks, unsigned long *root_blocks,
+	unsigned long long *free_blocks, unsigned long long *root_blocks,
 	const char *_file, int _line)
 {
 	struct dl_info *dli;
@@ -163,7 +164,7 @@ static inline void __dl_adjust_block(struct super_block *sb, tag_t tag,
 	spin_unlock(&dli->dl_lock);
 
 	vxlprintk(VXD_CBIT(dlim, 2),
-		"ADJUST: %lld,%lld on %ld,%ld [mult=%d]",
+		"ADJUST: %lld,%lld on %lld,%lld [mult=%d]",
 		(long long)bfree, (long long)broot,
 		*free_blocks, *root_blocks, dli->dl_nrlmult,
 		_file, _line);

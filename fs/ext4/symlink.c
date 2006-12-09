@@ -40,6 +40,7 @@ struct inode_operations ext4_symlink_inode_operations = {
 	.listxattr	= ext4_listxattr,
 	.removexattr	= generic_removexattr,
 #endif
+	.sync_flags	= ext4_sync_flags,
 };
 
 struct inode_operations ext4_fast_symlink_inode_operations = {
@@ -51,4 +52,5 @@ struct inode_operations ext4_fast_symlink_inode_operations = {
 	.listxattr	= ext4_listxattr,
 	.removexattr	= generic_removexattr,
 #endif
+	.sync_flags	= ext4_sync_flags,
 };

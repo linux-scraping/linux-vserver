@@ -75,7 +75,7 @@ int install_page(struct mm_struct *mm, struct vm_area_struct *vma,
 	err = -ENOMEM;
 	if (page_mapcount(page) > INT_MAX/2)
 		goto unlock;
-	if (!vx_rsspages_avail(mm, 1))
+	if (!vx_rss_avail(mm, 1))
 		goto unlock;
 
 	if (pte_none(*pte) || !zap_pte(mm, vma, addr, pte))

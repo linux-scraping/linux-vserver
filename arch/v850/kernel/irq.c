@@ -23,7 +23,6 @@
 #include <linux/mm.h>
 #include <linux/random.h>
 #include <linux/seq_file.h>
-#include <linux/vs_context.h>
 
 #include <asm/system.h>
 
@@ -101,12 +100,8 @@ int show_interrupts(struct seq_file *p, void *v)
    interrupt.  */
 unsigned int handle_irq (int irq, struct pt_regs *regs)
 {
-	struct vx_info_save vxis;
-
 	irq_enter();
-	__enter_vx_admin(&vxis);
 	__do_IRQ(irq, regs);
-	__leave_vx_admin(&vxis);
 	irq_exit();
 	return 1;
 }

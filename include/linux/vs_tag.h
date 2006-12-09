@@ -1,7 +1,6 @@
-#ifndef _VX_VS_TAG_H
-#define _VX_VS_TAG_H
+#ifndef _VS_TAG_H
+#define _VS_TAG_H
 
-#include <linux/kernel.h>
 #include <linux/vserver/tag.h>
 
 /* check conditions */

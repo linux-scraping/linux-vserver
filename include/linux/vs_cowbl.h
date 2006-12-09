@@ -1,5 +1,5 @@
-#ifndef _VX_VS_COWBL_H
-#define _VX_VS_COWBL_H
+#ifndef _VS_COWBL_H
+#define _VS_COWBL_H
 
 #include <linux/fs.h>
 #include <linux/dcache.h>

@@ -79,7 +79,6 @@
 #include <linux/buffer_head.h>
 #include <linux/capability.h>
 #include <linux/quotaops.h>
-#include <linux/vserver/debug.h>
 
 #include <asm/uaccess.h>
 

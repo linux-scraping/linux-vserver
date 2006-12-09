@@ -37,7 +37,7 @@
 #include <linux/buffer_head.h>
 #include <linux/bio.h>
 #include <linux/smp_lock.h>
-#include <linux/vserver/tag.h>
+#include <linux/vs_tag.h>
 
 #include "namei.h"
 #include "xattr.h"

@@ -21,7 +21,6 @@
 #include <linux/sched.h>
 #include <linux/seq_file.h>
 #include <linux/kallsyms.h>
-#include <linux/vs_context.h>
 
 #include <asm/atomic.h>
 #include <asm/system.h>
@@ -98,14 +97,10 @@ unsigned long irq_hwmask[NR_IRQS];
  */
 asmlinkage unsigned int do_IRQ(unsigned int irq)
 {
-	struct vx_info_save vxis;
-
 	irq_enter();
 
-	__enter_vx_admin(&vxis);
 	__DO_IRQ_SMTC_HOOK();
 	__do_IRQ(irq);
-	__leave_vx_admin(&vxis);
 
 	irq_exit();
 

@@ -125,8 +125,12 @@
 #define OCFS2_NOATIME_FL	(0x00000080)	/* do not update atime */
 #define OCFS2_DIRSYNC_FL	(0x00010000)	/* dirsync behaviour (directories only) */
 
+#define OCFS2_BARRIER_FL	(0x04000000)	/* Barrier for chroot() */
+#define OCFS2_IUNLINK_FL	(0x08000000)	/* Immutable unlink */
+
 #define OCFS2_FL_VISIBLE	(0x000100FF)	/* User visible flags */
 #define OCFS2_FL_MODIFIABLE	(0x000100FF)	/* User modifiable flags */
+#define OCFS2_FL_MASK		(0x0F0100FF)
 
 /*
  * ioctl commands

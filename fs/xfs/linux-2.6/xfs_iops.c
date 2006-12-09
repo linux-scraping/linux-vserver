@@ -53,7 +53,7 @@
 #include <linux/xattr.h>
 #include <linux/namei.h>
 #include <linux/security.h>
-#include <linux/vserver/tag.h>
+#include <linux/vs_tag.h>
 
 /*
  * Get a XFS inode from a given vnode.

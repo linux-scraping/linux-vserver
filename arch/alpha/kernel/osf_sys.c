@@ -38,7 +38,6 @@
 #include <linux/uio.h>
 #include <linux/vfs.h>
 #include <linux/rcupdate.h>
-#include <linux/vs_cvirt.h>
 
 #include <asm/fpu.h>
 #include <asm/io.h>
@@ -444,7 +443,6 @@ osf_getdomainname(char __user *name, int namelen)
 {
 	unsigned len;
 	int i;
-	char *domainname;
 
 	if (!access_ok(VERIFY_WRITE, name, namelen))
 		return -EFAULT;

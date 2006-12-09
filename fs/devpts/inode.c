@@ -27,7 +27,7 @@ static int devpts_permission(struct inode *inode, int mask, struct nameidata *nd
 	int ret = -EACCES;
 
 	/* devpts is xid tagged */
-	if (vx_check((xid_t)inode->i_tag, VX_WATCH_P|VX_IDENT))
+	if (vx_check((xid_t)inode->i_tag, VS_WATCH_P|VS_IDENT))
 		ret = generic_permission(inode, mask, NULL);
 	return ret;
 }
@@ -108,7 +108,7 @@ static int devpts_remount(struct super_block *sb, int *flags, char *data)
 static int devpts_filter(struct dentry *de)
 {
 	/* devpts is xid tagged */
-	return vx_check((xid_t)de->d_inode->i_tag, VX_WATCH_P|VX_IDENT);
+	return vx_check((xid_t)de->d_inode->i_tag, VS_WATCH_P|VS_IDENT);
 }
 
 static int devpts_readdir(struct file * filp, void * dirent, filldir_t filldir)

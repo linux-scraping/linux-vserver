@@ -108,6 +108,7 @@
 #include <net/inet_common.h>
 #include <net/checksum.h>
 #include <net/xfrm.h>
+// #include <linux/vs_base.h>
 
 /*
  *	Snmp MIB for the UDP layer
@@ -641,10 +642,10 @@ int udp_sendmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
 			err = ip_find_src(nxi, &rt, &fl);
 			if (err)
 				goto out;
-			if (daddr == IPI_LOOPBACK && !vx_check(0, VX_ADMIN))
+			if (daddr == IPI_LOOPBACK && !vx_check(0, VS_ADMIN))
 				daddr = fl.fl4_dst = nxi->ipv4[0];
 #ifdef CONFIG_VSERVER_REMAP_SADDR
-			if (saddr == IPI_LOOPBACK && !vx_check(0, VX_ADMIN))
+			if (saddr == IPI_LOOPBACK && !vx_check(0, VS_ADMIN))
 				saddr = fl.fl4_src = nxi->ipv4[0];
 #endif
 		}
@@ -949,23 +950,32 @@ static int udp_encap_rcv(struct sock * sk, struct sk_buff *skb)
 	return 1; 
 #else
 	struct udp_sock *up = udp_sk(sk);
-  	struct udphdr *uh = skb->h.uh;
+  	struct udphdr *uh;
 	struct iphdr *iph;
 	int iphlen, len;
   
-	__u8 *udpdata = (__u8 *)uh + sizeof(struct udphdr);
-	__be32 *udpdata32 = (__be32 *)udpdata;
+	__u8 *udpdata;
+	__be32 *udpdata32;
 	__u16 encap_type = up->encap_type;
 
 	/* if we're overly short, let UDP handle it */
-	if (udpdata > skb->tail)
+	len = skb->len - sizeof(struct udphdr);
+	if (len <= 0)
 		return 1;
 
 	/* if this is not encapsulated socket, then just return now */
 	if (!encap_type)
 		return 1;
 
-	len = skb->tail - udpdata;
+	/* If this is a paged skb, make sure we pull up
+	 * whatever data we need to look at. */
+	if (!pskb_may_pull(skb, sizeof(struct udphdr) + min(len, 8)))
+		return 1;
+
+	/* Now we can get the pointers */
+	uh = skb->h.uh;
+	udpdata = (__u8 *)uh + sizeof(struct udphdr);
+	udpdata32 = (__be32 *)udpdata;
 
 	switch (encap_type) {
 	default:
@@ -1466,7 +1476,7 @@ static struct sock *udp_get_first(struct seq_file *seq)
 
 		sk_for_each(sk, node, &udp_hash[state->bucket]) {
 			if (sk->sk_family == state->family &&
-				vx_check(sk->sk_xid, VX_WATCH_P|VX_IDENT))
+				nx_check(sk->sk_nid, VS_WATCH_P|VS_IDENT))
 				goto found;
 		}
 	}
@@ -1484,7 +1494,7 @@ static struct sock *udp_get_next(struct seq_file *seq, struct sock *sk)
 try_again:
 		;
 	} while (sk && (sk->sk_family != state->family ||
-		!vx_check(sk->sk_xid, VX_WATCH_P|VX_IDENT)));
+		!nx_check(sk->sk_nid, VS_WATCH_P|VS_IDENT)));
 
 	if (!sk && ++state->bucket < UDP_HTABLE_SIZE) {
 		sk = sk_head(&udp_hash[state->bucket]);

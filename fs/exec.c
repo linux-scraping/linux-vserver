@@ -50,7 +50,6 @@
 #include <linux/cn_proc.h>
 #include <linux/audit.h>
 #include <linux/vs_memory.h>
-#include <linux/vs_cvirt.h>
 
 #include <asm/uaccess.h>
 #include <asm/mmu_context.h>

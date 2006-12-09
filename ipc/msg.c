@@ -905,7 +905,7 @@ static int sysvipc_msg_proc_show(struct seq_file *s, void *it)
 {
 	struct msg_queue *msq = it;
 
-	if (!vx_check(msq->q_perm.xid, VX_WATCH_P|VX_IDENT))
+	if (!vx_check(msq->q_perm.xid, VS_WATCH_P|VS_IDENT))
 		return 0;
 
 	return seq_printf(s,

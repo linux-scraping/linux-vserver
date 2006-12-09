@@ -17,6 +17,7 @@
 #include <linux/gfp.h>
 #include <linux/module.h>
 #include <linux/elf.h>
+#include <linux/vs_memory.h>
 
 /*
  * Should the kernel map a VDSO page into processes and pass its
@@ -120,7 +121,7 @@ int arch_setup_additional_pages(struct linux_binprm *bprm,
 
 	current->mm->context.vdso = (void *)addr;
 
-	mm->total_vm++;
+	vx_vmpages_inc(mm);
 up_fail:
 	up_write(&mm->mmap_sem);
 	return ret;

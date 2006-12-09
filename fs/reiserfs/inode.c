@@ -17,7 +17,7 @@
 #include <linux/writeback.h>
 #include <linux/quotaops.h>
 #include <linux/vs_dlimit.h>
-#include <linux/vserver/tag.h>
+#include <linux/vs_tag.h>
 
 static int reiserfs_commit_write(struct file *f, struct page *page,
 				 unsigned from, unsigned to);

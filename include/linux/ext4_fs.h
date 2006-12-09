@@ -189,11 +189,21 @@ struct ext4_group_desc
 #define EXT4_NOTAIL_FL			0x00008000 /* file tail should not be merged */
 #define EXT4_DIRSYNC_FL			0x00010000 /* dirsync behaviour (directories only) */
 #define EXT4_TOPDIR_FL			0x00020000 /* Top of directory hierarchies*/
-#define EXT4_RESERVED_FL		0x80000000 /* reserved for ext4 lib */
 #define EXT4_EXTENTS_FL			0x00080000 /* Inode uses extents */
+#define EXT4_BARRIER_FL			0x04000000 /* Barrier for chroot() */
+#define EXT4_IUNLINK_FL			0x08000000 /* Immutable unlink */
+#define EXT4_RESERVED_FL		0x80000000 /* reserved for ext4 lib */
 
+#ifdef CONFIG_VSERVER_LEGACY
+#define EXT4_FL_USER_VISIBLE		0x080BDFFF /* User visible flags */
+#define EXT4_FL_USER_MODIFIABLE		0x080380FF /* User modifiable flags */
+#else
 #define EXT4_FL_USER_VISIBLE		0x000BDFFF /* User visible flags */
 #define EXT4_FL_USER_MODIFIABLE		0x000380FF /* User modifiable flags */
+#endif
+#ifdef	CONFIG_VSERVER_LEGACY
+#define EXT4_IOC_SETTAG			FIOC_SETTAGJ
+#endif
 
 /*
  * Inode dynamic state flags
@@ -312,7 +322,8 @@ struct ext4_inode {
 			__le16	l_i_file_acl_high;
 			__le16	l_i_uid_high;	/* these 2 fields    */
 			__le16	l_i_gid_high;	/* were reserved2[0] */
-			__u32	l_i_reserved2;
+			__u16	l_i_tag;	/* Context Tag */
+			__u16	l_i_reserved2;
 		} linux2;
 		struct {
 			__u8	h_i_frag;	/* Fragment number */
@@ -344,6 +355,7 @@ struct ext4_inode {
 #define i_gid_low	i_gid
 #define i_uid_high	osd2.linux2.l_i_uid_high
 #define i_gid_high	osd2.linux2.l_i_gid_high
+#define i_raw_tag	osd2.linux2.l_i_tag
 #define i_reserved2	osd2.linux2.l_i_reserved2
 
 #elif defined(__GNU__)
@@ -400,6 +412,7 @@ struct ext4_inode {
 #define EXT4_MOUNT_USRQUOTA		0x100000 /* "old" user quota */
 #define EXT4_MOUNT_GRPQUOTA		0x200000 /* "old" group quota */
 #define EXT4_MOUNT_EXTENTS		0x400000 /* Extents support */
+#define EXT4_MOUNT_TAGGED		(1<<24) /* Enable Context Tags */
 
 /* Compatibility, for having both ext2_fs.h and ext4_fs.h included at once */
 #ifndef _LINUX_EXT2_FS_H
@@ -843,6 +856,7 @@ struct buffer_head * ext4_bread (handle_t *, struct inode *, int, int, int *);
 int ext4_get_blocks_handle(handle_t *handle, struct inode *inode,
 	sector_t iblock, unsigned long maxblocks, struct buffer_head *bh_result,
 	int create, int extend_disksize);
+extern int ext4_sync_flags(struct inode *inode);
 
 extern void ext4_read_inode (struct inode *);
 extern int  ext4_write_inode (struct inode *, int);

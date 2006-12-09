@@ -78,6 +78,7 @@
 #include <linux/seq_file.h>
 #include <linux/netfilter.h>
 #include <linux/netfilter_ipv4.h>
+// #include <linux/vs_base.h>
 
 struct hlist_head raw_v4_htable[RAWV4_HTABLE_SIZE];
 DEFINE_RWLOCK(raw_v4_lock);
@@ -335,7 +336,7 @@ static int raw_send_hdrinc(struct sock *sk, void *from, size_t length,
 	}
 
 	err = -EPERM;
-	if (!vx_check(0, VX_ADMIN) && !capable(CAP_NET_RAW)
+	if (!vx_check(0, VS_ADMIN) && !capable(CAP_NET_RAW)
 		&& (!addr_in_nx_info(sk->sk_nx_info, iph->saddr)))
 		goto error_free;
 
@@ -828,7 +829,7 @@ static struct sock *raw_get_first(struct seq_file *seq)
 
 		sk_for_each(sk, node, &raw_v4_htable[state->bucket])
 			if (sk->sk_family == PF_INET &&
-				vx_check(sk->sk_xid, VX_WATCH_P|VX_IDENT))
+				nx_check(sk->sk_nid, VS_WATCH_P|VS_IDENT))
 				goto found;
 	}
 	sk = NULL;
@@ -845,7 +846,7 @@ static struct sock *raw_get_next(struct seq_file *seq, struct sock *sk)
 try_again:
 		;
 	} while (sk && (sk->sk_family != PF_INET ||
-		!vx_check(sk->sk_xid, VX_WATCH_P|VX_IDENT)));
+		!nx_check(sk->sk_nid, VS_WATCH_P|VS_IDENT)));
 
 	if (!sk && ++state->bucket < RAWV4_HTABLE_SIZE) {
 		sk = sk_head(&raw_v4_htable[state->bucket]);

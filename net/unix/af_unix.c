@@ -117,7 +117,6 @@
 #include <net/checksum.h>
 #include <linux/security.h>
 #include <linux/vs_context.h>
-#include <linux/vs_network.h>
 #include <linux/vs_limit.h>
 
 int sysctl_unix_max_dgram_qlen __read_mostly = 10;
@@ -255,7 +254,7 @@ static struct sock *__unix_find_socket_byname(struct sockaddr_un *sunname,
 	sk_for_each(s, node, &unix_socket_table[hash ^ type]) {
 		struct unix_sock *u = unix_sk(s);
 
-		if (!vx_check(s->sk_xid, VX_WATCH_P|VX_IDENT))
+		if (!nx_check(s->sk_nid, VS_WATCH_P|VS_IDENT))
 			continue;
 		if (u->addr->len == len &&
 		    !memcmp(u->addr->name, sunname, len))
