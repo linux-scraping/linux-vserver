@@ -124,33 +124,47 @@ void __vs_merge_fs(struct fs_struct **ptr, struct fs_struct *fs)
 
 int vx_enter_space(struct vx_info *vxi, unsigned long mask)
 {
-	struct fs_struct *fs;
+	struct fs_struct *fs = NULL;
 	struct nsproxy *nsproxy;
 
 	if (vx_info_flags(vxi, VXF_INFO_PRIVATE, 0))
 		return -EACCES;
 
-	nsproxy = vxi->vx_nsproxy;
-	if (!nsproxy)
+	if (!mask)
+		mask = vxi->vx_nsmask;
+
+	if ((mask & vxi->vx_nsmask) != mask)
 		return -EINVAL;
 
-	fs = copy_fs_struct(vxi->vx_fs);
-	if (!fs)
-		return -ENOMEM;
+	nsproxy = vxi->vx_nsproxy;
+	if ((mask & CLONE_FS)) {
+		BUG_ON(!vxi->vx_fs);
+		fs = copy_fs_struct(vxi->vx_fs);
+		if (!fs)
+			return -ENOMEM;
+	}
 
 	task_lock(current);
-	__vs_merge_nsproxy(&current->nsproxy, nsproxy, mask);
-	if (!mask || (mask & CLONE_FS))
+	if (nsproxy)
+		__vs_merge_nsproxy(&current->nsproxy, nsproxy, mask);
+	if (fs)
 		__vs_merge_fs(&current->fs, fs);
 	task_unlock(current);
 	return 0;
 }
 
+
 int vx_set_space(struct vx_info *vxi, unsigned long mask)
 {
-	struct fs_struct *fs_copy, *fs;
+	struct fs_struct *fs, *fs_copy = NULL;
 	struct nsproxy *nsproxy;
 	int ret;
+
+	if (!mask)
+		mask = space_mask.mask;
+
+	if ((mask & space_mask.mask) != mask)
+		return -EINVAL;
 
 	task_lock(current);
 	fs = current->fs;
@@ -160,13 +174,17 @@ int vx_set_space(struct vx_info *vxi, unsigned long mask)
 	task_unlock(current);
 
 	ret = -ENOMEM;
-	fs_copy = copy_fs_struct(fs);
-	if (!fs_copy)
-		goto out_put;
+	if ((mask & CLONE_FS)) {
+		fs_copy = copy_fs_struct(fs);
+		if (!fs_copy)
+			goto out_put;
+	}
 
-	__vs_merge_nsproxy(&vxi->vx_nsproxy, nsproxy, mask);
-	if (!mask || (mask & CLONE_FS))
+	if (nsproxy)
+		__vs_merge_nsproxy(&vxi->vx_nsproxy, nsproxy, mask);
+	if (fs_copy)
 		__vs_merge_fs(&vxi->vx_fs, fs_copy);
+	vxi->vx_nsmask |= mask;
 
 	ret = 0;
 out_put:

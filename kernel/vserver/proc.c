@@ -60,12 +60,12 @@ static int proc_vci(char *buffer)
 		);
 }
 
-static int proc_virtual_info(struct vx_info *vxi, char *buffer)
+static int proc_virtual_info(char *buffer)
 {
 	return proc_vci(buffer);
 }
 
-static int proc_virtual_status(struct vx_info *vxi, char *buffer)
+static int proc_virtual_status(char *buffer)
 {
 	return sprintf(buffer,
 		"#CTotal:\t%d\n"
@@ -101,12 +101,14 @@ int proc_vxi_status (struct vx_info *vxi, char *buffer)
 		"Flags:\t%016llx\n"
 		"BCaps:\t%016llx\n"
 		"CCaps:\t%016llx\n"
+		"Spaces:\t%08lx\n"
 //		"Ticks:\t%d\n"
 		,atomic_read(&vxi->vx_usecnt)
 		,atomic_read(&vxi->vx_tasks)
 		,(unsigned long long)vxi->vx_flags
 		,(unsigned long long)vxi->vx_bcaps
 		,(unsigned long long)vxi->vx_ccaps
+		,vxi->vx_nsmask
 //		,atomic_read(&vxi->limit.ticks)
 		);
 	return length;
@@ -155,12 +157,12 @@ int proc_vxi_cacct (struct vx_info *vxi, char *buffer)
 }
 
 
-static int proc_virtnet_info(struct nx_info *nxi, char *buffer)
+static int proc_virtnet_info(char *buffer)
 {
 	return proc_vci(buffer);
 }
 
-static int proc_virtnet_status(struct nx_info *nxi, char *buffer)
+static int proc_virtnet_status(char *buffer)
 {
 	return sprintf(buffer,
 		"#CTotal:\t%d\n"
@@ -353,6 +355,33 @@ static int proc_nid_revalidate(struct dentry * dentry, struct nameidata *nd)
 
 #define PROC_BLOCK_SIZE (PAGE_SIZE - 1024)
 
+static ssize_t proc_vs_info_read(struct file * file, char __user * buf,
+			  size_t count, loff_t *ppos)
+{
+	struct inode *inode = file->f_dentry->d_inode;
+	unsigned long page;
+	ssize_t length = 0;
+
+	if (count > PROC_BLOCK_SIZE)
+		count = PROC_BLOCK_SIZE;
+
+	/* fade that out as soon as stable */
+	WARN_ON(PROC_I(inode)->fd);
+
+	if (!(page = __get_free_page(GFP_KERNEL)))
+		return -ENOMEM;
+
+	BUG_ON(!PROC_I(inode)->op.proc_vs_read);
+	length = PROC_I(inode)->op.proc_vs_read((char*)page);
+
+	if (length >= 0)
+		length = simple_read_from_buffer(buf, count, ppos,
+			(char *)page, length);
+
+	free_page(page);
+	return length;
+}
+
 static ssize_t proc_vx_info_read(struct file * file, char __user * buf,
 			  size_t count, loff_t *ppos)
 {
@@ -365,12 +394,11 @@ static ssize_t proc_vx_info_read(struct file * file, char __user * buf,
 	if (count > PROC_BLOCK_SIZE)
 		count = PROC_BLOCK_SIZE;
 
-	/* context entry? */
-	if (xid) {
-		vxi = lookup_vx_info(xid);
-		if (!vxi)
-			goto out;
-	}
+	/* fade that out as soon as stable */
+	WARN_ON(!xid);
+	vxi = lookup_vx_info(xid);
+	if (!vxi)
+		goto out;
 
 	length = -ENOMEM;
 	if (!(page = __get_free_page(GFP_KERNEL)))
@@ -402,12 +430,11 @@ static ssize_t proc_nx_info_read(struct file * file, char __user * buf,
 	if (count > PROC_BLOCK_SIZE)
 		count = PROC_BLOCK_SIZE;
 
-	/* context entry? */
-	if (nid) {
-		nxi = lookup_nx_info(nid);
-		if (!nxi)
-			goto out;
-	}
+	/* fade that out as soon as stable */
+	WARN_ON(!nid);
+	nxi = lookup_nx_info(nid);
+	if (!nxi)
+		goto out;
 
 	length = -ENOMEM;
 	if (!(page = __get_free_page(GFP_KERNEL)))
@@ -447,6 +474,11 @@ out:
 		&proc_##OTYPE##_inode_operations,	\
 		&proc_##OTYPE##_file_operations, { } )
 
+#define INF(NAME, MODE, OTYPE)				\
+	NOD(NAME, (S_IFREG|(MODE)), NULL,		\
+		&proc_vs_info_file_operations,		\
+		{ .proc_vs_read = &proc_##OTYPE } )
+
 #define VINF(NAME, MODE, OTYPE)				\
 	NOD(NAME, (S_IFREG|(MODE)), NULL,		\
 		&proc_vx_info_file_operations,		\
@@ -458,6 +490,9 @@ out:
 		{ .proc_nxi_read = &proc_##OTYPE } )
 
 
+static struct file_operations proc_vs_info_file_operations = {
+	.read =		proc_vs_info_read,
+};
 
 static struct file_operations proc_vx_info_file_operations = {
 	.read =		proc_vx_info_read,
@@ -668,8 +703,8 @@ static struct inode_operations proc_xid_inode_operations = {
 };
 
 static struct vs_entry vx_virtual_stuff[] = {
-	VINF("info",	S_IRUGO, virtual_info),
-	VINF("status",	S_IRUGO, virtual_status),
+	INF("info",	S_IRUGO, virtual_info),
+	INF("status",	S_IRUGO, virtual_status),
 	DIR(NULL,	S_IRUGO|S_IXUGO, xid),
 };
 
@@ -710,8 +745,8 @@ static struct inode_operations proc_nid_inode_operations = {
 };
 
 static struct vs_entry nx_virtnet_stuff[] = {
-	NINF("info",	S_IRUGO, virtnet_info),
-	NINF("status",	S_IRUGO, virtnet_status),
+	INF("info",	S_IRUGO, virtnet_info),
+	INF("status",	S_IRUGO, virtnet_status),
 	DIR(NULL,	S_IRUGO|S_IXUGO, nid),
 };
 

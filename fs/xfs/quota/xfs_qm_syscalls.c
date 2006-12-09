@@ -214,7 +214,7 @@ xfs_qm_scall_quotaoff(
 	xfs_qoff_logitem_t	*qoffstart;
 	int			nculprits;
 
-	if (!force && !capable(CAP_SYS_ADMIN))
+	if (!force && !vx_capable(CAP_SYS_ADMIN, VXC_QUOTA_CTL))
 		return XFS_ERROR(EPERM);
 	/*
 	 * No file system can have quotas enabled on disk but not in core.
