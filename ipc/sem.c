@@ -1412,7 +1412,7 @@ static int sysvipc_sem_proc_show(struct seq_file *s, void *it)
 {
 	struct sem_array *sma = it;
 
-	if (!vx_check(sma->sem_perm.xid, VX_WATCH_P|VX_IDENT))
+	if (!vx_check(sma->sem_perm.xid, VS_WATCH_P|VS_IDENT))
 		return 0;
 
 	return seq_printf(s,

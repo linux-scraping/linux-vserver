@@ -34,7 +34,7 @@ static inline struct sock *next_unix_socket(int *i, struct sock *s)
 			s = sk_next(s);
 		if (!s)
 			s = next_unix_socket_table(i);
-	} while (s && !vx_check(s->sk_xid, VX_WATCH_P|VX_IDENT));
+	} while (s && !nx_check(s->sk_nid, VS_WATCH_P|VS_IDENT));
 	return s;
 }
 

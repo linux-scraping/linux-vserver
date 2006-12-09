@@ -55,9 +55,8 @@
 #include <asm/tlb.h>
 
 #include <asm/unistd.h>
-#include <linux/vs_context.h>
-#include <linux/vs_cvirt.h>
 #include <linux/vs_sched.h>
+#include <linux/vs_cvirt.h>
 
 /*
  * Convert user-nice values [ -20 ... 0 ... 19 ]

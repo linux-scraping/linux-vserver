@@ -24,6 +24,8 @@
 #include <linux/random.h>
 #include <linux/bitops.h>
 #include <linux/blkdev.h>
+#include <linux/vs_dlimit.h>
+#include <linux/vs_tag.h>
 #include <asm/byteorder.h>
 
 #include "xattr.h"
@@ -127,6 +129,7 @@ void ext4_free_inode (handle_t *handle, struct inode * inode)
 	ext4_xattr_delete_inode(handle, inode);
 	DQUOT_FREE_INODE(inode);
 	DQUOT_DROP(inode);
+	DLIMIT_FREE_INODE(inode);
 
 	is_directory = S_ISDIR(inode->i_mode);
 
@@ -448,6 +451,12 @@ struct inode *ext4_new_inode(handle_t *handle, struct inode * dir, int mode)
 	inode = new_inode(sb);
 	if (!inode)
 		return ERR_PTR(-ENOMEM);
+
+	inode->i_tag = dx_current_fstag(sb);
+	if (DLIMIT_ALLOC_INODE(inode)) {
+		err = -ENOSPC;
+		goto out_dlimit;
+	}
 	ei = EXT4_I(inode);
 
 	sbi = EXT4_SB(sb);
@@ -569,7 +578,8 @@ got:
 	ei->i_dir_start_lookup = 0;
 	ei->i_disksize = 0;
 
-	ei->i_flags = EXT4_I(dir)->i_flags & ~EXT4_INDEX_FL;
+	ei->i_flags = EXT4_I(dir)->i_flags &
+		~(EXT4_INDEX_FL|EXT4_IUNLINK_FL|EXT4_BARRIER_FL);
 	if (S_ISLNK(mode))
 		ei->i_flags &= ~(EXT4_IMMUTABLE_FL|EXT4_APPEND_FL);
 	/* dirsync only applies to directories */
@@ -635,6 +645,8 @@ got:
 fail:
 	ext4_std_error(sb, err);
 out:
+	DLIMIT_FREE_INODE(inode);
+out_dlimit:
 	iput(inode);
 	ret = ERR_PTR(err);
 really_out:
@@ -646,6 +658,7 @@ fail_free_drop:
 
 fail_drop:
 	DQUOT_DROP(inode);
+	DLIMIT_FREE_INODE(inode);
 	inode->i_flags |= S_NOQUOTA;
 	inode->i_nlink = 0;
 	iput(inode);

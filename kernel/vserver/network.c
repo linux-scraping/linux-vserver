@@ -19,7 +19,12 @@
 #include <net/tcp.h>
 
 #include <asm/errno.h>
+#include <linux/vserver/base.h>
 #include <linux/vserver/network_cmd.h>
+
+
+atomic_t nx_global_ctotal	= ATOMIC_INIT(0);
+atomic_t nx_global_cactive	= ATOMIC_INIT(0);
 
 
 /*	__alloc_nx_info()
@@ -51,6 +56,7 @@ static struct nx_info *__alloc_nx_info(nid_t nid)
 
 	vxdprintk(VXD_CBIT(nid, 0),
 		"alloc_nx_info(%d) = %p", nid, new);
+	atomic_inc(&nx_global_ctotal);
 	return new;
 }
 
@@ -71,6 +77,7 @@ static void __dealloc_nx_info(struct nx_info *nxi)
 
 	nxi->nx_state |= NXS_RELEASED;
 	kfree(nxi);
+	atomic_dec(&nx_global_ctotal);
 }
 
 static void __shutdown_nx_info(struct nx_info *nxi)
@@ -131,6 +138,7 @@ static inline void __hash_nx_info(struct nx_info *nxi)
 	nxi->nx_state |= NXS_HASHED;
 	head = &nx_info_hash[__hashval(nxi->nx_id)];
 	hlist_add_head(&nxi->nx_hlist, head);
+	atomic_inc(&nx_global_cactive);
 }
 
 /*	__unhash_nx_info()
@@ -149,6 +157,7 @@ static inline void __unhash_nx_info(struct nx_info *nxi)
 
 	nxi->nx_state &= ~NXS_HASHED;
 	hlist_del(&nxi->nx_hlist);
+	atomic_dec(&nx_global_cactive);
 }
 
 
@@ -334,7 +343,7 @@ int get_nid_list(int index, unsigned int *nids, int size)
 	int hindex, nr_nids = 0;
 
 	/* only show current and children */
-	if (!nx_check(0, VX_ADMIN|VX_WATCH)) {
+	if (!nx_check(0, VS_ADMIN|VS_WATCH)) {
 		if (index > 0)
 			return 0;
 		nids[nr_nids] = nx_current_nid();
@@ -387,7 +396,8 @@ int nx_migrate_task(struct task_struct *p, struct nx_info *nxi)
 		atomic_read(&nxi->nx_usecnt),
 		atomic_read(&nxi->nx_tasks));
 
-	if (nx_info_flags(nxi, NXF_INFO_LOCK, 0))
+	if (nx_info_flags(nxi, NXF_INFO_PRIVATE, 0) &&
+		!nx_info_flags(nxi, NXF_STATE_SETUP, 0))
 		return -EACCES;
 
 	/* maybe disallow this completely? */
@@ -409,6 +419,7 @@ int nx_migrate_task(struct task_struct *p, struct nx_info *nxi)
 
 	if (old_nxi)
 		release_nx_info(old_nxi, p);
+	ret = 0;
 out:
 	put_nx_info(old_nxi);
 	return ret;
@@ -546,7 +557,7 @@ int vc_task_nid(uint32_t id, void __user *data)
 	if (id) {
 		struct task_struct *tsk;
 
-		if (!vx_check(0, VX_ADMIN|VX_WATCH))
+		if (!vx_check(0, VS_ADMIN|VS_WATCH))
 			return -EPERM;
 
 		read_lock(&tasklist_lock);
@@ -583,7 +594,7 @@ int vc_net_create(uint32_t nid, void __user *data)
 	if (data && copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
-	if ((nid > MAX_S_CONTEXT) && (nid != VX_DYNAMIC_ID))
+	if ((nid > MAX_S_CONTEXT) && (nid != NX_DYNAMIC_ID))
 		return -EINVAL;
 	if (nid < 2)
 		return -EINVAL;
@@ -648,8 +659,8 @@ int vc_net_add(struct nx_info *nxi, void __user *data)
 		index = 0;
 		while ((index < vc_data.count) &&
 			((pos = nxi->nbipv4) < NB_IPV4ROOT)) {
-			nxi->ipv4[pos] = vc_data.ip[index];
-			nxi->mask[pos] = vc_data.mask[index];
+			nxi->ipv4[pos] = vc_data.ip[index].s_addr;
+			nxi->mask[pos] = vc_data.mask[index].s_addr;
 			index++;
 			nxi->nbipv4++;
 		}
@@ -657,7 +668,7 @@ int vc_net_add(struct nx_info *nxi, void __user *data)
 		break;
 
 	case NXA_TYPE_IPV4|NXA_MOD_BCAST:
-		nxi->v4_bcast = vc_data.ip[0];
+		nxi->v4_bcast = vc_data.ip[0].s_addr;
 		ret = 1;
 		break;
 
@@ -693,7 +704,7 @@ int vc_get_nflags(struct nx_info *nxi, void __user *data)
 	vc_data.flagword = nxi->nx_flags;
 
 	/* special STATE flag handling */
-	vc_data.mask = vx_mask_flags(~0UL, nxi->nx_flags, NXF_ONE_TIME);
+	vc_data.mask = vs_mask_flags(~0UL, nxi->nx_flags, NXF_ONE_TIME);
 
 	if (copy_to_user (data, &vc_data, sizeof(vc_data)))
 		return -EFAULT;
@@ -709,10 +720,10 @@ int vc_set_nflags(struct nx_info *nxi, void __user *data)
 		return -EFAULT;
 
 	/* special STATE flag handling */
-	mask = vx_mask_mask(vc_data.mask, nxi->nx_flags, NXF_ONE_TIME);
+	mask = vs_mask_mask(vc_data.mask, nxi->nx_flags, NXF_ONE_TIME);
 	trigger = (mask & nxi->nx_flags) ^ (mask & vc_data.flagword);
 
-	nxi->nx_flags = vx_mask_flags(nxi->nx_flags,
+	nxi->nx_flags = vs_mask_flags(nxi->nx_flags,
 		vc_data.flagword, mask);
 	if (trigger & NXF_PERSISTENT)
 		nx_update_persistent(nxi);
@@ -739,7 +750,7 @@ int vc_set_ncaps(struct nx_info *nxi, void __user *data)
 	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
-	nxi->nx_ncaps = vx_mask_flags(nxi->nx_ncaps,
+	nxi->nx_ncaps = vs_mask_flags(nxi->nx_ncaps,
 		vc_data.ncaps, vc_data.cmask);
 	return 0;
 }

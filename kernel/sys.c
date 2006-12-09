@@ -34,7 +34,6 @@
 #include <linux/compat.h>
 #include <linux/syscalls.h>
 #include <linux/kprobes.h>
-#include <linux/vs_cvirt.h>
 #include <linux/vs_pid.h>
 
 #include <asm/uaccess.h>
@@ -833,7 +832,7 @@ asmlinkage long sys_reboot(int magic1, int magic2, unsigned int cmd, void __user
 	if ((cmd == LINUX_REBOOT_CMD_POWER_OFF) && !pm_power_off)
 		cmd = LINUX_REBOOT_CMD_HALT;
 
-	if (!vx_check(0, VX_ADMIN|VX_WATCH))
+	if (!vx_check(0, VS_ADMIN|VS_WATCH))
 		return vs_reboot(cmd, arg);
 
 	lock_kernel();

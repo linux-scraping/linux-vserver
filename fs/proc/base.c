@@ -445,7 +445,8 @@ static int mountstats_open(struct inode *inode, struct file *file)
 
 		if (task) {
 			task_lock(task);
-			namespace = task->nsproxy->namespace;
+			if (task->nsproxy)
+				namespace = task->nsproxy->namespace;
 			if (namespace)
 				get_namespace(namespace);
 			task_unlock(task);
@@ -1030,9 +1031,7 @@ static int pid_revalidate(struct dentry *dentry, struct nameidata *nd)
 	int ret = 0;
 
 	if (task) {
-		int pid = (inode->i_ino >> 16) & 0xFFFF;
-
-		if (!proc_pid_visible(task, pid))
+		if (!vx_proc_task_visible(task))
 			goto out_put;
 
 		ret = 1;
@@ -1728,7 +1727,7 @@ out_iput:
 static struct dentry *proc_base_lookup(struct inode *dir, struct dentry *dentry)
 {
 	struct dentry *error;
-	struct task_struct *task = get_proc_task(dir);
+	struct task_struct *task = get_proc_task_real(dir);
 	struct pid_entry *p, *last;
 
 	error = ERR_PTR(-ENOENT);
@@ -1951,7 +1950,7 @@ struct dentry *proc_pid_lookup(struct inode *dir, struct dentry * dentry, struct
 		goto out;
 
 	rcu_read_lock();
-	task = find_proc_task_by_pid(tgid);
+	task = vx_find_proc_task_by_pid(tgid);
 	if (task)
 		get_task_struct(task);
 	rcu_read_unlock();
@@ -2015,7 +2014,7 @@ static int proc_pid_fill_cache(struct file *filp, void *dirent, filldir_t filldi
 int proc_pid_readdir(struct file * filp, void * dirent, filldir_t filldir)
 {
 	unsigned int nr = filp->f_pos - FIRST_PROCESS_ENTRY;
-	struct task_struct *reaper = get_proc_task(filp->f_dentry->d_inode);
+	struct task_struct *reaper = get_proc_task_real(filp->f_dentry->d_inode);
 	struct task_struct *task;
 	int tgid;
 
@@ -2034,7 +2033,10 @@ int proc_pid_readdir(struct file * filp, void * dirent, filldir_t filldir)
 	     put_task_struct(task), task = next_tgid(tgid + 1)) {
 		tgid = task->pid;
 		filp->f_pos = tgid + TGID_OFFSET;
-		if (proc_pid_fill_cache(filp, dirent, filldir, task, tgid) < 0) {
+		if (!vx_proc_task_visible(task))
+			continue;
+		if (proc_pid_fill_cache(filp, dirent, filldir, task,
+			vx_map_tgid(tgid)) < 0) {
 			put_task_struct(task);
 			goto out;
 		}
@@ -2159,7 +2161,7 @@ static struct dentry *proc_task_lookup(struct inode *dir, struct dentry * dentry
 		goto out;
 
 	rcu_read_lock();
-	task = find_proc_task_by_pid(tid);
+	task = vx_find_proc_task_by_pid(tid);
 	if (task)
 		get_task_struct(task);
 	rcu_read_unlock();
@@ -2197,7 +2199,7 @@ static struct task_struct *first_tid(struct task_struct *leader,
 	rcu_read_lock();
 	/* Attempt to start with the pid of a thread */
 	if (tid && (nr > 0)) {
-		pos = find_proc_task_by_pid(tid);
+		pos = find_task_by_pid(tid);
 		if (pos && (pos->group_leader == leader))
 			goto found;
 	}
@@ -2295,8 +2297,8 @@ static int proc_task_readdir(struct file * filp, void * dirent, filldir_t filldi
 	     task;
 	     task = next_tid(task), pos++) {
 		tid = vx_map_pid(task->pid);
-		/* FIXME: should go away now! */
-		if (!proc_pid_visible(task, tid))
+		/* FIXME: could go away now! */
+		if (!vx_proc_task_visible(task))
 			continue;
 		if (proc_task_fill_cache(filp, dirent, filldir, task, tid) < 0) {
 			/* returning this tgid failed, save it as the first

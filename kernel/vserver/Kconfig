@@ -259,6 +259,8 @@ endmenu
 config	VSERVER
 	bool
 	default y
+	select UTS_NS
+	select IPC_NS
 
 config	VSERVER_SECURITY
 	bool

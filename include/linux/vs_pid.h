@@ -1,7 +1,8 @@
-#ifndef _VX_VS_PID_H
-#define _VX_VS_PID_H
+#ifndef _VS_PID_H
+#define _VS_PID_H
 
-#include "vs_base.h"
+#include "vserver/base.h"
+#include "vserver/context.h"
 #include "vserver/debug.h"
 
 
@@ -57,13 +58,13 @@ static inline int __vx_info_rmap_pid(struct vx_info *vxi, int pid,
 #define VXF_FAKE_INIT	(VXF_INFO_INIT|VXF_STATE_INIT)
 
 static inline
-int proc_pid_visible(struct task_struct *task, int pid)
+int vx_proc_task_visible(struct task_struct *task)
 {
-	if ((pid == 1) &&
+	if ((task->pid == 1) &&
 		!vx_flags(VXF_FAKE_INIT, VXF_FAKE_INIT))
 		/* show a blend through init */
 		goto visible;
-	if (vx_check(vx_task_xid(task), VX_WATCH|VX_IDENT))
+	if (vx_check(vx_task_xid(task), VS_WATCH|VS_IDENT))
 		goto visible;
 	return 0;
 visible:
@@ -71,13 +72,13 @@ visible:
 }
 
 static inline
-struct task_struct *find_proc_task_by_pid(int pid)
+struct task_struct *vx_find_proc_task_by_pid(int pid)
 {
 	struct task_struct *task = find_task_by_pid(pid);
 
-	if (task && !proc_pid_visible(task, pid)) {
+	if (task && !vx_proc_task_visible(task)) {
 		vxdprintk(VXD_CBIT(misc, 6),
-			"dropping task %p[#%u,%u] for %p[#%u,%u]",
+			"dropping task (find) %p[#%u,%u] for %p[#%u,%u]",
 			task, task->xid, task->pid,
 			current, current->xid, current->pid);
 		task = NULL;
@@ -90,9 +91,9 @@ struct task_struct *vx_get_proc_task(struct inode *inode, struct pid *pid)
 {
 	struct task_struct *task = get_pid_task(pid, PIDTYPE_PID);
 
-	if (task && !proc_pid_visible(task, pid->nr)) {
+	if (task && !vx_proc_task_visible(task)) {
 		vxdprintk(VXD_CBIT(misc, 6),
-			"dropping task %p[#%u,%u] for %p[#%u,%u]",
+			"dropping task (get) %p[#%u,%u] for %p[#%u,%u]",
 			task, task->xid, task->pid,
 			current, current->xid, current->pid);
 		put_task_struct(task);

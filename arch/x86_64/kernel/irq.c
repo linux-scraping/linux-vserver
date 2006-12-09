@@ -15,7 +15,6 @@
 #include <linux/seq_file.h>
 #include <linux/module.h>
 #include <linux/delay.h>
-#include <linux/vs_context.h>
 #include <asm/uaccess.h>
 #include <asm/io_apic.h>
 #include <asm/idle.h>
@@ -106,7 +105,6 @@ skip:
 asmlinkage unsigned int do_IRQ(struct pt_regs *regs)
 {
 	struct pt_regs *old_regs = set_irq_regs(regs);
-	struct vx_info_save vxis;
 
 	/* high bit used in ret_from_ code  */
 	unsigned vector = ~regs->orig_rax;
@@ -120,14 +118,11 @@ asmlinkage unsigned int do_IRQ(struct pt_regs *regs)
 	stack_overflow_check(regs);
 #endif
 
-	__enter_vx_admin(&vxis);
 	if (likely(irq < NR_IRQS))
 		generic_handle_irq(irq);
 	else
 		printk(KERN_EMERG "%s: %d.%d No irq handler for vector\n",
 			__func__, smp_processor_id(), vector);
-	__leave_vx_admin(&vxis);
-
 	irq_exit();
 
 	set_irq_regs(old_regs);

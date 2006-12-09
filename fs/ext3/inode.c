@@ -37,7 +37,7 @@
 #include <linux/mpage.h>
 #include <linux/uio.h>
 #include <linux/bio.h>
-#include <linux/vserver/tag.h>
+#include <linux/vs_tag.h>
 #include "xattr.h"
 #include "acl.h"
 

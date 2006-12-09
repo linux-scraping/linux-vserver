@@ -24,7 +24,6 @@
 #include <linux/vs_context.h>
 #include <linux/vs_network.h>
 #include <linux/vserver/switch.h>
-#include <linux/vserver/debug.h>
 
 static inline
 int vc_get_version(uint32_t id)
@@ -54,7 +53,7 @@ int vc_get_vci(uint32_t id)
 #include <linux/vserver/inode_cmd.h>
 #include <linux/vserver/dlimit_cmd.h>
 #include <linux/vserver/signal_cmd.h>
-#include <linux/vserver/namespace_cmd.h>
+#include <linux/vserver/space_cmd.h>
 
 #include <linux/vserver/legacy.h>
 #include <linux/vserver/inode.h>
@@ -92,10 +91,13 @@ long do_vcmd(uint32_t cmd, uint32_t id,
 	case VCMD_nx_info:
 		return vc_nx_info(nxi, data);
 
-	case VCMD_set_namespace_v0:
+	case VCMD_set_space_v0:
 	/* this is version 1 */
-	case VCMD_set_namespace:
-		return vc_set_namespace(vxi, data);
+	case VCMD_set_space:
+		return vc_set_space(vxi, data);
+
+	case VCMD_get_space_mask:
+		return vc_get_space_mask(vxi, data);
 
 #ifdef	CONFIG_IA32_EMULATION
 	case VCMD_get_rlimit:
@@ -192,8 +194,11 @@ long do_vcmd(uint32_t cmd, uint32_t id,
 	case VCMD_set_iattr:
 		return __COMPAT(vc_set_iattr, id, data, compat);
 
-	case VCMD_enter_namespace:
-		return vc_enter_namespace(vxi, data);
+	case VCMD_enter_space_v0:
+		return vc_enter_space(vxi, NULL);
+	/* this is version 1 */
+	case VCMD_enter_space:
+		return vc_enter_space(vxi, data);
 
 	case VCMD_ctx_create_v0:
 		return vc_ctx_create(id, NULL);
@@ -271,6 +276,7 @@ long do_vserver(uint32_t cmd, uint32_t id, void __user *data, int compat)
 	__VCMD(get_version,	 0, VCA_NONE,	0);
 	__VCMD(get_vci,		 0, VCA_NONE,	0);
 	__VCMD(get_rlimit_mask,	 0, VCA_NONE,	0);
+	__VCMD(get_space_mask,	 0, VCA_NONE,   0);
 
 	/* info commands */
 	__VCMD(task_xid,	 2, VCA_NONE,	0);
@@ -302,7 +308,8 @@ long do_vserver(uint32_t cmd, uint32_t id, void __user *data, int compat)
 	__VCMD(ctx_create,	 5, VCA_NONE,	0);
 	__VCMD(ctx_migrate_v0,	 5, VCA_VXI,	VCF_ADMIN);
 	__VCMD(ctx_migrate,	 5, VCA_VXI,	VCF_ADMIN);
-	__VCMD(enter_namespace,	 5, VCA_VXI,	VCF_ADMIN);
+	__VCMD(enter_space_v0,	 5, VCA_VXI,	VCF_ADMIN);
+	__VCMD(enter_space,	 5, VCA_VXI,	VCF_ADMIN);
 
 	__VCMD(net_create_v0,	 5, VCA_NONE,	0);
 	__VCMD(net_create,	 5, VCA_NONE,	0);
@@ -310,8 +317,8 @@ long do_vserver(uint32_t cmd, uint32_t id, void __user *data, int compat)
 
 	/* higher admin commands */
 	__VCMD(ctx_kill,	 6, VCA_VXI,	VCF_ARES);
-	__VCMD(set_namespace_v0, 7, VCA_VXI,	VCF_ARES|VCF_SETUP);
-	__VCMD(set_namespace,	 7, VCA_VXI,	VCF_ARES|VCF_SETUP);
+	__VCMD(set_space_v0,	 7, VCA_VXI,	VCF_ARES|VCF_SETUP);
+	__VCMD(set_space,	 7, VCA_VXI,	VCF_ARES|VCF_SETUP);
 
 	__VCMD(set_ccaps_v0,	 7, VCA_VXI,	VCF_ARES|VCF_SETUP);
 	__VCMD(set_ccaps,	 7, VCA_VXI,	VCF_ARES|VCF_SETUP);
@@ -395,7 +402,7 @@ long do_vserver(uint32_t cmd, uint32_t id, void __user *data, int compat)
 	case VCMD_set_cflags:
 	case VCMD_set_ccaps_v0:
 		ret = 0;
-		if (vx_check(0, VX_WATCH))
+		if (vx_check(0, VS_WATCH))
 			goto out;
 		break;
 
@@ -412,7 +419,7 @@ long do_vserver(uint32_t cmd, uint32_t id, void __user *data, int compat)
 		break;
 
 	/* legacy special casing */
-	case VCMD_set_namespace_v0:
+	case VCMD_set_space_v0:
 		id = -1;
 		break;
 	}
@@ -422,7 +429,7 @@ long do_vserver(uint32_t cmd, uint32_t id, void __user *data, int compat)
 
 	/* admin type vcmds require admin ... */
 	if (flags & VCF_ADMIN)
-		permit = vx_check(0, VX_ADMIN) ? 1 : 0;
+		permit = vx_check(0, VS_ADMIN) ? 1 : 0;
 
 	/* ... but setup type vcmds override that */
 	if (!permit && (flags & VCF_SETUP))

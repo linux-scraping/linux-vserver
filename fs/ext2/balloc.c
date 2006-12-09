@@ -104,8 +104,7 @@ static int reserve_blocks(struct super_block *sb, int count)
 {
 	struct ext2_sb_info *sbi = EXT2_SB(sb);
 	struct ext2_super_block *es = sbi->s_es;
-	unsigned long free_blocks;
-	unsigned long root_blocks;
+	unsigned long long free_blocks, root_blocks;
 
 	free_blocks = percpu_counter_read_positive(&sbi->s_freeblocks_counter);
 	root_blocks = le32_to_cpu(es->s_r_blocks_count);

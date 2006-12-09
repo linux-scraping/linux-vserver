@@ -19,7 +19,7 @@
 #include <linux/blkdev.h>
 
 #include <linux/vroot.h>
-#include <linux/vserver/debug.h>
+#include <linux/vs_context.h>
 
 
 static int max_vroot = 8;

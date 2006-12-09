@@ -25,7 +25,6 @@
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
 #include <linux/module.h>
-#include <linux/vs_context.h>
 
 #include <asm/atomic.h>
 #include <asm/io.h>
@@ -143,12 +142,8 @@ static struct irq_chip frv_cpu_pic = {
  */
 asmlinkage void do_IRQ(void)
 {
-	struct vx_info_save vxis;
-
 	irq_enter();
-	__enter_vx_admin(&vxis);
 	generic_handle_irq(__get_IRL());
-	__leave_vx_admin(&vxis);
 	irq_exit();
 }
 

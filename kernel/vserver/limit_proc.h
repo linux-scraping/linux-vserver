@@ -1,20 +1,23 @@
 #ifndef _VX_LIMIT_PROC_H
 #define _VX_LIMIT_PROC_H
 
+#include <linux/vserver/limit_int.h>
 
 static inline void vx_limit_fixup(struct _vx_limit *limit)
 {
 	rlim_t value;
-	int lim;
+	int res;
 
-	for (lim=0; lim<NUM_LIMITS; lim++) {
-		value = __rlim_get(limit, lim);
-		if (value > __rlim_rmax(limit, lim))
-			__rlim_rmax(limit, lim) = value;
-		if (value < __rlim_rmin(limit, lim))
-			__rlim_rmin(limit, lim) = value;
-		if (__rlim_rmax(limit, lim) > __rlim_hard(limit, lim))
-			__rlim_rmax(limit, lim) = __rlim_hard(limit, lim);
+	/* complex resources first */
+	__vx_cres_array_fixup(limit, VLA_RSS);
+
+	for (res=0; res<NUM_LIMITS; res++) {
+		value = __rlim_get(limit, res);
+		__vx_cres_fixup(limit, res, value);
+
+		/* not supposed to happen, maybe warn? */
+		if (__rlim_rmax(limit, res) > __rlim_hard(limit, res))
+			__rlim_rmax(limit, res) = __rlim_hard(limit, res);
 	}
 }
 
@@ -40,6 +43,7 @@ static inline int vx_info_proc_limit(struct _vx_limit *limit, char *buffer)
 		"VML"	VX_LIMIT_FMT
 		"RSS"	VX_LIMIT_FMT
 		"ANON"	VX_LIMIT_FMT
+		"RMAP"	VX_LIMIT_FMT
 		"FILES" VX_LIMIT_FMT
 		"OFD"	VX_LIMIT_FMT
 		"LOCKS" VX_LIMIT_FMT
@@ -54,6 +58,7 @@ static inline int vx_info_proc_limit(struct _vx_limit *limit, char *buffer)
 		VX_LIMIT_ARG(RLIMIT_MEMLOCK)
 		VX_LIMIT_ARG(RLIMIT_RSS)
 		VX_LIMIT_ARG(VLIMIT_ANON)
+		VX_LIMIT_ARG(VLIMIT_MAPPED)
 		VX_LIMIT_ARG(RLIMIT_NOFILE)
 		VX_LIMIT_ARG(VLIMIT_OPENFD)
 		VX_LIMIT_ARG(RLIMIT_LOCKS)

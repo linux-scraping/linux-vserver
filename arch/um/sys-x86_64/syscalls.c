@@ -9,7 +9,6 @@
 #include "linux/shm.h"
 #include "linux/utsname.h"
 #include "linux/personality.h"
-#include "linux/vs_cvirt.h"
 #include "asm/uaccess.h"
 #define __FRAME_OFFSETS
 #include "asm/ptrace.h"

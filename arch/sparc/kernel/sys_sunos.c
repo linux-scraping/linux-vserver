@@ -35,7 +35,6 @@
 #include <linux/smp.h>
 #include <linux/smp_lock.h>
 #include <linux/syscalls.h>
-#include <linux/vs_cvirt.h>
 
 #include <net/sock.h>
 

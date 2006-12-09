@@ -561,11 +561,12 @@ static inline int __sock_sendmsg(struct kiocb *iocb, struct socket *sock,
 			vx_sock_fail(sock->sk, size);
 	}
 	vxdprintk(VXD_CBIT(net, 7),
-		"__sock_sendmsg: %p[%p,%p,%p;%d]:%d/%d",
+		"__sock_sendmsg: %p[%p,%p,%p;%d/%d]:%d/%d",
 		sock, sock->sk,
 		(sock->sk)?sock->sk->sk_nx_info:0,
 		(sock->sk)?sock->sk->sk_vx_info:0,
 		(sock->sk)?sock->sk->sk_xid:0,
+		(sock->sk)?sock->sk->sk_nid:0,
 		(unsigned int)size, len);
 	return len;
 }
@@ -622,11 +623,12 @@ static inline int __sock_recvmsg(struct kiocb *iocb, struct socket *sock,
 	if ((len >= 0) && sock->sk)
 		vx_sock_recv(sock->sk, len);
 	vxdprintk(VXD_CBIT(net, 7),
-		"__sock_recvmsg: %p[%p,%p,%p;%d]:%d/%d",
+		"__sock_recvmsg: %p[%p,%p,%p;%d/%d]:%d/%d",
 		sock, sock->sk,
 		(sock->sk)?sock->sk->sk_nx_info:0,
 		(sock->sk)?sock->sk->sk_vx_info:0,
 		(sock->sk)?sock->sk->sk_xid:0,
+		(sock->sk)?sock->sk->sk_nid:0,
 		(unsigned int)size, len);
 	return len;
 }
@@ -1088,7 +1090,7 @@ static int __sock_create(int family, int type, int protocol,
 		return -EINVAL;
 
 	/* disable IPv6 inside vservers for now */
-	if (family == PF_INET6 && !vx_check(0, VX_ADMIN))
+	if (family == PF_INET6 && !vx_check(0, VS_ADMIN))
 		return -EAFNOSUPPORT;
 
 	/* Compatibility.

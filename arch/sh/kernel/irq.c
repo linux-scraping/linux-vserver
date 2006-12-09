@@ -92,7 +92,6 @@ asmlinkage int do_IRQ(unsigned long r4, unsigned long r5,
 #ifdef CONFIG_4KSTACKS
 	union irq_ctx *curctx, *irqctx;
 #endif
-	struct vx_info_save vxis;
 
 	irq_enter();
 
@@ -124,7 +123,6 @@ asmlinkage int do_IRQ(unsigned long r4, unsigned long r5,
 	curctx = (union irq_ctx *)current_thread_info();
 	irqctx = hardirq_ctx[smp_processor_id()];
 
-	__enter_vx_admin(&vxis);
 	/*
 	 * this is where we switch to the IRQ stack. However, if we are
 	 * already using the IRQ stack (because we interrupted a hardirq
@@ -155,7 +153,6 @@ asmlinkage int do_IRQ(unsigned long r4, unsigned long r5,
 	} else
 #endif
 		generic_handle_irq(irq);
-	__leave_vx_admin(&vxis);
 
 	irq_exit();
 

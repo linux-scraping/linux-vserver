@@ -42,9 +42,43 @@ static inline void __vx_add_cres(struct vx_info *vxi,
 	__rlim_add(&vxi->limit, res, amount);
 }
 
-static inline int __vx_cres_avail(struct vx_info *vxi,
-		int res, int num, char *_file, int _line)
+static inline
+int __vx_cres_adjust_max(struct _vx_limit *limit, int res, rlim_t value)
 {
+	int cond = (value > __rlim_rmax(limit, res));
+
+	if (cond)
+		__rlim_rmax(limit, res) = value;
+	return cond;
+}
+
+static inline
+int __vx_cres_adjust_min(struct _vx_limit *limit, int res, rlim_t value)
+{
+	int cond = (value < __rlim_rmin(limit, res));
+
+	if (cond)
+		__rlim_rmin(limit, res) = value;
+	return cond;
+}
+
+static inline
+void __vx_cres_fixup(struct _vx_limit *limit, int res, rlim_t value)
+{
+	if (!__vx_cres_adjust_max(limit, res, value))
+		__vx_cres_adjust_min(limit, res, value);
+}
+
+
+/*	return values:
+	 +1 ... no limit hit
+	 -1 ... over soft limit
+	  0 ... over hard limit		*/
+
+static inline int __vx_cres_avail(struct vx_info *vxi,
+	int res, int num, char *_file, int _line)
+{
+	struct _vx_limit *limit;
 	rlim_t value;
 
 	if (VXD_RLIMIT_COND(res))
@@ -54,31 +88,88 @@ static inline int __vx_cres_avail(struct vx_info *vxi,
 			(vxi ? (long)__rlim_hard(&vxi->limit, res) : -1),
 			(vxi ? (long)__rlim_get(&vxi->limit, res) : 0),
 			num, _file, _line);
+	if (!vxi)
+		return 1;
+
+	limit = &vxi->limit;
+	value = __rlim_get(limit, res);
+
+	if (!__vx_cres_adjust_max(limit, res, value))
+		__vx_cres_adjust_min(limit, res, value);
+
+	if (num == 0)
+		return 1;
+
+	if (__rlim_soft(limit, res) == RLIM_INFINITY)
+		return -1;
+	if (value + num <= __rlim_soft(limit, res))
+		return -1;
+
+	if (__rlim_hard(limit, res) == RLIM_INFINITY)
+		return 1;
+	if (value + num <= __rlim_hard(limit, res))
+		return 1;
+
+	__rlim_hit(limit, res);
+	return 0;
+}
+
+
+static const int VLA_RSS[] = { RLIMIT_RSS, VLIMIT_ANON, VLIMIT_MAPPED, 0 };
+
+static inline
+rlim_t __vx_cres_array_sum(struct _vx_limit *limit, const int *array)
+{
+	rlim_t value, sum = 0;
+	int res;
+
+	while ((res = *array++)) {
+		value = __rlim_get(limit, res);
+		__vx_cres_fixup(limit, res, value);
+		sum += value;
+	}
+	return sum;
+}
+
+static inline
+rlim_t __vx_cres_array_fixup(struct _vx_limit *limit, const int *array)
+{
+	rlim_t value = __vx_cres_array_sum(limit, array + 1);
+	int res = *array;
+
+	if (value == __rlim_get(limit, res))
+		return value;
+
+	__rlim_set(limit, res, value);
+	/* now adjust min/max */
+	if (!__vx_cres_adjust_max(limit, res, value))
+		__vx_cres_adjust_min(limit, res, value);
+
+	return value;
+}
+
+static inline int __vx_cres_array_avail(struct vx_info *vxi,
+	const int *array, int num, char *_file, int _line)
+{
+	struct _vx_limit *limit;
+	rlim_t value = 0;
+	int res;
+
 	if (num == 0)
 		return 1;
 	if (!vxi)
 		return 1;
 
-	value = __rlim_get(&vxi->limit, res);
+	limit = &vxi->limit;
+	res = *array;
+	value = __vx_cres_array_sum(limit, array+1);
 
-	if (value > __rlim_rmax(&vxi->limit, res))
-		__rlim_rmax(&vxi->limit, res) = value;
-	else if (value < __rlim_rmin(&vxi->limit, res))
-		__rlim_rmin(&vxi->limit, res) = value;
+	__rlim_set(limit, res, value);
+	__vx_cres_fixup(limit, res, value);
 
-	if (__rlim_soft(&vxi->limit, res) == RLIM_INFINITY)
-		return -1;
-	if (value + num <= __rlim_soft(&vxi->limit, res))
-		return -1;
-
-	if (__rlim_hard(&vxi->limit, res) == RLIM_INFINITY)
-		return 1;
-	if (value + num <= __rlim_hard(&vxi->limit, res))
-		return 1;
-
-	__rlim_hit(&vxi->limit, res);
-	return 0;
+	return __vx_cres_avail(vxi, res, num, _file, _line);
 }
+
 
 #endif	/* __KERNEL__ */
 #endif	/* _VX_LIMIT_INT_H */

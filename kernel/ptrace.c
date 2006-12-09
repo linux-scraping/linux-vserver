@@ -18,7 +18,7 @@
 #include <linux/ptrace.h>
 #include <linux/security.h>
 #include <linux/signal.h>
-#include <linux/vs_base.h>
+#include <linux/vs_context.h>
 
 #include <asm/pgtable.h>
 #include <asm/uaccess.h>
@@ -145,9 +145,9 @@ static int may_attach(struct task_struct *task)
 		dumpable = task->mm->dumpable;
 	if (!dumpable && !capable(CAP_SYS_PTRACE))
 		return -EPERM;
-	if (!vx_check(task->xid, VX_ADMIN_P|VX_IDENT))
+	if (!vx_check(task->xid, VS_ADMIN_P|VS_IDENT))
 		return -EPERM;
-	if (!vx_check(task->xid, VX_IDENT) &&
+	if (!vx_check(task->xid, VS_IDENT) &&
 		!task_vx_flags(task, VXF_STATE_ADMIN, 0))
 		return -EACCES;
 
@@ -475,7 +475,7 @@ asmlinkage long sys_ptrace(long request, long pid, long addr, long data)
 	}
 
 	ret = -EPERM;
-	if (!vx_check(vx_task_xid(child), VX_WATCH_P|VX_IDENT))
+	if (!vx_check(vx_task_xid(child), VS_WATCH_P|VS_IDENT))
 		goto out_put_task_struct;
 
 	if (request == PTRACE_ATTACH) {

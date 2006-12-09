@@ -12,7 +12,7 @@
 #include <linux/module.h>
 #include <linux/security.h>
 #include <linux/syscalls.h>
-#include <linux/vs_base.h>
+#include <linux/vs_context.h>
 #include <asm/uaccess.h>
 
 unsigned securebits = SECUREBITS_DEFAULT; /* systemwide security settings */
@@ -245,10 +245,11 @@ int __capable(struct task_struct *t, int cap)
 }
 EXPORT_SYMBOL(__capable);
 
+#include <linux/vserver/base.h>
 int capable(int cap)
 {
 	/* here for now so we don't require task locking */
-	if (vx_check_bit(VXC_CAP_MASK, cap) && !vx_mcaps(1L << cap))
+	if (vs_check_bit(VXC_CAP_MASK, cap) && !vx_mcaps(1L << cap))
 		return 0;
 	return __capable(current, cap);
 }

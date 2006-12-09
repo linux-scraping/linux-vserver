@@ -1014,7 +1014,7 @@ static struct task_struct *copy_process(unsigned long clone_flags,
 			goto bad_fork_free;
 	}
 	if (p->mm && vx_flags(VXF_FORK_RSS, 0)) {
-		if (!vx_rsspages_avail(p->mm, get_mm_counter(p->mm, file_rss)))
+		if (!vx_rss_avail(p->mm, get_mm_counter(p->mm, file_rss)))
 			goto bad_fork_cleanup_vm;
 	}
 
@@ -1362,9 +1362,8 @@ struct task_struct * __devinit fork_idle(int cpu)
 	struct pt_regs regs;
 
 	task = copy_process(CLONE_VM, 0, idle_regs(&regs), 0, NULL, NULL, 0);
-	if (!task)
-		return ERR_PTR(-ENOMEM);
-	init_idle(task, cpu);
+	if (!IS_ERR(task))
+		init_idle(task, cpu);
 
 	return task;
 }
@@ -1407,7 +1406,7 @@ long do_fork(unsigned long clone_flags,
 		return -EAGAIN;
 
 	/* kernel threads are host only */
-	if ((clone_flags & CLONE_KTHREAD) && !vx_check(0, VX_ADMIN)) {
+	if ((clone_flags & CLONE_KTHREAD) && !vx_check(0, VS_ADMIN)) {
 		vxwprintk(1, "xid=%d tried to spawn a kernel thread.",
 			vx_current_xid());
 		free_pid(pid);

@@ -58,6 +58,7 @@
 #include <linux/sysctl.h>
 #endif
 #include <linux/kmod.h>
+#include <linux/vs_context.h>
 
 #include <net/arp.h>
 #include <net/ip.h>

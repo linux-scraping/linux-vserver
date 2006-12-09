@@ -34,7 +34,6 @@
 #include <linux/msg.h>
 #include <linux/shm.h>
 #include <linux/errno.h>
-#include <linux/vs_cvirt.h>
 #include <asm/ptrace.h>
 #include <asm/signal.h>
 #include <asm/uaccess.h>
