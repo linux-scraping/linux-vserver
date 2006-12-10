@@ -171,7 +171,6 @@ fastcall unsigned int __do_IRQ(unsigned int irq, struct pt_regs *regs)
 {
 	struct irq_desc *desc = irq_desc + irq;
 	struct irqaction *action;
-	struct vx_info_save vxis;
 	unsigned int status;
 
 	kstat_this_cpu.irqs[irq]++;
@@ -181,17 +180,14 @@ fastcall unsigned int __do_IRQ(unsigned int irq, struct pt_regs *regs)
 		/*
 		 * No locking required for CPU-local interrupts:
 		 */
-		__enter_vx_admin(&vxis);
 		if (desc->chip->ack)
 			desc->chip->ack(irq);
 		action_ret = handle_IRQ_event(irq, regs, desc->action);
 		desc->chip->end(irq);
-		__leave_vx_admin(&vxis);
 		return 1;
 	}
 
 	spin_lock(&desc->lock);
-	__enter_vx_admin(&vxis);
 	if (desc->chip->ack)
 		desc->chip->ack(irq);
 	/*
@@ -254,7 +250,6 @@ out:
 	 * disabled while the handler was running.
 	 */
 	desc->chip->end(irq);
-	__leave_vx_admin(&vxis);
 	spin_unlock(&desc->lock);
 
 	return 1;

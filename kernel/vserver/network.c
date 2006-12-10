@@ -373,10 +373,6 @@ int nx_migrate_task(struct task_struct *p, struct nx_info *nxi)
 	if (old_nxi == nxi)
 		goto out;
 
-	ret =-EACCES;
-	if (nx_info_flags(nxi, NXF_INFO_PRIVATE, 0))
-		goto out;
-
 	task_lock(p);
 	if (old_nxi)
 		clr_nx_info(&p->nx_info);

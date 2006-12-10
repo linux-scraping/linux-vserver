@@ -8,6 +8,8 @@
 #include <linux/time.h>
 #include <asm/atomic.h>
 
+#include "cacct.h"
+
 
 struct _vx_usage_stat {
 	uint64_t user;
@@ -69,7 +71,7 @@ struct _vx_sock_acc {
 struct _vx_cacct {
 	unsigned long total_forks;
 
-	struct _vx_sock_acc sock[5][3];
+	struct _vx_sock_acc sock[VXA_SOCK_SIZE][3];
 };
 
 #endif	/* _VX_CVIRT_DEF_H */

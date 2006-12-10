@@ -742,7 +742,6 @@ static int loop_set_fd(struct loop_device *lo, struct file *lo_file,
 	struct file	*file, *f;
 	struct inode	*inode;
 	struct address_space *mapping;
-	struct vx_info_save vxis;
 	unsigned lo_blocksize;
 	int		lo_flags = 0;
 	int		error;
@@ -839,9 +838,7 @@ static int loop_set_fd(struct loop_device *lo, struct file *lo_file,
 
 	set_blocksize(bdev, lo_blocksize);
 
-	__enter_vx_admin(&vxis);
 	error = kernel_thread(loop_thread, lo, CLONE_KERNEL);
-	__leave_vx_admin(&vxis);
 	if (error < 0)
 		goto out_putf;
 	wait_for_completion(&lo->lo_done);

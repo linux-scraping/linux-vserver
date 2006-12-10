@@ -29,7 +29,6 @@
 #include <linux/threads.h>
 #include <linux/spinlock.h>
 #include <linux/seq_file.h>
-#include <linux/vs_context.h>
 
 #include <asm/ptrace.h>
 #include <asm/processor.h>
@@ -322,7 +321,6 @@ void handler_irq(int irq, struct pt_regs * regs)
 {
 	struct irqaction * action;
 	int cpu = smp_processor_id();
-	struct vx_info_save vxis;
 #ifdef CONFIG_SMP
 	extern void smp4m_irq_rotate(int cpu);
 #endif
@@ -337,14 +335,12 @@ void handler_irq(int irq, struct pt_regs * regs)
 	action = sparc_irq[irq].action;
 	sparc_irq[irq].flags |= SPARC_IRQ_INPROGRESS;
 	kstat_cpu(cpu).irqs[irq]++;
-	__enter_vx_admin(&vxis);
 	do {
 		if (!action || !action->handler)
 			unexpected_irq(irq, NULL, regs);
 		action->handler(irq, action->dev_id, regs);
 		action = action->next;
 	} while (action);
-	__leave_vx_admin(&vxis);
 	sparc_irq[irq].flags &= ~SPARC_IRQ_INPROGRESS;
 	enable_pil_irq(irq);
 	irq_exit();
@@ -356,14 +352,11 @@ extern void floppy_interrupt(int irq, void *dev_id, struct pt_regs *regs);
 void sparc_floppy_irq(int irq, void *dev_id, struct pt_regs *regs)
 {
 	int cpu = smp_processor_id();
-	struct vx_info_save vxis;
 
 	disable_pil_irq(irq);
 	irq_enter();
 	kstat_cpu(cpu).irqs[irq]++;
-	__enter_vx_admin(&vxis);
 	floppy_interrupt(irq, dev_id, regs);
-	__leave_vx_admin(&vxis);
 	irq_exit();
 	enable_pil_irq(irq);
 	// XXX Eek, it's totally changed with preempt_count() and such

@@ -37,7 +37,6 @@
 #include <linux/list.h>
 #include <linux/kallsyms.h>
 #include <linux/proc_fs.h>
-#include <linux/vs_context.h>
 
 #include <asm/system.h>
 #include <asm/mach/time.h>
@@ -123,12 +122,10 @@ asmlinkage void asm_do_IRQ(unsigned int irq, struct pt_regs *regs)
 		desc = &bad_irq_desc;
 
 	irq_enter();
-	__enter_vx_admin(&vxis);
 	desc_handle_irq(irq, desc, regs);
 
 	/* AT91 specific workaround */
 	irq_finish(irq);
-	__leave_vx_admin(&vxis);
 	irq_exit();
 }
 
