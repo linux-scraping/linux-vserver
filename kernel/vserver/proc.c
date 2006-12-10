@@ -824,10 +824,11 @@ int proc_virtual_readdir(struct file * filp,
 		p = &vx_virtual_stuff[size-1];
 		nr_xids = get_xid_list(index, xid_array, PROC_MAXVIDS);
 		for (i = 0; i < nr_xids; i++) {
-			int xid = xid_array[i];
+			int n, xid = xid_array[i];
 			unsigned int j = PROC_NUMBUF;
 
-			do buf[--j] = '0' + (xid % 10); while (xid/=10);
+			n = xid;
+			do buf[--j] = '0' + (n % 10); while (n /= 10);
 
 			if (proc_fill_cache(filp, dirent, filldir, buf+j, PROC_NUMBUF-j,
 				vs_proc_instantiate, xid, p))
@@ -896,10 +897,11 @@ int proc_virtnet_readdir(struct file * filp,
 		p = &nx_virtnet_stuff[size-1];
 		nr_nids = get_nid_list(index, nid_array, PROC_MAXVIDS);
 		for (i = 0; i < nr_nids; i++) {
-			int nid = nid_array[i];
+			int n, nid = nid_array[i];
 			unsigned int j = PROC_NUMBUF;
 
-			do buf[--j] = '0' + (nid % 10); while (nid/=10);
+			n = nid;
+			do buf[--j] = '0' + (n % 10); while (n /= 10);
 
 			if (proc_fill_cache(filp, dirent, filldir, buf+j, PROC_NUMBUF-j,
 				vs_proc_instantiate, nid, p))
