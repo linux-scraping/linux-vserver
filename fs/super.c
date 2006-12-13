@@ -87,14 +87,15 @@ static struct super_block *alloc_super(struct file_system_type *type)
 		s->s_count = S_BIAS;
 		atomic_set(&s->s_active, 1);
 		mutex_init(&s->s_vfs_rename_mutex);
+		mutex_init(&s->s_dquot.dqio_mutex);
+		mutex_init(&s->s_dquot.dqonoff_mutex);
+		init_rwsem(&s->s_dquot.dqptr_sem);
 		init_waitqueue_head(&s->s_wait_unfrozen);
 		s->s_maxbytes = MAX_NON_LFS;
-		s->s_qop = sb_dquot_ops;
+		s->dq_op = sb_dquot_ops;
 		s->s_qcop = sb_quotactl_ops;
 		s->s_op = &default_op;
 		s->s_time_gran = 1000000000;
-		/* quick hack to make dqhash id unique, sufficient for now */
-		s->s_dqh = new_dqhash(s, (unsigned long)s);
 	}
 out:
 	return s;
@@ -109,7 +110,6 @@ out:
 static inline void destroy_super(struct super_block *s)
 {
 	security_sb_free(s);
-	dqhput(s->s_dqh);
 	kfree(s);
 }
 
@@ -181,7 +181,7 @@ void deactivate_super(struct super_block *s)
 	if (atomic_dec_and_lock(&s->s_active, &sb_lock)) {
 		s->s_count -= S_BIAS-1;
 		spin_unlock(&sb_lock);
-		DQUOT_OFF(s->s_dqh);
+		DQUOT_OFF(s);
 		down_write(&s->s_umount);
 		fs->kill_sb(s);
 		put_filesystem(fs);
@@ -232,7 +232,7 @@ static int grab_super(struct super_block *s) __releases(sb_lock)
 void __fsync_super(struct super_block *sb)
 {
 	sync_inodes_sb(sb, 0);
-	DQUOT_SYNC(sb->s_dqh);
+	DQUOT_SYNC(sb);
 	lock_super(sb);
 	if (sb->s_dirt && sb->s_op->write_super)
 		sb->s_op->write_super(sb);

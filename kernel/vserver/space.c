@@ -196,7 +196,7 @@ out_put:
 
 int vc_enter_space(struct vx_info *vxi, void __user *data)
 {
-	struct vcmd_space_mask vc_data = { .mask = 0 };
+	struct vcmd_space_mask vc_data = { .mask = ~0 };
 
 	if (data && copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;

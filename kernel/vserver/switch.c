@@ -13,7 +13,6 @@
  *  V0.06  added compat32 layer
  *  V0.07  vcmd args and perms
  *  V0.08  added status commands
- *  V0.09  added device commands
  *
  */
 
@@ -55,7 +54,6 @@ int vc_get_vci(uint32_t id)
 #include <linux/vserver/dlimit_cmd.h>
 #include <linux/vserver/signal_cmd.h>
 #include <linux/vserver/space_cmd.h>
-#include <linux/vserver/device_cmd.h>
 
 #include <linux/vserver/legacy.h>
 #include <linux/vserver/inode.h>
@@ -222,10 +220,6 @@ long do_vcmd(uint32_t cmd, uint32_t id,
 	case VCMD_net_remove:
 		return vc_net_remove(nxi, data);
 
-#ifdef	CONFIG_VSERVER_DEVICE
-	case VCMD_set_mapping:
-		return __COMPAT(vc_set_mapping, vxi, data, compat);
-#endif
 #ifdef	CONFIG_VSERVER_HISTORY
 	case VCMD_dump_history:
 		return vc_dump_history(id);
@@ -266,8 +260,6 @@ long do_vcmd(uint32_t cmd, uint32_t id,
 #define VCF_ADMIN	0x02
 #define VCF_ARES	0x06	/* includes admin */
 #define VCF_SETUP	0x08
-
-#define VCF_ZIDOK	0x10	/* zero id okay, no admin! */
 
 
 static inline
@@ -349,9 +341,6 @@ long do_vserver(uint32_t cmd, uint32_t id, void __user *data, int compat)
 	__VCMD(add_dlimit,	 8, VCA_NONE,	VCF_ARES);
 	__VCMD(rem_dlimit,	 8, VCA_NONE,	VCF_ARES);
 
-#ifdef	CONFIG_VSERVER_DEVICE
-	__VCMD(set_mapping,	 8, VCA_VXI,    VCF_ARES|VCF_ZIDOK);
-#endif
 	/* debug level admin commands */
 #ifdef	CONFIG_VSERVER_HISTORY
 	__VCMD(dump_history,	 9, VCA_NONE,	0);
@@ -452,9 +441,6 @@ long do_vserver(uint32_t cmd, uint32_t id, void __user *data, int compat)
 		goto out;
 
 	state = 6;
-	if (!id && (flags & VCF_ZIDOK))
-		goto skip_id;
-
 	ret = -ESRCH;
 	if (args & VCA_VXI) {
 		vxi = lookup_vx_info(id);
@@ -483,15 +469,15 @@ long do_vserver(uint32_t cmd, uint32_t id, void __user *data, int compat)
 			goto out_nxi;
 		}
 	}
-skip_id:
+
 	state = 8;
 	ret = do_vcmd(cmd, id, vxi, nxi, data, compat);
 
 out_nxi:
-	if ((args & VCA_NXI) && nxi)
+	if (args & VCA_NXI)
 		put_nx_info(nxi);
 out_vxi:
-	if ((args & VCA_VXI) && vxi)
+	if (args & VCA_VXI)
 		put_vx_info(vxi);
 out:
 	vxdprintk(VXD_CBIT(switch, 1),

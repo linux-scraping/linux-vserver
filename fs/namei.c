@@ -37,7 +37,6 @@
 #include <linux/vs_base.h>
 #include <linux/vs_tag.h>
 #include <linux/vs_cowbl.h>
-#include <linux/vs_device.h>
 #include <asm/namei.h>
 #include <asm/uaccess.h>
 
@@ -1932,20 +1931,9 @@ int vfs_mknod(struct inode *dir, struct dentry *dentry,
 	if (error)
 		return error;
 
-	if (!(S_ISCHR(mode) || S_ISBLK(mode)))
-		goto okay;
-
-	if (!capable(CAP_MKNOD))
+	if ((S_ISCHR(mode) || S_ISBLK(mode)) && !capable(CAP_MKNOD))
 		return -EPERM;
 
-	if (vx_check(0, VS_ADMIN|VS_WATCH))
-		goto okay;
-
-	if (S_ISCHR(mode) && !vs_chrdev_perm(dev, DATTR_CREATE))
-		return -EPERM;
-	if (S_ISBLK(mode) && !vs_blkdev_perm(dev, DATTR_CREATE))
-		return -EPERM;
-okay:
 	if (!dir->i_op || !dir->i_op->mknod)
 		return -EPERM;
 

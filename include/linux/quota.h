@@ -55,13 +55,6 @@ extern spinlock_t dq_data_lock;
 #define kb2qb(x) ((x) >> (QUOTABLOCK_BITS-10))
 #define toqb(x) (((x) + QUOTABLOCK_SIZE - 1) >> QUOTABLOCK_BITS)
 
-/* are NULL dqhash ptrs valid? */
-#ifdef HANDLE_DQHASH_NULL
-#define	dqhash_valid(hash)      ((hash) != NULL)
-#else
-#define	dqhash_valid(hash)      (0 == 0)
-#endif
-
 #define MAXQUOTAS 2
 #define USRQUOTA  0		/* element used for user quotas */
 #define GRPQUOTA  1		/* element used for group quotas */
@@ -183,20 +176,19 @@ struct mem_dqinfo {
 	} u;
 };
 
-struct dqhash;
+struct super_block;
 
 #define DQF_MASK 0xffff		/* Mask for format specific flags */
 #define DQF_INFO_DIRTY_B 16
 #define DQF_INFO_DIRTY (1 << DQF_INFO_DIRTY_B)	/* Is info dirty? */
 
-extern void mark_info_dirty(struct dqhash *hash, int type);
-
+extern void mark_info_dirty(struct super_block *sb, int type);
 #define info_dirty(info) test_bit(DQF_INFO_DIRTY_B, &(info)->dqi_flags)
 #define info_any_dquot_dirty(info) (!list_empty(&(info)->dqi_dirty_list))
 #define info_any_dirty(info) (info_dirty(info) || info_any_dquot_dirty(info))
 
-#define dqh_dqopt(hash) (&(hash)->dqh_dqopt)
-#define dqh_dqinfo(hash, type) (dqh_dqopt(hash)->info+(type))
+#define sb_dqopt(sb) (&(sb)->s_dquot)
+#define sb_dqinfo(sb, type) (sb_dqopt(sb)->info+(type))
 
 struct dqstats {
 	int lookups;
@@ -226,7 +218,7 @@ struct dquot {
 	struct mutex dq_lock;		/* dquot IO lock */
 	atomic_t dq_count;		/* Use count */
 	wait_queue_head_t dq_wait_unused;	/* Wait queue for dquot to become unused */
-	struct dqhash *dq_dqh;		/* quota hash backpointer */
+	struct super_block *dq_sb;	/* superblock this applies to */
 	unsigned int dq_id;		/* ID this applies to (uid, gid) */
 	loff_t dq_off;			/* Offset of dquot on disk */
 	unsigned long dq_flags;		/* See DQ_* */
@@ -241,14 +233,13 @@ struct dquot {
 
 /* Operations which must be implemented by each quota format */
 struct quota_format_ops {
-	int (*check_quota_file)(struct dqhash *, int);	/* Detect whether file is in our format */
-	int (*read_file_info)(struct dqhash *, int);	/* Read main info about file - called on quotaon() */
-	int (*write_file_info)(struct dqhash *, int);	/* Write main info about file */
-	int (*free_file_info)(struct dqhash *, int);	/* Called on quotaoff() */
-
-	int (*read_dqblk)(struct dquot *);	/* Read structure for one user */
-	int (*commit_dqblk)(struct dquot *);	/* Write structure for one user */
-	int (*release_dqblk)(struct dquot *);	/* Called when last reference to dquot is being dropped */
+	int (*check_quota_file)(struct super_block *sb, int type);	/* Detect whether file is in our format */
+	int (*read_file_info)(struct super_block *sb, int type);	/* Read main info about file - called on quotaon() */
+	int (*write_file_info)(struct super_block *sb, int type);	/* Write main info about file */
+	int (*free_file_info)(struct super_block *sb, int type);	/* Called on quotaoff() */
+	int (*read_dqblk)(struct dquot *dquot);		/* Read structure for one user */
+	int (*commit_dqblk)(struct dquot *dquot);	/* Write structure for one user */
+	int (*release_dqblk)(struct dquot *dquot);	/* Called when last reference to dquot is being dropped */
 };
 
 /* Operations working with dquots */
@@ -264,22 +255,22 @@ struct dquot_operations {
 	int (*acquire_dquot) (struct dquot *);		/* Quota is going to be created on disk */
 	int (*release_dquot) (struct dquot *);		/* Quota is going to be deleted from disk */
 	int (*mark_dirty) (struct dquot *);		/* Dquot is marked dirty */
-	int (*write_info) (struct dqhash *, int);	/* Write of quota "superblock" */
+	int (*write_info) (struct super_block *, int);	/* Write of quota "superblock" */
 };
 
 /* Operations handling requests from userspace */
 struct quotactl_ops {
-	int (*quota_on)(struct dqhash *, int, int, char *);
-	int (*quota_off)(struct dqhash *, int);
-	int (*quota_sync)(struct dqhash *, int);
-	int (*get_info)(struct dqhash *, int, struct if_dqinfo *);
-	int (*set_info)(struct dqhash *, int, struct if_dqinfo *);
-	int (*get_dqblk)(struct dqhash *, int, qid_t, struct if_dqblk *);
-	int (*set_dqblk)(struct dqhash *, int, qid_t, struct if_dqblk *);
-	int (*get_xstate)(struct dqhash *, struct fs_quota_stat *);
-	int (*set_xstate)(struct dqhash *, unsigned int, int);
-	int (*get_xquota)(struct dqhash *, int, qid_t, struct fs_disk_quota *);
-	int (*set_xquota)(struct dqhash *, int, qid_t, struct fs_disk_quota *);
+	int (*quota_on)(struct super_block *, int, int, char *);
+	int (*quota_off)(struct super_block *, int);
+	int (*quota_sync)(struct super_block *, int);
+	int (*get_info)(struct super_block *, int, struct if_dqinfo *);
+	int (*set_info)(struct super_block *, int, struct if_dqinfo *);
+	int (*get_dqblk)(struct super_block *, int, qid_t, struct if_dqblk *);
+	int (*set_dqblk)(struct super_block *, int, qid_t, struct if_dqblk *);
+	int (*get_xstate)(struct super_block *, struct fs_quota_stat *);
+	int (*set_xstate)(struct super_block *, unsigned int, int);
+	int (*get_xquota)(struct super_block *, int, qid_t, struct fs_disk_quota *);
+	int (*set_xquota)(struct super_block *, int, qid_t, struct fs_disk_quota *);
 };
 
 struct quota_format_type {
@@ -302,15 +293,16 @@ struct quota_info {
 	struct quota_format_ops *ops[MAXQUOTAS];	/* Operations for each type */
 };
 
+/* Inline would be better but we need to dereference super_block which is not defined yet */
+int mark_dquot_dirty(struct dquot *dquot);
 
 #define dquot_dirty(dquot) test_bit(DQ_MOD_B, &(dquot)->dq_flags)
 
-#define dqh_has_quota_enabled(hash, type) (dqhash_valid(hash) && ((type)==USRQUOTA ? \
-	(dqh_dqopt(hash)->flags & DQUOT_USR_ENABLED) : (dqh_dqopt(hash)->flags & DQUOT_GRP_ENABLED)))
+#define sb_has_quota_enabled(sb, type) ((type)==USRQUOTA ? \
+	(sb_dqopt(sb)->flags & DQUOT_USR_ENABLED) : (sb_dqopt(sb)->flags & DQUOT_GRP_ENABLED))
 
-#define dqh_any_quota_enabled(hash) (dqhash_valid(hash) && \
-	(dqh_has_quota_enabled(hash, USRQUOTA) || dqh_has_quota_enabled(hash, GRPQUOTA)))
-
+#define sb_any_quota_enabled(sb) (sb_has_quota_enabled(sb, USRQUOTA) | \
+				  sb_has_quota_enabled(sb, GRPQUOTA))
 
 int register_quota_format(struct quota_format_type *fmt);
 void unregister_quota_format(struct quota_format_type *fmt);
@@ -324,50 +316,6 @@ struct quota_module_name {
 	{QFMT_VFS_OLD, "quota_v1"},\
 	{QFMT_VFS_V0, "quota_v2"},\
 	{0, NULL}}
-
-struct dqhash {
-	struct list_head dqh_list;	/* List of all quota hashes */
-	unsigned int dqh_id;		/* ID for hash */
-	atomic_t dqh_count;		/* Use count */
-	struct quota_info dqh_dqopt;	/* Diskquota specific options */
-	struct dquot_operations	*dqh_qop;
-	struct quotactl_ops *dqh_qcop;
-	struct super_block *dqh_sb;	/* super block */
-	unsigned int dqh_hash_bits;
-	unsigned int dqh_hash_mask;
-	struct hlist_head *dqh_hash;
-};
-
-#ifdef CONFIG_QUOTACTL
-
-struct dqhash *new_dqhash(struct super_block *, unsigned int);
-void destroy_dqhash(struct dqhash *);
-struct dqhash *find_dqhash(unsigned int);
-
-static inline void dqhput(struct dqhash *hash)
-{
-	if (dqhash_valid(hash))
-		if (atomic_dec_and_test(&hash->dqh_count))
-			destroy_dqhash(hash);
-}
-
-static inline struct dqhash *dqhget(struct dqhash *hash)
-{
-	if (dqhash_valid(hash))
-		atomic_inc(&hash->dqh_count);
-	return hash;
-}
-
-#else /* CONFIG_QUOTACTL */
-
-#define new_dqhash(sb, dqdom)		(0)
-#define find_dqhash(dqdom)		(0)
-#define destroy_dqhash(hash)		do { } while(0)
-
-#define dqhput(hash)			do { } while(0)
-#define dqhget(hash)			(hash)
-
-#endif /* CONFIG_QUOTACTL */
 
 #else
 

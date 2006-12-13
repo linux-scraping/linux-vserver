@@ -1172,7 +1172,7 @@ struct security_operations {
 	int (*capable) (struct task_struct * tsk, int cap);
 	int (*acct) (struct file * file);
 	int (*sysctl) (struct ctl_table * table, int op);
-	int (*quotactl) (int cmds, int type, int id, struct dqhash *);
+	int (*quotactl) (int cmds, int type, int id, struct super_block * sb);
 	int (*quota_on) (struct dentry * dentry);
 	int (*syslog) (int type);
 	int (*settime) (struct timespec *ts, struct timezone *tz);
@@ -1456,9 +1456,9 @@ static inline int security_sysctl(struct ctl_table *table, int op)
 }
 
 static inline int security_quotactl (int cmds, int type, int id,
-				     struct dqhash *hash)
+				     struct super_block *sb)
 {
-	return security_ops->quotactl (cmds, type, id, hash);
+	return security_ops->quotactl (cmds, type, id, sb);
 }
 
 static inline int security_quota_on (struct dentry * dentry)
@@ -2201,7 +2201,7 @@ static inline int security_sysctl(struct ctl_table *table, int op)
 }
 
 static inline int security_quotactl (int cmds, int type, int id,
-				     struct dqhash * hash)
+				     struct super_block * sb)
 {
 	return 0;
 }

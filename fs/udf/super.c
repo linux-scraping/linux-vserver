@@ -1576,7 +1576,7 @@ static int udf_fill_super(struct super_block *sb, void *options, int silent)
 
 	/* Fill in the rest of the superblock */
 	sb->s_op = &udf_sb_ops;
-	sb->s_qop = NULL;
+	sb->dq_op = NULL;
 	sb->s_dirt = 0;
 	sb->s_magic = UDF_SUPER_MAGIC;
 	sb->s_time_gran = 1000;

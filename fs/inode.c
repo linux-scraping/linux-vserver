@@ -129,9 +129,6 @@ static struct inode *alloc_inode(struct super_block *sb)
 		inode->i_blocks = 0;
 		inode->i_bytes = 0;
 		inode->i_generation = 0;
-#ifdef CONFIG_QUOTACTL
-		inode->i_dqh = dqhget(sb->s_dqh);
-#endif
 #ifdef CONFIG_QUOTA
 		memset(&inode->i_dquot, 0, sizeof(inode->i_dquot));
 #endif
@@ -139,7 +136,6 @@ static struct inode *alloc_inode(struct super_block *sb)
 		inode->i_bdev = NULL;
 		inode->i_cdev = NULL;
 		inode->i_rdev = 0;
-		inode->i_mdev = 0;
 		inode->dirtied_when = 0;
 		if (security_inode_alloc(inode)) {
 			if (inode->i_sb->s_op->destroy_inode)
@@ -179,8 +175,6 @@ void destroy_inode(struct inode *inode)
 {
 	BUG_ON(inode_has_buffers(inode));
 	security_inode_free(inode);
-	if (dqhash_valid(inode->i_dqh))
-		dqhput(inode->i_dqh);
 	if (inode->i_sb->s_op->destroy_inode)
 		inode->i_sb->s_op->destroy_inode(inode);
 	else
@@ -1256,13 +1250,12 @@ EXPORT_SYMBOL(inode_needs_sync);
 /* Function back in dquot.c */
 int remove_inode_dquot_ref(struct inode *, int, struct list_head *);
 
-void remove_dquot_ref(struct dqhash *hash, int type,
+void remove_dquot_ref(struct super_block *sb, int type,
 			struct list_head *tofree_head)
 {
 	struct inode *inode;
-	struct super_block *sb = hash->dqh_sb;
 
-	if (!hash->dqh_qop)
+	if (!sb->dq_op)
 		return;	/* nothing to do */
 	spin_lock(&inode_lock);	/* This lock is for inodes code */
 
@@ -1429,11 +1422,9 @@ void init_special_inode(struct inode *inode, umode_t mode, dev_t rdev)
 	if (S_ISCHR(mode)) {
 		inode->i_fop = &def_chr_fops;
 		inode->i_rdev = rdev;
-		inode->i_mdev = rdev;
 	} else if (S_ISBLK(mode)) {
 		inode->i_fop = &def_blk_fops;
 		inode->i_rdev = rdev;
-		inode->i_mdev = rdev;
 	} else if (S_ISFIFO(mode))
 		inode->i_fop = &def_fifo_fops;
 	else if (S_ISSOCK(mode))
