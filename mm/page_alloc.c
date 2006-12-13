@@ -37,7 +37,6 @@
 #include <linux/vmalloc.h>
 #include <linux/mempolicy.h>
 #include <linux/stop_machine.h>
-#include <linux/vs_limit.h>
 
 #include <asm/tlbflush.h>
 #include <asm/div64.h>

@@ -47,8 +47,6 @@ const struct vcmd_ctx_rlimit_mask_v0 vlimit_mask = {
 		/* minimum */
 	0
 	,	/* softlimit */
-	MASK_ENTRY( RLIMIT_RSS		) |
-	MASK_ENTRY( VLIMIT_ANON		) |
 	0
 	,       /* maximum */
 	MASK_ENTRY( RLIMIT_RSS		) |
@@ -59,8 +57,6 @@ const struct vcmd_ctx_rlimit_mask_v0 vlimit_mask = {
 	MASK_ENTRY( RLIMIT_LOCKS	) |
 	MASK_ENTRY( RLIMIT_MSGQUEUE	) |
 
-	MASK_ENTRY( VLIMIT_NSOCK	) |
-	MASK_ENTRY( VLIMIT_OPENFD	) |
 	MASK_ENTRY( VLIMIT_ANON		) |
 	MASK_ENTRY( VLIMIT_SHMEM	) |
 	0

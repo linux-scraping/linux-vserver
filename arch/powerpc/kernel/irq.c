@@ -244,7 +244,6 @@ void do_IRQ(struct pt_regs *regs)
 
 #ifdef CONFIG_PPC_ISERIES
 	if (get_lppaca()->int_dword.fields.decr_int) {
-
 		get_lppaca()->int_dword.fields.decr_int = 0;
 		/* Signal a fake decrementer interrupt */
 		timer_interrupt(regs);

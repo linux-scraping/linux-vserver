@@ -20,7 +20,6 @@
 #include <linux/smp_lock.h>
 #include <linux/spinlock.h>
 #include <linux/seq_file.h>
-#include <linux/vs_context.h>
 
 #include <asm/ptrace.h>
 #include <asm/processor.h>

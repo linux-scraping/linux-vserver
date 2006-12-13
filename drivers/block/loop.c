@@ -72,7 +72,6 @@
 #include <linux/completion.h>
 #include <linux/highmem.h>
 #include <linux/gfp.h>
-#include <linux/vs_context.h>
 
 #include <asm/uaccess.h>
 

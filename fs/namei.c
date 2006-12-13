@@ -788,9 +788,10 @@ static int do_lookup(struct nameidata *nd, struct qstr *name,
 		goto need_lookup;
 	if (dentry->d_op && dentry->d_op->d_revalidate)
 		goto need_revalidate;
+done:
 	inode = dentry->d_inode;
 	if (!inode)
-		goto done;
+		goto no_inode;
 	if (!vx_check(inode->i_xid, VX_WATCH|VX_ADMIN|VX_HOSTID|VX_IDENT))
 		goto hidden;
 	if (inode->i_sb->s_magic == PROC_SUPER_MAGIC) {
@@ -799,7 +800,7 @@ static int do_lookup(struct nameidata *nd, struct qstr *name,
 		if (de && !vx_hide_check(0, de->vx_flags))
 			goto hidden;
 	}
-done:
+no_inode:
 	path->mnt = mnt;
 	path->dentry = dentry;
 	__follow_mount(path);

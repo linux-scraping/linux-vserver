@@ -63,7 +63,9 @@ unsigned int  do_IRQ(int irq, struct pt_regs *regs)
 			       sp - sizeof(struct thread_info));
 	}
 #endif
+
 	__do_IRQ(irq, regs);
+
 	irq_exit();
 
 	return 1;

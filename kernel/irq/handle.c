@@ -15,7 +15,6 @@
 #include <linux/random.h>
 #include <linux/interrupt.h>
 #include <linux/kernel_stat.h>
-#include <linux/vs_context.h>
 
 #include "internals.h"
 
