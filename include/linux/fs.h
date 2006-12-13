@@ -576,6 +576,7 @@ struct inode {
 	gid_t			i_gid;
 	tag_t			i_tag;
 	dev_t			i_rdev;
+	dev_t			i_mdev;
 	loff_t			i_size;
 	struct timespec		i_atime;
 	struct timespec		i_mtime;
@@ -712,12 +713,12 @@ static inline void i_size_write(struct inode *inode, loff_t i_size)
 
 static inline unsigned iminor(struct inode *inode)
 {
-	return MINOR(inode->i_rdev);
+	return MINOR(inode->i_mdev);
 }
 
 static inline unsigned imajor(struct inode *inode)
 {
-	return MAJOR(inode->i_rdev);
+	return MAJOR(inode->i_mdev);
 }
 
 extern struct block_device *I_BDEV(struct inode *inode);

@@ -22,6 +22,7 @@
 #include <linux/mount.h>
 #include <linux/uio.h>
 #include <linux/namei.h>
+#include <linux/vs_device.h>
 #include <asm/uaccess.h>
 #include "internal.h"
 
@@ -414,6 +415,7 @@ EXPORT_SYMBOL(bdput);
 static struct block_device *bd_acquire(struct inode *inode)
 {
 	struct block_device *bdev;
+	dev_t mdev;
 
 	spin_lock(&bdev_lock);
 	bdev = inode->i_bdev;
@@ -424,7 +426,12 @@ static struct block_device *bd_acquire(struct inode *inode)
 	}
 	spin_unlock(&bdev_lock);
 
-	bdev = bdget(inode->i_rdev);
+	mdev = inode->i_rdev;
+	if (!vs_map_blkdev(&mdev, DATTR_OPEN))
+		return NULL;
+	inode->i_mdev = mdev;
+
+	bdev = bdget(mdev);
 	if (bdev) {
 		spin_lock(&bdev_lock);
 		if (!inode->i_bdev) {

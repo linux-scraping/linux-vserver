@@ -76,6 +76,13 @@ config	VSERVER_VTIME
 	  this adds some overhead to the time functions and
 	  therefore should not be enabled without good reason.
 
+config	VSERVER_DEVICE
+	bool	"Enable Guest Device Mapping"
+	depends on EXPERIMENTAL
+	default n
+	help
+	  This enables generic device remapping.
+
 config	VSERVER_PROC_SECURE
 	bool	"Enable Proc Security"
 	depends on PROC_FS
