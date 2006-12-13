@@ -136,10 +136,9 @@ static const char *task_state_array[] = {
 	"D (disk sleep)",	/*  2 */
 	"T (stopped)",		/*  4 */
 	"T (tracing stop)",	/*  8 */
-	"Z (zombie)",		/* 16 */
-	"X (dead)",		/* 32 */
-	"N (noninteractive)",	/* 64 */
-	"H (on hold)"		/* 128 */
+	"H (on hold)"		/* 16 */
+	"Z (zombie)",		/* 32 */
+	"X (dead)",		/* 64 */
 };
 
 static inline const char * get_task_state(struct task_struct *tsk)
@@ -171,8 +170,10 @@ static inline char * task_state(struct task_struct *p, char *buffer)
 	rcu_read_lock();
 	tgid = vx_map_tgid(p->tgid);
 	pid = vx_map_pid(p->pid);
-	ptgid = vx_map_pid(rcu_dereference(p->real_parent)->tgid);
-	tppid = vx_map_pid(rcu_dereference(p->parent)->pid);
+	ptgid = vx_map_pid(pid_alive(p) ?
+		rcu_dereference(p->real_parent)->tgid : 0);
+	tppid = vx_map_pid(pid_alive(p) && p->ptrace ?
+		rcu_dereference(p->parent)->pid : 0);
 
 	buffer += sprintf(buffer,
 		"State:\t%s\n"
@@ -185,8 +186,7 @@ static inline char * task_state(struct task_struct *p, char *buffer)
 		"Gid:\t%d\t%d\t%d\t%d\n",
 		get_task_state(p),
 		(p->sleep_avg/1024)*100/(1020000000/1024),
-		tgid, pid, (pid > 1) ? ptgid : 0,
-		pid_alive(p) && p->ptrace ? tppid : 0,
+		tgid, pid, (pid > 1) ? ptgid : 0, tppid,
 		p->uid, p->euid, p->suid, p->fsuid,
 		p->gid, p->egid, p->sgid, p->fsgid);
 
@@ -448,11 +448,10 @@ static int do_task_stat(struct task_struct *task, char * buffer, int whole)
 		}
 
 		sid = sig->session;
-		pgid = process_group(task);
 		pid = vx_info_map_pid(task->vx_info, task->pid);
-		ppid = (!(pid > 1)) ? 0 : vx_info_map_tgid(task->vx_info,
-			rcu_dereference(task->real_parent)->tgid);
-		pgid = vx_info_map_pid(task->vx_info, pgid);
+		pgid = vx_info_map_pid(task->vx_info, process_group(task));
+		ppid = (pid > 1) ? vx_info_map_tgid(task->vx_info,
+			rcu_dereference(task->real_parent)->tgid) : 0;
 
 		unlock_task_sighand(task, &flags);
 	}
