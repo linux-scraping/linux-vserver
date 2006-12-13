@@ -377,6 +377,7 @@ struct block_device *bdget(dev_t dev)
 		bdev->bd_invalidated = 0;
 		inode->i_mode = S_IFBLK;
 		inode->i_rdev = dev;
+		inode->i_mdev = dev;
 		inode->i_bdev = bdev;
 		inode->i_data.a_ops = &def_blk_aops;
 		mapping_set_gfp_mask(&inode->i_data, GFP_USER);
@@ -426,8 +427,7 @@ static struct block_device *bd_acquire(struct inode *inode)
 	}
 	spin_unlock(&bdev_lock);
 
-	mdev = inode->i_rdev;
-	if (!vs_map_blkdev(&mdev, DATTR_OPEN))
+	if (!vs_map_blkdev(inode->i_rdev, &mdev, DATTR_OPEN))
 		return NULL;
 	inode->i_mdev = mdev;
 

@@ -115,11 +115,13 @@ static inline int __lookup_mapping(struct vx_info *vxi,
 			!((vdm->flags ^ mode) & S_IFMT))
 			goto found;
 	}
-	ret = 0;
+
+	/* compatible default for now */
 	if (target)
 		*target = device;
 	if (flags)
-		*flags = DATTR_OPEN|DATTR_CREATE;
+		*flags = DATTR_OPEN;
+	ret = 0;
 	goto out;
 found:
 	if (target)
@@ -134,38 +136,21 @@ out:
 
 
 
-int vs_map_device(struct vx_info *vxi, dev_t *device, umode_t mode)
+int vs_map_device(struct vx_info *vxi,
+	dev_t device, dev_t *target, umode_t mode)
 {
-	dev_t target = ~0;
-	int ret, flags = 0;
+	int ret, flags = DATTR_MASK;
 
-	if (!vxi && 0)
-		return DATTR_MASK;
-
-	ret = __lookup_mapping(vxi, *device, &target, &flags, mode);
+	if (!vxi) {
+		if (target)
+			*target = device;
+		goto out;
+	}
+	ret = __lookup_mapping(vxi, device, target, &flags, mode);
 	printk("··· mapping device: %08x target: %08x flags: %04x mode: %04x mapped=%d\n",
-		*device, target, flags, mode, ret);
-
-	*device = target;
+		device, target ? *target : 0, flags, mode, ret);
+out:
 	return (flags & DATTR_MASK);
-}
-
-
-int vs_device_permission(struct vx_info *vxi,
-	dev_t device, umode_t mode, int perm)
-{
-	int ret, flags = 0;
-
-	if (!vxi && 0)
-		return -1;
-
-	ret = __lookup_mapping(vxi, device, NULL, &flags, mode);
-	printk("··· device perm: %08x flags/perm: %04x/%04x mode: %04x mapped=%d\n",
-		device, flags, perm, mode, ret);
-
-	if ((flags & perm) != perm)
-		return 0;
-	return flags;
 }
 
 

@@ -369,10 +369,10 @@ int chrdev_open(struct inode * inode, struct file * filp)
 	if (!p) {
 		struct kobject *kobj;
 		int idx;
-		dev_t mdev = inode->i_rdev;
+		dev_t mdev;
 
 		spin_unlock(&cdev_lock);
-		if (!vs_map_chrdev(&mdev, DATTR_OPEN))
+		if (!vs_map_chrdev(inode->i_rdev, &mdev, DATTR_OPEN))
 			return -EPERM;
 		inode->i_mdev = mdev;
 

@@ -6,19 +6,38 @@
 #include "vserver/debug.h"
 
 
-int vs_map_device(struct vx_info *, dev_t *, umode_t);
+#ifdef CONFIG_VSERVER_DEVICE
 
-#define	vs_map_chrdev(d,p) \
-	((vs_map_device(current_vx_info(), d, S_IFCHR) & (p)) == (p))
-#define	vs_map_blkdev(d,p) \
-	((vs_map_device(current_vx_info(), d, S_IFBLK) & (p)) == (p))
+int vs_map_device(struct vx_info *, dev_t, dev_t *, umode_t);
 
-int vs_device_permission(struct vx_info *, dev_t, umode_t, int);
+#define vs_device_perm(v,d,m,p) \
+	((vs_map_device(current_vx_info(), d, NULL, m) & (p)) == (p))
 
-#define	vs_chrdev_permission(d,p) \
-	vs_device_permission(current_vx_info(), d, S_IFCHR, p)
-#define	vs_blkdev_permission(d,p) \
-	vs_device_permission(current_vx_info(), d, S_IFBLK, p)
+#else
+
+static inline
+int vs_map_device(struct vx_info *vxi,
+	dev_t device, dev_t *target, umode_t mode)
+{
+	if (target)
+		*target = device;
+	return ~0;
+}
+
+#define vs_device_perm(v,d,m,p) ((p) == (p))
+
+#endif
+
+
+#define vs_map_chrdev(d,t,p) \
+	((vs_map_device(current_vx_info(), d, t, S_IFCHR) & (p)) == (p))
+#define vs_map_blkdev(d,t,p) \
+	((vs_map_device(current_vx_info(), d, t, S_IFBLK) & (p)) == (p))
+
+#define vs_chrdev_perm(d,p) \
+	vs_device_perm(current_vx_info(), d, S_IFCHR, p)
+#define vs_blkdev_perm(d,p) \
+	vs_device_perm(current_vx_info(), d, S_IFBLK, p)
 
 
 #else
