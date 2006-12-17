@@ -249,54 +249,6 @@ int vc_set_iattr_x32(uint32_t id, void __user *data)
 
 #endif	/* CONFIG_COMPAT */
 
-#ifdef	CONFIG_VSERVER_LEGACY
-
-#define PROC_DYNAMIC_FIRST 0xF0000000UL
-
-int vx_proc_ioctl(struct inode * inode, struct file * filp,
-	unsigned int cmd, unsigned long arg)
-{
-	struct proc_dir_entry *entry;
-	int error = 0;
-	int flags;
-
-	if (inode->i_ino < PROC_DYNAMIC_FIRST)
-		return -ENOTTY;
-
-	entry = PROC_I(inode)->pde;
-	if (!entry)
-		return -ENOTTY;
-
-	switch(cmd) {
-	case FIOC_GETXFLG: {
-		/* fixme: if stealth, return -ENOTTY */
-		error = -EPERM;
-		flags = entry->vx_flags;
-		if (capable(CAP_CONTEXT))
-			error = put_user(flags, (int __user *) arg);
-		break;
-	}
-	case FIOC_SETXFLG: {
-		/* fixme: if stealth, return -ENOTTY */
-		error = -EPERM;
-		if (!capable(CAP_CONTEXT))
-			break;
-		error = -EROFS;
-		if (IS_RDONLY(inode))
-			break;
-		error = -EFAULT;
-		if (get_user(flags, (int __user *) arg))
-			break;
-		error = 0;
-		entry->vx_flags = flags;
-		break;
-	}
-	default:
-		return -ENOTTY;
-	}
-	return error;
-}
-#endif	/* CONFIG_VSERVER_LEGACY */
 
 #ifdef	CONFIG_PROPAGATE
 

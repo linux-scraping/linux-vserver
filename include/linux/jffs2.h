@@ -82,11 +82,15 @@
 //#define JFFS2_NODETYPE_OPTIONS (JFFS2_FEATURE_RWCOMPAT_COPY | JFFS2_NODE_ACCURATE | 4)
 
 
-#define JFFS2_INO_FLAG_PREREAD	  1	/* Do read_inode() for this one at
+#define JFFS2_INO_FLAG_PREREAD	  0x01	/* Do read_inode() for this one at
 					   mount time, don't wait for it to
 					   happen later */
-#define JFFS2_INO_FLAG_USERCOMPR  2	/* User has requested a specific
+#define JFFS2_INO_FLAG_USERCOMPR  0x02	/* User has requested a specific
 					   compression type */
+
+#define JFFS2_INO_FLAG_IMMUTABLE  0x10	/* immutable node */
+#define JFFS2_INO_FLAG_IUNLINK	  0x20	/* immutable unlink */
+#define JFFS2_INO_FLAG_BARRIER	  0x40	/* barrier */
 
 
 /* These can go once we've made sure we've caught all uses without

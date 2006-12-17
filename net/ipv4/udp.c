@@ -638,17 +638,10 @@ int udp_sendmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
 		struct nx_info *nxi = sk->sk_nx_info;
 
 		security_sk_classify_flow(sk, &fl);
-		if (nxi) {
-			err = ip_find_src(nxi, &rt, &fl);
-			if (err)
-				goto out;
-			if (daddr == IPI_LOOPBACK && !vx_check(0, VS_ADMIN))
-				daddr = fl.fl4_dst = nxi->ipv4[0];
-#ifdef CONFIG_VSERVER_REMAP_SADDR
-			if (saddr == IPI_LOOPBACK && !vx_check(0, VS_ADMIN))
-				saddr = fl.fl4_src = nxi->ipv4[0];
-#endif
-		}
+		err = ip_find_src(nxi, &rt, &fl);
+		if (err)
+			goto out;
+
 		err = ip_route_output_flow(&rt, &fl, sk, !(msg->msg_flags&MSG_DONTWAIT));
 		if (err)
 			goto out;

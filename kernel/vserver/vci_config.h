@@ -24,19 +24,8 @@ enum {
 static inline uint32_t vci_kernel_config(void)
 {
 	return
-	/* various legacy options */
-#ifndef CONFIG_VSERVER_DYNAMIC_IDS
 	(1 << VCI_KCBIT_NO_DYNAMIC) |
-#endif
-#ifdef	CONFIG_VSERVER_LEGACY
-	(1 << VCI_KCBIT_LEGACY) |
-#endif
-#ifdef	CONFIG_VSERVER_LEGACYNET
-	(1 << VCI_KCBIT_LEGACYNET) |
-#endif
-#ifdef	CONFIG_VSERVER_LEGACY_VERSION
-	(1 << VCI_KCBIT_LEGACY_VERSION) |
-#endif
+	(1 << VCI_KCBIT_NGNET) |
 
 	/* configured features */
 #ifdef	CONFIG_VSERVER_PROC_SECURE
@@ -64,8 +53,6 @@ static inline uint32_t vci_kernel_config(void)
 #ifdef	CONFIG_VSERVER_HISTORY
 	(1 << VCI_KCBIT_HISTORY) |
 #endif
-	(1 << VCI_KCBIT_SPACES) |
-
 	/* inode context tagging */
 #if	defined(CONFIG_TAGGING_NONE)
 	(0 << VCI_KCBIT_TAGGED) |

@@ -35,7 +35,7 @@
 #include <linux/cache.h>
 #include <linux/security.h>
 #include <linux/vs_base.h>
-#include <linux/vs_network.h>
+#include <linux/vs_inet.h>
 #include <linux/in.h>
 
 #ifndef __KERNEL__
@@ -148,58 +148,7 @@ static inline char rt_tos2priority(u8 tos)
 	return ip_tos2prio[IPTOS_TOS(tos)>>1];
 }
 
-#define IPI_LOOPBACK	htonl(INADDR_LOOPBACK)
-
-static inline int ip_find_src(struct nx_info *nxi, struct rtable **rp, struct flowi *fl)
-{
-	int err;
-	int i, n = nxi->nbipv4;
-	u32 ipv4root = nxi->ipv4[0];
-
-	if (ipv4root == 0)
-		return 0;
-
-	if (fl->fl4_src == 0) {
-		if (n > 1) {
-			u32 foundsrc;
-
-			err = __ip_route_output_key(rp, fl);
-			if (err) {
-				fl->fl4_src = ipv4root;
-				err = __ip_route_output_key(rp, fl);
-			}
-			if (err)
-				return err;
-
-			foundsrc = (*rp)->rt_src;
-			ip_rt_put(*rp);
-
-			for (i=0; i<n; i++){
-				u32 mask = nxi->mask[i];
-				u32 ipv4 = nxi->ipv4[i];
-				u32 net4 = ipv4 & mask;
-
-				if (foundsrc == ipv4) {
-					fl->fl4_src = ipv4;
-					break;
-				}
-				if (!fl->fl4_src && (foundsrc & mask) == net4)
-					fl->fl4_src = ipv4;
-			}
-		}
-		if (fl->fl4_src == 0)
-			fl->fl4_src = (fl->fl4_dst == IPI_LOOPBACK)
-				? IPI_LOOPBACK : ipv4root;
-	} else {
-		for (i=0; i<n; i++) {
-			if (nxi->ipv4[i] == fl->fl4_src)
-				break;
-		}
-		if (i == n)
-			return -EPERM;
-	}
-	return 0;
-}
+#include "route_vs.h"
 
 static inline int ip_route_connect(struct rtable **rp, __be32 dst,
 				   __be32 src, u32 tos, int oif, u8 protocol,
@@ -219,22 +168,16 @@ static inline int ip_route_connect(struct rtable **rp, __be32 dst,
 
 	if (sk)
 		nx_info = sk->sk_nx_info;
+
 	vxdprintk(VXD_CBIT(net, 4),
 		"ip_route_connect(%p) %p,%p;%lx",
 		sk, nx_info, sk->sk_socket,
 		(sk->sk_socket?sk->sk_socket->flags:0));
 
-	if (nx_info) {
-		err = ip_find_src(nx_info, rp, &fl);
-		if (err)
-			return err;
-		if (fl.fl4_dst == IPI_LOOPBACK && !vx_check(0, VS_ADMIN))
-			fl.fl4_dst = nx_info->ipv4[0];
-#ifdef CONFIG_VSERVER_REMAP_SADDR
-		if (fl.fl4_src == IPI_LOOPBACK && !vx_check(0, VS_ADMIN))
-			fl.fl4_src = nx_info->ipv4[0];
-#endif
-	}
+	err = ip_find_src(nx_info, rp, &fl);
+	if (err)
+		return err;
+
 	if (!fl.fl4_dst || !fl.fl4_src) {
 		err = __ip_route_output_key(rp, &fl);
 		if (err)

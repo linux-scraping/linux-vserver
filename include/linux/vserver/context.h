@@ -5,8 +5,6 @@
 #include <linux/capability.h>
 
 
-#define VX_DYNAMIC_ID	((uint32_t)-1)		/* id for dynamic context */
-
 /* context flags */
 
 #define VXF_INFO_SCHED		0x00000002
@@ -29,7 +27,7 @@
 #define VXF_VIRT_TIME		0x00100000
 
 #define VXF_HIDE_MOUNT		0x01000000
-#define VXF_HIDE_NETIF		0x02000000
+/* was	VXF_HIDE_NETIF		0x02000000 */
 #define VXF_HIDE_VINFO		0x04000000
 
 #define VXF_STATE_SETUP		(1ULL<<32)

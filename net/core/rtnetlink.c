@@ -36,7 +36,6 @@
 #include <linux/security.h>
 #include <linux/mutex.h>
 #include <linux/if_addr.h>
-#include <linux/vs_context.h> /* remove with NXF_HIDE_NETIF */
 
 #include <asm/uaccess.h>
 #include <asm/system.h>
@@ -360,8 +359,7 @@ static int rtnl_dump_ifinfo(struct sk_buff *skb, struct netlink_callback *cb)
 	for (dev=dev_base, idx=0; dev; dev = dev->next, idx++) {
 		if (idx < s_idx)
 			continue;
-		if (vx_info_flags(skb->sk->sk_vx_info, VXF_HIDE_NETIF, 0) &&
-			!dev_in_nx_info(dev, skb->sk->sk_nx_info))
+		if (!nx_dev_visible(skb->sk->sk_nx_info, dev))
 			continue;
 		if (rtnl_fill_ifinfo(skb, dev, NULL, 0, RTM_NEWLINK,
 				     NETLINK_CB(cb->skb).pid,
@@ -642,6 +640,9 @@ void rtmsg_ifinfo(int type, struct net_device *dev, unsigned change)
 {
 	struct sk_buff *skb;
 	int err = -ENOBUFS;
+
+	if (!nx_dev_visible(current->nx_info, dev))
+		return;
 
 	skb = nlmsg_new(NLMSG_GOODSIZE, GFP_KERNEL);
 	if (skb == NULL)

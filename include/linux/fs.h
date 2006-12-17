@@ -272,13 +272,8 @@ extern int dir_notify_enable;
 #define FS_IUNLINK_FL			0x08000000 /* Immutable unlink */
 #define FS_RESERVED_FL			0x80000000 /* reserved for ext2 lib */
 
-#ifdef CONFIG_VSERVER_LEGACY
-#define FS_FL_USER_VISIBLE		0x0803DFFF /* User visible flags */
-#define FS_FL_USER_MODIFIABLE		0x080380FF /* User modifiable flags */
-#else
 #define FS_FL_USER_VISIBLE		0x0003DFFF /* User visible flags */
 #define FS_FL_USER_MODIFIABLE		0x000380FF /* User modifiable flags */
-#endif
 
 #define SYNC_FILE_RANGE_WAIT_BEFORE	1
 #define SYNC_FILE_RANGE_WRITE		2
