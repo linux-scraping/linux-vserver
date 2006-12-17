@@ -998,6 +998,9 @@ int proc_pid_nx_info(struct task_struct *p, char *buffer)
 	buffer += sprintf (buffer,
 		"V4Root[bcast]:\t%d.%d.%d.%d\n"
 		,NIPQUAD(nxi->v4_bcast));
+	buffer += sprintf (buffer,
+		"V4Root[lback]:\t%d.%d.%d.%d\n"
+		,NIPQUAD(nxi->v4_lback));
 
 	put_nx_info(nxi);
 out:

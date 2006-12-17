@@ -5,5 +5,3 @@ unifdef-y += context_cmd.h network_cmd.h space_cmd.h \
 
 unifdef-y += switch.h network.h monitor.h
 
-unifdef-y += legacy.h
-

@@ -118,6 +118,9 @@ static int jffs2_do_setattr (struct inode *inode, struct iattr *iattr)
 	ri->offset = cpu_to_je32(0);
 	ri->csize = ri->dsize = cpu_to_je32(mdatalen);
 	ri->compr = JFFS2_COMPR_NONE;
+	ri->flags = cpu_to_je16(f->flags);
+	printk("··· do set attr flags: %04x\n", f->flags);
+
 	if (ivalid & ATTR_SIZE && inode->i_size < iattr->ia_size) {
 		/* It's an extension. Make it a hole node */
 		ri->compr = JFFS2_COMPR_ZERO;
@@ -178,6 +181,52 @@ static int jffs2_do_setattr (struct inode *inode, struct iattr *iattr)
 	if (ivalid & ATTR_SIZE && inode->i_size > iattr->ia_size)
 		vmtruncate(inode, iattr->ia_size);
 
+	return 0;
+}
+
+void jffs2_set_inode_flags(struct inode *inode)
+{
+	struct jffs2_inode_info *f = JFFS2_INODE_INFO(inode);
+	unsigned int flags = f->flags;
+
+	inode->i_flags &= ~(JFFS2_INO_FLAG_IMMUTABLE |
+		JFFS2_INO_FLAG_IUNLINK | JFFS2_INO_FLAG_BARRIER);
+
+	if (flags & JFFS2_INO_FLAG_IMMUTABLE)
+		inode->i_flags |= S_IMMUTABLE;
+	if (flags & JFFS2_INO_FLAG_IUNLINK)
+		inode->i_flags |= S_IUNLINK;
+	if (flags & JFFS2_INO_FLAG_BARRIER)
+		inode->i_flags |= S_BARRIER;
+
+	printk("··· set %p[#%lu] flags: %04x\n", inode, inode->i_ino, flags);
+}
+
+int jffs2_sync_flags(struct inode *inode)
+{
+	struct jffs2_inode_info *f = JFFS2_INODE_INFO(inode);
+	unsigned int oldflags, newflags;
+
+	oldflags = f->flags;
+	newflags = oldflags & ~(JFFS2_INO_FLAG_IMMUTABLE |
+		JFFS2_INO_FLAG_IUNLINK | JFFS2_INO_FLAG_BARRIER);
+
+	if (IS_IMMUTABLE(inode))
+		newflags |= JFFS2_INO_FLAG_IMMUTABLE;
+	if (IS_IUNLINK(inode))
+		newflags |= JFFS2_INO_FLAG_IUNLINK;
+	if (IS_BARRIER(inode))
+		newflags |= JFFS2_INO_FLAG_BARRIER;
+
+	if (oldflags ^ newflags) {
+		f->flags = newflags;
+		inode->i_ctime = CURRENT_TIME;
+		/* strange requirement, see jffs2_dirty_inode() */
+		inode->i_state |= I_DIRTY_DATASYNC;
+		mark_inode_dirty(inode);
+	}
+	printk("··· sync %p[#%lu] flags: %04x ^ %04x\n",
+		inode, inode->i_ino, oldflags, newflags);
 	return 0;
 }
 
@@ -287,6 +336,7 @@ void jffs2_read_inode (struct inode *inode)
 
 		inode->i_op = &jffs2_dir_inode_operations;
 		inode->i_fop = &jffs2_dir_operations;
+		f->flags = je16_to_cpu(latest_node.flags);
 		break;
 	}
 	case S_IFREG:
@@ -294,6 +344,7 @@ void jffs2_read_inode (struct inode *inode)
 		inode->i_fop = &jffs2_file_operations;
 		inode->i_mapping->a_ops = &jffs2_file_address_operations;
 		inode->i_mapping->nrpages = 0;
+		f->flags = je16_to_cpu(latest_node.flags);
 		break;
 
 	case S_IFBLK:
@@ -330,7 +381,7 @@ void jffs2_read_inode (struct inode *inode)
 	default:
 		printk(KERN_WARNING "jffs2_read_inode(): Bogus imode %o for ino %lu\n", inode->i_mode, (unsigned long)inode->i_ino);
 	}
-
+	jffs2_set_inode_flags(inode);
 	up(&f->sem);
 
 	D1(printk(KERN_DEBUG "jffs2_read_inode() returning\n"));
@@ -451,6 +502,8 @@ struct inode *jffs2_new_inode (struct inode *dir_i, int mode, struct jffs2_raw_i
 	inode->i_blocks = 0;
 	inode->i_size = 0;
 
+	f->flags = je16_to_cpu(ri->flags);
+	jffs2_set_inode_flags(inode);
 	insert_inode_hash(inode);
 
 	return inode;

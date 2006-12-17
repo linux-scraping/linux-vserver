@@ -6,14 +6,16 @@
 
 #define MAX_N_CONTEXT	65535	/* Arbitrary limit */
 
-#define NX_DYNAMIC_ID	((uint32_t)-1)		/* id for dynamic context */
-
 #define NB_IPV4ROOT	16
 
 
 /* network flags */
 
 #define NXF_INFO_PRIVATE	0x00000008
+
+#define NXF_SINGLE_IP		0x00000100
+
+#define NXF_HIDE_NETIF		0x02000000
 
 #define NXF_STATE_SETUP		(1ULL<<32)
 #define NXF_STATE_ADMIN		(1ULL<<34)
@@ -68,6 +70,7 @@ struct nx_info {
 					/* Used to select the proper source */
 					/* address for sockets */
 	__be32 v4_bcast;		/* Broadcast address to receive UDP  */
+	__be32 v4_lback;		/* Loopback address */
 
 	char nx_name[65];		/* network context name */
 };
@@ -79,26 +82,6 @@ struct nx_info {
 #define NXS_SHUTDOWN    0x0100
 #define NXS_RELEASED    0x8000
 
-/* check conditions */
-
-#define NX_ADMIN	0x0001
-#define NX_WATCH	0x0002
-#define NX_BLEND	0x0004
-#define NX_HOSTID	0x0008
-
-#define NX_IDENT	0x0010
-#define NX_EQUIV	0x0020
-#define NX_PARENT	0x0040
-#define NX_CHILD	0x0080
-
-#define NX_ARG_MASK	0x00F0
-
-#define NX_DYNAMIC	0x0100
-#define NX_STATIC	0x0200
-
-#define NX_ATR_MASK	0x0F00
-
-
 extern struct nx_info *lookup_nx_info(int);
 
 extern int get_nid_list(int, unsigned int *, int);
@@ -108,38 +91,7 @@ extern int nx_migrate_task(struct task_struct *, struct nx_info *);
 
 extern long vs_net_change(struct nx_info *, unsigned int);
 
-struct in_ifaddr;
-struct net_device;
-
-#ifdef CONFIG_INET
-int ifa_in_nx_info(struct in_ifaddr *, struct nx_info *);
-int dev_in_nx_info(struct net_device *, struct nx_info *);
-
-#else /* CONFIG_INET */
-static inline
-int ifa_in_nx_info(struct in_ifaddr *a, struct nx_info *n)
-{
-	return 1;
-}
-
-static inline
-int dev_in_nx_info(struct net_device *d, struct nx_info *n)
-{
-	return 1;
-}
-#endif /* CONFIG_INET */
-
 struct sock;
-
-#ifdef CONFIG_INET
-int nx_addr_conflict(struct nx_info *, uint32_t, struct sock *);
-#else /* CONFIG_INET */
-static inline
-int nx_addr_conflict(struct nx_info *n, uint32_t a, struct sock *s)
-{
-	return 1;
-}
-#endif /* CONFIG_INET */
 
 #endif	/* __KERNEL__ */
 #else	/* _VX_NETWORK_H */
