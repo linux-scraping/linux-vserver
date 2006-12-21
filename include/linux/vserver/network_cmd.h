@@ -53,6 +53,7 @@ struct	vcmd_match_ipv4_v0 {
 	uint16_t type;
 	uint16_t flags;
 	uint32_t parent;
+	uint32_t prefix;
 	struct in_addr ip;
 	struct in_addr ip2;
 	struct in_addr mask;
