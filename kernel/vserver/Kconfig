@@ -6,16 +6,11 @@ menu "Linux VServer"
 
 config	VSERVER_LEGACY
 	bool	"Enable Legacy Kernel API"
-	default y
+	default n
 	help
 	  This enables the legacy API used in vs1.xx, maintaining
 	  compatibility with older vserver tools, and guest images
-	  that are configured using the legacy method.  This is
-	  probably a good idea for now, for migration purposes.
-
-	  Note that some tools have not yet been altered to use
-	  this API, so disabling this option may reduce some
-	  functionality.
+	  that are configured using the legacy method.
 
 config	VSERVER_LEGACY_VERSION
 	bool	"Show a Legacy Version ID"
@@ -31,8 +26,8 @@ config	VSERVER_LEGACY_VERSION
 
 config	VSERVER_DYNAMIC_IDS
 	bool	"Enable dynamic context IDs"
-	depends on VSERVER_LEGACY
-	default y
+	depends on EXPERIMENTAL && VSERVER_LEGACY
+	default n
 	help
 	  This enables support of in kernel dynamic context IDs,
 	  which is deprecated and will probably be removed in the
@@ -40,16 +35,15 @@ config	VSERVER_DYNAMIC_IDS
 
 config	VSERVER_LEGACYNET
 	bool	"Enable Legacy Networking Kernel API"
-	default y
+	default n
 	help
-	  This enables the legacy networking API which is required
-	  by the chbind tool (for util-vserver versions prior to
-	  0.30.210). If you use an older version, don't disable
-	  this option.
+	  This enables the legacy networking API which is used
+	  by older tools (pre 0.30.210) to set up the network
+	  context (chbind).
 
 config	VSERVER_REMAP_SADDR
 	bool	"Remap Source IP Address"
-	depends on EXPERIMENTAL && !VSERVER_LEGACY
+	depends on EXPERIMENTAL
 	default n
 	help
 	  This allows to remap the source IP address of 'local'
@@ -218,7 +212,7 @@ config	VSERVER_HISTORY
 	  the event of a kernel panic or oops.
 
 config	VSERVER_HISTORY_SIZE
-	int "Per-CPU History Size (32-65536)"
+	int	"Per-CPU History Size (32-65536)"
 	depends on VSERVER_HISTORY
 	range 32 65536
 	default 64
@@ -236,7 +230,7 @@ config	VSERVER_MONITOR
 	  for detailed analysis.
 
 config	VSERVER_MONITOR_SIZE
-	int "Per-CPU Monitor Queue Size (32-65536)"
+	int	"Per-CPU Monitor Queue Size (32-65536)"
 	depends on VSERVER_MONITOR
 	range 32 65536
 	default 1024
@@ -245,7 +239,7 @@ config	VSERVER_MONITOR_SIZE
 	  the per-CPU scheduling monitor buffer.
 
 config	VSERVER_MONITOR_SYNC
-	int "Per-CPU Monitor Sync Interval (0-65536)"
+	int	"Per-CPU Monitor Sync Interval (0-65536)"
 	depends on VSERVER_MONITOR
 	range 0 65536
 	default 256
