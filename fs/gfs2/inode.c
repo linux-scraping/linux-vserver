@@ -85,6 +85,16 @@ void gfs2_inode_attr_in(struct gfs2_inode *ip)
 		inode->i_flags |= S_APPEND;
 	else
 		inode->i_flags &= ~S_APPEND;
+
+	if (di->di_flags & GFS2_DIF_BARRIER)
+		inode->i_flags |= S_BARRIER;
+	else
+		inode->i_flags &= ~S_BARRIER;
+
+	if (di->di_flags & GFS2_DIF_IUNLINK)
+		inode->i_flags |= S_IUNLINK;
+	else
+		inode->i_flags &= ~S_IUNLINK;
 }
 
 /**

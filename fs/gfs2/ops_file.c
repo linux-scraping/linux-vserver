@@ -230,6 +230,8 @@ static const u32 fsflags_to_gfs2[32] = {
 	[12] = GFS2_DIF_EXHASH,
 	[14] = GFS2_DIF_JDATA,
 	[20] = GFS2_DIF_DIRECTIO,
+//	[26] = GFS2_DIF_BARRIER,
+//	[27] = GFS2_DIF_IUNLINK,
 };
 
 static const u32 gfs2_to_fsflags[32] = {
@@ -242,6 +244,8 @@ static const u32 gfs2_to_fsflags[32] = {
 	[gfs2fl_Directio] = FS_DIRECTIO_FL,
 	[gfs2fl_InheritDirectio] = FS_DIRECTIO_FL,
 	[gfs2fl_InheritJdata] = FS_JOURNAL_DATA_FL,
+//	[gfs2fl_Barrier] = FS_BARRIER_FL,
+//	[gfs2fl_IUnlink] = FS_IUNLINK_FL,
 };
 
 static int gfs2_get_flags(struct file *filp, u32 __user *ptr)
@@ -352,6 +356,17 @@ static int gfs2_set_flags(struct file *filp, u32 __user *ptr)
 		return -EFAULT;
 	gfsflags = fsflags_cvt(fsflags_to_gfs2, fsflags);
 	return do_gfs2_set_flags(filp, gfsflags, ~0);
+}
+
+static int gfs2_sync_flags(struct inode *inode)
+{
+	unsigned int oldflags, newflags;
+
+	oldflags = GFS2_I(inode)->i_di.di_flags;
+	newflags = oldflags & ~(GFS2_DIF_IMMUTABLE |
+		GFS2_DIF_IUNLINK | GFS2_DIF_BARRIER);
+
+
 }
 
 static long gfs2_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
