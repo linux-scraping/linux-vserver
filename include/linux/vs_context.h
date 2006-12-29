@@ -215,30 +215,6 @@ extern void exit_vx_info(struct task_struct *, int);
 extern void exit_vx_info_early(struct task_struct *, int);
 
 
-static inline
-struct task_struct *vx_child_reaper(struct task_struct *p)
-{
-	struct vx_info *vxi = p->vx_info;
-	struct task_struct *reaper = child_reaper;
-
-	if (!vxi)
-		goto out;
-
-	BUG_ON(!p->vx_info->vx_reaper);
-
-	/* child reaper for the guest reaper */
-	if (vxi->vx_reaper == p)
-		goto out;
-
-	reaper = vxi->vx_reaper;
-out:
-	vxdprintk(VXD_CBIT(xid, 3),
-		"vx_child_reaper(%p[#%u,%u]) = %p[#%u,%u]\n",
-		p, p->xid, p->pid, reaper, reaper->xid, reaper->pid);
-	return reaper;
-}
-
-
 #else
 #warning duplicate inclusion
 #endif

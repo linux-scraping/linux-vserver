@@ -27,7 +27,7 @@
 
 /* namespace functions */
 
-#include <linux/namespace.h>
+#include <linux/mnt_namespace.h>
 
 const struct vcmd_space_mask space_mask = {
 	.mask = CLONE_NEWNS |
@@ -46,12 +46,12 @@ const struct vcmd_space_mask space_mask = {
 struct nsproxy *vs_mix_nsproxy(struct nsproxy *old_nsproxy,
 	struct nsproxy *new_nsproxy, unsigned long mask)
 {
-	struct namespace *old_ns;
+	struct mnt_namespace *old_mnt;
 	struct uts_namespace *old_uts;
 	struct ipc_namespace *old_ipc;
 	struct nsproxy *nsproxy;
 
-	old_ns = old_nsproxy->namespace;
+	old_mnt = old_nsproxy->mnt_ns;
 	old_uts = old_nsproxy->uts_ns;
 	old_ipc = old_nsproxy->ipc_ns;
 
@@ -60,11 +60,11 @@ struct nsproxy *vs_mix_nsproxy(struct nsproxy *old_nsproxy,
 		goto out;
 
 	if (mask & CLONE_NEWNS) {
-		nsproxy->namespace = new_nsproxy->namespace;
-		if (nsproxy->namespace)
-			get_namespace(nsproxy->namespace);
+		nsproxy->mnt_ns = new_nsproxy->mnt_ns;
+		if (nsproxy->mnt_ns)
+			get_mnt_ns(nsproxy->mnt_ns);
 	} else
-		old_ns = NULL;
+		old_mnt = NULL;
 
 	if (mask & CLONE_NEWUTS) {
 		nsproxy->uts_ns = new_nsproxy->uts_ns;
@@ -80,8 +80,8 @@ struct nsproxy *vs_mix_nsproxy(struct nsproxy *old_nsproxy,
 	} else
 		old_ipc = NULL;
 
-	if (old_ns)
-		put_namespace(old_ns);
+	if (old_mnt)
+		put_mnt_ns(old_mnt);
 	if (old_uts)
 		put_uts_ns(old_uts);
 	if (old_ipc)
@@ -95,7 +95,7 @@ void __vs_merge_nsproxy(struct nsproxy **ptr,
 	struct nsproxy *nsproxy, unsigned long mask)
 {
 	struct nsproxy *old = *ptr;
-	struct nsproxy null_proxy = { .namespace = NULL };
+	struct nsproxy null_proxy = { .mnt_ns = NULL };
 
 	BUG_ON(!nsproxy);
 

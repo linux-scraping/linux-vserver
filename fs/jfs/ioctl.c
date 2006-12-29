@@ -10,6 +10,7 @@
 #include <linux/capability.h>
 #include <linux/time.h>
 #include <linux/mount.h>
+#include <linux/sched.h>
 #include <asm/current.h>
 #include <asm/uaccess.h>
 

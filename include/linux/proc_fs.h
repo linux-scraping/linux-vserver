@@ -245,6 +245,9 @@ static inline void kclist_add(struct kcore_list *new, void *addr, size_t size)
 extern void kclist_add(struct kcore_list *, void *, size_t);
 #endif
 
+struct vx_info;
+struct nx_info;
+
 union proc_op {
 	int (*proc_get_link)(struct inode *, struct dentry **, struct vfsmount **);
 	int (*proc_read)(struct task_struct *task, char *page);

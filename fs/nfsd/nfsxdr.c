@@ -19,11 +19,6 @@
 
 #define NFSDDBG_FACILITY		NFSDDBG_XDR
 
-
-#ifdef NFSD_OPTIMIZE_SPACE
-# define inline
-#endif
-
 /*
  * Mapping of S_IF* types to NFS file types
  */
@@ -56,7 +51,7 @@ __be32 *nfs2svc_decode_fh(__be32 *p, struct svc_fh *fhp)
 	return decode_fh(p, fhp);
 }
 
-static inline __be32 *
+static __be32 *
 encode_fh(__be32 *p, struct svc_fh *fhp)
 {
 	memcpy(p, &fhp->fh_handle.fh_base, NFS_FHSIZE);
@@ -67,7 +62,7 @@ encode_fh(__be32 *p, struct svc_fh *fhp)
  * Decode a file name and make sure that the path contains
  * no slashes or null bytes.
  */
-static inline __be32 *
+static __be32 *
 decode_filename(__be32 *p, char **namp, int *lenp)
 {
 	char		*name;
@@ -83,7 +78,7 @@ decode_filename(__be32 *p, char **namp, int *lenp)
 	return p;
 }
 
-static inline __be32 *
+static __be32 *
 decode_pathname(__be32 *p, char **namp, int *lenp)
 {
 	char		*name;
@@ -99,7 +94,7 @@ decode_pathname(__be32 *p, char **namp, int *lenp)
 	return p;
 }
 
-static inline __be32 *
+static __be32 *
 decode_sattr(__be32 *p, struct iattr *iap)
 {
 	u32	tmp, tmp1;

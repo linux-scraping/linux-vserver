@@ -11,7 +11,7 @@
  */
 
 #include <linux/fs.h>
-#include <linux/namespace.h>
+// #include <linux/namespace.h>
 #include <linux/namei.h>
 #include <linux/statfs.h>
 #include <linux/compat.h>

@@ -2,7 +2,7 @@
 #define _VX_CVIRT_PROC_H
 
 #include <linux/nsproxy.h>
-#include <linux/namespace.h>
+#include <linux/mnt_namespace.h>
 #include <linux/utsname.h>
 #include <linux/ipc.h>
 
@@ -10,11 +10,11 @@
 static inline
 int vx_info_proc_nsproxy(struct nsproxy *nsproxy, char *buffer)
 {
-	struct namespace *ns;
+	struct mnt_namespace *mnt;
 	struct uts_namespace *uts;
 	struct ipc_namespace *ipc;
-	struct vfsmount *mnt;
-	char *path, *root;
+	struct vfsmount *root;
+	char *path, *d_root;
 	int length = 0;
 
 	if (!nsproxy)
@@ -22,26 +22,26 @@ int vx_info_proc_nsproxy(struct nsproxy *nsproxy, char *buffer)
 
 	length += sprintf(buffer + length,
 		"NSProxy:\t%p [%p,%p,%p]\n",
-		nsproxy, nsproxy->namespace,
+		nsproxy, nsproxy->mnt_ns,
 		nsproxy->uts_ns, nsproxy->ipc_ns);
 
-	ns = nsproxy->namespace;
-	if (!ns)
-		goto skip_ns;
+	mnt = nsproxy->mnt_ns;
+	if (!mnt)
+		goto skip_mnt;
 
 	path = kmalloc(PATH_MAX, GFP_KERNEL);
 	if (!path)
-		goto skip_ns;
+		goto skip_mnt;
 
-	mnt = ns->root;
-	root = d_path(mnt->mnt_root, mnt->mnt_parent, path, PATH_MAX-2);
+	root = mnt->root;
+	d_root = d_path(root->mnt_root, root->mnt_parent, path, PATH_MAX-2);
 	length += sprintf(buffer + length,
 		"Namespace:\t%p [#%u]\n"
 		"RootPath:\t%s\n"
-		,ns , atomic_read(&ns->count)
-		,root);
+		,mnt , atomic_read(&mnt->count)
+		,d_root);
 	kfree(path);
-skip_ns:
+skip_mnt:
 
 	uts = nsproxy->uts_ns;
 	if (!uts)

@@ -28,7 +28,11 @@
  * Should the kernel map a VDSO page into processes and pass its
  * address down to glibc upon exec()?
  */
+#ifdef CONFIG_PARAVIRT
+unsigned int __read_mostly vdso_enabled = 0;
+#else
 unsigned int __read_mostly vdso_enabled = 1;
+#endif
 
 EXPORT_SYMBOL_GPL(vdso_enabled);
 
@@ -133,7 +137,7 @@ int arch_setup_additional_pages(struct linux_binprm *bprm, int exstack)
 		goto up_fail;
 	}
 
-	vma = kmem_cache_zalloc(vm_area_cachep, SLAB_KERNEL);
+	vma = kmem_cache_zalloc(vm_area_cachep, GFP_KERNEL);
 	if (!vma) {
 		ret = -ENOMEM;
 		goto up_fail;

@@ -66,7 +66,7 @@ success:
 			ret = make_pages_present(start, end);
 	}
 
-	vx_vmlocked_sub(vma->vm_mm, pages);
+	vx_vmlocked_sub(mm, pages);
 out:
 	if (ret == -ENOMEM)
 		ret = -EAGAIN;
