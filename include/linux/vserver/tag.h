@@ -144,4 +144,10 @@ void __dx_propagate_tag(struct nameidata *nd, struct inode *inode);
 #define dx_propagate_tag(n,i)	do { } while (0)
 #endif
 
+struct peer_tag {
+	int32_t xid;
+	int32_t nid;
+};
+
+
 #endif /* _DX_TAG_H */

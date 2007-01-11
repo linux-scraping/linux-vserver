@@ -736,6 +736,7 @@ static int jffs2_garbage_collect_metadata(struct jffs2_sb_info *c, struct jffs2_
 	ri.mode = cpu_to_jemode(JFFS2_F_I_MODE(f));
 	ri.uid = cpu_to_je16(JFFS2_F_I_UID(f));
 	ri.gid = cpu_to_je16(JFFS2_F_I_GID(f));
+	ri.tag = cpu_to_je16(JFFS2_F_I_TAG(f));
 	ri.isize = cpu_to_je32(ilen);
 	ri.atime = cpu_to_je32(JFFS2_F_I_ATIME(f));
 	ri.ctime = cpu_to_je32(JFFS2_F_I_CTIME(f));
@@ -997,6 +998,7 @@ static int jffs2_garbage_collect_hole(struct jffs2_sb_info *c, struct jffs2_eras
 	ri.mode = cpu_to_jemode(JFFS2_F_I_MODE(f));
 	ri.uid = cpu_to_je16(JFFS2_F_I_UID(f));
 	ri.gid = cpu_to_je16(JFFS2_F_I_GID(f));
+	ri.tag = cpu_to_je16(JFFS2_F_I_TAG(f));
 	ri.isize = cpu_to_je32(ilen);
 	ri.atime = cpu_to_je32(JFFS2_F_I_ATIME(f));
 	ri.ctime = cpu_to_je32(JFFS2_F_I_CTIME(f));
@@ -1255,6 +1257,7 @@ static int jffs2_garbage_collect_dnode(struct jffs2_sb_info *c, struct jffs2_era
 		ri.mode = cpu_to_jemode(JFFS2_F_I_MODE(f));
 		ri.uid = cpu_to_je16(JFFS2_F_I_UID(f));
 		ri.gid = cpu_to_je16(JFFS2_F_I_GID(f));
+		ri.tag = cpu_to_je16(JFFS2_F_I_TAG(f));
 		ri.isize = cpu_to_je32(JFFS2_F_I_SIZE(f));
 		ri.atime = cpu_to_je32(JFFS2_F_I_ATIME(f));
 		ri.ctime = cpu_to_je32(JFFS2_F_I_CTIME(f));

@@ -163,6 +163,7 @@ static int jffs2_prepare_write (struct file *filp, struct page *pg,
 		ri.mode = cpu_to_jemode(inode->i_mode);
 		ri.uid = cpu_to_je16(inode->i_uid);
 		ri.gid = cpu_to_je16(inode->i_gid);
+		ri.tag = cpu_to_je16(inode->i_tag);
 		ri.isize = cpu_to_je32(max((uint32_t)inode->i_size, pageofs));
 		ri.atime = ri.ctime = ri.mtime = cpu_to_je32(get_seconds());
 		ri.offset = cpu_to_je32(inode->i_size);
@@ -255,6 +256,7 @@ static int jffs2_commit_write (struct file *filp, struct page *pg,
 	ri->mode = cpu_to_jemode(inode->i_mode);
 	ri->uid = cpu_to_je16(inode->i_uid);
 	ri->gid = cpu_to_je16(inode->i_gid);
+	ri->tag = cpu_to_je16(inode->i_tag);
 	ri->isize = cpu_to_je32((uint32_t)inode->i_size);
 	ri->atime = ri->ctime = ri->mtime = cpu_to_je32(get_seconds());
 	ri->flags = cpu_to_je16(f->flags);

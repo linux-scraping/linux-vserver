@@ -23,6 +23,7 @@
 #include <linux/mtd/mtd.h>
 #include <linux/ctype.h>
 #include <linux/namei.h>
+#include <linux/parser.h>
 #include "compr.h"
 #include "nodelist.h"
 
@@ -110,6 +111,59 @@ static int jffs2_sb_set(struct super_block *sb, void *data)
 	return 0;
 }
 
+enum {
+	Opt_tag, Opt_notag, Opt_tagid, Opt_ignore, Opt_err
+};
+
+static match_table_t tokens = {
+	{Opt_tag, "tag"},
+	{Opt_notag, "notag"},
+	{Opt_tagid, "tagid=%u"},
+	{Opt_tag, "tagxid"},
+	{Opt_err, NULL}
+};
+
+static int parse_options (char * options,
+			  struct jffs2_sb_info *sbi)
+{
+	char * p;
+	substring_t args[MAX_OPT_ARGS];
+	int option;
+
+	if (!options)
+		return 1;
+
+	while ((p = strsep (&options, ",")) != NULL) {
+		int token;
+		if (!*p)
+			continue;
+
+		token = match_token(p, tokens, args);
+		switch (token) {
+#ifndef CONFIG_TAGGING_NONE
+		case Opt_tag:
+			set_opt (sbi->s_mount_opt, TAGGED);
+			break;
+		case Opt_notag:
+			clear_opt (sbi->s_mount_opt, TAGGED);
+			break;
+#endif
+#ifdef CONFIG_PROPAGATE
+		case Opt_tagid:
+			/* use args[0] */
+			set_opt (sbi->s_mount_opt, TAGGED);
+			break;
+#endif
+		case Opt_ignore:
+			break;
+		default:
+			return 0;
+		}
+	}
+	return 1;
+}
+
+
 static int jffs2_get_sb_mtd(struct file_system_type *fs_type,
 			    int flags, const char *dev_name,
 			    void *data, struct mtd_info *mtd,
@@ -155,24 +209,31 @@ static int jffs2_get_sb_mtd(struct file_system_type *fs_type,
 #ifdef CONFIG_JFFS2_FS_POSIX_ACL
 	sb->s_flags |= MS_POSIXACL;
 #endif
+	ret = -EINVAL;
+	if (!parse_options ((char *) data, c))
+		goto failed_mount;
+
 	ret = jffs2_do_fill_super(sb, data, flags & MS_SILENT ? 1 : 0);
+	if (ret)
+		goto failed_mount;
 
-	if (ret) {
-		/* Failure case... */
-		up_write(&sb->s_umount);
-		deactivate_super(sb);
-		return ret;
-	}
-
+	if (c->s_mount_opt & JFFS2_MOUNT_TAGGED)
+		sb->s_flags |= MS_TAGGED;
 	sb->s_flags |= MS_ACTIVE;
 	return simple_set_mnt(mnt, sb);
 
 out_error:
 	ret = PTR_ERR(sb);
- out_put:
+out_put:
 	kfree(c);
 	put_mtd_device(mtd);
 
+	return ret;
+
+failed_mount:
+	/* Failure case... */
+	up_write(&sb->s_umount);
+	deactivate_super(sb);
 	return ret;
 }
 

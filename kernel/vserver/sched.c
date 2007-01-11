@@ -46,6 +46,8 @@ void vx_update_sched_param(struct _vx_sched *sched,
 		sched_pc->tokens_min = sched->tokens_min;
 	if (set_mask & VXSM_TOKENS_MAX)
 		sched_pc->tokens_max = sched->tokens_max;
+	if (set_mask & VXSM_PRIO_BIAS)
+		sched_pc->prio_bias = sched->prio_bias;
 
 	if (set_mask & VXSM_IDLE_TIME)
 		sched_pc->flags |= VXSF_IDLE_TIME;
@@ -192,21 +194,33 @@ on_hold:
 #endif /* CONFIG_VSERVER_HARDCPU */
 }
 
-
-static int do_set_sched(struct vx_info *vxi, struct vcmd_set_sched_v4 *data)
+static inline unsigned long msec_to_ticks(unsigned long msec)
 {
-	unsigned int set_mask = data->set_mask;
+	return msecs_to_jiffies(msec);
+}
+
+static inline unsigned long ticks_to_msec(unsigned long ticks)
+{
+	return jiffies_to_msecs(ticks);
+}
+
+static inline unsigned long ticks_to_usec(unsigned long ticks)
+{
+	return jiffies_to_usecs(ticks);
+}
+
+
+static int do_set_sched(struct vx_info *vxi, struct vcmd_sched_v5 *data)
+{
+	unsigned int set_mask = data->mask;
 	unsigned int update_mask;
+	int i;
 
 	/* Sanity check data values */
-	if (data->fill_rate < 0)
-		data->fill_rate = 1;
-	if (data->interval <= 0)
-		data->interval = HZ;
 	if (data->tokens_max <= 0)
 		data->tokens_max = HZ;
 	if (data->tokens_min < 0)
-		data->tokens_min = data->fill_rate*3;
+		data->tokens_min = HZ/3;
 	if (data->tokens_min >= data->tokens_max)
 		data->tokens_min = data->tokens_max;
 
@@ -218,13 +232,15 @@ static int do_set_sched(struct vx_info *vxi, struct vcmd_set_sched_v4 *data)
 	spin_lock(&vxi->sched.tokens_lock);
 
 	if (set_mask & VXSM_FILL_RATE)
-		vxi->sched.fill_rate[0] = data->fill_rate;
-	if (set_mask & VXSM_INTERVAL)
-		vxi->sched.interval[0] = data->interval;
+		vxi->sched.fill_rate[0] = data->fill_rate[0];
 	if (set_mask & VXSM_FILL_RATE2)
-		vxi->sched.fill_rate[1] = data->fill_rate;
+		vxi->sched.fill_rate[1] = data->fill_rate[1];
+	if (set_mask & VXSM_INTERVAL)
+		vxi->sched.interval[0] = (set_mask & VXSM_MSEC) ?
+			msec_to_ticks(data->interval[0]) : data->interval[0];
 	if (set_mask & VXSM_INTERVAL2)
-		vxi->sched.interval[1] = data->interval;
+		vxi->sched.interval[1] = (set_mask & VXSM_MSEC) ?
+			msec_to_ticks(data->interval[1]) : data->interval[1];
 	if (set_mask & VXSM_TOKENS)
 		vxi->sched.tokens = data->tokens;
 	if (set_mask & VXSM_TOKENS_MIN)
@@ -233,6 +249,14 @@ static int do_set_sched(struct vx_info *vxi, struct vcmd_set_sched_v4 *data)
 		vxi->sched.tokens_max = data->tokens_max;
 	if (set_mask & VXSM_PRIO_BIAS)
 		vxi->sched.prio_bias = data->prio_bias;
+
+	/* Sanity check rate/interval */
+	for (i=0; i<2; i++) {
+		if (data->fill_rate[i] < 0)
+			data->fill_rate[i] = 0;
+		if (data->interval[i] <= 0)
+			data->interval[i] = HZ;
+	}
 
 	update_mask = vxi->sched.update_mask & VXSM_SET_MASK;
 	update_mask |= (set_mask & (VXSM_SET_MASK|VXSM_IDLE_TIME));
@@ -261,6 +285,27 @@ static int do_set_sched(struct vx_info *vxi, struct vcmd_set_sched_v4 *data)
 	return 0;
 }
 
+#define	COPY_IDS(C) C(cpu_id); C(bucket_id)
+#define	COPY_PRI(C) C(prio_bias)
+#define	COPY_TOK(C) C(tokens); C(tokens_min); C(tokens_max)
+#define	COPY_FRI(C) C(fill_rate[0]); C(interval[0]);	\
+		    C(fill_rate[1]); C(interval[1]);
+
+#define	COPY_VALUE(name) vc_data.name = data->name
+
+static int do_set_sched_v4(struct vx_info *vxi, struct vcmd_set_sched_v4 *data)
+{
+	struct vcmd_sched_v5 vc_data;
+
+	vc_data.mask = data->set_mask;
+	COPY_IDS(COPY_VALUE);
+	COPY_PRI(COPY_VALUE);
+	COPY_TOK(COPY_VALUE);
+	vc_data.fill_rate[0] = vc_data.fill_rate[1] = data->fill_rate;
+	vc_data.interval[0] = vc_data.interval[1] = data->interval;
+	return do_set_sched(vxi, &vc_data);
+}
+
 int vc_set_sched_v3(struct vx_info *vxi, void __user *data)
 {
 	struct vcmd_set_sched_v3 vc_data;
@@ -274,16 +319,89 @@ int vc_set_sched_v3(struct vx_info *vxi, void __user *data)
 	vc_data_v4.set_mask &= VXSM_V3_MASK;
 	vc_data_v4.bucket_id = 0;
 
-	return do_set_sched(vxi, &vc_data_v4);
+	return do_set_sched_v4(vxi, &vc_data_v4);
 }
 
-int vc_set_sched(struct vx_info *vxi, void __user *data)
+int vc_set_sched_v4(struct vx_info *vxi, void __user *data)
 {
 	struct vcmd_set_sched_v4 vc_data;
 
 	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
+	return do_set_sched_v4(vxi, &vc_data);
+}
+
+	/* latest interface is v5 */
+
+int vc_set_sched(struct vx_info *vxi, void __user *data)
+{
+	struct vcmd_sched_v5 vc_data;
+
+	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
+		return -EFAULT;
+
 	return do_set_sched(vxi, &vc_data);
+}
+
+
+int vc_get_sched(struct vx_info *vxi, void __user *data)
+{
+	struct vcmd_sched_v5 vc_data;
+
+	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
+		return -EFAULT;
+
+	if (vc_data.mask & VXSM_CPU_ID) {
+		int cpu = vc_data.cpu_id;
+		struct _vx_sched_pc *data;
+
+		if (!cpu_possible(cpu))
+			return -EINVAL;
+
+		data = &vx_per_cpu(vxi, sched_pc, cpu);
+		COPY_TOK(COPY_VALUE);
+		COPY_PRI(COPY_VALUE);
+		COPY_FRI(COPY_VALUE);
+	} else {
+		struct _vx_sched *data = &vxi->sched;
+
+		COPY_TOK(COPY_VALUE);
+		COPY_PRI(COPY_VALUE);
+		COPY_FRI(COPY_VALUE);
+	}
+
+	if (copy_to_user (data, &vc_data, sizeof(vc_data)))
+		return -EFAULT;
+	return 0;
+}
+
+
+int vc_sched_info(struct vx_info *vxi, void __user *data)
+{
+	struct vcmd_sched_info vc_data;
+	int cpu;
+
+	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
+		return -EFAULT;
+
+	cpu = vc_data.cpu_id;
+	if (!cpu_possible(cpu))
+		return -EINVAL;
+
+	if (vxi) {
+		struct _vx_sched_pc *sched_pc =
+			&vx_per_cpu(vxi, sched_pc, cpu);
+
+		vc_data.user_msec = ticks_to_msec(sched_pc->user_ticks);
+		vc_data.sys_msec = ticks_to_msec(sched_pc->sys_ticks);
+		vc_data.hold_msec = ticks_to_msec(sched_pc->hold_ticks);
+		vc_data.vavavoom = sched_pc->vavavoom;
+	}
+	vc_data.token_usec = ticks_to_usec(1);
+
+	if (copy_to_user (data, &vc_data, sizeof(vc_data)))
+		return -EFAULT;
+	return 0;
 }
 

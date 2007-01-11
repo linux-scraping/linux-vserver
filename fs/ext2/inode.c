@@ -1068,13 +1068,9 @@ int ext2_sync_flags(struct inode *inode)
 	unsigned int oldflags, newflags;
 
 	oldflags = EXT2_I(inode)->i_flags;
-	newflags = oldflags & ~(EXT2_APPEND_FL |
-		EXT2_IMMUTABLE_FL | EXT2_IUNLINK_FL |
-		EXT2_BARRIER_FL | EXT2_NOATIME_FL |
-		EXT2_SYNC_FL | EXT2_DIRSYNC_FL);
+	newflags = oldflags & ~(EXT2_IMMUTABLE_FL |
+		EXT2_IUNLINK_FL | EXT2_BARRIER_FL);
 
-	if (IS_APPEND(inode))
-		newflags |= EXT2_APPEND_FL;
 	if (IS_IMMUTABLE(inode))
 		newflags |= EXT2_IMMUTABLE_FL;
 	if (IS_IUNLINK(inode))
@@ -1082,20 +1078,11 @@ int ext2_sync_flags(struct inode *inode)
 	if (IS_BARRIER(inode))
 		newflags |= EXT2_BARRIER_FL;
 
-	/* we do not want to copy superblock flags */
-	if (inode->i_flags & S_NOATIME)
-		newflags |= EXT2_NOATIME_FL;
-	if (inode->i_flags & S_SYNC)
-		newflags |= EXT2_SYNC_FL;
-	if (inode->i_flags & S_DIRSYNC)
-		newflags |= EXT2_DIRSYNC_FL;
-
 	if (oldflags ^ newflags) {
 		EXT2_I(inode)->i_flags = newflags;
 		inode->i_ctime = CURRENT_TIME;
 		mark_inode_dirty(inode);
 	}
-
 	return 0;
 }
 

@@ -789,6 +789,9 @@ int sock_getsockopt(struct socket *sock, int level, int optname,
 		case SO_PEERSEC:
 			return security_socket_getpeersec_stream(sock, optval, optlen, len);
 
+		case SO_PEERTAG:
+			return vx_socket_peer_tag(sock, level, optval, optlen, len);
+
 		default:
 			return(-ENOPROTOOPT);
 	}

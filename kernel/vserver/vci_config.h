@@ -1,4 +1,10 @@
 
+/*  interface version */
+
+#define VCI_VERSION		0x00020200
+#define VCI_LEGACY_VERSION	0x000100FF
+
+
 enum {
 	VCI_KCBIT_NO_DYNAMIC = 0,
 	VCI_KCBIT_LEGACY = 1,
