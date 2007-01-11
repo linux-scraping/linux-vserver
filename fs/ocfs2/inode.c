@@ -100,27 +100,15 @@ int ocfs2_sync_flags(struct inode *inode)
 	unsigned int oldflags, newflags;
 
 	oldflags = OCFS2_I(inode)->ip_flags;
-	newflags = oldflags & ~(OCFS2_APPEND_FL |
-		OCFS2_IMMUTABLE_FL | OCFS2_IUNLINK_FL |
-		OCFS2_BARRIER_FL | OCFS2_NOATIME_FL |
-		OCFS2_SYNC_FL | OCFS2_DIRSYNC_FL);
+	newflags = oldflags & ~(OCFS2_IMMUTABLE_FL |
+		OCFS2_IUNLINK_FL | OCFS2_BARRIER_FL);
 
-	if (IS_APPEND(inode))
-		newflags |= OCFS2_APPEND_FL;
 	if (IS_IMMUTABLE(inode))
 		newflags |= OCFS2_IMMUTABLE_FL;
 	if (IS_IUNLINK(inode))
 		newflags |= OCFS2_IUNLINK_FL;
 	if (IS_BARRIER(inode))
 		newflags |= OCFS2_BARRIER_FL;
-
-	/* we do not want to copy superblock flags */
-	if (inode->i_flags & S_NOATIME)
-		newflags |= OCFS2_NOATIME_FL;
-	if (inode->i_flags & S_SYNC)
-		newflags |= OCFS2_SYNC_FL;
-	if (inode->i_flags & S_DIRSYNC)
-		newflags |= OCFS2_DIRSYNC_FL;
 
 	if (oldflags ^ newflags)
 		return ocfs2_set_inode_attr(inode,

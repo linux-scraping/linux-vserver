@@ -25,6 +25,8 @@
 #include <linux/vs_network.h>
 #include <linux/vserver/switch.h>
 
+#include "vci_config.h"
+
 static inline
 int vc_get_version(uint32_t id)
 {
@@ -34,8 +36,6 @@ int vc_get_version(uint32_t id)
 #endif
 	return VCI_VERSION;
 }
-
-#include "vci_config.h"
 
 static inline
 int vc_get_vci(uint32_t id)
@@ -165,9 +165,15 @@ long do_vcmd(uint32_t cmd, uint32_t id,
 #endif
 	case VCMD_set_sched_v3:
 		return vc_set_sched_v3(vxi, data);
-	/* this is version 4 */
+	case VCMD_set_sched_v4:
+		return vc_set_sched_v4(vxi, data);
+	/* this is version 5 */
 	case VCMD_set_sched:
 		return vc_set_sched(vxi, data);
+	case VCMD_get_sched:
+		return vc_get_sched(vxi, data);
+	case VCMD_sched_info:
+		return vc_sched_info(vxi, data);
 
 	case VCMD_add_dlimit:
 		return __COMPAT(vc_add_dlimit, id, data, compat);
@@ -261,6 +267,8 @@ long do_vcmd(uint32_t cmd, uint32_t id,
 #define VCF_ARES	0x06	/* includes admin */
 #define VCF_SETUP	0x08
 
+#define VCF_ZIDOK	0x10	/* zero id okay */
+
 
 static inline
 long do_vserver(uint32_t cmd, uint32_t id, void __user *data, int compat)
@@ -301,6 +309,8 @@ long do_vserver(uint32_t cmd, uint32_t id, void __user *data, int compat)
 
 	__VCMD(get_iattr,	 2, VCA_NONE,	0);
 	__VCMD(get_dlimit,	 3, VCA_NONE,	VCF_INFO);
+	__VCMD(get_sched,	 3, VCA_VXI,	VCF_INFO);
+	__VCMD(sched_info,	 3, VCA_VXI,	VCF_INFO|VCF_ZIDOK);
 
 	/* lower admin commands */
 	__VCMD(wait_exit,	 4, VCA_VXI,	VCF_INFO);
@@ -330,6 +340,7 @@ long do_vserver(uint32_t cmd, uint32_t id, void __user *data, int compat)
 	__VCMD(set_sched,	 7, VCA_VXI,	VCF_ARES|VCF_SETUP);
 	__VCMD(set_sched_v2,	 7, VCA_VXI,	VCF_ARES|VCF_SETUP);
 	__VCMD(set_sched_v3,	 7, VCA_VXI,	VCF_ARES|VCF_SETUP);
+	__VCMD(set_sched_v4,	 7, VCA_VXI,	VCF_ARES|VCF_SETUP);
 
 	__VCMD(set_ncaps,	 7, VCA_NXI,	VCF_ARES|VCF_SETUP);
 	__VCMD(set_nflags,	 7, VCA_NXI,	VCF_ARES|VCF_SETUP);
@@ -441,6 +452,9 @@ long do_vserver(uint32_t cmd, uint32_t id, void __user *data, int compat)
 		goto out;
 
 	state = 6;
+	if (!id && (flags & VCF_ZIDOK))
+		goto skip_id;
+
 	ret = -ESRCH;
 	if (args & VCA_VXI) {
 		vxi = lookup_vx_info(id);
@@ -469,15 +483,15 @@ long do_vserver(uint32_t cmd, uint32_t id, void __user *data, int compat)
 			goto out_nxi;
 		}
 	}
-
+skip_id:
 	state = 8;
 	ret = do_vcmd(cmd, id, vxi, nxi, data, compat);
 
 out_nxi:
-	if (args & VCA_NXI)
+	if ((args & VCA_NXI) && nxi)
 		put_nx_info(nxi);
 out_vxi:
-	if (args & VCA_VXI)
+	if ((args & VCA_VXI) && vxi)
 		put_vx_info(vxi);
 out:
 	vxdprintk(VXD_CBIT(switch, 1),

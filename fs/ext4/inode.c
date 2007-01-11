@@ -2598,27 +2598,15 @@ int ext4_sync_flags(struct inode *inode)
 	int err = 0;
 
 	oldflags = EXT4_I(inode)->i_flags;
-	newflags = oldflags & ~(EXT4_APPEND_FL |
-		EXT4_IMMUTABLE_FL | EXT4_IUNLINK_FL |
-		EXT4_BARRIER_FL | EXT4_NOATIME_FL |
-		EXT4_SYNC_FL | EXT4_DIRSYNC_FL);
+	newflags = oldflags & ~(EXT4_IMMUTABLE_FL |
+		EXT4_IUNLINK_FL | EXT4_BARRIER_FL);
 
-	if (IS_APPEND(inode))
-		newflags |= EXT4_APPEND_FL;
 	if (IS_IMMUTABLE(inode))
 		newflags |= EXT4_IMMUTABLE_FL;
 	if (IS_IUNLINK(inode))
 		newflags |= EXT4_IUNLINK_FL;
 	if (IS_BARRIER(inode))
 		newflags |= EXT4_BARRIER_FL;
-
-	/* we do not want to copy superblock flags */
-	if (inode->i_flags & S_NOATIME)
-		newflags |= EXT4_NOATIME_FL;
-	if (inode->i_flags & S_SYNC)
-		newflags |= EXT4_SYNC_FL;
-	if (inode->i_flags & S_DIRSYNC)
-		newflags |= EXT4_DIRSYNC_FL;
 
 	if (oldflags ^ newflags) {
 		handle_t *handle;

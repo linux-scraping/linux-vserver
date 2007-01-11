@@ -18,7 +18,6 @@
 #include <linux/cache.h>
 #include <linux/init.h>
 #include <linux/time.h>
-// #include <linux/vs_base.h>
 
 #include <net/icmp.h>
 #include <net/tcp.h>
@@ -782,7 +781,7 @@ next_normal:
 			inet_twsk_for_each(tw, node,
 				    &hashinfo->ehash[i + hashinfo->ehash_size].chain) {
 
-				if (!vx_check(tw->tw_xid, VS_WATCH_P|VS_IDENT))
+				if (!nx_check(tw->tw_nid, VS_WATCH_P|VS_IDENT))
 					continue;
 				if (num < s_num)
 					goto next_dying;

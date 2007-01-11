@@ -58,18 +58,19 @@ static inline
 int vx_adjust_prio(struct task_struct *p, int prio, int max_user)
 {
 	struct vx_info *vxi = p->vx_info;
+	struct _vx_sched_pc *sched_pc;
 
 	if (!vxi)
 		return prio;
 
+	sched_pc = &vx_cpu(vxi, sched_pc);
 	if (vx_info_flags(vxi, VXF_SCHED_PRIO, 0)) {
-		struct _vx_sched_pc *sched_pc = &vx_cpu(vxi, sched_pc);
 		int vavavoom = vx_effective_vavavoom(sched_pc, max_user);
 
-		vxi->sched.vavavoom = vavavoom;
+		sched_pc->vavavoom = vavavoom;
 		prio += vavavoom;
 	}
-	prio += vxi->sched.prio_bias;
+	prio += sched_pc->prio_bias;
 	return prio;
 }
 
@@ -81,7 +82,7 @@ int vx_adjust_prio(struct task_struct *p, int prio, int max_user)
 	struct vx_info *vxi = p->vx_info;
 
 	if (vxi)
-		prio += vxi->sched.prio_bias;
+		prio += vx_cpu(vxi, sched_pc).prio_bias;
 	return prio;
 }
 

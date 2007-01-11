@@ -237,6 +237,7 @@ int vc_rlimit_stat(struct vx_info *vxi, void __user *data)
 	if (!is_accounted_vlimit(id))
 		return -EINVAL;
 
+	vx_limit_fixup(limit, id);
 	vc_data.hits = atomic_read(&__rlim_lhit(limit, id));
 	vc_data.value = __rlim_get(limit, id);
 	vc_data.minimum = __rlim_rmin(limit, id);
