@@ -557,7 +557,7 @@ int vc_task_nid(uint32_t id, void __user *data)
 	if (id) {
 		struct task_struct *tsk;
 
-		if (!vx_check(0, VS_ADMIN|VS_WATCH))
+		if (!nx_check(0, VS_ADMIN|VS_WATCH))
 			return -EPERM;
 
 		read_lock(&tasklist_lock);

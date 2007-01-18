@@ -228,10 +228,10 @@ static inline int ip_route_connect(struct rtable **rp, __be32 dst,
 		err = ip_find_src(nx_info, rp, &fl);
 		if (err)
 			return err;
-		if (fl.fl4_dst == IPI_LOOPBACK && !vx_check(0, VS_ADMIN))
+		if (fl.fl4_dst == IPI_LOOPBACK && !nx_check(0, VS_ADMIN))
 			fl.fl4_dst = nx_info->ipv4[0];
 #ifdef CONFIG_VSERVER_REMAP_SADDR
-		if (fl.fl4_src == IPI_LOOPBACK && !vx_check(0, VS_ADMIN))
+		if (fl.fl4_src == IPI_LOOPBACK && !nx_check(0, VS_ADMIN))
 			fl.fl4_src = nx_info->ipv4[0];
 #endif
 	}

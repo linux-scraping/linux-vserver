@@ -645,10 +645,10 @@ int udp_sendmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
 			err = ip_find_src(nxi, &rt, &fl);
 			if (err)
 				goto out;
-			if (daddr == IPI_LOOPBACK && !vx_check(0, VS_ADMIN))
+			if (daddr == IPI_LOOPBACK && !nx_check(0, VS_ADMIN))
 				daddr = fl.fl4_dst = nxi->ipv4[0];
 #ifdef CONFIG_VSERVER_REMAP_SADDR
-			if (saddr == IPI_LOOPBACK && !vx_check(0, VS_ADMIN))
+			if (saddr == IPI_LOOPBACK && !nx_check(0, VS_ADMIN))
 				saddr = fl.fl4_src = nxi->ipv4[0];
 #endif
 		}
