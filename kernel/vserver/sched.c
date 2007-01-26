@@ -391,12 +391,20 @@ int vc_get_sched(struct vx_info *vxi, void __user *data)
 		COPY_TOK(COPY_VALUE);
 		COPY_PRI(COPY_VALUE);
 		COPY_FRI(COPY_VALUE);
+
+		if (data->flags & VXSF_IDLE_TIME)
+			vc_data.mask |= VXSM_IDLE_TIME;
 	} else {
 		struct _vx_sched *data = &vxi->sched;
 
 		COPY_TOK(COPY_VALUE);
 		COPY_PRI(COPY_VALUE);
 		COPY_FRI(COPY_VALUE);
+	}
+
+	if (vc_data.mask & VXSM_MSEC) {
+		vc_data.interval[0] = ticks_to_msec(vc_data.interval[0]);
+		vc_data.interval[1] = ticks_to_msec(vc_data.interval[1]);
 	}
 
 	if (copy_to_user (data, &vc_data, sizeof(vc_data)))

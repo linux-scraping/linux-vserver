@@ -150,10 +150,13 @@ static inline void __unhash_nx_info(struct nx_info *nxi)
 {
 	vxd_assert_lock(&nx_info_hash_lock);
 	vxdprintk(VXD_CBIT(nid, 4),
-		"__unhash_nx_info: %p[#%d]", nxi, nxi->nx_id);
+		"__unhash_nx_info: %p[#%d.%d.%d]", nxi, nxi->nx_id,
+		atomic_read(&nxi->nx_usecnt), atomic_read(&nxi->nx_tasks));
 
 	/* context must be hashed */
 	BUG_ON(!nx_info_state(nxi, NXS_HASHED));
+	/* but without tasks */
+	BUG_ON(atomic_read(&nxi->nx_tasks));
 
 	nxi->nx_state &= ~NXS_HASHED;
 	hlist_del(&nxi->nx_hlist);
@@ -400,6 +403,9 @@ int nx_migrate_task(struct task_struct *p, struct nx_info *nxi)
 		!nx_info_flags(nxi, NXF_STATE_SETUP, 0))
 		return -EACCES;
 
+	if (nx_info_state(nxi, NXS_SHUTDOWN))
+		return -EFAULT;
+
 	/* maybe disallow this completely? */
 	old_nxi = task_get_nx_info(p);
 	if (old_nxi == nxi)
@@ -612,19 +618,20 @@ int vc_net_create(uint32_t nid, void __user *data)
 
 	ret = -ENOEXEC;
 	if (vs_net_change(new_nxi, VSC_NETUP))
-		goto out_unhash;
+		goto out_err;
+
 	ret = nx_migrate_task(current, new_nxi);
 	if (!ret) {
 		/* return context id on success */
 		ret = new_nxi->nx_id;
 		goto out;
 	}
-out_unhash:
+out_err:
 	/* prepare for context disposal */
 	new_nxi->nx_state |= NXS_SHUTDOWN;
+	new_nxi->nx_flags &= NXF_PERSISTENT;
 	if ((vc_data.flagword & NXF_PERSISTENT))
 		nx_clear_persistent(new_nxi);
-	__unhash_nx_info(new_nxi);
 out:
 	put_nx_info(new_nxi);
 	return ret;

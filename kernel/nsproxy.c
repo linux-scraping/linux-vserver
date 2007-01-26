@@ -105,7 +105,7 @@ int copy_namespaces(int flags, struct task_struct *tsk)
 		goto out_ipc;
 
 out:
-	put_nsproxy(old_ns);
+	put_and_finalize_nsproxy(old_ns);
 	return err;
 
 out_ipc:
@@ -118,6 +118,20 @@ out_ns:
 	tsk->nsproxy = old_ns;
 	kfree(new_ns);
 	goto out;
+}
+
+struct nsproxy *put_nsproxy(struct nsproxy *ns)
+{
+	if (ns) {
+		if (atomic_dec_and_test(&ns->count)) {
+			if (ns->namespace) {
+				put_namespace(ns->namespace);
+				ns->namespace = NULL;
+			}
+			return ns;
+		}
+	}
+	return NULL;
 }
 
 void free_nsproxy(struct nsproxy *ns)
