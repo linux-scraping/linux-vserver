@@ -232,8 +232,8 @@ struct task_struct *vx_child_reaper(struct task_struct *p)
 
 	reaper = vxi->vx_reaper;
 out:
-	vxdprintk(VXD_CBIT(xid, 3),
-		"vx_child_reaper(%p[#%u,%u]) = %p[#%u,%u]\n",
+	vxdprintk(VXD_CBIT(xid, 7),
+		"vx_child_reaper(%p[#%u,%u]) = %p[#%u,%u]",
 		p, p->xid, p->pid, reaper, reaper->xid, reaper->pid);
 	return reaper;
 }

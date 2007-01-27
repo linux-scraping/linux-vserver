@@ -18,6 +18,7 @@
 #include <linux/uaccess.h>
 #include "jffs2_fs_sb.h"
 #include "jffs2_fs_i.h"
+#include "acl.h"
 #include "os-linux.h"
 
 extern void jffs2_set_inode_flags(struct inode *);

@@ -3,10 +3,11 @@
  *
  *  Virtual Server: Signal Support
  *
- *  Copyright (C) 2003-2006  Herbert Pötzl
+ *  Copyright (C) 2003-2007  Herbert Pötzl
  *
  *  V0.01  broken out from vcontext V0.05
  *  V0.02  changed vcmds to vxi arg
+ *  V0.03  adjusted siginfo for kill
  *
  */
 
@@ -23,7 +24,7 @@ int vx_info_kill(struct vx_info *vxi, int pid, int sig)
 {
 	int retval, count=0;
 	struct task_struct *p;
-	unsigned long priv = 0;
+	struct siginfo *sip = SEND_SIG_PRIV;
 
 	retval = -ESRCH;
 	vxdprintk(VXD_CBIT(misc, 4),
@@ -32,7 +33,6 @@ int vx_info_kill(struct vx_info *vxi, int pid, int sig)
 	read_lock(&tasklist_lock);
 	switch (pid) {
 	case  0:
-		priv = 1;
 	case -1:
 		for_each_process(p) {
 			int err = 0;
@@ -41,7 +41,7 @@ int vx_info_kill(struct vx_info *vxi, int pid, int sig)
 				(pid && vxi->vx_initpid == p->pid))
 				continue;
 
-			err = group_send_sig_info(sig, (void*)priv, p);
+			err = group_send_sig_info(sig, sip, p);
 			++count;
 			if (err != -EPERM)
 				retval = err;
@@ -56,22 +56,20 @@ int vx_info_kill(struct vx_info *vxi, int pid, int sig)
 				/* ... as long as there are tasks left */
 				(atomic_read(&vxi->vx_tasks) > 1))
 				sig = SIGINT;
-			priv = 1;
 		}
 		/* fallthrough */
 	default:
 		p = find_task_by_real_pid(pid);
 		if (p) {
 			if (vx_task_xid(p) == vxi->vx_id)
-				retval = group_send_sig_info(sig,
-					(void*)priv, p);
+				retval = group_send_sig_info(sig, sip, p);
 		}
 		break;
 	}
 	read_unlock(&tasklist_lock);
 	vxdprintk(VXD_CBIT(misc, 4),
-		"vx_info_kill(%p[#%d],%d,%d) = %d",
-		vxi, vxi->vx_id, pid, sig, retval);
+		"vx_info_kill(%p[#%d],%d,%d,%d) = %d",
+		vxi, vxi->vx_id, pid, sig, (int)sip, retval);
 	return retval;
 }
 

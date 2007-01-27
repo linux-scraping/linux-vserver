@@ -371,11 +371,20 @@ long do_vserver(uint32_t cmd, uint32_t id, void __user *data, int compat)
 	state = 4;
 	/* various legacy exceptions */
 	switch (cmd) {
-	/* will go away when admin is a cap */
+	/* will go away when spectator is a cap */
 	case VCMD_ctx_migrate_v0:
 	case VCMD_ctx_migrate:
 		if (id == 1) {
 			current->xid = 1;
+			ret = 1;
+			goto out;
+		}
+		break;
+
+	/* will go away when spectator is a cap */
+	case VCMD_net_migrate:
+		if (id == 1) {
+			current->nid = 1;
 			ret = 1;
 			goto out;
 		}

@@ -49,7 +49,7 @@
 
 #define SO_PEERSEC		0x001e
 #define SO_PASSSEC		0x001f
-#define SO_PEERTAG		0x0020
+#define SO_PEERTAG		0x0200
 
 /* Security levels - as per NRL IPv6 - don't actually do anything */
 #define SO_SECURITY_AUTHENTICATION		0x5001

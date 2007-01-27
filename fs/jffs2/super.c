@@ -128,7 +128,6 @@ static int parse_options (char * options,
 {
 	char * p;
 	substring_t args[MAX_OPT_ARGS];
-	int option;
 
 	if (!options)
 		return 1;
