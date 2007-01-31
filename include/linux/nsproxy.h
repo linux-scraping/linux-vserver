@@ -35,6 +35,12 @@ void get_task_namespaces(struct task_struct *tsk);
 void free_nsproxy(struct nsproxy *ns);
 struct nsproxy *put_nsproxy(struct nsproxy *ns);
 
+static inline void vs_put_nsproxy(struct nsproxy *ns)
+{
+	if (atomic_dec_and_test(&ns->count))
+		free_nsproxy(ns);
+}
+
 static inline void finalize_put_nsproxy(struct nsproxy *ns)
 {
 	if (ns)

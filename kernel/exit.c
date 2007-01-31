@@ -44,6 +44,7 @@
 #include <linux/vs_limit.h>
 #include <linux/vs_context.h>
 #include <linux/vs_network.h>
+#include <linux/vserver/global.h>
 
 #include <asm/uaccess.h>
 #include <asm/unistd.h>
@@ -526,6 +527,7 @@ static inline void __put_fs_struct(struct fs_struct *fs)
 			dput(fs->altroot);
 			mntput(fs->altrootmnt);
 		}
+		atomic_dec(&vs_global_fs);
 		kmem_cache_free(fs_cachep, fs);
 	}
 }

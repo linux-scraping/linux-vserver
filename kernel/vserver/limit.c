@@ -70,6 +70,7 @@ const struct vcmd_ctx_rlimit_mask_v0 vlimit_mask = {
 uint32_t account_mask =
 	MASK_ENTRY( VLIMIT_SEMARY	) |
 	MASK_ENTRY( VLIMIT_NSEMS	) |
+	MASK_ENTRY( VLIMIT_MAPPED	) |
 	0;
 
 

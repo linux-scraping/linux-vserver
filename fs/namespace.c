@@ -26,9 +26,10 @@
 #include <linux/mount.h>
 #include <linux/ramfs.h>
 #include <linux/vs_base.h>
-#include <linux/vserver/space.h>
 #include <linux/vs_context.h>
 #include <linux/vs_tag.h>
+#include <linux/vserver/space.h>
+#include <linux/vserver/global.h>
 #include <asm/uaccess.h>
 #include <asm/unistd.h>
 #include "pnode.h"
@@ -1576,6 +1577,7 @@ struct namespace *dup_namespace(struct task_struct *tsk, struct fs_struct *fs)
 		q = next_mnt(q, new_ns->root);
 	}
 	up_write(&namespace_sem);
+	atomic_inc(&vs_global_mnt_ns);
 
 	if (rootmnt)
 		mntput(rootmnt);
@@ -1953,5 +1955,6 @@ void __put_namespace(struct namespace *namespace)
 	spin_unlock(&vfsmount_lock);
 	up_write(&namespace_sem);
 	release_mounts(&umount_list);
+	atomic_dec(&vs_global_mnt_ns);
 	kfree(namespace);
 }

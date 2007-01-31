@@ -70,8 +70,14 @@ static int proc_virtual_status(char *buffer)
 	return sprintf(buffer,
 		"#CTotal:\t%d\n"
 		"#CActive:\t%d\n"
+		"#NSProxy:\t%d\t%d %d %d %d\n"
 		,atomic_read(&vx_global_ctotal)
 		,atomic_read(&vx_global_cactive)
+		,atomic_read(&vs_global_nsproxy)
+		,atomic_read(&vs_global_fs)
+		,atomic_read(&vs_global_mnt_ns)
+		,atomic_read(&vs_global_uts_ns)
+		,atomic_read(&vs_global_ipc_ns)
 		);
 }
 
