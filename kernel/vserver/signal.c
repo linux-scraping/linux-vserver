@@ -68,8 +68,8 @@ int vx_info_kill(struct vx_info *vxi, int pid, int sig)
 	}
 	read_unlock(&tasklist_lock);
 	vxdprintk(VXD_CBIT(misc, 4),
-		"vx_info_kill(%p[#%d],%d,%d,%d) = %d",
-		vxi, vxi->vx_id, pid, sig, (int)sip, retval);
+		"vx_info_kill(%p[#%d],%d,%d,%ld) = %d",
+		vxi, vxi->vx_id, pid, sig, (long)sip, retval);
 	return retval;
 }
 
