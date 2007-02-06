@@ -254,6 +254,7 @@ config	VSERVER
 	bool
 	default y
 	select UTS_NS
+	select SYSVIPC
 	select IPC_NS
 
 config	VSERVER_SECURITY
