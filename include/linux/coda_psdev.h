@@ -1,10 +1,10 @@
 #ifndef __CODA_PSDEV_H
 #define __CODA_PSDEV_H
 
+#include <linux/magic.h>
+
 #define CODA_PSDEV_MAJOR 67
 #define MAX_CODADEVS  5	   /* how many do we allow */
-
-#define CODA_SUPER_MAGIC	0x73757245
 
 struct kstatfs;
 
@@ -70,7 +70,7 @@ int venus_pioctl(struct super_block *sb, struct CodaFid *fid,
 		 unsigned int cmd, struct PioctlData *data);
 int coda_downcall(int opcode, union outputArgs *out, struct super_block *sb);
 int venus_fsync(struct super_block *sb, struct CodaFid *fid);
-int venus_statfs(struct super_block *sb, struct kstatfs *sfs);
+int venus_statfs(struct dentry *dentry, struct kstatfs *sfs);
 
 
 /* messages between coda filesystem in kernel and Venus */

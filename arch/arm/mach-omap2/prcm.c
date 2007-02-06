@@ -13,12 +13,13 @@
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
  */
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/clk.h>
 
 #include "prcm-regs.h"
+
+extern void omap2_clk_prepare_for_reboot(void);
 
 u32 omap_prcm_get_reset_sources(void)
 {
@@ -29,12 +30,6 @@ EXPORT_SYMBOL(omap_prcm_get_reset_sources);
 /* Resets clock rates and reboots the system. Only called from system.h */
 void omap_prcm_arch_reset(char mode)
 {
-	u32 rate;
-	struct clk *vclk, *sclk;
-
-	vclk = clk_get(NULL, "virt_prcm_set");
-	sclk = clk_get(NULL, "sys_ck");
-	rate = clk_get_rate(sclk);
-	clk_set_rate(vclk, rate);	/* go to bypass for OMAP limitation */
+	omap2_clk_prepare_for_reboot();
 	RM_RSTCTRL_WKUP |= 2;
 }

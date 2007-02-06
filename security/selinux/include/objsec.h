@@ -23,6 +23,7 @@
 #include <linux/fs.h>
 #include <linux/binfmts.h>
 #include <linux/in.h>
+#include <linux/spinlock.h>
 #include "flask.h"
 #include "avc.h"
 
@@ -32,6 +33,8 @@ struct task_security_struct {
 	u32 sid;             /* current SID */
 	u32 exec_sid;        /* exec SID */
 	u32 create_sid;      /* fscreate SID */
+	u32 keycreate_sid;   /* keycreate SID */
+	u32 sockcreate_sid;  /* fscreate SID */
 	u32 ptrace_sid;      /* SID of ptrace parent */
 };
 
@@ -42,7 +45,7 @@ struct inode_security_struct {
 	u32 sid;             /* SID of this object */
 	u16 sclass;       /* security class of this object */
 	unsigned char initialized;     /* initialization flag */
-	struct semaphore sem;
+	struct mutex lock;
 	unsigned char inherit;         /* inherit SID from parent entry */
 };
 
@@ -55,12 +58,13 @@ struct file_security_struct {
 struct superblock_security_struct {
 	struct super_block *sb;         /* back pointer to sb object */
 	struct list_head list;          /* list of superblock_security_struct */
-	u32 sid;              /* SID of file system */
+	u32 sid;			/* SID of file system superblock */
 	u32 def_sid;			/* default SID for labeling */
+	u32 mntpoint_sid;		/* SECURITY_FS_USE_MNTPOINT context for files */
 	unsigned int behavior;          /* labeling behavior */
 	unsigned char initialized;      /* initialization flag */
 	unsigned char proc;             /* proc fs */
-	struct semaphore sem;
+	struct mutex lock;
 	struct list_head isec_head;
 	spinlock_t isec_lock;
 };
@@ -96,7 +100,22 @@ struct netif_security_struct {
 
 struct sk_security_struct {
 	struct sock *sk;		/* back pointer to sk object */
+	u32 sid;			/* SID of this object */
 	u32 peer_sid;			/* SID of peer */
+#ifdef CONFIG_NETLABEL
+	u16 sclass;			/* sock security class */
+	enum {				/* NetLabel state */
+		NLBL_UNSET = 0,
+		NLBL_REQUIRE,
+		NLBL_LABELED,
+	} nlbl_state;
+	spinlock_t nlbl_lock;		/* protects nlbl_state */
+#endif
+};
+
+struct key_security_struct {
+	struct key *obj; /* back pointer */
+	u32 sid;         /* SID of key */
 };
 
 extern unsigned int selinux_checkreqprot;

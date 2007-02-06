@@ -16,6 +16,7 @@
 #include <linux/string.h>
 #include <linux/init.h>
 #include <linux/bootmem.h>
+#include <linux/irq.h>
 
 #include <asm/sections.h>
 #include <asm/io.h>
@@ -24,10 +25,7 @@
 #include <asm/machdep.h>
 #include <asm/pmac_feature.h>
 #include <asm/grackle.h>
-#ifdef CONFIG_PPC64
-//#include <asm/iommu.h>
 #include <asm/ppc-pci.h>
-#endif
 
 #undef DEBUG
 
@@ -46,9 +44,10 @@ static int has_uninorth;
 static struct pci_controller *u3_agp;
 static struct pci_controller *u4_pcie;
 static struct pci_controller *u3_ht;
+#else
+static int has_second_ohare;
 #endif /* CONFIG_PPC64 */
 
-extern u8 pci_cache_line_size;
 extern int pcibios_assign_bus_offset;
 
 struct device_node *k2_skiplist[2];
@@ -66,16 +65,16 @@ struct device_node *k2_skiplist[2];
 static int __init fixup_one_level_bus_range(struct device_node *node, int higher)
 {
 	for (; node != 0;node = node->sibling) {
-		int * bus_range;
-		unsigned int *class_code;
+		const int * bus_range;
+		const unsigned int *class_code;
 		int len;
 
 		/* For PCI<->PCI bridges or CardBus bridges, we go down */
-		class_code = (unsigned int *) get_property(node, "class-code", NULL);
+		class_code = get_property(node, "class-code", NULL);
 		if (!class_code || ((*class_code >> 8) != PCI_CLASS_BRIDGE_PCI &&
 			(*class_code >> 8) != PCI_CLASS_BRIDGE_CARDBUS))
 			continue;
-		bus_range = (int *) get_property(node, "bus-range", &len);
+		bus_range = get_property(node, "bus-range", &len);
 		if (bus_range != NULL && len > 2 * sizeof(int)) {
 			if (bus_range[1] > higher)
 				higher = bus_range[1];
@@ -93,13 +92,15 @@ static int __init fixup_one_level_bus_range(struct device_node *node, int higher
  */
 static void __init fixup_bus_range(struct device_node *bridge)
 {
-	int * bus_range;
-	int len;
+	int *bus_range, len;
+	struct property *prop;
 
 	/* Lookup the "bus-range" property for the hose */
-	bus_range = (int *) get_property(bridge, "bus-range", &len);
-	if (bus_range == NULL || len < 2 * sizeof(int))
+	prop = of_find_property(bridge, "bus-range", &len);
+	if (prop == NULL || prop->length < 2 * sizeof(int))
 		return;
+
+	bus_range = (int *)prop->value;
 	bus_range[1] = fixup_one_level_bus_range(bridge->child, bus_range[1]);
 }
 
@@ -237,7 +238,7 @@ static struct pci_ops macrisc_pci_ops =
 static int chaos_validate_dev(struct pci_bus *bus, int devfn, int offset)
 {
 	struct device_node *np;
-	u32 *vendor, *device;
+	const u32 *vendor, *device;
 
 	if (offset >= 0x100)
 		return  PCIBIOS_BAD_REGISTER_NUMBER;
@@ -245,8 +246,8 @@ static int chaos_validate_dev(struct pci_bus *bus, int devfn, int offset)
 	if (np == NULL)
 		return PCIBIOS_DEVICE_NOT_FOUND;
 
-	vendor = (u32 *)get_property(np, "vendor-id", NULL);
-	device = (u32 *)get_property(np, "device-id", NULL);
+	vendor = get_property(np, "vendor-id", NULL);
+	device = get_property(np, "device-id", NULL);
 	if (vendor == NULL || device == NULL)
 		return PCIBIOS_DEVICE_NOT_FOUND;
 
@@ -647,6 +648,33 @@ static void __init init_p2pbridge(void)
 	early_write_config_word(hose, bus, devfn, PCI_BRIDGE_CONTROL, val);
 }
 
+static void __init init_second_ohare(void)
+{
+	struct device_node *np = of_find_node_by_name(NULL, "pci106b,7");
+	unsigned char bus, devfn;
+	unsigned short cmd;
+
+	if (np == NULL)
+		return;
+
+	/* This must run before we initialize the PICs since the second
+	 * ohare hosts a PIC that will be accessed there.
+	 */
+	if (pci_device_from_OF_node(np, &bus, &devfn) == 0) {
+		struct pci_controller* hose =
+			pci_find_hose_for_OF_device(np);
+		if (!hose) {
+			printk(KERN_ERR "Can't find PCI hose for OHare2 !\n");
+			return;
+		}
+		early_read_config_word(hose, bus, devfn, PCI_COMMAND, &cmd);
+		cmd |= PCI_COMMAND_MEMORY | PCI_COMMAND_MASTER;
+		cmd &= ~PCI_COMMAND_IO;
+		early_write_config_word(hose, bus, devfn, PCI_COMMAND, cmd);
+	}
+	has_second_ohare = 1;
+}
+
 /*
  * Some Apple desktop machines have a NEC PD720100A USB2 controller
  * on the motherboard. Open Firmware, on these, will disable the
@@ -659,20 +687,21 @@ static void __init fixup_nec_usb2(void)
 
 	for (nec = NULL; (nec = of_find_node_by_name(nec, "usb")) != NULL;) {
 		struct pci_controller *hose;
-		u32 data, *prop;
+		u32 data;
+		const u32 *prop;
 		u8 bus, devfn;
 
-		prop = (u32 *)get_property(nec, "vendor-id", NULL);
+		prop = get_property(nec, "vendor-id", NULL);
 		if (prop == NULL)
 			continue;
 		if (0x1033 != *prop)
 			continue;
-		prop = (u32 *)get_property(nec, "device-id", NULL);
+		prop = get_property(nec, "device-id", NULL);
 		if (prop == NULL)
 			continue;
 		if (0x0035 != *prop)
 			continue;
-		prop = (u32 *)get_property(nec, "reg", NULL);
+		prop = get_property(nec, "reg", NULL);
 		if (prop == NULL)
 			continue;
 		devfn = (prop[0] >> 8) & 0xff;
@@ -688,9 +717,6 @@ static void __init fixup_nec_usb2(void)
 			       " EHCI, fixing up...\n");
 			data &= ~1UL;
 			early_write_config_dword(hose, bus, devfn, 0xe4, data);
-			early_write_config_byte(hose, bus,
-						devfn | 2, PCI_INTERRUPT_LINE,
-				nec->intrs[0].line);
 		}
 	}
 }
@@ -874,7 +900,7 @@ static int __init add_bridge(struct device_node *dev)
 	struct pci_controller *hose;
 	struct resource rsrc;
 	char *disp_name;
-	int *bus_range;
+	const int *bus_range;
 	int primary = 1, has_address = 0;
 
 	DBG("Adding PCI host bridge %s\n", dev->full_name);
@@ -883,7 +909,7 @@ static int __init add_bridge(struct device_node *dev)
 	has_address = (of_address_to_resource(dev, 0, &rsrc) == 0);
 
 	/* Get bus range if any */
-	bus_range = (int *) get_property(dev, "bus-range", &len);
+	bus_range = get_property(dev, "bus-range", &len);
 	if (bus_range == NULL || len < 2 * sizeof(int)) {
 		printk(KERN_WARNING "Can't get bus-range for %s, assume"
 		       " bus 0\n", dev->full_name);
@@ -939,9 +965,10 @@ static int __init add_bridge(struct device_node *dev)
 		disp_name = "Chaos";
 		primary = 0;
 	}
-	printk(KERN_INFO "Found %s PCI host bridge at 0x%08lx. "
+	printk(KERN_INFO "Found %s PCI host bridge at 0x%016llx. "
 	       "Firmware bus number: %d->%d\n",
-		disp_name, rsrc.start, hose->first_busno, hose->last_busno);
+		disp_name, (unsigned long long)rsrc.start, hose->first_busno,
+		hose->last_busno);
 #endif /* CONFIG_PPC32 */
 
 	DBG(" ->Hose at 0x%p, cfg_addr=0x%p,cfg_data=0x%p\n",
@@ -957,30 +984,23 @@ static int __init add_bridge(struct device_node *dev)
 	return 0;
 }
 
-static void __init pcibios_fixup_OF_interrupts(void)
+void __devinit pmac_pci_irq_fixup(struct pci_dev *dev)
 {
-	struct pci_dev* dev = NULL;
-
-	/*
-	 * Open Firmware often doesn't initialize the
-	 * PCI_INTERRUPT_LINE config register properly, so we
-	 * should find the device node and apply the interrupt
-	 * obtained from the OF device-tree
+#ifdef CONFIG_PPC32
+	/* Fixup interrupt for the modem/ethernet combo controller.
+	 * on machines with a second ohare chip.
+	 * The number in the device tree (27) is bogus (correct for
+	 * the ethernet-only board but not the combo ethernet/modem
+	 * board). The real interrupt is 28 on the second controller
+	 * -> 28+32 = 60.
 	 */
-	for_each_pci_dev(dev) {
-		struct device_node *node;
-		node = pci_device_to_OF_node(dev);
-		/* this is the node, see if it has interrupts */
-		if (node && node->n_intrs > 0)
-			dev->irq = node->intrs[0].line;
-		pci_write_config_byte(dev, PCI_INTERRUPT_LINE, dev->irq);
+	if (has_second_ohare &&
+	    dev->vendor == PCI_VENDOR_ID_DEC &&
+	    dev->device == PCI_DEVICE_ID_DEC_TULIP_PLUS) {
+		dev->irq = irq_create_mapping(NULL, 60);
+		set_irq_type(dev->irq, IRQ_TYPE_LEVEL_LOW);
 	}
-}
-
-void __init pmac_pcibios_fixup(void)
-{
-	/* Fixup interrupts according to OF tree */
-	pcibios_fixup_OF_interrupts();
+#endif /* CONFIG_PPC32 */
 }
 
 #ifdef CONFIG_PPC64
@@ -1068,11 +1088,9 @@ void __init pmac_pci_init(void)
 	/* Tell pci.c to not use the common resource allocation mechanism */
 	pci_probe_only = 1;
 
-	/* Allow all IO */
-	io_page_mask = -1;
-
 #else /* CONFIG_PPC64 */
 	init_p2pbridge();
+	init_second_ohare();
 	fixup_nec_usb2();
 
 	/* We are still having some issues with the Xserve G4, enabling

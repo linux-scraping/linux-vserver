@@ -7,7 +7,6 @@
  * Copyright (C) 1996,98,99 Jakub Jelinek  (jj@sunsite.mff.cuni.cz)
  */
 
-#include <linux/config.h>
 #include <linux/errno.h>
 
 #include <asm/head.h>
@@ -22,10 +21,10 @@
 #include <asm/estate.h>
 #include <asm/auxio.h>
 #include <asm/sfafsr.h>
+#include <asm/pil.h>
+#include <asm/unistd.h>
 
 #define curptr      g6
-
-#define NR_SYSCALLS 300      /* Each OS is different... */
 
 	.text
 	.align		32
@@ -431,20 +430,16 @@ do_ivec:
 	membar		#Sync
 
 	sethi		%hi(ivector_table), %g2
-	sllx		%g3, 5, %g3
+	sllx		%g3, 3, %g3
 	or		%g2, %lo(ivector_table), %g2
 	add		%g2, %g3, %g3
-	ldub		[%g3 + 0x04], %g4	/* pil */
-	mov		1, %g2
-	sllx		%g2, %g4, %g2
-	sllx		%g4, 2, %g4
 
 	TRAP_LOAD_IRQ_WORK(%g6, %g1)
 
-	lduw		[%g6 + %g4], %g5	/* g5 = irq_work(cpu, pil) */
+	lduw		[%g6], %g5		/* g5 = irq_work(cpu) */
 	stw		%g5, [%g3 + 0x00]	/* bucket->irq_chain = g5 */
-	stw		%g3, [%g6 + %g4]	/* irq_work(cpu, pil) = bucket */
-	wr		%g2, 0x0, %set_softint
+	stw		%g3, [%g6]		/* irq_work(cpu) = bucket */
+	wr		%g0, 1 << PIL_DEVICE_IRQ, %set_softint
 	retry
 do_ivec_xcall:
 	mov		0x50, %g1
@@ -602,7 +597,12 @@ __spitfire_cee_trap_continue:
 1:	ba,pt		%xcc, etrap_irq
 	 rd		%pc, %g7
 
-2:	mov		%l4, %o1
+2:
+#ifdef CONFIG_TRACE_IRQFLAGS
+	call	trace_hardirqs_off
+	 nop
+#endif
+	mov		%l4, %o1
 	mov		%l5, %o2
 	call		spitfire_access_error
 	 add		%sp, PTREGS_OFF, %o0
@@ -829,6 +829,10 @@ do_cheetah_plus_data_parity:
 	wrpr		%g0, 15, %pil
 	ba,pt		%xcc, etrap_irq
 	 rd		%pc, %g7
+#ifdef CONFIG_TRACE_IRQFLAGS
+	call		trace_hardirqs_off
+	 nop
+#endif
 	mov		0x0, %o0
 	call		cheetah_plus_parity_error
 	 add		%sp, PTREGS_OFF, %o1
@@ -860,6 +864,10 @@ do_cheetah_plus_insn_parity:
 	wrpr		%g0, 15, %pil
 	ba,pt		%xcc, etrap_irq
 	 rd		%pc, %g7
+#ifdef CONFIG_TRACE_IRQFLAGS
+	call		trace_hardirqs_off
+	 nop
+#endif
 	mov		0x1, %o0
 	call		cheetah_plus_parity_error
 	 add		%sp, PTREGS_OFF, %o1
@@ -1188,6 +1196,10 @@ c_fast_ecc:
 	wrpr		%g0, 15, %pil
 	ba,pt		%xcc, etrap_irq
 	 rd		%pc, %g7
+#ifdef CONFIG_TRACE_IRQFLAGS
+	call		trace_hardirqs_off
+	 nop
+#endif
 	mov		%l4, %o1
 	mov		%l5, %o2
 	call		cheetah_fecc_handler
@@ -1216,6 +1228,10 @@ c_cee:
 	wrpr		%g0, 15, %pil
 	ba,pt		%xcc, etrap_irq
 	 rd		%pc, %g7
+#ifdef CONFIG_TRACE_IRQFLAGS
+	call		trace_hardirqs_off
+	 nop
+#endif
 	mov		%l4, %o1
 	mov		%l5, %o2
 	call		cheetah_cee_handler
@@ -1244,6 +1260,10 @@ c_deferred:
 	wrpr		%g0, 15, %pil
 	ba,pt		%xcc, etrap_irq
 	 rd		%pc, %g7
+#ifdef CONFIG_TRACE_IRQFLAGS
+	call		trace_hardirqs_off
+	 nop
+#endif
 	mov		%l4, %o1
 	mov		%l5, %o2
 	call		cheetah_deferred_handler

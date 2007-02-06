@@ -100,7 +100,7 @@ static int lmc_rx (struct net_device *dev);
 static int lmc_open(struct net_device *dev);
 static int lmc_close(struct net_device *dev);
 static struct net_device_stats *lmc_get_stats(struct net_device *dev);
-static irqreturn_t lmc_interrupt(int irq, void *dev_instance, struct pt_regs *regs);
+static irqreturn_t lmc_interrupt(int irq, void *dev_instance);
 static void lmc_initcsrs(lmc_softc_t * const sc, lmc_csrptr_t csr_base, size_t csr_size);
 static void lmc_softreset(lmc_softc_t * const);
 static void lmc_running_reset(struct net_device *dev);
@@ -1058,7 +1058,7 @@ static int lmc_open (struct net_device *dev) /*fold00*/
     lmc_softreset (sc);
 
     /* Since we have to use PCI bus, this should work on x86,alpha,ppc */
-    if (request_irq (dev->irq, &lmc_interrupt, SA_SHIRQ, dev->name, dev)){
+    if (request_irq (dev->irq, &lmc_interrupt, IRQF_SHARED, dev->name, dev)){
         printk(KERN_WARNING "%s: could not get irq: %d\n", dev->name, dev->irq);
         lmc_trace(dev, "lmc_open irq failed out");
         return -EAGAIN;
@@ -1273,7 +1273,7 @@ static int lmc_ifdown (struct net_device *dev) /*fold00*/
 /* Interrupt handling routine.  This will take an incoming packet, or clean
  * up after a trasmit.
  */
-static irqreturn_t lmc_interrupt (int irq, void *dev_instance, struct pt_regs *regs) /*fold00*/
+static irqreturn_t lmc_interrupt (int irq, void *dev_instance) /*fold00*/
 {
     struct net_device *dev = (struct net_device *) dev_instance;
     lmc_softc_t *sc;
@@ -1790,7 +1790,7 @@ static struct pci_driver lmc_driver = {
 
 static int __init init_lmc(void)
 {
-    return pci_module_init(&lmc_driver);
+    return pci_register_driver(&lmc_driver);
 }
 
 static void __exit exit_lmc(void)

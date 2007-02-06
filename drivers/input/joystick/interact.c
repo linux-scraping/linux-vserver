@@ -251,7 +251,7 @@ static int interact_connect(struct gameport *gameport, struct gameport_driver *d
 	gameport_set_poll_handler(gameport, interact_poll);
 	gameport_set_poll_interval(gameport, 20);
 
-	sprintf(interact->phys, "%s/input0", gameport->phys);
+	snprintf(interact->phys, sizeof(interact->phys), "%s/input0", gameport->phys);
 
 	interact->type = i;
 	interact->length = interact_type[i].length;
@@ -283,7 +283,9 @@ static int interact_connect(struct gameport *gameport, struct gameport_driver *d
 	for (i = 0; (t = interact_type[interact->type].btn[i]) >= 0; i++)
 		set_bit(t, input_dev->keybit);
 
-	input_register_device(interact->dev);
+	err = input_register_device(interact->dev);
+	if (err)
+		goto fail2;
 
 	return 0;
 

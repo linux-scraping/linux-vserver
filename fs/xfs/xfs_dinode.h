@@ -53,7 +53,7 @@ typedef struct xfs_dinode_core
 	__uint32_t	di_gid;		/* owner's group id */
 	__uint32_t	di_nlink;	/* number of links to file */
 	__uint16_t	di_projid;	/* owner's project id */
-	__uint16_t	di_xid;		/* vserver context id */
+	__uint16_t	di_tag;		/* context tagging */
 	__uint8_t	di_pad[6];	/* unused, zeroed space */
 	__uint16_t	di_flushiter;	/* incremented on flush */
 	xfs_timestamp_t	di_atime;	/* time last accessed */
@@ -86,7 +86,6 @@ typedef struct xfs_dinode
 	union {
 		xfs_bmdr_block_t di_bmbt;	/* btree root block */
 		xfs_bmbt_rec_32_t di_bmx[1];	/* extent list */
-		xfs_dir_shortform_t di_dirsf;	/* shortform directory */
 		xfs_dir2_sf_t	di_dir2sf;	/* shortform directory v2 */
 		char		di_c[1];	/* local contents */
 		xfs_dev_t	di_dev;		/* device for S_IFCHR/S_IFBLK */
@@ -258,8 +257,9 @@ typedef enum xfs_dinode_fmt
 #define XFS_DIFLAG_NOSYMLINKS_BIT   10	/* disallow symlink creation */
 #define XFS_DIFLAG_EXTSIZE_BIT      11	/* inode extent size allocator hint */
 #define XFS_DIFLAG_EXTSZINHERIT_BIT 12	/* inherit inode extent size */
-#define XFS_DIFLAG_BARRIER_BIT	13	/* chroot() barrier */
-#define XFS_DIFLAG_IUNLINK_BIT	14	/* immutable unlink */
+#define XFS_DIFLAG_NODEFRAG_BIT     13	/* do not reorganize/defragment */
+#define XFS_DIFLAG_BARRIER_BIT	14	/* chroot() barrier */
+#define XFS_DIFLAG_IUNLINK_BIT	15	/* immutable unlink */
 
 #define XFS_DIFLAG_REALTIME      (1 << XFS_DIFLAG_REALTIME_BIT)
 #define XFS_DIFLAG_PREALLOC      (1 << XFS_DIFLAG_PREALLOC_BIT)
@@ -274,6 +274,7 @@ typedef enum xfs_dinode_fmt
 #define XFS_DIFLAG_NOSYMLINKS    (1 << XFS_DIFLAG_NOSYMLINKS_BIT)
 #define XFS_DIFLAG_EXTSIZE       (1 << XFS_DIFLAG_EXTSIZE_BIT)
 #define XFS_DIFLAG_EXTSZINHERIT  (1 << XFS_DIFLAG_EXTSZINHERIT_BIT)
+#define XFS_DIFLAG_NODEFRAG      (1 << XFS_DIFLAG_NODEFRAG_BIT)
 #define XFS_DIFLAG_BARRIER	 (1 << XFS_DIFLAG_BARRIER_BIT)
 #define XFS_DIFLAG_IUNLINK	 (1 << XFS_DIFLAG_IUNLINK_BIT)
 
@@ -282,6 +283,7 @@ typedef enum xfs_dinode_fmt
 	 XFS_DIFLAG_IMMUTABLE | XFS_DIFLAG_APPEND | XFS_DIFLAG_SYNC | \
 	 XFS_DIFLAG_NOATIME | XFS_DIFLAG_NODUMP | XFS_DIFLAG_RTINHERIT | \
 	 XFS_DIFLAG_PROJINHERIT | XFS_DIFLAG_NOSYMLINKS | XFS_DIFLAG_EXTSIZE | \
-	 XFS_DIFLAG_EXTSZINHERIT | XFS_DIFLAG_BARRIER | XFS_DIFLAG_IUNLINK)
+	 XFS_DIFLAG_EXTSZINHERIT | XFS_DIFLAG_NODEFRAG | XFS_DIFLAG_BARRIER | \
+	 XFS_DIFLAG_IUNLINK)
 
 #endif	/* __XFS_DINODE_H__ */

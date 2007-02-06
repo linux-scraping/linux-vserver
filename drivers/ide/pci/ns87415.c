@@ -9,7 +9,6 @@
  * Inspired by an earlier effort from David S. Miller <davem@redhat.com>
  */
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/types.h>
 #include <linux/kernel.h>
@@ -303,7 +302,7 @@ static struct pci_driver driver = {
 	.probe		= ns87415_init_one,
 };
 
-static int ns87415_ide_init(void)
+static int __init ns87415_ide_init(void)
 {
 	return ide_pci_register_driver(&driver);
 }

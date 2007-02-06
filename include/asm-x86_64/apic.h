@@ -1,7 +1,6 @@
 #ifndef __ASM_APIC_H
 #define __ASM_APIC_H
 
-#include <linux/config.h>
 #include <linux/pm.h>
 #include <asm/fixmap.h>
 #include <asm/apicdef.h>
@@ -18,6 +17,8 @@
 
 extern int apic_verbosity;
 extern int apic_runs_main_timer;
+extern int ioapic_force;
+extern int apic_mapped;
 
 /*
  * Define the default level of output to be very little
@@ -29,8 +30,6 @@ extern int apic_runs_main_timer;
 		if ((v) <= apic_verbosity) \
 			printk(s, ##a);    \
 	} while (0)
-
-#ifdef CONFIG_X86_LOCAL_APIC
 
 struct pt_regs;
 
@@ -50,7 +49,8 @@ static __inline unsigned int apic_read(unsigned long reg)
 
 static __inline__ void apic_wait_icr_idle(void)
 {
-	while ( apic_read( APIC_ICR ) & APIC_ICR_BUSY );
+	while (apic_read( APIC_ICR ) & APIC_ICR_BUSY)
+		cpu_relax();
 }
 
 static inline void ack_APIC_irq(void)
@@ -77,41 +77,29 @@ extern void sync_Arb_IDs (void);
 extern void init_bsp_APIC (void);
 extern void setup_local_APIC (void);
 extern void init_apic_mappings (void);
-extern void smp_local_timer_interrupt (struct pt_regs * regs);
+extern void smp_local_timer_interrupt (void);
 extern void setup_boot_APIC_clock (void);
 extern void setup_secondary_APIC_clock (void);
-extern void setup_apic_nmi_watchdog (void);
-extern int reserve_lapic_nmi(void);
-extern void release_lapic_nmi(void);
-extern void disable_timer_nmi_watchdog(void);
-extern void enable_timer_nmi_watchdog(void);
-extern void nmi_watchdog_tick (struct pt_regs * regs, unsigned reason);
 extern int APIC_init_uniprocessor (void);
 extern void disable_APIC_timer(void);
 extern void enable_APIC_timer(void);
 extern void clustered_apic_check(void);
 
-extern void nmi_watchdog_default(void);
-extern int setup_nmi_watchdog(char *);
+extern void setup_APIC_extened_lvt(unsigned char lvt_off, unsigned char vector,
+				   unsigned char msg_type, unsigned char mask);
 
-extern unsigned int nmi_watchdog;
-#define NMI_DEFAULT	-1
-#define NMI_NONE	0
-#define NMI_IO_APIC	1
-#define NMI_LOCAL_APIC	2
-#define NMI_INVALID	3
-
-extern int disable_timer_pin_1;
-
-extern void setup_threshold_lvt(unsigned long lvt_off);
+#define K8_APIC_EXT_LVT_BASE    0x500
+#define K8_APIC_EXT_INT_MSG_FIX 0x0
+#define K8_APIC_EXT_INT_MSG_SMI 0x2
+#define K8_APIC_EXT_INT_MSG_NMI 0x4
+#define K8_APIC_EXT_INT_MSG_EXT 0x7
+#define K8_APIC_EXT_LVT_ENTRY_THRESHOLD    0
 
 void smp_send_timer_broadcast_ipi(void);
 void switch_APIC_timer_to_ipi(void *cpumask);
 void switch_ipi_to_APIC_timer(void *cpumask);
 
 #define ARCH_APICTIMER_STOPS_ON_C3	1
-
-#endif /* CONFIG_X86_LOCAL_APIC */
 
 extern unsigned boot_cpu_id;
 

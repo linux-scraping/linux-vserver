@@ -3,7 +3,6 @@
  *
  *  S390 version
  */
-#include <linux/config.h>
 #include <linux/highuid.h>
 #include <linux/module.h>
 #include <linux/mm.h>
@@ -26,12 +25,6 @@ EXPORT_SYMBOL(_oi_bitmap);
 EXPORT_SYMBOL(_ni_bitmap);
 EXPORT_SYMBOL(_zb_findmap);
 EXPORT_SYMBOL(_sb_findmap);
-EXPORT_SYMBOL(__copy_from_user_asm);
-EXPORT_SYMBOL(__copy_to_user_asm);
-EXPORT_SYMBOL(__copy_in_user_asm);
-EXPORT_SYMBOL(__clear_user_asm);
-EXPORT_SYMBOL(__strncpy_from_user_asm);
-EXPORT_SYMBOL(__strnlen_user_asm);
 EXPORT_SYMBOL(diag10);
 
 /*
@@ -46,8 +39,6 @@ EXPORT_SYMBOL(__down_interruptible);
  */
 extern int dump_fpu (struct pt_regs * regs, s390_fp_regs *fpregs);
 EXPORT_SYMBOL(dump_fpu);
-EXPORT_SYMBOL(overflowuid);
-EXPORT_SYMBOL(overflowgid);
 EXPORT_SYMBOL(empty_zero_page);
 
 /*
@@ -60,4 +51,3 @@ EXPORT_SYMBOL(csum_fold);
 EXPORT_SYMBOL(console_mode);
 EXPORT_SYMBOL(console_devno);
 EXPORT_SYMBOL(console_irq);
-EXPORT_SYMBOL(sys_wait4);

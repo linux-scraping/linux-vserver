@@ -102,6 +102,9 @@ struct fddihdr
 		} hdr;
 	} __attribute__ ((packed));
 
+#ifdef __KERNEL__
+#include <linux/netdevice.h>
+
 /* Define FDDI statistics structure */
 struct fddi_statistics {
 
@@ -193,5 +196,6 @@ struct fddi_statistics {
 	__u32	port_ler_flag[2];
 	__u32	port_hardware_present[2];
 	};
+#endif /* __KERNEL__ */
 
 #endif	/* _LINUX_IF_FDDI_H */

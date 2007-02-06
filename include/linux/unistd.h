@@ -1,10 +1,8 @@
 #ifndef _LINUX_UNISTD_H_
 #define _LINUX_UNISTD_H_
 
-extern int errno;
-
 /*
- * Include machine specific syscallX macros
+ * Include machine specific syscall numbers
  */
 #include <asm/unistd.h>
 

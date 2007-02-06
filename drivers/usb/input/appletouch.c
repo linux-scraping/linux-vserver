@@ -1,5 +1,5 @@
 /*
- * Apple USB Touchpad (for post-February 2005 PowerBooks) driver
+ * Apple USB Touchpad (for post-February 2005 PowerBooks and MacBooks) driver
  *
  * Copyright (C) 2001-2004 Greg Kroah-Hartman (greg@kroah.com)
  * Copyright (C) 2005      Johannes Berg (johannes@sipsolutions.net)
@@ -7,6 +7,7 @@
  * Copyright (C) 2005      Frank Arnold (frank@scirocco-5v-turbo.de)
  * Copyright (C) 2005      Peter Osterlund (petero2@telia.com)
  * Copyright (C) 2005      Michael Hanselmann (linux-kernel@hansmi.ch)
+ * Copyright (C) 2006      Nicolas Boichat (nicolas@boichat.ch)
  *
  * Thanks to Alex Harper <basilisk@foobox.net> for his inputs.
  *
@@ -26,23 +27,40 @@
  *
  */
 
-#include <linux/config.h>
 #include <linux/kernel.h>
 #include <linux/errno.h>
 #include <linux/init.h>
 #include <linux/slab.h>
 #include <linux/module.h>
-#include <linux/usb.h>
-#include <linux/input.h>
-#include <linux/usb_input.h>
+#include <linux/usb/input.h>
 
 /* Apple has powerbooks which have the keyboard with different Product IDs */
 #define APPLE_VENDOR_ID		0x05AC
 
 /* These names come from Info.plist in AppleUSBTrackpad.kext */
-#define GEYSER_ANSI_PRODUCT_ID	0x0214
-#define GEYSER_ISO_PRODUCT_ID	0x0215
-#define GEYSER_JIS_PRODUCT_ID	0x0216
+#define FOUNTAIN_ANSI_PRODUCT_ID	0x020E
+#define FOUNTAIN_ISO_PRODUCT_ID		0x020F
+
+#define FOUNTAIN_TP_ONLY_PRODUCT_ID	0x030A
+
+#define GEYSER1_TP_ONLY_PRODUCT_ID	0x030B
+
+#define GEYSER_ANSI_PRODUCT_ID		0x0214
+#define GEYSER_ISO_PRODUCT_ID		0x0215
+#define GEYSER_JIS_PRODUCT_ID		0x0216
+
+/* MacBook devices */
+#define GEYSER3_ANSI_PRODUCT_ID		0x0217
+#define GEYSER3_ISO_PRODUCT_ID		0x0218
+#define GEYSER3_JIS_PRODUCT_ID		0x0219
+
+/*
+ * Geyser IV: same as Geyser III according to Info.plist in AppleUSBTrackpad.kext
+ * -> same IOClass (AppleUSBGrIIITrackpad), same acceleration tables
+ */
+#define GEYSER4_ANSI_PRODUCT_ID	0x021A
+#define GEYSER4_ISO_PRODUCT_ID	0x021B
+#define GEYSER4_JIS_PRODUCT_ID	0x021C
 
 #define ATP_DEVICE(prod)					\
 	.match_flags = USB_DEVICE_ID_MATCH_DEVICE |		\
@@ -55,15 +73,25 @@
 
 /* table of devices that work with this driver */
 static struct usb_device_id atp_table [] = {
-	{ ATP_DEVICE(0x020E) },
-	{ ATP_DEVICE(0x020F) },
-	{ ATP_DEVICE(0x030A) },
-	{ ATP_DEVICE(0x030B) },
+	{ ATP_DEVICE(FOUNTAIN_ANSI_PRODUCT_ID) },
+	{ ATP_DEVICE(FOUNTAIN_ISO_PRODUCT_ID) },
+	{ ATP_DEVICE(FOUNTAIN_TP_ONLY_PRODUCT_ID) },
+	{ ATP_DEVICE(GEYSER1_TP_ONLY_PRODUCT_ID) },
 
 	/* PowerBooks Oct 2005 */
 	{ ATP_DEVICE(GEYSER_ANSI_PRODUCT_ID) },
 	{ ATP_DEVICE(GEYSER_ISO_PRODUCT_ID) },
 	{ ATP_DEVICE(GEYSER_JIS_PRODUCT_ID) },
+
+	/* Core Duo MacBook & MacBook Pro */
+	{ ATP_DEVICE(GEYSER3_ANSI_PRODUCT_ID) },
+	{ ATP_DEVICE(GEYSER3_ISO_PRODUCT_ID) },
+	{ ATP_DEVICE(GEYSER3_JIS_PRODUCT_ID) },
+
+	/* Core2 Duo MacBook & MacBook Pro */
+	{ ATP_DEVICE(GEYSER4_ANSI_PRODUCT_ID) },
+	{ ATP_DEVICE(GEYSER4_ISO_PRODUCT_ID) },
+	{ ATP_DEVICE(GEYSER4_JIS_PRODUCT_ID) },
 
 	/* Terminating entry */
 	{ }
@@ -100,6 +128,13 @@ MODULE_DEVICE_TABLE (usb, atp_table);
  * ignored.
  */
 #define ATP_THRESHOLD	 5
+
+/* MacBook Pro (Geyser 3 & 4) initialization constants */
+#define ATP_GEYSER3_MODE_READ_REQUEST_ID 1
+#define ATP_GEYSER3_MODE_WRITE_REQUEST_ID 9
+#define ATP_GEYSER3_MODE_REQUEST_VALUE 0x300
+#define ATP_GEYSER3_MODE_REQUEST_INDEX 0
+#define ATP_GEYSER3_MODE_VENDOR_VALUE 0x04
 
 /* Structure to hold all of our device specific stuff */
 struct atp {
@@ -140,6 +175,13 @@ MODULE_AUTHOR("Johannes Berg, Stelian Pop, Frank Arnold, Michael Hanselmann");
 MODULE_DESCRIPTION("Apple PowerBooks USB touchpad driver");
 MODULE_LICENSE("GPL");
 
+/*
+ * Make the threshold a module parameter
+ */
+static int threshold = ATP_THRESHOLD;
+module_param(threshold, int, 0644);
+MODULE_PARM_DESC(threshold, "Discards any change in data from a sensor (trackpad has hundreds of these sensors) less than this value");
+
 static int debug = 1;
 module_param(debug, int, 0644);
 MODULE_PARM_DESC(debug, "Activate debugging output");
@@ -147,11 +189,23 @@ MODULE_PARM_DESC(debug, "Activate debugging output");
 /* Checks if the device a Geyser 2 (ANSI, ISO, JIS) */
 static inline int atp_is_geyser_2(struct atp *dev)
 {
-	int16_t productId = le16_to_cpu(dev->udev->descriptor.idProduct);
+	u16 productId = le16_to_cpu(dev->udev->descriptor.idProduct);
 
 	return (productId == GEYSER_ANSI_PRODUCT_ID) ||
 		(productId == GEYSER_ISO_PRODUCT_ID) ||
 		(productId == GEYSER_JIS_PRODUCT_ID);
+}
+
+static inline int atp_is_geyser_3(struct atp *dev)
+{
+	u16 productId = le16_to_cpu(dev->udev->descriptor.idProduct);
+
+	return (productId == GEYSER3_ANSI_PRODUCT_ID) ||
+		(productId == GEYSER3_ISO_PRODUCT_ID) ||
+		(productId == GEYSER3_JIS_PRODUCT_ID) ||
+		(productId == GEYSER4_ANSI_PRODUCT_ID) ||
+		(productId == GEYSER4_ISO_PRODUCT_ID) ||
+		(productId == GEYSER4_JIS_PRODUCT_ID);
 }
 
 static int atp_calculate_abs(int *xy_sensors, int nb_sensors, int fact,
@@ -160,16 +214,48 @@ static int atp_calculate_abs(int *xy_sensors, int nb_sensors, int fact,
 	int i;
 	/* values to calculate mean */
 	int pcum = 0, psum = 0;
+	int is_increasing = 0;
 
 	*fingers = 0;
 
 	for (i = 0; i < nb_sensors; i++) {
-		if (xy_sensors[i] < ATP_THRESHOLD)
+		if (xy_sensors[i] < threshold) {
+			if (is_increasing)
+				is_increasing = 0;
+
 			continue;
-		if ((i - 1 < 0) || (xy_sensors[i - 1] < ATP_THRESHOLD))
+		}
+
+		/*
+		 * Makes the finger detection more versatile.  For example,
+		 * two fingers with no gap will be detected.  Also, my
+		 * tests show it less likely to have intermittent loss
+		 * of multiple finger readings while moving around (scrolling).
+		 *
+		 * Changes the multiple finger detection to counting humps on
+		 * sensors (transitions from nonincreasing to increasing)
+		 * instead of counting transitions from low sensors (no
+		 * finger reading) to high sensors (finger above
+		 * sensor)
+		 *
+		 * - Jason Parekh <jasonparekh@gmail.com>
+		 */
+		if (i < 1 || (!is_increasing && xy_sensors[i - 1] < xy_sensors[i])) {
 			(*fingers)++;
-		pcum += xy_sensors[i] * i;
-		psum += xy_sensors[i];
+			is_increasing = 1;
+		} else if (i > 0 && xy_sensors[i - 1] >= xy_sensors[i]) {
+			is_increasing = 0;
+		}
+
+		/*
+		 * Subtracts threshold so a high sensor that just passes the threshold
+		 * won't skew the calculated absolute coordinate.  Fixes an issue
+		 * where slowly moving the mouse would occassionaly jump a number of
+		 * pixels (let me restate--slowly moving the mouse makes this issue
+		 * most apparent).
+		 */
+		pcum += (xy_sensors[i] - threshold) * i;
+		psum += (xy_sensors[i] - threshold);
 	}
 
 	if (psum > 0) {
@@ -187,7 +273,7 @@ static inline void atp_report_fingers(struct input_dev *input, int fingers)
 	input_report_key(input, BTN_TOOL_TRIPLETAP, fingers > 2);
 }
 
-static void atp_complete(struct urb* urb, struct pt_regs* regs)
+static void atp_complete(struct urb* urb)
 {
 	int x, y, x_z, y_z, x_f, y_f;
 	int retval, i, j;
@@ -219,12 +305,33 @@ static void atp_complete(struct urb* urb, struct pt_regs* regs)
 
 	/* drop incomplete datasets */
 	if (dev->urb->actual_length != dev->datalen) {
-		dprintk("appletouch: incomplete data package.\n");
+		dprintk("appletouch: incomplete data package"
+			" (first byte: %d, length: %d).\n",
+			dev->data[0], dev->urb->actual_length);
 		goto exit;
 	}
 
 	/* reorder the sensors values */
-	if (atp_is_geyser_2(dev)) {
+	if (atp_is_geyser_3(dev)) {
+		memset(dev->xy_cur, 0, sizeof(dev->xy_cur));
+
+		/*
+		 * The values are laid out like this:
+		 * -, Y1, Y2, -, Y3, Y4, -, ..., -, X1, X2, -, X3, X4, ...
+		 * '-' is an unused value.
+		 */
+
+		/* read X values */
+		for (i = 0, j = 19; i < 20; i += 2, j += 3) {
+			dev->xy_cur[i] = dev->data[j + 1];
+			dev->xy_cur[i + 1] = dev->data[j + 2];
+		}
+		/* read Y values */
+		for (i = 0, j = 1; i < 9; i += 2, j += 3) {
+			dev->xy_cur[ATP_XSENSORS + i] = dev->data[j + 1];
+			dev->xy_cur[ATP_XSENSORS + i + 1] = dev->data[j + 2];
+		}
+	} else if (atp_is_geyser_2(dev)) {
 		memset(dev->xy_cur, 0, sizeof(dev->xy_cur));
 
 		/*
@@ -266,6 +373,9 @@ static void atp_complete(struct urb* urb, struct pt_regs* regs)
 		dev->valid = 1;
 		dev->x_old = dev->y_old = -1;
 		memcpy(dev->xy_old, dev->xy_cur, sizeof(dev->xy_old));
+
+		if (atp_is_geyser_3(dev)) /* No 17" Macbooks (yet) */
+			goto exit;
 
 		/* 17" Powerbooks have extra X sensors */
 		for (i = (atp_is_geyser_2(dev)?15:16); i < ATP_XSENSORS; i++) {
@@ -389,10 +499,7 @@ static int atp_probe(struct usb_interface *iface, const struct usb_device_id *id
 	iface_desc = iface->cur_altsetting;
 	for (i = 0; i < iface_desc->desc.bNumEndpoints; i++) {
 		endpoint = &iface_desc->endpoint[i].desc;
-		if (!int_in_endpointAddr &&
-		    (endpoint->bEndpointAddress & USB_DIR_IN) &&
-		    ((endpoint->bmAttributes & USB_ENDPOINT_XFERTYPE_MASK)
-					== USB_ENDPOINT_XFER_INT)) {
+		if (!int_in_endpointAddr && usb_endpoint_is_int_in(endpoint)) {
 			/* we found an interrupt in endpoint */
 			int_in_endpointAddr = endpoint->bEndpointAddress;
 			break;
@@ -414,7 +521,50 @@ static int atp_probe(struct usb_interface *iface, const struct usb_device_id *id
 	dev->udev = udev;
 	dev->input = input_dev;
 	dev->overflowwarn = 0;
-	dev->datalen = (atp_is_geyser_2(dev)?64:81);
+	if (atp_is_geyser_3(dev))
+		dev->datalen = 64;
+	else if (atp_is_geyser_2(dev))
+		dev->datalen = 64;
+	else
+		dev->datalen = 81;
+
+	if (atp_is_geyser_3(dev)) {
+		/*
+		 * By default Geyser 3 device sends standard USB HID mouse
+		 * packets (Report ID 2). This code changes device mode, so it
+		 * sends raw sensor reports (Report ID 5).
+		 */
+		char data[8];
+		int size;
+
+		size = usb_control_msg(udev, usb_rcvctrlpipe(udev, 0),
+			ATP_GEYSER3_MODE_READ_REQUEST_ID,
+			USB_DIR_IN | USB_TYPE_CLASS | USB_RECIP_INTERFACE,
+			ATP_GEYSER3_MODE_REQUEST_VALUE,
+			ATP_GEYSER3_MODE_REQUEST_INDEX, &data, 8, 5000);
+
+		if (size != 8) {
+			err("Could not do mode read request from device"
+							" (Geyser 3 mode)");
+			goto err_free_devs;
+		}
+
+		/* Apply the mode switch */
+		data[0] = ATP_GEYSER3_MODE_VENDOR_VALUE;
+
+		size = usb_control_msg(udev, usb_sndctrlpipe(udev, 0),
+			ATP_GEYSER3_MODE_WRITE_REQUEST_ID,
+			USB_DIR_OUT | USB_TYPE_CLASS | USB_RECIP_INTERFACE,
+			ATP_GEYSER3_MODE_REQUEST_VALUE,
+			ATP_GEYSER3_MODE_REQUEST_INDEX, &data, 8, 5000);
+
+		if (size != 8) {
+			err("Could not do mode write request to device"
+							" (Geyser 3 mode)");
+			goto err_free_devs;
+		}
+		printk("appletouch Geyser 3 inited.\n");
+	}
 
 	dev->urb = usb_alloc_urb(0, GFP_KERNEL);
 	if (!dev->urb) {
@@ -447,7 +597,15 @@ static int atp_probe(struct usb_interface *iface, const struct usb_device_id *id
 
 	set_bit(EV_ABS, input_dev->evbit);
 
-	if (atp_is_geyser_2(dev)) {
+	if (atp_is_geyser_3(dev)) {
+		/*
+		 * MacBook have 20 X sensors, 10 Y sensors
+		 */
+		input_set_abs_params(input_dev, ABS_X, 0,
+				     ((20 - 1) * ATP_XFACT) - 1, ATP_FUZZ, 0);
+		input_set_abs_params(input_dev, ABS_Y, 0,
+				     ((10 - 1) * ATP_YFACT) - 1, ATP_FUZZ, 0);
+	} else if (atp_is_geyser_2(dev)) {
 		/*
 		 * Oct 2005 15" PowerBooks have 15 X sensors, 17" are detected
 		 * later.
@@ -499,9 +657,9 @@ static void atp_disconnect(struct usb_interface *iface)
 	if (dev) {
 		usb_kill_urb(dev->urb);
 		input_unregister_device(dev->input);
-		usb_free_urb(dev->urb);
 		usb_buffer_free(dev->udev, dev->datalen,
 				dev->data, dev->urb->transfer_dma);
+		usb_free_urb(dev->urb);
 		kfree(dev);
 	}
 	printk(KERN_INFO "input: appletouch disconnected\n");

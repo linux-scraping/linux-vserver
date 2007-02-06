@@ -1,7 +1,6 @@
 #ifndef __ASM_SH_DMA_MAPPING_H
 #define __ASM_SH_DMA_MAPPING_H
 
-#include <linux/config.h>
 #include <linux/mm.h>
 #include <asm/scatterlist.h>
 #include <asm/io.h>
@@ -36,7 +35,7 @@ static inline void dma_free_coherent(struct device *dev, size_t size,
 	consistent_free(NULL, size, vaddr, dma_handle);
 }
 
-static inline void dma_cache_sync(void *vaddr, size_t size,
+static inline void dma_cache_sync(struct device *dev, void *vaddr, size_t size,
 				  enum dma_data_direction dir)
 {
 	dma_cache_wback_inv((unsigned long)vaddr, size);
@@ -127,22 +126,30 @@ static inline void dma_sync_sg(struct device *dev, struct scatterlist *sg,
 static inline void dma_sync_single_for_cpu(struct device *dev,
 					   dma_addr_t dma_handle, size_t size,
 					   enum dma_data_direction dir)
-	__attribute__ ((alias("dma_sync_single")));
+{
+	dma_sync_single(dev, dma_handle, size, dir);
+}
 
 static inline void dma_sync_single_for_device(struct device *dev,
 					   dma_addr_t dma_handle, size_t size,
 					   enum dma_data_direction dir)
-	__attribute__ ((alias("dma_sync_single")));
+{
+	dma_sync_single(dev, dma_handle, size, dir);
+}
 
 static inline void dma_sync_sg_for_cpu(struct device *dev,
 				       struct scatterlist *sg, int nelems,
 				       enum dma_data_direction dir)
-	__attribute__ ((alias("dma_sync_sg")));
+{
+	dma_sync_sg(dev, sg, nelems, dir);
+}
 
 static inline void dma_sync_sg_for_device(struct device *dev,
 				       struct scatterlist *sg, int nelems,
 				       enum dma_data_direction dir)
-	__attribute__ ((alias("dma_sync_sg")));
+{
+	dma_sync_sg(dev, sg, nelems, dir);
+}
 
 static inline int dma_get_cache_alignment(void)
 {

@@ -63,6 +63,7 @@ struct sctp_ulpevent {
 	__u32 cumtsn;
 	int msg_flags;
 	int iif;
+	unsigned int rmem_len;
 };
 
 /* Retrieve the skb this event sits inside of. */
@@ -119,7 +120,7 @@ struct sctp_ulpevent *sctp_ulpevent_make_pdapi(
 	const struct sctp_association *asoc,
 	__u32 indication, gfp_t gfp);
 
-struct sctp_ulpevent *sctp_ulpevent_make_adaption_indication(
+struct sctp_ulpevent *sctp_ulpevent_make_adaptation_indication(
 	const struct sctp_association *asoc, gfp_t gfp);
 
 struct sctp_ulpevent *sctp_ulpevent_make_rcvmsg(struct sctp_association *asoc,

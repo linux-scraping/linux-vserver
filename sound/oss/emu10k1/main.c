@@ -167,7 +167,7 @@ extern struct file_operations emu10k1_midi_fops;
 static struct midi_operations emu10k1_midi_operations;
 #endif
 
-extern irqreturn_t emu10k1_interrupt(int, void *, struct pt_regs *s);
+extern irqreturn_t emu10k1_interrupt(int, void *);
 
 static int __devinit emu10k1_audio_init(struct emu10k1_card *card)
 {
@@ -1301,7 +1301,7 @@ static int __devinit emu10k1_probe(struct pci_dev *pci_dev, const struct pci_dev
 	card->pci_dev = pci_dev;
 
 	/* Reserve IRQ Line */
-	if (request_irq(card->irq, emu10k1_interrupt, SA_SHIRQ, card_names[pci_id->driver_data], card)) {
+	if (request_irq(card->irq, emu10k1_interrupt, IRQF_SHARED, card_names[pci_id->driver_data], card)) {
 		printk(KERN_ERR "emu10k1: IRQ in use\n");
 		ret = -EBUSY;
 		goto err_irq;

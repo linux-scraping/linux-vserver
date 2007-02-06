@@ -13,17 +13,19 @@
 #include <linux/oprofile.h>
 #include <linux/sysdev.h>
 #include <linux/slab.h>
+#include <linux/moduleparam.h>
 #include <asm/nmi.h>
 #include <asm/msr.h>
 #include <asm/apic.h>
+#include <asm/kdebug.h>
  
 #include "op_counter.h"
 #include "op_x86_model.h"
- 
+
 static struct op_x86_model_spec const * model;
 static struct op_msrs cpu_msrs[NR_CPUS];
 static unsigned long saved_lvtpc[NR_CPUS];
- 
+
 static int nmi_start(void);
 static void nmi_stop(void);
 
@@ -81,13 +83,24 @@ static void exit_driverfs(void)
 #define exit_driverfs() do { } while (0)
 #endif /* CONFIG_PM */
 
-
-static int nmi_callback(struct pt_regs * regs, int cpu)
+static int profile_exceptions_notify(struct notifier_block *self,
+				     unsigned long val, void *data)
 {
-	return model->check_ctrs(regs, &cpu_msrs[cpu]);
+	struct die_args *args = (struct die_args *)data;
+	int ret = NOTIFY_DONE;
+	int cpu = smp_processor_id();
+
+	switch(val) {
+	case DIE_NMI:
+		if (model->check_ctrs(args->regs, &cpu_msrs[cpu]))
+			ret = NOTIFY_STOP;
+		break;
+	default:
+		break;
+	}
+	return ret;
 }
- 
- 
+
 static void nmi_cpu_save_registers(struct op_msrs * msrs)
 {
 	unsigned int const nr_ctrs = model->num_counters;
@@ -97,15 +110,19 @@ static void nmi_cpu_save_registers(struct op_msrs * msrs)
 	unsigned int i;
 
 	for (i = 0; i < nr_ctrs; ++i) {
-		rdmsr(counters[i].addr,
-			counters[i].saved.low,
-			counters[i].saved.high);
+		if (counters[i].addr){
+			rdmsr(counters[i].addr,
+				counters[i].saved.low,
+				counters[i].saved.high);
+		}
 	}
  
 	for (i = 0; i < nr_ctrls; ++i) {
-		rdmsr(controls[i].addr,
-			controls[i].saved.low,
-			controls[i].saved.high);
+		if (controls[i].addr){
+			rdmsr(controls[i].addr,
+				controls[i].saved.low,
+				controls[i].saved.high);
+		}
 	}
 }
 
@@ -169,27 +186,29 @@ static void nmi_cpu_setup(void * dummy)
 	apic_write(APIC_LVTPC, APIC_DM_NMI);
 }
 
+static struct notifier_block profile_exceptions_nb = {
+	.notifier_call = profile_exceptions_notify,
+	.next = NULL,
+	.priority = 0
+};
 
 static int nmi_setup(void)
 {
+	int err=0;
+
 	if (!allocate_msrs())
 		return -ENOMEM;
 
-	/* We walk a thin line between law and rape here.
-	 * We need to be careful to install our NMI handler
-	 * without actually triggering any NMIs as this will
-	 * break the core code horrifically.
-	 */
-	if (reserve_lapic_nmi() < 0) {
+	if ((err = register_die_notifier(&profile_exceptions_nb))){
 		free_msrs();
-		return -EBUSY;
+		return err;
 	}
+
 	/* We need to serialize save and setup for HT because the subset
 	 * of msrs are distinct for save and setup operations
 	 */
 	on_each_cpu(nmi_save_registers, NULL, 0, 1);
 	on_each_cpu(nmi_cpu_setup, NULL, 0, 1);
-	set_nmi_callback(nmi_callback);
 	nmi_enabled = 1;
 	return 0;
 }
@@ -204,15 +223,19 @@ static void nmi_restore_registers(struct op_msrs * msrs)
 	unsigned int i;
 
 	for (i = 0; i < nr_ctrls; ++i) {
-		wrmsr(controls[i].addr,
-			controls[i].saved.low,
-			controls[i].saved.high);
+		if (controls[i].addr){
+			wrmsr(controls[i].addr,
+				controls[i].saved.low,
+				controls[i].saved.high);
+		}
 	}
  
 	for (i = 0; i < nr_ctrs; ++i) {
-		wrmsr(counters[i].addr,
-			counters[i].saved.low,
-			counters[i].saved.high);
+		if (counters[i].addr){
+			wrmsr(counters[i].addr,
+				counters[i].saved.low,
+				counters[i].saved.high);
+		}
 	}
 }
  
@@ -233,6 +256,7 @@ static void nmi_cpu_shutdown(void * dummy)
 	apic_write(APIC_LVTPC, saved_lvtpc[cpu]);
 	apic_write(APIC_LVTERR, v);
 	nmi_restore_registers(msrs);
+	model->shutdown(msrs);
 }
 
  
@@ -240,8 +264,7 @@ static void nmi_shutdown(void)
 {
 	nmi_enabled = 0;
 	on_each_cpu(nmi_cpu_shutdown, NULL, 0, 1);
-	unset_nmi_callback();
-	release_lapic_nmi();
+	unregister_die_notifier(&profile_exceptions_nb);
 	free_msrs();
 }
 
@@ -281,9 +304,17 @@ static int nmi_create_files(struct super_block * sb, struct dentry * root)
 
 	for (i = 0; i < model->num_counters; ++i) {
 		struct dentry * dir;
-		char buf[2];
+		char buf[4];
  
-		snprintf(buf, 2, "%d", i);
+ 		/* quick little hack to _not_ expose a counter if it is not
+		 * available for use.  This should protect userspace app.
+		 * NOTE:  assumes 1:1 mapping here (that counters are organized
+		 *        sequentially in their struct assignment).
+		 */
+		if (unlikely(!avail_to_resrv_perfctr_nmi_bit(i)))
+			continue;
+
+		snprintf(buf,  sizeof(buf), "%d", i);
 		dir = oprofilefs_mkdir(sb, root, buf);
 		oprofilefs_create_ulong(sb, dir, "enabled", &counter_config[i].enabled); 
 		oprofilefs_create_ulong(sb, dir, "event", &counter_config[i].event); 
@@ -296,12 +327,14 @@ static int nmi_create_files(struct super_block * sb, struct dentry * root)
 	return 0;
 }
  
+static int p4force;
+module_param(p4force, int, 0);
  
 static int __init p4_init(char ** cpu_type)
 {
 	__u8 cpu_model = boot_cpu_data.x86_model;
 
-	if (cpu_model > 4)
+	if (!p4force && (cpu_model > 6 || cpu_model == 5))
 		return 0;
 
 #ifndef CONFIG_SMP
@@ -334,6 +367,8 @@ static int __init ppro_init(char ** cpu_type)
 
 	if (cpu_model == 14)
 		*cpu_type = "i386/core";
+	else if (cpu_model == 15)
+		*cpu_type = "i386/core_2";
 	else if (cpu_model > 0xd)
 		return 0;
 	else if (cpu_model == 9) {

@@ -72,6 +72,10 @@
 #define VALIDATE_BUF_SIZE 4096    
 #define RTAS_MSG_MAXLEN   64
 
+/* Quirk - RTAS requires 4k list length and block size */
+#define RTAS_BLKLIST_LENGTH 4096
+#define RTAS_BLK_SIZE 4096
+
 struct flash_block {
 	char *data;
 	unsigned long length;
@@ -83,7 +87,7 @@ struct flash_block {
  * into a version/length and translate the pointers
  * to absolute.
  */
-#define FLASH_BLOCKS_PER_NODE ((PAGE_SIZE - 16) / sizeof(struct flash_block))
+#define FLASH_BLOCKS_PER_NODE ((RTAS_BLKLIST_LENGTH - 16) / sizeof(struct flash_block))
 struct flash_block_list {
 	unsigned long num_blocks;
 	struct flash_block_list *next;
@@ -95,6 +99,9 @@ struct flash_block_list_header { /* just the header of flash_block_list */
 };
 
 static struct flash_block_list_header rtas_firmware_flash_list = {0, NULL};
+
+/* Use slab cache to guarantee 4k alignment */
+static struct kmem_cache *flash_block_cache = NULL;
 
 #define FLASH_BLOCK_LIST_VERSION (1UL)
 
@@ -153,7 +160,7 @@ static int flash_list_valid(struct flash_block_list *flist)
 				return FLASH_IMG_NULL_DATA;
 			}
 			block_size = f->blocks[i].length;
-			if (block_size <= 0 || block_size > PAGE_SIZE) {
+			if (block_size <= 0 || block_size > RTAS_BLK_SIZE) {
 				return FLASH_IMG_BAD_LEN;
 			}
 			image_size += block_size;
@@ -177,16 +184,16 @@ static void free_flash_list(struct flash_block_list *f)
 
 	while (f) {
 		for (i = 0; i < f->num_blocks; i++)
-			free_page((unsigned long)(f->blocks[i].data));
+			kmem_cache_free(flash_block_cache, f->blocks[i].data);
 		next = f->next;
-		free_page((unsigned long)f);
+		kmem_cache_free(flash_block_cache, f);
 		f = next;
 	}
 }
 
 static int rtas_flash_release(struct inode *inode, struct file *file)
 {
-	struct proc_dir_entry *dp = PDE(file->f_dentry->d_inode);
+	struct proc_dir_entry *dp = PDE(file->f_path.dentry->d_inode);
 	struct rtas_update_flash_t *uf;
 	
 	uf = (struct rtas_update_flash_t *) dp->data;
@@ -248,7 +255,7 @@ static void get_flash_status_msg(int status, char *buf)
 static ssize_t rtas_flash_read(struct file *file, char __user *buf,
 			       size_t count, loff_t *ppos)
 {
-	struct proc_dir_entry *dp = PDE(file->f_dentry->d_inode);
+	struct proc_dir_entry *dp = PDE(file->f_path.dentry->d_inode);
 	struct rtas_update_flash_t *uf;
 	char msg[RTAS_MSG_MAXLEN];
 	int msglen;
@@ -278,6 +285,12 @@ static ssize_t rtas_flash_read(struct file *file, char __user *buf,
 	return msglen;
 }
 
+/* constructor for flash_block_cache */
+void rtas_block_ctor(void *ptr, struct kmem_cache *cache, unsigned long flags)
+{
+	memset(ptr, 0, RTAS_BLK_SIZE);
+}
+
 /* We could be much more efficient here.  But to keep this function
  * simple we allocate a page to the block list no matter how small the
  * count is.  If the system is low on memory it will be just as well
@@ -286,7 +299,7 @@ static ssize_t rtas_flash_read(struct file *file, char __user *buf,
 static ssize_t rtas_flash_write(struct file *file, const char __user *buffer,
 				size_t count, loff_t *off)
 {
-	struct proc_dir_entry *dp = PDE(file->f_dentry->d_inode);
+	struct proc_dir_entry *dp = PDE(file->f_path.dentry->d_inode);
 	struct rtas_update_flash_t *uf;
 	char *p;
 	int next_free;
@@ -302,7 +315,7 @@ static ssize_t rtas_flash_write(struct file *file, const char __user *buffer,
 	 * proc file
 	 */
 	if (uf->flist == NULL) {
-		uf->flist = (struct flash_block_list *) get_zeroed_page(GFP_KERNEL);
+		uf->flist = kmem_cache_alloc(flash_block_cache, GFP_KERNEL);
 		if (!uf->flist)
 			return -ENOMEM;
 	}
@@ -313,21 +326,21 @@ static ssize_t rtas_flash_write(struct file *file, const char __user *buffer,
 	next_free = fl->num_blocks;
 	if (next_free == FLASH_BLOCKS_PER_NODE) {
 		/* Need to allocate another block_list */
-		fl->next = (struct flash_block_list *)get_zeroed_page(GFP_KERNEL);
+		fl->next = kmem_cache_alloc(flash_block_cache, GFP_KERNEL);
 		if (!fl->next)
 			return -ENOMEM;
 		fl = fl->next;
 		next_free = 0;
 	}
 
-	if (count > PAGE_SIZE)
-		count = PAGE_SIZE;
-	p = (char *)get_zeroed_page(GFP_KERNEL);
+	if (count > RTAS_BLK_SIZE)
+		count = RTAS_BLK_SIZE;
+	p = kmem_cache_alloc(flash_block_cache, GFP_KERNEL);
 	if (!p)
 		return -ENOMEM;
 	
 	if(copy_from_user(p, buffer, count)) {
-		free_page((unsigned long)p);
+		kmem_cache_free(flash_block_cache, p);
 		return -EFAULT;
 	}
 	fl->blocks[next_free].data = p;
@@ -365,20 +378,12 @@ static int rtas_excl_release(struct inode *inode, struct file *file)
 
 static void manage_flash(struct rtas_manage_flash_t *args_buf)
 {
-	unsigned int wait_time;
 	s32 rc;
 
-	while (1) {
+	do {
 		rc = rtas_call(rtas_token("ibm,manage-flash-image"), 1, 
 			       1, NULL, args_buf->op);
-		if (rc == RTAS_RC_BUSY)
-			udelay(1);
-		else if (rtas_is_extended_busy(rc)) {
-			wait_time = rtas_extended_busy_delay_time(rc);
-			udelay(wait_time * 1000);
-		} else
-			break;
-	}
+	} while (rtas_busy_delay(rc));
 
 	args_buf->status = rc;
 }
@@ -386,7 +391,7 @@ static void manage_flash(struct rtas_manage_flash_t *args_buf)
 static ssize_t manage_flash_read(struct file *file, char __user *buf,
 			       size_t count, loff_t *ppos)
 {
-	struct proc_dir_entry *dp = PDE(file->f_dentry->d_inode);
+	struct proc_dir_entry *dp = PDE(file->f_path.dentry->d_inode);
 	struct rtas_manage_flash_t *args_buf;
 	char msg[RTAS_MSG_MAXLEN];
 	int msglen;
@@ -416,7 +421,7 @@ static ssize_t manage_flash_read(struct file *file, char __user *buf,
 static ssize_t manage_flash_write(struct file *file, const char __user *buf,
 				size_t count, loff_t *off)
 {
-	struct proc_dir_entry *dp = PDE(file->f_dentry->d_inode);
+	struct proc_dir_entry *dp = PDE(file->f_path.dentry->d_inode);
 	struct rtas_manage_flash_t *args_buf;
 	const char reject_str[] = "0";
 	const char commit_str[] = "1";
@@ -451,27 +456,18 @@ static ssize_t manage_flash_write(struct file *file, const char __user *buf,
 static void validate_flash(struct rtas_validate_flash_t *args_buf)
 {
 	int token = rtas_token("ibm,validate-flash-image");
-	unsigned int wait_time;
 	int update_results;
 	s32 rc;	
 
 	rc = 0;
-	while(1) {
+	do {
 		spin_lock(&rtas_data_buf_lock);
 		memcpy(rtas_data_buf, args_buf->buf, VALIDATE_BUF_SIZE);
 		rc = rtas_call(token, 2, 2, &update_results, 
 			       (u32) __pa(rtas_data_buf), args_buf->buf_size);
 		memcpy(args_buf->buf, rtas_data_buf, VALIDATE_BUF_SIZE);
 		spin_unlock(&rtas_data_buf_lock);
-			
-		if (rc == RTAS_RC_BUSY)
-			udelay(1);
-		else if (rtas_is_extended_busy(rc)) {
-			wait_time = rtas_extended_busy_delay_time(rc);
-			udelay(wait_time * 1000);
-		} else
-			break;
-	}
+	} while (rtas_busy_delay(rc));
 
 	args_buf->status = rc;
 	args_buf->update_results = update_results;
@@ -496,7 +492,7 @@ static int get_validate_flash_msg(struct rtas_validate_flash_t *args_buf,
 static ssize_t validate_flash_read(struct file *file, char __user *buf,
 			       size_t count, loff_t *ppos)
 {
-	struct proc_dir_entry *dp = PDE(file->f_dentry->d_inode);
+	struct proc_dir_entry *dp = PDE(file->f_path.dentry->d_inode);
 	struct rtas_validate_flash_t *args_buf;
 	char msg[RTAS_MSG_MAXLEN];
 	int msglen;
@@ -524,7 +520,7 @@ static ssize_t validate_flash_read(struct file *file, char __user *buf,
 static ssize_t validate_flash_write(struct file *file, const char __user *buf,
 				    size_t count, loff_t *off)
 {
-	struct proc_dir_entry *dp = PDE(file->f_dentry->d_inode);
+	struct proc_dir_entry *dp = PDE(file->f_path.dentry->d_inode);
 	struct rtas_validate_flash_t *args_buf;
 	int rc;
 
@@ -573,7 +569,7 @@ done:
 
 static int validate_flash_release(struct inode *inode, struct file *file)
 {
-	struct proc_dir_entry *dp = PDE(file->f_dentry->d_inode);
+	struct proc_dir_entry *dp = PDE(file->f_path.dentry->d_inode);
 	struct rtas_validate_flash_t *args_buf;
 
 	args_buf = (struct rtas_validate_flash_t *) dp->data;
@@ -685,13 +681,11 @@ static int initialize_flash_pde_data(const char *rtas_call_name,
 	int *status;
 	int token;
 
-	dp->data = kmalloc(buf_size, GFP_KERNEL);
+	dp->data = kzalloc(buf_size, GFP_KERNEL);
 	if (dp->data == NULL) {
 		remove_flash_pde(dp);
 		return -ENOMEM;
 	}
-
-	memset(dp->data, 0, buf_size);
 
 	/*
 	 * This code assumes that the status int is the first member of the
@@ -808,6 +802,16 @@ int __init rtas_flash_init(void)
 		goto cleanup;
 
 	rtas_flash_term_hook = rtas_flash_firmware;
+
+	flash_block_cache = kmem_cache_create("rtas_flash_cache",
+				RTAS_BLK_SIZE, RTAS_BLK_SIZE, 0,
+				rtas_block_ctor, NULL);
+	if (!flash_block_cache) {
+		printk(KERN_ERR "%s: failed to create block cache\n",
+				__FUNCTION__);
+		rc = -ENOMEM;
+		goto cleanup;
+	}
 	return 0;
 
 cleanup:
@@ -822,6 +826,10 @@ cleanup:
 void __exit rtas_flash_cleanup(void)
 {
 	rtas_flash_term_hook = NULL;
+
+	if (flash_block_cache)
+		kmem_cache_destroy(flash_block_cache);
+
 	remove_flash_pde(firmware_flash_pde);
 	remove_flash_pde(firmware_update_pde);
 	remove_flash_pde(validate_pde);

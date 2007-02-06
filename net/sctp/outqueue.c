@@ -416,7 +416,8 @@ void sctp_retransmit_mark(struct sctp_outq *q,
 			 * (Section 7.2.4)), add the data size of those
 			 * chunks to the rwnd.
 			 */
-			q->asoc->peer.rwnd += sctp_data_size(chunk);
+			q->asoc->peer.rwnd += (sctp_data_size(chunk) +
+						sizeof(struct sk_buff));
 			q->outstanding_bytes -= sctp_data_size(chunk);
 			transport->flight_size -= sctp_data_size(chunk);
 
@@ -467,6 +468,7 @@ void sctp_retransmit(struct sctp_outq *q, struct sctp_transport *transport,
 
 	switch(reason) {
 	case SCTP_RTXR_T3_RTX:
+		SCTP_INC_STATS(SCTP_MIB_T3_RETRANSMITS);
 		sctp_transport_lower_cwnd(transport, SCTP_LOWER_CWND_T3_RTX);
 		/* Update the retran path if the T3-rtx timer has expired for
 		 * the current retran path.
@@ -475,12 +477,15 @@ void sctp_retransmit(struct sctp_outq *q, struct sctp_transport *transport,
 			sctp_assoc_update_retran_path(transport->asoc);
 		break;
 	case SCTP_RTXR_FAST_RTX:
+		SCTP_INC_STATS(SCTP_MIB_FAST_RETRANSMITS);
 		sctp_transport_lower_cwnd(transport, SCTP_LOWER_CWND_FAST_RTX);
 		fast_retransmit = 1;
 		break;
 	case SCTP_RTXR_PMTUD:
-	default:
+		SCTP_INC_STATS(SCTP_MIB_PMTUD_RETRANSMITS);
 		break;
+	default:
+		BUG();
 	}
 
 	sctp_retransmit_mark(q, transport, fast_retransmit);
@@ -691,7 +696,8 @@ int sctp_outq_flush(struct sctp_outq *q, int rtx_timeout)
 
 		if (!new_transport) {
 			new_transport = asoc->peer.active_path;
-		} else if (new_transport->state == SCTP_INACTIVE) {
+		} else if ((new_transport->state == SCTP_INACTIVE) ||
+			   (new_transport->state == SCTP_UNCONFIRMED)) {
 			/* If the chunk is Heartbeat or Heartbeat Ack,
 			 * send it to chunk->transport, even if it's
 			 * inactive.
@@ -848,7 +854,8 @@ int sctp_outq_flush(struct sctp_outq *q, int rtx_timeout)
 			 */
 			new_transport = chunk->transport;
 			if (!new_transport ||
-			    new_transport->state == SCTP_INACTIVE)
+			    ((new_transport->state == SCTP_INACTIVE) ||
+			     (new_transport->state == SCTP_UNCONFIRMED)))
 				new_transport = asoc->peer.active_path;
 
 			/* Change packets if necessary.  */
@@ -1058,7 +1065,7 @@ int sctp_outq_sack(struct sctp_outq *q, struct sctp_sackhdr *sack)
 	 * A) Initialize the cacc_saw_newack to 0 for all destination
 	 * addresses.
 	 */
-	if (sack->num_gap_ack_blocks > 0 &&
+	if (sack->num_gap_ack_blocks &&
 	    primary->cacc.changeover_active) {
 		list_for_each(pos, transport_list) {
 			transport = list_entry(pos, struct sctp_transport,
@@ -1464,7 +1471,8 @@ static void sctp_check_transmitted(struct sctp_outq *q,
 			/* Mark the destination transport address as
 			 * active if it is not so marked.
 			 */
-			if (transport->state == SCTP_INACTIVE) {
+			if ((transport->state == SCTP_INACTIVE) ||
+			    (transport->state == SCTP_UNCONFIRMED)) {
 				sctp_assoc_control_transport(
 					transport->asoc,
 					transport,
@@ -1624,7 +1632,7 @@ pass:
 }
 
 static inline int sctp_get_skip_pos(struct sctp_fwdtsn_skip *skiplist,
-				    int nskips, __u16 stream)
+				    int nskips, __be16 stream)
 {
 	int i;
 

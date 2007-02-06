@@ -479,7 +479,7 @@ static int snd_es1688_capture_trigger(struct snd_pcm_substream *substream,
 	return snd_es1688_trigger(chip, cmd, 0x0f);
 }
 
-static irqreturn_t snd_es1688_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t snd_es1688_interrupt(int irq, void *dev_id)
 {
 	struct snd_es1688 *chip = dev_id;
 
@@ -659,7 +659,7 @@ int snd_es1688_create(struct snd_card *card,
 		snd_es1688_free(chip);
 		return -EBUSY;
 	}
-	if (request_irq(irq, snd_es1688_interrupt, SA_INTERRUPT, "ES1688", (void *) chip)) {
+	if (request_irq(irq, snd_es1688_interrupt, IRQF_DISABLED, "ES1688", (void *) chip)) {
 		snd_printk(KERN_ERR "es1688: can't grab IRQ %d\n", irq);
 		snd_es1688_free(chip);
 		return -EBUSY;

@@ -18,7 +18,6 @@
  *  along with this program; if not, write to the Free Software
  *  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
-#include <linux/config.h>
 #include <linux/ctype.h>
 #include <linux/init.h>
 #include <linux/module.h>
@@ -48,6 +47,7 @@
 
 /* Private data accessors (keep these out of the header file) */
 #define spi_dv_pending(x) (((struct spi_transport_attrs *)&(x)->starget_data)->dv_pending)
+#define spi_dv_in_progress(x) (((struct spi_transport_attrs *)&(x)->starget_data)->dv_in_progress)
 #define spi_dv_mutex(x) (((struct spi_transport_attrs *)&(x)->starget_data)->dv_mutex)
 
 struct spi_internal {
@@ -122,7 +122,7 @@ static int spi_execute(struct scsi_device *sdev, const void *cmd,
 			if (!sshdr)
 				sshdr = &sshdr_tmp;
 
-			if (scsi_normalize_sense(sense, sizeof(*sense),
+			if (scsi_normalize_sense(sense, SCSI_SENSE_BUFFERSIZE,
 						 sshdr)
 			    && sshdr->sense_key == UNIT_ATTENTION)
 				continue;
@@ -146,7 +146,7 @@ static inline const char *spi_signal_to_string(enum spi_signal_type type)
 {
 	int i;
 
-	for (i = 0; i < sizeof(signal_types)/sizeof(signal_types[0]); i++) {
+	for (i = 0; i < ARRAY_SIZE(signal_types); i++) {
 		if (type == signal_types[i].value)
 			return signal_types[i].name;
 	}
@@ -156,7 +156,7 @@ static inline enum spi_signal_type spi_signal_to_value(const char *name)
 {
 	int i, len;
 
-	for (i = 0; i < sizeof(signal_types)/sizeof(signal_types[0]); i++) {
+	for (i = 0; i < ARRAY_SIZE(signal_types); i++) {
 		len =  strlen(signal_types[i].name);
 		if (strncmp(name, signal_types[i].name, len) == 0 &&
 		    (name[len] == '\n' || name[len] == '\0'))
@@ -241,6 +241,7 @@ static int spi_setup_transport_attrs(struct transport_container *tc,
 	spi_pcomp_en(starget) = 0;
 	spi_hold_mcs(starget) = 0;
 	spi_dv_pending(starget) = 0;
+	spi_dv_in_progress(starget) = 0;
 	spi_initial_dv(starget) = 0;
 	mutex_init(&spi_dv_mutex(starget));
 
@@ -785,6 +786,7 @@ spi_dv_device_internal(struct scsi_device *sdev, u8 *buffer)
 {
 	struct spi_internal *i = to_spi_internal(sdev->host->transportt);
 	struct scsi_target *starget = sdev->sdev_target;
+	struct Scsi_Host *shost = sdev->host;
 	int len = sdev->inquiry_len;
 	/* first set us up for narrow async */
 	DV_SET(offset, 0);
@@ -830,19 +832,36 @@ spi_dv_device_internal(struct scsi_device *sdev, u8 *buffer)
 	DV_SET(period, spi_min_period(starget));
 	/* try QAS requests; this should be harmless to set if the
 	 * target supports it */
-	if (scsi_device_qas(sdev))
+	if (scsi_device_qas(sdev)) {
 		DV_SET(qas, 1);
-	/* Also try IU transfers */
-	if (scsi_device_ius(sdev))
+	} else {
+		DV_SET(qas, 0);
+	}
+
+	if (scsi_device_ius(sdev) && spi_min_period(starget) < 9) {
+		/* This u320 (or u640). Set IU transfers */
 		DV_SET(iu, 1);
-	if (spi_min_period(starget) < 9) {
-		/* This u320 (or u640). Ignore the coupled parameters
-		 * like DT and IU, but set the optional ones */
+		/* Then set the optional parameters */
 		DV_SET(rd_strm, 1);
 		DV_SET(wr_flow, 1);
 		DV_SET(rti, 1);
 		if (spi_min_period(starget) == 8)
 			DV_SET(pcomp_en, 1);
+	} else {
+		DV_SET(iu, 0);
+	}
+
+	/* now that we've done all this, actually check the bus
+	 * signal type (if known).  Some devices are stupid on
+	 * a SE bus and still claim they can try LVD only settings */
+	if (i->f->get_signalling)
+		i->f->get_signalling(shost);
+	if (spi_signalling(shost) == SPI_SIGNAL_SE ||
+	    spi_signalling(shost) == SPI_SIGNAL_HVD ||
+	    !scsi_device_dt(sdev)) {
+		DV_SET(dt, 0);
+	} else {
+		DV_SET(dt, 1);
 	}
 	/* Do the read only INQUIRY tests */
 	spi_dv_retrain(sdev, buffer, buffer + sdev->inquiry_len,
@@ -899,6 +918,10 @@ spi_dv_device(struct scsi_device *sdev)
 	if (unlikely(scsi_device_get(sdev)))
 		return;
 
+	if (unlikely(spi_dv_in_progress(starget)))
+		return;
+	spi_dv_in_progress(starget) = 1;
+
 	buffer = kzalloc(len, GFP_KERNEL);
 
 	if (unlikely(!buffer))
@@ -930,6 +953,7 @@ spi_dv_device(struct scsi_device *sdev)
  out_free:
 	kfree(buffer);
  out_put:
+	spi_dv_in_progress(starget) = 0;
 	scsi_device_put(sdev);
 }
 EXPORT_SYMBOL(spi_dv_device);
@@ -940,9 +964,10 @@ struct work_queue_wrapper {
 };
 
 static void
-spi_dv_device_work_wrapper(void *data)
+spi_dv_device_work_wrapper(struct work_struct *work)
 {
-	struct work_queue_wrapper *wqw = (struct work_queue_wrapper *)data;
+	struct work_queue_wrapper *wqw =
+		container_of(work, struct work_queue_wrapper, work);
 	struct scsi_device *sdev = wqw->sdev;
 
 	kfree(wqw);
@@ -982,7 +1007,7 @@ spi_schedule_dv_device(struct scsi_device *sdev)
 		return;
 	}
 
-	INIT_WORK(&wqw->work, spi_dv_device_work_wrapper, wqw);
+	INIT_WORK(&wqw->work, spi_dv_device_work_wrapper);
 	wqw->sdev = sdev;
 
 	schedule_work(&wqw->work);

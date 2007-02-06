@@ -1,5 +1,5 @@
 /*
- * include/asm/m32700ut_lan.h
+ * include/asm-m32r/m32700ut/m32700ut_lan.h
  *
  * M32700UT-LAN board
  *
@@ -15,7 +15,6 @@
 #ifndef _M32700UT_M32700UT_LAN_H
 #define _M32700UT_M32700UT_LAN_H
 
-#include <linux/config.h>
 
 #ifndef __ASSEMBLY__
 /*

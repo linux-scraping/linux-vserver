@@ -13,7 +13,6 @@
  * your option) any later version.
  */
 
-#include <linux/config.h>
 #include <linux/kernel.h>
 #include <linux/init.h>
 #include <linux/spinlock.h>
@@ -98,15 +97,16 @@ static unsigned int last_jiffy_time;
 
 #define TIMER4_TICKS_PER_JIFFY		((CLOCK_TICK_RATE + (HZ/2)) / HZ)
 
-static int ep93xx_timer_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+static int ep93xx_timer_interrupt(int irq, void *dev_id)
 {
 	write_seqlock(&xtime_lock);
 
 	__raw_writel(1, EP93XX_TIMER1_CLEAR);
-	while (__raw_readl(EP93XX_TIMER4_VALUE_LOW) - last_jiffy_time
+	while ((signed long)
+		(__raw_readl(EP93XX_TIMER4_VALUE_LOW) - last_jiffy_time)
 						>= TIMER4_TICKS_PER_JIFFY) {
 		last_jiffy_time += TIMER4_TICKS_PER_JIFFY;
-		timer_tick(regs);
+		timer_tick();
 	}
 
 	write_sequnlock(&xtime_lock);
@@ -116,7 +116,7 @@ static int ep93xx_timer_interrupt(int irq, void *dev_id, struct pt_regs *regs)
 
 static struct irqaction ep93xx_timer_irq = {
 	.name		= "ep93xx timer",
-	.flags		= SA_INTERRUPT | SA_TIMER,
+	.flags		= IRQF_DISABLED | IRQF_TIMER,
 	.handler	= ep93xx_timer_interrupt,
 };
 
@@ -124,7 +124,7 @@ static void __init ep93xx_timer_init(void)
 {
 	/* Enable periodic HZ timer.  */
 	__raw_writel(0x48, EP93XX_TIMER1_CONTROL);
-	__raw_writel((508000 / HZ) - 1, EP93XX_TIMER1_LOAD);
+	__raw_writel((508469 / HZ) - 1, EP93XX_TIMER1_LOAD);
 	__raw_writel(0xc8, EP93XX_TIMER1_CONTROL);
 
 	/* Enable lost jiffy timer.  */
@@ -245,7 +245,7 @@ EXPORT_SYMBOL(gpio_line_set);
  * EP93xx IRQ handling
  *************************************************************************/
 static void ep93xx_gpio_ab_irq_handler(unsigned int irq,
-		struct irqdesc *desc, struct pt_regs *regs)
+		struct irq_desc *desc)
 {
 	unsigned char status;
 	int i;
@@ -254,7 +254,7 @@ static void ep93xx_gpio_ab_irq_handler(unsigned int irq,
 	for (i = 0; i < 8; i++) {
 		if (status & (1 << i)) {
 			desc = irq_desc + IRQ_EP93XX_GPIO(0) + i;
-			desc_handle_irq(IRQ_EP93XX_GPIO(0) + i, desc, regs);
+			desc_handle_irq(IRQ_EP93XX_GPIO(0) + i, desc);
 		}
 	}
 
@@ -262,7 +262,7 @@ static void ep93xx_gpio_ab_irq_handler(unsigned int irq,
 	for (i = 0; i < 8; i++) {
 		if (status & (1 << i)) {
 			desc = irq_desc + IRQ_EP93XX_GPIO(8) + i;
-			desc_handle_irq(IRQ_EP93XX_GPIO(8) + i, desc, regs);
+			desc_handle_irq(IRQ_EP93XX_GPIO(8) + i, desc);
 		}
 	}
 }
@@ -335,7 +335,7 @@ static int ep93xx_gpio_ab_irq_type(unsigned int irq, unsigned int type)
 	return 0;
 }
 
-static struct irqchip ep93xx_gpio_ab_irq_chip = {
+static struct irq_chip ep93xx_gpio_ab_irq_chip = {
 	.ack		= ep93xx_gpio_ab_irq_mask_ack,
 	.mask		= ep93xx_gpio_ab_irq_mask,
 	.unmask		= ep93xx_gpio_ab_irq_unmask,
@@ -352,7 +352,7 @@ void __init ep93xx_init_irq(void)
 
 	for (irq = IRQ_EP93XX_GPIO(0) ; irq <= IRQ_EP93XX_GPIO(15); irq++) {
 		set_irq_chip(irq, &ep93xx_gpio_ab_irq_chip);
-		set_irq_handler(irq, do_level_IRQ);
+		set_irq_handler(irq, handle_level_irq);
 		set_irq_flags(irq, IRQF_VALID);
 	}
 	set_irq_chained_handler(IRQ_EP93XX_GPIO_AB, ep93xx_gpio_ab_irq_handler);
@@ -432,9 +432,36 @@ static struct platform_device ep93xx_rtc_device = {
 };
 
 
+static struct resource ep93xx_ohci_resources[] = {
+	[0] = {
+		.start	= EP93XX_USB_PHYS_BASE,
+		.end	= EP93XX_USB_PHYS_BASE + 0x0fff,
+		.flags	= IORESOURCE_MEM,
+	},
+	[1] = {
+		.start	= IRQ_EP93XX_USB,
+		.end	= IRQ_EP93XX_USB,
+		.flags	= IORESOURCE_IRQ,
+	},
+};
+
+static struct platform_device ep93xx_ohci_device = {
+	.name		= "ep93xx-ohci",
+	.id		= -1,
+	.dev		= {
+		.dma_mask		= (void *)0xffffffff,
+		.coherent_dma_mask	= 0xffffffff,
+	},
+	.num_resources	= ARRAY_SIZE(ep93xx_ohci_resources),
+	.resource	= ep93xx_ohci_resources,
+};
+
+
 void __init ep93xx_init_devices(void)
 {
 	unsigned int v;
+
+	ep93xx_clock_init();
 
 	/*
 	 * Disallow access to MaverickCrunch initially.
@@ -449,4 +476,9 @@ void __init ep93xx_init_devices(void)
 	amba_device_register(&uart3_device, &iomem_resource);
 
 	platform_device_register(&ep93xx_rtc_device);
+	platform_device_register(&ep93xx_ohci_device);
+
+#ifdef CONFIG_CRUNCH
+	elf_hwcap |= HWCAP_CRUNCH;
+#endif
 }

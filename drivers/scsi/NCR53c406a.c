@@ -168,8 +168,8 @@ enum Phase {
 };
 
 /* Static function prototypes */
-static void NCR53c406a_intr(int, void *, struct pt_regs *);
-static irqreturn_t do_NCR53c406a_intr(int, void *, struct pt_regs *);
+static void NCR53c406a_intr(void *);
+static irqreturn_t do_NCR53c406a_intr(int, void *);
 static void chip_init(void);
 static void calc_port_addr(void);
 #ifndef IRQ_LEV
@@ -213,16 +213,18 @@ static void *addresses[] = {
 	(void *) 0xd8000,
 	(void *) 0xc8000
 };
-#define ADDRESS_COUNT (sizeof( addresses ) / sizeof( unsigned ))
+#define ADDRESS_COUNT ARRAY_SIZE(addresses)
 #endif				/* USE_BIOS */
 
 /* possible i/o port addresses */
 static unsigned short ports[] = { 0x230, 0x330, 0x280, 0x290, 0x330, 0x340, 0x300, 0x310, 0x348, 0x350 };
-#define PORT_COUNT (sizeof( ports ) / sizeof( unsigned short ))
+#define PORT_COUNT ARRAY_SIZE(ports)
 
+#ifndef MODULE
 /* possible interrupt channels */
 static unsigned short intrs[] = { 10, 11, 12, 15 };
-#define INTR_COUNT (sizeof( intrs ) / sizeof( unsigned short ))
+#define INTR_COUNT ARRAY_SIZE(intrs)
+#endif /* !MODULE */
 
 /* signatures for NCR 53c406a based controllers */
 #if USE_BIOS
@@ -236,7 +238,7 @@ struct signature {
 	{
 "Copyright (C) Acculogic, Inc.\r\n2.8M Diskette Extension Bios ver 4.04.03 03/01/1993", 61, 82},};
 
-#define SIGNATURE_COUNT (sizeof( signatures ) / sizeof( struct signature ))
+#define SIGNATURE_COUNT ARRAY_SIZE(signatures)
 #endif				/* USE_BIOS */
 
 /* ============================================================ */
@@ -605,6 +607,7 @@ static int NCR53c406a_release(struct Scsi_Host *shost)
 	return 0;
 }
 
+#ifndef MODULE
 /* called from init/main.c */
 static int __init NCR53c406a_setup(char *str)
 {
@@ -661,6 +664,8 @@ static int __init NCR53c406a_setup(char *str)
 
 __setup("ncr53c406a=", NCR53c406a_setup);
 
+#endif /* !MODULE */
+
 static const char *NCR53c406a_info(struct Scsi_Host *SChost)
 {
 	DEB(printk("NCR53c406a_info called\n"));
@@ -685,7 +690,7 @@ static void wait_intr(void)
 		return;
 	}
 
-	NCR53c406a_intr(0, NULL, NULL);
+	NCR53c406a_intr(NULL);
 }
 #endif
 
@@ -761,19 +766,18 @@ static int NCR53c406a_biosparm(struct scsi_device *disk,
 	return 0;
 }
 
-static irqreturn_t do_NCR53c406a_intr(int unused, void *dev_id,
-					struct pt_regs *regs)
+static irqreturn_t do_NCR53c406a_intr(int unused, void *dev_id)
 {
 	unsigned long flags;
 	struct Scsi_Host *dev = dev_id;
 
 	spin_lock_irqsave(dev->host_lock, flags);
-	NCR53c406a_intr(0, dev_id, regs);
+	NCR53c406a_intr(dev_id);
 	spin_unlock_irqrestore(dev->host_lock, flags);
 	return IRQ_HANDLED;
 }
 
-static void NCR53c406a_intr(int unused, void *dev_id, struct pt_regs *regs)
+static void NCR53c406a_intr(void *dev_id)
 {
 	DEB(unsigned char fifo_size;
 	    )

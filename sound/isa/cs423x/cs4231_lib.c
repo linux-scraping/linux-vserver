@@ -920,7 +920,7 @@ static void snd_cs4231_overrange(struct snd_cs4231 *chip)
 		chip->capture_substream->runtime->overrange++;
 }
 
-irqreturn_t snd_cs4231_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+irqreturn_t snd_cs4231_interrupt(int irq, void *dev_id)
 {
 	struct snd_cs4231 *chip = dev_id;
 	unsigned char status;
@@ -1454,7 +1454,7 @@ int snd_cs4231_create(struct snd_card *card,
 		return -ENODEV;
 	}
 	chip->cport = cport;
-	if (!(hwshare & CS4231_HWSHARE_IRQ) && request_irq(irq, snd_cs4231_interrupt, SA_INTERRUPT, "CS4231", (void *) chip)) {
+	if (!(hwshare & CS4231_HWSHARE_IRQ) && request_irq(irq, snd_cs4231_interrupt, IRQF_DISABLED, "CS4231", (void *) chip)) {
 		snd_printk(KERN_ERR "cs4231: can't grab IRQ %d\n", irq);
 		snd_cs4231_free(chip);
 		return -EBUSY;

@@ -57,11 +57,6 @@ Prior to version 0.9.0rc4 options had a 'snd_' prefix. This was removed.
 		- Default: 1
 		- For auto-loading more than one card, specify this
 		  option together with snd-card-X aliases.
-    device_mode
-		- permission mask for dynamic sound device filesystem
-		- This is available only when DEVFS is enabled
-		- Default: 0666
-		- E.g.: device_mode=0660
 
   
   Module snd-pcm-oss
@@ -366,7 +361,9 @@ Prior to version 0.9.0rc4 options had a 'snd_' prefix. This was removed.
 
     Module for C-Media CMI8338 and 8738 PCI sound cards.
 
-    mpu_port	- 0x300,0x310,0x320,0x330, 0 = disable (default)
+    mpu_port	- 0x300,0x310,0x320,0x330 = legacy port,
+		  1 = integrated PCI port,
+		  0 = disable (default)
     fm_port     - 0x388 (default), 0 = disable (default)
     soft_ac3    - Software-conversion of raw SPDIF packets (model 033 only)
                   (default = 1)
@@ -468,7 +465,23 @@ Prior to version 0.9.0rc4 options had a 'snd_' prefix. This was removed.
 
     Module for multifunction CS5535 companion PCI device
 
+    The power-management is supported.
+
+  Module snd-darla20
+  ------------------
+
+    Module for Echoaudio Darla20
+
     This module supports multiple cards.
+    The driver requires the firmware loader support on kernel.
+
+  Module snd-darla24
+  ------------------
+
+    Module for Echoaudio Darla24
+
+    This module supports multiple cards.
+    The driver requires the firmware loader support on kernel.
 
   Module snd-dt019x
   -----------------
@@ -496,6 +509,14 @@ Prior to version 0.9.0rc4 options had a 'snd_' prefix. This was removed.
     requires a sound card (like RealPlayer).
 
     The power-management is supported.
+
+  Module snd-echo3g
+  -----------------
+
+    Module for Echoaudio 3G cards (Gina3G/Layla3G)
+
+    This module supports multiple cards.
+    The driver requires the firmware loader support on kernel.
 
   Module snd-emu10k1
   ------------------
@@ -655,6 +676,22 @@ Prior to version 0.9.0rc4 options had a 'snd_' prefix. This was removed.
     
     The power-management is supported.
 
+  Module snd-gina20
+  -----------------
+
+    Module for Echoaudio Gina20
+
+    This module supports multiple cards.
+    The driver requires the firmware loader support on kernel.
+
+  Module snd-gina24
+  -----------------
+
+    Module for Echoaudio Gina24
+
+    This module supports multiple cards.
+    The driver requires the firmware loader support on kernel.
+
   Module snd-gusclassic
   ---------------------
 
@@ -707,13 +744,16 @@ Prior to version 0.9.0rc4 options had a 'snd_' prefix. This was removed.
   Module snd-hda-intel
   --------------------
 
-    Module for Intel HD Audio (ICH6, ICH6M, ICH7), ATI SB450,
-	       VIA VT8251/VT8237A
+    Module for Intel HD Audio (ICH6, ICH6M, ESB2, ICH7, ICH8),
+		ATI SB450, SB600, RS600,
+		VIA VT8251/VT8237A,
+		SIS966, ULI M5461
 
     model	- force the model name
     position_fix - Fix DMA pointer (0 = auto, 1 = none, 2 = POSBUF, 3 = FIFO size)
     single_cmd  - Use single immediate commands to communicate with
 		codecs (for debugging only)
+    enable_msi	- Enable Message Signaled Interrupt (MSI) (default = off)
 
     This module supports one card and autoprobe.
 
@@ -734,11 +774,16 @@ Prior to version 0.9.0rc4 options had a 'snd_' prefix. This was removed.
 	  6stack-digout	6-jack with a SPDIF out
 	  w810		3-jack
 	  z71v		3-jack (HP shared SPDIF)
-	  asus		3-jack
+	  asus		3-jack (ASUS Mobo)
+	  asus-w1v	ASUS W1V
+	  asus-dig	ASUS with SPDIF out
+	  asus-dig2	ASUS with SPDIF out (using GPIO2)
 	  uniwill	3-jack
 	  F1734		2-jack
 	  lg		LG laptop (m1 express dual)
-	  lg-lw		LG LW20 laptop
+	  lg-lw		LG LW20/LW25 laptop
+	  tcl		TCL S700
+	  clevo		Clevo laptops (m520G, m665n)
 	  test		for testing/debugging purpose, almost all controls can be
 			adjusted.  Appearing only when compiled with
 			$CONFIG_SND_DEBUG=y
@@ -746,6 +791,7 @@ Prior to version 0.9.0rc4 options had a 'snd_' prefix. This was removed.
 
 	ALC260
 	  hp		HP machines
+	  hp-3013	HP machines (3013-variant)
 	  fujitsu	Fujitsu S7020
 	  acer		Acer TravelMate
 	  basic		fixed pin assignment (old default model)
@@ -753,18 +799,32 @@ Prior to version 0.9.0rc4 options had a 'snd_' prefix. This was removed.
 
 	ALC262
 	  fujitsu	Fujitsu Laptop
+	  hp-bpc	HP xw4400/6400/8400/9400 laptops
+	  benq		Benq ED8
 	  basic		fixed pin assignment w/o SPDIF
 	  auto		auto-config reading BIOS (default)
 
-	ALC882/883/885
+	ALC882/885
 	  3stack-dig	3-jack with SPDIF I/O
 	  6stck-dig	6-jack digital with SPDIF I/O
+	  arima		Arima W820Di1
 	  auto		auto-config reading BIOS (default)
 
-	ALC861
+	ALC883/888
+	  3stack-dig	3-jack with SPDIF I/O
+	  6stack-dig	6-jack digital with SPDIF I/O
+	  3stack-6ch    3-jack 6-channel
+	  3stack-6ch-dig 3-jack 6-channel with SPDIF I/O
+	  6stack-dig-demo  6-jack digital for Intel demo board
+	  acer		Acer laptops (Travelmate 3012WTMi, Aspire 5600, etc)
+	  auto		auto-config reading BIOS (default)
+
+	ALC861/660
 	  3stack	3-jack
 	  3stack-dig	3-jack with SPDIF I/O
 	  6stack-dig	6-jack with SPDIF I/O
+	  3stack-660	3-jack (for ALC660)
+	  uniwill-m31	Uniwill M31 laptop
 	  auto		auto-config reading BIOS (default)
 
 	CMI9880
@@ -778,6 +838,7 @@ Prior to version 0.9.0rc4 options had a 'snd_' prefix. This was removed.
 	AD1981
 	  basic		3-jack (default)
 	  hp		HP nx6320
+	  thinkpad	Lenovo Thinkpad T60/X60/Z60
 
 	AD1986A
 	  6stack	6-jack, separate surrounds (default)
@@ -792,10 +853,21 @@ Prior to version 0.9.0rc4 options had a 'snd_' prefix. This was removed.
 	  3stack-dig	ditto with SPDIF
 	  laptop	3-jack with hp-jack automute
 	  laptop-dig	ditto with SPDIF
-	  auto		auto-confgi reading BIOS (default)
+	  auto		auto-config reading BIOS (default)
 
-	STAC7661(?)
+	STAC9200/9205/9220/9221/9254
+	  ref		Reference board
+	  3stack	D945 3stack
+	  5stack	D945 5stack + SPDIF
+
+	STAC9227/9228/9229/927x
+	  ref		Reference board
+	  3stack	D965 3stack
+	  5stack	D965 5stack + SPDIF
+
+	STAC9872
 	  vaio		Setup for VAIO FE550G/SZ110
+	  vaio-ar Setup for VAIO AR
 
     If the default configuration doesn't work and one of the above
     matches with your device, report it together with the PCI
@@ -883,7 +955,7 @@ Prior to version 0.9.0rc4 options had a 'snd_' prefix. This was removed.
 		  dmx6fire, dsp24, dsp24_value, dsp24_71, ez8,
 		  phase88, mediastation
     omni	- Omni I/O support for MidiMan M-Audio Delta44/66
-    cs8427_timeout - reset timeout for the CS8427 chip (S/PDIF transciever)
+    cs8427_timeout - reset timeout for the CS8427 chip (S/PDIF transceiver)
                      in msec resolution, default value is 500 (0.5 sec)
 
     This module supports multiple cards and autoprobe. Note: The consumer part
@@ -931,6 +1003,30 @@ Prior to version 0.9.0rc4 options had a 'snd_' prefix. This was removed.
 	  model by passing "model" module option in case that the
 	  driver isn't configured properly or you want to try another
 	  type for testing.
+
+  Module snd-indigo
+  -----------------
+
+    Module for Echoaudio Indigo
+
+    This module supports multiple cards.
+    The driver requires the firmware loader support on kernel.
+
+  Module snd-indigodj
+  -------------------
+
+    Module for Echoaudio Indigo DJ
+
+    This module supports multiple cards.
+    The driver requires the firmware loader support on kernel.
+
+  Module snd-indigoio
+  -------------------
+
+    Module for Echoaudio Indigo IO
+
+    This module supports multiple cards.
+    The driver requires the firmware loader support on kernel.
 
   Module snd-intel8x0
   -------------------
@@ -1031,6 +1127,22 @@ Prior to version 0.9.0rc4 options had a 'snd_' prefix. This was removed.
 
     This module supports multiple cards.
 
+  Module snd-layla20
+  ------------------
+
+    Module for Echoaudio Layla20
+
+    This module supports multiple cards.
+    The driver requires the firmware loader support on kernel.
+
+  Module snd-layla24
+  ------------------
+
+    Module for Echoaudio Layla24
+
+    This module supports multiple cards.
+    The driver requires the firmware loader support on kernel.
+
   Module snd-maestro3
   -------------------
 
@@ -1050,6 +1162,14 @@ Prior to version 0.9.0rc4 options had a 'snd_' prefix. This was removed.
     option.
 
     The power-management is supported.
+
+  Module snd-mia
+  ---------------
+
+    Module for Echoaudio Mia
+
+    This module supports multiple cards.
+    The driver requires the firmware loader support on kernel.
 
   Module snd-miro
   ---------------
@@ -1083,6 +1203,14 @@ Prior to version 0.9.0rc4 options had a 'snd_' prefix. This was removed.
     When no hotplug fw loader is available, you need to load the
     firmware via mixartloader utility in alsa-tools package.
 
+  Module snd-mona
+  ---------------
+
+    Module for Echoaudio Mona
+
+    This module supports multiple cards.
+    The driver requires the firmware loader support on kernel.
+
   Module snd-mpu401
   -----------------
 
@@ -1106,6 +1234,14 @@ Prior to version 0.9.0rc4 options had a 'snd_' prefix. This was removed.
     
     Module supports only 1 card.  This module has no enable option.
 
+  Module snd-mts64
+  ----------------
+
+    Module for Ego Systems (ESI) Miditerminal 4140
+
+    This module supports multiple devices.
+    Requires parport (CONFIG_PARPORT).
+
   Module snd-nm256
   ----------------
 
@@ -1127,8 +1263,8 @@ Prior to version 0.9.0rc4 options had a 'snd_' prefix. This was removed.
 
     Note: on some notebooks the buffer address cannot be detected
     automatically, or causes hang-up during initialization.
-    In such a case, specify the buffer top address explicity via
-    buffer_top option.
+    In such a case, specify the buffer top address explicitly via
+    the buffer_top option.
     For example,
       Sony F250: buffer_top=0x25a800
       Sony F270: buffer_top=0x272800
@@ -1633,9 +1769,7 @@ Prior to version 0.9.0rc4 options had a 'snd_' prefix. This was removed.
 
     About capture IBL, see the description of snd-vx222 module.
 
-    Note: the driver is build only when CONFIG_ISA is set.
-    
-    Note2: snd-vxp440 driver is merged to snd-vxpocket driver since
+    Note: snd-vxp440 driver is merged to snd-vxpocket driver since
            ALSA 1.0.10.
 
     The power-management is supported.
@@ -1661,8 +1795,6 @@ Prior to version 0.9.0rc4 options had a 'snd_' prefix. This was removed.
   --------------------
 
     Module for Sound Core PDAudioCF sound card.
-
-    Note: the driver is build only when CONFIG_ISA is set.
 
     The power-management is supported.
 
@@ -1750,7 +1882,7 @@ options snd-ens1371 index=1
 # OSS/Free portion
 alias sound-slot-0 snd-interwave
 alias sound-slot-1 snd-ens1371
------ /etc/moprobe.conf
+----- /etc/modprobe.conf
 
 In this example, the interwave card is always loaded as the first card
 (index 0) and ens1371 as the second (index 1).
@@ -1776,21 +1908,6 @@ playback, respectively.
 
 Please note that the device mapping above may be varied via the module
 options of snd-pcm-oss module.
-
-
-DEVFS support
-=============
-
-The ALSA driver fully supports the devfs extension.
-You should add lines below to your devfsd.conf file:
-
-LOOKUP snd MODLOAD ACTION snd
-REGISTER ^sound/.* PERMISSIONS root.audio 660
-REGISTER ^snd/.* PERMISSIONS root.audio 660
-
-Warning: These lines assume that you have the audio group in your system.
-         Otherwise replace audio word with another group name (root for
-         example).
 
 
 Proc interfaces (/proc/asound)

@@ -6,7 +6,7 @@
    		     Arnaldo Carvalho de Melo <acme@conectiva.com.br>
                      Brad Strand <linux@3ware.com>
 
-   Copyright (C) 1999-2005 3ware Inc.
+   Copyright (C) 1999-2007 3ware Inc.
 
    Kernel compatiblity By:	Andre Hedrick <andre@suse.com>
    Non-Copyright (C) 2000	Andre Hedrick <andre@suse.com>
@@ -74,7 +74,7 @@ static char *tw_aen_string[] = {
 	[0x00D] = "ERROR: Logical unit deleted: Unit #",
 	[0x00F] = "WARNING: SMART threshold exceeded: Port #",
 	[0x021] = "WARNING: ATA UDMA downgrade: Port #",
-	[0x021] = "WARNING: ATA UDMA upgrade: Port #",
+	[0x022] = "WARNING: ATA UDMA upgrade: Port #",
 	[0x023] = "WARNING: Sector repair occurred: Port #",
 	[0x024] = "ERROR: SBUF integrity check failure",
 	[0x025] = "ERROR: Lost cached write: Port #",

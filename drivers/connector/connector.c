@@ -121,6 +121,7 @@ nlmsg_failure:
 	kfree_skb(skb);
 	return -EINVAL;
 }
+EXPORT_SYMBOL_GPL(cn_netlink_send);
 
 /*
  * Callback helper - queues work and setup destructor for given data.
@@ -134,7 +135,7 @@ static int cn_call_callback(struct cn_msg *msg, void (*destruct_data)(void *), v
 	spin_lock_bh(&dev->cbdev->queue_lock);
 	list_for_each_entry(__cbq, &dev->cbdev->queue_list, callback_entry) {
 		if (cn_cb_equal(&__cbq->id.id, &msg->id)) {
-			if (likely(!test_bit(0, &__cbq->work.pending) &&
+			if (likely(!work_pending(&__cbq->work) &&
 					__cbq->data.ddata == NULL)) {
 				__cbq->data.callback_priv = msg;
 
@@ -142,32 +143,28 @@ static int cn_call_callback(struct cn_msg *msg, void (*destruct_data)(void *), v
 				__cbq->data.destruct_data = destruct_data;
 
 				if (queue_work(dev->cbdev->cn_queue,
-						&__cbq->work))
+							&__cbq->work))
 					err = 0;
 			} else {
-				struct work_struct *w;
 				struct cn_callback_data *d;
 				
-				w = kzalloc(sizeof(*w) + sizeof(*d), GFP_ATOMIC);
-				if (w) {
-					d = (struct cn_callback_data *)(w+1);
-
+				__cbq = kzalloc(sizeof(*__cbq), GFP_ATOMIC);
+				if (__cbq) {
+					d = &__cbq->data;
 					d->callback_priv = msg;
 					d->callback = __cbq->data.callback;
 					d->ddata = data;
 					d->destruct_data = destruct_data;
-					d->free = w;
+					d->free = __cbq;
 
-					INIT_LIST_HEAD(&w->entry);
-					w->pending = 0;
-					w->func = &cn_queue_wrapper;
-					w->data = d;
-					init_timer(&w->timer);
+					INIT_WORK(&__cbq->work,
+							&cn_queue_wrapper);
 					
-					if (queue_work(dev->cbdev->cn_queue, w))
+					if (queue_work(dev->cbdev->cn_queue,
+						    &__cbq->work))
 						err = 0;
 					else {
-						kfree(w);
+						kfree(__cbq);
 						err = -EINVAL;
 					}
 				} else
@@ -308,6 +305,9 @@ int cn_add_callback(struct cb_id *id, char *name, void (*callback)(void *))
 	int err;
 	struct cn_dev *dev = &cdev;
 
+	if (!cn_already_initialized)
+		return -EAGAIN;
+
 	err = cn_queue_add_callback(dev->cbdev, name, id, callback);
 	if (err)
 		return err;
@@ -316,6 +316,7 @@ int cn_add_callback(struct cb_id *id, char *name, void (*callback)(void *))
 
 	return 0;
 }
+EXPORT_SYMBOL_GPL(cn_add_callback);
 
 /*
  * Callback remove routing - removes callback
@@ -332,6 +333,7 @@ void cn_del_callback(struct cb_id *id)
 	cn_queue_del_callback(dev->cbdev, id);
 	cn_notify(id, 1);
 }
+EXPORT_SYMBOL_GPL(cn_del_callback);
 
 /*
  * Checks two connector's control messages to be the same.
@@ -435,7 +437,7 @@ static void cn_callback(void *data)
 	mutex_unlock(&notify_lock);
 }
 
-static int __init cn_init(void)
+static int __devinit cn_init(void)
 {
 	struct cn_dev *dev = &cdev;
 	int err;
@@ -456,21 +458,22 @@ static int __init cn_init(void)
 			sock_release(dev->nls->sk_socket);
 		return -EINVAL;
 	}
+	
+	cn_already_initialized = 1;
 
 	err = cn_add_callback(&dev->id, "connector", &cn_callback);
 	if (err) {
+		cn_already_initialized = 0;
 		cn_queue_free_dev(dev->cbdev);
 		if (dev->nls->sk_socket)
 			sock_release(dev->nls->sk_socket);
 		return -EINVAL;
 	}
 
-	cn_already_initialized = 1;
-
 	return 0;
 }
 
-static void __exit cn_fini(void)
+static void __devexit cn_fini(void)
 {
 	struct cn_dev *dev = &cdev;
 
@@ -482,9 +485,5 @@ static void __exit cn_fini(void)
 		sock_release(dev->nls->sk_socket);
 }
 
-module_init(cn_init);
+subsys_initcall(cn_init);
 module_exit(cn_fini);
-
-EXPORT_SYMBOL_GPL(cn_add_callback);
-EXPORT_SYMBOL_GPL(cn_del_callback);
-EXPORT_SYMBOL_GPL(cn_netlink_send);

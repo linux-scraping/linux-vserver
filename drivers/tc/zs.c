@@ -39,7 +39,6 @@
  *     is shared with DSRS(DTE) at pin 23.
  */
 
-#include <linux/config.h>
 #include <linux/errno.h>
 #include <linux/signal.h>
 #include <linux/sched.h>
@@ -348,7 +347,7 @@ static void rs_sched_event(struct dec_serial *info, int event)
 	tasklet_schedule(&info->tlet);
 }
 
-static void receive_chars(struct dec_serial *info, struct pt_regs *regs)
+static void receive_chars(struct dec_serial *info)
 {
 	struct tty_struct *tty = info->tty;
 	unsigned char ch, stat, flag;
@@ -390,7 +389,7 @@ static void receive_chars(struct dec_serial *info, struct pt_regs *regs)
 			if (ch == 0)
 				continue;
 			if (time_before(jiffies, break_pressed + HZ * 5)) {
-				handle_sysrq(ch, regs, NULL);
+				handle_sysrq(ch, NULL);
 				break_pressed = 0;
 				continue;
 			}
@@ -491,7 +490,7 @@ static void status_handle(struct dec_serial *info)
 /*
  * This is the serial driver's generic interrupt routine
  */
-static irqreturn_t rs_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t rs_interrupt(int irq, void *dev_id)
 {
 	struct dec_serial *info = (struct dec_serial *) dev_id;
 	irqreturn_t status = IRQ_NONE;
@@ -519,7 +518,7 @@ static irqreturn_t rs_interrupt(int irq, void *dev_id, struct pt_regs *regs)
 		status = IRQ_HANDLED;
 
 		if (zs_intreg & CHBRxIP) {
-			receive_chars(info, regs);
+			receive_chars(info);
 		}
 		if (zs_intreg & CHBTxIP) {
 			transmit_chars(info);
@@ -1239,7 +1238,7 @@ static int rs_ioctl(struct tty_struct *tty, struct file * file,
 	return 0;
 }
 
-static void rs_set_termios(struct tty_struct *tty, struct termios *old_termios)
+static void rs_set_termios(struct tty_struct *tty, struct ktermios *old_termios)
 {
 	struct dec_serial *info = (struct dec_serial *)tty->driver_data;
 	int was_stopped;
@@ -1702,7 +1701,7 @@ static void __init probe_sccs(void)
 	spin_unlock_irqrestore(&zs_lock, flags);
 }
 
-static struct tty_operations serial_ops = {
+static const struct tty_operations serial_ops = {
 	.open = rs_open,
 	.close = rs_close,
 	.write = rs_write,
@@ -1745,7 +1744,6 @@ int __init zs_init(void)
 	/* Not all of this is exactly right for us. */
 
 	serial_driver->owner = THIS_MODULE;
-	serial_driver->devfs_name = "tts/";
 	serial_driver->name = "ttyS";
 	serial_driver->major = TTY_MAJOR;
 	serial_driver->minor_start = 64;
@@ -1754,7 +1752,7 @@ int __init zs_init(void)
 	serial_driver->init_termios = tty_std_termios;
 	serial_driver->init_termios.c_cflag =
 		B9600 | CS8 | CREAD | HUPCL | CLOCAL;
-	serial_driver->flags = TTY_DRIVER_REAL_RAW | TTY_DRIVER_NO_DEVFS;
+	serial_driver->flags = TTY_DRIVER_REAL_RAW | TTY_DRIVER_DYNAMIC_DEV;
 	tty_set_operations(serial_driver, &serial_ops);
 
 	if (tty_register_driver(serial_driver))
@@ -1793,7 +1791,7 @@ int __init zs_init(void)
 		zs_soft[channel].clk_divisor = 16;
 		zs_soft[channel].zs_baud = get_zsbaud(&zs_soft[channel]);
 
-		if (request_irq(zs_soft[channel].irq, rs_interrupt, SA_SHIRQ,
+		if (request_irq(zs_soft[channel].irq, rs_interrupt, IRQF_SHARED,
 				"scc", &zs_soft[channel]))
 			printk(KERN_ERR "decserial: can't get irq %d\n",
 			       zs_soft[channel].irq);

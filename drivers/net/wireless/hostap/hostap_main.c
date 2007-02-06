@@ -12,7 +12,6 @@
  * more details.
  */
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/slab.h>
@@ -251,7 +250,7 @@ u16 hostap_tx_callback_register(local_info_t *local,
 	unsigned long flags;
 	struct hostap_tx_callback_info *entry;
 
-	entry = (struct hostap_tx_callback_info *) kmalloc(sizeof(*entry),
+	entry = kmalloc(sizeof(*entry),
 							   GFP_ATOMIC);
 	if (entry == NULL)
 		return 0;
@@ -768,14 +767,14 @@ static int prism2_set_mac_address(struct net_device *dev, void *p)
 
 /* TODO: to be further implemented as soon as Prism2 fully supports
  *       GroupAddresses and correct documentation is available */
-void hostap_set_multicast_list_queue(void *data)
+void hostap_set_multicast_list_queue(struct work_struct *work)
 {
-	struct net_device *dev = (struct net_device *) data;
+	local_info_t *local =
+		container_of(work, local_info_t, set_multicast_list_queue);
+	struct net_device *dev = local->dev;
 	struct hostap_interface *iface;
-	local_info_t *local;
 
 	iface = netdev_priv(dev);
-	local = iface->local;
 	if (hostap_set_word(dev, HFA384X_RID_PROMISCUOUSMODE,
 			    local->is_promisc)) {
 		printk(KERN_INFO "%s: %sabling promiscuous mode failed\n",
@@ -1125,11 +1124,9 @@ EXPORT_SYMBOL(hostap_set_auth_algs);
 EXPORT_SYMBOL(hostap_dump_rx_header);
 EXPORT_SYMBOL(hostap_dump_tx_header);
 EXPORT_SYMBOL(hostap_80211_header_parse);
-EXPORT_SYMBOL(hostap_80211_prism_header_parse);
 EXPORT_SYMBOL(hostap_80211_get_hdrlen);
 EXPORT_SYMBOL(hostap_get_stats);
 EXPORT_SYMBOL(hostap_setup_dev);
-EXPORT_SYMBOL(hostap_proc);
 EXPORT_SYMBOL(hostap_set_multicast_list_queue);
 EXPORT_SYMBOL(hostap_set_hostapd);
 EXPORT_SYMBOL(hostap_set_hostapd_sta);

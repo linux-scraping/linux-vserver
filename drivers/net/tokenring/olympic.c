@@ -80,7 +80,6 @@
 #define OLYMPIC_DEBUG 0
 
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/errno.h>
@@ -186,7 +185,7 @@ static int olympic_xmit(struct sk_buff *skb, struct net_device *dev);
 static int olympic_close(struct net_device *dev);
 static void olympic_set_rx_mode(struct net_device *dev);
 static void olympic_freemem(struct net_device *dev) ;  
-static irqreturn_t olympic_interrupt(int irq, void *dev_id, struct pt_regs *regs);
+static irqreturn_t olympic_interrupt(int irq, void *dev_id);
 static struct net_device_stats * olympic_get_stats(struct net_device *dev);
 static int olympic_set_mac_address(struct net_device *dev, void *addr) ; 
 static void olympic_arb_cmd(struct net_device *dev);
@@ -217,7 +216,7 @@ static int __devinit olympic_probe(struct pci_dev *pdev, const struct pci_device
 	dev = alloc_trdev(sizeof(struct olympic_private)) ; 
 	if (!dev) {
 		i = -ENOMEM; 
-		goto op_free_dev;
+		goto op_release_dev;
 	}
 
 	olympic_priv = dev->priv ;
@@ -282,8 +281,8 @@ op_free_iomap:
 	if (olympic_priv->olympic_lap)
 		iounmap(olympic_priv->olympic_lap);
 
-op_free_dev:
 	free_netdev(dev);
+op_release_dev:
 	pci_release_regions(pdev); 
 
 op_disable_dev:
@@ -446,7 +445,7 @@ static int olympic_open(struct net_device *dev)
 
 	olympic_init(dev);
 
-	if(request_irq(dev->irq, &olympic_interrupt, SA_SHIRQ , "olympic", dev)) {
+	if(request_irq(dev->irq, &olympic_interrupt, IRQF_SHARED , "olympic", dev)) {
 		return -EAGAIN;
 	}
 
@@ -926,7 +925,7 @@ static void olympic_freemem(struct net_device *dev)
 	return ; 
 }
  
-static irqreturn_t olympic_interrupt(int irq, void *dev_id, struct pt_regs *regs) 
+static irqreturn_t olympic_interrupt(int irq, void *dev_id) 
 {
 	struct net_device *dev= (struct net_device *)dev_id;
 	struct olympic_private *olympic_priv=(struct olympic_private *)dev->priv;
@@ -1772,7 +1771,7 @@ static struct pci_driver olympic_driver = {
 
 static int __init olympic_pci_init(void) 
 {
-	return pci_module_init (&olympic_driver) ; 
+	return pci_register_driver(&olympic_driver) ;
 }
 
 static void __exit olympic_pci_cleanup(void)

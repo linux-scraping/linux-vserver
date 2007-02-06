@@ -6,14 +6,18 @@ be removed from this file.
 
 ---------------------------
 
-What:	devfs
-When:	July 2005
-Files:	fs/devfs/*, include/linux/devfs_fs*.h and assorted devfs
-	function calls throughout the kernel tree
-Why:	It has been unmaintained for a number of years, has unfixable
-	races, contains a naming policy within the kernel that is
-	against the LSB, and can be replaced by using udev.
-Who:	Greg Kroah-Hartman <greg@kroah.com>
+What:	/sys/devices/.../power/state
+	dev->power.power_state
+	dpm_runtime_{suspend,resume)()
+When:	July 2007
+Why:	Broken design for runtime control over driver power states, confusing
+	driver-internal runtime power management with:  mechanisms to support
+	system-wide sleep state transitions; event codes that distinguish
+	different phases of swsusp "sleep" transitions; and userspace policy
+	inputs.  This framework was never widely used, and most attempts to
+	use it were broken.  Drivers should instead be exposing domain-specific
+	interfaces either to kernel or to userspace.
+Who:	Pavel Machek <pavel@suse.cz>
 
 ---------------------------
 
@@ -25,49 +29,45 @@ Who:	Adrian Bunk <bunk@stusta.de>
 
 ---------------------------
 
-What:	drivers that were depending on OBSOLETE_OSS_DRIVER
-        (config options already removed)
-When:	before 2.6.19
-Why:	OSS drivers with ALSA replacements
-Who:	Adrian Bunk <bunk@stusta.de>
-
----------------------------
-
-What:	RCU API moves to EXPORT_SYMBOL_GPL
-When:	April 2006
-Files:	include/linux/rcupdate.h, kernel/rcupdate.c
-Why:	Outside of Linux, the only implementations of anything even
-	vaguely resembling RCU that I am aware of are in DYNIX/ptx,
-	VM/XA, Tornado, and K42.  I do not expect anyone to port binary
-	drivers or kernel modules from any of these, since the first two
-	are owned by IBM and the last two are open-source research OSes.
-	So these will move to GPL after a grace period to allow
-	people, who might be using implementations that I am not aware
-	of, to adjust to this upcoming change.
-Who:	Paul E. McKenney <paulmck@us.ibm.com>
-
----------------------------
-
 What:	raw1394: requests of type RAW1394_REQ_ISO_SEND, RAW1394_REQ_ISO_LISTEN
-When:	November 2005
-Why:	Deprecated in favour of the new ioctl-based rawiso interface, which is
-	more efficient.  You should really be using libraw1394 for raw1394
-	access anyway.
-Who:	Jody McIntyre <scjody@steamballoon.com>
+When:	June 2007
+Why:	Deprecated in favour of the more efficient and robust rawiso interface.
+	Affected are applications which use the deprecated part of libraw1394
+	(raw1394_iso_write, raw1394_start_iso_write, raw1394_start_iso_rcv,
+	raw1394_stop_iso_rcv) or bypass	libraw1394.
+Who:	Dan Dennedy <dan@dennedy.org>, Stefan Richter <stefanr@s5r6.in-berlin.de>
 
 ---------------------------
 
-What:	sbp2: module parameter "force_inquiry_hack"
-When:	July 2006
-Why:	Superceded by parameter "workarounds". Both parameters are meant to be
-	used ad-hoc and for single devices only, i.e. not in modprobe.conf,
-	therefore the impact of this feature replacement should be low.
+What:	dv1394 driver (CONFIG_IEEE1394_DV1394)
+When:	June 2007
+Why:	Replaced by raw1394 + userspace libraries, notably libiec61883.  This
+	shift of application support has been indicated on www.linux1394.org
+	and developers' mailinglists for quite some time.  Major applications
+	have been converted, with the exception of ffmpeg and hence xine.
+	Piped output of dvgrab2 is a partial equivalent to dv1394.
+Who:	Dan Dennedy <dan@dennedy.org>, Stefan Richter <stefanr@s5r6.in-berlin.de>
+
+---------------------------
+
+What:	ieee1394 core's unused exports (CONFIG_IEEE1394_EXPORT_FULL_API)
+When:	January 2007
+Why:	There are no projects known to use these exported symbols, except
+	dfg1394 (uses one symbol whose functionality is core-internal now).
+Who:	Stefan Richter <stefanr@s5r6.in-berlin.de>
+
+---------------------------
+
+What:	ieee1394's *_oui sysfs attributes (CONFIG_IEEE1394_OUI_DB)
+When:	January 2007
+Files:	drivers/ieee1394/: oui.db, oui2c.sh
+Why:	big size, little value
 Who:	Stefan Richter <stefanr@s5r6.in-berlin.de>
 
 ---------------------------
 
 What:	Video4Linux API 1 ioctls and video_decoder.h from Video devices.
-When:	July 2006
+When:	December 2006
 Why:	V4L1 AP1 was replaced by V4L2 API. during migration from 2.4 to 2.6
 	series. The old API have lots of drawbacks and don't provide enough
 	means to work with all video and audio standards. The newer API is
@@ -78,14 +78,6 @@ Why:	V4L1 AP1 was replaced by V4L2 API. during migration from 2.4 to 2.6
 	communicate with video decoders. This should also be improved to allow
 	V4L2 calls being translated into compatible internal ioctls.
 Who:	Mauro Carvalho Chehab <mchehab@brturbo.com.br>
-
----------------------------
-
-What:	remove EXPORT_SYMBOL(insert_resource)
-When:	April 2006
-Files:	kernel/resource.c
-Why:	No modular usage in the kernel.
-Who:	Adrian Bunk <bunk@stusta.de>
 
 ---------------------------
 
@@ -103,18 +95,6 @@ Why:	With the 16-bit PCMCIA subsystem now behaving (almost) like a
 	pcmciautils package available at
 	http://kernel.org/pub/linux/utils/kernel/pcmcia/
 Who:	Dominik Brodowski <linux@brodo.de>
-
----------------------------
-
-What:	ip_queue and ip6_queue (old ipv4-only and ipv6-only netfilter queue)
-When:	December 2005
-Why:	This interface has been obsoleted by the new layer3-independent
-	"nfnetlink_queue".  The Kernel interface is compatible, so the old
-	ip[6]tables "QUEUE" targets still work and will transparently handle
-	all packets into nfnetlink queue number 0.  Userspace users will have
-	to link against API-compatible library on top of libnfnetlink_queue 
-	instead of the current 'libipq'.
-Who:	Harald Welte <laforge@netfilter.org>
 
 ---------------------------
 
@@ -138,29 +118,17 @@ Who:    Arjan van de Ven
 
 ---------------------------
 
-What:	START_ARRAY ioctl for md
-When:	July 2006
-Files:	drivers/md/md.c
-Why:	Not reliable by design - can fail when most needed.
-	Alternatives exist
-Who:	NeilBrown <neilb@suse.de>
-
----------------------------
-
-What:	au1x00_uart driver
-When:	January 2006
-Why:	The 8250 serial driver now has the ability to deal with the differences
-	between the standard 8250 family of UARTs and their slightly strange
-	brother on Alchemy SOCs.  The loss of features is not considered an
-	issue.
-Who:	Ralf Baechle <ralf@linux-mips.org>
-
----------------------------
-
 What:   eepro100 network driver
 When:   January 2007
 Why:    replaced by the e100 driver
 Who:    Adrian Bunk <bunk@stusta.de>
+
+---------------------------
+
+What:  drivers depending on OSS_OBSOLETE_DRIVER
+When:  options in 2.6.20, code in 2.6.22
+Why:   OSS drivers with ALSA replacements
+Who:   Adrian Bunk <bunk@stusta.de>
 
 ---------------------------
 
@@ -183,23 +151,13 @@ Who:	Thomas Gleixner <tglx@linutronix.de>
 
 ---------------------------
 
-What:	I2C interface of the it87 driver
-When:	January 2007
-Why:	The ISA interface is faster and should be always available. The I2C
-	probing is also known to cause trouble in at least one case (see
-	bug #5889.)
-Who:	Jean Delvare <khali@linux-fr.org>
-
----------------------------
-
-What:	remove EXPORT_SYMBOL(tasklist_lock)
-When:	August 2006
-Files:	kernel/fork.c
-Why:	tasklist_lock protects the kernel internal task list.  Modules have
-	no business looking at it, and all instances in drivers have been due
-	to use of too-lowlevel APIs.  Having this symbol exported prevents
-	moving to more scalable locking schemes for the task list.
-Who:	Christoph Hellwig <hch@lst.de>
+What:	Unused EXPORT_SYMBOL/EXPORT_SYMBOL_GPL exports
+	(temporary transition config option provided until then)
+	The transition config option will also be removed at the same time.
+When:	before 2.6.19
+Why:	Unused symbols are both increasing the size of the kernel binary
+	and are often a sign of "wrong API"
+Who:	Arjan van de Ven <arjan@linux.intel.com>
 
 ---------------------------
 
@@ -212,17 +170,8 @@ Who:	Greg Kroah-Hartman <gregkh@suse.de>
 
 ---------------------------
 
-What:	Support for NEC DDB5074 and DDB5476 evaluation boards.
-When:	June 2006
-Why:	Board specific code doesn't build anymore since ~2.6.0 and no
-	users have complained indicating there is no more need for these
-	boards.  This should really be considered a last call.
-Who:	Ralf Baechle <ralf@linux-mips.org>
-
----------------------------
-
 What:	USB driver API moves to EXPORT_SYMBOL_GPL
-When:	Febuary 2008
+When:	February 2008
 Files:	include/linux/usb.h, drivers/usb/core/driver.c
 Why:	The USB subsystem has changed a lot over time, and it has been
 	possible to create userspace USB drivers using usbfs/libusb/gadgetfs
@@ -246,5 +195,133 @@ Why:	The interface no longer has any callers left in the kernel. It
 	This feature removal can be reevaluated if users of the interface
 	cannot cleanly use something else.
 Who:	Nick Piggin <npiggin@suse.de>
+
+---------------------------
+
+What:	Interrupt only SA_* flags
+When:	Januar 2007
+Why:	The interrupt related SA_* flags are replaced by IRQF_* to move them
+	out of the signal namespace.
+
+Who:	Thomas Gleixner <tglx@linutronix.de>
+
+---------------------------
+
+What:	PHYSDEVPATH, PHYSDEVBUS, PHYSDEVDRIVER in the uevent environment
+When:	October 2008
+Why:	The stacking of class devices makes these values misleading and
+	inconsistent.
+	Class devices should not carry any of these properties, and bus
+	devices have SUBSYTEM and DRIVER as a replacement.
+Who:	Kay Sievers <kay.sievers@suse.de>
+
+---------------------------
+
+What:	i2c-isa
+When:	December 2006
+Why:	i2c-isa is a non-sense and doesn't fit in the device driver
+	model. Drivers relying on it are better implemented as platform
+	drivers.
+Who:	Jean Delvare <khali@linux-fr.org>
+
+---------------------------
+
+What:	i2c_adapter.dev
+	i2c_adapter.list
+When:	July 2007
+Why:	Superfluous, given i2c_adapter.class_dev:
+	  * The "dev" was a stand-in for the physical device node that legacy
+	    drivers would not have; but now it's almost always present.  Any
+	    remaining legacy drivers must upgrade (they now trigger warnings).
+	  * The "list" duplicates class device children.
+	The delay in removing this is so upgraded lm_sensors and libsensors
+	can get deployed.  (Removal causes minor changes in the sysfs layout,
+	notably the location of the adapter type name and parenting the i2c
+	client hardware directly from their controller.)
+Who:	Jean Delvare <khali@linux-fr.org>,
+	David Brownell <dbrownell@users.sourceforge.net>
+
+---------------------------
+
+What:	IPv4 only connection tracking/NAT/helpers
+When:	2.6.22
+Why:	The new layer 3 independant connection tracking replaces the old
+	IPv4 only version. After some stabilization of the new code the
+	old one will be removed.
+Who:	Patrick McHardy <kaber@trash.net>
+
+---------------------------
+
+What:	ACPI hooks (X86_SPEEDSTEP_CENTRINO_ACPI) in speedstep-centrino driver
+When:	December 2006
+Why:	Speedstep-centrino driver with ACPI hooks and acpi-cpufreq driver are
+	functionally very much similar. They talk to ACPI in same way. Only
+	difference between them is the way they do frequency transitions.
+	One uses MSRs and the other one uses IO ports. Functionaliy of
+	speedstep_centrino with ACPI hooks is now merged into acpi-cpufreq.
+	That means one common driver will support all Intel Enhanced Speedstep
+	capable CPUs. That means less confusion over name of
+	speedstep-centrino driver (with that driver supposed to be used on
+	non-centrino platforms). That means less duplication of code and
+	less maintenance effort and no possibility of these two drivers
+	going out of sync.
+	Current users of speedstep_centrino with ACPI hooks are requested to
+	switch over to acpi-cpufreq driver. speedstep-centrino will continue
+	to work using older non-ACPI static table based scheme even after this
+	date.
+
+Who:	Venkatesh Pallipadi <venkatesh.pallipadi@intel.com>
+
+---------------------------
+
+What:	ACPI hotkey driver (CONFIG_ACPI_HOTKEY)
+When:	2.6.21
+Why:	hotkey.c was an attempt to consolidate multiple drivers that use
+	ACPI to implement hotkeys.  However, hotkeys are not documented
+	in the ACPI specification, so the drivers used undocumented
+	vendor-specific hooks and turned out to be more different than
+	the same.
+
+	Further, the keys and the features supplied by each platform
+	are different, so there will always be a need for
+	platform-specific drivers.
+
+	So the new plan is to delete hotkey.c and instead, work on the
+	platform specific drivers to try to make them look the same
+	to the user when they supply the same features.
+
+	hotkey.c has always depended on CONFIG_EXPERIMENTAL
+
+Who:	Len Brown <len.brown@intel.com>
+
+---------------------------
+
+What:	/sys/firmware/acpi/namespace
+When:	2.6.21
+Why:	The ACPI namespace is effectively the symbol list for
+	the BIOS.  The device names are completely arbitrary
+	and have no place being exposed to user-space.
+
+	For those interested in the BIOS ACPI namespace,
+	the BIOS can be extracted and disassembled with acpidump
+	and iasl as documented in the pmtools package here:
+	http://ftp.kernel.org/pub/linux/kernel/people/lenb/acpi/utils
+
+Who:	Len Brown <len.brown@intel.com>
+
+---------------------------
+
+What:	/proc/acpi/button
+When:	August 2007
+Why:	/proc/acpi/button has been replaced by events to the input layer
+	since 2.6.20.
+Who:	Len Brown <len.brown@intel.com>
+
+---------------------------
+
+What:	JFFS (version 1)
+When:	2.6.21
+Why:	Unmaintained for years, superceded by JFFS2 for years.
+Who:	Jeff Garzik <jeff@garzik.org>
 
 ---------------------------

@@ -27,11 +27,9 @@
 
 #include <linux/kernel.h>
 #include <linux/slab.h>
-#include <linux/input.h>
 #include <linux/module.h>
 #include <linux/init.h>
-#include <linux/usb.h>
-#include <linux/usb_input.h>
+#include <linux/usb/input.h>
 
 /*
  * Version Information
@@ -60,7 +58,7 @@ struct usb_acecad {
 	dma_addr_t data_dma;
 };
 
-static void usb_acecad_irq(struct urb *urb, struct pt_regs *regs)
+static void usb_acecad_irq(struct urb *urb)
 {
 	struct usb_acecad *acecad = urb->context;
 	unsigned char *data = acecad->data;
@@ -143,10 +141,7 @@ static int usb_acecad_probe(struct usb_interface *intf, const struct usb_device_
 
 	endpoint = &interface->endpoint[0].desc;
 
-	if (!(endpoint->bEndpointAddress & 0x80))
-		return -ENODEV;
-
-	if ((endpoint->bmAttributes & 3) != 3)
+	if (!usb_endpoint_is_int_in(endpoint))
 		return -ENODEV;
 
 	pipe = usb_rcvintpipe(dev, endpoint->bEndpointAddress);
@@ -157,7 +152,7 @@ static int usb_acecad_probe(struct usb_interface *intf, const struct usb_device_
 	if (!acecad || !input_dev)
 		goto fail1;
 
-	acecad->data = usb_buffer_alloc(dev, 8, SLAB_KERNEL, &acecad->data_dma);
+	acecad->data = usb_buffer_alloc(dev, 8, GFP_KERNEL, &acecad->data_dma);
 	if (!acecad->data)
 		goto fail1;
 

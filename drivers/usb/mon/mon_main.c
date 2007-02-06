@@ -97,6 +97,7 @@ static void mon_submit(struct usb_bus *ubus, struct urb *urb)
 	if (mbus->nreaders == 0)
 		goto out_locked;
 
+	mbus->cnt_events++;
 	list_for_each (pos, &mbus->r_list) {
 		r = list_entry(pos, struct mon_reader, r_link);
 		r->rnf_submit(r->r_data, urb);
@@ -113,20 +114,32 @@ out_unlocked:
 
 /*
  */
-static void mon_submit_error(struct usb_bus *ubus, struct urb *urb, int err)
+static void mon_submit_error(struct usb_bus *ubus, struct urb *urb, int error)
 {
 	struct mon_bus *mbus;
+	unsigned long flags;
+	struct list_head *pos;
+	struct mon_reader *r;
 
 	mbus = ubus->mon_bus;
 	if (mbus == NULL)
 		goto out_unlocked;
 
-	/*
-	 * XXX Capture the error code and the 'E' event.
-	 */
+	spin_lock_irqsave(&mbus->lock, flags);
+	if (mbus->nreaders == 0)
+		goto out_locked;
 
+	mbus->cnt_events++;
+	list_for_each (pos, &mbus->r_list) {
+		r = list_entry(pos, struct mon_reader, r_link);
+		r->rnf_error(r->r_data, urb, error);
+	}
+
+	spin_unlock_irqrestore(&mbus->lock, flags);
 	return;
 
+out_locked:
+	spin_unlock_irqrestore(&mbus->lock, flags);
 out_unlocked:
 	return;
 }
@@ -152,6 +165,7 @@ static void mon_complete(struct usb_bus *ubus, struct urb *urb)
 	}
 
 	spin_lock_irqsave(&mbus->lock, flags);
+	mbus->cnt_events++;
 	list_for_each (pos, &mbus->r_list) {
 		r = list_entry(pos, struct mon_reader, r_link);
 		r->rnf_complete(r->r_data, urb);
@@ -163,7 +177,6 @@ static void mon_complete(struct usb_bus *ubus, struct urb *urb)
 
 /*
  * Stop monitoring.
- * Obviously this must be well locked, so no need to play with mb's.
  */
 static void mon_stop(struct mon_bus *mbus)
 {
@@ -252,7 +265,6 @@ static void mon_dissolve(struct mon_bus *mbus, struct usb_bus *ubus)
 	ubus->mon_bus = NULL;
 	mbus->u_bus = NULL;
 	mb();
-	// usb_bus_put(ubus);
 }
 
 /*
@@ -284,12 +296,12 @@ static void mon_bus_init(struct dentry *mondir, struct usb_bus *ubus)
 	INIT_LIST_HEAD(&mbus->r_list);
 
 	/*
-	 * This usb_bus_get here is superfluous, because we receive
-	 * a notification if usb_bus is about to be removed.
+	 * We don't need to take a reference to ubus, because we receive
+	 * a notification if the bus is about to be removed.
 	 */
-	// usb_bus_get(ubus);
 	mbus->u_bus = ubus;
 	ubus->mon_bus = mbus;
+	mbus->uses_dma = ubus->uses_dma;
 
 	rc = snprintf(name, NAMESZ, "%dt", ubus->busnum);
 	if (rc <= 0 || rc >= NAMESZ)

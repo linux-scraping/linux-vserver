@@ -55,7 +55,7 @@ static void __init find_tempdir(void)
  */
 static int next(int fd, char *buf, int size, char c)
 {
-	int n;
+	int n, len;
 	char *ptr;
 
 	while((ptr = strchr(buf, c)) == NULL){
@@ -69,7 +69,17 @@ static int next(int fd, char *buf, int size, char c)
 	}
 
 	ptr++;
-	memmove(buf, ptr, strlen(ptr) + 1);
+	len = strlen(ptr);
+	memmove(buf, ptr, len + 1);
+
+	/* Refill the buffer so that if there's a partial string that we care
+	 * about, it will be completed, and we can recognize it.
+	 */
+	n = read(fd, &buf[len], size - len - 1);
+	if(n < 0)
+		return -errno;
+
+	buf[len + n] = '\0';
 	return 1;
 }
 
@@ -104,14 +114,14 @@ static void which_tmpdir(void)
 	}
 
 	while(1){
-		found = next(fd, buf, sizeof(buf) / sizeof(buf[0]), ' ');
+		found = next(fd, buf, ARRAY_SIZE(buf), ' ');
 		if(found != 1)
 			break;
 
 		if(!strncmp(buf, "/dev/shm", strlen("/dev/shm")))
 			goto found;
 
-		found = next(fd, buf, sizeof(buf) / sizeof(buf[0]), '\n');
+		found = next(fd, buf, ARRAY_SIZE(buf), '\n');
 		if(found != 1)
 			break;
 	}
@@ -122,20 +132,24 @@ err:
 	else if(found < 0)
 		printf("read returned errno %d\n", -found);
 
+out:
+	close(fd);
+
 	return;
 
 found:
-	found = next(fd, buf, sizeof(buf) / sizeof(buf[0]), ' ');
+	found = next(fd, buf, ARRAY_SIZE(buf), ' ');
 	if(found != 1)
 		goto err;
 
 	if(strncmp(buf, "tmpfs", strlen("tmpfs"))){
 		printf("not tmpfs\n");
-		return;
+		goto out;
 	}
 
 	printf("OK\n");
 	default_tmpdir = "/dev/shm";
+	goto out;
 }
 
 /*
@@ -200,8 +214,11 @@ int create_tmp_file(unsigned long long len)
 		exit(1);
 	}
 
-        if (lseek64(fd, len, SEEK_SET) < 0) {
- 		perror("os_seek_file");
+	/* Seek to len - 1 because writing a character there will
+	 * increase the file size by one byte, to the desired length.
+	 */
+	if (lseek64(fd, len - 1, SEEK_SET) < 0) {
+		perror("os_seek_file");
 		exit(1);
 	}
 

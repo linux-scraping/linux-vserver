@@ -27,7 +27,7 @@
  *    - SEGREL32 handling
  *      We are not doing SEGREL32 handling correctly. According to the ABI, we
  *      should do a value offset, like this:
- *			if (is_init(me, (void *)val))
+ *			if (in_init(me, (void *)val))
  *				val -= (uint32_t)me->module_init;
  *			else
  *				val -= (uint32_t)me->module_core;
@@ -72,21 +72,27 @@
 
 /* three functions to determine where in the module core
  * or init pieces the location is */
-static inline int is_init(struct module *me, void *loc)
+static inline int in_init(struct module *me, void *loc)
 {
 	return (loc >= me->module_init &&
 		loc <= (me->module_init + me->init_size));
 }
 
-static inline int is_core(struct module *me, void *loc)
+static inline int in_core(struct module *me, void *loc)
 {
 	return (loc >= me->module_core &&
 		loc <= (me->module_core + me->core_size));
 }
 
-static inline int is_local(struct module *me, void *loc)
+static inline int in_local(struct module *me, void *loc)
 {
-	return is_init(me, loc) || is_core(me, loc);
+	return in_init(me, loc) || in_core(me, loc);
+}
+
+static inline int in_local_section(struct module *me, void *loc, void *dot)
+{
+	return (in_init(me, loc) && in_init(me, dot)) ||
+		(in_core(me, loc) && in_core(me, dot));
 }
 
 
@@ -364,8 +370,14 @@ static Elf_Addr get_fdesc(struct module *me, unsigned long value)
 }
 #endif /* __LP64__ */
 
+enum elf_stub_type {
+	ELF_STUB_GOT,
+	ELF_STUB_MILLI,
+	ELF_STUB_DIRECT,
+};
+
 static Elf_Addr get_stub(struct module *me, unsigned long value, long addend,
-	int millicode, int init_section)
+	enum elf_stub_type stub_type, int init_section)
 {
 	unsigned long i;
 	struct stub_entry *stub;
@@ -396,7 +408,7 @@ static Elf_Addr get_stub(struct module *me, unsigned long value, long addend,
 	stub->insns[1] |= reassemble_17(rrsel(value, addend) / 4);
 
 #else
-/* for 64-bit we have two kinds of stubs:
+/* for 64-bit we have three kinds of stubs:
  * for normal function calls:
  * 	ldd 0(%dp),%dp
  * 	ldd 10(%dp), %r1
@@ -408,18 +420,23 @@ static Elf_Addr get_stub(struct module *me, unsigned long value, long addend,
  * 	ldo 0(%r1), %r1
  * 	ldd 10(%r1), %r1
  * 	bve,n (%r1)
+ *
+ * for direct branches (jumps between different section of the
+ * same module):
+ *	ldil 0, %r1
+ *	ldo 0(%r1), %r1
+ *	bve,n (%r1)
  */
-	if (!millicode)
-	{
+	switch (stub_type) {
+	case ELF_STUB_GOT:
 		stub->insns[0] = 0x537b0000;	/* ldd 0(%dp),%dp	*/
 		stub->insns[1] = 0x53610020;	/* ldd 10(%dp),%r1	*/
 		stub->insns[2] = 0xe820d000;	/* bve (%r1)		*/
 		stub->insns[3] = 0x537b0030;	/* ldd 18(%dp),%dp	*/
 
 		stub->insns[0] |= reassemble_14(get_got(me, value, addend) & 0x3fff);
-	}
-	else
-	{
+		break;
+	case ELF_STUB_MILLI:
 		stub->insns[0] = 0x20200000;	/* ldil 0,%r1		*/
 		stub->insns[1] = 0x34210000;	/* ldo 0(%r1), %r1	*/
 		stub->insns[2] = 0x50210020;	/* ldd 10(%r1),%r1	*/
@@ -427,7 +444,17 @@ static Elf_Addr get_stub(struct module *me, unsigned long value, long addend,
 
 		stub->insns[0] |= reassemble_21(lrsel(value, addend));
 		stub->insns[1] |= reassemble_14(rrsel(value, addend));
+		break;
+	case ELF_STUB_DIRECT:
+		stub->insns[0] = 0x20200000;    /* ldil 0,%r1           */
+		stub->insns[1] = 0x34210000;    /* ldo 0(%r1), %r1      */
+		stub->insns[2] = 0xe820d002;    /* bve,n (%r1)          */
+
+		stub->insns[0] |= reassemble_21(lrsel(value, addend));
+		stub->insns[1] |= reassemble_14(rrsel(value, addend));
+		break;
 	}
+
 #endif
 
 	return (Elf_Addr)stub;
@@ -539,14 +566,14 @@ int apply_relocate_add(Elf_Shdr *sechdrs,
 			break;
 		case R_PARISC_PCREL17F:
 			/* 17-bit PC relative address */
-			val = get_stub(me, val, addend, 0, is_init(me, loc));
+			val = get_stub(me, val, addend, ELF_STUB_GOT, in_init(me, loc));
 			val = (val - dot - 8)/4;
 			CHECK_RELOC(val, 17)
 			*loc = (*loc & ~0x1f1ffd) | reassemble_17(val);
 			break;
 		case R_PARISC_PCREL22F:
 			/* 22-bit PC relative address; only defined for pa20 */
-			val = get_stub(me, val, addend, 0, is_init(me, loc));
+			val = get_stub(me, val, addend, ELF_STUB_GOT, in_init(me, loc));
 			DEBUGP("STUB FOR %s loc %lx+%lx at %lx\n", 
 			       strtab + sym->st_name, (unsigned long)loc, addend, 
 			       val)
@@ -643,14 +670,24 @@ int apply_relocate_add(Elf_Shdr *sechdrs,
 			       strtab + sym->st_name,
 			       loc, val);
 			/* can we reach it locally? */
-			if(!is_local(me, (void *)val)) {
-				if (strncmp(strtab + sym->st_name, "$$", 2)
+			if(!in_local_section(me, (void *)val, (void *)dot)) {
+
+				if (in_local(me, (void *)val))
+					/* this is the case where the
+					 * symbol is local to the
+					 * module, but in a different
+					 * section, so stub the jump
+					 * in case it's more than 22
+					 * bits away */
+					val = get_stub(me, val, addend, ELF_STUB_DIRECT,
+						       in_init(me, loc));
+				else if (strncmp(strtab + sym->st_name, "$$", 2)
 				    == 0)
-					val = get_stub(me, val, addend, 1,
-						       is_init(me, loc));
+					val = get_stub(me, val, addend, ELF_STUB_MILLI,
+						       in_init(me, loc));
 				else
-					val = get_stub(me, val, addend, 0,
-						       is_init(me, loc));
+					val = get_stub(me, val, addend, ELF_STUB_GOT,
+						       in_init(me, loc));
 			}
 			DEBUGP("STUB FOR %s loc %lx, val %lx+%lx at %lx\n", 
 			       strtab + sym->st_name, loc, sym->st_value,
@@ -683,7 +720,7 @@ int apply_relocate_add(Elf_Shdr *sechdrs,
 			break;
 		case R_PARISC_FPTR64:
 			/* 64-bit function address */
-			if(is_local(me, (void *)(val + addend))) {
+			if(in_local(me, (void *)(val + addend))) {
 				*loc64 = get_fdesc(me, val+addend);
 				DEBUGP("FDESC for %s at %p points to %lx\n",
 				       strtab + sym->st_name, *loc64,

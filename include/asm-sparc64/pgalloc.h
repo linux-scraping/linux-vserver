@@ -2,7 +2,6 @@
 #ifndef _SPARC64_PGALLOC_H
 #define _SPARC64_PGALLOC_H
 
-#include <linux/config.h>
 #include <linux/kernel.h>
 #include <linux/sched.h>
 #include <linux/mm.h>
@@ -14,7 +13,7 @@
 #include <asm/page.h>
 
 /* Page table allocation/freeing. */
-extern kmem_cache_t *pgtable_cache;
+extern struct kmem_cache *pgtable_cache;
 
 static inline pgd_t *pgd_alloc(struct mm_struct *mm)
 {

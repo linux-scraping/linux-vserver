@@ -3,7 +3,6 @@
 
 #ifdef __KERNEL__
 
-#include <linux/config.h>
 #include <linux/kernel.h>
 #include <asm/compiler.h>
 #include <asm/system.h>
@@ -533,19 +532,6 @@ extern void outsl (unsigned long port, const void *src, unsigned long count);
 
 #define eth_io_copy_and_sum(skb,src,len,unused) \
   memcpy_fromio((skb)->data,src,len)
-
-static inline int
-check_signature(const volatile void __iomem *io_addr,
-		const unsigned char *signature, int length)
-{
-	do {
-		if (readb(io_addr) != *signature)
-			return 0;
-		io_addr++;
-		signature++;
-	} while (--length);
-	return 1;
-}
 
 /*
  * The Alpha Jensen hardware for some rather strange reason puts

@@ -18,12 +18,12 @@
 #define VIA_VERSION	"1.9.1-ac4-2.5"
 
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/fs.h>
 #include <linux/mm.h>
 #include <linux/pci.h>
+#include <linux/poison.h>
 #include <linux/init.h>
 #include <linux/interrupt.h>
 #include <linux/proc_fs.h>
@@ -308,7 +308,7 @@ struct via_info {
 	unsigned sixchannel: 1;	/* 8233/35 with 6 channel support */
 	unsigned volume: 1;
 
-	int locked_rate : 1;
+	unsigned locked_rate : 1;
 	
 	int mixer_vol;		/* 8233/35 volume  - not yet implemented */
 
@@ -1547,7 +1547,7 @@ static int via_mixer_open (struct inode *inode, struct file *file)
 
 	DPRINTK ("ENTER\n");
 
-	while ((pdev = pci_find_device(PCI_ANY_ID, PCI_ANY_ID, pdev)) != NULL) {
+	while ((pdev = pci_get_device(PCI_ANY_ID, PCI_ANY_ID, pdev)) != NULL) {
 		drvr = pci_dev_driver (pdev);
 		if (drvr == &via_driver) {
 			assert (pci_get_drvdata (pdev) != NULL);
@@ -1562,6 +1562,7 @@ static int via_mixer_open (struct inode *inode, struct file *file)
 	return -ENODEV;
 
 match:
+	pci_dev_put(pdev);
 	file->private_data = card->ac97;
 
 	DPRINTK ("EXIT, returning 0\n");
@@ -1911,7 +1912,7 @@ static void via_intr_channel (struct via_info *card, struct via_channel *chan)
 }
 
 
-static irqreturn_t  via_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t  via_interrupt(int irq, void *dev_id)
 {
 	struct via_info *card = dev_id;
 	u32 status32;
@@ -1926,7 +1927,7 @@ static irqreturn_t  via_interrupt(int irq, void *dev_id, struct pt_regs *regs)
         {
 #ifdef CONFIG_MIDI_VIA82CXXX
 	    	 if (card->midi_devc)
-                    	uart401intr(irq, card->midi_devc, regs);
+                    	uart401intr(irq, card->midi_devc);
 #endif
 		return IRQ_HANDLED;
     	}
@@ -1949,7 +1950,7 @@ static irqreturn_t  via_interrupt(int irq, void *dev_id, struct pt_regs *regs)
 	return IRQ_HANDLED;
 }
 
-static irqreturn_t via_new_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t via_new_interrupt(int irq, void *dev_id)
 {
 	struct via_info *card = dev_id;
 	u32 status32;
@@ -2013,7 +2014,7 @@ static int via_interrupt_init (struct via_info *card)
 			tmp8 |= VIA_CR48_FM_TRAP_TO_NMI;
 			pci_write_config_byte (card->pdev, VIA_FM_NMI_CTRL, tmp8);
 		}
-		if (request_irq (card->pdev->irq, via_interrupt, SA_SHIRQ, VIA_MODULE_NAME, card)) {
+		if (request_irq (card->pdev->irq, via_interrupt, IRQF_SHARED, VIA_MODULE_NAME, card)) {
 			printk (KERN_ERR PFX "unable to obtain IRQ %d, aborting\n",
 				card->pdev->irq);
 			DPRINTK ("EXIT, returning -EBUSY\n");
@@ -2022,7 +2023,7 @@ static int via_interrupt_init (struct via_info *card)
 	}
 	else 
 	{
-		if (request_irq (card->pdev->irq, via_new_interrupt, SA_SHIRQ, VIA_MODULE_NAME, card)) {
+		if (request_irq (card->pdev->irq, via_new_interrupt, IRQF_SHARED, VIA_MODULE_NAME, card)) {
 			printk (KERN_ERR PFX "unable to obtain IRQ %d, aborting\n",
 				card->pdev->irq);
 			DPRINTK ("EXIT, returning -EBUSY\n");
@@ -2119,8 +2120,8 @@ static struct page * via_mm_nopage (struct vm_area_struct * vma,
 		return NOPAGE_SIGBUS; /* Disallow mremap */
 	}
         if (!card) {
-		DPRINTK ("EXIT, returning NOPAGE_OOM\n");
-		return NOPAGE_OOM;	/* Nothing allocated */
+		DPRINTK ("EXIT, returning NOPAGE_SIGBUS\n");
+		return NOPAGE_SIGBUS;	/* Nothing allocated */
 	}
 
 	pgoff = vma->vm_pgoff + ((address - vma->vm_start) >> PAGE_SHIFT);
@@ -3245,7 +3246,7 @@ static int via_dsp_open (struct inode *inode, struct file *file)
 	}
 
 	card = NULL;
-	while ((pdev = pci_find_device(PCI_ANY_ID, PCI_ANY_ID, pdev)) != NULL) {
+	while ((pdev = pci_get_device(PCI_ANY_ID, PCI_ANY_ID, pdev)) != NULL) {
 		drvr = pci_dev_driver (pdev);
 		if (drvr == &via_driver) {
 			assert (pci_get_drvdata (pdev) != NULL);
@@ -3264,6 +3265,7 @@ static int via_dsp_open (struct inode *inode, struct file *file)
 	return -ENODEV;
 
 match:
+	pci_dev_put(pdev);
 	if (nonblock) {
 		if (!mutex_trylock(&card->open_mutex)) {
 			DPRINTK ("EXIT, returning -EAGAIN\n");
@@ -3522,7 +3524,7 @@ err_out_have_mixer:
 
 err_out_kfree:
 #ifndef VIA_NDEBUG
-	memset (card, 0xAB, sizeof (*card)); /* poison memory */
+	memset (card, OSS_POISON_FREE, sizeof (*card)); /* poison memory */
 #endif
 	kfree (card);
 
@@ -3559,7 +3561,7 @@ static void __devexit via_remove_one (struct pci_dev *pdev)
 	via_ac97_cleanup (card);
 
 #ifndef VIA_NDEBUG
-	memset (card, 0xAB, sizeof (*card)); /* poison memory */
+	memset (card, OSS_POISON_FREE, sizeof (*card)); /* poison memory */
 #endif
 	kfree (card);
 

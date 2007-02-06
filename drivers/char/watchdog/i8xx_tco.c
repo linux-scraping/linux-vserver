@@ -205,6 +205,23 @@ static int tco_timer_set_heartbeat (int t)
 	return 0;
 }
 
+static int tco_timer_get_timeleft (int *time_left)
+{
+	unsigned char val;
+
+	spin_lock(&tco_lock);
+
+	/* read the TCO Timer */
+	val = inb (TCO1_RLD);
+	val &= 0x3f;
+
+	spin_unlock(&tco_lock);
+
+	*time_left = (int)((val * 6) / 10);
+
+	return 0;
+}
+
 /*
  *	/dev/watchdog handling
  */
@@ -272,6 +289,7 @@ static int i8xx_tco_ioctl (struct inode *inode, struct file *file,
 {
 	int new_options, retval = -EINVAL;
 	int new_heartbeat;
+	int time_left;
 	void __user *argp = (void __user *)arg;
 	int __user *p = argp;
 	static struct watchdog_info ident = {
@@ -320,7 +338,7 @@ static int i8xx_tco_ioctl (struct inode *inode, struct file *file,
 				return -EFAULT;
 
 			if (tco_timer_set_heartbeat(new_heartbeat))
-			    return -EINVAL;
+				return -EINVAL;
 
 			tco_timer_keepalive ();
 			/* Fall */
@@ -329,8 +347,16 @@ static int i8xx_tco_ioctl (struct inode *inode, struct file *file,
 		case WDIOC_GETTIMEOUT:
 			return put_user(heartbeat, p);
 
+		case WDIOC_GETTIMELEFT:
+		{
+			if (tco_timer_get_timeleft(&time_left))
+				return -EINVAL;
+
+			return put_user(time_left, p);
+		}
+
 		default:
-			return -ENOIOCTLCMD;
+			return -ENOTTY;
 	}
 }
 
@@ -352,7 +378,7 @@ static int i8xx_tco_notify_sys (struct notifier_block *this, unsigned long code,
  *	Kernel Interfaces
  */
 
-static struct file_operations i8xx_tco_fops = {
+static const struct file_operations i8xx_tco_fops = {
 	.owner =	THIS_MODULE,
 	.llseek =	no_llseek,
 	.write =	i8xx_tco_write,
@@ -380,18 +406,18 @@ static struct notifier_block i8xx_tco_notifier = {
  * want to register another driver on the same PCI id.
  */
 static struct pci_device_id i8xx_tco_pci_tbl[] = {
-	{ PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_INTEL_82801AA_0,	PCI_ANY_ID, PCI_ANY_ID, },
-	{ PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_INTEL_82801AB_0,	PCI_ANY_ID, PCI_ANY_ID, },
-	{ PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_INTEL_82801BA_0,	PCI_ANY_ID, PCI_ANY_ID, },
-	{ PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_INTEL_82801BA_10,	PCI_ANY_ID, PCI_ANY_ID, },
-	{ PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_INTEL_82801CA_0,	PCI_ANY_ID, PCI_ANY_ID, },
-	{ PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_INTEL_82801CA_12,	PCI_ANY_ID, PCI_ANY_ID, },
-	{ PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_INTEL_82801DB_0,	PCI_ANY_ID, PCI_ANY_ID, },
-	{ PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_INTEL_82801DB_12,	PCI_ANY_ID, PCI_ANY_ID, },
-	{ PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_INTEL_82801E_0,	PCI_ANY_ID, PCI_ANY_ID, },
-	{ PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_INTEL_82801EB_0,	PCI_ANY_ID, PCI_ANY_ID, },
-	{ PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_INTEL_ESB_1,	PCI_ANY_ID, PCI_ANY_ID, },
-	{ 0, },			/* End of list */
+	{ PCI_DEVICE(PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_INTEL_82801AA_0) },
+	{ PCI_DEVICE(PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_INTEL_82801AB_0) },
+	{ PCI_DEVICE(PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_INTEL_82801BA_0) },
+	{ PCI_DEVICE(PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_INTEL_82801BA_10) },
+	{ PCI_DEVICE(PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_INTEL_82801CA_0) },
+	{ PCI_DEVICE(PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_INTEL_82801CA_12) },
+	{ PCI_DEVICE(PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_INTEL_82801DB_0) },
+	{ PCI_DEVICE(PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_INTEL_82801DB_12) },
+	{ PCI_DEVICE(PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_INTEL_82801E_0) },
+	{ PCI_DEVICE(PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_INTEL_82801EB_0) },
+	{ PCI_DEVICE(PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_INTEL_ESB_1) },
+	{ },			/* End of list */
 };
 MODULE_DEVICE_TABLE (pci, i8xx_tco_pci_tbl);
 
@@ -408,12 +434,11 @@ static unsigned char __init i8xx_tco_getdevice (void)
 	 *      Find the PCI device
 	 */
 
-	while ((dev = pci_find_device(PCI_ANY_ID, PCI_ANY_ID, dev)) != NULL) {
+	for_each_pci_dev(dev)
 		if (pci_match_id(i8xx_tco_pci_tbl, dev)) {
 			i8xx_tco_pci = dev;
 			break;
 		}
-	}
 
 	if (i8xx_tco_pci) {
 		/*
@@ -428,6 +453,7 @@ static unsigned char __init i8xx_tco_getdevice (void)
 		/* Something's wrong here, ACPIBASE has to be set */
 		if (badr == 0x0001 || badr == 0x0000) {
 			printk (KERN_ERR PFX "failed to get TCOBASE address\n");
+			pci_dev_put(i8xx_tco_pci);
 			return 0;
 		}
 
@@ -439,6 +465,7 @@ static unsigned char __init i8xx_tco_getdevice (void)
 			pci_read_config_byte (i8xx_tco_pci, 0xd4, &val1);
 			if (val1 & 0x02) {
 				printk (KERN_ERR PFX "failed to reset NO_REBOOT flag, reboot disabled by hardware\n");
+				pci_dev_put(i8xx_tco_pci);
 				return 0;	/* Cannot reset NO_REBOOT bit */
 			}
 		}
@@ -450,6 +477,7 @@ static unsigned char __init i8xx_tco_getdevice (void)
 		if (!request_region (SMI_EN + 1, 1, "i8xx TCO")) {
 			printk (KERN_ERR PFX "I/O address 0x%04x already in use\n",
 				SMI_EN + 1);
+			pci_dev_put(i8xx_tco_pci);
 			return 0;
 		}
 		val1 = inb (SMI_EN + 1);
@@ -516,6 +544,7 @@ unreg_notifier:
 unreg_region:
 	release_region (TCOBASE, 0x10);
 out:
+	pci_dev_put(i8xx_tco_pci);
 	return ret;
 }
 
@@ -529,6 +558,8 @@ static void __exit watchdog_cleanup (void)
 	misc_deregister (&i8xx_tco_miscdev);
 	unregister_reboot_notifier(&i8xx_tco_notifier);
 	release_region (TCOBASE, 0x10);
+
+	pci_dev_put(i8xx_tco_pci);
 }
 
 module_init(watchdog_init);

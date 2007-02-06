@@ -38,13 +38,15 @@ static void lh7a400_ack_gpio_irq (u32 irq)
 	INTC_INTENC = (1 << irq);
 }
 
-static struct irqchip lh7a400_internal_chip = {
+static struct irq_chip lh7a400_internal_chip = {
+	.name	= "MPU",
 	.ack	= lh7a400_mask_irq, /* Level triggering -> mask is ack */
 	.mask	= lh7a400_mask_irq,
 	.unmask	= lh7a400_unmask_irq,
 };
 
-static struct irqchip lh7a400_gpio_chip = {
+static struct irq_chip lh7a400_gpio_chip = {
+	.name	= "GPIO",
 	.ack	= lh7a400_ack_gpio_irq,
 	.mask	= lh7a400_mask_irq,
 	.unmask	= lh7a400_unmask_irq,
@@ -72,11 +74,11 @@ void __init lh7a400_init_irq (void)
 		case IRQ_GPIO6INTR:
 		case IRQ_GPIO7INTR:
 			set_irq_chip (irq, &lh7a400_gpio_chip);
-			set_irq_handler (irq, do_level_IRQ); /* OK default */
+			set_irq_handler (irq, handle_level_irq); /* OK default */
 			break;
 		default:
 			set_irq_chip (irq, &lh7a400_internal_chip);
-			set_irq_handler (irq, do_level_IRQ);
+			set_irq_handler (irq, handle_level_irq);
 		}
 		set_irq_flags (irq, IRQF_VALID);
 	}

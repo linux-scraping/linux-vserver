@@ -1,5 +1,5 @@
 /*
- * $Id: synclink_gt.c,v 4.25 2006/02/06 21:20:33 paulkf Exp $
+ * $Id: synclink_gt.c,v 4.36 2006/08/28 20:47:14 paulkf Exp $
  *
  * Device driver for Microgate SyncLink GT serial adapters.
  *
@@ -46,7 +46,6 @@
 //#define DBGRBUF(info) dump_rbufs(info)
 
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/version.h>
 #include <linux/errno.h>
@@ -84,23 +83,26 @@
 
 #include "linux/synclink.h"
 
-#ifdef CONFIG_HDLC_MODULE
-#define CONFIG_HDLC 1
+#if defined(CONFIG_HDLC) || (defined(CONFIG_HDLC_MODULE) && defined(CONFIG_SYNCLINK_GT_MODULE))
+#define SYNCLINK_GENERIC_HDLC 1
+#else
+#define SYNCLINK_GENERIC_HDLC 0
 #endif
 
 /*
  * module identification
  */
 static char *driver_name     = "SyncLink GT";
-static char *driver_version  = "$Revision: 4.25 $";
+static char *driver_version  = "$Revision: 4.36 $";
 static char *tty_driver_name = "synclink_gt";
 static char *tty_dev_prefix  = "ttySLG";
 MODULE_LICENSE("GPL");
 #define MGSL_MAGIC 0x5401
-#define MAX_DEVICES 12
+#define MAX_DEVICES 32
 
 static struct pci_device_id pci_table[] = {
 	{PCI_VENDOR_ID_MICROGATE, SYNCLINK_GT_DEVICE_ID, PCI_ANY_ID, PCI_ANY_ID,},
+	{PCI_VENDOR_ID_MICROGATE, SYNCLINK_GT2_DEVICE_ID, PCI_ANY_ID, PCI_ANY_ID,},
 	{PCI_VENDOR_ID_MICROGATE, SYNCLINK_GT4_DEVICE_ID, PCI_ANY_ID, PCI_ANY_ID,},
 	{PCI_VENDOR_ID_MICROGATE, SYNCLINK_AC_DEVICE_ID, PCI_ANY_ID, PCI_ANY_ID,},
 	{0,}, /* terminate list */
@@ -149,7 +151,7 @@ static struct tty_driver *serial_driver;
 static int  open(struct tty_struct *tty, struct file * filp);
 static void close(struct tty_struct *tty, struct file * filp);
 static void hangup(struct tty_struct *tty);
-static void set_termios(struct tty_struct *tty, struct termios *old_termios);
+static void set_termios(struct tty_struct *tty, struct ktermios *old_termios);
 
 static int  write(struct tty_struct *tty, const unsigned char *buf, int count);
 static void put_char(struct tty_struct *tty, unsigned char ch);
@@ -171,7 +173,7 @@ static void set_break(struct tty_struct *tty, int break_state);
 /*
  * generic HDLC support and callbacks
  */
-#ifdef CONFIG_HDLC
+#if SYNCLINK_GENERIC_HDLC
 #define dev_to_port(D) (dev_to_hdlc(D)->priv)
 static void hdlcdev_tx_done(struct slgt_info *info);
 static void hdlcdev_rx(struct slgt_info *info, char *buf, int size);
@@ -359,7 +361,7 @@ struct slgt_info {
 	int netcount;
 	int dosyncppp;
 	spinlock_t netlock;
-#ifdef CONFIG_HDLC
+#if SYNCLINK_GENERIC_HDLC
 	struct net_device *netdev;
 #endif
 
@@ -391,8 +393,8 @@ static MGSL_PARAMS default_params = {
 #define DESC_LIST_SIZE 4096
 
 #define MASK_PARITY  BIT1
-#define MASK_FRAMING BIT2
-#define MASK_BREAK   BIT3
+#define MASK_FRAMING BIT0
+#define MASK_BREAK   BIT14
 #define MASK_OVERRUN BIT4
 
 #define GSR   0x00 /* global status */
@@ -461,7 +463,7 @@ static int  adapter_test(struct slgt_info *info);
 static void reset_adapter(struct slgt_info *info);
 static void reset_port(struct slgt_info *info);
 static void async_mode(struct slgt_info *info);
-static void hdlc_mode(struct slgt_info *info);
+static void sync_mode(struct slgt_info *info);
 
 static void rx_stop(struct slgt_info *info);
 static void rx_start(struct slgt_info *info);
@@ -485,13 +487,13 @@ static void enable_loopback(struct slgt_info *info);
 static void set_rate(struct slgt_info *info, u32 data_rate);
 
 static int  bh_action(struct slgt_info *info);
-static void bh_handler(void* context);
+static void bh_handler(struct work_struct *work);
 static void bh_transmit(struct slgt_info *info);
 static void isr_serial(struct slgt_info *info);
 static void isr_rdma(struct slgt_info *info);
 static void isr_txeom(struct slgt_info *info, unsigned short status);
 static void isr_tdma(struct slgt_info *info);
-static irqreturn_t slgt_interrupt(int irq, void *dev_id, struct pt_regs * regs);
+static irqreturn_t slgt_interrupt(int irq, void *dev_id);
 
 static int  alloc_dma_bufs(struct slgt_info *info);
 static void free_dma_bufs(struct slgt_info *info);
@@ -814,7 +816,7 @@ static void hangup(struct tty_struct *tty)
 	wake_up_interruptible(&info->open_wait);
 }
 
-static void set_termios(struct tty_struct *tty, struct termios *old_termios)
+static void set_termios(struct tty_struct *tty, struct ktermios *old_termios)
 {
 	struct slgt_info *info = tty->driver_data;
 	unsigned long flags;
@@ -870,7 +872,7 @@ static int write(struct tty_struct *tty,
 		goto cleanup;
 	DBGINFO(("%s write count=%d\n", info->device_name, count));
 
-	if (!tty || !info->tx_buf)
+	if (!info->tx_buf)
 		goto cleanup;
 
 	if (count > info->max_frame_size) {
@@ -881,7 +883,9 @@ static int write(struct tty_struct *tty,
 	if (!count)
 		goto cleanup;
 
-	if (info->params.mode == MGSL_MODE_RAW) {
+	if (info->params.mode == MGSL_MODE_RAW ||
+	    info->params.mode == MGSL_MODE_MONOSYNC ||
+	    info->params.mode == MGSL_MODE_BISYNC) {
 		unsigned int bufs_needed = (count/DMABUFSIZE);
 		unsigned int bufs_free = free_tbuf_count(info);
 		if (count % DMABUFSIZE)
@@ -924,7 +928,7 @@ static void put_char(struct tty_struct *tty, unsigned char ch)
 	if (sanity_check(info, tty->name, "put_char"))
 		return;
 	DBGINFO(("%s put_char(%d)\n", info->device_name, ch));
-	if (!tty || !info->tx_buf)
+	if (!info->tx_buf)
 		return;
 	spin_lock_irqsave(&info->lock,flags);
 	if (!info->tx_active && (info->tx_count < info->max_frame_size))
@@ -1352,7 +1356,7 @@ static void set_break(struct tty_struct *tty, int break_state)
 	spin_unlock_irqrestore(&info->lock,flags);
 }
 
-#ifdef CONFIG_HDLC
+#if SYNCLINK_GENERIC_HDLC
 
 /**
  * called by generic HDLC layer when protocol selected (PPP, frame relay, etc.)
@@ -1497,8 +1501,10 @@ static int hdlcdev_open(struct net_device *dev)
 	spin_lock_irqsave(&info->lock, flags);
 	get_signals(info);
 	spin_unlock_irqrestore(&info->lock, flags);
-	hdlc_set_carrier(info->signals & SerialSignal_DCD, dev);
-
+	if (info->signals & SerialSignal_DCD)
+		netif_carrier_on(dev);
+	else
+		netif_carrier_off(dev);
 	return 0;
 }
 
@@ -1798,17 +1804,17 @@ static void rx_async(struct slgt_info *info)
 
 			stat = 0;
 
-			if ((status = *(p+1) & (BIT9 + BIT8))) {
-				if (status & BIT9)
+			if ((status = *(p+1) & (BIT1 + BIT0))) {
+				if (status & BIT1)
 					icount->parity++;
-				else if (status & BIT8)
+				else if (status & BIT0)
 					icount->frame++;
 				/* discard char if tty control flags say so */
 				if (status & info->ignore_status_mask)
 					continue;
-				if (status & BIT9)
+				if (status & BIT1)
 					stat = TTY_PARITY;
-				else if (status & BIT8)
+				else if (status & BIT0)
 					stat = TTY_FRAME;
 			}
 			if (tty) {
@@ -1874,9 +1880,9 @@ static int bh_action(struct slgt_info *info)
 /*
  * perform bottom half processing
  */
-static void bh_handler(void* context)
+static void bh_handler(struct work_struct *work)
 {
-	struct slgt_info *info = context;
+	struct slgt_info *info = container_of(work, struct slgt_info, task);
 	int action;
 
 	if (!info)
@@ -1895,6 +1901,8 @@ static void bh_handler(void* context)
 				while(rx_get_frame(info));
 				break;
 			case MGSL_MODE_RAW:
+			case MGSL_MODE_MONOSYNC:
+			case MGSL_MODE_BISYNC:
 				while(rx_get_buf(info));
 				break;
 			}
@@ -1996,9 +2004,13 @@ static void dcd_change(struct slgt_info *info)
 	} else {
 		info->input_signal_events.dcd_down++;
 	}
-#ifdef CONFIG_HDLC
-	if (info->netcount)
-		hdlc_set_carrier(info->signals & SerialSignal_DCD, info->netdev);
+#if SYNCLINK_GENERIC_HDLC
+	if (info->netcount) {
+		if (info->signals & SerialSignal_DCD)
+			netif_carrier_on(info->netdev);
+		else
+			netif_carrier_off(info->netdev);
+	}
 #endif
 	wake_up_interruptible(&info->status_event_wait_q);
 	wake_up_interruptible(&info->event_wait_q);
@@ -2170,7 +2182,7 @@ static void isr_txeom(struct slgt_info *info, unsigned short status)
 			set_signals(info);
 		}
 
-#ifdef CONFIG_HDLC
+#if SYNCLINK_GENERIC_HDLC
 		if (info->netcount)
 			hdlcdev_tx_done(info);
 		else
@@ -2207,9 +2219,8 @@ static void isr_gpio(struct slgt_info *info, unsigned int changed, unsigned int 
  *
  * 	irq	interrupt number
  * 	dev_id	device ID supplied during interrupt registration
- * 	regs	interrupted processor context
  */
-static irqreturn_t slgt_interrupt(int irq, void *dev_id, struct pt_regs * regs)
+static irqreturn_t slgt_interrupt(int irq, void *dev_id)
 {
 	struct slgt_info *info;
 	unsigned int gsr;
@@ -2356,10 +2367,9 @@ static void program_hw(struct slgt_info *info)
 	rx_stop(info);
 	tx_stop(info);
 
-	if (info->params.mode == MGSL_MODE_HDLC ||
-	    info->params.mode == MGSL_MODE_RAW ||
+	if (info->params.mode != MGSL_MODE_ASYNC ||
 	    info->netcount)
-		hdlc_mode(info);
+		sync_mode(info);
 	else
 		async_mode(info);
 
@@ -2515,7 +2525,8 @@ static int set_txidle(struct slgt_info *info, int idle_mode)
 	DBGINFO(("%s set_txidle(%d)\n", info->device_name, idle_mode));
 	spin_lock_irqsave(&info->lock,flags);
 	info->idle_mode = idle_mode;
-	tx_set_idle(info);
+	if (info->params.mode != MGSL_MODE_ASYNC)
+		tx_set_idle(info);
 	spin_unlock_irqrestore(&info->lock,flags);
 	return 0;
 }
@@ -2557,6 +2568,10 @@ static int rx_enable(struct slgt_info *info, int enable)
 	if (enable) {
 		if (!info->rx_enabled)
 			rx_start(info);
+		else if (enable == 2) {
+			/* force hunt mode (write 1 to RCR[3]) */
+			wr_reg16(info, RCR, rd_reg16(info, RCR) | BIT3);
+		}
 	} else {
 		if (info->rx_enabled)
 			rx_stop(info);
@@ -3076,7 +3091,7 @@ static int block_til_ready(struct tty_struct *tty, struct file *filp,
 
 static int alloc_tmp_rbuf(struct slgt_info *info)
 {
-	info->tmp_rbuf = kmalloc(info->max_frame_size, GFP_KERNEL);
+	info->tmp_rbuf = kmalloc(info->max_frame_size + 5, GFP_KERNEL);
 	if (info->tmp_rbuf == NULL)
 		return -ENOMEM;
 	return 0;
@@ -3276,6 +3291,9 @@ static void add_device(struct slgt_info *info)
 	case SYNCLINK_GT_DEVICE_ID:
 		devstr = "GT";
 		break;
+	case SYNCLINK_GT2_DEVICE_ID:
+		devstr = "GT2";
+		break;
 	case SYNCLINK_GT4_DEVICE_ID:
 		devstr = "GT4";
 		break;
@@ -3290,7 +3308,7 @@ static void add_device(struct slgt_info *info)
 		devstr, info->device_name, info->phys_reg_addr,
 		info->irq_level, info->max_frame_size);
 
-#ifdef CONFIG_HDLC
+#if SYNCLINK_GENERIC_HDLC
 	hdlcdev_init(info);
 #endif
 }
@@ -3310,7 +3328,7 @@ static struct slgt_info *alloc_dev(int adapter_num, int port_num, struct pci_dev
 	} else {
 		memset(info, 0, sizeof(struct slgt_info));
 		info->magic = MGSL_MAGIC;
-		INIT_WORK(&info->task, bh_handler, info);
+		INIT_WORK(&info->task, bh_handler);
 		info->max_frame_size = 4096;
 		info->raw_rx_size = DMABUFSIZE;
 		info->close_delay = 5*HZ/10;
@@ -3339,7 +3357,7 @@ static struct slgt_info *alloc_dev(int adapter_num, int port_num, struct pci_dev
 		info->phys_reg_addr = pci_resource_start(pdev,0);
 
 		info->bus_type = MGSL_BUS_TYPE_PCI;
-		info->irq_flags = SA_SHIRQ;
+		info->irq_flags = IRQF_SHARED;
 
 		info->init_error = -1; /* assume error, set to 0 on successful init */
 	}
@@ -3353,7 +3371,9 @@ static void device_init(int adapter_num, struct pci_dev *pdev)
 	int i;
 	int port_count = 1;
 
-	if (pdev->device == SYNCLINK_GT4_DEVICE_ID)
+	if (pdev->device == SYNCLINK_GT2_DEVICE_ID)
+		port_count = 2;
+	else if (pdev->device == SYNCLINK_GT4_DEVICE_ID)
 		port_count = 4;
 
 	/* allocate device instances for all ports */
@@ -3422,7 +3442,7 @@ static void __devexit remove_one(struct pci_dev *dev)
 {
 }
 
-static struct tty_operations ops = {
+static const struct tty_operations ops = {
 	.open = open,
 	.close = close,
 	.write = write,
@@ -3470,7 +3490,7 @@ static void slgt_cleanup(void)
 	/* release devices */
 	info = slgt_device_list;
 	while(info) {
-#ifdef CONFIG_HDLC
+#if SYNCLINK_GENERIC_HDLC
 		hdlcdev_exit(info);
 #endif
 		free_dma_bufs(info);
@@ -3504,6 +3524,7 @@ static int __init slgt_init(void)
 
 	if (!slgt_device_list) {
 		printk("%s no devices found\n",driver_name);
+		pci_unregister_driver(&pci_driver);
 		return -ENODEV;
 	}
 
@@ -3525,6 +3546,8 @@ static int __init slgt_init(void)
 	serial_driver->init_termios = tty_std_termios;
 	serial_driver->init_termios.c_cflag =
 		B9600 | CS8 | CREAD | HUPCL | CLOCAL;
+	serial_driver->init_termios.c_ispeed = 9600;
+	serial_driver->init_termios.c_ospeed = 9600;
 	serial_driver->flags = TTY_DRIVER_REAL_RAW;
 	tty_set_operations(serial_driver, &ops);
 	if ((rc = tty_register_driver(serial_driver)) < 0) {
@@ -3736,7 +3759,7 @@ static void tx_start(struct slgt_info *info)
 {
 	if (!info->tx_enabled) {
 		wr_reg16(info, TCR,
-			(unsigned short)(rd_reg16(info, TCR) | BIT1));
+			 (unsigned short)((rd_reg16(info, TCR) | BIT1) & ~BIT2));
 		info->tx_enabled = TRUE;
 	}
 
@@ -3763,13 +3786,18 @@ static void tx_start(struct slgt_info *info)
 				tdma_reset(info);
 				/* set 1st descriptor address */
 				wr_reg32(info, TDDAR, info->tbufs[info->tbuf_start].pdesc);
-				if (info->params.mode == MGSL_MODE_RAW)
+				switch(info->params.mode) {
+				case MGSL_MODE_RAW:
+				case MGSL_MODE_MONOSYNC:
+				case MGSL_MODE_BISYNC:
 					wr_reg32(info, TDCSR, BIT2 + BIT0); /* IRQ + DMA enable */
-				else
+					break;
+				default:
 					wr_reg32(info, TDCSR, BIT0); /* DMA enable */
+				}
 			}
 
-			if (info->params.mode != MGSL_MODE_RAW) {
+			if (info->params.mode == MGSL_MODE_HDLC) {
 				info->tx_timer.expires = jiffies + msecs_to_jiffies(5000);
 				add_timer(&info->tx_timer);
 			}
@@ -3802,7 +3830,6 @@ static void tx_stop(struct slgt_info *info)
 	/* reset and disable transmitter */
 	val = rd_reg16(info, TCR) & ~BIT1;          /* clear enable bit */
 	wr_reg16(info, TCR, (unsigned short)(val | BIT2)); /* set reset bit */
-	wr_reg16(info, TCR, val);                  /* clear reset */
 
 	slgt_irq_off(info, IRQ_TXDATA + IRQ_TXIDLE + IRQ_TXUNDER);
 
@@ -3940,8 +3967,6 @@ static void async_mode(struct slgt_info *info)
 
 	msc_set_vcr(info);
 
-	tx_set_idle(info);
-
 	/* SCR (serial control)
 	 *
 	 * 15  1=tx req on FIFO half empty
@@ -3972,7 +3997,7 @@ static void async_mode(struct slgt_info *info)
 		enable_loopback(info);
 }
 
-static void hdlc_mode(struct slgt_info *info)
+static void sync_mode(struct slgt_info *info)
 {
 	unsigned short val;
 
@@ -3982,7 +4007,7 @@ static void hdlc_mode(struct slgt_info *info)
 
 	/* TCR (tx control)
 	 *
-	 * 15..13  mode, 000=HDLC 001=raw sync
+	 * 15..13  mode, 000=HDLC 001=raw 010=async 011=monosync 100=bisync
 	 * 12..10  encoding
 	 * 09      CRC enable
 	 * 08      CRC32
@@ -3996,8 +4021,11 @@ static void hdlc_mode(struct slgt_info *info)
 	 */
 	val = 0;
 
-	if (info->params.mode == MGSL_MODE_RAW)
-		val |= BIT13;
+	switch(info->params.mode) {
+	case MGSL_MODE_MONOSYNC: val |= BIT14 + BIT13; break;
+	case MGSL_MODE_BISYNC:   val |= BIT15; break;
+	case MGSL_MODE_RAW:      val |= BIT13; break;
+	}
 	if (info->if_mode & MGSL_INTERFACE_RTS_EN)
 		val |= BIT7;
 
@@ -4012,7 +4040,7 @@ static void hdlc_mode(struct slgt_info *info)
 	case HDLC_ENCODING_DIFF_BIPHASE_LEVEL: val |= BIT12 + BIT11 + BIT10; break;
 	}
 
-	switch (info->params.crc_type)
+	switch (info->params.crc_type & HDLC_CRC_MASK)
 	{
 	case HDLC_CRC_16_CCITT: val |= BIT9; break;
 	case HDLC_CRC_32_CCITT: val |= BIT9 + BIT8; break;
@@ -4048,7 +4076,7 @@ static void hdlc_mode(struct slgt_info *info)
 
 	/* RCR (rx control)
 	 *
-	 * 15..13  mode, 000=HDLC 001=raw sync
+	 * 15..13  mode, 000=HDLC 001=raw 010=async 011=monosync 100=bisync
 	 * 12..10  encoding
 	 * 09      CRC enable
 	 * 08      CRC32
@@ -4059,8 +4087,11 @@ static void hdlc_mode(struct slgt_info *info)
 	 */
 	val = 0;
 
-	if (info->params.mode == MGSL_MODE_RAW)
-		val |= BIT13;
+	switch(info->params.mode) {
+	case MGSL_MODE_MONOSYNC: val |= BIT14 + BIT13; break;
+	case MGSL_MODE_BISYNC:   val |= BIT15; break;
+	case MGSL_MODE_RAW:      val |= BIT13; break;
+	}
 
 	switch(info->params.encoding)
 	{
@@ -4073,7 +4104,7 @@ static void hdlc_mode(struct slgt_info *info)
 	case HDLC_ENCODING_DIFF_BIPHASE_LEVEL: val |= BIT12 + BIT11 + BIT10; break;
 	}
 
-	switch (info->params.crc_type)
+	switch (info->params.crc_type & HDLC_CRC_MASK)
 	{
 	case HDLC_CRC_16_CCITT: val |= BIT9; break;
 	case HDLC_CRC_32_CCITT: val |= BIT9 + BIT8; break;
@@ -4175,17 +4206,38 @@ static void hdlc_mode(struct slgt_info *info)
  */
 static void tx_set_idle(struct slgt_info *info)
 {
-	unsigned char val = 0xff;
+	unsigned char val;
+	unsigned short tcr;
 
-	switch(info->idle_mode)
-	{
-	case HDLC_TXIDLE_FLAGS:          val = 0x7e; break;
-	case HDLC_TXIDLE_ALT_ZEROS_ONES: val = 0xaa; break;
-	case HDLC_TXIDLE_ZEROS:          val = 0x00; break;
-	case HDLC_TXIDLE_ONES:           val = 0xff; break;
-	case HDLC_TXIDLE_ALT_MARK_SPACE: val = 0xaa; break;
-	case HDLC_TXIDLE_SPACE:          val = 0x00; break;
-	case HDLC_TXIDLE_MARK:           val = 0xff; break;
+	/* if preamble enabled (tcr[6] == 1) then tx idle size = 8 bits
+	 * else tcr[5:4] = tx idle size: 00 = 8 bits, 01 = 16 bits
+	 */
+	tcr = rd_reg16(info, TCR);
+	if (info->idle_mode & HDLC_TXIDLE_CUSTOM_16) {
+		/* disable preamble, set idle size to 16 bits */
+		tcr = (tcr & ~(BIT6 + BIT5)) | BIT4;
+		/* MSB of 16 bit idle specified in tx preamble register (TPR) */
+		wr_reg8(info, TPR, (unsigned char)((info->idle_mode >> 8) & 0xff));
+	} else if (!(tcr & BIT6)) {
+		/* preamble is disabled, set idle size to 8 bits */
+		tcr &= ~(BIT5 + BIT4);
+	}
+	wr_reg16(info, TCR, tcr);
+
+	if (info->idle_mode & (HDLC_TXIDLE_CUSTOM_8 | HDLC_TXIDLE_CUSTOM_16)) {
+		/* LSB of custom tx idle specified in tx idle register */
+		val = (unsigned char)(info->idle_mode & 0xff);
+	} else {
+		/* standard 8 bit idle patterns */
+		switch(info->idle_mode)
+		{
+		case HDLC_TXIDLE_FLAGS:          val = 0x7e; break;
+		case HDLC_TXIDLE_ALT_ZEROS_ONES:
+		case HDLC_TXIDLE_ALT_MARK_SPACE: val = 0xaa; break;
+		case HDLC_TXIDLE_ZEROS:
+		case HDLC_TXIDLE_SPACE:          val = 0x00; break;
+		default:                         val = 0xff;
+		}
 	}
 
 	wr_reg8(info, TIR, val);
@@ -4278,10 +4330,15 @@ static void free_rbufs(struct slgt_info *info, unsigned int i, unsigned int last
 	while(!done) {
 		/* reset current buffer for reuse */
 		info->rbufs[i].status = 0;
-		if (info->params.mode == MGSL_MODE_RAW)
+		switch(info->params.mode) {
+		case MGSL_MODE_RAW:
+		case MGSL_MODE_MONOSYNC:
+		case MGSL_MODE_BISYNC:
 			set_desc_count(info->rbufs[i], info->raw_rx_size);
-		else
+			break;
+		default:
 			set_desc_count(info->rbufs[i], DMABUFSIZE);
+		}
 
 		if (i == last)
 			done = 1;
@@ -4313,6 +4370,12 @@ static int rx_get_frame(struct slgt_info *info)
 	unsigned long flags;
 	struct tty_struct *tty = info->tty;
 	unsigned char addr_field = 0xff;
+	unsigned int crc_size = 0;
+
+	switch (info->params.crc_type & HDLC_CRC_MASK) {
+	case HDLC_CRC_16_CCITT: crc_size = 2; break;
+	case HDLC_CRC_32_CCITT: crc_size = 4; break;
+	}
 
 check_again:
 
@@ -4357,7 +4420,7 @@ check_again:
 	status = desc_status(info->rbufs[end]);
 
 	/* ignore CRC bit if not using CRC (bit is undefined) */
-	if (info->params.crc_type == HDLC_CRC_NONE)
+	if ((info->params.crc_type & HDLC_CRC_MASK) == HDLC_CRC_NONE)
 		status &= ~BIT1;
 
 	if (framesize == 0 ||
@@ -4366,34 +4429,34 @@ check_again:
 		goto check_again;
 	}
 
-	if (framesize < 2 || status & (BIT1+BIT0)) {
-		if (framesize < 2 || (status & BIT0))
-			info->icount.rxshort++;
-		else
-			info->icount.rxcrc++;
+	if (framesize < (2 + crc_size) || status & BIT0) {
+		info->icount.rxshort++;
 		framesize = 0;
-
-#ifdef CONFIG_HDLC
-		{
-			struct net_device_stats *stats = hdlc_stats(info->netdev);
-			stats->rx_errors++;
-			stats->rx_frame_errors++;
-		}
-#endif
-	} else {
-		/* adjust frame size for CRC, if any */
-		if (info->params.crc_type == HDLC_CRC_16_CCITT)
-			framesize -= 2;
-		else if (info->params.crc_type == HDLC_CRC_32_CCITT)
-			framesize -= 4;
+	} else if (status & BIT1) {
+		info->icount.rxcrc++;
+		if (!(info->params.crc_type & HDLC_CRC_RETURN_EX))
+			framesize = 0;
 	}
+
+#if SYNCLINK_GENERIC_HDLC
+	if (framesize == 0) {
+		struct net_device_stats *stats = hdlc_stats(info->netdev);
+		stats->rx_errors++;
+		stats->rx_frame_errors++;
+	}
+#endif
 
 	DBGBH(("%s rx frame status=%04X size=%d\n",
 		info->device_name, status, framesize));
 	DBGDATA(info, info->rbufs[start].buf, min_t(int, framesize, DMABUFSIZE), "rx");
 
 	if (framesize) {
-		if (framesize > info->max_frame_size)
+		if (!(info->params.crc_type & HDLC_CRC_RETURN_EX)) {
+			framesize -= crc_size;
+			crc_size = 0;
+		}
+
+		if (framesize > info->max_frame_size + crc_size)
 			info->icount.rxlong++;
 		else {
 			/* copy dma buffer(s) to contiguous temp buffer */
@@ -4413,7 +4476,12 @@ check_again:
 					i = 0;
 			}
 
-#ifdef CONFIG_HDLC
+			if (info->params.crc_type & HDLC_CRC_RETURN_EX) {
+				*p = (status & BIT1) ? RX_CRC_ERROR : RX_OK;
+				framesize++;
+			}
+
+#if SYNCLINK_GENERIC_HDLC
 			if (info->netcount)
 				hdlcdev_rx(info,info->tmp_rbuf, framesize);
 			else
@@ -4435,13 +4503,24 @@ cleanup:
 static int rx_get_buf(struct slgt_info *info)
 {
 	unsigned int i = info->rbuf_current;
+	unsigned int count;
 
 	if (!desc_complete(info->rbufs[i]))
 		return 0;
-	DBGDATA(info, info->rbufs[i].buf, desc_count(info->rbufs[i]), "rx");
-	DBGINFO(("rx_get_buf size=%d\n", desc_count(info->rbufs[i])));
-	ldisc_receive_buf(info->tty, info->rbufs[i].buf,
-			  info->flag_buf, desc_count(info->rbufs[i]));
+	count = desc_count(info->rbufs[i]);
+	switch(info->params.mode) {
+	case MGSL_MODE_MONOSYNC:
+	case MGSL_MODE_BISYNC:
+		/* ignore residue in byte synchronous modes */
+		if (desc_residue(info->rbufs[i]))
+			count--;
+		break;
+	}
+	DBGDATA(info, info->rbufs[i].buf, count, "rx");
+	DBGINFO(("rx_get_buf size=%d\n", count));
+	if (count)
+		ldisc_receive_buf(info->tty, info->rbufs[i].buf,
+				  info->flag_buf, count);
 	free_rbufs(info, i, i);
 	return 1;
 }
@@ -4507,8 +4586,13 @@ static void tx_load(struct slgt_info *info, const char *buf, unsigned int size)
 		size -= count;
 		buf  += count;
 
-		if (!size && info->params.mode != MGSL_MODE_RAW)
-			set_desc_eof(*d, 1); /* HDLC: set EOF of last desc */
+		/*
+		 * set EOF bit for last buffer of HDLC frame or
+		 * for every buffer in raw mode
+		 */
+		if ((!size && info->params.mode == MGSL_MODE_HDLC) ||
+		    info->params.mode == MGSL_MODE_RAW)
+			set_desc_eof(*d, 1);
 		else
 			set_desc_eof(*d, 0);
 
@@ -4671,13 +4755,13 @@ static int loopback_test(struct slgt_info *info)
 static int adapter_test(struct slgt_info *info)
 {
 	DBGINFO(("testing %s\n", info->device_name));
-	if ((info->init_error = register_test(info)) < 0) {
+	if (register_test(info) < 0) {
 		printk("register test failure %s addr=%08X\n",
 			info->device_name, info->phys_reg_addr);
-	} else if ((info->init_error = irq_test(info)) < 0) {
+	} else if (irq_test(info) < 0) {
 		printk("IRQ test failure %s IRQ=%d\n",
 			info->device_name, info->irq_level);
-	} else if ((info->init_error = loopback_test(info)) < 0) {
+	} else if (loopback_test(info) < 0) {
 		printk("loopback test failure %s\n", info->device_name);
 	}
 	return info->init_error;
@@ -4700,7 +4784,7 @@ static void tx_timeout(unsigned long context)
 	info->tx_count = 0;
 	spin_unlock_irqrestore(&info->lock,flags);
 
-#ifdef CONFIG_HDLC
+#if SYNCLINK_GENERIC_HDLC
 	if (info->netcount)
 		hdlcdev_tx_done(info);
 	else
@@ -4720,6 +4804,6 @@ static void rx_timeout(unsigned long context)
 	spin_lock_irqsave(&info->lock, flags);
 	info->pending_bh |= BH_RECEIVE;
 	spin_unlock_irqrestore(&info->lock, flags);
-	bh_handler(info);
+	bh_handler(&info->task);
 }
 

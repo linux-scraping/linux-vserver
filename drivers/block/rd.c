@@ -42,7 +42,6 @@
  * and set blk_size for -ENOSPC,     Werner Fink <werner@suse.de>, Apr '99
  */
 
-#include <linux/config.h>
 #include <linux/string.h>
 #include <linux/slab.h>
 #include <asm/atomic.h>
@@ -50,7 +49,6 @@
 #include <linux/module.h>
 #include <linux/moduleparam.h>
 #include <linux/init.h>
-#include <linux/devfs_fs_kernel.h>
 #include <linux/pagemap.h>
 #include <linux/blkdev.h>
 #include <linux/genhd.h>
@@ -86,7 +84,7 @@ int rd_size = CONFIG_BLK_DEV_RAM_SIZE;		/* Size of the RAM disks */
  * behaviour. The default is still BLOCK_SIZE (needed by rd_load_image that
  * supposes the filesystem in the image uses a BLOCK_SIZE blocksize).
  */
-static int rd_blocksize = BLOCK_SIZE;		/* blocksize of the RAM disks */
+static int rd_blocksize = CONFIG_BLK_DEV_RAM_BLOCKSIZE;
 
 /*
  * Copyright (C) 2000 Linus Torvalds.
@@ -191,7 +189,7 @@ static int ramdisk_set_page_dirty(struct page *page)
 	return 0;
 }
 
-static struct address_space_operations ramdisk_aops = {
+static const struct address_space_operations ramdisk_aops = {
 	.readpage	= ramdisk_readpage,
 	.prepare_write	= ramdisk_prepare_write,
 	.commit_write	= ramdisk_commit_write,
@@ -412,7 +410,6 @@ static void __exit rd_cleanup(void)
 		put_disk(rd_disks[i]);
 		blk_cleanup_queue(rd_queue[i]);
 	}
-	devfs_remove("rd");
 	unregister_blkdev(RAMDISK_MAJOR, "ramdisk");
 }
 
@@ -435,6 +432,12 @@ static int __init rd_init(void)
 		rd_disks[i] = alloc_disk(1);
 		if (!rd_disks[i])
 			goto out;
+
+		rd_queue[i] = blk_alloc_queue(GFP_KERNEL);
+		if (!rd_queue[i]) {
+			put_disk(rd_disks[i]);
+			goto out;
+		}
 	}
 
 	if (register_blkdev(RAMDISK_MAJOR, "ramdisk")) {
@@ -442,14 +445,8 @@ static int __init rd_init(void)
 		goto out;
 	}
 
-	devfs_mk_dir("rd");
-
 	for (i = 0; i < CONFIG_BLK_DEV_RAM_COUNT; i++) {
 		struct gendisk *disk = rd_disks[i];
-
-		rd_queue[i] = blk_alloc_queue(GFP_KERNEL);
-		if (!rd_queue[i])
-			goto out_queue;
 
 		blk_queue_make_request(rd_queue[i], &rd_make_request);
 		blk_queue_hardsect_size(rd_queue[i], rd_blocksize);
@@ -461,7 +458,6 @@ static int __init rd_init(void)
 		disk->queue = rd_queue[i];
 		disk->flags |= GENHD_FL_SUPPRESS_PARTITION_INFO;
 		sprintf(disk->disk_name, "ram%d", i);
-		sprintf(disk->devfs_name, "rd/%d", i);
 		set_capacity(disk, rd_size * 2);
 		add_disk(rd_disks[i]);
 	}
@@ -472,8 +468,6 @@ static int __init rd_init(void)
 		CONFIG_BLK_DEV_RAM_COUNT, rd_size, rd_blocksize);
 
 	return 0;
-out_queue:
-	unregister_blkdev(RAMDISK_MAJOR, "ramdisk");
 out:
 	while (i--) {
 		put_disk(rd_disks[i]);

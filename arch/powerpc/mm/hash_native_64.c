@@ -123,7 +123,7 @@ static inline void native_unlock_hpte(hpte_t *hptep)
 	clear_bit(HPTE_LOCK_BIT, word);
 }
 
-long native_hpte_insert(unsigned long hpte_group, unsigned long va,
+static long native_hpte_insert(unsigned long hpte_group, unsigned long va,
 			unsigned long pa, unsigned long rflags,
 			unsigned long vflags, int psize)
 {
@@ -238,7 +238,7 @@ static long native_hpte_updatepp(unsigned long slot, unsigned long newpp,
 		DBG_LOW(" -> hit\n");
 		/* Update the HPTE */
 		hptep->r = (hptep->r & ~(HPTE_R_PP | HPTE_R_N)) |
-			(newpp & (HPTE_R_PP | HPTE_R_N));
+			(newpp & (HPTE_R_PP | HPTE_R_N | HPTE_R_C));
 		native_unlock_hpte(hptep);
 	}
 
@@ -520,7 +520,7 @@ static inline int tlb_batching_enabled(void)
 }
 #endif
 
-void hpte_init_native(void)
+void __init hpte_init_native(void)
 {
 	ppc_md.hpte_invalidate	= native_hpte_invalidate;
 	ppc_md.hpte_updatepp	= native_hpte_updatepp;
@@ -530,5 +530,4 @@ void hpte_init_native(void)
 	ppc_md.hpte_clear_all	= native_hpte_clear;
 	if (tlb_batching_enabled())
 		ppc_md.flush_hash_range = native_flush_hash_range;
-	htab_finish_init();
 }

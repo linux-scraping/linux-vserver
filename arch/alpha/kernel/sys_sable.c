@@ -8,7 +8,6 @@
  * Code supporting the Sable, Sable-Gamma, and Lynx systems.
  */
 
-#include <linux/config.h>
 #include <linux/kernel.h>
 #include <linux/types.h>
 #include <linux/mm.h>
@@ -513,7 +512,7 @@ static struct hw_interrupt_type sable_lynx_irq_type = {
 };
 
 static void 
-sable_lynx_srm_device_interrupt(unsigned long vector, struct pt_regs * regs)
+sable_lynx_srm_device_interrupt(unsigned long vector)
 {
 	/* Note that the vector reported by the SRM PALcode corresponds
 	   to the interrupt mask bits, but we have to manage via the
@@ -527,7 +526,7 @@ sable_lynx_srm_device_interrupt(unsigned long vector, struct pt_regs * regs)
 	printk("%s: vector 0x%lx bit 0x%x irq 0x%x\n",
 	       __FUNCTION__, vector, bit, irq);
 #endif
-	handle_irq(irq, regs);
+	handle_irq(irq);
 }
 
 static void __init
@@ -537,7 +536,7 @@ sable_lynx_init_irq(int nr_irqs)
 
 	for (i = 0; i < nr_irqs; ++i) {
 		irq_desc[i].status = IRQ_DISABLED | IRQ_LEVEL;
-		irq_desc[i].handler = &sable_lynx_irq_type;
+		irq_desc[i].chip = &sable_lynx_irq_type;
 	}
 
 	common_init_isa_dma();

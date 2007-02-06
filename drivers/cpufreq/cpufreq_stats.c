@@ -9,7 +9,6 @@
  * published by the Free Software Foundation.
  */
 
-#include <linux/config.h>
 #include <linux/kernel.h>
 #include <linux/sysdev.h>
 #include <linux/cpu.h>
@@ -74,7 +73,7 @@ static ssize_t
 show_total_trans(struct cpufreq_policy *policy, char *buf)
 {
 	struct cpufreq_stats *stat = cpufreq_stats_table[policy->cpu];
-	if(!stat)
+	if (!stat)
 		return 0;
 	return sprintf(buf, "%d\n",
 			cpufreq_stats_table[stat->cpu]->total_trans);
@@ -86,7 +85,7 @@ show_time_in_state(struct cpufreq_policy *policy, char *buf)
 	ssize_t len = 0;
 	int i;
 	struct cpufreq_stats *stat = cpufreq_stats_table[policy->cpu];
-	if(!stat)
+	if (!stat)
 		return 0;
 	cpufreq_stats_update(stat->cpu);
 	for (i = 0; i < stat->state_num; i++) {
@@ -104,7 +103,7 @@ show_trans_table(struct cpufreq_policy *policy, char *buf)
 	int i, j;
 
 	struct cpufreq_stats *stat = cpufreq_stats_table[policy->cpu];
-	if(!stat)
+	if (!stat)
 		return 0;
 	cpufreq_stats_update(stat->cpu);
 	len += snprintf(buf + len, PAGE_SIZE - len, "   From  :    To\n");
@@ -286,11 +285,15 @@ cpufreq_stat_notifier_trans (struct notifier_block *nb, unsigned long val,
 	stat = cpufreq_stats_table[freq->cpu];
 	if (!stat)
 		return 0;
+
 	old_index = freq_table_get_index(stat, freq->old);
 	new_index = freq_table_get_index(stat, freq->new);
 
 	cpufreq_stats_update(freq->cpu);
 	if (old_index == new_index)
+		return 0;
+
+	if (old_index == -1 || new_index == -1)
 		return 0;
 
 	spin_lock(&cpufreq_stats_lock);
@@ -350,13 +353,11 @@ __init cpufreq_stats_init(void)
 		return ret;
 	}
 
-	register_cpu_notifier(&cpufreq_stat_cpu_notifier);
-	lock_cpu_hotplug();
+	register_hotcpu_notifier(&cpufreq_stat_cpu_notifier);
 	for_each_online_cpu(cpu) {
-		cpufreq_stat_cpu_callback(&cpufreq_stat_cpu_notifier, CPU_ONLINE,
-			(void *)(long)cpu);
+		cpufreq_stat_cpu_callback(&cpufreq_stat_cpu_notifier,
+				CPU_ONLINE, (void *)(long)cpu);
 	}
-	unlock_cpu_hotplug();
 	return 0;
 }
 static void
@@ -368,17 +369,18 @@ __exit cpufreq_stats_exit(void)
 			CPUFREQ_POLICY_NOTIFIER);
 	cpufreq_unregister_notifier(&notifier_trans_block,
 			CPUFREQ_TRANSITION_NOTIFIER);
-	unregister_cpu_notifier(&cpufreq_stat_cpu_notifier);
+	unregister_hotcpu_notifier(&cpufreq_stat_cpu_notifier);
 	lock_cpu_hotplug();
 	for_each_online_cpu(cpu) {
-		cpufreq_stat_cpu_callback(&cpufreq_stat_cpu_notifier, CPU_DEAD,
-			(void *)(long)cpu);
+		cpufreq_stat_cpu_callback(&cpufreq_stat_cpu_notifier,
+						CPU_DEAD, (void *)(long)cpu);
 	}
 	unlock_cpu_hotplug();
 }
 
 MODULE_AUTHOR ("Zou Nan hai <nanhai.zou@intel.com>");
-MODULE_DESCRIPTION ("'cpufreq_stats' - A driver to export cpufreq stats through sysfs filesystem");
+MODULE_DESCRIPTION ("'cpufreq_stats' - A driver to export cpufreq stats"
+				"through sysfs filesystem");
 MODULE_LICENSE ("GPL");
 
 module_init(cpufreq_stats_init);

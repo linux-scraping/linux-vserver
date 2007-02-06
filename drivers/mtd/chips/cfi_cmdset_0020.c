@@ -162,6 +162,7 @@ struct mtd_info *cfi_cmdset_0020(struct map_info *map, int primary)
 
 	return cfi_staa_setup(map);
 }
+EXPORT_SYMBOL_GPL(cfi_cmdset_0020);
 
 static struct mtd_info *cfi_staa_setup(struct map_info *map)
 {
@@ -171,7 +172,7 @@ static struct mtd_info *cfi_staa_setup(struct map_info *map)
 	int i,j;
 	unsigned long devsize = (1<<cfi->cfiq->DevSize) * cfi->interleave;
 
-	mtd = kmalloc(sizeof(*mtd), GFP_KERNEL);
+	mtd = kzalloc(sizeof(*mtd), GFP_KERNEL);
 	//printk(KERN_DEBUG "number of CFI chips: %d\n", cfi->numchips);
 
 	if (!mtd) {
@@ -180,7 +181,6 @@ static struct mtd_info *cfi_staa_setup(struct map_info *map)
 		return NULL;
 	}
 
-	memset(mtd, 0, sizeof(*mtd));
 	mtd->priv = map;
 	mtd->type = MTD_NORFLASH;
 	mtd->size = devsize * cfi->numchips;
@@ -237,9 +237,8 @@ static struct mtd_info *cfi_staa_setup(struct map_info *map)
 	mtd->unlock = cfi_staa_unlock;
 	mtd->suspend = cfi_staa_suspend;
 	mtd->resume = cfi_staa_resume;
-	mtd->flags = MTD_CAP_NORFLASH;
-	mtd->flags |= MTD_ECC; /* FIXME: Not all STMicro flashes have this */
-	mtd->eccsize = 8; /* FIXME: Should be 0 for STMicro flashes w/out ECC */
+	mtd->flags = MTD_CAP_NORFLASH & ~MTD_BIT_WRITEABLE;
+	mtd->writesize = 8; /* FIXME: Should be 0 for STMicro flashes w/out ECC */
 	map->fldrv = &cfi_staa_chipdrv;
 	__module_get(THIS_MODULE);
 	mtd->name = map->name;
@@ -1409,21 +1408,5 @@ static void cfi_staa_destroy(struct mtd_info *mtd)
 	kfree(cfi->cmdset_priv);
 	kfree(cfi);
 }
-
-static char im_name[]="cfi_cmdset_0020";
-
-static int __init cfi_staa_init(void)
-{
-	inter_module_register(im_name, THIS_MODULE, &cfi_cmdset_0020);
-	return 0;
-}
-
-static void __exit cfi_staa_exit(void)
-{
-	inter_module_unregister(im_name);
-}
-
-module_init(cfi_staa_init);
-module_exit(cfi_staa_exit);
 
 MODULE_LICENSE("GPL");

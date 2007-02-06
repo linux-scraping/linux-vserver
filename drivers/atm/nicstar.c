@@ -36,7 +36,6 @@
 /* Header files ***************************************************************/
 
 #include <linux/module.h>
-#include <linux/config.h>
 #include <linux/kernel.h>
 #include <linux/skbuff.h>
 #include <linux/atmdev.h>
@@ -215,7 +214,7 @@ static void __devinit ns_init_card_error(ns_dev *card, int error);
 static scq_info *get_scq(int size, u32 scd);
 static void free_scq(scq_info *scq, struct atm_vcc *vcc);
 static void push_rxbufs(ns_dev *, struct sk_buff *);
-static irqreturn_t ns_irq_handler(int irq, void *dev_id, struct pt_regs *regs);
+static irqreturn_t ns_irq_handler(int irq, void *dev_id);
 static int ns_open(struct atm_vcc *vcc);
 static void ns_close(struct atm_vcc *vcc);
 static void fill_tst(ns_dev *card, int n, vc_map *vc);
@@ -626,7 +625,7 @@ static int __devinit ns_init_card(int i, struct pci_dev *pcidev)
    if (mac[i] == NULL)
       nicstar_init_eprom(card->membase);
 
-   if (request_irq(pcidev->irq, &ns_irq_handler, SA_INTERRUPT | SA_SHIRQ, "nicstar", card) != 0)
+   if (request_irq(pcidev->irq, &ns_irq_handler, IRQF_DISABLED | IRQF_SHARED, "nicstar", card) != 0)
    {
       printk("nicstar%d: can't allocate IRQ %d.\n", i, pcidev->irq);
       error = 9;
@@ -998,7 +997,7 @@ static scq_info *get_scq(int size, u32 scd)
    if (size != VBR_SCQSIZE && size != CBR_SCQSIZE)
       return NULL;
 
-   scq = (scq_info *) kmalloc(sizeof(scq_info), GFP_KERNEL);
+   scq = kmalloc(sizeof(scq_info), GFP_KERNEL);
    if (scq == NULL)
       return NULL;
    scq->org = kmalloc(2 * size, GFP_KERNEL);
@@ -1007,7 +1006,7 @@ static scq_info *get_scq(int size, u32 scd)
       kfree(scq);
       return NULL;
    }
-   scq->skb = (struct sk_buff **) kmalloc(sizeof(struct sk_buff *) *
+   scq->skb = kmalloc(sizeof(struct sk_buff *) *
                                           (size / NS_SCQE_SIZE), GFP_KERNEL);
    if (scq->skb == NULL)
    {
@@ -1195,7 +1194,7 @@ static void push_rxbufs(ns_dev *card, struct sk_buff *skb)
 
 
 
-static irqreturn_t ns_irq_handler(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t ns_irq_handler(int irq, void *dev_id)
 {
    u32 stat_r;
    ns_dev *card;
@@ -2760,7 +2759,7 @@ static int ns_ioctl(struct atm_dev *dev, unsigned int cmd, void __user *arg)
 {
    ns_dev *card;
    pool_levels pl;
-   int btype;
+   long btype;
    unsigned long flags;
 
    card = dev->dev_data;
@@ -2860,7 +2859,7 @@ static int ns_ioctl(struct atm_dev *dev, unsigned int cmd, void __user *arg)
       case NS_ADJBUFLEV:
          if (!capable(CAP_NET_ADMIN))
 	    return -EPERM;
-         btype = (int) arg;	/* an int is the same size as a pointer */
+         btype = (long) arg;	/* a long is the same size as a pointer or bigger */
          switch (btype)
 	 {
 	    case NS_BUFTYPE_SMALL:

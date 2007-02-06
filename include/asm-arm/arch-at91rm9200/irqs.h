@@ -21,6 +21,8 @@
 #ifndef __ASM_ARCH_IRQS_H
 #define __ASM_ARCH_IRQS_H
 
+#include <asm/arch/at91_aic.h>
+
 #define NR_AIC_IRQS 32
 
 
@@ -32,21 +34,11 @@
 
 
 /*
- * IRQ interrupt symbols are the AT91_ID_* symbols in at91rm9200.h
+ * IRQ interrupt symbols are the AT91xxx_ID_* symbols
  * for IRQs handled directly through the AIC, or else the AT91_PIN_*
  * symbols in gpio.h for ones handled indirectly as GPIOs.
  * We make provision for 4 banks of GPIO.
  */
-#include <asm/arch/gpio.h>
-
 #define	NR_IRQS		(NR_AIC_IRQS + (4 * 32))
-
-
-#ifndef __ASSEMBLY__
-/*
- * Initialize the IRQ controller.
- */
-extern void at91rm9200_init_irq(unsigned int priority[]);
-#endif
 
 #endif

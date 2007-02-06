@@ -69,7 +69,6 @@
  *	Fabian Frederick:	Option parser rebuilt (using parser lib)
 */
 
-#include <linux/config.h>
 #include <linux/types.h>
 #include <linux/string.h>
 #include <linux/kernel.h>
@@ -87,7 +86,6 @@
 #include <linux/root_dev.h>
 #include <net/ipconfig.h>
 #include <linux/parser.h>
-#include <linux/vs_cvirt.h>
 
 /* Define this to allow debugging output */
 #undef NFSROOT_DEBUG
@@ -100,7 +98,7 @@
 static char nfs_root_name[256] __initdata = "";
 
 /* Address of NFS server */
-static __u32 servaddr __initdata = 0;
+static __be32 servaddr __initdata = 0;
 
 /* Name of directory to mount */
 static char nfs_path[NFS_MAXPATHLEN] __initdata = { 0, };
@@ -120,12 +118,12 @@ static int mount_port __initdata = 0;		/* Mount daemon port number */
 enum {
 	/* Options that take integer arguments */
 	Opt_port, Opt_rsize, Opt_wsize, Opt_timeo, Opt_retrans, Opt_acregmin,
-	Opt_acregmax, Opt_acdirmin, Opt_acdirmax,
+	Opt_acregmax, Opt_acdirmin, Opt_acdirmax, Opt_tagid,
 	/* Options that take no arguments */
 	Opt_soft, Opt_hard, Opt_intr,
 	Opt_nointr, Opt_posix, Opt_noposix, Opt_cto, Opt_nocto, Opt_ac, 
 	Opt_noac, Opt_lock, Opt_nolock, Opt_v2, Opt_v3, Opt_udp, Opt_tcp,
-	Opt_acl, Opt_noacl, Opt_tagxid,
+	Opt_acl, Opt_noacl, Opt_tag, Opt_notag,
 	/* Error token */
 	Opt_err
 };
@@ -162,7 +160,10 @@ static match_table_t __initdata tokens = {
 	{Opt_tcp, "tcp"},
 	{Opt_acl, "acl"},
 	{Opt_noacl, "noacl"},
-	{Opt_tagxid, "tagxid"},
+	{Opt_tag, "tag"},
+	{Opt_notag, "notag"},
+	{Opt_tagid, "tagid=%u"},
+	{Opt_tag, "tagxid"},
 	{Opt_err, NULL}
 	
 };
@@ -277,9 +278,18 @@ static int __init root_nfs_parse(char *name, char *buf)
 			case Opt_noacl:
 				nfs_data.flags |= NFS_MOUNT_NOACL;
 				break;
-#ifndef CONFIG_INOXID_NONE
-			case Opt_tagxid:
-				nfs_data.flags |= NFS_MOUNT_TAGXID;
+#ifndef CONFIG_TAGGING_NONE
+			case Opt_tag:
+				nfs_data.flags |= NFS_MOUNT_TAGGED;
+				break;
+			case Opt_notag:
+				nfs_data.flags &= ~NFS_MOUNT_TAGGED;
+				break;
+#endif
+#ifdef CONFIG_PROPAGATE
+			case Opt_tagid:
+				/* use args[0] */
+				nfs_data.flags |= NFS_MOUNT_TAGGED;
 				break;
 #endif
 			default:
@@ -319,7 +329,7 @@ static int __init root_nfs_name(char *name)
 	/* Override them by options set on kernel command-line */
 	root_nfs_parse(name, buf);
 
-	cp = vx_new_uts(nodename);
+	cp = utsname()->nodename;
 	if (strlen(buf) + strlen(cp) > NFS_MAXPATHLEN) {
 		printk(KERN_ERR "Root-NFS: Pathname for remote directory too long.\n");
 		return -1;
@@ -335,7 +345,7 @@ static int __init root_nfs_name(char *name)
  */
 static int __init root_nfs_addr(void)
 {
-	if ((servaddr = root_server_addr) == INADDR_NONE) {
+	if ((servaddr = root_server_addr) == htonl(INADDR_NONE)) {
 		printk(KERN_ERR "Root-NFS: No NFS server available, giving up.\n");
 		return -1;
 	}
@@ -419,7 +429,7 @@ __setup("nfsroot=", nfs_root_setup);
  *  Construct sockaddr_in from address and port number.
  */
 static inline void
-set_sockaddr(struct sockaddr_in *sin, __u32 addr, __u16 port)
+set_sockaddr(struct sockaddr_in *sin, __be32 addr, __be16 port)
 {
 	sin->sin_family = AF_INET;
 	sin->sin_addr.s_addr = addr;
@@ -476,14 +486,13 @@ static int __init root_nfs_ports(void)
 		dprintk("Root-NFS: Portmapper on server returned %d "
 			"as nfsd port\n", port);
 	}
-	nfs_port = htons(nfs_port);
 
 	if ((port = root_nfs_getport(NFS_MNT_PROGRAM, mountd_ver, proto)) < 0) {
 		printk(KERN_ERR "Root-NFS: Unable to get mountd port "
 				"number from server, using default\n");
 		port = mountd_port;
 	}
-	mount_port = htons(port);
+	mount_port = port;
 	dprintk("Root-NFS: mountd port is %d\n", port);
 
 	return 0;
@@ -504,7 +513,7 @@ static int __init root_nfs_get_handle(void)
 	int version = (nfs_data.flags & NFS_MOUNT_VER3) ?
 					NFS_MNT3_VERSION : NFS_MNT_VERSION;
 
-	set_sockaddr(&sin, servaddr, mount_port);
+	set_sockaddr(&sin, servaddr, htons(mount_port));
 	status = nfsroot_mount(&sin, nfs_path, &fh, version, protocol);
 	if (status < 0)
 		printk(KERN_ERR "Root-NFS: Server returned error %d "
@@ -527,6 +536,6 @@ void * __init nfs_root_data(void)
 	 || root_nfs_ports() < 0
 	 || root_nfs_get_handle() < 0)
 		return NULL;
-	set_sockaddr((struct sockaddr_in *) &nfs_data.addr, servaddr, nfs_port);
+	set_sockaddr((struct sockaddr_in *) &nfs_data.addr, servaddr, htons(nfs_port));
 	return (void*)&nfs_data;
 }

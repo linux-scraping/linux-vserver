@@ -15,7 +15,6 @@
  *  with this program; if not, write to the Free Software Foundation, Inc.,
  *  59 Temple Place - Suite 330, Boston MA 02111-1307, USA.
  */
-#include <linux/config.h>
 #include <linux/init.h>
 #include <linux/interrupt.h>
 #include <linux/sched.h>
@@ -36,7 +35,6 @@
 
 extern void mips_reboot_setup(void);
 extern void mips_time_init(void);
-extern void mips_timer_setup(struct irqaction *irq);
 extern unsigned long mips_rtc_get_time(void);
 
 #ifdef CONFIG_KGDB
@@ -50,7 +48,7 @@ const char *get_system_type(void)
 	return "MIPS Atlas";
 }
 
-void __init plat_setup(void)
+void __init plat_mem_setup(void)
 {
 	mips_pcibios_init();
 
@@ -64,7 +62,6 @@ void __init plat_setup(void)
 	mips_reboot_setup();
 
 	board_time_init = mips_time_init;
-	board_timer_setup = mips_timer_setup;
 	rtc_mips_get_time = mips_rtc_get_time;
 }
 
@@ -80,7 +77,7 @@ static void __init serial_init(void)
 #else
 	s.iobase = ATLAS_UART_REGS_BASE+3;
 #endif
-	s.irq = ATLASINT_UART;
+	s.irq = ATLAS_INT_UART;
 	s.uartclk = ATLAS_BASE_BAUD * 16;
 	s.flags = UPF_BOOT_AUTOCONF | UPF_SKIP_TEST | UPF_AUTO_IRQ;
 	s.iotype = UPIO_PORT;

@@ -246,7 +246,7 @@ static int flexcop_usb_i2c_req(struct flexcop_usb *fc_usb,
 	wIndex = (chipaddr << 8 ) | addr;
 
 	deb_i2c("i2c %2d: %02x %02x %02x %02x %02x %02x\n",func,request_type,req,
-			((wValue && 0xff) << 8),wValue >> 8,((wIndex && 0xff) << 8),wIndex >> 8);
+		wValue & 0xff, wValue >> 8, wIndex & 0xff, wIndex >> 8);
 
 	len = usb_control_msg(fc_usb->udev,pipe,
 			req,
@@ -328,7 +328,7 @@ static void flexcop_usb_process_frame(struct flexcop_usb *fc_usb, u8 *buffer, in
 	fc_usb->tmp_buffer_length = l;
 }
 
-static void flexcop_usb_urb_complete(struct urb *urb, struct pt_regs *ptregs)
+static void flexcop_usb_urb_complete(struct urb *urb)
 {
 	struct flexcop_usb *fc_usb = urb->context;
 	int i;
@@ -433,11 +433,10 @@ static int flexcop_usb_transfer_init(struct flexcop_usb *fc_usb)
 	flexcop_wan_set_speed(fc_usb->fc_dev,FC_WAN_SPEED_8MBITS);
 	flexcop_sram_ctrl(fc_usb->fc_dev,1,1,1);
 
-	ret = 0;
-	goto success;
+	return 0;
+
 urb_error:
 	flexcop_usb_transfer_exit(fc_usb);
-success:
 	return ret;
 }
 
@@ -515,15 +514,14 @@ static int flexcop_usb_probe(struct usb_interface *intf,
 		goto err_fc_exit;
 
 	info("%s successfully initialized and connected.",DRIVER_NAME);
-	ret = 0;
-	goto success;
+	return 0;
+
 err_fc_exit:
 	flexcop_device_exit(fc);
 err_usb_exit:
 	flexcop_usb_exit(fc_usb);
 err_kfree:
 	flexcop_device_kfree(fc);
-success:
 	return ret;
 }
 

@@ -110,7 +110,7 @@ static void e21_get_8390_hdr(struct net_device *dev, struct e8390_pkt_hdr *hdr,
 
 static int e21_close(struct net_device *dev);
 
-
+
 /*  Probe for the E2100 series ethercards.  These cards have an 8390 at the
 	base address and the station address at both offset 0x10 and 0x18.  I read
 	the station address from offset 0x18 to avoid the dataport of NE2000
@@ -403,7 +403,7 @@ e21_close(struct net_device *dev)
 	return 0;
 }
 
-
+
 #ifdef MODULE
 #define MAX_E21_CARDS	4	/* Max number of E21 cards per module */
 static struct net_device *dev_e21[MAX_E21_CARDS];
@@ -425,8 +425,8 @@ MODULE_LICENSE("GPL");
 
 /* This is set up so that only a single autoprobe takes place per call.
 ISA device autoprobes on a running machine are not recommended. */
-int
-init_module(void)
+
+int __init init_module(void)
 {
 	struct net_device *dev;
 	int this_dev, found = 0;
@@ -463,7 +463,7 @@ static void cleanup_card(struct net_device *dev)
 	release_region(dev->base_addr, E21_IO_EXTENT);
 }
 
-void
+void __exit
 cleanup_module(void)
 {
 	int this_dev;

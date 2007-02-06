@@ -1,12 +1,12 @@
 #ifndef _ALPHA_CACHEFLUSH_H
 #define _ALPHA_CACHEFLUSH_H
 
-#include <linux/config.h>
 #include <linux/mm.h>
 
 /* Caches aren't brain-dead on the Alpha. */
 #define flush_cache_all()			do { } while (0)
 #define flush_cache_mm(mm)			do { } while (0)
+#define flush_cache_dup_mm(mm)			do { } while (0)
 #define flush_cache_range(vma, start, end)	do { } while (0)
 #define flush_cache_page(vma, vmaddr, pfn)	do { } while (0)
 #define flush_dcache_page(page)			do { } while (0)

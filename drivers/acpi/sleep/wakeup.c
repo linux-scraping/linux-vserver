@@ -155,7 +155,6 @@ static int __init acpi_wakeup_device_init(void)
 
 	if (acpi_disabled)
 		return 0;
-	printk("ACPI wakeup devices: \n");
 
 	spin_lock(&acpi_device_lock);
 	list_for_each_safe(node, next, &acpi_wakeup_device_list) {
@@ -174,10 +173,8 @@ static int __init acpi_wakeup_device_init(void)
 			dev->wakeup.state.enabled = 1;
 			spin_lock(&acpi_device_lock);
 		}
-		printk("%4s ", dev->pnp.bus_id);
 	}
 	spin_unlock(&acpi_device_lock);
-	printk("\n");
 
 	return 0;
 }
@@ -186,11 +183,11 @@ late_initcall(acpi_wakeup_device_init);
 #endif
 
 /*
- * Disable all wakeup GPEs before power off.
- * 
+ * Disable all wakeup GPEs before entering requested sleep state.
+ *	@sleep_state:	ACPI state
  * Since acpi_enter_sleep_state() will disable all
  * RUNTIME GPEs, we simply mark all GPES that
- * are not enabled for wakeup from S5 as RUNTIME.
+ * are not enabled for wakeup from requested state as RUNTIME.
  */
 void acpi_gpe_sleep_prepare(u32 sleep_state)
 {

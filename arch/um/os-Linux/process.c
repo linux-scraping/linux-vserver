@@ -7,11 +7,10 @@
 #include <stdio.h>
 #include <errno.h>
 #include <signal.h>
-#include <setjmp.h>
-#include <linux/unistd.h>
 #include <sys/mman.h>
 #include <sys/wait.h>
 #include <sys/mman.h>
+#include <sys/syscall.h>
 #include "ptrace_user.h"
 #include "os.h"
 #include "user.h"
@@ -141,11 +140,9 @@ void os_usr1_process(int pid)
  * syscalls, and also breaks with clone(), which does not unshare the TLS.
  */
 
-inline _syscall0(pid_t, getpid)
-
 int os_getpid(void)
 {
-	return(getpid());
+	return(syscall(__NR_getpid));
 }
 
 int os_getpgrp(void)
@@ -247,39 +244,48 @@ void init_new_thread_stack(void *sig_stack, void (*usr1_handler)(int))
 		set_sigstack(sig_stack, pages * page_size());
 		flags = SA_ONSTACK;
 	}
-	if(usr1_handler) set_handler(SIGUSR1, usr1_handler, flags, -1);
+	if(usr1_handler){
+		struct sigaction sa;
+
+		sa.sa_handler = usr1_handler;
+		sigemptyset(&sa.sa_mask);
+		sa.sa_flags = flags;
+		sa.sa_restorer = NULL;
+		if(sigaction(SIGUSR1, &sa, NULL) < 0)
+			panic("init_new_thread_stack - sigaction failed - "
+			      "errno = %d\n", errno);
+	}
 }
 
-void init_new_thread_signals(int altstack)
+void init_new_thread_signals(void)
 {
-	int flags = altstack ? SA_ONSTACK : 0;
-
-	set_handler(SIGSEGV, (__sighandler_t) sig_handler, flags,
+	set_handler(SIGSEGV, (__sighandler_t) sig_handler, SA_ONSTACK,
 		    SIGUSR1, SIGIO, SIGWINCH, SIGALRM, SIGVTALRM, -1);
-	set_handler(SIGTRAP, (__sighandler_t) sig_handler, flags,
+	set_handler(SIGTRAP, (__sighandler_t) sig_handler, SA_ONSTACK,
 		    SIGUSR1, SIGIO, SIGWINCH, SIGALRM, SIGVTALRM, -1);
-	set_handler(SIGFPE, (__sighandler_t) sig_handler, flags,
+	set_handler(SIGFPE, (__sighandler_t) sig_handler, SA_ONSTACK,
 		    SIGUSR1, SIGIO, SIGWINCH, SIGALRM, SIGVTALRM, -1);
-	set_handler(SIGILL, (__sighandler_t) sig_handler, flags,
+	set_handler(SIGILL, (__sighandler_t) sig_handler, SA_ONSTACK,
 		    SIGUSR1, SIGIO, SIGWINCH, SIGALRM, SIGVTALRM, -1);
-	set_handler(SIGBUS, (__sighandler_t) sig_handler, flags,
+	set_handler(SIGBUS, (__sighandler_t) sig_handler, SA_ONSTACK,
 		    SIGUSR1, SIGIO, SIGWINCH, SIGALRM, SIGVTALRM, -1);
 	set_handler(SIGUSR2, (__sighandler_t) sig_handler,
-		    flags, SIGUSR1, SIGIO, SIGWINCH, SIGALRM, SIGVTALRM, -1);
+		    SA_ONSTACK, SIGUSR1, SIGIO, SIGWINCH, SIGALRM, SIGVTALRM,
+		    -1);
 	signal(SIGHUP, SIG_IGN);
 
-	init_irq_signals(altstack);
+	init_irq_signals(1);
 }
 
 int run_kernel_thread(int (*fn)(void *), void *arg, void **jmp_ptr)
 {
 	jmp_buf buf;
-	int n, enable;
+	int n;
 
 	*jmp_ptr = &buf;
-	n = UML_SETJMP(&buf, enable);
+	n = UML_SETJMP(&buf);
 	if(n != 0)
-		return(n);
+		return n;
 	(*fn)(arg);
-	return(0);
+	return 0;
 }

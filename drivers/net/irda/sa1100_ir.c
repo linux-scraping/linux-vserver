@@ -18,7 +18,6 @@
  *	power_leve:level	- set the transmitter power level
  *	tx_lpm:0|1		- set transmit low power mode
  */
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/moduleparam.h>
 #include <linux/types.h>
@@ -580,7 +579,7 @@ static void sa1100_irda_fir_irq(struct net_device *dev)
 	sa1100_irda_rx_dma_start(si);
 }
 
-static irqreturn_t sa1100_irda_irq(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t sa1100_irda_irq(int irq, void *dev_id)
 {
 	struct net_device *dev = dev_id;
 	if (IS_FIR(((struct sa1100_irda *)dev->priv)))

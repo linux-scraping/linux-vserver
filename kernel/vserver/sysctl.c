@@ -24,28 +24,32 @@
 #define CTL_VSERVER	4242    /* unused? */
 
 enum {
-	CTL_DEBUG_ERROR = 0,
-	CTL_DEBUG_SWITCH = 1,
+	CTL_DEBUG_ERROR		= 0,
+	CTL_DEBUG_SWITCH	= 1,
 	CTL_DEBUG_XID,
 	CTL_DEBUG_NID,
+	CTL_DEBUG_TAG,
 	CTL_DEBUG_NET,
 	CTL_DEBUG_LIMIT,
 	CTL_DEBUG_CRES,
 	CTL_DEBUG_DLIM,
+	CTL_DEBUG_QUOTA,
 	CTL_DEBUG_CVIRT,
 	CTL_DEBUG_MISC,
 };
 
 
-unsigned int vx_debug_switch = 0;
-unsigned int vx_debug_xid = 0;
-unsigned int vx_debug_nid = 0;
-unsigned int vx_debug_net = 0;
-unsigned int vx_debug_limit = 0;
-unsigned int vx_debug_cres = 0;
-unsigned int vx_debug_dlim = 0;
-unsigned int vx_debug_cvirt = 0;
-unsigned int vx_debug_misc = 0;
+unsigned int vx_debug_switch	= 0;
+unsigned int vx_debug_xid	= 0;
+unsigned int vx_debug_nid	= 0;
+unsigned int vx_debug_tag	= 0;
+unsigned int vx_debug_net	= 0;
+unsigned int vx_debug_limit	= 0;
+unsigned int vx_debug_cres	= 0;
+unsigned int vx_debug_dlim	= 0;
+unsigned int vx_debug_quota	= 0;
+unsigned int vx_debug_cvirt	= 0;
+unsigned int vx_debug_misc	= 0;
 
 
 static struct ctl_table_header *vserver_table_header;
@@ -127,80 +131,28 @@ done:
 }
 
 
+#define	CTL_ENTRY(ctl, name)				\
+	{						\
+		.ctl_name	= ctl,			\
+		.procname	= #name,		\
+		.data		= &vx_##name,		\
+		.maxlen		= sizeof(int),		\
+		.mode		= 0644,			\
+		.proc_handler	= &proc_dodebug		\
+	}
 
 static ctl_table debug_table[] = {
-	{
-		.ctl_name	= CTL_DEBUG_SWITCH,
-		.procname	= "debug_switch",
-		.data		= &vx_debug_switch,
-		.maxlen		= sizeof(int),
-		.mode		= 0644,
-		.proc_handler	= &proc_dodebug
-	},
-	{
-		.ctl_name	= CTL_DEBUG_XID,
-		.procname	= "debug_xid",
-		.data		= &vx_debug_xid,
-		.maxlen		= sizeof(int),
-		.mode		= 0644,
-		.proc_handler	= &proc_dodebug
-	},
-	{
-		.ctl_name	= CTL_DEBUG_NID,
-		.procname	= "debug_nid",
-		.data		= &vx_debug_nid,
-		.maxlen		= sizeof(int),
-		.mode		= 0644,
-		.proc_handler	= &proc_dodebug
-	},
-	{
-		.ctl_name	= CTL_DEBUG_NET,
-		.procname	= "debug_net",
-		.data		= &vx_debug_net,
-		.maxlen		= sizeof(int),
-		.mode		= 0644,
-		.proc_handler	= &proc_dodebug
-	},
-	{
-		.ctl_name	= CTL_DEBUG_LIMIT,
-		.procname	= "debug_limit",
-		.data		= &vx_debug_limit,
-		.maxlen		= sizeof(int),
-		.mode		= 0644,
-		.proc_handler	= &proc_dodebug
-	},
-	{
-		.ctl_name	= CTL_DEBUG_CRES,
-		.procname	= "debug_cres",
-		.data		= &vx_debug_cres,
-		.maxlen		= sizeof(int),
-		.mode		= 0644,
-		.proc_handler	= &proc_dodebug
-	},
-	{
-		.ctl_name	= CTL_DEBUG_DLIM,
-		.procname	= "debug_dlim",
-		.data		= &vx_debug_dlim,
-		.maxlen		= sizeof(int),
-		.mode		= 0644,
-		.proc_handler	= &proc_dodebug
-	},
-	{
-		.ctl_name	= CTL_DEBUG_CVIRT,
-		.procname	= "debug_cvirt",
-		.data		= &vx_debug_cvirt,
-		.maxlen		= sizeof(int),
-		.mode		= 0644,
-		.proc_handler	= &proc_dodebug
-	},
-	{
-		.ctl_name	= CTL_DEBUG_MISC,
-		.procname	= "debug_misc",
-		.data		= &vx_debug_misc,
-		.maxlen		= sizeof(int),
-		.mode		= 0644,
-		.proc_handler	= &proc_dodebug
-	},
+	CTL_ENTRY (CTL_DEBUG_SWITCH,	debug_switch),
+	CTL_ENTRY (CTL_DEBUG_XID,	debug_xid),
+	CTL_ENTRY (CTL_DEBUG_NID,	debug_nid),
+	CTL_ENTRY (CTL_DEBUG_TAG,	debug_tag),
+	CTL_ENTRY (CTL_DEBUG_NET,	debug_net),
+	CTL_ENTRY (CTL_DEBUG_LIMIT,	debug_limit),
+	CTL_ENTRY (CTL_DEBUG_CRES,	debug_cres),
+	CTL_ENTRY (CTL_DEBUG_DLIM,	debug_dlim),
+	CTL_ENTRY (CTL_DEBUG_QUOTA,	debug_quota),
+	CTL_ENTRY (CTL_DEBUG_CVIRT,	debug_cvirt),
+	CTL_ENTRY (CTL_DEBUG_MISC,	debug_misc),
 	{ .ctl_name = 0 }
 };
 
@@ -215,6 +167,68 @@ static ctl_table vserver_table[] = {
 };
 
 
+static match_table_t tokens = {
+	{ CTL_DEBUG_SWITCH,	"switch=%x"	},
+	{ CTL_DEBUG_XID,	"xid=%x"	},
+	{ CTL_DEBUG_NID,	"nid=%x"	},
+	{ CTL_DEBUG_TAG,	"tag=%x"	},
+	{ CTL_DEBUG_NET,	"net=%x"	},
+	{ CTL_DEBUG_LIMIT,	"limit=%x"	},
+	{ CTL_DEBUG_CRES,	"cres=%x"	},
+	{ CTL_DEBUG_DLIM,	"dlim=%x"	},
+	{ CTL_DEBUG_QUOTA,	"quota=%x"	},
+	{ CTL_DEBUG_CVIRT,	"cvirt=%x"	},
+	{ CTL_DEBUG_MISC,	"misc=%x"	},
+	{ CTL_DEBUG_ERROR,	NULL		}
+};
+
+#define	HANDLE_CASE(id, name, val)				\
+	case CTL_DEBUG_ ## id:					\
+		vx_debug_ ## name = val;			\
+		printk("vs_debug_" #name "=0x%x\n", val);	\
+		break
+
+
+static int __init vs_debug_setup(char *str)
+{
+	char *p;
+	int token;
+
+	printk("vs_debug_setup(%s)\n", str);
+	while ((p = strsep(&str, ",")) != NULL) {
+		substring_t args[MAX_OPT_ARGS];
+		unsigned int value;
+
+		if (!*p)
+			continue;
+
+		token = match_token(p, tokens, args);
+		value = (token>0)?simple_strtoul(args[0].from, NULL, 0):0;
+
+		switch (token) {
+		HANDLE_CASE(SWITCH, switch, value);
+		HANDLE_CASE(XID,    xid,    value);
+		HANDLE_CASE(NID,    nid,    value);
+		HANDLE_CASE(TAG,    tag,    value);
+		HANDLE_CASE(NET,    net,    value);
+		HANDLE_CASE(LIMIT,  limit,  value);
+		HANDLE_CASE(CRES,   cres,   value);
+		HANDLE_CASE(DLIM,   dlim,   value);
+		HANDLE_CASE(QUOTA,  quota,  value);
+		HANDLE_CASE(CVIRT,  cvirt,  value);
+		HANDLE_CASE(MISC,   misc,   value);
+		default:
+			return -EINVAL;
+			break;
+		}
+	}
+	return 1;
+}
+
+__setup("vsdebug=", vs_debug_setup);
+
+
+
 EXPORT_SYMBOL_GPL(vx_debug_switch);
 EXPORT_SYMBOL_GPL(vx_debug_xid);
 EXPORT_SYMBOL_GPL(vx_debug_nid);
@@ -222,6 +236,7 @@ EXPORT_SYMBOL_GPL(vx_debug_net);
 EXPORT_SYMBOL_GPL(vx_debug_limit);
 EXPORT_SYMBOL_GPL(vx_debug_cres);
 EXPORT_SYMBOL_GPL(vx_debug_dlim);
+EXPORT_SYMBOL_GPL(vx_debug_quota);
 EXPORT_SYMBOL_GPL(vx_debug_cvirt);
 EXPORT_SYMBOL_GPL(vx_debug_misc);
 

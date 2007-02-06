@@ -20,6 +20,9 @@
 #include <linux/mtd/partitions.h>
 #include <linux/mtd/cfi.h>
 #include <linux/reboot.h>
+#include <linux/err.h>
+#include <linux/kdev_t.h>
+#include <linux/root_dev.h>
 #include <asm/io.h>
 
 /****************************************************************************/
@@ -176,7 +179,7 @@ int nettel_eraseconfig(void)
 
 	init_waitqueue_head(&wait_q);
 	mtd = get_mtd_device(NULL, 2);
-	if (mtd) {
+	if (!IS_ERR(mtd)) {
 		nettel_erase.mtd = mtd;
 		nettel_erase.callback = nettel_erasecallback;
 		nettel_erase.callback = NULL;
@@ -188,7 +191,7 @@ int nettel_eraseconfig(void)
 		set_current_state(TASK_INTERRUPTIBLE);
 		add_wait_queue(&wait_q, &wait);
 
-		ret = MTD_ERASE(mtd, &nettel_erase);
+		ret = mtd->erase(mtd, &nettel_erase);
 		if (ret) {
 			set_current_state(TASK_RUNNING);
 			remove_wait_queue(&wait_q, &wait);
@@ -275,6 +278,7 @@ int __init nettel_init(void)
 	nettel_amd_map.virt = ioremap_nocache(amdaddr, maxsize);
 	if (!nettel_amd_map.virt) {
 		printk("SNAPGEAR: failed to ioremap() BOOTCS\n");
+		iounmap(nettel_mmcrp);
 		return(-EIO);
 	}
 	simple_map_init(&nettel_amd_map);
@@ -335,7 +339,8 @@ int __init nettel_init(void)
 		nettel_amd_map.virt = NULL;
 #else
 		/* Only AMD flash supported */
-		return(-ENXIO);
+		rc = -ENXIO;
+		goto out_unmap2;
 #endif
 	}
 
@@ -359,14 +364,15 @@ int __init nettel_init(void)
 	nettel_intel_map.virt = ioremap_nocache(intel0addr, maxsize);
 	if (!nettel_intel_map.virt) {
 		printk("SNAPGEAR: failed to ioremap() ROMCS1\n");
-		return(-EIO);
+		rc = -EIO;
+		goto out_unmap2;
 	}
 	simple_map_init(&nettel_intel_map);
 
 	intel_mtd = do_map_probe("cfi_probe", &nettel_intel_map);
 	if (!intel_mtd) {
-		iounmap(nettel_intel_map.virt);
-		return(-ENXIO);
+		rc = -ENXIO;
+		goto out_unmap1;
 	}
 
 	/* Set PAR to the detected size */
@@ -392,13 +398,14 @@ int __init nettel_init(void)
 	nettel_intel_map.virt = ioremap_nocache(intel0addr, maxsize);
 	if (!nettel_intel_map.virt) {
 		printk("SNAPGEAR: failed to ioremap() ROMCS1/2\n");
-		return(-EIO);
+		rc = -EIO;
+		goto out_unmap2;
 	}
 
 	intel_mtd = do_map_probe("cfi_probe", &nettel_intel_map);
 	if (! intel_mtd) {
-		iounmap((void *) nettel_intel_map.virt);
-		return(-ENXIO);
+		rc = -ENXIO;
+		goto out_unmap1;
 	}
 
 	intel1size = intel_mtd->size - intel0size;
@@ -454,6 +461,18 @@ int __init nettel_init(void)
 #endif
 
 	return(rc);
+
+#ifdef CONFIG_MTD_CFI_INTELEXT
+out_unmap1:
+	iounmap(nettel_intel_map.virt);
+#endif
+
+out_unmap2:
+	iounmap(nettel_mmcrp);
+	iounmap(nettel_amd_map.virt);
+
+	return(rc);
+
 }
 
 /****************************************************************************/
@@ -466,6 +485,10 @@ void __exit nettel_cleanup(void)
 	if (amd_mtd) {
 		del_mtd_partitions(amd_mtd);
 		map_destroy(amd_mtd);
+	}
+	if (nettel_mmcrp) {
+		iounmap(nettel_mmcrp);
+		nettel_mmcrp = NULL;
 	}
 	if (nettel_amd_map.virt) {
 		iounmap(nettel_amd_map.virt);

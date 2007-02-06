@@ -18,7 +18,6 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
-#include <linux/config.h>
 #include <linux/init.h>
 #include <linux/platform_device.h>
 #include <linux/dma-mapping.h>
@@ -140,6 +139,19 @@ struct platform_device realview_smc91x_device = {
 	.id		= 0,
 	.num_resources	= ARRAY_SIZE(realview_smc91x_resources),
 	.resource	= realview_smc91x_resources,
+};
+
+static struct resource realview_i2c_resource = {
+	.start		= REALVIEW_I2C_BASE,
+	.end		= REALVIEW_I2C_BASE + SZ_4K - 1,
+	.flags		= IORESOURCE_MEM,
+};
+
+struct platform_device realview_i2c_device = {
+	.name		= "versatile-i2c",
+	.id		= -1,
+	.num_resources	= 1,
+	.resource	= &realview_i2c_resource,
 };
 
 #define REALVIEW_SYSMCI	(__io_address(REALVIEW_SYS_BASE) + REALVIEW_SYS_MCI_OFFSET)
@@ -516,18 +528,18 @@ static unsigned long realview_gettimeoffset(void)
 /*
  * IRQ handler for the timer
  */
-static irqreturn_t realview_timer_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t realview_timer_interrupt(int irq, void *dev_id)
 {
 	write_seqlock(&xtime_lock);
 
 	// ...clear the interrupt
 	writel(1, TIMER0_VA_BASE + TIMER_INTCLR);
 
-	timer_tick(regs);
+	timer_tick();
 
 #if defined(CONFIG_SMP) && !defined(CONFIG_LOCAL_TIMERS)
 	smp_send_timer();
-	update_process_times(user_mode(regs));
+	update_process_times(user_mode(get_irq_regs()));
 #endif
 
 	write_sequnlock(&xtime_lock);
@@ -537,7 +549,7 @@ static irqreturn_t realview_timer_interrupt(int irq, void *dev_id, struct pt_reg
 
 static struct irqaction realview_timer_irq = {
 	.name		= "RealView Timer Tick",
-	.flags		= SA_INTERRUPT | SA_TIMER,
+	.flags		= IRQF_DISABLED | IRQF_TIMER,
 	.handler	= realview_timer_interrupt,
 };
 

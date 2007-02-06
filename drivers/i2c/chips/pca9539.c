@@ -134,11 +134,13 @@ static int pca9539_detect(struct i2c_adapter *adapter, int address, int kind)
 	new_client->driver = &pca9539_driver;
 	new_client->flags = 0;
 
-	/* Detection: the pca9539 only has 8 registers (0-7).
-	   A read of 7 should succeed, but a read of 8 should fail. */
-	if ((i2c_smbus_read_byte_data(new_client, 7) < 0) ||
-	    (i2c_smbus_read_byte_data(new_client, 8) >= 0))
-		goto exit_kfree;
+	if (kind < 0) {
+		/* Detection: the pca9539 only has 8 registers (0-7).
+		   A read of 7 should succeed, but a read of 8 should fail. */
+		if ((i2c_smbus_read_byte_data(new_client, 7) < 0) ||
+		    (i2c_smbus_read_byte_data(new_client, 8) >= 0))
+			goto exit_kfree;
+	}
 
 	strlcpy(new_client->name, "pca9539", I2C_NAME_SIZE);
 
@@ -146,11 +148,16 @@ static int pca9539_detect(struct i2c_adapter *adapter, int address, int kind)
 	if ((err = i2c_attach_client(new_client)))
 		goto exit_kfree;
 
-	/* Register sysfs hooks (don't care about failure) */
-	sysfs_create_group(&new_client->dev.kobj, &pca9539_defattr_group);
+	/* Register sysfs hooks */
+	err = sysfs_create_group(&new_client->dev.kobj,
+				 &pca9539_defattr_group);
+	if (err)
+		goto exit_detach;
 
 	return 0;
 
+exit_detach:
+	i2c_detach_client(new_client);
 exit_kfree:
 	kfree(data);
 exit:
@@ -160,6 +167,8 @@ exit:
 static int pca9539_detach_client(struct i2c_client *client)
 {
 	int err;
+
+	sysfs_remove_group(&client->dev.kobj, &pca9539_defattr_group);
 
 	if ((err = i2c_detach_client(client)))
 		return err;

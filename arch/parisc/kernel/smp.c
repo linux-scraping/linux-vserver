@@ -18,7 +18,6 @@
 */
 #undef ENTRY_SYS_CPUS	/* syscall support for iCOD-like functionality */
 
-#include <linux/config.h>
 
 #include <linux/types.h>
 #include <linux/spinlock.h>
@@ -155,7 +154,7 @@ halt_processor(void)
 
 
 irqreturn_t
-ipi_interrupt(int irq, void *dev_id, struct pt_regs *regs) 
+ipi_interrupt(int irq, void *dev_id) 
 {
 	int this_cpu = smp_processor_id();
 	struct cpuinfo_parisc *p = &cpu_data[this_cpu];
@@ -263,6 +262,9 @@ ipi_interrupt(int irq, void *dev_id, struct pt_regs *regs)
 					this_cpu, which);
 				return IRQ_NONE;
 			} /* Switch */
+		/* let in any pending interrupts */
+		local_irq_enable();
+		local_irq_disable();
 		} /* while (ops) */
 	}
 	return IRQ_HANDLED;
@@ -412,27 +414,15 @@ smp_flush_tlb_all(void)
 	on_each_cpu(flush_tlb_all_local, NULL, 1, 1);
 }
 
-
-void 
-smp_do_timer(struct pt_regs *regs)
-{
-	int cpu = smp_processor_id();
-	struct cpuinfo_parisc *data = &cpu_data[cpu];
-
-        if (!--data->prof_counter) {
-		data->prof_counter = data->prof_multiplier;
-		update_process_times(user_mode(regs));
-	}
-}
-
 /*
  * Called by secondaries to update state and initialize CPU registers.
  */
 static void __init
 smp_cpu_init(int cpunum)
 {
-	extern int init_per_cpu(int);  /* arch/parisc/kernel/setup.c */
+	extern int init_per_cpu(int);  /* arch/parisc/kernel/processor.c */
 	extern void init_IRQ(void);    /* arch/parisc/kernel/irq.c */
+	extern void start_cpu_itimer(void); /* arch/parisc/kernel/time.c */
 
 	/* Set modes and Enable floating point coprocessor */
 	(void) init_per_cpu(cpunum);
@@ -458,6 +448,7 @@ smp_cpu_init(int cpunum)
 	enter_lazy_tlb(&init_mm, current);
 
 	init_IRQ();   /* make sure no IRQ's are enabled or pending */
+	start_cpu_itimer();
 }
 
 
@@ -617,7 +608,7 @@ void smp_cpus_done(unsigned int cpu_max)
 }
 
 
-int __devinit __cpu_up(unsigned int cpu)
+int __cpuinit __cpu_up(unsigned int cpu)
 {
 	if (cpu != 0 && cpu < parisc_max_cpus)
 		smp_boot_one_cpu(cpu);

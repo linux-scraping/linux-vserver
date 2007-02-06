@@ -1,12 +1,9 @@
 #include <linux/kernel.h>
 #include <linux/slab.h>
-#include <linux/input.h>
 #include <linux/module.h>
 #include <linux/init.h>
-#include <linux/usb.h>
-#include <linux/usb_input.h>
+#include <linux/usb/input.h>
 #include <asm/unaligned.h>
-#include <asm/byteorder.h>
 
 /*
  * Version Information
@@ -44,7 +41,7 @@ struct kbtab {
 	char phys[32];
 };
 
-static void kbtab_irq(struct urb *urb, struct pt_regs *regs)
+static void kbtab_irq(struct urb *urb)
 {
 	struct kbtab *kbtab = urb->context;
 	unsigned char *data = kbtab->data;

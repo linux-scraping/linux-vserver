@@ -29,7 +29,7 @@
 #include <linux/kernel.h>	/* ARRAY_SIZE */
 #include <linux/wireless.h>
 
-#define IEEE80211_VERSION "git-1.1.7"
+#define IEEE80211_VERSION "git-1.1.13"
 
 #define IEEE80211_DATA_LEN		2304
 /* Maximum size for the MA-UNITDATA primitive, 802.11 standard section
@@ -103,6 +103,9 @@
 
 #define IEEE80211_SCTL_FRAG		0x000F
 #define IEEE80211_SCTL_SEQ		0xFFF0
+
+/* QOS control */
+#define IEEE80211_QCTL_TID		0x000F
 
 /* debug macros */
 
@@ -215,7 +218,7 @@ struct ieee80211_snap_hdr {
 #define WLAN_FC_GET_STYPE(fc) ((fc) & IEEE80211_FCTL_STYPE)
 
 #define WLAN_GET_SEQ_FRAG(seq) ((seq) & IEEE80211_SCTL_FRAG)
-#define WLAN_GET_SEQ_SEQ(seq)  ((seq) & IEEE80211_SCTL_SEQ)
+#define WLAN_GET_SEQ_SEQ(seq)  (((seq) & IEEE80211_SCTL_SEQ) >> 4)
 
 /* Authentication algorithms */
 #define WLAN_AUTH_OPEN 0
@@ -236,6 +239,11 @@ struct ieee80211_snap_hdr {
 #define WLAN_CAPABILITY_QOS (1<<9)
 #define WLAN_CAPABILITY_SHORT_SLOT_TIME (1<<10)
 #define WLAN_CAPABILITY_DSSS_OFDM (1<<13)
+
+/* 802.11g ERP information element */
+#define WLAN_ERP_NON_ERP_PRESENT (1<<0)
+#define WLAN_ERP_USE_PROTECTION (1<<1)
+#define WLAN_ERP_BARKER_PREAMBLE (1<<2)
 
 /* Status codes */
 enum ieee80211_statuscode {
@@ -744,6 +752,8 @@ struct ieee80211_txb {
 #define NETWORK_HAS_IBSS_DFS            (1<<8)
 #define NETWORK_HAS_TPC_REPORT          (1<<9)
 
+#define NETWORK_HAS_ERP_VALUE           (1<<10)
+
 #define QOS_QUEUE_NUM                   4
 #define QOS_OUI_LEN                     3
 #define QOS_OUI_TYPE                    2
@@ -965,6 +975,7 @@ enum ieee80211_state {
 
 enum {
 	IEEE80211_CH_PASSIVE_ONLY = (1 << 0),
+	IEEE80211_CH_80211H_RULES = (1 << 1),
 	IEEE80211_CH_B_ONLY = (1 << 2),
 	IEEE80211_CH_NO_IBSS = (1 << 3),
 	IEEE80211_CH_UNIFORM_SPREADING = (1 << 4),
@@ -973,10 +984,10 @@ enum {
 };
 
 struct ieee80211_channel {
-	u32 freq;
+	u32 freq;	/* in MHz */
 	u8 channel;
 	u8 flags;
-	u8 max_power;
+	u8 max_power;	/* in dBm */
 };
 
 struct ieee80211_geo {
@@ -1026,6 +1037,10 @@ struct ieee80211_device {
 	/* host performs multicast decryption */
 	int host_mc_decrypt;
 
+	/* host should strip IV and ICV from protected frames */
+	/* meaningful only when hardware decryption is being used */
+	int host_strip_iv_icv;
+
 	int host_open_frag;
 	int host_build_iv;
 	int ieee802_1x;		/* is IEEE 802.1X used */
@@ -1065,6 +1080,8 @@ struct ieee80211_device {
 	int perfect_rssi;
 	int worst_rssi;
 
+	u16 prev_seq_ctl;	/* used to drop duplicate frames */
+
 	/* Callback functions */
 	void (*set_security) (struct net_device * dev,
 			      struct ieee80211_security * sec);
@@ -1075,6 +1092,7 @@ struct ieee80211_device {
 
 	int (*handle_management) (struct net_device * dev,
 				  struct ieee80211_network * network, u16 type);
+	int (*is_qos_active) (struct net_device *dev, struct sk_buff *skb);
 
 	/* Typical STA methods */
 	int (*handle_auth) (struct net_device * dev,
@@ -1243,9 +1261,12 @@ extern int ieee80211_set_encryption(struct ieee80211_device *ieee);
 extern int ieee80211_xmit(struct sk_buff *skb, struct net_device *dev);
 extern void ieee80211_txb_free(struct ieee80211_txb *);
 extern int ieee80211_tx_frame(struct ieee80211_device *ieee,
-			      struct ieee80211_hdr *frame, int len);
+			      struct ieee80211_hdr *frame, int hdr_len,
+			      int total_len, int encrypt_mpdu);
 
 /* ieee80211_rx.c */
+extern void ieee80211_rx_any(struct ieee80211_device *ieee,
+		     struct sk_buff *skb, struct ieee80211_rx_stats *stats);
 extern int ieee80211_rx(struct ieee80211_device *ieee, struct sk_buff *skb,
 			struct ieee80211_rx_stats *rx_stats);
 /* make sure to set stats->len */

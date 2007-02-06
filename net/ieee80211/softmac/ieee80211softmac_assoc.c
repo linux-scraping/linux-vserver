@@ -47,10 +47,8 @@ ieee80211softmac_assoc(struct ieee80211softmac_device *mac, struct ieee80211soft
 	
 	dprintk(KERN_INFO PFX "sent association request!\n");
 
-	/* Change the state to associating */
 	spin_lock_irqsave(&mac->lock, flags);
-	mac->associnfo.associating = 1;
-	mac->associated = 0; /* just to make sure */
+	mac->associnfo.associated = 0; /* just to make sure */
 
 	/* Set a timer for timeout */
 	/* FIXME: make timeout configurable */
@@ -60,73 +58,76 @@ ieee80211softmac_assoc(struct ieee80211softmac_device *mac, struct ieee80211soft
 }
 
 void
-ieee80211softmac_assoc_timeout(void *d)
+ieee80211softmac_assoc_timeout(struct work_struct *work)
 {
-	struct ieee80211softmac_device *mac = (struct ieee80211softmac_device *)d;
+	struct ieee80211softmac_device *mac =
+		container_of(work, struct ieee80211softmac_device,
+			     associnfo.timeout.work);
+	struct ieee80211softmac_network *n;
+
+	mutex_lock(&mac->associnfo.mutex);
+	/* we might race against ieee80211softmac_handle_assoc_response,
+	 * so make sure only one of us does something */
+	if (!mac->associnfo.associating)
+		goto out;
+	mac->associnfo.associating = 0;
+	mac->associnfo.bssvalid = 0;
+	mac->associnfo.associated = 0;
+
+	n = ieee80211softmac_get_network_by_bssid_locked(mac, mac->associnfo.bssid);
+
+	dprintk(KERN_INFO PFX "assoc request timed out!\n");
+	ieee80211softmac_call_events(mac, IEEE80211SOFTMAC_EVENT_ASSOCIATE_TIMEOUT, n);
+out:
+	mutex_unlock(&mac->associnfo.mutex);
+}
+
+void
+ieee80211softmac_disassoc(struct ieee80211softmac_device *mac)
+{
 	unsigned long flags;
 
 	spin_lock_irqsave(&mac->lock, flags);
-	/* we might race against ieee80211softmac_handle_assoc_response,
-	 * so make sure only one of us does something */
-	if (!mac->associnfo.associating) {
-		spin_unlock_irqrestore(&mac->lock, flags);
-		return;
-	}
-	mac->associnfo.associating = 0;
-	mac->associnfo.bssvalid = 0;
-	mac->associated = 0;
-	spin_unlock_irqrestore(&mac->lock, flags);
+	if (mac->associnfo.associating)
+		cancel_delayed_work(&mac->associnfo.timeout);
 
-	dprintk(KERN_INFO PFX "assoc request timed out!\n");
-	/* FIXME: we need to know the network here. that requires a bit of restructuring */
-	ieee80211softmac_call_events(mac, IEEE80211SOFTMAC_EVENT_ASSOCIATE_TIMEOUT, NULL);
+	netif_carrier_off(mac->dev);
+
+	mac->associnfo.associated = 0;
+	mac->associnfo.bssvalid = 0;
+	mac->associnfo.associating = 0;
+	ieee80211softmac_init_bss(mac);
+	ieee80211softmac_call_events_locked(mac, IEEE80211SOFTMAC_EVENT_DISASSOCIATED, NULL);
+	spin_unlock_irqrestore(&mac->lock, flags);
 }
 
 /* Sends out a disassociation request to the desired AP */
-static void
-ieee80211softmac_disassoc(struct ieee80211softmac_device *mac, u16 reason)
+void
+ieee80211softmac_send_disassoc_req(struct ieee80211softmac_device *mac, u16 reason)
 {
-	unsigned long flags;
 	struct ieee80211softmac_network *found;
 
-	if (mac->associnfo.bssvalid && mac->associated) {
+	if (mac->associnfo.bssvalid && mac->associnfo.associated) {
 		found = ieee80211softmac_get_network_by_bssid(mac, mac->associnfo.bssid);
 		if (found)
 			ieee80211softmac_send_mgt_frame(mac, found, IEEE80211_STYPE_DISASSOC, reason);
-	} else if (mac->associnfo.associating) {
-		cancel_delayed_work(&mac->associnfo.timeout);
 	}
 
-	/* Change our state */
-	spin_lock_irqsave(&mac->lock, flags);
-	/* Do NOT clear bssvalid as that will break ieee80211softmac_assoc_work! */
-	mac->associated = 0;
-	mac->associnfo.associating = 0;
-	ieee80211softmac_call_events_locked(mac, IEEE80211SOFTMAC_EVENT_DISASSOCIATED, NULL);
-	spin_unlock_irqrestore(&mac->lock, flags);
+	ieee80211softmac_disassoc(mac);
 }
 
 static inline int
 we_support_all_basic_rates(struct ieee80211softmac_device *mac, u8 *from, u8 from_len)
 {
-	int idx, search, found;
-	u8 rate, search_rate;
+	int idx;
+	u8 rate;
 
 	for (idx = 0; idx < (from_len); idx++) {
 		rate = (from)[idx];
 		if (!(rate & IEEE80211_BASIC_RATE_MASK))
 			continue;
-		found = 0;
 		rate &= ~IEEE80211_BASIC_RATE_MASK;
-		for (search = 0; search < mac->ratesinfo.count; search++) {
-			search_rate = mac->ratesinfo.rates[search];
-			search_rate &= ~IEEE80211_BASIC_RATE_MASK;
-			if (rate == search_rate) {
-				found = 1;
-				break;
-			}
-		}
-		if (!found)
+		if (!ieee80211softmac_ratesinfo_rate_supported(&mac->ratesinfo, rate))
 			return 0;
 	}
 	return 1;
@@ -163,27 +164,54 @@ network_matches_request(struct ieee80211softmac_device *mac, struct ieee80211_ne
 }
 
 static void
-ieee80211softmac_assoc_notify(struct net_device *dev, void *context)
+ieee80211softmac_assoc_notify_scan(struct net_device *dev, int event_type, void *context)
 {
 	struct ieee80211softmac_device *mac = ieee80211_priv(dev);
-	ieee80211softmac_assoc_work((void*)mac);
+	ieee80211softmac_assoc_work(&mac->associnfo.work.work);
+}
+
+static void
+ieee80211softmac_assoc_notify_auth(struct net_device *dev, int event_type, void *context)
+{
+	struct ieee80211softmac_device *mac = ieee80211_priv(dev);
+
+	switch (event_type) {
+	case IEEE80211SOFTMAC_EVENT_AUTHENTICATED:
+		ieee80211softmac_assoc_work(&mac->associnfo.work.work);
+		break;
+	case IEEE80211SOFTMAC_EVENT_AUTH_FAILED:
+	case IEEE80211SOFTMAC_EVENT_AUTH_TIMEOUT:
+		ieee80211softmac_disassoc(mac);
+		break;
+	}
 }
 
 /* This function is called to handle userspace requests (asynchronously) */
 void
-ieee80211softmac_assoc_work(void *d)
+ieee80211softmac_assoc_work(struct work_struct *work)
 {
-	struct ieee80211softmac_device *mac = (struct ieee80211softmac_device *)d;
+	struct ieee80211softmac_device *mac =
+		container_of(work, struct ieee80211softmac_device,
+			     associnfo.work.work);
 	struct ieee80211softmac_network *found = NULL;
 	struct ieee80211_network *net = NULL, *best = NULL;
+	int bssvalid;
 	unsigned long flags;
-	
+
+	mutex_lock(&mac->associnfo.mutex);
+
+	if (!mac->associnfo.associating)
+		goto out;
+
+	/* ieee80211_disassoc might clear this */
+	bssvalid = mac->associnfo.bssvalid;
+
 	/* meh */
-	if (mac->associated)
-		ieee80211softmac_disassoc(mac, WLAN_REASON_DISASSOC_STA_HAS_LEFT);
+	if (mac->associnfo.associated)
+		ieee80211softmac_send_disassoc_req(mac, WLAN_REASON_DISASSOC_STA_HAS_LEFT);
 
 	/* try to find the requested network in our list, if we found one already */
-	if (mac->associnfo.bssvalid || mac->associnfo.bssfixed)
+	if (bssvalid || mac->associnfo.bssfixed)
 		found = ieee80211softmac_get_network_by_bssid(mac, mac->associnfo.bssid);	
 	
 	/* Search the ieee80211 networks for this network if we didn't find it by bssid,
@@ -235,31 +263,27 @@ ieee80211softmac_assoc_work(void *d)
 
 	if (!found) {
 		if (mac->associnfo.scan_retry > 0) {
-			spin_lock_irqsave(&mac->lock, flags);
 			mac->associnfo.scan_retry--;
-			spin_unlock_irqrestore(&mac->lock, flags);
-		
+
 			/* We know of no such network. Let's scan. 
 			 * NB: this also happens if we had no memory to copy the network info...
 			 * Maybe we can hope to have more memory after scanning finishes ;)
 			 */
 			dprintk(KERN_INFO PFX "Associate: Scanning for networks first.\n");
-			ieee80211softmac_notify(mac->dev, IEEE80211SOFTMAC_EVENT_SCAN_FINISHED, ieee80211softmac_assoc_notify, NULL);
+			ieee80211softmac_notify(mac->dev, IEEE80211SOFTMAC_EVENT_SCAN_FINISHED, ieee80211softmac_assoc_notify_scan, NULL);
 			if (ieee80211softmac_start_scan(mac))
 				dprintk(KERN_INFO PFX "Associate: failed to initiate scan. Is device up?\n");
-			return;
+			goto out;
 		} else {
-			spin_lock_irqsave(&mac->lock, flags);
 			mac->associnfo.associating = 0;
-			mac->associated = 0;
-			spin_unlock_irqrestore(&mac->lock, flags);
+			mac->associnfo.associated = 0;
 
 			dprintk(KERN_INFO PFX "Unable to find matching network after scan!\n");
 			/* reset the retry counter for the next user request since we
 			 * break out and don't reschedule ourselves after this point. */
 			mac->associnfo.scan_retry = IEEE80211SOFTMAC_ASSOC_SCAN_RETRY_LIMIT;
 			ieee80211softmac_call_events(mac, IEEE80211SOFTMAC_EVENT_ASSOCIATE_NET_NOT_FOUND, NULL);
-			return;
+			goto out;
 		}
 	}
 
@@ -272,22 +296,38 @@ ieee80211softmac_assoc_work(void *d)
 	/* copy the ESSID for displaying it */
 	mac->associnfo.associate_essid.len = found->essid.len;
 	memcpy(mac->associnfo.associate_essid.data, found->essid.data, IW_ESSID_MAX_SIZE + 1);
-	
+
 	/* we found a network! authenticate (if necessary) and associate to it. */
-	if (!found->authenticated) {
+	if (found->authenticating) {
+		dprintk(KERN_INFO PFX "Already requested authentication, waiting...\n");
+		if(!mac->associnfo.assoc_wait) {
+			mac->associnfo.assoc_wait = 1;
+			ieee80211softmac_notify_internal(mac, IEEE80211SOFTMAC_EVENT_ANY, found, ieee80211softmac_assoc_notify_auth, NULL, GFP_KERNEL);
+		}
+		goto out;
+	}
+	if (!found->authenticated && !found->authenticating) {
 		/* This relies on the fact that _auth_req only queues the work,
 		 * otherwise adding the notification would be racy. */
 		if (!ieee80211softmac_auth_req(mac, found)) {
-			dprintk(KERN_INFO PFX "cannot associate without being authenticated, requested authentication\n");
-			ieee80211softmac_notify_internal(mac, IEEE80211SOFTMAC_EVENT_ANY, found, ieee80211softmac_assoc_notify, NULL, GFP_KERNEL);
+			if(!mac->associnfo.assoc_wait) {
+				dprintk(KERN_INFO PFX "Cannot associate without being authenticated, requested authentication\n");
+				mac->associnfo.assoc_wait = 1;
+				ieee80211softmac_notify_internal(mac, IEEE80211SOFTMAC_EVENT_ANY, found, ieee80211softmac_assoc_notify_auth, NULL, GFP_KERNEL);
+			}
 		} else {
 			printkl(KERN_WARNING PFX "Not authenticated, but requesting authentication failed. Giving up to associate\n");
+			mac->associnfo.assoc_wait = 0;
 			ieee80211softmac_call_events(mac, IEEE80211SOFTMAC_EVENT_ASSOCIATE_FAILED, found);
 		}
-		return;
+		goto out;
 	}
 	/* finally! now we can start associating */
+	mac->associnfo.assoc_wait = 0;
 	ieee80211softmac_assoc(mac, found);
+
+out:
+	mutex_unlock(&mac->associnfo.mutex);
 }
 
 /* call this to do whatever is necessary when we're associated */
@@ -296,8 +336,19 @@ ieee80211softmac_associated(struct ieee80211softmac_device *mac,
 	struct ieee80211_assoc_response * resp,
 	struct ieee80211softmac_network *net)
 {
+	u16 cap = le16_to_cpu(resp->capability);
+	u8 erp_value = net->erp_value;
+
 	mac->associnfo.associating = 0;
-	mac->associated = 1;
+	mac->bssinfo.supported_rates = net->supported_rates;
+	ieee80211softmac_recalc_txrates(mac);
+
+	mac->associnfo.associated = 1;
+
+	mac->associnfo.short_preamble_available =
+		(cap & WLAN_CAPABILITY_SHORT_PREAMBLE) != 0;
+	ieee80211softmac_process_erp(mac, erp_value);
+
 	if (mac->set_bssid_filter)
 		mac->set_bssid_filter(mac->dev, net->bssid);
 	memcpy(mac->ieee->bssid, net->bssid, ETH_ALEN);
@@ -310,9 +361,9 @@ ieee80211softmac_associated(struct ieee80211softmac_device *mac,
 int
 ieee80211softmac_handle_assoc_response(struct net_device * dev,
 				       struct ieee80211_assoc_response * resp,
-				       struct ieee80211_network * _ieee80211_network_do_not_use)
+				       struct ieee80211_network * _ieee80211_network)
 {
-	/* NOTE: the network parameter has to be ignored by
+	/* NOTE: the network parameter has to be mostly ignored by
 	 *       this code because it is the ieee80211's pointer
 	 *       to the struct, not ours (we made a copy)
 	 */
@@ -344,6 +395,11 @@ ieee80211softmac_handle_assoc_response(struct net_device * dev,
 	/* now that we know it was for us, we can cancel the timeout */
 	cancel_delayed_work(&mac->associnfo.timeout);
 
+	/* if the association response included an ERP IE, update our saved
+	 * copy */
+	if (_ieee80211_network->flags & NETWORK_HAS_ERP_VALUE)
+		network->erp_value = _ieee80211_network->erp_value;
+
 	switch (status) {
 		case 0:
 			dprintk(KERN_INFO PFX "associated!\n");
@@ -360,14 +416,14 @@ ieee80211softmac_handle_assoc_response(struct net_device * dev,
 				network->authenticated = 0;
 				/* we don't want to do this more than once ... */
 				network->auth_desynced_once = 1;
-				schedule_work(&mac->associnfo.work);
+				schedule_delayed_work(&mac->associnfo.work, 0);
 				break;
 			}
 		default:
 			dprintk(KERN_INFO PFX "associating failed (reason: 0x%x)!\n", status);
 			mac->associnfo.associating = 0;
 			mac->associnfo.bssvalid = 0;
-			mac->associated = 0;
+			mac->associnfo.associated = 0;
 			ieee80211softmac_call_events_locked(mac, IEEE80211SOFTMAC_EVENT_ASSOCIATE_FAILED, network);
 	}
 	
@@ -375,12 +431,22 @@ ieee80211softmac_handle_assoc_response(struct net_device * dev,
 	return 0;
 }
 
+void
+ieee80211softmac_try_reassoc(struct ieee80211softmac_device *mac)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(&mac->lock, flags);
+	mac->associnfo.associating = 1;
+	schedule_delayed_work(&mac->associnfo.work, 0);
+	spin_unlock_irqrestore(&mac->lock, flags);
+}
+
 int
 ieee80211softmac_handle_disassoc(struct net_device * dev,
 				 struct ieee80211_disassoc *disassoc)
 {
 	struct ieee80211softmac_device *mac = ieee80211_priv(dev);
-	unsigned long flags;
 
 	if (unlikely(!mac->running))
 		return -ENODEV;
@@ -392,14 +458,10 @@ ieee80211softmac_handle_disassoc(struct net_device * dev,
 		return 0;
 
 	dprintk(KERN_INFO PFX "got disassoc frame\n");
-	netif_carrier_off(dev);
-	spin_lock_irqsave(&mac->lock, flags);
-	mac->associnfo.bssvalid = 0;
-	mac->associated = 0;
-	ieee80211softmac_call_events_locked(mac, IEEE80211SOFTMAC_EVENT_DISASSOCIATED, NULL);
-	schedule_work(&mac->associnfo.work);
-	spin_unlock_irqrestore(&mac->lock, flags);
-	
+	ieee80211softmac_disassoc(mac);
+
+	ieee80211softmac_try_reassoc(mac);
+
 	return 0;
 }
 
@@ -418,7 +480,7 @@ ieee80211softmac_handle_reassoc_req(struct net_device * dev,
 		dprintkl(KERN_INFO PFX "reassoc request from unknown network\n");
 		return 0;
 	}
-	schedule_work(&mac->associnfo.work);
+	schedule_delayed_work(&mac->associnfo.work, 0);
 
 	return 0;
 }

@@ -1,7 +1,7 @@
 /*!*****************************************************************************
 *!
-*!  Implements an interface for i2c compatible eeproms to run under linux.
-*!  Supports 2k, 8k(?) and 16k. Uses adaptive timing adjustents by
+*!  Implements an interface for i2c compatible eeproms to run under Linux.
+*!  Supports 2k, 8k(?) and 16k. Uses adaptive timing adjustments by
 *!  Johan.Adolfsson@axis.com
 *!
 *!  Probing results:
@@ -51,7 +51,7 @@
 *!  Revision 1.8  2001/06/15 13:24:29  jonashg
 *!  * Added verification of pointers from userspace in read and write.
 *!  * Made busy counter volatile.
-*!  * Added define for inital write delay.
+*!  * Added define for initial write delay.
 *!  * Removed warnings by using loff_t instead of unsigned long.
 *!
 *!  Revision 1.7  2001/06/14 15:26:54  jonashg
@@ -93,7 +93,6 @@
 *!        (c) 1999 Axis Communications AB, Lund, Sweden
 *!*****************************************************************************/
 
-#include <linux/config.h>
 #include <linux/kernel.h>
 #include <linux/sched.h>
 #include <linux/fs.h>
@@ -451,9 +450,9 @@ int __init eeprom_init(void)
 static int eeprom_open(struct inode * inode, struct file * file)
 {
 
-  if(MINOR(inode->i_rdev) != EEPROM_MINOR_NR)
+  if(iminor(inode) != EEPROM_MINOR_NR)
      return -ENXIO;
-  if(MAJOR(inode->i_rdev) != EEPROM_MAJOR_NR)
+  if(imajor(inode) != EEPROM_MAJOR_NR)
      return -ENXIO;
 
   if( eeprom.size > 0 )

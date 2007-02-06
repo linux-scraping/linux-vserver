@@ -32,7 +32,6 @@
  *
  */
  
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/types.h>
 #include <linux/kernel.h>
@@ -261,7 +260,7 @@ static struct pci_driver driver = {
 	.probe		= cs5520_init_one,
 };
 
-static int cs5520_ide_init(void)
+static int __init cs5520_ide_init(void)
 {
 	return ide_pci_register_driver(&driver);
 }

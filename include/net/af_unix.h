@@ -1,10 +1,10 @@
 #ifndef __LINUX_NET_AFUNIX_H
 #define __LINUX_NET_AFUNIX_H
 
-#include <linux/config.h>
 #include <linux/socket.h>
 #include <linux/un.h>
 #include <linux/mutex.h>
+#include <linux/vs_base.h>
 #include <net/sock.h>
 
 extern void unix_inflight(struct file *fp);
@@ -34,7 +34,7 @@ static inline struct sock *next_unix_socket(int *i, struct sock *s)
 			s = sk_next(s);
 		if (!s)
 			s = next_unix_socket_table(i);
-	} while (s && !vx_check(s->sk_xid, VX_IDENT|VX_WATCH));
+	} while (s && !nx_check(s->sk_nid, VS_WATCH_P|VS_IDENT));
 	return s;
 }
 
@@ -57,14 +57,21 @@ struct unix_address {
 struct unix_skb_parms {
 	struct ucred		creds;		/* Skb credentials	*/
 	struct scm_fp_list	*fp;		/* Passed files		*/
+#ifdef CONFIG_SECURITY_NETWORK
+	u32			secid;		/* Security ID		*/
+#endif
 };
 
 #define UNIXCB(skb) 	(*(struct unix_skb_parms*)&((skb)->cb))
 #define UNIXCREDS(skb)	(&UNIXCB((skb)).creds)
+#define UNIXSID(skb)	(&UNIXCB((skb)).secid)
 
 #define unix_state_rlock(s)	spin_lock(&unix_sk(s)->lock)
 #define unix_state_runlock(s)	spin_unlock(&unix_sk(s)->lock)
 #define unix_state_wlock(s)	spin_lock(&unix_sk(s)->lock)
+#define unix_state_wlock_nested(s) \
+				spin_lock_nested(&unix_sk(s)->lock, \
+				SINGLE_DEPTH_NESTING)
 #define unix_state_wunlock(s)	spin_unlock(&unix_sk(s)->lock)
 
 #ifdef __KERNEL__

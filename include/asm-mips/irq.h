@@ -9,7 +9,6 @@
 #ifndef _ASM_IRQ_H
 #define _ASM_IRQ_H
 
-#include <linux/config.h>
 #include <linux/linkage.h>
 
 #include <asm/mipsmtregs.h>
@@ -25,10 +24,6 @@ static inline int irq_canonicalize(int irq)
 #define irq_canonicalize(irq) (irq)	/* Sane hardware, sane code ... */
 #endif
 
-struct pt_regs;
-
-extern asmlinkage unsigned int do_IRQ(unsigned int irq, struct pt_regs *regs);
-
 #ifdef CONFIG_MIPS_MT_SMTC
 /*
  * Clear interrupt mask handling "backstop" if irq_hwmask
@@ -36,17 +31,15 @@ extern asmlinkage unsigned int do_IRQ(unsigned int irq, struct pt_regs *regs);
  * functions will take over re-enabling the low-level mask.
  * Otherwise it will be done on return from exception.
  */
-#define __DO_IRQ_SMTC_HOOK()						\
+#define __DO_IRQ_SMTC_HOOK(irq)						\
 do {									\
 	if (irq_hwmask[irq] & 0x0000ff00)				\
 		write_c0_tccontext(read_c0_tccontext() &		\
 		                   ~(irq_hwmask[irq] & 0x0000ff00));	\
 } while (0)
 #else
-#define __DO_IRQ_SMTC_HOOK() do { } while (0)
+#define __DO_IRQ_SMTC_HOOK(irq) do { } while (0)
 #endif
-
-#ifdef CONFIG_PREEMPT
 
 /*
  * do_IRQ handles all normal device IRQ's (the special
@@ -56,18 +49,16 @@ do {									\
  * Ideally there should be away to get this into kernel/irq/handle.c to
  * avoid the overhead of a call for just a tiny function ...
  */
-#define do_IRQ(irq, regs)						\
+#define do_IRQ(irq)							\
 do {									\
 	irq_enter();							\
-	__DO_IRQ_SMTC_HOOK();						\
-	__do_IRQ((irq), (regs));					\
+	__DO_IRQ_SMTC_HOOK(irq);					\
+	generic_handle_irq(irq);					\
 	irq_exit();							\
 } while (0)
 
-#endif
-
 extern void arch_init_irq(void);
-extern void spurious_interrupt(struct pt_regs *regs);
+extern void spurious_interrupt(void);
 
 #ifdef CONFIG_MIPS_MT_SMTC
 struct irqaction;
@@ -76,5 +67,9 @@ extern unsigned long irq_hwmask[];
 extern int setup_irq_smtc(unsigned int irq, struct irqaction * new,
                           unsigned long hwmask);
 #endif /* CONFIG_MIPS_MT_SMTC */
+
+extern int allocate_irqno(void);
+extern void alloc_legacy_irqno(void);
+extern void free_irqno(unsigned int irq);
 
 #endif /* _ASM_IRQ_H */

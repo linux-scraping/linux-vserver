@@ -90,10 +90,9 @@ asn1_bitstring_len(struct xdr_netobj *in, int *enclen, int *zerobits)
 int
 decode_asn1_bitstring(struct xdr_netobj *out, char *in, int enclen, int explen)
 {
-	if (!(out->data = kmalloc(explen,GFP_KERNEL)))
+	if (!(out->data = kzalloc(explen,GFP_KERNEL)))
 		return 0;
 	out->len = explen;
-	memset(out->data, 0, explen);
 	memcpy(out->data, in, enclen);
 	return 1;
 }
@@ -173,10 +172,10 @@ spkm3_mic_header(unsigned char **hdrbuf, unsigned int *hdrlen, unsigned char *ct
 	*(u8 *)hptr++ = zbit;
 	memcpy(hptr, ctxdata, elen);
 	hptr += elen;
-	*hdrlen = hptr - top; 
+	*hdrlen = hptr - top;
 }
-		
-/* 
+
+/*
  * spkm3_mic_innercontext_token()
  *
  * *tokp points to the beginning of the SPKM_MIC token  described 

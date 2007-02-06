@@ -12,18 +12,14 @@
  *	<tomsoft@informatik.tu-chemnitz.de>
  *
  *	hacked by Andi Kleen for x86-64.
- * 
- *  $Id: hw_irq.h,v 1.24 2001/09/14 20:55:03 vojtech Exp $
  */
 
 #ifndef __ASSEMBLY__
-#include <linux/config.h>
 #include <asm/atomic.h>
 #include <asm/irq.h>
 #include <linux/profile.h>
 #include <linux/smp.h>
-
-struct hw_interrupt_type;
+#include <linux/percpu.h>
 #endif
 
 #define NMI_VECTOR		0x02
@@ -78,9 +74,10 @@ struct hw_interrupt_type;
 
 
 #ifndef __ASSEMBLY__
-extern u8 irq_vector[NR_IRQ_VECTORS];
-#define IO_APIC_VECTOR(irq)	(irq_vector[irq])
-#define AUTO_ASSIGN		-1
+typedef int vector_irq_t[NR_VECTORS];
+DECLARE_PER_CPU(vector_irq_t, vector_irq);
+extern void __setup_vector_irq(int cpu);
+extern spinlock_t vector_lock;
 
 /*
  * Various low-level irq details needed by irq.c, process.c,
@@ -127,17 +124,8 @@ asmlinkage void IRQ_NAME(nr); \
 __asm__( \
 "\n.p2align\n" \
 "IRQ" #nr "_interrupt:\n\t" \
-	"push $" #nr "-256 ; " \
+	"push $~(" #nr ") ; " \
 	"jmp common_interrupt");
-
-#if defined(CONFIG_X86_IO_APIC)
-static inline void hw_resend_irq(struct hw_interrupt_type *h, unsigned int i) {
-	if (IO_APIC_IRQ(i))
-		send_IPI_self(IO_APIC_VECTOR(i));
-}
-#else
-static inline void hw_resend_irq(struct hw_interrupt_type *h, unsigned int i) {}
-#endif
 
 #define platform_legacy_irq(irq)	((irq) < 16)
 

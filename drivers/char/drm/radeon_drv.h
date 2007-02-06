@@ -38,7 +38,7 @@
 
 #define DRIVER_NAME		"radeon"
 #define DRIVER_DESC		"ATI Radeon"
-#define DRIVER_DATE		"20060225"
+#define DRIVER_DATE		"20060524"
 
 /* Interface history:
  *
@@ -93,9 +93,11 @@
  * 1.22- Add support for texture cache flushes (R300_TX_CNTL)
  * 1.23- Add new radeon memory map work from benh
  * 1.24- Add general-purpose packet for manipulating scratch registers (r300)
+ * 1.25- Add support for r200 vertex programs (R200_EMIT_VAP_PVS_CNTL,
+ *       new packet type)
  */
 #define DRIVER_MAJOR		1
-#define DRIVER_MINOR		24
+#define DRIVER_MINOR		25
 #define DRIVER_PATCHLEVEL	0
 
 /*
@@ -131,15 +133,16 @@ enum radeon_cp_microcode_version {
  * Chip flags
  */
 enum radeon_chip_flags {
-	CHIP_FAMILY_MASK = 0x0000ffffUL,
-	CHIP_FLAGS_MASK = 0xffff0000UL,
-	CHIP_IS_MOBILITY = 0x00010000UL,
-	CHIP_IS_IGP = 0x00020000UL,
-	CHIP_SINGLE_CRTC = 0x00040000UL,
-	CHIP_IS_AGP = 0x00080000UL,
-	CHIP_HAS_HIERZ = 0x00100000UL,
-	CHIP_IS_PCIE = 0x00200000UL,
-	CHIP_NEW_MEMMAP = 0x00400000UL,
+	RADEON_FAMILY_MASK = 0x0000ffffUL,
+	RADEON_FLAGS_MASK = 0xffff0000UL,
+	RADEON_IS_MOBILITY = 0x00010000UL,
+	RADEON_IS_IGP = 0x00020000UL,
+	RADEON_SINGLE_CRTC = 0x00040000UL,
+	RADEON_IS_AGP = 0x00080000UL,
+	RADEON_HAS_HIERZ = 0x00100000UL,
+	RADEON_IS_PCIE = 0x00200000UL,
+	RADEON_NEW_MEMMAP = 0x00400000UL,
+	RADEON_IS_PCI = 0x00800000UL,
 };
 
 #define GET_RING_HEAD(dev_priv)	(dev_priv->writeback_works ? \
@@ -300,6 +303,21 @@ extern int radeon_no_wb;
 extern drm_ioctl_desc_t radeon_ioctls[];
 extern int radeon_max_ioctl;
 
+/* Check whether the given hardware address is inside the framebuffer or the
+ * GART area.
+ */
+static __inline__ int radeon_check_offset(drm_radeon_private_t *dev_priv,
+					  u64 off)
+{
+	u32 fb_start = dev_priv->fb_location;
+	u32 fb_end = fb_start + dev_priv->fb_size - 1;
+	u32 gart_start = dev_priv->gart_vm_start;
+	u32 gart_end = gart_start + dev_priv->gart_size - 1;
+
+	return ((off >= fb_start && off <= fb_end) ||
+		(off >= gart_start && off <= gart_end));
+}
+
 				/* radeon_cp.c */
 extern int radeon_cp_init(DRM_IOCTL_ARGS);
 extern int radeon_cp_start(DRM_IOCTL_ARGS);
@@ -422,6 +440,8 @@ extern int r300_do_cp_cmdbuf(drm_device_t * dev, DRMFILE filp,
 #define RADEON_RB3D_COLOROFFSET		0x1c40
 #define RADEON_RB3D_COLORPITCH		0x1c48
 
+#define	RADEON_SRC_X_Y			0x1590
+
 #define RADEON_DP_GUI_MASTER_CNTL	0x146c
 #	define RADEON_GMC_SRC_PITCH_OFFSET_CNTL	(1 << 0)
 #	define RADEON_GMC_DST_PITCH_OFFSET_CNTL	(1 << 1)
@@ -439,6 +459,7 @@ extern int r300_do_cp_cmdbuf(drm_device_t * dev, DRMFILE filp,
 #	define RADEON_ROP3_S			0x00cc0000
 #	define RADEON_ROP3_P			0x00f00000
 #define RADEON_DP_WRITE_MASK		0x16cc
+#define RADEON_SRC_PITCH_OFFSET		0x1428
 #define RADEON_DST_PITCH_OFFSET		0x142c
 #define RADEON_DST_PITCH_OFFSET_C	0x1c80
 #	define RADEON_DST_TILE_LINEAR		(0 << 30)
@@ -543,6 +564,11 @@ extern int r300_do_cp_cmdbuf(drm_device_t * dev, DRMFILE filp,
 #	define RADEON_RB3D_ZC_FREE		(1 << 2)
 #	define RADEON_RB3D_ZC_FLUSH_ALL		0x5
 #	define RADEON_RB3D_ZC_BUSY		(1 << 31)
+#define RADEON_RB3D_DSTCACHE_CTLSTAT	0x325c
+#	define RADEON_RB3D_DC_FLUSH		(3 << 0)
+#	define RADEON_RB3D_DC_FREE		(3 << 2)
+#	define RADEON_RB3D_DC_FLUSH_ALL		0xf
+#	define RADEON_RB3D_DC_BUSY		(1 << 31)
 #define RADEON_RB3D_ZSTENCILCNTL	0x1c2c
 #	define RADEON_Z_TEST_MASK		(7 << 4)
 #	define RADEON_Z_TEST_ALWAYS		(7 << 4)
@@ -679,6 +705,7 @@ extern int r300_do_cp_cmdbuf(drm_device_t * dev, DRMFILE filp,
 #define RADEON_CP_RB_BASE		0x0700
 #define RADEON_CP_RB_CNTL		0x0704
 #	define RADEON_BUF_SWAP_32BIT		(2 << 16)
+#	define RADEON_RB_NO_UPDATE		(1 << 27)
 #define RADEON_CP_RB_RPTR_ADDR		0x070c
 #define RADEON_CP_RB_RPTR		0x0710
 #define RADEON_CP_RB_WPTR		0x0714
@@ -884,6 +911,8 @@ extern int r300_do_cp_cmdbuf(drm_device_t * dev, DRMFILE filp,
 #define RADEON_PP_CUBIC_OFFSET_T1_0         0x1e00
 #define RADEON_PP_CUBIC_OFFSET_T2_0         0x1e14
 
+#define RADEON_SE_TCL_STATE_FLUSH           0x2284
+
 #define SE_VAP_CNTL__TCL_ENA_MASK                          0x00000001
 #define SE_VAP_CNTL__FORCE_W_TO_ONE_MASK                   0x00010000
 #define SE_VAP_CNTL__VF_MAX_VTX_NUM__SHIFT                 0x00000012
@@ -904,6 +933,8 @@ extern int r300_do_cp_cmdbuf(drm_device_t * dev, DRMFILE filp,
 
 #define R200_PP_AFS_0                     0x2f80
 #define R200_PP_AFS_1                     0x2f00	/* same as txcblend_0 */
+
+#define R200_VAP_PVS_CNTL_1               0x22D0
 
 /* Constants */
 #define RADEON_MAX_USEC_TIMEOUT		100000	/* 100 ms */
@@ -980,13 +1011,13 @@ do {									\
 } while (0)
 
 #define RADEON_FLUSH_CACHE() do {					\
-	OUT_RING( CP_PACKET0( RADEON_RB2D_DSTCACHE_CTLSTAT, 0 ) );	\
-	OUT_RING( RADEON_RB2D_DC_FLUSH );				\
+	OUT_RING( CP_PACKET0( RADEON_RB3D_DSTCACHE_CTLSTAT, 0 ) );	\
+	OUT_RING( RADEON_RB3D_DC_FLUSH );				\
 } while (0)
 
 #define RADEON_PURGE_CACHE() do {					\
-	OUT_RING( CP_PACKET0( RADEON_RB2D_DSTCACHE_CTLSTAT, 0 ) );	\
-	OUT_RING( RADEON_RB2D_DC_FLUSH_ALL );				\
+	OUT_RING( CP_PACKET0( RADEON_RB3D_DSTCACHE_CTLSTAT, 0 ) );	\
+	OUT_RING( RADEON_RB3D_DC_FLUSH_ALL );				\
 } while (0)
 
 #define RADEON_FLUSH_ZCACHE() do {					\

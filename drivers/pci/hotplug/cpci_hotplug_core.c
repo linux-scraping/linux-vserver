@@ -25,17 +25,16 @@
  * Send feedback to <scottm@somanetworks.com>
  */
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/slab.h>
 #include <linux/pci.h>
+#include <linux/pci_hotplug.h>
 #include <linux/init.h>
 #include <linux/interrupt.h>
 #include <linux/smp_lock.h>
 #include <asm/atomic.h>
 #include <linux/delay.h>
-#include "pci_hotplug.h"
 #include "cpci_hotplug.h"
 
 #define DRIVER_AUTHOR	"Scott Murray <scottm@somanetworks.com>"
@@ -343,12 +342,12 @@ cpci_hp_unregister_bus(struct pci_bus *bus)
 
 /* This is the interrupt mode interrupt handler */
 static irqreturn_t
-cpci_hp_intr(int irq, void *data, struct pt_regs *regs)
+cpci_hp_intr(int irq, void *data)
 {
 	dbg("entered cpci_hp_intr");
 
 	/* Check to see if it was our interrupt */
-	if ((controller->irq_flags & SA_SHIRQ) &&
+	if ((controller->irq_flags & IRQF_SHARED) &&
 	    !controller->ops->check_irq(controller->dev_id)) {
 		dbg("exited cpci_hp_intr, not our interrupt");
 		return IRQ_NONE;

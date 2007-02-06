@@ -123,6 +123,26 @@ static void __init dmi_save_devices(struct dmi_header *dm)
 		dev->type = *d++ & 0x7f;
 		dev->name = dmi_string(dm, *d);
 		dev->device_data = NULL;
+		list_add(&dev->list, &dmi_devices);
+	}
+}
+
+static void __init dmi_save_oem_strings_devices(struct dmi_header *dm)
+{
+	int i, count = *(u8 *)(dm + 1);
+	struct dmi_device *dev;
+
+	for (i = 1; i <= count; i++) {
+		dev = dmi_alloc(sizeof(*dev));
+		if (!dev) {
+			printk(KERN_ERR
+			   "dmi_save_oem_strings_devices: out of memory.\n");
+			break;
+		}
+
+		dev->type = DMI_DEV_TYPE_OEM_STRING;
+		dev->name = dmi_string(dm, i);
+		dev->device_data = NULL;
 
 		list_add(&dev->list, &dmi_devices);
 	}
@@ -180,6 +200,9 @@ static void __init dmi_decode(struct dmi_header *dm)
 		break;
 	case 10:	/* Onboard Devices Information */
 		dmi_save_devices(dm);
+		break;
+	case 11:	/* OEM Strings */
+		dmi_save_oem_strings_devices(dm);
 		break;
 	case 38:	/* IPMI Device Information */
 		dmi_save_ipmi_device(dm);
@@ -255,10 +278,15 @@ void __init dmi_scan_machine(void)
 /**
  *	dmi_check_system - check system DMI data
  *	@list: array of dmi_system_id structures to match against
+ *		All non-null elements of the list must match
+ *		their slot's (field index's) data (i.e., each
+ *		list string must be a substring of the specified
+ *		DMI slot's string data) to be considered a
+ *		successful match.
  *
  *	Walk the blacklist table running matching functions until someone
  *	returns non zero or we hit the end. Callback function is called for
- *	each successfull match. Returns the number of matches.
+ *	each successful match. Returns the number of matches.
  */
 int dmi_check_system(struct dmi_system_id *list)
 {
@@ -287,7 +315,7 @@ EXPORT_SYMBOL(dmi_check_system);
 
 /**
  *	dmi_get_system_info - return DMI data value
- *	@field: data index (see enum dmi_filed)
+ *	@field: data index (see enum dmi_field)
  *
  *	Returns one DMI data value, can be used to perform
  *	complex DMI data checks.
@@ -298,16 +326,36 @@ char *dmi_get_system_info(int field)
 }
 EXPORT_SYMBOL(dmi_get_system_info);
 
+
+/**
+ *	dmi_name_in_vendors - Check if string is anywhere in the DMI vendor information.
+ *	@str: 	Case sensitive Name
+ */
+int dmi_name_in_vendors(char *str)
+{
+	static int fields[] = { DMI_BIOS_VENDOR, DMI_BIOS_VERSION, DMI_SYS_VENDOR,
+				DMI_PRODUCT_NAME, DMI_PRODUCT_VERSION, DMI_BOARD_VENDOR,
+				DMI_BOARD_NAME, DMI_BOARD_VERSION, DMI_NONE };
+	int i;
+	for (i = 0; fields[i] != DMI_NONE; i++) {
+		int f = fields[i];
+		if (dmi_ident[f] && strstr(dmi_ident[f], str))
+			return 1;
+	}
+	return 0;
+}
+EXPORT_SYMBOL(dmi_name_in_vendors);
+
 /**
  *	dmi_find_device - find onboard device by type/name
  *	@type: device type or %DMI_DEV_TYPE_ANY to match all device types
- *	@desc: device name string or %NULL to match all
+ *	@name: device name string or %NULL to match all
  *	@from: previous device found in search, or %NULL for new search.
  *
  *	Iterates through the list of known onboard devices. If a device is
  *	found with a matching @vendor and @device, a pointer to its device
  *	structure is returned.  Otherwise, %NULL is returned.
- *	A new search is initiated by passing %NULL to the @from argument.
+ *	A new search is initiated by passing %NULL as the @from argument.
  *	If @from is not %NULL, searches continue from next device.
  */
 struct dmi_device * dmi_find_device(int type, const char *name,

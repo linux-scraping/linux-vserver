@@ -6,7 +6,6 @@
  * Copyright (C) 2000, 2001 Keith M Wesolowski
  * Copyright (C) 2004 by Ralf Baechle (ralf@linux-mips.org)
  */
-#include <linux/config.h>
 #include <linux/kernel.h>
 #include <linux/init.h>
 #include <linux/interrupt.h>
@@ -23,7 +22,7 @@
  * registered on the bridge error irq.  It's conceivable that some of these
  * conditions warrant a panic.  Anybody care to say which ones?
  */
-static irqreturn_t macepci_error(int irq, void *dev, struct pt_regs *regs)
+static irqreturn_t macepci_error(int irq, void *dev)
 {
 	char s;
 	unsigned int flags = mace->pci.error;

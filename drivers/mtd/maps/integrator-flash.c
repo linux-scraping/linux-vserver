@@ -26,7 +26,6 @@
 
 ======================================================================*/
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/types.h>
 #include <linux/kernel.h>
@@ -76,13 +75,11 @@ static int armflash_probe(struct platform_device *dev)
 	int err;
 	void __iomem *base;
 
-	info = kmalloc(sizeof(struct armflash_info), GFP_KERNEL);
+	info = kzalloc(sizeof(struct armflash_info), GFP_KERNEL);
 	if (!info) {
 		err = -ENOMEM;
 		goto out;
 	}
-
-	memset(info, 0, sizeof(struct armflash_info));
 
 	info->plat = plat;
 	if (plat && plat->init) {

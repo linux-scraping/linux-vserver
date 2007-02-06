@@ -35,7 +35,7 @@ static inline struct hostfs_inode_info *HOSTFS_I(struct inode *inode)
 	return(list_entry(inode, struct hostfs_inode_info, vfs_inode));
 }
 
-#define FILE_HOSTFS_I(file) HOSTFS_I((file)->f_dentry->d_inode)
+#define FILE_HOSTFS_I(file) HOSTFS_I((file)->f_path.dentry->d_inode)
 
 int hostfs_d_delete(struct dentry *dentry)
 {
@@ -54,7 +54,7 @@ static int append = 0;
 
 static struct inode_operations hostfs_iops;
 static struct inode_operations hostfs_dir_iops;
-static struct address_space_operations hostfs_link_aops;
+static const struct address_space_operations hostfs_link_aops;
 
 #ifndef MODULE
 static int __init hostfs_args(char *options, int *add)
@@ -156,7 +156,6 @@ static int read_name(struct inode *ino, char *name)
 	ino->i_mode = i_mode;
 	ino->i_nlink = i_nlink;
 	ino->i_size = i_size;
-	ino->i_blksize = i_blksize;
 	ino->i_blocks = i_blocks;
 	return(0);
 }
@@ -239,7 +238,7 @@ static int read_inode(struct inode *ino)
 	return(err);
 }
 
-int hostfs_statfs(struct super_block *sb, struct kstatfs *sf)
+int hostfs_statfs(struct dentry *dentry, struct kstatfs *sf)
 {
 	/* do_statfs uses struct statfs64 internally, but the linux kernel
 	 * struct statfs still has 32-bit versions for most of these fields,
@@ -252,7 +251,7 @@ int hostfs_statfs(struct super_block *sb, struct kstatfs *sf)
 	long long f_files;
 	long long f_ffree;
 
-	err = do_statfs(HOSTFS_I(sb->s_root->d_inode)->host_filename,
+	err = do_statfs(HOSTFS_I(dentry->d_sb->s_root->d_inode)->host_filename,
 			&sf->f_bsize, &f_blocks, &f_bfree, &f_bavail, &f_files,
 			&f_ffree, &sf->f_fsid, sizeof(sf->f_fsid),
 			&sf->f_namelen, sf->f_spare);
@@ -326,7 +325,7 @@ int hostfs_readdir(struct file *file, void *ent, filldir_t filldir)
 	unsigned long long next, ino;
 	int error, len;
 
-	name = dentry_name(file->f_dentry, 0);
+	name = dentry_name(file->f_path.dentry, 0);
 	if(name == NULL) return(-ENOMEM);
 	dir = open_dir(name, &error);
 	kfree(name);
@@ -367,7 +366,7 @@ int hostfs_file_open(struct inode *ino, struct file *file)
 	if(w)
 		r = 1;
 
-	name = dentry_name(file->f_dentry, 0);
+	name = dentry_name(file->f_path.dentry, 0);
 	if(name == NULL)
 		return(-ENOMEM);
 
@@ -386,13 +385,11 @@ int hostfs_fsync(struct file *file, struct dentry *dentry, int datasync)
 
 static const struct file_operations hostfs_file_fops = {
 	.llseek		= generic_file_llseek,
-	.read		= generic_file_read,
+	.read		= do_sync_read,
 	.sendfile	= generic_file_sendfile,
 	.aio_read	= generic_file_aio_read,
 	.aio_write	= generic_file_aio_write,
-	.readv		= generic_file_readv,
-	.writev		= generic_file_writev,
-	.write		= generic_file_write,
+	.write		= do_sync_write,
 	.mmap		= generic_file_mmap,
 	.open		= hostfs_file_open,
 	.release	= NULL,
@@ -518,7 +515,7 @@ int hostfs_commit_write(struct file *file, struct page *page, unsigned from,
 	return(err);
 }
 
-static struct address_space_operations hostfs_aops = {
+static const struct address_space_operations hostfs_aops = {
 	.writepage 	= hostfs_writepage,
 	.readpage	= hostfs_readpage,
 	.set_page_dirty = __set_page_dirty_nobuffers,
@@ -758,7 +755,7 @@ int hostfs_mknod(struct inode *dir, struct dentry *dentry, int mode, dev_t dev)
 		goto out_put;
 
 	init_special_inode(inode, mode, dev);
-	err = do_mknod(name, mode, dev);
+	err = do_mknod(name, mode, MAJOR(dev), MINOR(dev));
 	if(err)
 		goto out_free;
 
@@ -935,7 +932,7 @@ int hostfs_link_readpage(struct file *file, struct page *page)
 	return(err);
 }
 
-static struct address_space_operations hostfs_link_aops = {
+static const struct address_space_operations hostfs_link_aops = {
 	.readpage	= hostfs_link_readpage,
 };
 
@@ -993,11 +990,11 @@ static int hostfs_fill_sb_common(struct super_block *sb, void *d, int silent)
 	return(err);
 }
 
-static struct super_block *hostfs_read_sb(struct file_system_type *type,
-					     int flags, const char *dev_name,
-					     void *data)
+static int hostfs_read_sb(struct file_system_type *type,
+			  int flags, const char *dev_name,
+			  void *data, struct vfsmount *mnt)
 {
-	return(get_sb_nodev(type, flags, data, hostfs_fill_sb_common));
+	return get_sb_nodev(type, flags, data, hostfs_fill_sb_common, mnt);
 }
 
 static struct file_system_type hostfs_type = {

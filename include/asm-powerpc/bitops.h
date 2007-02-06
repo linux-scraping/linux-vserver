@@ -65,8 +65,8 @@ static __inline__ void set_bit(int nr, volatile unsigned long *addr)
 	PPC405_ERR77(0,%3)
 	PPC_STLCX "%0,0,%3\n"
 	"bne-	1b"
-	: "=&r"(old), "=m"(*p)
-	: "r"(mask), "r"(p), "m"(*p)
+	: "=&r" (old), "+m" (*p)
+	: "r" (mask), "r" (p)
 	: "cc" );
 }
 
@@ -82,8 +82,8 @@ static __inline__ void clear_bit(int nr, volatile unsigned long *addr)
 	PPC405_ERR77(0,%3)
 	PPC_STLCX "%0,0,%3\n"
 	"bne-	1b"
-	: "=&r"(old), "=m"(*p)
-	: "r"(mask), "r"(p), "m"(*p)
+	: "=&r" (old), "+m" (*p)
+	: "r" (mask), "r" (p)
 	: "cc" );
 }
 
@@ -99,8 +99,8 @@ static __inline__ void change_bit(int nr, volatile unsigned long *addr)
 	PPC405_ERR77(0,%3)
 	PPC_STLCX "%0,0,%3\n"
 	"bne-	1b"
-	: "=&r"(old), "=m"(*p)
-	: "r"(mask), "r"(p), "m"(*p)
+	: "=&r" (old), "+m" (*p)
+	: "r" (mask), "r" (p)
 	: "cc" );
 }
 
@@ -179,8 +179,8 @@ static __inline__ void set_bits(unsigned long mask, unsigned long *addr)
 	"or	%0,%0,%2\n"
 	PPC_STLCX "%0,0,%3\n"
 	"bne-	1b"
-	: "=&r" (old), "=m" (*addr)
-	: "r" (mask), "r" (addr), "m" (*addr)
+	: "=&r" (old), "+m" (*addr)
+	: "r" (mask), "r" (addr)
 	: "cc");
 }
 
@@ -190,13 +190,32 @@ static __inline__ void set_bits(unsigned long mask, unsigned long *addr)
  * Return the zero-based bit position (LE, not IBM bit numbering) of
  * the most significant 1-bit in a double word.
  */
-static __inline__ int __ilog2(unsigned long x)
+static __inline__ __attribute__((const))
+int __ilog2(unsigned long x)
 {
 	int lz;
 
 	asm (PPC_CNTLZL "%0,%1" : "=r" (lz) : "r" (x));
 	return BITS_PER_LONG - 1 - lz;
 }
+
+static inline __attribute__((const))
+int __ilog2_u32(u32 n)
+{
+	int bit;
+	asm ("cntlzw %0,%1" : "=r" (bit) : "r" (n));
+	return 31 - bit;
+}
+
+#ifdef __powerpc64__
+static inline __attribute__((const))
+int __ilog2_u64(u64 n)
+{
+	int bit;
+	asm ("cntlzd %0,%1" : "=r" (bit) : "r" (n));
+	return 63 - bit;
+}
+#endif
 
 /*
  * Determines the bit position of the least significant 0 bit in the
@@ -288,8 +307,8 @@ static __inline__ int test_le_bit(unsigned long nr,
 #define __test_and_clear_le_bit(nr, addr) \
 	__test_and_clear_bit((nr) ^ BITOP_LE_SWIZZLE, (addr))
 
-#define find_first_zero_le_bit(addr, size) find_next_zero_le_bit((addr), (size), 0)
-unsigned long find_next_zero_le_bit(const unsigned long *addr,
+#define find_first_zero_le_bit(addr, size) generic_find_next_zero_le_bit((addr), (size), 0)
+unsigned long generic_find_next_zero_le_bit(const unsigned long *addr,
 				    unsigned long size, unsigned long offset);
 
 /* Bitmap functions for the ext2 filesystem */
@@ -309,7 +328,7 @@ unsigned long find_next_zero_le_bit(const unsigned long *addr,
 #define ext2_find_first_zero_bit(addr, size) \
 	find_first_zero_le_bit((unsigned long*)addr, size)
 #define ext2_find_next_zero_bit(addr, size, off) \
-	find_next_zero_le_bit((unsigned long*)addr, size, off)
+	generic_find_next_zero_le_bit((unsigned long*)addr, size, off)
 
 /* Bitmap functions for the minix filesystem.  */
 

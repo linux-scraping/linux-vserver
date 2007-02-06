@@ -71,6 +71,7 @@ lpfc_config_port_prep(struct lpfc_hba * phba)
 	uint16_t offset = 0;
 	static char licensed[56] =
 		    "key unlock for use with gnu public licensed code only\0";
+	static int init_key = 1;
 
 	pmb = mempool_alloc(phba->mbox_mem_pool, GFP_KERNEL);
 	if (!pmb) {
@@ -82,10 +83,13 @@ lpfc_config_port_prep(struct lpfc_hba * phba)
 	phba->hba_state = LPFC_INIT_MBX_CMDS;
 
 	if (lpfc_is_LC_HBA(phba->pcidev->device)) {
-		uint32_t *ptext = (uint32_t *) licensed;
+		if (init_key) {
+			uint32_t *ptext = (uint32_t *) licensed;
 
-		for (i = 0; i < 56; i += sizeof (uint32_t), ptext++)
-			*ptext = cpu_to_be32(*ptext);
+			for (i = 0; i < 56; i += sizeof (uint32_t), ptext++)
+				*ptext = cpu_to_be32(*ptext);
+			init_key = 0;
+		}
 
 		lpfc_read_nv(phba, pmb);
 		memset((char*)mb->un.varRDnvp.rsvd3, 0,
@@ -264,6 +268,10 @@ lpfc_config_port_post(struct lpfc_hba * phba)
 	kfree(mp);
 	pmb->context1 = NULL;
 
+	if (phba->cfg_soft_wwnn)
+		u64_to_wwn(phba->cfg_soft_wwnn, phba->fc_sparam.nodeName.u.wwn);
+	if (phba->cfg_soft_wwpn)
+		u64_to_wwn(phba->cfg_soft_wwpn, phba->fc_sparam.portName.u.wwn);
 	memcpy(&phba->fc_nodename, &phba->fc_sparam.nodeName,
 	       sizeof (struct lpfc_name));
 	memcpy(&phba->fc_portname, &phba->fc_sparam.portName,
@@ -343,8 +351,8 @@ lpfc_config_port_post(struct lpfc_hba * phba)
 	phba->hba_state = LPFC_LINK_DOWN;
 
 	/* Only process IOCBs on ring 0 till hba_state is READY */
-	if (psli->ring[psli->ip_ring].cmdringaddr)
-		psli->ring[psli->ip_ring].flag |= LPFC_STOP_IOCB_EVENT;
+	if (psli->ring[psli->extra_ring].cmdringaddr)
+		psli->ring[psli->extra_ring].flag |= LPFC_STOP_IOCB_EVENT;
 	if (psli->ring[psli->fcp_ring].cmdringaddr)
 		psli->ring[psli->fcp_ring].flag |= LPFC_STOP_IOCB_EVENT;
 	if (psli->ring[psli->next_ring].cmdringaddr)
@@ -383,7 +391,8 @@ lpfc_config_port_post(struct lpfc_hba * phba)
 
 	lpfc_init_link(phba, pmb, phba->cfg_topology, phba->cfg_link_speed);
 	pmb->mbox_cmpl = lpfc_sli_def_mbox_cmpl;
-	if (lpfc_sli_issue_mbox(phba, pmb, MBX_NOWAIT) != MBX_SUCCESS) {
+	rc = lpfc_sli_issue_mbox(phba, pmb, MBX_NOWAIT);
+	if (rc != MBX_SUCCESS) {
 		lpfc_printf_log(phba,
 				KERN_ERR,
 				LOG_INIT,
@@ -400,24 +409,32 @@ lpfc_config_port_post(struct lpfc_hba * phba)
 		readl(phba->HAregaddr); /* flush */
 
 		phba->hba_state = LPFC_HBA_ERROR;
-		mempool_free(pmb, phba->mbox_mem_pool);
+		if (rc != MBX_BUSY)
+			mempool_free(pmb, phba->mbox_mem_pool);
 		return -EIO;
 	}
 	/* MBOX buffer will be freed in mbox compl */
 
-	i = 0;
+	return (0);
+}
+
+static int
+lpfc_discovery_wait(struct lpfc_hba *phba)
+{
+	int i = 0;
+
 	while ((phba->hba_state != LPFC_HBA_READY) ||
 	       (phba->num_disc_nodes) || (phba->fc_prli_sent) ||
 	       ((phba->fc_map_cnt == 0) && (i<2)) ||
-	       (psli->sli_flag & LPFC_SLI_MBOX_ACTIVE)) {
+	       (phba->sli.sli_flag & LPFC_SLI_MBOX_ACTIVE)) {
 		/* Check every second for 30 retries. */
 		i++;
 		if (i > 30) {
-			break;
+			return -ETIMEDOUT;
 		}
 		if ((i >= 15) && (phba->hba_state <= LPFC_LINK_DOWN)) {
 			/* The link is down.  Set linkdown timeout */
-			break;
+			return -ETIMEDOUT;
 		}
 
 		/* Delay for 1 second to give discovery time to complete. */
@@ -425,12 +442,7 @@ lpfc_config_port_post(struct lpfc_hba * phba)
 
 	}
 
-	/* Since num_disc_nodes keys off of PLOGI, delay a bit to let
-	 * any potential PRLIs to flush thru the SLI sub-system.
-	 */
-	msleep(50);
-
-	return (0);
+	return 0;
 }
 
 /************************************************************************/
@@ -505,8 +517,10 @@ lpfc_handle_eratt(struct lpfc_hba * phba)
 {
 	struct lpfc_sli *psli = &phba->sli;
 	struct lpfc_sli_ring  *pring;
+	uint32_t event_data;
 
-	if (phba->work_hs & HS_FFER6) {
+	if (phba->work_hs & HS_FFER6 ||
+	    phba->work_hs & HS_FFER5) {
 		/* Re-establishing Link */
 		lpfc_printf_log(phba, KERN_INFO, LOG_LINK_EVENT,
 				"%d:1301 Re-establishing Link "
@@ -548,6 +562,11 @@ lpfc_handle_eratt(struct lpfc_hba * phba)
 				"Data: x%x x%x x%x\n",
 				phba->brd_no, phba->work_hs,
 				phba->work_status[0], phba->work_status[1]);
+
+		event_data = FC_REG_DUMP_EVENT;
+		fc_host_post_vendor_event(phba->host, fc_get_event_number(),
+				sizeof(event_data), (char *) &event_data,
+				SCSI_NL_VID_TYPE_PCI | PCI_VENDOR_ID_EMULEX);
 
 		psli->sli_flag &= ~LPFC_SLI2_ACTIVE;
 		lpfc_offline(phba);
@@ -595,7 +614,7 @@ lpfc_handle_latt(struct lpfc_hba * phba)
 	pmb->mbox_cmpl = lpfc_mbx_cmpl_read_la;
 	rc = lpfc_sli_issue_mbox (phba, pmb, (MBX_NOWAIT | MBX_STOP_IOCB));
 	if (rc == MBX_NOT_FINISHED)
-		goto lpfc_handle_latt_free_mp;
+		goto lpfc_handle_latt_free_mbuf;
 
 	/* Clear Link Attention in HA REG */
 	spin_lock_irq(phba->host->host_lock);
@@ -605,6 +624,8 @@ lpfc_handle_latt(struct lpfc_hba * phba)
 
 	return;
 
+lpfc_handle_latt_free_mbuf:
+	lpfc_mbuf_free(phba, mp->virt, mp->phys);
 lpfc_handle_latt_free_mp:
 	kfree(mp);
 lpfc_handle_latt_free_pmb:
@@ -786,19 +807,13 @@ lpfc_get_hba_model_desc(struct lpfc_hba * phba, uint8_t * mdp, uint8_t * descp)
 {
 	lpfc_vpd_t *vp;
 	uint16_t dev_id = phba->pcidev->device;
-	uint16_t dev_subid = phba->pcidev->subsystem_device;
-	uint8_t hdrtype;
 	int max_speed;
-	char * ports;
 	struct {
 		char * name;
 		int    max_speed;
-		char * ports;
 		char * bus;
-	} m = {"<Unknown>", 0, "", ""};
+	} m = {"<Unknown>", 0, ""};
 
-	pci_read_config_byte(phba->pcidev, PCI_HEADER_TYPE, &hdrtype);
-	ports = (hdrtype == 0x80) ? "2-port " : "";
 	if (mdp && mdp[0] != '\0'
 		&& descp && descp[0] != '\0')
 		return;
@@ -818,133 +833,96 @@ lpfc_get_hba_model_desc(struct lpfc_hba * phba, uint8_t * mdp, uint8_t * descp)
 
 	switch (dev_id) {
 	case PCI_DEVICE_ID_FIREFLY:
-		m = (typeof(m)){"LP6000", max_speed, "", "PCI"};
+		m = (typeof(m)){"LP6000", max_speed, "PCI"};
 		break;
 	case PCI_DEVICE_ID_SUPERFLY:
 		if (vp->rev.biuRev >= 1 && vp->rev.biuRev <= 3)
-			m = (typeof(m)){"LP7000", max_speed, "", "PCI"};
+			m = (typeof(m)){"LP7000", max_speed,  "PCI"};
 		else
-			m = (typeof(m)){"LP7000E", max_speed, "", "PCI"};
+			m = (typeof(m)){"LP7000E", max_speed, "PCI"};
 		break;
 	case PCI_DEVICE_ID_DRAGONFLY:
-		m = (typeof(m)){"LP8000", max_speed, "", "PCI"};
+		m = (typeof(m)){"LP8000", max_speed, "PCI"};
 		break;
 	case PCI_DEVICE_ID_CENTAUR:
 		if (FC_JEDEC_ID(vp->rev.biuRev) == CENTAUR_2G_JEDEC_ID)
-			m = (typeof(m)){"LP9002", max_speed, "", "PCI"};
+			m = (typeof(m)){"LP9002", max_speed, "PCI"};
 		else
-			m = (typeof(m)){"LP9000", max_speed, "", "PCI"};
+			m = (typeof(m)){"LP9000", max_speed, "PCI"};
 		break;
 	case PCI_DEVICE_ID_RFLY:
-		m = (typeof(m)){"LP952", max_speed, "", "PCI"};
+		m = (typeof(m)){"LP952", max_speed, "PCI"};
 		break;
 	case PCI_DEVICE_ID_PEGASUS:
-		m = (typeof(m)){"LP9802", max_speed, "", "PCI-X"};
+		m = (typeof(m)){"LP9802", max_speed, "PCI-X"};
 		break;
 	case PCI_DEVICE_ID_THOR:
-		if (hdrtype == 0x80)
-			m = (typeof(m)){"LP10000DC",
-					max_speed, ports, "PCI-X"};
-		else
-			m = (typeof(m)){"LP10000",
-					max_speed, ports, "PCI-X"};
+		m = (typeof(m)){"LP10000", max_speed, "PCI-X"};
 		break;
 	case PCI_DEVICE_ID_VIPER:
-		m = (typeof(m)){"LPX1000", max_speed, "", "PCI-X"};
+		m = (typeof(m)){"LPX1000", max_speed,  "PCI-X"};
 		break;
 	case PCI_DEVICE_ID_PFLY:
-		m = (typeof(m)){"LP982", max_speed, "", "PCI-X"};
+		m = (typeof(m)){"LP982", max_speed, "PCI-X"};
 		break;
 	case PCI_DEVICE_ID_TFLY:
-		if (hdrtype == 0x80)
-			m = (typeof(m)){"LP1050DC", max_speed, ports, "PCI-X"};
-		else
-			m = (typeof(m)){"LP1050", max_speed, ports, "PCI-X"};
+		m = (typeof(m)){"LP1050", max_speed, "PCI-X"};
 		break;
 	case PCI_DEVICE_ID_HELIOS:
-		if (hdrtype == 0x80)
-			m = (typeof(m)){"LP11002", max_speed, ports, "PCI-X2"};
-		else
-			m = (typeof(m)){"LP11000", max_speed, ports, "PCI-X2"};
+		m = (typeof(m)){"LP11000", max_speed, "PCI-X2"};
 		break;
 	case PCI_DEVICE_ID_HELIOS_SCSP:
-		m = (typeof(m)){"LP11000-SP", max_speed, ports, "PCI-X2"};
+		m = (typeof(m)){"LP11000-SP", max_speed, "PCI-X2"};
 		break;
 	case PCI_DEVICE_ID_HELIOS_DCSP:
-		m = (typeof(m)){"LP11002-SP", max_speed, ports, "PCI-X2"};
+		m = (typeof(m)){"LP11002-SP", max_speed, "PCI-X2"};
 		break;
 	case PCI_DEVICE_ID_NEPTUNE:
-		if (hdrtype == 0x80)
-			m = (typeof(m)){"LPe1002", max_speed, ports, "PCIe"};
-		else
-			m = (typeof(m)){"LPe1000", max_speed, ports, "PCIe"};
+		m = (typeof(m)){"LPe1000", max_speed, "PCIe"};
 		break;
 	case PCI_DEVICE_ID_NEPTUNE_SCSP:
-		m = (typeof(m)){"LPe1000-SP", max_speed, ports, "PCIe"};
+		m = (typeof(m)){"LPe1000-SP", max_speed, "PCIe"};
 		break;
 	case PCI_DEVICE_ID_NEPTUNE_DCSP:
-		m = (typeof(m)){"LPe1002-SP", max_speed, ports, "PCIe"};
+		m = (typeof(m)){"LPe1002-SP", max_speed, "PCIe"};
 		break;
 	case PCI_DEVICE_ID_BMID:
-		m = (typeof(m)){"LP1150", max_speed, ports, "PCI-X2"};
+		m = (typeof(m)){"LP1150", max_speed, "PCI-X2"};
 		break;
 	case PCI_DEVICE_ID_BSMB:
-		m = (typeof(m)){"LP111", max_speed, ports, "PCI-X2"};
+		m = (typeof(m)){"LP111", max_speed, "PCI-X2"};
 		break;
 	case PCI_DEVICE_ID_ZEPHYR:
-		if (hdrtype == 0x80)
-			m = (typeof(m)){"LPe11002", max_speed, ports, "PCIe"};
-		else
-			m = (typeof(m)){"LPe11000", max_speed, ports, "PCIe"};
+		m = (typeof(m)){"LPe11000", max_speed, "PCIe"};
 		break;
 	case PCI_DEVICE_ID_ZEPHYR_SCSP:
-		m = (typeof(m)){"LPe11000", max_speed, ports, "PCIe"};
+		m = (typeof(m)){"LPe11000", max_speed, "PCIe"};
 		break;
 	case PCI_DEVICE_ID_ZEPHYR_DCSP:
-		m = (typeof(m)){"LPe11002-SP", max_speed, ports, "PCIe"};
+		m = (typeof(m)){"LPe11002-SP", max_speed, "PCIe"};
 		break;
 	case PCI_DEVICE_ID_ZMID:
-		m = (typeof(m)){"LPe1150", max_speed, ports, "PCIe"};
+		m = (typeof(m)){"LPe1150", max_speed, "PCIe"};
 		break;
 	case PCI_DEVICE_ID_ZSMB:
-		m = (typeof(m)){"LPe111", max_speed, ports, "PCIe"};
+		m = (typeof(m)){"LPe111", max_speed, "PCIe"};
 		break;
 	case PCI_DEVICE_ID_LP101:
-		m = (typeof(m)){"LP101", max_speed, ports, "PCI-X"};
+		m = (typeof(m)){"LP101", max_speed, "PCI-X"};
 		break;
 	case PCI_DEVICE_ID_LP10000S:
-		m = (typeof(m)){"LP10000-S", max_speed, ports, "PCI"};
+		m = (typeof(m)){"LP10000-S", max_speed, "PCI"};
 		break;
 	case PCI_DEVICE_ID_LP11000S:
+		m = (typeof(m)){"LP11000-S", max_speed,
+			"PCI-X2"};
+		break;
 	case PCI_DEVICE_ID_LPE11000S:
-		switch (dev_subid) {
-		case PCI_SUBSYSTEM_ID_LP11000S:
-			m = (typeof(m)){"LP11000-S", max_speed,
-					ports, "PCI-X2"};
-			break;
-		case PCI_SUBSYSTEM_ID_LP11002S:
-			m = (typeof(m)){"LP11002-S", max_speed,
-					ports, "PCI-X2"};
-			break;
-		case PCI_SUBSYSTEM_ID_LPE11000S:
-			m = (typeof(m)){"LPe11000-S", max_speed,
-					ports, "PCIe"};
-			break;
-		case PCI_SUBSYSTEM_ID_LPE11002S:
-			m = (typeof(m)){"LPe11002-S", max_speed,
-					ports, "PCIe"};
-			break;
-		case PCI_SUBSYSTEM_ID_LPE11010S:
-			m = (typeof(m)){"LPe11010-S", max_speed,
-					"10-port ", "PCIe"};
-			break;
-		default:
-			m = (typeof(m)){ 0 };
-			break;
-		}
+		m = (typeof(m)){"LPe11000-S", max_speed,
+			"PCIe"};
 		break;
 	default:
-		m = (typeof(m)){ 0 };
+		m = (typeof(m)){ NULL };
 		break;
 	}
 
@@ -952,8 +930,8 @@ lpfc_get_hba_model_desc(struct lpfc_hba * phba, uint8_t * mdp, uint8_t * descp)
 		snprintf(mdp, 79,"%s", m.name);
 	if (descp && descp[0] == '\0')
 		snprintf(descp, 255,
-			 "Emulex %s %dGb %s%s Fibre Channel Adapter",
-			 m.name, m.max_speed, m.ports, m.bus);
+			 "Emulex %s %dGb %s Fibre Channel Adapter",
+			 m.name, m.max_speed, m.bus);
 }
 
 /**************************************************/
@@ -1339,7 +1317,8 @@ lpfc_offline(struct lpfc_hba * phba)
 	struct lpfc_sli_ring *pring;
 	struct lpfc_sli *psli;
 	unsigned long iflag;
-	int i = 0;
+	int i;
+	int cnt = 0;
 
 	if (!phba)
 		return 0;
@@ -1348,20 +1327,31 @@ lpfc_offline(struct lpfc_hba * phba)
 		return 0;
 
 	psli = &phba->sli;
-	pring = &psli->ring[psli->fcp_ring];
 
 	lpfc_linkdown(phba);
+	lpfc_sli_flush_mbox_queue(phba);
 
-	/* The linkdown event takes 30 seconds to timeout. */
-	while (pring->txcmplq_cnt) {
-		mdelay(10);
-		if (i++ > 3000)
-			break;
+	for (i = 0; i < psli->num_rings; i++) {
+		pring = &psli->ring[i];
+		/* The linkdown event takes 30 seconds to timeout. */
+		while (pring->txcmplq_cnt) {
+			mdelay(10);
+			if (cnt++ > 3000) {
+				lpfc_printf_log(phba,
+					KERN_WARNING, LOG_INIT,
+					"%d:0466 Outstanding IO when "
+					"bringing Adapter offline\n",
+					phba->brd_no);
+				break;
+			}
+		}
 	}
+
 
 	/* stop all timers associated with this hba */
 	lpfc_stop_timer(phba);
 	phba->work_hba_events = 0;
+	phba->work_ha = 0;
 
 	lpfc_printf_log(phba,
 		       KERN_WARNING,
@@ -1451,7 +1441,6 @@ lpfc_pci_probe_one(struct pci_dev *pdev, const struct pci_device_id *pid)
 		goto out_put_host;
 
 	host->unique_id = phba->brd_no;
-	init_MUTEX(&phba->hba_can_block);
 	INIT_LIST_HEAD(&phba->ctrspbuflist);
 	INIT_LIST_HEAD(&phba->rnidrspbuflist);
 	INIT_LIST_HEAD(&phba->freebufList);
@@ -1600,7 +1589,11 @@ lpfc_pci_probe_one(struct pci_dev *pdev, const struct pci_device_id *pid)
 		goto out_free_iocbq;
 	}
 
-	/* We can rely on a queue depth attribute only after SLI HBA setup */
+	/*
+	 * Set initial can_queue value since 0 is no longer supported and
+	 * scsi_add_host will fail. This will be adjusted later based on the
+	 * max xri value determined in hba setup.
+	 */
 	host->can_queue = phba->cfg_hba_queue_depth - 10;
 
 	/* Tell the midlayer we support 16 byte commands */
@@ -1620,7 +1613,15 @@ lpfc_pci_probe_one(struct pci_dev *pdev, const struct pci_device_id *pid)
 	if (error)
 		goto out_remove_host;
 
-	error =	request_irq(phba->pcidev->irq, lpfc_intr_handler, SA_SHIRQ,
+	if (phba->cfg_use_msi) {
+		error = pci_enable_msi(phba->pcidev);
+		if (error)
+			lpfc_printf_log(phba, KERN_INFO, LOG_INIT, "%d:0452 "
+					"Enable MSI failed, continuing with "
+					"IRQ\n", phba->brd_no);
+	}
+
+	error =	request_irq(phba->pcidev->irq, lpfc_intr_handler, IRQF_SHARED,
 							LPFC_DRIVER_NAME, phba);
 	if (error) {
 		lpfc_printf_log(phba, KERN_ERR, LOG_INIT,
@@ -1639,6 +1640,14 @@ lpfc_pci_probe_one(struct pci_dev *pdev, const struct pci_device_id *pid)
 		error = -ENODEV;
 		goto out_free_irq;
 	}
+
+	/*
+	 * hba setup may have changed the hba_queue_depth so we need to adjust
+	 * the value of can_queue.
+	 */
+	host->can_queue = phba->cfg_hba_queue_depth - 10;
+
+	lpfc_discovery_wait(phba);
 
 	if (phba->cfg_poll & DISABLE_FCP_RING_INT) {
 		spin_lock_irq(phba->host->host_lock);
@@ -1691,6 +1700,7 @@ out_free_irq:
 	lpfc_stop_timer(phba);
 	phba->work_hba_events = 0;
 	free_irq(phba->pcidev->irq, phba);
+	pci_disable_msi(phba->pcidev);
 out_free_sysfs_attr:
 	lpfc_free_sysfs_attr(phba);
 out_remove_host:
@@ -1757,6 +1767,7 @@ lpfc_pci_remove_one(struct pci_dev *pdev)
 
 	/* Release the irq reservation */
 	free_irq(phba->pcidev->irq, phba);
+	pci_disable_msi(phba->pcidev);
 
 	lpfc_cleanup(phba, 0);
 	lpfc_stop_timer(phba);

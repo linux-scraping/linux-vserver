@@ -16,7 +16,6 @@
 #ifndef __NET_TULIP_H__
 #define __NET_TULIP_H__
 
-#include <linux/config.h>
 #include <linux/kernel.h>
 #include <linux/types.h>
 #include <linux/spinlock.h>
@@ -31,11 +30,10 @@
 /* undefine, or define to various debugging levels (>4 == obscene levels) */
 #define TULIP_DEBUG 1
 
-/* undefine USE_IO_OPS for MMIO, define for PIO */
 #ifdef CONFIG_TULIP_MMIO
-# undef USE_IO_OPS
+#define TULIP_BAR	1	/* CBMA */
 #else
-# define USE_IO_OPS 1
+#define TULIP_BAR	0	/* CBIO */
 #endif
 
 
@@ -45,7 +43,8 @@ struct tulip_chip_table {
 	int io_size;
 	int valid_intrs;	/* CSR7 interrupt enable settings */
 	int flags;
-	void (*media_timer) (unsigned long data);
+	void (*media_timer) (unsigned long);
+	work_func_t media_task;
 };
 
 
@@ -143,6 +142,7 @@ enum status_bits {
 	RxNoBuf = 0x80,
 	RxIntr = 0x40,
 	TxFIFOUnderflow = 0x20,
+	RxErrIntr = 0x10,
 	TxJabber = 0x08,
 	TxNoBuf = 0x04,
 	TxDied = 0x02,
@@ -193,9 +193,14 @@ struct tulip_tx_desc {
 
 
 enum desc_status_bits {
-	DescOwned = 0x80000000,
-	RxDescFatalErr = 0x8000,
-	RxWholePkt = 0x0300,
+	DescOwned    = 0x80000000,
+	DescWholePkt = 0x60000000,
+	DescEndPkt   = 0x40000000,
+	DescStartPkt = 0x20000000,
+	DescEndRing  = 0x02000000,
+	DescUseLink  = 0x01000000,
+	RxDescFatalErr = 0x008000,
+	RxWholePkt   = 0x00000300,
 };
 
 
@@ -259,7 +264,7 @@ enum t21143_csr6_bits {
    There are no ill effects from too-large receive rings. */
 
 #define TX_RING_SIZE	32
-#define RX_RING_SIZE	128 
+#define RX_RING_SIZE	128
 #define MEDIA_MASK     31
 
 #define PKT_BUF_SZ		1536	/* Size of each temporary Rx buffer. */
@@ -367,6 +372,7 @@ struct tulip_private {
 	unsigned int medialock:1;	/* Don't sense media type. */
 	unsigned int mediasense:1;	/* Media sensing in progress. */
 	unsigned int nway:1, nwayset:1;		/* 21143 internal NWay. */
+	unsigned int timeout_recovery:1;
 	unsigned int csr0;	/* CSR0 setting. */
 	unsigned int csr6;	/* Current CSR6 control settings. */
 	unsigned char eeprom[EEPROM_SIZE];	/* Serial EEPROM contents. */
@@ -385,6 +391,8 @@ struct tulip_private {
 	void __iomem *base_addr;
 	int csr12_shadow;
 	int pad0;		/* Used for 8-byte alignment */
+	struct work_struct media_work;
+	struct net_device *dev;
 };
 
 
@@ -399,7 +407,7 @@ struct eeprom_fixup {
 
 /* 21142.c */
 extern u16 t21142_csr14[];
-void t21142_timer(unsigned long data);
+void t21142_media_task(struct work_struct *work);
 void t21142_start_nway(struct net_device *dev);
 void t21142_lnk_change(struct net_device *dev, int csr5);
 
@@ -417,7 +425,7 @@ int tulip_read_eeprom(struct net_device *dev, int location, int addr_len);
 /* interrupt.c */
 extern unsigned int tulip_max_interrupt_work;
 extern int tulip_rx_copybreak;
-irqreturn_t tulip_interrupt(int irq, void *dev_instance, struct pt_regs *regs);
+irqreturn_t tulip_interrupt(int irq, void *dev_instance);
 int tulip_refill_rx(struct net_device *dev);
 #ifdef CONFIG_TULIP_NAPI
 int tulip_poll(struct net_device *dev, int *budget);
@@ -437,7 +445,7 @@ void pnic_lnk_change(struct net_device *dev, int csr5);
 void pnic_timer(unsigned long data);
 
 /* timer.c */
-void tulip_timer(unsigned long data);
+void tulip_media_task(struct work_struct *work);
 void mxic_timer(unsigned long data);
 void comet_timer(unsigned long data);
 
@@ -484,6 +492,16 @@ static inline void tulip_restart_rxtx(struct tulip_private *tp)
 	tulip_stop_rxtx(tp);
 	udelay(5);
 	tulip_start_rxtx(tp);
+}
+
+static inline void tulip_tx_timeout_complete(struct tulip_private *tp, void __iomem *ioaddr)
+{
+	/* Stop and restart the chip's Tx processes. */
+	tulip_restart_rxtx(tp);
+	/* Trigger an immediate transmit demand. */
+	iowrite32(0, ioaddr + CSR1);
+
+	tp->stats.tx_errors++;
 }
 
 #endif /* __NET_TULIP_H__ */

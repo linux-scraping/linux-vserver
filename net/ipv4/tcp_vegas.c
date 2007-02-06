@@ -31,7 +31,6 @@
  *     assumed senders never went idle.
  */
 
-#include <linux/config.h>
 #include <linux/mm.h>
 #include <linux/module.h>
 #include <linux/skbuff.h>
@@ -43,8 +42,8 @@
  * with V_PARAM_SHIFT bits to the right of the binary point.
  */
 #define V_PARAM_SHIFT 1
-static int alpha = 1<<V_PARAM_SHIFT;
-static int beta  = 3<<V_PARAM_SHIFT;
+static int alpha = 2<<V_PARAM_SHIFT;
+static int beta  = 4<<V_PARAM_SHIFT;
 static int gamma = 1<<V_PARAM_SHIFT;
 
 module_param(alpha, int, 0644);
@@ -371,7 +370,7 @@ static struct tcp_congestion_ops tcp_vegas = {
 
 static int __init tcp_vegas_register(void)
 {
-	BUG_ON(sizeof(struct vegas) > ICSK_CA_PRIV_SIZE);
+	BUILD_BUG_ON(sizeof(struct vegas) > ICSK_CA_PRIV_SIZE);
 	tcp_register_congestion_control(&tcp_vegas);
 	return 0;
 }

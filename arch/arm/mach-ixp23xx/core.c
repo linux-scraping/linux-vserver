@@ -14,7 +14,6 @@
  * warranty of any kind, whether express or implied.
  */
 
-#include <linux/config.h>
 #include <linux/kernel.h>
 #include <linux/init.h>
 #include <linux/spinlock.h>
@@ -225,14 +224,14 @@ static void ixp23xx_irq_edge_unmask(unsigned int irq)
 	*intr_reg |= (1 << (irq % 32));
 }
 
-static struct irqchip ixp23xx_irq_level_chip = {
+static struct irq_chip ixp23xx_irq_level_chip = {
 	.ack		= ixp23xx_irq_mask,
 	.mask		= ixp23xx_irq_mask,
 	.unmask		= ixp23xx_irq_level_unmask,
 	.set_type	= ixp23xx_irq_set_type
 };
 
-static struct irqchip ixp23xx_irq_edge_chip = {
+static struct irq_chip ixp23xx_irq_edge_chip = {
 	.ack		= ixp23xx_irq_ack,
 	.mask		= ixp23xx_irq_mask,
 	.unmask		= ixp23xx_irq_edge_unmask,
@@ -252,11 +251,11 @@ static void ixp23xx_pci_irq_unmask(unsigned int irq)
 /*
  * TODO: Should this just be done at ASM level?
  */
-static void pci_handler(unsigned int irq, struct irqdesc *desc, struct pt_regs *regs)
+static void pci_handler(unsigned int irq, struct irq_desc *desc)
 {
 	u32 pci_interrupt;
 	unsigned int irqno;
-	struct irqdesc *int_desc;
+	struct irq_desc *int_desc;
 
 	pci_interrupt = *IXP23XX_PCI_XSCALE_INT_STATUS;
 
@@ -272,12 +271,12 @@ static void pci_handler(unsigned int irq, struct irqdesc *desc, struct pt_regs *
 	}
 
 	int_desc = irq_desc + irqno;
-	int_desc->handle(irqno, int_desc, regs);
+	desc_handle_irq(irqno, int_desc);
 
 	desc->chip->unmask(irq);
 }
 
-static struct irqchip ixp23xx_pci_irq_chip = {
+static struct irq_chip ixp23xx_pci_irq_chip = {
 	.ack	= ixp23xx_pci_irq_mask,
 	.mask	= ixp23xx_pci_irq_mask,
 	.unmask	= ixp23xx_pci_irq_unmask
@@ -288,11 +287,11 @@ static void ixp23xx_config_irq(unsigned int irq, enum ixp23xx_irq_type type)
 	switch (type) {
 	case IXP23XX_IRQ_LEVEL:
 		set_irq_chip(irq, &ixp23xx_irq_level_chip);
-		set_irq_handler(irq, do_level_IRQ);
+		set_irq_handler(irq, handle_level_irq);
 		break;
 	case IXP23XX_IRQ_EDGE:
 		set_irq_chip(irq, &ixp23xx_irq_edge_chip);
-		set_irq_handler(irq, do_edge_IRQ);
+		set_irq_handler(irq, handle_edge_irq);
 		break;
 	}
 	set_irq_flags(irq, IRQF_VALID);
@@ -323,7 +322,7 @@ void __init ixp23xx_init_irq(void)
 
 	for (irq = IRQ_IXP23XX_INTA; irq <= IRQ_IXP23XX_INTB; irq++) {
 		set_irq_chip(irq, &ixp23xx_pci_irq_chip);
-		set_irq_handler(irq, do_level_IRQ);
+		set_irq_handler(irq, handle_level_irq);
 		set_irq_flags(irq, IRQF_VALID);
 	}
 
@@ -334,7 +333,7 @@ void __init ixp23xx_init_irq(void)
 /*************************************************************************
  * Timer-tick functions for IXP23xx
  *************************************************************************/
-#define CLOCK_TICKS_PER_USEC	CLOCK_TICK_RATE / (USEC_PER_SEC)
+#define CLOCK_TICKS_PER_USEC	(CLOCK_TICK_RATE / USEC_PER_SEC)
 
 static unsigned long next_jiffy_time;
 
@@ -349,12 +348,12 @@ ixp23xx_gettimeoffset(void)
 }
 
 static irqreturn_t
-ixp23xx_timer_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+ixp23xx_timer_interrupt(int irq, void *dev_id)
 {
 	/* Clear Pending Interrupt by writing '1' to it */
 	*IXP23XX_TIMER_STATUS = IXP23XX_TIMER1_INT_PEND;
-	while ((*IXP23XX_TIMER_CONT - next_jiffy_time) > LATCH) {
-		timer_tick(regs);
+	while ((signed long)(*IXP23XX_TIMER_CONT - next_jiffy_time) >= LATCH) {
+		timer_tick();
 		next_jiffy_time += LATCH;
 	}
 
@@ -364,7 +363,7 @@ ixp23xx_timer_interrupt(int irq, void *dev_id, struct pt_regs *regs)
 static struct irqaction ixp23xx_timer_irq = {
 	.name		= "IXP23xx Timer Tick",
 	.handler	= ixp23xx_timer_interrupt,
-	.flags		= SA_INTERRUPT | SA_TIMER,
+	.flags		= IRQF_DISABLED | IRQF_TIMER,
 };
 
 void __init ixp23xx_init_timer(void)
@@ -439,5 +438,6 @@ static struct platform_device *ixp23xx_devices[] __initdata = {
 
 void __init ixp23xx_sys_init(void)
 {
+	*IXP23XX_EXP_UNIT_FUSE |= 0xf;
 	platform_add_devices(ixp23xx_devices, ARRAY_SIZE(ixp23xx_devices));
 }

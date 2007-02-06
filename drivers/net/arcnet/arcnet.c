@@ -44,7 +44,6 @@
 #define VERSION "arcnet: v3.93 BETA 2000/04/29 - by Avery Pennarun et al.\n"
 
 #include <linux/module.h>
-#include <linux/config.h>
 #include <linux/types.h>
 #include <linux/delay.h>
 #include <linux/netdevice.h>
@@ -753,7 +752,7 @@ static void arcnet_timeout(struct net_device *dev)
  * interrupts. Establish which device needs attention, and call the correct
  * chipset interrupt handler.
  */
-irqreturn_t arcnet_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+irqreturn_t arcnet_interrupt(int irq, void *dev_id)
 {
 	struct net_device *dev = dev_id;
 	struct arcnet_local *lp;

@@ -58,6 +58,7 @@
 #include <linux/init.h>
 #include <linux/delay.h>
 #include <linux/videodev.h>
+#include <media/v4l2-common.h>
 #include <linux/parport.h>
 
 //#define DEBUG				// Undef me for production
@@ -788,7 +789,7 @@ static int w9966_v4l_do_ioctl(struct inode *inode, struct file *file,
 	case VIDIOCSPICT:
 	{
 		struct video_picture *vpic = arg;
-		if (vpic->depth != 16 || vpic->palette != VIDEO_PALETTE_YUV422)
+		if (vpic->depth != 16 || (vpic->palette != VIDEO_PALETTE_YUV422 && vpic->palette != VIDEO_PALETTE_YUYV))
 			return -EINVAL;
 
 		cam->brightness = vpic->brightness >> 8;

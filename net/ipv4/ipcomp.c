@@ -13,7 +13,6 @@
  *   - Compression stats.
  *   - Adaptive compression.
  */
-#include <linux/config.h>
 #include <linux/module.h>
 #include <asm/scatterlist.h>
 #include <asm/semaphore.h>
@@ -33,7 +32,7 @@
 
 struct ipcomp_tfms {
 	struct list_head list;
-	struct crypto_tfm **tfms;
+	struct crypto_comp **tfms;
 	int users;
 };
 
@@ -45,10 +44,9 @@ static LIST_HEAD(ipcomp_tfms_list);
 static int ipcomp_decompress(struct xfrm_state *x, struct sk_buff *skb)
 {
 	int err, plen, dlen;
-	struct iphdr *iph;
 	struct ipcomp_data *ipcd = x->data;
 	u8 *start, *scratch;
-	struct crypto_tfm *tfm;
+	struct crypto_comp *tfm;
 	int cpu;
 	
 	plen = skb->len;
@@ -72,10 +70,9 @@ static int ipcomp_decompress(struct xfrm_state *x, struct sk_buff *skb)
 	if (err)
 		goto out;
 		
-	skb_put(skb, dlen - plen);
+	skb->truesize += dlen - plen;
+	__skb_put(skb, dlen - plen);
 	memcpy(skb->data, scratch, dlen);
-	iph = skb->nh.iph;
-	iph->tot_len = htons(dlen + iph->ihl * 4);
 out:	
 	put_cpu();
 	return err;
@@ -83,34 +80,21 @@ out:
 
 static int ipcomp_input(struct xfrm_state *x, struct sk_buff *skb)
 {
-	u8 nexthdr;
-	int err = 0;
+	int err = -ENOMEM;
 	struct iphdr *iph;
-	union {
-		struct iphdr	iph;
-		char 		buf[60];
-	} tmp_iph;
+	struct ip_comp_hdr *ipch;
 
-
-	if ((skb_is_nonlinear(skb) || skb_cloned(skb)) &&
-	    skb_linearize(skb, GFP_ATOMIC) != 0) {
-	    	err = -ENOMEM;
+	if (skb_linearize_cow(skb))
 	    	goto out;
-	}
 
 	skb->ip_summed = CHECKSUM_NONE;
 
 	/* Remove ipcomp header and decompress original payload */	
 	iph = skb->nh.iph;
-	memcpy(&tmp_iph, iph, iph->ihl * 4);
-	nexthdr = *(u8 *)skb->data;
-	skb_pull(skb, sizeof(struct ip_comp_hdr));
-	skb->nh.raw += sizeof(struct ip_comp_hdr);
-	memcpy(skb->nh.raw, &tmp_iph, tmp_iph.iph.ihl * 4);
-	iph = skb->nh.iph;
-	iph->tot_len = htons(ntohs(iph->tot_len) - sizeof(struct ip_comp_hdr));
-	iph->protocol = nexthdr;
-	skb->h.raw = skb->data;
+	ipch = (void *)skb->data;
+	iph->protocol = ipch->nexthdr;
+	skb->h.raw = skb->nh.raw + sizeof(*ipch);
+	__skb_pull(skb, sizeof(*ipch));
 	err = ipcomp_decompress(x, skb);
 
 out:	
@@ -123,7 +107,7 @@ static int ipcomp_compress(struct xfrm_state *x, struct sk_buff *skb)
 	struct iphdr *iph = skb->nh.iph;
 	struct ipcomp_data *ipcd = x->data;
 	u8 *start, *scratch;
-	struct crypto_tfm *tfm;
+	struct crypto_comp *tfm;
 	int cpu;
 	
 	ihlen = iph->ihl * 4;
@@ -171,10 +155,8 @@ static int ipcomp_output(struct xfrm_state *x, struct sk_buff *skb)
 		goto out_ok;
 	}
 
-	if ((skb_is_nonlinear(skb) || skb_cloned(skb)) &&
-	    skb_linearize(skb, GFP_ATOMIC) != 0) {
+	if (skb_linearize_cow(skb))
 		goto out_ok;
-	}
 	
 	err = ipcomp_compress(x, skb);
 	iph = skb->nh.iph;
@@ -194,14 +176,14 @@ static int ipcomp_output(struct xfrm_state *x, struct sk_buff *skb)
 	return 0;
 
 out_ok:
-	if (x->props.mode)
+	if (x->props.mode == XFRM_MODE_TUNNEL)
 		ip_send_check(iph);
 	return 0;
 }
 
 static void ipcomp4_err(struct sk_buff *skb, u32 info)
 {
-	u32 spi;
+	__be32 spi;
 	struct iphdr *iph = (struct iphdr *)skb->data;
 	struct ip_comp_hdr *ipch = (struct ip_comp_hdr *)(skb->data+(iph->ihl<<2));
 	struct xfrm_state *x;
@@ -224,6 +206,7 @@ static void ipcomp4_err(struct sk_buff *skb, u32 info)
 static struct xfrm_state *ipcomp_tunnel_create(struct xfrm_state *x)
 {
 	struct xfrm_state *t;
+	u8 mode = XFRM_MODE_TUNNEL;
 	
 	t = xfrm_state_alloc();
 	if (t == NULL)
@@ -234,7 +217,9 @@ static struct xfrm_state *ipcomp_tunnel_create(struct xfrm_state *x)
 	t->id.daddr.a4 = x->id.daddr.a4;
 	memcpy(&t->sel, &x->sel, sizeof(t->sel));
 	t->props.family = AF_INET;
-	t->props.mode = 1;
+	if (x->props.mode == XFRM_MODE_BEET)
+		mode = x->props.mode;
+	t->props.mode = mode;
 	t->props.saddr.a4 = x->props.saddr.a4;
 	t->props.flags = x->props.flags;
 
@@ -320,7 +305,7 @@ static void **ipcomp_alloc_scratches(void)
 	return scratches;
 }
 
-static void ipcomp_free_tfms(struct crypto_tfm **tfms)
+static void ipcomp_free_tfms(struct crypto_comp **tfms)
 {
 	struct ipcomp_tfms *pos;
 	int cpu;
@@ -342,28 +327,28 @@ static void ipcomp_free_tfms(struct crypto_tfm **tfms)
 		return;
 
 	for_each_possible_cpu(cpu) {
-		struct crypto_tfm *tfm = *per_cpu_ptr(tfms, cpu);
-		crypto_free_tfm(tfm);
+		struct crypto_comp *tfm = *per_cpu_ptr(tfms, cpu);
+		crypto_free_comp(tfm);
 	}
 	free_percpu(tfms);
 }
 
-static struct crypto_tfm **ipcomp_alloc_tfms(const char *alg_name)
+static struct crypto_comp **ipcomp_alloc_tfms(const char *alg_name)
 {
 	struct ipcomp_tfms *pos;
-	struct crypto_tfm **tfms;
+	struct crypto_comp **tfms;
 	int cpu;
 
 	/* This can be any valid CPU ID so we don't need locking. */
 	cpu = raw_smp_processor_id();
 
 	list_for_each_entry(pos, &ipcomp_tfms_list, list) {
-		struct crypto_tfm *tfm;
+		struct crypto_comp *tfm;
 
 		tfms = pos->tfms;
 		tfm = *per_cpu_ptr(tfms, cpu);
 
-		if (!strcmp(crypto_tfm_alg_name(tfm), alg_name)) {
+		if (!strcmp(crypto_comp_name(tfm), alg_name)) {
 			pos->users++;
 			return tfms;
 		}
@@ -377,12 +362,13 @@ static struct crypto_tfm **ipcomp_alloc_tfms(const char *alg_name)
 	INIT_LIST_HEAD(&pos->list);
 	list_add(&pos->list, &ipcomp_tfms_list);
 
-	pos->tfms = tfms = alloc_percpu(struct crypto_tfm *);
+	pos->tfms = tfms = alloc_percpu(struct crypto_comp *);
 	if (!tfms)
 		goto error;
 
 	for_each_possible_cpu(cpu) {
-		struct crypto_tfm *tfm = crypto_alloc_tfm(alg_name, 0);
+		struct crypto_comp *tfm = crypto_alloc_comp(alg_name, 0,
+							    CRYPTO_ALG_ASYNC);
 		if (!tfm)
 			goto error;
 		*per_cpu_ptr(tfms, cpu) = tfm;
@@ -428,13 +414,12 @@ static int ipcomp_init_state(struct xfrm_state *x)
 		goto out;
 
 	err = -ENOMEM;
-	ipcd = kmalloc(sizeof(*ipcd), GFP_KERNEL);
+	ipcd = kzalloc(sizeof(*ipcd), GFP_KERNEL);
 	if (!ipcd)
 		goto out;
 
-	memset(ipcd, 0, sizeof(*ipcd));
 	x->props.header_len = 0;
-	if (x->props.mode)
+	if (x->props.mode == XFRM_MODE_TUNNEL)
 		x->props.header_len += sizeof(struct iphdr);
 
 	mutex_lock(&ipcomp_resource_mutex);
@@ -446,7 +431,7 @@ static int ipcomp_init_state(struct xfrm_state *x)
 		goto error;
 	mutex_unlock(&ipcomp_resource_mutex);
 
-	if (x->props.mode) {
+	if (x->props.mode == XFRM_MODE_TUNNEL) {
 		err = ipcomp_tunnel_attach(x);
 		if (err)
 			goto error_tunnel;

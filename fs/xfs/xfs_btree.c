@@ -24,14 +24,12 @@
 #include "xfs_trans.h"
 #include "xfs_sb.h"
 #include "xfs_ag.h"
-#include "xfs_dir.h"
 #include "xfs_dir2.h"
 #include "xfs_dmapi.h"
 #include "xfs_mount.h"
 #include "xfs_bmap_btree.h"
 #include "xfs_alloc_btree.h"
 #include "xfs_ialloc_btree.h"
-#include "xfs_dir_sf.h"
 #include "xfs_dir2_sf.h"
 #include "xfs_attr_sf.h"
 #include "xfs_dinode.h"
@@ -163,7 +161,7 @@ xfs_btree_check_key(
 
 		k1 = ak1;
 		k2 = ak2;
-		ASSERT(INT_GET(k1->br_startoff, ARCH_CONVERT) < INT_GET(k2->br_startoff, ARCH_CONVERT));
+		ASSERT(be64_to_cpu(k1->br_startoff) < be64_to_cpu(k2->br_startoff));
 		break;
 	    }
 	case XFS_BTNUM_INO: {
@@ -172,7 +170,7 @@ xfs_btree_check_key(
 
 		k1 = ak1;
 		k2 = ak2;
-		ASSERT(INT_GET(k1->ir_startino, ARCH_CONVERT) < INT_GET(k2->ir_startino, ARCH_CONVERT));
+		ASSERT(be32_to_cpu(k1->ir_startino) < be32_to_cpu(k2->ir_startino));
 		break;
 	    }
 	default:
@@ -287,8 +285,8 @@ xfs_btree_check_rec(
 
 		r1 = ar1;
 		r2 = ar2;
-		ASSERT(INT_GET(r1->ir_startino, ARCH_CONVERT) + XFS_INODES_PER_CHUNK <=
-		       INT_GET(r2->ir_startino, ARCH_CONVERT));
+		ASSERT(be32_to_cpu(r1->ir_startino) + XFS_INODES_PER_CHUNK <=
+		       be32_to_cpu(r2->ir_startino));
 		break;
 	    }
 	default:

@@ -65,7 +65,7 @@
 #include <net/sctp/sctp.h>
 #include <net/sctp/sm.h>
 
-extern kmem_cache_t *sctp_chunk_cachep;
+extern struct kmem_cache *sctp_chunk_cachep;
 
 SCTP_STATIC
 struct sctp_chunk *sctp_make_chunk(const struct sctp_association *asoc,
@@ -111,7 +111,7 @@ static const struct sctp_paramhdr prsctp_param = {
  * provided chunk, as most cause codes will be embedded inside an
  * abort chunk.
  */
-void  sctp_init_cause(struct sctp_chunk *chunk, __u16 cause_code,
+void  sctp_init_cause(struct sctp_chunk *chunk, __be16 cause_code,
 		      const void *payload, size_t paylen)
 {
 	sctp_errhdr_t err;
@@ -124,8 +124,8 @@ void  sctp_init_cause(struct sctp_chunk *chunk, __u16 cause_code,
 	padlen = len % 4;
 	err.length  = htons(len);
 	len += padlen;
-	sctp_addto_chunk(chunk, sizeof(sctp_errhdr_t), &err);
-	chunk->subh.err_hdr = sctp_addto_chunk(chunk, paylen, payload);
+	chunk->subh.err_hdr = sctp_addto_chunk(chunk, sizeof(sctp_errhdr_t), &err);
+	sctp_addto_chunk(chunk, paylen, payload);
 }
 
 /* 3.3.2 Initiation (INIT) (1)
@@ -183,8 +183,8 @@ struct sctp_chunk *sctp_make_init(const struct sctp_association *asoc,
 	int num_types, addrs_len = 0;
 	struct sctp_sock *sp;
 	sctp_supported_addrs_param_t sat;
-	__u16 types[2];
-	sctp_adaption_ind_param_t aiparam;
+	__be16 types[2];
+	sctp_adaptation_ind_param_t aiparam;
 
 	/* RFC 2960 3.3.2 Initiation (INIT) (1)
 	 *
@@ -249,9 +249,9 @@ struct sctp_chunk *sctp_make_init(const struct sctp_association *asoc,
 	sctp_addto_chunk(retval, sizeof(ecap_param), &ecap_param);
 	if (sctp_prsctp_enable)
 		sctp_addto_chunk(retval, sizeof(prsctp_param), &prsctp_param);
-	aiparam.param_hdr.type = SCTP_PARAM_ADAPTION_LAYER_IND;
+	aiparam.param_hdr.type = SCTP_PARAM_ADAPTATION_LAYER_IND;
 	aiparam.param_hdr.length = htons(sizeof(aiparam));
-	aiparam.adaption_ind = htonl(sp->adaption_ind);
+	aiparam.adaptation_ind = htonl(sp->adaptation_ind);
 	sctp_addto_chunk(retval, sizeof(aiparam), &aiparam);
 nodata:
 	kfree(addrs.v);
@@ -269,7 +269,7 @@ struct sctp_chunk *sctp_make_init_ack(const struct sctp_association *asoc,
 	sctp_cookie_param_t *cookie;
 	int cookie_len;
 	size_t chunksize;
-	sctp_adaption_ind_param_t aiparam;
+	sctp_adaptation_ind_param_t aiparam;
 
 	retval = NULL;
 
@@ -323,9 +323,9 @@ struct sctp_chunk *sctp_make_init_ack(const struct sctp_association *asoc,
 	if (asoc->peer.prsctp_capable)
 		sctp_addto_chunk(retval, sizeof(prsctp_param), &prsctp_param);
 
-	aiparam.param_hdr.type = SCTP_PARAM_ADAPTION_LAYER_IND;
+	aiparam.param_hdr.type = SCTP_PARAM_ADAPTATION_LAYER_IND;
 	aiparam.param_hdr.length = htons(sizeof(aiparam));
-	aiparam.adaption_ind = htonl(sctp_sk(asoc->base.sk)->adaption_ind);
+	aiparam.adaptation_ind = htonl(sctp_sk(asoc->base.sk)->adaptation_ind);
 	sctp_addto_chunk(retval, sizeof(aiparam), &aiparam);
 
 	/* We need to remove the const qualifier at this point.  */
@@ -775,7 +775,7 @@ struct sctp_chunk *sctp_make_abort_no_data(
 	const struct sctp_chunk *chunk, __u32 tsn)
 {
 	struct sctp_chunk *retval;
-	__u32 payload;
+	__be32 payload;
 
 	retval = sctp_make_abort(asoc, chunk, sizeof(sctp_errhdr_t)
 				 + sizeof(tsn));
@@ -951,7 +951,7 @@ nodata:
 /* Create an Operation Error chunk.  */
 struct sctp_chunk *sctp_make_op_error(const struct sctp_association *asoc,
 				 const struct sctp_chunk *chunk,
-				 __u16 cause_code, const void *payload,
+				 __be16 cause_code, const void *payload,
 				 size_t paylen)
 {
 	struct sctp_chunk *retval;
@@ -979,7 +979,7 @@ struct sctp_chunk *sctp_chunkify(struct sk_buff *skb,
 {
 	struct sctp_chunk *retval;
 
-	retval = kmem_cache_alloc(sctp_chunk_cachep, SLAB_ATOMIC);
+	retval = kmem_cache_alloc(sctp_chunk_cachep, GFP_ATOMIC);
 
 	if (!retval)
 		goto nodata;
@@ -1190,15 +1190,14 @@ void sctp_chunk_assign_ssn(struct sctp_chunk *chunk)
 	if (chunk->chunk_hdr->flags & SCTP_DATA_UNORDERED) {
 		ssn = 0;
 	} else {
-		sid = htons(chunk->subh.data_hdr->stream);
+		sid = ntohs(chunk->subh.data_hdr->stream);
 		if (chunk->chunk_hdr->flags & SCTP_DATA_LAST_FRAG)
 			ssn = sctp_ssn_next(&chunk->asoc->ssnmap->out, sid);
 		else
 			ssn = sctp_ssn_peek(&chunk->asoc->ssnmap->out, sid);
-		ssn = htons(ssn);
 	}
 
-	chunk->subh.data_hdr->ssn = ssn;
+	chunk->subh.data_hdr->ssn = htons(ssn);
 	chunk->has_ssn = 1;
 }
 
@@ -1280,17 +1279,13 @@ static sctp_cookie_param_t *sctp_pack_cookie(const struct sctp_endpoint *ep,
 			- (bodysize % SCTP_COOKIE_MULTIPLE);
 	*cookie_len = headersize + bodysize;
 
-	retval = kmalloc(*cookie_len, GFP_ATOMIC);
-
-	if (!retval) {
-		*cookie_len = 0;
-		goto nodata;
-	}
-
 	/* Clear this memory since we are sending this data structure
 	 * out on the network.
 	 */
-	memset(retval, 0x00, *cookie_len);
+	retval = kzalloc(*cookie_len, GFP_ATOMIC);
+	if (!retval)
+		goto nodata;
+
 	cookie = (struct sctp_signed_cookie *) retval->body;
 
 	/* Set up the parameter header.  */
@@ -1305,8 +1300,8 @@ static sctp_cookie_param_t *sctp_pack_cookie(const struct sctp_endpoint *ep,
 	/* Remember PR-SCTP capability. */
 	cookie->c.prsctp_capable = asoc->peer.prsctp_capable;
 
-	/* Save adaption indication in the cookie. */
-	cookie->c.adaption_ind = asoc->peer.adaption_ind;
+	/* Save adaptation indication in the cookie. */
+	cookie->c.adaptation_ind = asoc->peer.adaptation_ind;
 
 	/* Set an expiration time for the cookie.  */
 	do_gettimeofday(&cookie->c.expiration);
@@ -1321,19 +1316,29 @@ static sctp_cookie_param_t *sctp_pack_cookie(const struct sctp_endpoint *ep,
 	       ntohs(init_chunk->chunk_hdr->length), raw_addrs, addrs_len);
 
   	if (sctp_sk(ep->base.sk)->hmac) {
+		struct hash_desc desc;
+
 		/* Sign the message.  */
 		sg.page = virt_to_page(&cookie->c);
 		sg.offset = (unsigned long)(&cookie->c) % PAGE_SIZE;
 		sg.length = bodysize;
 		keylen = SCTP_SECRET_SIZE;
 		key = (char *)ep->secret_key[ep->current_key];
+  		desc.tfm = sctp_sk(ep->base.sk)->hmac;
+  		desc.flags = 0;
 
-		sctp_crypto_hmac(sctp_sk(ep->base.sk)->hmac, key, &keylen,
-				 &sg, 1, cookie->signature);
+		if (crypto_hash_setkey(desc.tfm, key, keylen) ||
+		    crypto_hash_digest(&desc, &sg, bodysize, cookie->signature))
+			goto free_cookie;
 	}
 
-nodata:
 	return retval;
+
+free_cookie:
+	kfree(retval);
+nodata:
+	*cookie_len = 0;
+	return NULL;
 }
 
 /* Unpack the cookie from COOKIE ECHO chunk, recreating the association.  */
@@ -1354,6 +1359,7 @@ struct sctp_association *sctp_unpack_cookie(
 	sctp_scope_t scope;
 	struct sk_buff *skb = chunk->skb;
 	struct timeval tv;
+	struct hash_desc desc;
 
 	/* Header size is static data prior to the actual cookie, including
 	 * any padding.
@@ -1389,17 +1395,25 @@ struct sctp_association *sctp_unpack_cookie(
 	sg.offset = (unsigned long)(bear_cookie) % PAGE_SIZE;
 	sg.length = bodysize;
 	key = (char *)ep->secret_key[ep->current_key];
+	desc.tfm = sctp_sk(ep->base.sk)->hmac;
+	desc.flags = 0;
 
-	memset(digest, 0x00, sizeof(digest));
-	sctp_crypto_hmac(sctp_sk(ep->base.sk)->hmac, key, &keylen, &sg,
-			 1, digest);
+	memset(digest, 0x00, SCTP_SIGNATURE_SIZE);
+	if (crypto_hash_setkey(desc.tfm, key, keylen) ||
+	    crypto_hash_digest(&desc, &sg, bodysize, digest)) {
+		*error = -SCTP_IERROR_NOMEM;
+		goto fail;
+	}
 
 	if (memcmp(digest, cookie->signature, SCTP_SIGNATURE_SIZE)) {
 		/* Try the previous key. */
 		key = (char *)ep->secret_key[ep->last_key];
-		memset(digest, 0x00, sizeof(digest));
-		sctp_crypto_hmac(sctp_sk(ep->base.sk)->hmac, key, &keylen,
-				 &sg, 1, digest);
+		memset(digest, 0x00, SCTP_SIGNATURE_SIZE);
+		if (crypto_hash_setkey(desc.tfm, key, keylen) ||
+		    crypto_hash_digest(&desc, &sg, bodysize, digest)) {
+			*error = -SCTP_IERROR_NOMEM;
+			goto fail;
+		}
 
 		if (memcmp(digest, cookie->signature, SCTP_SIGNATURE_SIZE)) {
 			/* Yikes!  Still bad signature! */
@@ -1421,7 +1435,7 @@ no_hmac:
 		goto fail;
 	}
 
-	if (ntohs(chunk->sctp_hdr->source) != bear_cookie->peer_addr.v4.sin_port ||
+	if (chunk->sctp_hdr->source != bear_cookie->peer_addr.v4.sin_port ||
 	    ntohs(chunk->sctp_hdr->dest) != bear_cookie->my_port) {
 		*error = -SCTP_IERROR_BAD_PORTS;
 		goto fail;
@@ -1430,8 +1444,16 @@ no_hmac:
 	/* Check to see if the cookie is stale.  If there is already
 	 * an association, there is no need to check cookie's expiration
 	 * for init collision case of lost COOKIE ACK.
+	 * If skb has been timestamped, then use the stamp, otherwise
+	 * use current time.  This introduces a small possibility that
+	 * that a cookie may be considered expired, but his would only slow
+	 * down the new association establishment instead of every packet.
 	 */
-	skb_get_timestamp(skb, &tv);
+	if (sock_flag(ep->base.sk, SOCK_TIMESTAMP))
+		skb_get_timestamp(skb, &tv);
+	else
+		do_gettimeofday(&tv);
+
 	if (!asoc && tv_lt(bear_cookie->expiration, tv)) {
 		__u16 len;
 		/*
@@ -1448,10 +1470,10 @@ no_hmac:
 			suseconds_t usecs = (tv.tv_sec -
 				bear_cookie->expiration.tv_sec) * 1000000L +
 				tv.tv_usec - bear_cookie->expiration.tv_usec;
+			__be32 n = htonl(usecs);
 
-			usecs = htonl(usecs);
 			sctp_init_cause(*errp, SCTP_ERROR_STALE_COOKIE,
-					&usecs, sizeof(usecs));
+					&n, sizeof(n));
 			*error = -SCTP_IERROR_STALE_COOKIE;
 		} else
 			*error = -SCTP_IERROR_NOMEM;
@@ -1481,7 +1503,7 @@ no_hmac:
 
 	/* Also, add the destination address. */
 	if (list_empty(&retval->base.bind_addr.address_list)) {
-		sctp_add_bind_addr(&retval->base.bind_addr, &chunk->dest,
+		sctp_add_bind_addr(&retval->base.bind_addr, &chunk->dest, 1,
 				   GFP_ATOMIC);
 	}
 
@@ -1490,7 +1512,7 @@ no_hmac:
 	retval->addip_serial = retval->c.initial_tsn;
 	retval->adv_peer_ack_point = retval->ctsn_ack_point;
 	retval->peer.prsctp_capable = retval->c.prsctp_capable;
-	retval->peer.adaption_ind = retval->c.adaption_ind;
+	retval->peer.adaptation_ind = retval->c.adaptation_ind;
 
 	/* The INIT stuff will be done by the side effects.  */
 	return retval;
@@ -1514,8 +1536,8 @@ malformed:
  ********************************************************************/
 
 struct __sctp_missing {
-	__u32 num_missing;
-	__u16 type;
+	__be32 num_missing;
+	__be16 type;
 }  __attribute__((packed));
 
 /*
@@ -1540,7 +1562,7 @@ static int sctp_process_missing_param(const struct sctp_association *asoc,
 	if (*errp) {
 		report.num_missing = htonl(1);
 		report.type = paramtype;
-		sctp_init_cause(*errp, SCTP_ERROR_INV_PARAM,
+		sctp_init_cause(*errp, SCTP_ERROR_MISS_PARAM,
 				&report, sizeof(report));
 	}
 
@@ -1721,7 +1743,7 @@ static int sctp_verify_param(const struct sctp_association *asoc,
 	case SCTP_PARAM_HEARTBEAT_INFO:
 	case SCTP_PARAM_UNRECOGNIZED_PARAMETERS:
 	case SCTP_PARAM_ECN_CAPABLE:
-	case SCTP_PARAM_ADAPTION_LAYER_IND:
+	case SCTP_PARAM_ADAPTATION_LAYER_IND:
 		break;
 
 	case SCTP_PARAM_HOST_NAME_ADDRESS:
@@ -1753,7 +1775,9 @@ int sctp_verify_init(const struct sctp_association *asoc,
 
 	/* Verify stream values are non-zero. */
 	if ((0 == peer_init->init_hdr.num_outbound_streams) ||
-	    (0 == peer_init->init_hdr.num_inbound_streams)) {
+	    (0 == peer_init->init_hdr.num_inbound_streams) ||
+	    (0 == peer_init->init_hdr.init_tag) ||
+	    (SCTP_DEFAULT_MINWINDOW > ntohl(peer_init->init_hdr.a_rwnd))) {
 
 		sctp_process_inv_mandatory(asoc, chunk, errp);
 		return 0;
@@ -1827,9 +1851,10 @@ int sctp_process_init(struct sctp_association *asoc, sctp_cid_t cid,
 	 * added as the primary transport.  The source address seems to
 	 * be a a better choice than any of the embedded addresses.
 	 */
-	if (peer_addr)
+	if (peer_addr) {
 		if(!sctp_assoc_add_peer(asoc, peer_addr, gfp, SCTP_ACTIVE))
 			goto nomem;
+	}
 
 	/* Process the initialization parameters.  */
 
@@ -1885,10 +1910,9 @@ int sctp_process_init(struct sctp_association *asoc, sctp_cid_t cid,
 	/* Copy cookie in case we need to resend COOKIE-ECHO. */
 	cookie = asoc->peer.cookie;
 	if (cookie) {
-		asoc->peer.cookie = kmalloc(asoc->peer.cookie_len, gfp);
+		asoc->peer.cookie = kmemdup(cookie, asoc->peer.cookie_len, gfp);
 		if (!asoc->peer.cookie)
 			goto clean_up;
-		memcpy(asoc->peer.cookie, cookie, asoc->peer.cookie_len);
 	}
 
 	/* RFC 2960 7.2.1 The initial value of ssthresh MAY be arbitrarily
@@ -2002,10 +2026,10 @@ static int sctp_process_param(struct sctp_association *asoc,
 		/* Fall through. */
 	case SCTP_PARAM_IPV4_ADDRESS:
 		af = sctp_get_af_specific(param_type2af(param.p->type));
-		af->from_addr_param(&addr, param.addr, asoc->peer.port, 0);
+		af->from_addr_param(&addr, param.addr, htons(asoc->peer.port), 0);
 		scope = sctp_scope(peer_addr);
 		if (sctp_in_scope(&addr, scope))
-			if (!sctp_assoc_add_peer(asoc, &addr, gfp, SCTP_ACTIVE))
+			if (!sctp_assoc_add_peer(asoc, &addr, gfp, SCTP_UNCONFIRMED))
 				return 0;
 		break;
 
@@ -2076,8 +2100,8 @@ static int sctp_process_param(struct sctp_association *asoc,
 		asoc->peer.ecn_capable = 1;
 		break;
 
-	case SCTP_PARAM_ADAPTION_LAYER_IND:
-		asoc->peer.adaption_ind = param.aind->adaption_ind;
+	case SCTP_PARAM_ADAPTATION_LAYER_IND:
+		asoc->peer.adaptation_ind = param.aind->adaptation_ind;
 		break;
 
 	case SCTP_PARAM_FWD_TSN_SUPPORT:
@@ -2205,7 +2229,7 @@ struct sctp_chunk *sctp_make_asconf_update_ip(struct sctp_association *asoc,
 					      union sctp_addr	      *laddr,
 					      struct sockaddr	      *addrs,
 					      int		      addrcnt,
-					      __u16		      flags)
+					      __be16		      flags)
 {
 	sctp_addip_param_t	param;
 	struct sctp_chunk	*retval;
@@ -2338,14 +2362,14 @@ static struct sctp_chunk *sctp_make_asconf_ack(const struct sctp_association *as
 }
 
 /* Add response parameters to an ASCONF_ACK chunk. */
-static void sctp_add_asconf_response(struct sctp_chunk *chunk, __u32 crr_id,
-			      __u16 err_code, sctp_addip_param_t *asconf_param)
+static void sctp_add_asconf_response(struct sctp_chunk *chunk, __be32 crr_id,
+			      __be16 err_code, sctp_addip_param_t *asconf_param)
 {
 	sctp_addip_param_t 	ack_param;
 	sctp_errhdr_t		err_param;
 	int			asconf_param_len = 0;
 	int			err_param_len = 0;
-	__u16			response_type;
+	__be16			response_type;
 
 	if (SCTP_ERROR_NO_ERROR == err_code) {
 		response_type = SCTP_PARAM_SUCCESS_REPORT;
@@ -2379,7 +2403,7 @@ static void sctp_add_asconf_response(struct sctp_chunk *chunk, __u32 crr_id,
 }
 
 /* Process a asconf parameter. */
-static __u16 sctp_process_asconf_param(struct sctp_association *asoc,
+static __be16 sctp_process_asconf_param(struct sctp_association *asoc,
 				       struct sctp_chunk *asconf,
 				       sctp_addip_param_t *asconf_param)
 {
@@ -2388,7 +2412,7 @@ static __u16 sctp_process_asconf_param(struct sctp_association *asoc,
 	union sctp_addr	addr;
 	struct list_head *pos;
 	union sctp_addr_param *addr_param;
-				 
+
 	addr_param = (union sctp_addr_param *)
 			((void *)asconf_param + sizeof(sctp_addip_param_t));
 
@@ -2396,7 +2420,7 @@ static __u16 sctp_process_asconf_param(struct sctp_association *asoc,
 	if (unlikely(!af))
 		return SCTP_ERROR_INV_PARAM;
 
-	af->from_addr_param(&addr, addr_param, asoc->peer.port, 0);
+	af->from_addr_param(&addr, addr_param, htons(asoc->peer.port), 0);
 	switch (asconf_param->param_hdr.type) {
 	case SCTP_PARAM_ADD_IP:
 		/* ADDIP 4.3 D9) If an endpoint receives an ADD IP address
@@ -2406,7 +2430,7 @@ static __u16 sctp_process_asconf_param(struct sctp_association *asoc,
 	 	 * Due to Resource Shortage'.
 	 	 */
 
-		peer = sctp_assoc_add_peer(asoc, &addr, GFP_ATOMIC, SCTP_ACTIVE);
+		peer = sctp_assoc_add_peer(asoc, &addr, GFP_ATOMIC, SCTP_UNCONFIRMED);
 		if (!peer)
 			return SCTP_ERROR_RSRC_LOW;
 
@@ -2462,7 +2486,7 @@ struct sctp_chunk *sctp_process_asconf(struct sctp_association *asoc,
 	sctp_addip_param_t	*asconf_param;
 	struct sctp_chunk	*asconf_ack;
 
-	__u16	err_code;
+	__be16	err_code;
 	int	length = 0;
 	int	chunk_len = asconf->skb->len;
 	__u32	serial;
@@ -2553,6 +2577,7 @@ static int sctp_asconf_param_success(struct sctp_association *asoc,
 	union sctp_addr_param *addr_param;
 	struct list_head *pos;
 	struct sctp_transport *transport;
+	struct sctp_sockaddr_entry *saddr;
 	int retval = 0;
 
 	addr_param = (union sctp_addr_param *)
@@ -2560,13 +2585,17 @@ static int sctp_asconf_param_success(struct sctp_association *asoc,
 
 	/* We have checked the packet before, so we do not check again.	*/
 	af = sctp_get_af_specific(param_type2af(addr_param->v4.param_hdr.type));
-	af->from_addr_param(&addr, addr_param, bp->port, 0);
+	af->from_addr_param(&addr, addr_param, htons(bp->port), 0);
 
 	switch (asconf_param->param_hdr.type) {
 	case SCTP_PARAM_ADD_IP:
 		sctp_local_bh_disable();
 		sctp_write_lock(&asoc->base.addr_lock);
-		retval = sctp_add_bind_addr(bp, &addr, GFP_ATOMIC);
+		list_for_each(pos, &bp->address_list) {
+			saddr = list_entry(pos, struct sctp_sockaddr_entry, list);
+			if (sctp_cmp_addr_exact(&saddr->a, &addr))
+				saddr->use_as_src = 1;
+		}
 		sctp_write_unlock(&asoc->base.addr_lock);
 		sctp_local_bh_enable();
 		break;
@@ -2579,6 +2608,7 @@ static int sctp_asconf_param_success(struct sctp_association *asoc,
 		list_for_each(pos, &asoc->peer.transport_addr_list) {
 			transport = list_entry(pos, struct sctp_transport,
 						 transports);
+			dst_release(transport->dst);
 			sctp_transport_route(transport, NULL,
 					     sctp_sk(asoc->base.sk));
 		}
@@ -2599,7 +2629,7 @@ static int sctp_asconf_param_success(struct sctp_association *asoc,
  * All TLVs after the failed response are considered unsuccessful unless a
  * specific success indication is present for the parameter.
  */
-static __u16 sctp_get_asconf_response(struct sctp_chunk *asconf_ack,
+static __be16 sctp_get_asconf_response(struct sctp_chunk *asconf_ack,
 				      sctp_addip_param_t *asconf_param,
 				      int no_err)
 {
@@ -2607,7 +2637,7 @@ static __u16 sctp_get_asconf_response(struct sctp_chunk *asconf_ack,
 	sctp_errhdr_t		*err_param;
 	int			length;
 	int			asconf_ack_len = asconf_ack->skb->len;
-	__u16			err_code;
+	__be16			err_code;
 
 	if (no_err)
 		err_code = SCTP_ERROR_NO_ERROR;
@@ -2663,7 +2693,7 @@ int sctp_process_asconf_ack(struct sctp_association *asoc,
 	int	all_param_pass = 0;
 	int	no_err = 1;
 	int	retval = 0;
-	__u16	err_code = SCTP_ERROR_NO_ERROR;
+	__be16	err_code = SCTP_ERROR_NO_ERROR;
 
 	/* Skip the chunkhdr and addiphdr from the last asconf sent and store
 	 * a pointer to address parameter.

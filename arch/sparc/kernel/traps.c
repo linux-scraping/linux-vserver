@@ -9,7 +9,6 @@
  * I hate traps on the sparc, grrr...
  */
 
-#include <linux/config.h>
 #include <linux/sched.h>  /* for jiffies */
 #include <linux/kernel.h>
 #include <linux/kallsyms.h>
@@ -100,7 +99,8 @@ void die_if_kernel(char *str, struct pt_regs *regs)
 "              /_| \\__/ |_\\\n"
 "                 \\__U_/\n");
 
-	printk("%s(%d): %s [#%d]\n", current->comm, current->pid, str, ++die_counter);
+	printk("%s(%d[#%u]): %s [#%d]\n", current->comm,
+		current->pid, current->xid, str, ++die_counter);
 	show_regs(regs);
 
 	__SAVE; __SAVE; __SAVE; __SAVE;

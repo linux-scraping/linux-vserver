@@ -35,7 +35,6 @@
 #include <linux/moduleparam.h>
 
 #include "acpiphp.h"
-#include "pci_hotplug.h"
 
 #define DRIVER_VERSION	"1.0.1"
 #define DRIVER_AUTHOR	"Irene Zubarev <zubarev@us.ibm.com>, Vernon Mauery <vernux@us.ibm.com>"
@@ -320,13 +319,12 @@ static int ibm_get_table_from_acpi(char **bufp)
 	if (bufp == NULL)
 		goto read_table_done;
 
-	lbuf = kmalloc(size, GFP_KERNEL);
+	lbuf = kzalloc(size, GFP_KERNEL);
 	dbg("%s: element count: %i, ASL table size: %i, &table = 0x%p\n",
 			__FUNCTION__, package->package.count, size, lbuf);
 
 	if (lbuf) {
 		*bufp = lbuf;
-		memset(lbuf, 0, size);
 	} else {
 		size = -ENOMEM;
 		goto read_table_done;
@@ -487,9 +485,7 @@ static void __exit ibm_acpiphp_exit(void)
 	if (ACPI_FAILURE(status))
 		err("%s: Notification handler removal failed\n", __FUNCTION__);
 	/* remove the /sys entries */
-	if (sysfs_remove_bin_file(sysdir, &ibm_apci_table_attr))
-		err("%s: removal of sysfs file apci_table failed\n",
-				__FUNCTION__);
+	sysfs_remove_bin_file(sysdir, &ibm_apci_table_attr);
 }
 
 module_init(ibm_acpiphp_init);

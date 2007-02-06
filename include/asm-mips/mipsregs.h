@@ -13,7 +13,6 @@
 #ifndef _ASM_MIPSREGS_H
 #define _ASM_MIPSREGS_H
 
-#include <linux/config.h>
 #include <linux/linkage.h>
 #include <asm/hazards.h>
 
@@ -471,6 +470,8 @@
 
 /* Bits specific to the VR41xx.  */
 #define VR41_CONF_CS		(_ULCAST_(1) << 12)
+#define VR41_CONF_P4K		(_ULCAST_(1) << 13)
+#define VR41_CONF_BP		(_ULCAST_(1) << 16)
 #define VR41_CONF_M16		(_ULCAST_(1) << 20)
 #define VR41_CONF_AD		(_ULCAST_(1) << 23)
 
@@ -543,62 +544,6 @@
 #define MIPS_FPIR_W		(_ULCAST_(1) << 20)
 #define MIPS_FPIR_L		(_ULCAST_(1) << 21)
 #define MIPS_FPIR_F64		(_ULCAST_(1) << 22)
-
-/*
- * R10000 performance counter definitions.
- *
- * FIXME: The R10000 performance counter opens a nice way to implement CPU
- *        time accounting with a precission of one cycle.  I don't have
- *        R10000 silicon but just a manual, so ...
- */
-
-/*
- * Events counted by counter #0
- */
-#define CE0_CYCLES			0
-#define CE0_INSN_ISSUED			1
-#define CE0_LPSC_ISSUED			2
-#define CE0_S_ISSUED			3
-#define CE0_SC_ISSUED			4
-#define CE0_SC_FAILED			5
-#define CE0_BRANCH_DECODED		6
-#define CE0_QW_WB_SECONDARY		7
-#define CE0_CORRECTED_ECC_ERRORS	8
-#define CE0_ICACHE_MISSES		9
-#define CE0_SCACHE_I_MISSES		10
-#define CE0_SCACHE_I_WAY_MISSPREDICTED	11
-#define CE0_EXT_INTERVENTIONS_REQ	12
-#define CE0_EXT_INVALIDATE_REQ		13
-#define CE0_VIRTUAL_COHERENCY_COND	14
-#define CE0_INSN_GRADUATED		15
-
-/*
- * Events counted by counter #1
- */
-#define CE1_CYCLES			0
-#define CE1_INSN_GRADUATED		1
-#define CE1_LPSC_GRADUATED		2
-#define CE1_S_GRADUATED			3
-#define CE1_SC_GRADUATED		4
-#define CE1_FP_INSN_GRADUATED		5
-#define CE1_QW_WB_PRIMARY		6
-#define CE1_TLB_REFILL			7
-#define CE1_BRANCH_MISSPREDICTED	8
-#define CE1_DCACHE_MISS			9
-#define CE1_SCACHE_D_MISSES		10
-#define CE1_SCACHE_D_WAY_MISSPREDICTED	11
-#define CE1_EXT_INTERVENTION_HITS	12
-#define CE1_EXT_INVALIDATE_REQ		13
-#define CE1_SP_HINT_TO_CEXCL_SC_BLOCKS	14
-#define CE1_SP_HINT_TO_SHARED_SC_BLOCKS	15
-
-/*
- * These flags define in which privilege mode the counters count events
- */
-#define CEB_USER	8	/* Count events in user mode, EXL = ERL = 0 */
-#define CEB_SUPERVISOR	4	/* Count events in supvervisor mode EXL = ERL = 0 */
-#define CEB_KERNEL	2	/* Count events in kernel mode EXL = ERL = 0 */
-#define CEB_EXL		1	/* Count events with EXL = 1, ERL = 0 */
 
 #ifndef __ASSEMBLY__
 
@@ -1417,7 +1362,7 @@ change_c0_##name(unsigned int change, unsigned int new)		\
 
 #else /* SMTC versions that manage MT scheduling */
 
-#include <asm/interrupt.h>
+#include <linux/irqflags.h>
 
 /*
  * This is a duplicate of dmt() in mipsmtregs.h to avoid problems with
@@ -1451,18 +1396,17 @@ static inline void __emt(unsigned int previous)
 {
 	if ((previous & __EMT_ENABLE))
 		__asm__ __volatile__(
-		"	.set	noreorder				\n"
 		"	.set	mips32r2				\n"
 		"	.word	0x41600be1		# emt		\n"
 		"	ehb						\n"
-		"	.set	mips0					\n"
-		"	.set	reorder					\n");
+		"	.set	mips0					\n");
 }
 
 static inline void __ehb(void)
 {
 	__asm__ __volatile__(
-	"	ehb							\n");
+	"	.set	mips32r2					\n"
+	"	ehb							\n"		"	.set	mips0						\n");
 }
 
 /*

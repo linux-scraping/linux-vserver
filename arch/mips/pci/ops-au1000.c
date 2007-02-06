@@ -28,7 +28,6 @@
  *  with this program; if not, write  to the Free Software Foundation, Inc.,
  *  675 Mass Ave, Cambridge, MA 02139, USA.
  */
-#include <linux/config.h>
 #include <linux/types.h>
 #include <linux/pci.h>
 #include <linux/kernel.h>
@@ -111,7 +110,7 @@ static int config_access(unsigned char access_type, struct pci_bus *bus,
 	if (first_cfg) {
 		/* reserve a wired entry for pci config accesses */
 		first_cfg = 0;
-		pci_cfg_vm = get_vm_area(0x2000, 0);
+		pci_cfg_vm = get_vm_area(0x2000, VM_IOREMAP);
 		if (!pci_cfg_vm)
 			panic (KERN_ERR "PCI unable to get vm area\n");
 		pci_cfg_wired_entry = read_c0_wired();

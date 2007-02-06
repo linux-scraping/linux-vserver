@@ -5,7 +5,6 @@
  *
  */
 
-#include <linux/config.h>
 #include <linux/init.h>
 #include "hisax.h"
 #include "isac.h"
@@ -27,7 +26,7 @@ static void dummywr(struct IsdnCardState *cs, int chan, u_char off, u_char value
 }
 
 static irqreturn_t
-netjet_s_interrupt(int intno, void *dev_id, struct pt_regs *regs)
+netjet_s_interrupt(int intno, void *dev_id)
 {
 	struct IsdnCardState *cs = dev_id;
 	u_char val, s1val, s0val;
@@ -149,9 +148,9 @@ NETjet_S_card_msg(struct IsdnCardState *cs, int mt, void *arg)
 	return(0);
 }
 
-static struct pci_dev *dev_netjet __initdata = NULL;
+static struct pci_dev *dev_netjet __devinitdata = NULL;
 
-int __init
+int __devinit
 setup_netjet_s(struct IsdnCard *card)
 {
 	int bytecnt,cfg;
@@ -272,7 +271,7 @@ setup_netjet_s(struct IsdnCard *card)
 	setup_isac(cs);
 	cs->cardmsg = &NETjet_S_card_msg;
 	cs->irq_func = &netjet_s_interrupt;
-	cs->irq_flags |= SA_SHIRQ;
+	cs->irq_flags |= IRQF_SHARED;
 	ISACVersion(cs, "NETjet-S:");
 	return (1);
 }

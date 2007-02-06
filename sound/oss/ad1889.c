@@ -26,7 +26,6 @@
  *
  * $Id: ad1889.c,v 1.3 2002/10/19 21:31:44 grundler Exp $
  */
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/ioport.h>
@@ -930,7 +929,7 @@ static struct pci_device_id ad1889_id_tbl[] = {
 };
 MODULE_DEVICE_TABLE(pci, ad1889_id_tbl);
 
-static irqreturn_t ad1889_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t ad1889_interrupt(int irq, void *dev_id)
 {
 	u32 stat;
 	ad1889_dev_t *dev = (ad1889_dev_t *)dev_id;
@@ -1011,7 +1010,7 @@ static int __devinit ad1889_probe(struct pci_dev *pcidev, const struct pci_devic
 		goto out2;
 	}
 
-	if (request_irq(pcidev->irq, ad1889_interrupt, SA_SHIRQ, DEVNAME, dev) != 0) {
+	if (request_irq(pcidev->irq, ad1889_interrupt, IRQF_SHARED, DEVNAME, dev) != 0) {
 		printk(KERN_ERR DEVNAME ": unable to request interrupt\n");
 		goto out3;
 	}

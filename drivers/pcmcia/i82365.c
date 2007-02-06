@@ -80,7 +80,7 @@ module_param(pc_debug, int, 0644);
 #define debug(lvl, fmt, arg...) do { } while (0)
 #endif
 
-static irqreturn_t i365_count_irq(int, void *, struct pt_regs *);
+static irqreturn_t i365_count_irq(int, void *);
 static inline int _check_irq(int irq, int flags)
 {
     if (request_irq(irq, i365_count_irq, flags, "x", i365_count_irq) != 0)
@@ -498,7 +498,7 @@ static u_int __init set_bridge_opts(u_short s, u_short ns)
 static volatile u_int irq_hits;
 static u_short irq_sock;
 
-static irqreturn_t i365_count_irq(int irq, void *dev, struct pt_regs *regs)
+static irqreturn_t i365_count_irq(int irq, void *dev)
 {
     i365_get(irq_sock, I365_CSC);
     irq_hits++;
@@ -509,7 +509,7 @@ static irqreturn_t i365_count_irq(int irq, void *dev, struct pt_regs *regs)
 static u_int __init test_irq(u_short sock, int irq)
 {
     debug(2, "  testing ISA irq %d\n", irq);
-    if (request_irq(irq, i365_count_irq, SA_PROBEIRQ, "scan",
+    if (request_irq(irq, i365_count_irq, IRQF_PROBE_SHARED, "scan",
 			i365_count_irq) != 0)
 	return 1;
     irq_hits = 0; irq_sock = sock;
@@ -562,7 +562,7 @@ static u_int __init isa_scan(u_short sock, u_int mask0)
     } else {
 	/* Fallback: just find interrupts that aren't in use */
 	for (i = 0; i < 16; i++)
-	    if ((mask0 & (1 << i)) && (_check_irq(i, SA_PROBEIRQ) == 0))
+	    if ((mask0 & (1 << i)) && (_check_irq(i, IRQF_PROBE_SHARED) == 0))
 		mask1 |= (1 << i);
 	printk("default");
 	/* If scan failed, default to polled status */
@@ -726,7 +726,7 @@ static void __init add_pcic(int ns, int type)
 	u_int cs_mask = mask & ((cs_irq) ? (1<<cs_irq) : ~(1<<12));
 	for (cs_irq = 15; cs_irq > 0; cs_irq--)
 	    if ((cs_mask & (1 << cs_irq)) &&
-		(_check_irq(cs_irq, SA_PROBEIRQ) == 0))
+		(_check_irq(cs_irq, IRQF_PROBE_SHARED) == 0))
 		break;
 	if (cs_irq) {
 	    grab_irq = 1;
@@ -848,8 +848,7 @@ static void __init isa_probe(void)
 
 /*====================================================================*/
 
-static irqreturn_t pcic_interrupt(int irq, void *dev,
-				    struct pt_regs *regs)
+static irqreturn_t pcic_interrupt(int irq, void *dev)
 {
     int i, j, csc;
     u_int events, active;
@@ -898,7 +897,7 @@ static irqreturn_t pcic_interrupt(int irq, void *dev,
 
 static void pcic_interrupt_wrapper(u_long data)
 {
-    pcic_interrupt(0, NULL, NULL);
+    pcic_interrupt(0, NULL);
     poll_timer.expires = jiffies + poll_interval;
     add_timer(&poll_timer);
 }
@@ -1084,9 +1083,10 @@ static int i365_set_mem_map(u_short sock, struct pccard_mem_map *mem)
     u_short base, i;
     u_char map;
     
-    debug(1, "SetMemMap(%d, %d, %#2.2x, %d ns, %#lx-%#lx, "
+    debug(1, "SetMemMap(%d, %d, %#2.2x, %d ns, %#llx-%#llx, "
 	  "%#x)\n", sock, mem->map, mem->flags, mem->speed,
-	  mem->res->start, mem->res->end, mem->card_start);
+	  (unsigned long long)mem->res->start,
+	  (unsigned long long)mem->res->end, mem->card_start);
 
     map = mem->map;
     if ((map > 4) || (mem->card_start > 0x3ffffff) ||

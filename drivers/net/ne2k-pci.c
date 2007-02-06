@@ -175,9 +175,9 @@ static void ne2k_pci_block_input(struct net_device *dev, int count,
 			  struct sk_buff *skb, int ring_offset);
 static void ne2k_pci_block_output(struct net_device *dev, const int count,
 		const unsigned char *buf, const int start_page);
-static struct ethtool_ops ne2k_pci_ethtool_ops;
+static const struct ethtool_ops ne2k_pci_ethtool_ops;
 
-
+
 
 /* There is no room in the standard 8390 structure for extra info we need,
    so we build a meta/outer-wrapper structure.. */
@@ -231,12 +231,12 @@ static int __devinit ne2k_pci_init_one (struct pci_dev *pdev,
 	irq = pdev->irq;
 
 	if (!ioaddr || ((pci_resource_flags (pdev, 0) & IORESOURCE_IO) == 0)) {
-		printk (KERN_ERR PFX "no I/O resource at PCI BAR #0\n");
+		dev_err(&pdev->dev, "no I/O resource at PCI BAR #0\n");
 		return -ENODEV;
 	}
 
 	if (request_region (ioaddr, NE_IO_EXTENT, DRV_NAME) == NULL) {
-		printk (KERN_ERR PFX "I/O resource 0x%x @ 0x%lx busy\n",
+		dev_err(&pdev->dev, "I/O resource 0x%x @ 0x%lx busy\n",
 			NE_IO_EXTENT, ioaddr);
 		return -EBUSY;
 	}
@@ -263,7 +263,7 @@ static int __devinit ne2k_pci_init_one (struct pci_dev *pdev,
 	/* Allocate net_device, dev->priv; fill in 8390 specific dev fields. */
 	dev = alloc_ei_netdev();
 	if (!dev) {
-		printk (KERN_ERR PFX "cannot allocate ethernet device\n");
+		dev_err(&pdev->dev, "cannot allocate ethernet device\n");
 		goto err_out_free_res;
 	}
 	SET_MODULE_OWNER(dev);
@@ -281,7 +281,8 @@ static int __devinit ne2k_pci_init_one (struct pci_dev *pdev,
 		while ((inb(ioaddr + EN0_ISR) & ENISR_RESET) == 0)
 			/* Limit wait: '2' avoids jiffy roll-over. */
 			if (jiffies - reset_start_time > 2) {
-				printk(KERN_ERR PFX "Card failure (no reset ack).\n");
+				dev_err(&pdev->dev,
+					"Card failure (no reset ack).\n");
 				goto err_out_free_netdev;
 			}
 
@@ -385,7 +386,7 @@ err_out_free_res:
 
 }
 
-/* 
+/*
  * Magic incantation sequence for full duplex on the supported cards.
  */
 static inline int set_realtek_fdx(struct net_device *dev)
@@ -410,7 +411,7 @@ static inline int set_holtek_fdx(struct net_device *dev)
 
 static int ne2k_pci_set_fdx(struct net_device *dev)
 {
-	if (ei_status.ne2k_flags & REALTEK_FDX) 
+	if (ei_status.ne2k_flags & REALTEK_FDX)
 		return set_realtek_fdx(dev);
 	else if (ei_status.ne2k_flags & HOLTEK_FDX)
 		return set_holtek_fdx(dev);
@@ -420,7 +421,7 @@ static int ne2k_pci_set_fdx(struct net_device *dev)
 
 static int ne2k_pci_open(struct net_device *dev)
 {
-	int ret = request_irq(dev->irq, ei_interrupt, SA_SHIRQ, dev->name, dev);
+	int ret = request_irq(dev->irq, ei_interrupt, IRQF_SHARED, dev->name, dev);
 	if (ret)
 		return ret;
 
@@ -634,7 +635,7 @@ static void ne2k_pci_get_drvinfo(struct net_device *dev,
 	strcpy(info->bus_info, pci_name(pci_dev));
 }
 
-static struct ethtool_ops ne2k_pci_ethtool_ops = {
+static const struct ethtool_ops ne2k_pci_ethtool_ops = {
 	.get_drvinfo		= ne2k_pci_get_drvinfo,
 	.get_tx_csum		= ethtool_op_get_tx_csum,
 	.get_sg			= ethtool_op_get_sg,
@@ -701,7 +702,7 @@ static int __init ne2k_pci_init(void)
 #ifdef MODULE
 	printk(version);
 #endif
-	return pci_module_init (&ne2k_driver);
+	return pci_register_driver(&ne2k_driver);
 }
 
 

@@ -67,8 +67,8 @@
 /* Parisc type numbers. */
 #define PORT_MUX	48
 
-/* Atmel AT91RM9200 SoC */
-#define PORT_AT91RM9200 49
+/* Atmel AT91 / AT32 SoC */
+#define PORT_ATMEL	49
 
 /* Macintosh Zilog type numbers */
 #define PORT_MAC_ZILOG	50	/* m68k : not yet implemented */
@@ -130,9 +130,13 @@
 /* SUN4V Hypervisor Console */
 #define PORT_SUNHV	72
 
+#define PORT_S3C2412	73
+
+/* Xilinx uartlite */
+#define PORT_UARTLITE	74
+
 #ifdef __KERNEL__
 
-#include <linux/config.h>
 #include <linux/compiler.h>
 #include <linux/interrupt.h>
 #include <linux/circ_buf.h>
@@ -162,8 +166,8 @@ struct uart_ops {
 	void		(*break_ctl)(struct uart_port *, int ctl);
 	int		(*startup)(struct uart_port *);
 	void		(*shutdown)(struct uart_port *);
-	void		(*set_termios)(struct uart_port *, struct termios *new,
-				       struct termios *old);
+	void		(*set_termios)(struct uart_port *, struct ktermios *new,
+				       struct ktermios *old);
 	void		(*pm)(struct uart_port *, unsigned int state,
 			      unsigned int oldstate);
 	int		(*set_wake)(struct uart_port *, unsigned int state);
@@ -214,16 +218,18 @@ struct uart_port {
 	unsigned char __iomem	*membase;		/* read/write[bwl] */
 	unsigned int		irq;			/* irq number */
 	unsigned int		uartclk;		/* base uart clock */
-	unsigned char		fifosize;		/* tx fifo size */
+	unsigned int		fifosize;		/* tx fifo size */
 	unsigned char		x_char;			/* xon/xoff char */
 	unsigned char		regshift;		/* reg offset shift */
 	unsigned char		iotype;			/* io access style */
+	unsigned char		unused1;
 
 #define UPIO_PORT		(0)
 #define UPIO_HUB6		(1)
 #define UPIO_MEM		(2)
 #define UPIO_MEM32		(3)
 #define UPIO_AU			(4)			/* Au1x00 type IO */
+#define UPIO_TSI		(5)			/* Tsi108/109 type IO */
 
 	unsigned int		read_status_mask;	/* driver specific */
 	unsigned int		ignore_status_mask;	/* driver specific */
@@ -315,6 +321,7 @@ struct uart_info {
 #define UIF_CTS_FLOW		((__force uif_t) (1 << 26))
 #define UIF_NORMAL_ACTIVE	((__force uif_t) (1 << 29))
 #define UIF_INITIALIZED		((__force uif_t) (1 << 31))
+#define UIF_SUSPENDED		((__force uif_t) (1 << 30))
 
 	int			blocked_open;
 
@@ -334,7 +341,6 @@ struct uart_driver {
 	struct module		*owner;
 	const char		*driver_name;
 	const char		*dev_name;
-	const char		*devfs_name;
 	int			 major;
 	int			 minor;
 	int			 nr;
@@ -355,8 +361,8 @@ void uart_write_wakeup(struct uart_port *port);
  */
 void uart_update_timeout(struct uart_port *port, unsigned int cflag,
 			 unsigned int baud);
-unsigned int uart_get_baud_rate(struct uart_port *port, struct termios *termios,
-				struct termios *old, unsigned int min,
+unsigned int uart_get_baud_rate(struct uart_port *port, struct ktermios *termios,
+				struct ktermios *old, unsigned int min,
 				unsigned int max);
 unsigned int uart_get_divisor(struct uart_port *port, unsigned int baud);
 
@@ -405,13 +411,12 @@ int uart_resume_port(struct uart_driver *reg, struct uart_port *port);
  * The following are helper functions for the low level drivers.
  */
 static inline int
-uart_handle_sysrq_char(struct uart_port *port, unsigned int ch,
-		       struct pt_regs *regs)
+uart_handle_sysrq_char(struct uart_port *port, unsigned int ch)
 {
 #ifdef SUPPORT_SYSRQ
 	if (port->sysrq) {
 		if (ch && time_before(jiffies, port->sysrq)) {
-			handle_sysrq(ch, regs, NULL);
+			handle_sysrq(ch, port->info->tty);
 			port->sysrq = 0;
 			return 1;
 		}
@@ -421,7 +426,7 @@ uart_handle_sysrq_char(struct uart_port *port, unsigned int ch,
 	return 0;
 }
 #ifndef SUPPORT_SYSRQ
-#define uart_handle_sysrq_char(port,ch,regs) uart_handle_sysrq_char(port, 0, NULL)
+#define uart_handle_sysrq_char(port,ch) uart_handle_sysrq_char(port, 0)
 #endif
 
 /*

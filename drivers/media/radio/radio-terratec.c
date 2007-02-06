@@ -2,11 +2,11 @@
  * (c) 1999 R. Offermanns (rolf@offermanns.de)
  * based on the aimslab radio driver from M. Kirkwood
  * many thanks to Michael Becker and Friedhelm Birth (from TerraTec)
- * 
+ *
  *
  * History:
  * 1999-05-21	First preview release
- * 
+ *
  *  Notes on the hardware:
  *  There are two "main" chips on the card:
  *  - Philips OM5610 (http://www-us.semiconductors.philips.com/acrobat/datasheets/OM5610_2.pdf)
@@ -20,7 +20,8 @@
  *  (as soon i have understand how to get started :)
  *  If you can help me out with that, please contact me!!
  *
- *  
+ *
+ * Converted to V4L2 API by Mauro Carvalho Chehab <mchehab@infradead.org>
  */
 
 #include <linux/module.h>	/* Modules 			*/
@@ -29,9 +30,31 @@
 #include <linux/delay.h>	/* udelay			*/
 #include <asm/io.h>		/* outb, outb_p			*/
 #include <asm/uaccess.h>	/* copy to/from user		*/
-#include <linux/videodev.h>	/* kernel radio structs		*/
-#include <linux/config.h>	/* CONFIG_RADIO_TERRATEC_PORT 	*/
+#include <linux/videodev2.h>	/* kernel radio structs		*/
+#include <media/v4l2-common.h>
 #include <linux/spinlock.h>
+
+#include <linux/version.h>      /* for KERNEL_VERSION MACRO     */
+#define RADIO_VERSION KERNEL_VERSION(0,0,2)
+
+static struct v4l2_queryctrl radio_qctrl[] = {
+	{
+		.id            = V4L2_CID_AUDIO_MUTE,
+		.name          = "Mute",
+		.minimum       = 0,
+		.maximum       = 1,
+		.default_value = 1,
+		.type          = V4L2_CTRL_TYPE_BOOLEAN,
+	},{
+		.id            = V4L2_CID_AUDIO_VOLUME,
+		.name          = "Volume",
+		.minimum       = 0,
+		.maximum       = 0xff,
+		.step          = 1,
+		.default_value = 0xff,
+		.type          = V4L2_CTRL_TYPE_INTEGER,
+	}
+};
 
 #ifndef CONFIG_RADIO_TERRATEC_PORT
 #define CONFIG_RADIO_TERRATEC_PORT 0x590
@@ -49,7 +72,7 @@
 #define WRT_EN		0x10
 /*******************************************************************/
 
-static int io = CONFIG_RADIO_TERRATEC_PORT; 
+static int io = CONFIG_RADIO_TERRATEC_PORT;
 static int radio_nr = -1;
 static spinlock_t lock;
 
@@ -88,15 +111,15 @@ static void tt_mute(struct tt_device *dev)
 
 static int tt_setvol(struct tt_device *dev, int vol)
 {
-	
+
 //	printk(KERN_ERR "setvol called, vol = %d\n", vol);
 
 	if(vol == dev->curvol) {	/* requested volume = current */
 		if (dev->muted) {	/* user is unmuting the card  */
 			dev->muted = 0;
 			cardWriteVol(vol);	/* enable card */
-		}	
-	
+		}
+
 		return 0;
 	}
 
@@ -107,9 +130,9 @@ static int tt_setvol(struct tt_device *dev, int vol)
 	}
 
 	dev->muted = 0;
-	
+
 	cardWriteVol(vol);
-	 
+
 	dev->curvol = vol;
 
 	return 0;
@@ -121,13 +144,13 @@ static int tt_setvol(struct tt_device *dev, int vol)
 /* many more or less strange things are going on here, but hey, it works :) */
 
 static int tt_setfreq(struct tt_device *dev, unsigned long freq1)
-{	
+{
 	int freq;
 	int i;
 	int p;
 	int  temp;
 	long rest;
-     
+
 	unsigned char buffer[25];		/* we have to bit shift 25 registers */
 	freq = freq1/160;			/* convert the freq. to a nice to handle value */
 	for(i=24;i>-1;i--)
@@ -142,9 +165,9 @@ static int tt_setfreq(struct tt_device *dev, unsigned long freq1)
 	{
 		if (rest%temp  == rest)
 			buffer[i] = 0;
-		else 
+		else
 		{
-			buffer[i] = 1; 
+			buffer[i] = 1;
 			rest = rest-temp;
 		}
 		i--;
@@ -153,10 +176,10 @@ static int tt_setfreq(struct tt_device *dev, unsigned long freq1)
        }
 
 	spin_lock(&lock);
-	
+
 	for (i=24;i>-1;i--)			/* bit shift the values to the radiocard */
 	{
-		if (buffer[i]==1) 
+		if (buffer[i]==1)
 		{
 			outb(WRT_EN|DATA, BASEPORT);
 			outb(WRT_EN|DATA|CLK_ON  , BASEPORT);
@@ -168,11 +191,11 @@ static int tt_setfreq(struct tt_device *dev, unsigned long freq1)
 			outb(WRT_EN|0x00|CLK_ON  , BASEPORT);
 		}
 	}
-	outb(0x00, BASEPORT);     
-	
+	outb(0x00, BASEPORT);
+
 	spin_unlock(&lock);
-  
-  	return 0;
+
+	return 0;
 }
 
 static int tt_getsigstr(struct tt_device *dev)		/* TODO */
@@ -190,76 +213,120 @@ static int tt_do_ioctl(struct inode *inode, struct file *file,
 {
 	struct video_device *dev = video_devdata(file);
 	struct tt_device *tt=dev->priv;
-	
+
 	switch(cmd)
 	{
-		case VIDIOCGCAP:
+		case VIDIOC_QUERYCAP:
 		{
-			struct video_capability *v = arg;
+			struct v4l2_capability *v = arg;
 			memset(v,0,sizeof(*v));
-			v->type=VID_TYPE_TUNER;
-			v->channels=1;
-			v->audios=1;
-			strcpy(v->name, "ActiveRadio");
+			strlcpy(v->driver, "radio-terratec", sizeof (v->driver));
+			strlcpy(v->card, "ActiveRadio", sizeof (v->card));
+			sprintf(v->bus_info,"ISA");
+			v->version = RADIO_VERSION;
+			v->capabilities = V4L2_CAP_TUNER;
+
 			return 0;
 		}
-		case VIDIOCGTUNER:
+		case VIDIOC_G_TUNER:
 		{
-			struct video_tuner *v = arg;
-			if(v->tuner)	/* Only 1 tuner */ 
+			struct v4l2_tuner *v = arg;
+
+			if (v->index > 0)
 				return -EINVAL;
+
+			memset(v,0,sizeof(*v));
+			strcpy(v->name, "FM");
+			v->type = V4L2_TUNER_RADIO;
+
 			v->rangelow=(87*16000);
 			v->rangehigh=(108*16000);
-			v->flags=VIDEO_TUNER_LOW;
-			v->mode=VIDEO_MODE_AUTO;
-			strcpy(v->name, "FM");
+			v->rxsubchans =V4L2_TUNER_SUB_MONO;
+			v->capability=V4L2_TUNER_CAP_LOW;
+			v->audmode = V4L2_TUNER_MODE_MONO;
 			v->signal=0xFFFF*tt_getsigstr(tt);
+
 			return 0;
 		}
-		case VIDIOCSTUNER:
+		case VIDIOC_S_TUNER:
 		{
-			struct video_tuner *v = arg;
-			if(v->tuner!=0)
+			struct v4l2_tuner *v = arg;
+
+			if (v->index > 0)
 				return -EINVAL;
-			/* Only 1 tuner so no setting needed ! */
+
 			return 0;
 		}
-		case VIDIOCGFREQ:
+		case VIDIOC_S_FREQUENCY:
 		{
-			unsigned long *freq = arg;
-			*freq = tt->curfreq;
-			return 0;
-		}
-		case VIDIOCSFREQ:
-		{
-			unsigned long *freq = arg;
-			tt->curfreq = *freq;
+			struct v4l2_frequency *f = arg;
+
+			tt->curfreq = f->frequency;
 			tt_setfreq(tt, tt->curfreq);
 			return 0;
 		}
-		case VIDIOCGAUDIO:
-		{	
-			struct video_audio *v = arg;
-			memset(v,0, sizeof(*v));
-			v->flags|=VIDEO_AUDIO_MUTABLE|VIDEO_AUDIO_VOLUME;
-			v->volume=tt->curvol * 6554;
-			v->step=6554;
-			strcpy(v->name, "Radio");
-			return 0;			
-		}
-		case VIDIOCSAUDIO:
+		case VIDIOC_G_FREQUENCY:
 		{
-			struct video_audio *v = arg;
-			if(v->audio) 
-				return -EINVAL;
-			if(v->flags&VIDEO_AUDIO_MUTE) 
-				tt_mute(tt);
-			else
-				tt_setvol(tt,v->volume/6554);
+			struct v4l2_frequency *f = arg;
+
+			f->type = V4L2_TUNER_RADIO;
+			f->frequency = tt->curfreq;
+
 			return 0;
 		}
+		case VIDIOC_QUERYCTRL:
+		{
+			struct v4l2_queryctrl *qc = arg;
+			int i;
+
+			for (i = 0; i < ARRAY_SIZE(radio_qctrl); i++) {
+				if (qc->id && qc->id == radio_qctrl[i].id) {
+					memcpy(qc, &(radio_qctrl[i]),
+								sizeof(*qc));
+					return (0);
+				}
+			}
+			return -EINVAL;
+		}
+		case VIDIOC_G_CTRL:
+		{
+			struct v4l2_control *ctrl= arg;
+
+			switch (ctrl->id) {
+				case V4L2_CID_AUDIO_MUTE:
+					if (tt->muted)
+						ctrl->value=1;
+					else
+						ctrl->value=0;
+					return (0);
+				case V4L2_CID_AUDIO_VOLUME:
+					ctrl->value=tt->curvol * 6554;
+					return (0);
+			}
+			return -EINVAL;
+		}
+		case VIDIOC_S_CTRL:
+		{
+			struct v4l2_control *ctrl= arg;
+
+			switch (ctrl->id) {
+				case V4L2_CID_AUDIO_MUTE:
+					if (ctrl->value) {
+						tt_mute(tt);
+					} else {
+						tt_setvol(tt,tt->curvol);
+					}
+					return (0);
+				case V4L2_CID_AUDIO_VOLUME:
+					tt_setvol(tt,ctrl->value);
+					return (0);
+			}
+			return -EINVAL;
+		}
+
 		default:
-			return -ENOIOCTLCMD;
+			return v4l_compat_translate_ioctl(inode,file,cmd,arg,
+							  tt_do_ioctl);
 	}
 }
 
@@ -285,7 +352,7 @@ static struct video_device terratec_radio=
 	.owner		= THIS_MODULE,
 	.name		= "TerraTec ActiveRadio",
 	.type		= VID_TYPE_TUNER,
-	.hardware	= VID_HARDWARE_TERRATEC,
+	.hardware	= 0,
 	.fops           = &terratec_fops,
 };
 
@@ -296,25 +363,25 @@ static int __init terratec_init(void)
 		printk(KERN_ERR "You must set an I/O address with io=0x???\n");
 		return -EINVAL;
 	}
-	if (!request_region(io, 2, "terratec")) 
+	if (!request_region(io, 2, "terratec"))
 	{
 		printk(KERN_ERR "TerraTec: port 0x%x already in use\n", io);
 		return -EBUSY;
 	}
 
 	terratec_radio.priv=&terratec_unit;
-	
+
 	spin_lock_init(&lock);
-	
+
 	if(video_register_device(&terratec_radio, VFL_TYPE_RADIO, radio_nr)==-1)
 	{
 		release_region(io,2);
 		return -EINVAL;
 	}
-		
+
 	printk(KERN_INFO "TERRATEC ActivRadio Standalone card driver.\n");
 
- 	/* mute card - prevents noisy bootups */
+	/* mute card - prevents noisy bootups */
 
 	/* this ensures that the volume is all the way down  */
 	cardWriteVol(0);
@@ -334,7 +401,7 @@ static void __exit terratec_cleanup_module(void)
 {
 	video_unregister_device(&terratec_radio);
 	release_region(io,2);
-	printk(KERN_INFO "TERRATEC ActivRadio Standalone card driver unloaded.\n");	
+	printk(KERN_INFO "TERRATEC ActivRadio Standalone card driver unloaded.\n");
 }
 
 module_init(terratec_init);

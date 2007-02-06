@@ -4,7 +4,6 @@
  * Copyright (C) 1997,1998 Jakub Jelinek    (jj@sunsite.mff.cuni.cz)
  */
  
-#include <linux/config.h>
 #include <linux/kernel.h>
 #include <linux/init.h>
 #include <linux/slab.h>
@@ -23,6 +22,7 @@
 #include <asm/cacheflush.h>
 #include <asm/tlbflush.h>
 #include <asm/dma.h>
+#include <asm/oplib.h>
 
 /* #define IOUNIT_DEBUG */
 #ifdef IOUNIT_DEBUG
@@ -42,9 +42,12 @@ iounit_init(int sbi_node, int io_node, struct sbus_bus *sbus)
 	struct linux_prom_registers iommu_promregs[PROMREG_MAX];
 	struct resource r;
 
-	iounit = kmalloc(sizeof(struct iounit_struct), GFP_ATOMIC);
+	iounit = kzalloc(sizeof(struct iounit_struct), GFP_ATOMIC);
+	if (!iounit) {
+		prom_printf("SUN4D: Cannot alloc iounit, halting.\n");
+		prom_halt();
+	}
 
-	memset(iounit, 0, sizeof(*iounit));
 	iounit->limit[0] = IOUNIT_BMAP1_START;
 	iounit->limit[1] = IOUNIT_BMAP2_START;
 	iounit->limit[2] = IOUNIT_BMAPM_START;
@@ -65,6 +68,7 @@ iounit_init(int sbi_node, int io_node, struct sbus_bus *sbus)
 	
 	sbus->iommu = (struct iommu_struct *)iounit;
 	iounit->page_table = xpt;
+	spin_lock_init(&iounit->lock);
 	
 	for (xptend = iounit->page_table + (16 * PAGE_SIZE) / sizeof(iopte_t);
 	     xpt < xptend;)

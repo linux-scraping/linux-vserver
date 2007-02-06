@@ -109,7 +109,7 @@ static struct cpia_camera_ops cpia_usb_ops = {
 static LIST_HEAD(cam_list);
 static spinlock_t cam_list_lock_usb;
 
-static void cpia_usb_complete(struct urb *urb, struct pt_regs *regs)
+static void cpia_usb_complete(struct urb *urb)
 {
 	int i;
 	char *cdata;
@@ -471,12 +471,6 @@ static int cpia_usb_close(void *privdata)
 	 * alt setting if camera is physically disconnected while open */
 	cpia_usb_free_resources(ucpia, ucpia->present);
 
-	return 0;
-}
-
-int cpia_usb_init(void)
-{
-	/* return -ENODEV; */
 	return 0;
 }
 

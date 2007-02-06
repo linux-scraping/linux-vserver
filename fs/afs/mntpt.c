@@ -18,7 +18,7 @@
 #include <linux/pagemap.h>
 #include <linux/mount.h>
 #include <linux/namei.h>
-#include <linux/namespace.h>
+#include <linux/mnt_namespace.h>
 #include "super.h"
 #include "cell.h"
 #include "volume.h"
@@ -63,7 +63,6 @@ unsigned long afs_mntpt_expiry_timeout = 20;
 int afs_mntpt_check_symlink(struct afs_vnode *vnode)
 {
 	struct page *page;
-	filler_t *filler;
 	size_t size;
 	char *buf;
 	int ret;
@@ -71,10 +70,7 @@ int afs_mntpt_check_symlink(struct afs_vnode *vnode)
 	_enter("{%u,%u}", vnode->fid.vnode, vnode->fid.unique);
 
 	/* read the contents of the symlink into the pagecache */
-	filler = (filler_t *) AFS_VNODE_TO_I(vnode)->i_mapping->a_ops->readpage;
-
-	page = read_cache_page(AFS_VNODE_TO_I(vnode)->i_mapping, 0,
-			       filler, NULL);
+	page = read_mapping_page(AFS_VNODE_TO_I(vnode)->i_mapping, 0, NULL);
 	if (IS_ERR(page)) {
 		ret = PTR_ERR(page);
 		goto out;
@@ -140,11 +136,11 @@ static int afs_mntpt_open(struct inode *inode, struct file *file)
 {
 	kenter("%p,%p{%p{%s},%s}",
 	       inode, file,
-	       file->f_dentry->d_parent,
-	       file->f_dentry->d_parent ?
-	       file->f_dentry->d_parent->d_name.name :
+	       file->f_path.dentry->d_parent,
+	       file->f_path.dentry->d_parent ?
+	       file->f_path.dentry->d_parent->d_name.name :
 	       (const unsigned char *) "",
-	       file->f_dentry->d_name.name);
+	       file->f_path.dentry->d_name.name);
 
 	return -EREMOTE;
 } /* end afs_mntpt_open() */
@@ -160,7 +156,6 @@ static struct vfsmount *afs_mntpt_do_automount(struct dentry *mntpt)
 	struct page *page = NULL;
 	size_t size;
 	char *buf, *devname = NULL, *options = NULL;
-	filler_t *filler;
 	int ret;
 
 	kenter("{%s}", mntpt->d_name.name);
@@ -182,9 +177,7 @@ static struct vfsmount *afs_mntpt_do_automount(struct dentry *mntpt)
 		goto error;
 
 	/* read the contents of the AFS special symlink */
-	filler = (filler_t *)mntpt->d_inode->i_mapping->a_ops->readpage;
-
-	page = read_cache_page(mntpt->d_inode->i_mapping, 0, filler, NULL);
+	page = read_mapping_page(mntpt->d_inode->i_mapping, 0, NULL);
 	if (IS_ERR(page)) {
 		ret = PTR_ERR(page);
 		goto error;
@@ -210,7 +203,7 @@ static struct vfsmount *afs_mntpt_do_automount(struct dentry *mntpt)
 
 	/* try and do the mount */
 	kdebug("--- attempting mount %s -o %s ---", devname, options);
-	mnt = do_kern_mount("afs", 0, devname, options);
+	mnt = vfs_kern_mount(&afs_fs_type, 0, devname, options);
 	kdebug("--- mount result %p ---", mnt);
 
 	free_page((unsigned long) devname);

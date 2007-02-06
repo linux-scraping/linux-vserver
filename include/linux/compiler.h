@@ -10,11 +10,11 @@
 # define __force	__attribute__((force))
 # define __nocast	__attribute__((nocast))
 # define __iomem	__attribute__((noderef, address_space(2)))
-# define __acquires(x)	__attribute__((context(0,1)))
-# define __releases(x)	__attribute__((context(1,0)))
-# define __acquire(x)	__context__(1)
-# define __release(x)	__context__(-1)
-# define __cond_lock(x)	((x) ? ({ __context__(1); 1; }) : 0)
+# define __acquires(x)	__attribute__((context(x,0,1)))
+# define __releases(x)	__attribute__((context(x,1,0)))
+# define __acquire(x)	__context__(x,1)
+# define __release(x)	__context__(x,-1)
+# define __cond_lock(x,c)	((c) ? ({ __acquire(x); 1; }) : 0)
 extern void __chk_user_ptr(void __user *);
 extern void __chk_io_ptr(void __iomem *);
 #else
@@ -31,7 +31,7 @@ extern void __chk_io_ptr(void __iomem *);
 # define __releases(x)
 # define __acquire(x) (void)0
 # define __release(x) (void)0
-# define __cond_lock(x) (x)
+# define __cond_lock(x,c) (c)
 #endif
 
 #ifdef __KERNEL__
@@ -40,7 +40,7 @@ extern void __chk_io_ptr(void __iomem *);
 #error no compiler-gcc.h file for this gcc version
 #elif __GNUC__ == 4
 # include <linux/compiler-gcc4.h>
-#elif __GNUC__ == 3
+#elif __GNUC__ == 3 && __GNUC_MINOR__ >= 2
 # include <linux/compiler-gcc3.h>
 #else
 # error Sorry, your compiler is too old/not recognized.
@@ -78,6 +78,7 @@ extern void __chk_io_ptr(void __iomem *);
 
 #endif /* __ASSEMBLY__ */
 
+#ifdef __KERNEL__
 /*
  * Allow us to mark functions as 'deprecated' and have gcc emit a nice
  * warning for each use, in hopes of speeding the functions removal.
@@ -95,6 +96,11 @@ extern void __chk_io_ptr(void __iomem *);
 #endif
 
 #ifndef __must_check
+#define __must_check
+#endif
+
+#ifndef CONFIG_ENABLE_MUST_CHECK
+#undef __must_check
 #define __must_check
 #endif
 
@@ -127,6 +133,16 @@ extern void __chk_io_ptr(void __iomem *);
 # define __attribute_pure__	/* unimplemented */
 #endif
 
+#ifndef noinline
+#define noinline
+#endif
+
+#ifndef __always_inline
+#define __always_inline inline
+#endif
+
+#endif /* __KERNEL__ */
+
 /*
  * From the GCC manual:
  *
@@ -143,14 +159,6 @@ extern void __chk_io_ptr(void __iomem *);
  */
 #ifndef __attribute_const__
 # define __attribute_const__	/* unimplemented */
-#endif
-
-#ifndef noinline
-#define noinline
-#endif
-
-#ifndef __always_inline
-#define __always_inline inline
 #endif
 
 #endif /* __LINUX_COMPILER_H */

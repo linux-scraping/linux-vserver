@@ -11,7 +11,6 @@
 
 #include <asm-generic/4level-fixup.h>
 
-#include <linux/config.h>
 #include <linux/spinlock.h>
 #include <linux/swap.h>
 #include <asm/types.h>
@@ -144,10 +143,10 @@ extern unsigned long empty_zero_page;
 /*
  */
 BTFIXUPDEF_CALL_CONST(struct page *, pmd_page, pmd_t)
-BTFIXUPDEF_CALL_CONST(unsigned long, pgd_page, pgd_t)
+BTFIXUPDEF_CALL_CONST(unsigned long, pgd_page_vaddr, pgd_t)
 
 #define pmd_page(pmd) BTFIXUP_CALL(pmd_page)(pmd)
-#define pgd_page(pgd) BTFIXUP_CALL(pgd_page)(pgd)
+#define pgd_page_vaddr(pgd) BTFIXUP_CALL(pgd_page_vaddr)(pgd)
 
 BTFIXUPDEF_SETHI(none_mask)
 BTFIXUPDEF_CALL_CONST(int, pte_present, pte_t)

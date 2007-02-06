@@ -43,7 +43,6 @@ struct lgdt330x_config
 
 	/* PLL interface */
 	int (*pll_rf_set) (struct dvb_frontend* fe, int index);
-	int (*pll_set)(struct dvb_frontend* fe, struct dvb_frontend_parameters* params);
 
 	/* Need to set device param for start_dma */
 	int (*set_ts_params)(struct dvb_frontend* fe, int is_punctured);
@@ -53,8 +52,17 @@ struct lgdt330x_config
 	int clock_polarity_flip;
 };
 
+#if defined(CONFIG_DVB_LGDT330X) || (defined(CONFIG_DVB_LGDT330X_MODULE) && defined(MODULE))
 extern struct dvb_frontend* lgdt330x_attach(const struct lgdt330x_config* config,
 					    struct i2c_adapter* i2c);
+#else
+static inline struct dvb_frontend* lgdt330x_attach(const struct lgdt330x_config* config,
+					    struct i2c_adapter* i2c)
+{
+	printk(KERN_WARNING "%s: driver disabled by Kconfig\n", __FUNCTION__);
+	return NULL;
+}
+#endif // CONFIG_DVB_LGDT330X
 
 #endif /* LGDT330X_H */
 

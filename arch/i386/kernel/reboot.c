@@ -2,7 +2,6 @@
  *  linux/arch/i386/kernel/reboot.c
  */
 
-#include <linux/config.h>
 #include <linux/mm.h>
 #include <linux/module.h>
 #include <linux/delay.h>
@@ -13,6 +12,7 @@
 #include <linux/dmi.h>
 #include <linux/ctype.h>
 #include <linux/pm.h>
+#include <linux/reboot.h>
 #include <asm/uaccess.h>
 #include <asm/apic.h>
 #include <asm/desc.h>
@@ -146,14 +146,10 @@ real_mode_gdt_entries [3] =
 	0x000092000100ffffULL	/* 16-bit real-mode 64k data at 0x00000100 */
 };
 
-static struct
-{
-	unsigned short       size __attribute__ ((packed));
-	unsigned long long * base __attribute__ ((packed));
-}
-real_mode_gdt = { sizeof (real_mode_gdt_entries) - 1, real_mode_gdt_entries },
-real_mode_idt = { 0x3ff, NULL },
-no_idt = { 0, NULL };
+static struct Xgt_desc_struct
+real_mode_gdt = { sizeof (real_mode_gdt_entries) - 1, (long)real_mode_gdt_entries },
+real_mode_idt = { 0x3ff, 0 },
+no_idt = { 0, 0 };
 
 
 /* This is 16-bit protected mode code to disable paging and the cache,

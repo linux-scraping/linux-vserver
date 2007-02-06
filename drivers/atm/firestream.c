@@ -33,6 +33,7 @@
 #include <linux/kernel.h>
 #include <linux/mm.h>
 #include <linux/pci.h>
+#include <linux/poison.h>
 #include <linux/errno.h>
 #include <linux/atm.h>
 #include <linux/atmdev.h>
@@ -511,7 +512,7 @@ static unsigned int make_rate (unsigned int rate, int r,
 		}
 		case ROUND_UP: {
 			/* check all bits that we are discarding */
-			if (man & (-1>>9)) {
+			if (man & (~0U>>9)) {
 				man = (man>>(32-9)) + 1;
 				if (man == (1<<9)) {
 					/* no need to check for round up outside of range */
@@ -754,7 +755,7 @@ static void process_txdone_queue (struct fs_dev *dev, struct queue *q)
 			fs_kfree_skb (skb);
 
 			fs_dprintk (FS_DEBUG_ALLOC, "Free trans-d: %p\n", td); 
-			memset (td, 0x12, sizeof (struct FS_BPENTRY));
+			memset (td, ATM_POISON_FREE, sizeof(struct FS_BPENTRY));
 			kfree (td);
 			break;
 		default:
@@ -951,7 +952,7 @@ static int fs_open(struct atm_vcc *atm_vcc)
 		   it most likely that the chip will notice it. It also prevents us
 		   from having to wait for completion. On the other hand, we may
 		   need to wait for completion anyway, to see if it completed
-		   succesfully. */
+		   successfully. */
 
 		switch (atm_vcc->qos.aal) {
 		case ATM_AAL2:
@@ -1001,6 +1002,10 @@ static int fs_open(struct atm_vcc *atm_vcc)
 					r = ROUND_UP;
 				}
 				error = make_rate (pcr, r, &tmc0, NULL);
+				if (error) {
+					kfree(tc);
+					return error;
+				}
 			}
 			fs_dprintk (FS_DEBUG_OPEN, "pcr = %d.\n", pcr);
 		}
@@ -1545,7 +1550,7 @@ static void __devexit free_freepool (struct fs_dev *dev, struct freepool *fp)
 
 
 
-static irqreturn_t fs_irq (int irq, void *dev_id,  struct pt_regs * pt_regs) 
+static irqreturn_t fs_irq (int irq, void *dev_id) 
 {
 	int i;
 	u32 status;
@@ -1657,9 +1662,10 @@ static int __devinit fs_init (struct fs_dev *dev)
 	func_enter ();
 	pci_dev = dev->pci_dev;
 
-	printk (KERN_INFO "found a FireStream %d card, base %08lx, irq%d.\n", 
+	printk (KERN_INFO "found a FireStream %d card, base %16llx, irq%d.\n",
 		IS_FS50(dev)?50:155,
-		pci_resource_start(pci_dev, 0), dev->pci_dev->irq);
+		(unsigned long long)pci_resource_start(pci_dev, 0),
+		dev->pci_dev->irq);
 
 	if (fs_debug & FS_DEBUG_INIT)
 		my_hd ((unsigned char *) dev, sizeof (*dev));
@@ -1782,7 +1788,7 @@ static int __devinit fs_init (struct fs_dev *dev)
 		write_fs (dev, RAM, (1 << (28 - FS155_VPI_BITS - FS155_VCI_BITS)) - 1);
 		dev->nchannels = FS155_NR_CHANNELS;
 	}
-	dev->atm_vccs = kmalloc (dev->nchannels * sizeof (struct atm_vcc *), 
+	dev->atm_vccs = kcalloc (dev->nchannels, sizeof (struct atm_vcc *),
 				 GFP_KERNEL);
 	fs_dprintk (FS_DEBUG_ALLOC, "Alloc atmvccs: %p(%Zd)\n",
 		    dev->atm_vccs, dev->nchannels * sizeof (struct atm_vcc *));
@@ -1792,9 +1798,8 @@ static int __devinit fs_init (struct fs_dev *dev)
 		/* XXX Clean up..... */
 		return 1;
 	}
-	memset (dev->atm_vccs, 0, dev->nchannels * sizeof (struct atm_vcc *));
 
-	dev->tx_inuse = kmalloc (dev->nchannels / 8 /* bits/byte */ , GFP_KERNEL);
+	dev->tx_inuse = kzalloc (dev->nchannels / 8 /* bits/byte */ , GFP_KERNEL);
 	fs_dprintk (FS_DEBUG_ALLOC, "Alloc tx_inuse: %p(%d)\n", 
 		    dev->atm_vccs, dev->nchannels / 8);
 
@@ -1803,8 +1808,6 @@ static int __devinit fs_init (struct fs_dev *dev)
 		/* XXX Clean up..... */
 		return 1;
 	}
-	memset (dev->tx_inuse, 0, dev->nchannels / 8);
-
 	/* -- RAS1 : FS155 and 50 differ. Default (0) should be OK for both */
 	/* -- RAS2 : FS50 only: Default is OK. */
 
@@ -1827,7 +1830,7 @@ static int __devinit fs_init (struct fs_dev *dev)
 		init_q (dev, &dev->rx_rq[i], RXB_RQ(i), RXRQ_NENTRIES, 1);
 
 	dev->irq = pci_dev->irq;
-	if (request_irq (dev->irq, fs_irq, SA_SHIRQ, "firestream", dev)) {
+	if (request_irq (dev->irq, fs_irq, IRQF_SHARED, "firestream", dev)) {
 		printk (KERN_WARNING "couldn't get irq %d for firestream.\n", pci_dev->irq);
 		/* XXX undo all previous stuff... */
 		return 1;
@@ -1891,14 +1894,11 @@ static int __devinit firestream_init_one (struct pci_dev *pci_dev,
 	if (pci_enable_device(pci_dev)) 
 		goto err_out;
 
-	fs_dev = kmalloc (sizeof (struct fs_dev), GFP_KERNEL);
+	fs_dev = kzalloc (sizeof (struct fs_dev), GFP_KERNEL);
 	fs_dprintk (FS_DEBUG_ALLOC, "Alloc fs-dev: %p(%Zd)\n",
 		    fs_dev, sizeof (struct fs_dev));
 	if (!fs_dev)
 		goto err_out;
-
-	memset (fs_dev, 0, sizeof (struct fs_dev));
-  
 	atm_dev = atm_dev_register("fs", &ops, -1, NULL);
 	if (!atm_dev)
 		goto err_out_free_fs_dev;

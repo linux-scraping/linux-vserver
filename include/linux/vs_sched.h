@@ -1,6 +1,8 @@
-#ifndef _VX_VS_SCHED_H
-#define _VX_VS_SCHED_H
+#ifndef _VS_SCHED_H
+#define _VS_SCHED_H
 
+#include "vserver/base.h"
+#include "vserver/context.h"
 #include "vserver/sched.h"
 
 
@@ -10,81 +12,97 @@
 #define MIN_PRIO_BIAS		-20
 
 
-static inline int vx_tokens_avail(struct vx_info *vxi)
+#ifdef CONFIG_VSERVER_HARDCPU
+
+/*
+ * effective_prio - return the priority that is based on the static
+ * priority but is modified by bonuses/penalties.
+ *
+ * We scale the actual sleep average [0 .... MAX_SLEEP_AVG]
+ * into a -4 ... 0 ... +4 bonus/penalty range.
+ *
+ * Additionally, we scale another amount based on the number of
+ * CPU tokens currently held by the context, if the process is
+ * part of a context (and the appropriate SCHED flag is set).
+ * This ranges from -5 ... 0 ... +15, quadratically.
+ *
+ * So, the total bonus is -9 .. 0 .. +19
+ * We use ~50% of the full 0...39 priority range so that:
+ *
+ * 1) nice +19 interactive tasks do not preempt nice 0 CPU hogs.
+ * 2) nice -20 CPU hogs do not get preempted by nice 0 tasks.
+ *    unless that context is far exceeding its CPU allocation.
+ *
+ * Both properties are important to certain workloads.
+ */
+static inline
+int vx_effective_vavavoom(struct _vx_sched_pc *sched_pc, int max_prio)
 {
-	return atomic_read(&vxi->sched.tokens);
-}
+	int vavavoom, max;
 
-static inline void vx_consume_token(struct vx_info *vxi)
-{
-	atomic_dec(&vxi->sched.tokens);
-}
-
-static inline int vx_need_resched(struct task_struct *p)
-{
-#ifdef	CONFIG_VSERVER_HARDCPU
-	struct vx_info *vxi = p->vx_info;
-#endif
-	int slice = --p->time_slice;
-
-#ifdef	CONFIG_VSERVER_HARDCPU
-	if (vxi) {
-		int tokens;
-
-		if ((tokens = vx_tokens_avail(vxi)) > 0)
-			vx_consume_token(vxi);
-		/* for tokens > 0, one token was consumed */
-		if (tokens < 2)
-			return 1;
+	/* lots of tokens = lots of vavavoom
+	 *      no tokens = no vavavoom      */
+	if ((vavavoom = sched_pc->tokens) >= 0) {
+		max = sched_pc->tokens_max;
+		vavavoom = max - vavavoom;
+		max = max * max;
+		vavavoom = max_prio * VAVAVOOM_RATIO / 100
+			* (vavavoom*vavavoom - (max >> 2)) / max;
+		return vavavoom;
 	}
-#endif
-	return (slice == 0);
+	return 0;
 }
 
 
-static inline void vx_onhold_inc(struct vx_info *vxi)
+static inline
+int vx_adjust_prio(struct task_struct *p, int prio, int max_user)
 {
-	int onhold = atomic_read(&vxi->cvirt.nr_onhold);
+	struct vx_info *vxi = p->vx_info;
+	struct _vx_sched_pc *sched_pc;
 
-	atomic_inc(&vxi->cvirt.nr_onhold);
-	if (!onhold)
-		vxi->cvirt.onhold_last = jiffies;
+	if (!vxi)
+		return prio;
+
+	sched_pc = &vx_cpu(vxi, sched_pc);
+	if (vx_info_flags(vxi, VXF_SCHED_PRIO, 0)) {
+		int vavavoom = vx_effective_vavavoom(sched_pc, max_user);
+
+		sched_pc->vavavoom = vavavoom;
+		prio += vavavoom;
+	}
+	prio += sched_pc->prio_bias;
+	return prio;
 }
 
-static inline void __vx_onhold_update(struct vx_info *vxi)
+#else /* !CONFIG_VSERVER_HARDCPU */
+
+static inline
+int vx_adjust_prio(struct task_struct *p, int prio, int max_user)
 {
-	int cpu = smp_processor_id();
-	uint32_t now = jiffies;
-	uint32_t delta = now - vxi->cvirt.onhold_last;
+	struct vx_info *vxi = p->vx_info;
 
-	vxi->cvirt.onhold_last = now;
-	vxi->sched.cpu[cpu].hold_ticks += delta;
+	if (vxi)
+		prio += vx_cpu(vxi, sched_pc).prio_bias;
+	return prio;
 }
 
-static inline void vx_onhold_dec(struct vx_info *vxi)
-{
-	if (atomic_dec_and_test(&vxi->cvirt.nr_onhold))
-		__vx_onhold_update(vxi);
-}
+#endif /* CONFIG_VSERVER_HARDCPU */
+
 
 static inline void vx_account_user(struct vx_info *vxi,
 	cputime_t cputime, int nice)
 {
-	int cpu = smp_processor_id();
-
 	if (!vxi)
 		return;
-	vxi->sched.cpu[cpu].user_ticks += cputime;
+	vx_cpu(vxi, sched_pc).user_ticks += cputime;
 }
 
 static inline void vx_account_system(struct vx_info *vxi,
 	cputime_t cputime, int idle)
 {
-	int cpu = smp_processor_id();
-
 	if (!vxi)
 		return;
-	vxi->sched.cpu[cpu].sys_ticks += cputime;
+	vx_cpu(vxi, sched_pc).sys_ticks += cputime;
 }
 
 #else

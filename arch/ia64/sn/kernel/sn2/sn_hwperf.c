@@ -32,9 +32,10 @@
 #include <linux/cpumask.h>
 #include <linux/smp_lock.h>
 #include <linux/nodemask.h>
+#include <linux/smp.h>
+
 #include <asm/processor.h>
 #include <asm/topology.h>
-#include <asm/smp.h>
 #include <asm/semaphore.h>
 #include <asm/uaccess.h>
 #include <asm/sal.h>
@@ -50,6 +51,8 @@ static int sn_hwperf_obj_cnt = 0;
 static nasid_t sn_hwperf_master_nasid = INVALID_NASID;
 static int sn_hwperf_init(void);
 static DECLARE_MUTEX(sn_hwperf_init_mutex);
+
+#define cnode_possible(n)	((n) < num_cnodes)
 
 static int sn_hwperf_enum_objects(int *nobj, struct sn_hwperf_object_info **ret)
 {
@@ -127,14 +130,14 @@ static int sn_hwperf_geoid_to_cnode(char *location)
 		}
 	}
 
-	return node_possible(cnode) ? cnode : -1;
+	return cnode_possible(cnode) ? cnode : -1;
 }
 
 static int sn_hwperf_obj_to_cnode(struct sn_hwperf_object_info * obj)
 {
 	if (!SN_HWPERF_IS_NODE(obj) && !SN_HWPERF_IS_IONODE(obj))
 		BUG();
-	if (!obj->sn_hwp_this_part)
+	if (SN_HWPERF_FOREIGN(obj))
 		return -1;
 	return sn_hwperf_geoid_to_cnode(obj->location);
 }
@@ -186,7 +189,7 @@ static void print_pci_topology(struct seq_file *s)
 	int e;
 
 	for (sz = PAGE_SIZE; sz < 16 * PAGE_SIZE; sz += PAGE_SIZE) {
-		if (!(p = (char *)kmalloc(sz, GFP_KERNEL)))
+		if (!(p = kmalloc(sz, GFP_KERNEL)))
 			break;
 		e = ia64_sn_ioif_get_pci_topology(__pa(p), sz);
 		if (e == SALRET_OK)
@@ -199,12 +202,12 @@ static void print_pci_topology(struct seq_file *s)
 
 static inline int sn_hwperf_has_cpus(cnodeid_t node)
 {
-	return node_online(node) && nr_cpus_node(node);
+	return node < MAX_NUMNODES && node_online(node) && nr_cpus_node(node);
 }
 
 static inline int sn_hwperf_has_mem(cnodeid_t node)
 {
-	return node_online(node) && NODE_DATA(node)->node_present_pages;
+	return node < MAX_NUMNODES && node_online(node) && NODE_DATA(node)->node_present_pages;
 }
 
 static struct sn_hwperf_object_info *
@@ -237,7 +240,7 @@ static int sn_hwperf_get_nearest_node_objdata(struct sn_hwperf_object_info *objb
 	int found_mem = 0;
 	int found_cpu = 0;
 
-	if (!node_possible(node))
+	if (!cnode_possible(node))
 		return -EINVAL;
 
 	if (sn_hwperf_has_cpus(node)) {
@@ -420,7 +423,7 @@ static int sn_topology_show(struct seq_file *s, void *d)
 			"coherency_domain %d, "
 			"region_size %d\n",
 
-			partid, system_utsname.nodename,
+			partid, utsname()->nodename,
 			shubtype ? "shub2" : "shub1", 
 			(u64)nasid_mask << nasid_shift, nasid_msb, nasid_shift,
 			system_size, sharing_size, coher, region_size);
@@ -442,7 +445,7 @@ static int sn_topology_show(struct seq_file *s, void *d)
 	seq_printf(s, "%s %d %s %s asic %s", slabname, ordinal, obj->location,
 		obj->sn_hwp_this_part ? "local" : "shared", obj->name);
 
-	if (!SN_HWPERF_IS_NODE(obj) && !SN_HWPERF_IS_IONODE(obj))
+	if (ordinal < 0 || (!SN_HWPERF_IS_NODE(obj) && !SN_HWPERF_IS_IONODE(obj)))
 		seq_putc(s, '\n');
 	else {
 		cnodeid_t near_mem = -1;
@@ -468,22 +471,24 @@ static int sn_topology_show(struct seq_file *s, void *d)
 		/*
 		 * CPUs on this node, if any
 		 */
-		cpumask = node_to_cpumask(ordinal);
-		for_each_online_cpu(i) {
-			if (cpu_isset(i, cpumask)) {
-				slice = 'a' + cpuid_to_slice(i);
-				c = cpu_data(i);
-				seq_printf(s, "cpu %d %s%c local"
-					" freq %luMHz, arch ia64",
-					i, obj->location, slice,
-					c->proc_freq / 1000000);
-				for_each_online_cpu(j) {
-					seq_printf(s, j ? ":%d" : ", dist %d",
-						node_distance(
-						    cpu_to_node(i),
-						    cpu_to_node(j)));
+		if (!SN_HWPERF_IS_IONODE(obj)) {
+			cpumask = node_to_cpumask(ordinal);
+			for_each_online_cpu(i) {
+				if (cpu_isset(i, cpumask)) {
+					slice = 'a' + cpuid_to_slice(i);
+					c = cpu_data(i);
+					seq_printf(s, "cpu %d %s%c local"
+						" freq %luMHz, arch ia64",
+						i, obj->location, slice,
+						c->proc_freq / 1000000);
+					for_each_online_cpu(j) {
+						seq_printf(s, j ? ":%d" : ", dist %d",
+							node_distance(
+						    	cpu_to_node(i),
+						    	cpu_to_node(j)));
+					}
+					seq_putc(s, '\n');
 				}
-				seq_putc(s, '\n');
 			}
 		}
 	}
@@ -523,7 +528,7 @@ static int sn_topology_show(struct seq_file *s, void *d)
 			if (obj->sn_hwp_this_part && p->sn_hwp_this_part)
 				/* both ends local to this partition */
 				seq_puts(s, " local");
-			else if (!obj->sn_hwp_this_part && !p->sn_hwp_this_part)
+			else if (SN_HWPERF_FOREIGN(p))
 				/* both ends of the link in foreign partiton */
 				seq_puts(s, " foreign");
 			else
@@ -776,7 +781,7 @@ sn_hwperf_ioctl(struct inode *in, struct file *fp, u32 op, u64 arg)
 
 	case SN_HWPERF_GET_NODE_NASID:
 		if (a.sz != sizeof(u64) ||
-		   (node = a.arg) < 0 || !node_possible(node)) {
+		   (node = a.arg) < 0 || !cnode_possible(node)) {
 			r = -EINVAL;
 			goto error;
 		}

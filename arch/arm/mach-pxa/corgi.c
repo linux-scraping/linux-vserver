@@ -19,6 +19,7 @@
 #include <linux/fs.h>
 #include <linux/interrupt.h>
 #include <linux/mmc/host.h>
+#include <linux/pm.h>
 
 #include <asm/setup.h>
 #include <asm/memory.h>
@@ -26,6 +27,7 @@
 #include <asm/hardware.h>
 #include <asm/irq.h>
 #include <asm/io.h>
+#include <asm/system.h>
 
 #include <asm/mach/arch.h>
 #include <asm/mach/map.h>
@@ -210,7 +212,7 @@ static struct platform_device corgits_device = {
  */
 static struct pxamci_platform_data corgi_mci_platform_data;
 
-static int corgi_mci_init(struct device *dev, irqreturn_t (*corgi_detect_int)(int, void *, struct pt_regs *), void *data)
+static int corgi_mci_init(struct device *dev, irq_handler_t corgi_detect_int, void *data)
 {
 	int err;
 
@@ -223,7 +225,7 @@ static int corgi_mci_init(struct device *dev, irqreturn_t (*corgi_detect_int)(in
 	corgi_mci_platform_data.detect_delay = msecs_to_jiffies(250);
 
 	err = request_irq(CORGI_IRQ_GPIO_nSD_DETECT, corgi_detect_int,
-			  SA_INTERRUPT | SA_TRIGGER_RISING | SA_TRIGGER_FALLING,
+			  IRQF_DISABLED | IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING,
 			  "MMC card detect", data);
 	if (err) {
 		printk(KERN_ERR "corgi_mci_init: MMC/SD: can't request MMC card detect IRQ\n");
@@ -282,21 +284,9 @@ static struct pxaficp_platform_data corgi_ficp_platform_data = {
 /*
  * USB Device Controller
  */
-static void corgi_udc_command(int cmd)
-{
-	switch(cmd)	{
-	case PXA2XX_UDC_CMD_CONNECT:
-		GPSR(CORGI_GPIO_USB_PULLUP) = GPIO_bit(CORGI_GPIO_USB_PULLUP);
-		break;
-	case PXA2XX_UDC_CMD_DISCONNECT:
-		GPCR(CORGI_GPIO_USB_PULLUP) = GPIO_bit(CORGI_GPIO_USB_PULLUP);
-		break;
-	}
-}
-
 static struct pxa2xx_udc_mach_info udc_info __initdata = {
 	/* no connect GPIO; corgi can't tell connection status */
-	.udc_command		= corgi_udc_command,
+	.gpio_pullup		= CORGI_GPIO_USB_PULLUP,
 };
 
 
@@ -310,8 +300,31 @@ static struct platform_device *devices[] __initdata = {
 	&corgiled_device,
 };
 
+static void corgi_poweroff(void)
+{
+	RCSR = RCSR_HWR | RCSR_WDR | RCSR_SMR | RCSR_GPR;
+
+	if (!machine_is_corgi())
+		/* Green LED off tells the bootloader to halt */
+		reset_scoop_gpio(&corgiscoop_device.dev, CORGI_SCP_LED_GREEN);
+	arm_machine_restart('h');
+}
+
+static void corgi_restart(char mode)
+{
+	RCSR = RCSR_HWR | RCSR_WDR | RCSR_SMR | RCSR_GPR;
+
+	if (!machine_is_corgi())
+		/* Green LED on tells the bootloader to reboot */
+		set_scoop_gpio(&corgiscoop_device.dev, CORGI_SCP_LED_GREEN);
+	arm_machine_restart('h');
+}
+
 static void __init corgi_init(void)
 {
+	pm_power_off = corgi_poweroff;
+	arm_pm_restart = corgi_restart;
+
 	/* setup sleep mode values */
 	PWER  = 0x00000002;
 	PFER  = 0x00000000;
@@ -325,7 +338,6 @@ static void __init corgi_init(void)
 	corgi_ssp_set_machinfo(&corgi_ssp_machinfo);
 
 	pxa_gpio_mode(CORGI_GPIO_IR_ON | GPIO_OUT);
-	pxa_gpio_mode(CORGI_GPIO_USB_PULLUP | GPIO_OUT);
 	pxa_gpio_mode(CORGI_GPIO_HSYNC | GPIO_IN);
 
  	pxa_set_udc_info(&udc_info);

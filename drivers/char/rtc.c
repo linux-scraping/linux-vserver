@@ -35,23 +35,22 @@
  *	1.09a	Pete Zaitcev: Sun SPARC
  *	1.09b	Jeff Garzik: Modularize, init cleanup
  *	1.09c	Jeff Garzik: SMP cleanup
- *	1.10    Paul Barton-Davis: add support for async I/O
+ *	1.10	Paul Barton-Davis: add support for async I/O
  *	1.10a	Andrea Arcangeli: Alpha updates
  *	1.10b	Andrew Morton: SMP lock fix
  *	1.10c	Cesar Barros: SMP locking fixes and cleanup
  *	1.10d	Paul Gortmaker: delete paranoia check in rtc_exit
  *	1.10e	Maciej W. Rozycki: Handle DECstation's year weirdness.
- *      1.11    Takashi Iwai: Kernel access functions
+ *	1.11	Takashi Iwai: Kernel access functions
  *			      rtc_register/rtc_unregister/rtc_control
  *      1.11a   Daniele Bellucci: Audit create_proc_read_entry in rtc_init
  *	1.12	Venkatesh Pallipadi: Hooks for emulating rtc on HPET base-timer
  *		CONFIG_HPET_EMULATE_RTC
+ *	1.12a	Maciej W. Rozycki: Handle memory-mapped chips properly.
  *	1.12ac	Alan Cox: Allow read access to the day of week register
  */
 
 #define RTC_VERSION		"1.12ac"
-
-#define RTC_IO_EXTENT	0x8
 
 /*
  *	Note that *all* calls to CMOS_READ and CMOS_WRITE are done with
@@ -61,7 +60,6 @@
  *	this driver.)
  */
 
-#include <linux/config.h>
 #include <linux/interrupt.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
@@ -115,9 +113,14 @@ static int rtc_has_irq = 1;
 #define hpet_set_rtc_irq_bit(arg) 		0
 #define hpet_rtc_timer_init() 			do { } while (0)
 #define hpet_rtc_dropped_irq() 			0
-static inline irqreturn_t hpet_rtc_interrupt(int irq, void *dev_id, struct pt_regs *regs) {return 0;}
+#ifdef RTC_IRQ
+static irqreturn_t hpet_rtc_interrupt(int irq, void *dev_id)
+{
+	return 0;
+}
+#endif
 #else
-extern irqreturn_t hpet_rtc_interrupt(int irq, void *dev_id, struct pt_regs *regs);
+extern irqreturn_t hpet_rtc_interrupt(int irq, void *dev_id);
 #endif
 
 /*
@@ -167,7 +170,9 @@ static void mask_rtc_irq_bit(unsigned char bit)
 }
 #endif
 
+#ifdef CONFIG_PROC_FS
 static int rtc_proc_open(struct inode *inode, struct file *file);
+#endif
 
 /*
  *	Bits in rtc_status. (6 bits of room for future expansion)
@@ -211,17 +216,18 @@ static const unsigned char days_in_mo[] =
  */
 static inline unsigned char rtc_is_updating(void)
 {
+	unsigned long flags;
 	unsigned char uip;
 
-	spin_lock_irq(&rtc_lock);
+	spin_lock_irqsave(&rtc_lock, flags);
 	uip = (CMOS_READ(RTC_FREQ_SELECT) & RTC_UIP);
-	spin_unlock_irq(&rtc_lock);
+	spin_unlock_irqrestore(&rtc_lock, flags);
 	return uip;
 }
 
 #ifdef RTC_IRQ
 /*
- *	A very tiny interrupt handler. It runs with SA_INTERRUPT set,
+ *	A very tiny interrupt handler. It runs with IRQF_DISABLED set,
  *	but there is possibility of conflicting with the set_rtc_mmss()
  *	call (the rtc irq and the timer irq can easily run at the same
  *	time in two different CPUs). So we need to serialize
@@ -230,7 +236,7 @@ static inline unsigned char rtc_is_updating(void)
  *	(See ./arch/XXXX/kernel/time.c for the set_rtc_mmss() function.)
  */
 
-irqreturn_t rtc_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+irqreturn_t rtc_interrupt(int irq, void *dev_id)
 {
 	/*
 	 *	Can be an alarm interrupt, update complete interrupt,
@@ -338,7 +344,15 @@ static ssize_t rtc_read(struct file *file, char __user *buf,
 	if (rtc_has_irq == 0)
 		return -EIO;
 
-	if (count < sizeof(unsigned))
+	/*
+	 * Historically this function used to assume that sizeof(unsigned long)
+	 * is the same in userspace and kernelspace.  This lead to problems
+	 * for configurations with multiple ABIs such a the MIPS o32 and 64
+	 * ABIs supported on the same kernel.  So now we support read of both
+	 * 4 and 8 bytes and assume that's the sizeof(unsigned long) in the
+	 * userspace ABI.
+	 */
+	if (count != sizeof(unsigned int) && count !=  sizeof(unsigned long))
 		return -EINVAL;
 
 	add_wait_queue(&rtc_wait, &wait);
@@ -369,10 +383,12 @@ static ssize_t rtc_read(struct file *file, char __user *buf,
 		schedule();
 	} while (1);
 
-	if (count < sizeof(unsigned long))
-		retval = put_user(data, (unsigned int __user *)buf) ?: sizeof(int); 
+	if (count == sizeof(unsigned int))
+		retval = put_user(data, (unsigned int __user *)buf) ?: sizeof(int);
 	else
 		retval = put_user(data, (unsigned long __user *)buf) ?: sizeof(long);
+	if (!retval)
+		retval = count;
  out:
 	current->state = TASK_RUNNING;
 	remove_wait_queue(&rtc_wait, &wait);
@@ -878,7 +894,7 @@ int rtc_control(rtc_task_t *task, unsigned int cmd, unsigned long arg)
  *	The various file operations we support.
  */
 
-static struct file_operations rtc_fops = {
+static const struct file_operations rtc_fops = {
 	.owner		= THIS_MODULE,
 	.llseek		= no_llseek,
 	.read		= rtc_read,
@@ -897,21 +913,21 @@ static struct miscdevice rtc_dev = {
 	.fops		= &rtc_fops,
 };
 
-static struct file_operations rtc_proc_fops = {
+#ifdef CONFIG_PROC_FS
+static const struct file_operations rtc_proc_fops = {
 	.owner = THIS_MODULE,
 	.open = rtc_proc_open,
 	.read  = seq_read,
 	.llseek = seq_lseek,
 	.release = single_release,
 };
-
-#if defined(RTC_IRQ) && !defined(__sparc__)
-static irqreturn_t (*rtc_int_handler_ptr)(int irq, void *dev_id, struct pt_regs *regs);
 #endif
 
 static int __init rtc_init(void)
 {
+#ifdef CONFIG_PROC_FS
 	struct proc_dir_entry *ent;
+#endif
 #if defined(__alpha__) || defined(__mips__)
 	unsigned int year, ctrl;
 	char *guess = NULL;
@@ -923,12 +939,17 @@ static int __init rtc_init(void)
 	struct sparc_isa_bridge *isa_br;
 	struct sparc_isa_device *isa_dev;
 #endif
+#else
+	void *r;
+#ifdef RTC_IRQ
+	irq_handler_t rtc_int_handler_ptr;
+#endif
 #endif
 
 #ifdef __sparc__
 	for_each_ebus(ebus) {
 		for_each_ebusdev(edev, ebus) {
-			if(strcmp(edev->prom_name, "rtc") == 0) {
+			if(strcmp(edev->prom_node->name, "rtc") == 0) {
 				rtc_port = edev->resource[0].start;
 				rtc_irq = edev->irqs[0];
 				goto found;
@@ -938,7 +959,7 @@ static int __init rtc_init(void)
 #ifdef __sparc_v9__
 	for_each_isa(isa_br) {
 		for_each_isadev(isa_dev, isa_br) {
-			if (strcmp(isa_dev->prom_name, "rtc") == 0) {
+			if (strcmp(isa_dev->prom_node->name, "rtc") == 0) {
 				rtc_port = isa_dev->resource.start;
 				rtc_irq = isa_dev->irq;
 				goto found;
@@ -946,6 +967,7 @@ static int __init rtc_init(void)
 		}
 	}
 #endif
+	rtc_has_irq = 0;
 	printk(KERN_ERR "rtc_init: no PC rtc found\n");
 	return -EIO;
 
@@ -959,18 +981,23 @@ found:
 	 * XXX Interrupt pin #7 in Espresso is shared between RTC and
 	 * PCI Slot 2 INTA# (and some INTx# in Slot 1).
 	 */
-	if (request_irq(rtc_irq, rtc_interrupt, SA_SHIRQ, "rtc", (void *)&rtc_port)) {
-		/*
-		 * Standard way for sparc to print irq's is to use
-		 * __irq_itoa(). I think for EBus it's ok to use %d.
-		 */
+	if (request_irq(rtc_irq, rtc_interrupt, IRQF_SHARED, "rtc", (void *)&rtc_port)) {
+		rtc_has_irq = 0;
 		printk(KERN_ERR "rtc: cannot register IRQ %d\n", rtc_irq);
 		return -EIO;
 	}
 no_irq:
 #else
-	if (!request_region(RTC_PORT(0), RTC_IO_EXTENT, "rtc")) {
-		printk(KERN_ERR "rtc: I/O port %d is not free.\n", RTC_PORT (0));
+	if (RTC_IOMAPPED)
+		r = request_region(RTC_PORT(0), RTC_IO_EXTENT, "rtc");
+	else
+		r = request_mem_region(RTC_PORT(0), RTC_IO_EXTENT, "rtc");
+	if (!r) {
+#ifdef RTC_IRQ
+		rtc_has_irq = 0;
+#endif
+		printk(KERN_ERR "rtc: I/O resource %lx is not free.\n",
+		       (long)(RTC_PORT(0)));
 		return -EIO;
 	}
 
@@ -981,10 +1008,14 @@ no_irq:
 		rtc_int_handler_ptr = rtc_interrupt;
 	}
 
-	if(request_irq(RTC_IRQ, rtc_int_handler_ptr, SA_INTERRUPT, "rtc", NULL)) {
+	if(request_irq(RTC_IRQ, rtc_int_handler_ptr, IRQF_DISABLED, "rtc", NULL)) {
 		/* Yeah right, seeing as irq 8 doesn't even hit the bus. */
+		rtc_has_irq = 0;
 		printk(KERN_ERR "rtc: IRQ %d is not free.\n", RTC_IRQ);
-		release_region(RTC_PORT(0), RTC_IO_EXTENT);
+		if (RTC_IOMAPPED)
+			release_region(RTC_PORT(0), RTC_IO_EXTENT);
+		else
+			release_mem_region(RTC_PORT(0), RTC_IO_EXTENT);
 		return -EIO;
 	}
 	hpet_rtc_timer_init();
@@ -996,21 +1027,19 @@ no_irq:
 	if (misc_register(&rtc_dev)) {
 #ifdef RTC_IRQ
 		free_irq(RTC_IRQ, NULL);
+		rtc_has_irq = 0;
 #endif
 		release_region(RTC_PORT(0), RTC_IO_EXTENT);
 		return -ENODEV;
 	}
 
+#ifdef CONFIG_PROC_FS
 	ent = create_proc_entry("driver/rtc", 0, NULL);
-	if (!ent) {
-#ifdef RTC_IRQ
-		free_irq(RTC_IRQ, NULL);
+	if (ent)
+		ent->proc_fops = &rtc_proc_fops;
+	else
+		printk(KERN_WARNING "rtc: Failed to register with procfs.\n");
 #endif
-		release_region(RTC_PORT(0), RTC_IO_EXTENT);
-		misc_deregister(&rtc_dev);
-		return -ENOMEM;
-	}
-	ent->proc_fops = &rtc_proc_fops;
 
 #if defined(__alpha__) || defined(__mips__)
 	rtc_freq = HZ;
@@ -1084,7 +1113,10 @@ static void __exit rtc_exit (void)
 	if (rtc_has_irq)
 		free_irq (rtc_irq, &rtc_port);
 #else
-	release_region (RTC_PORT (0), RTC_IO_EXTENT);
+	if (RTC_IOMAPPED)
+		release_region(RTC_PORT(0), RTC_IO_EXTENT);
+	else
+		release_mem_region(RTC_PORT(0), RTC_IO_EXTENT);
 #ifdef RTC_IRQ
 	if (rtc_has_irq)
 		free_irq (RTC_IRQ, NULL);
@@ -1140,6 +1172,7 @@ static void rtc_dropped_irq(unsigned long data)
 }
 #endif
 
+#ifdef CONFIG_PROC_FS
 /*
  *	Info exported via "/proc/driver/rtc".
  */
@@ -1224,10 +1257,11 @@ static int rtc_proc_open(struct inode *inode, struct file *file)
 {
 	return single_open(file, rtc_proc_show, NULL);
 }
+#endif
 
 void rtc_get_rtc_time(struct rtc_time *rtc_tm)
 {
-	unsigned long uip_watchdog = jiffies;
+	unsigned long uip_watchdog = jiffies, flags;
 	unsigned char ctrl;
 #ifdef CONFIG_MACH_DECSTATION
 	unsigned int real_year;
@@ -1243,10 +1277,8 @@ void rtc_get_rtc_time(struct rtc_time *rtc_tm)
 	 * Once the read clears, read the RTC time (again via ioctl). Easy.
 	 */
 
-	while (rtc_is_updating() != 0 && jiffies - uip_watchdog < 2*HZ/100) {
-		barrier();
+	while (rtc_is_updating() != 0 && jiffies - uip_watchdog < 2*HZ/100)
 		cpu_relax();
-	}
 
 	/*
 	 * Only the values that we read from the RTC are set. We leave
@@ -1254,7 +1286,7 @@ void rtc_get_rtc_time(struct rtc_time *rtc_tm)
 	 * RTC has RTC_DAY_OF_WEEK, we should usually ignore it, as it is
 	 * only updated by the RTC when initially set to a non-zero value.
 	 */
-	spin_lock_irq(&rtc_lock);
+	spin_lock_irqsave(&rtc_lock, flags);
 	rtc_tm->tm_sec = CMOS_READ(RTC_SECONDS);
 	rtc_tm->tm_min = CMOS_READ(RTC_MINUTES);
 	rtc_tm->tm_hour = CMOS_READ(RTC_HOURS);
@@ -1268,7 +1300,7 @@ void rtc_get_rtc_time(struct rtc_time *rtc_tm)
 	real_year = CMOS_READ(RTC_DEC_YEAR);
 #endif
 	ctrl = CMOS_READ(RTC_CONTROL);
-	spin_unlock_irq(&rtc_lock);
+	spin_unlock_irqrestore(&rtc_lock, flags);
 
 	if (!(ctrl & RTC_DM_BINARY) || RTC_ALWAYS_BCD)
 	{

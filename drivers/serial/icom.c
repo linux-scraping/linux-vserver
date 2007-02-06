@@ -24,7 +24,6 @@
   */
 #define SERIAL_DO_RESTART
 #include <linux/module.h>
-#include <linux/config.h>
 #include <linux/kernel.h>
 #include <linux/errno.h>
 #include <linux/signal.h>
@@ -845,8 +844,7 @@ static void process_interrupt(u16 port_int_reg,
 	spin_unlock(&icom_port->uart_port.lock);
 }
 
-static irqreturn_t icom_interrupt(int irq, void *dev_id,
-				  struct pt_regs *regs)
+static irqreturn_t icom_interrupt(int irq, void *dev_id)
 {
 	void __iomem * int_reg;
 	u32 adapter_interrupts;
@@ -1089,8 +1087,8 @@ static void icom_close(struct uart_port *port)
 }
 
 static void icom_set_termios(struct uart_port *port,
-			     struct termios *termios,
-			     struct termios *old_termios)
+			     struct ktermios *termios,
+			     struct ktermios *old_termios)
 {
 	int baud;
 	unsigned cflag, iflag;
@@ -1512,7 +1510,7 @@ static int __devinit icom_probe(struct pci_dev *dev,
 	}
 
 	if ( (retval = pci_request_regions(dev, "icom"))) {
-		 dev_err(&dev->dev, "pci_request_region FAILED\n");
+		 dev_err(&dev->dev, "pci_request_regions FAILED\n");
 		 pci_disable_device(dev);
 		 return retval;
 	 }
@@ -1564,7 +1562,7 @@ static int __devinit icom_probe(struct pci_dev *dev,
 
 	 /* save off irq and request irq line */
 	 if ( (retval = request_irq(dev->irq, icom_interrupt,
-				   SA_INTERRUPT | SA_SHIRQ, ICOM_DRIVER_NAME,
+				   IRQF_DISABLED | IRQF_SHARED, ICOM_DRIVER_NAME,
 				   (void *) icom_adapter))) {
 		  goto probe_exit2;
 	 }

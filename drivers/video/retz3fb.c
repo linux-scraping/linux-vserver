@@ -25,7 +25,6 @@
 #include <linux/errno.h>
 #include <linux/string.h>
 #include <linux/mm.h>
-#include <linux/tty.h>
 #include <linux/slab.h>
 #include <linux/delay.h>
 #include <linux/fb.h>
@@ -1424,8 +1423,10 @@ int __init retz3fb_init(void)
 
 		do_install_cmap(0, fb_info);
 
-		if (register_framebuffer(fb_info) < 0)
+		if (register_framebuffer(fb_info) < 0) {
+			iounmap(zinfo->base);
 			return -EINVAL;
+		}
 
 		printk(KERN_INFO "fb%d: %s frame buffer device, using %ldK of "
 		       "video memory\n", fb_info->node,

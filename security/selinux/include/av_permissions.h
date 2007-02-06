@@ -312,6 +312,8 @@
 #define NODE__RAWIP_RECV                          0x00000010UL
 #define NODE__RAWIP_SEND                          0x00000020UL
 #define NODE__ENFORCE_DEST                        0x00000040UL
+#define NODE__DCCP_RECV                           0x00000080UL
+#define NODE__DCCP_SEND                           0x00000100UL
 
 #define NETIF__TCP_RECV                           0x00000001UL
 #define NETIF__TCP_SEND                           0x00000002UL
@@ -319,6 +321,8 @@
 #define NETIF__UDP_SEND                           0x00000008UL
 #define NETIF__RAWIP_RECV                         0x00000010UL
 #define NETIF__RAWIP_SEND                         0x00000020UL
+#define NETIF__DCCP_RECV                          0x00000040UL
+#define NETIF__DCCP_SEND                          0x00000080UL
 
 #define NETLINK_SOCKET__IOCTL                     0x00000001UL
 #define NETLINK_SOCKET__READ                      0x00000002UL
@@ -467,6 +471,8 @@
 #define PROCESS__EXECMEM                          0x02000000UL
 #define PROCESS__EXECSTACK                        0x04000000UL
 #define PROCESS__EXECHEAP                         0x08000000UL
+#define PROCESS__SETKEYCREATE                     0x10000000UL
+#define PROCESS__SETSOCKCREATE                    0x20000000UL
 
 #define IPC__CREATE                               0x00000001UL
 #define IPC__DESTROY                              0x00000002UL
@@ -909,6 +915,7 @@
 #define ASSOCIATION__SENDTO                       0x00000001UL
 #define ASSOCIATION__RECVFROM                     0x00000002UL
 #define ASSOCIATION__SETCONTEXT                   0x00000004UL
+#define ASSOCIATION__POLMATCH                     0x00000008UL
 
 #define NETLINK_KOBJECT_UEVENT_SOCKET__IOCTL      0x00000001UL
 #define NETLINK_KOBJECT_UEVENT_SOCKET__READ       0x00000002UL
@@ -933,3 +940,65 @@
 #define NETLINK_KOBJECT_UEVENT_SOCKET__SEND_MSG   0x00100000UL
 #define NETLINK_KOBJECT_UEVENT_SOCKET__NAME_BIND  0x00200000UL
 
+#define APPLETALK_SOCKET__IOCTL                   0x00000001UL
+#define APPLETALK_SOCKET__READ                    0x00000002UL
+#define APPLETALK_SOCKET__WRITE                   0x00000004UL
+#define APPLETALK_SOCKET__CREATE                  0x00000008UL
+#define APPLETALK_SOCKET__GETATTR                 0x00000010UL
+#define APPLETALK_SOCKET__SETATTR                 0x00000020UL
+#define APPLETALK_SOCKET__LOCK                    0x00000040UL
+#define APPLETALK_SOCKET__RELABELFROM             0x00000080UL
+#define APPLETALK_SOCKET__RELABELTO               0x00000100UL
+#define APPLETALK_SOCKET__APPEND                  0x00000200UL
+#define APPLETALK_SOCKET__BIND                    0x00000400UL
+#define APPLETALK_SOCKET__CONNECT                 0x00000800UL
+#define APPLETALK_SOCKET__LISTEN                  0x00001000UL
+#define APPLETALK_SOCKET__ACCEPT                  0x00002000UL
+#define APPLETALK_SOCKET__GETOPT                  0x00004000UL
+#define APPLETALK_SOCKET__SETOPT                  0x00008000UL
+#define APPLETALK_SOCKET__SHUTDOWN                0x00010000UL
+#define APPLETALK_SOCKET__RECVFROM                0x00020000UL
+#define APPLETALK_SOCKET__SENDTO                  0x00040000UL
+#define APPLETALK_SOCKET__RECV_MSG                0x00080000UL
+#define APPLETALK_SOCKET__SEND_MSG                0x00100000UL
+#define APPLETALK_SOCKET__NAME_BIND               0x00200000UL
+
+#define PACKET__SEND                              0x00000001UL
+#define PACKET__RECV                              0x00000002UL
+#define PACKET__RELABELTO                         0x00000004UL
+
+#define KEY__VIEW                                 0x00000001UL
+#define KEY__READ                                 0x00000002UL
+#define KEY__WRITE                                0x00000004UL
+#define KEY__SEARCH                               0x00000008UL
+#define KEY__LINK                                 0x00000010UL
+#define KEY__SETATTR                              0x00000020UL
+#define KEY__CREATE                               0x00000040UL
+
+#define CONTEXT__TRANSLATE                        0x00000001UL
+#define CONTEXT__CONTAINS                         0x00000002UL
+
+#define DCCP_SOCKET__IOCTL                        0x00000001UL
+#define DCCP_SOCKET__READ                         0x00000002UL
+#define DCCP_SOCKET__WRITE                        0x00000004UL
+#define DCCP_SOCKET__CREATE                       0x00000008UL
+#define DCCP_SOCKET__GETATTR                      0x00000010UL
+#define DCCP_SOCKET__SETATTR                      0x00000020UL
+#define DCCP_SOCKET__LOCK                         0x00000040UL
+#define DCCP_SOCKET__RELABELFROM                  0x00000080UL
+#define DCCP_SOCKET__RELABELTO                    0x00000100UL
+#define DCCP_SOCKET__APPEND                       0x00000200UL
+#define DCCP_SOCKET__BIND                         0x00000400UL
+#define DCCP_SOCKET__CONNECT                      0x00000800UL
+#define DCCP_SOCKET__LISTEN                       0x00001000UL
+#define DCCP_SOCKET__ACCEPT                       0x00002000UL
+#define DCCP_SOCKET__GETOPT                       0x00004000UL
+#define DCCP_SOCKET__SETOPT                       0x00008000UL
+#define DCCP_SOCKET__SHUTDOWN                     0x00010000UL
+#define DCCP_SOCKET__RECVFROM                     0x00020000UL
+#define DCCP_SOCKET__SENDTO                       0x00040000UL
+#define DCCP_SOCKET__RECV_MSG                     0x00080000UL
+#define DCCP_SOCKET__SEND_MSG                     0x00100000UL
+#define DCCP_SOCKET__NAME_BIND                    0x00200000UL
+#define DCCP_SOCKET__NODE_BIND                    0x00400000UL
+#define DCCP_SOCKET__NAME_CONNECT                 0x00800000UL

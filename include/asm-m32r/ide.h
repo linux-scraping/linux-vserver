@@ -15,7 +15,6 @@
 
 #ifdef __KERNEL__
 
-#include <linux/config.h>
 
 #ifndef MAX_HWIFS
 # ifdef CONFIG_BLK_DEV_IDEPCI
@@ -33,7 +32,8 @@
 static __inline__ int ide_default_irq(unsigned long base)
 {
 	switch (base) {
-#if defined(CONFIG_PLAT_M32700UT) || defined(CONFIG_PLAT_MAPPI2)
+#if defined(CONFIG_PLAT_M32700UT) || defined(CONFIG_PLAT_MAPPI2) \
+	|| defined(CONFIG_PLAT_OPSPUT)
 		case 0x1f0: return PLD_IRQ_CFIREQ;
 		default:
 			return 0;

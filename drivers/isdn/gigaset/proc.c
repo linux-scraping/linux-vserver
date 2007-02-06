@@ -16,8 +16,8 @@
 #include "gigaset.h"
 #include <linux/ctype.h>
 
-static ssize_t show_cidmode(struct device *dev, struct device_attribute *attr,
-			    char *buf)
+static ssize_t show_cidmode(struct device *dev,
+			    struct device_attribute *attr, char *buf)
 {
 	int ret;
 	unsigned long flags;
@@ -70,13 +70,20 @@ static DEVICE_ATTR(cidmode, S_IRUGO|S_IWUSR, show_cidmode, set_cidmode);
 /* free sysfs for device */
 void gigaset_free_dev_sysfs(struct cardstate *cs)
 {
+	if (!cs->tty_dev)
+		return;
+
 	gig_dbg(DEBUG_INIT, "removing sysfs entries");
-	device_remove_file(cs->dev, &dev_attr_cidmode);
+	device_remove_file(cs->tty_dev, &dev_attr_cidmode);
 }
 
 /* initialize sysfs for device */
 void gigaset_init_dev_sysfs(struct cardstate *cs)
 {
+	if (!cs->tty_dev)
+		return;
+
 	gig_dbg(DEBUG_INIT, "setting up sysfs");
-	device_create_file(cs->dev, &dev_attr_cidmode);
+	if (device_create_file(cs->tty_dev, &dev_attr_cidmode))
+		dev_err(cs->dev, "could not create sysfs attribute\n");
 }

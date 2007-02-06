@@ -12,7 +12,6 @@
  *	based upon discusions in irc://irc.openprojects.net/#kernelnewbies
  */
 
-#include <linux/config.h>
 #include <linux/sched.h>
 #include <linux/interrupt.h>
 #include <linux/mm.h>
@@ -36,14 +35,43 @@
 #include <linux/vt_kern.h>
 #include <linux/workqueue.h>
 #include <linux/kexec.h>
+#include <linux/irq.h>
+#include <linux/vserver/debug.h>
 
 #include <asm/ptrace.h>
+#include <asm/irq_regs.h>
 
 /* Whether we react on sysrq keys or just ignore them */
-int sysrq_enabled = 1;
+int __read_mostly __sysrq_enabled = 1;
 
-static void sysrq_handle_loglevel(int key, struct pt_regs *pt_regs,
-				  struct tty_struct *tty)
+static int __read_mostly sysrq_always_enabled;
+
+int sysrq_on(void)
+{
+	return __sysrq_enabled || sysrq_always_enabled;
+}
+
+/*
+ * A value of 1 means 'all', other nonzero values are an op mask:
+ */
+static inline int sysrq_on_mask(int mask)
+{
+	return sysrq_always_enabled || __sysrq_enabled == 1 ||
+						(__sysrq_enabled & mask);
+}
+
+static int __init sysrq_always_enabled_setup(char *str)
+{
+	sysrq_always_enabled = 1;
+	printk(KERN_INFO "debug: sysrq always enabled.\n");
+
+	return 1;
+}
+
+__setup("sysrq_always_enabled", sysrq_always_enabled_setup);
+
+
+static void sysrq_handle_loglevel(int key, struct tty_struct *tty)
 {
 	int i;
 	i = key - '0';
@@ -59,8 +87,7 @@ static struct sysrq_key_op sysrq_loglevel_op = {
 };
 
 #ifdef CONFIG_VT
-static void sysrq_handle_SAK(int key, struct pt_regs *pt_regs,
-			     struct tty_struct *tty)
+static void sysrq_handle_SAK(int key, struct tty_struct *tty)
 {
 	if (tty)
 		do_SAK(tty);
@@ -77,8 +104,7 @@ static struct sysrq_key_op sysrq_SAK_op = {
 #endif
 
 #ifdef CONFIG_VT
-static void sysrq_handle_unraw(int key, struct pt_regs *pt_regs,
-			       struct tty_struct *tty)
+static void sysrq_handle_unraw(int key, struct tty_struct *tty)
 {
 	struct kbd_struct *kbd = &kbd_table[fg_console];
 
@@ -96,10 +122,9 @@ static struct sysrq_key_op sysrq_unraw_op = {
 #endif /* CONFIG_VT */
 
 #ifdef CONFIG_KEXEC
-static void sysrq_handle_crashdump(int key, struct pt_regs *pt_regs,
-				struct tty_struct *tty)
+static void sysrq_handle_crashdump(int key, struct tty_struct *tty)
 {
-	crash_kexec(pt_regs);
+	crash_kexec(get_irq_regs());
 }
 static struct sysrq_key_op sysrq_crashdump_op = {
 	.handler	= sysrq_handle_crashdump,
@@ -111,9 +136,9 @@ static struct sysrq_key_op sysrq_crashdump_op = {
 #define sysrq_crashdump_op (*(struct sysrq_key_op *)0)
 #endif
 
-static void sysrq_handle_reboot(int key, struct pt_regs *pt_regs,
-				struct tty_struct *tty)
+static void sysrq_handle_reboot(int key, struct tty_struct *tty)
 {
+	lockdep_off();
 	local_irq_enable();
 	emergency_restart();
 }
@@ -124,8 +149,7 @@ static struct sysrq_key_op sysrq_reboot_op = {
 	.enable_mask	= SYSRQ_ENABLE_BOOT,
 };
 
-static void sysrq_handle_sync(int key, struct pt_regs *pt_regs,
-			      struct tty_struct *tty)
+static void sysrq_handle_sync(int key, struct tty_struct *tty)
 {
 	emergency_sync();
 }
@@ -136,8 +160,7 @@ static struct sysrq_key_op sysrq_sync_op = {
 	.enable_mask	= SYSRQ_ENABLE_SYNC,
 };
 
-static void sysrq_handle_mountro(int key, struct pt_regs *pt_regs,
-				 struct tty_struct *tty)
+static void sysrq_handle_mountro(int key, struct tty_struct *tty)
 {
 	emergency_remount();
 }
@@ -148,12 +171,12 @@ static struct sysrq_key_op sysrq_mountro_op = {
 	.enable_mask	= SYSRQ_ENABLE_REMOUNT,
 };
 
-#ifdef CONFIG_DEBUG_MUTEXES
-static void sysrq_handle_showlocks(int key, struct pt_regs *pt_regs,
-				struct tty_struct *tty)
+#ifdef CONFIG_LOCKDEP
+static void sysrq_handle_showlocks(int key, struct tty_struct *tty)
 {
-	mutex_debug_show_all_locks();
+	debug_show_all_locks();
 }
+
 static struct sysrq_key_op sysrq_showlocks_op = {
 	.handler	= sysrq_handle_showlocks,
 	.help_msg	= "show-all-locks(D)",
@@ -163,11 +186,11 @@ static struct sysrq_key_op sysrq_showlocks_op = {
 #define sysrq_showlocks_op (*(struct sysrq_key_op *)0)
 #endif
 
-static void sysrq_handle_showregs(int key, struct pt_regs *pt_regs,
-				  struct tty_struct *tty)
+static void sysrq_handle_showregs(int key, struct tty_struct *tty)
 {
-	if (pt_regs)
-		show_regs(pt_regs);
+	struct pt_regs *regs = get_irq_regs();
+	if (regs)
+		show_regs(regs);
 }
 static struct sysrq_key_op sysrq_showregs_op = {
 	.handler	= sysrq_handle_showregs,
@@ -176,8 +199,7 @@ static struct sysrq_key_op sysrq_showregs_op = {
 	.enable_mask	= SYSRQ_ENABLE_DUMP,
 };
 
-static void sysrq_handle_showstate(int key, struct pt_regs *pt_regs,
-				   struct tty_struct *tty)
+static void sysrq_handle_showstate(int key, struct tty_struct *tty)
 {
 	show_state();
 }
@@ -188,8 +210,19 @@ static struct sysrq_key_op sysrq_showstate_op = {
 	.enable_mask	= SYSRQ_ENABLE_DUMP,
 };
 
-static void sysrq_handle_showmem(int key, struct pt_regs *pt_regs,
-				 struct tty_struct *tty)
+static void sysrq_handle_showstate_blocked(int key, struct tty_struct *tty)
+{
+	show_state_filter(TASK_UNINTERRUPTIBLE);
+}
+static struct sysrq_key_op sysrq_showstate_blocked_op = {
+	.handler	= sysrq_handle_showstate_blocked,
+	.help_msg	= "shoW-blocked-tasks",
+	.action_msg	= "Show Blocked State",
+	.enable_mask	= SYSRQ_ENABLE_DUMP,
+};
+
+
+static void sysrq_handle_showmem(int key, struct tty_struct *tty)
 {
 	show_mem();
 }
@@ -208,14 +241,13 @@ static void send_sig_all(int sig)
 	struct task_struct *p;
 
 	for_each_process(p) {
-		if (p->mm && p->pid != 1)
+		if (p->mm && !is_init(p))
 			/* Not swapper, init nor kernel thread */
 			force_sig(sig, p);
 	}
 }
 
-static void sysrq_handle_term(int key, struct pt_regs *pt_regs,
-			      struct tty_struct *tty)
+static void sysrq_handle_term(int key, struct tty_struct *tty)
 {
 	send_sig_all(SIGTERM);
 	console_loglevel = 8;
@@ -227,16 +259,15 @@ static struct sysrq_key_op sysrq_term_op = {
 	.enable_mask	= SYSRQ_ENABLE_SIGNAL,
 };
 
-static void moom_callback(void *ignored)
+static void moom_callback(struct work_struct *ignored)
 {
 	out_of_memory(&NODE_DATA(0)->node_zonelists[ZONE_NORMAL],
 			GFP_KERNEL, 0);
 }
 
-static DECLARE_WORK(moom_work, moom_callback, NULL);
+static DECLARE_WORK(moom_work, moom_callback);
 
-static void sysrq_handle_moom(int key, struct pt_regs *pt_regs,
-			      struct tty_struct *tty)
+static void sysrq_handle_moom(int key, struct tty_struct *tty)
 {
 	schedule_work(&moom_work);
 }
@@ -246,8 +277,7 @@ static struct sysrq_key_op sysrq_moom_op = {
 	.action_msg	= "Manual OOM execution",
 };
 
-static void sysrq_handle_kill(int key, struct pt_regs *pt_regs,
-			      struct tty_struct *tty)
+static void sysrq_handle_kill(int key, struct tty_struct *tty)
 {
 	send_sig_all(SIGKILL);
 	console_loglevel = 8;
@@ -259,8 +289,7 @@ static struct sysrq_key_op sysrq_kill_op = {
 	.enable_mask	= SYSRQ_ENABLE_SIGNAL,
 };
 
-static void sysrq_handle_unrt(int key, struct pt_regs *pt_regs,
-				struct tty_struct *tty)
+static void sysrq_handle_unrt(int key, struct tty_struct *tty)
 {
 	normalize_rt_tasks();
 }
@@ -270,6 +299,21 @@ static struct sysrq_key_op sysrq_unrt_op = {
 	.action_msg	= "Nice All RT Tasks",
 	.enable_mask	= SYSRQ_ENABLE_RTNICE,
 };
+
+
+#ifdef CONFIG_VSERVER_DEBUG
+static void sysrq_handle_vxinfo(int key, struct tty_struct *tty)
+{
+	dump_vx_info_inactive((key == 'x')?0:1);
+}
+
+static struct sysrq_key_op sysrq_showvxinfo_op = {
+	.handler	= sysrq_handle_vxinfo,
+	.help_msg	= "conteXt",
+	.action_msg	= "Show Context Info",
+	.enable_mask	= SYSRQ_ENABLE_DUMP,
+};
+#endif
 
 /* Key Operations table and lock */
 static DEFINE_SPINLOCK(sysrq_key_table_lock);
@@ -287,15 +331,16 @@ static struct sysrq_key_op *sysrq_key_table[36] = {
 	&sysrq_loglevel_op,		/* 9 */
 
 	/*
-	 * Don't use for system provided sysrqs, it is handled specially on
-	 * sparc and will never arrive
+	 * a: Don't use for system provided sysrqs, it is handled specially on
+	 * sparc and will never arrive.
 	 */
 	NULL,				/* a */
 	&sysrq_reboot_op,		/* b */
-	&sysrq_crashdump_op,		/* c */
+	&sysrq_crashdump_op,		/* c & ibm_emac driver debug */
 	&sysrq_showlocks_op,		/* d */
 	&sysrq_term_op,			/* e */
 	&sysrq_moom_op,			/* f */
+	/* g: May be registered by ppc for kgdb */
 	NULL,				/* g */
 	NULL,				/* h */
 	&sysrq_kill_op,			/* i */
@@ -304,20 +349,25 @@ static struct sysrq_key_op *sysrq_key_table[36] = {
 	NULL,				/* l */
 	&sysrq_showmem_op,		/* m */
 	&sysrq_unrt_op,			/* n */
-	/* This will often be registered as 'Off' at init time */
+	/* o: This will often be registered as 'Off' at init time */
 	NULL,				/* o */
 	&sysrq_showregs_op,		/* p */
 	NULL,				/* q */
-	&sysrq_unraw_op,			/* r */
+	&sysrq_unraw_op,		/* r */
 	&sysrq_sync_op,			/* s */
 	&sysrq_showstate_op,		/* t */
 	&sysrq_mountro_op,		/* u */
-	/* May be assigned at init time by SMP VOYAGER */
+	/* v: May be registered at init time by SMP VOYAGER */
 	NULL,				/* v */
-	NULL,				/* w */
+	&sysrq_showstate_blocked_op,	/* w */
+	/* x: May be registered on ppc/powerpc for xmon */
 	NULL,				/* x */
 	NULL,				/* y */
-	NULL				/* z */
+#ifdef CONFIG_VSERVER_DEBUG
+	&sysrq_showvxinfo_op,		/* z */
+#else
+	NULL,				/* z */
+#endif
 };
 
 /* key2index calculation, -1 on invalid index */
@@ -329,6 +379,8 @@ static int sysrq_key_table_key2index(int key)
 		retval = key - '0';
 	else if ((key >= 'a') && (key <= 'z'))
 		retval = key + 10 - 'a';
+	else if ((key >= 'A') && (key <= 'Z'))
+		retval = key + 10 - 'A';
 	else
 		retval = -1;
 	return retval;
@@ -360,8 +412,7 @@ static void __sysrq_put_key_op(int key, struct sysrq_key_op *op_p)
  * This is the non-locking version of handle_sysrq.  It must/can only be called
  * by sysrq key handlers, as they are inside of the lock
  */
-void __handle_sysrq(int key, struct pt_regs *pt_regs, struct tty_struct *tty,
-			int check_mask)
+void __handle_sysrq(int key, struct tty_struct *tty, int check_mask)
 {
 	struct sysrq_key_op *op_p;
 	int orig_log_level;
@@ -379,11 +430,10 @@ void __handle_sysrq(int key, struct pt_regs *pt_regs, struct tty_struct *tty,
 		 * Should we check for enabled operations (/proc/sysrq-trigger
 		 * should not) and is the invoked operation enabled?
 		 */
-		if (!check_mask || sysrq_enabled == 1 ||
-		    (sysrq_enabled & op_p->enable_mask)) {
+		if (!check_mask || sysrq_on_mask(op_p->enable_mask)) {
 			printk("%s\n", op_p->action_msg);
 			console_loglevel = orig_log_level;
-			op_p->handler(key, pt_regs, tty);
+			op_p->handler(key, tty);
 		} else {
 			printk("This sysrq operation is disabled.\n");
 		}
@@ -412,11 +462,10 @@ void __handle_sysrq(int key, struct pt_regs *pt_regs, struct tty_struct *tty,
  * This function is called by the keyboard handler when SysRq is pressed
  * and any other keycode arrives.
  */
-void handle_sysrq(int key, struct pt_regs *pt_regs, struct tty_struct *tty)
+void handle_sysrq(int key, struct tty_struct *tty)
 {
-	if (!sysrq_enabled)
-		return;
-	__handle_sysrq(key, pt_regs, tty, 1);
+	if (sysrq_on())
+		__handle_sysrq(key, tty, 1);
 }
 EXPORT_SYMBOL(handle_sysrq);
 

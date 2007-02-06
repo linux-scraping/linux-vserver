@@ -12,13 +12,12 @@
  *	<tomsoft@informatik.tu-chemnitz.de>
  */
 
-#include <linux/config.h>
 #include <linux/profile.h>
 #include <asm/atomic.h>
 #include <asm/irq.h>
 #include <asm/sections.h>
 
-struct hw_interrupt_type;
+#define NMI_VECTOR		0x02
 
 /*
  * Various low-level irq details needed by irq.c, process.c,
@@ -26,10 +25,6 @@ struct hw_interrupt_type;
  *
  * Interrupt entry/exit code at both C and assembly level
  */
-
-extern u8 irq_vector[NR_IRQ_VECTORS];
-#define IO_APIC_VECTOR(irq)	(irq_vector[irq])
-#define AUTO_ASSIGN		-1
 
 extern void (*interrupt[NR_IRQS])(void);
 
@@ -43,7 +38,7 @@ fastcall void call_function_interrupt(void);
 fastcall void apic_timer_interrupt(void);
 fastcall void error_interrupt(void);
 fastcall void spurious_interrupt(void);
-fastcall void thermal_interrupt(struct pt_regs *);
+fastcall void thermal_interrupt(void);
 #define platform_legacy_irq(irq)	((irq) < 16)
 #endif
 
@@ -67,15 +62,5 @@ extern atomic_t irq_err_count;
 extern atomic_t irq_mis_count;
 
 #define IO_APIC_IRQ(x) (((x) >= 16) || ((1<<(x)) & io_apic_irqs))
-
-#if defined(CONFIG_X86_IO_APIC)
-static inline void hw_resend_irq(struct hw_interrupt_type *h, unsigned int i)
-{
-	if (IO_APIC_IRQ(i))
-		send_IPI_self(IO_APIC_VECTOR(i));
-}
-#else
-static inline void hw_resend_irq(struct hw_interrupt_type *h, unsigned int i) {}
-#endif
 
 #endif /* _ASM_HW_IRQ_H */

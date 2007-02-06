@@ -9,6 +9,7 @@
 #include <linux/module.h>
 #include <asm/io.h>
 #include <asm/proto.h>
+#include <asm/calgary.h>
 
 int iommu_merge __read_mostly = 0;
 EXPORT_SYMBOL(iommu_merge);
@@ -33,12 +34,15 @@ int panic_on_overflow __read_mostly = 0;
 int force_iommu __read_mostly= 0;
 #endif
 
+/* Set this to 1 if there is a HW IOMMU in the system */
+int iommu_detected __read_mostly = 0;
+
 /* Dummy device used for NULL arguments (normally ISA). Better would
    be probably a smaller DMA mask, but this is bug-to-bug compatible
    to i386. */
 struct device fallback_dev = {
 	.bus_id = "fallback device",
-	.coherent_dma_mask = 0xffffffff,
+	.coherent_dma_mask = DMA_32BIT_MASK,
 	.dma_mask = &fallback_dev.coherent_dma_mask,
 };
 
@@ -77,7 +81,7 @@ dma_alloc_coherent(struct device *dev, size_t size, dma_addr_t *dma_handle,
 		dev = &fallback_dev;
 	dma_mask = dev->coherent_dma_mask;
 	if (dma_mask == 0)
-		dma_mask = 0xffffffff;
+		dma_mask = DMA_32BIT_MASK;
 
 	/* Don't invoke OOM killer */
 	gfp |= __GFP_NORETRY;
@@ -90,7 +94,7 @@ dma_alloc_coherent(struct device *dev, size_t size, dma_addr_t *dma_handle,
 	   larger than 16MB and in this case we have a chance of
 	   finding fitting memory in the next higher zone first. If
 	   not retry with true GFP_DMA. -AK */
-	if (dma_mask <= 0xffffffff)
+	if (dma_mask <= DMA_32BIT_MASK)
 		gfp |= GFP_DMA32;
 
  again:
@@ -111,7 +115,7 @@ dma_alloc_coherent(struct device *dev, size_t size, dma_addr_t *dma_handle,
 
 			/* Don't use the 16MB ZONE_DMA unless absolutely
 			   needed. It's better to use remapping first. */
-			if (dma_mask < 0xffffffff && !(gfp & GFP_DMA)) {
+			if (dma_mask < DMA_32BIT_MASK && !(gfp & GFP_DMA)) {
 				gfp = (gfp & ~GFP_DMA32) | GFP_DMA;
 				goto again;
 			}
@@ -166,15 +170,27 @@ void dma_free_coherent(struct device *dev, size_t size,
 }
 EXPORT_SYMBOL(dma_free_coherent);
 
+static int forbid_dac __read_mostly;
+
 int dma_supported(struct device *dev, u64 mask)
 {
+#ifdef CONFIG_PCI
+	if (mask > 0xffffffff && forbid_dac > 0) {
+
+
+
+		printk(KERN_INFO "PCI: Disallowing DAC for device %s\n", dev->bus_id);
+		return 0;
+	}
+#endif
+
 	if (dma_ops->dma_supported)
 		return dma_ops->dma_supported(dev, mask);
 
 	/* Copied from i386. Doesn't make much sense, because it will
 	   only work for pci_alloc_coherent.
 	   The caller just has to use GFP_DMA in this case. */
-        if (mask < 0x00ffffff)
+        if (mask < DMA_24BIT_MASK)
                 return 0;
 
 	/* Tell the device to use SAC when IOMMU force is on.  This
@@ -189,7 +205,7 @@ int dma_supported(struct device *dev, u64 mask)
 	   SAC for these.  Assume all masks <= 40 bits are of this
 	   type. Normally this doesn't make any difference, but gives
 	   more gentle handling of IOMMU overflow. */
-	if (iommu_sac_force && (mask >= 0xffffffffffULL)) {
+	if (iommu_sac_force && (mask >= DMA_40BIT_MASK)) {
 		printk(KERN_INFO "%s: Force SAC with mask %Lx\n", dev->bus_id,mask);
 		return 0;
 	}
@@ -227,52 +243,104 @@ EXPORT_SYMBOL(dma_set_mask);
    allowed  overwrite iommu off workarounds for specific chipsets.
    soft	 Use software bounce buffering (default for Intel machines)
    noaperture Don't touch the aperture for AGP.
+   allowdac Allow DMA >4GB
+   nodac    Forbid DMA >4GB
+   panic    Force panic when IOMMU overflows
 */
 __init int iommu_setup(char *p)
 {
-    iommu_merge = 1;
+	iommu_merge = 1;
 
-    while (*p) {
-	    if (!strncmp(p,"off",3))
-		    no_iommu = 1;
-	    /* gart_parse_options has more force support */
-	    if (!strncmp(p,"force",5))
-		    force_iommu = 1;
-	    if (!strncmp(p,"noforce",7)) {
-		    iommu_merge = 0;
-		    force_iommu = 0;
-	    }
+	if (!p)
+		return -EINVAL;
 
-	    if (!strncmp(p, "biomerge",8)) {
-		    iommu_bio_merge = 4096;
-		    iommu_merge = 1;
-		    force_iommu = 1;
-	    }
-	    if (!strncmp(p, "panic",5))
-		    panic_on_overflow = 1;
-	    if (!strncmp(p, "nopanic",7))
-		    panic_on_overflow = 0;
-	    if (!strncmp(p, "merge",5)) {
-		    iommu_merge = 1;
-		    force_iommu = 1;
-	    }
-	    if (!strncmp(p, "nomerge",7))
-		    iommu_merge = 0;
-	    if (!strncmp(p, "forcesac",8))
-		    iommu_sac_force = 1;
+	while (*p) {
+		if (!strncmp(p,"off",3))
+			no_iommu = 1;
+		/* gart_parse_options has more force support */
+		if (!strncmp(p,"force",5))
+			force_iommu = 1;
+		if (!strncmp(p,"noforce",7)) {
+			iommu_merge = 0;
+			force_iommu = 0;
+		}
+
+		if (!strncmp(p, "biomerge",8)) {
+			iommu_bio_merge = 4096;
+			iommu_merge = 1;
+			force_iommu = 1;
+		}
+		if (!strncmp(p, "panic",5))
+			panic_on_overflow = 1;
+		if (!strncmp(p, "nopanic",7))
+			panic_on_overflow = 0;
+		if (!strncmp(p, "merge",5)) {
+			iommu_merge = 1;
+			force_iommu = 1;
+		}
+		if (!strncmp(p, "nomerge",7))
+			iommu_merge = 0;
+		if (!strncmp(p, "forcesac",8))
+			iommu_sac_force = 1;
+		if (!strncmp(p, "allowdac", 8))
+			forbid_dac = 0;
+		if (!strncmp(p, "nodac", 5))
+			forbid_dac = -1;
 
 #ifdef CONFIG_SWIOTLB
-	    if (!strncmp(p, "soft",4))
-		    swiotlb = 1;
+		if (!strncmp(p, "soft",4))
+			swiotlb = 1;
 #endif
 
-#ifdef CONFIG_GART_IOMMU
-	    gart_parse_options(p);
+#ifdef CONFIG_IOMMU
+		gart_parse_options(p);
 #endif
 
-	    p += strcspn(p, ",");
-	    if (*p == ',')
-		    ++p;
-    }
-    return 1;
+#ifdef CONFIG_CALGARY_IOMMU
+		if (!strncmp(p, "calgary", 7))
+			use_calgary = 1;
+#endif /* CONFIG_CALGARY_IOMMU */
+
+		p += strcspn(p, ",");
+		if (*p == ',')
+			++p;
+	}
+	return 0;
 }
+early_param("iommu", iommu_setup);
+
+void __init pci_iommu_alloc(void)
+{
+	/*
+	 * The order of these functions is important for
+	 * fall-back/fail-over reasons
+	 */
+#ifdef CONFIG_IOMMU
+	iommu_hole_init();
+#endif
+
+#ifdef CONFIG_CALGARY_IOMMU
+	detect_calgary();
+#endif
+
+#ifdef CONFIG_SWIOTLB
+	pci_swiotlb_init();
+#endif
+}
+
+static int __init pci_iommu_init(void)
+{
+#ifdef CONFIG_CALGARY_IOMMU
+	calgary_iommu_init();
+#endif
+
+#ifdef CONFIG_IOMMU
+	gart_iommu_init();
+#endif
+
+	no_iommu_init();
+	return 0;
+}
+
+/* Must execute after PCI subsystem */
+fs_initcall(pci_iommu_init);

@@ -182,7 +182,7 @@ void do_machine_check(struct pt_regs * regs, long error_code)
 		goto out2;
 
 	memset(&m, 0, sizeof(struct mce));
-	m.cpu = safe_smp_processor_id();
+	m.cpu = smp_processor_id();
 	rdmsrl(MSR_IA32_MCG_STATUS, m.mcgstatus);
 	if (!(m.mcgstatus & MCG_STATUS_RIPV))
 		kill_it = 1;
@@ -274,13 +274,40 @@ void do_machine_check(struct pt_regs * regs, long error_code)
 	atomic_dec(&mce_entry);
 }
 
+#ifdef CONFIG_X86_MCE_INTEL
+/***
+ * mce_log_therm_throt_event - Logs the thermal throttling event to mcelog
+ * @cpu: The CPU on which the event occured.
+ * @status: Event status information
+ *
+ * This function should be called by the thermal interrupt after the
+ * event has been processed and the decision was made to log the event
+ * further.
+ *
+ * The status parameter will be saved to the 'status' field of 'struct mce'
+ * and historically has been the register value of the
+ * MSR_IA32_THERMAL_STATUS (Intel) msr.
+ */
+void mce_log_therm_throt_event(unsigned int cpu, __u64 status)
+{
+	struct mce m;
+
+	memset(&m, 0, sizeof(m));
+	m.cpu = cpu;
+	m.bank = MCE_THERMAL_BANK;
+	m.status = status;
+	rdtscll(m.tsc);
+	mce_log(&m);
+}
+#endif /* CONFIG_X86_MCE_INTEL */
+
 /*
  * Periodic polling timer for "silent" machine check errors.
  */
 
 static int check_interval = 5 * 60; /* 5 minutes */
-static void mcheck_timer(void *data);
-static DECLARE_WORK(mcheck_work, mcheck_timer, NULL);
+static void mcheck_timer(struct work_struct *work);
+static DECLARE_DELAYED_WORK(mcheck_work, mcheck_timer);
 
 static void mcheck_check_cpu(void *info)
 {
@@ -288,7 +315,7 @@ static void mcheck_check_cpu(void *info)
 		do_machine_check(NULL, 0);
 }
 
-static void mcheck_timer(void *data)
+static void mcheck_timer(struct work_struct *work)
 {
 	on_each_cpu(mcheck_check_cpu, NULL, 1, 1);
 	schedule_delayed_work(&mcheck_work, check_interval * HZ);
@@ -562,7 +589,7 @@ static struct sysdev_class mce_sysclass = {
 	set_kset_name("machinecheck"),
 };
 
-static DEFINE_PER_CPU(struct sys_device, device_mce);
+DEFINE_PER_CPU(struct sys_device, device_mce);
 
 /* Why are there no generic functions for this? */
 #define ACCESSOR(name, var, start) \
@@ -614,8 +641,7 @@ static __cpuinit int mce_create_device(unsigned int cpu)
 	return err;
 }
 
-#ifdef CONFIG_HOTPLUG_CPU
-static __cpuinit void mce_remove_device(unsigned int cpu)
+static void mce_remove_device(unsigned int cpu)
 {
 	int i;
 
@@ -625,8 +651,8 @@ static __cpuinit void mce_remove_device(unsigned int cpu)
 	sysdev_remove_file(&per_cpu(device_mce,cpu), &attr_tolerant);
 	sysdev_remove_file(&per_cpu(device_mce,cpu), &attr_check_interval);
 	sysdev_unregister(&per_cpu(device_mce,cpu));
+	memset(&per_cpu(device_mce, cpu).kobj, 0, sizeof(struct kobject));
 }
-#endif
 
 /* Get notified when a cpu comes on/off. Be hotplug friendly. */
 static int
@@ -638,11 +664,9 @@ mce_cpu_callback(struct notifier_block *nfb, unsigned long action, void *hcpu)
 	case CPU_ONLINE:
 		mce_create_device(cpu);
 		break;
-#ifdef CONFIG_HOTPLUG_CPU
 	case CPU_DEAD:
 		mce_remove_device(cpu);
 		break;
-#endif
 	}
 	return NOTIFY_OK;
 }
@@ -664,7 +688,7 @@ static __init int mce_init_device(void)
 		mce_create_device(i);
 	}
 
-	register_cpu_notifier(&mce_cpu_notifier);
+	register_hotcpu_notifier(&mce_cpu_notifier);
 	misc_register(&mce_log_device);
 	return err;
 }

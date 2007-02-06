@@ -83,7 +83,7 @@ static void iomd_get_next_sg(struct scatterlist *sg, dma_t *dma)
 	sg->length |= flags;
 }
 
-static irqreturn_t iomd_dma_handle(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t iomd_dma_handle(int irq, void *dev_id)
 {
 	dma_t *dma = (dma_t *)dev_id;
 	unsigned long base = dma->dma_base;
@@ -128,7 +128,7 @@ static irqreturn_t iomd_dma_handle(int irq, void *dev_id, struct pt_regs *regs)
 static int iomd_request_dma(dmach_t channel, dma_t *dma)
 {
 	return request_irq(dma->dma_irq, iomd_dma_handle,
-			   SA_INTERRUPT, dma->device_id, dma);
+			   IRQF_DISABLED, dma->device_id, dma);
 }
 
 static void iomd_free_dma(dmach_t channel, dma_t *dma)

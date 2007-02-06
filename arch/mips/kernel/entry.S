@@ -7,7 +7,6 @@
  * Copyright (C) 1999, 2000 Silicon Graphics, Inc.
  * Copyright (C) 2001 MIPS Technologies, Inc.
  */
-#include <linux/config.h>
 
 #include <asm/asm.h>
 #include <asm/asmmacro.h>
@@ -21,10 +20,7 @@
 #include <asm/mipsmtregs.h>
 #endif
 
-#ifdef CONFIG_PREEMPT
-	.macro	preempt_stop
-	.endm
-#else
+#ifndef CONFIG_PREEMPT
 	.macro	preempt_stop
 	local_irq_disable
 	.endm
@@ -33,9 +29,16 @@
 
 	.text
 	.align	5
+FEXPORT(ret_from_irq)
+	LONG_S	s0, TI_REGS($28)
+#ifdef CONFIG_PREEMPT
+FEXPORT(ret_from_exception)
+#else
+	b	_ret_from_irq
 FEXPORT(ret_from_exception)
 	preempt_stop
-FEXPORT(ret_from_irq)
+#endif
+FEXPORT(_ret_from_irq)
 	LONG_L	t0, PT_STATUS(sp)		# returning to kernel mode?
 	andi	t0, t0, KU_USER
 	beqz	t0, resume_kernel
@@ -66,7 +69,7 @@ need_resched:
 #endif
 
 FEXPORT(ret_from_fork)
-	jal	schedule_tail		# a0 = task_t *prev
+	jal	schedule_tail		# a0 = struct task_struct *prev
 
 FEXPORT(syscall_exit)
 	local_irq_disable		# make sure need_resched and
@@ -80,14 +83,16 @@ FEXPORT(syscall_exit)
 FEXPORT(restore_all)			# restore full frame
 #ifdef CONFIG_MIPS_MT_SMTC
 /* Detect and execute deferred IPI "interrupts" */
-	move	a0,sp
+	LONG_L	s0, TI_REGS($28)
+	LONG_S	sp, TI_REGS($28)
 	jal	deferred_smtc_ipi
+	LONG_S	s0, TI_REGS($28)
 /* Re-arm any temporarily masked interrupts not explicitly "acked" */
 	mfc0	v0, CP0_TCSTATUS
 	ori	v1, v0, TCSTATUS_IXMT
 	mtc0	v1, CP0_TCSTATUS
 	andi	v0, TCSTATUS_IXMT
-	ehb
+	_ehb
 	mfc0	t0, CP0_TCCONTEXT
 	DMT	9				# dmt t1
 	jal	mips_ihb
@@ -95,7 +100,7 @@ FEXPORT(restore_all)			# restore full frame
 	andi	t3, t0, 0xff00
 	or	t2, t2, t3
 	mtc0	t2, CP0_STATUS
-	ehb
+	_ehb
 	andi	t1, t1, VPECONTROL_TE
 	beqz	t1, 1f
 	EMT
@@ -105,7 +110,7 @@ FEXPORT(restore_all)			# restore full frame
 	xori	v1, v1, TCSTATUS_IXMT
 	or	v1, v0, v1
 	mtc0	v1, CP0_TCSTATUS
-	ehb
+	_ehb
 	xor	t0, t0, t3
 	mtc0	t0, CP0_TCCONTEXT
 #endif /* CONFIG_MIPS_MT_SMTC */
@@ -114,6 +119,21 @@ FEXPORT(restore_all)			# restore full frame
 	RESTORE_AT
 	RESTORE_STATIC
 FEXPORT(restore_partial)		# restore partial frame
+#ifdef CONFIG_TRACE_IRQFLAGS
+	SAVE_STATIC
+	SAVE_AT
+	SAVE_TEMP
+	LONG_L	v0, PT_STATUS(sp)
+	and	v0, 1
+	beqz	v0, 1f
+	jal	trace_hardirqs_on
+	b	2f
+1:	jal	trace_hardirqs_off
+2:
+	RESTORE_TEMP
+	RESTORE_AT
+	RESTORE_STATIC
+#endif
 	RESTORE_SOME
 	RESTORE_SP_AND_RET
 	.set	at

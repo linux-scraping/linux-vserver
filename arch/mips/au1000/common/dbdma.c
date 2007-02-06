@@ -30,7 +30,6 @@
  *
  */
 
-#include <linux/config.h>
 #include <linux/kernel.h>
 #include <linux/errno.h>
 #include <linux/sched.h>
@@ -231,7 +230,7 @@ EXPORT_SYMBOL(au1xxx_ddma_add_device);
 */
 u32
 au1xxx_dbdma_chan_alloc(u32 srcid, u32 destid,
-       void (*callback)(int, void *, struct pt_regs *), void *callparam)
+       void (*callback)(int, void *), void *callparam)
 {
 	unsigned long   flags;
 	u32		used, chan, rv;
@@ -249,8 +248,10 @@ au1xxx_dbdma_chan_alloc(u32 srcid, u32 destid,
 		au1xxx_dbdma_init();
 	dbdma_initialized = 1;
 
-	if ((stp = find_dbdev_id(srcid)) == NULL) return 0;
-	if ((dtp = find_dbdev_id(destid)) == NULL) return 0;
+	if ((stp = find_dbdev_id(srcid)) == NULL)
+		return 0;
+	if ((dtp = find_dbdev_id(destid)) == NULL)
+		return 0;
 
 	used = 0;
 	rv = 0;
@@ -290,7 +291,7 @@ au1xxx_dbdma_chan_alloc(u32 srcid, u32 destid,
 				/* If kmalloc fails, it is caught below same
 				 * as a channel not available.
 				 */
-				ctp = kmalloc(sizeof(chan_tab_t), GFP_KERNEL);
+				ctp = kmalloc(sizeof(chan_tab_t), GFP_ATOMIC);
 				chan_tab_ptr[i] = ctp;
 				break;
 			}
@@ -730,6 +731,8 @@ au1xxx_dbdma_get_dest(u32 chanid, void **buf, int *nbytes)
 	return rv;
 }
 
+EXPORT_SYMBOL_GPL(au1xxx_dbdma_get_dest);
+
 void
 au1xxx_dbdma_stop(u32 chanid)
 {
@@ -821,6 +824,8 @@ au1xxx_get_dma_residue(u32 chanid)
 	return rv;
 }
 
+EXPORT_SYMBOL_GPL(au1xxx_get_dma_residue);
+
 void
 au1xxx_dbdma_chan_free(u32 chanid)
 {
@@ -844,7 +849,7 @@ au1xxx_dbdma_chan_free(u32 chanid)
 EXPORT_SYMBOL(au1xxx_dbdma_chan_free);
 
 static irqreturn_t
-dbdma_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+dbdma_interrupt(int irq, void *dev_id)
 {
 	u32 intstat;
 	u32 chan_index;
@@ -866,7 +871,7 @@ dbdma_interrupt(int irq, void *dev_id, struct pt_regs *regs)
 	au_sync();
 
 	if (ctp->chan_callback)
-		(ctp->chan_callback)(irq, ctp->chan_callparam, regs);
+		(ctp->chan_callback)(irq, ctp->chan_callparam);
 
 	ctp->cur_ptr = phys_to_virt(DSCR_GET_NXTPTR(dp->dscr_nxtptr));
 	return IRQ_RETVAL(1);
@@ -889,7 +894,7 @@ static void au1xxx_dbdma_init(void)
 	#error Unknown Au1x00 SOC
 #endif
 
-	if (request_irq(irq_nr, dbdma_interrupt, SA_INTERRUPT,
+	if (request_irq(irq_nr, dbdma_interrupt, IRQF_DISABLED,
 			"Au1xxx dbdma", (void *)dbdma_gptr))
 		printk("Can't get 1550 dbdma irq");
 }

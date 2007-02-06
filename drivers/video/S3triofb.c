@@ -23,13 +23,11 @@
 
 */
 
-#include <linux/config.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/errno.h>
 #include <linux/string.h>
 #include <linux/mm.h>
-#include <linux/tty.h>
 #include <linux/slab.h>
 #include <linux/vmalloc.h>
 #include <linux/delay.h>
@@ -351,30 +349,30 @@ static void __init s3triofb_of_init(struct device_node *dp)
     s3trio_name[sizeof(s3trio_name)-1] = '\0';
     strcpy(fb_fix.id, s3trio_name);
 
-    if((pp = (int *)get_property(dp, "vendor-id", &len)) != NULL
+    if((pp = get_property(dp, "vendor-id", &len)) != NULL
 	&& *pp!=PCI_VENDOR_ID_S3) {
 	printk("%s: can't find S3 Trio board\n", dp->full_name);
 	return;
     }
 
-    if((pp = (int *)get_property(dp, "device-id", &len)) != NULL
+    if((pp = get_property(dp, "device-id", &len)) != NULL
 	&& *pp!=PCI_DEVICE_ID_S3_TRIO) {
 	printk("%s: can't find S3 Trio board\n", dp->full_name);
 	return;
     }
 
-    if ((pp = (int *)get_property(dp, "depth", &len)) != NULL
+    if ((pp = get_property(dp, "depth", &len)) != NULL
 	&& len == sizeof(int) && *pp != 8) {
 	printk("%s: can't use depth = %d\n", dp->full_name, *pp);
 	return;
     }
-    if ((pp = (int *)get_property(dp, "width", &len)) != NULL
+    if ((pp = get_property(dp, "width", &len)) != NULL
 	&& len == sizeof(int))
 	fb_var.xres = fb_var.xres_virtual = *pp;
-    if ((pp = (int *)get_property(dp, "height", &len)) != NULL
+    if ((pp = get_property(dp, "height", &len)) != NULL
 	&& len == sizeof(int))
 	fb_var.yres = fb_var.yres_virtual = *pp;
-    if ((pp = (int *)get_property(dp, "linebytes", &len)) != NULL
+    if ((pp = get_property(dp, "linebytes", &len)) != NULL
 	&& len == sizeof(int))
 	fb_fix.line_length = *pp;
     else
@@ -537,8 +535,11 @@ static void __init s3triofb_of_init(struct device_node *dp)
 #endif
 
     fb_info.flags = FBINFO_FLAG_DEFAULT;
-    if (register_framebuffer(&fb_info) < 0)
-	return;
+    if (register_framebuffer(&fb_info) < 0) {
+		iounmap(fb_info.screen_base);
+		fb_info.screen_base = NULL;
+		return;
+    }
 
     printk("fb%d: S3 Trio frame buffer device on %s\n",
 	   fb_info.node, dp->full_name);

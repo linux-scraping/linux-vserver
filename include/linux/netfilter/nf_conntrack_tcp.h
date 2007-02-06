@@ -25,7 +25,7 @@ enum tcp_conntrack {
 #define IP_CT_TCP_FLAG_SACK_PERM		0x02
 
 /* This sender sent FIN first */
-#define IP_CT_TCP_FLAG_CLOSE_INIT		0x03
+#define IP_CT_TCP_FLAG_CLOSE_INIT		0x04
 
 #ifdef __KERNEL__
 
@@ -49,6 +49,7 @@ struct ip_ct_tcp
 	u_int32_t	last_seq;	/* Last sequence number seen in dir */
 	u_int32_t	last_ack;	/* Last sequence number seen in opposite dir */
 	u_int32_t	last_end;	/* Last seq + len */
+	u_int16_t	last_win;	/* Last window advertisement seen in dir */
 };
 
 #endif /* __KERNEL__ */

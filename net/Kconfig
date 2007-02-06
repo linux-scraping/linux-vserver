@@ -63,11 +63,19 @@ config INET
 if INET
 source "net/ipv4/Kconfig"
 source "net/ipv6/Kconfig"
+source "net/netlabel/Kconfig"
 
 endif # if INET
 
+config NETWORK_SECMARK
+	bool "Security Marking"
+	help
+	  This enables security marking of network packets, similar
+	  to nfmark, but designated for security purposes.
+	  If you are unsure how to answer this question, answer N.
+
 menuconfig NETFILTER
-	bool "Network packet filtering (replaces ipchains)"
+	bool "Network packet filtering framework (Netfilter)"
 	---help---
 	  Netfilter is a framework for filtering and mangling network packets
 	  that pass through your Linux box.
@@ -167,33 +175,6 @@ source "net/ipx/Kconfig"
 source "drivers/net/appletalk/Kconfig"
 source "net/x25/Kconfig"
 source "net/lapb/Kconfig"
-
-config NET_DIVERT
-	bool "Frame Diverter (EXPERIMENTAL)"
-	depends on EXPERIMENTAL
-	---help---
-	  The Frame Diverter allows you to divert packets from the
-	  network, that are not aimed at the interface receiving it (in
-	  promisc. mode). Typically, a Linux box setup as an Ethernet bridge
-	  with the Frames Diverter on, can do some *really* transparent www
-	  caching using a Squid proxy for example.
-
-	  This is very useful when you don't want to change your router's
-	  config (or if you simply don't have access to it).
-
-	  The other possible usages of diverting Ethernet Frames are
-	  numberous:
-	  - reroute smtp traffic to another interface
-	  - traffic-shape certain network streams
-	  - transparently proxy smtp connections
-	  - etc...
-
-	  For more informations, please refer to:
-	  <http://diverter.sourceforge.net/>
-	  <http://perso.wanadoo.fr/magpie/EtherDivert.html>
-
-	  If unsure, say N.
-
 source "net/econet/Kconfig"
 source "net/wanrouter/Kconfig"
 source "net/sched/Kconfig"
@@ -215,6 +196,21 @@ config NET_PKTGEN
 	  To compile this code as a module, choose M here: the
 	  module will be called pktgen.
 
+config NET_TCPPROBE
+	tristate "TCP connection probing"
+	depends on INET && EXPERIMENTAL && PROC_FS && KPROBES
+	---help---
+	This module allows for capturing the changes to TCP connection
+	state in response to incoming packets. It is used for debugging
+	TCP congestion avoidance modules. If you don't understand
+	what was just said, you don't need it: say N.
+
+	Documentation on how to use TCP connection probing can be found
+	at http://linux-net.osdl.org/index.php/TcpProbe
+
+	To compile this code as a module, choose M here: the
+	module will be called tcp_probe.
+
 endmenu
 
 endmenu
@@ -225,6 +221,9 @@ source "net/bluetooth/Kconfig"
 source "net/ieee80211/Kconfig"
 
 config WIRELESS_EXT
+	bool
+
+config FIB_RULES
 	bool
 
 endif   # if NET

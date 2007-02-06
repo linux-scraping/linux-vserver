@@ -25,7 +25,6 @@
 /* define _CPIA_DEBUG_ for verbose debug output (see cpia.h) */
 /* #define _CPIA_DEBUG_  1 */
 
-#include <linux/config.h>
 
 #include <linux/module.h>
 #include <linux/init.h>
@@ -83,6 +82,8 @@ struct pp_cam_entry {
 	struct pardevice *pdev;
 	struct parport *port;
 	struct work_struct cb_task;
+	void (*cb_func)(void *cbdata);
+	void *cb_data;
 	int open_count;
 	wait_queue_head_t wq_stream;
 	/* image state flags */
@@ -130,6 +131,20 @@ static void cpia_parport_disable_irq( struct parport *port ) {
 
 #define PARPORT_CHUNK_SIZE	PAGE_SIZE
 
+
+static void cpia_pp_run_callback(struct work_struct *work)
+{
+	void (*cb_func)(void *cbdata);
+	void *cb_data;
+	struct pp_cam_entry *cam;
+
+	cam = container_of(work, struct pp_cam_entry, cb_task);
+	cb_func = cam->cb_func;
+	cb_data = cam->cb_data;
+	work_release(work);
+
+	cb_func(cb_data);
+}
 
 /****************************************************************************
  *
@@ -665,7 +680,9 @@ static int cpia_pp_registerCallback(void *privdata, void (*cb)(void *cbdata), vo
 	int retval = 0;
 
 	if(cam->port->irq != PARPORT_IRQ_NONE) {
-		INIT_WORK(&cam->cb_task, cb, cbdata);
+		cam->cb_func = cb;
+		cam->cb_data = cbdata;
+		INIT_WORK_NAR(&cam->cb_task, cpia_pp_run_callback);
 	} else {
 		retval = -1;
 	}
@@ -803,7 +820,7 @@ static struct parport_driver cpia_pp_driver = {
 	.detach = cpia_pp_detach,
 };
 
-int cpia_pp_init(void)
+static int cpia_pp_init(void)
 {
 	printk(KERN_INFO "%s v%d.%d.%d\n",ABOUT,
 	       CPIA_PP_MAJ_VER,CPIA_PP_MIN_VER,CPIA_PP_PATCH_VER);
@@ -860,6 +877,8 @@ void cleanup_module(void)
 
 static int __init cpia_pp_setup(char *str)
 {
+	int err;
+
 	if (!strncmp(str, "parport", 7)) {
 		int n = simple_strtoul(str + 7, NULL, 10);
 		if (parport_ptr < PARPORT_MAX) {
@@ -872,6 +891,10 @@ static int __init cpia_pp_setup(char *str)
 	} else if (!strcmp(str, "none")) {
 		parport_nr[parport_ptr++] = PPCPIA_PARPORT_NONE;
 	}
+
+	err=cpia_pp_init();
+	if (err)
+		return err;
 
 	return 1;
 }

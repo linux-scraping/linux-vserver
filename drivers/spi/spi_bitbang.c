@@ -16,7 +16,6 @@
  * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
-#include <linux/config.h>
 #include <linux/init.h>
 #include <linux/spinlock.h>
 #include <linux/workqueue.h>
@@ -197,7 +196,7 @@ int spi_bitbang_setup(struct spi_device *spi)
 		return -EINVAL;
 
 	if (!cs) {
-		cs = kzalloc(sizeof *cs, SLAB_KERNEL);
+		cs = kzalloc(sizeof *cs, GFP_KERNEL);
 		if (!cs)
 			return -ENOMEM;
 		spi->controller_state = cs;
@@ -266,9 +265,10 @@ static int spi_bitbang_bufs(struct spi_device *spi, struct spi_transfer *t)
  * Drivers can provide word-at-a-time i/o primitives, or provide
  * transfer-at-a-time ones to leverage dma or fifo hardware.
  */
-static void bitbang_work(void *_bitbang)
+static void bitbang_work(struct work_struct *work)
 {
-	struct spi_bitbang	*bitbang = _bitbang;
+	struct spi_bitbang	*bitbang =
+		container_of(work, struct spi_bitbang, work);
 	unsigned long		flags;
 
 	spin_lock_irqsave(&bitbang->lock, flags);
@@ -457,7 +457,7 @@ int spi_bitbang_start(struct spi_bitbang *bitbang)
 	if (!bitbang->master || !bitbang->chipselect)
 		return -EINVAL;
 
-	INIT_WORK(&bitbang->work, bitbang_work, bitbang);
+	INIT_WORK(&bitbang->work, bitbang_work);
 	spin_lock_init(&bitbang->lock);
 	INIT_LIST_HEAD(&bitbang->queue);
 

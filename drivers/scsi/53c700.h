@@ -12,7 +12,7 @@
 #include <asm/io.h>
 
 #include <scsi/scsi_device.h>
-
+#include <scsi/scsi_cmnd.h>
 
 /* Turn on for general debugging---too verbose for normal use */
 #undef	NCR_700_DEBUG
@@ -57,7 +57,7 @@ struct NCR_700_Host_Parameters;
 struct Scsi_Host *NCR_700_detect(struct scsi_host_template *,
 		struct NCR_700_Host_Parameters *, struct device *);
 int NCR_700_release(struct Scsi_Host *host);
-irqreturn_t NCR_700_intr(int, void *, struct pt_regs *);
+irqreturn_t NCR_700_intr(int, void *);
 
 
 enum NCR_700_Host_State {
@@ -76,11 +76,16 @@ struct NCR_700_SG_List {
 	#define	SCRIPT_RETURN			0x90080000
 };
 
-/* We use device->hostdata to store negotiated parameters.  This is
- * supposed to be a pointer to a device private area, but we cannot
- * really use it as such since it will never be freed, so just use the
- * 32 bits to cram the information.  The SYNC negotiation sequence looks
- * like:
+struct NCR_700_Device_Parameters {
+	/* space for creating a request sense command. Really, except
+	 * for the annoying SCSI-2 requirement for LUN information in
+	 * cmnd[1], this could be in static storage */
+	unsigned char cmnd[MAX_COMMAND_SIZE];
+	__u8	depth;
+};
+
+
+/* The SYNC negotiation sequence looks like:
  * 
  * If DEV_NEGOTIATED_SYNC not set, tack and SDTR message on to the
  * initial identify for the device and set DEV_BEGIN_SYNC_NEGOTATION
@@ -98,19 +103,26 @@ struct NCR_700_SG_List {
 #define NCR_700_DEV_BEGIN_SYNC_NEGOTIATION	(1<<17)
 #define NCR_700_DEV_PRINT_SYNC_NEGOTIATION (1<<19)
 
+static inline char *NCR_700_get_sense_cmnd(struct scsi_device *SDp)
+{
+	struct NCR_700_Device_Parameters *hostdata = SDp->hostdata;
+
+	return hostdata->cmnd;
+}
+
 static inline void
 NCR_700_set_depth(struct scsi_device *SDp, __u8 depth)
 {
-	long l = (long)SDp->hostdata;
+	struct NCR_700_Device_Parameters *hostdata = SDp->hostdata;
 
-	l &= 0xffff00ff;
-	l |= 0xff00 & (depth << 8);
-	SDp->hostdata = (void *)l;
+	hostdata->depth = depth;
 }
 static inline __u8
 NCR_700_get_depth(struct scsi_device *SDp)
 {
-	return ((((unsigned long)SDp->hostdata) & 0xff00)>>8);
+	struct NCR_700_Device_Parameters *hostdata = SDp->hostdata;
+
+	return hostdata->depth;
 }
 static inline int
 NCR_700_is_flag_set(struct scsi_device *SDp, __u32 flag)
@@ -163,6 +175,8 @@ struct NCR_700_command_slot {
 	#define NCR_700_SLOT_BUSY (1|NCR_700_SLOT_MAGIC) /* slot has command active on HA */
 	#define NCR_700_SLOT_QUEUED (2|NCR_700_SLOT_MAGIC) /* slot has command to be made active on HA */
 	__u8	state;
+	#define NCR_700_FLAG_AUTOSENSE	0x01
+	__u8	flags;
 	int	tag;
 	__u32	resume_offset;
 	struct scsi_cmnd *cmnd;
@@ -401,31 +415,31 @@ struct NCR_700_Host_Parameters {
 #define NCR_710_MIN_XFERP	0
 #define NCR_700_MIN_PERIOD	25 /* for SDTR message, 100ns */
 
-#define script_patch_32(script, symbol, value) \
+#define script_patch_32(dev, script, symbol, value) \
 { \
 	int i; \
 	for(i=0; i< (sizeof(A_##symbol##_used) / sizeof(__u32)); i++) { \
 		__u32 val = bS_to_cpu((script)[A_##symbol##_used[i]]) + value; \
 		(script)[A_##symbol##_used[i]] = bS_to_host(val); \
-		dma_cache_sync(&(script)[A_##symbol##_used[i]], 4, DMA_TO_DEVICE); \
+		dma_cache_sync((dev), &(script)[A_##symbol##_used[i]], 4, DMA_TO_DEVICE); \
 		DEBUG((" script, patching %s at %d to 0x%lx\n", \
 		       #symbol, A_##symbol##_used[i], (value))); \
 	} \
 }
 
-#define script_patch_32_abs(script, symbol, value) \
+#define script_patch_32_abs(dev, script, symbol, value) \
 { \
 	int i; \
 	for(i=0; i< (sizeof(A_##symbol##_used) / sizeof(__u32)); i++) { \
 		(script)[A_##symbol##_used[i]] = bS_to_host(value); \
-		dma_cache_sync(&(script)[A_##symbol##_used[i]], 4, DMA_TO_DEVICE); \
+		dma_cache_sync((dev), &(script)[A_##symbol##_used[i]], 4, DMA_TO_DEVICE); \
 		DEBUG((" script, patching %s at %d to 0x%lx\n", \
 		       #symbol, A_##symbol##_used[i], (value))); \
 	} \
 }
 
 /* Used for patching the SCSI ID in the SELECT instruction */
-#define script_patch_ID(script, symbol, value) \
+#define script_patch_ID(dev, script, symbol, value) \
 { \
 	int i; \
 	for(i=0; i< (sizeof(A_##symbol##_used) / sizeof(__u32)); i++) { \
@@ -433,13 +447,13 @@ struct NCR_700_Host_Parameters {
 		val &= 0xff00ffff; \
 		val |= ((value) & 0xff) << 16; \
 		(script)[A_##symbol##_used[i]] = bS_to_host(val); \
-		dma_cache_sync(&(script)[A_##symbol##_used[i]], 4, DMA_TO_DEVICE); \
+		dma_cache_sync((dev), &(script)[A_##symbol##_used[i]], 4, DMA_TO_DEVICE); \
 		DEBUG((" script, patching ID field %s at %d to 0x%x\n", \
 		       #symbol, A_##symbol##_used[i], val)); \
 	} \
 }
 
-#define script_patch_16(script, symbol, value) \
+#define script_patch_16(dev, script, symbol, value) \
 { \
 	int i; \
 	for(i=0; i< (sizeof(A_##symbol##_used) / sizeof(__u32)); i++) { \
@@ -447,7 +461,7 @@ struct NCR_700_Host_Parameters {
 		val &= 0xffff0000; \
 		val |= ((value) & 0xffff); \
 		(script)[A_##symbol##_used[i]] = bS_to_host(val); \
-		dma_cache_sync(&(script)[A_##symbol##_used[i]], 4, DMA_TO_DEVICE); \
+		dma_cache_sync((dev), &(script)[A_##symbol##_used[i]], 4, DMA_TO_DEVICE); \
 		DEBUG((" script, patching short field %s at %d to 0x%x\n", \
 		       #symbol, A_##symbol##_used[i], val)); \
 	} \
@@ -472,8 +486,7 @@ NCR_700_readl(struct Scsi_Host *host, __u32 reg)
 		ioread32(hostdata->base + reg);
 #if 1
 	/* sanity check the register */
-	if((reg & 0x3) != 0)
-		BUG();
+	BUG_ON((reg & 0x3) != 0);
 #endif
 
 	return value;
@@ -496,8 +509,7 @@ NCR_700_writel(__u32 value, struct Scsi_Host *host, __u32 reg)
 
 #if 1
 	/* sanity check the register */
-	if((reg & 0x3) != 0)
-		BUG();
+	BUG_ON((reg & 0x3) != 0);
 #endif
 
 	bEBus ? iowrite32be(value, hostdata->base + reg): 

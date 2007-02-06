@@ -8,7 +8,6 @@
  * Code supporting the ALCOR and XLT (XL-300/366/433).
  */
 
-#include <linux/config.h>
 #include <linux/kernel.h>
 #include <linux/types.h>
 #include <linux/mm.h>
@@ -101,7 +100,7 @@ static struct hw_interrupt_type alcor_irq_type = {
 };
 
 static void
-alcor_device_interrupt(unsigned long vector, struct pt_regs *regs)
+alcor_device_interrupt(unsigned long vector)
 {
 	unsigned long pld;
 	unsigned int i;
@@ -117,9 +116,9 @@ alcor_device_interrupt(unsigned long vector, struct pt_regs *regs)
 		i = ffz(~pld);
 		pld &= pld - 1; /* clear least bit set */
 		if (i == 31) {
-			isa_device_interrupt(vector, regs);
+			isa_device_interrupt(vector);
 		} else {
-			handle_irq(16 + i, regs);
+			handle_irq(16 + i);
 		}
 	}
 }
@@ -144,7 +143,7 @@ alcor_init_irq(void)
 		if (i >= 16+20 && i <= 16+30)
 			continue;
 		irq_desc[i].status = IRQ_DISABLED | IRQ_LEVEL;
-		irq_desc[i].handler = &alcor_irq_type;
+		irq_desc[i].chip = &alcor_irq_type;
 	}
 	i8259a_irq_type.ack = alcor_isa_mask_and_ack_irq;
 

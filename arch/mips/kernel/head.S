@@ -5,7 +5,7 @@
  *
  * Copyright (C) 1994, 1995 Waldorf Electronics
  * Written by Ralf Baechle and Andreas Busse
- * Copyright (C) 1994, 95, 96, 97, 98, 99, 2003 Ralf Baechle
+ * Copyright (C) 1994 - 99, 2003, 06 Ralf Baechle
  * Copyright (C) 1996 Paul M. Antoine
  * Modified for DECStation and hence R3000 support by Paul M. Antoine
  * Further modifications by David S. Miller and Harald Koerfgen
@@ -13,12 +13,12 @@
  * Kevin Kissell, kevink@mips.com and Carsten Langgaard, carstenl@mips.com
  * Copyright (C) 2000 MIPS Technologies, Inc.  All rights reserved.
  */
-#include <linux/config.h>
 #include <linux/init.h>
 #include <linux/threads.h>
 
 #include <asm/asm.h>
 #include <asm/asmmacro.h>
+#include <asm/irqflags.h>
 #include <asm/regdef.h>
 #include <asm/page.h>
 #include <asm/mipsregs.h>
@@ -96,7 +96,7 @@
 	/* Clear TKSU, leave IXMT */
 	xori	t0, 0x00001800
 	mtc0	t0, CP0_TCSTATUS
-	ehb
+	_ehb
 	/* We need to leave the global IE bit set, but clear EXL...*/
 	mfc0	t0, CP0_STATUS
 	or	t0, ST0_CU0 | ST0_EXL | ST0_ERL | \set | \clr
@@ -138,7 +138,7 @@
 EXPORT(stext)					# used for profiling
 EXPORT(_stext)
 
-#if defined(CONFIG_QEMU) || defined(CONFIG_MIPS_SIM)
+#ifdef CONFIG_MIPS_SIM
 	/*
 	 * Give us a fighting chance of running if execution beings at the
 	 * kernel load address.  This is needed because this platform does
@@ -189,7 +189,8 @@ NESTED(kernel_entry, 16, sp)			# kernel entry point
 
 	MTC0		zero, CP0_CONTEXT	# clear context register
 	PTR_LA		$28, init_thread_union
-	PTR_ADDIU	sp, $28, _THREAD_SIZE - 32
+	PTR_LI		sp, _THREAD_SIZE - 32
+	PTR_ADDU	sp, $28
 	set_saved_sp	sp, t0, t1
 	PTR_SUBU	sp, 4 * SZREG		# init stack pointer
 
@@ -249,6 +250,9 @@ NESTED(smp_bootstrap, 16, sp)
 	 */
 	page	swapper_pg_dir, _PGD_ORDER
 #ifdef CONFIG_64BIT
+#if defined(CONFIG_MODULES) && !defined(CONFIG_BUILD_ELF64)
+	page	module_pg_dir, _PGD_ORDER
+#endif
 	page	invalid_pmd_table, _PMD_ORDER
 #endif
 	page	invalid_pte_table, _PTE_ORDER

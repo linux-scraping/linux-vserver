@@ -16,7 +16,6 @@
 #include <linux/file.h>
 #include <linux/utsname.h>
 #include <linux/personality.h>
-#include <linux/vs_cvirt.h>
 
 #include <asm/uaccess.h>
 #include <asm/ia32.h>
@@ -149,7 +148,7 @@ asmlinkage long sys_uname(struct new_utsname __user * name)
 {
 	int err;
 	down_read(&uts_sem);
-	err = copy_to_user(name, vx_new_utsname(), sizeof (*name));
+	err = copy_to_user(name, utsname(), sizeof (*name));
 	up_read(&uts_sem);
 	if (personality(current->personality) == PER_LINUX32) 
 		err |= copy_to_user(&name->machine, "i686", 5); 		

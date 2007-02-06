@@ -29,7 +29,6 @@
  * essentially no allocation space overhead.
  */
 
-#include <linux/config.h>
 #include <linux/slab.h>
 #include <linux/mm.h>
 #include <linux/cache.h>
@@ -61,6 +60,8 @@ static DEFINE_SPINLOCK(slob_lock);
 static DEFINE_SPINLOCK(block_lock);
 
 static void slob_free(void *b, int size);
+static void slob_timer_cbk(void);
+
 
 static void *slob_alloc(size_t size, gfp_t gfp, int align)
 {
@@ -158,7 +159,7 @@ static int fastcall find_order(int size)
 	return order;
 }
 
-void *kmalloc(size_t size, gfp_t gfp)
+void *__kmalloc(size_t size, gfp_t gfp)
 {
 	slob_t *m;
 	bigblock_t *bb;
@@ -187,8 +188,7 @@ void *kmalloc(size_t size, gfp_t gfp)
 	slob_free(bb, sizeof(bigblock_t));
 	return 0;
 }
-
-EXPORT_SYMBOL(kmalloc);
+EXPORT_SYMBOL(__kmalloc);
 
 void kfree(const void *block)
 {
@@ -271,10 +271,9 @@ struct kmem_cache *kmem_cache_create(const char *name, size_t size,
 }
 EXPORT_SYMBOL(kmem_cache_create);
 
-int kmem_cache_destroy(struct kmem_cache *c)
+void kmem_cache_destroy(struct kmem_cache *c)
 {
 	slob_free(c, sizeof(struct kmem_cache));
-	return 0;
 }
 EXPORT_SYMBOL(kmem_cache_destroy);
 
@@ -329,9 +328,25 @@ const char *kmem_cache_name(struct kmem_cache *c)
 EXPORT_SYMBOL(kmem_cache_name);
 
 static struct timer_list slob_timer = TIMER_INITIALIZER(
-	(void (*)(unsigned long))kmem_cache_init, 0, 0);
+	(void (*)(unsigned long))slob_timer_cbk, 0, 0);
 
-void kmem_cache_init(void)
+int kmem_cache_shrink(struct kmem_cache *d)
+{
+	return 0;
+}
+EXPORT_SYMBOL(kmem_cache_shrink);
+
+int kmem_ptr_validate(struct kmem_cache *a, const void *b)
+{
+	return 0;
+}
+
+void __init kmem_cache_init(void)
+{
+	slob_timer_cbk();
+}
+
+static void slob_timer_cbk(void)
 {
 	void *p = slob_alloc(PAGE_SIZE, 0, PAGE_SIZE-1);
 
@@ -340,52 +355,3 @@ void kmem_cache_init(void)
 
 	mod_timer(&slob_timer, jiffies + HZ);
 }
-
-atomic_t slab_reclaim_pages = ATOMIC_INIT(0);
-EXPORT_SYMBOL(slab_reclaim_pages);
-
-#ifdef CONFIG_SMP
-
-void *__alloc_percpu(size_t size)
-{
-	int i;
-	struct percpu_data *pdata = kmalloc(sizeof (*pdata), GFP_KERNEL);
-
-	if (!pdata)
-		return NULL;
-
-	for_each_possible_cpu(i) {
-		pdata->ptrs[i] = kmalloc(size, GFP_KERNEL);
-		if (!pdata->ptrs[i])
-			goto unwind_oom;
-		memset(pdata->ptrs[i], 0, size);
-	}
-
-	/* Catch derefs w/o wrappers */
-	return (void *) (~(unsigned long) pdata);
-
-unwind_oom:
-	while (--i >= 0) {
-		if (!cpu_possible(i))
-			continue;
-		kfree(pdata->ptrs[i]);
-	}
-	kfree(pdata);
-	return NULL;
-}
-EXPORT_SYMBOL(__alloc_percpu);
-
-void
-free_percpu(const void *objp)
-{
-	int i;
-	struct percpu_data *p = (struct percpu_data *) (~(unsigned long) objp);
-
-	for_each_possible_cpu(i)
-		kfree(p->ptrs[i]);
-
-	kfree(p);
-}
-EXPORT_SYMBOL(free_percpu);
-
-#endif

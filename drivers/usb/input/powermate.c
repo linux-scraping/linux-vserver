@@ -30,12 +30,10 @@
 
 #include <linux/kernel.h>
 #include <linux/slab.h>
-#include <linux/input.h>
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/spinlock.h>
-#include <linux/usb.h>
-#include <linux/usb_input.h>
+#include <linux/usb/input.h>
 
 #define POWERMATE_VENDOR	0x077d	/* Griffin Technology, Inc. */
 #define POWERMATE_PRODUCT_NEW	0x0410	/* Griffin PowerMate */
@@ -82,10 +80,10 @@ struct powermate_device {
 static char pm_name_powermate[] = "Griffin PowerMate";
 static char pm_name_soundknob[] = "Griffin SoundKnob";
 
-static void powermate_config_complete(struct urb *urb, struct pt_regs *regs);
+static void powermate_config_complete(struct urb *urb);
 
 /* Callback for data arriving from the PowerMate over the USB interrupt pipe */
-static void powermate_irq(struct urb *urb, struct pt_regs *regs)
+static void powermate_irq(struct urb *urb)
 {
 	struct powermate_device *pm = urb->context;
 	int retval;
@@ -106,7 +104,6 @@ static void powermate_irq(struct urb *urb, struct pt_regs *regs)
 	}
 
 	/* handle updates to device state */
-	input_regs(pm->input, regs);
 	input_report_key(pm->input, BTN_0, pm->data[0] & 0x01);
 	input_report_rel(pm->input, REL_DIAL, pm->data[1]);
 	input_sync(pm->input);
@@ -193,7 +190,7 @@ static void powermate_sync_state(struct powermate_device *pm)
 }
 
 /* Called when our asynchronous control message completes. We may need to issue another immediately */
-static void powermate_config_complete(struct urb *urb, struct pt_regs *regs)
+static void powermate_config_complete(struct urb *urb)
 {
 	struct powermate_device *pm = urb->context;
 	unsigned long flags;
@@ -280,12 +277,12 @@ static int powermate_input_event(struct input_dev *dev, unsigned int type, unsig
 static int powermate_alloc_buffers(struct usb_device *udev, struct powermate_device *pm)
 {
 	pm->data = usb_buffer_alloc(udev, POWERMATE_PAYLOAD_SIZE_MAX,
-				    SLAB_ATOMIC, &pm->data_dma);
+				    GFP_ATOMIC, &pm->data_dma);
 	if (!pm->data)
 		return -1;
 
 	pm->configcr = usb_buffer_alloc(udev, sizeof(*(pm->configcr)),
-					SLAB_ATOMIC, &pm->configcr_dma);
+					GFP_ATOMIC, &pm->configcr_dma);
 	if (!pm->configcr)
 		return -1;
 
@@ -315,9 +312,7 @@ static int powermate_probe(struct usb_interface *intf, const struct usb_device_i
 
 	interface = intf->cur_altsetting;
 	endpoint = &interface->endpoint[0].desc;
-	if (!(endpoint->bEndpointAddress & 0x80))
-		return -EIO;
-	if ((endpoint->bmAttributes & 3) != 3)
+	if (!usb_endpoint_is_int_in(endpoint))
 		return -EIO;
 
 	usb_control_msg(udev, usb_sndctrlpipe(udev, 0),

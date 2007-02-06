@@ -1,7 +1,6 @@
 #ifndef _ALPHA_DMA_MAPPING_H
 #define _ALPHA_DMA_MAPPING_H
 
-#include <linux/config.h>
 
 #ifdef CONFIG_PCI
 
@@ -42,9 +41,9 @@ int dma_map_sg(struct device *dev, struct scatterlist *sg, int nents,
 #define dma_map_single(dev, va, size, dir)	virt_to_phys(va)
 #define dma_map_page(dev, page, off, size, dir)	(page_to_pa(page) + off)
 
-#define dma_unmap_single(dev, addr, size, dir)	do { } while (0)
-#define dma_unmap_page(dev, addr, size, dir)	do { } while (0)
-#define dma_unmap_sg(dev, sg, nents, dir)	do { } while (0)
+#define dma_unmap_single(dev, addr, size, dir)	((void)0)
+#define dma_unmap_page(dev, addr, size, dir)	((void)0)
+#define dma_unmap_sg(dev, sg, nents, dir)	((void)0)
 
 #define dma_mapping_error(addr)  (0)
 
@@ -52,16 +51,18 @@ int dma_map_sg(struct device *dev, struct scatterlist *sg, int nents,
 
 #define dma_alloc_noncoherent(d, s, h, f)	dma_alloc_coherent(d, s, h, f)
 #define dma_free_noncoherent(d, s, v, h)	dma_free_coherent(d, s, v, h)
-#define dma_is_consistent(dev)			(1)
+#define dma_is_consistent(d, h)			(1)
 
 int dma_set_mask(struct device *dev, u64 mask);
 
-#define dma_sync_single_for_cpu(dev, addr, size, dir)	  do { } while (0)
-#define dma_sync_single_for_device(dev, addr, size, dir)  do { } while (0)
-#define dma_sync_single_range(dev, addr, off, size, dir)  do { } while (0)
-#define dma_sync_sg_for_cpu(dev, sg, nents, dir)	  do { } while (0)
-#define dma_sync_sg_for_device(dev, sg, nents, dir)	  do { } while (0)
-#define dma_cache_sync(va, size, dir)			  do { } while (0)
+#define dma_sync_single_for_cpu(dev, addr, size, dir)	  ((void)0)
+#define dma_sync_single_for_device(dev, addr, size, dir)  ((void)0)
+#define dma_sync_single_range(dev, addr, off, size, dir)  ((void)0)
+#define dma_sync_sg_for_cpu(dev, sg, nents, dir)	  ((void)0)
+#define dma_sync_sg_for_device(dev, sg, nents, dir)	  ((void)0)
+#define dma_cache_sync(dev, va, size, dir)		  ((void)0)
+#define dma_sync_single_range_for_cpu(dev, addr, offset, size, dir)	((void)0)
+#define dma_sync_single_range_for_device(dev, addr, offset, size, dir)	((void)0)
 
 #define dma_get_cache_alignment()			  L1_CACHE_BYTES
 

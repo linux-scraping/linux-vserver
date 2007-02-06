@@ -72,12 +72,27 @@ static const char* host_info(struct Scsi_Host *host)
 
 static int slave_alloc (struct scsi_device *sdev)
 {
+	struct us_data *us = host_to_us(sdev->host);
+
 	/*
 	 * Set the INQUIRY transfer length to 36.  We don't use any of
 	 * the extra data and many devices choke if asked for more or
 	 * less than 36 bytes.
 	 */
 	sdev->inquiry_len = 36;
+
+	/*
+	 * The UFI spec treates the Peripheral Qualifier bits in an
+	 * INQUIRY result as reserved and requires devices to set them
+	 * to 0.  However the SCSI spec requires these bits to be set
+	 * to 3 to indicate when a LUN is not present.
+	 *
+	 * Let the scanning code know if this target merely sets
+	 * Peripheral Device Type to 0x1f to indicate no LUN.
+	 */
+	if (us->subclass == US_SC_UFI)
+		sdev->sdev_target->pdt_1f_for_no_lun = 1;
+
 	return 0;
 }
 
@@ -112,13 +127,11 @@ static int slave_configure(struct scsi_device *sdev)
 	if (sdev->scsi_level < SCSI_2)
 		sdev->scsi_level = sdev->sdev_target->scsi_level = SCSI_2;
 
-	/* According to the technical support people at Genesys Logic,
-	 * devices using their chips have problems transferring more than
-	 * 32 KB at a time.  In practice people have found that 64 KB
-	 * works okay and that's what Windows does.  But we'll be
-	 * conservative; people can always use the sysfs interface to
-	 * increase max_sectors. */
-	if (le16_to_cpu(us->pusb_dev->descriptor.idVendor) == USB_VENDOR_ID_GENESYS &&
+	/* Many devices have trouble transfering more than 32KB at a time,
+	 * while others have trouble with more than 64K. At this time we
+	 * are limiting both to 32K (64 sectores).
+	 */
+	if ((us->flags & US_FL_MAX_SECTORS_64) &&
 			sdev->request_queue->max_sectors > 64)
 		blk_queue_max_sectors(sdev->request_queue, 64);
 
@@ -286,11 +299,7 @@ static int bus_reset(struct scsi_cmnd *srb)
 	int result;
 
 	US_DEBUGP("%s called\n", __FUNCTION__);
-
-	mutex_lock(&(us->dev_mutex));
 	result = usb_stor_port_reset(us);
-	mutex_unlock(&us->dev_mutex);
-
 	return result < 0 ? FAILED : SUCCESS;
 }
 

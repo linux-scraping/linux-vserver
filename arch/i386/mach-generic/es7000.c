@@ -2,9 +2,9 @@
  * APIC driver for the Unisys ES7000 chipset.
  */
 #define APIC_DEFINITION 1
-#include <linux/config.h>
 #include <linux/threads.h>
 #include <linux/cpumask.h>
+#include <asm/smp.h>
 #include <asm/mpspec.h>
 #include <asm/genapic.h>
 #include <asm/fixmap.h>
@@ -19,7 +19,7 @@
 #include <asm/mach-es7000/mach_mpparse.h>
 #include <asm/mach-es7000/mach_wakecpu.h>
 
-static __init int probe_es7000(void)
+static int probe_es7000(void)
 {
 	/* probed later in mptable/ACPI hooks */
 	return 0;

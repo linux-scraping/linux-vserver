@@ -1,5 +1,5 @@
 /*
- * linux/arch/arm/mach-omap/omap2/irq.c
+ * linux/arch/arm/mach-omap2/irq.c
  *
  * Interrupt handler for OMAP2 boards.
  *
@@ -12,7 +12,6 @@
  */
 #include <linux/kernel.h>
 #include <linux/init.h>
-#include <linux/config.h>
 #include <linux/interrupt.h>
 #include <asm/hardware.h>
 #include <asm/mach/irq.h>
@@ -42,18 +41,6 @@ static struct omap_irq_bank {
 		.nr_irqs	= 96,
 	}, {
 		/* XXX: DSP INTC */
-
-#if 0
-	/*
-	 * Commented out for now until we fix the IVA clocking
-	 */
-#ifdef CONFIG_ARCH_OMAP2420
-	}, {
-		/* IVA INTC (2420 only) */
-		.base_reg	= OMAP24XX_IVA_INTC_BASE,
-		.nr_irqs	= 16,	/* Actually 32, but only 16 are used */
-#endif
-#endif
 	}
 };
 
@@ -95,7 +82,8 @@ static void omap_mask_ack_irq(unsigned int irq)
 	omap_ack_irq(irq);
 }
 
-static struct irqchip omap_irq_chip = {
+static struct irq_chip omap_irq_chip = {
+	.name	= "INTC",
 	.ack	= omap_mask_ack_irq,
 	.mask	= omap_mask_irq,
 	.unmask	= omap_unmask_irq,
@@ -142,7 +130,7 @@ void __init omap_init_irq(void)
 
 	for (i = 0; i < nr_irqs; i++) {
 		set_irq_chip(i, &omap_irq_chip);
-		set_irq_handler(i, do_level_IRQ);
+		set_irq_handler(i, handle_level_irq);
 		set_irq_flags(i, IRQF_VALID);
 	}
 }

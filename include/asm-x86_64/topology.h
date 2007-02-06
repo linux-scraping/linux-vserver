@@ -1,14 +1,11 @@
 #ifndef _ASM_X86_64_TOPOLOGY_H
 #define _ASM_X86_64_TOPOLOGY_H
 
-#include <linux/config.h>
 
 #ifdef CONFIG_NUMA
 
 #include <asm/mpspec.h>
 #include <asm/bitops.h>
-
-/* Map the K8 CPU local memory controllers to a simple 1:1 CPU:NODE topology */
 
 extern cpumask_t cpu_online_map;
 
@@ -34,6 +31,7 @@ extern int __node_distance(int, int);
 #define SD_NODE_INIT (struct sched_domain) {		\
 	.span			= CPU_MASK_NONE,	\
 	.parent			= NULL,			\
+	.child			= NULL,			\
 	.groups			= NULL,			\
 	.min_interval		= 8,			\
 	.max_interval		= 32,			\
@@ -49,6 +47,7 @@ extern int __node_distance(int, int);
 	.flags			= SD_LOAD_BALANCE	\
 				| SD_BALANCE_FORK	\
 				| SD_BALANCE_EXEC	\
+				| SD_SERIALIZE		\
 				| SD_WAKE_BALANCE,	\
 	.last_balance		= jiffies,		\
 	.balance_interval	= 1,			\
@@ -58,12 +57,12 @@ extern int __node_distance(int, int);
 #endif
 
 #ifdef CONFIG_SMP
-#define topology_physical_package_id(cpu)				\
-	(phys_proc_id[cpu] == BAD_APICID ? -1 : phys_proc_id[cpu])
-#define topology_core_id(cpu)						\
-	(cpu_core_id[cpu] == BAD_APICID ? 0 : cpu_core_id[cpu])
+#define topology_physical_package_id(cpu)	(cpu_data[cpu].phys_proc_id)
+#define topology_core_id(cpu)			(cpu_data[cpu].cpu_core_id)
 #define topology_core_siblings(cpu)		(cpu_core_map[cpu])
 #define topology_thread_siblings(cpu)		(cpu_sibling_map[cpu])
+#define mc_capable()			(boot_cpu_data.x86_max_cores > 1)
+#define smt_capable() 			(smp_num_siblings > 1)
 #endif
 
 #include <asm-generic/topology.h>

@@ -1,6 +1,6 @@
 /* linux/include/asm-arm/arch-s3c2410/audio.h
  *
- * (c) 2004-2005 Simtec Electronics
+ * Copyright (c) 2004-2005 Simtec Electronics
  *	http://www.simtec.co.uk/products/SWLINUX/
  *	Ben Dooks <ben@simtec.co.uk>
  *
@@ -9,10 +9,6 @@
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
- *
- * Changelog:
- *	20-Nov-2004 BJD  Created file
- *	07-Mar-2005 BJD  Added suspend/resume calls
 */
 
 #ifndef __ASM_ARCH_AUDIO_H

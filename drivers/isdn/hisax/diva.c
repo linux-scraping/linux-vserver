@@ -16,7 +16,6 @@
  */
 
 #include <linux/init.h>
-#include <linux/config.h>
 #include "hisax.h"
 #include "isac.h"
 #include "hscx.h"
@@ -290,7 +289,7 @@ MemWriteHSCX_IPACX(struct IsdnCardState *cs, int hscx, u_char offset, u_char val
 #include "hscx_irq.c"
 
 static irqreturn_t
-diva_interrupt(int intno, void *dev_id, struct pt_regs *regs)
+diva_interrupt(int intno, void *dev_id)
 {
 	struct IsdnCardState *cs = dev_id;
 	u_char val, sval;
@@ -320,7 +319,7 @@ diva_interrupt(int intno, void *dev_id, struct pt_regs *regs)
 }
 
 static irqreturn_t
-diva_irq_ipac_isa(int intno, void *dev_id, struct pt_regs *regs)
+diva_irq_ipac_isa(int intno, void *dev_id)
 {
 	struct IsdnCardState *cs = dev_id;
 	u_char ista,val;
@@ -631,7 +630,7 @@ Memhscx_int_main(struct IsdnCardState *cs, u_char val)
 }
 
 static irqreturn_t
-diva_irq_ipac_pci(int intno, void *dev_id, struct pt_regs *regs)
+diva_irq_ipac_pci(int intno, void *dev_id)
 {
 	struct IsdnCardState *cs = dev_id;
 	u_char ista,val;
@@ -686,7 +685,7 @@ Start_IPACPCI:
 }
 
 static irqreturn_t
-diva_irq_ipacx_pci(int intno, void *dev_id, struct pt_regs *regs)
+diva_irq_ipacx_pci(int intno, void *dev_id)
 {
 	struct IsdnCardState *cs = dev_id;
 	u_char val;
@@ -717,8 +716,10 @@ release_io_diva(struct IsdnCardState *cs)
 
 		*cfg = 0; /* disable INT0/1 */ 
 		*cfg = 2; /* reset pending INT0 */
-		iounmap((void *)cs->hw.diva.cfg_reg);
-		iounmap((void *)cs->hw.diva.pci_cfg);
+		if (cs->hw.diva.cfg_reg)
+			iounmap((void *)cs->hw.diva.cfg_reg);
+		if (cs->hw.diva.pci_cfg)
+			iounmap((void *)cs->hw.diva.pci_cfg);
 		return;
 	} else if (cs->subtyp != DIVA_IPAC_ISA) {
 		del_timer(&cs->hw.diva.tl);
@@ -732,6 +733,23 @@ release_io_diva(struct IsdnCardState *cs)
 	if (cs->hw.diva.cfg_reg) {
 		release_region(cs->hw.diva.cfg_reg, bytecnt);
 	}
+}
+
+static void
+iounmap_diva(struct IsdnCardState *cs)
+{
+	if ((cs->subtyp == DIVA_IPAC_PCI) || (cs->subtyp == DIVA_IPACX_PCI)) {
+		if (cs->hw.diva.cfg_reg) {
+			iounmap((void *)cs->hw.diva.cfg_reg);
+			cs->hw.diva.cfg_reg = 0;
+		}
+		if (cs->hw.diva.pci_cfg) {
+			iounmap((void *)cs->hw.diva.pci_cfg);
+			cs->hw.diva.pci_cfg = 0;
+		}
+	}
+
+	return;
 }
 
 static void
@@ -888,13 +906,13 @@ Diva_card_msg(struct IsdnCardState *cs, int mt, void *arg)
 	return(0);
 }
 
-static struct pci_dev *dev_diva __initdata = NULL;
-static struct pci_dev *dev_diva_u __initdata = NULL;
-static struct pci_dev *dev_diva201 __initdata = NULL;
-static struct pci_dev *dev_diva202 __initdata = NULL;
+static struct pci_dev *dev_diva __devinitdata = NULL;
+static struct pci_dev *dev_diva_u __devinitdata = NULL;
+static struct pci_dev *dev_diva201 __devinitdata = NULL;
+static struct pci_dev *dev_diva202 __devinitdata = NULL;
 
 #ifdef __ISAPNP__
-static struct isapnp_device_id diva_ids[] __initdata = {
+static struct isapnp_device_id diva_ids[] __devinitdata = {
 	{ ISAPNP_VENDOR('G', 'D', 'I'), ISAPNP_FUNCTION(0x51),
 	  ISAPNP_VENDOR('G', 'D', 'I'), ISAPNP_FUNCTION(0x51), 
 	  (unsigned long) "Diva picola" },
@@ -916,12 +934,12 @@ static struct isapnp_device_id diva_ids[] __initdata = {
 	{ 0, }
 };
 
-static struct isapnp_device_id *ipid __initdata = &diva_ids[0];
+static struct isapnp_device_id *ipid __devinitdata = &diva_ids[0];
 static struct pnp_card *pnp_c __devinitdata = NULL;
 #endif
 
 
-int __init
+int __devinit
 setup_diva(struct IsdnCard *card)
 {
 	int bytecnt = 8;
@@ -1070,14 +1088,16 @@ setup_diva(struct IsdnCard *card)
 
 		if (!cs->irq) {
 			printk(KERN_WARNING "Diva: No IRQ for PCI card found\n");
+			iounmap_diva(cs);
 			return(0);
 		}
 
 		if (!cs->hw.diva.cfg_reg) {
 			printk(KERN_WARNING "Diva: No IO-Adr for PCI card found\n");
+			iounmap_diva(cs);
 			return(0);
 		}
-		cs->irq_flags |= SA_SHIRQ;
+		cs->irq_flags |= IRQF_SHARED;
 #else
 		printk(KERN_WARNING "Diva: cfgreg 0 and NO_PCI_BIOS\n");
 		printk(KERN_WARNING "Diva: unable to config DIVA PCI\n");
@@ -1101,7 +1121,11 @@ setup_diva(struct IsdnCard *card)
 			bytecnt = 32;
 		}
 	}
+
+#ifdef __ISAPNP__
 ready:
+#endif
+
 	printk(KERN_INFO
 		"Diva: %s card configured at %#lx IRQ %d\n",
 		(cs->subtyp == DIVA_PCI) ? "PCI" :
@@ -1124,6 +1148,7 @@ ready:
 			       CardType[card->typ],
 			       cs->hw.diva.cfg_reg,
 			       cs->hw.diva.cfg_reg + bytecnt);
+			iounmap_diva(cs);
 			return (0);
 		}
 	}

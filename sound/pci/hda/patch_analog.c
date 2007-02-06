@@ -488,9 +488,13 @@ static struct snd_kcontrol_new ad1986a_mixers[] = {
 	{
 		.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
 		.name = "PCM Playback Volume",
+		.access = SNDRV_CTL_ELEM_ACCESS_READWRITE |
+			  SNDRV_CTL_ELEM_ACCESS_TLV_READ |
+			  SNDRV_CTL_ELEM_ACCESS_TLV_CALLBACK,
 		.info = ad1986a_pcm_amp_vol_info,
 		.get = ad1986a_pcm_amp_vol_get,
 		.put = ad1986a_pcm_amp_vol_put,
+		.tlv = { .c = snd_hda_mixer_amp_tlv },
 		.private_value = HDA_COMPOSE_AMP_VAL(AD1986A_FRONT_DAC, 3, 0, HDA_OUTPUT)
 	},
 	{
@@ -637,6 +641,7 @@ static struct snd_kcontrol_new ad1986a_laptop_eapd_mixers[] = {
 		.info = snd_hda_mixer_amp_volume_info,
 		.get = snd_hda_mixer_amp_volume_get,
 		.put = ad1986a_laptop_master_vol_put,
+		.tlv = { .c = snd_hda_mixer_amp_tlv },
 		.private_value = HDA_COMPOSE_AMP_VAL(0x1a, 3, 0, HDA_OUTPUT),
 	},
 	{
@@ -789,6 +794,12 @@ static struct hda_board_config ad1986a_cfg_tbl[] = {
 	{ .modelname = "3stack",	.config = AD1986A_3STACK },
 	{ .pci_subvendor = 0x10de, .pci_subdevice = 0xcb84,
 	  .config = AD1986A_3STACK }, /* ASUS A8N-VM CSM */
+	{ .pci_subvendor = 0x1043, .pci_subdevice = 0x817f,
+	  .config = AD1986A_3STACK }, /* ASUS P5P-L2 */
+	{ .pci_subvendor = 0x1043, .pci_subdevice = 0x81b3,
+	  .config = AD1986A_3STACK }, /* ASUS P5RD2-VM / P5GPL-X SE */
+	{ .pci_subvendor = 0x1043, .pci_subdevice = 0x81cb,
+	  .config = AD1986A_3STACK }, /* ASUS M2NPV-VM */
 	{ .modelname = "laptop",	.config = AD1986A_LAPTOP },
 	{ .pci_subvendor = 0x144d, .pci_subdevice = 0xc01e,
 	  .config = AD1986A_LAPTOP }, /* FSC V2060 */
@@ -797,18 +808,28 @@ static struct hda_board_config ad1986a_cfg_tbl[] = {
 	{ .pci_subvendor = 0x1043, .pci_subdevice = 0x818f,
 	  .config = AD1986A_LAPTOP }, /* ASUS P5GV-MX */
 	{ .modelname = "laptop-eapd",	.config = AD1986A_LAPTOP_EAPD },
+	{ .pci_subvendor = 0x144d, .pci_subdevice = 0xc023,
+	  .config = AD1986A_LAPTOP_EAPD }, /* Samsung X60 Chane */
 	{ .pci_subvendor = 0x144d, .pci_subdevice = 0xc024,
 	  .config = AD1986A_LAPTOP_EAPD }, /* Samsung R65-T2300 Charis */
+	{ .pci_subvendor = 0x144d, .pci_subdevice = 0xc026,
+	  .config = AD1986A_LAPTOP_EAPD }, /* Samsung X11-T2300 Culesa */
 	{ .pci_subvendor = 0x1043, .pci_subdevice = 0x1153,
 	  .config = AD1986A_LAPTOP_EAPD }, /* ASUS M9 */
 	{ .pci_subvendor = 0x1043, .pci_subdevice = 0x1213,
 	  .config = AD1986A_LAPTOP_EAPD }, /* ASUS A6J */
 	{ .pci_subvendor = 0x1043, .pci_subdevice = 0x11f7,
 	  .config = AD1986A_LAPTOP_EAPD }, /* ASUS U5A */
+	{ .pci_subvendor = 0x1043, .pci_subdevice = 0x1263,
+	  .config = AD1986A_LAPTOP_EAPD }, /* ASUS U5F */
 	{ .pci_subvendor = 0x1043, .pci_subdevice = 0x1297,
 	  .config = AD1986A_LAPTOP_EAPD }, /* ASUS Z62F */
+	{ .pci_subvendor = 0x1043, .pci_subdevice = 0x12b3,
+	  .config = AD1986A_LAPTOP_EAPD }, /* ASUS V1j */
 	{ .pci_subvendor = 0x103c, .pci_subdevice = 0x30af,
 	  .config = AD1986A_LAPTOP_EAPD }, /* HP Compaq Presario B2800 */
+	{ .pci_subvendor = 0x17aa, .pci_subdevice = 0x2066,
+	  .config = AD1986A_LAPTOP_EAPD }, /* Lenovo 3000 N100-07684JU */
 	{}
 };
 
@@ -963,7 +984,7 @@ static struct snd_kcontrol_new ad1983_mixers[] = {
 	},
 	{
 		.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
-		.name = SNDRV_CTL_NAME_IEC958("",PLAYBACK,NONE) "Route",
+		.name = SNDRV_CTL_NAME_IEC958("",PLAYBACK,NONE) "Source",
 		.info = ad1983_spdif_route_info,
 		.get = ad1983_spdif_route_get,
 		.put = ad1983_spdif_route_put,
@@ -1103,7 +1124,7 @@ static struct snd_kcontrol_new ad1981_mixers[] = {
 	/* identical with AD1983 */
 	{
 		.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
-		.name = SNDRV_CTL_NAME_IEC958("",PLAYBACK,NONE) "Route",
+		.name = SNDRV_CTL_NAME_IEC958("",PLAYBACK,NONE) "Source",
 		.info = ad1983_spdif_route_info,
 		.get = ad1983_spdif_route_get,
 		.put = ad1983_spdif_route_put,
@@ -1329,13 +1350,60 @@ static int ad1981_hp_init(struct hda_codec *codec)
 	return 0;
 }
 
+/* configuration for Lenovo Thinkpad T60 */
+static struct snd_kcontrol_new ad1981_thinkpad_mixers[] = {
+	HDA_CODEC_VOLUME("Master Playback Volume", 0x05, 0x0, HDA_OUTPUT),
+	HDA_CODEC_MUTE("Master Playback Switch", 0x05, 0x0, HDA_OUTPUT),
+	HDA_CODEC_VOLUME("PCM Playback Volume", 0x11, 0x0, HDA_OUTPUT),
+	HDA_CODEC_MUTE("PCM Playback Switch", 0x11, 0x0, HDA_OUTPUT),
+	HDA_CODEC_VOLUME("Mic Playback Volume", 0x12, 0x0, HDA_OUTPUT),
+	HDA_CODEC_MUTE("Mic Playback Switch", 0x12, 0x0, HDA_OUTPUT),
+	HDA_CODEC_VOLUME("CD Playback Volume", 0x1d, 0x0, HDA_OUTPUT),
+	HDA_CODEC_MUTE("CD Playback Switch", 0x1d, 0x0, HDA_OUTPUT),
+	HDA_CODEC_VOLUME("Mic Boost", 0x08, 0x0, HDA_INPUT),
+	HDA_CODEC_VOLUME("Capture Volume", 0x15, 0x0, HDA_OUTPUT),
+	HDA_CODEC_MUTE("Capture Switch", 0x15, 0x0, HDA_OUTPUT),
+	{
+		.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
+		.name = "Capture Source",
+		.info = ad198x_mux_enum_info,
+		.get = ad198x_mux_enum_get,
+		.put = ad198x_mux_enum_put,
+	},
+	/* identical with AD1983 */
+	{
+		.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
+		.name = SNDRV_CTL_NAME_IEC958("",PLAYBACK,NONE) "Source",
+		.info = ad1983_spdif_route_info,
+		.get = ad1983_spdif_route_get,
+		.put = ad1983_spdif_route_put,
+	},
+	{ } /* end */
+};
+
+static struct hda_input_mux ad1981_thinkpad_capture_source = {
+	.num_items = 3,
+	.items = {
+		{ "Mic", 0x0 },
+		{ "Mix", 0x2 },
+		{ "CD", 0x4 },
+	},
+};
+
 /* models */
-enum { AD1981_BASIC, AD1981_HP };
+enum { AD1981_BASIC, AD1981_HP, AD1981_THINKPAD };
 
 static struct hda_board_config ad1981_cfg_tbl[] = {
 	{ .modelname = "hp", .config = AD1981_HP },
 	/* All HP models */
 	{ .pci_subvendor = 0x103c, .config = AD1981_HP },
+	{ .pci_subvendor = 0x30b0, .pci_subdevice = 0x103c,
+	  .config = AD1981_HP }, /* HP nx6320 (reversed SSID, H/W bug) */
+	{ .modelname = "thinkpad", .config = AD1981_THINKPAD },
+	/* Lenovo Thinkpad T60/X60/Z6xx */
+	{ .pci_subvendor = 0x17aa, .config = AD1981_THINKPAD },
+	{ .pci_subvendor = 0x1014, .pci_subdevice = 0x0597,
+	  .config = AD1981_THINKPAD }, /* Z60m/t */
 	{ .modelname = "basic", .config = AD1981_BASIC },
 	{}
 };
@@ -1380,6 +1448,10 @@ static int patch_ad1981(struct hda_codec *codec)
 
 		codec->patch_ops.init = ad1981_hp_init;
 		codec->patch_ops.unsol_event = ad1981_hp_unsol_event;
+		break;
+	case AD1981_THINKPAD:
+		spec->mixers[0] = ad1981_thinkpad_mixers;
+		spec->input_mux = &ad1981_thinkpad_capture_source;
 		break;
 	}
 
@@ -1569,10 +1641,12 @@ static int ad198x_ch_mode_put(struct snd_kcontrol *kcontrol,
 {
 	struct hda_codec *codec = snd_kcontrol_chip(kcontrol);
 	struct ad198x_spec *spec = codec->spec;
-	if (spec->need_dac_fix)
+	int err = snd_hda_ch_mode_put(codec, ucontrol, spec->channel_mode,
+				      spec->num_channel_mode,
+				      &spec->multiout.max_channels);
+	if (err >= 0 && spec->need_dac_fix)
 		spec->multiout.num_dacs = spec->multiout.max_channels / 2;
-	return snd_hda_ch_mode_put(codec, ucontrol, spec->channel_mode,
-				   spec->num_channel_mode, &spec->multiout.max_channels);
+	return err;
 }
 
 /* 6-stack mode */
@@ -2403,7 +2477,7 @@ static void ad1988_auto_init_extra_out(struct hda_codec *codec)
 	pin = spec->autocfg.speaker_pins[0];
 	if (pin) /* connect to front */
 		ad1988_auto_set_output_and_unmute(codec, pin, PIN_OUT, 0);
-	pin = spec->autocfg.hp_pin;
+	pin = spec->autocfg.hp_pins[0];
 	if (pin) /* connect to front */
 		ad1988_auto_set_output_and_unmute(codec, pin, PIN_HP, 0);
 }
@@ -2455,7 +2529,7 @@ static int ad1988_parse_auto_config(struct hda_codec *codec)
 	    (err = ad1988_auto_create_extra_out(codec,
 						spec->autocfg.speaker_pins[0],
 						"Speaker")) < 0 ||
-	    (err = ad1988_auto_create_extra_out(codec, spec->autocfg.hp_pin,
+	    (err = ad1988_auto_create_extra_out(codec, spec->autocfg.hp_pins[0],
 						"Headphone")) < 0 ||
 	    (err = ad1988_auto_create_analog_input_ctls(spec, &spec->autocfg)) < 0)
 		return err;

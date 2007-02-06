@@ -16,7 +16,6 @@
  *   - Split split split...
  *
  */
-#include <linux/config.h>
 #include <linux/types.h>
 #include <linux/init.h>
 #include <linux/delay.h>
@@ -487,10 +486,6 @@ static long heathrow_sound_enable(struct device_node *node, long param,
 
 static u32 save_fcr[6];
 static u32 save_mbcr;
-static u32 save_gpio_levels[2];
-static u8 save_gpio_extint[KEYLARGO_GPIO_EXTINT_CNT];
-static u8 save_gpio_normal[KEYLARGO_GPIO_CNT];
-static u32 save_unin_clock_ctl;
 static struct dbdma_regs save_dbdma[13];
 static struct dbdma_regs save_alt_dbdma[13];
 
@@ -1059,8 +1054,8 @@ core99_reset_cpu(struct device_node *node, long param, long value)
 	if (np == NULL)
 		return -ENODEV;
 	for (np = np->child; np != NULL; np = np->sibling) {
-		u32 *num = (u32 *)get_property(np, "reg", NULL);
-		u32 *rst = (u32 *)get_property(np, "soft-reset", NULL);
+		const u32 *num = get_property(np, "reg", NULL);
+		const u32 *rst = get_property(np, "soft-reset", NULL);
 		if (num == NULL || rst == NULL)
 			continue;
 		if (param == *num) {
@@ -1088,7 +1083,7 @@ core99_usb_enable(struct device_node *node, long param, long value)
 {
 	struct macio_chip *macio;
 	unsigned long flags;
-	char *prop;
+	const char *prop;
 	int number;
 	u32 reg;
 
@@ -1097,7 +1092,7 @@ core99_usb_enable(struct device_node *node, long param, long value)
 	    macio->type != macio_intrepid)
 		return -ENODEV;
 
-	prop = (char *)get_property(node, "AAPL,clock-id", NULL);
+	prop = get_property(node, "AAPL,clock-id", NULL);
 	if (!prop)
 		return -ENODEV;
 	if (strncmp(prop, "usb0u048", 8) == 0)
@@ -1508,8 +1503,8 @@ static long g5_reset_cpu(struct device_node *node, long param, long value)
 	if (np == NULL)
 		return -ENODEV;
 	for (np = np->child; np != NULL; np = np->sibling) {
-		u32 *num = (u32 *)get_property(np, "reg", NULL);
-		u32 *rst = (u32 *)get_property(np, "soft-reset", NULL);
+		const u32 *num = get_property(np, "reg", NULL);
+		const u32 *rst = get_property(np, "soft-reset", NULL);
 		if (num == NULL || rst == NULL)
 			continue;
 		if (param == *num) {
@@ -1549,6 +1544,10 @@ void g5_phy_disable_cpu1(void)
 
 
 #ifdef CONFIG_PM
+static u32 save_gpio_levels[2];
+static u8 save_gpio_extint[KEYLARGO_GPIO_EXTINT_CNT];
+static u8 save_gpio_normal[KEYLARGO_GPIO_CNT];
+static u32 save_unin_clock_ctl;
 
 static void keylargo_shutdown(struct macio_chip *macio, int sleep_mode)
 {
@@ -2409,7 +2408,7 @@ static int __init probe_motherboard(void)
 	 */
 	dt = find_devices("device-tree");
 	if (dt != NULL)
-		model = (const char *) get_property(dt, "model", NULL);
+		model = get_property(dt, "model", NULL);
 	for(i=0; model && i<(sizeof(pmac_mb_defs)/sizeof(struct pmac_mb_def)); i++) {
 	    if (strcmp(model, pmac_mb_defs[i].model_string) == 0) {
 		pmac_mb = pmac_mb_defs[i];
@@ -2510,7 +2509,7 @@ found:
 		if (get_property(np, "flush-on-lock", NULL))
 			break;
 		powersave_nap = 1;
-		printk(KERN_INFO "Processor NAP mode on idle enabled.\n");
+		printk(KERN_DEBUG "Processor NAP mode on idle enabled.\n");
 		break;
 	}
 
@@ -2537,7 +2536,7 @@ found:
  */
 static void __init probe_uninorth(void)
 {
-	u32 *addrp;
+	const u32 *addrp;
 	phys_addr_t address;
 	unsigned long actrl;
 
@@ -2556,7 +2555,7 @@ static void __init probe_uninorth(void)
 	if (uninorth_node == NULL)
 		return;
 
-	addrp = (u32 *)get_property(uninorth_node, "reg", NULL);
+	addrp = get_property(uninorth_node, "reg", NULL);
 	if (addrp == NULL)
 		return;
 	address = of_translate_address(uninorth_node, addrp);
@@ -2597,7 +2596,7 @@ static void __init probe_one_macio(const char *name, const char *compat, int typ
 	struct device_node*	node;
 	int			i;
 	volatile u32 __iomem	*base;
-	u32			*addrp, *revp;
+	const u32		*addrp, *revp;
 	phys_addr_t		addr;
 	u64			size;
 
@@ -2640,7 +2639,7 @@ static void __init probe_one_macio(const char *name, const char *compat, int typ
 		return;
 	}
 	if (type == macio_keylargo || type == macio_keylargo2) {
-		u32 *did = (u32 *)get_property(node, "device-id", NULL);
+		const u32 *did = get_property(node, "device-id", NULL);
 		if (*did == 0x00000025)
 			type = macio_pangea;
 		if (*did == 0x0000003e)
@@ -2653,7 +2652,7 @@ static void __init probe_one_macio(const char *name, const char *compat, int typ
 	macio_chips[i].base	= base;
 	macio_chips[i].flags	= MACIO_FLAG_SCCB_ON | MACIO_FLAG_SCCB_ON;
 	macio_chips[i].name	= macio_names[type];
-	revp = (u32 *)get_property(node, "revision-id", NULL);
+	revp = get_property(node, "revision-id", NULL);
 	if (revp)
 		macio_chips[i].rev = *revp;
 	printk(KERN_INFO "Found a %s mac-io controller, rev: %d, mapped at 0x%p\n",
@@ -2696,15 +2695,15 @@ static void __init
 initial_serial_shutdown(struct device_node *np)
 {
 	int len;
-	struct slot_names_prop {
+	const struct slot_names_prop {
 		int	count;
 		char	name[1];
 	} *slots;
-	char *conn;
+	const char *conn;
 	int port_type = PMAC_SCC_ASYNC;
 	int modem = 0;
 
-	slots = (struct slot_names_prop *)get_property(np, "slot-names", &len);
+	slots = get_property(np, "slot-names", &len);
 	conn = get_property(np, "AAPL,connector", &len);
 	if (conn && (strcmp(conn, "infrared") == 0))
 		port_type = PMAC_SCC_IRDA;

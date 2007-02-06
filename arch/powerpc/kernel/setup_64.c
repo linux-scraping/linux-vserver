@@ -12,7 +12,6 @@
 
 #undef DEBUG
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/string.h>
 #include <linux/sched.h>
@@ -34,6 +33,7 @@
 #include <linux/serial.h>
 #include <linux/serial_8250.h>
 #include <linux/bootmem.h>
+#include <linux/pci.h>
 #include <asm/io.h>
 #include <asm/kdump.h>
 #include <asm/prom.h>
@@ -57,7 +57,6 @@
 #include <asm/page.h>
 #include <asm/mmu.h>
 #include <asm/lmb.h>
-#include <asm/iseries/it_lp_naca.h>
 #include <asm/firmware.h>
 #include <asm/xmon.h>
 #include <asm/udbg.h>
@@ -73,17 +72,16 @@
 
 int have_of = 1;
 int boot_cpuid = 0;
-dev_t boot_dev;
 u64 ppc64_pft_size;
 
 /* Pick defaults since we might want to patch instructions
  * before we've read this from the device tree.
  */
 struct ppc64_caches ppc64_caches = {
-	.dline_size = 0x80,
-	.log_dline_size = 7,
-	.iline_size = 0x80,
-	.log_iline_size = 7
+	.dline_size = 0x40,
+	.log_dline_size = 6,
+	.iline_size = 0x40,
+	.log_iline_size = 6
 };
 EXPORT_SYMBOL_GPL(ppc64_caches);
 
@@ -95,17 +93,6 @@ int dcache_bsize;
 int icache_bsize;
 int ucache_bsize;
 
-#ifdef CONFIG_MAGIC_SYSRQ
-unsigned long SYSRQ_KEY;
-#endif /* CONFIG_MAGIC_SYSRQ */
-
-
-static int ppc64_panic_event(struct notifier_block *, unsigned long, void *);
-static struct notifier_block ppc64_panic_block = {
-	.notifier_call = ppc64_panic_event,
-	.priority = INT_MIN /* may not return; must be done last */
-};
-
 #ifdef CONFIG_SMP
 
 static int smt_enabled_cmdline;
@@ -114,7 +101,7 @@ static int smt_enabled_cmdline;
 static void check_smt_enabled(void)
 {
 	struct device_node *dn;
-	char *smt_option;
+	const char *smt_option;
 
 	/* Allow the command line to overrule the OF option */
 	if (smt_enabled_cmdline)
@@ -123,7 +110,7 @@ static void check_smt_enabled(void)
 	dn = of_find_node_by_path("/options");
 
 	if (dn) {
-		smt_option = (char *)get_property(dn, "ibm,smt-enabled", NULL);
+		smt_option = get_property(dn, "ibm,smt-enabled", NULL);
 
                 if (smt_option) {
 			if (!strcmp(smt_option, "on"))
@@ -155,6 +142,13 @@ early_param("smt-enabled", early_smt_enabled);
 #define check_smt_enabled()
 #endif /* CONFIG_SMP */
 
+/* Put the paca pointer into r13 and SPRG3 */
+void __init setup_paca(int cpu)
+{
+	local_paca = &paca[cpu];
+	mtspr(SPRN_SPRG3, local_paca);
+}
+
 /*
  * Early initialization entry point. This is called by head.S
  * with MMU translation disabled. We rely on the "feature" of
@@ -176,6 +170,12 @@ early_param("smt-enabled", early_smt_enabled);
 
 void __init early_setup(unsigned long dt_ptr)
 {
+	/* Identify CPU type */
+	identify_cpu(0, mfspr(SPRN_PVR));
+
+	/* Assume we're on cpu 0 for now. Don't write to the paca yet! */
+	setup_paca(0);
+
 	/* Enable early debugging if any specified (see udbg.h) */
 	udbg_early_init();
 
@@ -189,7 +189,7 @@ void __init early_setup(unsigned long dt_ptr)
 	early_init_devtree(__va(dt_ptr));
 
 	/* Now we know the logical id of our boot cpu, setup the paca. */
-	setup_boot_paca();
+	setup_paca(boot_cpuid);
 
 	/* Fix up paca fields required for the boot cpu */
 	get_paca()->cpu_start = 1;
@@ -199,9 +199,7 @@ void __init early_setup(unsigned long dt_ptr)
 	/* Probe the machine type */
 	probe_machine();
 
-#ifdef CONFIG_CRASH_DUMP
-	kdump_setup();
-#endif
+	setup_kdump_trampoline();
 
 	DBG("Found, Initializing memory management...\n");
 
@@ -228,8 +226,8 @@ void early_setup_secondary(void)
 {
 	struct paca_struct *lpaca = get_paca();
 
-	/* Mark enabled in PACA */
-	lpaca->proc_enabled = 0;
+	/* Mark interrupts enabled in PACA */
+	lpaca->soft_enabled = 0;
 
 	/* Initialize hash table for that CPU */
 	htab_initialize_secondary();
@@ -292,7 +290,7 @@ static void __init initialize_cache_info(void)
 		 */
 
 		if ( num_cpus == 1 ) {
-			u32 *sizep, *lsizep;
+			const u32 *sizep, *lsizep;
 			u32 size, lsize;
 			const char *dc, *ic;
 
@@ -307,10 +305,10 @@ static void __init initialize_cache_info(void)
 
 			size = 0;
 			lsize = cur_cpu_spec->dcache_bsize;
-			sizep = (u32 *)get_property(np, "d-cache-size", NULL);
+			sizep = get_property(np, "d-cache-size", NULL);
 			if (sizep != NULL)
 				size = *sizep;
-			lsizep = (u32 *) get_property(np, dc, NULL);
+			lsizep = get_property(np, dc, NULL);
 			if (lsizep != NULL)
 				lsize = *lsizep;
 			if (sizep == 0 || lsizep == 0)
@@ -324,10 +322,10 @@ static void __init initialize_cache_info(void)
 
 			size = 0;
 			lsize = cur_cpu_spec->icache_bsize;
-			sizep = (u32 *)get_property(np, "i-cache-size", NULL);
+			sizep = get_property(np, "i-cache-size", NULL);
 			if (sizep != NULL)
 				size = *sizep;
-			lsizep = (u32 *)get_property(np, ic, NULL);
+			lsizep = get_property(np, ic, NULL);
 			if (lsizep != NULL)
 				lsize = *lsizep;
 			if (sizep == 0 || lsizep == 0)
@@ -353,29 +351,29 @@ void __init setup_system(void)
 {
 	DBG(" -> setup_system()\n");
 
-#ifdef CONFIG_KEXEC
-	kdump_move_device_tree();
-#endif
+	/* Apply the CPUs-specific and firmware specific fixups to kernel
+	 * text (nop out sections not relevant to this CPU or this firmware)
+	 */
+	do_feature_fixups(cur_cpu_spec->cpu_features,
+			  &__start___ftr_fixup, &__stop___ftr_fixup);
+	do_feature_fixups(powerpc_firmware_features,
+			  &__start___fw_ftr_fixup, &__stop___fw_ftr_fixup);
+
 	/*
 	 * Unflatten the device-tree passed by prom_init or kexec
 	 */
 	unflatten_device_tree();
 
-#ifdef CONFIG_KEXEC
-	kexec_setup();	/* requires unflattened device tree. */
-#endif
-
 	/*
 	 * Fill the ppc64_caches & systemcfg structures with informations
-	 * retrieved from the device-tree. Need to be called before
-	 * finish_device_tree() since the later requires some of the
-	 * informations filled up here to properly parse the interrupt
-	 * tree.
-	 * It also sets up the cache line sizes which allows to call
-	 * routines like flush_icache_range (used by the hash init
-	 * later on).
+ 	 * retrieved from the device-tree.
 	 */
 	initialize_cache_info();
+
+	/*
+	 * Initialize irq remapping subsystem
+	 */
+	irq_early_init();
 
 #ifdef CONFIG_PPC_RTAS
 	/*
@@ -394,7 +392,8 @@ void __init setup_system(void)
 	 * setting up the hash table pointers. It also sets up some interrupt-mapping
 	 * related options that will be used by finish_device_tree()
 	 */
-	ppc_md.init_early();
+	if (ppc_md.init_early)
+		ppc_md.init_early();
 
  	/*
 	 * We can discover serial ports now since the above did setup the
@@ -404,26 +403,14 @@ void __init setup_system(void)
 	find_legacy_serial_ports();
 
 	/*
-	 * "Finish" the device-tree, that is do the actual parsing of
-	 * some of the properties like the interrupt map
-	 */
-	finish_device_tree();
-
-	/*
-	 * Initialize xmon
-	 */
-#ifdef CONFIG_XMON_DEFAULT
-	xmon_init(1);
-#endif
-	/*
 	 * Register early console
 	 */
 	register_early_udbg_console();
 
-	/* Save unparsed command line copy for /proc/cmdline */
-	strlcpy(saved_command_line, cmd_line, COMMAND_LINE_SIZE);
-
-	parse_early_param();
+	/*
+	 * Initialize xmon
+	 */
+	xmon_setup();
 
 	check_smt_enabled();
 	smp_setup_cpu_maps();
@@ -435,12 +422,10 @@ void __init setup_system(void)
 	smp_release_cpus();
 #endif
 
-	printk("Starting Linux PPC64 %s\n", system_utsname.version);
+	printk("Starting Linux PPC64 %s\n", init_utsname()->version);
 
 	printk("-----------------------------------------------------\n");
 	printk("ppc64_pft_size                = 0x%lx\n", ppc64_pft_size);
-	printk("ppc64_interrupt_controller    = 0x%ld\n",
-	       ppc64_interrupt_controller);
 	printk("physicalMemorySize            = 0x%lx\n", lmb_phys_mem_size());
 	printk("ppc64_caches.dcache_line_size = 0x%x\n",
 	       ppc64_caches.dline_size);
@@ -454,13 +439,6 @@ void __init setup_system(void)
 	printk("-----------------------------------------------------\n");
 
 	DBG(" <- setup_system()\n");
-}
-
-static int ppc64_panic_event(struct notifier_block *this,
-                             unsigned long event, void *ptr)
-{
-	ppc_md.panic((char *)ptr);  /* May not return */
-	return NOTIFY_DONE;
 }
 
 #ifdef CONFIG_IRQSTACKS
@@ -517,8 +495,6 @@ static void __init emergency_stack_init(void)
  */
 void __init setup_arch(char **cmdline_p)
 {
-	extern void do_init_bootmem(void);
-
 	ppc64_boot_msg(0x12, "Setup Arch");
 
 	*cmdline_p = cmd_line;
@@ -535,8 +511,7 @@ void __init setup_arch(char **cmdline_p)
 	panic_timeout = 180;
 
 	if (ppc_md.panic)
-		atomic_notifier_chain_register(&panic_notifier_list,
-				&ppc64_panic_block);
+		setup_panic();
 
 	init_mm.start_code = PAGE_OFFSET;
 	init_mm.end_code = (unsigned long) _etext;
@@ -624,3 +599,10 @@ void __init setup_per_cpu_areas(void)
 	}
 }
 #endif
+
+
+#ifdef CONFIG_PPC_INDIRECT_IO
+struct ppc_pci_io ppc_pci_io;
+EXPORT_SYMBOL(ppc_pci_io);
+#endif /* CONFIG_PPC_INDIRECT_IO */
+

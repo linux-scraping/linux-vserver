@@ -1,7 +1,9 @@
 #ifndef _NX_VS_NETWORK_H
 #define _NX_VS_NETWORK_H
 
+#include "vserver/context.h"
 #include "vserver/network.h"
+#include "vserver/base.h"
 #include "vserver/debug.h"
 
 
@@ -150,42 +152,6 @@ static __inline__ struct nx_info *__task_get_nx_info(struct task_struct *p,
 }
 
 
-#define nx_task_nid(t)	((t)->nid)
-
-#define nx_current_nid() nx_task_nid(current)
-
-#define nx_check(c,m)	__nx_check(nx_current_nid(),c,m)
-
-#define nx_weak_check(c,m)	((m) ? nx_check(c,m) : 1)
-
-
-#define __nx_state(v)	((v) ? ((v)->nx_state) : 0)
-
-#define nx_info_state(v,m)	(__nx_state(v) & (m))
-
-
-#define __nx_flags(v)	((v) ? (v)->nx_flags : 0)
-
-#define nx_current_flags()	__nx_flags(current->nx_info)
-
-#define nx_info_flags(v,m,f) \
-	vx_check_flags(__nx_flags(v),(m),(f))
-
-#define task_nx_flags(t,m,f) \
-	((t) && nx_info_flags((t)->nx_info, (m), (f)))
-
-#define nx_flags(m,f)	nx_info_flags(current->nx_info,(m),(f))
-
-
-/* context caps */
-
-#define __nx_ncaps(v)	((v) ? (v)->nx_ncaps : 0)
-
-#define nx_current_ncaps()	__nx_ncaps(current->nx_info)
-
-#define nx_info_ncaps(v,c)	(__nx_ncaps(v) & (c))
-
-#define nx_ncaps(c)	nx_info_ncaps(current->nx_info,(c))
 
 
 static inline int addr_in_nx_info(struct nx_info *nxi, uint32_t addr)
@@ -196,6 +162,8 @@ static inline int addr_in_nx_info(struct nx_info *nxi, uint32_t addr)
 		return 1;
 
 	n = nxi->nbipv4;
+	if (n && (nxi->ipv4[0] == 0))
+		return 1;
 	for (i=0; i<n; i++) {
 		if (nxi->ipv4[i] == addr)
 			return 1;

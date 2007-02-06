@@ -1,4 +1,4 @@
-#include <linux/config.h>
+#include <linux/err.h>
 #include <linux/module.h>
 #include <net/ip.h>
 #include <net/xfrm.h>
@@ -14,7 +14,7 @@
  * into IP header for icv calculation. Options are already checked
  * for validity, so paranoia is not required. */
 
-static int ip_clear_mutable_options(struct iphdr *iph, u32 *daddr)
+static int ip_clear_mutable_options(struct iphdr *iph, __be32 *daddr)
 {
 	unsigned char * optptr = (unsigned char*)(iph+1);
 	int  l = iph->ihl*4 - sizeof(struct iphdr);
@@ -35,7 +35,7 @@ static int ip_clear_mutable_options(struct iphdr *iph, u32 *daddr)
 		switch (*optptr) {
 		case IPOPT_SEC:
 		case 0x85:	/* Some "Extended Security" crap. */
-		case 0x86:	/* Another "Commercial Security" crap. */
+		case IPOPT_CIPSO:
 		case IPOPT_RA:
 		case 0x80|21:	/* RFC1770 */
 			break;
@@ -98,7 +98,10 @@ static int ah_output(struct xfrm_state *x, struct sk_buff *skb)
 	ah->spi = x->id.spi;
 	ah->seq_no = htonl(++x->replay.oseq);
 	xfrm_aevent_doreplay(x);
-	ahp->icv(ahp, skb, ah->auth_data);
+	err = ah_mac_digest(ahp, skb, ah->auth_data);
+	if (err)
+		goto error;
+	memcpy(ah->auth_data, ahp->work_icv, ahp->icv_trunc_len);
 
 	top_iph->tos = iph->tos;
 	top_iph->ttl = iph->ttl;
@@ -119,6 +122,8 @@ error:
 static int ah_input(struct xfrm_state *x, struct sk_buff *skb)
 {
 	int ah_hlen;
+	int ihl;
+	int err = -EINVAL;
 	struct iphdr *iph;
 	struct ip_auth_hdr *ah;
 	struct ah_data *ahp;
@@ -149,14 +154,15 @@ static int ah_input(struct xfrm_state *x, struct sk_buff *skb)
 	ah = (struct ip_auth_hdr*)skb->data;
 	iph = skb->nh.iph;
 
-	memcpy(work_buf, iph, iph->ihl*4);
+	ihl = skb->data - skb->nh.raw;
+	memcpy(work_buf, iph, ihl);
 
 	iph->ttl = 0;
 	iph->tos = 0;
 	iph->frag_off = 0;
 	iph->check = 0;
-	if (iph->ihl != 5) {
-		u32 dummy;
+	if (ihl > sizeof(*iph)) {
+		__be32 dummy;
 		if (ip_clear_mutable_options(iph, &dummy))
 			goto out;
 	}
@@ -164,24 +170,24 @@ static int ah_input(struct xfrm_state *x, struct sk_buff *skb)
 		u8 auth_data[MAX_AH_AUTH_LEN];
 		
 		memcpy(auth_data, ah->auth_data, ahp->icv_trunc_len);
-		skb_push(skb, skb->data - skb->nh.raw);
-		ahp->icv(ahp, skb, ah->auth_data);
-		if (memcmp(ah->auth_data, auth_data, ahp->icv_trunc_len)) {
+		skb_push(skb, ihl);
+		err = ah_mac_digest(ahp, skb, ah->auth_data);
+		if (err)
+			goto out;
+		err = -EINVAL;
+		if (memcmp(ahp->work_icv, auth_data, ahp->icv_trunc_len)) {
 			x->stats.integrity_failed++;
 			goto out;
 		}
 	}
 	((struct iphdr*)work_buf)->protocol = ah->nexthdr;
-	skb->nh.raw = skb_pull(skb, ah_hlen);
-	memcpy(skb->nh.raw, work_buf, iph->ihl*4);
-	skb->nh.iph->tot_len = htons(skb->len);
-	skb_pull(skb, skb->nh.iph->ihl*4);
-	skb->h.raw = skb->data;
+	skb->h.raw = memcpy(skb->nh.raw += ah_hlen, work_buf, ihl);
+	__skb_pull(skb, ah_hlen + ihl);
 
 	return 0;
 
 out:
-	return -EINVAL;
+	return err;
 }
 
 static void ah4_err(struct sk_buff *skb, u32 info)
@@ -206,6 +212,7 @@ static int ah_init_state(struct xfrm_state *x)
 {
 	struct ah_data *ahp = NULL;
 	struct xfrm_algo_desc *aalg_desc;
+	struct crypto_hash *tfm;
 
 	if (!x->aalg)
 		goto error;
@@ -217,32 +224,33 @@ static int ah_init_state(struct xfrm_state *x)
 	if (x->encap)
 		goto error;
 
-	ahp = kmalloc(sizeof(*ahp), GFP_KERNEL);
+	ahp = kzalloc(sizeof(*ahp), GFP_KERNEL);
 	if (ahp == NULL)
 		return -ENOMEM;
 
-	memset(ahp, 0, sizeof(*ahp));
-
 	ahp->key = x->aalg->alg_key;
 	ahp->key_len = (x->aalg->alg_key_len+7)/8;
-	ahp->tfm = crypto_alloc_tfm(x->aalg->alg_name, 0);
-	if (!ahp->tfm)
+	tfm = crypto_alloc_hash(x->aalg->alg_name, 0, CRYPTO_ALG_ASYNC);
+	if (IS_ERR(tfm))
 		goto error;
-	ahp->icv = ah_hmac_digest;
+
+	ahp->tfm = tfm;
+	if (crypto_hash_setkey(tfm, ahp->key, ahp->key_len))
+		goto error;
 	
 	/*
 	 * Lookup the algorithm description maintained by xfrm_algo,
 	 * verify crypto transform properties, and store information
 	 * we need for AH processing.  This lookup cannot fail here
-	 * after a successful crypto_alloc_tfm().
+	 * after a successful crypto_alloc_hash().
 	 */
 	aalg_desc = xfrm_aalg_get_byname(x->aalg->alg_name, 0);
 	BUG_ON(!aalg_desc);
 
 	if (aalg_desc->uinfo.auth.icv_fullbits/8 !=
-	    crypto_tfm_alg_digestsize(ahp->tfm)) {
+	    crypto_hash_digestsize(tfm)) {
 		printk(KERN_INFO "AH: %s digestsize %u != %hu\n",
-		       x->aalg->alg_name, crypto_tfm_alg_digestsize(ahp->tfm),
+		       x->aalg->alg_name, crypto_hash_digestsize(tfm),
 		       aalg_desc->uinfo.auth.icv_fullbits/8);
 		goto error;
 	}
@@ -257,7 +265,7 @@ static int ah_init_state(struct xfrm_state *x)
 		goto error;
 	
 	x->props.header_len = XFRM_ALIGN8(sizeof(struct ip_auth_hdr) + ahp->icv_trunc_len);
-	if (x->props.mode)
+	if (x->props.mode == XFRM_MODE_TUNNEL)
 		x->props.header_len += sizeof(struct iphdr);
 	x->data = ahp;
 
@@ -266,7 +274,7 @@ static int ah_init_state(struct xfrm_state *x)
 error:
 	if (ahp) {
 		kfree(ahp->work_icv);
-		crypto_free_tfm(ahp->tfm);
+		crypto_free_hash(ahp->tfm);
 		kfree(ahp);
 	}
 	return -EINVAL;
@@ -281,7 +289,7 @@ static void ah_destroy(struct xfrm_state *x)
 
 	kfree(ahp->work_icv);
 	ahp->work_icv = NULL;
-	crypto_free_tfm(ahp->tfm);
+	crypto_free_hash(ahp->tfm);
 	ahp->tfm = NULL;
 	kfree(ahp);
 }

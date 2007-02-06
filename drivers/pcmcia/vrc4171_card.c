@@ -514,7 +514,7 @@ static inline unsigned int get_events(int slot)
 	return events;
 }
 
-static irqreturn_t pccard_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t pccard_interrupt(int irq, void *dev_id)
 {
 	vrc4171_socket_t *socket;
 	unsigned int events;
@@ -730,7 +730,7 @@ static int __devinit vrc4171_card_init(void)
 
 	retval = vrc4171_add_sockets();
 	if (retval == 0)
-		retval = request_irq(vrc4171_irq, pccard_interrupt, SA_SHIRQ,
+		retval = request_irq(vrc4171_irq, pccard_interrupt, IRQF_SHARED,
 		                     vrc4171_card_name, vrc4171_sockets);
 
 	if (retval < 0) {

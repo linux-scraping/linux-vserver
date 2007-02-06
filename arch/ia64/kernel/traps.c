@@ -7,7 +7,6 @@
  * 05/12/00 grao <goutham.rao@intel.com> : added isr in siginfo for SIGFPE
  */
 
-#include <linux/config.h>
 #include <linux/kernel.h>
 #include <linux/init.h>
 #include <linux/sched.h>
@@ -107,8 +106,9 @@ die (const char *str, struct pt_regs *regs, long err)
 	put_cpu();
 
 	if (++die.lock_owner_depth < 3) {
-		printk("%s[%d]: %s %ld [%d]\n",
-			current->comm, current->pid, str, err, ++die_counter);
+		printk("%s[%d[#%u]]: %s %ld [%d]\n",
+			current->comm, current->pid, current->xid,
+			str, err, ++die_counter);
 		(void) notify_die(DIE_OOPS, (char *)str, regs, err, 255, SIGSEGV);
 		show_regs(regs);
   	} else
@@ -118,11 +118,8 @@ die (const char *str, struct pt_regs *regs, long err)
 	die.lock_owner = -1;
 	spin_unlock_irq(&die.lock);
 
-	if (panic_on_oops) {
-		printk(KERN_EMERG "Fatal exception: panic in 5 seconds\n");
-		ssleep(5);
+	if (panic_on_oops)
 		panic("Fatal exception");
-	}
 
   	do_exit(SIGSEGV);
 }
@@ -311,6 +308,15 @@ fp_emulate (int fp_fault, void *bundle, long *ipsr, long *fpsr, long *isr, long 
 	return ret.status;
 }
 
+struct fpu_swa_msg {
+	unsigned long count;
+	unsigned long time;
+};
+static DEFINE_PER_CPU(struct fpu_swa_msg, cpulast);
+DECLARE_PER_CPU(struct fpu_swa_msg, cpulast);
+static struct fpu_swa_msg last __cacheline_aligned;
+
+
 /*
  * Handle floating-point assist faults and traps.
  */
@@ -320,8 +326,6 @@ handle_fpu_swa (int fp_fault, struct pt_regs *regs, unsigned long isr)
 	long exception, bundle[2];
 	unsigned long fault_ip;
 	struct siginfo siginfo;
-	static int fpu_swa_count = 0;
-	static unsigned long last_time;
 
 	fault_ip = regs->cr_iip;
 	if (!fp_fault && (ia64_psr(regs)->ri == 0))
@@ -329,14 +333,38 @@ handle_fpu_swa (int fp_fault, struct pt_regs *regs, unsigned long isr)
 	if (copy_from_user(bundle, (void __user *) fault_ip, sizeof(bundle)))
 		return -1;
 
-	if (jiffies - last_time > 5*HZ)
-		fpu_swa_count = 0;
-	if ((fpu_swa_count < 4) && !(current->thread.flags & IA64_THREAD_FPEMU_NOPRINT)) {
-		last_time = jiffies;
-		++fpu_swa_count;
-		printk(KERN_WARNING
-		       "%s(%d): floating-point assist fault at ip %016lx, isr %016lx\n",
-		       current->comm, current->pid, regs->cr_iip + ia64_psr(regs)->ri, isr);
+	if (!(current->thread.flags & IA64_THREAD_FPEMU_NOPRINT))  {
+		unsigned long count, current_jiffies = jiffies;
+		struct fpu_swa_msg *cp = &__get_cpu_var(cpulast);
+
+		if (unlikely(current_jiffies > cp->time))
+			cp->count = 0;
+		if (unlikely(cp->count < 5)) {
+			cp->count++;
+			cp->time = current_jiffies + 5 * HZ;
+
+			/* minimize races by grabbing a copy of count BEFORE checking last.time. */
+			count = last.count;
+			barrier();
+
+			/*
+			 * Lower 4 bits are used as a count. Upper bits are a sequence
+			 * number that is updated when count is reset. The cmpxchg will
+			 * fail is seqno has changed. This minimizes mutiple cpus
+			 * reseting the count.
+			 */
+			if (current_jiffies > last.time)
+				(void) cmpxchg_acq(&last.count, count, 16 + (count & ~15));
+
+			/* used fetchadd to atomically update the count */
+			if ((last.count & 15) < 5 && (ia64_fetchadd(1, &last.count, acq) & 15) < 5) {
+				last.time = current_jiffies + 5 * HZ;
+				printk(KERN_WARNING
+					"%s(%d[#%u]): floating-point assist fault at ip %016lx, isr %016lx\n",
+					current->comm, current->pid, current->xid,
+					regs->cr_iip + ia64_psr(regs)->ri, isr);
+			}
+		}
 	}
 
 	exception = fp_emulate(fp_fault, bundle, &regs->cr_ipsr, &regs->ar_fpsr, &isr, &regs->pr,

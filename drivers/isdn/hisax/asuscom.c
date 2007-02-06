@@ -156,7 +156,7 @@ WriteHSCX(struct IsdnCardState *cs, int hscx, u_char offset, u_char value)
 #include "hscx_irq.c"
 
 static irqreturn_t
-asuscom_interrupt(int intno, void *dev_id, struct pt_regs *regs)
+asuscom_interrupt(int intno, void *dev_id)
 {
 	struct IsdnCardState *cs = dev_id;
 	u_char val;
@@ -194,7 +194,7 @@ asuscom_interrupt(int intno, void *dev_id, struct pt_regs *regs)
 }
 
 static irqreturn_t
-asuscom_interrupt_ipac(int intno, void *dev_id, struct pt_regs *regs)
+asuscom_interrupt_ipac(int intno, void *dev_id)
 {
 	struct IsdnCardState *cs = dev_id;
 	u_char ista, val, icnt = 5;
@@ -297,7 +297,7 @@ Asus_card_msg(struct IsdnCardState *cs, int mt, void *arg)
 }
 
 #ifdef __ISAPNP__
-static struct isapnp_device_id asus_ids[] __initdata = {
+static struct isapnp_device_id asus_ids[] __devinitdata = {
 	{ ISAPNP_VENDOR('A', 'S', 'U'), ISAPNP_FUNCTION(0x1688),
 	  ISAPNP_VENDOR('A', 'S', 'U'), ISAPNP_FUNCTION(0x1688), 
 	  (unsigned long) "Asus1688 PnP" },
@@ -313,11 +313,11 @@ static struct isapnp_device_id asus_ids[] __initdata = {
 	{ 0, }
 };
 
-static struct isapnp_device_id *ipid __initdata = &asus_ids[0];
+static struct isapnp_device_id *ipid __devinitdata = &asus_ids[0];
 static struct pnp_card *pnp_c __devinitdata = NULL;
 #endif
 
-int __init
+int __devinit
 setup_asuscom(struct IsdnCard *card)
 {
 	int bytecnt;

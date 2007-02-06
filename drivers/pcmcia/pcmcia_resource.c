@@ -95,7 +95,7 @@ static int alloc_io_space(struct pcmcia_socket *s, u_int attr, ioaddr_t *base,
 	 * potential conflicts, just the most obvious ones.
 	 */
 	for (i = 0; i < MAX_IO_WIN; i++)
-		if ((s->io[i].res) &&
+		if ((s->io[i].res) && *base &&
 		    ((s->io[i].res->start & (align-1)) == *base))
 			return 1;
 	for (i = 0; i < MAX_IO_WIN; i++) {
@@ -245,10 +245,17 @@ int pccard_get_configuration_info(struct pcmcia_socket *s,
 		return CS_SUCCESS;
 	}
 
-	/* !!! This is a hack !!! */
-	memcpy(&config->Attributes, &c->Attributes, sizeof(config_t));
-	config->Attributes |= CONF_VALID_CLIENT;
-	config->CardValues = c->CardValues;
+	config->Attributes = c->Attributes | CONF_VALID_CLIENT;
+	config->Vcc = s->socket.Vcc;
+	config->Vpp1 = config->Vpp2 = s->socket.Vpp;
+	config->IntType = c->IntType;
+	config->ConfigBase = c->ConfigBase;
+	config->Status = c->Status;
+	config->Pin = c->Pin;
+	config->Copy = c->Copy;
+	config->Option = c->Option;
+	config->ExtStatus = c->ExtStatus;
+	config->Present = config->CardValues = c->CardValues;
 	config->IRQAttributes = c->irq.Attributes;
 	config->AssignedIRQ = s->irq.AssignedIRQ;
 	config->BasePort1 = c->io.BasePort1;
@@ -777,7 +784,7 @@ EXPORT_SYMBOL(pcmcia_request_io);
  */
 
 #ifdef CONFIG_PCMCIA_PROBE
-static irqreturn_t test_action(int cpl, void *dev_id, struct pt_regs *regs)
+static irqreturn_t test_action(int cpl, void *dev_id)
 {
 	return IRQ_NONE;
 }
@@ -788,6 +795,7 @@ int pcmcia_request_irq(struct pcmcia_device *p_dev, irq_req_t *req)
 	struct pcmcia_socket *s = p_dev->socket;
 	config_t *c;
 	int ret = CS_IN_USE, irq = 0;
+	int type;
 
 	if (!(s->state & SOCKET_PRESENT))
 		return CS_NO_CARD;
@@ -796,6 +804,13 @@ int pcmcia_request_irq(struct pcmcia_device *p_dev, irq_req_t *req)
 		return CS_CONFIGURATION_LOCKED;
 	if (c->state & CONFIG_IRQ_REQ)
 		return CS_IN_USE;
+
+	/* Decide what type of interrupt we are registering */
+	type = 0;
+	if (s->functions > 1)		/* All of this ought to be handled higher up */
+		type = IRQF_SHARED;
+	if (req->Attributes & IRQ_TYPE_DYNAMIC_SHARING)
+		type = IRQF_SHARED;
 
 #ifdef CONFIG_PCMCIA_PROBE
 	if (s->irq.AssignedIRQ != 0) {
@@ -822,9 +837,7 @@ int pcmcia_request_irq(struct pcmcia_device *p_dev, irq_req_t *req)
 			 * marked as used by the kernel resource management core */
 			ret = request_irq(irq,
 					  (req->Attributes & IRQ_HANDLE_PRESENT) ? req->Handler : test_action,
-					  ((req->Attributes & IRQ_TYPE_DYNAMIC_SHARING) ||
-					   (s->functions > 1) ||
-					   (irq == s->pci_irq)) ? SA_SHIRQ : 0,
+					  type,
 					  p_dev->devname,
 					  (req->Attributes & IRQ_HANDLE_PRESENT) ? req->Instance : data);
 			if (!ret) {
@@ -839,18 +852,21 @@ int pcmcia_request_irq(struct pcmcia_device *p_dev, irq_req_t *req)
 	if (ret && !s->irq.AssignedIRQ) {
 		if (!s->pci_irq)
 			return ret;
+		type = IRQF_SHARED;
 		irq = s->pci_irq;
 	}
 
-	if (ret && req->Attributes & IRQ_HANDLE_PRESENT) {
-		if (request_irq(irq, req->Handler,
-				((req->Attributes & IRQ_TYPE_DYNAMIC_SHARING) ||
-				 (s->functions > 1) ||
-				 (irq == s->pci_irq)) ? SA_SHIRQ : 0,
-				p_dev->devname, req->Instance))
+	if (ret && (req->Attributes & IRQ_HANDLE_PRESENT)) {
+		if (request_irq(irq, req->Handler, type,  p_dev->devname, req->Instance))
 			return CS_IN_USE;
 	}
 
+	/* Make sure the fact the request type was overridden is passed back */
+	if (type == IRQF_SHARED && !(req->Attributes & IRQ_TYPE_DYNAMIC_SHARING)) {
+		req->Attributes |= IRQ_TYPE_DYNAMIC_SHARING;
+		printk(KERN_WARNING "pcmcia: request for exclusive IRQ could not be fulfilled.\n");
+		printk(KERN_WARNING "pcmcia: the driver needs updating to supported shared IRQ lines.\n");
+	}
 	c->irq.Attributes = req->Attributes;
 	s->irq.AssignedIRQ = req->AssignedIRQ = irq;
 	s->irq.Config++;

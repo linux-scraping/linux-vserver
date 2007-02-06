@@ -3,7 +3,6 @@
  * Licensed under the GPL
  */
 
-#include "linux/config.h"
 #include "linux/kernel.h"
 #include "linux/sched.h"
 #include "linux/notifier.h"
@@ -106,7 +105,7 @@ static void c_stop(struct seq_file *m, void *v)
 {
 }
 
-struct seq_operations cpuinfo_op = {
+const struct seq_operations cpuinfo_op = {
 	.start	= c_start,
 	.next	= c_next,
 	.stop	= c_stop,
@@ -167,7 +166,7 @@ static char *usage_string =
 
 static int __init uml_version_setup(char *line, int *add)
 {
-	printf("%s\n", system_utsname.release);
+	printf("%s\n", init_utsname()->release);
 	exit(0);
 
 	return 0;
@@ -278,7 +277,7 @@ static int __init Usage(char *line, int *add)
 {
  	const char **p;
 
-	printf(usage_string, system_utsname.release);
+	printf(usage_string, init_utsname()->release);
  	p = &__uml_help_start;
  	while (p < &__uml_help_end) {
  		printf("%s", *p);
@@ -330,6 +329,8 @@ EXPORT_SYMBOL(end_iomem);
 
 #define MIN_VMALLOC (32 * 1024 * 1024)
 
+extern char __binary_start;
+
 int linux_main(int argc, char **argv)
 {
 	unsigned long avail, diff;
@@ -374,8 +375,9 @@ int linux_main(int argc, char **argv)
 
 	printf("UML running in %s mode\n", mode);
 
-	uml_start = CHOOSE_MODE_PROC(set_task_sizes_tt, set_task_sizes_skas, 0,
-				     &host_task_size, &task_size);
+	uml_start = (unsigned long) &__binary_start;
+	host_task_size = CHOOSE_MODE_PROC(set_task_sizes_tt,
+					  set_task_sizes_skas, &task_size);
 
 	/*
  	 * Setting up handlers to 'sig_info' struct
@@ -395,12 +397,12 @@ int linux_main(int argc, char **argv)
 		physmem_size += UML_ROUND_UP(brk_start) - UML_ROUND_UP(&_end);
 	}
 
-	uml_physmem = uml_start;
+	uml_physmem = uml_start & PAGE_MASK;
 
 	/* Reserve up to 4M after the current brk */
 	uml_reserved = ROUND_4M(brk_start) + (1 << 22);
 
-	setup_machinename(system_utsname.machine);
+	setup_machinename(init_utsname()->machine);
 
 #ifdef CONFIG_CMDLINE_ON_HOST
 	argv1_begin = argv[1];
@@ -495,6 +497,7 @@ void apply_alternatives(struct alt_instr *start, struct alt_instr *end)
 {
 }
 
+#ifdef CONFIG_SMP
 void alternatives_smp_module_add(struct module *mod, char *name,
 				 void *locks, void *locks_end,
 				 void *text,  void *text_end)
@@ -504,3 +507,4 @@ void alternatives_smp_module_add(struct module *mod, char *name,
 void alternatives_smp_module_del(struct module *mod)
 {
 }
+#endif

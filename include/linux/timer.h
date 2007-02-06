@@ -1,7 +1,6 @@
 #ifndef _LINUX_TIMER_H
 #define _LINUX_TIMER_H
 
-#include <linux/config.h>
 #include <linux/list.h>
 #include <linux/spinlock.h>
 #include <linux/stddef.h>
@@ -42,7 +41,7 @@ static inline void setup_timer(struct timer_list * timer,
 	init_timer(timer);
 }
 
-/***
+/**
  * timer_pending - is a timer pending?
  * @timer: the timer in question
  *
@@ -64,7 +63,7 @@ extern int mod_timer(struct timer_list *timer, unsigned long expires);
 
 extern unsigned long next_timer_interrupt(void);
 
-/***
+/**
  * add_timer - start a timer
  * @timer: the timer to be added
  *
@@ -98,5 +97,11 @@ extern void init_timers(void);
 extern void run_local_timers(void);
 struct hrtimer;
 extern int it_real_fn(struct hrtimer *);
+
+unsigned long __round_jiffies(unsigned long j, int cpu);
+unsigned long __round_jiffies_relative(unsigned long j, int cpu);
+unsigned long round_jiffies(unsigned long j);
+unsigned long round_jiffies_relative(unsigned long j);
+
 
 #endif

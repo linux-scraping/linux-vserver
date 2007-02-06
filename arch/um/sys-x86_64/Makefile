@@ -4,9 +4,9 @@
 # Licensed under the GPL
 #
 
-obj-y = bugs.o delay.o fault.o ldt.o mem.o ptrace.o ptrace_user.o \
-	sigcontext.o signal.o syscalls.o syscall_table.o sysrq.o ksyms.o \
-	tls.o
+obj-y = bug.o bugs.o delay.o fault.o ldt.o mem.o ptrace.o ptrace_user.o \
+	setjmp.o sigcontext.o signal.o syscalls.o syscall_table.o sysrq.o \
+	ksyms.o tls.o
 
 obj-$(CONFIG_MODE_SKAS) += stub.o stub_segv.o
 obj-$(CONFIG_MODULES) += um_module.o

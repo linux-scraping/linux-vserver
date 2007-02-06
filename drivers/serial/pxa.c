@@ -24,7 +24,6 @@
  * with the serial core maintainer satisfaction to appear soon.
  */
 
-#include <linux/config.h>
 
 #if defined(CONFIG_SERIAL_PXA_CONSOLE) && defined(CONFIG_MAGIC_SYSRQ)
 #define SUPPORT_SYSRQ
@@ -99,8 +98,7 @@ static void serial_pxa_stop_rx(struct uart_port *port)
 	serial_out(up, UART_IER, up->ier);
 }
 
-static inline void
-receive_chars(struct uart_pxa_port *up, int *status, struct pt_regs *regs)
+static inline void receive_chars(struct uart_pxa_port *up, int *status)
 {
 	struct tty_struct *tty = up->port.info->tty;
 	unsigned int ch, flag;
@@ -154,7 +152,7 @@ receive_chars(struct uart_pxa_port *up, int *status, struct pt_regs *regs)
 				flag = TTY_FRAME;
 		}
 
-		if (uart_handle_sysrq_char(&up->port, ch, regs))
+		if (uart_handle_sysrq_char(&up->port, ch))
 			goto ignore_char;
 
 		uart_insert_char(&up->port, *status, UART_LSR_OE, ch, flag);
@@ -232,10 +230,9 @@ static inline void check_modem_status(struct uart_pxa_port *up)
 /*
  * This handles the interrupt from one port.
  */
-static inline irqreturn_t
-serial_pxa_irq(int irq, void *dev_id, struct pt_regs *regs)
+static inline irqreturn_t serial_pxa_irq(int irq, void *dev_id)
 {
-	struct uart_pxa_port *up = (struct uart_pxa_port *)dev_id;
+	struct uart_pxa_port *up = dev_id;
 	unsigned int iir, lsr;
 
 	iir = serial_in(up, UART_IIR);
@@ -243,7 +240,7 @@ serial_pxa_irq(int irq, void *dev_id, struct pt_regs *regs)
 		return IRQ_NONE;
 	lsr = serial_in(up, UART_LSR);
 	if (lsr & UART_LSR_DR)
-		receive_chars(up, &lsr, regs);
+		receive_chars(up, &lsr);
 	check_modem_status(up);
 	if (lsr & UART_LSR_THRE)
 		transmit_chars(up);
@@ -269,7 +266,6 @@ static unsigned int serial_pxa_get_mctrl(struct uart_port *port)
 	unsigned char status;
 	unsigned int ret;
 
-return TIOCM_CTS | TIOCM_DSR | TIOCM_CAR;
 	status = serial_in(up, UART_MSR);
 
 	ret = 0;
@@ -391,7 +387,7 @@ static int serial_pxa_startup(struct uart_port *port)
 
 	/*
 	 * Finally, enable interrupts.  Note: Modem status interrupts
-	 * are set via set_termios(), which will be occuring imminently
+	 * are set via set_termios(), which will be occurring imminently
 	 * anyway, so we don't enable them here.
 	 */
 	up->ier = UART_IER_RLSI | UART_IER_RDI | UART_IER_RTOIE | UART_IER_UUE;
@@ -437,8 +433,8 @@ static void serial_pxa_shutdown(struct uart_port *port)
 }
 
 static void
-serial_pxa_set_termios(struct uart_port *port, struct termios *termios,
-		       struct termios *old)
+serial_pxa_set_termios(struct uart_port *port, struct ktermios *termios,
+		       struct ktermios *old)
 {
 	struct uart_pxa_port *up = (struct uart_pxa_port *)port;
 	unsigned char cval, fcr = 0;
@@ -781,7 +777,6 @@ static struct uart_pxa_port serial_pxa_ports[] = {
 static struct uart_driver serial_pxa_reg = {
 	.owner		= THIS_MODULE,
 	.driver_name	= "PXA serial",
-	.devfs_name	= "tts/",
 	.dev_name	= "ttyS",
 	.major		= TTY_MAJOR,
 	.minor		= 64,

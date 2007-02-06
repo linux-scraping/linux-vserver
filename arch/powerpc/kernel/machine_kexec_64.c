@@ -10,7 +10,6 @@
  */
 
 
-#include <linux/cpumask.h>
 #include <linux/kexec.h>
 #include <linux/smp.h>
 #include <linux/thread_info.h>
@@ -32,8 +31,8 @@ int default_machine_kexec_prepare(struct kimage *image)
 	unsigned long begin, end;	/* limits of segment */
 	unsigned long low, high;	/* limits of blocked memory range */
 	struct device_node *node;
-	unsigned long *basep;
-	unsigned int *sizep;
+	const unsigned long *basep;
+	const unsigned int *sizep;
 
 	if (!ppc_md.hpte_clear_all)
 		return -ENOENT;
@@ -73,10 +72,8 @@ int default_machine_kexec_prepare(struct kimage *image)
 	/* We also should not overwrite the tce tables */
 	for (node = of_find_node_by_type(NULL, "pci"); node != NULL;
 			node = of_find_node_by_type(node, "pci")) {
-		basep = (unsigned long *)get_property(node, "linux,tce-base",
-							NULL);
-		sizep = (unsigned int *)get_property(node, "linux,tce-size",
-							NULL);
+		basep = get_property(node, "linux,tce-base", NULL);
+		sizep = get_property(node, "linux,tce-size", NULL);
 		if (basep == NULL || sizep == NULL)
 			continue;
 
@@ -335,7 +332,52 @@ static void __init export_htab_values(void)
 	of_node_put(node);
 }
 
-void __init kexec_setup(void)
+static struct property crashk_base_prop = {
+	.name = "linux,crashkernel-base",
+	.length = sizeof(unsigned long),
+	.value = (unsigned char *)&crashk_res.start,
+};
+
+static unsigned long crashk_size;
+
+static struct property crashk_size_prop = {
+	.name = "linux,crashkernel-size",
+	.length = sizeof(unsigned long),
+	.value = (unsigned char *)&crashk_size,
+};
+
+static void __init export_crashk_values(void)
+{
+	struct device_node *node;
+	struct property *prop;
+
+	node = of_find_node_by_path("/chosen");
+	if (!node)
+		return;
+
+	/* There might be existing crash kernel properties, but we can't
+	 * be sure what's in them, so remove them. */
+	prop = of_find_property(node, "linux,crashkernel-base", NULL);
+	if (prop)
+		prom_remove_property(node, prop);
+
+	prop = of_find_property(node, "linux,crashkernel-size", NULL);
+	if (prop)
+		prom_remove_property(node, prop);
+
+	if (crashk_res.start != 0) {
+		prom_add_property(node, &crashk_base_prop);
+		crashk_size = crashk_res.end - crashk_res.start + 1;
+		prom_add_property(node, &crashk_size_prop);
+	}
+
+	of_node_put(node);
+}
+
+static int __init kexec_setup(void)
 {
 	export_htab_values();
+	export_crashk_values();
+	return 0;
 }
+__initcall(kexec_setup);

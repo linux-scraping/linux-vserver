@@ -42,8 +42,8 @@ union irq_ctx {
 	u32                     stack[THREAD_SIZE/sizeof(u32)];
 };
 
-static union irq_ctx *hardirq_ctx[NR_CPUS];
-static union irq_ctx *softirq_ctx[NR_CPUS];
+static union irq_ctx *hardirq_ctx[NR_CPUS] __read_mostly;
+static union irq_ctx *softirq_ctx[NR_CPUS] __read_mostly;
 #endif
 
 /*
@@ -53,13 +53,22 @@ static union irq_ctx *softirq_ctx[NR_CPUS];
  */
 fastcall unsigned int do_IRQ(struct pt_regs *regs)
 {	
-	/* high bits used in ret_from_ code */
-	int irq = regs->orig_eax & 0xff;
+	struct pt_regs *old_regs;
+	/* high bit used in ret_from_ code */
+	int irq = ~regs->orig_eax;
+	struct irq_desc *desc = irq_desc + irq;
 #ifdef CONFIG_4KSTACKS
 	union irq_ctx *curctx, *irqctx;
 	u32 *isp;
 #endif
 
+	if (unlikely((unsigned)irq >= NR_IRQS)) {
+		printk(KERN_EMERG "%s: cannot handle IRQ %d\n",
+					__FUNCTION__, irq);
+		BUG();
+	}
+
+	old_regs = set_irq_regs(regs);
 	irq_enter();
 #ifdef CONFIG_DEBUG_STACKOVERFLOW
 	/* Debugging check for stack overflow: is there less than 1KB free? */
@@ -75,7 +84,6 @@ fastcall unsigned int do_IRQ(struct pt_regs *regs)
 		}
 	}
 #endif
-
 #ifdef CONFIG_4KSTACKS
 
 	curctx = (union irq_ctx *) current_thread_info();
@@ -95,20 +103,28 @@ fastcall unsigned int do_IRQ(struct pt_regs *regs)
 		irqctx->tinfo.task = curctx->tinfo.task;
 		irqctx->tinfo.previous_esp = current_stack_pointer;
 
+		/*
+		 * Copy the softirq bits in preempt_count so that the
+		 * softirq checks work in the hardirq context.
+		 */
+		irqctx->tinfo.preempt_count =
+			(irqctx->tinfo.preempt_count & ~SOFTIRQ_MASK) |
+			(curctx->tinfo.preempt_count & SOFTIRQ_MASK);
+
 		asm volatile(
-			"       xchgl   %%ebx,%%esp      \n"
-			"       call    __do_IRQ         \n"
+			"       xchgl  %%ebx,%%esp      \n"
+			"       call   *%%edi           \n"
 			"       movl   %%ebx,%%esp      \n"
 			: "=a" (arg1), "=d" (arg2), "=b" (ebx)
-			:  "0" (irq),   "1" (regs),  "2" (isp)
-			: "memory", "cc", "ecx"
+			:  "0" (irq),   "1" (desc),  "2" (isp),
+			   "D" (desc->handle_irq)
+			: "memory", "cc"
 		);
 	} else
 #endif
-		__do_IRQ(irq, regs);
-
+		desc->handle_irq(irq, desc);
 	irq_exit();
-
+	set_irq_regs(old_regs);
 	return 1;
 }
 
@@ -147,7 +163,7 @@ void irq_ctx_init(int cpu)
 	irqctx->tinfo.task              = NULL;
 	irqctx->tinfo.exec_domain       = NULL;
 	irqctx->tinfo.cpu               = cpu;
-	irqctx->tinfo.preempt_count     = SOFTIRQ_OFFSET;
+	irqctx->tinfo.preempt_count     = 0;
 	irqctx->tinfo.addr_limit        = MAKE_MM_SEG(0);
 
 	softirq_ctx[cpu] = irqctx;
@@ -192,6 +208,10 @@ asmlinkage void do_softirq(void)
 			: "0"(isp)
 			: "memory", "cc", "edx", "ecx", "eax"
 		);
+		/*
+		 * Shouldnt happen, we returned above if in_interrupt():
+	 	 */
+		WARN_ON_ONCE(softirq_count());
 	}
 
 	local_irq_restore(flags);
@@ -219,7 +239,7 @@ int show_interrupts(struct seq_file *p, void *v)
 	if (i == 0) {
 		seq_printf(p, "           ");
 		for_each_online_cpu(j)
-			seq_printf(p, "CPU%d       ",j);
+			seq_printf(p, "CPU%-8d",j);
 		seq_putc(p, '\n');
 	}
 
@@ -235,7 +255,8 @@ int show_interrupts(struct seq_file *p, void *v)
 		for_each_online_cpu(j)
 			seq_printf(p, "%10u ", kstat_cpu(j).irqs[i]);
 #endif
-		seq_printf(p, " %14s", irq_desc[i].handler->typename);
+		seq_printf(p, " %8s", irq_desc[i].chip->name);
+		seq_printf(p, "-%-8s", irq_desc[i].name);
 		seq_printf(p, "  %s", action->name);
 
 		for (action=action->next; action; action = action->next)
@@ -277,13 +298,13 @@ void fixup_irqs(cpumask_t map)
 		if (irq == 2)
 			continue;
 
-		cpus_and(mask, irq_affinity[irq], map);
+		cpus_and(mask, irq_desc[irq].affinity, map);
 		if (any_online_cpu(mask) == NR_CPUS) {
 			printk("Breaking affinity for irq %i\n", irq);
 			mask = map;
 		}
-		if (irq_desc[irq].handler->set_affinity)
-			irq_desc[irq].handler->set_affinity(irq, mask);
+		if (irq_desc[irq].chip->set_affinity)
+			irq_desc[irq].chip->set_affinity(irq, mask);
 		else if (irq_desc[irq].action && !(warned++))
 			printk("Cannot set affinity for irq %i\n", irq);
 	}

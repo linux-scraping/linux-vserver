@@ -31,6 +31,8 @@
 #define SUCCESS 0
 #define FAILURE -1
 
+#define CHECKBIT(value, nbit) (value & (1 << nbit))
+
 /* Maximum time to flicker LED when asked to identify NIC using ethtool */
 #define MAX_FLICKER_TIME	60000 /* 60 Secs */
 
@@ -78,6 +80,11 @@ static int debug_level = ERR_DBG;
 typedef struct {
 	unsigned long long single_ecc_errs;
 	unsigned long long double_ecc_errs;
+	unsigned long long parity_err_cnt;
+	unsigned long long serious_err_cnt;
+	unsigned long long soft_reset_cnt;
+	unsigned long long fifo_full_cnt;
+	unsigned long long ring_full_cnt;
 	/* LRO statistics */
 	unsigned long long clubbed_frms_cnt;
 	unsigned long long sending_both;
@@ -87,183 +94,204 @@ typedef struct {
 	unsigned long long num_aggregations;
 } swStat_t;
 
+/* Xpak releated alarm and warnings */
+typedef struct {
+	u64 alarm_transceiver_temp_high;
+	u64 alarm_transceiver_temp_low;
+	u64 alarm_laser_bias_current_high;
+	u64 alarm_laser_bias_current_low;
+	u64 alarm_laser_output_power_high;
+	u64 alarm_laser_output_power_low;
+	u64 warn_transceiver_temp_high;
+	u64 warn_transceiver_temp_low;
+	u64 warn_laser_bias_current_high;
+	u64 warn_laser_bias_current_low;
+	u64 warn_laser_output_power_high;
+	u64 warn_laser_output_power_low;
+	u64 xpak_regs_stat;
+	u32 xpak_timer_count;
+} xpakStat_t;
+
+
 /* The statistics block of Xena */
 typedef struct stat_block {
 /* Tx MAC statistics counters. */
-	u32 tmac_data_octets;
-	u32 tmac_frms;
-	u64 tmac_drop_frms;
-	u32 tmac_bcst_frms;
-	u32 tmac_mcst_frms;
-	u64 tmac_pause_ctrl_frms;
-	u32 tmac_ucst_frms;
-	u32 tmac_ttl_octets;
-	u32 tmac_any_err_frms;
-	u32 tmac_nucst_frms;
-	u64 tmac_ttl_less_fb_octets;
-	u64 tmac_vld_ip_octets;
-	u32 tmac_drop_ip;
-	u32 tmac_vld_ip;
-	u32 tmac_rst_tcp;
-	u32 tmac_icmp;
-	u64 tmac_tcp;
-	u32 reserved_0;
-	u32 tmac_udp;
+	__le32 tmac_data_octets;
+	__le32 tmac_frms;
+	__le64 tmac_drop_frms;
+	__le32 tmac_bcst_frms;
+	__le32 tmac_mcst_frms;
+	__le64 tmac_pause_ctrl_frms;
+	__le32 tmac_ucst_frms;
+	__le32 tmac_ttl_octets;
+	__le32 tmac_any_err_frms;
+	__le32 tmac_nucst_frms;
+	__le64 tmac_ttl_less_fb_octets;
+	__le64 tmac_vld_ip_octets;
+	__le32 tmac_drop_ip;
+	__le32 tmac_vld_ip;
+	__le32 tmac_rst_tcp;
+	__le32 tmac_icmp;
+	__le64 tmac_tcp;
+	__le32 reserved_0;
+	__le32 tmac_udp;
 
 /* Rx MAC Statistics counters. */
-	u32 rmac_data_octets;
-	u32 rmac_vld_frms;
-	u64 rmac_fcs_err_frms;
-	u64 rmac_drop_frms;
-	u32 rmac_vld_bcst_frms;
-	u32 rmac_vld_mcst_frms;
-	u32 rmac_out_rng_len_err_frms;
-	u32 rmac_in_rng_len_err_frms;
-	u64 rmac_long_frms;
-	u64 rmac_pause_ctrl_frms;
-	u64 rmac_unsup_ctrl_frms;
-	u32 rmac_accepted_ucst_frms;
-	u32 rmac_ttl_octets;
-	u32 rmac_discarded_frms;
-	u32 rmac_accepted_nucst_frms;
-	u32 reserved_1;
-	u32 rmac_drop_events;
-	u64 rmac_ttl_less_fb_octets;
-	u64 rmac_ttl_frms;
-	u64 reserved_2;
-	u32 rmac_usized_frms;
-	u32 reserved_3;
-	u32 rmac_frag_frms;
-	u32 rmac_osized_frms;
-	u32 reserved_4;
-	u32 rmac_jabber_frms;
-	u64 rmac_ttl_64_frms;
-	u64 rmac_ttl_65_127_frms;
-	u64 reserved_5;
-	u64 rmac_ttl_128_255_frms;
-	u64 rmac_ttl_256_511_frms;
-	u64 reserved_6;
-	u64 rmac_ttl_512_1023_frms;
-	u64 rmac_ttl_1024_1518_frms;
-	u32 rmac_ip;
-	u32 reserved_7;
-	u64 rmac_ip_octets;
-	u32 rmac_drop_ip;
-	u32 rmac_hdr_err_ip;
-	u32 reserved_8;
-	u32 rmac_icmp;
-	u64 rmac_tcp;
-	u32 rmac_err_drp_udp;
-	u32 rmac_udp;
-	u64 rmac_xgmii_err_sym;
-	u64 rmac_frms_q0;
-	u64 rmac_frms_q1;
-	u64 rmac_frms_q2;
-	u64 rmac_frms_q3;
-	u64 rmac_frms_q4;
-	u64 rmac_frms_q5;
-	u64 rmac_frms_q6;
-	u64 rmac_frms_q7;
-	u16 rmac_full_q3;
-	u16 rmac_full_q2;
-	u16 rmac_full_q1;
-	u16 rmac_full_q0;
-	u16 rmac_full_q7;
-	u16 rmac_full_q6;
-	u16 rmac_full_q5;
-	u16 rmac_full_q4;
-	u32 reserved_9;
-	u32 rmac_pause_cnt;
-	u64 rmac_xgmii_data_err_cnt;
-	u64 rmac_xgmii_ctrl_err_cnt;
-	u32 rmac_err_tcp;
-	u32 rmac_accepted_ip;
+	__le32 rmac_data_octets;
+	__le32 rmac_vld_frms;
+	__le64 rmac_fcs_err_frms;
+	__le64 rmac_drop_frms;
+	__le32 rmac_vld_bcst_frms;
+	__le32 rmac_vld_mcst_frms;
+	__le32 rmac_out_rng_len_err_frms;
+	__le32 rmac_in_rng_len_err_frms;
+	__le64 rmac_long_frms;
+	__le64 rmac_pause_ctrl_frms;
+	__le64 rmac_unsup_ctrl_frms;
+	__le32 rmac_accepted_ucst_frms;
+	__le32 rmac_ttl_octets;
+	__le32 rmac_discarded_frms;
+	__le32 rmac_accepted_nucst_frms;
+	__le32 reserved_1;
+	__le32 rmac_drop_events;
+	__le64 rmac_ttl_less_fb_octets;
+	__le64 rmac_ttl_frms;
+	__le64 reserved_2;
+	__le32 rmac_usized_frms;
+	__le32 reserved_3;
+	__le32 rmac_frag_frms;
+	__le32 rmac_osized_frms;
+	__le32 reserved_4;
+	__le32 rmac_jabber_frms;
+	__le64 rmac_ttl_64_frms;
+	__le64 rmac_ttl_65_127_frms;
+	__le64 reserved_5;
+	__le64 rmac_ttl_128_255_frms;
+	__le64 rmac_ttl_256_511_frms;
+	__le64 reserved_6;
+	__le64 rmac_ttl_512_1023_frms;
+	__le64 rmac_ttl_1024_1518_frms;
+	__le32 rmac_ip;
+	__le32 reserved_7;
+	__le64 rmac_ip_octets;
+	__le32 rmac_drop_ip;
+	__le32 rmac_hdr_err_ip;
+	__le32 reserved_8;
+	__le32 rmac_icmp;
+	__le64 rmac_tcp;
+	__le32 rmac_err_drp_udp;
+	__le32 rmac_udp;
+	__le64 rmac_xgmii_err_sym;
+	__le64 rmac_frms_q0;
+	__le64 rmac_frms_q1;
+	__le64 rmac_frms_q2;
+	__le64 rmac_frms_q3;
+	__le64 rmac_frms_q4;
+	__le64 rmac_frms_q5;
+	__le64 rmac_frms_q6;
+	__le64 rmac_frms_q7;
+	__le16 rmac_full_q3;
+	__le16 rmac_full_q2;
+	__le16 rmac_full_q1;
+	__le16 rmac_full_q0;
+	__le16 rmac_full_q7;
+	__le16 rmac_full_q6;
+	__le16 rmac_full_q5;
+	__le16 rmac_full_q4;
+	__le32 reserved_9;
+	__le32 rmac_pause_cnt;
+	__le64 rmac_xgmii_data_err_cnt;
+	__le64 rmac_xgmii_ctrl_err_cnt;
+	__le32 rmac_err_tcp;
+	__le32 rmac_accepted_ip;
 
 /* PCI/PCI-X Read transaction statistics. */
-	u32 new_rd_req_cnt;
-	u32 rd_req_cnt;
-	u32 rd_rtry_cnt;
-	u32 new_rd_req_rtry_cnt;
+	__le32 new_rd_req_cnt;
+	__le32 rd_req_cnt;
+	__le32 rd_rtry_cnt;
+	__le32 new_rd_req_rtry_cnt;
 
 /* PCI/PCI-X Write/Read transaction statistics. */
-	u32 wr_req_cnt;
-	u32 wr_rtry_rd_ack_cnt;
-	u32 new_wr_req_rtry_cnt;
-	u32 new_wr_req_cnt;
-	u32 wr_disc_cnt;
-	u32 wr_rtry_cnt;
+	__le32 wr_req_cnt;
+	__le32 wr_rtry_rd_ack_cnt;
+	__le32 new_wr_req_rtry_cnt;
+	__le32 new_wr_req_cnt;
+	__le32 wr_disc_cnt;
+	__le32 wr_rtry_cnt;
 
 /*	PCI/PCI-X Write / DMA Transaction statistics. */
-	u32 txp_wr_cnt;
-	u32 rd_rtry_wr_ack_cnt;
-	u32 txd_wr_cnt;
-	u32 txd_rd_cnt;
-	u32 rxd_wr_cnt;
-	u32 rxd_rd_cnt;
-	u32 rxf_wr_cnt;
-	u32 txf_rd_cnt;
+	__le32 txp_wr_cnt;
+	__le32 rd_rtry_wr_ack_cnt;
+	__le32 txd_wr_cnt;
+	__le32 txd_rd_cnt;
+	__le32 rxd_wr_cnt;
+	__le32 rxd_rd_cnt;
+	__le32 rxf_wr_cnt;
+	__le32 txf_rd_cnt;
 
 /* Tx MAC statistics overflow counters. */
-	u32 tmac_data_octets_oflow;
-	u32 tmac_frms_oflow;
-	u32 tmac_bcst_frms_oflow;
-	u32 tmac_mcst_frms_oflow;
-	u32 tmac_ucst_frms_oflow;
-	u32 tmac_ttl_octets_oflow;
-	u32 tmac_any_err_frms_oflow;
-	u32 tmac_nucst_frms_oflow;
-	u64 tmac_vlan_frms;
-	u32 tmac_drop_ip_oflow;
-	u32 tmac_vld_ip_oflow;
-	u32 tmac_rst_tcp_oflow;
-	u32 tmac_icmp_oflow;
-	u32 tpa_unknown_protocol;
-	u32 tmac_udp_oflow;
-	u32 reserved_10;
-	u32 tpa_parse_failure;
+	__le32 tmac_data_octets_oflow;
+	__le32 tmac_frms_oflow;
+	__le32 tmac_bcst_frms_oflow;
+	__le32 tmac_mcst_frms_oflow;
+	__le32 tmac_ucst_frms_oflow;
+	__le32 tmac_ttl_octets_oflow;
+	__le32 tmac_any_err_frms_oflow;
+	__le32 tmac_nucst_frms_oflow;
+	__le64 tmac_vlan_frms;
+	__le32 tmac_drop_ip_oflow;
+	__le32 tmac_vld_ip_oflow;
+	__le32 tmac_rst_tcp_oflow;
+	__le32 tmac_icmp_oflow;
+	__le32 tpa_unknown_protocol;
+	__le32 tmac_udp_oflow;
+	__le32 reserved_10;
+	__le32 tpa_parse_failure;
 
 /* Rx MAC Statistics overflow counters. */
-	u32 rmac_data_octets_oflow;
-	u32 rmac_vld_frms_oflow;
-	u32 rmac_vld_bcst_frms_oflow;
-	u32 rmac_vld_mcst_frms_oflow;
-	u32 rmac_accepted_ucst_frms_oflow;
-	u32 rmac_ttl_octets_oflow;
-	u32 rmac_discarded_frms_oflow;
-	u32 rmac_accepted_nucst_frms_oflow;
-	u32 rmac_usized_frms_oflow;
-	u32 rmac_drop_events_oflow;
-	u32 rmac_frag_frms_oflow;
-	u32 rmac_osized_frms_oflow;
-	u32 rmac_ip_oflow;
-	u32 rmac_jabber_frms_oflow;
-	u32 rmac_icmp_oflow;
-	u32 rmac_drop_ip_oflow;
-	u32 rmac_err_drp_udp_oflow;
-	u32 rmac_udp_oflow;
-	u32 reserved_11;
-	u32 rmac_pause_cnt_oflow;
-	u64 rmac_ttl_1519_4095_frms;
-	u64 rmac_ttl_4096_8191_frms;
-	u64 rmac_ttl_8192_max_frms;
-	u64 rmac_ttl_gt_max_frms;
-	u64 rmac_osized_alt_frms;
-	u64 rmac_jabber_alt_frms;
-	u64 rmac_gt_max_alt_frms;
-	u64 rmac_vlan_frms;
-	u32 rmac_len_discard;
-	u32 rmac_fcs_discard;
-	u32 rmac_pf_discard;
-	u32 rmac_da_discard;
-	u32 rmac_red_discard;
-	u32 rmac_rts_discard;
-	u32 reserved_12;
-	u32 rmac_ingm_full_discard;
-	u32 reserved_13;
-	u32 rmac_accepted_ip_oflow;
-	u32 reserved_14;
-	u32 link_fault_cnt;
+	__le32 rmac_data_octets_oflow;
+	__le32 rmac_vld_frms_oflow;
+	__le32 rmac_vld_bcst_frms_oflow;
+	__le32 rmac_vld_mcst_frms_oflow;
+	__le32 rmac_accepted_ucst_frms_oflow;
+	__le32 rmac_ttl_octets_oflow;
+	__le32 rmac_discarded_frms_oflow;
+	__le32 rmac_accepted_nucst_frms_oflow;
+	__le32 rmac_usized_frms_oflow;
+	__le32 rmac_drop_events_oflow;
+	__le32 rmac_frag_frms_oflow;
+	__le32 rmac_osized_frms_oflow;
+	__le32 rmac_ip_oflow;
+	__le32 rmac_jabber_frms_oflow;
+	__le32 rmac_icmp_oflow;
+	__le32 rmac_drop_ip_oflow;
+	__le32 rmac_err_drp_udp_oflow;
+	__le32 rmac_udp_oflow;
+	__le32 reserved_11;
+	__le32 rmac_pause_cnt_oflow;
+	__le64 rmac_ttl_1519_4095_frms;
+	__le64 rmac_ttl_4096_8191_frms;
+	__le64 rmac_ttl_8192_max_frms;
+	__le64 rmac_ttl_gt_max_frms;
+	__le64 rmac_osized_alt_frms;
+	__le64 rmac_jabber_alt_frms;
+	__le64 rmac_gt_max_alt_frms;
+	__le64 rmac_vlan_frms;
+	__le32 rmac_len_discard;
+	__le32 rmac_fcs_discard;
+	__le32 rmac_pf_discard;
+	__le32 rmac_da_discard;
+	__le32 rmac_red_discard;
+	__le32 rmac_rts_discard;
+	__le32 reserved_12;
+	__le32 rmac_ingm_full_discard;
+	__le32 reserved_13;
+	__le32 rmac_accepted_ip_oflow;
+	__le32 reserved_14;
+	__le32 link_fault_cnt;
+	u8  buffer[20];
 	swStat_t sw_stat;
+	xpakStat_t xpak_stat;
 } StatInfo_t;
 
 /*
@@ -624,7 +652,7 @@ typedef struct fifo_info {
 	nic_t *nic;
 }fifo_info_t;
 
-/* Infomation related to the Tx and Rx FIFOs and Rings of Xena
+/* Information related to the Tx and Rx FIFOs and Rings of Xena
  * is maintained in this structure.
  */
 typedef struct mac_info {
@@ -659,7 +687,8 @@ typedef struct {
 } usr_addr_t;
 
 /* Default Tunable parameters of the NIC. */
-#define DEFAULT_FIFO_LEN 4096
+#define DEFAULT_FIFO_0_LEN 4096
+#define DEFAULT_FIFO_1_7_LEN 512
 #define SMALL_BLK_CNT	30
 #define LARGE_BLK_CNT	100
 
@@ -690,6 +719,7 @@ struct msix_info_st {
 /* Data structure to represent a LRO session */
 typedef struct lro {
 	struct sk_buff	*parent;
+	struct sk_buff  *last_frag;
 	u8		*l2h;
 	struct iphdr	*iph;
 	struct tcphdr	*tcph;
@@ -732,7 +762,7 @@ struct s2io_nic {
 	int device_close_flag;
 	int device_enabled_once;
 
-	char name[50];
+	char name[60];
 	struct tasklet_struct task;
 	volatile unsigned long tasklet_status;
 
@@ -800,8 +830,9 @@ struct s2io_nic {
 #define MSIX_FLG                0xA5
 	struct msix_entry *entries;
 	struct s2io_msix_entry *s2io_entries;
-	char desc1[35];
-	char desc2[35];
+	char desc[MAX_REQUESTED_MSI_X][25];
+
+	int avail_msix_vectors; /* No. of MSI-X vectors granted by system */
 
 	struct msix_info_st msix_info[0x3f];
 
@@ -824,6 +855,8 @@ struct s2io_nic {
 	spinlock_t	rx_lock;
 	atomic_t	isr_cnt;
 	u64 *ufo_in_band_v;
+#define VPD_PRODUCT_NAME_LEN 50
+	u8  product_name[VPD_PRODUCT_NAME_LEN];
 };
 
 #define RESET_ERROR 1;
@@ -848,28 +881,32 @@ static inline void writeq(u64 val, void __iomem *addr)
 	writel((u32) (val), addr);
 	writel((u32) (val >> 32), (addr + 4));
 }
+#endif
 
-/* In 32 bit modes, some registers have to be written in a
- * particular order to expect correct hardware operation. The
- * macro SPECIAL_REG_WRITE is used to perform such ordered
- * writes. Defines UF (Upper First) and LF (Lower First) will
- * be used to specify the required write order.
+/*
+ * Some registers have to be written in a particular order to
+ * expect correct hardware operation. The macro SPECIAL_REG_WRITE
+ * is used to perform such ordered writes. Defines UF (Upper First)
+ * and LF (Lower First) will be used to specify the required write order.
  */
 #define UF	1
 #define LF	2
 static inline void SPECIAL_REG_WRITE(u64 val, void __iomem *addr, int order)
 {
+	u32 ret;
+
 	if (order == LF) {
 		writel((u32) (val), addr);
+		ret = readl(addr);
 		writel((u32) (val >> 32), (addr + 4));
+		ret = readl(addr + 4);
 	} else {
 		writel((u32) (val >> 32), (addr + 4));
+		ret = readl(addr + 4);
 		writel((u32) (val), addr);
+		ret = readl(addr);
 	}
 }
-#else
-#define SPECIAL_REG_WRITE(val, addr, dummy) writeq(val, addr)
-#endif
 
 /*  Interrupt related values of Xena */
 
@@ -955,15 +992,15 @@ static void s2io_init_pci(nic_t * sp);
 static int s2io_set_mac_addr(struct net_device *dev, u8 * addr);
 static void s2io_alarm_handle(unsigned long data);
 static int s2io_enable_msi(nic_t *nic);
-static irqreturn_t s2io_msi_handle(int irq, void *dev_id, struct pt_regs *regs);
+static irqreturn_t s2io_msi_handle(int irq, void *dev_id);
 static irqreturn_t
-s2io_msix_ring_handle(int irq, void *dev_id, struct pt_regs *regs);
+s2io_msix_ring_handle(int irq, void *dev_id);
 static irqreturn_t
-s2io_msix_fifo_handle(int irq, void *dev_id, struct pt_regs *regs);
-static irqreturn_t s2io_isr(int irq, void *dev_id, struct pt_regs *regs);
+s2io_msix_fifo_handle(int irq, void *dev_id);
+static irqreturn_t s2io_isr(int irq, void *dev_id);
 static int verify_xena_quiescence(nic_t *sp, u64 val64, int flag);
-static struct ethtool_ops netdev_ethtool_ops;
-static void s2io_set_link(unsigned long data);
+static const struct ethtool_ops netdev_ethtool_ops;
+static void s2io_set_link(struct work_struct *work);
 static int s2io_set_swapper(nic_t * sp);
 static void s2io_card_down(nic_t *nic);
 static int s2io_card_up(nic_t *nic);
@@ -975,4 +1012,13 @@ static void clear_lro_session(lro_t *lro);
 static void queue_rx_frame(struct sk_buff *skb);
 static void update_L3L4_header(nic_t *sp, lro_t *lro);
 static void lro_append_pkt(nic_t *sp, lro_t *lro, struct sk_buff *skb, u32 tcp_len);
+
+#define s2io_tcp_mss(skb) skb_shinfo(skb)->gso_size
+#define s2io_udp_mss(skb) skb_shinfo(skb)->gso_size
+#define s2io_offload_type(skb) skb_shinfo(skb)->gso_type
+
+#define S2IO_PARM_INT(X, def_val) \
+	static unsigned int X = def_val;\
+		module_param(X , uint, 0);
+
 #endif				/* _S2IO_H */

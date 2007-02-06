@@ -20,7 +20,6 @@
    SOFTWARE IS DISCLAIMED.
 */
 
-#include <linux/config.h>
 #include <linux/module.h>
 
 #include <linux/types.h>
@@ -41,6 +40,7 @@
 #include <linux/input.h>
 
 #include <net/bluetooth/bluetooth.h>
+#include <net/bluetooth/hci_core.h>
 #include <net/bluetooth/l2cap.h>
 
 #include "hidp.h"
@@ -507,14 +507,12 @@ static int hidp_session(void *arg)
 
 	hidp_del_timer(session);
 
-	if (intr_sk->sk_state != BT_CONNECTED)
-		wait_event_timeout(*(ctrl_sk->sk_sleep), (ctrl_sk->sk_state == BT_CLOSED), HZ);
+	fput(session->intr_sock->file);
+
+	wait_event_timeout(*(ctrl_sk->sk_sleep),
+		(ctrl_sk->sk_state == BT_CLOSED), msecs_to_jiffies(500));
 
 	fput(session->ctrl_sock->file);
-
-	wait_event_timeout(*(intr_sk->sk_sleep), (intr_sk->sk_state == BT_CLOSED), HZ);
-
-	fput(session->intr_sock->file);
 
 	__hidp_unlink_session(session);
 
@@ -527,6 +525,24 @@ static int hidp_session(void *arg)
 
 	kfree(session);
 	return 0;
+}
+
+static struct device *hidp_get_device(struct hidp_session *session)
+{
+	bdaddr_t *src = &bt_sk(session->ctrl_sock->sk)->src;
+	bdaddr_t *dst = &bt_sk(session->ctrl_sock->sk)->dst;
+	struct hci_dev *hdev;
+	struct hci_conn *conn;
+
+	hdev = hci_get_route(dst, src);
+	if (!hdev)
+		return NULL;
+
+	conn = hci_conn_hash_lookup_ba(hdev, ACL_LINK, dst);
+
+	hci_dev_put(hdev);
+
+	return conn ? &conn->dev : NULL;
 }
 
 static inline void hidp_setup_input(struct hidp_session *session, struct hidp_connadd_req *req)
@@ -567,6 +583,8 @@ static inline void hidp_setup_input(struct hidp_session *session, struct hidp_co
 		input->relbit[0] |= BIT(REL_WHEEL);
 	}
 
+	input->cdev.dev = hidp_get_device(session);
+
 	input->event = hidp_input_event;
 
 	input_register_device(input);
@@ -583,10 +601,9 @@ int hidp_add_connection(struct hidp_connadd_req *req, struct socket *ctrl_sock, 
 			bacmp(&bt_sk(ctrl_sock->sk)->dst, &bt_sk(intr_sock->sk)->dst))
 		return -ENOTUNIQ;
 
-	session = kmalloc(sizeof(struct hidp_session), GFP_KERNEL);
+	session = kzalloc(sizeof(struct hidp_session), GFP_KERNEL);
 	if (!session)
 		return -ENOMEM;
-	memset(session, 0, sizeof(struct hidp_session));
 
 	session->input = input_allocate_device();
 	if (!session->input) {

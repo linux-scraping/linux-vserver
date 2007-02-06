@@ -29,7 +29,6 @@
  * Note: for more information, please refer "AMD Alchemy Au1200/Au1550 IDE
  *       Interface and Linux Device Driver" Application Note.
  */
-#include <linux/config.h>
 
 #ifdef CONFIG_BLK_DEV_IDE_AU1XXX_MDMA2_DBDMA
         #define DMA_WAIT_TIMEOUT        100
@@ -171,10 +170,8 @@ int __init auide_probe(void);
         static int auide_dma_host_on(ide_drive_t *drive);
         static int auide_dma_lostirq(ide_drive_t *drive);
         static int auide_dma_on(ide_drive_t *drive);
-        static void auide_ddma_tx_callback(int irq, void *param,
-                                           struct pt_regs *regs);
-        static void auide_ddma_rx_callback(int irq, void *param,
-                                           struct pt_regs *regs);
+        static void auide_ddma_tx_callback(int irq, void *param);
+        static void auide_ddma_rx_callback(int irq, void *param);
         static int auide_dma_off_quietly(ide_drive_t *drive);
 #endif /* end CONFIG_BLK_DEV_IDE_AU1XXX_MDMA2_DBDMA */
 

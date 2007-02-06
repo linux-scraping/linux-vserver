@@ -17,9 +17,8 @@
 #include <asm/smp.h>
 #include <linux/user.h>
 #include <linux/a.out.h>
-#include <linux/tty.h>
+#include <linux/screen_info.h>
 #include <linux/delay.h>
-#include <linux/config.h>
 #include <linux/fs.h>
 #include <linux/seq_file.h>
 #include <linux/syscalls.h>
@@ -31,6 +30,7 @@
 #include <linux/console.h>
 #include <linux/spinlock.h>
 #include <linux/root_dev.h>
+#include <linux/cpu.h>
 
 #include <asm/system.h>
 #include <asm/io.h>
@@ -103,7 +103,6 @@ void prom_sync_me(void)
 
 unsigned int boot_flags __initdata = 0;
 #define BOOTME_DEBUG  0x1
-#define BOOTME_SINGLE 0x2
 
 /* Exported for mm/init.c:paging_init. */
 unsigned long cmdline_memory_size __initdata = 0;
@@ -121,16 +120,6 @@ static struct console prom_debug_console = {
 	.index =	-1,
 };
 
-int obp_system_intr(void)
-{
-	if (boot_flags & BOOTME_DEBUG) {
-		printk("OBP: system interrupted\n");
-		prom_halt();
-		return 1;
-	}
-	return 0;
-}
-
 /* 
  * Process kernel command line switches that are specific to the
  * SPARC or that require special low-level processing.
@@ -142,7 +131,6 @@ static void __init process_switch(char c)
 		boot_flags |= BOOTME_DEBUG;
 		break;
 	case 's':
-		boot_flags |= BOOTME_SINGLE;
 		break;
 	case 'h':
 		prom_printf("boot_flags_init: Halt!\n");
@@ -331,7 +319,7 @@ void __init setup_arch(char **cmdline_p)
 	if (!root_flags)
 		root_mountflags &= ~MS_RDONLY;
 	ROOT_DEV = old_decode_dev(root_dev);
-#ifdef CONFIG_BLK_DEV_INITRD
+#ifdef CONFIG_BLK_DEV_RAM
 	rd_image_start = ram_flags & RAMDISK_IMAGE_START_MASK;
 	rd_prompt = ((ram_flags & RAMDISK_PROMPT_FLAG) != 0);
 	rd_doload = ((ram_flags & RAMDISK_LOAD_FLAG) != 0);	
@@ -349,6 +337,8 @@ void __init setup_arch(char **cmdline_p)
 	init_task.thread.kregs = &fake_swapper_regs;
 
 	paging_init();
+
+	smp_setup_cpu_possible_map();
 }
 
 static int __init set_preferred_console(void)
@@ -389,6 +379,8 @@ console_initcall(set_preferred_console);
 extern char *sparc_cpu_type;
 extern char *sparc_fpu_type;
 
+static int ncpus_probed;
+
 static int show_cpuinfo(struct seq_file *m, void *__unused)
 {
 	seq_printf(m,
@@ -411,7 +403,7 @@ static int show_cpuinfo(struct seq_file *m, void *__unused)
 		   romvec->pv_printrev >> 16,
 		   romvec->pv_printrev & 0xffff,
 		   &cputypval,
-		   num_possible_cpus(),
+		   ncpus_probed,
 		   num_online_cpus()
 #ifndef CONFIG_SMP
 		   , cpu_data(0).udelay_val/(500000/HZ),
@@ -471,3 +463,30 @@ void sun_do_break(void)
 
 int serial_console = -1;
 int stop_a_enabled = 1;
+
+static int __init topology_init(void)
+{
+	int i, ncpus, err;
+
+	/* Count the number of physically present processors in
+	 * the machine, even on uniprocessor, so that /proc/cpuinfo
+	 * output is consistent with 2.4.x
+	 */
+	ncpus = 0;
+	while (!cpu_find_by_instance(ncpus, NULL, NULL))
+		ncpus++;
+	ncpus_probed = ncpus;
+
+	err = 0;
+	for_each_online_cpu(i) {
+		struct cpu *p = kzalloc(sizeof(*p), GFP_KERNEL);
+		if (!p)
+			err = -ENOMEM;
+		else
+			register_cpu(p, i);
+	}
+
+	return err;
+}
+
+subsys_initcall(topology_init);

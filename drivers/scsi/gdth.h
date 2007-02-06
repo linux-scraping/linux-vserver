@@ -4,13 +4,13 @@
 /*
  * Header file for the GDT Disk Array/Storage RAID controllers driver for Linux
  * 
- * gdth.h Copyright (C) 1995-03 ICP vortex, Achim Leubner
+ * gdth.h Copyright (C) 1995-06 ICP vortex, Achim Leubner
  * See gdth.c for further informations and 
  * below for supported controller types
  *
  * <achim_leubner@adaptec.com>
  *
- * $Id: gdth.h,v 1.57 2004/03/31 11:52:09 achim Exp $
+ * $Id: gdth.h,v 1.58 2006/01/11 16:14:09 achim Exp $
  */
 
 #include <linux/version.h>
@@ -26,9 +26,9 @@
 /* defines, macros */
 
 /* driver version */
-#define GDTH_VERSION_STR        "3.04"
+#define GDTH_VERSION_STR        "3.05"
 #define GDTH_VERSION            3
-#define GDTH_SUBVERSION         4
+#define GDTH_SUBVERSION         5
 
 /* protocol version */
 #define PROTOCOL_VERSION        1
@@ -936,18 +936,12 @@ typedef struct {
     gdth_binfo_str      binfo;                  /* controller info */
     gdth_evt_data       dvr;                    /* event structure */
     spinlock_t          smp_lock;
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,4,0)
     struct pci_dev      *pdev;
-#endif
     char                oem_name[8];
 #ifdef GDTH_DMA_STATISTICS
     ulong               dma32_cnt, dma64_cnt;   /* statistics: DMA buffer */
 #endif
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,4,0)
     struct scsi_device         *sdev;
-#else
-    struct scsi_device         sdev;
-#endif
 } gdth_ha_str;
 
 /* structure for scsi_register(), SCSI bus != 0 */
@@ -1029,10 +1023,6 @@ typedef struct {
 
 /* function prototyping */
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,0)
 int gdth_proc_info(struct Scsi_Host *, char *,char **,off_t,int,int);
-#else
-int gdth_proc_info(char *,char **,off_t,int,int,int);
-#endif
 
 #endif

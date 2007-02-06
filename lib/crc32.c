@@ -42,20 +42,21 @@ MODULE_AUTHOR("Matt Domsch <Matt_Domsch@dell.com>");
 MODULE_DESCRIPTION("Ethernet CRC32 calculations");
 MODULE_LICENSE("GPL");
 
+/**
+ * crc32_le() - Calculate bitwise little-endian Ethernet AUTODIN II CRC32
+ * @crc: seed value for computation.  ~0 for Ethernet, sometimes 0 for
+ *	other uses, or the previous crc32 value if computing incrementally.
+ * @p: pointer to buffer over which CRC is run
+ * @len: length of buffer @p
+ */
+u32 __attribute_pure__ crc32_le(u32 crc, unsigned char const *p, size_t len);
+
 #if CRC_LE_BITS == 1
 /*
  * In fact, the table-based code will work in this case, but it can be
  * simplified by inlining the table in ?: form.
  */
 
-/**
- * crc32_le() - Calculate bitwise little-endian Ethernet AUTODIN II CRC32
- * @crc - seed value for computation.  ~0 for Ethernet, sometimes 0 for
- *        other uses, or the previous crc32 value if computing incrementally.
- * @p   - pointer to buffer over which CRC is run
- * @len - length of buffer @p
- * 
- */
 u32 __attribute_pure__ crc32_le(u32 crc, unsigned char const *p, size_t len)
 {
 	int i;
@@ -68,14 +69,6 @@ u32 __attribute_pure__ crc32_le(u32 crc, unsigned char const *p, size_t len)
 }
 #else				/* Table-based approach */
 
-/**
- * crc32_le() - Calculate bitwise little-endian Ethernet AUTODIN II CRC32
- * @crc - seed value for computation.  ~0 for Ethernet, sometimes 0 for
- *        other uses, or the previous crc32 value if computing incrementally.
- * @p   - pointer to buffer over which CRC is run
- * @len - length of buffer @p
- * 
- */
 u32 __attribute_pure__ crc32_le(u32 crc, unsigned char const *p, size_t len)
 {
 # if CRC_LE_BITS == 8
@@ -145,20 +138,21 @@ u32 __attribute_pure__ crc32_le(u32 crc, unsigned char const *p, size_t len)
 }
 #endif
 
+/**
+ * crc32_be() - Calculate bitwise big-endian Ethernet AUTODIN II CRC32
+ * @crc: seed value for computation.  ~0 for Ethernet, sometimes 0 for
+ *	other uses, or the previous crc32 value if computing incrementally.
+ * @p: pointer to buffer over which CRC is run
+ * @len: length of buffer @p
+ */
+u32 __attribute_pure__ crc32_be(u32 crc, unsigned char const *p, size_t len);
+
 #if CRC_BE_BITS == 1
 /*
  * In fact, the table-based code will work in this case, but it can be
  * simplified by inlining the table in ?: form.
  */
 
-/**
- * crc32_be() - Calculate bitwise big-endian Ethernet AUTODIN II CRC32
- * @crc - seed value for computation.  ~0 for Ethernet, sometimes 0 for
- *        other uses, or the previous crc32 value if computing incrementally.
- * @p   - pointer to buffer over which CRC is run
- * @len - length of buffer @p
- * 
- */
 u32 __attribute_pure__ crc32_be(u32 crc, unsigned char const *p, size_t len)
 {
 	int i;
@@ -173,14 +167,6 @@ u32 __attribute_pure__ crc32_be(u32 crc, unsigned char const *p, size_t len)
 }
 
 #else				/* Table-based approach */
-/**
- * crc32_be() - Calculate bitwise big-endian Ethernet AUTODIN II CRC32
- * @crc - seed value for computation.  ~0 for Ethernet, sometimes 0 for
- *        other uses, or the previous crc32 value if computing incrementally.
- * @p   - pointer to buffer over which CRC is run
- * @len - length of buffer @p
- * 
- */
 u32 __attribute_pure__ crc32_be(u32 crc, unsigned char const *p, size_t len)
 {
 # if CRC_BE_BITS == 8
@@ -249,19 +235,8 @@ u32 __attribute_pure__ crc32_be(u32 crc, unsigned char const *p, size_t len)
 }
 #endif
 
-u32 bitreverse(u32 x)
-{
-	x = (x >> 16) | (x << 16);
-	x = (x >> 8 & 0x00ff00ff) | (x << 8 & 0xff00ff00);
-	x = (x >> 4 & 0x0f0f0f0f) | (x << 4 & 0xf0f0f0f0);
-	x = (x >> 2 & 0x33333333) | (x << 2 & 0xcccccccc);
-	x = (x >> 1 & 0x55555555) | (x << 1 & 0xaaaaaaaa);
-	return x;
-}
-
 EXPORT_SYMBOL(crc32_le);
 EXPORT_SYMBOL(crc32_be);
-EXPORT_SYMBOL(bitreverse);
 
 /*
  * A brief CRC tutorial.
@@ -410,10 +385,7 @@ buf_dump(char const *prefix, unsigned char const *buf, size_t len)
 static void bytereverse(unsigned char *buf, size_t len)
 {
 	while (len--) {
-		unsigned char x = *buf;
-		x = (x >> 4) | (x << 4);
-		x = (x >> 2 & 0x33) | (x << 2 & 0xcc);
-		x = (x >> 1 & 0x55) | (x << 1 & 0xaa);
+		unsigned char x = bitrev8(*buf);
 		*buf++ = x;
 	}
 }
@@ -470,11 +442,11 @@ static u32 test_step(u32 init, unsigned char *buf, size_t len)
 	/* Now swap it around for the other test */
 
 	bytereverse(buf, len + 4);
-	init = bitreverse(init);
-	crc2 = bitreverse(crc1);
-	if (crc1 != bitreverse(crc2))
+	init = bitrev32(init);
+	crc2 = bitrev32(crc1);
+	if (crc1 != bitrev32(crc2))
 		printf("\nBit reversal fail: 0x%08x -> 0x%08x -> 0x%08x\n",
-		       crc1, crc2, bitreverse(crc2));
+		       crc1, crc2, bitrev32(crc2));
 	crc1 = crc32_le(init, buf, len);
 	if (crc1 != crc2)
 		printf("\nCRC endianness fail: 0x%08x != 0x%08x\n", crc1,

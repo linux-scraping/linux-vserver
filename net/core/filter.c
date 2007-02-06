@@ -178,7 +178,7 @@ unsigned int sk_run_filter(struct sk_buff *skb, struct sock_filter *filter, int 
 load_w:
 			ptr = load_pointer(skb, k, 4, &tmp);
 			if (ptr != NULL) {
-				A = ntohl(get_unaligned((u32 *)ptr));
+				A = ntohl(get_unaligned((__be32 *)ptr));
 				continue;
 			}
 			break;
@@ -187,7 +187,7 @@ load_w:
 load_h:
 			ptr = load_pointer(skb, k, 2, &tmp);
 			if (ptr != NULL) {
-				A = ntohs(get_unaligned((u16 *)ptr));
+				A = ntohs(get_unaligned((__be16 *)ptr));
 				continue;
 			}
 			break;
@@ -261,7 +261,7 @@ load_b:
 		 */
 		switch (k-SKF_AD_OFF) {
 		case SKF_AD_PROTOCOL:
-			A = htons(skb->protocol);
+			A = ntohs(skb->protocol);
 			continue;
 		case SKF_AD_PKTTYPE:
 			A = skb->pkt_type;
@@ -422,10 +422,10 @@ int sk_attach_filter(struct sock_fprog *fprog, struct sock *sk)
 	if (!err) {
 		struct sk_filter *old_fp;
 
-		spin_lock_bh(&sk->sk_lock.slock);
-		old_fp = sk->sk_filter;
-		sk->sk_filter = fp;
-		spin_unlock_bh(&sk->sk_lock.slock);
+		rcu_read_lock_bh();
+		old_fp = rcu_dereference(sk->sk_filter);
+		rcu_assign_pointer(sk->sk_filter, fp);
+		rcu_read_unlock_bh();
 		fp = old_fp;
 	}
 

@@ -12,7 +12,6 @@
  *		Fred N. van Kempen, <waltje@uwalt.nl.mugnet.org>
  */
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <asm/system.h>
 #include <asm/uaccess.h>
@@ -308,9 +307,9 @@ static int sp_set_mac_address(struct net_device *dev, void *addr)
 {
 	struct sockaddr_ax25 *sa = addr;
 
-	spin_lock_irq(&dev->xmit_lock);
+	netif_tx_lock_bh(dev);
 	memcpy(dev->dev_addr, &sa->sax25_call, AX25_ADDR_LEN);
-	spin_unlock_irq(&dev->xmit_lock);
+	netif_tx_unlock_bh(dev);
 
 	return 0;
 }
@@ -326,11 +325,6 @@ static int sp_rebuild_header(struct sk_buff *skb)
 
 static void sp_setup(struct net_device *dev)
 {
-	static char ax25_bcast[AX25_ADDR_LEN] =
-		{'Q'<<1,'S'<<1,'T'<<1,' '<<1,' '<<1,' '<<1,'0'<<1};
-	static char ax25_test[AX25_ADDR_LEN] =
-		{'L'<<1,'I'<<1,'N'<<1,'U'<<1,'X'<<1,' '<<1,'1'<<1};
-
 	/* Finish setting up the DEVICE info. */
 	dev->mtu		= SIXP_MTU;
 	dev->hard_start_xmit	= sp_xmit;
@@ -348,8 +342,8 @@ static void sp_setup(struct net_device *dev)
 	dev->tx_timeout		= NULL;
 
 	/* Only activated in AX.25 mode */
-	memcpy(dev->broadcast, ax25_bcast, AX25_ADDR_LEN);
-	memcpy(dev->dev_addr, ax25_test, AX25_ADDR_LEN);
+	memcpy(dev->broadcast, &ax25_bcast, AX25_ADDR_LEN);
+	memcpy(dev->dev_addr, &ax25_defaddr, AX25_ADDR_LEN);
 
 	SET_MODULE_OWNER(dev);
 
@@ -767,9 +761,9 @@ static int sixpack_ioctl(struct tty_struct *tty, struct file *file,
 			break;
 		}
 
-		spin_lock_irq(&dev->xmit_lock);
+		netif_tx_lock_bh(dev);
 		memcpy(dev->dev_addr, &addr, AX25_ADDR_LEN);
-		spin_unlock_irq(&dev->xmit_lock);
+		netif_tx_unlock_bh(dev);
 
 		err = 0;
 		break;
@@ -915,7 +909,7 @@ static void decode_prio_command(struct sixpack *sp, unsigned char cmd)
 					printk(KERN_DEBUG "6pack: protocol violation\n");
 				else
 					sp->status = 0;
-				cmd &= !SIXP_RX_DCD_MASK;
+				cmd &= ~SIXP_RX_DCD_MASK;
 		}
 		sp->status = cmd & SIXP_PRIO_DATA_MASK;
 	} else { /* output watchdog char if idle */

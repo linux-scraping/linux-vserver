@@ -7,7 +7,6 @@
  *   Pat Gefre <pfg@sgi.com> - IOC3 serial port IRQ demuxer
  */
 
-#include <linux/config.h>
 #include <linux/errno.h>
 #include <linux/module.h>
 #include <linux/pci.h>
@@ -26,7 +25,7 @@ static DECLARE_RWSEM(ioc3_devices_rwsem);
 
 static struct ioc3_submodule *ioc3_submodules[IOC3_MAX_SUBMODULES];
 static struct ioc3_submodule *ioc3_ethernet;
-static rwlock_t ioc3_submodules_lock = RW_LOCK_UNLOCKED;
+static DEFINE_RWLOCK(ioc3_submodules_lock);
 
 /* NIC probing code */
 
@@ -399,10 +398,10 @@ static inline uint32_t get_pending_intrs(struct ioc3_driver_data *idd)
 	return intrs;
 }
 
-static irqreturn_t ioc3_intr_io(int irq, void *arg, struct pt_regs *regs)
+static irqreturn_t ioc3_intr_io(int irq, void *arg)
 {
 	unsigned long flags;
-	struct ioc3_driver_data *idd = (struct ioc3_driver_data *)arg;
+	struct ioc3_driver_data *idd = arg;
 	int handled = 1, id;
 	unsigned int pending;
 
@@ -413,7 +412,7 @@ static irqreturn_t ioc3_intr_io(int irq, void *arg, struct pt_regs *regs)
 		if(ioc3_ethernet && idd->active[ioc3_ethernet->id] &&
 						ioc3_ethernet->intr) {
 			handled = handled && !ioc3_ethernet->intr(ioc3_ethernet,
-							idd, 0, regs);
+							idd, 0);
 		}
 	}
 	pending = get_pending_intrs(idd);	/* look at the IO IRQs */
@@ -425,8 +424,7 @@ static irqreturn_t ioc3_intr_io(int irq, void *arg, struct pt_regs *regs)
 			write_ireg(idd, ioc3_submodules[id]->irq_mask,
 							IOC3_W_IEC);
 			if(!ioc3_submodules[id]->intr(ioc3_submodules[id],
-				   idd, pending & ioc3_submodules[id]->irq_mask,
-					regs))
+				   idd, pending & ioc3_submodules[id]->irq_mask))
 				pending &= ~ioc3_submodules[id]->irq_mask;
 			if (ioc3_submodules[id]->reset_mask)
 				write_ireg(idd, ioc3_submodules[id]->irq_mask,
@@ -443,7 +441,7 @@ static irqreturn_t ioc3_intr_io(int irq, void *arg, struct pt_regs *regs)
 	return handled?IRQ_HANDLED:IRQ_NONE;
 }
 
-static irqreturn_t ioc3_intr_eth(int irq, void *arg, struct pt_regs *regs)
+static irqreturn_t ioc3_intr_eth(int irq, void *arg)
 {
 	unsigned long flags;
 	struct ioc3_driver_data *idd = (struct ioc3_driver_data *)arg;
@@ -454,8 +452,7 @@ static irqreturn_t ioc3_intr_eth(int irq, void *arg, struct pt_regs *regs)
 	read_lock_irqsave(&ioc3_submodules_lock, flags);
 	if(ioc3_ethernet && idd->active[ioc3_ethernet->id]
 				&& ioc3_ethernet->intr)
-		handled = handled && !ioc3_ethernet->intr(ioc3_ethernet, idd, 0,
-								regs);
+		handled = handled && !ioc3_ethernet->intr(ioc3_ethernet, idd, 0);
 	read_unlock_irqrestore(&ioc3_submodules_lock, flags);
 	return handled?IRQ_HANDLED:IRQ_NONE;
 }
@@ -707,7 +704,7 @@ static int ioc3_probe(struct pci_dev *pdev, const struct pci_device_id *pci_id)
 		writel(~0, &idd->vma->eisr);
 
 		idd->dual_irq = 1;
-		if (!request_irq(pdev->irq, ioc3_intr_eth, SA_SHIRQ,
+		if (!request_irq(pdev->irq, ioc3_intr_eth, IRQF_SHARED,
 				 "ioc3-eth", (void *)idd)) {
 			idd->irq_eth = pdev->irq;
 		} else {
@@ -715,7 +712,7 @@ static int ioc3_probe(struct pci_dev *pdev, const struct pci_device_id *pci_id)
 			       "%s : request_irq fails for IRQ 0x%x\n ",
 			       __FUNCTION__, pdev->irq);
 		}
-		if (!request_irq(pdev->irq+2, ioc3_intr_io, SA_SHIRQ,
+		if (!request_irq(pdev->irq+2, ioc3_intr_io, IRQF_SHARED,
 				 "ioc3-io", (void *)idd)) {
 			idd->irq_io = pdev->irq+2;
 		} else {
@@ -724,7 +721,7 @@ static int ioc3_probe(struct pci_dev *pdev, const struct pci_device_id *pci_id)
 			       __FUNCTION__, pdev->irq+2);
 		}
 	} else {
-		if (!request_irq(pdev->irq, ioc3_intr_io, SA_SHIRQ,
+		if (!request_irq(pdev->irq, ioc3_intr_io, IRQF_SHARED,
 				 "ioc3", (void *)idd)) {
 			idd->irq_io = pdev->irq;
 		} else {

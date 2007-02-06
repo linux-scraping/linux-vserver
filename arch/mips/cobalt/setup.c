@@ -9,7 +9,6 @@
  * Copyright (C) 2001, 2002, 2003 by Liam Davies (ldavies@agile.tv)
  *
  */
-#include <linux/config.h>
 #include <linux/interrupt.h>
 #include <linux/pci.h>
 #include <linux/init.h>
@@ -24,7 +23,6 @@
 #include <asm/processor.h>
 #include <asm/reboot.h>
 #include <asm/gt64120.h>
-#include <asm/serial.h>
 
 #include <asm/mach-cobalt/cobalt.h>
 
@@ -50,37 +48,64 @@ const char *get_system_type(void)
 	return "MIPS Cobalt";
 }
 
-static void __init cobalt_timer_setup(struct irqaction *irq)
+void __init plat_timer_setup(struct irqaction *irq)
 {
-	/* Load timer value for 1KHz (TCLK is 50MHz) */
-	GALILEO_OUTL(50*1000*1000 / 1000, GT_TC0_OFS);
+	/* Load timer value for HZ (TCLK is 50MHz) */
+	GT_WRITE(GT_TC0_OFS, 50*1000*1000 / HZ);
 
 	/* Enable timer */
-	GALILEO_OUTL(GALILEO_ENTC0 | GALILEO_SELTC0, GT_TC_CONTROL_OFS);
+	GT_WRITE(GT_TC_CONTROL_OFS, GT_TC_CONTROL_ENTC0_MSK | GT_TC_CONTROL_SELTC0_MSK);
 
 	/* Register interrupt */
 	setup_irq(COBALT_GALILEO_IRQ, irq);
 
 	/* Enable interrupt */
-	GALILEO_OUTL(GALILEO_INTR_T0EXP | GALILEO_INL(GT_INTRMASK_OFS), GT_INTRMASK_OFS);
+	GT_WRITE(GT_INTRMASK_OFS, GT_INTR_T0EXP_MSK | GT_READ(GT_INTRMASK_OFS));
 }
 
 extern struct pci_ops gt64111_pci_ops;
 
 static struct resource cobalt_mem_resource = {
-	"PCI memory", GT64111_MEM_BASE, GT64111_MEM_END, IORESOURCE_MEM
+	.start	= GT_DEF_PCI0_MEM0_BASE,
+	.end	= GT_DEF_PCI0_MEM0_BASE + GT_DEF_PCI0_MEM0_SIZE - 1,
+	.name	= "PCI memory",
+	.flags	= IORESOURCE_MEM
 };
 
 static struct resource cobalt_io_resource = {
-	"PCI I/O", 0x1000, 0xffff, IORESOURCE_IO
+	.start	= 0x1000,
+	.end	= 0xffff,
+	.name	= "PCI I/O",
+	.flags	= IORESOURCE_IO
 };
 
 static struct resource cobalt_io_resources[] = {
-	{ "dma1", 0x00, 0x1f, IORESOURCE_BUSY },
-	{ "timer", 0x40, 0x5f, IORESOURCE_BUSY },
-	{ "keyboard", 0x60, 0x6f, IORESOURCE_BUSY },
-	{ "dma page reg", 0x80, 0x8f, IORESOURCE_BUSY },
-	{ "dma2", 0xc0, 0xdf, IORESOURCE_BUSY },
+	{
+		.start	= 0x00,
+		.end	= 0x1f,
+		.name	= "dma1",
+		.flags	= IORESOURCE_BUSY
+	}, {
+		.start	= 0x40,
+		.end	= 0x5f,
+		.name	= "timer",
+		.flags	= IORESOURCE_BUSY
+	}, {
+		.start	= 0x60,
+		.end	= 0x6f,
+		.name	= "keyboard",
+		.flags	= IORESOURCE_BUSY
+	}, {
+		.start	= 0x80,
+		.end	= 0x8f,
+		.name	= "dma page reg",
+		.flags	= IORESOURCE_BUSY
+	}, {
+		.start	= 0xc0,
+		.end	= 0xdf,
+		.name	= "dma2",
+		.flags	= IORESOURCE_BUSY
+	},
 };
 
 #define COBALT_IO_RESOURCES (sizeof(cobalt_io_resources)/sizeof(struct resource))
@@ -90,10 +115,10 @@ static struct pci_controller cobalt_pci_controller = {
 	.mem_resource	= &cobalt_mem_resource,
 	.mem_offset	= 0,
 	.io_resource	= &cobalt_io_resource,
-	.io_offset	= 0 - GT64111_IO_BASE
+	.io_offset	= 0 - GT_DEF_PCI0_IO_BASE,
 };
 
-void __init plat_setup(void)
+void __init plat_mem_setup(void)
 {
 	static struct uart_port uart;
 	unsigned int devfn = PCI_DEVFN(COBALT_PCICONF_VIA, 0);
@@ -103,9 +128,7 @@ void __init plat_setup(void)
 	_machine_halt = cobalt_machine_halt;
 	pm_power_off = cobalt_machine_power_off;
 
-	board_timer_setup = cobalt_timer_setup;
-
-        set_io_port_base(CKSEG1ADDR(GT64111_IO_BASE));
+	set_io_port_base(CKSEG1ADDR(GT_DEF_PCI0_IO_BASE));
 
 	/* I/O port resource must include UART and LCD/buttons */
 	ioport_resource.end = 0x0fffffff;
@@ -116,7 +139,7 @@ void __init plat_setup(void)
 
         /* Read the cobalt id register out of the PCI config space */
         PCI_CFG_SET(devfn, (VIA_COBALT_BRD_ID_REG & ~0x3));
-        cobalt_board_id = GALILEO_INL(GT_PCI0_CFGDATA_OFS);
+        cobalt_board_id = GT_READ(GT_PCI0_CFGDATA_OFS);
         cobalt_board_id >>= ((VIA_COBALT_BRD_ID_REG & 3) * 8);
         cobalt_board_id = VIA_COBALT_BRD_REG_to_ID(cobalt_board_id);
 

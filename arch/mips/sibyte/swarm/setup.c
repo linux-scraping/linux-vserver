@@ -21,14 +21,13 @@
  * Setup code for the SWARM board
  */
 
-#include <linux/config.h>
 #include <linux/spinlock.h>
 #include <linux/mm.h>
 #include <linux/bootmem.h>
 #include <linux/blkdev.h>
 #include <linux/init.h>
 #include <linux/kernel.h>
-#include <linux/tty.h>
+#include <linux/screen_info.h>
 #include <linux/initrd.h>
 
 #include <asm/irq.h>
@@ -44,7 +43,7 @@
 #elif defined(CONFIG_SIBYTE_SB1250) || defined(CONFIG_SIBYTE_BCM112X)
 #include <asm/sibyte/sb1250_regs.h>
 #else
-#error invalid SiByte board configuation
+#error invalid SiByte board configuration
 #endif
 #include <asm/sibyte/sb1250_genbus.h>
 #include <asm/sibyte/board.h>
@@ -54,7 +53,7 @@ extern void bcm1480_setup(void);
 #elif defined(CONFIG_SIBYTE_SB1250) || defined(CONFIG_SIBYTE_BCM112X)
 extern void sb1250_setup(void);
 #else
-#error invalid SiByte board configuation
+#error invalid SiByte board configuration
 #endif
 
 extern int xicor_probe(void);
@@ -72,11 +71,13 @@ const char *get_system_type(void)
 
 void __init swarm_time_init(void)
 {
+#if defined(CONFIG_SIBYTE_SB1250) || defined(CONFIG_SIBYTE_BCM112X)
 	/* Setup HPT */
 	sb1250_hpt_setup();
+#endif
 }
 
-void __init swarm_timer_setup(struct irqaction *irq)
+void __init plat_timer_setup(struct irqaction *irq)
 {
         /*
          * we don't set up irqaction, because we will deliver timer
@@ -89,7 +90,7 @@ void __init swarm_timer_setup(struct irqaction *irq)
 #elif defined(CONFIG_SIBYTE_SB1250) || defined(CONFIG_SIBYTE_BCM112X)
 	sb1250_time_init();
 #else
-#error invalid SiByte board configuation
+#error invalid SiByte board configuration
 #endif
 }
 
@@ -103,20 +104,19 @@ int swarm_be_handler(struct pt_regs *regs, int is_fixup)
 	return (is_fixup ? MIPS_BE_FIXUP : MIPS_BE_FATAL);
 }
 
-void __init plat_setup(void)
+void __init plat_mem_setup(void)
 {
 #if defined(CONFIG_SIBYTE_BCM1x55) || defined(CONFIG_SIBYTE_BCM1x80)
 	bcm1480_setup();
 #elif defined(CONFIG_SIBYTE_SB1250) || defined(CONFIG_SIBYTE_BCM112X)
 	sb1250_setup();
 #else
-#error invalid SiByte board configuation
+#error invalid SiByte board configuration
 #endif
 
 	panic_timeout = 5;  /* For debug.  */
 
 	board_time_init = swarm_time_init;
-	board_timer_setup = swarm_timer_setup;
 	board_be_handler = swarm_be_handler;
 
 	if (xicor_probe()) {

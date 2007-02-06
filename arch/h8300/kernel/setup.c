@@ -16,7 +16,6 @@
  * This file handles the architecture-dependent parts of system setup
  */
 
-#include <linux/config.h>
 #include <linux/kernel.h>
 #include <linux/sched.h>
 #include <linux/delay.h>
@@ -117,7 +116,7 @@ void __init setup_arch(char **cmdline_p)
 #endif
 #else
 	if ((memory_end < CONFIG_BLKDEV_RESERVE_ADDRESS) && 
-	    (memory_end > CONFIG_BLKDEV_RESERVE_ADDRESS)
+	    (memory_end > CONFIG_BLKDEV_RESERVE_ADDRESS))
 	    /* overlap userarea */
 	    memory_end = CONFIG_BLKDEV_RESERVE_ADDRESS; 
 #endif

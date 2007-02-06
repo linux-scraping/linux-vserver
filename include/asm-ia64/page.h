@@ -7,7 +7,7 @@
  *	David Mosberger-Tang <davidm@hpl.hp.com>
  */
 
-#include <linux/config.h>
+# ifdef __KERNEL__
 
 #include <asm/intrinsics.h>
 #include <asm/types.h>
@@ -65,7 +65,6 @@
 # define __pa(x)		((x) - PAGE_OFFSET)
 # define __va(x)		((x) + PAGE_OFFSET)
 #else /* !__ASSEMBLY */
-# ifdef __KERNEL__
 #  define STRICT_MM_TYPECHECKS
 
 extern void clear_page (void *page);
@@ -102,7 +101,7 @@ do {						\
 
 #ifdef CONFIG_VIRTUAL_MEM_MAP
 extern int ia64_pfn_valid (unsigned long pfn);
-#elif defined(CONFIG_FLATMEM)
+#else
 # define ia64_pfn_valid(pfn) 1
 #endif
 
@@ -111,12 +110,11 @@ extern struct page *vmem_map;
 #ifdef CONFIG_DISCONTIGMEM
 # define page_to_pfn(page)	((unsigned long) (page - vmem_map))
 # define pfn_to_page(pfn)	(vmem_map + (pfn))
+#else
+# include <asm-generic/memory_model.h>
 #endif
-#endif
-
-#if defined(CONFIG_FLATMEM) || defined(CONFIG_SPARSEMEM)
-/* FLATMEM always configures mem_map (mem_map = vmem_map if necessary) */
-#include <asm-generic/memory_model.h>
+#else
+# include <asm-generic/memory_model.h>
 #endif
 
 #ifdef CONFIG_FLATMEM
@@ -175,7 +173,6 @@ get_order (unsigned long size)
 	return order;
 }
 
-# endif /* __KERNEL__ */
 #endif /* !__ASSEMBLY__ */
 
 #ifdef STRICT_MM_TYPECHECKS
@@ -229,4 +226,5 @@ get_order (unsigned long size)
 					 (((current->personality & READ_IMPLIES_EXEC) != 0)	\
 					  ? VM_EXEC : 0))
 
+# endif /* __KERNEL__ */
 #endif /* _ASM_IA64_PAGE_H */

@@ -1,7 +1,7 @@
 /*
  *  Interrupt handing routines for NEC VR4100 series.
  *
- *  Copyright (C) 2005  Yoichi Yuasa <yoichi_yuasa@tripeaks.co.jp>
+ *  Copyright (C) 2005-2007  Yoichi Yuasa <yoichi_yuasa@tripeaks.co.jp>
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -22,10 +22,10 @@
 
 #include <asm/irq_cpu.h>
 #include <asm/system.h>
-#include <asm/vr41xx/vr41xx.h>
+#include <asm/vr41xx/irq.h>
 
 typedef struct irq_cascade {
-	int (*get_irq)(unsigned int, struct pt_regs *);
+	int (*get_irq)(unsigned int);
 } irq_cascade_t;
 
 static irq_cascade_t irq_cascade[NR_IRQS] __cacheline_aligned;
@@ -36,7 +36,7 @@ static struct irqaction cascade_irqaction = {
 	.name		= "cascade",
 };
 
-int cascade_irq(unsigned int irq, int (*get_irq)(unsigned int, struct pt_regs *))
+int cascade_irq(unsigned int irq, int (*get_irq)(unsigned int))
 {
 	int retval = 0;
 
@@ -59,10 +59,10 @@ int cascade_irq(unsigned int irq, int (*get_irq)(unsigned int, struct pt_regs *)
 
 EXPORT_SYMBOL_GPL(cascade_irq);
 
-static void irq_dispatch(unsigned int irq, struct pt_regs *regs)
+static void irq_dispatch(unsigned int irq)
 {
 	irq_cascade_t *cascade;
-	irq_desc_t *desc;
+	struct irq_desc *desc;
 
 	if (irq >= NR_IRQS) {
 		atomic_inc(&irq_err_count);
@@ -73,40 +73,46 @@ static void irq_dispatch(unsigned int irq, struct pt_regs *regs)
 	if (cascade->get_irq != NULL) {
 		unsigned int source_irq = irq;
 		desc = irq_desc + source_irq;
-		desc->handler->ack(source_irq);
-		irq = cascade->get_irq(irq, regs);
+		if (desc->chip->mask_ack)
+			desc->chip->mask_ack(source_irq);
+		else {
+			desc->chip->mask(source_irq);
+			desc->chip->ack(source_irq);
+		}
+		irq = cascade->get_irq(irq);
 		if (irq < 0)
 			atomic_inc(&irq_err_count);
 		else
-			irq_dispatch(irq, regs);
-		desc->handler->end(source_irq);
+			irq_dispatch(irq);
+		if (!(desc->status & IRQ_DISABLED) && desc->chip->unmask)
+			desc->chip->unmask(source_irq);
 	} else
-		do_IRQ(irq, regs);
+		do_IRQ(irq);
 }
 
-asmlinkage void plat_irq_dispatch(struct pt_regs *regs)
+asmlinkage void plat_irq_dispatch(void)
 {
 	unsigned int pending = read_c0_cause() & read_c0_status() & ST0_IM;
 
 	if (pending & CAUSEF_IP7)
-		do_IRQ(7, regs);
+		do_IRQ(7);
 	else if (pending & 0x7800) {
 		if (pending & CAUSEF_IP3)
-			irq_dispatch(3, regs);
+			irq_dispatch(3);
 		else if (pending & CAUSEF_IP4)
-			irq_dispatch(4, regs);
+			irq_dispatch(4);
 		else if (pending & CAUSEF_IP5)
-			irq_dispatch(5, regs);
+			irq_dispatch(5);
 		else if (pending & CAUSEF_IP6)
-			irq_dispatch(6, regs);
+			irq_dispatch(6);
 	} else if (pending & CAUSEF_IP2)
-		irq_dispatch(2, regs);
+		irq_dispatch(2);
 	else if (pending & CAUSEF_IP0)
-		do_IRQ(0, regs);
+		do_IRQ(0);
 	else if (pending & CAUSEF_IP1)
-		do_IRQ(1, regs);
+		do_IRQ(1);
 	else
-		spurious_interrupt(regs);
+		spurious_interrupt();
 }
 
 void __init arch_init_irq(void)

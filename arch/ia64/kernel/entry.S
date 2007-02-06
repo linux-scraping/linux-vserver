@@ -1,5 +1,5 @@
 /*
- * ia64/kernel/entry.S
+ * arch/ia64/kernel/entry.S
  *
  * Kernel entry points.
  *
@@ -31,7 +31,6 @@
  *	pNonSys:	!pSys
  */
 
-#include <linux/config.h>
 
 #include <asm/asmmacro.h>
 #include <asm/cache.h>
@@ -493,11 +492,11 @@ GLOBAL_ENTRY(prefetch_stack)
 	br.ret.sptk.many rp
 END(prefetch_stack)
 
-GLOBAL_ENTRY(execve)
+GLOBAL_ENTRY(kernel_execve)
 	mov r15=__NR_execve			// put syscall number in place
 	break __BREAK_SYSCALL
 	br.ret.sptk.many rp
-END(execve)
+END(kernel_execve)
 
 GLOBAL_ENTRY(clone)
 	mov r15=__NR_clone			// put syscall number in place
@@ -1576,7 +1575,7 @@ sys_call_table:
 	data8 sys_mq_timedreceive		// 1265
 	data8 sys_mq_notify
 	data8 sys_mq_getsetattr
-	data8 sys_ni_syscall			// reserved for kexec_load
+	data8 sys_kexec_load
 	data8 sys_vserver
 	data8 sys_waitid			// 1270
 	data8 sys_add_key
@@ -1584,7 +1583,7 @@ sys_call_table:
 	data8 sys_keyctl
 	data8 sys_ioprio_set
 	data8 sys_ioprio_get			// 1275
-	data8 sys_ni_syscall
+	data8 sys_move_pages
 	data8 sys_inotify_init
 	data8 sys_inotify_add_watch
 	data8 sys_inotify_rm_watch

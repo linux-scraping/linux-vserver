@@ -11,6 +11,7 @@
 #include <linux/skbuff.h>
 #include <linux/socket.h>
 #include <linux/list.h>
+#include <linux/workqueue.h>
 
 struct uml_net {
 	struct list_head list;
@@ -18,7 +19,6 @@ struct uml_net {
 	struct platform_device pdev;
 	int index;
 	unsigned char mac[ETH_ALEN];
-	int have_mac;
 };
 
 struct uml_net_private {
@@ -27,9 +27,9 @@ struct uml_net_private {
 	struct net_device *dev;
 	struct timer_list tl;
 	struct net_device_stats stats;
+	struct work_struct work;
 	int fd;
 	unsigned char mac[ETH_ALEN];
-	int have_mac;
 	unsigned short (*protocol)(struct sk_buff *);
 	int (*open)(void *);
 	void (*close)(int, void *);
@@ -54,15 +54,14 @@ struct transport {
 	struct list_head list;
 	char *name;
 	int (*setup)(char *, char **, void *);
-	struct net_user_info *user;
-	struct net_kern_info *kern;
+	const struct net_user_info *user;
+	const struct net_kern_info *kern;
 	int private_size;
 	int setup_size;
 };
 
 extern struct net_device *ether_init(int);
 extern unsigned short ether_protocol(struct sk_buff *);
-extern int setup_etheraddr(char *str, unsigned char *addr);
 extern struct sk_buff *ether_adjust_skb(struct sk_buff *skb, int extra);
 extern int tap_setup_common(char *str, char *type, char **dev_name, 
 			    char **mac_out, char **gate_addr);
@@ -70,14 +69,3 @@ extern void register_transport(struct transport *new);
 extern unsigned short eth_protocol(struct sk_buff *skb);
 
 #endif
-
-/*
- * Overrides for Emacs so that we follow Linus's tabbing style.
- * Emacs will notice this stuff at the end of the file and automatically
- * adjust the settings for this buffer only.  This must remain at the end
- * of the file.
- * ---------------------------------------------------------------------------
- * Local variables:
- * c-file-style: "linux"
- * End:
- */

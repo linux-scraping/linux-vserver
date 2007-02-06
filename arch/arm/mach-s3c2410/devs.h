@@ -8,16 +8,18 @@
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
- *
- * Modifications:
- *      18-Aug-2004 BJD  Created initial version
- *	27-Aug-2004 BJD  Added timers 0 through 3
- *	10-Feb-2005 BJD	 Added camera from guillaume.gourat@nexvision.tv
 */
-#include <linux/config.h>
 #include <linux/platform_device.h>
 
+struct s3c24xx_uart_resources {
+	struct resource		*resources;
+	unsigned long		 nr_resources;
+};
+
+extern struct s3c24xx_uart_resources s3c2410_uart_resources[];
+
 extern struct platform_device *s3c24xx_uart_devs[];
+extern struct platform_device *s3c24xx_uart_src[];
 
 extern struct platform_device s3c_device_usb;
 extern struct platform_device s3c_device_lcd;

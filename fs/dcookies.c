@@ -12,7 +12,6 @@
  * to the pair and can be looked up from userspace.
  */
 
-#include <linux/config.h>
 #include <linux/syscalls.h>
 #include <linux/module.h>
 #include <linux/slab.h>
@@ -38,7 +37,7 @@ struct dcookie_struct {
 
 static LIST_HEAD(dcookie_users);
 static DEFINE_MUTEX(dcookie_mutex);
-static kmem_cache_t *dcookie_cache __read_mostly;
+static struct kmem_cache *dcookie_cache __read_mostly;
 static struct list_head *dcookie_hashtable __read_mostly;
 static size_t hash_size __read_mostly;
 

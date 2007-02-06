@@ -12,8 +12,11 @@
 #define _ASM_PTRACE_H
 
 #include <asm/registers.h>
+#ifdef __KERNEL__
+#include <asm/irq_regs.h>
 
 #define in_syscall(regs) (((regs)->tbr & TBR_TT) == TBR_TT_TRAP0)
+#endif
 
 
 #define PT_PSR		0
@@ -59,21 +62,14 @@
 #define PTRACE_GETFDPIC_EXEC	0	/* [addr] request the executable loadmap */
 #define PTRACE_GETFDPIC_INTERP	1	/* [addr] request the interpreter loadmap */
 
+#ifdef __KERNEL__
 #ifndef __ASSEMBLY__
 
 /*
- * dedicate GR28; to keeping the a pointer to the current exception frame
+ * we dedicate GR28 to keeping a pointer to the current exception frame
+ * - gr28 is destroyed on entry to the kernel from userspace
  */
 register struct pt_regs *__frame asm("gr28");
-register struct pt_regs *__debug_frame asm("gr31");
-
-#ifndef container_of
-#define container_of(ptr, type, member) ({			\
-        const typeof( ((type *)0)->member ) *__mptr = (ptr);	\
-        (type *)( (char *)__mptr - offsetof(type,member) );})
-#endif
-
-#define __debug_regs container_of(__debug_frame, struct pt_debug_regs, normal_regs)
 
 #define user_mode(regs)			(!((regs)->psr & PSR_S))
 #define instruction_pointer(regs)	((regs)->pc)
@@ -81,6 +77,7 @@ register struct pt_regs *__debug_frame asm("gr31");
 extern unsigned long user_stack(const struct pt_regs *);
 extern void show_regs(struct pt_regs *);
 #define profile_pc(regs) ((regs)->pc)
+#endif
 
 #endif /* !__ASSEMBLY__ */
 #endif /* _ASM_PTRACE_H */

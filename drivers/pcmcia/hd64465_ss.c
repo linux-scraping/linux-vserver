@@ -244,8 +244,8 @@ static void hs_map_irq(hs_socket_t *sp, unsigned int irq)
 
     	hs_mapped_irq[irq].sock = sp;
 	/* insert ourselves as the irq controller */
-	hs_mapped_irq[irq].old_handler = irq_desc[irq].handler;
-	irq_desc[irq].handler = &hd64465_ss_irq_type;
+	hs_mapped_irq[irq].old_handler = irq_desc[irq].chip;
+	irq_desc[irq].chip = &hd64465_ss_irq_type;
 }
 
 
@@ -260,7 +260,7 @@ static void hs_unmap_irq(hs_socket_t *sp, unsigned int irq)
 	    return;
 		
 	/* restore the original irq controller */
-	irq_desc[irq].handler = hs_mapped_irq[irq].old_handler;
+	irq_desc[irq].chip = hs_mapped_irq[irq].old_handler;
 }
 
 /*============================================================*/
@@ -650,7 +650,7 @@ static int hs_set_mem_map(struct pcmcia_socket *s, struct pccard_mem_map *mem)
  */
 static int hs_irq_demux(int irq, void *dev)
 {
-    	hs_socket_t *sp = (hs_socket_t *)dev;
+    	hs_socket_t *sp = dev;
 	u_int cscr;
     	
     	DPRINTK("hs_irq_demux(irq=%d)\n", irq);
@@ -671,13 +671,12 @@ static int hs_irq_demux(int irq, void *dev)
  * Interrupt handling routine.
  */
  
-static irqreturn_t hs_interrupt(int irq, void *dev, struct pt_regs *regs)
+static irqreturn_t hs_interrupt(int irq, void *dev)
 {
-    	hs_socket_t *sp = (hs_socket_t *)dev;
+    	hs_socket_t *sp = dev;
 	u_int events = 0;
 	u_int cscr;
-	
-	
+
 	cscr = hs_in(sp, CSCR);
 	
 	DPRINTK("hs_interrupt, cscr=%04x\n", cscr);
@@ -761,7 +760,7 @@ static int hs_init_socket(hs_socket_t *sp, int irq, unsigned long mem_base,
 	
 	hd64465_register_irq_demux(sp->irq, hs_irq_demux, sp);
 	
-    	if ((err = request_irq(sp->irq, hs_interrupt, SA_INTERRUPT, MODNAME, sp)) < 0)
+    	if ((err = request_irq(sp->irq, hs_interrupt, IRQF_DISABLED, MODNAME, sp)) < 0)
 	    return err;
     	if (request_mem_region(sp->mem_base, sp->mem_length, MODNAME) == 0) {
     	    sp->mem_base = 0;

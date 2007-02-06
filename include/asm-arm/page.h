@@ -10,19 +10,24 @@
 #ifndef _ASMARM_PAGE_H
 #define _ASMARM_PAGE_H
 
-#include <linux/config.h>
+
+#ifdef __KERNEL__
 
 /* PAGE_SHIFT determines the page size */
 #define PAGE_SHIFT		12
 #define PAGE_SIZE		(1UL << PAGE_SHIFT)
 #define PAGE_MASK		(~(PAGE_SIZE-1))
 
-#ifdef __KERNEL__
-
 /* to align the pointer to the (next) page boundary */
 #define PAGE_ALIGN(addr)	(((addr)+PAGE_SIZE-1)&PAGE_MASK)
 
 #ifndef __ASSEMBLY__
+
+#ifndef CONFIG_MMU
+
+#include "page-nommu.h"
+
+#else
 
 #include <asm/glue.h>
 
@@ -169,8 +174,7 @@ typedef unsigned long pgprot_t;
 
 #endif /* STRICT_MM_TYPECHECKS */
 
-/* the upper-most page table pointer */
-extern pmd_t *top_pmd;
+#endif /* CONFIG_MMU */
 
 #include <asm/memory.h>
 
@@ -186,8 +190,8 @@ extern pmd_t *top_pmd;
 #define ARCH_SLAB_MINALIGN 8
 #endif
 
-#endif /* __KERNEL__ */
-
 #include <asm-generic/page.h>
+
+#endif /* __KERNEL__ */
 
 #endif

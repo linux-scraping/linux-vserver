@@ -17,7 +17,7 @@
 #include <linux/security.h>
 #include <linux/proc_fs.h>
 #include <linux/devpts_fs.h>
-#include <linux/vserver/debug.h>
+#include <linux/vs_base.h>
 
 /* Taken over from the old code... */
 
@@ -61,7 +61,7 @@ int inode_change_ok(struct inode *inode, struct iattr *attr)
 	}
 
 	/* Check for evil vserver activity */
-	if (vx_check(0, VX_ADMIN))
+	if (vx_check(0, VS_ADMIN))
 		goto fine;
 
 	if (IS_BARRIER(inode)) {
@@ -71,11 +71,13 @@ int inode_change_ok(struct inode *inode, struct iattr *attr)
 	}
 	switch (inode->i_sb->s_magic) {
 		case PROC_SUPER_MAGIC:
+			/* maybe allow that in the future? */
 			vxwprintk(1, "xid=%d messing with the procfs.",
 				vx_current_xid());
 			goto error;
 		case DEVPTS_SUPER_MAGIC:
-			if (vx_check(inode->i_xid, VX_IDENT))
+			/* devpts is xid tagged */
+			if (vx_check((xid_t)inode->i_tag, VS_IDENT))
 				goto fine;
 			vxwprintk(1, "xid=%d messing with the devpts.",
 				vx_current_xid());
@@ -104,8 +106,8 @@ int inode_setattr(struct inode * inode, struct iattr * attr)
 		inode->i_uid = attr->ia_uid;
 	if (ia_valid & ATTR_GID)
 		inode->i_gid = attr->ia_gid;
-	if ((ia_valid & ATTR_XID) && IS_TAGXID(inode))
-		inode->i_xid = attr->ia_xid;
+	if ((ia_valid & ATTR_TAG) && IS_TAGGED(inode))
+		inode->i_tag = attr->ia_tag;
 	if (ia_valid & ATTR_ATIME)
 		inode->i_atime = timespec_trunc(attr->ia_atime,
 						inode->i_sb->s_time_gran);
@@ -181,7 +183,7 @@ int notify_change(struct dentry * dentry, struct iattr * attr)
 		if (!error) {
 			if ((ia_valid & ATTR_UID && attr->ia_uid != inode->i_uid) ||
 			    (ia_valid & ATTR_GID && attr->ia_gid != inode->i_gid) ||
-			    (ia_valid & ATTR_XID && attr->ia_xid != inode->i_xid))
+			    (ia_valid & ATTR_TAG && attr->ia_tag != inode->i_tag))
 				error = DQUOT_TRANSFER(inode, attr) ? -EDQUOT : 0;
 			if (!error)
 				error = inode_setattr(inode, attr);

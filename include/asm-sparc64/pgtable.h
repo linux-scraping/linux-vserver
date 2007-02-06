@@ -14,7 +14,6 @@
 
 #include <asm-generic/pgtable-nopud.h>
 
-#include <linux/config.h>
 #include <linux/compiler.h>
 #include <asm/types.h>
 #include <asm/spitfire.h>
@@ -235,7 +234,7 @@ static inline pte_t pfn_pte(unsigned long pfn, pgprot_t prot)
 	sz_bits = 0UL;
 	if (_PAGE_SZBITS_4U != 0UL || _PAGE_SZBITS_4V != 0UL) {
 		__asm__ __volatile__(
-		"\n661:	sethi		%uhi(%1), %0\n"
+		"\n661:	sethi		%%uhi(%1), %0\n"
 		"	sllx		%0, 32, %0\n"
 		"	.section	.sun4v_2insn_patch, \"ax\"\n"
 		"	.word		661b\n"
@@ -340,7 +339,7 @@ static inline pgprot_t pgprot_noncached(pgprot_t prot)
 	"	.section	.sun4v_2insn_patch, \"ax\"\n"
 	"	.word		661b\n"
 	"	andn		%0, %4, %0\n"
-	"	or		%0, %3, %0\n"
+	"	or		%0, %5, %0\n"
 	"	.previous\n"
 	: "=r" (val)
 	: "0" (val), "i" (_PAGE_CP_4U | _PAGE_CV_4U), "i" (_PAGE_E_4U),
@@ -631,8 +630,9 @@ static inline unsigned long pte_present(pte_t pte)
 #define __pmd_page(pmd)		\
 	((unsigned long) __va((((unsigned long)pmd_val(pmd))<<11UL)))
 #define pmd_page(pmd) 			virt_to_page((void *)__pmd_page(pmd))
-#define pud_page(pud)		\
+#define pud_page_vaddr(pud)		\
 	((unsigned long) __va((((unsigned long)pud_val(pud))<<11UL)))
+#define pud_page(pud) 			virt_to_page((void *)pud_page_vaddr(pud))
 #define pmd_none(pmd)			(!pmd_val(pmd))
 #define pmd_bad(pmd)			(0)
 #define pmd_present(pmd)		(pmd_val(pmd) != 0U)
@@ -654,7 +654,7 @@ static inline unsigned long pte_present(pte_t pte)
 
 /* Find an entry in the second-level page table.. */
 #define pmd_offset(pudp, address)	\
-	((pmd_t *) pud_page(*(pudp)) + \
+	((pmd_t *) pud_page_vaddr(*(pudp)) + \
 	 (((address) >> PMD_SHIFT) & (PTRS_PER_PMD-1)))
 
 /* Find an entry in the third-level page table.. */
@@ -756,6 +756,8 @@ extern unsigned long *sparc64_valid_addr_bitmap;
 /* Needs to be defined here and not in linux/mm.h, as it is arch dependent */
 #define kern_addr_valid(addr)	\
 	(test_bit(__pa((unsigned long)(addr))>>22, sparc64_valid_addr_bitmap))
+
+extern int page_in_phys_avail(unsigned long paddr);
 
 extern int io_remap_pfn_range(struct vm_area_struct *vma, unsigned long from,
 			       unsigned long pfn,

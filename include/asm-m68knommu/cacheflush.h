@@ -8,6 +8,7 @@
 
 #define flush_cache_all()			__flush_cache_all()
 #define flush_cache_mm(mm)			do { } while (0)
+#define flush_cache_dup_mm(mm)			do { } while (0)
 #define flush_cache_range(vma, start, end)	__flush_cache_all()
 #define flush_cache_page(vma, vmaddr)		do { } while (0)
 #define flush_dcache_range(start,len)		__flush_cache_all()
@@ -57,13 +58,13 @@ static inline void __flush_cache_all(void)
 		"nop\n\t"
 		: : : "d0" );
 #endif /* CONFIG_M527x || CONFIG_M528x */
-#ifdef CONFIG_M5272
+#if defined(CONFIG_M5206) || defined(CONFIG_M5206e) || defined(CONFIG_M5272)
 	__asm__ __volatile__ (
-        	"movel	#0x01000000, %%d0\n\t"
+        	"movel	#0x81000100, %%d0\n\t"
         	"movec	%%d0, %%CACR\n\t"
 		"nop\n\t"
 		: : : "d0" );
-#endif /* CONFIG_M5272 */
+#endif /* CONFIG_M5206 || CONFIG_M5206e || CONFIG_M5272 */
 #ifdef CONFIG_M5249
 	__asm__ __volatile__ (
         	"movel	#0xa1000200, %%d0\n\t"
@@ -71,6 +72,13 @@ static inline void __flush_cache_all(void)
 		"nop\n\t"
 		: : : "d0" );
 #endif /* CONFIG_M5249 */
+#ifdef CONFIG_M532x
+	__asm__ __volatile__ (
+        	"movel	#0x81000200, %%d0\n\t"
+        	"movec	%%d0, %%CACR\n\t"
+		"nop\n\t"
+		: : : "d0" );
+#endif /* CONFIG_M532x */
 }
 
 #endif /* _M68KNOMMU_CACHEFLUSH_H */

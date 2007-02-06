@@ -29,7 +29,6 @@
  *
  */
 
-#include <linux/config.h>
 #include <linux/types.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
@@ -123,11 +122,11 @@ static u8 svwks_csb_check (struct pci_dev *dev)
 }
 static int svwks_tune_chipset (ide_drive_t *drive, u8 xferspeed)
 {
-	u8 udma_modes[]		= { 0x00, 0x01, 0x02, 0x03, 0x04, 0x05 };
-	u8 dma_modes[]		= { 0x77, 0x21, 0x20 };
-	u8 pio_modes[]		= { 0x5d, 0x47, 0x34, 0x22, 0x20 };
-	u8 drive_pci[]		= { 0x41, 0x40, 0x43, 0x42 };
-	u8 drive_pci2[]		= { 0x45, 0x44, 0x47, 0x46 };
+	static const u8 udma_modes[]		= { 0x00, 0x01, 0x02, 0x03, 0x04, 0x05 };
+	static const u8 dma_modes[]		= { 0x77, 0x21, 0x20 };
+	static const u8 pio_modes[]		= { 0x5d, 0x47, 0x34, 0x22, 0x20 };
+	static const u8 drive_pci[]		= { 0x41, 0x40, 0x43, 0x42 };
+	static const u8 drive_pci2[]		= { 0x45, 0x44, 0x47, 0x46 };
 
 	ide_hwif_t *hwif	= HWIF(drive);
 	struct pci_dev *dev	= hwif->pci_dev;
@@ -360,7 +359,7 @@ static unsigned int __devinit init_chipset_svwks (struct pci_dev *dev, const cha
 
 	/* OSB4 : South Bridge and IDE */
 	if (dev->device == PCI_DEVICE_ID_SERVERWORKS_OSB4IDE) {
-		isa_dev = pci_find_device(PCI_VENDOR_ID_SERVERWORKS,
+		isa_dev = pci_get_device(PCI_VENDOR_ID_SERVERWORKS,
 			  PCI_DEVICE_ID_SERVERWORKS_OSB4, NULL);
 		if (isa_dev) {
 			pci_read_config_dword(isa_dev, 0x64, &reg);
@@ -381,7 +380,7 @@ static unsigned int __devinit init_chipset_svwks (struct pci_dev *dev, const cha
 		if (!(PCI_FUNC(dev->devfn) & 1)) {
 			struct pci_dev * findev = NULL;
 			u32 reg4c = 0;
-			findev = pci_find_device(PCI_VENDOR_ID_SERVERWORKS,
+			findev = pci_get_device(PCI_VENDOR_ID_SERVERWORKS,
 				PCI_DEVICE_ID_SERVERWORKS_CSB5, NULL);
 			if (findev) {
 				pci_read_config_dword(findev, 0x4C, &reg4c);
@@ -389,29 +388,21 @@ static unsigned int __devinit init_chipset_svwks (struct pci_dev *dev, const cha
 				reg4c |=  0x00000040;
 				reg4c |=  0x00000020;
 				pci_write_config_dword(findev, 0x4C, reg4c);
+				pci_dev_put(findev);
 			}
 			outb_p(0x06, 0x0c00);
 			dev->irq = inb_p(0x0c01);
-#if 0
-			printk("%s: device class (0x%04x)\n",
-				name, dev->class);
-			if ((dev->class >> 8) != PCI_CLASS_STORAGE_IDE) {
-				dev->class &= ~0x000F0F00;
-		//		dev->class |= ~0x00000400;
-				dev->class |= ~0x00010100;
-				/**/
-			}
-#endif
 		} else {
 			struct pci_dev * findev = NULL;
 			u8 reg41 = 0;
 
-			findev = pci_find_device(PCI_VENDOR_ID_SERVERWORKS,
+			findev = pci_get_device(PCI_VENDOR_ID_SERVERWORKS,
 					PCI_DEVICE_ID_SERVERWORKS_CSB6, NULL);
 			if (findev) {
 				pci_read_config_byte(findev, 0x41, &reg41);
 				reg41 &= ~0x40;
 				pci_write_config_byte(findev, 0x41, reg41);
+				pci_dev_put(findev);
 			}
 			/*
 			 * This is a device pin issue on CSB6.
@@ -452,7 +443,7 @@ static unsigned int __devinit init_chipset_svwks (struct pci_dev *dev, const cha
 		pci_write_config_byte(dev, 0x5A, btr);
 	}
 
-	return (dev->irq) ? dev->irq : 0;
+	return dev->irq;
 }
 
 static unsigned int __devinit ata66_svwks_svwks (ide_hwif_t *hwif)
@@ -500,11 +491,6 @@ static unsigned int __devinit ata66_svwks (ide_hwif_t *hwif)
 {
 	struct pci_dev *dev = hwif->pci_dev;
 
-	/* Per Specified Design by OEM, and ASIC Architect */
-	if ((dev->device == PCI_DEVICE_ID_SERVERWORKS_CSB6IDE) ||
-	    (dev->device == PCI_DEVICE_ID_SERVERWORKS_CSB6IDE2))
-		return 1;
-
 	/* Server Works */
 	if (dev->subsystem_vendor == PCI_VENDOR_ID_SERVERWORKS)
 		return ata66_svwks_svwks (hwif);
@@ -517,10 +503,14 @@ static unsigned int __devinit ata66_svwks (ide_hwif_t *hwif)
 	if (dev->subsystem_vendor == PCI_VENDOR_ID_SUN)
 		return ata66_svwks_cobalt (hwif);
 
+	/* Per Specified Design by OEM, and ASIC Architect */
+	if ((dev->device == PCI_DEVICE_ID_SERVERWORKS_CSB6IDE) ||
+	    (dev->device == PCI_DEVICE_ID_SERVERWORKS_CSB6IDE2))
+		return 1;
+
 	return 0;
 }
 
-#undef CAN_SW_DMA
 static void __devinit init_hwif_svwks (ide_hwif_t *hwif)
 {
 	u8 dma_stat = 0;
@@ -537,9 +527,6 @@ static void __devinit init_hwif_svwks (ide_hwif_t *hwif)
 		hwif->ultra_mask = 0x3f;
 
 	hwif->mwdma_mask = 0x07;
-#ifdef CAN_SW_DMA
-	hwif->swdma_mask = 0x07;
-#endif /* CAN_SW_DMA */
 
 	hwif->autodma = 0;
 
@@ -562,8 +549,6 @@ static void __devinit init_hwif_svwks (ide_hwif_t *hwif)
 	hwif->drives[1].autodma = (dma_stat & 0x40);
 	hwif->drives[0].autotune = (!(dma_stat & 0x20));
 	hwif->drives[1].autotune = (!(dma_stat & 0x40));
-//	hwif->drives[0].autodma = hwif->autodma;
-//	hwif->drives[1].autodma = hwif->autodma;
 }
 
 /*
@@ -593,11 +578,6 @@ static int __devinit init_setup_csb6 (struct pci_dev *dev, ide_pci_device_t *d)
 		if (dev->resource[0].start == 0x01f1)
 			d->bootable = ON_BOARD;
 	}
-#if 0
-	if ((IDE_PCI_DEVID_EQ(d->devid, DEVID_CSB6) &&
-             (!(PCI_FUNC(dev->devfn) & 1)))
-		d->autodma = AUTODMA;
-#endif
 
 	d->channels = ((dev->device == PCI_DEVICE_ID_SERVERWORKS_CSB6IDE ||
 			dev->device == PCI_DEVICE_ID_SERVERWORKS_CSB6IDE2) &&
@@ -686,7 +666,7 @@ static struct pci_driver driver = {
 	.probe		= svwks_init_one,
 };
 
-static int svwks_ide_init(void)
+static int __init svwks_ide_init(void)
 {
 	return ide_pci_register_driver(&driver);
 }

@@ -16,6 +16,7 @@ struct sharpsl_charger_machinfo {
 	void (*exit)(void);
 	int gpio_acin;
 	int gpio_batfull;
+	int batfull_irq;
 	int gpio_batlock;
 	int gpio_fatal;
 	void (*discharge)(int);
@@ -24,6 +25,7 @@ struct sharpsl_charger_machinfo {
 	void (*measure_temp)(int);
 	void (*presuspend)(void);
 	void (*postsuspend)(void);
+	void (*earlyresume)(void);
 	unsigned long (*read_devdata)(int);
 #define SHARPSL_BATT_VOLT       1
 #define SHARPSL_BATT_TEMP       2
@@ -34,9 +36,19 @@ struct sharpsl_charger_machinfo {
 #define SHARPSL_STATUS_FATAL    7
 	unsigned long (*charger_wakeup)(void);
 	int (*should_wakeup)(unsigned int resume_on_alarm);
+	void (*backlight_limit)(int);
+	int (*backlight_get_status) (void);
+	int charge_on_volt;
+	int charge_on_temp;
+	int charge_acin_high;
+	int charge_acin_low;
+	int fatal_acin_volt;
+	int fatal_noacin_volt;
 	int bat_levels;
 	struct battery_thresh *bat_levels_noac;
 	struct battery_thresh *bat_levels_acin;
+	struct battery_thresh *bat_levels_noac_bl;
+	struct battery_thresh *bat_levels_acin_bl;
 	int status_high_acin;
 	int status_low_acin;
 	int status_high_noac;
@@ -88,7 +100,7 @@ extern struct sharpsl_pm_status sharpsl_pm;
 
 void sharpsl_battery_kick(void);
 void sharpsl_pm_led(int val);
-irqreturn_t sharpsl_ac_isr(int irq, void *dev_id, struct pt_regs *fp);
-irqreturn_t sharpsl_chrg_full_isr(int irq, void *dev_id, struct pt_regs *fp);
-irqreturn_t sharpsl_fatal_isr(int irq, void *dev_id, struct pt_regs *fp);
+irqreturn_t sharpsl_ac_isr(int irq, void *dev_id);
+irqreturn_t sharpsl_chrg_full_isr(int irq, void *dev_id);
+irqreturn_t sharpsl_fatal_isr(int irq, void *dev_id);
 

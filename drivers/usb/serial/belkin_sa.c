@@ -63,7 +63,6 @@
  *    UsbSnoop on Windows2000 and from examining the other USB drivers.
  */
 
-#include <linux/config.h>
 #include <linux/kernel.h>
 #include <linux/errno.h>
 #include <linux/init.h>
@@ -75,7 +74,7 @@
 #include <linux/spinlock.h>
 #include <asm/uaccess.h>
 #include <linux/usb.h>
-#include "usb-serial.h"
+#include <linux/usb/serial.h>
 #include "belkin_sa.h"
 
 static int debug;
@@ -92,8 +91,8 @@ static int  belkin_sa_startup		(struct usb_serial *serial);
 static void belkin_sa_shutdown		(struct usb_serial *serial);
 static int  belkin_sa_open		(struct usb_serial_port *port, struct file *filp);
 static void belkin_sa_close		(struct usb_serial_port *port, struct file *filp);
-static void belkin_sa_read_int_callback (struct urb *urb, struct pt_regs *regs);
-static void belkin_sa_set_termios	(struct usb_serial_port *port, struct termios * old);
+static void belkin_sa_read_int_callback (struct urb *urb);
+static void belkin_sa_set_termios	(struct usb_serial_port *port, struct ktermios * old);
 static int  belkin_sa_ioctl		(struct usb_serial_port *port, struct file * file, unsigned int cmd, unsigned long arg);
 static void belkin_sa_break_ctl		(struct usb_serial_port *port, int break_state );
 static int  belkin_sa_tiocmget		(struct usb_serial_port *port, struct file *file);
@@ -249,7 +248,7 @@ static void belkin_sa_close (struct usb_serial_port *port, struct file *filp)
 } /* belkin_sa_close */
 
 
-static void belkin_sa_read_int_callback (struct urb *urb, struct pt_regs *regs)
+static void belkin_sa_read_int_callback (struct urb *urb)
 {
 	struct usb_serial_port *port = (struct usb_serial_port *)urb->context;
 	struct belkin_sa_private *priv;
@@ -334,7 +333,7 @@ exit:
 		     __FUNCTION__, retval);
 }
 
-static void belkin_sa_set_termios (struct usb_serial_port *port, struct termios *old_termios)
+static void belkin_sa_set_termios (struct usb_serial_port *port, struct ktermios *old_termios)
 {
 	struct usb_serial *serial = port->serial;
 	struct belkin_sa_private *priv = usb_get_serial_port_data(port);

@@ -1,7 +1,6 @@
 #ifndef _SPARC64_CACHEFLUSH_H
 #define _SPARC64_CACHEFLUSH_H
 
-#include <linux/config.h>
 #include <asm/page.h>
 
 #ifndef __ASSEMBLY__
@@ -13,6 +12,7 @@
 /* These are the same regardless of whether this is an SMP kernel or not. */
 #define flush_cache_mm(__mm) \
 	do { if ((__mm) == current->mm) flushw_user(); } while(0)
+#define flush_cache_dup_mm(mm) flush_cache_mm(mm)
 #define flush_cache_range(vma, start, end) \
 	flush_cache_mm((vma)->vm_mm)
 #define flush_cache_page(vma, page, pfn) \

@@ -1,4 +1,4 @@
-/* linux/arch/arm/mach-s3c2410/gpio.c
+/* linux/arch/arm/mach-s3c2410/s3c2400-gpio.c
  *
  * Copyright (c) 2006 Lucas Correia Villa Real <lucasvr@gobolinux.org>
  *
@@ -17,10 +17,7 @@
  * You should have received a copy of the GNU General Public License
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- *
- * Changelog
- *	15-Jan-2006  LCVR  Splitted from gpio.c, adding support for the S3C2400
- */
+*/
 
 #include <linux/kernel.h>
 #include <linux/init.h>

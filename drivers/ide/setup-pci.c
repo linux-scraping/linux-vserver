@@ -18,7 +18,6 @@
  *  configuration of all PCI IDE interfaces present in a system.  
  */
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/types.h>
 #include <linux/kernel.h>
@@ -102,7 +101,7 @@ static ide_hwif_t *ide_match_hwif(unsigned long io_base, u8 bootable, const char
 				return hwif;	/* pick an unused entry */
 		}
 	}
-	for (h = 0; h < 2; ++h) {
+	for (h = 0; h < 2 && h < MAX_HWIFS; ++h) {
 		hwif = ide_hwifs + h;
 		if (hwif->chipset == ide_unknown)
 			return hwif;	/* pick an unused entry */
@@ -694,13 +693,8 @@ static int do_ide_setup_pci_device(struct pci_dev *dev, ide_pci_device_t *d,
 				goto out;
 		}
 		if (noisy)
-#ifdef __sparc__
-			printk(KERN_INFO "%s: 100%% native mode on irq %s\n",
-			       d->name, __irq_itoa(pciirq));
-#else
 			printk(KERN_INFO "%s: 100%% native mode on irq %d\n",
 				d->name, pciirq);
-#endif
 	}
 
 	/* FIXME: silent failure can happen */
@@ -801,24 +795,6 @@ int __ide_pci_register_driver(struct pci_driver *driver, struct module *module)
 EXPORT_SYMBOL_GPL(__ide_pci_register_driver);
 
 /**
- *	ide_unregister_pci_driver	-	unregister an IDE driver
- *	@driver: driver to remove
- *
- *	Unregister a currently installed IDE driver. Returns are the same
- *	as for pci_unregister_driver
- */
- 
-void ide_pci_unregister_driver(struct pci_driver *driver)
-{
-	if(!pre_init)
-		pci_unregister_driver(driver);
-	else
-		list_del(&driver->node);
-}
-
-EXPORT_SYMBOL_GPL(ide_pci_unregister_driver);
-
-/**
  *	ide_scan_pcidev		-	find an IDE driver for a device
  *	@dev: PCI device to check
  *
@@ -868,11 +844,11 @@ void __init ide_scan_pcibus (int scan_direction)
 
 	pre_init = 0;
 	if (!scan_direction) {
-		while ((dev = pci_find_device(PCI_ANY_ID, PCI_ANY_ID, dev)) != NULL) {
+		while ((dev = pci_get_device(PCI_ANY_ID, PCI_ANY_ID, dev)) != NULL) {
 			ide_scan_pcidev(dev);
 		}
 	} else {
-		while ((dev = pci_find_device_reverse(PCI_ANY_ID, PCI_ANY_ID, dev)) != NULL) {
+		while ((dev = pci_get_device_reverse(PCI_ANY_ID, PCI_ANY_ID, dev)) != NULL) {
 			ide_scan_pcidev(dev);
 		}
 	}

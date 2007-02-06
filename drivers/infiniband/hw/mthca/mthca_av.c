@@ -33,7 +33,6 @@
  * $Id: mthca_av.c 1349 2004-12-16 21:09:43Z roland $
  */
 
-#include <linux/init.h>
 #include <linux/string.h>
 #include <linux/slab.h>
 
@@ -90,7 +89,7 @@ static enum ib_rate tavor_rate_to_ib(u8 mthca_rate, u8 port_rate)
 	case MTHCA_RATE_TAVOR_1X:     return IB_RATE_2_5_GBPS;
 	case MTHCA_RATE_TAVOR_1X_DDR: return IB_RATE_5_GBPS;
 	case MTHCA_RATE_TAVOR_4X:     return IB_RATE_10_GBPS;
-	default:		      return port_rate;
+	default:		      return mult_to_ib_rate(port_rate);
 	}
 }
 
@@ -190,7 +189,7 @@ int mthca_create_ah(struct mthca_dev *dev,
 on_hca_fail:
 	if (ah->type == MTHCA_AH_PCI_POOL) {
 		ah->av = pci_pool_alloc(dev->av_table.pool,
-					SLAB_ATOMIC, &ah->avdma);
+					GFP_ATOMIC, &ah->avdma);
 		if (!ah->av)
 			return -ENOMEM;
 
@@ -303,9 +302,10 @@ int mthca_ah_query(struct ib_ah *ibah, struct ib_ah_attr *attr)
 	memset(attr, 0, sizeof *attr);
 	attr->dlid          = be16_to_cpu(ah->av->dlid);
 	attr->sl            = be32_to_cpu(ah->av->sl_tclass_flowlabel) >> 28;
-	attr->static_rate   = ah->av->msg_sr & 0x7;
-	attr->src_path_bits = ah->av->g_slid & 0x7F;
 	attr->port_num      = be32_to_cpu(ah->av->port_pd) >> 24;
+	attr->static_rate   = mthca_rate_to_ib(dev, ah->av->msg_sr & 0x7,
+					       attr->port_num);
+	attr->src_path_bits = ah->av->g_slid & 0x7F;
 	attr->ah_flags      = mthca_ah_grh_present(ah) ? IB_AH_GRH : 0;
 
 	if (attr->ah_flags) {
@@ -322,7 +322,7 @@ int mthca_ah_query(struct ib_ah *ibah, struct ib_ah_attr *attr)
 	return 0;
 }
 
-int __devinit mthca_init_av_table(struct mthca_dev *dev)
+int mthca_init_av_table(struct mthca_dev *dev)
 {
 	int err;
 

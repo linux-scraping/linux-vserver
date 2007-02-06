@@ -65,9 +65,7 @@
 #include <scsi/scsi_host.h>
 #include <scsi/scsi_device.h>
 #include <scsi/scsi_cmnd.h>
-#include <scsi/scsi_request.h>
 #include <scsi/sg.h>
-#include <scsi/sg_request.h>
 
 #define OSM_NAME	"scsi-osm"
 #define OSM_VERSION	"1.316"
@@ -222,7 +220,7 @@ static int i2o_scsi_probe(struct device *dev)
 	u32 id = -1;
 	u64 lun = -1;
 	int channel = -1;
-	int i;
+	int i, rc;
 
 	i2o_shost = i2o_scsi_get_host(c);
 	if (!i2o_shost)
@@ -306,14 +304,20 @@ static int i2o_scsi_probe(struct device *dev)
 		return PTR_ERR(scsi_dev);
 	}
 
-	sysfs_create_link(&i2o_dev->device.kobj, &scsi_dev->sdev_gendev.kobj,
-			  "scsi");
+	rc = sysfs_create_link(&i2o_dev->device.kobj,
+			       &scsi_dev->sdev_gendev.kobj, "scsi");
+	if (rc)
+		goto err;
 
 	osm_info("device added (TID: %03x) channel: %d, id: %d, lun: %ld\n",
 		 i2o_dev->lct_data.tid, channel, le32_to_cpu(id),
 		 (long unsigned int)le64_to_cpu(lun));
 
 	return 0;
+
+err:
+	scsi_remove_device(scsi_dev);
+	return rc;
 };
 
 static const char *i2o_scsi_info(struct Scsi_Host *SChost)
@@ -407,8 +411,7 @@ static void i2o_scsi_notify_device_add(struct i2o_device *i2o_dev)
 };
 
 /**
- *	i2o_scsi_notify_device_remove - Retrieve notifications of removed
- *				        devices
+ *	i2o_scsi_notify_device_remove - Retrieve notifications of removed devices
  *	@i2o_dev: the I2O device which was removed
  *
  *	If a I2O device is removed, we catch the notification to remove the
@@ -428,8 +431,7 @@ static void i2o_scsi_notify_device_remove(struct i2o_device *i2o_dev)
 };
 
 /**
- *	i2o_scsi_notify_controller_add - Retrieve notifications of added
- *					 controllers
+ *	i2o_scsi_notify_controller_add - Retrieve notifications of added controllers
  *	@c: the controller which was added
  *
  *	If a I2O controller is added, we catch the notification to add a
@@ -459,8 +461,7 @@ static void i2o_scsi_notify_controller_add(struct i2o_controller *c)
 };
 
 /**
- *	i2o_scsi_notify_controller_remove - Retrieve notifications of removed
- *					    controllers
+ *	i2o_scsi_notify_controller_remove - Retrieve notifications of removed controllers
  *	@c: the controller which was removed
  *
  *	If a I2O controller is removed, we catch the notification to remove the
@@ -588,6 +589,7 @@ static int i2o_scsi_queuecommand(struct scsi_cmnd *SCpnt,
 
 	mptr = &msg->body[0];
 
+#if 0 /* this code can't work */
 #ifdef CONFIG_I2O_EXT_ADAPTEC
 	if (c->adaptec) {
 		u32 adpt_flags = 0;
@@ -624,6 +626,7 @@ static int i2o_scsi_queuecommand(struct scsi_cmnd *SCpnt,
 		*mptr++ = cpu_to_le32(I2O_VENDOR_DPT << 16 | I2O_CMD_SCSI_EXEC);
 		*mptr++ = cpu_to_le32(adpt_flags | tid);
 	}
+#endif
 #endif
 
 	msg->u.head[1] = cpu_to_le32(cmd | HOST_TID << 12 | tid);
@@ -745,7 +748,7 @@ static int i2o_scsi_abort(struct scsi_cmnd *SCpnt)
  *	@capacity: size in sectors
  *	@ip: geometry array
  *
- *	This is anyones guess quite frankly. We use the same rules everyone
+ *	This is anyone's guess quite frankly. We use the same rules everyone
  *	else appears to and hope. It seems to work.
  */
 

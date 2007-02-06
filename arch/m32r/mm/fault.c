@@ -8,7 +8,6 @@
  *    Copyright (C) 1995  Linus Torvalds
  */
 
-#include <linux/config.h>
 #include <linux/signal.h>
 #include <linux/sched.h>
 #include <linux/kernel.h>
@@ -148,7 +147,7 @@ asmlinkage void do_page_fault(struct pt_regs *regs, unsigned long error_code,
 	/* When running in the kernel we expect faults to occur only to
 	 * addresses in user space.  All other faults represent errors in the
 	 * kernel and should generate an OOPS.  Unfortunatly, in the case of an
-	 * erroneous fault occuring in a code path which already holds mmap_sem
+	 * erroneous fault occurring in a code path which already holds mmap_sem
 	 * we will deadlock attempting to validate the fault against the
 	 * address space.  Luckily the kernel only validly references user
 	 * space from well defined areas of code, which are listed in the
@@ -174,7 +173,7 @@ asmlinkage void do_page_fault(struct pt_regs *regs, unsigned long error_code,
 		goto good_area;
 	if (!(vma->vm_flags & VM_GROWSDOWN))
 		goto bad_area;
-#if 0
+
 	if (error_code & ACE_USERMODE) {
 		/*
 		 * accessing the stack below "spu" is always a bug.
@@ -185,7 +184,7 @@ asmlinkage void do_page_fault(struct pt_regs *regs, unsigned long error_code,
 		if (address + 4 < regs->spu)
 			goto bad_area;
 	}
-#endif
+
 	if (expand_stack(vma, address))
 		goto bad_area;
 /*
@@ -300,7 +299,7 @@ no_context:
  */
 out_of_memory:
 	up_read(&mm->mmap_sem);
-	if (tsk->pid == 1) {
+	if (is_init(tsk)) {
 		yield();
 		down_read(&mm->mmap_sem);
 		goto survive;

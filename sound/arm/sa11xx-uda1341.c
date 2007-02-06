@@ -59,7 +59,6 @@
 * 
 ***************************************************************************************************/
 
-#include <linux/config.h>
 #include <sound/driver.h>
 #include <linux/module.h>
 #include <linux/moduleparam.h>
@@ -112,7 +111,7 @@ MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("SA1100/SA1111 + UDA1341TS driver for ALSA");
 MODULE_SUPPORTED_DEVICE("{{UDA1341,iPAQ H3600 UDA1341TS}}");
 
-static char *id = NULL;	/* ID for this card */
+static char *id;	/* ID for this card */
 
 module_param(id, charp, 0444);
 MODULE_PARM_DESC(id, "ID string for SA1100/SA1111 + UDA1341TS soundcard.");
@@ -126,7 +125,7 @@ struct audio_stream {
 #else
 	dma_regs_t *dma_regs;	/* points to our DMA registers */
 #endif
-	int active:1;		/* we are using this stream for transfer now */
+	unsigned int active:1;	/* we are using this stream for transfer now */
 	int period;		/* current transfer period */
 	int periods;		/* current count of periods registerd in the DMA engine */
 	int tx_spin;		/* are we recoding - flag used to do DMA trans. for sync */
@@ -984,11 +983,15 @@ static int __init sa11xx_uda1341_init(void)
 	if ((err = platform_driver_register(&sa11xx_uda1341_driver)) < 0)
 		return err;
 	device = platform_device_register_simple(SA11XX_UDA1341_DRIVER, -1, NULL, 0);
-	if (IS_ERR(device)) {
-		platform_driver_unregister(&sa11xx_uda1341_driver);
-		return PTR_ERR(device);
-	}
-	return 0;
+	if (!IS_ERR(device)) {
+		if (platform_get_drvdata(device))
+			return 0;
+		platform_device_unregister(device);
+		err = -ENODEV
+	} else
+		err = PTR_ERR(device);
+	platform_driver_unregister(&sa11xx_uda1341_driver);
+	return err;
 }
 
 static void __exit sa11xx_uda1341_exit(void)

@@ -93,8 +93,8 @@
 #define MSR_LE		__MASK(MSR_LE_LG)	/* Little Endian */
 
 #ifdef CONFIG_PPC64
-#define MSR_		MSR_ME | MSR_RI | MSR_IR | MSR_DR | MSR_ISF
-#define MSR_KERNEL      MSR_ | MSR_SF | MSR_HV
+#define MSR_		MSR_ME | MSR_RI | MSR_IR | MSR_DR | MSR_ISF |MSR_HV
+#define MSR_KERNEL      MSR_ | MSR_SF
 
 #define MSR_USER32	MSR_ | MSR_PR | MSR_EE
 #define MSR_USER64	MSR_USER32 | MSR_SF
@@ -143,6 +143,7 @@
 
 /* Special Purpose Registers (SPRNs)*/
 #define SPRN_CTR	0x009	/* Count Register */
+#define SPRN_DSCR	0x11
 #define SPRN_CTRLF	0x088
 #define SPRN_CTRLT	0x098
 #define   CTRL_CT	0xc0000000	/* current thread */
@@ -153,7 +154,7 @@
 #define SPRN_DABR	0x3F5	/* Data Address Breakpoint Register */
 #define   DABR_TRANSLATION	(1UL << 2)
 #define SPRN_DAR	0x013	/* Data Address Register */
-#define	SPRN_DSISR	0x012	/* Data Storage Interrupt Status Register */
+#define SPRN_DSISR	0x012	/* Data Storage Interrupt Status Register */
 #define   DSISR_NOHPTE		0x40000000	/* no translation found */
 #define   DSISR_PROTFAULT	0x08000000	/* protection fault */
 #define   DSISR_ISSTORE		0x02000000	/* access was a store */
@@ -163,6 +164,7 @@
 #define SPRN_TBRU	0x10D	/* Time Base Read Upper Register (user, R/O) */
 #define SPRN_TBWL	0x11C	/* Time Base Lower Register (super, R/W) */
 #define SPRN_TBWU	0x11D	/* Time Base Upper Register (super, R/W) */
+#define SPRN_SPURR	0x134	/* Scaled PURR */
 #define SPRN_HIOR	0x137	/* 970 Hypervisor interrupt offset */
 #define SPRN_DBAT0L	0x219	/* Data BAT 0 Lower Register */
 #define SPRN_DBAT0U	0x218	/* Data BAT 0 Upper Register */
@@ -258,16 +260,16 @@
 #define SPRN_IABR	0x3F2	/* Instruction Address Breakpoint Register */
 #define SPRN_HID4	0x3F4		/* 970 HID4 */
 #define SPRN_HID5	0x3F6		/* 970 HID5 */
-#define	SPRN_HID6	0x3F9	/* BE HID 6 */
-#define	  HID6_LB	(0x0F<<12) /* Concurrent Large Page Modes */
-#define	  HID6_DLP	(1<<20)	/* Disable all large page modes (4K only) */
-#define	SPRN_TSC_CELL	0x399	/* Thread switch control on Cell */
-#define	  TSC_CELL_DEC_ENABLE_0	0x400000 /* Decrementer Interrupt */
-#define	  TSC_CELL_DEC_ENABLE_1	0x200000 /* Decrementer Interrupt */
-#define	  TSC_CELL_EE_ENABLE	0x100000 /* External Interrupt */
-#define	  TSC_CELL_EE_BOOST	0x080000 /* External Interrupt Boost */
-#define	SPRN_TSC 	0x3FD	/* Thread switch control on others */
-#define	SPRN_TST 	0x3FC	/* Thread switch timeout on others */
+#define SPRN_HID6	0x3F9	/* BE HID 6 */
+#define   HID6_LB	(0x0F<<12) /* Concurrent Large Page Modes */
+#define   HID6_DLP	(1<<20)	/* Disable all large page modes (4K only) */
+#define SPRN_TSC_CELL	0x399	/* Thread switch control on Cell */
+#define   TSC_CELL_DEC_ENABLE_0	0x400000 /* Decrementer Interrupt */
+#define   TSC_CELL_DEC_ENABLE_1	0x200000 /* Decrementer Interrupt */
+#define   TSC_CELL_EE_ENABLE	0x100000 /* External Interrupt */
+#define   TSC_CELL_EE_BOOST	0x080000 /* External Interrupt Boost */
+#define SPRN_TSC 	0x3FD	/* Thread switch control on others */
+#define SPRN_TST 	0x3FC	/* Thread switch timeout on others */
 #if !defined(SPRN_IAC1) && !defined(SPRN_IAC2)
 #define SPRN_IAC1	0x3F4		/* Instruction Address Compare 1 */
 #define SPRN_IAC2	0x3F5		/* Instruction Address Compare 2 */
@@ -362,7 +364,7 @@
 #endif
 #define SPRN_PTEHI	0x3D5	/* 981 7450 PTE HI word (S/W TLB load) */
 #define SPRN_PTELO	0x3D6	/* 982 7450 PTE LO word (S/W TLB load) */
-#define	SPRN_PURR	0x135	/* Processor Utilization of Resources Reg */
+#define SPRN_PURR	0x135	/* Processor Utilization of Resources Reg */
 #define SPRN_PVR	0x11F	/* Processor Version Register */
 #define SPRN_RPA	0x3D6	/* Required Physical Address Register */
 #define SPRN_SDA	0x3BF	/* Sampled Data Address Register */
@@ -386,6 +388,8 @@
 #define   SRR1_WAKEMT		0x00280000 /* mtctrl */
 #define   SRR1_WAKEDEC		0x00180000 /* Decrementer interrupt */
 #define   SRR1_WAKETHERM	0x00100000 /* Thermal management interrupt */
+#define SPRN_HSRR0	0x13A	/* Save/Restore Register 0 */
+#define SPRN_HSRR1	0x13B	/* Save/Restore Register 1 */
 
 #ifndef SPRN_SVR
 #define SPRN_SVR	0x11E	/* System Version Register */
@@ -443,6 +447,10 @@
 #define   MMCRA_SIHV	0x10000000UL /* state of MSR HV when SIAR set */
 #define   MMCRA_SIPR	0x08000000UL /* state of MSR PR when SIAR set */
 #define   MMCRA_SAMPLE_ENABLE 0x00000001UL /* enable sampling */
+#define   POWER6_MMCRA_SIHV   0x0000040000000000ULL
+#define   POWER6_MMCRA_SIPR   0x0000020000000000ULL
+#define   POWER6_MMCRA_THRM	0x00000020UL
+#define   POWER6_MMCRA_OTHER	0x0000000EUL
 #define SPRN_PMC1	787
 #define SPRN_PMC2	788
 #define SPRN_PMC3	789
@@ -493,6 +501,19 @@
 #define MMCR0_PMC2_CYCLES	0x1
 #define MMCR0_PMC2_ITLB		0x7
 #define MMCR0_PMC2_LOADMISSTIME	0x5
+#endif
+
+/*
+ * An mtfsf instruction with the L bit set. On CPUs that support this a
+ * full 64bits of FPSCR is restored and on other CPUs the L bit is ignored.
+ *
+ * Until binutils gets the new form of mtfsf, hardwire the instruction.
+ */
+#ifdef CONFIG_PPC64
+#define MTFSF_L(REG) \
+	.long (0xfc00058e | ((0xff) << 17) | ((REG) << 11) | (1 << 25))
+#else
+#define MTFSF_L(REG)	mtfsf	0xff, (REG)
 #endif
 
 /* Processor Version Register (PVR) field extraction */
@@ -559,20 +580,22 @@
 
 /* 64-bit processors */
 /* XXX the prefix should be PVR_, we'll do a global sweep to fix it one day */
-#define	PV_NORTHSTAR	0x0033
-#define	PV_PULSAR	0x0034
-#define	PV_POWER4	0x0035
-#define	PV_ICESTAR	0x0036
-#define	PV_SSTAR	0x0037
-#define	PV_POWER4p	0x0038
+#define PV_NORTHSTAR	0x0033
+#define PV_PULSAR	0x0034
+#define PV_POWER4	0x0035
+#define PV_ICESTAR	0x0036
+#define PV_SSTAR	0x0037
+#define PV_POWER4p	0x0038
 #define PV_970		0x0039
-#define	PV_POWER5	0x003A
+#define PV_POWER5	0x003A
 #define PV_POWER5p	0x003B
 #define PV_970FX	0x003C
-#define	PV_630		0x0040
-#define	PV_630p	0x0041
-#define	PV_970MP	0x0044
-#define	PV_BE		0x0070
+#define PV_630		0x0040
+#define PV_630p	0x0041
+#define PV_970MP	0x0044
+#define PV_970GX	0x0045
+#define PV_BE		0x0070
+#define PV_PA6T		0x0090
 
 /*
  * Number of entries in the SLB. If this ever changes we should handle
@@ -598,10 +621,35 @@
 				: "=r" (rval)); rval;})
 #define mtspr(rn, v)	asm volatile("mtspr " __stringify(rn) ",%0" : : "r" (v))
 
+#ifdef __powerpc64__
+#ifdef CONFIG_PPC_CELL
+#define mftb()		({unsigned long rval;				\
+			asm volatile(					\
+				"90:	mftb %0;\n"			\
+				"97:	cmpwi %0,0;\n"			\
+				"	beq- 90b;\n"			\
+				"99:\n"					\
+				".section __ftr_fixup,\"a\"\n"		\
+				".align 3\n"				\
+				"98:\n"					\
+				"	.llong %1\n"			\
+				"	.llong %1\n"			\
+				"	.llong 97b-98b\n"		\
+				"	.llong 99b-98b\n"		\
+				".previous"				\
+			: "=r" (rval) : "i" (CPU_FTR_CELL_TB_BUG)); rval;})
+#else
 #define mftb()		({unsigned long rval;	\
 			asm volatile("mftb %0" : "=r" (rval)); rval;})
+#endif /* !CONFIG_PPC_CELL */
+
+#else /* __powerpc64__ */
+
 #define mftbl()		({unsigned long rval;	\
 			asm volatile("mftbl %0" : "=r" (rval)); rval;})
+#define mftbu()		({unsigned long rval;	\
+			asm volatile("mftbu %0" : "=r" (rval)); rval;})
+#endif /* !__powerpc64__ */
 
 #define mttbl(v)	asm volatile("mttbl %0":: "r"(v))
 #define mttbu(v)	asm volatile("mttbu %0":: "r"(v))

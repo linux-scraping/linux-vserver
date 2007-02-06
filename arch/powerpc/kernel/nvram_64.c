@@ -204,7 +204,7 @@ static void nvram_print_partitions(char * label)
 	printk(KERN_WARNING "indx\t\tsig\tchks\tlen\tname\n");
 	list_for_each(p, &nvram_part->partition) {
 		tmp_part = list_entry(p, struct nvram_partition, partition);
-		printk(KERN_WARNING "%d    \t%02x\t%02x\t%d\t%s\n",
+		printk(KERN_WARNING "%4d    \t%02x\t%02x\t%d\t%s\n",
 		       tmp_part->index, tmp_part->header.signature,
 		       tmp_part->header.checksum, tmp_part->header.length,
 		       tmp_part->header.name);
@@ -505,7 +505,7 @@ static int nvram_scan_partitions(void)
 		return -ENODEV;
 	total_size = ppc_md.nvram_size();
 	
-	header = (char *) kmalloc(NVRAM_HEADER_LEN, GFP_KERNEL);
+	header = kmalloc(NVRAM_HEADER_LEN, GFP_KERNEL);
 	if (!header) {
 		printk(KERN_ERR "nvram_scan_partitions: Failed kmalloc\n");
 		return -ENOMEM;
@@ -574,7 +574,7 @@ static int __init nvram_init(void)
 	}
   	
   	/* initialize our anchor for the nvram partition list */
-  	nvram_part = (struct nvram_partition *) kmalloc(sizeof(struct nvram_partition), GFP_KERNEL);
+  	nvram_part = kmalloc(sizeof(struct nvram_partition), GFP_KERNEL);
   	if (!nvram_part) {
   		printk(KERN_ERR "nvram_init: Failed kmalloc\n");
   		return -ENOMEM;

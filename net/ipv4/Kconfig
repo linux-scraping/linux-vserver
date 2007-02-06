@@ -64,7 +64,7 @@ config ASK_IP_FIB_HASH
 config IP_FIB_TRIE
 	bool "FIB_TRIE"
 	---help---
-	Use new experimental LC-trie as FIB lookup algoritm. 
+	Use new experimental LC-trie as FIB lookup algorithm. 
         This improves lookup performance if you have a large
 	number of routes.
 
@@ -88,6 +88,7 @@ config IP_FIB_HASH
 config IP_MULTIPLE_TABLES
 	bool "IP: policy routing"
 	depends on IP_ADVANCED_ROUTER
+	select FIB_RULES
 	---help---
 	  Normally, a router decides what to do with a received packet based
 	  solely on the packet's final destination address. If you say Y here,
@@ -102,13 +103,6 @@ config IP_MULTIPLE_TABLES
 	  <ftp://ftp.tux.org/pub/net/ip-routing/>.
 
 	  If unsure, say N.
-
-config IP_ROUTE_FWMARK
-	bool "IP: use netfilter MARK value as routing key"
-	depends on IP_MULTIPLE_TABLES && NETFILTER
-	help
-	  If you say Y here, you will be able to specify different routes for
-	  packets with different mark values (see iptables(8), MARK target).
 
 config IP_ROUTE_MULTIPATH
 	bool "IP: equal cost multipath"
@@ -386,6 +380,7 @@ config INET_ESP
 	select CRYPTO
 	select CRYPTO_HMAC
 	select CRYPTO_MD5
+	select CRYPTO_CBC
 	select CRYPTO_SHA1
 	select CRYPTO_DES
 	---help---
@@ -414,6 +409,33 @@ config INET_TUNNEL
 	tristate
 	default n
 
+config INET_XFRM_MODE_TRANSPORT
+	tristate "IP: IPsec transport mode"
+	default y
+	select XFRM
+	---help---
+	  Support for IPsec transport mode.
+
+	  If unsure, say Y.
+
+config INET_XFRM_MODE_TUNNEL
+	tristate "IP: IPsec tunnel mode"
+	default y
+	select XFRM
+	---help---
+	  Support for IPsec tunnel mode.
+
+	  If unsure, say Y.
+
+config INET_XFRM_MODE_BEET
+	tristate "IP: IPsec BEET mode"
+	default y
+	select XFRM
+	---help---
+	  Support for IPsec BEET mode.
+
+	  If unsure, say Y.
+
 config INET_DIAG
 	tristate "INET: socket monitoring interface"
 	default y
@@ -428,24 +450,22 @@ config INET_TCP_DIAG
 	depends on INET_DIAG
 	def_tristate INET_DIAG
 
-config TCP_CONG_ADVANCED
+menuconfig TCP_CONG_ADVANCED
 	bool "TCP: advanced congestion control"
 	---help---
 	  Support for selection of various TCP congestion control
 	  modules.
 
 	  Nearly all users can safely say no here, and a safe default
-	  selection will be made (BIC-TCP with new Reno as a fallback).
+	  selection will be made (CUBIC with new Reno as a fallback).
 
 	  If unsure, say N.
 
-# TCP Reno is builtin (required as fallback)
-menu "TCP congestion control"
-	depends on TCP_CONG_ADVANCED
+if TCP_CONG_ADVANCED
 
 config TCP_CONG_BIC
 	tristate "Binary Increase Congestion (BIC) control"
-	default y
+	default m
 	---help---
 	BIC-TCP is a sender-side only change that ensures a linear RTT
 	fairness under large windows while offering both scalability and
@@ -459,7 +479,7 @@ config TCP_CONG_BIC
 
 config TCP_CONG_CUBIC
 	tristate "CUBIC TCP"
-	default m
+	default y
 	---help---
 	This is version 2.0 of BIC-TCP which uses a cubic growth function
 	among other techniques.
@@ -508,7 +528,7 @@ config TCP_CONG_HYBLA
 	---help---
 	TCP-Hybla is a sender-side only change that eliminates penalization of
 	long-RTT, large-bandwidth connections, like when satellite legs are
-	involved, expecially when sharing a common bottleneck with normal
+	involved, especially when sharing a common bottleneck with normal
 	terrestrial connections.
 
 config TCP_CONG_VEGAS
@@ -532,12 +552,83 @@ config TCP_CONG_SCALABLE
 	properties, though is known to have fairness issues.
 	See http://www-lce.eng.cam.ac.uk/~ctk21/scalable/
 
-endmenu
+config TCP_CONG_LP
+	tristate "TCP Low Priority"
+	depends on EXPERIMENTAL
+	default n
+	---help---
+	TCP Low Priority (TCP-LP), a distributed algorithm whose goal is
+	to utilize only the excess network bandwidth as compared to the
+	``fair share`` of bandwidth as targeted by TCP.
+	See http://www-ece.rice.edu/networks/TCP-LP/
 
-config TCP_CONG_BIC
+config TCP_CONG_VENO
+	tristate "TCP Veno"
+	depends on EXPERIMENTAL
+	default n
+	---help---
+	TCP Veno is a sender-side only enhancement of TCP to obtain better
+	throughput over wireless networks. TCP Veno makes use of state
+	distinguishing to circumvent the difficult judgment of the packet loss
+	type. TCP Veno cuts down less congestion window in response to random
+	loss packets.
+	See http://www.ntu.edu.sg/home5/ZHOU0022/papers/CPFu03a.pdf
+
+choice
+	prompt "Default TCP congestion control"
+	default DEFAULT_CUBIC
+	help
+	  Select the TCP congestion control that will be used by default
+	  for all connections.
+
+	config DEFAULT_BIC
+		bool "Bic" if TCP_CONG_BIC=y
+
+	config DEFAULT_CUBIC
+		bool "Cubic" if TCP_CONG_CUBIC=y
+
+	config DEFAULT_HTCP
+		bool "Htcp" if TCP_CONG_HTCP=y
+
+	config DEFAULT_VEGAS
+		bool "Vegas" if TCP_CONG_VEGAS=y
+
+	config DEFAULT_WESTWOOD
+		bool "Westwood" if TCP_CONG_WESTWOOD=y
+
+	config DEFAULT_RENO
+		bool "Reno"
+
+endchoice
+
+endif
+
+config TCP_CONG_CUBIC
 	tristate
 	depends on !TCP_CONG_ADVANCED
 	default y
+
+config DEFAULT_TCP_CONG
+	string
+	default "bic" if DEFAULT_BIC
+	default "cubic" if DEFAULT_CUBIC
+	default "htcp" if DEFAULT_HTCP
+	default "vegas" if DEFAULT_VEGAS
+	default "westwood" if DEFAULT_WESTWOOD
+	default "reno" if DEFAULT_RENO
+	default "cubic"
+
+config TCP_MD5SIG
+	bool "TCP: MD5 Signature Option support (RFC2385) (EXPERIMENTAL)"
+	depends on EXPERIMENTAL
+	select CRYPTO
+	select CRYPTO_MD5
+	---help---
+	  RFC2385 specifices a method of giving MD5 protection to TCP sessions.
+	  Its main (only?) use is to protect BGP sessions between core routers
+	  on the Internet.
+
+	  If unsure, say N.
 
 source "net/ipv4/ipvs/Kconfig"
 

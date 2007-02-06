@@ -264,9 +264,9 @@ static ssize_t pnp_show_current_resources(struct device *dmdev, struct device_at
 			if (pnp_port_flags(dev, i) & IORESOURCE_DISABLED)
 				pnp_printf(buffer," disabled\n");
 			else
-				pnp_printf(buffer," 0x%lx-0x%lx\n",
-						pnp_port_start(dev, i),
-						pnp_port_end(dev, i));
+				pnp_printf(buffer," 0x%llx-0x%llx\n",
+					(unsigned long long)pnp_port_start(dev, i),
+					(unsigned long long)pnp_port_end(dev, i));
 		}
 	}
 	for (i = 0; i < PNP_MAX_MEM; i++) {
@@ -275,9 +275,9 @@ static ssize_t pnp_show_current_resources(struct device *dmdev, struct device_at
 			if (pnp_mem_flags(dev, i) & IORESOURCE_DISABLED)
 				pnp_printf(buffer," disabled\n");
 			else
-				pnp_printf(buffer," 0x%lx-0x%lx\n",
-						pnp_mem_start(dev, i),
-						pnp_mem_end(dev, i));
+				pnp_printf(buffer," 0x%llx-0x%llx\n",
+					(unsigned long long)pnp_mem_start(dev, i),
+					(unsigned long long)pnp_mem_end(dev, i));
 		}
 	}
 	for (i = 0; i < PNP_MAX_IRQ; i++) {
@@ -286,8 +286,8 @@ static ssize_t pnp_show_current_resources(struct device *dmdev, struct device_at
 			if (pnp_irq_flags(dev, i) & IORESOURCE_DISABLED)
 				pnp_printf(buffer," disabled\n");
 			else
-				pnp_printf(buffer," %ld\n",
-						pnp_irq(dev, i));
+				pnp_printf(buffer," %lld\n",
+					(unsigned long long)pnp_irq(dev, i));
 		}
 	}
 	for (i = 0; i < PNP_MAX_DMA; i++) {
@@ -296,8 +296,8 @@ static ssize_t pnp_show_current_resources(struct device *dmdev, struct device_at
 			if (pnp_dma_flags(dev, i) & IORESOURCE_DISABLED)
 				pnp_printf(buffer," disabled\n");
 			else
-				pnp_printf(buffer," %ld\n",
-						pnp_dma(dev, i));
+				pnp_printf(buffer," %lld\n",
+					(unsigned long long)pnp_dma(dev, i));
 		}
 	}
 	ret = (buffer->curr - buf);
@@ -461,8 +461,19 @@ static DEVICE_ATTR(id,S_IRUGO,pnp_show_current_ids,NULL);
 
 int pnp_interface_attach_device(struct pnp_dev *dev)
 {
-	device_create_file(&dev->dev,&dev_attr_options);
-	device_create_file(&dev->dev,&dev_attr_resources);
-	device_create_file(&dev->dev,&dev_attr_id);
+	int rc = device_create_file(&dev->dev,&dev_attr_options);
+	if (rc) goto err;
+	rc = device_create_file(&dev->dev,&dev_attr_resources);
+	if (rc) goto err_opt;
+	rc = device_create_file(&dev->dev,&dev_attr_id);
+	if (rc) goto err_res;
+
 	return 0;
+
+err_res:
+	device_remove_file(&dev->dev,&dev_attr_resources);
+err_opt:
+	device_remove_file(&dev->dev,&dev_attr_options);
+err:
+	return rc;
 }

@@ -5,7 +5,6 @@
  * 				Thomas Graf <tgraf@suug.ch>
  */
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/errno.h>
@@ -143,6 +142,13 @@ int genl_register_ops(struct genl_family *family, struct genl_ops *ops)
 		err = -EEXIST;
 		goto errout;
 	}
+
+	if (ops->dumpit)
+		ops->flags |= GENL_CMD_CAP_DUMP;
+	if (ops->doit)
+		ops->flags |= GENL_CMD_CAP_DO;
+	if (ops->policy)
+		ops->flags |= GENL_CMD_CAP_HASPOL;
 
 	genl_lock();
 	list_add_tail(&ops->ops_list, &family->ops_list);
@@ -320,7 +326,7 @@ static int genl_rcv_msg(struct sk_buff *skb, struct nlmsghdr *nlh,
 		goto errout;
 	}
 
-	if ((ops->flags & GENL_ADMIN_PERM) && security_netlink_recv(skb)) {
+	if ((ops->flags & GENL_ADMIN_PERM) && security_netlink_recv(skb, CAP_NET_ADMIN)) {
 		err = -EPERM;
 		goto errout;
 	}
@@ -332,7 +338,7 @@ static int genl_rcv_msg(struct sk_buff *skb, struct nlmsghdr *nlh,
 		}
 
 		*errp = err = netlink_dump_start(genl_sock, skb, nlh,
-						 ops->dumpit, NULL);
+						 ops->dumpit, ops->done);
 		if (err == 0)
 			skb_pull(skb, min(NLMSG_ALIGN(nlh->nlmsg_len),
 					  skb->len));
@@ -385,18 +391,52 @@ static void genl_rcv(struct sock *sk, int len)
  * Controller
  **************************************************************************/
 
+static struct genl_family genl_ctrl = {
+	.id = GENL_ID_CTRL,
+	.name = "nlctrl",
+	.version = 0x2,
+	.maxattr = CTRL_ATTR_MAX,
+};
+
 static int ctrl_fill_info(struct genl_family *family, u32 pid, u32 seq,
 			  u32 flags, struct sk_buff *skb, u8 cmd)
 {
 	void *hdr;
 
-	hdr = genlmsg_put(skb, pid, seq, GENL_ID_CTRL, 0, flags, cmd,
-			  family->version);
+	hdr = genlmsg_put(skb, pid, seq, &genl_ctrl, flags, cmd);
 	if (hdr == NULL)
 		return -1;
 
 	NLA_PUT_STRING(skb, CTRL_ATTR_FAMILY_NAME, family->name);
 	NLA_PUT_U16(skb, CTRL_ATTR_FAMILY_ID, family->id);
+	NLA_PUT_U32(skb, CTRL_ATTR_VERSION, family->version);
+	NLA_PUT_U32(skb, CTRL_ATTR_HDRSIZE, family->hdrsize);
+	NLA_PUT_U32(skb, CTRL_ATTR_MAXATTR, family->maxattr);
+
+	if (!list_empty(&family->ops_list)) {
+		struct nlattr *nla_ops;
+		struct genl_ops *ops;
+		int idx = 1;
+
+		nla_ops = nla_nest_start(skb, CTRL_ATTR_OPS);
+		if (nla_ops == NULL)
+			goto nla_put_failure;
+
+		list_for_each_entry(ops, &family->ops_list, ops_list) {
+			struct nlattr *nest;
+
+			nest = nla_nest_start(skb, idx++);
+			if (nest == NULL)
+				goto nla_put_failure;
+
+			NLA_PUT_U32(skb, CTRL_ATTR_OP_ID, ops->cmd);
+			NLA_PUT_U32(skb, CTRL_ATTR_OP_FLAGS, ops->flags);
+
+			nla_nest_end(skb, nest);
+		}
+
+		nla_nest_end(skb, nla_ops);
+	}
 
 	return genlmsg_end(skb, hdr);
 
@@ -411,6 +451,9 @@ static int ctrl_dumpfamily(struct sk_buff *skb, struct netlink_callback *cb)
 	struct genl_family *rt;
 	int chains_to_skip = cb->args[0];
 	int fams_to_skip = cb->args[1];
+
+	if (chains_to_skip != 0)
+		genl_lock();
 
 	for (i = 0; i < GENL_FAM_TAB_SIZE; i++) {
 		if (i < chains_to_skip)
@@ -429,6 +472,9 @@ static int ctrl_dumpfamily(struct sk_buff *skb, struct netlink_callback *cb)
 	}
 
 errout:
+	if (chains_to_skip != 0)
+		genl_unlock();
+
 	cb->args[0] = i;
 	cb->args[1] = n;
 
@@ -441,7 +487,7 @@ static struct sk_buff *ctrl_build_msg(struct genl_family *family, u32 pid,
 	struct sk_buff *skb;
 	int err;
 
-	skb = nlmsg_new(NLMSG_GOODSIZE);
+	skb = nlmsg_new(NLMSG_DEFAULT_SIZE, GFP_KERNEL);
 	if (skb == NULL)
 		return ERR_PTR(-ENOBUFS);
 
@@ -456,7 +502,8 @@ static struct sk_buff *ctrl_build_msg(struct genl_family *family, u32 pid,
 
 static struct nla_policy ctrl_policy[CTRL_ATTR_MAX+1] __read_mostly = {
 	[CTRL_ATTR_FAMILY_ID]	= { .type = NLA_U16 },
-	[CTRL_ATTR_FAMILY_NAME]	= { .type = NLA_STRING },
+	[CTRL_ATTR_FAMILY_NAME]	= { .type = NLA_NUL_STRING,
+				    .len = GENL_NAMSIZ - 1 },
 };
 
 static int ctrl_getfamily(struct sk_buff *skb, struct genl_info *info)
@@ -471,12 +518,9 @@ static int ctrl_getfamily(struct sk_buff *skb, struct genl_info *info)
 	}
 
 	if (info->attrs[CTRL_ATTR_FAMILY_NAME]) {
-		char name[GENL_NAMSIZ];
+		char *name;
 
-		if (nla_strlcpy(name, info->attrs[CTRL_ATTR_FAMILY_NAME],
-				GENL_NAMSIZ) >= GENL_NAMSIZ)
-			goto errout;
-
+		name = nla_data(info->attrs[CTRL_ATTR_FAMILY_NAME]);
 		res = genl_family_find_byname(name);
 	}
 
@@ -492,7 +536,7 @@ static int ctrl_getfamily(struct sk_buff *skb, struct genl_info *info)
 		goto errout;
 	}
 
-	err = genlmsg_unicast(msg, info->snd_pid);
+	err = genlmsg_reply(msg, info);
 errout:
 	return err;
 }
@@ -511,7 +555,7 @@ static int genl_ctrl_event(int event, void *data)
 		if (IS_ERR(msg))
 			return PTR_ERR(msg);
 
-		genlmsg_multicast(msg, 0, GENL_ID_CTRL);
+		genlmsg_multicast(msg, 0, GENL_ID_CTRL, GFP_KERNEL);
 		break;
 	}
 
@@ -523,13 +567,6 @@ static struct genl_ops genl_ctrl_ops = {
 	.doit		= ctrl_getfamily,
 	.dumpit		= ctrl_dumpfamily,
 	.policy		= ctrl_policy,
-};
-
-static struct genl_family genl_ctrl = {
-	.id = GENL_ID_CTRL,
-	.name = "nlctrl",
-	.version = 0x1,
-	.maxattr = CTRL_ATTR_MAX,
 };
 
 static int __init genl_init(void)

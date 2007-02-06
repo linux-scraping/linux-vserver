@@ -14,7 +14,6 @@
 
 //#define DMA_DEBUG 1
 
-#include <linux/config.h>
 #include <linux/interrupt.h>
 
 #undef MAX_DMA_CHANNELS		/* don't use kernel/dma.c */
@@ -25,10 +24,7 @@
 /*
  * FRV DMA controller management
  */
-struct pt_regs;
-
-typedef irqreturn_t (*dma_irq_handler_t)(int dmachan, unsigned long cstr, void *data,
-					 struct pt_regs *regs);
+typedef irqreturn_t (*dma_irq_handler_t)(int dmachan, unsigned long cstr, void *data);
 
 extern void frv_dma_init(void);
 

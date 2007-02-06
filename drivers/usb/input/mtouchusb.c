@@ -39,14 +39,11 @@
  *
  *****************************************************************************/
 
-#include <linux/config.h>
 #include <linux/kernel.h>
 #include <linux/slab.h>
-#include <linux/input.h>
 #include <linux/module.h>
 #include <linux/init.h>
-#include <linux/usb.h>
-#include <linux/usb_input.h>
+#include <linux/usb/input.h>
 
 #define MTOUCHUSB_MIN_XC                0x0
 #define MTOUCHUSB_MAX_RAW_XC            0x4000
@@ -101,7 +98,7 @@ static struct usb_device_id mtouchusb_devices[] = {
 	{ }
 };
 
-static void mtouchusb_irq(struct urb *urb, struct pt_regs *regs)
+static void mtouchusb_irq(struct urb *urb)
 {
 	struct mtouch_usb *mtouch = urb->context;
 	int retval;
@@ -110,7 +107,7 @@ static void mtouchusb_irq(struct urb *urb, struct pt_regs *regs)
 	case 0:
 		/* success */
 		break;
-	case -ETIMEDOUT:
+	case -ETIME:
 		/* this urb is timing out */
 		dbg("%s - urb timed out - was the device unplugged?",
 		    __FUNCTION__);
@@ -128,7 +125,6 @@ static void mtouchusb_irq(struct urb *urb, struct pt_regs *regs)
 		goto exit;
 	}
 
-	input_regs(mtouch->input, regs);
 	input_report_key(mtouch->input, BTN_TOUCH,
 			 MTOUCHUSB_GET_TOUCHED(mtouch->data));
 	input_report_abs(mtouch->input, ABS_X, MTOUCHUSB_GET_XC(mtouch->data));
@@ -168,7 +164,7 @@ static int mtouchusb_alloc_buffers(struct usb_device *udev, struct mtouch_usb *m
 	dbg("%s - called", __FUNCTION__);
 
 	mtouch->data = usb_buffer_alloc(udev, MTOUCHUSB_REPORT_DATA_SIZE,
-					SLAB_ATOMIC, &mtouch->data_dma);
+					GFP_ATOMIC, &mtouch->data_dma);
 
 	if (!mtouch->data)
 		return -1;

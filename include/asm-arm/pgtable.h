@@ -11,10 +11,17 @@
 #define _ASMARM_PGTABLE_H
 
 #include <asm-generic/4level-fixup.h>
+#include <asm/proc-fns.h>
+
+#ifndef CONFIG_MMU
+
+#include "pgtable-nommu.h"
+
+#else
 
 #include <asm/memory.h>
-#include <asm/proc-fns.h>
 #include <asm/arch/vmalloc.h>
+#include <asm/pgtable-hwdef.h>
 
 /*
  * Just any arbitrary offset to the start of the vmalloc VM area: the
@@ -130,6 +137,13 @@ extern void __pgd_error(const char *file, int line, unsigned long val);
 #define USER_PTRS_PER_PGD	((TASK_SIZE/PGDIR_SIZE) - FIRST_USER_PGD_NR)
 
 /*
+ * section address mask and size definitions.
+ */
+#define SECTION_SHIFT		20
+#define SECTION_SIZE		(1UL << SECTION_SHIFT)
+#define SECTION_MASK		(~(SECTION_SIZE-1))
+
+/*
  * ARMv6 supersection address mask and size definitions.
  */
 #define SUPERSECTION_SHIFT	24
@@ -156,9 +170,7 @@ extern void __pgd_error(const char *file, int line, unsigned long val);
 #define L_PTE_WRITE		(1 << 5)
 #define L_PTE_EXEC		(1 << 6)
 #define L_PTE_DIRTY		(1 << 7)
-#define L_PTE_COHERENT		(1 << 9)	/* I/O coherent (xsc3) */
-#define L_PTE_SHARED		(1 << 10)	/* shared between CPUs (v6) */
-#define L_PTE_ASID		(1 << 11)	/* non-global (use ASID, v6) */
+#define L_PTE_SHARED		(1 << 10)	/* shared(v6), coherent(xsc3) */
 
 #ifndef __ASSEMBLY__
 
@@ -216,16 +228,19 @@ extern struct page *empty_zero_page;
 #define pfn_pte(pfn,prot)	(__pte(((pfn) << PAGE_SHIFT) | pgprot_val(prot)))
 
 #define pte_none(pte)		(!pte_val(pte))
-#define pte_clear(mm,addr,ptep)	set_pte_at((mm),(addr),(ptep), __pte(0))
+#define pte_clear(mm,addr,ptep)	set_pte_ext(ptep, __pte(0), 0)
 #define pte_page(pte)		(pfn_to_page(pte_pfn(pte)))
-#define pte_offset_kernel(dir,addr)	(pmd_page_kernel(*(dir)) + __pte_index(addr))
-#define pte_offset_map(dir,addr)	(pmd_page_kernel(*(dir)) + __pte_index(addr))
-#define pte_offset_map_nested(dir,addr)	(pmd_page_kernel(*(dir)) + __pte_index(addr))
+#define pte_offset_kernel(dir,addr)	(pmd_page_vaddr(*(dir)) + __pte_index(addr))
+#define pte_offset_map(dir,addr)	(pmd_page_vaddr(*(dir)) + __pte_index(addr))
+#define pte_offset_map_nested(dir,addr)	(pmd_page_vaddr(*(dir)) + __pte_index(addr))
 #define pte_unmap(pte)		do { } while (0)
 #define pte_unmap_nested(pte)	do { } while (0)
 
-#define set_pte(ptep, pte)	cpu_set_pte(ptep,pte)
-#define set_pte_at(mm,addr,ptep,pteval) set_pte(ptep,pteval)
+#define set_pte_ext(ptep,pte,ext) cpu_set_pte_ext(ptep,pte,ext)
+
+#define set_pte_at(mm,addr,ptep,pteval) do { \
+	set_pte_ext(ptep, pteval, (addr) >= PAGE_OFFSET ? 0 : PTE_EXT_NG); \
+ } while (0)
 
 /*
  * The following only work if pte_present() is true.
@@ -285,7 +300,7 @@ PTE_BIT_FUNC(mkyoung,   |= L_PTE_YOUNG);
 		clean_pmd_entry(pmdp);	\
 	} while (0)
 
-static inline pte_t *pmd_page_kernel(pmd_t pmd)
+static inline pte_t *pmd_page_vaddr(pmd_t pmd)
 {
 	unsigned long ptr;
 
@@ -377,5 +392,7 @@ extern pgd_t swapper_pg_dir[PTRS_PER_PGD];
 #define pgtable_cache_init() do { } while (0)
 
 #endif /* !__ASSEMBLY__ */
+
+#endif /* CONFIG_MMU */
 
 #endif /* _ASMARM_PGTABLE_H */

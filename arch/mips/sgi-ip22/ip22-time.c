@@ -7,11 +7,12 @@
  * Ralf Baechle or David S. Miller (sorry guys, i'm really not sure)
  *
  * Copyright (C) 2001 by Ladislav Michl
- * Copyright (C) 2003 Ralf Baechle (ralf@linux-mips.org)
+ * Copyright (C) 2003, 06 Ralf Baechle (ralf@linux-mips.org)
  */
 #include <linux/bcd.h>
 #include <linux/ds1286.h>
 #include <linux/init.h>
+#include <linux/irq.h>
 #include <linux/kernel.h>
 #include <linux/interrupt.h>
 #include <linux/kernel_stat.h>
@@ -76,7 +77,7 @@ static int indy_rtc_set_time(unsigned long tim)
 	save_control = hpc3c0->rtcregs[RTC_CMD] & 0xff;
 	hpc3c0->rtcregs[RTC_CMD] = save_control | RTC_TE;
 
-	hpc3c0->rtcregs[RTC_YEAR] = BIN2BCD(tm.tm_sec);
+	hpc3c0->rtcregs[RTC_YEAR] = BIN2BCD(tm.tm_year);
 	hpc3c0->rtcregs[RTC_MONTH] = BIN2BCD(tm.tm_mon);
 	hpc3c0->rtcregs[RTC_DATE] = BIN2BCD(tm.tm_mday);
 	hpc3c0->rtcregs[RTC_HOURS] = BIN2BCD(tm.tm_hour);
@@ -174,7 +175,7 @@ static __init void indy_time_init(void)
 }
 
 /* Generic SGI handler for (spurious) 8254 interrupts */
-void indy_8254timer_irq(struct pt_regs *regs)
+void indy_8254timer_irq(void)
 {
 	int irq = SGI_8254_0_IRQ;
 	ULONG cnt;
@@ -188,19 +189,17 @@ void indy_8254timer_irq(struct pt_regs *regs)
 	irq_exit();
 }
 
-void indy_r4k_timer_interrupt(struct pt_regs *regs)
+void indy_r4k_timer_interrupt(void)
 {
 	int irq = SGI_TIMER_IRQ;
 
 	irq_enter();
 	kstat_this_cpu.irqs[irq]++;
-	timer_interrupt(irq, NULL, regs);
+	timer_interrupt(irq, NULL);
 	irq_exit();
 }
 
-extern int setup_irq(unsigned int irq, struct irqaction *irqaction);
-
-static void indy_timer_setup(struct irqaction *irq)
+void __init plat_timer_setup(struct irqaction *irq)
 {
 	/* over-write the handler, we use our own way */
 	irq->handler = no_action;
@@ -216,5 +215,4 @@ void __init ip22_time_init(void)
 	rtc_mips_set_time = indy_rtc_set_time;
 
 	board_time_init = indy_time_init;
-	board_timer_setup = indy_timer_setup;
 }

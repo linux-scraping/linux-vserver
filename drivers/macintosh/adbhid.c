@@ -1,5 +1,5 @@
 /*
- * drivers/input/adbhid.c
+ * drivers/macintosh/adbhid.c
  *
  * ADB HID driver for Power Macintosh computers.
  *
@@ -34,7 +34,6 @@
  * Move to syfs
  */
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/slab.h>
 #include <linux/init.h>
@@ -47,11 +46,8 @@
 
 #include <asm/machdep.h>
 #ifdef CONFIG_PPC_PMAC
-#include <asm/pmac_feature.h>
-#endif
-
-#ifdef CONFIG_PMAC_BACKLIGHT
 #include <asm/backlight.h>
+#include <asm/pmac_feature.h>
 #endif
 
 MODULE_AUTHOR("Franz Sirl <Franz.Sirl-kernel@lauterbach.com>");
@@ -179,7 +175,7 @@ u8 adb_to_linux_keycodes[128] = {
 	/* 0x65 */ KEY_F9,		/*  67 */
 	/* 0x66 */ KEY_HANJA,		/* 123 */
 	/* 0x67 */ KEY_F11,		/*  87 */
-	/* 0x68 */ KEY_HANGUEL,		/* 122 */
+	/* 0x68 */ KEY_HANGEUL,		/* 122 */
 	/* 0x69 */ KEY_SYSRQ,		/*  99 */
 	/* 0x6a */ 0,
 	/* 0x6b */ KEY_SCROLLLOCK,	/*  70 */
@@ -226,7 +222,7 @@ static struct adbhid *adbhid[16];
 
 static void adbhid_probe(void);
 
-static void adbhid_input_keycode(int, int, int, struct pt_regs *);
+static void adbhid_input_keycode(int, int, int);
 
 static void init_trackpad(int id);
 static void init_trackball(int id);
@@ -237,11 +233,6 @@ static void init_ms_a3(int id);
 static struct adb_ids keyboard_ids;
 static struct adb_ids mouse_ids;
 static struct adb_ids buttons_ids;
-
-#ifdef CONFIG_PMAC_BACKLIGHT
-/* Exported to via-pmu.c */
-int disable_kernel_backlight = 0;
-#endif /* CONFIG_PMAC_BACKLIGHT */
 
 /* Kind of keyboard, see Apple technote 1152  */
 #define ADB_KEYBOARD_UNKNOWN	0
@@ -262,7 +253,7 @@ int disable_kernel_backlight = 0;
 #define ADBMOUSE_MACALLY2	9	/* MacAlly 2-button mouse */
 
 static void
-adbhid_keyboard_input(unsigned char *data, int nb, struct pt_regs *regs, int apoll)
+adbhid_keyboard_input(unsigned char *data, int nb, int apoll)
 {
 	int id = (data[0] >> 4) & 0x0f;
 
@@ -275,13 +266,13 @@ adbhid_keyboard_input(unsigned char *data, int nb, struct pt_regs *regs, int apo
 	/* first check this is from register 0 */
 	if (nb != 3 || (data[0] & 3) != KEYB_KEYREG)
 		return;		/* ignore it */
-	adbhid_input_keycode(id, data[1], 0, regs);
+	adbhid_input_keycode(id, data[1], 0);
 	if (!(data[2] == 0xff || (data[2] == 0x7f && data[1] == 0x7f)))
-		adbhid_input_keycode(id, data[2], 0, regs);
+		adbhid_input_keycode(id, data[2], 0);
 }
 
 static void
-adbhid_input_keycode(int id, int keycode, int repeat, struct pt_regs *regs)
+adbhid_input_keycode(int id, int keycode, int repeat)
 {
 	struct adbhid *ahid = adbhid[id];
 	int up_flag;
@@ -291,7 +282,6 @@ adbhid_input_keycode(int id, int keycode, int repeat, struct pt_regs *regs)
 
 	switch (keycode) {
 	case ADB_KEY_CAPSLOCK: /* Generate down/up events for CapsLock everytime. */
-		input_regs(ahid->input, regs);
 		input_report_key(ahid->input, KEY_CAPSLOCK, 1);
 		input_report_key(ahid->input, KEY_CAPSLOCK, 0);
 		input_sync(ahid->input);
@@ -347,7 +337,6 @@ adbhid_input_keycode(int id, int keycode, int repeat, struct pt_regs *regs)
 	}
 
 	if (adbhid[id]->keycode[keycode]) {
-		input_regs(adbhid[id]->input, regs);
 		input_report_key(adbhid[id]->input,
 				 adbhid[id]->keycode[keycode], !up_flag);
 		input_sync(adbhid[id]->input);
@@ -358,7 +347,7 @@ adbhid_input_keycode(int id, int keycode, int repeat, struct pt_regs *regs)
 }
 
 static void
-adbhid_mouse_input(unsigned char *data, int nb, struct pt_regs *regs, int autopoll)
+adbhid_mouse_input(unsigned char *data, int nb, int autopoll)
 {
 	int id = (data[0] >> 4) & 0x0f;
 
@@ -441,8 +430,6 @@ adbhid_mouse_input(unsigned char *data, int nb, struct pt_regs *regs, int autopo
                 break;
 	}
 
-	input_regs(adbhid[id]->input, regs);
-
 	input_report_key(adbhid[id]->input, BTN_LEFT,   !((data[1] >> 7) & 1));
 	input_report_key(adbhid[id]->input, BTN_MIDDLE, !((data[2] >> 7) & 1));
 
@@ -458,7 +445,7 @@ adbhid_mouse_input(unsigned char *data, int nb, struct pt_regs *regs, int autopo
 }
 
 static void
-adbhid_buttons_input(unsigned char *data, int nb, struct pt_regs *regs, int autopoll)
+adbhid_buttons_input(unsigned char *data, int nb, int autopoll)
 {
 	int id = (data[0] >> 4) & 0x0f;
 
@@ -466,8 +453,6 @@ adbhid_buttons_input(unsigned char *data, int nb, struct pt_regs *regs, int auto
 		printk(KERN_ERR "ADB HID on ID %d not yet registered\n", id);
 		return;
 	}
-
-	input_regs(adbhid[id]->input, regs);
 
 	switch (adbhid[id]->original_handler_id) {
 	default:
@@ -503,9 +488,7 @@ adbhid_buttons_input(unsigned char *data, int nb, struct pt_regs *regs, int auto
 	case 0x1f: /* Powerbook button device */
 	  {
 		int down = (data[1] == (data[1] & 0xf));
-#ifdef CONFIG_PMAC_BACKLIGHT
-		int backlight = get_backlight_level();
-#endif
+
 		/*
 		 * XXX: Where is the contrast control for the passive?
 		 *  -- Cort
@@ -530,29 +513,17 @@ adbhid_buttons_input(unsigned char *data, int nb, struct pt_regs *regs, int auto
 
 		case 0xa:	/* brightness decrease */
 #ifdef CONFIG_PMAC_BACKLIGHT
-			if (!disable_kernel_backlight) {
-				if (down && backlight >= 0) {
-					if (backlight > BACKLIGHT_OFF)
-						set_backlight_level(backlight-1);
-					else
-						set_backlight_level(BACKLIGHT_OFF);
-				}
-			}
-#endif /* CONFIG_PMAC_BACKLIGHT */
+			if (down)
+				pmac_backlight_key_down();
+#endif
 			input_report_key(adbhid[id]->input, KEY_BRIGHTNESSDOWN, down);
 			break;
 
 		case 0x9:	/* brightness increase */
 #ifdef CONFIG_PMAC_BACKLIGHT
-			if (!disable_kernel_backlight) {
-				if (down && backlight >= 0) {
-					if (backlight < BACKLIGHT_MAX)
-						set_backlight_level(backlight+1);
-					else 
-						set_backlight_level(BACKLIGHT_MAX);
-				}
-			}
-#endif /* CONFIG_PMAC_BACKLIGHT */
+			if (down)
+				pmac_backlight_key_up();
+#endif
 			input_report_key(adbhid[id]->input, KEY_BRIGHTNESSUP, down);
 			break;
 
@@ -718,7 +689,6 @@ adbhid_input_register(int id, int default_id, int original_handler_id,
 	if (!hid || !input_dev) {
 		err = -ENOMEM;
 		goto fail;
-
 	}
 
 	sprintf(hid->phys, "adb%d:%d.%02x/input", id, default_id, original_handler_id);
@@ -836,7 +806,9 @@ adbhid_input_register(int id, int default_id, int original_handler_id,
 
 	input_dev->keycode = hid->keycode;
 
-	input_register_device(input_dev);
+	err = input_register_device(input_dev);
+	if (err)
+		goto fail;
 
 	if (default_id == ADB_KEYBOARD) {
 		/* HACK WARNING!! This should go away as soon there is an utility
@@ -849,7 +821,10 @@ adbhid_input_register(int id, int default_id, int original_handler_id,
 	return 0;
 
  fail:	input_free_device(input_dev);
-	kfree(hid);
+	if (hid) {
+		kfree(hid->keycode);
+		kfree(hid);
+	}
 	adbhid[id] = NULL;
 	return err;
 }

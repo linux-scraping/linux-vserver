@@ -112,8 +112,7 @@
  * Valid machtype for group GALILEO
  */
 #define MACH_GROUP_GALILEO     11	/* Galileo Eval Boards		*/
-#define  MACH_EV96100		0	/* EV96100 */
-#define  MACH_EV64120A		1	/* EV64120A */
+#define  MACH_EV64120A		0	/* EV64120A */
 
 /*
  * Valid machtype for group MOMENCO
@@ -126,24 +125,13 @@
 #define  MACH_MOMENCO_OCELOT_3	4
 
 /*
- * Valid machtype for group ITE
- */
-#define MACH_GROUP_ITE		13	/* ITE Semi Eval Boards		*/
-#define  MACH_QED_4N_S01B	0	/* ITE8172 based eval board */
-
-/*
  * Valid machtype for group PHILIPS
  */
 #define MACH_GROUP_PHILIPS     14
 #define  MACH_PHILIPS_NINO	0	/* Nino */
 #define  MACH_PHILIPS_VELO	1	/* Velo */
 #define  MACH_PHILIPS_JBS	2	/* JBS */
-
-/*
- * Valid machtype for group Globespan
- */
-#define MACH_GROUP_GLOBESPAN   15	/* Globespan */
-#define  MACH_IVR		0	/* IVR eval board */
+#define  MACH_PHILIPS_STB810	3	/* STB810 */
 
 /*
  * Valid machtype for group SIBYTE
@@ -217,6 +205,13 @@
  */
 #define MACH_GROUP_TITAN       22	/* PMC-Sierra Titan		*/
 #define  MACH_TITAN_YOSEMITE	1	/* PMC-Sierra Yosemite		*/
+#define  MACH_TITAN_EXCITE	2	/* Basler eXcite		*/
+
+/*
+ * Valid machtype for group NEC EMMA2RH
+ */
+#define MACH_GROUP_NEC_EMMA2RH 25	/* NEC EMMA2RH (was 23)		*/
+#define  MACH_NEC_MARKEINS	0	/* NEC EMMA2RH Mark-eins	*/
 
 #define CL_SIZE			COMMAND_LINE_SIZE
 
@@ -258,4 +253,10 @@ extern char arcs_cmdline[CL_SIZE];
  * Registers a0, a1, a3 and a4 as passed to the kenrel entry by firmware
  */
 extern unsigned long fw_arg0, fw_arg1, fw_arg2, fw_arg3;
+
+/*
+ * Platform memory detection hook called by setup_arch
+ */
+extern void plat_mem_setup(void);
+
 #endif /* _ASM_BOOTINFO_H */

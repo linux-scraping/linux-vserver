@@ -24,7 +24,6 @@
  *    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/syscalls.h>
@@ -69,10 +68,6 @@ EXPORT_SYMBOL($global$);
 EXPORT_SYMBOL(memcpy_toio);
 EXPORT_SYMBOL(memcpy_fromio);
 EXPORT_SYMBOL(memset_io);
-
-#include <asm/unistd.h>
-EXPORT_SYMBOL(sys_lseek);
-EXPORT_SYMBOL(sys_write);
 
 #include <asm/semaphore.h>
 EXPORT_SYMBOL(__up);

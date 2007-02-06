@@ -16,7 +16,6 @@
  *
  */
 
-#include <linux/config.h>
 #include <linux/sys.h>
 #include <asm/unistd.h>
 #include <asm/errno.h>
@@ -58,32 +57,6 @@ _GLOBAL(mulhdu)
 	addze	r3,r3
 2:	addc	r4,r4,r9
 	addze	r3,r3
-	blr
-
-/*
- * Returns (address we're running at) - (address we were linked at)
- * for use before the text and data are mapped to KERNELBASE.
- */
-_GLOBAL(reloc_offset)
-	mflr	r0
-	bl	1f
-1:	mflr	r3
-	LOAD_REG_IMMEDIATE(r4,1b)
-	subf	r3,r4,r3
-	mtlr	r0
-	blr
-
-/*
- * add_reloc_offset(x) returns x + reloc_offset().
- */
-_GLOBAL(add_reloc_offset)
-	mflr	r0
-	bl	1f
-1:	mflr	r5
-	LOAD_REG_IMMEDIATE(r4,1b)
-	subf	r5,r4,r5
-	add	r3,r3,r5
-	mtlr	r0
 	blr
 
 /*
@@ -129,80 +102,6 @@ _GLOBAL(reloc_got2)
 	blr
 
 /*
- * identify_cpu,
- * called with r3 = data offset and r4 = CPU number
- * doesn't change r3
- */
-_GLOBAL(identify_cpu)
-	addis	r8,r3,cpu_specs@ha
-	addi	r8,r8,cpu_specs@l
-	mfpvr	r7
-1:
-	lwz	r5,CPU_SPEC_PVR_MASK(r8)
-	and	r5,r5,r7
-	lwz	r6,CPU_SPEC_PVR_VALUE(r8)
-	cmplw	0,r6,r5
-	beq	1f
-	addi	r8,r8,CPU_SPEC_ENTRY_SIZE
-	b	1b
-1:
-	addis	r6,r3,cur_cpu_spec@ha
-	addi	r6,r6,cur_cpu_spec@l
-	sub	r8,r8,r3
-	stw	r8,0(r6)
-	blr
-
-/*
- * do_cpu_ftr_fixups - goes through the list of CPU feature fixups
- * and writes nop's over sections of code that don't apply for this cpu.
- * r3 = data offset (not changed)
- */
-_GLOBAL(do_cpu_ftr_fixups)
-	/* Get CPU 0 features */
-	addis	r6,r3,cur_cpu_spec@ha
-	addi	r6,r6,cur_cpu_spec@l
-	lwz	r4,0(r6)
-	add	r4,r4,r3
-	lwz	r4,CPU_SPEC_FEATURES(r4)
-
-	/* Get the fixup table */
-	addis	r6,r3,__start___ftr_fixup@ha
-	addi	r6,r6,__start___ftr_fixup@l
-	addis	r7,r3,__stop___ftr_fixup@ha
-	addi	r7,r7,__stop___ftr_fixup@l
-
-	/* Do the fixup */
-1:	cmplw	0,r6,r7
-	bgelr
-	addi	r6,r6,16
-	lwz	r8,-16(r6)	/* mask */
-	and	r8,r8,r4
-	lwz	r9,-12(r6)	/* value */
-	cmplw	0,r8,r9
-	beq	1b
-	lwz	r8,-8(r6)	/* section begin */
-	lwz	r9,-4(r6)	/* section end */
-	subf.	r9,r8,r9
-	beq	1b
-	/* write nops over the section of code */
-	/* todo: if large section, add a branch at the start of it */
-	srwi	r9,r9,2
-	mtctr	r9
-	add	r8,r8,r3
-	lis	r0,0x60000000@h	/* nop */
-3:	stw	r0,0(r8)
-	andi.	r10,r4,CPU_FTR_SPLIT_ID_CACHE@l
-	beq	2f
-	dcbst	0,r8		/* suboptimal, but simpler */
-	sync
-	icbi	0,r8
-2:	addi	r8,r8,4
-	bdnz	3b
-	sync			/* additional sync needed on g4 */
-	isync
-	b	1b
-
-/*
  * call_setup_cpu - call the setup_cpu function for this cpu
  * r3 = data offset, r24 = cpu number
  *
@@ -216,7 +115,7 @@ _GLOBAL(call_setup_cpu)
 	lwz	r4,0(r4)
 	add	r4,r4,r3
 	lwz	r5,CPU_SPEC_SETUP(r4)
-	cmpi	0,r5,0
+	cmpwi	0,r5,0
 	add	r5,r5,r3
 	beqlr
 	mtctr	r5
@@ -781,136 +680,6 @@ _GLOBAL(atomic_set_mask)
 	blr
 
 /*
- * I/O string operations
- *
- * insb(port, buf, len)
- * outsb(port, buf, len)
- * insw(port, buf, len)
- * outsw(port, buf, len)
- * insl(port, buf, len)
- * outsl(port, buf, len)
- * insw_ns(port, buf, len)
- * outsw_ns(port, buf, len)
- * insl_ns(port, buf, len)
- * outsl_ns(port, buf, len)
- *
- * The *_ns versions don't do byte-swapping.
- */
-_GLOBAL(_insb)
-	cmpwi	0,r5,0
-	mtctr	r5
-	subi	r4,r4,1
-	blelr-
-00:	lbz	r5,0(r3)
-	eieio
-	stbu	r5,1(r4)
-	bdnz	00b
-	blr
-
-_GLOBAL(_outsb)
-	cmpwi	0,r5,0
-	mtctr	r5
-	subi	r4,r4,1
-	blelr-
-00:	lbzu	r5,1(r4)
-	stb	r5,0(r3)
-	eieio
-	bdnz	00b
-	blr
-
-_GLOBAL(_insw)
-	cmpwi	0,r5,0
-	mtctr	r5
-	subi	r4,r4,2
-	blelr-
-00:	lhbrx	r5,0,r3
-	eieio
-	sthu	r5,2(r4)
-	bdnz	00b
-	blr
-
-_GLOBAL(_outsw)
-	cmpwi	0,r5,0
-	mtctr	r5
-	subi	r4,r4,2
-	blelr-
-00:	lhzu	r5,2(r4)
-	eieio
-	sthbrx	r5,0,r3
-	bdnz	00b
-	blr
-
-_GLOBAL(_insl)
-	cmpwi	0,r5,0
-	mtctr	r5
-	subi	r4,r4,4
-	blelr-
-00:	lwbrx	r5,0,r3
-	eieio
-	stwu	r5,4(r4)
-	bdnz	00b
-	blr
-
-_GLOBAL(_outsl)
-	cmpwi	0,r5,0
-	mtctr	r5
-	subi	r4,r4,4
-	blelr-
-00:	lwzu	r5,4(r4)
-	stwbrx	r5,0,r3
-	eieio
-	bdnz	00b
-	blr
-
-_GLOBAL(__ide_mm_insw)
-_GLOBAL(_insw_ns)
-	cmpwi	0,r5,0
-	mtctr	r5
-	subi	r4,r4,2
-	blelr-
-00:	lhz	r5,0(r3)
-	eieio
-	sthu	r5,2(r4)
-	bdnz	00b
-	blr
-
-_GLOBAL(__ide_mm_outsw)
-_GLOBAL(_outsw_ns)
-	cmpwi	0,r5,0
-	mtctr	r5
-	subi	r4,r4,2
-	blelr-
-00:	lhzu	r5,2(r4)
-	sth	r5,0(r3)
-	eieio
-	bdnz	00b
-	blr
-
-_GLOBAL(__ide_mm_insl)
-_GLOBAL(_insl_ns)
-	cmpwi	0,r5,0
-	mtctr	r5
-	subi	r4,r4,4
-	blelr-
-00:	lwz	r5,0(r3)
-	eieio
-	stwu	r5,4(r4)
-	bdnz	00b
-	blr
-
-_GLOBAL(__ide_mm_outsl)
-_GLOBAL(_outsl_ns)
-	cmpwi	0,r5,0
-	mtctr	r5
-	subi	r4,r4,4
-	blelr-
-00:	lwzu	r5,4(r4)
-	stw	r5,0(r3)
-	eieio
-	bdnz	00b
-	blr
-
-/*
  * Extended precision shifts.
  *
  * Updated to be valid for shift counts from 0 to 63 inclusive.
@@ -980,7 +749,7 @@ _GLOBAL(kernel_thread)
 	mr	r30,r3		/* function */
 	mr	r31,r4		/* argument */
 	ori	r3,r5,CLONE_VM	/* flags */
-	oris	r3,r3,CLONE_UNTRACED>>16
+	oris	r3,r3,(CLONE_UNTRACED|CLONE_KTHREAD)>>16
 	li	r4,0		/* new sp (unused) */
 	li	r0,__NR_clone
 	sc
@@ -1000,7 +769,7 @@ _GLOBAL(kernel_thread)
 	addi	r1,r1,16
 	blr
 
-_GLOBAL(execve)
+_GLOBAL(kernel_execve)
 	li	r0,__NR_execve
 	sc
 	bnslr

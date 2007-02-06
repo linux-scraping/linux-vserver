@@ -424,7 +424,7 @@ module_param_array(enable, bool, NULL, 0444);
 MODULE_PARM_DESC(enable, "Enable Korg 1212 soundcard.");
 MODULE_AUTHOR("Haroldo Gamal <gamal@alternex.com.br>");
 
-static struct pci_device_id snd_korg1212_ids[] __devinitdata = {
+static struct pci_device_id snd_korg1212_ids[] = {
 	{
 		.vendor	   = 0x10b5,
 		.device	   = 0x906d,
@@ -1119,13 +1119,10 @@ static void snd_korg1212_OnDSPDownloadComplete(struct snd_korg1212 *korg1212)
 	snd_korg1212_setCardState(korg1212, K1212_STATE_DSP_COMPLETE);
 }
 
-static irqreturn_t snd_korg1212_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t snd_korg1212_interrupt(int irq, void *dev_id)
 {
         u32 doorbellValue;
         struct snd_korg1212 *korg1212 = dev_id;
-
-	if(irq != korg1212->irq)
-		return IRQ_NONE;
 
         doorbellValue = readl(korg1212->inDoorbellPtr);
 
@@ -1139,7 +1136,6 @@ static irqreturn_t snd_korg1212_interrupt(int irq, void *dev_id, struct pt_regs 
         korg1212->irqcount++;
 
 	korg1212->inIRQ++;
-
 
         switch (doorbellValue) {
                 case K1212_DB_DSPDownloadDone:
@@ -2085,7 +2081,7 @@ static void __devinit snd_korg1212_proc_init(struct snd_korg1212 *korg1212)
 	struct snd_info_entry *entry;
 
 	if (! snd_card_proc_new(korg1212->card, "korg1212", &entry))
-		snd_info_set_text_ops(entry, korg1212, 1024, snd_korg1212_proc_read);
+		snd_info_set_text_ops(entry, korg1212, snd_korg1212_proc_read);
 }
 
 static int
@@ -2237,7 +2233,7 @@ static int __devinit snd_korg1212_create(struct snd_card *card, struct pci_dev *
         }
 
         err = request_irq(pci->irq, snd_korg1212_interrupt,
-                          SA_INTERRUPT|SA_SHIRQ,
+                          IRQF_SHARED,
                           "korg1212", korg1212);
 
         if (err) {

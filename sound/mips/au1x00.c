@@ -220,7 +220,7 @@ au1000_dma_start(struct audio_stream *stream)
 }
 
 static irqreturn_t
-au1000_dma_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+au1000_dma_interrupt(int irq, void *dev_id)
 {
 	struct audio_stream *stream = (struct audio_stream *) dev_id;
 	struct snd_pcm_substream *substream = stream->substream;
@@ -258,7 +258,7 @@ au1000_dma_interrupt(int irq, void *dev_id, struct pt_regs *regs)
 
 static unsigned int rates[] = {8000, 11025, 16000, 22050};
 static struct snd_pcm_hw_constraint_list hw_constraints_rates = {
-	.count	=  sizeof(rates) / sizeof(rates[0]),
+	.count	= ARRAY_SIZE(rates),
 	.list	= rates,
 	.mask	= 0,
 };
@@ -465,13 +465,13 @@ snd_au1000_pcm_new(struct snd_au1000 *au1000)
 
 	flags = claim_dma_lock();
 	if ((au1000->stream[PLAYBACK]->dma = request_au1000_dma(DMA_ID_AC97C_TX,
-			"AC97 TX", au1000_dma_interrupt, SA_INTERRUPT,
+			"AC97 TX", au1000_dma_interrupt, IRQF_DISABLED,
 			au1000->stream[PLAYBACK])) < 0) {
 		release_dma_lock(flags);
 		return -EBUSY;
 	}
 	if ((au1000->stream[CAPTURE]->dma = request_au1000_dma(DMA_ID_AC97C_RX,
-			"AC97 RX", au1000_dma_interrupt, SA_INTERRUPT,
+			"AC97 RX", au1000_dma_interrupt, IRQF_DISABLED,
 			au1000->stream[CAPTURE])) < 0){
 		release_dma_lock(flags);
 		return -EBUSY;

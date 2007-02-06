@@ -17,7 +17,6 @@
  *		Mike McLagan	:	Routing by source
  */
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/types.h>
 #include <linux/mm.h>
@@ -113,14 +112,19 @@ static void ip_cmsg_recv_retopts(struct msghdr *msg, struct sk_buff *skb)
 static void ip_cmsg_recv_security(struct msghdr *msg, struct sk_buff *skb)
 {
 	char *secdata;
-	u32 seclen;
+	u32 seclen, secid;
 	int err;
 
-	err = security_socket_getpeersec_dgram(skb, &secdata, &seclen);
+	err = security_socket_getpeersec_dgram(NULL, skb, &secid);
+	if (err)
+		return;
+
+	err = security_secid_to_secctx(secid, &secdata, &seclen);
 	if (err)
 		return;
 
 	put_cmsg(msg, SOL_IP, SCM_SECURITY, seclen, secdata);
+	security_release_secctx(secdata, seclen);
 }
 
 
@@ -250,7 +254,7 @@ int ip_ra_control(struct sock *sk, unsigned char on, void (*destructor)(struct s
 }
 
 void ip_icmp_error(struct sock *sk, struct sk_buff *skb, int err, 
-		   u16 port, u32 info, u8 *payload)
+		   __be16 port, u32 info, u8 *payload)
 {
 	struct inet_sock *inet = inet_sk(sk);
 	struct sock_exterr_skb *serr;
@@ -279,7 +283,7 @@ void ip_icmp_error(struct sock *sk, struct sk_buff *skb, int err,
 		kfree_skb(skb);
 }
 
-void ip_local_error(struct sock *sk, int err, u32 daddr, u16 port, u32 info)
+void ip_local_error(struct sock *sk, int err, __be32 daddr, __be16 port, u32 info)
 {
 	struct inet_sock *inet = inet_sk(sk);
 	struct sock_exterr_skb *serr;
@@ -351,7 +355,7 @@ int ip_recv_error(struct sock *sk, struct msghdr *msg, int len)
 	sin = (struct sockaddr_in *)msg->msg_name;
 	if (sin) {
 		sin->sin_family = AF_INET;
-		sin->sin_addr.s_addr = *(u32*)(skb->nh.raw + serr->addr_offset);
+		sin->sin_addr.s_addr = *(__be32*)(skb->nh.raw + serr->addr_offset);
 		sin->sin_port = serr->port;
 		memset(&sin->sin_zero, 0, sizeof(sin->sin_zero));
 	}

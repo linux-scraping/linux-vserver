@@ -12,7 +12,6 @@
 #include <asm/atomic.h>
 
 #include <linux/blkdev.h>
-#include <linux/config.h>
 #include <linux/fs.h>
 #include <linux/init.h>
 #include <linux/list.h>
@@ -204,7 +203,7 @@ struct kcopyd_job {
 /* FIXME: this should scale with the number of pages */
 #define MIN_JOBS 512
 
-static kmem_cache_t *_job_cache;
+static struct kmem_cache *_job_cache;
 static mempool_t *_job_pool;
 
 /*
@@ -314,7 +313,7 @@ static void complete_io(unsigned long error, void *context)
 
 	if (error) {
 		if (job->rw == WRITE)
-			job->write_err &= error;
+			job->write_err |= error;
 		else
 			job->read_err = 1;
 
@@ -418,7 +417,7 @@ static int process_jobs(struct list_head *jobs, int (*fn) (struct kcopyd_job *))
 /*
  * kcopyd does this every time it's woken up.
  */
-static void do_work(void *ignored)
+static void do_work(struct work_struct *ignored)
 {
 	/*
 	 * The order that these are called is *very* important.
@@ -460,7 +459,7 @@ static void segment_complete(int read_err,
 		job->read_err = 1;
 
 	if (write_err)
-		job->write_err &= write_err;
+		job->write_err |= write_err;
 
 	/*
 	 * Only dispatch more work if there hasn't been an error.
@@ -629,7 +628,7 @@ static int kcopyd_init(void)
 	}
 
 	kcopyd_clients++;
-	INIT_WORK(&_kcopyd_work, do_work, NULL);
+	INIT_WORK(&_kcopyd_work, do_work);
 	mutex_unlock(&kcopyd_init_lock);
 	return 0;
 }

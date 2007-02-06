@@ -1,9 +1,49 @@
+Version 1.47
+------------
+Fix oops in list_del during mount caused by unaligned string.
+
+Version 1.46
+------------
+Support deep tree mounts.  Better support OS/2, Win9x (DOS) time stamps.
+Allow null user to be specified on mount ("username="). Do not return
+EINVAL on readdir when filldir fails due to overwritten blocksize
+(fixes FC problem).  Return error in rename 2nd attempt retry (ie report
+if rename by handle also fails, after rename by path fails, we were
+not reporting whether the retry worked or not). Fix NTLMv2 to
+work to Windows servers (mount with option "sec=ntlmv2").
+
+Version 1.45
+------------
+Do not time out lockw calls when using posix extensions. Do not
+time out requests if server still responding reasonably fast
+on requests on other threads.  Improve POSIX locking emulation,
+(lock cancel now works, and unlock of merged range works even
+to Windows servers now).  Fix oops on mount to lanman servers
+(win9x, os/2 etc.) when null password.  Do not send listxattr
+(SMB to query all EAs) if nouser_xattr specified.  Fix SE Linux
+problem (instantiate inodes/dentries in right order for readdir).
+
+Version 1.44
+------------
+Rewritten sessionsetup support, including support for legacy SMB
+session setup needed for OS/2 and older servers such as Windows 95 and 98.
+Fix oops on ls to OS/2 servers.  Add support for level 1 FindFirst
+so we can do search (ls etc.) to OS/2.  Do not send NTCreateX
+or recent levels of FindFirst unless server says it supports NT SMBs
+(instead use legacy equivalents from LANMAN dialect). Fix to allow
+NTLMv2 authentication support (now can use stronger password hashing
+on mount if corresponding /proc/fs/cifs/SecurityFlags is set (0x4004).
+Allow override of global cifs security flags on mount via "sec=" option(s).
+
 Version 1.43
 ------------
 POSIX locking to servers which support CIFS POSIX Extensions
 (disabled by default controlled by proc/fs/cifs/Experimental).
 Handle conversion of long share names (especially Asian languages)
-to Unicode during mount. 
+to Unicode during mount. Fix memory leak in sess struct on reconnect.
+Fix rare oops after acpi suspend.  Fix O_TRUNC opens to overwrite on
+cifs open which helps rare case when setpathinfo fails or server does
+not support it. 
 
 Version 1.42
 ------------

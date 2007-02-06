@@ -24,6 +24,7 @@
 #define RTAS_RMOBUF_MAX (64 * 1024)
 
 /* RTAS return status codes */
+#define RTAS_NOT_SUSPENDABLE	-9004
 #define RTAS_BUSY		-2    /* RTAS Busy */
 #define RTAS_EXTENDED_DELAY_MIN	9900
 #define RTAS_EXTENDED_DELAY_MAX	9905
@@ -52,8 +53,6 @@ struct rtas_args {
 	rtas_arg_t args[16];
 	rtas_arg_t *rets;     /* Pointer to return values in args[]. */
 };  
-
-extern struct rtas_args rtas_stop_self_args;
 
 struct rtas_t {
 	unsigned long entry;		/* physical address pointer */
@@ -160,6 +159,7 @@ extern struct rtas_t rtas;
 
 extern void enter_rtas(unsigned long);
 extern int rtas_token(const char *service);
+extern int rtas_service_present(const char *service);
 extern int rtas_call(int token, int, int, int *, ...);
 extern void rtas_restart(char *cmd);
 extern void rtas_power_off(void);
@@ -169,6 +169,7 @@ extern int rtas_get_sensor(int sensor, int index, int *state);
 extern int rtas_get_power_level(int powerdomain, int *level);
 extern int rtas_set_power_level(int powerdomain, int level, int *setlevel);
 extern int rtas_set_indicator(int indicator, int index, int new_value);
+extern int rtas_set_indicator_fast(int indicator, int index, int new_value);
 extern void rtas_progress(char *s, unsigned short hex);
 extern void rtas_initialize(void);
 
@@ -177,12 +178,11 @@ extern unsigned long rtas_get_boot_time(void);
 extern void rtas_get_rtc_time(struct rtc_time *rtc_time);
 extern int rtas_set_rtc_time(struct rtc_time *rtc_time);
 
-/* Given an RTAS status code of 9900..9905 compute the hinted delay */
-unsigned int rtas_extended_busy_delay_time(int status);
-static inline int rtas_is_extended_busy(int status)
-{
-	return status >= 9900 && status <= 9909;
-}
+extern unsigned int rtas_busy_delay_time(int status);
+extern unsigned int rtas_busy_delay(int status);
+
+extern int early_init_dt_scan_rtas(unsigned long node,
+		const char *uname, int depth, void *data);
 
 extern void pSeries_log_error(char *buf, unsigned int err_type, int fatal);
 
@@ -222,12 +222,26 @@ extern int rtas_get_error_log_max(void);
 extern spinlock_t rtas_data_buf_lock;
 extern char rtas_data_buf[RTAS_DATA_BUF_SIZE];
 
-extern void rtas_stop_self(void);
-
 /* RMO buffer reserved for user-space RTAS use */
 extern unsigned long rtas_rmo_buf;
 
 #define GLOBAL_INTERRUPT_QUEUE 9005
+
+/**
+ * rtas_config_addr - Format a busno, devfn and reg for RTAS.
+ * @busno: The bus number.
+ * @devfn: The device and function number as encoded by PCI_DEVFN().
+ * @reg: The register number.
+ *
+ * This function encodes the given busno, devfn and register number as
+ * required for RTAS calls that take a "config_addr" parameter.
+ * See PAPR requirement 7.3.4-1 for more info.
+ */
+static inline u32 rtas_config_addr(int busno, int devfn, int reg)
+{
+	return ((reg & 0xf00) << 20) | ((busno & 0xff) << 16) |
+			(devfn << 8) | (reg & 0xff);
+}
 
 #endif /* __KERNEL__ */
 #endif /* _POWERPC_RTAS_H */

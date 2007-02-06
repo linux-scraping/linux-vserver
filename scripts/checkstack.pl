@@ -62,6 +62,8 @@ my (@stack, $re, $x, $xs);
 	} elsif ($arch eq 'ppc64') {
 		#XXX
 		$re = qr/.*stdu.*r1,-($x{1,8})\(r1\)/o;
+	} elsif ($arch eq 'powerpc') {
+		$re = qr/.*st[dw]u.*r1,-($x{1,8})\(r1\)/o;
 	} elsif ($arch =~ /^s390x?$/) {
 		#   11160:       a7 fb ff 60             aghi   %r15,-160
 		$re = qr/.*ag?hi.*\%r15,-(([0-9]{2}|[3-9])[0-9]{2})/o;
@@ -89,11 +91,21 @@ sub bysize($) {
 #
 my $funcre = qr/^$x* <(.*)>:$/;
 my $func;
+my $file, $lastslash;
+
 while (my $line = <STDIN>) {
 	if ($line =~ m/$funcre/) {
 		$func = $1;
 	}
-	if ($line =~ m/$re/) {
+	elsif ($line =~ m/(.*):\s*file format/) {
+		$file = $1;
+		$file =~ s/\.ko//;
+		$lastslash = rindex($file, "/");
+		if ($lastslash != -1) {
+			$file = substr($file, $lastslash + 1);
+		}
+	}
+	elsif ($line =~ m/$re/) {
 		my $size = $1;
 		$size = hex($size) if ($size =~ /^0x/);
 
@@ -109,7 +121,7 @@ while (my $line = <STDIN>) {
 		$addr =~ s/ /0/g;
 		$addr = "0x$addr";
 
-		my $intro = "$addr $func:";
+		my $intro = "$addr $func [$file]:";
 		my $padlen = 56 - length($intro);
 		while ($padlen > 0) {
 			$intro .= '	';

@@ -46,8 +46,8 @@
 #include <linux/module.h>
 #include <linux/spinlock.h>
 #include <linux/usb.h>
+#include <linux/usb/serial.h>
 #include <asm/uaccess.h>
-#include "usb-serial.h"
 
 /*
  * Version Information
@@ -161,7 +161,7 @@ static struct usb_driver usb_ipw_driver = {
 
 static int debug;
 
-static void ipw_read_bulk_callback(struct urb *urb, struct pt_regs *regs)
+static void ipw_read_bulk_callback(struct urb *urb)
 {
 	struct usb_serial_port *port = urb->context;
 	unsigned char *data = urb->transfer_buffer;
@@ -206,10 +206,9 @@ static int ipw_open(struct usb_serial_port *port, struct file *filp)
 
 	dbg("%s", __FUNCTION__);
 
-	buf_flow_init = kmalloc(16, GFP_KERNEL);
+	buf_flow_init = kmemdup(buf_flow_static, 16, GFP_KERNEL);
 	if (!buf_flow_init)
 		return -ENOMEM;
-	memcpy(buf_flow_init, buf_flow_static, 16);
 
 	if (port->tty)
 		port->tty->low_latency = 1;
@@ -367,16 +366,18 @@ static void ipw_close(struct usb_serial_port *port, struct file * filp)
 	usb_kill_urb(port->write_urb);
 }
 
-static void ipw_write_bulk_callback(struct urb *urb, struct pt_regs *regs)
+static void ipw_write_bulk_callback(struct urb *urb)
 {
 	struct usb_serial_port *port = urb->context;
 
 	dbg("%s", __FUNCTION__);
 
+	port->write_urb_busy = 0;
+
 	if (urb->status)
 		dbg("%s - nonzero write bulk status received: %d", __FUNCTION__, urb->status);
 
-	schedule_work(&port->work);
+	usb_serial_port_softint(port);
 }
 
 static int ipw_write(struct usb_serial_port *port, const unsigned char *buf, int count)
@@ -392,14 +393,14 @@ static int ipw_write(struct usb_serial_port *port, const unsigned char *buf, int
 		return 0;
 	}
 
-	spin_lock(&port->lock);
+	spin_lock_bh(&port->lock);
 	if (port->write_urb_busy) {
-		spin_unlock(&port->lock);
+		spin_unlock_bh(&port->lock);
 		dbg("%s - already writing", __FUNCTION__);
 		return 0;
 	}
 	port->write_urb_busy = 1;
-	spin_unlock(&port->lock);
+	spin_unlock_bh(&port->lock);
 
 	count = min(count, port->bulk_out_size);
 	memcpy(port->bulk_out_buffer, buf, count);

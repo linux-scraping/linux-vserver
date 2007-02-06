@@ -101,9 +101,11 @@ static void au1xxx_start_ohc(struct platform_device *dev)
 
 #endif  /* Au1200 */
 
+#ifndef CONFIG_SOC_AU1200
 	/* wait for reset complete (read register twice; see au1500 errata) */
 	while (au_readl(USB_HOST_CONFIG),
 		!(au_readl(USB_HOST_CONFIG) & USBH_ENABLE_RD))
+#endif
 		udelay(1000);
 
 	printk(KERN_DEBUG __FILE__
@@ -157,9 +159,9 @@ static int usb_ohci_au1xxx_probe(const struct hc_driver *driver,
 	/* Au1200 AB USB does not support coherent memory */
 	if (!(read_c0_prid() & 0xff)) {
 		pr_info("%s: this is chip revision AB !!\n",
-			dev->dev.name);
+			dev->name);
 		pr_info("%s: update your board or re-configure the kernel\n",
-			dev->dev.name);
+			dev->name);
 		return -ENODEV;
 	}
 #endif
@@ -191,7 +193,7 @@ static int usb_ohci_au1xxx_probe(const struct hc_driver *driver,
 	au1xxx_start_ohc(dev);
 	ohci_hcd_init(hcd_to_ohci(hcd));
 
-	retval = usb_add_hcd(hcd, dev->resource[1].start, SA_INTERRUPT | SA_SHIRQ);
+	retval = usb_add_hcd(hcd, dev->resource[1].start, IRQF_DISABLED | IRQF_SHARED);
 	if (retval == 0)
 		return retval;
 
@@ -266,11 +268,8 @@ static const struct hc_driver ohci_au1xxx_hc_driver = {
 	 * basic lifecycle operations
 	 */
 	.start =		ohci_au1xxx_start,
-#ifdef	CONFIG_PM
-	/* suspend:		ohci_au1xxx_suspend,  -- tbd */
-	/* resume:		ohci_au1xxx_resume,   -- tbd */
-#endif /*CONFIG_PM*/
 	.stop =			ohci_stop,
+	.shutdown =		ohci_shutdown,
 
 	/*
 	 * managing i/o requests and associated device resources
@@ -289,6 +288,7 @@ static const struct hc_driver ohci_au1xxx_hc_driver = {
 	 */
 	.hub_status_data =	ohci_hub_status_data,
 	.hub_control =		ohci_hub_control,
+	.hub_irq_enable =	ohci_rhsc_enable,
 #ifdef	CONFIG_PM
 	.bus_suspend =		ohci_bus_suspend,
 	.bus_resume =		ohci_bus_resume,
@@ -336,6 +336,7 @@ static int ohci_hcd_au1xxx_drv_resume(struct platform_device *dev)
 static struct platform_driver ohci_hcd_au1xxx_driver = {
 	.probe		= ohci_hcd_au1xxx_drv_probe,
 	.remove		= ohci_hcd_au1xxx_drv_remove,
+	.shutdown	= usb_hcd_platform_shutdown,
 	/*.suspend	= ohci_hcd_au1xxx_drv_suspend, */
 	/*.resume	= ohci_hcd_au1xxx_drv_resume, */
 	.driver		= {

@@ -41,19 +41,18 @@ static struct gatt_mask ati_generic_masks[] =
 };
 
 
-
-typedef struct _ati_page_map {
+struct ati_page_map {
 	unsigned long *real;
 	unsigned long __iomem *remapped;
-} ati_page_map;
+};
 
 static struct _ati_generic_private {
 	volatile u8 __iomem *registers;
-	ati_page_map **gatt_pages;
+	struct ati_page_map **gatt_pages;
 	int num_tables;
 } ati_generic_private;
 
-static int ati_create_page_map(ati_page_map *page_map)
+static int ati_create_page_map(struct ati_page_map *page_map)
 {
 	int i, err = 0;
 
@@ -83,7 +82,7 @@ static int ati_create_page_map(ati_page_map *page_map)
 }
 
 
-static void ati_free_page_map(ati_page_map *page_map)
+static void ati_free_page_map(struct ati_page_map *page_map)
 {
 	unmap_page_from_agp(virt_to_page(page_map->real));
 	iounmap(page_map->remapped);
@@ -95,8 +94,8 @@ static void ati_free_page_map(ati_page_map *page_map)
 static void ati_free_gatt_pages(void)
 {
 	int i;
-	ati_page_map **tables;
-	ati_page_map *entry;
+	struct ati_page_map **tables;
+	struct ati_page_map *entry;
 
 	tables = ati_generic_private.gatt_pages;
 	for (i = 0; i < ati_generic_private.num_tables; i++) {
@@ -113,35 +112,36 @@ static void ati_free_gatt_pages(void)
 
 static int ati_create_gatt_pages(int nr_tables)
 {
-	ati_page_map **tables;
-	ati_page_map *entry;
+	struct ati_page_map **tables;
+	struct ati_page_map *entry;
 	int retval = 0;
 	int i;
 
-	tables = kzalloc((nr_tables + 1) * sizeof(ati_page_map *),GFP_KERNEL);
+	tables = kzalloc((nr_tables + 1) * sizeof(struct ati_page_map *),GFP_KERNEL);
 	if (tables == NULL)
 		return -ENOMEM;
 
 	for (i = 0; i < nr_tables; i++) {
-		entry = kzalloc(sizeof(ati_page_map), GFP_KERNEL);
+		entry = kzalloc(sizeof(struct ati_page_map), GFP_KERNEL);
 		if (entry == NULL) {
-			while (i>0) {
-				kfree (tables[i-1]);
+			while (i > 0) {
+				kfree(tables[i-1]);
 				i--;
 			}
-			kfree (tables);
-			tables = NULL;
+			kfree(tables);
 			retval = -ENOMEM;
 			break;
 		}
 		tables[i] = entry;
 		retval = ati_create_page_map(entry);
-		if (retval != 0) break;
+		if (retval != 0)
+			break;
 	}
 	ati_generic_private.num_tables = nr_tables;
 	ati_generic_private.gatt_pages = tables;
 
-	if (retval != 0) ati_free_gatt_pages();
+	if (retval != 0)
+		ati_free_gatt_pages();
 
 	return retval;
 }
@@ -219,16 +219,16 @@ static int ati_configure(void)
 	ati_generic_private.registers = (volatile u8 __iomem *) ioremap(temp, 4096);
 
 	if (is_r200())
-       	pci_write_config_dword(agp_bridge->dev, ATI_RS100_IG_AGPMODE, 0x20000);
+		pci_write_config_dword(agp_bridge->dev, ATI_RS100_IG_AGPMODE, 0x20000);
 	else
 		pci_write_config_dword(agp_bridge->dev, ATI_RS300_IG_AGPMODE, 0x20000);
 
 	/* address to map too */
-        /*
+	/*
 	pci_read_config_dword(agp_bridge.dev, AGP_APBASE, &temp);
 	agp_bridge.gart_bus_addr = (temp & PCI_BASE_ADDRESS_MEM_MASK);
 	printk(KERN_INFO PFX "IGP320 gart_bus_addr: %x\n", agp_bridge.gart_bus_addr);
-        */
+	*/
 	writel(0x60000, ati_generic_private.registers+ATI_GART_FEATURE_ID);
 	readl(ati_generic_private.registers+ATI_GART_FEATURE_ID);	/* PCI Posting.*/
 
@@ -245,23 +245,25 @@ static int ati_configure(void)
 
 
 #ifdef CONFIG_PM
+static int agp_ati_suspend(struct pci_dev *dev, pm_message_t state)
+{
+	pci_save_state(dev);
+	pci_set_power_state(dev, 3);
+
+	return 0;
+}
+
 static int agp_ati_resume(struct pci_dev *dev)
 {
+	pci_set_power_state(dev, 0);
 	pci_restore_state(dev);
 
 	return ati_configure();
 }
-
-static int agp_ati_suspend(struct pci_dev *dev, pm_message_t state)
-{
-	pci_save_state(dev);
-
-	return 0;
-}
 #endif
 
 /*
- *Since we don't need contigious memory we just try
+ *Since we don't need contiguous memory we just try
  * to get the gatt table once
  */
 
@@ -321,9 +323,9 @@ static int ati_remove_memory(struct agp_memory * mem, off_t pg_start,
 	unsigned long __iomem *cur_gatt;
 	unsigned long addr;
 
-	if (type != 0 || mem->type != 0) {
+	if (type != 0 || mem->type != 0)
 		return -EINVAL;
-	}
+
 	for (i = pg_start; i < (mem->page_count + pg_start); i++) {
 		addr = (i * PAGE_SIZE) + agp_bridge->gart_bus_addr;
 		cur_gatt = GET_GATT(addr);
@@ -338,7 +340,7 @@ static int ati_remove_memory(struct agp_memory * mem, off_t pg_start,
 static int ati_create_gatt_table(struct agp_bridge_data *bridge)
 {
 	struct aper_size_info_lvl2 *value;
-	ati_page_map page_dir;
+	struct ati_page_map page_dir;
 	unsigned long addr;
 	int retval;
 	u32 temp;
@@ -398,7 +400,7 @@ static int ati_create_gatt_table(struct agp_bridge_data *bridge)
 
 static int ati_free_gatt_table(struct agp_bridge_data *bridge)
 {
-	ati_page_map page_dir;
+	struct ati_page_map page_dir;
 
 	page_dir.real = (unsigned long *)agp_bridge->gatt_table_real;
 	page_dir.remapped = (unsigned long __iomem *)agp_bridge->gatt_table;
@@ -502,9 +504,8 @@ found:
 
 	bridge->dev = pdev;
 	bridge->capndx = cap_ptr;
-	
-	bridge->driver = &ati_generic_bridge;
 
+	bridge->driver = &ati_generic_bridge;
 
 	printk(KERN_INFO PFX "Detected Ati %s chipset\n",
 			devs[j].chipset_name);
@@ -546,8 +547,8 @@ static struct pci_driver agp_ati_pci_driver = {
 	.probe		= agp_ati_probe,
 	.remove		= agp_ati_remove,
 #ifdef CONFIG_PM
-	.resume		= agp_ati_resume,
 	.suspend	= agp_ati_suspend,
+	.resume		= agp_ati_resume,
 #endif
 };
 

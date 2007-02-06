@@ -10,7 +10,6 @@
 #ifndef _ASM_STACKFRAME_H
 #define _ASM_STACKFRAME_H
 
-#include <linux/config.h>
 #include <linux/threads.h>
 
 #include <asm/asm.h>
@@ -60,69 +59,43 @@
 		.endm
 
 #ifdef CONFIG_SMP
+#ifdef CONFIG_MIPS_MT_SMTC
+#define PTEBASE_SHIFT	19	/* TCBIND */
+#else
+#define PTEBASE_SHIFT	23	/* CONTEXT */
+#endif
 		.macro	get_saved_sp	/* SMP variation */
-#ifdef CONFIG_32BIT
 #ifdef CONFIG_MIPS_MT_SMTC
-		.set	mips32
-		mfc0	k0, CP0_TCBIND;
-		.set	mips0
-		lui	k1, %hi(kernelsp)
-		srl	k0, k0, 19
-		/* No need to shift down and up to clear bits 0-1 */
+		mfc0	k0, CP0_TCBIND
 #else
-		mfc0	k0, CP0_CONTEXT
-		lui	k1, %hi(kernelsp)
-		srl	k0, k0, 23
+		MFC0	k0, CP0_CONTEXT
 #endif
-		addu	k1, k0
-		LONG_L	k1, %lo(kernelsp)(k1)
-#endif
-#ifdef CONFIG_64BIT
-#ifdef CONFIG_MIPS_MT_SMTC
-		.set	mips64
-		mfc0	k0, CP0_TCBIND;
-		.set	mips0
-		lui	k0, %highest(kernelsp)
-		dsrl	k1, 19
-		/* No need to shift down and up to clear bits 0-2 */
+#if defined(CONFIG_BUILD_ELF64) || (defined(CONFIG_64BIT) && __GNUC__ < 4)
+		lui	k1, %highest(kernelsp)
+		daddiu	k1, %higher(kernelsp)
+		dsll	k1, 16
+		daddiu	k1, %hi(kernelsp)
+		dsll	k1, 16
 #else
-		MFC0	k1, CP0_CONTEXT
-		lui	k0, %highest(kernelsp)
-		dsrl	k1, 23
-		daddiu	k0, %higher(kernelsp)
-		dsll	k0, k0, 16
-		daddiu	k0, %hi(kernelsp)
-		dsll	k0, k0, 16
-#endif /* CONFIG_MIPS_MT_SMTC */
-		daddu	k1, k1, k0
+		lui	k1, %hi(kernelsp)
+#endif
+		LONG_SRL	k0, PTEBASE_SHIFT
+		LONG_ADDU	k1, k0
 		LONG_L	k1, %lo(kernelsp)(k1)
-#endif /* CONFIG_64BIT */
 		.endm
 
 		.macro	set_saved_sp stackp temp temp2
-#ifdef CONFIG_32BIT
 #ifdef CONFIG_MIPS_MT_SMTC
 		mfc0	\temp, CP0_TCBIND
-		srl	\temp, 19
-#else
-		mfc0	\temp, CP0_CONTEXT
-		srl	\temp, 23
-#endif
-#endif
-#ifdef CONFIG_64BIT
-#ifdef CONFIG_MIPS_MT_SMTC
-		mfc0	\temp, CP0_TCBIND
-		dsrl	\temp, 19
 #else
 		MFC0	\temp, CP0_CONTEXT
-		dsrl	\temp, 23
 #endif
-#endif
+		LONG_SRL	\temp, PTEBASE_SHIFT
 		LONG_S	\stackp, kernelsp(\temp)
 		.endm
 #else
 		.macro	get_saved_sp	/* Uniprocessor variation */
-#ifdef CONFIG_64BIT
+#if defined(CONFIG_BUILD_ELF64) || (defined(CONFIG_64BIT) && __GNUC__ < 4)
 		lui	k1, %highest(kernelsp)
 		daddiu	k1, %higher(kernelsp)
 		dsll	k1, k1, 16
@@ -305,7 +278,7 @@
 		mfc0	v0, CP0_TCSTATUS
 		ori	v0, TCSTATUS_IXMT
 		mtc0	v0, CP0_TCSTATUS
-		ehb
+		_ehb
 		DMT	5				# dmt a1
 		jal	mips_ihb
 #endif /* CONFIG_MIPS_MT_SMTC */
@@ -326,14 +299,14 @@
  * restore TCStatus.IXMT.
  */
 		LONG_L	v1, PT_TCSTATUS(sp)
-		ehb
+		_ehb
 		mfc0	v0, CP0_TCSTATUS
 		andi	v1, TCSTATUS_IXMT
 		/* We know that TCStatua.IXMT should be set from above */
 		xori	v0, v0, TCSTATUS_IXMT
 		or	v0, v0, v1
 		mtc0	v0, CP0_TCSTATUS
-		ehb
+		_ehb
 		andi	a1, a1, VPECONTROL_TE
 		beqz	a1, 1f
 		emt
@@ -412,7 +385,7 @@
 		/* Clear TKSU, leave IXMT */
 		xori	t0, 0x00001800
 		mtc0	t0, CP0_TCSTATUS
-		ehb
+		_ehb
 		/* We need to leave the global IE bit set, but clear EXL...*/
 		mfc0	t0, CP0_STATUS
 		ori	t0, ST0_EXL | ST0_ERL
@@ -439,7 +412,7 @@
 		 * and enable interrupts only for the
 		 * current TC, using the TCStatus register.
 		 */
-		ehb
+		_ehb
 		mfc0	t0,CP0_TCSTATUS
 		/* Fortunately CU 0 is in the same place in both registers */
 		/* Set TCU0, TKSU (for later inversion) and IXMT */
@@ -448,7 +421,7 @@
 		/* Clear TKSU *and* IXMT */
 		xori	t0, 0x00001c00
 		mtc0	t0, CP0_TCSTATUS
-		ehb
+		_ehb
 		/* We need to leave the global IE bit set, but clear EXL...*/
 		mfc0	t0, CP0_STATUS
 		ori	t0, ST0_EXL
@@ -480,7 +453,7 @@
 		andi	v1, v0, TCSTATUS_IXMT
 		ori	v0, TCSTATUS_IXMT
 		mtc0	v0, CP0_TCSTATUS
-		ehb
+		_ehb
 		DMT	2				# dmt	v0
 		/*
 		 * We don't know a priori if ra is "live"
@@ -496,7 +469,7 @@
 		xori	t0, 0x1e
 		mtc0	t0, CP0_STATUS
 #ifdef CONFIG_MIPS_MT_SMTC
-		ehb
+		_ehb
 		andi	v0, v0, VPECONTROL_TE
 		beqz	v0, 2f
 		nop	/* delay slot */

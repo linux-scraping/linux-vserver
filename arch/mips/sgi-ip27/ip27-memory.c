@@ -10,7 +10,6 @@
  * On SGI IP27 the ARC memory configuration data is completly bogus but
  * alternate easier to use mechanisms are available.
  */
-#include <linux/config.h>
 #include <linux/init.h>
 #include <linux/kernel.h>
 #include <linux/mm.h>
@@ -20,6 +19,7 @@
 #include <linux/swap.h>
 #include <linux/bootmem.h>
 #include <linux/pfn.h>
+#include <linux/highmem.h>
 #include <asm/page.h>
 #include <asm/sections.h>
 
@@ -509,7 +509,7 @@ extern unsigned long setup_zero_pages(void);
 
 void __init paging_init(void)
 {
-	unsigned long zones_size[MAX_NR_ZONES] = {0, 0, 0};
+	unsigned long zones_size[MAX_NR_ZONES] = {0, };
 	unsigned node;
 
 	pagetable_init();

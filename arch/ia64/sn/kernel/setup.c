@@ -6,14 +6,13 @@
  * Copyright (C) 1999,2001-2006 Silicon Graphics, Inc. All rights reserved.
  */
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/delay.h>
 #include <linux/kernel.h>
 #include <linux/kdev_t.h>
 #include <linux/string.h>
-#include <linux/tty.h>
+#include <linux/screen_info.h>
 #include <linux/console.h>
 #include <linux/timex.h>
 #include <linux/sched.h>
@@ -66,7 +65,6 @@ extern void sn_timer_init(void);
 extern unsigned long last_time_offset;
 extern void (*ia64_mark_idle) (int);
 extern void snidle(int);
-extern unsigned char acpi_kbd_controller_present;
 extern unsigned long long (*ia64_printk_clock)(void);
 
 unsigned long sn_rtc_cycles_per_second;
@@ -139,7 +137,7 @@ static int __init pxm_to_nasid(int pxm)
 	int i;
 	int nid;
 
-	nid = pxm_to_nid_map[pxm];
+	nid = pxm_to_node(pxm);
 	for (i = 0; i < num_node_memblks; i++) {
 		if (node_memblk[i].nid == nid) {
 			return NASID_GET(node_memblk[i].start_paddr);
@@ -390,6 +388,14 @@ void __init sn_setup(char **cmdline_p)
 	ia64_sn_plat_set_error_handling_features();	// obsolete
 	ia64_sn_set_os_feature(OSF_MCA_SLV_TO_OS_INIT_SLV);
 	ia64_sn_set_os_feature(OSF_FEAT_LOG_SBES);
+	/*
+	 * Note: The calls to notify the PROM of ACPI and PCI Segment
+	 *	 support must be done prior to acpi_load_tables(), as
+	 *	 an ACPI capable PROM will rebuild the DSDT as result
+	 *	 of the call.
+	 */
+	ia64_sn_set_os_feature(OSF_PCISEGMENT_ENABLE);
+	ia64_sn_set_os_feature(OSF_ACPI_ENABLE);
 
 
 #if defined(CONFIG_VT) && defined(CONFIG_VGA_CONSOLE)
@@ -414,6 +420,16 @@ void __init sn_setup(char **cmdline_p)
 
 	if (! vga_console_membase)
 		sn_scan_pcdp();
+
+	/*
+	 *	Setup legacy IO space.
+	 *	vga_console_iobase maps to PCI IO Space address 0 on the
+	 * 	bus containing the VGA console.
+	 */
+	if (vga_console_iobase) {
+		io_space[0].mmio_base = vga_console_iobase;
+		io_space[0].sparse = 0;
+	}
 
 	if (vga_console_membase) {
 		/* usable vga ... make tty0 the preferred default console */
@@ -452,17 +468,6 @@ void __init sn_setup(char **cmdline_p)
 	platform_intr_list[ACPI_INTERRUPT_CPEI] = IA64_CPE_VECTOR;
 
 	ia64_printk_clock = ia64_sn2_printk_clock;
-
-	/*
-	 * Old PROMs do not provide an ACPI FADT. Disable legacy keyboard
-	 * support here so we don't have to listen to failed keyboard probe
-	 * messages.
-	 */
-	if (version <= 0x0209 && acpi_kbd_controller_present) {
-		printk(KERN_INFO "Disabling legacy keyboard support as prom "
-		       "is too old and doesn't provide FADT\n");
-		acpi_kbd_controller_present = 0;
-	}
 
 	printk("SGI SAL version %x.%02x\n", version >> 8, version & 0x00FF);
 
@@ -566,7 +571,7 @@ static void __init sn_init_pdas(char **cmdline_p)
  * Also sets up a few fields in the nodepda.  Also known as
  * platform_cpu_init() by the ia64 machvec code.
  */
-void __init sn_cpu_init(void)
+void __cpuinit sn_cpu_init(void)
 {
 	int cpuid;
 	int cpuphyid;
@@ -575,9 +580,10 @@ void __init sn_cpu_init(void)
 	int slice;
 	int cnode;
 	int i;
-	static int wars_have_been_checked;
+	static int wars_have_been_checked, set_cpu0_number;
 
-	if (smp_processor_id() == 0 && IS_MEDUSA()) {
+	cpuid = smp_processor_id();
+	if (cpuid == 0 && IS_MEDUSA()) {
 		if (ia64_sn_is_fake_prom())
 			sn_prom_type = 2;
 		else
@@ -597,6 +603,20 @@ void __init sn_cpu_init(void)
 	sn_hub_info->as_shift = sn_hub_info->nasid_shift - 2;
 
 	/*
+	 * Don't check status. The SAL call is not supported on all PROMs
+	 * but a failure is harmless.
+	 * Architechtuallly, cpu_init is always called twice on cpu 0. We
+	 * should set cpu_number on cpu 0 once.
+	 */
+	if (cpuid == 0) {
+		if (!set_cpu0_number) {
+			(void) ia64_sn_set_cpu_number(cpuid);
+			set_cpu0_number = 1;
+		}
+	} else
+		(void) ia64_sn_set_cpu_number(cpuid);
+
+	/*
 	 * The boot cpu makes this call again after platform initialization is
 	 * complete.
 	 */
@@ -607,7 +627,6 @@ void __init sn_cpu_init(void)
 		if (ia64_sn_get_prom_feature_set(i, &sn_prom_features[i]) != 0)
 			break;
 
-	cpuid = smp_processor_id();
 	cpuphyid = get_sapicid();
 
 	if (ia64_sn_get_sapic_info(cpuphyid, &nasid, &subnode, &slice))
@@ -704,7 +723,7 @@ void __init build_cnode_tables(void)
 	 * cnode == node for all C & M bricks.
 	 */
 	for_each_online_node(node) {
-		nasid = pxm_to_nasid(nid_to_pxm_map[node]);
+		nasid = pxm_to_nasid(node_to_pxm(node));
 		sn_cnodeid_to_nasid[node] = nasid;
 		physical_node_map[nasid] = node;
 	}
@@ -757,6 +776,14 @@ int sn_prom_feature_available(int id)
 	if (id >= BITS_PER_LONG * MAX_PROM_FEATURE_SETS)
 		return 0;
 	return test_bit(id, sn_prom_features);
+}
+
+void
+sn_kernel_launch_event(void)
+{
+	/* ignore status until we understand possible failure, if any*/
+	if (ia64_sn_kernel_launch_event())
+		printk(KERN_ERR "KEXEC is not supported in this PROM, Please update the PROM.\n");
 }
 EXPORT_SYMBOL(sn_prom_feature_available);
 

@@ -31,7 +31,6 @@
 
 #include <linux/module.h>
 #include <linux/moduleparam.h>
-#include <linux/config.h>
 #include <linux/init.h>
 #include <linux/mutex.h>
 
@@ -714,7 +713,6 @@ struct ipw_rx_packet {
 
 struct ipw_rx_mem_buffer {
 	dma_addr_t dma_addr;
-	struct ipw_rx_buffer *rxb;
 	struct sk_buff *skb;
 	struct list_head list;
 };				/* Not transferred over network, so not  __attribute__ ((packed)) */
@@ -789,7 +787,7 @@ struct ipw_sys_config {
 	u8 bt_coexist_collision_thr;
 	u8 silence_threshold;
 	u8 accept_all_mgmt_bcpr;
-	u8 accept_all_mgtm_frames;
+	u8 accept_all_mgmt_frames;
 	u8 pass_noise_stats_to_host;
 	u8 reserved3;
 } __attribute__ ((packed));
@@ -1122,16 +1120,69 @@ struct ipw_fw_error {
 	u8 payload[0];
 } __attribute__ ((packed));
 
+#ifdef CONFIG_IPW2200_PROMISCUOUS
+
+enum ipw_prom_filter {
+	IPW_PROM_CTL_HEADER_ONLY = (1 << 0),
+	IPW_PROM_MGMT_HEADER_ONLY = (1 << 1),
+	IPW_PROM_DATA_HEADER_ONLY = (1 << 2),
+	IPW_PROM_ALL_HEADER_ONLY = 0xf, /* bits 0..3 */
+	IPW_PROM_NO_TX = (1 << 4),
+	IPW_PROM_NO_RX = (1 << 5),
+	IPW_PROM_NO_CTL = (1 << 6),
+	IPW_PROM_NO_MGMT = (1 << 7),
+	IPW_PROM_NO_DATA = (1 << 8),
+};
+
+struct ipw_priv;
+struct ipw_prom_priv {
+	struct ipw_priv *priv;
+	struct ieee80211_device *ieee;
+	enum ipw_prom_filter filter;
+	int tx_packets;
+	int rx_packets;
+};
+#endif
+
+#if defined(CONFIG_IPW2200_RADIOTAP) || defined(CONFIG_IPW2200_PROMISCUOUS)
+/* Magic struct that slots into the radiotap header -- no reason
+ * to build this manually element by element, we can write it much
+ * more efficiently than we can parse it. ORDER MATTERS HERE
+ *
+ * When sent to us via the simulated Rx interface in sysfs, the entire
+ * structure is provided regardless of any bits unset.
+ */
+struct ipw_rt_hdr {
+	struct ieee80211_radiotap_header rt_hdr;
+	u64 rt_tsf;      /* TSF */
+	u8 rt_flags;	/* radiotap packet flags */
+	u8 rt_rate;	/* rate in 500kb/s */
+	u16 rt_channel;	/* channel in mhz */
+	u16 rt_chbitmask;	/* channel bitfield */
+	s8 rt_dbmsignal;	/* signal in dbM, kluged to signed */
+	s8 rt_dbmnoise;
+	u8 rt_antenna;	/* antenna number */
+	u8 payload[0];  /* payload... */
+} __attribute__ ((packed));
+#endif
+
 struct ipw_priv {
 	/* ieee device used by generic ieee processing code */
 	struct ieee80211_device *ieee;
 
 	spinlock_t lock;
+	spinlock_t irq_lock;
 	struct mutex mutex;
 
 	/* basic pci-network driver stuff */
 	struct pci_dev *pci_dev;
 	struct net_device *net_dev;
+
+#ifdef CONFIG_IPW2200_PROMISCUOUS
+	/* Promiscuous mode */
+	struct ipw_prom_priv *prom_priv;
+	struct net_device *prom_net_dev;
+#endif
 
 	/* pci hardware address support */
 	void __iomem *hw_base;
@@ -1153,11 +1204,9 @@ struct ipw_priv {
 	u32 config;
 	u32 capability;
 
-	u8 last_rx_rssi;
-	u8 last_noise;
 	struct average average_missed_beacons;
-	struct average average_rssi;
-	struct average average_noise;
+	s16 exp_avg_rssi;
+	s16 exp_avg_noise;
 	u32 port_type;
 	int rx_bufs_min;	  /**< minimum number of bufs in Rx queue */
 	int rx_pend_max;	  /**< maximum pending buffers for one IRQ */
@@ -1241,20 +1290,21 @@ struct ipw_priv {
 
 	struct workqueue_struct *workqueue;
 
-	struct work_struct adhoc_check;
+	struct delayed_work adhoc_check;
 	struct work_struct associate;
 	struct work_struct disassociate;
 	struct work_struct system_config;
 	struct work_struct rx_replenish;
-	struct work_struct request_scan;
+	struct delayed_work request_scan;
+  	struct work_struct request_passive_scan;
 	struct work_struct adapter_restart;
-	struct work_struct rf_kill;
+	struct delayed_work rf_kill;
 	struct work_struct up;
 	struct work_struct down;
-	struct work_struct gather_stats;
+	struct delayed_work gather_stats;
 	struct work_struct abort_scan;
 	struct work_struct roam;
-	struct work_struct scan_check;
+	struct delayed_work scan_check;
 	struct work_struct link_up;
 	struct work_struct link_down;
 
@@ -1269,9 +1319,9 @@ struct ipw_priv {
 	u32 led_ofdm_on;
 	u32 led_ofdm_off;
 
-	struct work_struct led_link_on;
-	struct work_struct led_link_off;
-	struct work_struct led_act_off;
+	struct delayed_work led_link_on;
+	struct delayed_work led_link_off;
+	struct delayed_work led_act_off;
 	struct work_struct merge_networks;
 
 	struct ipw_cmd_log *cmdlog;
@@ -1308,13 +1358,41 @@ struct ipw_priv {
 
 /* debug macros */
 
-#ifdef CONFIG_IPW2200_DEBUG
+/* Debug and printf string expansion helpers for printing bitfields */
+#define BIT_FMT8 "%c%c%c%c-%c%c%c%c"
+#define BIT_FMT16 BIT_FMT8 ":" BIT_FMT8
+#define BIT_FMT32 BIT_FMT16 " " BIT_FMT16
+
+#define BITC(x,y) (((x>>y)&1)?'1':'0')
+#define BIT_ARG8(x) \
+BITC(x,7),BITC(x,6),BITC(x,5),BITC(x,4),\
+BITC(x,3),BITC(x,2),BITC(x,1),BITC(x,0)
+
+#define BIT_ARG16(x) \
+BITC(x,15),BITC(x,14),BITC(x,13),BITC(x,12),\
+BITC(x,11),BITC(x,10),BITC(x,9),BITC(x,8),\
+BIT_ARG8(x)
+
+#define BIT_ARG32(x) \
+BITC(x,31),BITC(x,30),BITC(x,29),BITC(x,28),\
+BITC(x,27),BITC(x,26),BITC(x,25),BITC(x,24),\
+BITC(x,23),BITC(x,22),BITC(x,21),BITC(x,20),\
+BITC(x,19),BITC(x,18),BITC(x,17),BITC(x,16),\
+BIT_ARG16(x)
+
+
 #define IPW_DEBUG(level, fmt, args...) \
 do { if (ipw_debug_level & (level)) \
   printk(KERN_DEBUG DRV_NAME": %c %s " fmt, \
          in_interrupt() ? 'I' : 'U', __FUNCTION__ , ## args); } while (0)
+
+#ifdef CONFIG_IPW2200_DEBUG
+#define IPW_LL_DEBUG(level, fmt, args...) \
+do { if (ipw_debug_level & (level)) \
+  printk(KERN_DEBUG DRV_NAME": %c %s " fmt, \
+         in_interrupt() ? 'I' : 'U', __FUNCTION__ , ## args); } while (0)
 #else
-#define IPW_DEBUG(level, fmt, args...) do {} while (0)
+#define IPW_LL_DEBUG(level, fmt, args...) do {} while (0)
 #endif				/* CONFIG_IPW2200_DEBUG */
 
 /*
@@ -1384,28 +1462,27 @@ do { if (ipw_debug_level & (level)) \
 
 #define IPW_DEBUG_WX(f, a...)     IPW_DEBUG(IPW_DL_WX, f, ## a)
 #define IPW_DEBUG_SCAN(f, a...)   IPW_DEBUG(IPW_DL_SCAN, f, ## a)
-#define IPW_DEBUG_STATUS(f, a...) IPW_DEBUG(IPW_DL_STATUS, f, ## a)
-#define IPW_DEBUG_TRACE(f, a...)  IPW_DEBUG(IPW_DL_TRACE, f, ## a)
-#define IPW_DEBUG_RX(f, a...)     IPW_DEBUG(IPW_DL_RX, f, ## a)
-#define IPW_DEBUG_TX(f, a...)     IPW_DEBUG(IPW_DL_TX, f, ## a)
-#define IPW_DEBUG_ISR(f, a...)    IPW_DEBUG(IPW_DL_ISR, f, ## a)
+#define IPW_DEBUG_TRACE(f, a...)  IPW_LL_DEBUG(IPW_DL_TRACE, f, ## a)
+#define IPW_DEBUG_RX(f, a...)     IPW_LL_DEBUG(IPW_DL_RX, f, ## a)
+#define IPW_DEBUG_TX(f, a...)     IPW_LL_DEBUG(IPW_DL_TX, f, ## a)
+#define IPW_DEBUG_ISR(f, a...)    IPW_LL_DEBUG(IPW_DL_ISR, f, ## a)
 #define IPW_DEBUG_MANAGEMENT(f, a...) IPW_DEBUG(IPW_DL_MANAGE, f, ## a)
-#define IPW_DEBUG_LED(f, a...) IPW_DEBUG(IPW_DL_LED, f, ## a)
-#define IPW_DEBUG_WEP(f, a...)    IPW_DEBUG(IPW_DL_WEP, f, ## a)
-#define IPW_DEBUG_HC(f, a...) IPW_DEBUG(IPW_DL_HOST_COMMAND, f, ## a)
-#define IPW_DEBUG_FRAG(f, a...) IPW_DEBUG(IPW_DL_FRAG, f, ## a)
-#define IPW_DEBUG_FW(f, a...) IPW_DEBUG(IPW_DL_FW, f, ## a)
+#define IPW_DEBUG_LED(f, a...) IPW_LL_DEBUG(IPW_DL_LED, f, ## a)
+#define IPW_DEBUG_WEP(f, a...)    IPW_LL_DEBUG(IPW_DL_WEP, f, ## a)
+#define IPW_DEBUG_HC(f, a...) IPW_LL_DEBUG(IPW_DL_HOST_COMMAND, f, ## a)
+#define IPW_DEBUG_FRAG(f, a...) IPW_LL_DEBUG(IPW_DL_FRAG, f, ## a)
+#define IPW_DEBUG_FW(f, a...) IPW_LL_DEBUG(IPW_DL_FW, f, ## a)
 #define IPW_DEBUG_RF_KILL(f, a...) IPW_DEBUG(IPW_DL_RF_KILL, f, ## a)
 #define IPW_DEBUG_DROP(f, a...) IPW_DEBUG(IPW_DL_DROP, f, ## a)
-#define IPW_DEBUG_IO(f, a...) IPW_DEBUG(IPW_DL_IO, f, ## a)
-#define IPW_DEBUG_ORD(f, a...) IPW_DEBUG(IPW_DL_ORD, f, ## a)
-#define IPW_DEBUG_FW_INFO(f, a...) IPW_DEBUG(IPW_DL_FW_INFO, f, ## a)
+#define IPW_DEBUG_IO(f, a...) IPW_LL_DEBUG(IPW_DL_IO, f, ## a)
+#define IPW_DEBUG_ORD(f, a...) IPW_LL_DEBUG(IPW_DL_ORD, f, ## a)
+#define IPW_DEBUG_FW_INFO(f, a...) IPW_LL_DEBUG(IPW_DL_FW_INFO, f, ## a)
 #define IPW_DEBUG_NOTIF(f, a...) IPW_DEBUG(IPW_DL_NOTIF, f, ## a)
 #define IPW_DEBUG_STATE(f, a...) IPW_DEBUG(IPW_DL_STATE | IPW_DL_ASSOC | IPW_DL_INFO, f, ## a)
 #define IPW_DEBUG_ASSOC(f, a...) IPW_DEBUG(IPW_DL_ASSOC | IPW_DL_INFO, f, ## a)
-#define IPW_DEBUG_STATS(f, a...) IPW_DEBUG(IPW_DL_STATS, f, ## a)
-#define IPW_DEBUG_MERGE(f, a...) IPW_DEBUG(IPW_DL_MERGE, f, ## a)
-#define IPW_DEBUG_QOS(f, a...)   IPW_DEBUG(IPW_DL_QOS, f, ## a)
+#define IPW_DEBUG_STATS(f, a...) IPW_LL_DEBUG(IPW_DL_STATS, f, ## a)
+#define IPW_DEBUG_MERGE(f, a...) IPW_LL_DEBUG(IPW_DL_MERGE, f, ## a)
+#define IPW_DEBUG_QOS(f, a...)   IPW_LL_DEBUG(IPW_DL_QOS, f, ## a)
 
 #include <linux/ctype.h>
 
@@ -1874,10 +1951,17 @@ struct host_cmd {
 	u32 *param;
 } __attribute__ ((packed));
 
+struct cmdlog_host_cmd {
+	u8 cmd;
+	u8 len;
+	u16 reserved;
+	char param[124];
+} __attribute__ ((packed));
+
 struct ipw_cmd_log {
 	unsigned long jiffies;
 	int retcode;
-	struct host_cmd cmd;
+	struct cmdlog_host_cmd cmd;
 };
 
 /* SysConfig command parameters ... */

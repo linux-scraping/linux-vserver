@@ -4,12 +4,12 @@
 #include <linux/netfilter/nf_conntrack_common.h>
 
 #ifdef __KERNEL__
-#include <linux/config.h>
 #include <linux/netfilter_ipv4/ip_conntrack_tuple.h>
 #include <linux/bitops.h>
 #include <linux/compiler.h>
 #include <asm/atomic.h>
 
+#include <linux/timer.h>
 #include <linux/netfilter_ipv4/ip_conntrack_tcp.h>
 #include <linux/netfilter_ipv4/ip_conntrack_icmp.h>
 #include <linux/netfilter_ipv4/ip_conntrack_proto_gre.h>
@@ -121,6 +121,10 @@ struct ip_conntrack
 	u_int32_t mark;
 #endif
 
+#ifdef CONFIG_IP_NF_CONNTRACK_SECMARK
+	u_int32_t secmark;
+#endif
+
 	/* Traversed often, so hopefully in different cacheline to top */
 	/* These are my tuples; original and reply */
 	struct ip_conntrack_tuple_hash tuplehash[IP_CT_DIR_MAX];
@@ -154,6 +158,7 @@ struct ip_conntrack_expect
 	unsigned int flags;
 
 #ifdef CONFIG_IP_NF_NAT_NEEDED
+	__be32 saved_ip;
 	/* This is the original per-proto part, used to map the
 	 * expected connection the way the recipient expects. */
 	union ip_conntrack_manip_proto saved_proto;
@@ -273,7 +278,7 @@ extern struct ip_conntrack_expect *
 __ip_conntrack_expect_find(const struct ip_conntrack_tuple *tuple);
 
 extern struct ip_conntrack_expect *
-ip_conntrack_expect_find(const struct ip_conntrack_tuple *tuple);
+ip_conntrack_expect_find_get(const struct ip_conntrack_tuple *tuple);
 
 extern struct ip_conntrack_tuple_hash *
 __ip_conntrack_find(const struct ip_conntrack_tuple *tuple,
@@ -293,6 +298,7 @@ static inline int is_dying(struct ip_conntrack *ct)
 }
 
 extern unsigned int ip_conntrack_htable_size;
+extern int ip_conntrack_checksum;
  
 #define CONNTRACK_STAT_INC(count) (__get_cpu_var(ip_conntrack_stat).count++)
 

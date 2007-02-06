@@ -1,5 +1,5 @@
 /*
- * arch/arm/kernel/leds-shark.c
+ * arch/arm/mach-shark/leds.c
  * by Alexander Schulz
  *
  * derived from:
@@ -15,7 +15,6 @@
  *
  * Changelog:
  */
-#include <linux/config.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/init.h>

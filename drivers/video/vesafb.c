@@ -13,13 +13,13 @@
 #include <linux/errno.h>
 #include <linux/string.h>
 #include <linux/mm.h>
-#include <linux/tty.h>
 #include <linux/slab.h>
 #include <linux/delay.h>
 #include <linux/fb.h>
 #include <linux/ioport.h>
 #include <linux/init.h>
 #include <linux/platform_device.h>
+#include <linux/screen_info.h>
 
 #include <video/vga.h>
 #include <asm/io.h>
@@ -47,17 +47,16 @@ static struct fb_fix_screeninfo vesafb_fix __initdata = {
 	.accel	= FB_ACCEL_NONE,
 };
 
-static int             inverse   = 0;
-static int             mtrr      = 0; /* disable mtrr */
-static int	       vram_remap __initdata = 0; /* Set amount of memory to be used */
-static int	       vram_total __initdata = 0; /* Set total amount of memory */
-static int             pmi_setpal = 0;	/* pmi for palette changes ??? */
-static int             ypan       = 0;  /* 0..nothing, 1..ypan, 2..ywrap */
-static unsigned short  *pmi_base  = NULL;
-static void            (*pmi_start)(void);
-static void            (*pmi_pal)(void);
-static int             depth;
-static int             vga_compat;
+static int   inverse    __read_mostly;
+static int   mtrr       __read_mostly;		/* disable mtrr */
+static int   vram_remap __initdata;		/* Set amount of memory to be used */
+static int   vram_total __initdata;		/* Set total amount of memory */
+static int   pmi_setpal __read_mostly = 1;	/* pmi for palette changes ??? */
+static int   ypan       __read_mostly;		/* 0..nothing, 1..ypan, 2..ywrap */
+static void  (*pmi_start)(void) __read_mostly;
+static void  (*pmi_pal)  (void) __read_mostly;
+static int   depth      __read_mostly;
+static int   vga_compat __read_mostly;
 /* --------------------------------------------------------------------- */
 
 static int vesafb_pan_display(struct fb_var_screeninfo *var,
@@ -80,15 +79,30 @@ static int vesafb_pan_display(struct fb_var_screeninfo *var,
 	return 0;
 }
 
-static void vesa_setpalette(int regno, unsigned red, unsigned green,
+static int vesa_setpalette(int regno, unsigned red, unsigned green,
 			    unsigned blue)
 {
 	int shift = 16 - depth;
+	int err = -EINVAL;
+
+/*
+ * Try VGA registers first...
+ */
+	if (vga_compat) {
+		outb_p(regno,       dac_reg);
+		outb_p(red   >> shift, dac_val);
+		outb_p(green >> shift, dac_val);
+		outb_p(blue  >> shift, dac_val);
+		err = 0;
+	}
 
 #ifdef __i386__
-	struct { u_char blue, green, red, pad; } entry;
+/*
+ * Fallback to the PMI....
+ */
+	if (err && pmi_setpal) {
+		struct { u_char blue, green, red, pad; } entry;
 
-	if (pmi_setpal) {
 		entry.red   = red   >> shift;
 		entry.green = green >> shift;
 		entry.blue  = blue  >> shift;
@@ -102,26 +116,19 @@ static void vesa_setpalette(int regno, unsigned red, unsigned green,
                   "d" (regno),          /* EDX */
                   "D" (&entry),         /* EDI */
                   "S" (&pmi_pal));      /* ESI */
-		return;
+		err = 0;
 	}
 #endif
 
-/*
- * without protected mode interface and if VGA compatible,
- * try VGA registers...
- */
-	if (vga_compat) {
-		outb_p(regno,       dac_reg);
-		outb_p(red   >> shift, dac_val);
-		outb_p(green >> shift, dac_val);
-		outb_p(blue  >> shift, dac_val);
-	}
+	return err;
 }
 
 static int vesafb_setcolreg(unsigned regno, unsigned red, unsigned green,
 			    unsigned blue, unsigned transp,
 			    struct fb_info *info)
 {
+	int err = 0;
+
 	/*
 	 *  Set a single color register. The values supplied are
 	 *  already rounded down to the hardware's capabilities
@@ -133,7 +140,7 @@ static int vesafb_setcolreg(unsigned regno, unsigned red, unsigned green,
 		return 1;
 
 	if (info->var.bits_per_pixel == 8)
-		vesa_setpalette(regno,red,green,blue);
+		err = vesa_setpalette(regno,red,green,blue);
 	else if (regno < 16) {
 		switch (info->var.bits_per_pixel) {
 		case 16:
@@ -164,7 +171,7 @@ static int vesafb_setcolreg(unsigned regno, unsigned red, unsigned green,
 		}
 	}
 
-	return 0;
+	return err;
 }
 
 static struct fb_ops vesafb_ops = {
@@ -304,6 +311,7 @@ static int __init vesafb_probe(struct platform_device *dev)
 		ypan = pmi_setpal = 0; /* not available or some DOS TSR ... */
 
 	if (ypan || pmi_setpal) {
+		unsigned short *pmi_base;
 		pmi_base  = (unsigned short*)phys_to_virt(((unsigned long)screen_info.vesapm_seg << 4) + screen_info.vesapm_off);
 		pmi_start = (void*)((char*)pmi_base + pmi_base[1]);
 		pmi_pal   = (void*)((char*)pmi_base + pmi_base[2]);
@@ -448,6 +456,8 @@ static int __init vesafb_probe(struct platform_device *dev)
 	       info->node, info->fix.id);
 	return 0;
 err:
+	if (info->screen_base)
+		iounmap(info->screen_base);
 	framebuffer_release(info);
 	release_mem_region(vesafb_fix.smem_start, size_total);
 	return err;
@@ -460,9 +470,7 @@ static struct platform_driver vesafb_driver = {
 	},
 };
 
-static struct platform_device vesafb_device = {
-	.name	= "vesafb",
-};
+static struct platform_device *vesafb_device;
 
 static int __init vesafb_init(void)
 {
@@ -475,10 +483,19 @@ static int __init vesafb_init(void)
 	ret = platform_driver_register(&vesafb_driver);
 
 	if (!ret) {
-		ret = platform_device_register(&vesafb_device);
-		if (ret)
+		vesafb_device = platform_device_alloc("vesafb", 0);
+
+		if (vesafb_device)
+			ret = platform_device_add(vesafb_device);
+		else
+			ret = -ENOMEM;
+
+		if (ret) {
+			platform_device_put(vesafb_device);
 			platform_driver_unregister(&vesafb_driver);
+		}
 	}
+
 	return ret;
 }
 module_init(vesafb_init);

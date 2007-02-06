@@ -15,8 +15,7 @@
 *
 *	This program is free software; you can redistribute it and/or modify
 *	it under the terms of the GNU General Public License as published by
-*	the Free Software Foundation; either version 2 of the License, or
-*	(at your option) any later version.
+*	the Free Software Foundation; either version 2 of the License.
 *
 *	This program is distributed in the hope that it will be useful,
 *	but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -50,6 +49,8 @@
 #include <linux/delay.h>
 #include <linux/usb.h>
 #include <linux/crc32.h>
+#include <linux/kthread.h>
+#include <linux/freezer.h>
 #include <net/irda/irda.h>
 #include <net/irda/irlap.h>
 #include <net/irda/irda_device.h>
@@ -58,7 +59,7 @@
 #include <asm/byteorder.h>
 #include <asm/unaligned.h>
 
-MODULE_AUTHOR("Stephen Hemminger <shemminger@osdl.org>");
+MODULE_AUTHOR("Stephen Hemminger <shemminger@linux-foundation.org>");
 MODULE_DESCRIPTION("IrDA-USB Dongle Driver for SigmaTel STIr4200");
 MODULE_LICENSE("GPL");
 
@@ -148,8 +149,6 @@ enum StirFifoCtlMask {
 	FIFOCTL_DIR = 0x10,
 	FIFOCTL_CLR = 0x08,
 	FIFOCTL_EMPTY = 0x04,
-	FIFOCTL_RXERR = 0x02,
-	FIFOCTL_TXERR = 0x01,
 };
 
 enum StirDiagMask {
@@ -173,9 +172,7 @@ struct stir_cb {
         struct qos_info   qos;
 	unsigned 	  speed;	/* Current speed */
 
-	wait_queue_head_t thr_wait;	/* transmit thread wakeup */
-	struct completion thr_exited;
-	pid_t		  thr_pid;
+        struct task_struct *thread;     /* transmit thread */
 
 	struct sk_buff	  *tx_pending;
 	void		  *io_buf;	/* transmit/receive buffer */
@@ -577,7 +574,7 @@ static int stir_hard_xmit(struct sk_buff *skb, struct net_device *netdev)
 	SKB_LINEAR_ASSERT(skb);
 
 	skb = xchg(&stir->tx_pending, skb);
-	wake_up(&stir->thr_wait);
+        wake_up_process(stir->thread);
 	
 	/* this should never happen unless stop/wakeup problem */
 	if (unlikely(skb)) {
@@ -615,19 +612,6 @@ static int fifo_txwait(struct stir_cb *stir, int space)
 			| stir->fifo_status[1];
 
 		pr_debug("fifo status 0x%lx count %lu\n", status, count);
-
-		/* error when receive/transmit fifo gets confused */
-		if (status & FIFOCTL_RXERR) {
-			stir->stats.rx_fifo_errors++;
-			stir->stats.rx_errors++;
-			break;
-		}
-
-		if (status & FIFOCTL_TXERR) {
-			stir->stats.tx_fifo_errors++;
-			stir->stats.tx_errors++;
-			break;
-		}
 
 		/* is fifo receiving already, or empty */
 		if (!(status & FIFOCTL_DIR)
@@ -753,13 +737,7 @@ static int stir_transmit_thread(void *arg)
 	struct net_device *dev = stir->netdev;
 	struct sk_buff *skb;
 
-	daemonize("%s", dev->name);
-	allow_signal(SIGTERM);
-
-	while (netif_running(dev)
-	       && netif_device_present(dev)
-	       && !signal_pending(current))
-	{
+        while (!kthread_should_stop()) {
 #ifdef CONFIG_PM
 		/* if suspending, then power off and wait */
 		if (unlikely(freezing(current))) {
@@ -813,10 +791,11 @@ static int stir_transmit_thread(void *arg)
 		}
 
 		/* sleep if nothing to send */
-		wait_event_interruptible(stir->thr_wait, stir->tx_pending);
-	}
+                set_current_state(TASK_INTERRUPTIBLE);
+                schedule();
 
-	complete_and_exit (&stir->thr_exited, 0);
+	}
+        return 0;
 }
 
 
@@ -825,7 +804,7 @@ static int stir_transmit_thread(void *arg)
  * Wakes up every ms (usb round trip) with wrapped 
  * data.
  */
-static void stir_rcv_irq(struct urb *urb, struct pt_regs *regs)
+static void stir_rcv_irq(struct urb *urb)
 {
 	struct stir_cb *stir = urb->context;
 	int err;
@@ -859,7 +838,7 @@ static void stir_rcv_irq(struct urb *urb, struct pt_regs *regs)
 		warn("%s: usb receive submit error: %d",
 			stir->netdev->name, err);
 		stir->receiving = 0;
-		wake_up(&stir->thr_wait);
+		wake_up_process(stir->thread);
 	}
 }
 
@@ -928,10 +907,10 @@ static int stir_net_open(struct net_device *netdev)
 	}
 
 	/** Start kernel thread for transmit.  */
-	stir->thr_pid = kernel_thread(stir_transmit_thread, stir,
-				      CLONE_FS|CLONE_FILES);
-	if (stir->thr_pid < 0) {
-		err = stir->thr_pid;
+	stir->thread = kthread_run(stir_transmit_thread, stir,
+				   "%s", stir->netdev->name);
+        if (IS_ERR(stir->thread)) {
+                err = PTR_ERR(stir->thread);
 		err("stir4200: unable to start kernel thread");
 		goto err_out6;
 	}
@@ -968,8 +947,7 @@ static int stir_net_close(struct net_device *netdev)
 	netif_stop_queue(netdev);
 
 	/* Kill transmit thread */
-	kill_proc(stir->thr_pid, SIGTERM, 1);
-	wait_for_completion(&stir->thr_exited);
+	kthread_stop(stir->thread);
 	kfree(stir->fifo_status);
 
 	/* Mop up receive urb's */
@@ -1083,9 +1061,6 @@ static int stir_probe(struct usb_interface *intf,
 					 (IR_4000000 << 8);
 	stir->qos.min_turn_time.bits   &= qos_mtt_bits;
 	irda_qos_bits_to_value(&stir->qos);
-
-	init_completion (&stir->thr_exited);
-	init_waitqueue_head (&stir->thr_wait);
 
 	/* Override the network functions we need to use */
 	net->hard_start_xmit = stir_hard_xmit;

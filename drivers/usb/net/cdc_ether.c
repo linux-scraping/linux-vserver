@@ -20,7 +20,6 @@
 // #define	DEBUG			// error path messages, extra info
 // #define	VERBOSE			// more; success messages
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/sched.h>
 #include <linux/init.h>
@@ -31,7 +30,7 @@
 #include <linux/workqueue.h>
 #include <linux/mii.h>
 #include <linux/usb.h>
-#include <linux/usb_cdc.h>
+#include <linux/usb/cdc.h>
 
 #include "usbnet.h"
 
@@ -201,8 +200,7 @@ next_desc:
 
 		dev->status = &info->control->cur_altsetting->endpoint [0];
 		desc = &dev->status->desc;
-		if (desc->bmAttributes != USB_ENDPOINT_XFER_INT
-				|| !(desc->bEndpointAddress & USB_DIR_IN)
+		if (!usb_endpoint_is_int_in(desc)
 				|| (le16_to_cpu(desc->wMaxPacketSize)
 					< sizeof(struct usb_cdc_notification))
 				|| !desc->bInterval) {
@@ -455,6 +453,18 @@ static const struct usb_device_id	products [] = {
 	.driver_info		= 0,
 },
 
+/* Olympus has some models with a Zaurus-compatible option.
+ * R-1000 uses a FreeScale i.MXL cpu (ARMv4T)
+ */
+{
+	.match_flags    =   USB_DEVICE_ID_MATCH_INT_INFO
+		 | USB_DEVICE_ID_MATCH_DEVICE,
+	.idVendor               = 0x07B4,
+	.idProduct              = 0x0F02,	/* R-1000 */
+	ZAURUS_MASTER_INTERFACE,
+	.driver_info		= 0,
+},
+
 /*
  * WHITELIST!!!
  *
@@ -487,7 +497,7 @@ static struct usb_driver cdc_driver = {
 
 static int __init cdc_init(void)
 {
-	BUG_ON((sizeof(((struct usbnet *)0)->data)
+	BUILD_BUG_ON((sizeof(((struct usbnet *)0)->data)
 			< sizeof(struct cdc_state)));
 
  	return usb_register(&cdc_driver);

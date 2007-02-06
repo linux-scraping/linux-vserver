@@ -138,7 +138,6 @@
 #include <linux/module.h>
 #include <linux/types.h>
 #include <linux/kernel.h>
-#include <linux/config.h>
 #include <linux/init.h>
 #include <linux/slab.h>
 
@@ -517,7 +516,7 @@ static int __init init_axis_flash(void)
 #else
 		struct mtd_info *mtd_ram;
 
-		mtd_ram = (struct mtd_info *)kmalloc(sizeof(struct mtd_info),
+		mtd_ram = kmalloc(sizeof(struct mtd_info),
 						     GFP_KERNEL);
 		if (!mtd_ram) {
 			panic("axisflashmap couldn't allocate memory for "

@@ -34,7 +34,6 @@
  * So we use the timer to check the status manually.
  */
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/platform_device.h>
@@ -732,7 +731,7 @@ static void au1xmmc_set_ios(struct mmc_host* mmc, struct mmc_ios* ios)
 	}
 }
 
-static void au1xmmc_dma_callback(int irq, void *dev_id, struct pt_regs *regs)
+static void au1xmmc_dma_callback(int irq, void *dev_id)
 {
 	struct au1xmmc_host *host = (struct au1xmmc_host *) dev_id;
 
@@ -751,7 +750,7 @@ static void au1xmmc_dma_callback(int irq, void *dev_id, struct pt_regs *regs)
 #define STATUS_DATA_IN  (SD_STATUS_NE)
 #define STATUS_DATA_OUT (SD_STATUS_TH)
 
-static irqreturn_t au1xmmc_irq(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t au1xmmc_irq(int irq, void *dev_id)
 {
 
 	u32 status;
@@ -876,7 +875,7 @@ static void au1xmmc_init_dma(struct au1xmmc_host *host)
 	host->rx_chan = rxchan;
 }
 
-struct mmc_host_ops au1xmmc_ops = {
+static const struct mmc_host_ops au1xmmc_ops = {
 	.request	= au1xmmc_request,
 	.set_ios	= au1xmmc_set_ios,
 };
@@ -887,7 +886,7 @@ static int __devinit au1xmmc_probe(struct platform_device *pdev)
 	int i, ret = 0;
 
 	/* THe interrupt is shared among all controllers */
-	ret = request_irq(AU1100_SD_IRQ, au1xmmc_irq, SA_INTERRUPT, "MMC", 0);
+	ret = request_irq(AU1100_SD_IRQ, au1xmmc_irq, IRQF_DISABLED, "MMC", 0);
 
 	if (ret) {
 		printk(DRIVER_NAME "ERROR: Couldn't get int %d: %d\n",

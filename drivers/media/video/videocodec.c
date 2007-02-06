@@ -36,7 +36,6 @@
 #include <linux/slab.h>
 
 // kernel config is here (procfs flag)
-#include <linux/config.h>
 
 #ifdef CONFIG_PROC_FS
 #include <linux/proc_fs.h>
@@ -347,7 +346,7 @@ videocodec_build_table (void)
 		size);
 
 	kfree(videocodec_buf);
-	videocodec_buf = (char *) kmalloc(size, GFP_KERNEL);
+	videocodec_buf = kmalloc(size, GFP_KERNEL);
 
 	i = 0;
 	i += scnprintf(videocodec_buf + i, size - 1,

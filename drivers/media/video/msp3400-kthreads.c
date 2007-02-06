@@ -244,19 +244,21 @@ static void msp3400c_set_audmode(struct i2c_client *client)
 	   the hardware does not support SAP. So the rxsubchans combination
 	   of STEREO | LANG2 does not occur. */
 
-	/* switch to mono if only mono is available */
-	if (state->rxsubchans == V4L2_TUNER_SUB_MONO)
-		audmode = V4L2_TUNER_MODE_MONO;
-	/* if bilingual */
-	else if (state->rxsubchans & V4L2_TUNER_SUB_LANG2) {
-		/* and mono or stereo, then fallback to lang1 */
-		if (audmode == V4L2_TUNER_MODE_MONO ||
-		    audmode == V4L2_TUNER_MODE_STEREO)
-			audmode = V4L2_TUNER_MODE_LANG1;
+	if (state->mode != MSP_MODE_EXTERN) {
+		/* switch to mono if only mono is available */
+		if (state->rxsubchans == V4L2_TUNER_SUB_MONO)
+			audmode = V4L2_TUNER_MODE_MONO;
+		/* if bilingual */
+		else if (state->rxsubchans & V4L2_TUNER_SUB_LANG2) {
+			/* and mono or stereo, then fallback to lang1 */
+			if (audmode == V4L2_TUNER_MODE_MONO ||
+			    audmode == V4L2_TUNER_MODE_STEREO)
+				audmode = V4L2_TUNER_MODE_LANG1;
+		}
+		/* if stereo, and audmode is not mono, then switch to stereo */
+		else if (audmode != V4L2_TUNER_MODE_MONO)
+			audmode = V4L2_TUNER_MODE_STEREO;
 	}
-	/* if stereo, and audmode is not mono, then switch to stereo */
-	else if (audmode != V4L2_TUNER_MODE_MONO)
-		audmode = V4L2_TUNER_MODE_STEREO;
 
 	/* switch demodulator */
 	switch (state->mode) {
@@ -848,11 +850,14 @@ static void msp34xxg_set_source(struct i2c_client *client, u16 reg, int in)
 		source = 1; /* stereo or A|B */
 		matrix = 0x20;
 		break;
-	case V4L2_TUNER_MODE_STEREO:
 	case V4L2_TUNER_MODE_LANG1:
-	default:
 		source = 3; /* stereo or A */
 		matrix = 0x00;
+		break;
+	case V4L2_TUNER_MODE_STEREO:
+	default:
+		source = 3; /* stereo or A */
+		matrix = 0x20;
 		break;
 	}
 
@@ -947,13 +952,22 @@ int msp34xxg_thread(void *data)
 		if (kthread_should_stop())
 			break;
 
+		if (state->mode == MSP_MODE_EXTERN) {
+			/* no carrier scan needed, just unmute */
+			v4l_dbg(1, msp_debug, client, "thread: no carrier scan\n");
+			state->scan_in_progress = 0;
+			msp_set_audio(client);
+			continue;
+		}
+
 		/* setup the chip*/
 		msp34xxg_reset(client);
-		state->std = state->radio ? 0x40 : msp_standard;
+		state->std = state->radio ? 0x40 :
+			(state->force_btsc && msp_standard == 1) ? 32 : msp_standard;
+		msp_write_dem(client, 0x20, state->std);
+		/* start autodetect */
 		if (state->std != 1)
 			goto unmute;
-		/* start autodetect */
-		msp_write_dem(client, 0x20, state->std);
 
 		/* watch autodetect */
 		v4l_dbg(1, msp_debug, client, "started autodetect, waiting for result\n");
@@ -977,6 +991,11 @@ int msp34xxg_thread(void *data)
 	unmute:
 		v4l_dbg(1, msp_debug, client, "detected standard: %s (0x%04x)\n",
 			msp_standard_std_name(state->std), state->std);
+
+		if (state->std == 9) {
+			/* AM NICAM mode */
+			msp_write_dsp(client, 0x0e, 0x7c00);
+		}
 
 		/* unmute: dispatch sound to scart output, set scart volume */
 		msp_set_audio(client);
@@ -1012,6 +1031,9 @@ static int msp34xxg_detect_stereo(struct i2c_client *client)
 	int is_bilingual = status & 0x100;
 	int is_stereo = status & 0x40;
 	int oldrx = state->rxsubchans;
+
+	if (state->mode == MSP_MODE_EXTERN)
+		return 0;
 
 	state->rxsubchans = 0;
 	if (is_stereo)

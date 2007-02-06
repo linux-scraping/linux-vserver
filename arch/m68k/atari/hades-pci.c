@@ -4,7 +4,6 @@
  * Written by Wout Klaren.
  */
 
-#include <linux/config.h>
 #include <linux/init.h>
 #include <linux/kernel.h>
 #include <asm/io.h>
@@ -376,10 +375,9 @@ struct pci_bus_info * __init init_hades_pci(void)
 	 * Allocate memory for bus info structure.
 	 */
 
-	bus = kmalloc(sizeof(struct pci_bus_info), GFP_KERNEL);
+	bus = kzalloc(sizeof(struct pci_bus_info), GFP_KERNEL);
 	if (!bus)
 		return NULL;
-	memset(bus, 0, sizeof(struct pci_bus_info));
 
 	/*
 	 * Claim resources. The m68k has no separate I/O space, both

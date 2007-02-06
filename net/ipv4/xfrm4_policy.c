@@ -9,7 +9,6 @@
  */
 
 #include <linux/compiler.h>
-#include <linux/config.h>
 #include <linux/inetdevice.h>
 #include <net/xfrm.h>
 #include <net/ip.h>
@@ -17,11 +16,28 @@
 static struct dst_ops xfrm4_dst_ops;
 static struct xfrm_policy_afinfo xfrm4_policy_afinfo;
 
-static struct xfrm_type_map xfrm4_type_map = { .lock = RW_LOCK_UNLOCKED };
-
 static int xfrm4_dst_lookup(struct xfrm_dst **dst, struct flowi *fl)
 {
 	return __ip_route_output_key((struct rtable**)dst, fl);
+}
+
+static int xfrm4_get_saddr(xfrm_address_t *saddr, xfrm_address_t *daddr)
+{
+	struct rtable *rt;
+	struct flowi fl_tunnel = {
+		.nl_u = {
+			.ip4_u = {
+				.daddr = daddr->a4,
+			},
+		},
+	};
+
+	if (!xfrm4_dst_lookup((struct xfrm_dst **)&rt, &fl_tunnel)) {
+		saddr->a4 = rt->rt_src;
+		dst_release(&rt->u.dst);
+		return 0;
+	}
+	return -EHOSTUNREACH;
 }
 
 static struct dst_entry *
@@ -36,7 +52,7 @@ __xfrm4_find_bundle(struct flowi *fl, struct xfrm_policy *policy)
 		    xdst->u.rt.fl.fl4_dst == fl->fl4_dst &&
 	    	    xdst->u.rt.fl.fl4_src == fl->fl4_src &&
 	    	    xdst->u.rt.fl.fl4_tos == fl->fl4_tos &&
-		    xfrm_bundle_ok(xdst, fl, AF_INET)) {
+		    xfrm_bundle_ok(policy, xdst, fl, AF_INET, 0)) {
 			dst_clone(dst);
 			break;
 		}
@@ -56,8 +72,8 @@ __xfrm4_bundle_create(struct xfrm_policy *policy, struct xfrm_state **xfrm, int 
 	struct dst_entry *dst, *dst_prev;
 	struct rtable *rt0 = (struct rtable*)(*dst_p);
 	struct rtable *rt = rt0;
-	u32 remote = fl->fl4_dst;
-	u32 local  = fl->fl4_src;
+	__be32 remote = fl->fl4_dst;
+	__be32 local  = fl->fl4_src;
 	struct flowi fl_tunnel = {
 		.nl_u = {
 			.ip4_u = {
@@ -96,10 +112,11 @@ __xfrm4_bundle_create(struct xfrm_policy *policy, struct xfrm_state **xfrm, int 
 
 		xdst = (struct xfrm_dst *)dst1;
 		xdst->route = &rt->u.dst;
+		xdst->genid = xfrm[i]->genid;
 
 		dst1->next = dst_prev;
 		dst_prev = dst1;
-		if (xfrm[i]->props.mode) {
+		if (xfrm[i]->props.mode != XFRM_MODE_TRANSPORT) {
 			remote = xfrm[i]->id.daddr.a4;
 			local  = xfrm[i]->props.saddr.a4;
 			tunnel = 1;
@@ -138,6 +155,7 @@ __xfrm4_bundle_create(struct xfrm_policy *policy, struct xfrm_state **xfrm, int 
 		dst_prev->flags	       |= DST_HOST;
 		dst_prev->lastuse	= jiffies;
 		dst_prev->header_len	= header_len;
+		dst_prev->nfheader_len	= 0;
 		dst_prev->trailer_len	= trailer_len;
 		memcpy(&dst_prev->metrics, &x->route->metrics, sizeof(dst_prev->metrics));
 
@@ -181,11 +199,12 @@ _decode_session4(struct sk_buff *skb, struct flowi *fl)
 	if (!(iph->frag_off & htons(IP_MF | IP_OFFSET))) {
 		switch (iph->protocol) {
 		case IPPROTO_UDP:
+		case IPPROTO_UDPLITE:
 		case IPPROTO_TCP:
 		case IPPROTO_SCTP:
 		case IPPROTO_DCCP:
 			if (pskb_may_pull(skb, xprth + 4 - skb->data)) {
-				u16 *ports = (u16 *)xprth;
+				__be16 *ports = (__be16 *)xprth;
 
 				fl->fl_ip_sport = ports[0];
 				fl->fl_ip_dport = ports[1];
@@ -203,7 +222,7 @@ _decode_session4(struct sk_buff *skb, struct flowi *fl)
 
 		case IPPROTO_ESP:
 			if (pskb_may_pull(skb, xprth + 4 - skb->data)) {
-				u32 *ehdr = (u32 *)xprth;
+				__be32 *ehdr = (__be32 *)xprth;
 
 				fl->fl_ipsec_spi = ehdr[0];
 			}
@@ -211,7 +230,7 @@ _decode_session4(struct sk_buff *skb, struct flowi *fl)
 
 		case IPPROTO_AH:
 			if (pskb_may_pull(skb, xprth + 8 - skb->data)) {
-				u32 *ah_hdr = (u32*)xprth;
+				__be32 *ah_hdr = (__be32*)xprth;
 
 				fl->fl_ipsec_spi = ah_hdr[1];
 			}
@@ -219,7 +238,7 @@ _decode_session4(struct sk_buff *skb, struct flowi *fl)
 
 		case IPPROTO_COMP:
 			if (pskb_may_pull(skb, xprth + 4 - skb->data)) {
-				u16 *ipcomp_hdr = (u16 *)xprth;
+				__be16 *ipcomp_hdr = (__be16 *)xprth;
 
 				fl->fl_ipsec_spi = htonl(ntohs(ipcomp_hdr[1]));
 			}
@@ -237,9 +256,7 @@ _decode_session4(struct sk_buff *skb, struct flowi *fl)
 
 static inline int xfrm4_garbage_collect(void)
 {
-	read_lock(&xfrm4_policy_afinfo.lock);
 	xfrm4_policy_afinfo.garbage_collect();
-	read_unlock(&xfrm4_policy_afinfo.lock);
 	return (atomic_read(&xfrm4_dst_ops.entries) > xfrm4_dst_ops.gc_thresh*2);
 }
 
@@ -257,6 +274,8 @@ static void xfrm4_dst_destroy(struct dst_entry *dst)
 
 	if (likely(xdst->u.rt.idev))
 		in_dev_put(xdst->u.rt.idev);
+	if (likely(xdst->u.rt.peer))
+		inet_putpeer(xdst->u.rt.peer);
 	xfrm_dst_destroy(xdst);
 }
 
@@ -299,10 +318,9 @@ static struct dst_ops xfrm4_dst_ops = {
 
 static struct xfrm_policy_afinfo xfrm4_policy_afinfo = {
 	.family = 		AF_INET,
-	.lock = 		RW_LOCK_UNLOCKED,
-	.type_map = 		&xfrm4_type_map,
 	.dst_ops =		&xfrm4_dst_ops,
 	.dst_lookup =		xfrm4_dst_lookup,
+	.get_saddr =		xfrm4_get_saddr,
 	.find_bundle = 		__xfrm4_find_bundle,
 	.bundle_create =	__xfrm4_bundle_create,
 	.decode_session =	_decode_session4,

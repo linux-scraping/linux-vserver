@@ -8,7 +8,6 @@
  * Martin Bligh, Andi Kleen, James Bottomley, John Stultz, and
  * James Cleverdon.
  */
-#include <linux/config.h>
 #include <linux/threads.h>
 #include <linux/cpumask.h>
 #include <linux/string.h>
@@ -21,6 +20,20 @@
 static cpumask_t flat_target_cpus(void)
 {
 	return cpu_online_map;
+}
+
+static cpumask_t flat_vector_allocation_domain(int cpu)
+{
+	/* Careful. Some cpus do not strictly honor the set of cpus
+	 * specified in the interrupt destination when using lowest
+	 * priority interrupt delivery mode.
+	 *
+	 * In particular there was a hyperthreading cpu observed to
+	 * deliver interrupts to the wrong hyperthread when only one
+	 * hyperthread was specified in the interrupt desitination.
+	 */
+	cpumask_t domain = { { [0] = APIC_ALL_CPUS, } };
+	return domain;
 }
 
 /*
@@ -50,8 +63,7 @@ static void flat_send_IPI_mask(cpumask_t cpumask, int vector)
 	unsigned long cfg;
 	unsigned long flags;
 
-	local_save_flags(flags);
-	local_irq_disable();
+	local_irq_save(flags);
 
 	/*
 	 * Wait for idle.
@@ -78,22 +90,29 @@ static void flat_send_IPI_mask(cpumask_t cpumask, int vector)
 
 static void flat_send_IPI_allbutself(int vector)
 {
-#ifndef CONFIG_HOTPLUG_CPU
-	if (((num_online_cpus()) - 1) >= 1)
-		__send_IPI_shortcut(APIC_DEST_ALLBUT, vector,APIC_DEST_LOGICAL);
+#ifdef	CONFIG_HOTPLUG_CPU
+	int hotplug = 1;
 #else
-	cpumask_t allbutme = cpu_online_map;
-
-	cpu_clear(smp_processor_id(), allbutme);
-
-	if (!cpus_empty(allbutme))
-		flat_send_IPI_mask(allbutme, vector);
+	int hotplug = 0;
 #endif
+	if (hotplug || vector == NMI_VECTOR) {
+		cpumask_t allbutme = cpu_online_map;
+
+		cpu_clear(smp_processor_id(), allbutme);
+
+		if (!cpus_empty(allbutme))
+			flat_send_IPI_mask(allbutme, vector);
+	} else if (num_online_cpus() > 1) {
+		__send_IPI_shortcut(APIC_DEST_ALLBUT, vector,APIC_DEST_LOGICAL);
+	}
 }
 
 static void flat_send_IPI_all(int vector)
 {
-	__send_IPI_shortcut(APIC_DEST_ALLINC, vector, APIC_DEST_LOGICAL);
+	if (vector == NMI_VECTOR)
+		flat_send_IPI_mask(cpu_online_map, vector);
+	else
+		__send_IPI_shortcut(APIC_DEST_ALLINC, vector, APIC_DEST_LOGICAL);
 }
 
 static int flat_apic_id_registered(void)
@@ -108,18 +127,15 @@ static unsigned int flat_cpu_mask_to_apicid(cpumask_t cpumask)
 
 static unsigned int phys_pkg_id(int index_msb)
 {
-	u32 ebx;
-
-	ebx = cpuid_ebx(1);
-	return ((ebx >> 24) & 0xFF) >> index_msb;
+	return hard_smp_processor_id() >> index_msb;
 }
 
 struct genapic apic_flat =  {
 	.name = "flat",
 	.int_delivery_mode = dest_LowestPrio,
 	.int_dest_mode = (APIC_DEST_LOGICAL != 0),
-	.int_delivery_dest = APIC_DEST_LOGICAL | APIC_DM_LOWEST,
 	.target_cpus = flat_target_cpus,
+	.vector_allocation_domain = flat_vector_allocation_domain,
 	.apic_id_registered = flat_apic_id_registered,
 	.init_apic_ldr = flat_init_apic_ldr,
 	.send_IPI_all = flat_send_IPI_all,
@@ -137,8 +153,16 @@ struct genapic apic_flat =  {
 
 static cpumask_t physflat_target_cpus(void)
 {
-	return cpumask_of_cpu(0);
+	return cpu_online_map;
 }
+
+static cpumask_t physflat_vector_allocation_domain(int cpu)
+{
+	cpumask_t domain = CPU_MASK_NONE;
+	cpu_set(cpu, domain);
+	return domain;
+}
+
 
 static void physflat_send_IPI_mask(cpumask_t cpumask, int vector)
 {
@@ -177,8 +201,8 @@ struct genapic apic_physflat =  {
 	.name = "physical flat",
 	.int_delivery_mode = dest_Fixed,
 	.int_dest_mode = (APIC_DEST_PHYSICAL != 0),
-	.int_delivery_dest = APIC_DEST_PHYSICAL | APIC_DM_FIXED,
 	.target_cpus = physflat_target_cpus,
+	.vector_allocation_domain = physflat_vector_allocation_domain,
 	.apic_id_registered = flat_apic_id_registered,
 	.init_apic_ldr = flat_init_apic_ldr,/*not needed, but shouldn't hurt*/
 	.send_IPI_all = physflat_send_IPI_all,

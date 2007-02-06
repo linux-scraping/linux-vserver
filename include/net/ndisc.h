@@ -37,7 +37,6 @@ enum {
 
 #ifdef __KERNEL__
 
-#include <linux/config.h>
 #include <linux/compiler.h>
 #include <linux/icmpv6.h>
 #include <linux/in6.h>
@@ -67,8 +66,8 @@ struct rs_msg {
 
 struct ra_msg {
         struct icmp6hdr		icmph;
-	__u32			reachable_time;
-	__u32			retrans_timer;
+	__be32			reachable_time;
+	__be32			retrans_timer;
 };
 
 struct nd_opt_hdr {

@@ -8,7 +8,6 @@
 #ifndef _NET_DST_H
 #define _NET_DST_H
 
-#include <linux/config.h>
 #include <linux/netdevice.h>
 #include <linux/rtnetlink.h>
 #include <linux/rcupdate.h>
@@ -55,6 +54,7 @@ struct dst_entry
 	unsigned long		expires;
 
 	unsigned short		header_len;	/* more space at head required */
+	unsigned short		nfheader_len;	/* more non-fragment space at head required */
 	unsigned short		trailer_len;	/* space to reserve at tail */
 
 	u32			metrics[RTAX_MAX];
@@ -84,7 +84,7 @@ struct dst_entry
 struct dst_ops
 {
 	unsigned short		family;
-	unsigned short		protocol;
+	__be16			protocol;
 	unsigned		gc_thresh;
 
 	int			(*gc)(void);
@@ -98,7 +98,7 @@ struct dst_ops
 	int			entry_size;
 
 	atomic_t		entries;
-	kmem_cache_t 		*kmem_cachep;
+	struct kmem_cache 		*kmem_cachep;
 };
 
 #ifdef __KERNEL__

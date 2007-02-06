@@ -4,7 +4,6 @@
  */
 
 #include <asm-generic/vmlinux.lds.h>
-#include <linux/config.h>
 #include <asm/thread_info.h>
 #include <asm/memory.h>
 	
@@ -46,13 +45,7 @@ SECTIONS
 			*(.early_param.init)
 		__early_end = .;
 		__initcall_start = .;
-			*(.initcall1.init)
-			*(.initcall2.init)
-			*(.initcall3.init)
-			*(.initcall4.init)
-			*(.initcall5.init)
-			*(.initcall6.init)
-			*(.initcall7.init)
+			INITCALLS
 		__initcall_end = .;
 		__con_initcall_start = .;
 			*(.con_initcall.init)
@@ -80,6 +73,10 @@ SECTIONS
 		*(.exit.text)
 		*(.exit.data)
 		*(.exitcall.exit)
+#ifndef CONFIG_MMU
+		*(.fixup)
+		*(__ex_table)
+#endif
 	}
 
 	.text : {			/* Real text segment		*/
@@ -87,7 +84,9 @@ SECTIONS
 			*(.text)
 			SCHED_TEXT
 			LOCK_TEXT
+#ifdef CONFIG_MMU
 			*(.fixup)
+#endif
 			*(.gnu.warning)
 			*(.rodata)
 			*(.rodata.*)
@@ -142,7 +141,9 @@ SECTIONS
 		 */
 		. = ALIGN(32);
 		__start___ex_table = .;
+#ifdef CONFIG_MMU
 		*(__ex_table)
+#endif
 		__stop___ex_table = .;
 
 		/*

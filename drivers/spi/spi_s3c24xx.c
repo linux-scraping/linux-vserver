@@ -10,10 +10,6 @@
  *
 */
 
-
-//#define DEBUG
-
-#include <linux/config.h>
 #include <linux/init.h>
 #include <linux/spinlock.h>
 #include <linux/workqueue.h>
@@ -45,6 +41,9 @@ struct s3c24xx_spi {
 	int			 len;
 	int			 count;
 
+	int			(*set_cs)(struct s3c2410_spi_info *spi,
+					  int cs, int pol);
+
 	/* data buffers */
 	const unsigned char	*tx;
 	unsigned char		*rx;
@@ -65,6 +64,11 @@ static inline struct s3c24xx_spi *to_hw(struct spi_device *sdev)
 	return spi_master_get_devdata(sdev->master);
 }
 
+static void s3c24xx_spi_gpiocs(struct s3c2410_spi_info *spi, int cs, int pol)
+{
+	s3c2410_gpio_setpin(spi->pin_cs, pol);
+}
+
 static void s3c24xx_spi_chipsel(struct spi_device *spi, int value)
 {
 	struct s3c24xx_spi *hw = to_hw(spi);
@@ -73,10 +77,7 @@ static void s3c24xx_spi_chipsel(struct spi_device *spi, int value)
 
 	switch (value) {
 	case BITBANG_CS_INACTIVE:
-		if (hw->pdata->set_cs)
-			hw->pdata->set_cs(hw->pdata, value, cspol);
-		else
-			s3c2410_gpio_setpin(hw->pdata->pin_cs, cspol ^ 1);
+		hw->pdata->set_cs(hw->pdata, spi->chip_select, cspol^1);
 		break;
 
 	case BITBANG_CS_ACTIVE:
@@ -97,14 +98,9 @@ static void s3c24xx_spi_chipsel(struct spi_device *spi, int value)
 		/* write new configration */
 
 		writeb(spcon, hw->regs + S3C2410_SPCON);
-
-		if (hw->pdata->set_cs)
-			hw->pdata->set_cs(hw->pdata, value, cspol);
-		else
-			s3c2410_gpio_setpin(hw->pdata->pin_cs, cspol);
+		hw->pdata->set_cs(hw->pdata, spi->chip_select, cspol);
 
 		break;
-
 	}
 }
 
@@ -175,7 +171,7 @@ static int s3c24xx_spi_setup(struct spi_device *spi)
 
 static inline unsigned int hw_txbyte(struct s3c24xx_spi *hw, int count)
 {
-	return hw->tx ? hw->tx[count] : 0xff;
+	return hw->tx ? hw->tx[count] : 0;
 }
 
 static int s3c24xx_spi_txrx(struct spi_device *spi, struct spi_transfer *t)
@@ -197,7 +193,7 @@ static int s3c24xx_spi_txrx(struct spi_device *spi, struct spi_transfer *t)
 	return hw->count;
 }
 
-static irqreturn_t s3c24xx_spi_irq(int irq, void *dev, struct pt_regs *regs)
+static irqreturn_t s3c24xx_spi_irq(int irq, void *dev)
 {
 	struct s3c24xx_spi *hw = dev;
 	unsigned int spsta = readb(hw->regs + S3C2410_SPSTA);
@@ -331,9 +327,12 @@ static int s3c24xx_spi_probe(struct platform_device *pdev)
 	/* setup any gpio we can */
 
 	if (!hw->pdata->set_cs) {
+		hw->set_cs = s3c24xx_spi_gpiocs;
+
 		s3c2410_gpio_setpin(hw->pdata->pin_cs, 1);
 		s3c2410_gpio_cfgpin(hw->pdata->pin_cs, S3C2410_GPIO_OUTPUT);
-	}
+	} else
+		hw->set_cs = hw->pdata->set_cs;
 
 	/* register our spi controller */
 

@@ -34,11 +34,11 @@
  */
 int
 pci_bus_alloc_resource(struct pci_bus *bus, struct resource *res,
-	unsigned long size, unsigned long align, unsigned long min,
-	unsigned int type_mask,
-	void (*alignf)(void *, struct resource *,
-			unsigned long, unsigned long),
-	void *alignf_data)
+		resource_size_t size, resource_size_t align,
+		resource_size_t min, unsigned int type_mask,
+		void (*alignf)(void *, struct resource *, resource_size_t,
+				resource_size_t),
+		void *alignf_data)
 {
 	int i, ret = -ENOMEM;
 
@@ -77,16 +77,20 @@ pci_bus_alloc_resource(struct pci_bus *bus, struct resource *res,
  * This adds a single pci device to the global
  * device list and adds sysfs and procfs entries
  */
-void __devinit pci_bus_add_device(struct pci_dev *dev)
+int __devinit pci_bus_add_device(struct pci_dev *dev)
 {
-	device_add(&dev->dev);
+	int retval;
+	retval = device_add(&dev->dev);
+	if (retval)
+		return retval;
 
-	spin_lock(&pci_bus_lock);
+	down_write(&pci_bus_sem);
 	list_add_tail(&dev->global_list, &pci_devices);
-	spin_unlock(&pci_bus_lock);
+	up_write(&pci_bus_sem);
 
 	pci_proc_attach_device(dev);
 	pci_create_sysfs_dev_files(dev);
+	return 0;
 }
 
 /**
@@ -104,6 +108,7 @@ void __devinit pci_bus_add_device(struct pci_dev *dev)
 void __devinit pci_bus_add_devices(struct pci_bus *bus)
 {
 	struct pci_dev *dev;
+	int retval;
 
 	list_for_each_entry(dev, &bus->devices, bus_list) {
 		/*
@@ -112,7 +117,9 @@ void __devinit pci_bus_add_devices(struct pci_bus *bus)
 		 */
 		if (!list_empty(&dev->global_list))
 			continue;
-		pci_bus_add_device(dev);
+		retval = pci_bus_add_device(dev);
+		if (retval)
+			dev_err(&dev->dev, "Error adding device, continuing\n");
 	}
 
 	list_for_each_entry(dev, &bus->devices, bus_list) {
@@ -125,14 +132,17 @@ void __devinit pci_bus_add_devices(struct pci_bus *bus)
 		 */
 		if (dev->subordinate) {
 		       if (list_empty(&dev->subordinate->node)) {
-			       spin_lock(&pci_bus_lock);
+			       down_write(&pci_bus_sem);
 			       list_add_tail(&dev->subordinate->node,
 					       &dev->bus->children);
-			       spin_unlock(&pci_bus_lock);
-		       }
+			       up_write(&pci_bus_sem);
+			}
 			pci_bus_add_devices(dev->subordinate);
-
-			sysfs_create_link(&dev->subordinate->class_dev.kobj, &dev->dev.kobj, "bridge");
+			retval = sysfs_create_link(&dev->subordinate->class_dev.kobj,
+						   &dev->dev.kobj, "bridge");
+			if (retval)
+				dev_err(&dev->dev, "Error creating sysfs "
+					"bridge symlink, continuing...\n");
 		}
 	}
 }
@@ -168,7 +178,7 @@ void pci_walk_bus(struct pci_bus *top, void (*cb)(struct pci_dev *, void *),
 	struct list_head *next;
 
 	bus = top;
-	spin_lock(&pci_bus_lock);
+	down_read(&pci_bus_sem);
 	next = top->devices.next;
 	for (;;) {
 		if (next == &bus->devices) {
@@ -180,22 +190,19 @@ void pci_walk_bus(struct pci_bus *top, void (*cb)(struct pci_dev *, void *),
 			continue;
 		}
 		dev = list_entry(next, struct pci_dev, bus_list);
-		pci_dev_get(dev);
 		if (dev->subordinate) {
 			/* this is a pci-pci bridge, do its devices next */
 			next = dev->subordinate->devices.next;
 			bus = dev->subordinate;
 		} else
 			next = dev->bus_list.next;
-		spin_unlock(&pci_bus_lock);
 
-		/* Run device routines with the bus unlocked */
+		/* Run device routines with the device locked */
+		down(&dev->dev.sem);
 		cb(dev, userdata);
-
-		spin_lock(&pci_bus_lock);
-		pci_dev_put(dev);
+		up(&dev->dev.sem);
 	}
-	spin_unlock(&pci_bus_lock);
+	up_read(&pci_bus_sem);
 }
 EXPORT_SYMBOL_GPL(pci_walk_bus);
 

@@ -24,8 +24,6 @@ extern void mtrr_bp_init(void);
 #define mtrr_bp_init() do {} while (0)
 #endif
 extern void init_memory_mapping(unsigned long start, unsigned long end);
-extern void size_zones(unsigned long *z, unsigned long *h,
-			unsigned long start_pfn, unsigned long end_pfn);
 
 extern void system_call(void); 
 extern int kernel_syscall(void);
@@ -37,7 +35,6 @@ extern void ia32_sysenter_target(void);
 
 extern void config_acpi_tables(void);
 extern void ia32_syscall(void);
-extern void iommu_hole_init(void);
 
 extern int pmtimer_mark_offset(void);
 extern void pmtimer_resume(void);
@@ -52,10 +49,8 @@ extern unsigned long long monotonic_base;
 extern int sysctl_vsyscall;
 extern int nohpet;
 extern unsigned long vxtime_hz;
+extern void time_init_gtod(void);
 
-extern int numa_setup(char *opt);
-
-extern int setup_early_printk(char *); 
 extern void early_printk(const char *fmt, ...) __attribute__((format(printf,1,2)));
 
 extern void early_identify_cpu(struct cpuinfo_x86 *c);
@@ -66,16 +61,15 @@ extern void numa_initmem_init(unsigned long start_pfn, unsigned long end_pfn);
 extern unsigned long numa_free_all_bootmem(void);
 
 extern void reserve_bootmem_generic(unsigned long phys, unsigned len);
-extern void free_bootmem_generic(unsigned long phys, unsigned len);
 
 extern void load_gs_index(unsigned gs);
 
 extern void stop_timer_interrupt(void);
-extern void main_timer_handler(struct pt_regs *regs);
+extern void main_timer_handler(void);
 
 extern unsigned long end_pfn_map; 
 
-extern void show_trace(unsigned long * rsp);
+extern void show_trace(struct task_struct *, struct pt_regs *, unsigned long * rsp);
 extern void show_registers(struct pt_regs *regs);
 
 extern void exception_table_check(void);
@@ -92,7 +86,8 @@ extern void syscall32_cpu_init(void);
 
 extern void setup_node_bootmem(int nodeid, unsigned long start, unsigned long end);
 
-extern void check_ioapic(void);
+extern void early_quirks(void);
+extern void quirk_intel_irqbalance(void);
 extern void check_efer(void);
 
 extern int unhandled_signal(struct task_struct *tsk, int sig);
@@ -101,22 +96,18 @@ extern int unsynchronized_tsc(void);
 
 extern void select_idle_routine(const struct cpuinfo_x86 *c);
 
-extern void gart_parse_options(char *);
-extern void __init no_iommu_init(void);
-
 extern unsigned long table_start, table_end;
 
 extern int exception_trace;
-extern int force_iommu, no_iommu;
-extern int using_apic_timer;
-extern int disable_apic;
 extern unsigned cpu_khz;
-extern int ioapic_force;
-extern int skip_ioapic_setup;
-extern int acpi_ht;
-extern int acpi_disabled;
 
-#ifdef CONFIG_GART_IOMMU
+extern void no_iommu_init(void);
+extern int force_iommu, no_iommu;
+extern int iommu_detected;
+#ifdef CONFIG_IOMMU
+extern void gart_iommu_init(void);
+extern void gart_parse_options(char *);
+extern void iommu_hole_init(void);
 extern int fallback_aper_order;
 extern int fallback_aper_force;
 extern int iommu_aperture;
@@ -130,9 +121,12 @@ extern int fix_aperture;
 
 extern int reboot_force;
 extern int notsc_setup(char *);
-extern int setup_additional_cpus(char *);
 
-extern void smp_local_timer_interrupt(struct pt_regs * regs);
+extern int timer_over_8254;
+
+extern int gsi_irq_sharing(int gsi);
+
+extern void smp_local_timer_interrupt(void);
 
 long do_arch_prctl(struct task_struct *task, int code, unsigned long addr);
 

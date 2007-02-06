@@ -1,5 +1,5 @@
 /*
- * drivers/net/ibm_emac/ibm_emac_rgmii.c
+ * drivers/net/ibm_emac/ibm_emac_rgmii.h
  *
  * Driver for PowerPC 4xx on-chip ethernet controller, RGMII bridge support.
  *
@@ -21,7 +21,6 @@
 #ifndef _IBM_EMAC_RGMII_H_
 #define _IBM_EMAC_RGMII_H_
 
-#include <linux/config.h>
 
 /* RGMII bridge */
 struct rgmii_regs {

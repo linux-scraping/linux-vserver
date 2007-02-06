@@ -415,7 +415,7 @@
  * Fixed DEF_TX value that caused the serial transmitter pin (txd) to go to 0 when
  * closing the last filehandle, NASTY!.
  * Added break generation, not tested though!
- * Use SA_SHIRQ when request_irq() for ser2 and ser3 (shared with) par0 and par1.
+ * Use IRQF_SHARED when request_irq() for ser2 and ser3 (shared with) par0 and par1.
  * You can't use them at the same time (yet..), but you can hopefully switch
  * between ser2/par0, ser3/par1 with the same kernel config.
  * Replaced some magic constants with defines
@@ -425,7 +425,6 @@
 
 static char *serial_version = "$Revision: 1.25 $";
 
-#include <linux/config.h>
 #include <linux/types.h>
 #include <linux/errno.h>
 #include <linux/signal.h>
@@ -805,8 +804,8 @@ static struct e100_serial rs_table[] = {
 
 #define NR_PORTS (sizeof(rs_table)/sizeof(struct e100_serial))
 
-static struct termios *serial_termios[NR_PORTS];
-static struct termios *serial_termios_locked[NR_PORTS];
+static struct ktermios *serial_termios[NR_PORTS];
+static struct ktermios *serial_termios_locked[NR_PORTS];
 #ifdef CONFIG_ETRAX_SERIAL_FAST_TIMER
 static struct fast_timer fast_timers[NR_PORTS];
 #endif
@@ -2347,7 +2346,7 @@ start_receive(struct e100_serial *info)
 */
 
 static irqreturn_t
-tr_interrupt(int irq, void *dev_id, struct pt_regs * regs)
+tr_interrupt(int irq, void *dev_id)
 {
 	struct e100_serial *info;
 	unsigned long ireg;
@@ -2396,7 +2395,7 @@ tr_interrupt(int irq, void *dev_id, struct pt_regs * regs)
 /* dma input channel interrupt handler */
 
 static irqreturn_t
-rec_interrupt(int irq, void *dev_id, struct pt_regs * regs)
+rec_interrupt(int irq, void *dev_id)
 {
 	struct e100_serial *info;
 	unsigned long ireg;
@@ -2573,12 +2572,6 @@ static void flush_to_flip_buffer(struct e100_serial *info)
 
 	DFLIP(
 	  if (1) {
-
-		  if (test_bit(TTY_DONT_FLIP, &tty->flags)) {
-			  DEBUG_LOG(info->line, "*** TTY_DONT_FLIP set flip.count %i ***\n", tty->flip.count);
-			  DEBUG_LOG(info->line, "*** recv_cnt %i\n", info->recv_cnt);
-		  } else {
-		  }
 		  DEBUG_LOG(info->line, "*** rxtot %i\n", info->icount.rx);
 		  DEBUG_LOG(info->line, "ldisc %lu\n", tty->ldisc.chars_in_buffer(tty));
 		  DEBUG_LOG(info->line, "room  %lu\n", tty->ldisc.receive_room(tty));
@@ -3061,7 +3054,7 @@ static void handle_ser_tx_interrupt(struct e100_serial *info)
  * ser_int duration: just sending: 8-15 us normally, up to 73 us
  */
 static irqreturn_t
-ser_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+ser_interrupt(int irq, void *dev_id)
 {
 	static volatile int tx_started = 0;
 	struct e100_serial *info;
@@ -4230,7 +4223,7 @@ rs_ioctl(struct tty_struct *tty, struct file * file,
 }
 
 static void
-rs_set_termios(struct tty_struct *tty, struct termios *old_termios)
+rs_set_termios(struct tty_struct *tty, struct ktermios *old_termios)
 {
 	struct e100_serial *info = (struct e100_serial *)tty->driver_data;
 
@@ -4832,7 +4825,7 @@ show_serial_version(void)
 
 /* rs_init inits the driver at boot (using the module_init chain) */
 
-static struct tty_operations rs_ops = {
+static const struct tty_operations rs_ops = {
 	.open = rs_open,
 	.close = rs_close,
 	.write = rs_write,
@@ -4884,7 +4877,9 @@ rs_init(void)
 	driver->init_termios = tty_std_termios;
 	driver->init_termios.c_cflag =
 		B115200 | CS8 | CREAD | HUPCL | CLOCAL; /* is normally B9600 default... */
-	driver->flags = TTY_DRIVER_REAL_RAW | TTY_DRIVER_NO_DEVFS;
+	driver->init_termios.c_ispeed = 115200;
+	driver->init_termios.c_ospeed = 115200;
+	driver->flags = TTY_DRIVER_REAL_RAW | TTY_DRIVER_DYNAMIC_DEV;
 	driver->termios = serial_termios;
 	driver->termios_locked = serial_termios_locked;
 
@@ -4949,55 +4944,55 @@ rs_init(void)
 	/* Not needed in simulator.  May only complicate stuff. */
 	/* hook the irq's for DMA channel 6 and 7, serial output and input, and some more... */
 
-	if (request_irq(SERIAL_IRQ_NBR, ser_interrupt, SA_SHIRQ | SA_INTERRUPT, "serial ", NULL))
+	if (request_irq(SERIAL_IRQ_NBR, ser_interrupt, IRQF_SHARED | IRQF_DISABLED, "serial ", NULL))
 		panic("irq8");
 
 #ifdef CONFIG_ETRAX_SERIAL_PORT0
 #ifdef CONFIG_ETRAX_SERIAL_PORT0_DMA6_OUT
-	if (request_irq(SER0_DMA_TX_IRQ_NBR, tr_interrupt, SA_INTERRUPT, "serial 0 dma tr", NULL))
+	if (request_irq(SER0_DMA_TX_IRQ_NBR, tr_interrupt, IRQF_DISABLED, "serial 0 dma tr", NULL))
 		panic("irq22");
 #endif
 #ifdef CONFIG_ETRAX_SERIAL_PORT0_DMA7_IN
-	if (request_irq(SER0_DMA_RX_IRQ_NBR, rec_interrupt, SA_INTERRUPT, "serial 0 dma rec", NULL))
+	if (request_irq(SER0_DMA_RX_IRQ_NBR, rec_interrupt, IRQF_DISABLED, "serial 0 dma rec", NULL))
 		panic("irq23");
 #endif
 #endif
 
 #ifdef CONFIG_ETRAX_SERIAL_PORT1
 #ifdef CONFIG_ETRAX_SERIAL_PORT1_DMA8_OUT
-	if (request_irq(SER1_DMA_TX_IRQ_NBR, tr_interrupt, SA_INTERRUPT, "serial 1 dma tr", NULL))
+	if (request_irq(SER1_DMA_TX_IRQ_NBR, tr_interrupt, IRQF_DISABLED, "serial 1 dma tr", NULL))
 		panic("irq24");
 #endif
 #ifdef CONFIG_ETRAX_SERIAL_PORT1_DMA9_IN
-	if (request_irq(SER1_DMA_RX_IRQ_NBR, rec_interrupt, SA_INTERRUPT, "serial 1 dma rec", NULL))
+	if (request_irq(SER1_DMA_RX_IRQ_NBR, rec_interrupt, IRQF_DISABLED, "serial 1 dma rec", NULL))
 		panic("irq25");
 #endif
 #endif
 #ifdef CONFIG_ETRAX_SERIAL_PORT2
 	/* DMA Shared with par0 (and SCSI0 and ATA) */
 #ifdef CONFIG_ETRAX_SERIAL_PORT2_DMA2_OUT
-	if (request_irq(SER2_DMA_TX_IRQ_NBR, tr_interrupt, SA_SHIRQ | SA_INTERRUPT, "serial 2 dma tr", NULL))
+	if (request_irq(SER2_DMA_TX_IRQ_NBR, tr_interrupt, IRQF_SHARED | IRQF_DISABLED, "serial 2 dma tr", NULL))
 		panic("irq18");
 #endif
 #ifdef CONFIG_ETRAX_SERIAL_PORT2_DMA3_IN
-	if (request_irq(SER2_DMA_RX_IRQ_NBR, rec_interrupt, SA_SHIRQ | SA_INTERRUPT, "serial 2 dma rec", NULL))
+	if (request_irq(SER2_DMA_RX_IRQ_NBR, rec_interrupt, IRQF_SHARED | IRQF_DISABLED, "serial 2 dma rec", NULL))
 		panic("irq19");
 #endif
 #endif
 #ifdef CONFIG_ETRAX_SERIAL_PORT3
 	/* DMA Shared with par1 (and SCSI1 and Extern DMA 0) */
 #ifdef CONFIG_ETRAX_SERIAL_PORT3_DMA4_OUT
-	if (request_irq(SER3_DMA_TX_IRQ_NBR, tr_interrupt, SA_SHIRQ | SA_INTERRUPT, "serial 3 dma tr", NULL))
+	if (request_irq(SER3_DMA_TX_IRQ_NBR, tr_interrupt, IRQF_SHARED | IRQF_DISABLED, "serial 3 dma tr", NULL))
 		panic("irq20");
 #endif
 #ifdef CONFIG_ETRAX_SERIAL_PORT3_DMA5_IN
-	if (request_irq(SER3_DMA_RX_IRQ_NBR, rec_interrupt, SA_SHIRQ | SA_INTERRUPT, "serial 3 dma rec", NULL))
+	if (request_irq(SER3_DMA_RX_IRQ_NBR, rec_interrupt, IRQF_SHARED | IRQF_DISABLED, "serial 3 dma rec", NULL))
 		panic("irq21");
 #endif
 #endif
 
 #ifdef CONFIG_ETRAX_SERIAL_FLUSH_DMA_FAST
-	if (request_irq(TIMER1_IRQ_NBR, timeout_interrupt, SA_SHIRQ | SA_INTERRUPT,
+	if (request_irq(TIMER1_IRQ_NBR, timeout_interrupt, IRQF_SHARED | IRQF_DISABLED,
 		       "fast serial dma timeout", NULL)) {
 		printk(KERN_CRIT "err: timer1 irq\n");
 	}

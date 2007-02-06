@@ -79,7 +79,7 @@ static int ixp4xx_spkr_event(struct input_dev *dev, unsigned int type, unsigned 
 	return 0;
 }
 
-static irqreturn_t ixp4xx_spkr_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t ixp4xx_spkr_interrupt(int irq, void *dev_id)
 {
 	/* clear interrupt */
 	*IXP4XX_OSST = IXP4XX_OSST_TIMER_2_PEND;
@@ -113,7 +113,7 @@ static int __devinit ixp4xx_spkr_probe(struct platform_device *dev)
 	input_dev->event = ixp4xx_spkr_event;
 
 	err = request_irq(IRQ_IXP4XX_TIMER2, &ixp4xx_spkr_interrupt,
-			  SA_INTERRUPT | SA_TIMER, "ixp4xx-beeper", (void *) dev->id);
+			  IRQF_DISABLED | IRQF_TIMER, "ixp4xx-beeper", (void *) dev->id);
 	if (err)
 		goto err_free_device;
 

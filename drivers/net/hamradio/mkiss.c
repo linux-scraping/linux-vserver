@@ -16,7 +16,6 @@
  * Copyright (C) 2004, 05 Ralf Baechle DL5RB <ralf@linux-mips.org>
  * Copyright (C) 2004, 05 Thomas Osterried DL9SAU <thomas@x-berg.in-berlin.de>
  */
-#include <linux/config.h>
 #include <linux/module.h>
 #include <asm/system.h>
 #include <linux/bitops.h>
@@ -357,9 +356,9 @@ static int ax_set_mac_address(struct net_device *dev, void *addr)
 {
 	struct sockaddr_ax25 *sa = addr;
 
-	spin_lock_irq(&dev->xmit_lock);
+	netif_tx_lock_bh(dev);
 	memcpy(dev->dev_addr, &sa->sax25_call, AX25_ADDR_LEN);
-	spin_unlock_irq(&dev->xmit_lock);
+	netif_tx_unlock_bh(dev);
 
 	return 0;
 }
@@ -673,11 +672,6 @@ static struct net_device_stats *ax_get_stats(struct net_device *dev)
 
 static void ax_setup(struct net_device *dev)
 {
-	static char ax25_bcast[AX25_ADDR_LEN] =
-		{'Q'<<1,'S'<<1,'T'<<1,' '<<1,' '<<1,' '<<1,'0'<<1};
-	static char ax25_test[AX25_ADDR_LEN] =
-		{'L'<<1,'I'<<1,'N'<<1,'U'<<1,'X'<<1,' '<<1,'1'<<1};
-
 	/* Finish setting up the DEVICE info. */
 	dev->mtu             = AX_MTU;
 	dev->hard_start_xmit = ax_xmit;
@@ -692,8 +686,8 @@ static void ax_setup(struct net_device *dev)
 	dev->hard_header     = ax_header;
 	dev->rebuild_header  = ax_rebuild_header;
 
-	memcpy(dev->broadcast, ax25_bcast, AX25_ADDR_LEN);
-	memcpy(dev->dev_addr,  ax25_test,  AX25_ADDR_LEN);
+	memcpy(dev->broadcast, &ax25_bcast, AX25_ADDR_LEN);
+	memcpy(dev->dev_addr,  &ax25_defaddr,  AX25_ADDR_LEN);
 
 	dev->flags      = IFF_BROADCAST | IFF_MULTICAST;
 }
@@ -886,9 +880,9 @@ static int mkiss_ioctl(struct tty_struct *tty, struct file *file,
 			break;
 		}
 
-		spin_lock_irq(&dev->xmit_lock);
+		netif_tx_lock_bh(dev);
 		memcpy(dev->dev_addr, addr, AX25_ADDR_LEN);
-		spin_unlock_irq(&dev->xmit_lock);
+		netif_tx_unlock_bh(dev);
 
 		err = 0;
 		break;

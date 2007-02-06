@@ -7,7 +7,6 @@
  *                            Hitoshi Yamamoto
  */
 
-#include <linux/config.h>
 #include <linux/init.h>
 #include <linux/kernel.h>
 #include <linux/stddef.h>
@@ -22,7 +21,7 @@
 #include <linux/root_dev.h>
 #include <linux/seq_file.h>
 #include <linux/timex.h>
-#include <linux/tty.h>
+#include <linux/screen_info.h>
 #include <linux/cpu.h>
 #include <linux/nodemask.h>
 #include <linux/pfn.h>
@@ -197,9 +196,7 @@ static unsigned long __init setup_memory(void)
 	if (LOADER_TYPE && INITRD_START) {
 		if (INITRD_START + INITRD_SIZE <= (max_low_pfn << PAGE_SHIFT)) {
 			reserve_bootmem(INITRD_START, INITRD_SIZE);
-			initrd_start = INITRD_START ?
-				INITRD_START + PAGE_OFFSET : 0;
-
+			initrd_start = INITRD_START + PAGE_OFFSET;
 			initrd_end = initrd_start + INITRD_SIZE;
 			printk("initrd:start[%08lx],size[%08lx]\n",
 				initrd_start, INITRD_SIZE);
@@ -275,7 +272,7 @@ static int __init topology_init(void)
 	int i;
 
 	for_each_present_cpu(i)
-		register_cpu(&cpu_devices[i], i, NULL);
+		register_cpu(&cpu_devices[i], i);
 
 	return 0;
 }
@@ -370,10 +367,10 @@ static void c_stop(struct seq_file *m, void *v)
 }
 
 struct seq_operations cpuinfo_op = {
-	start:	c_start,
-	next:	c_next,
-	stop:	c_stop,
-	show:	show_cpuinfo,
+	.start = c_start,
+	.next = c_next,
+	.stop = c_stop,
+	.show = show_cpuinfo,
 };
 #endif	/* CONFIG_PROC_FS */
 

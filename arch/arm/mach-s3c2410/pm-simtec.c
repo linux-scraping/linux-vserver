@@ -27,7 +27,6 @@
 #include <asm/io.h>
 
 #include <asm/arch/map.h>
-#include <asm/arch/regs-serial.h>
 #include <asm/arch/regs-gpio.h>
 #include <asm/arch/regs-mem.h>
 
@@ -48,7 +47,9 @@ static __init int pm_simtec_init(void)
 
 	/* check which machine we are running on */
 
-	if (!machine_is_bast() && !machine_is_vr1000() && !machine_is_anubis())
+	if (!machine_is_bast() && !machine_is_vr1000() &&
+	    !machine_is_anubis() && !machine_is_osiris() &&
+	    !machine_is_aml_m5900())
 		return 0;
 
 	printk(KERN_INFO "Simtec Board Power Manangement" COPYRIGHT "\n");

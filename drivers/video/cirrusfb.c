@@ -36,13 +36,11 @@
 
 #define CIRRUSFB_VERSION "2.0-pre2"
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/errno.h>
 #include <linux/string.h>
 #include <linux/mm.h>
-#include <linux/tty.h>
 #include <linux/slab.h>
 #include <linux/delay.h>
 #include <linux/fb.h>
@@ -2227,7 +2225,6 @@ static void cirrusfb_pci_unmap (struct cirrusfb_info *cinfo)
 		release_region(0x3C0, 32);
 	pci_release_regions(pdev);
 	framebuffer_release(cinfo->info);
-	pci_disable_device(pdev);
 }
 #endif /* CONFIG_PCI */
 
@@ -2445,7 +2442,10 @@ static int cirrusfb_pci_register (struct pci_dev *pdev,
 	printk ("Cirrus Logic chipset on PCI bus\n");
 	pci_set_drvdata(pdev, info);
 
-	return cirrusfb_register(cinfo);
+	ret = cirrusfb_register(cinfo);
+	if (ret)
+		iounmap(cinfo->fbmem);
+	return ret;
 
 err_release_legacy:
 	if (release_io_ports)
@@ -2458,7 +2458,6 @@ err_release_regions:
 err_release_fb:
 	framebuffer_release(info);
 err_disable:
-	pci_disable_device(pdev);
 err_out:
 	return ret;
 }
@@ -2578,7 +2577,15 @@ static int cirrusfb_zorro_register(struct zorro_dev *z,
 	printk (KERN_INFO "Cirrus Logic chipset on Zorro bus\n");
 	zorro_set_drvdata(z, info);
 
-	return cirrusfb_register(cinfo);
+	ret = cirrusfb_register(cinfo);
+	if (ret) {
+		if (btype == BT_PICASSO4) {
+			iounmap(cinfo->fbmem);
+			iounmap(cinfo->regbase - 0x600000);
+		} else if (board_addr > 0x01000000)
+			iounmap(cinfo->fbmem);
+	}
+	return ret;
 
 err_unmap_regbase:
 	/* Parental advisory: explicit hack */

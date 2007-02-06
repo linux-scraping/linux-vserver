@@ -1,12 +1,8 @@
 /*
+ * This file is part of the zfcp device driver for
+ * FCP adapters for IBM System z9 and zSeries.
  *
- * linux/drivers/s390/scsi/zfcp_dbf.c
- *
- * FCP adapter driver for IBM eServer zSeries
- *
- * Debugging facilities
- *
- * (C) Copyright IBM Corp. 2005
+ * (C) Copyright IBM Corp. 2002, 2006
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -711,7 +707,7 @@ _zfcp_scsi_dbf_event_common(const char *tag, const char *tag2, int level,
 			    struct zfcp_adapter *adapter,
 			    struct scsi_cmnd *scsi_cmnd,
 			    struct zfcp_fsf_req *fsf_req,
-			    struct zfcp_fsf_req *old_fsf_req)
+			    unsigned long old_req_id)
 {
 	struct zfcp_scsi_dbf_record *rec = &adapter->scsi_dbf_buf;
 	struct zfcp_dbf_dump *dump = (struct zfcp_dbf_dump *)rec;
@@ -772,8 +768,7 @@ _zfcp_scsi_dbf_event_common(const char *tag, const char *tag2, int level,
 				rec->fsf_seqno = fsf_req->seq_no;
 				rec->fsf_issued = fsf_req->issued;
 			}
-			rec->type.old_fsf_reqid =
-				    (unsigned long) old_fsf_req;
+			rec->type.old_fsf_reqid = old_req_id;
 		} else {
 			strncpy(dump->tag, "dump", ZFCP_DBF_TAG_SIZE);
 			dump->total_size = buflen;
@@ -798,17 +793,17 @@ zfcp_scsi_dbf_event_result(const char *tag, int level,
 			   struct zfcp_fsf_req *fsf_req)
 {
 	_zfcp_scsi_dbf_event_common("rslt", tag, level,
-			adapter, scsi_cmnd, fsf_req, NULL);
+			adapter, scsi_cmnd, fsf_req, 0);
 }
 
 inline void
 zfcp_scsi_dbf_event_abort(const char *tag, struct zfcp_adapter *adapter,
 			  struct scsi_cmnd *scsi_cmnd,
 			  struct zfcp_fsf_req *new_fsf_req,
-			  struct zfcp_fsf_req *old_fsf_req)
+			  unsigned long old_req_id)
 {
 	_zfcp_scsi_dbf_event_common("abrt", tag, 1,
-			adapter, scsi_cmnd, new_fsf_req, old_fsf_req);
+			adapter, scsi_cmnd, new_fsf_req, old_req_id);
 }
 
 inline void
@@ -818,7 +813,7 @@ zfcp_scsi_dbf_event_devreset(const char *tag, u8 flag, struct zfcp_unit *unit,
 	struct zfcp_adapter *adapter = unit->port->adapter;
 
 	_zfcp_scsi_dbf_event_common(flag == FCP_TARGET_RESET ? "trst" : "lrst",
-			tag, 1, adapter, scsi_cmnd, NULL, NULL);
+			tag, 1, adapter, scsi_cmnd, NULL, 0);
 }
 
 static int

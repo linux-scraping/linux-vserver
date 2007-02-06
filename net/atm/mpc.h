@@ -36,18 +36,26 @@ struct mpoa_client {
 
 struct atm_mpoa_qos {
         struct atm_mpoa_qos *next;
-        uint32_t ipaddr;
+        __be32 ipaddr;
         struct atm_qos qos;
 };
 
 
 /* MPOA QoS operations */
-struct atm_mpoa_qos *atm_mpoa_add_qos(uint32_t dst_ip, struct atm_qos *qos);
-struct atm_mpoa_qos *atm_mpoa_search_qos(uint32_t dst_ip);
+struct atm_mpoa_qos *atm_mpoa_add_qos(__be32 dst_ip, struct atm_qos *qos);
+struct atm_mpoa_qos *atm_mpoa_search_qos(__be32 dst_ip);
 int atm_mpoa_delete_qos(struct atm_mpoa_qos *qos);
 
 /* Display QoS entries. This is for the procfs */
 struct seq_file;
 void atm_mpoa_disp_qos(struct seq_file *m);
+
+#ifdef CONFIG_PROC_FS
+int mpc_proc_init(void);
+void mpc_proc_clean(void);
+#else
+#define mpc_proc_init() (0)
+#define mpc_proc_clean() do { } while(0)
+#endif
 
 #endif /* _MPC_H_ */

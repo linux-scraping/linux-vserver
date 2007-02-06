@@ -16,7 +16,6 @@
  *	1 and 3 byte data transfers not supported
  *	max block length up to 1023
  */
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/ioport.h>
@@ -172,7 +171,7 @@ static void pxamci_start_cmd(struct pxamci_host *host, struct mmc_command *cmd, 
 
 #define RSP_TYPE(x)	((x) & ~(MMC_RSP_BUSY|MMC_RSP_OPCODE))
 	switch (RSP_TYPE(mmc_resp_type(cmd))) {
-	case RSP_TYPE(MMC_RSP_R1): /* r1, r1b, r6 */
+	case RSP_TYPE(MMC_RSP_R1): /* r1, r1b, r6, r7 */
 		cmdat |= CMDAT_RESP_SHORT;
 		break;
 	case RSP_TYPE(MMC_RSP_R3):
@@ -300,7 +299,7 @@ static int pxamci_data_done(struct pxamci_host *host, unsigned int stat)
 	return 1;
 }
 
-static irqreturn_t pxamci_irq(int irq, void *devid, struct pt_regs *regs)
+static irqreturn_t pxamci_irq(int irq, void *devid)
 {
 	struct pxamci_host *host = devid;
 	unsigned int ireg;
@@ -356,7 +355,7 @@ static int pxamci_get_ro(struct mmc_host *mmc)
 	struct pxamci_host *host = mmc_priv(mmc);
 
 	if (host->pdata && host->pdata->get_ro)
-		return host->pdata->get_ro(mmc->dev);
+		return host->pdata->get_ro(mmc_dev(mmc));
 	/* Host doesn't support read only detection so assume writeable */
 	return 0;
 }
@@ -384,7 +383,7 @@ static void pxamci_set_ios(struct mmc_host *mmc, struct mmc_ios *ios)
 		host->power_mode = ios->power_mode;
 
 		if (host->pdata && host->pdata->setpower)
-			host->pdata->setpower(mmc->dev, ios->vdd);
+			host->pdata->setpower(mmc_dev(mmc), ios->vdd);
 
 		if (ios->power_mode == MMC_POWER_ON)
 			host->cmdat |= CMDAT_INIT;
@@ -394,19 +393,19 @@ static void pxamci_set_ios(struct mmc_host *mmc, struct mmc_ios *ios)
 		 host->clkrt, host->cmdat);
 }
 
-static struct mmc_host_ops pxamci_ops = {
+static const struct mmc_host_ops pxamci_ops = {
 	.request	= pxamci_request,
 	.get_ro		= pxamci_get_ro,
 	.set_ios	= pxamci_set_ios,
 };
 
-static void pxamci_dma_irq(int dma, void *devid, struct pt_regs *regs)
+static void pxamci_dma_irq(int dma, void *devid)
 {
 	printk(KERN_ERR "DMA%d: IRQ???\n", dma);
 	DCSR(dma) = DCSR_STARTINTR|DCSR_ENDINTR|DCSR_BUSERR;
 }
 
-static irqreturn_t pxamci_detect_irq(int irq, void *devid, struct pt_regs *regs)
+static irqreturn_t pxamci_detect_irq(int irq, void *devid)
 {
 	struct pxamci_host *host = mmc_priv(devid);
 

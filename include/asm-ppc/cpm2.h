@@ -42,6 +42,8 @@
 #define CPM_CR_IDMA4_SBLOCK	(0x17)
 #define CPM_CR_MCC1_SBLOCK	(0x1c)
 
+#define CPM_CR_FCC_SBLOCK(x)	(x + 0x10)
+
 #define CPM_CR_SCC1_PAGE	(0x00)
 #define CPM_CR_SCC2_PAGE	(0x01)
 #define CPM_CR_SCC3_PAGE	(0x02)
@@ -61,6 +63,8 @@
 #define CPM_CR_IDMA4_PAGE	(0x0a)
 #define CPM_CR_MCC1_PAGE	(0x07)
 #define CPM_CR_MCC2_PAGE	(0x08)
+
+#define CPM_CR_FCC_PAGE(x)	(x + 0x04)
 
 /* Some opcodes (there are more...later)
 */
@@ -172,6 +176,10 @@ typedef struct cpm_buf_desc {
 #define PROFF_RAND		((uint)0x8af8)
 #define PROFF_I2C_BASE		((uint)0x8afc)
 #define PROFF_IDMA4_BASE	((uint)0x8afe)
+
+#define PROFF_SCC_SIZE		((uint)0x100)
+#define PROFF_FCC_SIZE		((uint)0x100)
+#define PROFF_SMC_SIZE		((uint)64)
 
 /* The SMCs are relocated to any of the first eight DPRAM pages.
  * We will fix these at the first locations of DPRAM, until we
@@ -1092,6 +1100,154 @@ typedef struct im_idma {
 #endif
 
 #define FCC_PSMR_RMII	((uint)0x00020000)	/* Use RMII interface */
+
+/* FCC iop & clock configuration. BSP code is responsible to define Fx_RXCLK & Fx_TXCLK
+ * in order to use clock-computing stuff below for the FCC x
+ */
+
+/* Automatically generates register configurations */
+#define PC_CLK(x)	((uint)(1<<(x-1)))	/* FCC CLK I/O ports */
+
+#define CMXFCR_RF1CS(x)	((uint)((x-5)<<27))	/* FCC1 Receive Clock Source */
+#define CMXFCR_TF1CS(x)	((uint)((x-5)<<24))	/* FCC1 Transmit Clock Source */
+#define CMXFCR_RF2CS(x)	((uint)((x-9)<<19))	/* FCC2 Receive Clock Source */
+#define CMXFCR_TF2CS(x) ((uint)((x-9)<<16))	/* FCC2 Transmit Clock Source */
+#define CMXFCR_RF3CS(x)	((uint)((x-9)<<11))	/* FCC3 Receive Clock Source */
+#define CMXFCR_TF3CS(x) ((uint)((x-9)<<8))	/* FCC3 Transmit Clock Source */
+
+#define PC_F1RXCLK	PC_CLK(F1_RXCLK)
+#define PC_F1TXCLK	PC_CLK(F1_TXCLK)
+#define CMX1_CLK_ROUTE	(CMXFCR_RF1CS(F1_RXCLK) | CMXFCR_TF1CS(F1_TXCLK))
+#define CMX1_CLK_MASK	((uint)0xff000000)
+
+#define PC_F2RXCLK	PC_CLK(F2_RXCLK)
+#define PC_F2TXCLK	PC_CLK(F2_TXCLK)
+#define CMX2_CLK_ROUTE	(CMXFCR_RF2CS(F2_RXCLK) | CMXFCR_TF2CS(F2_TXCLK))
+#define CMX2_CLK_MASK	((uint)0x00ff0000)
+
+#define PC_F3RXCLK	PC_CLK(F3_RXCLK)
+#define PC_F3TXCLK	PC_CLK(F3_TXCLK)
+#define CMX3_CLK_ROUTE	(CMXFCR_RF3CS(F3_RXCLK) | CMXFCR_TF3CS(F3_TXCLK))
+#define CMX3_CLK_MASK	((uint)0x0000ff00)
+
+#define CPMUX_CLK_MASK (CMX3_CLK_MASK | CMX2_CLK_MASK)
+#define CPMUX_CLK_ROUTE (CMX3_CLK_ROUTE | CMX2_CLK_ROUTE)
+
+#define CLK_TRX (PC_F3TXCLK | PC_F3RXCLK | PC_F2TXCLK | PC_F2RXCLK)
+
+/* I/O Pin assignment for FCC1.  I don't yet know the best way to do this,
+ * but there is little variation among the choices.
+ */
+#define PA1_COL		0x00000001U
+#define PA1_CRS		0x00000002U
+#define PA1_TXER	0x00000004U
+#define PA1_TXEN	0x00000008U
+#define PA1_RXDV	0x00000010U
+#define PA1_RXER	0x00000020U
+#define PA1_TXDAT	0x00003c00U
+#define PA1_RXDAT	0x0003c000U
+#define PA1_PSORA0	(PA1_RXDAT | PA1_TXDAT)
+#define PA1_PSORA1	(PA1_COL | PA1_CRS | PA1_TXER | PA1_TXEN | \
+		PA1_RXDV | PA1_RXER)
+#define PA1_DIRA0	(PA1_RXDAT | PA1_CRS | PA1_COL | PA1_RXER | PA1_RXDV)
+#define PA1_DIRA1	(PA1_TXDAT | PA1_TXEN | PA1_TXER)
+
+
+/* I/O Pin assignment for FCC2.  I don't yet know the best way to do this,
+ * but there is little variation among the choices.
+ */
+#define PB2_TXER	0x00000001U
+#define PB2_RXDV	0x00000002U
+#define PB2_TXEN	0x00000004U
+#define PB2_RXER	0x00000008U
+#define PB2_COL		0x00000010U
+#define PB2_CRS		0x00000020U
+#define PB2_TXDAT	0x000003c0U
+#define PB2_RXDAT	0x00003c00U
+#define PB2_PSORB0	(PB2_RXDAT | PB2_TXDAT | PB2_CRS | PB2_COL | \
+		PB2_RXER | PB2_RXDV | PB2_TXER)
+#define PB2_PSORB1	(PB2_TXEN)
+#define PB2_DIRB0	(PB2_RXDAT | PB2_CRS | PB2_COL | PB2_RXER | PB2_RXDV)
+#define PB2_DIRB1	(PB2_TXDAT | PB2_TXEN | PB2_TXER)
+
+
+/* I/O Pin assignment for FCC3.  I don't yet know the best way to do this,
+ * but there is little variation among the choices.
+ */
+#define PB3_RXDV	0x00004000U
+#define PB3_RXER	0x00008000U
+#define PB3_TXER	0x00010000U
+#define PB3_TXEN	0x00020000U
+#define PB3_COL		0x00040000U
+#define PB3_CRS		0x00080000U
+#define PB3_TXDAT	0x0f000000U
+#define PC3_TXDAT	0x00000010U
+#define PB3_RXDAT	0x00f00000U
+#define PB3_PSORB0	(PB3_RXDAT | PB3_TXDAT | PB3_CRS | PB3_COL | \
+		PB3_RXER | PB3_RXDV | PB3_TXER | PB3_TXEN)
+#define PB3_PSORB1	0
+#define PB3_DIRB0	(PB3_RXDAT | PB3_CRS | PB3_COL | PB3_RXER | PB3_RXDV)
+#define PB3_DIRB1	(PB3_TXDAT | PB3_TXEN | PB3_TXER)
+#define PC3_DIRC1	(PC3_TXDAT)
+
+/* Handy macro to specify mem for FCCs*/
+#define FCC_MEM_OFFSET(x) (CPM_FCC_SPECIAL_BASE + (x*128))
+#define FCC1_MEM_OFFSET FCC_MEM_OFFSET(0)
+#define FCC2_MEM_OFFSET FCC_MEM_OFFSET(1)
+#define FCC3_MEM_OFFSET FCC_MEM_OFFSET(2)
+
+/* Clocks and GRG's */
+
+enum cpm_clk_dir {
+	CPM_CLK_RX,
+	CPM_CLK_TX,
+	CPM_CLK_RTX
+};
+
+enum cpm_clk_target {
+	CPM_CLK_SCC1,
+	CPM_CLK_SCC2,
+	CPM_CLK_SCC3,
+	CPM_CLK_SCC4,
+	CPM_CLK_FCC1,
+	CPM_CLK_FCC2,
+	CPM_CLK_FCC3
+};
+
+enum cpm_clk {
+	CPM_CLK_NONE = 0,
+	CPM_BRG1,	/* Baud Rate Generator  1 */
+	CPM_BRG2,	/* Baud Rate Generator  2 */
+	CPM_BRG3,	/* Baud Rate Generator  3 */
+	CPM_BRG4,	/* Baud Rate Generator  4 */
+	CPM_BRG5,	/* Baud Rate Generator  5 */
+	CPM_BRG6,	/* Baud Rate Generator  6 */
+	CPM_BRG7,	/* Baud Rate Generator  7 */
+	CPM_BRG8,	/* Baud Rate Generator  8 */
+	CPM_CLK1,	/* Clock  1 */
+	CPM_CLK2,	/* Clock  2 */
+	CPM_CLK3,	/* Clock  3 */
+	CPM_CLK4,	/* Clock  4 */
+	CPM_CLK5,	/* Clock  5 */
+	CPM_CLK6,	/* Clock  6 */
+	CPM_CLK7,	/* Clock  7 */
+	CPM_CLK8,	/* Clock  8 */
+	CPM_CLK9,	/* Clock  9 */
+	CPM_CLK10,	/* Clock 10 */
+	CPM_CLK11,	/* Clock 11 */
+	CPM_CLK12,	/* Clock 12 */
+	CPM_CLK13,	/* Clock 13 */
+	CPM_CLK14,	/* Clock 14 */
+	CPM_CLK15,	/* Clock 15 */
+	CPM_CLK16,	/* Clock 16 */
+	CPM_CLK17,	/* Clock 17 */
+	CPM_CLK18,	/* Clock 18 */
+	CPM_CLK19,	/* Clock 19 */
+	CPM_CLK20,	/* Clock 20 */
+	CPM_CLK_DUMMY
+};
+
+extern int cpm2_clk_setup(enum cpm_clk_target target, int clock, int mode);
 
 #endif /* __CPM2__ */
 #endif /* __KERNEL__ */

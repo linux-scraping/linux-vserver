@@ -20,7 +20,6 @@
  *  Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
-#include <linux/config.h>
 #include <linux/init.h>
 #include <linux/list.h>
 #include <linux/module.h>
@@ -96,8 +95,8 @@ LIST_HEAD(saa7134_devlist);
 static LIST_HEAD(mops_list);
 static unsigned int saa7134_devcount;
 
-int (*dmasound_init)(struct saa7134_dev *dev);
-int (*dmasound_exit)(struct saa7134_dev *dev);
+int (*saa7134_dmasound_init)(struct saa7134_dev *dev);
+int (*saa7134_dmasound_exit)(struct saa7134_dev *dev);
 
 #define dprintk(fmt, arg...)	if (core_debug) \
 	printk(KERN_DEBUG "%s/core: " fmt, dev->name , ## arg)
@@ -496,7 +495,7 @@ static void print_irqstatus(struct saa7134_dev *dev, int loop,
 	printk("\n");
 }
 
-static irqreturn_t saa7134_irq(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t saa7134_irq(int irq, void *dev_id)
 {
 	struct saa7134_dev *dev = (struct saa7134_dev*) dev_id;
 	unsigned long report,status;
@@ -844,7 +843,7 @@ static int __devinit saa7134_initdev(struct pci_dev *pci_dev,
 			latency = 0x0A;
 		}
 #endif
-		if (pci_pci_problems & PCIPCI_FAIL) {
+		if (pci_pci_problems & (PCIPCI_FAIL|PCIAGP_FAIL)) {
 			printk(KERN_INFO "%s: quirk: this driver and your "
 					"chipset may not work together"
 					" in overlay mode.\n",dev->name);
@@ -871,9 +870,9 @@ static int __devinit saa7134_initdev(struct pci_dev *pci_dev,
 	pci_read_config_byte(pci_dev, PCI_CLASS_REVISION, &dev->pci_rev);
 	pci_read_config_byte(pci_dev, PCI_LATENCY_TIMER,  &dev->pci_lat);
 	printk(KERN_INFO "%s: found at %s, rev: %d, irq: %d, "
-	       "latency: %d, mmio: 0x%lx\n", dev->name,
+	       "latency: %d, mmio: 0x%llx\n", dev->name,
 	       pci_name(pci_dev), dev->pci_rev, pci_dev->irq,
-	       dev->pci_lat,pci_resource_start(pci_dev,0));
+	       dev->pci_lat,(unsigned long long)pci_resource_start(pci_dev,0));
 	pci_set_master(pci_dev);
 	if (!pci_dma_supported(pci_dev, DMA_32BIT_MASK)) {
 		printk("%s: Oops: no 32bit PCI DMA ???\n",dev->name);
@@ -890,23 +889,24 @@ static int __devinit saa7134_initdev(struct pci_dev *pci_dev,
 		must_configure_manually();
 		dev->board = SAA7134_BOARD_UNKNOWN;
 	}
+	dev->autodetected = card[dev->nr] != dev->board;
 	dev->tuner_type   = saa7134_boards[dev->board].tuner_type;
 	dev->tda9887_conf = saa7134_boards[dev->board].tda9887_conf;
 	if (UNSET != tuner[dev->nr])
 		dev->tuner_type = tuner[dev->nr];
-	printk(KERN_INFO "%s: subsystem: %04x:%04x, board: %s [card=%d,%s]\n",
-	       dev->name,pci_dev->subsystem_vendor,
-	       pci_dev->subsystem_device,saa7134_boards[dev->board].name,
-	       dev->board, card[dev->nr] == dev->board ?
-	       "insmod option" : "autodetected");
+		printk(KERN_INFO "%s: subsystem: %04x:%04x, board: %s [card=%d,%s]\n",
+		dev->name,pci_dev->subsystem_vendor,
+		pci_dev->subsystem_device,saa7134_boards[dev->board].name,
+		dev->board, dev->autodetected ?
+		"autodetected" : "insmod option");
 
 	/* get mmio */
 	if (!request_mem_region(pci_resource_start(pci_dev,0),
 				pci_resource_len(pci_dev,0),
 				dev->name)) {
 		err = -EBUSY;
-		printk(KERN_ERR "%s: can't get MMIO memory @ 0x%lx\n",
-		       dev->name,pci_resource_start(pci_dev,0));
+		printk(KERN_ERR "%s: can't get MMIO memory @ 0x%llx\n",
+		       dev->name,(unsigned long long)pci_resource_start(pci_dev,0));
 		goto fail1;
 	}
 	dev->lmmio = ioremap(pci_resource_start(pci_dev,0), 0x1000);
@@ -924,7 +924,7 @@ static int __devinit saa7134_initdev(struct pci_dev *pci_dev,
 
 	/* get irq */
 	err = request_irq(pci_dev->irq, saa7134_irq,
-			  SA_SHIRQ | SA_INTERRUPT, dev->name, dev);
+			  IRQF_SHARED | IRQF_DISABLED, dev->name, dev);
 	if (err < 0) {
 		printk(KERN_ERR "%s: can't get IRQ %d\n",
 		       dev->name,pci_dev->irq);
@@ -942,8 +942,6 @@ static int __devinit saa7134_initdev(struct pci_dev *pci_dev,
 	/* load i2c helpers */
 	if (TUNER_ABSENT != dev->tuner_type)
 		request_module("tuner");
-	if (dev->tda9887_conf)
-		request_module("tda9887");
 	if (card_is_empress(dev)) {
 		request_module("saa6752hs");
 		request_module_depend("saa7134-empress",&need_empress);
@@ -1011,8 +1009,8 @@ static int __devinit saa7134_initdev(struct pci_dev *pci_dev,
 	/* check for signal */
 	saa7134_irq_video_intl(dev);
 
-	if (dmasound_init && !dev->dmasound.priv_data) {
-		dmasound_init(dev);
+	if (saa7134_dmasound_init && !dev->dmasound.priv_data) {
+		saa7134_dmasound_init(dev);
 	}
 
 	return 0;
@@ -1039,8 +1037,8 @@ static void __devexit saa7134_finidev(struct pci_dev *pci_dev)
 	struct saa7134_mpeg_ops *mops;
 
 	/* Release DMA sound modules if present */
-	if (dmasound_exit && dev->dmasound.priv_data) {
-		dmasound_exit(dev);
+	if (saa7134_dmasound_exit && dev->dmasound.priv_data) {
+		saa7134_dmasound_exit(dev);
 	}
 
 	/* debugging ... */
@@ -1172,8 +1170,8 @@ EXPORT_SYMBOL(saa7134_boards);
 
 /* ----------------- for the DMA sound modules --------------- */
 
-EXPORT_SYMBOL(dmasound_init);
-EXPORT_SYMBOL(dmasound_exit);
+EXPORT_SYMBOL(saa7134_dmasound_init);
+EXPORT_SYMBOL(saa7134_dmasound_exit);
 EXPORT_SYMBOL(saa7134_pgtable_free);
 EXPORT_SYMBOL(saa7134_pgtable_build);
 EXPORT_SYMBOL(saa7134_pgtable_alloc);

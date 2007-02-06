@@ -54,7 +54,7 @@ static DECLARE_RWSEM(o2hb_callback_sem);
  * multiple hb threads are watching multiple regions.  A node is live
  * whenever any of the threads sees activity from the node in its region.
  */
-static spinlock_t o2hb_live_lock = SPIN_LOCK_UNLOCKED;
+static DEFINE_SPINLOCK(o2hb_live_lock);
 static struct list_head o2hb_live_slots[O2NM_MAX_NODES];
 static unsigned long o2hb_live_node_bitmap[BITS_TO_LONGS(O2NM_MAX_NODES)];
 static LIST_HEAD(o2hb_node_events);
@@ -141,7 +141,7 @@ struct o2hb_region {
 	 * recognizes a node going up and down in one iteration */
 	u64			hr_generation;
 
-	struct work_struct	hr_write_timeout_work;
+	struct delayed_work	hr_write_timeout_work;
 	unsigned long		hr_last_timeout_start;
 
 	/* Used during o2hb_check_slot to hold a copy of the block
@@ -156,9 +156,11 @@ struct o2hb_bio_wait_ctxt {
 	int               wc_error;
 };
 
-static void o2hb_write_timeout(void *arg)
+static void o2hb_write_timeout(struct work_struct *work)
 {
-	struct o2hb_region *reg = arg;
+	struct o2hb_region *reg =
+		container_of(work, struct o2hb_region,
+			     hr_write_timeout_work.work);
 
 	mlog(ML_ERROR, "Heartbeat write timeout to device %s after %u "
 	     "milliseconds\n", reg->hr_dev_name,
@@ -320,8 +322,12 @@ static int compute_max_sectors(struct block_device *bdev)
 		max_pages = q->max_hw_segments;
 	max_pages--; /* Handle I/Os that straddle a page */
 
-	max_sectors = max_pages << (PAGE_SHIFT - 9);
-
+	if (max_pages) {
+		max_sectors = max_pages << (PAGE_SHIFT - 9);
+	} else {
+		/* If BIO contains 1 or less than 1 page. */
+		max_sectors = q->max_sectors;
+	}
 	/* Why is fls() 1-based???? */
 	pow_two_sectors = 1 << (fls(max_sectors) - 1);
 
@@ -517,6 +523,7 @@ static inline void o2hb_prepare_block(struct o2hb_region *reg,
 	hb_block->hb_seq = cpu_to_le64(cputime);
 	hb_block->hb_node = node_num;
 	hb_block->hb_generation = cpu_to_le64(generation);
+	hb_block->hb_dead_ms = cpu_to_le32(o2hb_dead_threshold * O2HB_REGION_TIMEOUT_MS);
 
 	/* This step must always happen last! */
 	hb_block->hb_cksum = cpu_to_le32(o2hb_compute_block_crc_le(reg,
@@ -645,6 +652,8 @@ static int o2hb_check_slot(struct o2hb_region *reg,
 	struct o2nm_node *node;
 	struct o2hb_disk_heartbeat_block *hb_block = reg->hr_tmp_block;
 	u64 cputime;
+	unsigned int dead_ms = o2hb_dead_threshold * O2HB_REGION_TIMEOUT_MS;
+	unsigned int slot_dead_ms;
 
 	memcpy(hb_block, slot->ds_raw_block, reg->hr_block_bytes);
 
@@ -733,6 +742,23 @@ fire_callbacks:
 			      &o2hb_live_slots[slot->ds_node_num]);
 
 		slot->ds_equal_samples = 0;
+
+		/* We want to be sure that all nodes agree on the
+		 * number of milliseconds before a node will be
+		 * considered dead. The self-fencing timeout is
+		 * computed from this value, and a discrepancy might
+		 * result in heartbeat calling a node dead when it
+		 * hasn't self-fenced yet. */
+		slot_dead_ms = le32_to_cpu(hb_block->hb_dead_ms);
+		if (slot_dead_ms && slot_dead_ms != dead_ms) {
+			/* TODO: Perhaps we can fail the region here. */
+			mlog(ML_ERROR, "Node %d on device %s has a dead count "
+			     "of %u ms, but our count is %u ms.\n"
+			     "Please double check your configuration values "
+			     "for 'O2CB_HEARTBEAT_THRESHOLD'\n",
+			     slot->ds_node_num, reg->hr_dev_name, slot_dead_ms,
+			     dead_ms);
+		}
 		goto out;
 	}
 
@@ -1380,7 +1406,7 @@ static ssize_t o2hb_region_dev_write(struct o2hb_region *reg,
 		goto out;
 	}
 
-	INIT_WORK(&reg->hr_write_timeout_work, o2hb_write_timeout, reg);
+	INIT_DELAYED_WORK(&reg->hr_write_timeout_work, o2hb_write_timeout);
 
 	/*
 	 * A node is considered live after it has beat LIVE_THRESHOLD
@@ -1421,6 +1447,15 @@ out:
 	return ret;
 }
 
+static ssize_t o2hb_region_pid_read(struct o2hb_region *reg,
+                                      char *page)
+{
+	if (!reg->hr_task)
+		return 0;
+
+	return sprintf(page, "%u\n", reg->hr_task->pid);
+}
+
 struct o2hb_region_attribute {
 	struct configfs_attribute attr;
 	ssize_t (*show)(struct o2hb_region *, char *);
@@ -1459,11 +1494,19 @@ static struct o2hb_region_attribute o2hb_region_attr_dev = {
 	.store	= o2hb_region_dev_write,
 };
 
+static struct o2hb_region_attribute o2hb_region_attr_pid = {
+       .attr   = { .ca_owner = THIS_MODULE,
+                   .ca_name = "pid",
+                   .ca_mode = S_IRUGO | S_IRUSR },
+       .show   = o2hb_region_pid_read,
+};
+
 static struct configfs_attribute *o2hb_region_attrs[] = {
 	&o2hb_region_attr_block_bytes.attr,
 	&o2hb_region_attr_start_block.attr,
 	&o2hb_region_attr_blocks.attr,
 	&o2hb_region_attr_dev.attr,
+	&o2hb_region_attr_pid.attr,
 	NULL,
 };
 
@@ -1527,7 +1570,7 @@ static struct config_item *o2hb_heartbeat_group_make_item(struct config_group *g
 	struct o2hb_region *reg = NULL;
 	struct config_item *ret = NULL;
 
-	reg = kcalloc(1, sizeof(struct o2hb_region), GFP_KERNEL);
+	reg = kzalloc(sizeof(struct o2hb_region), GFP_KERNEL);
 	if (reg == NULL)
 		goto out; /* ENOMEM */
 
@@ -1653,7 +1696,7 @@ struct config_group *o2hb_alloc_hb_set(void)
 	struct o2hb_heartbeat_group *hs = NULL;
 	struct config_group *ret = NULL;
 
-	hs = kcalloc(1, sizeof(struct o2hb_heartbeat_group), GFP_KERNEL);
+	hs = kzalloc(sizeof(struct o2hb_heartbeat_group), GFP_KERNEL);
 	if (hs == NULL)
 		goto out;
 

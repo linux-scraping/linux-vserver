@@ -22,7 +22,6 @@
  *  with this program; if not, write  to the Free Software Foundation, Inc.,
  *  675 Mass Ave, Cambridge, MA 02139, USA.
  */
-#include <linux/config.h>
 #include <linux/errno.h>
 #include <linux/init.h>
 #include <linux/irq.h>
@@ -55,18 +54,18 @@
 #define PB1200_INT_END DB1200_INT_END
 #endif
 
-au1xxx_irq_map_t au1xxx_irq_map[] = {
+au1xxx_irq_map_t __initdata au1xxx_irq_map[] = {
 	{ AU1000_GPIO_7, INTC_INT_LOW_LEVEL, 0 }, // This is exteranl interrupt cascade
 };
 
-int au1xxx_nr_irqs = sizeof(au1xxx_irq_map)/sizeof(au1xxx_irq_map_t);
+int __initdata au1xxx_nr_irqs = ARRAY_SIZE(au1xxx_irq_map);
 
 /*
  *	Support for External interrupts on the PbAu1200 Development platform.
  */
 static volatile int pb1200_cascade_en=0;
 
-irqreturn_t pb1200_cascade_handler( int irq, void *dev_id, struct pt_regs *regs)
+irqreturn_t pb1200_cascade_handler( int irq, void *dev_id)
 {
 	unsigned short bisr = bcsr->int_status;
 	int extirq_nr = 0;
@@ -77,8 +76,9 @@ irqreturn_t pb1200_cascade_handler( int irq, void *dev_id, struct pt_regs *regs)
 	{
 		extirq_nr = (PB1200_INT_BEGIN-1) + au_ffs(bisr);
 		/* Ack and dispatch IRQ */
-		do_IRQ(extirq_nr,regs);
+		do_IRQ(extirq_nr);
 	}
+
 	return IRQ_RETVAL(1);
 }
 
@@ -149,7 +149,7 @@ static void pb1200_end_irq(unsigned int irq_nr)
 	}
 }
 
-static struct hw_interrupt_type external_irq_type =
+static struct irq_chip external_irq_type =
 {
 #ifdef CONFIG_MIPS_PB1200
 	"Pb1200 Ext",
@@ -172,7 +172,7 @@ void _board_init_irq(void)
 
 	for (irq_nr = PB1200_INT_BEGIN; irq_nr <= PB1200_INT_END; irq_nr++)
 	{
-		irq_desc[irq_nr].handler = &external_irq_type;
+		irq_desc[irq_nr].chip = &external_irq_type;
 		pb1200_disable_irq(irq_nr);
 	}
 

@@ -27,8 +27,6 @@ struct genl_family
 	struct list_head	family_list;	/* private */
 };
 
-#define GENL_ADMIN_PERM		0x01
-
 /**
  * struct genl_info - receiving information
  * @snd_seq: sending sequence number
@@ -55,6 +53,7 @@ struct genl_info
  * @policy: attribute validation policy
  * @doit: standard command callback
  * @dumpit: callback for dumpers
+ * @done: completion callback for dumps
  * @ops_list: operations list
  */
 struct genl_ops
@@ -66,6 +65,7 @@ struct genl_ops
 				       struct genl_info *info);
 	int		       (*dumpit)(struct sk_buff *skb,
 					 struct netlink_callback *cb);
+	int		       (*done)(struct netlink_callback *cb);
 	struct list_head	ops_list;
 };
 
@@ -81,31 +81,48 @@ extern struct sock *genl_sock;
  * @skb: socket buffer holding the message
  * @pid: netlink pid the message is addressed to
  * @seq: sequence number (usually the one of the sender)
- * @type: netlink message type
- * @hdrlen: length of the user specific header
+ * @family: generic netlink family
  * @flags netlink message flags
  * @cmd: generic netlink command
- * @version: version
  *
  * Returns pointer to user specific header
  */
 static inline void *genlmsg_put(struct sk_buff *skb, u32 pid, u32 seq,
-				int type, int hdrlen, int flags,
-				u8 cmd, u8 version)
+				struct genl_family *family, int flags, u8 cmd)
 {
 	struct nlmsghdr *nlh;
 	struct genlmsghdr *hdr;
 
-	nlh = nlmsg_put(skb, pid, seq, type, GENL_HDRLEN + hdrlen, flags);
+	nlh = nlmsg_put(skb, pid, seq, family->id, GENL_HDRLEN +
+			family->hdrsize, flags);
 	if (nlh == NULL)
 		return NULL;
 
 	hdr = nlmsg_data(nlh);
 	hdr->cmd = cmd;
-	hdr->version = version;
+	hdr->version = family->version;
 	hdr->reserved = 0;
 
 	return (char *) hdr + GENL_HDRLEN;
+}
+
+/**
+ * genlmsg_put_reply - Add generic netlink header to a reply message
+ * @skb: socket buffer holding the message
+ * @info: receiver info
+ * @family: generic netlink family
+ * @flags: netlink message flags
+ * @cmd: generic netlink command
+ *
+ * Returns pointer to user specific header
+ */
+static inline void *genlmsg_put_reply(struct sk_buff *skb,
+				      struct genl_info *info,
+				      struct genl_family *family,
+				      int flags, u8 cmd)
+{
+	return genlmsg_put(skb, info->snd_pid, info->snd_seq, family,
+			   flags, cmd);
 }
 
 /**
@@ -133,11 +150,12 @@ static inline int genlmsg_cancel(struct sk_buff *skb, void *hdr)
  * @skb: netlink message as socket buffer
  * @pid: own netlink pid to avoid sending to yourself
  * @group: multicast group id
+ * @flags: allocation flags
  */
 static inline int genlmsg_multicast(struct sk_buff *skb, u32 pid,
-				    unsigned int group)
+				    unsigned int group, gfp_t flags)
 {
-	return nlmsg_multicast(genl_sock, skb, pid, group);
+	return nlmsg_multicast(genl_sock, skb, pid, group, flags);
 }
 
 /**
@@ -149,5 +167,64 @@ static inline int genlmsg_unicast(struct sk_buff *skb, u32 pid)
 {
 	return nlmsg_unicast(genl_sock, skb, pid);
 }
+
+/**
+ * genlmsg_reply - reply to a request
+ * @skb: netlink message to be sent back
+ * @info: receiver information
+ */
+static inline int genlmsg_reply(struct sk_buff *skb, struct genl_info *info)
+{
+	return genlmsg_unicast(skb, info->snd_pid);
+}
+
+/**
+ * gennlmsg_data - head of message payload
+ * @gnlh: genetlink messsage header
+ */
+static inline void *genlmsg_data(const struct genlmsghdr *gnlh)
+{
+	return ((unsigned char *) gnlh + GENL_HDRLEN);
+}
+
+/**
+ * genlmsg_len - length of message payload
+ * @gnlh: genetlink message header
+ */
+static inline int genlmsg_len(const struct genlmsghdr *gnlh)
+{
+	struct nlmsghdr *nlh = (struct nlmsghdr *)((unsigned char *)gnlh -
+							NLMSG_HDRLEN);
+	return (nlh->nlmsg_len - GENL_HDRLEN - NLMSG_HDRLEN);
+}
+
+/**
+ * genlmsg_msg_size - length of genetlink message not including padding
+ * @payload: length of message payload
+ */
+static inline int genlmsg_msg_size(int payload)
+{
+	return GENL_HDRLEN + payload;
+}
+
+/**
+ * genlmsg_total_size - length of genetlink message including padding
+ * @payload: length of message payload
+ */
+static inline int genlmsg_total_size(int payload)
+{
+	return NLMSG_ALIGN(genlmsg_msg_size(payload));
+}
+
+/**
+ * genlmsg_new - Allocate a new generic netlink message
+ * @payload: size of the message payload
+ * @flags: the type of memory to allocate.
+ */
+static inline struct sk_buff *genlmsg_new(size_t payload, gfp_t flags)
+{
+	return nlmsg_new(genlmsg_total_size(payload), flags);
+}
+
 
 #endif	/* __NET_GENERIC_NETLINK_H */

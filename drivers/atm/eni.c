@@ -4,7 +4,6 @@
  
 
 #include <linux/module.h>
-#include <linux/config.h>
 #include <linux/kernel.h>
 #include <linux/mm.h>
 #include <linux/pci.h>
@@ -1489,7 +1488,7 @@ static void bug_int(struct atm_dev *dev,unsigned long reason)
 }
 
 
-static irqreturn_t eni_int(int irq,void *dev_id,struct pt_regs *regs)
+static irqreturn_t eni_int(int irq,void *dev_id)
 {
 	struct atm_dev *dev;
 	struct eni_dev *eni_dev;
@@ -1798,7 +1797,7 @@ static int __devinit eni_start(struct atm_dev *dev)
 
 	DPRINTK(">eni_start\n");
 	eni_dev = ENI_DEV(dev);
-	if (request_irq(eni_dev->irq,&eni_int,SA_SHIRQ,DEV_LABEL,dev)) {
+	if (request_irq(eni_dev->irq,&eni_int,IRQF_SHARED,DEV_LABEL,dev)) {
 		printk(KERN_ERR DEV_LABEL "(itf %d): IRQ%d is already in use\n",
 		    dev->number,eni_dev->irq);
 		error = -EAGAIN;
@@ -1833,7 +1832,7 @@ static int __devinit eni_start(struct atm_dev *dev)
 	/* initialize memory management */
 	buffer_mem = eni_dev->mem - (buf - eni_dev->ram);
 	eni_dev->free_list_size = buffer_mem/MID_MIN_BUF_SIZE/2;
-	eni_dev->free_list = (struct eni_free *) kmalloc(
+	eni_dev->free_list = kmalloc(
 	    sizeof(struct eni_free)*(eni_dev->free_list_size+1),GFP_KERNEL);
 	if (!eni_dev->free_list) {
 		printk(KERN_ERR DEV_LABEL "(itf %d): couldn't get free page\n",
@@ -2233,7 +2232,7 @@ static int __devinit eni_init_one(struct pci_dev *pci_dev,
 		goto out0;
 	}
 
-	eni_dev = (struct eni_dev *) kmalloc(sizeof(struct eni_dev),GFP_KERNEL);
+	eni_dev = kmalloc(sizeof(struct eni_dev),GFP_KERNEL);
 	if (!eni_dev) goto out0;
 	if (!cpu_zeroes) {
 		cpu_zeroes = pci_alloc_consistent(pci_dev,ENI_ZEROES_SIZE,

@@ -27,6 +27,7 @@
 #include <pcmcia/ciscode.h>
 #include <pcmcia/cisreg.h>
 #include <sound/initval.h>
+#include <sound/tlv.h>
 
 /*
  */
@@ -65,7 +66,7 @@ static void vxpocket_release(struct pcmcia_device *link)
 }
 
 /*
- * destructor, called from snd_card_free_in_thread()
+ * destructor, called from snd_card_free_when_closed()
  */
 static int snd_vxpocket_dev_free(struct snd_device *device)
 {
@@ -90,6 +91,8 @@ static int snd_vxpocket_dev_free(struct snd_device *device)
  * Only output levels can be modified
  */
 
+static DECLARE_TLV_DB_SCALE(db_scale_old_vol, -11350, 50, 0);
+
 static struct snd_vx_hardware vxpocket_hw = {
 	.name = "VXPocket",
 	.type = VX_TYPE_VXPOCKET,
@@ -99,6 +102,7 @@ static struct snd_vx_hardware vxpocket_hw = {
 	.num_ins = 1,
 	.num_outs = 1,
 	.output_level_max = VX_ANALOG_OUT_LEVEL_MAX,
+	.output_level_db_scale = db_scale_old_vol,
 };	
 
 /* VX-pocket 440
@@ -120,6 +124,7 @@ static struct snd_vx_hardware vxp440_hw = {
 	.num_ins = 2,
 	.num_outs = 2,
 	.output_level_max = VX_ANALOG_OUT_LEVEL_MAX,
+	.output_level_db_scale = db_scale_old_vol,
 };	
 
 
@@ -212,34 +217,12 @@ static int vxpocket_config(struct pcmcia_device *link)
 {
 	struct vx_core *chip = link->priv;
 	struct snd_vxpocket *vxp = (struct snd_vxpocket *)chip;
-	tuple_t tuple;
-	cisparse_t *parse;
-	u_short buf[32];
 	int last_fn, last_ret;
 
 	snd_printdd(KERN_DEBUG "vxpocket_config called\n");
-	parse = kmalloc(sizeof(*parse), GFP_KERNEL);
-	if (! parse) {
-		snd_printk(KERN_ERR "vx: cannot allocate\n");
-		return -ENOMEM;
-	}
-	tuple.Attributes = 0;
-	tuple.TupleData = (cisdata_t *)buf;
-	tuple.TupleDataMax = sizeof(buf);
-	tuple.TupleOffset = 0;
-	tuple.DesiredTuple = CISTPL_CONFIG;
-	CS_CHECK(GetFirstTuple, pcmcia_get_first_tuple(link, &tuple));
-	CS_CHECK(GetTupleData, pcmcia_get_tuple_data(link, &tuple));
-	CS_CHECK(ParseTuple, pcmcia_parse_tuple(link, &tuple, parse));
-	link->conf.ConfigBase = parse->config.base;
-	link->conf.Present = parse->config.rmask[0];
 
 	/* redefine hardware record according to the VERSION1 string */
-	tuple.DesiredTuple = CISTPL_VERS_1;
-	CS_CHECK(GetFirstTuple, pcmcia_get_first_tuple(link, &tuple));
-	CS_CHECK(GetTupleData, pcmcia_get_tuple_data(link, &tuple));
-	CS_CHECK(ParseTuple, pcmcia_parse_tuple(link, &tuple, parse));
-	if (! strcmp(parse->version_1.str + parse->version_1.ofs[1], "VX-POCKET")) {
+	if (!strcmp(link->prod_id[1], "VX-POCKET")) {
 		snd_printdd("VX-pocket is detected\n");
 	} else {
 		snd_printdd("VX-pocket 440 is detected\n");
@@ -260,14 +243,12 @@ static int vxpocket_config(struct pcmcia_device *link)
 		goto failed;
 
 	link->dev_node = &vxp->node;
-	kfree(parse);
-	return 9;
+	return 0;
 
 cs_failed:
 	cs_error(link, last_fn, last_ret);
 failed:
 	pcmcia_disable_device(link);
-	kfree(parse);
 	return -ENODEV;
 }
 
@@ -363,7 +344,7 @@ static void vxpocket_detach(struct pcmcia_device *link)
 	chip->chip_status |= VX_STAT_IS_STALE; /* to be sure */
 	snd_card_disconnect(chip->card);
 	vxpocket_release(link);
-	snd_card_free_in_thread(chip->card);
+	snd_card_free_when_closed(chip->card);
 }
 
 /*

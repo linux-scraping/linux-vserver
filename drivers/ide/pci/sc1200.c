@@ -11,7 +11,6 @@
  *	Available from National Semiconductor
  */
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/types.h>
 #include <linux/kernel.h>
@@ -324,6 +323,7 @@ static void sc1200_tuneproc (ide_drive_t *drive, byte pio)	/* mode=255 means "au
  	}
 }
 
+#ifdef CONFIG_PM
 static ide_hwif_t *lookup_pci_dev (ide_hwif_t *prev, struct pci_dev *dev)
 {
 	int	h;
@@ -395,7 +395,6 @@ static int sc1200_resume (struct pci_dev *dev)
 {
 	ide_hwif_t	*hwif = NULL;
 
-printk("SC1200: resume\n");
 	pci_set_power_state(dev, PCI_D0);	// bring chip back from sleep state
 	dev->current_state = PM_EVENT_ON;
 	pci_enable_device(dev);
@@ -405,7 +404,6 @@ printk("SC1200: resume\n");
 	while ((hwif = lookup_pci_dev(hwif, dev)) != NULL) {
 		unsigned int		basereg, r, d, format;
 		sc1200_saved_state_t	*ss = (sc1200_saved_state_t *)hwif->config_data;
-printk("%s: SC1200: resume\n", hwif->name);
 
 		//
 		// Restore timing registers:  this may be unnecessary if BIOS also does it
@@ -454,6 +452,7 @@ printk("%s: SC1200: resume\n", hwif->name);
 	}
 	return 0;
 }
+#endif
 
 /*
  * This gets invoked by the IDE driver once for each channel,
@@ -493,7 +492,7 @@ static int __devinit sc1200_init_one(struct pci_dev *dev, const struct pci_devic
 }
 
 static struct pci_device_id sc1200_pci_tbl[] = {
-	{ PCI_VENDOR_ID_NS, PCI_DEVICE_ID_NS_SCx200_IDE, PCI_ANY_ID, PCI_ANY_ID, 0, 0, 0},
+	{ PCI_DEVICE(PCI_VENDOR_ID_NS, PCI_DEVICE_ID_NS_SCx200_IDE), 0},
 	{ 0, },
 };
 MODULE_DEVICE_TABLE(pci, sc1200_pci_tbl);
@@ -502,11 +501,13 @@ static struct pci_driver driver = {
 	.name		= "SC1200_IDE",
 	.id_table	= sc1200_pci_tbl,
 	.probe		= sc1200_init_one,
+#ifdef CONFIG_PM
 	.suspend	= sc1200_suspend,
 	.resume		= sc1200_resume,
+#endif
 };
 
-static int sc1200_ide_init(void)
+static int __init sc1200_ide_init(void)
 {
 	return ide_pci_register_driver(&driver);
 }

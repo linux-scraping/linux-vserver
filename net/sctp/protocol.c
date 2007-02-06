@@ -61,7 +61,7 @@
 #include <net/inet_ecn.h>
 
 /* Global data structures. */
-struct sctp_globals sctp_globals;
+struct sctp_globals sctp_globals __read_mostly;
 struct proc_dir_entry	*proc_net_sctp;
 DEFINE_SNMP_STAT(struct sctp_mib, sctp_statistics) __read_mostly;
 
@@ -79,15 +79,8 @@ static struct sctp_pf *sctp_pf_inet_specific;
 static struct sctp_af *sctp_af_v4_specific;
 static struct sctp_af *sctp_af_v6_specific;
 
-kmem_cache_t *sctp_chunk_cachep __read_mostly;
-kmem_cache_t *sctp_bucket_cachep __read_mostly;
-
-extern int sctp_snmp_proc_init(void);
-extern int sctp_snmp_proc_exit(void);
-extern int sctp_eps_proc_init(void);
-extern int sctp_eps_proc_exit(void);
-extern int sctp_assocs_proc_init(void);
-extern int sctp_assocs_proc_exit(void);
+struct kmem_cache *sctp_chunk_cachep __read_mostly;
+struct kmem_cache *sctp_bucket_cachep __read_mostly;
 
 /* Return the address of the control sock. */
 struct sock *sctp_get_ctl_sock(void)
@@ -170,7 +163,7 @@ static void sctp_v4_copy_addrlist(struct list_head *addrlist,
 /* Extract our IP addresses from the system and stash them in the
  * protocol structure.
  */
-static void __sctp_get_local_addr_list(void)
+static void sctp_get_local_addr_list(void)
 {
 	struct net_device *dev;
 	struct list_head *pos;
@@ -186,17 +179,8 @@ static void __sctp_get_local_addr_list(void)
 	read_unlock(&dev_base_lock);
 }
 
-static void sctp_get_local_addr_list(void)
-{
-	unsigned long flags;
-
-	sctp_spin_lock_irqsave(&sctp_local_addr_lock, flags);
-	__sctp_get_local_addr_list();
-	sctp_spin_unlock_irqrestore(&sctp_local_addr_lock, flags);
-}
-
 /* Free the existing local addresses.  */
-static void __sctp_free_local_addr_list(void)
+static void sctp_free_local_addr_list(void)
 {
 	struct sctp_sockaddr_entry *addr;
 	struct list_head *pos, *temp;
@@ -208,27 +192,15 @@ static void __sctp_free_local_addr_list(void)
 	}
 }
 
-/* Free the existing local addresses.  */
-static void sctp_free_local_addr_list(void)
-{
-	unsigned long flags;
-
-	sctp_spin_lock_irqsave(&sctp_local_addr_lock, flags);
-	__sctp_free_local_addr_list();
-	sctp_spin_unlock_irqrestore(&sctp_local_addr_lock, flags);
-}
-
 /* Copy the local addresses which are valid for 'scope' into 'bp'.  */
 int sctp_copy_local_addr_list(struct sctp_bind_addr *bp, sctp_scope_t scope,
 			      gfp_t gfp, int copy_flags)
 {
 	struct sctp_sockaddr_entry *addr;
 	int error = 0;
-	struct list_head *pos;
-	unsigned long flags;
+	struct list_head *pos, *temp;
 
-	sctp_spin_lock_irqsave(&sctp_local_addr_lock, flags);
-	list_for_each(pos, &sctp_local_addr_list) {
+	list_for_each_safe(pos, temp, &sctp_local_addr_list) {
 		addr = list_entry(pos, struct sctp_sockaddr_entry, list);
 		if (sctp_in_scope(&addr->a, scope)) {
 			/* Now that the address is in scope, check to see if
@@ -240,7 +212,7 @@ int sctp_copy_local_addr_list(struct sctp_bind_addr *bp, sctp_scope_t scope,
 			    (((AF_INET6 == addr->a.sa.sa_family) &&
 			      (copy_flags & SCTP_ADDR6_ALLOWED) &&
 			      (copy_flags & SCTP_ADDR6_PEERSUPP)))) {
-				error = sctp_add_bind_addr(bp, &addr->a, 
+				error = sctp_add_bind_addr(bp, &addr->a, 1,
 							   GFP_ATOMIC);
 				if (error)
 					goto end_copy;
@@ -249,7 +221,6 @@ int sctp_copy_local_addr_list(struct sctp_bind_addr *bp, sctp_scope_t scope,
 	}
 
 end_copy:
-	sctp_spin_unlock_irqrestore(&sctp_local_addr_lock, flags);
 	return error;
 }
 
@@ -258,7 +229,7 @@ static void sctp_v4_from_skb(union sctp_addr *addr, struct sk_buff *skb,
 			     int is_saddr)
 {
 	void *from;
-	__u16 *port;
+	__be16 *port;
 	struct sctphdr *sh;
 
 	port = &addr->v4.sin_port;
@@ -266,10 +237,10 @@ static void sctp_v4_from_skb(union sctp_addr *addr, struct sk_buff *skb,
 
 	sh = (struct sctphdr *) skb->h.raw;
 	if (is_saddr) {
-		*port  = ntohs(sh->source);
+		*port  = sh->source;
 		from = &skb->nh.iph->saddr;
 	} else {
-		*port = ntohs(sh->dest);
+		*port = sh->dest;
 		from = &skb->nh.iph->daddr;
 	}
 	memcpy(&addr->v4.sin_addr.s_addr, from, sizeof(struct in_addr));
@@ -279,7 +250,7 @@ static void sctp_v4_from_skb(union sctp_addr *addr, struct sk_buff *skb,
 static void sctp_v4_from_sk(union sctp_addr *addr, struct sock *sk)
 {
 	addr->v4.sin_family = AF_INET;
-	addr->v4.sin_port = inet_sk(sk)->num;
+	addr->v4.sin_port = 0;
 	addr->v4.sin_addr.s_addr = inet_sk(sk)->rcv_saddr;
 }
 
@@ -298,7 +269,7 @@ static void sctp_v4_to_sk_daddr(union sctp_addr *addr, struct sock *sk)
 /* Initialize a sctp_addr from an address parameter. */
 static void sctp_v4_from_addr_param(union sctp_addr *addr,
 				    union sctp_addr_param *param,
-				    __u16 port, int iif)
+				    __be16 port, int iif)
 {
 	addr->v4.sin_family = AF_INET;
 	addr->v4.sin_port = port;
@@ -314,7 +285,7 @@ static int sctp_v4_to_addr_param(const union sctp_addr *addr,
 	int length = sizeof(sctp_ipv4addr_param_t);
 
 	param->v4.param_hdr.type = SCTP_PARAM_IPV4_ADDRESS;
-	param->v4.param_hdr.length = ntohs(length);
+	param->v4.param_hdr.length = htons(length);
 	param->v4.addr.s_addr = addr->v4.sin_addr.s_addr;	
 
 	return length;
@@ -322,7 +293,7 @@ static int sctp_v4_to_addr_param(const union sctp_addr *addr,
 
 /* Initialize a sctp_addr from a dst_entry. */
 static void sctp_v4_dst_saddr(union sctp_addr *saddr, struct dst_entry *dst,
-			      unsigned short port)
+			      __be16 port)
 {
 	struct rtable *rt = (struct rtable *)dst;
 	saddr->v4.sin_family = AF_INET;
@@ -345,7 +316,7 @@ static int sctp_v4_cmp_addr(const union sctp_addr *addr1,
 }
 
 /* Initialize addr struct to INADDR_ANY. */
-static void sctp_v4_inaddr_any(union sctp_addr *addr, unsigned short port)
+static void sctp_v4_inaddr_any(union sctp_addr *addr, __be16 port)
 {
 	addr->v4.sin_family = AF_INET;
 	addr->v4.sin_addr.s_addr = INADDR_ANY;
@@ -486,7 +457,9 @@ static struct dst_entry *sctp_v4_get_dst(struct sctp_association *asoc,
 		list_for_each(pos, &bp->address_list) {
 			laddr = list_entry(pos, struct sctp_sockaddr_entry,
 					   list);
-			sctp_v4_dst_saddr(&dst_saddr, dst, bp->port);
+			if (!laddr->use_as_src)
+				continue;
+			sctp_v4_dst_saddr(&dst_saddr, dst, htons(bp->port));
 			if (sctp_v4_cmp_addr(&dst_saddr, &laddr->a))
 				goto out_unlock;
 		}
@@ -506,7 +479,8 @@ static struct dst_entry *sctp_v4_get_dst(struct sctp_association *asoc,
 	list_for_each(pos, &bp->address_list) {
 		laddr = list_entry(pos, struct sctp_sockaddr_entry, list);
 
-		if (AF_INET == laddr->a.sa.sa_family) {
+		if ((laddr->use_as_src) &&
+		    (AF_INET == laddr->a.sa.sa_family)) {
 			fl.fl4_src = laddr->a.v4.sin_addr.s_addr;
 			if (!ip_route_output_key(&rt, &fl)) {
 				dst = &rt->u.dst;
@@ -542,7 +516,7 @@ static void sctp_v4_get_saddr(struct sctp_association *asoc,
 
 	if (rt) {
 		saddr->v4.sin_family = AF_INET;
-		saddr->v4.sin_port = asoc->base.bind_addr.port;  
+		saddr->v4.sin_port = htons(asoc->base.bind_addr.port);
 		saddr->v4.sin_addr.s_addr = rt->rt_src; 
 	}
 }
@@ -595,7 +569,7 @@ static struct sock *sctp_v4_create_accept_sk(struct sock *sk,
 	newinet->dport = htons(asoc->peer.port);
 	newinet->daddr = asoc->peer.primary_addr.v4.sin_addr.s_addr;
 	newinet->pmtudisc = inet->pmtudisc;
-      	newinet->id = 0;
+      	newinet->id = asoc->next_tsn ^ jiffies;
 
 	newinet->uc_ttl = -1;
 	newinet->mc_loop = 1;
@@ -626,18 +600,36 @@ static void sctp_v4_seq_dump_addr(struct seq_file *seq, union sctp_addr *addr)
 	seq_printf(seq, "%d.%d.%d.%d ", NIPQUAD(addr->v4.sin_addr));
 }
 
-/* Event handler for inet address addition/deletion events.
- * Basically, whenever there is an event, we re-build our local address list.
- */
-int sctp_inetaddr_event(struct notifier_block *this, unsigned long ev,
-                        void *ptr)
+/* Event handler for inet address addition/deletion events.  */
+static int sctp_inetaddr_event(struct notifier_block *this, unsigned long ev,
+			       void *ptr)
 {
-	unsigned long flags;
+	struct in_ifaddr *ifa = (struct in_ifaddr *)ptr;
+	struct sctp_sockaddr_entry *addr;
+	struct list_head *pos, *temp;
 
-	sctp_spin_lock_irqsave(&sctp_local_addr_lock, flags);
-	__sctp_free_local_addr_list();
-	__sctp_get_local_addr_list();
-	sctp_spin_unlock_irqrestore(&sctp_local_addr_lock, flags);
+	switch (ev) {
+	case NETDEV_UP:
+		addr = kmalloc(sizeof(struct sctp_sockaddr_entry), GFP_ATOMIC);
+		if (addr) {
+			addr->a.v4.sin_family = AF_INET;
+			addr->a.v4.sin_port = 0;
+			addr->a.v4.sin_addr.s_addr = ifa->ifa_local;
+			list_add_tail(&addr->list, &sctp_local_addr_list);
+		}
+		break;
+	case NETDEV_DOWN:
+		list_for_each_safe(pos, temp, &sctp_local_addr_list) {
+			addr = list_entry(pos, struct sctp_sockaddr_entry, list);
+			if (addr->a.v4.sin_addr.s_addr == ifa->ifa_local) {
+				list_del(pos);
+				kfree(addr);
+				break;
+			}
+		}
+
+		break;
+	}
 
 	return NOTIFY_DONE;
 }
@@ -795,7 +787,7 @@ static int sctp_inet_send_verify(struct sctp_sock *opt, union sctp_addr *addr)
  * chunks.  Returns number of addresses supported.
  */
 static int sctp_inet_supported_addrs(const struct sctp_sock *opt,
-				     __u16 *types)
+				     __be16 *types)
 {
 	types[0] = SCTP_PARAM_IPV4_ADDRESS;
 	return 1;
@@ -1046,7 +1038,7 @@ SCTP_STATIC __init int sctp_init(void)
 	sctp_rto_beta			= SCTP_RTO_BETA;
 
 	/* Valid.Cookie.Life        - 60  seconds */
-	sctp_valid_cookie_life		= 60 * HZ;
+	sctp_valid_cookie_life		= SCTP_DEFAULT_COOKIE_LIFE;
 
 	/* Whether Cookie Preservative is enabled(1) or not(0) */
 	sctp_cookie_preserve_enable 	= 1;
@@ -1176,12 +1168,11 @@ SCTP_STATIC __init int sctp_init(void)
 
 	/* Initialize the local address list. */
 	INIT_LIST_HEAD(&sctp_local_addr_list);
-	spin_lock_init(&sctp_local_addr_lock);
+
+	sctp_get_local_addr_list();
 
 	/* Register notifier for inet address additions/deletions. */
 	register_inetaddr_notifier(&sctp_inetaddr_notifier);
-
-	sctp_get_local_addr_list();
 
 	__unsafe(THIS_MODULE);
 	status = 0;
@@ -1267,6 +1258,7 @@ module_exit(sctp_exit);
  * __stringify doesn't likes enums, so use IPPROTO_SCTP value (132) directly.
  */
 MODULE_ALIAS("net-pf-" __stringify(PF_INET) "-proto-132");
+MODULE_ALIAS("net-pf-" __stringify(PF_INET6) "-proto-132");
 MODULE_AUTHOR("Linux Kernel SCTP developers <lksctp-developers@lists.sourceforge.net>");
 MODULE_DESCRIPTION("Support for the SCTP protocol (RFC2960)");
 MODULE_LICENSE("GPL");

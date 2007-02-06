@@ -58,12 +58,13 @@ static int get_fdb_entries(struct net_bridge *br, void __user *userbuf,
 {
 	int num;
 	void *buf;
-	size_t size = maxnum * sizeof(struct __fdb_entry);
+	size_t size;
 
-	if (size > PAGE_SIZE) {
-		size = PAGE_SIZE;
+	/* Clamp size to PAGE_SIZE, test maxnum to avoid overflow */
+	if (maxnum > PAGE_SIZE/sizeof(struct __fdb_entry))
 		maxnum = PAGE_SIZE/sizeof(struct __fdb_entry);
-	}
+
+	size = maxnum * sizeof(struct __fdb_entry);
 
 	buf = kmalloc(size, GFP_USER);
 	if (!buf)
@@ -162,11 +163,9 @@ static int old_dev_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
 		if (num > BR_MAX_PORTS)
 			num = BR_MAX_PORTS;
 
-		indices = kmalloc(num*sizeof(int), GFP_KERNEL);
+		indices = kcalloc(num, sizeof(int), GFP_KERNEL);
 		if (indices == NULL)
 			return -ENOMEM;
-
-		memset(indices, 0, num*sizeof(int));
 
 		get_port_ifindices(br, indices, num);
 		if (copy_to_user((void __user *)args[1], indices, num*sizeof(int)))
@@ -327,11 +326,10 @@ static int old_deviceless(void __user *uarg)
 
 		if (args[2] >= 2048)
 			return -ENOMEM;
-		indices = kmalloc(args[2]*sizeof(int), GFP_KERNEL);
+		indices = kcalloc(args[2], sizeof(int), GFP_KERNEL);
 		if (indices == NULL)
 			return -ENOMEM;
 
-		memset(indices, 0, args[2]*sizeof(int));
 		args[2] = get_bridge_ifindices(indices, args[2]);
 
 		ret = copy_to_user((void __user *)args[1], indices, args[2]*sizeof(int))

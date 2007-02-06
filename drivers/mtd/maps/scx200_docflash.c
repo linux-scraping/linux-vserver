@@ -8,7 +8,6 @@
 */
 
 #include <linux/module.h>
-#include <linux/config.h>
 #include <linux/types.h>
 #include <linux/kernel.h>
 #include <linux/init.h>
@@ -88,19 +87,23 @@ static int __init init_scx200_docflash(void)
 
 	printk(KERN_DEBUG NAME ": NatSemi SCx200 DOCCS Flash Driver\n");
 
-	if ((bridge = pci_find_device(PCI_VENDOR_ID_NS,
+	if ((bridge = pci_get_device(PCI_VENDOR_ID_NS,
 				      PCI_DEVICE_ID_NS_SCx200_BRIDGE,
 				      NULL)) == NULL)
 		return -ENODEV;
 
 	/* check that we have found the configuration block */
-	if (!scx200_cb_present())
+	if (!scx200_cb_present()) {
+		pci_dev_put(bridge);
 		return -ENODEV;
+	}
 
 	if (probe) {
 		/* Try to use the present flash mapping if any */
 		pci_read_config_dword(bridge, SCx200_DOCCS_BASE, &base);
 		pci_read_config_dword(bridge, SCx200_DOCCS_CTRL, &ctrl);
+		pci_dev_put(bridge);
+
 		pmr = inl(scx200_cb_base + SCx200_PMR);
 
 		if (base == 0
@@ -128,6 +131,7 @@ static int __init init_scx200_docflash(void)
 			return -ENOMEM;
 		}
 	} else {
+		pci_dev_put(bridge);
 		for (u = size; u > 1; u >>= 1)
 			;
 		if (u != 1) {
@@ -164,8 +168,9 @@ static int __init init_scx200_docflash(void)
 		outl(pmr, scx200_cb_base + SCx200_PMR);
 	}
 
-       	printk(KERN_INFO NAME ": DOCCS mapped at 0x%lx-0x%lx, width %d\n",
-	       docmem.start, docmem.end, width);
+       	printk(KERN_INFO NAME ": DOCCS mapped at 0x%llx-0x%llx, width %d\n",
+			(unsigned long long)docmem.start,
+			(unsigned long long)docmem.end, width);
 
 	scx200_docflash_map.size = size;
 	if (width == 8)

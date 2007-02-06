@@ -217,7 +217,7 @@ static int sctp_gen_sack(struct sctp_association *asoc, int force,
 
 		asoc->peer.sack_needed = 0;
 
-		error = sctp_outq_tail(&asoc->outqueue, sack);
+		sctp_add_cmd_sf(commands, SCTP_CMD_REPLY, SCTP_CHUNK(sack));
 
 		/* Stop the SACK timer.  */
 		sctp_add_cmd_sf(commands, SCTP_CMD_TIMER_STOP,
@@ -430,7 +430,11 @@ static void sctp_do_8_2_transport_strike(struct sctp_association *asoc,
 	/* The check for association's overall error counter exceeding the
 	 * threshold is done in the state function.
 	 */
-	asoc->overall_error_count++;
+	/* When probing UNCONFIRMED addresses, the association overall
+	 * error count is NOT incremented
+	 */
+	if (transport->state != SCTP_UNCONFIRMED)
+		asoc->overall_error_count++;
 
 	if (transport->state != SCTP_INACTIVE &&
 	    (transport->error_count++ >= transport->pathmaxrxt)) {
@@ -438,7 +442,7 @@ static void sctp_do_8_2_transport_strike(struct sctp_association *asoc,
 					 " transport IP: port:%d failed.\n",
 					 asoc,
 					 (&transport->ipaddr),
-					 transport->ipaddr.v4.sin_port);
+					 ntohs(transport->ipaddr.v4.sin_port));
 		sctp_assoc_control_transport(asoc, transport,
 					     SCTP_TRANSPORT_DOWN,
 					     SCTP_FAILED_THRESHOLD);
@@ -610,16 +614,26 @@ static void sctp_cmd_transport_on(sctp_cmd_seq_t *cmds,
 	/* Mark the destination transport address as active if it is not so
 	 * marked.
 	 */
-	if (t->state == SCTP_INACTIVE)
+	if ((t->state == SCTP_INACTIVE) || (t->state == SCTP_UNCONFIRMED))
 		sctp_assoc_control_transport(asoc, t, SCTP_TRANSPORT_UP,
 					     SCTP_HEARTBEAT_SUCCESS);
 
 	/* The receiver of the HEARTBEAT ACK should also perform an
 	 * RTT measurement for that destination transport address
 	 * using the time value carried in the HEARTBEAT ACK chunk.
+	 * If the transport's rto_pending variable has been cleared,
+	 * it was most likely due to a retransmit.  However, we want
+	 * to re-enable it to properly update the rto.
 	 */
+	if (t->rto_pending == 0)
+		t->rto_pending = 1;
+
 	hbinfo = (sctp_sender_hb_info_t *) chunk->skb->data;
 	sctp_transport_update_rto(t, (jiffies - hbinfo->sent_at));
+
+	/* Update the heartbeat timer.  */
+	if (!mod_timer(&t->hb_timer, sctp_transport_timeout(t)))
+		sctp_transport_hold(t);
 }
 
 /* Helper function to do a transport reset at the expiry of the hearbeat
@@ -1352,12 +1366,12 @@ static int sctp_cmd_interpreter(sctp_event_t event_type,
 			break;
 
 		case SCTP_CMD_INIT_FAILED:
-			sctp_cmd_init_failed(commands, asoc, cmd->obj.u32);
+			sctp_cmd_init_failed(commands, asoc, cmd->obj.err);
 			break;
 
 		case SCTP_CMD_ASSOC_FAILED:
 			sctp_cmd_assoc_failed(commands, asoc, event_type,
-					      subtype, chunk, cmd->obj.u32);
+					      subtype, chunk, cmd->obj.err);
 			break;
 
 		case SCTP_CMD_INIT_COUNTER_INC:
@@ -1412,7 +1426,7 @@ static int sctp_cmd_interpreter(sctp_event_t event_type,
 
 		case SCTP_CMD_PROCESS_CTSN:
 			/* Dummy up a SACK for processing. */
-			sackh.cum_tsn_ack = cmd->obj.u32;
+			sackh.cum_tsn_ack = cmd->obj.be32;
 			sackh.a_rwnd = 0;
 			sackh.num_gap_ack_blocks = 0;
 			sackh.num_dup_tsns = 0;

@@ -47,12 +47,10 @@ static struct mtd_info *map_absent_probe(struct map_info *map)
 {
 	struct mtd_info *mtd;
 
-	mtd = kmalloc(sizeof(*mtd), GFP_KERNEL);
+	mtd = kzalloc(sizeof(*mtd), GFP_KERNEL);
 	if (!mtd) {
 		return NULL;
 	}
-
-	memset(mtd, 0, sizeof(*mtd));
 
 	map->fldrv 	= &map_absent_chipdrv;
 	mtd->priv 	= map;
@@ -64,7 +62,8 @@ static struct mtd_info *map_absent_probe(struct map_info *map)
 	mtd->write 	= map_absent_write;
 	mtd->sync 	= map_absent_sync;
 	mtd->flags 	= 0;
-	mtd->erasesize = PAGE_SIZE;
+	mtd->erasesize  = PAGE_SIZE;
+	mtd->writesize  = 1;
 
 	__module_get(THIS_MODULE);
 	return mtd;

@@ -1,7 +1,6 @@
 #ifndef _PARISC_CACHEFLUSH_H
 #define _PARISC_CACHEFLUSH_H
 
-#include <linux/config.h>
 #include <linux/mm.h>
 #include <asm/cache.h>	/* for flush_user_dcache_range_asm() proto */
 
@@ -15,6 +14,8 @@
 #else
 #define flush_cache_mm(mm) flush_cache_all_local()
 #endif
+
+#define flush_cache_dup_mm(mm) flush_cache_mm(mm)
 
 #define flush_kernel_dcache_range(start,size) \
 	flush_kernel_dcache_range_asm((start), (start)+(size));
@@ -185,22 +186,44 @@ flush_cache_page(struct vm_area_struct *vma, unsigned long vmaddr, unsigned long
 }
 
 static inline void
-flush_anon_page(struct page *page, unsigned long vmaddr)
+flush_anon_page(struct vm_area_struct *vma, struct page *page, unsigned long vmaddr)
 {
 	if (PageAnon(page))
 		flush_user_dcache_page(vmaddr);
 }
 #define ARCH_HAS_FLUSH_ANON_PAGE
 
-static inline void
-flush_kernel_dcache_page(struct page *page)
-{
-	flush_kernel_dcache_page_asm(page_address(page));
-}
 #define ARCH_HAS_FLUSH_KERNEL_DCACHE_PAGE
+void flush_kernel_dcache_page_addr(void *addr);
+static inline void flush_kernel_dcache_page(struct page *page)
+{
+	flush_kernel_dcache_page_addr(page_address(page));
+}
 
 #ifdef CONFIG_DEBUG_RODATA
 void mark_rodata_ro(void);
+#endif
+
+#ifdef CONFIG_PA8X00
+/* Only pa8800, pa8900 needs this */
+#define ARCH_HAS_KMAP
+
+void kunmap_parisc(void *addr);
+
+static inline void *kmap(struct page *page)
+{
+	might_sleep();
+	return page_address(page);
+}
+
+#define kunmap(page)			kunmap_parisc(page_address(page))
+
+#define kmap_atomic(page, idx)		page_address(page)
+
+#define kunmap_atomic(addr, idx)	kunmap_parisc(addr)
+
+#define kmap_atomic_pfn(pfn, idx)	page_address(pfn_to_page(pfn))
+#define kmap_atomic_to_page(ptr)	virt_to_page(ptr)
 #endif
 
 #endif /* _PARISC_CACHEFLUSH_H */

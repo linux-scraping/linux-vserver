@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2004,2005 IBM Corporation
- * Interface implementation for communication with the v/VM control program
+ * Interface implementation for communication with the z/VM control program
  * Author(s): Christian Borntraeger <cborntra@de.ibm.com>
  *
  *
@@ -117,7 +117,7 @@ vmcp_write(struct file *file, const char __user * buff, size_t count,
 		return -ENOMEM;
 	}
 	debug_text_event(vmcp_debug, 1, cmd);
-	session->resp_size = __cpcmd(cmd, session->response,
+	session->resp_size = cpcmd(cmd, session->response,
 				     session->bufsize,
 				     &session->resp_code);
 	up(&session->mutex);

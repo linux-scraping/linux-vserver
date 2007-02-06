@@ -33,7 +33,6 @@
 
 #undef REALLY_SLOW_IO		/* most systems can safely undef this */
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/types.h>
 #include <linux/string.h>
@@ -47,7 +46,6 @@
 #include <linux/slab.h>
 #include <linux/delay.h>
 #include <linux/ide.h>
-#include <linux/devfs_fs_kernel.h>
 #include <linux/spinlock.h>
 #include <linux/kmod.h>
 #include <linux/pci.h>
@@ -625,6 +623,8 @@ static void hwif_release_dev (struct device *dev)
 
 static void hwif_register (ide_hwif_t *hwif)
 {
+	int ret;
+
 	/* register with global device tree */
 	strlcpy(hwif->gendev.bus_id,hwif->name,BUS_ID_SIZE);
 	hwif->gendev.driver_data = hwif;
@@ -636,7 +636,10 @@ static void hwif_register (ide_hwif_t *hwif)
 			hwif->gendev.parent = NULL;
 	}
 	hwif->gendev.release = hwif_release_dev;
-	device_register(&hwif->gendev);
+	ret = device_register(&hwif->gendev);
+	if (ret < 0)
+		printk(KERN_WARNING "IDE: %s: device_register error: %d\n",
+			__FUNCTION__, ret);
 }
 
 static int wait_hwif_ready(ide_hwif_t *hwif)
@@ -886,13 +889,19 @@ int probe_hwif_init_with_fixup(ide_hwif_t *hwif, void (*fixup)(ide_hwif_t *hwif)
 
 	if (hwif->present) {
 		u16 unit = 0;
+		int ret;
+
 		for (unit = 0; unit < MAX_DRIVES; ++unit) {
 			ide_drive_t *drive = &hwif->drives[unit];
 			/* For now don't attach absent drives, we may
 			   want them on default or a new "empty" class
 			   for hotplug reprobing ? */
 			if (drive->present) {
-				device_register(&drive->gendev);
+				ret = device_register(&drive->gendev);
+				if (ret < 0)
+					printk(KERN_WARNING "IDE: %s: "
+						"device_register error: %d\n",
+						__FUNCTION__, ret);
 			}
 		}
 	}
@@ -991,10 +1000,6 @@ static int ide_init_queue(ide_drive_t *drive)
 	/* needs drive->queue to be set */
 	ide_toggle_bounce(drive, 1);
 
-	/* enable led activity for disk drives only */
-	if (drive->media == ide_disk && hwif->led_act)
-		blk_queue_activity_fn(q, hwif->led_act, drive);
-
 	return 0;
 }
 
@@ -1006,7 +1011,7 @@ static int ide_init_queue(ide_drive_t *drive)
  * and irq serialization situations.  This is somewhat complex because
  * it handles static as well as dynamic (PCMCIA) IDE interfaces.
  *
- * The SA_INTERRUPT in sa_flags means ide_intr() is always entered with
+ * The IRQF_DISABLED in sa_flags means ide_intr() is always entered with
  * interrupts completely disabled.  This can be bad for interrupt latency,
  * but anything else has led to problems on some machines.  We re-enable
  * interrupts as much as we can safely do in most places.
@@ -1092,15 +1097,15 @@ static int init_irq (ide_hwif_t *hwif)
 	 * Allocate the irq, if not already obtained for another hwif
 	 */
 	if (!match || match->irq != hwif->irq) {
-		int sa = SA_INTERRUPT;
+		int sa = IRQF_DISABLED;
 #if defined(__mc68000__) || defined(CONFIG_APUS)
-		sa = SA_SHIRQ;
+		sa = IRQF_SHARED;
 #endif /* __mc68000__ || CONFIG_APUS */
 
 		if (IDE_CHIPSET_IS_PCI(hwif->chipset)) {
-			sa = SA_SHIRQ;
+			sa = IRQF_SHARED;
 #ifndef CONFIG_IDEPCI_SHARE_IRQ
-			sa |= SA_INTERRUPT;
+			sa |= IRQF_DISABLED;
 #endif /* CONFIG_IDEPCI_SHARE_IRQ */
 		}
 
@@ -1138,16 +1143,11 @@ static int init_irq (ide_hwif_t *hwif)
 		spin_unlock_irq(&ide_lock);
 	}
 
-#if !defined(__mc68000__) && !defined(CONFIG_APUS) && !defined(__sparc__)
+#if !defined(__mc68000__) && !defined(CONFIG_APUS)
 	printk("%s at 0x%03lx-0x%03lx,0x%03lx on irq %d", hwif->name,
 		hwif->io_ports[IDE_DATA_OFFSET],
 		hwif->io_ports[IDE_DATA_OFFSET]+7,
 		hwif->io_ports[IDE_CONTROL_OFFSET], hwif->irq);
-#elif defined(__sparc__)
-	printk("%s at 0x%03lx-0x%03lx,0x%03lx on irq %s", hwif->name,
-		hwif->io_ports[IDE_DATA_OFFSET],
-		hwif->io_ports[IDE_DATA_OFFSET]+7,
-		hwif->io_ports[IDE_CONTROL_OFFSET], __irq_itoa(hwif->irq));
 #else
 	printk("%s at 0x%08lx on irq %d", hwif->name,
 		hwif->io_ports[IDE_DATA_OFFSET], hwif->irq);
@@ -1284,10 +1284,6 @@ static void drive_release_dev (struct device *dev)
 	ide_drive_t *drive = container_of(dev, ide_drive_t, gendev);
 
 	spin_lock_irq(&ide_lock);
-	if (drive->devfs_name[0] != '\0') {
-		devfs_remove(drive->devfs_name);
-		drive->devfs_name[0] = '\0';
-	}
 	ide_remove_drive_from_hwgroup(drive);
 	kfree(drive->id);
 	drive->id = NULL;
@@ -1321,12 +1317,6 @@ static void init_gendisk (ide_hwif_t *hwif)
 		drive->gendev.bus = &ide_bus_type;
 		drive->gendev.driver_data = drive;
 		drive->gendev.release = drive_release_dev;
-		if (drive->present) {
-			sprintf(drive->devfs_name, "ide/host%d/bus%d/target%d/lun%d",
-				(hwif->channel && hwif->mate) ?
-				hwif->mate->index : hwif->index,
-				hwif->channel, unit, drive->lun);
-		}
 	}
 	blk_register_region(MKDEV(hwif->major, 0), MAX_DRIVES << PARTN_BITS,
 			THIS_MODULE, ata_probe, ata_lock, hwif);
@@ -1426,8 +1416,14 @@ int ideprobe_init (void)
 			if (hwif->chipset == ide_unknown || hwif->chipset == ide_forced)
 				hwif->chipset = ide_generic;
 			for (unit = 0; unit < MAX_DRIVES; ++unit)
-				if (hwif->drives[unit].present)
-					device_register(&hwif->drives[unit].gendev);
+				if (hwif->drives[unit].present) {
+					int ret = device_register(
+						&hwif->drives[unit].gendev);
+					if (ret < 0)
+						printk(KERN_WARNING "IDE: %s: "
+							"device_register error: %d\n",
+							__FUNCTION__, ret);
+				}
 		}
 	}
 	return 0;

@@ -14,7 +14,6 @@
  * Routines used by ia64 machines with contiguous (or virtually contiguous)
  * memory.
  */
-#include <linux/config.h>
 #include <linux/bootmem.h>
 #include <linux/efi.h>
 #include <linux/mm.h>
@@ -27,7 +26,7 @@
 #include <asm/mca.h>
 
 #ifdef CONFIG_VIRTUAL_MEM_MAP
-static unsigned long num_dma_physpages;
+static unsigned long max_gap;
 #endif
 
 /**
@@ -41,14 +40,21 @@ show_mem (void)
 	int i, total = 0, reserved = 0;
 	int shared = 0, cached = 0;
 
-	printk("Mem-info:\n");
+	printk(KERN_INFO "Mem-info:\n");
 	show_free_areas();
 
-	printk("Free swap:       %6ldkB\n", nr_swap_pages<<(PAGE_SHIFT-10));
+	printk(KERN_INFO "Free swap:       %6ldkB\n",
+	       nr_swap_pages<<(PAGE_SHIFT-10));
 	i = max_mapnr;
-	while (i-- > 0) {
-		if (!pfn_valid(i))
+	for (i = 0; i < max_mapnr; i++) {
+		if (!pfn_valid(i)) {
+#ifdef CONFIG_VIRTUAL_MEM_MAP
+			if (max_gap < LARGE_GAP)
+				continue;
+			i = vmemmap_find_next_valid_pfn(0, i) - 1;
+#endif
 			continue;
+		}
 		total++;
 		if (PageReserved(mem_map+i))
 			reserved++;
@@ -57,12 +63,12 @@ show_mem (void)
 		else if (page_count(mem_map + i))
 			shared += page_count(mem_map + i) - 1;
 	}
-	printk("%d pages of RAM\n", total);
-	printk("%d reserved pages\n", reserved);
-	printk("%d pages shared\n", shared);
-	printk("%d pages swap cached\n", cached);
-	printk("%ld pages in page table cache\n",
-		pgtable_quicklist_total_size());
+	printk(KERN_INFO "%d pages of RAM\n", total);
+	printk(KERN_INFO "%d reserved pages\n", reserved);
+	printk(KERN_INFO "%d pages shared\n", shared);
+	printk(KERN_INFO "%d pages swap cached\n", cached);
+	printk(KERN_INFO "%ld pages in page table cache\n",
+	       pgtable_quicklist_total_size());
 }
 
 /* physical address where the bootmem map is located */
@@ -168,6 +174,12 @@ find_memory (void)
 	reserve_bootmem(bootmap_start, bootmap_size);
 
 	find_initrd();
+
+#ifdef CONFIG_CRASH_DUMP
+	/* If we are doing a crash dump, we still need to know the real mem
+	 * size before original memory map is * reset. */
+	saved_max_pfn = max_pfn;
+#endif
 }
 
 #ifdef CONFIG_SMP
@@ -212,18 +224,6 @@ count_pages (u64 start, u64 end, void *arg)
 	return 0;
 }
 
-#ifdef CONFIG_VIRTUAL_MEM_MAP
-static int
-count_dma_pages (u64 start, u64 end, void *arg)
-{
-	unsigned long *count = arg;
-
-	if (start < MAX_DMA_ADDRESS)
-		*count += (min(end, MAX_DMA_ADDRESS) - start) >> PAGE_SHIFT;
-	return 0;
-}
-#endif
-
 /*
  * Set up the page tables.
  */
@@ -232,71 +232,46 @@ void __init
 paging_init (void)
 {
 	unsigned long max_dma;
-	unsigned long zones_size[MAX_NR_ZONES];
-#ifdef CONFIG_VIRTUAL_MEM_MAP
-	unsigned long zholes_size[MAX_NR_ZONES];
-	unsigned long max_gap;
-#endif
-
-	/* initialize mem_map[] */
-
-	memset(zones_size, 0, sizeof(zones_size));
+	unsigned long max_zone_pfns[MAX_NR_ZONES];
 
 	num_physpages = 0;
 	efi_memmap_walk(count_pages, &num_physpages);
 
 	max_dma = virt_to_phys((void *) MAX_DMA_ADDRESS) >> PAGE_SHIFT;
+	memset(max_zone_pfns, 0, sizeof(max_zone_pfns));
+	max_zone_pfns[ZONE_DMA] = max_dma;
+	max_zone_pfns[ZONE_NORMAL] = max_low_pfn;
 
 #ifdef CONFIG_VIRTUAL_MEM_MAP
-	memset(zholes_size, 0, sizeof(zholes_size));
-
-	num_dma_physpages = 0;
-	efi_memmap_walk(count_dma_pages, &num_dma_physpages);
-
-	if (max_low_pfn < max_dma) {
-		zones_size[ZONE_DMA] = max_low_pfn;
-		zholes_size[ZONE_DMA] = max_low_pfn - num_dma_physpages;
-	} else {
-		zones_size[ZONE_DMA] = max_dma;
-		zholes_size[ZONE_DMA] = max_dma - num_dma_physpages;
-		if (num_physpages > num_dma_physpages) {
-			zones_size[ZONE_NORMAL] = max_low_pfn - max_dma;
-			zholes_size[ZONE_NORMAL] =
-				((max_low_pfn - max_dma) -
-				 (num_physpages - num_dma_physpages));
-		}
-	}
-
-	max_gap = 0;
+	efi_memmap_walk(register_active_ranges, NULL);
 	efi_memmap_walk(find_largest_hole, (u64 *)&max_gap);
 	if (max_gap < LARGE_GAP) {
 		vmem_map = (struct page *) 0;
-		free_area_init_node(0, NODE_DATA(0), zones_size, 0,
-				    zholes_size);
+		free_area_init_nodes(max_zone_pfns);
 	} else {
 		unsigned long map_size;
 
 		/* allocate virtual_mem_map */
 
-		map_size = PAGE_ALIGN(max_low_pfn * sizeof(struct page));
+		map_size = PAGE_ALIGN(ALIGN(max_low_pfn, MAX_ORDER_NR_PAGES) *
+			sizeof(struct page));
 		vmalloc_end -= map_size;
 		vmem_map = (struct page *) vmalloc_end;
 		efi_memmap_walk(create_mem_map_page_table, NULL);
 
-		NODE_DATA(0)->node_mem_map = vmem_map;
-		free_area_init_node(0, NODE_DATA(0), zones_size,
-				    0, zholes_size);
+		/*
+		 * alloc_node_mem_map makes an adjustment for mem_map
+		 * which isn't compatible with vmem_map.
+		 */
+		NODE_DATA(0)->node_mem_map = vmem_map +
+			find_min_pfn_with_active_regions();
+		free_area_init_nodes(max_zone_pfns);
 
 		printk("Virtual mem_map starts at 0x%p\n", mem_map);
 	}
 #else /* !CONFIG_VIRTUAL_MEM_MAP */
-	if (max_low_pfn < max_dma)
-		zones_size[ZONE_DMA] = max_low_pfn;
-	else {
-		zones_size[ZONE_DMA] = max_dma;
-		zones_size[ZONE_NORMAL] = max_low_pfn - max_dma;
-	}
-	free_area_init(zones_size);
+	add_active_range(0, 0, max_low_pfn);
+	free_area_init_nodes(max_zone_pfns);
 #endif /* !CONFIG_VIRTUAL_MEM_MAP */
 	zero_page_memmap_ptr = virt_to_page(ia64_imva(empty_zero_page));
 }

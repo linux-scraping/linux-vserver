@@ -22,131 +22,14 @@
 
 	Support and updates available at
 	http://www.scyld.com/network/starfire.html
+	[link no longer provides useful info -jgarzik]
 
-	-----------------------------------------------------------
-
-	Linux kernel-specific changes:
-
-	LK1.1.1 (jgarzik):
-	- Use PCI driver interface
-	- Fix MOD_xxx races
-	- softnet fixups
-
-	LK1.1.2 (jgarzik):
-	- Merge Becker version 0.15
-
-	LK1.1.3 (Andrew Morton)
-	- Timer cleanups
-
-	LK1.1.4 (jgarzik):
-	- Merge Becker version 1.03
-
-	LK1.2.1 (Ion Badulescu <ionut@cs.columbia.edu>)
-	- Support hardware Rx/Tx checksumming
-	- Use the GFP firmware taken from Adaptec's Netware driver
-
-	LK1.2.2 (Ion Badulescu)
-	- Backported to 2.2.x
-
-	LK1.2.3 (Ion Badulescu)
-	- Fix the flaky mdio interface
-	- More compat clean-ups
-
-	LK1.2.4 (Ion Badulescu)
-	- More 2.2.x initialization fixes
-
-	LK1.2.5 (Ion Badulescu)
-	- Several fixes from Manfred Spraul
-
-	LK1.2.6 (Ion Badulescu)
-	- Fixed ifup/ifdown/ifup problem in 2.4.x
-
-	LK1.2.7 (Ion Badulescu)
-	- Removed unused code
-	- Made more functions static and __init
-
-	LK1.2.8 (Ion Badulescu)
-	- Quell bogus error messages, inform about the Tx threshold
-	- Removed #ifdef CONFIG_PCI, this driver is PCI only
-
-	LK1.2.9 (Ion Badulescu)
-	- Merged Jeff Garzik's changes from 2.4.4-pre5
-	- Added 2.2.x compatibility stuff required by the above changes
-
-	LK1.2.9a (Ion Badulescu)
-	- More updates from Jeff Garzik
-
-	LK1.3.0 (Ion Badulescu)
-	- Merged zerocopy support
-
-	LK1.3.1 (Ion Badulescu)
-	- Added ethtool support
-	- Added GPIO (media change) interrupt support
-
-	LK1.3.2 (Ion Badulescu)
-	- Fixed 2.2.x compatibility issues introduced in 1.3.1
-	- Fixed ethtool ioctl returning uninitialized memory
-
-	LK1.3.3 (Ion Badulescu)
-	- Initialize the TxMode register properly
-	- Don't dereference dev->priv after freeing it
-
-	LK1.3.4 (Ion Badulescu)
-	- Fixed initialization timing problems
-	- Fixed interrupt mask definitions
-
-	LK1.3.5 (jgarzik)
-	- ethtool NWAY_RST, GLINK, [GS]MSGLVL support
-
-	LK1.3.6:
-	- Sparc64 support and fixes (Ion Badulescu)
-	- Better stats and error handling (Ion Badulescu)
-	- Use new pci_set_mwi() PCI API function (jgarzik)
-
-	LK1.3.7 (Ion Badulescu)
-	- minimal implementation of tx_timeout()
-	- correctly shutdown the Rx/Tx engines in netdev_close()
-	- added calls to netif_carrier_on/off
-	(patch from Stefan Rompf <srompf@isg.de>)
-	- VLAN support
-
-	LK1.3.8 (Ion Badulescu)
-	- adjust DMA burst size on sparc64
-	- 64-bit support
-	- reworked zerocopy support for 64-bit buffers
-	- working and usable interrupt mitigation/latency
-	- reduced Tx interrupt frequency for lower interrupt overhead
-
-	LK1.3.9 (Ion Badulescu)
-	- bugfix for mcast filter
-	- enable the right kind of Tx interrupts (TxDMADone, not TxDone)
-
-	LK1.4.0 (Ion Badulescu)
-	- NAPI support
-
-	LK1.4.1 (Ion Badulescu)
-	- flush PCI posting buffers after disabling Rx interrupts
-	- put the chip to a D3 slumber on driver unload
-	- added config option to enable/disable NAPI
-
-	LK1.4.2 (Ion Badulescu)
-	- finally added firmware (GPL'ed by Adaptec)
-	- removed compatibility code for 2.2.x
-
-	LK1.4.2.1 (Ion Badulescu)
-	- fixed 32/64 bit issues on i386 + CONFIG_HIGHMEM
-	- added 32-bit padding to outgoing skb's, removed previous workaround
-
-TODO:	- fix forced speed/duplexing code (broken a long time ago, when
-	somebody converted the driver to use the generic MII code)
-	- fix VLAN support
 */
 
 #define DRV_NAME	"starfire"
-#define DRV_VERSION	"1.03+LK1.4.2.1"
-#define DRV_RELDATE	"October 3, 2005"
+#define DRV_VERSION	"2.0"
+#define DRV_RELDATE	"June 27, 2006"
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/pci.h>
@@ -158,6 +41,7 @@ TODO:	- fix forced speed/duplexing code (broken a long time ago, when
 #include <linux/ethtool.h>
 #include <linux/mii.h>
 #include <linux/if_vlan.h>
+#include <linux/mm.h>
 #include <asm/processor.h>		/* Processor type for cache alignment. */
 #include <asm/uaccess.h>
 #include <asm/io.h>
@@ -749,7 +633,7 @@ static void	check_duplex(struct net_device *dev);
 static void	tx_timeout(struct net_device *dev);
 static void	init_ring(struct net_device *dev);
 static int	start_tx(struct sk_buff *skb, struct net_device *dev);
-static irqreturn_t intr_handler(int irq, void *dev_instance, struct pt_regs *regs);
+static irqreturn_t intr_handler(int irq, void *dev_instance);
 static void	netdev_error(struct net_device *dev, int intr_status);
 static int	__netdev_rx(struct net_device *dev, int *quota);
 static void	refill_rx_ring(struct net_device *dev);
@@ -759,7 +643,7 @@ static struct net_device_stats *get_stats(struct net_device *dev);
 static int	netdev_ioctl(struct net_device *dev, struct ifreq *rq, int cmd);
 static int	netdev_close(struct net_device *dev);
 static void	netdev_media_change(struct net_device *dev);
-static struct ethtool_ops ethtool_ops;
+static const struct ethtool_ops ethtool_ops;
 
 
 #ifdef VLAN_SUPPORT
@@ -847,7 +731,6 @@ static int __devinit starfire_init_one(struct pci_dev *pdev,
 		goto err_out_free_netdev;
 	}
 
-	/* ioremap is borken in Linux-2.2.x/sparc64 */
 	base = ioremap(ioaddr, io_size);
 	if (!base) {
 		printk(KERN_ERR DRV_NAME " %d: cannot remap %#x @ %#lx, aborting\n",
@@ -1071,7 +954,7 @@ static int netdev_open(struct net_device *dev)
 
 	/* Do we ever need to reset the chip??? */
 
-	retval = request_irq(dev->irq, &intr_handler, SA_SHIRQ, dev->name, dev);
+	retval = request_irq(dev->irq, &intr_handler, IRQF_SHARED, dev->name, dev);
 	if (retval)
 		return retval;
 
@@ -1348,9 +1231,8 @@ static int start_tx(struct sk_buff *skb, struct net_device *dev)
 	}
 
 #if defined(ZEROCOPY) && defined(HAS_BROKEN_FIRMWARE)
-	if (skb->ip_summed == CHECKSUM_HW) {
-		skb = skb_padto(skb, (skb->len + PADDING_MASK) & ~PADDING_MASK);
-		if (skb == NULL)
+	if (skb->ip_summed == CHECKSUM_PARTIAL) {
+		if (skb_padto(skb, (skb->len + PADDING_MASK) & ~PADDING_MASK))
 			return NETDEV_TX_OK;
 	}
 #endif /* ZEROCOPY && HAS_BROKEN_FIRMWARE */
@@ -1371,7 +1253,7 @@ static int start_tx(struct sk_buff *skb, struct net_device *dev)
 				status |= TxDescIntr;
 				np->reap_tx = 0;
 			}
-			if (skb->ip_summed == CHECKSUM_HW) {
+			if (skb->ip_summed == CHECKSUM_PARTIAL) {
 				status |= TxCalTCP;
 				np->stats.tx_compressed++;
 			}
@@ -1426,7 +1308,7 @@ static int start_tx(struct sk_buff *skb, struct net_device *dev)
 
 /* The interrupt handler does all of the Rx thread work and cleans up
    after the Tx thread. */
-static irqreturn_t intr_handler(int irq, void *dev_instance, struct pt_regs *rgs)
+static irqreturn_t intr_handler(int irq, void *dev_instance)
 {
 	struct net_device *dev = dev_instance;
 	struct netdev_private *np = netdev_priv(dev);
@@ -1618,7 +1500,7 @@ static int __netdev_rx(struct net_device *dev, int *quota)
 		 * Until then, the printk stays. :-) -Ion
 		 */
 		else if (le16_to_cpu(desc->status2) & 0x0040) {
-			skb->ip_summed = CHECKSUM_HW;
+			skb->ip_summed = CHECKSUM_COMPLETE;
 			skb->csum = le16_to_cpu(desc->csum);
 			printk(KERN_DEBUG "%s: checksum_hw, status2 = %#x\n", dev->name, le16_to_cpu(desc->status2));
 		}
@@ -1987,7 +1869,7 @@ static void set_msglevel(struct net_device *dev, u32 val)
 	debug = val;
 }
 
-static struct ethtool_ops ethtool_ops = {
+static const struct ethtool_ops ethtool_ops = {
 	.begin = check_if_running,
 	.get_drvinfo = get_drvinfo,
 	.get_settings = get_settings,
@@ -2103,7 +1985,7 @@ static int starfire_suspend(struct pci_dev *pdev, pm_message_t state)
 static int starfire_resume(struct pci_dev *pdev)
 {
 	struct net_device *dev = pci_get_drvdata(pdev);
-	
+
 	pci_set_power_state(pdev, PCI_D0);
 	pci_restore_state(pdev);
 
@@ -2172,7 +2054,7 @@ static int __init starfire_init (void)
 		return -ENODEV;
 	}
 
-	return pci_module_init (&starfire_driver);
+	return pci_register_driver(&starfire_driver);
 }
 
 

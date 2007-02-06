@@ -16,7 +16,6 @@
  * - move bus probe to a kernel thread
  */
 
-#include <linux/config.h>
 #include <linux/types.h>
 #include <linux/errno.h>
 #include <linux/kernel.h>
@@ -36,7 +35,6 @@
 #include <linux/spinlock.h>
 #include <linux/completion.h>
 #include <linux/device.h>
-#include <linux/devfs_fs_kernel.h>
 
 #include <asm/uaccess.h>
 #include <asm/semaphore.h>
@@ -105,7 +103,7 @@ static void adbdev_init(void);
 static int try_handler_change(int, int);
 
 static struct adb_handler {
-	void (*handler)(unsigned char *, int, struct pt_regs *, int);
+	void (*handler)(unsigned char *, int, int);
 	int original_address;
 	int handler_id;
 	int busy;
@@ -269,12 +267,12 @@ adb_probe_task(void *x)
 }
 
 static void
-__adb_probe_task(void *data)
+__adb_probe_task(struct work_struct *bullshit)
 {
 	adb_probe_task_pid = kernel_thread(adb_probe_task, NULL, SIGCHLD | CLONE_KERNEL);
 }
 
-static DECLARE_WORK(adb_reset_work, __adb_probe_task, NULL);
+static DECLARE_WORK(adb_reset_work, __adb_probe_task);
 
 int
 adb_reset_bus(void)
@@ -524,7 +522,7 @@ bail:
     the handler_id id it doesn't match. */
 int
 adb_register(int default_id, int handler_id, struct adb_ids *ids,
-	     void (*handler)(unsigned char *, int, struct pt_regs *, int))
+	     void (*handler)(unsigned char *, int, int))
 {
 	int i;
 
@@ -572,13 +570,13 @@ adb_unregister(int index)
 }
 
 void
-adb_input(unsigned char *buf, int nb, struct pt_regs *regs, int autopoll)
+adb_input(unsigned char *buf, int nb, int autopoll)
 {
 	int i, id;
 	static int dump_adb_input = 0;
 	unsigned long flags;
 	
-	void (*handler)(unsigned char *, int, struct pt_regs *, int);
+	void (*handler)(unsigned char *, int, int);
 
 	/* We skip keystrokes and mouse moves when the sleep process
 	 * has been started. We stop autopoll, but this is another security
@@ -599,7 +597,7 @@ adb_input(unsigned char *buf, int nb, struct pt_regs *regs, int autopoll)
 		adb_handler[id].busy = 1;
 	write_unlock_irqrestore(&adb_handler_lock, flags);
 	if (handler != NULL) {
-		(*handler)(buf, nb, regs, autopoll);
+		(*handler)(buf, nb, autopoll);
 		wmb();
 		adb_handler[id].busy = 0;
 	}
@@ -830,7 +828,7 @@ static ssize_t adb_write(struct file *file, const char __user *buf,
 	if (!access_ok(VERIFY_READ, buf, count))
 		return -EFAULT;
 
-	req = (struct adb_request *) kmalloc(sizeof(struct adb_request),
+	req = kmalloc(sizeof(struct adb_request),
 					     GFP_KERNEL);
 	if (req == NULL)
 		return -ENOMEM;
@@ -903,8 +901,6 @@ adbdev_init(void)
 		printk(KERN_ERR "adb: unable to get major %d\n", ADB_MAJOR);
 		return;
 	}
-
-	devfs_mk_cdev(MKDEV(ADB_MAJOR, 0), S_IFCHR | S_IRUSR | S_IWUSR, "adb");
 
 	adb_dev_class = class_create(THIS_MODULE, "adb");
 	if (IS_ERR(adb_dev_class))

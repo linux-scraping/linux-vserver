@@ -43,7 +43,6 @@
 **       for PCI drivers devices which implement/use MMIO registers.
 */
 
-#include <linux/config.h>
 #include <linux/delay.h>
 #include <linux/types.h>
 #include <linux/kernel.h>
@@ -299,7 +298,7 @@ struct pci_port_ops dino_port_ops = {
 
 static void dino_disable_irq(unsigned int irq)
 {
-	struct dino_device *dino_dev = irq_desc[irq].handler_data;
+	struct dino_device *dino_dev = irq_desc[irq].chip_data;
 	int local_irq = gsc_find_local_irq(irq, dino_dev->global_irq, DINO_LOCAL_IRQS);
 
 	DBG(KERN_WARNING "%s(0x%p, %d)\n", __FUNCTION__, dino_dev, irq);
@@ -311,7 +310,7 @@ static void dino_disable_irq(unsigned int irq)
 
 static void dino_enable_irq(unsigned int irq)
 {
-	struct dino_device *dino_dev = irq_desc[irq].handler_data;
+	struct dino_device *dino_dev = irq_desc[irq].chip_data;
 	int local_irq = gsc_find_local_irq(irq, dino_dev->global_irq, DINO_LOCAL_IRQS);
 	u32 tmp;
 
@@ -369,8 +368,7 @@ static struct hw_interrupt_type dino_interrupt_type = {
  * ilr_loop counter is a kluge to prevent a "stuck" IRQ line from
  * wedging the CPU. Could be removed or made optional at some point.
  */
-static irqreturn_t
-dino_isr(int irq, void *intr_dev, struct pt_regs *regs)
+static irqreturn_t dino_isr(int irq, void *intr_dev)
 {
 	struct dino_device *dino_dev = intr_dev;
 	u32 mask;
@@ -391,7 +389,7 @@ ilr_again:
 		int irq = dino_dev->global_irq[local_irq];
 		DBG(KERN_DEBUG "%s(%d, %p) mask 0x%x\n",
 			__FUNCTION__, irq, intr_dev, mask);
-		__do_IRQ(irq, regs);
+		__do_IRQ(irq);
 		mask &= ~(1 << local_irq);
 	} while (mask);
 

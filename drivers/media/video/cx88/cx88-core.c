@@ -105,7 +105,7 @@ static u32* cx88_risc_field(u32 *rp, struct scatterlist *sglist,
 			*(rp++)=cpu_to_le32(sg_dma_address(sg)+offset);
 			offset+=bpl;
 		} else {
-			/* scanline needs to be splitted */
+			/* scanline needs to be split */
 			todo = bpl;
 			*(rp++)=cpu_to_le32(RISC_WRITE|RISC_SOL|
 					    (sg_dma_len(sg)-offset));
@@ -633,12 +633,12 @@ int cx88_reset(struct cx88_core *core)
 
 static unsigned int inline norm_swidth(struct cx88_tvnorm *norm)
 {
-	return (norm->id & V4L2_STD_625_50) ? 922 : 754;
+	return (norm->id & (V4L2_STD_MN & ~V4L2_STD_PAL_Nc)) ? 754 : 922;
 }
 
 static unsigned int inline norm_hdelay(struct cx88_tvnorm *norm)
 {
-	return (norm->id & V4L2_STD_625_50) ? 186 : 135;
+	return (norm->id & (V4L2_STD_MN & ~V4L2_STD_PAL_Nc)) ? 135 : 186;
 }
 
 static unsigned int inline norm_vdelay(struct cx88_tvnorm *norm)
@@ -648,36 +648,38 @@ static unsigned int inline norm_vdelay(struct cx88_tvnorm *norm)
 
 static unsigned int inline norm_fsc8(struct cx88_tvnorm *norm)
 {
-	static const unsigned int ntsc = 28636360;
-	static const unsigned int pal  = 35468950;
-	static const unsigned int palm  = 28604892;
-
 	if (norm->id & V4L2_STD_PAL_M)
-		return palm;
+		return 28604892;      // 3.575611 MHz
 
-	return (norm->id & V4L2_STD_625_50) ? pal : ntsc;
-}
+	if (norm->id & (V4L2_STD_PAL_Nc))
+		return 28656448;      // 3.582056 MHz
 
-static unsigned int inline norm_notchfilter(struct cx88_tvnorm *norm)
-{
-	return (norm->id & V4L2_STD_625_50)
-		? HLNotchFilter135PAL
-		: HLNotchFilter135NTSC;
+	if (norm->id & V4L2_STD_NTSC) // All NTSC/M and variants
+		return 28636360;      // 3.57954545 MHz +/- 10 Hz
+
+	/* SECAM have also different sub carrier for chroma,
+	   but step_db and step_dr, at cx88_set_tvnorm already handles that.
+
+	   The same FSC applies to PAL/BGDKIH, PAL/60, NTSC/4.43 and PAL/N
+	 */
+
+	return 35468950;      // 4.43361875 MHz +/- 5 Hz
 }
 
 static unsigned int inline norm_htotal(struct cx88_tvnorm *norm)
 {
-	/* Should always be Line Draw Time / (4*FSC) */
 
-	if (norm->id & V4L2_STD_PAL_M)
-		return 909;
+	unsigned int fsc4=norm_fsc8(norm)/2;
 
-	return (norm->id & V4L2_STD_625_50) ? 1135 : 910;
+	/* returns 4*FSC / vtotal / frames per seconds */
+	return (norm->id & V4L2_STD_625_50) ?
+				((fsc4+312)/625+12)/25 :
+				((fsc4+262)/525*1001+15000)/30000;
 }
 
 static unsigned int inline norm_vbipack(struct cx88_tvnorm *norm)
 {
-	return (norm->id & V4L2_STD_625_50) ? 511 : 288;
+	return (norm->id & V4L2_STD_625_50) ? 511 : 400;
 }
 
 int cx88_set_scale(struct cx88_core *core, unsigned int width, unsigned int height,
@@ -699,7 +701,7 @@ int cx88_set_scale(struct cx88_core *core, unsigned int width, unsigned int heig
 	value &= 0x3fe;
 	cx_write(MO_HDELAY_EVEN,  value);
 	cx_write(MO_HDELAY_ODD,   value);
-	dprintk(1,"set_scale: hdelay  0x%04x\n", value);
+	dprintk(1,"set_scale: hdelay  0x%04x (width %d)\n", value,swidth);
 
 	value = (swidth * 4096 / width) - 4096;
 	cx_write(MO_HSCALE_EVEN,  value);
@@ -792,6 +794,11 @@ int cx88_start_audio_dma(struct cx88_core *core)
 {
 	/* constant 128 made buzz in analog Nicam-stereo for bigger fifo_size */
 	int bpl = cx88_sram_channels[SRAM_CH25].fifo_size/4;
+
+	/* If downstream RISC is enabled, bail out; ALSA is managing DMA */
+	if (cx_read(MO_AUD_DMACNTRL) & 0x10)
+		return 0;
+
 	/* setup fifo + format */
 	cx88_sram_channel_setup(core, &cx88_sram_channels[SRAM_CH25], bpl, 0);
 	cx88_sram_channel_setup(core, &cx88_sram_channels[SRAM_CH26], bpl, 0);
@@ -801,11 +808,16 @@ int cx88_start_audio_dma(struct cx88_core *core)
 
 	/* start dma */
 	cx_write(MO_AUD_DMACNTRL, 0x0003); /* Up and Down fifo enable */
+
 	return 0;
 }
 
 int cx88_stop_audio_dma(struct cx88_core *core)
 {
+	/* If downstream RISC is enabled, bail out; ALSA is managing DMA */
+	if (cx_read(MO_AUD_DMACNTRL) & 0x10)
+		return 0;
+
 	/* stop dma */
 	cx_write(MO_AUD_DMACNTRL, 0x0000);
 
@@ -927,14 +939,14 @@ int cx88_set_tvnorm(struct cx88_core *core, struct cx88_tvnorm *norm)
 	// htotal
 	tmp64 = norm_htotal(norm) * (u64)vdec_clock;
 	do_div(tmp64, fsc8);
-	htotal = (u32)tmp64 | (norm_notchfilter(norm) << 11);
+	htotal = (u32)tmp64 | (HLNotchFilter4xFsc << 11);
 	dprintk(1,"set_tvnorm: MO_HTOTAL        0x%08x [old=0x%08x,htotal=%d]\n",
 		htotal, cx_read(MO_HTOTAL), (u32)tmp64);
 	cx_write(MO_HTOTAL, htotal);
 
-	// vbi stuff
-	cx_write(MO_VBI_PACKET, ((1 << 11) | /* (norm_vdelay(norm)   << 11) | */
-				 norm_vbipack(norm)));
+	// vbi stuff, set vbi offset to 10 (for 20 Clk*2 pixels), this makes
+	// the effective vbi offset ~244 samples, the same as the Bt8x8
+	cx_write(MO_VBI_PACKET, (10<<11) | norm_vbipack(norm));
 
 	// this is needed as well to set all tvnorm parameter
 	cx88_set_scale(core, 320, 240, V4L2_FIELD_INTERLACED);
@@ -1031,8 +1043,8 @@ static int get_ressources(struct cx88_core *core, struct pci_dev *pci)
 			       pci_resource_len(pci,0),
 			       core->name))
 		return 0;
-	printk(KERN_ERR "%s: can't get MMIO memory @ 0x%lx\n",
-	       core->name,pci_resource_start(pci,0));
+	printk(KERN_ERR "%s: can't get MMIO memory @ 0x%llx\n",
+	       core->name,(unsigned long long)pci_resource_start(pci,0));
 	return -EBUSY;
 }
 
@@ -1123,6 +1135,7 @@ struct cx88_core* cx88_core_get(struct pci_dev *pci)
 
 	/* init hardware */
 	cx88_reset(core);
+	cx88_card_setup_pre_i2c(core);
 	cx88_i2c_init(core,pci);
 	cx88_call_i2c_clients (core, TUNER_SET_STANDBY, NULL);
 	cx88_card_setup(core);
@@ -1149,7 +1162,7 @@ void cx88_core_put(struct cx88_core *core, struct pci_dev *pci)
 	mutex_lock(&devlist);
 	cx88_ir_fini(core);
 	if (0 == core->i2c_rc)
-		i2c_bit_del_bus(&core->i2c_adap);
+		i2c_del_adapter(&core->i2c_adap);
 	list_del(&core->devlist);
 	iounmap(core->lmmio);
 	cx88_devcount--;
@@ -1181,8 +1194,6 @@ EXPORT_SYMBOL(cx88_set_scale);
 EXPORT_SYMBOL(cx88_vdev_init);
 EXPORT_SYMBOL(cx88_core_get);
 EXPORT_SYMBOL(cx88_core_put);
-EXPORT_SYMBOL(cx88_start_audio_dma);
-EXPORT_SYMBOL(cx88_stop_audio_dma);
 
 /*
  * Local variables:

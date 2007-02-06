@@ -33,7 +33,6 @@
 #include <linux/utsname.h>
 #include <linux/vfs.h>
 #include <linux/vmalloc.h>
-#include <linux/vs_cvirt.h>
 
 #include <asm/errno.h>
 #include <asm/pgalloc.h>
@@ -146,7 +145,7 @@ static int hpux_ustat(dev_t dev, struct hpux_ustat __user *ubuf)
 	s = user_get_super(dev);
 	if (s == NULL)
 		goto out;
-	err = vfs_statfs(s, &sbuf);
+	err = vfs_statfs(s->s_root, &sbuf);
 	drop_super(s);
 	if (err)
 		goto out;
@@ -187,12 +186,12 @@ struct hpux_statfs {
      int16_t f_pad;
 };
 
-static int vfs_statfs_hpux(struct super_block *sb, struct hpux_statfs *buf)
+static int vfs_statfs_hpux(struct dentry *dentry, struct hpux_statfs *buf)
 {
 	struct kstatfs st;
 	int retval;
 	
-	retval = vfs_statfs(sb, &st);
+	retval = vfs_statfs(dentry, &st);
 	if (retval)
 		return retval;
 
@@ -220,7 +219,7 @@ asmlinkage long hpux_statfs(const char __user *path,
 	error = user_path_walk(path, &nd);
 	if (!error) {
 		struct hpux_statfs tmp;
-		error = vfs_statfs_hpux(nd.dentry->d_inode->i_sb, &tmp);
+		error = vfs_statfs_hpux(nd.dentry, &tmp);
 		if (!error && copy_to_user(buf, &tmp, sizeof(tmp)))
 			error = -EFAULT;
 		path_release(&nd);
@@ -238,7 +237,7 @@ asmlinkage long hpux_fstatfs(unsigned int fd, struct hpux_statfs __user * buf)
 	file = fget(fd);
 	if (!file)
 		goto out;
-	error = vfs_statfs_hpux(file->f_dentry->d_inode->i_sb, &tmp);
+	error = vfs_statfs_hpux(file->f_path.dentry, &tmp);
 	if (!error && copy_to_user(buf, &tmp, sizeof(tmp)))
 		error = -EFAULT;
 	fput(file);
@@ -267,16 +266,21 @@ static int hpux_uname(struct hpux_utsname *name)
 
 	down_read(&uts_sem);
 
-	error = __copy_to_user(&name->sysname,vx_new_uts(sysname),HPUX_UTSLEN-1);
-	error |= __put_user(0,name->sysname+HPUX_UTSLEN-1);
-	error |= __copy_to_user(&name->nodename,vx_new_uts(nodename),HPUX_UTSLEN-1);
-	error |= __put_user(0,name->nodename+HPUX_UTSLEN-1);
-	error |= __copy_to_user(&name->release,vx_new_uts(release),HPUX_UTSLEN-1);
-	error |= __put_user(0,name->release+HPUX_UTSLEN-1);
-	error |= __copy_to_user(&name->version,vx_new_uts(version),HPUX_UTSLEN-1);
-	error |= __put_user(0,name->version+HPUX_UTSLEN-1);
-	error |= __copy_to_user(&name->machine,vx_new_uts(machine),HPUX_UTSLEN-1);
-	error |= __put_user(0,name->machine+HPUX_UTSLEN-1);
+	error = __copy_to_user(&name->sysname, &utsname()->sysname,
+			       HPUX_UTSLEN - 1);
+	error |= __put_user(0, name->sysname + HPUX_UTSLEN - 1);
+	error |= __copy_to_user(&name->nodename, &utsname()->nodename,
+				HPUX_UTSLEN - 1);
+	error |= __put_user(0, name->nodename + HPUX_UTSLEN - 1);
+	error |= __copy_to_user(&name->release, &utsname()->release,
+				HPUX_UTSLEN - 1);
+	error |= __put_user(0, name->release + HPUX_UTSLEN - 1);
+	error |= __copy_to_user(&name->version, &utsname()->version,
+				HPUX_UTSLEN - 1);
+	error |= __put_user(0, name->version + HPUX_UTSLEN - 1);
+	error |= __copy_to_user(&name->machine, &utsname()->machine,
+				HPUX_UTSLEN - 1);
+	error |= __put_user(0, name->machine + HPUX_UTSLEN - 1);
 
 	up_read(&uts_sem);
 
@@ -374,8 +378,8 @@ int hpux_utssys(char *ubuf, int n, int type)
 		/*  TODO:  print a warning about using this?  */
 		down_write(&uts_sem);
 		error = -EFAULT;
-		if (!copy_from_user(vx_new_uts(sysname), ubuf, len)) {
-			vx_new_uts(sysname)[len] = 0;
+		if (!copy_from_user(utsname()->sysname, ubuf, len)) {
+			utsname()->sysname[len] = 0;
 			error = 0;
 		}
 		up_write(&uts_sem);
@@ -401,8 +405,8 @@ int hpux_utssys(char *ubuf, int n, int type)
 		/*  TODO:  print a warning about this?  */
 		down_write(&uts_sem);
 		error = -EFAULT;
-		if (!copy_from_user(vx_new_uts(release), ubuf, len)) {
-			vx_new_uts(release)[len] = 0;
+		if (!copy_from_user(utsname()->release, ubuf, len)) {
+			utsname()->release[len] = 0;
 			error = 0;
 		}
 		up_write(&uts_sem);
@@ -423,13 +427,13 @@ int hpux_getdomainname(char *name, int len)
  	
  	down_read(&uts_sem);
  	
-	nlen = strlen(vx_new_uts(domainname)) + 1;
+	nlen = strlen(utsname()->domainname) + 1;
 
 	if (nlen < len)
 		len = nlen;
 	if(len > __NEW_UTS_LEN)
 		goto done;
-	if(copy_to_user(name, vx_new_uts(domainname), len))
+	if(copy_to_user(name, utsname()->domainname, len))
 		goto done;
 	err = 0;
 done:
@@ -471,7 +475,7 @@ int hpux_sysfs(int opcode, unsigned long arg1, unsigned long arg2)
 		printk(KERN_DEBUG "len of arg1 = %d\n", len);
 		if (len == 0)
 			return 0;
-		fsname = (char *) kmalloc(len, GFP_KERNEL);
+		fsname = kmalloc(len, GFP_KERNEL);
 		if ( !fsname ) {
 			printk(KERN_DEBUG "failed to kmalloc fsname\n");
 			return 0;

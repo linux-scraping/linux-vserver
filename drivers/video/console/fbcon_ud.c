@@ -8,7 +8,6 @@
  *  more details.
  */
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/string.h>
 #include <linux/fb.h>
@@ -416,7 +415,7 @@ static void ud_cursor(struct vc_data *vc, struct fb_info *info, int mode,
 	ops->cursor_reset = 0;
 }
 
-int ud_update_start(struct fb_info *info)
+static int ud_update_start(struct fb_info *info)
 {
 	struct fbcon_ops *ops = info->fbcon_par;
 	int xoffset, yoffset;

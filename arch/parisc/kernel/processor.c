@@ -26,7 +26,6 @@
  *    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  *
  */
-#include <linux/config.h>
 #include <linux/delay.h>
 #include <linux/init.h>
 #include <linux/mm.h>
@@ -144,8 +143,9 @@ static int __init processor_probe(struct parisc_device *dev)
 	p = &cpu_data[cpuid];
 	boot_cpu_data.cpu_count++;
 
-	/* initialize counters */
-	memset(p, 0, sizeof(struct cpuinfo_parisc));
+	/* initialize counters - CPU 0 gets it_value set in time_init() */
+	if (cpuid)
+		memset(p, 0, sizeof(struct cpuinfo_parisc));
 
 	p->loops_per_jiffy = loops_per_jiffy;
 	p->dev = dev;		/* Save IODC data in case we need it */

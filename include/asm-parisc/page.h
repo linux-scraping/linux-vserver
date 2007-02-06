@@ -1,23 +1,14 @@
 #ifndef _PARISC_PAGE_H
 #define _PARISC_PAGE_H
 
-#if !defined(__KERNEL__)
-/* this is for userspace applications (4k page size) */
-# define PAGE_SHIFT	12	/* 4k */
-# define PAGE_SIZE	(1UL << PAGE_SHIFT)
-# define PAGE_MASK	(~(PAGE_SIZE-1))
-#endif
-
-
 #ifdef __KERNEL__
-#include <linux/config.h>
 
 #if defined(CONFIG_PARISC_PAGE_SIZE_4KB)
-# define PAGE_SHIFT	12	/* 4k */
+# define PAGE_SHIFT	12
 #elif defined(CONFIG_PARISC_PAGE_SIZE_16KB)
-# define PAGE_SHIFT	14	/* 16k */
+# define PAGE_SHIFT	14
 #elif defined(CONFIG_PARISC_PAGE_SIZE_64KB)
-# define PAGE_SHIFT	16	/* 64k */
+# define PAGE_SHIFT	16
 #else
 # error "unknown default kernel page size"
 #endif
@@ -35,24 +26,10 @@
 
 struct page;
 
-extern void purge_kernel_dcache_page(unsigned long);
-extern void copy_user_page_asm(void *to, void *from);
-extern void clear_user_page_asm(void *page, unsigned long vaddr);
-
-static inline void
-copy_user_page(void *vto, void *vfrom, unsigned long vaddr, struct page *pg)
-{
-	copy_user_page_asm(vto, vfrom);
-	flush_kernel_dcache_page_asm(vto);
-	/* XXX: ppc flushes icache too, should we? */
-}
-
-static inline void
-clear_user_page(void *page, unsigned long vaddr, struct page *pg)
-{
-	purge_kernel_dcache_page((unsigned long)page);
-	clear_user_page_asm(page, vaddr);
-}
+void copy_user_page_asm(void *to, void *from);
+void copy_user_page(void *vto, void *vfrom, unsigned long vaddr,
+			   struct page *pg);
+void clear_user_page(void *page, unsigned long vaddr, struct page *pg);
 
 /*
  * These are used to make use of C type-checking..
@@ -189,9 +166,9 @@ extern int npmem_ranges;
 #define VM_DATA_DEFAULT_FLAGS	(VM_READ | VM_WRITE | VM_EXEC | \
 				 VM_MAYREAD | VM_MAYWRITE | VM_MAYEXEC)
 
-#endif /* __KERNEL__ */
-
 #include <asm-generic/memory_model.h>
 #include <asm-generic/page.h>
+
+#endif /* __KERNEL__ */
 
 #endif /* _PARISC_PAGE_H */

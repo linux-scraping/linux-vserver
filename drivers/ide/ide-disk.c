@@ -37,7 +37,7 @@
  * Version 1.15		convert all calls to ide_raw_taskfile
  *				since args will return register content.
  * Version 1.16		added suspend-resume-checkpower
- * Version 1.17		do flush on standy, do flush on ATA < ATA6
+ * Version 1.17		do flush on standby, do flush on ATA < ATA6
  *			fix wcache setup.
  */
 
@@ -47,7 +47,6 @@
 
 //#define DEBUG
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/types.h>
 #include <linux/string.h>
@@ -700,7 +699,8 @@ static void idedisk_prepare_flush(request_queue_t *q, struct request *rq)
 		rq->cmd[0] = WIN_FLUSH_CACHE;
 
 
-	rq->flags |= REQ_DRIVE_TASK;
+	rq->cmd_type = REQ_TYPE_ATA_TASK;
+	rq->cmd_flags |= REQ_SOFTBARRIER;
 	rq->buffer = rq->cmd;
 }
 
@@ -741,7 +741,7 @@ static int set_multcount(ide_drive_t *drive, int arg)
 	if (drive->special.b.set_multmode)
 		return -EBUSY;
 	ide_init_drive_cmd (&rq);
-	rq.flags = REQ_DRIVE_CMD;
+	rq.cmd_type = REQ_TYPE_ATA_CMD;
 	drive->mult_req = arg;
 	drive->special.b.set_multmode = 1;
 	(void) ide_do_drive_cmd (drive, &rq, ide_wait);
@@ -777,7 +777,7 @@ static void update_ordered(ide_drive_t *drive)
 		 * not available so we don't need to recheck that.
 		 */
 		capacity = idedisk_capacity(drive);
-		barrier = ide_id_has_flush_cache(id) &&
+		barrier = ide_id_has_flush_cache(id) && !drive->noflush &&
 			(drive->addressing == 0 || capacity <= (1ULL << 28) ||
 			 ide_id_has_flush_cache_ext(id));
 
@@ -1018,7 +1018,6 @@ static void ide_disk_release(struct kref *kref)
 	struct gendisk *g = idkp->disk;
 
 	drive->driver_data = NULL;
-	drive->devfs_name[0] = '\0';
 	g->private_data = NULL;
 	put_disk(g);
 	kfree(idkp);
@@ -1222,7 +1221,6 @@ static int ide_disk_probe(ide_drive_t *drive)
 		drive->attach = 1;
 
 	g->minors = 1 << PARTN_BITS;
-	strcpy(g->devfs_name, drive->devfs_name);
 	g->driverfs_dev = &drive->gendev;
 	g->flags = drive->removable ? GENHD_FL_REMOVABLE : 0;
 	set_capacity(g, idedisk_capacity(drive));

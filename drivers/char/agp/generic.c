@@ -27,7 +27,6 @@
  * TODO:
  * - Allocate more than order 0 pages to avoid too much linear map splitting.
  */
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/pci.h>
 #include <linux/init.h>
@@ -420,6 +419,31 @@ static void agp_v2_parse_one(u32 *requested_mode, u32 *bridge_agpstat, u32 *vga_
 		*requested_mode &= ~AGP2_RESERVED_MASK;
 	}
 
+	/*
+	 * Some dumb bridges are programmed to disobey the AGP2 spec.
+	 * This is likely a BIOS misprogramming rather than poweron default, or
+	 * it would be a lot more common.
+	 * https://bugs.freedesktop.org/show_bug.cgi?id=8816
+	 * AGPv2 spec 6.1.9 states:
+	 *   The RATE field indicates the data transfer rates supported by this
+	 *   device. A.G.P. devices must report all that apply.
+	 * Fix them up as best we can.
+	 */
+	switch (*bridge_agpstat & 7) {
+	case 4:
+		*bridge_agpstat |= (AGPSTAT2_2X | AGPSTAT2_1X);
+		printk(KERN_INFO PFX "BIOS bug. AGP bridge claims to only support x4 rate"
+			"Fixing up support for x2 & x1\n");
+		break;
+	case 2:
+		*bridge_agpstat |= AGPSTAT2_1X;
+		printk(KERN_INFO PFX "BIOS bug. AGP bridge claims to only support x2 rate"
+			"Fixing up support for x1\n");
+		break;
+	default:
+		break;
+	}
+
 	/* Check the speed bits make sense. Only one should be set. */
 	tmp = *requested_mode & 7;
 	switch (tmp) {
@@ -569,25 +593,37 @@ static void agp_v3_parse_one(u32 *requested_mode, u32 *bridge_agpstat, u32 *vga_
 		*bridge_agpstat &= ~(AGPSTAT3_4X | AGPSTAT3_RSVD);
 		goto done;
 
+	} else if (*requested_mode & AGPSTAT3_4X) {
+		*bridge_agpstat &= ~(AGPSTAT3_8X | AGPSTAT3_RSVD);
+		*bridge_agpstat |= AGPSTAT3_4X;
+		goto done;
+
 	} else {
 
 		/*
-		 * If we didn't specify AGPx8, we can only do x4.
-		 * If the hardware can't do x4, we're up shit creek, and never
-		 *  should have got this far.
+		 * If we didn't specify an AGP mode, we see if both
+		 * the graphics card, and the bridge can do x8, and use if so.
+		 * If not, we fall back to x4 mode.
 		 */
-		*bridge_agpstat &= ~(AGPSTAT3_8X | AGPSTAT3_RSVD);
-		if ((*bridge_agpstat & AGPSTAT3_4X) && (*vga_agpstat & AGPSTAT3_4X))
-			*bridge_agpstat |= AGPSTAT3_4X;
-		else {
-			printk(KERN_INFO PFX "Badness. Don't know which AGP mode to set. "
-							"[bridge_agpstat:%x vga_agpstat:%x fell back to:- bridge_agpstat:%x vga_agpstat:%x]\n",
-							origbridge, origvga, *bridge_agpstat, *vga_agpstat);
-			if (!(*bridge_agpstat & AGPSTAT3_4X))
-				printk(KERN_INFO PFX "Bridge couldn't do AGP x4.\n");
-			if (!(*vga_agpstat & AGPSTAT3_4X))
-				printk(KERN_INFO PFX "Graphic card couldn't do AGP x4.\n");
-			return;
+		if ((*bridge_agpstat & AGPSTAT3_8X) && (*vga_agpstat & AGPSTAT3_8X)) {
+			printk(KERN_INFO PFX "No AGP mode specified. Setting to highest mode "
+				"supported by bridge & card (x8).\n");
+			*bridge_agpstat &= ~(AGPSTAT3_4X | AGPSTAT3_RSVD);
+			*vga_agpstat &= ~(AGPSTAT3_4X | AGPSTAT3_RSVD);
+		} else {
+			printk(KERN_INFO PFX "Fell back to AGPx4 mode because");
+			if (!(*bridge_agpstat & AGPSTAT3_8X)) {
+				printk(KERN_INFO PFX "bridge couldn't do x8. bridge_agpstat:%x (orig=%x)\n",
+					*bridge_agpstat, origbridge);
+				*bridge_agpstat &= ~(AGPSTAT3_8X | AGPSTAT3_RSVD);
+				*bridge_agpstat |= AGPSTAT3_4X;
+			}
+			if (!(*vga_agpstat & AGPSTAT3_8X)) {
+				printk(KERN_INFO PFX "graphics card couldn't do x8. vga_agpstat:%x (orig=%x)\n",
+					*vga_agpstat, origvga);
+				*vga_agpstat &= ~(AGPSTAT3_8X | AGPSTAT3_RSVD);
+				*vga_agpstat |= AGPSTAT3_4X;
+			}
 		}
 	}
 
@@ -809,12 +845,10 @@ int agp_generic_create_gatt_table(struct agp_bridge_data *bridge)
 				case U32_APER_SIZE:
 					bridge->current_size = A_IDX32(bridge);
 					break;
-					/* This case will never really happen. */
+				/* These cases will never really happen. */
 				case FIXED_APER_SIZE:
 				case LVL2_APER_SIZE:
 				default:
-					bridge->current_size =
-					    bridge->current_size;
 					break;
 				}
 				temp = bridge->current_size;
@@ -931,6 +965,9 @@ int agp_generic_insert_memory(struct agp_memory * mem, off_t pg_start, int type)
 	if (!bridge)
 		return -EINVAL;
 
+	if (mem->page_count == 0)
+		return 0;
+
 	temp = bridge->current_size;
 
 	switch (bridge->driver->size_type) {
@@ -982,8 +1019,8 @@ int agp_generic_insert_memory(struct agp_memory * mem, off_t pg_start, int type)
 
 	for (i = 0, j = pg_start; i < mem->page_count; i++, j++) {
 		writel(bridge->driver->mask_memory(bridge, mem->memory[i], mem->type), bridge->gatt_table+j);
-		readl(bridge->gatt_table+j);	/* PCI Posting. */
 	}
+	readl(bridge->gatt_table+j-1);	/* PCI Posting. */
 
 	bridge->driver->tlb_flush(mem);
 	return 0;
@@ -1000,6 +1037,9 @@ int agp_generic_remove_memory(struct agp_memory *mem, off_t pg_start, int type)
 	if (!bridge)
 		return -EINVAL;
 
+	if (mem->page_count == 0)
+		return 0;
+
 	if (type != 0 || mem->type != 0) {
 		/* The generic routines know nothing of memory types */
 		return -EINVAL;
@@ -1008,10 +1048,9 @@ int agp_generic_remove_memory(struct agp_memory *mem, off_t pg_start, int type)
 	/* AK: bogus, should encode addresses > 4GB */
 	for (i = pg_start; i < (mem->page_count + pg_start); i++) {
 		writel(bridge->scratch_page, bridge->gatt_table+i);
-		readl(bridge->gatt_table+i);	/* PCI Posting. */
 	}
+	readl(bridge->gatt_table+i-1);	/* PCI Posting. */
 
-	global_cache_flush();
 	bridge->driver->tlb_flush(mem);
 	return 0;
 }
@@ -1045,7 +1084,7 @@ void *agp_generic_alloc_page(struct agp_bridge_data *bridge)
 {
 	struct page * page;
 
-	page = alloc_page(GFP_KERNEL);
+	page = alloc_page(GFP_KERNEL | GFP_DMA32);
 	if (page == NULL)
 		return NULL;
 

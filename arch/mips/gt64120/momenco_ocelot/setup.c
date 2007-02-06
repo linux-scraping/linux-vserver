@@ -56,7 +56,6 @@
 #include <asm/irq.h>
 #include <asm/pci.h>
 #include <asm/processor.h>
-#include <asm/ptrace.h>
 #include <asm/reboot.h>
 #include <asm/traps.h>
 #include <linux/bootmem.h>
@@ -71,7 +70,6 @@ extern void momenco_ocelot_restart(char *command);
 extern void momenco_ocelot_halt(void);
 extern void momenco_ocelot_power_off(void);
 
-extern void gt64120_time_init(void);
 extern void momenco_ocelot_irq_setup(void);
 
 static char reset_reason;
@@ -152,20 +150,18 @@ void PMON_v2_setup()
 	gt64120_base = 0xe0000000;
 }
 
-void __init plat_setup(void)
+void __init plat_mem_setup(void)
 {
 	void (*l3func)(unsigned long)=KSEG1ADDR(&setup_l3cache);
 	unsigned int tmpword;
-
-	board_time_init = gt64120_time_init;
 
 	_machine_restart = momenco_ocelot_restart;
 	_machine_halt = momenco_ocelot_halt;
 	pm_power_off = momenco_ocelot_power_off;
 
 	/*
-	 * initrd_start = (ulong)ocelot_initrd_start;
-	 * initrd_end = (ulong)ocelot_initrd_start + (ulong)ocelot_initrd_size;
+	 * initrd_start = (unsigned long)ocelot_initrd_start;
+	 * initrd_end = (unsigned long)ocelot_initrd_start + (ulong)ocelot_initrd_size;
 	 * initrd_below_start_ok = 1;
 	 */
 

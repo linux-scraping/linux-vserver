@@ -6,8 +6,7 @@ config INFINIBAND_IPOIB
 	  transports IP packets over InfiniBand so you can use your IB
 	  device as a fancy NIC.
 
-	  The IPoIB protocol is defined by the IETF ipoib working
-	  group: <http://www.ietf.org/html.charters/ipoib-charter.html>.
+	  See Documentation/infiniband/ipoib.txt for more information
 
 config INFINIBAND_IPOIB_DEBUG
 	bool "IP-over-InfiniBand debugging" if EMBEDDED
@@ -27,7 +26,7 @@ config INFINIBAND_IPOIB_DEBUG_DATA
 	bool "IP-over-InfiniBand data path debugging"
 	depends on INFINIBAND_IPOIB_DEBUG
 	---help---
-	  This option compiles debugging code into the the data path
+	  This option compiles debugging code into the data path
 	  of the IPoIB driver.  The output can be turned on via the
 	  data_debug_level module parameter; however, even with output
 	  turned off, this debugging code will have some performance

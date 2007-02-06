@@ -81,7 +81,6 @@
 #include <linux/errno.h>
 #include <linux/string.h>
 #include <linux/mm.h>
-#include <linux/tty.h>
 #include <linux/slab.h>
 #include <linux/delay.h>
 #include <linux/zorro.h>
@@ -109,8 +108,6 @@ static void cv64_dump(void);
 
 #define wb_64(regs,reg,dat) (*(((volatile unsigned char *)regs) + reg) = dat)
 #define rb_64(regs, reg) (*(((volatile unsigned char *)regs) + reg))
-
-#define ww_64(regs,reg,dat) (*((volatile unsigned short *)(regs + reg) = dat)
 
 struct cyberfb_par {
 	struct fb_var_screeninfo var;
@@ -1056,6 +1053,8 @@ int __init cyberfb_init(void)
 
 	    if (register_framebuffer(&fb_info) < 0) {
 		    DPRINTK("EXIT - register_framebuffer failed\n");
+			if (CyberBase)
+				iounmap(CyberBase);
 		    release_mem_region(CyberMem_phys, 0x400000);
 		    release_mem_region(CyberRegs_phys, 0x10000);
 		    return -EINVAL;

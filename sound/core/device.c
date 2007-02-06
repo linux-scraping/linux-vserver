@@ -63,13 +63,15 @@ int snd_device_new(struct snd_card *card, snd_device_type_t type,
 	return 0;
 }
 
+EXPORT_SYMBOL(snd_device_new);
+
 /**
  * snd_device_free - release the device from the card
  * @card: the card instance
  * @device_data: the data pointer to release
  *
  * Removes the device from the list on the card and invokes the
- * callback, dev_unregister or dev_free, corresponding to the state.
+ * callbacks, dev_disconnect and dev_free, corresponding to the state.
  * Then release the device.
  *
  * Returns zero if successful, or a negative error code on failure or if the
@@ -88,16 +90,14 @@ int snd_device_free(struct snd_card *card, void *device_data)
 			continue;
 		/* unlink */
 		list_del(&dev->list);
-		if ((dev->state == SNDRV_DEV_REGISTERED ||
-		     dev->state == SNDRV_DEV_DISCONNECTED) &&
-		    dev->ops->dev_unregister) {
-			if (dev->ops->dev_unregister(dev))
-				snd_printk(KERN_ERR "device unregister failure\n");
-		} else {
-			if (dev->ops->dev_free) {
-				if (dev->ops->dev_free(dev))
-					snd_printk(KERN_ERR "device free failure\n");
-			}
+		if (dev->state == SNDRV_DEV_REGISTERED &&
+		    dev->ops->dev_disconnect)
+			if (dev->ops->dev_disconnect(dev))
+				snd_printk(KERN_ERR
+					   "device disconnect failure\n");
+		if (dev->ops->dev_free) {
+			if (dev->ops->dev_free(dev))
+				snd_printk(KERN_ERR "device free failure\n");
 		}
 		kfree(dev);
 		return 0;
@@ -106,6 +106,8 @@ int snd_device_free(struct snd_card *card, void *device_data)
 		   __builtin_return_address(0));
 	return -ENXIO;
 }
+
+EXPORT_SYMBOL(snd_device_free);
 
 /**
  * snd_device_disconnect - disconnect the device
@@ -181,6 +183,8 @@ int snd_device_register(struct snd_card *card, void *device_data)
 	snd_BUG();
 	return -ENXIO;
 }
+
+EXPORT_SYMBOL(snd_device_register);
 
 /*
  * register all the devices on the card.

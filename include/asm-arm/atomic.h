@@ -11,7 +11,6 @@
 #ifndef __ASM_ARM_ATOMIC_H
 #define __ASM_ARM_ATOMIC_H
 
-#include <linux/config.h>
 #include <linux/compiler.h>
 
 typedef struct { volatile int counter; } atomic_t;
@@ -129,10 +128,10 @@ static inline int atomic_add_return(int i, atomic_t *v)
 	unsigned long flags;
 	int val;
 
-	local_irq_save(flags);
+	raw_local_irq_save(flags);
 	val = v->counter;
 	v->counter = val += i;
-	local_irq_restore(flags);
+	raw_local_irq_restore(flags);
 
 	return val;
 }
@@ -142,10 +141,10 @@ static inline int atomic_sub_return(int i, atomic_t *v)
 	unsigned long flags;
 	int val;
 
-	local_irq_save(flags);
+	raw_local_irq_save(flags);
 	val = v->counter;
 	v->counter = val -= i;
-	local_irq_restore(flags);
+	raw_local_irq_restore(flags);
 
 	return val;
 }
@@ -155,11 +154,11 @@ static inline int atomic_cmpxchg(atomic_t *v, int old, int new)
 	int ret;
 	unsigned long flags;
 
-	local_irq_save(flags);
+	raw_local_irq_save(flags);
 	ret = v->counter;
 	if (likely(ret == old))
 		v->counter = new;
-	local_irq_restore(flags);
+	raw_local_irq_restore(flags);
 
 	return ret;
 }
@@ -168,9 +167,9 @@ static inline void atomic_clear_mask(unsigned long mask, unsigned long *addr)
 {
 	unsigned long flags;
 
-	local_irq_save(flags);
+	raw_local_irq_save(flags);
 	*addr &= ~mask;
-	local_irq_restore(flags);
+	raw_local_irq_restore(flags);
 }
 
 #endif /* __LINUX_ARM_ARCH__ */

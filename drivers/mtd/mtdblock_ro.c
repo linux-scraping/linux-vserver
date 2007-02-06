@@ -33,21 +33,17 @@ static int mtdblock_writesect(struct mtd_blktrans_dev *dev,
 
 static void mtdblock_add_mtd(struct mtd_blktrans_ops *tr, struct mtd_info *mtd)
 {
-	struct mtd_blktrans_dev *dev = kmalloc(sizeof(*dev), GFP_KERNEL);
+	struct mtd_blktrans_dev *dev = kzalloc(sizeof(*dev), GFP_KERNEL);
 
 	if (!dev)
 		return;
 
-	memset(dev, 0, sizeof(*dev));
-
 	dev->mtd = mtd;
 	dev->devnum = mtd->index;
-	dev->blksize = 512;
+
 	dev->size = mtd->size >> 9;
 	dev->tr = tr;
-	if ((mtd->flags & (MTD_CLEAR_BITS|MTD_SET_BITS|MTD_WRITEABLE)) !=
-	    (MTD_CLEAR_BITS|MTD_SET_BITS|MTD_WRITEABLE))
-		dev->readonly = 1;
+	dev->readonly = 1;
 
 	add_mtd_blktrans_dev(dev);
 }
@@ -62,6 +58,7 @@ static struct mtd_blktrans_ops mtdblock_tr = {
 	.name		= "mtdblock",
 	.major		= 31,
 	.part_bits	= 0,
+	.blksize 	= 512,
 	.readsect	= mtdblock_readsect,
 	.writesect	= mtdblock_writesect,
 	.add_mtd	= mtdblock_add_mtd,

@@ -235,7 +235,35 @@ config IPW2200_MONITOR
 	  promiscuous mode via the Wireless Tool's Monitor mode.  While in this
 	  mode, no packets can be sent.
 
-config IPW_QOS
+config IPW2200_RADIOTAP
+	bool "Enable radiotap format 802.11 raw packet support"
+	depends on IPW2200_MONITOR
+
+config IPW2200_PROMISCUOUS
+	bool "Enable creation of a RF radiotap promiscuous interface"
+	depends on IPW2200_MONITOR
+	select IPW2200_RADIOTAP
+	---help---
+          Enables the creation of a second interface prefixed 'rtap'. 
+          This second interface will provide every received in radiotap
+	  format.
+
+          This is useful for performing wireless network analysis while
+          maintaining an active association.
+
+          Example usage:
+
+            % modprobe ipw2200 rtap_iface=1
+            % ifconfig rtap0 up
+            % tethereal -i rtap0
+
+          If you do not specify 'rtap_iface=1' as a module parameter then 
+          the rtap interface will not be created and you will need to turn 
+          it on via sysfs:
+	
+            % echo 1 > /sys/bus/pci/drivers/ipw2200/*/rtap_iface
+
+config IPW2200_QOS
         bool "Enable QoS support"
         depends on IPW2200 && EXPERIMENTAL
 
@@ -243,25 +271,14 @@ config IPW2200_DEBUG
 	bool "Enable full debugging output in IPW2200 module."
 	depends on IPW2200
 	---help---
-	  This option will enable debug tracing output for the IPW2200.  
+	  This option will enable low level debug tracing output for IPW2200.
 
-	  This will result in the kernel module being ~100k larger.  You can 
-	  control which debug output is sent to the kernel log by setting the 
-	  value in 
+	  Note, normal debug code is already compiled in. This low level
+	  debug option enables debug on hot paths (e.g Tx, Rx, ISR) and
+	  will result in the kernel module being ~70 larger.  Most users
+	  will typically not need this high verbosity debug information.
 
-	  /sys/bus/pci/drivers/ipw2200/debug_level
-
-	  This entry will only exist if this option is enabled.
-
-	  To set a value, simply echo an 8-byte hex value to the same file:
-
-	  % echo 0x00000FFO > /sys/bus/pci/drivers/ipw2200/debug_level
-
-	  You can find the list of debug mask values in 
-	  drivers/net/wireless/ipw2200.h
-
-	  If you are not trying to debug or develop the IPW2200 driver, you 
-	  most likely want to say N here.
+	  If you are not sure, say N here.
 
 config AIRO
 	tristate "Cisco/Aironet 34X/35X/4500/4800 ISA and PCI cards"
@@ -284,7 +301,7 @@ config HERMES
 	tristate "Hermes chipset 802.11b support (Orinoco/Prism2/Symbol)"
 	depends on NET_RADIO && (PPC_PMAC || PCI || PCMCIA)
 	---help---
-	  A driver for 802.11b wireless cards based based on the "Hermes" or
+	  A driver for 802.11b wireless cards based on the "Hermes" or
 	  Intersil HFA384x (Prism 2) MAC controller.  This includes the vast
 	  majority of the PCMCIA 802.11b cards (which are nearly all rebadges)
 	  - except for the Cisco/Aironet cards.  Cards supported include the
@@ -419,6 +436,7 @@ config AIRO_CS
 	tristate "Cisco/Aironet 34X/35X/4500/4800 PCMCIA cards"
 	depends on NET_RADIO && PCMCIA && (BROKEN || !M32R)
 	select CRYPTO
+	select CRYPTO_AES
 	---help---
 	  This is the standard Linux driver to support Cisco/Aironet PCMCIA
 	  802.11 wireless cards.  This driver is the same as the Aironet
@@ -503,8 +521,26 @@ config PRISM54
 	  say M here and read <file:Documentation/modules.txt>.  The module
 	  will be called prism54.ko.
 
+config USB_ZD1201
+	tristate "USB ZD1201 based Wireless device support"
+	depends on USB && NET_RADIO
+	select FW_LOADER
+	---help---
+	  Say Y if you want to use wireless LAN adapters based on the ZyDAS
+	  ZD1201 chip.
+
+	  This driver makes the adapter appear as a normal Ethernet interface,
+	  typically on wlan0.
+
+	  The zd1201 device requires external firmware to be loaded.
+	  This can be found at http://linux-lc100020.sourceforge.net/
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called zd1201.
+
 source "drivers/net/wireless/hostap/Kconfig"
 source "drivers/net/wireless/bcm43xx/Kconfig"
+source "drivers/net/wireless/zd1211rw/Kconfig"
 
 # yes, this works even when no drivers are selected
 config NET_WIRELESS

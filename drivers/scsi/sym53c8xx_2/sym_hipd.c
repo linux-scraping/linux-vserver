@@ -1276,8 +1276,7 @@ static struct sym_chip sym_dev_table[] = {
  FE_RAM|FE_IO256|FE_LEDC}
 };
 
-#define sym_num_devs \
-	(sizeof(sym_dev_table) / sizeof(sym_dev_table[0]))
+#define sym_num_devs (ARRAY_SIZE(sym_dev_table))
 
 /*
  *  Look up the chip table.
@@ -5546,7 +5545,7 @@ int sym_hcb_attach(struct Scsi_Host *shost, struct sym_fw *fw, struct sym_nvram 
 	/*
 	 *  Allocate the array of lists of CCBs hashed by DSA.
 	 */
-	np->ccbh = kcalloc(sizeof(struct sym_ccb **), CCB_HASH_SIZE, GFP_KERNEL);
+	np->ccbh = kcalloc(CCB_HASH_SIZE, sizeof(struct sym_ccb **), GFP_KERNEL);
 	if (!np->ccbh)
 		goto attach_failed;
 

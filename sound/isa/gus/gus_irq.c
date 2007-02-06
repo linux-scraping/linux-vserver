@@ -30,7 +30,7 @@
 #define STAT_ADD(x)	while (0) { ; }
 #endif
 
-irqreturn_t snd_gus_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+irqreturn_t snd_gus_interrupt(int irq, void *dev_id)
 {
 	struct snd_gus_card * gus = dev_id;
 	unsigned char status;
@@ -136,7 +136,7 @@ void snd_gus_irq_profile_init(struct snd_gus_card *gus)
 	struct snd_info_entry *entry;
 
 	if (! snd_card_proc_new(gus->card, "gusirq", &entry))
-		snd_info_set_text_ops(entry, gus, 1024, snd_gus_irq_info_read);
+		snd_info_set_text_ops(entry, gus, snd_gus_irq_info_read);
 }
 
 #endif

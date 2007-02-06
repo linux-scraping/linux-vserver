@@ -10,7 +10,6 @@
  *		"A Kernel Model for Precision Timekeeping" by Dave Mills
  */
 
-#include <linux/config.h>
 #include <linux/errno.h>
 #include <linux/module.h>
 #include <linux/sched.h>
@@ -26,8 +25,6 @@
 #include <asm/io.h>
 
 #define	TICK_SIZE (tick_nsec / 1000)
-
-extern unsigned long wall_jiffies;
 
 
 static inline int set_rtc_mmss(unsigned long nowtime)
@@ -52,12 +49,12 @@ static irqreturn_t timer_interrupt(int irq, void *dummy, struct pt_regs * regs)
 
 	write_seqlock(&xtime_lock);
 
-	do_timer(regs);
+	do_timer(1);
 #ifndef CONFIG_SMP
 	update_process_times(user_mode(regs));
 #endif
 	if (current->pid)
-		profile_tick(CPU_PROFILING, regs);
+		profile_tick(CPU_PROFILING);
 
 	/*
 	 * If we have an externally synchronized Linux clock, then update
@@ -125,15 +122,12 @@ void time_init(void)
 void do_gettimeofday(struct timeval *tv)
 {
 	unsigned long flags;
-	unsigned long lost, seq;
+	unsigned long seq;
 	unsigned long usec, sec;
 
 	do {
 		seq = read_seqbegin_irqsave(&xtime_lock, flags);
 		usec = mach_gettimeoffset ? mach_gettimeoffset() : 0;
-		lost = jiffies - wall_jiffies;
-		if (lost)
-			usec += lost * (1000000 / HZ);
 		sec = xtime.tv_sec;
 		usec += (xtime.tv_nsec / 1000);
 	} while (read_seqretry_irqrestore(&xtime_lock, seq, flags));

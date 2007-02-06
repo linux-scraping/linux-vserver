@@ -8,7 +8,6 @@
  * Copyright (C) 2002, 2003 David S. Miller (davem@redhat.com)
  */
 
-#include <linux/config.h>
 #include <linux/init.h>
 #include <linux/fs.h>
 #include <linux/mm.h>
@@ -52,6 +51,11 @@ pte_t *huge_pte_offset(struct mm_struct *mm, unsigned long addr)
 			pte = pte_offset_map(pmd, addr);
 	}
 	return pte;
+}
+
+int huge_pmd_unshare(struct mm_struct *mm, unsigned long *addr, pte_t *ptep)
+{
+	return 0;
 }
 
 void set_huge_pte_at(struct mm_struct *mm, unsigned long addr,

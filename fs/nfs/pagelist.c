@@ -9,7 +9,6 @@
  *
  */
 
-#include <linux/config.h>
 #include <linux/slab.h>
 #include <linux/file.h>
 #include <linux/sunrpc/clnt.h>
@@ -18,16 +17,17 @@
 #include <linux/nfs_page.h>
 #include <linux/nfs_fs.h>
 #include <linux/nfs_mount.h>
+#include <linux/writeback.h>
 
 #define NFS_PARANOIA 1
 
-static kmem_cache_t *nfs_page_cachep;
+static struct kmem_cache *nfs_page_cachep;
 
 static inline struct nfs_page *
 nfs_page_alloc(void)
 {
 	struct nfs_page	*p;
-	p = kmem_cache_alloc(nfs_page_cachep, SLAB_KERNEL);
+	p = kmem_cache_alloc(nfs_page_cachep, GFP_KERNEL);
 	if (p) {
 		memset(p, 0, sizeof(*p));
 		INIT_LIST_HEAD(&p->wb_list);
@@ -269,8 +269,81 @@ nfs_coalesce_requests(struct list_head *head, struct list_head *dst,
 
 #define NFS_SCAN_MAXENTRIES 16
 /**
- * nfs_scan_lock_dirty - Scan the radix tree for dirty requests
+ * nfs_scan_dirty - Scan the radix tree for dirty requests
+ * @mapping: pointer to address space
+ * @wbc: writeback_control structure
+ * @dst: Destination list
+ *
+ * Moves elements from one of the inode request lists.
+ * If the number of requests is set to 0, the entire address_space
+ * starting at index idx_start, is scanned.
+ * The requests are *not* checked to ensure that they form a contiguous set.
+ * You must be holding the inode's req_lock when calling this function
+ */
+long nfs_scan_dirty(struct address_space *mapping,
+			struct writeback_control *wbc,
+			struct list_head *dst)
+{
+	struct nfs_inode *nfsi = NFS_I(mapping->host);
+	struct nfs_page *pgvec[NFS_SCAN_MAXENTRIES];
+	struct nfs_page *req;
+	pgoff_t idx_start, idx_end;
+	long res = 0;
+	int found, i;
+
+	if (nfsi->ndirty == 0)
+		return 0;
+	if (wbc->range_cyclic) {
+		idx_start = 0;
+		idx_end = ULONG_MAX;
+	} else if (wbc->range_end == 0) {
+		idx_start = wbc->range_start >> PAGE_CACHE_SHIFT;
+		idx_end = ULONG_MAX;
+	} else {
+		idx_start = wbc->range_start >> PAGE_CACHE_SHIFT;
+		idx_end = wbc->range_end >> PAGE_CACHE_SHIFT;
+	}
+
+	for (;;) {
+		unsigned int toscan = NFS_SCAN_MAXENTRIES;
+
+		found = radix_tree_gang_lookup_tag(&nfsi->nfs_page_tree,
+				(void **)&pgvec[0], idx_start, toscan,
+				NFS_PAGE_TAG_DIRTY);
+
+		/* Did we make progress? */
+		if (found <= 0)
+			break;
+
+		for (i = 0; i < found; i++) {
+			req = pgvec[i];
+			if (!wbc->range_cyclic && req->wb_index > idx_end)
+				goto out;
+
+			/* Try to lock request and mark it for writeback */
+			if (!nfs_set_page_writeback_locked(req))
+				goto next;
+			radix_tree_tag_clear(&nfsi->nfs_page_tree,
+					req->wb_index, NFS_PAGE_TAG_DIRTY);
+			nfsi->ndirty--;
+			nfs_list_remove_request(req);
+			nfs_list_add_request(req, dst);
+			res++;
+			if (res == LONG_MAX)
+				goto out;
+next:
+			idx_start = req->wb_index + 1;
+		}
+	}
+out:
+	WARN_ON ((nfsi->ndirty == 0) != list_empty(&nfsi->dirty));
+	return res;
+}
+
+/**
+ * nfs_scan_list - Scan a list for matching requests
  * @nfsi: NFS inode
+ * @head: One of the NFS inode request lists
  * @dst: Destination list
  * @idx_start: lower bound of page->index to scan
  * @npages: idx_start + npages sets the upper bound to scan.
@@ -281,9 +354,9 @@ nfs_coalesce_requests(struct list_head *head, struct list_head *dst,
  * The requests are *not* checked to ensure that they form a contiguous set.
  * You must be holding the inode's req_lock when calling this function
  */
-int
-nfs_scan_lock_dirty(struct nfs_inode *nfsi, struct list_head *dst,
-	      unsigned long idx_start, unsigned int npages)
+int nfs_scan_list(struct nfs_inode *nfsi, struct list_head *head,
+		struct list_head *dst, unsigned long idx_start,
+		unsigned int npages)
 {
 	struct nfs_page *pgvec[NFS_SCAN_MAXENTRIES];
 	struct nfs_page *req;
@@ -298,78 +371,31 @@ nfs_scan_lock_dirty(struct nfs_inode *nfsi, struct list_head *dst,
 		idx_end = idx_start + npages - 1;
 
 	for (;;) {
-		found = radix_tree_gang_lookup_tag(&nfsi->nfs_page_tree,
-				(void **)&pgvec[0], idx_start, NFS_SCAN_MAXENTRIES,
-				NFS_PAGE_TAG_DIRTY);
+		found = radix_tree_gang_lookup(&nfsi->nfs_page_tree,
+				(void **)&pgvec[0], idx_start,
+				NFS_SCAN_MAXENTRIES);
 		if (found <= 0)
 			break;
 		for (i = 0; i < found; i++) {
 			req = pgvec[i];
 			if (req->wb_index > idx_end)
 				goto out;
-
 			idx_start = req->wb_index + 1;
-
+			if (req->wb_list_head != head)
+				continue;
 			if (nfs_set_page_writeback_locked(req)) {
-				radix_tree_tag_clear(&nfsi->nfs_page_tree,
-						req->wb_index, NFS_PAGE_TAG_DIRTY);
 				nfs_list_remove_request(req);
 				nfs_list_add_request(req, dst);
 				res++;
 			}
 		}
+
 	}
 out:
 	return res;
 }
 
-/**
- * nfs_scan_list - Scan a list for matching requests
- * @head: One of the NFS inode request lists
- * @dst: Destination list
- * @idx_start: lower bound of page->index to scan
- * @npages: idx_start + npages sets the upper bound to scan.
- *
- * Moves elements from one of the inode request lists.
- * If the number of requests is set to 0, the entire address_space
- * starting at index idx_start, is scanned.
- * The requests are *not* checked to ensure that they form a contiguous set.
- * You must be holding the inode's req_lock when calling this function
- */
-int
-nfs_scan_list(struct list_head *head, struct list_head *dst,
-	      unsigned long idx_start, unsigned int npages)
-{
-	struct list_head	*pos, *tmp;
-	struct nfs_page		*req;
-	unsigned long		idx_end;
-	int			res;
-
-	res = 0;
-	if (npages == 0)
-		idx_end = ~0;
-	else
-		idx_end = idx_start + npages - 1;
-
-	list_for_each_safe(pos, tmp, head) {
-
-		req = nfs_list_entry(pos);
-
-		if (req->wb_index < idx_start)
-			continue;
-		if (req->wb_index > idx_end)
-			break;
-
-		if (!nfs_set_page_writeback_locked(req))
-			continue;
-		nfs_list_remove_request(req);
-		nfs_list_add_request(req, dst);
-		res++;
-	}
-	return res;
-}
-
-int nfs_init_nfspagecache(void)
+int __init nfs_init_nfspagecache(void)
 {
 	nfs_page_cachep = kmem_cache_create("nfs_page",
 					    sizeof(struct nfs_page),
@@ -383,7 +409,6 @@ int nfs_init_nfspagecache(void)
 
 void nfs_destroy_nfspagecache(void)
 {
-	if (kmem_cache_destroy(nfs_page_cachep))
-		printk(KERN_INFO "nfs_page: not all structures were freed\n");
+	kmem_cache_destroy(nfs_page_cachep);
 }
 

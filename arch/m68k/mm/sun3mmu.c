@@ -46,9 +46,8 @@ void __init paging_init(void)
 	unsigned long address;
 	unsigned long next_pgtable;
 	unsigned long bootmem_end;
-	unsigned long zones_size[3] = {0, 0, 0};
+	unsigned long zones_size[MAX_NR_ZONES] = { 0, };
 	unsigned long size;
-
 
 #ifdef TEST_VERIFY_AREA
 	wp_works_ok = 0;
@@ -92,10 +91,13 @@ void __init paging_init(void)
 	current->mm = NULL;
 
 	/* memory sizing is a hack stolen from motorola.c..  hope it works for us */
-	zones_size[0] = ((unsigned long)high_memory - PAGE_OFFSET) >> PAGE_SHIFT;
-	zones_size[1] = 0;
+	zones_size[ZONE_DMA] = ((unsigned long)high_memory - PAGE_OFFSET) >> PAGE_SHIFT;
 
-	free_area_init(zones_size);
+	/* I really wish I knew why the following change made things better...  -- Sam */
+/*	free_area_init(zones_size); */
+	free_area_init_node(0, NODE_DATA(0), zones_size,
+			    (__pa(PAGE_OFFSET) >> PAGE_SHIFT) + 1, NULL);
+
 
 }
 

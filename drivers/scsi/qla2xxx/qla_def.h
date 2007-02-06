@@ -31,6 +31,8 @@
 #include <scsi/scsi_cmnd.h>
 #include <scsi/scsi_transport_fc.h>
 
+#define QLA2XXX_DRIVER_NAME  "qla2xxx"
+
 /*
  * We have MAILBOX_REGISTER_COUNT sized arrays in a few places,
  * but that's fine as we don't look at the last 24 ones for
@@ -189,22 +191,13 @@ typedef struct srb {
 
 	struct scsi_cmnd *cmd;		/* Linux SCSI command pkt */
 
-	struct timer_list timer;	/* Command timer */
-	atomic_t ref_count;	/* Reference count for this structure */
 	uint16_t flags;
-
-	/* Request state */
-	uint16_t state;
 
 	/* Single transfer DMA context */
 	dma_addr_t dma_handle;
 
 	uint32_t request_sense_length;
 	uint8_t *request_sense_ptr;
-
-	/* SRB magic number */
-	uint16_t magic;
-#define SRB_MAGIC       0x10CB
 } srb_t;
 
 /*
@@ -224,21 +217,6 @@ typedef struct srb {
 #define SRB_FO_CANCEL		BIT_9	/* Command don't need to do failover */
 #define SRB_IOCTL		BIT_10	/* IOCTL command. */
 #define SRB_TAPE		BIT_11	/* FCP2 (Tape) command. */
-
-/*
- * SRB state definitions
- */
-#define SRB_FREE_STATE		0	/*   returned back */
-#define SRB_PENDING_STATE	1	/*   queued in LUN Q */
-#define SRB_ACTIVE_STATE	2	/*   in Active Array */
-#define SRB_DONE_STATE		3	/*   queued in Done Queue */
-#define SRB_RETRY_STATE		4	/*   in Retry Queue */
-#define SRB_SUSPENDED_STATE	5	/*   in suspended state */
-#define SRB_NO_QUEUE_STATE	6	/*   is in between states */
-#define SRB_ACTIVE_TIMEOUT_STATE 7	/*   in Active Array but timed out */
-#define SRB_FAILOVER_STATE	8	/*   in Failover Queue */
-#define SRB_SCSI_RETRY_STATE	9	/*   in Scsi Retry Queue */
-
 
 /*
  * ISP I/O Register Set structure definitions.
@@ -269,6 +247,8 @@ struct device_reg_2xxx {
 #define NVR_DATA_OUT		BIT_2
 #define NVR_SELECT		BIT_1
 #define NVR_CLOCK		BIT_0
+
+#define NVR_WAIT_CNT		20000
 
 	union {
 		struct {
@@ -507,6 +487,7 @@ typedef struct {
 #define MBA_IP_RCV_BUFFER_EMPTY 0x8026	/* IP receive buffer queue empty. */
 #define MBA_IP_HDR_DATA_SPLIT	0x8027	/* IP header/data splitting feature */
 					/* used. */
+#define MBA_TRACE_NOTIFICATION	0x8028	/* Trace/Diagnostic notification. */
 #define MBA_POINT_TO_POINT	0x8030	/* Point to point mode. */
 #define MBA_CMPLT_1_16BIT	0x8031	/* Completion 1 16bit IOSB. */
 #define MBA_CMPLT_2_16BIT	0x8032	/* Completion 2 16bit IOSB. */
@@ -627,8 +608,11 @@ typedef struct {
  */
 #define MBC_SERDES_PARAMS		0x10	/* Serdes Tx Parameters. */
 #define MBC_GET_IOCB_STATUS		0x12	/* Get IOCB status command. */
+#define MBC_PORT_PARAMS			0x1A	/* Port iDMA Parameters. */
 #define MBC_GET_TIMEOUT_PARAMS		0x22	/* Get FW timeouts. */
+#define MBC_TRACE_CONTROL		0x27	/* Trace control command. */
 #define MBC_GEN_SYSTEM_ERROR		0x2a	/* Generate System Error. */
+#define MBC_READ_SFP			0x31	/* Read SFP Data. */
 #define MBC_SET_TIMEOUT_PARAMS		0x32	/* Set FW timeouts. */
 #define MBC_MID_INITIALIZE_FIRMWARE	0x48	/* MID Initialize firmware. */
 #define MBC_MID_GET_VP_DATABASE		0x49	/* MID Get VP Database. */
@@ -637,6 +621,9 @@ typedef struct {
 #define MBC_SEND_RNFT_ELS		0x5e	/* Send RNFT ELS request */
 #define MBC_GET_LINK_PRIV_STATS		0x6d	/* Get link & private data. */
 #define MBC_SET_VENDOR_ID		0x76	/* Set Vendor ID. */
+
+#define TC_ENABLE			4
+#define TC_DISABLE			5
 
 /* Firmware return data sizes */
 #define FCAL_MAP_SIZE	128
@@ -1511,63 +1498,10 @@ typedef struct {
 	port_id_t d_id;
 	uint8_t node_name[WWN_SIZE];
 	uint8_t port_name[WWN_SIZE];
+	uint8_t fabric_port_name[WWN_SIZE];
+	uint16_t fp_speeds;
+	uint16_t fp_speed;
 } sw_info_t;
-
-/*
- * Inquiry command structure.
- */
-#define INQ_DATA_SIZE	36
-
-/*
- * Inquiry mailbox IOCB packet definition.
- */
-typedef struct {
-	union {
-		cmd_a64_entry_t cmd;
-		sts_entry_t rsp;
-		struct cmd_type_7 cmd24;
-		struct sts_entry_24xx rsp24;
-	} p;
-	uint8_t inq[INQ_DATA_SIZE];
-} inq_cmd_rsp_t;
-
-/*
- * Report LUN command structure.
- */
-#define CHAR_TO_SHORT(a, b)	(uint16_t)((uint8_t)b << 8 | (uint8_t)a)
-
-typedef struct {
-	uint32_t len;
-	uint32_t rsrv;
-} rpt_hdr_t;
-
-typedef struct {
-	struct {
-		uint8_t b : 6;
-		uint8_t address_method : 2;
-	} msb;
-	uint8_t lsb;
-	uint8_t unused[6];
-} rpt_lun_t;
-
-typedef struct {
-	rpt_hdr_t hdr;
-	rpt_lun_t lst[MAX_LUNS];
-} rpt_lun_lst_t;
-
-/*
- * Report Lun mailbox IOCB packet definition.
- */
-typedef struct {
-	union {
-		cmd_a64_entry_t cmd;
-		sts_entry_t rsp;
-		struct cmd_type_7 cmd24;
-		struct sts_entry_24xx rsp24;
-	} p;
-	rpt_lun_lst_t list;
-} rpt_lun_cmd_rsp_t;
-
 
 /*
  * Fibre channel port type.
@@ -1587,13 +1521,15 @@ typedef struct {
 typedef struct fc_port {
 	struct list_head list;
 	struct scsi_qla_host *ha;
-	struct scsi_qla_host *vis_ha;	/* only used when suspending lun */
 
 	uint8_t node_name[WWN_SIZE];
 	uint8_t port_name[WWN_SIZE];
 	port_id_t d_id;
 	uint16_t loop_id;
 	uint16_t old_loop_id;
+
+	uint8_t fabric_port_name[WWN_SIZE];
+	uint16_t fp_speed;
 
 	fc_port_type_t port_type;
 
@@ -1602,23 +1538,16 @@ typedef struct fc_port {
 
 	unsigned int os_target_id;
 
-	uint16_t iodesc_idx_sent;
-
 	int port_login_retry_count;
 	int login_retry;
 	atomic_t port_down_timer;
 
-	uint8_t device_type;
-	uint8_t unused;
-
-	uint8_t mp_byte;		/* multi-path byte (not used) */
-    	uint8_t cur_path;		/* current path id */
-
 	spinlock_t rport_lock;
 	struct fc_rport *rport, *drport;
 	u32 supported_classes;
-	struct work_struct rport_add_work;
-	struct work_struct rport_del_work;
+
+	unsigned long last_queue_full;
+	unsigned long last_ramp_up;
 } fc_port_t;
 
 /*
@@ -1673,6 +1602,7 @@ typedef struct fc_port {
 
 #define CT_REJECT_RESPONSE	0x8001
 #define CT_ACCEPT_RESPONSE	0x8002
+#define CT_REASON_INVALID_COMMAND_CODE	0x01
 #define CT_REASON_CANNOT_PERFORM	0x09
 #define CT_EXPL_ALREADY_REGISTERED	0x10
 
@@ -1715,6 +1645,15 @@ typedef struct fc_port {
 #define	RSNN_NN_CMD	 0x239
 #define	RSNN_NN_REQ_SIZE (16 + 8 + 1 + 255)
 #define	RSNN_NN_RSP_SIZE 16
+
+#define	GFPN_ID_CMD	0x11C
+#define	GFPN_ID_REQ_SIZE (16 + 4)
+#define	GFPN_ID_RSP_SIZE (16 + 8)
+
+#define	GPSC_CMD	0x127
+#define	GPSC_REQ_SIZE	(16 + 8)
+#define	GPSC_RSP_SIZE	(16 + 2 + 2)
+
 
 /*
  * HBA attribute types.
@@ -1829,7 +1768,7 @@ struct ct_sns_req {
 	uint8_t reserved[3];
 
 	union {
-		/* GA_NXT, GPN_ID, GNN_ID, GFT_ID */
+		/* GA_NXT, GPN_ID, GNN_ID, GFT_ID, GFPN_ID */
 		struct {
 			uint8_t reserved;
 			uint8_t port_id[3];
@@ -1904,6 +1843,10 @@ struct ct_sns_req {
 		struct {
 			uint8_t port_name[8];
 		} dpa;
+
+		struct {
+			uint8_t port_name[8];
+		} gpsc;
 	} req;
 };
 
@@ -1967,6 +1910,15 @@ struct ct_sns_rsp {
 			uint8_t port_name[8];
 			struct ct_fdmi_hba_attributes attrs;
 		} ghat;
+
+		struct {
+			uint8_t port_name[8];
+		} gfpn_id;
+
+		struct {
+			uint16_t speeds;
+			uint16_t speed;
+		} gpsc;
 	} rsp;
 };
 
@@ -2027,54 +1979,6 @@ struct sns_cmd_pkt {
 	} p;
 };
 
-/* IO descriptors */
-#define MAX_IO_DESCRIPTORS	32
-
-#define ABORT_IOCB_CB		0
-#define ADISC_PORT_IOCB_CB	1
-#define LOGOUT_PORT_IOCB_CB	2
-#define LOGIN_PORT_IOCB_CB	3
-#define LAST_IOCB_CB		4
-
-#define IODESC_INVALID_INDEX	0xFFFF
-#define IODESC_ADISC_NEEDED	0xFFFE
-#define IODESC_LOGIN_NEEDED	0xFFFD
-
-struct io_descriptor {
-	uint16_t used:1;
-	uint16_t idx:11;
-	uint16_t cb_idx:4;
-
-	struct timer_list timer;
-
-	struct scsi_qla_host *ha;
-
-	port_id_t d_id;
-	fc_port_t *remote_fcport;
-
-	uint32_t signature;
-};
-
-struct qla_fw_info {
-	unsigned short addressing;	/* addressing method used to load fw */
-#define FW_INFO_ADDR_NORMAL	0
-#define FW_INFO_ADDR_EXTENDED	1
-#define FW_INFO_ADDR_NOMORE	0xffff
-	unsigned short *fwcode;		/* pointer to FW array */
-	unsigned short *fwlen;		/* number of words in array */
-	unsigned short *fwstart;	/* start address for F/W */
-	unsigned long *lfwstart;	/* start address (long) for F/W */
-};
-
-struct qla_board_info {
-	char *drv_name;
-
-	char isp_name[8];
-	struct qla_fw_info *fw_info;
-	char *fw_fname;
-	struct scsi_host_template *sht;
-};
-
 struct fw_blob {
 	char *name;
 	uint32_t segs[4];
@@ -2109,7 +2013,7 @@ struct isp_operations {
 	char * (*pci_info_str) (struct scsi_qla_host *, char *);
 	char * (*fw_version_str) (struct scsi_qla_host *, char *);
 
-	irqreturn_t (*intr_handler) (int, void *, struct pt_regs *);
+	irq_handler_t intr_handler;
 	void (*enable_intrs) (struct scsi_qla_host *);
 	void (*disable_intrs) (struct scsi_qla_host *);
 
@@ -2132,7 +2036,6 @@ struct isp_operations {
 		uint32_t);
 
 	void (*fw_dump) (struct scsi_qla_host *, int);
-	void (*ascii_fw_dump) (struct scsi_qla_host *);
 
 	int (*beacon_on) (struct scsi_qla_host *);
 	int (*beacon_off) (struct scsi_qla_host *);
@@ -2176,6 +2079,8 @@ typedef struct scsi_qla_host {
 		uint32_t	enable_led_scheme	:1;
 		uint32_t	msi_enabled		:1;
 		uint32_t	msix_enabled		:1;
+		uint32_t	disable_serdes		:1;
+		uint32_t	gpsc_supported		:1;
 	} flags;
 
 	atomic_t	loop_state;
@@ -2269,7 +2174,7 @@ typedef struct scsi_qla_host {
 	mempool_t	*srb_mempool;
 
 	/* This spinlock is used to protect "io transactions", you must
-	 * aquire it before doing any IO to the card, eg with RD_REG*() and
+	 * acquire it before doing any IO to the card, eg with RD_REG*() and
 	 * WRT_REG*() for the duration of your entire commandtransaction.
 	 *
 	 * This spinlock is of lower priority than the io request lock.
@@ -2303,9 +2208,6 @@ typedef struct scsi_qla_host {
 	uint32_t	current_outstanding_cmd;
 	srb_t		*status_srb;	/* Status continuation entry. */
 
-	uint16_t           revision;
-	uint8_t           ports;
-
 	/* ISP configuration data. */
 	uint16_t	loop_id;		/* Host adapter loop id */
 	uint16_t	fb_rev;
@@ -2314,11 +2216,11 @@ typedef struct scsi_qla_host {
 	uint16_t	max_public_loop_ids;
 	uint16_t	min_external_loopid;	/* First external loop Id */
 
+#define PORT_SPEED_UNKNOWN 0xFFFF
+#define PORT_SPEED_1GB	0x00
+#define PORT_SPEED_2GB	0x01
+#define PORT_SPEED_4GB	0x03
 	uint16_t	link_data_rate;		/* F/W operating speed */
-#define LDR_1GB		0
-#define LDR_2GB		1
-#define LDR_4GB		3
-#define LDR_UNKNOWN	0xFFFF
 
 	uint8_t		current_topology;
 	uint8_t		prev_topology;
@@ -2358,13 +2260,10 @@ typedef struct scsi_qla_host {
 	uint16_t	mgmt_svr_loop_id;
 
         uint32_t	login_retry_count;
+	int		max_q_depth;
 
 	/* Fibre Channel Device List. */
 	struct list_head	fcports;
-	struct list_head	rscn_fcports;
-
-	struct io_descriptor	io_descriptors[MAX_IO_DESCRIPTORS];
-	uint16_t		iodesc_signature;
 
 	/* RSCN queue. */
 	uint32_t rscn_queue[MAX_RSCN_COUNT];
@@ -2379,6 +2278,11 @@ typedef struct scsi_qla_host {
 	/* SNS command interfaces for 2200. */
 	struct sns_cmd_pkt	*sns_cmd;
 	dma_addr_t		sns_cmd_dma;
+
+#define SFP_DEV_SIZE	256
+#define SFP_BLOCK_SIZE	64
+	void			*sfp_data;
+	dma_addr_t		sfp_data_dma;
 
 	struct task_struct	*dpc_thread;
 	uint8_t dpc_active;                  /* DPC routine is active */
@@ -2395,9 +2299,6 @@ typedef struct scsi_qla_host {
 	struct gid_list_info *gid_list;
 	int		gid_list_info_size;
 
-	dma_addr_t	rlc_rsp_dma;
-	rpt_lun_cmd_rsp_t *rlc_rsp;
-
 	/* Small DMA pool allocations -- maximum 256 bytes in length. */
 #define DMA_POOL_SIZE	256
 	struct dma_pool *s_dma_pool;
@@ -2405,9 +2306,6 @@ typedef struct scsi_qla_host {
 	dma_addr_t	init_cb_dma;
 	init_cb_t	*init_cb;
 	int		init_cb_size;
-
-	dma_addr_t	iodesc_pd_dma;
-	port_database_t *iodesc_pd;
 
 	/* These are used by mailbox operations. */
 	volatile uint16_t mailbox_out[MAILBOX_REGISTER_COUNT];
@@ -2435,28 +2333,28 @@ typedef struct scsi_qla_host {
 	mbx_cmd_t 	mc;
 
 	/* Basic firmware related information. */
-	struct qla_board_info	*brd_info;
 	uint16_t	fw_major_version;
 	uint16_t	fw_minor_version;
 	uint16_t	fw_subminor_version;
 	uint16_t	fw_attributes;
 	uint32_t	fw_memory_size;
 	uint32_t	fw_transfer_size;
+	uint32_t	fw_srisc_address;
+#define RISC_START_ADDRESS_2100 0x1000
+#define RISC_START_ADDRESS_2300 0x800
+#define RISC_START_ADDRESS_2400 0x100000
 
 	uint16_t	fw_options[16];		/* slots: 1,2,3,10,11 */
 	uint8_t		fw_seriallink_options[4];
 	uint16_t	fw_seriallink_options24[4];
 
 	/* Firmware dump information. */
-	void		*fw_dump;
-	int		fw_dump_order;
-	int		fw_dump_reading;
-	char		*fw_dump_buffer;
-	int		fw_dump_buffer_len;
-
+	struct qla2xxx_fw_dump *fw_dump;
+	uint32_t	fw_dump_len;
 	int		fw_dumped;
-	void		*fw_dump24;
-	int		fw_dump24_len;
+	int		fw_dump_reading;
+	dma_addr_t	eft_dma;
+	void		*eft;
 
 	uint8_t		host_str[16];
 	uint32_t	pci_attr;
@@ -2470,6 +2368,7 @@ typedef struct scsi_qla_host {
 
 	uint8_t		*node_name;
 	uint8_t		*port_name;
+	uint8_t		fabric_node_name[WWN_SIZE];
 	uint32_t    isp_abort_cnt;
 
 	/* Option ROM information. */
@@ -2503,8 +2402,6 @@ typedef struct scsi_qla_host {
 	 test_bit(LOOP_RESYNC_NEEDED, &ha->dpc_flags) || \
 	 atomic_read(&ha->loop_state) == LOOP_DOWN)
 
-#define TGT_Q(ha, t) (ha->otgt[t])
-
 #define to_qla_host(x)		((scsi_qla_host_t *) (x)->hostdata)
 
 #define qla_printk(level, ha, format, arg...) \
@@ -2537,19 +2434,6 @@ typedef struct scsi_qla_host {
 #define QLA_RSCNS_HANDLED		0x108
 #define QLA_ALREADY_REGISTERED		0x109
 
-/*
-* Stat info for all adpaters
-*/
-struct _qla2x00stats  {
-        unsigned long   mboxtout;            /* mailbox timeouts */
-        unsigned long   mboxerr;             /* mailbox errors */
-        unsigned long   ispAbort;            /* ISP aborts */
-        unsigned long   debugNo;
-        unsigned long   loop_resync;
-        unsigned long   outarray_full;
-        unsigned long   retry_q_cnt;
-};
-
 #define NVRAM_DELAY()		udelay(10)
 
 #define INVALID_HANDLE	(MAX_OUTSTANDING_COMMANDS+1)
@@ -2564,12 +2448,6 @@ struct _qla2x00stats  {
 #include "qla_gbl.h"
 #include "qla_dbg.h"
 #include "qla_inline.h"
-
-/*
-* String arrays
-*/
-#define LINESIZE    256
-#define MAXARGS      26
 
 #define CMD_SP(Cmnd)		((Cmnd)->SCp.ptr)
 #define CMD_COMPL_STATUS(Cmnd)  ((Cmnd)->SCp.this_residual)

@@ -4,7 +4,7 @@
  *  Copyright (C) 1995  Hamish Macdonald
  */
 
-#include <linux/config.h>
+#include <linux/module.h>
 #include <linux/mm.h>
 #include <linux/kernel.h>
 #include <linux/string.h>
@@ -94,8 +94,7 @@ pmd_t *get_pointer_table (void)
 	PD_MARKBITS(dp) = mask & ~tmp;
 	if (!PD_MARKBITS(dp)) {
 		/* move to end of list */
-		list_del(dp);
-		list_add_tail(dp, &ptable_list);
+		list_move_tail(dp, &ptable_list);
 	}
 	return (pmd_t *) (page_address(PD_PAGE(dp)) + off);
 }
@@ -123,8 +122,7 @@ int free_pointer_table (pmd_t *ptable)
 		 * move this descriptor to the front of the list, since
 		 * it has one or more free tables.
 		 */
-		list_del(dp);
-		list_add(dp, &ptable_list);
+		list_move(dp, &ptable_list);
 	}
 	return 0;
 }
@@ -160,9 +158,8 @@ unsigned long mm_vtop(unsigned long vaddr)
 
 	return -1;
 }
-#endif
+EXPORT_SYMBOL(mm_vtop);
 
-#ifndef CONFIG_SINGLE_MEMORY_CHUNK
 unsigned long mm_ptov (unsigned long paddr)
 {
 	int i = 0;
@@ -188,6 +185,7 @@ unsigned long mm_ptov (unsigned long paddr)
 #endif
 	return -1;
 }
+EXPORT_SYMBOL(mm_ptov);
 #endif
 
 /* invalidate page in both caches */
@@ -301,6 +299,7 @@ void cache_clear (unsigned long paddr, int len)
 	mach_l2_flush(0);
 #endif
 }
+EXPORT_SYMBOL(cache_clear);
 
 
 /*
@@ -353,6 +352,7 @@ void cache_push (unsigned long paddr, int len)
 	mach_l2_flush(1);
 #endif
 }
+EXPORT_SYMBOL(cache_push);
 
 #ifndef CONFIG_SINGLE_MEMORY_CHUNK
 int mm_end_of_chunk (unsigned long addr, int len)
@@ -364,4 +364,5 @@ int mm_end_of_chunk (unsigned long addr, int len)
 			return 1;
 	return 0;
 }
+EXPORT_SYMBOL(mm_end_of_chunk);
 #endif

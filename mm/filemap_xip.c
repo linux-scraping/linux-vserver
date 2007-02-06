@@ -184,13 +184,13 @@ __xip_unmap (struct address_space * mapping,
 		address = vma->vm_start +
 			((pgoff - vma->vm_pgoff) << PAGE_SHIFT);
 		BUG_ON(address < vma->vm_start || address >= vma->vm_end);
-		page = ZERO_PAGE(address);
+		page = ZERO_PAGE(0);
 		pte = page_check_address(page, mm, address, &ptl);
 		if (pte) {
 			/* Nuke the page table entry. */
 			flush_cache_page(vma, address, pte_pfn(*pte));
 			pteval = ptep_clear_flush(vma, address, pte);
-			page_remove_rmap(page);
+			page_remove_rmap(page, vma);
 			dec_mm_counter(mm, file_rss);
 			BUG_ON(pte_dirty(pteval));
 			pte_unmap_unlock(pte, ptl);
@@ -247,7 +247,7 @@ xip_file_nopage(struct vm_area_struct * area,
 		__xip_unmap(mapping, pgoff);
 	} else {
 		/* not shared and writable, use ZERO_PAGE() */
-		page = ZERO_PAGE(address);
+		page = ZERO_PAGE(0);
 	}
 
 out:
@@ -274,7 +274,7 @@ __xip_file_write(struct file *filp, const char __user *buf,
 		  size_t count, loff_t pos, loff_t *ppos)
 {
 	struct address_space * mapping = filp->f_mapping;
-	struct address_space_operations *a_ops = mapping->a_ops;
+	const struct address_space_operations *a_ops = mapping->a_ops;
 	struct inode 	*inode = mapping->host;
 	long		status = 0;
 	struct page	*page;
@@ -380,7 +380,7 @@ xip_file_write(struct file *filp, const char __user *buf, size_t len,
 	if (count == 0)
 		goto out_backing;
 
-	ret = remove_suid(filp->f_dentry);
+	ret = remove_suid(filp->f_path.dentry);
 	if (ret)
 		goto out_backing;
 

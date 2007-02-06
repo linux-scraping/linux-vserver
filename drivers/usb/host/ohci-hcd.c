@@ -3,78 +3,21 @@
  *
  * (C) Copyright 1999 Roman Weissgaerber <weissg@vienna.at>
  * (C) Copyright 2000-2004 David Brownell <dbrownell@users.sourceforge.net>
- * 
+ *
  * [ Initialisation is based on Linus'  ]
  * [ uhci code and gregs ohci fragments ]
  * [ (C) Copyright 1999 Linus Torvalds  ]
  * [ (C) Copyright 1999 Gregory P. Smith]
- * 
- * 
+ *
+ *
  * OHCI is the main "non-Intel/VIA" standard for USB 1.1 host controller
  * interfaces (though some non-x86 Intel chips use it).  It supports
  * smarter hardware than UHCI.  A download link for the spec available
  * through the http://www.usb.org website.
  *
- * History:
- * 
- * 2004/03/24 LH7A404 support (Durgesh Pattamatta & Marc Singer)
- * 2004/02/04 use generic dma_* functions instead of pci_* (dsaxena@plexity.net)
- * 2003/02/24 show registers in sysfs (Kevin Brosius)
- *
- * 2002/09/03 get rid of ed hashtables, rework periodic scheduling and
- * 	bandwidth accounting; if debugging, show schedules in driverfs
- * 2002/07/19 fixes to management of ED and schedule state.
- * 2002/06/09 SA-1111 support (Christopher Hoover)
- * 2002/06/01 remember frame when HC won't see EDs any more; use that info
- *	to fix urb unlink races caused by interrupt latency assumptions;
- *	minor ED field and function naming updates
- * 2002/01/18 package as a patch for 2.5.3; this should match the
- *	2.4.17 kernel modulo some bugs being fixed.
- *
- * 2001/10/18 merge pmac cleanup (Benjamin Herrenschmidt) and bugfixes
- *	from post-2.4.5 patches.
- * 2001/09/20 URB_ZERO_PACKET support; hcca_dma portability, OPTi warning
- * 2001/09/07 match PCI PM changes, errnos from Linus' tree
- * 2001/05/05 fork 2.4.5 version into "hcd" framework, cleanup, simplify;
- *	pbook pci quirks gone (please fix pbook pci sw!) (db)
- *
- * 2001/04/08 Identify version on module load (gb)
- * 2001/03/24 td/ed hashing to remove bus_to_virt (Steve Longerbeam);
- 	pci_map_single (db)
- * 2001/03/21 td and dev/ed allocation uses new pci_pool API (db)
- * 2001/03/07 hcca allocation uses pci_alloc_consistent (Steve Longerbeam)
- *
- * 2000/09/26 fixed races in removing the private portion of the urb
- * 2000/09/07 disable bulk and control lists when unlinking the last
- *	endpoint descriptor in order to avoid unrecoverable errors on
- *	the Lucent chips. (rwc@sgi)
- * 2000/08/29 use bandwidth claiming hooks (thanks Randy!), fix some
- *	urb unlink probs, indentation fixes
- * 2000/08/11 various oops fixes mostly affecting iso and cleanup from
- *	device unplugs.
- * 2000/06/28 use PCI hotplug framework, for better power management
- *	and for Cardbus support (David Brownell)
- * 2000/earlier:  fixes for NEC/Lucent chips; suspend/resume handling
- *	when the controller loses power; handle UE; cleanup; ...
- *
- * v5.2 1999/12/07 URB 3rd preview, 
- * v5.1 1999/11/30 URB 2nd preview, cpia, (usb-scsi)
- * v5.0 1999/11/22 URB Technical preview, Paul Mackerras powerbook susp/resume 
- * 	i386: HUB, Keyboard, Mouse, Printer 
- *
- * v4.3 1999/10/27 multiple HCs, bulk_request
- * v4.2 1999/09/05 ISO API alpha, new dev alloc, neg Error-codes
- * v4.1 1999/08/27 Randy Dunlap's - ISO API first impl.
- * v4.0 1999/08/18 
- * v3.0 1999/06/25 
- * v2.1 1999/05/09  code clean up
- * v2.0 1999/05/04 
- * v1.0 1999/04/27 initial release
- *
  * This file is licenced under the GPL.
  */
- 
-#include <linux/config.h>
+
 #include <linux/module.h>
 #include <linux/moduleparam.h>
 #include <linux/pci.h>
@@ -89,8 +32,8 @@
 #include <linux/timer.h>
 #include <linux/list.h>
 #include <linux/usb.h>
-#include <linux/usb_otg.h>
-#include <linux/dma-mapping.h> 
+#include <linux/usb/otg.h>
+#include <linux/dma-mapping.h>
 #include <linux/dmapool.h>
 #include <linux/reboot.h>
 
@@ -102,7 +45,7 @@
 
 #include "../core/hcd.h"
 
-#define DRIVER_VERSION "2005 April 22"
+#define DRIVER_VERSION "2006 August 04"
 #define DRIVER_AUTHOR "Roman Weissgaerber, David Brownell"
 #define DRIVER_DESC "USB 1.1 'Open' Host Controller (OHCI) Driver"
 
@@ -111,9 +54,10 @@
 #undef OHCI_VERBOSE_DEBUG	/* not always helpful */
 
 /* For initializing controller (mask in an HCFS mode too) */
-#define	OHCI_CONTROL_INIT 	OHCI_CTRL_CBSR
+#define	OHCI_CONTROL_INIT	OHCI_CTRL_CBSR
 #define	OHCI_INTR_INIT \
-	(OHCI_INTR_MIE | OHCI_INTR_UE | OHCI_INTR_RD | OHCI_INTR_WDH)
+		(OHCI_INTR_MIE | OHCI_INTR_RHSC | OHCI_INTR_UE \
+		| OHCI_INTR_RD | OHCI_INTR_WDH)
 
 #ifdef __hppa__
 /* On PA-RISC, PDC can leave IR set incorrectly; ignore it there. */
@@ -129,12 +73,13 @@
 
 static const char	hcd_name [] = "ohci_hcd";
 
+#define	STATECHANGE_DELAY	msecs_to_jiffies(300)
+
 #include "ohci.h"
 
 static void ohci_dump (struct ohci_hcd *ohci, int verbose);
 static int ohci_init (struct ohci_hcd *ohci);
 static void ohci_stop (struct usb_hcd *hcd);
-static int ohci_reboot (struct notifier_block *, unsigned long , void *);
 
 #include "ohci-hub.c"
 #include "ohci-dbg.c"
@@ -182,11 +127,11 @@ static int ohci_urb_enqueue (
 	int		i, size = 0;
 	unsigned long	flags;
 	int		retval = 0;
-	
+
 #ifdef OHCI_VERBOSE_DEBUG
 	urb_print (urb, "SUB", usb_pipein (pipe));
 #endif
-	
+
 	/* every endpoint has a ed, locate and maybe (re)initialize it */
 	if (! (ed = ed_get (ohci, ep, urb->dev, pipe, urb->interval)))
 		return -ENOMEM;
@@ -231,7 +176,7 @@ static int ohci_urb_enqueue (
 	memset (urb_priv, 0, sizeof (urb_priv_t) + size * sizeof (struct td *));
 	INIT_LIST_HEAD (&urb_priv->pending);
 	urb_priv->length = size;
-	urb_priv->ed = ed;	
+	urb_priv->ed = ed;
 
 	/* allocate the TDs (deferring hash chain updates) */
 	for (i = 0; i < size; i++) {
@@ -241,7 +186,7 @@ static int ohci_urb_enqueue (
 			urb_free_priv (ohci, urb_priv);
 			return -ENOMEM;
 		}
-	}	
+	}
 
 	spin_lock_irqsave (&ohci->lock, flags);
 
@@ -260,7 +205,7 @@ static int ohci_urb_enqueue (
 	if (urb->status != -EINPROGRESS) {
 		spin_unlock (&urb->lock);
 		urb->hcpriv = urb_priv;
-		finish_urb (ohci, urb, NULL);
+		finish_urb (ohci, urb);
 		retval = 0;
 		goto fail;
 	}
@@ -312,13 +257,13 @@ static int ohci_urb_dequeue (struct usb_hcd *hcd, struct urb *urb)
 {
 	struct ohci_hcd		*ohci = hcd_to_ohci (hcd);
 	unsigned long		flags;
-	
+
 #ifdef OHCI_VERBOSE_DEBUG
 	urb_print (urb, "UNLINK", 1);
-#endif		  
+#endif
 
 	spin_lock_irqsave (&ohci->lock, flags);
- 	if (HC_IS_RUNNING(hcd->state)) {
+	if (HC_IS_RUNNING(hcd->state)) {
 		urb_priv_t  *urb_priv;
 
 		/* Unless an IRQ completed the unlink while it was being
@@ -336,7 +281,7 @@ static int ohci_urb_dequeue (struct usb_hcd *hcd, struct urb *urb)
 		 * any more ... just clean up every urb's memory.
 		 */
 		if (urb->hcpriv)
-			finish_urb (ohci, urb, NULL);
+			finish_urb (ohci, urb);
 	}
 	spin_unlock_irqrestore (&ohci->lock, flags);
 	return 0;
@@ -368,7 +313,7 @@ rescan:
 	if (!HC_IS_RUNNING (hcd->state)) {
 sanitize:
 		ed->state = ED_IDLE;
-		finish_unlinks (ohci, 0, NULL);
+		finish_unlinks (ohci, 0);
 	}
 
 	switch (ed->state) {
@@ -417,21 +362,20 @@ static void ohci_usb_reset (struct ohci_hcd *ohci)
 	ohci_writel (ohci, ohci->hc_control, &ohci->regs->control);
 }
 
-/* reboot notifier forcibly disables IRQs and DMA, helping kexec and
+/* ohci_shutdown forcibly disables IRQs and DMA, helping kexec and
  * other cases where the next software may expect clean state from the
  * "firmware".  this is bus-neutral, unlike shutdown() methods.
  */
-static int
-ohci_reboot (struct notifier_block *block, unsigned long code, void *null)
+static void
+ohci_shutdown (struct usb_hcd *hcd)
 {
 	struct ohci_hcd *ohci;
 
-	ohci = container_of (block, struct ohci_hcd, reboot_notifier);
+	ohci = hcd_to_ohci (hcd);
 	ohci_writel (ohci, OHCI_INTR_MIE, &ohci->regs->intrdisable);
 	ohci_usb_reset (ohci);
 	/* flush the writes */
 	(void) ohci_readl (ohci, &ohci->regs->control);
-	return 0;
 }
 
 /*-------------------------------------------------------------------------*
@@ -447,7 +391,6 @@ static int ohci_init (struct ohci_hcd *ohci)
 
 	disable (ohci);
 	ohci->regs = hcd->regs;
-	ohci->next_statechange = jiffies;
 
 	/* REVISIT this BIOS handshake is now moved into PCI "quirks", and
 	 * was never needed for most non-PCI systems ... remove the code?
@@ -503,7 +446,6 @@ static int ohci_init (struct ohci_hcd *ohci)
 	if ((ret = ohci_mem_init (ohci)) < 0)
 		ohci_stop (hcd);
 	else {
-		register_reboot_notifier (&ohci->reboot_notifier);
 		create_debug_files (ohci);
 	}
 
@@ -514,11 +456,11 @@ static int ohci_init (struct ohci_hcd *ohci)
 
 /* Start an OHCI controller, set the BUS operational
  * resets USB and controller
- * enable interrupts 
+ * enable interrupts
  */
 static int ohci_run (struct ohci_hcd *ohci)
 {
-  	u32			mask, temp;
+	u32			mask, temp;
 	int			first = ohci->fminterval == 0;
 	struct usb_hcd		*hcd = ohci_to_hcd(ohci);
 
@@ -536,7 +478,7 @@ static int ohci_run (struct ohci_hcd *ohci)
 		/* also: power/overcurrent flags in roothub.a */
 	}
 
-  	/* Reset USB nearly "by the book".  RemoteWakeupConnected was
+	/* Reset USB nearly "by the book".  RemoteWakeupConnected was
 	 * saved if boot firmware (BIOS/SMM/...) told us it's connected,
 	 * or if bus glue did the same (e.g. for PCI add-in cards with
 	 * PCI PM support).
@@ -638,10 +580,14 @@ retry:
 		return -EOVERFLOW;
 	}
 
- 	/* start controller operations */
+	/* use rhsc irqs after khubd is fully initialized */
+	hcd->poll_rh = 1;
+	hcd->uses_new_polling = 1;
+
+	/* start controller operations */
 	ohci->hc_control &= OHCI_CTRL_RWC;
- 	ohci->hc_control |= OHCI_CONTROL_INIT | OHCI_USB_OPER;
- 	ohci_writel (ohci, ohci->hc_control, &ohci->regs->control);
+	ohci->hc_control |= OHCI_CONTROL_INIT | OHCI_USB_OPER;
+	ohci_writel (ohci, ohci->hc_control, &ohci->regs->control);
 	hcd->state = HC_STATE_RUNNING;
 
 	/* wake on ConnectStatusChange, matching external hubs */
@@ -649,7 +595,7 @@ retry:
 
 	/* Choose the interrupts we care about now, others later on demand */
 	mask = OHCI_INTR_INIT;
-	ohci_writel (ohci, mask, &ohci->regs->intrstatus);
+	ohci_writel (ohci, ~0, &ohci->regs->intrstatus);
 	ohci_writel (ohci, mask, &ohci->regs->intrenable);
 
 	/* handle root hub init quirks ... */
@@ -673,6 +619,7 @@ retry:
 	// flush those writes
 	(void) ohci_readl (ohci, &ohci->regs->control);
 
+	ohci->next_statechange = jiffies + STATECHANGE_DELAY;
 	spin_unlock_irq (&ohci->lock);
 
 	// POTPGT delay is bits 24-31, in 2 ms units.
@@ -688,7 +635,7 @@ retry:
 
 /* an interrupt happens */
 
-static irqreturn_t ohci_irq (struct usb_hcd *hcd, struct pt_regs *ptregs)
+static irqreturn_t ohci_irq (struct usb_hcd *hcd)
 {
 	struct ohci_hcd		*ohci = hcd_to_ohci (hcd);
 	struct ohci_regs __iomem *regs = ohci->regs;
@@ -710,7 +657,7 @@ static irqreturn_t ohci_irq (struct usb_hcd *hcd, struct pt_regs *ptregs)
 	/* interrupt for some other device? */
 	} else if ((ints &= ohci_readl (ohci, &regs->intrenable)) == 0) {
 		return IRQ_NOTMINE;
-	} 
+	}
 
 	if (ints & OHCI_INTR_UE) {
 		disable (ohci);
@@ -721,23 +668,50 @@ static irqreturn_t ohci_irq (struct usb_hcd *hcd, struct pt_regs *ptregs)
 		ohci_usb_reset (ohci);
 	}
 
-	if (ints & OHCI_INTR_RD) {
-		ohci_vdbg (ohci, "resume detect\n");
-		ohci_writel (ohci, OHCI_INTR_RD, &regs->intrstatus);
-		if (hcd->state != HC_STATE_QUIESCING)
+	if (ints & OHCI_INTR_RHSC) {
+		ohci_vdbg(ohci, "rhsc\n");
+		ohci->next_statechange = jiffies + STATECHANGE_DELAY;
+		ohci_writel(ohci, OHCI_INTR_RD | OHCI_INTR_RHSC,
+				&regs->intrstatus);
+
+		/* NOTE: Vendors didn't always make the same implementation
+		 * choices for RHSC.  Many followed the spec; RHSC triggers
+		 * on an edge, like setting and maybe clearing a port status
+		 * change bit.  With others it's level-triggered, active
+		 * until khubd clears all the port status change bits.  We'll
+		 * always disable it here and rely on polling until khubd
+		 * re-enables it.
+		 */
+		ohci_writel(ohci, OHCI_INTR_RHSC, &regs->intrdisable);
+		usb_hcd_poll_rh_status(hcd);
+	}
+
+	/* For connect and disconnect events, we expect the controller
+	 * to turn on RHSC along with RD.  But for remote wakeup events
+	 * this might not happen.
+	 */
+	else if (ints & OHCI_INTR_RD) {
+		ohci_vdbg(ohci, "resume detect\n");
+		ohci_writel(ohci, OHCI_INTR_RD, &regs->intrstatus);
+		hcd->poll_rh = 1;
+		if (ohci->autostop) {
+			spin_lock (&ohci->lock);
+			ohci_rh_resume (ohci);
+			spin_unlock (&ohci->lock);
+		} else
 			usb_hcd_resume_root_hub(hcd);
 	}
 
 	if (ints & OHCI_INTR_WDH) {
 		if (HC_IS_RUNNING(hcd->state))
-			ohci_writel (ohci, OHCI_INTR_WDH, &regs->intrdisable);	
+			ohci_writel (ohci, OHCI_INTR_WDH, &regs->intrdisable);
 		spin_lock (&ohci->lock);
-		dl_done_list (ohci, ptregs);
+		dl_done_list (ohci);
 		spin_unlock (&ohci->lock);
 		if (HC_IS_RUNNING(hcd->state))
-			ohci_writel (ohci, OHCI_INTR_WDH, &regs->intrenable); 
+			ohci_writel (ohci, OHCI_INTR_WDH, &regs->intrenable);
 	}
-  
+
 	/* could track INTR_SO to reduce available PCI/... bandwidth */
 
 	/* handle any pending URB/ED unlinks, leaving INTR_SF enabled
@@ -745,15 +719,15 @@ static irqreturn_t ohci_irq (struct usb_hcd *hcd, struct pt_regs *ptregs)
 	 */
 	spin_lock (&ohci->lock);
 	if (ohci->ed_rm_list)
-		finish_unlinks (ohci, ohci_frame_no(ohci), ptregs);
+		finish_unlinks (ohci, ohci_frame_no(ohci));
 	if ((ints & OHCI_INTR_SF) != 0 && !ohci->ed_rm_list
 			&& HC_IS_RUNNING(hcd->state))
-		ohci_writel (ohci, OHCI_INTR_SF, &regs->intrdisable);	
+		ohci_writel (ohci, OHCI_INTR_SF, &regs->intrdisable);
 	spin_unlock (&ohci->lock);
 
 	if (HC_IS_RUNNING(hcd->state)) {
 		ohci_writel (ohci, ints, &regs->intrstatus);
-		ohci_writel (ohci, OHCI_INTR_MIE, &regs->intrenable);	
+		ohci_writel (ohci, OHCI_INTR_MIE, &regs->intrenable);
 		// flush those writes
 		(void) ohci_readl (ohci, &ohci->regs->control);
 	}
@@ -764,7 +738,7 @@ static irqreturn_t ohci_irq (struct usb_hcd *hcd, struct pt_regs *ptregs)
 /*-------------------------------------------------------------------------*/
 
 static void ohci_stop (struct usb_hcd *hcd)
-{	
+{
 	struct ohci_hcd		*ohci = hcd_to_ohci (hcd);
 
 	ohci_dbg (ohci, "stop %s controller (state 0x%02x)\n",
@@ -776,13 +750,14 @@ static void ohci_stop (struct usb_hcd *hcd)
 
 	ohci_usb_reset (ohci);
 	ohci_writel (ohci, OHCI_INTR_MIE, &ohci->regs->intrdisable);
-	
+	free_irq(hcd->irq, hcd);
+	hcd->irq = -1;
+
 	remove_debug_files (ohci);
-	unregister_reboot_notifier (&ohci->reboot_notifier);
 	ohci_mem_cleanup (ohci);
 	if (ohci->hcca) {
-		dma_free_coherent (hcd->self.controller, 
-				sizeof *ohci->hcca, 
+		dma_free_coherent (hcd->self.controller,
+				sizeof *ohci->hcca,
 				ohci->hcca, ohci->hcca_dma);
 		ohci->hcca = NULL;
 		ohci->hcca_dma = 0;
@@ -805,7 +780,7 @@ static int ohci_restart (struct ohci_hcd *ohci)
 	 * recycle any "live" eds/tds (and urbs) right away.
 	 * later, khubd disconnect processing will recycle the other state,
 	 * (either as disconnect/reconnect, or maybe someday as a reset).
-	 */ 
+	 */
 	spin_lock_irq(&ohci->lock);
 	disable (ohci);
 	usb_root_hub_lost_power(ohci_to_hcd(ohci)->self.root_hub);
@@ -836,7 +811,7 @@ static int ohci_restart (struct ohci_hcd *ohci)
 		urb->status = -ESHUTDOWN;
 		spin_unlock (&urb->lock);
 	}
-	finish_unlinks (ohci, 0, NULL);
+	finish_unlinks (ohci, 0);
 	spin_unlock_irq(&ohci->lock);
 
 	/* paranoia, in case that didn't work: */
@@ -844,11 +819,11 @@ static int ohci_restart (struct ohci_hcd *ohci)
 	/* empty the interrupt branches */
 	for (i = 0; i < NUM_INTS; i++) ohci->load [i] = 0;
 	for (i = 0; i < NUM_INTS; i++) ohci->hcca->int_table [i] = 0;
-	
+
 	/* no EDs to remove */
 	ohci->ed_rm_list = NULL;
 
-	/* empty control and bulk lists */	 
+	/* empty control and bulk lists */
 	ohci->ed_controltail = NULL;
 	ohci->ed_bulktail    = NULL;
 
@@ -902,16 +877,28 @@ MODULE_LICENSE ("GPL");
 #include "ohci-pxa27x.c"
 #endif
 
+#ifdef CONFIG_ARCH_EP93XX
+#include "ohci-ep93xx.c"
+#endif
+
 #ifdef CONFIG_SOC_AU1X00
 #include "ohci-au1xxx.c"
+#endif
+
+#ifdef CONFIG_PNX8550
+#include "ohci-pnx8550.c"
 #endif
 
 #ifdef CONFIG_USB_OHCI_HCD_PPC_SOC
 #include "ohci-ppc-soc.c"
 #endif
 
-#ifdef CONFIG_ARCH_AT91RM9200
+#ifdef CONFIG_ARCH_AT91
 #include "ohci-at91.c"
+#endif
+
+#ifdef CONFIG_ARCH_PNX4008
+#include "ohci-pnx4008.c"
 #endif
 
 #if !(defined(CONFIG_PCI) \
@@ -920,9 +907,11 @@ MODULE_LICENSE ("GPL");
       || defined(CONFIG_ARCH_OMAP) \
       || defined (CONFIG_ARCH_LH7A404) \
       || defined (CONFIG_PXA27x) \
+      || defined (CONFIG_ARCH_EP93XX) \
       || defined (CONFIG_SOC_AU1X00) \
       || defined (CONFIG_USB_OHCI_HCD_PPC_SOC) \
-      || defined (CONFIG_ARCH_AT91RM9200) \
+      || defined (CONFIG_ARCH_AT91) \
+      || defined (CONFIG_ARCH_PNX4008) \
 	)
 #error "missing bus glue for ohci-hcd"
 #endif

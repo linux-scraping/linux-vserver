@@ -64,6 +64,8 @@ int snd_oss_info_register(int dev, int num, char *string)
 	return 0;
 }
 
+EXPORT_SYMBOL(snd_oss_info_register);
+
 extern void snd_card_info_read_oss(struct snd_info_buffer *buffer);
 
 static int snd_sndstat_show_strings(struct snd_info_buffer *buf, char *id, int dev)
@@ -94,11 +96,11 @@ static void snd_sndstat_proc_read(struct snd_info_entry *entry,
 {
 	snd_iprintf(buffer, "Sound Driver:3.8.1a-980706 (ALSA v" CONFIG_SND_VERSION " emulation code)\n");
 	snd_iprintf(buffer, "Kernel: %s %s %s %s %s\n",
-		    system_utsname.sysname,
-		    system_utsname.nodename,
-		    system_utsname.release,
-		    system_utsname.version,
-		    system_utsname.machine);
+		    init_utsname()->sysname,
+		    init_utsname()->nodename,
+		    init_utsname()->release,
+		    init_utsname()->version,
+		    init_utsname()->machine);
 	snd_iprintf(buffer, "Config options: 0\n");
 	snd_iprintf(buffer, "\nInstalled drivers: \n");
 	snd_iprintf(buffer, "Type 10: ALSA emulation\n");
@@ -117,7 +119,6 @@ int snd_info_minor_register(void)
 
 	memset(snd_sndstat_strings, 0, sizeof(snd_sndstat_strings));
 	if ((entry = snd_info_create_module_entry(THIS_MODULE, "sndstat", snd_oss_root)) != NULL) {
-		entry->c.text.read_size = 2048;
 		entry->c.text.read = snd_sndstat_proc_read;
 		if (snd_info_register(entry) < 0) {
 			snd_info_free_entry(entry);
@@ -130,10 +131,8 @@ int snd_info_minor_register(void)
 
 int snd_info_minor_unregister(void)
 {
-	if (snd_sndstat_proc_entry) {
-		snd_info_unregister(snd_sndstat_proc_entry);
-		snd_sndstat_proc_entry = NULL;
-	}
+	snd_info_free_entry(snd_sndstat_proc_entry);
+	snd_sndstat_proc_entry = NULL;
 	return 0;
 }
 

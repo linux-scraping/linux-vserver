@@ -291,7 +291,6 @@ register_proc(void)
 
 	entry->content = SNDRV_INFO_CONTENT_TEXT;
 	entry->private_data = NULL;
-	entry->c.text.read_size = 1024;
 	entry->c.text.read = info_read;
 	if (snd_info_register(entry) < 0) {
 		snd_info_free_entry(entry);
@@ -304,8 +303,7 @@ register_proc(void)
 static void
 unregister_proc(void)
 {
-	if (info_entry)
-		snd_info_unregister(info_entry);
+	snd_info_free_entry(info_entry);
 	info_entry = NULL;
 }
 #endif /* CONFIG_PROC_FS */

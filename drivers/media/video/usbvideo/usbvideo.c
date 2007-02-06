@@ -690,7 +690,7 @@ int usbvideo_register(
 	}
 
 	base_size = num_cams * sizeof(struct uvd) + sizeof(struct usbvideo);
-	cams = (struct usbvideo *) kzalloc(base_size, GFP_KERNEL);
+	cams = kzalloc(base_size, GFP_KERNEL);
 	if (cams == NULL) {
 		err("Failed to allocate %d. bytes for usbvideo struct", base_size);
 		return -ENOMEM;
@@ -1680,7 +1680,7 @@ static int usbvideo_CompressIsochronous(struct uvd *uvd, struct urb *urb)
 	return totlen;
 }
 
-static void usbvideo_IsocIrq(struct urb *urb, struct pt_regs *regs)
+static void usbvideo_IsocIrq(struct urb *urb)
 {
 	int i, ret, len;
 	struct uvd *uvd = urb->context;

@@ -38,7 +38,6 @@
  *		Fix some spin_locks.
  *		Do not call uart_add_one_port for absent ports.
  */
-#include <linux/config.h>
 
 #if defined(CONFIG_SERIAL_TXX9_CONSOLE) && defined(CONFIG_MAGIC_SYSRQ)
 #define SUPPORT_SYSRQ
@@ -69,12 +68,10 @@ static char *serial_name = "TX39/49 Serial driver";
 #if !defined(CONFIG_SERIAL_TXX9_STDSERIAL)
 /* "ttyS" is used for standard serial driver */
 #define TXX9_TTY_NAME "ttyTX"
-#define TXX9_TTY_DEVFS_NAME "tttx/"
 #define TXX9_TTY_MINOR_START	(64 + 64)	/* ttyTX0(128), ttyTX1(129) */
 #else
 /* acts like standard serial driver */
 #define TXX9_TTY_NAME "ttyS"
-#define TXX9_TTY_DEVFS_NAME "tts/"
 #define TXX9_TTY_MINOR_START	64
 #endif
 #define TXX9_TTY_MAJOR	TTY_MAJOR
@@ -286,7 +283,7 @@ static void serial_txx9_enable_ms(struct uart_port *port)
 }
 
 static inline void
-receive_chars(struct uart_txx9_port *up, unsigned int *status, struct pt_regs *regs)
+receive_chars(struct uart_txx9_port *up, unsigned int *status)
 {
 	struct tty_struct *tty = up->port.info->tty;
 	unsigned char ch;
@@ -347,7 +344,7 @@ receive_chars(struct uart_txx9_port *up, unsigned int *status, struct pt_regs *r
 			else if (disr & TXX9_SIDISR_UFER)
 				flag = TTY_FRAME;
 		}
-		if (uart_handle_sysrq_char(&up->port, ch, regs))
+		if (uart_handle_sysrq_char(&up->port, ch))
 			goto ignore_char;
 
 		uart_insert_char(&up->port, disr, TXX9_SIDISR_UOER, ch, flag);
@@ -394,7 +391,7 @@ static inline void transmit_chars(struct uart_txx9_port *up)
 		serial_txx9_stop_tx(&up->port);
 }
 
-static irqreturn_t serial_txx9_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t serial_txx9_interrupt(int irq, void *dev_id)
 {
 	int pass_counter = 0;
 	struct uart_txx9_port *up = dev_id;
@@ -412,7 +409,7 @@ static irqreturn_t serial_txx9_interrupt(int irq, void *dev_id, struct pt_regs *
 		}
 
 		if (status & TXX9_SIDISR_RDIS)
-			receive_chars(up, &status, regs);
+			receive_chars(up, &status);
 		if (status & TXX9_SIDISR_TDIS)
 			transmit_chars(up);
 		/* Clear TX/RX Int. Status */
@@ -498,7 +495,7 @@ static int serial_txx9_startup(struct uart_port *port)
 	sio_out(up, TXX9_SIDISR, 0);
 
 	retval = request_irq(up->port.irq, serial_txx9_interrupt,
-			     SA_SHIRQ, "serial_txx9", up);
+			     IRQF_SHARED, "serial_txx9", up);
 	if (retval)
 		return retval;
 
@@ -559,8 +556,8 @@ static void serial_txx9_shutdown(struct uart_port *port)
 }
 
 static void
-serial_txx9_set_termios(struct uart_port *port, struct termios *termios,
-		       struct termios *old)
+serial_txx9_set_termios(struct uart_port *port, struct ktermios *termios,
+		       struct ktermios *old)
 {
 	struct uart_txx9_port *up = (struct uart_txx9_port *)port;
 	unsigned int cval, fcr = 0;
@@ -971,7 +968,6 @@ console_initcall(serial_txx9_console_init);
 static struct uart_driver serial_txx9_reg = {
 	.owner			= THIS_MODULE,
 	.driver_name		= "serial_txx9",
-	.devfs_name		= TXX9_TTY_DEVFS_NAME,
 	.dev_name		= TXX9_TTY_NAME,
 	.major			= TXX9_TTY_MAJOR,
 	.minor			= TXX9_TTY_MINOR_START,
@@ -994,7 +990,6 @@ int __init early_serial_txx9_setup(struct uart_port *port)
 /**
  *	serial_txx9_suspend_port - suspend one serial port
  *	@line:  serial line number
- *      @level: the level of port suspension, as per uart_suspend_port
  *
  *	Suspend one serial port.
  */
@@ -1006,7 +1001,6 @@ static void serial_txx9_suspend_port(int line)
 /**
  *	serial_txx9_resume_port - resume one serial port
  *	@line:  serial line number
- *      @level: the level of port resumption, as per uart_resume_port
  *
  *	Resume one serial port.
  */

@@ -49,14 +49,55 @@ struct dvb_frontend_tune_settings {
 
 struct dvb_frontend;
 
+struct dvb_tuner_info {
+	char name[128];
+
+	u32 frequency_min;
+	u32 frequency_max;
+	u32 frequency_step;
+
+	u32 bandwidth_min;
+	u32 bandwidth_max;
+	u32 bandwidth_step;
+};
+
+struct dvb_tuner_ops {
+
+	struct dvb_tuner_info info;
+
+	int (*release)(struct dvb_frontend *fe);
+	int (*init)(struct dvb_frontend *fe);
+	int (*sleep)(struct dvb_frontend *fe);
+
+	/** This is for simple PLLs - set all parameters in one go. */
+	int (*set_params)(struct dvb_frontend *fe, struct dvb_frontend_parameters *p);
+
+	/** This is support for demods like the mt352 - fills out the supplied buffer with what to write. */
+	int (*calc_regs)(struct dvb_frontend *fe, struct dvb_frontend_parameters *p, u8 *buf, int buf_len);
+
+	int (*get_frequency)(struct dvb_frontend *fe, u32 *frequency);
+	int (*get_bandwidth)(struct dvb_frontend *fe, u32 *bandwidth);
+
+#define TUNER_STATUS_LOCKED 1
+	int (*get_status)(struct dvb_frontend *fe, u32 *status);
+
+	/** These are provided seperately from set_params in order to facilitate silicon
+	 * tuners which require sophisticated tuning loops, controlling each parameter seperately. */
+	int (*set_frequency)(struct dvb_frontend *fe, u32 frequency);
+	int (*set_bandwidth)(struct dvb_frontend *fe, u32 bandwidth);
+};
+
 struct dvb_frontend_ops {
 
 	struct dvb_frontend_info info;
 
 	void (*release)(struct dvb_frontend* fe);
+	void (*release_sec)(struct dvb_frontend* fe);
 
 	int (*init)(struct dvb_frontend* fe);
 	int (*sleep)(struct dvb_frontend* fe);
+
+	int (*write)(struct dvb_frontend* fe, u8* buf, int len);
 
 	/* if this is set, it overrides the default swzigzag */
 	int (*tune)(struct dvb_frontend* fe,
@@ -64,6 +105,8 @@ struct dvb_frontend_ops {
 		    unsigned int mode_flags,
 		    int *delay,
 		    fe_status_t *status);
+	/* get frontend tuning algorithm from the module */
+	int (*get_frontend_algo)(struct dvb_frontend *fe);
 
 	/* these two are only used for the swzigzag code */
 	int (*set_frontend)(struct dvb_frontend* fe, struct dvb_frontend_parameters* params);
@@ -86,6 +129,9 @@ struct dvb_frontend_ops {
 	int (*enable_high_lnb_voltage)(struct dvb_frontend* fe, long arg);
 	int (*dishnetwork_send_legacy_command)(struct dvb_frontend* fe, unsigned long cmd);
 	int (*i2c_gate_ctrl)(struct dvb_frontend* fe, int enable);
+	int (*ts_bus_ctrl)(struct dvb_frontend* fe, int acquire);
+
+	struct dvb_tuner_ops tuner_ops;
 };
 
 #define MAX_EVENT 8
@@ -100,17 +146,20 @@ struct dvb_fe_events {
 };
 
 struct dvb_frontend {
-	struct dvb_frontend_ops* ops;
+	struct dvb_frontend_ops ops;
 	struct dvb_adapter *dvb;
 	void* demodulator_priv;
+	void* tuner_priv;
 	void* frontend_priv;
-	void* misc_priv;
+	void* sec_priv;
 };
 
 extern int dvb_register_frontend(struct dvb_adapter* dvb,
 				 struct dvb_frontend* fe);
 
 extern int dvb_unregister_frontend(struct dvb_frontend* fe);
+
+extern void dvb_frontend_detach(struct dvb_frontend* fe);
 
 extern void dvb_frontend_reinitialise(struct dvb_frontend *fe);
 

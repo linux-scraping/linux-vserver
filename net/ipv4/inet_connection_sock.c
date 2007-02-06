@@ -13,7 +13,6 @@
  *		2 of the License, or(at your option) any later version.
  */
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/jhash.h>
 
@@ -326,6 +325,7 @@ struct dst_entry* inet_csk_route_req(struct sock *sk,
 				       { .sport = inet_sk(sk)->sport,
 					 .dport = ireq->rmt_port } } };
 
+	security_req_classify_flow(req, &fl);
 	if (ip_route_output_flow(&rt, &fl, sk, 0)) {
 		IP_INC_STATS_BH(IPSTATS_MIB_OUTNOROUTES);
 		return NULL;
@@ -340,10 +340,10 @@ struct dst_entry* inet_csk_route_req(struct sock *sk,
 
 EXPORT_SYMBOL_GPL(inet_csk_route_req);
 
-static inline u32 inet_synq_hash(const u32 raddr, const u16 rport,
-				 const u32 rnd, const u16 synq_hsize)
+static inline u32 inet_synq_hash(const __be32 raddr, const __be16 rport,
+				 const u32 rnd, const u32 synq_hsize)
 {
-	return jhash_2words(raddr, (u32)rport, rnd) & (synq_hsize - 1);
+	return jhash_2words((__force u32)raddr, (__force u32)rport, rnd) & (synq_hsize - 1);
 }
 
 #if defined(CONFIG_IPV6) || defined(CONFIG_IPV6_MODULE)
@@ -354,8 +354,8 @@ static inline u32 inet_synq_hash(const u32 raddr, const u16 rport,
 
 struct request_sock *inet_csk_search_req(const struct sock *sk,
 					 struct request_sock ***prevp,
-					 const __u16 rport, const __u32 raddr,
-					 const __u32 laddr)
+					 const __be16 rport, const __be32 raddr,
+					 const __be32 laddr)
 {
 	const struct inet_connection_sock *icsk = inet_csk(sk);
 	struct listen_sock *lopt = icsk->icsk_accept_queue.listen_opt;
@@ -508,6 +508,8 @@ struct sock *inet_csk_clone(struct sock *sk, const struct request_sock *req,
 
 		/* Deinitialize accept_queue to trap illegal accesses. */
 		memset(&newicsk->icsk_accept_queue, 0, sizeof(newicsk->icsk_accept_queue));
+
+		security_inet_csk_clone(newsk, req);
 	}
 	return newsk;
 }

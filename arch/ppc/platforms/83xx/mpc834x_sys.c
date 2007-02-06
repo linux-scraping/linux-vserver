@@ -11,7 +11,6 @@
  * option) any later version.
  */
 
-#include <linux/config.h>
 #include <linux/stddef.h>
 #include <linux/kernel.h>
 #include <linux/init.h>
@@ -122,8 +121,8 @@ mpc834x_sys_setup_arch(void)
 
 	mdata->irq[0] = MPC83xx_IRQ_EXT1;
 	mdata->irq[1] = MPC83xx_IRQ_EXT2;
-	mdata->irq[2] = -1;
-	mdata->irq[31] = -1;
+	mdata->irq[2] = PHY_POLL;
+	mdata->irq[31] = PHY_POLL;
 
 	/* setup the board related information for the enet controllers */
 	pdata = (struct gianfar_platform_data *) ppc_sys_get_pdata(MPC83xx_TSEC1);

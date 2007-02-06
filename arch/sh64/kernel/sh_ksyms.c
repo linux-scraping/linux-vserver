@@ -9,7 +9,6 @@
  *
  */
 
-#include <linux/config.h>
 #include <linux/rwsem.h>
 #include <linux/module.h>
 #include <linux/smp.h>
@@ -19,7 +18,7 @@
 #include <linux/in6.h>
 #include <linux/interrupt.h>
 #include <linux/smp_lock.h>
-#include <linux/tty.h>
+#include <linux/screen_info.h>
 
 #include <asm/semaphore.h>
 #include <asm/processor.h>
@@ -39,7 +38,7 @@ EXPORT_SYMBOL(disable_irq);
 EXPORT_SYMBOL(kernel_thread);
 
 /* Networking helper routines. */
-EXPORT_SYMBOL(csum_partial_copy);
+EXPORT_SYMBOL(csum_partial_copy_nocheck);
 
 EXPORT_SYMBOL(strstr);
 

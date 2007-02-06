@@ -5,7 +5,6 @@
  * derived from: arch/i386/kernel/pci-irq.c: (c) 1999--2000 Martin Mares <mj@suse.cz>
  */
 
-#include <linux/config.h>
 #include <linux/types.h>
 #include <linux/kernel.h>
 #include <linux/pci.h>
@@ -16,7 +15,6 @@
 
 #include <asm/io.h>
 #include <asm/smp.h>
-#include <asm/irq-routing.h>
 
 #include "pci-frv.h"
 
@@ -32,11 +30,11 @@
  */
 
 static const uint8_t __initdata pci_bus0_irq_routing[32][4] = {
-	[0 ] {	IRQ_FPGA_MB86943_PCI_INTA },
-	[16] {	IRQ_FPGA_RTL8029_INTA },
-	[17] {	IRQ_FPGA_PCI_INTC, IRQ_FPGA_PCI_INTD, IRQ_FPGA_PCI_INTA, IRQ_FPGA_PCI_INTB },
-	[18] {	IRQ_FPGA_PCI_INTB, IRQ_FPGA_PCI_INTC, IRQ_FPGA_PCI_INTD, IRQ_FPGA_PCI_INTA },
-	[19] {	IRQ_FPGA_PCI_INTA, IRQ_FPGA_PCI_INTB, IRQ_FPGA_PCI_INTC, IRQ_FPGA_PCI_INTD },
+	[0 ] = { IRQ_FPGA_MB86943_PCI_INTA },
+	[16] = { IRQ_FPGA_RTL8029_INTA },
+	[17] = { IRQ_FPGA_PCI_INTC, IRQ_FPGA_PCI_INTD, IRQ_FPGA_PCI_INTA, IRQ_FPGA_PCI_INTB },
+	[18] = { IRQ_FPGA_PCI_INTB, IRQ_FPGA_PCI_INTC, IRQ_FPGA_PCI_INTD, IRQ_FPGA_PCI_INTA },
+	[19] = { IRQ_FPGA_PCI_INTA, IRQ_FPGA_PCI_INTB, IRQ_FPGA_PCI_INTC, IRQ_FPGA_PCI_INTD },
 };
 
 void __init pcibios_irq_init(void)

@@ -23,7 +23,6 @@
  */
 
 
-#include <linux/config.h>
 #include <linux/init.h>
 #include <linux/types.h>
 #include <linux/slab.h>
@@ -38,6 +37,7 @@
 #include <asm/iommu.h>
 #include <asm/pci-bridge.h>
 #include <asm/machdep.h>
+#include <asm/kdump.h>
 
 #define DBG(...)
 
@@ -46,6 +46,17 @@ static int novmerge = 0;
 #else
 static int novmerge = 1;
 #endif
+
+static inline unsigned long iommu_num_pages(unsigned long vaddr,
+					    unsigned long slen)
+{
+	unsigned long npages;
+
+	npages = IOMMU_PAGE_ALIGN(vaddr + slen) - (vaddr & IOMMU_PAGE_MASK);
+	npages >>= IOMMU_PAGE_SHIFT;
+
+	return npages;
+}
 
 static int __init setup_iommu(char *str)
 {
@@ -75,7 +86,7 @@ static unsigned long iommu_range_alloc(struct iommu_table *tbl,
 	/* This allocator was derived from x86_64's bit string search */
 
 	/* Sanity check */
-	if (unlikely(npages) == 0) {
+	if (unlikely(npages == 0)) {
 		if (printk_ratelimit())
 			WARN_ON(1);
 		return DMA_ERROR_CODE;
@@ -178,10 +189,10 @@ static dma_addr_t iommu_alloc(struct iommu_table *tbl, void *page,
 	}
 
 	entry += tbl->it_offset;	/* Offset into real TCE table */
-	ret = entry << PAGE_SHIFT;	/* Set the return dma address */
+	ret = entry << IOMMU_PAGE_SHIFT;	/* Set the return dma address */
 
 	/* Put the TCEs in the HW table */
-	ppc_md.tce_build(tbl, entry, npages, (unsigned long)page & PAGE_MASK,
+	ppc_md.tce_build(tbl, entry, npages, (unsigned long)page & IOMMU_PAGE_MASK,
 			 direction);
 
 
@@ -203,7 +214,7 @@ static void __iommu_free(struct iommu_table *tbl, dma_addr_t dma_addr,
 	unsigned long entry, free_entry;
 	unsigned long i;
 
-	entry = dma_addr >> PAGE_SHIFT;
+	entry = dma_addr >> IOMMU_PAGE_SHIFT;
 	free_entry = entry - tbl->it_offset;
 
 	if (((free_entry + npages) > tbl->it_size) ||
@@ -247,9 +258,9 @@ static void iommu_free(struct iommu_table *tbl, dma_addr_t dma_addr,
 	spin_unlock_irqrestore(&(tbl->it_lock), flags);
 }
 
-int iommu_map_sg(struct device *dev, struct iommu_table *tbl,
-		struct scatterlist *sglist, int nelems,
-		unsigned long mask, enum dma_data_direction direction)
+int iommu_map_sg(struct iommu_table *tbl, struct scatterlist *sglist,
+		 int nelems, unsigned long mask,
+		 enum dma_data_direction direction)
 {
 	dma_addr_t dma_next = 0, dma_addr;
 	unsigned long flags;
@@ -270,7 +281,7 @@ int iommu_map_sg(struct device *dev, struct iommu_table *tbl,
 	/* Init first segment length for backout at failure */
 	outs->dma_length = 0;
 
-	DBG("mapping %d elements:\n", nelems);
+	DBG("sg mapping %d elements:\n", nelems);
 
 	spin_lock_irqsave(&(tbl->it_lock), flags);
 
@@ -285,9 +296,8 @@ int iommu_map_sg(struct device *dev, struct iommu_table *tbl,
 		}
 		/* Allocate iommu entries for that segment */
 		vaddr = (unsigned long)page_address(s->page) + s->offset;
-		npages = PAGE_ALIGN(vaddr + slen) - (vaddr & PAGE_MASK);
-		npages >>= PAGE_SHIFT;
-		entry = iommu_range_alloc(tbl, npages, &handle, mask >> PAGE_SHIFT, 0);
+		npages = iommu_num_pages(vaddr, slen);
+		entry = iommu_range_alloc(tbl, npages, &handle, mask >> IOMMU_PAGE_SHIFT, 0);
 
 		DBG("  - vaddr: %lx, size: %lx\n", vaddr, slen);
 
@@ -301,14 +311,14 @@ int iommu_map_sg(struct device *dev, struct iommu_table *tbl,
 
 		/* Convert entry to a dma_addr_t */
 		entry += tbl->it_offset;
-		dma_addr = entry << PAGE_SHIFT;
-		dma_addr |= s->offset;
+		dma_addr = entry << IOMMU_PAGE_SHIFT;
+		dma_addr |= (s->offset & ~IOMMU_PAGE_MASK);
 
-		DBG("  - %lx pages, entry: %lx, dma_addr: %lx\n",
+		DBG("  - %lu pages, entry: %lx, dma_addr: %lx\n",
 			    npages, entry, dma_addr);
 
 		/* Insert into HW table */
-		ppc_md.tce_build(tbl, entry, npages, vaddr & PAGE_MASK, direction);
+		ppc_md.tce_build(tbl, entry, npages, vaddr & IOMMU_PAGE_MASK, direction);
 
 		/* If we are in an open segment, try merging */
 		if (segstart != s) {
@@ -323,7 +333,7 @@ int iommu_map_sg(struct device *dev, struct iommu_table *tbl,
 				DBG("    can't merge, new segment.\n");
 			} else {
 				outs->dma_length += s->length;
-				DBG("    merged, new len: %lx\n", outs->dma_length);
+				DBG("    merged, new len: %ux\n", outs->dma_length);
 			}
 		}
 
@@ -367,9 +377,8 @@ int iommu_map_sg(struct device *dev, struct iommu_table *tbl,
 		if (s->dma_length != 0) {
 			unsigned long vaddr, npages;
 
-			vaddr = s->dma_address & PAGE_MASK;
-			npages = (PAGE_ALIGN(s->dma_address + s->dma_length) - vaddr)
-				>> PAGE_SHIFT;
+			vaddr = s->dma_address & IOMMU_PAGE_MASK;
+			npages = iommu_num_pages(s->dma_address, s->dma_length);
 			__iommu_free(tbl, vaddr, npages);
 			s->dma_address = DMA_ERROR_CODE;
 			s->dma_length = 0;
@@ -398,8 +407,7 @@ void iommu_unmap_sg(struct iommu_table *tbl, struct scatterlist *sglist,
 
 		if (sglist->dma_length == 0)
 			break;
-		npages = (PAGE_ALIGN(dma_handle + sglist->dma_length)
-			  - (dma_handle & PAGE_MASK)) >> PAGE_SHIFT;
+		npages = iommu_num_pages(dma_handle,sglist->dma_length);
 		__iommu_free(tbl, dma_handle, npages);
 		sglist++;
 	}
@@ -418,10 +426,11 @@ void iommu_unmap_sg(struct iommu_table *tbl, struct scatterlist *sglist,
  * Build a iommu_table structure.  This contains a bit map which
  * is used to manage allocation of the tce space.
  */
-struct iommu_table *iommu_init_table(struct iommu_table *tbl)
+struct iommu_table *iommu_init_table(struct iommu_table *tbl, int nid)
 {
 	unsigned long sz;
 	static int welcomed = 0;
+	struct page *page;
 
 	/* Set aside 1/4 of the table for large allocations. */
 	tbl->it_halfpoint = tbl->it_size * 3 / 4;
@@ -429,18 +438,47 @@ struct iommu_table *iommu_init_table(struct iommu_table *tbl)
 	/* number of bytes needed for the bitmap */
 	sz = (tbl->it_size + 7) >> 3;
 
-	tbl->it_map = (unsigned long *)__get_free_pages(GFP_ATOMIC, get_order(sz));
-	if (!tbl->it_map)
+	page = alloc_pages_node(nid, GFP_ATOMIC, get_order(sz));
+	if (!page)
 		panic("iommu_init_table: Can't allocate %ld bytes\n", sz);
-
+	tbl->it_map = page_address(page);
 	memset(tbl->it_map, 0, sz);
 
 	tbl->it_hint = 0;
 	tbl->it_largehint = tbl->it_halfpoint;
 	spin_lock_init(&tbl->it_lock);
 
+#ifdef CONFIG_CRASH_DUMP
+	if (ppc_md.tce_get) {
+		unsigned long index, tceval;
+		unsigned long tcecount = 0;
+
+		/*
+		 * Reserve the existing mappings left by the first kernel.
+		 */
+		for (index = 0; index < tbl->it_size; index++) {
+			tceval = ppc_md.tce_get(tbl, index + tbl->it_offset);
+			/*
+			 * Freed TCE entry contains 0x7fffffffffffffff on JS20
+			 */
+			if (tceval && (tceval != 0x7fffffffffffffffUL)) {
+				__set_bit(index, tbl->it_map);
+				tcecount++;
+			}
+		}
+		if ((tbl->it_size - tcecount) < KDUMP_MIN_TCE_ENTRIES) {
+			printk(KERN_WARNING "TCE table is full; ");
+			printk(KERN_WARNING "freeing %d entries for the kdump boot\n",
+				KDUMP_MIN_TCE_ENTRIES);
+			for (index = tbl->it_size - KDUMP_MIN_TCE_ENTRIES;
+				index < tbl->it_size; index++)
+				__clear_bit(index, tbl->it_map);
+		}
+	}
+#else
 	/* Clear the hardware table in case firmware left allocations in it */
 	ppc_md.tce_free(tbl, tbl->it_offset, tbl->it_size);
+#endif
 
 	if (!welcomed) {
 		printk(KERN_INFO "IOMMU table initialized, virtual merging %s\n",
@@ -502,12 +540,11 @@ dma_addr_t iommu_map_single(struct iommu_table *tbl, void *vaddr,
 	BUG_ON(direction == DMA_NONE);
 
 	uaddr = (unsigned long)vaddr;
-	npages = PAGE_ALIGN(uaddr + size) - (uaddr & PAGE_MASK);
-	npages >>= PAGE_SHIFT;
+	npages = iommu_num_pages(uaddr, size);
 
 	if (tbl) {
 		dma_handle = iommu_alloc(tbl, vaddr, npages, direction,
-					 mask >> PAGE_SHIFT, 0);
+					 mask >> IOMMU_PAGE_SHIFT, 0);
 		if (dma_handle == DMA_ERROR_CODE) {
 			if (printk_ratelimit())  {
 				printk(KERN_INFO "iommu_alloc failed, "
@@ -515,7 +552,7 @@ dma_addr_t iommu_map_single(struct iommu_table *tbl, void *vaddr,
 						tbl, vaddr, npages);
 			}
 		} else
-			dma_handle |= (uaddr & ~PAGE_MASK);
+			dma_handle |= (uaddr & ~IOMMU_PAGE_MASK);
 	}
 
 	return dma_handle;
@@ -524,11 +561,14 @@ dma_addr_t iommu_map_single(struct iommu_table *tbl, void *vaddr,
 void iommu_unmap_single(struct iommu_table *tbl, dma_addr_t dma_handle,
 		size_t size, enum dma_data_direction direction)
 {
+	unsigned int npages;
+
 	BUG_ON(direction == DMA_NONE);
 
-	if (tbl)
-		iommu_free(tbl, dma_handle, (PAGE_ALIGN(dma_handle + size) -
-					(dma_handle & PAGE_MASK)) >> PAGE_SHIFT);
+	if (tbl) {
+		npages = iommu_num_pages(dma_handle, size);
+		iommu_free(tbl, dma_handle, npages);
+	}
 }
 
 /* Allocates a contiguous real buffer and creates mappings over it.
@@ -536,14 +576,15 @@ void iommu_unmap_single(struct iommu_table *tbl, dma_addr_t dma_handle,
  * to the dma address (mapping) of the first page.
  */
 void *iommu_alloc_coherent(struct iommu_table *tbl, size_t size,
-		dma_addr_t *dma_handle, unsigned long mask, gfp_t flag)
+		dma_addr_t *dma_handle, unsigned long mask, gfp_t flag, int node)
 {
 	void *ret = NULL;
 	dma_addr_t mapping;
-	unsigned int npages, order;
+	unsigned int order;
+	unsigned int nio_pages, io_order;
+	struct page *page;
 
 	size = PAGE_ALIGN(size);
-	npages = size >> PAGE_SHIFT;
 	order = get_order(size);
 
  	/*
@@ -560,31 +601,35 @@ void *iommu_alloc_coherent(struct iommu_table *tbl, size_t size,
 		return NULL;
 
 	/* Alloc enough pages (and possibly more) */
-	ret = (void *)__get_free_pages(flag, order);
-	if (!ret)
+	page = alloc_pages_node(node, flag, order);
+	if (!page)
 		return NULL;
+	ret = page_address(page);
 	memset(ret, 0, size);
 
 	/* Set up tces to cover the allocated range */
-	mapping = iommu_alloc(tbl, ret, npages, DMA_BIDIRECTIONAL,
-			      mask >> PAGE_SHIFT, order);
+	nio_pages = size >> IOMMU_PAGE_SHIFT;
+	io_order = get_iommu_order(size);
+	mapping = iommu_alloc(tbl, ret, nio_pages, DMA_BIDIRECTIONAL,
+			      mask >> IOMMU_PAGE_SHIFT, io_order);
 	if (mapping == DMA_ERROR_CODE) {
 		free_pages((unsigned long)ret, order);
-		ret = NULL;
-	} else
-		*dma_handle = mapping;
+		return NULL;
+	}
+	*dma_handle = mapping;
 	return ret;
 }
 
 void iommu_free_coherent(struct iommu_table *tbl, size_t size,
 			 void *vaddr, dma_addr_t dma_handle)
 {
-	unsigned int npages;
-
 	if (tbl) {
+		unsigned int nio_pages;
+
 		size = PAGE_ALIGN(size);
-		npages = size >> PAGE_SHIFT;
-		iommu_free(tbl, dma_handle, npages);
+		nio_pages = size >> IOMMU_PAGE_SHIFT;
+		iommu_free(tbl, dma_handle, nio_pages);
+		size = PAGE_ALIGN(size);
 		free_pages((unsigned long)vaddr, get_order(size));
 	}
 }

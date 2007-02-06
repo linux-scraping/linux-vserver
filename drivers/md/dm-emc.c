@@ -12,6 +12,8 @@
 #include <scsi/scsi.h>
 #include <scsi/scsi_cmnd.h>
 
+#define DM_MSG_PREFIX "multipath emc"
+
 struct emc_handler {
 	spinlock_t lock;
 
@@ -38,7 +40,7 @@ static inline void free_bio(struct bio *bio)
 
 static int emc_endio(struct bio *bio, unsigned int bytes_done, int error)
 {
-	struct path *path = bio->bi_private;
+	struct dm_path *path = bio->bi_private;
 
 	if (bio->bi_size)
 		return 1;
@@ -59,14 +61,14 @@ static int emc_endio(struct bio *bio, unsigned int bytes_done, int error)
 	return 0;
 }
 
-static struct bio *get_failover_bio(struct path *path, unsigned data_size)
+static struct bio *get_failover_bio(struct dm_path *path, unsigned data_size)
 {
 	struct bio *bio;
 	struct page *page;
 
 	bio = bio_alloc(GFP_ATOMIC, 1);
 	if (!bio) {
-		DMERR("dm-emc: get_failover_bio: bio_alloc() failed.");
+		DMERR("get_failover_bio: bio_alloc() failed.");
 		return NULL;
 	}
 
@@ -78,13 +80,13 @@ static struct bio *get_failover_bio(struct path *path, unsigned data_size)
 
 	page = alloc_page(GFP_ATOMIC);
 	if (!page) {
-		DMERR("dm-emc: get_failover_bio: alloc_page() failed.");
+		DMERR("get_failover_bio: alloc_page() failed.");
 		bio_put(bio);
 		return NULL;
 	}
 
 	if (bio_add_page(bio, page, data_size, 0) != data_size) {
-		DMERR("dm-emc: get_failover_bio: alloc_page() failed.");
+		DMERR("get_failover_bio: alloc_page() failed.");
 		__free_page(page);
 		bio_put(bio);
 		return NULL;
@@ -94,7 +96,7 @@ static struct bio *get_failover_bio(struct path *path, unsigned data_size)
 }
 
 static struct request *get_failover_req(struct emc_handler *h,
-					struct bio *bio, struct path *path)
+					struct bio *bio, struct dm_path *path)
 {
 	struct request *rq;
 	struct block_device *bdev = bio->bi_bdev;
@@ -103,7 +105,7 @@ static struct request *get_failover_req(struct emc_handler *h,
 	/* FIXME: Figure out why it fails with GFP_ATOMIC. */
 	rq = blk_get_request(q, WRITE, __GFP_WAIT);
 	if (!rq) {
-		DMERR("dm-emc: get_failover_req: blk_get_request failed");
+		DMERR("get_failover_req: blk_get_request failed");
 		return NULL;
 	}
 
@@ -124,13 +126,14 @@ static struct request *get_failover_req(struct emc_handler *h,
 	memset(&rq->cmd, 0, BLK_MAX_CDB);
 
 	rq->timeout = EMC_FAILOVER_TIMEOUT;
-	rq->flags |= (REQ_BLOCK_PC | REQ_FAILFAST | REQ_NOMERGE);
+	rq->cmd_type = REQ_TYPE_BLOCK_PC;
+	rq->cmd_flags |= REQ_FAILFAST | REQ_NOMERGE;
 
 	return rq;
 }
 
 static struct request *emc_trespass_get(struct emc_handler *h,
-					struct path *path)
+					struct dm_path *path)
 {
 	struct bio *bio;
 	struct request *rq;
@@ -160,7 +163,7 @@ static struct request *emc_trespass_get(struct emc_handler *h,
 
 	bio = get_failover_bio(path, data_size);
 	if (!bio) {
-		DMERR("dm-emc: emc_trespass_get: no bio");
+		DMERR("emc_trespass_get: no bio");
 		return NULL;
 	}
 
@@ -173,7 +176,7 @@ static struct request *emc_trespass_get(struct emc_handler *h,
 	/* get request for block layer packet command */
 	rq = get_failover_req(h, bio, path);
 	if (!rq) {
-		DMERR("dm-emc: emc_trespass_get: no rq");
+		DMERR("emc_trespass_get: no rq");
 		free_bio(bio);
 		return NULL;
 	}
@@ -188,7 +191,7 @@ static struct request *emc_trespass_get(struct emc_handler *h,
 }
 
 static void emc_pg_init(struct hw_handler *hwh, unsigned bypassed,
-			struct path *path)
+			struct dm_path *path)
 {
 	struct request *rq;
 	struct request_queue *q = bdev_get_queue(path->dev->bdev);
@@ -200,18 +203,18 @@ static void emc_pg_init(struct hw_handler *hwh, unsigned bypassed,
 	 * initial state passed into us and then get an update here.
 	 */
 	if (!q) {
-		DMINFO("dm-emc: emc_pg_init: no queue");
+		DMINFO("emc_pg_init: no queue");
 		goto fail_path;
 	}
 
 	/* FIXME: The request should be pre-allocated. */
 	rq = emc_trespass_get(hwh->context, path);
 	if (!rq) {
-		DMERR("dm-emc: emc_pg_init: no rq");
+		DMERR("emc_pg_init: no rq");
 		goto fail_path;
 	}
 
-	DMINFO("dm-emc: emc_pg_init: sending switch-over command");
+	DMINFO("emc_pg_init: sending switch-over command");
 	elv_add_request(q, rq, ELEVATOR_INSERT_FRONT, 1);
 	return;
 
@@ -241,18 +244,18 @@ static int emc_create(struct hw_handler *hwh, unsigned argc, char **argv)
 		hr = 0;
 		short_trespass = 0;
 	} else if (argc != 2) {
-		DMWARN("dm-emc hwhandler: incorrect number of arguments");
+		DMWARN("incorrect number of arguments");
 		return -EINVAL;
 	} else {
 		if ((sscanf(argv[0], "%u", &short_trespass) != 1)
 			|| (short_trespass > 1)) {
-			DMWARN("dm-emc: invalid trespass mode selected");
+			DMWARN("invalid trespass mode selected");
 			return -EINVAL;
 		}
 
 		if ((sscanf(argv[1], "%u", &hr) != 1)
 			|| (hr > 1)) {
-			DMWARN("dm-emc: invalid honor reservation flag selected");
+			DMWARN("invalid honor reservation flag selected");
 			return -EINVAL;
 		}
 	}
@@ -264,14 +267,14 @@ static int emc_create(struct hw_handler *hwh, unsigned argc, char **argv)
 	hwh->context = h;
 
 	if ((h->short_trespass = short_trespass))
-		DMWARN("dm-emc: short trespass command will be send");
+		DMWARN("short trespass command will be send");
 	else
-		DMWARN("dm-emc: long trespass command will be send");
+		DMWARN("long trespass command will be send");
 
 	if ((h->hr = hr))
-		DMWARN("dm-emc: honor reservation bit will be set");
+		DMWARN("honor reservation bit will be set");
 	else
-		DMWARN("dm-emc: honor reservation bit will not be set (default)");
+		DMWARN("honor reservation bit will not be set (default)");
 
 	return 0;
 }
@@ -336,9 +339,9 @@ static int __init dm_emc_init(void)
 	int r = dm_register_hw_handler(&emc_hwh);
 
 	if (r < 0)
-		DMERR("emc: register failed %d", r);
+		DMERR("register failed %d", r);
 
-	DMINFO("dm-emc version 0.0.3 loaded");
+	DMINFO("version 0.0.3 loaded");
 
 	return r;
 }
@@ -348,7 +351,7 @@ static void __exit dm_emc_exit(void)
 	int r = dm_unregister_hw_handler(&emc_hwh);
 
 	if (r < 0)
-		DMERR("emc: unregister failed %d", r);
+		DMERR("unregister failed %d", r);
 }
 
 module_init(dm_emc_init);

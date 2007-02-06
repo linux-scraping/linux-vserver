@@ -34,7 +34,6 @@
  * $Id: mthca_main.c 1396 2004-12-28 04:10:27Z roland $
  */
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/errno.h>
@@ -81,23 +80,62 @@ static int tune_pci = 0;
 module_param(tune_pci, int, 0444);
 MODULE_PARM_DESC(tune_pci, "increase PCI burst from the default set by BIOS if nonzero");
 
+DEFINE_MUTEX(mthca_device_mutex);
+
+#define MTHCA_DEFAULT_NUM_QP            (1 << 16)
+#define MTHCA_DEFAULT_RDB_PER_QP        (1 << 2)
+#define MTHCA_DEFAULT_NUM_CQ            (1 << 16)
+#define MTHCA_DEFAULT_NUM_MCG           (1 << 13)
+#define MTHCA_DEFAULT_NUM_MPT           (1 << 17)
+#define MTHCA_DEFAULT_NUM_MTT           (1 << 20)
+#define MTHCA_DEFAULT_NUM_UDAV          (1 << 15)
+#define MTHCA_DEFAULT_NUM_RESERVED_MTTS (1 << 18)
+#define MTHCA_DEFAULT_NUM_UARC_SIZE     (1 << 18)
+
+static struct mthca_profile hca_profile = {
+	.num_qp             = MTHCA_DEFAULT_NUM_QP,
+	.rdb_per_qp         = MTHCA_DEFAULT_RDB_PER_QP,
+	.num_cq             = MTHCA_DEFAULT_NUM_CQ,
+	.num_mcg            = MTHCA_DEFAULT_NUM_MCG,
+	.num_mpt            = MTHCA_DEFAULT_NUM_MPT,
+	.num_mtt            = MTHCA_DEFAULT_NUM_MTT,
+	.num_udav           = MTHCA_DEFAULT_NUM_UDAV,          /* Tavor only */
+	.fmr_reserved_mtts  = MTHCA_DEFAULT_NUM_RESERVED_MTTS, /* Tavor only */
+	.uarc_size          = MTHCA_DEFAULT_NUM_UARC_SIZE,     /* Arbel only */
+};
+
+module_param_named(num_qp, hca_profile.num_qp, int, 0444);
+MODULE_PARM_DESC(num_qp, "maximum number of QPs per HCA");
+
+module_param_named(rdb_per_qp, hca_profile.rdb_per_qp, int, 0444);
+MODULE_PARM_DESC(rdb_per_qp, "number of RDB buffers per QP");
+
+module_param_named(num_cq, hca_profile.num_cq, int, 0444);
+MODULE_PARM_DESC(num_cq, "maximum number of CQs per HCA");
+
+module_param_named(num_mcg, hca_profile.num_mcg, int, 0444);
+MODULE_PARM_DESC(num_mcg, "maximum number of multicast groups per HCA");
+
+module_param_named(num_mpt, hca_profile.num_mpt, int, 0444);
+MODULE_PARM_DESC(num_mpt,
+		"maximum number of memory protection table entries per HCA");
+
+module_param_named(num_mtt, hca_profile.num_mtt, int, 0444);
+MODULE_PARM_DESC(num_mtt,
+		 "maximum number of memory translation table segments per HCA");
+
+module_param_named(num_udav, hca_profile.num_udav, int, 0444);
+MODULE_PARM_DESC(num_udav, "maximum number of UD address vectors per HCA");
+
+module_param_named(fmr_reserved_mtts, hca_profile.fmr_reserved_mtts, int, 0444);
+MODULE_PARM_DESC(fmr_reserved_mtts,
+		 "number of memory translation table segments reserved for FMR");
+
 static const char mthca_version[] __devinitdata =
 	DRV_NAME ": Mellanox InfiniBand HCA driver v"
 	DRV_VERSION " (" DRV_RELDATE ")\n";
 
-static struct mthca_profile default_profile = {
-	.num_qp		   = 1 << 16,
-	.rdb_per_qp	   = 4,
-	.num_cq		   = 1 << 16,
-	.num_mcg	   = 1 << 13,
-	.num_mpt	   = 1 << 17,
-	.num_mtt	   = 1 << 20,
-	.num_udav	   = 1 << 15,	/* Tavor only */
-	.fmr_reserved_mtts = 1 << 18,	/* Tavor only */
-	.uarc_size	   = 1 << 18,	/* Arbel only */
-};
-
-static int __devinit mthca_tune_pci(struct mthca_dev *mdev)
+static int mthca_tune_pci(struct mthca_dev *mdev)
 {
 	int cap;
 	u16 val;
@@ -142,7 +180,7 @@ static int __devinit mthca_tune_pci(struct mthca_dev *mdev)
 	return 0;
 }
 
-static int __devinit mthca_dev_lim(struct mthca_dev *mdev, struct mthca_dev_lim *dev_lim)
+static int mthca_dev_lim(struct mthca_dev *mdev, struct mthca_dev_lim *dev_lim)
 {
 	int err;
 	u8 status;
@@ -172,8 +210,9 @@ static int __devinit mthca_dev_lim(struct mthca_dev *mdev, struct mthca_dev_lim 
 
 	if (dev_lim->uar_size > pci_resource_len(mdev->pdev, 2)) {
 		mthca_err(mdev, "HCA reported UAR size of 0x%x bigger than "
-			  "PCI resource 2 size of 0x%lx, aborting.\n",
-			  dev_lim->uar_size, pci_resource_len(mdev->pdev, 2));
+			  "PCI resource 2 size of 0x%llx, aborting.\n",
+			  dev_lim->uar_size,
+			  (unsigned long long)pci_resource_len(mdev->pdev, 2));
 		return -ENODEV;
 	}
 
@@ -253,7 +292,7 @@ static int __devinit mthca_dev_lim(struct mthca_dev *mdev, struct mthca_dev_lim 
 	return 0;
 }
 
-static int __devinit mthca_init_tavor(struct mthca_dev *mdev)
+static int mthca_init_tavor(struct mthca_dev *mdev)
 {
 	u8 status;
 	int err;
@@ -301,7 +340,7 @@ static int __devinit mthca_init_tavor(struct mthca_dev *mdev)
 		goto err_disable;
 	}
 
-	profile = default_profile;
+	profile = hca_profile;
 	profile.num_uar   = dev_lim.uar_size / PAGE_SIZE;
 	profile.uarc_size = 0;
 	if (mdev->mthca_flags & MTHCA_FLAG_SRQ)
@@ -331,7 +370,7 @@ err_disable:
 	return err;
 }
 
-static int __devinit mthca_load_fw(struct mthca_dev *mdev)
+static int mthca_load_fw(struct mthca_dev *mdev)
 {
 	u8 status;
 	int err;
@@ -377,10 +416,10 @@ err_free:
 	return err;
 }
 
-static int __devinit mthca_init_icm(struct mthca_dev *mdev,
-				    struct mthca_dev_lim *dev_lim,
-				    struct mthca_init_hca_param *init_hca,
-				    u64 icm_size)
+static int mthca_init_icm(struct mthca_dev *mdev,
+			  struct mthca_dev_lim *dev_lim,
+			  struct mthca_init_hca_param *init_hca,
+			  u64 icm_size)
 {
 	u64 aux_pages;
 	u8 status;
@@ -573,7 +612,7 @@ static void mthca_free_icms(struct mthca_dev *mdev)
 	mthca_free_icm(mdev, mdev->fw.arbel.aux_icm);
 }
 
-static int __devinit mthca_init_arbel(struct mthca_dev *mdev)
+static int mthca_init_arbel(struct mthca_dev *mdev)
 {
 	struct mthca_dev_lim        dev_lim;
 	struct mthca_profile        profile;
@@ -619,7 +658,7 @@ static int __devinit mthca_init_arbel(struct mthca_dev *mdev)
 		goto err_stop_fw;
 	}
 
-	profile = default_profile;
+	profile = hca_profile;
 	profile.num_uar  = dev_lim.uar_size / PAGE_SIZE;
 	profile.num_udav = 0;
 	if (mdev->mthca_flags & MTHCA_FLAG_SRQ)
@@ -681,7 +720,7 @@ static void mthca_close_hca(struct mthca_dev *mdev)
 		mthca_SYS_DIS(mdev, &status);
 }
 
-static int __devinit mthca_init_hca(struct mthca_dev *mdev)
+static int mthca_init_hca(struct mthca_dev *mdev)
 {
 	u8 status;
 	int err;
@@ -718,7 +757,7 @@ err_close:
 	return err;
 }
 
-static int __devinit mthca_setup_hca(struct mthca_dev *dev)
+static int mthca_setup_hca(struct mthca_dev *dev)
 {
 	int err;
 	u8 status;
@@ -873,8 +912,7 @@ err_uar_table_free:
 	return err;
 }
 
-static int __devinit mthca_request_regions(struct pci_dev *pdev,
-					   int ddr_hidden)
+static int mthca_request_regions(struct pci_dev *pdev, int ddr_hidden)
 {
 	int err;
 
@@ -926,7 +964,7 @@ static void mthca_release_regions(struct pci_dev *pdev,
 			   MTHCA_HCR_SIZE);
 }
 
-static int __devinit mthca_enable_msi_x(struct mthca_dev *mdev)
+static int mthca_enable_msi_x(struct mthca_dev *mdev)
 {
 	struct msix_entry entries[3];
 	int err;
@@ -967,38 +1005,25 @@ static struct {
 } mthca_hca_table[] = {
 	[TAVOR]        = { .latest_fw = MTHCA_FW_VER(3, 4, 0),
 			   .flags     = 0 },
-	[ARBEL_COMPAT] = { .latest_fw = MTHCA_FW_VER(4, 7, 400),
+	[ARBEL_COMPAT] = { .latest_fw = MTHCA_FW_VER(4, 7, 600),
 			   .flags     = MTHCA_FLAG_PCIE },
-	[ARBEL_NATIVE] = { .latest_fw = MTHCA_FW_VER(5, 1, 0),
+	[ARBEL_NATIVE] = { .latest_fw = MTHCA_FW_VER(5, 1, 400),
 			   .flags     = MTHCA_FLAG_MEMFREE |
 					MTHCA_FLAG_PCIE },
-	[SINAI]        = { .latest_fw = MTHCA_FW_VER(1, 0, 800),
+	[SINAI]        = { .latest_fw = MTHCA_FW_VER(1, 1, 0),
 			   .flags     = MTHCA_FLAG_MEMFREE |
 					MTHCA_FLAG_PCIE    |
 					MTHCA_FLAG_SINAI_OPT }
 };
 
-static int __devinit mthca_init_one(struct pci_dev *pdev,
-				    const struct pci_device_id *id)
+static int __mthca_init_one(struct pci_dev *pdev, int hca_type)
 {
-	static int mthca_version_printed = 0;
 	int ddr_hidden = 0;
 	int err;
 	struct mthca_dev *mdev;
 
-	if (!mthca_version_printed) {
-		printk(KERN_INFO "%s", mthca_version);
-		++mthca_version_printed;
-	}
-
 	printk(KERN_INFO PFX "Initializing %s\n",
 	       pci_name(pdev));
-
-	if (id->driver_data >= ARRAY_SIZE(mthca_hca_table)) {
-		printk(KERN_ERR PFX "%s has invalid driver data %lx\n",
-		       pci_name(pdev), id->driver_data);
-		return -ENODEV;
-	}
 
 	err = pci_enable_device(pdev);
 	if (err) {
@@ -1065,7 +1090,7 @@ static int __devinit mthca_init_one(struct pci_dev *pdev,
 
 	mdev->pdev = pdev;
 
-	mdev->mthca_flags = mthca_hca_table[id->driver_data].flags;
+	mdev->mthca_flags = mthca_hca_table[hca_type].flags;
 	if (ddr_hidden)
 		mdev->mthca_flags |= MTHCA_FLAG_DDR_HIDDEN;
 
@@ -1099,13 +1124,13 @@ static int __devinit mthca_init_one(struct pci_dev *pdev,
 	if (err)
 		goto err_cmd;
 
-	if (mdev->fw_ver < mthca_hca_table[id->driver_data].latest_fw) {
+	if (mdev->fw_ver < mthca_hca_table[hca_type].latest_fw) {
 		mthca_warn(mdev, "HCA FW version %d.%d.%d is old (%d.%d.%d is current).\n",
 			   (int) (mdev->fw_ver >> 32), (int) (mdev->fw_ver >> 16) & 0xffff,
 			   (int) (mdev->fw_ver & 0xffff),
-			   (int) (mthca_hca_table[id->driver_data].latest_fw >> 32),
-			   (int) (mthca_hca_table[id->driver_data].latest_fw >> 16) & 0xffff,
-			   (int) (mthca_hca_table[id->driver_data].latest_fw & 0xffff));
+			   (int) (mthca_hca_table[hca_type].latest_fw >> 32),
+			   (int) (mthca_hca_table[hca_type].latest_fw >> 16) & 0xffff,
+			   (int) (mthca_hca_table[hca_type].latest_fw & 0xffff));
 		mthca_warn(mdev, "If you have problems, try updating your HCA FW.\n");
 	}
 
@@ -1122,6 +1147,7 @@ static int __devinit mthca_init_one(struct pci_dev *pdev,
 		goto err_unregister;
 
 	pci_set_drvdata(pdev, mdev);
+	mdev->hca_type = hca_type;
 
 	return 0;
 
@@ -1166,7 +1192,7 @@ err_disable_pdev:
 	return err;
 }
 
-static void __devexit mthca_remove_one(struct pci_dev *pdev)
+static void __mthca_remove_one(struct pci_dev *pdev)
 {
 	struct mthca_dev *mdev = pci_get_drvdata(pdev);
 	u8 status;
@@ -1211,6 +1237,51 @@ static void __devexit mthca_remove_one(struct pci_dev *pdev)
 	}
 }
 
+int __mthca_restart_one(struct pci_dev *pdev)
+{
+	struct mthca_dev *mdev;
+
+	mdev = pci_get_drvdata(pdev);
+	if (!mdev)
+		return -ENODEV;
+	__mthca_remove_one(pdev);
+	return __mthca_init_one(pdev, mdev->hca_type);
+}
+
+static int __devinit mthca_init_one(struct pci_dev *pdev,
+				    const struct pci_device_id *id)
+{
+	static int mthca_version_printed = 0;
+	int ret;
+
+	mutex_lock(&mthca_device_mutex);
+
+	if (!mthca_version_printed) {
+		printk(KERN_INFO "%s", mthca_version);
+		++mthca_version_printed;
+	}
+
+	if (id->driver_data >= ARRAY_SIZE(mthca_hca_table)) {
+		printk(KERN_ERR PFX "%s has invalid driver data %lx\n",
+		       pci_name(pdev), id->driver_data);
+		mutex_unlock(&mthca_device_mutex);
+		return -ENODEV;
+	}
+
+	ret = __mthca_init_one(pdev, id->driver_data);
+
+	mutex_unlock(&mthca_device_mutex);
+
+	return ret;
+}
+
+static void __devexit mthca_remove_one(struct pci_dev *pdev)
+{
+	mutex_lock(&mthca_device_mutex);
+	__mthca_remove_one(pdev);
+	mutex_unlock(&mthca_device_mutex);
+}
+
 static struct pci_device_id mthca_pci_table[] = {
 	{ PCI_DEVICE(PCI_VENDOR_ID_MELLANOX, PCI_DEVICE_ID_MELLANOX_TAVOR),
 	  .driver_data = TAVOR },
@@ -1244,17 +1315,72 @@ static struct pci_driver mthca_driver = {
 	.remove		= __devexit_p(mthca_remove_one)
 };
 
+static void __init __mthca_check_profile_val(const char *name, int *pval,
+					     int pval_default)
+{
+	/* value must be positive and power of 2 */
+	int old_pval = *pval;
+
+	if (old_pval <= 0)
+		*pval = pval_default;
+	else
+		*pval = roundup_pow_of_two(old_pval);
+
+	if (old_pval != *pval) {
+		printk(KERN_WARNING PFX "Invalid value %d for %s in module parameter.\n",
+		       old_pval, name);
+		printk(KERN_WARNING PFX "Corrected %s to %d.\n", name, *pval);
+	}
+}
+
+#define mthca_check_profile_val(name, default)				\
+	__mthca_check_profile_val(#name, &hca_profile.name, default)
+
+static void __init mthca_validate_profile(void)
+{
+	mthca_check_profile_val(num_qp,            MTHCA_DEFAULT_NUM_QP);
+	mthca_check_profile_val(rdb_per_qp,        MTHCA_DEFAULT_RDB_PER_QP);
+	mthca_check_profile_val(num_cq,            MTHCA_DEFAULT_NUM_CQ);
+	mthca_check_profile_val(num_mcg, 	   MTHCA_DEFAULT_NUM_MCG);
+	mthca_check_profile_val(num_mpt, 	   MTHCA_DEFAULT_NUM_MPT);
+	mthca_check_profile_val(num_mtt, 	   MTHCA_DEFAULT_NUM_MTT);
+	mthca_check_profile_val(num_udav,          MTHCA_DEFAULT_NUM_UDAV);
+	mthca_check_profile_val(fmr_reserved_mtts, MTHCA_DEFAULT_NUM_RESERVED_MTTS);
+
+	if (hca_profile.fmr_reserved_mtts >= hca_profile.num_mtt) {
+		printk(KERN_WARNING PFX "Invalid fmr_reserved_mtts module parameter %d.\n",
+		       hca_profile.fmr_reserved_mtts);
+		printk(KERN_WARNING PFX "(Must be smaller than num_mtt %d)\n",
+		       hca_profile.num_mtt);
+		hca_profile.fmr_reserved_mtts = hca_profile.num_mtt / 2;
+		printk(KERN_WARNING PFX "Corrected fmr_reserved_mtts to %d.\n",
+		       hca_profile.fmr_reserved_mtts);
+	}
+}
+
 static int __init mthca_init(void)
 {
 	int ret;
 
+	mthca_validate_profile();
+
+	ret = mthca_catas_init();
+	if (ret)
+		return ret;
+
 	ret = pci_register_driver(&mthca_driver);
-	return ret < 0 ? ret : 0;
+	if (ret < 0) {
+		mthca_catas_cleanup();
+		return ret;
+	}
+
+	return 0;
 }
 
 static void __exit mthca_cleanup(void)
 {
 	pci_unregister_driver(&mthca_driver);
+	mthca_catas_cleanup();
 }
 
 module_init(mthca_init);

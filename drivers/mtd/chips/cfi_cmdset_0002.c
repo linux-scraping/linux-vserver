@@ -21,7 +21,6 @@
  *
  */
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/types.h>
 #include <linux/kernel.h>
@@ -46,9 +45,12 @@
 #define MAX_WORD_RETRIES 3
 
 #define MANUFACTURER_AMD	0x0001
+#define MANUFACTURER_ATMEL	0x001F
 #define MANUFACTURER_SST	0x00BF
 #define SST49LF004B	        0x0060
+#define SST49LF040B	        0x0050
 #define SST49LF008A		0x005a
+#define AT49BV6416		0x00d6
 
 static int cfi_amdstd_read (struct mtd_info *, loff_t, size_t, size_t *, u_char *);
 static int cfi_amdstd_write_words(struct mtd_info *, loff_t, size_t, size_t *, const u_char *);
@@ -68,6 +70,9 @@ static struct mtd_info *cfi_amdstd_setup (struct mtd_info *);
 static int get_chip(struct map_info *map, struct flchip *chip, unsigned long adr, int mode);
 static void put_chip(struct map_info *map, struct flchip *chip, unsigned long adr);
 #include "fwh_lock.h"
+
+static int cfi_atmel_lock(struct mtd_info *mtd, loff_t ofs, size_t len);
+static int cfi_atmel_unlock(struct mtd_info *mtd, loff_t ofs, size_t len);
 
 static struct mtd_chip_driver cfi_amdstd_chipdrv = {
 	.probe		= NULL, /* Not usable directly */
@@ -162,6 +167,26 @@ static void fixup_use_write_buffers(struct mtd_info *mtd, void *param)
 	}
 }
 
+/* Atmel chips don't use the same PRI format as AMD chips */
+static void fixup_convert_atmel_pri(struct mtd_info *mtd, void *param)
+{
+	struct map_info *map = mtd->priv;
+	struct cfi_private *cfi = map->fldrv_priv;
+	struct cfi_pri_amdstd *extp = cfi->cmdset_priv;
+	struct cfi_pri_atmel atmel_pri;
+
+	memcpy(&atmel_pri, extp, sizeof(atmel_pri));
+	memset((char *)extp + 5, 0, sizeof(*extp) - 5);
+
+	if (atmel_pri.Features & 0x02)
+		extp->EraseSuspend = 2;
+
+	if (atmel_pri.BottomBoot)
+		extp->TopBottom = 2;
+	else
+		extp->TopBottom = 3;
+}
+
 static void fixup_use_secsi(struct mtd_info *mtd, void *param)
 {
 	/* Setup for chips with a secsi area */
@@ -180,6 +205,17 @@ static void fixup_use_erase_chip(struct mtd_info *mtd, void *param)
 
 }
 
+/*
+ * Some Atmel chips (e.g. the AT49BV6416) power-up with all sectors
+ * locked by default.
+ */
+static void fixup_use_atmel_lock(struct mtd_info *mtd, void *param)
+{
+	mtd->lock = cfi_atmel_lock;
+	mtd->unlock = cfi_atmel_unlock;
+	mtd->flags |= MTD_STUPID_LOCK;
+}
+
 static struct cfi_fixup cfi_fixup_table[] = {
 #ifdef AMD_BOOTLOC_BUG
 	{ CFI_MFR_AMD, CFI_ID_ANY, fixup_amd_bootblock, NULL },
@@ -193,10 +229,12 @@ static struct cfi_fixup cfi_fixup_table[] = {
 #if !FORCE_WORD_WRITE
 	{ CFI_MFR_ANY, CFI_ID_ANY, fixup_use_write_buffers, NULL, },
 #endif
+	{ CFI_MFR_ATMEL, CFI_ID_ANY, fixup_convert_atmel_pri, NULL },
 	{ 0, 0, NULL, NULL }
 };
 static struct cfi_fixup jedec_fixup_table[] = {
 	{ MANUFACTURER_SST, SST49LF004B, fixup_use_fwh_lock, NULL, },
+	{ MANUFACTURER_SST, SST49LF040B, fixup_use_fwh_lock, NULL, },
 	{ MANUFACTURER_SST, SST49LF008A, fixup_use_fwh_lock, NULL, },
 	{ 0, 0, NULL, NULL }
 };
@@ -208,6 +246,7 @@ static struct cfi_fixup fixup_table[] = {
 	 * we know that is the case.
 	 */
 	{ CFI_MFR_ANY, CFI_ID_ANY, fixup_use_erase_chip, NULL },
+	{ CFI_MFR_ATMEL, AT49BV6416, fixup_use_atmel_lock, NULL },
 	{ 0, 0, NULL, NULL }
 };
 
@@ -218,12 +257,11 @@ struct mtd_info *cfi_cmdset_0002(struct map_info *map, int primary)
 	struct mtd_info *mtd;
 	int i;
 
-	mtd = kmalloc(sizeof(*mtd), GFP_KERNEL);
+	mtd = kzalloc(sizeof(*mtd), GFP_KERNEL);
 	if (!mtd) {
 		printk(KERN_WARNING "Failed to allocate memory for MTD device\n");
 		return NULL;
 	}
-	memset(mtd, 0, sizeof(*mtd));
 	mtd->priv = map;
 	mtd->type = MTD_NORFLASH;
 
@@ -236,6 +274,7 @@ struct mtd_info *cfi_cmdset_0002(struct map_info *map, int primary)
 	mtd->resume  = cfi_amdstd_resume;
 	mtd->flags   = MTD_CAP_NORFLASH;
 	mtd->name    = map->name;
+	mtd->writesize = 1;
 
 	if (cfi->cfi_mode==CFI_MODE_CFI){
 		unsigned char bootloc;
@@ -326,7 +365,7 @@ struct mtd_info *cfi_cmdset_0002(struct map_info *map, int primary)
 
 	return cfi_amdstd_setup(mtd);
 }
-
+EXPORT_SYMBOL_GPL(cfi_cmdset_0002);
 
 static struct mtd_info *cfi_amdstd_setup(struct mtd_info *mtd)
 {
@@ -481,10 +520,12 @@ static int get_chip(struct map_info *map, struct flchip *chip, unsigned long adr
 		if (mode == FL_WRITING) /* FIXME: Erase-suspend-program appears broken. */
 			goto sleep;
 
-		if (!(mode == FL_READY || mode == FL_POINT
+		if (!(   mode == FL_READY
+		      || mode == FL_POINT
 		      || !cfip
 		      || (mode == FL_WRITING && (cfip->EraseSuspend & 0x2))
-		      || (mode == FL_WRITING && (cfip->EraseSuspend & 0x1))))
+		      || (mode == FL_WRITING && (cfip->EraseSuspend & 0x1)
+		    )))
 			goto sleep;
 
 		/* We could check to see if we're trying to access the sector
@@ -1607,6 +1648,80 @@ static int cfi_amdstd_erase_chip(struct mtd_info *mtd, struct erase_info *instr)
 	return 0;
 }
 
+static int do_atmel_lock(struct map_info *map, struct flchip *chip,
+			 unsigned long adr, int len, void *thunk)
+{
+	struct cfi_private *cfi = map->fldrv_priv;
+	int ret;
+
+	spin_lock(chip->mutex);
+	ret = get_chip(map, chip, adr + chip->start, FL_LOCKING);
+	if (ret)
+		goto out_unlock;
+	chip->state = FL_LOCKING;
+
+	DEBUG(MTD_DEBUG_LEVEL3, "MTD %s(): LOCK 0x%08lx len %d\n",
+	      __func__, adr, len);
+
+	cfi_send_gen_cmd(0xAA, cfi->addr_unlock1, chip->start, map, cfi,
+			 cfi->device_type, NULL);
+	cfi_send_gen_cmd(0x55, cfi->addr_unlock2, chip->start, map, cfi,
+			 cfi->device_type, NULL);
+	cfi_send_gen_cmd(0x80, cfi->addr_unlock1, chip->start, map, cfi,
+			 cfi->device_type, NULL);
+	cfi_send_gen_cmd(0xAA, cfi->addr_unlock1, chip->start, map, cfi,
+			 cfi->device_type, NULL);
+	cfi_send_gen_cmd(0x55, cfi->addr_unlock2, chip->start, map, cfi,
+			 cfi->device_type, NULL);
+	map_write(map, CMD(0x40), chip->start + adr);
+
+	chip->state = FL_READY;
+	put_chip(map, chip, adr + chip->start);
+	ret = 0;
+
+out_unlock:
+	spin_unlock(chip->mutex);
+	return ret;
+}
+
+static int do_atmel_unlock(struct map_info *map, struct flchip *chip,
+			   unsigned long adr, int len, void *thunk)
+{
+	struct cfi_private *cfi = map->fldrv_priv;
+	int ret;
+
+	spin_lock(chip->mutex);
+	ret = get_chip(map, chip, adr + chip->start, FL_UNLOCKING);
+	if (ret)
+		goto out_unlock;
+	chip->state = FL_UNLOCKING;
+
+	DEBUG(MTD_DEBUG_LEVEL3, "MTD %s(): LOCK 0x%08lx len %d\n",
+	      __func__, adr, len);
+
+	cfi_send_gen_cmd(0xAA, cfi->addr_unlock1, chip->start, map, cfi,
+			 cfi->device_type, NULL);
+	map_write(map, CMD(0x70), adr);
+
+	chip->state = FL_READY;
+	put_chip(map, chip, adr + chip->start);
+	ret = 0;
+
+out_unlock:
+	spin_unlock(chip->mutex);
+	return ret;
+}
+
+static int cfi_atmel_lock(struct mtd_info *mtd, loff_t ofs, size_t len)
+{
+	return cfi_varsize_frob(mtd, do_atmel_lock, ofs, len, NULL);
+}
+
+static int cfi_atmel_unlock(struct mtd_info *mtd, loff_t ofs, size_t len)
+{
+	return cfi_varsize_frob(mtd, do_atmel_unlock, ofs, len, NULL);
+}
+
 
 static void cfi_amdstd_sync (struct mtd_info *mtd)
 {
@@ -1757,25 +1872,6 @@ static void cfi_amdstd_destroy(struct mtd_info *mtd)
 	kfree(cfi);
 	kfree(mtd->eraseregions);
 }
-
-static char im_name[]="cfi_cmdset_0002";
-
-
-static int __init cfi_amdstd_init(void)
-{
-	inter_module_register(im_name, THIS_MODULE, &cfi_cmdset_0002);
-	return 0;
-}
-
-
-static void __exit cfi_amdstd_exit(void)
-{
-	inter_module_unregister(im_name);
-}
-
-
-module_init(cfi_amdstd_init);
-module_exit(cfi_amdstd_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Crossnet Co. <info@crossnet.co.jp> et al.");

@@ -30,7 +30,6 @@
  * 
 =============================================================================*/
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/proc_fs.h>
@@ -53,8 +52,8 @@
 #include <pcmcia/ds.h>
 #include <pcmcia/mem_op.h>
 
-#include <net/ieee80211.h>
 #include <linux/wireless.h>
+#include <net/iw_handler.h>
 
 #include <asm/io.h>
 #include <asm/system.h>
@@ -100,7 +99,7 @@ static int ray_dev_config(struct net_device *dev, struct ifmap *map);
 static struct net_device_stats *ray_get_stats(struct net_device *dev);
 static int ray_dev_init(struct net_device *dev);
 
-static struct ethtool_ops netdev_ethtool_ops;
+static const struct ethtool_ops netdev_ethtool_ops;
 
 static int ray_open(struct net_device *dev);
 static int ray_dev_start_xmit(struct sk_buff *skb, struct net_device *dev);
@@ -131,7 +130,7 @@ static void ray_update_parm(struct net_device *dev, UCHAR objid, UCHAR *value, i
 static void verify_dl_startup(u_long);
 
 /* Prototypes for interrpt time functions **********************************/
-static irqreturn_t ray_interrupt (int reg, void *dev_id, struct pt_regs *regs);
+static irqreturn_t ray_interrupt (int reg, void *dev_id);
 static void clear_interrupt(ray_dev_t *local);
 static void rx_deauthenticate(ray_dev_t *local, struct rcs __iomem *prcs, 
                        unsigned int pkt_addr, int rx_len);
@@ -332,7 +331,6 @@ static int ray_probe(struct pcmcia_device *p_dev)
     p_dev->conf.Attributes = CONF_ENABLE_IRQ;
     p_dev->conf.IntType = INT_MEMORY_AND_IO;
     p_dev->conf.ConfigIndex = 1;
-    p_dev->conf.Present = PRESENT_OPTION;
 
     p_dev->priv = dev;
     p_dev->irq.Instance = dev;
@@ -409,11 +407,8 @@ do { last_fn = (fn); if ((last_ret = (ret)) != 0) goto cs_failed; } while (0)
 #define MAX_TUPLE_SIZE 128
 static int ray_config(struct pcmcia_device *link)
 {
-    tuple_t tuple;
-    cisparse_t parse;
     int last_fn = 0, last_ret = 0;
     int i;
-    u_char buf[MAX_TUPLE_SIZE];
     win_req_t req;
     memreq_t mem;
     struct net_device *dev = (struct net_device *)link->priv;
@@ -421,29 +416,12 @@ static int ray_config(struct pcmcia_device *link)
 
     DEBUG(1, "ray_config(0x%p)\n", link);
 
-    /* This reads the card's CONFIG tuple to find its configuration regs */
-    tuple.DesiredTuple = CISTPL_CONFIG;
-    CS_CHECK(GetFirstTuple, pcmcia_get_first_tuple(link, &tuple));
-    tuple.TupleData = buf;
-    tuple.TupleDataMax = MAX_TUPLE_SIZE;
-    tuple.TupleOffset = 0;
-    CS_CHECK(GetTupleData, pcmcia_get_tuple_data(link, &tuple));
-    CS_CHECK(ParseTuple, pcmcia_parse_tuple(link, &tuple, &parse));
-    link->conf.ConfigBase = parse.config.base;
-    link->conf.Present = parse.config.rmask[0];
-
     /* Determine card type and firmware version */
-    buf[0] = buf[MAX_TUPLE_SIZE - 1] = 0;
-    tuple.DesiredTuple = CISTPL_VERS_1;
-    CS_CHECK(GetFirstTuple, pcmcia_get_first_tuple(link, &tuple));
-    tuple.TupleData = buf;
-    tuple.TupleDataMax = MAX_TUPLE_SIZE;
-    tuple.TupleOffset = 2;
-    CS_CHECK(GetTupleData, pcmcia_get_tuple_data(link, &tuple));
-
-    for (i=0; i<tuple.TupleDataLen - 4; i++) 
-        if (buf[i] == 0) buf[i] = ' ';
-    printk(KERN_INFO "ray_cs Detected: %s\n",buf);
+    printk(KERN_INFO "ray_cs Detected: %s%s%s%s\n",
+	   link->prod_id[0] ? link->prod_id[0] : " ",
+	   link->prod_id[1] ? link->prod_id[1] : " ",
+	   link->prod_id[2] ? link->prod_id[2] : " ",
+	   link->prod_id[3] ? link->prod_id[3] : " ");
 
     /* Now allocate an interrupt line.  Note that this does not
        actually assign a handler to the interrupt.
@@ -924,8 +902,7 @@ static int ray_dev_start_xmit(struct sk_buff *skb, struct net_device *dev)
 
     if (length < ETH_ZLEN)
     {
-    	skb = skb_padto(skb, ETH_ZLEN);
-    	if (skb == NULL)
+    	if (skb_padto(skb, ETH_ZLEN))
     		return 0;
     	length = ETH_ZLEN;
     }
@@ -1094,7 +1071,7 @@ static void netdev_get_drvinfo(struct net_device *dev,
 	strcpy(info->driver, "ray_cs");
 }
 
-static struct ethtool_ops netdev_ethtool_ops = {
+static const struct ethtool_ops netdev_ethtool_ops = {
 	.get_drvinfo		= netdev_get_drvinfo,
 };
 
@@ -1175,7 +1152,7 @@ static int ray_set_essid(struct net_device *dev,
 		return -EOPNOTSUPP;
 	} else {
 		/* Check the size of the string */
-		if(dwrq->length > IW_ESSID_MAX_SIZE + 1) {
+		if(dwrq->length > IW_ESSID_MAX_SIZE) {
 			return -E2BIG;
 		}
 
@@ -1200,7 +1177,6 @@ static int ray_get_essid(struct net_device *dev,
 
 	/* Get the essid that was set */
 	memcpy(extra, local->sparm.b5.a_current_ess_id, IW_ESSID_MAX_SIZE);
-	extra[IW_ESSID_MAX_SIZE] = '\0';
 
 	/* Push it out ! */
 	dwrq->length = strlen(extra);
@@ -1942,7 +1918,7 @@ static void set_multicast_list(struct net_device *dev)
 /*=============================================================================
  * All routines below here are run at interrupt time.
 =============================================================================*/
-static irqreturn_t ray_interrupt(int irq, void *dev_id, struct pt_regs * regs)
+static irqreturn_t ray_interrupt(int irq, void *dev_id)
 {
     struct net_device *dev = (struct net_device *)dev_id;
     struct pcmcia_device *link;

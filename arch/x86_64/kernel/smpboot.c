@@ -38,7 +38,6 @@
  */
 
 
-#include <linux/config.h>
 #include <linux/init.h>
 
 #include <linux/mm.h>
@@ -47,9 +46,10 @@
 #include <linux/bootmem.h>
 #include <linux/thread_info.h>
 #include <linux/module.h>
-
 #include <linux/delay.h>
 #include <linux/mc146818rtc.h>
+#include <linux/smp.h>
+
 #include <asm/mtrr.h>
 #include <asm/pgalloc.h>
 #include <asm/desc.h>
@@ -60,16 +60,15 @@
 #include <asm/irq.h>
 #include <asm/hw_irq.h>
 #include <asm/numa.h>
+#include <asm/genapic.h>
 
 /* Number of siblings per CPU package */
 int smp_num_siblings = 1;
-/* Package ID of each logical CPU */
-u8 phys_proc_id[NR_CPUS] __read_mostly = { [0 ... NR_CPUS-1] = BAD_APICID };
-/* core ID of each logical CPU */
-u8 cpu_core_id[NR_CPUS] __read_mostly = { [0 ... NR_CPUS-1] = BAD_APICID };
+EXPORT_SYMBOL(smp_num_siblings);
 
 /* Last level cache ID of each logical CPU */
 u8 cpu_llc_id[NR_CPUS] __cpuinitdata  = {[0 ... NR_CPUS-1] = BAD_APICID};
+EXPORT_SYMBOL(cpu_llc_id);
 
 /* Bitmask of currently online CPUs */
 cpumask_t cpu_online_map __read_mostly;
@@ -82,18 +81,21 @@ EXPORT_SYMBOL(cpu_online_map);
  */
 cpumask_t cpu_callin_map;
 cpumask_t cpu_callout_map;
+EXPORT_SYMBOL(cpu_callout_map);
 
 cpumask_t cpu_possible_map;
 EXPORT_SYMBOL(cpu_possible_map);
 
 /* Per CPU bogomips and other parameters */
 struct cpuinfo_x86 cpu_data[NR_CPUS] __cacheline_aligned;
+EXPORT_SYMBOL(cpu_data);
 
 /* Set when the idlers are all forked */
 int smp_threads_ready;
 
 /* representing HT siblings of each logical CPU */
 cpumask_t cpu_sibling_map[NR_CPUS] __read_mostly;
+EXPORT_SYMBOL(cpu_sibling_map);
 
 /* representing HT and core siblings of each logical CPU */
 cpumask_t cpu_core_map[NR_CPUS] __read_mostly;
@@ -454,10 +456,12 @@ cpumask_t cpu_coregroup_map(int cpu)
 	struct cpuinfo_x86 *c = cpu_data + cpu;
 	/*
 	 * For perf, we return last level cache shared map.
-	 * TBD: when power saving sched policy is added, we will return
-	 *      cpu_core_map when power saving policy is enabled
+	 * And for power savings, we return cpu_core_map
 	 */
-	return c->llc_shared_map;
+	if (sched_mc_power_savings || sched_smt_power_savings)
+		return cpu_core_map[cpu];
+	else
+		return c->llc_shared_map;
 }
 
 /* representing cpus for which sibling maps can be computed */
@@ -472,8 +476,8 @@ static inline void set_cpu_sibling_map(int cpu)
 
 	if (smp_num_siblings > 1) {
 		for_each_cpu_mask(i, cpu_sibling_setup_map) {
-			if (phys_proc_id[cpu] == phys_proc_id[i] &&
-			    cpu_core_id[cpu] == cpu_core_id[i]) {
+			if (c[cpu].phys_proc_id == c[i].phys_proc_id &&
+			    c[cpu].cpu_core_id == c[i].cpu_core_id) {
 				cpu_set(i, cpu_sibling_map[cpu]);
 				cpu_set(cpu, cpu_sibling_map[i]);
 				cpu_set(i, cpu_core_map[cpu]);
@@ -500,7 +504,7 @@ static inline void set_cpu_sibling_map(int cpu)
 			cpu_set(i, c[cpu].llc_shared_map);
 			cpu_set(cpu, c[i].llc_shared_map);
 		}
-		if (phys_proc_id[cpu] == phys_proc_id[i]) {
+		if (c[cpu].phys_proc_id == c[i].phys_proc_id) {
 			cpu_set(i, cpu_core_map[cpu]);
 			cpu_set(cpu, cpu_core_map[i]);
 			/*
@@ -578,12 +582,16 @@ void __cpuinit start_secondary(void)
 	 * smp_call_function().
 	 */
 	lock_ipi_call_lock();
+	spin_lock(&vector_lock);
 
+	/* Setup the per cpu irq handling data structures */
+	__setup_vector_irq(smp_processor_id());
 	/*
 	 * Allow the master to continue.
 	 */
 	cpu_set(smp_processor_id(), cpu_online_map);
 	per_cpu(cpu_state, smp_processor_id()) = CPU_ONLINE;
+	spin_unlock(&vector_lock);
 	unlock_ipi_call_lock();
 
 	cpu_idle();
@@ -746,14 +754,16 @@ static int __cpuinit wakeup_secondary_via_INIT(int phys_apicid, unsigned int sta
 }
 
 struct create_idle {
+	struct work_struct work;
 	struct task_struct *idle;
 	struct completion done;
 	int cpu;
 };
 
-void do_fork_idle(void *_c_idle)
+void do_fork_idle(struct work_struct *work)
 {
-	struct create_idle *c_idle = _c_idle;
+	struct create_idle *c_idle =
+		container_of(work, struct create_idle, work);
 
 	c_idle->idle = fork_idle(c_idle->cpu);
 	complete(&c_idle->done);
@@ -768,10 +778,10 @@ static int __cpuinit do_boot_cpu(int cpu, int apicid)
 	int timeout;
 	unsigned long start_rip;
 	struct create_idle c_idle = {
+		.work = __WORK_INITIALIZER(c_idle.work, do_fork_idle),
 		.cpu = cpu,
-		.done = COMPLETION_INITIALIZER(c_idle.done),
+		.done = COMPLETION_INITIALIZER_ONSTACK(c_idle.done),
 	};
-	DECLARE_WORK(work, do_fork_idle, &c_idle);
 
 	/* allocate memory for gdts of secondary cpus. Hotplug is considered */
 	if (!cpu_gdt_descr[cpu].address &&
@@ -796,6 +806,7 @@ static int __cpuinit do_boot_cpu(int cpu, int apicid)
 				cpu, node);
 	}
 
+	alternatives_smp_switch(1);
 
 	c_idle.idle = get_idle_for_cpu(cpu);
 
@@ -817,9 +828,9 @@ static int __cpuinit do_boot_cpu(int cpu, int apicid)
 	 * thread.
 	 */
 	if (!keventd_up() || current_is_keventd())
-		work.func(work.data);
+		c_idle.work.func(&c_idle.work);
 	else {
-		schedule_work(&work);
+		schedule_work(&c_idle.work);
 		wait_for_completion(&c_idle.done);
 	}
 
@@ -1086,7 +1097,6 @@ void __init smp_prepare_cpus(unsigned int max_cpus)
 	/*
 	 * Switch from PIC to APIC mode.
 	 */
-	connect_bsp_APIC();
 	setup_local_APIC();
 
 	if (GET_APIC_ID(apic_read(APIC_ID)) != boot_cpu_id) {
@@ -1160,6 +1170,13 @@ int __cpuinit __cpu_up(unsigned int cpu)
 
 	while (!cpu_isset(cpu, cpu_online_map))
 		cpu_relax();
+
+	if (num_online_cpus() > 8 && genapic == &apic_flat) {
+		printk(KERN_WARNING
+		       "flat APIC routing can't be used with > 8 cpus\n");
+		BUG();
+	}
+
 	err = 0;
 
 	return err;
@@ -1171,12 +1188,9 @@ int __cpuinit __cpu_up(unsigned int cpu)
 void __init smp_cpus_done(unsigned int max_cpus)
 {
 	smp_cleanup_boot();
-
-#ifdef CONFIG_X86_IO_APIC
 	setup_ioapic_dest();
-#endif
-
 	check_nmi_watchdog();
+	time_init_gtod();
 }
 
 #ifdef CONFIG_HOTPLUG_CPU
@@ -1199,8 +1213,8 @@ static void remove_siblinginfo(int cpu)
 		cpu_clear(cpu, cpu_sibling_map[sibling]);
 	cpus_clear(cpu_sibling_map[cpu]);
 	cpus_clear(cpu_core_map[cpu]);
-	phys_proc_id[cpu] = BAD_APICID;
-	cpu_core_id[cpu] = BAD_APICID;
+	c[cpu].phys_proc_id = 0;
+	c[cpu].cpu_core_id = 0;
 	cpu_clear(cpu, cpu_sibling_setup_map);
 }
 
@@ -1229,6 +1243,8 @@ int __cpu_disable(void)
 	if (cpu == 0)
 		return -EBUSY;
 
+	if (nmi_watchdog == NMI_LOCAL_APIC)
+		stop_apic_nmi_watchdog(NULL);
 	clear_local_APIC();
 
 	/*
@@ -1243,8 +1259,10 @@ int __cpu_disable(void)
 	local_irq_disable();
 	remove_siblinginfo(cpu);
 
+	spin_lock(&vector_lock);
 	/* It's now safe to remove this processor from the online map */
 	cpu_clear(cpu, cpu_online_map);
+	spin_unlock(&vector_lock);
 	remove_cpu_from_maps();
 	fixup_irqs(cpu_online_map);
 	return 0;
@@ -1259,6 +1277,8 @@ void __cpu_die(unsigned int cpu)
 		/* They ack this in play_dead by setting CPU_DEAD */
 		if (per_cpu(cpu_state, cpu) == CPU_DEAD) {
 			printk ("CPU %d is now offline\n", cpu);
+			if (1 == num_online_cpus())
+				alternatives_smp_switch(0);
 			return;
 		}
 		msleep(100);
@@ -1266,11 +1286,11 @@ void __cpu_die(unsigned int cpu)
  	printk(KERN_ERR "CPU %u didn't die...\n", cpu);
 }
 
-__init int setup_additional_cpus(char *s)
+static __init int setup_additional_cpus(char *s)
 {
-	return get_option(&s, &additional_cpus);
+	return s && get_option(&s, &additional_cpus) ? 0 : -EINVAL;
 }
-__setup("additional_cpus=", setup_additional_cpus);
+early_param("additional_cpus", setup_additional_cpus);
 
 #else /* ... !CONFIG_HOTPLUG_CPU */
 

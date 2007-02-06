@@ -21,10 +21,12 @@
 
 struct lpfc_sli2_slim;
 
-#define LPFC_MAX_TARGET         256	/* max targets supported */
-#define LPFC_MAX_DISC_THREADS	64	/* max outstanding discovery els req */
-#define LPFC_MAX_NS_RETRY       3	/* max NameServer retries */
 
+#define LPFC_MAX_TARGET		256	/* max number of targets supported */
+#define LPFC_MAX_DISC_THREADS	64	/* max outstanding discovery els
+					   requests */
+#define LPFC_MAX_NS_RETRY	3	/* Number of retry attempts to contact
+					   the NameServer  before giving up. */
 #define LPFC_DFT_HBA_Q_DEPTH	2048	/* max cmds per hba */
 #define LPFC_LC_HBA_Q_DEPTH	1024	/* max cmds per low cost hba */
 #define LPFC_LP101_HBA_Q_DEPTH	128	/* max cmds per low cost hba */
@@ -41,7 +43,6 @@ struct lpfc_sli2_slim;
 			     (( (u64)(high)<<16 ) << 16)|( (u64)(low))))
 /* Provide maximum configuration definitions. */
 #define LPFC_DRVR_TIMEOUT	16	/* driver iocb timeout value in sec */
-#define MAX_FCP_TARGET		256	/* max num of FCP targets supported */
 #define FC_MAX_ADPTMSG		64
 
 #define MAX_HBAEVT	32
@@ -174,7 +175,6 @@ struct lpfc_hba {
 	dma_addr_t slim2p_mapping;
 	uint16_t pci_cfg_value;
 
-	struct semaphore hba_can_block;
 	int32_t hba_state;
 
 #define LPFC_STATE_UNKNOWN        0    /* HBA state is unknown */
@@ -285,6 +285,7 @@ struct lpfc_hba {
 	uint32_t cfg_log_verbose;
 	uint32_t cfg_lun_queue_depth;
 	uint32_t cfg_nodev_tmo;
+	uint32_t cfg_devloss_tmo;
 	uint32_t cfg_hba_queue_depth;
 	uint32_t cfg_fcp_class;
 	uint32_t cfg_use_adisc;
@@ -295,13 +296,20 @@ struct lpfc_hba {
 	uint32_t cfg_cr_delay;
 	uint32_t cfg_cr_count;
 	uint32_t cfg_multi_ring_support;
+	uint32_t cfg_multi_ring_rctl;
+	uint32_t cfg_multi_ring_type;
 	uint32_t cfg_fdmi_on;
 	uint32_t cfg_discovery_threads;
 	uint32_t cfg_max_luns;
 	uint32_t cfg_poll;
 	uint32_t cfg_poll_tmo;
+	uint32_t cfg_use_msi;
 	uint32_t cfg_sg_seg_cnt;
 	uint32_t cfg_sg_dma_buf_size;
+	uint64_t cfg_soft_wwnn;
+	uint64_t cfg_soft_wwpn;
+
+	uint32_t dev_loss_tmo_changed;
 
 	lpfc_vpd_t vpd;		/* vital product data */
 
@@ -351,6 +359,8 @@ struct lpfc_hba {
 #define VPD_PORT            0x8         /* valid vpd port data */
 #define VPD_MASK            0xf         /* mask for any vpd data */
 
+	uint8_t soft_wwn_enable;
+
 	struct timer_list fcp_poll_timer;
 	struct timer_list els_tmofunc;
 
@@ -391,3 +401,5 @@ struct rnidrsp {
 	struct list_head list;
 	uint32_t data;
 };
+
+#define FC_REG_DUMP_EVENT	0x10	/* Register for Dump events */

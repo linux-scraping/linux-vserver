@@ -42,7 +42,7 @@
 #include <linux/reiserfs_xattr.h>
 #include <linux/reiserfs_acl.h>
 #include <asm/uaccess.h>
-#include <asm/checksum.h>
+#include <net/checksum.h>
 #include <linux/smp_lock.h>
 #include <linux/stat.h>
 #include <asm/semaphore.h>
@@ -275,7 +275,7 @@ static struct file *open_xa_file(const struct inode *inode, const char *name,
  */
 static int __xattr_readdir(struct file *filp, void *dirent, filldir_t filldir)
 {
-	struct inode *inode = filp->f_dentry->d_inode;
+	struct inode *inode = filp->f_path.dentry->d_inode;
 	struct cpu_key pos_key;	/* key of current position in the directory (key of directory entry) */
 	INITIALIZE_PATH(path_to_entry);
 	struct buffer_head *bh;
@@ -421,11 +421,11 @@ static int __xattr_readdir(struct file *filp, void *dirent, filldir_t filldir)
 static
 int xattr_readdir(struct file *file, filldir_t filler, void *buf)
 {
-	struct inode *inode = file->f_dentry->d_inode;
+	struct inode *inode = file->f_path.dentry->d_inode;
 	int res = -ENOTDIR;
 	if (!file->f_op || !file->f_op->readdir)
 		goto out;
-	mutex_lock(&inode->i_mutex);
+	mutex_lock_nested(&inode->i_mutex, I_MUTEX_XATTR);
 //        down(&inode->i_zombie);
 	res = -ENOENT;
 	if (!IS_DEADDIR(inode)) {
@@ -453,8 +453,7 @@ static struct page *reiserfs_get_page(struct inode *dir, unsigned long n)
 	/* We can deadlock if we try to free dentries,
 	   and an unlink/rmdir has just occured - GFP_NOFS avoids this */
 	mapping_set_gfp_mask(mapping, GFP_NOFS);
-	page = read_cache_page(mapping, n,
-			       (filler_t *) mapping->a_ops->readpage, NULL);
+	page = read_mapping_page(mapping, n, NULL);
 	if (!IS_ERR(page)) {
 		wait_on_page_locked(page);
 		kmap(page);
@@ -510,7 +509,7 @@ reiserfs_xattr_set(struct inode *inode, const char *name, const void *buffer,
 		goto out;
 	}
 
-	xinode = fp->f_dentry->d_inode;
+	xinode = fp->f_path.dentry->d_inode;
 	REISERFS_I(inode)->i_flags |= i_has_xattr_dir;
 
 	/* we need to copy it off.. */
@@ -529,7 +528,7 @@ reiserfs_xattr_set(struct inode *inode, const char *name, const void *buffer,
 	newattrs.ia_size = buffer_size;
 	newattrs.ia_valid = ATTR_SIZE | ATTR_CTIME;
 	mutex_lock(&xinode->i_mutex);
-	err = notify_change(fp->f_dentry, &newattrs);
+	err = notify_change(fp->f_path.dentry, &newattrs);
 	if (err)
 		goto out_filp;
 
@@ -628,7 +627,7 @@ reiserfs_xattr_get(const struct inode *inode, const char *name, void *buffer,
 		goto out;
 	}
 
-	xinode = fp->f_dentry->d_inode;
+	xinode = fp->f_path.dentry->d_inode;
 	isize = xinode->i_size;
 	REISERFS_I(inode)->i_flags |= i_has_xattr_dir;
 
@@ -775,7 +774,7 @@ int reiserfs_xattr_del(struct inode *inode, const char *name)
 
 static int
 reiserfs_delete_xattrs_filler(void *buf, const char *name, int namelen,
-			      loff_t offset, ino_t ino, unsigned int d_type)
+			      loff_t offset, u64 ino, unsigned int d_type)
 {
 	struct dentry *xadir = (struct dentry *)buf;
 
@@ -853,7 +852,7 @@ struct reiserfs_chown_buf {
 /* XXX: If there is a better way to do this, I'd love to hear about it */
 static int
 reiserfs_chown_xattrs_filler(void *buf, const char *name, int namelen,
-			     loff_t offset, ino_t ino, unsigned int d_type)
+			     loff_t offset, u64 ino, unsigned int d_type)
 {
 	struct reiserfs_chown_buf *chown_buf = (struct reiserfs_chown_buf *)buf;
 	struct dentry *xafile, *xadir = chown_buf->xadir;
@@ -1038,7 +1037,7 @@ struct reiserfs_listxattr_buf {
 
 static int
 reiserfs_listxattr_filler(void *buf, const char *name, int namelen,
-			  loff_t offset, ino_t ino, unsigned int d_type)
+			  loff_t offset, u64 ino, unsigned int d_type)
 {
 	struct reiserfs_listxattr_buf *b = (struct reiserfs_listxattr_buf *)buf;
 	int len = 0;

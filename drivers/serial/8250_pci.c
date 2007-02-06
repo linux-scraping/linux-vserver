@@ -134,7 +134,7 @@ afavlab_setup(struct serial_private *priv, struct pciserial_board *board,
  * and Keystone have one Diva chip with 3 UARTs.  Some later machines have
  * one Diva chip, but it has been expanded to 5 UARTs.
  */
-static int __devinit pci_hp_diva_init(struct pci_dev *dev)
+static int pci_hp_diva_init(struct pci_dev *dev)
 {
 	int rc = 0;
 
@@ -194,7 +194,7 @@ pci_hp_diva_setup(struct serial_private *priv, struct pciserial_board *board,
 /*
  * Added for EKF Intel i960 serial boards
  */
-static int __devinit pci_inteli960ni_init(struct pci_dev *dev)
+static int pci_inteli960ni_init(struct pci_dev *dev)
 {
 	unsigned long oldval;
 
@@ -216,7 +216,7 @@ static int __devinit pci_inteli960ni_init(struct pci_dev *dev)
  * seems to be mainly needed on card using the PLX which also use I/O
  * mapped memory.
  */
-static int __devinit pci_plx9050_init(struct pci_dev *dev)
+static int pci_plx9050_init(struct pci_dev *dev)
 {
 	u8 irq_config;
 	void __iomem *p;
@@ -314,7 +314,7 @@ sbs_setup(struct serial_private *priv, struct pciserial_board *board,
 /* global control register offset for SBS PMC-OctalPro */
 #define OCT_REG_CR_OFF		0x500
 
-static int __devinit sbs_init(struct pci_dev *dev)
+static int sbs_init(struct pci_dev *dev)
 {
 	u8 __iomem *p;
 
@@ -458,11 +458,11 @@ static int pci_siig_setup(struct serial_private *priv,
  * growing *huge*, we use this function to collapse some 70 entries
  * in the PCI table into one, for sanity's and compactness's sake.
  */
-static unsigned short timedia_single_port[] = {
+static const unsigned short timedia_single_port[] = {
 	0x4025, 0x4027, 0x4028, 0x5025, 0x5027, 0
 };
 
-static unsigned short timedia_dual_port[] = {
+static const unsigned short timedia_dual_port[] = {
 	0x0002, 0x4036, 0x4037, 0x4038, 0x4078, 0x4079, 0x4085,
 	0x4088, 0x4089, 0x5037, 0x5078, 0x5079, 0x5085, 0x6079, 
 	0x7079, 0x8079, 0x8137, 0x8138, 0x8237, 0x8238, 0x9079, 
@@ -470,35 +470,34 @@ static unsigned short timedia_dual_port[] = {
 	0xD079, 0
 };
 
-static unsigned short timedia_quad_port[] = {
+static const unsigned short timedia_quad_port[] = {
 	0x4055, 0x4056, 0x4095, 0x4096, 0x5056, 0x8156, 0x8157, 
 	0x8256, 0x8257, 0x9056, 0x9156, 0x9157, 0x9158, 0x9159, 
 	0x9256, 0x9257, 0xA056, 0xA157, 0xA158, 0xA159, 0xB056,
 	0xB157, 0
 };
 
-static unsigned short timedia_eight_port[] = {
+static const unsigned short timedia_eight_port[] = {
 	0x4065, 0x4066, 0x5065, 0x5066, 0x8166, 0x9066, 0x9166, 
 	0x9167, 0x9168, 0xA066, 0xA167, 0xA168, 0
 };
 
 static const struct timedia_struct {
 	int num;
-	unsigned short *ids;
+	const unsigned short *ids;
 } timedia_data[] = {
 	{ 1, timedia_single_port },
 	{ 2, timedia_dual_port },
 	{ 4, timedia_quad_port },
-	{ 8, timedia_eight_port },
-	{ 0, NULL }
+	{ 8, timedia_eight_port }
 };
 
-static int __devinit pci_timedia_init(struct pci_dev *dev)
+static int pci_timedia_init(struct pci_dev *dev)
 {
-	unsigned short *ids;
+	const unsigned short *ids;
 	int i, j;
 
-	for (i = 0; timedia_data[i].num; i++) {
+	for (i = 0; i < ARRAY_SIZE(timedia_data); i++) {
 		ids = timedia_data[i].ids;
 		for (j = 0; ids[j]; j++)
 			if (dev->subsystem_device == ids[j])
@@ -566,13 +565,13 @@ titan_400l_800l_setup(struct serial_private *priv,
 	return setup_port(priv, port, bar, offset, board->reg_shift);
 }
 
-static int __devinit pci_xircom_init(struct pci_dev *dev)
+static int pci_xircom_init(struct pci_dev *dev)
 {
 	msleep(100);
 	return 0;
 }
 
-static int __devinit pci_netmos_init(struct pci_dev *dev)
+static int pci_netmos_init(struct pci_dev *dev)
 {
 	/* subdevice 0x00PS means <P> parallel, <S> serial */
 	unsigned int num_serial = dev->subsystem_device & 0xf;
@@ -594,8 +593,8 @@ pci_default_setup(struct serial_private *priv, struct pciserial_board *board,
 	else
 		offset += idx * board->uart_offset;
 
-	maxnr = (pci_resource_len(priv->dev, bar) - board->first_offset) /
-		(8 << board->reg_shift);
+	maxnr = (pci_resource_len(priv->dev, bar) - board->first_offset) >>
+		(board->reg_shift + 3);
 
 	if (board->flags & FL_REGION_SZ_CAP && idx >= maxnr)
 		return 1;
@@ -622,7 +621,7 @@ pci_default_setup(struct serial_private *priv, struct pciserial_board *board,
  */
 static struct pci_serial_quirk pci_serial_quirks[] = {
 	/*
-	 * AFAVLAB cards.
+	 * AFAVLAB cards - these may be called via parport_serial
 	 *  It is not clear whether this applies to all products.
 	 */
 	{
@@ -754,7 +753,7 @@ static struct pci_serial_quirk pci_serial_quirks[] = {
 		.exit		= __devexit_p(sbs_exit),
 	},
 	/*
-	 * SIIG cards.
+	 * SIIG cards - these may be called via parport_serial
 	 */
 	{
 		.vendor		= PCI_VENDOR_ID_SIIG,
@@ -811,7 +810,7 @@ static struct pci_serial_quirk pci_serial_quirks[] = {
 		.setup		= pci_default_setup,
 	},
 	/*
-	 * Netmos cards
+	 * Netmos cards - these may be called via parport_serial
 	 */
 	{
 		.vendor		= PCI_VENDOR_ID_NETMOS,
@@ -936,6 +935,7 @@ enum pci_board_num_t {
 	pbn_b1_8_1382400,
 
 	pbn_b2_1_115200,
+	pbn_b2_2_115200,
 	pbn_b2_8_115200,
 
 	pbn_b2_1_460800,
@@ -1240,6 +1240,12 @@ static struct pciserial_board pci_boards[] __devinitdata = {
 	[pbn_b2_1_115200] = {
 		.flags		= FL_BASE2,
 		.num_ports	= 1,
+		.base_baud	= 115200,
+		.uart_offset	= 8,
+	},
+	[pbn_b2_2_115200] = {
+		.flags		= FL_BASE2,
+		.num_ports	= 2,
 		.base_baud	= 115200,
 		.uart_offset	= 8,
 	},
@@ -1783,6 +1789,7 @@ static void __devexit pciserial_remove_one(struct pci_dev *dev)
 	pci_disable_device(dev);
 }
 
+#ifdef CONFIG_PM
 static int pciserial_suspend_one(struct pci_dev *dev, pm_message_t state)
 {
 	struct serial_private *priv = pci_get_drvdata(dev);
@@ -1812,6 +1819,7 @@ static int pciserial_resume_one(struct pci_dev *dev)
 	}
 	return 0;
 }
+#endif
 
 static struct pci_device_id serial_pci_tbl[] = {
 	{	PCI_VENDOR_ID_V3, PCI_DEVICE_ID_V3_V960,
@@ -2231,6 +2239,30 @@ static struct pci_device_id serial_pci_tbl[] = {
 		pbn_b0_bt_1_460800 },
 
 	/*
+	 * Korenix Jetcard F0/F1 cards (JC1204, JC1208, JC1404, JC1408).
+	 * Cards are identified by their subsystem vendor IDs, which
+	 * (in hex) match the model number.
+	 *
+	 * Note that JC140x are RS422/485 cards which require ox950
+	 * ACR = 0x10, and as such are not currently fully supported.
+	 */
+	{	PCI_VENDOR_ID_KORENIX, PCI_DEVICE_ID_KORENIX_JETCARDF0,
+		0x1204, 0x0004, 0, 0,
+		pbn_b0_4_921600 },
+	{	PCI_VENDOR_ID_KORENIX, PCI_DEVICE_ID_KORENIX_JETCARDF0,
+		0x1208, 0x0004, 0, 0,
+		pbn_b0_4_921600 },
+/*	{	PCI_VENDOR_ID_KORENIX, PCI_DEVICE_ID_KORENIX_JETCARDF0,
+		0x1402, 0x0002, 0, 0,
+		pbn_b0_2_921600 }, */
+/*	{	PCI_VENDOR_ID_KORENIX, PCI_DEVICE_ID_KORENIX_JETCARDF0,
+		0x1404, 0x0004, 0, 0,
+		pbn_b0_4_921600 }, */
+	{	PCI_VENDOR_ID_KORENIX, PCI_DEVICE_ID_KORENIX_JETCARDF1,
+		0x1208, 0x0004, 0, 0,
+		pbn_b0_4_921600 },
+
+	/*
 	 * Dell Remote Access Card 4 - Tim_T_Murphy@Dell.com
 	 */
 	{	PCI_VENDOR_ID_DELL, PCI_DEVICE_ID_DELL_RAC4,
@@ -2340,6 +2372,13 @@ static struct pci_device_id serial_pci_tbl[] = {
 		pbn_b0_1_115200 },
 
 	/*
+	 * IntaShield IS-200
+	 */
+	{	PCI_VENDOR_ID_INTASHIELD, PCI_DEVICE_ID_INTASHIELD_IS200,
+		PCI_ANY_ID, PCI_ANY_ID, 0, 0,	/* 135a.0811 */
+		pbn_b2_2_115200 },
+
+	/*
 	 * These entries match devices with class COMMUNICATION_SERIAL,
 	 * COMMUNICATION_MODEM or COMMUNICATION_MULTISERIAL
 	 */
@@ -2362,8 +2401,10 @@ static struct pci_driver serial_pci_driver = {
 	.name		= "serial",
 	.probe		= pciserial_init_one,
 	.remove		= __devexit_p(pciserial_remove_one),
+#ifdef CONFIG_PM
 	.suspend	= pciserial_suspend_one,
 	.resume		= pciserial_resume_one,
+#endif
 	.id_table	= serial_pci_tbl,
 };
 

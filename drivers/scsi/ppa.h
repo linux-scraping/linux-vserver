@@ -2,7 +2,7 @@
  * the Iomega ZIP drive
  * 
  * (c) 1996     Grant R. Guenther  grant@torque.net
- *              David Campbell     campbell@torque.net
+ *              David Campbell
  *
  *      All comments to David.
  */
@@ -73,7 +73,6 @@
  */
 /* ------ END OF USER CONFIGURABLE PARAMETERS ----- */
 
-#include  <linux/config.h>
 #include  <linux/stddef.h>
 #include  <linux/module.h>
 #include  <linux/kernel.h>

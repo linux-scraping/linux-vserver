@@ -245,6 +245,7 @@
 #define A_IOCFG_GPOUT0		0x0044		/* analog/digital				*/
 #define A_IOCFG_DISABLE_ANALOG	0x0040		/* = 'enable' for Audigy2 (chiprev=4)		*/
 #define A_IOCFG_ENABLE_DIGITAL	0x0004
+#define A_IOCFG_ENABLE_DIGITAL_AUDIGY4	0x0080
 #define A_IOCFG_UNKNOWN_20      0x0020
 #define A_IOCFG_DISABLE_AC97_FRONT      0x0080  /* turn off ac97 front -> front (10k2.1)	*/
 #define A_IOCFG_GPOUT1		0x0002		/* IR? drive's internal bypass (?)		*/
@@ -1065,6 +1066,7 @@ struct snd_emu_chip_details {
 	unsigned char emu1212m;     /* EMU 1212m card */
 	unsigned char spi_dac;      /* SPI interface for DAC */
 	unsigned char i2c_adc;      /* I2C interface for ADC */
+	unsigned char adc_1361t;    /* Use Philips 1361T ADC */
 	const char *driver;
 	const char *name;
 	const char *id;		/* for backward compatibility - can be NULL if not needed */
@@ -1192,7 +1194,7 @@ int snd_emu10k1_mixer(struct snd_emu10k1 * emu, int pcm_device, int multi_device
 int snd_emu10k1_timer(struct snd_emu10k1 * emu, int device);
 int snd_emu10k1_fx8010_new(struct snd_emu10k1 *emu, int device, struct snd_hwdep ** rhwdep);
 
-irqreturn_t snd_emu10k1_interrupt(int irq, void *dev_id, struct pt_regs *regs);
+irqreturn_t snd_emu10k1_interrupt(int irq, void *dev_id);
 
 void snd_emu10k1_voice_init(struct snd_emu10k1 * emu, int voice);
 int snd_emu10k1_init_efx(struct snd_emu10k1 *emu);
@@ -1522,6 +1524,10 @@ struct snd_emu10k1_fx8010_control_gpr {
 	unsigned int value[32];		/* initial values */
 	unsigned int min;		/* minimum range */
 	unsigned int max;		/* maximum range */
+	union {
+		snd_kcontrol_tlv_rw_t *c;
+		unsigned int *p;
+	} tlv;
 	unsigned int translation;	/* translation type (EMU10K1_GPR_TRANSLATION*) */
 };
 

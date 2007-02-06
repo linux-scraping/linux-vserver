@@ -6,6 +6,7 @@
 #include <linux/kernel.h>
 #include <linux/init.h>
 #include <linux/interrupt.h>
+#include <linux/irq.h>
 #include <linux/sched.h>
 #include <linux/serial_8250.h>
 
@@ -79,17 +80,17 @@ static void __init shark_map_io(void)
 #define HZ_TIME ((1193180 + HZ/2) / HZ)
 
 static irqreturn_t
-shark_timer_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+shark_timer_interrupt(int irq, void *dev_id)
 {
 	write_seqlock(&xtime_lock);
-	timer_tick(regs);
+	timer_tick();
 	write_sequnlock(&xtime_lock);
 	return IRQ_HANDLED;
 }
 
 static struct irqaction shark_timer_irq = {
 	.name		= "Shark Timer Tick",
-	.flags		= SA_INTERRUPT | SA_TIMER,
+	.flags		= IRQF_DISABLED | IRQF_TIMER,
 	.handler	= shark_timer_interrupt,
 };
 

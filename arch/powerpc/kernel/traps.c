@@ -14,7 +14,6 @@
  * This file handles the architecture-dependent parts of hardware exceptions
  */
 
-#include <linux/config.h>
 #include <linux/errno.h>
 #include <linux/sched.h>
 #include <linux/kernel.h>
@@ -32,6 +31,8 @@
 #include <linux/delay.h>
 #include <linux/kprobes.h>
 #include <linux/kexec.h>
+#include <linux/backlight.h>
+#include <linux/bug.h>
 
 #include <asm/kdebug.h>
 #include <asm/pgtable.h>
@@ -51,10 +52,7 @@
 #include <asm/firmware.h>
 #include <asm/processor.h>
 #endif
-
-#ifdef CONFIG_PPC64	/* XXX */
-#define _IO_BASE	pci_io_base
-#endif
+#include <asm/kexec.h>
 
 #ifdef CONFIG_DEBUGGER
 int (*__debugger)(struct pt_regs *regs);
@@ -96,7 +94,7 @@ static DEFINE_SPINLOCK(die_lock);
 
 int die(const char *str, struct pt_regs *regs, long err)
 {
-	static int die_counter, crash_dump_start = 0;
+	static int die_counter;
 
 	if (debugger(regs))
 		return 1;
@@ -105,10 +103,18 @@ int die(const char *str, struct pt_regs *regs, long err)
 	spin_lock_irq(&die_lock);
 	bust_spinlocks(1);
 #ifdef CONFIG_PMAC_BACKLIGHT
-	if (machine_is(powermac)) {
-		set_backlight_enable(1);
-		set_backlight_level(BACKLIGHT_MAX);
+	mutex_lock(&pmac_backlight_mutex);
+	if (machine_is(powermac) && pmac_backlight) {
+		struct backlight_properties *props;
+
+		down(&pmac_backlight->sem);
+		props = pmac_backlight->props;
+		props->brightness = props->max_brightness;
+		props->power = FB_BLANK_UNBLANK;
+		props->update_status(pmac_backlight);
+		up(&pmac_backlight->sem);
 	}
+	mutex_unlock(&pmac_backlight_mutex);
 #endif
 	printk("Oops: %s, sig: %ld [#%d]\n", str, err, ++die_counter);
 #ifdef CONFIG_PREEMPT
@@ -128,32 +134,19 @@ int die(const char *str, struct pt_regs *regs, long err)
 	print_modules();
 	show_regs(regs);
 	bust_spinlocks(0);
-
-	if (!crash_dump_start && kexec_should_crash(current)) {
-		crash_dump_start = 1;
-		spin_unlock_irq(&die_lock);
-		crash_kexec(regs);
-		/* NOTREACHED */
-	}
 	spin_unlock_irq(&die_lock);
-	if (crash_dump_start)
-		/*
-		 * Only for soft-reset: Other CPUs will be responded to an IPI
-		 * sent by first kexec CPU.
-		 */
-		for(;;)
-			;
+
+	if (kexec_should_crash(current) ||
+		kexec_sr_activated(smp_processor_id()))
+		crash_kexec(regs);
+	crash_kexec_secondary(regs);
 
 	if (in_interrupt())
 		panic("Fatal exception in interrupt");
 
-	if (panic_on_oops) {
-#ifdef CONFIG_PPC64
-		printk(KERN_EMERG "Fatal exception: panic in 5 seconds\n");
-		ssleep(5);
-#endif
+	if (panic_on_oops)
 		panic("Fatal exception");
-	}
+
 	do_exit(err);
 
 	return 0;
@@ -206,7 +199,24 @@ void system_reset_exception(struct pt_regs *regs)
 			return;
 	}
 
+#ifdef CONFIG_KEXEC
+	cpu_set(smp_processor_id(), cpus_in_sr);
+#endif
+
 	die("System Reset", regs, SIGABRT);
+
+	/*
+	 * Some CPUs when released from the debugger will execute this path.
+	 * These CPUs entered the debugger via a soft-reset. If the CPU was
+	 * hung before entering the debugger it will return to the hung
+	 * state when exiting this function.  This causes a problem in
+	 * kdump since the hung CPU(s) will not respond to the IPI sent
+	 * from kdump. To prevent the problem we call crash_kexec_secondary()
+	 * here. If a kdump had not been initiated or we exit the debugger
+	 * with the "exit and recover" command (x) crash_kexec_secondary()
+	 * will return after 5ms and the CPU returns to its previous state.
+	 */
+	crash_kexec_secondary(regs);
 
 	/* Must die if the interrupt is not recoverable */
 	if (!(regs->msr & MSR_RI))
@@ -228,7 +238,7 @@ void system_reset_exception(struct pt_regs *regs)
  */
 static inline int check_io_access(struct pt_regs *regs)
 {
-#if defined(CONFIG_PPC_PMAC) && defined(CONFIG_PPC32)
+#ifdef CONFIG_PPC32
 	unsigned long msr = regs->msr;
 	const struct exception_table_entry *entry;
 	unsigned int *nip = (unsigned int *)regs->nip;
@@ -261,7 +271,7 @@ static inline int check_io_access(struct pt_regs *regs)
 			return 1;
 		}
 	}
-#endif /* CONFIG_PPC_PMAC && CONFIG_PPC32 */
+#endif /* CONFIG_PPC32 */
 	return 0;
 }
 
@@ -572,18 +582,21 @@ static void parse_fpe(struct pt_regs *regs)
 #define INST_MFSPR_PVR_MASK	0xfc1fffff
 
 #define INST_DCBA		0x7c0005ec
-#define INST_DCBA_MASK		0x7c0007fe
+#define INST_DCBA_MASK		0xfc0007fe
 
 #define INST_MCRXR		0x7c000400
-#define INST_MCRXR_MASK		0x7c0007fe
+#define INST_MCRXR_MASK		0xfc0007fe
 
 #define INST_STRING		0x7c00042a
-#define INST_STRING_MASK	0x7c0007fe
-#define INST_STRING_GEN_MASK	0x7c00067e
+#define INST_STRING_MASK	0xfc0007fe
+#define INST_STRING_GEN_MASK	0xfc00067e
 #define INST_LSWI		0x7c0004aa
 #define INST_LSWX		0x7c00042a
 #define INST_STSWI		0x7c0005aa
 #define INST_STSWX		0x7c00052a
+
+#define INST_POPCNTB		0x7c0000f4
+#define INST_POPCNTB_MASK	0xfc0007fe
 
 static int emulate_string_inst(struct pt_regs *regs, u32 instword)
 {
@@ -653,12 +666,29 @@ static int emulate_string_inst(struct pt_regs *regs, u32 instword)
 	return 0;
 }
 
+static int emulate_popcntb_inst(struct pt_regs *regs, u32 instword)
+{
+	u32 ra,rs;
+	unsigned long tmp;
+
+	ra = (instword >> 16) & 0x1f;
+	rs = (instword >> 21) & 0x1f;
+
+	tmp = regs->gpr[rs];
+	tmp = tmp - ((tmp >> 1) & 0x5555555555555555ULL);
+	tmp = (tmp & 0x3333333333333333ULL) + ((tmp >> 2) & 0x3333333333333333ULL);
+	tmp = (tmp + (tmp >> 4)) & 0x0f0f0f0f0f0f0f0fULL;
+	regs->gpr[ra] = tmp;
+
+	return 0;
+}
+
 static int emulate_instruction(struct pt_regs *regs)
 {
 	u32 instword;
 	u32 rd;
 
-	if (!user_mode(regs))
+	if (!user_mode(regs) || (regs->msr & MSR_LE))
 		return -EINVAL;
 	CHECK_FULL_REGS(regs);
 
@@ -690,57 +720,17 @@ static int emulate_instruction(struct pt_regs *regs)
 	if ((instword & INST_STRING_GEN_MASK) == INST_STRING)
 		return emulate_string_inst(regs, instword);
 
+	/* Emulate the popcntb (Population Count Bytes) instruction. */
+	if ((instword & INST_POPCNTB_MASK) == INST_POPCNTB) {
+		return emulate_popcntb_inst(regs, instword);
+	}
+
 	return -EINVAL;
 }
 
-/*
- * Look through the list of trap instructions that are used for BUG(),
- * BUG_ON() and WARN_ON() and see if we hit one.  At this point we know
- * that the exception was caused by a trap instruction of some kind.
- * Returns 1 if we should continue (i.e. it was a WARN_ON) or 0
- * otherwise.
- */
-extern struct bug_entry __start___bug_table[], __stop___bug_table[];
-
-#ifndef CONFIG_MODULES
-#define module_find_bug(x)	NULL
-#endif
-
-struct bug_entry *find_bug(unsigned long bugaddr)
+int is_valid_bugaddr(unsigned long addr)
 {
-	struct bug_entry *bug;
-
-	for (bug = __start___bug_table; bug < __stop___bug_table; ++bug)
-		if (bugaddr == bug->bug_addr)
-			return bug;
-	return module_find_bug(bugaddr);
-}
-
-static int check_bug_trap(struct pt_regs *regs)
-{
-	struct bug_entry *bug;
-	unsigned long addr;
-
-	if (regs->msr & MSR_PR)
-		return 0;	/* not in kernel */
-	addr = regs->nip;	/* address of trap instruction */
-	if (addr < PAGE_OFFSET)
-		return 0;
-	bug = find_bug(regs->nip);
-	if (bug == NULL)
-		return 0;
-	if (bug->line & BUG_WARNING_TRAP) {
-		/* this is a WARN_ON rather than BUG/BUG_ON */
-		printk(KERN_ERR "Badness in %s at %s:%ld\n",
-		       bug->function, bug->file,
-		       bug->line & ~BUG_WARNING_TRAP);
-		dump_stack();
-		return 1;
-	}
-	printk(KERN_CRIT "kernel BUG in %s at %s:%ld!\n",
-	       bug->function, bug->file, bug->line);
-
-	return 0;
+	return is_kernel_addr(addr);
 }
 
 void __kprobes program_check_exception(struct pt_regs *regs)
@@ -748,6 +738,8 @@ void __kprobes program_check_exception(struct pt_regs *regs)
 	unsigned int reason = get_reason(regs);
 	extern int do_mathemu(struct pt_regs *regs);
 
+	/* We can now get here via a FP Unavailable exception if the core
+	 * has no FPU, in that case no reason flags will be set */
 #ifdef CONFIG_MATH_EMULATION
 	/* (reason & REASON_ILLEGAL) would be the obvious thing here,
 	 * but there seems to be a hardware bug on the 405GP (RevD)
@@ -774,7 +766,9 @@ void __kprobes program_check_exception(struct pt_regs *regs)
 			return;
 		if (debugger_bpt(regs))
 			return;
-		if (check_bug_trap(regs)) {
+
+		if (!(regs->msr & MSR_PR) &&  /* not user-mode */
+		    report_bug(regs->nip) == BUG_TRAP_TYPE_WARN) {
 			regs->nip += 4;
 			return;
 		}
@@ -805,9 +799,11 @@ void __kprobes program_check_exception(struct pt_regs *regs)
 
 void alignment_exception(struct pt_regs *regs)
 {
-	int fixed;
+	int sig, code, fixed = 0;
 
-	fixed = fix_alignment(regs);
+	/* we don't implement logging of alignment exceptions */
+	if (!(current->thread.align_ctl & PR_UNALIGN_SIGBUS))
+		fixed = fix_alignment(regs);
 
 	if (fixed == 1) {
 		regs->nip += 4;	/* skip over emulated instruction */
@@ -817,14 +813,16 @@ void alignment_exception(struct pt_regs *regs)
 
 	/* Operand address was bad */
 	if (fixed == -EFAULT) {
-		if (user_mode(regs))
-			_exception(SIGSEGV, regs, SEGV_ACCERR, regs->dar);
-		else
-			/* Search exception table */
-			bad_page_fault(regs, regs->dar, SIGSEGV);
-		return;
+		sig = SIGSEGV;
+		code = SEGV_ACCERR;
+	} else {
+		sig = SIGBUS;
+		code = BUS_ADRALN;
 	}
-	_exception(SIGBUS, regs, BUS_ADRALN, regs->dar);
+	if (user_mode(regs))
+		_exception(sig, regs, code, regs->dar);
+	else
+		bad_page_fault(regs, regs->dar, sig);
 }
 
 void StackOverflow(struct pt_regs *regs)
@@ -846,8 +844,9 @@ void nonrecoverable_exception(struct pt_regs *regs)
 
 void trace_syscall(struct pt_regs *regs)
 {
-	printk("Task: %p(%d), PC: %08lX/%08lX, Syscall: %3ld, Result: %s%ld    %s\n",
-	       current, current->pid, regs->nip, regs->link, regs->gpr[0],
+	printk("Task: %p(%d[#%u]), PC: %08lX/%08lX, Syscall: %3ld, Result: %s%ld    %s\n",
+	       current, current->pid, current->xid,
+	       regs->nip, regs->link, regs->gpr[0],
 	       regs->ccr&0x10000000?"Error=":"", regs->gpr[3], print_tainted());
 }
 
@@ -860,14 +859,13 @@ void kernel_fp_unavailable_exception(struct pt_regs *regs)
 
 void altivec_unavailable_exception(struct pt_regs *regs)
 {
-#if !defined(CONFIG_ALTIVEC)
 	if (user_mode(regs)) {
 		/* A user program has executed an altivec instruction,
 		   but this kernel doesn't support altivec. */
 		_exception(SIGILL, regs, ILL_ILLOPC, regs->nip);
 		return;
 	}
-#endif
+
 	printk(KERN_EMERG "Unrecoverable VMX/Altivec Unavailable Exception "
 			"%lx at %lx\n", regs->trap, regs->nip);
 	die("Unrecoverable VMX/Altivec Unavailable Exception", regs, SIGABRT);

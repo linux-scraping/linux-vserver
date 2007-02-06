@@ -104,8 +104,6 @@ firmware_class/
 	- request_firmware() hotplug interface info.
 floppy.txt
 	- notes and driver options for the floppy disk driver.
-ftape.txt
-	- notes about the floppy tape device driver.
 hayes-esp.txt
 	- info on using the Hayes ESP serial driver.
 highuid.txt
@@ -184,6 +182,8 @@ mtrr.txt
 	- how to use PPro Memory Type Range Registers to increase performance.
 nbd.txt
 	- info on a TCP implementation of a network block device.
+netlabel/
+	- directory with information on the NetLabel subsystem.
 networking/
 	- directory with info on various aspects of networking with Linux.
 nfsroot.txt

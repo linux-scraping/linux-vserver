@@ -6,7 +6,7 @@
  *
  *  based on the loop.c code by Theodore Ts'o.
  *
- * Copyright (C) 2002-2005 by Herbert Pötzl.
+ * Copyright (C) 2002-2006 by Herbert Pötzl.
  * Redistribution of this file is permitted under the
  * GNU General Public License.
  *
@@ -17,10 +17,9 @@
 #include <linux/file.h>
 #include <linux/major.h>
 #include <linux/blkdev.h>
-#include <linux/devfs_fs_kernel.h>
 
 #include <linux/vroot.h>
-#include <linux/vserver/debug.h>
+#include <linux/vs_context.h>
 
 
 static int max_vroot = 8;
@@ -212,8 +211,6 @@ int __init vroot_init(void)
 			goto out_mem3;
 	}
 
-	devfs_mk_dir("vroot");
-
 	for (i = 0; i < max_vroot; i++) {
 		struct vroot_device *vr = &vroot_dev[i];
 		struct gendisk *disk = disks[i];
@@ -225,21 +222,18 @@ int __init vroot_init(void)
 		disk->first_minor = i;
 		disk->fops = &vr_fops;
 		sprintf(disk->disk_name, "vroot%d", i);
-		sprintf(disk->devfs_name, "vroot/%d", i);
 		disk->private_data = vr;
 	}
 
 	err = register_vroot_grb(&__vroot_get_real_bdev);
 	if (err)
-		goto out_reg;
+		goto out_mem3;
 
 	for (i = 0; i < max_vroot; i++)
 		add_disk(disks[i]);
 	printk(KERN_INFO "vroot: loaded (max %d devices)\n", max_vroot);
 	return 0;
 
-out_reg:
-	devfs_remove("vroot");
 out_mem3:
 	while (i--)
 		put_disk(disks[i]);
@@ -263,7 +257,6 @@ void vroot_exit(void)
 		del_gendisk(disks[i]);
 		put_disk(disks[i]);
 	}
-	devfs_remove("vroot");
 	if (unregister_blkdev(VROOT_MAJOR, "vroot"))
 		printk(KERN_WARNING "vroot: cannot unregister blkdev\n");
 

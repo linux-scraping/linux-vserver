@@ -4,14 +4,9 @@
  * Copyright (C) 2001 David S. Miller (davem@redhat.com)
  */
 
-#define __KERNEL_SYSCALLS__
-static int errno;
-
-#include <linux/kernel.h>
 #include <linux/kthread.h>
-#include <linux/sched.h>
-#include <linux/slab.h>
 #include <linux/delay.h>
+#include <linux/kmod.h>
 #include <asm/oplib.h>
 #include <asm/ebus.h>
 
@@ -200,7 +195,7 @@ static void do_envctrl_shutdown(struct bbc_cpu_temperature *tp)
 	printk(KERN_CRIT "kenvctrld: Shutting down the system now.\n");
 
 	shutting_down = 1;
-	if (execve("/sbin/shutdown", argv, envp) < 0)
+	if (call_usermodehelper("/sbin/shutdown", argv, envp, 0) < 0)
 		printk(KERN_CRIT "envctrl: shutdown execution failed\n");
 }
 
@@ -575,9 +570,9 @@ int bbc_envctrl_init(void)
 	int devidx = 0;
 
 	while ((echild = bbc_i2c_getdev(devidx++)) != NULL) {
-		if (!strcmp(echild->prom_name, "temperature"))
+		if (!strcmp(echild->prom_node->name, "temperature"))
 			attach_one_temp(echild, temp_index++);
-		if (!strcmp(echild->prom_name, "fan-control"))
+		if (!strcmp(echild->prom_node->name, "fan-control"))
 			attach_one_fan(echild, fan_index++);
 	}
 	if (temp_index != 0 && fan_index != 0) {

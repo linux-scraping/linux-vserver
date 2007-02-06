@@ -3,6 +3,7 @@
 
 #include <linux/transport_class.h>
 #include <linux/types.h>
+#include <linux/mutex.h>
 
 struct scsi_transport_template;
 struct sas_rphy;
@@ -23,15 +24,23 @@ enum sas_protocol {
 };
 
 enum sas_linkrate {
-	SAS_LINK_RATE_UNKNOWN,
-	SAS_PHY_DISABLED,
-	SAS_LINK_RATE_FAILED,
-	SAS_SATA_SPINUP_HOLD,
-	SAS_SATA_PORT_SELECTOR,
-	SAS_LINK_RATE_1_5_GBPS,
-	SAS_LINK_RATE_3_0_GBPS,
-	SAS_LINK_RATE_6_0_GBPS,
-	SAS_LINK_VIRTUAL,
+	/* These Values are defined in the SAS standard */
+	SAS_LINK_RATE_UNKNOWN = 0,
+	SAS_PHY_DISABLED = 1,
+	SAS_PHY_RESET_PROBLEM = 2,
+	SAS_SATA_SPINUP_HOLD = 3,
+	SAS_SATA_PORT_SELECTOR = 4,
+	SAS_PHY_RESET_IN_PROGRESS = 5,
+	SAS_LINK_RATE_1_5_GBPS = 8,
+	SAS_LINK_RATE_G1 = SAS_LINK_RATE_1_5_GBPS,
+	SAS_LINK_RATE_3_0_GBPS = 9,
+	SAS_LINK_RATE_G2 = SAS_LINK_RATE_3_0_GBPS,
+	SAS_LINK_RATE_6_0_GBPS = 10,
+	/* These are virtual to the transport class and may never
+	 * be signalled normally since the standard defined field
+	 * is only 4 bits */
+	SAS_LINK_RATE_FAILED = 0x10,
+	SAS_PHY_VIRTUAL = 0x11,
 };
 
 struct sas_identify {
@@ -55,10 +64,6 @@ struct sas_phy {
 	enum sas_linkrate	minimum_linkrate;
 	enum sas_linkrate	maximum_linkrate_hw;
 	enum sas_linkrate	maximum_linkrate;
-	u8			port_identifier;
-
-	/* internal state */
-	unsigned int		local_attached : 1;
 
 	/* link error statistics */
 	u32			invalid_dword_count;
@@ -66,8 +71,10 @@ struct sas_phy {
 	u32			loss_of_dword_sync_count;
 	u32			phy_reset_problem_count;
 
-	/* the other end of the link */
-	struct sas_rphy		*rphy;
+	/* for the list of phys belonging to a port */
+	struct list_head	port_siblings;
+
+	struct work_struct      reset_work;
 };
 
 #define dev_to_phy(d) \
@@ -106,6 +113,7 @@ struct sas_end_device {
 
 struct sas_expander_device {
 	int    level;
+	int    next_port_id;
 
 	#define SAS_EXPANDER_VENDOR_ID_LEN	8
 	char   vendor_id[SAS_EXPANDER_VENDOR_ID_LEN+1];
@@ -124,15 +132,42 @@ struct sas_expander_device {
 #define rphy_to_expander_device(r) \
 	container_of((r), struct sas_expander_device, rphy)
 
+struct sas_port {
+	struct device		dev;
+
+	int			port_identifier;
+	int			num_phys;
+	/* port flags */
+	unsigned int		is_backlink:1;
+
+	/* the other end of the link */
+	struct sas_rphy		*rphy;
+
+	struct mutex		phy_list_mutex;
+	struct list_head	phy_list;
+};
+
+#define dev_to_sas_port(d) \
+	container_of((d), struct sas_port, dev)
+#define transport_class_to_sas_port(cdev) \
+	dev_to_sas_port((cdev)->dev)
+
+struct sas_phy_linkrates {
+	enum sas_linkrate maximum_linkrate;
+	enum sas_linkrate minimum_linkrate;
+};
+
 /* The functions by which the transport class and the driver communicate */
 struct sas_function_template {
 	int (*get_linkerrors)(struct sas_phy *);
 	int (*get_enclosure_identifier)(struct sas_rphy *, u64 *);
 	int (*get_bay_identifier)(struct sas_rphy *);
 	int (*phy_reset)(struct sas_phy *, int);
+	int (*set_phy_speed)(struct sas_phy *, struct sas_phy_linkrates *);
 };
 
 
+void sas_remove_children(struct device *);
 extern void sas_remove_host(struct Scsi_Host *);
 
 extern struct sas_phy *sas_phy_alloc(struct device *, int);
@@ -141,12 +176,22 @@ extern int sas_phy_add(struct sas_phy *);
 extern void sas_phy_delete(struct sas_phy *);
 extern int scsi_is_sas_phy(const struct device *);
 
-extern struct sas_rphy *sas_end_device_alloc(struct sas_phy *);
-extern struct sas_rphy *sas_expander_alloc(struct sas_phy *, enum sas_device_type);
+extern struct sas_rphy *sas_end_device_alloc(struct sas_port *);
+extern struct sas_rphy *sas_expander_alloc(struct sas_port *, enum sas_device_type);
 void sas_rphy_free(struct sas_rphy *);
 extern int sas_rphy_add(struct sas_rphy *);
 extern void sas_rphy_delete(struct sas_rphy *);
 extern int scsi_is_sas_rphy(const struct device *);
+
+struct sas_port *sas_port_alloc(struct device *, int);
+struct sas_port *sas_port_alloc_num(struct device *);
+int sas_port_add(struct sas_port *);
+void sas_port_free(struct sas_port *);
+void sas_port_delete(struct sas_port *);
+void sas_port_add_phy(struct sas_port *, struct sas_phy *);
+void sas_port_delete_phy(struct sas_port *, struct sas_phy *);
+void sas_port_mark_backlink(struct sas_port *);
+int scsi_is_sas_port(const struct device *);
 
 extern struct scsi_transport_template *
 sas_attach_transport(struct sas_function_template *);
@@ -163,5 +208,7 @@ scsi_is_sas_expander_device(struct device *dev)
 	return rphy->identify.device_type == SAS_FANOUT_EXPANDER_DEVICE ||
 		rphy->identify.device_type == SAS_EDGE_EXPANDER_DEVICE;
 }
+
+#define scsi_is_sas_phy_local(phy)	scsi_is_host_device((phy)->dev.parent)
 
 #endif /* SCSI_TRANSPORT_SAS_H */

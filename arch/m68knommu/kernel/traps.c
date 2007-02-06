@@ -16,7 +16,6 @@
 /*
  * Sets up all exception vectors
  */
-#include <linux/config.h>
 #include <linux/sched.h>
 #include <linux/signal.h>
 #include <linux/kernel.h>
@@ -81,8 +80,9 @@ void die_if_kernel(char *str, struct pt_regs *fp, int nr)
 	printk(KERN_EMERG "d4: %08lx    d5: %08lx    a0: %08lx    a1: %08lx\n",
 	       fp->d4, fp->d5, fp->a0, fp->a1);
 
-	printk(KERN_EMERG "Process %s (pid: %d, stackpage=%08lx)\n",
-		current->comm, current->pid, PAGE_SIZE+(unsigned long)current);
+	printk(KERN_EMERG "Process %s (pid: %d[#%u], stackpage=%08lx)\n",
+		current->comm, current->pid, current->xid,
+		PAGE_SIZE+(unsigned long)current);
 	show_stack(NULL, (unsigned long *)fp);
 	do_exit(SIGSEGV);
 }
@@ -93,12 +93,12 @@ asmlinkage void buserr_c(struct frame *fp)
 	if (user_mode(&fp->ptregs))
 		current->thread.esp0 = (unsigned long) fp;
 
-#if DEBUG
+#if defined(DEBUG)
 	printk (KERN_DEBUG "*** Bus Error *** Format is %x\n", fp->ptregs.format);
 #endif
 
 	die_if_kernel("bad frame format",&fp->ptregs,0);
-#if DEBUG
+#if defined(DEBUG)
 	printk(KERN_DEBUG "Unknown SIGSEGV - 4\n");
 #endif
 	force_sig(SIGSEGV, current);
@@ -128,11 +128,12 @@ void show_stack(struct task_struct *task, unsigned long *stack)
 		if (stack + 1 > endstack)
 			break;
 		if (i % 8 == 0)
-			printk(KERN_EMERG "\n       ");
-		printk(KERN_EMERG " %08lx", *stack++);
+			printk("\n" KERN_EMERG "       ");
+		printk(" %08lx", *stack++);
 	}
+	printk("\n");
 
-	printk(KERN_EMERG "\nCall Trace:");
+	printk(KERN_EMERG "Call Trace:");
 	i = 0;
 	while (stack + 1 <= endstack) {
 		addr = *stack++;
@@ -147,12 +148,12 @@ void show_stack(struct task_struct *task, unsigned long *stack)
 		if (((addr >= (unsigned long) &_start) &&
 		     (addr <= (unsigned long) &_etext))) {
 			if (i % 4 == 0)
-				printk(KERN_EMERG "\n       ");
-			printk(KERN_EMERG " [<%08lx>]", addr);
+				printk("\n" KERN_EMERG "       ");
+			printk(" [<%08lx>]", addr);
 			i++;
 		}
 	}
-	printk(KERN_EMERG "\n");
+	printk("\n");
 }
 
 void bad_super_trap(struct frame *fp)

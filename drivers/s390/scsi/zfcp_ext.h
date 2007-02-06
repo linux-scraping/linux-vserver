@@ -1,18 +1,8 @@
 /* 
- * 
- * linux/drivers/s390/scsi/zfcp_ext.h
- * 
- * FCP adapter driver for IBM eServer zSeries 
- * 
- * (C) Copyright IBM Corp. 2002, 2004
+ * This file is part of the zfcp device driver for
+ * FCP adapters for IBM System z9 and zSeries.
  *
- * Author(s): Martin Peschke <mpeschke@de.ibm.com> 
- *            Raimund Schroeder <raimund.schroeder@de.ibm.com> 
- *            Aron Zeh
- *            Wolfgang Taphorn
- *            Stefan Bader <stefan.bader@de.ibm.com> 
- *            Heiko Carstens <heiko.carstens@de.ibm.com> 
- *            Andreas Herrmann <aherrman@de.ibm.com>
+ * (C) Copyright IBM Corp. 2002, 2006
  * 
  * This program is free software; you can redistribute it and/or modify 
  * it under the terms of the GNU General Public License as published by 
@@ -65,7 +55,6 @@ extern void   zfcp_unit_dequeue(struct zfcp_unit *);
 
 /******************************* S/390 IO ************************************/
 extern int  zfcp_ccw_register(void);
-extern void zfcp_ccw_unregister(void);
 
 extern void zfcp_qdio_zero_sbals(struct qdio_buffer **, int, int);
 extern int  zfcp_qdio_allocate(struct zfcp_adapter *);
@@ -73,7 +62,6 @@ extern int  zfcp_qdio_allocate_queues(struct zfcp_adapter *);
 extern void zfcp_qdio_free_queues(struct zfcp_adapter *);
 extern int  zfcp_qdio_determine_pci(struct zfcp_qdio_queue *,
 				    struct zfcp_fsf_req *);
-extern int  zfcp_qdio_reqid_check(struct zfcp_adapter *, void *);
 
 extern volatile struct qdio_buffer_element *zfcp_qdio_sbale_req
 	(struct zfcp_fsf_req *, int, int);
@@ -99,8 +87,8 @@ extern int  zfcp_fsf_exchange_port_data(struct zfcp_erp_action *,
 					struct fsf_qtcb_bottom_port *);
 extern int  zfcp_fsf_control_file(struct zfcp_adapter *, struct zfcp_fsf_req **,
 				  u32, u32, struct zfcp_sg_list *);
-extern void zfcp_fsf_request_timeout_handler(unsigned long);
-extern void zfcp_fsf_scsi_er_timeout_handler(unsigned long);
+extern void zfcp_fsf_start_timer(struct zfcp_fsf_req *, unsigned long);
+extern void zfcp_erp_start_timer(struct zfcp_fsf_req *);
 extern int  zfcp_fsf_req_dismiss_all(struct zfcp_adapter *);
 extern int  zfcp_fsf_status_read(struct zfcp_adapter *, int);
 extern int zfcp_fsf_req_create(struct zfcp_adapter *, u32, int, mempool_t *,
@@ -110,8 +98,7 @@ extern int zfcp_fsf_send_ct(struct zfcp_send_ct *, mempool_t *,
 extern int zfcp_fsf_send_els(struct zfcp_send_els *);
 extern int  zfcp_fsf_send_fcp_command_task(struct zfcp_adapter *,
 					   struct zfcp_unit *,
-					   struct scsi_cmnd *,
-					   struct timer_list*, int);
+					   struct scsi_cmnd *, int, int);
 extern int  zfcp_fsf_req_complete(struct zfcp_fsf_req *);
 extern void zfcp_fsf_incoming_els(struct zfcp_fsf_req *);
 extern void zfcp_fsf_req_free(struct zfcp_fsf_req *);
@@ -125,6 +112,7 @@ extern int  zfcp_nameserver_enqueue(struct zfcp_adapter *);
 extern int  zfcp_ns_gid_pn_request(struct zfcp_erp_action *);
 extern int  zfcp_check_ct_response(struct ct_hdr *);
 extern int  zfcp_handle_els_rjt(u32, struct zfcp_ls_rjt_par *);
+extern void zfcp_plogi_evaluate(struct zfcp_port *, struct fsf_plogi *);
 
 /******************************* SCSI ****************************************/
 extern int  zfcp_adapter_scsi_register(struct zfcp_adapter *);
@@ -134,16 +122,11 @@ extern char *zfcp_get_fcp_rsp_info_ptr(struct fcp_rsp_iu *);
 extern void set_host_byte(u32 *, char);
 extern void set_driver_byte(u32 *, char);
 extern char *zfcp_get_fcp_sns_info_ptr(struct fcp_rsp_iu *);
-extern void zfcp_fsf_start_scsi_er_timer(struct zfcp_adapter *);
 extern fcp_dl_t zfcp_get_fcp_dl(struct fcp_cmnd_iu *);
 
 extern int zfcp_scsi_command_async(struct zfcp_adapter *,struct zfcp_unit *,
-				   struct scsi_cmnd *, struct timer_list *);
-extern int zfcp_scsi_command_sync(struct zfcp_unit *, struct scsi_cmnd *,
-				  struct timer_list *);
-extern void zfcp_set_fc_host_attrs(struct zfcp_adapter *);
-extern void zfcp_set_fc_rport_attrs(struct zfcp_port *);
-extern struct scsi_transport_template *zfcp_transport_template;
+				   struct scsi_cmnd *, int);
+extern int zfcp_scsi_command_sync(struct zfcp_unit *, struct scsi_cmnd *, int);
 extern struct fc_function_template zfcp_transport_functions;
 
 /******************************** ERP ****************************************/
@@ -167,7 +150,7 @@ extern void zfcp_erp_unit_failed(struct zfcp_unit *);
 extern int  zfcp_erp_thread_setup(struct zfcp_adapter *);
 extern int  zfcp_erp_thread_kill(struct zfcp_adapter *);
 extern int  zfcp_erp_wait(struct zfcp_adapter *);
-extern int  zfcp_erp_async_handler(struct zfcp_erp_action *, unsigned long);
+extern void zfcp_erp_async_handler(struct zfcp_erp_action *, unsigned long);
 
 extern int  zfcp_test_link(struct zfcp_port *);
 
@@ -198,8 +181,13 @@ extern void zfcp_scsi_dbf_event_result(const char *, int, struct zfcp_adapter *,
 				       struct zfcp_fsf_req *);
 extern void zfcp_scsi_dbf_event_abort(const char *, struct zfcp_adapter *,
 				      struct scsi_cmnd *, struct zfcp_fsf_req *,
-				      struct zfcp_fsf_req *);
+				      unsigned long);
 extern void zfcp_scsi_dbf_event_devreset(const char *, u8, struct zfcp_unit *,
 					 struct scsi_cmnd *);
+extern void zfcp_reqlist_add(struct zfcp_adapter *, struct zfcp_fsf_req *);
+extern void zfcp_reqlist_remove(struct zfcp_adapter *, unsigned long);
+extern struct zfcp_fsf_req *zfcp_reqlist_ismember(struct zfcp_adapter *,
+						  unsigned long);
+extern int zfcp_reqlist_isempty(struct zfcp_adapter *);
 
 #endif	/* ZFCP_EXT_H */

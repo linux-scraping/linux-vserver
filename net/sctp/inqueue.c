@@ -54,7 +54,7 @@ void sctp_inq_init(struct sctp_inq *queue)
 	queue->in_progress = NULL;
 
 	/* Create a task for delivering data.  */
-	INIT_WORK(&queue->immediate, NULL, NULL);
+	INIT_WORK(&queue->immediate, NULL);
 
 	queue->malloced = 0;
 }
@@ -87,7 +87,7 @@ void sctp_inq_free(struct sctp_inq *queue)
 /* Put a new packet in an SCTP inqueue.
  * We assume that packet->sctp_hdr is set and in host byte order.
  */
-void sctp_inq_push(struct sctp_inq *q, struct sctp_chunk *packet)
+void sctp_inq_push(struct sctp_inq *q, struct sctp_chunk *chunk)
 {
 	/* Directly call the packet handling routine. */
 
@@ -96,8 +96,8 @@ void sctp_inq_push(struct sctp_inq *q, struct sctp_chunk *packet)
 	 * Eventually, we should clean up inqueue to not rely
 	 * on the BH related data structures.
 	 */
-	list_add_tail(&packet->list, &q->in_chunk_list);
-	q->immediate.func(q->immediate.data);
+	list_add_tail(&chunk->list, &q->in_chunk_list);
+	q->immediate.func(&q->immediate);
 }
 
 /* Extract a chunk from an SCTP inqueue.
@@ -205,9 +205,8 @@ struct sctp_chunk *sctp_inq_pop(struct sctp_inq *queue)
  * The intent is that this routine will pull stuff out of the
  * inqueue and process it.
  */
-void sctp_inq_set_th_handler(struct sctp_inq *q,
-				 void (*callback)(void *), void *arg)
+void sctp_inq_set_th_handler(struct sctp_inq *q, work_func_t callback)
 {
-	INIT_WORK(&q->immediate, callback, arg);
+	INIT_WORK(&q->immediate, callback);
 }
 

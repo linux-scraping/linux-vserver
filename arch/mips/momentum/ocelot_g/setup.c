@@ -37,7 +37,6 @@
  *  675 Mass Ave, Cambridge, MA 02139, USA.
  *
  */
-#include <linux/config.h>
 #include <linux/init.h>
 #include <linux/kernel.h>
 #include <linux/types.h>
@@ -58,14 +57,14 @@
 #include <asm/gt64240.h>
 #include <asm/irq.h>
 #include <asm/pci.h>
+#include <asm/pgtable.h>
 #include <asm/processor.h>
-#include <asm/ptrace.h>
 #include <asm/reboot.h>
 #include <linux/bootmem.h>
 
 #include "ocelot_pld.h"
 
-#ifdef CONFIG_GALILLEO_GT64240_ETH
+#ifdef CONFIG_GALILEO_GT64240_ETH
 extern unsigned char prom_mac_addr_base[6];
 #endif
 
@@ -162,7 +161,11 @@ static void __init setup_l3cache(unsigned long size)
 	printk("Done\n");
 }
 
-void __init plat_setup(void)
+void __init plat_timer_setup(struct irqaction *irq)
+{
+}
+
+void __init plat_mem_setup(void)
 {
 	void (*l3func)(unsigned long) = (void *) KSEG1ADDR(setup_l3cache);
 	unsigned int tmpword;
@@ -174,15 +177,15 @@ void __init plat_setup(void)
 	pm_power_off = momenco_ocelot_power_off;
 
 	/*
-	 * initrd_start = (ulong)ocelot_initrd_start;
-	 * initrd_end = (ulong)ocelot_initrd_start + (ulong)ocelot_initrd_size;
+	 * initrd_start = (unsigned long)ocelot_initrd_start;
+	 * initrd_end = (unsigned long)ocelot_initrd_start + (ulong)ocelot_initrd_size;
 	 * initrd_below_start_ok = 1;
 	 */
 
 	/* do handoff reconfiguration */
 	PMON_v2_setup();
 
-#ifdef CONFIG_GALILLEO_GT64240_ETH
+#ifdef CONFIG_GALILEO_GT64240_ETH
 	/* get the mac addr */
 	memcpy(prom_mac_addr_base, (void*)0xfc807cf2, 6);
 #endif

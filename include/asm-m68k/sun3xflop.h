@@ -111,8 +111,7 @@ static void sun3x_82072_fd_outb(unsigned char value, int port)
 }
 
 
-asmlinkage irqreturn_t sun3xflop_hardint(int irq, void *dev_id,
-					 struct pt_regs * regs)
+asmlinkage irqreturn_t sun3xflop_hardint(int irq, void *dev_id)
 {
 	register unsigned char st;
 
@@ -125,7 +124,7 @@ asmlinkage irqreturn_t sun3xflop_hardint(int irq, void *dev_id,
 	static int dma_wait=0;
 #endif
 	if(!doing_pdma) {
-		floppy_interrupt(irq, dev_id, regs);
+		floppy_interrupt(irq, dev_id);
 		return IRQ_HANDLED;
 	}
 
@@ -189,7 +188,7 @@ asmlinkage irqreturn_t sun3xflop_hardint(int irq, void *dev_id,
 		dma_wait=0;
 #endif
 
-		floppy_interrupt(irq, dev_id, regs);
+		floppy_interrupt(irq, dev_id);
 		return IRQ_HANDLED;
 	}
 
@@ -208,7 +207,8 @@ static int sun3xflop_request_irq(void)
 
 	if(!once) {
 		once = 1;
-		error = request_irq(FLOPPY_IRQ, sun3xflop_hardint, SA_INTERRUPT, "floppy", NULL);
+		error = request_irq(FLOPPY_IRQ, sun3xflop_hardint,
+				    IRQF_DISABLED, "floppy", NULL);
 		return ((error == 0) ? 0 : -1);
 	} else return 0;
 }

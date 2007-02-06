@@ -6,11 +6,15 @@
 #include <linux/agp_backend.h>
 #include <linux/fb.h>
 
+#ifdef CONFIG_FB_INTEL_I2C
+#include <linux/i2c.h>
+#include <linux/i2c-algo-bit.h>
+#endif
 
 /*** Version/name ***/
-#define INTELFB_VERSION			"0.9.2"
+#define INTELFB_VERSION			"0.9.4"
 #define INTELFB_MODULE_NAME		"intelfb"
-#define SUPPORTED_CHIPSETS		"830M/845G/852GM/855GM/865G/915G/915GM"
+#define SUPPORTED_CHIPSETS		"830M/845G/852GM/855GM/865G/915G/915GM/945G/945GM"
 
 
 /*** Debug/feature defines ***/
@@ -52,11 +56,14 @@
 #define PCI_DEVICE_ID_INTEL_865G	0x2572
 #define PCI_DEVICE_ID_INTEL_915G	0x2582
 #define PCI_DEVICE_ID_INTEL_915GM	0x2592
+#define PCI_DEVICE_ID_INTEL_945G	0x2772
+#define PCI_DEVICE_ID_INTEL_945GM	0x27A2
 
 /* Size of MMIO region */
 #define INTEL_REG_SIZE			0x80000
 
 #define STRIDE_ALIGNMENT		16
+#define STRIDE_ALIGNMENT_I9XX		64
 
 #define PALETTE_8_ENTRIES		256
 
@@ -112,6 +119,29 @@
 /* Intel agpgart driver */
 #define AGP_PHYSICAL_MEMORY     2
 
+/* store information about an Ixxx DVO */
+/* The i830->i865 use multiple DVOs with multiple i2cs */
+/* the i915, i945 have a single sDVO i2c bus - which is different */
+#define MAX_OUTPUTS 6
+
+/* these are outputs from the chip - integrated only
+   external chips are via DVO or SDVO output */
+#define INTELFB_OUTPUT_UNUSED 0
+#define INTELFB_OUTPUT_ANALOG 1
+#define INTELFB_OUTPUT_DVO 2
+#define INTELFB_OUTPUT_SDVO 3
+#define INTELFB_OUTPUT_LVDS 4
+#define INTELFB_OUTPUT_TVOUT 5
+
+#define INTELFB_DVO_CHIP_NONE 0
+#define INTELFB_DVO_CHIP_LVDS 1
+#define INTELFB_DVO_CHIP_TMDS 2
+#define INTELFB_DVO_CHIP_TVOUT 4
+
+#define INTELFB_OUTPUT_PIPE_NC  0
+#define INTELFB_OUTPUT_PIPE_A   1
+#define INTELFB_OUTPUT_PIPE_B   2
+
 /*** Data Types ***/
 
 /* supported chipsets */
@@ -125,7 +155,9 @@ enum intel_chips {
 	INTEL_855GME,
 	INTEL_865G,
 	INTEL_915G,
-	INTEL_915GM
+	INTEL_915GM,
+	INTEL_945G,
+	INTEL_945GM,
 };
 
 struct intelfb_hwstate {
@@ -190,6 +222,10 @@ struct intelfb_hwstate {
 	u32 mem_mode;
 	u32 fw_blc_0;
 	u32 fw_blc_1;
+	u16 hwstam;
+	u16 ier;
+	u16 iir;
+	u16 imr;
 };
 
 struct intelfb_heap_data {
@@ -197,6 +233,33 @@ struct intelfb_heap_data {
 	u8 __iomem *virtual;
 	u32 offset;  // in GATT pages
 	u32 size;    // in bytes
+};
+
+#ifdef CONFIG_FB_INTEL_I2C
+struct intelfb_i2c_chan {
+    struct intelfb_info *dinfo;
+    u32 reg;
+    struct i2c_adapter adapter;
+    struct i2c_algo_bit_data algo;
+};
+#endif
+
+struct intelfb_output_rec {
+    int type;
+    int pipe;
+    int flags;
+
+#ifdef CONFIG_FB_INTEL_I2C
+    struct intelfb_i2c_chan i2c_bus;
+    struct intelfb_i2c_chan ddc_bus;
+#endif
+};
+
+struct intelfb_vsync {
+	wait_queue_head_t wait;
+	unsigned int count;
+	int pan_display;
+	u32 pan_offset;
 };
 
 struct intelfb_info {
@@ -215,7 +278,7 @@ struct intelfb_info {
 	u8 fbmem_gart;
 
 	/* mtrr support */
-	u32 mtrr_reg;
+	int mtrr_reg;
 	u32 has_mtrr;
 
 	/* heap data */
@@ -232,7 +295,7 @@ struct intelfb_info {
 	u32 fb_start;
 
 	/* ring buffer */
-	u8 __iomem *ring_head;
+	u32 ring_head;
 	u32 ring_tail;
 	u32 ring_tail_mask;
 	u32 ring_space;
@@ -262,6 +325,12 @@ struct intelfb_info {
 	int fixed_mode;
 	int ring_active;
 	int flag;
+	unsigned long irq_flags;
+	int open;
+
+	/* vsync */
+	struct intelfb_vsync vsync;
+	spinlock_t int_lock;
 
 	/* hw cursor */
 	int cursor_on;
@@ -277,10 +346,28 @@ struct intelfb_info {
 
 	/* driver registered */
 	int registered;
+	
+	/* index into plls */
+	int pll_index;
+
+	/* outputs */
+	int num_outputs;
+	struct intelfb_output_rec output[MAX_OUTPUTS];
 };
+
+#define IS_I9XX(dinfo) (((dinfo)->chipset == INTEL_915G)||(dinfo->chipset == INTEL_915GM)||((dinfo)->chipset == INTEL_945G)||(dinfo->chipset==INTEL_945GM))
+
+#ifndef FBIO_WAITFORVSYNC
+#define FBIO_WAITFORVSYNC	_IOW('F', 0x20, __u32)
+#endif
 
 /*** function prototypes ***/
 
 extern int intelfb_var_to_depth(const struct fb_var_screeninfo *var);
+
+#ifdef CONFIG_FB_INTEL_I2C
+extern void intelfb_create_i2c_busses(struct intelfb_info *dinfo);
+extern void intelfb_delete_i2c_busses(struct intelfb_info *dinfo);
+#endif
 
 #endif /* _INTELFB_H */

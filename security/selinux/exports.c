@@ -21,19 +21,10 @@
 #include "security.h"
 #include "objsec.h"
 
-void selinux_task_ctxid(struct task_struct *tsk, u32 *ctxid)
-{
-	struct task_security_struct *tsec = tsk->security;
-	if (selinux_enabled)
-		*ctxid = tsec->sid;
-	else
-		*ctxid = 0;
-}
-
-int selinux_ctxid_to_string(u32 ctxid, char **ctx, u32 *ctxlen)
+int selinux_sid_to_string(u32 sid, char **ctx, u32 *ctxlen)
 {
 	if (selinux_enabled)
-		return security_sid_to_context(ctxid, ctx, ctxlen);
+		return security_sid_to_context(sid, ctx, ctxlen);
 	else {
 		*ctx = NULL;
 		*ctxlen = 0;
@@ -72,3 +63,25 @@ void selinux_get_task_sid(struct task_struct *tsk, u32 *sid)
 	*sid = 0;
 }
 
+int selinux_string_to_sid(char *str, u32 *sid)
+{
+	if (selinux_enabled)
+		return security_context_to_sid(str, strlen(str), sid);
+	else {
+		*sid = 0;
+		return 0;
+	}
+}
+EXPORT_SYMBOL_GPL(selinux_string_to_sid);
+
+int selinux_relabel_packet_permission(u32 sid)
+{
+	if (selinux_enabled) {
+		struct task_security_struct *tsec = current->security;
+
+		return avc_has_perm(tsec->sid, sid, SECCLASS_PACKET,
+				    PACKET__RELABELTO, NULL);
+	}
+	return 0;
+}
+EXPORT_SYMBOL_GPL(selinux_relabel_packet_permission);

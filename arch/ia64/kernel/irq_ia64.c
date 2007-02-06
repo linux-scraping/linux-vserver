@@ -1,5 +1,5 @@
 /*
- * linux/arch/ia64/kernel/irq.c
+ * linux/arch/ia64/kernel/irq_ia64.c
  *
  * Copyright (C) 1998-2001 Hewlett-Packard Co
  *	Stephane Eranian <eranian@hpl.hp.com>
@@ -14,7 +14,6 @@
  *						Added CPU Hotplug handling for IPF.
  */
 
-#include <linux/config.h>
 #include <linux/module.h>
 
 #include <linux/jiffies.h>
@@ -31,6 +30,7 @@
 #include <linux/smp_lock.h>
 #include <linux/threads.h>
 #include <linux/bitops.h>
+#include <linux/irq.h>
 
 #include <asm/delay.h>
 #include <asm/intrinsics.h>
@@ -46,6 +46,10 @@
 
 #define IRQ_DEBUG	0
 
+/* These can be overridden in platform_irq_init */
+int ia64_first_device_vector = IA64_DEF_FIRST_DEVICE_VECTOR;
+int ia64_last_device_vector = IA64_DEF_LAST_DEVICE_VECTOR;
+
 /* default base addr of IPI table */
 void __iomem *ipi_base_addr = ((void __iomem *)
 			       (__IA64_UNCACHED_OFFSET | IA64_IPI_DEFAULT_BASE_ADDR));
@@ -60,7 +64,7 @@ __u8 isa_irq_to_vector_map[16] = {
 };
 EXPORT_SYMBOL(isa_irq_to_vector_map);
 
-static unsigned long ia64_vector_mask[BITS_TO_LONGS(IA64_NUM_DEVICE_VECTORS)];
+static unsigned long ia64_vector_mask[BITS_TO_LONGS(IA64_MAX_DEVICE_VECTORS)];
 
 int
 assign_irq_vector (int irq)
@@ -89,6 +93,38 @@ free_irq_vector (int vector)
 		printk(KERN_WARNING "%s: double free!\n", __FUNCTION__);
 }
 
+int
+reserve_irq_vector (int vector)
+{
+	int pos;
+
+	if (vector < IA64_FIRST_DEVICE_VECTOR ||
+	    vector > IA64_LAST_DEVICE_VECTOR)
+		return -EINVAL;
+
+	pos = vector - IA64_FIRST_DEVICE_VECTOR;
+	return test_and_set_bit(pos, ia64_vector_mask);
+}
+
+/*
+ * Dynamic irq allocate and deallocation for MSI
+ */
+int create_irq(void)
+{
+	int vector = assign_irq_vector(AUTO_ASSIGN);
+
+	if (vector >= 0)
+		dynamic_irq_init(vector);
+
+	return vector;
+}
+
+void destroy_irq(unsigned int irq)
+{
+	dynamic_irq_cleanup(irq);
+	free_irq_vector(irq);
+}
+
 #ifdef CONFIG_SMP
 #	define IS_RESCHEDULE(vec)	(vec == IA64_IPI_RESCHEDULE)
 #else
@@ -102,6 +138,7 @@ free_irq_vector (int vector)
 void
 ia64_handle_irq (ia64_vector vector, struct pt_regs *regs)
 {
+	struct pt_regs *old_regs = set_irq_regs(regs);
 	unsigned long saved_tpr;
 
 #if IRQ_DEBUG
@@ -143,11 +180,13 @@ ia64_handle_irq (ia64_vector vector, struct pt_regs *regs)
 	saved_tpr = ia64_getreg(_IA64_REG_CR_TPR);
 	ia64_srlz_d();
 	while (vector != IA64_SPURIOUS_INT_VECTOR) {
-		if (!IS_RESCHEDULE(vector)) {
+		if (unlikely(IS_RESCHEDULE(vector)))
+			 kstat_this_cpu.irqs[vector]++;
+		else {
 			ia64_setreg(_IA64_REG_CR_TPR, vector);
 			ia64_srlz_d();
 
-			__do_IRQ(local_vector_to_irq(vector), regs);
+			generic_handle_irq(local_vector_to_irq(vector));
 
 			/*
 			 * Disable interrupts and send EOI:
@@ -164,6 +203,7 @@ ia64_handle_irq (ia64_vector vector, struct pt_regs *regs)
 	 * come through until ia64_eoi() has been done.
 	 */
 	irq_exit();
+	set_irq_regs(old_regs);
 }
 
 #ifdef CONFIG_HOTPLUG_CPU
@@ -187,7 +227,11 @@ void ia64_process_pending_intr(void)
 	  * Perform normal interrupt style processing
 	  */
 	while (vector != IA64_SPURIOUS_INT_VECTOR) {
-		if (!IS_RESCHEDULE(vector)) {
+		if (unlikely(IS_RESCHEDULE(vector)))
+			 kstat_this_cpu.irqs[vector]++;
+		else {
+			struct pt_regs *old_regs = set_irq_regs(NULL);
+
 			ia64_setreg(_IA64_REG_CR_TPR, vector);
 			ia64_srlz_d();
 
@@ -198,7 +242,8 @@ void ia64_process_pending_intr(void)
 			 * Probably could shared code.
 			 */
 			vectors_in_migration[local_vector_to_irq(vector)]=0;
-			__do_IRQ(local_vector_to_irq(vector), NULL);
+			generic_handle_irq(local_vector_to_irq(vector));
+			set_irq_regs(old_regs);
 
 			/*
 			 * Disable interrupts and send EOI
@@ -215,12 +260,23 @@ void ia64_process_pending_intr(void)
 
 
 #ifdef CONFIG_SMP
-extern irqreturn_t handle_IPI (int irq, void *dev_id, struct pt_regs *regs);
+extern irqreturn_t handle_IPI (int irq, void *dev_id);
+
+static irqreturn_t dummy_handler (int irq, void *dev_id)
+{
+	BUG();
+}
 
 static struct irqaction ipi_irqaction = {
 	.handler =	handle_IPI,
-	.flags =	SA_INTERRUPT,
+	.flags =	IRQF_DISABLED,
 	.name =		"IPI"
+};
+
+static struct irqaction resched_irqaction = {
+	.handler =	dummy_handler,
+	.flags =	SA_INTERRUPT,
+	.name =		"resched"
 };
 #endif
 
@@ -232,9 +288,9 @@ register_percpu_irq (ia64_vector vec, struct irqaction *action)
 
 	for (irq = 0; irq < NR_IRQS; ++irq)
 		if (irq_to_vector(irq) == vec) {
-			desc = irq_descp(irq);
+			desc = irq_desc + irq;
 			desc->status |= IRQ_PER_CPU;
-			desc->handler = &irq_type_ia64_lsapic;
+			desc->chip = &irq_type_ia64_lsapic;
 			if (action)
 				setup_irq(irq, action);
 		}
@@ -246,6 +302,7 @@ init_IRQ (void)
 	register_percpu_irq(IA64_SPURIOUS_INT_VECTOR, NULL);
 #ifdef CONFIG_SMP
 	register_percpu_irq(IA64_IPI_VECTOR, &ipi_irqaction);
+	register_percpu_irq(IA64_IPI_RESCHEDULE, &resched_irqaction);
 #endif
 #ifdef CONFIG_PERFMON
 	pfm_init_percpu();

@@ -7,7 +7,6 @@
 #ifndef _ETRAX_SERIAL_H
 #define _ETRAX_SERIAL_H
 
-#include <linux/config.h>
 #include <linux/circ_buf.h>
 #include <asm/termios.h>
 
@@ -94,8 +93,8 @@ struct e100_serial {
 
 	struct work_struct	work;
 	struct async_icount	icount;   /* error-statistics etc.*/
-	struct termios		normal_termios;
-	struct termios		callout_termios;
+	struct ktermios		normal_termios;
+	struct ktermios		callout_termios;
 #ifdef DECLARE_WAITQUEUE
 	wait_queue_head_t	open_wait;
 	wait_queue_head_t	close_wait;

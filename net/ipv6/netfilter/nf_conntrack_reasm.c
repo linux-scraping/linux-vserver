@@ -14,7 +14,6 @@
  * 2 of the License, or (at your option) any later version.
  */
 
-#include <linux/config.h>
 #include <linux/errno.h>
 #include <linux/types.h>
 #include <linux/string.h>
@@ -55,9 +54,9 @@
 #define NF_CT_FRAG6_LOW_THRESH 196608  /* == 192*1024 */
 #define NF_CT_FRAG6_TIMEOUT IPV6_FRAG_TIMEOUT
 
-unsigned int nf_ct_frag6_high_thresh = 256*1024;
-unsigned int nf_ct_frag6_low_thresh = 192*1024;
-unsigned long nf_ct_frag6_timeout = IPV6_FRAG_TIMEOUT;
+unsigned int nf_ct_frag6_high_thresh __read_mostly = 256*1024;
+unsigned int nf_ct_frag6_low_thresh __read_mostly = 192*1024;
+unsigned long nf_ct_frag6_timeout __read_mostly = IPV6_FRAG_TIMEOUT;
 
 struct nf_ct_frag6_skb_cb
 {
@@ -73,7 +72,7 @@ struct nf_ct_frag6_queue
 	struct hlist_node	list;
 	struct list_head	lru_list;	/* lru list member	*/
 
-	__u32			id;		/* fragment id		*/
+	__be32			id;		/* fragment id		*/
 	struct in6_addr		saddr;
 	struct in6_addr		daddr;
 
@@ -116,28 +115,28 @@ static __inline__ void fq_unlink(struct nf_ct_frag6_queue *fq)
 	write_unlock(&nf_ct_frag6_lock);
 }
 
-static unsigned int ip6qhashfn(u32 id, struct in6_addr *saddr,
+static unsigned int ip6qhashfn(__be32 id, struct in6_addr *saddr,
 			       struct in6_addr *daddr)
 {
 	u32 a, b, c;
 
-	a = saddr->s6_addr32[0];
-	b = saddr->s6_addr32[1];
-	c = saddr->s6_addr32[2];
+	a = (__force u32)saddr->s6_addr32[0];
+	b = (__force u32)saddr->s6_addr32[1];
+	c = (__force u32)saddr->s6_addr32[2];
 
 	a += JHASH_GOLDEN_RATIO;
 	b += JHASH_GOLDEN_RATIO;
 	c += nf_ct_frag6_hash_rnd;
 	__jhash_mix(a, b, c);
 
-	a += saddr->s6_addr32[3];
-	b += daddr->s6_addr32[0];
-	c += daddr->s6_addr32[1];
+	a += (__force u32)saddr->s6_addr32[3];
+	b += (__force u32)daddr->s6_addr32[0];
+	c += (__force u32)daddr->s6_addr32[1];
 	__jhash_mix(a, b, c);
 
-	a += daddr->s6_addr32[2];
-	b += daddr->s6_addr32[3];
-	c += id;
+	a += (__force u32)daddr->s6_addr32[2];
+	b += (__force u32)daddr->s6_addr32[3];
+	c += (__force u32)id;
 	__jhash_mix(a, b, c);
 
 	return c & (FRAG6Q_HASHSZ - 1);
@@ -339,7 +338,7 @@ static struct nf_ct_frag6_queue *nf_ct_frag6_intern(unsigned int hash,
 
 
 static struct nf_ct_frag6_queue *
-nf_ct_frag6_create(unsigned int hash, u32 id, struct in6_addr *src,				   struct in6_addr *dst)
+nf_ct_frag6_create(unsigned int hash, __be32 id, struct in6_addr *src,				   struct in6_addr *dst)
 {
 	struct nf_ct_frag6_queue *fq;
 
@@ -367,7 +366,7 @@ oom:
 }
 
 static __inline__ struct nf_ct_frag6_queue *
-fq_find(u32 id, struct in6_addr *src, struct in6_addr *dst)
+fq_find(__be32 id, struct in6_addr *src, struct in6_addr *dst)
 {
 	struct nf_ct_frag6_queue *fq;
 	struct hlist_node *n;
@@ -409,7 +408,7 @@ static int nf_ct_frag6_queue(struct nf_ct_frag6_queue *fq, struct sk_buff *skb,
  		return -1;
 	}
 
- 	if (skb->ip_summed == CHECKSUM_HW)
+ 	if (skb->ip_summed == CHECKSUM_COMPLETE)
  		skb->csum = csum_sub(skb->csum,
  				     csum_partial(skb->nh.raw,
 						  (u8*)(fhdr + 1) - skb->nh.raw,
@@ -456,13 +455,9 @@ static int nf_ct_frag6_queue(struct nf_ct_frag6_queue *fq, struct sk_buff *skb,
 		DEBUGP("queue: message is too short.\n");
 		goto err;
 	}
-	if (end-offset < skb->len) {
-		if (pskb_trim(skb, end - offset)) {
-			DEBUGP("Can't trim\n");
-			goto err;
-		}
-		if (skb->ip_summed != CHECKSUM_UNNECESSARY)
-			skb->ip_summed = CHECKSUM_NONE;
+	if (pskb_trim_rcsum(skb, end - offset)) {
+		DEBUGP("Can't trim\n");
+		goto err;
 	}
 
 	/* Find out which fragments are in front and at the back of us
@@ -645,7 +640,7 @@ nf_ct_frag6_reasm(struct nf_ct_frag6_queue *fq, struct net_device *dev)
 		head->len += fp->len;
 		if (head->ip_summed != fp->ip_summed)
 			head->ip_summed = CHECKSUM_NONE;
-		else if (head->ip_summed == CHECKSUM_HW)
+		else if (head->ip_summed == CHECKSUM_COMPLETE)
 			head->csum = csum_add(head->csum, fp->csum);
 		head->truesize += fp->truesize;
 		atomic_sub(fp->truesize, &nf_ct_frag6_mem);
@@ -657,7 +652,7 @@ nf_ct_frag6_reasm(struct nf_ct_frag6_queue *fq, struct net_device *dev)
 	head->nh.ipv6h->payload_len = htons(payload_len);
 
 	/* Yes, and fold redundant checksum back. 8) */
-	if (head->ip_summed == CHECKSUM_HW)
+	if (head->ip_summed == CHECKSUM_COMPLETE)
 		head->csum = csum_partial(head->nh.raw, head->h.raw-head->nh.raw, head->csum);
 
 	fq->fragments = NULL;
@@ -840,6 +835,8 @@ void nf_ct_frag6_output(unsigned int hooknum, struct sk_buff *skb,
 		s->nfct_reasm = skb;
 
 		s2 = s->next;
+		s->next = NULL;
+
 		NF_HOOK_THRESH(PF_INET6, hooknum, s, in, out, okfn,
 			       NF_IP6_PRI_CONNTRACK_DEFRAG + 1);
 		s = s2;

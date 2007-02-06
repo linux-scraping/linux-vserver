@@ -11,7 +11,6 @@
  */
 
 
-#include <linux/config.h>
 #include <linux/init.h>
 #include "hisax.h"
 #include "isac.h"
@@ -126,7 +125,7 @@ WriteJADE(struct IsdnCardState *cs, int jade, u_char offset, u_char value)
 #include "jade_irq.c"
 
 static irqreturn_t
-bkm_interrupt(int intno, void *dev_id, struct pt_regs *regs)
+bkm_interrupt(int intno, void *dev_id)
 {
 	struct IsdnCardState *cs = dev_id;
 	u_char val = 0;
@@ -256,9 +255,9 @@ BKM_card_msg(struct IsdnCardState *cs, int mt, void *arg)
 	return (0);
 }
 
-static struct pci_dev *dev_a4t __initdata = NULL;
+static struct pci_dev *dev_a4t __devinitdata = NULL;
 
-int __init
+int __devinit
 setup_bkm_a4t(struct IsdnCard *card)
 {
 	struct IsdnCardState *cs = card->cs;
@@ -336,7 +335,7 @@ setup_bkm_a4t(struct IsdnCard *card)
 	cs->BC_Send_Data = &jade_fill_fifo;
 	cs->cardmsg = &BKM_card_msg;
 	cs->irq_func = &bkm_interrupt;
-	cs->irq_flags |= SA_SHIRQ;
+	cs->irq_flags |= IRQF_SHARED;
 	ISACVersion(cs, "Telekom A4T:");
 	/* Jade version */
 	JadeVersion(cs, "Telekom A4T:");

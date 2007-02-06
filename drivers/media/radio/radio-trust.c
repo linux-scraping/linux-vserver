@@ -1,18 +1,18 @@
-/* radio-trust.c - Trust FM Radio card driver for Linux 2.2 
+/* radio-trust.c - Trust FM Radio card driver for Linux 2.2
  * by Eric Lammerts <eric@scintilla.utwente.nl>
  *
  * Based on radio-aztech.c. Original notes:
  *
- * Adapted to support the Video for Linux API by 
+ * Adapted to support the Video for Linux API by
  * Russell Kroll <rkroll@exploits.org>.  Based on original tuner code by:
  *
  * Quay Ly
  * Donald Song
- * Jason Lewis      (jlewis@twilight.vtc.vsc.edu) 
+ * Jason Lewis      (jlewis@twilight.vtc.vsc.edu)
  * Scott McGrath    (smcgrath@twilight.vtc.vsc.edu)
  * William McGrath  (wmcgrath@twilight.vtc.vsc.edu)
  *
- * The basis for this code may be found at http://bigbang.vtc.vsc.edu/fmradio/
+ * Converted to V4L2 API by Mauro Carvalho Chehab <mchehab@infradead.org>
  */
 
 #include <stdarg.h>
@@ -21,8 +21,46 @@
 #include <linux/ioport.h>
 #include <asm/io.h>
 #include <asm/uaccess.h>
-#include <linux/videodev.h>
-#include <linux/config.h>	/* CONFIG_RADIO_TRUST_PORT 	*/
+#include <linux/videodev2.h>
+#include <media/v4l2-common.h>
+
+#include <linux/version.h>      /* for KERNEL_VERSION MACRO     */
+#define RADIO_VERSION KERNEL_VERSION(0,0,2)
+
+static struct v4l2_queryctrl radio_qctrl[] = {
+	{
+		.id            = V4L2_CID_AUDIO_MUTE,
+		.name          = "Mute",
+		.minimum       = 0,
+		.maximum       = 1,
+		.default_value = 1,
+		.type          = V4L2_CTRL_TYPE_BOOLEAN,
+	},{
+		.id            = V4L2_CID_AUDIO_VOLUME,
+		.name          = "Volume",
+		.minimum       = 0,
+		.maximum       = 65535,
+		.step          = 2048,
+		.default_value = 65535,
+		.type          = V4L2_CTRL_TYPE_INTEGER,
+	},{
+		.id            = V4L2_CID_AUDIO_BASS,
+		.name          = "Bass",
+		.minimum       = 0,
+		.maximum       = 65535,
+		.step          = 4370,
+		.default_value = 32768,
+		.type          = V4L2_CTRL_TYPE_INTEGER,
+	},{
+		.id            = V4L2_CID_AUDIO_TREBLE,
+		.name          = "Treble",
+		.minimum       = 0,
+		.maximum       = 65535,
+		.step          = 4370,
+		.default_value = 32768,
+		.type          = V4L2_CTRL_TYPE_INTEGER,
+	},
+};
 
 /* acceptable ports: 0x350 (JP3 shorted), 0x358 (JP3 open) */
 
@@ -30,7 +68,7 @@
 #define CONFIG_RADIO_TRUST_PORT -1
 #endif
 
-static int io = CONFIG_RADIO_TRUST_PORT; 
+static int io = CONFIG_RADIO_TRUST_PORT;
 static int radio_nr = -1;
 static int ioval = 0xf;
 static __u16 curvol;
@@ -135,7 +173,7 @@ static void tr_setmute(int mute)
 static int tr_getsigstr(void)
 {
 	int i, v;
-	
+
 	for(i = 0, v = 0; i < 100; i++) v |= inb(io);
 	return (v & 1)? 0 : 0xffff;
 }
@@ -159,88 +197,125 @@ static int tr_do_ioctl(struct inode *inode, struct file *file,
 {
 	switch(cmd)
 	{
-		case VIDIOCGCAP:
+		case VIDIOC_QUERYCAP:
 		{
-			struct video_capability *v = arg;
+			struct v4l2_capability *v = arg;
+			memset(v,0,sizeof(*v));
+			strlcpy(v->driver, "radio-trust", sizeof (v->driver));
+			strlcpy(v->card, "Trust FM Radio", sizeof (v->card));
+			sprintf(v->bus_info,"ISA");
+			v->version = RADIO_VERSION;
+			v->capabilities = V4L2_CAP_TUNER;
+
+			return 0;
+		}
+		case VIDIOC_G_TUNER:
+		{
+			struct v4l2_tuner *v = arg;
+
+			if (v->index > 0)
+				return -EINVAL;
 
 			memset(v,0,sizeof(*v));
-			v->type=VID_TYPE_TUNER;
-			v->channels=1;
-			v->audios=1;
-			strcpy(v->name, "Trust FM Radio");
-
-			return 0;
-		}
-		case VIDIOCGTUNER:
-		{
-			struct video_tuner *v = arg;
-
-			if(v->tuner)	/* Only 1 tuner */ 
-				return -EINVAL;
-
-			v->rangelow = 87500 * 16;
-			v->rangehigh = 108000 * 16;
-			v->flags = VIDEO_TUNER_LOW;
-			v->mode = VIDEO_MODE_AUTO;
-
-			v->signal = tr_getsigstr();
-			if(tr_getstereo())
-				v->flags |= VIDEO_TUNER_STEREO_ON;
-
 			strcpy(v->name, "FM");
+			v->type = V4L2_TUNER_RADIO;
+
+			v->rangelow=(87.5*16000);
+			v->rangehigh=(108*16000);
+			v->rxsubchans =V4L2_TUNER_SUB_MONO|V4L2_TUNER_SUB_STEREO;
+			v->capability=V4L2_TUNER_CAP_LOW;
+			if(tr_getstereo())
+				v->audmode = V4L2_TUNER_MODE_STEREO;
+			else
+				v->audmode = V4L2_TUNER_MODE_MONO;
+			v->signal=tr_getsigstr();
 
 			return 0;
 		}
-		case VIDIOCSTUNER:
+		case VIDIOC_S_TUNER:
 		{
-			struct video_tuner *v = arg;
-			if(v->tuner != 0)
+			struct v4l2_tuner *v = arg;
+
+			if (v->index > 0)
 				return -EINVAL;
-			return 0;
-		}
-		case VIDIOCGFREQ:
-		{
-			unsigned long *freq = arg;
-			*freq = curfreq;
-			return 0;
-		}
-		case VIDIOCSFREQ:
-		{
-			unsigned long *freq = arg;
-			tr_setfreq(*freq);
-			return 0;
-		}
-		case VIDIOCGAUDIO:
-		{	
-			struct video_audio *v = arg;
 
-			memset(v,0, sizeof(*v));
-			v->flags = VIDEO_AUDIO_MUTABLE | VIDEO_AUDIO_VOLUME |
-			          VIDEO_AUDIO_BASS | VIDEO_AUDIO_TREBLE;
-			v->mode = curstereo? VIDEO_SOUND_STEREO : VIDEO_SOUND_MONO;
-			v->volume = curvol * 2048;
-			v->step = 2048;
-			v->bass = curbass * 4370;
-			v->treble = curtreble * 4370;
-			
-			strcpy(v->name, "Trust FM Radio");
-			return 0;			
-		}
-		case VIDIOCSAUDIO:
-		{
-			struct video_audio *v = arg;
-
-			if(v->audio) 
-				return -EINVAL;
-			tr_setvol(v->volume);					
-			tr_setbass(v->bass);
-			tr_settreble(v->treble);
-			tr_setstereo(v->mode & VIDEO_SOUND_STEREO);
-			tr_setmute(v->flags & VIDEO_AUDIO_MUTE);
 			return 0;
 		}
+		case VIDIOC_S_FREQUENCY:
+		{
+			struct v4l2_frequency *f = arg;
+
+			curfreq = f->frequency;
+			tr_setfreq(curfreq);
+			return 0;
+		}
+		case VIDIOC_G_FREQUENCY:
+		{
+			struct v4l2_frequency *f = arg;
+
+			f->type = V4L2_TUNER_RADIO;
+			f->frequency = curfreq;
+
+			return 0;
+		}
+		case VIDIOC_QUERYCTRL:
+		{
+			struct v4l2_queryctrl *qc = arg;
+			int i;
+
+			for (i = 0; i < ARRAY_SIZE(radio_qctrl); i++) {
+				if (qc->id && qc->id == radio_qctrl[i].id) {
+					memcpy(qc, &(radio_qctrl[i]),
+								sizeof(*qc));
+					return (0);
+				}
+			}
+			return -EINVAL;
+		}
+		case VIDIOC_G_CTRL:
+		{
+			struct v4l2_control *ctrl= arg;
+
+			switch (ctrl->id) {
+				case V4L2_CID_AUDIO_MUTE:
+					ctrl->value=curmute;
+					return (0);
+				case V4L2_CID_AUDIO_VOLUME:
+					ctrl->value= curvol * 2048;
+					return (0);
+				case V4L2_CID_AUDIO_BASS:
+					ctrl->value= curbass * 4370;
+					return (0);
+				case V4L2_CID_AUDIO_TREBLE:
+					ctrl->value= curtreble * 4370;
+					return (0);
+			}
+			return -EINVAL;
+		}
+		case VIDIOC_S_CTRL:
+		{
+			struct v4l2_control *ctrl= arg;
+
+			switch (ctrl->id) {
+				case V4L2_CID_AUDIO_MUTE:
+					tr_setmute(ctrl->value);
+					return 0;
+				case V4L2_CID_AUDIO_VOLUME:
+					tr_setvol(ctrl->value);
+					return 0;
+				case V4L2_CID_AUDIO_BASS:
+					tr_setbass(ctrl->value);
+					return 0;
+				case V4L2_CID_AUDIO_TREBLE:
+					tr_settreble(ctrl->value);
+					return (0);
+			}
+			return -EINVAL;
+		}
+
 		default:
-			return -ENOIOCTLCMD;
+			return v4l_compat_translate_ioctl(inode,file,cmd,arg,
+							  tr_do_ioctl);
 	}
 }
 
@@ -264,7 +339,7 @@ static struct video_device trust_radio=
 	.owner		= THIS_MODULE,
 	.name		= "Trust FM Radio",
 	.type		= VID_TYPE_TUNER,
-	.hardware	= VID_HARDWARE_TRUST,
+	.hardware	= 0,
 	.fops           = &trust_fops,
 };
 
@@ -292,7 +367,7 @@ static int __init trust_init(void)
 	write_i2c(2, TDA7318_ADDR, 0xe0);	/* speaker att. RR = 0 dB */
 	write_i2c(2, TDA7318_ADDR, 0x40);	/* stereo 1 input, gain = 18.75 dB */
 
-	tr_setvol(0x8000);					
+	tr_setvol(0x8000);
 	tr_setbass(0x8000);
 	tr_settreble(0x8000);
 	tr_setstereo(1);

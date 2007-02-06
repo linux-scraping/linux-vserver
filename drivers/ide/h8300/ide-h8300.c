@@ -1,11 +1,10 @@
 /*
- * drivers/ide/ide-h8300.c
+ * drivers/ide/h8300/ide-h8300.c
  * H8/300 generic IDE interface
  */
 
 #include <linux/init.h>
 #include <linux/ide.h>
-#include <linux/config.h>
 
 #include <asm/io.h>
 #include <asm/irq.h>

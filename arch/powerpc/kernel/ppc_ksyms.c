@@ -1,4 +1,3 @@
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/threads.h>
 #include <linux/smp.h>
@@ -6,7 +5,7 @@
 #include <linux/elfcore.h>
 #include <linux/string.h>
 #include <linux/interrupt.h>
-#include <linux/tty.h>
+#include <linux/screen_info.h>
 #include <linux/vt_kern.h>
 #include <linux/nvram.h>
 #include <linux/console.h>
@@ -48,6 +47,10 @@
 
 #ifdef  CONFIG_8xx
 #include <asm/commproc.h>
+#endif
+
+#ifdef CONFIG_PPC64
+EXPORT_SYMBOL(local_irq_restore);
 #endif
 
 #ifdef CONFIG_PPC32
@@ -92,24 +95,9 @@ EXPORT_SYMBOL(__copy_tofrom_user);
 EXPORT_SYMBOL(__clear_user);
 EXPORT_SYMBOL(__strncpy_from_user);
 EXPORT_SYMBOL(__strnlen_user);
-
-#ifndef  __powerpc64__
-EXPORT_SYMBOL(__ide_mm_insl);
-EXPORT_SYMBOL(__ide_mm_outsw);
-EXPORT_SYMBOL(__ide_mm_insw);
-EXPORT_SYMBOL(__ide_mm_outsl);
+#ifdef CONFIG_PPC64
+EXPORT_SYMBOL(copy_4K_page);
 #endif
-
-EXPORT_SYMBOL(_insb);
-EXPORT_SYMBOL(_outsb);
-EXPORT_SYMBOL(_insw);
-EXPORT_SYMBOL(_outsw);
-EXPORT_SYMBOL(_insl);
-EXPORT_SYMBOL(_outsl);
-EXPORT_SYMBOL(_insw_ns);
-EXPORT_SYMBOL(_outsw_ns);
-EXPORT_SYMBOL(_insl_ns);
-EXPORT_SYMBOL(_outsl_ns);
 
 #if defined(CONFIG_PPC32) && (defined(CONFIG_BLK_DEV_IDE) || defined(CONFIG_BLK_DEV_IDE_MODULE))
 EXPORT_SYMBOL(ppc_ide_md);
@@ -126,10 +114,6 @@ EXPORT_SYMBOL(pci_bus_io_base_phys);
 EXPORT_SYMBOL(pci_bus_mem_base_phys);
 EXPORT_SYMBOL(pci_bus_to_hose);
 #endif /* CONFIG_PCI */
-
-#ifdef CONFIG_NOT_COHERENT_CACHE
-EXPORT_SYMBOL(flush_dcache_all);
-#endif
 
 EXPORT_SYMBOL(start_thread);
 EXPORT_SYMBOL(kernel_thread);
@@ -224,7 +208,7 @@ EXPORT_SYMBOL(mmu_hash_lock); /* For MOL */
 extern long *intercept_table;
 EXPORT_SYMBOL(intercept_table);
 #endif /* CONFIG_PPC_STD_MMU_32 */
-#if defined(CONFIG_40x) || defined(CONFIG_BOOKE)
+#ifdef CONFIG_PPC_DCR_NATIVE
 EXPORT_SYMBOL(__mtdcr);
 EXPORT_SYMBOL(__mfdcr);
 #endif

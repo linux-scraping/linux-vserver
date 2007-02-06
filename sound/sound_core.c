@@ -34,7 +34,6 @@
  *	locking at some point in 2.3.x.
  */
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/slab.h>
@@ -44,7 +43,6 @@
 #include <linux/sound.h>
 #include <linux/major.h>
 #include <linux/kmod.h>
-#include <linux/devfs_fs_kernel.h>
 #include <linux/device.h>
 
 #define SOUND_STEP 16
@@ -172,10 +170,8 @@ static int sound_insert_unit(struct sound_unit **list, const struct file_operati
 	else
 		sprintf(s->name, "sound/%s%d", name, r / SOUND_STEP);
 
-	devfs_mk_cdev(MKDEV(SOUND_MAJOR, s->unit_minor),
-			S_IFCHR | mode, s->name);
-	class_device_create(sound_class, NULL, MKDEV(SOUND_MAJOR, s->unit_minor),
-			    dev, s->name+6);
+	device_create(sound_class, dev, MKDEV(SOUND_MAJOR, s->unit_minor),
+		      s->name+6);
 	return r;
 
  fail:
@@ -197,8 +193,7 @@ static void sound_remove_unit(struct sound_unit **list, int unit)
 	p = __sound_remove_unit(list, unit);
 	spin_unlock(&sound_loader_lock);
 	if (p) {
-		devfs_remove(p->name);
-		class_device_destroy(sound_class, MKDEV(SOUND_MAJOR, p->unit_minor));
+		device_destroy(sound_class, MKDEV(SOUND_MAJOR, p->unit_minor));
 		kfree(p);
 	}
 }
@@ -371,25 +366,6 @@ int register_sound_dsp(const struct file_operations *fops, int dev)
 EXPORT_SYMBOL(register_sound_dsp);
 
 /**
- *	register_sound_synth - register a synth device
- *	@fops: File operations for the driver
- *	@dev: Unit number to allocate
- *
- *	Allocate a synth device. Unit is the number of the synth device requested.
- *	Pass -1 to request the next free synth unit. On success the allocated
- *	number is returned, on failure a negative error code is returned.
- */
-
-
-int register_sound_synth(const struct file_operations *fops, int dev)
-{
-	return sound_insert_unit(&chains[9], fops, dev, 9, 137,
-				 "synth", S_IRUSR | S_IWUSR, NULL);
-}
-
-EXPORT_SYMBOL(register_sound_synth);
-
-/**
  *	unregister_sound_special - unregister a special sound device
  *	@unit: unit number to allocate
  *
@@ -453,21 +429,6 @@ void unregister_sound_dsp(int unit)
 
 
 EXPORT_SYMBOL(unregister_sound_dsp);
-
-/**
- *	unregister_sound_synth - unregister a synth device
- *	@unit: unit number to allocate
- *
- *	Release a sound device that was allocated with register_sound_synth().
- *	The unit passed is the return value from the register function.
- */
-
-void unregister_sound_synth(int unit)
-{
-	return sound_remove_unit(&chains[9], unit);
-}
-
-EXPORT_SYMBOL(unregister_sound_synth);
 
 /*
  *	Now our file operations
@@ -556,10 +517,6 @@ int soundcore_open(struct inode *inode, struct file *file)
 	return -ENODEV;
 }
 
-extern int mod_firmware_load(const char *, char **);
-EXPORT_SYMBOL(mod_firmware_load);
-
-
 MODULE_DESCRIPTION("Core sound module");
 MODULE_AUTHOR("Alan Cox");
 MODULE_LICENSE("GPL");
@@ -570,7 +527,6 @@ static void __exit cleanup_soundcore(void)
 	/* We have nothing to really do here - we know the lists must be
 	   empty */
 	unregister_chrdev(SOUND_MAJOR, "sound");
-	devfs_remove("sound");
 	class_destroy(sound_class);
 }
 
@@ -580,7 +536,6 @@ static int __init init_soundcore(void)
 		printk(KERN_ERR "soundcore: sound device already in use.\n");
 		return -EBUSY;
 	}
-	devfs_mk_dir ("sound");
 	sound_class = class_create(THIS_MODULE, "sound");
 	if (IS_ERR(sound_class))
 		return PTR_ERR(sound_class);

@@ -6,10 +6,17 @@
  ****************************************************************
  ****************************************************************
  **
+ **  WARNING:
  **  The values in this file are exported to user space via 
- **  the sysctl() binary interface.  However this interface
- **  is unstable and deprecated and will be removed in the future. 
- **  For a stable interface use /proc/sys.
+ **  the sysctl() binary interface.  Do *NOT* change the
+ **  numbering of any existing values here, and do not change
+ **  any numbers within any one set of values.  If you have to
+ **  redefine an existing interface, use a new number for it.
+ **  The kernel will then return -ENOTDIR to any application using
+ **  the old binary interface.
+ **
+ **  For new interfaces unless you really need a binary number
+ **  please use CTL_UNNUMBERED.
  **
  ****************************************************************
  ****************************************************************
@@ -48,6 +55,7 @@ struct __sysctl_args {
 #ifdef __KERNEL__
 #define CTL_ANY		-1	/* Matches any name */
 #define CTL_NONE	0
+#define CTL_UNNUMBERED	CTL_NONE	/* sysctl without a binary number */
 #endif
 
 enum
@@ -55,7 +63,7 @@ enum
 	CTL_KERN=1,		/* General kernel info and control */
 	CTL_VM=2,		/* VM management */
 	CTL_NET=3,		/* Networking */
-	CTL_PROC=4,		/* Process info */
+	/* was CTL_PROC */
 	CTL_FS=5,		/* Filesystems */
 	CTL_DEBUG=6,		/* Debugging */
 	CTL_DEV=7,		/* Devices */
@@ -149,7 +157,12 @@ enum
 	KERN_SPIN_RETRY=70,	/* int: number of spinlock retries */
 	KERN_ACPI_VIDEO_FLAGS=71, /* int: flags for setting up video after ACPI sleep */
 	KERN_IA64_UNALIGNED=72, /* int: ia64 unaligned userland trap enable */
+	KERN_COMPAT_LOG=73,	/* int: print compat layer  messages */
+	KERN_MAX_LOCK_DEPTH=74,
+	KERN_NMI_WATCHDOG=75, /* int: enable/disable nmi watchdog */
+	KERN_PANIC_ON_NMI=76, /* int: whether we will panic on an unrecovered */
 };
+
 
 
 /* CTL_VM names: */
@@ -186,7 +199,10 @@ enum
 	VM_DROP_PAGECACHE=29,	/* int: nuke lots of pagecache */
 	VM_PERCPU_PAGELIST_FRACTION=30,/* int: fraction of pages in each percpu_pagelist */
 	VM_ZONE_RECLAIM_MODE=31, /* reclaim local zone memory before going off node */
-	VM_ZONE_RECLAIM_INTERVAL=32, /* time period to wait after reclaim failure */
+	VM_MIN_UNMAPPED=32,	/* Set min percent of unmapped pages */
+	VM_PANIC_ON_OOM=33,	/* panic at out-of-memory */
+	VM_VDSO_ENABLED=34,	/* map VDSO into new processes? */
+	VM_MIN_SLAB=35,		 /* Percent pages ignored by zone reclaim */
 };
 
 
@@ -314,6 +330,7 @@ enum
 	NET_NF_CONNTRACK_FRAG6_TIMEOUT=29,
 	NET_NF_CONNTRACK_FRAG6_LOW_THRESH=30,
 	NET_NF_CONNTRACK_FRAG6_HIGH_THRESH=31,
+	NET_NF_CONNTRACK_CHECKSUM=32,
 };
 
 /* /proc/sys/net/ipv4 */
@@ -404,6 +421,14 @@ enum
  	NET_TCP_MTU_PROBING=113,
 	NET_TCP_BASE_MSS=114,
 	NET_IPV4_TCP_WORKAROUND_SIGNED_WINDOWS=115,
+	NET_TCP_DMA_COPYBREAK=116,
+	NET_TCP_SLOW_START_AFTER_IDLE=117,
+	NET_CIPSOV4_CACHE_ENABLE=118,
+	NET_CIPSOV4_CACHE_BUCKET_SIZE=119,
+	NET_CIPSOV4_RBM_OPTFMT=120,
+	NET_CIPSOV4_RBM_STRICTVALID=121,
+	NET_TCP_AVAIL_CONG_CONTROL=122,
+	NET_TCP_ALLOWED_CONG_CONTROL=123,
 };
 
 enum {
@@ -492,6 +517,7 @@ enum
  	NET_IPV4_NF_CONNTRACK_SCTP_TIMEOUT_SHUTDOWN_RECD=25,
  	NET_IPV4_NF_CONNTRACK_SCTP_TIMEOUT_SHUTDOWN_ACK_SENT=26,
 	NET_IPV4_NF_CONNTRACK_COUNT=27,
+	NET_IPV4_NF_CONNTRACK_CHECKSUM=28,
 };
  
 /* /proc/sys/net/ipv6 */
@@ -544,6 +570,7 @@ enum {
 	NET_IPV6_ACCEPT_RA_RTR_PREF=20,
 	NET_IPV6_RTR_PROBE_INTERVAL=21,
 	NET_IPV6_ACCEPT_RA_RT_INFO_MAX_PLEN=22,
+	NET_IPV6_PROXY_NDP=23,
 	__NET_IPV6_MAX
 };
 
@@ -578,16 +605,6 @@ enum {
 /* /proc/sys/net/dccp */
 enum {
 	NET_DCCP_DEFAULT=1,
-};
-
-/* /proc/sys/net/dccp/default */
-enum {
-	NET_DCCP_DEFAULT_SEQ_WINDOW  = 1,
-	NET_DCCP_DEFAULT_RX_CCID     = 2,
-	NET_DCCP_DEFAULT_TX_CCID     = 3,
-	NET_DCCP_DEFAULT_ACK_RATIO   = 4,
-	NET_DCCP_DEFAULT_SEND_ACKVEC = 5,
-	NET_DCCP_DEFAULT_SEND_NDP    = 6,
 };
 
 /* /proc/sys/net/ipx */
@@ -763,8 +780,6 @@ enum {
 	NET_BRIDGE_NF_FILTER_VLAN_TAGGED = 4,
 };
 
-/* CTL_PROC names: */
-
 /* CTL_FS names: */
 enum
 {
@@ -904,8 +919,7 @@ typedef struct ctl_table ctl_table;
 
 typedef int ctl_handler (ctl_table *table, int __user *name, int nlen,
 			 void __user *oldval, size_t __user *oldlenp,
-			 void __user *newval, size_t newlen, 
-			 void **context);
+			 void __user *newval, size_t newlen);
 
 typedef int proc_handler (ctl_table *ctl, int write, struct file * filp,
 			  void __user *buffer, size_t *lenp, loff_t *ppos);
@@ -939,7 +953,7 @@ extern int do_sysctl (int __user *name, int nlen,
 extern int do_sysctl_strategy (ctl_table *table, 
 			       int __user *name, int nlen,
 			       void __user *oldval, size_t __user *oldlenp,
-			       void __user *newval, size_t newlen, void ** context);
+			       void __user *newval, size_t newlen);
 
 extern ctl_handler sysctl_string;
 extern ctl_handler sysctl_intvec;
@@ -950,8 +964,8 @@ extern ctl_handler sysctl_ms_jiffies;
 /*
  * Register a set of sysctl names by calling register_sysctl_table
  * with an initialised array of ctl_table's.  An entry with zero
- * ctl_name terminates the table.  table->de will be set up by the
- * registration and need not be initialised in advance.
+ * ctl_name and NULL procname terminates the table.  table->de will be
+ * set up by the registration and need not be initialised in advance.
  *
  * sysctl names can be mirrored automatically under /proc/sys.  The
  * procname supplied controls /proc naming.
@@ -962,7 +976,10 @@ extern ctl_handler sysctl_ms_jiffies;
  * Leaf nodes in the sysctl tree will be represented by a single file
  * under /proc; non-leaf nodes will be represented by directories.  A
  * null procname disables /proc mirroring at this node.
- * 
+ *
+ * sysctl entries with a zero ctl_name will not be available through
+ * the binary sysctl interface.
+ *
  * sysctl(2) can automatically manage read and write requests through
  * the sysctl table.  The data and maxlen fields of the ctl_table
  * struct enable minimal validation of the values being written to be

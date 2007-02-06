@@ -19,8 +19,10 @@
 
 const struct file_operations bfs_file_operations = {
 	.llseek 	= generic_file_llseek,
-	.read		= generic_file_read,
-	.write		= generic_file_write,
+	.read		= do_sync_read,
+	.aio_read	= generic_file_aio_read,
+	.write		= do_sync_write,
+	.aio_write	= generic_file_aio_write,
 	.mmap		= generic_file_mmap,
 	.sendfile	= generic_file_sendfile,
 };
@@ -153,7 +155,7 @@ static sector_t bfs_bmap(struct address_space *mapping, sector_t block)
 	return generic_block_bmap(mapping, block, bfs_get_block);
 }
 
-struct address_space_operations bfs_aops = {
+const struct address_space_operations bfs_aops = {
 	.readpage	= bfs_readpage,
 	.writepage	= bfs_writepage,
 	.sync_page	= block_sync_page,

@@ -16,13 +16,15 @@
 
 #undef DEBUG
 
-#include <linux/config.h>
 #include <asm/pgtable.h>
 #include <asm/mmu.h>
 #include <asm/mmu_context.h>
 #include <asm/paca.h>
 #include <asm/cputable.h>
 #include <asm/cacheflush.h>
+#include <asm/smp.h>
+#include <asm/firmware.h>
+#include <linux/compiler.h>
 
 #ifdef DEBUG
 #define DBG(fmt...) udbg_printf(fmt)
@@ -51,32 +53,59 @@ static inline unsigned long mk_vsid_data(unsigned long ea, unsigned long flags)
 	return (get_kernel_vsid(ea) << SLB_VSID_SHIFT) | flags;
 }
 
-static inline void create_slbe(unsigned long ea, unsigned long flags,
-			       unsigned long entry)
+static inline void slb_shadow_update(unsigned long esid, unsigned long vsid,
+				     unsigned long entry)
 {
+	/*
+	 * Clear the ESID first so the entry is not valid while we are
+	 * updating it.
+	 */
+	get_slb_shadow()->save_area[entry].esid = 0;
+	barrier();
+	get_slb_shadow()->save_area[entry].vsid = vsid;
+	barrier();
+	get_slb_shadow()->save_area[entry].esid = esid;
+
+}
+
+static inline void create_shadowed_slbe(unsigned long ea, unsigned long flags,
+					unsigned long entry)
+{
+	/*
+	 * Updating the shadow buffer before writing the SLB ensures
+	 * we don't get a stale entry here if we get preempted by PHYP
+	 * between these two statements.
+	 */
+	slb_shadow_update(mk_esid_data(ea, entry), mk_vsid_data(ea, flags),
+			  entry);
+
 	asm volatile("slbmte  %0,%1" :
 		     : "r" (mk_vsid_data(ea, flags)),
 		       "r" (mk_esid_data(ea, entry))
 		     : "memory" );
 }
 
-static void slb_flush_and_rebolt(void)
+void slb_flush_and_rebolt(void)
 {
 	/* If you change this make sure you change SLB_NUM_BOLTED
 	 * appropriately too. */
-	unsigned long linear_llp, virtual_llp, lflags, vflags;
+	unsigned long linear_llp, vmalloc_llp, lflags, vflags;
 	unsigned long ksp_esid_data;
 
 	WARN_ON(!irqs_disabled());
 
 	linear_llp = mmu_psize_defs[mmu_linear_psize].sllp;
-	virtual_llp = mmu_psize_defs[mmu_virtual_psize].sllp;
+	vmalloc_llp = mmu_psize_defs[mmu_vmalloc_psize].sllp;
 	lflags = SLB_VSID_KERNEL | linear_llp;
-	vflags = SLB_VSID_KERNEL | virtual_llp;
+	vflags = SLB_VSID_KERNEL | vmalloc_llp;
 
 	ksp_esid_data = mk_esid_data(get_paca()->kstack, 2);
 	if ((ksp_esid_data & ESID_MASK) == PAGE_OFFSET)
 		ksp_esid_data &= ~SLB_ESID_V;
+
+	/* Only third entry (stack) may change here so only resave that */
+	slb_shadow_update(ksp_esid_data,
+			  mk_vsid_data(ksp_esid_data, lflags), 2);
 
 	/* We need to do this all in asm, so we're sure we don't touch
 	 * the stack between the slbia and rebolting it. */
@@ -122,9 +151,6 @@ void switch_slb(struct task_struct *tsk, struct mm_struct *mm)
 
 	get_paca()->slb_cache_ptr = 0;
 	get_paca()->context = mm->context;
-#ifdef CONFIG_PPC_64K_PAGES
-	get_paca()->pgdir = mm->pgd;
-#endif /* CONFIG_PPC_64K_PAGES */
 
 	/*
 	 * preload some userspace segments into the SLB.
@@ -167,11 +193,11 @@ static inline void patch_slb_encoding(unsigned int *insn_addr,
 
 void slb_initialize(void)
 {
-	unsigned long linear_llp, virtual_llp;
+	unsigned long linear_llp, vmalloc_llp, io_llp;
+	unsigned long lflags, vflags;
 	static int slb_encoding_inited;
 	extern unsigned int *slb_miss_kernel_load_linear;
-	extern unsigned int *slb_miss_kernel_load_virtual;
-	extern unsigned int *slb_miss_user_load_normal;
+	extern unsigned int *slb_miss_kernel_load_io;
 #ifdef CONFIG_HUGETLB_PAGE
 	extern unsigned int *slb_miss_user_load_huge;
 	unsigned long huge_llp;
@@ -181,18 +207,19 @@ void slb_initialize(void)
 
 	/* Prepare our SLB miss handler based on our page size */
 	linear_llp = mmu_psize_defs[mmu_linear_psize].sllp;
-	virtual_llp = mmu_psize_defs[mmu_virtual_psize].sllp;
+	io_llp = mmu_psize_defs[mmu_io_psize].sllp;
+	vmalloc_llp = mmu_psize_defs[mmu_vmalloc_psize].sllp;
+	get_paca()->vmalloc_sllp = SLB_VSID_KERNEL | vmalloc_llp;
+
 	if (!slb_encoding_inited) {
 		slb_encoding_inited = 1;
 		patch_slb_encoding(slb_miss_kernel_load_linear,
 				   SLB_VSID_KERNEL | linear_llp);
-		patch_slb_encoding(slb_miss_kernel_load_virtual,
-				   SLB_VSID_KERNEL | virtual_llp);
-		patch_slb_encoding(slb_miss_user_load_normal,
-				   SLB_VSID_USER | virtual_llp);
+		patch_slb_encoding(slb_miss_kernel_load_io,
+				   SLB_VSID_KERNEL | io_llp);
 
 		DBG("SLB: linear  LLP = %04x\n", linear_llp);
-		DBG("SLB: virtual LLP = %04x\n", virtual_llp);
+		DBG("SLB: io      LLP = %04x\n", io_llp);
 #ifdef CONFIG_HUGETLB_PAGE
 		patch_slb_encoding(slb_miss_user_load_huge,
 				   SLB_VSID_USER | huge_llp);
@@ -200,31 +227,27 @@ void slb_initialize(void)
 #endif
 	}
 
+	get_paca()->stab_rr = SLB_NUM_BOLTED;
+
 	/* On iSeries the bolted entries have already been set up by
 	 * the hypervisor from the lparMap data in head.S */
-#ifndef CONFIG_PPC_ISERIES
- {
-	unsigned long lflags, vflags;
+	if (firmware_has_feature(FW_FEATURE_ISERIES))
+		return;
 
 	lflags = SLB_VSID_KERNEL | linear_llp;
-	vflags = SLB_VSID_KERNEL | virtual_llp;
+	vflags = SLB_VSID_KERNEL | vmalloc_llp;
 
 	/* Invalidate the entire SLB (even slot 0) & all the ERATS */
 	asm volatile("isync":::"memory");
 	asm volatile("slbmte  %0,%0"::"r" (0) : "memory");
 	asm volatile("isync; slbia; isync":::"memory");
-	create_slbe(PAGE_OFFSET, lflags, 0);
+	create_shadowed_slbe(PAGE_OFFSET, lflags, 0);
 
-	/* VMALLOC space has 4K pages always for now */
-	create_slbe(VMALLOC_START, vflags, 1);
+	create_shadowed_slbe(VMALLOC_START, vflags, 1);
 
 	/* We don't bolt the stack for the time being - we're in boot,
 	 * so the stack is in the bolted segment.  By the time it goes
 	 * elsewhere, we'll call _switch() which will bolt in the new
 	 * one. */
 	asm volatile("isync":::"memory");
- }
-#endif /* CONFIG_PPC_ISERIES */
-
-	get_paca()->stab_rr = SLB_NUM_BOLTED;
 }

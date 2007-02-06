@@ -19,7 +19,6 @@
  * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
  
-#include <linux/config.h>
 #include <linux/acpi.h>
 #include <linux/pnp.h>
 #include <acpi/acpi_bus.h>
@@ -140,7 +139,7 @@ static int __init pnpacpi_add_device(struct acpi_device *device)
 		return 0;
 
 	pnp_dbg("ACPI device : hid %s", acpi_device_hid(device));
-	dev =  kcalloc(1, sizeof(struct pnp_dev), GFP_KERNEL);
+	dev =  kzalloc(sizeof(struct pnp_dev), GFP_KERNEL);
 	if (!dev) {
 		pnp_err("Out of memory");
 		return -ENOMEM;
@@ -170,7 +169,7 @@ static int __init pnpacpi_add_device(struct acpi_device *device)
 	dev->number = num;
 	
 	/* set the initial values for the PnP device */
-	dev_id = kcalloc(1, sizeof(struct pnp_id), GFP_KERNEL);
+	dev_id = kzalloc(sizeof(struct pnp_id), GFP_KERNEL);
 	if (!dev_id)
 		goto err;
 	pnpidacpi_to_pnpid(acpi_device_hid(device), dev_id->id);
@@ -202,7 +201,7 @@ static int __init pnpacpi_add_device(struct acpi_device *device)
 		for (i = 0; i < cid_list->count; i++) {
 			if (!ispnpidacpi(cid_list->id[i].value))
 				continue;
-			dev_id = kcalloc(1, sizeof(struct pnp_id), GFP_KERNEL);
+			dev_id = kzalloc(sizeof(struct pnp_id), GFP_KERNEL);
 			if (!dev_id)
 				continue;
 

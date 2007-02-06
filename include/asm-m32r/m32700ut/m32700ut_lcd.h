@@ -1,5 +1,5 @@
 /*
- * include/asm/m32700ut_lcd.h
+ * include/asm-m32r/m32700ut/m32700ut_lcd.h
  *
  * M32700UT-LCD board
  *
@@ -15,7 +15,6 @@
 #ifndef _M32700UT_M32700UT_LCD_H
 #define _M32700UT_M32700UT_LCD_H
 
-#include <linux/config.h>
 
 #ifndef __ASSEMBLY__
 /*

@@ -32,6 +32,7 @@
 #define _CHRP_Motorola	0x04	/* motorola chrp, the cobra */
 #define _CHRP_IBM	0x05	/* IBM chrp, the longtrail and longtrail 2 */
 #define _CHRP_Pegasos	0x06	/* Genesi/bplan's Pegasos and Pegasos2 */
+#define _CHRP_briq	0x07	/* TotalImpact's briQ */
 
 #if defined(__KERNEL__) && defined(CONFIG_PPC32)
 
@@ -51,10 +52,6 @@ extern unsigned char ucBoardRev;
 extern unsigned char ucBoardRevMaj, ucBoardRevMin;
 
 #endif /* CONFIG_PPC_PREP */
-
-#ifndef CONFIG_PPC_MULTIPLATFORM
-#define _machine 0
-#endif /* CONFIG_PPC_MULTIPLATFORM */
 
 #endif /* defined(__KERNEL__) && defined(CONFIG_PPC32) */
 
@@ -149,11 +146,11 @@ struct thread_struct {
 		unsigned int val;	/* Floating point status */
 	} fpscr;
 	int		fpexc_mode;	/* floating-point exception mode */
+	unsigned int	align_ctl;	/* alignment handling control */
 #ifdef CONFIG_PPC64
 	unsigned long	start_tb;	/* Start purr when proc switched in */
 	unsigned long	accum_tb;	/* Total accumilated purr for process */
 #endif
-	unsigned long	vdso_base;	/* base of the vDSO library */
 	unsigned long	dabr;		/* Data address breakpoint register */
 #ifdef CONFIG_ALTIVEC
 	/* Complete AltiVec register set */
@@ -190,7 +187,7 @@ struct thread_struct {
 	.fs = KERNEL_DS, \
 	.fpr = {0}, \
 	.fpscr = { .val = 0, }, \
-	.fpexc_mode = MSR_FE0|MSR_FE1, \
+	.fpexc_mode = 0, \
 }
 #endif
 
@@ -211,6 +208,18 @@ unsigned long get_wchan(struct task_struct *p);
 
 extern int get_fpexc_mode(struct task_struct *tsk, unsigned long adr);
 extern int set_fpexc_mode(struct task_struct *tsk, unsigned int val);
+
+#define GET_ENDIAN(tsk, adr) get_endian((tsk), (adr))
+#define SET_ENDIAN(tsk, val) set_endian((tsk), (val))
+
+extern int get_endian(struct task_struct *tsk, unsigned long adr);
+extern int set_endian(struct task_struct *tsk, unsigned int val);
+
+#define GET_UNALIGN_CTL(tsk, adr)	get_unalign_ctl((tsk), (adr))
+#define SET_UNALIGN_CTL(tsk, val)	set_unalign_ctl((tsk), (val))
+
+extern int get_unalign_ctl(struct task_struct *tsk, unsigned long adr);
+extern int set_unalign_ctl(struct task_struct *tsk, unsigned int val);
 
 static inline unsigned int __unpack_fe01(unsigned long msr_bits)
 {

@@ -101,6 +101,7 @@
 #include <linux/ac97_codec.h>
 #include <linux/bitops.h>
 #include <linux/mutex.h>
+#include <linux/mm.h>
 
 #include <asm/uaccess.h>
 
@@ -1523,9 +1524,9 @@ static void i810_channel_interrupt(struct i810_card *card)
 #endif
 }
 
-static irqreturn_t i810_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t i810_interrupt(int irq, void *dev_id)
 {
-	struct i810_card *card = (struct i810_card *)dev_id;
+	struct i810_card *card = dev_id;
 	u32 status;
 
 	spin_lock(&card->lock);
@@ -3413,7 +3414,7 @@ static int __devinit i810_probe(struct pci_dev *pci_dev, const struct pci_device
 		goto out_iospace;
 	}
 
-	if (request_irq(card->irq, &i810_interrupt, SA_SHIRQ,
+	if (request_irq(card->irq, &i810_interrupt, IRQF_SHARED,
 			card_names[pci_id->driver_data], card)) {
 		printk(KERN_ERR "i810_audio: unable to allocate irq %d\n", card->irq);
 		goto out_iospace;

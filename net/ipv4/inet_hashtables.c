@@ -13,7 +13,6 @@
  *      2 of the License, or (at your option) any later version.
  */
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/random.h>
 #include <linux/sched.h>
@@ -28,11 +27,11 @@
  * Allocate and initialize a new local port bind bucket.
  * The bindhash mutex for snum's hash chain must be held here.
  */
-struct inet_bind_bucket *inet_bind_bucket_create(kmem_cache_t *cachep,
+struct inet_bind_bucket *inet_bind_bucket_create(struct kmem_cache *cachep,
 						 struct inet_bind_hashbucket *head,
 						 const unsigned short snum)
 {
-	struct inet_bind_bucket *tb = kmem_cache_alloc(cachep, SLAB_ATOMIC);
+	struct inet_bind_bucket *tb = kmem_cache_alloc(cachep, GFP_ATOMIC);
 
 	if (tb != NULL) {
 		tb->port      = snum;
@@ -46,7 +45,7 @@ struct inet_bind_bucket *inet_bind_bucket_create(kmem_cache_t *cachep,
 /*
  * Caller must hold hashbucket lock for this tb with local BH disabled
  */
-void inet_bind_bucket_destroy(kmem_cache_t *cachep, struct inet_bind_bucket *tb)
+void inet_bind_bucket_destroy(struct kmem_cache *cachep, struct inet_bind_bucket *tb)
 {
 	if (hlist_empty(&tb->owners)) {
 		__hlist_del(&tb->node);
@@ -125,8 +124,10 @@ EXPORT_SYMBOL(inet_listen_wlock);
  * remote address for the connection. So always assume those are both
  * wildcarded during the search since they can never be otherwise.
  */
-struct sock *__inet_lookup_listener(const struct hlist_head *head, const u32 daddr,
-				    const unsigned short hnum, const int dif)
+static struct sock *inet_lookup_listener_slow(const struct hlist_head *head,
+					      const __be32 daddr,
+					      const unsigned short hnum,
+					      const int dif)
 {
 	struct sock *result = NULL, *sk;
 	const struct hlist_node *node;
@@ -136,7 +137,7 @@ struct sock *__inet_lookup_listener(const struct hlist_head *head, const u32 dad
 		const struct inet_sock *inet = inet_sk(sk);
 
 		if (inet->num == hnum && !ipv6_only_sock(sk)) {
-			const __u32 rcv_saddr = inet->rcv_saddr;
+			const __be32 rcv_saddr = inet->rcv_saddr;
 			int score = sk->sk_family == PF_INET ? 1 : 0;
 
 			if (inet_addr_match(sk->sk_nx_info, daddr, rcv_saddr))
@@ -159,6 +160,33 @@ struct sock *__inet_lookup_listener(const struct hlist_head *head, const u32 dad
 	return result;
 }
 
+/* Optimize the common listener case. */
+struct sock *__inet_lookup_listener(struct inet_hashinfo *hashinfo,
+				    const __be32 daddr, const unsigned short hnum,
+				    const int dif)
+{
+	struct sock *sk = NULL;
+	const struct hlist_head *head;
+
+	read_lock(&hashinfo->lhash_lock);
+	head = &hashinfo->listening_hash[inet_lhashfn(hnum)];
+	if (!hlist_empty(head)) {
+		const struct inet_sock *inet = inet_sk((sk = __sk_head(head)));
+
+		if (inet->num == hnum && !sk->sk_node.next &&
+		    inet_addr_match(sk->sk_nx_info, daddr, inet->rcv_saddr) &&
+		    (sk->sk_family == PF_INET || !ipv6_only_sock(sk)) &&
+		    !sk->sk_bound_dev_if)
+			goto sherry_cache;
+		sk = inet_lookup_listener_slow(head, daddr, hnum, dif);
+	}
+	if (sk) {
+sherry_cache:
+		sock_hold(sk);
+	}
+	read_unlock(&hashinfo->lhash_lock);
+	return sk;
+}
 EXPORT_SYMBOL_GPL(__inet_lookup_listener);
 
 /* called with local bh disabled */
@@ -168,11 +196,11 @@ static int __inet_check_established(struct inet_timewait_death_row *death_row,
 {
 	struct inet_hashinfo *hinfo = death_row->hashinfo;
 	struct inet_sock *inet = inet_sk(sk);
-	u32 daddr = inet->rcv_saddr;
-	u32 saddr = inet->daddr;
+	__be32 daddr = inet->rcv_saddr;
+	__be32 saddr = inet->daddr;
 	int dif = sk->sk_bound_dev_if;
 	INET_ADDR_COOKIE(acookie, saddr, daddr)
-	const __u32 ports = INET_COMBINED_PORTS(inet->dport, lport);
+	const __portpair ports = INET_COMBINED_PORTS(inet->dport, lport);
 	unsigned int hash = inet_ehashfn(daddr, lport, saddr, inet->dport);
 	struct inet_ehash_bucket *head = inet_ehash_bucket(hinfo, hash);
 	struct sock *sk2;

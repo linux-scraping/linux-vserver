@@ -1,12 +1,11 @@
 /*
- * linux/arch/sh/kernel/led_mpc1211.c
+ * linux/arch/sh/boards/mpc1211/led.c
  *
  * Copyright (C) 2001  Saito.K & Jeanne
  *
  * This file contains Interface MPC-1211 specific LED code.
  */
 
-#include <linux/config.h>
 
 static void mach_led(int position, int value)
 {

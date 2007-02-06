@@ -114,13 +114,11 @@
 #include <linux/module.h>
 #include <linux/init.h>
 
-#include <linux/config.h>
 #include <linux/errno.h>
 #include <linux/kernel.h>
 #include <linux/major.h>
 #include <linux/sched.h>
 #include <linux/smp_lock.h>
-#include <linux/devfs_fs_kernel.h>
 #include <linux/slab.h>
 #include <linux/fcntl.h>
 #include <linux/delay.h>
@@ -298,7 +296,7 @@ static int lp_wait_ready(int minor, int nonblock)
 static ssize_t lp_write(struct file * file, const char __user * buf,
 		        size_t count, loff_t *ppos)
 {
-	unsigned int minor = iminor(file->f_dentry->d_inode);
+	unsigned int minor = iminor(file->f_path.dentry->d_inode);
 	struct parport *port = lp_table[minor].dev->port;
 	char *kbuf = lp_table[minor].lp_buffer;
 	ssize_t retv = 0;
@@ -417,7 +415,7 @@ static ssize_t lp_read(struct file * file, char __user * buf,
 		       size_t count, loff_t *ppos)
 {
 	DEFINE_WAIT(wait);
-	unsigned int minor=iminor(file->f_dentry->d_inode);
+	unsigned int minor=iminor(file->f_path.dentry->d_inode);
 	struct parport *port = lp_table[minor].dev->port;
 	ssize_t retval = 0;
 	char *kbuf = lp_table[minor].lp_buffer;
@@ -527,7 +525,7 @@ static int lp_open(struct inode * inode, struct file * file)
 			return -EIO;
 		}
 	}
-	lp_table[minor].lp_buffer = (char *) kmalloc(LP_BUFFER_SIZE, GFP_KERNEL);
+	lp_table[minor].lp_buffer = kmalloc(LP_BUFFER_SIZE, GFP_KERNEL);
 	if (!lp_table[minor].lp_buffer) {
 		LP_F(minor) &= ~LP_BUSY;
 		return -ENOMEM;
@@ -668,7 +666,7 @@ static int lp_ioctl(struct inode *inode, struct file *file,
 	return retval;
 }
 
-static struct file_operations lp_fops = {
+static const struct file_operations lp_fops = {
 	.owner		= THIS_MODULE,
 	.write		= lp_write,
 	.ioctl		= lp_ioctl,
@@ -807,8 +805,6 @@ static int lp_register(int nr, struct parport *port)
 
 	class_device_create(lp_class, NULL, MKDEV(LP_MAJOR, nr), NULL,
 				"lp%d", nr);
-	devfs_mk_cdev(MKDEV(LP_MAJOR, nr), S_IFCHR | S_IRUGO | S_IWUGO,
-			"printers/%d", nr);
 
 	printk(KERN_INFO "lp%d: using %s (%s).\n", nr, port->name, 
 	       (port->irq == PARPORT_IRQ_NONE)?"polling":"interrupt-driven");
@@ -907,11 +903,10 @@ static int __init lp_init (void)
 		return -EIO;
 	}
 
-	devfs_mk_dir("printers");
 	lp_class = class_create(THIS_MODULE, "printer");
 	if (IS_ERR(lp_class)) {
 		err = PTR_ERR(lp_class);
-		goto out_devfs;
+		goto out_reg;
 	}
 
 	if (parport_register_driver (&lp_driver)) {
@@ -932,8 +927,7 @@ static int __init lp_init (void)
 
 out_class:
 	class_destroy(lp_class);
-out_devfs:
-	devfs_remove("printers");
+out_reg:
 	unregister_chrdev(LP_MAJOR, "lp");
 	return err;
 }
@@ -981,10 +975,8 @@ static void lp_cleanup_module (void)
 		if (lp_table[offset].dev == NULL)
 			continue;
 		parport_unregister_device(lp_table[offset].dev);
-		devfs_remove("printers/%d", offset);
 		class_device_destroy(lp_class, MKDEV(LP_MAJOR, offset));
 	}
-	devfs_remove("printers");
 	class_destroy(lp_class);
 }
 

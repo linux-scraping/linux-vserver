@@ -47,7 +47,6 @@
 #include <linux/workqueue.h>
 #include <linux/sunrpc/rpc_pipe_fs.h>
 
-#include <linux/nfs_fs_sb.h>
 #include <linux/nfs_fs.h>
 
 #include <linux/nfs_idmap.h>
@@ -57,6 +56,20 @@
 
 /* Default cache timeout is 10 minutes */
 unsigned int nfs_idmap_cache_timeout = 600 * HZ;
+
+static int param_set_idmap_timeout(const char *val, struct kernel_param *kp)
+{
+	char *endp;
+	int num = simple_strtol(val, &endp, 0);
+	int jif = num * HZ;
+	if (endp == val || *endp || num < 0 || jif < num)
+		return -EINVAL;
+	*((int *)kp->arg) = jif;
+	return 0;
+}
+
+module_param_call(idmap_cache_timeout, param_set_idmap_timeout, param_get_int,
+		 &nfs_idmap_cache_timeout, 0644);
 
 struct idmap_hashent {
 	unsigned long ih_expires;
@@ -71,7 +84,6 @@ struct idmap_hashtable {
 };
 
 struct idmap {
-	char                  idmap_path[48];
 	struct dentry        *idmap_dentry;
 	wait_queue_head_t     idmap_wq;
 	struct idmap_msg      idmap_im;
@@ -95,24 +107,23 @@ static struct rpc_pipe_ops idmap_upcall_ops = {
         .destroy_msg    = idmap_pipe_destroy_msg,
 };
 
-void
-nfs_idmap_new(struct nfs4_client *clp)
+int
+nfs_idmap_new(struct nfs_client *clp)
 {
 	struct idmap *idmap;
+	int error;
 
-	if (clp->cl_idmap != NULL)
-		return;
+	BUG_ON(clp->cl_idmap != NULL);
+
         if ((idmap = kzalloc(sizeof(*idmap), GFP_KERNEL)) == NULL)
-                return;
+                return -ENOMEM;
 
-	snprintf(idmap->idmap_path, sizeof(idmap->idmap_path),
-	    "%s/idmap", clp->cl_rpcclient->cl_pathname);
-
-        idmap->idmap_dentry = rpc_mkpipe(idmap->idmap_path,
+        idmap->idmap_dentry = rpc_mkpipe(clp->cl_rpcclient->cl_dentry, "idmap",
 	    idmap, &idmap_upcall_ops, 0);
         if (IS_ERR(idmap->idmap_dentry)) {
+		error = PTR_ERR(idmap->idmap_dentry);
 		kfree(idmap);
-		return;
+		return error;
 	}
 
         mutex_init(&idmap->idmap_lock);
@@ -122,18 +133,17 @@ nfs_idmap_new(struct nfs4_client *clp)
 	idmap->idmap_group_hash.h_type = IDMAP_TYPE_GROUP;
 
 	clp->cl_idmap = idmap;
+	return 0;
 }
 
 void
-nfs_idmap_delete(struct nfs4_client *clp)
+nfs_idmap_delete(struct nfs_client *clp)
 {
 	struct idmap *idmap = clp->cl_idmap;
 
 	if (!idmap)
 		return;
-	dput(idmap->idmap_dentry);
-	idmap->idmap_dentry = NULL;
-	rpc_unlink(idmap->idmap_path);
+	rpc_unlink(idmap->idmap_dentry);
 	clp->cl_idmap = NULL;
 	kfree(idmap);
 }
@@ -367,7 +377,7 @@ idmap_pipe_upcall(struct file *filp, struct rpc_pipe_msg *msg,
 static ssize_t
 idmap_pipe_downcall(struct file *filp, const char __user *src, size_t mlen)
 {
-        struct rpc_inode *rpci = RPC_I(filp->f_dentry->d_inode);
+        struct rpc_inode *rpci = RPC_I(filp->f_path.dentry->d_inode);
 	struct idmap *idmap = (struct idmap *)rpci->private;
 	struct idmap_msg im_in, *im = &idmap->idmap_im;
 	struct idmap_hashtable *h;
@@ -480,27 +490,27 @@ static unsigned int fnvhash32(const void *buf, size_t buflen)
 	return (hash);
 }
 
-int nfs_map_name_to_uid(struct nfs4_client *clp, const char *name, size_t namelen, __u32 *uid)
+int nfs_map_name_to_uid(struct nfs_client *clp, const char *name, size_t namelen, __u32 *uid)
 {
 	struct idmap *idmap = clp->cl_idmap;
 
 	return nfs_idmap_id(idmap, &idmap->idmap_user_hash, name, namelen, uid);
 }
 
-int nfs_map_group_to_gid(struct nfs4_client *clp, const char *name, size_t namelen, __u32 *uid)
+int nfs_map_group_to_gid(struct nfs_client *clp, const char *name, size_t namelen, __u32 *uid)
 {
 	struct idmap *idmap = clp->cl_idmap;
 
 	return nfs_idmap_id(idmap, &idmap->idmap_group_hash, name, namelen, uid);
 }
 
-int nfs_map_uid_to_name(struct nfs4_client *clp, __u32 uid, char *buf)
+int nfs_map_uid_to_name(struct nfs_client *clp, __u32 uid, char *buf)
 {
 	struct idmap *idmap = clp->cl_idmap;
 
 	return nfs_idmap_name(idmap, &idmap->idmap_user_hash, uid, buf);
 }
-int nfs_map_gid_to_group(struct nfs4_client *clp, __u32 uid, char *buf)
+int nfs_map_gid_to_group(struct nfs_client *clp, __u32 uid, char *buf)
 {
 	struct idmap *idmap = clp->cl_idmap;
 

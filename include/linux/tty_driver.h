@@ -53,7 +53,7 @@
  *	device-specific ioctl's.  If the ioctl number passed in cmd
  * 	is not recognized by the driver, it should return ENOIOCTLCMD.
  * 
- * void (*set_termios)(struct tty_struct *tty, struct termios * old);
+ * void (*set_termios)(struct tty_struct *tty, struct ktermios * old);
  *
  * 	This routine allows the tty driver to be notified when
  * 	device's termios settings have changed.  Note that a
@@ -132,7 +132,7 @@ struct tty_operations {
 	int  (*chars_in_buffer)(struct tty_struct *tty);
 	int  (*ioctl)(struct tty_struct *tty, struct file * file,
 		    unsigned int cmd, unsigned long arg);
-	void (*set_termios)(struct tty_struct *tty, struct termios * old);
+	void (*set_termios)(struct tty_struct *tty, struct ktermios * old);
 	void (*throttle)(struct tty_struct * tty);
 	void (*unthrottle)(struct tty_struct * tty);
 	void (*stop)(struct tty_struct *tty);
@@ -157,7 +157,6 @@ struct tty_driver {
 	struct cdev cdev;
 	struct module	*owner;
 	const char	*driver_name;
-	const char	*devfs_name;
 	const char	*name;
 	int	name_base;	/* offset of printed name */
 	int	major;		/* major device number */
@@ -166,7 +165,7 @@ struct tty_driver {
 	int	num;		/* number of devices allocated */
 	short	type;		/* type of tty driver */
 	short	subtype;	/* subtype of tty driver */
-	struct termios init_termios; /* Initial termios */
+	struct ktermios init_termios; /* Initial termios */
 	int	flags;		/* tty driver flags */
 	int	refcount;	/* for loadable tty drivers */
 	struct proc_dir_entry *proc_entry; /* /proc fs entry */
@@ -176,8 +175,8 @@ struct tty_driver {
 	 * Pointer to the tty data structures
 	 */
 	struct tty_struct **ttys;
-	struct termios **termios;
-	struct termios **termios_locked;
+	struct ktermios **termios;
+	struct ktermios **termios_locked;
 	void *driver_state;	/* only used for the PTY driver */
 	
 	/*
@@ -194,7 +193,7 @@ struct tty_driver {
 	int  (*chars_in_buffer)(struct tty_struct *tty);
 	int  (*ioctl)(struct tty_struct *tty, struct file * file,
 		    unsigned int cmd, unsigned long arg);
-	void (*set_termios)(struct tty_struct *tty, struct termios * old);
+	void (*set_termios)(struct tty_struct *tty, struct ktermios * old);
 	void (*throttle)(struct tty_struct * tty);
 	void (*unthrottle)(struct tty_struct * tty);
 	void (*stop)(struct tty_struct *tty);
@@ -220,7 +219,8 @@ extern struct list_head tty_drivers;
 
 struct tty_driver *alloc_tty_driver(int lines);
 void put_tty_driver(struct tty_driver *driver);
-void tty_set_operations(struct tty_driver *driver, struct tty_operations *op);
+void tty_set_operations(struct tty_driver *driver,
+			const struct tty_operations *op);
 
 /* tty driver magic number */
 #define TTY_DRIVER_MAGIC		0x5402
@@ -242,8 +242,15 @@ void tty_set_operations(struct tty_driver *driver, struct tty_operations *op);
  * 	is also a promise, if the above case is true, not to signal
  * 	overruns, either.)
  *
- * TTY_DRIVER_NO_DEVFS --- if set, do not create devfs entries. This
- *	is only used by tty_register_driver().
+ * TTY_DRIVER_DYNAMIC_DEV --- if set, the individual tty devices need
+ *	to be registered with a call to tty_register_driver() when the
+ *	device is found in the system and unregistered with a call to
+ *	tty_unregister_device() so the devices will be show up
+ *	properly in sysfs.  If not set, driver->num entries will be
+ *	created by the tty core in sysfs when tty_register_driver() is
+ *	called.  This is to be used by drivers that have tty devices
+ *	that can appear and disappear while the main tty driver is
+ *	registered with the tty core.
  *
  * TTY_DRIVER_DEVPTS_MEM -- don't use the standard arrays, instead
  *	use dynamic memory keyed through the devpts filesystem.  This
@@ -252,7 +259,7 @@ void tty_set_operations(struct tty_driver *driver, struct tty_operations *op);
 #define TTY_DRIVER_INSTALLED		0x0001
 #define TTY_DRIVER_RESET_TERMIOS	0x0002
 #define TTY_DRIVER_REAL_RAW		0x0004
-#define TTY_DRIVER_NO_DEVFS		0x0008
+#define TTY_DRIVER_DYNAMIC_DEV		0x0008
 #define TTY_DRIVER_DEVPTS_MEM		0x0010
 
 /* tty driver types */

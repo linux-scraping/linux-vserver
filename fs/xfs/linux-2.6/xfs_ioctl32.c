@@ -15,7 +15,6 @@
  * along with this program; if not, write the Free Software Foundation,
  * Inc.,  51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
-#include <linux/config.h>
 #include <linux/compat.h>
 #include <linux/init.h>
 #include <linux/ioctl.h>
@@ -113,8 +112,8 @@ xfs_compat_ioctl(
 	unsigned	cmd,
 	unsigned long	arg)
 {
-	struct inode	*inode = file->f_dentry->d_inode;
-	vnode_t		*vp = vn_from_inode(inode);
+	struct inode	*inode = file->f_path.dentry->d_inode;
+	bhv_vnode_t	*vp = vn_from_inode(inode);
 	int		error;
 
 	switch (cmd) {
@@ -193,7 +192,7 @@ xfs_compat_ioctl(
 		return -ENOIOCTLCMD;
 	}
 
-	VOP_IOCTL(vp, inode, file, mode, cmd, (void __user *)arg, error);
+	error = bhv_vop_ioctl(vp, inode, file, mode, cmd, (void __user *)arg);
 	VMODIFY(vp);
 
 	return error;

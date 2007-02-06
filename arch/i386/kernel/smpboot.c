@@ -33,8 +33,12 @@
  *		Dave Jones	:	Report invalid combinations of Athlon CPUs.
 *		Rusty Russell	:	Hacked into shape for new "hotplug" boot process. */
 
+
+/* SMP boot always wants to use real time delay to allow sufficient time for
+ * the APs to come online */
+#define USE_REAL_TIME_DELAY
+
 #include <linux/module.h>
-#include <linux/config.h>
 #include <linux/init.h>
 #include <linux/kernel.h>
 
@@ -52,6 +56,9 @@
 #include <asm/tlbflush.h>
 #include <asm/desc.h>
 #include <asm/arch_hooks.h>
+#include <asm/nmi.h>
+#include <asm/pda.h>
+#include <asm/genapic.h>
 
 #include <mach_apic.h>
 #include <mach_wakecpu.h>
@@ -62,15 +69,7 @@ static int __devinitdata smp_b_stepping;
 
 /* Number of siblings per CPU package */
 int smp_num_siblings = 1;
-#ifdef CONFIG_X86_HT
 EXPORT_SYMBOL(smp_num_siblings);
-#endif
-
-/* Package ID of each logical CPU */
-int phys_proc_id[NR_CPUS] __read_mostly = {[0 ... NR_CPUS-1] = BAD_APICID};
-
-/* Core ID of each logical CPU */
-int cpu_core_id[NR_CPUS] __read_mostly = {[0 ... NR_CPUS-1] = BAD_APICID};
 
 /* Last level cache ID of each logical CPU */
 int cpu_llc_id[NR_CPUS] __cpuinitdata = {[0 ... NR_CPUS-1] = BAD_APICID};
@@ -107,6 +106,8 @@ EXPORT_SYMBOL(cpu_data);
 u8 x86_cpu_to_apicid[NR_CPUS] __read_mostly =
 			{ [0 ... NR_CPUS-1] = 0xff };
 EXPORT_SYMBOL(x86_cpu_to_apicid);
+
+u8 apicid_2_node[MAX_APICID];
 
 /*
  * Trampoline 80x86 program as an array.
@@ -158,7 +159,7 @@ void __init smp_alloc_memory(void)
  * a given CPU
  */
 
-static void __devinit smp_store_cpu_info(int id)
+static void __cpuinit smp_store_cpu_info(int id)
 {
 	struct cpuinfo_x86 *c = cpu_data + id;
 
@@ -182,6 +183,9 @@ static void __devinit smp_store_cpu_info(int id)
 	 * but they are not certified as MP capable.
 	 */
 	if ((c->x86_vendor == X86_VENDOR_AMD) && (c->x86 == 6)) {
+
+		if (num_possible_cpus() == 1)
+			goto valid_k7;
 
 		/* Athlon 660/661 is valid. */	
 		if ((c->x86_model==6) && ((c->x86_mask==0) || (c->x86_mask==1)))
@@ -218,14 +222,20 @@ valid_k7:
  * then we print a warning if not, and always resync.
  */
 
-static atomic_t tsc_start_flag = ATOMIC_INIT(0);
-static atomic_t tsc_count_start = ATOMIC_INIT(0);
-static atomic_t tsc_count_stop = ATOMIC_INIT(0);
-static unsigned long long tsc_values[NR_CPUS];
+static struct {
+	atomic_t start_flag;
+	atomic_t count_start;
+	atomic_t count_stop;
+	unsigned long long values[NR_CPUS];
+} tsc __cpuinitdata = {
+	.start_flag = ATOMIC_INIT(0),
+	.count_start = ATOMIC_INIT(0),
+	.count_stop = ATOMIC_INIT(0),
+};
 
 #define NR_LOOPS 5
 
-static void __init synchronize_tsc_bp (void)
+static void __init synchronize_tsc_bp(void)
 {
 	int i;
 	unsigned long long t0;
@@ -239,7 +249,7 @@ static void __init synchronize_tsc_bp (void)
 	/* convert from kcyc/sec to cyc/usec */
 	one_usec = cpu_khz / 1000;
 
-	atomic_set(&tsc_start_flag, 1);
+	atomic_set(&tsc.start_flag, 1);
 	wmb();
 
 	/*
@@ -256,16 +266,16 @@ static void __init synchronize_tsc_bp (void)
 		/*
 		 * all APs synchronize but they loop on '== num_cpus'
 		 */
-		while (atomic_read(&tsc_count_start) != num_booting_cpus()-1)
-			mb();
-		atomic_set(&tsc_count_stop, 0);
+		while (atomic_read(&tsc.count_start) != num_booting_cpus()-1)
+			cpu_relax();
+		atomic_set(&tsc.count_stop, 0);
 		wmb();
 		/*
 		 * this lets the APs save their current TSC:
 		 */
-		atomic_inc(&tsc_count_start);
+		atomic_inc(&tsc.count_start);
 
-		rdtscll(tsc_values[smp_processor_id()]);
+		rdtscll(tsc.values[smp_processor_id()]);
 		/*
 		 * We clear the TSC in the last loop:
 		 */
@@ -275,56 +285,54 @@ static void __init synchronize_tsc_bp (void)
 		/*
 		 * Wait for all APs to leave the synchronization point:
 		 */
-		while (atomic_read(&tsc_count_stop) != num_booting_cpus()-1)
-			mb();
-		atomic_set(&tsc_count_start, 0);
+		while (atomic_read(&tsc.count_stop) != num_booting_cpus()-1)
+			cpu_relax();
+		atomic_set(&tsc.count_start, 0);
 		wmb();
-		atomic_inc(&tsc_count_stop);
+		atomic_inc(&tsc.count_stop);
 	}
 
 	sum = 0;
 	for (i = 0; i < NR_CPUS; i++) {
 		if (cpu_isset(i, cpu_callout_map)) {
-			t0 = tsc_values[i];
+			t0 = tsc.values[i];
 			sum += t0;
 		}
 	}
 	avg = sum;
 	do_div(avg, num_booting_cpus());
 
-	sum = 0;
 	for (i = 0; i < NR_CPUS; i++) {
 		if (!cpu_isset(i, cpu_callout_map))
 			continue;
-		delta = tsc_values[i] - avg;
+		delta = tsc.values[i] - avg;
 		if (delta < 0)
 			delta = -delta;
 		/*
 		 * We report bigger than 2 microseconds clock differences.
 		 */
 		if (delta > 2*one_usec) {
-			long realdelta;
+			long long realdelta;
+
 			if (!buggy) {
 				buggy = 1;
 				printk("\n");
 			}
 			realdelta = delta;
 			do_div(realdelta, one_usec);
-			if (tsc_values[i] < avg)
+			if (tsc.values[i] < avg)
 				realdelta = -realdelta;
 
-			if (realdelta > 0)
-				printk(KERN_INFO "CPU#%d had %ld usecs TSC "
+			if (realdelta)
+				printk(KERN_INFO "CPU#%d had %Ld usecs TSC "
 					"skew, fixed it up.\n", i, realdelta);
 		}
-
-		sum += delta;
 	}
 	if (!buggy)
 		printk("passed.\n");
 }
 
-static void __init synchronize_tsc_ap (void)
+static void __cpuinit synchronize_tsc_ap(void)
 {
 	int i;
 
@@ -333,19 +341,21 @@ static void __init synchronize_tsc_ap (void)
 	 * this gets called, so we first wait for the BP to
 	 * finish SMP initialization:
 	 */
-	while (!atomic_read(&tsc_start_flag)) mb();
+	while (!atomic_read(&tsc.start_flag))
+		cpu_relax();
 
 	for (i = 0; i < NR_LOOPS; i++) {
-		atomic_inc(&tsc_count_start);
-		while (atomic_read(&tsc_count_start) != num_booting_cpus())
-			mb();
+		atomic_inc(&tsc.count_start);
+		while (atomic_read(&tsc.count_start) != num_booting_cpus())
+			cpu_relax();
 
-		rdtscll(tsc_values[smp_processor_id()]);
+		rdtscll(tsc.values[smp_processor_id()]);
 		if (i == NR_LOOPS-1)
 			write_tsc(0, 0);
 
-		atomic_inc(&tsc_count_stop);
-		while (atomic_read(&tsc_count_stop) != num_booting_cpus()) mb();
+		atomic_inc(&tsc.count_stop);
+		while (atomic_read(&tsc.count_stop) != num_booting_cpus())
+			cpu_relax();
 	}
 }
 #undef NR_LOOPS
@@ -354,7 +364,7 @@ extern void calibrate_delay(void);
 
 static atomic_t init_deasserted;
 
-static void __devinit smp_callin(void)
+static void __cpuinit smp_callin(void)
 {
 	int cpuid, phys_id;
 	unsigned long timeout;
@@ -451,10 +461,12 @@ cpumask_t cpu_coregroup_map(int cpu)
 	struct cpuinfo_x86 *c = cpu_data + cpu;
 	/*
 	 * For perf, we return last level cache shared map.
-	 * TBD: when power saving sched policy is added, we will return
-	 *      cpu_core_map when power saving policy is enabled
+	 * And for power savings, we return cpu_core_map
 	 */
-	return c->llc_shared_map;
+	if (sched_mc_power_savings || sched_smt_power_savings)
+		return cpu_core_map[cpu];
+	else
+		return c->llc_shared_map;
 }
 
 /* representing cpus for which sibling maps can be computed */
@@ -470,8 +482,8 @@ set_cpu_sibling_map(int cpu)
 
 	if (smp_num_siblings > 1) {
 		for_each_cpu_mask(i, cpu_sibling_setup_map) {
-			if (phys_proc_id[cpu] == phys_proc_id[i] &&
-			    cpu_core_id[cpu] == cpu_core_id[i]) {
+			if (c[cpu].phys_proc_id == c[i].phys_proc_id &&
+			    c[cpu].cpu_core_id == c[i].cpu_core_id) {
 				cpu_set(i, cpu_sibling_map[cpu]);
 				cpu_set(cpu, cpu_sibling_map[i]);
 				cpu_set(i, cpu_core_map[cpu]);
@@ -498,7 +510,7 @@ set_cpu_sibling_map(int cpu)
 			cpu_set(i, c[cpu].llc_shared_map);
 			cpu_set(cpu, c[i].llc_shared_map);
 		}
-		if (phys_proc_id[cpu] == phys_proc_id[i]) {
+		if (c[cpu].phys_proc_id == c[i].phys_proc_id) {
 			cpu_set(i, cpu_core_map[cpu]);
 			cpu_set(cpu, cpu_core_map[i]);
 			/*
@@ -526,14 +538,14 @@ set_cpu_sibling_map(int cpu)
 /*
  * Activate a secondary processor.
  */
-static void __devinit start_secondary(void *unused)
+static void __cpuinit start_secondary(void *unused)
 {
 	/*
-	 * Dont put anything before smp_callin(), SMP
+	 * Don't put *anything* before secondary_cpu_init(), SMP
 	 * booting is too fragile that we want to limit the
 	 * things done here to the most necessary things.
 	 */
-	cpu_init();
+	secondary_cpu_init();
 	preempt_disable();
 	smp_callin();
 	while (!cpu_isset(smp_processor_id(), smp_commenced_mask))
@@ -584,6 +596,12 @@ static void __devinit start_secondary(void *unused)
 void __devinit initialize_secondary(void)
 {
 	/*
+	 * switch to the per CPU GDT we already set up
+	 * in do_boot_cpu()
+	 */
+	cpu_set_gdt(current_thread_info()->cpu);
+
+	/*
 	 * We don't actually need to load the full TSS,
 	 * basically just the stack pointer and the eip.
 	 */
@@ -592,19 +610,23 @@ void __devinit initialize_secondary(void)
 		"movl %0,%%esp\n\t"
 		"jmp *%1"
 		:
-		:"r" (current->thread.esp),"r" (current->thread.eip));
+		:"m" (current->thread.esp),"m" (current->thread.eip));
 }
 
+/* Static state in head.S used to set up a CPU */
 extern struct {
 	void * esp;
 	unsigned short ss;
 } stack_start;
+extern struct i386_pda *start_pda;
+extern struct Xgt_desc_struct cpu_gdt_descr;
 
 #ifdef CONFIG_NUMA
 
 /* which logical CPUs are on which nodes */
 cpumask_t node_2_cpu_mask[MAX_NUMNODES] __read_mostly =
 				{ [0 ... MAX_NUMNODES-1] = CPU_MASK_NONE };
+EXPORT_SYMBOL(node_2_cpu_mask);
 /* which node each logical CPU is on */
 int cpu_2_node[NR_CPUS] __read_mostly = { [0 ... NR_CPUS-1] = 0 };
 EXPORT_SYMBOL(cpu_2_node);
@@ -640,9 +662,13 @@ static void map_cpu_to_logical_apicid(void)
 {
 	int cpu = smp_processor_id();
 	int apicid = logical_smp_processor_id();
+	int node = apicid_to_node(apicid);
+
+	if (!node_online(node))
+		node = first_online_node;
 
 	cpu_2_logical_apicid[cpu] = apicid;
-	map_cpu_to_node(cpu, apicid_to_node(apicid));
+	map_cpu_to_node(cpu, node);
 }
 
 static void unmap_cpu_to_logical_apicid(int cpu)
@@ -911,7 +937,7 @@ static inline struct task_struct * alloc_idle_task(int cpu)
 #define alloc_idle_task(cpu) fork_idle(cpu)
 #endif
 
-static int __devinit do_boot_cpu(int apicid, int cpu)
+static int __cpuinit do_boot_cpu(int apicid, int cpu)
 /*
  * NOTE - on most systems this is a PHYSICAL apic ID, but on multiquad
  * (ie clustered apic addressing mode), this is a LOGICAL apic ID.
@@ -924,9 +950,6 @@ static int __devinit do_boot_cpu(int apicid, int cpu)
 	unsigned long start_eip;
 	unsigned short nmi_high = 0, nmi_low = 0;
 
-	++cpucount;
-	alternatives_smp_switch(1);
-
 	/*
 	 * We can't use kernel_thread since we must avoid to
 	 * reschedule the child.
@@ -934,9 +957,21 @@ static int __devinit do_boot_cpu(int apicid, int cpu)
 	idle = alloc_idle_task(cpu);
 	if (IS_ERR(idle))
 		panic("failed fork for CPU %d", cpu);
+
+	/* Pre-allocate and initialize the CPU's GDT and PDA so it
+	   doesn't have to do any memory allocation during the
+	   delicate CPU-bringup phase. */
+	if (!init_gdt(cpu, idle)) {
+		printk(KERN_INFO "Couldn't allocate GDT/PDA for CPU %d\n", cpu);
+		return -1;	/* ? */
+	}
+
 	idle->thread.eip = (unsigned long) start_secondary;
 	/* start_eip had better be page-aligned! */
 	start_eip = setup_trampoline();
+
+	++cpucount;
+	alternatives_smp_switch(1);
 
 	/* So we see what's up   */
 	printk("Booting processor %d/%d eip %lx\n", cpu, apicid, start_eip);
@@ -945,6 +980,7 @@ static int __devinit do_boot_cpu(int apicid, int cpu)
 
 	irq_ctx_init(cpu);
 
+	x86_cpu_to_apicid[cpu] = apicid;
 	/*
 	 * This grunge runs the startup process for
 	 * the targeted processor.
@@ -1036,23 +1072,25 @@ void cpu_exit_clear(void)
 
 struct warm_boot_cpu_info {
 	struct completion *complete;
+	struct work_struct task;
 	int apicid;
 	int cpu;
 };
 
-static void __cpuinit do_warm_boot_cpu(void *p)
+static void __cpuinit do_warm_boot_cpu(struct work_struct *work)
 {
-	struct warm_boot_cpu_info *info = p;
+	struct warm_boot_cpu_info *info =
+		container_of(work, struct warm_boot_cpu_info, task);
 	do_boot_cpu(info->apicid, info->cpu);
 	complete(info->complete);
 }
 
 static int __cpuinit __smp_prepare_cpu(int cpu)
 {
-	DECLARE_COMPLETION(done);
+	DECLARE_COMPLETION_ONSTACK(done);
 	struct warm_boot_cpu_info info;
-	struct work_struct task;
 	int	apicid, ret;
+	struct Xgt_desc_struct *cpu_gdt_descr = &per_cpu(cpu_gdt_descr, cpu);
 
 	apicid = x86_cpu_to_apicid[cpu];
 	if (apicid == BAD_APICID) {
@@ -1060,18 +1098,30 @@ static int __cpuinit __smp_prepare_cpu(int cpu)
 		goto exit;
 	}
 
+	/*
+	 * the CPU isn't initialized at boot time, allocate gdt table here.
+	 * cpu_init will initialize it
+	 */
+	if (!cpu_gdt_descr->address) {
+		cpu_gdt_descr->address = get_zeroed_page(GFP_KERNEL);
+		if (!cpu_gdt_descr->address)
+			printk(KERN_CRIT "CPU%d failed to allocate GDT\n", cpu);
+			ret = -ENOMEM;
+			goto exit;
+	}
+
 	info.complete = &done;
 	info.apicid = apicid;
 	info.cpu = cpu;
-	INIT_WORK(&task, do_warm_boot_cpu, &info);
+	INIT_WORK(&info.task, do_warm_boot_cpu);
 
 	tsc_sync_disabled = 1;
 
 	/* init low mem mapping */
 	clone_pgd_range(swapper_pg_dir, swapper_pg_dir + USER_PGD_PTRS,
-			KERNEL_PGD_PTRS);
+			min_t(unsigned long, KERNEL_PGD_PTRS, USER_PGD_PTRS));
 	flush_tlb_all();
-	schedule_work(&task);
+	schedule_work(&info.task);
 	wait_for_completion(&done);
 
 	tsc_sync_disabled = 0;
@@ -1082,34 +1132,15 @@ exit:
 }
 #endif
 
-static void smp_tune_scheduling (void)
+static void smp_tune_scheduling(void)
 {
 	unsigned long cachesize;       /* kB   */
-	unsigned long bandwidth = 350; /* MB/s */
-	/*
-	 * Rough estimation for SMP scheduling, this is the number of
-	 * cycles it takes for a fully memory-limited process to flush
-	 * the SMP-local cache.
-	 *
-	 * (For a P5 this pretty much means we will choose another idle
-	 *  CPU almost always at wakeup time (this is due to the small
-	 *  L1 cache), on PIIs it's around 50-100 usecs, depending on
-	 *  the cache size)
-	 */
 
-	if (!cpu_khz) {
-		/*
-		 * this basically disables processor-affinity
-		 * scheduling on SMP without a TSC.
-		 */
-		return;
-	} else {
+	if (cpu_khz) {
 		cachesize = boot_cpu_data.x86_cache_size;
-		if (cachesize == -1) {
-			cachesize = 16; /* Pentiums, 2x8kB cache */
-			bandwidth = 100;
-		}
-		max_cache_size = cachesize * 1024;
+
+		if (cachesize > 0)
+			max_cache_size = cachesize * 1024;
 	}
 }
 
@@ -1337,8 +1368,8 @@ remove_siblinginfo(int cpu)
 		cpu_clear(cpu, cpu_sibling_map[sibling]);
 	cpus_clear(cpu_sibling_map[cpu]);
 	cpus_clear(cpu_core_map[cpu]);
-	phys_proc_id[cpu] = BAD_APICID;
-	cpu_core_id[cpu] = BAD_APICID;
+	c[cpu].phys_proc_id = 0;
+	c[cpu].cpu_core_id = 0;
 	cpu_clear(cpu, cpu_sibling_setup_map);
 }
 
@@ -1357,7 +1388,8 @@ int __cpu_disable(void)
 	 */
 	if (cpu == 0)
 		return -EBUSY;
-
+	if (nmi_watchdog == NMI_LOCAL_APIC)
+		stop_apic_nmi_watchdog(NULL);
 	clear_local_APIC();
 	/* Allow any queued timer interrupts to get serviced */
 	local_irq_enable();
@@ -1403,7 +1435,7 @@ void __cpu_die(unsigned int cpu)
 }
 #endif /* CONFIG_HOTPLUG_CPU */
 
-int __devinit __cpu_up(unsigned int cpu)
+int __cpuinit __cpu_up(unsigned int cpu)
 {
 #ifdef CONFIG_HOTPLUG_CPU
 	int ret=0;
@@ -1433,7 +1465,13 @@ int __devinit __cpu_up(unsigned int cpu)
 	/* Unleash the CPU! */
 	cpu_set(cpu, smp_commenced_mask);
 	while (!cpu_isset(cpu, cpu_online_map))
-		mb();
+		cpu_relax();
+
+#ifdef CONFIG_X86_GENERICARCH
+	if (num_online_cpus() > 8 && genapic == &apic_default)
+		panic("Default flat APIC routing can't be used with > 8 cpus\n");
+#endif
+
 	return 0;
 }
 
@@ -1471,3 +1509,16 @@ void __init smp_intr_init(void)
 	/* IPI for generic function call */
 	set_intr_gate(CALL_FUNCTION_VECTOR, call_function_interrupt);
 }
+
+/*
+ * If the BIOS enumerates physical processors before logical,
+ * maxcpus=N at enumeration-time can be used to disable HT.
+ */
+static int __init parse_maxcpus(char *arg)
+{
+	extern unsigned int maxcpus;
+
+	maxcpus = simple_strtoul(arg, NULL, 0);
+	return 0;
+}
+early_param("maxcpus", parse_maxcpus);

@@ -15,11 +15,9 @@
  * along with this program; if not, write the Free Software Foundation,
  * Inc.,  51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
+#include <xfs.h>
 #include "debug.h"
 #include "spin.h"
-#include <asm/page.h>
-#include <linux/sched.h>
-#include <linux/kernel.h>
 
 static char		message[256];	/* keep it off the stack */
 static DEFINE_SPINLOCK(xfs_err_lock);
@@ -47,14 +45,13 @@ cmn_err(register int level, char *fmt, ...)
 	va_start(ap, fmt);
 	if (*fmt == '!') fp++;
 	len = vsprintf(message, fp, ap);
-	if (message[len-1] != '\n')
+	if (level != CE_DEBUG && message[len-1] != '\n')
 		strcat(message, "\n");
 	printk("%s%s", err_level[level], message);
 	va_end(ap);
 	spin_unlock_irqrestore(&xfs_err_lock,flags);
 
-	if (level == CE_PANIC)
-		BUG();
+	BUG_ON(level == CE_PANIC);
 }
 
 void
@@ -68,12 +65,11 @@ icmn_err(register int level, char *fmt, va_list ap)
 		level = XFS_MAX_ERR_LEVEL;
 	spin_lock_irqsave(&xfs_err_lock,flags);
 	len = vsprintf(message, fmt, ap);
-	if (message[len-1] != '\n')
+	if (level != CE_DEBUG && message[len-1] != '\n')
 		strcat(message, "\n");
 	spin_unlock_irqrestore(&xfs_err_lock,flags);
 	printk("%s%s", err_level[level], message);
-	if (level == CE_PANIC)
-		BUG();
+	BUG_ON(level == CE_PANIC);
 }
 
 void

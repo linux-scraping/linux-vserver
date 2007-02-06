@@ -14,7 +14,6 @@
  */
 
 #include <linux/bitops.h>
-#include <linux/config.h>
 #include <linux/errno.h>
 #include <linux/init.h>
 #include <linux/interrupt.h>
@@ -74,7 +73,7 @@ EXPORT_SYMBOL(gsc_alloc_irq);
 EXPORT_SYMBOL(gsc_claim_irq);
 
 /* Common interrupt demultiplexer used by Asp, Lasi & Wax.  */
-irqreturn_t gsc_asic_intr(int gsc_asic_irq, void *dev, struct pt_regs *regs)
+irqreturn_t gsc_asic_intr(int gsc_asic_irq, void *dev)
 {
 	unsigned long irr;
 	struct gsc_asic *gsc_asic = dev;
@@ -88,7 +87,7 @@ irqreturn_t gsc_asic_intr(int gsc_asic_irq, void *dev, struct pt_regs *regs)
 	do {
 		int local_irq = __ffs(irr);
 		unsigned int irq = gsc_asic->global_irq[local_irq];
-		__do_IRQ(irq, regs);
+		__do_IRQ(irq);
 		irr &= ~(1 << local_irq);
 	} while (irr);
 
@@ -109,7 +108,7 @@ int gsc_find_local_irq(unsigned int irq, int *global_irqs, int limit)
 
 static void gsc_asic_disable_irq(unsigned int irq)
 {
-	struct gsc_asic *irq_dev = irq_desc[irq].handler_data;
+	struct gsc_asic *irq_dev = irq_desc[irq].chip_data;
 	int local_irq = gsc_find_local_irq(irq, irq_dev->global_irq, 32);
 	u32 imr;
 
@@ -124,7 +123,7 @@ static void gsc_asic_disable_irq(unsigned int irq)
 
 static void gsc_asic_enable_irq(unsigned int irq)
 {
-	struct gsc_asic *irq_dev = irq_desc[irq].handler_data;
+	struct gsc_asic *irq_dev = irq_desc[irq].chip_data;
 	int local_irq = gsc_find_local_irq(irq, irq_dev->global_irq, 32);
 	u32 imr;
 
@@ -164,8 +163,8 @@ int gsc_assign_irq(struct hw_interrupt_type *type, void *data)
 	if (irq > GSC_IRQ_MAX)
 		return NO_IRQ;
 
-	irq_desc[irq].handler = type;
-	irq_desc[irq].handler_data = data;
+	irq_desc[irq].chip = type;
+	irq_desc[irq].chip_data = data;
 	return irq++;
 }
 

@@ -47,7 +47,7 @@
 #define BIO_BUG_ON
 #endif
 
-#define BIO_MAX_PAGES		(256)
+#define BIO_MAX_PAGES		256
 #define BIO_MAX_SIZE		(BIO_MAX_PAGES << PAGE_CACHE_SHIFT)
 #define BIO_MAX_SECTORS		(BIO_MAX_SIZE >> 9)
 
@@ -70,7 +70,8 @@ typedef void (bio_destructor_t) (struct bio *);
  * stacking drivers)
  */
 struct bio {
-	sector_t		bi_sector;
+	sector_t		bi_sector;	/* device address in 512 byte
+						   sectors */
 	struct bio		*bi_next;	/* request queue link */
 	struct block_device	*bi_bdev;
 	unsigned long		bi_flags;	/* status, command, etc */
@@ -148,6 +149,7 @@ struct bio {
 #define BIO_RW_BARRIER	2
 #define BIO_RW_FAILFAST	3
 #define BIO_RW_SYNC	4
+#define BIO_RW_META	5
 
 /*
  * upper 16 bits of bi_rw define the io priority of this bio
@@ -178,6 +180,7 @@ struct bio {
 #define bio_sync(bio)		((bio)->bi_rw & (1 << BIO_RW_SYNC))
 #define bio_failfast(bio)	((bio)->bi_rw & (1 << BIO_RW_FAILFAST))
 #define bio_rw_ahead(bio)	((bio)->bi_rw & (1 << BIO_RW_AHEAD))
+#define bio_rw_meta(bio)	((bio)->bi_rw & (1 << BIO_RW_META))
 
 /*
  * will die
@@ -306,6 +309,7 @@ extern struct bio *bio_map_kern(struct request_queue *, void *, unsigned int,
 				gfp_t);
 extern void bio_set_pages_dirty(struct bio *bio);
 extern void bio_check_pages_dirty(struct bio *bio);
+extern void bio_release_pages(struct bio *bio);
 extern struct bio *bio_copy_user(struct request_queue *, unsigned long, unsigned int, int);
 extern int bio_uncopy_user(struct bio *);
 void zero_fill_bio(struct bio *bio);

@@ -42,7 +42,7 @@ static struct hw_interrupt_type ppc403_aic = {
 };
 
 int
-ppc403_pic_get_irq(struct pt_regs *regs)
+ppc403_pic_get_irq(void)
 {
 	int irq;
 	unsigned long bits;
@@ -121,5 +121,5 @@ ppc4xx_pic_init(void)
 	ppc_md.get_irq = ppc403_pic_get_irq;
 
 	for (i = 0; i < NR_IRQS; i++)
-		irq_desc[i].handler = &ppc403_aic;
+		irq_desc[i].chip = &ppc403_aic;
 }

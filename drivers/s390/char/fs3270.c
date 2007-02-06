@@ -8,7 +8,6 @@
  *	-- Copyright (C) 2003 IBM Deutschland Entwicklung GmbH, IBM Corporation
  */
 
-#include <linux/config.h>
 #include <linux/bootmem.h>
 #include <linux/console.h>
 #include <linux/init.h>
@@ -18,7 +17,6 @@
 
 #include <asm/ccwdev.h>
 #include <asm/cio.h>
-#include <asm/cpcmd.h>
 #include <asm/ebcdic.h>
 #include <asm/idals.h>
 
@@ -29,7 +27,7 @@ struct raw3270_fn fs3270_fn;
 
 struct fs3270 {
 	struct raw3270_view view;
-	pid_t fs_pid;			/* Pid of controlling program. */
+	struct pid *fs_pid;		/* Pid of controlling program. */
 	int read_command;		/* ccw command to use for reads. */
 	int write_command;		/* ccw command to use for writes. */
 	int attention;			/* Got attention. */
@@ -104,7 +102,7 @@ fs3270_restore_callback(struct raw3270_request *rq, void *data)
 	fp = (struct fs3270 *) rq->view;
 	if (rq->rc != 0 || rq->rescnt != 0) {
 		if (fp->fs_pid)
-			kill_proc(fp->fs_pid, SIGHUP, 1);
+			kill_pid(fp->fs_pid, SIGHUP, 1);
 	}
 	fp->rdbuf_size = 0;
 	raw3270_request_reset(rq);
@@ -175,7 +173,7 @@ fs3270_save_callback(struct raw3270_request *rq, void *data)
 	 */
 	if (rq->rc != 0 || rq->rescnt == 0) {
 		if (fp->fs_pid)
-			kill_proc(fp->fs_pid, SIGHUP, 1);
+			kill_pid(fp->fs_pid, SIGHUP, 1);
 		fp->rdbuf_size = 0;
 	} else
 		fp->rdbuf_size = fp->rdbuf->size - rq->rescnt;
@@ -237,7 +235,7 @@ fs3270_irq(struct fs3270 *fp, struct raw3270_request *rq, struct irb *irb)
  * Process reads from fullscreen 3270.
  */
 static ssize_t
-fs3270_read(struct file *filp, char *data, size_t count, loff_t *off)
+fs3270_read(struct file *filp, char __user *data, size_t count, loff_t *off)
 {
 	struct fs3270 *fp;
 	struct raw3270_request *rq;
@@ -282,7 +280,7 @@ fs3270_read(struct file *filp, char *data, size_t count, loff_t *off)
  * Process writes to fullscreen 3270.
  */
 static ssize_t
-fs3270_write(struct file *filp, const char *data, size_t count, loff_t *off)
+fs3270_write(struct file *filp, const char __user *data, size_t count, loff_t *off)
 {
 	struct fs3270 *fp;
 	struct raw3270_request *rq;
@@ -339,10 +337,10 @@ fs3270_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		fp->write_command = arg;
 		break;
 	case TUBGETI:
-		rc = put_user(fp->read_command, (char *) arg);
+		rc = put_user(fp->read_command, (char __user *) arg);
 		break;
 	case TUBGETO:
-		rc = put_user(fp->write_command,(char *) arg);
+		rc = put_user(fp->write_command,(char __user *) arg);
 		break;
 	case TUBGETMOD:
 		iocb.model = fp->view.model;
@@ -351,7 +349,7 @@ fs3270_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		iocb.pf_cnt = 24;
 		iocb.re_cnt = 20;
 		iocb.map = 0;
-		if (copy_to_user((char *) arg, &iocb,
+		if (copy_to_user((char __user *) arg, &iocb,
 				 sizeof(struct raw3270_iocb)))
 			rc = -EFAULT;
 		break;
@@ -421,16 +419,20 @@ fs3270_open(struct inode *inode, struct file *filp)
 	struct idal_buffer *ib;
 	int minor, rc;
 
-	if (imajor(filp->f_dentry->d_inode) != IBM_FS3270_MAJOR)
+	if (imajor(filp->f_path.dentry->d_inode) != IBM_FS3270_MAJOR)
 		return -ENODEV;
-	minor = iminor(filp->f_dentry->d_inode);
+	minor = iminor(filp->f_path.dentry->d_inode);
 	/* Check for minor 0 multiplexer. */
 	if (minor == 0) {
-		if (!current->signal->tty)
+		struct tty_struct *tty;
+		mutex_lock(&tty_mutex);
+		tty = get_current_tty();
+		if (!tty || tty->driver->major != IBM_TTY3270_MAJOR) {
+			mutex_unlock(&tty_mutex);
 			return -ENODEV;
-		if (current->signal->tty->driver->major != IBM_TTY3270_MAJOR)
-			return -ENODEV;
-		minor = current->signal->tty->index + RAW3270_FIRSTMINOR;
+		}
+		minor = tty->index + RAW3270_FIRSTMINOR;
+		mutex_unlock(&tty_mutex);
 	}
 	/* Check if some other program is already using fullscreen mode. */
 	fp = (struct fs3270 *) raw3270_find_view(&fs3270_fn, minor);
@@ -444,7 +446,7 @@ fs3270_open(struct inode *inode, struct file *filp)
 		return PTR_ERR(fp);
 
 	init_waitqueue_head(&fp->wait);
-	fp->fs_pid = current->pid;
+	fp->fs_pid = get_pid(task_pid(current));
 	rc = raw3270_add_view(&fp->view, &fs3270_fn, minor);
 	if (rc) {
 		fs3270_free_view(&fp->view);
@@ -480,9 +482,10 @@ fs3270_close(struct inode *inode, struct file *filp)
 	struct fs3270 *fp;
 
 	fp = filp->private_data;
-	filp->private_data = 0;
+	filp->private_data = NULL;
 	if (fp) {
-		fp->fs_pid = 0;
+		put_pid(fp->fs_pid);
+		fp->fs_pid = NULL;
 		raw3270_reset(&fp->view);
 		raw3270_put_view(&fp->view);
 		raw3270_del_view(&fp->view);

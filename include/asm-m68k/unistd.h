@@ -284,106 +284,40 @@
 #define __NR_add_key		279
 #define __NR_request_key	280
 #define __NR_keyctl		281
-
-#define NR_syscalls		282
-
-/* user-visible error numbers are in the range -1 - -124: see
-   <asm-m68k/errno.h> */
-
-#define __syscall_return(type, res) \
-do { \
-	if ((unsigned long)(res) >= (unsigned long)(-125)) { \
-	/* avoid using res which is declared to be in register d0; \
-	   errno might expand to a function call and clobber it.  */ \
-		int __err = -(res); \
-		errno = __err; \
-		res = -1; \
-	} \
-	return (type) (res); \
-} while (0)
-
-#define _syscall0(type,name) \
-type name(void) \
-{ \
-register long __res __asm__ ("%d0") = __NR_##name; \
-__asm__ __volatile__ ("trap  #0" \
-                      : "+d" (__res) ); \
-__syscall_return(type,__res); \
-}
-
-#define _syscall1(type,name,atype,a) \
-type name(atype a) \
-{ \
-register long __res __asm__ ("%d0") = __NR_##name; \
-register long __a __asm__ ("%d1") = (long)(a); \
-__asm__ __volatile__ ("trap  #0" \
-		      : "+d" (__res) \
-		      : "d" (__a)  ); \
-__syscall_return(type,__res); \
-}
-
-#define _syscall2(type,name,atype,a,btype,b) \
-type name(atype a,btype b) \
-{ \
-register long __res __asm__ ("%d0") = __NR_##name; \
-register long __a __asm__ ("%d1") = (long)(a); \
-register long __b __asm__ ("%d2") = (long)(b); \
-__asm__ __volatile__ ("trap  #0" \
-		      : "+d" (__res) \
-                      : "d" (__a), "d" (__b) \
-		     ); \
-__syscall_return(type,__res); \
-}
-
-#define _syscall3(type,name,atype,a,btype,b,ctype,c) \
-type name(atype a,btype b,ctype c) \
-{ \
-register long __res __asm__ ("%d0") = __NR_##name; \
-register long __a __asm__ ("%d1") = (long)(a); \
-register long __b __asm__ ("%d2") = (long)(b); \
-register long __c __asm__ ("%d3") = (long)(c); \
-__asm__ __volatile__ ("trap  #0" \
-		      : "+d" (__res) \
-                      : "d" (__a), "d" (__b), \
-			"d" (__c) \
-		     ); \
-__syscall_return(type,__res); \
-}
-
-#define _syscall4(type,name,atype,a,btype,b,ctype,c,dtype,d) \
-type name (atype a, btype b, ctype c, dtype d) \
-{ \
-register long __res __asm__ ("%d0") = __NR_##name; \
-register long __a __asm__ ("%d1") = (long)(a); \
-register long __b __asm__ ("%d2") = (long)(b); \
-register long __c __asm__ ("%d3") = (long)(c); \
-register long __d __asm__ ("%d4") = (long)(d); \
-__asm__ __volatile__ ("trap  #0" \
-                      : "+d" (__res) \
-                      : "d" (__a), "d" (__b), \
-			"d" (__c), "d" (__d)  \
-		     ); \
-__syscall_return(type,__res); \
-}
-
-#define _syscall5(type,name,atype,a,btype,b,ctype,c,dtype,d,etype,e) \
-type name (atype a,btype b,ctype c,dtype d,etype e) \
-{ \
-register long __res __asm__ ("%d0") = __NR_##name; \
-register long __a __asm__ ("%d1") = (long)(a); \
-register long __b __asm__ ("%d2") = (long)(b); \
-register long __c __asm__ ("%d3") = (long)(c); \
-register long __d __asm__ ("%d4") = (long)(d); \
-register long __e __asm__ ("%d5") = (long)(e); \
-__asm__ __volatile__ ("trap  #0" \
-		      : "+d" (__res) \
-		      : "d" (__a), "d" (__b), \
-			"d" (__c), "d" (__d), "d" (__e)  \
-                     ); \
-__syscall_return(type,__res); \
-}
+#define __NR_ioprio_set		282
+#define __NR_ioprio_get		283
+#define __NR_inotify_init	284
+#define __NR_inotify_add_watch	285
+#define __NR_inotify_rm_watch	286
+#define __NR_migrate_pages	287
+#define __NR_openat		288
+#define __NR_mkdirat		289
+#define __NR_mknodat		290
+#define __NR_fchownat		291
+#define __NR_futimesat		292
+#define __NR_fstatat64		293
+#define __NR_unlinkat		294
+#define __NR_renameat		295
+#define __NR_linkat		296
+#define __NR_symlinkat		297
+#define __NR_readlinkat		298
+#define __NR_fchmodat		299
+#define __NR_faccessat		300
+#define __NR_pselect6		301
+#define __NR_ppoll		302
+#define __NR_unshare		303
+#define __NR_set_robust_list	304
+#define __NR_get_robust_list	305
+#define __NR_splice		306
+#define __NR_sync_file_range	307
+#define __NR_tee		308
+#define __NR_vmsplice		309
+#define __NR_move_pages		310
 
 #ifdef __KERNEL__
+
+#define NR_syscalls		311
+
 #define __ARCH_WANT_IPC_PARSE_VERSION
 #define __ARCH_WANT_OLD_READDIR
 #define __ARCH_WANT_OLD_STAT
@@ -406,52 +340,6 @@ __syscall_return(type,__res); \
 #define __ARCH_WANT_SYS_SIGPENDING
 #define __ARCH_WANT_SYS_SIGPROCMASK
 #define __ARCH_WANT_SYS_RT_SIGACTION
-#endif
-
-#ifdef __KERNEL_SYSCALLS__
-
-#include <linux/compiler.h>
-#include <linux/interrupt.h>
-#include <linux/types.h>
-
-/*
- * we need this inline - forking from kernel space will result
- * in NO COPY ON WRITE (!!!), until an execve is executed. This
- * is no problem, but for the stack. This is handled by not letting
- * main() use the stack at all after fork(). Thus, no function
- * calls - which means inline code for fork too, as otherwise we
- * would use the stack upon exit from 'fork()'.
- *
- * Actually only pause and fork are needed inline, so that there
- * won't be any messing with the stack from main(), but we define
- * some others too.
- */
-#define __NR__exit __NR_exit
-static inline _syscall0(pid_t,setsid)
-static inline _syscall3(int,write,int,fd,const char *,buf,off_t,count)
-static inline _syscall3(int,read,int,fd,char *,buf,off_t,count)
-static inline _syscall3(off_t,lseek,int,fd,off_t,offset,int,count)
-static inline _syscall1(int,dup,int,fd)
-static inline _syscall3(int,execve,const char *,file,char **,argv,char **,envp)
-static inline _syscall3(int,open,const char *,file,int,flag,int,mode)
-static inline _syscall1(int,close,int,fd)
-static inline _syscall1(int,_exit,int,exitcode)
-static inline _syscall3(pid_t,waitpid,pid_t,pid,int *,wait_stat,int,options)
-
-asmlinkage long sys_mmap2(
-			unsigned long addr, unsigned long len,
-			unsigned long prot, unsigned long flags,
-			unsigned long fd, unsigned long pgoff);
-asmlinkage int sys_execve(char *name, char **argv, char **envp);
-asmlinkage int sys_pipe(unsigned long *fildes);
-struct pt_regs;
-struct sigaction;
-asmlinkage long sys_rt_sigaction(int sig,
-				const struct sigaction __user *act,
-				struct sigaction __user *oact,
-				size_t sigsetsize);
-
-#endif
 
 /*
  * "Conditional" syscalls
@@ -461,4 +349,5 @@ asmlinkage long sys_rt_sigaction(int sig,
  */
 #define cond_syscall(x) asm(".weak\t" #x "\n\t.set\t" #x ",sys_ni_syscall")
 
+#endif /* __KERNEL__ */
 #endif /* _ASM_M68K_UNISTD_H_ */

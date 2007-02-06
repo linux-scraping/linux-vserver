@@ -4,7 +4,7 @@
  * 		This program is free software; you can redistribute it and/or
  * 		modify it under the terms of the GNU General Public License
  * 		as published by the Free Software Foundation; either version
- * 		2 of the License, or (at your option) any later version.
+ * 		2 of the License.
  *
  *  		Many of the algorithms and ideas for this came from
  *		NIST Net which is not copyrighted. 
@@ -13,7 +13,6 @@
  *		Catalin(ux aka Dino) BOIE <catab at umbrella dot ro>
  */
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/bitops.h>
 #include <linux/types.h>
@@ -149,7 +148,8 @@ static long tabledist(unsigned long mu, long sigma,
 static int netem_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 {
 	struct netem_sched_data *q = qdisc_priv(sch);
-	struct netem_skb_cb *cb = (struct netem_skb_cb *)skb->cb;
+	/* We don't fill cb now as skb_unshare() may invalidate it */
+	struct netem_skb_cb *cb;
 	struct sk_buff *skb2;
 	int ret;
 	int count = 1;
@@ -169,6 +169,8 @@ static int netem_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 		kfree_skb(skb);
 		return NET_XMIT_BYPASS;
 	}
+
+	skb_orphan(skb);
 
 	/*
 	 * If we need to duplicate packet, then re-insert at top of the
@@ -192,8 +194,8 @@ static int netem_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 	 */
 	if (q->corrupt && q->corrupt >= get_crandom(&q->corrupt_cor)) {
 		if (!(skb = skb_unshare(skb, GFP_ATOMIC))
-		    || (skb->ip_summed == CHECKSUM_HW
-			&& skb_checksum_help(skb, 0))) {
+		    || (skb->ip_summed == CHECKSUM_PARTIAL
+			&& skb_checksum_help(skb))) {
 			sch->qstats.drops++;
 			return NET_XMIT_DROP;
 		}
@@ -201,6 +203,7 @@ static int netem_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 		skb->data[net_random() % skb_headlen(skb)] ^= 1<<(net_random() % 8);
 	}
 
+	cb = (struct netem_skb_cb *)skb->cb;
 	if (q->gap == 0 		/* not doing reordering */
 	    || q->counter < q->gap 	/* inside last reordering gap */
 	    || q->reorder < get_crandom(&q->reorder_cor)) {
@@ -284,13 +287,10 @@ static struct sk_buff *netem_dequeue(struct Qdisc *sch)
 			psched_tdiff_t delay = PSCHED_TDIFF(cb->time_to_send, now);
 
 			if (q->qdisc->ops->requeue(skb, q->qdisc) != NET_XMIT_SUCCESS) {
+				qdisc_tree_decrease_qlen(q->qdisc, 1);
 				sch->qstats.drops++;
-
-				/* After this qlen is confused */
 				printk(KERN_ERR "netem: queue discpline %s could not requeue\n",
 				       q->qdisc->ops->id);
-
-				sch->q.qlen--;
 			}
 
 			mod_timer(&q->timer, jiffies + PSCHED_US2JIFFIE(delay));
@@ -571,7 +571,8 @@ static int netem_init(struct Qdisc *sch, struct rtattr *opt)
 	q->timer.function = netem_watchdog;
 	q->timer.data = (unsigned long) sch;
 
-	q->qdisc = qdisc_create_dflt(sch->dev, &tfifo_qdisc_ops);
+	q->qdisc = qdisc_create_dflt(sch->dev, &tfifo_qdisc_ops,
+				     TC_H_MAKE(sch->handle, 1));
 	if (!q->qdisc) {
 		pr_debug("netem: qdisc create failed\n");
 		return -ENOMEM;
@@ -658,8 +659,8 @@ static int netem_graft(struct Qdisc *sch, unsigned long arg, struct Qdisc *new,
 
 	sch_tree_lock(sch);
 	*old = xchg(&q->qdisc, new);
+	qdisc_tree_decrease_qlen(*old, (*old)->q.qlen);
 	qdisc_reset(*old);
-	sch->q.qlen = 0;
 	sch_tree_unlock(sch);
 
 	return 0;

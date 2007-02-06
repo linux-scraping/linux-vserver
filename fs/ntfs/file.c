@@ -231,8 +231,7 @@ do_non_resident_extend:
 		 * Read the page.  If the page is not present, this will zero
 		 * the uninitialized regions for us.
 		 */
-		page = read_cache_page(mapping, index,
-				(filler_t*)mapping->a_ops->readpage, NULL);
+		page = read_mapping_page(mapping, index, NULL);
 		if (IS_ERR(page)) {
 			err = PTR_ERR(page);
 			goto init_err_out;
@@ -510,7 +509,7 @@ static int ntfs_prepare_pages_for_non_resident_write(struct page **pages,
 	u32 attr_rec_len = 0;
 	unsigned blocksize, u;
 	int err, mp_size;
-	BOOL rl_write_locked, was_hole, is_retry;
+	bool rl_write_locked, was_hole, is_retry;
 	unsigned char blocksize_bits;
 	struct {
 		u8 runlist_merged:1;
@@ -544,13 +543,13 @@ static int ntfs_prepare_pages_for_non_resident_write(struct page **pages,
 				return -ENOMEM;
 		}
 	} while (++u < nr_pages);
-	rl_write_locked = FALSE;
+	rl_write_locked = false;
 	rl = NULL;
 	err = 0;
 	vcn = lcn = -1;
 	vcn_len = 0;
 	lcn_block = -1;
-	was_hole = FALSE;
+	was_hole = false;
 	cpos = pos >> vol->cluster_size_bits;
 	end = pos + bytes;
 	cend = (end + vol->cluster_size - 1) >> vol->cluster_size_bits;
@@ -761,7 +760,7 @@ map_buffer_cached:
 			}
 			continue;
 		}
-		is_retry = FALSE;
+		is_retry = false;
 		if (!rl) {
 			down_read(&ni->runlist.lock);
 retry_remap:
@@ -777,7 +776,7 @@ retry_remap:
 				 * Successful remap, setup the map cache and
 				 * use that to deal with the buffer.
 				 */
-				was_hole = FALSE;
+				was_hole = false;
 				vcn = bh_cpos;
 				vcn_len = rl[1].vcn - vcn;
 				lcn_block = lcn << (vol->cluster_size_bits -
@@ -793,7 +792,7 @@ retry_remap:
 				if (likely(vcn + vcn_len >= cend)) {
 					if (rl_write_locked) {
 						up_write(&ni->runlist.lock);
-						rl_write_locked = FALSE;
+						rl_write_locked = false;
 					} else
 						up_read(&ni->runlist.lock);
 					rl = NULL;
@@ -819,13 +818,13 @@ retry_remap:
 					 */
 					up_read(&ni->runlist.lock);
 					down_write(&ni->runlist.lock);
-					rl_write_locked = TRUE;
+					rl_write_locked = true;
 					goto retry_remap;
 				}
 				err = ntfs_map_runlist_nolock(ni, bh_cpos,
 						NULL);
 				if (likely(!err)) {
-					is_retry = TRUE;
+					is_retry = true;
 					goto retry_remap;
 				}
 				/*
@@ -904,7 +903,7 @@ rl_not_mapped_enoent:
 		if (!rl_write_locked) {
 			up_read(&ni->runlist.lock);
 			down_write(&ni->runlist.lock);
-			rl_write_locked = TRUE;
+			rl_write_locked = true;
 			goto retry_remap;
 		}
 		/* Find the previous last allocated cluster. */
@@ -918,7 +917,7 @@ rl_not_mapped_enoent:
 			}
 		}
 		rl2 = ntfs_cluster_alloc(vol, bh_cpos, 1, lcn, DATA_ZONE,
-				FALSE);
+				false);
 		if (IS_ERR(rl2)) {
 			err = PTR_ERR(rl2);
 			ntfs_debug("Failed to allocate cluster, error code %i.",
@@ -1094,7 +1093,7 @@ rl_not_mapped_enoent:
 		status.mft_attr_mapped = 0;
 		status.mp_rebuilt = 0;
 		/* Setup the map cache and use that to deal with the buffer. */
-		was_hole = TRUE;
+		was_hole = true;
 		vcn = bh_cpos;
 		vcn_len = 1;
 		lcn_block = lcn << (vol->cluster_size_bits - blocksize_bits);
@@ -1106,7 +1105,7 @@ rl_not_mapped_enoent:
 		 */
 		if (likely(vcn + vcn_len >= cend)) {
 			up_write(&ni->runlist.lock);
-			rl_write_locked = FALSE;
+			rl_write_locked = false;
 			rl = NULL;
 		}
 		goto map_buffer_cached;
@@ -1118,7 +1117,7 @@ rl_not_mapped_enoent:
 	if (likely(!err)) {
 		if (unlikely(rl_write_locked)) {
 			up_write(&ni->runlist.lock);
-			rl_write_locked = FALSE;
+			rl_write_locked = false;
 		} else if (unlikely(rl))
 			up_read(&ni->runlist.lock);
 		rl = NULL;
@@ -1359,7 +1358,7 @@ err_out:
 	goto out;
 }
 
-static size_t __ntfs_copy_from_user_iovec(char *vaddr,
+static size_t __ntfs_copy_from_user_iovec_inatomic(char *vaddr,
 		const struct iovec *iov, size_t iov_ofs, size_t bytes)
 {
 	size_t total = 0;
@@ -1377,10 +1376,6 @@ static size_t __ntfs_copy_from_user_iovec(char *vaddr,
 		bytes -= len;
 		vaddr += len;
 		if (unlikely(left)) {
-			/*
-			 * Zero the rest of the target like __copy_from_user().
-			 */
-			memset(vaddr, 0, bytes);
 			total -= left;
 			break;
 		}
@@ -1421,11 +1416,13 @@ static inline void ntfs_set_next_iovec(const struct iovec **iovp,
  * pages (out to offset + bytes), to emulate ntfs_copy_from_user()'s
  * single-segment behaviour.
  *
- * We call the same helper (__ntfs_copy_from_user_iovec()) both when atomic and
- * when not atomic.  This is ok because __ntfs_copy_from_user_iovec() calls
- * __copy_from_user_inatomic() and it is ok to call this when non-atomic.  In
- * fact, the only difference between __copy_from_user_inatomic() and
- * __copy_from_user() is that the latter calls might_sleep().  And on many
+ * We call the same helper (__ntfs_copy_from_user_iovec_inatomic()) both
+ * when atomic and when not atomic.  This is ok because
+ * __ntfs_copy_from_user_iovec_inatomic() calls __copy_from_user_inatomic()
+ * and it is ok to call this when non-atomic.
+ * Infact, the only difference between __copy_from_user_inatomic() and
+ * __copy_from_user() is that the latter calls might_sleep() and the former
+ * should not zero the tail of the buffer on error.  And on many
  * architectures __copy_from_user_inatomic() is just defined to
  * __copy_from_user() so it makes no difference at all on those architectures.
  */
@@ -1442,14 +1439,18 @@ static inline size_t ntfs_copy_from_user_iovec(struct page **pages,
 		if (len > bytes)
 			len = bytes;
 		kaddr = kmap_atomic(*pages, KM_USER0);
-		copied = __ntfs_copy_from_user_iovec(kaddr + ofs,
+		copied = __ntfs_copy_from_user_iovec_inatomic(kaddr + ofs,
 				*iov, *iov_ofs, len);
 		kunmap_atomic(kaddr, KM_USER0);
 		if (unlikely(copied != len)) {
 			/* Do it the slow way. */
 			kaddr = kmap(*pages);
-			copied = __ntfs_copy_from_user_iovec(kaddr + ofs,
+			copied = __ntfs_copy_from_user_iovec_inatomic(kaddr + ofs,
 					*iov, *iov_ofs, len);
+			/*
+			 * Zero the rest of the target like __copy_from_user().
+			 */
+			memset(kaddr + ofs + copied, 0, len - copied);
 			kunmap(*pages);
 			if (unlikely(copied != len))
 				goto err_out;
@@ -1527,19 +1528,19 @@ static inline int ntfs_commit_pages_after_non_resident_write(
 	do {
 		s64 bh_pos;
 		struct page *page;
-		BOOL partial;
+		bool partial;
 
 		page = pages[u];
 		bh_pos = (s64)page->index << PAGE_CACHE_SHIFT;
 		bh = head = page_buffers(page);
-		partial = FALSE;
+		partial = false;
 		do {
 			s64 bh_end;
 
 			bh_end = bh_pos + blocksize;
 			if (bh_end <= pos || bh_pos >= end) {
 				if (!buffer_uptodate(bh))
-					partial = TRUE;
+					partial = true;
 			} else {
 				set_buffer_uptodate(bh);
 				mark_buffer_dirty(bh);
@@ -1996,7 +1997,7 @@ static ssize_t ntfs_file_buffered_write(struct kiocb *iocb,
 				 */
 				down_read(&ni->runlist.lock);
 				lcn = ntfs_attr_vcn_to_lcn_nolock(ni, pos >>
-						vol->cluster_size_bits, FALSE);
+						vol->cluster_size_bits, false);
 				up_read(&ni->runlist.lock);
 				if (unlikely(lcn < LCN_HOLE)) {
 					status = -EIO;
@@ -2161,7 +2162,7 @@ static ssize_t ntfs_file_aio_write_nolock(struct kiocb *iocb,
 		goto out;
 	if (!count)
 		goto out;
-	err = remove_suid(file->f_dentry);
+	err = remove_suid(file->f_path.dentry);
 	if (err)
 		goto out;
 	file_update_time(file);
@@ -2175,20 +2176,18 @@ out:
 /**
  * ntfs_file_aio_write -
  */
-static ssize_t ntfs_file_aio_write(struct kiocb *iocb, const char __user *buf,
-		size_t count, loff_t pos)
+static ssize_t ntfs_file_aio_write(struct kiocb *iocb, const struct iovec *iov,
+		unsigned long nr_segs, loff_t pos)
 {
 	struct file *file = iocb->ki_filp;
 	struct address_space *mapping = file->f_mapping;
 	struct inode *inode = mapping->host;
 	ssize_t ret;
-	struct iovec local_iov = { .iov_base = (void __user *)buf,
-				   .iov_len = count };
 
 	BUG_ON(iocb->ki_pos != pos);
 
 	mutex_lock(&inode->i_mutex);
-	ret = ntfs_file_aio_write_nolock(iocb, &local_iov, 1, &iocb->ki_pos);
+	ret = ntfs_file_aio_write_nolock(iocb, iov, nr_segs, &iocb->ki_pos);
 	mutex_unlock(&inode->i_mutex);
 	if (ret > 0 && ((file->f_flags & O_SYNC) || IS_SYNC(inode))) {
 		int err = sync_page_range(inode, mapping, pos, ret);
@@ -2297,13 +2296,11 @@ static int ntfs_file_fsync(struct file *filp, struct dentry *dentry,
 
 const struct file_operations ntfs_file_ops = {
 	.llseek		= generic_file_llseek,	 /* Seek inside file. */
-	.read		= generic_file_read,	 /* Read from file. */
+	.read		= do_sync_read,		 /* Read from file. */
 	.aio_read	= generic_file_aio_read, /* Async read from file. */
-	.readv		= generic_file_readv,	 /* Read from file. */
 #ifdef NTFS_RW
 	.write		= ntfs_file_write,	 /* Write to file. */
 	.aio_write	= ntfs_file_aio_write,	 /* Async write to file. */
-	.writev		= ntfs_file_writev,	 /* Write to file. */
 	/*.release	= ,*/			 /* Last file is closed.  See
 						    fs/ext2/file.c::
 						    ext2_release_file() for

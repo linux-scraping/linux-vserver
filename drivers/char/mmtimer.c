@@ -25,7 +25,6 @@
 #include <linux/init.h>
 #include <linux/errno.h>
 #include <linux/mm.h>
-#include <linux/devfs_fs_kernel.h>
 #include <linux/mmtimer.h>
 #include <linux/miscdevice.h>
 #include <linux/posix-timers.h>
@@ -64,7 +63,7 @@ static int mmtimer_mmap(struct file *file, struct vm_area_struct *vma);
  */
 static unsigned long mmtimer_femtoperiod = 0;
 
-static struct file_operations mmtimer_fops = {
+static const struct file_operations mmtimer_fops = {
 	.owner =	THIS_MODULE,
 	.mmap =		mmtimer_mmap,
 	.ioctl =	mmtimer_ioctl,
@@ -329,7 +328,6 @@ static int mmtimer_mmap(struct file *file, struct vm_area_struct *vma)
 	if (PAGE_SIZE > (1 << 16))
 		return -ENOSYS;
 
-	vma->vm_flags |= (VM_IO | VM_SHM | VM_LOCKED );
 	vma->vm_page_prot = pgprot_noncached(vma->vm_page_prot);
 
 	mmtimer_addr = __pa(RTC_COUNTER_ADDR);
@@ -424,7 +422,6 @@ static int inline reschedule_periodic_timer(mmtimer_t *x)
  * mmtimer_interrupt - timer interrupt handler
  * @irq: irq received
  * @dev_id: device the irq came from
- * @regs: register state upon receipt of the interrupt
  *
  * Called when one of the comarators matches the counter, This
  * routine will send signals to processes that have requested
@@ -435,7 +432,7 @@ static int inline reschedule_periodic_timer(mmtimer_t *x)
  * registers.
  */
 static irqreturn_t
-mmtimer_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+mmtimer_interrupt(int irq, void *dev_id)
 {
 	int i;
 	unsigned long expires = 0;
@@ -683,23 +680,22 @@ static int __init mmtimer_init(void)
 	if (sn_rtc_cycles_per_second < 100000) {
 		printk(KERN_ERR "%s: unable to determine clock frequency\n",
 		       MMTIMER_NAME);
-		return -1;
+		goto out1;
 	}
 
 	mmtimer_femtoperiod = ((unsigned long)1E15 + sn_rtc_cycles_per_second /
 			       2) / sn_rtc_cycles_per_second;
 
-	if (request_irq(SGI_MMTIMER_VECTOR, mmtimer_interrupt, SA_PERCPU_IRQ, MMTIMER_NAME, NULL)) {
+	if (request_irq(SGI_MMTIMER_VECTOR, mmtimer_interrupt, IRQF_PERCPU, MMTIMER_NAME, NULL)) {
 		printk(KERN_WARNING "%s: unable to allocate interrupt.",
 			MMTIMER_NAME);
-		return -1;
+		goto out1;
 	}
 
-	strcpy(mmtimer_miscdev.devfs_name, MMTIMER_NAME);
 	if (misc_register(&mmtimer_miscdev)) {
 		printk(KERN_ERR "%s: failed to register device\n",
 		       MMTIMER_NAME);
-		return -1;
+		goto out2;
 	}
 
 	/* Get max numbered node, calculate slots needed */
@@ -713,8 +709,10 @@ static int __init mmtimer_init(void)
 	if (timers == NULL) {
 		printk(KERN_ERR "%s: failed to allocate memory for device\n",
 				MMTIMER_NAME);
-		return -1;
+		goto out3;
 	}
+
+	memset(timers,0,(sizeof(mmtimer_t *)*maxn));
 
 	/* Allocate mmtimer_t's for each online node */
 	for_each_online_node(node) {
@@ -722,7 +720,7 @@ static int __init mmtimer_init(void)
 		if (timers[node] == NULL) {
 			printk(KERN_ERR "%s: failed to allocate memory for device\n",
 				MMTIMER_NAME);
-			return -1;
+			goto out4;
 		}
 		for (i=0; i< NUM_COMPARATORS; i++) {
 			mmtimer_t * base = timers[node] + i;
@@ -743,6 +741,17 @@ static int __init mmtimer_init(void)
 	       sn_rtc_cycles_per_second/(unsigned long)1E6);
 
 	return 0;
+
+out4:
+	for_each_online_node(node) {
+		kfree(timers[node]);
+	}
+out3:
+	misc_deregister(&mmtimer_miscdev);
+out2:
+	free_irq(SGI_MMTIMER_VECTOR, NULL);
+out1:
+	return -1;
 }
 
 module_init(mmtimer_init);

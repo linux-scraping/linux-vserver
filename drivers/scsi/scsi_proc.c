@@ -178,9 +178,7 @@ static int proc_print_scsidevice(struct device *dev, void *data)
 
 	seq_printf(s, "\n");
 
-	seq_printf(s, "  Type:   %s ",
-		     sdev->type < MAX_SCSI_DEVICE_CODE ?
-	       scsi_device_types[(int) sdev->type] : "Unknown          ");
+	seq_printf(s, "  Type:   %s ", scsi_device_type(sdev->type));
 	seq_printf(s, "               ANSI"
 		     " SCSI revision: %02x", (sdev->scsi_level - 1) ?
 		     sdev->scsi_level - 1 : 1);
@@ -266,8 +264,6 @@ static ssize_t proc_scsi_write(struct file *file, const char __user *buf,
 		lun = simple_strtoul(p + 1, &p, 0);
 
 		err = scsi_add_single_device(host, channel, id, lun);
-		if (err >= 0)
-			err = length;
 
 	/*
 	 * Usage: echo "scsi remove-single-device 0 1 2 3" >/proc/scsi/scsi
@@ -283,6 +279,13 @@ static ssize_t proc_scsi_write(struct file *file, const char __user *buf,
 
 		err = scsi_remove_single_device(host, channel, id, lun);
 	}
+
+	/*
+	 * convert success returns so that we return the 
+	 * number of bytes consumed.
+	 */
+	if (!err)
+		err = length;
 
  out:
 	free_page((unsigned long)buffer);

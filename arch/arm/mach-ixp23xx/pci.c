@@ -16,7 +16,6 @@
  * option) any later version.
  */
 
-#include <linux/config.h>
 #include <linux/sched.h>
 #include <linux/kernel.h>
 #include <linux/pci.h>
@@ -37,7 +36,7 @@
 
 extern int (*external_fault) (unsigned long, struct pt_regs *);
 
-static int pci_master_aborts = 0;
+static volatile int pci_master_aborts = 0;
 
 #ifdef DEBUG
 #define DBG(x...)	printk(x)

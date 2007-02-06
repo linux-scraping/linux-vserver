@@ -16,14 +16,14 @@
 #include <linux/string.h>
 #include <linux/crypto.h>
 #include <linux/crc32c.h>
-#include <linux/types.h>
-#include <asm/byteorder.h>
+#include <linux/kernel.h>
 
 #define CHKSUM_BLOCK_SIZE	32
 #define CHKSUM_DIGEST_SIZE	4
 
 struct chksum_ctx {
 	u32 crc;
+	u32 key;
 };
 
 /*
@@ -31,11 +31,11 @@ struct chksum_ctx {
  * crc using table.
  */
 
-static void chksum_init(void *ctx)
+static void chksum_init(struct crypto_tfm *tfm)
 {
-	struct chksum_ctx *mctx = ctx;
+	struct chksum_ctx *mctx = crypto_tfm_ctx(tfm);
 
-	mctx->crc = ~(u32)0;			/* common usage */
+	mctx->crc = mctx->key;
 }
 
 /*
@@ -43,36 +43,40 @@ static void chksum_init(void *ctx)
  * If your algorithm starts with ~0, then XOR with ~0 before you set
  * the seed.
  */
-static int chksum_setkey(void *ctx, const u8 *key, unsigned int keylen,
-	                  u32 *flags)
+static int chksum_setkey(struct crypto_tfm *tfm, const u8 *key,
+			 unsigned int keylen)
 {
-	struct chksum_ctx *mctx = ctx;
+	struct chksum_ctx *mctx = crypto_tfm_ctx(tfm);
 
 	if (keylen != sizeof(mctx->crc)) {
-		if (flags)
-			*flags = CRYPTO_TFM_RES_BAD_KEY_LEN;
+		tfm->crt_flags |= CRYPTO_TFM_RES_BAD_KEY_LEN;
 		return -EINVAL;
 	}
-	mctx->crc = __cpu_to_le32(*(u32 *)key);
+	mctx->key = le32_to_cpu(*(__le32 *)key);
 	return 0;
 }
 
-static void chksum_update(void *ctx, const u8 *data, unsigned int length)
+static void chksum_update(struct crypto_tfm *tfm, const u8 *data,
+			  unsigned int length)
 {
-	struct chksum_ctx *mctx = ctx;
-	u32 mcrc;
+	struct chksum_ctx *mctx = crypto_tfm_ctx(tfm);
 
-	mcrc = crc32c(mctx->crc, data, (size_t)length);
-
-	mctx->crc = mcrc;
+	mctx->crc = crc32c(mctx->crc, data, length);
 }
 
-static void chksum_final(void *ctx, u8 *out)
+static void chksum_final(struct crypto_tfm *tfm, u8 *out)
 {
-	struct chksum_ctx *mctx = ctx;
-	u32 mcrc = (mctx->crc ^ ~(u32)0);
+	struct chksum_ctx *mctx = crypto_tfm_ctx(tfm);
 	
-	*(u32 *)out = __le32_to_cpu(mcrc);
+	*(__le32 *)out = ~cpu_to_le32(mctx->crc);
+}
+
+static int crc32c_cra_init(struct crypto_tfm *tfm)
+{
+	struct chksum_ctx *mctx = crypto_tfm_ctx(tfm);
+
+	mctx->key = ~0;
+	return 0;
 }
 
 static struct crypto_alg alg = {
@@ -82,6 +86,7 @@ static struct crypto_alg alg = {
 	.cra_ctxsize	=	sizeof(struct chksum_ctx),
 	.cra_module	=	THIS_MODULE,
 	.cra_list	=	LIST_HEAD_INIT(alg.cra_list),
+	.cra_init	=	crc32c_cra_init,
 	.cra_u		=	{
 		.digest = {
 			 .dia_digestsize=	CHKSUM_DIGEST_SIZE,

@@ -11,7 +11,6 @@
  *  Copyright (C) 1998-2000 Anton Blanchard (anton@samba.org)
  */
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/sched.h>
 #include <linux/ptrace.h>
@@ -47,6 +46,7 @@
 #include <asm/pgtable.h>
 #include <asm/pcic.h>
 #include <asm/cacheflush.h>
+#include <asm/irq_regs.h>
 
 #ifdef CONFIG_SMP
 #define SMP_NOP2 "nop; nop;\n\t"
@@ -134,8 +134,8 @@ static void irq_panic(void)
     prom_halt();
 }
 
-void (*sparc_init_timers)(irqreturn_t (*)(int, void *,struct pt_regs *)) =
-    (void (*)(irqreturn_t (*)(int, void *,struct pt_regs *))) irq_panic;
+void (*sparc_init_timers)(irq_handler_t ) =
+    (void (*)(irq_handler_t )) irq_panic;
 
 /*
  * Dave Redman (djhr@tadpole.co.uk)
@@ -192,11 +192,11 @@ int show_interrupts(struct seq_file *p, void *v)
 		}
 #endif
 		seq_printf(p, " %c %s",
-			(action->flags & SA_INTERRUPT) ? '+' : ' ',
+			(action->flags & IRQF_DISABLED) ? '+' : ' ',
 			action->name);
 		for (action=action->next; action; action = action->next) {
 			seq_printf(p, ",%s %s",
-				(action->flags & SA_INTERRUPT) ? " +" : "",
+				(action->flags & IRQF_DISABLED) ? " +" : "",
 				action->name);
 		}
 		seq_putc(p, '\n');
@@ -244,7 +244,7 @@ void free_irq(unsigned int irq, void *dev_id)
 			printk("Trying to free free shared IRQ%d\n",irq);
 			goto out_unlock;
 		}
-	} else if (action->flags & SA_SHIRQ) {
+	} else if (action->flags & IRQF_SHARED) {
 		printk("Trying to free shared IRQ%d with NULL device ID\n", irq);
 		goto out_unlock;
 	}
@@ -320,17 +320,19 @@ void unexpected_irq(int irq, void *dev_id, struct pt_regs * regs)
 
 void handler_irq(int irq, struct pt_regs * regs)
 {
+	struct pt_regs *old_regs;
 	struct irqaction * action;
 	int cpu = smp_processor_id();
 #ifdef CONFIG_SMP
 	extern void smp4m_irq_rotate(int cpu);
 #endif
 
+	old_regs = set_irq_regs(regs);
 	irq_enter();
 	disable_pil_irq(irq);
 #ifdef CONFIG_SMP
 	/* Only rotate on lower priority IRQ's (scsi, ethernet, etc.). */
-	if(irq < 10)
+	if((sparc_cpu_model==sun4m) && (irq < 10))
 		smp4m_irq_rotate(cpu);
 #endif
 	action = sparc_irq[irq].action;
@@ -339,27 +341,31 @@ void handler_irq(int irq, struct pt_regs * regs)
 	do {
 		if (!action || !action->handler)
 			unexpected_irq(irq, NULL, regs);
-		action->handler(irq, action->dev_id, regs);
+		action->handler(irq, action->dev_id);
 		action = action->next;
 	} while (action);
 	sparc_irq[irq].flags &= ~SPARC_IRQ_INPROGRESS;
 	enable_pil_irq(irq);
 	irq_exit();
+	set_irq_regs(old_regs);
 }
 
 #ifdef CONFIG_BLK_DEV_FD
-extern void floppy_interrupt(int irq, void *dev_id, struct pt_regs *regs);
+extern void floppy_interrupt(int irq, void *dev_id);
 
 void sparc_floppy_irq(int irq, void *dev_id, struct pt_regs *regs)
 {
+	struct pt_regs *old_regs;
 	int cpu = smp_processor_id();
 
+	old_regs = set_irq_regs(regs);
 	disable_pil_irq(irq);
 	irq_enter();
 	kstat_cpu(cpu).irqs[irq]++;
-	floppy_interrupt(irq, dev_id, regs);
+	floppy_interrupt(irq, dev_id);
 	irq_exit();
 	enable_pil_irq(irq);
+	set_irq_regs(old_regs);
 	// XXX Eek, it's totally changed with preempt_count() and such
 	// if (softirq_pending(cpu))
 	//	do_softirq();
@@ -370,7 +376,7 @@ void sparc_floppy_irq(int irq, void *dev_id, struct pt_regs *regs)
  * thus no sharing possible.
  */
 int request_fast_irq(unsigned int irq,
-		     irqreturn_t (*handler)(int, void *, struct pt_regs *),
+		     irq_handler_t handler,
 		     unsigned long irqflags, const char *devname)
 {
 	struct irqaction *action;
@@ -396,9 +402,9 @@ int request_fast_irq(unsigned int irq,
 
 	action = sparc_irq[cpu_irq].action;
 	if(action) {
-		if(action->flags & SA_SHIRQ)
+		if(action->flags & IRQF_SHARED)
 			panic("Trying to register fast irq when already shared.\n");
-		if(irqflags & SA_SHIRQ)
+		if(irqflags & IRQF_SHARED)
 			panic("Trying to register fast irq as shared.\n");
 
 		/* Anyway, someone already owns it so cannot be made fast. */
@@ -419,7 +425,7 @@ int request_fast_irq(unsigned int irq,
 	}
 	
 	if (action == NULL)
-	    action = (struct irqaction *)kmalloc(sizeof(struct irqaction),
+	    action = kmalloc(sizeof(struct irqaction),
 						 GFP_ATOMIC);
 	
 	if (!action) { 
@@ -469,7 +475,7 @@ out:
 }
 
 int request_irq(unsigned int irq,
-		irqreturn_t (*handler)(int, void *, struct pt_regs *),
+		irq_handler_t handler,
 		unsigned long irqflags, const char * devname, void *dev_id)
 {
 	struct irqaction * action, **actionp;
@@ -479,7 +485,7 @@ int request_irq(unsigned int irq,
 	
 	if (sparc_cpu_model == sun4d) {
 		extern int sun4d_request_irq(unsigned int, 
-					     irqreturn_t (*)(int, void *, struct pt_regs *),
+					     irq_handler_t ,
 					     unsigned long, const char *, void *);
 		return sun4d_request_irq(irq, handler, irqflags, devname, dev_id);
 	}
@@ -498,11 +504,11 @@ int request_irq(unsigned int irq,
 	actionp = &sparc_irq[cpu_irq].action;
 	action = *actionp;
 	if (action) {
-		if (!(action->flags & SA_SHIRQ) || !(irqflags & SA_SHIRQ)) {
+		if (!(action->flags & IRQF_SHARED) || !(irqflags & IRQF_SHARED)) {
 			ret = -EBUSY;
 			goto out_unlock;
 		}
-		if ((action->flags & SA_INTERRUPT) != (irqflags & SA_INTERRUPT)) {
+		if ((action->flags & IRQF_DISABLED) != (irqflags & IRQF_DISABLED)) {
 			printk("Attempt to mix fast and slow interrupts on IRQ%d denied\n", irq);
 			ret = -EBUSY;
 			goto out_unlock;
@@ -522,7 +528,7 @@ int request_irq(unsigned int irq,
 	}
 	
 	if (action == NULL)
-		action = (struct irqaction *)kmalloc(sizeof(struct irqaction),
+		action = kmalloc(sizeof(struct irqaction),
 						     GFP_ATOMIC);
 	
 	if (!action) { 

@@ -28,7 +28,6 @@
  * Thomas Lange, thomas@corelatus.com
  */
 
-#include <linux/config.h>
 #include <linux/kernel.h>
 #include <linux/sched.h>
 #include <linux/string.h>
@@ -174,6 +173,7 @@ struct fec_enet_private {
 	uint	phy_speed;
 	phy_info_t	*phy;
 	struct work_struct phy_task;
+	struct net_device *dev;
 
 	uint	sequence_done;
 
@@ -199,8 +199,7 @@ static int fec_enet_start_xmit(struct sk_buff *skb, struct net_device *dev);
 #ifdef	CONFIG_USE_MDIO
 static void fec_enet_mii(struct net_device *dev);
 #endif	/* CONFIG_USE_MDIO */
-static irqreturn_t fec_enet_interrupt(int irq, void * dev_id,
-		       					struct pt_regs * regs);
+static irqreturn_t fec_enet_interrupt(int irq, void * dev_id);
 #ifdef CONFIG_FEC_PACKETHOOK
 static void  fec_enet_tx(struct net_device *dev, __u32 regval);
 static void  fec_enet_rx(struct net_device *dev, __u32 regval);
@@ -473,7 +472,7 @@ fec_timeout(struct net_device *dev)
  * This is called from the MPC core interrupt.
  */
 static	irqreturn_t
-fec_enet_interrupt(int irq, void * dev_id, struct pt_regs * regs)
+fec_enet_interrupt(int irq, void * dev_id)
 {
 	struct	net_device *dev = dev_id;
 	volatile fec_t	*fecp;
@@ -1265,10 +1264,11 @@ static void mii_display_status(struct net_device *dev)
 	printk(".\n");
 }
 
-static void mii_display_config(void *priv)
+static void mii_display_config(struct work_struct *work)
 {
-	struct net_device *dev = (struct net_device *)priv;
-	struct fec_enet_private *fep = dev->priv;
+	struct fec_enet_private *fep =
+		container_of(work, struct fec_enet_private, phy_task);
+	struct net_device *dev = fep->dev;
 	volatile uint *s = &(fep->phy_status);
 
 	printk("%s: config: auto-negotiation ", dev->name);
@@ -1297,10 +1297,11 @@ static void mii_display_config(void *priv)
 	fep->sequence_done = 1;
 }
 
-static void mii_relink(void *priv)
+static void mii_relink(struct work_struct *work)
 {
-	struct net_device *dev = (struct net_device *)priv;
-	struct fec_enet_private *fep = dev->priv;
+	struct fec_enet_private *fep =
+		container_of(work, struct fec_enet_private, phy_task);
+	struct net_device *dev = fep->dev;
 	int duplex;
 
 	fep->link = (fep->phy_status & PHY_STAT_LINK) ? 1 : 0;
@@ -1327,7 +1328,8 @@ static void mii_queue_relink(uint mii_reg, struct net_device *dev)
 {
 	struct fec_enet_private *fep = dev->priv;
 
-	INIT_WORK(&fep->phy_task, mii_relink, (void *)dev);
+	fep->dev = dev;
+	INIT_WORK(&fep->phy_task, mii_relink);
 	schedule_work(&fep->phy_task);
 }
 
@@ -1335,7 +1337,8 @@ static void mii_queue_config(uint mii_reg, struct net_device *dev)
 {
 	struct fec_enet_private *fep = dev->priv;
 
-	INIT_WORK(&fep->phy_task, mii_display_config, (void *)dev);
+	fep->dev = dev;
+	INIT_WORK(&fep->phy_task, mii_display_config);
 	schedule_work(&fep->phy_task);
 }
 
@@ -1409,7 +1412,7 @@ static
 #ifdef CONFIG_RPXCLASSIC
 void mii_link_interrupt(void *dev_id)
 #else
-irqreturn_t mii_link_interrupt(int irq, void * dev_id, struct pt_regs * regs)
+irqreturn_t mii_link_interrupt(int irq, void * dev_id)
 #endif
 {
 #ifdef	CONFIG_USE_MDIO

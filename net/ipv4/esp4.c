@@ -1,4 +1,4 @@
-#include <linux/config.h>
+#include <linux/err.h>
 #include <linux/module.h>
 #include <net/ip.h>
 #include <net/xfrm.h>
@@ -17,7 +17,8 @@ static int esp_output(struct xfrm_state *x, struct sk_buff *skb)
 	int err;
 	struct iphdr *top_iph;
 	struct ip_esp_hdr *esph;
-	struct crypto_tfm *tfm;
+	struct crypto_blkcipher *tfm;
+	struct blkcipher_desc desc;
 	struct esp_data *esp;
 	struct sk_buff *trailer;
 	int blksize;
@@ -37,7 +38,9 @@ static int esp_output(struct xfrm_state *x, struct sk_buff *skb)
 	esp = x->data;
 	alen = esp->auth.icv_trunc_len;
 	tfm = esp->conf.tfm;
-	blksize = ALIGN(crypto_tfm_alg_blocksize(tfm), 4);
+	desc.tfm = tfm;
+	desc.flags = 0;
+	blksize = ALIGN(crypto_blkcipher_blocksize(tfm), 4);
 	clen = ALIGN(clen + 2, blksize);
 	if (esp->conf.padlen)
 		clen = ALIGN(clen, esp->conf.padlen);
@@ -64,7 +67,7 @@ static int esp_output(struct xfrm_state *x, struct sk_buff *skb)
 	if (x->encap) {
 		struct xfrm_encap_tmpl *encap = x->encap;
 		struct udphdr *uh;
-		u32 *udpdata32;
+		__be32 *udpdata32;
 
 		uh = (struct udphdr *)esph;
 		uh->source = encap->encap_sport;
@@ -78,7 +81,7 @@ static int esp_output(struct xfrm_state *x, struct sk_buff *skb)
 			esph = (struct ip_esp_hdr *)(uh + 1);
 			break;
 		case UDP_ENCAP_ESPINUDP_NON_IKE:
-			udpdata32 = (u32 *)(uh + 1);
+			udpdata32 = (__be32 *)(uh + 1);
 			udpdata32[0] = udpdata32[1] = 0;
 			esph = (struct ip_esp_hdr *)(udpdata32 + 2);
 			break;
@@ -92,8 +95,13 @@ static int esp_output(struct xfrm_state *x, struct sk_buff *skb)
 	esph->seq_no = htonl(++x->replay.oseq);
 	xfrm_aevent_doreplay(x);
 
-	if (esp->conf.ivlen)
-		crypto_cipher_set_iv(tfm, esp->conf.ivec, crypto_tfm_alg_ivsize(tfm));
+	if (esp->conf.ivlen) {
+		if (unlikely(!esp->conf.ivinitted)) {
+			get_random_bytes(esp->conf.ivec, esp->conf.ivlen);
+			esp->conf.ivinitted = 1;
+		}
+		crypto_blkcipher_set_iv(tfm, esp->conf.ivec, esp->conf.ivlen);
+	}
 
 	do {
 		struct scatterlist *sg = &esp->sgbuf[0];
@@ -104,25 +112,26 @@ static int esp_output(struct xfrm_state *x, struct sk_buff *skb)
 				goto error;
 		}
 		skb_to_sgvec(skb, sg, esph->enc_data+esp->conf.ivlen-skb->data, clen);
-		crypto_cipher_encrypt(tfm, sg, sg, clen);
+		err = crypto_blkcipher_encrypt(&desc, sg, sg, clen);
 		if (unlikely(sg != &esp->sgbuf[0]))
 			kfree(sg);
 	} while (0);
 
+	if (unlikely(err))
+		goto error;
+
 	if (esp->conf.ivlen) {
-		memcpy(esph->enc_data, esp->conf.ivec, crypto_tfm_alg_ivsize(tfm));
-		crypto_cipher_get_iv(tfm, esp->conf.ivec, crypto_tfm_alg_ivsize(tfm));
+		memcpy(esph->enc_data, esp->conf.ivec, esp->conf.ivlen);
+		crypto_blkcipher_get_iv(tfm, esp->conf.ivec, esp->conf.ivlen);
 	}
 
 	if (esp->auth.icv_full_len) {
-		esp->auth.icv(esp, skb, (u8*)esph-skb->data,
-		              sizeof(struct ip_esp_hdr) + esp->conf.ivlen+clen, trailer->tail);
-		pskb_put(skb, trailer, alen);
+		err = esp_mac_digest(esp, skb, (u8 *)esph - skb->data,
+				     sizeof(*esph) + esp->conf.ivlen + clen);
+		memcpy(pskb_put(skb, trailer, alen), esp->auth.work_icv, alen);
 	}
 
 	ip_send_check(top_iph);
-
-	err = 0;
 
 error:
 	return err;
@@ -138,16 +147,18 @@ static int esp_input(struct xfrm_state *x, struct sk_buff *skb)
 	struct iphdr *iph;
 	struct ip_esp_hdr *esph;
 	struct esp_data *esp = x->data;
+	struct crypto_blkcipher *tfm = esp->conf.tfm;
+	struct blkcipher_desc desc = { .tfm = tfm };
 	struct sk_buff *trailer;
-	int blksize = ALIGN(crypto_tfm_alg_blocksize(esp->conf.tfm), 4);
+	int blksize = ALIGN(crypto_blkcipher_blocksize(tfm), 4);
 	int alen = esp->auth.icv_trunc_len;
 	int elen = skb->len - sizeof(struct ip_esp_hdr) - esp->conf.ivlen - alen;
 	int nfrags;
-	int encap_len = 0;
+	int ihl;
 	u8 nexthdr[2];
 	struct scatterlist *sg;
-	u8 workbuf[60];
 	int padlen;
+	int err;
 
 	if (!pskb_may_pull(skb, sizeof(struct ip_esp_hdr)))
 		goto out;
@@ -157,15 +168,16 @@ static int esp_input(struct xfrm_state *x, struct sk_buff *skb)
 
 	/* If integrity check is required, do this. */
 	if (esp->auth.icv_full_len) {
-		u8 sum[esp->auth.icv_full_len];
-		u8 sum1[alen];
-		
-		esp->auth.icv(esp, skb, 0, skb->len-alen, sum);
+		u8 sum[alen];
 
-		if (skb_copy_bits(skb, skb->len-alen, sum1, alen))
+		err = esp_mac_digest(esp, skb, 0, skb->len - alen);
+		if (err)
+			goto out;
+
+		if (skb_copy_bits(skb, skb->len - alen, sum, alen))
 			BUG();
 
-		if (unlikely(memcmp(sum, sum1, alen))) {
+		if (unlikely(memcmp(esp->auth.work_icv, sum, alen))) {
 			x->stats.integrity_failed++;
 			goto out;
 		}
@@ -177,11 +189,10 @@ static int esp_input(struct xfrm_state *x, struct sk_buff *skb)
 	skb->ip_summed = CHECKSUM_NONE;
 
 	esph = (struct ip_esp_hdr*)skb->data;
-	iph = skb->nh.iph;
 
 	/* Get ivec. This can be wrong, check against another impls. */
 	if (esp->conf.ivlen)
-		crypto_cipher_set_iv(esp->conf.tfm, esph->enc_data, crypto_tfm_alg_ivsize(esp->conf.tfm));
+		crypto_blkcipher_set_iv(tfm, esph->enc_data, esp->conf.ivlen);
 
 	sg = &esp->sgbuf[0];
 
@@ -191,9 +202,11 @@ static int esp_input(struct xfrm_state *x, struct sk_buff *skb)
 			goto out;
 	}
 	skb_to_sgvec(skb, sg, sizeof(struct ip_esp_hdr) + esp->conf.ivlen, elen);
-	crypto_cipher_decrypt(esp->conf.tfm, sg, sg, elen);
+	err = crypto_blkcipher_decrypt(&desc, sg, sg, elen);
 	if (unlikely(sg != &esp->sgbuf[0]))
 		kfree(sg);
+	if (unlikely(err))
+		return err;
 
 	if (skb_copy_bits(skb, skb->len-alen-2, nexthdr, 2))
 		BUG();
@@ -204,12 +217,12 @@ static int esp_input(struct xfrm_state *x, struct sk_buff *skb)
 
 	/* ... check padding bits here. Silly. :-) */ 
 
+	iph = skb->nh.iph;
+	ihl = iph->ihl * 4;
+
 	if (x->encap) {
 		struct xfrm_encap_tmpl *encap = x->encap;
-		struct udphdr *uh;
-
-		uh = (struct udphdr *)(iph + 1);
-		encap_len = (void*)esph - (void*)uh;
+		struct udphdr *uh = (void *)(skb->nh.raw + ihl);
 
 		/*
 		 * 1) if the NAT-T peer's IP or port changed then
@@ -240,17 +253,14 @@ static int esp_input(struct xfrm_state *x, struct sk_buff *skb)
 		 *    as per draft-ietf-ipsec-udp-encaps-06,
 		 *    section 3.1.2
 		 */
-		if (!x->props.mode)
+		if (x->props.mode == XFRM_MODE_TRANSPORT ||
+		    x->props.mode == XFRM_MODE_BEET)
 			skb->ip_summed = CHECKSUM_UNNECESSARY;
 	}
 
 	iph->protocol = nexthdr[1];
 	pskb_trim(skb, skb->len - alen - padlen - 2);
-	memcpy(workbuf, skb->nh.raw, iph->ihl*4);
-	skb->h.raw = skb_pull(skb, sizeof(struct ip_esp_hdr) + esp->conf.ivlen);
-	skb->nh.raw += encap_len + sizeof(struct ip_esp_hdr) + esp->conf.ivlen;
-	memcpy(skb->nh.raw, workbuf, iph->ihl*4);
-	skb->nh.iph->tot_len = htons(skb->len);
+	skb->h.raw = __skb_pull(skb, sizeof(*esph) + esp->conf.ivlen) - ihl;
 
 	return 0;
 
@@ -261,18 +271,29 @@ out:
 static u32 esp4_get_max_size(struct xfrm_state *x, int mtu)
 {
 	struct esp_data *esp = x->data;
-	u32 blksize = ALIGN(crypto_tfm_alg_blocksize(esp->conf.tfm), 4);
+	u32 blksize = ALIGN(crypto_blkcipher_blocksize(esp->conf.tfm), 4);
+	int enclen = 0;
 
-	if (x->props.mode) {
-		mtu = ALIGN(mtu + 2, blksize);
-	} else {
-		/* The worst case. */
+	switch (x->props.mode) {
+	case XFRM_MODE_TUNNEL:
+		mtu = ALIGN(mtu +2, blksize);
+		break;
+	default:
+	case XFRM_MODE_TRANSPORT:
+		/* The worst case */
 		mtu = ALIGN(mtu + 2, 4) + blksize - 4;
+		break;
+	case XFRM_MODE_BEET:
+ 		/* The worst case. */
+		enclen = IPV4_BEET_PHMAXLEN;
+		mtu = ALIGN(mtu + enclen + 2, blksize);
+		break;
 	}
+
 	if (esp->conf.padlen)
 		mtu = ALIGN(mtu, esp->conf.padlen);
 
-	return mtu + x->props.header_len + esp->auth.icv_trunc_len;
+	return mtu + x->props.header_len + esp->auth.icv_trunc_len - enclen;
 }
 
 static void esp4_err(struct sk_buff *skb, u32 info)
@@ -300,11 +321,11 @@ static void esp_destroy(struct xfrm_state *x)
 	if (!esp)
 		return;
 
-	crypto_free_tfm(esp->conf.tfm);
+	crypto_free_blkcipher(esp->conf.tfm);
 	esp->conf.tfm = NULL;
 	kfree(esp->conf.ivec);
 	esp->conf.ivec = NULL;
-	crypto_free_tfm(esp->auth.tfm);
+	crypto_free_hash(esp->auth.tfm);
 	esp->auth.tfm = NULL;
 	kfree(esp->auth.work_icv);
 	esp->auth.work_icv = NULL;
@@ -314,6 +335,7 @@ static void esp_destroy(struct xfrm_state *x)
 static int esp_init_state(struct xfrm_state *x)
 {
 	struct esp_data *esp = NULL;
+	struct crypto_blkcipher *tfm;
 
 	/* null auth and encryption can have zero length keys */
 	if (x->aalg) {
@@ -323,30 +345,33 @@ static int esp_init_state(struct xfrm_state *x)
 	if (x->ealg == NULL)
 		goto error;
 
-	esp = kmalloc(sizeof(*esp), GFP_KERNEL);
+	esp = kzalloc(sizeof(*esp), GFP_KERNEL);
 	if (esp == NULL)
 		return -ENOMEM;
 
-	memset(esp, 0, sizeof(*esp));
-
 	if (x->aalg) {
 		struct xfrm_algo_desc *aalg_desc;
+		struct crypto_hash *hash;
 
 		esp->auth.key = x->aalg->alg_key;
 		esp->auth.key_len = (x->aalg->alg_key_len+7)/8;
-		esp->auth.tfm = crypto_alloc_tfm(x->aalg->alg_name, 0);
-		if (esp->auth.tfm == NULL)
+		hash = crypto_alloc_hash(x->aalg->alg_name, 0,
+					 CRYPTO_ALG_ASYNC);
+		if (IS_ERR(hash))
 			goto error;
-		esp->auth.icv = esp_hmac_digest;
+
+		esp->auth.tfm = hash;
+		if (crypto_hash_setkey(hash, esp->auth.key, esp->auth.key_len))
+			goto error;
 
 		aalg_desc = xfrm_aalg_get_byname(x->aalg->alg_name, 0);
 		BUG_ON(!aalg_desc);
 
 		if (aalg_desc->uinfo.auth.icv_fullbits/8 !=
-		    crypto_tfm_alg_digestsize(esp->auth.tfm)) {
+		    crypto_hash_digestsize(hash)) {
 			NETDEBUG(KERN_INFO "ESP: %s digestsize %u != %hu\n",
 				 x->aalg->alg_name,
-				 crypto_tfm_alg_digestsize(esp->auth.tfm),
+				 crypto_hash_digestsize(hash),
 				 aalg_desc->uinfo.auth.icv_fullbits/8);
 			goto error;
 		}
@@ -360,24 +385,22 @@ static int esp_init_state(struct xfrm_state *x)
 	}
 	esp->conf.key = x->ealg->alg_key;
 	esp->conf.key_len = (x->ealg->alg_key_len+7)/8;
-	if (x->props.ealgo == SADB_EALG_NULL)
-		esp->conf.tfm = crypto_alloc_tfm(x->ealg->alg_name, CRYPTO_TFM_MODE_ECB);
-	else
-		esp->conf.tfm = crypto_alloc_tfm(x->ealg->alg_name, CRYPTO_TFM_MODE_CBC);
-	if (esp->conf.tfm == NULL)
+	tfm = crypto_alloc_blkcipher(x->ealg->alg_name, 0, CRYPTO_ALG_ASYNC);
+	if (IS_ERR(tfm))
 		goto error;
-	esp->conf.ivlen = crypto_tfm_alg_ivsize(esp->conf.tfm);
+	esp->conf.tfm = tfm;
+	esp->conf.ivlen = crypto_blkcipher_ivsize(tfm);
 	esp->conf.padlen = 0;
 	if (esp->conf.ivlen) {
 		esp->conf.ivec = kmalloc(esp->conf.ivlen, GFP_KERNEL);
 		if (unlikely(esp->conf.ivec == NULL))
 			goto error;
-		get_random_bytes(esp->conf.ivec, esp->conf.ivlen);
+		esp->conf.ivinitted = 0;
 	}
-	if (crypto_cipher_setkey(esp->conf.tfm, esp->conf.key, esp->conf.key_len))
+	if (crypto_blkcipher_setkey(tfm, esp->conf.key, esp->conf.key_len))
 		goto error;
 	x->props.header_len = sizeof(struct ip_esp_hdr) + esp->conf.ivlen;
-	if (x->props.mode)
+	if (x->props.mode == XFRM_MODE_TUNNEL)
 		x->props.header_len += sizeof(struct iphdr);
 	if (x->encap) {
 		struct xfrm_encap_tmpl *encap = x->encap;

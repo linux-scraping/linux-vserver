@@ -41,16 +41,6 @@
 #define IbmVethMcastRemoveFilter     0x2UL
 #define IbmVethMcastClearFilterTable 0x3UL
 
-/* hcall numbers */
-#define H_VIO_SIGNAL             0x104
-#define H_REGISTER_LOGICAL_LAN   0x114
-#define H_FREE_LOGICAL_LAN       0x118
-#define H_ADD_LOGICAL_LAN_BUFFER 0x11C
-#define H_SEND_LOGICAL_LAN       0x120
-#define H_MULTICAST_CTRL         0x130
-#define H_CHANGE_LOGICAL_LAN_MAC 0x14C
-#define H_FREE_LOGICAL_LAN_BUFFER 0x1D4
-
 /* hcall macros */
 #define h_register_logical_lan(ua, buflst, rxq, fltlst, mac) \
   plpar_hcall_norets(H_REGISTER_LOGICAL_LAN, ua, buflst, rxq, fltlst, mac)
@@ -61,8 +51,21 @@
 #define h_add_logical_lan_buffer(ua, buf) \
   plpar_hcall_norets(H_ADD_LOGICAL_LAN_BUFFER, ua, buf)
 
-#define h_send_logical_lan(ua, buf1, buf2, buf3, buf4, buf5, buf6, correlator) \
-  plpar_hcall_8arg_2ret(H_SEND_LOGICAL_LAN, ua, buf1, buf2, buf3, buf4, buf5, buf6, correlator, &correlator)
+static inline long h_send_logical_lan(unsigned long unit_address,
+		unsigned long desc1, unsigned long desc2, unsigned long desc3,
+		unsigned long desc4, unsigned long desc5, unsigned long desc6,
+		unsigned long corellator_in, unsigned long *corellator_out)
+{
+	long rc;
+	unsigned long retbuf[PLPAR_HCALL9_BUFSIZE];
+
+	rc = plpar_hcall9(H_SEND_LOGICAL_LAN, retbuf, unit_address, desc1,
+			desc2, desc3, desc4, desc5, desc6, corellator_in);
+
+	*corellator_out = retbuf[0];
+
+	return rc;
+}
 
 #define h_multicast_ctrl(ua, cmd, mac) \
   plpar_hcall_norets(H_MULTICAST_CTRL, ua, cmd, mac)
@@ -75,10 +78,13 @@
 
 #define IbmVethNumBufferPools 5
 #define IBMVETH_BUFF_OH 22 /* Overhead: 14 ethernet header + 8 opaque handle */
+#define IBMVETH_MAX_MTU 68
+#define IBMVETH_MAX_POOL_COUNT 4096
+#define IBMVETH_MAX_BUF_SIZE (1024 * 128)
 
-/* pool_size should be sorted */
 static int pool_size[] = { 512, 1024 * 2, 1024 * 16, 1024 * 32, 1024 * 64 };
 static int pool_count[] = { 256, 768, 256, 256, 256 };
+static int pool_active[] = { 1, 1, 0, 0, 0};
 
 #define IBM_VETH_INVALID_MAP ((u16)0xffff)
 
@@ -94,6 +100,7 @@ struct ibmveth_buff_pool {
     dma_addr_t *dma_addr;
     struct sk_buff **skbuff;
     int active;
+    struct kobject kobj;
 };
 
 struct ibmveth_rx_q {
@@ -111,13 +118,13 @@ struct ibmveth_adapter {
     struct net_device_stats stats;
     unsigned int mcastFilterSize;
     unsigned long mac_addr;
-    unsigned long liobn;
     void * buffer_list_addr;
     void * filter_list_addr;
     dma_addr_t buffer_list_dma;
     dma_addr_t filter_list_dma;
     struct ibmveth_buff_pool rx_buff_pool[IbmVethNumBufferPools];
     struct ibmveth_rx_q rx_queue;
+    int pool_config;
 
     /* adapter specific stats */
     u64 replenish_task_cycles;
@@ -134,7 +141,7 @@ struct ibmveth_adapter {
     spinlock_t stats_lock;
 };
 
-struct ibmveth_buf_desc_fields {	
+struct ibmveth_buf_desc_fields {
     u32 valid : 1;
     u32 toggle : 1;
     u32 reserved : 6;
@@ -143,7 +150,7 @@ struct ibmveth_buf_desc_fields {
 };
 
 union ibmveth_buf_desc {
-    u64 desc;	
+    u64 desc;
     struct ibmveth_buf_desc_fields fields;
 };
 

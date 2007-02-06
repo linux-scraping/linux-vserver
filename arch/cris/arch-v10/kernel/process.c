@@ -11,7 +11,6 @@
  * This file handles the architecture-dependent parts of process handling..
  */
 
-#include <linux/config.h>
 #include <linux/sched.h>
 #include <linux/err.h>
 #include <linux/fs.h>
@@ -104,7 +103,8 @@ int kernel_thread(int (*fn)(void *), void * arg, unsigned long flags)
 	regs.dccr = 1 << I_DCCR_BITNR;
 
 	/* Ok, create the new process.. */
-        return do_fork(flags | CLONE_VM | CLONE_UNTRACED, 0, &regs, 0, NULL, NULL);
+	return do_fork(flags | CLONE_VM | CLONE_UNTRACED | CLONE_KTHREAD,
+		0, &regs, 0, NULL, NULL);
 }
 
 /* setup the child's kernel stack with a pt_regs and switch_stack on it.

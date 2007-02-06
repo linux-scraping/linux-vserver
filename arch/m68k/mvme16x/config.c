@@ -40,16 +40,9 @@ extern t_bdid mvme_bdid;
 
 static MK48T08ptr_t volatile rtc = (MK48T08ptr_t)MVME_RTC_BASE;
 
-extern irqreturn_t mvme16x_process_int (int level, struct pt_regs *regs);
-extern void mvme16x_init_IRQ (void);
-extern void mvme16x_free_irq (unsigned int, void *);
-extern int show_mvme16x_interrupts (struct seq_file *, void *);
-extern void mvme16x_enable_irq (unsigned int);
-extern void mvme16x_disable_irq (unsigned int);
 static void mvme16x_get_model(char *model);
 static int  mvme16x_get_hardware_list(char *buffer);
-extern int  mvme16x_request_irq(unsigned int irq, irqreturn_t (*handler)(int, void *, struct pt_regs *), unsigned long flags, const char *devname, void *dev_id);
-extern void mvme16x_sched_init(irqreturn_t (*handler)(int, void *, struct pt_regs *));
+extern void mvme16x_sched_init(irq_handler_t handler);
 extern unsigned long mvme16x_gettimeoffset (void);
 extern int mvme16x_hwclk (int, struct rtc_time *);
 extern int mvme16x_set_clock_mmss (unsigned long);
@@ -61,7 +54,7 @@ int bcd2int (unsigned char b);
 /* Save tick handler routine pointer, will point to do_timer() in
  * kernel/sched.c, called via mvme16x_process_int() */
 
-static irqreturn_t (*tick_handler)(int, void *, struct pt_regs *);
+static irq_handler_t tick_handler;
 
 
 unsigned short mvme16x_config;
@@ -120,6 +113,16 @@ static int mvme16x_get_hardware_list(char *buffer)
     return (len);
 }
 
+/*
+ * This function is called during kernel startup to initialize
+ * the mvme16x IRQ handling routines.  Should probably ensure
+ * that the base vectors for the VMEChip2 and PCCChip2 are valid.
+ */
+
+static void mvme16x_init_IRQ (void)
+{
+	m68k_setup_user_interrupt(VEC_USER, 192, NULL);
+}
 
 #define pcc2chip	((volatile u_char *)0xfff42000)
 #define PccSCCMICR	0x1d
@@ -138,12 +141,6 @@ void __init config_mvme16x(void)
     mach_hwclk           = mvme16x_hwclk;
     mach_set_clock_mmss	 = mvme16x_set_clock_mmss;
     mach_reset		 = mvme16x_reset;
-    mach_free_irq	 = mvme16x_free_irq;
-    mach_process_int	 = mvme16x_process_int;
-    mach_get_irq_list	 = show_mvme16x_interrupts;
-    mach_request_irq	 = mvme16x_request_irq;
-    enable_irq           = mvme16x_enable_irq;
-    disable_irq          = mvme16x_disable_irq;
     mach_get_model       = mvme16x_get_model;
     mach_get_hardware_list = mvme16x_get_hardware_list;
 
@@ -193,7 +190,7 @@ void __init config_mvme16x(void)
     }
 }
 
-static irqreturn_t mvme16x_abort_int (int irq, void *dev_id, struct pt_regs *fp)
+static irqreturn_t mvme16x_abort_int (int irq, void *dev_id)
 {
 	p_bdid p = &mvme_bdid;
 	unsigned long *new = (unsigned long *)vectors;
@@ -221,13 +218,13 @@ static irqreturn_t mvme16x_abort_int (int irq, void *dev_id, struct pt_regs *fp)
 	return IRQ_HANDLED;
 }
 
-static irqreturn_t mvme16x_timer_int (int irq, void *dev_id, struct pt_regs *fp)
+static irqreturn_t mvme16x_timer_int (int irq, void *dev_id)
 {
     *(volatile unsigned char *)0xfff4201b |= 8;
-    return tick_handler(irq, dev_id, fp);
+    return tick_handler(irq, dev_id);
 }
 
-void mvme16x_sched_init (irqreturn_t (*timer_routine)(int, void *, struct pt_regs *))
+void mvme16x_sched_init (irq_handler_t timer_routine)
 {
     p_bdid p = &mvme_bdid;
     int irq;

@@ -12,7 +12,6 @@
  * this behaves the same as the original Reno.
  */
 
-#include <linux/config.h>
 #include <linux/mm.h>
 #include <linux/module.h>
 #include <net/tcp.h>
@@ -191,7 +190,7 @@ static inline void bictcp_update(struct bictcp *ca, u32 cwnd)
          */
 
 	/* change the unit from HZ to bictcp_HZ */
-        t = ((tcp_time_stamp + ca->delay_min - ca->epoch_start)
+        t = ((tcp_time_stamp + (ca->delay_min>>3) - ca->epoch_start)
 	     << BICTCP_HZ) / HZ;
 
         if (t < ca->bic_K)		/* t - K */
@@ -260,7 +259,7 @@ static inline void measure_delay(struct sock *sk)
 	    (s32)(tcp_time_stamp - ca->epoch_start) < HZ)
 		return;
 
-	delay = tcp_time_stamp - tp->rx_opt.rcv_tsecr;
+	delay = (tcp_time_stamp - tp->rx_opt.rcv_tsecr)<<3;
 	if (delay == 0)
 		delay = 1;
 
@@ -325,11 +324,6 @@ static u32 bictcp_undo_cwnd(struct sock *sk)
 	return max(tcp_sk(sk)->snd_cwnd, ca->last_max_cwnd);
 }
 
-static u32 bictcp_min_cwnd(struct sock *sk)
-{
-	return tcp_sk(sk)->snd_ssthresh;
-}
-
 static void bictcp_state(struct sock *sk, u8 new_state)
 {
 	if (new_state == TCP_CA_Loss)
@@ -357,7 +351,6 @@ static struct tcp_congestion_ops cubictcp = {
 	.cong_avoid	= bictcp_cong_avoid,
 	.set_state	= bictcp_state,
 	.undo_cwnd	= bictcp_undo_cwnd,
-	.min_cwnd	= bictcp_min_cwnd,
 	.pkts_acked     = bictcp_acked,
 	.owner		= THIS_MODULE,
 	.name		= "cubic",
@@ -365,7 +358,7 @@ static struct tcp_congestion_ops cubictcp = {
 
 static int __init cubictcp_register(void)
 {
-	BUG_ON(sizeof(struct bictcp) > ICSK_CA_PRIV_SIZE);
+	BUILD_BUG_ON(sizeof(struct bictcp) > ICSK_CA_PRIV_SIZE);
 
 	/* Precompute a bunch of the scaling factors that are used per-packet
 	 * based on SRTT of 100ms
@@ -373,7 +366,7 @@ static int __init cubictcp_register(void)
 
 	beta_scale = 8*(BICTCP_BETA_SCALE+beta)/ 3 / (BICTCP_BETA_SCALE - beta);
 
-	cube_rtt_scale = (bic_scale << 3) / 10;	/* 1024*c/rtt */
+	cube_rtt_scale = (bic_scale * 10);	/* 1024*c/rtt */
 
 	/* calculate the "K" for (wmax-cwnd) = c/rtt * K^3
 	 *  so K = cubic_root( (wmax-cwnd)*rtt/c )

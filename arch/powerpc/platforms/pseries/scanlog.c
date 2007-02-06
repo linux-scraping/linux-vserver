@@ -47,7 +47,7 @@ static struct proc_dir_entry *proc_ppc64_scan_log_dump;	/* The proc file */
 static ssize_t scanlog_read(struct file *file, char __user *buf,
 			    size_t count, loff_t *ppos)
 {
-        struct inode * inode = file->f_dentry->d_inode;
+        struct inode * inode = file->f_path.dentry->d_inode;
 	struct proc_dir_entry *dp;
 	unsigned int *data;
 	int status;
@@ -107,9 +107,9 @@ static ssize_t scanlog_read(struct file *file, char __user *buf,
 			/* Break to sleep default time */
 			break;
 		    default:
-			if (status > 9900 && status <= 9905) {
-				wait_time = rtas_extended_busy_delay_time(status);
-			} else {
+			/* Assume extended busy */
+			wait_time = rtas_busy_delay_time(status);
+			if (!wait_time) {
 				printk(KERN_ERR "scanlog: unknown error from rtas: %d\n", status);
 				return -EIO;
 			}

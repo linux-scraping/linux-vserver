@@ -112,30 +112,6 @@ int bcm43xx_channel_to_freq(struct bcm43xx_private *bcm,
 	return bcm43xx_channel_to_freq_bg(channel);
 }
 
-/* Lightweight function to check if a channel number is valid.
- * Note that this does _NOT_ check for geographical restrictions!
- */
-static inline
-int bcm43xx_is_valid_channel_a(u8 channel)
-{
-	return (channel >= IEEE80211_52GHZ_MIN_CHANNEL
-	       && channel <= IEEE80211_52GHZ_MAX_CHANNEL);
-}
-static inline
-int bcm43xx_is_valid_channel_bg(u8 channel)
-{
-	return (channel >= IEEE80211_24GHZ_MIN_CHANNEL
-	       && channel <= IEEE80211_24GHZ_MAX_CHANNEL);
-}
-static inline
-int bcm43xx_is_valid_channel(struct bcm43xx_private *bcm,
-			     u8 channel)
-{
-	if (bcm43xx_current_phy(bcm)->type == BCM43xx_PHYTYPE_A)
-		return bcm43xx_is_valid_channel_a(channel);
-	return bcm43xx_is_valid_channel_bg(channel);
-}
-
 void bcm43xx_tsf_read(struct bcm43xx_private *bcm, u64 *tsf);
 void bcm43xx_tsf_write(struct bcm43xx_private *bcm, u64 tsf);
 
@@ -157,10 +133,16 @@ void bcm43xx_dummy_transmission(struct bcm43xx_private *bcm);
 
 int bcm43xx_switch_core(struct bcm43xx_private *bcm, struct bcm43xx_coreinfo *new_core);
 
+int bcm43xx_select_wireless_core(struct bcm43xx_private *bcm,
+				 int phytype);
+
 void bcm43xx_wireless_core_reset(struct bcm43xx_private *bcm, int connect_phy);
 
 void bcm43xx_mac_suspend(struct bcm43xx_private *bcm);
 void bcm43xx_mac_enable(struct bcm43xx_private *bcm);
+
+void bcm43xx_periodic_tasks_delete(struct bcm43xx_private *bcm);
+void bcm43xx_periodic_tasks_setup(struct bcm43xx_private *bcm);
 
 void bcm43xx_controller_restart(struct bcm43xx_private *bcm, const char *reason);
 

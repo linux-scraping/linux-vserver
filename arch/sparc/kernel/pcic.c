@@ -10,7 +10,6 @@
  * CP-1200 by Eric Brower.
  */
 
-#include <linux/config.h>
 #include <linux/kernel.h>
 #include <linux/types.h>
 #include <linux/init.h>
@@ -31,9 +30,11 @@
 
 #include <asm/irq.h>
 #include <asm/oplib.h>
+#include <asm/prom.h>
 #include <asm/pcic.h>
 #include <asm/timer.h>
 #include <asm/uaccess.h>
+#include <asm/irq_regs.h>
 
 
 unsigned int pcic_pin_to_irq(unsigned int pin, char *name);
@@ -665,7 +666,7 @@ void __init pcibios_fixup_bus(struct pci_bus *bus)
 		/* cookies */
 		pcp = pci_devcookie_alloc();
 		pcp->pbm = &pcic->pbm;
-		pcp->prom_node = node;
+		pcp->prom_node = of_find_node_by_phandle(node);
 		dev->sysdata = pcp;
 
 		/* fixing I/O to look like memory */
@@ -708,13 +709,13 @@ static void pcic_clear_clock_irq(void)
 	pcic_timer_dummy = readl(pcic0.pcic_regs+PCI_SYS_LIMIT);
 }
 
-static irqreturn_t pcic_timer_handler (int irq, void *h, struct pt_regs *regs)
+static irqreturn_t pcic_timer_handler (int irq, void *h)
 {
 	write_seqlock(&xtime_lock);	/* Dummy, to show that we remember */
 	pcic_clear_clock_irq();
-	do_timer(regs);
+	do_timer(1);
 #ifndef CONFIG_SMP
-	update_process_times(user_mode(regs));
+	update_process_times(user_mode(get_irq_regs()));
 #endif
 	write_sequnlock(&xtime_lock);
 	return IRQ_HANDLED;
@@ -745,7 +746,7 @@ void __init pci_time_init(void)
 	writel (PCI_COUNTER_IRQ_SET(timer_irq, 0),
 		pcic->pcic_regs+PCI_COUNTER_IRQ);
 	irq = request_irq(timer_irq, pcic_timer_handler,
-			  (SA_INTERRUPT | SA_STATIC_ALLOC), "timer", NULL);
+			  (IRQF_DISABLED | SA_STATIC_ALLOC), "timer", NULL);
 	if (irq) {
 		prom_printf("time_init: unable to attach IRQ%d\n", timer_irq);
 		prom_halt();
@@ -765,8 +766,6 @@ static __inline__ unsigned long do_gettimeoffset(void)
 	return count;
 }
 
-extern unsigned long wall_jiffies;
-
 static void pci_do_gettimeofday(struct timeval *tv)
 {
 	unsigned long flags;
@@ -775,25 +774,16 @@ static void pci_do_gettimeofday(struct timeval *tv)
 	unsigned long max_ntp_tick = tick_usec - tickadj;
 
 	do {
-		unsigned long lost;
-
 		seq = read_seqbegin_irqsave(&xtime_lock, flags);
 		usec = do_gettimeoffset();
-		lost = jiffies - wall_jiffies;
 
 		/*
 		 * If time_adjust is negative then NTP is slowing the clock
 		 * so make sure not to go into next possible interval.
 		 * Better to lose some accuracy than have time go backwards..
 		 */
-		if (unlikely(time_adjust < 0)) {
+		if (unlikely(time_adjust < 0))
 			usec = min(usec, max_ntp_tick);
-
-			if (lost)
-				usec += lost * max_ntp_tick;
-		}
-		else if (unlikely(lost))
-			usec += lost * tick_usec;
 
 		sec = xtime.tv_sec;
 		usec += (xtime.tv_nsec / 1000);
@@ -819,8 +809,7 @@ static int pci_do_settimeofday(struct timespec *tv)
 	 * wall time.  Discover what correction gettimeofday() would have
 	 * made, and then undo it!
 	 */
-	tv->tv_nsec -= 1000 * (do_gettimeoffset() + 
-				(jiffies - wall_jiffies) * (USEC_PER_SEC / HZ));
+	tv->tv_nsec -= 1000 * do_gettimeoffset();
 	while (tv->tv_nsec < 0) {
 		tv->tv_nsec += NSEC_PER_SEC;
 		tv->tv_sec--;
@@ -859,7 +848,7 @@ char * __init pcibios_setup(char *str)
 }
 
 void pcibios_align_resource(void *data, struct resource *res,
-			    unsigned long size, unsigned long align)
+			    resource_size_t size, resource_size_t align)
 {
 }
 
@@ -894,13 +883,6 @@ void pcic_nmi(unsigned int pend, struct pt_regs *regs)
 static inline unsigned long get_irqmask(int irq_nr)
 {
 	return 1 << irq_nr;
-}
-
-static inline char *pcic_irq_itoa(unsigned int irq)
-{
-	static char buff[16];
-	sprintf(buff, "%d", irq);
-	return buff;
 }
 
 static void pcic_disable_irq(unsigned int irq_nr)
@@ -955,7 +937,6 @@ void __init sun4m_pci_init_IRQ(void)
 	BTFIXUPSET_CALL(clear_clock_irq, pcic_clear_clock_irq, BTFIXUPCALL_NORM);
 	BTFIXUPSET_CALL(clear_profile_irq, pcic_clear_profile_irq, BTFIXUPCALL_NORM);
 	BTFIXUPSET_CALL(load_profile_irq, pcic_load_profile_irq, BTFIXUPCALL_NORM);
-	BTFIXUPSET_CALL(__irq_itoa, pcic_irq_itoa, BTFIXUPCALL_NORM);
 }
 
 int pcibios_assign_resource(struct pci_dev *pdev, int resource)

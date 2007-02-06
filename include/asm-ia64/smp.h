@@ -10,7 +10,6 @@
 #ifndef _ASM_IA64_SMP_H
 #define _ASM_IA64_SMP_H
 
-#include <linux/config.h>
 #include <linux/init.h>
 #include <linux/threads.h>
 #include <linux/kernel.h>
@@ -123,12 +122,11 @@ extern void __init smp_build_cpu_map(void);
 extern void __init init_smp_config (void);
 extern void smp_do_timer (struct pt_regs *regs);
 
-extern int smp_call_function_single (int cpuid, void (*func) (void *info), void *info,
-				     int retry, int wait);
 extern void smp_send_reschedule (int cpu);
 extern void lock_ipi_calllock(void);
 extern void unlock_ipi_calllock(void);
 extern void identify_siblings (struct cpuinfo_ia64 *);
+extern int is_multithreading_enabled(void);
 
 #else
 

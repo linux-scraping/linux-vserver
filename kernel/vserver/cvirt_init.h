@@ -1,8 +1,5 @@
 
 
-#include <linux/config.h>
-
-
 extern uint64_t vx_idle_jiffies(void);
 
 static inline void vx_info_init_cvirt(struct _vx_cvirt *cvirt)
@@ -14,16 +11,14 @@ static inline void vx_info_init_cvirt(struct _vx_cvirt *cvirt)
 	nsuptime = (unsigned long long)cvirt->bias_uptime.tv_sec
 		* NSEC_PER_SEC + cvirt->bias_uptime.tv_nsec;
 	cvirt->bias_clock = nsec_to_clock_t(nsuptime);
+	cvirt->bias_tv.tv_sec = 0;
+	cvirt->bias_tv.tv_usec = 0;
 
 	jiffies_to_timespec(idle_jiffies, &cvirt->bias_idle);
 	atomic_set(&cvirt->nr_threads, 0);
 	atomic_set(&cvirt->nr_running, 0);
 	atomic_set(&cvirt->nr_uninterruptible, 0);
 	atomic_set(&cvirt->nr_onhold, 0);
-
-	down_read(&uts_sem);
-	cvirt->utsname = system_utsname;
-	up_read(&uts_sem);
 
 	spin_lock_init(&cvirt->load_lock);
 	cvirt->load_last = jiffies;
@@ -39,6 +34,12 @@ static inline void vx_info_init_cvirt(struct _vx_cvirt *cvirt)
 	cvirt->syslog.log_end = 0;
 	cvirt->syslog.con_start = 0;
 	cvirt->syslog.logged_chars = 0;
+}
+
+static inline
+void vx_info_init_cvirt_pc(struct _vx_cvirt_pc *cvirt_pc, int cpu)
+{
+	// cvirt_pc->cpustat = { 0 };
 }
 
 static inline void vx_info_exit_cvirt(struct _vx_cvirt *cvirt)
@@ -62,19 +63,8 @@ static inline void vx_info_exit_cvirt(struct _vx_cvirt *cvirt)
 	return;
 }
 
-static inline void vx_info_init_cacct(struct _vx_cacct *cacct)
-{
-	int i,j;
-
-	for (i=0; i<5; i++) {
-		for (j=0; j<3; j++) {
-			atomic_set(&cacct->sock[i][j].count, 0);
-			atomic_set(&cacct->sock[i][j].total, 0);
-		}
-	}
-}
-
-static inline void vx_info_exit_cacct(struct _vx_cacct *cacct)
+static inline
+void vx_info_exit_cvirt_pc(struct _vx_cvirt_pc *cvirt_pc, int cpu)
 {
 	return;
 }

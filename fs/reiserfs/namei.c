@@ -11,7 +11,6 @@
  * NO WARRANTY
  */
 
-#include <linux/config.h>
 #include <linux/time.h>
 #include <linux/bitops.h>
 #include <linux/reiserfs_fs.h>
@@ -19,10 +18,10 @@
 #include <linux/reiserfs_xattr.h>
 #include <linux/smp_lock.h>
 #include <linux/quotaops.h>
-#include <linux/vserver/xid.h>
+#include <linux/vs_tag.h>
 
-#define INC_DIR_INODE_NLINK(i) if (i->i_nlink != 1) { i->i_nlink++; if (i->i_nlink >= REISERFS_LINK_MAX) i->i_nlink=1; }
-#define DEC_DIR_INODE_NLINK(i) if (i->i_nlink != 1) i->i_nlink--;
+#define INC_DIR_INODE_NLINK(i) if (i->i_nlink != 1) { inc_nlink(i); if (i->i_nlink >= REISERFS_LINK_MAX) i->i_nlink=1; }
+#define DEC_DIR_INODE_NLINK(i) if (i->i_nlink != 1) drop_nlink(i);
 
 // directory item contains array of entry headers. This performs
 // binary search through that array
@@ -56,7 +55,7 @@ static int bin_search_in_dir_item(struct reiserfs_dir_entry *de, loff_t off)
 
 // comment?  maybe something like set de to point to what the path points to?
 static inline void set_de_item_location(struct reiserfs_dir_entry *de,
-					struct path *path)
+					struct treepath *path)
 {
 	de->de_bh = get_last_bh(path);
 	de->de_ih = get_ih(path);
@@ -69,8 +68,7 @@ inline void set_de_name_and_namelen(struct reiserfs_dir_entry *de)
 {
 	struct reiserfs_de_head *deh = de->de_deh + de->de_entry_num;
 
-	if (de->de_entry_num >= ih_entry_count(de->de_ih))
-		BUG();
+	BUG_ON(de->de_entry_num >= ih_entry_count(de->de_ih));
 
 	de->de_entrylen = entry_length(de->de_bh, de->de_ih, de->de_entry_num);
 	de->de_namelen = de->de_entrylen - (de_with_sd(deh) ? SD_SIZE : 0);
@@ -82,8 +80,7 @@ inline void set_de_name_and_namelen(struct reiserfs_dir_entry *de)
 // what entry points to
 static inline void set_de_object_key(struct reiserfs_dir_entry *de)
 {
-	if (de->de_entry_num >= ih_entry_count(de->de_ih))
-		BUG();
+	BUG_ON(de->de_entry_num >= ih_entry_count(de->de_ih));
 	de->de_dir_id = deh_dir_id(&(de->de_deh[de->de_entry_num]));
 	de->de_objectid = deh_objectid(&(de->de_deh[de->de_entry_num]));
 }
@@ -92,8 +89,7 @@ static inline void store_de_entry_key(struct reiserfs_dir_entry *de)
 {
 	struct reiserfs_de_head *deh = de->de_deh + de->de_entry_num;
 
-	if (de->de_entry_num >= ih_entry_count(de->de_ih))
-		BUG();
+	BUG_ON(de->de_entry_num >= ih_entry_count(de->de_ih));
 
 	/* store key of the found entry */
 	de->de_entry_key.version = KEY_FORMAT_3_5;
@@ -118,7 +114,7 @@ entry position in the item
 
 /* The function is NOT SCHEDULE-SAFE! */
 int search_by_entry_key(struct super_block *sb, const struct cpu_key *key,
-			struct path *path, struct reiserfs_dir_entry *de)
+			struct treepath *path, struct reiserfs_dir_entry *de)
 {
 	int retval;
 
@@ -287,7 +283,7 @@ static int linear_search_in_dir_item(struct cpu_key *key,
 // may return NAME_FOUND, NAME_FOUND_INVISIBLE, NAME_NOT_FOUND
 // FIXME: should add something like IOERROR
 static int reiserfs_find_entry(struct inode *dir, const char *name, int namelen,
-			       struct path *path_to_entry,
+			       struct treepath *path_to_entry,
 			       struct reiserfs_dir_entry *de)
 {
 	struct cpu_key key_to_search;
@@ -366,7 +362,7 @@ static struct dentry *reiserfs_lookup(struct inode *dir, struct dentry *dentry,
 			reiserfs_write_unlock(dir->i_sb);
 			return ERR_PTR(-EACCES);
 		}
-		vx_propagate_xid(nd, inode);
+		dx_propagate_tag(nd, inode);
 
 		/* Propogate the priv_object flag so we know we're in the priv tree */
 		if (is_reiserfs_priv_object(dir))
@@ -602,7 +598,7 @@ static int new_inode_init(struct inode *inode, struct inode *dir, int mode)
 	} else {
 		inode->i_gid = current->fsgid;
 	}
-	inode->i_xid = vx_current_fsxid(inode->i_sb);
+	inode->i_tag = dx_current_fstag(inode->i_sb);
 	DQUOT_INIT(inode);
 	return 0;
 }
@@ -917,7 +913,7 @@ static int reiserfs_rmdir(struct inode *dir, struct dentry *dentry)
 		reiserfs_warning(inode->i_sb, "%s: empty directory has nlink "
 				 "!= 2 (%d)", __FUNCTION__, inode->i_nlink);
 
-	inode->i_nlink = 0;
+	clear_nlink(inode);
 	inode->i_ctime = dir->i_ctime = dir->i_mtime = CURRENT_TIME_SEC;
 	reiserfs_update_sd(&th, inode);
 
@@ -998,7 +994,7 @@ static int reiserfs_unlink(struct inode *dir, struct dentry *dentry)
 		inode->i_nlink = 1;
 	}
 
-	inode->i_nlink--;
+	drop_nlink(inode);
 
 	/*
 	 * we schedule before doing the add_save_link call, save the link
@@ -1010,7 +1006,7 @@ static int reiserfs_unlink(struct inode *dir, struct dentry *dentry)
 	    reiserfs_cut_from_item(&th, &path, &(de.de_entry_key), dir, NULL,
 				   0);
 	if (retval < 0) {
-		inode->i_nlink++;
+		inc_nlink(inode);
 		goto end_unlink;
 	}
 	inode->i_ctime = CURRENT_TIME_SEC;
@@ -1147,7 +1143,7 @@ static int reiserfs_link(struct dentry *old_dentry, struct inode *dir,
 	}
 
 	/* inc before scheduling so reiserfs_unlink knows we are here */
-	inode->i_nlink++;
+	inc_nlink(inode);
 
 	retval = journal_begin(&th, dir->i_sb, jbegin_count);
 	if (retval) {
@@ -1477,9 +1473,9 @@ static int reiserfs_rename(struct inode *old_dir, struct dentry *old_dentry,
 	if (new_dentry_inode) {
 		// adjust link number of the victim
 		if (S_ISDIR(new_dentry_inode->i_mode)) {
-			new_dentry_inode->i_nlink = 0;
+			clear_nlink(new_dentry_inode);
 		} else {
-			new_dentry_inode->i_nlink--;
+			drop_nlink(new_dentry_inode);
 		}
 		new_dentry_inode->i_ctime = ctime;
 		savelink = new_dentry_inode->i_nlink;

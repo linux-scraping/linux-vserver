@@ -8,17 +8,18 @@
  * Copyright (C) 2001 MIPS Technologies, Inc.
  * Copyright (C) 2002 Maciej W. Rozycki
  */
-#include <linux/config.h>
 #include <linux/init.h>
 
 #include <asm/asm.h>
 #include <asm/asmmacro.h>
 #include <asm/cacheops.h>
+#include <asm/irqflags.h>
 #include <asm/regdef.h>
 #include <asm/fpregdef.h>
 #include <asm/mipsregs.h>
 #include <asm/stackframe.h>
 #include <asm/war.h>
+#include <asm/page.h>
 
 #define PANIC_PIC(msg)					\
 		.set push;				\
@@ -129,9 +130,11 @@ handle_vcei:
 NESTED(handle_int, PT_SIZE, sp)
 	SAVE_ALL
 	CLI
+	TRACE_IRQS_OFF
 
+	LONG_L	s0, TI_REGS($28)
+	LONG_S	sp, TI_REGS($28)
 	PTR_LA	ra, ret_from_irq
-	move	a0, sp
 	j	plat_irq_dispatch
 	END(handle_int)
 
@@ -214,12 +217,15 @@ NESTED(except_vec_vi_handler, 0, sp)
 	mtc0	t0, CP0_TCCONTEXT
 	xor	t1, t1, t0
 	mtc0	t1, CP0_STATUS
-	ehb
+	_ehb
 #endif /* CONFIG_MIPS_MT_SMTC */
 	CLI
-	move	a0, sp
-	jalr	v0
-	j	ret_from_irq
+	TRACE_IRQS_OFF
+
+	LONG_L	s0, TI_REGS($28)
+	LONG_S	sp, TI_REGS($28)
+	PTR_LA	ra, ret_from_irq
+	jr	v0
 	END(except_vec_vi_handler)
 
 /*
@@ -289,11 +295,13 @@ NESTED(nmi_handler, PT_SIZE, sp)
 	.endm
 
 	.macro	__build_clear_sti
+	TRACE_IRQS_ON
 	STI
 	.endm
 
 	.macro	__build_clear_cli
 	CLI
+	TRACE_IRQS_OFF
 	.endm
 
 	.macro	__build_clear_fpe
@@ -301,6 +309,7 @@ NESTED(nmi_handler, PT_SIZE, sp)
 	li	a2, ~(0x3f << 12)
 	and	a2, a1
 	ctc1	a2, fcr31
+	TRACE_IRQS_ON
 	STI
 	.endm
 
@@ -344,8 +353,8 @@ NESTED(nmi_handler, PT_SIZE, sp)
 	.set	at
 	__BUILD_\verbose \exception
 	move	a0, sp
-	jal	do_\handler
-	j	ret_from_exception
+	PTR_LA	ra, ret_from_exception
+	j	do_\handler
 	END(handle_\exception)
 	.endm
 
@@ -366,9 +375,71 @@ NESTED(nmi_handler, PT_SIZE, sp)
 	BUILD_HANDLER mdmx mdmx sti silent		/* #22 */
 	BUILD_HANDLER watch watch sti verbose		/* #23 */
 	BUILD_HANDLER mcheck mcheck cli verbose		/* #24 */
-	BUILD_HANDLER mt mt sti verbose			/* #25 */
+	BUILD_HANDLER mt mt sti silent			/* #25 */
 	BUILD_HANDLER dsp dsp sti silent		/* #26 */
 	BUILD_HANDLER reserved reserved sti verbose	/* others */
+
+	.align	5
+	LEAF(handle_ri_rdhwr_vivt)
+#ifdef CONFIG_MIPS_MT_SMTC
+	PANIC_PIC("handle_ri_rdhwr_vivt called")
+#else
+	.set	push
+	.set	noat
+	.set	noreorder
+	/* check if TLB contains a entry for EPC */
+	MFC0	k1, CP0_ENTRYHI
+	andi	k1, 0xff	/* ASID_MASK */
+	MFC0	k0, CP0_EPC
+	PTR_SRL	k0, PAGE_SHIFT + 1
+	PTR_SLL	k0, PAGE_SHIFT + 1
+	or	k1, k0
+	MTC0	k1, CP0_ENTRYHI
+	mtc0_tlbw_hazard
+	tlbp
+	tlb_probe_hazard
+	mfc0	k1, CP0_INDEX
+	.set	pop
+	bltz	k1, handle_ri	/* slow path */
+	/* fall thru */
+#endif
+	END(handle_ri_rdhwr_vivt)
+
+	LEAF(handle_ri_rdhwr)
+	.set	push
+	.set	noat
+	.set	noreorder
+	/* 0x7c03e83b: rdhwr v1,$29 */
+	MFC0	k1, CP0_EPC
+	lui	k0, 0x7c03
+	lw	k1, (k1)
+	ori	k0, 0xe83b
+	.set	reorder
+	bne	k0, k1, handle_ri	/* if not ours */
+	/* The insn is rdhwr.  No need to check CAUSE.BD here. */
+	get_saved_sp	/* k1 := current_thread_info */
+	.set	noreorder
+	MFC0	k0, CP0_EPC
+#if defined(CONFIG_CPU_R3000) || defined(CONFIG_CPU_TX39XX)
+	ori	k1, _THREAD_MASK
+	xori	k1, _THREAD_MASK
+	LONG_L	v1, TI_TP_VALUE(k1)
+	LONG_ADDIU	k0, 4
+	jr	k0
+	 rfe
+#else
+	LONG_ADDIU	k0, 4		/* stall on $k0 */
+	MTC0	k0, CP0_EPC
+	/* I hope three instructions between MTC0 and ERET are enough... */
+	ori	k1, _THREAD_MASK
+	xori	k1, _THREAD_MASK
+	LONG_L	v1, TI_TP_VALUE(k1)
+	.set	mips3
+	eret
+	.set	mips0
+#endif
+	.set	pop
+	END(handle_ri_rdhwr)
 
 #ifdef CONFIG_64BIT
 /* A temporary overflow handler used by check_daddi(). */

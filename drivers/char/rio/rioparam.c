@@ -87,8 +87,8 @@ static char *_rioparam_c_sccs_ = "@(#)rioparam.c	1.3";
 ** command bit set onto the port. The command bit is in the len field,
 ** and gets ORed in with the actual byte count.
 **
-** When you send a packet with the command bit set, then the first
-** data byte ( data[0] ) is interpretted as the command to execute.
+** When you send a packet with the command bit set the first
+** data byte (data[0]) is interpreted as the command to execute.
 ** It also governs what data structure overlay should accompany the packet.
 ** Commands are defined in cirrus/cirrus.h
 **
@@ -103,7 +103,7 @@ static char *_rioparam_c_sccs_ = "@(#)rioparam.c	1.3";
 **
 ** Most commands do not use the remaining bytes in the data array. The
 ** exceptions are OPEN MOPEN and CONFIG. (NB. As with the SI CONFIG and
-** OPEN are currently analagous). With these three commands the following
+** OPEN are currently analogous). With these three commands the following
 ** 11 data bytes are all used to pass config information such as baud rate etc.
 ** The fields are also defined in cirrus.h. Some contain straightforward
 ** information such as the transmit XON character. Two contain the transmit and
@@ -154,8 +154,8 @@ int RIOParam(struct Port *PortP, int cmd, int Modem, int SleepFlag)
 {
 	struct tty_struct *TtyP;
 	int retval;
-	struct phb_param *phb_param_ptr;
-	struct PKT *PacketP;
+	struct phb_param __iomem *phb_param_ptr;
+	struct PKT __iomem *PacketP;
 	int res;
 	u8 Cor1 = 0, Cor2 = 0, Cor4 = 0, Cor5 = 0;
 	u8 TxXon = 0, TxXoff = 0, RxXon = 0, RxXoff = 0;
@@ -235,7 +235,7 @@ int RIOParam(struct Port *PortP, int cmd, int Modem, int SleepFlag)
 	rio_dprintk(RIO_DEBUG_PARAM, "can_add_transmit() returns %x\n", res);
 	rio_dprintk(RIO_DEBUG_PARAM, "Packet is %p\n", PacketP);
 
-	phb_param_ptr = (struct phb_param *) PacketP->data;
+	phb_param_ptr = (struct phb_param __iomem *) PacketP->data;
 
 
 	switch (TtyP->termios->c_cflag & CSIZE) {
@@ -580,11 +580,11 @@ int RIOParam(struct Port *PortP, int cmd, int Modem, int SleepFlag)
 ** We can add another packet to a transmit queue if the packet pointer pointed
 ** to by the TxAdd pointer has PKT_IN_USE clear in its address.
 */
-int can_add_transmit(struct PKT **PktP, struct Port *PortP)
+int can_add_transmit(struct PKT __iomem **PktP, struct Port *PortP)
 {
-	struct PKT *tp;
+	struct PKT __iomem *tp;
 
-	*PktP = tp = (struct PKT *) RIO_PTR(PortP->Caddr, readw(PortP->TxAdd));
+	*PktP = tp = (struct PKT __iomem *) RIO_PTR(PortP->Caddr, readw(PortP->TxAdd));
 
 	return !((unsigned long) tp & PKT_IN_USE);
 }
@@ -608,9 +608,9 @@ void add_transmit(struct Port *PortP)
  * Put a packet onto the end of the
  * free list
  ****************************************/
-void put_free_end(struct Host *HostP, struct PKT *PktP)
+void put_free_end(struct Host *HostP, struct PKT __iomem *PktP)
 {
-	struct rio_free_list *tmp_pointer;
+	struct rio_free_list __iomem *tmp_pointer;
 	unsigned short old_end, new_end;
 	unsigned long flags;
 
@@ -625,15 +625,15 @@ void put_free_end(struct Host *HostP, struct PKT *PktP)
 
 	if ((old_end = readw(&HostP->ParmMapP->free_list_end)) != TPNULL) {
 		new_end = RIO_OFF(HostP->Caddr, PktP);
-		tmp_pointer = (struct rio_free_list *) RIO_PTR(HostP->Caddr, old_end);
+		tmp_pointer = (struct rio_free_list __iomem *) RIO_PTR(HostP->Caddr, old_end);
 		writew(new_end, &tmp_pointer->next);
-		writew(old_end, &((struct rio_free_list *) PktP)->prev);
-		writew(TPNULL, &((struct rio_free_list *) PktP)->next);
+		writew(old_end, &((struct rio_free_list __iomem *) PktP)->prev);
+		writew(TPNULL, &((struct rio_free_list __iomem *) PktP)->next);
 		writew(new_end, &HostP->ParmMapP->free_list_end);
 	} else {		/* First packet on the free list this should never happen! */
 		rio_dprintk(RIO_DEBUG_PFE, "put_free_end(): This should never happen\n");
 		writew(RIO_OFF(HostP->Caddr, PktP), &HostP->ParmMapP->free_list_end);
-		tmp_pointer = (struct rio_free_list *) PktP;
+		tmp_pointer = (struct rio_free_list __iomem *) PktP;
 		writew(TPNULL, &tmp_pointer->prev);
 		writew(TPNULL, &tmp_pointer->next);
 	}
@@ -647,10 +647,10 @@ void put_free_end(struct Host *HostP, struct PKT *PktP)
 ** relevant packet, [having cleared the PKT_IN_USE bit]. If PKT_IN_USE is clear,
 ** then can_remove_receive() returns 0.
 */
-int can_remove_receive(struct PKT **PktP, struct Port *PortP)
+int can_remove_receive(struct PKT __iomem **PktP, struct Port *PortP)
 {
 	if (readw(PortP->RxRemove) & PKT_IN_USE) {
-		*PktP = (struct PKT *) RIO_PTR(PortP->Caddr, readw(PortP->RxRemove) & ~PKT_IN_USE);
+		*PktP = (struct PKT __iomem *) RIO_PTR(PortP->Caddr, readw(PortP->RxRemove) & ~PKT_IN_USE);
 		return 1;
 	}
 	return 0;

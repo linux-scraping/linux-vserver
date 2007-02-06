@@ -4,7 +4,7 @@
  * BRIEF MODULE DESCRIPTION
  * Momentum Computer Ocelot-3 board dependent boot routines
  *
- * Copyright (C) 1996, 1997, 01, 05  Ralf Baechle
+ * Copyright (C) 1996, 1997, 01, 05 - 06  Ralf Baechle
  * Copyright (C) 2000 RidgeRun, Inc.
  * Copyright (C) 2001 Red Hat, Inc.
  * Copyright (C) 2002 Momentum Computer
@@ -67,7 +67,6 @@
 #include <asm/irq.h>
 #include <asm/pci.h>
 #include <asm/processor.h>
-#include <asm/ptrace.h>
 #include <asm/reboot.h>
 #include <asm/mc146818rtc.h>
 #include <asm/tlbflush.h>
@@ -197,7 +196,7 @@ int m48t37y_set_time(unsigned long sec)
 	return 0;
 }
 
-void momenco_timer_setup(struct irqaction *irq)
+void __init plat_timer_setup(struct irqaction *irq)
 {
 	setup_irq(7, irq);	/* Timer interrupt, unmask status IM7 */
 }
@@ -211,7 +210,6 @@ void momenco_time_init(void)
 	 * the Rm7900 and the Rm7065C
 	 */
 	mips_hpt_frequency = cpu_clock / 2;
-	board_timer_setup = momenco_timer_setup;
 
 	rtc_mips_get_time = m48t37y_get_time;
 	rtc_mips_set_time = m48t37y_set_time;
@@ -313,7 +311,7 @@ static __init int __init ja_pci_init(void)
 
 arch_initcall(ja_pci_init);
 
-void __init plat_setup(void)
+void __init plat_mem_setup(void)
 {
 	unsigned int tmpword;
 

@@ -10,7 +10,6 @@
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License.
  */
-#include <linux/config.h>
 #include <linux/init.h>
 #include <linux/module.h>
 #include <linux/suspend.h>
@@ -84,7 +83,8 @@ int pxa_pm_enter(suspend_state_t state)
 
 #ifdef CONFIG_IWMMXT
 	/* force any iWMMXt context to ram **/
-	iwmmxt_task_disable(NULL);
+	if (elf_hwcap & HWCAP_IWMMXT)
+		iwmmxt_task_disable(NULL);
 #endif
 
 	/* preserve current time */

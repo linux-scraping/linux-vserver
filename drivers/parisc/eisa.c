@@ -199,7 +199,7 @@ static struct hw_interrupt_type eisa_interrupt_type = {
 	.end =		no_end_irq,
 };
 
-static irqreturn_t eisa_irq(int wax_irq, void *intr_dev, struct pt_regs *regs)
+static irqreturn_t eisa_irq(int wax_irq, void *intr_dev)
 {
 	int irq = gsc_readb(0xfc01f000); /* EISA supports 16 irqs */
 	unsigned long flags;
@@ -234,7 +234,7 @@ static irqreturn_t eisa_irq(int wax_irq, void *intr_dev, struct pt_regs *regs)
 	}
 	spin_unlock_irqrestore(&eisa_irq_lock, flags);
 
-	__do_IRQ(irq, regs);
+	__do_IRQ(irq);
    
 	spin_lock_irqsave(&eisa_irq_lock, flags);
 	/* unmask */
@@ -249,7 +249,7 @@ static irqreturn_t eisa_irq(int wax_irq, void *intr_dev, struct pt_regs *regs)
 	return IRQ_HANDLED;
 }
 
-static irqreturn_t dummy_irq2_handler(int _, void *dev, struct pt_regs *regs)
+static irqreturn_t dummy_irq2_handler(int _, void *dev)
 {
 	printk(KERN_ALERT "eisa: uhh, irq2?\n");
 	return IRQ_HANDLED;
@@ -340,7 +340,7 @@ static int __devinit eisa_probe(struct parisc_device *dev)
 	}
 	pcibios_register_hba(&eisa_dev.hba);
 
-	result = request_irq(dev->irq, eisa_irq, SA_SHIRQ, "EISA", &eisa_dev);
+	result = request_irq(dev->irq, eisa_irq, IRQF_SHARED, "EISA", &eisa_dev);
 	if (result) {
 		printk(KERN_ERR "EISA: request_irq failed!\n");
 		return result;
@@ -350,7 +350,7 @@ static int __devinit eisa_probe(struct parisc_device *dev)
 	irq_desc[2].action = &irq2_action;
 	
 	for (i = 0; i < 16; i++) {
-		irq_desc[i].handler = &eisa_interrupt_type;
+		irq_desc[i].chip = &eisa_interrupt_type;
 	}
 	
 	EISA_bus = 1;

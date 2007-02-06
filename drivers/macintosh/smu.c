@@ -19,7 +19,6 @@
  *    the userland interface
  */
 
-#include <linux/config.h>
 #include <linux/types.h>
 #include <linux/kernel.h>
 #include <linux/device.h>
@@ -47,6 +46,7 @@
 #include <asm/abs_addr.h>
 #include <asm/uaccess.h>
 #include <asm/of_device.h>
+#include <asm/of_platform.h>
 
 #define VERSION "0.7"
 #define AUTHOR  "(c) 2005 Benjamin Herrenschmidt, IBM Corp."
@@ -76,9 +76,11 @@ struct smu_device {
 	struct of_device	*of_dev;
 	int			doorbell;	/* doorbell gpio */
 	u32 __iomem		*db_buf;	/* doorbell buffer */
-	int			db_irq;
+	struct device_node	*db_node;
+	unsigned int		db_irq;
 	int			msg;
-	int			msg_irq;
+	struct device_node	*msg_node;
+	unsigned int		msg_irq;
 	struct smu_cmd_buf	*cmd_buf;	/* command buffer virtual */
 	u32			cmd_buf_abs;	/* command buffer absolute */
 	struct list_head	cmd_list;
@@ -94,6 +96,7 @@ struct smu_device {
  */
 static struct smu_device	*smu;
 static DEFINE_MUTEX(smu_part_access);
+static int smu_irq_inited;
 
 static void smu_i2c_retry(unsigned long data);
 
@@ -143,7 +146,7 @@ static void smu_start_cmd(void)
 }
 
 
-static irqreturn_t smu_db_intr(int irq, void *arg, struct pt_regs *regs)
+static irqreturn_t smu_db_intr(int irq, void *arg)
 {
 	unsigned long flags;
 	struct smu_cmd *cmd;
@@ -222,7 +225,7 @@ static irqreturn_t smu_db_intr(int irq, void *arg, struct pt_regs *regs)
 }
 
 
-static irqreturn_t smu_msg_intr(int irq, void *arg, struct pt_regs *regs)
+static irqreturn_t smu_msg_intr(int irq, void *arg)
 {
 	/* I don't quite know what to do with this one, we seem to never
 	 * receive it, so I suspect we have to arm it someway in the SMU
@@ -257,6 +260,10 @@ int smu_queue_cmd(struct smu_cmd *cmd)
 	if (smu->cmd_cur == NULL)
 		smu_start_cmd();
 	spin_unlock_irqrestore(&smu->lock, flags);
+
+	/* Workaround for early calls when irq isn't available */
+	if (!smu_irq_inited || smu->db_irq == NO_IRQ)
+		smu_spinwait_cmd(cmd);
 
 	return 0;
 }
@@ -303,7 +310,7 @@ void smu_poll(void)
 
 	gpio = pmac_do_feature_call(PMAC_FTR_READ_GPIO, NULL, smu->doorbell);
 	if ((gpio & 7) == 7)
-		smu_db_intr(smu->db_irq, smu, NULL);
+		smu_db_intr(smu->db_irq, smu);
 }
 EXPORT_SYMBOL(smu_poll);
 
@@ -448,7 +455,7 @@ EXPORT_SYMBOL(smu_present);
 int __init smu_init (void)
 {
 	struct device_node *np;
-	u32 *data;
+	const u32 *data;
 
         np = of_find_node_by_type(NULL, "smu");
         if (np == NULL)
@@ -479,14 +486,15 @@ int __init smu_init (void)
 	smu->cmd_buf_abs = (u32)smu_cmdbuf_abs;
 	smu->cmd_buf = (struct smu_cmd_buf *)abs_to_virt(smu_cmdbuf_abs);
 
-	np = of_find_node_by_name(NULL, "smu-doorbell");
-	if (np == NULL) {
+	smu->db_node = of_find_node_by_name(NULL, "smu-doorbell");
+	if (smu->db_node == NULL) {
 		printk(KERN_ERR "SMU: Can't find doorbell GPIO !\n");
 		goto fail;
 	}
-	data = (u32 *)get_property(np, "reg", NULL);
+	data = get_property(smu->db_node, "reg", NULL);
 	if (data == NULL) {
-		of_node_put(np);
+		of_node_put(smu->db_node);
+		smu->db_node = NULL;
 		printk(KERN_ERR "SMU: Can't find doorbell GPIO address !\n");
 		goto fail;
 	}
@@ -498,27 +506,21 @@ int __init smu_init (void)
 	smu->doorbell = *data;
 	if (smu->doorbell < 0x50)
 		smu->doorbell += 0x50;
-	if (np->n_intrs > 0)
-		smu->db_irq = np->intrs[0].line;
-
-	of_node_put(np);
 
 	/* Now look for the smu-interrupt GPIO */
 	do {
-		np = of_find_node_by_name(NULL, "smu-interrupt");
-		if (np == NULL)
+		smu->msg_node = of_find_node_by_name(NULL, "smu-interrupt");
+		if (smu->msg_node == NULL)
 			break;
-		data = (u32 *)get_property(np, "reg", NULL);
+		data = get_property(smu->msg_node, "reg", NULL);
 		if (data == NULL) {
-			of_node_put(np);
+			of_node_put(smu->msg_node);
+			smu->msg_node = NULL;
 			break;
 		}
 		smu->msg = *data;
 		if (smu->msg < 0x50)
 			smu->msg += 0x50;
-		if (np->n_intrs > 0)
-			smu->msg_irq = np->intrs[0].line;
-		of_node_put(np);
 	} while(0);
 
 	/* Doorbell buffer is currently hard-coded, I didn't find a proper
@@ -550,13 +552,26 @@ static int smu_late_init(void)
 	smu->i2c_timer.function = smu_i2c_retry;
 	smu->i2c_timer.data = (unsigned long)smu;
 
+	if (smu->db_node) {
+		smu->db_irq = irq_of_parse_and_map(smu->db_node, 0);
+		if (smu->db_irq == NO_IRQ)
+			printk(KERN_ERR "smu: failed to map irq for node %s\n",
+			       smu->db_node->full_name);
+	}
+	if (smu->msg_node) {
+		smu->msg_irq = irq_of_parse_and_map(smu->msg_node, 0);
+		if (smu->msg_irq == NO_IRQ)
+			printk(KERN_ERR "smu: failed to map irq for node %s\n",
+			       smu->msg_node->full_name);
+	}
+
 	/*
 	 * Try to request the interrupts
 	 */
 
 	if (smu->db_irq != NO_IRQ) {
 		if (request_irq(smu->db_irq, smu_db_intr,
-				SA_SHIRQ, "SMU doorbell", smu) < 0) {
+				IRQF_SHARED, "SMU doorbell", smu) < 0) {
 			printk(KERN_WARNING "SMU: can't "
 			       "request interrupt %d\n",
 			       smu->db_irq);
@@ -566,7 +581,7 @@ static int smu_late_init(void)
 
 	if (smu->msg_irq != NO_IRQ) {
 		if (request_irq(smu->msg_irq, smu_msg_intr,
-				SA_SHIRQ, "SMU message", smu) < 0) {
+				IRQF_SHARED, "SMU message", smu) < 0) {
 			printk(KERN_WARNING "SMU: can't "
 			       "request interrupt %d\n",
 			       smu->msg_irq);
@@ -574,6 +589,7 @@ static int smu_late_init(void)
 		}
 	}
 
+	smu_irq_inited = 1;
 	return 0;
 }
 /* This has to be before arch_initcall as the low i2c stuff relies on the
@@ -585,7 +601,7 @@ core_initcall(smu_late_init);
  * sysfs visibility
  */
 
-static void smu_expose_childs(void *unused)
+static void smu_expose_childs(struct work_struct *unused)
 {
 	struct device_node *np;
 
@@ -595,7 +611,7 @@ static void smu_expose_childs(void *unused)
 						  &smu->of_dev->dev);
 }
 
-static DECLARE_WORK(smu_expose_childs_work, smu_expose_childs, NULL);
+static DECLARE_WORK(smu_expose_childs_work, smu_expose_childs);
 
 static int smu_platform_probe(struct of_device* dev,
 			      const struct of_device_id *match)
@@ -638,7 +654,7 @@ static int __init smu_init_sysfs(void)
 	 * I'm a bit too far from figuring out how that works with those
 	 * new chipsets, but that will come back and bite us
 	 */
-	of_register_driver(&smu_of_platform_driver);
+	of_register_platform_driver(&smu_of_platform_driver);
 	return 0;
 }
 
@@ -745,6 +761,11 @@ static void smu_i2c_low_completion(struct smu_cmd *scmd, void *misc)
 	if (fail && --cmd->retries > 0) {
 		DPRINTK("SMU: i2c failure, starting timer...\n");
 		BUG_ON(cmd != smu->cmd_i2c_cur);
+		if (!smu_irq_inited) {
+			mdelay(5);
+			smu_i2c_retry(0);
+			return;
+		}
 		mod_timer(&smu->i2c_timer, jiffies + msecs_to_jiffies(5));
 		return;
 	}
@@ -850,7 +871,7 @@ int smu_queue_i2c(struct smu_i2c_cmd *cmd)
 
 static int smu_read_datablock(u8 *dest, unsigned int addr, unsigned int len)
 {
-	DECLARE_COMPLETION(comp);
+	DECLARE_COMPLETION_ONSTACK(comp);
 	unsigned int chunk;
 	struct smu_cmd cmd;
 	int rc;
@@ -897,7 +918,7 @@ static int smu_read_datablock(u8 *dest, unsigned int addr, unsigned int len)
 
 static struct smu_sdbp_header *smu_create_sdb_partition(int id)
 {
-	DECLARE_COMPLETION(comp);
+	DECLARE_COMPLETION_ONSTACK(comp);
 	struct smu_simple_cmd cmd;
 	unsigned int addr, len, tlen;
 	struct smu_sdbp_header *hdr;
@@ -924,7 +945,7 @@ static struct smu_sdbp_header *smu_create_sdb_partition(int id)
 	 */
 	tlen = sizeof(struct property) + len + 18;
 
-	prop = kcalloc(tlen, 1, GFP_KERNEL);
+	prop = kzalloc(tlen, GFP_KERNEL);
 	if (prop == NULL)
 		return NULL;
 	hdr = (struct smu_sdbp_header *)(prop + 1);
@@ -962,11 +983,11 @@ static struct smu_sdbp_header *smu_create_sdb_partition(int id)
 /* Note: Only allowed to return error code in pointers (using ERR_PTR)
  * when interruptible is 1
  */
-struct smu_sdbp_header *__smu_get_sdb_partition(int id, unsigned int *size,
-						int interruptible)
+const struct smu_sdbp_header *__smu_get_sdb_partition(int id,
+		unsigned int *size, int interruptible)
 {
 	char pname[32];
-	struct smu_sdbp_header *part;
+	const struct smu_sdbp_header *part;
 
 	if (!smu)
 		return NULL;
@@ -983,8 +1004,7 @@ struct smu_sdbp_header *__smu_get_sdb_partition(int id, unsigned int *size,
 	} else
 		mutex_lock(&smu_part_access);
 
-	part = (struct smu_sdbp_header *)get_property(smu->of_node,
-						      pname, size);
+	part = get_property(smu->of_node, pname, size);
 	if (part == NULL) {
 		DPRINTK("trying to extract from SMU ...\n");
 		part = smu_create_sdb_partition(id);
@@ -995,7 +1015,7 @@ struct smu_sdbp_header *__smu_get_sdb_partition(int id, unsigned int *size,
 	return part;
 }
 
-struct smu_sdbp_header *smu_get_sdb_partition(int id, unsigned int *size)
+const struct smu_sdbp_header *smu_get_sdb_partition(int id, unsigned int *size)
 {
 	return __smu_get_sdb_partition(id, size, 0);
 }
@@ -1074,7 +1094,7 @@ static ssize_t smu_write(struct file *file, const char __user *buf,
 		pp->mode = smu_file_events;
 		return 0;
 	} else if (hdr.cmdtype == SMU_CMDTYPE_GET_PARTITION) {
-		struct smu_sdbp_header *part;
+		const struct smu_sdbp_header *part;
 		part = __smu_get_sdb_partition(hdr.cmd, NULL, 1);
 		if (part == NULL)
 			return -EINVAL;

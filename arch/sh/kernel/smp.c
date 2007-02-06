@@ -10,7 +10,6 @@
  * Free Software Foundation; either version 2 of the License, or (at your
  * option) any later version.
  */
-#include <linux/config.h>
 #include <linux/cache.h>
 #include <linux/cpumask.h>
 #include <linux/delay.h>
@@ -43,6 +42,7 @@ cpumask_t cpu_possible_map;
 EXPORT_SYMBOL(cpu_possible_map);
 
 cpumask_t cpu_online_map;
+EXPORT_SYMBOL(cpu_online_map);
 static atomic_t cpus_booted = ATOMIC_INIT(0);
 
 /* These are defined by the board-specific code. */

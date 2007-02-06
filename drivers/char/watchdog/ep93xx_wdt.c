@@ -144,7 +144,7 @@ static int
 ep93xx_wdt_ioctl(struct inode *inode, struct file *file, unsigned int cmd,
 		 unsigned long arg)
 {
-	int ret = -ENOIOCTLCMD;
+	int ret = -ENOTTY;
 
 	switch (cmd) {
 	case WDIOC_GETSUPPORT:
@@ -187,7 +187,7 @@ static int ep93xx_wdt_release(struct inode *inode, struct file *file)
 	return 0;
 }
 
-static struct file_operations ep93xx_wdt_fops = {
+static const struct file_operations ep93xx_wdt_fops = {
 	.owner		= THIS_MODULE,
 	.write		= ep93xx_wdt_write,
 	.ioctl		= ep93xx_wdt_ioctl,

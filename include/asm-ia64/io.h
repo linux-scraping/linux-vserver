@@ -32,7 +32,7 @@
  */
 #define IO_SPACE_LIMIT		0xffffffffffffffffUL
 
-#define MAX_IO_SPACES_BITS		4
+#define MAX_IO_SPACES_BITS		8
 #define MAX_IO_SPACES			(1UL << MAX_IO_SPACES_BITS)
 #define IO_SPACE_BITS			24
 #define IO_SPACE_SIZE			(1UL << IO_SPACE_BITS)
@@ -88,8 +88,9 @@ phys_to_virt (unsigned long address)
 }
 
 #define ARCH_HAS_VALID_PHYS_ADDR_RANGE
+extern u64 kern_mem_attribute (unsigned long phys_addr, unsigned long size);
 extern int valid_phys_addr_range (unsigned long addr, size_t count); /* efi.c */
-extern int valid_mmap_phys_addr_range (unsigned long addr, size_t count);
+extern int valid_mmap_phys_addr_range (unsigned long pfn, size_t count);
 
 /*
  * The following two macros are deprecated and scheduled for removal.
@@ -416,6 +417,8 @@ __writeq (unsigned long val, volatile void __iomem *addr)
 # define outl_p		outl
 #endif
 
+# ifdef __KERNEL__
+
 extern void __iomem * ioremap(unsigned long offset, unsigned long size);
 extern void __iomem * ioremap_nocache (unsigned long offset, unsigned long size);
 
@@ -428,8 +431,6 @@ iounmap (volatile void __iomem *addr)
 #define dmi_ioremap ioremap
 #define dmi_iounmap(x,l) iounmap(x)
 #define dmi_alloc(l) kmalloc(l, GFP_ATOMIC)
-
-# ifdef __KERNEL__
 
 /*
  * String version of IO memory access ops:

@@ -204,9 +204,9 @@ mpc52xx_init_irq(void)
 	out_be32(&intr->main_pri1, 0);
 	out_be32(&intr->main_pri2, 0);
 
-	/* Initialize irq_desc[i].handler's with mpc52xx_ic. */
+	/* Initialize irq_desc[i].chip's with mpc52xx_ic. */
 	for (i = 0; i < NR_IRQS; i++) {
-		irq_desc[i].handler = &mpc52xx_ic;
+		irq_desc[i].chip = &mpc52xx_ic;
 		irq_desc[i].status = IRQ_LEVEL;
 	}
 
@@ -220,7 +220,7 @@ mpc52xx_init_irq(void)
 }
 
 int
-mpc52xx_get_irq(struct pt_regs *regs)
+mpc52xx_get_irq(void)
 {
 	u32 status;
 	int irq = -1;

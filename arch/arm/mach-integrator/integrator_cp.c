@@ -156,7 +156,8 @@ static void cic_unmask_irq(unsigned int irq)
 	cic_writel(1 << irq, INTCP_VA_CIC_BASE + IRQ_ENABLE_SET);
 }
 
-static struct irqchip cic_chip = {
+static struct irq_chip cic_chip = {
+	.name	= "CIC",
 	.ack	= cic_mask_irq,
 	.mask	= cic_mask_irq,
 	.unmask	= cic_unmask_irq,
@@ -174,7 +175,8 @@ static void pic_unmask_irq(unsigned int irq)
 	pic_writel(1 << irq, INTCP_VA_PIC_BASE + IRQ_ENABLE_SET);
 }
 
-static struct irqchip pic_chip = {
+static struct irq_chip pic_chip = {
+	.name	= "PIC",
 	.ack	= pic_mask_irq,
 	.mask	= pic_mask_irq,
 	.unmask = pic_unmask_irq,
@@ -192,19 +194,20 @@ static void sic_unmask_irq(unsigned int irq)
 	sic_writel(1 << irq, INTCP_VA_SIC_BASE + IRQ_ENABLE_SET);
 }
 
-static struct irqchip sic_chip = {
+static struct irq_chip sic_chip = {
+	.name	= "SIC",
 	.ack	= sic_mask_irq,
 	.mask	= sic_mask_irq,
 	.unmask	= sic_unmask_irq,
 };
 
 static void
-sic_handle_irq(unsigned int irq, struct irqdesc *desc, struct pt_regs *regs)
+sic_handle_irq(unsigned int irq, struct irq_desc *desc)
 {
 	unsigned long status = sic_readl(INTCP_VA_SIC_BASE + IRQ_STATUS);
 
 	if (status == 0) {
-		do_bad_IRQ(irq, desc, regs);
+		do_bad_IRQ(irq, desc);
 		return;
 	}
 
@@ -215,7 +218,7 @@ sic_handle_irq(unsigned int irq, struct irqdesc *desc, struct pt_regs *regs)
 		irq += IRQ_SIC_START;
 
 		desc = irq_desc + irq;
-		desc_handle_irq(irq, desc, regs);
+		desc_handle_irq(irq, desc);
 	} while (status);
 }
 
@@ -235,7 +238,7 @@ static void __init intcp_init_irq(void)
 		if (i == 29)
 			break;
 		set_irq_chip(i, &pic_chip);
-		set_irq_handler(i, do_level_IRQ);
+		set_irq_handler(i, handle_level_irq);
 		set_irq_flags(i, IRQF_VALID | IRQF_PROBE);
 	}
 
@@ -244,7 +247,7 @@ static void __init intcp_init_irq(void)
 
 	for (i = IRQ_CIC_START; i <= IRQ_CIC_END; i++) {
 		set_irq_chip(i, &cic_chip);
-		set_irq_handler(i, do_level_IRQ);
+		set_irq_handler(i, handle_level_irq);
 		set_irq_flags(i, IRQF_VALID);
 	}
 
@@ -253,7 +256,7 @@ static void __init intcp_init_irq(void)
 
 	for (i = IRQ_SIC_START; i <= IRQ_SIC_END; i++) {
 		set_irq_chip(i, &sic_chip);
-		set_irq_handler(i, do_level_IRQ);
+		set_irq_handler(i, handle_level_irq);
 		set_irq_flags(i, IRQF_VALID | IRQF_PROBE);
 	}
 

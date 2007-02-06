@@ -1,4 +1,3 @@
-#include <linux/config.h>
 #include <linux/sysdev.h>
 #include <linux/cpu.h>
 #include <linux/smp.h>
@@ -26,8 +25,8 @@ static DEFINE_PER_CPU(struct cpu, cpu_devices);
 /* SMT stuff */
 
 #ifdef CONFIG_PPC_MULTIPLATFORM
-/* default to snooze disabled */
-DEFINE_PER_CPU(unsigned long, smt_snooze_delay);
+/* Time in microseconds we delay before sleeping in the idle loop */
+DEFINE_PER_CPU(unsigned long, smt_snooze_delay) = { 100 };
 
 static ssize_t store_smt_snooze_delay(struct sys_device *dev, const char *buf,
 				      size_t count)
@@ -61,7 +60,7 @@ static int smt_snooze_cmdline;
 static int __init smt_setup(void)
 {
 	struct device_node *options;
-	unsigned int *val;
+	const unsigned int *val;
 	unsigned int cpu;
 
 	if (!cpu_has_feature(CPU_FTR_SMT))
@@ -71,8 +70,7 @@ static int __init smt_setup(void)
 	if (!options)
 		return -ENODEV;
 
-	val = (unsigned int *)get_property(options, "ibm,smt-snooze-delay",
-					   NULL);
+	val = get_property(options, "ibm,smt-snooze-delay", NULL);
 	if (!smt_snooze_cmdline && val) {
 		for_each_possible_cpu(cpu)
 			per_cpu(smt_snooze_delay, cpu) = *val;
@@ -183,6 +181,8 @@ SYSFS_PMCSETUP(pmc6, SPRN_PMC6);
 SYSFS_PMCSETUP(pmc7, SPRN_PMC7);
 SYSFS_PMCSETUP(pmc8, SPRN_PMC8);
 SYSFS_PMCSETUP(purr, SPRN_PURR);
+SYSFS_PMCSETUP(spurr, SPRN_SPURR);
+SYSFS_PMCSETUP(dscr, SPRN_DSCR);
 
 static SYSDEV_ATTR(mmcr0, 0600, show_mmcr0, store_mmcr0);
 static SYSDEV_ATTR(mmcr1, 0600, show_mmcr1, store_mmcr1);
@@ -196,16 +196,17 @@ static SYSDEV_ATTR(pmc6, 0600, show_pmc6, store_pmc6);
 static SYSDEV_ATTR(pmc7, 0600, show_pmc7, store_pmc7);
 static SYSDEV_ATTR(pmc8, 0600, show_pmc8, store_pmc8);
 static SYSDEV_ATTR(purr, 0600, show_purr, NULL);
+static SYSDEV_ATTR(spurr, 0600, show_spurr, NULL);
+static SYSDEV_ATTR(dscr, 0600, show_dscr, store_dscr);
 
 static void register_cpu_online(unsigned int cpu)
 {
 	struct cpu *c = &per_cpu(cpu_devices, cpu);
 	struct sys_device *s = &c->sysdev;
 
-#ifndef CONFIG_PPC_ISERIES
-	if (cpu_has_feature(CPU_FTR_SMT))
+	if (!firmware_has_feature(FW_FEATURE_ISERIES) &&
+			cpu_has_feature(CPU_FTR_SMT))
 		sysdev_create_file(s, &attr_smt_snooze_delay);
-#endif
 
 	/* PMC stuff */
 
@@ -232,8 +233,14 @@ static void register_cpu_online(unsigned int cpu)
 	if (cur_cpu_spec->num_pmcs >= 8)
 		sysdev_create_file(s, &attr_pmc8);
 
-	if (cpu_has_feature(CPU_FTR_SMT))
+	if (cpu_has_feature(CPU_FTR_PURR))
 		sysdev_create_file(s, &attr_purr);
+
+	if (cpu_has_feature(CPU_FTR_SPURR))
+		sysdev_create_file(s, &attr_spurr);
+
+	if (cpu_has_feature(CPU_FTR_DSCR))
+		sysdev_create_file(s, &attr_dscr);
 }
 
 #ifdef CONFIG_HOTPLUG_CPU
@@ -242,12 +249,11 @@ static void unregister_cpu_online(unsigned int cpu)
 	struct cpu *c = &per_cpu(cpu_devices, cpu);
 	struct sys_device *s = &c->sysdev;
 
-	BUG_ON(c->no_control);
+	BUG_ON(!c->hotpluggable);
 
-#ifndef CONFIG_PPC_ISERIES
-	if (cpu_has_feature(CPU_FTR_SMT))
+	if (!firmware_has_feature(FW_FEATURE_ISERIES) &&
+			cpu_has_feature(CPU_FTR_SMT))
 		sysdev_remove_file(s, &attr_smt_snooze_delay);
-#endif
 
 	/* PMC stuff */
 
@@ -274,12 +280,18 @@ static void unregister_cpu_online(unsigned int cpu)
 	if (cur_cpu_spec->num_pmcs >= 8)
 		sysdev_remove_file(s, &attr_pmc8);
 
-	if (cpu_has_feature(CPU_FTR_SMT))
+	if (cpu_has_feature(CPU_FTR_PURR))
 		sysdev_remove_file(s, &attr_purr);
+
+	if (cpu_has_feature(CPU_FTR_SPURR))
+		sysdev_remove_file(s, &attr_spurr);
+
+	if (cpu_has_feature(CPU_FTR_DSCR))
+		sysdev_remove_file(s, &attr_dscr);
 }
 #endif /* CONFIG_HOTPLUG_CPU */
 
-static int sysfs_cpu_notify(struct notifier_block *self,
+static int __cpuinit sysfs_cpu_notify(struct notifier_block *self,
 				      unsigned long action, void *hcpu)
 {
 	unsigned int cpu = (unsigned int)(long)hcpu;
@@ -297,30 +309,85 @@ static int sysfs_cpu_notify(struct notifier_block *self,
 	return NOTIFY_OK;
 }
 
-static struct notifier_block sysfs_cpu_nb = {
+static struct notifier_block __cpuinitdata sysfs_cpu_nb = {
 	.notifier_call	= sysfs_cpu_notify,
 };
+
+static DEFINE_MUTEX(cpu_mutex);
+
+int cpu_add_sysdev_attr(struct sysdev_attribute *attr)
+{
+	int cpu;
+
+	mutex_lock(&cpu_mutex);
+
+	for_each_possible_cpu(cpu) {
+		sysdev_create_file(get_cpu_sysdev(cpu), attr);
+	}
+
+	mutex_unlock(&cpu_mutex);
+	return 0;
+}
+EXPORT_SYMBOL_GPL(cpu_add_sysdev_attr);
+
+int cpu_add_sysdev_attr_group(struct attribute_group *attrs)
+{
+	int cpu;
+	struct sys_device *sysdev;
+
+	mutex_lock(&cpu_mutex);
+
+	for_each_possible_cpu(cpu) {
+		sysdev = get_cpu_sysdev(cpu);
+		sysfs_create_group(&sysdev->kobj, attrs);
+	}
+
+	mutex_unlock(&cpu_mutex);
+	return 0;
+}
+EXPORT_SYMBOL_GPL(cpu_add_sysdev_attr_group);
+
+
+void cpu_remove_sysdev_attr(struct sysdev_attribute *attr)
+{
+	int cpu;
+
+	mutex_lock(&cpu_mutex);
+
+	for_each_possible_cpu(cpu) {
+		sysdev_remove_file(get_cpu_sysdev(cpu), attr);
+	}
+
+	mutex_unlock(&cpu_mutex);
+}
+EXPORT_SYMBOL_GPL(cpu_remove_sysdev_attr);
+
+void cpu_remove_sysdev_attr_group(struct attribute_group *attrs)
+{
+	int cpu;
+	struct sys_device *sysdev;
+
+	mutex_lock(&cpu_mutex);
+
+	for_each_possible_cpu(cpu) {
+		sysdev = get_cpu_sysdev(cpu);
+		sysfs_remove_group(&sysdev->kobj, attrs);
+	}
+
+	mutex_unlock(&cpu_mutex);
+}
+EXPORT_SYMBOL_GPL(cpu_remove_sysdev_attr_group);
+
 
 /* NUMA stuff */
 
 #ifdef CONFIG_NUMA
-static struct node node_devices[MAX_NUMNODES];
-
 static void register_nodes(void)
 {
 	int i;
 
-	for (i = 0; i < MAX_NUMNODES; i++) {
-		if (node_online(i)) {
-			int p_node = parent_node(i);
-			struct node *parent = NULL;
-
-			if (p_node != i)
-				parent = &node_devices[p_node];
-
-			register_node(&node_devices[i], i, parent);
-		}
-	}
+	for (i = 0; i < MAX_NUMNODES; i++)
+		register_one_node(i);
 }
 
 int sysfs_add_device_to_node(struct sys_device *dev, int nid)
@@ -359,23 +426,13 @@ static SYSDEV_ATTR(physical_id, 0444, show_physical_id, NULL);
 static int __init topology_init(void)
 {
 	int cpu;
-	struct node *parent = NULL;
 
 	register_nodes();
-
 	register_cpu_notifier(&sysfs_cpu_nb);
 
 	for_each_possible_cpu(cpu) {
 		struct cpu *c = &per_cpu(cpu_devices, cpu);
 
-#ifdef CONFIG_NUMA
-		/* The node to which a cpu belongs can't be known
-		 * until the cpu is made present.
-		 */
-		parent = NULL;
-		if (cpu_present(cpu))
-			parent = &node_devices[cpu_to_node(cpu)];
-#endif
 		/*
 		 * For now, we just see if the system supports making
 		 * the RTAS calls for CPU hotplug.  But, there may be a
@@ -383,11 +440,11 @@ static int __init topology_init(void)
 		 * CPU.  For instance, the boot cpu might never be valid
 		 * for hotplugging.
 		 */
-		if (!ppc_md.cpu_die)
-			c->no_control = 1;
+		if (ppc_md.cpu_die)
+			c->hotpluggable = 1;
 
-		if (cpu_online(cpu) || (c->no_control == 0)) {
-			register_cpu(c, cpu, parent);
+		if (cpu_online(cpu) || c->hotpluggable) {
+			register_cpu(c, cpu);
 
 			sysdev_create_file(&c->sysdev, &attr_physical_id);
 		}

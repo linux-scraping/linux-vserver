@@ -11,7 +11,6 @@
  *		 Stefan Bader <shbader@de.ibm.com>
  */
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/init.h>	     // for kernel parameters
 #include <linux/kmod.h>	     // for requesting modules
@@ -29,7 +28,7 @@
 #define PRINTK_HEADER "TAPE_CORE: "
 
 static void __tape_do_irq (struct ccw_device *, unsigned long, struct irb *);
-static void tape_delayed_next_request(void * data);
+static void tape_delayed_next_request(struct work_struct *);
 
 /*
  * One list to contain all tape devices of all disciplines, so
@@ -273,7 +272,7 @@ __tape_cancel_io(struct tape_device *device, struct tape_request *request)
 				return 0;
 			case -EBUSY:
 				request->status	= TAPE_REQUEST_CANCEL;
-				schedule_work(&device->tape_dnr);
+				schedule_delayed_work(&device->tape_dnr, 0);
 				return 0;
 			case -ENODEV:
 				DBF_EXCEPTION(2, "device gone, retry\n");
@@ -471,7 +470,7 @@ tape_alloc_device(void)
 	*device->modeset_byte = 0;
 	device->first_minor = -1;
 	atomic_set(&device->ref_count, 1);
-	INIT_WORK(&device->tape_dnr, tape_delayed_next_request, device);
+	INIT_DELAYED_WORK(&device->tape_dnr, tape_delayed_next_request);
 
 	return device;
 }
@@ -544,20 +543,24 @@ int
 tape_generic_probe(struct ccw_device *cdev)
 {
 	struct tape_device *device;
+	int ret;
 
 	device = tape_alloc_device();
 	if (IS_ERR(device))
 		return -ENODEV;
-	PRINT_INFO("tape device %s found\n", cdev->dev.bus_id);
+	ccw_device_set_options(cdev, CCWDEV_DO_PATHGROUP);
+	ret = sysfs_create_group(&cdev->dev.kobj, &tape_attr_group);
+	if (ret) {
+		tape_put_device(device);
+		PRINT_ERR("probe failed for tape device %s\n", cdev->dev.bus_id);
+		return ret;
+	}
 	cdev->dev.driver_data = device;
+	cdev->handler = __tape_do_irq;
 	device->cdev = cdev;
 	device->cdev_id = busid_to_int(cdev->dev.bus_id);
-	cdev->handler = __tape_do_irq;
-
-	ccw_device_set_options(cdev, CCWDEV_DO_PATHGROUP);
-	sysfs_create_group(&cdev->dev.kobj, &tape_attr_group);
-
-	return 0;
+	PRINT_INFO("tape device %s found\n", cdev->dev.bus_id);
+	return ret;
 }
 
 static inline void
@@ -721,7 +724,7 @@ __tape_start_io(struct tape_device *device, struct tape_request *request)
 	} else if (rc == -EBUSY) {
 		/* The common I/O subsystem is currently busy. Retry later. */
 		request->status = TAPE_REQUEST_QUEUED;
-		schedule_work(&device->tape_dnr);
+		schedule_delayed_work(&device->tape_dnr, 0);
 		rc = 0;
 	} else {
 		/* Start failed. Remove request and indicate failure. */
@@ -787,11 +790,11 @@ __tape_start_next_request(struct tape_device *device)
 }
 
 static void
-tape_delayed_next_request(void *data)
+tape_delayed_next_request(struct work_struct *work)
 {
-	struct tape_device *	device;
+	struct tape_device *device =
+		container_of(work, struct tape_device, tape_dnr.work);
 
-	device = (struct tape_device *) data;
 	DBF_LH(6, "tape_delayed_next_request(%p)\n", device);
 	spin_lock_irq(get_ccwdev_lock(device->cdev));
 	__tape_start_next_request(device);

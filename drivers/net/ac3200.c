@@ -45,7 +45,7 @@ static const char version[] =
 #define AC_NIC_BASE	0x00
 #define AC_SA_PROM	0x16			/* The station address PROM. */
 #define AC_ADDR0	0x00			/* Prefix station address values. */
-#define AC_ADDR1	0x40			
+#define AC_ADDR1	0x40
 #define AC_ADDR2	0x90
 #define AC_ID_PORT	0xC80
 #define AC_EISA_ID	0x0110d305
@@ -89,7 +89,7 @@ static void ac_get_8390_hdr(struct net_device *dev, struct e8390_pkt_hdr *hdr,
 					int ring_page);
 
 static int ac_close_card(struct net_device *dev);
-
+
 
 /*	Probe for the AC3200.
 
@@ -217,7 +217,7 @@ static int __init ac_probe1(int ioaddr, struct net_device *dev)
 	dev->if_port = inb(ioaddr + AC_CONFIG) >> 6;
 	dev->mem_start = config2mem(inb(ioaddr + AC_CONFIG));
 
-	printk("%s: AC3200 at %#3x with %dkB memory at physical address %#lx.\n", 
+	printk("%s: AC3200 at %#3x with %dkB memory at physical address %#lx.\n",
 			dev->name, ioaddr, AC_STOP_PG/4, dev->mem_start);
 
 	/*
@@ -370,8 +370,7 @@ MODULE_PARM_DESC(mem, "Memory base address(es)");
 MODULE_DESCRIPTION("Ansel AC3200 EISA ethernet driver");
 MODULE_LICENSE("GPL");
 
-int
-init_module(void)
+int __init init_module(void)
 {
 	struct net_device *dev;
 	int this_dev, found = 0;
@@ -406,7 +405,7 @@ static void cleanup_card(struct net_device *dev)
 	iounmap(ei_status.mem);
 }
 
-void
+void __exit
 cleanup_module(void)
 {
 	int this_dev;

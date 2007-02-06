@@ -8,7 +8,6 @@
  *		 Martin Schwidefsky <schwidefsky@de.ibm.com>
  */
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/bio.h>
@@ -96,6 +95,12 @@ tape_34xx_medium_sense(struct tape_device *device)
 	return rc;
 }
 
+struct tape_34xx_work {
+	struct tape_device	*device;
+	enum tape_op		 op;
+	struct work_struct	 work;
+};
+
 /*
  * These functions are currently used only to schedule a medium_sense for
  * later execution. This is because we get an interrupt whenever a medium
@@ -104,13 +109,10 @@ tape_34xx_medium_sense(struct tape_device *device)
  * interrupt handler.
  */
 static void
-tape_34xx_work_handler(void *data)
+tape_34xx_work_handler(struct work_struct *work)
 {
-	struct {
-		struct tape_device	*device;
-		enum tape_op		 op;
-		struct work_struct	 work;
-	} *p = data;
+	struct tape_34xx_work *p =
+		container_of(work, struct tape_34xx_work, work);
 
 	switch(p->op) {
 		case TO_MSEN:
@@ -127,17 +129,13 @@ tape_34xx_work_handler(void *data)
 static int
 tape_34xx_schedule_work(struct tape_device *device, enum tape_op op)
 {
-	struct {
-		struct tape_device	*device;
-		enum tape_op		 op;
-		struct work_struct	 work;
-	} *p;
+	struct tape_34xx_work *p;
 
 	if ((p = kmalloc(sizeof(*p), GFP_ATOMIC)) == NULL)
 		return -ENOMEM;
 
 	memset(p, 0, sizeof(*p));
-	INIT_WORK(&p->work, tape_34xx_work_handler, p);
+	INIT_WORK(&p->work, tape_34xx_work_handler);
 
 	p->device = tape_get_device_reference(device);
 	p->op     = op;
@@ -1310,9 +1308,9 @@ static struct tape_discipline tape_discipline_34xx = {
 };
 
 static struct ccw_device_id tape_34xx_ids[] = {
-	{ CCW_DEVICE_DEVTYPE(0x3480, 0, 0x3480, 0), driver_info: tape_3480},
-	{ CCW_DEVICE_DEVTYPE(0x3490, 0, 0x3490, 0), driver_info: tape_3490},
-	{ /* end of list */ }
+	{ CCW_DEVICE_DEVTYPE(0x3480, 0, 0x3480, 0), .driver_info = tape_3480},
+	{ CCW_DEVICE_DEVTYPE(0x3490, 0, 0x3490, 0), .driver_info = tape_3490},
+	{ /* end of list */ },
 };
 
 static int

@@ -157,27 +157,9 @@ typedef enum {
 #define DM_FLAGS_IALLOCSEM_WR	0x020	/* thread holds i_alloc_sem wr */
 
 /*
- *	Based on IO_ISDIRECT, decide which i_ flag is set.
+ *	Pull in platform specific event flags defines
  */
-#if LINUX_VERSION_CODE > KERNEL_VERSION(2,6,0)
-#define DM_SEM_FLAG_RD(ioflags) (((ioflags) & IO_ISDIRECT) ? \
-			      DM_FLAGS_IMUX : 0)
-#define DM_SEM_FLAG_WR	(DM_FLAGS_IALLOCSEM_WR | DM_FLAGS_IMUX)
-#endif
-
-#if (LINUX_VERSION_CODE < KERNEL_VERSION(2,6,0)) && \
-    (LINUX_VERSION_CODE >= KERNEL_VERSION(2,4,22))
-#define DM_SEM_FLAG_RD(ioflags) (((ioflags) & IO_ISDIRECT) ? \
-			      DM_FLAGS_IALLOCSEM_RD : DM_FLAGS_IMUX)
-#define DM_SEM_FLAG_WR	(DM_FLAGS_IALLOCSEM_WR | DM_FLAGS_IMUX)
-#endif
-
-#if LINUX_VERSION_CODE <= KERNEL_VERSION(2,4,21)
-#define DM_SEM_FLAG_RD(ioflags) (((ioflags) & IO_ISDIRECT) ? \
-			      0 : DM_FLAGS_IMUX)
-#define DM_SEM_FLAG_WR	(DM_FLAGS_IMUX)
-#endif
-
+#include "xfs_dmapi_priv.h"
 
 /*
  *	Macros to turn caller specified delay/block flags into
@@ -189,6 +171,6 @@ typedef enum {
 #define AT_DELAY_FLAG(f) ((f&ATTR_NONBLOCK) ? DM_FLAGS_NDELAY : 0)
 
 
-extern struct bhv_vfsops xfs_dmops;
+extern struct bhv_module_vfsops xfs_dmops;
 
 #endif  /* __XFS_DMAPI_H__ */

@@ -8,7 +8,6 @@
 #ifndef _ASM_PGTABLE_H
 #define _ASM_PGTABLE_H
 
-#include <linux/config.h>
 #ifdef CONFIG_32BIT
 #include <asm/pgtable-32.h>
 #endif
@@ -68,17 +67,7 @@ extern unsigned long empty_zero_page;
 extern unsigned long zero_page_mask;
 
 #define ZERO_PAGE(vaddr) \
-	(virt_to_page(empty_zero_page + (((unsigned long)(vaddr)) & zero_page_mask)))
-
-#define __HAVE_ARCH_MOVE_PTE
-#define move_pte(pte, prot, old_addr, new_addr)				\
-({									\
- 	pte_t newpte = (pte);						\
-	if (pte_present(pte) && pfn_valid(pte_pfn(pte)) &&		\
-			pte_page(pte) == ZERO_PAGE(old_addr))		\
-		newpte = mk_pte(ZERO_PAGE(new_addr), (prot));		\
-	newpte;								\
-})
+	(virt_to_page((void *)(empty_zero_page + (((unsigned long)(vaddr)) & zero_page_mask))))
 
 extern void paging_init(void);
 
@@ -88,7 +77,7 @@ extern void paging_init(void);
  */
 #define pmd_phys(pmd)		(pmd_val(pmd) - PAGE_OFFSET)
 #define pmd_page(pmd)		(pfn_to_page(pmd_phys(pmd) >> PAGE_SHIFT))
-#define pmd_page_kernel(pmd)	pmd_val(pmd)
+#define pmd_page_vaddr(pmd)	pmd_val(pmd)
 
 #if defined(CONFIG_64BIT_PHYS_ADDR) && defined(CONFIG_CPU_MIPS32_R1)
 
@@ -379,9 +368,7 @@ static inline void update_mmu_cache(struct vm_area_struct *vma,
 	__update_cache(vma, address, pte);
 }
 
-#ifndef CONFIG_NEED_MULTIPLE_NODES
 #define kern_addr_valid(addr)	(1)
-#endif
 
 #ifdef CONFIG_64BIT_PHYS_ADDR
 extern int remap_pfn_range(struct vm_area_struct *vma, unsigned long from, unsigned long pfn, unsigned long size, pgprot_t prot);

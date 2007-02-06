@@ -2,7 +2,6 @@
 #ifndef _SPARC64_TTABLE_H
 #define _SPARC64_TTABLE_H
 
-#include <linux/config.h>
 #include <asm/utrap.h>
 
 #ifdef __ASSEMBLY__
@@ -138,10 +137,49 @@
 #endif
 #define BREAKPOINT_TRAP TRAP(breakpoint_trap)
 
+#ifdef CONFIG_TRACE_IRQFLAGS
+
 #define TRAP_IRQ(routine, level)			\
 	rdpr	%pil, %g2;				\
 	wrpr	%g0, 15, %pil;				\
-	b,pt	%xcc, etrap_irq;			\
+	sethi	%hi(1f-4), %g7;				\
+	ba,pt	%xcc, etrap_irq;			\
+	 or	%g7, %lo(1f-4), %g7;			\
+	nop;						\
+	nop;						\
+	nop;						\
+	.subsection	2;				\
+1:	call	trace_hardirqs_off;			\
+	 nop;						\
+	mov	level, %o0;				\
+	call	routine;				\
+	 add	%sp, PTREGS_OFF, %o1;			\
+	ba,a,pt	%xcc, rtrap_irq;			\
+	.previous;
+
+#define TICK_SMP_IRQ					\
+	rdpr	%pil, %g2;				\
+	wrpr	%g0, 15, %pil;				\
+	sethi	%hi(1f-4), %g7;				\
+	ba,pt	%xcc, etrap_irq;			\
+	 or	%g7, %lo(1f-4), %g7;			\
+	nop;						\
+	nop;						\
+	nop;						\
+	.subsection	2;				\
+1:	call	trace_hardirqs_off;			\
+	 nop;						\
+	call	smp_percpu_timer_interrupt;		\
+	 add	%sp, PTREGS_OFF, %o0;			\
+	ba,a,pt	%xcc, rtrap_irq;			\
+	.previous;
+
+#else
+
+#define TRAP_IRQ(routine, level)			\
+	rdpr	%pil, %g2;				\
+	wrpr	%g0, 15, %pil;				\
+	ba,pt	%xcc, etrap_irq;			\
 	 rd	%pc, %g7;				\
 	mov	level, %o0;				\
 	call	routine;				\
@@ -152,11 +190,13 @@
 	rdpr	%pil, %g2;				\
 	wrpr	%g0, 15, %pil;				\
 	sethi	%hi(109f), %g7;				\
-	b,pt	%xcc, etrap_irq;			\
+	ba,pt	%xcc, etrap_irq;			\
 109:	 or	%g7, %lo(109b), %g7;			\
 	call	smp_percpu_timer_interrupt;		\
 	 add	%sp, PTREGS_OFF, %o0;			\
 	ba,a,pt	%xcc, rtrap_irq;
+
+#endif
 
 #define TRAP_IVEC TRAP_NOSAVE(do_ivec)
 

@@ -1,4 +1,4 @@
-/* linux/include/asm/arch-s3c2410/regs-udc.h
+/* linux/include/asm-arm/arch-s3c2410/regs-udc.h
  *
  * Copyright (C) 2004 Herbert Poetzl <herbert@13thfloor.at>
  *
@@ -6,19 +6,12 @@
  * modify it under the terms of the GNU General Public License as
  * published by the Free Software Foundation; either version 2 of
  * the License, or (at your option) any later version.
- *
- *  Changelog:
- *    01-08-2004	Initial creation
- *    12-09-2004	Cleanup for submission
- *    24-10-2004	Fixed S3C2410_UDC_MAXP_REG definition
- *    10-03-2005	Changed S3C2410_VA to S3C24XX_VA
- */
+*/
 
 #ifndef __ASM_ARCH_REGS_UDC_H
 #define __ASM_ARCH_REGS_UDC_H
 
-
-#define S3C2410_USBDREG(x) ((x) + S3C24XX_VA_USBDEV)
+#define S3C2410_USBDREG(x) (x)
 
 #define S3C2410_UDC_FUNC_ADDR_REG	S3C2410_USBDREG(0x0140)
 #define S3C2410_UDC_PWR_REG		S3C2410_USBDREG(0x0144)
@@ -142,8 +135,8 @@
 #define S3C2410_UDC_OCSR2_ISO		(1<<6) // R/W
 #define S3C2410_UDC_OCSR2_DMAIEN	(1<<5) // R/W
 
-#define S3C2410_UDC_SETIX(x)	    \
-	__raw_writel(S3C2410_UDC_INDEX_ ## x, S3C2410_UDC_INDEX_REG);
+#define S3C2410_UDC_SETIX(base,x)	    \
+	writel(S3C2410_UDC_INDEX_ ## x, base+S3C2410_UDC_INDEX_REG);
 
 
 #define S3C2410_UDC_EP0_CSR_OPKRDY	(1<<0)

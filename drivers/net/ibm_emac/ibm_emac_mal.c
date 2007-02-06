@@ -19,7 +19,6 @@
  * option) any later version.
  *
  */
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/errno.h>
@@ -169,7 +168,7 @@ static inline void mal_disable_eob_irq(struct ibm_ocp_mal *mal)
 	MAL_DBG2("%d: disable_irq" NL, mal->def->index);
 }
 
-static irqreturn_t mal_serr(int irq, void *dev_instance, struct pt_regs *regs)
+static irqreturn_t mal_serr(int irq, void *dev_instance)
 {
 	struct ibm_ocp_mal *mal = dev_instance;
 	u32 esr = get_mal_dcrn(mal, MAL_ESR);
@@ -217,7 +216,7 @@ static inline void mal_schedule_poll(struct ibm_ocp_mal *mal)
 		MAL_DBG2("%d: already in poll" NL, mal->def->index);
 }
 
-static irqreturn_t mal_txeob(int irq, void *dev_instance, struct pt_regs *regs)
+static irqreturn_t mal_txeob(int irq, void *dev_instance)
 {
 	struct ibm_ocp_mal *mal = dev_instance;
 	u32 r = get_mal_dcrn(mal, MAL_TXEOBISR);
@@ -227,7 +226,7 @@ static irqreturn_t mal_txeob(int irq, void *dev_instance, struct pt_regs *regs)
 	return IRQ_HANDLED;
 }
 
-static irqreturn_t mal_rxeob(int irq, void *dev_instance, struct pt_regs *regs)
+static irqreturn_t mal_rxeob(int irq, void *dev_instance)
 {
 	struct ibm_ocp_mal *mal = dev_instance;
 	u32 r = get_mal_dcrn(mal, MAL_RXEOBISR);
@@ -237,7 +236,7 @@ static irqreturn_t mal_rxeob(int irq, void *dev_instance, struct pt_regs *regs)
 	return IRQ_HANDLED;
 }
 
-static irqreturn_t mal_txde(int irq, void *dev_instance, struct pt_regs *regs)
+static irqreturn_t mal_txde(int irq, void *dev_instance)
 {
 	struct ibm_ocp_mal *mal = dev_instance;
 	u32 deir = get_mal_dcrn(mal, MAL_TXDEIR);
@@ -253,7 +252,7 @@ static irqreturn_t mal_txde(int irq, void *dev_instance, struct pt_regs *regs)
 	return IRQ_HANDLED;
 }
 
-static irqreturn_t mal_rxde(int irq, void *dev_instance, struct pt_regs *regs)
+static irqreturn_t mal_rxde(int irq, void *dev_instance)
 {
 	struct ibm_ocp_mal *mal = dev_instance;
 	struct list_head *l;

@@ -1,9 +1,8 @@
 #ifndef __ASM_SH_HW_IRQ_H
 #define __ASM_SH_HW_IRQ_H
 
-static inline void hw_resend_irq(struct hw_interrupt_type *h, unsigned int i)
-{
-	/* Nothing to do */
-}
+#include <asm/atomic.h>
+
+extern atomic_t irq_err_count;
 
 #endif /* __ASM_SH_HW_IRQ_H */

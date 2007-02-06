@@ -6,16 +6,11 @@ menu "Linux VServer"
 
 config	VSERVER_LEGACY
 	bool	"Enable Legacy Kernel API"
-	default y
+	default n
 	help
 	  This enables the legacy API used in vs1.xx, maintaining
 	  compatibility with older vserver tools, and guest images
-	  that are configured using the legacy method.  This is
-	  probably a good idea for now, for migration purposes.
-
-	  Note that some tools have not yet been altered to use
-	  this API, so disabling this option may reduce some
-	  functionality.
+	  that are configured using the legacy method.
 
 config	VSERVER_LEGACY_VERSION
 	bool	"Show a Legacy Version ID"
@@ -29,23 +24,51 @@ config	VSERVER_LEGACY_VERSION
 	  so better avoid it, unless you really, really need it
 	  for backwards compatibility.
 
-config	VSERVER_NGNET
-	bool	"Disable Legacy Networking Kernel API"
-	depends on EXPERIMENTAL
+config	VSERVER_DYNAMIC_IDS
+	bool	"Enable dynamic context IDs"
+	depends on EXPERIMENTAL && VSERVER_LEGACY
 	default n
 	help
-	  This disables the legacy networking API which is required
-	  by the chbind tool. Do not disable it unless you exactly
-	  know what you are doing.
+	  This enables support of in kernel dynamic context IDs,
+	  which is deprecated and will probably be removed in the
+	  next release.
+
+config	VSERVER_LEGACYNET
+	bool	"Enable Legacy Networking Kernel API"
+	default n
+	help
+	  This enables the legacy networking API which is used
+	  by older tools (pre 0.30.210) to set up the network
+	  context (chbind).
 
 config	VSERVER_REMAP_SADDR
 	bool	"Remap Source IP Address"
-	depends on EXPERIMENTAL && !VSERVER_LEGACY
+	depends on EXPERIMENTAL
 	default n
 	help
 	  This allows to remap the source IP address of 'local'
 	  connections from 127.0.0.1 to the first assigned
 	  guest IP.
+
+config	VSERVER_COWBL
+	bool	"Enable COW Immutable Link Breaking"
+	depends on EXPERIMENTAL
+	default y
+	help
+	  This enables the COW (Copy-On-Write) link break code.
+	  It allows you to treat unified files like normal files
+	  when writing to them (which will implicitely break the
+	  link and create a copy of the unified file)
+
+config	VSERVER_VTIME
+	bool	"Enable Virtualized Guest Time"
+	depends on EXPERIMENTAL
+	default n
+	help
+	  This enables per guest time offsets to allow for
+	  adjusting the system clock individually per guest.
+	  this adds some overhead to the time functions and
+	  therefore should not be enabled without good reason.
 
 config	VSERVER_PROC_SECURE
 	bool	"Enable Proc Security"
@@ -75,7 +98,18 @@ config	VSERVER_HARDCPU
 	  to consume CPU resources again until a per-context
 	  configured minimum of tokens has been reached.
 
-config	VSERVER_HARDCPU_IDLE
+config	VSERVER_IDLETIME
+	bool	"Avoid idle CPUs by skipping Time"
+	depends on VSERVER_HARDCPU
+	default n
+	help
+	  This option allows the scheduler to artificially
+	  advance time (per cpu) when otherwise the idle
+	  task would be scheduled, thus keeping the cpu
+	  busy and sharing the available resources among
+	  certain contexts.
+
+config	VSERVER_IDLELIMIT
 	bool	"Limit the IDLE task"
 	depends on VSERVER_HARDCPU
 	default n
@@ -87,44 +121,44 @@ config	VSERVER_HARDCPU_IDLE
 	  will also marginally increase scheduling overhead.
 
 choice
-	prompt	"Persistent Inode Context Tagging"
-	default	INOXID_UGID24
+	prompt	"Persistent Inode Tagging"
+	default	TAGGING_ID24
 	help
 	  This adds persistent context information to filesystems
 	  mounted with the tagxid option. Tagging is a requirement
 	  for per-context disk limits and per-context quota.
 
 
-config	INOXID_NONE
+config	TAGGING_NONE
 	bool	"Disabled"
 	help
 	  do not store per-context information in inodes.
 
-config	INOXID_UID16
+config	TAGGING_UID16
 	bool	"UID16/GID32"
 	help
 	  reduces UID to 16 bit, but leaves GID at 32 bit.
 
-config	INOXID_GID16
+config	TAGGING_GID16
 	bool	"UID32/GID16"
 	help
 	  reduces GID to 16 bit, but leaves UID at 32 bit.
 
-config	INOXID_UGID24
+config	TAGGING_ID24
 	bool	"UID24/GID24"
 	help
 	  uses the upper 8bit from UID and GID for XID tagging
 	  which leaves 24bit for UID/GID each, which should be
 	  more than sufficient for normal use.
 
-config	INOXID_INTERN
+config	TAGGING_INTERN
 	bool	"UID32/GID32"
 	help
 	  this uses otherwise reserved inode fields in the on
 	  disk representation, which limits the use to a few
 	  filesystems (currently ext2 and ext3)
 
-config	INOXID_RUNTIME
+config	TAGGING_RUNTIME
 	bool	"Runtime"
 	depends on EXPERIMENTAL
 	help
@@ -134,13 +168,30 @@ config	INOXID_RUNTIME
 
 endchoice
 
-config	XID_TAG_NFSD
+config	TAG_NFSD
 	bool	"Tag NFSD User Auth and Files"
 	default n
 	help
 	  Enable this if you do want the in-kernel NFS
-	  Server to use the xid tagging specified above.
+	  Server to use the tagging specified above.
 	  (will require patched clients too)
+
+config	PROPAGATE
+	bool	"Enable Inode Tag Propagation"
+	default n
+	depends on EXPERIMENTAL
+	help
+	  This allows for the tagid= mount option to specify
+	  a tagid which is to be used for the entire mount
+	  tree.
+
+config	VSERVER_PRIVACY
+	bool	"Honor Privacy Aspects of Guests"
+	default y
+	help
+	  When enabled, most context checks will disallow
+	  access to structures assigned to a specific context,
+	  like ptys or loop devices.
 
 config	VSERVER_DEBUG
 	bool	"VServer Debugging Code"
@@ -161,7 +212,7 @@ config	VSERVER_HISTORY
 	  the event of a kernel panic or oops.
 
 config	VSERVER_HISTORY_SIZE
-	int "Per-CPU History Size (32-65536)"
+	int	"Per-CPU History Size (32-65536)"
 	depends on VSERVER_HISTORY
 	range 32 65536
 	default 64
@@ -169,12 +220,42 @@ config	VSERVER_HISTORY_SIZE
 	  This allows you to specify the number of entries in
 	  the per-CPU history buffer.
 
+config	VSERVER_MONITOR
+	bool	"VServer Scheduling Monitor"
+	depends on VSERVER_DEBUG
+	default n
+	help
+	  Set this to yes if you want to record the scheduling
+	  decisions, so that they can be relayed to userspace
+	  for detailed analysis.
+
+config	VSERVER_MONITOR_SIZE
+	int	"Per-CPU Monitor Queue Size (32-65536)"
+	depends on VSERVER_MONITOR
+	range 32 65536
+	default 1024
+	help
+	  This allows you to specify the number of entries in
+	  the per-CPU scheduling monitor buffer.
+
+config	VSERVER_MONITOR_SYNC
+	int	"Per-CPU Monitor Sync Interval (0-65536)"
+	depends on VSERVER_MONITOR
+	range 0 65536
+	default 256
+	help
+	  This allows you to specify the interval in ticks
+	  when a time sync entry is inserted.
+
 endmenu
 
 
 config	VSERVER
 	bool
 	default y
+	select UTS_NS
+	select SYSVIPC
+	select IPC_NS
 
 config	VSERVER_SECURITY
 	bool
@@ -182,8 +263,8 @@ config	VSERVER_SECURITY
 	default y
 	select SECURITY_CAPABILITIES
 
-config	VSERVER_LEGACYNET
+config	VSERVER_NGNET
 	bool
-	depends on !VSERVER_NGNET
+	depends on EXPERIMENTAL && !VSERVER_LEGACYNET
 	default y
 

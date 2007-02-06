@@ -130,7 +130,7 @@ MFG:HEWLETT-PACKARD;MDL:DESKJET 970C;CMD:MLC,PCL,PML;CLASS:PRINTER;DESCRIPTION:H
 
 struct usblp {
 	struct usb_device 	*dev;			/* USB device */
-	struct semaphore	sem;			/* locks this struct, especially "dev" */
+	struct mutex		mut;			/* locks this struct, especially "dev" */
 	char			*writebuf;		/* write transfer_buffer */
 	char			*readbuf;		/* read transfer_buffer */
 	char			*statusbuf;		/* status transfer_buffer */
@@ -154,6 +154,7 @@ struct usblp {
 	unsigned char		used;			/* True if open */
 	unsigned char		present;		/* True if not disconnected */
 	unsigned char		bidir;			/* interface is bidirectional */
+	unsigned char		sleeping;		/* interface is suspended */
 	unsigned char		*device_id_string;	/* IEEE 1284 DEVICE ID string (ptr) */
 							/* first 2 bytes are (big-endian) length */
 };
@@ -183,6 +184,7 @@ static void usblp_dump(struct usblp *usblp) {
 	dbg("quirks=%d", usblp->quirks);
 	dbg("used=%d", usblp->used);
 	dbg("bidir=%d", usblp->bidir);
+	dbg("sleeping=%d", usblp->sleeping);
 	dbg("device_id_string=\"%s\"",
 		usblp->device_id_string ?
 			usblp->device_id_string + 2 :
@@ -215,6 +217,7 @@ static const struct quirk_printer_struct quirk_printers[] = {
 	{ 0x0409, 0xbef4, USBLP_QUIRK_BIDIR }, /* NEC Picty760 (HP OEM) */
 	{ 0x0409, 0xf0be, USBLP_QUIRK_BIDIR }, /* NEC Picty920 (HP OEM) */
 	{ 0x0409, 0xf1be, USBLP_QUIRK_BIDIR }, /* NEC Picty800 (HP OEM) */
+	{ 0x0482, 0x0010, USBLP_QUIRK_BIDIR }, /* Kyocera Mita FS 820, by zut <kernel@zut.de> */
 	{ 0, 0 }
 };
 
@@ -271,7 +274,7 @@ static int proto_bias = -1;
  * URB callback.
  */
 
-static void usblp_bulk_read(struct urb *urb, struct pt_regs *regs)
+static void usblp_bulk_read(struct urb *urb)
 {
 	struct usblp *usblp = urb->context;
 
@@ -288,7 +291,7 @@ unplug:
 	wake_up_interruptible(&usblp->wait);
 }
 
-static void usblp_bulk_write(struct urb *urb, struct pt_regs *regs)
+static void usblp_bulk_write(struct urb *urb)
 {
 	struct usblp *usblp = urb->context;
 
@@ -336,6 +339,20 @@ static int usblp_check_status(struct usblp *usblp, int err)
 		info("usblp%d: %s", usblp->minor, usblp_messages[newerr]);
 
 	return newerr;
+}
+
+static int handle_bidir (struct usblp *usblp)
+{
+	if (usblp->bidir && usblp->used && !usblp->sleeping) {
+		usblp->readcount = 0;
+		usblp->readurb->dev = usblp->dev;
+		if (usb_submit_urb(usblp->readurb, GFP_KERNEL) < 0) {
+			usblp->used = 0;
+			return -EIO;
+		}
+	}
+
+	return 0;
 }
 
 /*
@@ -390,14 +407,9 @@ static int usblp_open(struct inode *inode, struct file *file)
 	usblp->writeurb->status = 0;
 	usblp->readurb->status = 0;
 
-	if (usblp->bidir) {
-		usblp->readcount = 0;
-		usblp->readurb->dev = usblp->dev;
-		if (usb_submit_urb(usblp->readurb, GFP_KERNEL) < 0) {
-			retval = -EIO;
-			usblp->used = 0;
-			file->private_data = NULL;
-		}
+	if (handle_bidir(usblp) < 0) {
+		file->private_data = NULL;
+		retval = -EIO;
 	}
 out:
 	mutex_unlock (&usblp_mutex);
@@ -454,8 +466,13 @@ static long usblp_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 	int twoints[2];
 	int retval = 0;
 
-	down (&usblp->sem);
+	mutex_lock (&usblp->mut);
 	if (!usblp->present) {
+		retval = -ENODEV;
+		goto done;
+	}
+
+	if (usblp->sleeping) {
 		retval = -ENODEV;
 		goto done;
 	}
@@ -628,14 +645,14 @@ static long usblp_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		}
 
 done:
-	up (&usblp->sem);
+	mutex_unlock (&usblp->mut);
 	return retval;
 }
 
 static ssize_t usblp_write(struct file *file, const char __user *buffer, size_t count, loff_t *ppos)
 {
 	struct usblp *usblp = file->private_data;
-	int timeout, rv, err = 0, transfer_length = 0;
+	int timeout, intr, rv, err = 0, transfer_length = 0;
 	size_t writecount = 0;
 
 	while (writecount < count) {
@@ -652,10 +669,17 @@ static ssize_t usblp_write(struct file *file, const char __user *buffer, size_t 
 			if (rv < 0)
 				return writecount ? writecount : -EINTR;
 		}
-		down (&usblp->sem);
+		intr = mutex_lock_interruptible (&usblp->mut);
+		if (intr)
+			return writecount ? writecount : -EINTR;
 		if (!usblp->present) {
-			up (&usblp->sem);
+			mutex_unlock (&usblp->mut);
 			return -ENODEV;
+		}
+
+		if (usblp->sleeping) {
+			mutex_unlock (&usblp->mut);
+			return writecount ? writecount : -ENODEV;
 		}
 
 		if (usblp->writeurb->status != 0) {
@@ -666,10 +690,10 @@ static ssize_t usblp_write(struct file *file, const char __user *buffer, size_t 
 				err = usblp->writeurb->status;
 			} else
 				err = usblp_check_status(usblp, err);
-			up (&usblp->sem);
+			mutex_unlock (&usblp->mut);
 
 			/* if the fault was due to disconnect, let khubd's
-			 * call to usblp_disconnect() grab usblp->sem ...
+			 * call to usblp_disconnect() grab usblp->mut ...
 			 */
 			schedule ();
 			continue;
@@ -681,7 +705,7 @@ static ssize_t usblp_write(struct file *file, const char __user *buffer, size_t 
 		 */
 		writecount += transfer_length;
 		if (writecount == count) {
-			up(&usblp->sem);
+			mutex_unlock(&usblp->mut);
 			break;
 		}
 
@@ -693,7 +717,7 @@ static ssize_t usblp_write(struct file *file, const char __user *buffer, size_t 
 
 		if (copy_from_user(usblp->writeurb->transfer_buffer, 
 				   buffer + writecount, transfer_length)) {
-			up(&usblp->sem);
+			mutex_unlock(&usblp->mut);
 			return writecount ? writecount : -EFAULT;
 		}
 
@@ -701,14 +725,15 @@ static ssize_t usblp_write(struct file *file, const char __user *buffer, size_t 
 		usblp->wcomplete = 0;
 		err = usb_submit_urb(usblp->writeurb, GFP_KERNEL);
 		if (err) {
+			usblp->wcomplete = 1;
 			if (err != -ENOMEM)
 				count = -EIO;
 			else
 				count = writecount ? writecount : -ENOMEM;
-			up (&usblp->sem);
+			mutex_unlock (&usblp->mut);
 			break;
 		}
-		up (&usblp->sem);
+		mutex_unlock (&usblp->mut);
 	}
 
 	return count;
@@ -717,12 +742,14 @@ static ssize_t usblp_write(struct file *file, const char __user *buffer, size_t 
 static ssize_t usblp_read(struct file *file, char __user *buffer, size_t count, loff_t *ppos)
 {
 	struct usblp *usblp = file->private_data;
-	int rv;
+	int rv, intr;
 
 	if (!usblp->bidir)
 		return -EINVAL;
 
-	down (&usblp->sem);
+	intr = mutex_lock_interruptible (&usblp->mut);
+	if (intr)
+		return -EINTR;
 	if (!usblp->present) {
 		count = -ENODEV;
 		goto done;
@@ -735,9 +762,9 @@ static ssize_t usblp_read(struct file *file, char __user *buffer, size_t count, 
 			count = -EAGAIN;
 			goto done;
 		}
-		up(&usblp->sem);
+		mutex_unlock(&usblp->mut);
 		rv = wait_event_interruptible(usblp->wait, usblp->rcomplete || !usblp->present);
-		down(&usblp->sem);
+		mutex_lock(&usblp->mut);
 		if (rv < 0) {
 			count = -EINTR;
 			goto done;
@@ -745,6 +772,11 @@ static ssize_t usblp_read(struct file *file, char __user *buffer, size_t count, 
 	}
 
 	if (!usblp->present) {
+		count = -ENODEV;
+		goto done;
+	}
+
+	if (usblp->sleeping) {
 		count = -ENODEV;
 		goto done;
 	}
@@ -780,7 +812,7 @@ static ssize_t usblp_read(struct file *file, char __user *buffer, size_t count, 
 	}
 
 done:
-	up (&usblp->sem);
+	mutex_unlock (&usblp->mut);
 	return count;
 }
 
@@ -813,7 +845,7 @@ static unsigned int usblp_quirks (__u16 vendor, __u16 product)
 	return 0;
 }
 
-static struct file_operations usblp_fops = {
+static const struct file_operations usblp_fops = {
 	.owner =	THIS_MODULE,
 	.read =		usblp_read,
 	.write =	usblp_write,
@@ -859,7 +891,7 @@ static int usblp_probe(struct usb_interface *intf,
 		goto abort;
 	}
 	usblp->dev = dev;
-	init_MUTEX (&usblp->sem);
+	mutex_init (&usblp->mut);
 	init_waitqueue_head(&usblp->wait);
 	usblp->ifnum = intf->cur_altsetting->desc.bInterfaceNumber;
 	usblp->intf = intf;
@@ -927,7 +959,9 @@ static int usblp_probe(struct usb_interface *intf,
 
 	/* Retrieve and store the device ID string. */
 	usblp_cache_device_id_string(usblp);
-	device_create_file(&intf->dev, &dev_attr_ieee1284_id);
+	retval = device_create_file(&intf->dev, &dev_attr_ieee1284_id);
+	if (retval)
+		goto abort_intfdata;
 
 #ifdef DEBUG
 	usblp_check_status(usblp, 0);
@@ -1021,18 +1055,13 @@ static int usblp_select_alts(struct usblp *usblp)
 		for (e = 0; e < ifd->desc.bNumEndpoints; e++) {
 			epd = &ifd->endpoint[e].desc;
 
-			if ((epd->bmAttributes&USB_ENDPOINT_XFERTYPE_MASK)!=
-			    USB_ENDPOINT_XFER_BULK)
-				continue;
-
-			if (!(epd->bEndpointAddress & USB_ENDPOINT_DIR_MASK)) {
+			if (usb_endpoint_is_bulk_out(epd))
 				if (!epwrite)
 					epwrite = epd;
 
-			} else {
+			if (usb_endpoint_is_bulk_in(epd))
 				if (!epread)
 					epread = epd;
-			}
 		}
 
 		/* Ignore buggy hardware without the right endpoints. */
@@ -1154,7 +1183,7 @@ static void usblp_disconnect(struct usb_interface *intf)
 	device_remove_file(&intf->dev, &dev_attr_ieee1284_id);
 
 	mutex_lock (&usblp_mutex);
-	down (&usblp->sem);
+	mutex_lock (&usblp->mut);
 	usblp->present = 0;
 	usb_set_intfdata (intf, NULL);
 
@@ -1163,11 +1192,44 @@ static void usblp_disconnect(struct usb_interface *intf)
 			usblp->writebuf, usblp->writeurb->transfer_dma);
 	usb_buffer_free (usblp->dev, USBLP_BUF_SIZE,
 			usblp->readbuf, usblp->readurb->transfer_dma);
-	up (&usblp->sem);
+	mutex_unlock (&usblp->mut);
 
 	if (!usblp->used)
 		usblp_cleanup (usblp);
 	mutex_unlock (&usblp_mutex);
+}
+
+static int usblp_suspend (struct usb_interface *intf, pm_message_t message)
+{
+	struct usblp *usblp = usb_get_intfdata (intf);
+
+	/* this races against normal access and open */
+	mutex_lock (&usblp_mutex);
+	mutex_lock (&usblp->mut);
+	/* we take no more IO */
+	usblp->sleeping = 1;
+	usblp_unlink_urbs(usblp);
+	mutex_unlock (&usblp->mut);
+	mutex_unlock (&usblp_mutex);
+
+	return 0;
+}
+
+static int usblp_resume (struct usb_interface *intf)
+{
+	struct usblp *usblp = usb_get_intfdata (intf);
+	int r;
+
+	mutex_lock (&usblp_mutex);
+	mutex_lock (&usblp->mut);
+
+	usblp->sleeping = 0;
+	r = handle_bidir (usblp);
+
+	mutex_unlock (&usblp->mut);
+	mutex_unlock (&usblp_mutex);
+
+	return r;
 }
 
 static struct usb_device_id usblp_ids [] = {
@@ -1186,6 +1248,8 @@ static struct usb_driver usblp_driver = {
 	.name =		"usblp",
 	.probe =	usblp_probe,
 	.disconnect =	usblp_disconnect,
+	.suspend =	usblp_suspend,
+	.resume =	usblp_resume,
 	.id_table =	usblp_ids,
 };
 

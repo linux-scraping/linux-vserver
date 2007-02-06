@@ -68,14 +68,14 @@ static void lpd270_unmask_irq(unsigned int irq)
 	__raw_writew(lpd270_irq_enabled, LPD270_INT_MASK);
 }
 
-static struct irqchip lpd270_irq_chip = {
+static struct irq_chip lpd270_irq_chip = {
+	.name		= "CPLD",
 	.ack		= lpd270_mask_irq,
 	.mask		= lpd270_mask_irq,
 	.unmask		= lpd270_unmask_irq,
 };
 
-static void lpd270_irq_handler(unsigned int irq, struct irqdesc *desc,
-				  struct pt_regs *regs)
+static void lpd270_irq_handler(unsigned int irq, struct irq_desc *desc)
 {
 	unsigned long pending;
 
@@ -85,7 +85,7 @@ static void lpd270_irq_handler(unsigned int irq, struct irqdesc *desc,
 		if (likely(pending)) {
 			irq = LPD270_IRQ(0) + __ffs(pending);
 			desc = irq_desc + irq;
-			desc_handle_irq(irq, desc, regs);
+			desc_handle_irq(irq, desc);
 
 			pending = __raw_readw(LPD270_INT_STATUS) &
 						lpd270_irq_enabled;
@@ -105,7 +105,7 @@ static void __init lpd270_init_irq(void)
 	/* setup extra LogicPD PXA270 irqs */
 	for (irq = LPD270_IRQ(2); irq <= LPD270_IRQ(4); irq++) {
 		set_irq_chip(irq, &lpd270_irq_chip);
-		set_irq_handler(irq, do_level_IRQ);
+		set_irq_handler(irq, handle_level_irq);
 		set_irq_flags(irq, IRQF_VALID | IRQF_PROBE);
 	}
 	set_irq_chained_handler(IRQ_GPIO(0), lpd270_irq_handler);
@@ -247,58 +247,167 @@ static void lpd270_backlight_power(int on)
 }
 
 /* 5.7" TFT QVGA (LoLo display number 1) */
-static struct pxafb_mach_info sharp_lq057q3dc02 __initdata = {
-	.pixclock		= 100000,
-	.xres			= 240,
-	.yres			= 320,
+static struct pxafb_mode_info sharp_lq057q3dc02_mode = {
+	.pixclock		= 150000,
+	.xres			= 320,
+	.yres			= 240,
 	.bpp			= 16,
-	.hsync_len		= 64,
-	.left_margin		= 0x27,
-	.right_margin		= 0x09,
-	.vsync_len		= 0x04,
+	.hsync_len		= 0x14,
+	.left_margin		= 0x28,
+	.right_margin		= 0x0a,
+	.vsync_len		= 0x02,
 	.upper_margin		= 0x08,
 	.lower_margin		= 0x14,
-	.sync			= 0,
+	.sync			= FB_SYNC_HOR_HIGH_ACT | FB_SYNC_VERT_HIGH_ACT,
+};
+
+static struct pxafb_mach_info sharp_lq057q3dc02 = {
+	.modes			= &sharp_lq057q3dc02_mode,
+	.num_modes		= 1,
 	.lccr0			= 0x07800080,
-	.lccr3			= 0x04400007,
+	.lccr3			= 0x00400000,
+	.pxafb_backlight_power	= lpd270_backlight_power,
+};
+
+/* 12.1" TFT SVGA (LoLo display number 2) */
+static struct pxafb_mode_info sharp_lq121s1dg31_mode = {
+	.pixclock		= 50000,
+	.xres			= 800,
+	.yres			= 600,
+	.bpp			= 16,
+	.hsync_len		= 0x05,
+	.left_margin		= 0x52,
+	.right_margin		= 0x05,
+	.vsync_len		= 0x04,
+	.upper_margin		= 0x14,
+	.lower_margin		= 0x0a,
+	.sync			= FB_SYNC_HOR_HIGH_ACT | FB_SYNC_VERT_HIGH_ACT,
+};
+
+static struct pxafb_mach_info sharp_lq121s1dg31 = {
+	.modes			= &sharp_lq121s1dg31_mode,
+	.num_modes		= 1,
+	.lccr0			= 0x07800080,
+	.lccr3			= 0x00400000,
+	.pxafb_backlight_power	= lpd270_backlight_power,
+};
+
+/* 3.6" TFT QVGA (LoLo display number 3) */
+static struct pxafb_mode_info sharp_lq036q1da01_mode = {
+	.pixclock		= 150000,
+	.xres			= 320,
+	.yres			= 240,
+	.bpp			= 16,
+	.hsync_len		= 0x0e,
+	.left_margin		= 0x04,
+	.right_margin		= 0x0a,
+	.vsync_len		= 0x03,
+	.upper_margin		= 0x03,
+	.lower_margin		= 0x03,
+	.sync			= FB_SYNC_HOR_HIGH_ACT | FB_SYNC_VERT_HIGH_ACT,
+};
+
+static struct pxafb_mach_info sharp_lq036q1da01 = {
+	.modes			= &sharp_lq036q1da01_mode,
+	.num_modes		= 1,
+	.lccr0			= 0x07800080,
+	.lccr3			= 0x00400000,
 	.pxafb_backlight_power	= lpd270_backlight_power,
 };
 
 /* 6.4" TFT VGA (LoLo display number 5) */
-static struct pxafb_mach_info sharp_lq64d343 __initdata = {
-	.pixclock		= 20000,
+static struct pxafb_mode_info sharp_lq64d343_mode = {
+	.pixclock		= 25000,
 	.xres			= 640,
 	.yres			= 480,
 	.bpp			= 16,
-	.hsync_len		= 49,
+	.hsync_len		= 0x31,
 	.left_margin		= 0x89,
 	.right_margin		= 0x19,
-	.vsync_len		= 18,
+	.vsync_len		= 0x12,
 	.upper_margin		= 0x22,
-	.lower_margin		= 0,
+	.lower_margin		= 0x00,
 	.sync			= FB_SYNC_HOR_HIGH_ACT | FB_SYNC_VERT_HIGH_ACT,
+};
+
+static struct pxafb_mach_info sharp_lq64d343 = {
+	.modes			= &sharp_lq64d343_mode,
+	.num_modes		= 1,
 	.lccr0			= 0x07800080,
-	.lccr3			= 0x04400001,
+	.lccr3			= 0x00400000,
+	.pxafb_backlight_power	= lpd270_backlight_power,
+};
+
+/* 10.4" TFT VGA (LoLo display number 7) */
+static struct pxafb_mode_info sharp_lq10d368_mode = {
+	.pixclock		= 25000,
+	.xres			= 640,
+	.yres			= 480,
+	.bpp			= 16,
+	.hsync_len		= 0x31,
+	.left_margin		= 0x89,
+	.right_margin		= 0x19,
+	.vsync_len		= 0x12,
+	.upper_margin		= 0x22,
+	.lower_margin		= 0x00,
+	.sync			= FB_SYNC_HOR_HIGH_ACT | FB_SYNC_VERT_HIGH_ACT,
+};
+
+static struct pxafb_mach_info sharp_lq10d368 = {
+	.modes			= &sharp_lq10d368_mode,
+	.num_modes		= 1,
+	.lccr0			= 0x07800080,
+	.lccr3			= 0x00400000,
 	.pxafb_backlight_power	= lpd270_backlight_power,
 };
 
 /* 3.5" TFT QVGA (LoLo display number 8) */
-static struct pxafb_mach_info sharp_lq035q7db02_20 __initdata = {
-	.pixclock		= 100000,
+static struct pxafb_mode_info sharp_lq035q7db02_20_mode = {
+	.pixclock		= 150000,
 	.xres			= 240,
 	.yres			= 320,
 	.bpp			= 16,
-	.hsync_len		= 0x34,
-	.left_margin		= 0x09,
-	.right_margin		= 0x09,
-	.vsync_len		= 0x08,
+	.hsync_len		= 0x0e,
+	.left_margin		= 0x0a,
+	.right_margin		= 0x0a,
+	.vsync_len		= 0x03,
 	.upper_margin		= 0x05,
 	.lower_margin		= 0x14,
-	.sync			= 0,
+	.sync			= FB_SYNC_HOR_HIGH_ACT | FB_SYNC_VERT_HIGH_ACT,
+};
+
+static struct pxafb_mach_info sharp_lq035q7db02_20 = {
+	.modes			= &sharp_lq035q7db02_20_mode,
+	.num_modes		= 1,
 	.lccr0			= 0x07800080,
-	.lccr3			= 0x04400007,
+	.lccr3			= 0x00400000,
 	.pxafb_backlight_power	= lpd270_backlight_power,
 };
+
+static struct pxafb_mach_info *lpd270_lcd_to_use;
+
+static int __init lpd270_set_lcd(char *str)
+{
+	if (!strnicmp(str, "lq057q3dc02", 11)) {
+		lpd270_lcd_to_use = &sharp_lq057q3dc02;
+	} else if (!strnicmp(str, "lq121s1dg31", 11)) {
+		lpd270_lcd_to_use = &sharp_lq121s1dg31;
+	} else if (!strnicmp(str, "lq036q1da01", 11)) {
+		lpd270_lcd_to_use = &sharp_lq036q1da01;
+	} else if (!strnicmp(str, "lq64d343", 8)) {
+		lpd270_lcd_to_use = &sharp_lq64d343;
+	} else if (!strnicmp(str, "lq10d368", 8)) {
+		lpd270_lcd_to_use = &sharp_lq10d368;
+	} else if (!strnicmp(str, "lq035q7db02-20", 14)) {
+		lpd270_lcd_to_use = &sharp_lq035q7db02_20;
+	} else {
+		printk(KERN_INFO "lpd270: unknown lcd panel [%s]\n", str);
+	}
+
+	return 1;
+}
+
+__setup("lcd=", lpd270_set_lcd);
 
 static struct platform_device *platform_devices[] __initdata = {
 	&smc91x_device,
@@ -345,9 +454,8 @@ static void __init lpd270_init(void)
 
 	platform_add_devices(platform_devices, ARRAY_SIZE(platform_devices));
 
-	// set_pxa_fb_info(&sharp_lq057q3dc02);
-	set_pxa_fb_info(&sharp_lq64d343);
-	// set_pxa_fb_info(&sharp_lq035q7db02_20);
+	if (lpd270_lcd_to_use != NULL)
+		set_pxa_fb_info(lpd270_lcd_to_use);
 
 	pxa_set_ohci_info(&lpd270_ohci_platform_data);
 }

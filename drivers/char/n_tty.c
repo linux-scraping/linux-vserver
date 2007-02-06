@@ -994,7 +994,7 @@ int is_ignored(int sig)
  *	when the ldisc is closed.
  */
  
-static void n_tty_set_termios(struct tty_struct *tty, struct termios * old)
+static void n_tty_set_termios(struct tty_struct *tty, struct ktermios * old)
 {
 	if (!tty)
 		return;
@@ -1132,7 +1132,7 @@ static inline int input_available_p(struct tty_struct *tty, int amt)
  *	buffer, and once to drain the space from the (physical) beginning of
  *	the buffer to head pointer.
  *
- *	Called under the tty->atomic_read_lock sem and with TTY_DONT_FLIP set
+ *	Called under the tty->atomic_read_lock sem
  *
  */
  
@@ -1151,7 +1151,6 @@ static int copy_from_read_buf(struct tty_struct *tty,
 	n = min(*nr, n);
 	spin_unlock_irqrestore(&tty->read_lock, flags);
 	if (n) {
-		mb();
 		retval = copy_to_user(*b, &tty->read_buf[tty->read_tail], n);
 		n -= retval;
 		spin_lock_irqsave(&tty->read_lock, flags);
@@ -1271,7 +1270,6 @@ do_it_again:
 	}
 
 	add_wait_queue(&tty->read_wait, &wait);
-	set_bit(TTY_DONT_FLIP, &tty->flags);
 	while (nr) {
 		/* First test for status change. */
 		if (tty->packet && tty->link->ctrl_status) {
@@ -1315,9 +1313,7 @@ do_it_again:
 				break;
 			}
 			n_tty_set_room(tty);
-			clear_bit(TTY_DONT_FLIP, &tty->flags);
 			timeout = schedule_timeout(timeout);
-			set_bit(TTY_DONT_FLIP, &tty->flags);
 			continue;
 		}
 		__set_current_state(TASK_RUNNING);
@@ -1394,7 +1390,6 @@ do_it_again:
 		if (time)
 			timeout = time;
 	}
-	clear_bit(TTY_DONT_FLIP, &tty->flags);
 	mutex_unlock(&tty->atomic_read_lock);
 	remove_wait_queue(&tty->read_wait, &wait);
 

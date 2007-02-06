@@ -9,7 +9,6 @@
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
  */
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/init.h>
@@ -21,6 +20,7 @@
 #include <linux/platform_device.h>
 
 #include <asm/div64.h>
+#include <asm/cnt32_to_63.h>
 #include <asm/hardware.h>
 #include <asm/system.h>
 #include <asm/pgtable.h>
@@ -119,15 +119,21 @@ EXPORT_SYMBOL(cpufreq_get);
 
 /*
  * This is the SA11x0 sched_clock implementation.  This has
- * a resolution of 271ns, and a maximum value of 1165s.
+ * a resolution of 271ns, and a maximum value of 32025597s (370 days).
+ *
+ * The return value is guaranteed to be monotonic in that range as
+ * long as there is always less than 582 seconds between successive
+ * calls to this function.
+ *
  *  ( * 1E9 / 3686400 => * 78125 / 288)
  */
 unsigned long long sched_clock(void)
 {
-	unsigned long long v;
+	unsigned long long v = cnt32_to_63(OSCR);
 
-	v = (unsigned long long)OSCR * 78125;
-	do_div(v, 288);
+	/* the <<1 gets rid of the cnt_32_to_63 top bit saving on a bic insn */
+	v *= 78125<<1;
+	do_div(v, 288<<1);
 
 	return v;
 }

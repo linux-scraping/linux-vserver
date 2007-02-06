@@ -4,16 +4,16 @@
  *
  *   This program is free software;  you can redistribute it and/or modify
  *   it under the terms of the GNU General Public License as published by
- *   the Free Software Foundation; either version 2 of the License, or 
+ *   the Free Software Foundation; either version 2 of the License, or
  *   (at your option) any later version.
- * 
+ *
  *   This program is distributed in the hope that it will be useful,
  *   but WITHOUT ANY WARRANTY;  without even the implied warranty of
  *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See
  *   the GNU General Public License for more details.
  *
  *   You should have received a copy of the GNU General Public License
- *   along with this program;  if not, write to the Free Software 
+ *   along with this program;  if not, write to the Free Software
  *   Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
  */
 
@@ -34,7 +34,7 @@
 
 void jfs_read_inode(struct inode *inode)
 {
-	if (diRead(inode)) { 
+	if (diRead(inode)) {
 		make_bad_inode(inode);
 		return;
 	}
@@ -170,16 +170,15 @@ void jfs_dirty_inode(struct inode *inode)
 	set_cflag(COMMIT_Dirty, inode);
 }
 
-static int
-jfs_get_blocks(struct inode *ip, sector_t lblock, unsigned long max_blocks,
-			struct buffer_head *bh_result, int create)
+int jfs_get_block(struct inode *ip, sector_t lblock,
+		  struct buffer_head *bh_result, int create)
 {
 	s64 lblock64 = lblock;
 	int rc = 0;
 	xad_t xad;
 	s64 xaddr;
 	int xflag;
-	s32 xlen = max_blocks;
+	s32 xlen = bh_result->b_size >> ip->i_blkbits;
 
 	/*
 	 * Take appropriate lock on inode
@@ -190,7 +189,7 @@ jfs_get_blocks(struct inode *ip, sector_t lblock, unsigned long max_blocks,
 		IREAD_LOCK(ip);
 
 	if (((lblock64 << ip->i_sb->s_blocksize_bits) < ip->i_size) &&
-	    (!xtLookup(ip, lblock64, max_blocks, &xflag, &xaddr, &xlen, 0)) &&
+	    (!xtLookup(ip, lblock64, xlen, &xflag, &xaddr, &xlen, 0)) &&
 	    xaddr) {
 		if (xflag & XAD_NOTRECORDED) {
 			if (!create)
@@ -230,7 +229,7 @@ jfs_get_blocks(struct inode *ip, sector_t lblock, unsigned long max_blocks,
 #ifdef _JFS_4K
 	if ((rc = extHint(ip, lblock64 << ip->i_sb->s_blocksize_bits, &xad)))
 		goto unlock;
-	rc = extAlloc(ip, xlen, lblock64, &xad, FALSE);
+	rc = extAlloc(ip, xlen, lblock64, &xad, false);
 	if (rc)
 		goto unlock;
 
@@ -255,13 +254,6 @@ jfs_get_blocks(struct inode *ip, sector_t lblock, unsigned long max_blocks,
 	else
 		IREAD_UNLOCK(ip);
 	return rc;
-}
-
-static int jfs_get_block(struct inode *ip, sector_t lblock,
-			 struct buffer_head *bh_result, int create)
-{
-	return jfs_get_blocks(ip, lblock, bh_result->b_size >> ip->i_blkbits,
-			bh_result, create);
 }
 
 static int jfs_writepage(struct page *page, struct writeback_control *wbc)
@@ -307,7 +299,7 @@ static ssize_t jfs_direct_IO(int rw, struct kiocb *iocb,
 				offset, nr_segs, jfs_get_block, NULL);
 }
 
-struct address_space_operations jfs_aops = {
+const struct address_space_operations jfs_aops = {
 	.readpage	= jfs_readpage,
 	.readpages	= jfs_readpages,
 	.writepage	= jfs_writepage,

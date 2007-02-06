@@ -21,7 +21,6 @@
  */
 #include <linux/module.h>
 #include <linux/moduleparam.h>
-#include <linux/config.h>
 #include <linux/types.h>
 #include <linux/miscdevice.h>
 #include <linux/watchdog.h>
@@ -65,7 +64,7 @@ MODULE_PARM_DESC(mpcore_noboot, "MPcore watchdog action, set to 1 to ignore rebo
  *	This is the interrupt handler.  Note that we only use this
  *	in testing mode, so don't actually do a reboot here.
  */
-static irqreturn_t mpcore_wdt_fire(int irq, void *arg, struct pt_regs *regs)
+static irqreturn_t mpcore_wdt_fire(int irq, void *arg)
 {
 	struct mpcore_wdt *wdt = arg;
 
@@ -222,7 +221,7 @@ static int mpcore_wdt_ioctl(struct inode *inode, struct file *file,
 	} uarg;
 
 	if (_IOC_DIR(cmd) && _IOC_SIZE(cmd) > sizeof(uarg))
-		return -ENOIOCTLCMD;
+		return -ENOTTY;
 
 	if (_IOC_DIR(cmd) & _IOC_WRITE) {
 		ret = copy_from_user(&uarg, (void __user *)arg, _IOC_SIZE(cmd));
@@ -272,7 +271,7 @@ static int mpcore_wdt_ioctl(struct inode *inode, struct file *file,
 		break;
 
 	default:
-		return -ENOIOCTLCMD;
+		return -ENOTTY;
 	}
 
 	if (ret == 0 && _IOC_DIR(cmd) & _IOC_READ) {
@@ -298,7 +297,7 @@ static void mpcore_wdt_shutdown(struct platform_device *dev)
 /*
  *	Kernel Interfaces
  */
-static struct file_operations mpcore_wdt_fops = {
+static const struct file_operations mpcore_wdt_fops = {
 	.owner		= THIS_MODULE,
 	.llseek		= no_llseek,
 	.write		= mpcore_wdt_write,
@@ -348,7 +347,7 @@ static int __devinit mpcore_wdt_probe(struct platform_device *dev)
 		goto err_free;
 	}
 
-	mpcore_wdt_miscdev.dev = &dev->dev;
+	mpcore_wdt_miscdev.parent = &dev->dev;
 	ret = misc_register(&mpcore_wdt_miscdev);
 	if (ret) {
 		dev_printk(KERN_ERR, _dev, "cannot register miscdev on minor=%d (err=%d)\n",
@@ -356,7 +355,7 @@ static int __devinit mpcore_wdt_probe(struct platform_device *dev)
 		goto err_misc;
 	}
 
-	ret = request_irq(wdt->irq, mpcore_wdt_fire, SA_INTERRUPT, "mpcore_wdt", wdt);
+	ret = request_irq(wdt->irq, mpcore_wdt_fire, IRQF_DISABLED, "mpcore_wdt", wdt);
 	if (ret) {
 		dev_printk(KERN_ERR, _dev, "cannot register IRQ%d for watchdog\n", wdt->irq);
 		goto err_irq;

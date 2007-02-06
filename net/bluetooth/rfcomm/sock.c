@@ -27,7 +27,6 @@
  * $Id: sock.c,v 1.24 2002/10/03 01:00:34 maxk Exp $
  */
 
-#include <linux/config.h>
 #include <linux/module.h>
 
 #include <linux/types.h>
@@ -337,7 +336,8 @@ static int rfcomm_sock_create(struct socket *sock, int protocol)
 
 	sock->ops = &rfcomm_sock_ops;
 
-	if (!(sk = rfcomm_sock_alloc(sock, protocol, GFP_KERNEL)))
+	sk = rfcomm_sock_alloc(sock, protocol, GFP_ATOMIC);
+	if (!sk)
 		return -ENOMEM;
 
 	rfcomm_sock_init(sk, NULL);
@@ -557,7 +557,6 @@ static int rfcomm_sock_sendmsg(struct kiocb *iocb, struct socket *sock,
 	struct sock *sk = sock->sk;
 	struct rfcomm_dlc *d = rfcomm_pi(sk)->dlc;
 	struct sk_buff *skb;
-	int err;
 	int sent = 0;
 
 	if (msg->msg_flags & MSG_OOB)
@@ -572,6 +571,7 @@ static int rfcomm_sock_sendmsg(struct kiocb *iocb, struct socket *sock,
 
 	while (len) {
 		size_t size = min_t(size_t, len, d->mtu);
+		int err;
 		
 		skb = sock_alloc_send_skb(sk, size + RFCOMM_SKB_RESERVE,
 				msg->msg_flags & MSG_DONTWAIT, &err);
@@ -582,13 +582,16 @@ static int rfcomm_sock_sendmsg(struct kiocb *iocb, struct socket *sock,
 		err = memcpy_fromiovec(skb_put(skb, size), msg->msg_iov, size);
 		if (err) {
 			kfree_skb(skb);
-			sent = err;
+			if (sent == 0)
+				sent = err;
 			break;
 		}
 
 		err = rfcomm_dlc_send(d, skb);
 		if (err < 0) {
 			kfree_skb(skb);
+			if (sent == 0)
+				sent = err;
 			break;
 		}
 
@@ -598,7 +601,7 @@ static int rfcomm_sock_sendmsg(struct kiocb *iocb, struct socket *sock,
 
 	release_sock(sk);
 
-	return sent ? sent : err;
+	return sent;
 }
 
 static long rfcomm_sock_data_wait(struct sock *sk, long timeo)
@@ -945,7 +948,8 @@ int __init rfcomm_init_sockets(void)
 	if (err < 0)
 		goto error;
 
-	class_create_file(&bt_class, &class_attr_rfcomm);
+	if (class_create_file(bt_class, &class_attr_rfcomm) < 0)
+		BT_ERR("Failed to create RFCOMM info file");
 
 	BT_INFO("RFCOMM socket layer initialized");
 
@@ -959,7 +963,7 @@ error:
 
 void __exit rfcomm_cleanup_sockets(void)
 {
-	class_remove_file(&bt_class, &class_attr_rfcomm);
+	class_remove_file(bt_class, &class_attr_rfcomm);
 
 	if (bt_sock_unregister(BTPROTO_RFCOMM) < 0)
 		BT_ERR("RFCOMM socket layer unregistration failed");

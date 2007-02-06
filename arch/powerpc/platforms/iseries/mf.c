@@ -38,6 +38,7 @@
 #include <asm/uaccess.h>
 #include <asm/paca.h>
 #include <asm/abs_addr.h>
+#include <asm/firmware.h>
 #include <asm/iseries/vio.h>
 #include <asm/iseries/mf.h>
 #include <asm/iseries/hv_lp_config.h>
@@ -45,7 +46,6 @@
 
 #include "setup.h"
 
-extern int piranha_simulator;
 static int mf_initialized;
 
 /*
@@ -358,7 +358,7 @@ static int dma_and_signal_ce_msg(char *ce_msg,
  */
 static int shutdown(void)
 {
-	int rc = kill_proc(1, SIGINT, 1);
+	int rc = kill_cad_pid(SIGINT, 1);
 
 	if (rc) {
 		printk(KERN_ALERT "mf.c: SIGINT to init failed (%d), "
@@ -514,7 +514,7 @@ static void handle_ack(struct io_mf_lp_event *event)
  * parse it enough to know if it is an interrupt or an
  * acknowledge.
  */
-static void hv_handler(struct HvLpEvent *event, struct pt_regs *regs)
+static void hv_handler(struct HvLpEvent *event)
 {
 	if ((event != NULL) && (event->xType == HvLpEvent_Type_MachineFac)) {
 		if (hvlpevent_is_ack(event))
@@ -658,7 +658,7 @@ static void mf_clear_src(void)
 
 void __init mf_display_progress(u16 value)
 {
-	if (piranha_simulator || !mf_initialized)
+	if (!mf_initialized)
 		return;
 
 	if (0xFFFF == value)
@@ -848,7 +848,7 @@ static int mf_get_boot_rtc(struct rtc_time *tm)
 	/* We need to poll here as we are not yet taking interrupts */
 	while (rtc_data.busy) {
 		if (hvlpevent_is_pending())
-			process_hvlpevents(NULL);
+			process_hvlpevents();
 	}
 	return rtc_set_tm(rtc_data.rc, rtc_data.ce_msg.ce_msg, tm);
 }
@@ -1179,7 +1179,7 @@ static ssize_t proc_mf_change_vmlinux(struct file *file,
 				      const char __user *buf,
 				      size_t count, loff_t *ppos)
 {
-	struct proc_dir_entry *dp = PDE(file->f_dentry->d_inode);
+	struct proc_dir_entry *dp = PDE(file->f_path.dentry->d_inode);
 	ssize_t rc;
 	dma_addr_t dma_addr;
 	char *page;
@@ -1235,6 +1235,9 @@ static int __init mf_proc_init(void)
 	struct proc_dir_entry *mf;
 	char name[2];
 	int i;
+
+	if (!firmware_has_feature(FW_FEATURE_ISERIES))
+		return 0;
 
 	mf_proc_root = proc_mkdir("iSeries/mf", NULL);
 	if (!mf_proc_root)
@@ -1295,9 +1298,6 @@ __initcall(mf_proc_init);
  */
 void iSeries_get_rtc_time(struct rtc_time *rtc_tm)
 {
-	if (piranha_simulator)
-		return;
-
 	mf_get_rtc(rtc_tm);
 	rtc_tm->tm_mon--;
 }
@@ -1315,9 +1315,6 @@ int iSeries_set_rtc_time(struct rtc_time *tm)
 unsigned long iSeries_get_boot_time(void)
 {
 	struct rtc_time tm;
-
-	if (piranha_simulator)
-		return 0;
 
 	mf_get_boot_rtc(&tm);
 	return mktime(tm.tm_year + 1900, tm.tm_mon, tm.tm_mday,

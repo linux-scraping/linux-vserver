@@ -26,6 +26,7 @@
 #include <linux/moduleparam.h>
 #include <sound/core.h>
 #include <sound/initval.h>
+#include <sound/tlv.h>
 #include "vx222.h"
 
 #define CARD_NAME "VX222"
@@ -60,7 +61,7 @@ enum {
 	VX_PCI_VX222_NEW
 };
 
-static struct pci_device_id snd_vx222_ids[] __devinitdata = {
+static struct pci_device_id snd_vx222_ids[] = {
 	{ 0x10b5, 0x9050, 0x1369, PCI_ANY_ID, 0, 0, VX_PCI_VX222_OLD, },   /* PLX */
 	{ 0x10b5, 0x9030, 0x1369, PCI_ANY_ID, 0, 0, VX_PCI_VX222_NEW, },   /* PLX */
 	{ 0, }
@@ -72,6 +73,9 @@ MODULE_DEVICE_TABLE(pci, snd_vx222_ids);
 /*
  */
 
+static DECLARE_TLV_DB_SCALE(db_scale_old_vol, -11350, 50, 0);
+static DECLARE_TLV_DB_SCALE(db_scale_akm, -7350, 50, 0);
+
 static struct snd_vx_hardware vx222_old_hw = {
 
 	.name = "VX222/Old",
@@ -81,6 +85,7 @@ static struct snd_vx_hardware vx222_old_hw = {
 	.num_ins = 1,
 	.num_outs = 1,
 	.output_level_max = VX_ANALOG_OUT_LEVEL_MAX,
+	.output_level_db_scale = db_scale_old_vol,
 };
 
 static struct snd_vx_hardware vx222_v2_hw = {
@@ -92,6 +97,7 @@ static struct snd_vx_hardware vx222_v2_hw = {
 	.num_ins = 1,
 	.num_outs = 1,
 	.output_level_max = VX2_AKM_LEVEL_MAX,
+	.output_level_db_scale = db_scale_akm,
 };
 
 static struct snd_vx_hardware vx222_mic_hw = {
@@ -103,6 +109,7 @@ static struct snd_vx_hardware vx222_mic_hw = {
 	.num_ins = 1,
 	.num_outs = 1,
 	.output_level_max = VX2_AKM_LEVEL_MAX,
+	.output_level_db_scale = db_scale_akm,
 };
 
 
@@ -162,8 +169,8 @@ static int __devinit snd_vx222_create(struct snd_card *card, struct pci_dev *pci
 	for (i = 0; i < 2; i++)
 		vx->port[i] = pci_resource_start(pci, i + 1);
 
-	if (request_irq(pci->irq, snd_vx_irq_handler, SA_INTERRUPT|SA_SHIRQ,
-			CARD_NAME, (void *) chip)) {
+	if (request_irq(pci->irq, snd_vx_irq_handler, IRQF_SHARED,
+			CARD_NAME, chip)) {
 		snd_printk(KERN_ERR "unable to grab IRQ %d\n", pci->irq);
 		snd_vx222_free(chip);
 		return -EBUSY;
@@ -259,9 +266,9 @@ static int snd_vx222_suspend(struct pci_dev *pci, pm_message_t state)
 	int err;
 
 	err = snd_vx_suspend(&vx->core, state);
-	pci_set_power_state(pci, PCI_D3hot);
 	pci_disable_device(pci);
 	pci_save_state(pci);
+	pci_set_power_state(pci, pci_choose_state(pci, state));
 	return err;
 }
 
@@ -270,9 +277,14 @@ static int snd_vx222_resume(struct pci_dev *pci)
 	struct snd_card *card = pci_get_drvdata(pci);
 	struct snd_vx222 *vx = card->private_data;
 
-	pci_restore_state(pci);
-	pci_enable_device(pci);
 	pci_set_power_state(pci, PCI_D0);
+	pci_restore_state(pci);
+	if (pci_enable_device(pci) < 0) {
+		printk(KERN_ERR "vx222: pci_enable_device failed, "
+		       "disabling device\n");
+		snd_card_disconnect(card);
+		return -EIO;
+	}
 	pci_set_master(pci);
 	return snd_vx_resume(&vx->core);
 }

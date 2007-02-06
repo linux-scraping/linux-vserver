@@ -17,13 +17,13 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
-#include <linux/config.h>
 #include <linux/kernel.h>
 #include <linux/init.h>
 #include <linux/delay.h>
 #include <linux/platform_device.h>
 #include <linux/parport.h>
 
+#include <linux/sched.h>
 #include <linux/spi/spi.h>
 #include <linux/spi/spi_bitbang.h>
 #include <linux/spi/flash.h>
@@ -251,6 +251,8 @@ static void butterfly_attach(struct parport *p)
 	 * setting up a platform device like this is an ugly kluge...
 	 */
 	pdev = platform_device_register_simple("butterfly", -1, NULL, 0);
+	if (IS_ERR(pdev))
+		return;
 
 	master = spi_alloc_master(&pdev->dev, sizeof *pp);
 	if (!master) {

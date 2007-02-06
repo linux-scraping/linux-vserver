@@ -8,7 +8,6 @@
  * This file handles the architecture-dependent parts of process handling.
  */
 
-#include <linux/config.h>
 #include <linux/errno.h>
 #include <linux/module.h>
 #include <linux/sched.h>
@@ -26,6 +25,7 @@
 #include <linux/time.h>
 #include <linux/major.h>
 #include <linux/stat.h>
+#include <linux/vt.h>
 #include <linux/mman.h>
 #include <linux/elfcore.h>
 #include <linux/reboot.h>
@@ -47,6 +47,7 @@
  * Power off function, if any
  */
 void (*pm_power_off)(void) = machine_power_off;
+EXPORT_SYMBOL(pm_power_off);
 
 void
 cpu_idle(void)
@@ -205,6 +206,7 @@ start_thread(struct pt_regs * regs, unsigned long pc, unsigned long sp)
 	regs->ps = 8;
 	wrusp(sp);
 }
+EXPORT_SYMBOL(start_thread);
 
 /*
  * Free current thread data structures etc..
@@ -376,6 +378,7 @@ dump_thread(struct pt_regs * pt, struct user * dump)
 	dump->regs[EF_A2]  = pt->r18;
 	memcpy((char *)dump->regs + EF_SIZE, sw->fp, 32 * 8);
 }
+EXPORT_SYMBOL(dump_thread);
 
 /*
  * Fill in the user structure for a ELF core dump.
@@ -424,6 +427,7 @@ dump_elf_thread(elf_greg_t *dest, struct pt_regs *pt, struct thread_info *ti)
 	   useful value of the thread's UNIQUE field.  */
 	dest[32] = ti->pcb.unique;
 }
+EXPORT_SYMBOL(dump_elf_thread);
 
 int
 dump_elf_task(elf_greg_t *dest, struct task_struct *task)
@@ -431,6 +435,7 @@ dump_elf_task(elf_greg_t *dest, struct task_struct *task)
 	dump_elf_thread(dest, task_pt_regs(task), task_thread_info(task));
 	return 1;
 }
+EXPORT_SYMBOL(dump_elf_task);
 
 int
 dump_elf_task_fp(elf_fpreg_t *dest, struct task_struct *task)
@@ -439,6 +444,7 @@ dump_elf_task_fp(elf_fpreg_t *dest, struct task_struct *task)
 	memcpy(dest, sw->fp, 32 * 8);
 	return 1;
 }
+EXPORT_SYMBOL(dump_elf_task_fp);
 
 /*
  * sys_execve() executes a new program.
@@ -475,7 +481,7 @@ out:
  */
 
 unsigned long
-thread_saved_pc(task_t *t)
+thread_saved_pc(struct task_struct *t)
 {
 	unsigned long base = (unsigned long)task_stack_page(t);
 	unsigned long fp, sp = task_thread_info(t)->pcb.ksp;

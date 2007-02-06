@@ -33,6 +33,7 @@
 #include <linux/module.h>
 #include <linux/timer.h>
 #include <linux/dmi.h>
+#include <linux/jiffies.h>
 #include <asm/io.h>
 
 #define HDAPS_LOW_PORT		0x1600	/* first port used by hdaps */
@@ -41,7 +42,7 @@
 #define HDAPS_PORT_STATE	0x1611	/* device state */
 #define HDAPS_PORT_YPOS		0x1612	/* y-axis position */
 #define	HDAPS_PORT_XPOS		0x1614	/* x-axis position */
-#define HDAPS_PORT_TEMP1	0x1616	/* device temperature, in celcius */
+#define HDAPS_PORT_TEMP1	0x1616	/* device temperature, in Celsius */
 #define HDAPS_PORT_YVAR		0x1617	/* y-axis variance (what is this?) */
 #define HDAPS_PORT_XVAR		0x1619	/* x-axis variance (what is this?) */
 #define HDAPS_PORT_TEMP2	0x161b	/* device temperature (again?) */
@@ -477,70 +478,63 @@ static struct attribute_group hdaps_attribute_group = {
 /* Module stuff */
 
 /* hdaps_dmi_match - found a match.  return one, short-circuiting the hunt. */
-static int hdaps_dmi_match(struct dmi_system_id *id)
+static int __init hdaps_dmi_match(struct dmi_system_id *id)
 {
 	printk(KERN_INFO "hdaps: %s detected.\n", id->ident);
 	return 1;
 }
 
 /* hdaps_dmi_match_invert - found an inverted match. */
-static int hdaps_dmi_match_invert(struct dmi_system_id *id)
+static int __init hdaps_dmi_match_invert(struct dmi_system_id *id)
 {
 	hdaps_invert = 1;
 	printk(KERN_INFO "hdaps: inverting axis readings.\n");
 	return hdaps_dmi_match(id);
 }
 
-#define HDAPS_DMI_MATCH_NORMAL(model)	{		\
-	.ident = "IBM " model,				\
+#define HDAPS_DMI_MATCH_NORMAL(vendor, model) {		\
+	.ident = vendor " " model,			\
 	.callback = hdaps_dmi_match,			\
 	.matches = {					\
-		DMI_MATCH(DMI_BOARD_VENDOR, "IBM"),	\
+		DMI_MATCH(DMI_BOARD_VENDOR, vendor),	\
 		DMI_MATCH(DMI_PRODUCT_VERSION, model)	\
 	}						\
 }
 
-#define HDAPS_DMI_MATCH_INVERT(model)	{		\
-	.ident = "IBM " model,				\
+#define HDAPS_DMI_MATCH_INVERT(vendor, model) {		\
+	.ident = vendor " " model,			\
 	.callback = hdaps_dmi_match_invert,		\
 	.matches = {					\
-		DMI_MATCH(DMI_BOARD_VENDOR, "IBM"),	\
+		DMI_MATCH(DMI_BOARD_VENDOR, vendor),	\
 		DMI_MATCH(DMI_PRODUCT_VERSION, model)	\
 	}						\
 }
 
-#define HDAPS_DMI_MATCH_LENOVO(model)   {               \
-        .ident = "Lenovo " model,                       \
-        .callback = hdaps_dmi_match_invert,             \
-        .matches = {                                    \
-                DMI_MATCH(DMI_BOARD_VENDOR, "LENOVO"),  \
-                DMI_MATCH(DMI_PRODUCT_VERSION, model)   \
-        }                                               \
-}
+/* Note that HDAPS_DMI_MATCH_NORMAL("ThinkPad T42") would match
+   "ThinkPad T42p", so the order of the entries matters.
+   If your ThinkPad is not recognized, please update to latest
+   BIOS. This is especially the case for some R52 ThinkPads. */
+static struct dmi_system_id __initdata hdaps_whitelist[] = {
+	HDAPS_DMI_MATCH_INVERT("IBM", "ThinkPad R50p"),
+	HDAPS_DMI_MATCH_NORMAL("IBM", "ThinkPad R50"),
+	HDAPS_DMI_MATCH_NORMAL("IBM", "ThinkPad R51"),
+	HDAPS_DMI_MATCH_NORMAL("IBM", "ThinkPad R52"),
+	HDAPS_DMI_MATCH_INVERT("IBM", "ThinkPad T41p"),
+	HDAPS_DMI_MATCH_NORMAL("IBM", "ThinkPad T41"),
+	HDAPS_DMI_MATCH_INVERT("IBM", "ThinkPad T42p"),
+	HDAPS_DMI_MATCH_NORMAL("IBM", "ThinkPad T42"),
+	HDAPS_DMI_MATCH_NORMAL("IBM", "ThinkPad T43"),
+	HDAPS_DMI_MATCH_INVERT("LENOVO", "ThinkPad T60"),
+	HDAPS_DMI_MATCH_NORMAL("IBM", "ThinkPad X40"),
+	HDAPS_DMI_MATCH_NORMAL("IBM", "ThinkPad X41"),
+	HDAPS_DMI_MATCH_INVERT("LENOVO", "ThinkPad X60"),
+	HDAPS_DMI_MATCH_NORMAL("IBM", "ThinkPad Z60m"),
+	{ .ident = NULL }
+};
 
 static int __init hdaps_init(void)
 {
 	int ret;
-
-	/* Note that DMI_MATCH(...,"ThinkPad T42") will match "ThinkPad T42p" */
-	struct dmi_system_id hdaps_whitelist[] = {
-		HDAPS_DMI_MATCH_NORMAL("ThinkPad H"),
-		HDAPS_DMI_MATCH_INVERT("ThinkPad R50p"),
-		HDAPS_DMI_MATCH_NORMAL("ThinkPad R50"),
-		HDAPS_DMI_MATCH_NORMAL("ThinkPad R51"),
-		HDAPS_DMI_MATCH_NORMAL("ThinkPad R52"),
-		HDAPS_DMI_MATCH_INVERT("ThinkPad T41p"),
-		HDAPS_DMI_MATCH_NORMAL("ThinkPad T41"),
-		HDAPS_DMI_MATCH_INVERT("ThinkPad T42p"),
-		HDAPS_DMI_MATCH_NORMAL("ThinkPad T42"),
-		HDAPS_DMI_MATCH_NORMAL("ThinkPad T43"),
-		HDAPS_DMI_MATCH_LENOVO("ThinkPad T60p"),
-		HDAPS_DMI_MATCH_NORMAL("ThinkPad X40"),
-		HDAPS_DMI_MATCH_NORMAL("ThinkPad X41 Tablet"),
-		HDAPS_DMI_MATCH_NORMAL("ThinkPad X41"),
-		HDAPS_DMI_MATCH_LENOVO("ThinkPad X60"),
-		{ .ident = NULL }
-	};
 
 	if (!dmi_check_system(hdaps_whitelist)) {
 		printk(KERN_WARNING "hdaps: supported laptop not found!\n");
@@ -585,7 +579,9 @@ static int __init hdaps_init(void)
 	input_set_abs_params(hdaps_idev, ABS_Y,
 			-256, 256, HDAPS_INPUT_FUZZ, HDAPS_INPUT_FLAT);
 
-	input_register_device(hdaps_idev);
+	ret = input_register_device(hdaps_idev);
+	if (ret)
+		goto out_idev;
 
 	/* start up our timer for the input device */
 	init_timer(&hdaps_timer);
@@ -596,6 +592,8 @@ static int __init hdaps_init(void)
 	printk(KERN_INFO "hdaps: driver successfully loaded.\n");
 	return 0;
 
+out_idev:
+	input_free_device(hdaps_idev);
 out_group:
 	sysfs_remove_group(&pdev->dev.kobj, &hdaps_attribute_group);
 out_device:

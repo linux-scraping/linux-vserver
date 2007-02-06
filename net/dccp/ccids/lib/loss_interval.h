@@ -4,7 +4,7 @@
  *  net/dccp/ccids/lib/loss_interval.h
  *
  *  Copyright (c) 2005 The University of Waikato, Hamilton, New Zealand.
- *  Copyright (c) 2005 Ian McDonald <iam4@cs.waikato.ac.nz>
+ *  Copyright (c) 2005 Ian McDonald <ian.mcdonald@jandi.co.nz>
  *  Copyright (c) 2005 Arnaldo Carvalho de Melo <acme@conectiva.com.br>
  *
  *  This program is free software; you can redistribute it and/or modify it
@@ -13,7 +13,6 @@
  *  any later version.
  */
 
-#include <linux/config.h>
 #include <linux/list.h>
 #include <linux/slab.h>
 #include <linux/time.h>
@@ -21,7 +20,7 @@
 #define DCCP_LI_HIST_IVAL_F_LENGTH  8
 
 struct dccp_li_hist {
-	kmem_cache_t *dccplih_slab;
+	struct kmem_cache *dccplih_slab;
 };
 
 extern struct dccp_li_hist *dccp_li_hist_new(const char *name);
@@ -53,9 +52,6 @@ extern void dccp_li_hist_purge(struct dccp_li_hist *hist,
 
 extern u32 dccp_li_hist_calc_i_mean(struct list_head *list);
 
-extern struct dccp_li_hist_entry *
-			dccp_li_hist_interval_new(struct dccp_li_hist *hist,
-						  struct list_head *list,
-						  const u64 seq_loss,
-						  const u8 win_loss);
+extern int dccp_li_hist_interval_new(struct dccp_li_hist *hist,
+   struct list_head *list, const u64 seq_loss, const u8 win_loss);
 #endif /* _DCCP_LI_HIST_ */

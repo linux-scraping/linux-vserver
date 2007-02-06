@@ -23,14 +23,14 @@
 #include <linux/module.h>
 #include <net/tcp.h>
 
-int sysctl_tcp_syn_retries = TCP_SYN_RETRIES; 
-int sysctl_tcp_synack_retries = TCP_SYNACK_RETRIES; 
-int sysctl_tcp_keepalive_time = TCP_KEEPALIVE_TIME;
-int sysctl_tcp_keepalive_probes = TCP_KEEPALIVE_PROBES;
-int sysctl_tcp_keepalive_intvl = TCP_KEEPALIVE_INTVL;
-int sysctl_tcp_retries1 = TCP_RETR1;
-int sysctl_tcp_retries2 = TCP_RETR2;
-int sysctl_tcp_orphan_retries;
+int sysctl_tcp_syn_retries __read_mostly = TCP_SYN_RETRIES;
+int sysctl_tcp_synack_retries __read_mostly = TCP_SYNACK_RETRIES;
+int sysctl_tcp_keepalive_time __read_mostly = TCP_KEEPALIVE_TIME;
+int sysctl_tcp_keepalive_probes __read_mostly = TCP_KEEPALIVE_PROBES;
+int sysctl_tcp_keepalive_intvl __read_mostly = TCP_KEEPALIVE_INTVL;
+int sysctl_tcp_retries1 __read_mostly = TCP_RETR1;
+int sysctl_tcp_retries2 __read_mostly = TCP_RETR2;
+int sysctl_tcp_orphan_retries __read_mostly;
 
 static void tcp_write_timer(unsigned long);
 static void tcp_delack_timer(unsigned long);
@@ -297,7 +297,7 @@ static void tcp_retransmit_timer(struct sock *sk)
 		if (net_ratelimit()) {
 			struct inet_sock *inet = inet_sk(sk);
 			printk(KERN_DEBUG "TCP: Treason uncloaked! Peer %u.%u.%u.%u:%u/%u shrinks window %u:%u. Repaired.\n",
-			       NIPQUAD(inet->daddr), htons(inet->dport),
+			       NIPQUAD(inet->daddr), ntohs(inet->dport),
 			       inet->num, tp->snd_una, tp->snd_nxt);
 		}
 #endif

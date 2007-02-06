@@ -16,7 +16,7 @@
 	case PIPE_CONTROL:	temp = "ctrl"; break; \
 	case PIPE_BULK:		temp = "bulk"; break; \
 	case PIPE_INTERRUPT:	temp = "intr"; break; \
-	default: 		temp = "isoc"; break; \
+	default:		temp = "isoc"; break; \
 	}; temp;})
 #define pipestring(pipe) edstring(usb_pipetype(pipe))
 
@@ -205,13 +205,13 @@ ohci_dump_status (struct ohci_hcd *controller, char **next, unsigned *size)
 		(temp & RH_PS_PSSC) ? " PSSC" : "", \
 		(temp & RH_PS_PESC) ? " PESC" : "", \
 		(temp & RH_PS_CSC) ? " CSC" : "", \
- 		\
+		\
 		(temp & RH_PS_LSDA) ? " LSDA" : "", \
 		(temp & RH_PS_PPS) ? " PPS" : "", \
 		(temp & RH_PS_PRS) ? " PRS" : "", \
 		(temp & RH_PS_POCI) ? " POCI" : "", \
 		(temp & RH_PS_PSS) ? " PSS" : "", \
- 		\
+		\
 		(temp & RH_PS_PES) ? " PES" : "", \
 		(temp & RH_PS_CCS) ? " CCS" : "" \
 		);
@@ -477,7 +477,7 @@ show_async (struct class_device *class_dev, char *buf)
 	unsigned long		flags;
 
 	bus = class_get_devdata(class_dev);
-	hcd = bus->hcpriv;
+	hcd = bus_to_hcd(bus);
 	ohci = hcd_to_ohci(hcd);
 
 	/* display control and bulk lists together, for simplicity */
@@ -505,12 +505,12 @@ show_periodic (struct class_device *class_dev, char *buf)
 	char			*next;
 	unsigned		i;
 
-	if (!(seen = kmalloc (DBG_SCHED_LIMIT * sizeof *seen, SLAB_ATOMIC)))
+	if (!(seen = kmalloc (DBG_SCHED_LIMIT * sizeof *seen, GFP_ATOMIC)))
 		return 0;
 	seen_count = 0;
 
 	bus = class_get_devdata(class_dev);
-	hcd = bus->hcpriv;
+	hcd = bus_to_hcd(bus);
 	ohci = hcd_to_ohci(hcd);
 	next = buf;
 	size = PAGE_SIZE;
@@ -563,7 +563,7 @@ show_periodic (struct class_device *class_dev, char *buf)
 					(info & ED_SKIP) ? " K" : "",
 					(ed->hwHeadP &
 						cpu_to_hc32(ohci, ED_H)) ?
- 							" H" : "");
+							" H" : "");
 				size -= temp;
 				next += temp;
 
@@ -607,7 +607,7 @@ show_registers (struct class_device *class_dev, char *buf)
 	u32			rdata;
 
 	bus = class_get_devdata(class_dev);
-	hcd = bus->hcpriv;
+	hcd = bus_to_hcd(bus);
 	ohci = hcd_to_ohci(hcd);
 	regs = ohci->regs;
 	next = buf;
@@ -667,6 +667,11 @@ show_registers (struct class_device *class_dev, char *buf)
 	size -= temp;
 	next += temp;
 
+	temp = scnprintf (next, size, "hub poll timer %s\n",
+			ohci_to_hcd(ohci)->poll_rh ? "ON" : "off");
+	size -= temp;
+	next += temp;
+
 	/* roothub */
 	ohci_dump_roothub (ohci, 1, &next, &size);
 
@@ -680,10 +685,11 @@ static CLASS_DEVICE_ATTR (registers, S_IRUGO, show_registers, NULL);
 static inline void create_debug_files (struct ohci_hcd *ohci)
 {
 	struct class_device *cldev = ohci_to_hcd(ohci)->self.class_dev;
+	int retval;
 
-	class_device_create_file(cldev, &class_device_attr_async);
-	class_device_create_file(cldev, &class_device_attr_periodic);
-	class_device_create_file(cldev, &class_device_attr_registers);
+	retval = class_device_create_file(cldev, &class_device_attr_async);
+	retval = class_device_create_file(cldev, &class_device_attr_periodic);
+	retval = class_device_create_file(cldev, &class_device_attr_registers);
 	ohci_dbg (ohci, "created debug files\n");
 }
 

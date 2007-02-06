@@ -13,7 +13,6 @@
  * warranty of any kind, whether express or implied.
  */
 
-#include <linux/config.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/sched.h>
@@ -64,7 +63,7 @@ static __inline__ void writeccr(struct mpc_i2c *i2c, u32 x)
 	writeb(x, i2c->base + MPC_I2C_CR);
 }
 
-static irqreturn_t mpc_i2c_isr(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t mpc_i2c_isr(int irq, void *dev_id)
 {
 	struct mpc_i2c *i2c = dev_id;
 	if (readb(i2c->base + MPC_I2C_SR) & CSR_MIF) {
@@ -273,7 +272,7 @@ static u32 mpc_functionality(struct i2c_adapter *adap)
 	return I2C_FUNC_I2C | I2C_FUNC_SMBUS_EMUL;
 }
 
-static struct i2c_algorithm mpc_algo = {
+static const struct i2c_algorithm mpc_algo = {
 	.master_xfer = mpc_xfer,
 	.functionality = mpc_functionality,
 };
@@ -319,7 +318,7 @@ static int fsl_i2c_probe(struct platform_device *pdev)
 
 	if (i2c->irq != 0)
 		if ((result = request_irq(i2c->irq, mpc_i2c_isr,
-					  SA_SHIRQ, "i2c-mpc", i2c)) < 0) {
+					  IRQF_SHARED, "i2c-mpc", i2c)) < 0) {
 			printk(KERN_ERR
 			       "i2c-mpc - failed to attach interrupt\n");
 			goto fail_irq;

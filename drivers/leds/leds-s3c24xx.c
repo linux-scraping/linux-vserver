@@ -11,13 +11,12 @@
  * published by the Free Software Foundation.
 */
 
-#include <linux/config.h>
 #include <linux/kernel.h>
 #include <linux/init.h>
 #include <linux/platform_device.h>
 #include <linux/leds.h>
 
-#include <asm/arch/hardware.h>
+#include <asm/hardware.h>
 #include <asm/arch/regs-gpio.h>
 #include <asm/arch/leds-gpio.h>
 

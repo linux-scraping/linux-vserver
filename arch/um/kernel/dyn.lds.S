@@ -14,6 +14,7 @@ SECTIONS
    * is remapped.*/
   __binary_start = .;
   . = ALIGN(4096);		/* Init code and data */
+  _text = .;
   _stext = .;
   __init_begin = .;
   .init.text : {
@@ -26,6 +27,7 @@ SECTIONS
 
   /* Read-only sections, merged into text segment: */
   .hash           : { *(.hash) }
+  .gnu.hash       : { *(.gnu.hash) }
   .dynsym         : { *(.dynsym) }
   .dynstr         : { *(.dynstr) }
   .gnu.version    : { *(.gnu.version) }

@@ -212,7 +212,7 @@ EXPORT_SYMBOL_GPL(platform_device_add_resources);
  *	pointer.  The memory associated with the platform data will be freed
  *	when the platform device is released.
  */
-int platform_device_add_data(struct platform_device *pdev, void *data, size_t size)
+int platform_device_add_data(struct platform_device *pdev, const void *data, size_t size)
 {
 	void *d;
 
@@ -275,7 +275,7 @@ int platform_device_add(struct platform_device *pdev)
 	pr_debug("Registering platform device '%s'. Parent at %s\n",
 		 pdev->dev.bus_id, pdev->dev.parent->bus_id);
 
-	ret = device_register(&pdev->dev);
+	ret = device_add(&pdev->dev);
 	if (ret == 0)
 		return ret;
 
@@ -388,6 +388,11 @@ static int platform_drv_probe(struct device *_dev)
 	return drv->probe(dev);
 }
 
+static int platform_drv_probe_fail(struct device *_dev)
+{
+	return -ENXIO;
+}
+
 static int platform_drv_remove(struct device *_dev)
 {
 	struct platform_driver *drv = to_platform_driver(_dev->driver);
@@ -451,6 +456,80 @@ void platform_driver_unregister(struct platform_driver *drv)
 }
 EXPORT_SYMBOL_GPL(platform_driver_unregister);
 
+/**
+ * platform_driver_probe - register driver for non-hotpluggable device
+ * @drv: platform driver structure
+ * @probe: the driver probe routine, probably from an __init section
+ *
+ * Use this instead of platform_driver_register() when you know the device
+ * is not hotpluggable and has already been registered, and you want to
+ * remove its run-once probe() infrastructure from memory after the driver
+ * has bound to the device.
+ *
+ * One typical use for this would be with drivers for controllers integrated
+ * into system-on-chip processors, where the controller devices have been
+ * configured as part of board setup.
+ *
+ * Returns zero if the driver registered and bound to a device, else returns
+ * a negative error code and with the driver not registered.
+ */
+int __init_or_module platform_driver_probe(struct platform_driver *drv,
+		int (*probe)(struct platform_device *))
+{
+	int retval, code;
+
+	/* temporary section violation during probe() */
+	drv->probe = probe;
+	retval = code = platform_driver_register(drv);
+
+	/* Fixup that section violation, being paranoid about code scanning
+	 * the list of drivers in order to probe new devices.  Check to see
+	 * if the probe was successful, and make sure any forced probes of
+	 * new devices fail.
+	 */
+	spin_lock(&platform_bus_type.klist_drivers.k_lock);
+	drv->probe = NULL;
+	if (code == 0 && list_empty(&drv->driver.klist_devices.k_list))
+		retval = -ENODEV;
+	drv->driver.probe = platform_drv_probe_fail;
+	spin_unlock(&platform_bus_type.klist_drivers.k_lock);
+
+	if (code != retval)
+		platform_driver_unregister(drv);
+	return retval;
+}
+EXPORT_SYMBOL_GPL(platform_driver_probe);
+
+/* modalias support enables more hands-off userspace setup:
+ * (a) environment variable lets new-style hotplug events work once system is
+ *     fully running:  "modprobe $MODALIAS"
+ * (b) sysfs attribute lets new-style coldplug recover from hotplug events
+ *     mishandled before system is fully running:  "modprobe $(cat modalias)"
+ */
+static ssize_t
+modalias_show(struct device *dev, struct device_attribute *a, char *buf)
+{
+	struct platform_device	*pdev = to_platform_device(dev);
+	int len = snprintf(buf, PAGE_SIZE, "%s\n", pdev->name);
+
+	return (len >= PAGE_SIZE) ? (PAGE_SIZE - 1) : len;
+}
+
+static struct device_attribute platform_dev_attrs[] = {
+	__ATTR_RO(modalias),
+	__ATTR_NULL,
+};
+
+static int platform_uevent(struct device *dev, char **envp, int num_envp,
+		char *buffer, int buffer_size)
+{
+	struct platform_device	*pdev = to_platform_device(dev);
+
+	envp[0] = buffer;
+	snprintf(buffer, buffer_size, "MODALIAS=%s", pdev->name);
+	return 0;
+}
+
 
 /**
  *	platform_match - bind platform device to platform driver.
@@ -474,12 +553,36 @@ static int platform_match(struct device * dev, struct device_driver * drv)
 	return (strncmp(pdev->name, drv->name, BUS_ID_SIZE) == 0);
 }
 
-static int platform_suspend(struct device * dev, pm_message_t state)
+static int platform_suspend(struct device *dev, pm_message_t mesg)
 {
 	int ret = 0;
 
 	if (dev->driver && dev->driver->suspend)
-		ret = dev->driver->suspend(dev, state);
+		ret = dev->driver->suspend(dev, mesg);
+
+	return ret;
+}
+
+static int platform_suspend_late(struct device *dev, pm_message_t mesg)
+{
+	struct platform_driver *drv = to_platform_driver(dev->driver);
+	struct platform_device *pdev = container_of(dev, struct platform_device, dev);
+	int ret = 0;
+
+	if (dev->driver && drv->suspend_late)
+		ret = drv->suspend_late(pdev, mesg);
+
+	return ret;
+}
+
+static int platform_resume_early(struct device *dev)
+{
+	struct platform_driver *drv = to_platform_driver(dev->driver);
+	struct platform_device *pdev = container_of(dev, struct platform_device, dev);
+	int ret = 0;
+
+	if (dev->driver && drv->resume_early)
+		ret = drv->resume_early(pdev);
 
 	return ret;
 }
@@ -496,8 +599,12 @@ static int platform_resume(struct device * dev)
 
 struct bus_type platform_bus_type = {
 	.name		= "platform",
+	.dev_attrs	= platform_dev_attrs,
 	.match		= platform_match,
+	.uevent		= platform_uevent,
 	.suspend	= platform_suspend,
+	.suspend_late	= platform_suspend_late,
+	.resume_early	= platform_resume_early,
 	.resume		= platform_resume,
 };
 EXPORT_SYMBOL_GPL(platform_bus_type);

@@ -55,7 +55,6 @@
  *
  */
 
-#include <linux/config.h>
 #include <linux/types.h>
 #include <linux/slab.h>
 #include <linux/jffs.h>
@@ -67,6 +66,7 @@
 #include <linux/smp_lock.h>
 #include <linux/time.h>
 #include <linux/ctype.h>
+#include <linux/freezer.h>
 
 #include "intrep.h"
 #include "jffs_fm.h"
@@ -247,7 +247,7 @@ flash_safe_read(struct mtd_info *mtd, loff_t from,
 	D3(printk(KERN_NOTICE "flash_safe_read(%p, %08x, %p, %08x)\n",
 		  mtd, (unsigned int) from, buf, count));
 
-	res = MTD_READ(mtd, from, count, &retlen, buf);
+	res = mtd->read(mtd, from, count, &retlen, buf);
 	if (retlen != count) {
 		panic("Didn't read all bytes in flash_safe_read(). Returned %d\n", res);
 	}
@@ -262,7 +262,7 @@ flash_read_u32(struct mtd_info *mtd, loff_t from)
 	__u32 ret;
 	int res;
 
-	res = MTD_READ(mtd, from, 4, &retlen, (unsigned char *)&ret);
+	res = mtd->read(mtd, from, 4, &retlen, (unsigned char *)&ret);
 	if (retlen != 4) {
 		printk("Didn't read all bytes in flash_read_u32(). Returned %d\n", res);
 		return 0;
@@ -282,7 +282,7 @@ flash_safe_write(struct mtd_info *mtd, loff_t to,
 	D3(printk(KERN_NOTICE "flash_safe_write(%p, %08x, %p, %08x)\n",
 		  mtd, (unsigned int) to, buf, count));
 
-	res = MTD_WRITE(mtd, to, count, &retlen, buf);
+	res = mtd->write(mtd, to, count, &retlen, buf);
 	if (retlen != count) {
 		printk("Didn't write all bytes in flash_safe_write(). Returned %d\n", res);
 	}
@@ -300,9 +300,9 @@ flash_safe_writev(struct mtd_info *mtd, const struct kvec *vecs,
 
 	D3(printk(KERN_NOTICE "flash_safe_writev(%p, %08x, %p)\n",
 		  mtd, (unsigned int) to, vecs));
-	
+
 	if (mtd->writev) {
-		res = MTD_WRITEV(mtd, vecs, iovec_cnt, to, &retlen);
+		res = mtd->writev(mtd, vecs, iovec_cnt, to, &retlen);
 		return res ? res : retlen;
 	}
 	/* Not implemented writev. Repeatedly use write - on the not so
@@ -312,7 +312,8 @@ flash_safe_writev(struct mtd_info *mtd, const struct kvec *vecs,
 	retlen=0;
 
 	for (i=0; !res && i<iovec_cnt; i++) {
-		res = MTD_WRITE(mtd, to, vecs[i].iov_len, &retlen_a, vecs[i].iov_base);
+		res = mtd->write(mtd, to, vecs[i].iov_len, &retlen_a,
+				 vecs[i].iov_base);
 		if (retlen_a != vecs[i].iov_len) {
 			printk("Didn't write all bytes in flash_safe_writev(). Returned %d\n", res);
 			if (i != iovec_cnt-1)
@@ -393,7 +394,7 @@ flash_erase_region(struct mtd_info *mtd, loff_t start,
 	set_current_state(TASK_UNINTERRUPTIBLE);
 	add_wait_queue(&wait_q, &wait);
 
-	if (MTD_ERASE(mtd, erase) < 0) {
+	if (mtd->erase(mtd, erase) < 0) {
 		set_current_state(TASK_RUNNING);
 		remove_wait_queue(&wait_q, &wait);
 		kfree(erase);
@@ -435,7 +436,7 @@ jffs_checksum_flash(struct mtd_info *mtd, loff_t start, int size, __u32 *result)
 	int i, length;
 
 	/* Allocate read buffer */
-	read_buf = (__u8 *) kmalloc (sizeof(__u8) * 4096, GFP_KERNEL);
+	read_buf = kmalloc(sizeof(__u8) * 4096, GFP_KERNEL);
 	if (!read_buf) {
 		printk(KERN_NOTICE "kmalloc failed in jffs_checksum_flash()\n");
 		return -ENOMEM;
@@ -488,13 +489,11 @@ jffs_create_file(struct jffs_control *c,
 {
 	struct jffs_file *f;
 
-	if (!(f = (struct jffs_file *)kmalloc(sizeof(struct jffs_file),
-					      GFP_KERNEL))) {
+	if (!(f = kzalloc(sizeof(*f), GFP_KERNEL))) {
 		D(printk("jffs_create_file(): Failed!\n"));
 		return NULL;
 	}
 	no_jffs_file++;
-	memset(f, 0, sizeof(struct jffs_file));
 	f->ino = raw_inode->ino;
 	f->pino = raw_inode->pino;
 	f->nlink = raw_inode->nlink;
@@ -516,7 +515,7 @@ jffs_create_control(struct super_block *sb)
 
 	D2(printk("jffs_create_control()\n"));
 
-	if (!(c = (struct jffs_control *)kmalloc(s, GFP_KERNEL))) {
+	if (!(c = kmalloc(s, GFP_KERNEL))) {
 		goto fail_control;
 	}
 	DJM(no_jffs_control++);
@@ -524,7 +523,7 @@ jffs_create_control(struct super_block *sb)
 	c->gc_task = NULL;
 	c->hash_len = JFFS_HASH_SIZE;
 	s = sizeof(struct list_head) * c->hash_len;
-	if (!(c->hash = (struct list_head *)kmalloc(s, GFP_KERNEL))) {
+	if (!(c->hash = kmalloc(s, GFP_KERNEL))) {
 		goto fail_hash;
 	}
 	DJM(no_hash++);
@@ -593,8 +592,7 @@ jffs_add_virtual_root(struct jffs_control *c)
 	D2(printk("jffs_add_virtual_root(): "
 		  "Creating a virtual root directory.\n"));
 
-	if (!(root = (struct jffs_file *)kmalloc(sizeof(struct jffs_file),
-						 GFP_KERNEL))) {
+	if (!(root = kzalloc(sizeof(struct jffs_file), GFP_KERNEL))) {
 		return -ENOMEM;
 	}
 	no_jffs_file++;
@@ -606,7 +604,6 @@ jffs_add_virtual_root(struct jffs_control *c)
 	DJM(no_jffs_node++);
 	memset(node, 0, sizeof(struct jffs_node));
 	node->ino = JFFS_MIN_INO;
-	memset(root, 0, sizeof(struct jffs_file));
 	root->ino = JFFS_MIN_INO;
 	root->mode = S_IFDIR | S_IRWXU | S_IRGRP
 		     | S_IXGRP | S_IROTH | S_IXOTH;
@@ -747,11 +744,11 @@ static int check_partly_erased_sectors(struct jffs_fmcontrol *fmc){
 
 
 	/* Allocate read buffers */
-	read_buf1 = (__u8 *) kmalloc (sizeof(__u8) * READ_AHEAD_BYTES, GFP_KERNEL);
+	read_buf1 = kmalloc(sizeof(__u8) * READ_AHEAD_BYTES, GFP_KERNEL);
 	if (!read_buf1)
 		return -ENOMEM;
 
-	read_buf2 = (__u8 *) kmalloc (sizeof(__u8) * READ_AHEAD_BYTES, GFP_KERNEL);
+	read_buf2 = kmalloc(sizeof(__u8) * READ_AHEAD_BYTES, GFP_KERNEL);
 	if (!read_buf2) {
 		kfree(read_buf1);
 		return -ENOMEM;
@@ -879,7 +876,7 @@ jffs_scan_flash(struct jffs_control *c)
 	}
 
 	/* Allocate read buffer */
-	read_buf = (__u8 *) kmalloc (sizeof(__u8) * 4096, GFP_KERNEL);
+	read_buf = kmalloc(sizeof(__u8) * 4096, GFP_KERNEL);
 	if (!read_buf) {
 		flash_safe_release(fmc->mtd);
 		return -ENOMEM;
@@ -1466,7 +1463,7 @@ jffs_insert_node(struct jffs_control *c, struct jffs_file *f,
 			kfree(f->name);
 			DJM(no_name--);
 		}
-		if (!(f->name = (char *) kmalloc(raw_inode->nsize + 1,
+		if (!(f->name = kmalloc(raw_inode->nsize + 1,
 						 GFP_KERNEL))) {
 			return -ENOMEM;
 		}
@@ -1740,7 +1737,7 @@ jffs_find_child(struct jffs_file *dir, const char *name, int len)
 		printk("jffs_find_child(): Found \"%s\".\n", f->name);
 	}
 	else {
-		char *copy = (char *) kmalloc(len + 1, GFP_KERNEL);
+		char *copy = kmalloc(len + 1, GFP_KERNEL);
 		if (copy) {
 			memcpy(copy, name, len);
 			copy[len] = '\0';
@@ -2630,7 +2627,7 @@ jffs_print_tree(struct jffs_file *first_file, int indent)
 		return;
 	}
 
-	if (!(space = (char *) kmalloc(indent + 1, GFP_KERNEL))) {
+	if (!(space = kmalloc(indent + 1, GFP_KERNEL))) {
 		printk("jffs_print_tree(): Out of memory!\n");
 		return;
 	}

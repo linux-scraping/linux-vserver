@@ -9,12 +9,13 @@
  * published by the Free Software Foundation.
  */
 #include <linux/module.h>
-#include <linux/config.h>
 #include <linux/types.h>
 #include <linux/kernel.h>
 #include <linux/signal.h>
 #include <linux/sched.h>
 #include <linux/init.h>
+
+#include <asm/thread_notify.h>
 #include <asm/vfp.h>
 
 #include "vfpinstr.h"
@@ -27,7 +28,7 @@ void vfp_testing_entry(void);
 void vfp_support_entry(void);
 
 void (*vfp_vector)(void) = vfp_testing_entry;
-union vfp_state *last_VFP_context;
+union vfp_state *last_VFP_context[NR_CPUS];
 
 /*
  * Dual-use variable.
@@ -36,37 +37,68 @@ union vfp_state *last_VFP_context;
  */
 unsigned int VFP_arch;
 
-/*
- * Per-thread VFP initialisation.
- */
-void vfp_flush_thread(union vfp_state *vfp)
+static int vfp_notifier(struct notifier_block *self, unsigned long cmd, void *v)
 {
-	memset(vfp, 0, sizeof(union vfp_state));
+	struct thread_info *thread = v;
+	union vfp_state *vfp;
+	__u32 cpu = thread->cpu;
 
-	vfp->hard.fpexc = FPEXC_ENABLE;
-	vfp->hard.fpscr = FPSCR_ROUND_NEAREST;
+	if (likely(cmd == THREAD_NOTIFY_SWITCH)) {
+		u32 fpexc = fmrx(FPEXC);
 
-	/*
-	 * Disable VFP to ensure we initialise it first.
-	 */
-	fmxr(FPEXC, fmrx(FPEXC) & ~FPEXC_ENABLE);
+#ifdef CONFIG_SMP
+		/*
+		 * On SMP, if VFP is enabled, save the old state in
+		 * case the thread migrates to a different CPU. The
+		 * restoring is done lazily.
+		 */
+		if ((fpexc & FPEXC_ENABLE) && last_VFP_context[cpu]) {
+			vfp_save_state(last_VFP_context[cpu], fpexc);
+			last_VFP_context[cpu]->hard.cpu = cpu;
+		}
+		/*
+		 * Thread migration, just force the reloading of the
+		 * state on the new CPU in case the VFP registers
+		 * contain stale data.
+		 */
+		if (thread->vfpstate.hard.cpu != cpu)
+			last_VFP_context[cpu] = NULL;
+#endif
 
-	/*
-	 * Ensure we don't try to overwrite our newly initialised
-	 * state information on the first fault.
-	 */
-	if (last_VFP_context == vfp)
-		last_VFP_context = NULL;
+		/*
+		 * Always disable VFP so we can lazily save/restore the
+		 * old state.
+		 */
+		fmxr(FPEXC, fpexc & ~FPEXC_ENABLE);
+		return NOTIFY_DONE;
+	}
+
+	vfp = &thread->vfpstate;
+	if (cmd == THREAD_NOTIFY_FLUSH) {
+		/*
+		 * Per-thread VFP initialisation.
+		 */
+		memset(vfp, 0, sizeof(union vfp_state));
+
+		vfp->hard.fpexc = FPEXC_ENABLE;
+		vfp->hard.fpscr = FPSCR_ROUND_NEAREST;
+
+		/*
+		 * Disable VFP to ensure we initialise it first.
+		 */
+		fmxr(FPEXC, fmrx(FPEXC) & ~FPEXC_ENABLE);
+	}
+
+	/* flush and release case: Per-thread VFP cleanup. */
+	if (last_VFP_context[cpu] == vfp)
+		last_VFP_context[cpu] = NULL;
+
+	return NOTIFY_DONE;
 }
 
-/*
- * Per-thread VFP cleanup.
- */
-void vfp_release_thread(union vfp_state *vfp)
-{
-	if (last_VFP_context == vfp)
-		last_VFP_context = NULL;
-}
+static struct notifier_block vfp_notifier_block = {
+	.notifier_call	= vfp_notifier,
+};
 
 /*
  * Raise a SIGFPE for the current process.
@@ -80,7 +112,7 @@ void vfp_raise_sigfpe(unsigned int sicode, struct pt_regs *regs)
 
 	info.si_signo = SIGFPE;
 	info.si_code = sicode;
-	info.si_addr = (void *)(instruction_pointer(regs) - 4);
+	info.si_addr = (void __user *)(instruction_pointer(regs) - 4);
 
 	/*
 	 * This is the same as NWFPE, because it's not clear what
@@ -113,7 +145,7 @@ static void vfp_raise_exceptions(u32 exceptions, u32 inst, u32 fpscr, struct pt_
 
 	pr_debug("VFP: raising exceptions %08x\n", exceptions);
 
-	if (exceptions == (u32)-1) {
+	if (exceptions == VFP_EXCEPTION_ERROR) {
 		vfp_panic("unhandled bounce");
 		vfp_raise_sigfpe(0, regs);
 		return;
@@ -138,6 +170,7 @@ static void vfp_raise_exceptions(u32 exceptions, u32 inst, u32 fpscr, struct pt_
 	/*
 	 * These are arranged in priority order, least to highest.
 	 */
+	RAISE(FPSCR_DZC, FPSCR_DZE, FPE_FLTDIV);
 	RAISE(FPSCR_IXC, FPSCR_IXE, FPE_FLTRES);
 	RAISE(FPSCR_UFC, FPSCR_UFE, FPE_FLTUND);
 	RAISE(FPSCR_OFC, FPSCR_OFE, FPE_FLTOVF);
@@ -152,7 +185,7 @@ static void vfp_raise_exceptions(u32 exceptions, u32 inst, u32 fpscr, struct pt_
  */
 static u32 vfp_emulate_instruction(u32 inst, u32 fpscr, struct pt_regs *regs)
 {
-	u32 exceptions = (u32)-1;
+	u32 exceptions = VFP_EXCEPTION_ERROR;
 
 	pr_debug("VFP: emulate: INST=0x%08x SCR=0x%08x\n", inst, fpscr);
 
@@ -252,13 +285,36 @@ void VFP9_bounce(u32 trigger, u32 fpexc, struct pt_regs *regs)
 	if (exceptions)
 		vfp_raise_exceptions(exceptions, trigger, orig_fpscr, regs);
 }
- 
+
+static void vfp_enable(void *unused)
+{
+	u32 access = get_copro_access();
+
+	/*
+	 * Enable full access to VFP (cp10 and cp11)
+	 */
+	set_copro_access(access | CPACC_FULL(10) | CPACC_FULL(11));
+}
+
+#include <linux/smp.h>
+
 /*
  * VFP support code initialisation.
  */
 static int __init vfp_init(void)
 {
 	unsigned int vfpsid;
+	unsigned int cpu_arch = cpu_architecture();
+	u32 access = 0;
+
+	if (cpu_arch >= CPU_ARCH_ARMv6) {
+		access = get_copro_access();
+
+		/*
+		 * Enable full access to VFP (cp10 and cp11)
+		 */
+		set_copro_access(access | CPACC_FULL(10) | CPACC_FULL(11));
+	}
 
 	/*
 	 * First check that there is a VFP that we can use.
@@ -266,13 +322,22 @@ static int __init vfp_init(void)
 	 * we just need to read the VFPSID register.
 	 */
 	vfpsid = fmrx(FPSID);
+	barrier();
 
 	printk(KERN_INFO "VFP support v0.3: ");
 	if (VFP_arch) {
 		printk("not present\n");
+
+		/*
+		 * Restore the copro access register.
+		 */
+		if (cpu_arch >= CPU_ARCH_ARMv6)
+			set_copro_access(access);
 	} else if (vfpsid & FPSID_NODOUBLE) {
 		printk("no double precision support\n");
 	} else {
+		smp_call_function(vfp_enable, NULL, 1, 1);
+
 		VFP_arch = (vfpsid & FPSID_ARCH_MASK) >> FPSID_ARCH_BIT;  /* Extract the architecture version */
 		printk("implementor %02x architecture %d part %02x variant %x rev %x\n",
 			(vfpsid & FPSID_IMPLEMENTER_MASK) >> FPSID_IMPLEMENTER_BIT,
@@ -280,7 +345,16 @@ static int __init vfp_init(void)
 			(vfpsid & FPSID_PART_MASK) >> FPSID_PART_BIT,
 			(vfpsid & FPSID_VARIANT_MASK) >> FPSID_VARIANT_BIT,
 			(vfpsid & FPSID_REV_MASK) >> FPSID_REV_BIT);
+
 		vfp_vector = vfp_support_entry;
+
+		thread_register_notifier(&vfp_notifier_block);
+
+		/*
+		 * We detected VFP, and the support code is
+		 * in place; report VFP support to userspace.
+		 */
+		elf_hwcap |= HWCAP_VFP;
 	}
 	return 0;
 }

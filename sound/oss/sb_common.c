@@ -1,5 +1,5 @@
 /*
- * sound/sb_common.c
+ * sound/oss/sb_common.c
  *
  * Common routines for Sound Blaster compatible cards.
  *
@@ -26,7 +26,6 @@
  * Chris Rankin <rankinc@zipworld.com.au>
  */
 
-#include <linux/config.h>
 #include <linux/init.h>
 #include <linux/interrupt.h>
 #include <linux/module.h>
@@ -133,7 +132,7 @@ static void sb_intr (sb_devc *devc)
 
 		if (src & 4)						/* MPU401 interrupt */
 			if(devc->midi_irq_cookie)
-				uart401intr(devc->irq, devc->midi_irq_cookie, NULL);
+				uart401intr(devc->irq, devc->midi_irq_cookie);
 
 		if (!(src & 3))
 			return;	/* Not a DSP interrupt */
@@ -201,7 +200,7 @@ static void pci_intr(sb_devc *devc)
 		sb_intr(devc);
 }
 
-static irqreturn_t sbintr(int irq, void *dev_id, struct pt_regs *dummy)
+static irqreturn_t sbintr(int irq, void *dev_id)
 {
 	sb_devc *devc = dev_id;
 
@@ -626,7 +625,7 @@ int sb_dsp_detect(struct address_info *hw_config, int pci, int pciio, struct sb_
 	 */
 
 
-	detected_devc = (sb_devc *)kmalloc(sizeof(sb_devc), GFP_KERNEL);
+	detected_devc = kmalloc(sizeof(sb_devc), GFP_KERNEL);
 	if (detected_devc == NULL)
 	{
 		printk(KERN_ERR "sb: Can't allocate memory for device information\n");
@@ -678,7 +677,7 @@ int sb_dsp_init(struct address_info *hw_config, struct module *owner)
 		 *	will get shared PCI irq lines we must cope.
 		 */
 		 
-		int i=(devc->caps&SB_PCI_IRQ)?SA_SHIRQ:0;
+		int i=(devc->caps&SB_PCI_IRQ)?IRQF_SHARED:0;
 		
 		if (request_irq(hw_config->irq, sbintr, i, "soundblaster", devc) < 0)
 		{

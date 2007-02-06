@@ -27,7 +27,6 @@
  * MPCBL0010 ATCA computer.
  */
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/sched.h>
@@ -187,6 +186,7 @@ static int got_event;		/* if events processing have been done */
 static void switchover_timeout(unsigned long data);
 static struct timer_list switchover_timer =
 	TIMER_INITIALIZER(switchover_timeout , 0, 0);
+static unsigned long tlclk_timer_data;
 
 static struct tlclk_alarms *alarm_events;
 
@@ -194,13 +194,22 @@ static DEFINE_SPINLOCK(event_lock);
 
 static int tlclk_major = TLCLK_MAJOR;
 
-static irqreturn_t tlclk_interrupt(int irq, void *dev_id, struct pt_regs *regs);
+static irqreturn_t tlclk_interrupt(int irq, void *dev_id);
 
 static DECLARE_WAIT_QUEUE_HEAD(wq);
+
+static unsigned long useflags;
+static DEFINE_MUTEX(tlclk_mutex);
 
 static int tlclk_open(struct inode *inode, struct file *filp)
 {
 	int result;
+
+	if (test_and_set_bit(0, &useflags))
+		return -EBUSY;
+		/* this legacy device is always one per system and it doesn't
+		 * know how to handle multiple concurrent clients.
+		 */
 
 	/* Make sure there is no interrupt pending while
 	 * initialising interrupt handler */
@@ -209,7 +218,7 @@ static int tlclk_open(struct inode *inode, struct file *filp)
 	/* This device is wired through the FPGA IO space of the ATCA blade
 	 * we can't share this IRQ */
 	result = request_irq(telclk_interrupt, &tlclk_interrupt,
-			     SA_INTERRUPT, "telco_clock", tlclk_interrupt);
+			     IRQF_DISABLED, "telco_clock", tlclk_interrupt);
 	if (result == -EBUSY) {
 		printk(KERN_ERR "tlclk: Interrupt can't be reserved.\n");
 		return -EBUSY;
@@ -222,6 +231,7 @@ static int tlclk_open(struct inode *inode, struct file *filp)
 static int tlclk_release(struct inode *inode, struct file *filp)
 {
 	free_irq(telclk_interrupt, tlclk_interrupt);
+	clear_bit(0, &useflags);
 
 	return 0;
 }
@@ -231,26 +241,25 @@ static ssize_t tlclk_read(struct file *filp, char __user *buf, size_t count,
 {
 	if (count < sizeof(struct tlclk_alarms))
 		return -EIO;
+	if (mutex_lock_interruptible(&tlclk_mutex))
+		return -EINTR;
+
 
 	wait_event_interruptible(wq, got_event);
-	if (copy_to_user(buf, alarm_events, sizeof(struct tlclk_alarms)))
+	if (copy_to_user(buf, alarm_events, sizeof(struct tlclk_alarms))) {
+		mutex_unlock(&tlclk_mutex);
 		return -EFAULT;
+	}
 
 	memset(alarm_events, 0, sizeof(struct tlclk_alarms));
 	got_event = 0;
 
+	mutex_unlock(&tlclk_mutex);
 	return  sizeof(struct tlclk_alarms);
 }
 
-static ssize_t tlclk_write(struct file *filp, const char __user *buf, size_t count,
-	    loff_t *f_pos)
-{
-	return 0;
-}
-
-static struct file_operations tlclk_fops = {
+static const struct file_operations tlclk_fops = {
 	.read = tlclk_read,
-	.write = tlclk_write,
 	.open = tlclk_open,
 	.release = tlclk_release,
 
@@ -343,7 +352,7 @@ static ssize_t store_received_ref_clk3b(struct device *d,
 
 	val = (unsigned char)tmp;
 	spin_lock_irqsave(&event_lock, flags);
-	SET_PORT_BITS(TLCLK_REG1, 0xef, val << 1);
+	SET_PORT_BITS(TLCLK_REG1, 0xdf, val << 1);
 	spin_unlock_irqrestore(&event_lock, flags);
 
 	return strnlen(buf, count);
@@ -541,7 +550,7 @@ static ssize_t store_select_amcb1_transmit_clock(struct device *d,
 			SET_PORT_BITS(TLCLK_REG3, 0xf8, 0x7);
 			switch (val) {
 			case CLK_8_592MHz:
-				SET_PORT_BITS(TLCLK_REG0, 0xfc, 1);
+				SET_PORT_BITS(TLCLK_REG0, 0xfc, 2);
 				break;
 			case CLK_11_184MHz:
 				SET_PORT_BITS(TLCLK_REG0, 0xfc, 0);
@@ -550,7 +559,7 @@ static ssize_t store_select_amcb1_transmit_clock(struct device *d,
 				SET_PORT_BITS(TLCLK_REG0, 0xfc, 3);
 				break;
 			case CLK_44_736MHz:
-				SET_PORT_BITS(TLCLK_REG0, 0xfc, 2);
+				SET_PORT_BITS(TLCLK_REG0, 0xfc, 1);
 				break;
 			}
 		} else
@@ -793,15 +802,14 @@ static int __init tlclk_init(void)
 	ret = misc_register(&tlclk_miscdev);
 	if (ret < 0) {
 		printk(KERN_ERR "tlclk: misc_register returns %d.\n", ret);
-		ret = -EBUSY;
 		goto out3;
 	}
 
 	tlclk_device = platform_device_register_simple("telco_clock",
 				-1, NULL, 0);
-	if (!tlclk_device) {
+	if (IS_ERR(tlclk_device)) {
 		printk(KERN_ERR "tlclk: platform_device_register failed.\n");
-		ret = -EBUSY;
+		ret = PTR_ERR(tlclk_device);
 		goto out4;
 	}
 
@@ -809,8 +817,6 @@ static int __init tlclk_init(void)
 			&tlclk_attribute_group);
 	if (ret) {
 		printk(KERN_ERR "tlclk: failed to create sysfs device attributes.\n");
-		sysfs_remove_group(&tlclk_device->dev.kobj,
-			&tlclk_attribute_group);
 		goto out5;
 	}
 
@@ -843,11 +849,13 @@ static void __exit tlclk_cleanup(void)
 
 static void switchover_timeout(unsigned long data)
 {
-	if ((data & 1)) {
-		if ((inb(TLCLK_REG1) & 0x08) != (data & 0x08))
+	unsigned long flags = *(unsigned long *) data;
+
+	if ((flags & 1)) {
+		if ((inb(TLCLK_REG1) & 0x08) != (flags & 0x08))
 			alarm_events->switchover_primary++;
 	} else {
-		if ((inb(TLCLK_REG1) & 0x08) != (data & 0x08))
+		if ((inb(TLCLK_REG1) & 0x08) != (flags & 0x08))
 			alarm_events->switchover_secondary++;
 	}
 
@@ -857,7 +865,7 @@ static void switchover_timeout(unsigned long data)
 	wake_up(&wq);
 }
 
-static irqreturn_t tlclk_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t tlclk_interrupt(int irq, void *dev_id)
 {
 	unsigned long flags;
 
@@ -905,8 +913,9 @@ static irqreturn_t tlclk_interrupt(int irq, void *dev_id, struct pt_regs *regs)
 
 		/* TIMEOUT in ~10ms */
 		switchover_timer.expires = jiffies + msecs_to_jiffies(10);
-		switchover_timer.data = inb(TLCLK_REG1);
-		add_timer(&switchover_timer);
+		tlclk_timer_data = inb(TLCLK_REG1);
+		switchover_timer.data = (unsigned long) &tlclk_timer_data;
+		mod_timer(&switchover_timer, switchover_timer.expires);
 	} else {
 		got_event = 1;
 		wake_up(&wq);

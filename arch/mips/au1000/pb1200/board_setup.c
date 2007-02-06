@@ -23,7 +23,6 @@
  *  with this program; if not, write  to the Free Software Foundation, Inc.,
  *  675 Mass Ave, Cambridge, MA 02139, USA.
  */
-#include <linux/config.h>
 #include <linux/init.h>
 #include <linux/sched.h>
 #include <linux/ioport.h>
@@ -56,7 +55,7 @@
 #endif
 
 extern void _board_init_irq(void);
-extern void	(*board_init_irq)(void);
+extern void (*board_init_irq)(void);
 
 void board_reset (void)
 {
@@ -152,11 +151,7 @@ void __init board_setup(void)
 #endif
 
 	/* Setup Pb1200 External Interrupt Controller */
-	{
-		extern void (*board_init_irq)(void);
-		extern void _board_init_irq(void);
-		board_init_irq = _board_init_irq;
-	}
+	board_init_irq = _board_init_irq;
 }
 
 int

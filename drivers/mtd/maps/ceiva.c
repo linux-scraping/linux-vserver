@@ -14,7 +14,6 @@
  * $Id: ceiva.c,v 1.11 2004/09/16 23:27:12 gleixner Exp $
  */
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/types.h>
 #include <linux/ioport.h>
@@ -123,10 +122,9 @@ static int __init clps_setup_mtd(struct clps_info *clps, int nr, struct mtd_info
 	/*
 	 * Allocate the map_info structs in one go.
 	 */
-	maps = kmalloc(sizeof(struct map_info) * nr, GFP_KERNEL);
+	maps = kzalloc(sizeof(struct map_info) * nr, GFP_KERNEL);
 	if (!maps)
 		return -ENOMEM;
-	memset(maps, 0, sizeof(struct map_info) * nr);
 	/*
 	 * Claim and then map the memory regions.
 	 */

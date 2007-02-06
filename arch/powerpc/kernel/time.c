@@ -32,7 +32,6 @@
  *      2 of the License, or (at your option) any later version.
  */
 
-#include <linux/config.h>
 #include <linux/errno.h>
 #include <linux/module.h>
 #include <linux/sched.h>
@@ -52,6 +51,7 @@
 #include <linux/rtc.h>
 #include <linux/jiffies.h>
 #include <linux/posix-timers.h>
+#include <linux/irq.h>
 
 #include <asm/io.h>
 #include <asm/processor.h>
@@ -76,7 +76,6 @@
 
 /* keep track of when we need to update the rtc */
 time_t last_rtc_update;
-extern int piranha_simulator;
 #ifdef CONFIG_PPC_ISERIES
 unsigned long iSeries_recal_titan = 0;
 unsigned long iSeries_recal_tb = 0; 
@@ -103,7 +102,7 @@ EXPORT_SYMBOL(tb_ticks_per_sec);	/* for cputime_t conversions */
 u64 tb_to_xs;
 unsigned tb_to_us;
 
-#define TICKLEN_SCALE	(SHIFT_SCALE - 10)
+#define TICKLEN_SCALE	TICK_LENGTH_SHIFT
 u64 last_tick_len;	/* units are ns / 2^TICKLEN_SCALE */
 u64 ticklen_to_xs;	/* 0.64 fraction */
 
@@ -119,23 +118,14 @@ unsigned tb_to_ns_shift;
 
 struct gettimeofday_struct do_gtod;
 
-extern unsigned long wall_jiffies;
-
 extern struct timezone sys_tz;
 static long timezone_offset;
 
 unsigned long ppc_proc_freq;
 unsigned long ppc_tb_freq;
 
-u64 tb_last_jiffy __cacheline_aligned_in_smp;
-unsigned long tb_last_stamp;
-
-/*
- * Note that on ppc32 this only stores the bottom 32 bits of
- * the timebase value, but that's enough to tell when a jiffy
- * has passed.
- */
-DEFINE_PER_CPU(unsigned long, last_jiffy);
+static u64 tb_last_jiffy __cacheline_aligned_in_smp;
+static DEFINE_PER_CPU(u64, last_jiffy);
 
 #ifdef CONFIG_VIRT_CPU_ACCOUNTING
 /*
@@ -230,11 +220,8 @@ static void account_process_time(struct pt_regs *regs)
  */
 struct cpu_purr_data {
 	int	initialized;			/* thread is running */
-	u64	tb0;			/* timebase at origin time */
-	u64	purr0;			/* PURR at origin time */
 	u64	tb;			/* last TB value read */
 	u64	purr;			/* last PURR value read */
-	u64	stolen;			/* stolen time so far */
 	spinlock_t lock;
 };
 
@@ -244,10 +231,8 @@ static void snapshot_tb_and_purr(void *data)
 {
 	struct cpu_purr_data *p = &__get_cpu_var(cpu_purr_data);
 
-	p->tb0 = mftb();
-	p->purr0 = mfspr(SPRN_PURR);
-	p->tb = p->tb0;
-	p->purr = 0;
+	p->tb = mftb();
+	p->purr = mfspr(SPRN_PURR);
 	wmb();
 	p->initialized = 1;
 }
@@ -268,37 +253,24 @@ void snapshot_timebases(void)
 
 void calculate_steal_time(void)
 {
-	u64 tb, purr, t0;
+	u64 tb, purr;
 	s64 stolen;
-	struct cpu_purr_data *p0, *pme, *phim;
-	int cpu;
+	struct cpu_purr_data *pme;
 
 	if (!cpu_has_feature(CPU_FTR_PURR))
 		return;
-	cpu = smp_processor_id();
-	pme = &per_cpu(cpu_purr_data, cpu);
+	pme = &per_cpu(cpu_purr_data, smp_processor_id());
 	if (!pme->initialized)
 		return;		/* this can happen in early boot */
-	p0 = &per_cpu(cpu_purr_data, cpu & ~1);
-	phim = &per_cpu(cpu_purr_data, cpu ^ 1);
-	spin_lock(&p0->lock);
+	spin_lock(&pme->lock);
 	tb = mftb();
-	purr = mfspr(SPRN_PURR) - pme->purr0;
-	if (!phim->initialized || !cpu_online(cpu ^ 1)) {
-		stolen = (tb - pme->tb) - (purr - pme->purr);
-	} else {
-		t0 = pme->tb0;
-		if (phim->tb0 < t0)
-			t0 = phim->tb0;
-		stolen = phim->tb - t0 - phim->purr - purr - p0->stolen;
-	}
-	if (stolen > 0) {
+	purr = mfspr(SPRN_PURR);
+	stolen = (tb - pme->tb) - (purr - pme->purr);
+	if (stolen > 0)
 		account_steal_time(current, stolen);
-		p0->stolen += stolen;
-	}
 	pme->tb = tb;
 	pme->purr = purr;
-	spin_unlock(&p0->lock);
+	spin_unlock(&pme->lock);
 }
 
 /*
@@ -307,30 +279,17 @@ void calculate_steal_time(void)
  */
 static void snapshot_purr(void)
 {
-	int cpu;
-	u64 purr;
-	struct cpu_purr_data *p0, *pme, *phim;
+	struct cpu_purr_data *pme;
 	unsigned long flags;
 
 	if (!cpu_has_feature(CPU_FTR_PURR))
 		return;
-	cpu = smp_processor_id();
-	pme = &per_cpu(cpu_purr_data, cpu);
-	p0 = &per_cpu(cpu_purr_data, cpu & ~1);
-	phim = &per_cpu(cpu_purr_data, cpu ^ 1);
-	spin_lock_irqsave(&p0->lock, flags);
-	pme->tb = pme->tb0 = mftb();
-	purr = mfspr(SPRN_PURR);
-	if (!phim->initialized) {
-		pme->purr = 0;
-		pme->purr0 = purr;
-	} else {
-		/* set p->purr and p->purr0 for no change in p0->stolen */
-		pme->purr = phim->tb - phim->tb0 - phim->purr - p0->stolen;
-		pme->purr0 = purr - pme->purr;
-	}
+	pme = &per_cpu(cpu_purr_data, smp_processor_id());
+	spin_lock_irqsave(&pme->lock, flags);
+	pme->tb = mftb();
+	pme->purr = mfspr(SPRN_PURR);
 	pme->initialized = 1;
-	spin_unlock_irqrestore(&p0->lock, flags);
+	spin_unlock_irqrestore(&pme->lock, flags);
 }
 
 #endif /* CONFIG_PPC_SPLPAR */
@@ -419,7 +378,7 @@ static __inline__ void timer_check_rtc(void)
 /*
  * This version of gettimeofday has microsecond resolution.
  */
-static inline void __do_gettimeofday(struct timeval *tv, u64 tb_val)
+static inline void __do_gettimeofday(struct timeval *tv)
 {
 	unsigned long sec, usec;
 	u64 tb_ticks, xsec;
@@ -433,7 +392,12 @@ static inline void __do_gettimeofday(struct timeval *tv, u64 tb_val)
 	 * without a divide (and in fact, without a multiply)
 	 */
 	temp_varp = do_gtod.varp;
-	tb_ticks = tb_val - temp_varp->tb_orig_stamp;
+
+	/* Sampling the time base must be done after loading
+	 * do_gtod.varp in order to avoid racing with update_gtod.
+	 */
+	data_barrier(temp_varp);
+	tb_ticks = get_tb() - temp_varp->tb_orig_stamp;
 	temp_tb_to_xs = temp_varp->tb_to_xs;
 	temp_stamp_xsec = temp_varp->stamp_xsec;
 	xsec = temp_stamp_xsec + mulhdu(tb_ticks, temp_tb_to_xs);
@@ -455,7 +419,7 @@ void do_gettimeofday(struct timeval *tv)
 		do {
 			seq = read_seqbegin_irqsave(&xtime_lock, flags);
 			sec = xtime.tv_sec;
-			nsec = xtime.tv_nsec + tb_ticks_since(tb_last_stamp);
+			nsec = xtime.tv_nsec + tb_ticks_since(tb_last_jiffy);
 		} while (read_seqretry_irqrestore(&xtime_lock, seq, flags));
 		usec = nsec / 1000;
 		while (usec >= 1000000) {
@@ -466,7 +430,7 @@ void do_gettimeofday(struct timeval *tv)
 		tv->tv_usec = usec;
 		return;
 	}
-	__do_gettimeofday(tv, get_tb());
+	__do_gettimeofday(tv);
 }
 
 EXPORT_SYMBOL(do_gettimeofday);
@@ -649,22 +613,26 @@ static void iSeries_tb_recal(void)
  */
 void timer_interrupt(struct pt_regs * regs)
 {
+	struct pt_regs *old_regs;
 	int next_dec;
 	int cpu = smp_processor_id();
 	unsigned long ticks;
+	u64 tb_next_jiffy;
 
 #ifdef CONFIG_PPC32
 	if (atomic_read(&ppc_n_lost_interrupts) != 0)
 		do_IRQ(regs);
 #endif
 
+	old_regs = set_irq_regs(regs);
 	irq_enter();
 
-	profile_tick(CPU_PROFILING, regs);
+	profile_tick(CPU_PROFILING);
 	calculate_steal_time();
 
 #ifdef CONFIG_PPC_ISERIES
-	get_lppaca()->int_dword.fields.decr_int = 0;
+	if (firmware_has_feature(FW_FEATURE_ISERIES))
+		get_lppaca()->int_dword.fields.decr_int = 0;
 #endif
 
 	while ((ticks = tb_ticks_since(per_cpu(last_jiffy, cpu)))
@@ -693,11 +661,13 @@ void timer_interrupt(struct pt_regs * regs)
 			continue;
 
 		write_seqlock(&xtime_lock);
-		tb_last_jiffy += tb_ticks_per_jiffy;
-		tb_last_stamp = per_cpu(last_jiffy, cpu);
-		do_timer(regs);
-		timer_recalc_offset(tb_last_jiffy);
-		timer_check_rtc();
+		tb_next_jiffy = tb_last_jiffy + tb_ticks_per_jiffy;
+		if (per_cpu(last_jiffy, cpu) >= tb_next_jiffy) {
+			tb_last_jiffy = tb_next_jiffy;
+			do_timer(1);
+			timer_recalc_offset(tb_last_jiffy);
+			timer_check_rtc();
+		}
 		write_sequnlock(&xtime_lock);
 	}
 	
@@ -705,8 +675,8 @@ void timer_interrupt(struct pt_regs * regs)
 	set_dec(next_dec);
 
 #ifdef CONFIG_PPC_ISERIES
-	if (hvlpevent_is_pending())
-		process_hvlpevents(regs);
+	if (firmware_has_feature(FW_FEATURE_ISERIES) && hvlpevent_is_pending())
+		process_hvlpevents();
 #endif
 
 #ifdef CONFIG_PPC64
@@ -718,6 +688,7 @@ void timer_interrupt(struct pt_regs * regs)
 #endif
 
 	irq_exit();
+	set_irq_regs(old_regs);
 }
 
 void wakeup_decrementer(void)
@@ -742,7 +713,7 @@ void __init smp_space_timers(unsigned int max_cpus)
 	int i;
 	unsigned long half = tb_ticks_per_jiffy / 2;
 	unsigned long offset = tb_ticks_per_jiffy / max_cpus;
-	unsigned long previous_tb = per_cpu(last_jiffy, boot_cpuid);
+	u64 previous_tb = per_cpu(last_jiffy, boot_cpuid);
 
 	/* make sure tb > per_cpu(last_jiffy, cpu) for all cpus always */
 	previous_tb -= tb_ticks_per_jiffy;
@@ -804,7 +775,7 @@ int do_settimeofday(struct timespec *tv)
 	 * settimeofday to perform this operation.
 	 */
 #ifdef CONFIG_PPC_ISERIES
-	if (first_settimeofday) {
+	if (firmware_has_feature(FW_FEATURE_ISERIES) && first_settimeofday) {
 		iSeries_tb_recal();
 		first_settimeofday = 0;
 	}
@@ -817,13 +788,8 @@ int do_settimeofday(struct timespec *tv)
 	/*
 	 * Subtract off the number of nanoseconds since the
 	 * beginning of the last tick.
-	 * Note that since we don't increment jiffies_64 anywhere other
-	 * than in do_timer (since we don't have a lost tick problem),
-	 * wall_jiffies will always be the same as jiffies,
-	 * and therefore the (jiffies - wall_jiffies) computation
-	 * has been removed.
 	 */
-	tb_delta = tb_ticks_since(tb_last_stamp);
+	tb_delta = tb_ticks_since(tb_last_jiffy);
 	tb_delta = mulhdu(tb_delta, do_gtod.varp->tb_to_xs); /* in xsec */
 	new_nsec -= SCALE_XSEC(tb_delta, 1000000000);
 
@@ -858,42 +824,48 @@ int do_settimeofday(struct timespec *tv)
 
 EXPORT_SYMBOL(do_settimeofday);
 
-void __init generic_calibrate_decr(void)
+static int __init get_freq(char *name, int cells, unsigned long *val)
 {
 	struct device_node *cpu;
-	unsigned int *fp;
-	int node_found;
+	const unsigned int *fp;
+	int found = 0;
 
-	/*
-	 * The cpu node should have a timebase-frequency property
-	 * to tell us the rate at which the decrementer counts.
-	 */
+	/* The cpu node should have timebase and clock frequency properties */
 	cpu = of_find_node_by_type(NULL, "cpu");
 
-	ppc_tb_freq = DEFAULT_TB_FREQ;		/* hardcoded default */
-	node_found = 0;
 	if (cpu) {
-		fp = (unsigned int *)get_property(cpu, "timebase-frequency",
-						  NULL);
+		fp = get_property(cpu, name, NULL);
 		if (fp) {
-			node_found = 1;
-			ppc_tb_freq = *fp;
+			found = 1;
+			*val = of_read_ulong(fp, cells);
 		}
+
+		of_node_put(cpu);
 	}
-	if (!node_found)
+
+	return found;
+}
+
+void __init generic_calibrate_decr(void)
+{
+	ppc_tb_freq = DEFAULT_TB_FREQ;		/* hardcoded default */
+
+	if (!get_freq("ibm,extended-timebase-frequency", 2, &ppc_tb_freq) &&
+	    !get_freq("timebase-frequency", 1, &ppc_tb_freq)) {
+
 		printk(KERN_ERR "WARNING: Estimating decrementer frequency "
 				"(not found)\n");
-
-	ppc_proc_freq = DEFAULT_PROC_FREQ;
-	node_found = 0;
-	if (cpu) {
-		fp = (unsigned int *)get_property(cpu, "clock-frequency",
-						  NULL);
-		if (fp) {
-			node_found = 1;
-			ppc_proc_freq = *fp;
-		}
 	}
+
+	ppc_proc_freq = DEFAULT_PROC_FREQ;	/* hardcoded default */
+
+	if (!get_freq("ibm,extended-clock-frequency", 2, &ppc_proc_freq) &&
+	    !get_freq("clock-frequency", 1, &ppc_proc_freq)) {
+
+		printk(KERN_ERR "WARNING: Estimating processor frequency "
+				"(not found)\n");
+	}
+
 #ifdef CONFIG_BOOKE
 	/* Set the time base to zero */
 	mtspr(SPRN_TBWL, 0);
@@ -905,11 +877,6 @@ void __init generic_calibrate_decr(void)
 	/* Enable decrementer interrupt */
 	mtspr(SPRN_TCR, TCR_DIE);
 #endif
-	if (!node_found)
-		printk(KERN_ERR "WARNING: Estimating processor frequency "
-				"(not found)\n");
-
-	of_node_put(cpu);
 }
 
 unsigned long get_boot_time(void)
@@ -940,16 +907,15 @@ void __init time_init(void)
 	if (__USE_RTC()) {
 		/* 601 processor: dec counts down by 128 every 128ns */
 		ppc_tb_freq = 1000000000;
-		tb_last_stamp = get_rtcl();
-		tb_last_jiffy = tb_last_stamp;
+		tb_last_jiffy = get_rtcl();
 	} else {
 		/* Normal PowerPC with timebase register */
 		ppc_md.calibrate_decr();
-		printk(KERN_INFO "time_init: decrementer frequency = %lu.%.6lu MHz\n",
+		printk(KERN_DEBUG "time_init: decrementer frequency = %lu.%.6lu MHz\n",
 		       ppc_tb_freq / 1000000, ppc_tb_freq % 1000000);
-		printk(KERN_INFO "time_init: processor frequency   = %lu.%.6lu MHz\n",
+		printk(KERN_DEBUG "time_init: processor frequency   = %lu.%.6lu MHz\n",
 		       ppc_proc_freq / 1000000, ppc_proc_freq % 1000000);
-		tb_last_stamp = tb_last_jiffy = get_tb();
+		tb_last_jiffy = get_tb();
 	}
 
 	tb_ticks_per_jiffy = ppc_tb_freq / HZ;
@@ -1010,10 +976,7 @@ void __init time_init(void)
 	tb_to_ns_scale = scale;
 	tb_to_ns_shift = shift;
 
-#ifdef CONFIG_PPC_ISERIES
-	if (!piranha_simulator)
-#endif
-		tm = get_boot_time();
+	tm = get_boot_time();
 
 	write_seqlock_irqsave(&xtime_lock, flags);
 
@@ -1029,7 +992,7 @@ void __init time_init(void)
 	do_gtod.varp = &do_gtod.vars[0];
 	do_gtod.var_idx = 0;
 	do_gtod.varp->tb_orig_stamp = tb_last_jiffy;
-	__get_cpu_var(last_jiffy) = tb_last_stamp;
+	__get_cpu_var(last_jiffy) = tb_last_jiffy;
 	do_gtod.varp->stamp_xsec = (u64) xtime.tv_sec * XSEC_PER_SEC;
 	do_gtod.tb_ticks_per_sec = tb_ticks_per_sec;
 	do_gtod.varp->tb_to_xs = tb_to_xs;

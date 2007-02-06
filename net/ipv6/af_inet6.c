@@ -23,7 +23,6 @@
 
 #include <linux/module.h>
 #include <linux/capability.h>
-#include <linux/config.h>
 #include <linux/errno.h>
 #include <linux/types.h>
 #include <linux/socket.h>
@@ -50,6 +49,7 @@
 #include <net/ip.h>
 #include <net/ipv6.h>
 #include <net/udp.h>
+#include <net/udplite.h>
 #include <net/tcp.h>
 #include <net/ipip.h>
 #include <net/protocol.h>
@@ -60,6 +60,9 @@
 #ifdef CONFIG_IPV6_TUNNEL
 #include <net/ip6_tunnel.h>
 #endif
+#ifdef CONFIG_IPV6_MIP6
+#include <net/mip6.h>
+#endif
 
 #include <asm/uaccess.h>
 #include <asm/system.h>
@@ -68,7 +71,7 @@ MODULE_AUTHOR("Cast of dozens");
 MODULE_DESCRIPTION("IPv6 protocol stack for Linux");
 MODULE_LICENSE("GPL");
 
-int sysctl_ipv6_bindv6only;
+int sysctl_ipv6_bindv6only __read_mostly;
 
 /* The inetsw table contains everything that inet_create needs to
  * build a new socket.
@@ -168,7 +171,7 @@ lookup_protocol:
 		sk->sk_reuse = 1;
 
 	inet = inet_sk(sk);
-	inet->is_icsk = INET_PROTOSW_ICSK & answer_flags;
+	inet->is_icsk = (INET_PROTOSW_ICSK & answer_flags) != 0;
 
 	if (SOCK_RAW == sock->type) {
 		inet->num = protocol;
@@ -219,7 +222,7 @@ lookup_protocol:
 		 * the user to assign a number at socket
 		 * creation time automatically shares.
 		 */
-		inet->sport = ntohs(inet->num);
+		inet->sport = htons(inet->num);
 		sk->sk_prot->hash(sk);
 	}
 	if (sk->sk_prot->init) {
@@ -244,7 +247,7 @@ int inet6_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len)
 	struct sock *sk = sock->sk;
 	struct inet_sock *inet = inet_sk(sk);
 	struct ipv6_pinfo *np = inet6_sk(sk);
-	__u32 v4addr = 0;
+	__be32 v4addr = 0;
 	unsigned short snum;
 	int addr_type = 0;
 	int err = 0;
@@ -339,7 +342,7 @@ int inet6_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len)
 		sk->sk_userlocks |= SOCK_BINDADDR_LOCK;
 	if (snum)
 		sk->sk_userlocks |= SOCK_BINDPORT_LOCK;
-	inet->sport = ntohs(inet->num);
+	inet->sport = htons(inet->num);
 	inet->dport = 0;
 	inet->daddr = 0;
 out:
@@ -638,6 +641,7 @@ int inet6_sk_rebuild_header(struct sock *sk)
 		fl.oif = sk->sk_bound_dev_if;
 		fl.fl_ip_dport = inet->dport;
 		fl.fl_ip_sport = inet->sport;
+		security_sk_classify_flow(sk, &fl);
 
 		if (np->opt && np->opt->srcrt) {
 			struct rt0_hdr *rt0 = (struct rt0_hdr *) np->opt->srcrt;
@@ -659,9 +663,7 @@ int inet6_sk_rebuild_header(struct sock *sk)
 			return err;
 		}
 
-		ip6_dst_store(sk, dst, NULL);
-		sk->sk_route_caps = dst->dev->features &
-			~(NETIF_F_IP_CSUM | NETIF_F_TSO);
+		__ip6_dst_store(sk, dst, NULL, NULL);
 	}
 
 	return 0;
@@ -677,7 +679,7 @@ int ipv6_opt_accepted(struct sock *sk, struct sk_buff *skb)
 	if (np->rxopt.all) {
 		if ((opt->hop && (np->rxopt.bits.hopopts ||
 				  np->rxopt.bits.ohopopts)) ||
-		    ((IPV6_FLOWINFO_MASK & *(u32*)skb->nh.raw) &&
+		    ((IPV6_FLOWINFO_MASK & *(__be32*)skb->nh.raw) &&
 		     np->rxopt.bits.rxflow) ||
 		    (opt->srcrt && (np->rxopt.bits.srcrt ||
 		     np->rxopt.bits.osrcrt)) ||
@@ -718,10 +720,8 @@ snmp6_mib_free(void *ptr[2])
 {
 	if (ptr == NULL)
 		return;
-	if (ptr[0])
-		free_percpu(ptr[0]);
-	if (ptr[1])
-		free_percpu(ptr[1]);
+	free_percpu(ptr[0]);
+	free_percpu(ptr[1]);
 	ptr[0] = ptr[1] = NULL;
 }
 
@@ -736,8 +736,13 @@ static int __init init_ipv6_mibs(void)
 	if (snmp6_mib_init((void **)udp_stats_in6, sizeof (struct udp_mib),
 			   __alignof__(struct udp_mib)) < 0)
 		goto err_udp_mib;
+	if (snmp6_mib_init((void **)udplite_stats_in6, sizeof (struct udp_mib),
+			   __alignof__(struct udp_mib)) < 0)
+		goto err_udplite_mib;
 	return 0;
 
+err_udplite_mib:
+	snmp6_mib_free((void **)udp_stats_in6);
 err_udp_mib:
 	snmp6_mib_free((void **)icmpv6_statistics);
 err_icmp_mib:
@@ -752,6 +757,7 @@ static void cleanup_ipv6_mibs(void)
 	snmp6_mib_free((void **)ipv6_statistics);
 	snmp6_mib_free((void **)icmpv6_statistics);
 	snmp6_mib_free((void **)udp_stats_in6);
+	snmp6_mib_free((void **)udplite_stats_in6);
 }
 
 static int __init inet6_init(void)
@@ -759,6 +765,8 @@ static int __init inet6_init(void)
 	struct sk_buff *dummy_skb;
         struct list_head *r;
 	int err;
+
+	BUILD_BUG_ON(sizeof(struct inet6_skb_parm) > sizeof(dummy_skb->cb));
 
 #ifdef MODULE
 #if 0 /* FIXME --RR */
@@ -769,11 +777,6 @@ static int __init inet6_init(void)
 #endif
 #endif
 
-	if (sizeof(struct inet6_skb_parm) > sizeof(dummy_skb->cb)) {
-		printk(KERN_CRIT "inet6_proto_init: size fault\n");
-		return -EINVAL;
-	}
-
 	err = proto_register(&tcpv6_prot, 1);
 	if (err)
 		goto out;
@@ -782,9 +785,13 @@ static int __init inet6_init(void)
 	if (err)
 		goto out_unregister_tcp_proto;
 
-	err = proto_register(&rawv6_prot, 1);
+	err = proto_register(&udplitev6_prot, 1);
 	if (err)
 		goto out_unregister_udp_proto;
+
+	err = proto_register(&rawv6_prot, 1);
+	if (err)
+		goto out_unregister_udplite_proto;
 
 
 	/* Register the socket-side information for inet6_create.  */
@@ -839,6 +846,8 @@ static int __init inet6_init(void)
 		goto proc_tcp6_fail;
 	if (udp6_proc_init())
 		goto proc_udp6_fail;
+	if (udplite6_proc_init())
+		goto proc_udplite6_fail;
 	if (ipv6_misc_proc_init())
 		goto proc_misc6_fail;
 
@@ -852,16 +861,19 @@ static int __init inet6_init(void)
 	err = addrconf_init();
 	if (err)
 		goto addrconf_fail;
-	sit_init();
 
 	/* Init v6 extension headers. */
 	ipv6_rthdr_init();
 	ipv6_frag_init();
 	ipv6_nodata_init();
 	ipv6_destopt_init();
+#ifdef CONFIG_IPV6_MIP6
+	mip6_init();
+#endif
 
 	/* Init v6 transport protocols. */
 	udpv6_init();
+	udplitev6_init();
 	tcpv6_init();
 
 	ipv6_packet_init();
@@ -879,6 +891,8 @@ proc_if6_fail:
 proc_anycast6_fail:
 	ipv6_misc_proc_exit();
 proc_misc6_fail:
+	udplite6_proc_exit();
+proc_udplite6_fail:
 	udp6_proc_exit();
 proc_udp6_fail:
 	tcp6_proc_exit();
@@ -902,6 +916,8 @@ out_unregister_sock:
 	sock_unregister(PF_INET6);
 out_unregister_raw_proto:
 	proto_unregister(&rawv6_prot);
+out_unregister_udplite_proto:
+	proto_unregister(&udplitev6_prot);
 out_unregister_udp_proto:
 	proto_unregister(&udpv6_prot);
 out_unregister_tcp_proto:
@@ -919,11 +935,14 @@ static void __exit inet6_exit(void)
 	ac6_proc_exit();
  	ipv6_misc_proc_exit();
  	udp6_proc_exit();
+ 	udplite6_proc_exit();
  	tcp6_proc_exit();
  	raw6_proc_exit();
 #endif
+#ifdef CONFIG_IPV6_MIP6
+	mip6_fini();
+#endif
 	/* Cleanup code parts. */
-	sit_cleanup();
 	ip6_flowlabel_cleanup();
 	addrconf_cleanup();
 	ip6_route_cleanup();

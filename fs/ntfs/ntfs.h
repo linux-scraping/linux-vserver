@@ -57,8 +57,8 @@ extern struct kmem_cache *ntfs_attr_ctx_cache;
 extern struct kmem_cache *ntfs_index_ctx_cache;
 
 /* The various operations structs defined throughout the driver files. */
-extern struct address_space_operations ntfs_aops;
-extern struct address_space_operations ntfs_mst_aops;
+extern const struct address_space_operations ntfs_aops;
+extern const struct address_space_operations ntfs_mst_aops;
 
 extern const struct  file_operations ntfs_file_ops;
 extern struct inode_operations ntfs_file_inode_ops;
@@ -105,7 +105,7 @@ extern int pre_write_mst_fixup(NTFS_RECORD *b, const u32 size);
 extern void post_write_mst_fixup(NTFS_RECORD *b);
 
 /* From fs/ntfs/unistr.c */
-extern BOOL ntfs_are_names_equal(const ntfschar *s1, size_t s1_len,
+extern bool ntfs_are_names_equal(const ntfschar *s1, size_t s1_len,
 		const ntfschar *s2, size_t s2_len,
 		const IGNORE_CASE_BOOL ic,
 		const ntfschar *upcase, const u32 upcase_size);

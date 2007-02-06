@@ -243,25 +243,6 @@ ahd_print_path(struct ahd_softc *ahd, struct scb *scb)
 static uint32_t aic79xx_no_reset;
 
 /*
- * Certain PCI motherboards will scan PCI devices from highest to lowest,
- * others scan from lowest to highest, and they tend to do all kinds of
- * strange things when they come into contact with PCI bridge chips.  The
- * net result of all this is that the PCI card that is actually used to boot
- * the machine is very hard to detect.  Most motherboards go from lowest
- * PCI slot number to highest, and the first SCSI controller found is the
- * one you boot from.  The only exceptions to this are when a controller
- * has its BIOS disabled.  So, we by default sort all of our SCSI controllers
- * from lowest PCI slot number to highest PCI slot number.  We also force
- * all controllers with their BIOS disabled to the end of the list.  This
- * works on *almost* all computers.  Where it doesn't work, we have this
- * option.  Setting this option to non-0 will reverse the order of the sort
- * to highest first, then lowest, but will still leave cards with their BIOS
- * disabled at the very end.  That should fix everyone up unless there are
- * really strange cirumstances.
- */
-static uint32_t aic79xx_reverse_scan;
-
-/*
  * Should we force EXTENDED translation on a controller.
  *     0 == Use whatever is in the SEEPROM or default to off
  *     1 == Use whatever is in the SEEPROM or default to on
@@ -312,7 +293,7 @@ static uint32_t aic79xx_seltime;
  * force all outstanding transactions to be serviced prior to a new
  * transaction.
  */
-uint32_t aic79xx_periodic_otag;
+static uint32_t aic79xx_periodic_otag;
 
 /* Some storage boxes are using an LSI chip which has a bug making it
  * impossible to use aic79xx Rev B chip in 320 speeds.  The following
@@ -340,7 +321,7 @@ MODULE_LICENSE("Dual BSD/GPL");
 MODULE_VERSION(AIC79XX_DRIVER_VERSION);
 module_param(aic79xx, charp, 0444);
 MODULE_PARM_DESC(aic79xx,
-"period delimited, options string.\n"
+"period-delimited options string:\n"
 "	verbose			Enable verbose/diagnostic logging\n"
 "	allow_memio		Allow device registers to be memory mapped\n"
 "	debug			Bitmask of debug values to enable\n"
@@ -350,7 +331,6 @@ MODULE_PARM_DESC(aic79xx,
 "				periodically to prevent tag starvation.\n"
 "				This may be required by some older disk\n"
 "				or drives/RAID arrays.\n"
-"	reverse_scan		Sort PCI devices highest Bus/Slot to lowest\n"
 "	tag_info:<tag_str>	Set per-target tag depth\n"
 "	global_tag_depth:<int>	Global tag depth for all targets on all buses\n"
 "	slewrate:<slewrate_list>Set the signal slew rate (0-15).\n"
@@ -366,7 +346,7 @@ MODULE_PARM_DESC(aic79xx,
 "		Shorten the selection timeout to 128ms\n"
 "\n"
 "	options aic79xx 'aic79xx=verbose.tag_info:{{}.{}.{..10}}.seltime:1'\n"
-"\n");
+);
 
 static void ahd_linux_handle_scsi_status(struct ahd_softc *,
 					 struct scsi_device *,
@@ -484,7 +464,6 @@ ahd_linux_target_alloc(struct scsi_target *starget)
 	struct seeprom_config *sc = ahd->seep_config;
 	unsigned long flags;
 	struct scsi_target **ahd_targp = ahd_linux_target_in_softc(starget);
-	struct ahd_linux_target *targ = scsi_transport_target_data(starget);
 	struct ahd_devinfo devinfo;
 	struct ahd_initiator_tinfo *tinfo;
 	struct ahd_tmode_tstate *tstate;
@@ -495,7 +474,6 @@ ahd_linux_target_alloc(struct scsi_target *starget)
 	BUG_ON(*ahd_targp != NULL);
 
 	*ahd_targp = starget;
-	memset(targ, 0, sizeof(*targ));
 
 	if (sc) {
 		int flags = sc->device_flags[starget->id];
@@ -551,14 +529,10 @@ ahd_linux_slave_alloc(struct scsi_device *sdev)
 {
 	struct	ahd_softc *ahd =
 		*((struct ahd_softc **)sdev->host->hostdata);
-	struct scsi_target *starget = sdev->sdev_target;
-	struct ahd_linux_target *targ = scsi_transport_target_data(starget);
 	struct ahd_linux_device *dev;
 
 	if (bootverbose)
 		printf("%s: Slave Alloc %d\n", ahd_name(ahd), sdev->id);
-
-	BUG_ON(targ->sdev[sdev->lun] != NULL);
 
 	dev = scsi_transport_device_data(sdev);
 	memset(dev, 0, sizeof(*dev));
@@ -576,8 +550,6 @@ ahd_linux_slave_alloc(struct scsi_device *sdev)
 	 */
 	dev->maxtags = 0;
 	
-	targ->sdev[sdev->lun] = sdev;
-
 	return (0);
 }
 
@@ -597,23 +569,6 @@ ahd_linux_slave_configure(struct scsi_device *sdev)
 		spi_dv_device(sdev);
 
 	return 0;
-}
-
-static void
-ahd_linux_slave_destroy(struct scsi_device *sdev)
-{
-	struct	ahd_softc *ahd;
-	struct	ahd_linux_device *dev = scsi_transport_device_data(sdev);
-	struct  ahd_linux_target *targ = scsi_transport_target_data(sdev->sdev_target);
-
-	ahd = *((struct ahd_softc **)sdev->host->hostdata);
-	if (bootverbose)
-		printf("%s: Slave Destroy %d\n", ahd_name(ahd), sdev->id);
-
-	BUG_ON(dev->active);
-
-	targ->sdev[sdev->lun] = NULL;
-
 }
 
 #if defined(__i386__)
@@ -691,7 +646,7 @@ ahd_linux_dev_reset(struct scsi_cmnd *cmd)
 	struct	ahd_initiator_tinfo *tinfo;
 	struct	ahd_tmode_tstate *tstate;
 	unsigned long flags;
-	DECLARE_COMPLETION(done);
+	DECLARE_COMPLETION_ONSTACK(done);
 
 	reset_scb = NULL;
 	paused = FALSE;
@@ -818,11 +773,11 @@ struct scsi_host_template aic79xx_driver_template = {
 #endif
 	.can_queue		= AHD_MAX_QUEUE,
 	.this_id		= -1,
+	.max_sectors		= 8192,
 	.cmd_per_lun		= 2,
 	.use_clustering		= ENABLE_CLUSTERING,
 	.slave_alloc		= ahd_linux_slave_alloc,
 	.slave_configure	= ahd_linux_slave_configure,
-	.slave_destroy		= ahd_linux_slave_destroy,
 	.target_alloc		= ahd_linux_target_alloc,
 	.target_destroy		= ahd_linux_target_destroy,
 };
@@ -916,7 +871,7 @@ ahd_linux_setup_iocell_info(u_long index, int instance, int targ, int32_t value)
 {
 
 	if ((instance >= 0)
-	 && (instance < NUM_ELEMENTS(aic79xx_iocell_info))) {
+	 && (instance < ARRAY_SIZE(aic79xx_iocell_info))) {
 		uint8_t *iocell_info;
 
 		iocell_info = (uint8_t*)&aic79xx_iocell_info[instance];
@@ -934,7 +889,7 @@ ahd_linux_setup_tag_info_global(char *p)
 	tags = simple_strtoul(p + 1, NULL, 0) & 0xff;
 	printf("Setting Global Tags= %d\n", tags);
 
-	for (i = 0; i < NUM_ELEMENTS(aic79xx_tag_info); i++) {
+	for (i = 0; i < ARRAY_SIZE(aic79xx_tag_info); i++) {
 		for (j = 0; j < AHD_NUM_TARGETS; j++) {
 			aic79xx_tag_info[i].tag_commands[j] = tags;
 		}
@@ -946,7 +901,7 @@ ahd_linux_setup_tag_info(u_long arg, int instance, int targ, int32_t value)
 {
 
 	if ((instance >= 0) && (targ >= 0)
-	 && (instance < NUM_ELEMENTS(aic79xx_tag_info))
+	 && (instance < ARRAY_SIZE(aic79xx_tag_info))
 	 && (targ < AHD_NUM_TARGETS)) {
 		aic79xx_tag_info[instance].tag_commands[targ] = value & 0x1FF;
 		if (bootverbose)
@@ -1057,7 +1012,6 @@ aic79xx_setup(char *s)
 #ifdef AHD_DEBUG
 		{ "debug", &ahd_debug },
 #endif
-		{ "reverse_scan", &aic79xx_reverse_scan },
 		{ "periodic_otag", &aic79xx_periodic_otag },
 		{ "pci_parity", &aic79xx_pci_parity },
 		{ "seltime", &aic79xx_seltime },
@@ -1072,21 +1026,21 @@ aic79xx_setup(char *s)
 	end = strchr(s, '\0');
 
 	/*
-	 * XXX ia64 gcc isn't smart enough to know that NUM_ELEMENTS
+	 * XXX ia64 gcc isn't smart enough to know that ARRAY_SIZE
 	 * will never be 0 in this case.
-	 */      
-	n = 0;  
+	 */
+	n = 0;
 
 	while ((p = strsep(&s, ",.")) != NULL) {
 		if (*p == '\0')
 			continue;
-		for (i = 0; i < NUM_ELEMENTS(options); i++) {
+		for (i = 0; i < ARRAY_SIZE(options); i++) {
 
 			n = strlen(options[i].name);
 			if (strncmp(options[i].name, p, n) == 0)
 				break;
 		}
-		if (i == NUM_ELEMENTS(options))
+		if (i == ARRAY_SIZE(options))
 			continue;
 
 		if (strncmp(p, "global_tag_depth", n) == 0) {
@@ -1249,20 +1203,13 @@ void
 ahd_platform_free(struct ahd_softc *ahd)
 {
 	struct scsi_target *starget;
-	int i, j;
+	int i;
 
 	if (ahd->platform_data != NULL) {
 		/* destroy all of the device and target objects */
 		for (i = 0; i < AHD_NUM_TARGETS; i++) {
 			starget = ahd->platform_data->starget[i];
 			if (starget != NULL) {
-				for (j = 0; j < AHD_NUM_LUNS; j++) {
-					struct ahd_linux_target *targ =
-						scsi_transport_target_data(starget);
-					if (targ->sdev[j] == NULL)
-						continue;
-					targ->sdev[j] = NULL;
-				}
 				ahd->platform_data->starget[i] = NULL;
 			}
 		}
@@ -1294,7 +1241,7 @@ ahd_platform_init(struct ahd_softc *ahd)
 	/*
 	 * Lookup and commit any modified IO Cell options.
 	 */
-	if (ahd->unit < NUM_ELEMENTS(aic79xx_iocell_info)) {
+	if (ahd->unit < ARRAY_SIZE(aic79xx_iocell_info)) {
 		struct ahd_linux_iocell_opts *iocell_opts;
 
 		iocell_opts = &aic79xx_iocell_info[ahd->unit];
@@ -1318,20 +1265,13 @@ ahd_platform_freeze_devq(struct ahd_softc *ahd, struct scb *scb)
 }
 
 void
-ahd_platform_set_tags(struct ahd_softc *ahd, struct ahd_devinfo *devinfo,
-		      ahd_queue_alg alg)
+ahd_platform_set_tags(struct ahd_softc *ahd, struct scsi_device *sdev,
+		      struct ahd_devinfo *devinfo, ahd_queue_alg alg)
 {
-	struct scsi_target *starget;
-	struct ahd_linux_target *targ;
 	struct ahd_linux_device *dev;
-	struct scsi_device *sdev;
 	int was_queuing;
 	int now_queuing;
 
-	starget = ahd->platform_data->starget[devinfo->target];
-	targ = scsi_transport_target_data(starget);
-	BUG_ON(targ == NULL);
-	sdev = targ->sdev[devinfo->lun];
 	if (sdev == NULL)
 		return;
 
@@ -1426,7 +1366,7 @@ ahd_linux_user_tagdepth(struct ahd_softc *ahd, struct ahd_devinfo *devinfo)
 
 	tags = 0;
 	if ((ahd->user_discenable & devinfo->target_mask) != 0) {
-		if (ahd->unit >= NUM_ELEMENTS(aic79xx_tag_info)) {
+		if (ahd->unit >= ARRAY_SIZE(aic79xx_tag_info)) {
 
 			if (warned_user == 0) {
 				printf(KERN_WARNING
@@ -1467,11 +1407,15 @@ ahd_linux_device_queue_depth(struct scsi_device *sdev)
 	tags = ahd_linux_user_tagdepth(ahd, &devinfo);
 	if (tags != 0 && sdev->tagged_supported != 0) {
 
-		ahd_set_tags(ahd, &devinfo, AHD_QUEUE_TAGGED);
+		ahd_platform_set_tags(ahd, sdev, &devinfo, AHD_QUEUE_TAGGED);
+		ahd_send_async(ahd, devinfo.channel, devinfo.target,
+			       devinfo.lun, AC_TRANSFER_NEG);
 		ahd_print_devinfo(ahd, &devinfo);
 		printf("Tagged Queuing enabled.  Depth %d\n", tags);
 	} else {
-		ahd_set_tags(ahd, &devinfo, AHD_QUEUE_NONE);
+		ahd_platform_set_tags(ahd, sdev, &devinfo, AHD_QUEUE_NONE);
+		ahd_send_async(ahd, devinfo.channel, devinfo.target,
+			       devinfo.lun, AC_TRANSFER_NEG);
 	}
 }
 
@@ -1614,7 +1558,7 @@ ahd_linux_run_command(struct ahd_softc *ahd, struct ahd_linux_device *dev,
  * SCSI controller interrupt handler.
  */
 irqreturn_t
-ahd_linux_isr(int irq, void *dev_id, struct pt_regs * regs)
+ahd_linux_isr(int irq, void *dev_id)
 {
 	struct	ahd_softc *ahd;
 	u_long	flags;
@@ -1629,7 +1573,7 @@ ahd_linux_isr(int irq, void *dev_id, struct pt_regs * regs)
 
 void
 ahd_send_async(struct ahd_softc *ahd, char channel,
-	       u_int target, u_int lun, ac_code code, void *arg)
+	       u_int target, u_int lun, ac_code code)
 {
 	switch (code) {
 	case AC_TRANSFER_NEG:
@@ -1870,9 +1814,9 @@ ahd_linux_handle_scsi_status(struct ahd_softc *ahd,
 			u_int sense_offset;
 
 			if (scb->flags & SCB_SENSE) {
-				sense_size = MIN(sizeof(struct scsi_sense_data)
+				sense_size = min(sizeof(struct scsi_sense_data)
 					       - ahd_get_sense_residual(scb),
-						 sizeof(cmd->sense_buffer));
+						 (u_long)sizeof(cmd->sense_buffer));
 				sense_offset = 0;
 			} else {
 				/*
@@ -1881,7 +1825,8 @@ ahd_linux_handle_scsi_status(struct ahd_softc *ahd,
 				 */
 				siu = (struct scsi_status_iu_header *)
 				    scb->sense_data;
-				sense_size = MIN(scsi_4btoul(siu->sense_length),
+				sense_size = min_t(size_t,
+						scsi_4btoul(siu->sense_length),
 						sizeof(cmd->sense_buffer));
 				sense_offset = SIU_SENSE_OFFSET(siu);
 			}
@@ -1956,7 +1901,7 @@ ahd_linux_handle_scsi_status(struct ahd_softc *ahd,
 			}
 			ahd_set_transaction_status(scb, CAM_REQUEUE_REQ);
 			ahd_set_scsi_status(scb, SCSI_STATUS_OK);
-			ahd_platform_set_tags(ahd, &devinfo,
+			ahd_platform_set_tags(ahd, sdev, &devinfo,
 				     (dev->flags & AHD_DEV_Q_BASIC)
 				   ? AHD_QUEUE_BASIC : AHD_QUEUE_TAGGED);
 			break;
@@ -1966,7 +1911,7 @@ ahd_linux_handle_scsi_status(struct ahd_softc *ahd,
 		 * as if the target returned BUSY SCSI status.
 		 */
 		dev->openings = 1;
-		ahd_platform_set_tags(ahd, &devinfo,
+		ahd_platform_set_tags(ahd, sdev, &devinfo,
 			     (dev->flags & AHD_DEV_Q_BASIC)
 			   ? AHD_QUEUE_BASIC : AHD_QUEUE_TAGGED);
 		ahd_set_scsi_status(scb, SCSI_STATUS_BUSY);
@@ -2308,7 +2253,7 @@ done:
 	if (paused)
 		ahd_unpause(ahd);
 	if (wait) {
-		DECLARE_COMPLETION(done);
+		DECLARE_COMPLETION_ONSTACK(done);
 
 		ahd->platform_data->eh_done = &done;
 		ahd_unlock(ahd, &flags);
@@ -2691,8 +2636,22 @@ static void ahd_linux_set_pcomp_en(struct scsi_target *starget, int pcomp)
 		       pcomp ? "Enable" : "Disable");
 #endif
 
-	if (pcomp)
+	if (pcomp) {
+		uint8_t precomp;
+
+		if (ahd->unit < ARRAY_SIZE(aic79xx_iocell_info)) {
+			struct ahd_linux_iocell_opts *iocell_opts;
+
+			iocell_opts = &aic79xx_iocell_info[ahd->unit];
+			precomp = iocell_opts->precomp;
+		} else {
+			precomp = AIC79XX_DEFAULT_PRECOMP;
+		}
 		ppr_options |= MSG_EXT_PPR_PCOMP_EN;
+		AHD_SET_PRECOMP(ahd, precomp);
+	} else {
+		AHD_SET_PRECOMP(ahd, 0);
+	}
 
 	ahd_compile_devinfo(&devinfo, shost->this_id, starget->id, 0,
 			    starget->channel + 'A', ROLE_INITIATOR);
@@ -2735,7 +2694,25 @@ static void ahd_linux_set_hold_mcs(struct scsi_target *starget, int hold)
 	ahd_unlock(ahd, &flags);
 }
 
+static void ahd_linux_get_signalling(struct Scsi_Host *shost)
+{
+	struct ahd_softc *ahd = *(struct ahd_softc **)shost->hostdata;
+	unsigned long flags;
+	u8 mode;
 
+	ahd_lock(ahd, &flags);
+	ahd_pause(ahd);
+	mode = ahd_inb(ahd, SBLKCTL);
+	ahd_unpause(ahd);
+	ahd_unlock(ahd, &flags);
+
+	if (mode & ENAB40)
+		spi_signalling(shost) = SPI_SIGNAL_LVD;
+	else if (mode & ENAB20)
+		spi_signalling(shost) = SPI_SIGNAL_SE;
+	else
+		spi_signalling(shost) = SPI_SIGNAL_UNKNOWN;
+}
 
 static struct spi_function_template ahd_linux_transport_functions = {
 	.set_offset	= ahd_linux_set_offset,
@@ -2760,6 +2737,7 @@ static struct spi_function_template ahd_linux_transport_functions = {
 	.show_pcomp_en	= 1,
 	.set_hold_mcs	= ahd_linux_set_hold_mcs,
 	.show_hold_mcs	= 1,
+	.get_signalling = ahd_linux_get_signalling,
 };
 
 static int __init
@@ -2778,8 +2756,6 @@ ahd_linux_init(void)
 	if (!ahd_linux_transport_template)
 		return -ENODEV;
 
-	scsi_transport_reserve_target(ahd_linux_transport_template,
-				      sizeof(struct ahd_linux_target));
 	scsi_transport_reserve_device(ahd_linux_transport_template,
 				      sizeof(struct ahd_linux_device));
 

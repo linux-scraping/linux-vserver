@@ -55,6 +55,30 @@ static inline int fs_get_scc_index(enum fs_id id)
 	return -1;
 }
 
+static inline int fs_fec_index2id(int index)
+{
+	int id = fsid_fec1 + index - 1;
+	if (id >= fsid_fec1 && id <= fsid_fec2)
+		return id;
+	return FS_MAX_INDEX;
+		}
+
+static inline int fs_fcc_index2id(int index)
+{
+	int id = fsid_fcc1 + index - 1;
+	if (id >= fsid_fcc1 && id <= fsid_fcc3)
+		return id;
+	return FS_MAX_INDEX;
+}
+
+static inline int fs_scc_index2id(int index)
+{
+	int id = fsid_scc1 + index - 1;
+	if (id >= fsid_scc1 && id <= fsid_scc4)
+		return id;
+	return FS_MAX_INDEX;
+}
+
 enum fs_mii_method {
 	fsmii_fixed,
 	fsmii_fec,
@@ -69,49 +93,39 @@ enum fs_ioport {
 	fsiop_porte,
 };
 
-struct fs_mii_bus_info {
-	int method;		/* mii method                  */
-	int id;			/* the id of the mii_bus       */
-	int disable_aneg;	/* if the controller needs to negothiate speed & duplex */
-	int lpa; 		/* the default board-specific vallues will be applied otherwise */
-
-	union {
-		struct {
-			int duplex;
-			int speed;
-		} fixed;
-
-		struct {
-			/* nothing */
-		} fec;
-		
-		struct {
-			/* nothing */
-		} scc;
-
-		struct {
-			int mdio_port;	/* port & bit for MDIO */
-			int mdio_bit;
-			int mdc_port;	/* port & bit for MDC  */
-			int mdc_bit;
-			int delay;	/* delay in us         */
-		} bitbang;
-	} i;
+struct fs_mii_bit {
+	u32 offset;
+	u8 bit;
+	u8 polarity;
+};
+struct fs_mii_bb_platform_info {
+	struct fs_mii_bit 	mdio_dir;
+	struct fs_mii_bit 	mdio_dat;
+	struct fs_mii_bit	mdc_dat;
+	int mdio_port;	/* port & bit for MDIO */
+	int mdio_bit;
+	int mdc_port;	/* port & bit for MDC  */
+	int mdc_bit;
+	int delay;	/* delay in us         */
+	int irq[32]; 	/* irqs per phy's */
 };
 
 struct fs_platform_info {
-	
-	void(*init_ioports)(void);
+
+	void(*init_ioports)(struct fs_platform_info *);
 	/* device specific information */
 	int fs_no;		/* controller index            */
+	char fs_type[4];	/* controller type             */
 
 	u32 cp_page;		/* CPM page */
 	u32 cp_block;		/* CPM sblock */
-	
+
 	u32 clk_trx;		/* some stuff for pins & mux configuration*/
+	u32 clk_rx;
+	u32 clk_tx;
 	u32 clk_route;
 	u32 clk_mask;
-	
+
 	u32 mem_offset;
 	u32 dpram_offset;
 	u32 fcc_regs_c;
@@ -119,6 +133,7 @@ struct fs_platform_info {
 	u32 device_flags;
 
 	int phy_addr;		/* the phy address (-1 no phy) */
+	const char*	bus_id;
 	int phy_irq;		/* the phy irq (if it exists)  */
 
 	const struct fs_mii_bus_info *bus_info;
@@ -130,6 +145,22 @@ struct fs_platform_info {
 	int napi_weight;	/* NAPI weight                 */
 
 	int use_rmii;		/* use RMII mode 	       */
+	int has_phy;            /* if the network is phy container as well...*/
 };
+struct fs_mii_fec_platform_info {
+	u32 irq[32];
+	u32 mii_speed;
+};
+
+static inline int fs_get_id(struct fs_platform_info *fpi)
+{
+	if(strstr(fpi->fs_type, "SCC"))
+		return fs_scc_index2id(fpi->fs_no);
+	if(strstr(fpi->fs_type, "FCC"))
+		return fs_fcc_index2id(fpi->fs_no);
+	if(strstr(fpi->fs_type, "FEC"))
+		return fs_fec_index2id(fpi->fs_no);
+	return fpi->fs_no;
+}
 
 #endif

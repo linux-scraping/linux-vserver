@@ -24,12 +24,14 @@
 #ifndef _SPIDER_NET_H
 #define _SPIDER_NET_H
 
+#define VERSION "1.6 A"
+
 #include "sungem_phy.h"
 
 extern int spider_net_stop(struct net_device *netdev);
 extern int spider_net_open(struct net_device *netdev);
 
-extern struct ethtool_ops spider_net_ethtool_ops;
+extern const struct ethtool_ops spider_net_ethtool_ops;
 
 extern char spider_net_driver_name[];
 
@@ -47,7 +49,7 @@ extern char spider_net_driver_name[];
 #define SPIDER_NET_TX_DESCRIPTORS_MIN		16
 #define SPIDER_NET_TX_DESCRIPTORS_MAX		512
 
-#define SPIDER_NET_TX_TIMER			20
+#define SPIDER_NET_TX_TIMER			(HZ/5)
 
 #define SPIDER_NET_RX_CSUM_DEFAULT		1
 
@@ -189,7 +191,9 @@ extern char spider_net_driver_name[];
 #define SPIDER_NET_MACMODE_VALUE	0x00000001
 #define SPIDER_NET_BURSTLMT_VALUE	0x00000200 /* about 16 us */
 
-/* 1(0)					enable r/tx dma
+/* DMAC control register GDMACCNTR
+ *
+ * 1(0)				enable r/tx dma
  *  0000000				fixed to 0
  *
  *         000000			fixed to 0
@@ -198,6 +202,7 @@ extern char spider_net_driver_name[];
  *
  *                 000000		fixed to 0
  *                       00		burst alignment: 128 bytes
+ *                       11		burst alignment: 1024 bytes
  *
  *                         00000	fixed to 0
  *                              0	descr writeback size 32 bytes
@@ -208,7 +213,12 @@ extern char spider_net_driver_name[];
 #define SPIDER_NET_DMA_RX_VALUE		0x80000000
 #define SPIDER_NET_DMA_RX_FEND_VALUE	0x00030003
 /* to set TX_DMA_EN */
-#define SPIDER_NET_DMA_TX_VALUE		0x80000000
+#define SPIDER_NET_TX_DMA_EN           0x80000000
+#define SPIDER_NET_GDTBSTA             0x00000300
+#define SPIDER_NET_GDTDCEIDIS          0x00000002
+#define SPIDER_NET_DMA_TX_VALUE        SPIDER_NET_TX_DMA_EN | \
+                                       SPIDER_NET_GDTBSTA
+
 #define SPIDER_NET_DMA_TX_FEND_VALUE	0x00030003
 
 /* SPIDER_NET_UA_DESCR_VALUE is OR'ed with the unicast address */
@@ -317,67 +327,34 @@ enum spider_net_int2_status {
 	SPIDER_NET_GRISPDNGINT
 };
 
-#define SPIDER_NET_TXINT	( (1 << SPIDER_NET_GTTEDINT) | \
-				  (1 << SPIDER_NET_GDTDCEINT) | \
-				  (1 << SPIDER_NET_GDTFDCINT) )
+#define SPIDER_NET_TXINT	( (1 << SPIDER_NET_GDTFDCINT) | \
+                             (1 << SPIDER_NET_GDTDCEINT) )
 
-/* we rely on flagged descriptor interrupts*/
-#define SPIDER_NET_RXINT	( (1 << SPIDER_NET_GDAFDCINT) | \
-				  (1 << SPIDER_NET_GRMFLLINT) )
+/* We rely on flagged descriptor interrupts */
+#define SPIDER_NET_RXINT	( (1 << SPIDER_NET_GDAFDCINT) )
 
 #define SPIDER_NET_ERRINT	( 0xffffffff & \
 				  (~SPIDER_NET_TXINT) & \
 				  (~SPIDER_NET_RXINT) )
 
-#define SPIDER_NET_GPREXEC		0x80000000
-#define SPIDER_NET_GPRDAT_MASK		0x0000ffff
+#define SPIDER_NET_GPREXEC			0x80000000
+#define SPIDER_NET_GPRDAT_MASK			0x0000ffff
 
-/* descriptor bits
- *
- * 1010					descriptor ready
- *     0				descr in middle of chain
- *      000				fixed to 0
- *
- *         0				no interrupt on completion
- *          000				fixed to 0
- *             1			no ipsec processing
- *              1			last descriptor for this frame
- *               00			no checksum
- *               10			tcp checksum
- *               11			udp checksum
- *
- *                 00			fixed to 0
- *                   0			fixed to 0
- *                    0			no interrupt on response errors
- *                     0		no interrupt on invalid descr
- *                      0		no interrupt on dma process termination
- *                       0		no interrupt on descr chain end
- *                        0		no interrupt on descr complete
- *
- *                         000		fixed to 0
- *                            0		response error interrupt status
- *                             0	invalid descr status
- *                              0	dma termination status
- *                               0	descr chain end status
- *                                0	descr complete status */
-#define SPIDER_NET_DMAC_CMDSTAT_NOCS	0xa00c0000
-#define SPIDER_NET_DMAC_CMDSTAT_TCPCS	0xa00e0000
-#define SPIDER_NET_DMAC_CMDSTAT_UDPCS	0xa00f0000
-#define SPIDER_NET_DESCR_IND_PROC_SHIFT	28
-#define SPIDER_NET_DESCR_IND_PROC_MASKO	0x0fffffff
+#define SPIDER_NET_DMAC_NOINTR_COMPLETE		0x00800000
+#define SPIDER_NET_DMAC_NOCS			0x00040000
+#define SPIDER_NET_DMAC_TCP			0x00020000
+#define SPIDER_NET_DMAC_UDP			0x00030000
+#define SPIDER_NET_TXDCEST			0x08000000
 
-/* descr ready, descr is in middle of chain, get interrupt on completion */
-#define SPIDER_NET_DMAC_RX_CARDOWNED	0xa0800000
-
-enum spider_net_descr_status {
-	SPIDER_NET_DESCR_COMPLETE		= 0x00, /* used in rx and tx */
-	SPIDER_NET_DESCR_RESPONSE_ERROR		= 0x01, /* used in rx and tx */
-	SPIDER_NET_DESCR_PROTECTION_ERROR	= 0x02, /* used in rx and tx */
-	SPIDER_NET_DESCR_FRAME_END		= 0x04, /* used in rx */
-	SPIDER_NET_DESCR_FORCE_END		= 0x05, /* used in rx and tx */
-	SPIDER_NET_DESCR_CARDOWNED		= 0x0a, /* used in rx and tx */
-	SPIDER_NET_DESCR_NOT_IN_USE /* any other value */
-};
+#define SPIDER_NET_DESCR_IND_PROC_MASK		0xF0000000
+#define SPIDER_NET_DESCR_COMPLETE		0x00000000 /* used in rx and tx */
+#define SPIDER_NET_DESCR_RESPONSE_ERROR		0x10000000 /* used in rx and tx */
+#define SPIDER_NET_DESCR_PROTECTION_ERROR	0x20000000 /* used in rx and tx */
+#define SPIDER_NET_DESCR_FRAME_END		0x40000000 /* used in rx */
+#define SPIDER_NET_DESCR_FORCE_END		0x50000000 /* used in rx and tx */
+#define SPIDER_NET_DESCR_CARDOWNED		0xA0000000 /* used in rx and tx */
+#define SPIDER_NET_DESCR_NOT_IN_USE		0xF0000000
+#define SPIDER_NET_DESCR_TXDESFLG		0x00800000
 
 struct spider_net_descr {
 	/* as defined by the hardware */
@@ -398,7 +375,7 @@ struct spider_net_descr {
 } __attribute__((aligned(32)));
 
 struct spider_net_descr_chain {
-	/* we walk from tail to head */
+	spinlock_t lock;
 	struct spider_net_descr *head;
 	struct spider_net_descr *tail;
 };
@@ -444,6 +421,15 @@ struct spider_net_options {
 					  NETIF_MSG_HW | \
 					  NETIF_MSG_WOL )
 
+struct spider_net_extra_stats {
+	unsigned long rx_desc_error;
+	unsigned long tx_timeouts;
+	unsigned long alloc_rx_skb_error;
+	unsigned long rx_iommu_map_error;
+	unsigned long tx_iommu_map_error;
+	unsigned long rx_desc_unk_state;
+};
+
 struct spider_net_card {
 	struct net_device *netdev;
 	struct pci_dev *pdev;
@@ -453,8 +439,7 @@ struct spider_net_card {
 
 	struct spider_net_descr_chain tx_chain;
 	struct spider_net_descr_chain rx_chain;
-	atomic_t rx_chain_refill;
-	atomic_t tx_chain_release;
+	struct spider_net_descr *low_watermark;
 
 	struct net_device_stats netdev_stats;
 
@@ -470,6 +455,9 @@ struct spider_net_card {
 
 	/* for ethtool */
 	int msg_enable;
+	int num_rx_desc;
+	int num_tx_desc;
+	struct spider_net_extra_stats spider_stats;
 
 	struct spider_net_descr descr[0];
 };

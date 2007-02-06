@@ -39,7 +39,7 @@ static void rtc_device_release(struct class_device *class_dev)
  * Returns the pointer to the new struct class device.
  */
 struct rtc_device *rtc_device_register(const char *name, struct device *dev,
-					struct rtc_class_ops *ops,
+					const struct rtc_class_ops *ops,
 					struct module *owner)
 {
 	struct rtc_device *rtc;
@@ -69,6 +69,7 @@ struct rtc_device *rtc_device_register(const char *name, struct device *dev,
 	rtc->id = id;
 	rtc->ops = ops;
 	rtc->owner = owner;
+	rtc->max_user_freq = 64;
 	rtc->class_dev.dev = dev;
 	rtc->class_dev.class = rtc_class;
 	rtc->class_dev.release = rtc_device_release;
@@ -93,7 +94,9 @@ exit_kfree:
 	kfree(rtc);
 
 exit_idr:
+	mutex_lock(&idr_lock);
 	idr_remove(&rtc_idr, id);
+	mutex_unlock(&idr_lock);
 
 exit:
 	dev_err(dev, "rtc core: unable to register %s, err = %d\n",
@@ -139,9 +142,9 @@ static void __exit rtc_exit(void)
 	class_destroy(rtc_class);
 }
 
-module_init(rtc_init);
+subsys_initcall(rtc_init);
 module_exit(rtc_exit);
 
-MODULE_AUTHOR("Alessandro Zummo <a.zummo@towerteh.it>");
+MODULE_AUTHOR("Alessandro Zummo <a.zummo@towertech.it>");
 MODULE_DESCRIPTION("RTC class support");
 MODULE_LICENSE("GPL");

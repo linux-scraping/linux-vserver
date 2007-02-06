@@ -47,12 +47,29 @@ config USB_EHCI_ROOT_HUB_TT
 	  controller is needed.  It's safe to say "y" even if your
 	  controller doesn't support this feature.
 
-	  This supports the EHCI implementation from TransDimension Inc.
+	  This supports the EHCI implementation that's originally
+	  from ARC, and has since changed hands a few times.
+
+config USB_EHCI_TT_NEWSCHED
+	bool "Improved Transaction Translator scheduling (EXPERIMENTAL)"
+	depends on USB_EHCI_HCD && EXPERIMENTAL
+	---help---
+	  This changes the periodic scheduling code to fill more of the low
+	  and full speed bandwidth available from the Transaction Translator
+	  (TT) in USB 2.0 hubs.  Without this, only one transfer will be
+	  issued in each microframe, significantly reducing the number of
+	  periodic low/fullspeed transfers possible.
+
+	  If you have multiple periodic low/fullspeed devices connected to a
+	  highspeed USB hub which is connected to a highspeed USB Host
+	  Controller, and some of those devices will not work correctly
+	  (possibly due to "ENOSPC" or "-28" errors), say Y.
+
+	  If unsure, say N.
 
 config USB_ISP116X_HCD
 	tristate "ISP116X HCD support"
 	depends on USB
-	default N
 	---help---
 	  The ISP1160 and ISP1161 chips are USB host controllers. Enable this
 	  option if your board has this chip. If unsure, say N.
@@ -66,6 +83,7 @@ config USB_OHCI_HCD
 	tristate "OHCI HCD support"
 	depends on USB && USB_ARCH_HAS_OHCI
 	select ISP1301_OMAP if MACH_OMAP_H2 || MACH_OMAP_H3
+	select I2C if ARCH_PNX4008
 	---help---
 	  The Open Host Controller Interface (OHCI) is a standard for accessing
 	  USB 1.1 host controller hardware.  It does more in hardware than Intel's
@@ -124,10 +142,37 @@ config USB_UHCI_HCD
 	  To compile this driver as a module, choose M here: the
 	  module will be called uhci-hcd.
 
+config USB_U132_HCD
+	tristate "Elan U132 Adapter Host Controller"
+	depends on USB && USB_FTDI_ELAN
+	default M
+	help
+	  The U132 adapter is a USB to CardBus adapter specifically designed
+	  for PC cards that contain an OHCI host controller. Typical PC cards
+	  are the Orange Mobile 3G Option GlobeTrotter Fusion card. The U132
+	  adapter will *NOT* work with PC cards that do not contain an OHCI
+	  controller.
+
+	  For those PC cards that contain multiple OHCI controllers only the
+	  first one is used.
+
+	  The driver consists of two modules, the "ftdi-elan" module is a
+	  USB client driver that interfaces to the FTDI chip within ELAN's
+	  USB-to-PCMCIA adapter, and this "u132-hcd" module is a USB host
+	  controller driver that talks to the OHCI controller within the
+	  CardBus cards that are inserted in the U132 adapter.
+
+	  This driver has been tested with a CardBus OHCI USB adapter, and
+	  worked with a USB PEN Drive inserted into the first USB port of
+	  the PCCARD. A rather pointless thing to do, but useful for testing.
+
+	  It is safe to say M here.
+
+	  See also <http://www.elandigitalsystems.com/support/ufaq/u132linux.php>
+
 config USB_SL811_HCD
 	tristate "SL811HS HCD support"
 	depends on USB
-	default N
 	help
 	  The SL811HS is a single-port USB controller that supports either
 	  host side or peripheral side roles.  Enable this option if your
@@ -140,7 +185,6 @@ config USB_SL811_HCD
 config USB_SL811_CS
 	tristate "CF/PCMCIA support for SL811HS HCD"
 	depends on USB_SL811_HCD && PCMCIA
-	default N
 	help
 	  Wraps a PCMCIA driver around the SL811HS HCD, supporting the RATOC
 	  REX-CFU1U CF card (often used with PDAs).  If unsure, say N.

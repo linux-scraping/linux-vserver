@@ -1,5 +1,5 @@
 /*
- * sound/ad1848.c
+ * sound/oss/ad1848.c
  *
  * The low level driver for the AD1848/CS4248 codec chip which
  * is used for example in the MS Sound System.
@@ -41,7 +41,6 @@
  *		Tested. Believed fully functional.
  */
 
-#include <linux/config.h>
 #include <linux/init.h>
 #include <linux/interrupt.h>
 #include <linux/module.h>
@@ -196,6 +195,7 @@ static void     ad1848_halt(int dev);
 static void     ad1848_halt_input(int dev);
 static void     ad1848_halt_output(int dev);
 static void     ad1848_trigger(int dev, int bits);
+static irqreturn_t adintr(int irq, void *dev_id);
 
 #ifndef EXCLUDE_TIMERS
 static int ad1848_tmr_install(int dev);
@@ -1992,7 +1992,7 @@ int ad1848_init (char *name, struct resource *ports, int irq, int dma_playback,
 			devc->audio_flags |= DMA_DUPLEX;
 	}
 
-	portc = (ad1848_port_info *) kmalloc(sizeof(ad1848_port_info), GFP_KERNEL);
+	portc = kmalloc(sizeof(ad1848_port_info), GFP_KERNEL);
 	if(portc==NULL) {
 		release_region(devc->base, 4);
 		return -1;
@@ -2196,7 +2196,7 @@ void ad1848_unload(int io_base, int irq, int dma_playback, int dma_capture, int 
 		printk(KERN_ERR "ad1848: Can't find device to be unloaded. Base=%x\n", io_base);
 }
 
-irqreturn_t adintr(int irq, void *dev_id, struct pt_regs *dummy)
+static irqreturn_t adintr(int irq, void *dev_id)
 {
 	unsigned char status;
 	ad1848_info *devc;
@@ -2803,7 +2803,6 @@ EXPORT_SYMBOL(ad1848_detect);
 EXPORT_SYMBOL(ad1848_init);
 EXPORT_SYMBOL(ad1848_unload);
 EXPORT_SYMBOL(ad1848_control);
-EXPORT_SYMBOL(adintr);
 EXPORT_SYMBOL(probe_ms_sound);
 EXPORT_SYMBOL(attach_ms_sound);
 EXPORT_SYMBOL(unload_ms_sound);

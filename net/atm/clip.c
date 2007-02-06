@@ -2,7 +2,6 @@
 
 /* Written 1995-2000 by Werner Almesberger, EPFL LRC/ICA */
 
-#include <linux/config.h>
 #include <linux/string.h>
 #include <linux/errno.h>
 #include <linux/kernel.h> /* for UINT_MAX */
@@ -24,6 +23,7 @@
 #include <linux/if.h> /* for IFF_UP */
 #include <linux/inetdevice.h>
 #include <linux/bitops.h>
+#include <linux/poison.h>
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
 #include <linux/rcupdate.h>
@@ -38,7 +38,6 @@
 
 #include "common.h"
 #include "resources.h"
-#include "ipcommon.h"
 #include <net/atmclip.h>
 
 
@@ -54,7 +53,7 @@ static struct atm_vcc *atmarpd;
 static struct neigh_table clip_tbl;
 static struct timer_list idle_timer;
 
-static int to_atmarpd(enum atmarp_ctrl_type type, int itf, unsigned long ip)
+static int to_atmarpd(enum atmarp_ctrl_type type, int itf, __be32 ip)
 {
 	struct sock *sk;
 	struct atmarp_ctrl *ctrl;
@@ -98,7 +97,7 @@ static void unlink_clip_vcc(struct clip_vcc *clip_vcc)
 		printk(KERN_CRIT "!clip_vcc->entry (clip_vcc %p)\n", clip_vcc);
 		return;
 	}
-	spin_lock_bh(&entry->neigh->dev->xmit_lock);	/* block clip_start_xmit() */
+	netif_tx_lock_bh(entry->neigh->dev);	/* block clip_start_xmit() */
 	entry->neigh->used = jiffies;
 	for (walk = &entry->vccs; *walk; walk = &(*walk)->next)
 		if (*walk == clip_vcc) {
@@ -122,7 +121,7 @@ static void unlink_clip_vcc(struct clip_vcc *clip_vcc)
 	printk(KERN_CRIT "ATMARP: unlink_clip_vcc failed (entry %p, vcc "
 	       "0x%p)\n", entry, clip_vcc);
       out:
-	spin_unlock_bh(&entry->neigh->dev->xmit_lock);
+	netif_tx_unlock_bh(entry->neigh->dev);
 }
 
 /* The neighbour entry n->lock is held. */
@@ -220,7 +219,7 @@ static void clip_push(struct atm_vcc *vcc, struct sk_buff *skb)
 	    || memcmp(skb->data, llc_oui, sizeof (llc_oui)))
 		skb->protocol = htons(ETH_P_IP);
 	else {
-		skb->protocol = ((u16 *) skb->data)[3];
+		skb->protocol = ((__be16 *) skb->data)[3];
 		skb_pull(skb, RFC1483LLC_LEN);
 		if (skb->protocol == htons(ETH_P_ARP)) {
 			PRIV(skb->dev)->stats.rx_packets++;
@@ -267,7 +266,7 @@ static void clip_neigh_destroy(struct neighbour *neigh)
 	DPRINTK("clip_neigh_destroy (neigh %p)\n", neigh);
 	if (NEIGH2ENTRY(neigh)->vccs)
 		printk(KERN_CRIT "clip_neigh_destroy: vccs != NULL !!!\n");
-	NEIGH2ENTRY(neigh)->vccs = (void *) 0xdeadbeef;
+	NEIGH2ENTRY(neigh)->vccs = (void *) NEIGHBOR_DEAD;
 }
 
 static void clip_neigh_solicit(struct neighbour *neigh, struct sk_buff *skb)
@@ -430,7 +429,7 @@ static int clip_start_xmit(struct sk_buff *skb, struct net_device *dev)
 
 		here = skb_push(skb, RFC1483LLC_LEN);
 		memcpy(here, llc_oui, sizeof(llc_oui));
-		((u16 *) here)[3] = skb->protocol;
+		((__be16 *) here)[3] = skb->protocol;
 	}
 	atomic_add(skb->truesize, &sk_atm(vcc)->sk_wmem_alloc);
 	ATM_SKB(skb)->atm_options = vcc->atm_options;
@@ -469,8 +468,9 @@ static struct net_device_stats *clip_get_stats(struct net_device *dev)
 static int clip_mkip(struct atm_vcc *vcc, int timeout)
 {
 	struct clip_vcc *clip_vcc;
-	struct sk_buff_head copy;
 	struct sk_buff *skb;
+	struct sk_buff_head *rq;
+	unsigned long flags;
 
 	if (!vcc->push)
 		return -EBADFD;
@@ -490,24 +490,45 @@ static int clip_mkip(struct atm_vcc *vcc, int timeout)
 	clip_vcc->old_pop = vcc->pop;
 	vcc->push = clip_push;
 	vcc->pop = clip_pop;
-	skb_queue_head_init(&copy);
-	skb_migrate(&sk_atm(vcc)->sk_receive_queue, &copy);
+
+	rq = &sk_atm(vcc)->sk_receive_queue;
+
+	spin_lock_irqsave(&rq->lock, flags);
+	if (skb_queue_empty(rq)) {
+		skb = NULL;
+	} else {
+		/* NULL terminate the list.  */
+		rq->prev->next = NULL;
+		skb = rq->next;
+	}
+	rq->prev = rq->next = (struct sk_buff *)rq;
+	rq->qlen = 0;
+	spin_unlock_irqrestore(&rq->lock, flags);
+
 	/* re-process everything received between connection setup and MKIP */
-	while ((skb = skb_dequeue(&copy)) != NULL)
+	while (skb) {
+		struct sk_buff *next = skb->next;
+
+		skb->next = skb->prev = NULL;
 		if (!clip_devs) {
 			atm_return(vcc, skb->truesize);
 			kfree_skb(skb);
 		} else {
 			unsigned int len = skb->len;
 
+			skb_get(skb);
 			clip_push(vcc, skb);
 			PRIV(skb->dev)->stats.rx_packets--;
 			PRIV(skb->dev)->stats.rx_bytes -= len;
+			kfree_skb(skb);
 		}
+
+		skb = next;
+	}
 	return 0;
 }
 
-static int clip_setentry(struct atm_vcc *vcc, u32 ip)
+static int clip_setentry(struct atm_vcc *vcc, __be32 ip)
 {
 	struct neighbour *neigh;
 	struct atmarp_entry *entry;
@@ -750,7 +771,7 @@ static int clip_ioctl(struct socket *sock, unsigned int cmd, unsigned long arg)
 		err = clip_mkip(vcc, arg);
 		break;
 	case ATMARP_SETENTRY:
-		err = clip_setentry(vcc, arg);
+		err = clip_setentry(vcc, (__force __be32)arg);
 		break;
 	case ATMARP_ENCAP:
 		err = clip_encap(vcc, arg);
@@ -929,12 +950,11 @@ static int arp_seq_open(struct inode *inode, struct file *file)
 	struct seq_file *seq;
 	int rc = -EAGAIN;
 
-	state = kmalloc(sizeof(*state), GFP_KERNEL);
+	state = kzalloc(sizeof(*state), GFP_KERNEL);
 	if (!state) {
 		rc = -ENOMEM;
 		goto out_kfree;
 	}
-	memset(state, 0, sizeof(*state));
 	state->ns.neigh_sub_iter = clip_seq_sub_iter;
 
 	rc = seq_open(file, &arp_seq_ops);
@@ -962,7 +982,6 @@ static struct file_operations arp_seq_fops = {
 
 static int __init atm_clip_init(void)
 {
-	struct proc_dir_entry *p;
 	neigh_table_init_no_netlink(&clip_tbl);
 
 	clip_tbl_hook = &clip_tbl;
@@ -972,9 +991,15 @@ static int __init atm_clip_init(void)
 
 	setup_timer(&idle_timer, idle_timer_check, 0);
 
-	p = create_proc_entry("arp", S_IRUGO, atm_proc_root);
-	if (p)
-		p->proc_fops = &arp_seq_fops;
+#ifdef CONFIG_PROC_FS
+	{
+		struct proc_dir_entry *p;
+
+		p = create_proc_entry("arp", S_IRUGO, atm_proc_root);
+		if (p)
+			p->proc_fops = &arp_seq_fops;
+	}
+#endif
 
 	return 0;
 }

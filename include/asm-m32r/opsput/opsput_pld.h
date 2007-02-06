@@ -1,5 +1,5 @@
 /*
- * include/asm/opsput/opsput_pld.h
+ * include/asm-m32r/opsput/opsput_pld.h
  *
  * Definitions for Programable Logic Device(PLD) on OPSPUT board.
  *
@@ -15,7 +15,6 @@
 #ifndef _OPSPUT_OPSPUT_PLD_H
 #define _OPSPUT_OPSPUT_PLD_H
 
-#include <linux/config.h>
 
 #define PLD_PLAT_BASE		0x1cc00000
 

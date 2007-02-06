@@ -55,13 +55,12 @@ int afs_server_lookup(struct afs_cell *cell, const struct in_addr *addr,
 	_enter("%p,%08x,", cell, ntohl(addr->s_addr));
 
 	/* allocate and initialise a server record */
-	server = kmalloc(sizeof(struct afs_server), GFP_KERNEL);
+	server = kzalloc(sizeof(struct afs_server), GFP_KERNEL);
 	if (!server) {
 		_leave(" = -ENOMEM");
 		return -ENOMEM;
 	}
 
-	memset(server, 0, sizeof(struct afs_server));
 	atomic_set(&server->usage, 1);
 
 	INIT_LIST_HEAD(&server->link);
@@ -123,8 +122,7 @@ int afs_server_lookup(struct afs_cell *cell, const struct in_addr *addr,
  resurrect_server:
 	_debug("resurrecting server");
 
-	list_del(&zombie->link);
-	list_add_tail(&zombie->link, &cell->sv_list);
+	list_move_tail(&zombie->link, &cell->sv_list);
 	afs_get_server(zombie);
 	afs_kafstimod_del_timer(&zombie->timeout);
 	spin_unlock(&cell->sv_gylock);
@@ -168,8 +166,7 @@ void afs_put_server(struct afs_server *server)
 	}
 
 	spin_lock(&cell->sv_gylock);
-	list_del(&server->link);
-	list_add_tail(&server->link, &cell->sv_graveyard);
+	list_move_tail(&server->link, &cell->sv_graveyard);
 
 	/* time out in 10 secs */
 	afs_kafstimod_add_timer(&server->timeout, 10 * HZ);

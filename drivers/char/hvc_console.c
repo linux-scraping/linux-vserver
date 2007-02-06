@@ -22,7 +22,6 @@
  * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
  */
 
-#include <linux/config.h>
 #include <linux/console.h>
 #include <linux/cpumask.h>
 #include <linux/init.h>
@@ -39,6 +38,7 @@
 #include <linux/sched.h>
 #include <linux/spinlock.h>
 #include <linux/delay.h>
+#include <linux/freezer.h>
 
 #include <asm/uaccess.h>
 
@@ -81,7 +81,8 @@ struct hvc_struct {
 	struct tty_struct *tty;
 	unsigned int count;
 	int do_wakeup;
-	char outbuf[N_OUTBUF] __ALIGNED__;
+	char *outbuf;
+	int outbuf_size;
 	int n_outbuf;
 	uint32_t vtermno;
 	struct hv_ops *ops;
@@ -294,7 +295,7 @@ static int hvc_poll(struct hvc_struct *hp);
  * NOTE: This API isn't used if the console adapter doesn't support interrupts.
  * In this case the console is poll driven.
  */
-static irqreturn_t hvc_handle_interrupt(int irq, void *dev_instance, struct pt_regs *regs)
+static irqreturn_t hvc_handle_interrupt(int irq, void *dev_instance)
 {
 	/* if hvc_poll request a repoll, then kick the hvcd thread */
 	if (hvc_poll(dev_instance))
@@ -320,10 +321,8 @@ static int hvc_open(struct tty_struct *tty, struct file * filp)
 	struct kobject *kobjp;
 
 	/* Auto increments kobject reference if found. */
-	if (!(hp = hvc_get_by_index(tty->index))) {
-		printk(KERN_WARNING "hvc_console: tty open failed, no vty associated with tty.\n");
+	if (!(hp = hvc_get_by_index(tty->index)))
 		return -ENODEV;
-	}
 
 	spin_lock_irqsave(&hp->lock, flags);
 	/* Check and then increment for fast path open. */
@@ -347,7 +346,7 @@ static int hvc_open(struct tty_struct *tty, struct file * filp)
 	spin_unlock_irqrestore(&hp->lock, flags);
 	/* check error, fallback to non-irq */
 	if (irq != NO_IRQ)
-		rc = request_irq(irq, hvc_handle_interrupt, SA_INTERRUPT, "hvc_console", hp);
+		rc = request_irq(irq, hvc_handle_interrupt, IRQF_DISABLED, "hvc_console", hp);
 
 	/*
 	 * If the request_irq() fails and we return an error.  The tty layer
@@ -506,7 +505,7 @@ static int hvc_write(struct tty_struct *tty, const unsigned char *buf, int count
 	if (hp->n_outbuf > 0)
 		hvc_push(hp);
 
-	while (count > 0 && (rsize = N_OUTBUF - hp->n_outbuf) > 0) {
+	while (count > 0 && (rsize = hp->outbuf_size - hp->n_outbuf) > 0) {
 		if (rsize > count)
 			rsize = count;
 		memcpy(hp->outbuf + hp->n_outbuf, buf, rsize);
@@ -539,7 +538,7 @@ static int hvc_write_room(struct tty_struct *tty)
 	if (!hp)
 		return -1;
 
-	return N_OUTBUF - hp->n_outbuf;
+	return hp->outbuf_size - hp->n_outbuf;
 }
 
 static int hvc_chars_in_buffer(struct tty_struct *tty)
@@ -553,7 +552,6 @@ static int hvc_chars_in_buffer(struct tty_struct *tty)
 
 #define HVC_POLL_READ	0x00000001
 #define HVC_POLL_WRITE	0x00000002
-#define HVC_POLL_QUICK	0x00000004
 
 static int hvc_poll(struct hvc_struct *hp)
 {
@@ -568,6 +566,7 @@ static int hvc_poll(struct hvc_struct *hp)
 	/* Push pending writes */
 	if (hp->n_outbuf > 0)
 		hvc_push(hp);
+
 	/* Reschedule us if still some write pending */
 	if (hp->n_outbuf > 0)
 		poll_mask |= HVC_POLL_WRITE;
@@ -623,7 +622,7 @@ static int hvc_poll(struct hvc_struct *hp)
 					sysrq_pressed = 1;
 					continue;
 				} else if (sysrq_pressed) {
-					handle_sysrq(buf[i], NULL, tty);
+					handle_sysrq(buf[i], tty);
 					sysrq_pressed = 0;
 					continue;
 				}
@@ -669,6 +668,7 @@ int khvcd(void *unused)
 	do {
 		poll_mask = 0;
 		hvc_kicked = 0;
+		try_to_freeze();
 		wmb();
 		if (cpus_empty(cpus_in_xmon)) {
 			spin_lock(&hvc_structs_lock);
@@ -680,7 +680,7 @@ int khvcd(void *unused)
 			poll_mask |= HVC_POLL_READ;
 		if (hvc_kicked)
 			continue;
-		if (poll_mask & HVC_POLL_QUICK) {
+		if (poll_mask & HVC_POLL_WRITE) {
 			yield();
 			continue;
 		}
@@ -697,7 +697,7 @@ int khvcd(void *unused)
 	return 0;
 }
 
-static struct tty_operations hvc_ops = {
+static const struct tty_operations hvc_ops = {
 	.open = hvc_open,
 	.close = hvc_close,
 	.write = hvc_write,
@@ -729,12 +729,13 @@ static struct kobj_type hvc_kobj_type = {
 };
 
 struct hvc_struct __devinit *hvc_alloc(uint32_t vtermno, int irq,
-					struct hv_ops *ops)
+					struct hv_ops *ops, int outbuf_size)
 {
 	struct hvc_struct *hp;
 	int i;
 
-	hp = kmalloc(sizeof(*hp), GFP_KERNEL);
+	hp = kmalloc(ALIGN(sizeof(*hp), sizeof(long)) + outbuf_size,
+			GFP_KERNEL);
 	if (!hp)
 		return ERR_PTR(-ENOMEM);
 
@@ -743,6 +744,8 @@ struct hvc_struct __devinit *hvc_alloc(uint32_t vtermno, int irq,
 	hp->vtermno = vtermno;
 	hp->irq = irq;
 	hp->ops = ops;
+	hp->outbuf_size = outbuf_size;
+	hp->outbuf = &((char *)hp)[ALIGN(sizeof(*hp), sizeof(long))];
 
 	kobject_init(&hp->kobj);
 	hp->kobj.ktype = &hvc_kobj_type;
@@ -820,7 +823,6 @@ int __init hvc_init(void)
 		return -ENOMEM;
 
 	drv->owner = THIS_MODULE;
-	drv->devfs_name = "hvc/";
 	drv->driver_name = "hvc";
 	drv->name = "hvc";
 	drv->major = HVC_MAJOR;

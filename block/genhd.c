@@ -2,7 +2,6 @@
  *  gendisk handling
  */
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/fs.h>
 #include <linux/genhd.h>
@@ -17,8 +16,7 @@
 #include <linux/buffer_head.h>
 #include <linux/mutex.h>
 
-static struct subsystem block_subsys;
-
+struct subsystem block_subsys;
 static DEFINE_MUTEX(block_subsys_lock);
 
 /*
@@ -297,10 +295,15 @@ static struct kobject *base_probe(dev_t dev, int *part, void *data)
 
 static int __init genhd_device_init(void)
 {
+	int err;
+
 	bdev_map = kobj_map_init(base_probe, &block_subsys_lock);
 	blk_dev_init();
-	subsystem_register(&block_subsys);
-	return 0;
+	err = subsystem_register(&block_subsys);
+	if (err < 0)
+		printk(KERN_WARNING "%s: subsystem_register error: %d\n",
+			__FUNCTION__, err);
+	return err;
 }
 
 subsys_initcall(genhd_device_init);
@@ -414,6 +417,34 @@ static struct disk_attribute disk_attr_stat = {
 	.show	= disk_stats_read
 };
 
+#ifdef CONFIG_FAIL_MAKE_REQUEST
+
+static ssize_t disk_fail_store(struct gendisk * disk,
+			       const char *buf, size_t count)
+{
+	int i;
+
+	if (count > 0 && sscanf(buf, "%d", &i) > 0) {
+		if (i == 0)
+			disk->flags &= ~GENHD_FL_FAIL;
+		else
+			disk->flags |= GENHD_FL_FAIL;
+	}
+
+	return count;
+}
+static ssize_t disk_fail_read(struct gendisk * disk, char *page)
+{
+	return sprintf(page, "%d\n", disk->flags & GENHD_FL_FAIL ? 1 : 0);
+}
+static struct disk_attribute disk_attr_fail = {
+	.attr = {.name = "make-it-fail", .mode = S_IRUGO | S_IWUSR },
+	.store	= disk_fail_store,
+	.show	= disk_fail_read
+};
+
+#endif
+
 static struct attribute * default_attrs[] = {
 	&disk_attr_uevent.attr,
 	&disk_attr_dev.attr,
@@ -421,6 +452,9 @@ static struct attribute * default_attrs[] = {
 	&disk_attr_removable.attr,
 	&disk_attr_size.attr,
 	&disk_attr_stat.attr,
+#ifdef CONFIG_FAIL_MAKE_REQUEST
+	&disk_attr_fail.attr,
+#endif
 	NULL,
 };
 
@@ -511,9 +545,7 @@ static struct kset_uevent_ops block_uevent_ops = {
 	.uevent		= block_uevent,
 };
 
-/* declare block_subsys. */
-static decl_subsys(block, &ktype_block, &block_uevent_ops);
-
+decl_subsys(block, &ktype_block, &block_uevent_ops);
 
 /*
  * aggregate disk stat collector.  Uses the same stats that the sysfs

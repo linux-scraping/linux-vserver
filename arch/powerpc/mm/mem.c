@@ -18,7 +18,6 @@
  *
  */
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/sched.h>
 #include <linux/kernel.h>
@@ -114,15 +113,20 @@ void online_page(struct page *page)
 	num_physpages++;
 }
 
-int __devinit add_memory(u64 start, u64 size)
+#ifdef CONFIG_NUMA
+int memory_add_physaddr_to_nid(u64 start)
+{
+	return hot_add_scn_to_nid(start);
+}
+#endif
+
+int __devinit arch_add_memory(int nid, u64 start, u64 size)
 {
 	struct pglist_data *pgdata;
 	struct zone *zone;
-	int nid;
 	unsigned long start_pfn = start >> PAGE_SHIFT;
 	unsigned long nr_pages = size >> PAGE_SHIFT;
 
-	nid = hot_add_scn_to_nid(start);
 	pgdata = NODE_DATA(nid);
 
 	start = (unsigned long)__va(start);
@@ -252,20 +256,22 @@ void __init do_init_bootmem(void)
 
 	boot_mapsize = init_bootmem(start >> PAGE_SHIFT, total_pages);
 
+	/* Add active regions with valid PFNs */
+	for (i = 0; i < lmb.memory.cnt; i++) {
+		unsigned long start_pfn, end_pfn;
+		start_pfn = lmb.memory.region[i].base >> PAGE_SHIFT;
+		end_pfn = start_pfn + lmb_size_pages(&lmb.memory, i);
+		add_active_range(0, start_pfn, end_pfn);
+	}
+
 	/* Add all physical memory to the bootmem map, mark each area
 	 * present.
 	 */
-	for (i = 0; i < lmb.memory.cnt; i++) {
-		unsigned long base = lmb.memory.region[i].base;
-		unsigned long size = lmb_size_bytes(&lmb.memory, i);
 #ifdef CONFIG_HIGHMEM
-		if (base >= total_lowmem)
-			continue;
-		if (base + size > total_lowmem)
-			size = total_lowmem - base;
+	free_bootmem_with_active_regions(0, total_lowmem >> PAGE_SHIFT);
+#else
+	free_bootmem_with_active_regions(0, max_pfn);
 #endif
-		free_bootmem(base, size);
-	}
 
 	/* reserve the sections we're already using */
 	for (i = 0; i < lmb.reserved.cnt; i++)
@@ -273,9 +279,8 @@ void __init do_init_bootmem(void)
 				lmb_size_bytes(&lmb.reserved, i));
 
 	/* XXX need to clip this if using highmem? */
-	for (i = 0; i < lmb.memory.cnt; i++)
-		memory_present(0, lmb_start_pfn(&lmb.memory, i),
-			       lmb_end_pfn(&lmb.memory, i));
+	sparse_memory_present_with_active_regions(0);
+
 	init_bootmem_done = 1;
 }
 
@@ -284,10 +289,9 @@ void __init do_init_bootmem(void)
  */
 void __init paging_init(void)
 {
-	unsigned long zones_size[MAX_NR_ZONES];
-	unsigned long zholes_size[MAX_NR_ZONES];
 	unsigned long total_ram = lmb_phys_mem_size();
 	unsigned long top_of_ram = lmb_end_of_DRAM();
+	unsigned long max_zone_pfns[MAX_NR_ZONES];
 
 #ifdef CONFIG_HIGHMEM
 	map_page(PKMAP_BASE, 0, 0);	/* XXX gross */
@@ -299,30 +303,18 @@ void __init paging_init(void)
 	kmap_prot = PAGE_KERNEL;
 #endif /* CONFIG_HIGHMEM */
 
-	printk(KERN_INFO "Top of RAM: 0x%lx, Total RAM: 0x%lx\n",
+	printk(KERN_DEBUG "Top of RAM: 0x%lx, Total RAM: 0x%lx\n",
 	       top_of_ram, total_ram);
-	printk(KERN_INFO "Memory hole size: %ldMB\n",
+	printk(KERN_DEBUG "Memory hole size: %ldMB\n",
 	       (top_of_ram - total_ram) >> 20);
-	/*
-	 * All pages are DMA-able so we put them all in the DMA zone.
-	 */
-	memset(zones_size, 0, sizeof(zones_size));
-	memset(zholes_size, 0, sizeof(zholes_size));
-
-	zones_size[ZONE_DMA] = top_of_ram >> PAGE_SHIFT;
-	zholes_size[ZONE_DMA] = (top_of_ram - total_ram) >> PAGE_SHIFT;
-
+	memset(max_zone_pfns, 0, sizeof(max_zone_pfns));
 #ifdef CONFIG_HIGHMEM
-	zones_size[ZONE_DMA] = total_lowmem >> PAGE_SHIFT;
-	zones_size[ZONE_HIGHMEM] = (total_memory - total_lowmem) >> PAGE_SHIFT;
-	zholes_size[ZONE_HIGHMEM] = (top_of_ram - total_ram) >> PAGE_SHIFT;
+	max_zone_pfns[ZONE_DMA] = total_lowmem >> PAGE_SHIFT;
+	max_zone_pfns[ZONE_HIGHMEM] = top_of_ram >> PAGE_SHIFT;
 #else
-	zones_size[ZONE_DMA] = top_of_ram >> PAGE_SHIFT;
-	zholes_size[ZONE_DMA] = (top_of_ram - total_ram) >> PAGE_SHIFT;
-#endif /* CONFIG_HIGHMEM */
-
-	free_area_init_node(0, NODE_DATA(0), zones_size,
-			    __pa(PAGE_OFFSET) >> PAGE_SHIFT, zholes_size);
+	max_zone_pfns[ZONE_DMA] = top_of_ram >> PAGE_SHIFT;
+#endif
+	free_area_init_nodes(max_zone_pfns);
 }
 #endif /* ! CONFIG_NEED_MULTIPLE_NODES */
 
@@ -380,7 +372,7 @@ void __init mem_init(void)
 			totalhigh_pages++;
 		}
 		totalram_pages += totalhigh_pages;
-		printk(KERN_INFO "High memory: %luk\n",
+		printk(KERN_DEBUG "High memory: %luk\n",
 		       totalhigh_pages << (PAGE_SHIFT-10));
 	}
 #endif /* CONFIG_HIGHMEM */

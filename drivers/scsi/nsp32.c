@@ -256,7 +256,7 @@ static void nsp32_sack_negate (nsp32_hw_data *);
 static void nsp32_do_bus_reset(nsp32_hw_data *);
 
 /* hardware interrupt handler */
-static irqreturn_t do_nsp32_isr(int, void *, struct pt_regs *);
+static irqreturn_t do_nsp32_isr(int, void *);
 
 /* initialize hardware */
 static int  nsp32hw_init(nsp32_hw_data *);
@@ -1201,7 +1201,7 @@ static int nsp32hw_init(nsp32_hw_data *data)
 
 
 /* interrupt routine */
-static irqreturn_t do_nsp32_isr(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t do_nsp32_isr(int irq, void *dev_id)
 {
 	nsp32_hw_data *data = dev_id;
 	unsigned int base = data->BaseAddress;
@@ -1636,7 +1636,7 @@ static void nsp32_scsi_done(struct scsi_cmnd *SCpnt)
 
 	if (SCpnt->use_sg) {
 		pci_unmap_sg(data->Pci,
-			     (struct scatterlist *)SCpnt->buffer,
+			     (struct scatterlist *)SCpnt->request_buffer,
 			     SCpnt->use_sg, SCpnt->sc_data_direction);
 	} else {
 		pci_unmap_single(data->Pci,
@@ -2866,8 +2866,7 @@ static int nsp32_detect(struct scsi_host_template *sht)
 	 */
 	nsp32_do_bus_reset(data);
 
-	ret = request_irq(host->irq, do_nsp32_isr,
-			  SA_SHIRQ | SA_SAMPLE_RANDOM, "nsp32", data);
+	ret = request_irq(host->irq, do_nsp32_isr, IRQF_SHARED, "nsp32", data);
 	if (ret < 0) {
 		nsp32_msg(KERN_ERR, "Unable to allocate IRQ for NinjaSCSI32 "
 			  "SCSI PCI controller. Interrupt: %d", host->irq);
@@ -2886,11 +2885,18 @@ static int nsp32_detect(struct scsi_host_template *sht)
         }
 
 #if (LINUX_VERSION_CODE > KERNEL_VERSION(2,5,73))
-	scsi_add_host (host, &PCIDEV->dev);
+	ret = scsi_add_host(host, &PCIDEV->dev);
+	if (ret) {
+		nsp32_msg(KERN_ERR, "failed to add scsi host");
+		goto free_region;
+	}
 	scsi_scan_host(host);
 #endif
 	pci_set_drvdata(PCIDEV, host);
 	return DETECT_OK;
+
+ free_region:
+	release_region(host->io_port, host->n_io_port);
 
  free_irq:
 	free_irq(host->irq, data);
@@ -3575,7 +3581,7 @@ static struct pci_driver nsp32_driver = {
  */
 static int __init init_nsp32(void) {
 	nsp32_msg(KERN_INFO, "loading...");
-	return pci_module_init(&nsp32_driver);
+	return pci_register_driver(&nsp32_driver);
 }
 
 static void __exit exit_nsp32(void) {

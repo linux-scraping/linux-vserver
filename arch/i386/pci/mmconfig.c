@@ -26,6 +26,7 @@
 
 /* The base address of the last MMCONFIG device accessed */
 static u32 mmcfg_last_accessed_device;
+static int mmcfg_last_accessed_cpu;
 
 static DECLARE_BITMAP(fallback_slots, MAX_CHECK_BUS*32);
 
@@ -67,11 +68,17 @@ static u32 get_base_addr(unsigned int seg, int bus, unsigned devfn)
 	return 0;
 }
 
-static inline void pci_exp_set_dev_base(unsigned int base, int bus, int devfn)
+/*
+ * This is always called under pci_config_lock
+ */
+static void pci_exp_set_dev_base(unsigned int base, int bus, int devfn)
 {
 	u32 dev_base = base | (bus << 20) | (devfn << 12);
-	if (dev_base != mmcfg_last_accessed_device) {
+	int cpu = smp_processor_id();
+	if (dev_base != mmcfg_last_accessed_device ||
+	    cpu != mmcfg_last_accessed_cpu) {
 		mmcfg_last_accessed_device = dev_base;
+		mmcfg_last_accessed_cpu = cpu;
 		set_fixmap_nocache(FIX_PCIE_MCFG, dev_base);
 	}
 }
@@ -178,7 +185,7 @@ static __init void unreachable_devices(void)
 				pci_exp_set_dev_base(addr, k, PCI_DEVFN(i, 0));
 			if (addr == 0 ||
 			    readl((u32 __iomem *)mmcfg_virt_addr) != val1) {
-				set_bit(i, fallback_slots);
+				set_bit(i + 32*k, fallback_slots);
 				printk(KERN_NOTICE
 			"PCI: No mmconfig possible on %x:%x\n", k, i);
 			}
@@ -187,7 +194,7 @@ static __init void unreachable_devices(void)
 	}
 }
 
-void __init pci_mmcfg_init(void)
+void __init pci_mmcfg_init(int type)
 {
 	if ((pci_probe & PCI_PROBE_MMCONF) == 0)
 		return;
@@ -198,7 +205,9 @@ void __init pci_mmcfg_init(void)
 	    (pci_mmcfg_config[0].base_address == 0))
 		return;
 
-	if (!e820_all_mapped(pci_mmcfg_config[0].base_address,
+	/* Only do this check when type 1 works. If it doesn't work
+	   assume we run on a Mac and always use MCFG */
+	if (type == 1 && !e820_all_mapped(pci_mmcfg_config[0].base_address,
 			pci_mmcfg_config[0].base_address + MMCONFIG_APER_MIN,
 			E820_RESERVED)) {
 		printk(KERN_ERR "PCI: BIOS Bug: MCFG area at %x is not E820-reserved\n",

@@ -8,8 +8,6 @@
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
- *
- * Modifications:
 */
 
 #define irqdbf(x...)
@@ -17,7 +15,7 @@
 
 #define EXTINT_OFF (IRQ_EINT4 - 4)
 
-extern struct irqchip s3c_irq_level_chip;
+extern struct irq_chip s3c_irq_level_chip;
 
 static inline void
 s3c_irqsub_mask(unsigned int irqno, unsigned int parentbit,
@@ -97,3 +95,13 @@ s3c_irqsub_ack(unsigned int irqno, unsigned int parentmask, unsigned int group)
 		__raw_writel(parentmask, S3C2410_INTPND);
 	}
 }
+
+/* exported for use in arch/arm/mach-s3c2410 */
+
+#ifdef CONFIG_PM
+extern int s3c_irq_wake(unsigned int irqno, unsigned int state);
+#else
+#define s3c_irq_wake NULL
+#endif
+
+extern int s3c_irqext_type(unsigned int irq, unsigned int type);

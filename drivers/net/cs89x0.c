@@ -15,13 +15,13 @@
   Changelog:
 
   Mike Cruse        : mcruse@cti-ltd.com
-                    : Changes for Linux 2.0 compatibility. 
+                    : Changes for Linux 2.0 compatibility.
                     : Added dev_id parameter in net_interrupt(),
                     : request_irq() and free_irq(). Just NULL for now.
 
   Mike Cruse        : Added MOD_INC_USE_COUNT and MOD_DEC_USE_COUNT macros
                     : in net_open() and net_close() so kerneld would know
-                    : that the module is in use and wouldn't eject the 
+                    : that the module is in use and wouldn't eject the
                     : driver prematurely.
 
   Mike Cruse        : Rewrote init_module() and cleanup_module using 8390.c
@@ -31,7 +31,7 @@
 
   Russ Nelson       : Jul 13 1998.  Added RxOnly DMA support.
 
-  Melody Lee        : Aug 10 1999.  Changes for Linux 2.2.5 compatibility. 
+  Melody Lee        : Aug 10 1999.  Changes for Linux 2.2.5 compatibility.
                     : email: ethernet@crystal.cirrus.com
 
   Alan Cox          : Removed 1.2 support, added 2.1 extra counters.
@@ -100,7 +100,6 @@
 
 /* Always include 'config.h' first in case the user wants to turn on
    or override something. */
-#include <linux/config.h>
 #include <linux/module.h>
 
 /*
@@ -164,12 +163,12 @@ static char version[] __initdata =
 /* First, a few definitions that the brave might change.
    A zero-terminated list of I/O addresses to be probed. Some special flags..
       Addr & 1 = Read back the address port, look for signature and reset
-                 the page window before probing 
-      Addr & 3 = Reset the page window and probe 
+                 the page window before probing
+      Addr & 3 = Reset the page window and probe
    The CLPS eval board has the Cirrus chip at 0x80090300, in ARM IO space,
    but it is possible that a Cirrus board could be plugged into the ISA
    slots. */
-/* The cs8900 has 4 IRQ pins, software selectable. cs8900_irq_map maps 
+/* The cs8900 has 4 IRQ pins, software selectable. cs8900_irq_map maps
    them to system IRQ numbers. This mapping is card specific and is set to
    the configuration of the Cirrus Eval board for this chip. */
 #ifdef CONFIG_ARCH_CLPS7500
@@ -250,7 +249,7 @@ struct net_local {
 static int cs89x0_probe1(struct net_device *dev, int ioaddr, int modular);
 static int net_open(struct net_device *dev);
 static int net_send_packet(struct sk_buff *skb, struct net_device *dev);
-static irqreturn_t net_interrupt(int irq, void *dev_id, struct pt_regs *regs);
+static irqreturn_t net_interrupt(int irq, void *dev_id);
 static void set_multicast_list(struct net_device *dev);
 static void net_timeout(struct net_device *dev);
 static void net_rx(struct net_device *dev);
@@ -300,7 +299,7 @@ static int __init media_fn(char *str)
 
 __setup("cs89x0_media=", media_fn);
 
-
+
 /* Check for a network adaptor of this type, and return '0' iff one exists.
    If dev->base_addr == 0, probe all likely locations.
    If dev->base_addr == 1, always return failure.
@@ -496,7 +495,7 @@ get_eeprom_cksum(int off, int len, int *buffer)
 static void net_poll_controller(struct net_device *dev)
 {
 	disable_irq(dev->irq);
-	net_interrupt(dev->irq, dev, NULL);
+	net_interrupt(dev->irq, dev);
 	enable_irq(dev->irq);
 }
 #endif
@@ -589,10 +588,10 @@ cs89x0_probe1(struct net_device *dev, int ioaddr, int modular)
 				goto out2;
 			}
 	}
-	printk(KERN_DEBUG "PP_addr at %x[%x]: 0x%x\n",
-			ioaddr, ADD_PORT, readword(ioaddr, ADD_PORT));
 
 	ioaddr &= ~3;
+	printk(KERN_DEBUG "PP_addr at %x[%x]: 0x%x\n",
+			ioaddr, ADD_PORT, readword(ioaddr, ADD_PORT));
 	writeword(ioaddr, ADD_PORT, PP_ChipID);
 
 	tmp = readword(ioaddr, DATA_PORT);
@@ -631,7 +630,7 @@ cs89x0_probe1(struct net_device *dev, int ioaddr, int modular)
 	       dev->base_addr);
 
 	reset_chip(dev);
-   
+
         /* Here we read the current configuration of the chip. If there
 	   is no Extended EEPROM then the idea is to not disturb the chip
 	   configuration, it should have been correctly setup by automatic
@@ -655,7 +654,7 @@ cs89x0_probe1(struct net_device *dev, int ioaddr, int modular)
 		cnt = (*confd++ & 0x00ff) >> 1;
 		while (--cnt > 0) {
 			__u16 j = *confd++;
-			
+
 			switch (j & 0x0fff) {
 			case PP_IA:
 				for (i = 0; i < ETH_ALEN/2; i++) {
@@ -671,7 +670,7 @@ cs89x0_probe1(struct net_device *dev, int ioaddr, int modular)
 	} else
 #endif
 
-        if ((readreg(dev, PP_SelfST) & (EEPROM_OK | EEPROM_PRESENT)) == 
+        if ((readreg(dev, PP_SelfST) & (EEPROM_OK | EEPROM_PRESENT)) ==
 	      (EEPROM_OK|EEPROM_PRESENT)) {
 	        /* Load the MAC. */
 		for (i=0; i < ETH_ALEN/2; i++) {
@@ -680,17 +679,17 @@ cs89x0_probe1(struct net_device *dev, int ioaddr, int modular)
 		        dev->dev_addr[i*2] = Addr & 0xFF;
 		        dev->dev_addr[i*2+1] = Addr >> 8;
 		}
-   
-	   	/* Load the Adapter Configuration. 
-		   Note:  Barring any more specific information from some 
-		   other source (ie EEPROM+Schematics), we would not know 
-		   how to operate a 10Base2 interface on the AUI port. 
-		   However, since we  do read the status of HCB1 and use 
-		   settings that always result in calls to control_dc_dc(dev,0) 
-		   a BNC interface should work if the enable pin 
-		   (dc/dc converter) is on HCB1. It will be called AUI 
+
+	   	/* Load the Adapter Configuration.
+		   Note:  Barring any more specific information from some
+		   other source (ie EEPROM+Schematics), we would not know
+		   how to operate a 10Base2 interface on the AUI port.
+		   However, since we  do read the status of HCB1 and use
+		   settings that always result in calls to control_dc_dc(dev,0)
+		   a BNC interface should work if the enable pin
+		   (dc/dc converter) is on HCB1. It will be called AUI
 		   however. */
-	   
+
 		lp->adapter_cnf = 0;
 		i = readreg(dev, PP_LineCTL);
 		/* Preserve the setting of the HCB1 pin. */
@@ -707,22 +706,22 @@ cs89x0_probe1(struct net_device *dev, int ioaddr, int modular)
 			lp->adapter_cnf |=  A_CNF_AUI | A_CNF_MEDIA_AUI;
 		/* Check if the card is in Auto mode. */
 		if ((i & (AUI_ONLY | AUTO_AUI_10BASET)) == AUTO_AUI_10BASET)
-			lp->adapter_cnf |=  A_CNF_AUI | A_CNF_10B_T | 
+			lp->adapter_cnf |=  A_CNF_AUI | A_CNF_10B_T |
 			A_CNF_MEDIA_AUI | A_CNF_MEDIA_10B_T | A_CNF_MEDIA_AUTO;
-		
+
 		if (net_debug > 1)
 			printk(KERN_INFO "%s: PP_LineCTL=0x%x, adapter_cnf=0x%x\n",
 					dev->name, i, lp->adapter_cnf);
 
 		/* IRQ. Other chips already probe, see below. */
-		if (lp->chip_type == CS8900) 
+		if (lp->chip_type == CS8900)
 			lp->isa_config = readreg(dev, PP_CS8900_ISAINT) & INT_NO_MASK;
-	   
+
 		printk( "[Cirrus EEPROM] ");
 	}
 
         printk("\n");
-   
+
 	/* First check to see if an EEPROM is attached. */
 #ifdef CONFIG_SH_HICOSH4 /* no EEPROM on HiCO, don't hazzle with it here */
 	if (1) {
@@ -737,13 +736,13 @@ cs89x0_probe1(struct net_device *dev, int ioaddr, int modular)
 		/* Check if the chip was able to read its own configuration starting
 		   at 0 in the EEPROM*/
 		if ((readreg(dev, PP_SelfST) & (EEPROM_OK | EEPROM_PRESENT)) !=
-		    (EEPROM_OK|EEPROM_PRESENT)) 
+		    (EEPROM_OK|EEPROM_PRESENT))
                 	printk(KERN_WARNING "cs89x0: Extended EEPROM checksum bad and no Cirrus EEPROM, relying on command line\n");
-		   
+
         } else {
 		/* This reads an extended EEPROM that is not documented
 		   in the CS8900 datasheet. */
-		
+
                 /* get transmission control word  but keep the autonegotiation bits */
                 if (!lp->auto_neg_cnf) lp->auto_neg_cnf = eeprom_buff[AUTO_NEG_CNF_OFFSET/2];
                 /* Store adapter configuration */
@@ -811,7 +810,7 @@ cs89x0_probe1(struct net_device *dev, int ioaddr, int modular)
 				printk("\ncs89x0: invalid ISA interrupt number %d\n", i);
 			else
 				i = cs8900_irq_map[i];
-			
+
 			lp->irq_map = CS8900_IRQ_MAP; /* fixed IRQ map for CS8900 */
 		} else {
 			int irq_map_buff[IRQ_MAP_LEN/2];
@@ -876,7 +875,7 @@ out1:
 	return retval;
 }
 
-
+
 /*********************************
  * This page contains DMA routines
 **********************************/
@@ -1065,14 +1064,14 @@ void  __init reset_chip(struct net_device *dev)
 		;
 }
 
-
+
 static void
 control_dc_dc(struct net_device *dev, int on_not_off)
 {
 	struct net_local *lp = netdev_priv(dev);
 	unsigned int selfcontrol;
 	int timenow = jiffies;
-	/* control the DC to DC convertor in the SelfControl register.  
+	/* control the DC to DC convertor in the SelfControl register.
 	   Note: This is hooked up to a general purpose pin, might not
 	   always be a DC to DC convertor. */
 
@@ -1241,7 +1240,7 @@ detect_bnc(struct net_device *dev)
 		return DETECTED_NONE;
 }
 
-
+
 static void
 write_irq(struct net_device *dev, int chip_type, int irq)
 {
@@ -1545,7 +1544,7 @@ static int net_send_packet(struct sk_buff *skb, struct net_device *dev)
 		 * Gasp!  It hasn't.  But that shouldn't happen since
 		 * we're waiting for TxOk, so return 1 and requeue this packet.
 		 */
-		
+
 		spin_unlock_irq(&lp->lock);
 		if (net_debug) printk("cs89x0: Tx buffer not free!\n");
 		return 1;
@@ -1570,11 +1569,11 @@ static int net_send_packet(struct sk_buff *skb, struct net_device *dev)
 
 	return 0;
 }
-
+
 /* The typical workload of the driver:
    Handle the network interface interrupts. */
-   
-static irqreturn_t net_interrupt(int irq, void *dev_id, struct pt_regs * regs)
+
+static irqreturn_t net_interrupt(int irq, void *dev_id)
 {
 	struct net_device *dev = dev_id;
 	struct net_local *lp;
@@ -1741,7 +1740,7 @@ net_close(struct net_device *dev)
 #endif
 
 	netif_stop_queue(dev);
-	
+
 	writereg(dev, PP_RxCFG, 0);
 	writereg(dev, PP_TxCFG, 0);
 	writereg(dev, PP_BufCFG, 0);
@@ -1792,7 +1791,7 @@ static void set_multicast_list(struct net_device *dev)
 		/* The multicast-accept list is initialized to accept-all, and we
 		   rely on higher-level filtering for now. */
 		lp->rx_mode = RX_MULTCAST_ACCEPT;
-	} 
+	}
 	else
 		lp->rx_mode = 0;
 
@@ -1834,8 +1833,8 @@ static int set_mac_address(struct net_device *dev, void *p)
 static struct net_device *dev_cs89x0;
 
 /*
- * Support the 'debug' module parm even if we're compiled for non-debug to 
- * avoid breaking someone's startup scripts 
+ * Support the 'debug' module parm even if we're compiled for non-debug to
+ * avoid breaking someone's startup scripts
  */
 
 static int io;
@@ -1906,8 +1905,7 @@ MODULE_LICENSE("GPL");
 
 */
 
-int
-init_module(void)
+int __init init_module(void)
 {
 	struct net_device *dev = alloc_etherdev(sizeof(struct net_local));
 	struct net_local *lp;
@@ -1976,7 +1974,7 @@ out:
 	return ret;
 }
 
-void
+void __exit
 cleanup_module(void)
 {
 	unregister_netdev(dev_cs89x0);
@@ -1985,7 +1983,7 @@ cleanup_module(void)
 	free_netdev(dev_cs89x0);
 }
 #endif /* MODULE */
-
+
 /*
  * Local variables:
  *  version-control: t

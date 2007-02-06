@@ -51,7 +51,6 @@
  * 
  */
 
-#include <linux/config.h>
 #include <linux/kernel.h>
 #include <linux/errno.h>
 #include <linux/init.h>
@@ -63,7 +62,7 @@
 #include <linux/spinlock.h>
 #include <asm/uaccess.h>
 #include <linux/usb.h>
-#include "usb-serial.h"
+#include <linux/usb/serial.h>
 
 static int debug;
 
@@ -93,9 +92,9 @@ static int  empeg_ioctl			(struct usb_serial_port *port,
 					struct file * file,
 					unsigned int cmd,
 					unsigned long arg);
-static void empeg_set_termios		(struct usb_serial_port *port, struct termios *old_termios);
-static void empeg_write_bulk_callback	(struct urb *urb, struct pt_regs *regs);
-static void empeg_read_bulk_callback	(struct urb *urb, struct pt_regs *regs);
+static void empeg_set_termios		(struct usb_serial_port *port, struct ktermios *old_termios);
+static void empeg_write_bulk_callback	(struct urb *urb);
+static void empeg_read_bulk_callback	(struct urb *urb);
 
 static struct usb_device_id id_table [] = {
 	{ USB_DEVICE(EMPEG_VENDOR_ID, EMPEG_PRODUCT_ID) },
@@ -324,7 +323,7 @@ static int empeg_chars_in_buffer (struct usb_serial_port *port)
 }
 
 
-static void empeg_write_bulk_callback (struct urb *urb, struct pt_regs *regs)
+static void empeg_write_bulk_callback (struct urb *urb)
 {
 	struct usb_serial_port *port = (struct usb_serial_port *)urb->context;
 
@@ -335,11 +334,11 @@ static void empeg_write_bulk_callback (struct urb *urb, struct pt_regs *regs)
 		return;
 	}
 
-	schedule_work(&port->work);
+	usb_serial_port_softint(port);
 }
 
 
-static void empeg_read_bulk_callback (struct urb *urb, struct pt_regs *regs)
+static void empeg_read_bulk_callback (struct urb *urb)
 {
 	struct usb_serial_port *port = (struct usb_serial_port *)urb->context;
 	struct tty_struct *tty;
@@ -443,7 +442,7 @@ static int empeg_ioctl (struct usb_serial_port *port, struct file * file, unsign
 }
 
 
-static void empeg_set_termios (struct usb_serial_port *port, struct termios *old_termios)
+static void empeg_set_termios (struct usb_serial_port *port, struct ktermios *old_termios)
 {
 
 	dbg("%s - port %d", __FUNCTION__, port->number);

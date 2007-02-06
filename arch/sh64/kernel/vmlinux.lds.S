@@ -22,7 +22,6 @@
  *    Remove support for ancient toolchains.
  */
 
-#include <linux/config.h>
 #include <asm/page.h>
 #include <asm/cache.h>
 #include <asm/processor.h>
@@ -109,13 +108,7 @@ SECTIONS
   __setup_end = .;
   __initcall_start = .;
   .initcall.init : C_PHYS(.initcall.init) {
-  	*(.initcall1.init)
-  	*(.initcall2.init)
-  	*(.initcall3.init)
-  	*(.initcall4.init)
-  	*(.initcall5.init)
-  	*(.initcall6.init)
-  	*(.initcall7.init)
+	INITCALLS
   }
   __initcall_end = .;
   __con_initcall_start = .;

@@ -1,5 +1,5 @@
 /*
- *	linux/arch/i386/mach_visws/visws_apic.c
+ *	linux/arch/i386/mach-visws/visws_apic.c
  *
  *	Copyright (C) 1999 Bent Hagemark, Ingo Molnar
  *
@@ -16,7 +16,6 @@
  *  25/11/2002 - Updated for 2.5 by Andrey Panin <pazke@orbita1.ru>
  */
 
-#include <linux/config.h>
 #include <linux/kernel_stat.h>
 #include <linux/interrupt.h>
 #include <linux/smp_lock.h>
@@ -123,7 +122,7 @@ static void end_cobalt_irq(unsigned int irq)
 	spin_unlock_irqrestore(&cobalt_lock, flags);
 }
 
-static struct hw_interrupt_type cobalt_irq_type = {
+static struct irq_chip cobalt_irq_type = {
 	.typename =	"Cobalt-APIC",
 	.startup =	startup_cobalt_irq,
 	.shutdown =	disable_cobalt_irq,
@@ -160,7 +159,7 @@ static void end_piix4_master_irq(unsigned int irq)
 	spin_unlock_irqrestore(&cobalt_lock, flags);
 }
 
-static struct hw_interrupt_type piix4_master_irq_type = {
+static struct irq_chip piix4_master_irq_type = {
 	.typename =	"PIIX4-master",
 	.startup =	startup_piix4_master_irq,
 	.ack =		ack_cobalt_irq,
@@ -168,9 +167,8 @@ static struct hw_interrupt_type piix4_master_irq_type = {
 };
 
 
-static struct hw_interrupt_type piix4_virtual_irq_type = {
+static struct irq_chip piix4_virtual_irq_type = {
 	.typename =	"PIIX4-virtual",
-	.startup =	startup_8259A_irq,
 	.shutdown =	disable_8259A_irq,
 	.enable =	enable_8259A_irq,
 	.disable =	disable_8259A_irq,
@@ -192,7 +190,7 @@ static struct hw_interrupt_type piix4_virtual_irq_type = {
  * enable_irq gets the right irq. This 'master' irq is never directly
  * manipulated by any driver.
  */
-static irqreturn_t piix4_master_intr(int irq, void *dev_id, struct pt_regs * regs)
+static irqreturn_t piix4_master_intr(int irq, void *dev_id)
 {
 	int realirq;
 	irq_desc_t *desc;
@@ -245,7 +243,7 @@ static irqreturn_t piix4_master_intr(int irq, void *dev_id, struct pt_regs * reg
 	kstat_cpu(smp_processor_id()).irqs[realirq]++;
 
 	if (likely(desc->action != NULL))
-		handle_IRQ_event(realirq, regs, desc->action);
+		handle_IRQ_event(realirq, desc->action);
 
 	if (!(desc->status & IRQ_DISABLED))
 		enable_8259A_irq(realirq);
@@ -278,22 +276,22 @@ void init_VISWS_APIC_irqs(void)
 		irq_desc[i].depth = 1;
 
 		if (i == 0) {
-			irq_desc[i].handler = &cobalt_irq_type;
+			irq_desc[i].chip = &cobalt_irq_type;
 		}
 		else if (i == CO_IRQ_IDE0) {
-			irq_desc[i].handler = &cobalt_irq_type;
+			irq_desc[i].chip = &cobalt_irq_type;
 		}
 		else if (i == CO_IRQ_IDE1) {
-			irq_desc[i].handler = &cobalt_irq_type;
+			irq_desc[i].chip = &cobalt_irq_type;
 		}
 		else if (i == CO_IRQ_8259) {
-			irq_desc[i].handler = &piix4_master_irq_type;
+			irq_desc[i].chip = &piix4_master_irq_type;
 		}
 		else if (i < CO_IRQ_APIC0) {
-			irq_desc[i].handler = &piix4_virtual_irq_type;
+			irq_desc[i].chip = &piix4_virtual_irq_type;
 		}
 		else if (IS_CO_APIC(i)) {
-			irq_desc[i].handler = &cobalt_irq_type;
+			irq_desc[i].chip = &cobalt_irq_type;
 		}
 	}
 

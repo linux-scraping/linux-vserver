@@ -13,7 +13,6 @@
 #include <linux/string.h>
 #include <linux/netfilter.h>
 #include <linux/netfilter_ipv4.h>
-#include <net/inet_ecn.h>
 #include <net/ip.h>
 #include <net/xfrm.h>
 
@@ -24,16 +23,7 @@ int xfrm4_rcv(struct sk_buff *skb)
 
 EXPORT_SYMBOL(xfrm4_rcv);
 
-static inline void ipip_ecn_decapsulate(struct sk_buff *skb)
-{
-	struct iphdr *outer_iph = skb->nh.iph;
-	struct iphdr *inner_iph = skb->h.ipiph;
-
-	if (INET_ECN_is_ce(outer_iph->tos))
-		IP_ECN_set_ce(inner_iph);
-}
-
-static int xfrm4_parse_spi(struct sk_buff *skb, u8 nexthdr, u32 *spi, u32 *seq)
+static int xfrm4_parse_spi(struct sk_buff *skb, u8 nexthdr, __be32 *spi, __be32 *seq)
 {
 	switch (nexthdr) {
 	case IPPROTO_IPIP:
@@ -65,7 +55,7 @@ drop:
 int xfrm4_rcv_encap(struct sk_buff *skb, __u16 encap_type)
 {
 	int err;
-	u32 spi, seq;
+	__be32 spi, seq;
 	struct xfrm_state *xfrm_vec[XFRM_MAX_DEPTH];
 	struct xfrm_state *x;
 	int xfrm_nr = 0;
@@ -113,24 +103,10 @@ int xfrm4_rcv_encap(struct sk_buff *skb, __u16 encap_type)
 
 		xfrm_vec[xfrm_nr++] = x;
 
-		iph = skb->nh.iph;
+		if (x->mode->input(x, skb))
+			goto drop;
 
-		if (x->props.mode) {
-			if (iph->protocol != IPPROTO_IPIP)
-				goto drop;
-			if (!pskb_may_pull(skb, sizeof(struct iphdr)))
-				goto drop;
-			if (skb_cloned(skb) &&
-			    pskb_expand_head(skb, 0, 0, GFP_ATOMIC))
-				goto drop;
-			if (x->props.flags & XFRM_STATE_DECAP_DSCP)
-				ipv4_copy_dscp(iph, skb->h.ipiph);
-			if (!(x->props.flags & XFRM_STATE_NOECN))
-				ipip_ecn_decapsulate(skb);
-			skb->mac.raw = memmove(skb->data - skb->mac_len,
-					       skb->mac.raw, skb->mac_len);
-			skb->nh.raw = skb->data;
-			memset(&(IPCB(skb)->opt), 0, sizeof(struct ip_options));
+		if (x->props.mode == XFRM_MODE_TUNNEL) {
 			decaps = 1;
 			break;
 		}

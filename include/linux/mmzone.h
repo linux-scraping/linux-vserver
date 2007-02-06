@@ -4,7 +4,6 @@
 #ifdef __KERNEL__
 #ifndef __ASSEMBLY__
 
-#include <linux/config.h>
 #include <linux/spinlock.h>
 #include <linux/list.h>
 #include <linux/wait.h>
@@ -47,6 +46,29 @@ struct zone_padding {
 #define ZONE_PADDING(name)
 #endif
 
+enum zone_stat_item {
+	NR_ANON_PAGES,	/* Mapped anonymous pages */
+	NR_FILE_MAPPED,	/* pagecache pages mapped into pagetables.
+			   only modified from process context */
+	NR_FILE_PAGES,
+	NR_SLAB_RECLAIMABLE,
+	NR_SLAB_UNRECLAIMABLE,
+	NR_PAGETABLE,	/* used for pagetables */
+	NR_FILE_DIRTY,
+	NR_WRITEBACK,
+	NR_UNSTABLE_NFS,	/* NFS unstable pages */
+	NR_BOUNCE,
+	NR_VMSCAN_WRITE,
+#ifdef CONFIG_NUMA
+	NUMA_HIT,		/* allocated in intended node */
+	NUMA_MISS,		/* allocated in non intended node */
+	NUMA_FOREIGN,		/* was intended here, hit elsewhere */
+	NUMA_INTERLEAVE_HIT,	/* interleaver preferred this zone */
+	NUMA_LOCAL,		/* allocation from local node */
+	NUMA_OTHER,		/* allocation from other node */
+#endif
+	NR_VM_ZONE_STAT_ITEMS };
+
 struct per_cpu_pages {
 	int count;		/* number of pages in the list */
 	int high;		/* high watermark, emptying needed */
@@ -56,13 +78,9 @@ struct per_cpu_pages {
 
 struct per_cpu_pageset {
 	struct per_cpu_pages pcp[2];	/* 0: hot.  1: cold */
-#ifdef CONFIG_NUMA
-	unsigned long numa_hit;		/* allocated in intended node */
-	unsigned long numa_miss;	/* allocated in non intended node */
-	unsigned long numa_foreign;	/* was intended here, hit elsewhere */
-	unsigned long interleave_hit; 	/* interleaver prefered this zone */
-	unsigned long local_node;	/* allocation from local node */
-	unsigned long other_node;	/* allocation from other node */
+#ifdef CONFIG_SMP
+	s8 stat_threshold;
+	s8 vm_stat_diff[NR_VM_ZONE_STAT_ITEMS];
 #endif
 } ____cacheline_aligned_in_smp;
 
@@ -72,53 +90,68 @@ struct per_cpu_pageset {
 #define zone_pcp(__z, __cpu) (&(__z)->pageset[(__cpu)])
 #endif
 
-#define ZONE_DMA		0
-#define ZONE_DMA32		1
-#define ZONE_NORMAL		2
-#define ZONE_HIGHMEM		3
-
-#define MAX_NR_ZONES		4	/* Sync this with ZONES_SHIFT */
-#define ZONES_SHIFT		2	/* ceil(log2(MAX_NR_ZONES)) */
-
+enum zone_type {
+	/*
+	 * ZONE_DMA is used when there are devices that are not able
+	 * to do DMA to all of addressable memory (ZONE_NORMAL). Then we
+	 * carve out the portion of memory that is needed for these devices.
+	 * The range is arch specific.
+	 *
+	 * Some examples
+	 *
+	 * Architecture		Limit
+	 * ---------------------------
+	 * parisc, ia64, sparc	<4G
+	 * s390			<2G
+	 * arm26		<48M
+	 * arm			Various
+	 * alpha		Unlimited or 0-16MB.
+	 *
+	 * i386, x86_64 and multiple other arches
+	 * 			<16M.
+	 */
+	ZONE_DMA,
+#ifdef CONFIG_ZONE_DMA32
+	/*
+	 * x86_64 needs two ZONE_DMAs because it supports devices that are
+	 * only able to do DMA to the lower 16M but also 32 bit devices that
+	 * can only do DMA areas below 4G.
+	 */
+	ZONE_DMA32,
+#endif
+	/*
+	 * Normal addressable memory is in ZONE_NORMAL. DMA operations can be
+	 * performed on pages in ZONE_NORMAL if the DMA devices support
+	 * transfers to all addressable memory.
+	 */
+	ZONE_NORMAL,
+#ifdef CONFIG_HIGHMEM
+	/*
+	 * A memory area that is only addressable by the kernel through
+	 * mapping portions into its own address space. This is for example
+	 * used by i386 to allow the kernel to address the memory beyond
+	 * 900MB. The kernel will set up special mappings (page
+	 * table entries on i386) for each page that the kernel needs to
+	 * access.
+	 */
+	ZONE_HIGHMEM,
+#endif
+	MAX_NR_ZONES
+};
 
 /*
  * When a memory allocation must conform to specific limitations (such
  * as being suitable for DMA) the caller will pass in hints to the
  * allocator in the gfp_mask, in the zone modifier bits.  These bits
  * are used to select a priority ordered list of memory zones which
- * match the requested limits.  GFP_ZONEMASK defines which bits within
- * the gfp_mask should be considered as zone modifiers.  Each valid
- * combination of the zone modifier bits has a corresponding list
- * of zones (in node_zonelists).  Thus for two zone modifiers there
- * will be a maximum of 4 (2 ** 2) zonelists, for 3 modifiers there will
- * be 8 (2 ** 3) zonelists.  GFP_ZONETYPES defines the number of possible
- * combinations of zone modifiers in "zone modifier space".
- *
- * As an optimisation any zone modifier bits which are only valid when
- * no other zone modifier bits are set (loners) should be placed in
- * the highest order bits of this field.  This allows us to reduce the
- * extent of the zonelists thus saving space.  For example in the case
- * of three zone modifier bits, we could require up to eight zonelists.
- * If the left most zone modifier is a "loner" then the highest valid
- * zonelist would be four allowing us to allocate only five zonelists.
- * Use the first form for GFP_ZONETYPES when the left most bit is not
- * a "loner", otherwise use the second.
- *
- * NOTE! Make sure this matches the zones in <linux/gfp.h>
+ * match the requested limits. See gfp_zone() in include/linux/gfp.h
  */
-#define GFP_ZONEMASK	0x07
-/* #define GFP_ZONETYPES       (GFP_ZONEMASK + 1) */           /* Non-loner */
-#define GFP_ZONETYPES  ((GFP_ZONEMASK + 1) / 2 + 1)            /* Loner */
 
-/*
- * On machines where it is needed (eg PCs) we divide physical memory
- * into multiple physical zones. On a 32bit PC we have 4 zones:
- *
- * ZONE_DMA	  < 16 MB	ISA DMA capable memory
- * ZONE_DMA32	     0 MB 	Empty
- * ZONE_NORMAL	16-896 MB	direct mapped by the kernel
- * ZONE_HIGHMEM	 > 896 MB	only page cache and user processes
- */
+#if !defined(CONFIG_ZONE_DMA32) && !defined(CONFIG_HIGHMEM)
+#define ZONES_SHIFT 1
+#else
+#define ZONES_SHIFT 2
+#endif
 
 struct zone {
 	/* Fields commonly accessed by the page allocator */
@@ -135,6 +168,12 @@ struct zone {
 	unsigned long		lowmem_reserve[MAX_NR_ZONES];
 
 #ifdef CONFIG_NUMA
+	int node;
+	/*
+	 * zone reclaim becomes active if more unmapped pages exist.
+	 */
+	unsigned long		min_unmapped_pages;
+	unsigned long		min_slab_pages;
 	struct per_cpu_pageset	*pageset[NR_CPUS];
 #else
 	struct per_cpu_pageset	pageset[NR_CPUS];
@@ -166,12 +205,8 @@ struct zone {
 	/* A count of how many reclaimers are scanning this zone */
 	atomic_t		reclaim_in_progress;
 
-	/*
-	 * timestamp (in jiffies) of the last zone reclaim that did not
-	 * result in freeing of pages. This is used to avoid repeated scans
-	 * if all memory in the zone is in use.
-	 */
-	unsigned long		last_unsuccessful_zone_reclaim;
+	/* Zone statistics */
+	atomic_long_t		vm_stat[NR_VM_ZONE_STAT_ITEMS];
 
 	/*
 	 * prev_priority holds the scanning priority for this zone.  It is
@@ -183,13 +218,9 @@ struct zone {
 	 * under - it drives the swappiness decision: whether to unmap mapped
 	 * pages.
 	 *
-	 * temp_priority is used to remember the scanning priority at which
-	 * this zone was successfully refilled to free_pages == pages_high.
-	 *
-	 * Access to both these fields is quite racy even on uniprocessor.  But
+	 * Access to both this field is quite racy even on uniprocessor.  But
 	 * it is expected to average out OK.
 	 */
-	int temp_priority;
 	int prev_priority;
 
 
@@ -198,7 +229,7 @@ struct zone {
 
 	/*
 	 * wait_table		-- the array holding the hash table
-	 * wait_table_size	-- the size of the hash table array
+	 * wait_table_hash_nr_entries	-- the size of the hash table array
 	 * wait_table_bits	-- wait_table_size == (1 << wait_table_bits)
 	 *
 	 * The purpose of all these is to keep track of the people
@@ -221,7 +252,7 @@ struct zone {
 	 * free_area_init_core() performs the initialization of them.
 	 */
 	wait_queue_head_t	* wait_table;
-	unsigned long		wait_table_size;
+	unsigned long		wait_table_hash_nr_entries;
 	unsigned long		wait_table_bits;
 
 	/*
@@ -247,9 +278,8 @@ struct zone {
 	/*
 	 * rarely used fields:
 	 */
-	char			*name;
+	const char		*name;
 } ____cacheline_internodealigned_in_smp;
-
 
 /*
  * The "priority" of VM scanning is how much of the queues we will scan in one
@@ -258,21 +288,108 @@ struct zone {
  */
 #define DEF_PRIORITY 12
 
+/* Maximum number of zones on a zonelist */
+#define MAX_ZONES_PER_ZONELIST (MAX_NUMNODES * MAX_NR_ZONES)
+
+#ifdef CONFIG_NUMA
+/*
+ * We cache key information from each zonelist for smaller cache
+ * footprint when scanning for free pages in get_page_from_freelist().
+ *
+ * 1) The BITMAP fullzones tracks which zones in a zonelist have come
+ *    up short of free memory since the last time (last_fullzone_zap)
+ *    we zero'd fullzones.
+ * 2) The array z_to_n[] maps each zone in the zonelist to its node
+ *    id, so that we can efficiently evaluate whether that node is
+ *    set in the current tasks mems_allowed.
+ *
+ * Both fullzones and z_to_n[] are one-to-one with the zonelist,
+ * indexed by a zones offset in the zonelist zones[] array.
+ *
+ * The get_page_from_freelist() routine does two scans.  During the
+ * first scan, we skip zones whose corresponding bit in 'fullzones'
+ * is set or whose corresponding node in current->mems_allowed (which
+ * comes from cpusets) is not set.  During the second scan, we bypass
+ * this zonelist_cache, to ensure we look methodically at each zone.
+ *
+ * Once per second, we zero out (zap) fullzones, forcing us to
+ * reconsider nodes that might have regained more free memory.
+ * The field last_full_zap is the time we last zapped fullzones.
+ *
+ * This mechanism reduces the amount of time we waste repeatedly
+ * reexaming zones for free memory when they just came up low on
+ * memory momentarilly ago.
+ *
+ * The zonelist_cache struct members logically belong in struct
+ * zonelist.  However, the mempolicy zonelists constructed for
+ * MPOL_BIND are intentionally variable length (and usually much
+ * shorter).  A general purpose mechanism for handling structs with
+ * multiple variable length members is more mechanism than we want
+ * here.  We resort to some special case hackery instead.
+ *
+ * The MPOL_BIND zonelists don't need this zonelist_cache (in good
+ * part because they are shorter), so we put the fixed length stuff
+ * at the front of the zonelist struct, ending in a variable length
+ * zones[], as is needed by MPOL_BIND.
+ *
+ * Then we put the optional zonelist cache on the end of the zonelist
+ * struct.  This optional stuff is found by a 'zlcache_ptr' pointer in
+ * the fixed length portion at the front of the struct.  This pointer
+ * both enables us to find the zonelist cache, and in the case of
+ * MPOL_BIND zonelists, (which will just set the zlcache_ptr to NULL)
+ * to know that the zonelist cache is not there.
+ *
+ * The end result is that struct zonelists come in two flavors:
+ *  1) The full, fixed length version, shown below, and
+ *  2) The custom zonelists for MPOL_BIND.
+ * The custom MPOL_BIND zonelists have a NULL zlcache_ptr and no zlcache.
+ *
+ * Even though there may be multiple CPU cores on a node modifying
+ * fullzones or last_full_zap in the same zonelist_cache at the same
+ * time, we don't lock it.  This is just hint data - if it is wrong now
+ * and then, the allocator will still function, perhaps a bit slower.
+ */
+
+
+struct zonelist_cache {
+	unsigned short z_to_n[MAX_ZONES_PER_ZONELIST];		/* zone->nid */
+	DECLARE_BITMAP(fullzones, MAX_ZONES_PER_ZONELIST);	/* zone full? */
+	unsigned long last_full_zap;		/* when last zap'd (jiffies) */
+};
+#else
+struct zonelist_cache;
+#endif
+
 /*
  * One allocation request operates on a zonelist. A zonelist
  * is a list of zones, the first one is the 'goal' of the
  * allocation, the other zones are fallback zones, in decreasing
  * priority.
  *
- * Right now a zonelist takes up less than a cacheline. We never
- * modify it apart from boot-up, and only a few indices are used,
- * so despite the zonelist table being relatively big, the cache
- * footprint of this construct is very small.
+ * If zlcache_ptr is not NULL, then it is just the address of zlcache,
+ * as explained above.  If zlcache_ptr is NULL, there is no zlcache.
  */
+
 struct zonelist {
-	struct zone *zones[MAX_NUMNODES * MAX_NR_ZONES + 1]; // NULL delimited
+	struct zonelist_cache *zlcache_ptr;		     // NULL or &zlcache
+	struct zone *zones[MAX_ZONES_PER_ZONELIST + 1];      // NULL delimited
+#ifdef CONFIG_NUMA
+	struct zonelist_cache zlcache;			     // optional ...
+#endif
 };
 
+#ifdef CONFIG_ARCH_POPULATES_NODE_MAP
+struct node_active_region {
+	unsigned long start_pfn;
+	unsigned long end_pfn;
+	int nid;
+};
+#endif /* CONFIG_ARCH_POPULATES_NODE_MAP */
+
+#ifndef CONFIG_DISCONTIGMEM
+/* The array of struct pages - for discontigmem use pgdat->lmem_map */
+extern struct page *mem_map;
+#endif
 
 /*
  * The pg_data_t structure is used in machines with CONFIG_DISCONTIGMEM
@@ -288,7 +405,7 @@ struct zonelist {
 struct bootmem_data;
 typedef struct pglist_data {
 	struct zone node_zones[MAX_NR_ZONES];
-	struct zonelist node_zonelists[GFP_ZONETYPES];
+	struct zonelist node_zonelists[MAX_NR_ZONES];
 	int nr_zones;
 #ifdef CONFIG_FLAT_NODE_MEM_MAP
 	struct page *node_mem_map;
@@ -333,6 +450,13 @@ void build_all_zonelists(void);
 void wakeup_kswapd(struct zone *zone, int order);
 int zone_watermark_ok(struct zone *z, int order, unsigned long mark,
 		int classzone_idx, int alloc_flags);
+enum memmap_context {
+	MEMMAP_EARLY,
+	MEMMAP_HOTPLUG,
+};
+extern int init_currently_empty_zone(struct zone *zone, unsigned long start_pfn,
+				     unsigned long size,
+				     enum memmap_context context);
 
 #ifdef CONFIG_HAVE_MEMORY_PRESENT
 void memory_present(int nid, unsigned long start, unsigned long end);
@@ -354,12 +478,16 @@ static inline int populated_zone(struct zone *zone)
 	return (!!zone->present_pages);
 }
 
-static inline int is_highmem_idx(int idx)
+static inline int is_highmem_idx(enum zone_type idx)
 {
+#ifdef CONFIG_HIGHMEM
 	return (idx == ZONE_HIGHMEM);
+#else
+	return 0;
+#endif
 }
 
-static inline int is_normal_idx(int idx)
+static inline int is_normal_idx(enum zone_type idx)
 {
 	return (idx == ZONE_NORMAL);
 }
@@ -372,7 +500,11 @@ static inline int is_normal_idx(int idx)
  */
 static inline int is_highmem(struct zone *zone)
 {
+#ifdef CONFIG_HIGHMEM
 	return zone == zone->zone_pgdat->node_zones + ZONE_HIGHMEM;
+#else
+	return 0;
+#endif
 }
 
 static inline int is_normal(struct zone *zone)
@@ -382,7 +514,11 @@ static inline int is_normal(struct zone *zone)
 
 static inline int is_dma32(struct zone *zone)
 {
+#ifdef CONFIG_ZONE_DMA32
 	return zone == zone->zone_pgdat->node_zones + ZONE_DMA32;
+#else
+	return 0;
+#endif
 }
 
 static inline int is_dma(struct zone *zone)
@@ -400,6 +536,10 @@ int lowmem_reserve_ratio_sysctl_handler(struct ctl_table *, int, struct file *,
 					void __user *, size_t *, loff_t *);
 int percpu_pagelist_fraction_sysctl_handler(struct ctl_table *, int, struct file *,
 					void __user *, size_t *, loff_t *);
+int sysctl_min_unmapped_ratio_sysctl_handler(struct ctl_table *, int,
+			struct file *, void __user *, size_t *, loff_t *);
+int sysctl_min_slab_ratio_sysctl_handler(struct ctl_table *, int,
+			struct file *, void __user *, size_t *, loff_t *);
 
 #include <linux/topology.h>
 /* Returns the number of the current Node. */
@@ -467,7 +607,8 @@ extern struct zone *next_zone(struct zone *zone);
 
 #endif
 
-#ifndef CONFIG_HAVE_ARCH_EARLY_PFN_TO_NID
+#if !defined(CONFIG_HAVE_ARCH_EARLY_PFN_TO_NID) && \
+	!defined(CONFIG_ARCH_POPULATES_NODE_MAP)
 #define early_pfn_to_nid(nid)  (0UL)
 #endif
 
@@ -506,6 +647,10 @@ struct mem_section {
 	 * This is, logically, a pointer to an array of struct
 	 * pages.  However, it is stored with some other magic.
 	 * (see sparse.c::sparse_init_one_section())
+	 *
+	 * Additionally during early boot we encode node id of
+	 * the location of the section here to guide allocation.
+	 * (see sparse.c::memory_present())
 	 *
 	 * Making it a UL at least makes someone do a cast
 	 * before using it wrong.
@@ -546,6 +691,7 @@ extern int __section_nr(struct mem_section* ms);
 #define SECTION_HAS_MEM_MAP	(1UL<<1)
 #define SECTION_MAP_LAST_BIT	(1UL<<2)
 #define SECTION_MAP_MASK	(~(SECTION_MAP_LAST_BIT-1))
+#define SECTION_NID_SHIFT	2
 
 static inline struct page *__section_mem_map_addr(struct mem_section *section)
 {
@@ -602,6 +748,12 @@ void sparse_init(void);
 #define sparse_init()	do {} while (0)
 #define sparse_index_init(_sec, _nid)  do {} while (0)
 #endif /* CONFIG_SPARSEMEM */
+
+#ifdef CONFIG_NODES_SPAN_OTHER_NODES
+#define early_pfn_in_nid(pfn, nid)	(early_pfn_to_nid(pfn) == (nid))
+#else
+#define early_pfn_in_nid(pfn, nid)	(1)
+#endif
 
 #ifndef early_pfn_valid
 #define early_pfn_valid(pfn)	(1)

@@ -12,7 +12,6 @@
  * 2 of the License, or (at your option) any later version.
  */
 
-#include <linux/config.h>
 #include <linux/kernel.h>
 #include <linux/spinlock.h>
 #include <linux/module.h>
@@ -24,6 +23,7 @@
 #include <asm/hvcall.h>
 #include <asm/iseries/hv_call.h>
 #include <asm/smp.h>
+#include <asm/firmware.h>
 
 void __spin_yield(raw_spinlock_t *lock)
 {
@@ -40,13 +40,12 @@ void __spin_yield(raw_spinlock_t *lock)
 	rmb();
 	if (lock->slock != lock_value)
 		return;		/* something has changed */
-#ifdef CONFIG_PPC_ISERIES
-	HvCall2(HvCallBaseYieldProcessor, HvCall_YieldToProc,
-		((u64)holder_cpu << 32) | yield_count);
-#else
-	plpar_hcall_norets(H_CONFER, get_hard_smp_processor_id(holder_cpu),
-			   yield_count);
-#endif
+	if (firmware_has_feature(FW_FEATURE_ISERIES))
+		HvCall2(HvCallBaseYieldProcessor, HvCall_YieldToProc,
+			((u64)holder_cpu << 32) | yield_count);
+	else
+		plpar_hcall_norets(H_CONFER,
+			get_hard_smp_processor_id(holder_cpu), yield_count);
 }
 
 /*
@@ -70,13 +69,12 @@ void __rw_yield(raw_rwlock_t *rw)
 	rmb();
 	if (rw->lock != lock_value)
 		return;		/* something has changed */
-#ifdef CONFIG_PPC_ISERIES
-	HvCall2(HvCallBaseYieldProcessor, HvCall_YieldToProc,
-		((u64)holder_cpu << 32) | yield_count);
-#else
-	plpar_hcall_norets(H_CONFER, get_hard_smp_processor_id(holder_cpu),
-			   yield_count);
-#endif
+	if (firmware_has_feature(FW_FEATURE_ISERIES))
+		HvCall2(HvCallBaseYieldProcessor, HvCall_YieldToProc,
+			((u64)holder_cpu << 32) | yield_count);
+	else
+		plpar_hcall_norets(H_CONFER,
+			get_hard_smp_processor_id(holder_cpu), yield_count);
 }
 #endif
 

@@ -23,7 +23,6 @@
  *
  */
 
-#include <linux/config.h>
 #include <linux/init.h>
 #include <linux/kernel.h>
 #include <linux/sched.h>
@@ -229,7 +228,7 @@ void acpi_table_print_madt_entry(acpi_table_entry_header * header)
 static int
 acpi_table_compute_checksum(void *table_pointer, unsigned long length)
 {
-	u8 *p = (u8 *) table_pointer;
+	u8 *p = table_pointer;
 	unsigned long remains = length;
 	unsigned long sum = 0;
 
@@ -282,8 +281,8 @@ acpi_get_table_header_early(enum acpi_table_id id,
 
 	/* Map the DSDT header via the pointer in the FADT */
 	if (id == ACPI_DSDT) {
-		struct fadt_descriptor_rev2 *fadt =
-		    (struct fadt_descriptor_rev2 *)*header;
+		struct fadt_descriptor *fadt =
+		    (struct fadt_descriptor *)*header;
 
 		if (fadt->revision == 3 && fadt->Xdsdt) {
 			*header = (void *)__acpi_map_table(fadt->Xdsdt,

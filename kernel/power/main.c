@@ -8,6 +8,7 @@
  *
  */
 
+#include <linux/module.h>
 #include <linux/suspend.h>
 #include <linux/kobject.h>
 #include <linux/string.h>
@@ -15,17 +16,20 @@
 #include <linux/errno.h>
 #include <linux/init.h>
 #include <linux/pm.h>
-
+#include <linux/console.h>
+#include <linux/cpu.h>
+#include <linux/resume-trace.h>
+#include <linux/freezer.h>
 
 #include "power.h"
 
 /*This is just an arbitrary number */
 #define FREE_PAGE_NUMBER (100)
 
-DECLARE_MUTEX(pm_sem);
+DEFINE_MUTEX(pm_mutex);
 
 struct pm_ops *pm_ops;
-suspend_disk_method_t pm_disk_mode = PM_DISK_SHUTDOWN;
+suspend_disk_method_t pm_disk_mode = PM_DISK_PLATFORM;
 
 /**
  *	pm_set_ops - Set the global power method table. 
@@ -34,9 +38,9 @@ suspend_disk_method_t pm_disk_mode = PM_DISK_SHUTDOWN;
 
 void pm_set_ops(struct pm_ops * ops)
 {
-	down(&pm_sem);
+	mutex_lock(&pm_mutex);
 	pm_ops = ops;
-	up(&pm_sem);
+	mutex_unlock(&pm_mutex);
 }
 
 
@@ -51,7 +55,7 @@ void pm_set_ops(struct pm_ops * ops)
 
 static int suspend_prepare(suspend_state_t state)
 {
-	int error = 0;
+	int error;
 	unsigned int free_pages;
 
 	if (!pm_ops || !pm_ops->enter)
@@ -59,12 +63,9 @@ static int suspend_prepare(suspend_state_t state)
 
 	pm_prepare_console();
 
-	disable_nonboot_cpus();
-
-	if (num_online_cpus() != 1) {
-		error = -EPERM;
+	error = disable_nonboot_cpus();
+	if (error)
 		goto Enable_cpu;
-	}
 
 	if (freeze_processes()) {
 		error = -EAGAIN;
@@ -86,6 +87,7 @@ static int suspend_prepare(suspend_state_t state)
 			goto Thaw;
 	}
 
+	suspend_console();
 	if ((error = device_suspend(PMSG_SUSPEND))) {
 		printk(KERN_ERR "Some devices failed to suspend\n");
 		goto Finish;
@@ -133,6 +135,7 @@ int suspend_enter(suspend_state_t state)
 static void suspend_finish(suspend_state_t state)
 {
 	device_resume();
+	resume_console();
 	thaw_processes();
 	enable_nonboot_cpus();
 	if (pm_ops && pm_ops->finish)
@@ -143,7 +146,7 @@ static void suspend_finish(suspend_state_t state)
 
 
 
-static char *pm_states[PM_SUSPEND_MAX] = {
+static const char * const pm_states[PM_SUSPEND_MAX] = {
 	[PM_SUSPEND_STANDBY]	= "standby",
 	[PM_SUSPEND_MEM]	= "mem",
 #ifdef CONFIG_SOFTWARE_SUSPEND
@@ -181,7 +184,7 @@ static int enter_state(suspend_state_t state)
 
 	if (!valid_state(state))
 		return -ENODEV;
-	if (down_trylock(&pm_sem))
+	if (!mutex_trylock(&pm_mutex))
 		return -EBUSY;
 
 	if (state == PM_SUSPEND_DISK) {
@@ -199,7 +202,7 @@ static int enter_state(suspend_state_t state)
 	pr_debug("PM: Finishing wakeup.\n");
 	suspend_finish(state);
  Unlock:
-	up(&pm_sem);
+	mutex_unlock(&pm_mutex);
 	return error;
 }
 
@@ -228,7 +231,7 @@ int pm_suspend(suspend_state_t state)
 	return -EINVAL;
 }
 
-
+EXPORT_SYMBOL(pm_suspend);
 
 decl_subsys(power,NULL,NULL);
 
@@ -260,7 +263,7 @@ static ssize_t state_show(struct subsystem * subsys, char * buf)
 static ssize_t state_store(struct subsystem * subsys, const char * buf, size_t n)
 {
 	suspend_state_t state = PM_SUSPEND_STANDBY;
-	char ** s;
+	const char * const *s;
 	char *p;
 	int error;
 	int len;
@@ -281,10 +284,39 @@ static ssize_t state_store(struct subsystem * subsys, const char * buf, size_t n
 
 power_attr(state);
 
+#ifdef CONFIG_PM_TRACE
+int pm_trace_enabled;
+
+static ssize_t pm_trace_show(struct subsystem * subsys, char * buf)
+{
+	return sprintf(buf, "%d\n", pm_trace_enabled);
+}
+
+static ssize_t
+pm_trace_store(struct subsystem * subsys, const char * buf, size_t n)
+{
+	int val;
+
+	if (sscanf(buf, "%d", &val) == 1) {
+		pm_trace_enabled = !!val;
+		return n;
+	}
+	return -EINVAL;
+}
+
+power_attr(pm_trace);
+
+static struct attribute * g[] = {
+	&state_attr.attr,
+	&pm_trace_attr.attr,
+	NULL,
+};
+#else
 static struct attribute * g[] = {
 	&state_attr.attr,
 	NULL,
 };
+#endif /* CONFIG_PM_TRACE */
 
 static struct attribute_group attr_group = {
 	.attrs = g,

@@ -22,7 +22,9 @@ static inline int pm_suspend_disk(void)
 	return -EPERM;
 }
 #endif
-extern struct semaphore pm_sem;
+
+extern struct mutex pm_mutex;
+
 #define power_attr(_name) \
 static struct subsys_attribute _name##_attr = {	\
 	.attr	= {				\
@@ -38,33 +40,83 @@ extern struct subsystem power_subsys;
 /* References to section boundaries */
 extern const void __nosave_begin, __nosave_end;
 
-extern struct pbe *pagedir_nosave;
-
 /* Preferred image size in bytes (default 500 MB) */
 extern unsigned long image_size;
 extern int in_suspend;
 extern dev_t swsusp_resume_device;
+extern sector_t swsusp_resume_block;
 
 extern asmlinkage int swsusp_arch_suspend(void);
 extern asmlinkage int swsusp_arch_resume(void);
 
 extern unsigned int count_data_pages(void);
 
+/**
+ *	Auxiliary structure used for reading the snapshot image data and
+ *	metadata from and writing them to the list of page backup entries
+ *	(PBEs) which is the main data structure of swsusp.
+ *
+ *	Using struct snapshot_handle we can transfer the image, including its
+ *	metadata, as a continuous sequence of bytes with the help of
+ *	snapshot_read_next() and snapshot_write_next().
+ *
+ *	The code that writes the image to a storage or transfers it to
+ *	the user land is required to use snapshot_read_next() for this
+ *	purpose and it should not make any assumptions regarding the internal
+ *	structure of the image.  Similarly, the code that reads the image from
+ *	a storage or transfers it from the user land is required to use
+ *	snapshot_write_next().
+ *
+ *	This may allow us to change the internal structure of the image
+ *	in the future with considerably less effort.
+ */
+
 struct snapshot_handle {
-	loff_t		offset;
-	unsigned int	page;
-	unsigned int	page_offset;
-	unsigned int	prev;
-	struct pbe	*pbe;
-	void		*buffer;
-	unsigned int	buf_offset;
+	loff_t		offset;	/* number of the last byte ready for reading
+				 * or writing in the sequence
+				 */
+	unsigned int	cur;	/* number of the block of PAGE_SIZE bytes the
+				 * next operation will refer to (ie. current)
+				 */
+	unsigned int	cur_offset;	/* offset with respect to the current
+					 * block (for the next operation)
+					 */
+	unsigned int	prev;	/* number of the block of PAGE_SIZE bytes that
+				 * was the current one previously
+				 */
+	void		*buffer;	/* address of the block to read from
+					 * or write to
+					 */
+	unsigned int	buf_offset;	/* location to read from or write to,
+					 * given as a displacement from 'buffer'
+					 */
+	int		sync_read;	/* Set to one to notify the caller of
+					 * snapshot_write_next() that it may
+					 * need to call wait_on_bio_chain()
+					 */
 };
 
+/* This macro returns the address from/to which the caller of
+ * snapshot_read_next()/snapshot_write_next() is allowed to
+ * read/write data after the function returns
+ */
 #define data_of(handle)	((handle).buffer + (handle).buf_offset)
 
+extern unsigned int snapshot_additional_pages(struct zone *zone);
 extern int snapshot_read_next(struct snapshot_handle *handle, size_t count);
 extern int snapshot_write_next(struct snapshot_handle *handle, size_t count);
-int snapshot_image_loaded(struct snapshot_handle *handle);
+extern void snapshot_write_finalize(struct snapshot_handle *handle);
+extern int snapshot_image_loaded(struct snapshot_handle *handle);
+
+/*
+ * This structure is used to pass the values needed for the identification
+ * of the resume swap area from a user space to the kernel via the
+ * SNAPSHOT_SET_SWAP_AREA ioctl
+ */
+struct resume_swap_area {
+	loff_t offset;
+	u_int32_t dev;
+} __attribute__((packed));
 
 #define SNAPSHOT_IOC_MAGIC	'3'
 #define SNAPSHOT_FREEZE			_IO(SNAPSHOT_IOC_MAGIC, 1)
@@ -78,7 +130,14 @@ int snapshot_image_loaded(struct snapshot_handle *handle);
 #define SNAPSHOT_FREE_SWAP_PAGES	_IO(SNAPSHOT_IOC_MAGIC, 9)
 #define SNAPSHOT_SET_SWAP_FILE		_IOW(SNAPSHOT_IOC_MAGIC, 10, unsigned int)
 #define SNAPSHOT_S2RAM			_IO(SNAPSHOT_IOC_MAGIC, 11)
-#define SNAPSHOT_IOC_MAXNR	11
+#define SNAPSHOT_PMOPS			_IOW(SNAPSHOT_IOC_MAGIC, 12, unsigned int)
+#define SNAPSHOT_SET_SWAP_AREA		_IOW(SNAPSHOT_IOC_MAGIC, 13, \
+							struct resume_swap_area)
+#define SNAPSHOT_IOC_MAXNR	13
+
+#define PMOPS_PREPARE	1
+#define PMOPS_ENTER	2
+#define PMOPS_FINISH	3
 
 /**
  *	The bitmap is used for tracing allocated swap pages
@@ -102,7 +161,7 @@ struct bitmap_page {
 
 extern void free_bitmap(struct bitmap_page *bitmap);
 extern struct bitmap_page *alloc_bitmap(unsigned int nr_bits);
-extern unsigned long alloc_swap_page(int swap, struct bitmap_page *bitmap);
+extern sector_t alloc_swapdev_block(int swap, struct bitmap_page *bitmap);
 extern void free_all_swap_pages(int swap, struct bitmap_page *bitmap);
 
 extern int swsusp_check(void);
@@ -114,3 +173,7 @@ extern int swsusp_read(void);
 extern int swsusp_write(void);
 extern void swsusp_close(void);
 extern int suspend_enter(suspend_state_t state);
+
+struct timeval;
+extern void swsusp_show_speed(struct timeval *, struct timeval *,
+				unsigned int, char *);

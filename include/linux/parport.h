@@ -96,7 +96,6 @@ typedef enum {
 /* The rest is for the kernel only */
 #ifdef __KERNEL__
 
-#include <linux/config.h>
 #include <linux/jiffies.h>
 #include <linux/proc_fs.h>
 #include <linux/spinlock.h>
@@ -128,6 +127,10 @@ struct amiga_parport_state {
        unsigned char statusdir;/* ciab.ddrb & 7 */
 };
 
+struct ax88796_parport_state {
+	unsigned char cpr;
+};
+
 struct ip32_parport_state {
 	unsigned int dcr;
 	unsigned int ecr;
@@ -139,6 +142,7 @@ struct parport_state {
 		/* ARC has no state. */
 		struct ax_parport_state ax;
 		struct amiga_parport_state amiga;
+		struct ax88796_parport_state ax88796;
 		/* Atari has not state. */
 		struct ip32_parport_state ip32;
 		void *misc; 
@@ -225,7 +229,7 @@ struct pardevice {
 	int (*preempt)(void *);
 	void (*wakeup)(void *);
 	void *private;
-	void (*irq_func)(int, void *, struct pt_regs *);
+	void (*irq_func)(int, void *);
 	unsigned int flags;
 	struct pardevice *next;
 	struct pardevice *prev;
@@ -371,7 +375,7 @@ extern void parport_put_port (struct parport *);
 struct pardevice *parport_register_device(struct parport *port, 
 			  const char *name,
 			  int (*pf)(void *), void (*kf)(void *),
-			  void (*irq_func)(int, void *, struct pt_regs *), 
+			  void (*irq_func)(int, void *), 
 			  int flags, void *handle);
 
 /* parport_unregister unlinks a device from the chain. */
@@ -453,7 +457,7 @@ static __inline__ int parport_yield_blocking(struct pardevice *dev)
 #define PARPORT_FLAG_EXCL		(1<<1)	/* EXCL driver registered. */
 
 /* IEEE1284 functions */
-extern void parport_ieee1284_interrupt (int, void *, struct pt_regs *);
+extern void parport_ieee1284_interrupt (int, void *);
 extern int parport_negotiate (struct parport *, int mode);
 extern ssize_t parport_write (struct parport *, const void *buf, size_t len);
 extern ssize_t parport_read (struct parport *, void *buf, size_t len);
@@ -498,8 +502,7 @@ extern void parport_daisy_fini (struct parport *port);
 extern struct pardevice *parport_open (int devnum, const char *name,
 				       int (*pf) (void *),
 				       void (*kf) (void *),
-				       void (*irqf) (int, void *,
-						     struct pt_regs *),
+				       void (*irqf) (int, void *),
 				       int flags, void *handle);
 extern void parport_close (struct pardevice *dev);
 extern ssize_t parport_device_id (int devnum, char *buffer, size_t len);
@@ -508,13 +511,12 @@ extern void parport_daisy_deselect_all (struct parport *port);
 extern int parport_daisy_select (struct parport *port, int daisy, int mode);
 
 /* Lowlevel drivers _can_ call this support function to handle irqs.  */
-static __inline__ void parport_generic_irq(int irq, struct parport *port,
-					   struct pt_regs *regs)
+static __inline__ void parport_generic_irq(int irq, struct parport *port)
 {
-	parport_ieee1284_interrupt (irq, port, regs);
+	parport_ieee1284_interrupt (irq, port);
 	read_lock(&port->cad_lock);
 	if (port->cad && port->cad->irq_func)
-		port->cad->irq_func(irq, port->cad->private, regs);
+		port->cad->irq_func(irq, port->cad->private);
 	read_unlock(&port->cad_lock);
 }
 

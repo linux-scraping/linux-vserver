@@ -74,7 +74,7 @@ jensen_local_startup(unsigned int irq)
 		 * the IPL from being dropped during handler processing.
 		 */
 		if (irq_desc[irq].action)
-			irq_desc[irq].action->flags |= SA_INTERRUPT;
+			irq_desc[irq].action->flags |= IRQF_DISABLED;
 	return 0;
 }
 
@@ -129,7 +129,7 @@ static struct hw_interrupt_type jensen_local_irq_type = {
 };
 
 static void 
-jensen_device_interrupt(unsigned long vector, struct pt_regs * regs)
+jensen_device_interrupt(unsigned long vector)
 {
 	int irq;
 
@@ -189,7 +189,7 @@ jensen_device_interrupt(unsigned long vector, struct pt_regs * regs)
           if (cc - last_msg > ((JENSEN_CYCLES_PER_SEC) * 3) ||
 	      irq != last_irq) {
                 printk(KERN_CRIT " irq %d count %d cc %u @ %lx\n",
-                       irq, count, cc-last_cc, regs->pc);
+                       irq, count, cc-last_cc, get_irq_regs()->pc);
                 count = 0;
                 last_msg = cc;
                 last_irq = irq;
@@ -198,7 +198,7 @@ jensen_device_interrupt(unsigned long vector, struct pt_regs * regs)
         }
 #endif
 
-	handle_irq(irq, regs);
+	handle_irq(irq);
 }
 
 static void __init
@@ -206,11 +206,11 @@ jensen_init_irq(void)
 {
 	init_i8259a_irqs();
 
-	irq_desc[1].handler = &jensen_local_irq_type;
-	irq_desc[4].handler = &jensen_local_irq_type;
-	irq_desc[3].handler = &jensen_local_irq_type;
-	irq_desc[7].handler = &jensen_local_irq_type;
-	irq_desc[9].handler = &jensen_local_irq_type;
+	irq_desc[1].chip = &jensen_local_irq_type;
+	irq_desc[4].chip = &jensen_local_irq_type;
+	irq_desc[3].chip = &jensen_local_irq_type;
+	irq_desc[7].chip = &jensen_local_irq_type;
+	irq_desc[9].chip = &jensen_local_irq_type;
 
 	common_init_isa_dma();
 }
@@ -244,7 +244,7 @@ jensen_init_arch(void)
 }
 
 static void
-jensen_machine_check (u64 vector, u64 la, struct pt_regs *regs)
+jensen_machine_check (u64 vector, u64 la)
 {
 	printk(KERN_CRIT "Machine check\n");
 }

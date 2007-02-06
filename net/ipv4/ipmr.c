@@ -28,7 +28,6 @@
  *
  */
 
-#include <linux/config.h>
 #include <asm/system.h>
 #include <asm/uaccess.h>
 #include <linux/types.h>
@@ -106,7 +105,7 @@ static DEFINE_SPINLOCK(mfc_unres_lock);
    In this case data path is free of exclusive locks at all.
  */
 
-static kmem_cache_t *mrt_cachep __read_mostly;
+static struct kmem_cache *mrt_cachep __read_mostly;
 
 static int ip_mr_forward(struct sk_buff *skb, struct mfc_cache *cache, int local);
 static int ipmr_cache_report(struct sk_buff *pkt, vifi_t vifi, int assert);
@@ -313,7 +312,8 @@ static void ipmr_destroy_unres(struct mfc_cache *c)
 			e = NLMSG_DATA(nlh);
 			e->error = -ETIMEDOUT;
 			memset(&e->msg, 0, sizeof(e->msg));
-			netlink_unicast(rtnl, skb, NETLINK_CB(skb).dst_pid, MSG_DONTWAIT);
+
+			rtnl_unicast(skb, NETLINK_CB(skb).pid);
 		} else
 			kfree_skb(skb);
 	}
@@ -462,7 +462,7 @@ static int vif_add(struct vifctl *vifc, int mrtsock)
 	return 0;
 }
 
-static struct mfc_cache *ipmr_cache_find(__u32 origin, __u32 mcastgrp)
+static struct mfc_cache *ipmr_cache_find(__be32 origin, __be32 mcastgrp)
 {
 	int line=MFC_HASH(mcastgrp,origin);
 	struct mfc_cache *c;
@@ -513,7 +513,6 @@ static void ipmr_cache_resolve(struct mfc_cache *uc, struct mfc_cache *c)
 
 	while((skb=__skb_dequeue(&uc->mfc_un.unres.unresolved))) {
 		if (skb->nh.iph->version == 0) {
-			int err;
 			struct nlmsghdr *nlh = (struct nlmsghdr *)skb_pull(skb, sizeof(struct iphdr));
 
 			if (ipmr_fill_mroute(skb, c, NLMSG_DATA(nlh)) > 0) {
@@ -526,7 +525,8 @@ static void ipmr_cache_resolve(struct mfc_cache *uc, struct mfc_cache *c)
 				e->error = -EMSGSIZE;
 				memset(&e->msg, 0, sizeof(e->msg));
 			}
-			err = netlink_unicast(rtnl, skb, NETLINK_CB(skb).dst_pid, MSG_DONTWAIT);
+
+			rtnl_unicast(skb, NETLINK_CB(skb).pid);
 		} else
 			ip_mr_forward(skb, c, 0);
 	}
@@ -1097,7 +1097,7 @@ static struct notifier_block ip_mr_notifier={
  *	important for multicast video.
  */
  
-static void ip_encap(struct sk_buff *skb, u32 saddr, u32 daddr)
+static void ip_encap(struct sk_buff *skb, __be32 saddr, __be32 daddr)
 {
 	struct iphdr *iph = (struct iphdr *)skb_push(skb,sizeof(struct iphdr));
 
@@ -1462,7 +1462,6 @@ int pim_rcv_v1(struct sk_buff * skb)
 	skb_pull(skb, (u8*)encap - skb->data);
 	skb->nh.iph = (struct iphdr *)skb->data;
 	skb->dev = reg_dev;
-	memset(&(IPCB(skb)->opt), 0, sizeof(struct ip_options));
 	skb->protocol = htons(ETH_P_IP);
 	skb->ip_summed = 0;
 	skb->pkt_type = PACKET_HOST;
@@ -1494,7 +1493,7 @@ static int pim_rcv(struct sk_buff * skb)
         if (pim->type != ((PIM_VERSION<<4)|(PIM_REGISTER)) ||
 	    (pim->flags&PIM_NULL_REGISTER) ||
 	    (ip_compute_csum((void *)pim, sizeof(*pim)) != 0 && 
-	     (u16)csum_fold(skb_checksum(skb, 0, skb->len, 0)))) 
+	     csum_fold(skb_checksum(skb, 0, skb->len, 0))))
 		goto drop;
 
 	/* check if the inner packet is destined to mcast group */
@@ -1518,7 +1517,6 @@ static int pim_rcv(struct sk_buff * skb)
 	skb_pull(skb, (u8*)encap - skb->data);
 	skb->nh.iph = (struct iphdr *)skb->data;
 	skb->dev = reg_dev;
-	memset(&(IPCB(skb)->opt), 0, sizeof(struct ip_options));
 	skb->protocol = htons(ETH_P_IP);
 	skb->ip_summed = 0;
 	skb->pkt_type = PACKET_HOST;
@@ -1581,6 +1579,7 @@ int ipmr_get_route(struct sk_buff *skb, struct rtmsg *rtm, int nowait)
 	cache = ipmr_cache_find(rt->rt_src, rt->rt_dst);
 
 	if (cache==NULL) {
+		struct sk_buff *skb2;
 		struct net_device *dev;
 		int vif;
 
@@ -1594,12 +1593,18 @@ int ipmr_get_route(struct sk_buff *skb, struct rtmsg *rtm, int nowait)
 			read_unlock(&mrt_lock);
 			return -ENODEV;
 		}
-		skb->nh.raw = skb_push(skb, sizeof(struct iphdr));
-		skb->nh.iph->ihl = sizeof(struct iphdr)>>2;
-		skb->nh.iph->saddr = rt->rt_src;
-		skb->nh.iph->daddr = rt->rt_dst;
-		skb->nh.iph->version = 0;
-		err = ipmr_cache_unresolved(vif, skb);
+		skb2 = skb_clone(skb, GFP_ATOMIC);
+		if (!skb2) {
+			read_unlock(&mrt_lock);
+			return -ENOMEM;
+		}
+
+		skb2->nh.raw = skb_push(skb2, sizeof(struct iphdr));
+		skb2->nh.iph->ihl = sizeof(struct iphdr)>>2;
+		skb2->nh.iph->saddr = rt->rt_src;
+		skb2->nh.iph->daddr = rt->rt_dst;
+		skb2->nh.iph->version = 0;
+		err = ipmr_cache_unresolved(vif, skb2);
 		read_unlock(&mrt_lock);
 		return err;
 	}
@@ -1895,11 +1900,8 @@ void __init ip_mr_init(void)
 {
 	mrt_cachep = kmem_cache_create("ip_mrt_cache",
 				       sizeof(struct mfc_cache),
-				       0, SLAB_HWCACHE_ALIGN,
+				       0, SLAB_HWCACHE_ALIGN|SLAB_PANIC,
 				       NULL, NULL);
-	if (!mrt_cachep)
-		panic("cannot allocate ip_mrt_cache");
-
 	init_timer(&ipmr_expire_timer);
 	ipmr_expire_timer.function=ipmr_expire_process;
 	register_netdevice_notifier(&ip_mr_notifier);

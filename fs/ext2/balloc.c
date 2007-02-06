@@ -11,13 +11,13 @@
  *        David S. Miller (davem@caip.rutgers.edu), 1995
  */
 
-#include <linux/config.h>
 #include "ext2.h"
 #include <linux/quotaops.h>
 #include <linux/sched.h>
 #include <linux/buffer_head.h>
 #include <linux/capability.h>
 #include <linux/vs_dlimit.h>
+#include <linux/vs_tag.h>
 
 /*
  * balloc.c contains the blocks allocation and deallocation routines
@@ -104,13 +104,12 @@ static int reserve_blocks(struct super_block *sb, int count)
 {
 	struct ext2_sb_info *sbi = EXT2_SB(sb);
 	struct ext2_super_block *es = sbi->s_es;
-	unsigned free_blocks;
-	unsigned root_blocks;
+	unsigned long long free_blocks, root_blocks;
 
 	free_blocks = percpu_counter_read_positive(&sbi->s_freeblocks_counter);
 	root_blocks = le32_to_cpu(es->s_r_blocks_count);
 
-	DLIMIT_ADJUST_BLOCK(sb, vx_current_xid(), &free_blocks, &root_blocks);
+	DLIMIT_ADJUST_BLOCK(sb, dx_current_tag(), &free_blocks, &root_blocks);
 
 	if (free_blocks < count)
 		count = free_blocks;
@@ -531,6 +530,25 @@ io_error:
 	goto out_release;
 }
 
+#ifdef EXT2FS_DEBUG
+
+static int nibblemap[] = {4, 3, 3, 2, 3, 2, 2, 1, 3, 2, 2, 1, 2, 1, 1, 0};
+
+unsigned long ext2_count_free (struct buffer_head * map, unsigned int numchars)
+{
+	unsigned int i;
+	unsigned long sum = 0;
+
+	if (!map)
+		return (0);
+	for (i = 0; i < numchars; i++)
+		sum += nibblemap[map->b_data[i] & 0xf] +
+			nibblemap[(map->b_data[i] >> 4) & 0xf];
+	return (sum);
+}
+
+#endif  /*  EXT2FS_DEBUG  */
+
 unsigned long ext2_count_free_blocks (struct super_block * sb)
 {
 	struct ext2_group_desc * desc;
@@ -540,7 +558,6 @@ unsigned long ext2_count_free_blocks (struct super_block * sb)
 	unsigned long bitmap_count, x;
 	struct ext2_super_block *es;
 
-	lock_super (sb);
 	es = EXT2_SB(sb)->s_es;
 	desc_count = 0;
 	bitmap_count = 0;
@@ -564,7 +581,6 @@ unsigned long ext2_count_free_blocks (struct super_block * sb)
 	printk("ext2_count_free_blocks: stored = %lu, computed = %lu, %lu\n",
 		(long)le32_to_cpu(es->s_free_blocks_count),
 		desc_count, bitmap_count);
-	unlock_super (sb);
 	return bitmap_count;
 #else
         for (i = 0; i < EXT2_SB(sb)->s_groups_count; i++) {

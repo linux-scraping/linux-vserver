@@ -1,5 +1,5 @@
 /*
- * arch/sh/pci/ops-dreamcast.c
+ * arch/sh/drivers/pci/ops-dreamcast.c
  *
  * PCI operations for the Sega Dreamcast
  *
@@ -15,7 +15,6 @@
  * for more details.
  */
 
-#include <linux/config.h>
 #include <linux/sched.h>
 #include <linux/kernel.h>
 #include <linux/param.h>

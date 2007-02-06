@@ -50,7 +50,6 @@
  * 4) AFAICT, hardware flow control isn't supported by the controller --MAG.
  */
 
-#include <linux/config.h>
 
 #if defined(CONFIG_SERIAL_MPSC_CONSOLE) && defined(CONFIG_MAGIC_SYSRQ)
 #define SUPPORT_SYSRQ
@@ -315,7 +314,6 @@ struct mpsc_port_info *mpsc_device_remove(int index);
 #define MPSC_MAJOR		204
 #define MPSC_MINOR_START	44
 #define	MPSC_DRIVER_NAME	"MPSC"
-#define	MPSC_DEVFS_NAME		"ttymm/"
 #define	MPSC_DEV_NAME		"ttyMM"
 #define	MPSC_VERSION		"1.00"
 
@@ -557,7 +555,7 @@ mpsc_sdma_start_tx(struct mpsc_port_info *pi)
 	if (!mpsc_sdma_tx_active(pi)) {
 		txre = (struct mpsc_tx_desc *)(pi->txr +
 			(pi->txr_tail * MPSC_TXRE_SIZE));
-		dma_cache_sync((void *) txre, MPSC_TXRE_SIZE, DMA_FROM_DEVICE);
+		dma_cache_sync(pi->port.dev, (void *) txre, MPSC_TXRE_SIZE, DMA_FROM_DEVICE);
 #if defined(CONFIG_PPC32) && !defined(CONFIG_NOT_COHERENT_CACHE)
 		if (pi->cache_mgmt) /* GT642[46]0 Res #COMM-2 */
 			invalidate_dcache_range((ulong)txre,
@@ -933,7 +931,7 @@ mpsc_init_rings(struct mpsc_port_info *pi)
 	}
 	txre->link = cpu_to_be32(pi->txr_p);	/* Wrap last back to first */
 
-	dma_cache_sync((void *) pi->dma_region, MPSC_DMA_ALLOC_SIZE,
+	dma_cache_sync(pi->port.dev, (void *) pi->dma_region, MPSC_DMA_ALLOC_SIZE,
 		DMA_BIDIRECTIONAL);
 #if defined(CONFIG_PPC32) && !defined(CONFIG_NOT_COHERENT_CACHE)
 		if (pi->cache_mgmt) /* GT642[46]0 Res #COMM-2 */
@@ -994,7 +992,7 @@ mpsc_make_ready(struct mpsc_port_info *pi)
  */
 
 static inline int
-mpsc_rx_intr(struct mpsc_port_info *pi, struct pt_regs *regs)
+mpsc_rx_intr(struct mpsc_port_info *pi)
 {
 	struct mpsc_rx_desc *rxre;
 	struct tty_struct *tty = pi->port.info->tty;
@@ -1007,7 +1005,7 @@ mpsc_rx_intr(struct mpsc_port_info *pi, struct pt_regs *regs)
 
 	rxre = (struct mpsc_rx_desc *)(pi->rxr + (pi->rxr_posn*MPSC_RXRE_SIZE));
 
-	dma_cache_sync((void *)rxre, MPSC_RXRE_SIZE, DMA_FROM_DEVICE);
+	dma_cache_sync(pi->port.dev, (void *)rxre, MPSC_RXRE_SIZE, DMA_FROM_DEVICE);
 #if defined(CONFIG_PPC32) && !defined(CONFIG_NOT_COHERENT_CACHE)
 	if (pi->cache_mgmt) /* GT642[46]0 Res #COMM-2 */
 		invalidate_dcache_range((ulong)rxre,
@@ -1031,7 +1029,7 @@ mpsc_rx_intr(struct mpsc_port_info *pi, struct pt_regs *regs)
 		}
 
 		bp = pi->rxb + (pi->rxr_posn * MPSC_RXBE_SIZE);
-		dma_cache_sync((void *) bp, MPSC_RXBE_SIZE, DMA_FROM_DEVICE);
+		dma_cache_sync(pi->port.dev, (void *) bp, MPSC_RXBE_SIZE, DMA_FROM_DEVICE);
 #if defined(CONFIG_PPC32) && !defined(CONFIG_NOT_COHERENT_CACHE)
 		if (pi->cache_mgmt) /* GT642[46]0 Res #COMM-2 */
 			invalidate_dcache_range((ulong)bp,
@@ -1074,7 +1072,7 @@ mpsc_rx_intr(struct mpsc_port_info *pi, struct pt_regs *regs)
 				flag = TTY_PARITY;
 		}
 
-		if (uart_handle_sysrq_char(&pi->port, *bp, regs)) {
+		if (uart_handle_sysrq_char(&pi->port, *bp)) {
 			bp++;
 			bytes_in--;
 			goto next_frame;
@@ -1100,7 +1098,7 @@ next_frame:
 					    SDMA_DESC_CMDSTAT_F |
 					    SDMA_DESC_CMDSTAT_L);
 		wmb();
-		dma_cache_sync((void *)rxre, MPSC_RXRE_SIZE, DMA_BIDIRECTIONAL);
+		dma_cache_sync(pi->port.dev, (void *)rxre, MPSC_RXRE_SIZE, DMA_BIDIRECTIONAL);
 #if defined(CONFIG_PPC32) && !defined(CONFIG_NOT_COHERENT_CACHE)
 		if (pi->cache_mgmt) /* GT642[46]0 Res #COMM-2 */
 			flush_dcache_range((ulong)rxre,
@@ -1111,7 +1109,7 @@ next_frame:
 		pi->rxr_posn = (pi->rxr_posn + 1) & (MPSC_RXR_ENTRIES - 1);
 		rxre = (struct mpsc_rx_desc *)(pi->rxr +
 			(pi->rxr_posn * MPSC_RXRE_SIZE));
-		dma_cache_sync((void *)rxre, MPSC_RXRE_SIZE, DMA_FROM_DEVICE);
+		dma_cache_sync(pi->port.dev, (void *)rxre, MPSC_RXRE_SIZE, DMA_FROM_DEVICE);
 #if defined(CONFIG_PPC32) && !defined(CONFIG_NOT_COHERENT_CACHE)
 		if (pi->cache_mgmt) /* GT642[46]0 Res #COMM-2 */
 			invalidate_dcache_range((ulong)rxre,
@@ -1145,7 +1143,7 @@ mpsc_setup_tx_desc(struct mpsc_port_info *pi, u32 count, u32 intr)
 							   SDMA_DESC_CMDSTAT_EI
 							   : 0));
 	wmb();
-	dma_cache_sync((void *) txre, MPSC_TXRE_SIZE, DMA_BIDIRECTIONAL);
+	dma_cache_sync(pi->port.dev, (void *) txre, MPSC_TXRE_SIZE, DMA_BIDIRECTIONAL);
 #if defined(CONFIG_PPC32) && !defined(CONFIG_NOT_COHERENT_CACHE)
 	if (pi->cache_mgmt) /* GT642[46]0 Res #COMM-2 */
 		flush_dcache_range((ulong)txre,
@@ -1194,7 +1192,7 @@ mpsc_copy_tx_data(struct mpsc_port_info *pi)
 		else /* All tx data copied into ring bufs */
 			return;
 
-		dma_cache_sync((void *) bp, MPSC_TXBE_SIZE, DMA_BIDIRECTIONAL);
+		dma_cache_sync(pi->port.dev, (void *) bp, MPSC_TXBE_SIZE, DMA_BIDIRECTIONAL);
 #if defined(CONFIG_PPC32) && !defined(CONFIG_NOT_COHERENT_CACHE)
 		if (pi->cache_mgmt) /* GT642[46]0 Res #COMM-2 */
 			flush_dcache_range((ulong)bp,
@@ -1219,7 +1217,7 @@ mpsc_tx_intr(struct mpsc_port_info *pi)
 		txre = (struct mpsc_tx_desc *)(pi->txr +
 			(pi->txr_tail * MPSC_TXRE_SIZE));
 
-		dma_cache_sync((void *) txre, MPSC_TXRE_SIZE, DMA_FROM_DEVICE);
+		dma_cache_sync(pi->port.dev, (void *) txre, MPSC_TXRE_SIZE, DMA_FROM_DEVICE);
 #if defined(CONFIG_PPC32) && !defined(CONFIG_NOT_COHERENT_CACHE)
 		if (pi->cache_mgmt) /* GT642[46]0 Res #COMM-2 */
 			invalidate_dcache_range((ulong)txre,
@@ -1237,7 +1235,7 @@ mpsc_tx_intr(struct mpsc_port_info *pi)
 
 			txre = (struct mpsc_tx_desc *)(pi->txr +
 				(pi->txr_tail * MPSC_TXRE_SIZE));
-			dma_cache_sync((void *) txre, MPSC_TXRE_SIZE,
+			dma_cache_sync(pi->port.dev, (void *) txre, MPSC_TXRE_SIZE,
 				DMA_FROM_DEVICE);
 #if defined(CONFIG_PPC32) && !defined(CONFIG_NOT_COHERENT_CACHE)
 			if (pi->cache_mgmt) /* GT642[46]0 Res #COMM-2 */
@@ -1259,7 +1257,7 @@ mpsc_tx_intr(struct mpsc_port_info *pi)
  * handling those descriptors, we restart the Rx/Tx engines if they're stopped.
  */
 static irqreturn_t
-mpsc_sdma_intr(int irq, void *dev_id, struct pt_regs *regs)
+mpsc_sdma_intr(int irq, void *dev_id)
 {
 	struct mpsc_port_info *pi = dev_id;
 	ulong iflags;
@@ -1269,7 +1267,7 @@ mpsc_sdma_intr(int irq, void *dev_id, struct pt_regs *regs)
 
 	spin_lock_irqsave(&pi->port.lock, iflags);
 	mpsc_sdma_intr_ack(pi);
-	if (mpsc_rx_intr(pi, regs))
+	if (mpsc_rx_intr(pi))
 		rc = IRQ_HANDLED;
 	if (mpsc_tx_intr(pi))
 		rc = IRQ_HANDLED;
@@ -1414,7 +1412,7 @@ mpsc_startup(struct uart_port *port)
 
 		/* If irq's are shared, need to set flag */
 		if (mpsc_ports[0].port.irq == mpsc_ports[1].port.irq)
-			flag = SA_SHIRQ;
+			flag = IRQF_SHARED;
 
 		if (request_irq(pi->port.irq, mpsc_sdma_intr, flag,
 				"mpsc-sdma", pi))
@@ -1442,8 +1440,8 @@ mpsc_shutdown(struct uart_port *port)
 }
 
 static void
-mpsc_set_termios(struct uart_port *port, struct termios *termios,
-		 struct termios *old)
+mpsc_set_termios(struct uart_port *port, struct ktermios *termios,
+		 struct ktermios *old)
 {
 	struct mpsc_port_info *pi = (struct mpsc_port_info *)port;
 	u32 baud;
@@ -1654,7 +1652,7 @@ mpsc_console_write(struct console *co, const char *s, uint count)
 			count--;
 		}
 
-		dma_cache_sync((void *) bp, MPSC_TXBE_SIZE, DMA_BIDIRECTIONAL);
+		dma_cache_sync(pi->port.dev, (void *) bp, MPSC_TXBE_SIZE, DMA_BIDIRECTIONAL);
 #if defined(CONFIG_PPC32) && !defined(CONFIG_NOT_COHERENT_CACHE)
 		if (pi->cache_mgmt) /* GT642[46]0 Res #COMM-2 */
 			flush_dcache_range((ulong)bp,
@@ -1863,7 +1861,6 @@ static struct platform_driver mpsc_shared_driver = {
 static struct uart_driver mpsc_reg = {
 	.owner       = THIS_MODULE,
 	.driver_name = MPSC_DRIVER_NAME,
-	.devfs_name  = MPSC_DEVFS_NAME,
 	.dev_name    = MPSC_DEV_NAME,
 	.major       = MPSC_MAJOR,
 	.minor       = MPSC_MINOR_START,
@@ -1896,6 +1893,10 @@ mpsc_drv_map_regs(struct mpsc_port_info *pi, struct platform_device *pd)
 	}
 	else {
 		mpsc_resource_err("SDMA base");
+		if (pi->mpsc_base) {
+			iounmap(pi->mpsc_base);
+			pi->mpsc_base = NULL;
+		}
 		return -ENOMEM;
 	}
 
@@ -1908,6 +1909,14 @@ mpsc_drv_map_regs(struct mpsc_port_info *pi, struct platform_device *pd)
 	}
 	else {
 		mpsc_resource_err("BRG base");
+		if (pi->mpsc_base) {
+			iounmap(pi->mpsc_base);
+			pi->mpsc_base = NULL;
+		}
+		if (pi->sdma_base) {
+			iounmap(pi->sdma_base);
+			pi->sdma_base = NULL;
+		}
 		return -ENOMEM;
 	}
 

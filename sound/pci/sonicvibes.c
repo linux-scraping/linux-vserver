@@ -54,8 +54,8 @@ MODULE_SUPPORTED_DEVICE("{{S3,SonicVibes PCI}}");
 static int index[SNDRV_CARDS] = SNDRV_DEFAULT_IDX;	/* Index 0-MAX */
 static char *id[SNDRV_CARDS] = SNDRV_DEFAULT_STR;	/* ID for this card */
 static int enable[SNDRV_CARDS] = SNDRV_DEFAULT_ENABLE_PNP;	/* Enable this card */
-static int reverb[SNDRV_CARDS] = {[0 ... (SNDRV_CARDS - 1)] = 0};
-static int mge[SNDRV_CARDS] = {[0 ... (SNDRV_CARDS - 1)] = 0};
+static int reverb[SNDRV_CARDS];
+static int mge[SNDRV_CARDS];
 static unsigned int dmaio = 0x7a00;	/* DDMA i/o address */
 
 module_param_array(index, int, NULL, 0444);
@@ -243,7 +243,7 @@ struct sonicvibes {
 #endif
 };
 
-static struct pci_device_id snd_sonic_ids[] __devinitdata = {
+static struct pci_device_id snd_sonic_ids[] = {
 	{ 0x5333, 0xca00, PCI_ANY_ID, PCI_ANY_ID, 0, 0, 0, },
         { 0, }
 };
@@ -580,7 +580,7 @@ static int snd_sonicvibes_trigger(struct sonicvibes * sonic, int what, int cmd)
 	return result;
 }
 
-static irqreturn_t snd_sonicvibes_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t snd_sonicvibes_interrupt(int irq, void *dev_id)
 {
 	struct sonicvibes *sonic = dev_id;
 	unsigned char status;
@@ -601,7 +601,7 @@ static irqreturn_t snd_sonicvibes_interrupt(int irq, void *dev_id, struct pt_reg
 	}
 	if (sonic->rmidi) {
 		if (status & SV_MIDI_IRQ)
-			snd_mpu401_uart_interrupt(irq, sonic->rmidi->private_data, regs);
+			snd_mpu401_uart_interrupt(irq, sonic->rmidi->private_data);
 	}
 	if (status & SV_UD_IRQ) {
 		unsigned char udreg;
@@ -1144,7 +1144,7 @@ static void __devinit snd_sonicvibes_proc_init(struct sonicvibes * sonic)
 	struct snd_info_entry *entry;
 
 	if (! snd_card_proc_new(sonic->card, "sonicvibes", &entry))
-		snd_info_set_text_ops(entry, sonic, 1024, snd_sonicvibes_proc_read);
+		snd_info_set_text_ops(entry, sonic, snd_sonicvibes_proc_read);
 }
 
 /*
@@ -1195,7 +1195,7 @@ static int snd_sonicvibes_free(struct sonicvibes *sonic)
 	pci_write_config_dword(sonic->pci, 0x40, sonic->dmaa_port);
 	pci_write_config_dword(sonic->pci, 0x48, sonic->dmac_port);
 	if (sonic->irq >= 0)
-		free_irq(sonic->irq, (void *)sonic);
+		free_irq(sonic->irq, sonic);
 	release_and_free_resource(sonic->res_dmaa);
 	release_and_free_resource(sonic->res_dmac);
 	pci_release_regions(sonic->pci);
@@ -1257,7 +1257,8 @@ static int __devinit snd_sonicvibes_create(struct snd_card *card,
 	sonic->midi_port = pci_resource_start(pci, 3);
 	sonic->game_port = pci_resource_start(pci, 4);
 
-	if (request_irq(pci->irq, snd_sonicvibes_interrupt, SA_INTERRUPT|SA_SHIRQ, "S3 SonicVibes", (void *)sonic)) {
+	if (request_irq(pci->irq, snd_sonicvibes_interrupt, IRQF_SHARED,
+			"S3 SonicVibes", sonic)) {
 		snd_printk(KERN_ERR "unable to grab IRQ %d\n", pci->irq);
 		snd_sonicvibes_free(sonic);
 		return -EBUSY;
@@ -1441,10 +1442,10 @@ static int __devinit snd_sonic_probe(struct pci_dev *pci,
 
 	strcpy(card->driver, "SonicVibes");
 	strcpy(card->shortname, "S3 SonicVibes");
-	sprintf(card->longname, "%s rev %i at 0x%lx, irq %i",
+	sprintf(card->longname, "%s rev %i at 0x%llx, irq %i",
 		card->shortname,
 		sonic->revision,
-		pci_resource_start(pci, 1),
+		(unsigned long long)pci_resource_start(pci, 1),
 		sonic->irq);
 
 	if ((err = snd_sonicvibes_pcm(sonic, 0, NULL)) < 0) {
@@ -1456,7 +1457,7 @@ static int __devinit snd_sonic_probe(struct pci_dev *pci,
 		return err;
 	}
 	if ((err = snd_mpu401_uart_new(card, 0, MPU401_HW_SONICVIBES,
-				       sonic->midi_port, 1,
+				       sonic->midi_port, MPU401_INFO_INTEGRATED,
 				       sonic->irq, 0,
 				       &midi_uart)) < 0) {
 		snd_card_free(card);

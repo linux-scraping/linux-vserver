@@ -1,5 +1,5 @@
 /*
- * linux/include/asm/qdio.h
+ * linux/include/asm-s390/qdio.h
  *
  * Linux for S/390 QDIO base support, Hipersocket base support
  * version 2
@@ -34,6 +34,7 @@
 #define QDIO_QETH_QFMT 0
 #define QDIO_ZFCP_QFMT 1
 #define QDIO_IQDIO_QFMT 2
+#define QDIO_IQDIO_QFMT_ASYNCH 3
 
 struct qdio_buffer_element{
 	unsigned int flags;

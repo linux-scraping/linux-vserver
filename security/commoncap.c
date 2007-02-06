@@ -8,7 +8,6 @@
  */
 
 #include <linux/capability.h>
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/kernel.h>
@@ -24,18 +23,19 @@
 #include <linux/ptrace.h>
 #include <linux/xattr.h>
 #include <linux/hugetlb.h>
+#include <linux/vs_context.h>
 
 int cap_netlink_send(struct sock *sk, struct sk_buff *skb)
 {
-	NETLINK_CB(skb).eff_cap = current->cap_effective;
+	cap_t(NETLINK_CB(skb).eff_cap) = vx_mbcap(cap_effective);
 	return 0;
 }
 
 EXPORT_SYMBOL(cap_netlink_send);
 
-int cap_netlink_recv(struct sk_buff *skb)
+int cap_netlink_recv(struct sk_buff *skb, int cap)
 {
-	if (!cap_raised(NETLINK_CB(skb).eff_cap, CAP_NET_ADMIN))
+	if (!cap_raised(NETLINK_CB(skb).eff_cap, cap))
 		return -EPERM;
 	return 0;
 }
@@ -45,7 +45,7 @@ EXPORT_SYMBOL(cap_netlink_recv);
 int cap_capable (struct task_struct *tsk, int cap)
 {
 	/* Derived from include/linux/sched.h:capable. */
-	if (cap_raised(tsk->cap_effective, cap))
+       if (vx_cap_raised(tsk->vx_info, tsk->cap_effective, cap))
 		return 0;
 	return -EPERM;
 }
@@ -143,7 +143,8 @@ void cap_bprm_apply_creds (struct linux_binprm *bprm, int unsafe)
 	/* Derived from fs/exec.c:compute_creds. */
 	kernel_cap_t new_permitted, working;
 
-	new_permitted = cap_intersect (bprm->cap_permitted, vx_current_bcaps());
+	new_permitted = cap_intersect (bprm->cap_permitted,
+					vx_current_cap_bset());
 	working = cap_intersect (bprm->cap_inheritable,
 				 current->cap_inheritable);
 	new_permitted = cap_combine (new_permitted, working);
@@ -170,7 +171,7 @@ void cap_bprm_apply_creds (struct linux_binprm *bprm, int unsafe)
 	/* For init, we want to retain the capabilities set
 	 * in the init_task struct. Thus we skip the usual
 	 * capability rules */
-	if (current->pid != 1) {
+	if (!is_init(current)) {
 		current->cap_permitted = new_permitted;
 		current->cap_effective =
 		    cap_intersect (new_permitted, bprm->cap_effective);

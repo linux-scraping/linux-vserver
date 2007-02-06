@@ -45,7 +45,6 @@
 struct mt352_state {
 	struct i2c_adapter* i2c;
 	struct dvb_frontend frontend;
-	struct dvb_frontend_ops ops;
 
 	/* configuration settings */
 	struct mt352_config config;
@@ -71,7 +70,7 @@ static int mt352_single_write(struct dvb_frontend *fe, u8 reg, u8 val)
 	return 0;
 }
 
-int mt352_write(struct dvb_frontend* fe, u8* ibuf, int ilen)
+static int _mt352_write(struct dvb_frontend* fe, u8* ibuf, int ilen)
 {
 	int err,i;
 	for (i=0; i < ilen-1; i++)
@@ -108,7 +107,7 @@ static int mt352_sleep(struct dvb_frontend* fe)
 {
 	static u8 mt352_softdown[] = { CLOCK_CTL, 0x20, 0x08 };
 
-	mt352_write(fe, mt352_softdown, sizeof(mt352_softdown));
+	_mt352_write(fe, mt352_softdown, sizeof(mt352_softdown));
 	return 0;
 }
 
@@ -286,16 +285,25 @@ static int mt352_set_parameters(struct dvb_frontend* fe,
 
 	mt352_calc_nominal_rate(state, op->bandwidth, buf+4);
 	mt352_calc_input_freq(state, buf+6);
-	state->config.pll_set(fe, param, buf+8);
 
-	mt352_write(fe, buf, sizeof(buf));
 	if (state->config.no_tuner) {
-		/* start decoding */
-		mt352_write(fe, fsm_go, 2);
+		if (fe->ops.tuner_ops.set_params) {
+			fe->ops.tuner_ops.set_params(fe, param);
+			if (fe->ops.i2c_gate_ctrl)
+				fe->ops.i2c_gate_ctrl(fe, 0);
+		}
+
+		_mt352_write(fe, buf, 8);
+		_mt352_write(fe, fsm_go, 2);
 	} else {
-		/* start tuning */
-		mt352_write(fe, tuner_go, 2);
+		if (fe->ops.tuner_ops.calc_regs) {
+			fe->ops.tuner_ops.calc_regs(fe, param, buf+8, 5);
+			buf[8] <<= 1;
+			_mt352_write(fe, buf, sizeof(buf));
+			_mt352_write(fe, tuner_go, 2);
+		}
 	}
+
 	return 0;
 }
 
@@ -514,7 +522,7 @@ static int mt352_init(struct dvb_frontend* fe)
 	    (mt352_read_register(state, CONFIG) & 0x20) == 0) {
 
 		/* Do a "hard" reset */
-		mt352_write(fe, mt352_reset_attach, sizeof(mt352_reset_attach));
+		_mt352_write(fe, mt352_reset_attach, sizeof(mt352_reset_attach));
 		return state->config.demod_init(fe);
 	}
 
@@ -541,13 +549,12 @@ struct dvb_frontend* mt352_attach(const struct mt352_config* config,
 	/* setup the state */
 	state->i2c = i2c;
 	memcpy(&state->config,config,sizeof(struct mt352_config));
-	memcpy(&state->ops, &mt352_ops, sizeof(struct dvb_frontend_ops));
 
 	/* check if the demod is there */
 	if (mt352_read_register(state, CHIP_ID) != ID_MT352) goto error;
 
 	/* create dvb_frontend */
-	state->frontend.ops = &state->ops;
+	memcpy(&state->frontend.ops, &mt352_ops, sizeof(struct dvb_frontend_ops));
 	state->frontend.demodulator_priv = state;
 	return &state->frontend;
 
@@ -578,6 +585,7 @@ static struct dvb_frontend_ops mt352_ops = {
 
 	.init = mt352_init,
 	.sleep = mt352_sleep,
+	.write = _mt352_write,
 
 	.set_frontend = mt352_set_parameters,
 	.get_frontend = mt352_get_parameters,
@@ -598,4 +606,3 @@ MODULE_AUTHOR("Holger Waechtler, Daniel Mack, Antonio Mancuso");
 MODULE_LICENSE("GPL");
 
 EXPORT_SYMBOL(mt352_attach);
-EXPORT_SYMBOL(mt352_write);

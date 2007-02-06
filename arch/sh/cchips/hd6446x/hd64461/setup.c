@@ -4,7 +4,6 @@
  *	Hitachi HD64461 companion chip support
  */
 
-#include <linux/config.h>
 #include <linux/sched.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
@@ -12,36 +11,28 @@
 #include <linux/interrupt.h>
 #include <linux/init.h>
 #include <linux/irq.h>
-
 #include <asm/io.h>
 #include <asm/irq.h>
-
-#include <asm/hd64461/hd64461.h>
+#include <asm/hd64461.h>
 
 static void disable_hd64461_irq(unsigned int irq)
 {
-	unsigned long flags;
 	unsigned short nimr;
 	unsigned short mask = 1 << (irq - HD64461_IRQBASE);
 
-	local_irq_save(flags);
 	nimr = inw(HD64461_NIMR);
 	nimr |= mask;
 	outw(nimr, HD64461_NIMR);
-	local_irq_restore(flags);
 }
 
 static void enable_hd64461_irq(unsigned int irq)
 {
-	unsigned long flags;
 	unsigned short nimr;
 	unsigned short mask = 1 << (irq - HD64461_IRQBASE);
 
-	local_irq_save(flags);
 	nimr = inw(HD64461_NIMR);
 	nimr &= ~mask;
 	outw(nimr, HD64461_NIMR);
-	local_irq_restore(flags);
 }
 
 static void mask_and_ack_hd64461(unsigned int irq)
@@ -80,7 +71,7 @@ static struct hw_interrupt_type hd64461_irq_type = {
 	.end		= end_hd64461_irq,
 };
 
-static irqreturn_t hd64461_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t hd64461_interrupt(int irq, void *dev_id)
 {
 	printk(KERN_INFO
 	       "HD64461: spurious interrupt, nirr: 0x%x nimr: 0x%x\n",
@@ -134,7 +125,7 @@ int hd64461_irq_demux(int irq)
 	return __irq_demux(irq);
 }
 
-static struct irqaction irq0 = { hd64461_interrupt, SA_INTERRUPT, CPU_MASK_NONE, "HD64461", NULL, NULL };
+static struct irqaction irq0 = { hd64461_interrupt, IRQF_DISABLED, CPU_MASK_NONE, "HD64461", NULL, NULL };
 
 int __init setup_hd64461(void)
 {
@@ -154,7 +145,7 @@ int __init setup_hd64461(void)
 	outw(0xffff, HD64461_NIMR);
 
 	for (i = HD64461_IRQBASE; i < HD64461_IRQBASE + 16; i++) {
-		irq_desc[i].handler = &hd64461_irq_type;
+		irq_desc[i].chip = &hd64461_irq_type;
 	}
 
 	setup_irq(CONFIG_HD64461_IRQ, &irq0);

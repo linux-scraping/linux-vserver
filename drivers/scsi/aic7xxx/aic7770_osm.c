@@ -65,7 +65,7 @@ aic7770_map_int(struct ahc_softc *ahc, u_int irq)
 
 	shared = 0;
 	if ((ahc->flags & AHC_EDGE_INTERRUPT) == 0)
-		shared = SA_SHIRQ;
+		shared = IRQF_SHARED;
 
 	error = request_irq(irq, ahc_linux_isr, shared, "aic7xxx", ahc);
 	if (error == 0)
@@ -132,7 +132,8 @@ static struct eisa_device_id aic7770_ids[] = {
 	{ "ADP7770", 5 }, /* AIC7770 generic */
 	{ "" }
 };
-  
+MODULE_DEVICE_TABLE(eisa, aic7770_ids);
+
 static struct eisa_driver aic7770_driver = {
 	.id_table	= aic7770_ids,
 	.driver = {

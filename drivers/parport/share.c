@@ -17,7 +17,6 @@
 
 #undef PARPORT_DEBUG_SHARING		/* undef for production */
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/string.h>
 #include <linux/threads.h>
@@ -218,7 +217,7 @@ static void free_port (struct parport *port)
  *	parport_get_port - increment a port's reference count
  *	@port: the port
  *
- *	This ensure's that a struct parport pointer remains valid
+ *	This ensures that a struct parport pointer remains valid
  *	until the matching parport_put_port() call.
  **/
 
@@ -520,7 +519,7 @@ void parport_remove_port(struct parport *port)
 struct pardevice *
 parport_register_device(struct parport *port, const char *name,
 			int (*pf)(void *), void (*kf)(void *),
-			void (*irq_func)(int, void *, struct pt_regs *), 
+			void (*irq_func)(int, void *), 
 			int flags, void *handle)
 {
 	struct pardevice *tmp;

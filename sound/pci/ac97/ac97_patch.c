@@ -32,6 +32,7 @@
 #include <sound/core.h>
 #include <sound/pcm.h>
 #include <sound/control.h>
+#include <sound/tlv.h>
 #include <sound/ac97_codec.h>
 #include "ac97_patch.h"
 #include "ac97_id.h"
@@ -49,6 +50,20 @@ static int patch_build_controls(struct snd_ac97 * ac97, const struct snd_kcontro
 		if ((err = snd_ctl_add(ac97->bus->card, snd_ac97_cnew(&controls[idx], ac97))) < 0)
 			return err;
 	return 0;
+}
+
+/* replace with a new TLV */
+static void reset_tlv(struct snd_ac97 *ac97, const char *name,
+		      unsigned int *tlv)
+{
+	struct snd_ctl_elem_id sid;
+	struct snd_kcontrol *kctl;
+	memset(&sid, 0, sizeof(sid));
+	strcpy(sid.name, name);
+	sid.iface = SNDRV_CTL_ELEM_IFACE_MIXER;
+	kctl = snd_ctl_find_id(ac97->bus->card, &sid);
+	if (kctl && kctl->tlv.p)
+		kctl->tlv.p = tlv;
 }
 
 /* set to the page, update bits and restore the page */
@@ -464,6 +479,10 @@ int patch_wolfson05(struct snd_ac97 * ac97)
 {
 	/* WM9705, WM9710 */
 	ac97->build_ops = &patch_wolfson_wm9705_ops;
+#ifdef CONFIG_TOUCHSCREEN_WM9705
+	/* WM9705 touchscreen uses AUX and VIDEO for touch */
+	ac97->flags |= AC97_HAS_NO_VIDEO | AC97_HAS_NO_AUX;
+#endif
 	return 0;
 }
 
@@ -511,7 +530,7 @@ AC97_ENUM("ALC Headphone Mux", wm9711_enum[1]),
 AC97_SINGLE("ALC Headphone Volume", AC97_VIDEO, 7, 7, 1),
 
 AC97_SINGLE("Out3 Switch", AC97_AUX, 15, 1, 1),
-AC97_SINGLE("Out3 ZC Switch", AC97_AUX, 7, 1, 1),
+AC97_SINGLE("Out3 ZC Switch", AC97_AUX, 7, 1, 0),
 AC97_ENUM("Out3 Mux", wm9711_enum[2]),
 AC97_ENUM("Out3 LR Mux", wm9711_enum[3]),
 AC97_SINGLE("Out3 Volume", AC97_AUX, 0, 31, 1),
@@ -556,13 +575,14 @@ AC97_SINGLE("Playback Attenuate (-6dB) Switch", AC97_MASTER_TONE, 6, 1, 0),
 
 AC97_SINGLE("ADC Switch", AC97_REC_GAIN, 15, 1, 1),
 AC97_ENUM("Capture Volume Steps", wm9711_enum[6]),
-AC97_DOUBLE("Capture Volume", AC97_REC_GAIN, 8, 0, 15, 1),
+AC97_DOUBLE("Capture Volume", AC97_REC_GAIN, 8, 0, 63, 1),
 AC97_SINGLE("Capture ZC Switch", AC97_REC_GAIN, 7, 1, 0),
 
 AC97_SINGLE("Mic 1 to Phone Switch", AC97_MIC, 14, 1, 1),
 AC97_SINGLE("Mic 2 to Phone Switch", AC97_MIC, 13, 1, 1),
 AC97_ENUM("Mic Select Source", wm9711_enum[7]),
-AC97_SINGLE("Mic 1 Volume", AC97_MIC, 8, 32, 1),
+AC97_SINGLE("Mic 1 Volume", AC97_MIC, 8, 31, 1),
+AC97_SINGLE("Mic 2 Volume", AC97_MIC, 0, 31, 1),
 AC97_SINGLE("Mic 20dB Boost Switch", AC97_MIC, 7, 1, 0),
 
 AC97_SINGLE("Master ZC Switch", AC97_MASTER, 7, 1, 0),
@@ -1367,7 +1387,25 @@ static void ad18xx_resume(struct snd_ac97 *ac97)
 
 	snd_ac97_restore_iec958(ac97);
 }
+
+static void ad1888_resume(struct snd_ac97 *ac97)
+{
+	ad18xx_resume(ac97);
+	snd_ac97_write_cache(ac97, AC97_CODEC_CLASS_REV, 0x8080);
+}
+
 #endif
+
+static const struct snd_ac97_res_table ad1819_restbl[] = {
+	{ AC97_PHONE, 0x9f1f },
+	{ AC97_MIC, 0x9f1f },
+	{ AC97_LINE, 0x9f1f },
+	{ AC97_CD, 0x9f1f },
+	{ AC97_VIDEO, 0x9f1f },
+	{ AC97_AUX, 0x9f1f },
+	{ AC97_PCM, 0x9f1f },
+	{ } /* terminator */
+};
 
 int patch_ad1819(struct snd_ac97 * ac97)
 {
@@ -1376,6 +1414,7 @@ int patch_ad1819(struct snd_ac97 * ac97)
 	// patch for Analog Devices
 	scfg = snd_ac97_read(ac97, AC97_AD_SERIAL_CFG);
 	snd_ac97_write_cache(ac97, AC97_AD_SERIAL_CFG, scfg | 0x7000); /* select all codecs */
+	ac97->res_table = ad1819_restbl;
 	return 0;
 }
 
@@ -1428,7 +1467,9 @@ static void patch_ad1881_chained(struct snd_ac97 * ac97, int unchained_idx, int 
 	snd_ac97_write_cache(ac97, AC97_AD_CODEC_CFG, 0x0002);		// ID1C
 	ac97->spec.ad18xx.codec_cfg[unchained_idx] = 0x0002;
 	if (cidx1 >= 0) {
-		if (patch_ad1881_chained1(ac97, cidx1, 0x0006))		// SDIE | ID1C
+		if (cidx2 < 0)
+			patch_ad1881_chained1(ac97, cidx1, 0);
+		else if (patch_ad1881_chained1(ac97, cidx1, 0x0006))	// SDIE | ID1C
 			patch_ad1881_chained1(ac97, cidx2, 0);
 		else if (patch_ad1881_chained1(ac97, cidx2, 0x0006))	// SDIE | ID1C
 			patch_ad1881_chained1(ac97, cidx1, 0);
@@ -1511,12 +1552,16 @@ static const struct snd_kcontrol_new snd_ac97_controls_ad1885[] = {
 	AC97_SINGLE("Line Jack Sense", AC97_AD_JACK_SPDIF, 8, 1, 1), /* inverted */
 };
 
+static DECLARE_TLV_DB_SCALE(db_scale_6bit_6db_max, -8850, 150, 0);
+
 static int patch_ad1885_specific(struct snd_ac97 * ac97)
 {
 	int err;
 
 	if ((err = patch_build_controls(ac97, snd_ac97_controls_ad1885, ARRAY_SIZE(snd_ac97_controls_ad1885))) < 0)
 		return err;
+	reset_tlv(ac97, "Headphone Playback Volume",
+		  db_scale_6bit_6db_max);
 	return 0;
 }
 
@@ -1540,12 +1585,27 @@ int patch_ad1885(struct snd_ac97 * ac97)
 	return 0;
 }
 
+static int patch_ad1886_specific(struct snd_ac97 * ac97)
+{
+	reset_tlv(ac97, "Headphone Playback Volume",
+		  db_scale_6bit_6db_max);
+	return 0;
+}
+
+static struct snd_ac97_build_ops patch_ad1886_build_ops = {
+	.build_specific = &patch_ad1886_specific,
+#ifdef CONFIG_PM
+	.resume = ad18xx_resume
+#endif
+};
+
 int patch_ad1886(struct snd_ac97 * ac97)
 {
 	patch_ad1881(ac97);
 	/* Presario700 workaround */
 	/* for Jack Sense/SPDIF Register misetting causing */
 	snd_ac97_write_cache(ac97, AC97_AD_JACK_SPDIF, 0x0010);
+	ac97->build_ops = &patch_ad1886_build_ops;
 	return 0;
 }
 
@@ -1627,6 +1687,7 @@ static const struct snd_kcontrol_new snd_ac97_ad1981x_jack_sense[] = {
  * (SS vendor << 16 | device)
  */
 static unsigned int ad1981_jacks_blacklist[] = {
+	0x10140537, /* Thinkpad T41p */
 	0x10140554, /* Thinkpad T42p/R50p */
 	0 /* end */
 };
@@ -1812,6 +1873,8 @@ static const struct snd_kcontrol_new snd_ac97_ad1888_controls[] = {
 		.get = snd_ac97_ad1888_lohpsel_get,
 		.put = snd_ac97_ad1888_lohpsel_put
 	},
+	AC97_SINGLE("V_REFOUT Enable", AC97_AD_MISC, 2, 1, 1),
+	AC97_SINGLE("High Pass Filter Enable", AC97_AD_TEST2, 12, 1, 1),
 	AC97_SINGLE("Spread Front to Surround and Center/LFE", AC97_AD_MISC, 7, 1, 0),
 	{
 		.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
@@ -1839,7 +1902,7 @@ static struct snd_ac97_build_ops patch_ad1888_build_ops = {
 	.build_post_spdif = patch_ad198x_post_spdif,
 	.build_specific = patch_ad1888_specific,
 #ifdef CONFIG_PM
-	.resume = ad18xx_resume,
+	.resume = ad1888_resume,
 #endif
 	.update_jacks = ad1888_update_jacks,
 };
@@ -2001,6 +2064,8 @@ static const struct snd_kcontrol_new snd_ac97_spdif_controls_alc650[] = {
 	/* AC97_SINGLE("IEC958 Input Monitor", AC97_ALC650_MULTICH, 13, 1, 0), */
 };
 
+static DECLARE_TLV_DB_SCALE(db_scale_5bit_3db_max, -4350, 150, 0);
+
 static int patch_alc650_specific(struct snd_ac97 * ac97)
 {
 	int err;
@@ -2011,6 +2076,9 @@ static int patch_alc650_specific(struct snd_ac97 * ac97)
 		if ((err = patch_build_controls(ac97, snd_ac97_spdif_controls_alc650, ARRAY_SIZE(snd_ac97_spdif_controls_alc650))) < 0)
 			return err;
 	}
+	if (ac97->id != AC97_ID_ALC650F)
+		reset_tlv(ac97, "Master Playback Volume",
+			  db_scale_5bit_3db_max);
 	return 0;
 }
 
@@ -2048,7 +2116,10 @@ int patch_alc650(struct snd_ac97 * ac97)
 	/* Enable SPDIF-IN only on Rev.E and above */
 	val = snd_ac97_read(ac97, AC97_ALC650_CLOCK);
 	/* SPDIF IN with pin 47 */
-	if (ac97->spec.dev_flags)
+	if (ac97->spec.dev_flags &&
+	    /* ASUS A6KM requires EAPD */
+	    ! (ac97->subsystem_vendor == 0x1043 &&
+	       ac97->subsystem_device == 0x1103))
 		val |= 0x03; /* enable */
 	else
 		val &= ~0x03; /* disable */
@@ -2191,7 +2262,9 @@ int patch_alc655(struct snd_ac97 * ac97)
 		val &= ~(1 << 1); /* Pin 47 is spdif input pin */
 	else { /* ALC655 */
 		if (ac97->subsystem_vendor == 0x1462 &&
-		    ac97->subsystem_device == 0x0131) /* MSI S270 laptop */
+		    (ac97->subsystem_device == 0x0131 || /* MSI S270 laptop */
+		     ac97->subsystem_device == 0x0161 || /* LG K1 Express */
+		     ac97->subsystem_device == 0x0351))  /* MSI L725 laptop */
 			val &= ~(1 << 1); /* Pin 47 is EAPD (for internal speaker) */
 		else
 			val |= (1 << 1); /* Pin 47 is spdif input pin */
@@ -2742,6 +2815,10 @@ int patch_vt1616(struct snd_ac97 * ac97)
  */
 int patch_vt1617a(struct snd_ac97 * ac97)
 {
+	/* bring analog power consumption to normal, like WinXP driver
+	 * for EPIA SP
+	 */
+	snd_ac97_write_cache(ac97, 0x5c, 0x20);
 	ac97->ext_id |= AC97_EI_SPDIF;	/* force the detection of spdif */
 	ac97->rates[AC97_RATES_SPDIF] = SNDRV_PCM_RATE_44100 | SNDRV_PCM_RATE_48000;
 	return 0;
@@ -2853,5 +2930,43 @@ static struct snd_ac97_res_table lm4550_restbl[] = {
 int patch_lm4550(struct snd_ac97 *ac97)
 {
 	ac97->res_table = lm4550_restbl;
+	return 0;
+}
+
+/* 
+ *  UCB1400 codec (http://www.semiconductors.philips.com/acrobat_download/datasheets/UCB1400-02.pdf)
+ */
+static const struct snd_kcontrol_new snd_ac97_controls_ucb1400[] = {
+/* enable/disable headphone driver which allows direct connection to
+   stereo headphone without the use of external DC blocking
+   capacitors */
+AC97_SINGLE("Headphone Driver", 0x6a, 6, 1, 0),
+/* Filter used to compensate the DC offset is added in the ADC to remove idle
+   tones from the audio band. */
+AC97_SINGLE("DC Filter", 0x6a, 4, 1, 0),
+/* Control smart-low-power mode feature. Allows automatic power down
+   of unused blocks in the ADC analog front end and the PLL. */
+AC97_SINGLE("Smart Low Power Mode", 0x6c, 4, 3, 0),
+};
+
+static int patch_ucb1400_specific(struct snd_ac97 * ac97)
+{
+	int idx, err;
+	for (idx = 0; idx < ARRAY_SIZE(snd_ac97_controls_ucb1400); idx++)
+		if ((err = snd_ctl_add(ac97->bus->card, snd_ctl_new1(&snd_ac97_controls_ucb1400[idx], ac97))) < 0)
+			return err;
+	return 0;
+}
+
+static struct snd_ac97_build_ops patch_ucb1400_ops = {
+	.build_specific	= patch_ucb1400_specific,
+};
+
+int patch_ucb1400(struct snd_ac97 * ac97)
+{
+	ac97->build_ops = &patch_ucb1400_ops;
+	/* enable headphone driver and smart low power mode by default */
+	snd_ac97_write(ac97, 0x6a, 0x0050);
+	snd_ac97_write(ac97, 0x6c, 0x0030);
 	return 0;
 }

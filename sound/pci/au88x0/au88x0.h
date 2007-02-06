@@ -236,8 +236,7 @@ static void vortex_spdif_init(vortex_t * vortex, int spdif_sr, int spdif_mode);
 static int vortex_core_init(vortex_t * card);
 static int vortex_core_shutdown(vortex_t * card);
 static void vortex_enable_int(vortex_t * card);
-static irqreturn_t vortex_interrupt(int irq, void *dev_id,
-				    struct pt_regs *regs);
+static irqreturn_t vortex_interrupt(int irq, void *dev_id);
 static int vortex_alsafmt_aspfmt(int alsafmt);
 
 /* Connection  stuff. */
@@ -270,7 +269,8 @@ static void vortex_mix_setvolumebyte(vortex_t * vortex, unsigned char mix,
 
 /* A3D functions. */
 #ifndef CHIP_AU8820
-static void vortex_Vort3D(vortex_t * v, int en);
+static void vortex_Vort3D_enable(vortex_t * v);
+static void vortex_Vort3D_disable(vortex_t * v);
 static void vortex_Vort3D_connect(vortex_t * vortex, int en);
 static void vortex_Vort3D_InitializeSource(a3dsrc_t * a, int en);
 #endif

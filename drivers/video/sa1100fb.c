@@ -160,7 +160,6 @@
  *	- Add patch 681/1 and clean up stork definitions.
  */
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/sched.h>
@@ -1086,7 +1085,7 @@ static void sa1100fb_disable_controller(struct sa1100fb_info *fbi)
 /*
  *  sa1100fb_handle_irq: Handle 'LCD DONE' interrupts.
  */
-static irqreturn_t sa1100fb_handle_irq(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t sa1100fb_handle_irq(int irq, void *dev_id)
 {
 	struct sa1100fb_info *fbi = dev_id;
 	unsigned int lcsr = LCSR;
@@ -1201,9 +1200,9 @@ static void set_ctrlr_state(struct sa1100fb_info *fbi, u_int state)
  * Our LCD controller task (which is called when we blank or unblank)
  * via keventd.
  */
-static void sa1100fb_task(void *dummy)
+static void sa1100fb_task(struct work_struct *w)
 {
-	struct sa1100fb_info *fbi = dummy;
+	struct sa1100fb_info *fbi = container_of(w, struct sa1100fb_info, task);
 	u_int state = xchg(&fbi->task_state, -1);
 
 	set_ctrlr_state(fbi, state);
@@ -1445,7 +1444,7 @@ static struct sa1100fb_info * __init sa1100fb_init_fbinfo(struct device *dev)
 					  fbi->max_bpp / 8;
 
 	init_waitqueue_head(&fbi->ctrlr_wait);
-	INIT_WORK(&fbi->task, sa1100fb_task, fbi);
+	INIT_WORK(&fbi->task, sa1100fb_task);
 	init_MUTEX(&fbi->ctrlr_sem);
 
 	return fbi;
@@ -1473,7 +1472,7 @@ static int __init sa1100fb_probe(struct platform_device *pdev)
 	if (ret)
 		goto failed;
 
-	ret = request_irq(irq, sa1100fb_handle_irq, SA_INTERRUPT,
+	ret = request_irq(irq, sa1100fb_handle_irq, IRQF_DISABLED,
 			  "LCD", fbi);
 	if (ret) {
 		printk(KERN_ERR "sa1100fb: request_irq failed: %d\n", ret);

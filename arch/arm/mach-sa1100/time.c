@@ -11,6 +11,7 @@
 #include <linux/init.h>
 #include <linux/errno.h>
 #include <linux/interrupt.h>
+#include <linux/irq.h>
 #include <linux/timex.h>
 #include <linux/signal.h>
 
@@ -76,7 +77,7 @@ static int match_posponed;
 #endif
 
 static irqreturn_t
-sa1100_timer_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+sa1100_timer_interrupt(int irq, void *dev_id)
 {
 	unsigned int next_match;
 
@@ -98,7 +99,7 @@ sa1100_timer_interrupt(int irq, void *dev_id, struct pt_regs *regs)
 	 * handlers.
 	 */
 	do {
-		timer_tick(regs);
+		timer_tick();
 		OSSR = OSSR_M0;  /* Clear match on timer 0 */
 		next_match = (OSMR0 += LATCH);
 	} while ((signed long)(next_match - OSCR) <= 0);
@@ -110,13 +111,14 @@ sa1100_timer_interrupt(int irq, void *dev_id, struct pt_regs *regs)
 
 static struct irqaction sa1100_timer_irq = {
 	.name		= "SA11xx Timer Tick",
-	.flags		= SA_INTERRUPT | SA_TIMER,
+	.flags		= IRQF_DISABLED | IRQF_TIMER,
 	.handler	= sa1100_timer_interrupt,
 };
 
 static void __init sa1100_timer_init(void)
 {
 	struct timespec tv;
+	unsigned long flags;
 
 	set_rtc = sa1100_set_rtc;
 
@@ -125,12 +127,12 @@ static void __init sa1100_timer_init(void)
 	do_settimeofday(&tv);
 
 	OIER = 0;		/* disable any timer interrupts */
-	OSCR = LATCH*2;		/* push OSCR out of the way */
-	OSMR0 = LATCH;		/* set initial match */
 	OSSR = 0xf;		/* clear status on all timers */
 	setup_irq(IRQ_OST0, &sa1100_timer_irq);
+	local_irq_save(flags);
 	OIER = OIER_E0;		/* enable match on timer 0 to cause interrupts */
-	OSCR = 0;		/* initialize free-running timer */
+	OSMR0 = OSCR + LATCH;	/* set initial match */
+	local_irq_restore(flags);
 }
 
 #ifdef CONFIG_NO_IDLE_HZ
@@ -150,13 +152,13 @@ static void sa1100_dyn_tick_reprogram(unsigned long ticks)
 }
 
 static irqreturn_t
-sa1100_dyn_tick_handler(int irq, void *dev_id, struct pt_regs *regs)
+sa1100_dyn_tick_handler(int irq, void *dev_id)
 {
 	if (match_posponed) {
 		match_posponed = 0;
 		OSMR0 = initial_match;
 		if ((signed long)(initial_match - OSCR) <= 0)
-			return sa1100_timer_interrupt(irq, dev_id, regs);
+			return sa1100_timer_interrupt(irq, dev_id);
 	}
 	return IRQ_NONE;
 }

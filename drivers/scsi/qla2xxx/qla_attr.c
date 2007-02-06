@@ -16,15 +16,16 @@ qla2x00_sysfs_read_fw_dump(struct kobject *kobj, char *buf, loff_t off,
 {
 	struct scsi_qla_host *ha = to_qla_host(dev_to_shost(container_of(kobj,
 	    struct device, kobj)));
+	char *rbuf = (char *)ha->fw_dump;
 
 	if (ha->fw_dump_reading == 0)
 		return 0;
-	if (off > ha->fw_dump_buffer_len)
-		return 0;
-	if (off + count > ha->fw_dump_buffer_len)
-		count = ha->fw_dump_buffer_len - off;
+	if (off > ha->fw_dump_len)
+                return 0;
+	if (off + count > ha->fw_dump_len)
+		count = ha->fw_dump_len - off;
 
-	memcpy(buf, &ha->fw_dump_buffer[off], count);
+	memcpy(buf, &rbuf[off], count);
 
 	return (count);
 }
@@ -36,7 +37,6 @@ qla2x00_sysfs_write_fw_dump(struct kobject *kobj, char *buf, loff_t off,
 	struct scsi_qla_host *ha = to_qla_host(dev_to_shost(container_of(kobj,
 	    struct device, kobj)));
 	int reading;
-	uint32_t dump_size;
 
 	if (off != 0)
 		return (0);
@@ -44,51 +44,26 @@ qla2x00_sysfs_write_fw_dump(struct kobject *kobj, char *buf, loff_t off,
 	reading = simple_strtol(buf, NULL, 10);
 	switch (reading) {
 	case 0:
-		if (ha->fw_dump_reading == 1) {
-			qla_printk(KERN_INFO, ha,
-			    "Firmware dump cleared on (%ld).\n",
-			    ha->host_no);
+		if (!ha->fw_dump_reading)
+			break;
 
-			vfree(ha->fw_dump_buffer);
-			if (!IS_QLA24XX(ha) && !IS_QLA54XX(ha))
-				free_pages((unsigned long)ha->fw_dump,
-				    ha->fw_dump_order);
+		qla_printk(KERN_INFO, ha,
+		    "Firmware dump cleared on (%ld).\n", ha->host_no);
 
-			ha->fw_dump_reading = 0;
-			ha->fw_dump_buffer = NULL;
-			ha->fw_dump = NULL;
-			ha->fw_dumped = 0;
-		}
+		ha->fw_dump_reading = 0;
+		ha->fw_dumped = 0;
 		break;
 	case 1:
-		if ((ha->fw_dump || ha->fw_dumped) && !ha->fw_dump_reading) {
+		if (ha->fw_dumped && !ha->fw_dump_reading) {
 			ha->fw_dump_reading = 1;
 
-			if (IS_QLA24XX(ha) || IS_QLA54XX(ha))
-				dump_size = FW_DUMP_SIZE_24XX;
-			else {
-				dump_size = FW_DUMP_SIZE_1M;
-				if (ha->fw_memory_size < 0x20000)
-					dump_size = FW_DUMP_SIZE_128K;
-				else if (ha->fw_memory_size < 0x80000)
-					dump_size = FW_DUMP_SIZE_512K;
-			}
-			ha->fw_dump_buffer = (char *)vmalloc(dump_size);
-			if (ha->fw_dump_buffer == NULL) {
-				qla_printk(KERN_WARNING, ha,
-				    "Unable to allocate memory for firmware "
-				    "dump buffer (%d).\n", dump_size);
-
-				ha->fw_dump_reading = 0;
-				return (count);
-			}
 			qla_printk(KERN_INFO, ha,
-			    "Firmware dump ready for read on (%ld).\n",
+			    "Raw firmware dump ready for read on (%ld).\n",
 			    ha->host_no);
-			memset(ha->fw_dump_buffer, 0, dump_size);
-			ha->isp_ops.ascii_fw_dump(ha);
-			ha->fw_dump_buffer_len = strlen(ha->fw_dump_buffer);
 		}
+		break;
+	case 2:
+		qla2x00_alloc_fw_dump(ha);
 		break;
 	}
 	return (count);
@@ -319,9 +294,6 @@ qla2x00_sysfs_read_vpd(struct kobject *kobj, char *buf, loff_t off,
 	if (!capable(CAP_SYS_ADMIN) || off != 0)
 		return 0;
 
-	if (!IS_QLA24XX(ha) && !IS_QLA54XX(ha))
-		return -ENOTSUPP;
-
 	/* Read NVRAM. */
 	spin_lock_irqsave(&ha->hardware_lock, flags);
 	ha->isp_ops.read_nvram(ha, (uint8_t *)buf, ha->vpd_base, ha->vpd_size);
@@ -340,9 +312,6 @@ qla2x00_sysfs_write_vpd(struct kobject *kobj, char *buf, loff_t off,
 
 	if (!capable(CAP_SYS_ADMIN) || off != 0 || count != ha->vpd_size)
 		return 0;
-
-	if (!IS_QLA24XX(ha) && !IS_QLA54XX(ha))
-		return -ENOTSUPP;
 
 	/* Write NVRAM. */
 	spin_lock_irqsave(&ha->hardware_lock, flags);
@@ -363,30 +332,100 @@ static struct bin_attribute sysfs_vpd_attr = {
 	.write = qla2x00_sysfs_write_vpd,
 };
 
+static ssize_t
+qla2x00_sysfs_read_sfp(struct kobject *kobj, char *buf, loff_t off,
+    size_t count)
+{
+	struct scsi_qla_host *ha = to_qla_host(dev_to_shost(container_of(kobj,
+	    struct device, kobj)));
+	uint16_t iter, addr, offset;
+	int rval;
+
+	if (!capable(CAP_SYS_ADMIN) || off != 0 || count != SFP_DEV_SIZE * 2)
+		return 0;
+
+	addr = 0xa0;
+	for (iter = 0, offset = 0; iter < (SFP_DEV_SIZE * 2) / SFP_BLOCK_SIZE;
+	    iter++, offset += SFP_BLOCK_SIZE) {
+		if (iter == 4) {
+			/* Skip to next device address. */
+			addr = 0xa2;
+			offset = 0;
+		}
+
+		rval = qla2x00_read_sfp(ha, ha->sfp_data_dma, addr, offset,
+		    SFP_BLOCK_SIZE);
+		if (rval != QLA_SUCCESS) {
+			qla_printk(KERN_WARNING, ha,
+			    "Unable to read SFP data (%x/%x/%x).\n", rval,
+			    addr, offset);
+			count = 0;
+			break;
+		}
+		memcpy(buf, ha->sfp_data, SFP_BLOCK_SIZE);
+		buf += SFP_BLOCK_SIZE;
+	}
+
+	return count;
+}
+
+static struct bin_attribute sysfs_sfp_attr = {
+	.attr = {
+		.name = "sfp",
+		.mode = S_IRUSR | S_IWUSR,
+		.owner = THIS_MODULE,
+	},
+	.size = SFP_DEV_SIZE * 2,
+	.read = qla2x00_sysfs_read_sfp,
+};
+
+static struct sysfs_entry {
+	char *name;
+	struct bin_attribute *attr;
+	int is4GBp_only;
+} bin_file_entries[] = {
+	{ "fw_dump", &sysfs_fw_dump_attr, },
+	{ "nvram", &sysfs_nvram_attr, },
+	{ "optrom", &sysfs_optrom_attr, },
+	{ "optrom_ctl", &sysfs_optrom_ctl_attr, },
+	{ "vpd", &sysfs_vpd_attr, 1 },
+	{ "sfp", &sysfs_sfp_attr, 1 },
+	{ NULL },
+};
+
 void
 qla2x00_alloc_sysfs_attr(scsi_qla_host_t *ha)
 {
 	struct Scsi_Host *host = ha->host;
+	struct sysfs_entry *iter;
+	int ret;
 
-	sysfs_create_bin_file(&host->shost_gendev.kobj, &sysfs_fw_dump_attr);
-	sysfs_create_bin_file(&host->shost_gendev.kobj, &sysfs_nvram_attr);
-	sysfs_create_bin_file(&host->shost_gendev.kobj, &sysfs_optrom_attr);
-	sysfs_create_bin_file(&host->shost_gendev.kobj,
-	    &sysfs_optrom_ctl_attr);
-	sysfs_create_bin_file(&host->shost_gendev.kobj, &sysfs_vpd_attr);
+	for (iter = bin_file_entries; iter->name; iter++) {
+		if (iter->is4GBp_only && (!IS_QLA24XX(ha) && !IS_QLA54XX(ha)))
+			continue;
+
+		ret = sysfs_create_bin_file(&host->shost_gendev.kobj,
+		    iter->attr);
+		if (ret)
+			qla_printk(KERN_INFO, ha,
+			    "Unable to create sysfs %s binary attribute "
+			    "(%d).\n", iter->name, ret);
+	}
 }
 
 void
 qla2x00_free_sysfs_attr(scsi_qla_host_t *ha)
 {
 	struct Scsi_Host *host = ha->host;
+	struct sysfs_entry *iter;
 
-	sysfs_remove_bin_file(&host->shost_gendev.kobj, &sysfs_fw_dump_attr);
-	sysfs_remove_bin_file(&host->shost_gendev.kobj, &sysfs_nvram_attr);
-	sysfs_remove_bin_file(&host->shost_gendev.kobj, &sysfs_optrom_attr);
-	sysfs_remove_bin_file(&host->shost_gendev.kobj,
-	    &sysfs_optrom_ctl_attr);
-	sysfs_remove_bin_file(&host->shost_gendev.kobj, &sysfs_vpd_attr);
+	for (iter = bin_file_entries; iter->name; iter++) {
+		if (iter->is4GBp_only && (!IS_QLA24XX(ha) && !IS_QLA54XX(ha)))
+			continue;
+
+		sysfs_remove_bin_file(&host->shost_gendev.kobj,
+		    iter->attr);
+	}
 
 	if (ha->beacon_blink_led == 1)
 		ha->isp_ops.beacon_off(ha);
@@ -665,13 +704,13 @@ qla2x00_get_host_speed(struct Scsi_Host *shost)
 	uint32_t speed = 0;
 
 	switch (ha->link_data_rate) {
-	case LDR_1GB:
+	case PORT_SPEED_1GB:
 		speed = 1;
 		break;
-	case LDR_2GB:
+	case PORT_SPEED_2GB:
 		speed = 2;
 		break;
-	case LDR_4GB:
+	case PORT_SPEED_4GB:
 		speed = 4;
 		break;
 	}
@@ -823,6 +862,49 @@ qla2x00_get_fc_host_stats(struct Scsi_Host *shost)
 	return pfc_host_stat;
 }
 
+static void
+qla2x00_get_host_symbolic_name(struct Scsi_Host *shost)
+{
+	scsi_qla_host_t *ha = to_qla_host(shost);
+
+	qla2x00_get_sym_node_name(ha, fc_host_symbolic_name(shost));
+}
+
+static void
+qla2x00_set_host_system_hostname(struct Scsi_Host *shost)
+{
+	scsi_qla_host_t *ha = to_qla_host(shost);
+
+	set_bit(REGISTER_FDMI_NEEDED, &ha->dpc_flags);
+}
+
+static void
+qla2x00_get_host_fabric_name(struct Scsi_Host *shost)
+{
+	scsi_qla_host_t *ha = to_qla_host(shost);
+	u64 node_name;
+
+	if (ha->device_flags & SWITCH_FOUND)
+		node_name = wwn_to_u64(ha->fabric_node_name);
+	else
+		node_name = wwn_to_u64(ha->node_name);
+
+	fc_host_fabric_name(shost) = node_name;
+}
+
+static void
+qla2x00_get_host_port_state(struct Scsi_Host *shost)
+{
+	scsi_qla_host_t *ha = to_qla_host(shost);
+
+	if (!ha->flags.online)
+		fc_host_port_state(shost) = FC_PORTSTATE_OFFLINE;
+	else if (atomic_read(&ha->loop_state) == LOOP_TIMEOUT)
+		fc_host_port_state(shost) = FC_PORTSTATE_UNKNOWN;
+	else
+		fc_host_port_state(shost) = FC_PORTSTATE_ONLINE;
+}
+
 struct fc_function_template qla2xxx_transport_functions = {
 
 	.show_host_node_name = 1,
@@ -835,6 +917,14 @@ struct fc_function_template qla2xxx_transport_functions = {
 	.show_host_speed = 1,
 	.get_host_port_type = qla2x00_get_host_port_type,
 	.show_host_port_type = 1,
+	.get_host_symbolic_name = qla2x00_get_host_symbolic_name,
+	.show_host_symbolic_name = 1,
+	.set_host_system_hostname = qla2x00_set_host_system_hostname,
+	.show_host_system_hostname = 1,
+	.get_host_fabric_name = qla2x00_get_host_fabric_name,
+	.show_host_fabric_name = 1,
+	.get_host_port_state = qla2x00_get_host_port_state,
+	.show_host_port_state = 1,
 
 	.dd_fcrport_size = sizeof(struct fc_port *),
 	.show_rport_supported_classes = 1,

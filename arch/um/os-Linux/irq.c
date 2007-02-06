@@ -18,6 +18,7 @@
 #include "sigio.h"
 #include "irq_user.h"
 #include "os.h"
+#include "um_malloc.h"
 
 static struct pollfd *pollfds = NULL;
 static int pollfds_num = 0;
@@ -50,11 +51,6 @@ int os_waiting_for_events(struct irq_fd *active_fds)
 		irq_fd = irq_fd->next;
 	}
 	return n;
-}
-
-int os_isatty(int fd)
-{
-	return isatty(fd);
 }
 
 int os_create_pollfd(int fd, int events, void *tmp_pfd, int size_tmpfds)
@@ -137,22 +133,19 @@ void os_set_pollfd(int i, int fd)
 
 void os_set_ioignore(void)
 {
-	set_handler(SIGIO, SIG_IGN, 0, -1);
+	signal(SIGIO, SIG_IGN);
 }
 
 void init_irq_signals(int on_sigstack)
 {
-	__sighandler_t h;
 	int flags;
 
 	flags = on_sigstack ? SA_ONSTACK : 0;
-	if (timer_irq_inited)
-		h = (__sighandler_t)alarm_handler;
-	else
-		h = boot_timer_handler;
 
-	set_handler(SIGVTALRM, h, flags | SA_RESTART,
-		    SIGUSR1, SIGIO, SIGWINCH, SIGALRM, -1);
+	set_handler(SIGVTALRM, (__sighandler_t) alarm_handler,
+		    flags | SA_RESTART, SIGUSR1, SIGIO, SIGWINCH, SIGALRM, -1);
+	set_handler(SIGALRM, (__sighandler_t) alarm_handler,
+		    flags | SA_RESTART, SIGUSR1, SIGIO, SIGWINCH, SIGALRM, -1);
 	set_handler(SIGIO, (__sighandler_t) sig_handler, flags | SA_RESTART,
 		    SIGUSR1, SIGIO, SIGWINCH, SIGALRM, SIGVTALRM, -1);
 	signal(SIGWINCH, SIG_IGN);

@@ -1,14 +1,14 @@
 /*
- *  linux/drivers/ide/pci/slc90e66.c	Version 0.11	September 11, 2002
+ *  linux/drivers/ide/pci/slc90e66.c	Version 0.12	May 12, 2006
  *
  *  Copyright (C) 2000-2002 Andre Hedrick <andre@linux-ide.org>
+ *  Copyright (C) 2006 MontaVista Software, Inc. <source@mvista.com>
  *
- * This a look-a-like variation of the ICH0 PIIX4 Ultra-66,
+ * This is a look-alike variation of the ICH0 PIIX4 Ultra-66,
  * but this keeps the ISA-Bridge and slots alive.
  *
  */
 
-#include <linux/config.h>
 #include <linux/types.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
@@ -72,7 +72,8 @@ static void slc90e66_tune_drive (ide_drive_t *drive, u8 pio)
 	u16 master_data;
 	u8 slave_data;
 				 /* ISP  RTC */
-	u8 timings[][2]	= { { 0, 0 },
+	static const u8 timings[][2]= {
+				    { 0, 0 },
 				    { 0, 0 },
 				    { 1, 0 },
 				    { 2, 1 },
@@ -119,7 +120,6 @@ static int slc90e66_tune_chipset (ide_drive_t *drive, u8 xferspeed)
 	pci_read_config_word(dev, 0x4a, &reg4a);
 
 	switch(speed) {
-#ifdef CONFIG_BLK_DEV_IDEDMA
 		case XFER_UDMA_4:	u_speed = 4 << (drive->dn * 4); break;
 		case XFER_UDMA_3:	u_speed = 3 << (drive->dn * 4); break;
 		case XFER_UDMA_2:	u_speed = 2 << (drive->dn * 4); break;
@@ -128,7 +128,6 @@ static int slc90e66_tune_chipset (ide_drive_t *drive, u8 xferspeed)
 		case XFER_MW_DMA_2:
 		case XFER_MW_DMA_1:
 		case XFER_SW_DMA_2:	break;
-#endif /* CONFIG_BLK_DEV_IDEDMA */
 		case XFER_PIO_4:
 		case XFER_PIO_3:
 		case XFER_PIO_2:
@@ -156,15 +155,12 @@ static int slc90e66_tune_chipset (ide_drive_t *drive, u8 xferspeed)
 	return (ide_config_drive_speed(drive, speed));
 }
 
-#ifdef CONFIG_BLK_DEV_IDEDMA
 static int slc90e66_config_drive_for_dma (ide_drive_t *drive)
 {
 	u8 speed = ide_dma_speed(drive, slc90e66_ratemask(drive));
 
-	if (!(speed)) {
-		u8 tspeed = ide_get_best_pio_mode(drive, 255, 5, NULL);
-		speed = slc90e66_dma_2_pio(XFER_PIO_0 + tspeed);
-	}
+	if (!speed)
+		return 0;
 
 	(void) slc90e66_tune_chipset(drive, speed);
 	return ide_dma_enable(drive);
@@ -179,22 +175,20 @@ static int slc90e66_config_drive_xfer_rate (ide_drive_t *drive)
 
 	if (id && (id->capability & 1) && drive->autodma) {
 
-		if (ide_use_dma(drive)) {
-			if (slc90e66_config_drive_for_dma(drive))
-				return hwif->ide_dma_on(drive);
-		}
+		if (ide_use_dma(drive) && slc90e66_config_drive_for_dma(drive))
+			return hwif->ide_dma_on(drive);
 
 		goto fast_ata_pio;
 
 	} else if ((id->capability & 8) || (id->field_valid & 2)) {
 fast_ata_pio:
-		hwif->tuneproc(drive, 5);
+		(void) hwif->speedproc(drive, XFER_PIO_0 +
+				       ide_get_best_pio_mode(drive, 255, 4, NULL));
 		return hwif->ide_dma_off_quietly(drive);
 	}
 	/* IORDY not supported */
 	return 0;
 }
-#endif /* CONFIG_BLK_DEV_IDEDMA */
 
 static void __devinit init_hwif_slc90e66 (ide_hwif_t *hwif)
 {
@@ -222,7 +216,6 @@ static void __devinit init_hwif_slc90e66 (ide_hwif_t *hwif)
 	hwif->mwdma_mask = 0x07;
 	hwif->swdma_mask = 0x07;
 
-#ifdef CONFIG_BLK_DEV_IDEDMA 
 	if (!(hwif->udma_four))
 		/* bit[0(1)]: 0:80, 1:40 */
 		hwif->udma_four = (reg47 & mask) ? 0 : 1;
@@ -232,7 +225,6 @@ static void __devinit init_hwif_slc90e66 (ide_hwif_t *hwif)
 		hwif->autodma = 1;
 	hwif->drives[0].autodma = hwif->autodma;
 	hwif->drives[1].autodma = hwif->autodma;
-#endif /* !CONFIG_BLK_DEV_IDEDMA */
 }
 
 static ide_pci_device_t slc90e66_chipset __devinitdata = {
@@ -250,7 +242,7 @@ static int __devinit slc90e66_init_one(struct pci_dev *dev, const struct pci_dev
 }
 
 static struct pci_device_id slc90e66_pci_tbl[] = {
-	{ PCI_VENDOR_ID_EFAR, PCI_DEVICE_ID_EFAR_SLC90E66_1, PCI_ANY_ID, PCI_ANY_ID, 0, 0, 0},
+	{ PCI_DEVICE(PCI_VENDOR_ID_EFAR, PCI_DEVICE_ID_EFAR_SLC90E66_1), 0},
 	{ 0, },
 };
 MODULE_DEVICE_TABLE(pci, slc90e66_pci_tbl);
@@ -261,7 +253,7 @@ static struct pci_driver driver = {
 	.probe		= slc90e66_init_one,
 };
 
-static int slc90e66_ide_init(void)
+static int __init slc90e66_ide_init(void)
 {
 	return ide_pci_register_driver(&driver);
 }

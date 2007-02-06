@@ -3,7 +3,6 @@
  *
  * Benjamin Herrenschmidt <benh@kernel.crashing.org>
  */
-#include <linux/config.h>
 #include <linux/kernel.h>
 #include <linux/string.h>
 #include <linux/init.h>
@@ -112,7 +111,7 @@ void __init btext_setup_display(int width, int height, int depth, int pitch,
 	logicalDisplayBase = (unsigned char *)address;
 	dispDeviceBase = (unsigned char *)address;
 	dispDeviceRowBytes = pitch;
-	dispDeviceDepth = depth;
+	dispDeviceDepth = depth == 15 ? 16 : depth;
 	dispDeviceRect[0] = dispDeviceRect[1] = 0;
 	dispDeviceRect[2] = width;
 	dispDeviceRect[3] = height;
@@ -159,27 +158,35 @@ int btext_initialize(struct device_node *np)
 {
 	unsigned int width, height, depth, pitch;
 	unsigned long address = 0;
-	u32 *prop;
+	const u32 *prop;
 
-	prop = (u32 *)get_property(np, "width", NULL);
+	prop = get_property(np, "linux,bootx-width", NULL);
+	if (prop == NULL)
+		prop = get_property(np, "width", NULL);
 	if (prop == NULL)
 		return -EINVAL;
 	width = *prop;
-	prop = (u32 *)get_property(np, "height", NULL);
+	prop = get_property(np, "linux,bootx-height", NULL);
+	if (prop == NULL)
+		prop = get_property(np, "height", NULL);
 	if (prop == NULL)
 		return -EINVAL;
 	height = *prop;
-	prop = (u32 *)get_property(np, "depth", NULL);
+	prop = get_property(np, "linux,bootx-depth", NULL);
+	if (prop == NULL)
+		prop = get_property(np, "depth", NULL);
 	if (prop == NULL)
 		return -EINVAL;
 	depth = *prop;
 	pitch = width * ((depth + 7) / 8);
-	prop = (u32 *)get_property(np, "linebytes", NULL);
-	if (prop)
+	prop = get_property(np, "linux,bootx-linebytes", NULL);
+	if (prop == NULL)
+		prop = get_property(np, "linebytes", NULL);
+	if (prop && *prop != 0xffffffffu)
 		pitch = *prop;
 	if (pitch == 1)
 		pitch = 0x1000;
-	prop = (u32 *)get_property(np, "address", NULL);
+	prop = get_property(np, "address", NULL);
 	if (prop)
 		address = *prop;
 
@@ -195,7 +202,7 @@ int btext_initialize(struct device_node *np)
 	g_max_loc_Y = height / 16;
 	dispDeviceBase = (unsigned char *)address;
 	dispDeviceRowBytes = pitch;
-	dispDeviceDepth = depth;
+	dispDeviceDepth = depth == 15 ? 16 : depth;
 	dispDeviceRect[0] = dispDeviceRect[1] = 0;
 	dispDeviceRect[2] = width;
 	dispDeviceRect[3] = height;
@@ -207,11 +214,11 @@ int btext_initialize(struct device_node *np)
 
 int __init btext_find_display(int allow_nonstdout)
 {
-	char *name;
+	const char *name;
 	struct device_node *np = NULL; 
 	int rc = -ENODEV;
 
-	name = (char *)get_property(of_chosen, "linux,stdout-path", NULL);
+	name = get_property(of_chosen, "linux,stdout-path", NULL);
 	if (name != NULL) {
 		np = of_find_node_by_path(name);
 		if (np != NULL) {

@@ -35,7 +35,6 @@
 
 #define MAX_DEVICE_COUNT 4
 
-#include <linux/config.h>	
 #include <linux/module.h>
 #include <linux/errno.h>
 #include <linux/signal.h>
@@ -57,7 +56,6 @@
 #include <linux/netdevice.h>
 #include <linux/vmalloc.h>
 #include <linux/init.h>
-#include <asm/serial.h>
 #include <linux/delay.h>
 #include <linux/ioctl.h>
 
@@ -77,8 +75,10 @@
 #include <pcmcia/cisreg.h>
 #include <pcmcia/ds.h>
 
-#ifdef CONFIG_HDLC_MODULE
-#define CONFIG_HDLC 1
+#if defined(CONFIG_HDLC) || (defined(CONFIG_HDLC_MODULE) && defined(CONFIG_SYNCLINK_CS_MODULE))
+#define SYNCLINK_GENERIC_HDLC 1
+#else
+#define SYNCLINK_GENERIC_HDLC 0
 #endif
 
 #define GET_USER(error,value,addr) error = get_user(value,addr)
@@ -237,7 +237,7 @@ typedef struct _mgslpc_info {
 	int dosyncppp;
 	spinlock_t netlock;
 
-#ifdef CONFIG_HDLC
+#if SYNCLINK_GENERIC_HDLC
 	struct net_device *netdev;
 #endif
 
@@ -394,7 +394,7 @@ static void tx_timeout(unsigned long context);
 
 static int ioctl_common(MGSLPC_INFO *info, unsigned int cmd, unsigned long arg);
 
-#ifdef CONFIG_HDLC
+#if SYNCLINK_GENERIC_HDLC
 #define dev_to_port(D) (dev_to_hdlc(D)->priv)
 static void hdlcdev_tx_done(MGSLPC_INFO *info);
 static void hdlcdev_rx(MGSLPC_INFO *info, char *buf, int size);
@@ -418,12 +418,12 @@ static void rx_reset_buffers(MGSLPC_INFO *info);
 static int  rx_alloc_buffers(MGSLPC_INFO *info);
 static void rx_free_buffers(MGSLPC_INFO *info);
 
-static irqreturn_t mgslpc_isr(int irq, void *dev_id, struct pt_regs * regs);
+static irqreturn_t mgslpc_isr(int irq, void *dev_id);
 
 /*
  * Bottom half interrupt handlers
  */
-static void bh_handler(void* Context);
+static void bh_handler(struct work_struct *work);
 static void bh_transmit(MGSLPC_INFO *info);
 static void bh_status(MGSLPC_INFO *info);
 
@@ -541,7 +541,7 @@ static int mgslpc_probe(struct pcmcia_device *link)
     if (debug_level >= DEBUG_LEVEL_INFO)
 	    printk("mgslpc_attach\n");
 
-    info = (MGSLPC_INFO *)kmalloc(sizeof(MGSLPC_INFO), GFP_KERNEL);
+    info = kmalloc(sizeof(MGSLPC_INFO), GFP_KERNEL);
     if (!info) {
 	    printk("Error can't allocate device instance data\n");
 	    return -ENOMEM;
@@ -549,7 +549,7 @@ static int mgslpc_probe(struct pcmcia_device *link)
 
     memset(info, 0, sizeof(MGSLPC_INFO));
     info->magic = MGSLPC_MAGIC;
-    INIT_WORK(&info->task, bh_handler, info);
+    INIT_WORK(&info->task, bh_handler);
     info->max_frame_size = 4096;
     info->close_delay = 5*HZ/10;
     info->closing_wait = 30*HZ;
@@ -606,17 +606,10 @@ static int mgslpc_config(struct pcmcia_device *link)
     if (debug_level >= DEBUG_LEVEL_INFO)
 	    printk("mgslpc_config(0x%p)\n", link);
 
-    /* read CONFIG tuple to find its configuration registers */
-    tuple.DesiredTuple = CISTPL_CONFIG;
     tuple.Attributes = 0;
     tuple.TupleData = buf;
     tuple.TupleDataMax = sizeof(buf);
     tuple.TupleOffset = 0;
-    CS_CHECK(GetFirstTuple, pcmcia_get_first_tuple(link, &tuple));
-    CS_CHECK(GetTupleData, pcmcia_get_tuple_data(link, &tuple));
-    CS_CHECK(ParseTuple, pcmcia_parse_tuple(link, &tuple, &parse));
-    link->conf.ConfigBase = parse.config.base;
-    link->conf.Present = parse.config.rmask[0];
 
     /* get CIS configuration entry */
 
@@ -844,9 +837,9 @@ static int bh_action(MGSLPC_INFO *info)
 	return rc;
 }
 
-void bh_handler(void* Context)
+static void bh_handler(struct work_struct *work)
 {
-	MGSLPC_INFO *info = (MGSLPC_INFO*)Context;
+	MGSLPC_INFO *info = container_of(work, MGSLPC_INFO, task);
 	int action;
 
 	if (!info)
@@ -888,7 +881,7 @@ void bh_handler(void* Context)
 			__FILE__,__LINE__,info->device_name);
 }
 
-void bh_transmit(MGSLPC_INFO *info)
+static void bh_transmit(MGSLPC_INFO *info)
 {
 	struct tty_struct *tty = info->tty;
 	if (debug_level >= DEBUG_LEVEL_BH)
@@ -900,7 +893,7 @@ void bh_transmit(MGSLPC_INFO *info)
 	}
 }
 
-void bh_status(MGSLPC_INFO *info)
+static void bh_status(MGSLPC_INFO *info)
 {
 	info->ri_chkcount = 0;
 	info->dsr_chkcount = 0;
@@ -1062,7 +1055,7 @@ static void tx_done(MGSLPC_INFO *info)
 		info->drop_rts_on_tx_done = 0;
 	}
 
-#ifdef CONFIG_HDLC
+#if SYNCLINK_GENERIC_HDLC
 	if (info->netcount)
 		hdlcdev_tx_done(info);
 	else 
@@ -1173,9 +1166,13 @@ static void dcd_change(MGSLPC_INFO *info)
 	}
 	else
 		info->input_signal_events.dcd_down++;
-#ifdef CONFIG_HDLC
-	if (info->netcount)
-		hdlc_set_carrier(info->serial_signals & SerialSignal_DCD, info->netdev);
+#if SYNCLINK_GENERIC_HDLC
+	if (info->netcount) {
+		if (info->serial_signals & SerialSignal_DCD)
+			netif_carrier_on(info->netdev);
+		else
+			netif_carrier_off(info->netdev);
+	}
 #endif
 	wake_up_interruptible(&info->status_event_wait_q);
 	wake_up_interruptible(&info->event_wait_q);
@@ -1232,9 +1229,8 @@ static void ri_change(MGSLPC_INFO *info)
  * 
  * irq     interrupt number that caused interrupt
  * dev_id  device ID supplied during interrupt registration
- * regs    interrupted processor context
  */
-static irqreturn_t mgslpc_isr(int irq, void *dev_id, struct pt_regs * regs)
+static irqreturn_t mgslpc_isr(int irq, void *dev_id)
 {
 	MGSLPC_INFO * info = (MGSLPC_INFO *)dev_id;
 	unsigned short isr;
@@ -1582,7 +1578,7 @@ static void mgslpc_put_char(struct tty_struct *tty, unsigned char ch)
 	if (mgslpc_paranoia_check(info, tty->name, "mgslpc_put_char"))
 		return;
 
-	if (!tty || !info->tx_buf)
+	if (!info->tx_buf)
 		return;
 
 	spin_lock_irqsave(&info->lock,flags);
@@ -1649,7 +1645,7 @@ static int mgslpc_write(struct tty_struct * tty,
 			__FILE__,__LINE__,info->device_name,count);
 	
 	if (mgslpc_paranoia_check(info, tty->name, "mgslpc_write") ||
-	    !tty || !info->tx_buf)
+		!info->tx_buf)
 		goto cleanup;
 
 	if (info->params.mode == MGSL_MODE_HDLC) {
@@ -2305,7 +2301,7 @@ static int mgslpc_ioctl(struct tty_struct *tty, struct file * file,
 	return ioctl_common(info, cmd, arg);
 }
 
-int ioctl_common(MGSLPC_INFO *info, unsigned int cmd, unsigned long arg)
+static int ioctl_common(MGSLPC_INFO *info, unsigned int cmd, unsigned long arg)
 {
 	int error;
 	struct mgsl_icount cnow;	/* kernel counter temps */
@@ -2379,7 +2375,7 @@ int ioctl_common(MGSLPC_INFO *info, unsigned int cmd, unsigned long arg)
  * 	tty		pointer to tty structure
  * 	termios		pointer to buffer to hold returned old termios
  */
-static void mgslpc_set_termios(struct tty_struct *tty, struct termios *old_termios)
+static void mgslpc_set_termios(struct tty_struct *tty, struct ktermios *old_termios)
 {
 	MGSLPC_INFO *info = (MGSLPC_INFO *)tty->driver_data;
 	unsigned long flags;
@@ -2877,7 +2873,7 @@ done:
 	return ((count < begin+len-off) ? count : begin+len-off);
 }
 
-int rx_alloc_buffers(MGSLPC_INFO *info)
+static int rx_alloc_buffers(MGSLPC_INFO *info)
 {
 	/* each buffer has header and data */
 	info->rx_buf_size = sizeof(RXBUF) + info->max_frame_size;
@@ -2900,13 +2896,13 @@ int rx_alloc_buffers(MGSLPC_INFO *info)
 	return 0;
 }
 
-void rx_free_buffers(MGSLPC_INFO *info)
+static void rx_free_buffers(MGSLPC_INFO *info)
 {
 	kfree(info->rx_buf);
 	info->rx_buf = NULL;
 }
 
-int claim_resources(MGSLPC_INFO *info)
+static int claim_resources(MGSLPC_INFO *info)
 {
 	if (rx_alloc_buffers(info) < 0 ) {
 		printk( "Cant allocate rx buffer %s\n", info->device_name);
@@ -2916,7 +2912,7 @@ int claim_resources(MGSLPC_INFO *info)
 	return 0;
 }
 
-void release_resources(MGSLPC_INFO *info)
+static void release_resources(MGSLPC_INFO *info)
 {
 	if (debug_level >= DEBUG_LEVEL_INFO)
 		printk("release_resources(%s)\n", info->device_name);
@@ -2928,7 +2924,7 @@ void release_resources(MGSLPC_INFO *info)
  * 	
  * Arguments:		info	pointer to device instance data
  */
-void mgslpc_add_device(MGSLPC_INFO *info)
+static void mgslpc_add_device(MGSLPC_INFO *info)
 {
 	info->next_device = NULL;
 	info->line = mgslpc_device_count;
@@ -2959,12 +2955,12 @@ void mgslpc_add_device(MGSLPC_INFO *info)
 	printk( "SyncLink PC Card %s:IO=%04X IRQ=%d\n",
 		info->device_name, info->io_base, info->irq_level);
 
-#ifdef CONFIG_HDLC
+#if SYNCLINK_GENERIC_HDLC
 	hdlcdev_init(info);
 #endif
 }
 
-void mgslpc_remove_device(MGSLPC_INFO *remove_info)
+static void mgslpc_remove_device(MGSLPC_INFO *remove_info)
 {
 	MGSLPC_INFO *info = mgslpc_device_list;
 	MGSLPC_INFO *last = NULL;
@@ -2975,7 +2971,7 @@ void mgslpc_remove_device(MGSLPC_INFO *remove_info)
 				last->next_device = info->next_device;
 			else
 				mgslpc_device_list = info->next_device;
-#ifdef CONFIG_HDLC
+#if SYNCLINK_GENERIC_HDLC
 			hdlcdev_exit(info);
 #endif
 			release_resources(info);
@@ -3006,7 +3002,7 @@ static struct pcmcia_driver mgslpc_driver = {
 	.resume		= mgslpc_resume,
 };
 
-static struct tty_operations mgslpc_ops = {
+static const struct tty_operations mgslpc_ops = {
 	.open = mgslpc_open,
 	.close = mgslpc_close,
 	.write = mgslpc_write,
@@ -3257,7 +3253,7 @@ static void loopback_enable(MGSLPC_INFO *info)
 	write_reg(info, CHA + MODE, val);
 }
 
-void hdlc_mode(MGSLPC_INFO *info)
+static void hdlc_mode(MGSLPC_INFO *info)
 {
 	unsigned char val;
 	unsigned char clkmode, clksubmode;
@@ -3497,7 +3493,7 @@ void hdlc_mode(MGSLPC_INFO *info)
 	rx_stop(info);
 }
 
-void rx_stop(MGSLPC_INFO *info)
+static void rx_stop(MGSLPC_INFO *info)
 {
 	if (debug_level >= DEBUG_LEVEL_ISR)
 		printk("%s(%d):rx_stop(%s)\n",
@@ -3510,7 +3506,7 @@ void rx_stop(MGSLPC_INFO *info)
 	info->rx_overflow = 0;
 }
 
-void rx_start(MGSLPC_INFO *info)
+static void rx_start(MGSLPC_INFO *info)
 {
 	if (debug_level >= DEBUG_LEVEL_ISR)
 		printk("%s(%d):rx_start(%s)\n",
@@ -3526,7 +3522,7 @@ void rx_start(MGSLPC_INFO *info)
 	info->rx_enabled = 1;
 }
 
-void tx_start(MGSLPC_INFO *info)
+static void tx_start(MGSLPC_INFO *info)
 {
 	if (debug_level >= DEBUG_LEVEL_ISR)
 		printk("%s(%d):tx_start(%s)\n",
@@ -3564,7 +3560,7 @@ void tx_start(MGSLPC_INFO *info)
 		info->tx_enabled = 1;
 }
 
-void tx_stop(MGSLPC_INFO *info)
+static void tx_stop(MGSLPC_INFO *info)
 {
 	if (debug_level >= DEBUG_LEVEL_ISR)
 		printk("%s(%d):tx_stop(%s)\n",
@@ -3578,7 +3574,7 @@ void tx_stop(MGSLPC_INFO *info)
 
 /* Reset the adapter to a known state and prepare it for further use.
  */
-void reset_device(MGSLPC_INFO *info)
+static void reset_device(MGSLPC_INFO *info)
 {
 	/* power up both channels (set BIT7) */ 
 	write_reg(info, CHA + CCR0, 0x80);
@@ -3628,7 +3624,7 @@ void reset_device(MGSLPC_INFO *info)
 	write_reg(info, IPC, 0x05);
 }
 
-void async_mode(MGSLPC_INFO *info)
+static void async_mode(MGSLPC_INFO *info)
 {
 	unsigned char val;
 
@@ -3799,7 +3795,7 @@ void async_mode(MGSLPC_INFO *info)
 
 /* Set the HDLC idle mode for the transmitter.
  */
-void tx_set_idle(MGSLPC_INFO *info)
+static void tx_set_idle(MGSLPC_INFO *info)
 {
 	/* Note: ESCC2 only supports flags and one idle modes */ 
 	if (info->idle_mode == HDLC_TXIDLE_FLAGS)
@@ -3810,7 +3806,7 @@ void tx_set_idle(MGSLPC_INFO *info)
 
 /* get state of the V24 status (input) signals.
  */
-void get_signals(MGSLPC_INFO *info)
+static void get_signals(MGSLPC_INFO *info)
 {
 	unsigned char status = 0;
 	
@@ -3832,7 +3828,7 @@ void get_signals(MGSLPC_INFO *info)
 /* Set the state of DTR and RTS based on contents of
  * serial_signals member of device extension.
  */
-void set_signals(MGSLPC_INFO *info)
+static void set_signals(MGSLPC_INFO *info)
 {
 	unsigned char val;
 
@@ -3856,7 +3852,7 @@ void set_signals(MGSLPC_INFO *info)
 		set_reg_bits(info, CHA + PVR, PVR_DTR);
 }
 
-void rx_reset_buffers(MGSLPC_INFO *info)
+static void rx_reset_buffers(MGSLPC_INFO *info)
 {
 	RXBUF *buf;
 	int i;
@@ -3875,7 +3871,7 @@ void rx_reset_buffers(MGSLPC_INFO *info)
  *
  * Returns 1 if frame returned, otherwise 0
  */
-int rx_get_frame(MGSLPC_INFO *info)
+static int rx_get_frame(MGSLPC_INFO *info)
 {
 	unsigned short status;
 	RXBUF *buf;
@@ -3907,7 +3903,7 @@ int rx_get_frame(MGSLPC_INFO *info)
 				return_frame = 1;
 		}
 		framesize = 0;
-#ifdef CONFIG_HDLC
+#if SYNCLINK_GENERIC_HDLC
 		{
 			struct net_device_stats *stats = hdlc_stats(info->netdev);
 			stats->rx_errors++;
@@ -3941,7 +3937,7 @@ int rx_get_frame(MGSLPC_INFO *info)
 				++framesize;
 			}
 
-#ifdef CONFIG_HDLC
+#if SYNCLINK_GENERIC_HDLC
 			if (info->netcount)
 				hdlcdev_rx(info, buf->data, framesize);
 			else
@@ -3961,7 +3957,7 @@ int rx_get_frame(MGSLPC_INFO *info)
 	return 1;
 }
 
-BOOLEAN register_test(MGSLPC_INFO *info)
+static BOOLEAN register_test(MGSLPC_INFO *info)
 {
 	static unsigned char patterns[] = 
 	    { 0x00, 0xff, 0xaa, 0x55, 0x69, 0x96, 0x0f };
@@ -3987,7 +3983,7 @@ BOOLEAN register_test(MGSLPC_INFO *info)
 	return rc;
 }
 
-BOOLEAN irq_test(MGSLPC_INFO *info)
+static BOOLEAN irq_test(MGSLPC_INFO *info)
 {
 	unsigned long end_time;
 	unsigned long flags;
@@ -4022,7 +4018,7 @@ BOOLEAN irq_test(MGSLPC_INFO *info)
 	return info->irq_occurred ? TRUE : FALSE;
 }
 
-int adapter_test(MGSLPC_INFO *info)
+static int adapter_test(MGSLPC_INFO *info)
 {
 	if (!register_test(info)) {
 		info->init_error = DiagStatus_AddressFailure;
@@ -4044,7 +4040,7 @@ int adapter_test(MGSLPC_INFO *info)
 	return 0;
 }
 
-void trace_block(MGSLPC_INFO *info,const char* data, int count, int xmit)
+static void trace_block(MGSLPC_INFO *info,const char* data, int count, int xmit)
 {
 	int i;
 	int linecount;
@@ -4079,7 +4075,7 @@ void trace_block(MGSLPC_INFO *info,const char* data, int count, int xmit)
 /* HDLC frame time out
  * update stats and do tx completion processing
  */
-void tx_timeout(unsigned long context)
+static void tx_timeout(unsigned long context)
 {
 	MGSLPC_INFO *info = (MGSLPC_INFO*)context;
 	unsigned long flags;
@@ -4097,7 +4093,7 @@ void tx_timeout(unsigned long context)
 
 	spin_unlock_irqrestore(&info->lock,flags);
 	
-#ifdef CONFIG_HDLC
+#if SYNCLINK_GENERIC_HDLC
 	if (info->netcount)
 		hdlcdev_tx_done(info);
 	else
@@ -4105,7 +4101,7 @@ void tx_timeout(unsigned long context)
 		bh_transmit(info);
 }
 
-#ifdef CONFIG_HDLC
+#if SYNCLINK_GENERIC_HDLC
 
 /**
  * called by generic HDLC layer when protocol selected (PPP, frame relay, etc.)
@@ -4251,8 +4247,10 @@ static int hdlcdev_open(struct net_device *dev)
 	spin_lock_irqsave(&info->lock, flags);
 	get_signals(info);
 	spin_unlock_irqrestore(&info->lock, flags);
-	hdlc_set_carrier(info->serial_signals & SerialSignal_DCD, dev);
-
+	if (info->serial_signals & SerialSignal_DCD)
+		netif_carrier_on(dev);
+	else
+		netif_carrier_off(dev);
 	return 0;
 }
 

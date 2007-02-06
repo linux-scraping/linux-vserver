@@ -160,7 +160,7 @@ static void ne_block_input(struct net_device *dev, int count,
 static void ne_block_output(struct net_device *dev, const int count,
 		const unsigned char *buf, const int start_page);
 
-
+
 /*  Probe for various non-shared-memory ethercards.
 
    NEx000-clone boards have a Station Address PROM (SAPROM) in the packet
@@ -807,7 +807,7 @@ retry:
 	return;
 }
 
-
+
 #ifdef MODULE
 #define MAX_NE_CARDS	4	/* Max number of NE cards per module */
 static struct net_device *dev_ne[MAX_NE_CARDS];
@@ -829,7 +829,7 @@ that the ne2k probe is the last 8390 based probe to take place (as it
 is at boot) and so the probe will get confused by any other 8390 cards.
 ISA device autoprobes on a running machine are not recommended anyway. */
 
-int init_module(void)
+int __init init_module(void)
 {
 	int this_dev, found = 0;
 
@@ -867,7 +867,7 @@ static void cleanup_card(struct net_device *dev)
 	release_region(dev->base_addr, NE_IO_EXTENT);
 }
 
-void cleanup_module(void)
+void __exit cleanup_module(void)
 {
 	int this_dev;
 

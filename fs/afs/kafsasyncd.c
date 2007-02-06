@@ -20,6 +20,7 @@
 #include <linux/init.h>
 #include <linux/sched.h>
 #include <linux/completion.h>
+#include <linux/freezer.h>
 #include "cell.h"
 #include "server.h"
 #include "volume.h"
@@ -136,8 +137,7 @@ static int kafsasyncd(void *arg)
 			if (!list_empty(&kafsasyncd_async_attnq)) {
 				op = list_entry(kafsasyncd_async_attnq.next,
 						struct afs_async_op, link);
-				list_del(&op->link);
-				list_add_tail(&op->link,
+				list_move_tail(&op->link,
 					      &kafsasyncd_async_busyq);
 			}
 
@@ -204,8 +204,7 @@ void afs_kafsasyncd_begin_op(struct afs_async_op *op)
 	init_waitqueue_entry(&op->waiter, kafsasyncd_task);
 	add_wait_queue(&op->call->waitq, &op->waiter);
 
-	list_del(&op->link);
-	list_add_tail(&op->link, &kafsasyncd_async_busyq);
+	list_move_tail(&op->link, &kafsasyncd_async_busyq);
 
 	spin_unlock(&kafsasyncd_async_lock);
 
@@ -223,8 +222,7 @@ void afs_kafsasyncd_attend_op(struct afs_async_op *op)
 
 	spin_lock(&kafsasyncd_async_lock);
 
-	list_del(&op->link);
-	list_add_tail(&op->link, &kafsasyncd_async_attnq);
+	list_move_tail(&op->link, &kafsasyncd_async_attnq);
 
 	spin_unlock(&kafsasyncd_async_lock);
 

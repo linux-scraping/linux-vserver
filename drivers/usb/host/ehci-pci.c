@@ -76,6 +76,30 @@ static int ehci_pci_setup(struct usb_hcd *hcd)
 	dbg_hcs_params(ehci, "reset");
 	dbg_hcc_params(ehci, "reset");
 
+        /* ehci_init() causes memory for DMA transfers to be
+         * allocated.  Thus, any vendor-specific workarounds based on
+         * limiting the type of memory used for DMA transfers must
+         * happen before ehci_init() is called. */
+	switch (pdev->vendor) {
+	case PCI_VENDOR_ID_NVIDIA:
+		/* NVidia reports that certain chips don't handle
+		 * QH, ITD, or SITD addresses above 2GB.  (But TD,
+		 * data buffer, and periodic schedule are normal.)
+		 */
+		switch (pdev->device) {
+		case 0x003c:	/* MCP04 */
+		case 0x005b:	/* CK804 */
+		case 0x00d8:	/* CK8 */
+		case 0x00e8:	/* CK8S */
+			if (pci_set_consistent_dma_mask(pdev,
+						DMA_31BIT_MASK) < 0)
+				ehci_warn(ehci, "can't enable NVidia "
+					"workaround for >2GB RAM\n");
+			break;
+		}
+		break;
+	}
+
 	/* cache this readonly data; minimize chip reads */
 	ehci->hcs_params = readl(&ehci->caps->hcs_params);
 
@@ -87,8 +111,6 @@ static int ehci_pci_setup(struct usb_hcd *hcd)
 	retval = ehci_init(hcd);
 	if (retval)
 		return retval;
-
-	/* NOTE:  only the parts below this line are PCI-specific */
 
 	switch (pdev->vendor) {
 	case PCI_VENDOR_ID_TDI:
@@ -107,19 +129,6 @@ static int ehci_pci_setup(struct usb_hcd *hcd)
 		break;
 	case PCI_VENDOR_ID_NVIDIA:
 		switch (pdev->device) {
-		/* NVidia reports that certain chips don't handle
-		 * QH, ITD, or SITD addresses above 2GB.  (But TD,
-		 * data buffer, and periodic schedule are normal.)
-		 */
-		case 0x003c:	/* MCP04 */
-		case 0x005b:	/* CK804 */
-		case 0x00d8:	/* CK8 */
-		case 0x00e8:	/* CK8S */
-			if (pci_set_consistent_dma_mask(pdev,
-						DMA_31BIT_MASK) < 0)
-				ehci_warn(ehci, "can't enable NVidia "
-					"workaround for >2GB RAM\n");
-			break;
 		/* Some NForce2 chips have problems with selective suspend;
 		 * fixed in newer silicon.
 		 */
@@ -229,6 +238,12 @@ static int ehci_pci_suspend(struct usb_hcd *hcd, pm_message_t message)
 	writel (0, &ehci->regs->intr_enable);
 	(void)readl(&ehci->regs->intr_enable);
 
+	/* make sure snapshot being resumed re-enumerates everything */
+	if (message.event == PM_EVENT_PRETHAW) {
+		ehci_halt(ehci);
+		ehci_reset(ehci);
+	}
+
 	clear_bit(HCD_FLAG_HW_ACCESSIBLE, &hcd->flags);
  bail:
 	spin_unlock_irqrestore (&ehci->lock, flags);
@@ -242,9 +257,7 @@ static int ehci_pci_suspend(struct usb_hcd *hcd, pm_message_t message)
 static int ehci_pci_resume(struct usb_hcd *hcd)
 {
 	struct ehci_hcd		*ehci = hcd_to_ehci(hcd);
-	unsigned		port;
 	struct pci_dev		*pdev = to_pci_dev(hcd->self.controller);
-	int			retval = -EINVAL;
 
 	// maybe restore FLADJ
 
@@ -254,27 +267,19 @@ static int ehci_pci_resume(struct usb_hcd *hcd)
 	/* Mark hardware accessible again as we are out of D3 state by now */
 	set_bit(HCD_FLAG_HW_ACCESSIBLE, &hcd->flags);
 
-	/* If CF is clear, we lost PCI Vaux power and need to restart.  */
-	if (readl(&ehci->regs->configured_flag) != FLAG_CF)
-		goto restart;
-
-	/* If any port is suspended (or owned by the companion),
-	 * we know we can/must resume the HC (and mustn't reset it).
-	 * We just defer that to the root hub code.
+	/* If CF is still set, we maintained PCI Vaux power.
+	 * Just undo the effect of ehci_pci_suspend().
 	 */
-	for (port = HCS_N_PORTS(ehci->hcs_params); port > 0; ) {
-		u32	status;
-		port--;
-		status = readl(&ehci->regs->port_status [port]);
-		if (!(status & PORT_POWER))
-			continue;
-		if (status & (PORT_SUSPEND | PORT_RESUME | PORT_OWNER)) {
-			usb_hcd_resume_root_hub(hcd);
-			return 0;
-		}
+	if (readl(&ehci->regs->configured_flag) == FLAG_CF) {
+		int	mask = INTR_MASK;
+
+		if (!device_may_wakeup(&hcd->self.root_hub->dev))
+			mask &= ~STS_PCD;
+		writel(mask, &ehci->regs->intr_enable);
+		readl(&ehci->regs->intr_enable);
+		return 0;
 	}
 
-restart:
 	ehci_dbg(ehci, "lost power, restarting\n");
 	usb_root_hub_lost_power(hcd->self.root_hub);
 
@@ -289,16 +294,18 @@ restart:
 	spin_lock_irq(&ehci->lock);
 	if (ehci->reclaim)
 		ehci->reclaim_ready = 1;
-	ehci_work(ehci, NULL);
+	ehci_work(ehci);
 	spin_unlock_irq(&ehci->lock);
-
-	/* restart; khubd will disconnect devices */
-	retval = ehci_run(hcd);
 
 	/* here we "know" root ports should always stay powered */
 	ehci_port_power(ehci, 1);
 
-	return retval;
+	writel(ehci->command, &ehci->regs->command);
+	writel(FLAG_CF, &ehci->regs->configured_flag);
+	readl(&ehci->regs->command);	/* unblock posted writes */
+
+	hcd->state = HC_STATE_SUSPENDED;
+	return 0;
 }
 #endif
 
@@ -323,6 +330,7 @@ static const struct hc_driver ehci_pci_hc_driver = {
 	.resume =		ehci_pci_resume,
 #endif
 	.stop =			ehci_stop,
+	.shutdown =		ehci_shutdown,
 
 	/*
 	 * managing i/o requests and associated device resources
@@ -369,24 +377,5 @@ static struct pci_driver ehci_pci_driver = {
 	.suspend =	usb_hcd_pci_suspend,
 	.resume =	usb_hcd_pci_resume,
 #endif
+	.shutdown = 	usb_hcd_pci_shutdown,
 };
-
-static int __init ehci_hcd_pci_init(void)
-{
-	if (usb_disabled())
-		return -ENODEV;
-
-	pr_debug("%s: block sizes: qh %Zd qtd %Zd itd %Zd sitd %Zd\n",
-		hcd_name,
-		sizeof(struct ehci_qh), sizeof(struct ehci_qtd),
-		sizeof(struct ehci_itd), sizeof(struct ehci_sitd));
-
-	return pci_register_driver(&ehci_pci_driver);
-}
-module_init(ehci_hcd_pci_init);
-
-static void __exit ehci_hcd_pci_cleanup(void)
-{
-	pci_unregister_driver(&ehci_pci_driver);
-}
-module_exit(ehci_hcd_pci_cleanup);

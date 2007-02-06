@@ -64,23 +64,32 @@ MODULE_PARM_DESC(hauppauge, "Specify Hauppauge remote: 0=black, 1=grey (defaults
 static int get_key_haup(struct IR_i2c *ir, u32 *ir_key, u32 *ir_raw)
 {
 	unsigned char buf[3];
-	int start, toggle, dev, code;
+	int start, range, toggle, dev, code;
 
 	/* poll IR chip */
 	if (3 != i2c_master_recv(&ir->c,buf,3))
 		return -EIO;
 
 	/* split rc5 data block ... */
-	start  = (buf[0] >> 6) &    3;
+	start  = (buf[0] >> 7) &    1;
+	range  = (buf[0] >> 6) &    1;
 	toggle = (buf[0] >> 5) &    1;
 	dev    =  buf[0]       & 0x1f;
 	code   = (buf[1] >> 2) & 0x3f;
 
-	if (3 != start)
+	/* rc5 has two start bits
+	 * the first bit must be one
+	 * the second bit defines the command range (1 = 0-63, 0 = 64 - 127)
+	 */
+	if (!start)
 		/* no key pressed */
 		return 0;
-	dprintk(1,"ir hauppauge (rc5): s%d t%d dev=%d code=%d\n",
-		start, toggle, dev, code);
+
+	if (!range)
+		code += 64;
+
+	dprintk(1,"ir hauppauge (rc5): s%d r%d t%d dev=%d code=%d\n",
+		start, range, toggle, dev, code);
 
 	/* return key */
 	*ir_key = code;
@@ -150,12 +159,11 @@ static int get_key_knc1(struct IR_i2c *ir, u32 *ir_key, u32 *ir_raw)
 	return 1;
 }
 
-/* The new pinnacle PCTV remote (with the colored buttons)
+/* Common (grey or coloured) pinnacle PCTV remote handling
  *
- * Ricardo Cerqueira <v4l@cerqueira.org>
  */
-
-int get_key_pinnacle(struct IR_i2c *ir, u32 *ir_key, u32 *ir_raw)
+static int get_key_pinnacle(struct IR_i2c *ir, u32 *ir_key, u32 *ir_raw,
+			    int parity_offset, int marker, int code_modulo)
 {
 	unsigned char b[4];
 	unsigned int start = 0,parity = 0,code = 0;
@@ -167,9 +175,9 @@ int get_key_pinnacle(struct IR_i2c *ir, u32 *ir_key, u32 *ir_raw)
 	}
 
 	for (start = 0; start<4; start++) {
-		if (b[start] == 0x80) {
-			code=b[(start+3)%4];
-			parity=b[(start+2)%4];
+		if (b[start] == marker) {
+			code=b[(start+parity_offset+1)%4];
+			parity=b[(start+parity_offset)%4];
 		}
 	}
 
@@ -181,16 +189,14 @@ int get_key_pinnacle(struct IR_i2c *ir, u32 *ir_key, u32 *ir_raw)
 	if (ir->old == parity)
 		return 0;
 
-
 	ir->old = parity;
 
-	/* Reduce code value to fit inside IR_KEYTAB_SIZE
-	 *
-	 * this is the only value that results in 42 unique
-	 * codes < 128
-	 */
+	/* drop special codes when a key is held down a long time for the grey controller
+	   In this case, the second bit of the code is asserted */
+	if (marker == 0xfe && (code & 0x40))
+		return 0;
 
-	code %= 0x88;
+	code %= code_modulo;
 
 	*ir_raw = code;
 	*ir_key = code;
@@ -200,7 +206,40 @@ int get_key_pinnacle(struct IR_i2c *ir, u32 *ir_key, u32 *ir_raw)
 	return 1;
 }
 
-EXPORT_SYMBOL_GPL(get_key_pinnacle);
+/* The grey pinnacle PCTV remote
+ *
+ *  There are one issue with this remote:
+ *   - I2c packet does not change when the same key is pressed quickly. The workaround
+ *     is to hold down each key for about half a second, so that another code is generated
+ *     in the i2c packet, and the function can distinguish key presses.
+ *
+ * Sylvain Pasche <sylvain.pasche@gmail.com>
+ */
+int get_key_pinnacle_grey(struct IR_i2c *ir, u32 *ir_key, u32 *ir_raw)
+{
+
+	return get_key_pinnacle(ir, ir_key, ir_raw, 1, 0xfe, 0xff);
+}
+
+EXPORT_SYMBOL_GPL(get_key_pinnacle_grey);
+
+
+/* The new pinnacle PCTV remote (with the colored buttons)
+ *
+ * Ricardo Cerqueira <v4l@cerqueira.org>
+ */
+int get_key_pinnacle_color(struct IR_i2c *ir, u32 *ir_key, u32 *ir_raw)
+{
+	/* code_modulo parameter (0x88) is used to reduce code value to fit inside IR_KEYTAB_SIZE
+	 *
+	 * this is the only value that results in 42 unique
+	 * codes < 128
+	 */
+
+	return get_key_pinnacle(ir, ir_key, ir_raw, 2, 0x80, 0x88);
+}
+
+EXPORT_SYMBOL_GPL(get_key_pinnacle_color);
 
 /* ----------------------------------------------------------------------- */
 
@@ -229,9 +268,9 @@ static void ir_timer(unsigned long data)
 	schedule_work(&ir->work);
 }
 
-static void ir_work(void *data)
+static void ir_work(struct work_struct *work)
 {
-	struct IR_i2c *ir = data;
+	struct IR_i2c *ir = container_of(work, struct IR_i2c, work);
 	ir_key_poll(ir);
 	mod_timer(&ir->timer, jiffies+HZ/10);
 }
@@ -266,15 +305,14 @@ static int ir_attach(struct i2c_adapter *adap, int addr,
 	int ir_type;
 	struct IR_i2c *ir;
 	struct input_dev *input_dev;
+	int err;
 
 	ir = kzalloc(sizeof(struct IR_i2c),GFP_KERNEL);
 	input_dev = input_allocate_device();
 	if (!ir || !input_dev) {
-		input_free_device(input_dev);
-		kfree(ir);
-		return -ENOMEM;
+		err = -ENOMEM;
+		goto err_out_free;
 	}
-	memset(ir,0,sizeof(*ir));
 
 	ir->c = client_template;
 	ir->input = input_dev;
@@ -316,32 +354,34 @@ static int ir_attach(struct i2c_adapter *adap, int addr,
 		break;
 	case 0x7a:
 	case 0x47:
+	case 0x71:
 		/* Handled by saa7134-input */
 		name        = "SAA713x remote";
 		ir_type     = IR_TYPE_OTHER;
 		break;
 	default:
 		/* shouldn't happen */
-		printk(DEVNAME ": Huh? unknown i2c address (0x%02x)?\n",addr);
-		kfree(ir);
-		return -1;
+		printk(DEVNAME ": Huh? unknown i2c address (0x%02x)?\n", addr);
+		err = -ENODEV;
+		goto err_out_free;
 	}
 
 	/* Sets name */
 	snprintf(ir->c.name, sizeof(ir->c.name), "i2c IR (%s)", name);
-	ir->ir_codes=ir_codes;
+	ir->ir_codes = ir_codes;
 
 	/* register i2c device
 	 * At device register, IR codes may be changed to be
 	 * board dependent.
 	 */
-	i2c_attach_client(&ir->c);
+	err = i2c_attach_client(&ir->c);
+	if (err)
+		goto err_out_free;
 
 	/* If IR not supported or disabled, unregisters driver */
 	if (ir->get_key == NULL) {
-		i2c_detach_client(&ir->c);
-		kfree(ir);
-		return -1;
+		err = -ENODEV;
+		goto err_out_detach;
 	}
 
 	/* Phys addr can only be set after attaching (for ir->c.dev.bus_id) */
@@ -350,24 +390,33 @@ static int ir_attach(struct i2c_adapter *adap, int addr,
 		 ir->c.dev.bus_id);
 
 	/* init + register input device */
-	ir_input_init(input_dev,&ir->ir,ir_type,ir->ir_codes);
+	ir_input_init(input_dev, &ir->ir, ir_type, ir->ir_codes);
 	input_dev->id.bustype = BUS_I2C;
 	input_dev->name       = ir->c.name;
 	input_dev->phys       = ir->phys;
 
-	/* register event device */
-	input_register_device(ir->input);
+	err = input_register_device(ir->input);
+	if (err)
+		goto err_out_detach;
+
 	printk(DEVNAME ": %s detected at %s [%s]\n",
-	       ir->input->name,ir->input->phys,adap->name);
+	       ir->input->name, ir->input->phys, adap->name);
 
 	/* start polling via eventd */
-	INIT_WORK(&ir->work, ir_work, ir);
+	INIT_WORK(&ir->work, ir_work);
 	init_timer(&ir->timer);
 	ir->timer.function = ir_timer;
 	ir->timer.data     = (unsigned long)ir;
 	schedule_work(&ir->work);
 
 	return 0;
+
+ err_out_detach:
+	i2c_detach_client(&ir->c);
+ err_out_free:
+	input_free_device(input_dev);
+	kfree(ir);
+	return err;
 }
 
 static int ir_detach(struct i2c_client *client)
@@ -375,7 +424,7 @@ static int ir_detach(struct i2c_client *client)
 	struct IR_i2c *ir = i2c_get_clientdata(client);
 
 	/* kill outstanding polls */
-	del_timer(&ir->timer);
+	del_timer_sync(&ir->timer);
 	flush_scheduled_work();
 
 	/* unregister devices */
@@ -400,7 +449,7 @@ static int ir_probe(struct i2c_adapter *adap)
 	*/
 
 	static const int probe_bttv[] = { 0x1a, 0x18, 0x4b, 0x64, 0x30, -1};
-	static const int probe_saa7134[] = { 0x7a, 0x47, -1 };
+	static const int probe_saa7134[] = { 0x7a, 0x47, 0x71, -1 };
 	static const int probe_em28XX[] = { 0x30, 0x47, -1 };
 	const int *probe = NULL;
 	struct i2c_client c;

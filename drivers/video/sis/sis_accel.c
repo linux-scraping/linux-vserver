@@ -28,26 +28,13 @@
  *			for more information and updates)
  */
 
-#include <linux/config.h>
 #include <linux/version.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/fb.h>
-#if LINUX_VERSION_CODE < KERNEL_VERSION(2,5,0)
-#include <linux/console.h>
-#endif
 #include <linux/ioport.h>
 #include <linux/types.h>
-
 #include <asm/io.h>
-
-#if LINUX_VERSION_CODE < KERNEL_VERSION(2,5,0)
-#include <video/fbcon.h>
-#include <video/fbcon-cfb8.h>
-#include <video/fbcon-cfb16.h>
-#include <video/fbcon-cfb24.h>
-#include <video/fbcon-cfb32.h>
-#endif
 
 #include "sis.h"
 #include "sis_accel.h"
@@ -92,11 +79,9 @@ static const u8 sisPatALUConv[] =
     0xFF,       /* dest = 0xFF;         1,      GXset,          0xF */
 };
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,5,34)
 static const int myrops[] = {
    	3, 10, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3
 };
-#endif
 
 /* 300 series ----------------------------------------------------- */
 #ifdef CONFIG_FB_SIS_300
@@ -316,8 +301,6 @@ void sisfb_syncaccel(struct sis_video_info *ivideo)
 	}
 }
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,5,0)  /* --------------- 2.5 --------------- */
-
 int fbcon_sis_sync(struct fb_info *info)
 {
 	struct sis_video_info *ivideo = (struct sis_video_info *)info->par;
@@ -439,13 +422,3 @@ void fbcon_sis_copyarea(struct fb_info *info, const struct fb_copyarea *area)
 
 	sisfb_syncaccel(ivideo);
 }
-
-#endif
-
-#if LINUX_VERSION_CODE < KERNEL_VERSION(2,5,0)  /* -------------- 2.4 --------------- */
-
-#include "sisfb_accel_2_4.h"
-
-#endif /* KERNEL VERSION */
-
-

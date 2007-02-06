@@ -1,6 +1,6 @@
 
 extern struct vfsmount * sysfs_mount;
-extern kmem_cache_t *sysfs_dir_cachep;
+extern struct kmem_cache *sysfs_dir_cachep;
 
 extern struct inode * sysfs_new_inode(mode_t mode, struct sysfs_dirent *);
 extern int sysfs_create(struct dentry *, int mode, int (*init)(struct inode *));
@@ -10,7 +10,7 @@ extern int sysfs_make_dirent(struct sysfs_dirent *, struct dentry *, void *,
 				umode_t, int);
 
 extern int sysfs_add_file(struct dentry *, const struct attribute *, int);
-extern void sysfs_hash_and_remove(struct dentry * dir, const char * name);
+extern int sysfs_hash_and_remove(struct dentry * dir, const char * name);
 extern struct sysfs_dirent *sysfs_find(struct sysfs_dirent *dir, const char * name);
 
 extern int sysfs_create_subdir(struct kobject *, const char *, struct dentry **);

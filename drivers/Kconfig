@@ -14,9 +14,15 @@ source "drivers/pnp/Kconfig"
 
 source "drivers/block/Kconfig"
 
+# misc before ide - BLK_DEV_SGIIOC4 depends on SGI_IOC4
+
+source "drivers/misc/Kconfig"
+
 source "drivers/ide/Kconfig"
 
 source "drivers/scsi/Kconfig"
+
+source "drivers/ata/Kconfig"
 
 source "drivers/cdrom/Kconfig"
 
@@ -50,8 +56,6 @@ source "drivers/w1/Kconfig"
 
 source "drivers/hwmon/Kconfig"
 
-source "drivers/misc/Kconfig"
-
 source "drivers/mfd/Kconfig"
 
 source "drivers/media/Kconfig"
@@ -59,6 +63,8 @@ source "drivers/media/Kconfig"
 source "drivers/video/Kconfig"
 
 source "sound/Kconfig"
+
+source "drivers/hid/Kconfig"
 
 source "drivers/usb/Kconfig"
 
@@ -71,5 +77,9 @@ source "drivers/infiniband/Kconfig"
 source "drivers/edac/Kconfig"
 
 source "drivers/rtc/Kconfig"
+
+source "drivers/dma/Kconfig"
+
+source "drivers/kvm/Kconfig"
 
 endmenu

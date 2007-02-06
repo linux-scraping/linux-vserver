@@ -12,7 +12,6 @@
 
 #include <stdarg.h>
 
-#include <linux/config.h>
 #include <linux/errno.h>
 #include <linux/module.h>
 #include <linux/sched.h>
@@ -26,7 +25,6 @@
 #include <linux/slab.h>
 #include <linux/user.h>
 #include <linux/a.out.h>
-#include <linux/config.h>
 #include <linux/reboot.h>
 #include <linux/delay.h>
 #include <linux/compat.h>
@@ -698,7 +696,8 @@ pid_t kernel_thread(int (*fn)(void *), void * arg, unsigned long flags)
 			     /* Notreached by child. */
 			     "1:" :
 			     "=r" (retval) :
-			     "i" (__NR_clone), "r" (flags | CLONE_VM | CLONE_UNTRACED),
+			     "i" (__NR_clone), "r" (flags |
+				CLONE_VM | CLONE_UNTRACED | CLONE_KTHREAD),
 			     "i" (__NR_exit),  "r" (fn), "r" (arg) :
 			     "g1", "g2", "g3", "o0", "o1", "memory", "cc");
 	return retval;

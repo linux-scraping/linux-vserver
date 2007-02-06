@@ -20,6 +20,7 @@
 #include <linux/fs.h>
 #include <linux/interrupt.h>
 #include <linux/mmc/host.h>
+#include <linux/pm.h>
 
 #include <asm/setup.h>
 #include <asm/memory.h>
@@ -27,6 +28,7 @@
 #include <asm/hardware.h>
 #include <asm/irq.h>
 #include <asm/io.h>
+#include <asm/system.h>
 
 #include <asm/mach/arch.h>
 #include <asm/mach/map.h>
@@ -289,7 +291,7 @@ static struct platform_device spitzts_device = {
 
 static struct pxamci_platform_data spitz_mci_platform_data;
 
-static int spitz_mci_init(struct device *dev, irqreturn_t (*spitz_detect_int)(int, void *, struct pt_regs *), void *data)
+static int spitz_mci_init(struct device *dev, irq_handler_t spitz_detect_int, void *data)
 {
 	int err;
 
@@ -306,7 +308,7 @@ static int spitz_mci_init(struct device *dev, irqreturn_t (*spitz_detect_int)(in
 	spitz_mci_platform_data.detect_delay = msecs_to_jiffies(250);
 
 	err = request_irq(SPITZ_IRQ_GPIO_nSD_DETECT, spitz_detect_int,
-			  SA_INTERRUPT | SA_TRIGGER_RISING | SA_TRIGGER_FALLING,
+			  IRQF_DISABLED | IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING,
 			  "MMC card detect", data);
 	if (err) {
 		printk(KERN_ERR "spitz_mci_init: MMC/SD: can't request MMC card detect IRQ\n");
@@ -405,21 +407,42 @@ static struct pxaficp_platform_data spitz_ficp_platform_data = {
 /*
  * Spitz PXA Framebuffer
  */
-static struct pxafb_mach_info spitz_pxafb_info __initdata = {
-        .pixclock       = 19231,
-        .xres           = 480,
-        .yres           = 640,
-        .bpp            = 16,
-        .hsync_len      = 40,
-        .left_margin    = 46,
-        .right_margin   = 125,
-        .vsync_len      = 3,
-        .upper_margin   = 1,
-        .lower_margin   = 0,
-        .sync           = 0,
-        .lccr0          = LCCR0_Color | LCCR0_Sngl | LCCR0_Act | LCCR0_LDDALT | LCCR0_OUC | LCCR0_CMDIM | LCCR0_RDSTM,
-        .lccr3          = LCCR3_PixRsEdg | LCCR3_OutEnH,
-        .pxafb_lcd_power = spitz_lcd_power,
+
+static struct pxafb_mode_info spitz_pxafb_modes[] = {
+{
+	.pixclock       = 19231,
+	.xres           = 480,
+	.yres           = 640,
+	.bpp            = 16,
+	.hsync_len      = 40,
+	.left_margin    = 46,
+	.right_margin   = 125,
+	.vsync_len      = 3,
+	.upper_margin   = 1,
+	.lower_margin   = 0,
+	.sync           = 0,
+},{
+	.pixclock       = 134617,
+	.xres           = 240,
+	.yres           = 320,
+	.bpp            = 16,
+	.hsync_len      = 20,
+	.left_margin    = 20,
+	.right_margin   = 46,
+	.vsync_len      = 2,
+	.upper_margin   = 1,
+	.lower_margin   = 0,
+	.sync           = 0,
+},
+};
+
+static struct pxafb_mach_info spitz_pxafb_info = {
+	.modes          = &spitz_pxafb_modes[0],
+	.num_modes      = 2,
+	.fixed_modes    = 1,
+	.lccr0          = LCCR0_Color | LCCR0_Sngl | LCCR0_Act | LCCR0_LDDALT | LCCR0_OUC | LCCR0_CMDIM | LCCR0_RDSTM,
+	.lccr3          = LCCR3_PixRsEdg | LCCR3_OutEnH,
+	.pxafb_lcd_power = spitz_lcd_power,
 };
 
 
@@ -432,8 +455,31 @@ static struct platform_device *devices[] __initdata = {
 	&spitzled_device,
 };
 
+static void spitz_poweroff(void)
+{
+	RCSR = RCSR_HWR | RCSR_WDR | RCSR_SMR | RCSR_GPR;
+
+	pxa_gpio_mode(SPITZ_GPIO_ON_RESET | GPIO_OUT);
+	GPSR(SPITZ_GPIO_ON_RESET) = GPIO_bit(SPITZ_GPIO_ON_RESET);
+
+	mdelay(1000);
+	arm_machine_restart('h');
+}
+
+static void spitz_restart(char mode)
+{
+	/* Bootloader magic for a reboot */
+	if((MSC0 & 0xffff0000) == 0x7ff00000)
+		MSC0 = (MSC0 & 0xffff) | 0x7ee00000;
+
+	spitz_poweroff();
+}
+
 static void __init common_init(void)
 {
+	pm_power_off = spitz_poweroff;
+	arm_pm_restart = spitz_restart;
+
 	PMCR = 0x00;
 
 	/* setup sleep mode values */

@@ -85,10 +85,9 @@ unsigned int aac_response_normal(struct aac_queue * q)
 		 *	continue. The caller has already been notified that
 		 *	the fib timed out.
 		 */
-		if (!(fib->flags & FIB_CONTEXT_FLAG_TIMED_OUT)) {
-			list_del(&fib->queue);
+		if (!(fib->flags & FIB_CONTEXT_FLAG_TIMED_OUT))
 			dev->queues->queue[AdapNormCmdQueue].numpending--;
-		} else {
+		else {
 			printk(KERN_WARNING "aacraid: FIB timeout (%x).\n", fib->flags);
 			printk(KERN_DEBUG"aacraid: hwfib=%p fib index=%i fib=%p\n",hwfib, hwfib->header.SenderData,fib);
 			continue;
@@ -125,10 +124,15 @@ unsigned int aac_response_normal(struct aac_queue * q)
 		} else {
 			unsigned long flagv;
 			spin_lock_irqsave(&fib->event_lock, flagv);
-			fib->done = 1;
+			if (!fib->done)
+				fib->done = 1;
 			up(&fib->event_wait);
 			spin_unlock_irqrestore(&fib->event_lock, flagv);
 			FIB_COUNTER_INCREMENT(aac_config.NormalRecved);
+			if (fib->done == 2) {
+				aac_fib_complete(fib);
+				aac_fib_free(fib);
+			}
 		}
 		consumed++;
 		spin_lock_irqsave(q->lock, flags);
@@ -284,7 +288,6 @@ unsigned int aac_intr_normal(struct aac_dev * dev, u32 Index)
 			return 0;
 		}
 
-		list_del(&fib->queue);
 		dev->queues->queue[AdapNormCmdQueue].numpending--;
 
 		if (fast) {
@@ -318,7 +321,8 @@ unsigned int aac_intr_normal(struct aac_dev * dev, u32 Index)
 			unsigned long flagv;
 	  		dprintk((KERN_INFO "event_wait up\n"));
 			spin_lock_irqsave(&fib->event_lock, flagv);
-			fib->done = 1;
+			if (!fib->done)
+				fib->done = 1;
 			up(&fib->event_wait);
 			spin_unlock_irqrestore(&fib->event_lock, flagv);
 			FIB_COUNTER_INCREMENT(aac_config.NormalRecved);

@@ -1,4 +1,4 @@
-/* linux/drivers/cdrom/cdrom.c. 
+/* linux/drivers/cdrom/cdrom.c
    Copyright (c) 1996, 1997 David A. van Leeuwen.
    Copyright (c) 1997, 1998 Erik Andersen <andersee@debian.org>
    Copyright (c) 1998, 1999 Jens Axboe <axboe@image.dk>
@@ -263,7 +263,6 @@
 /* #define ERRLOGMASK (CD_WARNING|CD_OPEN|CD_COUNT_TRACKS|CD_CLOSE) */
 /* #define ERRLOGMASK (CD_WARNING|CD_REG_UNREG|CD_DO_IOCTL|CD_OPEN|CD_CLOSE|CD_COUNT_TRACKS) */
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/fs.h>
 #include <linux/buffer_head.h>
@@ -337,6 +336,12 @@ static const char *mrw_address_space[] = { "DMA", "GAA" };
 
 /* used in the audio ioctls */
 #define CHECKAUDIO if ((ret=check_for_audio_disc(cdi, cdo))) return ret
+
+/*
+ * Another popular OS uses 7 seconds as the hard timeout for default
+ * commands, so it is a good choice for us as well.
+ */
+#define CDROM_DEF_TIMEOUT	(7 * HZ)
 
 /* Not-exported routines. */
 static int open_for_data(struct cdrom_device_info * cdi);
@@ -704,7 +709,7 @@ static int cdrom_has_defect_mgt(struct cdrom_device_info *cdi)
 {
 	struct packet_command cgc;
 	char buffer[16];
-	__u16 *feature_code;
+	__be16 *feature_code;
 	int ret;
 
 	init_cdrom_command(&cgc, buffer, sizeof(buffer), CGC_DATA_READ);
@@ -717,7 +722,7 @@ static int cdrom_has_defect_mgt(struct cdrom_device_info *cdi)
 	if ((ret = cdi->ops->generic_packet(cdi, &cgc)))
 		return ret;
 
-	feature_code = (__u16 *) &buffer[sizeof(struct feature_header)];
+	feature_code = (__be16 *) &buffer[sizeof(struct feature_header)];
 	if (be16_to_cpu(*feature_code) == CDF_HWDM)
 		return 0;
 
@@ -1529,7 +1534,7 @@ void init_cdrom_command(struct packet_command *cgc, void *buf, int len,
 	cgc->buffer = (char *) buf;
 	cgc->buflen = len;
 	cgc->data_direction = type;
-	cgc->timeout = 5*HZ;
+	cgc->timeout = CDROM_DEF_TIMEOUT;
 }
 
 /* DVD handling */
@@ -1811,7 +1816,7 @@ static int dvd_read_disckey(struct cdrom_device_info *cdi, dvd_struct *s)
 
 	size = sizeof(s->disckey.value) + 4;
 
-	if ((buf = (u_char *) kmalloc(size, GFP_KERNEL)) == NULL)
+	if ((buf = kmalloc(size, GFP_KERNEL)) == NULL)
 		return -ENOMEM;
 
 	init_cdrom_command(&cgc, buf, size, CGC_DATA_READ);
@@ -1862,7 +1867,7 @@ static int dvd_read_manufact(struct cdrom_device_info *cdi, dvd_struct *s)
 
 	size = sizeof(s->manufact.value) + 4;
 
-	if ((buf = (u_char *) kmalloc(size, GFP_KERNEL)) == NULL)
+	if ((buf = kmalloc(size, GFP_KERNEL)) == NULL)
 		return -ENOMEM;
 
 	init_cdrom_command(&cgc, buf, size, CGC_DATA_READ);
@@ -2130,12 +2135,9 @@ static int cdrom_read_cdda_bpc(struct cdrom_device_info *cdi, __u8 __user *ubuf,
 		rq->cmd[9] = 0xf8;
 
 		rq->cmd_len = 12;
-		rq->flags |= REQ_BLOCK_PC;
+		rq->cmd_type = REQ_TYPE_BLOCK_PC;
 		rq->timeout = 60 * HZ;
 		bio = rq->bio;
-
-		if (rq->bio)
-			blk_queue_bounce(q, &rq->bio);
 
 		if (blk_execute_rq(q, cdi->disk, rq, 0)) {
 			struct request_sense *s = rq->sense;
@@ -2143,7 +2145,7 @@ static int cdrom_read_cdda_bpc(struct cdrom_device_info *cdi, __u8 __user *ubuf,
 			cdi->last_sense = s->sense_key;
 		}
 
-		if (blk_rq_unmap_user(bio, len))
+		if (blk_rq_unmap_user(bio))
 			ret = -EFAULT;
 
 		if (ret)
@@ -2852,7 +2854,7 @@ static int mmc_ioctl(struct cdrom_device_info *cdi, unsigned int cmd,
 		/* FIXME: we need upper bound checking, too!! */
 		if (lba < 0)
 			return -EINVAL;
-		cgc.buffer = (char *) kmalloc(blocksize, GFP_KERNEL);
+		cgc.buffer = kmalloc(blocksize, GFP_KERNEL);
 		if (cgc.buffer == NULL)
 			return -ENOMEM;
 		memset(&sense, 0, sizeof(sense));
@@ -2964,7 +2966,7 @@ static int mmc_ioctl(struct cdrom_device_info *cdi, unsigned int cmd,
 		   how much data is available for transfer. buffer[1] is
 		   unfortunately ambigious and the only reliable way seem
 		   to be to simply skip over the block descriptor... */
-		offset = 8 + be16_to_cpu(*(unsigned short *)(buffer+6));
+		offset = 8 + be16_to_cpu(*(__be16 *)(buffer+6));
 
 		if (offset + 16 > sizeof(buffer))
 			return -E2BIG;
@@ -3034,7 +3036,7 @@ static int mmc_ioctl(struct cdrom_device_info *cdi, unsigned int cmd,
 		int size = sizeof(dvd_struct);
 		if (!CDROM_CAN(CDC_DVD))
 			return -ENOSYS;
-		if ((s = (dvd_struct *) kmalloc(size, GFP_KERNEL)) == NULL)
+		if ((s = kmalloc(size, GFP_KERNEL)) == NULL)
 			return -ENOMEM;
 		cdinfo(CD_DO_IOCTL, "entering DVD_READ_STRUCT\n"); 
 		if (copy_from_user(s, (dvd_struct __user *)arg, size)) {

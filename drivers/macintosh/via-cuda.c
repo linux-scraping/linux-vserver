@@ -9,7 +9,6 @@
  * Copyright (C) 1996 Paul Mackerras.
  */
 #include <stdarg.h>
-#include <linux/config.h>
 #include <linux/types.h>
 #include <linux/errno.h>
 #include <linux/kernel.h>
@@ -34,13 +33,6 @@
 
 static volatile unsigned char __iomem *via;
 static DEFINE_SPINLOCK(cuda_lock);
-
-#ifdef CONFIG_MAC
-#define CUDA_IRQ IRQ_MAC_ADB
-#define eieio()
-#else
-#define CUDA_IRQ vias->intrs[0].line
-#endif
 
 /* VIA registers - spaced 0x200 bytes apart */
 #define RS		0x200		/* skip between registers */
@@ -106,8 +98,8 @@ static int cuda_reset_adb_bus(void);
 
 static int cuda_init_via(void);
 static void cuda_start(void);
-static irqreturn_t cuda_interrupt(int irq, void *arg, struct pt_regs *regs);
-static void cuda_input(unsigned char *buf, int nb, struct pt_regs *regs);
+static irqreturn_t cuda_interrupt(int irq, void *arg);
+static void cuda_input(unsigned char *buf, int nb);
 void cuda_poll(void);
 static int cuda_write(struct adb_request *req);
 
@@ -131,7 +123,7 @@ int __init find_via_cuda(void)
 {
     struct adb_request req;
     phys_addr_t taddr;
-    u32 *reg;
+    const u32 *reg;
     int err;
 
     if (vias != 0)
@@ -140,7 +132,7 @@ int __init find_via_cuda(void)
     if (vias == 0)
 	return 0;
 
-    reg = (u32 *)get_property(vias, "reg", NULL);
+    reg = get_property(vias, "reg", NULL);
     if (reg == NULL) {
 	    printk(KERN_ERR "via-cuda: No \"reg\" property !\n");
 	    goto fail;
@@ -190,11 +182,24 @@ int __init find_via_cuda(void)
 
 static int __init via_cuda_start(void)
 {
+    unsigned int irq;
+
     if (via == NULL)
 	return -ENODEV;
 
-    if (request_irq(CUDA_IRQ, cuda_interrupt, 0, "ADB", cuda_interrupt)) {
-	printk(KERN_ERR "cuda_init: can't get irq %d\n", CUDA_IRQ);
+#ifdef CONFIG_MAC
+    irq = IRQ_MAC_ADB;
+#else /* CONFIG_MAC */
+    irq = irq_of_parse_and_map(vias, 0);
+    if (irq == NO_IRQ) {
+	printk(KERN_ERR "via-cuda: can't map interrupts for %s\n",
+	       vias->full_name);
+	return -ENODEV;
+    }
+#endif /* CONFIG_MAP */
+
+    if (request_irq(irq, cuda_interrupt, 0, "ADB", cuda_interrupt)) {
+	printk(KERN_ERR "via-cuda: can't request irq %d\n", irq);
 	return -EAGAIN;
     }
 
@@ -432,12 +437,12 @@ cuda_poll(void)
      * disable_irq(), would that work on m68k ? --BenH
      */
     local_irq_save(flags);
-    cuda_interrupt(0, NULL, NULL);
+    cuda_interrupt(0, NULL);
     local_irq_restore(flags);
 }
 
 static irqreturn_t
-cuda_interrupt(int irq, void *arg, struct pt_regs *regs)
+cuda_interrupt(int irq, void *arg)
 {
     int status;
     struct adb_request *req = NULL;
@@ -589,12 +594,12 @@ cuda_interrupt(int irq, void *arg, struct pt_regs *regs)
 		(*done)(req);
     }
     if (ibuf_len)
-	cuda_input(ibuf, ibuf_len, regs);
+	cuda_input(ibuf, ibuf_len);
     return IRQ_HANDLED;
 }
 
 static void
-cuda_input(unsigned char *buf, int nb, struct pt_regs *regs)
+cuda_input(unsigned char *buf, int nb)
 {
     int i;
 
@@ -610,7 +615,7 @@ cuda_input(unsigned char *buf, int nb, struct pt_regs *regs)
 	}
 #endif /* CONFIG_XMON */
 #ifdef CONFIG_ADB
-	adb_input(buf+2, nb-2, regs, buf[1] & 0x40);
+	adb_input(buf+2, nb-2, buf[1] & 0x40);
 #endif /* CONFIG_ADB */
 	break;
 

@@ -33,7 +33,6 @@
  * */
 
 #include <linux/module.h>
-#include <linux/config.h>
 #include <linux/kdev_t.h>
 #include <asm/io.h>
 #include <linux/kernel.h>
@@ -244,7 +243,7 @@ static struct real_driver rio_real_driver = {
  *
  */
 
-static struct file_operations rio_fw_fops = {
+static const struct file_operations rio_fw_fops = {
 	.owner = THIS_MODULE,
 	.ioctl = rio_fw_ioctl,
 };
@@ -333,9 +332,9 @@ int RIODelay_ni(struct Port *PortP, int njiffies)
 	return !RIO_FAIL;
 }
 
-void rio_copy_to_card(void *to, void *from, int len)
+void rio_copy_to_card(void *from, void __iomem *to, int len)
 {
-	rio_memcpy_toio(NULL, to, from, len);
+	rio_copy_toio(to, from, len);
 }
 
 int rio_minor(struct tty_struct *tty)
@@ -364,12 +363,12 @@ static void rio_reset_interrupt(struct Host *HostP)
 }
 
 
-static irqreturn_t rio_interrupt(int irq, void *ptr, struct pt_regs *regs)
+static irqreturn_t rio_interrupt(int irq, void *ptr)
 {
 	struct Host *HostP;
 	func_enter();
 
-	HostP = (struct Host *) ptr;	/* &p->RIOHosts[(long)ptr]; */
+	HostP = ptr;			/* &p->RIOHosts[(long)ptr]; */
 	rio_dprintk(RIO_DEBUG_IFLOW, "rio: enter rio_interrupt (%d/%d)\n", irq, HostP->Ivec);
 
 	/* AAargh! The order in which to do these things is essential and
@@ -403,7 +402,7 @@ static irqreturn_t rio_interrupt(int irq, void *ptr, struct pt_regs *regs)
 		return IRQ_HANDLED;
 	}
 
-	RIOServiceHost(p, HostP, irq);
+	RIOServiceHost(p, HostP);
 
 	rio_dprintk(RIO_DEBUG_IFLOW, "riointr() doing host %p type %d\n", ptr, HostP->Type);
 
@@ -418,7 +417,7 @@ static void rio_pollfunc(unsigned long data)
 {
 	func_enter();
 
-	rio_interrupt(0, &p->RIOHosts[data], NULL);
+	rio_interrupt(0, &p->RIOHosts[data]);
 	p->RIOHosts[data].timer.expires = jiffies + rio_poll;
 	add_timer(&p->RIOHosts[data].timer);
 
@@ -573,7 +572,7 @@ static int rio_fw_ioctl(struct inode *inode, struct file *filp, unsigned int cmd
 	func_enter();
 
 	/* The "dev" argument isn't used. */
-	rc = riocontrol(p, 0, cmd, (void *) arg, capable(CAP_SYS_ADMIN));
+	rc = riocontrol(p, 0, cmd, arg, capable(CAP_SYS_ADMIN));
 
 	func_exit();
 	return rc;
@@ -583,6 +582,7 @@ extern int RIOShortCommand(struct rio_info *p, struct Port *PortP, int command, 
 
 static int rio_ioctl(struct tty_struct *tty, struct file *filp, unsigned int cmd, unsigned long arg)
 {
+	void __user *argp = (void __user *)arg;
 	int rc;
 	struct Port *PortP;
 	int ival;
@@ -594,14 +594,14 @@ static int rio_ioctl(struct tty_struct *tty, struct file *filp, unsigned int cmd
 	rc = 0;
 	switch (cmd) {
 	case TIOCSSOFTCAR:
-		if ((rc = get_user(ival, (unsigned int *) arg)) == 0) {
+		if ((rc = get_user(ival, (unsigned __user *) argp)) == 0) {
 			tty->termios->c_cflag = (tty->termios->c_cflag & ~CLOCAL) | (ival ? CLOCAL : 0);
 		}
 		break;
 	case TIOCGSERIAL:
 		rc = -EFAULT;
-		if (access_ok(VERIFY_WRITE, (void *) arg, sizeof(struct serial_struct)))
-			rc = gs_getserial(&PortP->gs, (struct serial_struct *) arg);
+		if (access_ok(VERIFY_WRITE, argp, sizeof(struct serial_struct)))
+			rc = gs_getserial(&PortP->gs, argp);
 		break;
 	case TCSBRK:
 		if (PortP->State & RIO_DELETED) {
@@ -631,8 +631,8 @@ static int rio_ioctl(struct tty_struct *tty, struct file *filp, unsigned int cmd
 		break;
 	case TIOCSSERIAL:
 		rc = -EFAULT;
-		if (access_ok(VERIFY_READ, (void *) arg, sizeof(struct serial_struct)))
-			rc = gs_setserial(&PortP->gs, (struct serial_struct *) arg);
+		if (access_ok(VERIFY_READ, argp, sizeof(struct serial_struct)))
+			rc = gs_setserial(&PortP->gs, argp);
 		break;
 	default:
 		rc = -ENOIOCTLCMD;
@@ -727,7 +727,7 @@ static struct vpd_prom *get_VPD_PROM(struct Host *hp)
 	return &vpdp;
 }
 
-static struct tty_operations rio_ops = {
+static const struct tty_operations rio_ops = {
 	.open = riotopen,
 	.close = gs_close,
 	.write = gs_write,
@@ -919,7 +919,7 @@ static void __exit rio_release_drivers(void)
 static void fix_rio_pci(struct pci_dev *pdev)
 {
 	unsigned long hwbase;
-	unsigned char *rebase;
+	unsigned char __iomem *rebase;
 	unsigned int t;
 
 #define CNTRL_REG_OFFSET        0x50
@@ -999,7 +999,7 @@ static int __init rio_init(void)
 		if (((1 << hp->Ivec) & rio_irqmask) == 0)
 			hp->Ivec = 0;
 		hp->Caddr = ioremap(p->RIOHosts[p->RIONumHosts].PaddrP, RIO_WINDOW_LEN);
-		hp->CardP = (struct DpRam *) hp->Caddr;
+		hp->CardP = (struct DpRam __iomem *) hp->Caddr;
 		hp->Type = RIO_PCI;
 		hp->Copy = rio_copy_to_card;
 		hp->Mode = RIO_PCI_BOOT_FROM_RAM;
@@ -1017,11 +1017,16 @@ static int __init rio_init(void)
 			rio_dprintk(RIO_DEBUG_PROBE, "Hmm Tested ok, uniqid = %x.\n", p->RIOHosts[p->RIONumHosts].UniqueNum);
 
 			fix_rio_pci(pdev);
+
+			p->RIOHosts[p->RIONumHosts].pdev = pdev;
+			pci_dev_get(pdev);
+
 			p->RIOLastPCISearch = 0;
 			p->RIONumHosts++;
 			found++;
 		} else {
-			iounmap((char *) (p->RIOHosts[p->RIONumHosts].Caddr));
+			iounmap(p->RIOHosts[p->RIONumHosts].Caddr);
+			p->RIOHosts[p->RIONumHosts].Caddr = NULL;
 		}
 	}
 
@@ -1047,7 +1052,7 @@ static int __init rio_init(void)
 			hp->Ivec = 0;
 		hp->Ivec |= 0x8000;	/* Mark as non-sharable */
 		hp->Caddr = ioremap(p->RIOHosts[p->RIONumHosts].PaddrP, RIO_WINDOW_LEN);
-		hp->CardP = (struct DpRam *) hp->Caddr;
+		hp->CardP = (struct DpRam __iomem *) hp->Caddr;
 		hp->Type = RIO_PCI;
 		hp->Copy = rio_copy_to_card;
 		hp->Mode = RIO_PCI_BOOT_FROM_RAM;
@@ -1066,11 +1071,15 @@ static int __init rio_init(void)
 			    ((readb(&p->RIOHosts[p->RIONumHosts].Unique[1]) & 0xFF) << 8) | ((readb(&p->RIOHosts[p->RIONumHosts].Unique[2]) & 0xFF) << 16) | ((readb(&p->RIOHosts[p->RIONumHosts].Unique[3]) & 0xFF) << 24);
 			rio_dprintk(RIO_DEBUG_PROBE, "Hmm Tested ok, uniqid = %x.\n", p->RIOHosts[p->RIONumHosts].UniqueNum);
 
+			p->RIOHosts[p->RIONumHosts].pdev = pdev;
+			pci_dev_get(pdev);
+
 			p->RIOLastPCISearch = 0;
 			p->RIONumHosts++;
 			found++;
 		} else {
-			iounmap((char *) (p->RIOHosts[p->RIONumHosts].Caddr));
+			iounmap(p->RIOHosts[p->RIONumHosts].Caddr);
+			p->RIOHosts[p->RIONumHosts].Caddr = NULL;
 		}
 #else
 		printk(KERN_ERR "Found an older RIO PCI card, but the driver is not " "compiled to support it.\n");
@@ -1085,7 +1094,7 @@ static int __init rio_init(void)
 		/* There was something about the IRQs of these cards. 'Forget what.--REW */
 		hp->Ivec = 0;
 		hp->Caddr = ioremap(p->RIOHosts[p->RIONumHosts].PaddrP, RIO_WINDOW_LEN);
-		hp->CardP = (struct DpRam *) hp->Caddr;
+		hp->CardP = (struct DpRam __iomem *) hp->Caddr;
 		hp->Type = RIO_AT;
 		hp->Copy = rio_copy_to_card;	/* AT card PCI???? - PVDL
                                          * -- YES! this is now a normal copy. Only the
@@ -1110,8 +1119,10 @@ static int __init rio_init(void)
 				}
 			}
 
-			if (!okboard)
-				iounmap((char *) (hp->Caddr));
+			if (!okboard) {
+				iounmap(hp->Caddr);
+				hp->Caddr = NULL;
+			}
 		}
 	}
 
@@ -1119,7 +1130,7 @@ static int __init rio_init(void)
 	for (i = 0; i < p->RIONumHosts; i++) {
 		hp = &p->RIOHosts[i];
 		if (hp->Ivec) {
-			int mode = SA_SHIRQ;
+			int mode = IRQF_SHARED;
 			if (hp->Ivec & 0x8000) {
 				mode = 0;
 				hp->Ivec &= 0x7fff;
@@ -1181,6 +1192,10 @@ static void __exit rio_exit(void)
 		}
 		/* It is safe/allowed to del_timer a non-active timer */
 		del_timer(&hp->timer);
+		if (hp->Caddr)
+			iounmap(hp->Caddr);
+		if (hp->Type == RIO_PCI)
+			pci_dev_put(hp->pdev);
 	}
 
 	if (misc_deregister(&rio_fw_device) < 0) {

@@ -6,10 +6,8 @@
 
 #ifdef __KERNEL__
 #ifndef __ASSEMBLY__
-#include <linux/config.h>
 #include <linux/personality.h>
 #include <linux/types.h>
-#include <linux/compat.h>
 #endif
 #endif
 
@@ -134,16 +132,13 @@ struct sigstack {
  * usage of signal stacks by using the (now obsolete) sa_restorer field in
  * the sigaction structure as a stack pointer. This is now possible due to
  * the changes in signal handling. LBT 010493.
- * SA_INTERRUPT is a no-op, but left due to historical reasons. Use the
  * SA_RESTART flag to get restarting signals (which were the default long ago)
- * SA_SHIRQ flag is for shared interrupt support on PCI and EISA.
  */
 #define SA_NOCLDSTOP	_SV_IGNCHILD
 #define SA_STACK	_SV_SSTACK
 #define SA_ONSTACK	_SV_SSTACK
 #define SA_RESTART	_SV_INTR
 #define SA_ONESHOT	_SV_RESET
-#define SA_INTERRUPT	0x10u
 #define SA_NOMASK	0x20u
 #define SA_NOCLDWAIT    0x100u
 #define SA_SIGINFO      0x200u
@@ -171,42 +166,12 @@ struct __new_sigaction {
 	__new_sigset_t		sa_mask;
 };
 
-#ifdef __KERNEL__
-
-#ifdef CONFIG_COMPAT
-struct __new_sigaction32 {
-	unsigned		sa_handler;
-	unsigned int    	sa_flags;
-	unsigned		sa_restorer;     /* not used by Linux/SPARC yet */
-	compat_sigset_t 	sa_mask;
-};
-#endif
-
-struct k_sigaction {
-	struct __new_sigaction 	sa;
-	void __user		*ka_restorer;
-};
-#endif
-
 struct __old_sigaction {
 	__sighandler_t  	sa_handler;
 	__old_sigset_t  	sa_mask;
 	unsigned long   	sa_flags;
 	void 			(*sa_restorer)(void);     /* not used by Linux/SPARC yet */
 };
-
-#ifdef __KERNEL__
-
-#ifdef CONFIG_COMPAT
-struct __old_sigaction32 {
-	unsigned		sa_handler;
-	compat_old_sigset_t  	sa_mask;
-	unsigned int    	sa_flags;
-	unsigned		sa_restorer;     /* not used by Linux/SPARC yet */
-};
-#endif
-
-#endif
 
 typedef struct sigaltstack {
 	void			__user *ss_sp;
@@ -216,13 +181,10 @@ typedef struct sigaltstack {
 
 #ifdef __KERNEL__
 
-#ifdef CONFIG_COMPAT
-typedef struct sigaltstack32 {
-	u32			ss_sp;
-	int			ss_flags;
-	compat_size_t		ss_size;
-} stack_t32;
-#endif
+struct k_sigaction {
+	struct __new_sigaction 	sa;
+	void __user		*ka_restorer;
+};
 
 struct signal_deliver_cookie {
 	int restart_syscall;

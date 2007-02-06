@@ -58,6 +58,8 @@ void *snd_lookup_oss_minor_data(unsigned int minor, int type)
 	return private_data;
 }
 
+EXPORT_SYMBOL(snd_lookup_oss_minor_data);
+
 static int snd_oss_kernel_minor(int type, struct snd_card *card, int dev)
 {
 	int minor;
@@ -104,7 +106,7 @@ int snd_register_oss_device(int type, struct snd_card *card, int dev,
 	int cidx = SNDRV_MINOR_OSS_CARD(minor);
 	int track2 = -1;
 	int register1 = -1, register2 = -1;
-	struct device *carddev = NULL;
+	struct device *carddev = snd_card_get_device_link(card);
 
 	if (card && card->number >= 8)
 		return 0; /* ignore silently */
@@ -132,8 +134,6 @@ int snd_register_oss_device(int type, struct snd_card *card, int dev,
 		track2 = SNDRV_MINOR_OSS(cidx, SNDRV_MINOR_OSS_DMMIDI1);
 		break;
 	}
-	if (card)
-		carddev = card->dev;
 	register1 = register_sound_special_device(f_ops, minor, carddev);
 	if (register1 != minor)
 		goto __end;
@@ -157,6 +157,8 @@ int snd_register_oss_device(int type, struct snd_card *card, int dev,
 	kfree(preg);
       	return -EBUSY;
 }
+
+EXPORT_SYMBOL(snd_register_oss_device);
 
 int snd_unregister_oss_device(int type, struct snd_card *card, int dev)
 {
@@ -197,13 +199,15 @@ int snd_unregister_oss_device(int type, struct snd_card *card, int dev)
 	return 0;
 }
 
+EXPORT_SYMBOL(snd_unregister_oss_device);
+
 /*
  *  INFO PART
  */
 
 #ifdef CONFIG_PROC_FS
 
-static struct snd_info_entry *snd_minor_info_oss_entry = NULL;
+static struct snd_info_entry *snd_minor_info_oss_entry;
 
 static const char *snd_oss_device_type_name(int type)
 {
@@ -252,7 +256,6 @@ int __init snd_minor_info_oss_init(void)
 
 	entry = snd_info_create_module_entry(THIS_MODULE, "devices", snd_oss_root);
 	if (entry) {
-		entry->c.text.read_size = PAGE_SIZE;
 		entry->c.text.read = snd_minor_info_oss_read;
 		if (snd_info_register(entry) < 0) {
 			snd_info_free_entry(entry);
@@ -265,8 +268,7 @@ int __init snd_minor_info_oss_init(void)
 
 int __exit snd_minor_info_oss_done(void)
 {
-	if (snd_minor_info_oss_entry)
-		snd_info_unregister(snd_minor_info_oss_entry);
+	snd_info_free_entry(snd_minor_info_oss_entry);
 	return 0;
 }
 #endif /* CONFIG_PROC_FS */

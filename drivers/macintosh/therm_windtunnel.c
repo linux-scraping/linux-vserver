@@ -27,7 +27,6 @@
  *   
  */
 
-#include <linux/config.h>
 #include <linux/types.h>
 #include <linux/module.h>
 #include <linux/errno.h>
@@ -37,12 +36,13 @@
 #include <linux/i2c.h>
 #include <linux/slab.h>
 #include <linux/init.h>
+
 #include <asm/prom.h>
 #include <asm/machdep.h>
 #include <asm/io.h>
 #include <asm/system.h>
 #include <asm/sections.h>
-#include <asm/of_device.h>
+#include <asm/of_platform.h>
 #include <asm/macio.h>
 
 #define LOG_TEMP		0			/* continously log temperature */
@@ -485,14 +485,14 @@ struct apple_thermal_info {
 static int __init
 g4fan_init( void )
 {
-	struct apple_thermal_info *info;
+	const struct apple_thermal_info *info;
 	struct device_node *np;
 
 	init_MUTEX( &x.lock );
 
 	if( !(np=of_find_node_by_name(NULL, "power-mgt")) )
 		return -ENODEV;
-	info = (struct apple_thermal_info*)get_property(np, "thermal-info", NULL);
+	info = get_property(np, "thermal-info", NULL);
 	of_node_put(np);
 
 	if( !info || !machine_is_compatible("PowerMac3,6") )
@@ -512,14 +512,14 @@ g4fan_init( void )
 		return -ENODEV;
 	}
 
-	of_register_driver( &therm_of_driver );
+	of_register_platform_driver( &therm_of_driver );
 	return 0;
 }
 
 static void __exit
 g4fan_exit( void )
 {
-	of_unregister_driver( &therm_of_driver );
+	of_unregister_platform_driver( &therm_of_driver );
 
 	if( x.of_dev )
 		of_device_unregister( x.of_dev );

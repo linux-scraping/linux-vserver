@@ -42,7 +42,6 @@
 #undef DEBUG_HARD
 #undef USE_CTRL_O_SYSRQ
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/tty.h>
 
@@ -101,7 +100,6 @@ static DEFINE_MUTEX(pmz_irq_mutex);
 static struct uart_driver pmz_uart_reg = {
 	.owner		=	THIS_MODULE,
 	.driver_name	=	"ttyS",
-	.devfs_name	=	"tts/",
 	.dev_name	=	"ttyS",
 	.major		=	TTY_MAJOR,
 };
@@ -206,8 +204,7 @@ static void pmz_maybe_update_regs(struct uart_pmac_port *uap)
 	}
 }
 
-static struct tty_struct *pmz_receive_chars(struct uart_pmac_port *uap,
-					    struct pt_regs *regs)
+static struct tty_struct *pmz_receive_chars(struct uart_pmac_port *uap)
 {
 	struct tty_struct *tty = NULL;
 	unsigned char ch, r1, drop, error, flag;
@@ -269,7 +266,7 @@ static struct tty_struct *pmz_receive_chars(struct uart_pmac_port *uap,
 		if (uap->port.sysrq) {
 			int swallow;
 			spin_unlock(&uap->port.lock);
-			swallow = uart_handle_sysrq_char(&uap->port, ch, regs);
+			swallow = uart_handle_sysrq_char(&uap->port, ch);
 			spin_lock(&uap->port.lock);
 			if (swallow)
 				goto next_char;
@@ -337,7 +334,7 @@ static struct tty_struct *pmz_receive_chars(struct uart_pmac_port *uap,
 	return tty;
 }
 
-static void pmz_status_handle(struct uart_pmac_port *uap, struct pt_regs *regs)
+static void pmz_status_handle(struct uart_pmac_port *uap)
 {
 	unsigned char status;
 
@@ -440,7 +437,7 @@ ack_tx_int:
 }
 
 /* Hrm... we register that twice, fixme later.... */
-static irqreturn_t pmz_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t pmz_interrupt(int irq, void *dev_id)
 {
 	struct uart_pmac_port *uap = dev_id;
 	struct uart_pmac_port *uap_a;
@@ -464,9 +461,9 @@ static irqreturn_t pmz_interrupt(int irq, void *dev_id, struct pt_regs *regs)
 		write_zsreg(uap_a, R0, RES_H_IUS);
 		zssync(uap_a);		
        		if (r3 & CHAEXT)
-       			pmz_status_handle(uap_a, regs);
+       			pmz_status_handle(uap_a);
 		if (r3 & CHARxIP)
-			tty = pmz_receive_chars(uap_a, regs);
+			tty = pmz_receive_chars(uap_a);
        		if (r3 & CHATxIP)
        			pmz_transmit_chars(uap_a);
 	        rc = IRQ_HANDLED;
@@ -484,9 +481,9 @@ static irqreturn_t pmz_interrupt(int irq, void *dev_id, struct pt_regs *regs)
 		write_zsreg(uap_b, R0, RES_H_IUS);
 		zssync(uap_b);
        		if (r3 & CHBEXT)
-       			pmz_status_handle(uap_b, regs);
+       			pmz_status_handle(uap_b);
        	       	if (r3 & CHBRxIP)
-       			tty = pmz_receive_chars(uap_b, regs);
+       			tty = pmz_receive_chars(uap_b);
        		if (r3 & CHBTxIP)
        			pmz_transmit_chars(uap_b);
 	       	rc = IRQ_HANDLED;
@@ -936,7 +933,7 @@ static int pmz_startup(struct uart_port *port)
 	}	
 
 	pmz_get_port_A(uap)->flags |= PMACZILOG_FLAG_IS_IRQ_ON;
-	if (request_irq(uap->port.irq, pmz_interrupt, SA_SHIRQ, "PowerMac Zilog", uap)) {
+	if (request_irq(uap->port.irq, pmz_interrupt, IRQF_SHARED, "PowerMac Zilog", uap)) {
 		dev_err(&uap->dev->ofdev.dev,
 			"Unable to register zs interrupt handler.\n");
 		pmz_set_scc_power(uap, 0);
@@ -1265,8 +1262,8 @@ static void pmz_irda_setup(struct uart_pmac_port *uap, unsigned long *baud)
 }
 
 
-static void __pmz_set_termios(struct uart_port *port, struct termios *termios,
-			      struct termios *old)
+static void __pmz_set_termios(struct uart_port *port, struct ktermios *termios,
+			      struct ktermios *old)
 {
 	struct uart_pmac_port *uap = to_pmz(port);
 	unsigned long baud;
@@ -1276,7 +1273,7 @@ static void __pmz_set_termios(struct uart_port *port, struct termios *termios,
 	if (ZS_IS_ASLEEP(uap))
 		return;
 
-	memcpy(&uap->termios_cache, termios, sizeof(struct termios));
+	memcpy(&uap->termios_cache, termios, sizeof(struct ktermios));
 
 	/* XXX Check which revs of machines actually allow 1 and 4Mb speeds
 	 * on the IR dongle. Note that the IRTTY driver currently doesn't know
@@ -1316,8 +1313,8 @@ static void __pmz_set_termios(struct uart_port *port, struct termios *termios,
 }
 
 /* The port lock is not held.  */
-static void pmz_set_termios(struct uart_port *port, struct termios *termios,
-			    struct termios *old)
+static void pmz_set_termios(struct uart_port *port, struct ktermios *termios,
+			    struct ktermios *old)
 {
 	struct uart_pmac_port *uap = to_pmz(port);
 	unsigned long flags;
@@ -1402,8 +1399,8 @@ static struct uart_ops pmz_pops = {
 static int __init pmz_init_port(struct uart_pmac_port *uap)
 {
 	struct device_node *np = uap->node;
-	char *conn;
-	struct slot_names_prop {
+	const char *conn;
+	const struct slot_names_prop {
 		int	count;
 		char	name[1];
 	} *slots;
@@ -1445,8 +1442,8 @@ static int __init pmz_init_port(struct uart_pmac_port *uap)
 			uap->flags &= ~PMACZILOG_FLAG_HAS_DMA;
 			goto no_dma;
 		}
-		uap->tx_dma_irq = np->intrs[1].line;
-		uap->rx_dma_irq = np->intrs[2].line;
+		uap->tx_dma_irq = irq_of_parse_and_map(np, 1);
+		uap->rx_dma_irq = irq_of_parse_and_map(np, 2);
 	}
 no_dma:
 
@@ -1460,7 +1457,7 @@ no_dma:
 		uap->flags |= PMACZILOG_FLAG_IS_IRDA;
 	uap->port_type = PMAC_SCC_ASYNC;
 	/* 1999 Powerbook G3 has slot-names property instead */
-	slots = (struct slot_names_prop *)get_property(np, "slot-names", &len);
+	slots = get_property(np, "slot-names", &len);
 	if (slots && slots->count > 0) {
 		if (strcmp(slots->name, "IrDA") == 0)
 			uap->flags |= PMACZILOG_FLAG_IS_IRDA;
@@ -1472,7 +1469,8 @@ no_dma:
 	if (ZS_IS_INTMODEM(uap)) {
 		struct device_node* i2c_modem = find_devices("i2c-modem");
 		if (i2c_modem) {
-			char* mid = get_property(i2c_modem, "modem-id", NULL);
+			const char* mid =
+				get_property(i2c_modem, "modem-id", NULL);
 			if (mid) switch(*mid) {
 			case 0x04 :
 			case 0x05 :
@@ -1493,7 +1491,7 @@ no_dma:
 	 * Init remaining bits of "port" structure
 	 */
 	uap->port.iotype = UPIO_MEM;
-	uap->port.irq = np->intrs[0].line;
+	uap->port.irq = irq_of_parse_and_map(np, 0);
 	uap->port.uartclk = ZS_CLOCK;
 	uap->port.fifosize = 1;
 	uap->port.ops = &pmz_pops;

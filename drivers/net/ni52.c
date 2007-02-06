@@ -195,7 +195,7 @@ sizeof(nop_cmd) = 8;
 #define NI52_ADDR2 0x01
 
 static int     ni52_probe1(struct net_device *dev,int ioaddr);
-static irqreturn_t ni52_interrupt(int irq,void *dev_id,struct pt_regs *reg_ptr);
+static irqreturn_t ni52_interrupt(int irq,void *dev_id);
 static int     ni52_open(struct net_device *dev);
 static int     ni52_close(struct net_device *dev);
 static int     ni52_send_packet(struct sk_buff *,struct net_device *);
@@ -639,7 +639,7 @@ static int init586(struct net_device *dev)
 	/*
 	 * TDR, wire check .. e.g. no resistor e.t.c
 	 */
-	 
+
 	tdr_cmd = (struct tdr_cmd_struct *)ptr;
 
 	tdr_cmd->cmd_status	= 0;
@@ -837,7 +837,7 @@ static void *alloc_rfa(struct net_device *dev,void *ptr)
  * Interrupt Handler ...
  */
 
-static irqreturn_t ni52_interrupt(int irq,void *dev_id,struct pt_regs *reg_ptr)
+static irqreturn_t ni52_interrupt(int irq,void *dev_id)
 {
 	struct net_device *dev = dev_id;
 	unsigned short stat;
@@ -1323,7 +1323,7 @@ MODULE_PARM_DESC(irq, "NI5210 IRQ number,required");
 MODULE_PARM_DESC(memstart, "NI5210 memory base address,required");
 MODULE_PARM_DESC(memend, "NI5210 memory end address,required");
 
-int init_module(void)
+int __init init_module(void)
 {
 	if(io <= 0x0 || !memend || !memstart || irq < 2) {
 		printk("ni52: Autoprobing not allowed for modules.\nni52: Set symbols 'io' 'irq' 'memstart' and 'memend'\n");
@@ -1335,7 +1335,7 @@ int init_module(void)
 	return 0;
 }
 
-void cleanup_module(void)
+void __exit cleanup_module(void)
 {
 	unregister_netdev(dev_ni52);
 	release_region(dev_ni52->base_addr, NI52_TOTAL_SIZE);

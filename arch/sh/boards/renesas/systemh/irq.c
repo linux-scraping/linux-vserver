@@ -1,5 +1,5 @@
 /*
- * linux/arch/sh/boards/systemh/irq.c
+ * linux/arch/sh/boards/renesas/systemh/irq.c
  *
  * Copyright (C) 2000  Kazumoto Kojima
  *
@@ -9,14 +9,13 @@
  * Jonathan Short.
  */
 
-#include <linux/config.h>
 #include <linux/init.h>
 #include <linux/irq.h>
 
 #include <linux/hdreg.h>
 #include <linux/ide.h>
 #include <asm/io.h>
-#include <asm/mach/7751systemh.h>
+#include <asm/systemh7751.h>
 #include <asm/smc37c93x.h>
 
 /* address of external interrupt mask register
@@ -58,12 +57,9 @@ static void shutdown_systemh_irq(unsigned int irq)
 static void disable_systemh_irq(unsigned int irq)
 {
 	if (systemh_irq_mask_register) {
-		unsigned long flags;
 		unsigned long val, mask = 0x01 << 1;
 
 		/* Clear the "irq"th bit in the mask and set it in the request */
-		local_irq_save(flags);
-
 		val = ctrl_inl((unsigned long)systemh_irq_mask_register);
 		val &= ~mask;
 		ctrl_outl(val, (unsigned long)systemh_irq_mask_register);
@@ -71,23 +67,18 @@ static void disable_systemh_irq(unsigned int irq)
 		val = ctrl_inl((unsigned long)systemh_irq_request_register);
 		val |= mask;
 		ctrl_outl(val, (unsigned long)systemh_irq_request_register);
-
-		local_irq_restore(flags);
 	}
 }
 
 static void enable_systemh_irq(unsigned int irq)
 {
 	if (systemh_irq_mask_register) {
-		unsigned long flags;
 		unsigned long val, mask = 0x01 << 1;
 
 		/* Set "irq"th bit in the mask register */
-		local_irq_save(flags);
 		val = ctrl_inl((unsigned long)systemh_irq_mask_register);
 		val |= mask;
 		ctrl_outl(val, (unsigned long)systemh_irq_mask_register);
-		local_irq_restore(flags);
 	}
 }
 
@@ -105,7 +96,7 @@ static void end_systemh_irq(unsigned int irq)
 void make_systemh_irq(unsigned int irq)
 {
 	disable_irq_nosync(irq);
-	irq_desc[irq].handler = &systemh_irq_type;
+	irq_desc[irq].chip = &systemh_irq_type;
 	disable_systemh_irq(irq);
 }
 

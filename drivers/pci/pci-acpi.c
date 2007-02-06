@@ -36,6 +36,7 @@ acpi_query_osc (
 	struct acpi_buffer	output = {ACPI_ALLOCATE_BUFFER, NULL};
 	union acpi_object 	*out_obj;
 	u32			osc_dw0;
+	acpi_status *ret_status = (acpi_status *)retval;
 
 	
 	/* Setting up input parameters */
@@ -56,6 +57,7 @@ acpi_query_osc (
 	if (ACPI_FAILURE (status)) {
 		printk(KERN_DEBUG  
 			"Evaluate _OSC Set fails. Status = 0x%04x\n", status);
+		*ret_status = status;
 		return status;
 	}
 	out_obj = output.pointer;
@@ -90,6 +92,7 @@ acpi_query_osc (
 
 query_osc_out:
 	kfree(output.pointer);
+	*ret_status = status;
 	return status;
 }
 
@@ -166,6 +169,7 @@ run_osc_out:
 acpi_status pci_osc_support_set(u32 flags)
 {
 	u32 temp;
+	acpi_status retval;
 
 	if (!(flags & OSC_SUPPORT_MASKS)) {
 		return AE_TYPE;
@@ -179,9 +183,13 @@ acpi_status pci_osc_support_set(u32 flags)
 	acpi_get_devices ( PCI_ROOT_HID_STRING,
 			acpi_query_osc,
 			ctrlset_buf,
-			NULL );
+			(void **) &retval );
 	ctrlset_buf[OSC_QUERY_TYPE] = !OSC_QUERY_ENABLE;
 	ctrlset_buf[OSC_CONTROL_TYPE] = temp;
+	if (ACPI_FAILURE(retval)) {
+		/* no osc support at all */
+		ctrlset_buf[OSC_SUPPORT_TYPE] = 0;
+	}
 	return AE_OK;
 }
 EXPORT_SYMBOL(pci_osc_support_set);
@@ -267,7 +275,7 @@ static int acpi_pci_set_power_state(struct pci_dev *dev, pci_power_t state)
 
 
 /* ACPI bus type */
-static int pci_acpi_find_device(struct device *dev, acpi_handle *handle)
+static int acpi_pci_find_device(struct device *dev, acpi_handle *handle)
 {
 	struct pci_dev * pci_dev;
 	acpi_integer	addr;
@@ -281,7 +289,7 @@ static int pci_acpi_find_device(struct device *dev, acpi_handle *handle)
 	return 0;
 }
 
-static int pci_acpi_find_root_bridge(struct device *dev, acpi_handle *handle)
+static int acpi_pci_find_root_bridge(struct device *dev, acpi_handle *handle)
 {
 	int num;
 	unsigned int seg, bus;
@@ -299,21 +307,21 @@ static int pci_acpi_find_root_bridge(struct device *dev, acpi_handle *handle)
 	return 0;
 }
 
-static struct acpi_bus_type pci_acpi_bus = {
+static struct acpi_bus_type acpi_pci_bus = {
 	.bus = &pci_bus_type,
-	.find_device = pci_acpi_find_device,
-	.find_bridge = pci_acpi_find_root_bridge,
+	.find_device = acpi_pci_find_device,
+	.find_bridge = acpi_pci_find_root_bridge,
 };
 
-static int __init pci_acpi_init(void)
+static int __init acpi_pci_init(void)
 {
 	int ret;
 
-	ret = register_acpi_bus_type(&pci_acpi_bus);
+	ret = register_acpi_bus_type(&acpi_pci_bus);
 	if (ret)
 		return 0;
 	platform_pci_choose_state = acpi_pci_choose_state;
 	platform_pci_set_power_state = acpi_pci_set_power_state;
 	return 0;
 }
-arch_initcall(pci_acpi_init);
+arch_initcall(acpi_pci_init);

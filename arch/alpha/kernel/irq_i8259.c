@@ -7,7 +7,6 @@
  * Started hacking from linux-2.3.30pre6/arch/i386/kernel/i8259.c.
  */
 
-#include <linux/config.h>
 #include <linux/init.h>
 #include <linux/cache.h>
 #include <linux/sched.h>
@@ -109,7 +108,7 @@ init_i8259a_irqs(void)
 
 	for (i = 0; i < 16; i++) {
 		irq_desc[i].status = IRQ_DISABLED;
-		irq_desc[i].handler = &i8259a_irq_type;
+		irq_desc[i].chip = &i8259a_irq_type;
 	}
 
 	setup_irq(2, &cascade);
@@ -138,7 +137,7 @@ init_i8259a_irqs(void)
 
 #if defined(IACK_SC)
 void
-isa_device_interrupt(unsigned long vector, struct pt_regs *regs)
+isa_device_interrupt(unsigned long vector)
 {
 	/*
 	 * Generate a PCI interrupt acknowledge cycle.  The PIC will
@@ -148,13 +147,13 @@ isa_device_interrupt(unsigned long vector, struct pt_regs *regs)
 	 */
 	int j = *(vuip) IACK_SC;
 	j &= 0xff;
-	handle_irq(j, regs);
+	handle_irq(j);
 }
 #endif
 
 #if defined(CONFIG_ALPHA_GENERIC) || !defined(IACK_SC)
 void
-isa_no_iack_sc_device_interrupt(unsigned long vector, struct pt_regs *regs)
+isa_no_iack_sc_device_interrupt(unsigned long vector)
 {
 	unsigned long pic;
 
@@ -177,7 +176,7 @@ isa_no_iack_sc_device_interrupt(unsigned long vector, struct pt_regs *regs)
 	while (pic) {
 		int j = ffz(~pic);
 		pic &= pic - 1;
-		handle_irq(j, regs);
+		handle_irq(j);
 	}
 }
 #endif

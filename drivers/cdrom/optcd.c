@@ -101,7 +101,7 @@ static void debug(int debug_this, const char* fmt, ...)
 		return;
 
 	va_start(args, fmt);
-	vsprintf(s, fmt, args);
+	vsnprintf(s, sizeof(s), fmt, args);
 	printk(KERN_DEBUG "optcd: %s\n", s);
 	va_end(args);
 }
@@ -2033,7 +2033,6 @@ static int __init optcd_init(void)
 	optcd_disk->first_minor = 0;
 	optcd_disk->fops = &opt_fops;
 	sprintf(optcd_disk->disk_name, "optcd");
-	sprintf(optcd_disk->devfs_name, "optcd");
 
 	if (!request_region(optcd_port, 4, "optcd")) {
 		printk(KERN_ERR "optcd: conflict, I/O port 0x%x already used\n",

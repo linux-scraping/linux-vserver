@@ -77,11 +77,9 @@ static u_int
 ahc_calc_syncsrate(u_int period_factor)
 {
 	int i;
-	int num_syncrates;
 
-	num_syncrates = sizeof(scsi_syncrates) / sizeof(scsi_syncrates[0]);
 	/* See if the period is in the "exception" table */
-	for (i = 0; i < num_syncrates; i++) {
+	for (i = 0; i < ARRAY_SIZE(scsi_syncrates); i++) {
 
 		if (period_factor == scsi_syncrates[i].period_factor) {
 			/* Period in kHz */
@@ -184,7 +182,6 @@ ahc_dump_target_state(struct ahc_softc *ahc, struct info_str *info,
 		      u_int our_id, char channel, u_int target_id,
 		      u_int target_offset)
 {
-	struct	ahc_linux_target *targ;
 	struct	scsi_target *starget;
 	struct	ahc_initiator_tinfo *tinfo;
 	struct	ahc_tmode_tstate *tstate;
@@ -200,7 +197,6 @@ ahc_dump_target_state(struct ahc_softc *ahc, struct info_str *info,
 	starget = ahc->platform_data->starget[target_offset];
 	if (!starget)
 		return;
-	targ = scsi_transport_target_data(starget);
 
 	copy_info(info, "\tGoal: ");
 	ahc_format_transinfo(info, &tinfo->goal);
@@ -210,7 +206,7 @@ ahc_dump_target_state(struct ahc_softc *ahc, struct info_str *info,
 	for (lun = 0; lun < AHC_NUM_LUNS; lun++) {
 		struct scsi_device *sdev;
 
-		sdev = targ->sdev[lun];
+		sdev = scsi_device_lookup_by_target(starget, lun);
 
 		if (sdev == NULL)
 			continue;
@@ -385,11 +381,11 @@ ahc_linux_proc_info(struct Scsi_Host *shost, char *buffer, char **start,
 	}
 	copy_info(&info, "\n");
 
-	max_targ = 15;
+	max_targ = 16;
 	if ((ahc->features & (AHC_WIDE|AHC_TWIN)) == 0)
-		max_targ = 7;
+		max_targ = 8;
 
-	for (i = 0; i <= max_targ; i++) {
+	for (i = 0; i < max_targ; i++) {
 		u_int our_id;
 		u_int target_id;
 		char channel;

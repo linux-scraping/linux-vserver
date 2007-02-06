@@ -5,6 +5,7 @@
 #include <linux/pci.h>
 #include <linux/init.h>
 #include <linux/module.h>
+#include <linux/uaccess.h>
 #include "pci.h"
 #include "pci-functions.h"
 
@@ -314,6 +315,10 @@ static struct pci_raw_ops * __devinit pci_find_bios(void)
 	for (check = (union bios32 *) __va(0xe0000);
 	     check <= (union bios32 *) __va(0xffff0);
 	     ++check) {
+		long sig;
+		if (probe_kernel_address(&check->fields.signature, sig))
+			continue;
+
 		if (check->fields.signature != BIOS32_SIGNATURE)
 			continue;
 		length = check->fields.length * 16;
@@ -331,11 +336,13 @@ static struct pci_raw_ops * __devinit pci_find_bios(void)
 		}
 		DBG("PCI: BIOS32 Service Directory structure at 0x%p\n", check);
 		if (check->fields.entry >= 0x100000) {
-			printk("PCI: BIOS32 entry (0x%p) in high memory, cannot use.\n", check);
+			printk("PCI: BIOS32 entry (0x%p) in high memory, "
+					"cannot use.\n", check);
 			return NULL;
 		} else {
 			unsigned long bios32_entry = check->fields.entry;
-			DBG("PCI: BIOS32 Service Directory entry at 0x%lx\n", bios32_entry);
+			DBG("PCI: BIOS32 Service Directory entry at 0x%lx\n",
+					bios32_entry);
 			bios32_indirect.address = bios32_entry + PAGE_OFFSET;
 			if (check_pcibios())
 				return &pci_bios_access;
@@ -371,8 +378,7 @@ void __devinit pcibios_sort(void)
 			list_for_each(ln, &pci_devices) {
 				d = pci_dev_g(ln);
 				if (d->bus->number == bus && d->devfn == devfn) {
-					list_del(&d->global_list);
-					list_add_tail(&d->global_list, &sorted_devices);
+					list_move_tail(&d->global_list, &sorted_devices);
 					if (d == dev)
 						found = 1;
 					break;
@@ -390,8 +396,7 @@ void __devinit pcibios_sort(void)
 		if (!found) {
 			printk(KERN_WARNING "PCI: Device %s not found by BIOS\n",
 				pci_name(dev));
-			list_del(&dev->global_list);
-			list_add_tail(&dev->global_list, &sorted_devices);
+			list_move_tail(&dev->global_list, &sorted_devices);
 		}
 	}
 	list_splice(&sorted_devices, &pci_devices);

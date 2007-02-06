@@ -25,8 +25,8 @@
 #include <linux/sched.h>		/* wake_up() */
 #include <linux/mutex.h>		/* struct mutex */
 #include <linux/rwsem.h>		/* struct rw_semaphore */
-#include <linux/workqueue.h>		/* struct workqueue_struct */
 #include <linux/pm.h>			/* pm_message_t */
+#include <linux/device.h>
 
 /* forward declarations */
 #ifdef CONFIG_PCI
@@ -71,7 +71,6 @@ struct snd_device_ops {
 	int (*dev_free)(struct snd_device *dev);
 	int (*dev_register)(struct snd_device *dev);
 	int (*dev_disconnect)(struct snd_device *dev);
-	int (*dev_unregister)(struct snd_device *dev);
 };
 
 struct snd_device {
@@ -90,9 +89,9 @@ struct snd_device {
 struct snd_monitor_file {
 	struct file *file;
 	struct snd_monitor_file *next;
+	const struct file_operations *disconnected_f_op;
+	struct list_head shutdown_list;
 };
-
-struct snd_shutdown_f_ops;	/* define it later in init.c */
 
 /* main structure for soundcard */
 
@@ -131,9 +130,12 @@ struct snd_card {
 								state */
 	spinlock_t files_lock;		/* lock the files for this card */
 	int shutdown;			/* this card is going down */
+	int free_on_last_close;		/* free in context of file_release */
 	wait_queue_head_t shutdown_sleep;
-	struct work_struct free_workq;	/* for free in workqueue */
-	struct device *dev;
+	struct device *dev;		/* device assigned to this card */
+#ifndef CONFIG_SYSFS_DEPRECATED
+	struct device *card_dev;	/* cardX object for sysfs */
+#endif
 
 #ifdef CONFIG_PM
 	unsigned int power_state;	/* power state */
@@ -188,14 +190,24 @@ struct snd_minor {
 	int device;			/* device number */
 	const struct file_operations *f_ops;	/* file operations */
 	void *private_data;		/* private data for f_ops->open */
-	char name[0];			/* device name (keep at the end of
-								structure) */
+	struct device *dev;		/* device for sysfs */
 };
+
+/* return a device pointer linked to each sound device as a parent */
+static inline struct device *snd_card_get_device_link(struct snd_card *card)
+{
+#ifdef CONFIG_SYSFS_DEPRECATED
+	return card ? card->dev : NULL;
+#else
+	return card ? card->card_dev : NULL;
+#endif
+}
 
 /* sound.c */
 
 extern int snd_major;
 extern int snd_ecards_limit;
+extern struct class *sound_class;
 
 void snd_request_card(int card);
 
@@ -204,6 +216,8 @@ int snd_register_device(int type, struct snd_card *card, int dev,
 			const char *name);
 int snd_unregister_device(int type, struct snd_card *card, int dev);
 void *snd_lookup_minor_data(unsigned int minor, int type);
+int snd_add_device_sysfs_file(int type, struct snd_card *card, int dev,
+			      struct device_attribute *attr);
 
 #ifdef CONFIG_SND_OSSEMUL
 int snd_register_oss_device(int type, struct snd_card *card, int dev,
@@ -233,9 +247,8 @@ int copy_from_user_toio(volatile void __iomem *dst, const void __user *src, size
 
 /* init.c */
 
-extern unsigned int snd_cards_lock;
 extern struct snd_card *snd_cards[SNDRV_CARDS];
-extern rwlock_t snd_card_rwlock;
+int snd_card_locked(int card);
 #if defined(CONFIG_SND_MIXER_OSS) || defined(CONFIG_SND_MIXER_OSS_MODULE)
 #define SND_MIXER_OSS_NOTIFY_REGISTER	0
 #define SND_MIXER_OSS_NOTIFY_DISCONNECT	1
@@ -247,7 +260,7 @@ struct snd_card *snd_card_new(int idx, const char *id,
 			 struct module *module, int extra_size);
 int snd_card_disconnect(struct snd_card *card);
 int snd_card_free(struct snd_card *card);
-int snd_card_free_in_thread(struct snd_card *card);
+int snd_card_free_when_closed(struct snd_card *card);
 int snd_card_register(struct snd_card *card);
 int snd_card_info_init(void);
 int snd_card_info_done(void);

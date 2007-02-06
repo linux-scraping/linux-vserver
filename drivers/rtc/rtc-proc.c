@@ -23,7 +23,7 @@ static int rtc_proc_show(struct seq_file *seq, void *offset)
 {
 	int err;
 	struct class_device *class_dev = seq->private;
-	struct rtc_class_ops *ops = to_rtc_device(class_dev)->ops;
+	const struct rtc_class_ops *ops = to_rtc_device(class_dev)->ops;
 	struct rtc_wkalrm alrm;
 	struct rtc_time tm;
 
@@ -61,11 +61,11 @@ static int rtc_proc_show(struct seq_file *seq, void *offset)
 			seq_printf(seq, "%02d-", alrm.time.tm_mon + 1);
 		else
 			seq_printf(seq, "**-");
-		if ((unsigned int)alrm.time.tm_mday <= 31)
+		if (alrm.time.tm_mday && (unsigned int)alrm.time.tm_mday <= 31)
 			seq_printf(seq, "%02d\n", alrm.time.tm_mday);
 		else
 			seq_printf(seq, "**\n");
-		seq_printf(seq, "alrm_wakeup\t: %s\n",
+		seq_printf(seq, "alarm_IRQ\t: %s\n",
 				alrm.enabled ? "yes" : "no");
 		seq_printf(seq, "alrm_pending\t: %s\n",
 				alrm.pending ? "yes" : "no");
@@ -120,7 +120,7 @@ static int rtc_proc_add_device(struct class_device *class_dev,
 			ent->owner = rtc->owner;
 			ent->data = class_dev;
 
-			dev_info(class_dev->dev, "rtc intf: proc\n");
+			dev_dbg(class_dev->dev, "rtc intf: proc\n");
 		}
 		else
 			rtc_dev = NULL;
@@ -156,7 +156,7 @@ static void __exit rtc_proc_exit(void)
 	class_interface_unregister(&rtc_proc_interface);
 }
 
-module_init(rtc_proc_init);
+subsys_initcall(rtc_proc_init);
 module_exit(rtc_proc_exit);
 
 MODULE_AUTHOR("Alessandro Zummo <a.zummo@towertech.it>");

@@ -11,9 +11,8 @@
  *
  */
 
-#define DEBUG
+#undef DEBUG
 
-#include <linux/config.h>
 #include <linux/init.h>
 #include <linux/errno.h>
 #include <linux/sched.h>
@@ -61,6 +60,7 @@
 #include <asm/of_device.h>
 #include <asm/lmb.h>
 #include <asm/mpic.h>
+#include <asm/rtas.h>
 #include <asm/udbg.h>
 
 #include "maple.h"
@@ -100,8 +100,7 @@ static unsigned long maple_find_nvram_base(void)
 static void maple_restart(char *cmd)
 {
 	unsigned int maple_nvram_base;
-	unsigned int maple_nvram_offset;
-	unsigned int maple_nvram_command;
+	const unsigned int *maple_nvram_offset, *maple_nvram_command;
 	struct device_node *sp;
 
 	maple_nvram_base = maple_find_nvram_base();
@@ -114,14 +113,12 @@ static void maple_restart(char *cmd)
 		printk(KERN_EMERG "Maple: Unable to find Service Processor\n");
 		goto fail;
 	}
-	maple_nvram_offset = *(unsigned int*) get_property(sp,
-			"restart-addr", NULL);
-	maple_nvram_command = *(unsigned int*) get_property(sp,
-			"restart-value", NULL);
+	maple_nvram_offset = get_property(sp, "restart-addr", NULL);
+	maple_nvram_command = get_property(sp, "restart-value", NULL);
 	of_node_put(sp);
 
 	/* send command */
-	outb_p(maple_nvram_command, maple_nvram_base + maple_nvram_offset);
+	outb_p(*maple_nvram_command, maple_nvram_base + *maple_nvram_offset);
 	for (;;) ;
  fail:
 	printk(KERN_EMERG "Maple: Manual Restart Required\n");
@@ -130,8 +127,7 @@ static void maple_restart(char *cmd)
 static void maple_power_off(void)
 {
 	unsigned int maple_nvram_base;
-	unsigned int maple_nvram_offset;
-	unsigned int maple_nvram_command;
+	const unsigned int *maple_nvram_offset, *maple_nvram_command;
 	struct device_node *sp;
 
 	maple_nvram_base = maple_find_nvram_base();
@@ -144,14 +140,12 @@ static void maple_power_off(void)
 		printk(KERN_EMERG "Maple: Unable to find Service Processor\n");
 		goto fail;
 	}
-	maple_nvram_offset = *(unsigned int*) get_property(sp,
-			"power-off-addr", NULL);
-	maple_nvram_command = *(unsigned int*) get_property(sp,
-			"power-off-value", NULL);
+	maple_nvram_offset = get_property(sp, "power-off-addr", NULL);
+	maple_nvram_command = get_property(sp, "power-off-value", NULL);
 	of_node_put(sp);
 
 	/* send command */
-	outb_p(maple_nvram_command, maple_nvram_base + maple_nvram_offset);
+	outb_p(*maple_nvram_command, maple_nvram_base + *maple_nvram_offset);
 	for (;;) ;
  fail:
 	printk(KERN_EMERG "Maple: Manual Power-Down Required\n");
@@ -173,6 +167,16 @@ struct smp_ops_t maple_smp_ops = {
 };
 #endif /* CONFIG_SMP */
 
+static void __init maple_use_rtas_reboot_and_halt_if_present(void)
+{
+	if (rtas_service_present("system-reboot") &&
+	    rtas_service_present("power-off")) {
+		ppc_md.restart = rtas_restart;
+		ppc_md.power_off = rtas_power_off;
+		ppc_md.halt = rtas_halt;
+	}
+}
+
 void __init maple_setup_arch(void)
 {
 	/* init to some ~sane value until calibrate_delay() runs */
@@ -188,8 +192,9 @@ void __init maple_setup_arch(void)
 #ifdef CONFIG_DUMMY_CONSOLE
 	conswitchp = &dummy_con;
 #endif
+	maple_use_rtas_reboot_and_halt_if_present();
 
-	printk(KERN_INFO "Using native/NAP idle loop\n");
+	printk(KERN_DEBUG "Using native/NAP idle loop\n");
 }
 
 /* 
@@ -199,55 +204,88 @@ static void __init maple_init_early(void)
 {
 	DBG(" -> maple_init_early\n");
 
-	/* Initialize hash table, from now on, we can take hash faults
-	 * and call ioremap
-	 */
-	hpte_init_native();
-
-	/* Setup interrupt mapping options */
-	ppc64_interrupt_controller = IC_OPEN_PIC;
-
 	iommu_init_early_dart();
 
 	DBG(" <- maple_init_early\n");
 }
 
-
-static __init void maple_init_IRQ(void)
+/*
+ * This is almost identical to pSeries and CHRP. We need to make that
+ * code generic at one point, with appropriate bits in the device-tree to
+ * identify the presence of an HT APIC
+ */
+static void __init maple_init_IRQ(void)
 {
-	struct device_node *root;
-	unsigned int *opprop;
-	unsigned long opic_addr;
+	struct device_node *root, *np, *mpic_node = NULL;
+	const unsigned int *opprop;
+	unsigned long openpic_addr = 0;
+	int naddr, n, i, opplen, has_isus = 0;
 	struct mpic *mpic;
-	unsigned char senses[128];
-	int n;
+	unsigned int flags = MPIC_PRIMARY;
 
-	DBG(" -> maple_init_IRQ\n");
+	/* Locate MPIC in the device-tree. Note that there is a bug
+	 * in Maple device-tree where the type of the controller is
+	 * open-pic and not interrupt-controller
+	 */
 
-	/* XXX: Non standard, replace that with a proper openpic/mpic node
-	 * in the device-tree. Find the Open PIC if present */
+	for_each_node_by_type(np, "interrupt-controller")
+		if (device_is_compatible(np, "open-pic")) {
+			mpic_node = np;
+			break;
+		}
+	if (mpic_node == NULL)
+		for_each_node_by_type(np, "open-pic") {
+			mpic_node = np;
+			break;
+		}
+	if (mpic_node == NULL) {
+		printk(KERN_ERR
+		       "Failed to locate the MPIC interrupt controller\n");
+		return;
+	}
+
+	/* Find address list in /platform-open-pic */
 	root = of_find_node_by_path("/");
-	opprop = (unsigned int *) get_property(root,
-				"platform-open-pic", NULL);
-	if (opprop == 0)
-		panic("OpenPIC not found !\n");
+	naddr = prom_n_addr_cells(root);
+	opprop = get_property(root, "platform-open-pic", &opplen);
+	if (opprop != 0) {
+		openpic_addr = of_read_number(opprop, naddr);
+		has_isus = (opplen > naddr);
+		printk(KERN_DEBUG "OpenPIC addr: %lx, has ISUs: %d\n",
+		       openpic_addr, has_isus);
+	}
 
-	n = prom_n_addr_cells(root);
-	for (opic_addr = 0; n > 0; --n)
-		opic_addr = (opic_addr << 32) + *opprop++;
-	of_node_put(root);
+	BUG_ON(openpic_addr == 0);
 
-	/* Obtain sense values from device-tree */
-	prom_get_irq_senses(senses, 0, 128);
+	/* Check for a big endian MPIC */
+	if (get_property(np, "big-endian", NULL) != NULL)
+		flags |= MPIC_BIG_ENDIAN;
 
-	mpic = mpic_alloc(opic_addr,
-			  MPIC_PRIMARY | MPIC_BIG_ENDIAN |
-			  MPIC_BROKEN_U3 | MPIC_WANTS_RESET,
-			  0, 0, 128, 128, senses, 128, "U3-MPIC");
+	/* XXX Maple specific bits */
+	flags |= MPIC_BROKEN_U3 | MPIC_WANTS_RESET;
+	/* All U3/U4 are big-endian, older SLOF firmware doesn't encode this */
+	flags |= MPIC_BIG_ENDIAN;
+
+	/* Setup the openpic driver. More device-tree junks, we hard code no
+	 * ISUs for now. I'll have to revisit some stuffs with the folks doing
+	 * the firmware for those
+	 */
+	mpic = mpic_alloc(mpic_node, openpic_addr, flags,
+			  /*has_isus ? 16 :*/ 0, 0, " MPIC     ");
 	BUG_ON(mpic == NULL);
-	mpic_init(mpic);
 
-	DBG(" <- maple_init_IRQ\n");
+	/* Add ISUs */
+	opplen /= sizeof(u32);
+	for (n = 0, i = naddr; i < opplen; i += naddr, n++) {
+		unsigned long isuaddr = of_read_number(opprop + i, naddr);
+		mpic_assign_isu(mpic, n, isuaddr);
+	}
+
+	/* All ISUs are setup, complete initialization */
+	mpic_init(mpic);
+	ppc_md.get_irq = mpic_get_irq;
+	of_node_put(mpic_node);
+	of_node_put(root);
 }
 
 static void __init maple_progress(char *s, unsigned short hex)
@@ -262,7 +300,9 @@ static void __init maple_progress(char *s, unsigned short hex)
 static int __init maple_probe(void)
 {
 	unsigned long root = of_get_flat_dt_root();
-	if (!of_flat_dt_is_compatible(root, "Momentum,Maple"))
+
+	if (!of_flat_dt_is_compatible(root, "Momentum,Maple") &&
+	    !of_flat_dt_is_compatible(root, "Momentum,Apache"))
 		return 0;
 	/*
 	 * On U3, the DART (iommu) must be allocated now since it
@@ -271,6 +311,8 @@ static int __init maple_probe(void)
 	 * part of the cacheable linar mapping
 	 */
 	alloc_dart_table();
+
+	hpte_init_native();
 
 	return 1;
 }
@@ -281,8 +323,7 @@ define_machine(maple_md) {
 	.setup_arch		= maple_setup_arch,
 	.init_early		= maple_init_early,
 	.init_IRQ		= maple_init_IRQ,
-	.get_irq		= mpic_get_irq,
-	.pcibios_fixup		= maple_pcibios_fixup,
+	.pci_irq_fixup		= maple_pci_irq_fixup,
 	.pci_get_legacy_ide_irq	= maple_pci_get_legacy_ide_irq,
 	.restart		= maple_restart,
 	.power_off		= maple_power_off,

@@ -37,7 +37,6 @@
 
 #include <linux/module.h>
 #include <linux/moduleparam.h>
-#include <linux/config.h>
 #include <linux/types.h>
 #include <linux/miscdevice.h>
 #include <linux/ioport.h>
@@ -186,12 +185,12 @@ static int mixcomwd_ioctl(struct inode *inode, struct file *file,
 			mixcomwd_ping();
 			break;
 		default:
-			return -ENOIOCTLCMD;
+			return -ENOTTY;
 	}
 	return 0;
 }
 
-static struct file_operations mixcomwd_fops=
+static const struct file_operations mixcomwd_fops=
 {
 	.owner		= THIS_MODULE,
 	.llseek		= no_llseek,

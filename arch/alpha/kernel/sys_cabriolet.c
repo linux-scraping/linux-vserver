@@ -9,7 +9,6 @@
  * PC164 and LX164.
  */
 
-#include <linux/config.h>
 #include <linux/kernel.h>
 #include <linux/types.h>
 #include <linux/mm.h>
@@ -83,7 +82,7 @@ static struct hw_interrupt_type cabriolet_irq_type = {
 };
 
 static void 
-cabriolet_device_interrupt(unsigned long v, struct pt_regs *r)
+cabriolet_device_interrupt(unsigned long v)
 {
 	unsigned long pld;
 	unsigned int i;
@@ -99,15 +98,15 @@ cabriolet_device_interrupt(unsigned long v, struct pt_regs *r)
 		i = ffz(~pld);
 		pld &= pld - 1;	/* clear least bit set */
 		if (i == 4) {
-			isa_device_interrupt(v, r);
+			isa_device_interrupt(v);
 		} else {
-			handle_irq(16 + i, r);
+			handle_irq(16 + i);
 		}
 	}
 }
 
 static void __init
-common_init_irq(void (*srm_dev_int)(unsigned long v, struct pt_regs *r))
+common_init_irq(void (*srm_dev_int)(unsigned long v))
 {
 	init_i8259a_irqs();
 
@@ -124,7 +123,7 @@ common_init_irq(void (*srm_dev_int)(unsigned long v, struct pt_regs *r))
 
 		for (i = 16; i < 35; ++i) {
 			irq_desc[i].status = IRQ_DISABLED | IRQ_LEVEL;
-			irq_desc[i].handler = &cabriolet_irq_type;
+			irq_desc[i].chip = &cabriolet_irq_type;
 		}
 	}
 
@@ -155,18 +154,18 @@ cabriolet_init_irq(void)
    too invasive though.  */
 
 static void
-pc164_srm_device_interrupt(unsigned long v, struct pt_regs *r)
+pc164_srm_device_interrupt(unsigned long v)
 {
 	__min_ipl = getipl();
-	srm_device_interrupt(v, r);
+	srm_device_interrupt(v);
 	__min_ipl = 0;
 }
 
 static void
-pc164_device_interrupt(unsigned long v, struct pt_regs *r)
+pc164_device_interrupt(unsigned long v)
 {
 	__min_ipl = getipl();
-	cabriolet_device_interrupt(v, r);
+	cabriolet_device_interrupt(v);
 	__min_ipl = 0;
 }
 

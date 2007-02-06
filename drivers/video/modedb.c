@@ -12,7 +12,6 @@
  */
 
 #include <linux/module.h>
-#include <linux/tty.h>
 #include <linux/fb.h>
 #include <linux/sched.h>
 
@@ -34,8 +33,6 @@ const char *global_mode_option;
     /*
      *  Standard video mode definitions (taken from XFree86)
      */
-
-#define DEFAULT_MODEDB_INDEX	0
 
 static const struct fb_videomode modedb[] = {
     {
@@ -259,6 +256,10 @@ static const struct fb_videomode modedb[] = {
 	/* 1152x768, 60 Hz, PowerBook G4 Titanium I and II */
 	NULL, 60, 1152, 768, 15386, 158, 26, 29, 3, 136, 6,
 	FB_SYNC_HOR_HIGH_ACT|FB_SYNC_VERT_HIGH_ACT, FB_VMODE_NONINTERLACED
+    }, {
+	/* 1366x768, 60 Hz, 47.403 kHz hsync, WXGA 16:9 aspect ratio */
+	NULL, 60, 1366, 768, 13806, 120, 10, 14, 3, 32, 5,
+	0, FB_VMODE_NONINTERLACED
     },
 };
 
@@ -502,8 +503,10 @@ int fb_find_mode(struct fb_var_screeninfo *var,
 	db = modedb;
 	dbsize = ARRAY_SIZE(modedb);
     }
+
     if (!default_mode)
-	default_mode = &modedb[DEFAULT_MODEDB_INDEX];
+	default_mode = &db[0];
+
     if (!default_bpp)
 	default_bpp = 8;
 
@@ -787,8 +790,9 @@ struct fb_videomode *fb_find_best_mode(struct fb_var_screeninfo *var,
 			if (diff > d) {
 				diff = d;
 				best = mode;
-			} else if (diff == d && mode->refresh > best->refresh)
-			    best = mode;
+			} else if (diff == d && best &&
+				   mode->refresh > best->refresh)
+				best = mode;
 		}
 	}
 	return best;
@@ -1016,8 +1020,6 @@ EXPORT_SYMBOL(fb_videomode_to_var);
 EXPORT_SYMBOL(fb_var_to_videomode);
 EXPORT_SYMBOL(fb_mode_is_equal);
 EXPORT_SYMBOL(fb_add_videomode);
-EXPORT_SYMBOL(fb_delete_videomode);
-EXPORT_SYMBOL(fb_destroy_modelist);
 EXPORT_SYMBOL(fb_match_mode);
 EXPORT_SYMBOL(fb_find_best_mode);
 EXPORT_SYMBOL(fb_find_nearest_mode);

@@ -27,12 +27,12 @@
  * Timer interrupt handler
  */
 static irqreturn_t
-h7201_timer_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+h7201_timer_interrupt(int irq, void *dev_id)
 {
 	write_seqlock(&xtime_lock);
 
 	CPU_REG (TIMER_VIRT, TIMER_TOPSTAT);
-	timer_tick(regs);
+	timer_tick();
 
 	write_sequnlock(&xtime_lock);
 
@@ -41,7 +41,7 @@ h7201_timer_interrupt(int irq, void *dev_id, struct pt_regs *regs)
 
 static struct irqaction h7201_timer_irq = {
 	.name		= "h7201 Timer Tick",
-	.flags		= SA_INTERRUPT | SA_TIMER,
+	.flags		= IRQF_DISABLED | IRQF_TIMER,
 	.handler	= h7201_timer_interrupt,
 };
 

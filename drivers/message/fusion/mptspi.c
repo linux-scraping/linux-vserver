@@ -3,7 +3,7 @@
  *      For use with LSI Logic PCI chip/adapter(s)
  *      running LSI Logic Fusion MPT (Message Passing Technology) firmware.
  *
- *  Copyright (c) 1999-2005 LSI Logic Corporation
+ *  Copyright (c) 1999-2007 LSI Logic Corporation
  *  (mailto:mpt_linux_developer@lsil.com)
  *
  */
@@ -77,15 +77,12 @@
 MODULE_AUTHOR(MODULEAUTHOR);
 MODULE_DESCRIPTION(my_NAME);
 MODULE_LICENSE("GPL");
+MODULE_VERSION(my_VERSION);
 
 /* Command line args */
 static int mpt_saf_te = MPTSCSIH_SAF_TE;
 module_param(mpt_saf_te, int, 0);
 MODULE_PARM_DESC(mpt_saf_te, " Force enabling SEP Processor: enable=1  (default=MPTSCSIH_SAF_TE=0)");
-
-static int mpt_pq_filter = 0;
-module_param(mpt_pq_filter, int, 0);
-MODULE_PARM_DESC(mpt_pq_filter, " Enable peripheral qualifier filter: enable=1  (default=0)");
 
 static void mptspi_write_offset(struct scsi_target *, int);
 static void mptspi_write_width(struct scsi_target *, int);
@@ -650,9 +647,10 @@ struct work_queue_wrapper {
 	int			disk;
 };
 
-static void mpt_work_wrapper(void *data)
+static void mpt_work_wrapper(struct work_struct *work)
 {
-	struct work_queue_wrapper *wqw = (struct work_queue_wrapper *)data;
+	struct work_queue_wrapper *wqw =
+		container_of(work, struct work_queue_wrapper, work);
 	struct _MPT_SCSI_HOST *hd = wqw->hd;
 	struct Scsi_Host *shost = hd->ioc->sh;
 	struct scsi_device *sdev;
@@ -699,7 +697,7 @@ static void mpt_dv_raid(struct _MPT_SCSI_HOST *hd, int disk)
 			   disk);
 		return;
 	}
-	INIT_WORK(&wqw->work, mpt_work_wrapper, wqw);
+	INIT_WORK(&wqw->work, mpt_work_wrapper);
 	wqw->hd = hd;
 	wqw->disk = disk;
 
@@ -775,9 +773,9 @@ static struct spi_function_template mptspi_transport_functions = {
  */
 
 static struct pci_device_id mptspi_pci_table[] = {
-	{ PCI_VENDOR_ID_LSI_LOGIC, PCI_DEVICE_ID_LSI_53C1030,
+	{ PCI_VENDOR_ID_LSI_LOGIC, MPI_MANUFACTPAGE_DEVID_53C1030,
 		PCI_ANY_ID, PCI_ANY_ID },
-	{ PCI_VENDOR_ID_LSI_LOGIC, PCI_DEVICE_ID_LSI_1030_53C1035,
+	{ PCI_VENDOR_ID_LSI_LOGIC, MPI_MANUFACTPAGE_DEVID_53C1035,
 		PCI_ANY_ID, PCI_ANY_ID },
 	{0}	/* Terminating entry */
 };
@@ -788,9 +786,10 @@ MODULE_DEVICE_TABLE(pci, mptspi_pci_table);
  * renegotiate for a given target
  */
 static void
-mptspi_dv_renegotiate_work(void *data)
+mptspi_dv_renegotiate_work(struct work_struct *work)
 {
-	struct work_queue_wrapper *wqw = (struct work_queue_wrapper *)data;
+	struct work_queue_wrapper *wqw =
+		container_of(work, struct work_queue_wrapper, work);
 	struct _MPT_SCSI_HOST *hd = wqw->hd;
 	struct scsi_device *sdev;
 
@@ -808,7 +807,7 @@ mptspi_dv_renegotiate(struct _MPT_SCSI_HOST *hd)
 	if (!wqw)
 		return;
 
-	INIT_WORK(&wqw->work, mptspi_dv_renegotiate_work, wqw);
+	INIT_WORK(&wqw->work, mptspi_dv_renegotiate_work);
 	wqw->hd = hd;
 
 	schedule_work(&wqw->work);
@@ -1047,14 +1046,12 @@ mptspi_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	hd->timer.function = mptscsih_timer_expired;
 
 	ioc->spi_data.Saf_Te = mpt_saf_te;
-	hd->mpt_pq_filter = mpt_pq_filter;
 
 	hd->negoNvram = MPT_SCSICFG_USE_NVRAM;
 	ddvprintk((MYIOC_s_INFO_FMT
-		"saf_te %x mpt_pq_filter %x\n",
+		"saf_te %x\n",
 		ioc->name,
-		mpt_saf_te,
-		mpt_pq_filter));
+		mpt_saf_te));
 	ioc->spi_data.noQas = 0;
 
 	init_waitqueue_head(&hd->scandv_waitq);
@@ -1104,8 +1101,7 @@ static struct pci_driver mptspi_driver = {
 
 /*=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=*/
 /**
- *	mptspi_init - Register MPT adapter(s) as SCSI host(s) with
- *	linux scsi mid-layer.
+ *	mptspi_init - Register MPT adapter(s) as SCSI host(s) with SCSI mid-layer.
  *
  *	Returns 0 for success, non-zero for failure.
  */
@@ -1139,7 +1135,6 @@ mptspi_init(void)
 /*=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=*/
 /**
  *	mptspi_exit - Unregisters MPT adapter(s)
- *
  */
 static void __exit
 mptspi_exit(void)

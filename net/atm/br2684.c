@@ -5,7 +5,6 @@ Author: Marcell GAL, 2000, XDSL Ltd, Hungary
 */
 
 #include <linux/module.h>
-#include <linux/config.h>
 #include <linux/init.h>
 #include <linux/kernel.h>
 #include <linux/list.h>
@@ -24,7 +23,6 @@ Author: Marcell GAL, 2000, XDSL Ltd, Hungary
 #include <linux/atmbr2684.h>
 
 #include "common.h"
-#include "ipcommon.h"
 
 /*
  * Define this to use a version of the code which interacts with the higher
@@ -373,7 +371,7 @@ static int br2684_setfilt(struct atm_vcc *atmvcc, void __user *arg)
 
 /* Returns 1 if packet should be dropped */
 static inline int
-packet_fails_filter(u16 type, struct br2684_vcc *brvcc, struct sk_buff *skb)
+packet_fails_filter(__be16 type, struct br2684_vcc *brvcc, struct sk_buff *skb)
 {
 	if (brvcc->filter.netmask == 0)
 		return 0;			/* no filter in place */
@@ -501,18 +499,18 @@ Note: we do not have explicit unassign, but look at _push()
 */
 	int err;
 	struct br2684_vcc *brvcc;
-	struct sk_buff_head copy;
 	struct sk_buff *skb;
+	struct sk_buff_head *rq;
 	struct br2684_dev *brdev;
 	struct net_device *net_dev;
 	struct atm_backend_br2684 be;
+	unsigned long flags;
 
 	if (copy_from_user(&be, arg, sizeof be))
 		return -EFAULT;
-	brvcc = kmalloc(sizeof(struct br2684_vcc), GFP_KERNEL);
+	brvcc = kzalloc(sizeof(struct br2684_vcc), GFP_KERNEL);
 	if (!brvcc)
 		return -ENOMEM;
-	memset(brvcc, 0, sizeof(struct br2684_vcc));
 	write_lock_irq(&devs_lock);
 	net_dev = br2684_find_dev(&be.ifspec);
 	if (net_dev == NULL) {
@@ -556,12 +554,30 @@ Note: we do not have explicit unassign, but look at _push()
 	brvcc->old_push = atmvcc->push;
 	barrier();
 	atmvcc->push = br2684_push;
-	skb_queue_head_init(&copy);
-	skb_migrate(&sk_atm(atmvcc)->sk_receive_queue, &copy);
-	while ((skb = skb_dequeue(&copy)) != NULL) {
+
+	rq = &sk_atm(atmvcc)->sk_receive_queue;
+
+	spin_lock_irqsave(&rq->lock, flags);
+	if (skb_queue_empty(rq)) {
+		skb = NULL;
+	} else {
+		/* NULL terminate the list.  */
+		rq->prev->next = NULL;
+		skb = rq->next;
+	}
+	rq->prev = rq->next = (struct sk_buff *)rq;
+	rq->qlen = 0;
+	spin_unlock_irqrestore(&rq->lock, flags);
+
+	while (skb) {
+		struct sk_buff *next = skb->next;
+
+		skb->next = skb->prev = NULL;
 		BRPRIV(skb->dev)->stats.rx_bytes -= skb->len;
 		BRPRIV(skb->dev)->stats.rx_packets--;
 		br2684_push(atmvcc, skb);
+
+		skb = next;
 	}
 	__module_get(THIS_MODULE);
 	return 0;

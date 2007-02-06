@@ -22,7 +22,6 @@
  *  2 of the License, or (at your option) any later version.
  */
 
-#include <linux/config.h>
 #include <linux/kernel.h>
 #include <linux/mm.h>
 #include <linux/init.h>
@@ -131,7 +130,7 @@ void hpte_update(struct mm_struct *mm, unsigned long addr,
 {
 	struct ppc64_tlb_batch *batch = &__get_cpu_var(ppc64_tlb_batch);
 	unsigned long vsid;
-	unsigned int psize = mmu_virtual_psize;
+	unsigned int psize;
 	int i;
 
 	i = batch->index;
@@ -147,8 +146,10 @@ void hpte_update(struct mm_struct *mm, unsigned long addr,
 		psize = mmu_huge_psize;
 #else
 		BUG();
+		psize = pte_pagesize_index(pte); /* shutup gcc */
 #endif
-	}
+	} else
+		psize = pte_pagesize_index(pte);
 
 	/*
 	 * This can happen when we are in the middle of a TLB batch and

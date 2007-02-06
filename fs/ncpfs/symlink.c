@@ -20,7 +20,6 @@
  *
  */
 
-#include <linux/config.h>
 
 #include <asm/uaccess.h>
 
@@ -49,7 +48,7 @@ static int ncp_symlink_readpage(struct file *file, struct page *page)
 	char *buf = kmap(page);
 
 	error = -ENOMEM;
-	rawlink=(char *)kmalloc(NCP_MAX_SYMLINK_SIZE, GFP_KERNEL);
+	rawlink = kmalloc(NCP_MAX_SYMLINK_SIZE, GFP_KERNEL);
 	if (!rawlink)
 		goto fail;
 
@@ -99,7 +98,7 @@ fail:
 /*
  * symlinks can't do much...
  */
-struct address_space_operations ncp_symlink_aops = {
+const struct address_space_operations ncp_symlink_aops = {
 	.readpage	= ncp_symlink_readpage,
 };
 	
@@ -127,7 +126,7 @@ int ncp_symlink(struct inode *dir, struct dentry *dentry, const char *symname) {
 	/* EPERM is returned by VFS if symlink procedure does not exist */
 		return -EPERM;
   
-	rawlink=(char *)kmalloc(NCP_MAX_SYMLINK_SIZE, GFP_KERNEL);
+	rawlink = kmalloc(NCP_MAX_SYMLINK_SIZE, GFP_KERNEL);
 	if (!rawlink)
 		return -ENOMEM;
 

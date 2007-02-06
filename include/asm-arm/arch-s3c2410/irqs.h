@@ -6,19 +6,15 @@
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
- *
- * Changelog:
- *  12-May-2003 BJD  Created file
- *  08-Jan-2003 BJD  Linux 2.6.0 version, moved BAST bits out
- *  12-Mar-2004 BJD  Fixed bug in header protection
- *  10-Feb-2005 BJD  Added camera IRQ from guillaume.gourat@nexvision.tv
- *  28-Feb-2005 BJD  Updated s3c2440 IRQs
- */
+*/
 
 
 #ifndef __ASM_ARCH_IRQS_H
 #define __ASM_ARCH_IRQS_H __FILE__
 
+#ifndef __ASM_ARM_IRQ_H
+#error "Do not include this directly, instead #include <asm/irq.h>"
+#endif
 
 /* we keep the first set of CPU IRQs out of the range of
  * the ISA space, so that the PC104 has them to itself

@@ -1,4 +1,3 @@
-#include <linux/config.h>
 #include <linux/kernel.h>
 #include <linux/errno.h>
 #include <linux/init.h>
@@ -139,7 +138,7 @@ get_endpoints (struct usbtest_dev *dev, struct usb_interface *intf)
 			default:
 				continue;
 			}
-			if (e->desc.bEndpointAddress & USB_DIR_IN) {
+			if (usb_endpoint_dir_in(&e->desc)) {
 				if (!in)
 					in = e;
 			} else {
@@ -148,7 +147,7 @@ get_endpoints (struct usbtest_dev *dev, struct usb_interface *intf)
 			}
 			continue;
 try_iso:
-			if (e->desc.bEndpointAddress & USB_DIR_IN) {
+			if (usb_endpoint_dir_in(&e->desc)) {
 				if (!iso_in)
 					iso_in = e;
 			} else {
@@ -199,7 +198,7 @@ found:
  * them with non-zero test data (or test for it) when appropriate.
  */
 
-static void simple_callback (struct urb *urb, struct pt_regs *regs)
+static void simple_callback (struct urb *urb)
 {
 	complete ((struct completion *) urb->context);
 }
@@ -214,7 +213,7 @@ static struct urb *simple_alloc_urb (
 
 	if (bytes < 0)
 		return NULL;
-	urb = usb_alloc_urb (0, SLAB_KERNEL);
+	urb = usb_alloc_urb (0, GFP_KERNEL);
 	if (!urb)
 		return urb;
 	usb_fill_bulk_urb (urb, udev, pipe, NULL, bytes, simple_callback, NULL);
@@ -224,7 +223,7 @@ static struct urb *simple_alloc_urb (
 	urb->transfer_flags = URB_NO_TRANSFER_DMA_MAP;
 	if (usb_pipein (pipe))
 		urb->transfer_flags |= URB_SHORT_NOT_OK;
-	urb->transfer_buffer = usb_buffer_alloc (udev, bytes, SLAB_KERNEL,
+	urb->transfer_buffer = usb_buffer_alloc (udev, bytes, GFP_KERNEL,
 			&urb->transfer_dma);
 	if (!urb->transfer_buffer) {
 		usb_free_urb (urb);
@@ -316,7 +315,7 @@ static int simple_io (
 		init_completion (&completion);
 		if (usb_pipeout (urb->pipe))
 			simple_fill_buf (urb);
-		if ((retval = usb_submit_urb (urb, SLAB_KERNEL)) != 0)
+		if ((retval = usb_submit_urb (urb, GFP_KERNEL)) != 0)
 			break;
 
 		/* NOTE:  no timeouts; can't be broken out of by interrupt */
@@ -375,7 +374,7 @@ alloc_sglist (int nents, int max, int vary)
 	unsigned		i;
 	unsigned		size = max;
 
-	sg = kmalloc (nents * sizeof *sg, SLAB_KERNEL);
+	sg = kmalloc (nents * sizeof *sg, GFP_KERNEL);
 	if (!sg)
 		return NULL;
 
@@ -383,7 +382,7 @@ alloc_sglist (int nents, int max, int vary)
 		char		*buf;
 		unsigned	j;
 
-		buf = kzalloc (size, SLAB_KERNEL);
+		buf = kzalloc (size, GFP_KERNEL);
 		if (!buf) {
 			free_sglist (sg, i);
 			return NULL;
@@ -429,7 +428,7 @@ static int perform_sglist (
 				(udev->speed == USB_SPEED_HIGH)
 					? (INTERRUPT_RATE << 3)
 					: INTERRUPT_RATE,
-				sg, nents, 0, SLAB_KERNEL);
+				sg, nents, 0, GFP_KERNEL);
 		
 		if (retval)
 			break;
@@ -731,7 +730,7 @@ struct subcase {
 	int			expected;
 };
 
-static void ctrl_complete (struct urb *urb, struct pt_regs *regs)
+static void ctrl_complete (struct urb *urb)
 {
 	struct ctrl_ctx		*ctx = urb->context;
 	struct usb_ctrlrequest	*reqp;
@@ -802,7 +801,9 @@ error:
 
 				if (u == urb || !u->dev)
 					continue;
+				spin_unlock(&ctx->lock);
 				status = usb_unlink_urb (u);
+				spin_lock(&ctx->lock);
 				switch (status) {
 				case -EINPROGRESS:
 				case -EBUSY:
@@ -818,7 +819,7 @@ error:
 
 	/* resubmit if we need to, else mark this as done */
 	if ((status == 0) && (ctx->pending < ctx->count)) {
-		if ((status = usb_submit_urb (urb, SLAB_ATOMIC)) != 0) {
+		if ((status = usb_submit_urb (urb, GFP_ATOMIC)) != 0) {
 			dbg ("can't resubmit ctrl %02x.%02x, err %d",
 				reqp->bRequestType, reqp->bRequest, status);
 			urb->dev = NULL;
@@ -854,7 +855,7 @@ test_ctrl_queue (struct usbtest_dev *dev, struct usbtest_param *param)
 	 * as with bulk/intr sglists, sglen is the queue depth; it also
 	 * controls which subtests run (more tests than sglen) or rerun.
 	 */
-	urb = kcalloc(param->sglen, sizeof(struct urb *), SLAB_KERNEL);
+	urb = kcalloc(param->sglen, sizeof(struct urb *), GFP_KERNEL);
 	if (!urb)
 		return -ENOMEM;
 	for (i = 0; i < param->sglen; i++) {
@@ -980,7 +981,7 @@ test_ctrl_queue (struct usbtest_dev *dev, struct usbtest_param *param)
 		if (!u)
 			goto cleanup;
 
-		reqp = usb_buffer_alloc (udev, sizeof *reqp, SLAB_KERNEL,
+		reqp = usb_buffer_alloc (udev, sizeof *reqp, GFP_KERNEL,
 				&u->setup_dma);
 		if (!reqp)
 			goto cleanup;
@@ -998,7 +999,7 @@ test_ctrl_queue (struct usbtest_dev *dev, struct usbtest_param *param)
 	context.urb = urb;
 	spin_lock_irq (&context.lock);
 	for (i = 0; i < param->sglen; i++) {
-		context.status = usb_submit_urb (urb [i], SLAB_ATOMIC);
+		context.status = usb_submit_urb (urb [i], GFP_ATOMIC);
 		if (context.status != 0) {
 			dbg ("can't submit urb[%d], status %d",
 					i, context.status);
@@ -1034,13 +1035,13 @@ cleanup:
 
 /*-------------------------------------------------------------------------*/
 
-static void unlink1_callback (struct urb *urb, struct pt_regs *regs)
+static void unlink1_callback (struct urb *urb)
 {
 	int	status = urb->status;
 
 	// we "know" -EPIPE (stall) never happens
 	if (!status)
-		status = usb_submit_urb (urb, SLAB_ATOMIC);
+		status = usb_submit_urb (urb, GFP_ATOMIC);
 	if (status) {
 		urb->status = status;
 		complete ((struct completion *) urb->context);
@@ -1066,7 +1067,7 @@ static int unlink1 (struct usbtest_dev *dev, int pipe, int size, int async)
 	 * FIXME want additional tests for when endpoint is STALLing
 	 * due to errors, or is just NAKing requests.
 	 */
-	if ((retval = usb_submit_urb (urb, SLAB_KERNEL)) != 0) {
+	if ((retval = usb_submit_urb (urb, GFP_KERNEL)) != 0) {
 		dev_dbg (&dev->intf->dev, "submit fail %d\n", retval);
 		return retval;
 	}
@@ -1241,15 +1242,16 @@ done:
 static int ctrl_out (struct usbtest_dev *dev,
 		unsigned count, unsigned length, unsigned vary)
 {
-	unsigned		i, j, len, retval;
+	unsigned		i, j, len;
+	int			retval;
 	u8			*buf;
 	char			*what = "?";
 	struct usb_device	*udev;
-	
+
 	if (length < 1 || length > 0xffff || vary >= length)
 		return -EINVAL;
 
-	buf = kmalloc(length, SLAB_KERNEL);
+	buf = kmalloc(length, GFP_KERNEL);
 	if (!buf)
 		return -ENOMEM;
 
@@ -1335,21 +1337,27 @@ struct iso_context {
 	unsigned		pending;
 	spinlock_t		lock;
 	struct completion	done;
+	int			submit_error;
 	unsigned long		errors;
+	unsigned long		packet_count;
 	struct usbtest_dev	*dev;
 };
 
-static void iso_callback (struct urb *urb, struct pt_regs *regs)
+static void iso_callback (struct urb *urb)
 {
 	struct iso_context	*ctx = urb->context;
 
 	spin_lock(&ctx->lock);
 	ctx->count--;
 
+	ctx->packet_count += urb->number_of_packets;
 	if (urb->error_count > 0)
 		ctx->errors += urb->error_count;
+	else if (urb->status != 0)
+		ctx->errors += urb->number_of_packets;
 
-	if (urb->status == 0 && ctx->count > (ctx->pending - 1)) {
+	if (urb->status == 0 && ctx->count > (ctx->pending - 1)
+			&& !ctx->submit_error) {
 		int status = usb_submit_urb (urb, GFP_ATOMIC);
 		switch (status) {
 		case 0:
@@ -1360,6 +1368,8 @@ static void iso_callback (struct urb *urb, struct pt_regs *regs)
 					status);
 			/* FALLTHROUGH */
 		case -ENODEV:			/* disconnected */
+		case -ESHUTDOWN:		/* endpoint disabled */
+			ctx->submit_error = 1;
 			break;
 		}
 	}
@@ -1369,8 +1379,8 @@ static void iso_callback (struct urb *urb, struct pt_regs *regs)
 	if (ctx->pending == 0) {
 		if (ctx->errors)
 			dev_dbg (&ctx->dev->intf->dev,
-				"iso test, %lu errors\n",
-				ctx->errors);
+				"iso test, %lu errors out of %lu\n",
+				ctx->errors, ctx->packet_count);
 		complete (&ctx->done);
 	}
 done:
@@ -1393,7 +1403,7 @@ static struct urb *iso_alloc_urb (
 	maxp *= 1 + (0x3 & (le16_to_cpu(desc->wMaxPacketSize) >> 11));
 	packets = (bytes + maxp - 1) / maxp;
 
-	urb = usb_alloc_urb (packets, SLAB_KERNEL);
+	urb = usb_alloc_urb (packets, GFP_KERNEL);
 	if (!urb)
 		return urb;
 	urb->dev = udev;
@@ -1401,7 +1411,7 @@ static struct urb *iso_alloc_urb (
 
 	urb->number_of_packets = packets;
 	urb->transfer_buffer_length = bytes;
-	urb->transfer_buffer = usb_buffer_alloc (udev, bytes, SLAB_KERNEL,
+	urb->transfer_buffer = usb_buffer_alloc (udev, bytes, GFP_KERNEL,
 			&urb->transfer_dma);
 	if (!urb->transfer_buffer) {
 		usb_free_urb (urb);
@@ -1431,15 +1441,14 @@ test_iso_queue (struct usbtest_dev *dev, struct usbtest_param *param,
 	struct usb_device	*udev;
 	unsigned		i;
 	unsigned long		packets = 0;
-	int			status;
+	int			status = 0;
 	struct urb		*urbs[10];	/* FIXME no limit */
 
 	if (param->sglen > 10)
 		return -EDOM;
 
+	memset(&context, 0, sizeof context);
 	context.count = param->iterations * param->sglen;
-	context.pending = param->sglen;
-	context.errors = 0;
 	context.dev = dev;
 	init_completion (&context.done);
 	spin_lock_init (&context.lock);
@@ -1471,7 +1480,8 @@ test_iso_queue (struct usbtest_dev *dev, struct usbtest_param *param,
 
 	spin_lock_irq (&context.lock);
 	for (i = 0; i < param->sglen; i++) {
-		status = usb_submit_urb (urbs [i], SLAB_ATOMIC);
+		++context.pending;
+		status = usb_submit_urb (urbs [i], GFP_ATOMIC);
 		if (status < 0) {
 			ERROR (dev, "submit iso[%d], error %d\n", i, status);
 			if (i == 0) {
@@ -1481,12 +1491,26 @@ test_iso_queue (struct usbtest_dev *dev, struct usbtest_param *param,
 
 			simple_free_urb (urbs [i]);
 			context.pending--;
+			context.submit_error = 1;
+			break;
 		}
 	}
 	spin_unlock_irq (&context.lock);
 
 	wait_for_completion (&context.done);
-	return 0;
+
+	/*
+	 * Isochronous transfers are expected to fail sometimes.  As an
+	 * arbitrary limit, we will report an error if any submissions
+	 * fail or if the transfer failure rate is > 10%.
+	 */
+	if (status != 0)
+		;
+	else if (context.submit_error)
+		status = -EACCES;
+	else if (context.errors > context.packet_count / 10)
+		status = -EIO;
+	return status;
 
 fail:
 	for (i = 0; i < param->sglen; i++) {
@@ -1876,7 +1900,7 @@ usbtest_probe (struct usb_interface *intf, const struct usb_device_id *id)
 	}
 #endif
 
-	dev = kzalloc(sizeof(*dev), SLAB_KERNEL);
+	dev = kzalloc(sizeof(*dev), GFP_KERNEL);
 	if (!dev)
 		return -ENOMEM;
 	info = (struct usbtest_info *) id->driver_info;
@@ -1886,7 +1910,7 @@ usbtest_probe (struct usb_interface *intf, const struct usb_device_id *id)
 	dev->intf = intf;
 
 	/* cacheline-aligned scratch for i/o */
-	if ((dev->buf = kmalloc (TBUF_SIZE, SLAB_KERNEL)) == NULL) {
+	if ((dev->buf = kmalloc (TBUF_SIZE, GFP_KERNEL)) == NULL) {
 		kfree (dev);
 		return -ENOMEM;
 	}

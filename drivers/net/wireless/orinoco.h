@@ -7,7 +7,7 @@
 #ifndef _ORINOCO_H
 #define _ORINOCO_H
 
-#define DRIVER_VERSION "0.15rc3"
+#define DRIVER_VERSION "0.15"
 
 #include <linux/netdevice.h>
 #include <linux/wireless.h>
@@ -28,20 +28,6 @@
 struct orinoco_key {
 	__le16 len;	/* always stored as little-endian */
 	char data[ORINOCO_MAX_KEY_SIZE];
-} __attribute__ ((packed));
-
-struct header_struct {
-	/* 802.3 */
-	u8 dest[ETH_ALEN];
-	u8 src[ETH_ALEN];
-	__be16 len;
-	/* 802.2 */
-	u8 dsap;
-	u8 ssap;
-	u8 ctrl;
-	/* SNAP */
-	u8 oui[3];
-	unsigned short ethertype;
 } __attribute__ ((packed));
 
 typedef enum {
@@ -132,9 +118,6 @@ extern int orinoco_debug;
 #define DEBUG(n, args...) do { } while (0)
 #endif	/* ORINOCO_DEBUG */
 
-#define TRACE_ENTER(devname) DEBUG(2, "%s: -> %s()\n", devname, __FUNCTION__);
-#define TRACE_EXIT(devname)  DEBUG(2, "%s: <- %s()\n", devname, __FUNCTION__);
-
 /********************************************************************/
 /* Exported prototypes                                              */
 /********************************************************************/
@@ -145,17 +128,13 @@ extern void free_orinocodev(struct net_device *dev);
 extern int __orinoco_up(struct net_device *dev);
 extern int __orinoco_down(struct net_device *dev);
 extern int orinoco_reinit_firmware(struct net_device *dev);
-extern irqreturn_t orinoco_interrupt(int irq, void * dev_id, struct pt_regs *regs);
+extern irqreturn_t orinoco_interrupt(int irq, void * dev_id);
 
 /********************************************************************/
 /* Locking and synchronization functions                            */
 /********************************************************************/
 
-/* These functions *must* be inline or they will break horribly on
- * SPARC, due to its weird semantics for save/restore flags. extern
- * inline should prevent the kernel from linking or module from
- * loading if they are not inlined. */
-extern inline int orinoco_lock(struct orinoco_private *priv,
+static inline int orinoco_lock(struct orinoco_private *priv,
 			       unsigned long *flags)
 {
 	spin_lock_irqsave(&priv->lock, *flags);
@@ -168,7 +147,7 @@ extern inline int orinoco_lock(struct orinoco_private *priv,
 	return 0;
 }
 
-extern inline void orinoco_unlock(struct orinoco_private *priv,
+static inline void orinoco_unlock(struct orinoco_private *priv,
 				  unsigned long *flags)
 {
 	spin_unlock_irqrestore(&priv->lock, *flags);

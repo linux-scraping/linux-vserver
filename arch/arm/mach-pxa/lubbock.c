@@ -22,6 +22,10 @@
 #include <linux/mtd/mtd.h>
 #include <linux/mtd/partitions.h>
 
+#include <linux/spi/spi.h>
+#include <linux/spi/ads7846.h>
+#include <asm/arch/pxa2xx_spi.h>
+
 #include <asm/setup.h>
 #include <asm/memory.h>
 #include <asm/mach-types.h>
@@ -74,14 +78,14 @@ static void lubbock_unmask_irq(unsigned int irq)
 	LUB_IRQ_MASK_EN = (lubbock_irq_enabled |= (1 << lubbock_irq));
 }
 
-static struct irqchip lubbock_irq_chip = {
+static struct irq_chip lubbock_irq_chip = {
+	.name		= "FPGA",
 	.ack		= lubbock_mask_irq,
 	.mask		= lubbock_mask_irq,
 	.unmask		= lubbock_unmask_irq,
 };
 
-static void lubbock_irq_handler(unsigned int irq, struct irqdesc *desc,
-				struct pt_regs *regs)
+static void lubbock_irq_handler(unsigned int irq, struct irq_desc *desc)
 {
 	unsigned long pending = LUB_IRQ_SET_CLR & lubbock_irq_enabled;
 	do {
@@ -89,7 +93,7 @@ static void lubbock_irq_handler(unsigned int irq, struct irqdesc *desc,
 		if (likely(pending)) {
 			irq = LUBBOCK_IRQ(0) + __ffs(pending);
 			desc = irq_desc + irq;
-			desc_handle_irq(irq, desc, regs);
+			desc_handle_irq(irq, desc);
 		}
 		pending = LUB_IRQ_SET_CLR & lubbock_irq_enabled;
 	} while (pending);
@@ -104,7 +108,7 @@ static void __init lubbock_init_irq(void)
 	/* setup extra lubbock irqs */
 	for (irq = LUBBOCK_IRQ(0); irq <= LUBBOCK_LAST_IRQ; irq++) {
 		set_irq_chip(irq, &lubbock_irq_chip);
-		set_irq_handler(irq, do_level_IRQ);
+		set_irq_handler(irq, handle_level_irq);
 		set_irq_flags(irq, IRQF_VALID | IRQF_PROBE);
 	}
 
@@ -196,6 +200,78 @@ static struct resource smc91x_resources[] = {
 	},
 };
 
+/* ADS7846 is connected through SSP ... and if your board has J5 populated,
+ * you can select it to replace the ucb1400 by switching the touchscreen cable
+ * (to J5) and poking board registers (as done below).  Else it's only useful
+ * for the temperature sensors.
+ */
+static struct resource pxa_ssp_resources[] = {
+	[0] = {
+		.start	= __PREG(SSCR0_P(1)),
+		.end	= __PREG(SSCR0_P(1)) + 0x14,
+		.flags	= IORESOURCE_MEM,
+	},
+	[1] = {
+		.start	= IRQ_SSP,
+		.end	= IRQ_SSP,
+		.flags	= IORESOURCE_IRQ,
+	},
+};
+
+static struct pxa2xx_spi_master pxa_ssp_master_info = {
+	.ssp_type	= PXA25x_SSP,
+	.clock_enable	= CKEN3_SSP,
+	.num_chipselect	= 0,
+};
+
+static struct platform_device pxa_ssp = {
+	.name		= "pxa2xx-spi",
+	.id		= 1,
+	.resource	= pxa_ssp_resources,
+	.num_resources	= ARRAY_SIZE(pxa_ssp_resources),
+	.dev = {
+		.platform_data	= &pxa_ssp_master_info,
+	},
+};
+
+static int lubbock_ads7846_pendown_state(void)
+{
+	/* TS_BUSY is bit 8 in LUB_MISC_RD, but pendown is irq-only */
+	return 0;
+}
+
+static struct ads7846_platform_data ads_info = {
+	.model			= 7846,
+	.vref_delay_usecs	= 100,		/* internal, no cap */
+	.get_pendown_state	= lubbock_ads7846_pendown_state,
+	// .x_plate_ohms		= 500,	/* GUESS! */
+	// .y_plate_ohms		= 500,	/* GUESS! */
+};
+
+static void ads7846_cs(u32 command)
+{
+	static const unsigned	TS_nCS = 1 << 11;
+	lubbock_set_misc_wr(TS_nCS, (command == PXA2XX_CS_ASSERT) ? 0 : TS_nCS);
+}
+
+static struct pxa2xx_spi_chip ads_hw = {
+	.tx_threshold		= 1,
+	.rx_threshold		= 2,
+	.cs_control		= ads7846_cs,
+};
+
+static struct spi_board_info spi_board_info[] __initdata = { {
+	.modalias	= "ads7846",
+	.platform_data	= &ads_info,
+	.controller_data = &ads_hw,
+	.irq		= LUBBOCK_BB_IRQ,
+	.max_speed_hz	= 120000 /* max sample rate at 3V */
+				* 26 /* command + data + overhead */,
+	.bus_num	= 1,
+	.chip_select	= 0,
+},
+};
+
 static struct platform_device smc91x_device = {
 	.name		= "smc91x",
 	.id		= -1,
@@ -272,9 +348,10 @@ static struct platform_device *devices[] __initdata = {
 	&smc91x_device,
 	&lubbock_flash_device[0],
 	&lubbock_flash_device[1],
+	&pxa_ssp,
 };
 
-static struct pxafb_mach_info sharp_lm8v31 __initdata = {
+static struct pxafb_mode_info sharp_lm8v31_mode = {
 	.pixclock	= 270000,
 	.xres		= 640,
 	.yres		= 480,
@@ -287,6 +364,11 @@ static struct pxafb_mach_info sharp_lm8v31 __initdata = {
 	.lower_margin	= 0,
 	.sync		= FB_SYNC_HOR_HIGH_ACT | FB_SYNC_VERT_HIGH_ACT,
 	.cmap_greyscale	= 0,
+};
+
+static struct pxafb_mach_info sharp_lm8v31 = {
+	.modes		= &sharp_lm8v31_mode,
+	.num_modes	= 1,
 	.cmap_inverse	= 0,
 	.cmap_static	= 0,
 	.lccr0		= LCCR0_SDS,
@@ -296,7 +378,7 @@ static struct pxafb_mach_info sharp_lm8v31 __initdata = {
 #define	MMC_POLL_RATE		msecs_to_jiffies(1000)
 
 static void lubbock_mmc_poll(unsigned long);
-static irqreturn_t (*mmc_detect_int)(int, void *, struct pt_regs *);
+static irq_handler_t mmc_detect_int;
 
 static struct timer_list mmc_timer = {
 	.function	= lubbock_mmc_poll,
@@ -315,22 +397,22 @@ static void lubbock_mmc_poll(unsigned long data)
 	if (LUB_IRQ_SET_CLR & (1 << 0))
 		mod_timer(&mmc_timer, jiffies + MMC_POLL_RATE);
 	else {
-		(void) mmc_detect_int(LUBBOCK_SD_IRQ, (void *)data, NULL);
+		(void) mmc_detect_int(LUBBOCK_SD_IRQ, (void *)data);
 		enable_irq(LUBBOCK_SD_IRQ);
 	}
 }
 
-static irqreturn_t lubbock_detect_int(int irq, void *data, struct pt_regs *regs)
+static irqreturn_t lubbock_detect_int(int irq, void *data)
 {
 	/* IRQ is level triggered; disable, and poll for removal */
 	disable_irq(irq);
 	mod_timer(&mmc_timer, jiffies + MMC_POLL_RATE);
 
-	return mmc_detect_int(irq, data, regs);
+	return mmc_detect_int(irq, data);
 }
 
 static int lubbock_mci_init(struct device *dev,
-		irqreturn_t (*detect_int)(int, void *, struct pt_regs *),
+		irq_handler_t detect_int,
 		void *data)
 {
 	/* setup GPIO for PXA25x MMC controller	*/
@@ -342,7 +424,7 @@ static int lubbock_mci_init(struct device *dev,
 	init_timer(&mmc_timer);
 	mmc_timer.data = (unsigned long) data;
 	return request_irq(LUBBOCK_SD_IRQ, lubbock_detect_int,
-			SA_SAMPLE_RANDOM, "lubbock-sd-detect", data);
+			IRQF_SAMPLE_RANDOM, "lubbock-sd-detect", data);
 }
 
 static int lubbock_mci_get_ro(struct device *dev)
@@ -400,6 +482,8 @@ static void __init lubbock_init(void)
 	lubbock_flash_data[flashboot^1].name = "application-flash";
 	lubbock_flash_data[flashboot].name = "boot-rom";
 	(void) platform_add_devices(devices, ARRAY_SIZE(devices));
+
+	spi_register_board_info(spi_board_info, ARRAY_SIZE(spi_board_info));
 }
 
 static struct map_desc lubbock_io_desc[] __initdata = {
@@ -415,6 +499,11 @@ static void __init lubbock_map_io(void)
 {
 	pxa_map_io();
 	iotable_init(lubbock_io_desc, ARRAY_SIZE(lubbock_io_desc));
+
+	/* SSP data pins */
+	pxa_gpio_mode(GPIO23_SCLK_MD);
+	pxa_gpio_mode(GPIO25_STXD_MD);
+	pxa_gpio_mode(GPIO26_SRXD_MD);
 
 	/* This enables the BTUART */
 	pxa_gpio_mode(GPIO42_BTRXD_MD);

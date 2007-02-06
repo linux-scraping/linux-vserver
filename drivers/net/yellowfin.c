@@ -19,37 +19,13 @@
 
 	Support and updates available at
 	http://www.scyld.com/network/yellowfin.html
+	[link no longer provides useful info -jgarzik]
 
-
-	Linux kernel changelog:
-	-----------------------
-
-	LK1.1.1 (jgarzik): Port to 2.4 kernel
-
-	LK1.1.2 (jgarzik):
-	* Merge in becker version 1.05
-
-	LK1.1.3 (jgarzik):
-	* Various cleanups
-	* Update yellowfin_timer to correctly calculate duplex.
-	(suggested by Manfred Spraul)
-
-	LK1.1.4 (val@nmt.edu):
-	* Fix three endian-ness bugs
-	* Support dual function SYM53C885E ethernet chip
-	
-	LK1.1.5 (val@nmt.edu):
-	* Fix forced full-duplex bug I introduced
-
-	LK1.1.6 (val@nmt.edu):
-	* Only print warning on truly "oversized" packets
-	* Fix theoretical bug on gigabit cards - return to 1.1.3 behavior
-	
 */
 
 #define DRV_NAME	"yellowfin"
-#define DRV_VERSION	"1.05+LK1.1.6"
-#define DRV_RELDATE	"Feb 11, 2002"
+#define DRV_VERSION	"2.1"
+#define DRV_RELDATE	"Sep 11, 2006"
 
 #define PFX DRV_NAME ": "
 
@@ -161,7 +137,7 @@ MODULE_PARM_DESC(gx_fix, "G-NIC: enable GX server chipset bug workaround (0-1)")
 I. Board Compatibility
 
 This device driver is designed for the Packet Engines "Yellowfin" Gigabit
-Ethernet adapter.  The G-NIC 64-bit PCI card is supported, as well as the 
+Ethernet adapter.  The G-NIC 64-bit PCI card is supported, as well as the
 Symbios 53C885E dual function chip.
 
 II. Board-specific settings
@@ -232,28 +208,18 @@ IVc. Errata
 See Packet Engines confidential appendix (prototype chips only).
 */
 
-
 
-enum pci_id_flags_bits {
-	/* Set PCI command register bits before calling probe1(). */
-	PCI_USES_IO=1, PCI_USES_MEM=2, PCI_USES_MASTER=4,
-	/* Read and map the single following PCI BAR. */
-	PCI_ADDR0=0<<4, PCI_ADDR1=1<<4, PCI_ADDR2=2<<4, PCI_ADDR3=3<<4,
-	PCI_ADDR_64BITS=0x100, PCI_NO_ACPI_WAKE=0x200, PCI_NO_MIN_LATENCY=0x400,
-	PCI_UNUSED_IRQ=0x800,
-};
+
 enum capability_flags {
 	HasMII=1, FullTxStatus=2, IsGigabit=4, HasMulticastBug=8, FullRxStatus=16,
 	HasMACAddrBug=32, /* Only on early revs.  */
 	DontUseEeprom=64, /* Don't read the MAC from the EEPROm. */
 };
+
 /* The PCI I/O space extent. */
-#define YELLOWFIN_SIZE 0x100
-#ifdef USE_IO_OPS
-#define PCI_IOTYPE (PCI_USES_MASTER | PCI_USES_IO  | PCI_ADDR0)
-#else
-#define PCI_IOTYPE (PCI_USES_MASTER | PCI_USES_MEM | PCI_ADDR1)
-#endif
+enum {
+	YELLOWFIN_SIZE	= 0x100,
+};
 
 struct pci_id_info {
         const char *name;
@@ -261,24 +227,21 @@ struct pci_id_info {
                 int     pci, pci_mask, subsystem, subsystem_mask;
                 int revision, revision_mask;                            /* Only 8 bits. */
         } id;
-        enum pci_id_flags_bits pci_flags;
-        int io_size;                            /* Needed for I/O region check or ioremap(). */
         int drv_flags;                          /* Driver use, intended as capability flags. */
 };
 
 static const struct pci_id_info pci_id_tbl[] = {
 	{"Yellowfin G-NIC Gigabit Ethernet", { 0x07021000, 0xffffffff},
-	 PCI_IOTYPE, YELLOWFIN_SIZE,
 	 FullTxStatus | IsGigabit | HasMulticastBug | HasMACAddrBug | DontUseEeprom},
 	{"Symbios SYM83C885", { 0x07011000, 0xffffffff},
-	 PCI_IOTYPE, YELLOWFIN_SIZE, HasMII | DontUseEeprom },
-	{NULL,},
+	  HasMII | DontUseEeprom },
+	{ }
 };
 
-static struct pci_device_id yellowfin_pci_tbl[] = {
+static const struct pci_device_id yellowfin_pci_tbl[] = {
 	{ 0x1000, 0x0702, PCI_ANY_ID, PCI_ANY_ID, 0, 0, 0 },
 	{ 0x1000, 0x0701, PCI_ANY_ID, PCI_ANY_ID, 0, 0, 1 },
-	{ 0, }
+	{ }
 };
 MODULE_DEVICE_TABLE (pci, yellowfin_pci_tbl);
 
@@ -387,13 +350,13 @@ static void yellowfin_timer(unsigned long data);
 static void yellowfin_tx_timeout(struct net_device *dev);
 static void yellowfin_init_ring(struct net_device *dev);
 static int yellowfin_start_xmit(struct sk_buff *skb, struct net_device *dev);
-static irqreturn_t yellowfin_interrupt(int irq, void *dev_instance, struct pt_regs *regs);
+static irqreturn_t yellowfin_interrupt(int irq, void *dev_instance);
 static int yellowfin_rx(struct net_device *dev);
 static void yellowfin_error(struct net_device *dev, int intr_status);
 static int yellowfin_close(struct net_device *dev);
 static struct net_device_stats *yellowfin_get_stats(struct net_device *dev);
 static void set_rx_mode(struct net_device *dev);
-static struct ethtool_ops ethtool_ops;
+static const struct ethtool_ops ethtool_ops;
 
 
 static int __devinit yellowfin_init_one(struct pci_dev *pdev,
@@ -414,7 +377,7 @@ static int __devinit yellowfin_init_one(struct pci_dev *pdev,
 #else
 	int bar = 1;
 #endif
-	
+
 /* when built into the kernel, we only print version if device is found */
 #ifndef MODULE
 	static int printed_version;
@@ -545,11 +508,11 @@ static int __devinit yellowfin_init_one(struct pci_dev *pdev,
 	}
 
 	find_cnt++;
-	
+
 	return 0;
 
 err_out_unmap_status:
-        pci_free_consistent(pdev, STATUS_TOTAL_SIZE, np->tx_status, 
+        pci_free_consistent(pdev, STATUS_TOTAL_SIZE, np->tx_status,
 		np->tx_status_dma);
 err_out_unmap_rx:
         pci_free_consistent(pdev, RX_TOTAL_SIZE, np->rx_ring, np->rx_ring_dma);
@@ -606,7 +569,7 @@ static void mdio_write(void __iomem *ioaddr, int phy_id, int location, int value
 	return;
 }
 
-
+
 static int yellowfin_open(struct net_device *dev)
 {
 	struct yellowfin_private *yp = netdev_priv(dev);
@@ -616,7 +579,7 @@ static int yellowfin_open(struct net_device *dev)
 	/* Reset the chip. */
 	iowrite32(0x80000000, ioaddr + DMACtrl);
 
-	i = request_irq(dev->irq, &yellowfin_interrupt, SA_SHIRQ, dev->name, dev);
+	i = request_irq(dev->irq, &yellowfin_interrupt, IRQF_SHARED, dev->name, dev);
 	if (i) return i;
 
 	if (yellowfin_debug > 1)
@@ -710,7 +673,7 @@ static void yellowfin_timer(unsigned long data)
 				   dev->name, yp->phys[0], bmsr, lpa);
 
 		yp->full_duplex = mii_duplex(yp->duplex_lock, negotiated);
-			
+
 		iowrite16(0x101C | (yp->full_duplex ? 2 : 0), ioaddr + Cnfg);
 
 		if (bmsr & BMSR_LSTATUS)
@@ -829,10 +792,10 @@ static void yellowfin_init_ring(struct net_device *dev)
 			/* Om pade ummmmm... */
 			yp->tx_ring[j].addr = cpu_to_le32(yp->tx_status_dma +
 				i*sizeof(struct tx_status_words) +
-				&(yp->tx_status[0].tx_errs) - 
+				&(yp->tx_status[0].tx_errs) -
 				&(yp->tx_status[0]));
 		}
-		yp->tx_ring[j].branch_addr = cpu_to_le32(yp->tx_ring_dma + 
+		yp->tx_ring[j].branch_addr = cpu_to_le32(yp->tx_ring_dma +
 			((j+1)%(2*TX_RING_SIZE))*sizeof(struct yellowfin_desc));
 	}
 	/* Wrap ring */
@@ -862,19 +825,17 @@ static int yellowfin_start_xmit(struct sk_buff *skb, struct net_device *dev)
 		/* Fix GX chipset errata. */
 		if (cacheline_end > 24  || cacheline_end == 0) {
 			len = skb->len + 32 - cacheline_end + 1;
-			if (len != skb->len)
-				skb = skb_padto(skb, len);
-		}
-		if (skb == NULL) {
-			yp->tx_skbuff[entry] = NULL;
-			netif_wake_queue(dev);
-			return 0;
+			if (skb_padto(skb, len)) {
+				yp->tx_skbuff[entry] = NULL;
+				netif_wake_queue(dev);
+				return 0;
+			}
 		}
 	}
 	yp->tx_skbuff[entry] = skb;
 
 #ifdef NO_TXSTATS
-	yp->tx_ring[entry].addr = cpu_to_le32(pci_map_single(yp->pci_dev, 
+	yp->tx_ring[entry].addr = cpu_to_le32(pci_map_single(yp->pci_dev,
 		skb->data, len, PCI_DMA_TODEVICE));
 	yp->tx_ring[entry].result_status = 0;
 	if (entry >= TX_RING_SIZE-1) {
@@ -890,9 +851,9 @@ static int yellowfin_start_xmit(struct sk_buff *skb, struct net_device *dev)
 	yp->cur_tx++;
 #else
 	yp->tx_ring[entry<<1].request_cnt = len;
-	yp->tx_ring[entry<<1].addr = cpu_to_le32(pci_map_single(yp->pci_dev, 
+	yp->tx_ring[entry<<1].addr = cpu_to_le32(pci_map_single(yp->pci_dev,
 		skb->data, len, PCI_DMA_TODEVICE));
-	/* The input_last (status-write) command is constant, but we must 
+	/* The input_last (status-write) command is constant, but we must
 	   rewrite the subsequent 'stop' command. */
 
 	yp->cur_tx++;
@@ -927,7 +888,7 @@ static int yellowfin_start_xmit(struct sk_buff *skb, struct net_device *dev)
 
 /* The interrupt handler does all of the Rx thread work and cleans up
    after the Tx thread. */
-static irqreturn_t yellowfin_interrupt(int irq, void *dev_instance, struct pt_regs *regs)
+static irqreturn_t yellowfin_interrupt(int irq, void *dev_instance)
 {
 	struct net_device *dev = dev_instance;
 	struct yellowfin_private *yp;
@@ -935,16 +896,9 @@ static irqreturn_t yellowfin_interrupt(int irq, void *dev_instance, struct pt_re
 	int boguscnt = max_interrupt_work;
 	unsigned int handled = 0;
 
-#ifndef final_version			/* Can never occur. */
-	if (dev == NULL) {
-		printk (KERN_ERR "yellowfin_interrupt(): irq %d for unknown device.\n", irq);
-		return IRQ_NONE;
-	}
-#endif
-
 	yp = netdev_priv(dev);
 	ioaddr = yp->base;
-	
+
 	spin_lock (&yp->lock);
 
 	do {
@@ -1032,8 +986,8 @@ static irqreturn_t yellowfin_interrupt(int irq, void *dev_instance, struct pt_re
 					yp->stats.tx_packets++;
 				}
 				/* Free the original skb. */
-				pci_unmap_single(yp->pci_dev, 
-					yp->tx_ring[entry<<1].addr, skb->len, 
+				pci_unmap_single(yp->pci_dev,
+					yp->tx_ring[entry<<1].addr, skb->len,
 					PCI_DMA_TODEVICE);
 				dev_kfree_skb_irq(skb);
 				yp->tx_skbuff[entry] = 0;
@@ -1112,7 +1066,7 @@ static int yellowfin_rx(struct net_device *dev)
 			yp->rx_buf_sz, PCI_DMA_FROMDEVICE);
 		desc_status = le32_to_cpu(desc->result_status) >> 16;
 		buf_addr = rx_skb->data;
-		data_size = (le32_to_cpu(desc->dbdma_cmd) - 
+		data_size = (le32_to_cpu(desc->dbdma_cmd) -
 			le32_to_cpu(desc->result_status)) & 0xffff;
 		frame_status = le16_to_cpu(get_unaligned((s16*)&(buf_addr[data_size - 2])));
 		if (yellowfin_debug > 4)
@@ -1148,7 +1102,7 @@ static int yellowfin_rx(struct net_device *dev)
 		} else if ((yp->flags & HasMACAddrBug)  &&
 			memcmp(le32_to_cpu(yp->rx_ring_dma +
 				entry*sizeof(struct yellowfin_desc)),
-				dev->dev_addr, 6) != 0 && 
+				dev->dev_addr, 6) != 0 &&
 			memcmp(le32_to_cpu(yp->rx_ring_dma +
 				entry*sizeof(struct yellowfin_desc)),
 				"\377\377\377\377\377\377", 6) != 0) {
@@ -1174,9 +1128,9 @@ static int yellowfin_rx(struct net_device *dev)
 			   without copying to a properly sized skbuff. */
 			if (pkt_len > rx_copybreak) {
 				skb_put(skb = rx_skb, pkt_len);
-				pci_unmap_single(yp->pci_dev, 
-					yp->rx_ring[entry].addr, 
-					yp->rx_buf_sz, 
+				pci_unmap_single(yp->pci_dev,
+					yp->rx_ring[entry].addr,
+					yp->rx_buf_sz,
 					PCI_DMA_FROMDEVICE);
 				yp->rx_skbuff[entry] = NULL;
 			} else {
@@ -1346,8 +1300,6 @@ static void set_rx_mode(struct net_device *dev)
 	/* Stop the Rx process to change any value. */
 	iowrite16(cfg_value & ~0x1000, ioaddr + Cnfg);
 	if (dev->flags & IFF_PROMISC) {			/* Set promiscuous. */
-		/* Unconditionally log net taps. */
-		printk(KERN_NOTICE "%s: Promiscuous mode enabled.\n", dev->name);
 		iowrite16(0x000F, ioaddr + AddrMode);
 	} else if ((dev->mc_count > 64)  ||  (dev->flags & IFF_ALLMULTI)) {
 		/* Too many to filter well, or accept all multicasts. */
@@ -1393,7 +1345,7 @@ static void yellowfin_get_drvinfo(struct net_device *dev, struct ethtool_drvinfo
 	strcpy(info->bus_info, pci_name(np->pci_dev));
 }
 
-static struct ethtool_ops ethtool_ops = {
+static const struct ethtool_ops ethtool_ops = {
 	.get_drvinfo = yellowfin_get_drvinfo
 };
 
@@ -1444,7 +1396,7 @@ static void __devexit yellowfin_remove_one (struct pci_dev *pdev)
 	BUG_ON(!dev);
 	np = netdev_priv(dev);
 
-        pci_free_consistent(pdev, STATUS_TOTAL_SIZE, np->tx_status, 
+        pci_free_consistent(pdev, STATUS_TOTAL_SIZE, np->tx_status,
 		np->tx_status_dma);
 	pci_free_consistent(pdev, RX_TOTAL_SIZE, np->rx_ring, np->rx_ring_dma);
 	pci_free_consistent(pdev, TX_TOTAL_SIZE, np->tx_ring, np->tx_ring_dma);
@@ -1473,7 +1425,7 @@ static int __init yellowfin_init (void)
 #ifdef MODULE
 	printk(version);
 #endif
-	return pci_module_init (&yellowfin_driver);
+	return pci_register_driver(&yellowfin_driver);
 }
 
 
@@ -1485,7 +1437,7 @@ static void __exit yellowfin_cleanup (void)
 
 module_init(yellowfin_init);
 module_exit(yellowfin_cleanup);
-
+
 /*
  * Local variables:
  *  compile-command: "gcc -DMODULE -Wall -Wstrict-prototypes -O6 -c yellowfin.c"

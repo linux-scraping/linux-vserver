@@ -187,7 +187,6 @@ History:
 #include <linux/interrupt.h>
 #include <linux/timer.h>
 #include <linux/cdrom.h>
-#include <linux/devfs_fs_kernel.h>
 #include <linux/ioport.h>
 #include <linux/mm.h>
 #include <linux/slab.h>
@@ -360,7 +359,7 @@ static struct tasklet_struct cm206_tasklet;
    as there seems so reason for this to happen.
 */
 
-static irqreturn_t cm206_interrupt(int sig, void *dev_id, struct pt_regs *regs)
+static irqreturn_t cm206_interrupt(int sig, void *dev_id)
 {
 	volatile ush fool;
 	cd->intr_ds = inw(r_data_status);	/* resets data_ready, data_error,
@@ -915,7 +914,7 @@ static void seek(int lba)
 	cd->dsb = wait_dsb();
 }
 
-uch bcdbin(unsigned char bcd)
+static uch bcdbin(unsigned char bcd)
 {				/* stolen from mcd.c! */
 	return (bcd >> 4) * 10 + (bcd & 0xf);
 }
@@ -1421,7 +1420,7 @@ int __init cm206_init(void)
 		return -EIO;
 	}
 	printk(" adapter at 0x%x", cm206_base);
-	cd = (struct cm206_struct *) kmalloc(size, GFP_KERNEL);
+	cd = kmalloc(size, GFP_KERNEL);
 	if (!cd)
                goto out_base;
 	/* Now we have found the adaptor card, try to reset it. As we have
@@ -1533,7 +1532,7 @@ static void __init parse_options(void)
 	}
 }
 
-static int __cm206_init(void)
+static int __init __cm206_init(void)
 {
 	parse_options();
 #if !defined(AUTO_PROBE_MODULE)
@@ -1594,8 +1593,3 @@ __setup("cm206=", cm206_setup);
 #endif				/* !MODULE */
 MODULE_ALIAS_BLOCKDEV_MAJOR(CM206_CDROM_MAJOR);
 
-/*
- * Local variables:
- * compile-command: "gcc -D__KERNEL__ -I/usr/src/linux/include -Wall -Wstrict-prototypes -O2 -fomit-frame-pointer -pipe -fno-strength-reduce -m486 -DMODULE -DMODVERSIONS -include /usr/src/linux/include/linux/modversions.h  -c -o cm206.o cm206.c"
- * End:
- */

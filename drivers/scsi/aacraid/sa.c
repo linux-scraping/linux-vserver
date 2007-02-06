@@ -46,7 +46,7 @@
 
 #include "aacraid.h"
 
-static irqreturn_t aac_sa_intr(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t aac_sa_intr(int irq, void *dev_id)
 {
 	struct aac_dev *dev = dev_id;
 	unsigned short intstat, mask;
@@ -66,11 +66,11 @@ static irqreturn_t aac_sa_intr(int irq, void *dev_id, struct pt_regs *regs)
 			sa_writew(dev, DoorbellClrReg_p, PrintfReady); /* clear PrintfReady */
 			sa_writew(dev, DoorbellReg_s, PrintfDone);
 		} else if (intstat & DOORBELL_1) {	// dev -> Host Normal Command Ready
-			aac_command_normal(&dev->queues->queue[HostNormCmdQueue]);
 			sa_writew(dev, DoorbellClrReg_p, DOORBELL_1);
+			aac_command_normal(&dev->queues->queue[HostNormCmdQueue]);
 		} else if (intstat & DOORBELL_2) {	// dev -> Host Normal Response Ready
-			aac_response_normal(&dev->queues->queue[HostNormRespQueue]);
 			sa_writew(dev, DoorbellClrReg_p, DOORBELL_2);
+			aac_response_normal(&dev->queues->queue[HostNormRespQueue]);
 		} else if (intstat & DOORBELL_3) {	// dev -> Host Normal Command Not Full
 			sa_writew(dev, DoorbellClrReg_p, DOORBELL_3);
 		} else if (intstat & DOORBELL_4) {	// dev -> Host Normal Response Not Full
@@ -281,6 +281,21 @@ static int aac_sa_check_health(struct aac_dev *dev)
 }
 
 /**
+ *	aac_sa_ioremap
+ *	@size: mapping resize request
+ *
+ */
+static int aac_sa_ioremap(struct aac_dev * dev, u32 size)
+{
+	if (!size) {
+		iounmap(dev->regs.sa);
+		return 0;
+	}
+	dev->base = dev->regs.sa = ioremap(dev->scsi_host_ptr->base, size);
+	return (dev->base == NULL) ? -1 : 0;
+}
+
+/**
  *	aac_sa_init	-	initialize an ARM based AAC card
  *	@dev: device to configure
  *
@@ -298,6 +313,11 @@ int aac_sa_init(struct aac_dev *dev)
 
 	instance = dev->id;
 	name     = dev->name;
+
+	if (aac_sa_ioremap(dev, dev->base_size)) {
+		printk(KERN_WARNING "%s: unable to map adapter.\n", name);
+		goto error_iounmap;
+	}
 
 	/*
 	 *	Check to see if the board failed any self tests.
@@ -318,16 +338,16 @@ int aac_sa_init(struct aac_dev *dev)
 	 *	Wait for the adapter to be up and running. Wait up to 3 minutes.
 	 */
 	while (!(sa_readl(dev, Mailbox7) & KERNEL_UP_AND_RUNNING)) {
-		if (time_after(jiffies, start+180*HZ)) {
+		if (time_after(jiffies, start+startup_timeout*HZ)) {
 			status = sa_readl(dev, Mailbox7);
 			printk(KERN_WARNING "%s%d: adapter kernel failed to start, init status = %lx.\n", 
 					name, instance, status);
 			goto error_iounmap;
 		}
-		schedule_timeout_uninterruptible(1);
+		msleep(1);
 	}
 
-	if (request_irq(dev->scsi_host_ptr->irq, aac_sa_intr, SA_SHIRQ|SA_INTERRUPT, "aacraid", (void *)dev ) < 0) {
+	if (request_irq(dev->scsi_host_ptr->irq, aac_sa_intr, IRQF_SHARED|IRQF_DISABLED, "aacraid", (void *)dev ) < 0) {
 		printk(KERN_WARNING "%s%d: Interrupt unavailable.\n", name, instance);
 		goto error_iounmap;
 	}
@@ -341,6 +361,7 @@ int aac_sa_init(struct aac_dev *dev)
 	dev->a_ops.adapter_notify = aac_sa_notify_adapter;
 	dev->a_ops.adapter_sync_cmd = sa_sync_cmd;
 	dev->a_ops.adapter_check_health = aac_sa_check_health;
+	dev->a_ops.adapter_ioremap = aac_sa_ioremap;
 
 	/*
 	 *	First clear out all interrupts.  Then enable the one's that 

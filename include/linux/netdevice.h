@@ -30,15 +30,15 @@
 #include <linux/if_packet.h>
 
 #ifdef __KERNEL__
+#include <linux/timer.h>
 #include <asm/atomic.h>
 #include <asm/cache.h>
 #include <asm/byteorder.h>
 
-#include <linux/config.h>
 #include <linux/device.h>
 #include <linux/percpu.h>
+#include <linux/dmaengine.h>
 
-struct divert_blk;
 struct vlan_group;
 struct ethtool_ops;
 struct netpoll_info;
@@ -67,6 +67,10 @@ struct netpoll_info;
 #define NET_RX_CN_HIGH		4   /* The storm is here */
 #define NET_RX_BAD		5  /* packet dropped due to kernel error */
 
+/* NET_XMIT_CN is special. It does not guarantee that this packet is lost. It
+ * indicates that the device will soon be dropping packets, or already drops
+ * some packets of the same priority; prompting us to send less aggressively. */
+#define net_xmit_eval(e)	((e) == NET_XMIT_CN? 0 : (e))
 #define net_xmit_errno(e)	((e) != NET_XMIT_CN ? -ENOBUFS : 0)
 
 #endif
@@ -93,8 +97,10 @@ struct netpoll_info;
 #endif
 #endif
 
-#if !defined(CONFIG_NET_IPIP) && \
-    !defined(CONFIG_IPV6) && !defined(CONFIG_IPV6_MODULE)
+#if !defined(CONFIG_NET_IPIP) && !defined(CONFIG_NET_IPIP_MODULE) && \
+    !defined(CONFIG_NET_IPGRE) &&  !defined(CONFIG_NET_IPGRE_MODULE) && \
+    !defined(CONFIG_IPV6_SIT) && !defined(CONFIG_IPV6_SIT_MODULE) && \
+    !defined(CONFIG_IPV6_TUNNEL) && !defined(CONFIG_IPV6_TUNNEL_MODULE)
 #define MAX_HEADER LL_MAX_HEADER
 #else
 #define MAX_HEADER (LL_MAX_HEADER + 48)
@@ -187,13 +193,20 @@ struct hh_cache
 {
 	struct hh_cache *hh_next;	/* Next entry			     */
 	atomic_t	hh_refcnt;	/* number of users                   */
-	unsigned short  hh_type;	/* protocol identifier, f.e ETH_P_IP
+/*
+ * We want hh_output, hh_len, hh_lock and hh_data be a in a separate
+ * cache line on SMP.
+ * They are mostly read, but hh_refcnt may be changed quite frequently,
+ * incurring cache line ping pongs.
+ */
+	__be16		hh_type ____cacheline_aligned_in_smp;
+					/* protocol identifier, f.e ETH_P_IP
                                          *  NOTE:  For VLANs, this will be the
                                          *  encapuslated type. --BLG
                                          */
-	int		hh_len;		/* length of header */
+	u16		hh_len;		/* length of header */
 	int		(*hh_output)(struct sk_buff *skb);
-	rwlock_t	hh_lock;
+	seqlock_t	hh_lock;
 
 	/* cached hardware header; allow for machine alignment needs.        */
 #define HH_DATA_MOD	16
@@ -232,6 +245,7 @@ enum netdev_state_t
 	__LINK_STATE_RX_SCHED,
 	__LINK_STATE_LINKWATCH_PENDING,
 	__LINK_STATE_DORMANT,
+	__LINK_STATE_QDISC_RUNNING,
 };
 
 
@@ -307,9 +321,23 @@ struct net_device
 #define NETIF_F_HW_VLAN_RX	256	/* Receive VLAN hw acceleration */
 #define NETIF_F_HW_VLAN_FILTER	512	/* Receive filtering on VLAN */
 #define NETIF_F_VLAN_CHALLENGED	1024	/* Device cannot handle VLAN packets */
-#define NETIF_F_TSO		2048	/* Can offload TCP/IP segmentation */
+#define NETIF_F_GSO		2048	/* Enable software GSO. */
 #define NETIF_F_LLTX		4096	/* LockLess TX */
-#define NETIF_F_UFO             8192    /* Can offload UDP Large Send*/
+
+	/* Segmentation offload features */
+#define NETIF_F_GSO_SHIFT	16
+#define NETIF_F_GSO_MASK	0xffff0000
+#define NETIF_F_TSO		(SKB_GSO_TCPV4 << NETIF_F_GSO_SHIFT)
+#define NETIF_F_UFO		(SKB_GSO_UDP << NETIF_F_GSO_SHIFT)
+#define NETIF_F_GSO_ROBUST	(SKB_GSO_DODGY << NETIF_F_GSO_SHIFT)
+#define NETIF_F_TSO_ECN		(SKB_GSO_TCP_ECN << NETIF_F_GSO_SHIFT)
+#define NETIF_F_TSO6		(SKB_GSO_TCPV6 << NETIF_F_GSO_SHIFT)
+
+	/* List of features with software fallbacks. */
+#define NETIF_F_GSO_SOFTWARE	(NETIF_F_TSO | NETIF_F_TSO_ECN | NETIF_F_TSO6)
+
+#define NETIF_F_GEN_CSUM	(NETIF_F_NO_CSUM | NETIF_F_HW_CSUM)
+#define NETIF_F_ALL_CSUM	(NETIF_F_IP_CSUM | NETIF_F_GEN_CSUM)
 
 	struct net_device	*next_sched;
 
@@ -319,7 +347,6 @@ struct net_device
 
 
 	struct net_device_stats* (*get_stats)(struct net_device *dev);
-	struct iw_statistics*	(*get_wireless_stats)(struct net_device *dev);
 
 	/* List of functions to handle Wireless Extensions (instead of ioctl).
 	 * See <net/iw_handler.h> for details. Jean II */
@@ -327,7 +354,7 @@ struct net_device
 	/* Instance data managed by the core of Wireless Extensions. */
 	struct iw_public_data *	wireless_data;
 
-	struct ethtool_ops *ethtool_ops;
+	const struct ethtool_ops *ethtool_ops;
 
 	/*
 	 * This marks the end of the "visible" part of the structure. All
@@ -398,6 +425,9 @@ struct net_device
 	struct list_head	qdisc_list;
 	unsigned long		tx_queue_len;	/* Max frames per queue allowed */
 
+	/* Partially transmitted GSO packet. */
+	struct sk_buff		*gso_skb;
+
 	/* ingress path synchronizer */
 	spinlock_t		ingress_lock;
 	struct Qdisc		*qdisc_ingress;
@@ -406,7 +436,7 @@ struct net_device
  * One part is mostly used on xmit path (device)
  */
 	/* hard_start_xmit synchronizer */
-	spinlock_t		xmit_lock ____cacheline_aligned_in_smp;
+	spinlock_t		_xmit_lock ____cacheline_aligned_in_smp;
 	/* cpu id of processor entered to hard_start_xmit or -1,
 	   if nobody entered there.
 	 */
@@ -498,11 +528,6 @@ struct net_device
 	/* bridge stuff */
 	struct net_bridge_port	*br_port;
 
-#ifdef CONFIG_NET_DIVERT
-	/* this will get initialized at each interface type init routine */
-	struct divert_blk	*divert;
-#endif /* CONFIG_NET_DIVERT */
-
 	/* class/net/name entry */
 	struct class_device	class_dev;
 	/* space for optional statistics and wireless sysfs groups */
@@ -532,6 +557,9 @@ struct packet_type {
 					 struct net_device *,
 					 struct packet_type *,
 					 struct net_device *);
+	struct sk_buff		*(*gso_segment)(struct sk_buff *skb,
+						int features);
+	int			(*gso_send_check)(struct sk_buff *skb);
 	void			*af_packet_priv;
 	struct list_head	list;
 };
@@ -593,6 +621,9 @@ struct softnet_data
 	struct sk_buff		*completion_queue;
 
 	struct net_device	backlog_dev;	/* Sorry. 8) */
+#ifdef CONFIG_NET_DMA
+	struct dma_chan		*net_dma;
+#endif
 };
 
 DECLARE_PER_CPU(struct softnet_data,softnet_data);
@@ -679,11 +710,11 @@ extern int		dev_change_name(struct net_device *, char *);
 extern int		dev_set_mtu(struct net_device *, int);
 extern int		dev_set_mac_address(struct net_device *,
 					    struct sockaddr *);
-extern void		dev_queue_xmit_nit(struct sk_buff *skb, struct net_device *dev);
+extern int		dev_hard_start_xmit(struct sk_buff *skb,
+					    struct net_device *dev);
 
 extern void		dev_init(void);
 
-extern int		netdev_nit;
 extern int		netdev_budget;
 
 /* Called by rtnetlink.c:rtnl_unlock() */
@@ -875,6 +906,7 @@ static inline void netif_poll_disable(struct net_device *dev)
 
 static inline void netif_poll_enable(struct net_device *dev)
 {
+	smp_mb__before_clear_bit();
 	clear_bit(__LINK_STATE_RX_SCHED, &dev->state);
 }
 
@@ -889,11 +921,43 @@ static inline void __netif_rx_complete(struct net_device *dev)
 	clear_bit(__LINK_STATE_RX_SCHED, &dev->state);
 }
 
+static inline void netif_tx_lock(struct net_device *dev)
+{
+	spin_lock(&dev->_xmit_lock);
+	dev->xmit_lock_owner = smp_processor_id();
+}
+
+static inline void netif_tx_lock_bh(struct net_device *dev)
+{
+	spin_lock_bh(&dev->_xmit_lock);
+	dev->xmit_lock_owner = smp_processor_id();
+}
+
+static inline int netif_tx_trylock(struct net_device *dev)
+{
+	int ok = spin_trylock(&dev->_xmit_lock);
+	if (likely(ok))
+		dev->xmit_lock_owner = smp_processor_id();
+	return ok;
+}
+
+static inline void netif_tx_unlock(struct net_device *dev)
+{
+	dev->xmit_lock_owner = -1;
+	spin_unlock(&dev->_xmit_lock);
+}
+
+static inline void netif_tx_unlock_bh(struct net_device *dev)
+{
+	dev->xmit_lock_owner = -1;
+	spin_unlock_bh(&dev->_xmit_lock);
+}
+
 static inline void netif_tx_disable(struct net_device *dev)
 {
-	spin_lock_bh(&dev->xmit_lock);
+	netif_tx_lock_bh(dev);
 	netif_stop_queue(dev);
-	spin_unlock_bh(&dev->xmit_lock);
+	netif_tx_unlock_bh(dev);
 }
 
 /* These functions live elsewhere (drivers/net/net_init.c, but related) */
@@ -920,7 +984,8 @@ extern void		dev_mcast_init(void);
 extern int		netdev_max_backlog;
 extern int		weight_p;
 extern int		netdev_set_master(struct net_device *dev, struct net_device *master);
-extern int skb_checksum_help(struct sk_buff *skb, int inward);
+extern int skb_checksum_help(struct sk_buff *skb);
+extern struct sk_buff *skb_gso_segment(struct sk_buff *skb, int features);
 #ifdef CONFIG_BUG
 extern void netdev_rx_csum_fault(struct net_device *dev);
 #else
@@ -939,6 +1004,53 @@ extern void dev_seq_stop(struct seq_file *seq, void *v);
 #endif
 
 extern void linkwatch_run_queue(void);
+
+static inline int net_gso_ok(int features, int gso_type)
+{
+	int feature = gso_type << NETIF_F_GSO_SHIFT;
+	return (features & feature) == feature;
+}
+
+static inline int skb_gso_ok(struct sk_buff *skb, int features)
+{
+	return net_gso_ok(features, skb_shinfo(skb)->gso_type);
+}
+
+static inline int netif_needs_gso(struct net_device *dev, struct sk_buff *skb)
+{
+	return skb_is_gso(skb) &&
+	       (!skb_gso_ok(skb, dev->features) ||
+		unlikely(skb->ip_summed != CHECKSUM_PARTIAL));
+}
+
+/* On bonding slaves other than the currently active slave, suppress
+ * duplicates except for 802.3ad ETH_P_SLOW, alb non-mcast/bcast, and
+ * ARP on active-backup slaves with arp_validate enabled.
+ */
+static inline int skb_bond_should_drop(struct sk_buff *skb)
+{
+	struct net_device *dev = skb->dev;
+	struct net_device *master = dev->master;
+
+	if (master &&
+	    (dev->priv_flags & IFF_SLAVE_INACTIVE)) {
+		if ((dev->priv_flags & IFF_SLAVE_NEEDARP) &&
+		    skb->protocol == __constant_htons(ETH_P_ARP))
+			return 0;
+
+		if (master->priv_flags & IFF_MASTER_ALB) {
+			if (skb->pkt_type != PACKET_BROADCAST &&
+			    skb->pkt_type != PACKET_MULTICAST)
+				return 0;
+		}
+		if (master->priv_flags & IFF_MASTER_8023AD &&
+		    skb->protocol == __constant_htons(ETH_P_SLOW))
+			return 0;
+
+		return 1;
+	}
+	return 0;
+}
 
 #endif /* __KERNEL__ */
 

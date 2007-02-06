@@ -52,7 +52,6 @@ typedef unsigned long long __u64;
 
 #ifndef __ASSEMBLY__
 
-#include <linux/config.h>
 
 typedef __signed char s8;
 typedef unsigned char u8;
@@ -92,16 +91,6 @@ typedef u64 dma64_addr_t;
 typedef unsigned long long phys_t;
 #else
 typedef unsigned long phys_t;
-#endif
-
-#ifdef CONFIG_LBD
-typedef u64 sector_t;
-#define HAVE_SECTOR_T
-#endif
-
-#ifdef CONFIG_LSF
-typedef u64 blkcnt_t;
-#define HAVE_BLKCNT_T
 #endif
 
 #endif /* __ASSEMBLY__ */

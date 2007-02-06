@@ -9,7 +9,6 @@
  *  it under the terms of the GNU General Public License version 2 as
  *  published by the Free Software Foundation.
  */
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/init.h>
@@ -83,7 +82,7 @@ static void aaec2000_int_unmask(unsigned int irq)
 	IRQ_INTENS |= (1 << irq);
 }
 
-static struct irqchip aaec2000_irq_chip = {
+static struct irq_chip aaec2000_irq_chip = {
 	.ack	= aaec2000_int_ack,
 	.mask	= aaec2000_int_mask,
 	.unmask	= aaec2000_int_unmask,
@@ -94,7 +93,7 @@ void __init aaec2000_init_irq(void)
 	unsigned int i;
 
 	for (i = 0; i < NR_IRQS; i++) {
-		set_irq_handler(i, do_level_IRQ);
+		set_irq_handler(i, handle_level_irq);
 		set_irq_chip(i, &aaec2000_irq_chip);
 		set_irq_flags(i, IRQF_VALID);
 	}
@@ -128,12 +127,12 @@ static unsigned long aaec2000_gettimeoffset(void)
 
 /* We enter here with IRQs enabled */
 static irqreturn_t
-aaec2000_timer_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+aaec2000_timer_interrupt(int irq, void *dev_id)
 {
 	/* TODO: Check timer accuracy */
 	write_seqlock(&xtime_lock);
 
-	timer_tick(regs);
+	timer_tick();
 	TIMER1_CLEAR = 1;
 
 	write_sequnlock(&xtime_lock);
@@ -143,7 +142,7 @@ aaec2000_timer_interrupt(int irq, void *dev_id, struct pt_regs *regs)
 
 static struct irqaction aaec2000_timer_irq = {
 	.name		= "AAEC-2000 Timer Tick",
-	.flags		= SA_INTERRUPT | SA_TIMER,
+	.flags		= IRQF_DISABLED | IRQF_TIMER,
 	.handler	= aaec2000_timer_interrupt,
 };
 

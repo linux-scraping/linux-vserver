@@ -56,7 +56,6 @@
  * number of packets outstanding to a remote partition at a time.
  */
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/types.h>
 #include <linux/errno.h>
@@ -69,11 +68,12 @@
 #include <linux/delay.h>
 #include <linux/mm.h>
 #include <linux/ethtool.h>
+#include <linux/if_ether.h>
 
 #include <asm/abs_addr.h>
 #include <asm/iseries/mf.h>
 #include <asm/uaccess.h>
-
+#include <asm/firmware.h>
 #include <asm/iseries/hv_lp_config.h>
 #include <asm/iseries/hv_types.h>
 #include <asm/iseries/hv_lp_event.h>
@@ -166,7 +166,7 @@ struct veth_msg {
 
 struct veth_lpar_connection {
 	HvLpIndex remote_lp;
-	struct work_struct statemachine_wq;
+	struct delayed_work statemachine_wq;
 	struct veth_msg *msgs;
 	int num_events;
 	struct veth_cap_data local_caps;
@@ -456,7 +456,7 @@ static struct kobj_type veth_port_ktype = {
 
 static inline void veth_kick_statemachine(struct veth_lpar_connection *cnx)
 {
-	schedule_work(&cnx->statemachine_wq);
+	schedule_delayed_work(&cnx->statemachine_wq, 0);
 }
 
 static void veth_take_cap(struct veth_lpar_connection *cnx,
@@ -586,7 +586,7 @@ static void veth_handle_int(struct veth_lpevent *event)
 	};
 }
 
-static void veth_handle_event(struct HvLpEvent *event, struct pt_regs *regs)
+static void veth_handle_event(struct HvLpEvent *event)
 {
 	struct veth_lpevent *veth_event = (struct veth_lpevent *)event;
 
@@ -638,9 +638,11 @@ static int veth_process_caps(struct veth_lpar_connection *cnx)
 }
 
 /* FIXME: The gotos here are a bit dubious */
-static void veth_statemachine(void *p)
+static void veth_statemachine(struct work_struct *work)
 {
-	struct veth_lpar_connection *cnx = (struct veth_lpar_connection *)p;
+	struct veth_lpar_connection *cnx =
+		container_of(work, struct veth_lpar_connection,
+			     statemachine_wq.work);
 	int rlp = cnx->remote_lp;
 	int rc;
 
@@ -827,7 +829,7 @@ static int veth_init_connection(u8 rlp)
 
 	cnx->remote_lp = rlp;
 	spin_lock_init(&cnx->lock);
-	INIT_WORK(&cnx->statemachine_wq, veth_statemachine, cnx);
+	INIT_DELAYED_WORK(&cnx->statemachine_wq, veth_statemachine);
 
 	init_timer(&cnx->ack_timer);
 	cnx->ack_timer.function = veth_timed_ack;
@@ -1029,17 +1031,28 @@ static u32 veth_get_link(struct net_device *dev)
 	return 1;
 }
 
-static struct ethtool_ops ops = {
+static const struct ethtool_ops ops = {
 	.get_drvinfo = veth_get_drvinfo,
 	.get_settings = veth_get_settings,
 	.get_link = veth_get_link,
 };
 
-static struct net_device * __init veth_probe_one(int vlan, struct device *vdev)
+static struct net_device * __init veth_probe_one(int vlan,
+		struct vio_dev *vio_dev)
 {
 	struct net_device *dev;
 	struct veth_port *port;
+	struct device *vdev = &vio_dev->dev;
 	int i, rc;
+	const unsigned char *mac_addr;
+
+	mac_addr = vio_get_attribute(vio_dev, "local-mac-address", NULL);
+	if (mac_addr == NULL)
+		mac_addr = vio_get_attribute(vio_dev, "mac-address", NULL);
+	if (mac_addr == NULL) {
+		veth_error("Unable to fetch MAC address from device tree.\n");
+		return NULL;
+	}
 
 	dev = alloc_etherdev(sizeof (struct veth_port));
 	if (! dev) {
@@ -1064,16 +1077,11 @@ static struct net_device * __init veth_probe_one(int vlan, struct device *vdev)
 	}
 	port->dev = vdev;
 
-	dev->dev_addr[0] = 0x02;
-	dev->dev_addr[1] = 0x01;
-	dev->dev_addr[2] = 0xff;
-	dev->dev_addr[3] = vlan;
-	dev->dev_addr[4] = 0xff;
-	dev->dev_addr[5] = this_lp;
+	memcpy(dev->dev_addr, mac_addr, ETH_ALEN);
 
 	dev->mtu = VETH_MAX_MTU;
 
-	memcpy(&port->mac_addr, dev->dev_addr, 6);
+	memcpy(&port->mac_addr, mac_addr, ETH_ALEN);
 
 	dev->open = veth_open;
 	dev->hard_start_xmit = veth_start_xmit;
@@ -1608,7 +1616,7 @@ static int veth_probe(struct vio_dev *vdev, const struct vio_device_id *id)
 	struct net_device *dev;
 	struct veth_port *port;
 
-	dev = veth_probe_one(i, &vdev->dev);
+	dev = veth_probe_one(i, vdev);
 	if (dev == NULL) {
 		veth_remove(vdev);
 		return 1;
@@ -1641,7 +1649,7 @@ static int veth_probe(struct vio_dev *vdev, const struct vio_device_id *id)
  * support.
  */
 static struct vio_device_id veth_device_table[] __devinitdata = {
-	{ "vlan", "" },
+	{ "network", "IBM,iSeries-l-lan" },
 	{ "", "" }
 };
 MODULE_DEVICE_TABLE(vio, veth_device_table);
@@ -1660,7 +1668,7 @@ static struct vio_driver veth_driver = {
  * Module initialization/cleanup
  */
 
-void __exit veth_module_cleanup(void)
+static void __exit veth_module_cleanup(void)
 {
 	int i;
 	struct veth_lpar_connection *cnx;
@@ -1689,10 +1697,13 @@ void __exit veth_module_cleanup(void)
 }
 module_exit(veth_module_cleanup);
 
-int __init veth_module_init(void)
+static int __init veth_module_init(void)
 {
 	int i;
 	int rc;
+
+	if (!firmware_has_feature(FW_FEATURE_ISERIES))
+		return -ENODEV;
 
 	this_lp = HvLpConfig_getLpIndex_outline();
 

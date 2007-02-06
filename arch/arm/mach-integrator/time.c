@@ -96,8 +96,7 @@ static struct rtc_ops rtc_ops = {
 	.set_alarm	= integrator_rtc_set_alarm,
 };
 
-static irqreturn_t arm_rtc_interrupt(int irq, void *dev_id,
-				     struct pt_regs *regs)
+static irqreturn_t arm_rtc_interrupt(int irq, void *dev_id)
 {
 	writel(0, rtc_base + RTC_EOI);
 	return IRQ_HANDLED;
@@ -125,7 +124,7 @@ static int rtc_probe(struct amba_device *dev, void *id)
 
 	xtime.tv_sec = __raw_readl(rtc_base + RTC_DR);
 
-	ret = request_irq(dev->irq[0], arm_rtc_interrupt, SA_INTERRUPT,
+	ret = request_irq(dev->irq[0], arm_rtc_interrupt, IRQF_DISABLED,
 			  "rtc-pl030", dev);
 	if (ret)
 		goto map_out;

@@ -1,11 +1,13 @@
 #ifndef __ASM_HARDIRQ_H
 #define __ASM_HARDIRQ_H
 
-#include <linux/config.h>
 #include <linux/threads.h>
 #include <linux/irq.h>
 #include <asm/pda.h>
 #include <asm/apic.h>
+
+/* We can have at most NR_VECTORS irqs routed to a cpu at a time */
+#define MAX_HARDIRQS_PER_CPU NR_VECTORS
 
 #define __ARCH_IRQ_STAT 1
 

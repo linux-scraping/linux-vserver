@@ -14,11 +14,12 @@
 #include <linux/init.h>
 #include <linux/statfs.h>
 #include <linux/parser.h>
+#include <linux/magic.h>
 #include "affs.h"
 
 extern struct timezone sys_tz;
 
-static int affs_statfs(struct super_block *sb, struct kstatfs *buf);
+static int affs_statfs(struct dentry *dentry, struct kstatfs *buf);
 static int affs_remount (struct super_block *sb, int *flags, char *data);
 
 static void
@@ -65,12 +66,12 @@ affs_write_super(struct super_block *sb)
 	pr_debug("AFFS: write_super() at %lu, clean=%d\n", get_seconds(), clean);
 }
 
-static kmem_cache_t * affs_inode_cachep;
+static struct kmem_cache * affs_inode_cachep;
 
 static struct inode *affs_alloc_inode(struct super_block *sb)
 {
 	struct affs_inode_info *ei;
-	ei = (struct affs_inode_info *)kmem_cache_alloc(affs_inode_cachep, SLAB_KERNEL);
+	ei = (struct affs_inode_info *)kmem_cache_alloc(affs_inode_cachep, GFP_KERNEL);
 	if (!ei)
 		return NULL;
 	ei->vfs_inode.i_version = 1;
@@ -82,7 +83,7 @@ static void affs_destroy_inode(struct inode *inode)
 	kmem_cache_free(affs_inode_cachep, AFFS_I(inode));
 }
 
-static void init_once(void * foo, kmem_cache_t * cachep, unsigned long flags)
+static void init_once(void * foo, struct kmem_cache * cachep, unsigned long flags)
 {
 	struct affs_inode_info *ei = (struct affs_inode_info *) foo;
 
@@ -108,8 +109,7 @@ static int init_inodecache(void)
 
 static void destroy_inodecache(void)
 {
-	if (kmem_cache_destroy(affs_inode_cachep))
-		printk(KERN_INFO "affs_inode_cache: not all structures were freed\n");
+	kmem_cache_destroy(affs_inode_cachep);
 }
 
 static struct super_operations affs_sops = {
@@ -271,6 +271,7 @@ static int affs_fill_super(struct super_block *sb, void *data, int silent)
 	int			 reserved;
 	unsigned long		 mount_flags;
 	int			 tmp_flags;	/* fix remount prototype... */
+	u8			 sig[4];
 
 	pr_debug("AFFS: read_super(%s)\n",data ? (const char *)data : "no options");
 
@@ -278,11 +279,10 @@ static int affs_fill_super(struct super_block *sb, void *data, int silent)
 	sb->s_op                = &affs_sops;
 	sb->s_flags |= MS_NODIRATIME;
 
-	sbi = kmalloc(sizeof(struct affs_sb_info), GFP_KERNEL);
+	sbi = kzalloc(sizeof(struct affs_sb_info), GFP_KERNEL);
 	if (!sbi)
 		return -ENOMEM;
 	sb->s_fs_info = sbi;
-	memset(sbi, 0, sizeof(*sbi));
 	init_MUTEX(&sbi->s_bmlock);
 
 	if (!parse_options(data,&uid,&gid,&i,&reserved,&root_block,
@@ -370,8 +370,9 @@ got_root:
 		printk(KERN_ERR "AFFS: Cannot read boot block\n");
 		goto out_error;
 	}
-	chksum = be32_to_cpu(*(__be32 *)boot_bh->b_data);
+	memcpy(sig, boot_bh->b_data, 4);
 	brelse(boot_bh);
+	chksum = be32_to_cpu(*(__be32 *)sig);
 
 	/* Dircache filesystems are compatible with non-dircache ones
 	 * when reading. As long as they aren't supported, writing is
@@ -420,11 +421,11 @@ got_root:
 	}
 
 	if (mount_flags & SF_VERBOSE) {
-		chksum = cpu_to_be32(chksum);
-		printk(KERN_NOTICE "AFFS: Mounting volume \"%*s\": Type=%.3s\\%c, Blocksize=%d\n",
-			AFFS_ROOT_TAIL(sb, root_bh)->disk_name[0],
+		u8 len = AFFS_ROOT_TAIL(sb, root_bh)->disk_name[0];
+		printk(KERN_NOTICE "AFFS: Mounting volume \"%.*s\": Type=%.3s\\%c, Blocksize=%d\n",
+			len > 31 ? 31 : len,
 			AFFS_ROOT_TAIL(sb, root_bh)->disk_name + 1,
-			(char *)&chksum,((char *)&chksum)[3] + '0',blocksize);
+			sig, sig[3] + '0', blocksize);
 	}
 
 	sb->s_flags |= MS_NODEV | MS_NOSUID;
@@ -508,8 +509,9 @@ affs_remount(struct super_block *sb, int *flags, char *data)
 }
 
 static int
-affs_statfs(struct super_block *sb, struct kstatfs *buf)
+affs_statfs(struct dentry *dentry, struct kstatfs *buf)
 {
+	struct super_block *sb = dentry->d_sb;
 	int		 free;
 
 	pr_debug("AFFS: statfs() partsize=%d, reserved=%d\n",AFFS_SB(sb)->s_partition_size,
@@ -524,10 +526,11 @@ affs_statfs(struct super_block *sb, struct kstatfs *buf)
 	return 0;
 }
 
-static struct super_block *affs_get_sb(struct file_system_type *fs_type,
-	int flags, const char *dev_name, void *data)
+static int affs_get_sb(struct file_system_type *fs_type,
+	int flags, const char *dev_name, void *data, struct vfsmount *mnt)
 {
-	return get_sb_bdev(fs_type, flags, dev_name, data, affs_fill_super);
+	return get_sb_bdev(fs_type, flags, dev_name, data, affs_fill_super,
+			   mnt);
 }
 
 static struct file_system_type affs_fs_type = {

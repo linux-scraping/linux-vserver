@@ -60,7 +60,6 @@
  */
 
 
-#include <linux/config.h>
 #include "hisax.h"
 #include "isac.h"
 #include "isdnl1.h"
@@ -241,7 +240,7 @@ enpci_card_msg(struct IsdnCardState *cs, int mt, void *arg)
 }
 
 static irqreturn_t
-enpci_interrupt(int intno, void *dev_id, struct pt_regs *regs)
+enpci_interrupt(int intno, void *dev_id)
 {
 	struct IsdnCardState *cs = dev_id;
 	unsigned char s0val, s1val, ir;
@@ -302,10 +301,10 @@ enpci_interrupt(int intno, void *dev_id, struct pt_regs *regs)
 }
 
 
-static struct pci_dev *dev_netjet __initdata = NULL;
+static struct pci_dev *dev_netjet __devinitdata = NULL;
 
 /* called by config.c */
-int __init
+int __devinit
 setup_enternow_pci(struct IsdnCard *card)
 {
 	int bytecnt;
@@ -406,7 +405,7 @@ setup_enternow_pci(struct IsdnCard *card)
 	cs->BC_Send_Data = &netjet_fill_dma;
 	cs->cardmsg = &enpci_card_msg;
 	cs->irq_func = &enpci_interrupt;
-	cs->irq_flags |= SA_SHIRQ;
+	cs->irq_flags |= IRQF_SHARED;
 
         return (1);
 }

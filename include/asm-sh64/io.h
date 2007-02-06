@@ -123,6 +123,13 @@ void insw(unsigned long port, void *addr, unsigned long count);
 void outsl(unsigned long port, const void *addr, unsigned long count);
 void insl(unsigned long port, void *addr, unsigned long count);
 
+#define __raw_readb		readb
+#define __raw_readw		readw
+#define __raw_readl		readl
+#define __raw_writeb		writeb
+#define __raw_writew		writew
+#define __raw_writel		writel
+
 void memcpy_toio(void __iomem *to, const void *from, long count);
 void memcpy_fromio(void *to, void __iomem *from, long count);
 
@@ -170,22 +177,6 @@ extern void iounmap(void *addr);
 
 unsigned long onchip_remap(unsigned long addr, unsigned long size, const char* name);
 extern void onchip_unmap(unsigned long vaddr);
-
-static __inline__ int check_signature(volatile void __iomem *io_addr,
-			const unsigned char *signature, int length)
-{
-	int retval = 0;
-	do {
-		if (readb(io_addr) != *signature)
-			goto out;
-		io_addr++;
-		signature++;
-		length--;
-	} while (length);
-	retval = 1;
-out:
-	return retval;
-}
 
 /*
  * The caches on some architectures aren't dma-coherent and have need to

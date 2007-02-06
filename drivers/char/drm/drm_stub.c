@@ -60,27 +60,29 @@ static int drm_fill_in_dev(drm_device_t * dev, struct pci_dev *pdev,
 	int retcode;
 
 	spin_lock_init(&dev->count_lock);
+	spin_lock_init(&dev->drw_lock);
+	spin_lock_init(&dev->tasklet_lock);
 	init_timer(&dev->timer);
 	mutex_init(&dev->struct_mutex);
 	mutex_init(&dev->ctxlist_mutex);
 
 	dev->pdev = pdev;
+	dev->pci_device = pdev->device;
+	dev->pci_vendor = pdev->vendor;
 
 #ifdef __alpha__
 	dev->hose = pdev->sysdata;
-	dev->pci_domain = dev->hose->bus->number;
-#else
-	dev->pci_domain = 0;
 #endif
-	dev->pci_bus = pdev->bus->number;
-	dev->pci_slot = PCI_SLOT(pdev->devfn);
-	dev->pci_func = PCI_FUNC(pdev->devfn);
 	dev->irq = pdev->irq;
 
 	dev->maplist = drm_calloc(1, sizeof(*dev->maplist), DRM_MEM_MAPS);
 	if (dev->maplist == NULL)
 		return -ENOMEM;
 	INIT_LIST_HEAD(&dev->maplist->head);
+	if (drm_ht_create(&dev->map_hash, 12)) {
+		drm_free(dev->maplist, sizeof(*dev->maplist), DRM_MEM_MAPS);
+		return -ENOMEM;
+	}
 
 	/* the DRM has 6 basic counters */
 	dev->counters = 6;
@@ -209,14 +211,16 @@ int drm_get_dev(struct pci_dev *pdev, const struct pci_device_id *ent,
 	if (!dev)
 		return -ENOMEM;
 
-	pci_enable_device(pdev);
+	ret = pci_enable_device(pdev);
+	if (ret)
+		goto err_g1;
 
 	if ((ret = drm_fill_in_dev(dev, pdev, ent, driver))) {
 		printk(KERN_ERR "DRM: Fill_in_dev failed.\n");
-		goto err_g1;
+		goto err_g2;
 	}
 	if ((ret = drm_get_head(dev, &dev->primary)))
-		goto err_g1;
+		goto err_g2;
 	
 	DRM_INFO("Initialized %s %d.%d.%d %s on minor %d\n",
 		 driver->name, driver->major, driver->minor, driver->patchlevel,
@@ -224,7 +228,9 @@ int drm_get_dev(struct pci_dev *pdev, const struct pci_device_id *ent,
 
 	return 0;
 
-      err_g1:
+err_g2:
+	pci_disable_device(pdev);
+err_g1:
 	drm_free(dev, sizeof(*dev), DRM_MEM_STUB);
 	return ret;
 }

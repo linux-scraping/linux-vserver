@@ -10,11 +10,19 @@
  *
  * Copyright (C) 2004-2006 Trusted Computer Solutions, Inc.
  */
+/*
+ * Updated: Hewlett-Packard <paul.moore@hp.com>
+ *
+ *      Added support to import/export the MLS label from NetLabel
+ *
+ * (c) Copyright Hewlett-Packard Development Company, L.P., 2006
+ */
 
 #include <linux/kernel.h>
 #include <linux/slab.h>
 #include <linux/string.h>
 #include <linux/errno.h>
+#include <net/netlabel.h>
 #include "sidtab.h"
 #include "mls.h"
 #include "policydb.h"
@@ -212,26 +220,6 @@ int mls_context_isvalid(struct policydb *p, struct context *c)
 }
 
 /*
- * Copies the MLS range from `src' into `dst'.
- */
-static inline int mls_copy_context(struct context *dst,
-				   struct context *src)
-{
-	int l, rc = 0;
-
-	/* Copy the MLS range from the source context */
-	for (l = 0; l < 2; l++) {
-		dst->range.level[l].sens = src->range.level[l].sens;
-		rc = ebitmap_cpy(&dst->range.level[l].cat,
-				 &src->range.level[l].cat);
-		if (rc)
-			break;
-	}
-
-	return rc;
-}
-
-/*
  * Set the MLS fields in the security context structure
  * `context' based on the string representation in
  * the string `*scontext'.  Update `*scontext' to
@@ -282,7 +270,7 @@ int mls_context_to_sid(char oldc,
 		if (!defcon)
 			goto out;
 
-		rc = mls_copy_context(context, defcon);
+		rc = mls_context_cpy(context, defcon);
 		goto out;
 	}
 
@@ -413,26 +401,6 @@ int mls_from_string(char *str, struct context *context, gfp_t gfp_mask)
 }
 
 /*
- * Copies the effective MLS range from `src' into `dst'.
- */
-static inline int mls_scopy_context(struct context *dst,
-                                    struct context *src)
-{
-	int l, rc = 0;
-
-	/* Copy the MLS range from the source context */
-	for (l = 0; l < 2; l++) {
-		dst->range.level[l].sens = src->range.level[0].sens;
-		rc = ebitmap_cpy(&dst->range.level[l].cat,
-				 &src->range.level[0].cat);
-		if (rc)
-			break;
-	}
-
-	return rc;
-}
-
-/*
  * Copies the MLS range `range' into `context'.
  */
 static inline int mls_range_set(struct context *context,
@@ -543,41 +511,40 @@ int mls_compute_sid(struct context *scontext,
 		    u32 specified,
 		    struct context *newcontext)
 {
+	struct range_trans *rtr;
+
 	if (!selinux_mls_enabled)
 		return 0;
 
 	switch (specified) {
 	case AVTAB_TRANSITION:
-		if (tclass == SECCLASS_PROCESS) {
-			struct range_trans *rangetr;
-			/* Look for a range transition rule. */
-			for (rangetr = policydb.range_tr; rangetr;
-			     rangetr = rangetr->next) {
-				if (rangetr->dom == scontext->type &&
-				    rangetr->type == tcontext->type) {
-					/* Set the range from the rule */
-					return mls_range_set(newcontext,
-					                     &rangetr->range);
-				}
+		/* Look for a range transition rule. */
+		for (rtr = policydb.range_tr; rtr; rtr = rtr->next) {
+			if (rtr->source_type == scontext->type &&
+			    rtr->target_type == tcontext->type &&
+			    rtr->target_class == tclass) {
+				/* Set the range from the rule */
+				return mls_range_set(newcontext,
+				                     &rtr->target_range);
 			}
 		}
 		/* Fallthrough */
 	case AVTAB_CHANGE:
 		if (tclass == SECCLASS_PROCESS)
 			/* Use the process MLS attributes. */
-			return mls_copy_context(newcontext, scontext);
+			return mls_context_cpy(newcontext, scontext);
 		else
 			/* Use the process effective MLS attributes. */
-			return mls_scopy_context(newcontext, scontext);
+			return mls_context_cpy_low(newcontext, scontext);
 	case AVTAB_MEMBER:
 		/* Only polyinstantiate the MLS attributes if
 		   the type is being polyinstantiated */
 		if (newcontext->type != tcontext->type) {
 			/* Use the process effective MLS attributes. */
-			return mls_scopy_context(newcontext, scontext);
+			return mls_context_cpy_low(newcontext, scontext);
 		} else {
 			/* Use the related object MLS attributes. */
-			return mls_copy_context(newcontext, tcontext);
+			return mls_context_cpy(newcontext, tcontext);
 		}
 	default:
 		return -EINVAL;
@@ -585,3 +552,108 @@ int mls_compute_sid(struct context *scontext,
 	return -EINVAL;
 }
 
+#ifdef CONFIG_NETLABEL
+/**
+ * mls_export_netlbl_lvl - Export the MLS sensitivity levels to NetLabel
+ * @context: the security context
+ * @secattr: the NetLabel security attributes
+ *
+ * Description:
+ * Given the security context copy the low MLS sensitivity level into the
+ * NetLabel MLS sensitivity level field.
+ *
+ */
+void mls_export_netlbl_lvl(struct context *context,
+			   struct netlbl_lsm_secattr *secattr)
+{
+	if (!selinux_mls_enabled)
+		return;
+
+	secattr->mls_lvl = context->range.level[0].sens - 1;
+	secattr->flags |= NETLBL_SECATTR_MLS_LVL;
+}
+
+/**
+ * mls_import_netlbl_lvl - Import the NetLabel MLS sensitivity levels
+ * @context: the security context
+ * @secattr: the NetLabel security attributes
+ *
+ * Description:
+ * Given the security context and the NetLabel security attributes, copy the
+ * NetLabel MLS sensitivity level into the context.
+ *
+ */
+void mls_import_netlbl_lvl(struct context *context,
+			   struct netlbl_lsm_secattr *secattr)
+{
+	if (!selinux_mls_enabled)
+		return;
+
+	context->range.level[0].sens = secattr->mls_lvl + 1;
+	context->range.level[1].sens = context->range.level[0].sens;
+}
+
+/**
+ * mls_export_netlbl_cat - Export the MLS categories to NetLabel
+ * @context: the security context
+ * @secattr: the NetLabel security attributes
+ *
+ * Description:
+ * Given the security context copy the low MLS categories into the NetLabel
+ * MLS category field.  Returns zero on success, negative values on failure.
+ *
+ */
+int mls_export_netlbl_cat(struct context *context,
+			  struct netlbl_lsm_secattr *secattr)
+{
+	int rc;
+
+	if (!selinux_mls_enabled)
+		return 0;
+
+	rc = ebitmap_netlbl_export(&context->range.level[0].cat,
+				   &secattr->mls_cat);
+	if (rc == 0 && secattr->mls_cat != NULL)
+		secattr->flags |= NETLBL_SECATTR_MLS_CAT;
+
+	return rc;
+}
+
+/**
+ * mls_import_netlbl_cat - Import the MLS categories from NetLabel
+ * @context: the security context
+ * @secattr: the NetLabel security attributes
+ *
+ * Description:
+ * Copy the NetLabel security attributes into the SELinux context; since the
+ * NetLabel security attribute only contains a single MLS category use it for
+ * both the low and high categories of the context.  Returns zero on success,
+ * negative values on failure.
+ *
+ */
+int mls_import_netlbl_cat(struct context *context,
+			  struct netlbl_lsm_secattr *secattr)
+{
+	int rc;
+
+	if (!selinux_mls_enabled)
+		return 0;
+
+	rc = ebitmap_netlbl_import(&context->range.level[0].cat,
+				   secattr->mls_cat);
+	if (rc != 0)
+		goto import_netlbl_cat_failure;
+
+	rc = ebitmap_cpy(&context->range.level[1].cat,
+			 &context->range.level[0].cat);
+	if (rc != 0)
+		goto import_netlbl_cat_failure;
+
+	return 0;
+
+import_netlbl_cat_failure:
+	ebitmap_destroy(&context->range.level[0].cat);
+	ebitmap_destroy(&context->range.level[1].cat);
+	return rc;
+}
+#endif /* CONFIG_NETLABEL */

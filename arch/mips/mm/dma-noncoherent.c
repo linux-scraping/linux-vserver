@@ -7,7 +7,6 @@
  * Copyright (C) 2000, 2001  Ralf Baechle <ralf@gnu.org>
  * swiped from i386, and cloned for MIPS by Geert, polished by Ralf.
  */
-#include <linux/config.h>
 #include <linux/types.h>
 #include <linux/mm.h>
 #include <linux/module.h>
@@ -300,14 +299,15 @@ int dma_supported(struct device *dev, u64 mask)
 
 EXPORT_SYMBOL(dma_supported);
 
-int dma_is_consistent(dma_addr_t dma_addr)
+int dma_is_consistent(struct device *dev, dma_addr_t dma_addr)
 {
 	return 1;
 }
 
 EXPORT_SYMBOL(dma_is_consistent);
 
-void dma_cache_sync(void *vaddr, size_t size, enum dma_data_direction direction)
+void dma_cache_sync(struct device *dev, void *vaddr, size_t size,
+	enum dma_data_direction direction)
 {
 	if (direction == DMA_NONE)
 		return;

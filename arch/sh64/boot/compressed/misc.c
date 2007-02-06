@@ -1,5 +1,5 @@
 /*
- * arch/shmedia/boot/compressed/misc.c
+ * arch/sh64/boot/compressed/misc.c
  *
  * This is a collection of several routines from gzip-1.0.3
  * adapted for Linux.
@@ -9,7 +9,6 @@
  * Adapted for SHmedia from sh by Stuart Menefy, May 2002
  */
 
-#include <linux/config.h>
 #include <asm/uaccess.h>
 
 /* cache.c */

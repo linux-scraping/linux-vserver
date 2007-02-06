@@ -114,7 +114,6 @@
  * */
 #define NCR_700_VERSION "2.8"
 
-#include <linux/config.h>
 #include <linux/kernel.h>
 #include <linux/types.h>
 #include <linux/string.h>
@@ -174,6 +173,7 @@ STATIC int NCR_700_bus_reset(struct scsi_cmnd * SCpnt);
 STATIC int NCR_700_host_reset(struct scsi_cmnd * SCpnt);
 STATIC void NCR_700_chip_setup(struct Scsi_Host *host);
 STATIC void NCR_700_chip_reset(struct Scsi_Host *host);
+STATIC int NCR_700_slave_alloc(struct scsi_device *SDpnt);
 STATIC int NCR_700_slave_configure(struct scsi_device *SDpnt);
 STATIC void NCR_700_slave_destroy(struct scsi_device *SDpnt);
 static int NCR_700_change_queue_depth(struct scsi_device *SDpnt, int depth);
@@ -313,10 +313,10 @@ NCR_700_detect(struct scsi_host_template *tpnt,
 	hostdata->status = memory + STATUS_OFFSET;
 	/* all of these offsets are L1_CACHE_BYTES separated.  It is fatal
 	 * if this isn't sufficient separation to avoid dma flushing issues */
-	BUG_ON(!dma_is_consistent(pScript) && L1_CACHE_BYTES < dma_get_cache_alignment());
+	BUG_ON(!dma_is_consistent(hostdata->dev, pScript) && L1_CACHE_BYTES < dma_get_cache_alignment());
 	hostdata->slots = (struct NCR_700_command_slot *)(memory + SLOTS_OFFSET);
 	hostdata->dev = dev;
-		
+
 	pSlots = pScript + SLOTS_OFFSET;
 
 	/* Fill in the missing routines from the host template */
@@ -330,21 +330,21 @@ NCR_700_detect(struct scsi_host_template *tpnt,
 	tpnt->use_clustering = ENABLE_CLUSTERING;
 	tpnt->slave_configure = NCR_700_slave_configure;
 	tpnt->slave_destroy = NCR_700_slave_destroy;
+	tpnt->slave_alloc = NCR_700_slave_alloc;
 	tpnt->change_queue_depth = NCR_700_change_queue_depth;
 	tpnt->change_queue_type = NCR_700_change_queue_type;
-	
+
 	if(tpnt->name == NULL)
 		tpnt->name = "53c700";
 	if(tpnt->proc_name == NULL)
 		tpnt->proc_name = "53c700";
-	
 
 	host = scsi_host_alloc(tpnt, 4);
 	if (!host)
 		return NULL;
 	memset(hostdata->slots, 0, sizeof(struct NCR_700_command_slot)
 	       * NCR_700_COMMAND_SLOTS_PER_HOST);
-	for(j = 0; j < NCR_700_COMMAND_SLOTS_PER_HOST; j++) {
+	for (j = 0; j < NCR_700_COMMAND_SLOTS_PER_HOST; j++) {
 		dma_addr_t offset = (dma_addr_t)((unsigned long)&hostdata->slots[j].SG[0]
 					  - (unsigned long)&hostdata->slots[0].SG[0]);
 		hostdata->slots[j].pSG = (struct NCR_700_SG_List *)((unsigned long)(pSlots + offset));
@@ -355,20 +355,18 @@ NCR_700_detect(struct scsi_host_template *tpnt,
 		hostdata->slots[j].state = NCR_700_SLOT_FREE;
 	}
 
-	for(j = 0; j < sizeof(SCRIPT)/sizeof(SCRIPT[0]); j++) {
+	for (j = 0; j < ARRAY_SIZE(SCRIPT); j++)
 		script[j] = bS_to_host(SCRIPT[j]);
-	}
 
 	/* adjust all labels to be bus physical */
-	for(j = 0; j < PATCHES; j++) {
+	for (j = 0; j < PATCHES; j++)
 		script[LABELPATCHES[j]] = bS_to_host(pScript + SCRIPT[LABELPATCHES[j]]);
-	}
 	/* now patch up fixed addresses. */
-	script_patch_32(script, MessageLocation,
+	script_patch_32(hostdata->dev, script, MessageLocation,
 			pScript + MSGOUT_OFFSET);
-	script_patch_32(script, StatusAddress,
+	script_patch_32(hostdata->dev, script, StatusAddress,
 			pScript + STATUS_OFFSET);
-	script_patch_32(script, ReceiveMsgAddress,
+	script_patch_32(hostdata->dev, script, ReceiveMsgAddress,
 			pScript + MSGIN_OFFSET);
 
 	hostdata->script = script;
@@ -376,7 +374,7 @@ NCR_700_detect(struct scsi_host_template *tpnt,
 	dma_sync_single_for_device(hostdata->dev, pScript, sizeof(SCRIPT), DMA_TO_DEVICE);
 	hostdata->state = NCR_700_HOST_FREE;
 	hostdata->cmd = NULL;
-	host->max_id = 7;
+	host->max_id = 8;
 	host->max_lun = NCR_700_MAX_LUNS;
 	BUG_ON(NCR_700_transport_template == NULL);
 	host->transportt = NCR_700_transport_template;
@@ -385,17 +383,17 @@ NCR_700_detect(struct scsi_host_template *tpnt,
 	host->hostdata[0] = (unsigned long)hostdata;
 	/* kick the chip */
 	NCR_700_writeb(0xff, host, CTEST9_REG);
-	if(hostdata->chip710) 
+	if (hostdata->chip710)
 		hostdata->rev = (NCR_700_readb(host, CTEST8_REG)>>4) & 0x0f;
 	else
 		hostdata->rev = (NCR_700_readb(host, CTEST7_REG)>>4) & 0x0f;
 	hostdata->fast = (NCR_700_readb(host, CTEST9_REG) == 0);
-	if(banner == 0) {
+	if (banner == 0) {
 		printk(KERN_NOTICE "53c700: Version " NCR_700_VERSION " By James.Bottomley@HansenPartnership.com\n");
 		banner = 1;
 	}
 	printk(KERN_NOTICE "scsi%d: %s rev %d %s\n", host->host_no,
-	       hostdata->chip710 ? "53c710" : 
+	       hostdata->chip710 ? "53c710" :
 	       (hostdata->fast ? "53c700-66" : "53c700"),
 	       hostdata->rev, hostdata->differential ?
 	       "(Differential)" : "");
@@ -540,6 +538,7 @@ find_empty_slot(struct NCR_700_Host_Parameters *hostdata)
 	 * finish routine.  If we cannot queue the command when it
 	 * is properly build, we then change to NCR_700_SLOT_QUEUED */
 	slot->state = NCR_700_SLOT_BUSY;
+	slot->flags = 0;
 	hostdata->command_slot_count++;
 	
 	return slot;
@@ -589,7 +588,7 @@ NCR_700_unmap(struct NCR_700_Host_Parameters *hostdata, struct scsi_cmnd *SCp,
 	if(SCp->sc_data_direction != DMA_NONE &&
 	   SCp->sc_data_direction != DMA_BIDIRECTIONAL) {
 		if(SCp->use_sg) {
-			dma_unmap_sg(hostdata->dev, SCp->buffer,
+			dma_unmap_sg(hostdata->dev, SCp->request_buffer,
 				     SCp->use_sg, SCp->sc_data_direction);
 		} else {
 			dma_unmap_single(hostdata->dev, slot->dma_handle,
@@ -610,31 +609,26 @@ NCR_700_scsi_done(struct NCR_700_Host_Parameters *hostdata,
 		struct NCR_700_command_slot *slot = 
 			(struct NCR_700_command_slot *)SCp->host_scribble;
 		
-		NCR_700_unmap(hostdata, SCp, slot);
 		dma_unmap_single(hostdata->dev, slot->pCmd,
 				 sizeof(SCp->cmnd), DMA_TO_DEVICE);
-		if(SCp->cmnd[0] == REQUEST_SENSE && SCp->cmnd[6] == NCR_700_INTERNAL_SENSE_MAGIC) {
+		if (slot->flags == NCR_700_FLAG_AUTOSENSE) {
+			char *cmnd = NCR_700_get_sense_cmnd(SCp->device);
 #ifdef NCR_700_DEBUG
 			printk(" ORIGINAL CMD %p RETURNED %d, new return is %d sense is\n",
 			       SCp, SCp->cmnd[7], result);
 			scsi_print_sense("53c700", SCp);
 
 #endif
+			dma_unmap_single(hostdata->dev, slot->dma_handle, sizeof(SCp->sense_buffer), DMA_FROM_DEVICE);
 			/* restore the old result if the request sense was
 			 * successful */
-			if(result == 0)
-				result = SCp->cmnd[7];
-			/* now restore the original command */
-			memcpy((void *) SCp->cmnd, (void *) SCp->data_cmnd,
-			       sizeof(SCp->data_cmnd));
-			SCp->request_buffer = SCp->buffer;
-			SCp->request_bufflen = SCp->bufflen;
-			SCp->use_sg = SCp->old_use_sg;
-			SCp->cmd_len = SCp->old_cmd_len;
-			SCp->sc_data_direction = SCp->sc_old_data_direction;
-			SCp->underflow = SCp->old_underflow;
-			
-		}
+			if (result == 0)
+				result = cmnd[7];
+			/* restore the original length */
+			SCp->cmd_len = cmnd[8];
+		} else
+			NCR_700_unmap(hostdata, SCp, slot);
+
 		free_slot(slot, hostdata);
 #ifdef NCR_700_DEBUG
 		if(NCR_700_get_depth(SCp->device) == 0 ||
@@ -827,8 +821,9 @@ process_extended_message(struct Scsi_Host *host,
 			shost_printk(KERN_WARNING, host,
 				"Unexpected SDTR msg\n");
 			hostdata->msgout[0] = A_REJECT_MSG;
-			dma_cache_sync(hostdata->msgout, 1, DMA_TO_DEVICE);
-			script_patch_16(hostdata->script, MessageCount, 1);
+			dma_cache_sync(hostdata->dev, hostdata->msgout, 1, DMA_TO_DEVICE);
+			script_patch_16(hostdata->dev, hostdata->script,
+			                MessageCount, 1);
 			/* SendMsgOut returns, so set up the return
 			 * address */
 			resume_offset = hostdata->pScript + Ent_SendMessageWithATN;
@@ -839,8 +834,9 @@ process_extended_message(struct Scsi_Host *host,
 		printk(KERN_INFO "scsi%d: (%d:%d), Unsolicited WDTR after CMD, Rejecting\n",
 		       host->host_no, pun, lun);
 		hostdata->msgout[0] = A_REJECT_MSG;
-		dma_cache_sync(hostdata->msgout, 1, DMA_TO_DEVICE);
-		script_patch_16(hostdata->script, MessageCount, 1);
+		dma_cache_sync(hostdata->dev, hostdata->msgout, 1, DMA_TO_DEVICE);
+		script_patch_16(hostdata->dev, hostdata->script, MessageCount,
+		                1);
 		resume_offset = hostdata->pScript + Ent_SendMessageWithATN;
 
 		break;
@@ -853,8 +849,9 @@ process_extended_message(struct Scsi_Host *host,
 		printk("\n");
 		/* just reject it */
 		hostdata->msgout[0] = A_REJECT_MSG;
-		dma_cache_sync(hostdata->msgout, 1, DMA_TO_DEVICE);
-		script_patch_16(hostdata->script, MessageCount, 1);
+		dma_cache_sync(hostdata->dev, hostdata->msgout, 1, DMA_TO_DEVICE);
+		script_patch_16(hostdata->dev, hostdata->script, MessageCount,
+		                1);
 		/* SendMsgOut returns, so set up the return
 		 * address */
 		resume_offset = hostdata->pScript + Ent_SendMessageWithATN;
@@ -935,8 +932,9 @@ process_message(struct Scsi_Host *host,	struct NCR_700_Host_Parameters *hostdata
 		printk("\n");
 		/* just reject it */
 		hostdata->msgout[0] = A_REJECT_MSG;
-		dma_cache_sync(hostdata->msgout, 1, DMA_TO_DEVICE);
-		script_patch_16(hostdata->script, MessageCount, 1);
+		dma_cache_sync(hostdata->dev, hostdata->msgout, 1, DMA_TO_DEVICE);
+		script_patch_16(hostdata->dev, hostdata->script, MessageCount,
+		                1);
 		/* SendMsgOut returns, so set up the return
 		 * address */
 		resume_offset = hostdata->pScript + Ent_SendMessageWithATN;
@@ -945,7 +943,7 @@ process_message(struct Scsi_Host *host,	struct NCR_700_Host_Parameters *hostdata
 	}
 	NCR_700_writel(temp, host, TEMP_REG);
 	/* set us up to receive another message */
-	dma_cache_sync(hostdata->msgin, MSG_ARRAY_SIZE, DMA_FROM_DEVICE);
+	dma_cache_sync(hostdata->dev, hostdata->msgin, MSG_ARRAY_SIZE, DMA_FROM_DEVICE);
 	return resume_offset;
 }
 
@@ -975,13 +973,15 @@ process_script_interrupt(__u32 dsps, __u32 dsp, struct scsi_cmnd *SCp,
 		   status_byte(hostdata->status[0]) == COMMAND_TERMINATED) {
 			struct NCR_700_command_slot *slot =
 				(struct NCR_700_command_slot *)SCp->host_scribble;
-			if(SCp->cmnd[0] == REQUEST_SENSE) {
+			if(slot->flags == NCR_700_FLAG_AUTOSENSE) {
 				/* OOPS: bad device, returning another
 				 * contingent allegiance condition */
 				scmd_printk(KERN_ERR, SCp,
 					"broken device is looping in contingent allegiance: ignoring\n");
 				NCR_700_scsi_done(hostdata, SCp, hostdata->status[0]);
 			} else {
+				char *cmnd =
+					NCR_700_get_sense_cmnd(SCp->device);
 #ifdef NCR_DEBUG
 				scsi_print_command(SCp);
 				printk("  cmd %p has status %d, requesting sense\n",
@@ -995,38 +995,40 @@ process_script_interrupt(__u32 dsps, __u32 dsp, struct scsi_cmnd *SCp,
 				 * data associated with the command
 				 * here */
 				NCR_700_unmap(hostdata, SCp, slot);
+				dma_unmap_single(hostdata->dev, slot->pCmd,
+						 sizeof(SCp->cmnd),
+						 DMA_TO_DEVICE);
 
-				SCp->cmnd[0] = REQUEST_SENSE;
-				SCp->cmnd[1] = (SCp->device->lun & 0x7) << 5;
-				SCp->cmnd[2] = 0;
-				SCp->cmnd[3] = 0;
-				SCp->cmnd[4] = sizeof(SCp->sense_buffer);
-				SCp->cmnd[5] = 0;
-				SCp->cmd_len = 6;
+				cmnd[0] = REQUEST_SENSE;
+				cmnd[1] = (SCp->device->lun & 0x7) << 5;
+				cmnd[2] = 0;
+				cmnd[3] = 0;
+				cmnd[4] = sizeof(SCp->sense_buffer);
+				cmnd[5] = 0;
 				/* Here's a quiet hack: the
 				 * REQUEST_SENSE command is six bytes,
 				 * so store a flag indicating that
 				 * this was an internal sense request
 				 * and the original status at the end
 				 * of the command */
-				SCp->cmnd[6] = NCR_700_INTERNAL_SENSE_MAGIC;
-				SCp->cmnd[7] = hostdata->status[0];
-				SCp->use_sg = 0;
-				SCp->sc_data_direction = DMA_FROM_DEVICE;
-				dma_sync_single_for_device(hostdata->dev, slot->pCmd,
-							   SCp->cmd_len, DMA_TO_DEVICE);
-				SCp->request_bufflen = sizeof(SCp->sense_buffer);
+				cmnd[6] = NCR_700_INTERNAL_SENSE_MAGIC;
+				cmnd[7] = hostdata->status[0];
+				cmnd[8] = SCp->cmd_len;
+				SCp->cmd_len = 6; /* command length for
+						   * REQUEST_SENSE */
+				slot->pCmd = dma_map_single(hostdata->dev, cmnd, MAX_COMMAND_SIZE, DMA_TO_DEVICE);
 				slot->dma_handle = dma_map_single(hostdata->dev, SCp->sense_buffer, sizeof(SCp->sense_buffer), DMA_FROM_DEVICE);
 				slot->SG[0].ins = bS_to_host(SCRIPT_MOVE_DATA_IN | sizeof(SCp->sense_buffer));
 				slot->SG[0].pAddr = bS_to_host(slot->dma_handle);
 				slot->SG[1].ins = bS_to_host(SCRIPT_RETURN);
 				slot->SG[1].pAddr = 0;
 				slot->resume_offset = hostdata->pScript;
-				dma_cache_sync(slot->SG, sizeof(slot->SG[0])*2, DMA_TO_DEVICE);
-				dma_cache_sync(SCp->sense_buffer, sizeof(SCp->sense_buffer), DMA_FROM_DEVICE);
-				
+				dma_cache_sync(hostdata->dev, slot->SG, sizeof(slot->SG[0])*2, DMA_TO_DEVICE);
+				dma_cache_sync(hostdata->dev, SCp->sense_buffer, sizeof(SCp->sense_buffer), DMA_FROM_DEVICE);
+
 				/* queue the command for reissue */
 				slot->state = NCR_700_SLOT_QUEUED;
+				slot->flags = NCR_700_FLAG_AUTOSENSE;
 				hostdata->state = NCR_700_HOST_FREE;
 				hostdata->cmd = NULL;
 			}
@@ -1138,11 +1140,12 @@ process_script_interrupt(__u32 dsps, __u32 dsp, struct scsi_cmnd *SCp,
 			hostdata->cmd = slot->cmnd;
 
 			/* re-patch for this command */
-			script_patch_32_abs(hostdata->script, CommandAddress, 
-					    slot->pCmd);
-			script_patch_16(hostdata->script,
+			script_patch_32_abs(hostdata->dev, hostdata->script,
+			                    CommandAddress, slot->pCmd);
+			script_patch_16(hostdata->dev, hostdata->script,
 					CommandCount, slot->cmnd->cmd_len);
-			script_patch_32_abs(hostdata->script, SGScriptStartAddress,
+			script_patch_32_abs(hostdata->dev, hostdata->script,
+			                    SGScriptStartAddress,
 					    to32bit(&slot->pSG[0].ins));
 
 			/* Note: setting SXFER only works if we're
@@ -1152,13 +1155,13 @@ process_script_interrupt(__u32 dsps, __u32 dsp, struct scsi_cmnd *SCp,
 			 * should therefore always clear ACK */
 			NCR_700_writeb(NCR_700_get_SXFER(hostdata->cmd->device),
 				       host, SXFER_REG);
-			dma_cache_sync(hostdata->msgin,
+			dma_cache_sync(hostdata->dev, hostdata->msgin,
 				       MSG_ARRAY_SIZE, DMA_FROM_DEVICE);
-			dma_cache_sync(hostdata->msgout,
+			dma_cache_sync(hostdata->dev, hostdata->msgout,
 				       MSG_ARRAY_SIZE, DMA_TO_DEVICE);
 			/* I'm just being paranoid here, the command should
 			 * already have been flushed from the cache */
-			dma_cache_sync(slot->cmnd->cmnd,
+			dma_cache_sync(hostdata->dev, slot->cmnd->cmnd,
 				       slot->cmnd->cmd_len, DMA_TO_DEVICE);
 
 
@@ -1222,7 +1225,7 @@ process_script_interrupt(__u32 dsps, __u32 dsp, struct scsi_cmnd *SCp,
 		hostdata->reselection_id = reselection_id;
 		/* just in case we have a stale simple tag message, clear it */
 		hostdata->msgin[1] = 0;
-		dma_cache_sync(hostdata->msgin,
+		dma_cache_sync(hostdata->dev, hostdata->msgin,
 			       MSG_ARRAY_SIZE, DMA_BIDIRECTIONAL);
 		if(hostdata->tag_negotiated & (1<<reselection_id)) {
 			resume_offset = hostdata->pScript + Ent_GetReselectionWithTag;
@@ -1247,7 +1250,7 @@ process_script_interrupt(__u32 dsps, __u32 dsp, struct scsi_cmnd *SCp,
 
 			if(SCp->use_sg) {
 				for(i = 0; i < SCp->use_sg + 1; i++) {
-					printk(KERN_INFO " SG[%d].length = %d, move_insn=%08x, addr %08x\n", i, ((struct scatterlist *)SCp->buffer)[i].length, ((struct NCR_700_command_slot *)SCp->host_scribble)->SG[i].ins, ((struct NCR_700_command_slot *)SCp->host_scribble)->SG[i].pAddr);
+					printk(KERN_INFO " SG[%d].length = %d, move_insn=%08x, addr %08x\n", i, ((struct scatterlist *)SCp->request_buffer)[i].length, ((struct NCR_700_command_slot *)SCp->host_scribble)->SG[i].ins, ((struct NCR_700_command_slot *)SCp->host_scribble)->SG[i].pAddr);
 				}
 			}
 		}	       
@@ -1338,7 +1341,7 @@ process_selection(struct Scsi_Host *host, __u32 dsp)
 	hostdata->cmd = NULL;
 	/* clear any stale simple tag message */
 	hostdata->msgin[1] = 0;
-	dma_cache_sync(hostdata->msgin, MSG_ARRAY_SIZE,
+	dma_cache_sync(hostdata->dev, hostdata->msgin, MSG_ARRAY_SIZE,
 		       DMA_BIDIRECTIONAL);
 
 	if(id == 0xff) {
@@ -1406,12 +1409,14 @@ NCR_700_start_command(struct scsi_cmnd *SCp)
 	/* keep interrupts disabled until we have the command correctly
 	 * set up so we cannot take a selection interrupt */
 
-	hostdata->msgout[0] = NCR_700_identify(SCp->cmnd[0] != REQUEST_SENSE,
+	hostdata->msgout[0] = NCR_700_identify((SCp->cmnd[0] != REQUEST_SENSE &&
+						slot->flags != NCR_700_FLAG_AUTOSENSE),
 					       SCp->device->lun);
 	/* for INQUIRY or REQUEST_SENSE commands, we cannot be sure
 	 * if the negotiated transfer parameters still hold, so
 	 * always renegotiate them */
-	if(SCp->cmnd[0] == INQUIRY || SCp->cmnd[0] == REQUEST_SENSE) {
+	if(SCp->cmnd[0] == INQUIRY || SCp->cmnd[0] == REQUEST_SENSE ||
+	   slot->flags == NCR_700_FLAG_AUTOSENSE) {
 		NCR_700_clear_flag(SCp->device, NCR_700_DEV_NEGOTIATED_SYNC);
 	}
 
@@ -1420,7 +1425,8 @@ NCR_700_start_command(struct scsi_cmnd *SCp)
 	 * will refuse all tags, so send the request sense as untagged
 	 * */
 	if((hostdata->tag_negotiated & (1<<scmd_id(SCp)))
-	   && (slot->tag != SCSI_NO_TAG && SCp->cmnd[0] != REQUEST_SENSE)) {
+	   && (slot->tag != SCSI_NO_TAG && SCp->cmnd[0] != REQUEST_SENSE &&
+	       slot->flags != NCR_700_FLAG_AUTOSENSE)) {
 		count += scsi_populate_tag_msg(SCp, &hostdata->msgout[count]);
 	}
 
@@ -1432,29 +1438,30 @@ NCR_700_start_command(struct scsi_cmnd *SCp)
 		NCR_700_set_flag(SCp->device, NCR_700_DEV_BEGIN_SYNC_NEGOTIATION);
 	}
 
-	script_patch_16(hostdata->script, MessageCount, count);
+	script_patch_16(hostdata->dev, hostdata->script, MessageCount, count);
 
 
-	script_patch_ID(hostdata->script,
+	script_patch_ID(hostdata->dev, hostdata->script,
 			Device_ID, 1<<scmd_id(SCp));
 
-	script_patch_32_abs(hostdata->script, CommandAddress, 
+	script_patch_32_abs(hostdata->dev, hostdata->script, CommandAddress,
 			    slot->pCmd);
-	script_patch_16(hostdata->script, CommandCount, SCp->cmd_len);
+	script_patch_16(hostdata->dev, hostdata->script, CommandCount,
+	                SCp->cmd_len);
 	/* finally plumb the beginning of the SG list into the script
 	 * */
-	script_patch_32_abs(hostdata->script, SGScriptStartAddress,
-			    to32bit(&slot->pSG[0].ins));
+	script_patch_32_abs(hostdata->dev, hostdata->script,
+	                    SGScriptStartAddress, to32bit(&slot->pSG[0].ins));
 	NCR_700_clear_fifo(SCp->device->host);
 
 	if(slot->resume_offset == 0)
 		slot->resume_offset = hostdata->pScript;
 	/* now perform all the writebacks and invalidates */
-	dma_cache_sync(hostdata->msgout, count, DMA_TO_DEVICE);
-	dma_cache_sync(hostdata->msgin, MSG_ARRAY_SIZE,
+	dma_cache_sync(hostdata->dev, hostdata->msgout, count, DMA_TO_DEVICE);
+	dma_cache_sync(hostdata->dev, hostdata->msgin, MSG_ARRAY_SIZE,
 		       DMA_FROM_DEVICE);
-	dma_cache_sync(SCp->cmnd, SCp->cmd_len, DMA_TO_DEVICE);
-	dma_cache_sync(hostdata->status, 1, DMA_FROM_DEVICE);
+	dma_cache_sync(hostdata->dev, SCp->cmnd, SCp->cmd_len, DMA_TO_DEVICE);
+	dma_cache_sync(hostdata->dev, hostdata->status, 1, DMA_FROM_DEVICE);
 
 	/* set the synchronous period/offset */
 	NCR_700_writeb(NCR_700_get_SXFER(SCp->device),
@@ -1466,7 +1473,7 @@ NCR_700_start_command(struct scsi_cmnd *SCp)
 }
 
 irqreturn_t
-NCR_700_intr(int irq, void *dev_id, struct pt_regs *regs)
+NCR_700_intr(int irq, void *dev_id)
 {
 	struct Scsi_Host *host = (struct Scsi_Host *)dev_id;
 	struct NCR_700_Host_Parameters *hostdata =
@@ -1533,7 +1540,7 @@ NCR_700_intr(int irq, void *dev_id, struct pt_regs *regs)
 
 			/* clear all the negotiated parameters */
 			__shost_for_each_device(SDp, host)
-				SDp->hostdata = NULL;
+				NCR_700_clear_flag(SDp, ~0);
 			
 			/* clear all the slots and their pending commands */
 			for(i = 0; i < NCR_700_COMMAND_SLOTS_PER_HOST; i++) {
@@ -1630,7 +1637,7 @@ NCR_700_intr(int irq, void *dev_id, struct pt_regs *regs)
 					slot->SG[i].ins = bS_to_host(SCRIPT_NOP);
 					slot->SG[i].pAddr = 0;
 				}
-				dma_cache_sync(slot->SG, sizeof(slot->SG), DMA_TO_DEVICE);
+				dma_cache_sync(hostdata->dev, slot->SG, sizeof(slot->SG), DMA_TO_DEVICE);
 				/* and pretend we disconnected after
 				 * the command phase */
 				resume_offset = hostdata->pScript + Ent_MsgInDuringData;
@@ -1866,8 +1873,9 @@ NCR_700_queuecommand(struct scsi_cmnd *SCp, void (*done)(struct scsi_cmnd *))
 		__u32 count = 0;
 
 		if(SCp->use_sg) {
-			sg_count = dma_map_sg(hostdata->dev, SCp->buffer,
-					      SCp->use_sg, direction);
+			sg_count = dma_map_sg(hostdata->dev,
+					      SCp->request_buffer, SCp->use_sg,
+					      direction);
 		} else {
 			vPtr = dma_map_single(hostdata->dev,
 					      SCp->request_buffer, 
@@ -1882,7 +1890,7 @@ NCR_700_queuecommand(struct scsi_cmnd *SCp, void (*done)(struct scsi_cmnd *))
 		for(i = 0; i < sg_count; i++) {
 
 			if(SCp->use_sg) {
-				struct scatterlist *sg = SCp->buffer;
+				struct scatterlist *sg = SCp->request_buffer;
 
 				vPtr = sg_dma_address(&sg[i]);
 				count = sg_dma_len(&sg[i]);
@@ -1895,9 +1903,9 @@ NCR_700_queuecommand(struct scsi_cmnd *SCp, void (*done)(struct scsi_cmnd *))
 		}
 		slot->SG[i].ins = bS_to_host(SCRIPT_RETURN);
 		slot->SG[i].pAddr = 0;
-		dma_cache_sync(slot->SG, sizeof(slot->SG), DMA_TO_DEVICE);
+		dma_cache_sync(hostdata->dev, slot->SG, sizeof(slot->SG), DMA_TO_DEVICE);
 		DEBUG((" SETTING %08lx to %x\n",
-		       (&slot->pSG[i].ins), 
+		       (&slot->pSG[i].ins),
 		       slot->SG[i].ins));
 	}
 	slot->resume_offset = 0;
@@ -1942,7 +1950,7 @@ NCR_700_abort(struct scsi_cmnd * SCp)
 STATIC int
 NCR_700_bus_reset(struct scsi_cmnd * SCp)
 {
-	DECLARE_COMPLETION(complete);
+	DECLARE_COMPLETION_ONSTACK(complete);
 	struct NCR_700_Host_Parameters *hostdata = 
 		(struct NCR_700_Host_Parameters *)SCp->device->host->hostdata[0];
 
@@ -2037,7 +2045,17 @@ NCR_700_set_offset(struct scsi_target *STp, int offset)
 	spi_flags(STp) |= NCR_700_DEV_PRINT_SYNC_NEGOTIATION;
 }
 
+STATIC int
+NCR_700_slave_alloc(struct scsi_device *SDp)
+{
+	SDp->hostdata = kzalloc(sizeof(struct NCR_700_Device_Parameters),
+				GFP_KERNEL);
 
+	if (!SDp->hostdata)
+		return -ENOMEM;
+
+	return 0;
+}
 
 STATIC int
 NCR_700_slave_configure(struct scsi_device *SDp)
@@ -2068,7 +2086,8 @@ NCR_700_slave_configure(struct scsi_device *SDp)
 STATIC void
 NCR_700_slave_destroy(struct scsi_device *SDp)
 {
-	/* to do here: deallocate memory */
+	kfree(SDp->hostdata);
+	SDp->hostdata = NULL;
 }
 
 static int

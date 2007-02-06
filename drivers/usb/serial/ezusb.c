@@ -8,7 +8,6 @@
  *	2 as published by the Free Software Foundation.
  */
 
-#include <linux/config.h>
 #include <linux/kernel.h>
 #include <linux/errno.h>
 #include <linux/init.h>
@@ -16,7 +15,7 @@
 #include <linux/tty.h>
 #include <linux/module.h>
 #include <linux/usb.h>
-#include "usb-serial.h"
+#include <linux/usb/serial.h>
 
 /* EZ-USB Control and Status Register.  Bit 0 controls 8051 reset */
 #define CPUCS_REG    0x7F92
@@ -32,12 +31,11 @@ int ezusb_writememory (struct usb_serial *serial, int address, unsigned char *da
 		return -ENODEV;
 	}
 
-	transfer_buffer =  kmalloc (length, GFP_KERNEL);
+	transfer_buffer = kmemdup(data, length, GFP_KERNEL);
 	if (!transfer_buffer) {
 		dev_err(&serial->dev->dev, "%s - kmalloc(%d) failed.\n", __FUNCTION__, length);
 		return -ENOMEM;
 	}
-	memcpy (transfer_buffer, data, length);
 	result = usb_control_msg (serial->dev, usb_sndctrlpipe(serial->dev, 0), bRequest, 0x40, address, 0, transfer_buffer, length, 3000);
 	kfree (transfer_buffer);
 	return result;

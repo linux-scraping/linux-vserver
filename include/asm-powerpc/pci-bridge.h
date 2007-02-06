@@ -22,19 +22,21 @@
 struct pci_controller {
 	struct pci_bus *bus;
 	char is_dynamic;
+	int node;
 	void *arch_data;
 	struct list_head list_node;
+	struct device *parent;
 
 	int first_busno;
 	int last_busno;
 
 	void __iomem *io_base_virt;
-	unsigned long io_base_phys;
+	resource_size_t io_base_phys;
 
 	/* Some machines have a non 1:1 mapping of
 	 * the PCI memory space in the CPU bus space
 	 */
-	unsigned long pci_mem_offset;
+	resource_size_t pci_mem_offset;
 	unsigned long pci_io_size;
 
 	struct pci_ops *ops;
@@ -78,12 +80,6 @@ struct pci_dn {
 	struct	iommu_table *iommu_table;	/* for phb's or bridges */
 	struct	pci_dev *pcidev;	/* back-pointer to the pci device */
 	struct	device_node *node;	/* back-pointer to the device_node */
-#ifdef CONFIG_PPC_ISERIES
-	struct	list_head Device_List;
-	int	Irq;			/* Assigned IRQ */
-	int	Flags;			/* Possible flags(disable/bist)*/
-	u8	LogicalSlot;		/* Hv Slot Index for Tces */
-#endif
 	u32	config_space[16];	/* saved PCI config space */
 };
 
@@ -170,6 +166,12 @@ static inline unsigned long pci_address_to_pio(phys_addr_t address)
 #define PCI_PROBE_NONE		-1	/* Don't look at this bus at all */
 #define PCI_PROBE_NORMAL	0	/* Do normal PCI probing */
 #define PCI_PROBE_DEVTREE	1	/* Instantiate from device tree */
+
+#ifdef CONFIG_NUMA
+#define PHB_SET_NODE(PHB, NODE)		((PHB)->node = (NODE))
+#else
+#define PHB_SET_NODE(PHB, NODE)		((PHB)->node = -1)
+#endif
 
 #endif /* CONFIG_PPC64 */
 #endif /* __KERNEL__ */

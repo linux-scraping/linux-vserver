@@ -78,12 +78,12 @@ static struct attribute_group rtc_attr_group = {
 	.attrs = rtc_attrs,
 };
 
-static int __devinit rtc_sysfs_add_device(struct class_device *class_dev,
+static int rtc_sysfs_add_device(struct class_device *class_dev,
 					struct class_interface *class_intf)
 {
 	int err;
 
-	dev_info(class_dev->dev, "rtc intf: sysfs\n");
+	dev_dbg(class_dev->dev, "rtc intf: sysfs\n");
 
 	err = sysfs_create_group(&class_dev->kobj, &rtc_attr_group);
 	if (err)
@@ -116,7 +116,7 @@ static void __exit rtc_sysfs_exit(void)
 	class_interface_unregister(&rtc_sysfs_interface);
 }
 
-module_init(rtc_sysfs_init);
+subsys_initcall(rtc_sysfs_init);
 module_exit(rtc_sysfs_exit);
 
 MODULE_AUTHOR("Alessandro Zummo <a.zummo@towertech.it>");

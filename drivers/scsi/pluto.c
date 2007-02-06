@@ -13,7 +13,6 @@
 #include <linux/proc_fs.h>
 #include <linux/stat.h>
 #include <linux/init.h>
-#include <linux/config.h>
 #ifdef CONFIG_KMOD
 #include <linux/kmod.h>
 #endif
@@ -26,6 +25,9 @@
 #include "pluto.h"
 
 #include <linux/module.h>
+
+#define RQ_SCSI_BUSY		0xffff
+#define RQ_SCSI_DONE		0xfffe
 
 /* #define PLUTO_DEBUG */
 
@@ -65,7 +67,6 @@ static void __init pluto_detect_done(Scsi_Cmnd *SCpnt)
 
 static void __init pluto_detect_scsi_done(Scsi_Cmnd *SCpnt)
 {
-	SCpnt->request->rq_status = RQ_SCSI_DONE;
 	PLND(("Detect done %08lx\n", (long)SCpnt))
 	if (atomic_dec_and_test (&fcss))
 		up(&fc_sem);
@@ -116,7 +117,7 @@ int __init pluto_detect(struct scsi_host_template *tpnt)
 #endif
 			return 0;
 	}
-	fcs = (struct ctrl_inquiry *) kmalloc (sizeof (struct ctrl_inquiry) * fcscount, GFP_DMA);
+	fcs = kmalloc(sizeof (struct ctrl_inquiry) * fcscount, GFP_DMA);
 	if (!fcs) {
 		printk ("PLUTO: Not enough memory to probe\n");
 		return 0;
@@ -164,11 +165,9 @@ int __init pluto_detect(struct scsi_host_template *tpnt)
 		
 		SCpnt->cmd_len = COMMAND_SIZE(INQUIRY);
 	
-		SCpnt->request->rq_status = RQ_SCSI_BUSY;
+		SCpnt->request->cmd_flags &= ~REQ_STARTED;
 		
 		SCpnt->done = pluto_detect_done;
-		SCpnt->bufflen = 256;
-		SCpnt->buffer = fcs[i].inquiry;
 		SCpnt->request_bufflen = 256;
 		SCpnt->request_buffer = fcs[i].inquiry;
 		PLD(("set up %d %08lx\n", i, (long)SCpnt))
@@ -178,7 +177,8 @@ int __init pluto_detect(struct scsi_host_template *tpnt)
 	for (retry = 0; retry < 5; retry++) {
 		for (i = 0; i < fcscount; i++) {
 			if (!fcs[i].fc) break;
-			if (fcs[i].cmd.request->rq_status != RQ_SCSI_DONE) {
+			if (!(fcs[i].cmd.request->cmd_flags & REQ_STARTED)) {
+				fcs[i].cmd.request->cmd_flags |= REQ_STARTED;
 				disable_irq(fcs[i].fc->irq);
 				PLND(("queuecommand %d %d\n", retry, i))
 				fcp_scsi_queuecommand (&(fcs[i].cmd), 

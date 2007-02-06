@@ -10,7 +10,9 @@ kernel, the process can sometimes be daunting if you're not familiar
 with "the system."  This text is a collection of suggestions which
 can greatly increase the chances of your change being accepted.
 
-If you are submitting a driver, also read Documentation/SubmittingDrivers.
+Read Documentation/SubmitChecklist for a list of items to check
+before submitting code.  If you are submitting a driver, also read
+Documentation/SubmittingDrivers.
 
 
 
@@ -74,9 +76,6 @@ There are a number of scripts which can aid in this:
 Quilt:
 http://savannah.nongnu.org/projects/quilt
 
-Randy Dunlap's patch scripts:
-http://www.xenotime.net/linux/scripts/patching-scripts-002.tar.gz
-
 Andrew Morton's patch scripts:
 http://www.zip.com.au/~akpm/linux/patches/
 Instead of these scripts, quilt is the recommended patch management
@@ -135,9 +134,9 @@ Do not send more than 15 patches at once to the vger mailing lists!!!
 
 
 Linus Torvalds is the final arbiter of all changes accepted into the
-Linux kernel.  His e-mail address is <torvalds@osdl.org>.  He gets
-a lot of e-mail, so typically you should do your best to -avoid- sending
-him e-mail.
+Linux kernel.  His e-mail address is <torvalds@linux-foundation.org>. 
+He gets a lot of e-mail, so typically you should do your best to -avoid-
+sending him e-mail. 
 
 Patches which are bug fixes, are "obvious" changes, or similarly
 require little discussion should be sent or CC'd to Linus.  Patches
@@ -174,15 +173,15 @@ For small patches you may want to CC the Trivial Patch Monkey
 trivial@kernel.org managed by Adrian Bunk; which collects "trivial"
 patches. Trivial patches must qualify for one of the following rules:
  Spelling fixes in documentation
- Spelling fixes which could break grep(1).
+ Spelling fixes which could break grep(1)
  Warning fixes (cluttering with useless warnings is bad)
  Compilation fixes (only if they are actually correct)
  Runtime fixes (only if they actually fix things)
- Removing use of deprecated functions/macros (eg. check_region).
+ Removing use of deprecated functions/macros (eg. check_region)
  Contact detail and documentation fixes
  Non-portable code replaced by portable code (even in arch-specific,
  since people copy, as long as it's trivial)
- Any fix by the author/maintainer of the file. (ie. patch monkey
+ Any fix by the author/maintainer of the file (ie. patch monkey
  in re-transmission mode)
 URL: <http://www.kernel.org/pub/linux/kernel/people/bunk/trivial/>
 
@@ -208,6 +207,19 @@ decreasing the likelihood of your MIME-attached change being accepted.
 
 Exception:  If your mailer is mangling patches then someone may ask
 you to re-send them using MIME.
+
+
+WARNING: Some mailers like Mozilla send your messages with
+---- message header ----
+Content-Type: text/plain; charset=us-ascii; format=flowed
+---- message header ----
+The problem is that "format=flowed" makes some of the mailers
+on receiving side to replace TABs with spaces and do similar
+changes. Thus the patches from you can look corrupted.
+
+To fix this just make your mozilla defaults/pref/mailnews.js file to look like:
+pref("mailnews.send_plaintext_flowed", false); // RFC 2646=======
+pref("mailnews.display.disable_format_flowed_support", true);
 
 
 
@@ -246,13 +258,13 @@ updated change.
 It is quite common for Linus to "drop" your patch without comment.
 That's the nature of the system.  If he drops your patch, it could be
 due to
-* Your patch did not apply cleanly to the latest kernel version
+* Your patch did not apply cleanly to the latest kernel version.
 * Your patch was not sufficiently discussed on linux-kernel.
-* A style issue (see section 2),
-* An e-mail formatting issue (re-read this section)
-* A technical problem with your change
-* He gets tons of e-mail, and yours got lost in the shuffle
-* You are being annoying (See Figure 1)
+* A style issue (see section 2).
+* An e-mail formatting issue (re-read this section).
+* A technical problem with your change.
+* He gets tons of e-mail, and yours got lost in the shuffle.
+* You are being annoying.
 
 When in doubt, solicit comments on linux-kernel mailing list.
 
@@ -308,6 +320,8 @@ can certify the below:
 then you just add a line saying
 
 	Signed-off-by: Random J Developer <random@developer.example.org>
+
+using your real name (sorry, no pseudonyms or anonymous contributions.)
 
 Some people also put extra tags at the end.  They'll just be ignored for
 now, but you can do this to mark internal company procedures or just
@@ -475,22 +489,21 @@ SECTION 3 - REFERENCES
 Andrew Morton, "The perfect patch" (tpp).
   <http://www.zip.com.au/~akpm/linux/patches/stuff/tpp.txt>
 
-Jeff Garzik, "Linux kernel patch submission format."
+Jeff Garzik, "Linux kernel patch submission format".
   <http://linux.yyz.us/patch-format.html>
 
-Greg Kroah-Hartman "How to piss off a kernel subsystem maintainer".
+Greg Kroah-Hartman, "How to piss off a kernel subsystem maintainer".
   <http://www.kroah.com/log/2005/03/31/>
   <http://www.kroah.com/log/2005/07/08/>
   <http://www.kroah.com/log/2005/10/19/>
   <http://www.kroah.com/log/2006/01/11/>
 
-NO!!!! No more huge patch bombs to linux-kernel@vger.kernel.org people!.
+NO!!!! No more huge patch bombs to linux-kernel@vger.kernel.org people!
   <http://marc.theaimsgroup.com/?l=linux-kernel&m=112112749912944&w=2>
 
-Kernel Documentation/CodingStyle
+Kernel Documentation/CodingStyle:
   <http://sosdg.org/~coywolf/lxr/source/Documentation/CodingStyle>
 
-Linus Torvald's mail on the canonical patch format:
+Linus Torvalds's mail on the canonical patch format:
   <http://lkml.org/lkml/2005/4/7/183>
 --
-Last updated on 17 Nov 2005.

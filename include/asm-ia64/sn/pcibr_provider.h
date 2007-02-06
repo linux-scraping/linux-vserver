@@ -55,6 +55,7 @@
 #define PCI32_ATE_V                     (0x1 << 0)
 #define PCI32_ATE_CO                    (0x1 << 1)
 #define PCI32_ATE_PREC                  (0x1 << 2)
+#define PCI32_ATE_MSI                   (0x1 << 2)
 #define PCI32_ATE_PREF                  (0x1 << 3)
 #define PCI32_ATE_BAR                   (0x1 << 4)
 #define PCI32_ATE_ADDR_SHFT             12
@@ -117,8 +118,8 @@ struct pcibus_info {
 
 extern int  pcibr_init_provider(void);
 extern void *pcibr_bus_fixup(struct pcibus_bussoft *, struct pci_controller *);
-extern dma_addr_t pcibr_dma_map(struct pci_dev *, unsigned long, size_t);
-extern dma_addr_t pcibr_dma_map_consistent(struct pci_dev *, unsigned long, size_t);
+extern dma_addr_t pcibr_dma_map(struct pci_dev *, unsigned long, size_t, int type);
+extern dma_addr_t pcibr_dma_map_consistent(struct pci_dev *, unsigned long, size_t, int type);
 extern void pcibr_dma_unmap(struct pci_dev *, dma_addr_t, int);
 
 /*
@@ -134,7 +135,7 @@ extern void             pcireg_intr_addr_addr_set(struct pcibus_info *, int, u64
 extern void             pcireg_force_intr_set(struct pcibus_info *, int);
 extern u64         pcireg_wrb_flush_get(struct pcibus_info *, int);
 extern void             pcireg_int_ate_set(struct pcibus_info *, int, u64);
-extern u64 *	pcireg_int_ate_addr(struct pcibus_info *, int);
+extern u64 __iomem *	pcireg_int_ate_addr(struct pcibus_info *, int);
 extern void 		pcibr_force_interrupt(struct sn_irq_info *sn_irq_info);
 extern void 		pcibr_change_devices_irq(struct sn_irq_info *sn_irq_info);
 extern int 		pcibr_ate_alloc(struct pcibus_info *, int);

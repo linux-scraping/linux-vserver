@@ -66,7 +66,7 @@ static inline void put_next_SCp_byte(struct scsi_pointer *SCp, unsigned char c)
 	SCp->this_residual -= 1;
 }
 
-static inline void init_SCp(Scsi_Cmnd *SCpnt)
+static inline void init_SCp(struct scsi_cmnd *SCpnt)
 {
 	memset(&SCpnt->SCp, 0, sizeof(struct scsi_pointer));
 
@@ -74,7 +74,7 @@ static inline void init_SCp(Scsi_Cmnd *SCpnt)
 		unsigned long len = 0;
 		int buf;
 
-		SCpnt->SCp.buffer = (struct scatterlist *) SCpnt->buffer;
+		SCpnt->SCp.buffer = (struct scatterlist *) SCpnt->request_buffer;
 		SCpnt->SCp.buffers_residual = SCpnt->use_sg - 1;
 		SCpnt->SCp.ptr = (char *)
 			 (page_address(SCpnt->SCp.buffer->page) +

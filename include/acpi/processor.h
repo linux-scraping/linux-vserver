@@ -2,7 +2,7 @@
 #define __ACPI_PROCESSOR_H
 
 #include <linux/kernel.h>
-#include <linux/config.h>
+#include <linux/cpu.h>
 
 #include <asm/acpi.h>
 
@@ -17,6 +17,20 @@
 #define ACPI_PROCESSOR_MAX_DUTY_WIDTH	4
 
 #define ACPI_PDC_REVISION_ID		0x1
+
+#define ACPI_PSD_REV0_REVISION		0 /* Support for _PSD as in ACPI 3.0 */
+#define ACPI_PSD_REV0_ENTRIES		5
+
+/*
+ * Types of coordination defined in ACPI 3.0. Same macros can be used across
+ * P, C and T states
+ */
+#define DOMAIN_COORD_TYPE_SW_ALL	0xfc
+#define DOMAIN_COORD_TYPE_SW_ANY	0xfd
+#define DOMAIN_COORD_TYPE_HW_ALL	0xfe
+
+#define ACPI_CSTATE_SYSTEMIO	(0)
+#define ACPI_CSTATE_FFH		(1)
 
 /* Power Management */
 
@@ -47,10 +61,13 @@ struct acpi_processor_cx {
 	u8 valid;
 	u8 type;
 	u32 address;
+	u8 space_id;
+	u8 index;
 	u32 latency;
 	u32 latency_ticks;
 	u32 power;
 	u32 usage;
+	u64 time;
 	struct acpi_processor_cx_policy promotion;
 	struct acpi_processor_cx_policy demotion;
 };
@@ -65,6 +82,14 @@ struct acpi_processor_power {
 };
 
 /* Performance Management */
+
+struct acpi_psd_package {
+	acpi_integer num_entries;
+	acpi_integer revision;
+	acpi_integer domain;
+	acpi_integer coord_type;
+	acpi_integer num_processors;
+} __attribute__ ((packed));
 
 struct acpi_pct_register {
 	u8 descriptor;
@@ -92,7 +117,9 @@ struct acpi_processor_performance {
 	struct acpi_pct_register status_register;
 	unsigned int state_count;
 	struct acpi_processor_px *states;
-
+	struct acpi_psd_package domain_info;
+	cpumask_t shared_cpu_map;
+	unsigned int shared_type;
 };
 
 /* Throttling Control */
@@ -161,6 +188,9 @@ struct acpi_processor_errata {
 	} piix4;
 };
 
+extern int acpi_processor_preregister_performance(
+		struct acpi_processor_performance **performance);
+
 extern int acpi_processor_register_performance(struct acpi_processor_performance
 					       *performance, unsigned int cpu);
 extern void acpi_processor_unregister_performance(struct
@@ -181,12 +211,25 @@ void arch_acpi_processor_init_pdc(struct acpi_processor *pr);
 #ifdef ARCH_HAS_POWER_INIT
 void acpi_processor_power_init_bm_check(struct acpi_processor_flags *flags,
 					unsigned int cpu);
+int acpi_processor_ffh_cstate_probe(unsigned int cpu,
+		struct acpi_processor_cx *cx, struct acpi_power_register *reg);
+void acpi_processor_ffh_cstate_enter(struct acpi_processor_cx *cstate);
 #else
 static inline void acpi_processor_power_init_bm_check(struct
 						      acpi_processor_flags
 						      *flags, unsigned int cpu)
 {
 	flags->bm_check = 1;
+	return;
+}
+static inline int acpi_processor_ffh_cstate_probe(unsigned int cpu,
+		struct acpi_processor_cx *cx, struct acpi_power_register *reg)
+{
+	return -1;
+}
+static inline void acpi_processor_ffh_cstate_enter(
+		struct acpi_processor_cx *cstate)
+{
 	return;
 }
 #endif

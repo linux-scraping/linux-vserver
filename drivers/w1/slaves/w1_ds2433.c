@@ -13,7 +13,7 @@
 #include <linux/device.h>
 #include <linux/types.h>
 #include <linux/delay.h>
-#ifdef CONFIG_W1_F23_CRC
+#ifdef CONFIG_W1_SLAVE_DS2433_CRC
 #include <linux/crc16.h>
 
 #define CRC16_INIT		0
@@ -22,7 +22,6 @@
 #endif
 
 #include "../w1.h"
-#include "../w1_io.h"
 #include "../w1_int.h"
 #include "../w1_family.h"
 
@@ -63,7 +62,7 @@ static inline size_t w1_f23_fix_count(loff_t off, size_t count, size_t size)
 	return count;
 }
 
-#ifdef CONFIG_W1_F23_CRC
+#ifdef CONFIG_W1_SLAVE_DS2433_CRC
 static int w1_f23_refresh_block(struct w1_slave *sl, struct w1_f23_data *data,
 				int block)
 {
@@ -90,13 +89,13 @@ static int w1_f23_refresh_block(struct w1_slave *sl, struct w1_f23_data *data,
 
 	return 0;
 }
-#endif	/* CONFIG_W1_F23_CRC */
+#endif	/* CONFIG_W1_SLAVE_DS2433_CRC */
 
 static ssize_t w1_f23_read_bin(struct kobject *kobj, char *buf, loff_t off,
 			       size_t count)
 {
 	struct w1_slave *sl = kobj_to_w1_slave(kobj);
-#ifdef CONFIG_W1_F23_CRC
+#ifdef CONFIG_W1_SLAVE_DS2433_CRC
 	struct w1_f23_data *data = sl->family_data;
 	int i, min_page, max_page;
 #else
@@ -106,13 +105,9 @@ static ssize_t w1_f23_read_bin(struct kobject *kobj, char *buf, loff_t off,
 	if ((count = w1_f23_fix_count(off, count, W1_EEPROM_SIZE)) == 0)
 		return 0;
 
-	atomic_inc(&sl->refcnt);
-	if (down_interruptible(&sl->master->mutex)) {
-		count = 0;
-		goto out_dec;
-	}
+	mutex_lock(&sl->master->mutex);
 
-#ifdef CONFIG_W1_F23_CRC
+#ifdef CONFIG_W1_SLAVE_DS2433_CRC
 
 	min_page = (off >> W1_PAGE_BITS);
 	max_page = (off + count - 1) >> W1_PAGE_BITS;
@@ -124,7 +119,7 @@ static ssize_t w1_f23_read_bin(struct kobject *kobj, char *buf, loff_t off,
 	}
 	memcpy(buf, &data->memory[off], count);
 
-#else 	/* CONFIG_W1_F23_CRC */
+#else 	/* CONFIG_W1_SLAVE_DS2433_CRC */
 
 	/* read directly from the EEPROM */
 	if (w1_reset_select_slave(sl)) {
@@ -138,12 +133,10 @@ static ssize_t w1_f23_read_bin(struct kobject *kobj, char *buf, loff_t off,
 	w1_write_block(sl->master, wrbuf, 3);
 	w1_read_block(sl->master, buf, count);
 
-#endif	/* CONFIG_W1_F23_CRC */
+#endif	/* CONFIG_W1_SLAVE_DS2433_CRC */
 
 out_up:
-	up(&sl->master->mutex);
-out_dec:
-	atomic_dec(&sl->refcnt);
+	mutex_unlock(&sl->master->mutex);
 
 	return count;
 }
@@ -215,7 +208,7 @@ static ssize_t w1_f23_write_bin(struct kobject *kobj, char *buf, loff_t off,
 	if ((count = w1_f23_fix_count(off, count, W1_EEPROM_SIZE)) == 0)
 		return 0;
 
-#ifdef CONFIG_W1_F23_CRC
+#ifdef CONFIG_W1_SLAVE_DS2433_CRC
 	/* can only write full blocks in cached mode */
 	if ((off & W1_PAGE_MASK) || (count & W1_PAGE_MASK)) {
 		dev_err(&sl->dev, "invalid offset/count off=%d cnt=%zd\n",
@@ -230,13 +223,9 @@ static ssize_t w1_f23_write_bin(struct kobject *kobj, char *buf, loff_t off,
 			return -EINVAL;
 		}
 	}
-#endif	/* CONFIG_W1_F23_CRC */
+#endif	/* CONFIG_W1_SLAVE_DS2433_CRC */
 
-	atomic_inc(&sl->refcnt);
-	if (down_interruptible(&sl->master->mutex)) {
-		count = 0;
-		goto out_dec;
-	}
+	mutex_lock(&sl->master->mutex);
 
 	/* Can only write data to one page at a time */
 	idx = 0;
@@ -254,9 +243,7 @@ static ssize_t w1_f23_write_bin(struct kobject *kobj, char *buf, loff_t off,
 	}
 
 out_up:
-	up(&sl->master->mutex);
-out_dec:
-	atomic_dec(&sl->refcnt);
+	mutex_unlock(&sl->master->mutex);
 
 	return count;
 }
@@ -275,7 +262,7 @@ static struct bin_attribute w1_f23_bin_attr = {
 static int w1_f23_add_slave(struct w1_slave *sl)
 {
 	int err;
-#ifdef CONFIG_W1_F23_CRC
+#ifdef CONFIG_W1_SLAVE_DS2433_CRC
 	struct w1_f23_data *data;
 
 	data = kmalloc(sizeof(struct w1_f23_data), GFP_KERNEL);
@@ -284,24 +271,24 @@ static int w1_f23_add_slave(struct w1_slave *sl)
 	memset(data, 0, sizeof(struct w1_f23_data));
 	sl->family_data = data;
 
-#endif	/* CONFIG_W1_F23_CRC */
+#endif	/* CONFIG_W1_SLAVE_DS2433_CRC */
 
 	err = sysfs_create_bin_file(&sl->dev.kobj, &w1_f23_bin_attr);
 
-#ifdef CONFIG_W1_F23_CRC
+#ifdef CONFIG_W1_SLAVE_DS2433_CRC
 	if (err)
 		kfree(data);
-#endif	/* CONFIG_W1_F23_CRC */
+#endif	/* CONFIG_W1_SLAVE_DS2433_CRC */
 
 	return err;
 }
 
 static void w1_f23_remove_slave(struct w1_slave *sl)
 {
-#ifdef CONFIG_W1_F23_CRC
+#ifdef CONFIG_W1_SLAVE_DS2433_CRC
 	kfree(sl->family_data);
 	sl->family_data = NULL;
-#endif	/* CONFIG_W1_F23_CRC */
+#endif	/* CONFIG_W1_SLAVE_DS2433_CRC */
 	sysfs_remove_bin_file(&sl->dev.kobj, &w1_f23_bin_attr);
 }
 

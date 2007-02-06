@@ -4,7 +4,6 @@
  * Copyright (C) 1998 Harald Koerfgen, Frieder Streffer and Paul M. Antoine
  * Copyright (C) 2000, 2002  Maciej W. Rozycki
  */
-#include <linux/config.h>
 #include <linux/init.h>
 #include <linux/kernel.h>
 #include <linux/mm.h>
@@ -123,7 +122,7 @@ unsigned long __init prom_free_prom_memory(void)
 		addr += PAGE_SIZE;
 	}
 
-	printk("Freeing unused PROM memory: %ldk freed\n",
+	printk("Freeing unused PROM memory: %ldkb freed\n",
 	       (end - PAGE_SIZE) >> 10);
 
 	return end - PAGE_SIZE;

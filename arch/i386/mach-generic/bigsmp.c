@@ -3,9 +3,9 @@
  * Drives the local APIC in "clustered mode".
  */
 #define APIC_DEFINITION 1
-#include <linux/config.h>
 #include <linux/threads.h>
 #include <linux/cpumask.h>
+#include <asm/smp.h>
 #include <asm/mpspec.h>
 #include <asm/genapic.h>
 #include <asm/fixmap.h>
@@ -45,7 +45,7 @@ static struct dmi_system_id __initdata bigsmp_dmi_table[] = {
 };
 
 
-static __init int probe_bigsmp(void)
+static int probe_bigsmp(void)
 { 
 	if (def_to_bigsmp)
         	dmi_bigsmp = 1;

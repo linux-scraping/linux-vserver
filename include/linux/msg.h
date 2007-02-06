@@ -2,7 +2,6 @@
 #define _LINUX_MSG_H
 
 #include <linux/ipc.h>
-#include <linux/list.h>
 
 /* ipcs ctl commands */
 #define MSG_STAT 11
@@ -63,6 +62,7 @@ struct msginfo {
 #define MSGSEG (__MSGSEG <= 0xffff ? __MSGSEG : 0xffff)
 
 #ifdef __KERNEL__
+#include <linux/list.h>
 
 /* one msg_msg structure for each message */
 struct msg_msg {
@@ -91,6 +91,12 @@ struct msg_queue {
 	struct list_head q_receivers;
 	struct list_head q_senders;
 };
+
+/* Helper routines for sys_msgsnd and sys_msgrcv */
+extern long do_msgsnd(int msqid, long mtype, void __user *mtext,
+			size_t msgsz, int msgflg);
+extern long do_msgrcv(int msqid, long *pmtype, void __user *mtext,
+			size_t msgsz, long msgtyp, int msgflg);
 
 #endif /* __KERNEL__ */
 

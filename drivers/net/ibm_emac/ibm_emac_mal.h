@@ -19,12 +19,12 @@
 #ifndef __IBM_EMAC_MAL_H_
 #define __IBM_EMAC_MAL_H_
 
-#include <linux/config.h>
 #include <linux/init.h>
 #include <linux/list.h>
 #include <linux/netdevice.h>
 
 #include <asm/io.h>
+#include <asm/dcr.h>
 
 /*
  * These MAL "versions" probably aren't the real versions IBM uses for these 
@@ -192,6 +192,7 @@ struct mal_commac {
 
 struct ibm_ocp_mal {
 	int			dcrbase;
+	dcr_host_t		dcrhost;
 
 	struct list_head	poll_list;
 	struct net_device	poll_dev;
@@ -208,12 +209,12 @@ struct ibm_ocp_mal {
 
 static inline u32 get_mal_dcrn(struct ibm_ocp_mal *mal, int reg)
 {
-	return mfdcr(mal->dcrbase + reg);
+	return dcr_read(mal->dcrhost, mal->dcrbase + reg);
 }
 
 static inline void set_mal_dcrn(struct ibm_ocp_mal *mal, int reg, u32 val)
 {
-	mtdcr(mal->dcrbase + reg, val);
+	dcr_write(mal->dcrhost, mal->dcrbase + reg, val);
 }
 
 /* Register MAL devices */

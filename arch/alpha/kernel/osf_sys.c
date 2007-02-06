@@ -38,7 +38,6 @@
 #include <linux/uio.h>
 #include <linux/vfs.h>
 #include <linux/rcupdate.h>
-#include <linux/vs_cvirt.h>
 
 #include <asm/fpu.h>
 #include <asm/io.h>
@@ -112,22 +111,26 @@ struct osf_dirent_callback {
 
 static int
 osf_filldir(void *__buf, const char *name, int namlen, loff_t offset,
-	    ino_t ino, unsigned int d_type)
+	    u64 ino, unsigned int d_type)
 {
 	struct osf_dirent __user *dirent;
 	struct osf_dirent_callback *buf = (struct osf_dirent_callback *) __buf;
 	unsigned int reclen = ROUND_UP(NAME_OFFSET + namlen + 1);
+	unsigned int d_ino;
 
 	buf->error = -EINVAL;	/* only used if we fail */
 	if (reclen > buf->count)
 		return -EINVAL;
+	d_ino = ino;
+	if (sizeof(d_ino) < sizeof(ino) && d_ino != ino)
+		return -EOVERFLOW;
 	if (buf->basep) {
 		if (put_user(offset, buf->basep))
 			return -EFAULT;
 		buf->basep = NULL;
 	}
 	dirent = buf->dirent;
-	put_user(ino, &dirent->d_ino);
+	put_user(d_ino, &dirent->d_ino);
 	put_user(namlen, &dirent->d_namlen);
 	put_user(reclen, &dirent->d_reclen);
 	if (copy_to_user(dirent->d_name, name, namlen) ||
@@ -245,7 +248,7 @@ do_osf_statfs(struct dentry * dentry, struct osf_statfs __user *buffer,
 	      unsigned long bufsiz)
 {
 	struct kstatfs linux_stat;
-	int error = vfs_statfs(dentry->d_inode->i_sb, &linux_stat);
+	int error = vfs_statfs(dentry, &linux_stat);
 	if (!error)
 		error = linux_to_osf_statfs(&linux_stat, buffer, bufsiz);
 	return error;	
@@ -274,7 +277,7 @@ osf_fstatfs(unsigned long fd, struct osf_statfs __user *buffer, unsigned long bu
 	retval = -EBADF;
 	file = fget(fd);
 	if (file) {
-		retval = do_osf_statfs(file->f_dentry, buffer, bufsiz);
+		retval = do_osf_statfs(file->f_path.dentry, buffer, bufsiz);
 		fput(file);
 	}
 	return retval;
@@ -400,20 +403,18 @@ asmlinkage int
 osf_utsname(char __user *name)
 {
 	int error;
-	struct new_utsname *ptr;
 
 	down_read(&uts_sem);
-	ptr = vx_new_utsname();
 	error = -EFAULT;
-	if (copy_to_user(name + 0, ptr->sysname, 32))
+	if (copy_to_user(name + 0, utsname()->sysname, 32))
 		goto out;
-	if (copy_to_user(name + 32, ptr->nodename, 32))
+	if (copy_to_user(name + 32, utsname()->nodename, 32))
 		goto out;
-	if (copy_to_user(name + 64, ptr->release, 32))
+	if (copy_to_user(name + 64, utsname()->release, 32))
 		goto out;
-	if (copy_to_user(name + 96, ptr->version, 32))
+	if (copy_to_user(name + 96, utsname()->version, 32))
 		goto out;
-	if (copy_to_user(name + 128, ptr->machine, 32))
+	if (copy_to_user(name + 128, utsname()->machine, 32))
 		goto out;
 
 	error = 0;
@@ -442,7 +443,6 @@ osf_getdomainname(char __user *name, int namelen)
 {
 	unsigned len;
 	int i;
-	char *domainname;
 
 	if (!access_ok(VERIFY_WRITE, name, namelen))
 		return -EFAULT;
@@ -452,10 +452,9 @@ osf_getdomainname(char __user *name, int namelen)
 		len = 32;
 
 	down_read(&uts_sem);
-	domainname = vx_new_uts(domainname);
 	for (i = 0; i < len; ++i) {
-		__put_user(domainname[i], name + i);
-		if (domainname[i] == '\0')
+		__put_user(utsname()->domainname[i], name + i);
+		if (utsname()->domainname[i] == '\0')
 			break;
 	}
 	up_read(&uts_sem);
@@ -612,30 +611,30 @@ osf_sigstack(struct sigstack __user *uss, struct sigstack __user *uoss)
 asmlinkage long
 osf_sysinfo(int command, char __user *buf, long count)
 {
+	char *sysinfo_table[] = {
+		utsname()->sysname,
+		utsname()->nodename,
+		utsname()->release,
+		utsname()->version,
+		utsname()->machine,
+		"alpha",	/* instruction set architecture */
+		"dummy",	/* hardware serial number */
+		"dummy",	/* hardware manufacturer */
+		"dummy",	/* secure RPC domain */
+	};
 	unsigned long offset;
 	char *res;
 	long len, err = -EINVAL;
 
 	offset = command-1;
-	if (offset >= 9) {
+	if (offset >= ARRAY_SIZE(sysinfo_table)) {
 		/* Digital UNIX has a few unpublished interfaces here */
 		printk("sysinfo(%d)", command);
 		goto out;
 	}
-	
+
 	down_read(&uts_sem);
-	switch (offset)
-	{
-	case 0:	res = vx_new_uts(sysname);  break;
-	case 1:	res = vx_new_uts(nodename); break;
-	case 2:	res = vx_new_uts(release);  break;
-	case 3:	res = vx_new_uts(version);  break;
-	case 4: res = vx_new_uts(machine);  break;
-	case 5:	res = "alpha";              break;
-	default:
-		res = "dummy";
-		break;
-	}
+	res = sysinfo_table[offset];
 	len = strlen(res)+1;
 	if (len > count)
 		len = count;
@@ -886,7 +885,7 @@ osf_gettimeofday(struct timeval32 __user *tv, struct timezone __user *tz)
 {
 	if (tv) {
 		struct timeval ktv;
-		do_gettimeofday(&ktv);
+		vx_gettimeofday(&ktv);
 		if (put_tv32(tv, &ktv))
 			return -EFAULT;
 	}
@@ -980,7 +979,7 @@ osf_select(int n, fd_set __user *inp, fd_set __user *outp, fd_set __user *exp,
 	long timeout;
 	int ret = -EINVAL;
 	struct fdtable *fdt;
-	int max_fdset;
+	int max_fds;
 
 	timeout = MAX_SCHEDULE_TIMEOUT;
 	if (tvp) {
@@ -1004,9 +1003,9 @@ osf_select(int n, fd_set __user *inp, fd_set __user *outp, fd_set __user *exp,
 
 	rcu_read_lock();
 	fdt = files_fdtable(current->files);
-	max_fdset = fdt->max_fdset;
+	max_fds = fdt->max_fds;
 	rcu_read_unlock();
-	if (n < 0 || n > max_fdset)
+	if (n < 0 || n > max_fds)
 		goto out_nofds;
 
 	/*

@@ -1,9 +1,9 @@
 /* linux/arch/arm/mach-s3c2410/pm.c
  *
- * Copyright (c) 2004 Simtec Electronics
+ * Copyright (c) 2004,2006 Simtec Electronics
  *	Ben Dooks <ben@simtec.co.uk>
  *
- * S3C2410 Power Manager (Suspend-To-RAM) support
+ * S3C24XX Power Manager (Suspend-To-RAM) support
  *
  * See Documentation/arm/Samsung-S3C24XX/Suspend.txt for more information
  *
@@ -24,12 +24,8 @@
  * Parts based on arch/arm/mach-pxa/pm.c
  *
  * Thanks to Dimitry Andric for debugging
- *
- * Modifications:
- *     10-Mar-2005 LCVR  Changed S3C2410_VA_UART to S3C24XX_VA_UART
 */
 
-#include <linux/config.h>
 #include <linux/init.h>
 #include <linux/suspend.h>
 #include <linux/errno.h>
@@ -38,7 +34,9 @@
 #include <linux/crc32.h>
 #include <linux/ioport.h>
 #include <linux/delay.h>
+#include <linux/serial_core.h>
 
+#include <asm/cacheflush.h>
 #include <asm/hardware.h>
 #include <asm/io.h>
 
@@ -55,10 +53,6 @@
 /* for external use */
 
 unsigned long s3c_pm_flags;
-
-/* cache functions from arch/arm/mm/proc-arm920.S */
-
-extern void arm920_flush_kern_cache_all(void);
 
 #define PFX "s3c24xx-pm: "
 
@@ -87,19 +81,6 @@ static struct sleep_save core_save[] = {
 	SAVE_ITEM(S3C2410_UPLLCON),
 	SAVE_ITEM(S3C2410_CLKSLOW),
 	SAVE_ITEM(S3C2410_REFRESH),
-};
-
-/* this lot should be really saved by the IRQ code */
-static struct sleep_save irq_save[] = {
-	SAVE_ITEM(S3C2410_EXTINT0),
-	SAVE_ITEM(S3C2410_EXTINT1),
-	SAVE_ITEM(S3C2410_EXTINT2),
-	SAVE_ITEM(S3C2410_EINFLT0),
-	SAVE_ITEM(S3C2410_EINFLT1),
-	SAVE_ITEM(S3C2410_EINFLT2),
-	SAVE_ITEM(S3C2410_EINFLT3),
-	SAVE_ITEM(S3C2410_EINTMASK),
-	SAVE_ITEM(S3C2410_INTMSK)
 };
 
 static struct sleep_save gpio_save[] = {
@@ -162,7 +143,7 @@ static struct sleep_save uart_save[] = {
 
 extern void printascii(const char *);
 
-static void pm_dbg(const char *fmt, ...)
+void pm_dbg(const char *fmt, ...)
 {
 	va_list va;
 	char buff[256];
@@ -470,15 +451,14 @@ static void s3c2410_pm_check_resume_pin(unsigned int pin, unsigned int irqoffs)
 		irqstate = s3c_irqwake_eintmask & (1L<<irqoffs);
 
 	pinstate = s3c2410_gpio_getcfg(pin);
-	pinstate >>= S3C2410_GPIO_OFFSET(pin)*2;
 
 	if (!irqstate) {
-		if (pinstate == 0x02)
+		if (pinstate == S3C2410_GPIO_IRQ)
 			DBG("Leaving IRQ %d (pin %d) enabled\n", irq, pin);
 	} else {
-		if (pinstate == 0x02) {
+		if (pinstate == S3C2410_GPIO_IRQ) {
 			DBG("Disabling IRQ %d (pin %d)\n", irq, pin);
-			s3c2410_gpio_cfgpin(pin, 0x00);
+			s3c2410_gpio_cfgpin(pin, S3C2410_GPIO_INPUT);
 		}
 	}
 }
@@ -506,6 +486,9 @@ static void s3c2410_pm_configure_extint(void)
 	}
 }
 
+void (*pm_cpu_prep)(void);
+void (*pm_cpu_sleep)(void);
+
 #define any_allowed(mask, allow) (((mask) & (allow)) != (allow))
 
 /* s3c2410_pm_enter
@@ -516,13 +499,17 @@ static void s3c2410_pm_configure_extint(void)
 static int s3c2410_pm_enter(suspend_state_t state)
 {
 	unsigned long regs_save[16];
-	unsigned long tmp;
 
 	/* ensure the debug is initialised (if enabled) */
 
 	s3c2410_pm_debug_init();
 
 	DBG("s3c2410_pm_enter(%d)\n", state);
+
+	if (pm_cpu_prep == NULL || pm_cpu_sleep == NULL) {
+		printk(KERN_ERR PFX "error: no cpu sleep functions set\n");
+		return -EINVAL;
+	}
 
 	if (state != PM_SUSPEND_MEM) {
 		printk(KERN_ERR PFX "error: only PM_SUSPEND_MEM supported\n");
@@ -551,17 +538,9 @@ static int s3c2410_pm_enter(suspend_state_t state)
 
 	DBG("s3c2410_sleep_save_phys=0x%08lx\n", s3c2410_sleep_save_phys);
 
-	/* ensure at least GESTATUS3 has the resume address */
-
-	__raw_writel(virt_to_phys(s3c2410_cpu_resume), S3C2410_GSTATUS3);
-
-	DBG("GSTATUS3 0x%08x\n", __raw_readl(S3C2410_GSTATUS3));
-	DBG("GSTATUS4 0x%08x\n", __raw_readl(S3C2410_GSTATUS4));
-
 	/* save all necessary core registers not covered by the drivers */
 
 	s3c2410_pm_do_save(gpio_save, ARRAY_SIZE(gpio_save));
-	s3c2410_pm_do_save(irq_save, ARRAY_SIZE(irq_save));
 	s3c2410_pm_do_save(core_save, ARRAY_SIZE(core_save));
 	s3c2410_pm_do_save(uart_save, ARRAY_SIZE(uart_save));
 
@@ -578,10 +557,16 @@ static int s3c2410_pm_enter(suspend_state_t state)
 	/* ack any outstanding external interrupts before we go to sleep */
 
 	__raw_writel(__raw_readl(S3C2410_EINTPEND), S3C2410_EINTPEND);
+	__raw_writel(__raw_readl(S3C2410_INTPND), S3C2410_INTPND);
+	__raw_writel(__raw_readl(S3C2410_SRCPND), S3C2410_SRCPND);
+
+	/* call cpu specific preperation */
+
+	pm_cpu_prep();
 
 	/* flush cache back to ram */
 
-	arm920_flush_kern_cache_all();
+	flush_cache_all();
 
 	s3c2410_pm_check_store();
 
@@ -589,23 +574,23 @@ static int s3c2410_pm_enter(suspend_state_t state)
 
 	__raw_writel(0x00, S3C2410_CLKCON);  /* turn off clocks over sleep */
 
-	s3c2410_cpu_suspend(regs_save);
+	/* s3c2410_cpu_save will also act as our return point from when
+	 * we resume as it saves its own register state, so use the return
+	 * code to differentiate return from save and return from sleep */
+
+	if (s3c2410_cpu_save(regs_save) == 0) {
+		flush_cache_all();
+		pm_cpu_sleep();
+	}
 
 	/* restore the cpu state */
 
 	cpu_init();
 
-	/* unset the return-from-sleep flag, to ensure reset */
-
-	tmp = __raw_readl(S3C2410_GSTATUS2);
-	tmp &= S3C2410_GSTATUS2_OFFRESET;
-	__raw_writel(tmp, S3C2410_GSTATUS2);
-
 	/* restore the system state */
 
 	s3c2410_pm_do_restore_core(core_save, ARRAY_SIZE(core_save));
 	s3c2410_pm_do_restore(gpio_save, ARRAY_SIZE(gpio_save));
-	s3c2410_pm_do_restore(irq_save, ARRAY_SIZE(irq_save));
 	s3c2410_pm_do_restore(uart_save, ARRAY_SIZE(uart_save));
 
 	s3c2410_pm_debug_init();

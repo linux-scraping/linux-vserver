@@ -13,7 +13,6 @@
  *             2 of the License, or(at your option) any later version.
  */
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/in6.h>
 #include <linux/ipv6.h>
@@ -53,20 +52,20 @@ EXPORT_SYMBOL_GPL(inet6_csk_bind_conflict);
 /*
  * request_sock (formerly open request) hash tables.
  */
-static u32 inet6_synq_hash(const struct in6_addr *raddr, const u16 rport,
+static u32 inet6_synq_hash(const struct in6_addr *raddr, const __be16 rport,
 			   const u32 rnd, const u16 synq_hsize)
 {
-	u32 a = raddr->s6_addr32[0];
-	u32 b = raddr->s6_addr32[1];
-	u32 c = raddr->s6_addr32[2];
+	u32 a = (__force u32)raddr->s6_addr32[0];
+	u32 b = (__force u32)raddr->s6_addr32[1];
+	u32 c = (__force u32)raddr->s6_addr32[2];
 
 	a += JHASH_GOLDEN_RATIO;
 	b += JHASH_GOLDEN_RATIO;
 	c += rnd;
 	__jhash_mix(a, b, c);
 
-	a += raddr->s6_addr32[3];
-	b += (u32)rport;
+	a += (__force u32)raddr->s6_addr32[3];
+	b += (__force u32)rport;
 	__jhash_mix(a, b, c);
 
 	return c & (synq_hsize - 1);
@@ -74,7 +73,7 @@ static u32 inet6_synq_hash(const struct in6_addr *raddr, const u16 rport,
 
 struct request_sock *inet6_csk_search_req(const struct sock *sk,
 					  struct request_sock ***prevp,
-					  const __u16 rport,
+					  const __be16 rport,
 					  const struct in6_addr *raddr,
 					  const struct in6_addr *laddr,
 					  const int iif)
@@ -158,6 +157,7 @@ int inet6_csk_xmit(struct sk_buff *skb, int ipfragok)
 	fl.oif = sk->sk_bound_dev_if;
 	fl.fl_ip_sport = inet->sport;
 	fl.fl_ip_dport = inet->dport;
+	security_sk_classify_flow(sk, &fl);
 
 	if (np->opt && np->opt->srcrt) {
 		struct rt0_hdr *rt0 = (struct rt0_hdr *)np->opt->srcrt;
@@ -186,9 +186,7 @@ int inet6_csk_xmit(struct sk_buff *skb, int ipfragok)
 			return err;
 		}
 
-		ip6_dst_store(sk, dst, NULL);
-		sk->sk_route_caps = dst->dev->features &
-			~(NETIF_F_IP_CSUM | NETIF_F_TSO);
+		__ip6_dst_store(sk, dst, NULL, NULL);
 	}
 
 	skb->dst = dst_clone(dst);

@@ -11,7 +11,6 @@
  * Free Software Foundation; either version 2 of the License, or (at your
  * option) any later version.
  */
-#include <linux/config.h>
 #include <linux/kernel.h>
 #include <linux/pci.h>
 #include <linux/kdev_t.h>
@@ -359,13 +358,12 @@ ev64360_setup_mtd(void)
 
 	ptbl_entries = 3;
 
-	if ((ptbl = kmalloc(ptbl_entries * sizeof(struct mtd_partition),
+	if ((ptbl = kzalloc(ptbl_entries * sizeof(struct mtd_partition),
 		GFP_KERNEL)) == NULL) {
 
 		printk(KERN_WARNING "Can't alloc MTD partition table\n");
 		return -ENOMEM;
 	}
-	memset(ptbl, 0, ptbl_entries * sizeof(struct mtd_partition));
 
 	ptbl[0].name = "reserved";
 	ptbl[0].offset = 0;

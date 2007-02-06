@@ -17,14 +17,14 @@
  *  with this program; if not, write to the Free Software Foundation, Inc.,
  *  59 Temple Place - Suite 330, Boston MA 02111-1307, USA.
  */
-#include <linux/config.h>
 #include <linux/init.h>
 #include <linux/sched.h>
 #include <linux/ioport.h>
+#include <linux/irq.h>
 #include <linux/mm.h>
 #include <linux/delay.h>
 #include <linux/interrupt.h>
-#include <linux/serial_ip3106.h>
+#include <linux/serial_pnx8xxx.h>
 #include <linux/pm.h>
 
 #include <asm/cpu.h>
@@ -49,19 +49,33 @@ extern void pnx8550_machine_halt(void);
 extern void pnx8550_machine_power_off(void);
 extern struct resource ioport_resource;
 extern struct resource iomem_resource;
-extern void (*board_time_init)(void);
 extern void pnx8550_time_init(void);
-extern void (*board_timer_setup)(struct irqaction *irq);
-extern void pnx8550_timer_setup(struct irqaction *irq);
 extern void rs_kgdb_hook(int tty_no);
 extern void prom_printf(char *fmt, ...);
 extern char *prom_getcmdline(void);
 
 struct resource standard_io_resources[] = {
-	{"dma1", 0x00, 0x1f, IORESOURCE_BUSY},
-	{"timer", 0x40, 0x5f, IORESOURCE_BUSY},
-	{"dma page reg", 0x80, 0x8f, IORESOURCE_BUSY},
-	{"dma2", 0xc0, 0xdf, IORESOURCE_BUSY},
+	{
+		.start	= 0x00,
+		.end	= 0x1f,
+		.name	= "dma1",
+		.flags	= IORESOURCE_BUSY
+	}, {
+		.start	= 0x40,
+		.end	= 0x5f,
+		.name	= "timer",
+		.flags	= IORESOURCE_BUSY
+	}, {
+		.start	= 0x80,
+		.end	= 0x8f,
+		.name	= "dma page reg",
+		.flags	= IORESOURCE_BUSY
+	}, {
+		.start	= 0xc0,
+		.end	= 0xdf,
+		.name	= "dma2",
+		.flags	= IORESOURCE_BUSY
+	},
 };
 
 #define STANDARD_IO_RESOURCES (sizeof(standard_io_resources)/sizeof(struct resource))
@@ -82,7 +96,7 @@ unsigned long get_system_mem_size(void)
 
 int pnx8550_console_port = -1;
 
-void __init plat_setup(void)
+void __init plat_mem_setup(void)
 {
 	int i;
 	char* argptr;
@@ -94,7 +108,6 @@ void __init plat_setup(void)
         pm_power_off = pnx8550_machine_power_off;
 
 	board_time_init = pnx8550_time_init;
-	board_timer_setup = pnx8550_timer_setup;
 
 	/* Clear the Global 2 Register, PCI Inta Output Enable Registers
 	   Bit 1:Enable DAC Powerdown
@@ -131,7 +144,7 @@ void __init plat_setup(void)
 		/* We must initialize the UART (console) before prom_printf */
 		/* Set LCR to 8-bit and BAUD to 38400 (no 5)                */
 		ip3106_lcr(UART_BASE, pnx8550_console_port) =
-			IP3106_UART_LCR_8BIT;
+			PNX8XXX_UART_LCR_8BIT;
 		ip3106_baud(UART_BASE, pnx8550_console_port) = 5;
 	}
 

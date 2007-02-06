@@ -34,7 +34,6 @@
 #include "dvb_frontend.h"
 #include "dvb-bt8xx.h"
 #include "bt878.h"
-#include "dvb-pll.h"
 
 static int debug;
 
@@ -67,7 +66,7 @@ static void dvb_bt8xx_task(unsigned long data)
 
 static int dvb_bt8xx_start_feed(struct dvb_demux_feed *dvbdmxfeed)
 {
-	struct dvb_demux *dvbdmx = dvbdmxfeed->demux;
+	struct dvb_demux*dvbdmx = dvbdmxfeed->demux;
 	struct dvb_bt8xx_card *card = dvbdmx->priv;
 	int rc;
 
@@ -147,11 +146,14 @@ static int thomson_dtt7579_demod_init(struct dvb_frontend* fe)
 	return 0;
 }
 
-static int thomson_dtt7579_pll_set(struct dvb_frontend* fe, struct dvb_frontend_parameters* params, u8* pllbuf)
+static int thomson_dtt7579_tuner_calc_regs(struct dvb_frontend* fe, struct dvb_frontend_parameters* params, u8* pllbuf, int buf_len)
 {
 	u32 div;
 	unsigned char bs = 0;
 	unsigned char cp = 0;
+
+	if (buf_len < 5)
+		return -EINVAL;
 
 	div = (((params->frequency + 83333) * 3) / 500000) + IF_FREQUENCYx6;
 
@@ -169,27 +171,25 @@ static int thomson_dtt7579_pll_set(struct dvb_frontend* fe, struct dvb_frontend_
 	else
 		bs = 0x08;
 
-	pllbuf[0] = 0xc0; // Note: non-linux standard PLL i2c address
+	pllbuf[0] = 0x60;
 	pllbuf[1] = div >> 8;
 	pllbuf[2] = div & 0xff;
 	pllbuf[3] = cp;
 	pllbuf[4] = bs;
 
-	return 0;
+	return 5;
 }
 
 static struct mt352_config thomson_dtt7579_config = {
 	.demod_address = 0x0f,
 	.demod_init = thomson_dtt7579_demod_init,
-	.pll_set = thomson_dtt7579_pll_set,
 };
 
 static struct zl10353_config thomson_dtt7579_zl10353_config = {
 	.demod_address = 0x0f,
-	.pll_set = thomson_dtt7579_pll_set,
 };
 
-static int cx24108_pll_set(struct dvb_frontend* fe, struct dvb_frontend_parameters* params)
+static int cx24108_tuner_set_params(struct dvb_frontend* fe, struct dvb_frontend_parameters* params)
 {
 	u32 freq = params->frequency;
 
@@ -242,7 +242,7 @@ static int cx24108_pll_set(struct dvb_frontend* fe, struct dvb_frontend_paramete
 	return 0;
 }
 
-static int pinnsat_pll_init(struct dvb_frontend* fe)
+static int pinnsat_tuner_init(struct dvb_frontend* fe)
 {
 	struct dvb_bt8xx_card *card = fe->dvb->priv;
 
@@ -252,7 +252,7 @@ static int pinnsat_pll_init(struct dvb_frontend* fe)
 	return 0;
 }
 
-static int pinnsat_pll_sleep(struct dvb_frontend* fe)
+static int pinnsat_tuner_sleep(struct dvb_frontend* fe)
 {
 	struct dvb_bt8xx_card *card = fe->dvb->priv;
 
@@ -263,12 +263,9 @@ static int pinnsat_pll_sleep(struct dvb_frontend* fe)
 
 static struct cx24110_config pctvsat_config = {
 	.demod_address = 0x55,
-	.pll_init = pinnsat_pll_init,
-	.pll_set = cx24108_pll_set,
-	.pll_sleep = pinnsat_pll_sleep,
 };
 
-static int microtune_mt7202dtf_pll_set(struct dvb_frontend* fe, struct dvb_frontend_parameters* params)
+static int microtune_mt7202dtf_tuner_set_params(struct dvb_frontend* fe, struct dvb_frontend_parameters* params)
 {
 	struct dvb_bt8xx_card *card = (struct dvb_bt8xx_card *) fe->dvb->priv;
 	u8 cfg, cpump, band_select;
@@ -302,6 +299,8 @@ static int microtune_mt7202dtf_pll_set(struct dvb_frontend* fe, struct dvb_front
 	data[2] = ((div >> 10) & 0x60) | cfg;
 	data[3] = (cpump << 6) | band_select;
 
+	if (fe->ops.i2c_gate_ctrl)
+		fe->ops.i2c_gate_ctrl(fe, 1);
 	i2c_transfer(card->i2c_adapter, &msg, 1);
 	return (div * 166666 - 36000000);
 }
@@ -315,7 +314,6 @@ static int microtune_mt7202dtf_request_firmware(struct dvb_frontend* fe, const s
 
 static struct sp887x_config microtune_mt7202dtf_config = {
 	.demod_address = 0x70,
-	.pll_set = microtune_mt7202dtf_pll_set,
 	.request_firmware = microtune_mt7202dtf_request_firmware,
 };
 
@@ -342,11 +340,13 @@ static int advbt771_samsung_tdtc9251dh0_demod_init(struct dvb_frontend* fe)
 	return 0;
 }
 
-static int advbt771_samsung_tdtc9251dh0_pll_set(struct dvb_frontend* fe, struct dvb_frontend_parameters* params, u8* pllbuf)
+static int advbt771_samsung_tdtc9251dh0_tuner_calc_regs(struct dvb_frontend* fe, struct dvb_frontend_parameters* params, u8* pllbuf, int buf_len)
 {
 	u32 div;
 	unsigned char bs = 0;
 	unsigned char cp = 0;
+
+	if (buf_len < 5) return -EINVAL;
 
 	div = (((params->frequency + 83333) * 3) / 500000) + IF_FREQUENCYx6;
 
@@ -388,19 +388,18 @@ static int advbt771_samsung_tdtc9251dh0_pll_set(struct dvb_frontend* fe, struct 
 	else
 		bs = 0x08;
 
-	pllbuf[0] = 0xc2; // Note: non-linux standard PLL i2c address
+	pllbuf[0] = 0x61;
 	pllbuf[1] = div >> 8;
 	pllbuf[2] = div & 0xff;
 	pllbuf[3] = cp;
 	pllbuf[4] = bs;
 
-	return 0;
+	return 5;
 }
 
 static struct mt352_config advbt771_samsung_tdtc9251dh0_config = {
 	.demod_address = 0x0f,
 	.demod_init = advbt771_samsung_tdtc9251dh0_demod_init,
-	.pll_set = advbt771_samsung_tdtc9251dh0_pll_set,
 };
 
 static struct dst_config dst_config = {
@@ -460,7 +459,7 @@ static struct or51211_config or51211_config = {
 	.sleep = or51211_sleep,
 };
 
-static int vp3021_alps_tded4_pll_set(struct dvb_frontend* fe, struct dvb_frontend_parameters* params)
+static int vp3021_alps_tded4_tuner_set_params(struct dvb_frontend* fe, struct dvb_frontend_parameters* params)
 {
 	struct dvb_bt8xx_card *card = (struct dvb_bt8xx_card *) fe->dvb->priv;
 	u8 buf[4];
@@ -483,6 +482,8 @@ static int vp3021_alps_tded4_pll_set(struct dvb_frontend* fe, struct dvb_fronten
 	else
 		return -EINVAL;
 
+	if (fe->ops.i2c_gate_ctrl)
+		fe->ops.i2c_gate_ctrl(fe, 1);
 	i2c_transfer(card->i2c_adapter, &msg, 1);
 	return 0;
 }
@@ -490,7 +491,6 @@ static int vp3021_alps_tded4_pll_set(struct dvb_frontend* fe, struct dvb_fronten
 static struct nxt6000_config vp3021_alps_tded4_config = {
 	.demod_address = 0x0a,
 	.clock_inversion = 1,
-	.pll_set = vp3021_alps_tded4_pll_set,
 };
 
 static int digitv_alps_tded4_demod_init(struct dvb_frontend* fe)
@@ -511,14 +511,17 @@ static int digitv_alps_tded4_demod_init(struct dvb_frontend* fe)
 	return 0;
 }
 
-static int digitv_alps_tded4_pll_set(struct dvb_frontend* fe, struct dvb_frontend_parameters* params, u8* pllbuf)
+static int digitv_alps_tded4_tuner_calc_regs(struct dvb_frontend* fe, struct dvb_frontend_parameters* params, u8* pllbuf, int buf_len)
 {
 	u32 div;
 	struct dvb_ofdm_parameters *op = &params->u.ofdm;
 
+	if (buf_len < 5)
+		return -EINVAL;
+
 	div = (((params->frequency + 83333) * 3) / 500000) + IF_FREQUENCYx6;
 
-	pllbuf[0] = 0xc2;
+	pllbuf[0] = 0x61;
 	pllbuf[1] = (div >> 8) & 0x7F;
 	pllbuf[2] = div & 0xFF;
 	pllbuf[3] = 0x85;
@@ -535,7 +538,7 @@ static int digitv_alps_tded4_pll_set(struct dvb_frontend* fe, struct dvb_fronten
 	if (op->bandwidth == 8)
 		pllbuf[4] |= 0x04;
 
-	return 0;
+	return 5;
 }
 
 static void digitv_alps_tded4_reset(struct dvb_bt8xx_card *bt)
@@ -562,43 +565,12 @@ static void digitv_alps_tded4_reset(struct dvb_bt8xx_card *bt)
 static struct mt352_config digitv_alps_tded4_config = {
 	.demod_address = 0x0a,
 	.demod_init = digitv_alps_tded4_demod_init,
-	.pll_set = digitv_alps_tded4_pll_set,
 };
-
-static int tdvs_tua6034_pll_set(struct dvb_frontend* fe, struct dvb_frontend_parameters* params)
-{
-	struct dvb_bt8xx_card *card = (struct dvb_bt8xx_card *) fe->dvb->priv;
-	u8 buf[4];
-	struct i2c_msg msg = { .addr = 0x61, .flags = 0, .buf = buf, .len = sizeof(buf) };
-	int err;
-
-	dvb_pll_configure(&dvb_pll_tdvs_tua6034, buf, params->frequency, 0);
-	dprintk("%s: tuner at 0x%02x bytes: 0x%02x 0x%02x 0x%02x 0x%02x\n",
-		__FUNCTION__, msg.addr, buf[0],buf[1],buf[2],buf[3]);
-	if ((err = i2c_transfer(card->i2c_adapter, &msg, 1)) != 1) {
-		printk(KERN_WARNING "dvb-bt8xx: %s error "
-			"(addr %02x <- %02x, err = %i)\n",
-			__FUNCTION__, buf[0], buf[1], err);
-		if (err < 0)
-			return err;
-		else
-			return -EREMOTEIO;
-	}
-
-	/* Set the Auxiliary Byte. */
-	buf[2] &= ~0x20;
-	buf[2] |= 0x18;
-	buf[3] = 0x50;
-	i2c_transfer(card->i2c_adapter, &msg, 1);
-
-	return 0;
-}
 
 static struct lgdt330x_config tdvs_tua6034_config = {
 	.demod_address    = 0x0e,
 	.demod_chip       = LGDT3303,
 	.serial_mpeg      = 0x40, /* TPSERIAL for 3303 in TOP_CONTROL */
-	.pll_set          = tdvs_tua6034_pll_set,
 };
 
 static void lgdt330x_reset(struct dvb_bt8xx_card *bt)
@@ -616,28 +588,30 @@ static void lgdt330x_reset(struct dvb_bt8xx_card *bt)
 
 static void frontend_init(struct dvb_bt8xx_card *card, u32 type)
 {
-	int ret;
 	struct dst_state* state = NULL;
 
 	switch(type) {
 	case BTTV_BOARD_DVICO_DVBT_LITE:
-		card->fe = mt352_attach(&thomson_dtt7579_config, card->i2c_adapter);
+		card->fe = dvb_attach(mt352_attach, &thomson_dtt7579_config, card->i2c_adapter);
 
 		if (card->fe == NULL)
-			card->fe = zl10353_attach(&thomson_dtt7579_zl10353_config,
+			card->fe = dvb_attach(zl10353_attach, &thomson_dtt7579_zl10353_config,
 						  card->i2c_adapter);
 
 		if (card->fe != NULL) {
-			card->fe->ops->info.frequency_min = 174000000;
-			card->fe->ops->info.frequency_max = 862000000;
+			card->fe->ops.tuner_ops.calc_regs = thomson_dtt7579_tuner_calc_regs;
+			card->fe->ops.info.frequency_min = 174000000;
+			card->fe->ops.info.frequency_max = 862000000;
 		}
 		break;
 
 	case BTTV_BOARD_DVICO_FUSIONHDTV_5_LITE:
 		lgdt330x_reset(card);
-		card->fe = lgdt330x_attach(&tdvs_tua6034_config, card->i2c_adapter);
-		if (card->fe != NULL)
+		card->fe = dvb_attach(lgdt330x_attach, &tdvs_tua6034_config, card->i2c_adapter);
+		if (card->fe != NULL) {
+			dvb_attach(lgh06xf_attach, card->fe, card->i2c_adapter);
 			dprintk ("dvb_bt8xx: lgdt330x detected\n");
+		}
 		break;
 
 	case BTTV_BOARD_NEBULA_DIGITV:
@@ -648,59 +622,74 @@ static void frontend_init(struct dvb_bt8xx_card *card, u32 type)
 
 		/* Old Nebula (marked (c)2003 on high profile pci card) has nxt6000 demod */
 		digitv_alps_tded4_reset(card);
-		card->fe = nxt6000_attach(&vp3021_alps_tded4_config, card->i2c_adapter);
+		card->fe = dvb_attach(nxt6000_attach, &vp3021_alps_tded4_config, card->i2c_adapter);
 		if (card->fe != NULL) {
+			card->fe->ops.tuner_ops.set_params = vp3021_alps_tded4_tuner_set_params;
 			dprintk ("dvb_bt8xx: an nxt6000 was detected on your digitv card\n");
 			break;
 		}
 
 		/* New Nebula (marked (c)2005 on low profile pci card) has mt352 demod */
 		digitv_alps_tded4_reset(card);
-		card->fe = mt352_attach(&digitv_alps_tded4_config, card->i2c_adapter);
+		card->fe = dvb_attach(mt352_attach, &digitv_alps_tded4_config, card->i2c_adapter);
 
-		if (card->fe != NULL)
+		if (card->fe != NULL) {
+			card->fe->ops.tuner_ops.calc_regs = digitv_alps_tded4_tuner_calc_regs;
 			dprintk ("dvb_bt8xx: an mt352 was detected on your digitv card\n");
+		}
 		break;
 
 	case BTTV_BOARD_AVDVBT_761:
-		card->fe = sp887x_attach(&microtune_mt7202dtf_config, card->i2c_adapter);
+		card->fe = dvb_attach(sp887x_attach, &microtune_mt7202dtf_config, card->i2c_adapter);
+		if (card->fe) {
+			card->fe->ops.tuner_ops.set_params = microtune_mt7202dtf_tuner_set_params;
+		}
 		break;
 
 	case BTTV_BOARD_AVDVBT_771:
-		card->fe = mt352_attach(&advbt771_samsung_tdtc9251dh0_config, card->i2c_adapter);
+		card->fe = dvb_attach(mt352_attach, &advbt771_samsung_tdtc9251dh0_config, card->i2c_adapter);
 		if (card->fe != NULL) {
-			card->fe->ops->info.frequency_min = 174000000;
-			card->fe->ops->info.frequency_max = 862000000;
+			card->fe->ops.tuner_ops.calc_regs = advbt771_samsung_tdtc9251dh0_tuner_calc_regs;
+			card->fe->ops.info.frequency_min = 174000000;
+			card->fe->ops.info.frequency_max = 862000000;
 		}
 		break;
 
 	case BTTV_BOARD_TWINHAN_DST:
 		/*	DST is not a frontend driver !!!		*/
-		state = (struct dst_state *) kmalloc(sizeof (struct dst_state), GFP_KERNEL);
+		state = kmalloc(sizeof (struct dst_state), GFP_KERNEL);
+		if (!state) {
+			printk("dvb_bt8xx: No memory\n");
+			break;
+		}
 		/*	Setup the Card					*/
 		state->config = &dst_config;
 		state->i2c = card->i2c_adapter;
 		state->bt = card->bt;
-
+		state->dst_ca = NULL;
 		/*	DST is not a frontend, attaching the ASIC	*/
-		if ((dst_attach(state, &card->dvb_adapter)) == NULL) {
+		if (dvb_attach(dst_attach, state, &card->dvb_adapter) == NULL) {
 			printk("%s: Could not find a Twinhan DST.\n", __FUNCTION__);
 			break;
 		}
-		card->fe = &state->frontend;
-
 		/*	Attach other DST peripherals if any		*/
 		/*	Conditional Access device			*/
+		card->fe = &state->frontend;
 		if (state->dst_hw_cap & DST_TYPE_HAS_CA)
-			ret = dst_ca_attach(state, &card->dvb_adapter);
+			dvb_attach(dst_ca_attach, state, &card->dvb_adapter);
 		break;
 
 	case BTTV_BOARD_PINNACLESAT:
-		card->fe = cx24110_attach(&pctvsat_config, card->i2c_adapter);
+		card->fe = dvb_attach(cx24110_attach, &pctvsat_config, card->i2c_adapter);
+		if (card->fe) {
+			card->fe->ops.tuner_ops.init = pinnsat_tuner_init;
+			card->fe->ops.tuner_ops.sleep = pinnsat_tuner_sleep;
+			card->fe->ops.tuner_ops.set_params = cx24108_tuner_set_params;
+		}
 		break;
 
 	case BTTV_BOARD_PC_HDTV:
-		card->fe = or51211_attach(&or51211_config, card->i2c_adapter);
+		card->fe = dvb_attach(or51211_attach, &or51211_config, card->i2c_adapter);
 		break;
 	}
 
@@ -713,8 +702,7 @@ static void frontend_init(struct dvb_bt8xx_card *card, u32 type)
 	else
 		if (dvb_register_frontend(&card->dvb_adapter, card->fe)) {
 			printk("dvb-bt8xx: Frontend registration failed!\n");
-			if (card->fe->ops->release)
-				card->fe->ops->release(card->fe);
+			dvb_frontend_detach(card->fe);
 			card->fe = NULL;
 		}
 }
@@ -723,7 +711,7 @@ static int __devinit dvb_bt8xx_load_card(struct dvb_bt8xx_card *card, u32 type)
 {
 	int result;
 
-	if ((result = dvb_register_adapter(&card->dvb_adapter, card->card_name, THIS_MODULE)) < 0) {
+	if ((result = dvb_register_adapter(&card->dvb_adapter, card->card_name, THIS_MODULE, &card->bt->dev->dev)) < 0) {
 		printk("dvb_bt8xx: dvb_register_adapter failed (errno = %d)\n", result);
 		return result;
 	}
@@ -931,8 +919,10 @@ static void dvb_bt8xx_remove(struct bttv_sub_device *sub)
 	card->demux.dmx.remove_frontend(&card->demux.dmx, &card->fe_hw);
 	dvb_dmxdev_release(&card->dmxdev);
 	dvb_dmx_release(&card->demux);
-	if (card->fe)
+	if (card->fe) {
 		dvb_unregister_frontend(card->fe);
+		dvb_frontend_detach(card->fe);
+	}
 	dvb_unregister_adapter(&card->dvb_adapter);
 
 	kfree(card);

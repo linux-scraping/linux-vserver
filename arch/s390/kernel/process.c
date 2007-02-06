@@ -15,7 +15,6 @@
  * This file handles the architecture-dependent parts of process handling..
  */
 
-#include <linux/config.h>
 #include <linux/compiler.h>
 #include <linux/cpu.h>
 #include <linux/errno.h>
@@ -46,7 +45,7 @@
 #include <asm/irq.h>
 #include <asm/timer.h>
 
-asmlinkage void ret_from_fork(void) __asm__("ret_from_fork");
+asmlinkage void ret_from_fork(void) asm ("ret_from_fork");
 
 /*
  * Return saved PC of a blocked thread. used in kernel/sched.
@@ -143,6 +142,7 @@ static void default_idle(void)
 		return;
 	}
 
+	trace_hardirqs_on();
 	/* Wait for external, I/O or machine check interrupt. */
 	__load_psw_mask(PSW_KERNEL_BITS | PSW_MASK_WAIT |
 			PSW_MASK_IO | PSW_MASK_EXT);
@@ -172,12 +172,13 @@ void show_regs(struct pt_regs *regs)
 	show_registers(regs);
 	/* Show stack backtrace if pt_regs is from kernel mode */
 	if (!(regs->psw.mask & PSW_MASK_PSTATE))
-		show_trace(0,(unsigned long *) regs->gprs[15]);
+		show_trace(NULL, (unsigned long *) regs->gprs[15]);
 }
 
 extern void kernel_thread_starter(void);
 
-__asm__(".align 4\n"
+asm(
+	".align 4\n"
 	"kernel_thread_starter:\n"
 	"    la    2,0(10)\n"
 	"    basr  14,9\n"
@@ -197,7 +198,7 @@ int kernel_thread(int (*fn)(void *), void * arg, unsigned long flags)
 	regs.orig_gpr2 = -1;
 
 	/* Ok, create the new process.. */
-	return do_fork(flags | CLONE_VM | CLONE_UNTRACED,
+	return do_fork(flags | CLONE_VM | CLONE_UNTRACED | CLONE_KTHREAD,
 		       0, &regs, 0, NULL, NULL);
 }
 

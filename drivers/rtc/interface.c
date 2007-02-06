@@ -145,6 +145,13 @@ int rtc_set_alarm(struct class_device *class_dev, struct rtc_wkalrm *alarm)
 }
 EXPORT_SYMBOL_GPL(rtc_set_alarm);
 
+/**
+ * rtc_update_irq - report RTC periodic, alarm, and/or update irqs
+ * @class_dev: the rtc's class device
+ * @num: how many irqs are being reported (usually one)
+ * @events: mask of RTC_IRQF with one or more of RTC_PF, RTC_AF, RTC_UF
+ * Context: in_interrupt(), irqs blocked
+ */
 void rtc_update_irq(struct class_device *class_dev,
 		unsigned long num, unsigned long events)
 {
@@ -201,12 +208,12 @@ int rtc_irq_register(struct class_device *class_dev, struct rtc_task *task)
 	if (task == NULL || task->func == NULL)
 		return -EINVAL;
 
-	spin_lock(&rtc->irq_task_lock);
+	spin_lock_irq(&rtc->irq_task_lock);
 	if (rtc->irq_task == NULL) {
 		rtc->irq_task = task;
 		retval = 0;
 	}
-	spin_unlock(&rtc->irq_task_lock);
+	spin_unlock_irq(&rtc->irq_task_lock);
 
 	return retval;
 }
@@ -216,10 +223,10 @@ void rtc_irq_unregister(struct class_device *class_dev, struct rtc_task *task)
 {
 	struct rtc_device *rtc = to_rtc_device(class_dev);
 
-	spin_lock(&rtc->irq_task_lock);
+	spin_lock_irq(&rtc->irq_task_lock);
 	if (rtc->irq_task == task)
 		rtc->irq_task = NULL;
-	spin_unlock(&rtc->irq_task_lock);
+	spin_unlock_irq(&rtc->irq_task_lock);
 }
 EXPORT_SYMBOL_GPL(rtc_irq_unregister);
 
@@ -228,6 +235,9 @@ int rtc_irq_set_state(struct class_device *class_dev, struct rtc_task *task, int
 	int err = 0;
 	unsigned long flags;
 	struct rtc_device *rtc = to_rtc_device(class_dev);
+
+	if (rtc->ops->irq_set_state == NULL)
+		return -ENXIO;
 
 	spin_lock_irqsave(&rtc->irq_task_lock, flags);
 	if (rtc->irq_task != task)
@@ -243,25 +253,12 @@ EXPORT_SYMBOL_GPL(rtc_irq_set_state);
 
 int rtc_irq_set_freq(struct class_device *class_dev, struct rtc_task *task, int freq)
 {
-	int err = 0, tmp = 0;
+	int err = 0;
 	unsigned long flags;
 	struct rtc_device *rtc = to_rtc_device(class_dev);
 
-	/* allowed range is 2-8192 */
-	if (freq < 2 || freq > 8192)
-		return -EINVAL;
-/*
-	FIXME: this does not belong here, will move where appropriate
-	at a later stage. It cannot hurt right now, trust me :)
-	if ((freq > rtc_max_user_freq) && (!capable(CAP_SYS_RESOURCE)))
-		return -EACCES;
-*/
-	/* check if freq is a power of 2 */
-	while (freq > (1 << tmp))
-		tmp++;
-
-	if (freq != (1 << tmp))
-		return -EINVAL;
+	if (rtc->ops->irq_set_freq == NULL)
+		return -ENXIO;
 
 	spin_lock_irqsave(&rtc->irq_task_lock, flags);
 	if (rtc->irq_task != task)
@@ -275,3 +272,4 @@ int rtc_irq_set_freq(struct class_device *class_dev, struct rtc_task *task, int 
 	}
 	return err;
 }
+EXPORT_SYMBOL_GPL(rtc_irq_set_freq);

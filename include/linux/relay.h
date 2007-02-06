@@ -10,7 +10,6 @@
 #ifndef _LINUX_RELAY_H
 #define _LINUX_RELAY_H
 
-#include <linux/config.h>
 #include <linux/types.h>
 #include <linux/sched.h>
 #include <linux/wait.h>
@@ -39,7 +38,7 @@ struct rchan_buf
 	size_t subbufs_consumed;	/* count of sub-buffers consumed */
 	struct rchan *chan;		/* associated channel */
 	wait_queue_head_t read_wait;	/* reader wait queue */
-	struct work_struct wake_readers; /* reader wake-up work struct */
+	struct delayed_work wake_readers; /* reader wake-up work struct */
 	struct dentry *dentry;		/* channel file dentry */
 	struct kref kref;		/* channel buffer refcount */
 	struct page **page_array;	/* array of current buffer pages */
@@ -275,7 +274,7 @@ static inline void subbuf_start_reserve(struct rchan_buf *buf,
 /*
  * exported relay file operations, kernel/relay.c
  */
-extern struct file_operations relay_file_operations;
+extern const struct file_operations relay_file_operations;
 
 #endif /* _LINUX_RELAY_H */
 

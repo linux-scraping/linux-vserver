@@ -30,13 +30,26 @@ struct tda10021_config
 {
 	/* the demodulator's i2c address */
 	u8 demod_address;
-
-	/* PLL maintenance */
-	int (*pll_init)(struct dvb_frontend* fe);
-	int (*pll_set)(struct dvb_frontend* fe, struct dvb_frontend_parameters* params);
 };
 
+#if defined(CONFIG_DVB_TDA10021) || (defined(CONFIG_DVB_TDA10021_MODULE) && defined(MODULE))
 extern struct dvb_frontend* tda10021_attach(const struct tda10021_config* config,
 					    struct i2c_adapter* i2c, u8 pwm);
+#else
+static inline struct dvb_frontend* tda10021_attach(const struct tda10021_config* config,
+					    struct i2c_adapter* i2c, u8 pwm)
+{
+	printk(KERN_WARNING "%s: driver disabled by Kconfig\n", __FUNCTION__);
+	return NULL;
+}
+#endif // CONFIG_DVB_TDA10021
+
+static inline int tda10021_writereg(struct dvb_frontend *fe, u8 reg, u8 val) {
+	int r = 0;
+	u8 buf[] = {reg, val};
+	if (fe->ops.write)
+		r = fe->ops.write(fe, buf, 2);
+	return r;
+}
 
 #endif // TDA10021_H

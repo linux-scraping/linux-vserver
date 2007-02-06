@@ -13,14 +13,19 @@
 #ifndef _ASM_FIXMAP_H
 #define _ASM_FIXMAP_H
 
-#include <linux/config.h>
 
 /* used by vmalloc.c, vsyscall.lds.S.
  *
  * Leave one empty page between vmalloc'ed areas and
  * the start of the fixmap.
  */
-#define __FIXADDR_TOP	0xfffff000
+#ifndef CONFIG_COMPAT_VDSO
+extern unsigned long __FIXADDR_TOP;
+#else
+#define __FIXADDR_TOP  0xfffff000
+#define FIXADDR_USER_START	__fix_to_virt(FIX_VDSO)
+#define FIXADDR_USER_END	__fix_to_virt(FIX_VDSO - 1)
+#endif
 
 #ifndef __ASSEMBLY__
 #include <linux/kernel.h>
@@ -52,7 +57,7 @@
  */
 enum fixed_addresses {
 	FIX_HOLE,
-	FIX_VSYSCALL,
+	FIX_VDSO,
 #ifdef CONFIG_X86_LOCAL_APIC
 	FIX_APIC_BASE,	/* local (CPU) APIC) -- required for SMP or not */
 #endif
@@ -94,6 +99,7 @@ enum fixed_addresses {
 
 extern void __set_fixmap (enum fixed_addresses idx,
 					unsigned long phys, pgprot_t flags);
+extern void reserve_top_address(unsigned long reserve);
 
 #define set_fixmap(idx, phys) \
 		__set_fixmap(idx, phys, PAGE_KERNEL)
@@ -115,14 +121,6 @@ extern void __set_fixmap (enum fixed_addresses idx,
 
 #define __fix_to_virt(x)	(FIXADDR_TOP - ((x) << PAGE_SHIFT))
 #define __virt_to_fix(x)	((FIXADDR_TOP - ((x)&PAGE_MASK)) >> PAGE_SHIFT)
-
-/*
- * This is the range that is readable by user mode, and things
- * acting like user mode such as get_user_pages.
- */
-#define FIXADDR_USER_START	(__fix_to_virt(FIX_VSYSCALL))
-#define FIXADDR_USER_END	(FIXADDR_USER_START + PAGE_SIZE)
-
 
 extern void __this_fixmap_does_not_exist(void);
 

@@ -97,7 +97,6 @@ struct amd_flash_private {
 	int interleave;
 	int numchips;
 	unsigned long chipshift;
-//	const char *im_name;
 	struct flchip chips[0];
 };
 
@@ -130,12 +129,6 @@ static struct mtd_chip_driver amd_flash_chipdrv = {
 	.name = "amd_flash",
 	.module = THIS_MODULE
 };
-
-
-
-static const char im_name[] = "amd_flash";
-
-
 
 static inline __u32 wide_read(struct map_info *map, __u32 addr)
 {
@@ -650,13 +643,12 @@ static struct mtd_info *amd_flash_probe(struct map_info *map)
 	int reg_idx;
 	int offset;
 
-	mtd = (struct mtd_info*)kmalloc(sizeof(*mtd), GFP_KERNEL);
+	mtd = kzalloc(sizeof(*mtd), GFP_KERNEL);
 	if (!mtd) {
 		printk(KERN_WARNING
 		       "%s: kmalloc failed for info structure\n", map->name);
 		return NULL;
 	}
-	memset(mtd, 0, sizeof(*mtd));
 	mtd->priv = map;
 
 	memset(&temp, 0, sizeof(temp));
@@ -737,6 +729,7 @@ static struct mtd_info *amd_flash_probe(struct map_info *map)
 		offset += dev_size;
 	}
 	mtd->type = MTD_NORFLASH;
+	mtd->writesize = 1;
 	mtd->flags = MTD_CAP_NORFLASH;
 	mtd->name = map->name;
 	mtd->erase = amd_flash_erase;

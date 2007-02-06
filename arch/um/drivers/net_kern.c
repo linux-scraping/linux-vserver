@@ -5,7 +5,6 @@
  * Licensed under the GPL.
  */
 
-#include "linux/config.h"
 #include "linux/kernel.h"
 #include "linux/netdevice.h"
 #include "linux/rtnetlink.h"
@@ -30,6 +29,11 @@
 #include "init.h"
 #include "irq_user.h"
 #include "irq_kern.h"
+
+static inline void set_ether_mac(struct net_device *dev, unsigned char *addr)
+{
+	memcpy(dev->dev_addr, addr, ETH_ALEN);
+}
 
 #define DRIVER_NAME "uml-netdev"
 
@@ -68,12 +72,14 @@ static int uml_net_rx(struct net_device *dev)
 	return pkt_len;
 }
 
-static void uml_dev_close(void* dev)
+static void uml_dev_close(struct work_struct *work)
 {
-	dev_close( (struct net_device *) dev);
+	struct uml_net_private *lp =
+		container_of(work, struct uml_net_private, work);
+	dev_close(lp->dev);
 }
 
-irqreturn_t uml_net_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+irqreturn_t uml_net_interrupt(int irq, void *dev_id)
 {
 	struct net_device *dev = dev_id;
 	struct uml_net_private *lp = dev->priv;
@@ -85,7 +91,6 @@ irqreturn_t uml_net_interrupt(int irq, void *dev_id, struct pt_regs *regs)
 	spin_lock(&lp->lock);
 	while((err = uml_net_rx(dev)) > 0) ;
 	if(err < 0) {
-		DECLARE_WORK(close_work, uml_dev_close, dev);
 		printk(KERN_ERR 
 		       "Device '%s' read returned %d, shutting it down\n", 
 		       dev->name, err);
@@ -93,8 +98,10 @@ irqreturn_t uml_net_interrupt(int irq, void *dev_id, struct pt_regs *regs)
 		 * again lp->lock.
 		 * And dev_close() can be safely called multiple times on the
 		 * same device, since it tests for (dev->flags & IFF_UP). So
-		 * there's no harm in delaying the device shutdown. */
-		schedule_work(&close_work);
+		 * there's no harm in delaying the device shutdown.
+		 * Furthermore, the workqueue will not re-enqueue an already
+		 * enqueued work item. */
+		schedule_work(&lp->work);
 		goto out;
 	}
 	reactivate_fd(lp->fd, UM_ETH_IRQ);
@@ -109,16 +116,9 @@ static int uml_net_open(struct net_device *dev)
 	struct uml_net_private *lp = dev->priv;
 	int err;
 
-	spin_lock(&lp->lock);
-
 	if(lp->fd >= 0){
 		err = -ENXIO;
 		goto out;
-	}
-
-	if(!lp->have_mac){
- 		dev_ip_addr(dev, &lp->mac[2]);
- 		set_ether_mac(dev, lp->mac);
 	}
 
 	lp->fd = (*lp->open)(&lp->user);
@@ -128,7 +128,7 @@ static int uml_net_open(struct net_device *dev)
 	}
 
 	err = um_request_irq(dev->irq, lp->fd, IRQ_READ, uml_net_interrupt,
-			     SA_INTERRUPT | SA_SHIRQ, dev->name, dev);
+			     IRQF_DISABLED | IRQF_SHARED, dev->name, dev);
 	if(err != 0){
 		printk(KERN_ERR "uml_net_open: failed to get irq(%d)\n", err);
 		err = -ENETUNREACH;
@@ -144,8 +144,6 @@ static int uml_net_open(struct net_device *dev)
 	 */
 	while((err = uml_net_rx(dev)) > 0) ;
 
-	spin_unlock(&lp->lock);
-
 	spin_lock(&opened_lock);
 	list_add(&lp->list, &opened);
 	spin_unlock(&opened_lock);
@@ -155,7 +153,6 @@ out_close:
 	if(lp->close != NULL) (*lp->close)(lp->fd, &lp->user);
 	lp->fd = -1;
 out:
-	spin_unlock(&lp->lock);
 	return err;
 }
 
@@ -164,14 +161,11 @@ static int uml_net_close(struct net_device *dev)
 	struct uml_net_private *lp = dev->priv;
 	
 	netif_stop_queue(dev);
-	spin_lock(&lp->lock);
 
 	free_irq(dev->irq, dev);
 	if(lp->close != NULL)
 		(*lp->close)(lp->fd, &lp->user);
 	lp->fd = -1;
-
-	spin_unlock(&lp->lock);
 
 	spin_lock(&opened_lock);
 	list_del(&lp->list);
@@ -241,9 +235,9 @@ static int uml_net_set_mac(struct net_device *dev, void *addr)
 	struct uml_net_private *lp = dev->priv;
 	struct sockaddr *hwaddr = addr;
 
-	spin_lock(&lp->lock);
-	memcpy(dev->dev_addr, hwaddr->sa_data, ETH_ALEN);
-	spin_unlock(&lp->lock);
+	spin_lock_irq(&lp->lock);
+	set_ether_mac(dev, hwaddr->sa_data);
+	spin_unlock_irq(&lp->lock);
 
 	return(0);
 }
@@ -253,7 +247,7 @@ static int uml_net_change_mtu(struct net_device *dev, int new_mtu)
 	struct uml_net_private *lp = dev->priv;
 	int err = 0;
 
-	spin_lock(&lp->lock);
+	spin_lock_irq(&lp->lock);
 
 	new_mtu = (*lp->set_mtu)(new_mtu, &lp->user);
 	if(new_mtu < 0){
@@ -264,7 +258,7 @@ static int uml_net_change_mtu(struct net_device *dev, int new_mtu)
 	dev->mtu = new_mtu;
 
  out:
-	spin_unlock(&lp->lock);
+	spin_unlock_irq(&lp->lock);
 	return err;
 }
 
@@ -290,6 +284,37 @@ void uml_net_user_timer_expire(unsigned long _conn)
 #endif
 }
 
+static void setup_etheraddr(char *str, unsigned char *addr)
+{
+	char *end;
+	int i;
+
+	if(str == NULL)
+		goto random;
+
+	for(i=0;i<6;i++){
+		addr[i] = simple_strtoul(str, &end, 16);
+		if((end == str) ||
+		   ((*end != ':') && (*end != ',') && (*end != '\0'))){
+			printk(KERN_ERR
+			       "setup_etheraddr: failed to parse '%s' "
+			       "as an ethernet address\n", str);
+			goto random;
+		}
+		str = end + 1;
+	}
+	if(addr[0] & 1){
+		printk(KERN_ERR
+		       "Attempt to assign a broadcast ethernet address to a "
+		       "device disallowed\n");
+		goto random;
+	}
+	return;
+
+random:
+	random_ether_addr(addr);
+}
+
 static DEFINE_SPINLOCK(devices_lock);
 static LIST_HEAD(devices);
 
@@ -311,13 +336,12 @@ static int eth_configure(int n, void *init, char *mac,
 	size = transport->private_size + sizeof(struct uml_net_private) + 
 		sizeof(((struct uml_net_private *) 0)->user);
 
-	device = kmalloc(sizeof(*device), GFP_KERNEL);
+	device = kzalloc(sizeof(*device), GFP_KERNEL);
 	if (device == NULL) {
 		printk(KERN_ERR "eth_configure failed to allocate uml_net\n");
 		return(1);
 	}
 
-	memset(device, 0, sizeof(*device));
 	INIT_LIST_HEAD(&device->list);
 	device->index = n;
 
@@ -325,15 +349,13 @@ static int eth_configure(int n, void *init, char *mac,
 	list_add(&device->list, &devices);
 	spin_unlock(&devices_lock);
 
-	if (setup_etheraddr(mac, device->mac))
-		device->have_mac = 1;
+	setup_etheraddr(mac, device->mac);
 
 	printk(KERN_INFO "Netdevice %d ", n);
-	if (device->have_mac)
-		printk("(%02x:%02x:%02x:%02x:%02x:%02x) ",
-		       device->mac[0], device->mac[1],
-		       device->mac[2], device->mac[3],
-		       device->mac[4], device->mac[5]);
+	printk("(%02x:%02x:%02x:%02x:%02x:%02x) ",
+	       device->mac[0], device->mac[1],
+	       device->mac[2], device->mac[3],
+	       device->mac[4], device->mac[5]);
 	printk(": ");
 	dev = alloc_etherdev(size);
 	if (dev == NULL) {
@@ -345,6 +367,7 @@ static int eth_configure(int n, void *init, char *mac,
 	/* This points to the transport private data. It's still clear, but we
 	 * must memset it to 0 *now*. Let's help the drivers. */
 	memset(lp, 0, size);
+	INIT_WORK(&lp->work, uml_dev_close);
 
 	/* sysfs register */
 	if (!driver_registered) {
@@ -399,7 +422,6 @@ static int eth_configure(int n, void *init, char *mac,
 		  .dev 			= dev,
 		  .fd 			= -1,
 		  .mac 			= { 0xfe, 0xfd, 0x0, 0x0, 0x0, 0x0},
-		  .have_mac 		= device->have_mac,
 		  .protocol 		= transport->kern->protocol,
 		  .open 		= transport->user->open,
 		  .close 		= transport->user->close,
@@ -414,14 +436,12 @@ static int eth_configure(int n, void *init, char *mac,
 	init_timer(&lp->tl);
 	spin_lock_init(&lp->lock);
 	lp->tl.function = uml_net_user_timer_expire;
-	if (lp->have_mac)
-		memcpy(lp->mac, device->mac, sizeof(lp->mac));
+	memcpy(lp->mac, device->mac, sizeof(lp->mac));
 
 	if (transport->user->init) 
 		(*transport->user->init)(&lp->user, dev);
 
-	if (device->have_mac)
-		set_ether_mac(dev, device->mac);
+	set_ether_mac(dev, device->mac);
 
 	return 0;
 }
@@ -564,12 +584,13 @@ static int eth_setup(char *str)
 	int n, err;
 
 	err = eth_parse(str, &n, &str);
-	if(err) return(1);
+	if(err)
+		return 1;
 
-	new = alloc_bootmem(sizeof(new));
+	new = alloc_bootmem(sizeof(*new));
 	if (new == NULL){
 		printk("eth_init : alloc_bootmem failed\n");
-		return(1);
+		return 1;
 	}
 
 	INIT_LIST_HEAD(&new->list);
@@ -577,7 +598,7 @@ static int eth_setup(char *str)
 	new->init = str;
 
 	list_add_tail(&new->list, &eth_cmd_line);
-	return(1);
+	return 1;
 }
 
 __setup("eth", eth_setup);
@@ -749,54 +770,6 @@ static void close_devices(void)
 
 __uml_exitcall(close_devices);
 
-int setup_etheraddr(char *str, unsigned char *addr)
-{
-	char *end;
-	int i;
-
-	if(str == NULL)
-		return(0);
-	for(i=0;i<6;i++){
-		addr[i] = simple_strtoul(str, &end, 16);
-		if((end == str) ||
-		   ((*end != ':') && (*end != ',') && (*end != '\0'))){
-			printk(KERN_ERR 
-			       "setup_etheraddr: failed to parse '%s' "
-			       "as an ethernet address\n", str);
-			return(0);
-		}
-		str = end + 1;
-	}
-	if(addr[0] & 1){
-		printk(KERN_ERR 
-		       "Attempt to assign a broadcast ethernet address to a "
-		       "device disallowed\n");
-		return(0);
-	}
-	return(1);
-}
-
-void dev_ip_addr(void *d, unsigned char *bin_buf)
-{
-	struct net_device *dev = d;
-	struct in_device *ip = dev->ip_ptr;
-	struct in_ifaddr *in;
-
-	if((ip == NULL) || ((in = ip->ifa_list) == NULL)){
-		printk(KERN_WARNING "dev_ip_addr - device not assigned an "
-		       "IP address\n");
-		return;
-	}
-	memcpy(bin_buf, &in->ifa_address, sizeof(in->ifa_address));
-}
-
-void set_ether_mac(void *d, unsigned char *addr)
-{
-	struct net_device *dev = d;
-
-	memcpy(dev->dev_addr, addr, ETH_ALEN);	
-}
-
 struct sk_buff *ether_adjust_skb(struct sk_buff *skb, int extra)
 {
 	if((skb != NULL) && (skb_tailroom(skb) < extra)){
@@ -834,7 +807,7 @@ int dev_netmask(void *d, void *m)
 	struct net_device *dev = d;
 	struct in_device *ip = dev->ip_ptr;
 	struct in_ifaddr *in;
-	__u32 *mask_out = m;
+	__be32 *mask_out = m;
 
 	if(ip == NULL) 
 		return(1);

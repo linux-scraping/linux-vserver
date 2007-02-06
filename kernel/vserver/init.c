@@ -37,6 +37,10 @@ static void __exit exit_vserver(void)
 	return;
 }
 
+/* FIXME: GFP_ZONETYPES gone
+long vx_slab[GFP_ZONETYPES]; */
+long vx_area;
+
 
 module_init(init_vserver);
 module_exit(exit_vserver);

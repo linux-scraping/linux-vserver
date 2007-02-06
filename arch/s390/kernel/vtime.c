@@ -7,7 +7,6 @@
  *    Author(s): Jan Glauber <jan.glauber@de.ibm.com>
  */
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/time.h>
@@ -23,6 +22,7 @@
 
 #include <asm/s390_ext.h>
 #include <asm/timer.h>
+#include <asm/irq_regs.h>
 
 static ext_int_info_t ext_int_info_timer;
 DEFINE_PER_CPU(struct vtimer_queue, virt_cpu_timer);
@@ -209,11 +209,11 @@ static void list_add_sorted(struct vtimer_list *timer, struct list_head *head)
  * Do the callback functions of expired vtimer events.
  * Called from within the interrupt handler.
  */
-static void do_callbacks(struct list_head *cb_list, struct pt_regs *regs)
+static void do_callbacks(struct list_head *cb_list)
 {
 	struct vtimer_queue *vt_list;
 	struct vtimer_list *event, *tmp;
-	void (*fn)(unsigned long, struct pt_regs*);
+	void (*fn)(unsigned long);
 	unsigned long data;
 
 	if (list_empty(cb_list))
@@ -224,7 +224,7 @@ static void do_callbacks(struct list_head *cb_list, struct pt_regs *regs)
 	list_for_each_entry_safe(event, tmp, cb_list, entry) {
 		fn = event->function;
 		data = event->data;
-		fn(data, regs);
+		fn(data);
 
 		if (!event->interval)
 			/* delete one shot timer */
@@ -242,7 +242,7 @@ static void do_callbacks(struct list_head *cb_list, struct pt_regs *regs)
 /*
  * Handler for the virtual CPU timer.
  */
-static void do_cpu_timer_interrupt(struct pt_regs *regs, __u16 error_code)
+static void do_cpu_timer_interrupt(__u16 error_code)
 {
 	int cpu;
 	__u64 next, delta;
@@ -275,7 +275,7 @@ static void do_cpu_timer_interrupt(struct pt_regs *regs, __u16 error_code)
 		list_move_tail(&event->entry, &cb_list);
 	}
 	spin_unlock(&vt_list->lock);
-	do_callbacks(&cb_list, regs);
+	do_callbacks(&cb_list);
 
 	/* next event is first in list */
 	spin_lock(&vt_list->lock);
@@ -356,7 +356,7 @@ static void internal_add_vtimer(struct vtimer_list *timer)
 
 	set_vtimer(event->expires);
 	spin_unlock_irqrestore(&vt_list->lock, flags);
-	/* release CPU aquired in prepare_vtimer or mod_virt_timer() */
+	/* release CPU acquired in prepare_vtimer or mod_virt_timer() */
 	put_cpu();
 }
 

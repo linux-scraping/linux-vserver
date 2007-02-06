@@ -7,7 +7,6 @@
  */
 
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/if.h>
@@ -67,10 +66,12 @@ static struct pci_device_id prism2_plx_id_table[] __devinitdata = {
 	PLXDEV(0x10b7, 0x7770, "3Com AirConnect PCI 777A"),
 	PLXDEV(0x111a, 0x1023, "Siemens SpeedStream SS1023"),
 	PLXDEV(0x126c, 0x8030, "Nortel emobility"),
+	PLXDEV(0x1562, 0x0001, "Symbol LA-4123"),
 	PLXDEV(0x1385, 0x4100, "Netgear MA301"),
 	PLXDEV(0x15e8, 0x0130, "National Datacomm NCP130 (PLX9052)"),
 	PLXDEV(0x15e8, 0x0131, "National Datacomm NCP130 (TMD7160)"),
 	PLXDEV(0x1638, 0x1100, "Eumitcom WL11000"),
+	PLXDEV(0x16ab, 0x1100, "Global Sun Tech GL24110P"),
 	PLXDEV(0x16ab, 0x1101, "Global Sun Tech GL24110P (?)"),
 	PLXDEV(0x16ab, 0x1102, "Linksys WPC11 with WDT11"),
 	PLXDEV(0x16ab, 0x1103, "Longshine 8031"),
@@ -363,7 +364,7 @@ static int prism2_plx_check_cis(void __iomem *attr_mem, int attr_len,
 
 	pos = 0;
 	while (pos < CIS_MAX_LEN - 1 && cis[pos] != CISTPL_END) {
-		if (pos + cis[pos + 1] >= CIS_MAX_LEN)
+		if (pos + 2 + cis[pos + 1] > CIS_MAX_LEN)
 			goto cis_error;
 
 		switch (cis[pos]) {
@@ -390,7 +391,7 @@ static int prism2_plx_check_cis(void __iomem *attr_mem, int attr_len,
 			break;
 
 		case CISTPL_MANFID:
-			if (cis[pos + 1] < 5)
+			if (cis[pos + 1] < 4)
 				goto cis_error;
 			manfid1 = cis[pos + 2] + (cis[pos + 3] << 8);
 			manfid2 = cis[pos + 4] + (cis[pos + 5] << 8);
@@ -446,10 +447,9 @@ static int prism2_plx_probe(struct pci_dev *pdev,
 	int tmd7160;
 	struct hostap_plx_priv *hw_priv;
 
-	hw_priv = kmalloc(sizeof(*hw_priv), GFP_KERNEL);
+	hw_priv = kzalloc(sizeof(*hw_priv), GFP_KERNEL);
 	if (hw_priv == NULL)
 		return -ENOMEM;
-	memset(hw_priv, 0, sizeof(*hw_priv));
 
 	if (pci_enable_device(pdev))
 		goto err_out_free;
@@ -551,7 +551,7 @@ static int prism2_plx_probe(struct pci_dev *pdev,
 
 	pci_set_drvdata(pdev, dev);
 
-	if (request_irq(dev->irq, prism2_interrupt, SA_SHIRQ, dev->name,
+	if (request_irq(dev->irq, prism2_interrupt, IRQF_SHARED, dev->name,
 			dev)) {
 		printk(KERN_WARNING "%s: request_irq failed\n", dev->name);
 		goto fail;

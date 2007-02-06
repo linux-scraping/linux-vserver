@@ -23,7 +23,6 @@
 #include "xfs_inum.h"
 #include "xfs_trans.h"
 #include "xfs_sb.h"
-#include "xfs_dir.h"
 #include "xfs_dmapi.h"
 #include "xfs_mount.h"
 #include "xfs_buf_item.h"
@@ -235,7 +234,6 @@ xfs_buf_item_format(
 	ASSERT((bip->bli_flags & XFS_BLI_LOGGED) ||
 	       (bip->bli_flags & XFS_BLI_STALE));
 	bp = bip->bli_buf;
-	ASSERT(XFS_BUF_BP_ISMAPPED(bp));
 	vecp = log_vector;
 
 	/*
@@ -629,25 +627,6 @@ xfs_buf_item_committed(
 }
 
 /*
- * This is called when the transaction holding the buffer is aborted.
- * Just behave as if the transaction had been cancelled. If we're shutting down
- * and have aborted this transaction, we'll trap this buffer when it tries to
- * get written out.
- */
-STATIC void
-xfs_buf_item_abort(
-	xfs_buf_log_item_t	*bip)
-{
-	xfs_buf_t	*bp;
-
-	bp = bip->bli_buf;
-	xfs_buftrace("XFS_ABORT", bp);
-	XFS_BUF_SUPER_STALE(bp);
-	xfs_buf_item_unlock(bip);
-	return;
-}
-
-/*
  * This is called to asynchronously write the buffer associated with this
  * buf log item out to disk. The buffer will already have been locked by
  * a successful call to xfs_buf_item_trylock().  If the buffer still has
@@ -694,7 +673,6 @@ STATIC struct xfs_item_ops xfs_buf_item_ops = {
 	.iop_committed	= (xfs_lsn_t(*)(xfs_log_item_t*, xfs_lsn_t))
 					xfs_buf_item_committed,
 	.iop_push	= (void(*)(xfs_log_item_t*))xfs_buf_item_push,
-	.iop_abort	= (void(*)(xfs_log_item_t*))xfs_buf_item_abort,
 	.iop_pushbuf	= NULL,
 	.iop_committing = (void(*)(xfs_log_item_t*, xfs_lsn_t))
 					xfs_buf_item_committing
@@ -902,7 +880,6 @@ xfs_buf_item_relse(
 	XFS_BUF_SET_FSPRIVATE(bp, bip->bli_item.li_bio_list);
 	if ((XFS_BUF_FSPRIVATE(bp, void *) == NULL) &&
 	    (XFS_BUF_IODONE_FUNC(bp) != NULL)) {
-		ASSERT((XFS_BUF_ISUNINITIAL(bp)) == 0);
 		XFS_BUF_CLR_IODONE_FUNC(bp);
 	}
 
@@ -1030,9 +1007,9 @@ xfs_buf_iodone_callbacks(
 		if ((XFS_BUF_TARGET(bp) != lasttarg) ||
 		    (time_after(jiffies, (lasttime + 5*HZ)))) {
 			lasttime = jiffies;
-			prdev("XFS write error in file system meta-data "
-			      "block 0x%llx in %s",
-			      XFS_BUF_TARGET(bp),
+			cmn_err(CE_ALERT, "Device %s, XFS metadata write error"
+					" block 0x%llx in %s",
+				XFS_BUFTARG_NAME(XFS_BUF_TARGET(bp)),
 			      (__uint64_t)XFS_BUF_ADDR(bp), mp->m_fsname);
 		}
 		lasttarg = XFS_BUF_TARGET(bp);
@@ -1108,7 +1085,7 @@ xfs_buf_error_relse(
 	XFS_BUF_ERROR(bp,0);
 	xfs_buftrace("BUF_ERROR_RELSE", bp);
 	if (! XFS_FORCED_SHUTDOWN(mp))
-		xfs_force_shutdown(mp, XFS_METADATA_IO_ERROR);
+		xfs_force_shutdown(mp, SHUTDOWN_META_IO_ERROR);
 	/*
 	 * We have to unpin the pinned buffers so do the
 	 * callbacks.

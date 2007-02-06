@@ -58,7 +58,11 @@
 #include <linux/tcp.h>
 #include <linux/percpu.h>
 
-static DEFINE_PER_CPU(struct net_device_stats, loopback_stats);
+struct pcpu_lstats {
+	unsigned long packets;
+	unsigned long bytes;
+};
+static DEFINE_PER_CPU(struct pcpu_lstats, pcpu_lstats);
 
 #define LOOPBACK_OVERHEAD (128 + MAX_HEADER + 16 + 16)
 
@@ -74,7 +78,7 @@ static void emulate_large_send_offload(struct sk_buff *skb)
 	struct iphdr *iph = skb->nh.iph;
 	struct tcphdr *th = (struct tcphdr*)(skb->nh.raw + (iph->ihl * 4));
 	unsigned int doffset = (iph->ihl + th->doff) * 4;
-	unsigned int mtu = skb_shinfo(skb)->tso_size + doffset;
+	unsigned int mtu = skb_shinfo(skb)->gso_size + doffset;
 	unsigned int offset = 0;
 	u32 seq = ntohl(th->seq);
 	u16 id  = ntohs(iph->id);
@@ -128,7 +132,7 @@ static void emulate_large_send_offload(struct sk_buff *skb)
  */
 static int loopback_xmit(struct sk_buff *skb, struct net_device *dev)
 {
-	struct net_device_stats *lb_stats;
+	struct pcpu_lstats *lb_stats;
 
 	skb_orphan(skb);
 
@@ -139,7 +143,7 @@ static int loopback_xmit(struct sk_buff *skb, struct net_device *dev)
 #endif
 
 #ifdef LOOPBACK_TSO
-	if (skb_shinfo(skb)->tso_size) {
+	if (skb_is_gso(skb)) {
 		BUG_ON(skb->protocol != htons(ETH_P_IP));
 		BUG_ON(skb->nh.iph->protocol != IPPROTO_TCP);
 
@@ -149,55 +153,61 @@ static int loopback_xmit(struct sk_buff *skb, struct net_device *dev)
 #endif
 	dev->last_rx = jiffies;
 
-	lb_stats = &per_cpu(loopback_stats, get_cpu());
-	lb_stats->rx_bytes += skb->len;
-	lb_stats->tx_bytes = lb_stats->rx_bytes;
-	lb_stats->rx_packets++;
-	lb_stats->tx_packets = lb_stats->rx_packets;
-	put_cpu();
+	/* it's OK to use __get_cpu_var() because BHs are off */
+	lb_stats = &__get_cpu_var(pcpu_lstats);
+	lb_stats->bytes += skb->len;
+	lb_stats->packets++;
 
 	netif_rx(skb);
 
-	return(0);
+	return 0;
 }
+
+static struct net_device_stats loopback_stats;
 
 static struct net_device_stats *get_stats(struct net_device *dev)
 {
-	struct net_device_stats *stats = dev->priv;
+	struct net_device_stats *stats = &loopback_stats;
+	unsigned long bytes = 0;
+	unsigned long packets = 0;
 	int i;
 
-	if (!stats) {
-		return NULL;
-	}
-
-	memset(stats, 0, sizeof(struct net_device_stats));
-
 	for_each_possible_cpu(i) {
-		struct net_device_stats *lb_stats;
+		const struct pcpu_lstats *lb_stats;
 
-		lb_stats = &per_cpu(loopback_stats, i);
-		stats->rx_bytes   += lb_stats->rx_bytes;
-		stats->tx_bytes   += lb_stats->tx_bytes;
-		stats->rx_packets += lb_stats->rx_packets;
-		stats->tx_packets += lb_stats->tx_packets;
+		lb_stats = &per_cpu(pcpu_lstats, i);
+		bytes   += lb_stats->bytes;
+		packets += lb_stats->packets;
 	}
-				
+	stats->rx_packets = packets;
+	stats->tx_packets = packets;
+	stats->rx_bytes = bytes;
+	stats->tx_bytes = bytes;
 	return stats;
 }
 
-static u32 loopback_get_link(struct net_device *dev)
+static u32 always_on(struct net_device *dev)
 {
 	return 1;
 }
 
-static struct ethtool_ops loopback_ethtool_ops = {
-	.get_link		= loopback_get_link,
+static const struct ethtool_ops loopback_ethtool_ops = {
+	.get_link		= always_on,
 	.get_tso		= ethtool_op_get_tso,
 	.set_tso		= ethtool_op_set_tso,
+	.get_tx_csum		= always_on,
+	.get_sg			= always_on,
+	.get_rx_csum		= always_on,
 };
 
+/*
+ * The loopback device is special. There is only one instance and
+ * it is statically allocated. Don't do this for other devices.
+ */
 struct net_device loopback_dev = {
 	.name	 		= "lo",
+	.get_stats		= &get_stats,
+	.priv			= &loopback_stats,
 	.mtu			= (16 * 1024) + 20 + 20 + 12,
 	.hard_start_xmit	= loopback_xmit,
 	.hard_header		= eth_header,
@@ -219,19 +229,11 @@ struct net_device loopback_dev = {
 };
 
 /* Setup and register the loopback device. */
-int __init loopback_init(void)
+static int __init loopback_init(void)
 {
-	struct net_device_stats *stats;
-
-	/* Can survive without statistics */
-	stats = kmalloc(sizeof(struct net_device_stats), GFP_KERNEL);
-	if (stats) {
-		memset(stats, 0, sizeof(struct net_device_stats));
-		loopback_dev.priv = stats;
-		loopback_dev.get_stats = &get_stats;
-	}
-	
 	return register_netdev(&loopback_dev);
 };
+
+module_init(loopback_init);
 
 EXPORT_SYMBOL(loopback_dev);

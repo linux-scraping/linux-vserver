@@ -33,7 +33,6 @@
 #include <linux/fs.h>
 #include <linux/mm.h>
 #include <linux/init.h>
-#include <linux/devfs_fs_kernel.h>
 #include <linux/smp_lock.h>
 #include <linux/device.h>
 
@@ -202,7 +201,7 @@ static int dsp56k_upload(u_char __user *bin, int len)
 static ssize_t dsp56k_read(struct file *file, char __user *buf, size_t count,
 			   loff_t *ppos)
 {
-	struct inode *inode = file->f_dentry->d_inode;
+	struct inode *inode = file->f_path.dentry->d_inode;
 	int dev = iminor(inode) & 0x0f;
 
 	switch(dev)
@@ -265,7 +264,7 @@ static ssize_t dsp56k_read(struct file *file, char __user *buf, size_t count,
 static ssize_t dsp56k_write(struct file *file, const char __user *buf, size_t count,
 			    loff_t *ppos)
 {
-	struct inode *inode = file->f_dentry->d_inode;
+	struct inode *inode = file->f_path.dentry->d_inode;
 	int dev = iminor(inode) & 0x0f;
 
 	switch(dev)
@@ -421,7 +420,7 @@ static int dsp56k_ioctl(struct inode *inode, struct file *file,
 #if 0
 static unsigned int dsp56k_poll(struct file *file, poll_table *wait)
 {
-	int dev = iminor(file->f_dentry->d_inode) & 0x0f;
+	int dev = iminor(file->f_path.dentry->d_inode) & 0x0f;
 
 	switch(dev)
 	{
@@ -484,7 +483,7 @@ static int dsp56k_release(struct inode *inode, struct file *file)
 	return 0;
 }
 
-static struct file_operations dsp56k_fops = {
+static const struct file_operations dsp56k_fops = {
 	.owner		= THIS_MODULE,
 	.read		= dsp56k_read,
 	.write		= dsp56k_write,
@@ -518,17 +517,9 @@ static int __init dsp56k_init_driver(void)
 	}
 	class_device_create(dsp56k_class, NULL, MKDEV(DSP56K_MAJOR, 0), NULL, "dsp56k");
 
-	err = devfs_mk_cdev(MKDEV(DSP56K_MAJOR, 0),
-		      S_IFCHR | S_IRUSR | S_IWUSR, "dsp56k");
-	if(err)
-		goto out_class;
-
 	printk(banner);
 	goto out;
 
-out_class:
-	class_device_destroy(dsp56k_class, MKDEV(DSP56K_MAJOR, 0));
-	class_destroy(dsp56k_class);
 out_chrdev:
 	unregister_chrdev(DSP56K_MAJOR, "dsp56k");
 out:
@@ -541,7 +532,6 @@ static void __exit dsp56k_cleanup_driver(void)
 	class_device_destroy(dsp56k_class, MKDEV(DSP56K_MAJOR, 0));
 	class_destroy(dsp56k_class);
 	unregister_chrdev(DSP56K_MAJOR, "dsp56k");
-	devfs_remove("dsp56k");
 }
 module_exit(dsp56k_cleanup_driver);
 

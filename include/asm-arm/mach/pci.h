@@ -28,7 +28,7 @@ struct hw_pci {
 struct pci_sys_data {
 	struct list_head node;
 	int		busnr;		/* primary bus number			*/
-	unsigned long	mem_offset;	/* bus->cpu memory mapping offset	*/
+	u64		mem_offset;	/* bus->cpu memory mapping offset	*/
 	unsigned long	io_offset;	/* bus->cpu IO mapping offset		*/
 	struct pci_bus	*bus;		/* PCI bus				*/
 	struct resource *resource[3];	/* Primary PCI bus resources		*/
@@ -52,13 +52,9 @@ void pci_common_init(struct hw_pci *);
 /*
  * PCI controllers
  */
-extern int iop321_setup(int nr, struct pci_sys_data *);
-extern struct pci_bus *iop321_scan_bus(int nr, struct pci_sys_data *);
-extern void iop321_init(void);
-
-extern int iop331_setup(int nr, struct pci_sys_data *);
-extern struct pci_bus *iop331_scan_bus(int nr, struct pci_sys_data *);
-extern void iop331_init(void);
+extern int iop3xx_pci_setup(int nr, struct pci_sys_data *);
+extern struct pci_bus *iop3xx_pci_scan_bus(int nr, struct pci_sys_data *);
+extern void iop3xx_pci_preinit(void);
 
 extern int dc21285_setup(int nr, struct pci_sys_data *);
 extern struct pci_bus *dc21285_scan_bus(int nr, struct pci_sys_data *);

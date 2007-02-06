@@ -10,25 +10,6 @@
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
  *
- * Modifications:
- *     14-Sep-2004 BJD  USB Power control
- *     04-Sep-2004 BJD  Added new uart init, and io init
- *     21-Aug-2004 BJD  Added struct s3c2410_board
- *     06-Aug-2004 BJD  Fixed call to time initialisation
- *     05-Apr-2004 BJD  Copied to make mach-vr1000.c
- *     18-Oct-2004 BJD  Updated board struct
- *     04-Nov-2004 BJD  Clock and serial configuration update
- *
- *     04-Jan-2005 BJD  Updated uart init call
- *     10-Jan-2005 BJD  Removed include of s3c2410.h
- *     14-Jan-2005 BJD  Added clock init
- *     15-Jan-2005 BJD  Add serial port device definition
- *     20-Jan-2005 BJD  Use UPF_IOREMAP for ports
- *     10-Feb-2005 BJD  Added power-off capability
- *     10-Mar-2005 LCVR Changed S3C2410_VA to S3C24XX_VA
- *     14-Mar-2006 BJD  void __iomem fixes
- *     22-Jun-2006 BJD  Added DM9000 platform information
- *     20-Sep-2005 BJD  Added static to non-exported items
 */
 
 #include <linux/kernel.h>
@@ -60,6 +41,7 @@
 
 #include <asm/arch/regs-serial.h>
 #include <asm/arch/regs-gpio.h>
+#include <asm/arch/leds-gpio.h>
 
 #include "clock.h"
 #include "devs.h"
@@ -166,7 +148,7 @@ static struct s3c24xx_uart_clksrc vr1000_serial_clocks[] = {
 	}
 };
 
-static struct s3c2410_uartcfg vr1000_uartcfgs[] = {
+static struct s3c2410_uartcfg vr1000_uartcfgs[] __initdata = {
 	[0] = {
 		.hwport	     = 0,
 		.flags	     = 0,
@@ -332,6 +314,50 @@ static struct platform_device vr1000_dm9k1 = {
 	}
 };
 
+/* LEDS */
+
+static struct s3c24xx_led_platdata vr1000_led1_pdata = {
+	.name		= "led1",
+	.gpio		= S3C2410_GPB0,
+	.def_trigger	= "",
+};
+
+static struct s3c24xx_led_platdata vr1000_led2_pdata = {
+	.name		= "led2",
+	.gpio		= S3C2410_GPB1,
+	.def_trigger	= "",
+};
+
+static struct s3c24xx_led_platdata vr1000_led3_pdata = {
+	.name		= "led3",
+	.gpio		= S3C2410_GPB2,
+	.def_trigger	= "",
+};
+
+static struct platform_device vr1000_led1 = {
+	.name		= "s3c24xx_led",
+	.id		= 1,
+	.dev		= {
+		.platform_data	= &vr1000_led1_pdata,
+	},
+};
+
+static struct platform_device vr1000_led2 = {
+	.name		= "s3c24xx_led",
+	.id		= 2,
+	.dev		= {
+		.platform_data	= &vr1000_led2_pdata,
+	},
+};
+
+static struct platform_device vr1000_led3 = {
+	.name		= "s3c24xx_led",
+	.id		= 3,
+	.dev		= {
+		.platform_data	= &vr1000_led3_pdata,
+	},
+};
+
 /* devices for this board */
 
 static struct platform_device *vr1000_devices[] __initdata = {
@@ -344,7 +370,10 @@ static struct platform_device *vr1000_devices[] __initdata = {
 	&serial_device,
 	&vr1000_nor,
 	&vr1000_dm9k0,
-	&vr1000_dm9k1
+	&vr1000_dm9k1,
+	&vr1000_led1,
+	&vr1000_led2,
+	&vr1000_led3,
 };
 
 static struct clk *vr1000_clocks[] = {

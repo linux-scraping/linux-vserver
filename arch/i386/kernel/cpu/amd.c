@@ -22,7 +22,7 @@
 extern void vide(void);
 __asm__(".align 4\nvide: ret");
 
-static void __init init_amd(struct cpuinfo_x86 *c)
+static void __cpuinit init_amd(struct cpuinfo_x86 *c)
 {
 	u32 l, h;
 	int mbytes = num_physpages >> (20-PAGE_SHIFT);
@@ -104,10 +104,7 @@ static void __init init_amd(struct cpuinfo_x86 *c)
 					f_vide();
 				rdtscl(d2);
 				d = d2-d;
-				
-				/* Knock these two lines out if it debugs out ok */
-				printk(KERN_INFO "AMD K6 stepping B detected - ");
-				/* -- cut here -- */
+
 				if (d > 20*K6_BUG_LOOP) 
 					printk("system stability may be impaired when more than 32 MB are used.\n");
 				else 
@@ -224,25 +221,29 @@ static void __init init_amd(struct cpuinfo_x86 *c)
 
 #ifdef CONFIG_X86_HT
 	/*
-	 * On a AMD dual core setup the lower bits of the APIC id
-	 * distingush the cores.  Assumes number of cores is a power
-	 * of two.
+	 * On a AMD multi core setup the lower bits of the APIC id
+	 * distingush the cores.
 	 */
 	if (c->x86_max_cores > 1) {
 		int cpu = smp_processor_id();
-		unsigned bits = 0;
-		while ((1 << bits) < c->x86_max_cores)
-			bits++;
-		cpu_core_id[cpu] = phys_proc_id[cpu] & ((1<<bits)-1);
-		phys_proc_id[cpu] >>= bits;
+		unsigned bits = (cpuid_ecx(0x80000008) >> 12) & 0xf;
+
+		if (bits == 0) {
+			while ((1 << bits) < c->x86_max_cores)
+				bits++;
+		}
+		c->cpu_core_id = c->phys_proc_id & ((1<<bits)-1);
+		c->phys_proc_id >>= bits;
 		printk(KERN_INFO "CPU %d(%d) -> Core %d\n",
-		       cpu, c->x86_max_cores, cpu_core_id[cpu]);
+		       cpu, c->x86_max_cores, c->cpu_core_id);
 	}
 #endif
 
+	if (cpuid_eax(0x80000000) >= 0x80000006)
+		num_cache_leaves = 3;
 }
 
-static unsigned int amd_size_cache(struct cpuinfo_x86 * c, unsigned int size)
+static unsigned int __cpuinit amd_size_cache(struct cpuinfo_x86 * c, unsigned int size)
 {
 	/* AMD errata T13 (order #21922) */
 	if ((c->x86 == 6)) {
@@ -255,7 +256,7 @@ static unsigned int amd_size_cache(struct cpuinfo_x86 * c, unsigned int size)
 	return size;
 }
 
-static struct cpu_dev amd_cpu_dev __initdata = {
+static struct cpu_dev amd_cpu_dev __cpuinitdata = {
 	.c_vendor	= "AMD",
 	.c_ident 	= { "AuthenticAMD" },
 	.c_models = {
@@ -271,7 +272,6 @@ static struct cpu_dev amd_cpu_dev __initdata = {
 		},
 	},
 	.c_init		= init_amd,
-	.c_identify	= generic_identify,
 	.c_size_cache	= amd_size_cache,
 };
 

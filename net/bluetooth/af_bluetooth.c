@@ -24,7 +24,6 @@
 
 /* Bluetooth address family and sockets. */
 
-#include <linux/config.h>
 #include <linux/module.h>
 
 #include <linux/types.h>
@@ -49,41 +48,56 @@
 #define BT_DBG(D...)
 #endif
 
-#define VERSION "2.8"
+#define VERSION "2.11"
 
 /* Bluetooth sockets */
 #define BT_MAX_PROTO	8
 static struct net_proto_family *bt_proto[BT_MAX_PROTO];
+static DEFINE_RWLOCK(bt_proto_lock);
 
 int bt_sock_register(int proto, struct net_proto_family *ops)
 {
+	int err = 0;
+
 	if (proto < 0 || proto >= BT_MAX_PROTO)
 		return -EINVAL;
 
-	if (bt_proto[proto])
-		return -EEXIST;
+	write_lock(&bt_proto_lock);
 
-	bt_proto[proto] = ops;
-	return 0;
+	if (bt_proto[proto])
+		err = -EEXIST;
+	else
+		bt_proto[proto] = ops;
+
+	write_unlock(&bt_proto_lock);
+
+	return err;
 }
 EXPORT_SYMBOL(bt_sock_register);
 
 int bt_sock_unregister(int proto)
 {
+	int err = 0;
+
 	if (proto < 0 || proto >= BT_MAX_PROTO)
 		return -EINVAL;
 
-	if (!bt_proto[proto])
-		return -ENOENT;
+	write_lock(&bt_proto_lock);
 
-	bt_proto[proto] = NULL;
-	return 0;
+	if (!bt_proto[proto])
+		err = -ENOENT;
+	else
+		bt_proto[proto] = NULL;
+
+	write_unlock(&bt_proto_lock);
+
+	return err;
 }
 EXPORT_SYMBOL(bt_sock_unregister);
 
 static int bt_sock_create(struct socket *sock, int proto)
 {
-	int err = 0;
+	int err;
 
 	if (proto < 0 || proto >= BT_MAX_PROTO)
 		return -EINVAL;
@@ -93,11 +107,18 @@ static int bt_sock_create(struct socket *sock, int proto)
 		request_module("bt-proto-%d", proto);
 	}
 #endif
+
 	err = -EPROTONOSUPPORT;
+
+	read_lock(&bt_proto_lock);
+
 	if (bt_proto[proto] && try_module_get(bt_proto[proto]->owner)) {
 		err = bt_proto[proto]->create(sock, proto);
 		module_put(bt_proto[proto]->owner);
 	}
+
+	read_unlock(&bt_proto_lock);
+
 	return err; 
 }
 
@@ -277,7 +298,7 @@ int bt_sock_wait_state(struct sock *sk, int state, unsigned long timeo)
 		set_current_state(TASK_INTERRUPTIBLE);
 
 		if (!timeo) {
-			err = -EAGAIN;
+			err = -EINPROGRESS;
 			break;
 		}
 
@@ -308,13 +329,21 @@ static struct net_proto_family bt_sock_family_ops = {
 
 static int __init bt_init(void)
 {
+	int err;
+
 	BT_INFO("Core ver %s", VERSION);
 
-	sock_register(&bt_sock_family_ops);
+	err = bt_sysfs_init();
+	if (err < 0)
+		return err;
+
+	err = sock_register(&bt_sock_family_ops);
+	if (err < 0) {
+		bt_sysfs_cleanup();
+		return err;
+	}
 
 	BT_INFO("HCI device and connection manager initialized");
-
-	bt_sysfs_init();
 
 	hci_sock_init();
 
@@ -325,9 +354,9 @@ static void __exit bt_exit(void)
 {
 	hci_sock_cleanup();
 
-	bt_sysfs_cleanup();
-
 	sock_unregister(PF_BLUETOOTH);
+
+	bt_sysfs_cleanup();
 }
 
 subsys_initcall(bt_init);

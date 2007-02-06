@@ -40,6 +40,7 @@
 
 #include <linux/list.h>
 #include <linux/spinlock.h>
+#include <linux/lockdep.h>
 
 struct rwsem_waiter;
 
@@ -61,36 +62,34 @@ struct rw_semaphore {
 #define RWSEM_ACTIVE_WRITE_BIAS		(RWSEM_WAITING_BIAS + RWSEM_ACTIVE_BIAS)
 	spinlock_t		wait_lock;
 	struct list_head	wait_list;
-#if RWSEM_DEBUG
-	int			debug;
+#ifdef CONFIG_DEBUG_LOCK_ALLOC
+	struct lockdep_map dep_map;
 #endif
 };
 
-/*
- * initialisation
- */
-#if RWSEM_DEBUG
-#define __RWSEM_DEBUG_INIT      , 0
+#ifdef CONFIG_DEBUG_LOCK_ALLOC
+# define __RWSEM_DEP_MAP_INIT(lockname) , .dep_map = { .name = #lockname }
 #else
-#define __RWSEM_DEBUG_INIT	/* */
+# define __RWSEM_DEP_MAP_INIT(lockname)
 #endif
 
+
 #define __RWSEM_INITIALIZER(name) \
-{ RWSEM_UNLOCKED_VALUE, SPIN_LOCK_UNLOCKED, LIST_HEAD_INIT((name).wait_list) \
-	__RWSEM_DEBUG_INIT }
+{ RWSEM_UNLOCKED_VALUE, __SPIN_LOCK_UNLOCKED((name).wait_lock), \
+  LIST_HEAD_INIT((name).wait_list) __RWSEM_DEP_MAP_INIT(name) }
 
 #define DECLARE_RWSEM(name) \
 	struct rw_semaphore name = __RWSEM_INITIALIZER(name)
 
-static inline void init_rwsem(struct rw_semaphore *sem)
-{
-	sem->count = RWSEM_UNLOCKED_VALUE;
-	spin_lock_init(&sem->wait_lock);
-	INIT_LIST_HEAD(&sem->wait_list);
-#if RWSEM_DEBUG
-	sem->debug = 0;
-#endif
-}
+extern void __init_rwsem(struct rw_semaphore *sem, const char *name,
+			 struct lock_class_key *key);
+
+#define init_rwsem(sem)						\
+do {								\
+	static struct lock_class_key __key;			\
+								\
+	__init_rwsem((sem), #sem, &__key);			\
+} while (0)
 
 /*
  * lock for reading
@@ -100,20 +99,12 @@ static inline void __down_read(struct rw_semaphore *sem)
 	__asm__ __volatile__(
 		"# beginning down_read\n\t"
 LOCK_PREFIX	"  incl      (%%eax)\n\t" /* adds 0x00000001, returns the old value */
-		"  js        2f\n\t" /* jump if we weren't granted the lock */
+		"  jns        1f\n"
+		"  call call_rwsem_down_read_failed\n"
 		"1:\n\t"
-		LOCK_SECTION_START("")
-		"2:\n\t"
-		"  pushl     %%ecx\n\t"
-		"  pushl     %%edx\n\t"
-		"  call      rwsem_down_read_failed\n\t"
-		"  popl      %%edx\n\t"
-		"  popl      %%ecx\n\t"
-		"  jmp       1b\n"
-		LOCK_SECTION_END
 		"# ending down_read\n\t"
-		: "=m"(sem->count)
-		: "a"(sem), "m"(sem->count)
+		: "+m" (sem->count)
+		: "a" (sem)
 		: "memory", "cc");
 }
 
@@ -134,8 +125,8 @@ LOCK_PREFIX	"  cmpxchgl  %2,%0\n\t"
 		"  jnz	     1b\n\t"
 		"2:\n\t"
 		"# ending __down_read_trylock\n\t"
-		: "+m"(sem->count), "=&a"(result), "=&r"(tmp)
-		: "i"(RWSEM_ACTIVE_READ_BIAS)
+		: "+m" (sem->count), "=&a" (result), "=&r" (tmp)
+		: "i" (RWSEM_ACTIVE_READ_BIAS)
 		: "memory", "cc");
 	return result>=0 ? 1 : 0;
 }
@@ -143,7 +134,7 @@ LOCK_PREFIX	"  cmpxchgl  %2,%0\n\t"
 /*
  * lock for writing
  */
-static inline void __down_write(struct rw_semaphore *sem)
+static inline void __down_write_nested(struct rw_semaphore *sem, int subclass)
 {
 	int tmp;
 
@@ -152,19 +143,18 @@ static inline void __down_write(struct rw_semaphore *sem)
 		"# beginning down_write\n\t"
 LOCK_PREFIX	"  xadd      %%edx,(%%eax)\n\t" /* subtract 0x0000ffff, returns the old value */
 		"  testl     %%edx,%%edx\n\t" /* was the count 0 before? */
-		"  jnz       2f\n\t" /* jump if we weren't granted the lock */
-		"1:\n\t"
-		LOCK_SECTION_START("")
-		"2:\n\t"
-		"  pushl     %%ecx\n\t"
-		"  call      rwsem_down_write_failed\n\t"
-		"  popl      %%ecx\n\t"
-		"  jmp       1b\n"
-		LOCK_SECTION_END
+		"  jz        1f\n"
+		"  call call_rwsem_down_write_failed\n"
+		"1:\n"
 		"# ending down_write"
-		: "=m"(sem->count), "=d"(tmp)
-		: "a"(sem), "1"(tmp), "m"(sem->count)
+		: "+m" (sem->count), "=d" (tmp)
+		: "a" (sem), "1" (tmp)
 		: "memory", "cc");
+}
+
+static inline void __down_write(struct rw_semaphore *sem)
+{
+	__down_write_nested(sem, 0);
 }
 
 /*
@@ -189,20 +179,12 @@ static inline void __up_read(struct rw_semaphore *sem)
 	__asm__ __volatile__(
 		"# beginning __up_read\n\t"
 LOCK_PREFIX	"  xadd      %%edx,(%%eax)\n\t" /* subtracts 1, returns the old value */
-		"  js        2f\n\t" /* jump if the lock is being waited upon */
-		"1:\n\t"
-		LOCK_SECTION_START("")
-		"2:\n\t"
-		"  decw      %%dx\n\t" /* do nothing if still outstanding active readers */
-		"  jnz       1b\n\t"
-		"  pushl     %%ecx\n\t"
-		"  call      rwsem_wake\n\t"
-		"  popl      %%ecx\n\t"
-		"  jmp       1b\n"
-		LOCK_SECTION_END
+		"  jns        1f\n\t"
+		"  call call_rwsem_wake\n"
+		"1:\n"
 		"# ending __up_read\n"
-		: "=m"(sem->count), "=d"(tmp)
-		: "a"(sem), "1"(tmp), "m"(sem->count)
+		: "+m" (sem->count), "=d" (tmp)
+		: "a" (sem), "1" (tmp)
 		: "memory", "cc");
 }
 
@@ -215,20 +197,12 @@ static inline void __up_write(struct rw_semaphore *sem)
 		"# beginning __up_write\n\t"
 		"  movl      %2,%%edx\n\t"
 LOCK_PREFIX	"  xaddl     %%edx,(%%eax)\n\t" /* tries to transition 0xffff0001 -> 0x00000000 */
-		"  jnz       2f\n\t" /* jump if the lock is being waited upon */
+		"  jz       1f\n"
+		"  call call_rwsem_wake\n"
 		"1:\n\t"
-		LOCK_SECTION_START("")
-		"2:\n\t"
-		"  decw      %%dx\n\t" /* did the active count reduce to 0? */
-		"  jnz       1b\n\t" /* jump back if not */
-		"  pushl     %%ecx\n\t"
-		"  call      rwsem_wake\n\t"
-		"  popl      %%ecx\n\t"
-		"  jmp       1b\n"
-		LOCK_SECTION_END
 		"# ending __up_write\n"
-		: "=m"(sem->count)
-		: "a"(sem), "i"(-RWSEM_ACTIVE_WRITE_BIAS), "m"(sem->count)
+		: "+m" (sem->count)
+		: "a" (sem), "i" (-RWSEM_ACTIVE_WRITE_BIAS)
 		: "memory", "cc", "edx");
 }
 
@@ -240,20 +214,12 @@ static inline void __downgrade_write(struct rw_semaphore *sem)
 	__asm__ __volatile__(
 		"# beginning __downgrade_write\n\t"
 LOCK_PREFIX	"  addl      %2,(%%eax)\n\t" /* transitions 0xZZZZ0001 -> 0xYYYY0001 */
-		"  js        2f\n\t" /* jump if the lock is being waited upon */
+		"  jns       1f\n\t"
+		"  call call_rwsem_downgrade_wake\n"
 		"1:\n\t"
-		LOCK_SECTION_START("")
-		"2:\n\t"
-		"  pushl     %%ecx\n\t"
-		"  pushl     %%edx\n\t"
-		"  call      rwsem_downgrade_wake\n\t"
-		"  popl      %%edx\n\t"
-		"  popl      %%ecx\n\t"
-		"  jmp       1b\n"
-		LOCK_SECTION_END
 		"# ending __downgrade_write\n"
-		: "=m"(sem->count)
-		: "a"(sem), "i"(-RWSEM_WAITING_BIAS), "m"(sem->count)
+		: "+m" (sem->count)
+		: "a" (sem), "i" (-RWSEM_WAITING_BIAS)
 		: "memory", "cc");
 }
 
@@ -264,8 +230,8 @@ static inline void rwsem_atomic_add(int delta, struct rw_semaphore *sem)
 {
 	__asm__ __volatile__(
 LOCK_PREFIX	"addl %1,%0"
-		: "=m"(sem->count)
-		: "ir"(delta), "m"(sem->count));
+		: "+m" (sem->count)
+		: "ir" (delta));
 }
 
 /*
@@ -276,10 +242,9 @@ static inline int rwsem_atomic_update(int delta, struct rw_semaphore *sem)
 	int tmp = delta;
 
 	__asm__ __volatile__(
-LOCK_PREFIX	"xadd %0,(%2)"
-		: "+r"(tmp), "=m"(sem->count)
-		: "r"(sem), "m"(sem->count)
-		: "memory");
+LOCK_PREFIX	"xadd %0,%1"
+		: "+r" (tmp), "+m" (sem->count)
+		: : "memory");
 
 	return tmp+delta;
 }

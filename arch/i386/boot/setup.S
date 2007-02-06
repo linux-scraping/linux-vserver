@@ -46,9 +46,8 @@
  * by Robert Schwebel, December 2001 <robert@schwebel.de>
  */
 
-#include <linux/config.h>
 #include <asm/segment.h>
-#include <linux/version.h>
+#include <linux/utsrelease.h>
 #include <linux/compile.h>
 #include <asm/boot.h>
 #include <asm/e820.h>
@@ -82,7 +81,7 @@ start:
 # This is the setup header, and it must start at %cs:2 (old 0x9020:2)
 
 		.ascii	"HdrS"		# header signature
-		.word	0x0204		# header version number (>= 0x0105)
+		.word	0x0205		# header version number (>= 0x0105)
 					# or else old loadlin-1.5 will fail)
 realmode_swtch:	.word	0, 0		# default_switch, SETUPSEG
 start_sys_seg:	.word	SYSSEG
@@ -160,6 +159,17 @@ ramdisk_max:	.long (-__PAGE_OFFSET-(512 << 20)-1) & 0x7fffffff
 					# (Header version 0x0203 or later)
 					# The highest safe address for
 					# the contents of an initrd
+
+kernel_alignment:  .long CONFIG_PHYSICAL_ALIGN 	#physical addr alignment
+						#required for protected mode
+						#kernel
+#ifdef CONFIG_RELOCATABLE
+relocatable_kernel:    .byte 1
+#else
+relocatable_kernel:    .byte 0
+#endif
+pad2:			.byte 0
+pad3:			.word 0
 
 trampoline:	call	start_of_setup
 		.align 16
@@ -495,12 +505,12 @@ no_voyager:
 	movw	%cs, %ax			# aka SETUPSEG
 	subw	$DELTA_INITSEG, %ax		# aka INITSEG
 	movw	%ax, %ds
-	movw	$0, (0x1ff)			# default is no pointing device
+	movb	$0, (0x1ff)			# default is no pointing device
 	int	$0x11				# int 0x11: equipment list
 	testb	$0x04, %al			# check if mouse installed
 	jz	no_psmouse
 
-	movw	$0xAA, (0x1ff)			# device present
+	movb	$0xAA, (0x1ff)			# device present
 no_psmouse:
 
 #if defined(CONFIG_X86_SPEEDSTEP_SMI) || defined(CONFIG_X86_SPEEDSTEP_SMI_MODULE)
@@ -589,11 +599,6 @@ rmodeswtch_normal:
 	call	default_switch
 
 rmodeswtch_end:
-# we get the code32 start address and modify the below 'jmpi'
-# (loader may have changed it)
-	movl	%cs:code32_start, %eax
-	movl	%eax, %cs:code32
-
 # Now we move the system to its rightful place ... but we check if we have a
 # big-kernel. In that case we *must* not move it ...
 	testb	$LOADED_HIGH, %cs:loadflags
@@ -789,11 +794,12 @@ a20_err_msg:
 a20_done:
 
 #endif /* CONFIG_X86_VOYAGER */
-# set up gdt and idt
+# set up gdt and idt and 32bit start address
 	lidt	idt_48				# load idt with 0,0
 	xorl	%eax, %eax			# Compute gdt_base
 	movw	%ds, %ax			# (Convert %ds:gdt to a linear ptr)
 	shll	$4, %eax
+	addl	%eax, code32
 	addl	$gdt, %eax
 	movl	%eax, (gdt_48+2)
 	lgdt	gdt_48				# load gdt with whatever is
@@ -852,9 +858,26 @@ flush_instr:
 #	Manual, Mixing 16-bit and 32-bit code, page 16-6)
 
 	.byte 0x66, 0xea			# prefix + jmpi-opcode
-code32:	.long	0x1000				# will be set to 0x100000
-						# for big kernels
+code32:	.long	startup_32			# will be set to %cs+startup_32
 	.word	__BOOT_CS
+.code32
+startup_32:
+	movl $(__BOOT_DS), %eax
+	movl %eax, %ds
+	movl %eax, %es
+	movl %eax, %fs
+	movl %eax, %gs
+	movl %eax, %ss
+
+	xorl %eax, %eax
+1:	incl %eax				# check that A20 really IS enabled
+	movl %eax, 0x00000000			# loop forever if it isn't
+	cmpl %eax, 0x00100000
+	je 1b
+
+	# Jump to the 32bit entry point
+	jmpl *(code32_start - start + (DELTA_INITSEG << 4))(%esi)
+.code16
 
 # Here's a bunch of information about your current kernel..
 kernel_version:	.ascii	UTS_RELEASE

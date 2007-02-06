@@ -44,17 +44,19 @@
 #define HCI_NOTIFY_VOICE_SETTING	3
 
 /* HCI device types */
-#define HCI_VHCI	0
+#define HCI_VIRTUAL	0
 #define HCI_USB		1
 #define HCI_PCCARD	2
 #define HCI_UART	3
 #define HCI_RS232	4
 #define HCI_PCI		5
+#define HCI_SDIO	6
 
 /* HCI device quirks */
 enum {
 	HCI_QUIRK_RESET_ON_INIT,
-	HCI_QUIRK_RAW_DEVICE
+	HCI_QUIRK_RAW_DEVICE,
+	HCI_QUIRK_FIXUP_BUFFER_SIZE
 };
 
 /* HCI device flags */
@@ -100,9 +102,10 @@ enum {
 #define HCIINQUIRY	_IOR('H', 240, int)
 
 /* HCI timeouts */
-#define HCI_CONN_TIMEOUT	(HZ * 40)
-#define HCI_DISCONN_TIMEOUT	(HZ * 2)
-#define HCI_CONN_IDLE_TIMEOUT	(HZ * 60)
+#define HCI_CONNECT_TIMEOUT	(40000)	/* 40 seconds */
+#define HCI_DISCONN_TIMEOUT	(2000)	/* 2 seconds */
+#define HCI_IDLE_TIMEOUT	(6000)	/* 6 seconds */
+#define HCI_INIT_TIMEOUT	(10000)	/* 10 seconds */
 
 /* HCI Packet types */
 #define HCI_COMMAND_PKT		0x01
@@ -144,7 +147,7 @@ enum {
 #define LMP_TACCURACY	0x10
 #define LMP_RSWITCH	0x20
 #define LMP_HOLD	0x40
-#define LMP_SNIF	0x80
+#define LMP_SNIFF	0x80
 
 #define LMP_PARK	0x01
 #define LMP_RSSI	0x02
@@ -159,13 +162,21 @@ enum {
 #define LMP_PSCHEME	0x02
 #define LMP_PCONTROL	0x04
 
+#define LMP_SNIFF_SUBR	0x02
+
+/* Connection modes */
+#define HCI_CM_ACTIVE	0x0000
+#define HCI_CM_HOLD	0x0001
+#define HCI_CM_SNIFF	0x0002
+#define HCI_CM_PARK	0x0003
+
 /* Link policies */
 #define HCI_LP_RSWITCH	0x0001
 #define HCI_LP_HOLD	0x0002
 #define HCI_LP_SNIFF	0x0004
 #define HCI_LP_PARK	0x0008
 
-/* Link mode */
+/* Link modes */
 #define HCI_LM_ACCEPT	0x8000
 #define HCI_LM_MASTER	0x0001
 #define HCI_LM_AUTH	0x0002
@@ -191,7 +202,7 @@ struct hci_rp_read_loc_version {
 } __attribute__ ((packed));
 
 #define OCF_READ_LOCAL_FEATURES	0x0003
-struct hci_rp_read_loc_features {
+struct hci_rp_read_local_features {
 	__u8 status;
 	__u8 features[8];
 } __attribute__ ((packed));
@@ -286,6 +297,7 @@ struct hci_cp_host_buffer_size {
 
 /* Link Control */
 #define OGF_LINK_CTL	0x01 
+
 #define OCF_CREATE_CONN		0x0005
 struct hci_cp_create_conn {
 	bdaddr_t bdaddr;
@@ -294,6 +306,11 @@ struct hci_cp_create_conn {
 	__u8     pscan_mode;
 	__le16   clock_offset;
 	__u8     role_switch;
+} __attribute__ ((packed));
+
+#define OCF_CREATE_CONN_CANCEL	0x0008
+struct hci_cp_create_conn_cancel {
+	bdaddr_t bdaddr;
 } __attribute__ ((packed));
 
 #define OCF_ACCEPT_CONN_REQ	0x0009
@@ -328,6 +345,8 @@ struct hci_cp_inquiry {
 } __attribute__ ((packed));
 
 #define OCF_INQUIRY_CANCEL	0x0002
+
+#define OCF_EXIT_PERIODIC_INQ	0x0004
 
 #define OCF_LINK_KEY_REPLY	0x000B
 struct hci_cp_link_key_reply {
@@ -375,17 +394,32 @@ struct hci_cp_change_conn_link_key {
 } __attribute__ ((packed));
 
 #define OCF_READ_REMOTE_FEATURES 0x001B
-struct hci_cp_read_rmt_features {
+struct hci_cp_read_remote_features {
 	__le16   handle;
 } __attribute__ ((packed));
 
 #define OCF_READ_REMOTE_VERSION 0x001D
-struct hci_cp_read_rmt_version {
+struct hci_cp_read_remote_version {
 	__le16   handle;
 } __attribute__ ((packed));
 
 /* Link Policy */
-#define OGF_LINK_POLICY	 0x02   
+#define OGF_LINK_POLICY	0x02   
+
+#define OCF_SNIFF_MODE		0x0003
+struct hci_cp_sniff_mode {
+	__le16   handle;
+	__le16   max_interval;
+	__le16   min_interval;
+	__le16   attempt;
+	__le16   timeout;
+} __attribute__ ((packed));
+
+#define OCF_EXIT_SNIFF_MODE	0x0004
+struct hci_cp_exit_sniff_mode {
+	__le16   handle;
+} __attribute__ ((packed));
+
 #define OCF_ROLE_DISCOVERY	0x0009
 struct hci_cp_role_discovery {
 	__le16   handle;
@@ -406,7 +440,7 @@ struct hci_rp_read_link_policy {
 	__le16   policy;
 } __attribute__ ((packed));
 
-#define OCF_SWITCH_ROLE	0x000B
+#define OCF_SWITCH_ROLE		0x000B
 struct hci_cp_switch_role {
 	bdaddr_t bdaddr;
 	__u8     role;
@@ -420,6 +454,14 @@ struct hci_cp_write_link_policy {
 struct hci_rp_write_link_policy {
 	__u8     status;
 	__le16   handle;
+} __attribute__ ((packed));
+
+#define OCF_SNIFF_SUBRATE	0x0011
+struct hci_cp_sniff_subrate {
+	__le16   handle;
+	__le16   max_latency;
+	__le16   min_remote_timeout;
+	__le16   min_local_timeout;
 } __attribute__ ((packed));
 
 /* Status params */
@@ -581,15 +623,15 @@ struct hci_ev_link_key_notify {
 	__u8	 key_type;
 } __attribute__ ((packed));
 
-#define HCI_EV_RMT_FEATURES	0x0B
-struct hci_ev_rmt_features {
+#define HCI_EV_REMOTE_FEATURES	0x0B
+struct hci_ev_remote_features {
 	__u8     status;
 	__le16   handle;
 	__u8     features[8];
 } __attribute__ ((packed));
 
-#define HCI_EV_RMT_VERSION	0x0C
-struct hci_ev_rmt_version {
+#define HCI_EV_REMOTE_VERSION	0x0C
+struct hci_ev_remote_version {
 	__u8     status;
 	__le16   handle;
 	__u8     lmp_ver;
@@ -608,6 +650,16 @@ struct hci_ev_clock_offset {
 struct hci_ev_pscan_rep_mode {
 	bdaddr_t bdaddr;
 	__u8     pscan_rep_mode;
+} __attribute__ ((packed));
+
+#define HCI_EV_SNIFF_SUBRATE	0x2E
+struct hci_ev_sniff_subrate {
+	__u8     status;
+	__le16   handle;
+	__le16   max_tx_latency;
+	__le16   max_rx_latency;
+	__le16   max_remote_timeout;
+	__le16   max_local_timeout;
 } __attribute__ ((packed));
 
 /* Internal events generated by Bluetooth stack */
@@ -687,13 +739,13 @@ struct sockaddr_hci {
 struct hci_filter {
 	unsigned long type_mask;
 	unsigned long event_mask[2];
-	__u16   opcode;
+	__le16   opcode;
 };
 
 struct hci_ufilter {
 	__u32   type_mask;
 	__u32   event_mask[2];
-	__u16   opcode;
+	__le16   opcode;
 };
 
 #define HCI_FLT_TYPE_BITS	31

@@ -22,7 +22,6 @@
  *    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
-#include <linux/config.h>
 #include <asm/asm-offsets.h>
 
 /* we have the following possibilities to act on an interruption:
@@ -31,6 +30,7 @@
 
 
 #include <asm/psw.h>
+#include <asm/cache.h>		/* for L1_CACHE_SHIFT */
 #include <asm/assembly.h>	/* for LDREG/STREG defines */
 #include <asm/pgtable.h>
 #include <asm/signal.h>
@@ -479,11 +479,7 @@
 	bb,>=,n		\pmd,_PxD_PRESENT_BIT,\fault
 	DEP		%r0,31,PxD_FLAG_SHIFT,\pmd /* clear flags */
 	copy		\pmd,%r9
-#ifdef CONFIG_64BIT
-	shld		%r9,PxD_VALUE_SHIFT,\pmd
-#else
-	shlw		%r9,PxD_VALUE_SHIFT,\pmd
-#endif
+	SHLREG		%r9,PxD_VALUE_SHIFT,\pmd
 	EXTR		\va,31-PAGE_SHIFT,ASM_BITS_PER_PTE,\index
 	DEP		%r0,31,PAGE_SHIFT,\pmd  /* clear offset */
 	shladd		\index,BITS_PER_PTE_ENTRY,\pmd,\pmd
@@ -765,6 +761,7 @@ fault_vector_11:
 
 #define CLONE_VM 0x100	/* Must agree with <linux/sched.h> */
 #define CLONE_UNTRACED 0x00800000
+#define CLONE_KTHREAD 0x10000000
 
 	.export __kernel_thread, code
 	.import do_fork
@@ -942,8 +939,8 @@ syscall_exit_rfi:
 	 * to "proper" values now (otherwise we'll wind up restoring
 	 * whatever was last stored in the task structure, which might
 	 * be inconsistent if an interrupt occured while on the gateway
-	 * page) Note that we may be "trashing" values the user put in
-	 * them, but we don't support the the user changing them.
+	 * page). Note that we may be "trashing" values the user put in
+	 * them, but we don't support the user changing them.
 	 */
 
 	STREG   %r0,PT_SR2(%r16)
@@ -971,11 +968,7 @@ intr_return:
 	/* shift left ____cacheline_aligned (aka L1_CACHE_BYTES) amount
 	** irq_stat[] is defined using ____cacheline_aligned.
 	*/
-#ifdef CONFIG_64BIT
-	shld	%r1, 6, %r20
-#else
-	shlw	%r1, 5, %r20
-#endif
+	SHLREG	%r1,L1_CACHE_SHIFT,%r20
 	add     %r19,%r20,%r19	/* now have &irq_stat[smp_processor_id()] */
 #endif /* CONFIG_SMP */
 
@@ -1077,7 +1070,7 @@ intr_do_preempt:
 	BL	preempt_schedule_irq, %r2
 	nop
 
-	b	intr_restore		/* ssm PSW_SM_I done by intr_restore */
+	b,n	intr_restore		/* ssm PSW_SM_I done by intr_restore */
 #endif /* CONFIG_PREEMPT */
 
 	.import do_signal,code
@@ -1638,7 +1631,7 @@ dbit_trap_20w:
 	load32		PA(pa_dbit_lock),t0
 
 dbit_spin_20w:
-	ldcw            0(t0),t1
+	LDCW		0(t0),t1
 	cmpib,=         0,t1,dbit_spin_20w
 	nop
 
@@ -1674,7 +1667,7 @@ dbit_trap_11:
 	load32		PA(pa_dbit_lock),t0
 
 dbit_spin_11:
-	ldcw            0(t0),t1
+	LDCW		0(t0),t1
 	cmpib,=         0,t1,dbit_spin_11
 	nop
 
@@ -1714,7 +1707,7 @@ dbit_trap_20:
 	load32		PA(pa_dbit_lock),t0
 
 dbit_spin_20:
-	ldcw            0(t0),t1
+	LDCW		0(t0),t1
 	cmpib,=         0,t1,dbit_spin_20
 	nop
 
@@ -2116,11 +2109,7 @@ syscall_check_bh:
 	ldw     TI_CPU-THREAD_SZ_ALGN-FRAME_SIZE(%r30),%r26 /* cpu # */
 
 	/* shift left ____cacheline_aligned (aka L1_CACHE_BYTES) bits */
-#ifdef CONFIG_64BIT
-	shld	%r26, 6, %r20
-#else
-	shlw	%r26, 5, %r20
-#endif
+	SHLREG	%r26,L1_CACHE_SHIFT,%r20
 	add     %r19,%r20,%r19	/* now have &irq_stat[smp_processor_id()] */
 #endif /* CONFIG_SMP */
 

@@ -19,13 +19,13 @@
 
 #include <linux/module.h>
 #include <linux/reboot.h>
+#include <linux/irq.h>
 #include <linux/interrupt.h>
+#include <linux/reboot.h>
 
 #include <asm/mach-types.h>
 
-extern void ctrl_alt_del(void);
-
-static irqreturn_t nslu2_power_handler(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t nslu2_power_handler(int irq, void *dev_id)
 {
 	/* Signal init to do the ctrlaltdel action, this will bypass init if
 	 * it hasn't started and do a kernel_restart.
@@ -35,7 +35,7 @@ static irqreturn_t nslu2_power_handler(int irq, void *dev_id, struct pt_regs *re
 	return IRQ_HANDLED;
 }
 
-static irqreturn_t nslu2_reset_handler(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t nslu2_reset_handler(int irq, void *dev_id)
 {
 	/* This is the paper-clip reset, it shuts the machine down directly.
 	 */
@@ -55,7 +55,7 @@ static int __init nslu2_power_init(void)
 	set_irq_type(NSLU2_PB_IRQ, IRQT_HIGH);
 
 	if (request_irq(NSLU2_RB_IRQ, &nslu2_reset_handler,
-		SA_INTERRUPT, "NSLU2 reset button", NULL) < 0) {
+		IRQF_DISABLED, "NSLU2 reset button", NULL) < 0) {
 
 		printk(KERN_DEBUG "Reset Button IRQ %d not available\n",
 			NSLU2_RB_IRQ);
@@ -64,7 +64,7 @@ static int __init nslu2_power_init(void)
 	}
 
 	if (request_irq(NSLU2_PB_IRQ, &nslu2_power_handler,
-		SA_INTERRUPT, "NSLU2 power button", NULL) < 0) {
+		IRQF_DISABLED, "NSLU2 power button", NULL) < 0) {
 
 		printk(KERN_DEBUG "Power Button IRQ %d not available\n",
 			NSLU2_PB_IRQ);

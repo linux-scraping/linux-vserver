@@ -8,7 +8,6 @@
  * Code supporting the EB64+ and EB66.
  */
 
-#include <linux/config.h>
 #include <linux/kernel.h>
 #include <linux/types.h>
 #include <linux/mm.h>
@@ -81,7 +80,7 @@ static struct hw_interrupt_type eb64p_irq_type = {
 };
 
 static void 
-eb64p_device_interrupt(unsigned long vector, struct pt_regs *regs)
+eb64p_device_interrupt(unsigned long vector)
 {
 	unsigned long pld;
 	unsigned int i;
@@ -98,9 +97,9 @@ eb64p_device_interrupt(unsigned long vector, struct pt_regs *regs)
 		pld &= pld - 1;	/* clear least bit set */
 
 		if (i == 5) {
-			isa_device_interrupt(vector, regs);
+			isa_device_interrupt(vector);
 		} else {
-			handle_irq(16 + i, regs);
+			handle_irq(16 + i);
 		}
 	}
 }
@@ -137,7 +136,7 @@ eb64p_init_irq(void)
 
 	for (i = 16; i < 32; ++i) {
 		irq_desc[i].status = IRQ_DISABLED | IRQ_LEVEL;
-		irq_desc[i].handler = &eb64p_irq_type;
+		irq_desc[i].chip = &eb64p_irq_type;
 	}		
 
 	common_init_isa_dma();

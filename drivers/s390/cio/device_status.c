@@ -9,7 +9,6 @@
  * Status accumulation and basic sense functions.
  */
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/init.h>
 
@@ -33,19 +32,18 @@ ccw_device_msg_control_check(struct ccw_device *cdev, struct irb *irb)
 				 SCHN_STAT_CHN_CTRL_CHK |
 				 SCHN_STAT_INTF_CTRL_CHK)))
 		return;
-		
 	CIO_MSG_EVENT(0, "Channel-Check or Interface-Control-Check "
 		      "received"
 		      " ... device %04x on subchannel 0.%x.%04x, dev_stat "
 		      ": %02X sch_stat : %02X\n",
-		      cdev->private->devno, cdev->private->ssid,
-		      cdev->private->sch_no,
+		      cdev->private->dev_id.devno, cdev->private->schid.ssid,
+		      cdev->private->schid.sch_no,
 		      irb->scsw.dstat, irb->scsw.cstat);
 
 	if (irb->scsw.cc != 3) {
 		char dbf_text[15];
 
-		sprintf(dbf_text, "chk%x", cdev->private->sch_no);
+		sprintf(dbf_text, "chk%x", cdev->private->schid.sch_no);
 		CIO_TRACE_EVENT(0, dbf_text);
 		CIO_HEX_EVENT(0, irb, sizeof (struct irb));
 	}
@@ -68,8 +66,7 @@ ccw_device_path_notoper(struct ccw_device *cdev)
 		      sch->schib.pmcw.pnom);
 
 	sch->lpm &= ~sch->schib.pmcw.pnom;
-	if (cdev->private->options.pgroup)
-		cdev->private->flags.doverify = 1;
+	cdev->private->flags.doverify = 1;
 }
 
 /*
@@ -181,7 +178,7 @@ ccw_device_accumulate_esw(struct ccw_device *cdev, struct irb *irb)
 	cdev_irb->esw.esw0.erw.auth = irb->esw.esw0.erw.auth;
 	/* Copy path verification required flag. */
 	cdev_irb->esw.esw0.erw.pvrf = irb->esw.esw0.erw.pvrf;
-	if (irb->esw.esw0.erw.pvrf && cdev->private->options.pgroup)
+	if (irb->esw.esw0.erw.pvrf)
 		cdev->private->flags.doverify = 1;
 	/* Copy concurrent sense bit. */
 	cdev_irb->esw.esw0.erw.cons = irb->esw.esw0.erw.cons;
@@ -322,6 +319,9 @@ ccw_device_do_sense(struct ccw_device *cdev, struct irb *irb)
 	sch->sense_ccw.count = SENSE_MAX_COUNT;
 	sch->sense_ccw.flags = CCW_FLAG_SLI;
 
+	/* Reset internal retry indication. */
+	cdev->private->flags.intretry = 0;
+
 	return cio_start (sch, &sch->sense_ccw, 0xff);
 }
 
@@ -355,7 +355,7 @@ ccw_device_accumulate_basic_sense(struct ccw_device *cdev, struct irb *irb)
 	}
 	/* Check if path verification is required. */
 	if (ccw_device_accumulate_esw_valid(irb) &&
-	    irb->esw.esw0.erw.pvrf && cdev->private->options.pgroup) 
+	    irb->esw.esw0.erw.pvrf)
 		cdev->private->flags.doverify = 1;
 }
 

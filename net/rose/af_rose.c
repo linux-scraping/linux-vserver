@@ -10,7 +10,6 @@
  * Copyright (C) Tomi Manninen OH2BNS (oh2bns@sral.fi)
  */
 
-#include <linux/config.h>
 #include <linux/capability.h>
 #include <linux/module.h>
 #include <linux/moduleparam.h>
@@ -66,6 +65,14 @@ static DEFINE_SPINLOCK(rose_list_lock);
 static struct proto_ops rose_proto_ops;
 
 ax25_address rose_callsign;
+
+/*
+ * ROSE network devices are virtual network devices encapsulating ROSE
+ * frames into AX.25 which will be sent through an AX.25 device, so form a
+ * special "super class" of normal net devices; split their locks off into a
+ * separate class since they always nest.
+ */
+static struct lock_class_key rose_netdev_xmit_lock_key;
 
 /*
  *	Convert a ROSE address into text.
@@ -753,7 +760,7 @@ static int rose_connect(struct socket *sock, struct sockaddr *uaddr, int addr_le
 
 		rose_insert_socket(sk);		/* Finish the bind */
 	}
-
+rose_try_next_neigh:
 	rose->dest_addr   = addr->srose_addr;
 	rose->dest_call   = addr->srose_call;
 	rose->rand        = ((long)rose & 0xFFFF) + rose->lci;
@@ -811,6 +818,11 @@ static int rose_connect(struct socket *sock, struct sockaddr *uaddr, int addr_le
 	}
 
 	if (sk->sk_state != TCP_ESTABLISHED) {
+	/* Try next neighbour */
+		rose->neighbour = rose_get_neigh(&addr->srose_addr, &cause, &diagnostic);
+		if (rose->neighbour)
+			goto rose_try_next_neigh;
+	/* No more neighbour */
 		sock->state = SS_UNCONNECTED;
 		return sock_error(sk);	/* Always set at this point */
 	}
@@ -1302,7 +1314,8 @@ static int rose_ioctl(struct socket *sock, unsigned int cmd, unsigned long arg)
 		if (copy_from_user(&rose_callsign, argp, sizeof(ax25_address)))
 			return -EFAULT;
 		if (ax25cmp(&rose_callsign, &null_ax25_address) != 0)
-			ax25_listen_register(&rose_callsign, NULL);
+			return ax25_listen_register(&rose_callsign, NULL);
+
 		return 0;
 
 	case SIOCRSGL2CALL:
@@ -1469,6 +1482,15 @@ static struct notifier_block rose_dev_notifier = {
 
 static struct net_device **dev_rose;
 
+static struct ax25_protocol rose_pid = {
+	.pid	= AX25_P_ROSE,
+	.func	= rose_route_frame
+};
+
+static struct ax25_linkfail rose_linkfail_notifier = {
+	.func	= rose_link_failed
+};
+
 static int __init rose_proto_init(void)
 {
 	int i;
@@ -1486,14 +1508,13 @@ static int __init rose_proto_init(void)
 
 	rose_callsign = null_ax25_address;
 
-	dev_rose = kmalloc(rose_ndevs * sizeof(struct net_device *), GFP_KERNEL);
+	dev_rose = kzalloc(rose_ndevs * sizeof(struct net_device *), GFP_KERNEL);
 	if (dev_rose == NULL) {
 		printk(KERN_ERR "ROSE: rose_proto_init - unable to allocate device structure\n");
 		rc = -ENOMEM;
 		goto out_proto_unregister;
 	}
 
-	memset(dev_rose, 0x00, rose_ndevs * sizeof(struct net_device*));
 	for (i = 0; i < rose_ndevs; i++) {
 		struct net_device *dev;
 		char name[IFNAMSIZ];
@@ -1512,14 +1533,15 @@ static int __init rose_proto_init(void)
 			free_netdev(dev);
 			goto fail;
 		}
+		lockdep_set_class(&dev->_xmit_lock, &rose_netdev_xmit_lock_key);
 		dev_rose[i] = dev;
 	}
 
 	sock_register(&rose_family_ops);
 	register_netdevice_notifier(&rose_dev_notifier);
 
-	ax25_protocol_register(AX25_P_ROSE, rose_route_frame);
-	ax25_linkfail_register(rose_link_failed);
+	ax25_register_pid(&rose_pid);
+	ax25_linkfail_register(&rose_linkfail_notifier);
 
 #ifdef CONFIG_SYSCTL
 	rose_register_sysctl();
@@ -1567,7 +1589,7 @@ static void __exit rose_exit(void)
 	rose_rt_free();
 
 	ax25_protocol_release(AX25_P_ROSE);
-	ax25_linkfail_release(rose_link_failed);
+	ax25_linkfail_release(&rose_linkfail_notifier);
 
 	if (ax25cmp(&rose_callsign, &null_ax25_address) != 0)
 		ax25_listen_release(&rose_callsign, NULL);

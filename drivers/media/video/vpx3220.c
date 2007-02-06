@@ -34,6 +34,7 @@
 #define I2C_NAME(x) (x)->name
 
 #include <linux/videodev.h>
+#include <media/v4l2-common.h>
 #include <linux/video_decoder.h>
 
 #define I2C_VPX3220        0x86
@@ -743,6 +744,6 @@ vpx3220_cleanup (void)
 module_init(vpx3220_init);
 module_exit(vpx3220_cleanup);
 
-MODULE_DESCRIPTION("vpx3220a/vpx3216b/vpx3214c video encoder driver");
+MODULE_DESCRIPTION("vpx3220a/vpx3216b/vpx3214c video decoder driver");
 MODULE_AUTHOR("Laurent Pinchart");
 MODULE_LICENSE("GPL");

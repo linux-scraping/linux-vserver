@@ -2,7 +2,6 @@
 #define _ASM_POWERPC_TOPOLOGY_H
 #ifdef __KERNEL__
 
-#include <linux/config.h>
 
 struct sys_device;
 struct device_node;
@@ -32,13 +31,26 @@ static inline int node_to_first_cpu(int node)
 
 int of_node_to_nid(struct device_node *device);
 
-#define pcibus_to_node(node)    (-1)
-#define pcibus_to_cpumask(bus)	(cpu_online_map)
+struct pci_bus;
+#ifdef CONFIG_PCI
+extern int pcibus_to_node(struct pci_bus *bus);
+#else
+static inline int pcibus_to_node(struct pci_bus *bus)
+{
+	return -1;
+}
+#endif
+
+#define pcibus_to_cpumask(bus)	(pcibus_to_node(bus) == -1 ? \
+					CPU_MASK_ALL : \
+					node_to_cpumask(pcibus_to_node(bus)) \
+				)
 
 /* sched_domains SD_NODE_INIT for PPC64 machines */
 #define SD_NODE_INIT (struct sched_domain) {		\
 	.span			= CPU_MASK_NONE,	\
 	.parent			= NULL,			\
+	.child			= NULL,			\
 	.groups			= NULL,			\
 	.min_interval		= 8,			\
 	.max_interval		= 32,			\
@@ -54,6 +66,7 @@ int of_node_to_nid(struct device_node *device);
 				| SD_BALANCE_EXEC	\
 				| SD_BALANCE_NEWIDLE	\
 				| SD_WAKE_IDLE		\
+				| SD_SERIALIZE		\
 				| SD_WAKE_BALANCE,	\
 	.last_balance		= jiffies,		\
 	.balance_interval	= 1,			\
@@ -88,6 +101,17 @@ static inline void sysfs_remove_device_from_node(struct sys_device *dev,
 #include <asm-generic/topology.h>
 
 #endif /* CONFIG_NUMA */
+
+#ifdef CONFIG_SMP
+#include <asm/cputable.h>
+#define smt_capable()		(cpu_has_feature(CPU_FTR_SMT))
+
+#ifdef CONFIG_PPC64
+#include <asm/smp.h>
+
+#define topology_thread_siblings(cpu)	(cpu_sibling_map[cpu])
+#endif
+#endif
 
 #endif /* __KERNEL__ */
 #endif	/* _ASM_POWERPC_TOPOLOGY_H */

@@ -289,7 +289,7 @@ extern struct spi_master *spi_busnum_to_master(u16 busnum);
  * the data being transferred; that may reduce overhead, when the
  * underlying driver uses dma.
  *
- * If the transmit buffer is null, undefined data will be shifted out
+ * If the transmit buffer is null, zeroes will be shifted out
  * while filling rx_buf.  If the receive buffer is null, the data
  * shifted in will be discarded.  Only "len" bytes shift out (or in).
  * It's an error to try to shift out a partial word.  (For example, by
@@ -642,10 +642,14 @@ struct spi_board_info {
 	u16		bus_num;
 	u16		chip_select;
 
+	/* mode becomes spi_device.mode, and is essential for chips
+	 * where the default of SPI_CS_HIGH = 0 is wrong.
+	 */
+	u8		mode;
+
 	/* ... may need additional spi_device chip config data here.
 	 * avoid stuff protocol drivers can set; but include stuff
 	 * needed to behave without being bound to a driver:
-	 *  - chipselect polarity
 	 *  - quirks like clock rate mattering when not selected
 	 */
 };

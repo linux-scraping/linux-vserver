@@ -31,7 +31,6 @@
  *		Matt Domsch	:	Added nowayout module option
  */
 
-#include <linux/config.h>
 #include <linux/interrupt.h>
 #include <linux/module.h>
 #include <linux/moduleparam.h>
@@ -226,14 +225,13 @@ static int wdt_get_temperature(int *temperature)
  *	wdt_interrupt:
  *	@irq:		Interrupt number
  *	@dev_id:	Unused as we don't allow multiple devices.
- *	@regs:		Unused.
  *
  *	Handle an interrupt from the board. These are raised when the status
  *	map changes in what the board considers an interesting way. That means
  *	a failure condition occurring.
  */
 
-static irqreturn_t wdt_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t wdt_interrupt(int irq, void *dev_id)
 {
 	/*
 	 *	Read the status register see what is up and
@@ -342,7 +340,7 @@ static int wdt_ioctl(struct inode *inode, struct file *file, unsigned int cmd,
 	switch(cmd)
 	{
 		default:
-			return -ENOIOCTLCMD;
+			return -ENOTTY;
 		case WDIOC_GETSUPPORT:
 			return copy_to_user(argp, &ident, sizeof(ident))?-EFAULT:0;
 
@@ -495,7 +493,7 @@ static int wdt_notify_sys(struct notifier_block *this, unsigned long code,
  */
 
 
-static struct file_operations wdt_fops = {
+static const struct file_operations wdt_fops = {
 	.owner		= THIS_MODULE,
 	.llseek		= no_llseek,
 	.write		= wdt_write,
@@ -511,7 +509,7 @@ static struct miscdevice wdt_miscdev = {
 };
 
 #ifdef CONFIG_WDT_501
-static struct file_operations wdt_temp_fops = {
+static const struct file_operations wdt_temp_fops = {
 	.owner		= THIS_MODULE,
 	.llseek		= no_llseek,
 	.read		= wdt_temp_read,
@@ -581,7 +579,7 @@ static int __init wdt_init(void)
 		goto out;
 	}
 
-	ret = request_irq(irq, wdt_interrupt, SA_INTERRUPT, "wdt501p", NULL);
+	ret = request_irq(irq, wdt_interrupt, IRQF_DISABLED, "wdt501p", NULL);
 	if(ret) {
 		printk(KERN_ERR "wdt: IRQ %d is not free.\n", irq);
 		goto outreg;

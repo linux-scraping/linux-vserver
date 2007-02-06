@@ -365,7 +365,12 @@ videobuf_iolock(struct videobuf_queue* q, struct videobuf_buffer *vb,
 		if (NULL == fbuf)
 			return -EINVAL;
 		/* FIXME: need sanity checks for vb->boff */
-		bus   = (dma_addr_t)fbuf->base + vb->boff;
+		/*
+		 * Using a double cast to avoid compiler warnings when
+		 * building for PAE. Compiler doesn't like direct casting
+		 * of a 32 bit ptr to 64 bit integer.
+		 */
+		bus   = (dma_addr_t)(unsigned long)fbuf->base + vb->boff;
 		pages = PAGE_ALIGN(vb->size) >> PAGE_SHIFT;
 		err = videobuf_dma_init_overlay(&vb->dma,PCI_DMA_FROMDEVICE,
 						bus, pages);
@@ -695,6 +700,7 @@ videobuf_qbuf(struct videobuf_queue *q,
 		goto done;
 	}
 	if (buf->state == STATE_QUEUED ||
+	    buf->state == STATE_PREPARED ||
 	    buf->state == STATE_ACTIVE) {
 		dprintk(1,"qbuf: buffer is already queued or active.\n");
 		goto done;
@@ -1224,7 +1230,7 @@ videobuf_vm_nopage(struct vm_area_struct *vma, unsigned long vaddr,
 		vaddr,vma->vm_start,vma->vm_end);
 	if (vaddr > vma->vm_end)
 		return NOPAGE_SIGBUS;
-	page = alloc_page(GFP_USER);
+	page = alloc_page(GFP_USER | __GFP_DMA32);
 	if (!page)
 		return NOPAGE_OOM;
 	clear_user_page(page_address(page), vaddr, page);

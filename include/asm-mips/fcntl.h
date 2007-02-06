@@ -8,7 +8,6 @@
 #ifndef _ASM_FCNTL_H
 #define _ASM_FCNTL_H
 
-#include <linux/config.h>
 
 #define O_APPEND	0x0008
 #define O_SYNC		0x0010
@@ -26,8 +25,6 @@
 
 #define F_SETOWN	24	/*  for sockets. */
 #define F_GETOWN	23	/*  for sockets. */
-#define F_SETSIG	10	/*  for sockets. */
-#define F_GETSIG	11	/*  for sockets. */
 
 #ifndef __mips64
 #define F_GETLK64	33	/*  using 'struct flock64' */

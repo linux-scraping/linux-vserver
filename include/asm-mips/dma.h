@@ -12,7 +12,6 @@
 #ifndef _ASM_DMA_H
 #define _ASM_DMA_H
 
-#include <linux/config.h>
 #include <asm/io.h>			/* need byte IO */
 #include <linux/spinlock.h>		/* And spinlocks */
 #include <linux/delay.h>
@@ -75,7 +74,9 @@
  *
  */
 
+#ifndef GENERIC_ISA_DMA_SUPPORT_BROKEN
 #define MAX_DMA_CHANNELS	8
+#endif
 
 /*
  * The maximum address in KSEG0 that we can perform a DMA transfer to on this

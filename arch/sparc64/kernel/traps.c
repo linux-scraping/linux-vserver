@@ -9,9 +9,8 @@
  * I like traps on v9, :))))
  */
 
-#include <linux/config.h>
 #include <linux/module.h>
-#include <linux/sched.h>  /* for jiffies */
+#include <linux/sched.h>
 #include <linux/kernel.h>
 #include <linux/kallsyms.h>
 #include <linux/signal.h>
@@ -42,6 +41,7 @@
 #ifdef CONFIG_KMOD
 #include <linux/kmod.h>
 #endif
+#include <asm/prom.h>
 
 ATOMIC_NOTIFIER_HEAD(sparc64die_chain);
 
@@ -87,6 +87,7 @@ static void dump_tl1_traplog(struct tl1_traplog *p)
 		       i + 1,
 		       p->trapstack[i].tstate, p->trapstack[i].tpc,
 		       p->trapstack[i].tnpc, p->trapstack[i].tt);
+		print_symbol("TRAPLOG: TPC<%s>\n", p->trapstack[i].tpc);
 	}
 }
 
@@ -807,7 +808,8 @@ extern unsigned int cheetah_deferred_trap_vector[], cheetah_deferred_trap_vector
 void __init cheetah_ecache_flush_init(void)
 {
 	unsigned long largest_size, smallest_linesize, order, ver;
-	int node, i, instance;
+	struct device_node *dp;
+	int i, instance, sz;
 
 	/* Scan all cpu device tree nodes, note two values:
 	 * 1) largest E-cache size
@@ -817,14 +819,14 @@ void __init cheetah_ecache_flush_init(void)
 	smallest_linesize = ~0UL;
 
 	instance = 0;
-	while (!cpu_find_by_instance(instance, &node, NULL)) {
+	while (!cpu_find_by_instance(instance, &dp, NULL)) {
 		unsigned long val;
 
-		val = prom_getintdefault(node, "ecache-size",
-					 (2 * 1024 * 1024));
+		val = of_getintprop_default(dp, "ecache-size",
+					    (2 * 1024 * 1024));
 		if (val > largest_size)
 			largest_size = val;
-		val = prom_getintdefault(node, "ecache-line-size", 64);
+		val = of_getintprop_default(dp, "ecache-line-size", 64);
 		if (val < smallest_linesize)
 			smallest_linesize = val;
 		instance++;
@@ -849,16 +851,16 @@ void __init cheetah_ecache_flush_init(void)
 	}
 
 	/* Now allocate error trap reporting scoreboard. */
-	node = NR_CPUS * (2 * sizeof(struct cheetah_err_info));
+	sz = NR_CPUS * (2 * sizeof(struct cheetah_err_info));
 	for (order = 0; order < MAX_ORDER; order++) {
-		if ((PAGE_SIZE << order) >= node)
+		if ((PAGE_SIZE << order) >= sz)
 			break;
 	}
 	cheetah_error_log = (struct cheetah_err_info *)
 		__get_free_pages(GFP_KERNEL, order);
 	if (!cheetah_error_log) {
 		prom_printf("cheetah_ecache_flush_init: Failed to allocate "
-			    "error logging scoreboard (%d bytes).\n", node);
+			    "error logging scoreboard (%d bytes).\n", sz);
 		prom_halt();
 	}
 	memset(cheetah_error_log, 0, PAGE_SIZE << order);
@@ -1133,6 +1135,9 @@ static void cheetah_log_errors(struct pt_regs *regs, struct cheetah_err_info *in
 	printk("%s" "ERROR(%d): TPC[%lx] TNPC[%lx] O7[%lx] TSTATE[%lx]\n",
 	       (recoverable ? KERN_WARNING : KERN_CRIT), smp_processor_id(),
 	       regs->tpc, regs->tnpc, regs->u_regs[UREG_I7], regs->tstate);
+	printk("%s" "ERROR(%d): ",
+	       (recoverable ? KERN_WARNING : KERN_CRIT), smp_processor_id());
+	print_symbol("TPC<%s>\n", regs->tpc);
 	printk("%s" "ERROR(%d): M_SYND(%lx),  E_SYND(%lx)%s%s\n",
 	       (recoverable ? KERN_WARNING : KERN_CRIT), smp_processor_id(),
 	       (afsr & CHAFSR_M_SYNDROME) >> CHAFSR_M_SYNDROME_SHIFT,
@@ -1740,6 +1745,7 @@ void cheetah_plus_parity_error(int type, struct pt_regs *regs)
 		       smp_processor_id(),
 		       (type & 0x1) ? 'I' : 'D',
 		       regs->tpc);
+		print_symbol(KERN_EMERG "TPC<%s>\n", regs->tpc);
 		panic("Irrecoverable Cheetah+ parity error.");
 	}
 
@@ -1747,6 +1753,7 @@ void cheetah_plus_parity_error(int type, struct pt_regs *regs)
 	       smp_processor_id(),
 	       (type & 0x1) ? 'I' : 'D',
 	       regs->tpc);
+	print_symbol(KERN_WARNING "TPC<%s>\n", regs->tpc);
 }
 
 struct sun4v_error_entry {
@@ -1866,6 +1873,16 @@ void sun4v_resum_error(struct pt_regs *regs, unsigned long offset)
 
 	put_cpu();
 
+	if (ent->err_type == SUN4V_ERR_TYPE_WARNING_RES) {
+		/* If err_type is 0x4, it's a powerdown request.  Do
+		 * not do the usual resumable error log because that
+		 * makes it look like some abnormal error.
+		 */
+		printk(KERN_INFO "Power down request...\n");
+		kill_cad_pid(SIGINT, 1);
+		return;
+	}
+
 	sun4v_log_error(regs, &local_copy, cpu,
 			KERN_ERR "RESUMABLE ERROR",
 			&sun4v_resum_oflow_cnt);
@@ -1945,6 +1962,7 @@ void sun4v_itlb_error_report(struct pt_regs *regs, int tl)
 
 	printk(KERN_EMERG "SUN4V-ITLB: Error at TPC[%lx], tl %d\n",
 	       regs->tpc, tl);
+	print_symbol(KERN_EMERG "SUN4V-ITLB: TPC<%s>\n", regs->tpc);
 	printk(KERN_EMERG "SUN4V-ITLB: vaddr[%lx] ctx[%lx] "
 	       "pte[%lx] error[%lx]\n",
 	       sun4v_err_itlb_vaddr, sun4v_err_itlb_ctx,
@@ -1965,6 +1983,7 @@ void sun4v_dtlb_error_report(struct pt_regs *regs, int tl)
 
 	printk(KERN_EMERG "SUN4V-DTLB: Error at TPC[%lx], tl %d\n",
 	       regs->tpc, tl);
+	print_symbol(KERN_EMERG "SUN4V-DTLB: TPC<%s>\n", regs->tpc);
 	printk(KERN_EMERG "SUN4V-DTLB: vaddr[%lx] ctx[%lx] "
 	       "pte[%lx] error[%lx]\n",
 	       sun4v_err_dtlb_vaddr, sun4v_err_dtlb_ctx,
@@ -2214,7 +2233,8 @@ void die_if_kernel(char *str, struct pt_regs *regs)
 "              /_| \\__/ |_\\\n"
 "                 \\__U_/\n");
 
-	printk("%s(%d): %s [#%d]\n", current->comm, current->pid, str, ++die_counter);
+	printk("%s(%d[#%u]): %s [#%d]\n", current->comm,
+		current->pid, current->xid, str, ++die_counter);
 	notify_die(DIE_OOPS, str, regs, 0, 255, SIGSEGV);
 	__asm__ __volatile__("flushw");
 	__show_regs(regs);
@@ -2252,8 +2272,12 @@ void die_if_kernel(char *str, struct pt_regs *regs)
 	do_exit(SIGSEGV);
 }
 
+#define VIS_OPCODE_MASK	((0x3 << 30) | (0x3f << 19))
+#define VIS_OPCODE_VAL	((0x2 << 30) | (0x36 << 19))
+
 extern int handle_popc(u32 insn, struct pt_regs *regs);
 extern int handle_ldf_stq(u32 insn, struct pt_regs *regs);
+extern int vis_emul(struct pt_regs *, unsigned int);
 
 void do_illegal_instruction(struct pt_regs *regs)
 {
@@ -2278,10 +2302,18 @@ void do_illegal_instruction(struct pt_regs *regs)
 			if (handle_ldf_stq(insn, regs))
 				return;
 		} else if (tlb_type == hypervisor) {
-			extern int vis_emul(struct pt_regs *, unsigned int);
+			if ((insn & VIS_OPCODE_MASK) == VIS_OPCODE_VAL) {
+				if (!vis_emul(regs, insn))
+					return;
+			} else {
+				struct fpustate *f = FPUSTATE;
 
-			if (!vis_emul(regs, insn))
-				return;
+				/* XXX maybe verify XFSR bits like
+				 * XXX do_fpother() does?
+				 */
+				if (do_mathemu(regs, f))
+					return;
+			}
 		}
 	}
 	info.si_signo = SIGILL;
@@ -2544,7 +2576,9 @@ void __init trap_init(void)
 	    (TRAP_PER_CPU_TSB_HUGE !=
 	     offsetof(struct trap_per_cpu, tsb_huge)) ||
 	    (TRAP_PER_CPU_TSB_HUGE_TEMP !=
-	     offsetof(struct trap_per_cpu, tsb_huge_temp)))
+	     offsetof(struct trap_per_cpu, tsb_huge_temp)) ||
+	    (TRAP_PER_CPU_IRQ_WORKLIST !=
+	     offsetof(struct trap_per_cpu, irq_worklist)))
 		trap_per_cpu_offsets_are_bolixed_dave();
 
 	if ((TSB_CONFIG_TSB !=

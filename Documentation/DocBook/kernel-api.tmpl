@@ -59,9 +59,14 @@
 !Iinclude/linux/hrtimer.h
 !Ekernel/hrtimer.c
      </sect1>
+     <sect1><title>Workqueues and Kevents</title>
+!Ekernel/workqueue.c
+     </sect1>
      <sect1><title>Internal Functions</title>
 !Ikernel/exit.c
 !Ikernel/signal.c
+!Iinclude/linux/kthread.h
+!Ekernel/kthread.c
      </sect1>
 
      <sect1><title>Kernel objects manipulation</title>
@@ -114,9 +119,33 @@ X!Ilib/string.c
      </sect1>
   </chapter>
 
+  <chapter id="kernel-lib">
+     <title>Basic Kernel Library Functions</title>
+
+     <para>
+       The Linux kernel provides more basic utility functions.
+     </para>
+
+     <sect1><title>Bitmap Operations</title>
+!Elib/bitmap.c
+!Ilib/bitmap.c
+     </sect1>
+
+     <sect1><title>Command-line Parsing</title>
+!Elib/cmdline.c
+     </sect1>
+
+     <sect1><title>CRC Functions</title>
+!Elib/crc16.c
+!Elib/crc32.c
+!Elib/crc-ccitt.c
+     </sect1>
+  </chapter>
+
   <chapter id="mm">
      <title>Memory Management in Linux</title>
      <sect1><title>The Slab Cache</title>
+!Iinclude/linux/slab.h
 !Emm/slab.c
      </sect1>
      <sect1><title>User Space Memory Access</title>
@@ -129,6 +158,7 @@ X!Ilib/string.c
 !Emm/filemap.c
 !Emm/memory.c
 !Emm/vmalloc.c
+!Imm/page_alloc.c
 !Emm/mempool.c
 !Emm/page-writeback.c
 !Emm/truncate.c
@@ -152,56 +182,19 @@ X!Ilib/string.c
      </sect1>
   </chapter>
 
-  <chapter id="proc">
-     <title>The proc filesystem</title>
- 
-     <sect1><title>sysctl interface</title>
-!Ekernel/sysctl.c
-     </sect1>
+  <chapter id="relayfs">
+     <title>relay interface support</title>
 
-     <sect1><title>proc filesystem interface</title>
-!Ifs/proc/base.c
-     </sect1>
-  </chapter>
+     <para>
+	Relay interface support
+	is designed to provide an efficient mechanism for tools and
+	facilities to relay large amounts of data from kernel space to
+	user space.
+     </para>
 
-  <chapter id="debugfs">
-     <title>The debugfs filesystem</title>
- 
-     <sect1><title>debugfs interface</title>
-!Efs/debugfs/inode.c
-!Efs/debugfs/file.c
-     </sect1>
-  </chapter>
-
-  <chapter id="vfs">
-     <title>The Linux VFS</title>
-     <sect1><title>The Filesystem types</title>
-!Iinclude/linux/fs.h
-     </sect1>
-     <sect1><title>The Directory Cache</title>
-!Efs/dcache.c
-!Iinclude/linux/dcache.h
-     </sect1>
-     <sect1><title>Inode Handling</title>
-!Efs/inode.c
-!Efs/bad_inode.c
-     </sect1>
-     <sect1><title>Registration and Superblocks</title>
-!Efs/super.c
-     </sect1>
-     <sect1><title>File Locks</title>
-!Efs/locks.c
-!Ifs/locks.c
-     </sect1>
-     <sect1><title>Other Functions</title>
-!Efs/mpage.c
-!Efs/namei.c
-!Efs/buffer.c
-!Efs/bio.c
-!Efs/seq_file.c
-!Efs/filesystems.c
-!Efs/fs-writeback.c
-!Efs/block_dev.c
+     <sect1><title>relay interface</title>
+!Ekernel/relay.c
+!Ikernel/relay.c
      </sect1>
   </chapter>
 
@@ -273,21 +266,25 @@ X!Ekernel/module.c
 !Ekernel/irq/manage.c
      </sect1>
 
+     <sect1><title>DMA Channels</title>
+!Ekernel/dma.c
+     </sect1>
+
      <sect1><title>Resources Management</title>
+!Ikernel/resource.c
 !Ekernel/resource.c
      </sect1>
 
      <sect1><title>MTRR Handling</title>
 !Earch/i386/kernel/cpu/mtrr/main.c
      </sect1>
+
      <sect1><title>PCI Support Library</title>
 !Edrivers/pci/pci.c
 !Edrivers/pci/pci-driver.c
 !Edrivers/pci/remove.c
 !Edrivers/pci/pci-acpi.c
-<!-- kerneldoc does not understand to __devinit
-X!Edrivers/pci/search.c
- -->
+!Edrivers/pci/search.c
 !Edrivers/pci/msi.c
 !Edrivers/pci/bus.c
 <!-- FIXME: Removed for now since no structured comments in source
@@ -314,21 +311,28 @@ X!Earch/i386/kernel/mca.c
      </sect1>
   </chapter>
 
-  <chapter id="devfs">
-     <title>The Device File System</title>
-!Efs/devfs/base.c
-  </chapter>
-
-  <chapter id="sysfs">
-     <title>The Filesystem for Exporting Kernel Objects</title>
-!Efs/sysfs/file.c
-!Efs/sysfs/symlink.c
-!Efs/sysfs/bin.c
+  <chapter id="firmware">
+     <title>Firmware Interfaces</title>
+     <sect1><title>DMI Interfaces</title>
+!Edrivers/firmware/dmi_scan.c
+     </sect1>
   </chapter>
 
   <chapter id="security">
      <title>Security Framework</title>
 !Esecurity/security.c
+  </chapter>
+
+  <chapter id="audit">
+     <title>Audit Interfaces</title>
+!Ekernel/audit.c
+!Ikernel/auditsc.c
+!Ikernel/auditfilter.c
+  </chapter>
+
+  <chapter id="accounting">
+     <title>Accounting Framework</title>
+!Ikernel/acct.c
   </chapter>
 
   <chapter id="pmfuncs">
@@ -344,6 +348,7 @@ X!Iinclude/linux/device.h
 -->
 !Edrivers/base/driver.c
 !Edrivers/base/core.c
+!Edrivers/base/class.c
 !Edrivers/base/firmware_class.c
 !Edrivers/base/transport_class.c
 !Edrivers/base/dmapool.c
@@ -390,10 +395,14 @@ X!Edrivers/pnp/system.c
      </sect1>
   </chapter>
 
-
   <chapter id="blkdev">
      <title>Block Devices</title>
 !Eblock/ll_rw_blk.c
+  </chapter>
+
+  <chapter id="chrdev">
+	<title>Char devices</title>
+!Efs/char_dev.c
   </chapter>
 
   <chapter id="miscdev">
@@ -401,9 +410,43 @@ X!Edrivers/pnp/system.c
 !Edrivers/char/misc.c
   </chapter>
 
-  <chapter id="viddev">
-     <title>Video4Linux</title>
-!Edrivers/media/video/videodev.c
+  <chapter id="parportdev">
+     <title>Parallel Port Devices</title>
+!Iinclude/linux/parport.h
+!Edrivers/parport/ieee1284.c
+!Edrivers/parport/share.c
+!Idrivers/parport/daisy.c
+  </chapter>
+
+  <chapter id="message_devices">
+	<title>Message-based devices</title>
+     <sect1><title>Fusion message devices</title>
+!Edrivers/message/fusion/mptbase.c
+!Idrivers/message/fusion/mptbase.c
+!Edrivers/message/fusion/mptscsih.c
+!Idrivers/message/fusion/mptscsih.c
+!Idrivers/message/fusion/mptctl.c
+!Idrivers/message/fusion/mptspi.c
+!Idrivers/message/fusion/mptfc.c
+!Idrivers/message/fusion/mptlan.c
+     </sect1>
+     <sect1><title>I2O message devices</title>
+!Iinclude/linux/i2o.h
+!Idrivers/message/i2o/core.h
+!Edrivers/message/i2o/iop.c
+!Idrivers/message/i2o/iop.c
+!Idrivers/message/i2o/config-osm.c
+!Edrivers/message/i2o/exec-osm.c
+!Idrivers/message/i2o/exec-osm.c
+!Idrivers/message/i2o/bus-osm.c
+!Edrivers/message/i2o/device.c
+!Idrivers/message/i2o/device.c
+!Idrivers/message/i2o/driver.c
+!Idrivers/message/i2o/pci.c
+!Idrivers/message/i2o/i2o_block.c
+!Idrivers/message/i2o/i2o_scsi.c
+!Idrivers/message/i2o/i2o_proc.c
+     </sect1>
   </chapter>
 
   <chapter id="snddev">
@@ -515,5 +558,13 @@ KAO -->
 X!Idrivers/video/console/fonts.c
 -->
      </sect1>
+  </chapter>
+
+  <chapter id="input_subsystem">
+     <title>Input Subsystem</title>
+!Iinclude/linux/input.h
+!Edrivers/input/input.c
+!Edrivers/input/ff-core.c
+!Edrivers/input/ff-memless.c
   </chapter>
 </book>

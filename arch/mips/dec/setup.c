@@ -46,7 +46,7 @@
 extern void dec_machine_restart(char *command);
 extern void dec_machine_halt(void);
 extern void dec_machine_power_off(void);
-extern irqreturn_t dec_intr_halt(int irq, void *dev_id, struct pt_regs *regs);
+extern irqreturn_t dec_intr_halt(int irq, void *dev_id);
 
 unsigned long dec_kn_slot_base, dec_kn_slot_size;
 
@@ -105,7 +105,7 @@ static struct irqaction fpuirq = {
 };
 
 static struct irqaction busirq = {
-	.flags = SA_INTERRUPT,
+	.flags = IRQF_DISABLED,
 	.name = "bus error",
 };
 
@@ -124,7 +124,7 @@ static void __init dec_be_init(void)
 	case MACH_DS23100:	/* DS2100/DS3100 Pmin/Pmax */
 		board_be_handler = dec_kn01_be_handler;
 		busirq.handler = dec_kn01_be_interrupt;
-		busirq.flags |= SA_SHIRQ;
+		busirq.flags |= IRQF_SHARED;
 		dec_kn01_be_init();
 		break;
 	case MACH_DS5000_1XX:	/* DS5000/1xx 3min */
@@ -145,13 +145,11 @@ static void __init dec_be_init(void)
 
 
 extern void dec_time_init(void);
-extern void dec_timer_setup(struct irqaction *);
 
-void __init plat_setup(void)
+void __init plat_mem_setup(void)
 {
 	board_be_init = dec_be_init;
 	board_time_init = dec_time_init;
-	board_timer_setup = dec_timer_setup;
 
 	wbflush_setup();
 
@@ -762,4 +760,10 @@ void __init arch_init_irq(void)
 	/* Register the HALT interrupt. */
 	if (dec_interrupt[DEC_IRQ_HALT] >= 0)
 		setup_irq(dec_interrupt[DEC_IRQ_HALT], &haltirq);
+}
+
+asmlinkage unsigned int dec_irq_dispatch(unsigned int irq)
+{
+	do_IRQ(irq);
+	return 0;
 }

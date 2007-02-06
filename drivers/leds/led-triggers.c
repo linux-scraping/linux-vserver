@@ -11,7 +11,6 @@
  *
  */
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/init.h>
@@ -26,7 +25,7 @@
 /*
  * Nests outside led_cdev->trigger_lock
  */
-static rwlock_t triggers_list_lock = RW_LOCK_UNLOCKED;
+static DEFINE_RWLOCK(triggers_list_lock);
 static LIST_HEAD(trigger_list);
 
 ssize_t led_trigger_store(struct class_device *dev, const char *buf,
@@ -126,6 +125,7 @@ void led_trigger_set(struct led_classdev *led_cdev, struct led_trigger *trigger)
 		write_unlock_irqrestore(&led_cdev->trigger->leddev_list_lock, flags);
 		if (led_cdev->trigger->deactivate)
 			led_cdev->trigger->deactivate(led_cdev);
+		led_set_brightness(led_cdev, LED_OFF);
 	}
 	if (trigger) {
 		write_lock_irqsave(&trigger->leddev_list_lock, flags);

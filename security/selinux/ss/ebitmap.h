@@ -14,6 +14,8 @@
 #ifndef _SS_EBITMAP_H_
 #define _SS_EBITMAP_H_
 
+#include <net/netlabel.h>
+
 #define MAPTYPE u64			/* portion of bitmap in each node */
 #define MAPSIZE (sizeof(MAPTYPE) * 8)	/* number of bits in node bitmap */
 #define MAPBIT  1ULL			/* a bit in the node bitmap */
@@ -74,5 +76,23 @@ int ebitmap_get_bit(struct ebitmap *e, unsigned long bit);
 int ebitmap_set_bit(struct ebitmap *e, unsigned long bit, int value);
 void ebitmap_destroy(struct ebitmap *e);
 int ebitmap_read(struct ebitmap *e, void *fp);
+
+#ifdef CONFIG_NETLABEL
+int ebitmap_netlbl_export(struct ebitmap *ebmap,
+			  struct netlbl_lsm_secattr_catmap **catmap);
+int ebitmap_netlbl_import(struct ebitmap *ebmap,
+			  struct netlbl_lsm_secattr_catmap *catmap);
+#else
+static inline int ebitmap_netlbl_export(struct ebitmap *ebmap,
+				struct netlbl_lsm_secattr_catmap **catmap)
+{
+	return -ENOMEM;
+}
+static inline int ebitmap_netlbl_import(struct ebitmap *ebmap,
+				struct netlbl_lsm_secattr_catmap *catmap)
+{
+	return -ENOMEM;
+}
+#endif
 
 #endif	/* _SS_EBITMAP_H_ */

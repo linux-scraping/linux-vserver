@@ -1,5 +1,5 @@
 /*
- * sound/pss.c
+ * sound/oss/pss.c
  *
  * The low level driver for the Personal Sound System (ECHO ESC614).
  *
@@ -57,7 +57,6 @@
  */
 
 
-#include <linux/config.h>
 #include <linux/init.h>
 #include <linux/module.h>
 #include <linux/spinlock.h>

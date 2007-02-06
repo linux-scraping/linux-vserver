@@ -16,7 +16,6 @@ struct r10_private_data_s {
 	mddev_t			*mddev;
 	mirror_info_t		*mirrors;
 	int			raid_disks;
-	int			working_disks;
 	spinlock_t		device_lock;
 
 	/* geometry */
@@ -24,11 +23,16 @@ struct r10_private_data_s {
 	int 			far_copies;   /* number of copies layed out
 					       * at large strides across drives
 					       */
+	int			far_offset;   /* far_copies are offset by 1 stripe
+					       * instead of many
+					       */
 	int			copies;	      /* near_copies * far_copies.
 					       * must be <= raid_disks
 					       */
 	sector_t		stride;	      /* distance between far copies.
-					       * This is size / far_copies
+					       * This is size / far_copies unless
+					       * far_offset, in which case it is
+					       * 1 stripe.
 					       */
 
 	int chunk_shift; /* shift from chunks to sectors */

@@ -6,7 +6,6 @@
 #ifndef __KERN_UTIL_H__
 #define __KERN_UTIL_H__
 
-#include "linux/threads.h"
 #include "sysdep/ptrace.h"
 #include "sysdep/faultinfo.h"
 
@@ -21,13 +20,12 @@ struct kern_handlers {
 	kern_hndl timer_handler;
 };
 
-extern struct kern_handlers handlinfo_kern;
+extern const struct kern_handlers handlinfo_kern;
 
 extern int ncpus;
 extern char *linux_prog;
 extern char *gdb_init;
 extern int kmalloc_ok;
-extern int timer_irq_inited;
 extern int jail;
 extern int nsyscalls;
 
@@ -72,10 +70,8 @@ extern void init_flush_vm(void);
 extern void *syscall_sp(void *t);
 extern void syscall_trace(union uml_pt_regs *regs, int entryexit);
 extern int hz(void);
-extern void uml_idle_timer(void);
 extern unsigned int do_IRQ(int irq, union uml_pt_regs *regs);
 extern int external_pid(void *t);
-extern void boot_timer_handler(int sig);
 extern void interrupt_end(void);
 extern void initial_thread_cb(void (*proc)(void *), void *arg);
 extern int debugger_signal(int status, int pid);

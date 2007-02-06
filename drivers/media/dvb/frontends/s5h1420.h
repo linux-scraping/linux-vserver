@@ -32,13 +32,18 @@ struct s5h1420_config
 
 	/* does the inversion require inversion? */
 	u8 invert:1;
-
-	/* PLL maintenance */
-	int (*pll_init)(struct dvb_frontend* fe);
-	int (*pll_set)(struct dvb_frontend* fe, struct dvb_frontend_parameters* params, u32* freqout);
 };
 
+#if defined(CONFIG_DVB_S5H1420) || (defined(CONFIG_DVB_S5H1420_MODULE) && defined(MODULE))
 extern struct dvb_frontend* s5h1420_attach(const struct s5h1420_config* config,
 	     struct i2c_adapter* i2c);
+#else
+static inline struct dvb_frontend* s5h1420_attach(const struct s5h1420_config* config,
+					   struct i2c_adapter* i2c)
+{
+	printk(KERN_WARNING "%s: driver disabled by Kconfig\n", __FUNCTION__);
+	return NULL;
+}
+#endif // CONFIG_DVB_S5H1420
 
 #endif // S5H1420_H

@@ -12,7 +12,6 @@
 #ifndef __ASM_HARDIRQ_H
 #define __ASM_HARDIRQ_H
 
-#include <linux/config.h>
 #include <linux/threads.h>
 #include <linux/irq.h>
 
@@ -27,5 +26,10 @@ typedef struct {
 #error SMP not available on FR-V
 #endif /* CONFIG_SMP */
 
+extern atomic_t irq_err_count;
+static inline void ack_bad_irq(int irq)
+{
+	atomic_inc(&irq_err_count);
+}
 
 #endif

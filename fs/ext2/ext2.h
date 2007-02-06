@@ -137,6 +137,7 @@ extern void ext2_set_inode_flags(struct inode *inode);
 /* ioctl.c */
 extern int ext2_ioctl (struct inode *, struct file *, unsigned int,
 		       unsigned long);
+extern long ext2_compat_ioctl(struct file *, unsigned int, unsigned long);
 
 /* namei.c */
 struct dentry *ext2_get_parent(struct dentry *child);
@@ -162,9 +163,9 @@ extern const struct file_operations ext2_file_operations;
 extern const struct file_operations ext2_xip_file_operations;
 
 /* inode.c */
-extern struct address_space_operations ext2_aops;
-extern struct address_space_operations ext2_aops_xip;
-extern struct address_space_operations ext2_nobh_aops;
+extern const struct address_space_operations ext2_aops;
+extern const struct address_space_operations ext2_aops_xip;
+extern const struct address_space_operations ext2_nobh_aops;
 extern int ext2_sync_flags(struct inode *inode);
 
 /* namei.c */

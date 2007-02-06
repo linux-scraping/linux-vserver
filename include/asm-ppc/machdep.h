@@ -2,7 +2,6 @@
 #ifndef _PPC_MACHDEP_H
 #define _PPC_MACHDEP_H
 
-#include <linux/config.h>
 #include <linux/init.h>
 #include <linux/kexec.h>
 
@@ -44,7 +43,7 @@ struct machdep_calls {
 	/* Optional, may be NULL. */
 	unsigned int	(*irq_canonicalize)(unsigned int irq);
 	void		(*init_IRQ)(void);
-	int		(*get_irq)(struct pt_regs *);
+	int		(*get_irq)(void);
 	
 	/* A general init function, called by ppc_init in init/main.c.
 	   May be NULL. DEPRECATED ! */

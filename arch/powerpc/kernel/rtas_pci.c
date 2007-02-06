@@ -38,6 +38,7 @@
 #include <asm/rtas.h>
 #include <asm/mpic.h>
 #include <asm/ppc-pci.h>
+#include <asm/eeh.h>
 
 /* RTAS tokens */
 static int read_pci_config;
@@ -57,7 +58,7 @@ static inline int config_access_valid(struct pci_dn *dn, int where)
 
 static int of_device_available(struct device_node * dn)
 {
-        char * status;
+        const char *status;
 
         status = get_property(dn, "status", NULL);
 
@@ -81,8 +82,7 @@ int rtas_read_config(struct pci_dn *pdn, int where, int size, u32 *val)
 	if (!config_access_valid(pdn, where))
 		return PCIBIOS_BAD_REGISTER_NUMBER;
 
-	addr = ((where & 0xf00) << 20) | (pdn->busno << 16) |
-		(pdn->devfn << 8) | (where & 0xff);
+	addr = rtas_config_addr(pdn->busno, pdn->devfn, where);
 	buid = pdn->phb->buid;
 	if (buid) {
 		ret = rtas_call(ibm_read_pci_config, 4, 2, &returnval,
@@ -134,8 +134,7 @@ int rtas_write_config(struct pci_dn *pdn, int where, int size, u32 val)
 	if (!config_access_valid(pdn, where))
 		return PCIBIOS_BAD_REGISTER_NUMBER;
 
-	addr = ((where & 0xf00) << 20) | (pdn->busno << 16) |
-		(pdn->devfn << 8) | (where & 0xff);
+	addr = rtas_config_addr(pdn->busno, pdn->devfn, where);
 	buid = pdn->phb->buid;
 	if (buid) {
 		ret = rtas_call(ibm_write_pci_config, 5, 1, NULL, addr,
@@ -178,7 +177,7 @@ struct pci_ops rtas_pci_ops = {
 
 int is_python(struct device_node *dev)
 {
-	char *model = (char *)get_property(dev, "model", NULL);
+	const char *model = get_property(dev, "model", NULL);
 
 	if (model && strstr(model, "Python"))
 		return 1;
@@ -233,41 +232,22 @@ void __init init_pci_config_tokens (void)
 
 unsigned long __devinit get_phb_buid (struct device_node *phb)
 {
-	int addr_cells;
-	unsigned int *buid_vals;
-	unsigned int len;
-	unsigned long buid;
+	struct resource r;
 
-	if (ibm_read_pci_config == -1) return 0;
-
-	/* PHB's will always be children of the root node,
-	 * or so it is promised by the current firmware. */
-	if (phb->parent == NULL)
+	if (ibm_read_pci_config == -1)
 		return 0;
-	if (phb->parent->parent)
+	if (of_address_to_resource(phb, 0, &r))
 		return 0;
-
-	buid_vals = (unsigned int *) get_property(phb, "reg", &len);
-	if (buid_vals == NULL)
-		return 0;
-
-	addr_cells = prom_n_addr_cells(phb);
-	if (addr_cells == 1) {
-		buid = (unsigned long) buid_vals[0];
-	} else {
-		buid = (((unsigned long)buid_vals[0]) << 32UL) |
-			(((unsigned long)buid_vals[1]) & 0xffffffff);
-	}
-	return buid;
+	return r.start;
 }
 
 static int phb_set_bus_ranges(struct device_node *dev,
 			      struct pci_controller *phb)
 {
-	int *bus_range;
+	const int *bus_range;
 	unsigned int len;
 
-	bus_range = (int *) get_property(dev, "bus-range", &len);
+	bus_range = get_property(dev, "bus-range", &len);
 	if (bus_range == NULL || len < 2 * sizeof(int)) {
 		return 1;
  	}
@@ -278,8 +258,10 @@ static int phb_set_bus_ranges(struct device_node *dev,
 	return 0;
 }
 
-int __devinit setup_phb(struct device_node *dev, struct pci_controller *phb)
+int __devinit rtas_setup_phb(struct pci_controller *phb)
 {
+	struct device_node *dev = phb->arch_data;
+
 	if (is_python(dev))
 		python_countermeasures(dev);
 
@@ -297,38 +279,23 @@ unsigned long __init find_and_init_phbs(void)
 	struct device_node *node;
 	struct pci_controller *phb;
 	unsigned int index;
-	unsigned int root_size_cells = 0;
-	unsigned int *opprop = NULL;
 	struct device_node *root = of_find_node_by_path("/");
 
-	if (ppc64_interrupt_controller == IC_OPEN_PIC) {
-		opprop = (unsigned int *)get_property(root,
-				"platform-open-pic", NULL);
-	}
-
-	root_size_cells = prom_n_size_cells(root);
-
 	index = 0;
-
 	for (node = of_get_next_child(root, NULL);
 	     node != NULL;
 	     node = of_get_next_child(root, node)) {
-		if (node->type == NULL || strcmp(node->type, "pci") != 0)
+
+		if (node->type == NULL || (strcmp(node->type, "pci") != 0 &&
+					   strcmp(node->type, "pciex") != 0))
 			continue;
 
 		phb = pcibios_alloc_controller(node);
 		if (!phb)
 			continue;
-		setup_phb(node, phb);
+		rtas_setup_phb(phb);
 		pci_process_bridge_OF_ranges(phb, node, 0);
 		pci_setup_phb_io(phb, index == 0);
-#ifdef CONFIG_PPC_PSERIES
-		/* XXX This code need serious fixing ... --BenH */
-		if (ppc64_interrupt_controller == IC_OPEN_PIC && pSeries_mpic) {
-			int addr = root_size_cells * (index + 2) - 1;
-			mpic_assign_isu(pSeries_mpic, index, opprop[addr]);
-		}
-#endif
 		index++;
 	}
 
@@ -340,15 +307,15 @@ unsigned long __init find_and_init_phbs(void)
 	 * in chosen.
 	 */
 	if (of_chosen) {
-		int *prop;
+		const int *prop;
 
-		prop = (int *)get_property(of_chosen, "linux,pci-probe-only",
-					   NULL);
+		prop = get_property(of_chosen,
+				"linux,pci-probe-only", NULL);
 		if (prop)
 			pci_probe_only = *prop;
 
-		prop = (int *)get_property(of_chosen,
-					   "linux,pci-assign-all-buses", NULL);
+		prop = get_property(of_chosen,
+				"linux,pci-assign-all-buses", NULL);
 		if (prop)
 			pci_assign_all_buses = *prop;
 	}
@@ -398,7 +365,6 @@ int pcibios_remove_root_bus(struct pci_controller *phb)
 		}
 	}
 
-	list_del(&phb->list_node);
 	pcibios_free_controller(phb);
 
 	return 0;

@@ -254,7 +254,7 @@ static int usbatm_submit_urb(struct urb *urb)
 	return ret;
 }
 
-static void usbatm_complete(struct urb *urb, struct pt_regs *regs)
+static void usbatm_complete(struct urb *urb)
 {
 	struct usbatm_channel *channel = urb->context;
 	unsigned long flags;
@@ -1001,6 +1001,7 @@ static int usbatm_do_heavy_init(void *arg)
 
 	daemonize(instance->driver->driver_name);
 	allow_signal(SIGTERM);
+	instance->thread_pid = current->pid;
 
 	complete(&instance->thread_started);
 
@@ -1025,10 +1026,6 @@ static int usbatm_heavy_init(struct usbatm_data *instance)
 		return ret;
 	}
 
-	mutex_lock(&instance->serialize);
-	instance->thread_pid = ret;
-	mutex_unlock(&instance->serialize);
-
 	wait_for_completion(&instance->thread_started);
 
 	return 0;
@@ -1039,7 +1036,7 @@ static void usbatm_tasklet_schedule(unsigned long data)
 	tasklet_schedule((struct tasklet_struct *) data);
 }
 
-static inline void usbatm_init_channel(struct usbatm_channel *channel)
+static void usbatm_init_channel(struct usbatm_channel *channel)
 {
 	spin_lock_init(&channel->lock);
 	INIT_LIST_HEAD(&channel->list);

@@ -12,7 +12,7 @@
     Copyright (C) 1999 David A. Hinds -- dahinds@users.sourceforge.net
 
     pcnet_cs.c 1.153 2003/11/09 18:53:09
-    
+
     The network driver code is based on Donald Becker's NE2000 code:
 
     Written 1992,1993 by Donald Becker.
@@ -108,8 +108,8 @@ static void pcnet_release(struct pcmcia_device *link);
 static int pcnet_open(struct net_device *dev);
 static int pcnet_close(struct net_device *dev);
 static int ei_ioctl(struct net_device *dev, struct ifreq *rq, int cmd);
-static struct ethtool_ops netdev_ethtool_ops;
-static irqreturn_t ei_irq_wrapper(int irq, void *dev_id, struct pt_regs *regs);
+static const struct ethtool_ops netdev_ethtool_ops;
+static irqreturn_t ei_irq_wrapper(int irq, void *dev_id);
 static void ei_watchdog(u_long arg);
 static void pcnet_reset_8390(struct net_device *dev);
 static int set_config(struct net_device *dev, struct ifmap *map);
@@ -146,7 +146,7 @@ typedef struct hw_info_t {
 #define MII_PHYID_REG2		0x03
 
 static hw_info_t hw_info[] = {
-    { /* Accton EN2212 */ 0x0ff0, 0x00, 0x00, 0xe8, DELAY_OUTPUT }, 
+    { /* Accton EN2212 */ 0x0ff0, 0x00, 0x00, 0xe8, DELAY_OUTPUT },
     { /* Allied Telesis LA-PCM */ 0x0ff0, 0x00, 0x00, 0xf4, 0 },
     { /* APEX MultiCard */ 0x03f4, 0x00, 0x20, 0xe5, 0 },
     { /* ASANTE FriendlyNet */ 0x4910, 0x00, 0x00, 0x94,
@@ -193,7 +193,7 @@ static hw_info_t hw_info[] = {
     { /* NE2000 Compatible */ 0x0ff0, 0x00, 0xa0, 0x0c, 0 },
     { /* Network General Sniffer */ 0x0ff0, 0x00, 0x00, 0x65,
       HAS_MISC_REG | HAS_IBM_MISC },
-    { /* Panasonic VEL211 */ 0x0ff0, 0x00, 0x80, 0x45, 
+    { /* Panasonic VEL211 */ 0x0ff0, 0x00, 0x80, 0x45,
       HAS_MISC_REG | HAS_IBM_MISC },
     { /* PreMax PE-200 */ 0x07f0, 0x00, 0x20, 0xe0, 0 },
     { /* RPTI EP400 */ 0x0110, 0x00, 0x40, 0x95, 0 },
@@ -330,7 +330,7 @@ static hw_info_t *get_hwinfo(struct pcmcia_device *link)
 	for (j = 0; j < 6; j++)
 	    dev->dev_addr[j] = readb(base + (j<<1));
     }
-    
+
     iounmap(virt);
     j = pcmcia_release_window(link->win);
     if (j != CS_SUCCESS)
@@ -490,7 +490,7 @@ static int try_io_port(struct pcmcia_device *link)
 	if (link->io.NumPorts2 > 0) {
 	    /* for master/slave multifunction cards */
 	    link->io.Attributes2 = IO_DATA_PATH_WIDTH_8;
-	    link->irq.Attributes = 
+	    link->irq.Attributes =
 		IRQ_TYPE_DYNAMIC_SHARING|IRQ_FIRST_SHARED;
 	}
     } else {
@@ -519,43 +519,27 @@ static int pcnet_config(struct pcmcia_device *link)
     tuple_t tuple;
     cisparse_t parse;
     int i, last_ret, last_fn, start_pg, stop_pg, cm_offset;
-    int manfid = 0, prodid = 0, has_shmem = 0;
+    int has_shmem = 0;
     u_short buf[64];
     hw_info_t *hw_info;
 
     DEBUG(0, "pcnet_config(0x%p)\n", link);
 
-    tuple.Attributes = 0;
     tuple.TupleData = (cisdata_t *)buf;
     tuple.TupleDataMax = sizeof(buf);
     tuple.TupleOffset = 0;
-    tuple.DesiredTuple = CISTPL_CONFIG;
-    CS_CHECK(GetFirstTuple, pcmcia_get_first_tuple(link, &tuple));
-    CS_CHECK(GetTupleData, pcmcia_get_tuple_data(link, &tuple));
-    CS_CHECK(ParseTuple, pcmcia_parse_tuple(link, &tuple, &parse));
-    link->conf.ConfigBase = parse.config.base;
-    link->conf.Present = parse.config.rmask[0];
-
-    tuple.DesiredTuple = CISTPL_MANFID;
-    tuple.Attributes = TUPLE_RETURN_COMMON;
-    if ((pcmcia_get_first_tuple(link, &tuple) == CS_SUCCESS) &&
- 	(pcmcia_get_tuple_data(link, &tuple) == CS_SUCCESS)) {
-	manfid = le16_to_cpu(buf[0]);
-	prodid = le16_to_cpu(buf[1]);
-    }
-    
     tuple.DesiredTuple = CISTPL_CFTABLE_ENTRY;
     tuple.Attributes = 0;
     CS_CHECK(GetFirstTuple, pcmcia_get_first_tuple(link, &tuple));
     while (last_ret == CS_SUCCESS) {
 	cistpl_cftable_entry_t *cfg = &(parse.cftable_entry);
 	cistpl_io_t *io = &(parse.cftable_entry.io);
-	
+
 	if (pcmcia_get_tuple_data(link, &tuple) != 0 ||
 			pcmcia_parse_tuple(link, &tuple, &parse) != 0 ||
 			cfg->index == 0 || cfg->io.nwin == 0)
 		goto next_entry;
-	
+
 	link->conf.ConfigIndex = cfg->index;
 	/* For multifunction cards, by convention, we configure the
 	   network function with window 0, and serial with window 1 */
@@ -584,15 +568,15 @@ static int pcnet_config(struct pcmcia_device *link)
     }
 
     CS_CHECK(RequestIRQ, pcmcia_request_irq(link, &link->irq));
-    
+
     if (link->io.NumPorts2 == 8) {
 	link->conf.Attributes |= CONF_ENABLE_SPKR;
 	link->conf.Status = CCSR_AUDIO_ENA;
     }
-    if ((manfid == MANFID_IBM) &&
-	(prodid == PRODID_IBM_HOME_AND_AWAY))
+    if ((link->manf_id == MANFID_IBM) &&
+	(link->card_id == PRODID_IBM_HOME_AND_AWAY))
 	link->conf.ConfigIndex |= 0x10;
-    
+
     CS_CHECK(RequestConfiguration, pcmcia_request_configuration(link, &link->conf));
     dev->irq = link->irq.AssignedIRQ;
     dev->base_addr = link->io.BasePort1;
@@ -614,7 +598,7 @@ static int pcnet_config(struct pcmcia_device *link)
 	hw_info = get_ax88190(link);
     if (hw_info == NULL)
 	hw_info = get_hwired(link);
-    
+
     if (hw_info == NULL) {
 	printk(KERN_NOTICE "pcnet_cs: unable to read hardware net"
 	       " address for io base %#3lx\n", dev->base_addr);
@@ -624,14 +608,14 @@ static int pcnet_config(struct pcmcia_device *link)
     info->flags = hw_info->flags;
     /* Check for user overrides */
     info->flags |= (delay_output) ? DELAY_OUTPUT : 0;
-    if ((manfid == MANFID_SOCKET) &&
-	((prodid == PRODID_SOCKET_LPE) ||
-	 (prodid == PRODID_SOCKET_LPE_CF) ||
-	 (prodid == PRODID_SOCKET_EIO)))
+    if ((link->manf_id == MANFID_SOCKET) &&
+	((link->card_id == PRODID_SOCKET_LPE) ||
+	 (link->card_id == PRODID_SOCKET_LPE_CF) ||
+	 (link->card_id == PRODID_SOCKET_EIO)))
 	info->flags &= ~USE_BIG_BUF;
     if (!use_big_buf)
 	info->flags &= ~USE_BIG_BUF;
-    
+
     if (info->flags & USE_BIG_BUF) {
 	start_pg = SOCKET_START_PG;
 	stop_pg = SOCKET_STOP_PG;
@@ -654,11 +638,8 @@ static int pcnet_config(struct pcmcia_device *link)
     SET_ETHTOOL_OPS(dev, &netdev_ethtool_ops);
 
     if (info->flags & (IS_DL10019|IS_DL10022)) {
-	u_char id = inb(dev->base_addr + 0x1a);
 	dev->do_ioctl = &ei_ioctl;
 	mii_phy_probe(dev);
-	if ((id == 0x30) && !info->pna_phy && (info->eth_phy == 4))
-	    info->eth_phy = 0;
     }
 
     link->dev_node = &info->node;
@@ -821,15 +802,6 @@ static void mdio_write(kio_addr_t addr, int phy_id, int loc, int value)
     }
 }
 
-static void mdio_reset(kio_addr_t addr, int phy_id)
-{
-    outb_p(0x08, addr);
-    outb_p(0x0c, addr);
-    outb_p(0x08, addr);
-    outb_p(0x0c, addr);
-    outb_p(0x00, addr);
-}
-
 /*======================================================================
 
     EEPROM access routines for DL10019 and DL10022 based cards
@@ -929,7 +901,7 @@ static void set_misc_reg(struct net_device *dev)
     kio_addr_t nic_base = dev->base_addr;
     pcnet_dev_t *info = PRIV(dev);
     u_char tmp;
-    
+
     if (info->flags & HAS_MISC_REG) {
 	tmp = inb_p(nic_base + PCNET_MISC) & ~3;
 	if (dev->if_port == 2)
@@ -942,7 +914,8 @@ static void set_misc_reg(struct net_device *dev)
     }
     if (info->flags & IS_DL10022) {
 	if (info->flags & HAS_MII) {
-	    mdio_reset(nic_base + DLINK_GPIO, info->eth_phy);
+	    /* Advertise 100F, 100H, 10F, 10H */
+	    mdio_write(nic_base + DLINK_GPIO, info->eth_phy, 4, 0x01e1);
 	    /* Restart MII autonegotiation */
 	    mdio_write(nic_base + DLINK_GPIO, info->eth_phy, 0, 0x0000);
 	    mdio_write(nic_base + DLINK_GPIO, info->eth_phy, 0, 0x1200);
@@ -998,7 +971,7 @@ static int pcnet_open(struct net_device *dev)
     link->open++;
 
     set_misc_reg(dev);
-    request_irq(dev->irq, ei_irq_wrapper, SA_SHIRQ, dev_info, dev);
+    request_irq(dev->irq, ei_irq_wrapper, IRQF_SHARED, dev_info, dev);
 
     info->phy_id = info->eth_phy;
     info->link_status = 0x00;
@@ -1022,7 +995,7 @@ static int pcnet_close(struct net_device *dev)
 
     ei_close(dev);
     free_irq(dev->irq, dev);
-    
+
     link->open--;
     netif_stop_queue(dev);
     del_timer_sync(&info->watchdog);
@@ -1054,12 +1027,12 @@ static void pcnet_reset_8390(struct net_device *dev)
 	udelay(100);
     }
     outb_p(ENISR_RESET, nic_base + EN0_ISR); /* Ack intr. */
-    
+
     if (i == 100)
 	printk(KERN_ERR "%s: pcnet_reset_8390() did not complete.\n",
 	       dev->name);
     set_misc_reg(dev);
-    
+
 } /* pcnet_reset_8390 */
 
 /*====================================================================*/
@@ -1082,11 +1055,11 @@ static int set_config(struct net_device *dev, struct ifmap *map)
 
 /*====================================================================*/
 
-static irqreturn_t ei_irq_wrapper(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t ei_irq_wrapper(int irq, void *dev_id)
 {
     struct net_device *dev = dev_id;
     pcnet_dev_t *info;
-    irqreturn_t ret = ei_interrupt(irq, dev_id, regs);
+    irqreturn_t ret = ei_interrupt(irq, dev_id);
 
     if (ret == IRQ_HANDLED) {
 	    info = PRIV(dev);
@@ -1107,11 +1080,10 @@ static void ei_watchdog(u_long arg)
 
     /* Check for pending interrupt with expired latency timer: with
        this, we can limp along even if the interrupt is blocked */
-    outb_p(E8390_NODMA+E8390_PAGE0, nic_base + E8390_CMD);
     if (info->stale++ && (inb_p(nic_base + EN0_ISR) & ENISR_ALL)) {
 	if (!info->fast_poll)
 	    printk(KERN_INFO "%s: interrupt(s) dropped!\n", dev->name);
-	ei_irq_wrapper(dev->irq, dev, NULL);
+	ei_irq_wrapper(dev->irq, dev);
 	info->fast_poll = HZ;
     }
     if (info->fast_poll) {
@@ -1192,7 +1164,7 @@ static void netdev_get_drvinfo(struct net_device *dev,
 	strcpy(info->driver, "pcnet_cs");
 }
 
-static struct ethtool_ops netdev_ethtool_ops = {
+static const struct ethtool_ops netdev_ethtool_ops = {
 	.get_drvinfo		= netdev_get_drvinfo,
 };
 
@@ -1233,7 +1205,7 @@ static void dma_get_8390_hdr(struct net_device *dev,
 	       dev->name, ei_status.dmaing, ei_status.irqlock);
 	return;
     }
-    
+
     ei_status.dmaing |= 0x01;
     outb_p(E8390_NODMA+E8390_PAGE0+E8390_START, nic_base + PCNET_CMD);
     outb_p(sizeof(struct e8390_pkt_hdr), nic_base + EN0_RCNTLO);
@@ -1458,7 +1430,7 @@ static void shmem_get_8390_hdr(struct net_device *dev,
     void __iomem *xfer_start = ei_status.mem + (TX_PAGES<<8)
 				+ (ring_page << 8)
 				- (ei_status.rx_start_page << 8);
-    
+
     copyin(hdr, xfer_start, sizeof(struct e8390_pkt_hdr));
     /* Fix for big endian systems */
     hdr->count = le16_to_cpu(hdr->count);
@@ -1473,7 +1445,7 @@ static void shmem_block_input(struct net_device *dev, int count,
     unsigned long offset = (TX_PAGES<<8) + ring_offset
 				- (ei_status.rx_start_page << 8);
     char *buf = skb->data;
-    
+
     if (offset + count > ei_status.priv) {
 	/* We must wrap the input move. */
 	int semi_count = ei_status.priv - offset;
@@ -1541,7 +1513,7 @@ static int setup_shmem_window(struct pcmcia_device *link, int start_pg,
 	info->base = NULL; link->win = NULL;
 	goto failed;
     }
-    
+
     ei_status.mem = info->base + offset;
     ei_status.priv = req.Size;
     dev->mem_start = (u_long)ei_status.mem;
@@ -1645,6 +1617,7 @@ static struct pcmcia_device_id pcnet_ids[] = {
 	PCMCIA_DEVICE_PROD_ID12("corega K.K.", "corega FastEther PCC-TX", 0x5261440f, 0x485e85d9),
 	PCMCIA_DEVICE_PROD_ID12("Corega,K.K.", "Ethernet LAN Card", 0x110d26d9, 0x9fd2f0a2),
 	PCMCIA_DEVICE_PROD_ID12("corega,K.K.", "Ethernet LAN Card", 0x9791a90e, 0x9fd2f0a2),
+	PCMCIA_DEVICE_PROD_ID12("corega K.K.", "(CG-LAPCCTXD)", 0x5261440f, 0x73ec0d88),
 	PCMCIA_DEVICE_PROD_ID12("CouplerlessPCMCIA", "100BASE", 0xee5af0ad, 0x7c2add04),
 	PCMCIA_DEVICE_PROD_ID12("CyQ've", "ELA-010", 0x77008979, 0x9d8d445d),
 	PCMCIA_DEVICE_PROD_ID12("CyQ've", "ELA-110E 10/100M LAN Card", 0x77008979, 0xfd184814),
@@ -1695,6 +1668,7 @@ static struct pcmcia_device_id pcnet_ids[] = {
 	PCMCIA_DEVICE_PROD_ID12("Logitec", "LPM-LN100TX", 0x88fcdeda, 0x6d772737),
 	PCMCIA_DEVICE_PROD_ID12("Logitec", "LPM-LN100TE", 0x88fcdeda, 0x0e714bee),
 	PCMCIA_DEVICE_PROD_ID12("Logitec", "LPM-LN20T", 0x88fcdeda, 0x81090922),
+	PCMCIA_DEVICE_PROD_ID12("Logitec", "LPM-LN10TE", 0x88fcdeda, 0xc1e2521c),
 	PCMCIA_DEVICE_PROD_ID12("LONGSHINE", "PCMCIA Ethernet Card", 0xf866b0b0, 0x6f6652e0),
 	PCMCIA_DEVICE_PROD_ID12("MACNICA", "ME1-JEIDA", 0x20841b68, 0xaf8a3578),
 	PCMCIA_DEVICE_PROD_ID12("Macsense", "MPC-10", 0xd830297f, 0xd265c307),
@@ -1768,6 +1742,8 @@ static struct pcmcia_device_id pcnet_ids[] = {
 	PCMCIA_DEVICE_CIS_PROD_ID12("NDC", "Ethernet", 0x01c43ae1, 0x00b2e941, "NE2K.cis"),
 	PCMCIA_DEVICE_CIS_PROD_ID12("PMX   ", "PE-200", 0x34f3f1c8, 0x10b59f8c, "PE-200.cis"),
 	PCMCIA_DEVICE_CIS_PROD_ID12("TAMARACK", "Ethernet", 0xcf434fba, 0x00b2e941, "tamarack.cis"),
+	PCMCIA_DEVICE_PROD_ID123("Fast Ethernet", "CF Size PC Card", "1.0",
+		0xb4be14e3, 0x43ac239b, 0x0877b627),
 	PCMCIA_DEVICE_NULL
 };
 MODULE_DEVICE_TABLE(pcmcia, pcnet_ids);

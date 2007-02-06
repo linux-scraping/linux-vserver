@@ -13,7 +13,6 @@
 #ifndef NCR53C9X_H
 #define NCR53C9X_H
 
-#include <linux/config.h>
 #include <linux/interrupt.h>
 
 /* djweis for mac driver */
@@ -657,7 +656,7 @@ extern struct NCR_ESP *esp_allocate(struct scsi_host_template *, void *);
 extern void esp_deallocate(struct NCR_ESP *);
 extern void esp_release(void);
 extern void esp_initialize(struct NCR_ESP *);
-extern irqreturn_t esp_intr(int, void *, struct pt_regs *);
+extern irqreturn_t esp_intr(int, void *);
 extern const char *esp_info(struct Scsi_Host *);
 extern int esp_queue(Scsi_Cmnd *, void (*done)(Scsi_Cmnd *));
 extern int esp_abort(Scsi_Cmnd *);

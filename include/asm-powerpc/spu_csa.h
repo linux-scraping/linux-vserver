@@ -86,10 +86,18 @@ struct spu_lscsa {
 	struct spu_reg128 event_mask;
 	struct spu_reg128 srr0;
 	struct spu_reg128 stopped_status;
-	struct spu_reg128 pad[119];	/* 'ls' must be page-aligned. */
-	unsigned char ls[LS_SIZE];
+
+	/*
+	 * 'ls' must be page-aligned on all configurations.
+	 * Since we don't want to rely on having the spu-gcc
+	 * installed to build the kernel and this structure
+	 * is used in the SPU-side code, make it 64k-page
+	 * aligned for now.
+	 */
+	unsigned char ls[LS_SIZE] __attribute__((aligned(65536)));
 };
 
+#ifndef __SPU__
 /*
  * struct spu_problem_collapsed - condensed problem state area, w/o pads.
  */
@@ -143,7 +151,6 @@ struct spu_priv1_collapsed {
 	u64 mfc_fir_chkstp_enable_RW;
 	u64 smf_sbi_signal_sel;
 	u64 smf_ato_signal_sel;
-	u64 mfc_sdr_RW;
 	u64 tlb_index_hint_RO;
 	u64 tlb_index_W;
 	u64 tlb_vpn_RW;
@@ -250,6 +257,7 @@ extern int spu_restore(struct spu_state *new, struct spu *spu);
 extern int spu_switch(struct spu_state *prev, struct spu_state *new,
 		      struct spu *spu);
 
+#endif /* !__SPU__ */
 #endif /* __KERNEL__ */
 #endif /* !__ASSEMBLY__ */
 #endif /* _SPU_CSA_H_ */

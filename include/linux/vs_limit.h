@@ -1,8 +1,11 @@
-#ifndef _VX_VS_LIMIT_H
-#define _VX_VS_LIMIT_H
+#ifndef _VS_LIMIT_H
+#define _VS_LIMIT_H
 
 #include "vserver/limit.h"
+#include "vserver/base.h"
+#include "vserver/context.h"
 #include "vserver/debug.h"
+#include "vserver/context.h"
 #include "vserver/limit_int.h"
 
 
@@ -68,6 +71,22 @@
 	vx_cres_avail(current->vx_info, n, VLIMIT_OPENFD)
 
 
+/* dentry limits */
+
+#define vx_dentry_inc(d) do {						\
+	if (atomic_read(&d->d_count) == 1)				\
+		vx_acc_cres(current->vx_info, 1, d, VLIMIT_DENTRY);	\
+	} while (0)
+
+#define vx_dentry_dec(d) do {						\
+	if (atomic_read(&d->d_count) == 0)				\
+		vx_acc_cres(current->vx_info,-1, d, VLIMIT_DENTRY);	\
+	} while (0)
+
+#define vx_dentry_avail(n) \
+	vx_cres_avail(current->vx_info, n, VLIMIT_DENTRY)
+
+
 /* socket limits */
 
 #define vx_sock_inc(s) \
@@ -100,6 +119,20 @@
 
 #define vx_ipcshm_avail(v,a) \
 	vx_cres_avail(v, a, VLIMIT_SHMEM)
+
+
+#define vx_semary_inc(a) \
+	vx_acc_cres(current->vx_info, 1, a, VLIMIT_SEMARY)
+
+#define vx_semary_dec(a) \
+	vx_acc_cres(current->vx_info,-1, a, VLIMIT_SEMARY)
+
+
+#define vx_nsems_add(a,n) \
+	vx_add_cres(current->vx_info, n, a, VLIMIT_NSEMS)
+
+#define vx_nsems_sub(a,n) \
+	vx_sub_cres(current->vx_info, n, a, VLIMIT_NSEMS)
 
 
 #else

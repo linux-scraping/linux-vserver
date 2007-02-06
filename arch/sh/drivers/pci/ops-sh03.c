@@ -4,7 +4,6 @@
  * PCI initialization for the Interface CTP/PCI-SH03 board
  */
 
-#include <linux/config.h>
 #include <linux/kernel.h>
 #include <linux/types.h>
 #include <linux/init.h>
@@ -36,10 +35,10 @@ static struct resource sh7751_mem_resource = {
 	.flags  = IORESOURCE_MEM
 };
 
-extern struct pci_ops sh7751_pci_ops;
+extern struct pci_ops sh4_pci_ops;
 
 struct pci_channel board_pci_channels[] = {
-	{ &sh7751_pci_ops, &sh7751_io_resource, &sh7751_mem_resource, 0, 0xff },
+	{ &sh4_pci_ops, &sh7751_io_resource, &sh7751_mem_resource, 0, 0xff },
 	{ NULL, NULL, NULL, 0, 0 },
 };
 

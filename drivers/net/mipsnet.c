@@ -116,8 +116,7 @@ static inline ssize_t mipsnet_get_fromdev(struct net_device *dev, size_t count)
 	return count;
 }
 
-static irqreturn_t
-mipsnet_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t mipsnet_interrupt(int irq, void *dev_id)
 {
 	struct net_device *dev = dev_id;
 
@@ -179,7 +178,7 @@ static int mipsnet_open(struct net_device *dev)
 	pr_debug("%s: mipsnet_open\n", dev->name);
 
 	err = request_irq(dev->irq, &mipsnet_interrupt,
-			  SA_SHIRQ, dev->name, (void *) dev);
+			  IRQF_SHARED, dev->name, (void *) dev);
 
 	if (err) {
 		pr_debug("%s: %s(): can't get irq %d\n",

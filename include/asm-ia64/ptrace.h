@@ -54,9 +54,10 @@
  * This is because ar.ec is saved as part of ar.pfs.
  */
 
-#include <linux/config.h>
 
 #include <asm/fpu.h>
+
+#ifdef __KERNEL__
 #ifndef ASM_OFFSETS_C
 #include <asm/asm-offsets.h>
 #endif
@@ -80,10 +81,9 @@
 
 #define KERNEL_STACK_SIZE		IA64_STK_OFFSET
 
-#ifndef __ASSEMBLY__
+#endif /* __KERNEL__ */
 
-#include <asm/current.h>
-#include <asm/page.h>
+#ifndef __ASSEMBLY__
 
 /*
  * This struct defines the way the registers are saved on system
@@ -230,6 +230,9 @@ struct switch_stack {
 
 #ifdef __KERNEL__
 
+#include <asm/current.h>
+#include <asm/page.h>
+
 #define __ARCH_SYS_PTRACE	1
 
 /*
@@ -238,6 +241,9 @@ struct switch_stack {
  * the canonical representation by adding to instruction pointer.
  */
 # define instruction_pointer(regs) ((regs)->cr_iip + ia64_psr(regs)->ri)
+
+#define regs_return_value(regs) ((regs)->r8)
+
 /* Conserve space in histogram by encoding slot bits in address
  * bits 2 and 3 rather than bits 0 and 1.
  */

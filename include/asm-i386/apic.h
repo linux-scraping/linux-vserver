@@ -1,7 +1,6 @@
 #ifndef __ASM_APIC_H
 #define __ASM_APIC_H
 
-#include <linux/config.h>
 #include <linux/pm.h>
 #include <asm/fixmap.h>
 #include <asm/apicdef.h>
@@ -17,19 +16,7 @@
 #define APIC_VERBOSE 1
 #define APIC_DEBUG   2
 
-extern int enable_local_apic;
 extern int apic_verbosity;
-
-static inline void lapic_disable(void)
-{
-	enable_local_apic = -1;
-	clear_bit(X86_FEATURE_APIC, boot_cpu_data.x86_capability);
-}
-
-static inline void lapic_enable(void)
-{
-	enable_local_apic = 1;
-}
 
 /*
  * Define the default level of output to be very little
@@ -43,23 +30,34 @@ static inline void lapic_enable(void)
 	} while (0)
 
 
+extern void generic_apic_probe(void);
+
 #ifdef CONFIG_X86_LOCAL_APIC
 
 /*
  * Basic functions accessing APICs.
  */
+#ifdef CONFIG_PARAVIRT
+#include <asm/paravirt.h>
+#else
+#define apic_write native_apic_write
+#define apic_write_atomic native_apic_write_atomic
+#define apic_read native_apic_read
+#endif
 
-static __inline void apic_write(unsigned long reg, unsigned long v)
+static __inline fastcall void native_apic_write(unsigned long reg,
+						unsigned long v)
 {
 	*((volatile unsigned long *)(APIC_BASE+reg)) = v;
 }
 
-static __inline void apic_write_atomic(unsigned long reg, unsigned long v)
+static __inline fastcall void native_apic_write_atomic(unsigned long reg,
+						       unsigned long v)
 {
 	xchg((volatile unsigned long *)(APIC_BASE+reg), v);
 }
 
-static __inline unsigned long apic_read(unsigned long reg)
+static __inline fastcall unsigned long native_apic_read(unsigned long reg)
 {
 	return *((volatile unsigned long *)(APIC_BASE+reg));
 }
@@ -109,37 +107,21 @@ extern void sync_Arb_IDs (void);
 extern void init_bsp_APIC (void);
 extern void setup_local_APIC (void);
 extern void init_apic_mappings (void);
-extern void smp_local_timer_interrupt (struct pt_regs * regs);
+extern void smp_local_timer_interrupt (void);
 extern void setup_boot_APIC_clock (void);
 extern void setup_secondary_APIC_clock (void);
-extern void setup_apic_nmi_watchdog (void);
-extern int reserve_lapic_nmi(void);
-extern void release_lapic_nmi(void);
-extern void disable_timer_nmi_watchdog(void);
-extern void enable_timer_nmi_watchdog(void);
-extern void nmi_watchdog_tick (struct pt_regs * regs);
 extern int APIC_init_uniprocessor (void);
 extern void disable_APIC_timer(void);
 extern void enable_APIC_timer(void);
 
 extern void enable_NMI_through_LVT0 (void * dummy);
 
-extern unsigned int nmi_watchdog;
-#define NMI_NONE	0
-#define NMI_IO_APIC	1
-#define NMI_LOCAL_APIC	2
-#define NMI_INVALID	3
-
-extern int disable_timer_pin_1;
-
-void smp_send_timer_broadcast_ipi(struct pt_regs *regs);
+void smp_send_timer_broadcast_ipi(void);
 void switch_APIC_timer_to_ipi(void *cpumask);
 void switch_ipi_to_APIC_timer(void *cpumask);
 #define ARCH_APICTIMER_STOPS_ON_C3	1
 
 extern int timer_over_8254;
-
-extern int modern_apic(void);
 
 #else /* !CONFIG_X86_LOCAL_APIC */
 static inline void lapic_shutdown(void) { }

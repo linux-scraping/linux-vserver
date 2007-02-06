@@ -10,7 +10,6 @@
 #ifndef _ASM_FPU_H
 #define _ASM_FPU_H
 
-#include <linux/config.h>
 #include <linux/sched.h>
 #include <linux/thread_info.h>
 
@@ -135,13 +134,14 @@ static inline void restore_fp(struct task_struct *tsk)
 
 static inline fpureg_t *get_fpu_regs(struct task_struct *tsk)
 {
-	if (cpu_has_fpu) {
-		if ((tsk == current) && __is_fpu_owner())
+	if (tsk == current) {
+		preempt_disable();
+		if (is_fpu_owner())
 			_save_fp(current);
-		return tsk->thread.fpu.hard.fpr;
+		preempt_enable();
 	}
 
-	return tsk->thread.fpu.soft.fpr;
+	return tsk->thread.fpu.fpr;
 }
 
 #endif /* _ASM_FPU_H */

@@ -4,7 +4,6 @@
  * Declarations for Reverse Mapping functions in mm/rmap.c
  */
 
-#include <linux/config.h>
 #include <linux/list.h>
 #include <linux/slab.h>
 #include <linux/mm.h>
@@ -31,11 +30,11 @@ struct anon_vma {
 
 #ifdef CONFIG_MMU
 
-extern kmem_cache_t *anon_vma_cachep;
+extern struct kmem_cache *anon_vma_cachep;
 
 static inline struct anon_vma *anon_vma_alloc(void)
 {
-	return kmem_cache_alloc(anon_vma_cachep, SLAB_KERNEL);
+	return kmem_cache_alloc(anon_vma_cachep, GFP_KERNEL);
 }
 
 static inline void anon_vma_free(struct anon_vma *anon_vma)
@@ -73,7 +72,7 @@ void __anon_vma_link(struct vm_area_struct *);
 void page_add_anon_rmap(struct page *, struct vm_area_struct *, unsigned long);
 void page_add_new_anon_rmap(struct page *, struct vm_area_struct *, unsigned long);
 void page_add_file_rmap(struct page *);
-void page_remove_rmap(struct page *);
+void page_remove_rmap(struct page *, struct vm_area_struct *);
 
 /**
  * page_dup_rmap - duplicate pte mapping to a page
@@ -92,7 +91,6 @@ static inline void page_dup_rmap(struct page *page)
  */
 int page_referenced(struct page *, int is_locked);
 int try_to_unmap(struct page *, int ignore_refs);
-void remove_from_swap(struct page *page);
 
 /*
  * Called from mm/filemap_xip.c to unmap empty zero page
@@ -105,6 +103,14 @@ pte_t *page_check_address(struct page *, struct mm_struct *,
  */
 unsigned long page_address_in_vma(struct page *, struct vm_area_struct *);
 
+/*
+ * Cleans the PTEs of shared mappings.
+ * (and since clean PTEs should also be readonly, write protects them too)
+ *
+ * returns the number of cleaned PTEs.
+ */
+int page_mkclean(struct page *);
+
 #else	/* !CONFIG_MMU */
 
 #define anon_vma_init()		do {} while (0)
@@ -113,6 +119,12 @@ unsigned long page_address_in_vma(struct page *, struct vm_area_struct *);
 
 #define page_referenced(page,l) TestClearPageReferenced(page)
 #define try_to_unmap(page, refs) SWAP_FAIL
+
+static inline int page_mkclean(struct page *page)
+{
+	return 0;
+}
+
 
 #endif	/* CONFIG_MMU */
 

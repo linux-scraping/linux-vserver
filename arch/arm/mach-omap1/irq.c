@@ -36,7 +36,6 @@
  * 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
-#include <linux/config.h>
 #include <linux/init.h>
 #include <linux/module.h>
 #include <linux/sched.h>
@@ -169,7 +168,8 @@ static struct omap_irq_bank omap1610_irq_banks[] = {
 };
 #endif
 
-static struct irqchip omap_irq_chip = {
+static struct irq_chip omap_irq_chip = {
+	.name		= "MPU",
 	.ack		= omap_mask_ack_irq,
 	.mask		= omap_mask_irq,
 	.unmask		= omap_unmask_irq,
@@ -229,7 +229,7 @@ void __init omap_init_irq(void)
 			omap_irq_set_cfg(j, 0, 0, irq_trigger);
 
 			set_irq_chip(j, &omap_irq_chip);
-			set_irq_handler(j, do_level_IRQ);
+			set_irq_handler(j, handle_level_irq);
 			set_irq_flags(j, IRQF_VALID);
 		}
 	}

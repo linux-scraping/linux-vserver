@@ -22,6 +22,7 @@
 #include <asm/pmc.h>
 #include <asm/cputable.h>
 #include <asm/oprofile_impl.h>
+#include <asm/firmware.h>
 
 static struct op_powerpc_model *model;
 
@@ -31,6 +32,11 @@ static struct op_system_config sys;
 static void op_handle_interrupt(struct pt_regs *regs)
 {
 	model->handle_interrupt(regs, ctr);
+}
+
+static void op_powerpc_cpu_setup(void *dummy)
+{
+	model->cpu_setup(ctr);
 }
 
 static int op_powerpc_setup(void)
@@ -46,7 +52,7 @@ static int op_powerpc_setup(void)
 	model->reg_setup(ctr, &sys, model->num_counters);
 
 	/* Configure the registers on all cpus.  */
-	on_each_cpu(model->cpu_setup, NULL, 0, 1);
+	on_each_cpu(op_powerpc_cpu_setup, NULL, 0, 1);
 
 	return 0;
 }
@@ -63,7 +69,10 @@ static void op_powerpc_cpu_start(void *dummy)
 
 static int op_powerpc_start(void)
 {
-	on_each_cpu(op_powerpc_cpu_start, NULL, 0, 1);
+	if (model->global_start)
+		model->global_start(ctr);
+	if (model->start)
+		on_each_cpu(op_powerpc_cpu_start, NULL, 0, 1);
 	return 0;
 }
 
@@ -74,7 +83,10 @@ static inline void op_powerpc_cpu_stop(void *dummy)
 
 static void op_powerpc_stop(void)
 {
-	on_each_cpu(op_powerpc_cpu_stop, NULL, 0, 1);
+	if (model->stop)
+		on_each_cpu(op_powerpc_cpu_stop, NULL, 0, 1);
+        if (model->global_stop)
+                model->global_stop();
 }
 
 static int op_powerpc_create_files(struct super_block *sb, struct dentry *root)
@@ -93,7 +105,7 @@ static int op_powerpc_create_files(struct super_block *sb, struct dentry *root)
 
 	for (i = 0; i < model->num_counters; ++i) {
 		struct dentry *dir;
-		char buf[3];
+		char buf[4];
 
 		snprintf(buf, sizeof buf, "%d", i);
 		dir = oprofilefs_mkdir(sb, root, buf);
@@ -130,15 +142,24 @@ int __init oprofile_arch_init(struct oprofile_operations *ops)
 	if (!cur_cpu_spec->oprofile_cpu_type)
 		return -ENODEV;
 
+	if (firmware_has_feature(FW_FEATURE_ISERIES))
+		return -ENODEV;
+
 	switch (cur_cpu_spec->oprofile_type) {
 #ifdef CONFIG_PPC64
+#ifdef CONFIG_PPC_CELL_NATIVE
+		case PPC_OPROFILE_CELL:
+			model = &op_model_cell;
+			break;
+#endif
 		case PPC_OPROFILE_RS64:
 			model = &op_model_rs64;
 			break;
 		case PPC_OPROFILE_POWER4:
 			model = &op_model_power4;
 			break;
-#else
+#endif
+#ifdef CONFIG_6xx
 		case PPC_OPROFILE_G4:
 			model = &op_model_7450;
 			break;
@@ -162,7 +183,7 @@ int __init oprofile_arch_init(struct oprofile_operations *ops)
 	ops->stop = op_powerpc_stop;
 	ops->backtrace = op_powerpc_backtrace;
 
-	printk(KERN_INFO "oprofile: using %s performance monitoring.\n",
+	printk(KERN_DEBUG "oprofile: using %s performance monitoring.\n",
 	       ops->cpu_type);
 
 	return 0;

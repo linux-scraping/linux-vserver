@@ -1,4 +1,4 @@
-/*
+	/*
     cx24110 - Single Chip Satellite Channel Receiver driver module
 
     Copyright (C) 2002 Peter Hettkamp <peter.hettkamp@htp-tel.de> based on
@@ -35,8 +35,6 @@
 struct cx24110_state {
 
 	struct i2c_adapter* i2c;
-
-	struct dvb_frontend_ops ops;
 
 	const struct cx24110_config* config;
 
@@ -250,7 +248,7 @@ static int cx24110_set_symbolrate (struct cx24110_state* state, u32 srate)
 	static const u32 bands[]={5000000UL,15000000UL,90999000UL/2};
 	int i;
 
-dprintk("cx24110 debug: entering %s(%d)\n",__FUNCTION__,srate);
+	dprintk("cx24110 debug: entering %s(%d)\n",__FUNCTION__,srate);
 	if (srate>90999000UL/2)
 		srate=90999000UL/2;
 	if (srate<500000)
@@ -313,15 +311,16 @@ dprintk("cx24110 debug: entering %s(%d)\n",__FUNCTION__,srate);
 
 }
 
-int cx24110_pll_write (struct dvb_frontend* fe, u32 data)
+static int _cx24110_pll_write (struct dvb_frontend* fe, u8 *buf, int len)
 {
 	struct cx24110_state *state = fe->demodulator_priv;
+
+	if (len != 3)
+		return -EINVAL;
 
 /* tuner data is 21 bits long, must be left-aligned in data */
 /* tuner cx24108 is written through a dedicated 3wire interface on the demod chip */
 /* FIXME (low): add error handling, avoid infinite loops if HW fails... */
-
-	dprintk("cx24110 debug: cx24108_write(%8.8x)\n",data);
 
 	cx24110_writereg(state,0x6d,0x30); /* auto mode at 62kHz */
 	cx24110_writereg(state,0x70,0x15); /* auto mode 21 bits */
@@ -331,19 +330,19 @@ int cx24110_pll_write (struct dvb_frontend* fe, u32 data)
 		cx24110_writereg(state,0x72,0);
 
 	/* write the topmost 8 bits */
-	cx24110_writereg(state,0x72,(data>>24)&0xff);
+	cx24110_writereg(state,0x72,buf[0]);
 
 	/* wait for the send to be completed */
 	while ((cx24110_readreg(state,0x6d)&0xc0)==0x80)
 		;
 
 	/* send another 8 bytes */
-	cx24110_writereg(state,0x72,(data>>16)&0xff);
+	cx24110_writereg(state,0x72,buf[1]);
 	while ((cx24110_readreg(state,0x6d)&0xc0)==0x80)
 		;
 
 	/* and the topmost 5 bits of this byte */
-	cx24110_writereg(state,0x72,(data>>8)&0xff);
+	cx24110_writereg(state,0x72,buf[2]);
 	while ((cx24110_readreg(state,0x6d)&0xc0)==0x80)
 		;
 
@@ -366,17 +365,6 @@ static int cx24110_initfe(struct dvb_frontend* fe)
 		cx24110_writereg(state, cx24110_regdata[i].reg, cx24110_regdata[i].data);
 	};
 
-	if (state->config->pll_init) state->config->pll_init(fe);
-
-	return 0;
-}
-
-static int cx24110_sleep(struct dvb_frontend *fe)
-{
-	struct cx24110_state *state = fe->demodulator_priv;
-
-	if (state->config->pll_sleep)
-		  return state->config->pll_sleep(fe);
 	return 0;
 }
 
@@ -548,7 +536,12 @@ static int cx24110_set_frontend(struct dvb_frontend* fe, struct dvb_frontend_par
 {
 	struct cx24110_state *state = fe->demodulator_priv;
 
-	state->config->pll_set(fe, p);
+
+	if (fe->ops.tuner_ops.set_params) {
+		fe->ops.tuner_ops.set_params(fe, p);
+		if (fe->ops.i2c_gate_ctrl) fe->ops.i2c_gate_ctrl(fe, 0);
+	}
+
 	cx24110_set_inversion (state, p->inversion);
 	cx24110_set_fec (state, p->u.qpsk.fec_inner);
 	cx24110_set_symbolrate (state, p->u.qpsk.symbol_rate);
@@ -612,7 +605,6 @@ struct dvb_frontend* cx24110_attach(const struct cx24110_config* config,
 	/* setup the state */
 	state->config = config;
 	state->i2c = i2c;
-	memcpy(&state->ops, &cx24110_ops, sizeof(struct dvb_frontend_ops));
 	state->lastber = 0;
 	state->lastbler = 0;
 	state->lastesn0 = 0;
@@ -622,7 +614,7 @@ struct dvb_frontend* cx24110_attach(const struct cx24110_config* config,
 	if ((ret != 0x5a) && (ret != 0x69)) goto error;
 
 	/* create dvb_frontend */
-	state->frontend.ops = &state->ops;
+	memcpy(&state->frontend.ops, &cx24110_ops, sizeof(struct dvb_frontend_ops));
 	state->frontend.demodulator_priv = state;
 	return &state->frontend;
 
@@ -651,7 +643,7 @@ static struct dvb_frontend_ops cx24110_ops = {
 	.release = cx24110_release,
 
 	.init = cx24110_initfe,
-	.sleep = cx24110_sleep,
+	.write = _cx24110_pll_write,
 	.set_frontend = cx24110_set_frontend,
 	.get_frontend = cx24110_get_frontend,
 	.read_status = cx24110_read_status,
@@ -674,4 +666,3 @@ MODULE_AUTHOR("Peter Hettkamp");
 MODULE_LICENSE("GPL");
 
 EXPORT_SYMBOL(cx24110_attach);
-EXPORT_SYMBOL(cx24110_pll_write);

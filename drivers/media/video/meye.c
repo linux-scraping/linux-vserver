@@ -26,12 +26,12 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/pci.h>
 #include <linux/sched.h>
 #include <linux/init.h>
 #include <linux/videodev.h>
+#include <media/v4l2-common.h>
 #include <asm/uaccess.h>
 #include <asm/io.h>
 #include <linux/delay.h>
@@ -786,7 +786,7 @@ static void mchip_cont_compression_start(void)
 /* Interrupt handling                                                       */
 /****************************************************************************/
 
-static irqreturn_t meye_irq(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t meye_irq(int irq, void *dev_id)
 {
 	u32 v;
 	int reqnr;
@@ -923,7 +923,7 @@ static int meye_do_ioctl(struct inode *inode, struct file *file,
 		struct video_picture *p = arg;
 		if (p->depth != 16)
 			return -EINVAL;
-		if (p->palette != VIDEO_PALETTE_YUV422)
+		if (p->palette != VIDEO_PALETTE_YUV422 && p->palette != VIDEO_PALETTE_YUYV)
 			return -EINVAL;
 		mutex_lock(&meye.lock);
 		sonypi_camera_command(SONYPI_COMMAND_SETCAMERABRIGHTNESS,
@@ -978,7 +978,7 @@ static int meye_do_ioctl(struct inode *inode, struct file *file,
 
 		if (vm->frame >= gbuffers || vm->frame < 0)
 			return -EINVAL;
-		if (vm->format != VIDEO_PALETTE_YUV422)
+		if (vm->format != VIDEO_PALETTE_YUV422 && vm->format != VIDEO_PALETTE_YUYV)
 			return -EINVAL;
 		if (vm->height * vm->width * 2 > gbufsize)
 			return -EINVAL;
@@ -1682,13 +1682,13 @@ static unsigned int meye_poll(struct file *file, poll_table *wait)
 
 static void meye_vm_open(struct vm_area_struct *vma)
 {
-	int idx = (int)vma->vm_private_data;
+	long idx = (long)vma->vm_private_data;
 	meye.vma_use_count[idx]++;
 }
 
 static void meye_vm_close(struct vm_area_struct *vma)
 {
-	int idx = (int)vma->vm_private_data;
+	long idx = (long)vma->vm_private_data;
 	meye.vma_use_count[idx]--;
 }
 
@@ -1881,7 +1881,7 @@ static int __devinit meye_probe(struct pci_dev *pcidev,
 
 	meye.mchip_irq = pcidev->irq;
 	if (request_irq(meye.mchip_irq, meye_irq,
-			SA_INTERRUPT | SA_SHIRQ, "meye", meye_irq)) {
+			IRQF_DISABLED | IRQF_SHARED, "meye", meye_irq)) {
 		printk(KERN_ERR "meye: request_irq failed\n");
 		goto outreqirq;
 	}

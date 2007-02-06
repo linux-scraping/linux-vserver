@@ -280,6 +280,7 @@ enum sis190_feature {
 struct sis190_private {
 	void __iomem *mmio_addr;
 	struct pci_dev *pci_dev;
+	struct net_device *dev;
 	struct net_device_stats stats;
 	spinlock_t lock;
 	u32 rx_buf_sz;
@@ -713,7 +714,7 @@ static void sis190_tx_interrupt(struct net_device *dev,
  * The interrupt handler does all of the Rx thread work and cleans up after
  * the Tx thread.
  */
-static irqreturn_t sis190_interrupt(int irq, void *__dev, struct pt_regs *regs)
+static irqreturn_t sis190_interrupt(int irq, void *__dev)
 {
 	struct net_device *dev = __dev;
 	struct sis190_private *tp = netdev_priv(dev);
@@ -758,7 +759,7 @@ static void sis190_netpoll(struct net_device *dev)
 	struct pci_dev *pdev = tp->pci_dev;
 
 	disable_irq(pdev->irq);
-	sis190_interrupt(pdev->irq, dev, NULL);
+	sis190_interrupt(pdev->irq, dev);
 	enable_irq(pdev->irq);
 }
 #endif
@@ -821,9 +822,6 @@ static void sis190_set_rx_mode(struct net_device *dev)
 	u16 rx_mode;
 
 	if (dev->flags & IFF_PROMISC) {
-		/* Unconditionally log net taps. */
-		net_drv(tp, KERN_NOTICE "%s: Promiscuous mode enabled.\n",
-			dev->name);
 		rx_mode =
 			AcceptBroadcast | AcceptMulticast | AcceptMyPhys |
 			AcceptAllPhys;
@@ -900,10 +898,11 @@ static void sis190_hw_start(struct net_device *dev)
 	netif_start_queue(dev);
 }
 
-static void sis190_phy_task(void * data)
+static void sis190_phy_task(struct work_struct *work)
 {
-	struct net_device *dev = data;
-	struct sis190_private *tp = netdev_priv(dev);
+	struct sis190_private *tp =
+		container_of(work, struct sis190_private, phy_task);
+	struct net_device *dev = tp->dev;
 	void __iomem *ioaddr = tp->mmio_addr;
 	int phy_id = tp->mii_if.phy_id;
 	u16 val;
@@ -1050,11 +1049,11 @@ static int sis190_open(struct net_device *dev)
 	if (rc < 0)
 		goto err_free_rx_1;
 
-	INIT_WORK(&tp->phy_task, sis190_phy_task, dev);
+	INIT_WORK(&tp->phy_task, sis190_phy_task);
 
 	sis190_request_timer(dev);
 
-	rc = request_irq(dev->irq, sis190_interrupt, SA_SHIRQ, dev->name, dev);
+	rc = request_irq(dev->irq, sis190_interrupt, IRQF_SHARED, dev->name, dev);
 	if (rc < 0)
 		goto err_release_timer_2;
 
@@ -1156,8 +1155,7 @@ static int sis190_start_xmit(struct sk_buff *skb, struct net_device *dev)
 	dma_addr_t mapping;
 
 	if (unlikely(skb->len < ETH_ZLEN)) {
-		skb = skb_padto(skb, ETH_ZLEN);
-		if (!skb) {
+		if (skb_padto(skb, ETH_ZLEN)) {
 			tp->stats.tx_dropped++;
 			goto out;
 		}
@@ -1440,6 +1438,7 @@ static struct net_device * __devinit sis190_init_board(struct pci_dev *pdev)
 	SET_NETDEV_DEV(dev, &pdev->dev);
 
 	tp = netdev_priv(dev);
+	tp->dev = dev;
 	tp->msg_enable = netif_msg_init(debug.msg_enable, SIS190_MSG_DEFAULT);
 
 	rc = pci_enable_device(pdev);
@@ -1563,7 +1562,7 @@ static int __devinit sis190_get_mac_addr_from_eeprom(struct pci_dev *pdev,
 	for (i = 0; i < MAC_ADDR_LEN / 2; i++) {
 		__le16 w = sis190_read_eeprom(ioaddr, EEPROMMACAddr + i);
 
-		((u16 *)dev->dev_addr)[0] = le16_to_cpu(w);
+		((u16 *)dev->dev_addr)[i] = le16_to_cpu(w);
 	}
 
 	sis190_set_rgmii(tp, sis190_read_eeprom(ioaddr, EEPROMInfo));
@@ -1751,7 +1750,7 @@ static void sis190_set_msglevel(struct net_device *dev, u32 value)
 	tp->msg_enable = value;
 }
 
-static struct ethtool_ops sis190_ethtool_ops = {
+static const struct ethtool_ops sis190_ethtool_ops = {
 	.get_settings	= sis190_get_settings,
 	.set_settings	= sis190_set_settings,
 	.get_drvinfo	= sis190_get_drvinfo,
@@ -1802,7 +1801,7 @@ static int __devinit sis190_init_one(struct pci_dev *pdev,
 
 	sis190_init_rxfilter(dev);
 
-	INIT_WORK(&tp->phy_task, sis190_phy_task, dev);
+	INIT_WORK(&tp->phy_task, sis190_phy_task);
 
 	dev->open = sis190_open;
 	dev->stop = sis190_close;
@@ -1872,7 +1871,7 @@ static struct pci_driver sis190_pci_driver = {
 
 static int __init sis190_init_module(void)
 {
-	return pci_module_init(&sis190_pci_driver);
+	return pci_register_driver(&sis190_pci_driver);
 }
 
 static void __exit sis190_cleanup_module(void)

@@ -12,6 +12,8 @@
 #include <linux/bio.h>
 #include <linux/slab.h>
 
+#define DM_MSG_PREFIX "linear"
+
 /*
  * Linear: maps a linear range of a device.
  */
@@ -29,7 +31,7 @@ static int linear_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	unsigned long long tmp;
 
 	if (argc != 2) {
-		ti->error = "dm-linear: Invalid argument count";
+		ti->error = "Invalid argument count";
 		return -EINVAL;
 	}
 
@@ -75,7 +77,7 @@ static int linear_map(struct dm_target *ti, struct bio *bio,
 	bio->bi_bdev = lc->dev->bdev;
 	bio->bi_sector = lc->start + (bio->bi_sector - ti->begin);
 
-	return 1;
+	return DM_MAPIO_REMAPPED;
 }
 
 static int linear_status(struct dm_target *ti, status_type_t type,
@@ -96,14 +98,31 @@ static int linear_status(struct dm_target *ti, status_type_t type,
 	return 0;
 }
 
+static int linear_ioctl(struct dm_target *ti, struct inode *inode,
+			struct file *filp, unsigned int cmd,
+			unsigned long arg)
+{
+	struct linear_c *lc = (struct linear_c *) ti->private;
+	struct block_device *bdev = lc->dev->bdev;
+	struct file fake_file = {};
+	struct dentry fake_dentry = {};
+
+	fake_file.f_mode = lc->dev->mode;
+	fake_file.f_path.dentry = &fake_dentry;
+	fake_dentry.d_inode = bdev->bd_inode;
+
+	return blkdev_driver_ioctl(bdev->bd_inode, &fake_file, bdev->bd_disk, cmd, arg);
+}
+
 static struct target_type linear_target = {
 	.name   = "linear",
-	.version= {1, 0, 1},
+	.version= {1, 0, 2},
 	.module = THIS_MODULE,
 	.ctr    = linear_ctr,
 	.dtr    = linear_dtr,
 	.map    = linear_map,
 	.status = linear_status,
+	.ioctl  = linear_ioctl,
 };
 
 int __init dm_linear_init(void)
@@ -111,7 +130,7 @@ int __init dm_linear_init(void)
 	int r = dm_register_target(&linear_target);
 
 	if (r < 0)
-		DMERR("linear: register failed %d", r);
+		DMERR("register failed %d", r);
 
 	return r;
 }
@@ -121,5 +140,5 @@ void dm_linear_exit(void)
 	int r = dm_unregister_target(&linear_target);
 
 	if (r < 0)
-		DMERR("linear: unregister failed %d", r);
+		DMERR("unregister failed %d", r);
 }

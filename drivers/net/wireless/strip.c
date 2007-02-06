@@ -81,7 +81,6 @@ static const char StripVersion[] = "1.3A-STUART.CHESHIRE";
 /************************************************************************/
 /* Header files								*/
 
-#include <linux/config.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/init.h>
@@ -468,6 +467,7 @@ static int arp_query(unsigned char *haddr, u32 paddr,
 		     struct net_device *dev)
 {
 	struct neighbour *neighbor_entry;
+	int ret = 0;
 
 	neighbor_entry = neigh_lookup(&arp_tbl, &paddr, dev);
 
@@ -475,10 +475,11 @@ static int arp_query(unsigned char *haddr, u32 paddr,
 		neighbor_entry->used = jiffies;
 		if (neighbor_entry->nud_state & NUD_VALID) {
 			memcpy(haddr, neighbor_entry->ha, dev->addr_len);
-			return 1;
+			ret = 1;
 		}
+		neigh_release(neighbor_entry);
 	}
-	return 0;
+	return ret;
 }
 
 static void DumpData(char *msg, struct strip *strip_info, __u8 * ptr,
@@ -797,7 +798,7 @@ static unsigned int get_baud(struct tty_struct *tty)
  */
 static void set_baud(struct tty_struct *tty, unsigned int baudcode)
 {
-	struct termios old_termios = *(tty->termios);
+	struct ktermios old_termios = *(tty->termios);
 	tty->termios->c_cflag &= ~CBAUD;	/* Clear the old baud setting */
 	tty->termios->c_cflag |= baudcode;	/* Set the new baud setting */
 	tty->driver->set_termios(tty, &old_termios);
@@ -1341,7 +1342,7 @@ static unsigned char *strip_make_packet(unsigned char *buffer,
 	 * 'broadcast hub' radio (First byte of address being 0xFF means broadcast)
 	 */
 	if (haddr.c[0] == 0xFF) {
-		u32 brd = 0;
+		__be32 brd = 0;
 		struct in_device *in_dev;
 
 		rcu_read_lock();
@@ -1405,7 +1406,7 @@ static void strip_send(struct strip *strip_info, struct sk_buff *skb)
 	int doreset = (long) jiffies - strip_info->watchdog_doreset >= 0;
 	int doprobe = (long) jiffies - strip_info->watchdog_doprobe >= 0
 	    && !doreset;
-	u32 addr, brd;
+	__be32 addr, brd;
 
 	/*
 	 * 1. If we have a packet, encapsulate it and put it in the buffer

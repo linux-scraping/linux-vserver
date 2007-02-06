@@ -29,7 +29,6 @@
  */
 
 #include <linux/module.h>
-#include <linux/config.h>
 #include <linux/spinlock.h>
 #include <linux/socket.h>
 #include <linux/skbuff.h>
@@ -169,7 +168,7 @@ static void ebt_ulog_packet(unsigned int hooknr, const struct sk_buff *skb,
 	if (ub->qlen == 1)
 		skb_set_timestamp(ub->skb, &pm->stamp);
 	pm->data_len = copy_len;
-	pm->mark = skb->nfmark;
+	pm->mark = skb->mark;
 	pm->hook = hooknr;
 	if (uloginfo->prefix != NULL)
 		strcpy(pm->prefix, uloginfo->prefix);

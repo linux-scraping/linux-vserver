@@ -137,10 +137,9 @@ cumanascsi_2_terminator_ctl(struct Scsi_Host *host, int on_off)
  * Purpose  : handle interrupts from Cumana SCSI 2 card
  * Params   : irq    - interrupt number
  *	      dev_id - user-defined (Scsi_Host structure)
- *	      regs   - processor registers at interrupt
  */
 static irqreturn_t
-cumanascsi_2_intr(int irq, void *dev_id, struct pt_regs *regs)
+cumanascsi_2_intr(int irq, void *dev_id)
 {
 	struct cumanascsi2_info *info = dev_id;
 
@@ -460,7 +459,7 @@ cumanascsi2_probe(struct expansion_card *ec, const struct ecard_id *id)
 		goto out_free;
 
 	ret = request_irq(ec->irq, cumanascsi_2_intr,
-			  SA_INTERRUPT, "cumanascsi2", info);
+			  IRQF_DISABLED, "cumanascsi2", info);
 	if (ret) {
 		printk("scsi%d: IRQ%d not free: %d\n",
 		       host->host_no, ec->irq, ret);

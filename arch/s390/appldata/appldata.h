@@ -3,9 +3,9 @@
  *
  * Definitions and interface for Linux - z/VM Monitor Stream.
  *
- * Copyright (C) 2003 IBM Corporation, IBM Deutschland Entwicklung GmbH.
+ * Copyright (C) 2003,2006 IBM Corporation, IBM Deutschland Entwicklung GmbH.
  *
- * Author: Gerald Schaefer <geraldsc@de.ibm.com>
+ * Author: Gerald Schaefer <gerald.schaefer@de.ibm.com>
  */
 
 //#define APPLDATA_DEBUG			/* Debug messages on/off */
@@ -53,7 +53,11 @@ struct appldata_ops {
 	void *data;				/* record data */
 	unsigned int size;			/* size of record */
 	struct module *owner;			/* THIS_MODULE */
+	char mod_lvl[2];			/* modification level, EBCDIC */
 };
 
 extern int appldata_register_ops(struct appldata_ops *ops);
 extern void appldata_unregister_ops(struct appldata_ops *ops);
+extern int appldata_diag(char record_nr, u16 function, unsigned long buffer,
+			 u16 length, char *mod_lvl);
+

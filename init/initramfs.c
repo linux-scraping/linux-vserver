@@ -30,6 +30,7 @@ static void __init free(void *where)
 
 static __initdata struct hash {
 	int ino, minor, major;
+	mode_t mode;
 	struct hash *next;
 	char name[N_ALIGN(PATH_MAX)];
 } *head[32];
@@ -41,7 +42,8 @@ static inline int hash(int major, int minor, int ino)
 	return tmp & 31;
 }
 
-static char __init *find_link(int major, int minor, int ino, char *name)
+static char __init *find_link(int major, int minor, int ino,
+			      mode_t mode, char *name)
 {
 	struct hash **p, *q;
 	for (p = head + hash(major, minor, ino); *p; p = &(*p)->next) {
@@ -51,14 +53,17 @@ static char __init *find_link(int major, int minor, int ino, char *name)
 			continue;
 		if ((*p)->major != major)
 			continue;
+		if (((*p)->mode ^ mode) & S_IFMT)
+			continue;
 		return (*p)->name;
 	}
 	q = (struct hash *)malloc(sizeof(struct hash));
 	if (!q)
 		panic("can't allocate link hash entry");
-	q->ino = ino;
-	q->minor = minor;
 	q->major = major;
+	q->minor = minor;
+	q->ino = ino;
+	q->mode = mode;
 	strcpy(q->name, name);
 	q->next = NULL;
 	*p = q;
@@ -177,6 +182,10 @@ static int __init do_collect(void)
 
 static int __init do_header(void)
 {
+	if (memcmp(collected, "070707", 6)==0) {
+		error("incorrect cpio method used: use -H newc option");
+		return 1;
+	}
 	if (memcmp(collected, "070701", 6)) {
 		error("no cpio magic");
 		return 1;
@@ -229,11 +238,23 @@ static int __init do_reset(void)
 static int __init maybe_link(void)
 {
 	if (nlink >= 2) {
-		char *old = find_link(major, minor, ino, collected);
+		char *old = find_link(major, minor, ino, mode, collected);
 		if (old)
 			return (sys_link(old, collected) < 0) ? -1 : 1;
 	}
 	return 0;
+}
+
+static void __init clean_path(char *path, mode_t mode)
+{
+	struct stat st;
+
+	if (!sys_newlstat(path, &st) && (st.st_mode^mode) & S_IFMT) {
+		if (S_ISDIR(st.st_mode))
+			sys_rmdir(path);
+		else
+			sys_unlink(path);
+	}
 }
 
 static __initdata int wfd;
@@ -248,9 +269,15 @@ static int __init do_name(void)
 	}
 	if (dry_run)
 		return 0;
+	clean_path(collected, mode);
 	if (S_ISREG(mode)) {
-		if (maybe_link() >= 0) {
-			wfd = sys_open(collected, O_WRONLY|O_CREAT, mode);
+		int ml = maybe_link();
+		if (ml >= 0) {
+			int openflags = O_WRONLY|O_CREAT;
+			if (ml != 1)
+				openflags |= O_TRUNC;
+			wfd = sys_open(collected, openflags, mode);
+
 			if (wfd >= 0) {
 				sys_fchown(wfd, uid, gid);
 				sys_fchmod(wfd, mode);
@@ -291,6 +318,7 @@ static int __init do_copy(void)
 static int __init do_symlink(void)
 {
 	collected[N_ALIGN(name_len) + body_len] = '\0';
+	clean_path(collected, 0);
 	sys_symlink(collected + N_ALIGN(name_len), collected);
 	sys_lchown(collected, uid, gid);
 	state = SkipIt;
@@ -498,7 +526,7 @@ static void __init free_initrd(void)
 
 #endif
 
-void __init populate_rootfs(void)
+static int __init populate_rootfs(void)
 {
 	char *err = unpack_to_rootfs(__initramfs_start,
 			 __initramfs_end - __initramfs_start, 0);
@@ -516,7 +544,7 @@ void __init populate_rootfs(void)
 			unpack_to_rootfs((char *)initrd_start,
 				initrd_end - initrd_start, 0);
 			free_initrd();
-			return;
+			return 0;
 		}
 		printk("it isn't (%s); looks like an initrd\n", err);
 		fd = sys_open("/initrd.image", O_WRONLY|O_CREAT, 0700);
@@ -537,4 +565,6 @@ void __init populate_rootfs(void)
 #endif
 	}
 #endif
+	return 0;
 }
+rootfs_initcall(populate_rootfs);

@@ -99,7 +99,7 @@ WriteHSCX(struct IsdnCardState *cs, int hscx, u_char offset, u_char value)
 #include "hscx_irq.c"
 
 static irqreturn_t
-sportster_interrupt(int intno, void *dev_id, struct pt_regs *regs)
+sportster_interrupt(int intno, void *dev_id)
 {
 	struct IsdnCardState *cs = dev_id;
 	u_char val;
@@ -184,7 +184,7 @@ Sportster_card_msg(struct IsdnCardState *cs, int mt, void *arg)
 	return(0);
 }
 
-static int __init
+static int __devinit
 get_io_range(struct IsdnCardState *cs)
 {
 	int i, j, adr;
@@ -209,7 +209,7 @@ get_io_range(struct IsdnCardState *cs)
 	}
 }
 
-int __init
+int __devinit
 setup_sportster(struct IsdnCard *card)
 {
 	struct IsdnCardState *cs = card->cs;

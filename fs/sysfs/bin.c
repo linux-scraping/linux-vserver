@@ -10,6 +10,7 @@
 
 #include <linux/errno.h>
 #include <linux/fs.h>
+#include <linux/kernel.h>
 #include <linux/kobject.h>
 #include <linux/module.h>
 #include <linux/slab.h>
@@ -34,7 +35,7 @@ static ssize_t
 read(struct file * file, char __user * userbuf, size_t count, loff_t * off)
 {
 	char *buffer = file->private_data;
-	struct dentry *dentry = file->f_dentry;
+	struct dentry *dentry = file->f_path.dentry;
 	int size = dentry->d_inode->i_size;
 	loff_t offs = *off;
 	int ret;
@@ -80,7 +81,7 @@ static ssize_t write(struct file * file, const char __user * userbuf,
 		     size_t count, loff_t * off)
 {
 	char *buffer = file->private_data;
-	struct dentry *dentry = file->f_dentry;
+	struct dentry *dentry = file->f_path.dentry;
 	int size = dentry->d_inode->i_size;
 	loff_t offs = *off;
 
@@ -104,7 +105,7 @@ static ssize_t write(struct file * file, const char __user * userbuf,
 
 static int mmap(struct file *file, struct vm_area_struct *vma)
 {
-	struct dentry *dentry = file->f_dentry;
+	struct dentry *dentry = file->f_path.dentry;
 	struct bin_attribute *attr = to_bin_attr(dentry);
 	struct kobject *kobj = to_kobj(dentry->d_parent);
 
@@ -116,8 +117,8 @@ static int mmap(struct file *file, struct vm_area_struct *vma)
 
 static int open(struct inode * inode, struct file * file)
 {
-	struct kobject *kobj = sysfs_get_kobject(file->f_dentry->d_parent);
-	struct bin_attribute * attr = to_bin_attr(file->f_dentry);
+	struct kobject *kobj = sysfs_get_kobject(file->f_path.dentry->d_parent);
+	struct bin_attribute * attr = to_bin_attr(file->f_path.dentry);
 	int error = -EINVAL;
 
 	if (!kobj || !attr)
@@ -152,8 +153,8 @@ static int open(struct inode * inode, struct file * file)
 
 static int release(struct inode * inode, struct file * file)
 {
-	struct kobject * kobj = to_kobj(file->f_dentry->d_parent);
-	struct bin_attribute * attr = to_bin_attr(file->f_dentry);
+	struct kobject * kobj = to_kobj(file->f_path.dentry->d_parent);
+	struct bin_attribute * attr = to_bin_attr(file->f_path.dentry);
 	u8 * buffer = file->private_data;
 
 	if (kobj) 
@@ -176,7 +177,6 @@ const struct file_operations bin_fops = {
  *	sysfs_create_bin_file - create binary file for object.
  *	@kobj:	object.
  *	@attr:	attribute descriptor.
- *
  */
 
 int sysfs_create_bin_file(struct kobject * kobj, struct bin_attribute * attr)
@@ -191,13 +191,16 @@ int sysfs_create_bin_file(struct kobject * kobj, struct bin_attribute * attr)
  *	sysfs_remove_bin_file - remove binary file for object.
  *	@kobj:	object.
  *	@attr:	attribute descriptor.
- *
  */
 
-int sysfs_remove_bin_file(struct kobject * kobj, struct bin_attribute * attr)
+void sysfs_remove_bin_file(struct kobject * kobj, struct bin_attribute * attr)
 {
-	sysfs_hash_and_remove(kobj->dentry,attr->attr.name);
-	return 0;
+	if (sysfs_hash_and_remove(kobj->dentry, attr->attr.name) < 0) {
+		printk(KERN_ERR "%s: "
+			"bad dentry or inode or no such file: \"%s\"\n",
+			__FUNCTION__, attr->attr.name);
+		dump_stack();
+	}
 }
 
 EXPORT_SYMBOL_GPL(sysfs_create_bin_file);

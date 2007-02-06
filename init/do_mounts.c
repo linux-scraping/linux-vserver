@@ -8,6 +8,7 @@
 #include <linux/security.h>
 #include <linux/delay.h>
 #include <linux/mount.h>
+#include <linux/device.h>
 
 #include <linux/nfs_fs.h>
 #include <linux/nfs_fs_sb.h>
@@ -284,7 +285,11 @@ void __init mount_block_root(char *name, int flags)
 {
 	char *fs_names = __getname();
 	char *p;
+#ifdef CONFIG_BLOCK
 	char b[BDEVNAME_SIZE];
+#else
+	const char *b = name;
+#endif
 
 	get_fs_names(fs_names);
 retry:
@@ -303,7 +308,9 @@ retry:
 		 * Allow the user to distinguish between failed sys_open
 		 * and bad superblock on root device.
 		 */
+#ifdef CONFIG_BLOCK
 		__bdevname(ROOT_DEV, b);
+#endif
 		printk("VFS: Cannot open root device \"%s\" or %s\n",
 				root_device_name, b);
 		printk("Please append a correct \"root=\" boot option\n");
@@ -315,7 +322,10 @@ retry:
 	for (p = fs_names; *p; p += strlen(p)+1)
 		printk(" %s", p);
 	printk("\n");
-	panic("VFS: Unable to mount root fs on %s", __bdevname(ROOT_DEV, b));
+#ifdef CONFIG_BLOCK
+	__bdevname(ROOT_DEV, b);
+#endif
+	panic("VFS: Unable to mount root fs on %s", b);
 out:
 	putname(fs_names);
 }
@@ -325,7 +335,7 @@ static int __init mount_nfs_root(void)
 {
 	void *data = nfs_root_data();
 
-	create_dev("/dev/root", ROOT_DEV, NULL);
+	create_dev("/dev/root", ROOT_DEV);
 	if (data &&
 	    do_mount_root("/dev/root", "nfs", root_mountflags, data) == 0)
 		return 1;
@@ -386,8 +396,10 @@ void __init mount_root(void)
 			change_floppy("root floppy");
 	}
 #endif
-	create_dev("/dev/root", ROOT_DEV, root_device_name);
+#ifdef CONFIG_BLOCK
+	create_dev("/dev/root", ROOT_DEV);
 	mount_block_root("/dev/root", root_mountflags);
+#endif
 }
 
 /*
@@ -397,18 +409,24 @@ void __init prepare_namespace(void)
 {
 	int is_floppy;
 
-	mount_devfs();
-
 	if (root_delay) {
 		printk(KERN_INFO "Waiting %dsec before mounting root device...\n",
 		       root_delay);
 		ssleep(root_delay);
 	}
 
+	/* wait for the known devices to complete their probing */
+	while (driver_probe_done() != 0)
+		msleep(100);
+
 	md_run_setup();
 
 	if (saved_root_name[0]) {
 		root_device_name = saved_root_name;
+		if (!strncmp(root_device_name, "mtd", 3)) {
+			mount_block_root(root_device_name, root_mountflags);
+			goto out;
+		}
 		ROOT_DEV = name_to_dev_t(root_device_name);
 		if (strncmp(root_device_name, "/dev/", 5) == 0)
 			root_device_name += 5;
@@ -424,10 +442,8 @@ void __init prepare_namespace(void)
 
 	mount_root();
 out:
-	umount_devfs("/dev");
 	sys_mount(".", "/", NULL, MS_MOVE, NULL);
 	sys_chroot(".");
 	security_sb_post_mountroot();
-	mount_devfs_fs ();
 }
 

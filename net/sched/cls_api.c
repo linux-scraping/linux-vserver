@@ -17,7 +17,6 @@
 #include <asm/uaccess.h>
 #include <asm/system.h>
 #include <linux/bitops.h>
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/types.h>
 #include <linux/kernel.h>
@@ -218,7 +217,7 @@ replay:
 		/* Create new proto tcf */
 
 		err = -ENOBUFS;
-		if ((tp = kmalloc(sizeof(*tp), GFP_KERNEL)) == NULL)
+		if ((tp = kzalloc(sizeof(*tp), GFP_KERNEL)) == NULL)
 			goto errout;
 		err = -EINVAL;
 		tp_ops = tcf_proto_lookup_ops(tca[TCA_KIND-1]);
@@ -248,7 +247,6 @@ replay:
 			kfree(tp);
 			goto errout;
 		}
-		memset(tp, 0, sizeof(*tp));
 		tp->ops = tp_ops;
 		tp->protocol = protocol;
 		tp->prio = nprio ? : tcf_auto_prio(*back);
@@ -402,7 +400,7 @@ static int tc_dump_tfilter(struct sk_buff *skb, struct netlink_callback *cb)
 	if ((dev = dev_get_by_index(tcm->tcm_ifindex)) == NULL)
 		return skb->len;
 
-	read_lock_bh(&qdisc_tree_lock);
+	read_lock(&qdisc_tree_lock);
 	if (!tcm->tcm_parent)
 		q = dev->qdisc_sleeping;
 	else
@@ -459,7 +457,7 @@ errout:
 	if (cl)
 		cops->put(q, cl);
 out:
-	read_unlock_bh(&qdisc_tree_lock);
+	read_unlock(&qdisc_tree_lock);
 	dev_put(dev);
 	return skb->len;
 }

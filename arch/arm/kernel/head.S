@@ -11,43 +11,46 @@
  *
  *  Kernel startup code for all 32-bit CPUs
  */
-#include <linux/config.h>
 #include <linux/linkage.h>
 #include <linux/init.h>
 
 #include <asm/assembler.h>
 #include <asm/domain.h>
-#include <asm/procinfo.h>
 #include <asm/ptrace.h>
 #include <asm/asm-offsets.h>
 #include <asm/memory.h>
 #include <asm/thread_info.h>
 #include <asm/system.h>
 
-#define KERNEL_RAM_ADDR	(PAGE_OFFSET + TEXT_OFFSET)
+#if (PHYS_OFFSET & 0x001fffff)
+#error "PHYS_OFFSET must be at an even 2MiB boundary!"
+#endif
+
+#define KERNEL_RAM_VADDR	(PAGE_OFFSET + TEXT_OFFSET)
+#define KERNEL_RAM_PADDR	(PHYS_OFFSET + TEXT_OFFSET)
 
 /*
  * swapper_pg_dir is the virtual address of the initial page table.
- * We place the page tables 16K below KERNEL_RAM_ADDR.  Therefore, we must
- * make sure that KERNEL_RAM_ADDR is correctly set.  Currently, we expect
+ * We place the page tables 16K below KERNEL_RAM_VADDR.  Therefore, we must
+ * make sure that KERNEL_RAM_VADDR is correctly set.  Currently, we expect
  * the least significant 16 bits to be 0x8000, but we could probably
- * relax this restriction to KERNEL_RAM_ADDR >= PAGE_OFFSET + 0x4000.
+ * relax this restriction to KERNEL_RAM_VADDR >= PAGE_OFFSET + 0x4000.
  */
-#if (KERNEL_RAM_ADDR & 0xffff) != 0x8000
-#error KERNEL_RAM_ADDR must start at 0xXXXX8000
+#if (KERNEL_RAM_VADDR & 0xffff) != 0x8000
+#error KERNEL_RAM_VADDR must start at 0xXXXX8000
 #endif
 
 	.globl	swapper_pg_dir
-	.equ	swapper_pg_dir, KERNEL_RAM_ADDR - 0x4000
+	.equ	swapper_pg_dir, KERNEL_RAM_VADDR - 0x4000
 
 	.macro	pgtbl, rd
-	ldr	\rd, =(__virt_to_phys(KERNEL_RAM_ADDR - 0x4000))
+	ldr	\rd, =(KERNEL_RAM_PADDR - 0x4000)
 	.endm
 
 #ifdef CONFIG_XIP_KERNEL
 #define TEXTADDR  XIP_VIRT_ADDR(CONFIG_XIP_PHYS_ADDR)
 #else
-#define TEXTADDR  KERNEL_RAM_ADDR
+#define TEXTADDR  KERNEL_RAM_VADDR
 #endif
 
 /*
@@ -71,7 +74,7 @@
 	__INIT
 	.type	stext, %function
 ENTRY(stext)
-	msr	cpsr_c, #PSR_F_BIT | PSR_I_BIT | MODE_SVC @ ensure svc mode
+	msr	cpsr_c, #PSR_F_BIT | PSR_I_BIT | SVC_MODE @ ensure svc mode
 						@ and irqs disabled
 	mrc	p15, 0, r9, c0, c0		@ get processor id
 	bl	__lookup_processor_type		@ r5=procinfo r9=cpuid
@@ -104,7 +107,7 @@ ENTRY(secondary_startup)
 	 * the processor type - there is no need to check the machine type
 	 * as it has already been validated by the primary processor.
 	 */
-	msr	cpsr_c, #PSR_F_BIT | PSR_I_BIT | MODE_SVC
+	msr	cpsr_c, #PSR_F_BIT | PSR_I_BIT | SVC_MODE
 	mrc	p15, 0, r9, c0, c0		@ get processor id
 	bl	__lookup_processor_type
 	movs	r10, r5				@ invalid processor?
@@ -115,18 +118,18 @@ ENTRY(secondary_startup)
 	 * Use the page tables supplied from  __cpu_up.
 	 */
 	adr	r4, __secondary_data
-	ldmia	r4, {r5, r6, r13}		@ address to jump to after
+	ldmia	r4, {r5, r7, r13}		@ address to jump to after
 	sub	r4, r4, r5			@ mmu has been enabled
-	ldr	r4, [r6, r4]			@ get secondary_data.pgdir
+	ldr	r4, [r7, r4]			@ get secondary_data.pgdir
 	adr	lr, __enable_mmu		@ return address
-	add	pc, r10, #12			@ initialise processor
+	add	pc, r10, #PROCINFO_INITFUNC	@ initialise processor
 						@ (return control reg)
 
 	/*
 	 * r6  = &secondary_data
 	 */
 ENTRY(__secondary_switched)
-	ldr	sp, [r6, #4]			@ get secondary_data.stack
+	ldr	sp, [r7, #4]			@ get secondary_data.stack
 	mov	fp, #0
 	b	secondary_start_kernel
 
@@ -221,7 +224,7 @@ __create_page_tables:
 	teq	r0, r6
 	bne	1b
 
-	ldr	r7, [r10, #PROCINFO_MMUFLAGS]	@ mmuflags
+	ldr	r7, [r10, #PROCINFO_MM_MMUFLAGS] @ mm_mmuflags
 
 	/*
 	 * Create identity mapping for first MB of kernel to
@@ -235,24 +238,25 @@ __create_page_tables:
 
 	/*
 	 * Now setup the pagetables for our kernel direct
-	 * mapped region.  We round TEXTADDR down to the
-	 * nearest megabyte boundary.  It is assumed that
-	 * the kernel fits within 4 contigous 1MB sections.
+	 * mapped region.
 	 */
 	add	r0, r4,  #(TEXTADDR & 0xff000000) >> 18	@ start of kernel
 	str	r3, [r0, #(TEXTADDR & 0x00f00000) >> 18]!
-	add	r3, r3, #1 << 20
-	str	r3, [r0, #4]!			@ KERNEL + 1MB
-	add	r3, r3, #1 << 20
-	str	r3, [r0, #4]!			@ KERNEL + 2MB
-	add	r3, r3, #1 << 20
-	str	r3, [r0, #4]			@ KERNEL + 3MB
+
+	ldr	r6, =(_end - PAGE_OFFSET - 1)	@ r6 = number of sections
+	mov	r6, r6, lsr #20			@ needed for kernel minus 1
+
+1:	add	r3, r3, #1 << 20
+	str	r3, [r0, #4]!
+	subs	r6, r6, #1
+	bgt	1b
 
 	/*
 	 * Then map first 1MB of ram in case it contains our boot params.
 	 */
 	add	r0, r4, #PAGE_OFFSET >> 18
-	orr	r6, r7, #PHYS_OFFSET
+	orr	r6, r7, #(PHYS_OFFSET & 0xff000000)
+	orr	r6, r6, #(PHYS_OFFSET & 0x00e00000)
 	str	r6, [r0]
 
 #ifdef CONFIG_XIP_KERNEL
@@ -272,8 +276,7 @@ __create_page_tables:
 #endif
 
 #ifdef CONFIG_DEBUG_LL
-	bic	r7, r7, #0x0c			@ turn off cacheable
-						@ and bufferable bits
+	ldr	r7, [r10, #PROCINFO_IO_MMUFLAGS] @ io_mmuflags
 	/*
 	 * Map in IO space for serial debugging.
 	 * This allows debug messages to be output

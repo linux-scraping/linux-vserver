@@ -62,6 +62,7 @@ static struct pci_device_id ahd_linux_pci_id_table[] = {
 	/* aic7901 based controllers */
 	ID(ID_AHA_29320A),
 	ID(ID_AHA_29320ALP),
+	ID(ID_AHA_29320LPE),
 	/* aic7902 based controllers */
 	ID(ID_AHA_29320),
 	ID(ID_AHA_29320B),
@@ -82,7 +83,7 @@ static struct pci_device_id ahd_linux_pci_id_table[] = {
 
 MODULE_DEVICE_TABLE(pci, ahd_linux_pci_id_table);
 
-struct pci_driver aic79xx_pci_driver = {
+static struct pci_driver aic79xx_pci_driver = {
 	.name		= "aic79xx",
 	.probe		= ahd_linux_pci_dev_probe,
 	.remove		= ahd_linux_pci_dev_remove,
@@ -198,7 +199,7 @@ ahd_linux_pci_dev_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 int
 ahd_linux_pci_init(void)
 {
-	return (pci_module_init(&aic79xx_pci_driver));
+	return pci_register_driver(&aic79xx_pci_driver);
 }
 
 void
@@ -342,7 +343,7 @@ ahd_pci_map_int(struct ahd_softc *ahd)
 	int error;
 
 	error = request_irq(ahd->dev_softc->irq, ahd_linux_isr,
-			    SA_SHIRQ, "aic79xx", ahd);
+			    IRQF_SHARED, "aic79xx", ahd);
 	if (!error)
 		ahd->platform_data->irq = ahd->dev_softc->irq;
 	

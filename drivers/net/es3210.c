@@ -421,8 +421,7 @@ MODULE_PARM_DESC(mem, "memory base address(es)");
 MODULE_DESCRIPTION("Racal-Interlan ES3210 EISA ethernet driver");
 MODULE_LICENSE("GPL");
 
-int
-init_module(void)
+int __init init_module(void)
 {
 	struct net_device *dev;
 	int this_dev, found = 0;
@@ -456,7 +455,7 @@ static void cleanup_card(struct net_device *dev)
 	iounmap(ei_status.mem);
 }
 
-void
+void __exit
 cleanup_module(void)
 {
 	int this_dev;

@@ -6,7 +6,6 @@
  * Copyright (C) 1999 VA Linux Systems
  * Copyright (C) 1999 Walt Drummond <drummond@valinux.com>
  */
-#include <linux/config.h>
 
 #include <linux/kernel.h>
 #include <linux/init.h>
@@ -224,12 +223,13 @@ static void __init sal_desc_ap_wakeup(void *p) { }
  */
 static int sal_cache_flush_drops_interrupts;
 
-static void __init
+void __init
 check_sal_cache_flush (void)
 {
-	unsigned long flags, itv;
+	unsigned long flags;
 	int cpu;
-	u64 vector;
+	u64 vector, cache_type = 3;
+	struct ia64_sal_retval isrv;
 
 	cpu = get_cpu();
 	local_irq_save(flags);
@@ -238,16 +238,16 @@ check_sal_cache_flush (void)
 	 * Schedule a timer interrupt, wait until it's reported, and see if
 	 * SAL_CACHE_FLUSH drops it.
 	 */
-	itv = ia64_get_itv();
-	BUG_ON((itv & (1 << 16)) == 0);
-
 	ia64_set_itv(IA64_TIMER_VECTOR);
 	ia64_set_itm(ia64_get_itc() + 1000);
 
 	while (!ia64_get_irr(IA64_TIMER_VECTOR))
 		cpu_relax();
 
-	ia64_sal_cache_flush(3);
+	SAL_CALL(isrv, SAL_CACHE_FLUSH, cache_type, 0, 0, 0, 0, 0, 0);
+
+	if (isrv.status)
+		printk(KERN_ERR "SAL_CAL_FLUSH failed with %ld\n", isrv.status);
 
 	if (ia64_get_irr(IA64_TIMER_VECTOR)) {
 		vector = ia64_get_ivr();
@@ -260,7 +260,6 @@ check_sal_cache_flush (void)
 		ia64_eoi();
 	}
 
-	ia64_set_itv(itv);
 	local_irq_restore(flags);
 	put_cpu();
 }
@@ -336,7 +335,6 @@ ia64_sal_init (struct ia64_sal_systab *systab)
 		p += SAL_DESC_SIZE(*p);
 	}
 
-	check_sal_cache_flush();
 }
 
 int

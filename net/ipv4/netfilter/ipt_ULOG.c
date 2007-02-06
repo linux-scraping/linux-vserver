@@ -47,7 +47,6 @@
  */
 
 #include <linux/module.h>
-#include <linux/config.h>
 #include <linux/spinlock.h>
 #include <linux/socket.h>
 #include <linux/skbuff.h>
@@ -240,7 +239,7 @@ static void ipt_ulog_packet(unsigned int hooknum,
 	pm->data_len = copy_len;
 	pm->timestamp_sec = skb->tstamp.off_sec;
 	pm->timestamp_usec = skb->tstamp.off_usec;
-	pm->mark = skb->nfmark;
+	pm->mark = skb->mark;
 	pm->hook = hooknum;
 	if (prefix != NULL)
 		strncpy(pm->prefix, prefix, sizeof(pm->prefix));
@@ -309,7 +308,7 @@ static unsigned int ipt_ulog_target(struct sk_buff **pskb,
 				    const struct net_device *out,
 				    unsigned int hooknum,
 				    const struct xt_target *target,
-				    const void *targinfo, void *userinfo)
+				    const void *targinfo)
 {
 	struct ipt_ulog_info *loginfo = (struct ipt_ulog_info *) targinfo;
 
@@ -347,7 +346,6 @@ static int ipt_ulog_checkentry(const char *tablename,
 			       const void *e,
 			       const struct xt_target *target,
 			       void *targinfo,
-			       unsigned int targinfosize,
 			       unsigned int hookmask)
 {
 	struct ipt_ulog_info *loginfo = (struct ipt_ulog_info *) targinfo;

@@ -11,8 +11,8 @@
  *----------------------------------------------------------------------------*/
 
 #ifndef AAC_DRIVER_BUILD
-# define AAC_DRIVER_BUILD 2409
-# define AAC_DRIVER_BRANCH "-mh1"
+# define AAC_DRIVER_BUILD 2423
+# define AAC_DRIVER_BRANCH "-mh3"
 #endif
 #define MAXIMUM_NUM_CONTAINERS	32
 
@@ -494,6 +494,7 @@ struct adapter_ops
 	int  (*adapter_sync_cmd)(struct aac_dev *dev, u32 command, u32 p1, u32 p2, u32 p3, u32 p4, u32 p5, u32 p6, u32 *status, u32 *r1, u32 *r2, u32 *r3, u32 *r4);
 	int  (*adapter_check_health)(struct aac_dev *dev);
 	int  (*adapter_send)(struct fib * fib);
+	int  (*adapter_ioremap)(struct aac_dev * dev, u32 size);
 };
 
 /*
@@ -563,7 +564,6 @@ struct aac_queue {
 	spinlock_t		lockdata;	/* Actual lock (used only on one side of the lock) */
 	struct list_head 	cmdq;	   	/* A queue of FIBs which need to be prcessed by the FS thread. This is */
                                 		/* only valid for command queues which receive entries from the adapter. */
-	struct list_head	pendingq;	/* A queue of outstanding fib's to the adapter. */
 	u32			numpending;	/* Number of entries on outstanding queue. */
 	struct aac_dev *	dev;		/* Back pointer to adapter structure */
 };
@@ -682,14 +682,6 @@ struct rx_mu_registers {
 struct rx_inbound {
 	__le32	Mailbox[8];
 };
-
-#define	InboundMailbox0		IndexRegs.Mailbox[0]
-#define	InboundMailbox1		IndexRegs.Mailbox[1]
-#define	InboundMailbox2		IndexRegs.Mailbox[2]
-#define	InboundMailbox3		IndexRegs.Mailbox[3]
-#define	InboundMailbox4		IndexRegs.Mailbox[4]
-#define	InboundMailbox5		IndexRegs.Mailbox[5]
-#define	InboundMailbox6		IndexRegs.Mailbox[6]
 
 #define	INBOUNDDOORBELL_0	0x00000001
 #define INBOUNDDOORBELL_1	0x00000002
@@ -822,11 +814,6 @@ struct fib {
 	fib_callback 		callback;
 	void 			*callback_data;
 	u32			flags; // u32 dmb was ulong
-	/*
-	 *	The following is used to put this fib context onto the 
-	 *	Outstanding I/O queue.
-	 */
-	struct list_head	queue;
 	/*
 	 *	And for the internal issue/reply queues (we may be able
 	 *	to merge these two)
@@ -1016,6 +1003,8 @@ struct aac_dev
 		struct rx_registers __iomem *rx;
 		struct rkt_registers __iomem *rkt;
 	} regs;
+	volatile void __iomem *base;
+	volatile struct rx_inbound __iomem *IndexRegs;
 	u32			OIMR; /* Mask Register Cache */
 	/*
 	 *	AIF thread states
@@ -1035,6 +1024,7 @@ struct aac_dev
 	  init->InitStructRevision==cpu_to_le32(ADAPTER_INIT_STRUCT_REVISION_4)
 	u8			raw_io_64;
 	u8			printf_enabled;
+	u8			in_reset;
 };
 
 #define aac_adapter_interrupt(dev) \
@@ -1054,6 +1044,9 @@ struct aac_dev
 
 #define aac_adapter_send(fib) \
 	((fib)->dev)->a_ops.adapter_send(fib)
+
+#define aac_adapter_ioremap(dev, size) \
+	(dev)->a_ops.adapter_ioremap(dev, size)
 
 #define FIB_CONTEXT_FLAG_TIMED_OUT		(0x00000001)
 
@@ -1530,7 +1523,6 @@ struct aac_get_name {
 	__le32		count;	/* sizeof(((struct aac_get_name_resp *)NULL)->data) */
 };
 
-#define CT_OK        218
 struct aac_get_name_resp {
 	__le32		dummy0;
 	__le32		dummy1;
@@ -1676,6 +1668,7 @@ extern struct aac_common aac_config;
 #define RCV_TEMP_READINGS		0x00000025
 #define GET_COMM_PREFERRED_SETTINGS	0x00000026
 #define IOP_RESET			0x00001000
+#define IOP_RESET_ALWAYS		0x00001001
 #define RE_INIT_ADAPTER			0x000000ee
 
 /*
@@ -1794,7 +1787,7 @@ void aac_consumer_free(struct aac_dev * dev, struct aac_queue * q, u32 qnum);
 int aac_fib_complete(struct fib * context);
 #define fib_data(fibctx) ((void *)(fibctx)->hw_fib->data)
 struct aac_dev *aac_init_adapter(struct aac_dev *dev);
-int aac_get_config_status(struct aac_dev *dev);
+int aac_get_config_status(struct aac_dev *dev, int commit_flag);
 int aac_get_containers(struct aac_dev *dev);
 int aac_scsi_cmd(struct scsi_cmnd *cmd);
 int aac_dev_ioctl(struct aac_dev *dev, int cmd, void __user *arg);
@@ -1805,6 +1798,7 @@ int aac_sa_init(struct aac_dev *dev);
 unsigned int aac_response_normal(struct aac_queue * q);
 unsigned int aac_command_normal(struct aac_queue * q);
 unsigned int aac_intr_normal(struct aac_dev * dev, u32 Index);
+int aac_check_health(struct aac_dev * dev);
 int aac_command_thread(void *data);
 int aac_close_fib_context(struct aac_dev * dev, struct aac_fib_context *fibctx);
 int aac_fib_adapter_complete(struct fib * fibptr, unsigned short size);
@@ -1815,3 +1809,5 @@ int aac_probe_container(struct aac_dev *dev, int cid);
 extern int numacb;
 extern int acbsize;
 extern char aac_driver_version[];
+extern int startup_timeout;
+extern int aif_timeout;

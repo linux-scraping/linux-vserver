@@ -18,7 +18,7 @@
  *		- struct init cleanup, enable multiple ISA autoprobes.
  *		Arnaldo Carvalho de Melo <acme@conectiva.com.br> - 09/1999
  *		- fix sbni: s/device/net_device/
- *		Paul Gortmaker (06/98): 
+ *		Paul Gortmaker (06/98):
  *		 - sort probes in a sane way, make sure all (safe) probes
  *		   get run once & failed autoprobes don't autoprobe again.
  *
@@ -27,14 +27,12 @@
  *		as published by the Free Software Foundation; either version
  *		2 of the License, or (at your option) any later version.
  */
-#include <linux/config.h>
 #include <linux/netdevice.h>
 #include <linux/etherdevice.h>
 #include <linux/trdevice.h>
 #include <linux/errno.h>
 #include <linux/init.h>
 #include <linux/netlink.h>
-#include <linux/divert.h>
 
 /* A unified ethernet device probe.  This is the easiest way to have every
    ethernet adaptor have the name "eth[0123...]".
@@ -92,7 +90,7 @@ extern struct net_device *mac89x0_probe(int unit);
 extern struct net_device *mc32_probe(int unit);
 extern struct net_device *cops_probe(int unit);
 extern struct net_device *ltpc_probe(void);
-  
+
 /* Detachable devices ("pocket adaptors") */
 extern struct net_device *de620_probe(int unit);
 
@@ -130,10 +128,10 @@ static int __init probe_list2(int unit, struct devprobe2 *p, int autoprobe)
  */
 
 static struct devprobe2 eisa_probes[] __initdata = {
-#ifdef CONFIG_ULTRA32 
-	{ultra32_probe, 0},	
+#ifdef CONFIG_ULTRA32
+	{ultra32_probe, 0},
 #endif
-#ifdef CONFIG_AC3200	
+#ifdef CONFIG_AC3200
 	{ac3200_probe, 0},
 #endif
 #ifdef CONFIG_ES3210
@@ -166,16 +164,16 @@ static struct devprobe2 mca_probes[] __initdata = {
  * look for EISA/PCI/MCA cards in addition to ISA cards).
  */
 static struct devprobe2 isa_probes[] __initdata = {
-#ifdef CONFIG_HP100 		/* ISA, EISA & PCI */
+#if defined(CONFIG_HP100) && defined(CONFIG_ISA)	/* ISA, EISA */
 	{hp100_probe, 0},
-#endif	
+#endif
 #ifdef CONFIG_3C515
 	{tc515_probe, 0},
 #endif
-#ifdef CONFIG_ULTRA 
+#ifdef CONFIG_ULTRA
 	{ultra_probe, 0},
 #endif
-#ifdef CONFIG_WD80x3 
+#ifdef CONFIG_WD80x3
 	{wd_probe, 0},
 #endif
 #ifdef CONFIG_EL2 		/* 3c503 */
@@ -200,7 +198,7 @@ static struct devprobe2 isa_probes[] __initdata = {
 #ifdef CONFIG_SMC9194
 	{smc_init, 0},
 #endif
-#ifdef CONFIG_SEEQ8005 
+#ifdef CONFIG_SEEQ8005
 	{seeq8005_probe, 0},
 #endif
 #ifdef CONFIG_CS89x0
@@ -296,7 +294,7 @@ static struct devprobe2 m68k_probes[] __initdata = {
  * Unified ethernet device probe, segmented per architecture and
  * per bus interface. This drives the legacy devices only for now.
  */
- 
+
 static void __init ethif_probe2(int unit)
 {
 	unsigned long base_addr = netdev_boot_base("eth", unit);
@@ -350,23 +348,12 @@ static void __init trif_probe2(int unit)
 }
 #endif
 
-	
-/*
- *	The loopback device is global so it can be directly referenced
- *	by the network code. Also, it must be first on device list.
- */
-extern int loopback_init(void);
 
 /*  Statically configured drivers -- order matters here. */
 static int __init net_olddevs_init(void)
 {
 	int num;
 
-	if (loopback_init()) {
-		printk(KERN_ERR "Network loopback device setup failed\n");
-	}
-
-	
 #ifdef CONFIG_SBNI
 	for (num = 0; num < 8; ++num)
 		sbni_probe(num);

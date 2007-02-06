@@ -47,7 +47,7 @@ struct connection {
 	struct port_list *port;
 };
 
-static irqreturn_t pipe_interrupt(int irq, void *data, struct pt_regs *regs)
+static irqreturn_t pipe_interrupt(int irq, void *data)
 {
 	struct connection *conn = data;
 	int fd;
@@ -105,7 +105,7 @@ static int port_accept(struct port_list *port)
 		  .port 	= port });
 
 	if(um_request_irq(TELNETD_IRQ, socket[0], IRQ_READ, pipe_interrupt, 
-			  SA_INTERRUPT | SA_SHIRQ | SA_SAMPLE_RANDOM, 
+			  IRQF_DISABLED | IRQF_SHARED | IRQF_SAMPLE_RANDOM,
 			  "telnetd", conn)){
 		printk(KERN_ERR "port_accept : failed to get IRQ for "
 		       "telnetd\n");
@@ -132,7 +132,7 @@ static int port_accept(struct port_list *port)
 DECLARE_MUTEX(ports_sem);
 struct list_head ports = LIST_HEAD_INIT(ports);
 
-void port_work_proc(void *unused)
+void port_work_proc(struct work_struct *unused)
 {
 	struct port_list *port;
 	struct list_head *ele;
@@ -150,9 +150,9 @@ void port_work_proc(void *unused)
 	local_irq_restore(flags);
 }
 
-DECLARE_WORK(port_work, port_work_proc, NULL);
+DECLARE_WORK(port_work, port_work_proc);
 
-static irqreturn_t port_interrupt(int irq, void *data, struct pt_regs *regs)
+static irqreturn_t port_interrupt(int irq, void *data)
 {
 	struct port_list *port = data;
 
@@ -186,7 +186,7 @@ void *port_data(int port_num)
 		goto out_free;
 	}
 	if(um_request_irq(ACCEPT_IRQ, fd, IRQ_READ, port_interrupt, 
-			  SA_INTERRUPT | SA_SHIRQ | SA_SAMPLE_RANDOM, "port",
+			  IRQF_DISABLED | IRQF_SHARED | IRQF_SAMPLE_RANDOM, "port",
 			  port)){
 		printk(KERN_ERR "Failed to get IRQ for port %d\n", port_num);
 		goto out_close;

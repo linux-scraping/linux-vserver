@@ -9,7 +9,6 @@
  * Authors:	Thomas Graf <tgraf@suug.ch>
  */
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/types.h>
 #include <linux/kernel.h>
@@ -179,25 +178,23 @@ static int basic_change(struct tcf_proto *tp, unsigned long base, u32 handle,
 
 	err = -ENOBUFS;
 	if (head == NULL) {
-		head = kmalloc(sizeof(*head), GFP_KERNEL);
+		head = kzalloc(sizeof(*head), GFP_KERNEL);
 		if (head == NULL)
 			goto errout;
 
-		memset(head, 0, sizeof(*head));
 		INIT_LIST_HEAD(&head->flist);
 		tp->root = head;
 	}
 
-	f = kmalloc(sizeof(*f), GFP_KERNEL);
+	f = kzalloc(sizeof(*f), GFP_KERNEL);
 	if (f == NULL)
 		goto errout;
-	memset(f, 0, sizeof(*f));
 
 	err = -EINVAL;
 	if (handle)
 		f->handle = handle;
 	else {
-		int i = 0x80000000;
+		unsigned int i = 0x80000000;
 		do {
 			if (++head->hgenerator == 0x7FFFFFFF)
 				head->hgenerator = 1;

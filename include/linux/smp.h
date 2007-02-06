@@ -6,7 +6,6 @@
  *		Alan Cox. <alan@redhat.com>
  */
 
-#include <linux/config.h>
 
 extern void cpu_idle(void);
 
@@ -54,6 +53,9 @@ extern void smp_cpus_done(unsigned int max_cpus);
  */
 int smp_call_function(void(*func)(void *info), void *info, int retry, int wait);
 
+int smp_call_function_single(int cpuid, void (*func) (void *info), void *info,
+				int retry, int wait);
+
 /*
  * Call a function on all processors
  */
@@ -97,6 +99,13 @@ static inline int up_smp_call_function(void)
 static inline void smp_send_reschedule(int cpu) { }
 #define num_booting_cpus()			1
 #define smp_prepare_boot_cpu()			do {} while (0)
+static inline int smp_call_function_single(int cpuid, void (*func) (void *info),
+				void *info, int retry, int wait)
+{
+	/* Disable interrupts here? */
+	func(info);
+	return 0;
+}
 
 #endif /* !SMP */
 
@@ -125,5 +134,7 @@ static inline void smp_send_reschedule(int cpu) { }
 #define get_cpu()		({ preempt_disable(); smp_processor_id(); })
 #define put_cpu()		preempt_enable()
 #define put_cpu_no_resched()	preempt_enable_no_resched()
+
+void smp_setup_processor_id(void);
 
 #endif /* __LINUX_SMP_H */

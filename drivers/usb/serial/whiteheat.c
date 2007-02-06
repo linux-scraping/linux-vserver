@@ -65,7 +65,6 @@
  * 
  */
 
-#include <linux/config.h>
 #include <linux/kernel.h>
 #include <linux/errno.h>
 #include <linux/init.h>
@@ -80,7 +79,7 @@
 #include <linux/usb.h>
 #include <linux/serial_reg.h>
 #include <linux/serial.h>
-#include "usb-serial.h"
+#include <linux/usb/serial.h>
 #include "whiteheat_fw.h"		/* firmware for the ConnectTech WhiteHEAT device */
 #include "whiteheat.h"			/* WhiteHEAT specific commands */
 
@@ -146,15 +145,15 @@ static void whiteheat_close		(struct usb_serial_port *port, struct file *filp);
 static int  whiteheat_write		(struct usb_serial_port *port, const unsigned char *buf, int count);
 static int  whiteheat_write_room	(struct usb_serial_port *port);
 static int  whiteheat_ioctl		(struct usb_serial_port *port, struct file * file, unsigned int cmd, unsigned long arg);
-static void whiteheat_set_termios	(struct usb_serial_port *port, struct termios * old);
+static void whiteheat_set_termios	(struct usb_serial_port *port, struct ktermios * old);
 static int  whiteheat_tiocmget		(struct usb_serial_port *port, struct file *file);
 static int  whiteheat_tiocmset		(struct usb_serial_port *port, struct file *file, unsigned int set, unsigned int clear);
 static void whiteheat_break_ctl		(struct usb_serial_port *port, int break_state);
 static int  whiteheat_chars_in_buffer	(struct usb_serial_port *port);
 static void whiteheat_throttle		(struct usb_serial_port *port);
 static void whiteheat_unthrottle	(struct usb_serial_port *port);
-static void whiteheat_read_callback	(struct urb *urb, struct pt_regs *regs);
-static void whiteheat_write_callback	(struct urb *urb, struct pt_regs *regs);
+static void whiteheat_read_callback	(struct urb *urb);
+static void whiteheat_write_callback	(struct urb *urb);
 
 static struct usb_serial_driver whiteheat_fake_device = {
 	.driver = {
@@ -228,6 +227,7 @@ struct whiteheat_private {
 	struct list_head	rx_urbs_submitted;
 	struct list_head	rx_urb_q;
 	struct work_struct	rx_work;
+	struct usb_serial_port	*port;
 	struct list_head	tx_urbs_free;
 	struct list_head	tx_urbs_submitted;
 };
@@ -236,13 +236,13 @@ struct whiteheat_private {
 /* local function prototypes */
 static int start_command_port(struct usb_serial *serial);
 static void stop_command_port(struct usb_serial *serial);
-static void command_port_write_callback(struct urb *urb, struct pt_regs *regs);
-static void command_port_read_callback(struct urb *urb, struct pt_regs *regs);
+static void command_port_write_callback(struct urb *urb);
+static void command_port_read_callback(struct urb *urb);
 
 static int start_port_read(struct usb_serial_port *port);
 static struct whiteheat_urb_wrap *urb_to_wrap(struct urb *urb, struct list_head *head);
 static struct list_head *list_first(struct list_head *head);
-static void rx_data_softint(void *private);
+static void rx_data_softint(struct work_struct *work);
 
 static int firm_send_command(struct usb_serial_port *port, __u8 command, __u8 *data, __u8 datasize);
 static int firm_open(struct usb_serial_port *port);
@@ -416,7 +416,7 @@ static int whiteheat_attach (struct usb_serial *serial)
 	for (i = 0; i < serial->num_ports; i++) {
 		port = serial->port[i];
 
-		info = (struct whiteheat_private *)kmalloc(sizeof(struct whiteheat_private), GFP_KERNEL);
+		info = kmalloc(sizeof(struct whiteheat_private), GFP_KERNEL);
 		if (info == NULL) {
 			err("%s: Out of memory for port structures\n", serial->type->description);
 			goto no_private;
@@ -425,7 +425,8 @@ static int whiteheat_attach (struct usb_serial *serial)
 		spin_lock_init(&info->lock);
 		info->flags = 0;
 		info->mcr = 0;
-		INIT_WORK(&info->rx_work, rx_data_softint, port);
+		INIT_WORK(&info->rx_work, rx_data_softint);
+		info->port = port;
 
 		INIT_LIST_HEAD(&info->rx_urbs_free);
 		INIT_LIST_HEAD(&info->rx_urbs_submitted);
@@ -486,7 +487,7 @@ static int whiteheat_attach (struct usb_serial *serial)
 		usb_set_serial_port_data(port, info);
 	}
 
-	command_info = (struct whiteheat_command_private *)kmalloc(sizeof(struct whiteheat_command_private), GFP_KERNEL);
+	command_info = kmalloc(sizeof(struct whiteheat_command_private), GFP_KERNEL);
 	if (command_info == NULL) {
 		err("%s: Out of memory for port structures\n", serial->type->description);
 		goto no_command_private;
@@ -596,7 +597,7 @@ static void whiteheat_shutdown (struct usb_serial *serial)
 static int whiteheat_open (struct usb_serial_port *port, struct file *filp)
 {
 	int		retval = 0;
-	struct termios	old_term;
+	struct ktermios	old_term;
 
 	dbg("%s - port %d", __FUNCTION__, port->number);
 
@@ -686,19 +687,16 @@ static void whiteheat_close(struct usb_serial_port *port, struct file * filp)
 		wrap = list_entry(tmp, struct whiteheat_urb_wrap, list);
 		urb = wrap->urb;
 		usb_kill_urb(urb);
-		list_del(tmp);
-		list_add(tmp, &info->rx_urbs_free);
+		list_move(tmp, &info->rx_urbs_free);
 	}
-	list_for_each_safe(tmp, tmp2, &info->rx_urb_q) {
-		list_del(tmp);
-		list_add(tmp, &info->rx_urbs_free);
-	}
+	list_for_each_safe(tmp, tmp2, &info->rx_urb_q)
+		list_move(tmp, &info->rx_urbs_free);
+
 	list_for_each_safe(tmp, tmp2, &info->tx_urbs_submitted) {
 		wrap = list_entry(tmp, struct whiteheat_urb_wrap, list);
 		urb = wrap->urb;
 		usb_kill_urb(urb);
-		list_del(tmp);
-		list_add(tmp, &info->tx_urbs_free);
+		list_move(tmp, &info->tx_urbs_free);
 	}
 	spin_unlock_irqrestore(&info->lock, flags);
 
@@ -872,7 +870,7 @@ static int whiteheat_ioctl (struct usb_serial_port *port, struct file * file, un
 }
 
 
-static void whiteheat_set_termios (struct usb_serial_port *port, struct termios *old_termios)
+static void whiteheat_set_termios (struct usb_serial_port *port, struct ktermios *old_termios)
 {
 	dbg("%s -port %d", __FUNCTION__, port->number);
 
@@ -953,7 +951,7 @@ static void whiteheat_unthrottle (struct usb_serial_port *port)
 	spin_unlock_irqrestore(&info->lock, flags);
 
 	if (actually_throttled)
-		rx_data_softint(port);
+		rx_data_softint(&info->rx_work);
 
 	return;
 }
@@ -962,7 +960,7 @@ static void whiteheat_unthrottle (struct usb_serial_port *port)
 /*****************************************************************************
  * Connect Tech's White Heat callback routines
  *****************************************************************************/
-static void command_port_write_callback (struct urb *urb, struct pt_regs *regs)
+static void command_port_write_callback (struct urb *urb)
 {
 	dbg("%s", __FUNCTION__);
 
@@ -973,7 +971,7 @@ static void command_port_write_callback (struct urb *urb, struct pt_regs *regs)
 }
 
 
-static void command_port_read_callback (struct urb *urb, struct pt_regs *regs)
+static void command_port_read_callback (struct urb *urb)
 {
 	struct usb_serial_port *command_port = (struct usb_serial_port *)urb->context;
 	struct whiteheat_command_private *command_info;
@@ -1023,7 +1021,7 @@ static void command_port_read_callback (struct urb *urb, struct pt_regs *regs)
 }
 
 
-static void whiteheat_read_callback(struct urb *urb, struct pt_regs *regs)
+static void whiteheat_read_callback(struct urb *urb)
 {
 	struct usb_serial_port *port = (struct usb_serial_port *)urb->context;
 	struct whiteheat_urb_wrap *wrap;
@@ -1065,7 +1063,7 @@ static void whiteheat_read_callback(struct urb *urb, struct pt_regs *regs)
 }
 
 
-static void whiteheat_write_callback(struct urb *urb, struct pt_regs *regs)
+static void whiteheat_write_callback(struct urb *urb)
 {
 	struct usb_serial_port *port = (struct usb_serial_port *)urb->context;
 	struct whiteheat_private *info = usb_get_serial_port_data(port);
@@ -1080,8 +1078,7 @@ static void whiteheat_write_callback(struct urb *urb, struct pt_regs *regs)
 		err("%s - Not my urb!", __FUNCTION__);
 		return;
 	}
-	list_del(&wrap->list);
-	list_add(&wrap->list, &info->tx_urbs_free);
+	list_move(&wrap->list, &info->tx_urbs_free);
 	spin_unlock(&info->lock);
 
 	if (urb->status) {
@@ -1089,9 +1086,7 @@ static void whiteheat_write_callback(struct urb *urb, struct pt_regs *regs)
 		return;
 	}
 
-	usb_serial_port_softint((void *)port);
-
-	schedule_work(&port->work);
+	usb_serial_port_softint(port);
 }
 
 
@@ -1373,8 +1368,7 @@ static int start_port_read(struct usb_serial_port *port)
 				wrap = list_entry(tmp, struct whiteheat_urb_wrap, list);
 				urb = wrap->urb;
 				usb_kill_urb(urb);
-				list_del(tmp);
-				list_add(tmp, &info->rx_urbs_free);
+				list_move(tmp, &info->rx_urbs_free);
 			}
 			break;
 		}
@@ -1408,10 +1402,11 @@ static struct list_head *list_first(struct list_head *head)
 }
 
 
-static void rx_data_softint(void *private)
+static void rx_data_softint(struct work_struct *work)
 {
-	struct usb_serial_port *port = (struct usb_serial_port *)private;
-	struct whiteheat_private *info = usb_get_serial_port_data(port);
+	struct whiteheat_private *info =
+		container_of(work, struct whiteheat_private, rx_work);
+	struct usb_serial_port *port = info->port;
 	struct tty_struct *tty = port->tty;
 	struct whiteheat_urb_wrap *wrap;
 	struct urb *urb;

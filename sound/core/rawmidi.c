@@ -43,7 +43,7 @@ MODULE_DESCRIPTION("Midlevel RawMidi code for ALSA.");
 MODULE_LICENSE("GPL");
 
 #ifdef CONFIG_SND_OSSEMUL
-static int midi_map[SNDRV_CARDS] = {[0 ... (SNDRV_CARDS-1)] = 0};
+static int midi_map[SNDRV_CARDS];
 static int amidi_map[SNDRV_CARDS] = {[0 ... (SNDRV_CARDS-1)] = 1};
 module_param_array(midi_map, int, NULL, 0444);
 MODULE_PARM_DESC(midi_map, "Raw MIDI device number assigned to 1st OSS device.");
@@ -55,7 +55,6 @@ static int snd_rawmidi_free(struct snd_rawmidi *rawmidi);
 static int snd_rawmidi_dev_free(struct snd_device *device);
 static int snd_rawmidi_dev_register(struct snd_device *device);
 static int snd_rawmidi_dev_disconnect(struct snd_device *device);
-static int snd_rawmidi_dev_unregister(struct snd_device *device);
 
 static LIST_HEAD(snd_rawmidi_devices);
 static DEFINE_MUTEX(register_mutex);
@@ -431,7 +430,8 @@ static int snd_rawmidi_open(struct inode *inode, struct file *file)
 			kctl = snd_ctl_file(list);
 			if (kctl->pid == current->pid) {
 				subdevice = kctl->prefer_rawmidi_subdevice;
-				break;
+				if (subdevice != -1)
+					break;
 			}
 		}
 		up_read(&card->controls_rwsem);
@@ -1385,7 +1385,6 @@ static int snd_rawmidi_alloc_substreams(struct snd_rawmidi *rmidi,
 	struct snd_rawmidi_substream *substream;
 	int idx;
 
-	INIT_LIST_HEAD(&stream->substreams);
 	for (idx = 0; idx < count; idx++) {
 		substream = kzalloc(sizeof(*substream), GFP_KERNEL);
 		if (substream == NULL) {
@@ -1426,7 +1425,6 @@ int snd_rawmidi_new(struct snd_card *card, char *id, int device,
 		.dev_free = snd_rawmidi_dev_free,
 		.dev_register = snd_rawmidi_dev_register,
 		.dev_disconnect = snd_rawmidi_dev_disconnect,
-		.dev_unregister = snd_rawmidi_dev_unregister
 	};
 
 	snd_assert(rrawmidi != NULL, return -EINVAL);
@@ -1441,6 +1439,9 @@ int snd_rawmidi_new(struct snd_card *card, char *id, int device,
 	rmidi->device = device;
 	mutex_init(&rmidi->open_mutex);
 	init_waitqueue_head(&rmidi->open_wait);
+	INIT_LIST_HEAD(&rmidi->streams[SNDRV_RAWMIDI_STREAM_INPUT].substreams);
+	INIT_LIST_HEAD(&rmidi->streams[SNDRV_RAWMIDI_STREAM_OUTPUT].substreams);
+
 	if (id != NULL)
 		strlcpy(rmidi->id, id, sizeof(rmidi->id));
 	if ((err = snd_rawmidi_alloc_substreams(rmidi,
@@ -1479,6 +1480,14 @@ static void snd_rawmidi_free_substreams(struct snd_rawmidi_str *stream)
 static int snd_rawmidi_free(struct snd_rawmidi *rmidi)
 {
 	snd_assert(rmidi != NULL, return -ENXIO);	
+
+	snd_info_free_entry(rmidi->proc_entry);
+	rmidi->proc_entry = NULL;
+	mutex_lock(&register_mutex);
+	if (rmidi->ops && rmidi->ops->dev_unregister)
+		rmidi->ops->dev_unregister(rmidi);
+	mutex_unlock(&register_mutex);
+
 	snd_rawmidi_free_substreams(&rmidi->streams[SNDRV_RAWMIDI_STREAM_INPUT]);
 	snd_rawmidi_free_substreams(&rmidi->streams[SNDRV_RAWMIDI_STREAM_OUTPUT]);
 	if (rmidi->private_free)
@@ -1561,7 +1570,6 @@ static int snd_rawmidi_dev_register(struct snd_device *device)
 	entry = snd_info_create_card_entry(rmidi->card, name, rmidi->card->proc_root);
 	if (entry) {
 		entry->private_data = rmidi;
-		entry->c.text.read_size = 1024;
 		entry->c.text.read = snd_rawmidi_proc_info_read;
 		if (snd_info_register(entry) < 0) {
 			snd_info_free_entry(entry);
@@ -1588,21 +1596,6 @@ static int snd_rawmidi_dev_disconnect(struct snd_device *device)
 
 	mutex_lock(&register_mutex);
 	list_del_init(&rmidi->list);
-	mutex_unlock(&register_mutex);
-	return 0;
-}
-
-static int snd_rawmidi_dev_unregister(struct snd_device *device)
-{
-	struct snd_rawmidi *rmidi = device->device_data;
-
-	snd_assert(rmidi != NULL, return -ENXIO);
-	mutex_lock(&register_mutex);
-	list_del(&rmidi->list);
-	if (rmidi->proc_entry) {
-		snd_info_unregister(rmidi->proc_entry);
-		rmidi->proc_entry = NULL;
-	}
 #ifdef CONFIG_SND_OSSEMUL
 	if (rmidi->ossreg) {
 		if ((int)rmidi->device == midi_map[rmidi->card->number]) {
@@ -1616,17 +1609,9 @@ static int snd_rawmidi_dev_unregister(struct snd_device *device)
 		rmidi->ossreg = 0;
 	}
 #endif /* CONFIG_SND_OSSEMUL */
-	if (rmidi->ops && rmidi->ops->dev_unregister)
-		rmidi->ops->dev_unregister(rmidi);
 	snd_unregister_device(SNDRV_DEVICE_TYPE_RAWMIDI, rmidi->card, rmidi->device);
 	mutex_unlock(&register_mutex);
-#if defined(CONFIG_SND_SEQUENCER) || (defined(MODULE) && defined(CONFIG_SND_SEQUENCER_MODULE))
-	if (rmidi->seq_dev) {
-		snd_device_free(rmidi->card, rmidi->seq_dev);
-		rmidi->seq_dev = NULL;
-	}
-#endif
-	return snd_rawmidi_free(rmidi);
+	return 0;
 }
 
 /**

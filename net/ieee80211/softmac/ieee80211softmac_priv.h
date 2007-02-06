@@ -78,7 +78,7 @@
 /* private definitions and prototypes */
 
 /*** prototypes from _scan.c */
-void ieee80211softmac_scan(void *sm);
+void ieee80211softmac_scan(struct work_struct *work);
 /* for internal use if scanning is needed */
 int ieee80211softmac_start_scan(struct ieee80211softmac_device *mac);
 void ieee80211softmac_stop_scan(struct ieee80211softmac_device *mac);
@@ -116,7 +116,12 @@ ieee80211softmac_get_network_by_essid(struct ieee80211softmac_device *mac,
 	struct ieee80211softmac_essid *essid);
 
 /* Rates related */
+void ieee80211softmac_process_erp(struct ieee80211softmac_device *mac,
+	u8 erp_value);
+int ieee80211softmac_ratesinfo_rate_supported(struct ieee80211softmac_ratesinfo *ri, u8 rate);
 u8 ieee80211softmac_lower_rate_delta(struct ieee80211softmac_device *mac, u8 rate, int delta);
+void ieee80211softmac_init_bss(struct ieee80211softmac_device *mac);
+void ieee80211softmac_recalc_txrates(struct ieee80211softmac_device *mac);
 static inline u8 lower_rate(struct ieee80211softmac_device *mac, u8 rate) {
 	return ieee80211softmac_lower_rate_delta(mac, rate, 1);
 }
@@ -130,6 +135,9 @@ static inline u8 get_fallback_rate(struct ieee80211softmac_device *mac, u8 rate)
 /*** prototypes from _io.c */
 int ieee80211softmac_send_mgt_frame(struct ieee80211softmac_device *mac,
 	void* ptrarg, u32 type, u32 arg);
+int ieee80211softmac_handle_beacon(struct net_device *dev,
+	struct ieee80211_beacon *beacon,
+	struct ieee80211_network *network);
 
 /*** prototypes from _auth.c */
 /* do these have to go into the public header? */
@@ -141,7 +149,7 @@ int ieee80211softmac_auth_resp(struct net_device *dev, struct ieee80211_auth *au
 int ieee80211softmac_deauth_resp(struct net_device *dev, struct ieee80211_deauth *deauth);
 
 /*** prototypes from _assoc.c */
-void ieee80211softmac_assoc_work(void *d);
+void ieee80211softmac_assoc_work(struct work_struct *work);
 int ieee80211softmac_handle_assoc_response(struct net_device * dev,
 					   struct ieee80211_assoc_response * resp,
 					   struct ieee80211_network * network);
@@ -149,7 +157,9 @@ int ieee80211softmac_handle_disassoc(struct net_device * dev,
 				     struct ieee80211_disassoc * disassoc);
 int ieee80211softmac_handle_reassoc_req(struct net_device * dev,
 				        struct ieee80211_reassoc_request * reassoc);
-void ieee80211softmac_assoc_timeout(void *d);
+void ieee80211softmac_assoc_timeout(struct work_struct *work);
+void ieee80211softmac_send_disassoc_req(struct ieee80211softmac_device *mac, u16 reason);
+void ieee80211softmac_disassoc(struct ieee80211softmac_device *mac);
 
 /* some helper functions */
 static inline int ieee80211softmac_scan_handlers_check_self(struct ieee80211softmac_device *sm)
@@ -184,6 +194,7 @@ struct ieee80211softmac_network {
 	    authenticated:1,
 	    auth_desynced_once:1;
 
+	u8 erp_value;				/* Saved ERP value */
 	u16 capabilities;			/* Capabilities bitfield */
 	u8 challenge_len;			/* Auth Challenge length */
 	char *challenge;			/* Challenge Text */
@@ -196,7 +207,7 @@ struct ieee80211softmac_auth_queue_item {
 	struct ieee80211softmac_device	*mac;	/* SoftMAC device */
 	u8 retry;				/* Retry limit */
 	u8 state;				/* Auth State */
-	struct work_struct		work;	/* Work queue */
+	struct delayed_work		work;	/* Work queue */
 };
 
 /* scanning information */
@@ -208,7 +219,8 @@ struct ieee80211softmac_scaninfo {
 	   stop:1;
 	u8 skip_flags;
 	struct completion finished;
-	struct work_struct softmac_scan;
+	struct delayed_work softmac_scan;
+	struct ieee80211softmac_device *mac;
 };
 
 /* private event struct */
@@ -216,7 +228,7 @@ struct ieee80211softmac_event {
 	struct list_head list;
 	int event_type;
 	void *event_context;
-	struct work_struct work;
+	struct delayed_work work;
 	notify_function_ptr fun;
 	void *context;
 	struct ieee80211softmac_device *mac;
@@ -226,5 +238,7 @@ void ieee80211softmac_call_events(struct ieee80211softmac_device *mac, int event
 void ieee80211softmac_call_events_locked(struct ieee80211softmac_device *mac, int event, void *event_context);
 int ieee80211softmac_notify_internal(struct ieee80211softmac_device *mac,
 	int event, void *event_context, notify_function_ptr fun, void *context, gfp_t gfp_mask);
+
+void ieee80211softmac_try_reassoc(struct ieee80211softmac_device *mac);
 
 #endif /* IEEE80211SOFTMAC_PRIV_H_ */

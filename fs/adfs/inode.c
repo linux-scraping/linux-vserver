@@ -72,7 +72,7 @@ static sector_t _adfs_bmap(struct address_space *mapping, sector_t block)
 	return generic_block_bmap(mapping, block, adfs_get_block);
 }
 
-static struct address_space_operations adfs_aops = {
+static const struct address_space_operations adfs_aops = {
 	.readpage	= adfs_readpage,
 	.writepage	= adfs_writepage,
 	.sync_page	= block_sync_page,
@@ -269,7 +269,6 @@ adfs_iget(struct super_block *sb, struct object_info *obj)
 	inode->i_ino	 = obj->file_id;
 	inode->i_size	 = obj->size;
 	inode->i_nlink	 = 2;
-	inode->i_blksize = PAGE_SIZE;
 	inode->i_blocks	 = (inode->i_size + sb->s_blocksize - 1) >>
 			    sb->s_blocksize_bits;
 

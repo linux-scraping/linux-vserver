@@ -59,7 +59,7 @@ MODULE_SUPPORTED_DEVICE("{{Intel,82801AA-ICH},"
 
 static int index = -2; /* Exclude the first card */
 static char *id = SNDRV_DEFAULT_STR1;	/* ID for this card */
-static int ac97_clock = 0;
+static int ac97_clock;
 
 module_param(index, int, 0444);
 MODULE_PARM_DESC(index, "Index value for Intel i8x0 modemcard.");
@@ -224,7 +224,7 @@ struct intel8x0m {
 	unsigned int pcm_pos_shift;
 };
 
-static struct pci_device_id snd_intel8x0m_ids[] __devinitdata = {
+static struct pci_device_id snd_intel8x0m_ids[] = {
 	{ 0x8086, 0x2416, PCI_ANY_ID, PCI_ANY_ID, 0, 0, DEVICE_INTEL },	/* 82801AA */
 	{ 0x8086, 0x2426, PCI_ANY_ID, PCI_ANY_ID, 0, 0, DEVICE_INTEL },	/* 82901AB */
 	{ 0x8086, 0x2446, PCI_ANY_ID, PCI_ANY_ID, 0, 0, DEVICE_INTEL },	/* 82801BA */
@@ -511,7 +511,7 @@ static inline void snd_intel8x0_update(struct intel8x0m *chip, struct ichdev *ic
 	iputbyte(chip, port + ichdev->roff_sr, ICH_FIFOE | ICH_BCIS | ICH_LVBCI);
 }
 
-static irqreturn_t snd_intel8x0_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t snd_intel8x0_interrupt(int irq, void *dev_id)
 {
 	struct intel8x0m *chip = dev_id;
 	struct ichdev *ichdev;
@@ -1045,8 +1045,14 @@ static int intel8x0m_suspend(struct pci_dev *pci, pm_message_t state)
 	for (i = 0; i < chip->pcm_devs; i++)
 		snd_pcm_suspend_all(chip->pcm[i]);
 	snd_ac97_suspend(chip->ac97);
+	if (chip->irq >= 0) {
+		synchronize_irq(chip->irq);
+		free_irq(chip->irq, chip);
+		chip->irq = -1;
+	}
 	pci_disable_device(pci);
 	pci_save_state(pci);
+	pci_set_power_state(pci, pci_choose_state(pci, state));
 	return 0;
 }
 
@@ -1055,9 +1061,23 @@ static int intel8x0m_resume(struct pci_dev *pci)
 	struct snd_card *card = pci_get_drvdata(pci);
 	struct intel8x0m *chip = card->private_data;
 
+	pci_set_power_state(pci, PCI_D0);
 	pci_restore_state(pci);
-	pci_enable_device(pci);
+	if (pci_enable_device(pci) < 0) {
+		printk(KERN_ERR "intel8x0m: pci_enable_device failed, "
+		       "disabling device\n");
+		snd_card_disconnect(card);
+		return -EIO;
+	}
 	pci_set_master(pci);
+	if (request_irq(pci->irq, snd_intel8x0_interrupt,
+			IRQF_SHARED, card->shortname, chip)) {
+		printk(KERN_ERR "intel8x0m: unable to grab IRQ %d, "
+		       "disabling device\n", pci->irq);
+		snd_card_disconnect(card);
+		return -EIO;
+	}
+	chip->irq = pci->irq;
 	snd_intel8x0_chip_init(chip, 0);
 	snd_ac97_resume(chip->ac97);
 
@@ -1092,7 +1112,7 @@ static void __devinit snd_intel8x0m_proc_init(struct intel8x0m * chip)
 	struct snd_info_entry *entry;
 
 	if (! snd_card_proc_new(chip->card, "intel8x0m", &entry))
-		snd_info_set_text_ops(entry, chip, 1024, snd_intel8x0m_proc_read);
+		snd_info_set_text_ops(entry, chip, snd_intel8x0m_proc_read);
 }
 #else /* !CONFIG_PROC_FS */
 #define snd_intel8x0m_proc_init(chip)
@@ -1185,7 +1205,7 @@ static int __devinit snd_intel8x0m_create(struct snd_card *card,
 	}
 
  port_inited:
-	if (request_irq(pci->irq, snd_intel8x0_interrupt, SA_INTERRUPT|SA_SHIRQ,
+	if (request_irq(pci->irq, snd_intel8x0_interrupt, IRQF_SHARED,
 			card->shortname, chip)) {
 		snd_printk(KERN_ERR "unable to grab IRQ %d\n", pci->irq);
 		snd_intel8x0_free(chip);

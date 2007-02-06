@@ -112,6 +112,8 @@ u32 mpc83xx_spi_tx_buf_##type(struct mpc83xx_spi *mpc83xx_spi)	\
 {								\
 	u32 data;						\
 	const type * tx = mpc83xx_spi->tx;			\
+	if (!tx)						\
+		return 0;					\
 	data = *tx++;						\
 	mpc83xx_spi->tx = tx;					\
 	return data;						\
@@ -296,8 +298,7 @@ static int mpc83xx_spi_bufs(struct spi_device *spi, struct spi_transfer *t)
 	return t->len - mpc83xx_spi->count;
 }
 
-irqreturn_t mpc83xx_spi_irq(s32 irq, void *context_data,
-			    struct pt_regs * ptregs)
+irqreturn_t mpc83xx_spi_irq(s32 irq, void *context_data)
 {
 	struct mpc83xx_spi *mpc83xx_spi = context_data;
 	u32 event;

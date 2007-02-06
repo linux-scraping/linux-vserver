@@ -10,7 +10,6 @@
 #ifndef _ASMARM_CACHEFLUSH_H
 #define _ASMARM_CACHEFLUSH_H
 
-#include <linux/config.h>
 #include <linux/sched.h>
 #include <linux/mm.h>
 
@@ -26,7 +25,7 @@
 #undef _CACHE
 #undef MULTI_CACHE
 
-#if defined(CONFIG_CPU_ARM610) || defined(CONFIG_CPU_ARM710)
+#if defined(CONFIG_CPU_CACHE_V3)
 # ifdef _CACHE
 #  define MULTI_CACHE 1
 # else
@@ -34,7 +33,7 @@
 # endif
 #endif
 
-#if defined(CONFIG_CPU_ARM720T)
+#if defined(CONFIG_CPU_CACHE_V4)
 # ifdef _CACHE
 #  define MULTI_CACHE 1
 # else
@@ -55,7 +54,23 @@
 # endif
 #endif
 
-#if defined(CONFIG_CPU_SA110) || defined(CONFIG_CPU_SA1100)
+#if defined(CONFIG_CPU_ARM940T)
+# ifdef _CACHE
+#  define MULTI_CACHE 1
+# else
+#  define _CACHE arm940
+# endif
+#endif
+
+#if defined(CONFIG_CPU_ARM946E)
+# ifdef _CACHE
+#  define MULTI_CACHE 1
+# else
+#  define _CACHE arm946
+# endif
+#endif
+
+#if defined(CONFIG_CPU_CACHE_V4WB)
 # ifdef _CACHE
 #  define MULTI_CACHE 1
 # else
@@ -248,14 +263,12 @@ extern void dmac_flush_range(unsigned long, unsigned long);
  */
 #define copy_to_user_page(vma, page, vaddr, dst, src, len) \
 	do {							\
-		flush_cache_page(vma, vaddr, page_to_pfn(page));\
 		memcpy(dst, src, len);				\
-		flush_dcache_page(page);			\
+		flush_ptrace_access(vma, page, vaddr, dst, len, 1);\
 	} while (0)
 
 #define copy_from_user_page(vma, page, vaddr, dst, src, len) \
 	do {							\
-		flush_cache_page(vma, vaddr, page_to_pfn(page));\
 		memcpy(dst, src, len);				\
 	} while (0)
 
@@ -286,11 +299,27 @@ flush_cache_page(struct vm_area_struct *vma, unsigned long user_addr, unsigned l
 		__cpuc_flush_user_range(addr, addr + PAGE_SIZE, vma->vm_flags);
 	}
 }
+
+static inline void
+flush_ptrace_access(struct vm_area_struct *vma, struct page *page,
+			 unsigned long uaddr, void *kaddr,
+			 unsigned long len, int write)
+{
+	if (cpu_isset(smp_processor_id(), vma->vm_mm->cpu_vm_mask)) {
+		unsigned long addr = (unsigned long)kaddr;
+		__cpuc_coherent_kern_range(addr, addr + len);
+	}
+}
 #else
 extern void flush_cache_mm(struct mm_struct *mm);
 extern void flush_cache_range(struct vm_area_struct *vma, unsigned long start, unsigned long end);
 extern void flush_cache_page(struct vm_area_struct *vma, unsigned long user_addr, unsigned long pfn);
+extern void flush_ptrace_access(struct vm_area_struct *vma, struct page *page,
+				unsigned long uaddr, void *kaddr,
+				unsigned long len, int write);
 #endif
+
+#define flush_cache_dup_mm(mm) flush_cache_mm(mm)
 
 /*
  * flush_cache_user_range is used when we want to ensure that the
@@ -325,6 +354,18 @@ extern void flush_cache_page(struct vm_area_struct *vma, unsigned long user_addr
  * See update_mmu_cache for the user space part.
  */
 extern void flush_dcache_page(struct page *);
+
+extern void __flush_dcache_page(struct address_space *mapping, struct page *page);
+
+#define ARCH_HAS_FLUSH_ANON_PAGE
+static inline void flush_anon_page(struct vm_area_struct *vma,
+			 struct page *page, unsigned long vmaddr)
+{
+	extern void __flush_anon_page(struct vm_area_struct *vma,
+				struct page *, unsigned long);
+	if (PageAnon(page))
+		__flush_anon_page(vma, page, vmaddr);
+}
 
 #define flush_dcache_mmap_lock(mapping) \
 	write_lock_irq(&(mapping)->tree_lock)

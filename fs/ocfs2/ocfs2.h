@@ -34,6 +34,7 @@
 #include <linux/workqueue.h>
 #include <linux/kref.h>
 #include <linux/mutex.h>
+#include <linux/jbd.h>
 
 #include "cluster/nodemanager.h"
 #include "cluster/heartbeat.h"
@@ -174,17 +175,17 @@ enum ocfs2_mount_options
 	OCFS2_MOUNT_NOINTR  = 1 << 2,   /* Don't catch signals */
 	OCFS2_MOUNT_ERRORS_PANIC = 1 << 3, /* Panic on errors */
 	OCFS2_MOUNT_DATA_WRITEBACK = 1 << 4, /* No data ordering */
+	OCFS2_MOUNT_TAGGED = 1 << 8, /* use tagging */
 };
 
 #define OCFS2_OSB_SOFT_RO	0x0001
 #define OCFS2_OSB_HARD_RO	0x0002
 #define OCFS2_OSB_ERROR_FS	0x0004
+#define OCFS2_DEFAULT_ATIME_QUANTUM	60
 
 struct ocfs2_journal;
-struct ocfs2_journal_handle;
 struct ocfs2_super
 {
-	u32 osb_id;		/* id used by the proc interface */
 	struct task_struct *commit_task;
 	struct super_block *sb;
 	struct inode *root_inode;
@@ -198,7 +199,6 @@ struct ocfs2_super
 	struct ocfs2_node_map recovery_map;
 	struct ocfs2_node_map umount_map;
 
-	u32 num_clusters;
 	u64 root_blkno;
 	u64 system_dir_blkno;
 	u64 bitmap_blkno;
@@ -220,15 +220,14 @@ struct ocfs2_super
 	unsigned long osb_flags;
 
 	unsigned long s_mount_opt;
+	unsigned int s_atime_quantum;
 
 	u16 max_slots;
-	u16 num_nodes;
 	s16 node_num;
 	s16 slot_num;
 	int s_sectsize_bits;
 	int s_clustersize;
 	int s_clustersize_bits;
-	struct proc_dir_entry *proc_sub_dir; /* points to /proc/fs/ocfs2/<maj_min> */
 
 	atomic_t vol_state;
 	struct mutex recovery_lock;
@@ -240,6 +239,7 @@ struct ocfs2_super
 
 	enum ocfs2_local_alloc_state local_alloc_state;
 	struct buffer_head *local_alloc_bh;
+	u64 la_last_gd;
 
 	/* Next two fields are for local node slot recovery during
 	 * mount. */
@@ -286,7 +286,7 @@ struct ocfs2_super
 	/* Truncate log info */
 	struct inode			*osb_tl_inode;
 	struct buffer_head		*osb_tl_bh;
-	struct work_struct		osb_truncate_log_wq;
+	struct delayed_work		osb_truncate_log_wq;
 
 	struct ocfs2_node_map		osb_recovering_orphan_dirs;
 	unsigned int			*osb_orphan_wipes;
@@ -294,7 +294,6 @@ struct ocfs2_super
 };
 
 #define OCFS2_SB(sb)	    ((struct ocfs2_super *)(sb)->s_fs_info)
-#define OCFS2_MAX_OSB_ID             65536
 
 static inline int ocfs2_should_order_data(struct inode *inode)
 {
@@ -349,6 +348,11 @@ static inline int ocfs2_is_soft_readonly(struct ocfs2_super *osb)
 	spin_unlock(&osb->osb_lock);
 
 	return ret;
+}
+
+static inline int ocfs2_mount_local(struct ocfs2_super *osb)
+{
+	return (osb->s_feature_incompat & OCFS2_FEATURE_INCOMPAT_LOCAL_MOUNT);
 }
 
 #define OCFS2_IS_VALID_DINODE(ptr)					\

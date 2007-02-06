@@ -32,15 +32,15 @@
 #include <sound/control.h>
 #include <sound/initval.h>
 #include <linux/kmod.h>
-#include <linux/devfs_fs_kernel.h>
 #include <linux/mutex.h>
 
 #define SNDRV_OS_MINORS 256
 
 static int major = CONFIG_SND_MAJOR;
 int snd_major;
+EXPORT_SYMBOL(snd_major);
+
 static int cards_limit = 1;
-static int device_mode = S_IFCHR | S_IRUGO | S_IWUGO;
 
 MODULE_AUTHOR("Jaroslav Kysela <perex@suse.cz>");
 MODULE_DESCRIPTION("Advanced Linux Sound Architecture driver for soundcards.");
@@ -49,10 +49,6 @@ module_param(major, int, 0444);
 MODULE_PARM_DESC(major, "Major # for sound driver.");
 module_param(cards_limit, int, 0444);
 MODULE_PARM_DESC(cards_limit, "Count of auto-loadable soundcards.");
-#ifdef CONFIG_DEVFS_FS
-module_param(device_mode, int, 0444);
-MODULE_PARM_DESC(device_mode, "Device file permission mask for devfs.");
-#endif
 MODULE_ALIAS_CHARDEV_MAJOR(CONFIG_SND_MAJOR);
 
 /* this one holds the actual max. card number currently available.
@@ -60,12 +56,10 @@ MODULE_ALIAS_CHARDEV_MAJOR(CONFIG_SND_MAJOR);
  * modules are loaded manually, this limit number increases, too.
  */
 int snd_ecards_limit;
+EXPORT_SYMBOL(snd_ecards_limit);
 
 static struct snd_minor *snd_minors[SNDRV_OS_MINORS];
 static DEFINE_MUTEX(sound_mutex);
-
-extern struct class *sound_class;
-
 
 #ifdef CONFIG_KMOD
 
@@ -78,19 +72,16 @@ extern struct class *sound_class;
  */
 void snd_request_card(int card)
 {
-	int locked;
-
 	if (! current->fs->root)
 		return;
-	read_lock(&snd_card_rwlock);
-	locked = snd_cards_lock & (1 << card);
-	read_unlock(&snd_card_rwlock);
-	if (locked)
+	if (snd_card_locked(card))
 		return;
 	if (card < 0 || card >= cards_limit)
 		return;
 	request_module("snd-card-%i", card);
 }
+
+EXPORT_SYMBOL(snd_request_card);
 
 static void snd_request_other(int minor)
 {
@@ -132,6 +123,8 @@ void *snd_lookup_minor_data(unsigned int minor, int type)
 	mutex_unlock(&sound_mutex);
 	return private_data;
 }
+
+EXPORT_SYMBOL(snd_lookup_minor_data);
 
 static int snd_open(struct inode *inode, struct file *file)
 {
@@ -245,10 +238,10 @@ int snd_register_device(int type, struct snd_card *card, int dev,
 {
 	int minor;
 	struct snd_minor *preg;
-	struct device *device = NULL;
+	struct device *device = snd_card_get_device_link(card);
 
 	snd_assert(name, return -EINVAL);
-	preg = kmalloc(sizeof(struct snd_minor) + strlen(name) + 1, GFP_KERNEL);
+	preg = kmalloc(sizeof *preg, GFP_KERNEL);
 	if (preg == NULL)
 		return -ENOMEM;
 	preg->type = type;
@@ -256,7 +249,6 @@ int snd_register_device(int type, struct snd_card *card, int dev,
 	preg->device = dev;
 	preg->f_ops = f_ops;
 	preg->private_data = private_data;
-	strcpy(preg->name, name);
 	mutex_lock(&sound_mutex);
 #ifdef CONFIG_SND_DYNAMIC_MINORS
 	minor = snd_find_free_minor();
@@ -271,14 +263,33 @@ int snd_register_device(int type, struct snd_card *card, int dev,
 		return minor;
 	}
 	snd_minors[minor] = preg;
-	if (type != SNDRV_DEVICE_TYPE_CONTROL || preg->card >= cards_limit)
-		devfs_mk_cdev(MKDEV(major, minor), S_IFCHR | device_mode, "snd/%s", name);
-	if (card)
-		device = card->dev;
-	class_device_create(sound_class, NULL, MKDEV(major, minor), device, "%s", name);
+	preg->dev = device_create(sound_class, device, MKDEV(major, minor),
+				  "%s", name);
+	if (preg->dev)
+		dev_set_drvdata(preg->dev, private_data);
 
 	mutex_unlock(&sound_mutex);
 	return 0;
+}
+
+EXPORT_SYMBOL(snd_register_device);
+
+/* find the matching minor record
+ * return the index of snd_minor, or -1 if not found
+ */
+static int find_snd_minor(int type, struct snd_card *card, int dev)
+{
+	int cardnum, minor;
+	struct snd_minor *mptr;
+
+	cardnum = card ? card->number : -1;
+	for (minor = 0; minor < ARRAY_SIZE(snd_minors); ++minor)
+		if ((mptr = snd_minors[minor]) != NULL &&
+		    mptr->type == type &&
+		    mptr->card == cardnum &&
+		    mptr->device == dev)
+			return minor;
+	return -1;
 }
 
 /**
@@ -294,39 +305,48 @@ int snd_register_device(int type, struct snd_card *card, int dev,
  */
 int snd_unregister_device(int type, struct snd_card *card, int dev)
 {
-	int cardnum, minor;
-	struct snd_minor *mptr;
+	int minor;
 
-	cardnum = card ? card->number : -1;
 	mutex_lock(&sound_mutex);
-	for (minor = 0; minor < ARRAY_SIZE(snd_minors); ++minor)
-		if ((mptr = snd_minors[minor]) != NULL &&
-		    mptr->type == type &&
-		    mptr->card == cardnum &&
-		    mptr->device == dev)
-			break;
-	if (minor == ARRAY_SIZE(snd_minors)) {
+	minor = find_snd_minor(type, card, dev);
+	if (minor < 0) {
 		mutex_unlock(&sound_mutex);
 		return -EINVAL;
 	}
 
-	if (mptr->type != SNDRV_DEVICE_TYPE_CONTROL ||
-	    mptr->card >= cards_limit)			/* created in sound.c */
-		devfs_remove("snd/%s", mptr->name);
-	class_device_destroy(sound_class, MKDEV(major, minor));
+	device_destroy(sound_class, MKDEV(major, minor));
 
+	kfree(snd_minors[minor]);
 	snd_minors[minor] = NULL;
 	mutex_unlock(&sound_mutex);
-	kfree(mptr);
 	return 0;
 }
+
+EXPORT_SYMBOL(snd_unregister_device);
+
+int snd_add_device_sysfs_file(int type, struct snd_card *card, int dev,
+			      struct device_attribute *attr)
+{
+	int minor, ret = -EINVAL;
+	struct device *d;
+
+	mutex_lock(&sound_mutex);
+	minor = find_snd_minor(type, card, dev);
+	if (minor >= 0 && (d = snd_minors[minor]->dev) != NULL)
+		ret = device_create_file(d, attr);
+	mutex_unlock(&sound_mutex);
+	return ret;
+
+}
+
+EXPORT_SYMBOL(snd_add_device_sysfs_file);
 
 #ifdef CONFIG_PROC_FS
 /*
  *  INFO PART
  */
 
-static struct snd_info_entry *snd_minor_info_entry = NULL;
+static struct snd_info_entry *snd_minor_info_entry;
 
 static const char *snd_device_type_name(int type)
 {
@@ -381,7 +401,6 @@ int __init snd_minor_info_init(void)
 
 	entry = snd_info_create_module_entry(THIS_MODULE, "devices", NULL);
 	if (entry) {
-		entry->c.text.read_size = PAGE_SIZE;
 		entry->c.text.read = snd_minor_info_read;
 		if (snd_info_register(entry) < 0) {
 			snd_info_free_entry(entry);
@@ -394,8 +413,7 @@ int __init snd_minor_info_init(void)
 
 int __exit snd_minor_info_done(void)
 {
-	if (snd_minor_info_entry)
-		snd_info_unregister(snd_minor_info_entry);
+	snd_info_free_entry(snd_minor_info_entry);
 	return 0;
 }
 #endif /* CONFIG_PROC_FS */
@@ -406,24 +424,17 @@ int __exit snd_minor_info_done(void)
 
 static int __init alsa_sound_init(void)
 {
-	short controlnum;
-
 	snd_major = major;
 	snd_ecards_limit = cards_limit;
-	devfs_mk_dir("snd");
 	if (register_chrdev(major, "alsa", &snd_fops)) {
 		snd_printk(KERN_ERR "unable to register native major device number %d\n", major);
-		devfs_remove("snd");
 		return -EIO;
 	}
 	if (snd_info_init() < 0) {
 		unregister_chrdev(major, "alsa");
-		devfs_remove("snd");
 		return -ENOMEM;
 	}
 	snd_info_minor_register();
-	for (controlnum = 0; controlnum < cards_limit; controlnum++)
-		devfs_mk_cdev(MKDEV(major, controlnum<<5), S_IFCHR | device_mode, "snd/controlC%d", controlnum);
 #ifndef MODULE
 	printk(KERN_INFO "Advanced Linux Sound Architecture Driver Version " CONFIG_SND_VERSION CONFIG_SND_DATE ".\n");
 #endif
@@ -432,105 +443,11 @@ static int __init alsa_sound_init(void)
 
 static void __exit alsa_sound_exit(void)
 {
-	short controlnum;
-
-	for (controlnum = 0; controlnum < cards_limit; controlnum++)
-		devfs_remove("snd/controlC%d", controlnum);
-
 	snd_info_minor_unregister();
 	snd_info_done();
 	if (unregister_chrdev(major, "alsa") != 0)
 		snd_printk(KERN_ERR "unable to unregister major device number %d\n", major);
-	devfs_remove("snd");
 }
 
 module_init(alsa_sound_init)
 module_exit(alsa_sound_exit)
-
-  /* sound.c */
-EXPORT_SYMBOL(snd_major);
-EXPORT_SYMBOL(snd_ecards_limit);
-#if defined(CONFIG_KMOD)
-EXPORT_SYMBOL(snd_request_card);
-#endif
-EXPORT_SYMBOL(snd_register_device);
-EXPORT_SYMBOL(snd_unregister_device);
-EXPORT_SYMBOL(snd_lookup_minor_data);
-#if defined(CONFIG_SND_OSSEMUL)
-EXPORT_SYMBOL(snd_register_oss_device);
-EXPORT_SYMBOL(snd_unregister_oss_device);
-EXPORT_SYMBOL(snd_lookup_oss_minor_data);
-#endif
-  /* memory.c */
-EXPORT_SYMBOL(copy_to_user_fromio);
-EXPORT_SYMBOL(copy_from_user_toio);
-  /* init.c */
-EXPORT_SYMBOL(snd_cards);
-#if defined(CONFIG_SND_MIXER_OSS) || defined(CONFIG_SND_MIXER_OSS_MODULE)
-EXPORT_SYMBOL(snd_mixer_oss_notify_callback);
-#endif
-EXPORT_SYMBOL(snd_card_new);
-EXPORT_SYMBOL(snd_card_disconnect);
-EXPORT_SYMBOL(snd_card_free);
-EXPORT_SYMBOL(snd_card_free_in_thread);
-EXPORT_SYMBOL(snd_card_register);
-EXPORT_SYMBOL(snd_component_add);
-EXPORT_SYMBOL(snd_card_file_add);
-EXPORT_SYMBOL(snd_card_file_remove);
-#ifdef CONFIG_PM
-EXPORT_SYMBOL(snd_power_wait);
-#endif
-  /* device.c */
-EXPORT_SYMBOL(snd_device_new);
-EXPORT_SYMBOL(snd_device_register);
-EXPORT_SYMBOL(snd_device_free);
-  /* isadma.c */
-#ifdef CONFIG_ISA_DMA_API
-EXPORT_SYMBOL(snd_dma_program);
-EXPORT_SYMBOL(snd_dma_disable);
-EXPORT_SYMBOL(snd_dma_pointer);
-#endif
-  /* info.c */
-#ifdef CONFIG_PROC_FS
-EXPORT_SYMBOL(snd_seq_root);
-EXPORT_SYMBOL(snd_iprintf);
-EXPORT_SYMBOL(snd_info_get_line);
-EXPORT_SYMBOL(snd_info_get_str);
-EXPORT_SYMBOL(snd_info_create_module_entry);
-EXPORT_SYMBOL(snd_info_create_card_entry);
-EXPORT_SYMBOL(snd_info_free_entry);
-EXPORT_SYMBOL(snd_info_register);
-EXPORT_SYMBOL(snd_info_unregister);
-EXPORT_SYMBOL(snd_card_proc_new);
-#endif
-  /* info_oss.c */
-#if defined(CONFIG_SND_OSSEMUL) && defined(CONFIG_PROC_FS)
-EXPORT_SYMBOL(snd_oss_info_register);
-#endif
-  /* control.c */
-EXPORT_SYMBOL(snd_ctl_new);
-EXPORT_SYMBOL(snd_ctl_new1);
-EXPORT_SYMBOL(snd_ctl_free_one);
-EXPORT_SYMBOL(snd_ctl_add);
-EXPORT_SYMBOL(snd_ctl_remove);
-EXPORT_SYMBOL(snd_ctl_remove_id);
-EXPORT_SYMBOL(snd_ctl_rename_id);
-EXPORT_SYMBOL(snd_ctl_find_numid);
-EXPORT_SYMBOL(snd_ctl_find_id);
-EXPORT_SYMBOL(snd_ctl_notify);
-EXPORT_SYMBOL(snd_ctl_register_ioctl);
-EXPORT_SYMBOL(snd_ctl_unregister_ioctl);
-#ifdef CONFIG_COMPAT
-EXPORT_SYMBOL(snd_ctl_register_ioctl_compat);
-EXPORT_SYMBOL(snd_ctl_unregister_ioctl_compat);
-#endif
-EXPORT_SYMBOL(snd_ctl_elem_read);
-EXPORT_SYMBOL(snd_ctl_elem_write);
-  /* misc.c */
-EXPORT_SYMBOL(release_and_free_resource);
-#ifdef CONFIG_SND_VERBOSE_PRINTK
-EXPORT_SYMBOL(snd_verbose_printk);
-#endif
-#if defined(CONFIG_SND_DEBUG) && defined(CONFIG_SND_VERBOSE_PRINTK)
-EXPORT_SYMBOL(snd_verbose_printd);
-#endif

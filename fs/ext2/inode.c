@@ -31,7 +31,7 @@
 #include <linux/writeback.h>
 #include <linux/buffer_head.h>
 #include <linux/mpage.h>
-#include <linux/vserver/xid.h>
+#include <linux/vs_tag.h>
 #include "ext2.h"
 #include "acl.h"
 #include "xip.h"
@@ -685,7 +685,7 @@ ext2_writepages(struct address_space *mapping, struct writeback_control *wbc)
 	return mpage_writepages(mapping, wbc, ext2_get_block);
 }
 
-struct address_space_operations ext2_aops = {
+const struct address_space_operations ext2_aops = {
 	.readpage		= ext2_readpage,
 	.readpages		= ext2_readpages,
 	.writepage		= ext2_writepage,
@@ -698,12 +698,12 @@ struct address_space_operations ext2_aops = {
 	.migratepage		= buffer_migrate_page,
 };
 
-struct address_space_operations ext2_aops_xip = {
+const struct address_space_operations ext2_aops_xip = {
 	.bmap			= ext2_bmap,
 	.get_xip_page		= ext2_get_xip_page,
 };
 
-struct address_space_operations ext2_nobh_aops = {
+const struct address_space_operations ext2_nobh_aops = {
 	.readpage		= ext2_readpage,
 	.readpages		= ext2_readpages,
 	.writepage		= ext2_nobh_writepage,
@@ -914,7 +914,7 @@ void ext2_truncate (struct inode * inode)
 		return;
 	if (ext2_inode_is_fast_symlink(inode))
 		return;
-	if (IS_APPEND(inode) || IS_IMMUTABLE(inode))
+	if (IS_APPEND(inode) || IS_IXORUNLINK(inode))
 		return;
 
 	ext2_discard_prealloc(inode);
@@ -1068,13 +1068,9 @@ int ext2_sync_flags(struct inode *inode)
 	unsigned int oldflags, newflags;
 
 	oldflags = EXT2_I(inode)->i_flags;
-	newflags = oldflags & ~(EXT2_APPEND_FL |
-		EXT2_IMMUTABLE_FL | EXT2_IUNLINK_FL |
-		EXT2_BARRIER_FL | EXT2_NOATIME_FL |
-		EXT2_SYNC_FL | EXT2_DIRSYNC_FL);
+	newflags = oldflags & ~(EXT2_IMMUTABLE_FL |
+		EXT2_IUNLINK_FL | EXT2_BARRIER_FL);
 
-	if (IS_APPEND(inode))
-		newflags |= EXT2_APPEND_FL;
 	if (IS_IMMUTABLE(inode))
 		newflags |= EXT2_IMMUTABLE_FL;
 	if (IS_IUNLINK(inode))
@@ -1082,20 +1078,11 @@ int ext2_sync_flags(struct inode *inode)
 	if (IS_BARRIER(inode))
 		newflags |= EXT2_BARRIER_FL;
 
-	/* we do not want to copy superblock flags */
-	if (inode->i_flags & S_NOATIME)
-		newflags |= EXT2_NOATIME_FL;
-	if (inode->i_flags & S_SYNC)
-		newflags |= EXT2_SYNC_FL;
-	if (inode->i_flags & S_DIRSYNC)
-		newflags |= EXT2_DIRSYNC_FL;
-
 	if (oldflags ^ newflags) {
 		EXT2_I(inode)->i_flags = newflags;
 		inode->i_ctime = CURRENT_TIME;
 		mark_inode_dirty(inode);
 	}
-
 	return 0;
 }
 
@@ -1123,10 +1110,10 @@ void ext2_read_inode (struct inode * inode)
 		uid |= le16_to_cpu(raw_inode->i_uid_high) << 16;
 		gid |= le16_to_cpu(raw_inode->i_gid_high) << 16;
 	}
-	inode->i_uid = INOXID_UID(XID_TAG(inode), uid, gid);
-	inode->i_gid = INOXID_GID(XID_TAG(inode), uid, gid);
-	inode->i_xid = INOXID_XID(XID_TAG(inode), uid, gid,
-		le16_to_cpu(raw_inode->i_raw_xid));
+	inode->i_uid = INOTAG_UID(DX_TAG(inode), uid, gid);
+	inode->i_gid = INOTAG_GID(DX_TAG(inode), uid, gid);
+	inode->i_tag = INOTAG_TAG(DX_TAG(inode), uid, gid,
+		le16_to_cpu(raw_inode->i_raw_tag));
 
 	inode->i_nlink = le16_to_cpu(raw_inode->i_links_count);
 	inode->i_size = le32_to_cpu(raw_inode->i_size);
@@ -1145,7 +1132,6 @@ void ext2_read_inode (struct inode * inode)
 		brelse (bh);
 		goto bad_inode;
 	}
-	inode->i_blksize = PAGE_SIZE;	/* This is the optimal IO size (for stat), not the fs block size */
 	inode->i_blocks = le32_to_cpu(raw_inode->i_blocks);
 	ei->i_flags = le32_to_cpu(raw_inode->i_flags);
 	ei->i_faddr = le32_to_cpu(raw_inode->i_faddr);
@@ -1225,8 +1211,8 @@ static int ext2_update_inode(struct inode * inode, int do_sync)
 	struct ext2_inode_info *ei = EXT2_I(inode);
 	struct super_block *sb = inode->i_sb;
 	ino_t ino = inode->i_ino;
-	uid_t uid = XIDINO_UID(XID_TAG(inode), inode->i_uid, inode->i_xid);
-	gid_t gid = XIDINO_GID(XID_TAG(inode), inode->i_gid, inode->i_xid);
+	uid_t uid = TAGINO_UID(DX_TAG(inode), inode->i_uid, inode->i_tag);
+	gid_t gid = TAGINO_GID(DX_TAG(inode), inode->i_gid, inode->i_tag);
 	struct buffer_head * bh;
 	struct ext2_inode * raw_inode = ext2_get_inode(sb, ino, &bh);
 	int n;
@@ -1261,8 +1247,8 @@ static int ext2_update_inode(struct inode * inode, int do_sync)
 		raw_inode->i_uid_high = 0;
 		raw_inode->i_gid_high = 0;
 	}
-#ifdef CONFIG_INOXID_INTERN
-	raw_inode->i_raw_xid = cpu_to_le16(inode->i_xid);
+#ifdef CONFIG_TAGGING_INTERN
+	raw_inode->i_raw_tag = cpu_to_le16(inode->i_tag);
 #endif
 	raw_inode->i_links_count = cpu_to_le16(inode->i_nlink);
 	raw_inode->i_size = cpu_to_le32(inode->i_size);
@@ -1351,7 +1337,7 @@ int ext2_setattr(struct dentry *dentry, struct iattr *iattr)
 		return error;
 	if ((iattr->ia_valid & ATTR_UID && iattr->ia_uid != inode->i_uid) ||
 	    (iattr->ia_valid & ATTR_GID && iattr->ia_gid != inode->i_gid) ||
-	    (iattr->ia_valid & ATTR_XID && iattr->ia_xid != inode->i_xid)) {
+	    (iattr->ia_valid & ATTR_TAG && iattr->ia_tag != inode->i_tag)) {
 		error = DQUOT_TRANSFER(inode, iattr) ? -EDQUOT : 0;
 		if (error)
 			return error;

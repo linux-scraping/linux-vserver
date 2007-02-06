@@ -40,7 +40,6 @@
 #endif
 
 #ifdef __KERNEL__
-#include <linux/config.h>
 #ifdef CONFIG_NETFILTER
 
 extern void netfilter_init(void);
@@ -117,6 +116,16 @@ void nf_unregister_hooks(struct nf_hook_ops *reg, unsigned int n);
    need to check permissions yourself! */
 int nf_register_sockopt(struct nf_sockopt_ops *reg);
 void nf_unregister_sockopt(struct nf_sockopt_ops *reg);
+
+#ifdef CONFIG_SYSCTL
+/* Sysctl registration */
+struct ctl_table_header *nf_register_sysctl_table(struct ctl_table *path,
+						  struct ctl_table *table);
+void nf_unregister_sysctl_table(struct ctl_table_header *header,
+				struct ctl_table *table);
+extern struct ctl_table nf_net_netfilter_sysctl_path[];
+extern struct ctl_table nf_net_ipv4_netfilter_sysctl_path[];
+#endif /* CONFIG_SYSCTL */
 
 extern struct list_head nf_hooks[NPROTO][NF_MAX_HOOKS];
 
@@ -283,9 +292,31 @@ extern void nf_invalidate_cache(int pf);
    Returns true or false. */
 extern int skb_make_writable(struct sk_buff **pskb, unsigned int writable_len);
 
+static inline void nf_csum_replace4(__sum16 *sum, __be32 from, __be32 to)
+{
+	__be32 diff[] = { ~from, to };
+
+	*sum = csum_fold(csum_partial((char *)diff, sizeof(diff), ~csum_unfold(*sum)));
+}
+
+static inline void nf_csum_replace2(__sum16 *sum, __be16 from, __be16 to)
+{
+	nf_csum_replace4(sum, (__force __be32)from, (__force __be32)to);
+}
+
+extern void nf_proto_csum_replace4(__sum16 *sum, struct sk_buff *skb,
+				      __be32 from, __be32 to, int pseudohdr);
+
+static inline void nf_proto_csum_replace2(__sum16 *sum, struct sk_buff *skb,
+				      __be16 from, __be16 to, int pseudohdr)
+{
+	nf_proto_csum_replace4(sum, skb, (__force __be32)from,
+				(__force __be32)to, pseudohdr);
+}
+
 struct nf_afinfo {
 	unsigned short	family;
-	unsigned int	(*checksum)(struct sk_buff *skb, unsigned int hook,
+	__sum16		(*checksum)(struct sk_buff *skb, unsigned int hook,
 				    unsigned int dataoff, u_int8_t protocol);
 	void		(*saveroute)(const struct sk_buff *skb,
 				     struct nf_info *info);
@@ -300,12 +331,12 @@ static inline struct nf_afinfo *nf_get_afinfo(unsigned short family)
 	return rcu_dereference(nf_afinfo[family]);
 }
 
-static inline unsigned int
+static inline __sum16
 nf_checksum(struct sk_buff *skb, unsigned int hook, unsigned int dataoff,
 	    u_int8_t protocol, unsigned short family)
 {
 	struct nf_afinfo *afinfo;
-	unsigned int csum = 0;
+	__sum16 csum = 0;
 
 	rcu_read_lock();
 	afinfo = nf_get_afinfo(family);
@@ -326,7 +357,7 @@ extern void (*ip_nat_decode_session)(struct sk_buff *, struct flowi *);
 static inline void
 nf_nat_decode_session(struct sk_buff *skb, struct flowi *fl, int family)
 {
-#ifdef CONFIG_IP_NF_NAT_NEEDED
+#if defined(CONFIG_IP_NF_NAT_NEEDED) || defined(CONFIG_NF_NAT_NEEDED)
 	void (*decodefn)(struct sk_buff *, struct flowi *);
 
 	if (family == AF_INET && (decodefn = ip_nat_decode_session) != NULL)

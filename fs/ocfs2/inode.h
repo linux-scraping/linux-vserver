@@ -48,14 +48,8 @@ struct ocfs2_inode_info
 
 	struct mutex			ip_io_mutex;
 
-	/* Used by the journalling code to attach an inode to a
-	 * handle.  These are protected by ip_io_mutex in order to lock
-	 * out other I/O to the inode until we either commit or
-	 * abort. */
-	struct list_head		ip_handle_list;
-	struct ocfs2_journal_handle	*ip_handle;
-
 	u32				ip_flags; /* see below */
+	u32				ip_attr; /* inode attributes */
 
 	/* protected by recovery_lock. */
 	struct inode			*ip_next_orphan;
@@ -112,16 +106,22 @@ static inline struct ocfs2_inode_info *OCFS2_I(struct inode *inode)
 #define INODE_JOURNAL(i) (OCFS2_I(i)->ip_flags & OCFS2_INODE_JOURNAL)
 #define SET_INODE_JOURNAL(i) (OCFS2_I(i)->ip_flags |= OCFS2_INODE_JOURNAL)
 
-extern kmem_cache_t *ocfs2_inode_cache;
+extern struct kmem_cache *ocfs2_inode_cache;
 
-extern struct address_space_operations ocfs2_aops;
+extern const struct address_space_operations ocfs2_aops;
 
 struct buffer_head *ocfs2_bread(struct inode *inode, int block,
 				int *err, int reada);
 void ocfs2_clear_inode(struct inode *inode);
 void ocfs2_delete_inode(struct inode *inode);
 void ocfs2_drop_inode(struct inode *inode);
-struct inode *ocfs2_iget(struct ocfs2_super *osb, u64 feoff);
+
+/* Flags for ocfs2_iget() */
+#define OCFS2_FI_FLAG_NOWAIT	0x1
+#define OCFS2_FI_FLAG_DELETE	0x2
+#define OCFS2_FI_FLAG_SYSFILE	0x4
+#define OCFS2_FI_FLAG_NOLOCK	0x8
+struct inode *ocfs2_iget(struct ocfs2_super *osb, u64 feoff, int flags);
 struct inode *ocfs2_ilookup_for_vote(struct ocfs2_super *osb,
 				     u64 blkno,
 				     int delete_vote);
@@ -136,10 +136,13 @@ ssize_t ocfs2_rw_direct(int rw, struct file *filp, char *buf,
 void ocfs2_sync_blockdev(struct super_block *sb);
 void ocfs2_refresh_inode(struct inode *inode,
 			 struct ocfs2_dinode *fe);
-int ocfs2_mark_inode_dirty(struct ocfs2_journal_handle *handle,
+int ocfs2_mark_inode_dirty(handle_t *handle,
 			   struct inode *inode,
 			   struct buffer_head *bh);
 int ocfs2_aio_read(struct file *file, struct kiocb *req, struct iocb *iocb);
 int ocfs2_aio_write(struct file *file, struct kiocb *req, struct iocb *iocb);
+
+void ocfs2_set_inode_flags(struct inode *inode);
+int ocfs2_sync_flags(struct inode *inode);
 
 #endif /* OCFS2_INODE_H */

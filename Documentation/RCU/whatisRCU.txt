@@ -184,7 +184,17 @@ synchronize_rcu()
 	blocking, it registers a function and argument which are invoked
 	after all ongoing RCU read-side critical sections have completed.
 	This callback variant is particularly useful in situations where
-	it is illegal to block.
+	it is illegal to block or where update-side performance is
+	critically important.
+
+	However, the call_rcu() API should not be used lightly, as use
+	of the synchronize_rcu() API generally results in simpler code.
+	In addition, the synchronize_rcu() API has the nice property
+	of automatically limiting update rate should grace periods
+	be delayed.  This property results in system resilience in face
+	of denial-of-service attacks.  Code using call_rcu() should limit
+	update rate in order to gain this same sort of resilience.  See
+	checklist.txt for some approaches to limiting the update rate.
 
 rcu_assign_pointer()
 
@@ -572,7 +582,7 @@ The rcu_read_lock() and rcu_read_unlock() primitive read-acquire
 and release a global reader-writer lock.  The synchronize_rcu()
 primitive write-acquires this same lock, then immediately releases
 it.  This means that once synchronize_rcu() exits, all RCU read-side
-critical sections that were in progress before synchonize_rcu() was
+critical sections that were in progress before synchronize_rcu() was
 called are guaranteed to have completed -- there is no way that
 synchronize_rcu() would have been able to write-acquire the lock
 otherwise.
@@ -677,8 +687,9 @@ diff shows how closely related RCU and reader-writer locking can be.
 	+	spin_lock(&listmutex);
 		list_for_each_entry(p, head, lp) {
 			if (p->key == key) {
-				list_del(&p->list);
+	-			list_del(&p->list);
 	-			write_unlock(&listmutex);
+	+			list_del_rcu(&p->list);
 	+			spin_unlock(&listmutex);
 	+			synchronize_rcu();
 				kfree(p);
@@ -726,7 +737,7 @@ Or, for those who prefer a side-by-side listing:
  5   write_lock(&listmutex);            5   spin_lock(&listmutex);
  6   list_for_each_entry(p, head, lp) { 6   list_for_each_entry(p, head, lp) {
  7     if (p->key == key) {             7     if (p->key == key) {
- 8       list_del(&p->list);            8       list_del(&p->list);
+ 8       list_del(&p->list);            8       list_del_rcu(&p->list);
  9       write_unlock(&listmutex);      9       spin_unlock(&listmutex);
                                        10       synchronize_rcu();
 10       kfree(p);                     11       kfree(p);
@@ -739,7 +750,7 @@ Or, for those who prefer a side-by-side listing:
 
 Either way, the differences are quite small.  Read-side locking moves
 to rcu_read_lock() and rcu_read_unlock, update-side locking moves from
-from a reader-writer lock to a simple spinlock, and a synchronize_rcu()
+a reader-writer lock to a simple spinlock, and a synchronize_rcu()
 precedes the kfree().
 
 However, there is one potential catch: the read-side and update-side
@@ -767,6 +778,8 @@ Markers for RCU read-side critical sections:
 	rcu_read_unlock
 	rcu_read_lock_bh
 	rcu_read_unlock_bh
+	srcu_read_lock
+	srcu_read_unlock
 
 RCU pointer/list traversal:
 
@@ -790,10 +803,10 @@ RCU pointer update:
 
 RCU grace period:
 
-	synchronize_kernel (deprecated)
 	synchronize_net
 	synchronize_sched
 	synchronize_rcu
+	synchronize_srcu
 	call_rcu
 	call_rcu_bh
 

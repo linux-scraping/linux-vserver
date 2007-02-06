@@ -1793,7 +1793,7 @@ static int bttv_common_ioctls(struct bttv *btv, unsigned int cmd, void *arg)
 		memset(i,0,sizeof(*i));
 		i->index    = n;
 		i->type     = V4L2_INPUT_TYPE_CAMERA;
-		i->audioset = 0;
+		i->audioset = 1;
 		if (i->index == bttv_tvcards[btv->c.type].tuner) {
 			sprintf(i->name, "Television");
 			i->type  = V4L2_INPUT_TYPE_TUNER;
@@ -2431,6 +2431,14 @@ static int bttv_do_ioctl(struct inode *inode, struct file *file,
 		fbuf->bytesperline  = btv->fbuf.fmt.bytesperline;
 		if (fh->ovfmt)
 			fbuf->depth = fh->ovfmt->depth;
+		else {
+			if (fbuf->width)
+				fbuf->depth   = ((fbuf->bytesperline<<3)
+						  + (fbuf->width-1) )
+						  /fbuf->width;
+			else
+				fbuf->depth = 0;
+		}
 		return 0;
 	}
 	case VIDIOCSFBUF:
@@ -3745,7 +3753,7 @@ bttv_irq_switch_vbi(struct bttv *btv)
 	spin_unlock(&btv->s_lock);
 }
 
-static irqreturn_t bttv_irq(int irq, void *dev_id, struct pt_regs * regs)
+static irqreturn_t bttv_irq(int irq, void *dev_id)
 {
 	u32 stat,astat;
 	u32 dstat;
@@ -3923,7 +3931,12 @@ static int __devinit bttv_register_video(struct bttv *btv)
 		goto err;
 	printk(KERN_INFO "bttv%d: registered device video%d\n",
 	       btv->c.nr,btv->video_dev->minor & 0x1f);
-	video_device_create_file(btv->video_dev, &class_device_attr_card);
+	if (class_device_create_file(&btv->video_dev->class_dev,
+				     &class_device_attr_card)<0) {
+		printk(KERN_ERR "bttv%d: class_device_create_file 'card' "
+		       "failed\n", btv->c.nr);
+		goto err;
+	}
 
 	/* vbi */
 	btv->vbi_dev = vdev_init(btv, &bttv_vbi_template, "vbi");
@@ -4019,8 +4032,9 @@ static int __devinit bttv_probe(struct pci_dev *dev,
 	if (!request_mem_region(pci_resource_start(dev,0),
 				pci_resource_len(dev,0),
 				btv->c.name)) {
-		printk(KERN_WARNING "bttv%d: can't request iomem (0x%lx).\n",
-		       btv->c.nr, pci_resource_start(dev,0));
+		printk(KERN_WARNING "bttv%d: can't request iomem (0x%llx).\n",
+		       btv->c.nr,
+		       (unsigned long long)pci_resource_start(dev,0));
 		return -EBUSY;
 	}
 	pci_set_master(dev);
@@ -4031,12 +4045,13 @@ static int __devinit bttv_probe(struct pci_dev *dev,
 	pci_read_config_byte(dev, PCI_LATENCY_TIMER, &lat);
 	printk(KERN_INFO "bttv%d: Bt%d (rev %d) at %s, ",
 	       bttv_num,btv->id, btv->revision, pci_name(dev));
-	printk("irq: %d, latency: %d, mmio: 0x%lx\n",
-	       btv->c.pci->irq, lat, pci_resource_start(dev,0));
+	printk("irq: %d, latency: %d, mmio: 0x%llx\n",
+	       btv->c.pci->irq, lat,
+	       (unsigned long long)pci_resource_start(dev,0));
 	schedule();
 
-	btv->bt848_mmio=ioremap(pci_resource_start(dev,0), 0x1000);
-	if (NULL == ioremap(pci_resource_start(dev,0), 0x1000)) {
+	btv->bt848_mmio = ioremap(pci_resource_start(dev, 0), 0x1000);
+	if (NULL == btv->bt848_mmio) {
 		printk("bttv%d: ioremap() failed\n", btv->c.nr);
 		result = -EIO;
 		goto fail1;
@@ -4048,7 +4063,7 @@ static int __devinit bttv_probe(struct pci_dev *dev,
 	/* disable irqs, register irq handler */
 	btwrite(0, BT848_INT_MASK);
 	result = request_irq(btv->c.pci->irq, bttv_irq,
-			     SA_SHIRQ | SA_INTERRUPT,btv->c.name,(void *)btv);
+			     IRQF_SHARED | IRQF_DISABLED,btv->c.name,(void *)btv);
 	if (result < 0) {
 		printk(KERN_ERR "bttv%d: can't get IRQ %d\n",
 		       bttv_num,btv->c.pci->irq);
@@ -4179,6 +4194,7 @@ static void __devexit bttv_remove(struct pci_dev *pci_dev)
 	return;
 }
 
+#ifdef CONFIG_PM
 static int bttv_suspend(struct pci_dev *pci_dev, pm_message_t state)
 {
 	struct bttv *btv = pci_get_drvdata(pci_dev);
@@ -4259,6 +4275,7 @@ static int bttv_resume(struct pci_dev *pci_dev)
 	spin_unlock_irqrestore(&btv->s_lock,flags);
 	return 0;
 }
+#endif
 
 static struct pci_device_id bttv_pci_tbl[] = {
 	{PCI_VENDOR_ID_BROOKTREE, PCI_DEVICE_ID_BT848,
@@ -4279,12 +4296,16 @@ static struct pci_driver bttv_pci_driver = {
 	.id_table = bttv_pci_tbl,
 	.probe    = bttv_probe,
 	.remove   = __devexit_p(bttv_remove),
+#ifdef CONFIG_PM
 	.suspend  = bttv_suspend,
 	.resume   = bttv_resume,
+#endif
 };
 
 static int bttv_init_module(void)
 {
+	int ret;
+
 	bttv_num = 0;
 
 	printk(KERN_INFO "bttv: driver version %d.%d.%d loaded\n",
@@ -4306,7 +4327,11 @@ static int bttv_init_module(void)
 
 	bttv_check_chipset();
 
-	bus_register(&bttv_sub_bus_type);
+	ret = bus_register(&bttv_sub_bus_type);
+	if (ret < 0) {
+		printk(KERN_WARNING "bttv: bus_register error: %d\n", ret);
+		return ret;
+	}
 	return pci_register_driver(&bttv_pci_driver);
 }
 

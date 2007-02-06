@@ -117,7 +117,7 @@ WriteHSCX(struct IsdnCardState *cs, int hscx, u_char offset, u_char value)
 #include "hscx_irq.c"
 
 static irqreturn_t
-saphir_interrupt(int intno, void *dev_id, struct pt_regs *regs)
+saphir_interrupt(int intno, void *dev_id)
 {
 	struct IsdnCardState *cs = dev_id;
 	u_char val;
@@ -241,7 +241,7 @@ saphir_card_msg(struct IsdnCardState *cs, int mt, void *arg)
 }
 
 
-int __init
+int __devinit
 setup_saphir(struct IsdnCard *card)
 {
 	struct IsdnCardState *cs = card->cs;

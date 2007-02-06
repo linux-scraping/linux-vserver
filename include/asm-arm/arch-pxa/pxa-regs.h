@@ -13,7 +13,6 @@
 #ifndef __PXA_REGS_H
 #define __PXA_REGS_H
 
-#include <linux/config.h>
 
 /*
  * PXA Chip selects
@@ -100,7 +99,7 @@
 #define DCSR_SETCMPST	(1 << 25)       /* Set Descriptor Compare Status */
 #define DCSR_CLRCMPST	(1 << 24)       /* Clear Descriptor Compare Status */
 #define DCSR_CMPST	(1 << 10)       /* The Descriptor Compare Status */
-#define DCSR_ENRINTR	(1 << 9)        /* The end of Receive */
+#define DCSR_EORINTR	(1 << 9)        /* The end of Receive */
 #endif
 #define DCSR_REQPEND	(1 << 8)	/* Request Pending (read-only) */
 #define DCSR_STOPSTATE	(1 << 3)	/* Stop State (read-only) */
@@ -804,12 +803,11 @@
 #define UDCISR0         __REG(0x4060000C) /* UDC Interrupt Status Register 0 */
 #define UDCISR1         __REG(0x40600010) /* UDC Interrupt Status Register 1 */
 #define UDCISR_INT(n,intr) (((intr) & 0x03) << (((n) & 0x0F) * 2))
-#define UDCISR1_IECC	(1 << 31)	/* IntEn - Configuration Change */
-#define UDCISR1_IESOF	(1 << 30)	/* IntEn - Start of Frame */
-#define UDCISR1_IERU	(1 << 29)	/* IntEn - Resume */
-#define UDCISR1_IESU	(1 << 28)	/* IntEn - Suspend */
-#define UDCISR1_IERS	(1 << 27)	/* IntEn - Reset */
-
+#define UDCISR1_IRCC	(1 << 31)	/* IntReq - Configuration Change */
+#define UDCISR1_IRSOF	(1 << 30)	/* IntReq - Start of Frame */
+#define UDCISR1_IRRU	(1 << 29)	/* IntReq - Resume */
+#define UDCISR1_IRSU	(1 << 28)	/* IntReq - Suspend */
+#define UDCISR1_IRRS	(1 << 27)	/* IntReq - Reset */
 
 #define UDCFNR          __REG(0x40600014) /* UDC Frame Number Register */
 #define UDCOTGICR	__REG(0x40600018) /* UDC On-The-Go interrupt control */
@@ -1330,6 +1328,7 @@
 #define GPIO84_NSRXD		84	/* NSSP receive */
 #define GPIO85_nPCE_1		85	/* Card Enable for Card Space (PXA27x) */
 #define GPIO92_MMCDAT0		92	/* MMC DAT0 (PXA27x) */
+#define GPIO102_nPCE_1		102	/* PCMCIA (PXA27x) */
 #define GPIO109_MMCDAT1		109	/* MMC DAT1 (PXA27x) */
 #define GPIO110_MMCDAT2		110	/* MMC DAT2 (PXA27x) */
 #define GPIO110_MMCCS0		110	/* MMC Chip Select 0 (PXA27x) */
@@ -1472,6 +1471,7 @@
 #define GPIO84_NSSP_RX      	(84 | GPIO_ALT_FN_2_IN)
 #define GPIO85_nPCE_1_MD	(85 | GPIO_ALT_FN_1_OUT)
 #define GPIO92_MMCDAT0_MD	(92 | GPIO_ALT_FN_1_OUT)
+#define GPIO102_nPCE_1_MD	(102 | GPIO_ALT_FN_1_OUT)
 #define GPIO104_pSKTSEL_MD	(104 | GPIO_ALT_FN_1_OUT)
 #define GPIO109_MMCDAT1_MD	(109 | GPIO_ALT_FN_1_OUT)
 #define GPIO110_MMCDAT2_MD	(110 | GPIO_ALT_FN_1_OUT)
@@ -1626,7 +1626,7 @@
 #define SSCR0_RIM	(1 << 22)	/* Receive FIFO overrrun interrupt mask */
 #define SSCR0_TUM	(1 << 23)	/* Transmit FIFO underrun interrupt mask */
 #define SSCR0_FRDC	(0x07000000)	/* Frame rate divider control (mask) */
-#define SSCR0_SlotsPerFrm(c) ((x) - 1)	/* Time slots per frame [1..8] */
+#define SSCR0_SlotsPerFrm(x) (((x) - 1) << 24)	/* Time slots per frame [1..8] */
 #define SSCR0_ADC	(1 << 30)	/* Audio clock select */
 #define SSCR0_MOD	(1 << 31)	/* Mode (normal or network) */
 #endif
@@ -1655,6 +1655,7 @@
 #define SSCR0_EDSS		(1 << 20)	/* Extended Data Size Select */
 
 /* extra bits in PXA255, PXA26x and PXA27x SSP ports */
+#define SSCR0_TISSP		(1 << 4)	/* TI Sync Serial Protocol */
 #define SSCR0_PSP		(3 << 4)	/* PSP - Programmable Serial Protocol */
 #define SSCR1_TTELP		(1 << 31)	/* TXD Tristate Enable Last Phase */
 #define SSCR1_TTE		(1 << 30)	/* TXD Tristate Enable */
@@ -1680,6 +1681,7 @@
 #define SSSR_TINT		(1 << 19)	/* Receiver Time-out Interrupt */
 #define SSSR_PINT		(1 << 18)	/* Peripheral Trailing Byte Interrupt */
 
+#define SSPSP_FSRT		(1 << 25)	/* Frame Sync Relative Timing */
 #define SSPSP_DMYSTOP(x)	(x << 23)	/* Dummy Stop */
 #define SSPSP_SFRMWDTH(x)	(x << 16)	/* Serial Frame Width */
 #define SSPSP_SFRMDLY(x)	(x << 9)	/* Serial Frame Delay */
@@ -1707,6 +1709,10 @@
 #if defined (CONFIG_PXA27x)
 #define SSTO_P1		__REG(0x41000028)  /* SSP Port 1 Time Out Register */
 #define SSPSP_P1	__REG(0x4100002C)  /* SSP Port 1 Programmable Serial Protocol */
+#define SSTSA_P1	__REG(0x41000030)  /* SSP Port 1 Tx Timeslot Active */
+#define SSRSA_P1	__REG(0x41000034)  /* SSP Port 1 Rx Timeslot Active */
+#define SSTSS_P1	__REG(0x41000038)  /* SSP Port 1 Timeslot Status */
+#define SSACD_P1	__REG(0x4100003C)  /* SSP Port 1 Audio Clock Divider */
 #define SSCR0_P2	__REG(0x41700000)  /* SSP Port 2 Control Register 0 */
 #define SSCR1_P2	__REG(0x41700004)  /* SSP Port 2 Control Register 1 */
 #define SSSR_P2		__REG(0x41700008)  /* SSP Port 2 Status Register */
@@ -1714,6 +1720,10 @@
 #define SSDR_P2		__REG(0x41700010)  /* (Write / Read) SSP Port 2 Data Write Register/SSP Data Read Register */
 #define SSTO_P2		__REG(0x41700028)  /* SSP Port 2 Time Out Register */
 #define SSPSP_P2	__REG(0x4170002C)  /* SSP Port 2 Programmable Serial Protocol */
+#define SSTSA_P2	__REG(0x41700030)  /* SSP Port 2 Tx Timeslot Active */
+#define SSRSA_P2	__REG(0x41700034)  /* SSP Port 2 Rx Timeslot Active */
+#define SSTSS_P2	__REG(0x41700038)  /* SSP Port 2 Timeslot Status */
+#define SSACD_P2	__REG(0x4170003C)  /* SSP Port 2 Audio Clock Divider */
 #define SSCR0_P3	__REG(0x41900000)  /* SSP Port 3 Control Register 0 */
 #define SSCR1_P3	__REG(0x41900004)  /* SSP Port 3 Control Register 1 */
 #define SSSR_P3		__REG(0x41900008)  /* SSP Port 3 Status Register */
@@ -1721,6 +1731,10 @@
 #define SSDR_P3		__REG(0x41900010)  /* (Write / Read) SSP Port 3 Data Write Register/SSP Data Read Register */
 #define SSTO_P3		__REG(0x41900028)  /* SSP Port 3 Time Out Register */
 #define SSPSP_P3	__REG(0x4190002C)  /* SSP Port 3 Programmable Serial Protocol */
+#define SSTSA_P3	__REG(0x41900030)  /* SSP Port 3 Tx Timeslot Active */
+#define SSRSA_P3	__REG(0x41900034)  /* SSP Port 3 Rx Timeslot Active */
+#define SSTSS_P3	__REG(0x41900038)  /* SSP Port 3 Timeslot Status */
+#define SSACD_P3	__REG(0x4190003C)  /* SSP Port 3 Audio Clock Divider */
 #else /* PXA255 (only port 2) and PXA26x ports*/
 #define SSTO_P1		__REG(0x41000028)  /* SSP Port 1 Time Out Register */
 #define SSPSP_P1	__REG(0x4100002C)  /* SSP Port 1 Programmable Serial Protocol */
@@ -1747,6 +1761,10 @@
 #define SSDR_P(x) (*(((x) == 1) ? &SSDR_P1 : ((x) == 2) ? &SSDR_P2 : ((x) == 3) ? &SSDR_P3 : NULL))
 #define SSTO_P(x) (*(((x) == 1) ? &SSTO_P1 : ((x) == 2) ? &SSTO_P2 : ((x) == 3) ? &SSTO_P3 : NULL))
 #define SSPSP_P(x) (*(((x) == 1) ? &SSPSP_P1 : ((x) == 2) ? &SSPSP_P2 : ((x) == 3) ? &SSPSP_P3 : NULL))
+#define SSTSA_P(x) (*(((x) == 1) ? &SSTSA_P1 : ((x) == 2) ? &SSTSA_P2 : ((x) == 3) ? &SSTSA_P3 : NULL))
+#define SSRSA_P(x) (*(((x) == 1) ? &SSRSA_P1 : ((x) == 2) ? &SSRSA_P2 : ((x) == 3) ? &SSRSA_P3 : NULL))
+#define SSTSS_P(x) (*(((x) == 1) ? &SSTSS_P1 : ((x) == 2) ? &SSTSS_P2 : ((x) == 3) ? &SSTSS_P3 : NULL))
+#define SSACD_P(x) (*(((x) == 1) ? &SSACD_P1 : ((x) == 2) ? &SSACD_P2 : ((x) == 3) ? &SSACD_P3 : NULL))
 
 /*
  * MultiMediaCard (MMC) controller
@@ -2224,7 +2242,7 @@
 
 #define CICR1_TBIT	(1 << 31)	/* Transparency bit */
 #define CICR1_RGBT_CONV	(0x3 << 30)	/* RGBT conversion mask */
-#define CICR1_PPL	(0x3f << 15)	/* Pixels per line mask */
+#define CICR1_PPL	(0x7ff << 15)	/* Pixels per line mask */
 #define CICR1_RGB_CONV	(0x7 << 12)	/* RGB conversion mask */
 #define CICR1_RGB_F	(1 << 11)	/* RGB format */
 #define CICR1_YCBCR_F	(1 << 10)	/* YCbCr format */
@@ -2250,7 +2268,7 @@
 #define CICR3_VSW	(0x3f << 10)	/* Vertical sync pulse width mask */
 #define CICR3_BFPW	(0x3f << 3)	/* Beginning-of-frame pixel clock
 					   wait count mask */
-#define CICR3_LPF	(0x3ff << 0)	/* Lines per frame mask */
+#define CICR3_LPF	(0x7ff << 0)	/* Lines per frame mask */
 
 #define CICR4_MCLK_DLY	(0x3 << 24)	/* MCLK Data Capture Delay mask */
 #define CICR4_PCLK_EN	(1 << 23)	/* Pixel clock enable */
@@ -2271,8 +2289,8 @@
 #define CISR_EOL	(1 << 8)	/* End of line */
 #define CISR_PAR_ERR	(1 << 7)	/* Parity error */
 #define CISR_CQD	(1 << 6)	/* Camera interface quick disable */
-#define CISR_SOF	(1 << 5)	/* Start of frame */
-#define CISR_CDD	(1 << 4)	/* Camera interface disable done */
+#define CISR_CDD	(1 << 5)	/* Camera interface disable done */
+#define CISR_SOF	(1 << 4)	/* Start of frame */
 #define CISR_EOF	(1 << 3)	/* End of frame */
 #define CISR_IFO_2	(1 << 2)	/* FIFO overrun for Channel 2 */
 #define CISR_IFO_1	(1 << 1)	/* FIFO overrun for Channel 1 */

@@ -24,14 +24,12 @@
 #include "xfs_trans.h"
 #include "xfs_sb.h"
 #include "xfs_ag.h"
-#include "xfs_dir.h"
 #include "xfs_dir2.h"
 #include "xfs_dmapi.h"
 #include "xfs_mount.h"
 #include "xfs_bmap_btree.h"
 #include "xfs_alloc_btree.h"
 #include "xfs_ialloc_btree.h"
-#include "xfs_dir_sf.h"
 #include "xfs_dir2_sf.h"
 #include "xfs_attr_sf.h"
 #include "xfs_dinode.h"
@@ -460,7 +458,7 @@ nextag:
 		 */
 		if (XFS_FORCED_SHUTDOWN(mp)) {
 			up_read(&mp->m_peraglock);
-			return (xfs_buf_t *)0;
+			return NULL;
 		}
 		agno++;
 		if (agno >= agcount)
@@ -468,7 +466,7 @@ nextag:
 		if (agno == pagno) {
 			if (flags == 0) {
 				up_read(&mp->m_peraglock);
-				return (xfs_buf_t *)0;
+				return NULL;
 			}
 			flags = 0;
 		}
@@ -531,10 +529,10 @@ xfs_dialloc(
 	int		offset;		/* index of inode in chunk */
 	xfs_agino_t	pagino;		/* parent's a.g. relative inode # */
 	xfs_agnumber_t	pagno;		/* parent's allocation group number */
-	xfs_inobt_rec_t	rec;		/* inode allocation record */
+	xfs_inobt_rec_incore_t rec;	/* inode allocation record */
 	xfs_agnumber_t	tagno;		/* testing allocation group number */
 	xfs_btree_cur_t	*tcur;		/* temp cursor */
-	xfs_inobt_rec_t	trec;		/* temp inode allocation record */
+	xfs_inobt_rec_incore_t trec;	/* temp inode allocation record */
 
 
 	if (*IO_agbp == NULL) {
@@ -947,7 +945,7 @@ xfs_difree(
 	int		ilen;	/* inodes in an inode cluster */
 	xfs_mount_t	*mp;	/* mount structure for filesystem */
 	int		off;	/* offset of inode in inode chunk */
-	xfs_inobt_rec_t	rec;	/* btree record */
+	xfs_inobt_rec_incore_t rec;	/* btree record */
 
 	mp = tp->t_mountp;
 
@@ -1174,6 +1172,9 @@ xfs_dilocate(
 	if (agno >= mp->m_sb.sb_agcount || agbno >= mp->m_sb.sb_agblocks ||
 	    ino != XFS_AGINO_TO_INO(mp, agno, agino)) {
 #ifdef DEBUG
+		/* no diagnostics for bulkstat, ino comes from userspace */
+		if (flags & XFS_IMAP_BULKSTAT)
+			return XFS_ERROR(EINVAL);
 		if (agno >= mp->m_sb.sb_agcount) {
 			xfs_fs_cmn_err(CE_ALERT, mp,
 					"xfs_dilocate: agno (%d) >= "
@@ -1194,6 +1195,7 @@ xfs_dilocate(
 					"(0x%llx)",
 					ino, XFS_AGINO_TO_INO(mp, agno, agino));
 		}
+		xfs_stack_trace();
 #endif /* DEBUG */
 		return XFS_ERROR(EINVAL);
 	}

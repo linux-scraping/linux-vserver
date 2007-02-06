@@ -111,14 +111,14 @@ char *kobject_get_path(struct kobject *kobj, gfp_t gfp_mask)
 	len = get_kobj_path_length(kobj);
 	if (len == 0)
 		return NULL;
-	path = kmalloc(len, gfp_mask);
+	path = kzalloc(len, gfp_mask);
 	if (!path)
 		return NULL;
-	memset(path, 0x00, len);
 	fill_kobj_path(kobj, path, len);
 
 	return path;
 }
+EXPORT_SYMBOL_GPL(kobject_get_path);
 
 /**
  *	kobject_init - initialize object.
@@ -198,14 +198,14 @@ int kobject_add(struct kobject * kobj)
 
 		/* be noisy on error issues */
 		if (error == -EEXIST)
-			pr_debug("kobject_add failed for %s with -EEXIST, "
+			printk("kobject_add failed for %s with -EEXIST, "
 			       "don't try to register things with the "
 			       "same name in the same directory.\n",
 			       kobject_name(kobj));
 		else
-			pr_debug("kobject_add failed for %s (%d)\n",
+			printk("kobject_add failed for %s (%d)\n",
 			       kobject_name(kobj), error);
-		/* dump_stack(); */
+		 dump_stack();
 	}
 
 	return error;
@@ -310,6 +310,56 @@ int kobject_rename(struct kobject * kobj, const char *new_name)
 }
 
 /**
+ *	kobject_move - move object to another parent
+ *	@kobj:	object in question.
+ *	@new_parent: object's new parent
+ */
+
+int kobject_move(struct kobject *kobj, struct kobject *new_parent)
+{
+	int error;
+	struct kobject *old_parent;
+	const char *devpath = NULL;
+	char *devpath_string = NULL;
+	char *envp[2];
+
+	kobj = kobject_get(kobj);
+	if (!kobj)
+		return -EINVAL;
+	new_parent = kobject_get(new_parent);
+	if (!new_parent) {
+		error = -EINVAL;
+		goto out;
+	}
+	/* old object path */
+	devpath = kobject_get_path(kobj, GFP_KERNEL);
+	if (!devpath) {
+		error = -ENOMEM;
+		goto out;
+	}
+	devpath_string = kmalloc(strlen(devpath) + 15, GFP_KERNEL);
+	if (!devpath_string) {
+		error = -ENOMEM;
+		goto out;
+	}
+	sprintf(devpath_string, "DEVPATH_OLD=%s", devpath);
+	envp[0] = devpath_string;
+	envp[1] = NULL;
+	error = sysfs_move_dir(kobj, new_parent);
+	if (error)
+		goto out;
+	old_parent = kobj->parent;
+	kobj->parent = new_parent;
+	kobject_put(old_parent);
+	kobject_uevent_env(kobj, KOBJ_MOVE, envp);
+out:
+	kobject_put(kobj);
+	kfree(devpath_string);
+	kfree(devpath);
+	return error;
+}
+
+/**
  *	kobject_del - unlink kobject from hierarchy.
  * 	@kobj:	object.
  */
@@ -407,6 +457,7 @@ static struct kobj_type dir_ktype = {
 struct kobject *kobject_add_dir(struct kobject *parent, const char *name)
 {
 	struct kobject *k;
+	int ret;
 
 	if (!parent)
 		return NULL;
@@ -418,7 +469,13 @@ struct kobject *kobject_add_dir(struct kobject *parent, const char *name)
 	k->parent = parent;
 	k->ktype = &dir_ktype;
 	kobject_set_name(k, name);
-	kobject_register(k);
+	ret = kobject_register(k);
+	if (ret < 0) {
+		printk(KERN_WARNING "kobject_add_dir: "
+			"kobject_register error: %d\n", ret);
+		kobject_del(k);
+		return NULL;
+	}
 
 	return k;
 }

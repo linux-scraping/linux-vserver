@@ -30,16 +30,20 @@
 #include <sound/core.h>
 #include <sound/emu10k1.h>
 
-irqreturn_t snd_emu10k1_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+irqreturn_t snd_emu10k1_interrupt(int irq, void *dev_id)
 {
 	struct snd_emu10k1 *emu = dev_id;
 	unsigned int status, status2, orig_status, orig_status2;
 	int handled = 0;
 
 	while ((status = inl(emu->port + IPR)) != 0) {
-		//printk("emu10k1 irq - status = 0x%x\n", status);
+		//snd_printk(KERN_INFO "emu10k1 irq - status = 0x%x\n", status);
 		orig_status = status;
 		handled = 1;
+		if ((status & 0xffffffff) == 0xffffffff) {
+			snd_printk(KERN_INFO "snd-emu10k1: Suspected sound card removal\n");
+			break;
+		}
 		if (status & IPR_PCIERROR) {
 			snd_printk(KERN_ERR "interrupt: PCI error\n");
 			snd_emu10k1_intr_disable(emu, INTE_PCIERRORENABLE);

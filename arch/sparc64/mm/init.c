@@ -5,7 +5,6 @@
  *  Copyright (C) 1997-1999 Jakub Jelinek (jj@sunsite.mff.cuni.cz)
  */
  
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/sched.h>
@@ -18,6 +17,7 @@
 #include <linux/initrd.h>
 #include <linux/swap.h>
 #include <linux/pagemap.h>
+#include <linux/poison.h>
 #include <linux/fs.h>
 #include <linux/seq_file.h>
 #include <linux/kprobes.h>
@@ -42,6 +42,7 @@
 #include <asm/sections.h>
 #include <asm/tsb.h>
 #include <asm/hypervisor.h>
+#include <asm/prom.h>
 
 extern void device_scan(void);
 
@@ -101,8 +102,6 @@ static void __init read_obp_memory(const char *property,
 		prom_halt();
 	}
 
-	*num_ents = ents;
-
 	/* Sanitize what we got from the firmware, by page aligning
 	 * everything.
 	 */
@@ -124,6 +123,25 @@ static void __init read_obp_memory(const char *property,
 		regs[i].phys_addr = base;
 		regs[i].reg_size = size;
 	}
+
+	for (i = 0; i < ents; i++) {
+		if (regs[i].reg_size == 0UL) {
+			int j;
+
+			for (j = i; j < ents - 1; j++) {
+				regs[j].phys_addr =
+					regs[j+1].phys_addr;
+				regs[j].reg_size =
+					regs[j+1].reg_size;
+			}
+
+			ents--;
+			i--;
+		}
+	}
+
+	*num_ents = ents;
+
 	sort(regs, ents, sizeof(struct linux_prom64_registers),
 	     cmp_p64, NULL);
 }
@@ -158,9 +176,9 @@ unsigned long sparc64_kern_sec_context __read_mostly;
 
 int bigkernel = 0;
 
-kmem_cache_t *pgtable_cache __read_mostly;
+struct kmem_cache *pgtable_cache __read_mostly;
 
-static void zero_ctor(void *addr, kmem_cache_t *cache, unsigned long flags)
+static void zero_ctor(void *addr, struct kmem_cache *cache, unsigned long flags)
 {
 	clear_page(addr);
 }
@@ -854,6 +872,115 @@ static unsigned long __init choose_bootmap_pfn(unsigned long start_pfn,
 	prom_halt();
 }
 
+static void __init trim_pavail(unsigned long *cur_size_p,
+			       unsigned long *end_of_phys_p)
+{
+	unsigned long to_trim = *cur_size_p - cmdline_memory_size;
+	unsigned long avoid_start, avoid_end;
+	int i;
+
+	to_trim = PAGE_ALIGN(to_trim);
+
+	avoid_start = avoid_end = 0;
+#ifdef CONFIG_BLK_DEV_INITRD
+	avoid_start = initrd_start;
+	avoid_end = PAGE_ALIGN(initrd_end);
+#endif
+
+	/* Trim some pavail[] entries in order to satisfy the
+	 * requested "mem=xxx" kernel command line specification.
+	 *
+	 * We must not trim off the kernel image area nor the
+	 * initial ramdisk range (if any).  Also, we must not trim
+	 * any pavail[] entry down to zero in order to preserve
+	 * the invariant that all pavail[] entries have a non-zero
+	 * size which is assumed by all of the code in here.
+	 */
+	for (i = 0; i < pavail_ents; i++) {
+		unsigned long start, end, kern_end;
+		unsigned long trim_low, trim_high, n;
+
+		kern_end = PAGE_ALIGN(kern_base + kern_size);
+
+		trim_low = start = pavail[i].phys_addr;
+		trim_high = end = start + pavail[i].reg_size;
+
+		if (kern_base >= start &&
+		    kern_base < end) {
+			trim_low = kern_base;
+			if (kern_end >= end)
+				continue;
+		}
+		if (kern_end >= start &&
+		    kern_end < end) {
+			trim_high = kern_end;
+		}
+		if (avoid_start &&
+		    avoid_start >= start &&
+		    avoid_start < end) {
+			if (trim_low > avoid_start)
+				trim_low = avoid_start;
+			if (avoid_end >= end)
+				continue;
+		}
+		if (avoid_end &&
+		    avoid_end >= start &&
+		    avoid_end < end) {
+			if (trim_high < avoid_end)
+				trim_high = avoid_end;
+		}
+
+		if (trim_high <= trim_low)
+			continue;
+
+		if (trim_low == start && trim_high == end) {
+			/* Whole chunk is available for trimming.
+			 * Trim all except one page, in order to keep
+			 * entry non-empty.
+			 */
+			n = (end - start) - PAGE_SIZE;
+			if (n > to_trim)
+				n = to_trim;
+
+			if (n) {
+				pavail[i].phys_addr += n;
+				pavail[i].reg_size -= n;
+				to_trim -= n;
+			}
+		} else {
+			n = (trim_low - start);
+			if (n > to_trim)
+				n = to_trim;
+
+			if (n) {
+				pavail[i].phys_addr += n;
+				pavail[i].reg_size -= n;
+				to_trim -= n;
+			}
+			if (to_trim) {
+				n = end - trim_high;
+				if (n > to_trim)
+					n = to_trim;
+				if (n) {
+					pavail[i].reg_size -= n;
+					to_trim -= n;
+				}
+			}
+		}
+
+		if (!to_trim)
+			break;
+	}
+
+	/* Recalculate.  */
+	*cur_size_p = 0UL;
+	for (i = 0; i < pavail_ents; i++) {
+		*end_of_phys_p = pavail[i].phys_addr +
+			pavail[i].reg_size;
+		*cur_size_p += pavail[i].reg_size;
+	}
+}
+
 static unsigned long __init bootmem_init(unsigned long *pages_avail,
 					 unsigned long phys_base)
 {
@@ -871,39 +998,20 @@ static unsigned long __init bootmem_init(unsigned long *pages_avail,
 		end_of_phys_memory = pavail[i].phys_addr +
 			pavail[i].reg_size;
 		bytes_avail += pavail[i].reg_size;
-		if (cmdline_memory_size) {
-			if (bytes_avail > cmdline_memory_size) {
-				unsigned long slack = bytes_avail - cmdline_memory_size;
-
-				bytes_avail -= slack;
-				end_of_phys_memory -= slack;
-
-				pavail[i].reg_size -= slack;
-				if ((long)pavail[i].reg_size <= 0L) {
-					pavail[i].phys_addr = 0xdeadbeefUL;
-					pavail[i].reg_size = 0UL;
-					pavail_ents = i;
-				} else {
-					pavail[i+1].reg_size = 0Ul;
-					pavail[i+1].phys_addr = 0xdeadbeefUL;
-					pavail_ents = i + 1;
-				}
-				break;
-			}
-		}
 	}
 
-	*pages_avail = bytes_avail >> PAGE_SHIFT;
-
-	end_pfn = end_of_phys_memory >> PAGE_SHIFT;
+	/* Determine the location of the initial ramdisk before trying
+	 * to honor the "mem=xxx" command line argument.  We must know
+	 * where the kernel image and the ramdisk image are so that we
+	 * do not trim those two areas from the physical memory map.
+	 */
 
 #ifdef CONFIG_BLK_DEV_INITRD
 	/* Now have to check initial ramdisk, so that bootmap does not overwrite it */
 	if (sparc_ramdisk_image || sparc_ramdisk_image64) {
 		unsigned long ramdisk_image = sparc_ramdisk_image ?
 			sparc_ramdisk_image : sparc_ramdisk_image64;
-		if (ramdisk_image >= (unsigned long)_end - 2 * PAGE_SIZE)
-			ramdisk_image -= KERNBASE;
+		ramdisk_image -= KERNBASE;
 		initrd_start = ramdisk_image + phys_base;
 		initrd_end = initrd_start + sparc_ramdisk_size;
 		if (initrd_end > end_of_phys_memory) {
@@ -915,6 +1023,16 @@ static unsigned long __init bootmem_init(unsigned long *pages_avail,
 		}
 	}
 #endif	
+
+	if (cmdline_memory_size &&
+	    bytes_avail > cmdline_memory_size)
+		trim_pavail(&bytes_avail,
+			    &end_of_phys_memory);
+
+	*pages_avail = bytes_avail >> PAGE_SHIFT;
+
+	end_pfn = end_of_phys_memory >> PAGE_SHIFT;
+
 	/* Initialize the boot-time allocator. */
 	max_pfn = max_low_pfn = end_pfn;
 	min_low_pfn = (phys_base >> PAGE_SHIFT);
@@ -1339,6 +1457,8 @@ void __init paging_init(void)
 
 	kernel_physical_mapping_init();
 
+	prom_build_devicetree();
+
 	{
 		unsigned long zones_size[MAX_NR_ZONES];
 		unsigned long zholes_size[MAX_NR_ZONES];
@@ -1376,7 +1496,7 @@ static void __init taint_real_pages(void)
 		while (old_start < old_end) {
 			int n;
 
-			for (n = 0; pavail_rescan_ents; n++) {
+			for (n = 0; n < pavail_rescan_ents; n++) {
 				unsigned long new_start, new_end;
 
 				new_start = pavail_rescan[n].phys_addr;
@@ -1396,6 +1516,32 @@ static void __init taint_real_pages(void)
 			old_start += PAGE_SIZE;
 		}
 	}
+}
+
+int __init page_in_phys_avail(unsigned long paddr)
+{
+	int i;
+
+	paddr &= PAGE_MASK;
+
+	for (i = 0; i < pavail_rescan_ents; i++) {
+		unsigned long start, end;
+
+		start = pavail_rescan[i].phys_addr;
+		end = start + pavail_rescan[i].reg_size;
+
+		if (paddr >= start && paddr < end)
+			return 1;
+	}
+	if (paddr >= kern_base && paddr < (kern_base + kern_size))
+		return 1;
+#ifdef CONFIG_BLK_DEV_INITRD
+	if (paddr >= __pa(initrd_start) &&
+	    paddr < __pa(PAGE_ALIGN(initrd_end)))
+		return 1;
+#endif
+
+	return 0;
 }
 
 void __init mem_init(void)
@@ -1474,7 +1620,7 @@ void free_initmem(void)
 		page = (addr +
 			((unsigned long) __va(kern_base)) -
 			((unsigned long) KERNBASE));
-		memset((void *)addr, 0xcc, PAGE_SIZE);
+		memset((void *)addr, POISON_FREE_INITMEM, PAGE_SIZE);
 		p = virt_to_page(page);
 
 		ClearPageReserved(p);
@@ -1522,6 +1668,7 @@ pgprot_t PAGE_EXEC __read_mostly;
 unsigned long pg_iobits __read_mostly;
 
 unsigned long _PAGE_IE __read_mostly;
+EXPORT_SYMBOL(_PAGE_IE);
 
 unsigned long _PAGE_E __read_mostly;
 EXPORT_SYMBOL(_PAGE_E);

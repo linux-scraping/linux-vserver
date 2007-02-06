@@ -1,4 +1,4 @@
-/* linux/include/asm/arch-s3c2410/regs-sdi.h
+/* linux/include/asm-arm/arch-s3c2410/regs-sdi.h
  *
  * Copyright (c) 2004 Simtec Electronics <linux@simtec.co.uk>
  *		      http://www.simtec.co.uk/products/SWLINUX/
@@ -8,11 +8,6 @@
  * published by the Free Software Foundation.
  *
  * S3C2410 MMC/SDIO register definitions
- *
- *  Changelog:
- *    18-Aug-2004 Ben Dooks      Created initial file
- *    29-Nov-2004 Koen Martens   Added some missing defines, fixed duplicates
- *    29-Nov-2004 Ben Dooks	 Updated Koen's patch
 */
 
 #ifndef __ASM_ARM_REGS_SDI

@@ -20,7 +20,6 @@
 #include <linux/timer.h>
 #include <linux/ioport.h>
 #include <linux/major.h>
-#include <linux/devfs_fs_kernel.h>
 
 #include <asm/uaccess.h>
 #include <asm/io.h>
@@ -622,7 +621,7 @@ static long read_ecp(unsigned minor, char __user *c, unsigned long cnt)
 static ssize_t bpp_read(struct file *f, char __user *c, size_t cnt, loff_t * ppos)
 {
       long rc;
-      unsigned minor = iminor(f->f_dentry->d_inode);
+      unsigned minor = iminor(f->f_path.dentry->d_inode);
       if (minor >= BPP_NO) return -ENODEV;
       if (!instances[minor].present) return -ENODEV;
 
@@ -775,7 +774,7 @@ static long write_ecp(unsigned minor, const char __user *c, unsigned long cnt)
 static ssize_t bpp_write(struct file *f, const char __user *c, size_t cnt, loff_t * ppos)
 {
       long errno = 0;
-      unsigned minor = iminor(f->f_dentry->d_inode);
+      unsigned minor = iminor(f->f_path.dentry->d_inode);
       if (minor >= BPP_NO) return -ENODEV;
       if (!instances[minor].present) return -ENODEV;
 
@@ -1031,11 +1030,6 @@ static int __init bpp_init(void)
 		instances[idx].opened = 0;
 		probeLptPort(idx);
 	}
-	devfs_mk_dir("bpp");
-	for (idx = 0; idx < BPP_NO; idx++) {
-		devfs_mk_cdev(MKDEV(BPP_MAJOR, idx),
-				S_IFCHR | S_IRUSR | S_IWUSR, "bpp/%d", idx);
-	}
 
 	return 0;
 }
@@ -1044,9 +1038,6 @@ static void __exit bpp_cleanup(void)
 {
 	unsigned idx;
 
-	for (idx = 0; idx < BPP_NO; idx++)
-		devfs_remove("bpp/%d", idx);
-	devfs_remove("bpp");
 	unregister_chrdev(BPP_MAJOR, dev_name);
 
 	for (idx = 0;  idx < BPP_NO; idx++) {

@@ -88,6 +88,19 @@
 #define INSTDONE		0x2090
 #define PRI_RING_EMPTY			1
 
+#define HWSTAM			0x2098
+#define IER			0x20A0
+#define IIR			0x20A4
+#define IMR			0x20A8
+#define VSYNC_PIPE_A_INTERRUPT		(1 << 7)
+#define PIPE_A_EVENT_INTERRUPT		(1 << 4)
+#define VSYNC_PIPE_B_INTERRUPT		(1 << 5)
+#define PIPE_B_EVENT_INTERRUPT		(1 << 4)
+#define HOST_PORT_EVENT_INTERRUPT	(1 << 3)
+#define CAPTURE_EVENT_INTERRUPT		(1 << 2)
+#define USER_DEFINED_INTERRUPT		(1 << 1)
+#define BREAKPOINT_INTERRUPT		1
+
 #define INSTPM			0x20c0
 #define SYNC_FLUSH_ENABLE		(1 << 5)
 
@@ -113,6 +126,12 @@
 #define FW_DISPC_BL_SHIFT		8
 #define FW_DISPC_BL_MASK		0x7
 
+#define GPIOA             0x5010
+#define GPIOB             0x5014
+#define GPIOC             0x5018 // this may be external DDC on i830
+#define GPIOD             0x501C // this is DVO DDC
+#define GPIOE             0x5020 // this is DVO i2C
+#define GPIOF             0x5024
 
 /* PLL registers */
 #define VGA0_DIVISOR		0x06000
@@ -133,6 +152,7 @@
 #define DPLL_VGA_MODE_DISABLE		(1 << 28)
 #define DPLL_P2_MASK			1
 #define DPLL_P2_SHIFT			23
+#define DPLL_I9XX_P2_SHIFT              24
 #define DPLL_P1_FORCE_DIV2		(1 << 21)
 #define DPLL_P1_MASK			0x1f
 #define DPLL_P1_SHIFT			16
@@ -155,29 +175,8 @@
 /* PLL parameters (these are for 852GM/855GM/865G, check earlier chips). */
 /* Clock values are in units of kHz */
 #define PLL_REFCLK		48000
-#define MIN_VCO_FREQ		930000
-#define MAX_VCO_FREQ		1400000
 #define MIN_CLOCK		25000
 #define MAX_CLOCK		350000
-#define P_TRANSITION_CLOCK	165000
-#define MIN_M			108
-#define MAX_M			140
-#define MIN_M1			18
-#define MAX_M1			26
-#define MIN_M2			6
-#define MAX_M2			16
-#define MIN_P			4
-#define MAX_P			128
-#define MIN_P1			0
-#define MAX_P1			31
-#define MIN_N			3
-#define MAX_N			16
-
-#define CALC_VCLOCK(m1, m2, n, p1, p2) \
-        ((PLL_REFCLK * (5 * ((m1) + 2) + ((m2) + 2)) / ((n) + 2)) / \
-        (((p1) + 2) * (1 << (p2 + 1))))
-
-#define CALC_VCLOCK3(m, n, p)	((PLL_REFCLK * (m) / (n)) / (p))
 
 /* Two pipes */
 #define PIPE_A			0
@@ -488,8 +487,11 @@
 
 /* I/O macros */
 #define INREG8(addr)	      readb((u8 __iomem *)(dinfo->mmio_base + (addr)))
+#define INREG16(addr)	      readw((u16 __iomem *)(dinfo->mmio_base + (addr)))
 #define INREG(addr)	      readl((u32 __iomem *)(dinfo->mmio_base + (addr)))
 #define OUTREG8(addr, val)    writeb((val),(u8 __iomem *)(dinfo->mmio_base + \
+							   (addr)))
+#define OUTREG16(addr, val)    writew((val),(u16 __iomem *)(dinfo->mmio_base + \
 							   (addr)))
 #define OUTREG(addr, val)     writel((val),(u32 __iomem *)(dinfo->mmio_base + \
                                      (addr)))
@@ -522,8 +524,7 @@
 
 
 /* function protoypes */
-extern int intelfbhw_get_chipset(struct pci_dev *pdev, const char **name,
-				 int *chipset, int *mobile);
+extern int intelfbhw_get_chipset(struct pci_dev *pdev, struct intelfb_info *dinfo);
 extern int intelfbhw_get_memory(struct pci_dev *pdev, int *aperture_size,
 				int *stolen_size);
 extern int intelfbhw_check_non_crt(struct intelfb_info *dinfo);
@@ -566,5 +567,8 @@ extern void intelfbhw_cursor_setcolor(struct intelfb_info *dinfo, u32 bg,
 extern void intelfbhw_cursor_load(struct intelfb_info *dinfo, int width,
 				  int height, u8 *data);
 extern void intelfbhw_cursor_reset(struct intelfb_info *dinfo);
+extern int intelfbhw_enable_irq(struct intelfb_info *dinfo, int reenable);
+extern void intelfbhw_disable_irq(struct intelfb_info *dinfo);
+extern int intelfbhw_wait_for_vsync(struct intelfb_info *dinfo, u32 pipe);
 
 #endif /* _INTELFBHW_H */

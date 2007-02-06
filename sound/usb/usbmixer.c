@@ -37,6 +37,7 @@
 #include <sound/control.h>
 #include <sound/hwdep.h>
 #include <sound/info.h>
+#include <sound/tlv.h>
 
 #include "usbaudio.h"
 
@@ -45,6 +46,27 @@
 
 /* ignore error from controls - for debugging */
 /* #define IGNORE_CTL_ERROR */
+
+/*
+ * Sound Blaster remote control configuration
+ *
+ * format of remote control data:
+ * Extigy:       xx 00
+ * Audigy 2 NX:  06 80 xx 00 00 00
+ * Live! 24-bit: 06 80 xx yy 22 83
+ */
+static const struct rc_config {
+	u32 usb_id;
+	u8  offset;
+	u8  length;
+	u8  packet_length;
+	u8  mute_mixer_id;
+	u32 mute_code;
+} rc_configs[] = {
+	{ USB_ID(0x041e, 0x3000), 0, 1, 2,  18, 0x0013 }, /* Extigy       */
+	{ USB_ID(0x041e, 0x3020), 2, 1, 6,  18, 0x0013 }, /* Audigy 2 NX  */
+	{ USB_ID(0x041e, 0x3040), 2, 2, 6,  2,  0x6e91 }, /* Live! 24-bit */
+};
 
 struct usb_mixer_interface {
 	struct snd_usb_audio *chip;
@@ -55,11 +77,7 @@ struct usb_mixer_interface {
 	struct usb_mixer_elem_info **id_elems; /* array[256], indexed by unit id */
 
 	/* Sound Blaster remote control stuff */
-	enum {
-		RC_NONE,
-		RC_EXTIGY,
-		RC_AUDIGY2NX,
-	} rc_type;
+	const struct rc_config *rc_cfg;
 	unsigned long rc_hwdep_open;
 	u32 rc_code;
 	wait_queue_head_t rc_waitq;
@@ -399,6 +417,26 @@ static inline int set_cur_mix_value(struct usb_mixer_elem_info *cval, int channe
 	return set_ctl_value(cval, SET_CUR, (cval->control << 8) | channel, value);
 }
 
+/*
+ * TLV callback for mixer volume controls
+ */
+static int mixer_vol_tlv(struct snd_kcontrol *kcontrol, int op_flag,
+			 unsigned int size, unsigned int __user *_tlv)
+{
+	struct usb_mixer_elem_info *cval = kcontrol->private_data;
+	DECLARE_TLV_DB_SCALE(scale, 0, 0, 0);
+
+	if (size < sizeof(scale))
+		return -ENOMEM;
+	/* USB descriptions contain the dB scale in 1/256 dB unit
+	 * while ALSA TLV contains in 1/100 dB unit
+	 */
+	scale[2] = (convert_signed_value(cval, cval->min) * 100) / 256;
+	scale[3] = (convert_signed_value(cval, cval->res) * 100) / 256;
+	if (copy_to_user(_tlv, scale, sizeof(scale)))
+		return -EFAULT;
+	return 0;
+}
 
 /*
  * parser routines begin here...
@@ -916,6 +954,12 @@ static void build_feature_ctl(struct mixer_build *state, unsigned char *desc,
 		}
 		strlcat(kctl->id.name + len, control == USB_FEATURE_MUTE ? " Switch" : " Volume",
 			sizeof(kctl->id.name));
+		if (control == USB_FEATURE_VOLUME) {
+			kctl->tlv.c = mixer_vol_tlv;
+			kctl->vd[0].access |= 
+				SNDRV_CTL_ELEM_ACCESS_TLV_READ |
+				SNDRV_CTL_ELEM_ACCESS_TLV_CALLBACK;
+		}
 		break;
 
 	default:
@@ -1482,7 +1526,7 @@ static int parse_audio_selector_unit(struct mixer_build *state, int unitid, unsi
 		namelist[i] = kmalloc(MAX_ITEM_NAME_LEN, GFP_KERNEL);
 		if (! namelist[i]) {
 			snd_printk(KERN_ERR "cannot malloc\n");
-			while (--i > 0)
+			while (i--)
 				kfree(namelist[i]);
 			kfree(namelist);
 			kfree(cval);
@@ -1576,8 +1620,7 @@ static void snd_usb_mixer_free(struct usb_mixer_interface *mixer)
 		kfree(mixer->urb->transfer_buffer);
 		usb_free_urb(mixer->urb);
 	}
-	if (mixer->rc_urb)
-		usb_free_urb(mixer->rc_urb);
+	usb_free_urb(mixer->rc_urb);
 	kfree(mixer->rc_setup_packet);
 	kfree(mixer);
 }
@@ -1647,7 +1690,7 @@ static void snd_usb_mixer_notify_id(struct usb_mixer_interface *mixer,
 static void snd_usb_mixer_memory_change(struct usb_mixer_interface *mixer,
 					int unitid)
 {
-	if (mixer->rc_type == RC_NONE)
+	if (!mixer->rc_cfg)
 		return;
 	/* unit ids specific to Extigy/Audigy 2 NX: */
 	switch (unitid) {
@@ -1666,7 +1709,7 @@ static void snd_usb_mixer_memory_change(struct usb_mixer_interface *mixer,
 	}
 }
 
-static void snd_usb_mixer_status_complete(struct urb *urb, struct pt_regs *regs)
+static void snd_usb_mixer_status_complete(struct urb *urb)
 {
 	struct usb_mixer_interface *mixer = urb->context;
 
@@ -1728,24 +1771,22 @@ static int snd_usb_mixer_status_create(struct usb_mixer_interface *mixer)
 	return 0;
 }
 
-static void snd_usb_soundblaster_remote_complete(struct urb *urb,
-						 struct pt_regs *regs)
+static void snd_usb_soundblaster_remote_complete(struct urb *urb)
 {
 	struct usb_mixer_interface *mixer = urb->context;
-	/*
-	 * format of remote control data:
-	 * Extigy:	xx 00
-	 * Audigy 2 NX:	06 80 xx 00 00 00
-	 */
-	int offset = mixer->rc_type == RC_EXTIGY ? 0 : 2;
+	const struct rc_config *rc = mixer->rc_cfg;
 	u32 code;
 
-	if (urb->status < 0 || urb->actual_length <= offset)
+	if (urb->status < 0 || urb->actual_length < rc->packet_length)
 		return;
-	code = mixer->rc_buffer[offset];
+
+	code = mixer->rc_buffer[rc->offset];
+	if (rc->length == 2)
+		code |= mixer->rc_buffer[rc->offset + 1] << 8;
+
 	/* the Mute button actually changes the mixer control */
-	if (code == 13)
-		snd_usb_mixer_notify_id(mixer, 18);
+	if (code == rc->mute_code)
+		snd_usb_mixer_notify_id(mixer, rc->mute_mixer_id);
 	mixer->rc_code = code;
 	wmb();
 	wake_up(&mixer->rc_waitq);
@@ -1801,21 +1842,17 @@ static unsigned int snd_usb_sbrc_hwdep_poll(struct snd_hwdep *hw, struct file *f
 static int snd_usb_soundblaster_remote_init(struct usb_mixer_interface *mixer)
 {
 	struct snd_hwdep *hwdep;
-	int err, len;
+	int err, len, i;
 
-	switch (mixer->chip->usb_id) {
-	case USB_ID(0x041e, 0x3000):
-		mixer->rc_type = RC_EXTIGY;
-		len = 2;
-		break;
-	case USB_ID(0x041e, 0x3020):
-		mixer->rc_type = RC_AUDIGY2NX;
-		len = 6;
-		break;
-	default:
+	for (i = 0; i < ARRAY_SIZE(rc_configs); ++i)
+		if (rc_configs[i].usb_id == mixer->chip->usb_id)
+			break;
+	if (i >= ARRAY_SIZE(rc_configs))
 		return 0;
-	}
+	mixer->rc_cfg = &rc_configs[i];
 
+	len = mixer->rc_cfg->packet_length;
+	
 	init_waitqueue_head(&mixer->rc_waitq);
 	err = snd_hwdep_new(mixer->chip->card, "SB remote control", 0, &hwdep);
 	if (err < 0)
@@ -1998,7 +2035,7 @@ int snd_usb_create_mixer(struct snd_usb_audio *chip, int ctrlif)
 		if ((err = snd_audigy2nx_controls_create(mixer)) < 0)
 			goto _error;
 		if (!snd_card_proc_new(chip->card, "audigy2nx", &entry))
-			snd_info_set_text_ops(entry, mixer, 1024,
+			snd_info_set_text_ops(entry, mixer,
 					      snd_audigy2nx_proc_read);
 	}
 
@@ -2018,8 +2055,6 @@ void snd_usb_mixer_disconnect(struct list_head *p)
 	struct usb_mixer_interface *mixer;
 	
 	mixer = list_entry(p, struct usb_mixer_interface, list);
-	if (mixer->urb)
-		usb_kill_urb(mixer->urb);
-	if (mixer->rc_urb)
-		usb_kill_urb(mixer->rc_urb);
+	usb_kill_urb(mixer->urb);
+	usb_kill_urb(mixer->rc_urb);
 }

@@ -40,6 +40,7 @@
 #include <linux/mm.h>
 #include <linux/sched.h>
 #include <linux/videodev.h>
+#include <media/v4l2-common.h>
 #include <linux/wait.h>
 #include <asm/uaccess.h>
 #include <asm/io.h>
@@ -90,7 +91,7 @@ static void planb_close(struct video_device *);
 static int planb_ioctl(struct video_device *, unsigned int, void *);
 static int planb_init_done(struct video_device *);
 static int planb_mmap(struct video_device *, const char *, unsigned long);
-static void planb_irq(int, void *, struct pt_regs *);
+static void planb_irq(int, void *);
 static void release_planb(void);
 int init_planbs(struct video_init *);
 
@@ -137,7 +138,7 @@ static int grabbuf_alloc(struct planb *pb)
 		+ MAX_LNUM
 #endif /* PLANB_GSCANLINE */
 		);
-	if ((pb->rawbuf = (unsigned char**) kmalloc (npage
+	if ((pb->rawbuf = kmalloc(npage
 				* sizeof(unsigned long), GFP_KERNEL)) == 0)
 		return -ENOMEM;
 	for (i = 0; i < npage; i++) {
@@ -1315,7 +1316,7 @@ cmd_tab_data_end:
 	return c1;
 }
 
-static void planb_irq(int irq, void *dev_id, struct pt_regs * regs)
+static void planb_irq(int irq, void *dev_id)
 {
 	unsigned int stat, astat;
 	struct planb *pb = (struct planb *)dev_id;

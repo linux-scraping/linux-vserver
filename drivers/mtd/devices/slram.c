@@ -168,19 +168,16 @@ static int register_device(char *name, unsigned long start, unsigned long length
 		E("slram: Cannot allocate new MTD device.\n");
 		return(-ENOMEM);
 	}
-	(*curmtd)->mtdinfo = kmalloc(sizeof(struct mtd_info), GFP_KERNEL);
+	(*curmtd)->mtdinfo = kzalloc(sizeof(struct mtd_info), GFP_KERNEL);
 	(*curmtd)->next = NULL;
 
 	if ((*curmtd)->mtdinfo)	{
-		memset((char *)(*curmtd)->mtdinfo, 0, sizeof(struct mtd_info));
 		(*curmtd)->mtdinfo->priv =
-			kmalloc(sizeof(slram_priv_t), GFP_KERNEL);
+			kzalloc(sizeof(slram_priv_t), GFP_KERNEL);
 
 		if (!(*curmtd)->mtdinfo->priv) {
 			kfree((*curmtd)->mtdinfo);
 			(*curmtd)->mtdinfo = NULL;
-		} else {
-			memset((*curmtd)->mtdinfo->priv,0,sizeof(slram_priv_t));
 		}
 	}
 
@@ -200,8 +197,7 @@ static int register_device(char *name, unsigned long start, unsigned long length
 
 	(*curmtd)->mtdinfo->name = name;
 	(*curmtd)->mtdinfo->size = length;
-	(*curmtd)->mtdinfo->flags = MTD_CLEAR_BITS | MTD_SET_BITS |
-					MTD_WRITEB_WRITEABLE | MTD_VOLATILE | MTD_CAP_RAM;
+	(*curmtd)->mtdinfo->flags = MTD_CAP_RAM;
         (*curmtd)->mtdinfo->erase = slram_erase;
 	(*curmtd)->mtdinfo->point = slram_point;
 	(*curmtd)->mtdinfo->unpoint = slram_unpoint;
@@ -210,6 +206,7 @@ static int register_device(char *name, unsigned long start, unsigned long length
 	(*curmtd)->mtdinfo->owner = THIS_MODULE;
 	(*curmtd)->mtdinfo->type = MTD_RAM;
 	(*curmtd)->mtdinfo->erasesize = SLRAM_BLK_SZ;
+	(*curmtd)->mtdinfo->writesize = 1;
 
 	if (add_mtd_device((*curmtd)->mtdinfo))	{
 		E("slram: Failed to register new device\n");

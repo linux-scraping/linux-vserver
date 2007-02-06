@@ -28,7 +28,6 @@
  */
 #undef REALLY_SLOW_IO	/* most systems can safely undef this */
 
-#include <linux/config.h>
 #include <linux/delay.h>
 #include <linux/types.h>
 #include <linux/ethtool.h>
@@ -1146,7 +1145,6 @@ static inline void wl3501_ack_interrupt(struct wl3501_card *this)
  * wl3501_interrupt - Hardware interrupt from card.
  * @irq - Interrupt number
  * @dev_id - net_device
- * @regs - registers
  *
  * We must acknowledge the interrupt as soon as possible, and block the
  * interrupt from the same card immediately to prevent re-entry.
@@ -1155,27 +1153,20 @@ static inline void wl3501_ack_interrupt(struct wl3501_card *this)
  * On the other hand, to prevent SUTRO from malfunctioning, we must
  * unlock the SUTRO as soon as possible.
  */
-static irqreturn_t wl3501_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t wl3501_interrupt(int irq, void *dev_id)
 {
-	struct net_device *dev = (struct net_device *)dev_id;
+	struct net_device *dev = dev_id;
 	struct wl3501_card *this;
-	int handled = 1;
 
-	if (!dev)
-		goto unknown;
-	this = dev->priv;
+	this = netdev_priv(dev);
 	spin_lock(&this->lock);
 	wl3501_ack_interrupt(this);
 	wl3501_block_interrupt(this);
 	wl3501_rx_interrupt(dev);
 	wl3501_unblock_interrupt(this);
 	spin_unlock(&this->lock);
-out:
-	return IRQ_RETVAL(handled);
-unknown:
-	handled = 0;
-	printk(KERN_ERR "%s: irq %d for unknown device.\n", __FUNCTION__, irq);
-	goto out;
+
+	return IRQ_HANDLED;
 }
 
 static int wl3501_reset_board(struct wl3501_card *this)
@@ -1465,7 +1456,7 @@ static void wl3501_get_drvinfo(struct net_device *dev, struct ethtool_drvinfo *i
 	strlcpy(info->driver, wl3501_dev_info, sizeof(info->driver));
 }
 
-static struct ethtool_ops ops = {
+static const struct ethtool_ops ops = {
 	.get_drvinfo = wl3501_get_drvinfo
 };
 
@@ -1803,15 +1794,15 @@ static int wl3501_get_retry(struct net_device *dev,
 				      &retry, sizeof(retry));
 	if (rc)
 		goto out;
-	if (wrqu->retry.flags & IW_RETRY_MAX) {
-		wrqu->retry.flags = IW_RETRY_LIMIT | IW_RETRY_MAX;
+	if (wrqu->retry.flags & IW_RETRY_LONG) {
+		wrqu->retry.flags = IW_RETRY_LIMIT | IW_RETRY_LONG;
 		goto set_value;
 	}
 	rc = wl3501_get_mib_value(this, WL3501_MIB_ATTR_SHORT_RETRY_LIMIT,
 				  &retry, sizeof(retry));
 	if (rc)
 		goto out;
-	wrqu->retry.flags = IW_RETRY_LIMIT | IW_RETRY_MIN;
+	wrqu->retry.flags = IW_RETRY_LIMIT | IW_RETRY_SHORT;
 set_value:
 	wrqu->retry.value = retry;
 	wrqu->retry.disabled = 0;
@@ -1937,7 +1928,6 @@ static int wl3501_probe(struct pcmcia_device *p_dev)
 	p_dev->conf.Attributes	= CONF_ENABLE_IRQ;
 	p_dev->conf.IntType	= INT_MEMORY_AND_IO;
 	p_dev->conf.ConfigIndex	= 1;
-	p_dev->conf.Present	= PRESENT_OPTION;
 
 	dev = alloc_etherdev(sizeof(struct wl3501_card));
 	if (!dev)
@@ -1975,24 +1965,9 @@ do { last_fn = (fn); if ((last_ret = (ret)) != 0) goto cs_failed; } while (0)
  */
 static int wl3501_config(struct pcmcia_device *link)
 {
-	tuple_t tuple;
-	cisparse_t parse;
 	struct net_device *dev = link->priv;
 	int i = 0, j, last_fn, last_ret;
-	unsigned char bf[64];
 	struct wl3501_card *this;
-
-	/* This reads the card's CONFIG tuple to find its config registers. */
-	tuple.Attributes	= 0;
-	tuple.DesiredTuple	= CISTPL_CONFIG;
-	CS_CHECK(GetFirstTuple, pcmcia_get_first_tuple(link, &tuple));
-	tuple.TupleData		= bf;
-	tuple.TupleDataMax	= sizeof(bf);
-	tuple.TupleOffset	= 0;
-	CS_CHECK(GetTupleData, pcmcia_get_tuple_data(link, &tuple));
-	CS_CHECK(ParseTuple, pcmcia_parse_tuple(link, &tuple, &parse));
-	link->conf.ConfigBase	= parse.config.base;
-	link->conf.Present	= parse.config.rmask[0];
 
 	/* Try allocating IO ports.  This tries a few fixed addresses.  If you
 	 * want, you can also read the card's config table to pick addresses --

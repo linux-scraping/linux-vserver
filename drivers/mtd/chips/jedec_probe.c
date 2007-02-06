@@ -8,7 +8,6 @@
    Occasionally maintained by Thayne Harbaugh tharbaugh at lnxi dot com
 */
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/types.h>
@@ -112,6 +111,7 @@
 #define MX29LV040C	0x004F
 #define MX29LV160T	0x22C4
 #define MX29LV160B	0x2249
+#define MX29F040	0x00A4
 #define MX29F016	0x00AD
 #define MX29F002T	0x00B0
 #define MX29F004T	0x0045
@@ -154,6 +154,7 @@
 #define SST39SF010A	0x00B5
 #define SST39SF020A	0x00B6
 #define SST49LF004B	0x0060
+#define SST49LF040B	0x0050
 #define SST49LF008A	0x005a
 #define SST49LF030A	0x001C
 #define SST49LF040A	0x0051
@@ -1173,6 +1174,19 @@ static const struct amd_flash_info jedec_table[] = {
 		}
 	}, {
 		.mfr_id		= MANUFACTURER_MACRONIX,
+		.dev_id		= MX29F040,
+		.name		= "Macronix MX29F040",
+		.uaddr		= {
+			[0] = MTD_UADDR_0x0555_0x02AA /* x8 */
+		},
+		.DevSize	= SIZE_512KiB,
+		.CmdSet		= P_ID_AMD_STD,
+		.NumEraseRegions= 1,
+		.regions	= {
+			ERASEINFO(0x10000,8),
+		}
+        }, {
+		.mfr_id		= MANUFACTURER_MACRONIX,
 		.dev_id		= MX29F016,
 		.name		= "Macronix MX29F016",
 		.uaddr		= {
@@ -1387,6 +1401,20 @@ static const struct amd_flash_info jedec_table[] = {
 			ERASEINFO(0x01000,64),
 		}
 	}, {
+		.mfr_id		= MANUFACTURER_SST,
+		.dev_id         = SST49LF040B,
+		.name           = "SST 49LF040B",
+		.uaddr          = {
+			[0] = MTD_UADDR_0x5555_0x2AAA /* x8 */
+		},
+		.DevSize        = SIZE_512KiB,
+		.CmdSet         = P_ID_AMD_STD,
+		.NumEraseRegions= 1,
+		.regions        = {
+			ERASEINFO(0x01000,128),
+		}
+	}, {
+
 		.mfr_id		= MANUFACTURER_SST,
 		.dev_id		= SST49LF004B,
 		.name		= "SST 49LF004B",
@@ -1861,7 +1889,7 @@ static int cfi_jedec_setup(struct cfi_private *p_cfi, int index)
 
 
 /*
- * There is a BIG problem properly ID'ing the JEDEC devic and guaranteeing
+ * There is a BIG problem properly ID'ing the JEDEC device and guaranteeing
  * the mapped address, unlock addresses, and proper chip ID.  This function
  * attempts to minimize errors.  It is doubtfull that this probe will ever
  * be perfect - consequently there should be some module parameters that

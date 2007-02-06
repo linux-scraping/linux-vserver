@@ -18,13 +18,17 @@
 #include <linux/pci_ids.h>
 #include <linux/ioport.h>
 #include <linux/module.h>
-#include <linux/config.h>
 #include <linux/errno.h>
 #include <linux/input.h>
 #include <linux/init.h>
 #include <linux/interrupt.h>
 #include <linux/hil.h>
+#include <linux/io.h>
 #include <linux/spinlock.h>
+#include <asm/irq.h>
+#ifdef CONFIG_HP300
+#include <asm/hwtest.h>
+#endif
 
 
 MODULE_AUTHOR("Philip Blundell, Matthew Wilcox, Helge Deller");
@@ -151,7 +155,7 @@ static inline void handle_data(unsigned char s, unsigned char c)
 /* 
  * Handle HIL interrupts.
  */
-static irqreturn_t hil_interrupt(int irq, void *handle, struct pt_regs *regs)
+static irqreturn_t hil_interrupt(int irq, void *handle)
 {
 	unsigned char s, c;
 	

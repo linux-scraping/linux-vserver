@@ -8,7 +8,6 @@
  *
  *  Todo: - add support for the OF persistent properties
  */
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/stddef.h>
@@ -29,6 +28,8 @@
 #include <asm/prom.h>
 #include <asm/machdep.h>
 #include <asm/nvram.h>
+
+#include "pmac.h"
 
 #define DEBUG
 
@@ -80,9 +81,6 @@ static int core99_bank = 0;
 static int nvram_partitions[3];
 // XXX Turn that into a sem
 static DEFINE_SPINLOCK(nv_lock);
-
-extern int pmac_newworld;
-extern int system_running;
 
 static int (*core99_write_bank)(int bank, u8* datas);
 static int (*core99_erase_bank)(int bank);
@@ -197,7 +195,7 @@ static void pmu_nvram_complete(struct adb_request *req)
 static unsigned char pmu_nvram_read_byte(int addr)
 {
 	struct adb_request req;
-	DECLARE_COMPLETION(req_complete); 
+	DECLARE_COMPLETION_ONSTACK(req_complete);
 	
 	req.arg = system_state == SYSTEM_RUNNING ? &req_complete : NULL;
 	if (pmu_request(&req, pmu_nvram_complete, 3, PMU_READ_NVRAM,
@@ -213,7 +211,7 @@ static unsigned char pmu_nvram_read_byte(int addr)
 static void pmu_nvram_write_byte(int addr, unsigned char val)
 {
 	struct adb_request req;
-	DECLARE_COMPLETION(req_complete); 
+	DECLARE_COMPLETION_ONSTACK(req_complete);
 	
 	req.arg = system_state == SYSTEM_RUNNING ? &req_complete : NULL;
 	if (pmu_request(&req, pmu_nvram_complete, 4, PMU_WRITE_NVRAM,

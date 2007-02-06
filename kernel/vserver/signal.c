@@ -3,9 +3,11 @@
  *
  *  Virtual Server: Signal Support
  *
- *  Copyright (C) 2003-2005  Herbert Pötzl
+ *  Copyright (C) 2003-2007  Herbert Pötzl
  *
  *  V0.01  broken out from vcontext V0.05
+ *  V0.02  changed vcmds to vxi arg
+ *  V0.03  adjusted siginfo for kill
  *
  */
 
@@ -22,7 +24,7 @@ int vx_info_kill(struct vx_info *vxi, int pid, int sig)
 {
 	int retval, count=0;
 	struct task_struct *p;
-	unsigned long priv = 0;
+	struct siginfo *sip = SEND_SIG_PRIV;
 
 	retval = -ESRCH;
 	vxdprintk(VXD_CBIT(misc, 4),
@@ -31,7 +33,6 @@ int vx_info_kill(struct vx_info *vxi, int pid, int sig)
 	read_lock(&tasklist_lock);
 	switch (pid) {
 	case  0:
-		priv = 1;
 	case -1:
 		for_each_process(p) {
 			int err = 0;
@@ -40,7 +41,7 @@ int vx_info_kill(struct vx_info *vxi, int pid, int sig)
 				(pid && vxi->vx_initpid == p->pid))
 				continue;
 
-			err = group_send_sig_info(sig, (void*)priv, p);
+			err = group_send_sig_info(sig, sip, p);
 			++count;
 			if (err != -EPERM)
 				retval = err;
@@ -50,43 +51,43 @@ int vx_info_kill(struct vx_info *vxi, int pid, int sig)
 	case 1:
 		if (vxi->vx_initpid) {
 			pid = vxi->vx_initpid;
-			priv = 1;
+			/* for now, only SIGINT to private init ... */
+			if (!vx_info_flags(vxi, VXF_STATE_ADMIN, 0) &&
+				/* ... as long as there are tasks left */
+				(atomic_read(&vxi->vx_tasks) > 1))
+				sig = SIGINT;
 		}
 		/* fallthrough */
 	default:
 		p = find_task_by_real_pid(pid);
 		if (p) {
 			if (vx_task_xid(p) == vxi->vx_id)
-				retval = group_send_sig_info(sig,
-					(void*)priv, p);
+				retval = group_send_sig_info(sig, sip, p);
 		}
 		break;
 	}
 	read_unlock(&tasklist_lock);
 	vxdprintk(VXD_CBIT(misc, 4),
-		"vx_info_kill(%p[#%d],%d,%d) = %d",
-		vxi, vxi->vx_id, pid, sig, retval);
+		"vx_info_kill(%p[#%d],%d,%d,%ld) = %d",
+		vxi, vxi->vx_id, pid, sig, (long)sip, retval);
 	return retval;
 }
 
-int vc_ctx_kill(uint32_t id, void __user *data)
+int vc_ctx_kill(struct vx_info *vxi, void __user *data)
 {
-	int retval;
 	struct vcmd_ctx_kill_v0 vc_data;
-	struct vx_info *vxi;
 
-	if (!vx_check(0, VX_ADMIN))
-		return -ENOSYS;
 	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
-	vxi = lookup_vx_info(id);
-	if (!vxi)
-		return -ESRCH;
+	/* special check to allow guest shutdown */
+	if (!vx_info_flags(vxi, VXF_STATE_ADMIN, 0) &&
+		/* forbid killall pid=0 when init is present */
+		(((vc_data.pid < 1) && vxi->vx_initpid) ||
+		(vc_data.pid > 1)))
+		return -EACCES;
 
-	retval = vx_info_kill(vxi, vc_data.pid, vc_data.sig);
-	put_vx_info(vxi);
-	return retval;
+	return vx_info_kill(vxi, vc_data.pid, vc_data.sig);
 }
 
 
@@ -117,20 +118,14 @@ out:
 
 
 
-int vc_wait_exit(uint32_t id, void __user *data)
+int vc_wait_exit(struct vx_info *vxi, void __user *data)
 {
-	struct vx_info *vxi;
 	struct vcmd_wait_exit_v0 vc_data;
 	int ret;
-
-	vxi = lookup_vx_info(id);
-	if (!vxi)
-		return -ESRCH;
 
 	ret = __wait_exit(vxi);
 	vc_data.reboot_cmd = vxi->reboot_cmd;
 	vc_data.exit_code = vxi->exit_code;
-	put_vx_info(vxi);
 
 	if (copy_to_user (data, &vc_data, sizeof(vc_data)))
 		ret = -EFAULT;

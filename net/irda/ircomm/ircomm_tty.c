@@ -30,7 +30,6 @@
  *     
  ********************************************************************/
 
-#include <linux/config.h>
 #include <linux/init.h>
 #include <linux/module.h>
 #include <linux/fs.h>
@@ -62,7 +61,7 @@ static void ircomm_tty_flush_buffer(struct tty_struct *tty);
 static void ircomm_tty_send_xchar(struct tty_struct *tty, char ch);
 static void ircomm_tty_wait_until_sent(struct tty_struct *tty, int timeout);
 static void ircomm_tty_hangup(struct tty_struct *tty);
-static void ircomm_tty_do_softint(void *private_);
+static void ircomm_tty_do_softint(struct work_struct *work);
 static void ircomm_tty_shutdown(struct ircomm_tty_cb *self);
 static void ircomm_tty_stop(struct tty_struct *tty);
 
@@ -80,7 +79,7 @@ static struct tty_driver *driver;
 
 hashbin_t *ircomm_tty = NULL;
 
-static struct tty_operations ops = {
+static const struct tty_operations ops = {
 	.open            = ircomm_tty_open,
 	.close           = ircomm_tty_close,
 	.write           = ircomm_tty_write,
@@ -124,7 +123,6 @@ static int __init ircomm_tty_init(void)
 	driver->owner		= THIS_MODULE;
 	driver->driver_name     = "ircomm";
 	driver->name            = "ircomm";
-	driver->devfs_name      = "ircomm";
 	driver->major           = IRCOMM_TTY_MAJOR;
 	driver->minor_start     = IRCOMM_TTY_MINOR;
 	driver->type            = TTY_DRIVER_TYPE_SERIAL;
@@ -381,18 +379,17 @@ static int ircomm_tty_open(struct tty_struct *tty, struct file *filp)
 	self = hashbin_lock_find(ircomm_tty, line, NULL);
 	if (!self) {
 		/* No, so make new instance */
-		self = kmalloc(sizeof(struct ircomm_tty_cb), GFP_KERNEL);
+		self = kzalloc(sizeof(struct ircomm_tty_cb), GFP_KERNEL);
 		if (self == NULL) {
 			IRDA_ERROR("%s(), kmalloc failed!\n", __FUNCTION__);
 			return -ENOMEM;
 		}
-		memset(self, 0, sizeof(struct ircomm_tty_cb));
 		
 		self->magic = IRCOMM_TTY_MAGIC;
 		self->flow = FLOW_STOP;
 
 		self->line = line;
-		INIT_WORK(&self->tqueue, ircomm_tty_do_softint, self);
+		INIT_WORK(&self->tqueue, ircomm_tty_do_softint);
 		self->max_header_size = IRCOMM_TTY_HDR_UNINITIALISED;
 		self->max_data_size = IRCOMM_TTY_DATA_UNINITIALISED;
 		self->close_delay = 5*HZ/10;
@@ -597,15 +594,16 @@ static void ircomm_tty_flush_buffer(struct tty_struct *tty)
 }
 
 /*
- * Function ircomm_tty_do_softint (private_)
+ * Function ircomm_tty_do_softint (work)
  *
  *    We use this routine to give the write wakeup to the user at at a
  *    safe time (as fast as possible after write have completed). This 
  *    can be compared to the Tx interrupt.
  */
-static void ircomm_tty_do_softint(void *private_)
+static void ircomm_tty_do_softint(struct work_struct *work)
 {
-	struct ircomm_tty_cb *self = (struct ircomm_tty_cb *) private_;
+	struct ircomm_tty_cb *self =
+		container_of(work, struct ircomm_tty_cb, tqueue);
 	struct tty_struct *tty;
 	unsigned long flags;
 	struct sk_buff *skb, *ctrl_skb;
@@ -761,8 +759,9 @@ static int ircomm_tty_write(struct tty_struct *tty,
 			}
 		} else {
 			/* Prepare a full sized frame */
-			skb = dev_alloc_skb(self->max_data_size+
-					    self->max_header_size);
+			skb = alloc_skb(self->max_data_size+
+					self->max_header_size,
+					GFP_ATOMIC);
 			if (!skb) {
 				spin_unlock_irqrestore(&self->spinlock, flags);
 				return -ENOBUFS;

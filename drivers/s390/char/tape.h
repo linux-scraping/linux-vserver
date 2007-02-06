@@ -16,7 +16,6 @@
 #include <asm/ccwdev.h>
 #include <asm/debug.h>
 #include <asm/idals.h>
-#include <linux/config.h>
 #include <linux/blkdev.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
@@ -180,6 +179,7 @@ struct tape_char_data {
 /* Block Frontend Data */
 struct tape_blk_data
 {
+	struct tape_device *	device;
 	/* Block device request queue. */
 	request_queue_t *	request_queue;
 	spinlock_t		request_queue_lock;
@@ -241,7 +241,7 @@ struct tape_device {
 #endif
 
 	/* Function to start or stop the next request later. */
-	struct work_struct		tape_dnr;
+	struct delayed_work		tape_dnr;
 };
 
 /* Externals from tape_core.c */

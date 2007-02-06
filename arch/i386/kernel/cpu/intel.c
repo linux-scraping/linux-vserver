@@ -1,4 +1,3 @@
-#include <linux/config.h>
 #include <linux/init.h>
 #include <linux/kernel.h>
 
@@ -108,7 +107,7 @@ static void __cpuinit init_intel(struct cpuinfo_x86 *c)
 	 * Note that the workaround only should be initialized once...
 	 */
 	c->f00f_bug = 0;
-	if ( c->x86 == 5 ) {
+	if (!paravirt_enabled() && c->x86 == 5) {
 		static int f00f_workaround_enabled = 0;
 
 		c->f00f_bug = 1;
@@ -122,6 +121,12 @@ static void __cpuinit init_intel(struct cpuinfo_x86 *c)
 
 	select_idle_routine(c);
 	l2 = init_intel_cacheinfo(c);
+	if (c->cpuid_level > 9 ) {
+		unsigned eax = cpuid_eax(10);
+		/* Check for version and the number of counters */
+		if ((eax & 0xff) && (((eax>>8) & 0xff) > 1))
+			set_bit(X86_FEATURE_ARCH_PERFMON, c->x86_capability);
+	}
 
 	/* SEP CPUID bug: Pentium Pro reports SEP but doesn't have it until model 3 mask 3 */
 	if ((c->x86<<8 | c->x86_model<<4 | c->x86_mask) < 0x633)
@@ -190,10 +195,18 @@ static void __cpuinit init_intel(struct cpuinfo_x86 *c)
 	if ((c->x86 == 0xf && c->x86_model >= 0x03) ||
 		(c->x86 == 0x6 && c->x86_model >= 0x0e))
 		set_bit(X86_FEATURE_CONSTANT_TSC, c->x86_capability);
+
+	if (cpu_has_ds) {
+		unsigned int l1;
+		rdmsr(MSR_IA32_MISC_ENABLE, l1, l2);
+		if (!(l1 & (1<<11)))
+			set_bit(X86_FEATURE_BTS, c->x86_capability);
+		if (!(l1 & (1<<12)))
+			set_bit(X86_FEATURE_PEBS, c->x86_capability);
+	}
 }
 
-
-static unsigned int intel_size_cache(struct cpuinfo_x86 * c, unsigned int size)
+static unsigned int __cpuinit intel_size_cache(struct cpuinfo_x86 * c, unsigned int size)
 {
 	/* Intel PIII Tualatin. This comes in two flavours.
 	 * One has 256kb of cache, the other 512. We have no way
@@ -258,7 +271,6 @@ static struct cpu_dev intel_cpu_dev __cpuinitdata = {
 		},
 	},
 	.c_init		= init_intel,
-	.c_identify	= generic_identify,
 	.c_size_cache	= intel_size_cache,
 };
 

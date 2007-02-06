@@ -16,7 +16,6 @@
  * Various hacks, Fred Barnes <frmb2@ukc.ac.uk>, 04/2000
  */
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/threads.h>
 #include <linux/parport.h>
@@ -572,7 +571,7 @@ static int parport_ieee1284_ack_data_avail (struct parport *port)
 #endif /* IEEE1284 support */
 
 /* Handle an interrupt. */
-void parport_ieee1284_interrupt (int which, void *handle, struct pt_regs *regs)
+void parport_ieee1284_interrupt (int which, void *handle)
 {
 	struct parport *port = handle;
 	parport_ieee1284_wakeup (port);

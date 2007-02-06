@@ -101,7 +101,7 @@ WriteHSCX(struct IsdnCardState *cs, int hscx, u_char offset, u_char value)
 #include "hscx_irq.c"
 
 static irqreturn_t
-teles3_interrupt(int intno, void *dev_id, struct pt_regs *regs)
+teles3_interrupt(int intno, void *dev_id)
 {
 #define MAXCOUNT 5
 	struct IsdnCardState *cs = dev_id;
@@ -369,6 +369,7 @@ setup_teles3(struct IsdnCard *card)
 			       cs->hw.teles3.hscx[1] + 96);
 			return (0);
 		}
+		cs->irq_flags |= IRQF_SHARED; /* cardbus can share */
 	} else {
 		if (cs->hw.teles3.cfg_reg) {
 			if (cs->typ == ISDN_CTYPE_COMPAQ_ISA) {

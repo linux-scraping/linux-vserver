@@ -57,13 +57,13 @@
 #include <linux/time.h>
 
 struct kstat {
-	unsigned long	ino;
+	u64		ino;
 	dev_t		dev;
 	umode_t		mode;
 	unsigned int	nlink;
 	uid_t		uid;
 	gid_t		gid;
-	xid_t		xid;
+	tag_t		tag;
 	dev_t		rdev;
 	loff_t		size;
 	struct timespec  atime;

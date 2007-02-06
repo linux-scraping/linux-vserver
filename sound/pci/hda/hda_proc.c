@@ -45,17 +45,16 @@ static const char *get_wid_type_name(unsigned int wid_value)
 	if (names[wid_value])
 		return names[wid_value];
 	else
-		return "UNKOWN Widget";
+		return "UNKNOWN Widget";
 }
 
 static void print_amp_caps(struct snd_info_buffer *buffer,
 			   struct hda_codec *codec, hda_nid_t nid, int dir)
 {
 	unsigned int caps;
-	if (dir == HDA_OUTPUT)
-		caps = snd_hda_param_read(codec, nid, AC_PAR_AMP_OUT_CAP);
-	else
-		caps = snd_hda_param_read(codec, nid, AC_PAR_AMP_IN_CAP);
+	caps = snd_hda_param_read(codec, nid,
+				  dir == HDA_OUTPUT ?
+				    AC_PAR_AMP_OUT_CAP : AC_PAR_AMP_IN_CAP);
 	if (caps == -1 || caps == 0) {
 		snd_iprintf(buffer, "N/A\n");
 		return;
@@ -74,10 +73,7 @@ static void print_amp_vals(struct snd_info_buffer *buffer,
 	unsigned int val;
 	int i;
 
-	if (dir == HDA_OUTPUT)
-		dir = AC_AMP_GET_OUTPUT;
-	else
-		dir = AC_AMP_GET_INPUT;
+	dir = dir == HDA_OUTPUT ? AC_AMP_GET_OUTPUT : AC_AMP_GET_INPUT;
 	for (i = 0; i < indices; i++) {
 		snd_iprintf(buffer, " [");
 		if (stereo) {
@@ -92,6 +88,48 @@ static void print_amp_vals(struct snd_info_buffer *buffer,
 	snd_iprintf(buffer, "\n");
 }
 
+static void print_pcm_rates(struct snd_info_buffer *buffer, unsigned int pcm)
+{
+	static unsigned int rates[] = {
+		8000, 11025, 16000, 22050, 32000, 44100, 48000, 88200,
+		96000, 176400, 192000, 384000
+	};
+	int i;
+
+	pcm &= AC_SUPPCM_RATES;
+	snd_iprintf(buffer, "    rates [0x%x]:", pcm);
+	for (i = 0; i < ARRAY_SIZE(rates); i++) 
+		if (pcm & (1 << i))
+			snd_iprintf(buffer, " %d", rates[i]);
+	snd_iprintf(buffer, "\n");
+}
+
+static void print_pcm_bits(struct snd_info_buffer *buffer, unsigned int pcm)
+{
+	static unsigned int bits[] = { 8, 16, 20, 24, 32 };
+	int i;
+
+	pcm = (pcm >> 16) & 0xff;
+	snd_iprintf(buffer, "    bits [0x%x]:", pcm);
+	for (i = 0; i < ARRAY_SIZE(bits); i++)
+		if (pcm & (1 << i))
+			snd_iprintf(buffer, " %d", bits[i]);
+	snd_iprintf(buffer, "\n");
+}
+
+static void print_pcm_formats(struct snd_info_buffer *buffer,
+			      unsigned int streams)
+{
+	snd_iprintf(buffer, "    formats [0x%x]:", streams & 0xf);
+	if (streams & AC_SUPFMT_PCM)
+		snd_iprintf(buffer, " PCM");
+	if (streams & AC_SUPFMT_FLOAT32)
+		snd_iprintf(buffer, " FLOAT");
+	if (streams & AC_SUPFMT_AC3)
+		snd_iprintf(buffer, " AC3");
+	snd_iprintf(buffer, "\n");
+}
+
 static void print_pcm_caps(struct snd_info_buffer *buffer,
 			   struct hda_codec *codec, hda_nid_t nid)
 {
@@ -101,8 +139,9 @@ static void print_pcm_caps(struct snd_info_buffer *buffer,
 		snd_iprintf(buffer, "N/A\n");
 		return;
 	}
-	snd_iprintf(buffer, "rates 0x%03x, bits 0x%02x, types 0x%x\n",
-		    pcm & AC_SUPPCM_RATES, (pcm >> 16) & 0xff, stream & 0xf);
+	print_pcm_rates(buffer, pcm);
+	print_pcm_bits(buffer, pcm);
+	print_pcm_formats(buffer, stream);
 }
 
 static const char *get_jack_location(u32 cfg)
@@ -182,6 +221,10 @@ static void print_pin_caps(struct snd_info_buffer *buffer,
 		snd_iprintf(buffer, " OUT");
 	if (caps & AC_PINCAP_HP_DRV)
 		snd_iprintf(buffer, " HP");
+	if (caps & AC_PINCAP_EAPD)
+		snd_iprintf(buffer, " EAPD");
+	if (caps & AC_PINCAP_PRES_DETECT)
+		snd_iprintf(buffer, " Detect");
 	snd_iprintf(buffer, "\n");
 	caps = snd_hda_codec_read(codec, nid, 0, AC_VERB_GET_CONFIG_DEFAULT, 0);
 	snd_iprintf(buffer, "  Pin Default 0x%08x: [%s] %s at %s %s\n", caps,
@@ -210,7 +253,7 @@ static void print_codec_info(struct snd_info_entry *entry, struct snd_info_buffe
 	snd_iprintf(buffer, "Revision Id: 0x%x\n", codec->revision_id);
 	if (! codec->afg)
 		return;
-	snd_iprintf(buffer, "Default PCM: ");
+	snd_iprintf(buffer, "Default PCM:\n");
 	print_pcm_caps(buffer, codec, codec->afg);
 	snd_iprintf(buffer, "Default Amp-In caps: ");
 	print_amp_caps(buffer, codec, codec->afg, HDA_INPUT);
@@ -278,7 +321,7 @@ static void print_codec_info(struct snd_info_entry *entry, struct snd_info_buffe
 
 		if ((wid_type == AC_WID_AUD_OUT || wid_type == AC_WID_AUD_IN) &&
 		    (wid_caps & AC_WCAP_FORMAT_OVRD)) {
-			snd_iprintf(buffer, "  PCM: ");
+			snd_iprintf(buffer, "  PCM:\n");
 			print_pcm_caps(buffer, codec, nid);
 		}
 
@@ -318,7 +361,7 @@ int snd_hda_codec_proc_new(struct hda_codec *codec)
 	if (err < 0)
 		return err;
 
-	snd_info_set_text_ops(entry, codec, 32 * 1024, print_codec_info);
+	snd_info_set_text_ops(entry, codec, print_codec_info);
 	return 0;
 }
 

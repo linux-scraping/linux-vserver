@@ -28,20 +28,6 @@ MODULE_AUTHOR("Vojtech Pavlik <vojtech@suse.cz>");
 MODULE_DESCRIPTION("Input core");
 MODULE_LICENSE("GPL");
 
-EXPORT_SYMBOL(input_allocate_device);
-EXPORT_SYMBOL(input_register_device);
-EXPORT_SYMBOL(input_unregister_device);
-EXPORT_SYMBOL(input_register_handler);
-EXPORT_SYMBOL(input_unregister_handler);
-EXPORT_SYMBOL(input_grab_device);
-EXPORT_SYMBOL(input_release_device);
-EXPORT_SYMBOL(input_open_device);
-EXPORT_SYMBOL(input_close_device);
-EXPORT_SYMBOL(input_accept_process);
-EXPORT_SYMBOL(input_flush_device);
-EXPORT_SYMBOL(input_event);
-EXPORT_SYMBOL_GPL(input_class);
-
 #define INPUT_DEVICES	256
 
 static LIST_HEAD(input_dev_list);
@@ -49,6 +35,16 @@ static LIST_HEAD(input_handler_list);
 
 static struct input_handler *input_table[8];
 
+/**
+ * input_event() - report new input event
+ * @dev: device that generated the event
+ * @type: type of the event
+ * @code: event code
+ * @value: value of the event
+ *
+ * This function should be used by drivers implementing various input devices
+ * See also input_inject_event()
+ */
 void input_event(struct input_dev *dev, unsigned int type, unsigned int code, int value)
 {
 	struct input_handle *handle;
@@ -63,11 +59,13 @@ void input_event(struct input_dev *dev, unsigned int type, unsigned int code, in
 		case EV_SYN:
 			switch (code) {
 				case SYN_CONFIG:
-					if (dev->event) dev->event(dev, type, code, value);
+					if (dev->event)
+						dev->event(dev, type, code, value);
 					break;
 
 				case SYN_REPORT:
-					if (dev->sync) return;
+					if (dev->sync)
+						return;
 					dev->sync = 1;
 					break;
 			}
@@ -136,7 +134,8 @@ void input_event(struct input_dev *dev, unsigned int type, unsigned int code, in
 			if (code > MSC_MAX || !test_bit(code, dev->mscbit))
 				return;
 
-			if (dev->event) dev->event(dev, type, code, value);
+			if (dev->event)
+				dev->event(dev, type, code, value);
 
 			break;
 
@@ -146,7 +145,9 @@ void input_event(struct input_dev *dev, unsigned int type, unsigned int code, in
 				return;
 
 			change_bit(code, dev->led);
-			if (dev->event) dev->event(dev, type, code, value);
+
+			if (dev->event)
+				dev->event(dev, type, code, value);
 
 			break;
 
@@ -158,21 +159,29 @@ void input_event(struct input_dev *dev, unsigned int type, unsigned int code, in
 			if (!!test_bit(code, dev->snd) != !!value)
 				change_bit(code, dev->snd);
 
-			if (dev->event) dev->event(dev, type, code, value);
+			if (dev->event)
+				dev->event(dev, type, code, value);
 
 			break;
 
 		case EV_REP:
 
-			if (code > REP_MAX || value < 0 || dev->rep[code] == value) return;
+			if (code > REP_MAX || value < 0 || dev->rep[code] == value)
+				return;
 
 			dev->rep[code] = value;
-			if (dev->event) dev->event(dev, type, code, value);
+			if (dev->event)
+				dev->event(dev, type, code, value);
 
 			break;
 
 		case EV_FF:
-			if (dev->event) dev->event(dev, type, code, value);
+
+			if (value < 0)
+				return;
+
+			if (dev->event)
+				dev->event(dev, type, code, value);
 			break;
 	}
 
@@ -186,6 +195,24 @@ void input_event(struct input_dev *dev, unsigned int type, unsigned int code, in
 			if (handle->open)
 				handle->handler->event(handle, type, code, value);
 }
+EXPORT_SYMBOL(input_event);
+
+/**
+ * input_inject_event() - send input event from input handler
+ * @handle: input handle to send event through
+ * @type: type of the event
+ * @code: event code
+ * @value: value of the event
+ *
+ * Similar to input_event() but will ignore event if device is "grabbed" and handle
+ * injecting event is not the one that owns the device.
+ */
+void input_inject_event(struct input_handle *handle, unsigned int type, unsigned int code, int value)
+{
+	if (!handle->dev->grab || handle->dev->grab == handle)
+		input_event(handle->dev, type, code, value);
+}
+EXPORT_SYMBOL(input_inject_event);
 
 static void input_repeat_key(unsigned long data)
 {
@@ -201,14 +228,6 @@ static void input_repeat_key(unsigned long data)
 		mod_timer(&dev->timer, jiffies + msecs_to_jiffies(dev->rep[REP_PERIOD]));
 }
 
-int input_accept_process(struct input_handle *handle, struct file *file)
-{
-	if (handle->dev->accept)
-		return handle->dev->accept(handle->dev, file);
-
-	return 0;
-}
-
 int input_grab_device(struct input_handle *handle)
 {
 	if (handle->dev->grab)
@@ -217,12 +236,21 @@ int input_grab_device(struct input_handle *handle)
 	handle->dev->grab = handle;
 	return 0;
 }
+EXPORT_SYMBOL(input_grab_device);
 
 void input_release_device(struct input_handle *handle)
 {
-	if (handle->dev->grab == handle)
-		handle->dev->grab = NULL;
+	struct input_dev *dev = handle->dev;
+
+	if (dev->grab == handle) {
+		dev->grab = NULL;
+
+		list_for_each_entry(handle, &dev->h_list, d_node)
+			if (handle->handler->start)
+				handle->handler->start(handle);
+	}
 }
+EXPORT_SYMBOL(input_release_device);
 
 int input_open_device(struct input_handle *handle)
 {
@@ -245,6 +273,7 @@ int input_open_device(struct input_handle *handle)
 
 	return err;
 }
+EXPORT_SYMBOL(input_open_device);
 
 int input_flush_device(struct input_handle* handle, struct file* file)
 {
@@ -253,6 +282,7 @@ int input_flush_device(struct input_handle* handle, struct file* file)
 
 	return 0;
 }
+EXPORT_SYMBOL(input_flush_device);
 
 void input_close_device(struct input_handle *handle)
 {
@@ -268,6 +298,7 @@ void input_close_device(struct input_handle *handle)
 
 	mutex_unlock(&dev->mutex);
 }
+EXPORT_SYMBOL(input_close_device);
 
 static void input_link_handle(struct input_handle *handle)
 {
@@ -282,7 +313,8 @@ static void input_link_handle(struct input_handle *handle)
 		if (i != NBITS(max)) \
 			continue;
 
-static struct input_device_id *input_match_device(struct input_device_id *id, struct input_dev *dev)
+static const struct input_device_id *input_match_device(const struct input_device_id *id,
+							struct input_dev *dev)
 {
 	int i;
 
@@ -335,9 +367,11 @@ static inline void input_wakeup_procfs_readers(void)
 static unsigned int input_proc_devices_poll(struct file *file, poll_table *wait)
 {
 	int state = input_devices_state;
+
 	poll_wait(file, &input_devices_poll_wait, wait);
 	if (state != input_devices_state)
 		return POLLIN | POLLRDNORM;
+
 	return 0;
 }
 
@@ -733,7 +767,9 @@ static void input_dev_release(struct class_device *class_dev)
 {
 	struct input_dev *dev = to_input_dev(class_dev);
 
+	input_ff_destroy(dev);
 	kfree(dev);
+
 	module_put(THIS_MODULE);
 }
 
@@ -862,40 +898,72 @@ struct class input_class = {
 	.release		= input_dev_release,
 	.uevent			= input_dev_uevent,
 };
+EXPORT_SYMBOL_GPL(input_class);
 
+/**
+ * input_allocate_device - allocate memory for new input device
+ *
+ * Returns prepared struct input_dev or NULL.
+ *
+ * NOTE: Use input_free_device() to free devices that have not been
+ * registered; input_unregister_device() should be used for already
+ * registered devices.
+ */
 struct input_dev *input_allocate_device(void)
 {
 	struct input_dev *dev;
 
 	dev = kzalloc(sizeof(struct input_dev), GFP_KERNEL);
 	if (dev) {
-		dev->dynalloc = 1;
 		dev->cdev.class = &input_class;
 		class_device_initialize(&dev->cdev);
+		mutex_init(&dev->mutex);
 		INIT_LIST_HEAD(&dev->h_list);
 		INIT_LIST_HEAD(&dev->node);
+
+		__module_get(THIS_MODULE);
 	}
 
 	return dev;
 }
+EXPORT_SYMBOL(input_allocate_device);
+
+/**
+ * input_free_device - free memory occupied by input_dev structure
+ * @dev: input device to free
+ *
+ * This function should only be used if input_register_device()
+ * was not called yet or if it failed. Once device was registered
+ * use input_unregister_device() and memory will be freed once last
+ * refrence to the device is dropped.
+ *
+ * Device should be allocated by input_allocate_device().
+ *
+ * NOTE: If there are references to the input device then memory
+ * will not be freed until last reference is dropped.
+ */
+void input_free_device(struct input_dev *dev)
+{
+	if (dev) {
+
+		mutex_lock(&dev->mutex);
+		dev->name = dev->phys = dev->uniq = NULL;
+		mutex_unlock(&dev->mutex);
+
+		input_put_device(dev);
+	}
+}
+EXPORT_SYMBOL(input_free_device);
 
 int input_register_device(struct input_dev *dev)
 {
 	static atomic_t input_no = ATOMIC_INIT(0);
 	struct input_handle *handle;
 	struct input_handler *handler;
-	struct input_device_id *id;
+	const struct input_device_id *id;
 	const char *path;
 	int error;
 
-	if (!dev->dynalloc) {
-		printk(KERN_WARNING "input: device %s is statically allocated, will not register\n"
-			"Please convert to input_allocate_device() or contact dtor_core@ameritech.net\n",
-			dev->name ? dev->name : "<Unknown>");
-		return -EINVAL;
-	}
-
-	mutex_init(&dev->mutex);
 	set_bit(EV_SYN, dev->evbit);
 
 	/*
@@ -911,10 +979,8 @@ int input_register_device(struct input_dev *dev)
 		dev->rep[REP_PERIOD] = 33;
 	}
 
-	INIT_LIST_HEAD(&dev->h_list);
 	list_add_tail(&dev->node, &input_dev_list);
 
-	dev->cdev.class = &input_class;
 	snprintf(dev->cdev.class_id, sizeof(dev->cdev.class_id),
 		 "input%ld", (unsigned long) atomic_inc_return(&input_no) - 1);
 
@@ -934,8 +1000,6 @@ int input_register_device(struct input_dev *dev)
 	if (error)
 		goto fail3;
 
-	__module_get(THIS_MODULE);
-
 	path = kobject_get_path(&dev->cdev.kobj, GFP_KERNEL);
 	printk(KERN_INFO "input: %s as %s\n",
 		dev->name ? dev->name : "Unspecified device", path ? path : "N/A");
@@ -944,8 +1008,11 @@ int input_register_device(struct input_dev *dev)
 	list_for_each_entry(handler, &input_handler_list, node)
 		if (!handler->blacklist || !input_match_device(handler->blacklist, dev))
 			if ((id = input_match_device(handler->id_table, dev)))
-				if ((handle = handler->connect(handler, dev, id)))
+				if ((handle = handler->connect(handler, dev, id))) {
 					input_link_handle(handle);
+					if (handler->start)
+						handler->start(handle);
+				}
 
 	input_wakeup_procfs_readers();
 
@@ -956,12 +1023,17 @@ int input_register_device(struct input_dev *dev)
  fail1:	class_device_del(&dev->cdev);
 	return error;
 }
+EXPORT_SYMBOL(input_register_device);
 
 void input_unregister_device(struct input_dev *dev)
 {
-	struct list_head * node, * next;
+	struct list_head *node, *next;
+	int code;
 
-	if (!dev) return;
+	for (code = 0; code <= KEY_MAX; code++)
+		if (test_bit(code, dev->key))
+			input_report_key(dev, code, 0);
+	input_sync(dev);
 
 	del_timer_sync(&dev->timer);
 
@@ -977,38 +1049,51 @@ void input_unregister_device(struct input_dev *dev)
 	sysfs_remove_group(&dev->cdev.kobj, &input_dev_caps_attr_group);
 	sysfs_remove_group(&dev->cdev.kobj, &input_dev_id_attr_group);
 	sysfs_remove_group(&dev->cdev.kobj, &input_dev_attr_group);
+
+	mutex_lock(&dev->mutex);
+	dev->name = dev->phys = dev->uniq = NULL;
+	mutex_unlock(&dev->mutex);
+
 	class_device_unregister(&dev->cdev);
 
 	input_wakeup_procfs_readers();
 }
+EXPORT_SYMBOL(input_unregister_device);
 
-void input_register_handler(struct input_handler *handler)
+int input_register_handler(struct input_handler *handler)
 {
 	struct input_dev *dev;
 	struct input_handle *handle;
-	struct input_device_id *id;
-
-	if (!handler) return;
+	const struct input_device_id *id;
 
 	INIT_LIST_HEAD(&handler->h_list);
 
-	if (handler->fops != NULL)
+	if (handler->fops != NULL) {
+		if (input_table[handler->minor >> 5])
+			return -EBUSY;
+
 		input_table[handler->minor >> 5] = handler;
+	}
 
 	list_add_tail(&handler->node, &input_handler_list);
 
 	list_for_each_entry(dev, &input_dev_list, node)
 		if (!handler->blacklist || !input_match_device(handler->blacklist, dev))
 			if ((id = input_match_device(handler->id_table, dev)))
-				if ((handle = handler->connect(handler, dev, id)))
+				if ((handle = handler->connect(handler, dev, id))) {
 					input_link_handle(handle);
+					if (handler->start)
+						handler->start(handle);
+				}
 
 	input_wakeup_procfs_readers();
+	return 0;
 }
+EXPORT_SYMBOL(input_register_handler);
 
 void input_unregister_handler(struct input_handler *handler)
 {
-	struct list_head * node, * next;
+	struct list_head *node, *next;
 
 	list_for_each_safe(node, next, &handler->h_list) {
 		struct input_handle * handle = to_handle_h(node);
@@ -1024,6 +1109,7 @@ void input_unregister_handler(struct input_handler *handler)
 
 	input_wakeup_procfs_readers();
 }
+EXPORT_SYMBOL(input_unregister_handler);
 
 static int input_open_file(struct inode *inode, struct file *file)
 {

@@ -34,8 +34,8 @@ struct rtc_time {
  * alarm API.
  */
 struct rtc_wkalrm {
-	unsigned char enabled;	/* 0 = alarm disable, 1 = alarm disabled */
-	unsigned char pending;  /* 0 = alarm pending, 1 = alarm not pending */
+	unsigned char enabled;	/* 0 = alarm disabled, 1 = alarm enabled */
+	unsigned char pending;  /* 0 = alarm not pending, 1 = alarm pending */
 	struct rtc_time time;	/* time the alarm is set to */
 };
 
@@ -102,9 +102,11 @@ struct rtc_pll_info {
 #include <linux/interrupt.h>
 
 extern int rtc_month_days(unsigned int month, unsigned int year);
+extern int rtc_year_days(unsigned int day, unsigned int month, unsigned int year);
 extern int rtc_valid_tm(struct rtc_time *tm);
 extern int rtc_tm_to_time(struct rtc_time *tm, unsigned long *time);
 extern void rtc_time_to_tm(unsigned long time, struct rtc_time *tm);
+extern void rtc_merge_alarm(struct rtc_time *now, struct rtc_time *alarm);
 
 #include <linux/device.h>
 #include <linux/seq_file.h>
@@ -140,7 +142,7 @@ struct rtc_device
 	int id;
 	char name[RTC_DEVICE_NAME_SIZE];
 
-	struct rtc_class_ops *ops;
+	const struct rtc_class_ops *ops;
 	struct mutex ops_lock;
 
 	struct class_device *rtc_dev;
@@ -155,12 +157,23 @@ struct rtc_device
 	struct rtc_task *irq_task;
 	spinlock_t irq_task_lock;
 	int irq_freq;
+	int max_user_freq;
+#ifdef CONFIG_RTC_INTF_DEV_UIE_EMUL
+	struct work_struct uie_task;
+	struct timer_list uie_timer;
+	/* Those fields are protected by rtc->irq_lock */
+	unsigned int oldsecs;
+	unsigned int irq_active:1;
+	unsigned int stop_uie_polling:1;
+	unsigned int uie_task_active:1;
+	unsigned int uie_timer_active:1;
+#endif
 };
 #define to_rtc_device(d) container_of(d, struct rtc_device, class_dev)
 
 extern struct rtc_device *rtc_device_register(const char *name,
 					struct device *dev,
-					struct rtc_class_ops *ops,
+					const struct rtc_class_ops *ops,
 					struct module *owner);
 extern void rtc_device_unregister(struct rtc_device *rdev);
 extern int rtc_interface_register(struct class_interface *intf);
@@ -196,7 +209,7 @@ int rtc_register(rtc_task_t *task);
 int rtc_unregister(rtc_task_t *task);
 int rtc_control(rtc_task_t *t, unsigned int cmd, unsigned long arg);
 void rtc_get_rtc_time(struct rtc_time *rtc_tm);
-irqreturn_t rtc_interrupt(int irq, void *dev_id, struct pt_regs *regs);
+irqreturn_t rtc_interrupt(int irq, void *dev_id);
 
 #endif /* __KERNEL__ */
 

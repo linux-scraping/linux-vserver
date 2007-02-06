@@ -8,7 +8,6 @@
  *  2 of the License, or (at your option) any later version.
  */
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/errno.h>
 #include <linux/sched.h>
@@ -37,6 +36,8 @@
 #include <asm/firmware.h>
 #include <asm/vdso.h>
 #include <asm/vdso_datapage.h>
+
+#include "setup.h"
 
 #undef DEBUG
 
@@ -224,6 +225,7 @@ int arch_setup_additional_pages(struct linux_binprm *bprm,
 	struct vm_area_struct *vma;
 	unsigned long vdso_pages;
 	unsigned long vdso_base;
+	int rc;
 
 #ifdef CONFIG_PPC64
 	if (test_thread_flag(TIF_32BIT)) {
@@ -238,20 +240,13 @@ int arch_setup_additional_pages(struct linux_binprm *bprm,
 	vdso_base = VDSO32_MBASE;
 #endif
 
-	current->thread.vdso_base = 0;
+	current->mm->context.vdso_base = 0;
 
 	/* vDSO has a problem and was disabled, just don't "enable" it for the
 	 * process
 	 */
 	if (vdso_pages == 0)
 		return 0;
-
-	vma = kmem_cache_alloc(vm_area_cachep, SLAB_KERNEL);
-	if (vma == NULL)
-		return -ENOMEM;
-
-	memset(vma, 0, sizeof(*vma));
-
 	/* Add a page to the vdso size for the data page */
 	vdso_pages ++;
 
@@ -260,17 +255,23 @@ int arch_setup_additional_pages(struct linux_binprm *bprm,
 	 * at vdso_base which is the "natural" base for it, but we might fail
 	 * and end up putting it elsewhere.
 	 */
+	down_write(&mm->mmap_sem);
 	vdso_base = get_unmapped_area(NULL, vdso_base,
 				      vdso_pages << PAGE_SHIFT, 0, 0);
-	if (vdso_base & ~PAGE_MASK) {
-		kmem_cache_free(vm_area_cachep, vma);
-		return (int)vdso_base;
+	if (IS_ERR_VALUE(vdso_base)) {
+		rc = vdso_base;
+		goto fail_mmapsem;
 	}
 
-	current->thread.vdso_base = vdso_base;
 
+	/* Allocate a VMA structure and fill it up */
+	vma = kmem_cache_zalloc(vm_area_cachep, GFP_KERNEL);
+	if (vma == NULL) {
+		rc = -ENOMEM;
+		goto fail_mmapsem;
+	}
 	vma->vm_mm = mm;
-	vma->vm_start = current->thread.vdso_base;
+	vma->vm_start = vdso_base;
 	vma->vm_end = vma->vm_start + (vdso_pages << PAGE_SHIFT);
 
 	/*
@@ -283,22 +284,44 @@ int arch_setup_additional_pages(struct linux_binprm *bprm,
 	 * It's fine to use that for setting breakpoints in the vDSO code
 	 * pages though
 	 */
-	vma->vm_flags = VM_READ | VM_EXEC | VM_MAYREAD | VM_MAYWRITE | VM_MAYEXEC;
+	vma->vm_flags = VM_READ|VM_EXEC|VM_MAYREAD|VM_MAYWRITE|VM_MAYEXEC;
+	/*
+	 * Make sure the vDSO gets into every core dump.
+	 * Dumping its contents makes post-mortem fully interpretable later
+	 * without matching up the same kernel and hardware config to see
+	 * what PC values meant.
+	 */
+	vma->vm_flags |= VM_ALWAYSDUMP;
 	vma->vm_flags |= mm->def_flags;
 	vma->vm_page_prot = protection_map[vma->vm_flags & 0x7];
 	vma->vm_ops = &vdso_vmops;
 
-	down_write(&mm->mmap_sem);
-	if (insert_vm_struct(mm, vma)) {
-		up_write(&mm->mmap_sem);
-		kmem_cache_free(vm_area_cachep, vma);
-		return -ENOMEM;
-	}
+	/* Insert new VMA */
+	rc = insert_vm_struct(mm, vma);
+	if (rc)
+		goto fail_vma;
+
+	/* Put vDSO base into mm struct and account for memory usage */
+	current->mm->context.vdso_base = vdso_base;
 	vx_vmpages_add(mm, (vma->vm_end - vma->vm_start) >> PAGE_SHIFT);
 	up_write(&mm->mmap_sem);
-
 	return 0;
+
+ fail_vma:
+	kmem_cache_free(vm_area_cachep, vma);
+ fail_mmapsem:
+	up_write(&mm->mmap_sem);
+	return rc;
 }
+
+const char *arch_vma_name(struct vm_area_struct *vma)
+{
+	if (vma->vm_mm && vma->vm_start == vma->vm_mm->context.vdso_base)
+		return "[vdso]";
+	return NULL;
+}
+
+
 
 static void * __init find_section32(Elf32_Ehdr *ehdr, const char *secname,
 				  unsigned long *size)
@@ -573,6 +596,43 @@ static __init int vdso_fixup_datapage(struct lib32_elfinfo *v32,
 	return 0;
 }
 
+
+static __init int vdso_fixup_features(struct lib32_elfinfo *v32,
+				      struct lib64_elfinfo *v64)
+{
+	void *start32;
+	unsigned long size32;
+
+#ifdef CONFIG_PPC64
+	void *start64;
+	unsigned long size64;
+
+	start64 = find_section64(v64->hdr, "__ftr_fixup", &size64);
+	if (start64)
+		do_feature_fixups(cur_cpu_spec->cpu_features,
+				  start64, start64 + size64);
+
+	start64 = find_section64(v64->hdr, "__fw_ftr_fixup", &size64);
+	if (start64)
+		do_feature_fixups(powerpc_firmware_features,
+				  start64, start64 + size64);
+#endif /* CONFIG_PPC64 */
+
+	start32 = find_section32(v32->hdr, "__ftr_fixup", &size32);
+	if (start32)
+		do_feature_fixups(cur_cpu_spec->cpu_features,
+				  start32, start32 + size32);
+
+#ifdef CONFIG_PPC64
+	start32 = find_section32(v32->hdr, "__fw_ftr_fixup", &size32);
+	if (start32)
+		do_feature_fixups(powerpc_firmware_features,
+				  start32, start32 + size32);
+#endif /* CONFIG_PPC64 */
+
+	return 0;
+}
+
 static __init int vdso_fixup_alt_funcs(struct lib32_elfinfo *v32,
 				       struct lib64_elfinfo *v64)
 {
@@ -619,6 +679,9 @@ static __init int vdso_setup(void)
 		return -1;
 
 	if (vdso_fixup_datapage(&v32, &v64))
+		return -1;
+
+	if (vdso_fixup_features(&v32, &v64))
 		return -1;
 
 	if (vdso_fixup_alt_funcs(&v32, &v64))
@@ -701,6 +764,7 @@ void __init vdso_init(void)
 	 * Setup the syscall map in the vDOS
 	 */
 	vdso_setup_syscall_map();
+
 	/*
 	 * Initialize the vDSO images in memory, that is do necessary
 	 * fixups of vDSO symbols, locate trampolines, etc...

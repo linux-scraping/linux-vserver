@@ -13,7 +13,6 @@
  * Free Software Foundation;  either version 2 of the  License, or (at your
  * option) any later version.
 */
-#include <linux/config.h>
 #include <linux/init.h>
 #include <linux/sched.h>
 #include <linux/signal.h>
@@ -97,7 +96,7 @@ UIC_HANDLERS(1);
 UIC_HANDLERS(2);
 UIC_HANDLERS(3);
 
-static int ppc4xx_pic_get_irq(struct pt_regs *regs)
+static int ppc4xx_pic_get_irq(void)
 {
 	u32 uic0 = mfdcr(DCRN_UIC_MSR(UIC0));
 	if (uic0 & UIC0_UIC1NC)
@@ -126,7 +125,7 @@ UIC_HANDLERS(0);
 UIC_HANDLERS(1);
 UIC_HANDLERS(2);
 
-static int ppc4xx_pic_get_irq(struct pt_regs *regs)
+static int ppc4xx_pic_get_irq(void)
 {
 	u32 uicb = mfdcr(DCRN_UIC_MSR(UICB));
 	if (uicb & UICB_UIC0NC)
@@ -159,7 +158,7 @@ static void __init ppc4xx_pic_impl_init(void)
 UIC_HANDLERS(0);
 UIC_HANDLERS(1);
 
-static int ppc4xx_pic_get_irq(struct pt_regs *regs)
+static int ppc4xx_pic_get_irq(void)
 {
 	u32 uic0 = mfdcr(DCRN_UIC_MSR(UIC0));
 	if (uic0 & UIC0_UIC1NC)
@@ -180,7 +179,7 @@ static void __init ppc4xx_pic_impl_init(void)
 #define ACK_UIC0_PARENT
 UIC_HANDLERS(0);
 
-static int ppc4xx_pic_get_irq(struct pt_regs *regs)
+static int ppc4xx_pic_get_irq(void)
 {
 	u32 uic0 = mfdcr(DCRN_UIC_MSR(UIC0));
 	return uic0 ? 32 - ffs(uic0) : -1;
@@ -276,7 +275,7 @@ void __init ppc4xx_pic_init(void)
 
 	/* Attach low-level handlers */
 	for (i = 0; i < (NR_UICS << 5); ++i) {
-		irq_desc[i].handler = &__uic[i >> 5].decl;
+		irq_desc[i].chip = &__uic[i >> 5].decl;
 		if (is_level_sensitive(i))
 			irq_desc[i].status |= IRQ_LEVEL;
 	}

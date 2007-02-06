@@ -1,11 +1,12 @@
 /* RadioTrack II driver for Linux radio support (C) 1998 Ben Pfaff
- * 
+ *
  * Based on RadioTrack I/RadioReveal (C) 1997 M. Kirkwood
  * Converted to new API by Alan Cox <Alan.Cox@linux.org>
  * Various bugfixes and enhancements by Russell Kroll <rkroll@exploits.org>
  *
  * TODO: Allow for more than one of these foolish entities :-)
  *
+ * Converted to V4L2 API by Mauro Carvalho Chehab <mchehab@infradead.org>
  */
 
 #include <linux/module.h>	/* Modules 			*/
@@ -14,15 +15,37 @@
 #include <linux/delay.h>	/* udelay			*/
 #include <asm/io.h>		/* outb, outb_p			*/
 #include <asm/uaccess.h>	/* copy to/from user		*/
-#include <linux/videodev.h>	/* kernel radio structs		*/
-#include <linux/config.h>	/* CONFIG_RADIO_RTRACK2_PORT 	*/
+#include <linux/videodev2.h>	/* kernel radio structs		*/
+#include <media/v4l2-common.h>
 #include <linux/spinlock.h>
+
+#include <linux/version.h>      /* for KERNEL_VERSION MACRO     */
+#define RADIO_VERSION KERNEL_VERSION(0,0,2)
+
+static struct v4l2_queryctrl radio_qctrl[] = {
+	{
+		.id            = V4L2_CID_AUDIO_MUTE,
+		.name          = "Mute",
+		.minimum       = 0,
+		.maximum       = 1,
+		.default_value = 1,
+		.type          = V4L2_CTRL_TYPE_BOOLEAN,
+	},{
+		.id            = V4L2_CID_AUDIO_VOLUME,
+		.name          = "Volume",
+		.minimum       = 0,
+		.maximum       = 65535,
+		.step          = 65535,
+		.default_value = 0xff,
+		.type          = V4L2_CTRL_TYPE_INTEGER,
+	}
+};
 
 #ifndef CONFIG_RADIO_RTRACK2_PORT
 #define CONFIG_RADIO_RTRACK2_PORT -1
 #endif
 
-static int io = CONFIG_RADIO_RTRACK2_PORT; 
+static int io = CONFIG_RADIO_RTRACK2_PORT;
 static int radio_nr = -1;
 static spinlock_t lock;
 
@@ -38,7 +61,7 @@ struct rt_device
 
 static void rt_mute(struct rt_device *dev)
 {
-        if(dev->muted)
+	if(dev->muted)
 		return;
 	spin_lock(&lock);
 	outb(1, io);
@@ -58,14 +81,14 @@ static void rt_unmute(struct rt_device *dev)
 
 static void zero(void)
 {
-        outb_p(1, io);
+	outb_p(1, io);
 	outb_p(3, io);
 	outb_p(1, io);
 }
 
 static void one(void)
 {
-        outb_p(5, io);
+	outb_p(5, io);
 	outb_p(7, io);
 	outb_p(5, io);
 }
@@ -75,7 +98,7 @@ static int rt_setfreq(struct rt_device *dev, unsigned long freq)
 	int i;
 
 	freq = freq / 200 + 856;
-	
+
 	spin_lock(&lock);
 
 	outb_p(0xc8, io);
@@ -94,7 +117,7 @@ static int rt_setfreq(struct rt_device *dev, unsigned long freq)
 	outb_p(0xc8, io);
 	if (!dev->muted)
 		outb_p(0, io);
-		
+
 	spin_unlock(&lock);
 	return 0;
 }
@@ -114,75 +137,120 @@ static int rt_do_ioctl(struct inode *inode, struct file *file,
 
 	switch(cmd)
 	{
-		case VIDIOCGCAP:
+		case VIDIOC_QUERYCAP:
 		{
-			struct video_capability *v = arg;
+			struct v4l2_capability *v = arg;
 			memset(v,0,sizeof(*v));
-			v->type=VID_TYPE_TUNER;
-			v->channels=1;
-			v->audios=1;
-			strcpy(v->name, "RadioTrack II");
+			strlcpy(v->driver, "radio-rtrack2", sizeof (v->driver));
+			strlcpy(v->card, "RadioTrack II", sizeof (v->card));
+			sprintf(v->bus_info,"ISA");
+			v->version = RADIO_VERSION;
+			v->capabilities = V4L2_CAP_TUNER;
+
 			return 0;
 		}
-		case VIDIOCGTUNER:
+		case VIDIOC_G_TUNER:
 		{
-			struct video_tuner *v = arg;
-			if(v->tuner)	/* Only 1 tuner */ 
+			struct v4l2_tuner *v = arg;
+
+			if (v->index > 0)
 				return -EINVAL;
-			v->rangelow=88*16000;
-			v->rangehigh=108*16000;
-			v->flags=VIDEO_TUNER_LOW;
-			v->mode=VIDEO_MODE_AUTO;
-			v->signal=0xFFFF*rt_getsigstr(rt);
+
+			memset(v,0,sizeof(*v));
 			strcpy(v->name, "FM");
+			v->type = V4L2_TUNER_RADIO;
+
+			v->rangelow=(88*16000);
+			v->rangehigh=(108*16000);
+			v->rxsubchans =V4L2_TUNER_SUB_MONO;
+			v->capability=V4L2_TUNER_CAP_LOW;
+			v->audmode = V4L2_TUNER_MODE_MONO;
+			v->signal=0xFFFF*rt_getsigstr(rt);
+
 			return 0;
 		}
-		case VIDIOCSTUNER:
+		case VIDIOC_S_TUNER:
 		{
-			struct video_tuner *v = arg;
-			if(v->tuner!=0)
+			struct v4l2_tuner *v = arg;
+
+			if (v->index > 0)
 				return -EINVAL;
-			/* Only 1 tuner so no setting needed ! */
+
 			return 0;
 		}
-		case VIDIOCGFREQ:
+		case VIDIOC_S_FREQUENCY:
 		{
-			unsigned long *freq = arg;
-			*freq = rt->curfreq;
-			return 0;
-		}
-		case VIDIOCSFREQ:
-		{
-			unsigned long *freq = arg;
-			rt->curfreq = *freq;
+			struct v4l2_frequency *f = arg;
+
+			rt->curfreq = f->frequency;
 			rt_setfreq(rt, rt->curfreq);
 			return 0;
 		}
-		case VIDIOCGAUDIO:
-		{	
-			struct video_audio *v = arg;
-			memset(v,0, sizeof(*v));
-			v->flags|=VIDEO_AUDIO_MUTABLE;
-			v->volume=1;
-			v->step=65535;
-			strcpy(v->name, "Radio");
-			return 0;			
-		}
-		case VIDIOCSAUDIO:
+		case VIDIOC_G_FREQUENCY:
 		{
-			struct video_audio *v = arg;
-			if(v->audio) 
-				return -EINVAL;
+			struct v4l2_frequency *f = arg;
 
-			if(v->flags&VIDEO_AUDIO_MUTE) 
-				rt_mute(rt);
-			else
-			        rt_unmute(rt);
+			f->type = V4L2_TUNER_RADIO;
+			f->frequency = rt->curfreq;
 
 			return 0;
 		}
+		case VIDIOC_QUERYCTRL:
+		{
+			struct v4l2_queryctrl *qc = arg;
+			int i;
+
+			for (i = 0; i < ARRAY_SIZE(radio_qctrl); i++) {
+				if (qc->id && qc->id == radio_qctrl[i].id) {
+					memcpy(qc, &(radio_qctrl[i]),
+								sizeof(*qc));
+					return (0);
+				}
+			}
+			return -EINVAL;
+		}
+		case VIDIOC_G_CTRL:
+		{
+			struct v4l2_control *ctrl= arg;
+
+			switch (ctrl->id) {
+				case V4L2_CID_AUDIO_MUTE:
+					ctrl->value=rt->muted;
+					return (0);
+				case V4L2_CID_AUDIO_VOLUME:
+					if (rt->muted)
+						ctrl->value=0;
+					else
+						ctrl->value=65535;
+					return (0);
+			}
+			return -EINVAL;
+		}
+		case VIDIOC_S_CTRL:
+		{
+			struct v4l2_control *ctrl= arg;
+
+			switch (ctrl->id) {
+				case V4L2_CID_AUDIO_MUTE:
+					if (ctrl->value) {
+						rt_mute(rt);
+					} else {
+						rt_unmute(rt);
+					}
+					return (0);
+				case V4L2_CID_AUDIO_VOLUME:
+					if (ctrl->value) {
+						rt_unmute(rt);
+					} else {
+						rt_mute(rt);
+					}
+					return (0);
+			}
+			return -EINVAL;
+		}
 		default:
-			return -ENOIOCTLCMD;
+			return v4l_compat_translate_ioctl(inode,file,cmd,arg,
+							  rt_do_ioctl);
 	}
 }
 
@@ -208,7 +276,7 @@ static struct video_device rtrack2_radio=
 	.owner		= THIS_MODULE,
 	.name		= "RadioTrack II radio",
 	.type		= VID_TYPE_TUNER,
-	.hardware	= VID_HARDWARE_RTRACK2,
+	.hardware	= 0,
 	.fops           = &rtrack2_fops,
 };
 
@@ -219,7 +287,7 @@ static int __init rtrack2_init(void)
 		printk(KERN_ERR "You must set an I/O address with io=0x20c or io=0x30c\n");
 		return -EINVAL;
 	}
-	if (!request_region(io, 4, "rtrack2")) 
+	if (!request_region(io, 4, "rtrack2"))
 	{
 		printk(KERN_ERR "rtrack2: port 0x%x already in use\n", io);
 		return -EBUSY;
@@ -227,16 +295,16 @@ static int __init rtrack2_init(void)
 
 	rtrack2_radio.priv=&rtrack2_unit;
 
-	spin_lock_init(&lock);	
+	spin_lock_init(&lock);
 	if(video_register_device(&rtrack2_radio, VFL_TYPE_RADIO, radio_nr)==-1)
 	{
 		release_region(io, 4);
 		return -EINVAL;
 	}
-		
+
 	printk(KERN_INFO "AIMSlab Radiotrack II card driver.\n");
 
- 	/* mute card - prevents noisy bootups */
+	/* mute card - prevents noisy bootups */
 	outb(1, io);
 	rtrack2_unit.muted = 1;
 

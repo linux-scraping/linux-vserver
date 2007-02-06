@@ -143,9 +143,8 @@ static int snd_gf1_mem_find(struct snd_gf1_mem * alloc,
 	struct snd_gf1_mem_block *pblock;
 	unsigned int ptr1, ptr2;
 
-	align--;
-	if (w_16 && align < 1)
-		align = 1;
+	if (w_16 && align < 2)
+		align = 2;
 	block->flags = w_16 ? SNDRV_GF1_MEM_BLOCK_16BIT : 0;
 	block->owner = SNDRV_GF1_MEM_OWNER_DRIVER;
 	block->share = 0;
@@ -165,7 +164,7 @@ static int snd_gf1_mem_find(struct snd_gf1_mem * alloc,
 			if (pblock->next->ptr < boundary)
 				ptr2 = pblock->next->ptr;
 		}
-		ptr1 = (pblock->ptr + pblock->size + align) & ~align;
+		ptr1 = ALIGN(pblock->ptr + pblock->size, align);
 		if (ptr1 >= ptr2)
 			continue;
 		size1 = ptr2 - ptr1;
@@ -264,10 +263,8 @@ int snd_gf1_mem_init(struct snd_gus_card * gus)
 	if (snd_gf1_mem_xalloc(alloc, &block) == NULL)
 		return -ENOMEM;
 #ifdef CONFIG_SND_DEBUG
-	if (! snd_card_proc_new(gus->card, "gusmem", &entry)) {
-		snd_info_set_text_ops(entry, gus, 1024, snd_gf1_mem_info_read);
-		entry->c.text.read_size = 256 * 1024;
-	}
+	if (! snd_card_proc_new(gus->card, "gusmem", &entry))
+		snd_info_set_text_ops(entry, gus, snd_gf1_mem_info_read);
 #endif
 	return 0;
 }

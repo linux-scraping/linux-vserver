@@ -1,7 +1,9 @@
-#ifndef _VX_VS_CONTEXT_H
-#define _VX_VS_CONTEXT_H
+#ifndef _VS_CONTEXT_H
+#define _VS_CONTEXT_H
 
-#include <linux/kernel.h>
+#include "vserver/base.h"
+#include "vserver/context.h"
+#include "vserver/history.h"
 #include "vserver/debug.h"
 
 
@@ -170,27 +172,47 @@ static inline void __wakeup_vx_info(struct vx_info *vxi)
 		wake_up_interruptible(&vxi->vx_wait);
 }
 
-extern void exit_vx_info(struct task_struct *, int);
 
-static inline
-struct task_struct *vx_child_reaper(struct task_struct *p)
+#define enter_vx_info(v,s)	__enter_vx_info(v,s,__FILE__,__LINE__)
+
+static inline void __enter_vx_info(struct vx_info *vxi,
+	struct vx_info_save *vxis, const char *_file, int _line)
 {
-	struct vx_info *vxi = p->vx_info;
-	struct task_struct *reaper = child_reaper;
-
-	if (!vxi)
-		goto out;
-
-	BUG_ON(!p->vx_info->vx_reaper);
-
-	/* child reaper for the guest reaper */
-	if (vxi->vx_reaper == p)
-		goto out;
-
-	reaper = vxi->vx_reaper;
-out:
-	return reaper;
+	vxlprintk(VXD_CBIT(xid, 5), "enter_vx_info(%p[#%d],%p) %p[#%d,%p]",
+		vxi, vxi ? vxi->vx_id : 0, vxis, current,
+		current->xid, current->vx_info, _file, _line);
+	vxis->vxi = xchg(&current->vx_info, vxi);
+	vxis->xid = current->xid;
+	current->xid = vxi ? vxi->vx_id : 0;
 }
+
+#define leave_vx_info(s)	__leave_vx_info(s,__FILE__,__LINE__)
+
+static inline void __leave_vx_info(struct vx_info_save *vxis,
+	const char *_file, int _line)
+{
+	vxlprintk(VXD_CBIT(xid, 5), "leave_vx_info(%p[#%d,%p]) %p[#%d,%p]",
+		vxis, vxis->xid, vxis->vxi, current,
+		current->xid, current->vx_info, _file, _line);
+	(void)xchg(&current->vx_info, vxis->vxi);
+	current->xid = vxis->xid;
+}
+
+
+static inline void __enter_vx_admin(struct vx_info_save *vxis)
+{
+	vxis->vxi = xchg(&current->vx_info, NULL);
+	vxis->xid = xchg(&current->xid, (xid_t)0);
+}
+
+static inline void __leave_vx_admin(struct vx_info_save *vxis)
+{
+	(void)xchg(&current->xid, vxis->xid);
+	(void)xchg(&current->vx_info, vxis->vxi);
+}
+
+extern void exit_vx_info(struct task_struct *, int);
+extern void exit_vx_info_early(struct task_struct *, int);
 
 
 #else

@@ -3,7 +3,8 @@
 #include <linux/pci.h>
 #include <linux/cache.h>
 #include <linux/module.h>
-#include <asm/dma-mapping.h>
+#include <linux/dma-mapping.h>
+
 #include <asm/proto.h>
 #include <asm/swiotlb.h>
 #include <asm/dma.h>
@@ -31,9 +32,10 @@ struct dma_mapping_ops swiotlb_dma_ops = {
 void pci_swiotlb_init(void)
 {
 	/* don't initialize swiotlb if iommu=off (no_iommu=1) */
-	if (!iommu_aperture && !no_iommu &&
-	    (end_pfn > MAX_DMA32_PFN || force_iommu))
+	if (!iommu_detected && !no_iommu && end_pfn > MAX_DMA32_PFN)
 	       swiotlb = 1;
+	if (swiotlb_force)
+		swiotlb = 1;
 	if (swiotlb) {
 		printk(KERN_INFO "PCI-DMA: Using software bounce buffering for IO (SWIOTLB)\n");
 		swiotlb_init();

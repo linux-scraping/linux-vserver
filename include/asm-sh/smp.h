@@ -10,7 +10,6 @@
 #ifndef __ASM_SH_SMP_H
 #define __ASM_SH_SMP_H
 
-#include <linux/config.h>
 #include <linux/bitops.h>
 #include <linux/cpumask.h>
 
@@ -19,11 +18,6 @@
 #include <asm/spinlock.h>
 #include <asm/atomic.h>
 #include <asm/current.h>
-
-extern cpumask_t cpu_online_map;
-extern cpumask_t cpu_possible_map;
-
-#define cpu_online(cpu)		cpu_isset(cpu, cpu_online_map)
 
 #define raw_smp_processor_id()	(current_thread_info()->cpu)
 

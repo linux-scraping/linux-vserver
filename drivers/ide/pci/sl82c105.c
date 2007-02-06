@@ -13,7 +13,6 @@
  *  -- Benjamin Herrenschmidt (01/11/03) benh@kernel.crashing.org
  */
 
-#include <linux/config.h>
 #include <linux/types.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
@@ -300,14 +299,14 @@ static void sl82c105_selectproc(ide_drive_t *drive)
 	//DBG(("sl82c105_selectproc(drive:%s)\n", drive->name));
 
 	mask = hwif->channel ? CTRL_P1F16 : CTRL_P0F16;
-	old = val = *((u32 *)&hwif->hwif_data);
+	old = val = (u32)pci_get_drvdata(dev);
 	if (drive->using_dma)
 		val &= ~mask;
 	else
 		val |= mask;
 	if (old != val) {
 		pci_write_config_dword(dev, 0x40, val);	
-		*((u32 *)&hwif->hwif_data) = val;
+		pci_set_drvdata(dev, (void *)val);
 	}
 }
 
@@ -317,14 +316,13 @@ static void sl82c105_selectproc(ide_drive_t *drive)
  */
 static void sl82c105_resetproc(ide_drive_t *drive)
 {
-	ide_hwif_t *hwif = HWIF(drive);
-	struct pci_dev *dev = hwif->pci_dev;
+	struct pci_dev *dev = HWIF(drive)->pci_dev;
 	u32 val;
 
 	DBG(("sl82c105_resetproc(drive:%s)\n", drive->name));
 
 	pci_read_config_dword(dev, 0x40, &val);
-	*((u32 *)&hwif->hwif_data) = val;
+	pci_set_drvdata(dev, (void *)val);
 }
 	
 /*
@@ -395,6 +393,7 @@ static unsigned int __devinit init_chipset_sl82c105(struct pci_dev *dev, const c
 	pci_read_config_dword(dev, 0x40, &val);
 	val |= CTRL_P0EN | CTRL_P0F16 | CTRL_P1F16;
 	pci_write_config_dword(dev, 0x40, val);
+	pci_set_drvdata(dev, (void *)val);
 
 	return dev->irq;
 }
@@ -405,30 +404,25 @@ static unsigned int __devinit init_chipset_sl82c105(struct pci_dev *dev, const c
 
 static void __devinit init_hwif_sl82c105(ide_hwif_t *hwif)
 {
-	struct pci_dev *dev = hwif->pci_dev;
 	unsigned int rev;
 	u8 dma_state;
-	u32 val;
-	
+
 	DBG(("init_hwif_sl82c105(hwif: ide%d)\n", hwif->index));
 
 	hwif->tuneproc = tune_sl82c105;
 	hwif->selectproc = sl82c105_selectproc;
 	hwif->resetproc = sl82c105_resetproc;
-	
-	/* Default to PIO 0 for fallback unless tuned otherwise,
-	 * we always autotune PIO, this is done before DMA is
-	 * checked, so there is no risk of accidentally disabling
-	 * DMA
-	  */
+
+	/*
+	 * Default to PIO 0 for fallback unless tuned otherwise.
+	 * We always autotune PIO,  this is done before DMA is checked,
+	 * so there's no risk of accidentally disabling DMA
+	 */
 	hwif->drives[0].pio_speed = XFER_PIO_0;
 	hwif->drives[0].autotune = 1;
-	hwif->drives[1].pio_speed = XFER_PIO_1;
+	hwif->drives[1].pio_speed = XFER_PIO_0;
 	hwif->drives[1].autotune = 1;
 
-	pci_read_config_dword(dev, 0x40, &val);
-	*((u32 *)&hwif->hwif_data) = val;
-	
 	hwif->atapi_dma = 0;
 	hwif->mwdma_mask = 0;
 	hwif->swdma_mask = 0;
@@ -447,7 +441,6 @@ static void __devinit init_hwif_sl82c105(ide_hwif_t *hwif)
 		printk("    %s: Winbond 553 bridge revision %d, BM-DMA disabled\n",
 		       hwif->name, rev);
 	} else {
-#ifdef CONFIG_BLK_DEV_IDEDMA
 		dma_state |= 0x60;
 
 		hwif->atapi_dma = 1;
@@ -468,7 +461,6 @@ static void __devinit init_hwif_sl82c105(ide_hwif_t *hwif)
 
 		if (hwif->mate)
 			hwif->serialized = hwif->mate->serialized = 1;
-#endif /* CONFIG_BLK_DEV_IDEDMA */
 	}
 	hwif->OUTB(dma_state, hwif->dma_base + 2);
 }
@@ -489,7 +481,7 @@ static int __devinit sl82c105_init_one(struct pci_dev *dev, const struct pci_dev
 }
 
 static struct pci_device_id sl82c105_pci_tbl[] = {
-	{ PCI_VENDOR_ID_WINBOND, PCI_DEVICE_ID_WINBOND_82C105, PCI_ANY_ID, PCI_ANY_ID, 0, 0, 0},
+	{ PCI_DEVICE(PCI_VENDOR_ID_WINBOND, PCI_DEVICE_ID_WINBOND_82C105), 0},
 	{ 0, },
 };
 MODULE_DEVICE_TABLE(pci, sl82c105_pci_tbl);
@@ -500,7 +492,7 @@ static struct pci_driver driver = {
 	.probe		= sl82c105_init_one,
 };
 
-static int sl82c105_ide_init(void)
+static int __init sl82c105_ide_init(void)
 {
 	return ide_pci_register_driver(&driver);
 }

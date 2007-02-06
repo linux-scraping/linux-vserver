@@ -5,13 +5,16 @@
 #ifndef _LINUX_KALLSYMS_H
 #define _LINUX_KALLSYMS_H
 
-#include <linux/config.h>
 
 #define KSYM_NAME_LEN 127
 
 #ifdef CONFIG_KALLSYMS
 /* Lookup the address for a symbol. Returns 0 if not found. */
 unsigned long kallsyms_lookup_name(const char *name);
+
+extern int kallsyms_lookup_size_offset(unsigned long addr,
+				  unsigned long *symbolsize,
+				  unsigned long *offset);
 
 /* Lookup an address.  modname is set to NULL if it's in the kernel. */
 const char *kallsyms_lookup(unsigned long addr,
@@ -25,6 +28,13 @@ extern void __print_symbol(const char *fmt, unsigned long address);
 #else /* !CONFIG_KALLSYMS */
 
 static inline unsigned long kallsyms_lookup_name(const char *name)
+{
+	return 0;
+}
+
+static inline int kallsyms_lookup_size_offset(unsigned long addr,
+					      unsigned long *symbolsize,
+					      unsigned long *offset)
 {
 	return 0;
 }
@@ -58,10 +68,25 @@ do {						\
 #define print_fn_descriptor_symbol(fmt, addr) print_symbol(fmt, addr)
 #endif
 
-#define print_symbol(fmt, addr)			\
-do {						\
-	__check_printsym_format(fmt, "");	\
-	__print_symbol(fmt, addr);		\
+static inline void print_symbol(const char *fmt, unsigned long addr)
+{
+	__check_printsym_format(fmt, "");
+	__print_symbol(fmt, (unsigned long)
+		       __builtin_extract_return_addr((void *)addr));
+}
+
+#ifndef CONFIG_64BIT
+#define print_ip_sym(ip)		\
+do {					\
+	printk("[<%08lx>]", ip);	\
+	print_symbol(" %s\n", ip);	\
 } while(0)
+#else
+#define print_ip_sym(ip)		\
+do {					\
+	printk("[<%016lx>]", ip);	\
+	print_symbol(" %s\n", ip);	\
+} while(0)
+#endif
 
 #endif /*_LINUX_KALLSYMS_H*/

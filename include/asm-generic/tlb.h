@@ -1,4 +1,4 @@
-/* asm-generic/tlb.h
+/* include/asm-generic/tlb.h
  *
  *	Generic TLB shootdown code
  *
@@ -13,7 +13,6 @@
 #ifndef _ASM_GENERIC__TLB_H
 #define _ASM_GENERIC__TLB_H
 
-#include <linux/config.h>
 #include <linux/swap.h>
 #include <linux/vs_memory.h>
 #include <asm/pgalloc.h>

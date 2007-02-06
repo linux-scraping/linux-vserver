@@ -18,7 +18,6 @@
 #define DIVA_BUILD "local"
 #endif
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/kernel.h>
@@ -82,14 +81,6 @@
 
 #ifndef	NULL
 #define	NULL	((void *) 0)
-#endif
-
-#ifndef	MIN
-#define MIN(a,b)	((a)>(b) ? (b) : (a))
-#endif
-
-#ifndef	MAX
-#define MAX(a,b)	((a)>(b) ? (a) : (b))
 #endif
 
 #ifndef	far

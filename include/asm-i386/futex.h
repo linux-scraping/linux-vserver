@@ -20,8 +20,8 @@
 	.align	8\n\
 	.long	1b,3b\n\
 	.previous"						\
-	: "=r" (oldval), "=r" (ret), "=m" (*uaddr)		\
-	: "i" (-EFAULT), "m" (*uaddr), "0" (oparg), "1" (0))
+	: "=r" (oldval), "=r" (ret), "+m" (*uaddr)		\
+	: "i" (-EFAULT), "0" (oparg), "1" (0))
 
 #define __futex_atomic_op2(insn, ret, oldval, uaddr, oparg) \
   __asm__ __volatile (						\
@@ -38,9 +38,9 @@
 	.align	8\n\
 	.long	1b,4b,2b,4b\n\
 	.previous"						\
-	: "=&a" (oldval), "=&r" (ret), "=m" (*uaddr),		\
+	: "=&a" (oldval), "=&r" (ret), "+m" (*uaddr),		\
 	  "=&r" (tem)						\
-	: "r" (oparg), "i" (-EFAULT), "m" (*uaddr), "1" (0))
+	: "r" (oparg), "i" (-EFAULT), "1" (0))
 
 static inline int
 futex_atomic_op_inuser (int encoded_op, int __user *uaddr)
@@ -56,7 +56,7 @@ futex_atomic_op_inuser (int encoded_op, int __user *uaddr)
 	if (! access_ok (VERIFY_WRITE, uaddr, sizeof(int)))
 		return -EFAULT;
 
-	inc_preempt_count();
+	pagefault_disable();
 
 	if (op == FUTEX_OP_SET)
 		__futex_atomic_op1("xchgl %0, %2", ret, oldval, uaddr, oparg);
@@ -88,7 +88,7 @@ futex_atomic_op_inuser (int encoded_op, int __user *uaddr)
 		}
 	}
 
-	dec_preempt_count();
+	pagefault_enable();
 
 	if (!ret) {
 		switch (cmp) {
@@ -123,7 +123,7 @@ futex_atomic_cmpxchg_inatomic(int __user *uaddr, int oldval, int newval)
 		"	.long   1b,3b				\n"
 		"	.previous				\n"
 
-		: "=a" (oldval), "=m" (*uaddr)
+		: "=a" (oldval), "+m" (*uaddr)
 		: "i" (-EFAULT), "r" (newval), "0" (oldval)
 		: "memory"
 	);

@@ -33,7 +33,6 @@
 
 #include <linux/module.h>
 #include <linux/moduleparam.h>
-#include <linux/config.h>
 
 #include <linux/spinlock.h>
 #include <linux/kernel.h>
@@ -117,7 +116,7 @@ static DEFINE_SPINLOCK(iucv_irq_queue_lock);
  *Internal function prototypes
  */
 static void iucv_tasklet_handler(unsigned long);
-static void iucv_irq_handler(struct pt_regs *, __u16);
+static void iucv_irq_handler(__u16);
 
 static DECLARE_TASKLET(iucv_tasklet,iucv_tasklet_handler,0);
 
@@ -336,8 +335,8 @@ do { \
 
 #else
 
-#define iucv_debug(lvl, fmt, args...)
-#define iucv_dumpit(title, buf, len)
+#define iucv_debug(lvl, fmt, args...)	do { } while (0)
+#define iucv_dumpit(title, buf, len)	do { } while (0)
 
 #endif
 
@@ -535,19 +534,15 @@ iucv_add_handler (handler *new)
  *
  * Returns: return code from CP's IUCV call
  */
-static __inline__ ulong
-b2f0(__u32 code, void *parm)
+static inline ulong b2f0(__u32 code, void *parm)
 {
+	register unsigned long reg0 asm ("0");
+	register unsigned long reg1 asm ("1");
 	iucv_dumpit("iparml before b2f0 call:", parm, sizeof(iucv_param));
 
-	asm volatile (
-		"LRA   1,0(%1)\n\t"
-		"LR    0,%0\n\t"
-		".long 0xb2f01000"
-		:
-		: "d" (code), "a" (parm)
-		: "0", "1"
-		);
+	reg0 = code;
+	reg1 = virt_to_phys(parm);
+	asm volatile(".long 0xb2f01000" : : "d" (reg0), "a" (reg1));
 
 	iucv_dumpit("iparml after b2f0 call:", parm, sizeof(iucv_param));
 
@@ -693,7 +688,7 @@ iucv_retrieve_buffer (void)
 	iucv_debug(1, "entering");
 	if (iucv_cpuid != -1) {
 		smp_call_function_on(iucv_retrieve_buffer_cpuid,
-				     0, 0, 1, iucv_cpuid);
+				     NULL, 0, 1, iucv_cpuid);
 		/* Release the cpu reserved by iucv_declare_buffer. */
 		smp_put_cpu(iucv_cpuid);
 		iucv_cpuid = -1;
@@ -777,7 +772,7 @@ iucv_register_program (__u8 pgmname[16],
 	}
 
 	/* Allocate handler entry */
-	new_handler = (handler *)kmalloc(sizeof(handler), GFP_ATOMIC);
+	new_handler = kmalloc(sizeof(handler), GFP_ATOMIC);
 	if (new_handler == NULL) {
 		printk(KERN_WARNING "%s: storage allocation for new handler "
 		       "failed.\n", __FUNCTION__);
@@ -1249,6 +1244,8 @@ iucv_purge (__u16 pathid, __u32 msgid, __u32 srccls, __u32 *audit)
 static int
 iucv_query_generic(int want_maxconn)
 {
+	register unsigned long reg0 asm ("0");
+	register unsigned long reg1 asm ("1");
 	iparml_purge *parm = (iparml_purge *)grab_param();
 	int bufsize, maxconn;
 	int ccode;
@@ -1257,18 +1254,15 @@ iucv_query_generic(int want_maxconn)
 	 * Call b2f0 and store R0 (max buffer size),
 	 * R1 (max connections) and CC.
 	 */
-	asm volatile (
-		"LRA   1,0(%4)\n\t"
-		"LR    0,%3\n\t"
-		".long 0xb2f01000\n\t"
-		"IPM   %0\n\t"
-		"SRL   %0,28\n\t"
-		"ST    0,%1\n\t"
-		"ST    1,%2\n\t"
-		: "=d" (ccode), "=m" (bufsize), "=m" (maxconn)
-		: "d" (QUERY), "a" (parm)
-		: "0", "1", "cc"
-		);
+	reg0 = QUERY;
+	reg1 = virt_to_phys(parm);
+	asm volatile(
+		"	.long	0xb2f01000\n"
+		"	ipm	%0\n"
+		"	srl	%0,28\n"
+		: "=d" (ccode), "+d" (reg0), "+d" (reg1) : : "cc");
+	bufsize = reg0;
+	maxconn = reg1;
 	release_param(parm);
 
 	if (ccode)
@@ -2257,7 +2251,7 @@ iucv_sever(__u16 pathid, __u8 user_data[16])
  * Places the interrupt buffer on a queue and schedules iucv_tasklet_handler().
  */
 static void
-iucv_irq_handler(struct pt_regs *regs, __u16 code)
+iucv_irq_handler(__u16 code)
 {
 	iucv_irqdata *irqdata;
 

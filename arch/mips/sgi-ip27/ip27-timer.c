@@ -1,5 +1,5 @@
 /*
- * Copytight (C) 1999, 2000, 05 Ralf Baechle (ralf@linux-mips.org)
+ * Copytight (C) 1999, 2000, 05, 06 Ralf Baechle (ralf@linux-mips.org)
  * Copytight (C) 1999, 2000 Silicon Graphics, Inc.
  */
 #include <linux/bcd.h>
@@ -41,8 +41,6 @@
 
 static unsigned long ct_cur[NR_CPUS];	/* What counter should be at next timer irq */
 static long last_rtc_update;		/* Last time the rtc clock got updated */
-
-extern volatile unsigned long wall_jiffies;
 
 #if 0
 static int set_rtc_mmss(unsigned long nowtime)
@@ -89,11 +87,13 @@ static int set_rtc_mmss(unsigned long nowtime)
 }
 #endif
 
-void ip27_rt_timer_interrupt(struct pt_regs *regs)
+static unsigned int rt_timer_irq;
+
+void ip27_rt_timer_interrupt(void)
 {
 	int cpu = smp_processor_id();
 	int cpuA = cputoslice(cpu) == 0;
-	int irq = 9;				/* XXX Assign number */
+	unsigned int irq = rt_timer_irq;
 
 	irq_enter();
 	write_seqlock(&xtime_lock);
@@ -109,9 +109,9 @@ again:
 	kstat_this_cpu.irqs[irq]++;		/* kstat only for bootcpu? */
 
 	if (cpu == 0)
-		do_timer(regs);
+		do_timer(1);
 
-	update_process_times(user_mode(regs));
+	update_process_times(user_mode(get_irq_regs()));
 
 	/*
 	 * If we have an externally synchronized Linux clock, then update
@@ -132,13 +132,6 @@ again:
 
 	write_sequnlock(&xtime_lock);
 	irq_exit();
-}
-
-unsigned long ip27_do_gettimeoffset(void)
-{
-	unsigned long ct_cur1;
-	ct_cur1 = REMOTE_HUB_L(cputonasid(0), PI_RT_COUNT) + CYCLES_PER_JIFFY;
-	return (ct_cur1 - ct_cur[0]) * NSEC_PER_CYCLE / 1000;
 }
 
 /* Includes for ioc3_init().  */
@@ -179,23 +172,63 @@ static __init unsigned long get_m48t35_time(void)
         return mktime(year, month, date, hour, min, sec);
 }
 
-static void ip27_timer_setup(struct irqaction *irq)
+static void enable_rt_irq(unsigned int irq)
 {
+}
+
+static void disable_rt_irq(unsigned int irq)
+{
+}
+
+static struct irq_chip rt_irq_type = {
+	.typename	= "SN HUB RT timer",
+	.ack		= disable_rt_irq,
+	.mask		= disable_rt_irq,
+	.mask_ack	= disable_rt_irq,
+	.unmask		= enable_rt_irq,
+	.eoi		= enable_rt_irq,
+};
+
+static struct irqaction rt_irqaction = {
+	.handler	= ip27_rt_timer_interrupt,
+	.flags		= IRQF_DISABLED,
+	.mask		= CPU_MASK_NONE,
+	.name		= "timer"
+};
+
+void __init plat_timer_setup(struct irqaction *irq)
+{
+	int irqno  = allocate_irqno();
+
+	if (irqno < 0)
+		panic("Can't allocate interrupt number for timer interrupt");
+
+	set_irq_chip_and_handler(irqno, &rt_irq_type, handle_percpu_irq);
+
 	/* over-write the handler, we use our own way */
 	irq->handler = no_action;
 
 	/* setup irqaction */
-//	setup_irq(IP27_TIMER_IRQ, irq);		/* XXX Can't do this yet.  */
+	irq_desc[irqno].status |= IRQ_PER_CPU;
+
+	rt_timer_irq = irqno;
+	/*
+	 * Only needed to get /proc/interrupt to display timer irq stats
+	 */
+	setup_irq(irqno, &rt_irqaction);
+}
+
+static cycle_t ip27_hpt_read(void)
+{
+	return REMOTE_HUB_L(cputonasid(0), PI_RT_COUNT);
 }
 
 void __init ip27_time_init(void)
 {
+	clocksource_mips.read = ip27_hpt_read;
+	mips_hpt_frequency = CYCLES_PER_SEC;
 	xtime.tv_sec = get_m48t35_time();
 	xtime.tv_nsec = 0;
-
-	do_gettimeoffset = ip27_do_gettimeoffset;
-
-	board_timer_setup = ip27_timer_setup;
 }
 
 void __init cpu_time_init(void)

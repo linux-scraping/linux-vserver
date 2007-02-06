@@ -1,5 +1,5 @@
 /*
- * sound/opl3.c
+ * sound/oss/opl3.c
  *
  * A low level driver for Yamaha YM3812 and OPL-3 -chips
  *
@@ -166,7 +166,7 @@ int opl3_detect(int ioaddr, int *osp)
 		return 0;
 	}
 
-	devc = (struct opl_devinfo *)kmalloc(sizeof(*devc), GFP_KERNEL);
+	devc = kmalloc(sizeof(*devc), GFP_KERNEL);
 
 	if (devc == NULL)
 	{

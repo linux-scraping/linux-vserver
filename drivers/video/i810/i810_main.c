@@ -29,12 +29,10 @@
  */
 
 #include <linux/module.h>
-#include <linux/config.h>
 #include <linux/kernel.h>
 #include <linux/errno.h>
 #include <linux/string.h>
 #include <linux/mm.h>
-#include <linux/tty.h>
 #include <linux/slab.h>
 #include <linux/fb.h>
 #include <linux/init.h>
@@ -1556,15 +1554,17 @@ static struct fb_ops i810fb_ops __devinitdata = {
 /***********************************************************************
  *                         Power Management                            *
  ***********************************************************************/
-static int i810fb_suspend(struct pci_dev *dev, pm_message_t state)
+static int i810fb_suspend(struct pci_dev *dev, pm_message_t mesg)
 {
 	struct fb_info *info = pci_get_drvdata(dev);
 	struct i810fb_par *par = info->par;
 
-	par->cur_state = state.event;
+	par->cur_state = mesg.event;
 
-	if (state.event == PM_EVENT_FREEZE) {
-		dev->dev.power.power_state = state;
+	switch (mesg.event) {
+	case PM_EVENT_FREEZE:
+	case PM_EVENT_PRETHAW:
+		dev->dev.power.power_state = mesg;
 		return 0;
 	}
 
@@ -1580,7 +1580,7 @@ static int i810fb_suspend(struct pci_dev *dev, pm_message_t state)
 
 	pci_save_state(dev);
 	pci_disable_device(dev);
-	pci_set_power_state(dev, pci_choose_state(dev, state));
+	pci_set_power_state(dev, pci_choose_state(dev, mesg));
 	release_console_sem();
 
 	return 0;
@@ -1602,7 +1602,10 @@ static int i810fb_resume(struct pci_dev *dev)
 	acquire_console_sem();
 	pci_set_power_state(dev, PCI_D0);
 	pci_restore_state(dev);
-	pci_enable_device(dev);
+
+	if (pci_enable_device(dev))
+		goto fail;
+
 	pci_set_master(dev);
 	agp_bind_memory(par->i810_gtt.i810_fb_memory,
 			par->fb.offset);
@@ -1611,6 +1614,7 @@ static int i810fb_resume(struct pci_dev *dev)
 	i810fb_set_par(info);
 	fb_set_suspend (info, 0);
 	info->fbops->fb_blank(VESA_NO_BLANKING, info);
+fail:
 	release_console_sem();
 	return 0;
 }
@@ -2109,9 +2113,6 @@ static void i810fb_release_resource(struct fb_info *info,
 				   par->aperture.size);
 	if (par->res_flags & MMIO_REQ)
 		release_mem_region(par->mmio_start_phys, MMIO_SIZE);
-
-	if (par->res_flags & PCI_DEVICE_ENABLED)
-		pci_disable_device(par->dev);
 
 	framebuffer_release(info);
 

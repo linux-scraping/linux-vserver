@@ -55,7 +55,7 @@ static int atkbd_softraw = 1;
 module_param_named(softraw, atkbd_softraw, bool, 0);
 MODULE_PARM_DESC(softraw, "Use software generated rawmode");
 
-static int atkbd_scroll = 0;
+static int atkbd_scroll;
 module_param_named(scroll, atkbd_scroll, bool, 0);
 MODULE_PARM_DESC(scroll, "Enable scroll-wheel on MS Office and similar keyboards");
 
@@ -150,8 +150,8 @@ static unsigned char atkbd_unxlate_table[128] = {
 #define ATKBD_RET_EMUL0		0xe0
 #define ATKBD_RET_EMUL1		0xe1
 #define ATKBD_RET_RELEASE	0xf0
-#define ATKBD_RET_HANGUEL	0xf1
-#define ATKBD_RET_HANJA		0xf2
+#define ATKBD_RET_HANJA		0xf1
+#define ATKBD_RET_HANGEUL	0xf2
 #define ATKBD_RET_ERR		0xff
 
 #define ATKBD_KEY_UNKNOWN	  0
@@ -169,6 +169,13 @@ static unsigned char atkbd_unxlate_table[128] = {
 
 #define ATKBD_LED_EVENT_BIT	0
 #define ATKBD_REP_EVENT_BIT	1
+
+#define ATKBD_XL_ERR		0x01
+#define ATKBD_XL_BAT		0x02
+#define ATKBD_XL_ACK		0x04
+#define ATKBD_XL_NAK		0x08
+#define ATKBD_XL_HANGEUL	0x10
+#define ATKBD_XL_HANJA		0x20
 
 static struct {
 	unsigned char keycode;
@@ -211,10 +218,10 @@ struct atkbd {
 	unsigned char emul;
 	unsigned char resend;
 	unsigned char release;
-	unsigned char bat_xl;
-	unsigned char err_xl;
+	unsigned long xl_bit;
 	unsigned int last;
 	unsigned long time;
+	unsigned long err_count;
 
 	struct work_struct event_work;
 	struct mutex event_mutex;
@@ -228,11 +235,13 @@ static ssize_t atkbd_attr_set_helper(struct device *dev, const char *buf, size_t
 #define ATKBD_DEFINE_ATTR(_name)						\
 static ssize_t atkbd_show_##_name(struct atkbd *, char *);			\
 static ssize_t atkbd_set_##_name(struct atkbd *, const char *, size_t);		\
-static ssize_t atkbd_do_show_##_name(struct device *d, struct device_attribute *attr, char *b)			\
+static ssize_t atkbd_do_show_##_name(struct device *d,				\
+				struct device_attribute *attr, char *b)		\
 {										\
 	return atkbd_attr_show_helper(d, b, atkbd_show_##_name);		\
 }										\
-static ssize_t atkbd_do_set_##_name(struct device *d, struct device_attribute *attr, const char *b, size_t s)	\
+static ssize_t atkbd_do_set_##_name(struct device *d,				\
+			struct device_attribute *attr, const char *b, size_t s)	\
 {										\
 	return atkbd_attr_set_helper(d, b, s, atkbd_set_##_name);		\
 }										\
@@ -245,17 +254,91 @@ ATKBD_DEFINE_ATTR(set);
 ATKBD_DEFINE_ATTR(softrepeat);
 ATKBD_DEFINE_ATTR(softraw);
 
+#define ATKBD_DEFINE_RO_ATTR(_name)						\
+static ssize_t atkbd_show_##_name(struct atkbd *, char *);			\
+static ssize_t atkbd_do_show_##_name(struct device *d,				\
+				struct device_attribute *attr, char *b)		\
+{										\
+	return atkbd_attr_show_helper(d, b, atkbd_show_##_name);		\
+}										\
+static struct device_attribute atkbd_attr_##_name =				\
+	__ATTR(_name, S_IRUGO, atkbd_do_show_##_name, NULL);
 
-static void atkbd_report_key(struct input_dev *dev, struct pt_regs *regs, int code, int value)
+ATKBD_DEFINE_RO_ATTR(err_count);
+
+static struct attribute *atkbd_attributes[] = {
+	&atkbd_attr_extra.attr,
+	&atkbd_attr_scroll.attr,
+	&atkbd_attr_set.attr,
+	&atkbd_attr_softrepeat.attr,
+	&atkbd_attr_softraw.attr,
+	&atkbd_attr_err_count.attr,
+	NULL
+};
+
+static struct attribute_group atkbd_attribute_group = {
+	.attrs	= atkbd_attributes,
+};
+
+static const unsigned int xl_table[] = {
+	ATKBD_RET_BAT, ATKBD_RET_ERR, ATKBD_RET_ACK,
+	ATKBD_RET_NAK, ATKBD_RET_HANJA, ATKBD_RET_HANGEUL,
+};
+
+/*
+ * Checks if we should mangle the scancode to extract 'release' bit
+ * in translated mode.
+ */
+static int atkbd_need_xlate(unsigned long xl_bit, unsigned char code)
 {
-	input_regs(dev, regs);
-	if (value == 3) {
-		input_report_key(dev, code, 1);
-		input_sync(dev);
-		input_report_key(dev, code, 0);
-	} else
-		input_event(dev, EV_KEY, code, value);
-	input_sync(dev);
+	int i;
+
+	if (code == ATKBD_RET_EMUL0 || code == ATKBD_RET_EMUL1)
+		return 0;
+
+	for (i = 0; i < ARRAY_SIZE(xl_table); i++)
+		if (code == xl_table[i])
+			return test_bit(i, &xl_bit);
+
+	return 1;
+}
+
+/*
+ * Calculates new value of xl_bit so the driver can distinguish
+ * between make/break pair of scancodes for select keys and PS/2
+ * protocol responses.
+ */
+static void atkbd_calculate_xl_bit(struct atkbd *atkbd, unsigned char code)
+{
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(xl_table); i++) {
+		if (!((code ^ xl_table[i]) & 0x7f)) {
+			if (code & 0x80)
+				__clear_bit(i, &atkbd->xl_bit);
+			else
+				__set_bit(i, &atkbd->xl_bit);
+			break;
+		}
+	}
+}
+
+/*
+ * Encode the scancode, 0xe0 prefix, and high bit into a single integer,
+ * keeping kernel 2.4 compatibility for set 2
+ */
+static unsigned int atkbd_compat_scancode(struct atkbd *atkbd, unsigned int code)
+{
+	if (atkbd->set == 3) {
+		if (atkbd->emul == 1)
+			code |= 0x100;
+        } else {
+		code = (code & 0x7f) | ((code & 0x80) << 1);
+		if (atkbd->emul == 1)
+			code |= 0x80;
+	}
+
+	return code;
 }
 
 /*
@@ -264,12 +347,14 @@ static void atkbd_report_key(struct input_dev *dev, struct pt_regs *regs, int co
  */
 
 static irqreturn_t atkbd_interrupt(struct serio *serio, unsigned char data,
-			unsigned int flags, struct pt_regs *regs)
+			unsigned int flags)
 {
 	struct atkbd *atkbd = serio_get_drvdata(serio);
+	struct input_dev *dev = atkbd->dev;
 	unsigned int code = data;
-	int scroll = 0, hscroll = 0, click = -1;
+	int scroll = 0, hscroll = 0, click = -1, add_release_event = 0;
 	int value;
+	unsigned char keycode;
 
 #ifdef ATKBD_DEBUG
 	printk(KERN_DEBUG "atkbd.c: Received %02x flags %02x\n", data, flags);
@@ -298,25 +383,17 @@ static irqreturn_t atkbd_interrupt(struct serio *serio, unsigned char data,
 	if (!atkbd->enabled)
 		goto out;
 
-	input_event(atkbd->dev, EV_MSC, MSC_RAW, code);
+	input_event(dev, EV_MSC, MSC_RAW, code);
 
 	if (atkbd->translated) {
 
-		if (atkbd->emul ||
-		    (code != ATKBD_RET_EMUL0 && code != ATKBD_RET_EMUL1 &&
-		     code != ATKBD_RET_HANGUEL && code != ATKBD_RET_HANJA &&
-		     (code != ATKBD_RET_ERR || atkbd->err_xl) &&
-	             (code != ATKBD_RET_BAT || atkbd->bat_xl))) {
+		if (atkbd->emul || atkbd_need_xlate(atkbd->xl_bit, code)) {
 			atkbd->release = code >> 7;
 			code &= 0x7f;
 		}
 
-		if (!atkbd->emul) {
-		     if ((code & 0x7f) == (ATKBD_RET_BAT & 0x7f))
-			atkbd->bat_xl = !(data >> 7);
-		     if ((code & 0x7f) == (ATKBD_RET_ERR & 0x7f))
-			atkbd->err_xl = !(data >> 7);
-		}
+		if (!atkbd->emul)
+			atkbd_calculate_xl_bit(atkbd, data);
 	}
 
 	switch (code) {
@@ -333,47 +410,51 @@ static irqreturn_t atkbd_interrupt(struct serio *serio, unsigned char data,
 		case ATKBD_RET_RELEASE:
 			atkbd->release = 1;
 			goto out;
-		case ATKBD_RET_HANGUEL:
-			atkbd_report_key(atkbd->dev, regs, KEY_HANGUEL, 3);
+		case ATKBD_RET_ACK:
+		case ATKBD_RET_NAK:
+			printk(KERN_WARNING "atkbd.c: Spurious %s on %s. "
+			       "Some program might be trying access hardware directly.\n",
+			       data == ATKBD_RET_ACK ? "ACK" : "NAK", serio->phys);
 			goto out;
+		case ATKBD_RET_HANGEUL:
 		case ATKBD_RET_HANJA:
-			atkbd_report_key(atkbd->dev, regs, KEY_HANJA, 3);
-			goto out;
+			/*
+			 * These keys do not report release and thus need to be
+			 * flagged properly
+			 */
+			add_release_event = 1;
+			break;
 		case ATKBD_RET_ERR:
+			atkbd->err_count++;
+#ifdef ATKBD_DEBUG
 			printk(KERN_DEBUG "atkbd.c: Keyboard on %s reports too many keys pressed.\n", serio->phys);
+#endif
 			goto out;
 	}
 
-	if (atkbd->set != 3)
-		code = (code & 0x7f) | ((code & 0x80) << 1);
-	if (atkbd->emul) {
-		if (--atkbd->emul)
-			goto out;
-		code |= (atkbd->set != 3) ? 0x80 : 0x100;
-	}
+	code = atkbd_compat_scancode(atkbd, code);
 
-	if (atkbd->keycode[code] != ATKBD_KEY_NULL)
-		input_event(atkbd->dev, EV_MSC, MSC_SCAN, code);
+	if (atkbd->emul && --atkbd->emul)
+		goto out;
 
-	switch (atkbd->keycode[code]) {
+	keycode = atkbd->keycode[code];
+
+	if (keycode != ATKBD_KEY_NULL)
+		input_event(dev, EV_MSC, MSC_SCAN, code);
+
+	switch (keycode) {
 		case ATKBD_KEY_NULL:
 			break;
 		case ATKBD_KEY_UNKNOWN:
-			if (data == ATKBD_RET_ACK || data == ATKBD_RET_NAK) {
-				printk(KERN_WARNING "atkbd.c: Spurious %s on %s. Some program, "
-				       "like XFree86, might be trying access hardware directly.\n",
-				       data == ATKBD_RET_ACK ? "ACK" : "NAK", serio->phys);
-			} else {
-				printk(KERN_WARNING "atkbd.c: Unknown key %s "
-				       "(%s set %d, code %#x on %s).\n",
-				       atkbd->release ? "released" : "pressed",
-				       atkbd->translated ? "translated" : "raw",
-				       atkbd->set, code, serio->phys);
-				printk(KERN_WARNING "atkbd.c: Use 'setkeycodes %s%02x <keycode>' "
-				       "to make it known.\n",
-				       code & 0x80 ? "e0" : "", code & 0x7f);
-			}
-			input_sync(atkbd->dev);
+			printk(KERN_WARNING
+			       "atkbd.c: Unknown key %s (%s set %d, code %#x on %s).\n",
+			       atkbd->release ? "released" : "pressed",
+			       atkbd->translated ? "translated" : "raw",
+			       atkbd->set, code, serio->phys);
+			printk(KERN_WARNING
+			       "atkbd.c: Use 'setkeycodes %s%02x <keycode>' to make it known.\n",
+			       code & 0x80 ? "e0" : "", code & 0x7f);
+			input_sync(dev);
 			break;
 		case ATKBD_SCR_1:
 			scroll = 1 - atkbd->release * 2;
@@ -397,38 +478,87 @@ static irqreturn_t atkbd_interrupt(struct serio *serio, unsigned char data,
 			hscroll = 1;
 			break;
 		default:
-			value = atkbd->release ? 0 :
-				(1 + (!atkbd->softrepeat && test_bit(atkbd->keycode[code], atkbd->dev->key)));
-
-			switch (value) {	/* Workaround Toshiba laptop multiple keypress */
-				case 0:
-					atkbd->last = 0;
-					break;
-				case 1:
-					atkbd->last = code;
-					atkbd->time = jiffies + msecs_to_jiffies(atkbd->dev->rep[REP_DELAY]) / 2;
-					break;
-				case 2:
-					if (!time_after(jiffies, atkbd->time) && atkbd->last == code)
-						value = 1;
-					break;
+			if (atkbd->release) {
+				value = 0;
+				atkbd->last = 0;
+			} else if (!atkbd->softrepeat && test_bit(keycode, dev->key)) {
+				/* Workaround Toshiba laptop multiple keypress */
+				value = time_before(jiffies, atkbd->time) && atkbd->last == code ? 1 : 2;
+			} else {
+				value = 1;
+				atkbd->last = code;
+				atkbd->time = jiffies + msecs_to_jiffies(dev->rep[REP_DELAY]) / 2;
 			}
 
-			atkbd_report_key(atkbd->dev, regs, atkbd->keycode[code], value);
+			input_event(dev, EV_KEY, keycode, value);
+			input_sync(dev);
+
+			if (value && add_release_event) {
+				input_report_key(dev, keycode, 0);
+				input_sync(dev);
+			}
 	}
 
 	if (atkbd->scroll) {
-		input_regs(atkbd->dev, regs);
 		if (click != -1)
-			input_report_key(atkbd->dev, BTN_MIDDLE, click);
-		input_report_rel(atkbd->dev, REL_WHEEL, scroll);
-		input_report_rel(atkbd->dev, REL_HWHEEL, hscroll);
-		input_sync(atkbd->dev);
+			input_report_key(dev, BTN_MIDDLE, click);
+		input_report_rel(dev, REL_WHEEL, scroll);
+		input_report_rel(dev, REL_HWHEEL, hscroll);
+		input_sync(dev);
 	}
 
 	atkbd->release = 0;
 out:
 	return IRQ_HANDLED;
+}
+
+static int atkbd_set_repeat_rate(struct atkbd *atkbd)
+{
+	const short period[32] =
+		{ 33,  37,  42,  46,  50,  54,  58,  63,  67,  75,  83,  92, 100, 109, 116, 125,
+		 133, 149, 167, 182, 200, 217, 232, 250, 270, 303, 333, 370, 400, 435, 470, 500 };
+	const short delay[4] =
+		{ 250, 500, 750, 1000 };
+
+	struct input_dev *dev = atkbd->dev;
+	unsigned char param;
+	int i = 0, j = 0;
+
+	while (i < ARRAY_SIZE(period) - 1 && period[i] < dev->rep[REP_PERIOD])
+		i++;
+	dev->rep[REP_PERIOD] = period[i];
+
+	while (j < ARRAY_SIZE(delay) - 1 && delay[j] < dev->rep[REP_DELAY])
+		j++;
+	dev->rep[REP_DELAY] = delay[j];
+
+	param = i | (j << 5);
+	return ps2_command(&atkbd->ps2dev, &param, ATKBD_CMD_SETREP);
+}
+
+static int atkbd_set_leds(struct atkbd *atkbd)
+{
+	struct input_dev *dev = atkbd->dev;
+	unsigned char param[2];
+
+	param[0] = (test_bit(LED_SCROLLL, dev->led) ? 1 : 0)
+		 | (test_bit(LED_NUML,    dev->led) ? 2 : 0)
+		 | (test_bit(LED_CAPSL,   dev->led) ? 4 : 0);
+	if (ps2_command(&atkbd->ps2dev, param, ATKBD_CMD_SETLEDS))
+		return -1;
+
+	if (atkbd->extra) {
+		param[0] = 0;
+		param[1] = (test_bit(LED_COMPOSE, dev->led) ? 0x01 : 0)
+			 | (test_bit(LED_SLEEP,   dev->led) ? 0x02 : 0)
+			 | (test_bit(LED_SUSPEND, dev->led) ? 0x04 : 0)
+			 | (test_bit(LED_MISC,    dev->led) ? 0x10 : 0)
+			 | (test_bit(LED_MUTE,    dev->led) ? 0x20 : 0);
+		if (ps2_command(&atkbd->ps2dev, param, ATKBD_CMD_EX_SETLEDS))
+			return -1;
+	}
+
+	return 0;
 }
 
 /*
@@ -437,49 +567,17 @@ out:
  * interrupt context.
  */
 
-static void atkbd_event_work(void *data)
+static void atkbd_event_work(struct work_struct *work)
 {
-	const short period[32] =
-		{ 33,  37,  42,  46,  50,  54,  58,  63,  67,  75,  83,  92, 100, 109, 116, 125,
-		 133, 149, 167, 182, 200, 217, 232, 250, 270, 303, 333, 370, 400, 435, 470, 500 };
-	const short delay[4] =
-		{ 250, 500, 750, 1000 };
-
-	struct atkbd *atkbd = data;
-	struct input_dev *dev = atkbd->dev;
-	unsigned char param[2];
-	int i, j;
+	struct atkbd *atkbd = container_of(work, struct atkbd, event_work);
 
 	mutex_lock(&atkbd->event_mutex);
 
-	if (test_and_clear_bit(ATKBD_LED_EVENT_BIT, &atkbd->event_mask)) {
-		param[0] = (test_bit(LED_SCROLLL, dev->led) ? 1 : 0)
-			 | (test_bit(LED_NUML,    dev->led) ? 2 : 0)
-			 | (test_bit(LED_CAPSL,   dev->led) ? 4 : 0);
-		ps2_command(&atkbd->ps2dev, param, ATKBD_CMD_SETLEDS);
+	if (test_and_clear_bit(ATKBD_LED_EVENT_BIT, &atkbd->event_mask))
+		atkbd_set_leds(atkbd);
 
-		if (atkbd->extra) {
-			param[0] = 0;
-			param[1] = (test_bit(LED_COMPOSE, dev->led) ? 0x01 : 0)
-				 | (test_bit(LED_SLEEP,   dev->led) ? 0x02 : 0)
-				 | (test_bit(LED_SUSPEND, dev->led) ? 0x04 : 0)
-				 | (test_bit(LED_MISC,    dev->led) ? 0x10 : 0)
-				 | (test_bit(LED_MUTE,    dev->led) ? 0x20 : 0);
-			ps2_command(&atkbd->ps2dev, param, ATKBD_CMD_EX_SETLEDS);
-		}
-	}
-
-	if (test_and_clear_bit(ATKBD_REP_EVENT_BIT, &atkbd->event_mask)) {
-		i = j = 0;
-		while (i < 31 && period[i] < dev->rep[REP_PERIOD])
-			i++;
-		while (j < 3 && delay[j] < dev->rep[REP_DELAY])
-			j++;
-		dev->rep[REP_PERIOD] = period[i];
-		dev->rep[REP_DELAY] = delay[j];
-		param[0] = i | (j << 5);
-		ps2_command(&atkbd->ps2dev, param, ATKBD_CMD_SETREP);
-	}
+	if (test_and_clear_bit(ATKBD_REP_EVENT_BIT, &atkbd->event_mask))
+		atkbd_set_repeat_rate(atkbd);
 
 	mutex_unlock(&atkbd->event_mutex);
 }
@@ -584,9 +682,7 @@ static int atkbd_probe(struct atkbd *atkbd)
 		return 0;
 	}
 
-	if (param[0] != 0xab && param[0] != 0xac &&	/* Regular and NCD Sun keyboards */
-	    param[0] != 0x2b && param[0] != 0x5d &&	/* Trust keyboard, raw and translated */
-	    param[0] != 0x60 && param[0] != 0x47)	/* NMB SGI keyboard, raw and translated */
+	if (!ps2_is_keyboard_id(param[0]))
 		return -1;
 
 	atkbd->id = (param[0] << 8) | param[1];
@@ -722,12 +818,7 @@ static void atkbd_disconnect(struct serio *serio)
 	synchronize_sched();  /* Allow atkbd_interrupt()s to complete. */
 	flush_scheduled_work();
 
-	device_remove_file(&serio->dev, &atkbd_attr_extra);
-	device_remove_file(&serio->dev, &atkbd_attr_scroll);
-	device_remove_file(&serio->dev, &atkbd_attr_set);
-	device_remove_file(&serio->dev, &atkbd_attr_softrepeat);
-	device_remove_file(&serio->dev, &atkbd_attr_softraw);
-
+	sysfs_remove_group(&serio->dev.kobj, &atkbd_attribute_group);
 	input_unregister_device(atkbd->dev);
 	serio_close(serio);
 	serio_set_drvdata(serio, NULL);
@@ -764,6 +855,9 @@ static void atkbd_set_keycode_table(struct atkbd *atkbd)
 			for (i = 0; i < ARRAY_SIZE(atkbd_scroll_keys); i++)
 				atkbd->keycode[atkbd_scroll_keys[i].set2] = atkbd_scroll_keys[i].keycode;
 	}
+
+	atkbd->keycode[atkbd_compat_scancode(atkbd, ATKBD_RET_HANGEUL)] = KEY_HANGUEL;
+	atkbd->keycode[atkbd_compat_scancode(atkbd, ATKBD_RET_HANJA)] = KEY_HANJA;
 }
 
 /*
@@ -776,12 +870,15 @@ static void atkbd_set_device_attrs(struct atkbd *atkbd)
 	int i;
 
 	if (atkbd->extra)
-		sprintf(atkbd->name, "AT Set 2 Extra keyboard");
+		snprintf(atkbd->name, sizeof(atkbd->name),
+			 "AT Set 2 Extra keyboard");
 	else
-		sprintf(atkbd->name, "AT %s Set %d keyboard",
-			atkbd->translated ? "Translated" : "Raw", atkbd->set);
+		snprintf(atkbd->name, sizeof(atkbd->name),
+			 "AT %s Set %d keyboard",
+			 atkbd->translated ? "Translated" : "Raw", atkbd->set);
 
-	sprintf(atkbd->phys, "%s/input0", atkbd->ps2dev.serio->phys);
+	snprintf(atkbd->phys, sizeof(atkbd->phys),
+		 "%s/input0", atkbd->ps2dev.serio->phys);
 
 	input_dev->name = atkbd->name;
 	input_dev->phys = atkbd->phys;
@@ -842,11 +939,11 @@ static int atkbd_connect(struct serio *serio, struct serio_driver *drv)
 	atkbd = kzalloc(sizeof(struct atkbd), GFP_KERNEL);
 	dev = input_allocate_device();
 	if (!atkbd || !dev)
-		goto fail;
+		goto fail1;
 
 	atkbd->dev = dev;
 	ps2_init(&atkbd->ps2dev, serio);
-	INIT_WORK(&atkbd->event_work, atkbd_event_work, atkbd);
+	INIT_WORK(&atkbd->event_work, atkbd_event_work);
 	mutex_init(&atkbd->event_mutex);
 
 	switch (serio->id.type) {
@@ -870,14 +967,13 @@ static int atkbd_connect(struct serio *serio, struct serio_driver *drv)
 
 	err = serio_open(serio, drv);
 	if (err)
-		goto fail;
+		goto fail2;
 
 	if (atkbd->write) {
 
 		if (atkbd_probe(atkbd)) {
-			serio_close(serio);
 			err = -ENODEV;
-			goto fail;
+			goto fail3;
 		}
 
 		atkbd->set = atkbd_select_set(atkbd, atkbd_set, atkbd_extra);
@@ -891,20 +987,22 @@ static int atkbd_connect(struct serio *serio, struct serio_driver *drv)
 	atkbd_set_keycode_table(atkbd);
 	atkbd_set_device_attrs(atkbd);
 
-	device_create_file(&serio->dev, &atkbd_attr_extra);
-	device_create_file(&serio->dev, &atkbd_attr_scroll);
-	device_create_file(&serio->dev, &atkbd_attr_set);
-	device_create_file(&serio->dev, &atkbd_attr_softrepeat);
-	device_create_file(&serio->dev, &atkbd_attr_softraw);
+	err = sysfs_create_group(&serio->dev.kobj, &atkbd_attribute_group);
+	if (err)
+		goto fail3;
 
 	atkbd_enable(atkbd);
 
-	input_register_device(atkbd->dev);
+	err = input_register_device(atkbd->dev);
+	if (err)
+		goto fail4;
 
 	return 0;
 
- fail:	serio_set_drvdata(serio, NULL);
-	input_free_device(dev);
+ fail4: sysfs_remove_group(&serio->dev.kobj, &atkbd_attribute_group);
+ fail3:	serio_close(serio);
+ fail2:	serio_set_drvdata(serio, NULL);
+ fail1:	input_free_device(dev);
 	kfree(atkbd);
 	return err;
 }
@@ -918,7 +1016,6 @@ static int atkbd_reconnect(struct serio *serio)
 {
 	struct atkbd *atkbd = serio_get_drvdata(serio);
 	struct serio_driver *drv = serio->drv;
-	unsigned char param[1];
 
 	if (!atkbd || !drv) {
 		printk(KERN_DEBUG "atkbd: reconnect request, but serio is disconnected, ignoring...\n");
@@ -928,10 +1025,6 @@ static int atkbd_reconnect(struct serio *serio)
 	atkbd_disable(atkbd);
 
 	if (atkbd->write) {
-		param[0] = (test_bit(LED_SCROLLL, atkbd->dev->led) ? 1 : 0)
-		         | (test_bit(LED_NUML,    atkbd->dev->led) ? 2 : 0)
-		         | (test_bit(LED_CAPSL,   atkbd->dev->led) ? 4 : 0);
-
 		if (atkbd_probe(atkbd))
 			return -1;
 		if (atkbd->set != atkbd_select_set(atkbd, atkbd->set, atkbd->extra))
@@ -939,8 +1032,13 @@ static int atkbd_reconnect(struct serio *serio)
 
 		atkbd_activate(atkbd);
 
-		if (ps2_command(&atkbd->ps2dev, param, ATKBD_CMD_SETLEDS))
-			return -1;
+/*
+ * Restore repeat rate and LEDs (that were reset by atkbd_activate)
+ * to pre-resume state
+ */
+		if (!atkbd->softrepeat)
+			atkbd_set_repeat_rate(atkbd);
+		atkbd_set_leds(atkbd);
 	}
 
 	atkbd_enable(atkbd);
@@ -1040,9 +1138,11 @@ static ssize_t atkbd_show_extra(struct atkbd *atkbd, char *buf)
 
 static ssize_t atkbd_set_extra(struct atkbd *atkbd, const char *buf, size_t count)
 {
-	struct input_dev *new_dev;
+	struct input_dev *old_dev, *new_dev;
 	unsigned long value;
 	char *rest;
+	int err;
+	unsigned char old_extra, old_set;
 
 	if (!atkbd->write)
 		return -EIO;
@@ -1054,17 +1154,36 @@ static ssize_t atkbd_set_extra(struct atkbd *atkbd, const char *buf, size_t coun
 	if (atkbd->extra != value) {
 		/*
 		 * Since device's properties will change we need to
-		 * unregister old device. But allocate new one first
-		 * to make sure we have it.
+		 * unregister old device. But allocate and register
+		 * new one first to make sure we have it.
 		 */
-		if (!(new_dev = input_allocate_device()))
+		old_dev = atkbd->dev;
+		old_extra = atkbd->extra;
+		old_set = atkbd->set;
+
+		new_dev = input_allocate_device();
+		if (!new_dev)
 			return -ENOMEM;
-		input_unregister_device(atkbd->dev);
+
 		atkbd->dev = new_dev;
 		atkbd->set = atkbd_select_set(atkbd, atkbd->set, value);
 		atkbd_activate(atkbd);
+		atkbd_set_keycode_table(atkbd);
 		atkbd_set_device_attrs(atkbd);
-		input_register_device(atkbd->dev);
+
+		err = input_register_device(atkbd->dev);
+		if (err) {
+			input_free_device(new_dev);
+
+			atkbd->dev = old_dev;
+			atkbd->set = atkbd_select_set(atkbd, old_set, old_extra);
+			atkbd_set_keycode_table(atkbd);
+			atkbd_set_device_attrs(atkbd);
+
+			return err;
+		}
+		input_unregister_device(old_dev);
+
 	}
 	return count;
 }
@@ -1076,23 +1195,41 @@ static ssize_t atkbd_show_scroll(struct atkbd *atkbd, char *buf)
 
 static ssize_t atkbd_set_scroll(struct atkbd *atkbd, const char *buf, size_t count)
 {
-	struct input_dev *new_dev;
+	struct input_dev *old_dev, *new_dev;
 	unsigned long value;
 	char *rest;
+	int err;
+	unsigned char old_scroll;
 
 	value = simple_strtoul(buf, &rest, 10);
 	if (*rest || value > 1)
 		return -EINVAL;
 
 	if (atkbd->scroll != value) {
-		if (!(new_dev = input_allocate_device()))
+		old_dev = atkbd->dev;
+		old_scroll = atkbd->scroll;
+
+		new_dev = input_allocate_device();
+		if (!new_dev)
 			return -ENOMEM;
-		input_unregister_device(atkbd->dev);
+
 		atkbd->dev = new_dev;
 		atkbd->scroll = value;
 		atkbd_set_keycode_table(atkbd);
 		atkbd_set_device_attrs(atkbd);
-		input_register_device(atkbd->dev);
+
+		err = input_register_device(atkbd->dev);
+		if (err) {
+			input_free_device(new_dev);
+
+			atkbd->scroll = old_scroll;
+			atkbd->dev = old_dev;
+			atkbd_set_keycode_table(atkbd);
+			atkbd_set_device_attrs(atkbd);
+
+			return err;
+		}
+		input_unregister_device(old_dev);
 	}
 	return count;
 }
@@ -1104,9 +1241,11 @@ static ssize_t atkbd_show_set(struct atkbd *atkbd, char *buf)
 
 static ssize_t atkbd_set_set(struct atkbd *atkbd, const char *buf, size_t count)
 {
-	struct input_dev *new_dev;
+	struct input_dev *old_dev, *new_dev;
 	unsigned long value;
 	char *rest;
+	int err;
+	unsigned char old_set, old_extra;
 
 	if (!atkbd->write)
 		return -EIO;
@@ -1116,15 +1255,32 @@ static ssize_t atkbd_set_set(struct atkbd *atkbd, const char *buf, size_t count)
 		return -EINVAL;
 
 	if (atkbd->set != value) {
-		if (!(new_dev = input_allocate_device()))
+		old_dev = atkbd->dev;
+		old_extra = atkbd->extra;
+		old_set = atkbd->set;
+
+		new_dev = input_allocate_device();
+		if (!new_dev)
 			return -ENOMEM;
-		input_unregister_device(atkbd->dev);
+
 		atkbd->dev = new_dev;
 		atkbd->set = atkbd_select_set(atkbd, value, atkbd->extra);
 		atkbd_activate(atkbd);
 		atkbd_set_keycode_table(atkbd);
 		atkbd_set_device_attrs(atkbd);
-		input_register_device(atkbd->dev);
+
+		err = input_register_device(atkbd->dev);
+		if (err) {
+			input_free_device(new_dev);
+
+			atkbd->dev = old_dev;
+			atkbd->set = atkbd_select_set(atkbd, old_set, old_extra);
+			atkbd_set_keycode_table(atkbd);
+			atkbd_set_device_attrs(atkbd);
+
+			return err;
+		}
+		input_unregister_device(old_dev);
 	}
 	return count;
 }
@@ -1136,9 +1292,11 @@ static ssize_t atkbd_show_softrepeat(struct atkbd *atkbd, char *buf)
 
 static ssize_t atkbd_set_softrepeat(struct atkbd *atkbd, const char *buf, size_t count)
 {
-	struct input_dev *new_dev;
+	struct input_dev *old_dev, *new_dev;
 	unsigned long value;
 	char *rest;
+	int err;
+	unsigned char old_softrepeat, old_softraw;
 
 	if (!atkbd->write)
 		return -EIO;
@@ -1148,15 +1306,32 @@ static ssize_t atkbd_set_softrepeat(struct atkbd *atkbd, const char *buf, size_t
 		return -EINVAL;
 
 	if (atkbd->softrepeat != value) {
-		if (!(new_dev = input_allocate_device()))
+		old_dev = atkbd->dev;
+		old_softrepeat = atkbd->softrepeat;
+		old_softraw = atkbd->softraw;
+
+		new_dev = input_allocate_device();
+		if (!new_dev)
 			return -ENOMEM;
-		input_unregister_device(atkbd->dev);
+
 		atkbd->dev = new_dev;
 		atkbd->softrepeat = value;
 		if (atkbd->softrepeat)
 			atkbd->softraw = 1;
 		atkbd_set_device_attrs(atkbd);
-		input_register_device(atkbd->dev);
+
+		err = input_register_device(atkbd->dev);
+		if (err) {
+			input_free_device(new_dev);
+
+			atkbd->dev = old_dev;
+			atkbd->softrepeat = old_softrepeat;
+			atkbd->softraw = old_softraw;
+			atkbd_set_device_attrs(atkbd);
+
+			return err;
+		}
+		input_unregister_device(old_dev);
 	}
 	return count;
 }
@@ -1169,31 +1344,52 @@ static ssize_t atkbd_show_softraw(struct atkbd *atkbd, char *buf)
 
 static ssize_t atkbd_set_softraw(struct atkbd *atkbd, const char *buf, size_t count)
 {
-	struct input_dev *new_dev;
+	struct input_dev *old_dev, *new_dev;
 	unsigned long value;
 	char *rest;
+	int err;
+	unsigned char old_softraw;
 
 	value = simple_strtoul(buf, &rest, 10);
 	if (*rest || value > 1)
 		return -EINVAL;
 
 	if (atkbd->softraw != value) {
-		if (!(new_dev = input_allocate_device()))
+		old_dev = atkbd->dev;
+		old_softraw = atkbd->softraw;
+
+		new_dev = input_allocate_device();
+		if (!new_dev)
 			return -ENOMEM;
-		input_unregister_device(atkbd->dev);
+
 		atkbd->dev = new_dev;
 		atkbd->softraw = value;
 		atkbd_set_device_attrs(atkbd);
-		input_register_device(atkbd->dev);
+
+		err = input_register_device(atkbd->dev);
+		if (err) {
+			input_free_device(new_dev);
+
+			atkbd->dev = old_dev;
+			atkbd->softraw = old_softraw;
+			atkbd_set_device_attrs(atkbd);
+
+			return err;
+		}
+		input_unregister_device(old_dev);
 	}
 	return count;
+}
+
+static ssize_t atkbd_show_err_count(struct atkbd *atkbd, char *buf)
+{
+	return sprintf(buf, "%lu\n", atkbd->err_count);
 }
 
 
 static int __init atkbd_init(void)
 {
-	serio_register_driver(&atkbd_drv);
-	return 0;
+	return serio_register_driver(&atkbd_drv);
 }
 
 static void __exit atkbd_exit(void)

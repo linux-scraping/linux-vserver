@@ -3,16 +3,16 @@
  *
  *   This program is free software;  you can redistribute it and/or modify
  *   it under the terms of the GNU General Public License as published by
- *   the Free Software Foundation; either version 2 of the License, or 
+ *   the Free Software Foundation; either version 2 of the License, or
  *   (at your option) any later version.
- * 
+ *
  *   This program is distributed in the hope that it will be useful,
  *   but WITHOUT ANY WARRANTY;  without even the implied warranty of
  *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See
  *   the GNU General Public License for more details.
  *
  *   You should have received a copy of the GNU General Public License
- *   along with this program;  if not, write to the Free Software 
+ *   along with this program;  if not, write to the Free Software
  *   Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
  */
 
@@ -75,7 +75,7 @@ static s64 extRoundDown(s64 nb);
  *		  extent that is used as an allocation hint if the
  *		  xaddr of the xad is non-zero.  on successful exit,
  *		  the xad describes the newly allocated extent.
- *	abnr	- boolean_t indicating whether the newly allocated extent
+ *	abnr	- bool indicating whether the newly allocated extent
  *		  should be marked as allocated but not recorded.
  *
  * RETURN VALUES:
@@ -84,7 +84,7 @@ static s64 extRoundDown(s64 nb);
  *      -ENOSPC	- insufficient disk resources.
  */
 int
-extAlloc(struct inode *ip, s64 xlen, s64 pno, xad_t * xp, boolean_t abnr)
+extAlloc(struct inode *ip, s64 xlen, s64 pno, xad_t * xp, bool abnr)
 {
 	struct jfs_sb_info *sbi = JFS_SBI(ip->i_sb);
 	s64 nxlen, nxaddr, xoff, hint, xaddr = 0;
@@ -118,7 +118,7 @@ extAlloc(struct inode *ip, s64 xlen, s64 pno, xad_t * xp, boolean_t abnr)
 		 * following the hint extent.
 		 */
 		if (offsetXAD(xp) + nxlen == xoff &&
-		    abnr == ((xp->flag & XAD_NOTRECORDED) ? TRUE : FALSE))
+		    abnr == ((xp->flag & XAD_NOTRECORDED) ? true : false))
 			xaddr = hint + nxlen;
 
 		/* adjust the hint to the last block of the extent */
@@ -126,8 +126,8 @@ extAlloc(struct inode *ip, s64 xlen, s64 pno, xad_t * xp, boolean_t abnr)
 	}
 
 	/* allocate the disk blocks for the extent.  initially, extBalloc()
-	 * will try to allocate disk blocks for the requested size (xlen). 
-	 * if this fails (xlen contigious free blocks not avaliable), it'll
+	 * will try to allocate disk blocks for the requested size (xlen).
+	 * if this fails (xlen contiguous free blocks not avaliable), it'll
 	 * try to allocate a smaller number of blocks (producing a smaller
 	 * extent), with this smaller number of blocks consisting of the
 	 * requested number of blocks rounded down to the next smaller
@@ -147,6 +147,7 @@ extAlloc(struct inode *ip, s64 xlen, s64 pno, xad_t * xp, boolean_t abnr)
 		mutex_unlock(&JFS_IP(ip)->commit_mutex);
 		return -EDQUOT;
 	}
+
 	/* Allocate blocks to dlimit. */
 	if (DLIMIT_ALLOC_BLOCK(ip, nxlen)) {
 		DQUOT_FREE_BLOCK(ip, nxlen);
@@ -156,9 +157,9 @@ extAlloc(struct inode *ip, s64 xlen, s64 pno, xad_t * xp, boolean_t abnr)
 	}
 
 	/* determine the value of the extent flag */
-	xflag = (abnr == TRUE) ? XAD_NOTRECORDED : 0;
+	xflag = abnr ? XAD_NOTRECORDED : 0;
 
-	/* if we can extend the hint extent to cover the current request, 
+	/* if we can extend the hint extent to cover the current request,
 	 * extend it.  otherwise, insert a new extent to
 	 * cover the current request.
 	 */
@@ -167,7 +168,7 @@ extAlloc(struct inode *ip, s64 xlen, s64 pno, xad_t * xp, boolean_t abnr)
 	else
 		rc = xtInsert(0, ip, xflag, xoff, (int) nxlen, &nxaddr, 0);
 
-	/* if the extend or insert failed, 
+	/* if the extend or insert failed,
 	 * free the newly allocated blocks and return the error.
 	 */
 	if (rc) {
@@ -212,7 +213,7 @@ extAlloc(struct inode *ip, s64 xlen, s64 pno, xad_t * xp, boolean_t abnr)
  *	xlen	- request size of the resulting extent.
  *	xp	- pointer to an xad. on successful exit, the xad
  *		  describes the newly allocated extent.
- *	abnr	- boolean_t indicating whether the newly allocated extent
+ *	abnr	- bool indicating whether the newly allocated extent
  *		  should be marked as allocated but not recorded.
  *
  * RETURN VALUES:
@@ -220,7 +221,7 @@ extAlloc(struct inode *ip, s64 xlen, s64 pno, xad_t * xp, boolean_t abnr)
  *      -EIO	- i/o error.
  *      -ENOSPC	- insufficient disk resources.
  */
-int extRealloc(struct inode *ip, s64 nxlen, xad_t * xp, boolean_t abnr)
+int extRealloc(struct inode *ip, s64 nxlen, xad_t * xp, bool abnr)
 {
 	struct super_block *sb = ip->i_sb;
 	s64 xaddr, xlen, nxaddr, delta, xoff;
@@ -244,7 +245,7 @@ int extRealloc(struct inode *ip, s64 nxlen, xad_t * xp, boolean_t abnr)
 	xoff = offsetXAD(xp);
 
 	/* if the extend page is abnr and if the request is for
-	 * the extent to be allocated and recorded, 
+	 * the extent to be allocated and recorded,
 	 * make the page allocated and recorded.
 	 */
 	if ((xp->flag & XAD_NOTRECORDED) && !abnr) {
@@ -415,7 +416,7 @@ int extHint(struct inode *ip, s64 offset, xad_t * xp)
 	if ((rc = xtLookupList(ip, &lxdl, &xadl, 0)))
 		return (rc);
 
-	/* check if not extent exists for the previous page.  
+	/* check if not extent exists for the previous page.
 	 * this is possible for sparse files.
 	 */
 	if (xadl.nxad == 0) {
@@ -428,7 +429,7 @@ int extHint(struct inode *ip, s64 offset, xad_t * xp)
 	 */
 	xp->flag &= XAD_NOTRECORDED;
 
-        if(xadl.nxad != 1 || lengthXAD(xp) != nbperpage) {          
+        if(xadl.nxad != 1 || lengthXAD(xp) != nbperpage) {
 		jfs_error(ip->i_sb, "extHint: corrupt xtree");
 		return -EIO;
         }
@@ -486,7 +487,7 @@ int extRecord(struct inode *ip, xad_t * xp)
 int extFill(struct inode *ip, xad_t * xp)
 {
 	int rc, nbperpage = JFS_SBI(ip->i_sb)->nbperpage;
-	s64 blkno = offsetXAD(xp) >> ip->i_blksize;
+	s64 blkno = offsetXAD(xp) >> ip->i_blkbits;
 
 //      assert(ISSPARSE(ip));
 
@@ -494,7 +495,7 @@ int extFill(struct inode *ip, xad_t * xp)
 	XADaddress(xp, 0);
 
 	/* allocate an extent to fill the hole */
-	if ((rc = extAlloc(ip, nbperpage, blkno, xp, FALSE)))
+	if ((rc = extAlloc(ip, nbperpage, blkno, xp, false)))
 		return (rc);
 
 	assert(lengthPXD(xp) == nbperpage);
@@ -510,15 +511,15 @@ int extFill(struct inode *ip, xad_t * xp)
  * FUNCTION:    allocate disk blocks to form an extent.
  *
  *		initially, we will try to allocate disk blocks for the
- *		requested size (nblocks).  if this fails (nblocks 
- *		contigious free blocks not avaliable), we'll try to allocate
+ *		requested size (nblocks).  if this fails (nblocks
+ *		contiguous free blocks not avaliable), we'll try to allocate
  *		a smaller number of blocks (producing a smaller extent), with
  *		this smaller number of blocks consisting of the requested
  *		number of blocks rounded down to the next smaller power of 2
  *		number (i.e. 16 -> 8).  we'll continue to round down and
  *		retry the allocation until the number of blocks to allocate
  *		is smaller than the number of blocks per page.
- *		
+ *
  * PARAMETERS:
  *	ip	 - the inode of the file.
  *	hint	 - disk block number to be used as an allocation hint.
@@ -527,7 +528,7 @@ int extFill(struct inode *ip, xad_t * xp)
  *		   exit, this value is set to the number of blocks actually
  *		   allocated.
  *	blkno	 - pointer to a block address that is filled in on successful
- *		   return with the starting block number of the newly 
+ *		   return with the starting block number of the newly
  *		   allocated block range.
  *
  * RETURN VALUES:
@@ -547,8 +548,8 @@ extBalloc(struct inode *ip, s64 hint, s64 * nblocks, s64 * blkno)
 
 	/* get the number of blocks to initially attempt to allocate.
 	 * we'll first try the number of blocks requested unless this
-	 * number is greater than the maximum number of contigious free
-	 * blocks in the map. in that case, we'll start off with the 
+	 * number is greater than the maximum number of contiguous free
+	 * blocks in the map. in that case, we'll start off with the
 	 * maximum free.
 	 */
 	max = (s64) 1 << bmp->db_maxfreebud;
@@ -600,19 +601,19 @@ extBalloc(struct inode *ip, s64 hint, s64 * nblocks, s64 * blkno)
  *
  * FUNCTION:    attempt to extend an extent's allocation.
  *
- *		initially, we will try to extend the extent's allocation
- *		in place.  if this fails, we'll try to move the extent
- *		to a new set of blocks. if moving the extent, we initially
+ *		Initially, we will try to extend the extent's allocation
+ *		in place.  If this fails, we'll try to move the extent
+ *		to a new set of blocks.  If moving the extent, we initially
  *		will try to allocate disk blocks for the requested size
- *		(nnew).  if this fails 	(nnew contigious free blocks not
- *		avaliable), we'll try  to allocate a smaller number of
+ *		(newnblks).  if this fails (new contiguous free blocks not
+ *		avaliable), we'll try to allocate a smaller number of
  *		blocks (producing a smaller extent), with this smaller
  *		number of blocks consisting of the requested number of
  *		blocks rounded down to the next smaller power of 2
- *		number (i.e. 16 -> 8).  we'll continue to round down and
+ *		number (i.e. 16 -> 8).  We'll continue to round down and
  *		retry the allocation until the number of blocks to allocate
  *		is smaller than the number of blocks per page.
- *		
+ *
  * PARAMETERS:
  *	ip	 - the inode of the file.
  *	blkno    - starting block number of the extents current allocation.
@@ -643,7 +644,7 @@ extBrealloc(struct inode *ip,
 			return (rc);
 	}
 
-	/* in place extension not possible.  
+	/* in place extension not possible.
 	 * try to move the extent to a new set of blocks.
 	 */
 	return (extBalloc(ip, blkno, newnblks, newblkno));

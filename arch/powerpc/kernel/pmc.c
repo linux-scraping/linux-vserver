@@ -12,7 +12,6 @@
  *  2 of the License, or (at your option) any later version.
  */
 
-#include <linux/config.h>
 #include <linux/errno.h>
 #include <linux/spinlock.h>
 #include <linux/module.h>
@@ -72,7 +71,7 @@ int reserve_pmc_hardware(perf_irq_t new_perf_irq)
 	}
 
 	pmc_owner_caller = __builtin_return_address(0);
-	perf_irq = new_perf_irq ? : dummy_perf;
+	perf_irq = new_perf_irq ? new_perf_irq : dummy_perf;
 
  out:
 	spin_unlock(&pmc_owner_lock);

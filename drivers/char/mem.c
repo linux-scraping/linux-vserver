@@ -8,7 +8,6 @@
  *  Shared /dev/zero mmaping support, Feb 2000, Kanoj Sarcar <kanoj@sgi.com>
  */
 
-#include <linux/config.h>
 #include <linux/mm.h>
 #include <linux/miscdevice.h>
 #include <linux/slab.h>
@@ -20,7 +19,6 @@
 #include <linux/tty.h>
 #include <linux/capability.h>
 #include <linux/smp_lock.h>
-#include <linux/devfs_fs_kernel.h>
 #include <linux/ptrace.h>
 #include <linux/device.h>
 #include <linux/highmem.h>
@@ -28,6 +26,7 @@
 #include <linux/backing-dev.h>
 #include <linux/bootmem.h>
 #include <linux/pipe_fs_i.h>
+#include <linux/pfn.h>
 
 #include <asm/uaccess.h>
 #include <asm/io.h>
@@ -97,7 +96,7 @@ static inline int valid_phys_addr_range(unsigned long addr, size_t count)
 	return 1;
 }
 
-static inline int valid_mmap_phys_addr_range(unsigned long addr, size_t size)
+static inline int valid_mmap_phys_addr_range(unsigned long pfn, size_t size)
 {
 	return 1;
 }
@@ -240,12 +239,41 @@ static pgprot_t phys_mem_access_prot(struct file *file, unsigned long pfn,
 }
 #endif
 
+#ifndef CONFIG_MMU
+static unsigned long get_unmapped_area_mem(struct file *file,
+					   unsigned long addr,
+					   unsigned long len,
+					   unsigned long pgoff,
+					   unsigned long flags)
+{
+	if (!valid_mmap_phys_addr_range(pgoff, len))
+		return (unsigned long) -EINVAL;
+	return pgoff;
+}
+
+/* can't do an in-place private mapping if there's no MMU */
+static inline int private_mapping_ok(struct vm_area_struct *vma)
+{
+	return vma->vm_flags & VM_MAYSHARE;
+}
+#else
+#define get_unmapped_area_mem	NULL
+
+static inline int private_mapping_ok(struct vm_area_struct *vma)
+{
+	return 1;
+}
+#endif
+
 static int mmap_mem(struct file * file, struct vm_area_struct * vma)
 {
 	size_t size = vma->vm_end - vma->vm_start;
 
-	if (!valid_mmap_phys_addr_range(vma->vm_pgoff << PAGE_SHIFT, size))
+	if (!valid_mmap_phys_addr_range(vma->vm_pgoff, size))
 		return -EINVAL;
+
+	if (!private_mapping_ok(vma))
+		return -ENOSYS;
 
 	vma->vm_page_prot = phys_mem_access_prot(file, vma->vm_pgoff,
 						 size,
@@ -524,7 +552,7 @@ static ssize_t write_kmem(struct file * file, const char __user * buf,
  	return virtr + wrote;
 }
 
-#if defined(CONFIG_ISA) || !defined(__mc68000__)
+#if (defined(CONFIG_ISA) || defined(CONFIG_PCI)) && !defined(__mc68000__)
 static ssize_t read_port(struct file * file, char __user * buf,
 			 size_t count, loff_t *ppos)
 {
@@ -618,7 +646,8 @@ static inline size_t read_zero_pagealigned(char __user * buf, size_t size)
 			count = size;
 
 		zap_page_range(vma, addr, count, NULL);
-        	zeromap_page_range(vma, addr, count, PAGE_COPY);
+        	if (zeromap_page_range(vma, addr, count, PAGE_COPY))
+			break;
 
 		size -= count;
 		buf += count;
@@ -685,11 +714,14 @@ out:
 
 static int mmap_zero(struct file * file, struct vm_area_struct * vma)
 {
+	int err;
+
 	if (vma->vm_flags & VM_SHARED)
 		return shmem_zero_setup(vma);
-	if (zeromap_page_range(vma, vma->vm_start, vma->vm_end - vma->vm_start, vma->vm_page_prot))
-		return -EAGAIN;
-	return 0;
+	err = zeromap_page_range(vma, vma->vm_start,
+			vma->vm_end - vma->vm_start, vma->vm_page_prot);
+	BUG_ON(err == -EEXIST);
+	return err;
 }
 #else /* CONFIG_MMU */
 static ssize_t read_zero(struct file * file, char * buf, 
@@ -746,7 +778,7 @@ static loff_t memory_lseek(struct file * file, loff_t offset, int orig)
 {
 	loff_t ret;
 
-	mutex_lock(&file->f_dentry->d_inode->i_mutex);
+	mutex_lock(&file->f_path.dentry->d_inode->i_mutex);
 	switch (orig) {
 		case 0:
 			file->f_pos = offset;
@@ -761,7 +793,7 @@ static loff_t memory_lseek(struct file * file, loff_t offset, int orig)
 		default:
 			ret = -EINVAL;
 	}
-	mutex_unlock(&file->f_dentry->d_inode->i_mutex);
+	mutex_unlock(&file->f_path.dentry->d_inode->i_mutex);
 	return ret;
 }
 
@@ -778,31 +810,33 @@ static int open_port(struct inode * inode, struct file * filp)
 #define open_kmem	open_mem
 #define open_oldmem	open_mem
 
-static struct file_operations mem_fops = {
+static const struct file_operations mem_fops = {
 	.llseek		= memory_lseek,
 	.read		= read_mem,
 	.write		= write_mem,
 	.mmap		= mmap_mem,
 	.open		= open_mem,
+	.get_unmapped_area = get_unmapped_area_mem,
 };
 
-static struct file_operations kmem_fops = {
+static const struct file_operations kmem_fops = {
 	.llseek		= memory_lseek,
 	.read		= read_kmem,
 	.write		= write_kmem,
 	.mmap		= mmap_kmem,
 	.open		= open_kmem,
+	.get_unmapped_area = get_unmapped_area_mem,
 };
 
-static struct file_operations null_fops = {
+static const struct file_operations null_fops = {
 	.llseek		= null_lseek,
 	.read		= read_null,
 	.write		= write_null,
 	.splice_write	= splice_write_null,
 };
 
-#if defined(CONFIG_ISA) || !defined(__mc68000__)
-static struct file_operations port_fops = {
+#if (defined(CONFIG_ISA) || defined(CONFIG_PCI)) && !defined(__mc68000__)
+static const struct file_operations port_fops = {
 	.llseek		= memory_lseek,
 	.read		= read_port,
 	.write		= write_port,
@@ -810,25 +844,29 @@ static struct file_operations port_fops = {
 };
 #endif
 
-static struct file_operations zero_fops = {
+static const struct file_operations zero_fops = {
 	.llseek		= zero_lseek,
 	.read		= read_zero,
 	.write		= write_zero,
 	.mmap		= mmap_zero,
 };
 
+/*
+ * capabilities for /dev/zero
+ * - permits private mappings, "copies" are taken of the source of zeros
+ */
 static struct backing_dev_info zero_bdi = {
 	.capabilities	= BDI_CAP_MAP_COPY,
 };
 
-static struct file_operations full_fops = {
+static const struct file_operations full_fops = {
 	.llseek		= full_lseek,
 	.read		= read_full,
 	.write		= write_full,
 };
 
 #ifdef CONFIG_CRASH_DUMP
-static struct file_operations oldmem_fops = {
+static const struct file_operations oldmem_fops = {
 	.read	= read_oldmem,
 	.open	= open_oldmem,
 };
@@ -855,7 +893,7 @@ static ssize_t kmsg_write(struct file * file, const char __user * buf,
 	return ret;
 }
 
-static struct file_operations kmsg_fops = {
+static const struct file_operations kmsg_fops = {
 	.write =	kmsg_write,
 };
 
@@ -864,14 +902,18 @@ static int memory_open(struct inode * inode, struct file * filp)
 	switch (iminor(inode)) {
 		case 1:
 			filp->f_op = &mem_fops;
+			filp->f_mapping->backing_dev_info =
+				&directly_mappable_cdev_bdi;
 			break;
 		case 2:
 			filp->f_op = &kmem_fops;
+			filp->f_mapping->backing_dev_info =
+				&directly_mappable_cdev_bdi;
 			break;
 		case 3:
 			filp->f_op = &null_fops;
 			break;
-#if defined(CONFIG_ISA) || !defined(__mc68000__)
+#if (defined(CONFIG_ISA) || defined(CONFIG_PCI)) && !defined(__mc68000__)
 		case 4:
 			filp->f_op = &port_fops;
 			break;
@@ -905,7 +947,7 @@ static int memory_open(struct inode * inode, struct file * filp)
 	return 0;
 }
 
-static struct file_operations memory_fops = {
+static const struct file_operations memory_fops = {
 	.open		= memory_open,	/* just a selector for the real open */
 };
 
@@ -918,7 +960,7 @@ static const struct {
 	{1, "mem",     S_IRUSR | S_IWUSR | S_IRGRP, &mem_fops},
 	{2, "kmem",    S_IRUSR | S_IWUSR | S_IRGRP, &kmem_fops},
 	{3, "null",    S_IRUGO | S_IWUGO,           &null_fops},
-#if defined(CONFIG_ISA) || !defined(__mc68000__)
+#if (defined(CONFIG_ISA) || defined(CONFIG_PCI)) && !defined(__mc68000__)
 	{4, "port",    S_IRUSR | S_IWUSR | S_IRGRP, &port_fops},
 #endif
 	{5, "zero",    S_IRUGO | S_IWUGO,           &zero_fops},
@@ -941,14 +983,11 @@ static int __init chr_dev_init(void)
 		printk("unable to get major %d for memory devs\n", MEM_MAJOR);
 
 	mem_class = class_create(THIS_MODULE, "mem");
-	for (i = 0; i < ARRAY_SIZE(devlist); i++) {
-		class_device_create(mem_class, NULL,
-					MKDEV(MEM_MAJOR, devlist[i].minor),
-					NULL, devlist[i].name);
-		devfs_mk_cdev(MKDEV(MEM_MAJOR, devlist[i].minor),
-				S_IFCHR | devlist[i].mode, devlist[i].name);
-	}
-	
+	for (i = 0; i < ARRAY_SIZE(devlist); i++)
+		device_create(mem_class, NULL,
+			      MKDEV(MEM_MAJOR, devlist[i].minor),
+			      devlist[i].name);
+
 	return 0;
 }
 

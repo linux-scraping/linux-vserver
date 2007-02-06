@@ -13,7 +13,6 @@
 
 #ifdef __KERNEL__
 
-#include <linux/config.h>
 
 /*
  * Work out if we need multiple CPU support
@@ -34,6 +33,14 @@
 #   define CPU_NAME cpu_arm6
 #  endif
 # endif
+# ifdef CONFIG_CPU_ARM7TDMI
+#  ifdef CPU_NAME
+#   undef  MULTI_CPU
+#   define MULTI_CPU
+#  else
+#   define CPU_NAME cpu_arm7tdmi
+#  endif
+# endif
 # ifdef CONFIG_CPU_ARM710
 #  ifdef CPU_NAME
 #   undef  MULTI_CPU
@@ -48,6 +55,22 @@
 #   define MULTI_CPU
 #  else
 #   define CPU_NAME cpu_arm720
+#  endif
+# endif
+# ifdef CONFIG_CPU_ARM740T
+#  ifdef CPU_NAME
+#   undef  MULTI_CPU
+#   define MULTI_CPU
+#  else
+#   define CPU_NAME cpu_arm740
+#  endif
+# endif
+# ifdef CONFIG_CPU_ARM9TDMI
+#  ifdef CPU_NAME
+#   undef  MULTI_CPU
+#   define MULTI_CPU
+#  else
+#   define CPU_NAME cpu_arm9tdmi
 #  endif
 # endif
 # ifdef CONFIG_CPU_ARM920T
@@ -80,6 +103,22 @@
 #   define MULTI_CPU
 #  else
 #   define CPU_NAME cpu_arm926
+#  endif
+# endif
+# ifdef CONFIG_CPU_ARM940T
+#  ifdef CPU_NAME
+#   undef  MULTI_CPU
+#   define MULTI_CPU
+#  else
+#   define CPU_NAME cpu_arm940
+#  endif
+# endif
+# ifdef CONFIG_CPU_ARM946E
+#  ifdef CPU_NAME
+#   undef  MULTI_CPU
+#   define MULTI_CPU
+#  else
+#   define CPU_NAME cpu_arm946
 #  endif
 # endif
 # ifdef CONFIG_CPU_SA110
@@ -166,6 +205,8 @@
 
 #include <asm/memory.h>
 
+#ifdef CONFIG_MMU
+
 #define cpu_switch_mm(pgd,mm) cpu_do_switch_mm(virt_to_phys(pgd),mm)
 
 #define cpu_get_pgd()	\
@@ -176,6 +217,8 @@
 		pg &= ~0x3fff;				\
 		(pgd_t *)phys_to_virt(pg);		\
 	})
+
+#endif
 
 #endif /* __ASSEMBLY__ */
 #endif /* __KERNEL__ */

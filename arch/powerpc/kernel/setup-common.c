@@ -12,7 +12,6 @@
 
 #undef DEBUG
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/string.h>
 #include <linux/sched.h>
@@ -27,7 +26,7 @@
 #include <linux/ioport.h>
 #include <linux/console.h>
 #include <linux/utsname.h>
-#include <linux/tty.h>
+#include <linux/screen_info.h>
 #include <linux/root_dev.h>
 #include <linux/notifier.h>
 #include <linux/cpu.h>
@@ -305,19 +304,21 @@ struct seq_operations cpuinfo_op = {
 void __init check_for_initrd(void)
 {
 #ifdef CONFIG_BLK_DEV_INITRD
-	unsigned long *prop;
+	const unsigned int *prop;
+	int len;
 
 	DBG(" -> check_for_initrd()\n");
 
 	if (of_chosen) {
-		prop = (unsigned long *)get_property(of_chosen,
-				"linux,initrd-start", NULL);
+		prop = get_property(of_chosen, "linux,initrd-start", &len);
 		if (prop != NULL) {
-			initrd_start = (unsigned long)__va(*prop);
-			prop = (unsigned long *)get_property(of_chosen,
-					"linux,initrd-end", NULL);
+			initrd_start = (unsigned long)
+				__va(of_read_ulong(prop, len / 4));
+			prop = get_property(of_chosen,
+					"linux,initrd-end", &len);
 			if (prop != NULL) {
-				initrd_end = (unsigned long)__va(*prop);
+				initrd_end = (unsigned long)
+					__va(of_read_ulong(prop, len / 4));
 				initrd_below_start_ok = 1;
 			} else
 				initrd_start = 0;
@@ -367,15 +368,14 @@ void __init smp_setup_cpu_maps(void)
 	int cpu = 0;
 
 	while ((dn = of_find_node_by_type(dn, "cpu")) && cpu < NR_CPUS) {
-		int *intserv;
+		const int *intserv;
 		int j, len = sizeof(u32), nthreads = 1;
 
-		intserv = (int *)get_property(dn, "ibm,ppc-interrupt-server#s",
-					      &len);
+		intserv = get_property(dn, "ibm,ppc-interrupt-server#s", &len);
 		if (intserv)
 			nthreads = len / sizeof(int);
 		else {
-			intserv = (int *) get_property(dn, "reg", NULL);
+			intserv = get_property(dn, "reg", NULL);
 			if (!intserv)
 				intserv = &cpu;	/* assume logical == phys */
 		}
@@ -396,13 +396,12 @@ void __init smp_setup_cpu_maps(void)
 	if (machine_is(pseries) && firmware_has_feature(FW_FEATURE_LPAR) &&
 	    (dn = of_find_node_by_path("/rtas"))) {
 		int num_addr_cell, num_size_cell, maxcpus;
-		unsigned int *ireg;
+		const unsigned int *ireg;
 
 		num_addr_cell = prom_n_addr_cells(dn);
 		num_size_cell = prom_n_size_cells(dn);
 
-		ireg = (unsigned int *)
-			get_property(dn, "ibm,lrdr-capacity", NULL);
+		ireg = get_property(dn, "ibm,lrdr-capacity", NULL);
 
 		if (!ireg)
 			goto out;
@@ -442,26 +441,6 @@ void __init smp_setup_cpu_maps(void)
 #endif /* CONFIG_PPC64 */
 }
 #endif /* CONFIG_SMP */
-
-#ifdef CONFIG_XMON
-static int __init early_xmon(char *p)
-{
-	/* ensure xmon is enabled */
-	if (p) {
-		if (strncmp(p, "on", 2) == 0)
-			xmon_init(1);
-		if (strncmp(p, "off", 3) == 0)
-			xmon_init(0);
-		if (strncmp(p, "early", 5) != 0)
-			return 0;
-	}
-	xmon_init(1);
-	debugger(NULL);
-
-	return 0;
-}
-early_param("xmon", early_xmon);
-#endif
 
 static __init int add_pcspkr(void)
 {
@@ -524,3 +503,20 @@ int check_legacy_ioport(unsigned long base_port)
 	return ppc_md.check_legacy_ioport(base_port);
 }
 EXPORT_SYMBOL(check_legacy_ioport);
+
+static int ppc_panic_event(struct notifier_block *this,
+                             unsigned long event, void *ptr)
+{
+	ppc_md.panic(ptr);  /* May not return */
+	return NOTIFY_DONE;
+}
+
+static struct notifier_block ppc_panic_block = {
+	.notifier_call = ppc_panic_event,
+	.priority = INT_MIN /* may not return; must be done last */
+};
+
+void __init setup_panic(void)
+{
+	atomic_notifier_chain_register(&panic_notifier_list, &ppc_panic_block);
+}

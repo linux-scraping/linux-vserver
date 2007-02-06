@@ -7,6 +7,9 @@
  *  	Karl Lessard <klessard@sunrisetelecom.com>
  *  	<c.pellegrin@exadron.com>
  *
+ * PM support added by Rodolfo Giometti <giometti@linux.it>
+ * Cursor enable/disable by Rodolfo Giometti <giometti@linux.it>
+ *
  * Copyright 2002 MontaVista Software
  * Author: MontaVista Software, Inc.
  *		ppopov@mvista.com or source@mvista.com
@@ -38,7 +41,6 @@
  *  with this program; if not, write  to the Free Software Foundation, Inc.,
  *  675 Mass Ave, Cambridge, MA 02139, USA.
  */
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/errno.h>
@@ -109,6 +111,10 @@ static struct fb_var_screeninfo au1100fb_var __initdata = {
 
 static struct au1100fb_drv_info drv_info;
 
+static int nocursor = 0;
+module_param(nocursor, int, 0644);
+MODULE_PARM_DESC(nocursor, "cursor enable/disable");
+
 /*
  * Set hardware with var settings. This will enable the controller with a specific
  * mode, normally validated with the fb_check_var method
@@ -155,7 +161,7 @@ int au1100fb_setmode(struct au1100fb_device *fbdev)
 
 			info->fix.visual = FB_VISUAL_TRUECOLOR;
 			info->fix.line_length = info->var.xres_virtual << 1; /* depth=16 */
-	}
+		}
 	} else {
 		/* mono */
 		info->fix.visual = FB_VISUAL_MONO10;
@@ -163,20 +169,16 @@ int au1100fb_setmode(struct au1100fb_device *fbdev)
 	}
 
 	info->screen_size = info->fix.line_length * info->var.yres_virtual;
+	info->var.rotate = ((fbdev->panel->control_base&LCD_CONTROL_SM_MASK) \
+				>> LCD_CONTROL_SM_BIT) * 90;
 
 	/* Determine BPP mode and format */
-	fbdev->regs->lcd_control = fbdev->panel->control_base |
-			    ((info->var.rotate/90) << LCD_CONTROL_SM_BIT);
-
+	fbdev->regs->lcd_control = fbdev->panel->control_base;
+	fbdev->regs->lcd_horztiming = fbdev->panel->horztiming;
+	fbdev->regs->lcd_verttiming = fbdev->panel->verttiming;
+	fbdev->regs->lcd_clkcontrol = fbdev->panel->clkcontrol_base;
 	fbdev->regs->lcd_intenable = 0;
 	fbdev->regs->lcd_intstatus = 0;
-
-	fbdev->regs->lcd_horztiming = fbdev->panel->horztiming;
-
-	fbdev->regs->lcd_verttiming = fbdev->panel->verttiming;
-
-	fbdev->regs->lcd_clkcontrol = fbdev->panel->clkcontrol_base;
-
 	fbdev->regs->lcd_dmaaddr0 = LCD_DMA_SA_N(fbdev->fb_phys);
 
 	if (panel_is_dual(fbdev->panel)) {
@@ -205,6 +207,8 @@ int au1100fb_setmode(struct au1100fb_device *fbdev)
 
 	/* Resume controller */
 	fbdev->regs->lcd_control |= LCD_CONTROL_GO;
+	mdelay(10);
+	au1100fb_fb_blank(VESA_NO_BLANKING, info);
 
 	return 0;
 }
@@ -423,6 +427,17 @@ int au1100fb_fb_mmap(struct fb_info *fbi, struct vm_area_struct *vma)
 	return 0;
 }
 
+/* fb_cursor
+ * Used to disable cursor drawing...
+ */
+int au1100fb_fb_cursor(struct fb_info *info, struct fb_cursor *cursor)
+{
+	if (nocursor)
+		return 0;
+	else
+		return -EINVAL;	/* just to force soft_cursor() call */
+}
+
 static struct fb_ops au1100fb_ops =
 {
 	.owner			= THIS_MODULE,
@@ -434,6 +449,7 @@ static struct fb_ops au1100fb_ops =
 	.fb_imageblit		= cfb_imageblit,
 	.fb_rotate		= au1100fb_fb_rotate,
 	.fb_mmap		= au1100fb_fb_mmap,
+	.fb_cursor		= au1100fb_fb_cursor,
 };
 
 
@@ -602,17 +618,52 @@ int au1100fb_drv_remove(struct device *dev)
 	return 0;
 }
 
+#ifdef CONFIG_PM
+static u32 sys_clksrc;
+static struct au1100fb_regs fbregs;
+
 int au1100fb_drv_suspend(struct device *dev, pm_message_t state)
 {
-	/* TODO */
+	struct au1100fb_device *fbdev = dev_get_drvdata(dev);
+
+	if (!fbdev)
+		return 0;
+
+	/* Save the clock source state */
+	sys_clksrc = au_readl(SYS_CLKSRC);
+
+	/* Blank the LCD */
+	au1100fb_fb_blank(VESA_POWERDOWN, &fbdev->info);
+
+	/* Stop LCD clocking */
+	au_writel(sys_clksrc & ~SYS_CS_ML_MASK, SYS_CLKSRC);
+
+	memcpy(&fbregs, fbdev->regs, sizeof(struct au1100fb_regs));
+
 	return 0;
 }
 
 int au1100fb_drv_resume(struct device *dev)
 {
-	/* TODO */
+	struct au1100fb_device *fbdev = dev_get_drvdata(dev);
+
+	if (!fbdev)
+		return 0;
+
+	memcpy(fbdev->regs, &fbregs, sizeof(struct au1100fb_regs));
+
+	/* Restart LCD clocking */
+	au_writel(sys_clksrc, SYS_CLKSRC);
+
+	/* Unblank the LCD */
+	au1100fb_fb_blank(VESA_NO_BLANKING, &fbdev->info);
+
 	return 0;
 }
+#else
+#define au1100fb_drv_suspend NULL
+#define au1100fb_drv_resume NULL
+#endif
 
 static struct device_driver au1100fb_driver = {
 	.name		= "au1100-lcd",
@@ -643,7 +694,7 @@ int au1100fb_setup(char *options)
 	if (options) {
 		while ((this_opt = strsep(&options,",")) != NULL) {
 			/* Panel option */
-		if (!strncmp(this_opt, "panel:", 6)) {
+			if (!strncmp(this_opt, "panel:", 6)) {
 				int i;
 				this_opt += 6;
 				for (i = 0; i < num_panels; i++) {
@@ -651,12 +702,17 @@ int au1100fb_setup(char *options)
 					      	     known_lcd_panels[i].name,
 							strlen(this_opt))) {
 						panel_idx = i;
-					break;
+						break;
+					}
 				}
-			}
 				if (i >= num_panels) {
  					print_warn("Panel %s not supported!", this_opt);
 				}
+			}
+			if (!strncmp(this_opt, "nocursor", 8)) {
+				this_opt += 8;
+				nocursor = 1;
+				print_info("Cursor disabled");
 			}
 			/* Mode option (only option that start with digit) */
 			else if (isdigit(this_opt[0])) {
@@ -666,7 +722,7 @@ int au1100fb_setup(char *options)
 			/* Unsupported option */
 			else {
 				print_warn("Unsupported option \"%s\"", this_opt);
-		}
+			}
 		}
 	}
 
@@ -706,8 +762,7 @@ void __exit au1100fb_cleanup(void)
 {
 	driver_unregister(&au1100fb_driver);
 
-	if (drv_info.opt_mode)
-		kfree(drv_info.opt_mode);
+	kfree(drv_info.opt_mode);
 }
 
 module_init(au1100fb_init);

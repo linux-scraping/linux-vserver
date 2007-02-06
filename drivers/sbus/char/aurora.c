@@ -254,7 +254,7 @@ for(i=0;i<TYPE_1_IRQS;i++)
 return 0;
 }
 
-static irqreturn_t aurora_interrupt(int irq, void * dev_id, struct pt_regs * regs);
+static irqreturn_t aurora_interrupt(int irq, void * dev_id);
 
 /* Main probing routine, also sets irq. */
 static int aurora_probe(void)
@@ -337,19 +337,19 @@ static int aurora_probe(void)
 				printk("intr pri %d\n", grrr);
 #endif
 				if ((bp->irq=irqs[bn]) && valid_irq(bp->irq) &&
-				    !request_irq(bp->irq|0x30, aurora_interrupt, SA_SHIRQ, "sio16", bp)) {
+				    !request_irq(bp->irq|0x30, aurora_interrupt, IRQF_SHARED, "sio16", bp)) {
 					free_irq(bp->irq|0x30, bp);
 				} else
 				if ((bp->irq=prom_getint(sdev->prom_node, "bintr")) && valid_irq(bp->irq) &&
-				    !request_irq(bp->irq|0x30, aurora_interrupt, SA_SHIRQ, "sio16", bp)) {
+				    !request_irq(bp->irq|0x30, aurora_interrupt, IRQF_SHARED, "sio16", bp)) {
 					free_irq(bp->irq|0x30, bp);
 				} else
 				if ((bp->irq=prom_getint(sdev->prom_node, "intr")) && valid_irq(bp->irq) &&
-				    !request_irq(bp->irq|0x30, aurora_interrupt, SA_SHIRQ, "sio16", bp)) {
+				    !request_irq(bp->irq|0x30, aurora_interrupt, IRQF_SHARED, "sio16", bp)) {
 					free_irq(bp->irq|0x30, bp);
 				} else
 				for(grrr=0;grrr<TYPE_1_IRQS;grrr++) {
-					if ((bp->irq=type_1_irq[grrr])&&!request_irq(bp->irq|0x30, aurora_interrupt, SA_SHIRQ, "sio16", bp)) {
+					if ((bp->irq=type_1_irq[grrr])&&!request_irq(bp->irq|0x30, aurora_interrupt, IRQF_SHARED, "sio16", bp)) {
 						free_irq(bp->irq|0x30, bp);
 						break;
 					} else {
@@ -689,7 +689,7 @@ static void aurora_check_modem(struct Aurora_board const * bp, int chip)
 }
 
 /* The main interrupt processing routine */
-static irqreturn_t aurora_interrupt(int irq, void * dev_id, struct pt_regs * regs)
+static irqreturn_t aurora_interrupt(int irq, void * dev_id)
 {
 	unsigned char status;
 	unsigned char ack,chip/*,chip_id*/;
@@ -909,14 +909,14 @@ static int aurora_setup_board(struct Aurora_board * bp)
 #ifdef AURORA_ALLIRQ
 	int i;
 	for (i = 0; i < AURORA_ALLIRQ; i++) {
-		error = request_irq(allirq[i]|0x30, aurora_interrupt, SA_SHIRQ,
+		error = request_irq(allirq[i]|0x30, aurora_interrupt, IRQF_SHARED,
 				    "sio16", bp);
 		if (error)
 			printk(KERN_ERR "IRQ%d request error %d\n",
 			       allirq[i], error);
 	}
 #else
-	error = request_irq(bp->irq|0x30, aurora_interrupt, SA_SHIRQ,
+	error = request_irq(bp->irq|0x30, aurora_interrupt, IRQF_SHARED,
 			    "sio16", bp);
 	if (error) {
 		printk(KERN_ERR "IRQ request error %d\n", error);
@@ -2187,7 +2187,7 @@ static void do_softint(void *private_)
 #endif
 }
 
-static struct tty_operations aurora_ops = {
+static const struct tty_operations aurora_ops = {
 	.open  = aurora_open,
 	.close = aurora_close,
 	.write = aurora_write,

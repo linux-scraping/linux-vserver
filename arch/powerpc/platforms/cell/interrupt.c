@@ -1,6 +1,9 @@
 /*
  * Cell Internal Interrupt Controller
  *
+ * Copyright (C) 2006 Benjamin Herrenschmidt (benh@kernel.crashing.org)
+ *                    IBM, Corp.
+ *
  * (C) Copyright IBM Deutschland Entwicklung GmbH 2005
  *
  * Author: Arnd Bergmann <arndb@de.ibm.com>
@@ -18,271 +21,141 @@
  * You should have received a copy of the GNU General Public License
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ *
+ * TODO:
+ * - Fix various assumptions related to HW CPU numbers vs. linux CPU numbers
+ *   vs node numbers in the setup code
+ * - Implement proper handling of maxcpus=1/2 (that is, routing of irqs from
+ *   a non-active node to the active node)
  */
 
-#include <linux/config.h>
 #include <linux/interrupt.h>
 #include <linux/irq.h>
 #include <linux/module.h>
 #include <linux/percpu.h>
 #include <linux/types.h>
+#include <linux/ioport.h>
 
 #include <asm/io.h>
 #include <asm/pgtable.h>
 #include <asm/prom.h>
 #include <asm/ptrace.h>
+#include <asm/machdep.h>
 
 #include "interrupt.h"
-
-struct iic_pending_bits {
-	u32 data;
-	u8 flags;
-	u8 class;
-	u8 source;
-	u8 prio;
-};
-
-enum iic_pending_flags {
-	IIC_VALID = 0x80,
-	IIC_IPI   = 0x40,
-};
-
-struct iic_regs {
-	struct iic_pending_bits pending;
-	struct iic_pending_bits pending_destr;
-	u64 generate;
-	u64 prio;
-};
+#include "cbe_regs.h"
 
 struct iic {
-	struct iic_regs __iomem *regs;
+	struct cbe_iic_thread_regs __iomem *regs;
 	u8 target_id;
+	u8 eoi_stack[16];
+	int eoi_ptr;
+	struct device_node *node;
 };
 
 static DEFINE_PER_CPU(struct iic, iic);
+#define IIC_NODE_COUNT	2
+static struct irq_host *iic_host;
 
-void iic_local_enable(void)
+/* Convert between "pending" bits and hw irq number */
+static irq_hw_number_t iic_pending_to_hwnum(struct cbe_iic_pending_bits bits)
+{
+	unsigned char unit = bits.source & 0xf;
+	unsigned char node = bits.source >> 4;
+	unsigned char class = bits.class & 3;
+
+	/* Decode IPIs */
+	if (bits.flags & CBE_IIC_IRQ_IPI)
+		return IIC_IRQ_TYPE_IPI | (bits.prio >> 4);
+	else
+		return (node << IIC_IRQ_NODE_SHIFT) | (class << 4) | unit;
+}
+
+static void iic_mask(unsigned int irq)
+{
+}
+
+static void iic_unmask(unsigned int irq)
+{
+}
+
+static void iic_eoi(unsigned int irq)
 {
 	struct iic *iic = &__get_cpu_var(iic);
-	u64 tmp;
-
-	/*
-	 * There seems to be a bug that is present in DD2.x CPUs
-	 * and still only partially fixed in DD3.1.
-	 * This bug causes a value written to the priority register
-	 * not to make it there, resulting in a system hang unless we
-	 * write it again.
-	 * Masking with 0xf0 is done because the Cell BE does not
-	 * implement the lower four bits of the interrupt priority,
-	 * they always read back as zeroes, although future CPUs
-	 * might implement different bits.
-	 */
-	do {
-		out_be64(&iic->regs->prio, 0xff);
-		tmp = in_be64(&iic->regs->prio);
-	} while ((tmp & 0xf0) != 0xf0);
+	out_be64(&iic->regs->prio, iic->eoi_stack[--iic->eoi_ptr]);
+	BUG_ON(iic->eoi_ptr < 0);
 }
 
-void iic_local_disable(void)
-{
-	out_be64(&__get_cpu_var(iic).regs->prio, 0x0);
-}
-
-static unsigned int iic_startup(unsigned int irq)
-{
-	return 0;
-}
-
-static void iic_enable(unsigned int irq)
-{
-	iic_local_enable();
-}
-
-static void iic_disable(unsigned int irq)
-{
-}
-
-static void iic_end(unsigned int irq)
-{
-	iic_local_enable();
-}
-
-static struct hw_interrupt_type iic_pic = {
+static struct irq_chip iic_chip = {
 	.typename = " CELL-IIC ",
-	.startup = iic_startup,
-	.enable = iic_enable,
-	.disable = iic_disable,
-	.end = iic_end,
+	.mask = iic_mask,
+	.unmask = iic_unmask,
+	.eoi = iic_eoi,
 };
 
-static int iic_external_get_irq(struct iic_pending_bits pending)
+
+static void iic_ioexc_eoi(unsigned int irq)
 {
-	int irq;
-	unsigned char node, unit;
-
-	node = pending.source >> 4;
-	unit = pending.source & 0xf;
-	irq = -1;
-
-	/*
-	 * This mapping is specific to the Cell Broadband
-	 * Engine. We might need to get the numbers
-	 * from the device tree to support future CPUs.
-	 */
-	switch (unit) {
-	case 0x00:
-	case 0x0b:
-		/*
-		 * One of these units can be connected
-		 * to an external interrupt controller.
-		 */
-		if (pending.prio > 0x3f ||
-		    pending.class != 2)
-			break;
-		irq = IIC_EXT_OFFSET
-			+ spider_get_irq(node)
-			+ node * IIC_NODE_STRIDE;
-		break;
-	case 0x01 ... 0x04:
-	case 0x07 ... 0x0a:
-		/*
-		 * These units are connected to the SPEs
-		 */
-		if (pending.class > 2)
-			break;
-		irq = IIC_SPE_OFFSET
-			+ pending.class * IIC_CLASS_STRIDE
-			+ node * IIC_NODE_STRIDE
-			+ unit;
-		break;
-	}
-	if (irq == -1)
-		printk(KERN_WARNING "Unexpected interrupt class %02x, "
-			"source %02x, prio %02x, cpu %02x\n", pending.class,
-			pending.source, pending.prio, smp_processor_id());
-	return irq;
 }
+
+static void iic_ioexc_cascade(unsigned int irq, struct irq_desc *desc)
+{
+	struct cbe_iic_regs __iomem *node_iic = (void __iomem *)desc->handler_data;
+	unsigned int base = (irq & 0xffffff00) | IIC_IRQ_TYPE_IOEXC;
+	unsigned long bits, ack;
+	int cascade;
+
+	for (;;) {
+		bits = in_be64(&node_iic->iic_is);
+		if (bits == 0)
+			break;
+		/* pre-ack edge interrupts */
+		ack = bits & IIC_ISR_EDGE_MASK;
+		if (ack)
+			out_be64(&node_iic->iic_is, ack);
+		/* handle them */
+		for (cascade = 63; cascade >= 0; cascade--)
+			if (bits & (0x8000000000000000UL >> cascade)) {
+				unsigned int cirq =
+					irq_linear_revmap(iic_host,
+							  base | cascade);
+				if (cirq != NO_IRQ)
+					generic_handle_irq(cirq);
+			}
+		/* post-ack level interrupts */
+		ack = bits & ~IIC_ISR_EDGE_MASK;
+		if (ack)
+			out_be64(&node_iic->iic_is, ack);
+	}
+	desc->chip->eoi(irq);
+}
+
+
+static struct irq_chip iic_ioexc_chip = {
+	.typename = " CELL-IOEX",
+	.mask = iic_mask,
+	.unmask = iic_unmask,
+	.eoi = iic_ioexc_eoi,
+};
 
 /* Get an IRQ number from the pending state register of the IIC */
-int iic_get_irq(struct pt_regs *regs)
+static unsigned int iic_get_irq(void)
 {
+	struct cbe_iic_pending_bits pending;
 	struct iic *iic;
-	int irq;
-	struct iic_pending_bits pending;
+	unsigned int virq;
 
 	iic = &__get_cpu_var(iic);
-	*(unsigned long *) &pending = 
+	*(unsigned long *) &pending =
 		in_be64((unsigned long __iomem *) &iic->regs->pending_destr);
-
-	irq = -1;
-	if (pending.flags & IIC_VALID) {
-		if (pending.flags & IIC_IPI) {
-			irq = IIC_IPI_OFFSET + (pending.prio >> 4);
-/*
-			if (irq > 0x80)
-				printk(KERN_WARNING "Unexpected IPI prio %02x"
-					"on CPU %02x\n", pending.prio,
-							smp_processor_id());
-*/
-		} else {
-			irq = iic_external_get_irq(pending);
-		}
-	}
-	return irq;
-}
-
-/* hardcoded part to be compatible with older firmware */
-
-static int setup_iic_hardcoded(void)
-{
-	struct device_node *np;
-	int nodeid, cpu;
-	unsigned long regs;
-	struct iic *iic;
-
-	for_each_cpu(cpu) {
-		iic = &per_cpu(iic, cpu);
-		nodeid = cpu/2;
-
-		for (np = of_find_node_by_type(NULL, "cpu");
-		     np;
-		     np = of_find_node_by_type(np, "cpu")) {
-			if (nodeid == *(int *)get_property(np, "node-id", NULL))
-				break;
-			}
-
-		if (!np) {
-			printk(KERN_WARNING "IIC: CPU %d not found\n", cpu);
-			iic->regs = NULL;
-			iic->target_id = 0xff;
-			return -ENODEV;
-			}
-
-		regs = *(long *)get_property(np, "iic", NULL);
-
-		/* hack until we have decided on the devtree info */
-		regs += 0x400;
-		if (cpu & 1)
-			regs += 0x20;
-
-		printk(KERN_INFO "IIC for CPU %d at %lx\n", cpu, regs);
-		iic->regs = ioremap(regs, sizeof(struct iic_regs));
-		iic->target_id = (nodeid << 4) + ((cpu & 1) ? 0xf : 0xe);
-	}
-
-	return 0;
-}
-
-static int setup_iic(void)
-{
-	struct device_node *dn;
-	unsigned long *regs;
-	char *compatible;
- 	unsigned *np, found = 0;
-	struct iic *iic = NULL;
-
-	for (dn = NULL; (dn = of_find_node_by_name(dn, "interrupt-controller"));) {
-		compatible = (char *)get_property(dn, "compatible", NULL);
-
-		if (!compatible) {
-			printk(KERN_WARNING "no compatible property found !\n");
-			continue;
-		}
-
- 		if (strstr(compatible, "IBM,CBEA-Internal-Interrupt-Controller"))
- 			regs = (unsigned long *)get_property(dn,"reg", NULL);
- 		else
-			continue;
-
- 		if (!regs)
- 			printk(KERN_WARNING "IIC: no reg property\n");
-
- 		np = (unsigned int *)get_property(dn, "ibm,interrupt-server-ranges", NULL);
-
- 		if (!np) {
-			printk(KERN_WARNING "IIC: CPU association not found\n");
-			iic->regs = NULL;
-			iic->target_id = 0xff;
-			return -ENODEV;
-		}
-
- 		iic = &per_cpu(iic, np[0]);
- 		iic->regs = ioremap(regs[0], sizeof(struct iic_regs));
-		iic->target_id = ((np[0] & 2) << 3) + ((np[0] & 1) ? 0xf : 0xe);
- 		printk("IIC for CPU %d at %lx mapped to %p\n", np[0], regs[0], iic->regs);
-
- 		iic = &per_cpu(iic, np[1]);
- 		iic->regs = ioremap(regs[2], sizeof(struct iic_regs));
-		iic->target_id = ((np[1] & 2) << 3) + ((np[1] & 1) ? 0xf : 0xe);
- 		printk("IIC for CPU %d at %lx mapped to %p\n", np[1], regs[2], iic->regs);
-
-		found++;
-  	}
-
-	if (found)
-		return 0;
-	else
-		return -ENODEV;
+	if (!(pending.flags & CBE_IIC_IRQ_VALID))
+		return NO_IRQ;
+	virq = irq_linear_revmap(iic_host, iic_pending_to_hwnum(pending));
+	if (virq == NO_IRQ)
+		return NO_IRQ;
+	iic->eoi_stack[++iic->eoi_ptr] = pending.prio;
+	BUG_ON(iic->eoi_ptr > 15);
+	return virq;
 }
 
 #ifdef CONFIG_SMP
@@ -290,12 +163,7 @@ static int setup_iic(void)
 /* Use the highest interrupt priorities for IPI */
 static inline int iic_ipi_to_irq(int ipi)
 {
-	return IIC_IPI_OFFSET + IIC_NUM_IPIS - 1 - ipi;
-}
-
-static inline int iic_irq_to_ipi(int irq)
-{
-	return IIC_NUM_IPIS - 1 - (irq - IIC_IPI_OFFSET);
+	return IIC_IRQ_TYPE_IPI + 0xf - ipi;
 }
 
 void iic_setup_cpu(void)
@@ -305,7 +173,7 @@ void iic_setup_cpu(void)
 
 void iic_cause_IPI(int cpu, int mesg)
 {
-	out_be64(&per_cpu(iic, cpu).regs->generate, (IIC_NUM_IPIS - 1 - mesg) << 4);
+	out_be64(&per_cpu(iic, cpu).regs->generate, (0xf - mesg) << 4);
 }
 
 u8 iic_get_target_id(int cpu)
@@ -314,22 +182,35 @@ u8 iic_get_target_id(int cpu)
 }
 EXPORT_SYMBOL_GPL(iic_get_target_id);
 
-static irqreturn_t iic_ipi_action(int irq, void *dev_id, struct pt_regs *regs)
+struct irq_host *iic_get_irq_host(int node)
 {
-	smp_message_recv(iic_irq_to_ipi(irq), regs);
+	return iic_host;
+}
+EXPORT_SYMBOL_GPL(iic_get_irq_host);
+
+
+static irqreturn_t iic_ipi_action(int irq, void *dev_id)
+{
+	int ipi = (int)(long)dev_id;
+
+	smp_message_recv(ipi);
+
 	return IRQ_HANDLED;
 }
-
 static void iic_request_ipi(int ipi, const char *name)
 {
-	int irq;
+	int virq;
 
-	irq = iic_ipi_to_irq(ipi);
-	/* IPIs are marked SA_INTERRUPT as they must run with irqs
-	 * disabled */
-	get_irq_desc(irq)->handler = &iic_pic;
-	get_irq_desc(irq)->status |= IRQ_PER_CPU;
-	request_irq(irq, iic_ipi_action, SA_INTERRUPT, name, NULL);
+	virq = irq_create_mapping(iic_host, iic_ipi_to_irq(ipi));
+	if (virq == NO_IRQ) {
+		printk(KERN_ERR
+		       "iic: failed to map IPI %s\n", name);
+		return;
+	}
+	if (request_irq(virq, iic_ipi_action, IRQF_DISABLED, name,
+			(void *)(long)ipi))
+		printk(KERN_ERR
+		       "iic: failed to request IPI %s\n", name);
 }
 
 void iic_request_IPIs(void)
@@ -340,34 +221,194 @@ void iic_request_IPIs(void)
 	iic_request_ipi(PPC_MSG_DEBUGGER_BREAK, "IPI-debug");
 #endif /* CONFIG_DEBUGGER */
 }
+
 #endif /* CONFIG_SMP */
 
-static void iic_setup_spe_handlers(void)
-{
-	int be, isrc;
 
-	/* Assume two threads per BE are present */
-	for (be=0; be < num_present_cpus() / 2; be++) {
-		for (isrc = 0; isrc < IIC_CLASS_STRIDE * 3; isrc++) {
-			int irq = IIC_NODE_STRIDE * be + IIC_SPE_OFFSET + isrc;
-			get_irq_desc(irq)->handler = &iic_pic;
-		}
-	}
+static int iic_host_match(struct irq_host *h, struct device_node *node)
+{
+	return device_is_compatible(node,
+				    "IBM,CBEA-Internal-Interrupt-Controller");
 }
 
-void iic_init_IRQ(void)
+static int iic_host_map(struct irq_host *h, unsigned int virq,
+			irq_hw_number_t hw)
 {
-	int cpu, irq_offset;
-	struct iic *iic;
-
-	if (setup_iic() < 0)
-		setup_iic_hardcoded();
-
-	irq_offset = 0;
-	for_each_possible_cpu(cpu) {
-		iic = &per_cpu(iic, cpu);
-		if (iic->regs)
-			out_be64(&iic->regs->prio, 0xff);
+	switch (hw & IIC_IRQ_TYPE_MASK) {
+	case IIC_IRQ_TYPE_IPI:
+		set_irq_chip_and_handler(virq, &iic_chip, handle_percpu_irq);
+		break;
+	case IIC_IRQ_TYPE_IOEXC:
+		set_irq_chip_and_handler(virq, &iic_ioexc_chip,
+					 handle_fasteoi_irq);
+		break;
+	default:
+		set_irq_chip_and_handler(virq, &iic_chip, handle_fasteoi_irq);
 	}
-	iic_setup_spe_handlers();
+	return 0;
+}
+
+static int iic_host_xlate(struct irq_host *h, struct device_node *ct,
+			   u32 *intspec, unsigned int intsize,
+			   irq_hw_number_t *out_hwirq, unsigned int *out_flags)
+
+{
+	unsigned int node, ext, unit, class;
+	const u32 *val;
+
+	if (!device_is_compatible(ct,
+				     "IBM,CBEA-Internal-Interrupt-Controller"))
+		return -ENODEV;
+	if (intsize != 1)
+		return -ENODEV;
+	val = get_property(ct, "#interrupt-cells", NULL);
+	if (val == NULL || *val != 1)
+		return -ENODEV;
+
+	node = intspec[0] >> 24;
+	ext = (intspec[0] >> 16) & 0xff;
+	class = (intspec[0] >> 8) & 0xff;
+	unit = intspec[0] & 0xff;
+
+	/* Check if node is in supported range */
+	if (node > 1)
+		return -EINVAL;
+
+	/* Build up interrupt number, special case for IO exceptions */
+	*out_hwirq = (node << IIC_IRQ_NODE_SHIFT);
+	if (unit == IIC_UNIT_IIC && class == 1)
+		*out_hwirq |= IIC_IRQ_TYPE_IOEXC | ext;
+	else
+		*out_hwirq |= IIC_IRQ_TYPE_NORMAL |
+			(class << IIC_IRQ_CLASS_SHIFT) | unit;
+
+	/* Dummy flags, ignored by iic code */
+	*out_flags = IRQ_TYPE_EDGE_RISING;
+
+	return 0;
+}
+
+static struct irq_host_ops iic_host_ops = {
+	.match = iic_host_match,
+	.map = iic_host_map,
+	.xlate = iic_host_xlate,
+};
+
+static void __init init_one_iic(unsigned int hw_cpu, unsigned long addr,
+				struct device_node *node)
+{
+	/* XXX FIXME: should locate the linux CPU number from the HW cpu
+	 * number properly. We are lucky for now
+	 */
+	struct iic *iic = &per_cpu(iic, hw_cpu);
+
+	iic->regs = ioremap(addr, sizeof(struct cbe_iic_thread_regs));
+	BUG_ON(iic->regs == NULL);
+
+	iic->target_id = ((hw_cpu & 2) << 3) | ((hw_cpu & 1) ? 0xf : 0xe);
+	iic->eoi_stack[0] = 0xff;
+	iic->node = of_node_get(node);
+	out_be64(&iic->regs->prio, 0);
+
+	printk(KERN_INFO "IIC for CPU %d target id 0x%x : %s\n",
+	       hw_cpu, iic->target_id, node->full_name);
+}
+
+static int __init setup_iic(void)
+{
+	struct device_node *dn;
+	struct resource r0, r1;
+	unsigned int node, cascade, found = 0;
+	struct cbe_iic_regs __iomem *node_iic;
+	const u32 *np;
+
+	for (dn = NULL;
+	     (dn = of_find_node_by_name(dn,"interrupt-controller")) != NULL;) {
+		if (!device_is_compatible(dn,
+				     "IBM,CBEA-Internal-Interrupt-Controller"))
+			continue;
+		np = get_property(dn, "ibm,interrupt-server-ranges", NULL);
+		if (np == NULL) {
+			printk(KERN_WARNING "IIC: CPU association not found\n");
+			of_node_put(dn);
+			return -ENODEV;
+		}
+		if (of_address_to_resource(dn, 0, &r0) ||
+		    of_address_to_resource(dn, 1, &r1)) {
+			printk(KERN_WARNING "IIC: Can't resolve addresses\n");
+			of_node_put(dn);
+			return -ENODEV;
+		}
+		found++;
+		init_one_iic(np[0], r0.start, dn);
+		init_one_iic(np[1], r1.start, dn);
+
+		/* Setup cascade for IO exceptions. XXX cleanup tricks to get
+		 * node vs CPU etc...
+		 * Note that we configure the IIC_IRR here with a hard coded
+		 * priority of 1. We might want to improve that later.
+		 */
+		node = np[0] >> 1;
+		node_iic = cbe_get_cpu_iic_regs(np[0]);
+		cascade = node << IIC_IRQ_NODE_SHIFT;
+		cascade |= 1 << IIC_IRQ_CLASS_SHIFT;
+		cascade |= IIC_UNIT_IIC;
+		cascade = irq_create_mapping(iic_host, cascade);
+		if (cascade == NO_IRQ)
+			continue;
+		/*
+		 * irq_data is a generic pointer that gets passed back
+		 * to us later, so the forced cast is fine.
+		 */
+		set_irq_data(cascade, (void __force *)node_iic);
+		set_irq_chained_handler(cascade , iic_ioexc_cascade);
+		out_be64(&node_iic->iic_ir,
+			 (1 << 12)		/* priority */ |
+			 (node << 4)		/* dest node */ |
+			 IIC_UNIT_THREAD_0	/* route them to thread 0 */);
+		/* Flush pending (make sure it triggers if there is
+		 * anything pending
+		 */
+		out_be64(&node_iic->iic_is, 0xfffffffffffffffful);
+	}
+
+	if (found)
+		return 0;
+	else
+		return -ENODEV;
+}
+
+void __init iic_init_IRQ(void)
+{
+	/* Setup an irq host data structure */
+	iic_host = irq_alloc_host(IRQ_HOST_MAP_LINEAR, IIC_SOURCE_COUNT,
+				  &iic_host_ops, IIC_IRQ_INVALID);
+	BUG_ON(iic_host == NULL);
+	irq_set_default_host(iic_host);
+
+	/* Discover and initialize iics */
+	if (setup_iic() < 0)
+		panic("IIC: Failed to initialize !\n");
+
+	/* Set master interrupt handling function */
+	ppc_md.get_irq = iic_get_irq;
+
+	/* Enable on current CPU */
+	iic_setup_cpu();
+}
+
+void iic_set_interrupt_routing(int cpu, int thread, int priority)
+{
+	struct cbe_iic_regs __iomem *iic_regs = cbe_get_cpu_iic_regs(cpu);
+	u64 iic_ir = 0;
+	int node = cpu >> 1;
+
+	/* Set which node and thread will handle the next interrupt */
+	iic_ir |= CBE_IIC_IR_PRIO(priority) |
+		  CBE_IIC_IR_DEST_NODE(node);
+	if (thread == 0)
+		iic_ir |= CBE_IIC_IR_DEST_UNIT(CBE_IIC_IR_PT_0);
+	else
+		iic_ir |= CBE_IIC_IR_DEST_UNIT(CBE_IIC_IR_PT_1);
+	out_be64(&iic_regs->iic_ir, iic_ir);
 }

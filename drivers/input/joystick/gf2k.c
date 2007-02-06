@@ -298,7 +298,7 @@ static int gf2k_connect(struct gameport *gameport, struct gameport_driver *drv)
 	gameport_set_poll_handler(gameport, gf2k_poll);
 	gameport_set_poll_interval(gameport, 20);
 
-	sprintf(gf2k->phys, "%s/input0", gameport->phys);
+	snprintf(gf2k->phys, sizeof(gf2k->phys), "%s/input0", gameport->phys);
 
 	gf2k->length = gf2k_lens[gf2k->id];
 
@@ -341,7 +341,9 @@ static int gf2k_connect(struct gameport *gameport, struct gameport_driver *drv)
 		input_dev->absflat[gf2k_abs[i]] = (i < 2) ? 24 : 0;
 	}
 
-	input_register_device(gf2k->dev);
+	err = input_register_device(gf2k->dev);
+	if (err)
+		goto fail2;
 
 	return 0;
 

@@ -55,11 +55,9 @@ static struct mtd_info *map_ram_probe(struct map_info *map)
 #endif
 	/* OK. It seems to be RAM. */
 
-	mtd = kmalloc(sizeof(*mtd), GFP_KERNEL);
+	mtd = kzalloc(sizeof(*mtd), GFP_KERNEL);
 	if (!mtd)
 		return NULL;
-
-	memset(mtd, 0, sizeof(*mtd));
 
 	map->fldrv = &mapram_chipdrv;
 	mtd->priv = map;
@@ -70,7 +68,8 @@ static struct mtd_info *map_ram_probe(struct map_info *map)
 	mtd->read = mapram_read;
 	mtd->write = mapram_write;
 	mtd->sync = mapram_nop;
-	mtd->flags = MTD_CAP_RAM | MTD_VOLATILE;
+	mtd->flags = MTD_CAP_RAM;
+	mtd->writesize = 1;
 
 	mtd->erasesize = PAGE_SIZE;
  	while(mtd->size & (mtd->erasesize - 1))

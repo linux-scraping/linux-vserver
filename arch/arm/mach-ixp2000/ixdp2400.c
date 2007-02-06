@@ -14,7 +14,6 @@
  *  Free Software Foundation;  either version 2 of the  License, or (at your
  *  option) any later version.
  */
-#include <linux/config.h>
 #include <linux/kernel.h>
 #include <linux/init.h>
 #include <linux/mm.h>
@@ -134,11 +133,13 @@ static void ixdp2400_pci_postinit(void)
 	struct pci_dev *dev;
 
 	if (ixdp2x00_master_npu()) {
-		dev = pci_find_slot(1, IXDP2400_SLAVE_ENET_DEVFN);
+		dev = pci_get_bus_and_slot(1, IXDP2400_SLAVE_ENET_DEVFN);
 		pci_remove_bus_device(dev);
+		pci_dev_put(dev);
 	} else {
-		dev = pci_find_slot(1, IXDP2400_MASTER_ENET_DEVFN);
+		dev = pci_get_bus_and_slot(1, IXDP2400_MASTER_ENET_DEVFN);
 		pci_remove_bus_device(dev);
+		pci_dev_put(dev);
 
 		ixdp2x00_slave_pci_postinit();
 	}

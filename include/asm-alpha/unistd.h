@@ -342,9 +342,14 @@
 #define __NR_io_cancel			402
 #define __NR_exit_group			405
 #define __NR_lookup_dcookie		406
-#define __NR_sys_epoll_create		407
-#define __NR_sys_epoll_ctl		408
-#define __NR_sys_epoll_wait		409
+#define __NR_epoll_create		407
+#define __NR_epoll_ctl			408
+#define __NR_epoll_wait			409
+/* Feb 2007: These three sys_epoll defines shouldn't be here but culling
+ * them would break userspace apps ... we'll kill them off in 2010 :) */
+#define __NR_sys_epoll_create		__NR_epoll_create
+#define __NR_sys_epoll_ctl		__NR_epoll_ctl
+#define __NR_sys_epoll_wait		__NR_epoll_wait
 #define __NR_remap_file_pages		410
 #define __NR_set_tid_address		411
 #define __NR_restart_syscall		412
@@ -383,191 +388,10 @@
 #define __NR_inotify_add_watch		445
 #define __NR_inotify_rm_watch		446
 
+#ifdef __KERNEL__
+
 #define NR_SYSCALLS			447
 
-#if defined(__GNUC__)
-
-#define _syscall_return(type)						\
-	return (_sc_err ? errno = _sc_ret, _sc_ret = -1L : 0), (type) _sc_ret
-
-#define _syscall_clobbers						\
-	"$1", "$2", "$3", "$4", "$5", "$6", "$7", "$8",			\
-	"$22", "$23", "$24", "$25", "$27", "$28" 			\
-
-#define _syscall0(type, name)						\
-type name(void)								\
-{									\
-	long _sc_ret, _sc_err;						\
-	{								\
-		register long _sc_0 __asm__("$0");			\
-		register long _sc_19 __asm__("$19");			\
-									\
-		_sc_0 = __NR_##name;					\
-		__asm__("callsys # %0 %1 %2"				\
-			: "=r"(_sc_0), "=r"(_sc_19)			\
-			: "0"(_sc_0)					\
-			: _syscall_clobbers);				\
-		_sc_ret = _sc_0, _sc_err = _sc_19;			\
-	}								\
-	_syscall_return(type);						\
-}
-
-#define _syscall1(type,name,type1,arg1)					\
-type name(type1 arg1)							\
-{									\
-	long _sc_ret, _sc_err;						\
-	{								\
-		register long _sc_0 __asm__("$0");			\
-		register long _sc_16 __asm__("$16");			\
-		register long _sc_19 __asm__("$19");			\
-									\
-		_sc_0 = __NR_##name;					\
-		_sc_16 = (long) (arg1);					\
-		__asm__("callsys # %0 %1 %2 %3"				\
-			: "=r"(_sc_0), "=r"(_sc_19)			\
-			: "0"(_sc_0), "r"(_sc_16)			\
-			: _syscall_clobbers);				\
-		_sc_ret = _sc_0, _sc_err = _sc_19;			\
-	}								\
-	_syscall_return(type);						\
-}
-
-#define _syscall2(type,name,type1,arg1,type2,arg2)			\
-type name(type1 arg1,type2 arg2)					\
-{									\
-	long _sc_ret, _sc_err;						\
-	{								\
-		register long _sc_0 __asm__("$0");			\
-		register long _sc_16 __asm__("$16");			\
-		register long _sc_17 __asm__("$17");			\
-		register long _sc_19 __asm__("$19");			\
-									\
-		_sc_0 = __NR_##name;					\
-		_sc_16 = (long) (arg1);					\
-		_sc_17 = (long) (arg2);					\
-		__asm__("callsys # %0 %1 %2 %3 %4"			\
-			: "=r"(_sc_0), "=r"(_sc_19)			\
-			: "0"(_sc_0), "r"(_sc_16), "r"(_sc_17)		\
-			: _syscall_clobbers);				\
-		_sc_ret = _sc_0, _sc_err = _sc_19;			\
-	}								\
-	_syscall_return(type);						\
-}
-
-#define _syscall3(type,name,type1,arg1,type2,arg2,type3,arg3)		\
-type name(type1 arg1,type2 arg2,type3 arg3)				\
-{									\
-	long _sc_ret, _sc_err;						\
-	{								\
-		register long _sc_0 __asm__("$0");			\
-		register long _sc_16 __asm__("$16");			\
-		register long _sc_17 __asm__("$17");			\
-		register long _sc_18 __asm__("$18");			\
-		register long _sc_19 __asm__("$19");			\
-									\
-		_sc_0 = __NR_##name;					\
-		_sc_16 = (long) (arg1);					\
-		_sc_17 = (long) (arg2);					\
-		_sc_18 = (long) (arg3);					\
-		__asm__("callsys # %0 %1 %2 %3 %4 %5"			\
-			: "=r"(_sc_0), "=r"(_sc_19)			\
-			: "0"(_sc_0), "r"(_sc_16), "r"(_sc_17),		\
-			  "r"(_sc_18)					\
-			: _syscall_clobbers);				\
-		_sc_ret = _sc_0, _sc_err = _sc_19;			\
-	}								\
-	_syscall_return(type);						\
-}
-
-#define _syscall4(type,name,type1,arg1,type2,arg2,type3,arg3,type4,arg4) \
-type name (type1 arg1, type2 arg2, type3 arg3, type4 arg4)		 \
-{									 \
-	long _sc_ret, _sc_err;						\
-	{								\
-		register long _sc_0 __asm__("$0");			\
-		register long _sc_16 __asm__("$16");			\
-		register long _sc_17 __asm__("$17");			\
-		register long _sc_18 __asm__("$18");			\
-		register long _sc_19 __asm__("$19");			\
-									\
-		_sc_0 = __NR_##name;					\
-		_sc_16 = (long) (arg1);					\
-		_sc_17 = (long) (arg2);					\
-		_sc_18 = (long) (arg3);					\
-		_sc_19 = (long) (arg4);					\
-		__asm__("callsys # %0 %1 %2 %3 %4 %5 %6"		\
-			: "=r"(_sc_0), "=r"(_sc_19)			\
-			: "0"(_sc_0), "r"(_sc_16), "r"(_sc_17),		\
-			  "r"(_sc_18), "1"(_sc_19)			\
-			: _syscall_clobbers);				\
-		_sc_ret = _sc_0, _sc_err = _sc_19;			\
-	}								\
-	_syscall_return(type);						\
-} 
-
-#define _syscall5(type,name,type1,arg1,type2,arg2,type3,arg3,type4,arg4, \
-	  type5,arg5)							 \
-type name (type1 arg1,type2 arg2,type3 arg3,type4 arg4,type5 arg5)	\
-{									\
-	long _sc_ret, _sc_err;						\
-	{								\
-		register long _sc_0 __asm__("$0");			\
-		register long _sc_16 __asm__("$16");			\
-		register long _sc_17 __asm__("$17");			\
-		register long _sc_18 __asm__("$18");			\
-		register long _sc_19 __asm__("$19");			\
-		register long _sc_20 __asm__("$20");			\
-									\
-		_sc_0 = __NR_##name;					\
-		_sc_16 = (long) (arg1);					\
-		_sc_17 = (long) (arg2);					\
-		_sc_18 = (long) (arg3);					\
-		_sc_19 = (long) (arg4);					\
-		_sc_20 = (long) (arg5);					\
-		__asm__("callsys # %0 %1 %2 %3 %4 %5 %6 %7"		\
-			: "=r"(_sc_0), "=r"(_sc_19)			\
-			: "0"(_sc_0), "r"(_sc_16), "r"(_sc_17),		\
-			  "r"(_sc_18), "1"(_sc_19), "r"(_sc_20)		\
-			: _syscall_clobbers);				\
-		_sc_ret = _sc_0, _sc_err = _sc_19;			\
-	}								\
-	_syscall_return(type);						\
-}
-
-#define _syscall6(type,name,type1,arg1,type2,arg2,type3,arg3,type4,arg4, \
-	  type5,arg5,type6,arg6)					 \
-type name (type1 arg1,type2 arg2,type3 arg3,type4 arg4,type5 arg5, type6 arg6)\
-{									\
-	long _sc_ret, _sc_err;						\
-	{								\
-		register long _sc_0 __asm__("$0");			\
-		register long _sc_16 __asm__("$16");			\
-		register long _sc_17 __asm__("$17");			\
-		register long _sc_18 __asm__("$18");			\
-		register long _sc_19 __asm__("$19");			\
-		register long _sc_20 __asm__("$20");			\
-		register long _sc_21 __asm__("$21");			\
-									\
-		_sc_0 = __NR_##name;					\
-		_sc_16 = (long) (arg1);					\
-		_sc_17 = (long) (arg2);					\
-		_sc_18 = (long) (arg3);					\
-		_sc_19 = (long) (arg4);					\
-		_sc_20 = (long) (arg5);					\
-		_sc_21 = (long) (arg6);					\
-		__asm__("callsys # %0 %1 %2 %3 %4 %5 %6 %7 %8"		\
-			: "=r"(_sc_0), "=r"(_sc_19)			\
-			: "0"(_sc_0), "r"(_sc_16), "r"(_sc_17),		\
-			  "r"(_sc_18), "1"(_sc_19), "r"(_sc_20), "r"(_sc_21) \
-			: _syscall_clobbers);				\
-		_sc_ret = _sc_0, _sc_err = _sc_19;			\
-	}								\
-	_syscall_return(type);						\
-}
-
-#endif /* __LIBRARY__ && __GNUC__ */
-
-#ifdef __KERNEL__
 #define __ARCH_WANT_IPC_PARSE_VERSION
 #define __ARCH_WANT_OLD_READDIR
 #define __ARCH_WANT_STAT64
@@ -578,76 +402,6 @@ type name (type1 arg1,type2 arg2,type3 arg3,type4 arg4,type5 arg5, type6 arg6)\
 #define __ARCH_WANT_SYS_OLD_GETRLIMIT
 #define __ARCH_WANT_SYS_OLDUMOUNT
 #define __ARCH_WANT_SYS_SIGPENDING
-#endif
-
-#ifdef __KERNEL_SYSCALLS__
-
-#include <linux/compiler.h>
-#include <linux/types.h>
-#include <linux/string.h>
-#include <linux/signal.h>
-#include <linux/syscalls.h>
-#include <asm/ptrace.h>
-
-static inline long open(const char * name, int mode, int flags)
-{
-	return sys_open(name, mode, flags);
-}
-
-static inline long dup(int fd)
-{
-	return sys_dup(fd);
-}
-
-static inline long close(int fd)
-{
-	return sys_close(fd);
-}
-
-static inline off_t lseek(int fd, off_t off, int whence)
-{
-	return sys_lseek(fd, off, whence);
-}
-
-static inline void _exit(int value)
-{
-	sys_exit(value);
-}
-
-#define exit(x) _exit(x)
-
-static inline long write(int fd, const char * buf, size_t nr)
-{
-	return sys_write(fd, buf, nr);
-}
-
-static inline long read(int fd, char * buf, size_t nr)
-{
-	return sys_read(fd, buf, nr);
-}
-
-extern int execve(char *, char **, char **);
-
-static inline long setsid(void)
-{
-	return sys_setsid();
-}
-
-static inline pid_t waitpid(int pid, int * wait_stat, int flags)
-{
-	return sys_wait4(pid, wait_stat, flags, NULL);
-}
-
-asmlinkage int sys_execve(char *ufilename, char **argv, char **envp,
-			unsigned long a3, unsigned long a4, unsigned long a5,
-			struct pt_regs regs);
-asmlinkage long sys_rt_sigaction(int sig,
-				const struct sigaction __user *act,
-				struct sigaction __user *oact,
-				size_t sigsetsize,
-				void *restorer);
-
-#endif /* __KERNEL_SYSCALLS__ */
 
 /* "Conditional" syscalls.  What we want is
 
@@ -661,4 +415,5 @@ asmlinkage long sys_rt_sigaction(int sig,
 
 #define cond_syscall(x)  asm(".weak\t" #x "\n" #x " = sys_ni_syscall")
 
+#endif /* __KERNEL__ */
 #endif /* _ALPHA_UNISTD_H */

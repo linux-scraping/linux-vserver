@@ -56,7 +56,7 @@
 #include <media/tvaudio.h>
 #include <media/msp3400.h>
 #include <linux/kthread.h>
-#include <linux/suspend.h>
+#include <linux/freezer.h>
 #include "msp3400-driver.h"
 
 /* ---------------------------------------------------------------------- */
@@ -362,7 +362,7 @@ int msp_sleep(struct msp_state *state, int timeout)
 }
 
 /* ------------------------------------------------------------------------ */
-
+#ifdef CONFIG_VIDEO_V4L1
 static int msp_mode_v4l2_to_v4l1(int rxsubchans, int audmode)
 {
 	if (rxsubchans == V4L2_TUNER_SUB_MONO)
@@ -384,67 +384,7 @@ static int msp_mode_v4l1_to_v4l2(int mode)
 		return V4L2_TUNER_MODE_LANG1;
 	return V4L2_TUNER_MODE_MONO;
 }
-
-static struct v4l2_queryctrl msp_qctrl_std[] = {
-	{
-		.id            = V4L2_CID_AUDIO_VOLUME,
-		.name          = "Volume",
-		.minimum       = 0,
-		.maximum       = 65535,
-		.step          = 65535/100,
-		.default_value = 58880,
-		.flags         = 0,
-		.type          = V4L2_CTRL_TYPE_INTEGER,
-	},{
-		.id            = V4L2_CID_AUDIO_MUTE,
-		.name          = "Mute",
-		.minimum       = 0,
-		.maximum       = 1,
-		.step          = 1,
-		.default_value = 1,
-		.flags         = 0,
-		.type          = V4L2_CTRL_TYPE_BOOLEAN,
-	},
-};
-
-static struct v4l2_queryctrl msp_qctrl_sound_processing[] = {
-	{
-		.id            = V4L2_CID_AUDIO_BALANCE,
-		.name          = "Balance",
-		.minimum       = 0,
-		.maximum       = 65535,
-		.step          = 65535/100,
-		.default_value = 32768,
-		.flags         = 0,
-		.type          = V4L2_CTRL_TYPE_INTEGER,
-	},{
-		.id            = V4L2_CID_AUDIO_BASS,
-		.name          = "Bass",
-		.minimum       = 0,
-		.maximum       = 65535,
-		.step          = 65535/100,
-		.default_value = 32768,
-		.type          = V4L2_CTRL_TYPE_INTEGER,
-	},{
-		.id            = V4L2_CID_AUDIO_TREBLE,
-		.name          = "Treble",
-		.minimum       = 0,
-		.maximum       = 65535,
-		.step          = 65535/100,
-		.default_value = 32768,
-		.type          = V4L2_CTRL_TYPE_INTEGER,
-	},{
-		.id            = V4L2_CID_AUDIO_LOUDNESS,
-		.name          = "Loudness",
-		.minimum       = 0,
-		.maximum       = 1,
-		.step          = 1,
-		.default_value = 1,
-		.flags         = 0,
-		.type          = V4L2_CTRL_TYPE_BOOLEAN,
-	},
-};
-
+#endif
 
 static int msp_get_ctrl(struct i2c_client *client, struct v4l2_control *ctrl)
 {
@@ -570,6 +510,7 @@ static int msp_command(struct i2c_client *client, unsigned int cmd, void *arg)
 	/* --- v4l ioctls --- */
 	/* take care: bttv does userspace copying, we'll get a
 	   kernel pointer here... */
+#ifdef CONFIG_VIDEO_V4L1
 	case VIDIOCGAUDIO:
 	{
 		struct video_audio *va = arg;
@@ -638,6 +579,12 @@ static int msp_command(struct i2c_client *client, unsigned int cmd, void *arg)
 	}
 
 	case VIDIOCSFREQ:
+	{
+		/* new channel -- kick audio carrier scan */
+		msp_wake_thread(client);
+		break;
+	}
+#endif
 	case VIDIOC_S_FREQUENCY:
 	{
 		/* new channel -- kick audio carrier scan */
@@ -674,22 +621,29 @@ static int msp_command(struct i2c_client *client, unsigned int cmd, void *arg)
 		int sc1_out = rt->output & 0xf;
 		int sc2_out = (rt->output >> 4) & 0xf;
 		u16 val, reg;
+		int i;
+		int extern_input = 1;
 
 		if (state->routing.input == rt->input &&
 		    state->routing.output == rt->output)
 			break;
 		state->routing = *rt;
+		/* check if the tuner input is used */
+		for (i = 0; i < 5; i++) {
+			if (((rt->input >> (4 + i * 4)) & 0xf) == 0)
+				extern_input = 0;
+		}
+		state->mode = extern_input ? MSP_MODE_EXTERN : MSP_MODE_AM_DETECT;
+		state->rxsubchans = V4L2_TUNER_SUB_STEREO;
 		msp_set_scart(client, sc_in, 0);
 		msp_set_scart(client, sc1_out, 1);
 		msp_set_scart(client, sc2_out, 2);
 		msp_set_audmode(client);
 		reg = (state->opmode == OPMODE_AUTOSELECT) ? 0x30 : 0xbb;
 		val = msp_read_dem(client, reg);
-		if (tuner != ((val >> 8) & 1)) {
-			msp_write_dem(client, reg, (val & ~0x100) | (tuner << 8));
-			/* wake thread when a new tuner input is chosen */
-			msp_wake_thread(client);
-		}
+		msp_write_dem(client, reg, (val & ~0x100) | (tuner << 8));
+		/* wake thread when a new input is chosen */
+		msp_wake_thread(client);
 		break;
 	}
 
@@ -744,21 +698,25 @@ static int msp_command(struct i2c_client *client, unsigned int cmd, void *arg)
 	case VIDIOC_QUERYCTRL:
 	{
 		struct v4l2_queryctrl *qc = arg;
-		int i;
 
-		for (i = 0; i < ARRAY_SIZE(msp_qctrl_std); i++)
-			if (qc->id && qc->id == msp_qctrl_std[i].id) {
-				memcpy(qc, &msp_qctrl_std[i], sizeof(*qc));
-				return 0;
-			}
+		switch (qc->id) {
+			case V4L2_CID_AUDIO_VOLUME:
+			case V4L2_CID_AUDIO_MUTE:
+				return v4l2_ctrl_query_fill_std(qc);
+			default:
+				break;
+		}
 		if (!state->has_sound_processing)
 			return -EINVAL;
-		for (i = 0; i < ARRAY_SIZE(msp_qctrl_sound_processing); i++)
-			if (qc->id && qc->id == msp_qctrl_sound_processing[i].id) {
-				memcpy(qc, &msp_qctrl_sound_processing[i], sizeof(*qc));
-				return 0;
-			}
-		return -EINVAL;
+		switch (qc->id) {
+			case V4L2_CID_AUDIO_LOUDNESS:
+			case V4L2_CID_AUDIO_BALANCE:
+			case V4L2_CID_AUDIO_BASS:
+			case V4L2_CID_AUDIO_TREBLE:
+				return v4l2_ctrl_query_fill_std(qc);
+			default:
+				return -EINVAL;
+		}
 	}
 
 	case VIDIOC_G_CTRL:
@@ -794,7 +752,9 @@ static int msp_command(struct i2c_client *client, unsigned int cmd, void *arg)
 		case MSP_MODE_EXTERN: p = "External input"; break;
 		default: p = "unknown"; break;
 		}
-		if (state->opmode == OPMODE_MANUAL) {
+		if (state->mode == MSP_MODE_EXTERN) {
+			v4l_info(client, "Mode:     %s\n", p);
+		} else if (state->opmode == OPMODE_MANUAL) {
 			v4l_info(client, "Mode:     %s (%s%s)\n", p,
 				(state->rxsubchans & V4L2_TUNER_SUB_STEREO) ? "stereo" : "mono",
 				(state->rxsubchans & V4L2_TUNER_SUB_LANG2) ? ", dual" : "");
@@ -942,6 +902,8 @@ static int msp_attach(struct i2c_adapter *adapter, int address, int kind)
 	state->has_virtual_dolby_surround = msp_revision == 'G' && msp_prod_lo == 1;
 	/* Has Virtual Dolby Surround & Dolby Pro Logic: only in msp34x2 */
 	state->has_dolby_pro_logic = msp_revision == 'G' && msp_prod_lo == 2;
+	/* The msp343xG supports BTSC only and cannot do Automatic Standard Detection. */
+	state->force_btsc = msp_family == 3 && msp_revision == 'G' && msp_prod_hi == 3;
 
 	state->opmode = opmode;
 	if (state->opmode == OPMODE_AUTO) {
@@ -987,7 +949,7 @@ static int msp_attach(struct i2c_adapter *adapter, int address, int kind)
 	if (thread_func) {
 		state->kthread = kthread_run(thread_func, client, "msp34xx");
 
-		if (state->kthread == NULL)
+		if (IS_ERR(state->kthread))
 			v4l_warn(client, "kernel_thread() failed\n");
 		msp_wake_thread(client);
 	}

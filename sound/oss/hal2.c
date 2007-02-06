@@ -370,9 +370,9 @@ static void hal2_adc_interrupt(struct hal2_codec *adc)
 	wake_up(&adc->dma_wait);
 }
 
-static irqreturn_t hal2_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t hal2_interrupt(int irq, void *dev_id)
 {
-	struct hal2_card *hal2 = (struct hal2_card*)dev_id;
+	struct hal2_card *hal2 = dev_id;
 	irqreturn_t ret = IRQ_NONE;
 
 	/* decide what caused this interrupt */
@@ -1435,7 +1435,7 @@ static int hal2_init_card(struct hal2_card **phal2, struct hpc3_regs *hpc3)
 	int ret = 0;
 	struct hal2_card *hal2;
 
-	hal2 = (struct hal2_card *) kmalloc(sizeof(struct hal2_card), GFP_KERNEL);
+	hal2 = kmalloc(sizeof(struct hal2_card), GFP_KERNEL);
 	if (!hal2)
 		return -ENOMEM;
 	memset(hal2, 0, sizeof(struct hal2_card));
@@ -1479,7 +1479,7 @@ static int hal2_init_card(struct hal2_card **phal2, struct hpc3_regs *hpc3)
 	hpc3->pbus_dmacfg[hal2->dac.pbus.pbusnr][0] = 0x8208844;
 	hpc3->pbus_dmacfg[hal2->adc.pbus.pbusnr][0] = 0x8208844;
 
-	if (request_irq(SGI_HPCDMA_IRQ, hal2_interrupt, SA_SHIRQ,
+	if (request_irq(SGI_HPCDMA_IRQ, hal2_interrupt, IRQF_SHARED,
 			hal2str, hal2)) {
 		printk(KERN_ERR "HAL2: Can't get irq %d\n", SGI_HPCDMA_IRQ);
 		ret = -EAGAIN;

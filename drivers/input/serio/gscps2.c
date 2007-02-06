@@ -22,7 +22,6 @@
  *                 was usable/enabled ?)
  */
 
-#include <linux/config.h>
 #include <linux/init.h>
 #include <linux/module.h>
 #include <linux/serio.h>
@@ -83,7 +82,7 @@ MODULE_DEVICE_TABLE(parisc, gscps2_device_tbl);
 #define GSC_ID_MOUSE		1
 
 
-static irqreturn_t gscps2_interrupt(int irq, void *dev, struct pt_regs *regs);
+static irqreturn_t gscps2_interrupt(int irq, void *dev);
 
 #define BUFFER_SIZE 0x0f
 
@@ -167,7 +166,7 @@ static inline int gscps2_writeb_output(struct gscps2port *ps2port, u8 data)
 
 	/* make sure any received data is returned as fast as possible */
 	/* this is important e.g. when we set the LEDs on the keyboard */
-	gscps2_interrupt(0, NULL, NULL);
+	gscps2_interrupt(0, NULL);
 
 	return 1;
 }
@@ -227,7 +226,7 @@ static LIST_HEAD(ps2port_list);
  * later.
  */
 
-static irqreturn_t gscps2_interrupt(int irq, void *dev, struct pt_regs *regs)
+static irqreturn_t gscps2_interrupt(int irq, void *dev)
 {
 	struct gscps2port *ps2port;
 
@@ -268,7 +267,7 @@ static irqreturn_t gscps2_interrupt(int irq, void *dev, struct pt_regs *regs)
 	    rxflags =	((status & GSC_STAT_TERR) ? SERIO_TIMEOUT : 0 ) |
 			((status & GSC_STAT_PERR) ? SERIO_PARITY  : 0 );
 
-	    serio_interrupt(ps2port->port, data, rxflags, regs);
+	    serio_interrupt(ps2port->port, data, rxflags);
 
 	  } /* while() */
 
@@ -307,7 +306,7 @@ static int gscps2_open(struct serio *port)
 	/* enable it */
 	gscps2_enable(ps2port, ENABLE);
 
-	gscps2_interrupt(0, NULL, NULL);
+	gscps2_interrupt(0, NULL);
 
 	return 0;
 }
@@ -371,7 +370,7 @@ static int __init gscps2_probe(struct parisc_device *dev)
 	serio->dev.parent	= &dev->dev;
 
 	ret = -EBUSY;
-	if (request_irq(dev->irq, gscps2_interrupt, SA_SHIRQ, ps2port->port->name, ps2port))
+	if (request_irq(dev->irq, gscps2_interrupt, IRQF_SHARED, ps2port->port->name, ps2port))
 		goto fail_miserably;
 
 	if (ps2port->id != GSC_ID_KEYBOARD && ps2port->id != GSC_ID_MOUSE) {

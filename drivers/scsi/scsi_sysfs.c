@@ -6,7 +6,6 @@
  * Created to pull SCSI mid layer sysfs routines into one file.
  */
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/blkdev.h>
@@ -39,7 +38,7 @@ const char *scsi_device_state_name(enum scsi_device_state state)
 	int i;
 	char *name = NULL;
 
-	for (i = 0; i < sizeof(sdev_states)/sizeof(sdev_states[0]); i++) {
+	for (i = 0; i < ARRAY_SIZE(sdev_states); i++) {
 		if (sdev_states[i].value == state) {
 			name = sdev_states[i].name;
 			break;
@@ -65,7 +64,7 @@ const char *scsi_host_state_name(enum scsi_host_state state)
 	int i;
 	char *name = NULL;
 
-	for (i = 0; i < sizeof(shost_states)/sizeof(shost_states[0]); i++) {
+	for (i = 0; i < ARRAY_SIZE(shost_states); i++) {
 		if (shost_states[i].value == state) {
 			name = shost_states[i].name;
 			break;
@@ -160,7 +159,7 @@ store_shost_state(struct class_device *class_dev, const char *buf, size_t count)
 	struct Scsi_Host *shost = class_to_shost(class_dev);
 	enum scsi_host_state state = 0;
 
-	for (i = 0; i < sizeof(shost_states)/sizeof(shost_states[0]); i++) {
+	for (i = 0; i < ARRAY_SIZE(shost_states); i++) {
 		const int len = strlen(shost_states[i].name);
 		if (strncmp(shost_states[i].name, buf, len) == 0 &&
 		   buf[len] == '\n') {
@@ -193,6 +192,7 @@ static CLASS_DEVICE_ATTR(state, S_IRUGO | S_IWUSR, show_shost_state, store_shost
 shost_rd_attr(unique_id, "%u\n");
 shost_rd_attr(host_busy, "%hu\n");
 shost_rd_attr(cmd_per_lun, "%hd\n");
+shost_rd_attr(can_queue, "%hd\n");
 shost_rd_attr(sg_tablesize, "%hu\n");
 shost_rd_attr(unchecked_isa_dma, "%d\n");
 shost_rd_attr2(proc_name, hostt->proc_name, "%s\n");
@@ -201,6 +201,7 @@ static struct class_device_attribute *scsi_sysfs_shost_attrs[] = {
 	&class_device_attr_unique_id,
 	&class_device_attr_host_busy,
 	&class_device_attr_cmd_per_lun,
+	&class_device_attr_can_queue,
 	&class_device_attr_sg_tablesize,
 	&class_device_attr_unchecked_isa_dma,
 	&class_device_attr_proc_name,
@@ -217,16 +218,16 @@ static void scsi_device_cls_release(struct class_device *class_dev)
 	put_device(&sdev->sdev_gendev);
 }
 
-static void scsi_device_dev_release_usercontext(void *data)
+static void scsi_device_dev_release_usercontext(struct work_struct *work)
 {
-	struct device *dev = data;
 	struct scsi_device *sdev;
 	struct device *parent;
 	struct scsi_target *starget;
 	unsigned long flags;
 
-	parent = dev->parent;
-	sdev = to_scsi_device(dev);
+	sdev = container_of(work, struct scsi_device, ew.work);
+
+	parent = sdev->sdev_gendev.parent;
 	starget = to_scsi_target(parent);
 
 	spin_lock_irqsave(sdev->host->host_lock, flags);
@@ -257,7 +258,7 @@ static void scsi_device_dev_release_usercontext(void *data)
 static void scsi_device_dev_release(struct device *dev)
 {
 	struct scsi_device *sdp = to_scsi_device(dev);
-	execute_in_process_context(scsi_device_dev_release_usercontext, dev,
+	execute_in_process_context(scsi_device_dev_release_usercontext,
 				   &sdp->ew);
 }
 
@@ -466,7 +467,7 @@ store_state_field(struct device *dev, struct device_attribute *attr, const char 
 	struct scsi_device *sdev = to_scsi_device(dev);
 	enum scsi_device_state state = 0;
 
-	for (i = 0; i < sizeof(sdev_states)/sizeof(sdev_states[0]); i++) {
+	for (i = 0; i < ARRAY_SIZE(sdev_states); i++) {
 		const int len = strlen(sdev_states[i].name);
 		if (strncmp(sdev_states[i].name, buf, len) == 0 &&
 		   buf[len] == '\n') {

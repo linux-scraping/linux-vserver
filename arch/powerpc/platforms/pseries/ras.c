@@ -65,39 +65,66 @@ static int ras_check_exception_token;
 #define EPOW_SENSOR_INDEX	0
 #define RAS_VECTOR_OFFSET	0x500
 
-static irqreturn_t ras_epow_interrupt(int irq, void *dev_id,
-					struct pt_regs * regs);
-static irqreturn_t ras_error_interrupt(int irq, void *dev_id,
-					struct pt_regs * regs);
+static irqreturn_t ras_epow_interrupt(int irq, void *dev_id);
+static irqreturn_t ras_error_interrupt(int irq, void *dev_id);
 
 /* #define DEBUG */
 
-static void request_ras_irqs(struct device_node *np, char *propname,
-			irqreturn_t (*handler)(int, void *, struct pt_regs *),
+
+static void request_ras_irqs(struct device_node *np,
+			irq_handler_t handler,
 			const char *name)
 {
-	unsigned int *ireg, len, i;
-	int virq, n_intr;
+	int i, index, count = 0;
+	struct of_irq oirq;
+	const u32 *opicprop;
+	unsigned int opicplen;
+	unsigned int virqs[16];
 
-	ireg = (unsigned int *)get_property(np, propname, &len);
-	if (ireg == NULL)
-		return;
-	n_intr = prom_n_intr_cells(np);
-	len /= n_intr * sizeof(*ireg);
+	/* Check for obsolete "open-pic-interrupt" property. If present, then
+	 * map those interrupts using the default interrupt host and default
+	 * trigger
+	 */
+	opicprop = get_property(np, "open-pic-interrupt", &opicplen);
+	if (opicprop) {
+		opicplen /= sizeof(u32);
+		for (i = 0; i < opicplen; i++) {
+			if (count > 15)
+				break;
+			virqs[count] = irq_create_mapping(NULL, *(opicprop++));
+			if (virqs[count] == NO_IRQ)
+				printk(KERN_ERR "Unable to allocate interrupt "
+				       "number for %s\n", np->full_name);
+			else
+				count++;
 
-	for (i = 0; i < len; i++) {
-		virq = virt_irq_create_mapping(*ireg);
-		if (virq == NO_IRQ) {
-			printk(KERN_ERR "Unable to allocate interrupt "
-			       "number for %s\n", np->full_name);
-			return;
 		}
-		if (request_irq(irq_offset_up(virq), handler, 0, name, NULL)) {
+	}
+	/* Else use normal interrupt tree parsing */
+	else {
+		/* First try to do a proper OF tree parsing */
+		for (index = 0; of_irq_map_one(np, index, &oirq) == 0;
+		     index++) {
+			if (count > 15)
+				break;
+			virqs[count] = irq_create_of_mapping(oirq.controller,
+							    oirq.specifier,
+							    oirq.size);
+			if (virqs[count] == NO_IRQ)
+				printk(KERN_ERR "Unable to allocate interrupt "
+				       "number for %s\n", np->full_name);
+			else
+				count++;
+		}
+	}
+
+	/* Now request them */
+	for (i = 0; i < count; i++) {
+		if (request_irq(virqs[i], handler, 0, name, NULL)) {
 			printk(KERN_ERR "Unable to request interrupt %d for "
-			       "%s\n", irq_offset_up(virq), np->full_name);
+			       "%s\n", virqs[i], np->full_name);
 			return;
 		}
-		ireg += n_intr;
 	}
 }
 
@@ -115,20 +142,14 @@ static int __init init_ras_IRQ(void)
 	/* Internal Errors */
 	np = of_find_node_by_path("/event-sources/internal-errors");
 	if (np != NULL) {
-		request_ras_irqs(np, "open-pic-interrupt", ras_error_interrupt,
-				 "RAS_ERROR");
-		request_ras_irqs(np, "interrupts", ras_error_interrupt,
-				 "RAS_ERROR");
+		request_ras_irqs(np, ras_error_interrupt, "RAS_ERROR");
 		of_node_put(np);
 	}
 
 	/* EPOW Events */
 	np = of_find_node_by_path("/event-sources/epow-events");
 	if (np != NULL) {
-		request_ras_irqs(np, "open-pic-interrupt", ras_epow_interrupt,
-				 "RAS_EPOW");
-		request_ras_irqs(np, "interrupts", ras_epow_interrupt,
-				 "RAS_EPOW");
+		request_ras_irqs(np, ras_epow_interrupt, "RAS_EPOW");
 		of_node_put(np);
 	}
 
@@ -143,8 +164,7 @@ __initcall(init_ras_IRQ);
  * to examine the type of power failure and take appropriate action where
  * the time horizon permits something useful to be done.
  */
-static irqreturn_t
-ras_epow_interrupt(int irq, void *dev_id, struct pt_regs * regs)
+static irqreturn_t ras_epow_interrupt(int irq, void *dev_id)
 {
 	int status = 0xdeadbeef;
 	int state = 0;
@@ -162,7 +182,7 @@ ras_epow_interrupt(int irq, void *dev_id, struct pt_regs * regs)
 
 	status = rtas_call(ras_check_exception_token, 6, 1, NULL,
 			   RAS_VECTOR_OFFSET,
-			   virt_irq_to_real(irq_offset_down(irq)),
+			   irq_map[irq].hwirq,
 			   RTAS_EPOW_WARNING | RTAS_POWERMGM_EVENTS,
 			   critical, __pa(&ras_log_buf),
 				rtas_get_error_log_max());
@@ -187,8 +207,7 @@ ras_epow_interrupt(int irq, void *dev_id, struct pt_regs * regs)
  * For nonrecoverable errors, an error is logged and we stop all processing
  * as quickly as possible in order to prevent propagation of the failure.
  */
-static irqreturn_t
-ras_error_interrupt(int irq, void *dev_id, struct pt_regs * regs)
+static irqreturn_t ras_error_interrupt(int irq, void *dev_id)
 {
 	struct rtas_error_log *rtas_elog;
 	int status = 0xdeadbeef;
@@ -198,7 +217,7 @@ ras_error_interrupt(int irq, void *dev_id, struct pt_regs * regs)
 
 	status = rtas_call(ras_check_exception_token, 6, 1, NULL,
 			   RAS_VECTOR_OFFSET,
-			   virt_irq_to_real(irq_offset_down(irq)),
+			   irq_map[irq].hwirq,
 			   RTAS_INTERNAL_ERROR, 1 /*Time Critical */,
 			   __pa(&ras_log_buf),
 				rtas_get_error_log_max());
@@ -314,7 +333,7 @@ static int recover_mce(struct pt_regs *regs, struct rtas_error_log * err)
 		   err->disposition == RTAS_DISP_NOT_RECOVERED &&
 		   err->target == RTAS_TARGET_MEMORY &&
 		   err->type == RTAS_TYPE_ECC_UNCORR &&
-		   !(current->pid == 0 || current->pid == 1)) {
+		   !(current->pid == 0 || is_init(current))) {
 		/* Kill off a user process with an ECC error */
 		printk(KERN_ERR "MCE: uncorrectable ecc error for pid %d\n",
 		       current->pid);

@@ -200,7 +200,7 @@ static int ocfs2_readpage(struct file *file, struct page *page)
 
 	mlog_entry("(0x%p, %lu)\n", file, (page ? page->index : 0));
 
-	ret = ocfs2_meta_lock_with_page(inode, NULL, NULL, 0, page);
+	ret = ocfs2_meta_lock_with_page(inode, NULL, 0, page);
 	if (ret != 0) {
 		if (ret == AOP_TRUNCATED_PAGE)
 			unlock = 0;
@@ -305,7 +305,7 @@ static int ocfs2_prepare_write(struct file *file, struct page *page,
 
 	mlog_entry("(0x%p, 0x%p, %u, %u)\n", file, page, from, to);
 
-	ret = ocfs2_meta_lock_with_page(inode, NULL, NULL, 0, page);
+	ret = ocfs2_meta_lock_with_page(inode, NULL, 0, page);
 	if (ret != 0) {
 		mlog_errno(ret);
 		goto out;
@@ -355,16 +355,16 @@ static int walk_page_buffers(	handle_t *handle,
 	return ret;
 }
 
-struct ocfs2_journal_handle *ocfs2_start_walk_page_trans(struct inode *inode,
+handle_t *ocfs2_start_walk_page_trans(struct inode *inode,
 							 struct page *page,
 							 unsigned from,
 							 unsigned to)
 {
 	struct ocfs2_super *osb = OCFS2_SB(inode->i_sb);
-	struct ocfs2_journal_handle *handle = NULL;
+	handle_t *handle = NULL;
 	int ret = 0;
 
-	handle = ocfs2_start_trans(osb, NULL, OCFS2_INODE_UPDATE_CREDITS);
+	handle = ocfs2_start_trans(osb, OCFS2_INODE_UPDATE_CREDITS);
 	if (!handle) {
 		ret = -ENOMEM;
 		mlog_errno(ret);
@@ -372,7 +372,7 @@ struct ocfs2_journal_handle *ocfs2_start_walk_page_trans(struct inode *inode,
 	}
 
 	if (ocfs2_should_order_data(inode)) {
-		ret = walk_page_buffers(handle->k_handle,
+		ret = walk_page_buffers(handle,
 					page_buffers(page),
 					from, to, NULL,
 					ocfs2_journal_dirty_data);
@@ -382,7 +382,7 @@ struct ocfs2_journal_handle *ocfs2_start_walk_page_trans(struct inode *inode,
 out:
 	if (ret) {
 		if (handle)
-			ocfs2_commit_trans(handle);
+			ocfs2_commit_trans(osb, handle);
 		handle = ERR_PTR(ret);
 	}
 	return handle;
@@ -391,31 +391,28 @@ out:
 static int ocfs2_commit_write(struct file *file, struct page *page,
 			      unsigned from, unsigned to)
 {
-	int ret, extending = 0, locklevel = 0;
-	loff_t new_i_size;
+	int ret;
 	struct buffer_head *di_bh = NULL;
 	struct inode *inode = page->mapping->host;
-	struct ocfs2_journal_handle *handle = NULL;
+	handle_t *handle = NULL;
+	struct ocfs2_dinode *di;
 
 	mlog_entry("(0x%p, 0x%p, %u, %u)\n", file, page, from, to);
 
 	/* NOTE: ocfs2_file_aio_write has ensured that it's safe for
-	 * us to sample inode->i_size here without the metadata lock:
+	 * us to continue here without rechecking the I/O against
+	 * changed inode values.
 	 *
 	 * 1) We're currently holding the inode alloc lock, so no
 	 *    nodes can change it underneath us.
 	 *
 	 * 2) We've had to take the metadata lock at least once
-	 *    already to check for extending writes, hence insuring
-	 *    that our current copy is also up to date.
+	 *    already to check for extending writes, suid removal, etc.
+	 *    The meta data update code then ensures that we don't get a
+	 *    stale inode allocation image (i_size, i_clusters, etc).
 	 */
-	new_i_size = ((loff_t)page->index << PAGE_CACHE_SHIFT) + to;
-	if (new_i_size > i_size_read(inode)) {
-		extending = 1;
-		locklevel = 1;
-	}
 
-	ret = ocfs2_meta_lock_with_page(inode, NULL, &di_bh, locklevel, page);
+	ret = ocfs2_meta_lock_with_page(inode, &di_bh, 1, page);
 	if (ret != 0) {
 		mlog_errno(ret);
 		goto out;
@@ -427,23 +424,20 @@ static int ocfs2_commit_write(struct file *file, struct page *page,
 		goto out_unlock_meta;
 	}
 
-	if (extending) {
-		handle = ocfs2_start_walk_page_trans(inode, page, from, to);
-		if (IS_ERR(handle)) {
-			ret = PTR_ERR(handle);
-			handle = NULL;
-			goto out_unlock_data;
-		}
+	handle = ocfs2_start_walk_page_trans(inode, page, from, to);
+	if (IS_ERR(handle)) {
+		ret = PTR_ERR(handle);
+		goto out_unlock_data;
+	}
 
-		/* Mark our buffer early. We'd rather catch this error up here
-		 * as opposed to after a successful commit_write which would
-		 * require us to set back inode->i_size. */
-		ret = ocfs2_journal_access(handle, inode, di_bh,
-					   OCFS2_JOURNAL_ACCESS_WRITE);
-		if (ret < 0) {
-			mlog_errno(ret);
-			goto out_commit;
-		}
+	/* Mark our buffer early. We'd rather catch this error up here
+	 * as opposed to after a successful commit_write which would
+	 * require us to set back inode->i_size. */
+	ret = ocfs2_journal_access(handle, inode, di_bh,
+				   OCFS2_JOURNAL_ACCESS_WRITE);
+	if (ret < 0) {
+		mlog_errno(ret);
+		goto out_commit;
 	}
 
 	/* might update i_size */
@@ -453,37 +447,28 @@ static int ocfs2_commit_write(struct file *file, struct page *page,
 		goto out_commit;
 	}
 
-	if (extending) {
-		loff_t size = (u64) i_size_read(inode);
-		struct ocfs2_dinode *di =
-			(struct ocfs2_dinode *)di_bh->b_data;
+	di = (struct ocfs2_dinode *)di_bh->b_data;
 
-		/* ocfs2_mark_inode_dirty is too heavy to use here. */
-		inode->i_blocks = ocfs2_align_bytes_to_sectors(size);
-		inode->i_ctime = inode->i_mtime = CURRENT_TIME;
+	/* ocfs2_mark_inode_dirty() is too heavy to use here. */
+	inode->i_mtime = inode->i_ctime = CURRENT_TIME;
+	di->i_mtime = di->i_ctime = cpu_to_le64(inode->i_mtime.tv_sec);
+	di->i_mtime_nsec = di->i_ctime_nsec = cpu_to_le32(inode->i_mtime.tv_nsec);
 
-		di->i_size = cpu_to_le64(size);
-		di->i_ctime = di->i_mtime = 
-				cpu_to_le64(inode->i_mtime.tv_sec);
-		di->i_ctime_nsec = di->i_mtime_nsec = 
-				cpu_to_le32(inode->i_mtime.tv_nsec);
+	inode->i_blocks = ocfs2_align_bytes_to_sectors((u64)(i_size_read(inode)));
+	di->i_size = cpu_to_le64((u64)i_size_read(inode));
 
-		ret = ocfs2_journal_dirty(handle, di_bh);
-		if (ret < 0) {
-			mlog_errno(ret);
-			goto out_commit;
-		}
+	ret = ocfs2_journal_dirty(handle, di_bh);
+	if (ret < 0) {
+		mlog_errno(ret);
+		goto out_commit;
 	}
 
-	BUG_ON(extending && (i_size_read(inode) != new_i_size));
-
 out_commit:
-	if (handle)
-		ocfs2_commit_trans(handle);
+	ocfs2_commit_trans(OCFS2_SB(inode->i_sb), handle);
 out_unlock_data:
 	ocfs2_data_unlock(inode, 1);
 out_unlock_meta:
-	ocfs2_meta_unlock(inode, locklevel);
+	ocfs2_meta_unlock(inode, 1);
 out:
 	if (di_bh)
 		brelse(di_bh);
@@ -505,7 +490,7 @@ static sector_t ocfs2_bmap(struct address_space *mapping, sector_t block)
 	 * accessed concurrently from multiple nodes.
 	 */
 	if (!INODE_JOURNAL(inode)) {
-		err = ocfs2_meta_lock(inode, NULL, NULL, 0);
+		err = ocfs2_meta_lock(inode, NULL, 0);
 		if (err) {
 			if (err != -ENOENT)
 				mlog_errno(err);
@@ -555,29 +540,32 @@ static int ocfs2_direct_IO_get_blocks(struct inode *inode, sector_t iblock,
 				     struct buffer_head *bh_result, int create)
 {
 	int ret;
-	u64 vbo_max; /* file offset, max_blocks from iblock */
-	u64 p_blkno;
+	u64 p_blkno, inode_blocks;
 	int contig_blocks;
-	unsigned char blocksize_bits;
+	unsigned char blocksize_bits = inode->i_sb->s_blocksize_bits;
 	unsigned long max_blocks = bh_result->b_size >> inode->i_blkbits;
-
-	if (!inode || !bh_result) {
-		mlog(ML_ERROR, "inode or bh_result is null\n");
-		return -EIO;
-	}
-
-	blocksize_bits = inode->i_sb->s_blocksize_bits;
 
 	/* This function won't even be called if the request isn't all
 	 * nicely aligned and of the right size, so there's no need
 	 * for us to check any of that. */
 
-	vbo_max = ((u64)iblock + max_blocks) << blocksize_bits;
-
 	spin_lock(&OCFS2_I(inode)->ip_lock);
-	if ((iblock + max_blocks) >
-	    ocfs2_clusters_to_blocks(inode->i_sb,
-				     OCFS2_I(inode)->ip_clusters)) {
+	inode_blocks = ocfs2_clusters_to_blocks(inode->i_sb,
+						OCFS2_I(inode)->ip_clusters);
+
+	/*
+	 * For a read which begins past the end of file, we return a hole.
+	 */
+	if (!create && (iblock >= inode_blocks)) {
+		spin_unlock(&OCFS2_I(inode)->ip_lock);
+		ret = 0;
+		goto bail;
+	}
+
+	/*
+	 * Any write past EOF is not allowed because we'd be extending.
+	 */
+	if (create && (iblock + max_blocks) > inode_blocks) {
 		spin_unlock(&OCFS2_I(inode)->ip_lock);
 		ret = -EIO;
 		goto bail;
@@ -617,7 +605,7 @@ static void ocfs2_dio_end_io(struct kiocb *iocb,
 			     ssize_t bytes,
 			     void *private)
 {
-	struct inode *inode = iocb->ki_filp->f_dentry->d_inode;
+	struct inode *inode = iocb->ki_filp->f_path.dentry->d_inode;
 
 	/* this io's submitter should not have unlocked this before we could */
 	BUG_ON(!ocfs2_iocb_is_rw_locked(iocb));
@@ -633,7 +621,7 @@ static ssize_t ocfs2_direct_IO(int rw,
 			       unsigned long nr_segs)
 {
 	struct file *file = iocb->ki_filp;
-	struct inode *inode = file->f_dentry->d_inode->i_mapping->host;
+	struct inode *inode = file->f_path.dentry->d_inode->i_mapping->host;
 	int ret;
 
 	mlog_entry_void();
@@ -666,7 +654,7 @@ out:
 	return ret;
 }
 
-struct address_space_operations ocfs2_aops = {
+const struct address_space_operations ocfs2_aops = {
 	.readpage	= ocfs2_readpage,
 	.writepage	= ocfs2_writepage,
 	.prepare_write	= ocfs2_prepare_write,

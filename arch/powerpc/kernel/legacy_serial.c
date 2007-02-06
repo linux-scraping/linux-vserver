@@ -1,4 +1,3 @@
-#include <linux/config.h>
 #include <linux/kernel.h>
 #include <linux/serial.h>
 #include <linux/serial_8250.h>
@@ -29,6 +28,7 @@ static struct legacy_serial_info {
 	struct device_node		*np;
 	unsigned int			speed;
 	unsigned int			clock;
+	int				irq_check_parent;
 	phys_addr_t			taddr;
 } legacy_serial_infos[MAX_LEGACY_SERIAL_PORTS];
 static unsigned int legacy_serial_count;
@@ -37,18 +37,19 @@ static int legacy_serial_console = -1;
 static int __init add_legacy_port(struct device_node *np, int want_index,
 				  int iotype, phys_addr_t base,
 				  phys_addr_t taddr, unsigned long irq,
-				  upf_t flags)
+				  upf_t flags, int irq_check_parent)
 {
-	u32 *clk, *spd, clock = BASE_BAUD * 16;
+	const u32 *clk, *spd;
+	u32 clock = BASE_BAUD * 16;
 	int index;
 
 	/* get clock freq. if present */
-	clk = (u32 *)get_property(np, "clock-frequency", NULL);
+	clk = get_property(np, "clock-frequency", NULL);
 	if (clk && *clk)
 		clock = *clk;
 
 	/* get default speed if present */
-	spd = (u32 *)get_property(np, "current-speed", NULL);
+	spd = get_property(np, "current-speed", NULL);
 
 	/* If we have a location index, then try to use it */
 	if (want_index >= 0 && want_index < MAX_LEGACY_SERIAL_PORTS)
@@ -69,7 +70,7 @@ static int __init add_legacy_port(struct device_node *np, int want_index,
 	if (legacy_serial_infos[index].np != 0) {
 		/* if we still have some room, move it, else override */
 		if (legacy_serial_count < MAX_LEGACY_SERIAL_PORTS) {
-			printk(KERN_INFO "Moved legacy port %d -> %d\n",
+			printk(KERN_DEBUG "Moved legacy port %d -> %d\n",
 			       index, legacy_serial_count);
 			legacy_serial_ports[legacy_serial_count] =
 				legacy_serial_ports[index];
@@ -77,7 +78,7 @@ static int __init add_legacy_port(struct device_node *np, int want_index,
 				legacy_serial_infos[index];
 			legacy_serial_count++;
 		} else {
-			printk(KERN_INFO "Replacing legacy port %d\n", index);
+			printk(KERN_DEBUG "Replacing legacy port %d\n", index);
 		}
 	}
 
@@ -96,10 +97,11 @@ static int __init add_legacy_port(struct device_node *np, int want_index,
 	legacy_serial_infos[index].np = of_node_get(np);
 	legacy_serial_infos[index].clock = clock;
 	legacy_serial_infos[index].speed = spd ? *spd : 0;
+	legacy_serial_infos[index].irq_check_parent = irq_check_parent;
 
-	printk(KERN_INFO "Found legacy serial port %d for %s\n",
+	printk(KERN_DEBUG "Found legacy serial port %d for %s\n",
 	       index, np->full_name);
-	printk(KERN_INFO "  %s=%llx, taddr=%llx, irq=%lx, clk=%d, speed=%d\n",
+	printk(KERN_DEBUG "  %s=%llx, taddr=%llx, irq=%lx, clk=%d, speed=%d\n",
 	       (iotype == UPIO_PORT) ? "port" : "mem",
 	       (unsigned long long)base, (unsigned long long)taddr, irq,
 	       legacy_serial_ports[index].uartclk,
@@ -111,9 +113,10 @@ static int __init add_legacy_port(struct device_node *np, int want_index,
 static int __init add_legacy_soc_port(struct device_node *np,
 				      struct device_node *soc_dev)
 {
-	phys_addr_t addr;
-	u32 *addrp;
+	u64 addr;
+	const u32 *addrp;
 	upf_t flags = UPF_BOOT_AUTOCONF | UPF_SKIP_TEST | UPF_SHARE_IRQ;
+	struct device_node *tsi = of_get_parent(np);
 
 	/* We only support ports that have a clock frequency properly
 	 * encoded in the device-tree.
@@ -127,23 +130,30 @@ static int __init add_legacy_soc_port(struct device_node *np,
 		return -1;
 
 	addr = of_translate_address(soc_dev, addrp);
+	if (addr == OF_BAD_ADDR)
+		return -1;
 
 	/* Add port, irq will be dealt with later. We passed a translated
 	 * IO port value. It will be fixed up later along with the irq
 	 */
-	return add_legacy_port(np, -1, UPIO_MEM, addr, addr, NO_IRQ, flags);
+	if (tsi && !strcmp(tsi->type, "tsi-bridge"))
+		return add_legacy_port(np, -1, UPIO_TSI, addr, addr, NO_IRQ, flags, 0);
+	else
+		return add_legacy_port(np, -1, UPIO_MEM, addr, addr, NO_IRQ, flags, 0);
 }
 
 static int __init add_legacy_isa_port(struct device_node *np,
 				      struct device_node *isa_brg)
 {
-	u32 *reg;
-	char *typep;
+	const u32 *reg;
+	const char *typep;
 	int index = -1;
-	phys_addr_t taddr;
+	u64 taddr;
+
+	DBG(" -> add_legacy_isa_port(%s)\n", np->full_name);
 
 	/* Get the ISA port number */
-	reg = (u32 *)get_property(np, "reg", NULL);
+	reg = get_property(np, "reg", NULL);
 	if (reg == NULL)
 		return -1;
 
@@ -154,17 +164,23 @@ static int __init add_legacy_isa_port(struct device_node *np,
 	/* Now look for an "ibm,aix-loc" property that gives us ordering
 	 * if any...
 	 */
-	typep = (char *)get_property(np, "ibm,aix-loc", NULL);
+	typep = get_property(np, "ibm,aix-loc", NULL);
 
 	/* If we have a location index, then use it */
 	if (typep && *typep == 'S')
 		index = simple_strtol(typep+1, NULL, 0) - 1;
 
-	/* Translate ISA address */
+	/* Translate ISA address. If it fails, we still register the port
+	 * with no translated address so that it can be picked up as an IO
+	 * port later by the serial driver
+	 */
 	taddr = of_translate_address(np, reg);
+	if (taddr == OF_BAD_ADDR)
+		taddr = 0;
 
 	/* Add port, irq will be dealt with later */
-	return add_legacy_port(np, index, UPIO_PORT, reg[1], taddr, NO_IRQ, UPF_BOOT_AUTOCONF);
+	return add_legacy_port(np, index, UPIO_PORT, reg[1], taddr,
+			       NO_IRQ, UPF_BOOT_AUTOCONF, 0);
 
 }
 
@@ -172,10 +188,12 @@ static int __init add_legacy_isa_port(struct device_node *np,
 static int __init add_legacy_pci_port(struct device_node *np,
 				      struct device_node *pci_dev)
 {
-	phys_addr_t addr, base;
-	u32 *addrp;
+	u64 addr, base;
+	const u32 *addrp;
 	unsigned int flags;
 	int iotype, index = -1, lindex = 0;
+
+	DBG(" -> add_legacy_pci_port(%s)\n", np->full_name);
 
 	/* We only support ports that have a clock frequency properly
 	 * encoded in the device-tree (that is have an fcode). Anything
@@ -195,6 +213,8 @@ static int __init add_legacy_pci_port(struct device_node *np,
 	/* We only support BAR 0 for now */
 	iotype = (flags & IORESOURCE_MEM) ? UPIO_MEM : UPIO_PORT;
 	addr = of_translate_address(pci_dev, addrp);
+	if (addr == OF_BAD_ADDR)
+		return -1;
 
 	/* Set the IO base to the same as the translated address for MMIO,
 	 * or to the domain local IO base for PIO (it will be fixed up later)
@@ -208,7 +228,7 @@ static int __init add_legacy_pci_port(struct device_node *np,
 	 * we get to their "reg" property
 	 */
 	if (np != pci_dev) {
-		u32 *reg = (u32 *)get_property(np, "reg", NULL);
+		const u32 *reg = get_property(np, "reg", NULL);
 		if (reg && (*reg < 4))
 			index = lindex = *reg;
 	}
@@ -232,7 +252,8 @@ static int __init add_legacy_pci_port(struct device_node *np,
 	/* Add port, irq will be dealt with later. We passed a translated
 	 * IO port value. It will be fixed up later along with the irq
 	 */
-	return add_legacy_port(np, index, iotype, base, addr, NO_IRQ, UPF_BOOT_AUTOCONF);
+	return add_legacy_port(np, index, iotype, base, addr, NO_IRQ,
+			       UPF_BOOT_AUTOCONF, np != pci_dev);
 }
 #endif
 
@@ -265,13 +286,13 @@ static void __init setup_legacy_serial_console(int console)
 void __init find_legacy_serial_ports(void)
 {
 	struct device_node *np, *stdout = NULL;
-	char *path;
+	const char *path;
 	int index;
 
 	DBG(" -> find_legacy_serial_port()\n");
 
 	/* Now find out if one of these is out firmware console */
-	path = (char *)get_property(of_chosen, "linux,stdout-path", NULL);
+	path = get_property(of_chosen, "linux,stdout-path", NULL);
 	if (path != NULL) {
 		stdout = of_find_node_by_path(path);
 		if (stdout)
@@ -300,6 +321,17 @@ void __init find_legacy_serial_ports(void)
 				legacy_serial_console = index;
 		}
 		of_node_put(isa);
+	}
+
+	/* First fill our array with tsi-bridge ports */
+	for (np = NULL; (np = of_find_compatible_node(np, "serial", "ns16550")) != NULL;) {
+		struct device_node *tsi = of_get_parent(np);
+		if (tsi && !strcmp(tsi->type, "tsi-bridge")) {
+			index = add_legacy_soc_port(np, np);
+			if (index >= 0 && np == stdout)
+				legacy_serial_console = index;
+		}
+		of_node_put(tsi);
 	}
 
 #ifdef CONFIG_PCI
@@ -352,27 +384,22 @@ static void __init fixup_port_irq(int index,
 				  struct device_node *np,
 				  struct plat_serial8250_port *port)
 {
+	unsigned int virq;
+
 	DBG("fixup_port_irq(%d)\n", index);
 
-	/* Check for interrupts in that node */
-	if (np->n_intrs > 0) {
-		port->irq = np->intrs[0].line;
-		DBG(" port %d (%s), irq=%d\n",
-		    index, np->full_name, port->irq);
-		return;
+	virq = irq_of_parse_and_map(np, 0);
+	if (virq == NO_IRQ && legacy_serial_infos[index].irq_check_parent) {
+		np = of_get_parent(np);
+		if (np == NULL)
+			return;
+		virq = irq_of_parse_and_map(np, 0);
+		of_node_put(np);
 	}
-
-	/* Check for interrupts in the parent */
-	np = of_get_parent(np);
-	if (np == NULL)
+	if (virq == NO_IRQ)
 		return;
 
-	if (np->n_intrs > 0) {
-		port->irq = np->intrs[0].line;
-		DBG(" port %d (%s), irq=%d\n",
-		    index, np->full_name, port->irq);
-	}
-	of_node_put(np);
+	port->irq = virq;
 }
 
 static void __init fixup_port_pio(int index,
@@ -442,7 +469,7 @@ static int __init serial_dev_init(void)
 			fixup_port_irq(i, np, port);
 		if (port->iotype == UPIO_PORT)
 			fixup_port_pio(i, np, port);
-		if (port->iotype == UPIO_MEM)
+		if ((port->iotype == UPIO_MEM) || (port->iotype == UPIO_TSI))
 			fixup_port_mmio(i, np, port);
 	}
 
@@ -465,8 +492,8 @@ static int __init check_legacy_serial_console(void)
 {
 	struct device_node *prom_stdout = NULL;
 	int speed = 0, offset = 0;
-	char *name;
-	u32 *spd;
+	const char *name;
+	const u32 *spd;
 
 	DBG(" -> check_legacy_serial_console()\n");
 
@@ -487,7 +514,7 @@ static int __init check_legacy_serial_console(void)
 	}
 	/* We are getting a weird phandle from OF ... */
 	/* ... So use the full path instead */
-	name = (char *)get_property(of_chosen, "linux,stdout-path", NULL);
+	name = get_property(of_chosen, "linux,stdout-path", NULL);
 	if (name == NULL) {
 		DBG(" no linux,stdout-path !\n");
 		return -ENODEV;
@@ -499,12 +526,12 @@ static int __init check_legacy_serial_console(void)
 	}
 	DBG("stdout is %s\n", prom_stdout->full_name);
 
-	name = (char *)get_property(prom_stdout, "name", NULL);
+	name = get_property(prom_stdout, "name", NULL);
 	if (!name) {
 		DBG(" stdout package has no name !\n");
 		goto not_found;
 	}
-	spd = (u32 *)get_property(prom_stdout, "current-speed", NULL);
+	spd = get_property(prom_stdout, "current-speed", NULL);
 	if (spd)
 		speed = *spd;
 

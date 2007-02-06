@@ -459,7 +459,7 @@ ok_to_read:
 #ifdef DEBUG
 	printk("%s: read: sector %ld, remaining = %ld, buffer=%p\n",
 		req->rq_disk->disk_name, req->sector, req->nr_sectors,
-		req->buffer+512));
+		req->buffer+512);
 #endif
 	if (req->current_nr_sectors <= 0)
 		end_request(req, 1);
@@ -626,7 +626,7 @@ repeat:
 		req->rq_disk->disk_name, (req->cmd == READ)?"read":"writ",
 		cyl, head, sec, nsect, req->buffer);
 #endif
-	if (req->flags & REQ_CMD) {
+	if (blk_fs_request(req)) {
 		switch (rq_data_dir(req)) {
 		case READ:
 			hd_out(disk,nsect,sec,head,cyl,WIN_READ,&read_intr);
@@ -673,7 +673,7 @@ static int hd_getgeo(struct block_device *bdev, struct hd_geometry *geo)
  * be forgotten about...
  */
 
-static irqreturn_t hd_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t hd_interrupt(int irq, void *dev_id)
 {
 	void (*handler)(void) = do_hd;
 
@@ -691,7 +691,7 @@ static struct block_device_operations hd_fops = {
 };
 
 /*
- * This is the hard disk IRQ description. The SA_INTERRUPT in sa_flags
+ * This is the hard disk IRQ description. The IRQF_DISABLED in sa_flags
  * means we run the IRQ-handler with interrupts disabled:  this is bad for
  * interrupt latency, but anything else has led to problems on some
  * machines.
@@ -806,7 +806,7 @@ static int __init hd_init(void)
 			p->cyl, p->head, p->sect);
 	}
 
-	if (request_irq(HD_IRQ, hd_interrupt, SA_INTERRUPT, "hd", NULL)) {
+	if (request_irq(HD_IRQ, hd_interrupt, IRQF_DISABLED, "hd", NULL)) {
 		printk("hd: unable to get IRQ%d for the hard disk driver\n",
 			HD_IRQ);
 		goto out1;

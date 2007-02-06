@@ -20,7 +20,7 @@
 #include <linux/fs.h>
 #include <linux/kthread.h>
 #include <linux/file.h>
-#include <linux/suspend.h>
+#include <linux/freezer.h>
 
 #include <media/video-buf.h>
 #include <media/video-buf-dvb.h>
@@ -135,14 +135,15 @@ static int videobuf_dvb_stop_feed(struct dvb_demux_feed *feed)
 
 int videobuf_dvb_register(struct videobuf_dvb *dvb,
 			  struct module *module,
-			  void *adapter_priv)
+			  void *adapter_priv,
+			  struct device *device)
 {
 	int result;
 
 	mutex_init(&dvb->lock);
 
 	/* register adapter */
-	result = dvb_register_adapter(&dvb->adapter, dvb->name, module);
+	result = dvb_register_adapter(&dvb->adapter, dvb->name, module, device);
 	if (result < 0) {
 		printk(KERN_WARNING "%s: dvb_register_adapter failed (errno = %d)\n",
 		       dvb->name, result);
@@ -222,6 +223,7 @@ fail_dmxdev:
 fail_dmx:
 	dvb_unregister_frontend(dvb->frontend);
 fail_frontend:
+	dvb_frontend_detach(dvb->frontend);
 	dvb_unregister_adapter(&dvb->adapter);
 fail_adapter:
 	return result;
@@ -235,6 +237,7 @@ void videobuf_dvb_unregister(struct videobuf_dvb *dvb)
 	dvb_dmxdev_release(&dvb->dmxdev);
 	dvb_dmx_release(&dvb->demux);
 	dvb_unregister_frontend(dvb->frontend);
+	dvb_frontend_detach(dvb->frontend);
 	dvb_unregister_adapter(&dvb->adapter);
 }
 

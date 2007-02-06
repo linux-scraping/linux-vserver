@@ -29,7 +29,6 @@
  *  Also need to add code to deal with cards endians that are different than
  *  the native cpu endians. I also need to deal with MSB position in the word.
  */
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/string.h>
 #include <linux/fb.h>
@@ -43,7 +42,7 @@
 #define DPRINTK(fmt, args...)
 #endif
 
-static u32 cfb_tab8[] = {
+static const u32 cfb_tab8[] = {
 #if defined(__BIG_ENDIAN)
     0x00000000,0x000000ff,0x0000ff00,0x0000ffff,
     0x00ff0000,0x00ff00ff,0x00ffff00,0x00ffffff,
@@ -59,7 +58,7 @@ static u32 cfb_tab8[] = {
 #endif
 };
 
-static u32 cfb_tab16[] = {
+static const u32 cfb_tab16[] = {
 #if defined(__BIG_ENDIAN)
     0x00000000, 0x0000ffff, 0xffff0000, 0xffffffff
 #elif defined(__LITTLE_ENDIAN)
@@ -69,7 +68,7 @@ static u32 cfb_tab16[] = {
 #endif
 };
 
-static u32 cfb_tab32[] = {
+static const u32 cfb_tab32[] = {
 	0x00000000, 0xffffffff
 };
 
@@ -219,7 +218,7 @@ static inline void fast_imageblit(const struct fb_image *image, struct fb_info *
 	u32 bit_mask, end_mask, eorx, shift;
 	const char *s = image->data, *src;
 	u32 __iomem *dst;
-	u32 *tab = NULL;
+	const u32 *tab = NULL;
 	int i, j, k;
 		
 	switch (bpp) {
@@ -230,6 +229,7 @@ static inline void fast_imageblit(const struct fb_image *image, struct fb_info *
 		tab = cfb_tab16;
 		break;
 	case 32:
+	default:
 		tab = cfb_tab32;
 		break;
 	}

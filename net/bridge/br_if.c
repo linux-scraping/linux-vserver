@@ -77,11 +77,15 @@ static int port_cost(struct net_device *dev)
  * Called from work queue to allow for calling functions that
  * might sleep (such as speed check), and to debounce.
  */
-static void port_carrier_check(void *arg)
+static void port_carrier_check(struct work_struct *work)
 {
-	struct net_device *dev = arg;
 	struct net_bridge_port *p;
+	struct net_device *dev;
 	struct net_bridge *br;
+
+	dev = container_of(work, struct net_bridge_port,
+			   carrier_check.work)->dev;
+	work_release(work);
 
 	rtnl_lock();
 	p = dev->br_port;
@@ -163,7 +167,7 @@ static void del_nbp(struct net_bridge_port *p)
 	br_stp_disable_port(p);
 	spin_unlock_bh(&br->lock);
 
-	br_fdb_delete_by_port(br, p);
+	br_fdb_delete_by_port(br, p, 1);
 
 	list_del_rcu(&p->list);
 
@@ -276,7 +280,7 @@ static struct net_bridge_port *new_nbp(struct net_bridge *br,
 	p->port_no = index;
 	br_init_port(p);
 	p->state = BR_STATE_DISABLED;
-	INIT_WORK(&p->carrier_check, port_carrier_check, dev);
+	INIT_DELAYED_WORK_NAR(&p->carrier_check, port_carrier_check);
 	br_stp_port_timer_init(p);
 
 	kobject_init(&p->kobj);
@@ -372,17 +376,33 @@ void br_features_recompute(struct net_bridge *br)
 	struct net_bridge_port *p;
 	unsigned long features, checksum;
 
-	features = br->feature_mask &~ NETIF_F_IP_CSUM;
-	checksum = br->feature_mask & NETIF_F_IP_CSUM;
+	checksum = br->feature_mask & NETIF_F_ALL_CSUM ? NETIF_F_NO_CSUM : 0;
+	features = br->feature_mask & ~NETIF_F_ALL_CSUM;
 
 	list_for_each_entry(p, &br->port_list, list) {
-		if (!(p->dev->features 
-		      & (NETIF_F_IP_CSUM|NETIF_F_NO_CSUM|NETIF_F_HW_CSUM)))
+		unsigned long feature = p->dev->features;
+
+		if (checksum & NETIF_F_NO_CSUM && !(feature & NETIF_F_NO_CSUM))
+			checksum ^= NETIF_F_NO_CSUM | NETIF_F_HW_CSUM;
+		if (checksum & NETIF_F_HW_CSUM && !(feature & NETIF_F_HW_CSUM))
+			checksum ^= NETIF_F_HW_CSUM | NETIF_F_IP_CSUM;
+		if (!(feature & NETIF_F_IP_CSUM))
 			checksum = 0;
-		features &= p->dev->features;
+
+		if (feature & NETIF_F_GSO)
+			feature |= NETIF_F_GSO_SOFTWARE;
+		feature |= NETIF_F_GSO;
+
+		features &= feature;
 	}
 
-	br->dev->features = features | checksum | NETIF_F_LLTX;
+	if (!(checksum & NETIF_F_ALL_CSUM))
+		features &= ~NETIF_F_SG;
+	if (!(features & NETIF_F_SG))
+		features &= ~NETIF_F_GSO_MASK;
+
+	br->dev->features = features | checksum | NETIF_F_LLTX |
+			    NETIF_F_GSO_ROBUST;
 }
 
 /* called with RTNL */
@@ -432,7 +452,7 @@ int br_add_if(struct net_bridge *br, struct net_device *dev)
 
 	return 0;
 err2:
-	br_fdb_delete_by_port(br, p);
+	br_fdb_delete_by_port(br, p, 1);
 err1:
 	kobject_del(&p->kobj);
 err0:

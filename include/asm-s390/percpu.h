@@ -15,18 +15,20 @@
  */
 #if defined(__s390x__) && defined(MODULE)
 
-#define __reloc_hide(var,offset) \
-  (*({ unsigned long *__ptr; \
-       asm ( "larl %0,per_cpu__"#var"@GOTENT" \
-             : "=a" (__ptr) : "X" (per_cpu__##var) ); \
-       (typeof(&per_cpu__##var))((*__ptr) + (offset)); }))
+#define __reloc_hide(var,offset) (*({			\
+	extern int simple_identifier_##var(void);	\
+	unsigned long *__ptr;				\
+	asm ( "larl %0,per_cpu__"#var"@GOTENT"		\
+	    : "=a" (__ptr) : "X" (per_cpu__##var) );	\
+	(typeof(&per_cpu__##var))((*__ptr) + (offset));	}))
 
 #else
 
-#define __reloc_hide(var, offset) \
-  (*({ unsigned long __ptr; \
-       asm ( "" : "=a" (__ptr) : "0" (&per_cpu__##var) ); \
-       (typeof(&per_cpu__##var)) (__ptr + (offset)); }))
+#define __reloc_hide(var, offset) (*({				\
+	extern int simple_identifier_##var(void);		\
+	unsigned long __ptr;					\
+	asm ( "" : "=a" (__ptr) : "0" (&per_cpu__##var) );	\
+	(typeof(&per_cpu__##var)) (__ptr + (offset)); }))
 
 #endif
 
@@ -40,7 +42,9 @@ extern unsigned long __per_cpu_offset[NR_CPUS];
     __typeof__(type) per_cpu__##name
 
 #define __get_cpu_var(var) __reloc_hide(var,S390_lowcore.percpu_offset)
+#define __raw_get_cpu_var(var) __reloc_hide(var,S390_lowcore.percpu_offset)
 #define per_cpu(var,cpu) __reloc_hide(var,__per_cpu_offset[cpu])
+#define per_cpu_offset(x) (__per_cpu_offset[x])
 
 /* A macro to avoid #include hell... */
 #define percpu_modcopy(pcpudst, src, size)			\
@@ -57,6 +61,7 @@ do {								\
     __typeof__(type) per_cpu__##name
 
 #define __get_cpu_var(var) __reloc_hide(var,0)
+#define __raw_get_cpu_var(var) __reloc_hide(var,0)
 #define per_cpu(var,cpu) __reloc_hide(var,0)
 
 #endif /* SMP */

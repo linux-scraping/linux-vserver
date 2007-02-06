@@ -28,79 +28,50 @@
 #include <linux/init.h>
 #include <linux/smp.h>
 #include <linux/nodemask.h>
+#include <linux/mmzone.h>
 #include <asm/cpu.h>
 
 static struct i386_cpu cpu_devices[NR_CPUS];
 
-int arch_register_cpu(int num){
-	struct node *parent = NULL;
-
-#ifdef CONFIG_NUMA
-	int node = cpu_to_node(num);
-	if (node_online(node))
-		parent = &node_devices[node].node;
-#endif /* CONFIG_NUMA */
-
+int arch_register_cpu(int num)
+{
 	/*
 	 * CPU0 cannot be offlined due to several
 	 * restrictions and assumptions in kernel. This basically
 	 * doesnt add a control file, one cannot attempt to offline
 	 * BSP.
+	 *
+	 * Also certain PCI quirks require not to enable hotplug control
+	 * for all CPU's.
 	 */
-	if (!num)
-		cpu_devices[num].cpu.no_control = 1;
+	if (num && enable_cpu_hotplug)
+		cpu_devices[num].cpu.hotpluggable = 1;
 
-	return register_cpu(&cpu_devices[num].cpu, num, parent);
+	return register_cpu(&cpu_devices[num].cpu, num);
 }
 
 #ifdef CONFIG_HOTPLUG_CPU
+int enable_cpu_hotplug = 1;
 
 void arch_unregister_cpu(int num) {
-	struct node *parent = NULL;
-
-#ifdef CONFIG_NUMA
-	int node = cpu_to_node(num);
-	if (node_online(node))
-		parent = &node_devices[node].node;
-#endif /* CONFIG_NUMA */
-
-	return unregister_cpu(&cpu_devices[num].cpu, parent);
+	return unregister_cpu(&cpu_devices[num].cpu);
 }
 EXPORT_SYMBOL(arch_register_cpu);
 EXPORT_SYMBOL(arch_unregister_cpu);
 #endif /*CONFIG_HOTPLUG_CPU*/
 
-
+static int __init topology_init(void)
+{
+	int i;
 
 #ifdef CONFIG_NUMA
-#include <linux/mmzone.h>
-#include <asm/node.h>
-
-struct i386_node node_devices[MAX_NUMNODES];
-
-static int __init topology_init(void)
-{
-	int i;
-
 	for_each_online_node(i)
-		arch_register_node(i);
-
-	for_each_present_cpu(i)
-		arch_register_cpu(i);
-	return 0;
-}
-
-#else /* !CONFIG_NUMA */
-
-static int __init topology_init(void)
-{
-	int i;
-
-	for_each_present_cpu(i)
-		arch_register_cpu(i);
-	return 0;
-}
-
+		register_one_node(i);
 #endif /* CONFIG_NUMA */
+
+	for_each_present_cpu(i)
+		arch_register_cpu(i);
+	return 0;
+}
 
 subsys_initcall(topology_init);

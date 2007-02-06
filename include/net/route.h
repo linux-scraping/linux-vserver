@@ -24,7 +24,6 @@
 #ifndef _ROUTE_H
 #define _ROUTE_H
 
-#include <linux/config.h>
 #include <net/dst.h>
 #include <net/inetpeer.h>
 #include <net/flow.h>
@@ -34,6 +33,8 @@
 #include <linux/route.h>
 #include <linux/ip.h>
 #include <linux/cache.h>
+#include <linux/security.h>
+#include <linux/vs_base.h>
 #include <linux/vs_network.h>
 #include <linux/in.h>
 
@@ -65,18 +66,18 @@ struct rtable
 	__u16			rt_type;
 	__u16			rt_multipath_alg;
 
-	__u32			rt_dst;	/* Path destination	*/
-	__u32			rt_src;	/* Path source		*/
+	__be32			rt_dst;	/* Path destination	*/
+	__be32			rt_src;	/* Path source		*/
 	int			rt_iif;
 
 	/* Info on neighbour */
-	__u32			rt_gateway;
+	__be32			rt_gateway;
 
 	/* Cache lookup keys */
 	struct flowi		fl;
 
 	/* Miscellaneous cached information */
-	__u32			rt_spec_dst; /* RFC1122 specific destination */
+	__be32			rt_spec_dst; /* RFC1122 specific destination */
 	struct inet_peer	*peer; /* long-living peer info */
 };
 
@@ -112,18 +113,18 @@ extern struct ip_rt_acct *ip_rt_acct;
 
 struct in_device;
 extern int		ip_rt_init(void);
-extern void		ip_rt_redirect(u32 old_gw, u32 dst, u32 new_gw,
-				       u32 src, struct net_device *dev);
+extern void		ip_rt_redirect(__be32 old_gw, __be32 dst, __be32 new_gw,
+				       __be32 src, struct net_device *dev);
 extern void		ip_rt_advice(struct rtable **rp, int advice);
 extern void		rt_cache_flush(int how);
 extern int		__ip_route_output_key(struct rtable **, const struct flowi *flp);
 extern int		ip_route_output_key(struct rtable **, struct flowi *flp);
 extern int		ip_route_output_flow(struct rtable **rp, struct flowi *flp, struct sock *sk, int flags);
-extern int		ip_route_input(struct sk_buff*, u32 dst, u32 src, u8 tos, struct net_device *devin);
+extern int		ip_route_input(struct sk_buff*, __be32 dst, __be32 src, u8 tos, struct net_device *devin);
 extern unsigned short	ip_rt_frag_needed(struct iphdr *iph, unsigned short new_mtu);
 extern void		ip_rt_send_redirect(struct sk_buff *skb);
 
-extern unsigned		inet_addr_type(u32 addr);
+extern unsigned		inet_addr_type(__be32 addr);
 extern void		ip_rt_multicast_event(struct in_device *);
 extern int		ip_rt_ioctl(unsigned int cmd, void __user *arg);
 extern void		ip_rt_get_source(u8 *src, struct rtable *rt);
@@ -200,9 +201,9 @@ static inline int ip_find_src(struct nx_info *nxi, struct rtable **rp, struct fl
 	return 0;
 }
 
-static inline int ip_route_connect(struct rtable **rp, u32 dst,
-				   u32 src, u32 tos, int oif, u8 protocol,
-				   u16 sport, u16 dport, struct sock *sk)
+static inline int ip_route_connect(struct rtable **rp, __be32 dst,
+				   __be32 src, u32 tos, int oif, u8 protocol,
+				   __be16 sport, __be16 dport, struct sock *sk)
 {
 	struct flowi fl = { .oif = oif,
 			    .nl_u = { .ip4_u = { .daddr = dst,
@@ -227,10 +228,10 @@ static inline int ip_route_connect(struct rtable **rp, u32 dst,
 		err = ip_find_src(nx_info, rp, &fl);
 		if (err)
 			return err;
-		if (fl.fl4_dst == IPI_LOOPBACK && !vx_check(0, VX_ADMIN))
+		if (fl.fl4_dst == IPI_LOOPBACK && !nx_check(0, VS_ADMIN))
 			fl.fl4_dst = nx_info->ipv4[0];
 #ifdef CONFIG_VSERVER_REMAP_SADDR
-		if (fl.fl4_src == IPI_LOOPBACK && !vx_check(0, VX_ADMIN))
+		if (fl.fl4_src == IPI_LOOPBACK && !nx_check(0, VS_ADMIN))
 			fl.fl4_src = nx_info->ipv4[0];
 #endif
 	}
@@ -243,11 +244,12 @@ static inline int ip_route_connect(struct rtable **rp, u32 dst,
 		ip_rt_put(*rp);
 		*rp = NULL;
 	}
+	security_sk_classify_flow(sk, &fl);
 	return ip_route_output_flow(rp, &fl, sk, 0);
 }
 
 static inline int ip_route_newports(struct rtable **rp, u8 protocol,
-				    u16 sport, u16 dport, struct sock *sk)
+				    __be16 sport, __be16 dport, struct sock *sk)
 {
 	if (sport != (*rp)->fl.fl_ip_sport ||
 	    dport != (*rp)->fl.fl_ip_dport) {
@@ -259,6 +261,7 @@ static inline int ip_route_newports(struct rtable **rp, u8 protocol,
 		fl.proto = protocol;
 		ip_rt_put(*rp);
 		*rp = NULL;
+		security_sk_classify_flow(sk, &fl);
 		return ip_route_output_flow(rp, &fl, sk, 0);
 	}
 	return 0;

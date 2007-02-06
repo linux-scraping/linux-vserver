@@ -23,42 +23,6 @@
 #include <linux/mm.h>
 
 /*
- * Process flags handling
- */
-
-#define PFLAGS_TEST_NOIO()              (current->flags & PF_NOIO)
-#define PFLAGS_TEST_FSTRANS()           (current->flags & PF_FSTRANS)
-
-#define PFLAGS_SET_NOIO() do {		\
-	current->flags |= PF_NOIO;	\
-} while (0)
-
-#define PFLAGS_CLEAR_NOIO() do {	\
-	current->flags &= ~PF_NOIO;	\
-} while (0)
-
-/* these could be nested, so we save state */
-#define PFLAGS_SET_FSTRANS(STATEP) do {	\
-	*(STATEP) = current->flags;	\
-	current->flags |= PF_FSTRANS;	\
-} while (0)
-
-#define PFLAGS_CLEAR_FSTRANS(STATEP) do { \
-	*(STATEP) = current->flags;	\
-	current->flags &= ~PF_FSTRANS;	\
-} while (0)
-
-/* Restore the PF_FSTRANS state to what was saved in STATEP */
-#define PFLAGS_RESTORE_FSTRANS(STATEP) do {     		\
-	current->flags = ((current->flags & ~PF_FSTRANS) |	\
-			  (*(STATEP) & PF_FSTRANS));		\
-} while (0)
-
-#define PFLAGS_DUP(OSTATEP, NSTATEP) do { \
-	*(NSTATEP) = *(OSTATEP);	\
-} while (0)
-
-/*
  * General memory allocation interfaces
  */
 
@@ -66,6 +30,7 @@
 #define KM_NOSLEEP	0x0002u
 #define KM_NOFS		0x0004u
 #define KM_MAYFAIL	0x0008u
+#define KM_LARGE	0x0010u
 
 /*
  * We use a special process flag to avoid recursive callbacks into
@@ -77,21 +42,22 @@ kmem_flags_convert(unsigned int __nocast flags)
 {
 	gfp_t	lflags;
 
-	BUG_ON(flags & ~(KM_SLEEP|KM_NOSLEEP|KM_NOFS|KM_MAYFAIL));
+	BUG_ON(flags & ~(KM_SLEEP|KM_NOSLEEP|KM_NOFS|KM_MAYFAIL|KM_LARGE));
 
 	if (flags & KM_NOSLEEP) {
 		lflags = GFP_ATOMIC | __GFP_NOWARN;
 	} else {
 		lflags = GFP_KERNEL | __GFP_NOWARN;
-		if (PFLAGS_TEST_FSTRANS() || (flags & KM_NOFS))
+		if ((current->flags & PF_FSTRANS) || (flags & KM_NOFS))
 			lflags &= ~__GFP_FS;
 	}
 	return lflags;
 }
 
 extern void *kmem_alloc(size_t, unsigned int __nocast);
-extern void *kmem_realloc(void *, size_t, size_t, unsigned int __nocast);
 extern void *kmem_zalloc(size_t, unsigned int __nocast);
+extern void *kmem_zalloc_greedy(size_t *, size_t, size_t, unsigned int __nocast);
+extern void *kmem_realloc(void *, size_t, size_t, unsigned int __nocast);
 extern void  kmem_free(void *, size_t);
 
 /*
@@ -127,8 +93,8 @@ kmem_zone_free(kmem_zone_t *zone, void *ptr)
 static inline void
 kmem_zone_destroy(kmem_zone_t *zone)
 {
-	if (zone && kmem_cache_destroy(zone))
-		BUG();
+	if (zone)
+		kmem_cache_destroy(zone);
 }
 
 extern void *kmem_zone_alloc(kmem_zone_t *, unsigned int __nocast);

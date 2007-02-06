@@ -1,4 +1,4 @@
-/* linux/include/asm/arch-s3c2410/fb.h
+/* linux/include/asm-arm/arch-s3c2410/fb.h
  *
  * Copyright (c) 2004 Arnaud Patard <arnaud.patard@rtp-net.org>
  *
@@ -7,13 +7,6 @@
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
- *
- *
- *  Changelog:
- *	07-Sep-2004	RTP	Created file
- *	03-Nov-2004	BJD	Updated and minor cleanups
- *	03-Aug-2005     RTP     Renamed to fb.h
- *	26-Oct-2005	BJD	Changed name of platdata init
 */
 
 #ifndef __ASM_ARM_FB_H
@@ -37,6 +30,9 @@ struct s3c2410fb_hw {
 
 struct s3c2410fb_mach_info {
 	unsigned char	fixed_syncs;	/* do not update sync/border */
+
+	/* LCD types */
+	int		type;
 
 	/* Screen size */
 	int		width;

@@ -19,7 +19,6 @@
  * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
-#include <linux/config.h>
 #include <linux/init.h>
 #include <linux/platform_device.h>
 #include <linux/sysdev.h>
@@ -156,6 +155,7 @@ static void __init realview_eb_init(void)
 
 	platform_device_register(&realview_flash_device);
 	platform_device_register(&realview_smc91x_device);
+	platform_device_register(&realview_i2c_device);
 
 	for (i = 0; i < ARRAY_SIZE(amba_devs); i++) {
 		struct amba_device *d = amba_devs[i];

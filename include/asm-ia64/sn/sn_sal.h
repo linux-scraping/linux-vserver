@@ -12,7 +12,6 @@
  */
 
 
-#include <linux/config.h>
 #include <asm/sal.h>
 #include <asm/sn/sn_cpuid.h>
 #include <asm/sn/arch.h>
@@ -78,6 +77,7 @@
 #define  SN_SAL_IOIF_GET_WIDGET_DMAFLUSH_LIST	   0x02000058	// deprecated
 #define  SN_SAL_IOIF_GET_DEVICE_DMAFLUSH_LIST	   0x0200005a
 
+#define SN_SAL_IOIF_INIT			   0x0200005f
 #define SN_SAL_HUB_ERROR_INTERRUPT		   0x02000060
 #define SN_SAL_BTE_RECOVER			   0x02000061
 #define SN_SAL_RESERVED_DO_NOT_USE		   0x02000062
@@ -86,6 +86,9 @@
 #define  SN_SAL_GET_PROM_FEATURE_SET		   0x02000065
 #define  SN_SAL_SET_OS_FEATURE_SET		   0x02000066
 #define  SN_SAL_INJECT_ERROR			   0x02000067
+#define  SN_SAL_SET_CPU_NUMBER			   0x02000068
+
+#define  SN_SAL_KERNEL_LAUNCH_EVENT		   0x02000069
 
 /*
  * Service-specific constants
@@ -346,7 +349,7 @@ ia64_sn_plat_set_error_handling_features(void)
 	ret_stuff.v1 = 0;
 	ret_stuff.v2 = 0;
 	SAL_CALL_REENTRANT(ret_stuff, SN_SAL_SET_ERROR_HANDLING_FEATURES,
-		(SAL_ERR_FEAT_MCA_SLV_TO_OS_INIT_SLV | SAL_ERR_FEAT_LOG_SBES),
+		SAL_ERR_FEAT_LOG_SBES,
 		0, 0, 0, 0, 0, 0);
 
 	return ret_stuff.status;
@@ -706,12 +709,9 @@ static inline int
 sn_change_memprotect(u64 paddr, u64 len, u64 perms, u64 *nasid_array)
 {
 	struct ia64_sal_retval ret_stuff;
-	unsigned long irq_flags;
 
-	local_irq_save(irq_flags);
 	ia64_sal_oemcall_nolock(&ret_stuff, SN_SAL_MEMPROTECT, paddr, len,
 				(u64)nasid_array, perms, 0, 0, 0);
-	local_irq_restore(irq_flags);
 	return ret_stuff.status;
 }
 #define SN_MEMPROT_ACCESS_CLASS_0		0x14a080
@@ -1143,12 +1143,25 @@ static inline int
 sn_inject_error(u64 paddr, u64 *data, u64 *ecc)
 {
 	struct ia64_sal_retval ret_stuff;
-	unsigned long irq_flags;
 
-	local_irq_save(irq_flags);
 	ia64_sal_oemcall_nolock(&ret_stuff, SN_SAL_INJECT_ERROR, paddr, (u64)data,
 				(u64)ecc, 0, 0, 0, 0);
-	local_irq_restore(irq_flags);
 	return ret_stuff.status;
+}
+
+static inline int
+ia64_sn_set_cpu_number(int cpu)
+{
+	struct ia64_sal_retval rv;
+
+	SAL_CALL_NOLOCK(rv, SN_SAL_SET_CPU_NUMBER, cpu, 0, 0, 0, 0, 0, 0);
+	return rv.status;
+}
+static inline int
+ia64_sn_kernel_launch_event(void)
+{
+ 	struct ia64_sal_retval rv;
+	SAL_CALL_NOLOCK(rv, SN_SAL_KERNEL_LAUNCH_EVENT, 0, 0, 0, 0, 0, 0, 0);
+	return rv.status;
 }
 #endif /* _ASM_IA64_SN_SN_SAL_H */

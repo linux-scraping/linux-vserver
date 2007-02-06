@@ -80,14 +80,14 @@ INT_MODULE_PARM(if_port, 0);
 #ifdef PCMCIA_DEBUG
 INT_MODULE_PARM(pc_debug, PCMCIA_DEBUG);
 static const char *version =
-"smc91c92_cs.c 0.09 1996/8/4 Donald Becker, becker@scyld.com.\n";
+"smc91c92_cs.c 1.123 2006/11/09 Donald Becker, becker@scyld.com.\n";
 #define DEBUG(n, args...) if (pc_debug>(n)) printk(KERN_DEBUG args)
 #else
 #define DEBUG(n, args...)
 #endif
 
 #define DRV_NAME	"smc91c92_cs"
-#define DRV_VERSION	"1.122"
+#define DRV_VERSION	"1.123"
 
 /*====================================================================*/
 
@@ -287,7 +287,7 @@ static int smc_close(struct net_device *dev);
 static int smc_ioctl(struct net_device *dev, struct ifreq *rq, int cmd);
 static void smc_tx_timeout(struct net_device *dev);
 static int smc_start_xmit(struct sk_buff *skb, struct net_device *dev);
-static irqreturn_t smc_interrupt(int irq, void *dev_id, struct pt_regs *regs);
+static irqreturn_t smc_interrupt(int irq, void *dev_id);
 static void smc_rx(struct net_device *dev);
 static struct net_device_stats *smc_get_stats(struct net_device *dev);
 static void set_rx_mode(struct net_device *dev);
@@ -299,7 +299,7 @@ static void mdio_sync(kio_addr_t addr);
 static int mdio_read(struct net_device *dev, int phy_id, int loc);
 static void mdio_write(struct net_device *dev, int phy_id, int loc, int value);
 static int smc_link_ok(struct net_device *dev);
-static struct ethtool_ops ethtool_ops;
+static const struct ethtool_ops ethtool_ops;
 
 /*======================================================================
 
@@ -560,16 +560,8 @@ static int mhz_setup(struct pcmcia_device *link)
 
     /* Read the station address from the CIS.  It is stored as the last
        (fourth) string in the Version 1 Version/ID tuple. */
-    tuple->DesiredTuple = CISTPL_VERS_1;
-    if (first_tuple(link, tuple, parse) != CS_SUCCESS) {
-	rc = -1;
-	goto free_cfg_mem;
-    }
-    /* Ugh -- the EM1144 card has two VERS_1 tuples!?! */
-    if (next_tuple(link, tuple, parse) != CS_SUCCESS)
-	first_tuple(link, tuple, parse);
-    if (parse->version_1.ns > 3) {
-	station_addr = parse->version_1.str + parse->version_1.ofs[3];
+    if (link->prod_id[3]) {
+	station_addr = link->prod_id[3];
 	if (cvt_ascii_address(dev, station_addr) == 0) {
 		rc = 0;
 		goto free_cfg_mem;
@@ -744,15 +736,12 @@ static int smc_setup(struct pcmcia_device *link)
 	}
     }
     /* Try the third string in the Version 1 Version/ID tuple. */
-    tuple->DesiredTuple = CISTPL_VERS_1;
-    if (first_tuple(link, tuple, parse) != CS_SUCCESS) {
-	rc = -1;
-	goto free_cfg_mem;
-    }
-    station_addr = parse->version_1.str + parse->version_1.ofs[2];
-    if (cvt_ascii_address(dev, station_addr) == 0) {
-	rc = 0;
-	goto free_cfg_mem;
+    if (link->prod_id[2]) {
+	station_addr = link->prod_id[2];
+	if (cvt_ascii_address(dev, station_addr) == 0) {
+		rc = 0;
+		goto free_cfg_mem;
+	}
     }
 
     rc = -1;
@@ -970,10 +959,6 @@ static int smc91c92_config(struct pcmcia_device *link)
 {
     struct net_device *dev = link->priv;
     struct smc_private *smc = netdev_priv(dev);
-    struct smc_cfg_mem *cfg_mem;
-    tuple_t *tuple;
-    cisparse_t *parse;
-    u_char *buf;
     char *name;
     int i, j, rev;
     kio_addr_t ioaddr;
@@ -981,30 +966,8 @@ static int smc91c92_config(struct pcmcia_device *link)
 
     DEBUG(0, "smc91c92_config(0x%p)\n", link);
 
-    cfg_mem = kmalloc(sizeof(struct smc_cfg_mem), GFP_KERNEL);
-    if (!cfg_mem)
-	goto config_failed;
-
-    tuple = &cfg_mem->tuple;
-    parse = &cfg_mem->parse;
-    buf = cfg_mem->buf;
-
-    tuple->Attributes = tuple->TupleOffset = 0;
-    tuple->TupleData = (cisdata_t *)buf;
-    tuple->TupleDataMax = 64;
-
-    tuple->DesiredTuple = CISTPL_CONFIG;
-    i = first_tuple(link, tuple, parse);
-    CS_EXIT_TEST(i, ParseTuple, config_failed);
-    link->conf.ConfigBase = parse->config.base;
-    link->conf.Present = parse->config.rmask[0];
-
-    tuple->DesiredTuple = CISTPL_MANFID;
-    tuple->Attributes = TUPLE_RETURN_COMMON;
-    if (first_tuple(link, tuple, parse) == CS_SUCCESS) {
-	smc->manfid = parse->manfid.manf;
-	smc->cardid = parse->manfid.card;
-    }
+    smc->manfid = link->manf_id;
+    smc->cardid = link->card_id;
 
     if ((smc->manfid == MANFID_OSITECH) &&
 	(smc->cardid != PRODID_OSITECH_SEVEN)) {
@@ -1134,14 +1097,12 @@ static int smc91c92_config(struct pcmcia_device *link)
     	    printk(KERN_NOTICE "  No MII transceivers found!\n");
 	}
     }
-    kfree(cfg_mem);
     return 0;
 
 config_undo:
     unregister_netdev(dev);
 config_failed:			/* CS_EXIT_TEST() calls jump to here... */
     smc91c92_release(link);
-    kfree(cfg_mem);
     return -ENODEV;
 } /* smc91c92_config */
 
@@ -1545,7 +1506,7 @@ static void smc_eph_irq(struct net_device *dev)
 
 /*====================================================================*/
 
-static irqreturn_t smc_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t smc_interrupt(int irq, void *dev_id)
 {
     struct net_device *dev = dev_id;
     struct smc_private *smc = netdev_priv(dev);
@@ -1780,7 +1741,6 @@ static void set_rx_mode(struct net_device *dev)
     u_short rx_cfg_setting;
 
     if (dev->flags & IFF_PROMISC) {
-	printk(KERN_NOTICE "%s: setting Rx mode to promiscuous.\n", dev->name);
 	rx_cfg_setting = RxStripCRC | RxEnable | RxPromisc | RxAllMulti;
     } else if (dev->flags & IFF_ALLMULTI)
 	rx_cfg_setting = RxStripCRC | RxEnable | RxAllMulti;
@@ -1883,7 +1843,7 @@ static void smc_reset(struct net_device *dev)
     /* Set the Window 1 control, configuration and station addr registers.
        No point in writing the I/O base register ;-> */
     SMC_SELECT_BANK(1);
-    /* Automatically release succesfully transmitted packets,
+    /* Automatically release successfully transmitted packets,
        Accept link errors, counter and Tx error interrupts. */
     outw(CTL_AUTO_RELEASE | CTL_TE_ENABLE | CTL_CR_ENABLE,
 	 ioaddr + CONTROL);
@@ -1967,7 +1927,7 @@ static void media_check(u_long arg)
     if (smc->watchdog++ && ((i>>8) & i)) {
 	if (!smc->fast_poll)
 	    printk(KERN_INFO "%s: interrupt(s) dropped!\n", dev->name);
-	smc_interrupt(dev->irq, smc, NULL);
+	smc_interrupt(dev->irq, smc);
 	smc->fast_poll = HZ;
     }
     if (smc->fast_poll) {
@@ -2208,7 +2168,7 @@ static int smc_nway_reset(struct net_device *dev)
 		return -EOPNOTSUPP;
 }
 
-static struct ethtool_ops ethtool_ops = {
+static const struct ethtool_ops ethtool_ops = {
 	.begin = check_if_running,
 	.get_drvinfo = smc_get_drvinfo,
 	.get_settings = smc_get_settings,

@@ -20,6 +20,7 @@
 #include <linux/types.h>
 #include <linux/list.h>
 #include <linux/sysfs.h>
+#include <linux/compiler.h>
 #include <linux/spinlock.h>
 #include <linux/rwsem.h>
 #include <linux/kref.h>
@@ -46,6 +47,7 @@ enum kobject_action {
 	KOBJ_UMOUNT	= (__force kobject_action_t) 0x05,	/* umount event for block devices (broken) */
 	KOBJ_OFFLINE	= (__force kobject_action_t) 0x06,	/* device offline */
 	KOBJ_ONLINE	= (__force kobject_action_t) 0x07,	/* device online */
+	KOBJ_MOVE	= (__force kobject_action_t) 0x08,	/* device move */
 };
 
 struct kobject {
@@ -71,12 +73,13 @@ static inline const char * kobject_name(const struct kobject * kobj)
 extern void kobject_init(struct kobject *);
 extern void kobject_cleanup(struct kobject *);
 
-extern int kobject_add(struct kobject *);
+extern int __must_check kobject_add(struct kobject *);
 extern void kobject_del(struct kobject *);
 
-extern int kobject_rename(struct kobject *, const char *new_name);
+extern int __must_check kobject_rename(struct kobject *, const char *new_name);
+extern int __must_check kobject_move(struct kobject *, struct kobject *);
 
-extern int kobject_register(struct kobject *);
+extern int __must_check kobject_register(struct kobject *);
 extern void kobject_unregister(struct kobject *);
 
 extern struct kobject * kobject_get(struct kobject *);
@@ -128,8 +131,8 @@ struct kset {
 
 
 extern void kset_init(struct kset * k);
-extern int kset_add(struct kset * k);
-extern int kset_register(struct kset * k);
+extern int __must_check kset_add(struct kset * k);
+extern int __must_check kset_register(struct kset * k);
 extern void kset_unregister(struct kset * k);
 
 static inline struct kset * to_kset(struct kobject * kobj)
@@ -190,6 +193,8 @@ struct subsystem _varname##_subsys = { \
 
 /* The global /sys/kernel/ subsystem for people to chain off of */
 extern struct subsystem kernel_subsys;
+/* The global /sys/hypervisor/ subsystem  */
+extern struct subsystem hypervisor_subsys;
 
 /**
  * Helpers for setting the kset of registered objects.
@@ -237,7 +242,7 @@ extern struct subsystem kernel_subsys;
 	(obj)->subsys.kset.kobj.kset = &(_subsys).kset
 
 extern void subsystem_init(struct subsystem *);
-extern int subsystem_register(struct subsystem *);
+extern int __must_check subsystem_register(struct subsystem *);
 extern void subsystem_unregister(struct subsystem *);
 
 static inline struct subsystem * subsys_get(struct subsystem * s)
@@ -256,17 +261,25 @@ struct subsys_attribute {
 	ssize_t (*store)(struct subsystem *, const char *, size_t); 
 };
 
-extern int subsys_create_file(struct subsystem * , struct subsys_attribute *);
+extern int __must_check subsys_create_file(struct subsystem * ,
+					struct subsys_attribute *);
 
 #if defined(CONFIG_HOTPLUG)
-void kobject_uevent(struct kobject *kobj, enum kobject_action action);
+int kobject_uevent(struct kobject *kobj, enum kobject_action action);
+int kobject_uevent_env(struct kobject *kobj, enum kobject_action action,
+			char *envp[]);
 
 int add_uevent_var(char **envp, int num_envp, int *cur_index,
 			char *buffer, int buffer_size, int *cur_len,
 			const char *format, ...)
 	__attribute__((format (printf, 7, 8)));
 #else
-static inline void kobject_uevent(struct kobject *kobj, enum kobject_action action) { }
+static inline int kobject_uevent(struct kobject *kobj, enum kobject_action action)
+{ return 0; }
+static inline int kobject_uevent_env(struct kobject *kobj,
+				      enum kobject_action action,
+				      char *envp[])
+{ return 0; }
 
 static inline int add_uevent_var(char **envp, int num_envp, int *cur_index,
 				      char *buffer, int buffer_size, int *cur_len, 

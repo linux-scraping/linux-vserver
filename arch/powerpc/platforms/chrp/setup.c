@@ -8,7 +8,6 @@
  * bootup setup stuff..
  */
 
-#include <linux/config.h>
 #include <linux/errno.h>
 #include <linux/sched.h>
 #include <linux/kernel.h>
@@ -25,7 +24,7 @@
 #include <linux/reboot.h>
 #include <linux/init.h>
 #include <linux/pci.h>
-#include <linux/version.h>
+#include <linux/utsrelease.h>
 #include <linux/adb.h>
 #include <linux/module.h>
 #include <linux/delay.h>
@@ -60,7 +59,7 @@ void rtas_indicator_progress(char *, unsigned short);
 int _chrp_type;
 EXPORT_SYMBOL(_chrp_type);
 
-struct mpic *chrp_mpic;
+static struct mpic *chrp_mpic;
 
 /* Used for doing CHRP event-scans */
 DEFINE_PER_CPU(struct timer_list, heartbeat_timer);
@@ -71,9 +70,12 @@ unsigned long event_scan_interval;
  * has to include <linux/interrupt.h> (to get irqreturn_t), which
  * causes all sorts of problems.  -- paulus
  */
-extern irqreturn_t xmon_irq(int, void *, struct pt_regs *);
+extern irqreturn_t xmon_irq(int, void *);
 
 extern unsigned long loops_per_jiffy;
+
+/* To be replaced by RTAS when available */
+static unsigned int *briq_SPOR;
 
 #ifdef CONFIG_SMP
 extern struct smp_ops_t chrp_smp_ops;
@@ -91,6 +93,15 @@ static const char *gg2_cachetypes[4] = {
 };
 static const char *gg2_cachemodes[4] = {
 	"Disabled", "Write-Through", "Copy-Back", "Transparent Mode"
+};
+
+static const char *chrp_names[] = {
+	"Unknown",
+	"","","",
+	"Motorola",
+	"IBM or Longtrail",
+	"Genesi Pegasos",
+	"Total Impact Briq"
 };
 
 void chrp_show_cpuinfo(struct seq_file *m)
@@ -215,8 +226,7 @@ static void __init pegasos_set_l2cr(void)
 	/* Enable L2 cache if needed */
 	np = find_type_devices("cpu");
 	if (np != NULL) {
-		unsigned int *l2cr = (unsigned int *)
-			get_property (np, "l2cr", NULL);
+		const unsigned int *l2cr = get_property(np, "l2cr", NULL);
 		if (l2cr == NULL) {
 			printk ("Pegasos l2cr : no cpu l2cr property found\n");
 			return;
@@ -230,10 +240,18 @@ static void __init pegasos_set_l2cr(void)
 	}
 }
 
+static void briq_restart(char *cmd)
+{
+	local_irq_disable();
+	if (briq_SPOR)
+		out_be32(briq_SPOR, 0);
+	for(;;);
+}
+
 void __init chrp_setup_arch(void)
 {
 	struct device_node *root = find_path_device ("/");
-	char *machine = NULL;
+	const char *machine = NULL;
 
 	/* init to some ~sane value until calibrate_delay() runs */
 	loops_per_jiffy = 50000000/HZ;
@@ -246,11 +264,16 @@ void __init chrp_setup_arch(void)
 		_chrp_type = _CHRP_IBM;
 	} else if (machine && strncmp(machine, "MOT", 3) == 0) {
 		_chrp_type = _CHRP_Motorola;
+	} else if (machine && strncmp(machine, "TotalImpact,BRIQ-1", 18) == 0) {
+		_chrp_type = _CHRP_briq;
+		/* Map the SPOR register on briq and change the restart hook */
+		briq_SPOR = (unsigned int *)ioremap(0xff0000e8, 4);
+		ppc_md.restart = briq_restart;
 	} else {
 		/* Let's assume it is an IBM chrp if all else fails */
 		_chrp_type = _CHRP_IBM;
 	}
-	printk("chrp type = %x\n", _chrp_type);
+	printk("chrp type = %x [%s]\n", _chrp_type, chrp_names[_chrp_type]);
 
 	rtas_initialize();
 	if (rtas_token("display-character") >= 0)
@@ -292,10 +315,6 @@ void __init chrp_setup_arch(void)
 
 	pci_create_OF_bus_map();
 
-#ifdef CONFIG_SMP
-	smp_ops = &chrp_smp_ops;
-#endif /* CONFIG_SMP */
-
 	/*
 	 * Print the banner, then scroll down so boot progress
 	 * can be printed.  -- Cort
@@ -316,27 +335,33 @@ chrp_event_scan(unsigned long unused)
 		  jiffies + event_scan_interval);
 }
 
+static void chrp_8259_cascade(unsigned int irq, struct irq_desc *desc)
+{
+	unsigned int cascade_irq = i8259_irq();
+	if (cascade_irq != NO_IRQ)
+		generic_handle_irq(cascade_irq);
+	desc->chip->eoi(irq);
+}
+
 /*
  * Finds the open-pic node and sets up the mpic driver.
  */
 static void __init chrp_find_openpic(void)
 {
 	struct device_node *np, *root;
-	int len, i, j, irq_count;
+	int len, i, j;
 	int isu_size, idu_size;
-	unsigned int *iranges, *opprop = NULL;
+	const unsigned int *iranges, *opprop = NULL;
 	int oplen = 0;
 	unsigned long opaddr;
 	int na = 1;
-	unsigned char init_senses[NR_IRQS - NUM_8259_INTERRUPTS];
 
-	np = find_type_devices("open-pic");
+	np = of_find_node_by_type(NULL, "open-pic");
 	if (np == NULL)
 		return;
-	root = find_path_device("/");
+	root = of_find_node_by_path("/");
 	if (root) {
-		opprop = (unsigned int *) get_property
-			(root, "platform-open-pic", &oplen);
+		opprop = get_property(root, "platform-open-pic", &oplen);
 		na = prom_n_addr_cells(root);
 	}
 	if (opprop && oplen >= na * sizeof(unsigned int)) {
@@ -344,20 +369,16 @@ static void __init chrp_find_openpic(void)
 		oplen /= na * sizeof(unsigned int);
 	} else {
 		struct resource r;
-		if (of_address_to_resource(np, 0, &r))
-			return;
+		if (of_address_to_resource(np, 0, &r)) {
+			goto bail;
+		}
 		opaddr = r.start;
 		oplen = 0;
 	}
 
 	printk(KERN_INFO "OpenPIC at %lx\n", opaddr);
 
-	irq_count = NR_IRQS - NUM_ISA_INTERRUPTS - 4; /* leave room for IPIs */
-	prom_get_irq_senses(init_senses, NUM_ISA_INTERRUPTS, NR_IRQS - 4);
-	/* i8259 cascade is always positive level */
-	init_senses[0] = IRQ_SENSE_LEVEL | IRQ_POLARITY_POSITIVE;
-
-	iranges = (unsigned int *) get_property(np, "interrupt-ranges", &len);
+	iranges = get_property(np, "interrupt-ranges", &len);
 	if (iranges == NULL)
 		len = 0;	/* non-distributed mpic */
 	else
@@ -383,15 +404,12 @@ static void __init chrp_find_openpic(void)
 	if (len > 1)
 		isu_size = iranges[3];
 
-	chrp_mpic = mpic_alloc(opaddr, MPIC_PRIMARY,
-			       isu_size, NUM_ISA_INTERRUPTS, irq_count,
-			       NR_IRQS - 4, init_senses, irq_count,
-			       " MPIC    ");
+	chrp_mpic = mpic_alloc(np, opaddr, MPIC_PRIMARY,
+			       isu_size, 0, " MPIC    ");
 	if (chrp_mpic == NULL) {
 		printk(KERN_ERR "Failed to allocate MPIC structure\n");
-		return;
+		goto bail;
 	}
-
 	j = na - 1;
 	for (i = 1; i < len; ++i) {
 		iranges += 2;
@@ -403,7 +421,10 @@ static void __init chrp_find_openpic(void)
 	}
 
 	mpic_init(chrp_mpic);
-	mpic_setup_cascade(NUM_ISA_INTERRUPTS, i8259_irq_cascade, NULL);
+	ppc_md.get_irq = mpic_get_irq;
+ bail:
+	of_node_put(root);
+	of_node_put(np);
 }
 
 #if defined(CONFIG_VT) && defined(CONFIG_INPUT_ADBHID) && defined(XMON)
@@ -414,17 +435,37 @@ static struct irqaction xmon_irqaction = {
 };
 #endif
 
-void __init chrp_init_IRQ(void)
+static void __init chrp_find_8259(void)
 {
-	struct device_node *np;
+	struct device_node *np, *pic = NULL;
 	unsigned long chrp_int_ack = 0;
-#if defined(CONFIG_VT) && defined(CONFIG_INPUT_ADBHID) && defined(XMON)
-	struct device_node *kbd;
-#endif
+	unsigned int cascade_irq;
 
+	/* Look for cascade */
+	for_each_node_by_type(np, "interrupt-controller")
+		if (device_is_compatible(np, "chrp,iic")) {
+			pic = np;
+			break;
+		}
+	/* Ok, 8259 wasn't found. We need to handle the case where
+	 * we have a pegasos that claims to be chrp but doesn't have
+	 * a proper interrupt tree
+	 */
+	if (pic == NULL && chrp_mpic != NULL) {
+		printk(KERN_ERR "i8259: Not found in device-tree"
+		       " assuming no legacy interrupts\n");
+		return;
+	}
+
+	/* Look for intack. In a perfect world, we would look for it on
+	 * the ISA bus that holds the 8259 but heh... Works that way. If
+	 * we ever see a problem, we can try to re-use the pSeries code here.
+	 * Also, Pegasos-type platforms don't have a proper node to start
+	 * from anyway
+	 */
 	for (np = find_devices("pci"); np != NULL; np = np->next) {
-		unsigned int *addrp = (unsigned int *)
-			get_property(np, "8259-interrupt-acknowledge", NULL);
+		const unsigned int *addrp = get_property(np,
+				"8259-interrupt-acknowledge", NULL);
 
 		if (addrp == NULL)
 			continue;
@@ -432,11 +473,39 @@ void __init chrp_init_IRQ(void)
 		break;
 	}
 	if (np == NULL)
-		printk(KERN_ERR "Cannot find PCI interrupt acknowledge address\n");
+		printk(KERN_WARNING "Cannot find PCI interrupt acknowledge"
+		       " address, polling\n");
 
+	i8259_init(pic, chrp_int_ack);
+	if (ppc_md.get_irq == NULL) {
+		ppc_md.get_irq = i8259_irq;
+		irq_set_default_host(i8259_get_host());
+	}
+	if (chrp_mpic != NULL) {
+		cascade_irq = irq_of_parse_and_map(pic, 0);
+		if (cascade_irq == NO_IRQ)
+			printk(KERN_ERR "i8259: failed to map cascade irq\n");
+		else
+			set_irq_chained_handler(cascade_irq,
+						chrp_8259_cascade);
+	}
+}
+
+void __init chrp_init_IRQ(void)
+{
+#if defined(CONFIG_VT) && defined(CONFIG_INPUT_ADBHID) && defined(XMON)
+	struct device_node *kbd;
+#endif
 	chrp_find_openpic();
+	chrp_find_8259();
 
-	i8259_init(chrp_int_ack, 0);
+#ifdef CONFIG_SMP
+	/* Pegasos has no MPIC, those ops would make it crash. It might be an
+	 * option to move setting them to after we probe the PIC though
+	 */
+	if (chrp_mpic != NULL)
+		smp_ops = &chrp_smp_ops;
+#endif /* CONFIG_SMP */
 
 	if (_chrp_type == _CHRP_Pegasos)
 		ppc_md.get_irq        = i8259_irq;
@@ -457,7 +526,7 @@ void __init
 chrp_init2(void)
 {
 	struct device_node *device;
-	unsigned int *p = NULL;
+	const unsigned int *p = NULL;
 
 #ifdef CONFIG_NVRAM
 	chrp_nvram_init();
@@ -475,8 +544,7 @@ chrp_init2(void)
 	 */
 	device = find_devices("rtas");
 	if (device)
-		p = (unsigned int *) get_property
-			(device, "rtas-event-scan-rate", NULL);
+		p = get_property(device, "rtas-event-scan-rate", NULL);
 	if (p && *p) {
 		/*
 		 * Arrange to call chrp_event_scan at least *p times
@@ -520,11 +588,6 @@ static int __init chrp_probe(void)
 	ISA_DMA_THRESHOLD = ~0L;
 	DMA_MODE_READ = 0x44;
 	DMA_MODE_WRITE = 0x48;
-	isa_io_base = CHRP_ISA_IO_BASE;		/* default value */
-	ppc_do_canonicalize_irqs = 1;
-
-	/* Assume we have an 8259... */
-	__irq_offset_value = NUM_ISA_INTERRUPTS;
 
 	return 1;
 }
@@ -536,8 +599,6 @@ define_machine(chrp) {
 	.init			= chrp_init2,
 	.show_cpuinfo		= chrp_show_cpuinfo,
 	.init_IRQ		= chrp_init_IRQ,
-	.get_irq		= mpic_get_irq,
-	.pcibios_fixup		= chrp_pcibios_fixup,
 	.restart		= rtas_restart,
 	.power_off		= rtas_power_off,
 	.halt			= rtas_halt,

@@ -363,7 +363,7 @@ SYM53C500_pio_write(int fast_pio, int base, unsigned char *request, unsigned int
 }
 
 static irqreturn_t
-SYM53C500_intr(int irq, void *dev_id, struct pt_regs *regs)
+SYM53C500_intr(int irq, void *dev_id)
 {
 	unsigned long flags;
 	struct Scsi_Host *dev = dev_id;
@@ -545,8 +545,6 @@ SYM53C500_release(struct pcmcia_device *link)
 	*/
 	if (shost->irq)
 		free_irq(shost->irq, shost);
-	if (shost->dma_channel != 0xff)
-		free_dma(shost->dma_channel);
 	if (shost->io_port && shost->n_io_port)
 		release_region(shost->io_port, shost->n_io_port);
 
@@ -722,19 +720,11 @@ SYM53C500_config(struct pcmcia_device *link)
 
 	DEBUG(0, "SYM53C500_config(0x%p)\n", link);
 
+	info->manf_id = link->manf_id;
+
 	tuple.TupleData = (cisdata_t *)tuple_data;
 	tuple.TupleDataMax = 64;
 	tuple.TupleOffset = 0;
-	tuple.DesiredTuple = CISTPL_CONFIG;
-	CS_CHECK(GetFirstTuple, pcmcia_get_first_tuple(link, &tuple));
-	CS_CHECK(GetTupleData, pcmcia_get_tuple_data(link, &tuple));
-	CS_CHECK(ParseTuple, pcmcia_parse_tuple(link, &tuple, &parse));
-	link->conf.ConfigBase = parse.config.base;
-
-	tuple.DesiredTuple = CISTPL_MANFID;
-	if ((pcmcia_get_first_tuple(link, &tuple) == CS_SUCCESS) &&
-	    (pcmcia_get_tuple_data(link, &tuple) == CS_SUCCESS))
-		info->manf_id = le16_to_cpu(tuple.TupleData[0]);
 
 	tuple.DesiredTuple = CISTPL_CFTABLE_ENTRY;
 	CS_CHECK(GetFirstTuple, pcmcia_get_first_tuple(link, &tuple));
@@ -799,7 +789,7 @@ next_entry:
 	data = (struct sym53c500_data *)host->hostdata;
 
 	if (irq_level > 0) {
-		if (request_irq(irq_level, SYM53C500_intr, SA_SHIRQ, "SYM53C500", host)) {
+		if (request_irq(irq_level, SYM53C500_intr, IRQF_SHARED, "SYM53C500", host)) {
 			printk("SYM53C500: unable to allocate IRQ %d\n", irq_level);
 			goto err_free_scsi;
 		}
@@ -903,7 +893,6 @@ SYM53C500_probe(struct pcmcia_device *link)
 	link->irq.IRQInfo1 = IRQ_LEVEL_ID;
 	link->conf.Attributes = CONF_ENABLE_IRQ;
 	link->conf.IntType = INT_MEMORY_AND_IO;
-	link->conf.Present = PRESENT_OPTION;
 
 	return SYM53C500_config(link);
 } /* SYM53C500_attach */

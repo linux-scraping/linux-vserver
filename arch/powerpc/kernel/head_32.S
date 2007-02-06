@@ -22,7 +22,6 @@
  *
  */
 
-#include <linux/config.h>
 #include <asm/reg.h>
 #include <asm/page.h>
 #include <asm/mmu.h>
@@ -438,6 +437,13 @@ Alignment:
 /* Floating-point unavailable */
 	. = 0x800
 FPUnavailable:
+BEGIN_FTR_SECTION
+/*
+ * Certain Freescale cores don't have a FPU and treat fp instructions
+ * as a FP Unavailable exception.  Redirect to illegal/emulation handling.
+ */
+	b 	ProgramCheck
+END_FTR_SECTION_IFSET(CPU_FTR_FPU_UNAVAILABLE)
 	EXCEPTION_PROLOG
 	bne	load_up_fpu		/* if from user, just load it up */
 	addi	r3,r1,STACK_FRAME_OVERHEAD
@@ -973,6 +979,13 @@ __secondary_start_gemini:
         b       __secondary_start
 #endif /* CONFIG_GEMINI */
 
+	.globl __secondary_start_mpc86xx
+__secondary_start_mpc86xx:
+	mfspr	r3, SPRN_PIR
+	stw	r3, __secondary_hold_acknowledge@l(0)
+	mr	r24, r3			/* cpu # */
+	b	__secondary_start
+
 	.globl	__secondary_start_pmac_0
 __secondary_start_pmac_0:
 	/* NB the entries for cpus 0, 1, 2 must each occupy 8 bytes. */
@@ -1088,7 +1101,12 @@ load_up_mmu:
 	LOAD_BAT(1,r3,r4,r5)
 	LOAD_BAT(2,r3,r4,r5)
 	LOAD_BAT(3,r3,r4,r5)
-
+BEGIN_FTR_SECTION
+	LOAD_BAT(4,r3,r4,r5)
+	LOAD_BAT(5,r3,r4,r5)
+	LOAD_BAT(6,r3,r4,r5)
+	LOAD_BAT(7,r3,r4,r5)
+END_FTR_SECTION_IFSET(CPU_FTR_HAS_HIGH_BATS)
 	blr
 
 /*

@@ -11,7 +11,6 @@
  *      2 of the License, or (at your option) any later version.
  */
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/types.h>
 #include <linux/fcntl.h>
@@ -37,8 +36,8 @@
 static const struct inet_diag_handler **inet_diag_table;
 
 struct inet_diag_entry {
-	u32 *saddr;
-	u32 *daddr;
+	__be32 *saddr;
+	__be32 *daddr;
 	u16 sport;
 	u16 dport;
 	u16 family;
@@ -295,7 +294,7 @@ out:
 	return err;
 }
 
-static int bitstring_match(const u32 *a1, const u32 *a2, int bits)
+static int bitstring_match(const __be32 *a1, const __be32 *a2, int bits)
 {
 	int words = bits >> 5;
 
@@ -306,8 +305,8 @@ static int bitstring_match(const u32 *a1, const u32 *a2, int bits)
 			return 0;
 	}
 	if (bits) {
-		__u32 w1, w2;
-		__u32 mask;
+		__be32 w1, w2;
+		__be32 mask;
 
 		w1 = a1[words];
 		w2 = a2[words];
@@ -353,7 +352,7 @@ static int inet_diag_bc_run(const void *bc, int len,
 		case INET_DIAG_BC_S_COND:
 		case INET_DIAG_BC_D_COND: {
 			struct inet_diag_hostcond *cond;
-			u32 *addr;
+			__be32 *addr;
 
 			cond = (struct inet_diag_hostcond *)(op + 1);
 			if (cond->port != -1 &&
@@ -694,7 +693,7 @@ static int inet_diag_dump(struct sk_buff *skb, struct netlink_callback *cb)
 			sk_for_each(sk, node, &hashinfo->listening_hash[i]) {
 				struct inet_sock *inet = inet_sk(sk);
 
-				if (!vx_check(sk->sk_xid, VX_IDENT|VX_WATCH))
+				if (!nx_check(sk->sk_nid, VS_WATCH_P|VS_IDENT))
 					continue;
 				if (num < s_num) {
 					num++;
@@ -756,7 +755,7 @@ skip_listen_ht:
 		sk_for_each(sk, node, &head->chain) {
 			struct inet_sock *inet = inet_sk(sk);
 
-			if (!vx_check(sk->sk_xid, VX_IDENT|VX_WATCH))
+			if (!nx_check(sk->sk_nid, VS_WATCH_P|VS_IDENT))
 				continue;
 			if (num < s_num)
 				goto next_normal;
@@ -782,7 +781,7 @@ next_normal:
 			inet_twsk_for_each(tw, node,
 				    &hashinfo->ehash[i + hashinfo->ehash_size].chain) {
 
-				if (!vx_check(tw->tw_xid, VX_IDENT|VX_WATCH))
+				if (!nx_check(tw->tw_nid, VS_WATCH_P|VS_IDENT))
 					continue;
 				if (num < s_num)
 					goto next_dying;
@@ -916,11 +915,10 @@ static int __init inet_diag_init(void)
 					  sizeof(struct inet_diag_handler *));
 	int err = -ENOMEM;
 
-	inet_diag_table = kmalloc(inet_diag_table_size, GFP_KERNEL);
+	inet_diag_table = kzalloc(inet_diag_table_size, GFP_KERNEL);
 	if (!inet_diag_table)
 		goto out;
 
-	memset(inet_diag_table, 0, inet_diag_table_size);
 	idiagnl = netlink_kernel_create(NETLINK_INET_DIAG, 0, inet_diag_rcv,
 					THIS_MODULE);
 	if (idiagnl == NULL)

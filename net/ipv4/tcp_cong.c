@@ -6,7 +6,6 @@
  * Copyright (C) 2005 Stephen Hemminger <shemminger@osdl.org>
  */
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/mm.h>
 #include <linux/types.h>
@@ -38,7 +37,7 @@ int tcp_register_congestion_control(struct tcp_congestion_ops *ca)
 	int ret = 0;
 
 	/* all algorithms must implement ssthresh and cong_avoid ops */
-	if (!ca->ssthresh || !ca->cong_avoid || !ca->min_cwnd) {
+	if (!ca->ssthresh || !ca->cong_avoid) {
 		printk(KERN_ERR "TCP %s does not implement required ops\n",
 		       ca->name);
 		return -EINVAL;
@@ -49,7 +48,7 @@ int tcp_register_congestion_control(struct tcp_congestion_ops *ca)
 		printk(KERN_NOTICE "TCP %s already registered\n", ca->name);
 		ret = -EEXIST;
 	} else {
-		list_add_rcu(&ca->list, &tcp_cong_list);
+		list_add_tail_rcu(&ca->list, &tcp_cong_list);
 		printk(KERN_INFO "TCP %s registered\n", ca->name);
 	}
 	spin_unlock(&tcp_cong_list_lock);
@@ -114,7 +113,7 @@ int tcp_set_default_congestion_control(const char *name)
 	spin_lock(&tcp_cong_list_lock);
 	ca = tcp_ca_find(name);
 #ifdef CONFIG_KMOD
-	if (!ca) {
+	if (!ca && capable(CAP_SYS_MODULE)) {
 		spin_unlock(&tcp_cong_list_lock);
 
 		request_module("tcp_%s", name);
@@ -124,12 +123,37 @@ int tcp_set_default_congestion_control(const char *name)
 #endif
 
 	if (ca) {
+		ca->non_restricted = 1;	/* default is always allowed */
 		list_move(&ca->list, &tcp_cong_list);
 		ret = 0;
 	}
 	spin_unlock(&tcp_cong_list_lock);
 
 	return ret;
+}
+
+/* Set default value from kernel configuration at bootup */
+static int __init tcp_congestion_default(void)
+{
+	return tcp_set_default_congestion_control(CONFIG_DEFAULT_TCP_CONG);
+}
+late_initcall(tcp_congestion_default);
+
+
+/* Build string with list of available congestion control values */
+void tcp_get_available_congestion_control(char *buf, size_t maxlen)
+{
+	struct tcp_congestion_ops *ca;
+	size_t offs = 0;
+
+	rcu_read_lock();
+	list_for_each_entry_rcu(ca, &tcp_cong_list, list) {
+		offs += snprintf(buf + offs, maxlen - offs,
+				 "%s%s",
+				 offs == 0 ? "" : " ", ca->name);
+
+	}
+	rcu_read_unlock();
 }
 
 /* Get current default congestion control */
@@ -145,6 +169,64 @@ void tcp_get_default_congestion_control(char *name)
 	rcu_read_unlock();
 }
 
+/* Built list of non-restricted congestion control values */
+void tcp_get_allowed_congestion_control(char *buf, size_t maxlen)
+{
+	struct tcp_congestion_ops *ca;
+	size_t offs = 0;
+
+	*buf = '\0';
+	rcu_read_lock();
+	list_for_each_entry_rcu(ca, &tcp_cong_list, list) {
+		if (!ca->non_restricted)
+			continue;
+		offs += snprintf(buf + offs, maxlen - offs,
+				 "%s%s",
+				 offs == 0 ? "" : " ", ca->name);
+
+	}
+	rcu_read_unlock();
+}
+
+/* Change list of non-restricted congestion control */
+int tcp_set_allowed_congestion_control(char *val)
+{
+	struct tcp_congestion_ops *ca;
+	char *clone, *name;
+	int ret = 0;
+
+	clone = kstrdup(val, GFP_USER);
+	if (!clone)
+		return -ENOMEM;
+
+	spin_lock(&tcp_cong_list_lock);
+	/* pass 1 check for bad entries */
+	while ((name = strsep(&clone, " ")) && *name) {
+		ca = tcp_ca_find(name);
+		if (!ca) {
+			ret = -ENOENT;
+			goto out;
+		}
+	}
+
+	/* pass 2 clear */
+	list_for_each_entry_rcu(ca, &tcp_cong_list, list)
+		ca->non_restricted = 0;
+
+	/* pass 3 mark as allowed */
+	while ((name = strsep(&val, " ")) && *name) {
+		ca = tcp_ca_find(name);
+		WARN_ON(!ca);
+		if (ca)
+			ca->non_restricted = 1;
+	}
+out:
+	spin_unlock(&tcp_cong_list_lock);
+
+	return ret;
+}
+
+
 /* Change congestion control for socket */
 int tcp_set_congestion_control(struct sock *sk, const char *name)
 {
@@ -154,11 +236,24 @@ int tcp_set_congestion_control(struct sock *sk, const char *name)
 
 	rcu_read_lock();
 	ca = tcp_ca_find(name);
+	/* no change asking for existing value */
 	if (ca == icsk->icsk_ca_ops)
 		goto out;
 
+#ifdef CONFIG_KMOD
+	/* not found attempt to autoload module */
+	if (!ca && capable(CAP_SYS_MODULE)) {
+		rcu_read_unlock();
+		request_module("tcp_%s", name);
+		rcu_read_lock();
+		ca = tcp_ca_find(name);
+	}
+#endif
 	if (!ca)
 		err = -ENOENT;
+
+	else if (!(ca->non_restricted || capable(CAP_NET_ADMIN)))
+		err = -EPERM;
 
 	else if (!try_module_get(ca->owner))
 		err = -EBUSY;
@@ -190,7 +285,7 @@ void tcp_slow_start(struct tcp_sock *tp)
 			return;
 
 		/* We MAY increase by 2 if discovered delayed ack */
-		if (sysctl_tcp_abc > 1 && tp->bytes_acked > 2*tp->mss_cache) {
+		if (sysctl_tcp_abc > 1 && tp->bytes_acked >= 2*tp->mss_cache) {
 			if (tp->snd_cwnd < tp->snd_cwnd_clamp)
 				tp->snd_cwnd++;
 		}
@@ -251,8 +346,8 @@ u32 tcp_reno_ssthresh(struct sock *sk)
 }
 EXPORT_SYMBOL_GPL(tcp_reno_ssthresh);
 
-/* Lower bound on congestion window. */
-u32 tcp_reno_min_cwnd(struct sock *sk)
+/* Lower bound on congestion window with halving. */
+u32 tcp_reno_min_cwnd(const struct sock *sk)
 {
 	const struct tcp_sock *tp = tcp_sk(sk);
 	return tp->snd_ssthresh/2;
@@ -261,6 +356,7 @@ EXPORT_SYMBOL_GPL(tcp_reno_min_cwnd);
 
 struct tcp_congestion_ops tcp_reno = {
 	.name		= "reno",
+	.non_restricted = 1,
 	.owner		= THIS_MODULE,
 	.ssthresh	= tcp_reno_ssthresh,
 	.cong_avoid	= tcp_reno_cong_avoid,

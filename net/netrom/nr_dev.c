@@ -6,7 +6,6 @@
  *
  * Copyright Jonathan Naylor G4KLX (g4klx@g4klx.demon.co.uk)
  */
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/proc_fs.h>
 #include <linux/kernel.h>
@@ -129,25 +128,37 @@ static int nr_header(struct sk_buff *skb, struct net_device *dev, unsigned short
 	return -37;
 }
 
-static int nr_set_mac_address(struct net_device *dev, void *addr)
+static int __must_check nr_set_mac_address(struct net_device *dev, void *addr)
 {
 	struct sockaddr *sa = addr;
+	int err;
 
-	if (dev->flags & IFF_UP)
+	if (!memcmp(dev->dev_addr, sa->sa_data, dev->addr_len))
+		return 0;
+
+	if (dev->flags & IFF_UP) {
+		err = ax25_listen_register((ax25_address *)sa->sa_data, NULL);
+		if (err)
+			return err;
+
 		ax25_listen_release((ax25_address *)dev->dev_addr, NULL);
+	}
 
 	memcpy(dev->dev_addr, sa->sa_data, dev->addr_len);
-
-	if (dev->flags & IFF_UP)
-		ax25_listen_register((ax25_address *)dev->dev_addr, NULL);
 
 	return 0;
 }
 
 static int nr_open(struct net_device *dev)
 {
+	int err;
+
+	err = ax25_listen_register((ax25_address *)dev->dev_addr, NULL);
+	if (err)
+		return err;
+
 	netif_start_queue(dev);
-	ax25_listen_register((ax25_address *)dev->dev_addr, NULL);
+
 	return 0;
 }
 

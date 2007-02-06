@@ -1,4 +1,5 @@
 /*
+ * Copyright (c) 2006 QLogic, Inc. All rights reserved.
  * Copyright (c) 2003, 2004, 2005, 2006 PathScale, Inc. All rights reserved.
  *
  * This software is available to you under a choice of one of two
@@ -185,7 +186,6 @@ static void ipath_qcheck(struct ipath_devdata *dd)
 				   dd->ipath_port0head,
 				   (unsigned long long)
 				   ipath_stats.sps_port0pkts);
-			ipath_kreceive(dd);
 		}
 		dd->ipath_lastport0rcv_cnt = ipath_stats.sps_port0pkts;
 	}
@@ -269,33 +269,6 @@ void ipath_get_faststats(unsigned long opaque)
 			if (dd->ipath_lastrcvhdrqtails[val] != -1)
 				dd->ipath_lastrcvhdrqtails[val] = -1;
 		}
-	}
-
-	if (dd->ipath_nosma_bufs) {
-		dd->ipath_nosma_secs += 5;
-		if (dd->ipath_nosma_secs >= 30) {
-			ipath_cdbg(SMA, "No SMA bufs avail %u seconds; "
-				   "cancelling pending sends\n",
-				   dd->ipath_nosma_secs);
-			/*
-			 * issue an abort as well, in case we have a packet
-			 * stuck in launch fifo.  This could corrupt an
-			 * outgoing user packet in the worst case,
-			 * but this is a pretty catastrophic, anyway.
-			 */
-			ipath_write_kreg(dd, dd->ipath_kregs->kr_sendctrl,
-					 INFINIPATH_S_ABORT);
-			ipath_disarm_piobufs(dd, dd->ipath_lastport_piobuf,
-					     dd->ipath_piobcnt2k +
-					     dd->ipath_piobcnt4k -
-					     dd->ipath_lastport_piobuf);
-			/* start again, if necessary */
-			dd->ipath_nosma_secs = 0;
-		} else
-			ipath_cdbg(SMA, "No SMA bufs avail %u tries, "
-				   "after %u seconds\n",
-				   dd->ipath_nosma_bufs,
-				   dd->ipath_nosma_secs);
 	}
 
 done:

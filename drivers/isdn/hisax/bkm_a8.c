@@ -11,7 +11,6 @@
  */
 
 
-#include <linux/config.h>
 #include <linux/init.h>
 #include "hisax.h"
 #include "isac.h"
@@ -141,7 +140,7 @@ set_ipac_active(struct IsdnCardState *cs, u_int active)
 #include "hscx_irq.c"
 
 static irqreturn_t
-bkm_interrupt_ipac(int intno, void *dev_id, struct pt_regs *regs)
+bkm_interrupt_ipac(int intno, void *dev_id)
 {
 	struct IsdnCardState *cs = dev_id;
 	u_char ista, val, icnt = 5;
@@ -261,7 +260,7 @@ BKM_card_msg(struct IsdnCardState *cs, int mt, void *arg)
 	return (0);
 }
 
-static int __init
+static int __devinit
 sct_alloc_io(u_int adr, u_int len)
 {
 	if (!request_region(adr, len, "scitel")) {
@@ -273,16 +272,16 @@ sct_alloc_io(u_int adr, u_int len)
 	return(0);
 }
 
-static struct pci_dev *dev_a8 __initdata = NULL;
-static u16  sub_vendor_id __initdata = 0;
-static u16  sub_sys_id __initdata = 0;
-static u_char pci_bus __initdata = 0;
-static u_char pci_device_fn __initdata = 0;
-static u_char pci_irq __initdata = 0;
+static struct pci_dev *dev_a8 __devinitdata = NULL;
+static u16  sub_vendor_id __devinitdata = 0;
+static u16  sub_sys_id __devinitdata = 0;
+static u_char pci_bus __devinitdata = 0;
+static u_char pci_device_fn __devinitdata = 0;
+static u_char pci_irq __devinitdata = 0;
 
 #endif /* CONFIG_PCI */
 
-int __init
+int __devinit
 setup_sct_quadro(struct IsdnCard *card)
 {
 #ifdef CONFIG_PCI
@@ -375,7 +374,7 @@ setup_sct_quadro(struct IsdnCard *card)
 	pci_ioaddr5 &= PCI_BASE_ADDRESS_IO_MASK;
 	/* Take over */
 	cs->irq = pci_irq;
-	cs->irq_flags |= SA_SHIRQ;
+	cs->irq_flags |= IRQF_SHARED;
 	/* pci_ioaddr1 is unique to all subdevices */
 	/* pci_ioaddr2 is for the fourth subdevice only */
 	/* pci_ioaddr3 is for the third subdevice only */

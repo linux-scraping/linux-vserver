@@ -23,33 +23,21 @@
  */
 
 /*
- * This implementation should follow: draft-ietf-dccp-ccid2-10.txt
+ * This implementation should follow RFC 4341
  *
  * BUGS:
  * - sequence number wrapping
- * - jiffies wrapping
  */
 
-#include <linux/config.h>
 #include "../ccid.h"
 #include "../dccp.h"
 #include "ccid2.h"
 
+
+#ifdef CONFIG_IP_DCCP_CCID2_DEBUG
 static int ccid2_debug;
+#define ccid2_pr_debug(format, a...)	DCCP_PR_DEBUG(ccid2_debug, format, ##a)
 
-#undef CCID2_DEBUG
-#ifdef CCID2_DEBUG
-#define ccid2_pr_debug(format, a...) \
-        do { if (ccid2_debug) \
-                printk(KERN_DEBUG "%s: " format, __FUNCTION__, ##a); \
-        } while (0)
-#else
-#define ccid2_pr_debug(format, a...)
-#endif
-
-static const int ccid2_seq_len = 128;
-
-#ifdef CCID2_DEBUG
 static void ccid2_hc_tx_check_sanity(const struct ccid2_hc_tx_sock *hctx)
 {
 	int len = 0;
@@ -72,8 +60,8 @@ static void ccid2_hc_tx_check_sanity(const struct ccid2_hc_tx_sock *hctx)
 
 			/* packets are sent sequentially */
 			BUG_ON(seqp->ccid2s_seq <= prev->ccid2s_seq);
-			BUG_ON(seqp->ccid2s_sent < prev->ccid2s_sent);
-			BUG_ON(len > ccid2_seq_len);
+			BUG_ON(time_before(seqp->ccid2s_sent,
+					   prev->ccid2s_sent));
 
 			seqp = prev;
 		}
@@ -85,18 +73,59 @@ static void ccid2_hc_tx_check_sanity(const struct ccid2_hc_tx_sock *hctx)
 	do {
 		seqp = seqp->ccid2s_prev;
 		len++;
-		BUG_ON(len > ccid2_seq_len);
 	} while (seqp != hctx->ccid2hctx_seqh);
 
-	BUG_ON(len != ccid2_seq_len);
 	ccid2_pr_debug("total len=%d\n", len);
+	BUG_ON(len != hctx->ccid2hctx_seqbufc * CCID2_SEQBUF_LEN);
 }
 #else
-#define ccid2_hc_tx_check_sanity(hctx) do {} while (0)
+#define ccid2_pr_debug(format, a...)
+#define ccid2_hc_tx_check_sanity(hctx)
 #endif
 
-static int ccid2_hc_tx_send_packet(struct sock *sk,
-				   struct sk_buff *skb, int len)
+static int ccid2_hc_tx_alloc_seq(struct ccid2_hc_tx_sock *hctx, int num,
+				 gfp_t gfp)
+{
+	struct ccid2_seq *seqp;
+	int i;
+
+	/* check if we have space to preserve the pointer to the buffer */
+	if (hctx->ccid2hctx_seqbufc >= (sizeof(hctx->ccid2hctx_seqbuf) /
+					sizeof(struct ccid2_seq*)))
+		return -ENOMEM;
+
+	/* allocate buffer and initialize linked list */
+	seqp = kmalloc(sizeof(*seqp) * num, gfp);
+	if (seqp == NULL)
+		return -ENOMEM;
+
+	for (i = 0; i < (num - 1); i++) {
+		seqp[i].ccid2s_next = &seqp[i + 1];
+		seqp[i + 1].ccid2s_prev = &seqp[i];
+	}
+	seqp[num - 1].ccid2s_next = seqp;
+	seqp->ccid2s_prev = &seqp[num - 1];
+
+	/* This is the first allocation.  Initiate the head and tail.  */
+	if (hctx->ccid2hctx_seqbufc == 0)
+		hctx->ccid2hctx_seqh = hctx->ccid2hctx_seqt = seqp;
+	else {
+		/* link the existing list with the one we just created */
+		hctx->ccid2hctx_seqh->ccid2s_next = seqp;
+		seqp->ccid2s_prev = hctx->ccid2hctx_seqh;
+
+		hctx->ccid2hctx_seqt->ccid2s_prev = &seqp[num - 1];
+		seqp[num - 1].ccid2s_next = hctx->ccid2hctx_seqt;
+	}
+
+	/* store the original pointer to the buffer so we can free it */
+	hctx->ccid2hctx_seqbuf[hctx->ccid2hctx_seqbufc] = seqp;
+	hctx->ccid2hctx_seqbufc++;
+
+	return 0;
+}
+
+static int ccid2_hc_tx_send_packet(struct sock *sk, struct sk_buff *skb)
 {
 	struct ccid2_hc_tx_sock *hctx;
 
@@ -123,7 +152,7 @@ static int ccid2_hc_tx_send_packet(struct sock *sk,
 		}
 	}
 
-	return 100; /* XXX */
+	return 1; /* XXX CCID should dequeue when ready instead of polling */
 }
 
 static void ccid2_change_l_ack_ratio(struct sock *sk, int val)
@@ -151,10 +180,8 @@ static void ccid2_change_l_ack_ratio(struct sock *sk, int val)
 	dp->dccps_l_ack_ratio = val;
 }
 
-static void ccid2_change_cwnd(struct sock *sk, int val)
+static void ccid2_change_cwnd(struct ccid2_hc_tx_sock *hctx, int val)
 {
-	struct ccid2_hc_tx_sock *hctx = ccid2_hc_tx_sk(sk);
-
 	if (val == 0)
 		val = 1;
 
@@ -163,6 +190,17 @@ static void ccid2_change_cwnd(struct sock *sk, int val)
 
 	BUG_ON(val < 1);
 	hctx->ccid2hctx_cwnd = val;
+}
+
+static void ccid2_change_srtt(struct ccid2_hc_tx_sock *hctx, long val)
+{
+	ccid2_pr_debug("change SRTT to %ld\n", val);
+	hctx->ccid2hctx_srtt = val;
+}
+
+static void ccid2_change_pipe(struct ccid2_hc_tx_sock *hctx, long val)
+{
+	hctx->ccid2hctx_pipe = val;
 }
 
 static void ccid2_start_rto_timer(struct sock *sk);
@@ -194,11 +232,11 @@ static void ccid2_hc_tx_rto_expire(unsigned long data)
 	ccid2_start_rto_timer(sk);
 
 	/* adjust pipe, cwnd etc */
-	hctx->ccid2hctx_pipe = 0;
+	ccid2_change_pipe(hctx, 0);
 	hctx->ccid2hctx_ssthresh = hctx->ccid2hctx_cwnd >> 1;
 	if (hctx->ccid2hctx_ssthresh < 2)
 		hctx->ccid2hctx_ssthresh = 2;
-	ccid2_change_cwnd(sk, 1);
+	ccid2_change_cwnd(hctx, 1);
 
 	/* clear state about stuff we sent */
 	hctx->ccid2hctx_seqt	= hctx->ccid2hctx_seqh;
@@ -229,17 +267,18 @@ static void ccid2_start_rto_timer(struct sock *sk)
 		       jiffies + hctx->ccid2hctx_rto);
 }
 
-static void ccid2_hc_tx_packet_sent(struct sock *sk, int more, int len)
+static void ccid2_hc_tx_packet_sent(struct sock *sk, int more, unsigned int len)
 {
 	struct dccp_sock *dp = dccp_sk(sk);
 	struct ccid2_hc_tx_sock *hctx = ccid2_hc_tx_sk(sk);
+	struct ccid2_seq *next;
 	u64 seq;
 
 	ccid2_hc_tx_check_sanity(hctx);
 
 	BUG_ON(!hctx->ccid2hctx_sendwait);
 	hctx->ccid2hctx_sendwait = 0;
-	hctx->ccid2hctx_pipe++;
+	ccid2_change_pipe(hctx, hctx->ccid2hctx_pipe + 1);
 	BUG_ON(hctx->ccid2hctx_pipe < 0);
 
 	/* There is an issue.  What if another packet is sent between
@@ -252,15 +291,23 @@ static void ccid2_hc_tx_packet_sent(struct sock *sk, int more, int len)
 	hctx->ccid2hctx_seqh->ccid2s_seq   = seq;
 	hctx->ccid2hctx_seqh->ccid2s_acked = 0;
 	hctx->ccid2hctx_seqh->ccid2s_sent  = jiffies;
-	hctx->ccid2hctx_seqh = hctx->ccid2hctx_seqh->ccid2s_next;
+
+	next = hctx->ccid2hctx_seqh->ccid2s_next;
+	/* check if we need to alloc more space */
+	if (next == hctx->ccid2hctx_seqt) {
+		int rc;
+
+		ccid2_pr_debug("allocating more space in history\n");
+		rc = ccid2_hc_tx_alloc_seq(hctx, CCID2_SEQBUF_LEN, GFP_KERNEL);
+		BUG_ON(rc); /* XXX what do we do? */
+
+		next = hctx->ccid2hctx_seqh->ccid2s_next;
+		BUG_ON(next == hctx->ccid2hctx_seqt);
+	}
+	hctx->ccid2hctx_seqh = next;
 
 	ccid2_pr_debug("cwnd=%d pipe=%d\n", hctx->ccid2hctx_cwnd,
 		       hctx->ccid2hctx_pipe);
-
-	if (hctx->ccid2hctx_seqh == hctx->ccid2hctx_seqt) {
-		/* XXX allocate more space */
-		WARN_ON(1);
-	}
 
 	hctx->ccid2hctx_sent++;
 
@@ -296,16 +343,16 @@ static void ccid2_hc_tx_packet_sent(struct sock *sk, int more, int len)
 	if (!timer_pending(&hctx->ccid2hctx_rtotimer))
 		ccid2_start_rto_timer(sk);
 
-#ifdef CCID2_DEBUG
+#ifdef CONFIG_IP_DCCP_CCID2_DEBUG
 	ccid2_pr_debug("pipe=%d\n", hctx->ccid2hctx_pipe);
-	ccid2_pr_debug("Sent: seq=%llu\n", seq);
+	ccid2_pr_debug("Sent: seq=%llu\n", (unsigned long long)seq);
 	do {
 		struct ccid2_seq *seqp = hctx->ccid2hctx_seqt;
 
 		while (seqp != hctx->ccid2hctx_seqh) {
 			ccid2_pr_debug("out seq=%llu acked=%d time=%lu\n",
-			       	       seqp->ccid2s_seq, seqp->ccid2s_acked,
-				       seqp->ccid2s_sent);
+				       (unsigned long long)seqp->ccid2s_seq,
+				       seqp->ccid2s_acked, seqp->ccid2s_sent);
 			seqp = seqp->ccid2s_next;
 		}
 	} while (0);
@@ -372,7 +419,7 @@ static int ccid2_ackvector(struct sock *sk, struct sk_buff *skb, int offset,
 	return -1;
 
 out_invalid_option:
-	BUG_ON(1); /* should never happen... options were previously parsed ! */
+	DCCP_BUG("Invalid option - this should not happen (previous parsing)!");
 	return -1;
 }
 
@@ -399,7 +446,7 @@ static inline void ccid2_new_ack(struct sock *sk,
 			/* increase every 2 acks */
 			hctx->ccid2hctx_ssacks++;
 			if (hctx->ccid2hctx_ssacks == 2) {
-				ccid2_change_cwnd(sk, hctx->ccid2hctx_cwnd + 1);
+				ccid2_change_cwnd(hctx, hctx->ccid2hctx_cwnd+1);
 				hctx->ccid2hctx_ssacks = 0;
 				*maxincr = *maxincr - 1;
 			}
@@ -412,26 +459,29 @@ static inline void ccid2_new_ack(struct sock *sk,
 		hctx->ccid2hctx_acks++;
 
 		if (hctx->ccid2hctx_acks >= hctx->ccid2hctx_cwnd) {
-			ccid2_change_cwnd(sk, hctx->ccid2hctx_cwnd + 1);
+			ccid2_change_cwnd(hctx, hctx->ccid2hctx_cwnd + 1);
 			hctx->ccid2hctx_acks = 0;
 		}
 	}
 
 	/* update RTO */
 	if (hctx->ccid2hctx_srtt == -1 ||
-	    (jiffies - hctx->ccid2hctx_lastrtt) >= hctx->ccid2hctx_srtt) {
-		unsigned long r = jiffies - seqp->ccid2s_sent;
+	    time_after(jiffies, hctx->ccid2hctx_lastrtt + hctx->ccid2hctx_srtt)) {
+		unsigned long r = (long)jiffies - (long)seqp->ccid2s_sent;
 		int s;
 
 		/* first measurement */
 		if (hctx->ccid2hctx_srtt == -1) {
 			ccid2_pr_debug("R: %lu Time=%lu seq=%llu\n",
-			       	       r, jiffies, seqp->ccid2s_seq);
-			hctx->ccid2hctx_srtt = r;
+				       r, jiffies,
+				       (unsigned long long)seqp->ccid2s_seq);
+			ccid2_change_srtt(hctx, r);
 			hctx->ccid2hctx_rttvar = r >> 1;
 		} else {
 			/* RTTVAR */
 			long tmp = hctx->ccid2hctx_srtt - r;
+			long srtt;
+
 			if (tmp < 0)
 				tmp *= -1;
 
@@ -441,10 +491,12 @@ static inline void ccid2_new_ack(struct sock *sk,
 			hctx->ccid2hctx_rttvar += tmp;
 
 			/* SRTT */
-			hctx->ccid2hctx_srtt *= 7;
-			hctx->ccid2hctx_srtt >>= 3;
+			srtt = hctx->ccid2hctx_srtt;
+			srtt *= 7;
+			srtt >>= 3;
 			tmp = r >> 3;
-			hctx->ccid2hctx_srtt += tmp;
+			srtt += tmp;
+			ccid2_change_srtt(hctx, srtt);
 		}
 		s = hctx->ccid2hctx_rttvar << 2;
 		/* clock granularity is 1 when based on jiffies */
@@ -466,8 +518,8 @@ static inline void ccid2_new_ack(struct sock *sk,
 		hctx->ccid2hctx_lastrtt = jiffies;
 
 		ccid2_pr_debug("srtt: %ld rttvar: %ld rto: %ld (HZ=%d) R=%lu\n",
-		       	       hctx->ccid2hctx_srtt, hctx->ccid2hctx_rttvar,
-		       	       hctx->ccid2hctx_rto, HZ, r);
+			       hctx->ccid2hctx_srtt, hctx->ccid2hctx_rttvar,
+			       hctx->ccid2hctx_rto, HZ, r);
 		hctx->ccid2hctx_sent = 0;
 	}
 
@@ -480,11 +532,27 @@ static void ccid2_hc_tx_dec_pipe(struct sock *sk)
 {
 	struct ccid2_hc_tx_sock *hctx = ccid2_hc_tx_sk(sk);
 
-	hctx->ccid2hctx_pipe--;
+	ccid2_change_pipe(hctx, hctx->ccid2hctx_pipe-1);
 	BUG_ON(hctx->ccid2hctx_pipe < 0);
 
 	if (hctx->ccid2hctx_pipe == 0)
 		ccid2_hc_tx_kill_rto_timer(sk);
+}
+
+static void ccid2_congestion_event(struct ccid2_hc_tx_sock *hctx,
+				   struct ccid2_seq *seqp)
+{
+	if (time_before(seqp->ccid2s_sent, hctx->ccid2hctx_last_cong)) {
+		ccid2_pr_debug("Multiple losses in an RTT---treating as one\n");
+		return;
+	}
+
+	hctx->ccid2hctx_last_cong = jiffies;
+
+	ccid2_change_cwnd(hctx, hctx->ccid2hctx_cwnd >> 1);
+	hctx->ccid2hctx_ssthresh = hctx->ccid2hctx_cwnd;
+	if (hctx->ccid2hctx_ssthresh < 2)
+		hctx->ccid2hctx_ssthresh = 2;
 }
 
 static void ccid2_hc_tx_packet_recv(struct sock *sk, struct sk_buff *skb)
@@ -497,7 +565,6 @@ static void ccid2_hc_tx_packet_recv(struct sock *sk, struct sk_buff *skb)
 	unsigned char veclen;
 	int offset = 0;
 	int done = 0;
-	int loss = 0;
 	unsigned int maxincr = 0;
 
 	ccid2_hc_tx_check_sanity(hctx);
@@ -545,7 +612,17 @@ static void ccid2_hc_tx_packet_recv(struct sock *sk, struct sk_buff *skb)
 	}
 
 	ackno = DCCP_SKB_CB(skb)->dccpd_ack_seq;
-	seqp = hctx->ccid2hctx_seqh->ccid2s_prev;
+	if (after48(ackno, hctx->ccid2hctx_high_ack))
+		hctx->ccid2hctx_high_ack = ackno;
+
+	seqp = hctx->ccid2hctx_seqt;
+	while (before48(seqp->ccid2s_seq, ackno)) {
+		seqp = seqp->ccid2s_next;
+		if (seqp == hctx->ccid2hctx_seqh) {
+			seqp = hctx->ccid2hctx_seqh->ccid2s_prev;
+			break;
+		}
+	}
 
 	/* If in slow-start, cwnd can increase at most Ack Ratio / 2 packets for
 	 * this single ack.  I round up.
@@ -563,8 +640,9 @@ static void ccid2_hc_tx_packet_recv(struct sock *sk, struct sk_buff *skb)
 			u64 ackno_end_rl;
 
 			dccp_set_seqno(&ackno_end_rl, ackno - rl);
-			ccid2_pr_debug("ackvec start:%llu end:%llu\n", ackno,
-				       ackno_end_rl);
+			ccid2_pr_debug("ackvec start:%llu end:%llu\n",
+				       (unsigned long long)ackno,
+				       (unsigned long long)ackno_end_rl);
 			/* if the seqno we are analyzing is larger than the
 			 * current ackno, then move towards the tail of our
 			 * seqnos.
@@ -583,22 +661,23 @@ static void ccid2_hc_tx_packet_recv(struct sock *sk, struct sk_buff *skb)
 			 * run length
 			 */
 			while (between48(seqp->ccid2s_seq,ackno_end_rl,ackno)) {
-				const u8 state = (*vector &
-						  DCCP_ACKVEC_STATE_MASK) >> 6;
+				const u8 state = *vector &
+						 DCCP_ACKVEC_STATE_MASK;
 
 				/* new packet received or marked */
 				if (state != DCCP_ACKVEC_STATE_NOT_RECEIVED &&
 				    !seqp->ccid2s_acked) {
-				    	if (state ==
+					if (state ==
 					    DCCP_ACKVEC_STATE_ECN_MARKED) {
-						loss = 1;
+						ccid2_congestion_event(hctx,
+								       seqp);
 					} else
 						ccid2_new_ack(sk, seqp,
 							      &maxincr);
 
 					seqp->ccid2s_acked = 1;
 					ccid2_pr_debug("Got ack for %llu\n",
-					       	       seqp->ccid2s_seq);
+						       (unsigned long long)seqp->ccid2s_seq);
 					ccid2_hc_tx_dec_pipe(sk);
 				}
 				if (seqp == hctx->ccid2hctx_seqt) {
@@ -621,7 +700,14 @@ static void ccid2_hc_tx_packet_recv(struct sock *sk, struct sk_buff *skb)
 	/* The state about what is acked should be correct now
 	 * Check for NUMDUPACK
 	 */
-	seqp = hctx->ccid2hctx_seqh->ccid2s_prev;
+	seqp = hctx->ccid2hctx_seqt;
+	while (before48(seqp->ccid2s_seq, hctx->ccid2hctx_high_ack)) {
+		seqp = seqp->ccid2s_next;
+		if (seqp == hctx->ccid2hctx_seqh) {
+			seqp = hctx->ccid2hctx_seqh->ccid2s_prev;
+			break;
+		}
+	}
 	done = 0;
 	while (1) {
 		if (seqp->ccid2s_acked) {
@@ -643,7 +729,13 @@ static void ccid2_hc_tx_packet_recv(struct sock *sk, struct sk_buff *skb)
 		/* check for lost packets */
 		while (1) {
 			if (!seqp->ccid2s_acked) {
-				loss = 1;
+				ccid2_pr_debug("Packet lost: %llu\n",
+					       (unsigned long long)seqp->ccid2s_seq);
+				/* XXX need to traverse from tail -> head in
+				 * order to detect multiple congestion events in
+				 * one ack vector.
+				 */
+				ccid2_congestion_event(hctx, seqp);
 				ccid2_hc_tx_dec_pipe(sk);
 			}
 			if (seqp == hctx->ccid2hctx_seqt)
@@ -662,53 +754,34 @@ static void ccid2_hc_tx_packet_recv(struct sock *sk, struct sk_buff *skb)
 		hctx->ccid2hctx_seqt = hctx->ccid2hctx_seqt->ccid2s_next;
 	}
 
-	if (loss) {
-		/* XXX do bit shifts guarantee a 0 as the new bit? */
-		ccid2_change_cwnd(sk, hctx->ccid2hctx_cwnd >> 1);
-		hctx->ccid2hctx_ssthresh = hctx->ccid2hctx_cwnd;
-		if (hctx->ccid2hctx_ssthresh < 2)
-			hctx->ccid2hctx_ssthresh = 2;
-	}
-
 	ccid2_hc_tx_check_sanity(hctx);
 }
 
 static int ccid2_hc_tx_init(struct ccid *ccid, struct sock *sk)
 {
         struct ccid2_hc_tx_sock *hctx = ccid_priv(ccid);
-	int seqcount = ccid2_seq_len;
-	int i;
 
-	/* XXX init variables with proper values */
-	hctx->ccid2hctx_cwnd	  = 1;
-	hctx->ccid2hctx_ssthresh  = 10;
+	ccid2_change_cwnd(hctx, 1);
+	/* Initialize ssthresh to infinity.  This means that we will exit the
+	 * initial slow-start after the first packet loss.  This is what we
+	 * want.
+	 */
+	hctx->ccid2hctx_ssthresh  = ~0;
 	hctx->ccid2hctx_numdupack = 3;
+	hctx->ccid2hctx_seqbufc   = 0;
 
 	/* XXX init ~ to window size... */
-	hctx->ccid2hctx_seqbuf = kmalloc(sizeof(*hctx->ccid2hctx_seqbuf) *
-					 seqcount, gfp_any());
-	if (hctx->ccid2hctx_seqbuf == NULL)
+	if (ccid2_hc_tx_alloc_seq(hctx, CCID2_SEQBUF_LEN, GFP_ATOMIC) != 0)
 		return -ENOMEM;
 
-	for (i = 0; i < (seqcount - 1); i++) {
-		hctx->ccid2hctx_seqbuf[i].ccid2s_next =
-					&hctx->ccid2hctx_seqbuf[i + 1];
-		hctx->ccid2hctx_seqbuf[i + 1].ccid2s_prev =
-					&hctx->ccid2hctx_seqbuf[i];
-	}
-	hctx->ccid2hctx_seqbuf[seqcount - 1].ccid2s_next =
-					hctx->ccid2hctx_seqbuf;
-	hctx->ccid2hctx_seqbuf->ccid2s_prev =
-					&hctx->ccid2hctx_seqbuf[seqcount - 1];
-
-	hctx->ccid2hctx_seqh	 = hctx->ccid2hctx_seqbuf;
-	hctx->ccid2hctx_seqt	 = hctx->ccid2hctx_seqh;
 	hctx->ccid2hctx_sent	 = 0;
 	hctx->ccid2hctx_rto	 = 3 * HZ;
-	hctx->ccid2hctx_srtt	 = -1;
+	ccid2_change_srtt(hctx, -1);
 	hctx->ccid2hctx_rttvar	 = -1;
 	hctx->ccid2hctx_lastrtt  = 0;
 	hctx->ccid2hctx_rpdupack = -1;
+	hctx->ccid2hctx_last_cong = jiffies;
+	hctx->ccid2hctx_high_ack = 0;
 
 	hctx->ccid2hctx_rtotimer.function = &ccid2_hc_tx_rto_expire;
 	hctx->ccid2hctx_rtotimer.data	  = (unsigned long)sk;
@@ -721,10 +794,13 @@ static int ccid2_hc_tx_init(struct ccid *ccid, struct sock *sk)
 static void ccid2_hc_tx_exit(struct sock *sk)
 {
         struct ccid2_hc_tx_sock *hctx = ccid2_hc_tx_sk(sk);
+	int i;
 
 	ccid2_hc_tx_kill_rto_timer(sk);
-	kfree(hctx->ccid2hctx_seqbuf);
-	hctx->ccid2hctx_seqbuf = NULL;
+
+	for (i = 0; i < hctx->ccid2hctx_seqbufc; i++)
+		kfree(hctx->ccid2hctx_seqbuf[i]);
+	hctx->ccid2hctx_seqbufc = 0;
 }
 
 static void ccid2_hc_rx_packet_recv(struct sock *sk, struct sk_buff *skb)
@@ -745,7 +821,7 @@ static void ccid2_hc_rx_packet_recv(struct sock *sk, struct sk_buff *skb)
 }
 
 static struct ccid_operations ccid2 = {
-	.ccid_id		= 2,
+	.ccid_id		= DCCPC_CCID2,
 	.ccid_name		= "ccid2",
 	.ccid_owner		= THIS_MODULE,
 	.ccid_hc_tx_obj_size	= sizeof(struct ccid2_hc_tx_sock),
@@ -758,8 +834,10 @@ static struct ccid_operations ccid2 = {
 	.ccid_hc_rx_packet_recv	= ccid2_hc_rx_packet_recv,
 };
 
+#ifdef CONFIG_IP_DCCP_CCID2_DEBUG
 module_param(ccid2_debug, int, 0444);
 MODULE_PARM_DESC(ccid2_debug, "Enable debug messages");
+#endif
 
 static __init int ccid2_module_init(void)
 {

@@ -34,7 +34,6 @@
 struct zl10353_state {
 	struct i2c_adapter *i2c;
 	struct dvb_frontend frontend;
-	struct dvb_frontend_ops ops;
 
 	struct zl10353_config config;
 };
@@ -126,6 +125,7 @@ static int zl10353_set_parameters(struct dvb_frontend *fe,
 				  struct dvb_frontend_parameters *param)
 {
 	struct zl10353_state *state = fe->demodulator_priv;
+
 	u8 pllbuf[6] = { 0x67 };
 
 	/* These settings set "auto-everything" and start the FSM. */
@@ -140,11 +140,37 @@ static int zl10353_set_parameters(struct dvb_frontend *fe,
 	zl10353_single_write(fe, 0x5E, 0x00);
 	zl10353_single_write(fe, 0x65, 0x5A);
 	zl10353_single_write(fe, 0x66, 0xE9);
+	zl10353_single_write(fe, 0x6C, 0xCD);
+	zl10353_single_write(fe, 0x6D, 0x7E);
 	zl10353_single_write(fe, 0x62, 0x0A);
 
-	state->config.pll_set(fe, param, pllbuf + 1);
+	// if there is no attached secondary tuner, we call set_params to program
+	// a potential tuner attached somewhere else
+	if (state->config.no_tuner) {
+		if (fe->ops.tuner_ops.set_params) {
+			fe->ops.tuner_ops.set_params(fe, param);
+			if (fe->ops.i2c_gate_ctrl) fe->ops.i2c_gate_ctrl(fe, 0);
+		}
+	}
+
+	// if pllbuf is defined, retrieve the settings
+	if (fe->ops.tuner_ops.calc_regs) {
+		fe->ops.tuner_ops.calc_regs(fe, param, pllbuf+1, 5);
+		pllbuf[1] <<= 1;
+	} else {
+		// fake pllbuf settings
+		pllbuf[1] = 0x61 << 1;
+		pllbuf[2] = 0;
+		pllbuf[3] = 0;
+		pllbuf[3] = 0;
+		pllbuf[4] = 0;
+	}
+
+	// there is no call to _just_ start decoding, so we send the pllbuf anyway
+	// even if there isn't a PLL attached to the secondary bus
 	zl10353_write(fe, pllbuf, sizeof(pllbuf));
 
+	zl10353_single_write(fe, 0x5F, 0x13);
 	zl10353_single_write(fe, 0x70, 0x01);
 	udelay(250);
 	zl10353_single_write(fe, 0xE4, 0x00);
@@ -220,9 +246,12 @@ static int zl10353_init(struct dvb_frontend *fe)
 
 	if (debug_regs)
 		zl10353_dump_regs(fe);
+	if (state->config.parallel_ts)
+		zl10353_reset_attach[2] &= ~0x20;
 
 	/* Do a "hard" reset if not already done */
-	if (zl10353_read_register(state, 0x50) != 0x03) {
+	if (zl10353_read_register(state, 0x50) != zl10353_reset_attach[1] ||
+	    zl10353_read_register(state, 0x51) != zl10353_reset_attach[2]) {
 		rc = zl10353_write(fe, zl10353_reset_attach,
 				   sizeof(zl10353_reset_attach));
 		if (debug_regs)
@@ -235,7 +264,6 @@ static int zl10353_init(struct dvb_frontend *fe)
 static void zl10353_release(struct dvb_frontend *fe)
 {
 	struct zl10353_state *state = fe->demodulator_priv;
-
 	kfree(state);
 }
 
@@ -254,14 +282,13 @@ struct dvb_frontend *zl10353_attach(const struct zl10353_config *config,
 	/* setup the state */
 	state->i2c = i2c;
 	memcpy(&state->config, config, sizeof(struct zl10353_config));
-	memcpy(&state->ops, &zl10353_ops, sizeof(struct dvb_frontend_ops));
 
 	/* check if the demod is there */
 	if (zl10353_read_register(state, CHIP_ID) != ID_ZL10353)
 		goto error;
 
 	/* create dvb_frontend */
-	state->frontend.ops = &state->ops;
+	memcpy(&state->frontend.ops, &zl10353_ops, sizeof(struct dvb_frontend_ops));
 	state->frontend.demodulator_priv = state;
 
 	return &state->frontend;
@@ -292,6 +319,7 @@ static struct dvb_frontend_ops zl10353_ops = {
 
 	.init = zl10353_init,
 	.sleep = zl10353_sleep,
+	.write = zl10353_write,
 
 	.set_frontend = zl10353_set_parameters,
 	.get_tune_settings = zl10353_get_tune_settings,
@@ -308,4 +336,3 @@ MODULE_AUTHOR("Chris Pascoe");
 MODULE_LICENSE("GPL");
 
 EXPORT_SYMBOL(zl10353_attach);
-EXPORT_SYMBOL(zl10353_write);

@@ -65,7 +65,6 @@ not be guaranteed. There are several ways to assure this:
 #include <linux/time.h>
 #include <linux/mm.h>
 #include <linux/slab.h>
-#include <linux/devfs_fs_kernel.h>
 #include <linux/smp_lock.h>
 
 #include <asm/pgtable.h>
@@ -247,7 +246,7 @@ static int slm_getstats( char *buffer, int device );
 static ssize_t slm_read( struct file* file, char *buf, size_t count, loff_t
                          *ppos );
 static void start_print( int device );
-static irqreturn_t slm_interrupt(int irc, void *data, struct pt_regs *fp);
+static irqreturn_t slm_interrupt(int irc, void *data);
 static void slm_test_ready( unsigned long dummy );
 static void set_dma_addr( unsigned long paddr );
 static unsigned long get_dma_addr( void );
@@ -364,7 +363,7 @@ static ssize_t slm_read( struct file *file, char *buf, size_t count,
 						 loff_t *ppos )
 
 {
-	struct inode *node = file->f_dentry->d_inode;
+	struct inode *node = file->f_path.dentry->d_inode;
 	unsigned long page;
 	int length;
 	int end;
@@ -453,7 +452,7 @@ static void start_print( int device )
 
 /* Only called when an error happened or at the end of a page */
 
-static irqreturn_t slm_interrupt(int irc, void *data, struct pt_regs *fp)
+static irqreturn_t slm_interrupt(int irc, void *data)
 
 {	unsigned long	addr;
 	int				stat;
@@ -619,7 +618,7 @@ static ssize_t slm_write( struct file *file, const char *buf, size_t count,
 						  loff_t *ppos )
 
 {
-	struct inode *node = file->f_dentry->d_inode;
+	struct inode *node = file->f_path.dentry->d_inode;
 	int		device = iminor(node);
 	int		n, filled, w, h;
 
@@ -1005,11 +1004,6 @@ int slm_init( void )
 	BufferP = SLMBuffer;
 	SLMState = IDLE;
 	
-	devfs_mk_dir("slm");
-	for (i = 0; i < MAX_SLM; i++) {
-		devfs_mk_cdev(MKDEV(ACSI_MAJOR, i),
-				S_IFCHR|S_IRUSR|S_IWUSR, "slm/%d", i);
-	}
 	return 0;
 }
 
@@ -1032,10 +1026,6 @@ int init_module(void)
 
 void cleanup_module(void)
 {
-	int i;
-	for (i = 0; i < MAX_SLM; i++)
-		devfs_remove("slm/%d", i);
-	devfs_remove("slm");
 	if (unregister_chrdev( ACSI_MAJOR, "slm" ) != 0)
 		printk( KERN_ERR "acsi_slm: cleanup_module failed\n");
 	atari_stram_free( SLMBuffer );

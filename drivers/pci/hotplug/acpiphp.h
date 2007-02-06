@@ -38,7 +38,7 @@
 #include <linux/acpi.h>
 #include <linux/kobject.h>	/* for KOBJ_NAME_LEN */
 #include <linux/mutex.h>
-#include "pci_hotplug.h"
+#include <linux/pci_hotplug.h>
 
 #define dbg(format, arg...)					\
 	do {							\
@@ -62,9 +62,9 @@ struct acpiphp_slot;
 struct slot {
 	struct hotplug_slot	*hotplug_slot;
 	struct acpiphp_slot	*acpi_slot;
+	struct hotplug_slot_info info;
+	char name[SLOT_NAME_SIZE];
 };
-
-
 
 /**
  * struct acpiphp_bridge - PCI bridge information
@@ -75,6 +75,10 @@ struct acpiphp_bridge {
 	struct list_head list;
 	acpi_handle handle;
 	struct acpiphp_slot *slots;
+
+	/* Ejectable PCI-to-PCI bridge (PCI bridge and PCI function) */
+	struct acpiphp_func *func;
+
 	int type;
 	int nr_slots;
 
@@ -122,10 +126,11 @@ struct acpiphp_slot {
  */
 struct acpiphp_func {
 	struct acpiphp_slot *slot;	/* parent */
+	struct acpiphp_bridge *bridge;	/* Ejectable PCI-to-PCI bridge */
 
 	struct list_head sibling;
 	struct pci_dev *pci_dev;
-
+	struct notifier_block nb;
 	acpi_handle	handle;
 
 	u8		function;	/* pci function# */
@@ -145,24 +150,11 @@ struct acpiphp_attention_info
 	struct module *owner;
 };
 
-
-struct dependent_device {
-	struct list_head device_list;
-	struct list_head pci_list;
-	acpi_handle handle;
-	struct acpiphp_func *func;
+struct acpiphp_ioapic {
+	struct pci_dev *dev;
+	u32 gsi_base;
+	struct list_head list;
 };
-
-
-struct acpiphp_dock_station {
-	acpi_handle handle;
-	u32 last_dock_time;
-	u32 flags;
-	struct acpiphp_func *dock_bridge;
-	struct list_head dependent_devices;
-	struct list_head pci_dependent_devices;
-};
-
 
 /* PCI bus bridge HID */
 #define ACPI_PCI_HOST_HID		"PNP0A03"
@@ -202,11 +194,6 @@ struct acpiphp_dock_station {
 #define FUNC_HAS_PS2		(0x00000040)
 #define FUNC_HAS_PS3		(0x00000080)
 #define FUNC_HAS_DCK            (0x00000100)
-#define FUNC_IS_DD              (0x00000200)
-
-/* dock station flags */
-#define DOCK_DOCKING            (0x00000001)
-#define DOCK_HAS_BRIDGE         (0x00000002)
 
 /* function prototypes */
 
@@ -221,7 +208,6 @@ extern int acpiphp_glue_init (void);
 extern void acpiphp_glue_exit (void);
 extern int acpiphp_get_num_slots (void);
 typedef int (*acpiphp_callback)(struct acpiphp_slot *slot, void *data);
-void handle_hotplug_event_func(acpi_handle, u32, void*);
 
 extern int acpiphp_enable_slot (struct acpiphp_slot *slot);
 extern int acpiphp_disable_slot (struct acpiphp_slot *slot);
@@ -230,16 +216,6 @@ extern u8 acpiphp_get_attention_status (struct acpiphp_slot *slot);
 extern u8 acpiphp_get_latch_status (struct acpiphp_slot *slot);
 extern u8 acpiphp_get_adapter_status (struct acpiphp_slot *slot);
 extern u32 acpiphp_get_address (struct acpiphp_slot *slot);
-
-/* acpiphp_dock.c */
-extern int find_dock_station(void);
-extern void remove_dock_station(void);
-extern void add_dependent_device(struct dependent_device *new_dd);
-extern void add_pci_dependent_device(struct dependent_device *new_dd);
-extern struct dependent_device *get_dependent_device(acpi_handle handle);
-extern int is_dependent_device(acpi_handle handle);
-extern int detect_dependent_devices(acpi_handle *bridge_handle);
-extern struct dependent_device *alloc_dependent_device(acpi_handle handle);
 
 /* variables */
 extern int acpiphp_debug;

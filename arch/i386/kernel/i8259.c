@@ -1,4 +1,3 @@
-#include <linux/config.h>
 #include <linux/errno.h>
 #include <linux/signal.h>
 #include <linux/sched.h>
@@ -35,33 +34,15 @@
  * moves to arch independent land
  */
 
+static int i8259A_auto_eoi;
 DEFINE_SPINLOCK(i8259A_lock);
-
-static void end_8259A_irq (unsigned int irq)
-{
-	if (!(irq_desc[irq].status & (IRQ_DISABLED|IRQ_INPROGRESS)) &&
-							irq_desc[irq].action)
-		enable_8259A_irq(irq);
-}
-
-#define shutdown_8259A_irq	disable_8259A_irq
-
 static void mask_and_ack_8259A(unsigned int);
 
-unsigned int startup_8259A_irq(unsigned int irq)
-{ 
-	enable_8259A_irq(irq);
-	return 0; /* never anything pending */
-}
-
-static struct hw_interrupt_type i8259A_irq_type = {
-	.typename = "XT-PIC",
-	.startup = startup_8259A_irq,
-	.shutdown = shutdown_8259A_irq,
-	.enable = enable_8259A_irq,
-	.disable = disable_8259A_irq,
-	.ack = mask_and_ack_8259A,
-	.end = end_8259A_irq,
+static struct irq_chip i8259A_chip = {
+	.name		= "XT-PIC",
+	.mask		= disable_8259A_irq,
+	.unmask		= enable_8259A_irq,
+	.mask_ack	= mask_and_ack_8259A,
 };
 
 /*
@@ -132,7 +113,8 @@ void make_8259A_irq(unsigned int irq)
 {
 	disable_irq_nosync(irq);
 	io_apic_irqs &= ~(1<<irq);
-	irq_desc[irq].handler = &i8259A_irq_type;
+	set_irq_chip_and_handler_name(irq, &i8259A_chip, handle_level_irq,
+				      "XT");
 	enable_irq(irq);
 }
 
@@ -175,7 +157,7 @@ static void mask_and_ack_8259A(unsigned int irq)
 	 * Lightweight spurious IRQ detection. We do not want
 	 * to overdo spurious IRQ handling - it's usually a sign
 	 * of hardware problems, so we only do the checks we can
-	 * do without slowing down good hardware unnecesserily.
+	 * do without slowing down good hardware unnecessarily.
 	 *
 	 * Note that IRQ7 and IRQ15 (the two spurious IRQs
 	 * usually resulting from the 8259A-1|2 PICs) occur
@@ -254,7 +236,7 @@ static void save_ELCR(char *trigger)
 
 static int i8259A_resume(struct sys_device *dev)
 {
-	init_8259A(0);
+	init_8259A(i8259A_auto_eoi);
 	restore_ELCR(irq_trigger);
 	return 0;
 }
@@ -271,8 +253,8 @@ static int i8259A_shutdown(struct sys_device *dev)
 	 * the kernel initialization code can get it
 	 * out of.
 	 */
-	outb(0xff, 0x21);	/* mask all of 8259A-1 */
-	outb(0xff, 0xA1);	/* mask all of 8259A-1 */
+	outb(0xff, PIC_MASTER_IMR);	/* mask all of 8259A-1 */
+	outb(0xff, PIC_SLAVE_IMR);	/* mask all of 8259A-1 */
 	return 0;
 }
 
@@ -302,6 +284,8 @@ void init_8259A(int auto_eoi)
 {
 	unsigned long flags;
 
+	i8259A_auto_eoi = auto_eoi;
+
 	spin_lock_irqsave(&i8259A_lock, flags);
 
 	outb(0xff, PIC_MASTER_IMR);	/* mask all of 8259A-1 */
@@ -324,12 +308,12 @@ void init_8259A(int auto_eoi)
 	outb_p(SLAVE_ICW4_DEFAULT, PIC_SLAVE_IMR); /* (slave's support for AEOI in flat mode is to be investigated) */
 	if (auto_eoi)
 		/*
-		 * in AEOI mode we just have to mask the interrupt
+		 * In AEOI mode we just have to mask the interrupt
 		 * when acking.
 		 */
-		i8259A_irq_type.ack = disable_8259A_irq;
+		i8259A_chip.mask_ack = disable_8259A_irq;
 	else
-		i8259A_irq_type.ack = mask_and_ack_8259A;
+		i8259A_chip.mask_ack = mask_and_ack_8259A;
 
 	udelay(100);		/* wait for 8259A to initialize */
 
@@ -352,13 +336,13 @@ void init_8259A(int auto_eoi)
  */
  
 
-static irqreturn_t math_error_irq(int cpl, void *dev_id, struct pt_regs *regs)
+static irqreturn_t math_error_irq(int cpl, void *dev_id)
 {
 	extern void math_error(void __user *);
 	outb(0,0xF0);
 	if (ignore_fpu_irq || !boot_cpu_data.hard_math)
 		return IRQ_NONE;
-	math_error((void __user *)regs->eip);
+	math_error((void __user *)get_irq_regs()->eip);
 	return IRQ_HANDLED;
 }
 
@@ -386,17 +370,21 @@ void __init init_ISA_irqs (void)
 			/*
 			 * 16 old-style INTA-cycle interrupts:
 			 */
-			irq_desc[i].handler = &i8259A_irq_type;
+			set_irq_chip_and_handler_name(i, &i8259A_chip,
+						      handle_level_irq, "XT");
 		} else {
 			/*
 			 * 'high' PCI IRQs filled in on demand
 			 */
-			irq_desc[i].handler = &no_irq_type;
+			irq_desc[i].chip = &no_irq_chip;
 		}
 	}
 }
 
-void __init init_IRQ(void)
+/* Overridden in paravirt.c */
+void init_IRQ(void) __attribute__((weak, alias("native_init_IRQ")));
+
+void __init native_init_IRQ(void)
 {
 	int i;
 

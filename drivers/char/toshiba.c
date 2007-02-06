@@ -92,7 +92,7 @@ static int tosh_ioctl(struct inode *, struct file *, unsigned int,
 	unsigned long);
 
 
-static struct file_operations tosh_fops = {
+static const struct file_operations tosh_fops = {
 	.owner		= THIS_MODULE,
 	.ioctl		= tosh_ioctl,
 };
@@ -249,6 +249,7 @@ int tosh_smm(SMMRegisters *regs)
 
 	return eax;
 }
+EXPORT_SYMBOL(tosh_smm);
 
 
 static int tosh_ioctl(struct inode *ip, struct file *fp, unsigned int cmd,

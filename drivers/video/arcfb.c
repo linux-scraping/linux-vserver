@@ -39,7 +39,6 @@
 #include <linux/errno.h>
 #include <linux/string.h>
 #include <linux/mm.h>
-#include <linux/tty.h>
 #include <linux/slab.h>
 #include <linux/vmalloc.h>
 #include <linux/delay.h>
@@ -219,8 +218,7 @@ static int arcfb_pan_display(struct fb_var_screeninfo *var,
 	return -EINVAL;
 }
 
-static irqreturn_t arcfb_interrupt(int vec, void *dev_instance,
-		struct pt_regs *regs)
+static irqreturn_t arcfb_interrupt(int vec, void *dev_instance)
 {
 	struct fb_info *info = dev_instance;
 	unsigned char ctl2status;
@@ -456,7 +454,7 @@ static ssize_t arcfb_write(struct file *file, const char __user *buf, size_t cou
 	unsigned int xres;
 
 	p = *ppos;
-	inode = file->f_dentry->d_inode;
+	inode = file->f_path.dentry->d_inode;
 	fbidx = iminor(inode);
 	info = registered_fb[fbidx];
 
@@ -561,7 +559,7 @@ static int __init arcfb_probe(struct platform_device *dev)
 	platform_set_drvdata(dev, info);
 	if (irq) {
 		par->irq = irq;
-		if (request_irq(par->irq, &arcfb_interrupt, SA_SHIRQ,
+		if (request_irq(par->irq, &arcfb_interrupt, IRQF_SHARED,
 				"arcfb", info)) {
 			printk(KERN_INFO
 				"arcfb: Failed req IRQ %d\n", par->irq);

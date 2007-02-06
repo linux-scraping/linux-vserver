@@ -63,7 +63,7 @@ struct flexcop_pci {
 
 	unsigned long last_irq;
 
-	struct work_struct irq_check_work;
+	struct delayed_work irq_check_work;
 
 	struct flexcop_device *fc_dev;
 };
@@ -97,9 +97,10 @@ static int flexcop_pci_write_ibi_reg(struct flexcop_device *fc, flexcop_ibi_regi
 	return 0;
 }
 
-static void flexcop_pci_irq_check_work(void *data)
+static void flexcop_pci_irq_check_work(struct work_struct *work)
 {
-	struct flexcop_pci *fc_pci = data;
+	struct flexcop_pci *fc_pci =
+		container_of(work, struct flexcop_pci, irq_check_work.work);
 	struct flexcop_device *fc = fc_pci->fc_dev;
 
 	flexcop_ibi_value v = fc->read_ibi_reg(fc,sram_dest_reg_714);
@@ -122,7 +123,7 @@ static void flexcop_pci_irq_check_work(void *data)
 /* When PID filtering is turned on, we use the timer IRQ, because small amounts
  * of data need to be passed to the user space instantly as well. When PID
  * filtering is turned off, we use the page-change-IRQ */
-static irqreturn_t flexcop_pci_isr(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t flexcop_pci_isr(int irq, void *dev_id)
 {
 	struct flexcop_pci *fc_pci = dev_id;
 	struct flexcop_device *fc = fc_pci->fc_dev;
@@ -242,19 +243,16 @@ static int flexcop_pci_dma_init(struct flexcop_pci *fc_pci)
 	if ((ret = flexcop_dma_allocate(fc_pci->pdev,&fc_pci->dma[0],FC_DEFAULT_DMA1_BUFSIZE)) != 0)
 		return ret;
 
-	if ((ret = flexcop_dma_allocate(fc_pci->pdev,&fc_pci->dma[1],FC_DEFAULT_DMA2_BUFSIZE)) != 0)
-		goto dma1_free;
+	if ((ret = flexcop_dma_allocate(fc_pci->pdev,&fc_pci->dma[1],FC_DEFAULT_DMA2_BUFSIZE)) != 0) {
+		flexcop_dma_free(&fc_pci->dma[0]);
+		return ret;
+	}
 
 	flexcop_sram_set_dest(fc_pci->fc_dev,FC_SRAM_DEST_MEDIA | FC_SRAM_DEST_NET, FC_SRAM_DEST_TARGET_DMA1);
 	flexcop_sram_set_dest(fc_pci->fc_dev,FC_SRAM_DEST_CAO   | FC_SRAM_DEST_CAI, FC_SRAM_DEST_TARGET_DMA2);
 
 	fc_pci->init_state |= FC_PCI_DMA_INIT;
 
-	goto success;
-dma1_free:
-	flexcop_dma_free(&fc_pci->dma[0]);
-
-success:
 	return ret;
 }
 
@@ -297,13 +295,13 @@ static int flexcop_pci_init(struct flexcop_pci *fc_pci)
 	pci_set_drvdata(fc_pci->pdev, fc_pci);
 
 	if ((ret = request_irq(fc_pci->pdev->irq, flexcop_pci_isr,
-					SA_SHIRQ, DRIVER_NAME, fc_pci)) != 0)
+					IRQF_SHARED, DRIVER_NAME, fc_pci)) != 0)
 		goto err_pci_iounmap;
 
 	spin_lock_init(&fc_pci->irq_lock);
 
 	fc_pci->init_state |= FC_PCI_INIT;
-	goto success;
+	return ret;
 
 err_pci_iounmap:
 	pci_iounmap(fc_pci->pdev, fc_pci->io_mem);
@@ -312,8 +310,6 @@ err_pci_release_regions:
 	pci_release_regions(fc_pci->pdev);
 err_pci_disable_device:
 	pci_disable_device(fc_pci->pdev);
-
-success:
 	return ret;
 }
 
@@ -376,16 +372,16 @@ static int flexcop_pci_probe(struct pci_dev *pdev, const struct pci_device_id *e
 	if ((ret = flexcop_pci_dma_init(fc_pci)) != 0)
 		goto err_fc_exit;
 
-	INIT_WORK(&fc_pci->irq_check_work, flexcop_pci_irq_check_work, fc_pci);
+	INIT_DELAYED_WORK(&fc_pci->irq_check_work, flexcop_pci_irq_check_work);
 
-	goto success;
+	return ret;
+
 err_fc_exit:
 	flexcop_device_exit(fc);
 err_pci_exit:
 	flexcop_pci_exit(fc_pci);
 err_kfree:
 	flexcop_device_kfree(fc);
-success:
 	return ret;
 }
 

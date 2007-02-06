@@ -40,6 +40,8 @@ enum {
 	ATA_MAX_DEVICES		= 2,	/* per bus/port */
 	ATA_MAX_PRD		= 256,	/* we could make these 256/256 */
 	ATA_SECT_SIZE		= 512,
+	ATA_MAX_SECTORS		= 256,
+	ATA_MAX_SECTORS_LBA48	= 65535,/* TODO: 65536? */
 
 	ATA_ID_WORDS		= 256,
 	ATA_ID_SERNO_OFS	= 10,
@@ -97,6 +99,9 @@ enum {
 	ATA_DRQ			= (1 << 3),	/* data request i/o */
 	ATA_ERR			= (1 << 0),	/* have an error */
 	ATA_SRST		= (1 << 2),	/* software reset */
+	ATA_ICRC		= (1 << 7),	/* interface CRC error */
+	ATA_UNC			= (1 << 6),	/* uncorrectable media error */
+	ATA_IDNF		= (1 << 4),	/* ID not found */
 	ATA_ABORTED		= (1 << 2),	/* command aborted */
 
 	/* ATA command block registers */
@@ -130,6 +135,8 @@ enum {
 	ATA_CMD_WRITE		= 0xCA,
 	ATA_CMD_WRITE_EXT	= 0x35,
 	ATA_CMD_WRITE_FUA_EXT	= 0x3D,
+	ATA_CMD_FPDMA_READ	= 0x60,
+	ATA_CMD_FPDMA_WRITE	= 0x61,
 	ATA_CMD_PIO_READ	= 0x20,
 	ATA_CMD_PIO_READ_EXT	= 0x24,
 	ATA_CMD_PIO_WRITE	= 0x30,
@@ -148,6 +155,10 @@ enum {
 	ATA_CMD_INIT_DEV_PARAMS	= 0x91,
 	ATA_CMD_READ_NATIVE_MAX	= 0xF8,
 	ATA_CMD_READ_NATIVE_MAX_EXT = 0x27,
+	ATA_CMD_READ_LOG_EXT	= 0x2f,
+
+	/* READ_LOG_EXT pages */
+	ATA_LOG_SATA_NCQ	= 0x10,
 
 	/* SETFEATURES stuff */
 	SETFEATURES_XFER	= 0x03,
@@ -159,18 +170,25 @@ enum {
 	XFER_UDMA_2		= 0x42,
 	XFER_UDMA_1		= 0x41,
 	XFER_UDMA_0		= 0x40,
+	XFER_MW_DMA_4		= 0x24,	/* CFA only */
+	XFER_MW_DMA_3		= 0x23,	/* CFA only */
 	XFER_MW_DMA_2		= 0x22,
 	XFER_MW_DMA_1		= 0x21,
 	XFER_MW_DMA_0		= 0x20,
 	XFER_SW_DMA_2		= 0x12,
 	XFER_SW_DMA_1		= 0x11,
 	XFER_SW_DMA_0		= 0x10,
+	XFER_PIO_6		= 0x0E,	/* CFA only */
+	XFER_PIO_5		= 0x0D,	/* CFA only */
 	XFER_PIO_4		= 0x0C,
 	XFER_PIO_3		= 0x0B,
 	XFER_PIO_2		= 0x0A,
 	XFER_PIO_1		= 0x09,
 	XFER_PIO_0		= 0x08,
 	XFER_PIO_SLOW		= 0x00,
+
+	SETFEATURES_WC_ON	= 0x02, /* Enable write cache */
+	SETFEATURES_WC_OFF	= 0x82, /* Disable write cache */
 
 	/* ATAPI stuff */
 	ATAPI_PKT_DMA		= (1 << 0),
@@ -182,8 +200,9 @@ enum {
 	ATA_CBL_NONE		= 0,
 	ATA_CBL_PATA40		= 1,
 	ATA_CBL_PATA80		= 2,
-	ATA_CBL_PATA_UNK	= 3,
-	ATA_CBL_SATA		= 4,
+	ATA_CBL_PATA40_SHORT	= 3,		/* 40 wire cable to high UDMA spec */
+	ATA_CBL_PATA_UNK	= 4,
+	ATA_CBL_SATA		= 5,
 
 	/* SATA Status and Control Registers */
 	SCR_STATUS		= 0,
@@ -192,6 +211,16 @@ enum {
 	SCR_ACTIVE		= 3,
 	SCR_NOTIFICATION	= 4,
 
+	/* SError bits */
+	SERR_DATA_RECOVERED	= (1 << 0), /* recovered data error */
+	SERR_COMM_RECOVERED	= (1 << 1), /* recovered comm failure */
+	SERR_DATA		= (1 << 8), /* unrecovered data error */
+	SERR_PERSISTENT		= (1 << 9), /* persistent data/comm error */
+	SERR_PROTOCOL		= (1 << 10), /* protocol violation */
+	SERR_INTERNAL		= (1 << 11), /* host internal error */
+	SERR_PHYRDY_CHG		= (1 << 16), /* PHY RDY changed */
+	SERR_DEV_XCHG		= (1 << 26), /* device exchanged */
+
 	/* struct ata_taskfile flags */
 	ATA_TFLAG_LBA48		= (1 << 0), /* enable 48-bit LBA and "HOB" */
 	ATA_TFLAG_ISADDR	= (1 << 1), /* enable r/w to nsect/lba regs */
@@ -199,6 +228,7 @@ enum {
 	ATA_TFLAG_WRITE		= (1 << 3), /* data dir: host->dev==1 (write) */
 	ATA_TFLAG_LBA		= (1 << 4), /* enable LBA */
 	ATA_TFLAG_FUA		= (1 << 5), /* enable FUA */
+	ATA_TFLAG_POLLING	= (1 << 6), /* set nIEN to 1 and use polling */
 };
 
 enum ata_tf_protocols {
@@ -207,6 +237,7 @@ enum ata_tf_protocols {
 	ATA_PROT_NODATA,	/* no data */
 	ATA_PROT_PIO,		/* PIO single sector */
 	ATA_PROT_DMA,		/* DMA */
+	ATA_PROT_NCQ,		/* NCQ */
 	ATA_PROT_ATAPI,		/* packet command, PIO data xfer*/
 	ATA_PROT_ATAPI_NODATA,	/* packet command, no data */
 	ATA_PROT_ATAPI_DMA,	/* packet command with special DMA sauce */
@@ -248,7 +279,6 @@ struct ata_taskfile {
 };
 
 #define ata_id_is_ata(id)	(((id)[0] & (1 << 15)) == 0)
-#define ata_id_is_cfa(id)	((id)[0] == 0x848A)
 #define ata_id_is_sata(id)	((id)[93] == 0)
 #define ata_id_rahead_enabled(id) ((id)[85] & (1 << 6))
 #define ata_id_wcache_enabled(id) ((id)[85] & (1 << 5))
@@ -262,6 +292,8 @@ struct ata_taskfile {
 #define ata_id_has_pm(id)	((id)[82] & (1 << 3))
 #define ata_id_has_lba(id)	((id)[49] & (1 << 9))
 #define ata_id_has_dma(id)	((id)[49] & (1 << 8))
+#define ata_id_has_ncq(id)	((id)[76] & (1 << 8))
+#define ata_id_queue_depth(id)	(((id)[75] & 0x1f) + 1)
 #define ata_id_removeable(id)	((id)[0] & (1 << 7))
 #define ata_id_has_dword_io(id)	((id)[50] & (1 << 0))
 #define ata_id_u32(id,n)	\
@@ -272,9 +304,14 @@ struct ata_taskfile {
 	  ((u64) (id)[(n) + 1] << 16) |	\
 	  ((u64) (id)[(n) + 0]) )
 
+#define ata_id_cdb_intr(id)	(((id)[0] & 0x60) == 0x20)
+
 static inline unsigned int ata_id_major_version(const u16 *id)
 {
 	unsigned int mver;
+
+	if (id[ATA_ID_MAJOR_VER] == 0xFFFF)
+		return 0;
 
 	for (mver = 14; mver >= 1; mver--)
 		if (id[ATA_ID_MAJOR_VER] & (1 << mver))
@@ -284,14 +321,35 @@ static inline unsigned int ata_id_major_version(const u16 *id)
 
 static inline int ata_id_current_chs_valid(const u16 *id)
 {
-	/* For ATA-1 devices, if the INITIALIZE DEVICE PARAMETERS command 
-	   has not been issued to the device then the values of 
+	/* For ATA-1 devices, if the INITIALIZE DEVICE PARAMETERS command
+	   has not been issued to the device then the values of
 	   id[54] to id[56] are vendor specific. */
 	return (id[53] & 0x01) && /* Current translation valid */
 		id[54] &&  /* cylinders in current translation */
 		id[55] &&  /* heads in current translation */
 		id[55] <= 16 &&
 		id[56];    /* sectors in current translation */
+}
+
+static inline int ata_id_is_cfa(const u16 *id)
+{
+	u16 v = id[0];
+	if (v == 0x848A)	/* Standard CF */
+		return 1;
+	/* Could be CF hiding as standard ATA */
+	if (ata_id_major_version(id) >= 3 &&  id[82] != 0xFFFF &&
+			(id[82] & ( 1 << 2)))
+		return 1;
+	return 0;
+}
+
+static inline int ata_drive_40wire(const u16 *dev_id)
+{
+	if (ata_id_major_version(dev_id) >= 5 && ata_id_is_sata(dev_id))
+		return 0;	/* SATA */
+	if (dev_id[93] & 0x4000)
+		return 0;	/* 80 wire */
+	return 1;
 }
 
 static inline int atapi_cdb_len(const u16 *dev_id)
@@ -309,6 +367,15 @@ static inline int is_atapi_taskfile(const struct ata_taskfile *tf)
 	return (tf->protocol == ATA_PROT_ATAPI) ||
 	       (tf->protocol == ATA_PROT_ATAPI_NODATA) ||
 	       (tf->protocol == ATA_PROT_ATAPI_DMA);
+}
+
+static inline int is_multi_taskfile(struct ata_taskfile *tf)
+{
+	return (tf->command == ATA_CMD_READ_MULTI) ||
+	       (tf->command == ATA_CMD_WRITE_MULTI) ||
+	       (tf->command == ATA_CMD_READ_MULTI_EXT) ||
+	       (tf->command == ATA_CMD_WRITE_MULTI_EXT) ||
+	       (tf->command == ATA_CMD_WRITE_MULTI_FUA_EXT);
 }
 
 static inline int ata_ok(u8 status)

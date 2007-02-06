@@ -20,8 +20,11 @@
 #include <linux/vmalloc.h>
 #include <linux/workqueue.h>
 
+#define DM_MSG_PREFIX "raid1"
+
 static struct workqueue_struct *_kmirrord_wq;
 static struct work_struct _kmirrord_work;
+static DECLARE_WAIT_QUEUE_HEAD(_kmirrord_recovery_stopped);
 
 static inline void wake(void)
 {
@@ -81,6 +84,7 @@ struct region_hash {
 	struct list_head *buckets;
 
 	spinlock_t region_lock;
+	atomic_t recovery_in_flight;
 	struct semaphore recovery_count;
 	struct list_head clean_regions;
 	struct list_head quiesced_regions;
@@ -106,12 +110,42 @@ struct region {
 	struct bio_list delayed_bios;
 };
 
+
+/*-----------------------------------------------------------------
+ * Mirror set structures.
+ *---------------------------------------------------------------*/
+struct mirror {
+	atomic_t error_count;
+	struct dm_dev *dev;
+	sector_t offset;
+};
+
+struct mirror_set {
+	struct dm_target *ti;
+	struct list_head list;
+	struct region_hash rh;
+	struct kcopyd_client *kcopyd_client;
+
+	spinlock_t lock;	/* protects the next two lists */
+	struct bio_list reads;
+	struct bio_list writes;
+
+	/* recovery */
+	region_t nr_regions;
+	int in_sync;
+
+	struct mirror *default_mirror;	/* Default mirror */
+
+	unsigned int nr_mirrors;
+	struct mirror mirror[0];
+};
+
 /*
  * Conversion fns
  */
 static inline region_t bio_to_region(struct region_hash *rh, struct bio *bio)
 {
-	return bio->bi_sector >> rh->region_shift;
+	return (bio->bi_sector - rh->ms->ti->begin) >> rh->region_shift;
 }
 
 static inline sector_t region_to_sector(struct region_hash *rh, region_t region)
@@ -159,6 +193,7 @@ static int rh_init(struct region_hash *rh, struct mirror_set *ms,
 
 	spin_lock_init(&rh->region_lock);
 	sema_init(&rh->recovery_count, 0);
+	atomic_set(&rh->recovery_in_flight, 0);
 	INIT_LIST_HEAD(&rh->clean_regions);
 	INIT_LIST_HEAD(&rh->quiesced_regions);
 	INIT_LIST_HEAD(&rh->recovered_regions);
@@ -223,7 +258,9 @@ static struct region *__rh_alloc(struct region_hash *rh, region_t region)
 	struct region *reg, *nreg;
 
 	read_unlock(&rh->hash_lock);
-	nreg = mempool_alloc(rh->region_pool, GFP_NOIO);
+	nreg = mempool_alloc(rh->region_pool, GFP_ATOMIC);
+	if (unlikely(!nreg))
+		nreg = kmalloc(sizeof(struct region), GFP_NOIO);
 	nreg->state = rh->log->type->in_sync(rh->log, region, 1) ?
 		RH_CLEAN : RH_NOSYNC;
 	nreg->rh = rh;
@@ -307,6 +344,17 @@ static void dispatch_bios(struct mirror_set *ms, struct bio_list *bio_list)
 	}
 }
 
+static void complete_resync_work(struct region *reg, int success)
+{
+	struct region_hash *rh = reg->rh;
+
+	rh->log->type->set_region_sync(rh->log, reg->key, success);
+	dispatch_bios(rh->ms, &reg->delayed_bios);
+	if (atomic_dec_and_test(&rh->recovery_in_flight))
+		wake_up_all(&_kmirrord_recovery_stopped);
+	up(&rh->recovery_count);
+}
+
 static void rh_update_states(struct region_hash *rh)
 {
 	struct region *reg, *next;
@@ -346,9 +394,7 @@ static void rh_update_states(struct region_hash *rh)
 	 */
 	list_for_each_entry_safe (reg, next, &recovered, list) {
 		rh->log->type->clear_region(rh->log, reg->key);
-		rh->log->type->complete_resync_work(rh->log, reg->key, 1);
-		dispatch_bios(rh->ms, &reg->delayed_bios);
-		up(&rh->recovery_count);
+		complete_resync_work(reg, 1);
 		mempool_free(reg, rh->region_pool);
 	}
 
@@ -458,11 +504,9 @@ static int __rh_recovery_prepare(struct region_hash *rh)
 	/* Already quiesced ? */
 	if (atomic_read(&reg->pending))
 		list_del_init(&reg->list);
+	else
+		list_move(&reg->list, &rh->quiesced_regions);
 
-	else {
-		list_del_init(&reg->list);
-		list_add(&reg->list, &rh->quiesced_regions);
-	}
 	spin_unlock_irq(&rh->region_lock);
 
 	return 1;
@@ -470,11 +514,21 @@ static int __rh_recovery_prepare(struct region_hash *rh)
 
 static void rh_recovery_prepare(struct region_hash *rh)
 {
-	while (!down_trylock(&rh->recovery_count))
+	/* Extra reference to avoid race with rh_stop_recovery */
+	atomic_inc(&rh->recovery_in_flight);
+
+	while (!down_trylock(&rh->recovery_count)) {
+		atomic_inc(&rh->recovery_in_flight);
 		if (__rh_recovery_prepare(rh) <= 0) {
+			atomic_dec(&rh->recovery_in_flight);
 			up(&rh->recovery_count);
 			break;
 		}
+	}
+
+	/* Drop the extra reference */
+	if (atomic_dec_and_test(&rh->recovery_in_flight))
+		wake_up_all(&_kmirrord_recovery_stopped);
 }
 
 /*
@@ -541,35 +595,6 @@ static void rh_start_recovery(struct region_hash *rh)
 	wake();
 }
 
-/*-----------------------------------------------------------------
- * Mirror set structures.
- *---------------------------------------------------------------*/
-struct mirror {
-	atomic_t error_count;
-	struct dm_dev *dev;
-	sector_t offset;
-};
-
-struct mirror_set {
-	struct dm_target *ti;
-	struct list_head list;
-	struct region_hash rh;
-	struct kcopyd_client *kcopyd_client;
-
-	spinlock_t lock;	/* protects the next two lists */
-	struct bio_list reads;
-	struct bio_list writes;
-
-	/* recovery */
-	region_t nr_regions;
-	int in_sync;
-
-	struct mirror *default_mirror;	/* Default mirror */
-
-	unsigned int nr_mirrors;
-	struct mirror mirror[0];
-};
-
 /*
  * Every mirror should look like this one.
  */
@@ -603,7 +628,7 @@ static void recovery_complete(int read_err, unsigned int write_err,
 	struct region *reg = (struct region *) context;
 
 	/* FIXME: better error handling */
-	rh_recovery_end(reg, read_err || write_err);
+	rh_recovery_end(reg, !(read_err || write_err));
 }
 
 static int recover(struct mirror_set *ms, struct region *reg)
@@ -865,7 +890,7 @@ static void do_mirror(struct mirror_set *ms)
 	do_writes(ms, &writes);
 }
 
-static void do_work(void *ignored)
+static void do_work(struct work_struct *ignored)
 {
 	struct mirror_set *ms;
 
@@ -893,7 +918,7 @@ static struct mirror_set *alloc_context(unsigned int nr_mirrors,
 
 	ms = kmalloc(len, GFP_KERNEL);
 	if (!ms) {
-		ti->error = "dm-mirror: Cannot allocate mirror context";
+		ti->error = "Cannot allocate mirror context";
 		return NULL;
 	}
 
@@ -907,7 +932,7 @@ static struct mirror_set *alloc_context(unsigned int nr_mirrors,
 	ms->default_mirror = &ms->mirror[DEFAULT_MIRROR];
 
 	if (rh_init(&ms->rh, ms, dl, region_size, ms->nr_regions)) {
-		ti->error = "dm-mirror: Error creating dirty region hash";
+		ti->error = "Error creating dirty region hash";
 		kfree(ms);
 		return NULL;
 	}
@@ -937,14 +962,14 @@ static int get_mirror(struct mirror_set *ms, struct dm_target *ti,
 	unsigned long long offset;
 
 	if (sscanf(argv[1], "%llu", &offset) != 1) {
-		ti->error = "dm-mirror: Invalid offset";
+		ti->error = "Invalid offset";
 		return -EINVAL;
 	}
 
 	if (dm_get_device(ti, argv[0], offset, ti->len,
 			  dm_table_get_mode(ti->table),
 			  &ms->mirror[mirror].dev)) {
-		ti->error = "dm-mirror: Device lookup failure";
+		ti->error = "Device lookup failure";
 		return -ENXIO;
 	}
 
@@ -981,30 +1006,30 @@ static struct dirty_log *create_dirty_log(struct dm_target *ti,
 	struct dirty_log *dl;
 
 	if (argc < 2) {
-		ti->error = "dm-mirror: Insufficient mirror log arguments";
+		ti->error = "Insufficient mirror log arguments";
 		return NULL;
 	}
 
 	if (sscanf(argv[1], "%u", &param_count) != 1) {
-		ti->error = "dm-mirror: Invalid mirror log argument count";
+		ti->error = "Invalid mirror log argument count";
 		return NULL;
 	}
 
 	*args_used = 2 + param_count;
 
 	if (argc < *args_used) {
-		ti->error = "dm-mirror: Insufficient mirror log arguments";
+		ti->error = "Insufficient mirror log arguments";
 		return NULL;
 	}
 
 	dl = dm_create_dirty_log(argv[0], ti, param_count, argv + 2);
 	if (!dl) {
-		ti->error = "dm-mirror: Error creating mirror dirty log";
+		ti->error = "Error creating mirror dirty log";
 		return NULL;
 	}
 
 	if (!_check_region_size(ti, dl->type->get_region_size(dl))) {
-		ti->error = "dm-mirror: Invalid region size";
+		ti->error = "Invalid region size";
 		dm_destroy_dirty_log(dl);
 		return NULL;
 	}
@@ -1038,7 +1063,7 @@ static int mirror_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 
 	if (!argc || sscanf(argv[0], "%u", &nr_mirrors) != 1 ||
 	    nr_mirrors < 2 || nr_mirrors > KCOPYD_MAX_REGIONS + 1) {
-		ti->error = "dm-mirror: Invalid number of mirrors";
+		ti->error = "Invalid number of mirrors";
 		dm_destroy_dirty_log(dl);
 		return -EINVAL;
 	}
@@ -1046,7 +1071,7 @@ static int mirror_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	argv++, argc--;
 
 	if (argc != nr_mirrors * 2) {
-		ti->error = "dm-mirror: Wrong number of mirror arguments";
+		ti->error = "Wrong number of mirror arguments";
 		dm_destroy_dirty_log(dl);
 		return -EINVAL;
 	}
@@ -1115,11 +1140,11 @@ static int mirror_map(struct dm_target *ti, struct bio *bio,
 	struct mirror *m;
 	struct mirror_set *ms = ti->private;
 
-	map_context->ll = bio->bi_sector >> ms->rh.region_shift;
+	map_context->ll = bio_to_region(&ms->rh, bio);
 
 	if (rw == WRITE) {
 		queue_bio(ms, bio, rw);
-		return 0;
+		return DM_MAPIO_SUBMITTED;
 	}
 
 	r = ms->rh.log->type->in_sync(ms->rh.log,
@@ -1128,7 +1153,7 @@ static int mirror_map(struct dm_target *ti, struct bio *bio,
 		return r;
 
 	if (r == -EWOULDBLOCK)	/* FIXME: ugly */
-		r = 0;
+		r = DM_MAPIO_SUBMITTED;
 
 	/*
 	 * We don't want to fast track a recovery just for a read
@@ -1141,7 +1166,7 @@ static int mirror_map(struct dm_target *ti, struct bio *bio,
 	if (!r) {
 		/* Pass this io over to the daemon */
 		queue_bio(ms, bio, rw);
-		return 0;
+		return DM_MAPIO_SUBMITTED;
 	}
 
 	m = choose_mirror(ms, bio->bi_sector);
@@ -1149,7 +1174,7 @@ static int mirror_map(struct dm_target *ti, struct bio *bio,
 		return -EIO;
 
 	map_bio(ms, m, bio);
-	return 1;
+	return DM_MAPIO_REMAPPED;
 }
 
 static int mirror_end_io(struct dm_target *ti, struct bio *bio,
@@ -1174,6 +1199,11 @@ static void mirror_postsuspend(struct dm_target *ti)
 	struct dirty_log *log = ms->rh.log;
 
 	rh_stop_recovery(&ms->rh);
+
+	/* Wait for all I/O we generated to complete */
+	wait_event(_kmirrord_recovery_stopped,
+		   !atomic_read(&ms->rh.recovery_in_flight));
+
 	if (log->type->suspend && log->type->suspend(log))
 		/* FIXME: need better error handling */
 		DMWARN("log suspend failed");
@@ -1210,9 +1240,9 @@ static int mirror_status(struct dm_target *ti, status_type_t type,
 		break;
 
 	case STATUSTYPE_TABLE:
-		DMEMIT("%d ", ms->nr_mirrors);
+		DMEMIT("%d", ms->nr_mirrors);
 		for (m = 0; m < ms->nr_mirrors; m++)
-			DMEMIT("%s %llu ", ms->mirror[m].dev->name,
+			DMEMIT(" %s %llu", ms->mirror[m].dev->name,
 				(unsigned long long)ms->mirror[m].offset);
 	}
 
@@ -1221,7 +1251,7 @@ static int mirror_status(struct dm_target *ti, status_type_t type,
 
 static struct target_type mirror_target = {
 	.name	 = "mirror",
-	.version = {1, 0, 1},
+	.version = {1, 0, 2},
 	.module	 = THIS_MODULE,
 	.ctr	 = mirror_ctr,
 	.dtr	 = mirror_dtr,
@@ -1246,7 +1276,7 @@ static int __init dm_mirror_init(void)
 		dm_dirty_log_exit();
 		return r;
 	}
-	INIT_WORK(&_kmirrord_work, do_work, NULL);
+	INIT_WORK(&_kmirrord_work, do_work);
 
 	r = dm_register_target(&mirror_target);
 	if (r < 0) {

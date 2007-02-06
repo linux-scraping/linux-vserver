@@ -17,7 +17,6 @@
 #ifndef __ASM_MPC85xx_H__
 #define __ASM_MPC85xx_H__
 
-#include <linux/config.h>
 #include <asm/mmu.h>
 
 #ifdef CONFIG_85xx
@@ -27,6 +26,9 @@
 #endif
 #if defined(CONFIG_MPC8555_CDS) || defined(CONFIG_MPC8548_CDS)
 #include <platforms/85xx/mpc8555_cds.h>
+#endif
+#ifdef CONFIG_MPC85xx_CDS
+#include <platforms/85xx/mpc85xx_cds.h>
 #endif
 #ifdef CONFIG_MPC8560_ADS
 #include <platforms/85xx/mpc8560_ads.h>
@@ -40,14 +42,6 @@
 #if defined(CONFIG_TQM8540) || defined(CONFIG_TQM8541) || \
 	defined(CONFIG_TQM8555) || defined(CONFIG_TQM8560)
 #include <platforms/85xx/tqm85xx.h>
-#endif
-
-#define _IO_BASE        isa_io_base
-#define _ISA_MEM_BASE   isa_mem_base
-#ifdef CONFIG_PCI
-#define PCI_DRAM_OFFSET pci_dram_offset
-#else
-#define PCI_DRAM_OFFSET 0
 #endif
 
 /*

@@ -3,6 +3,8 @@
 #
 
 klibcdirs:;
+PHONY += klibcdirs
+
 
 # Generate builtin.o based on initramfs_data.o
 obj-y := initramfs_data.o
@@ -18,7 +20,7 @@ $(obj)/initramfs_data.o: $(obj)/initramfs_data.cpio.gz FORCE
 hostprogs-y := gen_init_cpio
 initramfs   := $(CONFIG_SHELL) $(srctree)/scripts/gen_initramfs_list.sh
 ramfs-input := $(if $(filter-out "",$(CONFIG_INITRAMFS_SOURCE)), \
-                    $(CONFIG_INITRAMFS_SOURCE),-d)
+			$(shell echo $(CONFIG_INITRAMFS_SOURCE)),-d)
 ramfs-args  := \
         $(if $(CONFIG_INITRAMFS_ROOT_UID), -u $(CONFIG_INITRAMFS_ROOT_UID)) \
         $(if $(CONFIG_INITRAMFS_ROOT_GID), -g $(CONFIG_INITRAMFS_ROOT_GID))
@@ -35,6 +37,9 @@ quiet_cmd_initfs = GEN     $@
       cmd_initfs = $(initramfs) -o $@ $(ramfs-args) $(ramfs-input)
 
 targets := initramfs_data.cpio.gz
+# do not try to update files included in initramfs
+$(deps_initramfs): ;
+
 $(deps_initramfs): klibcdirs
 # We rebuild initramfs_data.cpio.gz if:
 # 1) Any included file is newer then initramfs_data.cpio.gz

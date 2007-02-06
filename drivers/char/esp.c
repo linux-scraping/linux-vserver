@@ -615,8 +615,7 @@ static inline void check_modem_status(struct esp_struct *info)
 /*
  * This is the serial driver's interrupt routine
  */
-static irqreturn_t rs_interrupt_single(int irq, void *dev_id,
-					struct pt_regs *regs)
+static irqreturn_t rs_interrupt_single(int irq, void *dev_id)
 {
 	struct esp_struct * info;
 	unsigned err_status;
@@ -724,9 +723,10 @@ static irqreturn_t rs_interrupt_single(int irq, void *dev_id,
  * -------------------------------------------------------------------
  */
 
-static void do_softint(void *private_)
+static void do_softint(struct work_struct *work)
 {
-	struct esp_struct	*info = (struct esp_struct *) private_;
+	struct esp_struct	*info =
+		container_of(work, struct esp_struct, tqueue);
 	struct tty_struct	*tty;
 	
 	tty = info->tty;
@@ -747,9 +747,10 @@ static void do_softint(void *private_)
  * 	do_serial_hangup() -> tty->hangup() -> esp_hangup()
  * 
  */
-static void do_serial_hangup(void *private_)
+static void do_serial_hangup(struct work_struct *work)
 {
-	struct esp_struct	*info = (struct esp_struct *) private_;
+	struct esp_struct	*info =
+		container_of(work, struct esp_struct, tqueue_hangup);
 	struct tty_struct	*tty;
 	
 	tty = info->tty;
@@ -883,7 +884,7 @@ static int startup(struct esp_struct * info)
 	 * Allocate the IRQ
 	 */
 
-	retval = request_irq(info->irq, rs_interrupt_single, SA_SHIRQ,
+	retval = request_irq(info->irq, rs_interrupt_single, IRQF_SHARED,
 			     "esp serial", info);
 
 	if (retval) {
@@ -1212,7 +1213,7 @@ static void rs_put_char(struct tty_struct *tty, unsigned char ch)
 	if (serial_paranoia_check(info, tty->name, "rs_put_char"))
 		return;
 
-	if (!tty || !info->xmit_buf)
+	if (!info->xmit_buf)
 		return;
 
 	spin_lock_irqsave(&info->lock, flags);
@@ -1256,7 +1257,7 @@ static int rs_write(struct tty_struct * tty,
 	if (serial_paranoia_check(info, tty->name, "rs_write"))
 		return 0;
 
-	if (!tty || !info->xmit_buf)
+	if (!info->xmit_buf)
 		return 0;
 	    
 	while (1) {
@@ -1914,7 +1915,7 @@ static int rs_ioctl(struct tty_struct *tty, struct file * file,
 	return 0;
 }
 
-static void rs_set_termios(struct tty_struct *tty, struct termios *old_termios)
+static void rs_set_termios(struct tty_struct *tty, struct ktermios *old_termios)
 {
 	struct esp_struct *info = (struct esp_struct *)tty->driver_data;
 	unsigned long flags;
@@ -2376,7 +2377,7 @@ static inline int autoconfig(struct esp_struct * info)
 	return (port_detected);
 }
 
-static struct tty_operations esp_ops = {
+static const struct tty_operations esp_ops = {
 	.open = esp_open,
 	.close = rs_close,
 	.write = rs_write,
@@ -2449,7 +2450,6 @@ static int __init espserial_init(void)
 	
 	esp_driver->owner = THIS_MODULE;
 	esp_driver->name = "ttyP";
-	esp_driver->devfs_name = "tts/P";
 	esp_driver->major = ESP_IN_MAJOR;
 	esp_driver->minor_start = 0;
 	esp_driver->type = TTY_DRIVER_TYPE_SERIAL;
@@ -2503,8 +2503,8 @@ static int __init espserial_init(void)
 		info->magic = ESP_MAGIC;
 		info->close_delay = 5*HZ/10;
 		info->closing_wait = 30*HZ;
-		INIT_WORK(&info->tqueue, do_softint, info);
-		INIT_WORK(&info->tqueue_hangup, do_serial_hangup, info);
+		INIT_WORK(&info->tqueue, do_softint);
+		INIT_WORK(&info->tqueue_hangup, do_serial_hangup);
 		info->config.rx_timeout = rx_timeout;
 		info->config.flow_on = flow_on;
 		info->config.flow_off = flow_off;

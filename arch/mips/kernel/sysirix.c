@@ -31,7 +31,7 @@
 #include <linux/socket.h>
 #include <linux/security.h>
 #include <linux/syscalls.h>
-#include <linux/vs_cvirt.h>
+#include <linux/resource.h>
 
 #include <asm/ptrace.h>
 #include <asm/page.h>
@@ -236,7 +236,6 @@ asmlinkage int irix_prctl(unsigned option, ...)
 #undef DEBUG_PROCGRPS
 
 extern unsigned long irix_mapelf(int fd, struct elf_phdr __user *user_phdrp, int cnt);
-extern int getrusage(struct task_struct *p, int who, struct rusage __user *ru);
 extern char *prom_getenv(char *name);
 extern long prom_setenv(char *name, char *value);
 
@@ -695,7 +694,7 @@ asmlinkage int irix_statfs(const char __user *path,
 	if (error)
 		goto out;
 
-	error = vfs_statfs(nd.dentry->d_inode->i_sb, &kbuf);
+	error = vfs_statfs(nd.dentry, &kbuf);
 	if (error)
 		goto dput_and_out;
 
@@ -733,7 +732,7 @@ asmlinkage int irix_fstatfs(unsigned int fd, struct irix_statfs __user *buf)
 		goto out;
 	}
 
-	error = vfs_statfs(file->f_dentry->d_inode->i_sb, &kbuf);
+	error = vfs_statfs(file->f_path.dentry, &kbuf);
 	if (error)
 		goto out_f;
 
@@ -885,7 +884,7 @@ asmlinkage int irix_getdomainname(char __user *name, int len)
 	down_read(&uts_sem);
 	if (len > __NEW_UTS_LEN)
 		len = __NEW_UTS_LEN;
-	err = copy_to_user(name, vx_new_uts(domainname), len) ? -EFAULT : 0;
+	err = copy_to_user(name, utsname()->domainname, len) ? -EFAULT : 0;
 	up_read(&uts_sem);
 
 	return err;
@@ -1042,7 +1041,7 @@ asmlinkage unsigned long irix_mmap32(unsigned long addr, size_t len, int prot,
 			unsigned long old_pos;
 			long max_size = offset + len;
 
-			if (max_size > file->f_dentry->d_inode->i_size) {
+			if (max_size > file->f_path.dentry->d_inode->i_size) {
 				old_pos = sys_lseek (fd, max_size - 1, 0);
 				sys_write (fd, (void __user *) "", 1);
 				sys_lseek (fd, old_pos, 0);
@@ -1128,11 +1127,11 @@ struct iuname {
 asmlinkage int irix_uname(struct iuname __user *buf)
 {
 	down_read(&uts_sem);
-	if (copy_from_user(vx_new_uts(sysname), buf->sysname, 65)
-	    || copy_from_user(vx_new_uts(nodename), buf->nodename, 65)
-	    || copy_from_user(vx_new_uts(release), buf->release, 65)
-	    || copy_from_user(vx_new_uts(version), buf->version, 65)
-	    || copy_from_user(vx_new_uts(machine), buf->machine, 65)) {
+	if (copy_from_user(utsname()->sysname, buf->sysname, 65)
+	    || copy_from_user(utsname()->nodename, buf->nodename, 65)
+	    || copy_from_user(utsname()->release, buf->release, 65)
+	    || copy_from_user(utsname()->version, buf->version, 65)
+	    || copy_from_user(utsname()->machine, buf->machine, 65)) {
 		return -EFAULT;
 	}
 	up_read(&uts_sem);
@@ -1361,7 +1360,7 @@ asmlinkage int irix_statvfs(char __user *fname, struct irix_statvfs __user *buf)
 	error = user_path_walk(fname, &nd);
 	if (error)
 		goto out;
-	error = vfs_statfs(nd.dentry->d_inode->i_sb, &kbuf);
+	error = vfs_statfs(nd.dentry, &kbuf);
 	if (error)
 		goto dput_and_out;
 
@@ -1407,7 +1406,7 @@ asmlinkage int irix_fstatvfs(int fd, struct irix_statvfs __user *buf)
 		error = -EBADF;
 		goto out;
 	}
-	error = vfs_statfs(file->f_dentry->d_inode->i_sb, &kbuf);
+	error = vfs_statfs(file->f_path.dentry, &kbuf);
 	if (error)
 		goto out_f;
 
@@ -1527,7 +1526,7 @@ asmlinkage int irix_mmap64(struct pt_regs *regs)
 			unsigned long old_pos;
 			long max_size = off2 + len;
 
-			if (max_size > file->f_dentry->d_inode->i_size) {
+			if (max_size > file->f_path.dentry->d_inode->i_size) {
 				old_pos = sys_lseek (fd, max_size - 1, 0);
 				sys_write (fd, (void __user *) "", 1);
 				sys_lseek (fd, old_pos, 0);
@@ -1612,7 +1611,7 @@ asmlinkage int irix_statvfs64(char __user *fname, struct irix_statvfs64 __user *
 	error = user_path_walk(fname, &nd);
 	if (error)
 		goto out;
-	error = vfs_statfs(nd.dentry->d_inode->i_sb, &kbuf);
+	error = vfs_statfs(nd.dentry, &kbuf);
 	if (error)
 		goto dput_and_out;
 
@@ -1659,7 +1658,7 @@ asmlinkage int irix_fstatvfs64(int fd, struct irix_statvfs __user *buf)
 		error = -EBADF;
 		goto out;
 	}
-	error = vfs_statfs(file->f_dentry->d_inode->i_sb, &kbuf);
+	error = vfs_statfs(file->f_path.dentry, &kbuf);
 	if (error)
 		goto out_f;
 
@@ -1740,12 +1739,13 @@ struct irix_dirent32_callback {
 #define ROUND_UP32(x) (((x)+sizeof(u32)-1) & ~(sizeof(u32)-1))
 
 static int irix_filldir32(void *__buf, const char *name,
-	int namlen, loff_t offset, ino_t ino, unsigned int d_type)
+	int namlen, loff_t offset, u64 ino, unsigned int d_type)
 {
 	struct irix_dirent32 __user *dirent;
 	struct irix_dirent32_callback *buf = __buf;
 	unsigned short reclen = ROUND_UP32(NAME_OFFSET32(dirent) + namlen + 1);
 	int err = 0;
+	u32 d_ino;
 
 #ifdef DEBUG_GETDENTS
 	printk("\nirix_filldir32[reclen<%d>namlen<%d>count<%d>]",
@@ -1754,12 +1754,15 @@ static int irix_filldir32(void *__buf, const char *name,
 	buf->error = -EINVAL;	/* only used if we fail.. */
 	if (reclen > buf->count)
 		return -EINVAL;
+	d_ino = ino;
+	if (sizeof(d_ino) < sizeof(ino) && d_ino != ino)
+		return -EOVERFLOW;
 	dirent = buf->previous;
 	if (dirent)
 		err = __put_user(offset, &dirent->d_off);
 	dirent = buf->current_dir;
 	err |= __put_user(dirent, &buf->previous);
-	err |= __put_user(ino, &dirent->d_ino);
+	err |= __put_user(d_ino, &dirent->d_ino);
 	err |= __put_user(reclen, &dirent->d_reclen);
 	err |= copy_to_user((char __user *)dirent->d_name, name, namlen) ? -EFAULT : 0;
 	err |= __put_user(0, &dirent->d_name[namlen]);
@@ -1838,7 +1841,7 @@ struct irix_dirent64_callback {
 #define ROUND_UP64(x) (((x)+sizeof(u64)-1) & ~(sizeof(u64)-1))
 
 static int irix_filldir64(void *__buf, const char *name,
-	int namlen, loff_t offset, ino_t ino, unsigned int d_type)
+	int namlen, loff_t offset, u64 ino, unsigned int d_type)
 {
 	struct irix_dirent64 __user *dirent;
 	struct irix_dirent64_callback * buf = __buf;

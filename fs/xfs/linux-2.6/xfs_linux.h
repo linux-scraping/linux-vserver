@@ -19,7 +19,6 @@
 #define __XFS_LINUX__
 
 #include <linux/types.h>
-#include <linux/config.h>
 
 /*
  * Some types are conditional depending on the target system.
@@ -134,22 +133,23 @@ BUFFER_FNS(PrivateStart, unwritten);
 #define xfs_buf_age_centisecs	xfs_params.xfs_buf_age.val
 #define xfs_inherit_nosymlinks	xfs_params.inherit_nosym.val
 #define xfs_rotorstep		xfs_params.rotorstep.val
+#define xfs_inherit_nodefrag	xfs_params.inherit_nodfrg.val
 
-#ifndef raw_smp_processor_id
-#define raw_smp_processor_id()	smp_processor_id()
-#endif
-#define current_cpu()		raw_smp_processor_id()
+#define current_cpu()		(raw_smp_processor_id())
 #define current_pid()		(current->pid)
 #define current_fsuid(cred)	(current->fsuid)
 #define current_fsgid(cred)	(current->fsgid)
-#define current_fsxid(cred,vp)	(vx_current_fsxid(vn_to_inode(vp)->i_sb))
+#define current_fstag(cred,vp)	(dx_current_fstag(vn_to_inode(vp)->i_sb))
+#define current_test_flags(f)	(current->flags & (f))
+#define current_set_flags_nested(sp, f)		\
+		(*(sp) = current->flags, current->flags |= (f))
+#define current_clear_flags_nested(sp, f)	\
+		(*(sp) = current->flags, current->flags &= ~(f))
+#define current_restore_flags_nested(sp, f)	\
+		(current->flags = ((current->flags & ~(f)) | (*(sp) & (f))))
 
 #define NBPP		PAGE_SIZE
-#define DPPSHFT		(PAGE_SHIFT - 9)
 #define NDPP		(1 << (PAGE_SHIFT - 9))
-#define dtop(DD)	(((DD) + NDPP - 1) >> DPPSHFT)
-#define dtopt(DD)	((DD) >> DPPSHFT)
-#define dpoff(DD)	((DD) & (NDPP-1))
 
 #define NBBY		8		/* number of bits per byte */
 #define	NBPC		PAGE_SIZE	/* Number of bytes per click */
@@ -169,8 +169,6 @@ BUFFER_FNS(PrivateStart, unwritten);
 #define	btoct(x)	((__psunsigned_t)(x)>>BPCSHIFT)
 #define	btoc64(x)	(((__uint64_t)(x)+(NBPC-1))>>BPCSHIFT)
 #define	btoct64(x)	((__uint64_t)(x)>>BPCSHIFT)
-#define	io_btoc(x)	(((__psunsigned_t)(x)+(IO_NBPC-1))>>IO_BPCSHIFT)
-#define	io_btoct(x)	((__psunsigned_t)(x)>>IO_BPCSHIFT)
 
 /* off_t bytes to clicks */
 #define offtoc(x)       (((__uint64_t)(x)+(NBPC-1))>>BPCSHIFT)
@@ -183,30 +181,13 @@ BUFFER_FNS(PrivateStart, unwritten);
 #define	ctob(x)		((__psunsigned_t)(x)<<BPCSHIFT)
 #define btoct(x)        ((__psunsigned_t)(x)>>BPCSHIFT)
 #define	ctob64(x)	((__uint64_t)(x)<<BPCSHIFT)
-#define	io_ctob(x)	((__psunsigned_t)(x)<<IO_BPCSHIFT)
 
 /* bytes to clicks */
 #define btoc(x)         (((__psunsigned_t)(x)+(NBPC-1))>>BPCSHIFT)
 
-#ifndef ENOATTR
 #define ENOATTR		ENODATA		/* Attribute not found */
-#endif
-
-/* Note: EWRONGFS never visible outside the kernel */
-#define	EWRONGFS	EINVAL		/* Mount with wrong filesystem type */
-
-/*
- * XXX EFSCORRUPTED needs a real value in errno.h. asm-i386/errno.h won't
- *     return codes out of its known range in errno.
- * XXX Also note: needs to be < 1000 and fairly unique on Linux (mustn't
- *     conflict with any code we use already or any code a driver may use)
- * XXX Some options (currently we do #2):
- *	1/ New error code ["Filesystem is corrupted", _after_ glibc updated]
- *	2/ 990 ["Unknown error 990"]
- *	3/ EUCLEAN ["Structure needs cleaning"]
- *	4/ Convert EFSCORRUPTED to EIO [just prior to return into userspace]
- */
-#define EFSCORRUPTED    990		/* Filesystem is corrupted */
+#define EWRONGFS	EINVAL		/* Mount with wrong filesystem type */
+#define EFSCORRUPTED	EUCLEAN		/* Filesystem is corrupted */
 
 #define SYNCHRONIZE()	barrier()
 #define __return_address __builtin_return_address(0)
@@ -228,7 +209,6 @@ BUFFER_FNS(PrivateStart, unwritten);
 #define MIN(a,b)	(min(a,b))
 #define MAX(a,b)	(max(a,b))
 #define howmany(x, y)	(((x)+((y)-1))/(y))
-#define roundup(x, y)	((((x)+((y)-1))/(y))*(y))
 
 /*
  * Various platform dependent calls that don't fit anywhere else
@@ -351,6 +331,13 @@ static inline __uint64_t roundup_64(__uint64_t x, __uint32_t y)
 	x += y - 1;
 	do_div(x, y);
 	return(x * y);
+}
+
+static inline __uint64_t howmany_64(__uint64_t x, __uint32_t y)
+{
+	x += y - 1;
+	do_div(x, y);
+	return x;
 }
 
 #endif /* __XFS_LINUX__ */

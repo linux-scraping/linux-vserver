@@ -13,6 +13,7 @@
 
 #include <ctype.h>
 #include "modpost.h"
+#include "../../include/linux/license.h"
 
 /* Are we using CONFIG_MODVERSIONS? */
 int modversions = 0;
@@ -22,6 +23,13 @@ int have_vmlinux = 0;
 static int all_versions = 0;
 /* If we are modposting external module set to 1 */
 static int external_module = 0;
+/* Only warn about unresolved symbols */
+static int warn_unresolved = 0;
+/* How a symbol is exported */
+enum export {
+	export_plain,      export_unused,     export_gpl,
+	export_unused_gpl, export_gpl_future, export_unknown
+};
 
 void fatal(const char *fmt, ...)
 {
@@ -97,6 +105,7 @@ static struct module *new_module(char *modname)
 
 	/* add to list */
 	mod->name = p;
+	mod->gpl_compatible = -1;
 	mod->next = modules;
 	modules = mod;
 
@@ -118,6 +127,7 @@ struct symbol {
 	unsigned int kernel:1;     /* 1 if symbol is from kernel
 				    *  (only for external modules) **/
 	unsigned int preloaded:1;  /* 1 if symbol from Module.symvers */
+	enum export  export;       /* Type of export */
 	char name[0];
 };
 
@@ -153,7 +163,8 @@ static struct symbol *alloc_symbol(const char *name, unsigned int weak,
 }
 
 /* For the hash of exported symbols */
-static struct symbol *new_symbol(const char *name, struct module *module)
+static struct symbol *new_symbol(const char *name, struct module *module,
+				 enum export export)
 {
 	unsigned int hash;
 	struct symbol *new;
@@ -161,6 +172,7 @@ static struct symbol *new_symbol(const char *name, struct module *module)
 	hash = tdb_hash(name) % SYMBOL_HASH_SIZE;
 	new = symbolhash[hash] = alloc_symbol(name, 0, symbolhash[hash]);
 	new->module = module;
+	new->export = export;
 	return new;
 }
 
@@ -179,16 +191,63 @@ static struct symbol *find_symbol(const char *name)
 	return NULL;
 }
 
+static struct {
+	const char *str;
+	enum export export;
+} export_list[] = {
+	{ .str = "EXPORT_SYMBOL",            .export = export_plain },
+	{ .str = "EXPORT_UNUSED_SYMBOL",     .export = export_unused },
+	{ .str = "EXPORT_SYMBOL_GPL",        .export = export_gpl },
+	{ .str = "EXPORT_UNUSED_SYMBOL_GPL", .export = export_unused_gpl },
+	{ .str = "EXPORT_SYMBOL_GPL_FUTURE", .export = export_gpl_future },
+	{ .str = "(unknown)",                .export = export_unknown },
+};
+
+
+static const char *export_str(enum export ex)
+{
+	return export_list[ex].str;
+}
+
+static enum export export_no(const char * s)
+{
+	int i;
+	if (!s)
+		return export_unknown;
+	for (i = 0; export_list[i].export != export_unknown; i++) {
+		if (strcmp(export_list[i].str, s) == 0)
+			return export_list[i].export;
+	}
+	return export_unknown;
+}
+
+static enum export export_from_sec(struct elf_info *elf, Elf_Section sec)
+{
+	if (sec == elf->export_sec)
+		return export_plain;
+	else if (sec == elf->export_unused_sec)
+		return export_unused;
+	else if (sec == elf->export_gpl_sec)
+		return export_gpl;
+	else if (sec == elf->export_unused_gpl_sec)
+		return export_unused_gpl;
+	else if (sec == elf->export_gpl_future_sec)
+		return export_gpl_future;
+	else
+		return export_unknown;
+}
+
 /**
  * Add an exported symbol - it may have already been added without a
  * CRC, in this case just update the CRC
  **/
-static struct symbol *sym_add_exported(const char *name, struct module *mod)
+static struct symbol *sym_add_exported(const char *name, struct module *mod,
+				       enum export export)
 {
 	struct symbol *s = find_symbol(name);
 
 	if (!s) {
-		s = new_symbol(name, mod);
+		s = new_symbol(name, mod, export);
 	} else {
 		if (!s->preloaded) {
 			warn("%s: '%s' exported twice. Previous export "
@@ -200,16 +259,17 @@ static struct symbol *sym_add_exported(const char *name, struct module *mod)
 	s->preloaded = 0;
 	s->vmlinux   = is_vmlinux(mod->name);
 	s->kernel    = 0;
+	s->export    = export;
 	return s;
 }
 
 static void sym_update_crc(const char *name, struct module *mod,
-			   unsigned int crc)
+			   unsigned int crc, enum export export)
 {
 	struct symbol *s = find_symbol(name);
 
 	if (!s)
-		s = new_symbol(name, mod);
+		s = new_symbol(name, mod, export);
 	s->crc = crc;
 	s->crc_valid = 1;
 }
@@ -283,7 +343,7 @@ static void parse_elf(struct elf_info *info, const char *filename)
 	hdr = grab_file(filename, &info->size);
 	if (!hdr) {
 		perror(filename);
-		abort();
+		exit(1);
 	}
 	info->hdr = hdr;
 	if (info->size < sizeof(*hdr))
@@ -309,13 +369,25 @@ static void parse_elf(struct elf_info *info, const char *filename)
 	for (i = 1; i < hdr->e_shnum; i++) {
 		const char *secstrings
 			= (void *)hdr + sechdrs[hdr->e_shstrndx].sh_offset;
+		const char *secname;
 
 		if (sechdrs[i].sh_offset > info->size)
 			goto truncated;
-		if (strcmp(secstrings+sechdrs[i].sh_name, ".modinfo") == 0) {
+		secname = secstrings + sechdrs[i].sh_name;
+		if (strcmp(secname, ".modinfo") == 0) {
 			info->modinfo = (void *)hdr + sechdrs[i].sh_offset;
 			info->modinfo_len = sechdrs[i].sh_size;
-		}
+		} else if (strcmp(secname, "__ksymtab") == 0)
+			info->export_sec = i;
+		else if (strcmp(secname, "__ksymtab_unused") == 0)
+			info->export_unused_sec = i;
+		else if (strcmp(secname, "__ksymtab_gpl") == 0)
+			info->export_gpl_sec = i;
+		else if (strcmp(secname, "__ksymtab_unused_gpl") == 0)
+			info->export_unused_gpl_sec = i;
+		else if (strcmp(secname, "__ksymtab_gpl_future") == 0)
+			info->export_gpl_future_sec = i;
+
 		if (sechdrs[i].sh_type != SHT_SYMTAB)
 			continue;
 
@@ -353,6 +425,7 @@ static void handle_modversions(struct module *mod, struct elf_info *info,
 			       Elf_Sym *sym, const char *symname)
 {
 	unsigned int crc;
+	enum export export = export_from_sec(info, sym->st_shndx);
 
 	switch (sym->st_shndx) {
 	case SHN_COMMON:
@@ -362,7 +435,8 @@ static void handle_modversions(struct module *mod, struct elf_info *info,
 		/* CRC'd symbol */
 		if (memcmp(symname, CRC_PFX, strlen(CRC_PFX)) == 0) {
 			crc = (unsigned int) sym->st_value;
-			sym_update_crc(symname + strlen(CRC_PFX), mod, crc);
+			sym_update_crc(symname + strlen(CRC_PFX), mod, crc,
+					export);
 		}
 		break;
 	case SHN_UNDEF:
@@ -406,7 +480,8 @@ static void handle_modversions(struct module *mod, struct elf_info *info,
 	default:
 		/* All exported symbols */
 		if (memcmp(symname, KSYMTAB_PFX, strlen(KSYMTAB_PFX)) == 0) {
-			sym_add_exported(symname + strlen(KSYMTAB_PFX), mod);
+			sym_add_exported(symname + strlen(KSYMTAB_PFX), mod,
+					export);
 		}
 		if (strcmp(symname, MODULE_SYMBOL_PREFIX "init_module") == 0)
 			mod->has_init = 1;
@@ -437,18 +512,30 @@ static char *next_string(char *string, unsigned long *secsize)
 	return string;
 }
 
-static char *get_modinfo(void *modinfo, unsigned long modinfo_len,
-			 const char *tag)
+static char *get_next_modinfo(void *modinfo, unsigned long modinfo_len,
+			      const char *tag, char *info)
 {
 	char *p;
 	unsigned int taglen = strlen(tag);
 	unsigned long size = modinfo_len;
+
+	if (info) {
+		size -= info - (char *)modinfo;
+		modinfo = next_string(info, &size);
+	}
 
 	for (p = modinfo; p; p = next_string(p, &size)) {
 		if (strncmp(p, tag, taglen) == 0 && p[taglen] == '=')
 			return p + taglen + 1;
 	}
 	return NULL;
+}
+
+static char *get_modinfo(void *modinfo, unsigned long modinfo_len,
+			 const char *tag)
+
+{
+	return get_next_modinfo(modinfo, modinfo_len, tag, NULL);
 }
 
 /**
@@ -495,9 +582,19 @@ static int strrcmp(const char *s, const char *sub)
  *   tosec   = .init.text | .exit.text | .init.data
  *   fromsec = .data
  *   atsym = *driver, *_template, *_sht, *_ops, *_probe, *probe_one
+ *
+ * Pattern 3:
+ *   Some symbols belong to init section but still it is ok to reference
+ *   these from non-init sections as these symbols don't have any memory
+ *   allocated for them and symbol address and value are same. So even
+ *   if init section is freed, its ok to reference those symbols.
+ *   For ex. symbols marking the init section boundaries.
+ *   This pattern is identified by
+ *   refsymname = __init_begin, _sinittext, _einittext
  **/
-static int secref_whitelist(const char *tosec, const char *fromsec,
-			    const char *atsym)
+static int secref_whitelist(const char *modname, const char *tosec,
+			    const char *fromsec, const char *atsym,
+			    const char *refsymname)
 {
 	int f1 = 1, f2 = 1;
 	const char **s;
@@ -508,6 +605,14 @@ static int secref_whitelist(const char *tosec, const char *fromsec,
 		"_ops",
 		"_probe",
 		"_probe_one",
+		"_console",
+		NULL
+	};
+
+	const char *pat3refsym[] = {
+		"__init_begin",
+		"_sinittext",
+		"_einittext",
 		NULL
 	};
 
@@ -533,8 +638,21 @@ static int secref_whitelist(const char *tosec, const char *fromsec,
 	for (s = pat2sym; *s; s++)
 		if (strrcmp(atsym, *s) == 0)
 			f1 = 1;
+	if (f1 && f2)
+		return 1;
 
-	return f1 && f2;
+	/* Whitelist all references from .pci_fixup section if vmlinux */
+	if (is_vmlinux(modname)) {
+		if ((strcmp(fromsec, ".pci_fixup") == 0) &&
+		    (strcmp(tosec, ".init.text") == 0))
+		return 1;
+
+		/* Check for pattern 3 */
+		for (s = pat3refsym; *s; s++)
+			if (strcmp(refsymname, *s) == 0)
+				return 1;
+	}
+	return 0;
 }
 
 /**
@@ -641,7 +759,8 @@ static void warn_sec_mismatch(const char *modname, const char *fromsec,
 
 	/* check whitelist - we may ignore it */
 	if (before &&
-	    secref_whitelist(secname, fromsec, elf->strtab + before->st_name))
+	    secref_whitelist(modname, secname, fromsec,
+			     elf->strtab + before->st_name, refsymname))
 		return;
 
 	if (before && after) {
@@ -815,12 +934,19 @@ static int init_section_ref_ok(const char *name)
 		".toc1",  /* used by ppc64 */
 		".stab",
 		".rodata",
+		".parainstructions",
 		".text.lock",
 		"__bug_table", /* used by powerpc for BUG() */
 		".pci_fixup_header",
 		".pci_fixup_final",
 		".pdr",
 		"__param",
+		"__ex_table",
+		".fixup",
+		".smp_locks",
+		".plt",  /* seen on ARCH=um build on x86_64. Harmless */
+		"__ftr_fixup",		/* powerpc cpu feature fixup */
+		"__fw_ftr_fixup",	/* powerpc firmware feature fixup */
 		NULL
 	};
 	/* Start of section names */
@@ -829,6 +955,7 @@ static int init_section_ref_ok(const char *name)
 		".altinstructions",
 		".eh_frame",
 		".debug",
+		".parainstructions",
 		NULL
 	};
 	/* part of section name */
@@ -846,6 +973,8 @@ static int init_section_ref_ok(const char *name)
 	for (s = namelist3; *s; s++)
 		if (strstr(name, *s) != NULL)
 			return 1;
+	if (strrcmp(name, ".init") == 0)
+		return 1;
 	return 0;
 }
 
@@ -891,7 +1020,12 @@ static int exit_section_ref_ok(const char *name)
 		"__bug_table", /* used by powerpc for BUG() */
 		".exitcall.exit",
 		".eh_frame",
+		".parainstructions",
 		".stab",
+		"__ex_table",
+		".fixup",
+		".smp_locks",
+		".plt",  /* seen on ARCH=um build on x86_64. Harmless */
 		NULL
 	};
 	/* Start of section names */
@@ -921,6 +1055,7 @@ static void read_symbols(char *modname)
 {
 	const char *symname;
 	char *version;
+	char *license;
 	struct module *mod;
 	struct elf_info info = { };
 	Elf_Sym *sym;
@@ -934,6 +1069,18 @@ static void read_symbols(char *modname)
 	if (is_vmlinux(modname)) {
 		have_vmlinux = 1;
 		mod->skip = 1;
+	}
+
+	license = get_modinfo(info.modinfo, info.modinfo_len, "license");
+	while (license) {
+		if (license_is_gpl_compatible(license))
+			mod->gpl_compatible = 1;
+		else {
+			mod->gpl_compatible = 0;
+			break;
+		}
+		license = get_next_modinfo(info.modinfo, info.modinfo_len,
+					   "license", license);
 	}
 
 	for (sym = info.symtab_start; sym < info.symtab_stop; sym++) {
@@ -992,6 +1139,67 @@ void buf_write(struct buffer *buf, const char *s, int len)
 	buf->pos += len;
 }
 
+static void check_for_gpl_usage(enum export exp, const char *m, const char *s)
+{
+	const char *e = is_vmlinux(m) ?"":".ko";
+
+	switch (exp) {
+	case export_gpl:
+		fatal("modpost: GPL-incompatible module %s%s "
+		      "uses GPL-only symbol '%s'\n", m, e, s);
+		break;
+	case export_unused_gpl:
+		fatal("modpost: GPL-incompatible module %s%s "
+		      "uses GPL-only symbol marked UNUSED '%s'\n", m, e, s);
+		break;
+	case export_gpl_future:
+		warn("modpost: GPL-incompatible module %s%s "
+		      "uses future GPL-only symbol '%s'\n", m, e, s);
+		break;
+	case export_plain:
+	case export_unused:
+	case export_unknown:
+		/* ignore */
+		break;
+	}
+}
+
+static void check_for_unused(enum export exp, const char* m, const char* s)
+{
+	const char *e = is_vmlinux(m) ?"":".ko";
+
+	switch (exp) {
+	case export_unused:
+	case export_unused_gpl:
+		warn("modpost: module %s%s "
+		      "uses symbol '%s' marked UNUSED\n", m, e, s);
+		break;
+	default:
+		/* ignore */
+		break;
+	}
+}
+
+static void check_exports(struct module *mod)
+{
+	struct symbol *s, *exp;
+
+	for (s = mod->unres; s; s = s->next) {
+		const char *basename;
+		exp = find_symbol(s->name);
+		if (!exp || exp->module == mod)
+			continue;
+		basename = strrchr(mod->name, '/');
+		if (basename)
+			basename++;
+		else
+			basename = mod->name;
+		if (!mod->gpl_compatible)
+			check_for_gpl_usage(exp->export, basename, exp->name);
+		check_for_unused(exp->export, basename, exp->name);
+        }
+}
+
 /**
  * Header for the generated file
  **/
@@ -1018,16 +1226,19 @@ static void add_header(struct buffer *b, struct module *mod)
 /**
  * Record CRCs for unresolved symbols
  **/
-static void add_versions(struct buffer *b, struct module *mod)
+static int add_versions(struct buffer *b, struct module *mod)
 {
 	struct symbol *s, *exp;
+	int err = 0;
 
 	for (s = mod->unres; s; s = s->next) {
 		exp = find_symbol(s->name);
 		if (!exp || exp->module == mod) {
-			if (have_vmlinux && !s->weak)
+			if (have_vmlinux && !s->weak) {
 				warn("\"%s\" [%s.ko] undefined!\n",
 				     s->name, mod->name);
+				err = warn_unresolved ? 0 : 1;
+			}
 			continue;
 		}
 		s->module = exp->module;
@@ -1036,7 +1247,7 @@ static void add_versions(struct buffer *b, struct module *mod)
 	}
 
 	if (!modversions)
-		return;
+		return err;
 
 	buf_printf(b, "\n");
 	buf_printf(b, "static const struct modversion_info ____versions[]\n");
@@ -1056,6 +1267,8 @@ static void add_versions(struct buffer *b, struct module *mod)
 	}
 
 	buf_printf(b, "};\n");
+
+	return err;
 }
 
 static void add_depends(struct buffer *b, struct module *mod,
@@ -1142,6 +1355,9 @@ static void write_if_changed(struct buffer *b, const char *fname)
 	fclose(file);
 }
 
+/* parse Module.symvers file. line format:
+ * 0x12345678<tab>symbol<tab>module[[<tab>export]<tab>something]
+ **/
 static void read_dump(const char *fname, unsigned int kernel)
 {
 	unsigned long size, pos = 0;
@@ -1153,7 +1369,7 @@ static void read_dump(const char *fname, unsigned int kernel)
 		return;
 
 	while ((line = get_next_line(&pos, file, size))) {
-		char *symname, *modname, *d;
+		char *symname, *modname, *d, *export, *end;
 		unsigned int crc;
 		struct module *mod;
 		struct symbol *s;
@@ -1164,8 +1380,10 @@ static void read_dump(const char *fname, unsigned int kernel)
 		if (!(modname = strchr(symname, '\t')))
 			goto fail;
 		*modname++ = '\0';
-		if (strchr(modname, '\t'))
-			goto fail;
+		if ((export = strchr(modname, '\t')) != NULL)
+			*export++ = '\0';
+		if (export && ((end = strchr(export, '\t')) != NULL))
+			*end = '\0';
 		crc = strtoul(line, &d, 16);
 		if (*symname == '\0' || *modname == '\0' || *d != '\0')
 			goto fail;
@@ -1177,10 +1395,10 @@ static void read_dump(const char *fname, unsigned int kernel)
 			mod = new_module(NOFAIL(strdup(modname)));
 			mod->skip = 1;
 		}
-		s = sym_add_exported(symname, mod);
+		s = sym_add_exported(symname, mod, export_no(export));
 		s->kernel    = kernel;
 		s->preloaded = 1;
-		sym_update_crc(symname, mod, crc);
+		sym_update_crc(symname, mod, crc, export_no(export));
 	}
 	return;
 fail:
@@ -1210,9 +1428,10 @@ static void write_dump(const char *fname)
 		symbol = symbolhash[n];
 		while (symbol) {
 			if (dump_sym(symbol))
-				buf_printf(&buf, "0x%08x\t%s\t%s\n",
+				buf_printf(&buf, "0x%08x\t%s\t%s\t%s\n",
 					symbol->crc, symbol->name,
-					symbol->module->name);
+					symbol->module->name,
+					export_str(symbol->export));
 			symbol = symbol->next;
 		}
 	}
@@ -1227,8 +1446,9 @@ int main(int argc, char **argv)
 	char *kernel_read = NULL, *module_read = NULL;
 	char *dump_write = NULL;
 	int opt;
+	int err;
 
-	while ((opt = getopt(argc, argv, "i:I:mo:a")) != -1) {
+	while ((opt = getopt(argc, argv, "i:I:mo:aw")) != -1) {
 		switch(opt) {
 			case 'i':
 				kernel_read = optarg;
@@ -1245,6 +1465,9 @@ int main(int argc, char **argv)
 				break;
 			case 'a':
 				all_versions = 1;
+				break;
+			case 'w':
+				warn_unresolved = 1;
 				break;
 			default:
 				exit(1);
@@ -1263,11 +1486,19 @@ int main(int argc, char **argv)
 	for (mod = modules; mod; mod = mod->next) {
 		if (mod->skip)
 			continue;
+		check_exports(mod);
+	}
+
+	err = 0;
+
+	for (mod = modules; mod; mod = mod->next) {
+		if (mod->skip)
+			continue;
 
 		buf.pos = 0;
 
 		add_header(&buf, mod);
-		add_versions(&buf, mod);
+		err |= add_versions(&buf, mod);
 		add_depends(&buf, mod, modules);
 		add_moddevtable(&buf, mod);
 		add_srcversion(&buf, mod);
@@ -1279,5 +1510,5 @@ int main(int argc, char **argv)
 	if (dump_write)
 		write_dump(dump_write);
 
-	return 0;
+	return err;
 }

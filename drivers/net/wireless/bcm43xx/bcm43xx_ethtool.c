@@ -32,7 +32,7 @@
 #include <linux/netdevice.h>
 #include <linux/pci.h>
 #include <linux/string.h>
-#include <linux/version.h>
+#include <linux/utsrelease.h>
 
 
 static void bcm43xx_get_drvinfo(struct net_device *dev, struct ethtool_drvinfo *info)
@@ -44,7 +44,7 @@ static void bcm43xx_get_drvinfo(struct net_device *dev, struct ethtool_drvinfo *
 	strncpy(info->bus_info, pci_name(bcm->pci_dev), ETHTOOL_BUSINFO_LEN);
 }
 
-struct ethtool_ops bcm43xx_ethtool_ops = {
+const struct ethtool_ops bcm43xx_ethtool_ops = {
 	.get_drvinfo = bcm43xx_get_drvinfo,
 	.get_link = ethtool_op_get_link,
 };

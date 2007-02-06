@@ -19,7 +19,6 @@
 #include <linux/moduleparam.h>
 #include <linux/init.h>
 #include <linux/input.h>
-#include <linux/config.h>
 #include <linux/smp_lock.h>
 #include <linux/random.h>
 #include <linux/major.h>
@@ -123,7 +122,9 @@ static void mousedev_touchpad_event(struct input_dev *dev, struct mousedev *mous
 
 	if (mousedev->touch) {
 		size = dev->absmax[ABS_X] - dev->absmin[ABS_X];
-		if (size == 0) size = 256 * 2;
+		if (size == 0)
+			size = 256 * 2;
+
 		switch (code) {
 			case ABS_X:
 				fx(0) = value;
@@ -155,18 +156,24 @@ static void mousedev_abs_event(struct input_dev *dev, struct mousedev *mousedev,
 	switch (code) {
 		case ABS_X:
 			size = dev->absmax[ABS_X] - dev->absmin[ABS_X];
-			if (size == 0) size = xres ? : 1;
-			if (value > dev->absmax[ABS_X]) value = dev->absmax[ABS_X];
-			if (value < dev->absmin[ABS_X]) value = dev->absmin[ABS_X];
+			if (size == 0)
+				size = xres ? : 1;
+			if (value > dev->absmax[ABS_X])
+				value = dev->absmax[ABS_X];
+			if (value < dev->absmin[ABS_X])
+				value = dev->absmin[ABS_X];
 			mousedev->packet.x = ((value - dev->absmin[ABS_X]) * xres) / size;
 			mousedev->packet.abs_event = 1;
 			break;
 
 		case ABS_Y:
 			size = dev->absmax[ABS_Y] - dev->absmin[ABS_Y];
-			if (size == 0) size = yres ? : 1;
-			if (value > dev->absmax[ABS_Y]) value = dev->absmax[ABS_Y];
-			if (value < dev->absmin[ABS_Y]) value = dev->absmin[ABS_Y];
+			if (size == 0)
+				size = yres ? : 1;
+			if (value > dev->absmax[ABS_Y])
+				value = dev->absmax[ABS_Y];
+			if (value < dev->absmin[ABS_Y])
+				value = dev->absmin[ABS_Y];
 			mousedev->packet.y = yres - ((value - dev->absmin[ABS_Y]) * yres) / size;
 			mousedev->packet.abs_event = 1;
 			break;
@@ -189,12 +196,12 @@ static void mousedev_key_event(struct mousedev *mousedev, unsigned int code, int
 	switch (code) {
 		case BTN_TOUCH:
 		case BTN_0:
-		case BTN_FORWARD:
 		case BTN_LEFT:		index = 0; break;
 		case BTN_STYLUS:
 		case BTN_1:
 		case BTN_RIGHT:		index = 1; break;
 		case BTN_2:
+		case BTN_FORWARD:
 		case BTN_STYLUS2:
 		case BTN_MIDDLE:	index = 2; break;
 		case BTN_3:
@@ -202,7 +209,7 @@ static void mousedev_key_event(struct mousedev *mousedev, unsigned int code, int
 		case BTN_SIDE:		index = 3; break;
 		case BTN_4:
 		case BTN_EXTRA:		index = 4; break;
-		default: 		return;
+		default:		return;
 	}
 
 	if (value) {
@@ -285,10 +292,9 @@ static void mousedev_touchpad_touch(struct mousedev *mousedev, int value)
 		mousedev->touch = mousedev->pkt_count = 0;
 		mousedev->frac_dx = 0;
 		mousedev->frac_dy = 0;
-	}
-	else
-		if (!mousedev->touch)
-			mousedev->touch = jiffies;
+
+	} else if (!mousedev->touch)
+		mousedev->touch = jiffies;
 }
 
 static void mousedev_event(struct input_handle *handle, unsigned int type, unsigned int code, int value)
@@ -327,7 +333,7 @@ static void mousedev_event(struct input_handle *handle, unsigned int type, unsig
 					mousedev->pkt_count++;
 					/* Input system eats duplicate events, but we need all of them
 					 * to do correct averaging so apply present one forward
-			 		 */
+					 */
 					fx(0) = fx(1);
 					fy(0) = fy(1);
 				}
@@ -346,7 +352,9 @@ static int mousedev_fasync(int fd, struct file *file, int on)
 {
 	int retval;
 	struct mousedev_list *list = file->private_data;
+
 	retval = fasync_helper(fd, file, on, &list->fasync);
+
 	return retval < 0 ? retval : 0;
 }
 
@@ -507,14 +515,16 @@ static ssize_t mousedev_write(struct file * file, const char __user * buffer, si
 				list->imexseq = 0;
 				list->mode = MOUSEDEV_EMUL_EXPS;
 			}
-		} else list->imexseq = 0;
+		} else
+			list->imexseq = 0;
 
 		if (c == mousedev_imps_seq[list->impsseq]) {
 			if (++list->impsseq == MOUSEDEV_SEQ_LEN) {
 				list->impsseq = 0;
 				list->mode = MOUSEDEV_EMUL_IMPS;
 			}
-		} else list->impsseq = 0;
+		} else
+			list->impsseq = 0;
 
 		list->ps2[0] = 0xfa;
 
@@ -598,12 +608,13 @@ static ssize_t mousedev_read(struct file * file, char __user * buffer, size_t co
 static unsigned int mousedev_poll(struct file *file, poll_table *wait)
 {
 	struct mousedev_list *list = file->private_data;
+
 	poll_wait(file, &list->mousedev->wait, wait);
 	return ((list->ready || list->buffer) ? (POLLIN | POLLRDNORM) : 0) |
 		(list->mousedev->exist ? 0 : (POLLHUP | POLLERR));
 }
 
-static struct file_operations mousedev_fops = {
+static const struct file_operations mousedev_fops = {
 	.owner =	THIS_MODULE,
 	.read =		mousedev_read,
 	.write =	mousedev_write,
@@ -613,7 +624,8 @@ static struct file_operations mousedev_fops = {
 	.fasync =	mousedev_fasync,
 };
 
-static struct input_handle *mousedev_connect(struct input_handler *handler, struct input_dev *dev, struct input_device_id *id)
+static struct input_handle *mousedev_connect(struct input_handler *handler, struct input_dev *dev,
+					     const struct input_device_id *id)
 {
 	struct mousedev *mousedev;
 	struct class_device *cdev;
@@ -677,7 +689,7 @@ static void mousedev_disconnect(struct input_handle *handle)
 	}
 }
 
-static struct input_device_id mousedev_ids[] = {
+static const struct input_device_id mousedev_ids[] = {
 	{
 		.flags = INPUT_DEVICE_ID_MATCH_EVBIT | INPUT_DEVICE_ID_MATCH_KEYBIT | INPUT_DEVICE_ID_MATCH_RELBIT,
 		.evbit = { BIT(EV_KEY) | BIT(EV_REL) },
@@ -726,7 +738,12 @@ static int psaux_registered;
 
 static int __init mousedev_init(void)
 {
-	input_register_handler(&mousedev_handler);
+	struct class_device *cdev;
+	int error;
+
+	error = input_register_handler(&mousedev_handler);
+	if (error)
+		return error;
 
 	memset(&mousedev_mix, 0, sizeof(struct mousedev));
 	INIT_LIST_HEAD(&mousedev_mix.list);
@@ -735,12 +752,20 @@ static int __init mousedev_init(void)
 	mousedev_mix.exist = 1;
 	mousedev_mix.minor = MOUSEDEV_MIX;
 
-	class_device_create(&input_class, NULL,
+	cdev = class_device_create(&input_class, NULL,
 			MKDEV(INPUT_MAJOR, MOUSEDEV_MINOR_BASE + MOUSEDEV_MIX), NULL, "mice");
+	if (IS_ERR(cdev)) {
+		input_unregister_handler(&mousedev_handler);
+		return PTR_ERR(cdev);
+	}
 
 #ifdef CONFIG_INPUT_MOUSEDEV_PSAUX
-	if (!(psaux_registered = !misc_register(&psaux_mouse)))
-		printk(KERN_WARNING "mice: could not misc_register the device\n");
+	error = misc_register(&psaux_mouse);
+	if (error)
+		printk(KERN_WARNING "mice: could not register psaux device, "
+			"error: %d\n", error);
+	else
+		psaux_registered = 1;
 #endif
 
 	printk(KERN_INFO "mice: PS/2 mouse device common for all mice\n");

@@ -11,7 +11,6 @@
 #ifndef _XTENSA_SYSTEM_H
 #define _XTENSA_SYSTEM_H
 
-#include <linux/config.h>
 #include <linux/stringify.h>
 
 #include <asm/processor.h>
@@ -100,7 +99,6 @@ static inline void disable_coprocessor(int i)
 #endif
 
 #define set_mb(var, value)	do { var = value; mb(); } while (0)
-#define set_wmb(var, value)	do { var = value; wmb(); } while (0)
 
 #if !defined (__ASSEMBLY__)
 
@@ -215,7 +213,7 @@ static inline void spill_registers(void)
 	unsigned int a0, ps;
 
 	__asm__ __volatile__ (
-		"movi	a14," __stringify (PS_EXCM_MASK) " | 1\n\t"
+		"movi	a14," __stringify (PS_EXCM_BIT) " | 1\n\t"
 		"mov	a12, a0\n\t"
 		"rsr	a13," __stringify(SAR) "\n\t"
 		"xsr	a14," __stringify(PS) "\n\t"

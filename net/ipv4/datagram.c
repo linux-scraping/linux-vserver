@@ -11,7 +11,6 @@
  * 	2 of the License, or (at your option) any later version.
  */
 
-#include <linux/config.h>
 #include <linux/types.h>
 #include <linux/module.h>
 #include <linux/ip.h>
@@ -26,7 +25,7 @@ int ip4_datagram_connect(struct sock *sk, struct sockaddr *uaddr, int addr_len)
 	struct inet_sock *inet = inet_sk(sk);
 	struct sockaddr_in *usin = (struct sockaddr_in *) uaddr;
 	struct rtable *rt;
-	u32 saddr;
+	__be32 saddr;
 	int oif;
 	int err;
 

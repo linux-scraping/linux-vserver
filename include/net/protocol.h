@@ -24,7 +24,6 @@
 #ifndef _PROTOCOL_H
 #define _PROTOCOL_H
 
-#include <linux/config.h>
 #include <linux/in6.h>
 #if defined(CONFIG_IPV6) || defined (CONFIG_IPV6_MODULE)
 #include <linux/ipv6.h>
@@ -37,6 +36,9 @@
 struct net_protocol {
 	int			(*handler)(struct sk_buff *skb);
 	void			(*err_handler)(struct sk_buff *skb, u32 info);
+	int			(*gso_send_check)(struct sk_buff *skb);
+	struct sk_buff	       *(*gso_segment)(struct sk_buff *skb,
+					       int features);
 	int			no_policy;
 };
 
@@ -48,12 +50,19 @@ struct inet6_protocol
 	void	(*err_handler)(struct sk_buff *skb,
 			       struct inet6_skb_parm *opt,
 			       int type, int code, int offset,
-			       __u32 info);
+			       __be32 info);
+
+	int	(*gso_send_check)(struct sk_buff *skb);
+	struct sk_buff *(*gso_segment)(struct sk_buff *skb,
+				       int features);
+
 	unsigned int	flags;	/* INET6_PROTO_xxx */
 };
 
 #define INET6_PROTO_NOPOLICY	0x1
 #define INET6_PROTO_FINAL	0x2
+/* This should be set for any extension header which is compatible with GSO. */
+#define INET6_PROTO_GSO_EXTHDR	0x4
 #endif
 
 /* This is used to register socket interfaces for IP protocols.  */
@@ -62,7 +71,7 @@ struct inet_protosw {
 
         /* These two fields form the lookup key.  */
 	unsigned short	 type;	   /* This is the 2nd argument to socket(2). */
-	int		 protocol; /* This is the L4 protocol number.  */
+	unsigned short	 protocol; /* This is the L4 protocol number.  */
 
 	struct proto	 *prot;
 	const struct proto_ops *ops;

@@ -11,12 +11,13 @@
  */
 
 #include <linux/fs.h>
-#include <linux/namespace.h>
+// #include <linux/mnt_namespace.h>
 #include <linux/namei.h>
 #include <linux/statfs.h>
 #include <linux/compat.h>
 #include <linux/vserver/switch.h>
 #include <linux/vs_context.h>
+#include <linux/vs_tag.h>
 #include <linux/vs_dlimit.h>
 #include <linux/vserver/dlimit_cmd.h>
 
@@ -28,12 +29,12 @@
 	* allocate an initialized dl_info struct
 	* doesn't make it visible (hash)			*/
 
-static struct dl_info *__alloc_dl_info(struct super_block *sb, xid_t xid)
+static struct dl_info *__alloc_dl_info(struct super_block *sb, tag_t tag)
 {
 	struct dl_info *new = NULL;
 
 	vxdprintk(VXD_CBIT(dlim, 5),
-		"alloc_dl_info(%p,%d)*", sb, xid);
+		"alloc_dl_info(%p,%d)*", sb, tag);
 
 	/* would this benefit from a slab cache? */
 	new = kmalloc(sizeof(struct dl_info), GFP_KERNEL);
@@ -41,7 +42,7 @@ static struct dl_info *__alloc_dl_info(struct super_block *sb, xid_t xid)
 		return 0;
 
 	memset (new, 0, sizeof(struct dl_info));
-	new->dl_xid = xid;
+	new->dl_tag = tag;
 	new->dl_sb = sb;
 	INIT_RCU_HEAD(&new->dl_rcu);
 	INIT_HLIST_NODE(&new->dl_hlist);
@@ -52,7 +53,7 @@ static struct dl_info *__alloc_dl_info(struct super_block *sb, xid_t xid)
 	/* rest of init goes here */
 
 	vxdprintk(VXD_CBIT(dlim, 4),
-		"alloc_dl_info(%p,%d) = %p", sb, xid, new);
+		"alloc_dl_info(%p,%d) = %p", sb, tag, new);
 	return new;
 }
 
@@ -66,7 +67,7 @@ static void __dealloc_dl_info(struct dl_info *dli)
 		"dealloc_dl_info(%p)", dli);
 
 	dli->dl_hlist.next = LIST_POISON1;
-	dli->dl_xid = -1;
+	dli->dl_tag = -1;
 	dli->dl_sb = 0;
 
 	BUG_ON(atomic_read(&dli->dl_usecnt));
@@ -85,9 +86,9 @@ struct hlist_head dl_info_hash[DL_HASH_SIZE];
 static spinlock_t dl_info_hash_lock = SPIN_LOCK_UNLOCKED;
 
 
-static inline unsigned int __hashval(struct super_block *sb, xid_t xid)
+static inline unsigned int __hashval(struct super_block *sb, tag_t tag)
 {
-	return ((xid ^ (unsigned long)sb) % DL_HASH_SIZE);
+	return ((tag ^ (unsigned long)sb) % DL_HASH_SIZE);
 }
 
 
@@ -102,9 +103,9 @@ static inline void __hash_dl_info(struct dl_info *dli)
 	struct hlist_head *head;
 
 	vxdprintk(VXD_CBIT(dlim, 6),
-		"__hash_dl_info: %p[#%d]", dli, dli->dl_xid);
+		"__hash_dl_info: %p[#%d]", dli, dli->dl_tag);
 	get_dl_info(dli);
-	head = &dl_info_hash[__hashval(dli->dl_sb, dli->dl_xid)];
+	head = &dl_info_hash[__hashval(dli->dl_sb, dli->dl_tag)];
 	hlist_add_head_rcu(&dli->dl_hlist, head);
 }
 
@@ -116,7 +117,7 @@ static inline void __hash_dl_info(struct dl_info *dli)
 static inline void __unhash_dl_info(struct dl_info *dli)
 {
 	vxdprintk(VXD_CBIT(dlim, 6),
-		"__unhash_dl_info: %p[#%d]", dli, dli->dl_xid);
+		"__unhash_dl_info: %p[#%d]", dli, dli->dl_tag);
 	hlist_del_rcu(&dli->dl_hlist);
 	put_dl_info(dli);
 }
@@ -127,15 +128,15 @@ static inline void __unhash_dl_info(struct dl_info *dli)
 	* requires the rcu_read_lock()
 	* doesn't increment the dl_refcnt			*/
 
-static inline struct dl_info *__lookup_dl_info(struct super_block *sb, xid_t xid)
+static inline struct dl_info *__lookup_dl_info(struct super_block *sb, tag_t tag)
 {
-	struct hlist_head *head = &dl_info_hash[__hashval(sb, xid)];
+	struct hlist_head *head = &dl_info_hash[__hashval(sb, tag)];
 	struct hlist_node *pos;
 	struct dl_info *dli;
 
 	hlist_for_each_entry_rcu(dli, pos, head, dl_hlist) {
 
-		if (dli->dl_xid == xid && dli->dl_sb == sb) {
+		if (dli->dl_tag == tag && dli->dl_sb == sb) {
 			return dli;
 		}
 	}
@@ -143,14 +144,14 @@ static inline struct dl_info *__lookup_dl_info(struct super_block *sb, xid_t xid
 }
 
 
-struct dl_info *locate_dl_info(struct super_block *sb, xid_t xid)
+struct dl_info *locate_dl_info(struct super_block *sb, tag_t tag)
 {
 	struct dl_info *dli;
 
 	rcu_read_lock();
-	dli = get_dl_info(__lookup_dl_info(sb, xid));
+	dli = get_dl_info(__lookup_dl_info(sb, tag));
 	vxdprintk(VXD_CBIT(dlim, 7),
-		"locate_dl_info(%p,#%d) = %p", sb, xid, dli);
+		"locate_dl_info(%p,#%d) = %p", sb, tag, dli);
 	rcu_read_unlock();
 	return dli;
 }
@@ -229,8 +230,6 @@ int vc_add_dlimit(uint32_t id, void __user *data)
 {
 	struct vcmd_ctx_dlimit_base_v0 vc_data;
 
-	if (!vx_check(0, VX_ADMIN))
-		return -ENOSYS;
 	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
@@ -241,8 +240,6 @@ int vc_rem_dlimit(uint32_t id, void __user *data)
 {
 	struct vcmd_ctx_dlimit_base_v0 vc_data;
 
-	if (!vx_check(0, VX_ADMIN))
-		return -ENOSYS;
 	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
@@ -255,8 +252,6 @@ int vc_add_dlimit_x32(uint32_t id, void __user *data)
 {
 	struct vcmd_ctx_dlimit_base_v0_x32 vc_data;
 
-	if (!vx_check(0, VX_ADMIN))
-		return -ENOSYS;
 	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
@@ -268,8 +263,6 @@ int vc_rem_dlimit_x32(uint32_t id, void __user *data)
 {
 	struct vcmd_ctx_dlimit_base_v0_x32 vc_data;
 
-	if (!vx_check(0, VX_ADMIN))
-		return -ENOSYS;
 	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
@@ -299,11 +292,11 @@ int do_set_dlimit(uint32_t id, const char __user *name,
 			goto out_release;
 		if (!(sb = nd.dentry->d_inode->i_sb))
 			goto out_release;
-		if ((reserved != (uint32_t)CDLIM_KEEP &&
+		if ((reserved != CDLIM_KEEP &&
 			reserved > 100) ||
-			(inodes_used != (uint32_t)CDLIM_KEEP &&
+			(inodes_used != CDLIM_KEEP &&
 			inodes_used > inodes_total) ||
-			(space_used != (uint32_t)CDLIM_KEEP &&
+			(space_used != CDLIM_KEEP &&
 			space_used > space_total))
 			goto out_release;
 
@@ -314,21 +307,21 @@ int do_set_dlimit(uint32_t id, const char __user *name,
 
 		spin_lock(&dli->dl_lock);
 
-		if (inodes_used != (uint32_t)CDLIM_KEEP)
+		if (inodes_used != CDLIM_KEEP)
 			dli->dl_inodes_used = inodes_used;
-		if (inodes_total != (uint32_t)CDLIM_KEEP)
+		if (inodes_total != CDLIM_KEEP)
 			dli->dl_inodes_total = inodes_total;
-		if (space_used != (uint32_t)CDLIM_KEEP) {
+		if (space_used != CDLIM_KEEP) {
 			dli->dl_space_used = space_used;
 			dli->dl_space_used <<= 10;
 		}
-		if (space_total == (uint32_t)CDLIM_INFINITY)
-			dli->dl_space_total = (uint64_t)CDLIM_INFINITY;
-		else if (space_total != (uint32_t)CDLIM_KEEP) {
+		if (space_total == CDLIM_INFINITY)
+			dli->dl_space_total = DLIM_INFINITY;
+		else if (space_total != CDLIM_KEEP) {
 			dli->dl_space_total = space_total;
 			dli->dl_space_total <<= 10;
 		}
-		if (reserved != (uint32_t)CDLIM_KEEP)
+		if (reserved != CDLIM_KEEP)
 			dli->dl_nrlmult = (1 << 10) * (100 - reserved) / 100;
 
 		spin_unlock(&dli->dl_lock);
@@ -346,8 +339,6 @@ int vc_set_dlimit(uint32_t id, void __user *data)
 {
 	struct vcmd_ctx_dlimit_v0 vc_data;
 
-	if (!vx_check(0, VX_ADMIN))
-		return -ENOSYS;
 	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
@@ -363,8 +354,6 @@ int vc_set_dlimit_x32(uint32_t id, void __user *data)
 {
 	struct vcmd_ctx_dlimit_v0_x32 vc_data;
 
-	if (!vx_check(0, VX_ADMIN))
-		return -ENOSYS;
 	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
@@ -406,8 +395,8 @@ int do_get_dlimit(uint32_t id, const char __user *name,
 		*inodes_used = dli->dl_inodes_used;
 		*inodes_total = dli->dl_inodes_total;
 		*space_used = dli->dl_space_used >> 10;
-		if (dli->dl_space_total == (uint64_t)CDLIM_INFINITY)
-			*space_total = (uint32_t)CDLIM_INFINITY;
+		if (dli->dl_space_total == DLIM_INFINITY)
+			*space_total = CDLIM_INFINITY;
 		else
 			*space_total = dli->dl_space_total >> 10;
 
@@ -430,8 +419,6 @@ int vc_get_dlimit(uint32_t id, void __user *data)
 	struct vcmd_ctx_dlimit_v0 vc_data;
 	int ret;
 
-	if (!vx_check(0, VX_ADMIN))
-		return -ENOSYS;
 	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
@@ -454,8 +441,6 @@ int vc_get_dlimit_x32(uint32_t id, void __user *data)
 	struct vcmd_ctx_dlimit_v0_x32 vc_data;
 	int ret;
 
-	if (!vx_check(0, VX_ADMIN))
-		return -ENOSYS;
 	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
@@ -480,23 +465,17 @@ void vx_vsi_statfs(struct super_block *sb, struct kstatfs *buf)
 	__u64 blimit, bfree, bavail;
 	__u32 ifree;
 
-	dli = locate_dl_info(sb, vx_current_xid());
+	dli = locate_dl_info(sb, dx_current_tag());
 	if (!dli)
 		return;
 
 	spin_lock(&dli->dl_lock);
-	if (dli->dl_inodes_total == (uint32_t)CDLIM_INFINITY)
+	if (dli->dl_inodes_total == (unsigned long)DLIM_INFINITY)
 		goto no_ilim;
 
 	/* reduce max inodes available to limit */
 	if (buf->f_files > dli->dl_inodes_total)
 		buf->f_files = dli->dl_inodes_total;
-
-	/* inode hack for reiserfs */
-	if ((buf->f_files == 0) && (dli->dl_inodes_total > 0)) {
-		buf->f_files = dli->dl_inodes_total;
-		buf->f_ffree = dli->dl_inodes_total;
-	}
 
 	ifree = dli->dl_inodes_total - dli->dl_inodes_used;
 	/* reduce free inodes to min */
@@ -504,7 +483,7 @@ void vx_vsi_statfs(struct super_block *sb, struct kstatfs *buf)
 		buf->f_ffree = ifree;
 
 no_ilim:
-	if (dli->dl_space_total == (uint64_t)CDLIM_INFINITY)
+	if (dli->dl_space_total == DLIM_INFINITY)
 		goto no_blim;
 
 	blimit = dli->dl_space_total >> sb->s_blocksize_bits;

@@ -1,0 +1,154 @@
+
+debug_cvirt:
+
+ 2   4	"vx_map_tgid: %p/%llx: %d -> %d"
+	"vx_rmap_tgid: %p/%llx: %d -> %d"
+
+debug_dlim:
+
+ 0   1	"ALLOC (%p,#%d)%c inode (%d)"
+	"FREE  (%p,#%d)%c inode"
+ 1   2	"ALLOC (%p,#%d)%c %lld bytes (%d)"
+	"FREE  (%p,#%d)%c %lld bytes"
+ 2   4	"ADJUST: %lld,%lld on %ld,%ld [mult=%d]"
+ 3   8	"ext3_has_free_blocks(%p): %lu<%lu+1, %c, %u!=%u r=%d"
+	"ext3_has_free_blocks(%p): free=%lu, root=%lu"
+	"rcu_free_dl_info(%p)"
+ 4  10	"alloc_dl_info(%p,%d) = %p"
+	"dealloc_dl_info(%p)"
+	"get_dl_info(%p[#%d.%d])"
+	"put_dl_info(%p[#%d.%d])"
+ 5  20	"alloc_dl_info(%p,%d)*"
+ 6  40	"__hash_dl_info: %p[#%d]"
+	"__unhash_dl_info: %p[#%d]"
+ 7  80	"locate_dl_info(%p,#%d) = %p"
+
+debug_misc:
+
+ 0   1	"destroy_dqhash: %p [#0x%08x] c=%d"
+	"new_dqhash: %p [#0x%08x]"
+	"vroot[%d]_clr_dev: dev=%p[%lu,%d:%d]"
+	"vroot[%d]_get_real_bdev: dev=%p[%lu,%d:%d]"
+	"vroot[%d]_set_dev: dev=%p[%lu,%d:%d]"
+	"vroot_get_real_bdev not set"
+ 1   2	"cow_break_link(»%s«)"
+	"temp copy »%s«"
+ 2   4	"dentry_open(new): %p"
+	"dentry_open(old): %p"
+	"lookup_create(new): %p"
+	"old path »%s«"
+	"path_lookup(old): %d"
+	"vfs_create(new): %d"
+	"vfs_rename: %d"
+	"vfs_sendfile: %d"
+ 3   8	"fput(new_file=%p[#%d])"
+	"fput(old_file=%p[#%d])"
+ 4  10	"vx_info_kill(%p[#%d],%d,%d) = %d"
+	"vx_info_kill(%p[#%d],%d,%d)*"
+ 5  20	"vs_reboot(%p[#%d],%d)"
+ 6  40	"dropping task %p[#%u,%u] for %p[#%u,%u]"
+
+debug_net:
+
+ 2   4	"nx_addr_conflict(%p,%p) %d.%d,%d.%d"
+ 3   8	"inet_bind(%p) %d.%d.%d.%d, %d.%d.%d.%d, %d.%d.%d.%d"
+	"inet_bind(%p)* %p,%p;%lx %d.%d.%d.%d"
+ 4  10	"ip_route_connect(%p) %p,%p;%lx"
+ 5  20	"__addr_in_socket(%p,%d.%d.%d.%d) %p:%d.%d.%d.%d %p;%lx"
+ 6  40	"sk,egf: %p [#%d] (from %d)"
+	"sk,egn: %p [#%d] (from %d)"
+	"sk,req: %p [#%d] (from %d)"
+	"sk: %p [#%d] (from %d)"
+	"tw: %p [#%d] (from %d)"
+ 7  80	"__sock_recvmsg: %p[%p,%p,%p;%d]:%d/%d"
+	"__sock_sendmsg: %p[%p,%p,%p;%d]:%d/%d"
+
+debug_nid:
+
+ 0   1	"__lookup_nx_info(#%u): %p[#%u]"
+	"alloc_nx_info(%d) = %p"
+	"create_nx_info(%d) (dynamic rejected)"
+	"create_nx_info(%d) = %p (already there)"
+	"create_nx_info(%d) = %p (new)"
+	"dealloc_nx_info(%p)"
+ 1   2	"alloc_nx_info(%d)*"
+	"create_nx_info(%d)*"
+ 2   4	"get_nx_info(%p[#%d.%d])"
+	"put_nx_info(%p[#%d.%d])"
+ 3   8	"claim_nx_info(%p[#%d.%d.%d]) %p"
+	"clr_nx_info(%p[#%d.%d])"
+	"init_nx_info(%p[#%d.%d])"
+	"release_nx_info(%p[#%d.%d.%d]) %p"
+	"set_nx_info(%p[#%d.%d])"
+ 4  10	"__hash_nx_info: %p[#%d]"
+	"__nx_dynamic_id: [#%d]"
+	"__unhash_nx_info: %p[#%d.%d.%d]"
+ 5  20	"moved task %p into nxi:%p[#%d]"
+	"nx_migrate_task(%p,%p[#%d.%d.%d])"
+	"task_get_nx_info(%p)"
+ 6  40	"nx_clear_persistent(%p[#%d])"
+
+debug_quota:
+
+ 0   1	"quota_sync_dqh(%p,%d) discard inode %p"
+ 1   2	"quota_sync_dqh(%p,%d)"
+	"sync_dquots(%p,%d)"
+	"sync_dquots_dqh(%p,%d)"
+ 3   8	"do_quotactl(%p,%d,cmd=%d,id=%d,%p)"
+
+debug_switch:
+
+ 0   1	"vc: VCMD_%02d_%d[%d], %d,%p [%d,%d,%x,%x]"
+ 1   2	"vc: VCMD_%02d_%d[%d] = %08lx(%ld) [%d,%d]"
+ 4  10	"%s: (%s %s) returned %s with %d"
+
+debug_tag:
+
+ 7  80	"dx_parse_tag(»%s«): %d:#%d"
+	"dx_propagate_tag(%p[#%lu.%d]): %d,%d"
+
+debug_xid:
+
+ 0   1	"__lookup_vx_info(#%u): %p[#%u]"
+	"alloc_vx_info(%d) = %p"
+	"alloc_vx_info(%d)*"
+	"create_vx_info(%d) (dynamic rejected)"
+	"create_vx_info(%d) = %p (already there)"
+	"create_vx_info(%d) = %p (new)"
+	"dealloc_vx_info(%p)"
+	"loc_vx_info(%d) = %p (found)"
+	"loc_vx_info(%d) = %p (new)"
+	"loc_vx_info(%d) = %p (not available)"
+ 1   2	"create_vx_info(%d)*"
+	"loc_vx_info(%d)*"
+ 2   4	"get_vx_info(%p[#%d.%d])"
+	"put_vx_info(%p[#%d.%d])"
+ 3   8	"claim_vx_info(%p[#%d.%d.%d]) %p"
+	"clr_vx_info(%p[#%d.%d])"
+	"init_vx_info(%p[#%d.%d])"
+	"release_vx_info(%p[#%d.%d.%d]) %p"
+	"set_vx_info(%p[#%d.%d])"
+ 4  10	"__hash_vx_info: %p[#%d]"
+	"__unhash_vx_info: %p[#%d.%d.%d]"
+	"__vx_dynamic_id: [#%d]"
+ 5  20	"enter_vx_info(%p[#%d],%p) %p[#%d,%p]"
+	"leave_vx_info(%p[#%d,%p]) %p[#%d,%p]"
+	"moved task %p into vxi:%p[#%d]"
+	"task_get_vx_info(%p)"
+	"vx_migrate_task(%p,%p[#%d.%d])"
+ 6  40	"vx_clear_persistent(%p[#%d])"
+	"vx_exit_init(%p[#%d],%p[#%d,%d,%d])"
+	"vx_set_init(%p[#%d],%p[#%d,%d,%d])"
+	"vx_set_persistent(%p[#%d])"
+	"vx_set_reaper(%p[#%d],%p[#%d,%d])"
+ 7  80	"vx_child_reaper(%p[#%u,%u]) = %p[#%u,%u]"
+
+
+debug_limit:
+
+ n 2^n	"vx_acc_cres[%5d,%s,%2d]: %5d%s"
+	"vx_cres_avail[%5d,%s,%2d]: %5ld > %5d + %5d"
+
+ m 2^m	"vx_acc_page[%5d,%s,%2d]: %5d%s"
+	"vx_acc_pages[%5d,%s,%2d]: %5d += %5d"
+	"vx_pages_avail[%5d,%s,%2d]: %5ld > %5d + %5d"

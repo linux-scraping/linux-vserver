@@ -121,7 +121,7 @@ static void *z_comp_alloc(unsigned char *options, int opt_len)
 	if (w_size < DEFLATE_MIN_SIZE || w_size > DEFLATE_MAX_SIZE)
 		return NULL;
 
-	state = (struct ppp_deflate_state *) kmalloc(sizeof(*state),
+	state = kmalloc(sizeof(*state),
 						     GFP_KERNEL);
 	if (state == NULL)
 		return NULL;
@@ -341,7 +341,7 @@ static void *z_decomp_alloc(unsigned char *options, int opt_len)
 	if (w_size < DEFLATE_MIN_SIZE || w_size > DEFLATE_MAX_SIZE)
 		return NULL;
 
-	state = (struct ppp_deflate_state *) kmalloc(sizeof(*state), GFP_KERNEL);
+	state = kmalloc(sizeof(*state), GFP_KERNEL);
 	if (state == NULL)
 		return NULL;
 
@@ -635,7 +635,7 @@ static struct compressor ppp_deflate_draft = {
 };
 
 static int __init deflate_init(void)
-{  
+{
         int answer = ppp_register_compressor(&ppp_deflate);
         if (answer == 0)
                 printk(KERN_INFO
@@ -643,7 +643,7 @@ static int __init deflate_init(void)
 	ppp_register_compressor(&ppp_deflate_draft);
         return answer;
 }
-     
+
 static void __exit deflate_cleanup(void)
 {
 	ppp_unregister_compressor(&ppp_deflate);

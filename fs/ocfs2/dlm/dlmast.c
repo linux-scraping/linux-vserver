@@ -197,12 +197,14 @@ static void dlm_update_lvb(struct dlm_ctxt *dlm, struct dlm_lock_resource *res,
 				  lock->ml.node == dlm->node_num ? "master" :
 				  "remote");
 			memcpy(lksb->lvb, res->lvb, DLM_LVB_LEN);
-		} else if (lksb->flags & DLM_LKSB_PUT_LVB) {
-			mlog(0, "setting lvb from lockres for %s node\n",
-				  lock->ml.node == dlm->node_num ? "master" :
-				  "remote");
-			memcpy(res->lvb, lksb->lvb, DLM_LVB_LEN);
 		}
+		/* Do nothing for lvb put requests - they should be done in
+ 		 * place when the lock is downconverted - otherwise we risk
+ 		 * racing gets and puts which could result in old lvb data
+ 		 * being propagated. We leave the put flag set and clear it
+ 		 * here. In the future we might want to clear it at the time
+ 		 * the put is actually done.
+		 */
 		spin_unlock(&res->spinlock);
 	}
 
@@ -318,8 +320,8 @@ int dlm_proxy_ast_handler(struct o2net_msg *msg, u32 len, void *data)
 
 	res = dlm_lookup_lockres(dlm, name, locklen);
 	if (!res) {
-		mlog(ML_ERROR, "got %sast for unknown lockres! "
-			       "cookie=%u:%llu, name=%.*s, namelen=%u\n",
+		mlog(0, "got %sast for unknown lockres! "
+		     "cookie=%u:%llu, name=%.*s, namelen=%u\n",
 		     past->type == DLM_AST ? "" : "b",
 		     dlm_get_lock_cookie_node(cookie),
 		     dlm_get_lock_cookie_seq(cookie),
@@ -365,12 +367,10 @@ int dlm_proxy_ast_handler(struct o2net_msg *msg, u32 len, void *data)
 			goto do_ast;
 	}
 
-	mlog(ML_ERROR, "got %sast for unknown lock!  cookie=%u:%llu, "
-		       "name=%.*s, namelen=%u\n", 
-		       past->type == DLM_AST ? "" : "b", 
-		       dlm_get_lock_cookie_node(cookie),
-		       dlm_get_lock_cookie_seq(cookie),
-		       locklen, name, locklen);
+	mlog(0, "got %sast for unknown lock!  cookie=%u:%llu, "
+	     "name=%.*s, namelen=%u\n", past->type == DLM_AST ? "" : "b", 
+	     dlm_get_lock_cookie_node(cookie), dlm_get_lock_cookie_seq(cookie),
+	     locklen, name, locklen);
 
 	ret = DLM_NORMAL;
 unlock_out:
@@ -381,8 +381,7 @@ do_ast:
 	ret = DLM_NORMAL;
 	if (past->type == DLM_AST) {
 		/* do not alter lock refcount.  switching lists. */
-		list_del_init(&lock->list);
-		list_add_tail(&lock->list, &res->granted);
+		list_move_tail(&lock->list, &res->granted);
 		mlog(0, "ast: adding to granted list... type=%d, "
 			  "convert_type=%d\n", lock->ml.type, lock->ml.convert_type);
 		if (lock->ml.convert_type != LKM_IVMODE) {
@@ -463,7 +462,7 @@ int dlm_send_proxy_ast_msg(struct dlm_ctxt *dlm, struct dlm_lock_resource *res,
 			mlog(ML_ERROR, "sent AST to node %u, it returned "
 			     "DLM_MIGRATING!\n", lock->ml.node);
 			BUG();
-		} else if (status != DLM_NORMAL) {
+		} else if (status != DLM_NORMAL && status != DLM_IVLOCKID) {
 			mlog(ML_ERROR, "AST to node %u returned %d!\n",
 			     lock->ml.node, status);
 			/* ignore it */

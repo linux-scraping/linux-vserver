@@ -120,7 +120,7 @@ static int ariadne_start_xmit(struct sk_buff *skb, struct net_device *dev);
 static void ariadne_tx_timeout(struct net_device *dev);
 static int ariadne_rx(struct net_device *dev);
 static void ariadne_reset(struct net_device *dev);
-static irqreturn_t ariadne_interrupt(int irq, void *data, struct pt_regs *fp);
+static irqreturn_t ariadne_interrupt(int irq, void *data);
 static int ariadne_close(struct net_device *dev);
 static struct net_device_stats *ariadne_get_stats(struct net_device *dev);
 #ifdef HAVE_MULTICAST
@@ -320,7 +320,7 @@ static int ariadne_open(struct net_device *dev)
 
     netif_start_queue(dev);
 
-    i = request_irq(IRQ_AMIGA_PORTS, ariadne_interrupt, SA_SHIRQ,
+    i = request_irq(IRQ_AMIGA_PORTS, ariadne_interrupt, IRQF_SHARED,
                     dev->name, dev);
     if (i) return i;
 
@@ -416,7 +416,7 @@ static inline void ariadne_reset(struct net_device *dev)
 }
 
 
-static irqreturn_t ariadne_interrupt(int irq, void *data, struct pt_regs *fp)
+static irqreturn_t ariadne_interrupt(int irq, void *data)
 {
     struct net_device *dev = (struct net_device *)data;
     volatile struct Am79C960 *lance = (struct Am79C960*)dev->base_addr;
@@ -607,8 +607,7 @@ static int ariadne_start_xmit(struct sk_buff *skb, struct net_device *dev)
     /* FIXME: is the 79C960 new enough to do its own padding right ? */
     if (skb->len < ETH_ZLEN)
     {
-    	skb = skb_padto(skb, ETH_ZLEN);
-    	if (skb == NULL)
+    	if (skb_padto(skb, ETH_ZLEN))
     	    return 0;
     	len = ETH_ZLEN;
     }
@@ -826,8 +825,6 @@ static void set_multicast_list(struct net_device *dev)
     ariadne_init_ring(dev);
 
     if (dev->flags & IFF_PROMISC) {
-	/* Log any net taps. */
-	printk(KERN_INFO "%s: Promiscuous mode enabled.\n", dev->name);
 	lance->RAP = CSR15;		/* Mode Register */
 	lance->RDP = PROM;		/* Set promiscuous mode */
     } else {

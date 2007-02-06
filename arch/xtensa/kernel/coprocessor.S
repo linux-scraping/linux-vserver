@@ -24,7 +24,6 @@
  * assigned when the Xtensa processor is generated.
  */
 
-#include <linux/config.h>
 #include <linux/linkage.h>
 #include <asm/processor.h>
 
@@ -91,7 +90,6 @@ ENTRY(enable_coprocessor)
 	rsync
 	retw
 
-#endif
 
 ENTRY(save_coprocessor_extra)
 	entry	sp, 16
@@ -198,4 +196,5 @@ _xtensa_reginfo_tables:
 	XCHAL_CP7_SA_CONTENTS_LIBDB
 	.word	0xFC000000	/* invalid register number,marks end of table*/
 _xtensa_reginfo_table_end:
+#endif
 

@@ -17,21 +17,12 @@
 #ifndef __ASM_MPC83xx_H__
 #define __ASM_MPC83xx_H__
 
-#include <linux/config.h>
 #include <asm/mmu.h>
 
 #ifdef CONFIG_83xx
 
 #ifdef CONFIG_MPC834x_SYS
 #include <platforms/83xx/mpc834x_sys.h>
-#endif
-
-#define _IO_BASE        isa_io_base
-#define _ISA_MEM_BASE   isa_mem_base
-#ifdef CONFIG_PCI
-#define PCI_DRAM_OFFSET pci_dram_offset
-#else
-#define PCI_DRAM_OFFSET 0
 #endif
 
 /*

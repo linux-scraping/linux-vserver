@@ -1,4 +1,3 @@
-#include <linux/config.h>
 #include <linux/kernel.h>
 #include <linux/stat.h>
 #include <asm/macio.h>
@@ -17,12 +16,12 @@ static ssize_t
 compatible_show (struct device *dev, struct device_attribute *attr, char *buf)
 {
 	struct of_device *of;
-	char *compat;
+	const char *compat;
 	int cplen;
 	int length = 0;
 
 	of = &to_macio_device (dev)->ofdev;
-	compat = (char *) get_property(of->node, "compatible", &cplen);
+	compat = get_property(of->node, "compatible", &cplen);
 	if (!compat) {
 		*buf = '\0';
 		return 0;
@@ -43,12 +42,12 @@ static ssize_t modalias_show (struct device *dev, struct device_attribute *attr,
 			      char *buf)
 {
 	struct of_device *of;
-	char *compat;
+	const char *compat;
 	int cplen;
 	int length;
 
 	of = &to_macio_device (dev)->ofdev;
-	compat = (char *) get_property (of->node, "compatible", &cplen);
+	compat = get_property(of->node, "compatible", &cplen);
 	if (!compat) compat = "", cplen = 1;
 	length = sprintf (buf, "of:N%sT%s", of->node->name, of->node->type);
 	buf += length;

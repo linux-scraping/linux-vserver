@@ -28,7 +28,6 @@
  * i.e cat spapp >/dev/vpe1.
  */
 
-#include <linux/config.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/fs.h>
@@ -140,13 +139,16 @@ struct tc {
 	struct list_head list;
 };
 
-struct vpecontrol_ {
+struct {
 	/* Virtual processing elements */
 	struct list_head vpe_list;
 
 	/* Thread contexts */
 	struct list_head tc_list;
-} vpecontrol;
+} vpecontrol = {
+	.vpe_list = LIST_HEAD_INIT(vpecontrol.vpe_list),
+	.tc_list = LIST_HEAD_INIT(vpecontrol.tc_list)
+};
 
 static void release_progmem(void *ptr);
 /* static __attribute_used__ void dump_vpe(struct vpe * v); */
@@ -769,9 +771,15 @@ int vpe_run(struct vpe * v)
 	 */
  	write_tc_c0_tcbind((read_tc_c0_tcbind() & ~TCBIND_CURVPE) | v->minor);
 
+	write_vpe_c0_vpeconf0(read_vpe_c0_vpeconf0() & ~(VPECONF0_VPA));
+
+	back_to_back_c0_hazard();
+
         /* Set up the XTC bit in vpeconf0 to point at our tc */
         write_vpe_c0_vpeconf0( (read_vpe_c0_vpeconf0() & ~(VPECONF0_XTC))
                                | (t->index << VPECONF0_XTC_SHIFT));
+
+	back_to_back_c0_hazard();
 
         /* enable this VPE */
         write_vpe_c0_vpeconf0(read_vpe_c0_vpeconf0() | VPECONF0_VPA);
@@ -1174,7 +1182,7 @@ static ssize_t vpe_write(struct file *file, const char __user * buffer,
 	size_t ret = count;
 	struct vpe *v;
 
-	minor = iminor(file->f_dentry->d_inode);
+	minor = iminor(file->f_path.dentry->d_inode);
 	if ((v = get_vpe(minor)) == NULL)
 		return -ENODEV;
 
@@ -1383,8 +1391,6 @@ static int __init vpe_module_init(void)
 
 	/* dump_mtregs(); */
 
-	INIT_LIST_HEAD(&vpecontrol.vpe_list);
-	INIT_LIST_HEAD(&vpecontrol.tc_list);
 
 	val = read_c0_mvpconf0();
 	for (i = 0; i < ((val & MVPCONF0_PTC) + 1); i++) {

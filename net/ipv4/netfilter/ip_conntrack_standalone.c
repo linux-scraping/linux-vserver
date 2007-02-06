@@ -12,7 +12,6 @@
  * published by the Free Software Foundation.
  */
 
-#include <linux/config.h>
 #include <linux/types.h>
 #include <linux/ip.h>
 #include <linux/netfilter.h>
@@ -29,14 +28,10 @@
 #include <net/ip.h>
 #include <net/route.h>
 
-#define ASSERT_READ_LOCK(x)
-#define ASSERT_WRITE_LOCK(x)
-
 #include <linux/netfilter_ipv4/ip_conntrack.h>
 #include <linux/netfilter_ipv4/ip_conntrack_protocol.h>
 #include <linux/netfilter_ipv4/ip_conntrack_core.h>
 #include <linux/netfilter_ipv4/ip_conntrack_helper.h>
-#include <linux/netfilter_ipv4/listhelp.h>
 
 #if 0
 #define DEBUGP printk
@@ -141,7 +136,6 @@ static int ct_seq_show(struct seq_file *s, void *v)
 	const struct ip_conntrack *conntrack = tuplehash_to_ctrack(hash);
 	struct ip_conntrack_protocol *proto;
 
-	ASSERT_READ_LOCK(&ip_conntrack_lock);
 	IP_NF_ASSERT(conntrack);
 
 	/* we only want to print DIR_ORIGINAL */
@@ -186,6 +180,11 @@ static int ct_seq_show(struct seq_file *s, void *v)
 
 #if defined(CONFIG_IP_NF_CONNTRACK_MARK)
 	if (seq_printf(s, "mark=%u ", conntrack->mark))
+		return -ENOSPC;
+#endif
+
+#ifdef CONFIG_IP_NF_CONNTRACK_SECMARK
+	if (seq_printf(s, "secmark=%u ", conntrack->secmark))
 		return -ENOSPC;
 #endif
 
@@ -417,7 +416,7 @@ static unsigned int ip_conntrack_help(unsigned int hooknum,
 
 	/* This is where we call the helper: as the packet goes out. */
 	ct = ip_conntrack_get(*pskb, &ctinfo);
-	if (ct && ct->helper) {
+	if (ct && ct->helper && ctinfo != IP_CT_RELATED + IP_CT_IS_REPLY) {
 		unsigned int ret;
 		ret = ct->helper->help(pskb, ct, ctinfo);
 		if (ret != NF_ACCEPT)
@@ -530,6 +529,8 @@ static struct nf_hook_ops ip_conntrack_ops[] = {
 
 /* Sysctl support */
 
+int ip_conntrack_checksum __read_mostly = 1;
+
 #ifdef CONFIG_SYSCTL
 
 /* From ip_conntrack_core.c */
@@ -557,7 +558,7 @@ extern unsigned int ip_ct_udp_timeout_stream;
 /* From ip_conntrack_proto_icmp.c */
 extern unsigned int ip_ct_icmp_timeout;
 
-/* From ip_conntrack_proto_icmp.c */
+/* From ip_conntrack_proto_generic.c */
 extern unsigned int ip_ct_generic_timeout;
 
 /* Log invalid packets of a given protocol */
@@ -589,6 +590,14 @@ static ctl_table ip_ct_sysctl_table[] = {
 		.data		= &ip_conntrack_htable_size,
 		.maxlen		= sizeof(unsigned int),
 		.mode		= 0444,
+		.proc_handler	= &proc_dointvec,
+	},
+	{
+		.ctl_name	= NET_IPV4_NF_CONNTRACK_CHECKSUM,
+		.procname	= "ip_conntrack_checksum",
+		.data		= &ip_conntrack_checksum,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
 		.proc_handler	= &proc_dointvec,
 	},
 	{
@@ -913,7 +922,7 @@ EXPORT_SYMBOL(__ip_ct_refresh_acct);
 EXPORT_SYMBOL(ip_conntrack_expect_alloc);
 EXPORT_SYMBOL(ip_conntrack_expect_put);
 EXPORT_SYMBOL_GPL(__ip_conntrack_expect_find);
-EXPORT_SYMBOL_GPL(ip_conntrack_expect_find);
+EXPORT_SYMBOL_GPL(ip_conntrack_expect_find_get);
 EXPORT_SYMBOL(ip_conntrack_expect_related);
 EXPORT_SYMBOL(ip_conntrack_unexpect_related);
 EXPORT_SYMBOL_GPL(ip_conntrack_expect_list);
@@ -946,6 +955,7 @@ EXPORT_SYMBOL_GPL(__ip_conntrack_helper_find_byname);
 EXPORT_SYMBOL_GPL(ip_conntrack_proto_find_get);
 EXPORT_SYMBOL_GPL(ip_conntrack_proto_put);
 EXPORT_SYMBOL_GPL(__ip_conntrack_proto_find);
+EXPORT_SYMBOL_GPL(ip_conntrack_checksum);
 #if defined(CONFIG_IP_NF_CONNTRACK_NETLINK) || \
     defined(CONFIG_IP_NF_CONNTRACK_NETLINK_MODULE)
 EXPORT_SYMBOL_GPL(ip_ct_port_tuple_to_nfattr);

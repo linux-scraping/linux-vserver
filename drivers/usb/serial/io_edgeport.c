@@ -29,7 +29,6 @@
  *
  */
 
-#include <linux/config.h>
 #include <linux/kernel.h>
 #include <linux/jiffies.h>
 #include <linux/errno.h>
@@ -45,7 +44,7 @@
 #include <linux/wait.h>
 #include <asm/uaccess.h>
 #include <linux/usb.h>
-#include "usb-serial.h"
+#include <linux/usb/serial.h>
 #include "io_edgeport.h"
 #include "io_ionsp.h"		/* info for the iosp messages */
 #include "io_16654.h"		/* 16654 UART defines */
@@ -142,7 +141,7 @@ struct edgeport_port {
 
 /* This structure holds all of the individual device information */
 struct edgeport_serial {
-	char			name[MAX_NAME_LEN+1];		/* string name of this device */
+	char			name[MAX_NAME_LEN+2];		/* string name of this device */
 
 	struct edge_manuf_descriptor	manuf_descriptor;	/* the manufacturer descriptor */
 	struct edge_boot_descriptor	boot_descriptor;	/* the boot firmware descriptor */
@@ -217,10 +216,10 @@ static int CmdUrbs = 0;		/* Number of outstanding Command Write Urbs */
 /* local function prototypes */
 
 /* function prototypes for all URB callbacks */
-static void edge_interrupt_callback	(struct urb *urb, struct pt_regs *regs);
-static void edge_bulk_in_callback	(struct urb *urb, struct pt_regs *regs);
-static void edge_bulk_out_data_callback	(struct urb *urb, struct pt_regs *regs);
-static void edge_bulk_out_cmd_callback	(struct urb *urb, struct pt_regs *regs);
+static void edge_interrupt_callback	(struct urb *urb);
+static void edge_bulk_in_callback	(struct urb *urb);
+static void edge_bulk_out_data_callback	(struct urb *urb);
+static void edge_bulk_out_cmd_callback	(struct urb *urb);
 
 /* function prototypes for the usbserial callbacks */
 static int  edge_open			(struct usb_serial_port *port, struct file *filp);
@@ -230,7 +229,7 @@ static int  edge_write_room		(struct usb_serial_port *port);
 static int  edge_chars_in_buffer	(struct usb_serial_port *port);
 static void edge_throttle		(struct usb_serial_port *port);
 static void edge_unthrottle		(struct usb_serial_port *port);
-static void edge_set_termios		(struct usb_serial_port *port, struct termios *old_termios);
+static void edge_set_termios		(struct usb_serial_port *port, struct ktermios *old_termios);
 static int  edge_ioctl			(struct usb_serial_port *port, struct file *file, unsigned int cmd, unsigned long arg);
 static void edge_break			(struct usb_serial_port *port, int break_state);
 static int  edge_tiocmget		(struct usb_serial_port *port, struct file *file);
@@ -258,7 +257,7 @@ static void handle_new_lsr		(struct edgeport_port *edge_port, __u8 lsrData, __u8
 static int  send_iosp_ext_cmd		(struct edgeport_port *edge_port, __u8 command, __u8 param);
 static int  calc_baud_rate_divisor	(int baud_rate, int *divisor);
 static int  send_cmd_write_baud_rate	(struct edgeport_port *edge_port, int baudRate);
-static void change_port_settings	(struct edgeport_port *edge_port, struct termios *old_termios);
+static void change_port_settings	(struct edgeport_port *edge_port, struct ktermios *old_termios);
 static int  send_cmd_write_uart_register	(struct edgeport_port *edge_port, __u8 regNum, __u8 regValue);
 static int  write_cmd_usb		(struct edgeport_port *edge_port, unsigned char *buffer, int writeLength);
 static void send_more_port_data		(struct edgeport_serial *edge_serial, struct edgeport_port *edge_port);
@@ -270,7 +269,7 @@ static void get_manufacturing_desc	(struct edgeport_serial *edge_serial);
 static void get_boot_desc		(struct edgeport_serial *edge_serial);
 static void load_application_firmware	(struct edgeport_serial *edge_serial);
 
-static void unicode_to_ascii		(char *string, __le16 *unicode, int unicode_size);
+static void unicode_to_ascii(char *string, int buflen, __le16 *unicode, int unicode_size);
 
 
 // ************************************************************************
@@ -373,7 +372,7 @@ static void update_edgeport_E2PROM (struct edgeport_serial *edge_serial)
  *  Get string descriptor from device					*
  *									*
  ************************************************************************/
-static int get_string (struct usb_device *dev, int Id, char *string)
+static int get_string (struct usb_device *dev, int Id, char *string, int buflen)
 {
 	struct usb_string_descriptor StringDesc;
 	struct usb_string_descriptor *pStringDesc;
@@ -395,7 +394,7 @@ static int get_string (struct usb_device *dev, int Id, char *string)
 		return 0;
 	}
 
-	unicode_to_ascii(string,  pStringDesc->wData,     pStringDesc->bLength/2-1);
+	unicode_to_ascii(string, buflen, pStringDesc->wData, pStringDesc->bLength/2);
 
 	kfree(pStringDesc);
 	return strlen(string);
@@ -535,7 +534,7 @@ static void get_product_info(struct edgeport_serial *edge_serial)
  *	this is the callback function for when we have received data on the 
  *	interrupt endpoint.
  *****************************************************************************/
-static void edge_interrupt_callback (struct urb *urb, struct pt_regs *regs)
+static void edge_interrupt_callback (struct urb *urb)
 {
 	struct edgeport_serial	*edge_serial = (struct edgeport_serial *)urb->context;
 	struct edgeport_port *edge_port;
@@ -632,7 +631,7 @@ exit:
  *	this is the callback function for when we have received data on the 
  *	bulk in endpoint.
  *****************************************************************************/
-static void edge_bulk_in_callback (struct urb *urb, struct pt_regs *regs)
+static void edge_bulk_in_callback (struct urb *urb)
 {
 	struct edgeport_serial	*edge_serial = (struct edgeport_serial *)urb->context;
 	unsigned char		*data = urb->transfer_buffer;
@@ -688,7 +687,7 @@ static void edge_bulk_in_callback (struct urb *urb, struct pt_regs *regs)
  *	this is the callback function for when we have finished sending serial data
  *	on the bulk out endpoint.
  *****************************************************************************/
-static void edge_bulk_out_data_callback (struct urb *urb, struct pt_regs *regs)
+static void edge_bulk_out_data_callback (struct urb *urb)
 {
 	struct edgeport_port *edge_port = (struct edgeport_port *)urb->context;
 	struct tty_struct *tty;
@@ -719,7 +718,7 @@ static void edge_bulk_out_data_callback (struct urb *urb, struct pt_regs *regs)
  *	this is the callback function for when we have finished sending a command
  *	on the bulk out endpoint.
  *****************************************************************************/
-static void edge_bulk_out_cmd_callback (struct urb *urb, struct pt_regs *regs)
+static void edge_bulk_out_cmd_callback (struct urb *urb)
 {
 	struct edgeport_port *edge_port = (struct edgeport_port *)urb->context;
 	struct tty_struct *tty;
@@ -1039,9 +1038,7 @@ static void edge_close (struct usb_serial_port *port, struct file * filp)
 	edge_port->open = FALSE;
 	edge_port->openPending = FALSE;
 
-	if (edge_port->write_urb) {
-		usb_kill_urb(edge_port->write_urb);
-	}
+	usb_kill_urb(edge_port->write_urb);
 
 	if (edge_port->write_urb) {
 		/* if this urb had a transfer buffer already (old transfer) free it */
@@ -1434,7 +1431,7 @@ static void edge_unthrottle (struct usb_serial_port *port)
  * SerialSetTermios
  *	this function is called by the tty driver when it wants to change the termios structure
  *****************************************************************************/
-static void edge_set_termios (struct usb_serial_port *port, struct termios *old_termios)
+static void edge_set_termios (struct usb_serial_port *port, struct ktermios *old_termios)
 {
 	struct edgeport_port *edge_port = usb_get_serial_port_data(port);
 	struct tty_struct *tty = port->tty;
@@ -2415,7 +2412,7 @@ static int send_cmd_write_uart_register (struct edgeport_port *edge_port, __u8 r
 #ifndef CMSPAR
 #define CMSPAR 0
 #endif
-static void change_port_settings (struct edgeport_port *edge_port, struct termios *old_termios)
+static void change_port_settings (struct edgeport_port *edge_port, struct ktermios *old_termios)
 {
 	struct tty_struct *tty;
 	int baud;
@@ -2564,16 +2561,20 @@ static void change_port_settings (struct edgeport_port *edge_port, struct termio
  *	ASCII range, but it's only for debugging...
  *	NOTE: expects the unicode in LE format
  ****************************************************************************/
-static void unicode_to_ascii (char *string, __le16 *unicode, int unicode_size)
+static void unicode_to_ascii(char *string, int buflen, __le16 *unicode, int unicode_size)
 {
 	int i;
 
-	if (unicode_size <= 0)
+	if (buflen <= 0)	/* never happens, but... */
 		return;
+	--buflen;		/* space for nul */
 
-	for (i = 0; i < unicode_size; ++i)
+	for (i = 0; i < unicode_size; i++) {
+		if (i >= buflen)
+			break;
 		string[i] = (char)(le16_to_cpu(unicode[i]));
-	string[unicode_size] = 0x00;
+	}
+	string[i] = 0x00;
 }
 
 
@@ -2603,11 +2604,17 @@ static void get_manufacturing_desc (struct edgeport_serial *edge_serial)
 		dbg("  BoardRev:       %d", edge_serial->manuf_descriptor.BoardRev);
 		dbg("  NumPorts:       %d", edge_serial->manuf_descriptor.NumPorts);
 		dbg("  DescDate:       %d/%d/%d", edge_serial->manuf_descriptor.DescDate[0], edge_serial->manuf_descriptor.DescDate[1], edge_serial->manuf_descriptor.DescDate[2]+1900);
-		unicode_to_ascii (string, edge_serial->manuf_descriptor.SerialNumber, edge_serial->manuf_descriptor.SerNumLength/2-1);
+		unicode_to_ascii(string, sizeof(string),
+		    edge_serial->manuf_descriptor.SerialNumber,
+		    edge_serial->manuf_descriptor.SerNumLength/2);
 		dbg("  SerialNumber: %s", string);
-		unicode_to_ascii (string, edge_serial->manuf_descriptor.AssemblyNumber, edge_serial->manuf_descriptor.AssemblyNumLength/2-1);
+		unicode_to_ascii(string, sizeof(string),
+		    edge_serial->manuf_descriptor.AssemblyNumber,
+		    edge_serial->manuf_descriptor.AssemblyNumLength/2);
 		dbg("  AssemblyNumber: %s", string);
-		unicode_to_ascii (string, edge_serial->manuf_descriptor.OemAssyNumber, edge_serial->manuf_descriptor.OemAssyNumLength/2-1);
+		unicode_to_ascii(string, sizeof(string),
+		    edge_serial->manuf_descriptor.OemAssyNumber,
+		    edge_serial->manuf_descriptor.OemAssyNumLength/2);
 		dbg("  OemAssyNumber:  %s", string);
 		dbg("  UartType:       %d", edge_serial->manuf_descriptor.UartType);
 		dbg("  IonPid:         %d", edge_serial->manuf_descriptor.IonPid);
@@ -2720,7 +2727,7 @@ static int edge_startup (struct usb_serial *serial)
 	struct edgeport_serial *edge_serial;
 	struct edgeport_port *edge_port;
 	struct usb_device *dev;
-	int i;
+	int i, j;
 
 	dev = serial->dev;
 
@@ -2735,11 +2742,11 @@ static int edge_startup (struct usb_serial *serial)
 	usb_set_serial_data(serial, edge_serial);
 
 	/* get the name for the device from the device */
-	if ( (i = get_string(dev, dev->descriptor.iManufacturer, &edge_serial->name[0])) != 0) {
-		edge_serial->name[i-1] = ' ';
-	}
-
-	get_string(dev, dev->descriptor.iProduct, &edge_serial->name[i]);
+	i = get_string(dev, dev->descriptor.iManufacturer,
+	    &edge_serial->name[0], MAX_NAME_LEN+1);
+	edge_serial->name[i++] = ' ';
+	get_string(dev, dev->descriptor.iProduct,
+	    &edge_serial->name[i], MAX_NAME_LEN+2 - i);
 
 	dev_info(&serial->dev->dev, "%s detected\n", edge_serial->name);
 
@@ -2784,6 +2791,10 @@ static int edge_startup (struct usb_serial *serial)
 		edge_port = kmalloc (sizeof(struct edgeport_port), GFP_KERNEL);
 		if (edge_port == NULL) {
 			dev_err(&serial->dev->dev, "%s - Out of memory\n", __FUNCTION__);
+			for (j = 0; j < i; ++j) {
+				kfree (usb_get_serial_port_data(serial->port[j]));
+				usb_set_serial_port_data(serial->port[j],  NULL);
+			}
 			usb_set_serial_data(serial, NULL);
 			kfree(edge_serial);
 			return -ENOMEM;

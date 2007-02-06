@@ -6,6 +6,9 @@
 #ifndef _i386_SETUP_H
 #define _i386_SETUP_H
 
+#define COMMAND_LINE_SIZE 256
+
+#ifdef __KERNEL__
 #include <linux/pfn.h>
 
 /*
@@ -15,7 +18,6 @@
 #define MAX_NONPAE_PFN	(1 << 20)
 
 #define PARAM_SIZE 4096
-#define COMMAND_LINE_SIZE 256
 
 #define OLD_CL_MAGIC_ADDR	0x90020
 #define OLD_CL_MAGIC		0xA33F
@@ -59,6 +61,24 @@ extern unsigned char boot_params[PARAM_SIZE];
 #define EDD_MBR_SIGNATURE ((unsigned int *) (PARAM+EDD_MBR_SIG_BUF))
 #define EDD_BUF     ((struct edd_info *) (PARAM+EDDBUF))
 
+/*
+ * Do NOT EVER look at the BIOS memory size location.
+ * It does not work on many machines.
+ */
+#define LOWMEMSIZE()	(0x9f000)
+
+struct e820entry;
+
+char * __init machine_specific_memory_setup(void);
+char *memory_setup(void);
+
+int __init copy_e820_map(struct e820entry * biosmap, int nr_map);
+int __init sanitize_e820_map(struct e820entry * biosmap, char * pnr_map);
+void __init add_memory_region(unsigned long long start,
+			      unsigned long long size, int type);
+
 #endif /* __ASSEMBLY__ */
+
+#endif  /*  __KERNEL__  */
 
 #endif /* _i386_SETUP_H */

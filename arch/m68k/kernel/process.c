@@ -10,7 +10,6 @@
  * This file handles the architecture-dependent parts of process handling..
  */
 
-#include <linux/config.h>
 #include <linux/errno.h>
 #include <linux/module.h>
 #include <linux/sched.h>
@@ -160,7 +159,8 @@ int kernel_thread(int (*fn)(void *), void * arg, unsigned long flags)
 
 	{
 	register long retval __asm__ ("d0");
-	register long clone_arg __asm__ ("d1") = flags | CLONE_VM | CLONE_UNTRACED;
+	register long clone_arg __asm__ ("d1") =
+		flags | CLONE_VM | CLONE_UNTRACED | CLONE_KTHREAD;
 
 	retval = __NR_clone;
 	__asm__ __volatile__
@@ -188,6 +188,7 @@ int kernel_thread(int (*fn)(void *), void * arg, unsigned long flags)
 	set_fs (fs);
 	return pid;
 }
+EXPORT_SYMBOL(kernel_thread);
 
 void flush_thread(void)
 {
@@ -222,13 +223,13 @@ asmlinkage int m68k_clone(struct pt_regs *regs)
 {
 	unsigned long clone_flags;
 	unsigned long newsp;
-	int *parent_tidptr, *child_tidptr;
+	int __user *parent_tidptr, *child_tidptr;
 
 	/* syscall2 puts clone_flags in d1 and usp in d2 */
 	clone_flags = regs->d1;
 	newsp = regs->d2;
-	parent_tidptr = (int *)regs->d3;
-	child_tidptr = (int *)regs->d4;
+	parent_tidptr = (int __user *)regs->d3;
+	child_tidptr = (int __user *)regs->d4;
 	if (!newsp)
 		newsp = rdusp();
 	return do_fork(clone_flags, newsp, regs, 0,
@@ -312,6 +313,7 @@ int dump_fpu (struct pt_regs *regs, struct user_m68kfp_struct *fpu)
 		: "memory");
 	return 1;
 }
+EXPORT_SYMBOL(dump_fpu);
 
 /*
  * fill in the user structure for a core dump..
@@ -358,11 +360,12 @@ void dump_thread(struct pt_regs * regs, struct user * dump)
 	/* dump floating point stuff */
 	dump->u_fpvalid = dump_fpu (regs, &dump->m68kfp);
 }
+EXPORT_SYMBOL(dump_thread);
 
 /*
  * sys_execve() executes a new program.
  */
-asmlinkage int sys_execve(char *name, char **argv, char **envp)
+asmlinkage int sys_execve(char __user *name, char __user * __user *argv, char __user * __user *envp)
 {
 	int error;
 	char * filename;

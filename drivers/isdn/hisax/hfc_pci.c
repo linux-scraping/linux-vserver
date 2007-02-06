@@ -16,7 +16,6 @@
  */
 
 #include <linux/init.h>
-#include <linux/config.h>
 #include "hisax.h"
 #include "hfc_pci.h"
 #include "isdnl1.h"
@@ -932,7 +931,7 @@ receive_emsg(struct IsdnCardState *cs)
 /* Interrupt handler */
 /*********************/
 static irqreturn_t
-hfcpci_interrupt(int intno, void *dev_id, struct pt_regs *regs)
+hfcpci_interrupt(int intno, void *dev_id)
 {
 	u_long flags;
 	struct IsdnCardState *cs = dev_id;
@@ -1212,7 +1211,7 @@ HFCPCI_l1hw(struct PStack *st, int pr, void *arg)
 			break;
 		case (HW_TESTLOOP | REQUEST):
 			spin_lock_irqsave(&cs->lock, flags);
-			switch ((int) arg) {
+			switch ((long) arg) {
 				case (1):
 					Write_hfc(cs, HFCPCI_B1_SSL, 0x80);	/* tx slot */
 					Write_hfc(cs, HFCPCI_B1_RSL, 0x80);	/* rx slot */
@@ -1230,7 +1229,7 @@ HFCPCI_l1hw(struct PStack *st, int pr, void *arg)
 				default:
 					spin_unlock_irqrestore(&cs->lock, flags);
 					if (cs->debug & L1_DEB_WARN)
-						debugl1(cs, "hfcpci_l1hw loop invalid %4x", (int) arg);
+						debugl1(cs, "hfcpci_l1hw loop invalid %4lx", (long) arg);
 					return;
 			}
 			cs->hw.hfcpci.trm |= 0x80;	/* enable IOM-loop */
@@ -1507,8 +1506,10 @@ setstack_2b(struct PStack *st, struct BCState *bcs)
 /* handle L1 state changes */
 /***************************/
 static void
-hfcpci_bh(struct IsdnCardState *cs)
+hfcpci_bh(struct work_struct *work)
 {
+	struct IsdnCardState *cs =
+		container_of(work, struct IsdnCardState, tqueue);
 	u_long	flags;
 //      struct PStack *stptr;
 
@@ -1582,7 +1583,7 @@ hfcpci_bh(struct IsdnCardState *cs)
 /********************************/
 /* called for card init message */
 /********************************/
-static void __init
+static void
 inithfcpci(struct IsdnCardState *cs)
 {
 	cs->bcs[0].BC_SetStack = setstack_2b;
@@ -1639,11 +1640,11 @@ hfcpci_card_msg(struct IsdnCardState *cs, int mt, void *arg)
 
 
 /* this variable is used as card index when more than one cards are present */
-static struct pci_dev *dev_hfcpci __initdata = NULL;
+static struct pci_dev *dev_hfcpci __devinitdata = NULL;
 
 #endif				/* CONFIG_PCI */
 
-int __init
+int __devinit
 setup_hfcpci(struct IsdnCard *card)
 {
 	u_long flags;
@@ -1688,7 +1689,7 @@ setup_hfcpci(struct IsdnCard *card)
 				printk(KERN_WARNING "HFC-PCI: No IRQ for PCI card found\n");
 				return (0);
 			}
-			cs->hw.hfcpci.pci_io = (char *) dev_hfcpci->resource[ 1].start;
+			cs->hw.hfcpci.pci_io = (char *)(unsigned long)dev_hfcpci->resource[1].start;
 			printk(KERN_INFO "HiSax: HFC-PCI card manufacturer: %s card name: %s\n", id_list[i].vendor_name, id_list[i].card_name);
 		} else {
 			printk(KERN_WARNING "HFC-PCI: No PCI card found\n");
@@ -1710,9 +1711,9 @@ setup_hfcpci(struct IsdnCard *card)
 		pci_write_config_dword(cs->hw.hfcpci.dev, 0x80, (u_int) virt_to_bus(cs->hw.hfcpci.fifos));
 		cs->hw.hfcpci.pci_io = ioremap((ulong) cs->hw.hfcpci.pci_io, 256);
 		printk(KERN_INFO
-		       "HFC-PCI: defined at mem %#x fifo %#x(%#x) IRQ %d HZ %d\n",
-		       (u_int) cs->hw.hfcpci.pci_io,
-		       (u_int) cs->hw.hfcpci.fifos,
+		       "HFC-PCI: defined at mem %p fifo %p(%#x) IRQ %d HZ %d\n",
+		       cs->hw.hfcpci.pci_io,
+		       cs->hw.hfcpci.fifos,
 		       (u_int) virt_to_bus(cs->hw.hfcpci.fifos),
 		       cs->irq, HZ);
 		spin_lock_irqsave(&cs->lock, flags);
@@ -1723,7 +1724,7 @@ setup_hfcpci(struct IsdnCard *card)
 		Write_hfc(cs, HFCPCI_INT_M2, cs->hw.hfcpci.int_m2);
 		/* At this point the needed PCI config is done */
 		/* fifos are still not enabled */
-		INIT_WORK(&cs->tqueue, (void *)(void *) hfcpci_bh, cs);
+		INIT_WORK(&cs->tqueue,  hfcpci_bh);
 		cs->setstack_d = setstack_hfcpci;
 		cs->BC_Send_Data = &hfcpci_send_data;
 		cs->readisac = NULL;
@@ -1733,7 +1734,7 @@ setup_hfcpci(struct IsdnCard *card)
 		cs->BC_Read_Reg = NULL;
 		cs->BC_Write_Reg = NULL;
 		cs->irq_func = &hfcpci_interrupt;
-		cs->irq_flags |= SA_SHIRQ;
+		cs->irq_flags |= IRQF_SHARED;
 		cs->hw.hfcpci.timer.function = (void *) hfcpci_Timer;
 		cs->hw.hfcpci.timer.data = (long) cs;
 		init_timer(&cs->hw.hfcpci.timer);

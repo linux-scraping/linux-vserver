@@ -281,8 +281,6 @@ typedef struct xfs_qoff_logformat {
 				 XFS_UQUOTA_CHKD|XFS_PQUOTA_ACCT|\
 				 XFS_OQUOTA_ENFD|XFS_OQUOTA_CHKD|\
 				 XFS_GQUOTA_ACCT)
-#define XFS_MOUNT_QUOTA_MASK	(XFS_MOUNT_QUOTA_ALL | XFS_UQUOTA_ACTIVE | \
-				 XFS_GQUOTA_ACTIVE | XFS_PQUOTA_ACTIVE)
 
 
 /*
@@ -365,7 +363,7 @@ typedef struct xfs_dqtrxops {
 extern int xfs_qm_dqcheck(xfs_disk_dquot_t *, xfs_dqid_t, uint, uint, char *);
 extern int xfs_mount_reset_sbqflags(struct xfs_mount *);
 
-extern struct bhv_vfsops xfs_qmops;
+extern struct bhv_module_vfsops xfs_qmops;
 
 #endif	/* __KERNEL__ */
 

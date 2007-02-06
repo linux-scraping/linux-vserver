@@ -12,7 +12,6 @@
  *  Copyright (C) 2002 Ralf Baechle (ralf@linux-mips.org)
  *  Copyright (C) 2002 David S. Miller (davem@redhat.com)
  */
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/sched.h>
@@ -253,8 +252,7 @@ static void ip22zilog_maybe_update_regs(struct uart_ip22zilog_port *up,
 }
 
 static void ip22zilog_receive_chars(struct uart_ip22zilog_port *up,
-				   struct zilog_channel *channel,
-				   struct pt_regs *regs)
+				   struct zilog_channel *channel)
 {
 	struct tty_struct *tty = up->port.info->tty;	/* XXX info==NULL? */
 
@@ -320,7 +318,7 @@ static void ip22zilog_receive_chars(struct uart_ip22zilog_port *up,
 			else if (r1 & CRC_ERR)
 				flag = TTY_FRAME;
 		}
-		if (uart_handle_sysrq_char(&up->port, ch, regs))
+		if (uart_handle_sysrq_char(&up->port, ch))
 			goto next_char;
 
 		if (up->port.ignore_status_mask == 0xff ||
@@ -340,8 +338,7 @@ static void ip22zilog_receive_chars(struct uart_ip22zilog_port *up,
 }
 
 static void ip22zilog_status_handle(struct uart_ip22zilog_port *up,
-				   struct zilog_channel *channel,
-				   struct pt_regs *regs)
+				   struct zilog_channel *channel)
 {
 	unsigned char status;
 
@@ -444,7 +441,7 @@ ack_tx_int:
 	ZS_WSYNC(channel);
 }
 
-static irqreturn_t ip22zilog_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t ip22zilog_interrupt(int irq, void *dev_id)
 {
 	struct uart_ip22zilog_port *up = dev_id;
 
@@ -463,9 +460,9 @@ static irqreturn_t ip22zilog_interrupt(int irq, void *dev_id, struct pt_regs *re
 			ZS_WSYNC(channel);
 
 			if (r3 & CHARxIP)
-				ip22zilog_receive_chars(up, channel, regs);
+				ip22zilog_receive_chars(up, channel);
 			if (r3 & CHAEXT)
-				ip22zilog_status_handle(up, channel, regs);
+				ip22zilog_status_handle(up, channel);
 			if (r3 & CHATxIP)
 				ip22zilog_transmit_chars(up, channel);
 		}
@@ -482,9 +479,9 @@ static irqreturn_t ip22zilog_interrupt(int irq, void *dev_id, struct pt_regs *re
 			ZS_WSYNC(channel);
 
 			if (r3 & CHBRxIP)
-				ip22zilog_receive_chars(up, channel, regs);
+				ip22zilog_receive_chars(up, channel);
 			if (r3 & CHBEXT)
-				ip22zilog_status_handle(up, channel, regs);
+				ip22zilog_status_handle(up, channel);
 			if (r3 & CHBTxIP)
 				ip22zilog_transmit_chars(up, channel);
 		}
@@ -843,8 +840,8 @@ ip22zilog_convert_to_zs(struct uart_ip22zilog_port *up, unsigned int cflag,
 
 /* The port lock is not held.  */
 static void
-ip22zilog_set_termios(struct uart_port *port, struct termios *termios,
-		      struct termios *old)
+ip22zilog_set_termios(struct uart_port *port, struct ktermios *termios,
+		      struct ktermios *old)
 {
 	struct uart_ip22zilog_port *up = (struct uart_ip22zilog_port *) port;
 	unsigned long flags;
@@ -1085,7 +1082,6 @@ static struct console ip22zilog_console = {
 static struct uart_driver ip22zilog_reg = {
 	.owner		= THIS_MODULE,
 	.driver_name	= "serial",
-	.devfs_name	= "tts/",
 	.dev_name	= "ttyS",
 	.major		= TTY_MAJOR,
 	.minor		= 64,
@@ -1145,9 +1141,8 @@ static void __init ip22zilog_prepare(void)
 		up[(chip * 2) + 1].port.fifosize = 1;
 		up[(chip * 2) + 1].port.ops = &ip22zilog_pops;
 		up[(chip * 2) + 1].port.type = PORT_IP22ZILOG;
-		up[(chip * 2) + 1].port.flags |= IP22ZILOG_FLAG_IS_CHANNEL_A;
 		up[(chip * 2) + 1].port.line = (chip * 2) + 1;
-		up[(chip * 2) + 1].flags = 0;
+		up[(chip * 2) + 1].flags |= IP22ZILOG_FLAG_IS_CHANNEL_A;
 	}
 }
 
@@ -1232,11 +1227,25 @@ static int __init ip22zilog_init(void)
 static void __exit ip22zilog_exit(void)
 {
 	int i;
+	struct uart_ip22zilog_port *up;
 
 	for (i = 0; i < NUM_CHANNELS; i++) {
-		struct uart_ip22zilog_port *up = &ip22zilog_port_table[i];
+		up = &ip22zilog_port_table[i];
 
 		uart_remove_one_port(&ip22zilog_reg, &up->port);
+	}
+
+	/* Free IO mem */
+	up = &ip22zilog_port_table[0];
+	for (i = 0; i < NUM_IP22ZILOG; i++) {
+		if (up[(i * 2) + 0].port.mapbase) {
+		   iounmap((void*)up[(i * 2) + 0].port.mapbase);
+		   up[(i * 2) + 0].port.mapbase = 0;
+		}
+		if (up[(i * 2) + 1].port.mapbase) {
+			iounmap((void*)up[(i * 2) + 1].port.mapbase);
+			up[(i * 2) + 1].port.mapbase = 0;
+		}
 	}
 
 	uart_unregister_driver(&ip22zilog_reg);

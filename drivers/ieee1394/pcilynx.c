@@ -30,7 +30,6 @@
  *        Enhancements in async and iso send code
  */
 
-#include <linux/config.h>
 #include <linux/kernel.h>
 #include <linux/slab.h>
 #include <linux/interrupt.h>
@@ -138,7 +137,6 @@ static struct i2c_algo_bit_data bit_data = {
 	.getsda			= bit_getsda,
 	.getscl			= bit_getscl,
 	.udelay			= 5,
-	.mdelay			= 5,
 	.timeout		= 100,
 };
 
@@ -841,8 +839,7 @@ static int lynx_devctl(struct hpsb_host *host, enum devctl_cmd cmd, int arg)
  ********************************************************/
 
 
-static irqreturn_t lynx_irq_handler(int irq, void *dev_id,
-                             struct pt_regs *regs_are_unused)
+static irqreturn_t lynx_irq_handler(int irq, void *dev_id)
 {
         struct ti_lynx *lynx = (struct ti_lynx *)dev_id;
         struct hpsb_host *host = lynx->host;
@@ -1252,13 +1249,9 @@ static int __devinit add_card(struct pci_dev *dev,
         /* Fix buggy cards with autoboot pin not tied low: */
         reg_write(lynx, DMA0_CHAN_CTRL, 0);
 
-#ifndef __sparc__
 	sprintf (irq_buf, "%d", dev->irq);
-#else
-	sprintf (irq_buf, "%s", __irq_itoa(dev->irq));
-#endif
 
-        if (!request_irq(dev->irq, lynx_irq_handler, SA_SHIRQ,
+        if (!request_irq(dev->irq, lynx_irq_handler, IRQF_SHARED,
                          PCILYNX_DRIVER_NAME, lynx)) {
                 PRINT(KERN_INFO, lynx->id, "allocated interrupt %s", irq_buf);
                 lynx->state = have_intr;
@@ -1435,10 +1428,9 @@ static int __devinit add_card(struct pci_dev *dev,
         	struct i2c_algo_bit_data i2c_adapter_data;
 
         	error = -ENOMEM;
-		i2c_ad = kmalloc(sizeof(*i2c_ad), SLAB_KERNEL);
+		i2c_ad = kmemdup(&bit_ops, sizeof(*i2c_ad), GFP_KERNEL);
         	if (!i2c_ad) FAIL("failed to allocate I2C adapter memory");
 
-		memcpy(i2c_ad, &bit_ops, sizeof(struct i2c_adapter));
                 i2c_adapter_data = bit_data;
                 i2c_ad->algo_data = &i2c_adapter_data;
                 i2c_adapter_data.data = lynx;
@@ -1493,7 +1485,7 @@ static int __devinit add_card(struct pci_dev *dev,
 
                         }
 
-                        i2c_bit_del_bus(i2c_ad);
+			i2c_del_adapter(i2c_ad);
 			kfree(i2c_ad);
                 }
         }

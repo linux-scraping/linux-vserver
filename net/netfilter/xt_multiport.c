@@ -1,5 +1,5 @@
-/* Kernel module to match one of a list of TCP/UDP ports: ports are in
-   the same place so we can treat them as equal. */
+/* Kernel module to match one of a list of TCP/UDP(-Lite)/SCTP/DCCP ports:
+   ports are in the same place so we can treat them as equal. */
 
 /* (C) 1999-2001 Paul `Rusty' Russell
  * (C) 2002-2004 Netfilter Core Team <coreteam@netfilter.org>
@@ -104,7 +104,7 @@ match(const struct sk_buff *skb,
       unsigned int protoff,
       int *hotdrop)
 {
-	u16 _ports[2], *pptr;
+	__be16 _ports[2], *pptr;
 	const struct xt_multiport *multiinfo = matchinfo;
 
 	if (offset)
@@ -135,7 +135,7 @@ match_v1(const struct sk_buff *skb,
 	 unsigned int protoff,
 	 int *hotdrop)
 {
-	u16 _ports[2], *pptr;
+	__be16 _ports[2], *pptr;
 	const struct xt_multiport_v1 *multiinfo = matchinfo;
 
 	if (offset)
@@ -160,8 +160,10 @@ check(u_int16_t proto,
       u_int8_t match_flags,
       u_int8_t count)
 {
-	/* Must specify proto == TCP/UDP, no unknown flags or bad count */
-	return (proto == IPPROTO_TCP || proto == IPPROTO_UDP)
+	/* Must specify supported protocol, no unknown flags or bad count */
+	return (proto == IPPROTO_TCP || proto == IPPROTO_UDP
+		|| proto == IPPROTO_UDPLITE
+		|| proto == IPPROTO_SCTP || proto == IPPROTO_DCCP)
 		&& !(ip_invflags & XT_INV_PROTO)
 		&& (match_flags == XT_MULTIPORT_SOURCE
 		    || match_flags == XT_MULTIPORT_DESTINATION
@@ -175,7 +177,6 @@ checkentry(const char *tablename,
 	   const void *info,
 	   const struct xt_match *match,
 	   void *matchinfo,
-	   unsigned int matchsize,
 	   unsigned int hook_mask)
 {
 	const struct ipt_ip *ip = info;
@@ -190,7 +191,6 @@ checkentry_v1(const char *tablename,
 	      const void *info,
 	      const struct xt_match *match,
 	      void *matchinfo,
-	      unsigned int matchsize,
 	      unsigned int hook_mask)
 {
 	const struct ipt_ip *ip = info;
@@ -205,7 +205,6 @@ checkentry6(const char *tablename,
 	    const void *info,
 	    const struct xt_match *match,
 	    void *matchinfo,
-	    unsigned int matchsize,
 	    unsigned int hook_mask)
 {
 	const struct ip6t_ip6 *ip = info;
@@ -220,7 +219,6 @@ checkentry6_v1(const char *tablename,
 	       const void *info,
 	       const struct xt_match *match,
 	       void *matchinfo,
-	       unsigned int matchsize,
 	       unsigned int hook_mask)
 {
 	const struct ip6t_ip6 *ip = info;
@@ -230,84 +228,55 @@ checkentry6_v1(const char *tablename,
 		     multiinfo->count);
 }
 
-static struct xt_match multiport_match = {
-	.name		= "multiport",
-	.revision	= 0,
-	.matchsize	= sizeof(struct xt_multiport),
-	.match		= &match,
-	.checkentry	= &checkentry,
-	.family		= AF_INET,
-	.me		= THIS_MODULE,
-};
-
-static struct xt_match multiport_match_v1 = {
-	.name		= "multiport",
-	.revision	= 1,
-	.matchsize	= sizeof(struct xt_multiport_v1),
-	.match		= &match_v1,
-	.checkentry	= &checkentry_v1,
-	.family		= AF_INET,
-	.me		= THIS_MODULE,
-};
-
-static struct xt_match multiport6_match = {
-	.name		= "multiport",
-	.revision	= 0,
-	.matchsize	= sizeof(struct xt_multiport),
-	.match		= &match,
-	.checkentry	= &checkentry6,
-	.family		= AF_INET6,
-	.me		= THIS_MODULE,
-};
-
-static struct xt_match multiport6_match_v1 = {
-	.name		= "multiport",
-	.revision	= 1,
-	.matchsize	= sizeof(struct xt_multiport_v1),
-	.match		= &match_v1,
-	.checkentry	= &checkentry6_v1,
-	.family		= AF_INET6,
-	.me		= THIS_MODULE,
+static struct xt_match xt_multiport_match[] = {
+	{
+		.name		= "multiport",
+		.family		= AF_INET,
+		.revision	= 0,
+		.checkentry	= checkentry,
+		.match		= match,
+		.matchsize	= sizeof(struct xt_multiport),
+		.me		= THIS_MODULE,
+	},
+	{
+		.name		= "multiport",
+		.family		= AF_INET,
+		.revision	= 1,
+		.checkentry	= checkentry_v1,
+		.match		= match_v1,
+		.matchsize	= sizeof(struct xt_multiport_v1),
+		.me		= THIS_MODULE,
+	},
+	{
+		.name		= "multiport",
+		.family		= AF_INET6,
+		.revision	= 0,
+		.checkentry	= checkentry6,
+		.match		= match,
+		.matchsize	= sizeof(struct xt_multiport),
+		.me		= THIS_MODULE,
+	},
+	{
+		.name		= "multiport",
+		.family		= AF_INET6,
+		.revision	= 1,
+		.checkentry	= checkentry6_v1,
+		.match		= match_v1,
+		.matchsize	= sizeof(struct xt_multiport_v1),
+		.me		= THIS_MODULE,
+	},
 };
 
 static int __init xt_multiport_init(void)
 {
-	int ret;
-
-	ret = xt_register_match(&multiport_match);
-	if (ret)
-		goto out;
-
-	ret = xt_register_match(&multiport_match_v1);
-	if (ret)
-		goto out_unreg_multi_v0;
-
-	ret = xt_register_match(&multiport6_match);
-	if (ret)
-		goto out_unreg_multi_v1;
-
-	ret = xt_register_match(&multiport6_match_v1);
-	if (ret)
-		goto out_unreg_multi6_v0;
-
-	return ret;
-
-out_unreg_multi6_v0:
-	xt_unregister_match(&multiport6_match);
-out_unreg_multi_v1:
-	xt_unregister_match(&multiport_match_v1);
-out_unreg_multi_v0:
-	xt_unregister_match(&multiport_match);
-out:
-	return ret;
+	return xt_register_matches(xt_multiport_match,
+				   ARRAY_SIZE(xt_multiport_match));
 }
 
 static void __exit xt_multiport_fini(void)
 {
-	xt_unregister_match(&multiport_match);
-	xt_unregister_match(&multiport_match_v1);
-	xt_unregister_match(&multiport6_match);
-	xt_unregister_match(&multiport6_match_v1);
+	xt_unregister_matches(xt_multiport_match,
+			      ARRAY_SIZE(xt_multiport_match));
 }
 
 module_init(xt_multiport_init);

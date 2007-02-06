@@ -41,7 +41,7 @@
 static int index[SNDRV_CARDS] = SNDRV_DEFAULT_IDX;	/* Index 0-MAX */
 static char *id[SNDRV_CARDS] = SNDRV_DEFAULT_STR;	/* ID for this card */
 static int enable[SNDRV_CARDS] = SNDRV_DEFAULT_ENABLE_PNP;	/* Enable this card */
-static int precise_ptr[SNDRV_CARDS] = { [0 ... (SNDRV_CARDS-1)] = 0 }; /* Enable precise pointer */
+static int precise_ptr[SNDRV_CARDS];			/* Enable precise pointer */
 
 module_param_array(index, int, NULL, 0444);
 MODULE_PARM_DESC(index, "Index value for RME Digi9652 (Hammerfall) soundcard.");
@@ -315,7 +315,7 @@ static void snd_hammerfall_free_buffer(struct snd_dma_buffer *dmab, struct pci_d
 }
 
 
-static struct pci_device_id snd_rme9652_ids[] __devinitdata = {
+static struct pci_device_id snd_rme9652_ids[] = {
 	{
 		.vendor	   = 0x10ee,
 		.device	   = 0x3fc4,
@@ -1787,7 +1787,7 @@ static void __devinit snd_rme9652_proc_init(struct snd_rme9652 *rme9652)
 	struct snd_info_entry *entry;
 
 	if (! snd_card_proc_new(rme9652->card, "rme9652", &entry))
-		snd_info_set_text_ops(entry, rme9652, 1024, snd_rme9652_proc_read);
+		snd_info_set_text_ops(entry, rme9652, snd_rme9652_proc_read);
 }
 
 static void snd_rme9652_free_buffers(struct snd_rme9652 *rme9652)
@@ -1827,8 +1827,8 @@ static int __devinit snd_rme9652_initialize_memory(struct snd_rme9652 *rme9652)
 
 	/* Align to bus-space 64K boundary */
 
-	cb_bus = (rme9652->capture_dma_buf.addr + 0xFFFF) & ~0xFFFFl;
-	pb_bus = (rme9652->playback_dma_buf.addr + 0xFFFF) & ~0xFFFFl;
+	cb_bus = ALIGN(rme9652->capture_dma_buf.addr, 0x10000ul);
+	pb_bus = ALIGN(rme9652->playback_dma_buf.addr, 0x10000ul);
 
 	/* Tell the card where it is */
 
@@ -1882,7 +1882,7 @@ static void snd_rme9652_set_defaults(struct snd_rme9652 *rme9652)
 	rme9652_set_rate(rme9652, 48000);
 }
 
-static irqreturn_t snd_rme9652_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t snd_rme9652_interrupt(int irq, void *dev_id)
 {
 	struct snd_rme9652 *rme9652 = (struct snd_rme9652 *) dev_id;
 
@@ -2500,7 +2500,8 @@ static int __devinit snd_rme9652_create(struct snd_card *card,
 		return -EBUSY;
 	}
 	
-	if (request_irq(pci->irq, snd_rme9652_interrupt, SA_INTERRUPT|SA_SHIRQ, "rme9652", (void *)rme9652)) {
+	if (request_irq(pci->irq, snd_rme9652_interrupt, IRQF_SHARED,
+			"rme9652", rme9652)) {
 		snd_printk(KERN_ERR "unable to request IRQ %d\n", pci->irq);
 		return -EBUSY;
 	}

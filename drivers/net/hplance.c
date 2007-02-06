@@ -45,12 +45,12 @@ struct hplance_private {
 
 /* function prototypes... This is easy because all the grot is in the
  * generic LANCE support. All we have to support is probing for boards,
- * plus board-specific init, open and close actions. 
+ * plus board-specific init, open and close actions.
  * Oh, and we need to tell the generic code how to read and write LANCE registers...
  */
 static int __devinit hplance_init_one(struct dio_dev *d,
 				const struct dio_device_id *ent);
-static void __devinit hplance_init(struct net_device *dev, 
+static void __devinit hplance_init(struct net_device *dev,
 				struct dio_dev *d);
 static void __devexit hplance_remove_one(struct dio_dev *d);
 static void hplance_writerap(void *priv, unsigned short value);
@@ -77,6 +77,7 @@ static int __devinit hplance_init_one(struct dio_dev *d,
 {
 	struct net_device *dev;
 	int err = -ENOMEM;
+	int i;
 
 	dev = alloc_etherdev(sizeof(struct hplance_private));
 	if (!dev)
@@ -93,6 +94,15 @@ static int __devinit hplance_init_one(struct dio_dev *d,
 		goto out_release_mem_region;
 
 	dio_set_drvdata(d, dev);
+
+	printk(KERN_INFO "%s: %s; select code %d, addr %2.2x", dev->name, d->name, d->scode, dev->dev_addr[0]);
+
+	for (i=1; i<6; i++) {
+		printk(":%2.2x", dev->dev_addr[i]);
+	}
+
+	printk(", irq %d\n", d->ipl);
+
 	return 0;
 
  out_release_mem_region:
@@ -118,8 +128,6 @@ static void __init hplance_init(struct net_device *dev, struct dio_dev *d)
         unsigned long va = (d->resource.start + DIO_VIRADDRBASE);
         struct hplance_private *lp;
         int i;
-        
-        printk(KERN_INFO "%s: %s; select code %d, addr", dev->name, d->name, d->scode);
 
         /* reset the board */
         out_8(va+DIO_IDOFF, 0xff);
@@ -136,16 +144,15 @@ static void __init hplance_init(struct net_device *dev, struct dio_dev *d)
         dev->get_stats = &lance_get_stats;
         dev->set_multicast_list = &lance_set_multicast;
         dev->dma = 0;
-        
+
         for (i=0; i<6; i++) {
                 /* The NVRAM holds our ethernet address, one nibble per byte,
                  * at bytes NVRAMOFF+1,3,5,7,9...
                  */
                 dev->dev_addr[i] = ((in_8(va + HPLANCE_NVRAMOFF + i*4 + 1) & 0xF) << 4)
                         | (in_8(va + HPLANCE_NVRAMOFF + i*4 + 3) & 0xF);
-                printk("%c%2.2x", i == 0 ? ' ' : ':', dev->dev_addr[i]);
         }
-        
+
         lp = netdev_priv(dev);
         lp->lance.name = (char*)d->name;                /* discards const, shut up gcc */
         lp->lance.base = va;
@@ -160,7 +167,6 @@ static void __init hplance_init(struct net_device *dev, struct dio_dev *d)
         lp->lance.lance_log_tx_bufs = LANCE_LOG_TX_BUFFERS;
         lp->lance.rx_ring_mod_mask = RX_RING_MOD_MASK;
         lp->lance.tx_ring_mod_mask = TX_RING_MOD_MASK;
-	printk(", irq %d\n", lp->lance.irq);
 }
 
 /* This is disgusting. We have to check the DIO status register for ack every
@@ -196,7 +202,7 @@ static int hplance_open(struct net_device *dev)
 {
         int status;
         struct lance_private *lp = netdev_priv(dev);
-        
+
         status = lance_open(dev);                 /* call generic lance open code */
         if (status)
                 return status;

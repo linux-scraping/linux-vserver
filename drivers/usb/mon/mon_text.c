@@ -26,10 +26,13 @@
 
 /*
  * This limit exists to prevent OOMs when the user process stops reading.
+ * If usbmon were available to unprivileged processes, it might be open
+ * to a local DoS. But we have to keep to root in order to prevent
+ * password sniffing from HID devices.
  */
-#define EVENT_MAX  25
+#define EVENT_MAX  (2*PAGE_SIZE / sizeof(struct mon_event_text))
 
-#define PRINTF_DFL  130
+#define PRINTF_DFL  160
 
 struct mon_event_text {
 	struct list_head e_link;
@@ -47,7 +50,7 @@ struct mon_event_text {
 
 #define SLAB_NAME_SZ  30
 struct mon_reader_text {
-	kmem_cache_t *e_slab;
+	struct kmem_cache *e_slab;
 	int nevents;
 	struct list_head e_list;
 	struct mon_reader r;	/* In C, parent class can be placed anywhere */
@@ -60,8 +63,7 @@ struct mon_reader_text {
 	char slab_name[SLAB_NAME_SZ];
 };
 
-static void mon_text_ctor(void *, kmem_cache_t *, unsigned long);
-static void mon_text_dtor(void *, kmem_cache_t *, unsigned long);
+static void mon_text_ctor(void *, struct kmem_cache *, unsigned long);
 
 /*
  * mon_text_submit
@@ -73,13 +75,13 @@ static void mon_text_dtor(void *, kmem_cache_t *, unsigned long);
  */
 
 static inline char mon_text_get_setup(struct mon_event_text *ep,
-    struct urb *urb, char ev_type)
+    struct urb *urb, char ev_type, struct mon_bus *mbus)
 {
 
 	if (!usb_pipecontrol(urb->pipe) || ev_type != 'S')
 		return '-';
 
-	if (urb->transfer_flags & URB_NO_SETUP_DMA_MAP)
+	if (mbus->uses_dma && (urb->transfer_flags & URB_NO_SETUP_DMA_MAP))
 		return mon_dmapeek(ep->setup, urb->setup_dma, SETUP_MAX);
 	if (urb->setup_packet == NULL)
 		return 'Z';	/* '0' would be not as pretty. */
@@ -89,7 +91,7 @@ static inline char mon_text_get_setup(struct mon_event_text *ep,
 }
 
 static inline char mon_text_get_data(struct mon_event_text *ep, struct urb *urb,
-    int len, char ev_type)
+    int len, char ev_type, struct mon_bus *mbus)
 {
 	int pipe = urb->pipe;
 
@@ -111,11 +113,11 @@ static inline char mon_text_get_data(struct mon_event_text *ep, struct urb *urb,
 	 * number of corner cases, but it seems that the following is
 	 * more or less safe.
 	 *
-	 * We do not even try to look transfer_buffer, because it can
+	 * We do not even try to look at transfer_buffer, because it can
 	 * contain non-NULL garbage in case the upper level promised to
 	 * set DMA for the HCD.
 	 */
-	if (urb->transfer_flags & URB_NO_TRANSFER_DMA_MAP)
+	if (mbus->uses_dma && (urb->transfer_flags & URB_NO_TRANSFER_DMA_MAP))
 		return mon_dmapeek(ep->data, urb->transfer_dma, len);
 
 	if (urb->transfer_buffer == NULL)
@@ -145,7 +147,7 @@ static void mon_text_event(struct mon_reader_text *rp, struct urb *urb,
 	stamp = mon_get_timestamp();
 
 	if (rp->nevents >= EVENT_MAX ||
-	    (ep = kmem_cache_alloc(rp->e_slab, SLAB_ATOMIC)) == NULL) {
+	    (ep = kmem_cache_alloc(rp->e_slab, GFP_ATOMIC)) == NULL) {
 		rp->r.m_bus->cnt_text_lost++;
 		return;
 	}
@@ -159,8 +161,9 @@ static void mon_text_event(struct mon_reader_text *rp, struct urb *urb,
 	/* Collecting status makes debugging sense for submits, too */
 	ep->status = urb->status;
 
-	ep->setup_flag = mon_text_get_setup(ep, urb, ev_type);
-	ep->data_flag = mon_text_get_data(ep, urb, ep->length, ev_type);
+	ep->setup_flag = mon_text_get_setup(ep, urb, ev_type, rp->r.m_bus);
+	ep->data_flag = mon_text_get_data(ep, urb, ep->length, ev_type,
+			rp->r.m_bus);
 
 	rp->nevents++;
 	list_add_tail(&ep->e_link, &rp->e_list);
@@ -177,6 +180,32 @@ static void mon_text_complete(void *data, struct urb *urb)
 {
 	struct mon_reader_text *rp = data;
 	mon_text_event(rp, urb, 'C');
+}
+
+static void mon_text_error(void *data, struct urb *urb, int error)
+{
+	struct mon_reader_text *rp = data;
+	struct mon_event_text *ep;
+
+	if (rp->nevents >= EVENT_MAX ||
+	    (ep = kmem_cache_alloc(rp->e_slab, GFP_ATOMIC)) == NULL) {
+		rp->r.m_bus->cnt_text_lost++;
+		return;
+	}
+
+	ep->type = 'E';
+	ep->pipe = urb->pipe;
+	ep->id = (unsigned long) urb;
+	ep->tstamp = 0;
+	ep->length = 0;
+	ep->status = error;
+
+	ep->setup_flag = '-';
+	ep->data_flag = 'E';
+
+	rp->nevents++;
+	list_add_tail(&ep->e_link, &rp->e_list);
+	wake_up(&rp->wait);
 }
 
 /*
@@ -210,7 +239,7 @@ static int mon_text_open(struct inode *inode, struct file *file)
 	int rc;
 
 	mutex_lock(&mon_lock);
-	mbus = inode->u.generic_ip;
+	mbus = inode->i_private;
 	ubus = mbus->u_bus;
 
 	rp = kzalloc(sizeof(struct mon_reader_text), GFP_KERNEL);
@@ -232,13 +261,14 @@ static int mon_text_open(struct inode *inode, struct file *file)
 	rp->r.m_bus = mbus;
 	rp->r.r_data = rp;
 	rp->r.rnf_submit = mon_text_submit;
+	rp->r.rnf_error = mon_text_error;
 	rp->r.rnf_complete = mon_text_complete;
 
 	snprintf(rp->slab_name, SLAB_NAME_SZ, "mon%dt_%lx", ubus->busnum,
 	    (long)rp);
 	rp->e_slab = kmem_cache_create(rp->slab_name,
 	    sizeof(struct mon_event_text), sizeof(long), 0,
-	    mon_text_ctor, mon_text_dtor);
+	    mon_text_ctor, NULL);
 	if (rp->e_slab == NULL) {
 		rc = -ENOMEM;
 		goto err_slab;
@@ -372,7 +402,7 @@ static int mon_text_release(struct inode *inode, struct file *file)
 	struct mon_event_text *ep;
 
 	mutex_lock(&mon_lock);
-	mbus = inode->u.generic_ip;
+	mbus = inode->i_private;
 
 	if (mbus->nreaders <= 0) {
 		printk(KERN_ERR TAG ": consistency error on close\n");
@@ -406,7 +436,7 @@ static int mon_text_release(struct inode *inode, struct file *file)
 	return 0;
 }
 
-struct file_operations mon_fops_text = {
+const struct file_operations mon_fops_text = {
 	.owner =	THIS_MODULE,
 	.open =		mon_text_open,
 	.llseek =	no_llseek,
@@ -420,7 +450,7 @@ struct file_operations mon_fops_text = {
 /*
  * Slab interface: constructor.
  */
-static void mon_text_ctor(void *mem, kmem_cache_t *slab, unsigned long sflags)
+static void mon_text_ctor(void *mem, struct kmem_cache *slab, unsigned long sflags)
 {
 	/*
 	 * Nothing to initialize. No, really!
@@ -429,7 +459,3 @@ static void mon_text_ctor(void *mem, kmem_cache_t *slab, unsigned long sflags)
 	memset(mem, 0xe5, sizeof(struct mon_event_text));
 }
 
-static void mon_text_dtor(void *mem, kmem_cache_t *slab, unsigned long sflags)
-{
-	;
-}

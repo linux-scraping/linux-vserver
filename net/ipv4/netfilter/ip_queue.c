@@ -52,15 +52,15 @@ struct ipq_queue_entry {
 
 typedef int (*ipq_cmpfn)(struct ipq_queue_entry *, unsigned long);
 
-static unsigned char copy_mode = IPQ_COPY_NONE;
-static unsigned int queue_maxlen = IPQ_QMAX_DEFAULT;
+static unsigned char copy_mode __read_mostly = IPQ_COPY_NONE;
+static unsigned int queue_maxlen __read_mostly = IPQ_QMAX_DEFAULT;
 static DEFINE_RWLOCK(queue_lock);
-static int peer_pid;
-static unsigned int copy_range;
+static int peer_pid __read_mostly;
+static unsigned int copy_range __read_mostly;
 static unsigned int queue_total;
 static unsigned int queue_dropped = 0;
 static unsigned int queue_user_dropped = 0;
-static struct sock *ipqnl;
+static struct sock *ipqnl __read_mostly;
 static LIST_HEAD(queue_list);
 static DEFINE_MUTEX(ipqnl_mutex);
 
@@ -208,9 +208,9 @@ ipq_build_packet_message(struct ipq_queue_entry *entry, int *errp)
 		break;
 	
 	case IPQ_COPY_PACKET:
-		if (entry->skb->ip_summed == CHECKSUM_HW &&
-		    (*errp = skb_checksum_help(entry->skb,
-		                               entry->info->outdev == NULL))) {
+		if ((entry->skb->ip_summed == CHECKSUM_PARTIAL ||
+		     entry->skb->ip_summed == CHECKSUM_COMPLETE) &&
+		    (*errp = skb_checksum_help(entry->skb))) {
 			read_unlock_bh(&queue_lock);
 			return NULL;
 		}
@@ -243,7 +243,7 @@ ipq_build_packet_message(struct ipq_queue_entry *entry, int *errp)
 	pmsg->data_len        = data_len;
 	pmsg->timestamp_sec   = entry->skb->tstamp.off_sec;
 	pmsg->timestamp_usec  = entry->skb->tstamp.off_usec;
-	pmsg->mark            = entry->skb->nfmark;
+	pmsg->mark            = entry->skb->mark;
 	pmsg->hook            = entry->info->hook;
 	pmsg->hw_protocol     = entry->skb->protocol;
 	
@@ -351,9 +351,10 @@ ipq_mangle_ipv4(ipq_verdict_msg_t *v, struct ipq_queue_entry *e)
 	if (v->data_len < sizeof(*user_iph))
 		return 0;
 	diff = v->data_len - e->skb->len;
-	if (diff < 0)
-		skb_trim(e->skb, v->data_len);
-	else if (diff > 0) {
+	if (diff < 0) {
+		if (pskb_trim(e->skb, v->data_len))
+			return -ENOMEM;
+	} else if (diff > 0) {
 		if (v->data_len > 0xFFFF)
 			return -EINVAL;
 		if (diff > skb_tailroom(e->skb)) {
@@ -457,11 +458,19 @@ dev_cmp(struct ipq_queue_entry *entry, unsigned long ifindex)
 	if (entry->info->indev)
 		if (entry->info->indev->ifindex == ifindex)
 			return 1;
-			
 	if (entry->info->outdev)
 		if (entry->info->outdev->ifindex == ifindex)
 			return 1;
-
+#ifdef CONFIG_BRIDGE_NETFILTER
+	if (entry->skb->nf_bridge) {
+		if (entry->skb->nf_bridge->physindev &&
+		    entry->skb->nf_bridge->physindev->ifindex == ifindex)
+			return 1;
+		if (entry->skb->nf_bridge->physoutdev &&
+		    entry->skb->nf_bridge->physoutdev->ifindex == ifindex)
+		    	return 1;
+	}
+#endif
 	return 0;
 }
 
@@ -507,7 +516,7 @@ ipq_rcv_skb(struct sk_buff *skb)
 	if (type <= IPQM_BASE)
 		return;
 		
-	if (security_netlink_recv(skb))
+	if (security_netlink_recv(skb, CAP_NET_ADMIN))
 		RCV_SKB_FAIL(-EPERM);
 	
 	write_lock_bh(&queue_lock);

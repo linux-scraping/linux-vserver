@@ -112,7 +112,7 @@ static void hpp_io_block_output(struct net_device *dev, int count,
 static void hpp_io_get_8390_hdr(struct net_device *dev, struct e8390_pkt_hdr *hdr,
 						  int ring_page);
 
-
+
 /*	Probe a list of addresses for an HP LAN+ adaptor.
 	This routine is almost boilerplate. */
 
@@ -430,7 +430,7 @@ hpp_mem_block_output(struct net_device *dev, int count,
 	return;
 }
 
-
+
 #ifdef MODULE
 #define MAX_HPP_CARDS	4	/* Max number of HPP cards per module */
 static struct net_device *dev_hpp[MAX_HPP_CARDS];
@@ -446,7 +446,7 @@ MODULE_LICENSE("GPL");
 
 /* This is set up so that only a single autoprobe takes place per call.
 ISA device autoprobes on a running machine are not recommended. */
-int
+int __init
 init_module(void)
 {
 	struct net_device *dev;
@@ -482,7 +482,7 @@ static void cleanup_card(struct net_device *dev)
 	release_region(dev->base_addr - NIC_OFFSET, HP_IO_EXTENT);
 }
 
-void
+void __exit
 cleanup_module(void)
 {
 	int this_dev;

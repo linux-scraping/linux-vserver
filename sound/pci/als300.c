@@ -146,7 +146,7 @@ struct snd_als300_substream_data {
 	int block_counter_register;
 };
 
-static struct pci_device_id snd_als300_ids[] __devinitdata = {
+static struct pci_device_id snd_als300_ids[] = {
 	{ 0x4005, 0x0300, PCI_ANY_ID, PCI_ANY_ID, 0, 0, DEVICE_ALS300 },
 	{ 0x4005, 0x0308, PCI_ANY_ID, PCI_ANY_ID, 0, 0, DEVICE_ALS300_PLUS },
 	{ 0, }
@@ -190,7 +190,7 @@ static int snd_als300_free(struct snd_als300 *chip)
 	snd_als300_dbgcallenter();
 	snd_als300_set_irq_flag(chip, IRQ_DISABLE);
 	if (chip->irq >= 0)
-		free_irq(chip->irq, (void *)chip);
+		free_irq(chip->irq, chip);
 	pci_release_regions(chip->pci);
 	pci_disable_device(chip->pci);
 	kfree(chip);
@@ -204,8 +204,7 @@ static int snd_als300_dev_free(struct snd_device *device)
 	return snd_als300_free(chip);
 }
 
-static irqreturn_t snd_als300_interrupt(int irq, void *dev_id,
-						struct pt_regs *regs)
+static irqreturn_t snd_als300_interrupt(int irq, void *dev_id)
 {
 	u8 status;
 	struct snd_als300 *chip = dev_id;
@@ -236,8 +235,7 @@ static irqreturn_t snd_als300_interrupt(int irq, void *dev_id,
 	return IRQ_HANDLED;
 }
 
-static irqreturn_t snd_als300plus_interrupt(int irq, void *dev_id,
-						struct pt_regs *regs)
+static irqreturn_t snd_als300plus_interrupt(int irq, void *dev_id)
 {
 	u8 general, mpu, dram;
 	struct snd_als300 *chip = dev_id;
@@ -724,8 +722,8 @@ static int __devinit snd_als300_create(snd_card_t *card,
 	else
 		irq_handler = snd_als300_interrupt;
 
-	if (request_irq(pci->irq, irq_handler, SA_INTERRUPT|SA_SHIRQ,
-					card->shortname, (void *)chip)) {
+	if (request_irq(pci->irq, irq_handler, IRQF_SHARED,
+			card->shortname, chip)) {
 		snd_printk(KERN_ERR "unable to grab IRQ %d\n", pci->irq);
 		snd_als300_free(chip);
 		return -EBUSY;
@@ -770,9 +768,9 @@ static int snd_als300_suspend(struct pci_dev *pci, pm_message_t state)
 	snd_pcm_suspend_all(chip->pcm);
 	snd_ac97_suspend(chip->ac97);
 
-	pci_set_power_state(pci, PCI_D3hot);
 	pci_disable_device(pci);
 	pci_save_state(pci);
+	pci_set_power_state(pci, pci_choose_state(pci, state));
 	return 0;
 }
 
@@ -781,9 +779,14 @@ static int snd_als300_resume(struct pci_dev *pci)
 	struct snd_card *card = pci_get_drvdata(pci);
 	struct snd_als300 *chip = card->private_data;
 
-	pci_restore_state(pci);
-	pci_enable_device(pci);
 	pci_set_power_state(pci, PCI_D0);
+	pci_restore_state(pci);
+	if (pci_enable_device(pci) < 0) {
+		printk(KERN_ERR "als300: pci_enable_device failed, "
+		       "disabling device\n");
+		snd_card_disconnect(card);
+		return -EIO;
+	}
 	pci_set_master(pci);
 
 	snd_als300_init(chip);

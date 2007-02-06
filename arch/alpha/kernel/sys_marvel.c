@@ -38,7 +38,7 @@
  * Interrupt handling.
  */
 static void 
-io7_device_interrupt(unsigned long vector, struct pt_regs * regs)
+io7_device_interrupt(unsigned long vector)
 {
 	unsigned int pid;
 	unsigned int irq;
@@ -64,7 +64,7 @@ io7_device_interrupt(unsigned long vector, struct pt_regs * regs)
 	irq &= MARVEL_IRQ_VEC_IRQ_MASK;		/* not too many bits */
 	irq |= pid << MARVEL_IRQ_VEC_PE_SHIFT;	/* merge the pid     */
 
-	handle_irq(irq, regs);
+	handle_irq(irq);
 }
 
 static volatile unsigned long *
@@ -303,7 +303,7 @@ init_io7_irqs(struct io7 *io7,
 	/* Set up the lsi irqs.  */
 	for (i = 0; i < 128; ++i) {
 		irq_desc[base + i].status = IRQ_DISABLED | IRQ_LEVEL;
-		irq_desc[base + i].handler = lsi_ops;
+		irq_desc[base + i].chip = lsi_ops;
 	}
 
 	/* Disable the implemented irqs in hardware.  */
@@ -317,7 +317,7 @@ init_io7_irqs(struct io7 *io7,
 	/* Set up the msi irqs.  */
 	for (i = 128; i < (128 + 512); ++i) {
 		irq_desc[base + i].status = IRQ_DISABLED | IRQ_LEVEL;
-		irq_desc[base + i].handler = msi_ops;
+		irq_desc[base + i].chip = msi_ops;
 	}
 
 	for (i = 0; i < 16; ++i)
@@ -335,7 +335,7 @@ marvel_init_irq(void)
 	/* Reserve the legacy irqs.  */
 	for (i = 0; i < 16; ++i) {
 		irq_desc[i].status = IRQ_DISABLED;
-		irq_desc[i].handler = &marvel_legacy_irq_type;
+		irq_desc[i].chip = &marvel_legacy_irq_type;
 	}
 
 	/* Init the io7 irqs.  */

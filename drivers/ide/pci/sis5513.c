@@ -44,7 +44,6 @@
  * 962/963.
  */
 
-#include <linux/config.h>
 #include <linux/types.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
@@ -87,6 +86,8 @@ static const struct {
 	u8 chipset_family;
 	u8 flags;
 } SiSHostChipInfo[] = {
+	{ "SiS968",	PCI_DEVICE_ID_SI_968,	ATA_133  },
+	{ "SiS966",	PCI_DEVICE_ID_SI_966,	ATA_133  },
 	{ "SiS965",	PCI_DEVICE_ID_SI_965,	ATA_133  },
 	{ "SiS745",	PCI_DEVICE_ID_SI_745,	ATA_100  },
 	{ "SiS735",	PCI_DEVICE_ID_SI_735,	ATA_100  },
@@ -738,7 +739,7 @@ static unsigned int __devinit init_chipset_sis5513 (struct pci_dev *dev, const c
 
 	for (i = 0; i < ARRAY_SIZE(SiSHostChipInfo) && !chipset_family; i++) {
 
-		host = pci_find_device(PCI_VENDOR_ID_SI, SiSHostChipInfo[i].host_id, NULL);
+		host = pci_get_device(PCI_VENDOR_ID_SI, SiSHostChipInfo[i].host_id, NULL);
 
 		if (!host)
 			continue;
@@ -752,6 +753,7 @@ static unsigned int __devinit init_chipset_sis5513 (struct pci_dev *dev, const c
 			if (hostrev >= 0x30)
 				chipset_family = ATA_100a;
 		}
+		pci_dev_put(host);
 	
 		printk(KERN_INFO "SIS5513: %s %s controller\n",
 			 SiSHostChipInfo[i].name, chipset_capability[chipset_family]);
@@ -798,9 +800,10 @@ static unsigned int __devinit init_chipset_sis5513 (struct pci_dev *dev, const c
 
 			if (trueid == 0x5517) { /* SiS 961/961B */
 
-				lpc_bridge = pci_find_slot(0x00, 0x10); /* Bus 0, Dev 2, Fn 0 */
+				lpc_bridge = pci_get_slot(dev->bus, 0x10); /* Bus 0, Dev 2, Fn 0 */
 				pci_read_config_byte(lpc_bridge, PCI_REVISION_ID, &sbrev);
 				pci_read_config_byte(dev, 0x49, &prefctl);
+				pci_dev_put(lpc_bridge);
 
 				if (sbrev == 0x10 && (prefctl & 0x80)) {
 					printk(KERN_INFO "SIS5513: SiS 961B MuTIOL IDE UDMA133 controller\n");
@@ -965,7 +968,7 @@ static struct pci_driver driver = {
 	.probe		= sis5513_init_one,
 };
 
-static int sis5513_ide_init(void)
+static int __init sis5513_ide_init(void)
 {
 	return ide_pci_register_driver(&driver);
 }

@@ -46,7 +46,8 @@ char *
 build_path_from_dentry(struct dentry *direntry)
 {
 	struct dentry *temp;
-	int namelen = 0;
+	int namelen;
+	int pplen;
 	char *full_path;
 	char dirsep;
 
@@ -56,7 +57,9 @@ build_path_from_dentry(struct dentry *direntry)
 		when the server crashed */
 
 	dirsep = CIFS_DIR_SEP(CIFS_SB(direntry->d_sb));
+	pplen = CIFS_SB(direntry->d_sb)->prepathlen;
 cifs_bp_rename_retry:
+	namelen = pplen; 
 	for (temp = direntry; !IS_ROOT(temp);) {
 		namelen += (1 + temp->d_name.len);
 		temp = temp->d_parent;
@@ -70,7 +73,6 @@ cifs_bp_rename_retry:
 	if(full_path == NULL)
 		return full_path;
 	full_path[namelen] = 0;	/* trailing null */
-
 	for (temp = direntry; !IS_ROOT(temp);) {
 		namelen -= 1 + temp->d_name.len;
 		if (namelen < 0) {
@@ -79,7 +81,7 @@ cifs_bp_rename_retry:
 			full_path[namelen] = dirsep;
 			strncpy(full_path + namelen + 1, temp->d_name.name,
 				temp->d_name.len);
-			cFYI(0, (" name: %s ", full_path + namelen));
+			cFYI(0, ("name: %s", full_path + namelen));
 		}
 		temp = temp->d_parent;
 		if(temp == NULL) {
@@ -88,18 +90,23 @@ cifs_bp_rename_retry:
 			return NULL;
 		}
 	}
-	if (namelen != 0) {
+	if (namelen != pplen) {
 		cERROR(1,
-		       ("We did not end path lookup where we expected namelen is %d",
+		       ("did not end path lookup where expected namelen is %d",
 			namelen));
-		/* presumably this is only possible if we were racing with a rename 
+		/* presumably this is only possible if racing with a rename 
 		of one of the parent directories  (we can not lock the dentries
 		above us to prevent this, but retrying should be harmless) */
 		kfree(full_path);
-		namelen = 0;
 		goto cifs_bp_rename_retry;
 	}
-
+	/* DIR_SEP already set for byte  0 / vs \ but not for
+	   subsequent slashes in prepath which currently must
+	   be entered the right way - not sure if there is an alternative
+	   since the '\' is a valid posix character so we can not switch
+	   those safely to '/' if any are found in the middle of the prepath */
+	/* BB test paths to Windows with '/' in the midst of prepath */
+	strncpy(full_path,CIFS_SB(direntry->d_sb)->prepath,pplen);
 	return full_path;
 }
 
@@ -113,7 +120,7 @@ cifs_bp_rename_retry:
 	full_path[namelen+2] = 0;
 BB remove above eight lines BB */
 
-/* Inode operations in similar order to how they appear in the Linux file fs.h */
+/* Inode operations in similar order to how they appear in Linux file fs.h */
 
 int
 cifs_create(struct inode *inode, struct dentry *direntry, int mode,
@@ -178,11 +185,14 @@ cifs_create(struct inode *inode, struct dentry *direntry, int mode,
 		FreeXid(xid);
 		return -ENOMEM;
 	}
-
-	rc = CIFSSMBOpen(xid, pTcon, full_path, disposition,
+	if (cifs_sb->tcon->ses->capabilities & CAP_NT_SMBS) 
+		rc = CIFSSMBOpen(xid, pTcon, full_path, disposition,
 			 desiredAccess, CREATE_NOT_DIR,
 			 &fileHandle, &oplock, buf, cifs_sb->local_nls,
 			 cifs_sb->mnt_cifs_flags & CIFS_MOUNT_MAP_SPECIAL_CHR);
+	else
+		rc = -EIO; /* no NT SMB support fall into legacy open below */
+
 	if(rc == -EIO) {
 		/* old server, retry the open legacy style */
 		rc = SMBLegacyOpen(xid, pTcon, full_path, disposition,
@@ -191,7 +201,7 @@ cifs_create(struct inode *inode, struct dentry *direntry, int mode,
 			cifs_sb->mnt_cifs_flags & CIFS_MOUNT_MAP_SPECIAL_CHR);
 	} 
 	if (rc) {
-		cFYI(1, ("cifs_create returned 0x%x ", rc));
+		cFYI(1, ("cifs_create returned 0x%x", rc));
 	} else {
 		/* If Open reported that we actually created a file
 		then we now have to set the mode if possible */
@@ -264,6 +274,10 @@ cifs_create(struct inode *inode, struct dentry *direntry, int mode,
 			pCifsFile->invalidHandle = FALSE;
 			pCifsFile->closePend     = FALSE;
 			init_MUTEX(&pCifsFile->fh_sem);
+			init_MUTEX(&pCifsFile->lock_sem);
+			INIT_LIST_HEAD(&pCifsFile->llist);
+			atomic_set(&pCifsFile->wrtPending,0);
+
 			/* set the following in open now 
 				pCifsFile->pfile = file; */
 			write_lock(&GlobalSMBSeslock);
@@ -369,6 +383,10 @@ int cifs_mknod(struct inode *inode, struct dentry *direntry, int mode,
 					 cifs_sb->mnt_cifs_flags & 
 					    CIFS_MOUNT_MAP_SPECIAL_CHR);
 
+			/* BB FIXME - add handling for backlevel servers
+			   which need legacy open and check for all
+			   calls to SMBOpen for fallback to 
+			   SMBLeagcyOpen */
 			if(!rc) {
 				/* BB Do not bother to decode buf since no
 				   local inode yet to put timestamps in,

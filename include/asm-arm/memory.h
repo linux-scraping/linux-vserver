@@ -2,6 +2,7 @@
  *  linux/include/asm-arm/memory.h
  *
  *  Copyright (C) 2000-2002 Russell King
+ *  modification for nommu, Hyok S. Choi, 2004
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -22,10 +23,11 @@
 #define UL(x) (x)
 #endif
 
-#include <linux/config.h>
 #include <linux/compiler.h>
 #include <asm/arch/memory.h>
 #include <asm/sizes.h>
+
+#ifdef CONFIG_MMU
 
 #ifndef TASK_SIZE
 /*
@@ -47,6 +49,65 @@
 #ifndef PAGE_OFFSET
 #define PAGE_OFFSET		UL(0xc0000000)
 #endif
+
+/*
+ * The module space lives between the addresses given by TASK_SIZE
+ * and PAGE_OFFSET - it must be within 32MB of the kernel text.
+ */
+#define MODULE_END		(PAGE_OFFSET)
+#define MODULE_START		(MODULE_END - 16*1048576)
+
+#if TASK_SIZE > MODULE_START
+#error Top of user space clashes with start of module space
+#endif
+
+/*
+ * The XIP kernel gets mapped at the bottom of the module vm area.
+ * Since we use sections to map it, this macro replaces the physical address
+ * with its virtual address while keeping offset from the base section.
+ */
+#define XIP_VIRT_ADDR(physaddr)  (MODULE_START + ((physaddr) & 0x000fffff))
+
+/*
+ * Allow 16MB-aligned ioremap pages
+ */
+#define IOREMAP_MAX_ORDER	24
+
+#else /* CONFIG_MMU */
+
+/*
+ * The limitation of user task size can grow up to the end of free ram region.
+ * It is difficult to define and perhaps will never meet the original meaning
+ * of this define that was meant to.
+ * Fortunately, there is no reference for this in noMMU mode, for now.
+ */
+#ifndef TASK_SIZE
+#define TASK_SIZE		(CONFIG_DRAM_SIZE)
+#endif
+
+#ifndef TASK_UNMAPPED_BASE
+#define TASK_UNMAPPED_BASE	UL(0x00000000)
+#endif
+
+#ifndef PHYS_OFFSET
+#define PHYS_OFFSET 		(CONFIG_DRAM_BASE)
+#endif
+
+#ifndef END_MEM
+#define END_MEM     		(CONFIG_DRAM_BASE + CONFIG_DRAM_SIZE)
+#endif
+
+#ifndef PAGE_OFFSET
+#define PAGE_OFFSET		(PHYS_OFFSET)
+#endif
+
+/*
+ * The module can be at any place in ram in nommu mode.
+ */
+#define MODULE_END		(END_MEM)
+#define MODULE_START		(PHYS_OFFSET)
+
+#endif /* !CONFIG_MMU */
 
 /*
  * Size of DMA-consistent memory region.  Must be multiple of 2M,
@@ -71,24 +132,6 @@
  */
 #define	__phys_to_pfn(paddr)	((paddr) >> PAGE_SHIFT)
 #define	__pfn_to_phys(pfn)	((pfn) << PAGE_SHIFT)
-
-/*
- * The module space lives between the addresses given by TASK_SIZE
- * and PAGE_OFFSET - it must be within 32MB of the kernel text.
- */
-#define MODULE_END	(PAGE_OFFSET)
-#define MODULE_START	(MODULE_END - 16*1048576)
-
-#if TASK_SIZE > MODULE_START
-#error Top of user space clashes with start of module space
-#endif
-
-/*
- * The XIP kernel gets mapped at the bottom of the module vm area.
- * Since we use sections to map it, this macro replaces the physical address
- * with its virtual address while keeping offset from the base section.
- */
-#define XIP_VIRT_ADDR(physaddr)  (MODULE_START + ((physaddr) & 0x000fffff))
 
 #ifndef __ASSEMBLY__
 
@@ -172,6 +215,7 @@ static inline __deprecated void *bus_to_virt(unsigned long x)
  *  virt_addr_valid(k)	indicates whether a virtual address is valid
  */
 #ifndef CONFIG_DISCONTIGMEM
+
 #define ARCH_PFN_OFFSET		PHYS_PFN_OFFSET
 #define pfn_valid(pfn)		((pfn) >= PHYS_PFN_OFFSET && (pfn) < (PHYS_PFN_OFFSET + max_mapnr))
 
@@ -187,6 +231,7 @@ static inline __deprecated void *bus_to_virt(unsigned long x)
  * around in memory.
  */
 #include <linux/numa.h>
+
 #define arch_pfn_to_nid(pfn)	PFN_TO_NID(pfn)
 #define arch_local_page_offset(pfn, nid) LOCAL_MAP_NR((pfn) << PAGE_SHIFT)
 
@@ -212,6 +257,43 @@ static inline __deprecated void *bus_to_virt(unsigned long x)
  *  PHYS_TO_NID is used by the ARM kernel/setup.c
  */
 #define PHYS_TO_NID(addr)	PFN_TO_NID((addr) >> PAGE_SHIFT)
+
+/*
+ * Given a kaddr, ADDR_TO_MAPBASE finds the owning node of the memory
+ * and returns the mem_map of that node.
+ */
+#define ADDR_TO_MAPBASE(kaddr)	NODE_MEM_MAP(KVADDR_TO_NID(kaddr))
+
+/*
+ * Given a page frame number, find the owning node of the memory
+ * and returns the mem_map of that node.
+ */
+#define PFN_TO_MAPBASE(pfn)	NODE_MEM_MAP(PFN_TO_NID(pfn))
+
+#ifdef NODE_MEM_SIZE_BITS
+#define NODE_MEM_SIZE_MASK	((1 << NODE_MEM_SIZE_BITS) - 1)
+
+/*
+ * Given a kernel address, find the home node of the underlying memory.
+ */
+#define KVADDR_TO_NID(addr) \
+	(((unsigned long)(addr) - PAGE_OFFSET) >> NODE_MEM_SIZE_BITS)
+
+/*
+ * Given a page frame number, convert it to a node id.
+ */
+#define PFN_TO_NID(pfn) \
+	(((pfn) - PHYS_PFN_OFFSET) >> (NODE_MEM_SIZE_BITS - PAGE_SHIFT))
+
+/*
+ * Given a kaddr, LOCAL_MEM_MAP finds the owning node of the memory
+ * and returns the index corresponding to the appropriate page in the
+ * node's mem_map.
+ */
+#define LOCAL_MAP_NR(addr) \
+	(((unsigned long)(addr) & NODE_MEM_SIZE_MASK) >> PAGE_SHIFT)
+
+#endif /* NODE_MEM_SIZE_BITS */
 
 #endif /* !CONFIG_DISCONTIGMEM */
 

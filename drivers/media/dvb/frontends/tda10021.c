@@ -21,7 +21,6 @@
     Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
 */
 
-#include <linux/config.h>
 #include <linux/delay.h>
 #include <linux/errno.h>
 #include <linux/init.h>
@@ -36,7 +35,6 @@
 
 struct tda10021_state {
 	struct i2c_adapter* i2c;
-	struct dvb_frontend_ops ops;
 	/* configuration settings */
 	const struct tda10021_config* config;
 	struct dvb_frontend frontend;
@@ -74,7 +72,7 @@ static u8 tda10021_inittab[0x40]=
 	0x04, 0x2d, 0x2f, 0xff, 0x00, 0x00, 0x00, 0x00,
 };
 
-static int tda10021_writereg (struct tda10021_state* state, u8 reg, u8 data)
+static int _tda10021_writereg (struct tda10021_state* state, u8 reg, u8 data)
 {
 	u8 buf[] = { reg, data };
 	struct i2c_msg msg = { .addr = state->config->demod_address, .flags = 0, .buf = buf, .len = 2 };
@@ -143,8 +141,8 @@ static int tda10021_setup_reg0 (struct tda10021_state* state, u8 reg0,
 	else if (INVERSION_OFF == inversion)
 		DISABLE_INVERSION(reg0);
 
-	tda10021_writereg (state, 0x00, reg0 & 0xfe);
-	tda10021_writereg (state, 0x00, reg0 | 0x01);
+	_tda10021_writereg (state, 0x00, reg0 & 0xfe);
+	_tda10021_writereg (state, 0x00, reg0 | 0x01);
 
 	state->reg0 = reg0;
 	return 0;
@@ -192,15 +190,25 @@ static int tda10021_set_symbolrate (struct tda10021_state* state, u32 symbolrate
 
 	NDEC = (NDEC << 6) | tda10021_inittab[0x03];
 
-	tda10021_writereg (state, 0x03, NDEC);
-	tda10021_writereg (state, 0x0a, BDR&0xff);
-	tda10021_writereg (state, 0x0b, (BDR>> 8)&0xff);
-	tda10021_writereg (state, 0x0c, (BDR>>16)&0x3f);
+	_tda10021_writereg (state, 0x03, NDEC);
+	_tda10021_writereg (state, 0x0a, BDR&0xff);
+	_tda10021_writereg (state, 0x0b, (BDR>> 8)&0xff);
+	_tda10021_writereg (state, 0x0c, (BDR>>16)&0x3f);
 
-	tda10021_writereg (state, 0x0d, BDRI);
-	tda10021_writereg (state, 0x0e, SFIL);
+	_tda10021_writereg (state, 0x0d, BDRI);
+	_tda10021_writereg (state, 0x0e, SFIL);
 
 	return 0;
+}
+
+int tda10021_write(struct dvb_frontend* fe, u8 *buf, int len)
+{
+	struct tda10021_state* state = fe->demodulator_priv;
+
+	if (len != 2)
+		return -EINVAL;
+
+	return _tda10021_writereg(state, buf[0], buf[1]);
 }
 
 static int tda10021_init (struct dvb_frontend *fe)
@@ -210,12 +218,12 @@ static int tda10021_init (struct dvb_frontend *fe)
 
 	dprintk("DVB: TDA10021(%d): init chip\n", fe->adapter->num);
 
-	//tda10021_writereg (fe, 0, 0);
+	//_tda10021_writereg (fe, 0, 0);
 
 	for (i=0; i<tda10021_inittab_size; i++)
-		tda10021_writereg (state, i, tda10021_inittab[i]);
+		_tda10021_writereg (state, i, tda10021_inittab[i]);
 
-	tda10021_writereg (state, 0x34, state->pwm);
+	_tda10021_writereg (state, 0x34, state->pwm);
 
 	//Comment by markus
 	//0x2A[3-0] == PDIV -> P multiplaying factor (P=PDIV+1)(default 0)
@@ -224,14 +232,7 @@ static int tda10021_init (struct dvb_frontend *fe)
 	//0x2A[6] == POLAXIN -> Polarity of the input reference clock (default 0)
 
 	//Activate PLL
-	tda10021_writereg(state, 0x2a, tda10021_inittab[0x2a] & 0xef);
-
-	if (state->config->pll_init) {
-		lock_tuner(state);
-		state->config->pll_init(fe);
-		unlock_tuner(state);
-	}
-
+	_tda10021_writereg(state, 0x2a, tda10021_inittab[0x2a] & 0xef);
 	return 0;
 }
 
@@ -259,17 +260,18 @@ static int tda10021_set_parameters (struct dvb_frontend *fe,
 
 	//printk("tda10021: set frequency to %d qam=%d symrate=%d\n", p->frequency,qam,p->u.qam.symbol_rate);
 
-	lock_tuner(state);
-	state->config->pll_set(fe, p);
-	unlock_tuner(state);
+	if (fe->ops.tuner_ops.set_params) {
+		fe->ops.tuner_ops.set_params(fe, p);
+		if (fe->ops.i2c_gate_ctrl) fe->ops.i2c_gate_ctrl(fe, 0);
+	}
 
 	tda10021_set_symbolrate (state, p->u.qam.symbol_rate);
-	tda10021_writereg (state, 0x34, state->pwm);
+	_tda10021_writereg (state, 0x34, state->pwm);
 
-	tda10021_writereg (state, 0x01, reg0x01[qam]);
-	tda10021_writereg (state, 0x05, reg0x05[qam]);
-	tda10021_writereg (state, 0x08, reg0x08[qam]);
-	tda10021_writereg (state, 0x09, reg0x09[qam]);
+	_tda10021_writereg (state, 0x01, reg0x01[qam]);
+	_tda10021_writereg (state, 0x05, reg0x05[qam]);
+	_tda10021_writereg (state, 0x08, reg0x08[qam]);
+	_tda10021_writereg (state, 0x09, reg0x09[qam]);
 
 	tda10021_setup_reg0 (state, reg0x00[qam], p->inversion);
 
@@ -342,8 +344,8 @@ static int tda10021_read_ucblocks(struct dvb_frontend* fe, u32* ucblocks)
 		*ucblocks = 0xffffffff;
 
 	/* reset uncorrected block counter */
-	tda10021_writereg (state, 0x10, tda10021_inittab[0x10] & 0xdf);
-	tda10021_writereg (state, 0x10, tda10021_inittab[0x10]);
+	_tda10021_writereg (state, 0x10, tda10021_inittab[0x10] & 0xdf);
+	_tda10021_writereg (state, 0x10, tda10021_inittab[0x10]);
 
 	return 0;
 }
@@ -376,12 +378,24 @@ static int tda10021_get_frontend(struct dvb_frontend* fe, struct dvb_frontend_pa
 	return 0;
 }
 
+static int tda10021_i2c_gate_ctrl(struct dvb_frontend* fe, int enable)
+{
+	struct tda10021_state* state = fe->demodulator_priv;
+
+	if (enable) {
+		lock_tuner(state);
+	} else {
+		unlock_tuner(state);
+	}
+	return 0;
+}
+
 static int tda10021_sleep(struct dvb_frontend* fe)
 {
 	struct tda10021_state* state = fe->demodulator_priv;
 
-	tda10021_writereg (state, 0x1b, 0x02);  /* pdown ADC */
-	tda10021_writereg (state, 0x00, 0x80);  /* standby */
+	_tda10021_writereg (state, 0x1b, 0x02);  /* pdown ADC */
+	_tda10021_writereg (state, 0x00, 0x80);  /* standby */
 
 	return 0;
 }
@@ -407,7 +421,6 @@ struct dvb_frontend* tda10021_attach(const struct tda10021_config* config,
 	/* setup the state */
 	state->config = config;
 	state->i2c = i2c;
-	memcpy(&state->ops, &tda10021_ops, sizeof(struct dvb_frontend_ops));
 	state->pwm = pwm;
 	state->reg0 = tda10021_inittab[0];
 
@@ -415,7 +428,7 @@ struct dvb_frontend* tda10021_attach(const struct tda10021_config* config,
 	if ((tda10021_readreg(state, 0x1a) & 0xf0) != 0x70) goto error;
 
 	/* create dvb_frontend */
-	state->frontend.ops = &state->ops;
+	memcpy(&state->frontend.ops, &tda10021_ops, sizeof(struct dvb_frontend_ops));
 	state->frontend.demodulator_priv = state;
 	return &state->frontend;
 
@@ -448,6 +461,8 @@ static struct dvb_frontend_ops tda10021_ops = {
 
 	.init = tda10021_init,
 	.sleep = tda10021_sleep,
+	.write = tda10021_write,
+	.i2c_gate_ctrl = tda10021_i2c_gate_ctrl,
 
 	.set_frontend = tda10021_set_parameters,
 	.get_frontend = tda10021_get_frontend,

@@ -5,14 +5,14 @@
    but there were too many hoops which HP wants jumped through to
    keep this code in there in a sane manner.
 
-   3 primary sources of the mess -- 
+   3 primary sources of the mess --
    1) hppa needs *lots* of cacheline flushing to keep this kind of
    MMIO running.
 
    2) The 82596 needs to see all of its pointers as their physical
    address.  Thus virt_to_bus/bus_to_virt are *everywhere*.
 
-   3) The implementation HP is using seems to be significantly pickier 
+   3) The implementation HP is using seems to be significantly pickier
    about when and how the command and RX units are started.  some
    command ordering was changed.
 
@@ -21,7 +21,7 @@
    full rewrite can be my guest.
 
    Split 02/13/2000 Sam Creasey (sammy@oh.verio.com)
-   
+
    02/01/2000  Initial modifications for parisc by Helge Deller (deller@gmx.de)
    03/02/2000  changes for better/correct(?) cache-flushing (deller)
 */
@@ -119,14 +119,14 @@
 #define DEB(x,y)	if (i596_debug & (x)) { y; }
 
 
-#define  CHECK_WBACK(addr,len) \
-	do { dma_cache_sync((void *)addr, len, DMA_TO_DEVICE); } while (0)
+#define  CHECK_WBACK(priv, addr,len) \
+	do { dma_cache_sync((priv)->dev, (void *)addr, len, DMA_TO_DEVICE); } while (0)
 
-#define  CHECK_INV(addr,len) \
-	do { dma_cache_sync((void *)addr, len, DMA_FROM_DEVICE); } while(0)
+#define  CHECK_INV(priv, addr,len) \
+	do { dma_cache_sync((priv)->dev, (void *)addr, len, DMA_FROM_DEVICE); } while(0)
 
-#define  CHECK_WBACK_INV(addr,len) \
-	do { dma_cache_sync((void *)addr, len, DMA_BIDIRECTIONAL); } while (0)
+#define  CHECK_WBACK_INV(priv, addr,len) \
+	do { dma_cache_sync((priv)->dev, (void *)addr, len, DMA_BIDIRECTIONAL); } while (0)
 
 
 #define PA_I82596_RESET		0	/* Offsets relative to LASI-LAN-Addr.*/
@@ -172,7 +172,7 @@
 #define PORT_ALTSCP		0x02	/* alternate SCB address */
 #define PORT_ALTDUMP		0x03	/* Alternate DUMP address */
 
-static int i596_debug = (DEB_SERIOUS|DEB_PROBE);  
+static int i596_debug = (DEB_SERIOUS|DEB_PROBE);
 
 MODULE_AUTHOR("Richard Hirst");
 MODULE_DESCRIPTION("i82596 driver");
@@ -265,9 +265,9 @@ struct tx_cmd {
 	dma_addr_t dma_addr;
 #ifdef __LP64__
 	u32 cache_pad[6];		/* Total 64 bytes... */
-#else    
+#else
 	u32 cache_pad[1];		/* Total 32 bytes... */
-#endif    
+#endif
 };
 
 struct tdr_cmd {
@@ -301,9 +301,9 @@ struct i596_rfd {
 	unsigned short size;
 	struct i596_rfd *v_next;	/* Address from CPUs viewpoint */
 	struct i596_rfd *v_prev;
-#ifndef __LP64__    
+#ifndef __LP64__
 	u32 cache_pad[2];		/* Total 32 bytes... */
-#endif    
+#endif
 };
 
 struct i596_rbd {
@@ -322,7 +322,7 @@ struct i596_rbd {
 					/* Total 32 bytes... */
 #ifdef __LP64__
     u32 cache_pad[4];
-#endif    
+#endif
 };
 
 /* These values as chosen so struct i596_private fits in one page... */
@@ -403,7 +403,7 @@ static char init_setup[] =
 
 static int i596_open(struct net_device *dev);
 static int i596_start_xmit(struct sk_buff *skb, struct net_device *dev);
-static irqreturn_t i596_interrupt(int irq, void *dev_id, struct pt_regs *regs);
+static irqreturn_t i596_interrupt(int irq, void *dev_id);
 static int i596_close(struct net_device *dev);
 static struct net_device_stats *i596_get_stats(struct net_device *dev);
 static void i596_add_cmd(struct net_device *dev, struct i596_cmd *cmd);
@@ -449,10 +449,10 @@ static inline void MPU_PORT(struct net_device *dev, int c, dma_addr_t x)
 
 static inline int wait_istat(struct net_device *dev, struct i596_private *lp, int delcnt, char *str)
 {
-	CHECK_INV(&(lp->iscp), sizeof(struct i596_iscp));
+	CHECK_INV(lp, &(lp->iscp), sizeof(struct i596_iscp));
 	while (--delcnt && lp->iscp.stat) {
 		udelay(10);
-		CHECK_INV(&(lp->iscp), sizeof(struct i596_iscp));
+		CHECK_INV(lp, &(lp->iscp), sizeof(struct i596_iscp));
 	}
 	if (!delcnt) {
 		printk("%s: %s, iscp.stat %04x, didn't clear\n",
@@ -466,10 +466,10 @@ static inline int wait_istat(struct net_device *dev, struct i596_private *lp, in
 
 static inline int wait_cmd(struct net_device *dev, struct i596_private *lp, int delcnt, char *str)
 {
-	CHECK_INV(&(lp->scb), sizeof(struct i596_scb));
+	CHECK_INV(lp, &(lp->scb), sizeof(struct i596_scb));
 	while (--delcnt && lp->scb.command) {
 		udelay(10);
-		CHECK_INV(&(lp->scb), sizeof(struct i596_scb));
+		CHECK_INV(lp, &(lp->scb), sizeof(struct i596_scb));
 	}
 	if (!delcnt) {
 		printk("%s: %s, status %4.4x, cmd %4.4x.\n",
@@ -522,12 +522,12 @@ static void i596_display_data(struct net_device *dev)
 			rbd, rbd->count, rbd->b_next, rbd->b_data, rbd->size);
 		rbd = rbd->v_next;
 	} while (rbd != lp->rbd_head);
-	CHECK_INV(lp, sizeof(struct i596_private));
+	CHECK_INV(lp, lp, sizeof(struct i596_private));
 }
 
 
 #if defined(ENABLE_MVME16x_NET) || defined(ENABLE_BVME6000_NET)
-static void i596_error(int irq, void *dev_id, struct pt_regs *regs)
+static void i596_error(int irq, void *dev_id)
 {
 	struct net_device *dev = dev_id;
 	volatile unsigned char *pcc2 = (unsigned char *) 0xfff42000;
@@ -592,7 +592,7 @@ static inline void init_rx_bufs(struct net_device *dev)
 	rfd->b_next = WSWAPrfd(virt_to_dma(lp,lp->rfds));
 	rfd->cmd = CMD_EOL|CMD_FLEX;
 
-	CHECK_WBACK_INV(lp, sizeof(struct i596_private));
+	CHECK_WBACK_INV(lp, lp, sizeof(struct i596_private));
 }
 
 static inline void remove_rx_bufs(struct net_device *dev)
@@ -605,7 +605,7 @@ static inline void remove_rx_bufs(struct net_device *dev)
 		if (rbd->skb == NULL)
 			break;
 		dma_unmap_single(lp->dev,
-				 (dma_addr_t)WSWAPchar(rbd->b_data), 
+				 (dma_addr_t)WSWAPchar(rbd->b_data),
 				 PKT_BUF_SZ, DMA_FROM_DEVICE);
 		dev_kfree_skb(rbd->skb);
 	}
@@ -629,7 +629,7 @@ static void rebuild_rx_bufs(struct net_device *dev)
 	lp->rbd_head = lp->rbds;
 	lp->rfds[0].rbd = WSWAPrbd(virt_to_dma(lp,lp->rbds));
 
-	CHECK_WBACK_INV(lp, sizeof(struct i596_private));
+	CHECK_WBACK_INV(lp, lp, sizeof(struct i596_private));
 }
 
 
@@ -643,7 +643,7 @@ static int init_i596_mem(struct net_device *dev)
 		printk("RESET 82596 port: %lx (with IRQ %d disabled)\n",
 		       (dev->base_addr + PA_I82596_RESET),
 		       dev->irq));
-	
+
 	gsc_writel(0, (dev->base_addr + PA_I82596_RESET)); /* Hard Reset */
 	udelay(100);			/* Wait 100us - seems to help */
 
@@ -663,10 +663,10 @@ static int init_i596_mem(struct net_device *dev)
 
 	DEB(DEB_INIT, printk("%s: starting i82596.\n", dev->name));
 
-	CHECK_WBACK(&(lp->scp), sizeof(struct i596_scp));
-	CHECK_WBACK(&(lp->iscp), sizeof(struct i596_iscp));
+	CHECK_WBACK(lp, &(lp->scp), sizeof(struct i596_scp));
+	CHECK_WBACK(lp, &(lp->iscp), sizeof(struct i596_iscp));
 
-	MPU_PORT(dev, PORT_ALTSCP, virt_to_dma(lp,&lp->scp));	
+	MPU_PORT(dev, PORT_ALTSCP, virt_to_dma(lp,&lp->scp));
 
 	CA(dev);
 
@@ -678,25 +678,25 @@ static int init_i596_mem(struct net_device *dev)
 	rebuild_rx_bufs(dev);
 
 	lp->scb.command = 0;
-	CHECK_WBACK(&(lp->scb), sizeof(struct i596_scb));
+	CHECK_WBACK(lp, &(lp->scb), sizeof(struct i596_scb));
 
 	enable_irq(dev->irq);	/* enable IRQs from LAN */
 
 	DEB(DEB_INIT, printk("%s: queuing CmdConfigure\n", dev->name));
 	memcpy(lp->cf_cmd.i596_config, init_setup, 14);
 	lp->cf_cmd.cmd.command = CmdConfigure;
-	CHECK_WBACK(&(lp->cf_cmd), sizeof(struct cf_cmd));
+	CHECK_WBACK(lp, &(lp->cf_cmd), sizeof(struct cf_cmd));
 	i596_add_cmd(dev, &lp->cf_cmd.cmd);
 
 	DEB(DEB_INIT, printk("%s: queuing CmdSASetup\n", dev->name));
 	memcpy(lp->sa_cmd.eth_addr, dev->dev_addr, 6);
 	lp->sa_cmd.cmd.command = CmdSASetup;
-	CHECK_WBACK(&(lp->sa_cmd), sizeof(struct sa_cmd));
+	CHECK_WBACK(lp, &(lp->sa_cmd), sizeof(struct sa_cmd));
 	i596_add_cmd(dev, &lp->sa_cmd.cmd);
 
 	DEB(DEB_INIT, printk("%s: queuing CmdTDR\n", dev->name));
 	lp->tdr_cmd.cmd.command = CmdTDR;
-	CHECK_WBACK(&(lp->tdr_cmd), sizeof(struct tdr_cmd));
+	CHECK_WBACK(lp, &(lp->tdr_cmd), sizeof(struct tdr_cmd));
 	i596_add_cmd(dev, &lp->tdr_cmd.cmd);
 
 	spin_lock_irqsave (&lp->lock, flags);
@@ -708,7 +708,7 @@ static int init_i596_mem(struct net_device *dev)
 	DEB(DEB_INIT, printk("%s: Issuing RX_START\n", dev->name));
 	lp->scb.command = RX_START;
 	lp->scb.rfd = WSWAPrfd(virt_to_dma(lp,lp->rfds));
-	CHECK_WBACK(&(lp->scb), sizeof(struct i596_scb));
+	CHECK_WBACK(lp, &(lp->scb), sizeof(struct i596_scb));
 
 	CA(dev);
 
@@ -740,13 +740,13 @@ static inline int i596_rx(struct net_device *dev)
 
 	rfd = lp->rfd_head;		/* Ref next frame to check */
 
-	CHECK_INV(rfd, sizeof(struct i596_rfd));
+	CHECK_INV(lp, rfd, sizeof(struct i596_rfd));
 	while ((rfd->stat) & STAT_C) {	/* Loop while complete frames */
 		if (rfd->rbd == I596_NULL)
 			rbd = NULL;
 		else if (rfd->rbd == lp->rbd_head->b_addr) {
 			rbd = lp->rbd_head;
-			CHECK_INV(rbd, sizeof(struct i596_rbd));
+			CHECK_INV(lp, rbd, sizeof(struct i596_rbd));
 		}
 		else {
 			printk("%s: rbd chain broken!\n", dev->name);
@@ -755,7 +755,7 @@ static inline int i596_rx(struct net_device *dev)
 		}
 		DEB(DEB_RXFRAME, printk("  rfd %p, rfd.rbd %08x, rfd.stat %04x\n",
 			rfd, rfd->rbd, rfd->stat));
-		
+
 		if (rbd != NULL && ((rfd->stat) & STAT_OK)) {
 			/* a good frame */
 			int pkt_len = rbd->count & 0x3fff;
@@ -790,7 +790,7 @@ static inline int i596_rx(struct net_device *dev)
 				dma_addr = dma_map_single(lp->dev, newskb->data, PKT_BUF_SZ, DMA_FROM_DEVICE);
 				rbd->v_data = newskb->data;
 				rbd->b_data = WSWAPchar(dma_addr);
-				CHECK_WBACK_INV(rbd, sizeof(struct i596_rbd));
+				CHECK_WBACK_INV(lp, rbd, sizeof(struct i596_rbd));
 			}
 			else
 				skb = dev_alloc_skb(pkt_len + 2);
@@ -842,7 +842,7 @@ memory_squeeze:
 		if (rbd != NULL && (rbd->count & 0x4000)) {
 			rbd->count = 0;
 			lp->rbd_head = rbd->v_next;
-			CHECK_WBACK_INV(rbd, sizeof(struct i596_rbd));
+			CHECK_WBACK_INV(lp, rbd, sizeof(struct i596_rbd));
 		}
 
 		/* Tidy the frame descriptor, marking it as end of list */
@@ -860,10 +860,10 @@ memory_squeeze:
 
 		lp->scb.rfd = rfd->b_next;
 		lp->rfd_head = rfd->v_next;
-		CHECK_WBACK_INV(rfd->v_prev, sizeof(struct i596_rfd));
-		CHECK_WBACK_INV(rfd, sizeof(struct i596_rfd));
+		CHECK_WBACK_INV(lp, rfd->v_prev, sizeof(struct i596_rfd));
+		CHECK_WBACK_INV(lp, rfd, sizeof(struct i596_rfd));
 		rfd = lp->rfd_head;
-		CHECK_INV(rfd, sizeof(struct i596_rfd));
+		CHECK_INV(lp, rfd, sizeof(struct i596_rfd));
 	}
 
 	DEB(DEB_RXFRAME, printk("frames %d\n", frames));
@@ -902,12 +902,12 @@ static inline void i596_cleanup_cmd(struct net_device *dev, struct i596_private 
 			ptr->v_next = NULL;
 			ptr->b_next = I596_NULL;
 		}
-		CHECK_WBACK_INV(ptr, sizeof(struct i596_cmd));
+		CHECK_WBACK_INV(lp, ptr, sizeof(struct i596_cmd));
 	}
 
 	wait_cmd(dev, lp, 100, "i596_cleanup_cmd timed out");
 	lp->scb.cmd = I596_NULL;
-	CHECK_WBACK(&(lp->scb), sizeof(struct i596_scb));
+	CHECK_WBACK(lp, &(lp->scb), sizeof(struct i596_scb));
 }
 
 
@@ -925,7 +925,7 @@ static inline void i596_reset(struct net_device *dev, struct i596_private *lp)
 
 	/* FIXME: this command might cause an lpmc */
 	lp->scb.command = CUC_ABORT | RX_ABORT;
-	CHECK_WBACK(&(lp->scb), sizeof(struct i596_scb));
+	CHECK_WBACK(lp, &(lp->scb), sizeof(struct i596_scb));
 	CA(dev);
 
 	/* wait for shutdown */
@@ -951,20 +951,20 @@ static void i596_add_cmd(struct net_device *dev, struct i596_cmd *cmd)
 	cmd->command |= (CMD_EOL | CMD_INTR);
 	cmd->v_next = NULL;
 	cmd->b_next = I596_NULL;
-	CHECK_WBACK(cmd, sizeof(struct i596_cmd));
+	CHECK_WBACK(lp, cmd, sizeof(struct i596_cmd));
 
 	spin_lock_irqsave (&lp->lock, flags);
 
 	if (lp->cmd_head != NULL) {
 		lp->cmd_tail->v_next = cmd;
 		lp->cmd_tail->b_next = WSWAPcmd(virt_to_dma(lp,&cmd->status));
-		CHECK_WBACK(lp->cmd_tail, sizeof(struct i596_cmd));
+		CHECK_WBACK(lp, lp->cmd_tail, sizeof(struct i596_cmd));
 	} else {
 		lp->cmd_head = cmd;
 		wait_cmd(dev, lp, 100, "i596_add_cmd timed out");
 		lp->scb.cmd = WSWAPcmd(virt_to_dma(lp,&cmd->status));
 		lp->scb.command = CUC_START;
-		CHECK_WBACK(&(lp->scb), sizeof(struct i596_scb));
+		CHECK_WBACK(lp, &(lp->scb), sizeof(struct i596_scb));
 		CA(dev);
 	}
 	lp->cmd_tail = cmd;
@@ -996,14 +996,14 @@ static int i596_test(struct net_device *dev)
 
 	tint = (volatile int *)(&(lp->scp));
 	data = virt_to_dma(lp,tint);
-	
+
 	tint[1] = -1;
-	CHECK_WBACK(tint,PAGE_SIZE);
+	CHECK_WBACK(lp, tint, PAGE_SIZE);
 
 	MPU_PORT(dev, 1, data);
 
 	for(data = 1000000; data; data--) {
-		CHECK_INV(tint,PAGE_SIZE);
+		CHECK_INV(lp, tint, PAGE_SIZE);
 		if(tint[1] != -1)
 			break;
 
@@ -1061,7 +1061,7 @@ static void i596_tx_timeout (struct net_device *dev)
 		/* Issue a channel attention signal */
 		DEB(DEB_ERRORS, printk("Kicking board.\n"));
 		lp->scb.command = CUC_START | RX_START;
-		CHECK_WBACK_INV(&(lp->scb), sizeof(struct i596_scb));
+		CHECK_WBACK_INV(lp, &(lp->scb), sizeof(struct i596_scb));
 		CA (dev);
 		lp->last_restart = lp->stats.tx_packets;
 	}
@@ -1083,12 +1083,11 @@ static int i596_start_xmit(struct sk_buff *skb, struct net_device *dev)
 				skb->len, skb->data));
 
 	if (length < ETH_ZLEN) {
-		skb = skb_padto(skb, ETH_ZLEN);
-		if (skb == NULL)
+		if (skb_padto(skb, ETH_ZLEN))
 			return 0;
 		length = ETH_ZLEN;
 	}
-	
+
 	netif_stop_queue(dev);
 
 	tx_cmd = lp->tx_cmds + lp->next_tx_cmd;
@@ -1119,8 +1118,8 @@ static int i596_start_xmit(struct sk_buff *skb, struct net_device *dev)
 		tbd->data = WSWAPchar(tx_cmd->dma_addr);
 
 		DEB(DEB_TXADDR,print_eth(skb->data, "tx-queued"));
-		CHECK_WBACK_INV(tx_cmd, sizeof(struct tx_cmd));
-		CHECK_WBACK_INV(tbd, sizeof(struct i596_tbd));
+		CHECK_WBACK_INV(lp, tx_cmd, sizeof(struct tx_cmd));
+		CHECK_WBACK_INV(lp, tbd, sizeof(struct i596_tbd));
 		i596_add_cmd(dev, &tx_cmd->cmd);
 
 		lp->stats.tx_packets++;
@@ -1195,7 +1194,7 @@ static int __devinit i82596_probe(struct net_device *dev,
 		printk(KERN_INFO "%s: MAC of HP700 LAN read from EEPROM\n", __FILE__);
 	}
 
-	dev->mem_start = (unsigned long) dma_alloc_noncoherent(gen_dev, 
+	dev->mem_start = (unsigned long) dma_alloc_noncoherent(gen_dev,
 		sizeof(struct i596_private), &dma_addr, GFP_KERNEL);
 	if (!dev->mem_start) {
 		printk(KERN_ERR "%s: Couldn't get shared memory\n", __FILE__);
@@ -1229,12 +1228,12 @@ static int __devinit i82596_probe(struct net_device *dev,
 	lp->dma_addr = dma_addr;
 	lp->dev = gen_dev;
 
-	CHECK_WBACK_INV(dev->mem_start, sizeof(struct i596_private));
+	CHECK_WBACK_INV(lp, dev->mem_start, sizeof(struct i596_private));
 
 	i = register_netdev(dev);
 	if (i) {
 		lp = dev->priv;
-		dma_free_noncoherent(lp->dev, sizeof(struct i596_private), 
+		dma_free_noncoherent(lp->dev, sizeof(struct i596_private),
 				    (void *)dev->mem_start, lp->dma_addr);
 		return i;
 	};
@@ -1253,12 +1252,12 @@ static int __devinit i82596_probe(struct net_device *dev,
 static void i596_poll_controller(struct net_device *dev)
 {
 	disable_irq(dev->irq);
-	i596_interrupt(dev->irq, dev, NULL);
+	i596_interrupt(dev->irq, dev);
 	enable_irq(dev->irq);
 }
 #endif
 
-static irqreturn_t i596_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t i596_interrupt(int irq, void *dev_id)
 {
 	struct net_device *dev = dev_id;
 	struct i596_private *lp;
@@ -1296,7 +1295,7 @@ static irqreturn_t i596_interrupt(int irq, void *dev_id, struct pt_regs *regs)
 			DEB(DEB_INTS, printk("%s: i596 interrupt command unit inactive %x.\n", dev->name, status & 0x0700));
 
 		while (lp->cmd_head != NULL) {
-			CHECK_INV(lp->cmd_head, sizeof(struct i596_cmd));
+			CHECK_INV(lp, lp->cmd_head, sizeof(struct i596_cmd));
 			if (!(lp->cmd_head->status & STAT_C))
 				break;
 
@@ -1359,7 +1358,7 @@ static irqreturn_t i596_interrupt(int irq, void *dev_id, struct pt_regs *regs)
 			}
 			ptr->v_next = NULL;
 		        ptr->b_next = I596_NULL;
-			CHECK_WBACK(ptr, sizeof(struct i596_cmd));
+			CHECK_WBACK(lp, ptr, sizeof(struct i596_cmd));
 			lp->last_cmd = jiffies;
 		}
 
@@ -1373,13 +1372,13 @@ static irqreturn_t i596_interrupt(int irq, void *dev_id, struct pt_regs *regs)
 
 			ptr->command &= 0x1fff;
 			ptr = ptr->v_next;
-			CHECK_WBACK_INV(prev, sizeof(struct i596_cmd));
+			CHECK_WBACK_INV(lp, prev, sizeof(struct i596_cmd));
 		}
 
 		if ((lp->cmd_head != NULL))
 			ack_cmd |= CUC_START;
 		lp->scb.cmd = WSWAPcmd(virt_to_dma(lp,&lp->cmd_head->status));
-		CHECK_WBACK_INV(&lp->scb, sizeof(struct i596_scb));
+		CHECK_WBACK_INV(lp, &lp->scb, sizeof(struct i596_scb));
 	}
 	if ((status & 0x1000) || (status & 0x4000)) {
 		if ((status & 0x4000))
@@ -1398,10 +1397,10 @@ static irqreturn_t i596_interrupt(int irq, void *dev_id, struct pt_regs *regs)
 	}
 	wait_cmd(dev, lp, 100, "i596 interrupt, timeout");
 	lp->scb.command = ack_cmd;
-	CHECK_WBACK(&lp->scb, sizeof(struct i596_scb));
+	CHECK_WBACK(lp, &lp->scb, sizeof(struct i596_scb));
 
 	/* DANGER: I suspect that some kind of interrupt
-	 acknowledgement aside from acking the 82596 might be needed 
+	 acknowledgement aside from acking the 82596 might be needed
 	 here...  but it's running acceptably without */
 
 	CA(dev);
@@ -1427,7 +1426,7 @@ static int i596_close(struct net_device *dev)
 
 	wait_cmd(dev, lp, 100, "close1 timed out");
 	lp->scb.command = CUC_ABORT | RX_ABORT;
-	CHECK_WBACK(&lp->scb, sizeof(struct i596_scb));
+	CHECK_WBACK(lp, &lp->scb, sizeof(struct i596_scb));
 
 	CA(dev);
 
@@ -1487,7 +1486,7 @@ static void set_multicast_list(struct net_device *dev)
 			       dev->name);
 		else {
 			lp->cf_cmd.cmd.command = CmdConfigure;
-			CHECK_WBACK_INV(&lp->cf_cmd, sizeof(struct cf_cmd));
+			CHECK_WBACK_INV(lp, &lp->cf_cmd, sizeof(struct cf_cmd));
 			i596_add_cmd(dev, &lp->cf_cmd.cmd);
 		}
 	}
@@ -1499,7 +1498,7 @@ static void set_multicast_list(struct net_device *dev)
 		printk("%s: Only %d multicast addresses supported",
 			dev->name, cnt);
 	}
-	
+
 	if (dev->mc_count > 0) {
 		struct dev_mc_list *dmi;
 		unsigned char *cp;
@@ -1515,7 +1514,7 @@ static void set_multicast_list(struct net_device *dev)
 				DEB(DEB_MULTI, printk("%s: Adding address %02x:%02x:%02x:%02x:%02x:%02x\n",
 						dev->name, cp[0],cp[1],cp[2],cp[3],cp[4],cp[5]));
 		}
-		CHECK_WBACK_INV(&lp->mc_cmd, sizeof(struct mc_cmd));
+		CHECK_WBACK_INV(lp, &lp->mc_cmd, sizeof(struct mc_cmd));
 		i596_add_cmd(dev, &cmd->cmd);
 	}
 }
@@ -1540,7 +1539,7 @@ lan_init_chip(struct parisc_device *dev)
 
 	if (num_drivers == 0)
 		printk(KERN_INFO LASI_82596_DRIVER_VERSION "\n");
-	
+
 	if (!dev->irq) {
 		printk(KERN_ERR "%s: IRQ not found for i82596 at 0x%lx\n",
 			__FILE__, dev->hpa.start);
@@ -1603,15 +1602,15 @@ static void __exit lasi_82596_exit(void)
 	for (i=0; i<MAX_DRIVERS; i++) {
 		struct i596_private *lp;
 		struct net_device *netdevice;
-		
+
 		netdevice = netdevs[i];
-		if (!netdevice) 
+		if (!netdevice)
 			continue;
-		
+
 		unregister_netdev(netdevice);
 
 		lp = netdevice->priv;
-		dma_free_noncoherent(lp->dev, sizeof(struct i596_private), 
+		dma_free_noncoherent(lp->dev, sizeof(struct i596_private),
 				       (void *)netdevice->mem_start, lp->dma_addr);
 		free_netdev(netdevice);
 	}

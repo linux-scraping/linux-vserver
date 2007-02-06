@@ -9,23 +9,6 @@
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
  *
- * Modifications:
- *     16-May-2003 BJD  Created initial version
- *     16-Aug-2003 BJD  Fixed header files and copyright, added URL
- *     05-Sep-2003 BJD  Moved to v2.6 kernel
- *     06-Jan-2003 BJD  Updates for <arch/map.h>
- *     18-Jan-2003 BJD  Added serial port configuration
- *     17-Feb-2003 BJD  Copied to mach-ipaq.c
- *     21-Aug-2004 BJD  Added struct s3c2410_board
- *     04-Sep-2004 BJD  Changed uart init, renamed ipaq_ -> h1940_
- *     18-Oct-2004 BJD  Updated new board structure name
- *     04-Nov-2004 BJD  Change for new serial clock
- *     04-Jan-2005 BJD  Updated uart init call
- *     10-Jan-2005 BJD  Removed include of s3c2410.h
- *     14-Jan-2005 BJD  Added clock init
- *     10-Mar-2005 LCVR Changed S3C2410_VA to S3C24XX_VA
- *     20-Sep-2005 BJD  Added static to non-exported items
- *     26-Oct-2005 BJD  Changed name of fb init call
 */
 
 #include <linux/kernel.h>
@@ -34,6 +17,7 @@
 #include <linux/list.h>
 #include <linux/timer.h>
 #include <linux/init.h>
+#include <linux/serial_core.h>
 #include <linux/platform_device.h>
 
 #include <asm/mach/arch.h>
@@ -50,14 +34,14 @@
 #include <asm/arch/regs-serial.h>
 #include <asm/arch/regs-lcd.h>
 
+#include <asm/arch/h1940.h>
 #include <asm/arch/h1940-latch.h>
 #include <asm/arch/fb.h>
-
-#include <linux/serial_core.h>
 
 #include "clock.h"
 #include "devs.h"
 #include "cpu.h"
+#include "pm.h"
 
 static struct map_desc h1940_iodesc[] __initdata = {
 	[0] = {
@@ -72,7 +56,7 @@ static struct map_desc h1940_iodesc[] __initdata = {
 #define ULCON S3C2410_LCON_CS8 | S3C2410_LCON_PNONE | S3C2410_LCON_STOPB
 #define UFCON S3C2410_UFCON_RXTRIG8 | S3C2410_UFCON_FIFOMODE
 
-static struct s3c2410_uartcfg h1940_uartcfgs[] = {
+static struct s3c2410_uartcfg h1940_uartcfgs[] __initdata = {
 	[0] = {
 		.hwport	     = 0,
 		.flags	     = 0,
@@ -181,12 +165,16 @@ static void __init h1940_map_io(void)
 	s3c24xx_init_clocks(0);
 	s3c24xx_init_uarts(h1940_uartcfgs, ARRAY_SIZE(h1940_uartcfgs));
 	s3c24xx_set_board(&h1940_board);
+
+	/* setup PM */
+
+	memcpy(phys_to_virt(H1940_SUSPEND_RESUMEAT), h1940_pm_return, 1024);
+	s3c2410_pm_init();
 }
 
 static void __init h1940_init_irq(void)
 {
 	s3c24xx_init_irq();
-
 }
 
 static void __init h1940_init(void)

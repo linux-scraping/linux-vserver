@@ -40,8 +40,6 @@
 #define DPRINTK(fmt,args...) do {} while(0)
 #endif
 
-#define AUTOFS_SUPER_MAGIC 0x0187
-
 /* Unified info structure.  This is pointed to by both the dentry and
    inode structures.  Each file in the filesystem has an instance of this
    structure.  It holds a reference to the dentry, so dentries are never
@@ -96,7 +94,6 @@ struct autofs_wait_queue {
 
 struct autofs_sb_info {
 	u32 magic;
-	struct dentry *root;
 	int pipefd;
 	struct file *pipe;
 	pid_t oz_pgrp;
@@ -153,7 +150,8 @@ static inline int autofs4_ispending(struct dentry *dentry)
 
 static inline void autofs4_copy_atime(struct file *src, struct file *dst)
 {
-	dst->f_dentry->d_inode->i_atime = src->f_dentry->d_inode->i_atime;
+	dst->f_path.dentry->d_inode->i_atime =
+		src->f_path.dentry->d_inode->i_atime;
 	return;
 }
 
@@ -231,4 +229,4 @@ out:
 }
 
 void autofs4_dentry_release(struct dentry *);
-
+extern void autofs4_kill_sb(struct super_block *);

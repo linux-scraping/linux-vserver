@@ -14,7 +14,6 @@
  * At this time Linux/MIPS64 only supports syscall tracing, even for 32-bit
  * binaries.
  */
-#include <linux/config.h>
 #include <linux/compiler.h>
 #include <linux/kernel.h>
 #include <linux/sched.h>
@@ -27,6 +26,7 @@
 #include <linux/user.h>
 #include <linux/security.h>
 #include <linux/signal.h>
+#include <linux/vs_base.h>
 
 #include <asm/byteorder.h>
 #include <asm/cpu.h>
@@ -107,6 +107,7 @@ int ptrace_setregs (struct task_struct *child, __s64 __user *data)
 int ptrace_getfpregs (struct task_struct *child, __u32 __user *data)
 {
 	int i;
+	unsigned int tmp;
 
 	if (!access_ok(VERIFY_WRITE, data, 33 * 8))
 		return -EIO;
@@ -120,12 +121,12 @@ int ptrace_getfpregs (struct task_struct *child, __u32 __user *data)
 			__put_user ((__u64) -1, i + (__u64 __user *) data);
 	}
 
+	__put_user (child->thread.fpu.fcr31, data + 64);
+
+	preempt_disable();
 	if (cpu_has_fpu) {
-		unsigned int flags, tmp;
+		unsigned int flags;
 
-		__put_user (child->thread.fpu.hard.fcr31, data + 64);
-
-		preempt_disable();
 		if (cpu_has_mipsmt) {
 			unsigned int vpflags = dvpe();
 			flags = read_c0_status();
@@ -139,12 +140,11 @@ int ptrace_getfpregs (struct task_struct *child, __u32 __user *data)
 			__asm__ __volatile__("cfc1\t%0,$0" : "=r" (tmp));
 			write_c0_status(flags);
 		}
-		preempt_enable();
-		__put_user (tmp, data + 65);
 	} else {
-		__put_user (child->thread.fpu.soft.fcr31, data + 64);
-		__put_user ((__u32) 0, data + 65);
+		tmp = 0;
 	}
+	preempt_enable();
+	__put_user (tmp, data + 65);
 
 	return 0;
 }
@@ -162,10 +162,7 @@ int ptrace_setfpregs (struct task_struct *child, __u32 __user *data)
 	for (i = 0; i < 32; i++)
 		__get_user (fregs[i], i + (__u64 __user *) data);
 
-	if (cpu_has_fpu)
-		__get_user (child->thread.fpu.hard.fcr31, data + 64);
-	else
-		__get_user (child->thread.fpu.soft.fcr31, data + 64);
+	__get_user (child->thread.fpu.fcr31, data + 64);
 
 	/* FIR may not be written.  */
 
@@ -175,6 +172,9 @@ int ptrace_setfpregs (struct task_struct *child, __u32 __user *data)
 long arch_ptrace(struct task_struct *child, long request, long addr, long data)
 {
 	int ret;
+
+	if (!vx_check(vx_task_xid(child), VS_WATCH_P|VS_IDENT))
+		goto out;
 
 	switch (request) {
 	/* when I and D space are separate, these will need to be fixed. */
@@ -241,10 +241,7 @@ long arch_ptrace(struct task_struct *child, long request, long addr, long data)
 			tmp = regs->lo;
 			break;
 		case FPC_CSR:
-			if (cpu_has_fpu)
-				tmp = child->thread.fpu.hard.fcr31;
-			else
-				tmp = child->thread.fpu.soft.fcr31;
+			tmp = child->thread.fpu.fcr31;
 			break;
 		case FPC_EIR: {	/* implementation / version register */
 			unsigned int flags;
@@ -253,16 +250,17 @@ long arch_ptrace(struct task_struct *child, long request, long addr, long data)
 			unsigned int mtflags;
 #endif /* CONFIG_MIPS_MT_SMTC */
 
-			if (!cpu_has_fpu)
+			preempt_disable();
+			if (!cpu_has_fpu) {
+				preempt_enable();
 				break;
+			}
 
 #ifdef CONFIG_MIPS_MT_SMTC
 			/* Read-modify-write of Status must be atomic */
 			local_irq_save(irqflags);
 			mtflags = dmt();
 #endif /* CONFIG_MIPS_MT_SMTC */
-
-			preempt_disable();
 			if (cpu_has_mipsmt) {
 				unsigned int vpflags = dvpe();
 				flags = read_c0_status();
@@ -336,9 +334,9 @@ long arch_ptrace(struct task_struct *child, long request, long addr, long data)
 
 			if (!tsk_used_math(child)) {
 				/* FP not yet used  */
-				memset(&child->thread.fpu.hard, ~0,
-				       sizeof(child->thread.fpu.hard));
-				child->thread.fpu.hard.fcr31 = 0;
+				memset(&child->thread.fpu, ~0,
+				       sizeof(child->thread.fpu));
+				child->thread.fpu.fcr31 = 0;
 			}
 #ifdef CONFIG_32BIT
 			/*
@@ -369,10 +367,7 @@ long arch_ptrace(struct task_struct *child, long request, long addr, long data)
 			regs->lo = data;
 			break;
 		case FPC_CSR:
-			if (cpu_has_fpu)
-				child->thread.fpu.hard.fcr31 = data;
-			else
-				child->thread.fpu.soft.fcr31 = data;
+			child->thread.fpu.fcr31 = data;
 			break;
 		case DSP_BASE ... DSP_BASE + 5: {
 			dspreg_t *dregs;
@@ -490,8 +485,6 @@ asmlinkage void do_syscall_trace(struct pt_regs *regs, int entryexit)
 		goto out;
 	if (!test_thread_flag(TIF_SYSCALL_TRACE))
 		goto out;
-	if (!vx_check(vx_task_xid(child), VX_WATCH|VX_IDENT))
-		goto out_tsk;
 
 	/* The 0x80 provides a way for the tracing parent to distinguish
 	   between a syscall stop and SIGTRAP delivery */

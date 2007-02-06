@@ -12,7 +12,6 @@
  * Changes:
  *
  */
-#include <linux/config.h>
 #include <linux/string.h>
 #include <linux/net.h>
 #include <linux/socket.h>
@@ -31,6 +30,7 @@
 #include <net/neighbour.h>
 #include <net/dst.h>
 #include <net/flow.h>
+#include <net/fib_rules.h>
 #include <net/dn.h>
 #include <net/dn_route.h>
 #include <net/dn_fib.h>
@@ -75,11 +75,11 @@ for( ; ((f) = *(fp)) != NULL; (fp) = &(f)->fn_next)
 for( ; ((f) = *(fp)) != NULL && dn_key_eq((f)->fn_key, (key)); (fp) = &(f)->fn_next)
 
 #define RT_TABLE_MIN 1
-
+#define DN_FIB_TABLE_HASHSZ 256
+static struct hlist_head dn_fib_table_hash[DN_FIB_TABLE_HASHSZ];
 static DEFINE_RWLOCK(dn_fib_tables_lock);
-struct dn_fib_table *dn_fib_tables[RT_TABLE_MAX + 1];
 
-static kmem_cache_t *dn_hash_kmem __read_mostly;
+static struct kmem_cache *dn_hash_kmem __read_mostly;
 static int dn_fib_hash_zombies;
 
 static inline dn_fib_idx_t dn_hash(dn_fib_key_t key, struct dn_zone *dz)
@@ -159,12 +159,10 @@ static void dn_rehash_zone(struct dn_zone *dz)
 			break;
 	}
 
-	ht = kmalloc(new_divisor*sizeof(struct dn_fib_node*), GFP_KERNEL);
-
+	ht = kcalloc(new_divisor, sizeof(struct dn_fib_node*), GFP_KERNEL);
 	if (ht == NULL)
 		return;
 
-	memset(ht, 0, new_divisor*sizeof(struct dn_fib_node *));
 	write_lock_bh(&dn_fib_tables_lock);
 	old_ht = dz->dz_hash;
 	dz->dz_hash = ht;
@@ -185,11 +183,10 @@ static void dn_free_node(struct dn_fib_node *f)
 static struct dn_zone *dn_new_zone(struct dn_hash *table, int z)
 {
 	int i;
-	struct dn_zone *dz = kmalloc(sizeof(struct dn_zone), GFP_KERNEL);
+	struct dn_zone *dz = kzalloc(sizeof(struct dn_zone), GFP_KERNEL);
 	if (!dz)
 		return NULL;
 
-	memset(dz, 0, sizeof(struct dn_zone));
 	if (z) {
 		dz->dz_divisor = 16;
 		dz->dz_hashmask = 0x0F;
@@ -198,14 +195,12 @@ static struct dn_zone *dn_new_zone(struct dn_hash *table, int z)
 		dz->dz_hashmask = 0;
 	}
 
-	dz->dz_hash = kmalloc(dz->dz_divisor*sizeof(struct dn_fib_node *), GFP_KERNEL);
-
+	dz->dz_hash = kcalloc(dz->dz_divisor, sizeof(struct dn_fib_node *), GFP_KERNEL);
 	if (!dz->dz_hash) {
 		kfree(dz);
 		return NULL;
 	}
 
-	memset(dz->dz_hash, 0, dz->dz_divisor*sizeof(struct dn_fib_node*));
 	dz->dz_order = z;
 	dz->dz_mask = dnet_make_mask(z);
 
@@ -268,8 +263,34 @@ static int dn_fib_nh_match(struct rtmsg *r, struct nlmsghdr *nlh, struct dn_kern
 	return 0;
 }
 
+static inline size_t dn_fib_nlmsg_size(struct dn_fib_info *fi)
+{
+	size_t payload = NLMSG_ALIGN(sizeof(struct rtmsg))
+			 + nla_total_size(4) /* RTA_TABLE */
+			 + nla_total_size(2) /* RTA_DST */
+			 + nla_total_size(4); /* RTA_PRIORITY */
+
+	/* space for nested metrics */
+	payload += nla_total_size((RTAX_MAX * nla_total_size(4)));
+
+	if (fi->fib_nhs) {
+		/* Also handles the special case fib_nhs == 1 */
+
+		/* each nexthop is packed in an attribute */
+		size_t nhsize = nla_total_size(sizeof(struct rtnexthop));
+
+		/* may contain a gateway attribute */
+		nhsize += nla_total_size(4);
+
+		/* all nexthops are packed in a nested attribute */
+		payload += nla_total_size(fi->fib_nhs * nhsize);
+	}
+
+	return payload;
+}
+
 static int dn_fib_dump_info(struct sk_buff *skb, u32 pid, u32 seq, int event,
-                        u8 tb_id, u8 type, u8 scope, void *dst, int dst_len,
+                        u32 tb_id, u8 type, u8 scope, void *dst, int dst_len,
                         struct dn_fib_info *fi, unsigned int flags)
 {
         struct rtmsg *rtm;
@@ -283,6 +304,7 @@ static int dn_fib_dump_info(struct sk_buff *skb, u32 pid, u32 seq, int event,
         rtm->rtm_src_len = 0;
         rtm->rtm_tos = 0;
         rtm->rtm_table = tb_id;
+	RTA_PUT_U32(skb, RTA_TABLE, tb_id);
         rtm->rtm_flags = fi->fib_flags;
         rtm->rtm_scope = scope;
 	rtm->rtm_type  = type;
@@ -332,29 +354,27 @@ rtattr_failure:
 }
 
 
-static void dn_rtmsg_fib(int event, struct dn_fib_node *f, int z, int tb_id,
+static void dn_rtmsg_fib(int event, struct dn_fib_node *f, int z, u32 tb_id,
                         struct nlmsghdr *nlh, struct netlink_skb_parms *req)
 {
         struct sk_buff *skb;
         u32 pid = req ? req->pid : 0;
-        int size = NLMSG_SPACE(sizeof(struct rtmsg) + 256);
+	int err = -ENOBUFS;
 
-        skb = alloc_skb(size, GFP_KERNEL);
-        if (!skb)
-                return;
+        skb = nlmsg_new(dn_fib_nlmsg_size(DN_FIB_INFO(f)), GFP_KERNEL);
+        if (skb == NULL)
+		goto errout;
 
-        if (dn_fib_dump_info(skb, pid, nlh->nlmsg_seq, event, tb_id, 
-                                f->fn_type, f->fn_scope, &f->fn_key, z, 
-                                DN_FIB_INFO(f), 0) < 0) {
-                kfree_skb(skb);
-                return;
-        }
-        NETLINK_CB(skb).dst_group = RTNLGRP_DECnet_ROUTE;
-        if (nlh->nlmsg_flags & NLM_F_ECHO)
-                atomic_inc(&skb->users);
-        netlink_broadcast(rtnl, skb, pid, RTNLGRP_DECnet_ROUTE, GFP_KERNEL);
-        if (nlh->nlmsg_flags & NLM_F_ECHO)
-                netlink_unicast(rtnl, skb, pid, MSG_DONTWAIT);
+        err = dn_fib_dump_info(skb, pid, nlh->nlmsg_seq, event, tb_id,
+			       f->fn_type, f->fn_scope, &f->fn_key, z,
+			       DN_FIB_INFO(f), 0);
+	/* failure implies BUG in dn_fib_nlmsg_size() */
+	BUG_ON(err < 0);
+
+	err = rtnl_notify(skb, pid, RTNLGRP_DECnet_ROUTE, nlh, GFP_KERNEL);
+errout:
+	if (err < 0)
+		rtnl_set_sk_err(RTNLGRP_DECnet_ROUTE, err);
 }
 
 static __inline__ int dn_hash_dump_bucket(struct sk_buff *skb, 
@@ -365,7 +385,7 @@ static __inline__ int dn_hash_dump_bucket(struct sk_buff *skb,
 {
 	int i, s_i;
 
-	s_i = cb->args[3];
+	s_i = cb->args[4];
 	for(i = 0; f; i++, f = f->fn_next) {
 		if (i < s_i)
 			continue;
@@ -378,11 +398,11 @@ static __inline__ int dn_hash_dump_bucket(struct sk_buff *skb,
 				(f->fn_state & DN_S_ZOMBIE) ? 0 : f->fn_type,
 				f->fn_scope, &f->fn_key, dz->dz_order, 
 				f->fn_info, NLM_F_MULTI) < 0) {
-			cb->args[3] = i;
+			cb->args[4] = i;
 			return -1;
 		}
 	}
-	cb->args[3] = i;
+	cb->args[4] = i;
 	return skb->len;
 }
 
@@ -393,20 +413,20 @@ static __inline__ int dn_hash_dump_zone(struct sk_buff *skb,
 {
 	int h, s_h;
 
-	s_h = cb->args[2];
+	s_h = cb->args[3];
 	for(h = 0; h < dz->dz_divisor; h++) {
 		if (h < s_h)
 			continue;
 		if (h > s_h)
-			memset(&cb->args[3], 0, sizeof(cb->args) - 3*sizeof(cb->args[0]));
+			memset(&cb->args[4], 0, sizeof(cb->args) - 4*sizeof(cb->args[0]));
 		if (dz->dz_hash == NULL || dz->dz_hash[h] == NULL)
 			continue;
 		if (dn_hash_dump_bucket(skb, cb, tb, dz, dz->dz_hash[h]) < 0) {
-			cb->args[2] = h;
+			cb->args[3] = h;
 			return -1;
 		}
 	}
-	cb->args[2] = h;
+	cb->args[3] = h;
 	return skb->len;
 }
 
@@ -417,24 +437,61 @@ static int dn_fib_table_dump(struct dn_fib_table *tb, struct sk_buff *skb,
 	struct dn_zone *dz;
 	struct dn_hash *table = (struct dn_hash *)tb->data;
 
-	s_m = cb->args[1];
+	s_m = cb->args[2];
 	read_lock(&dn_fib_tables_lock);
 	for(dz = table->dh_zone_list, m = 0; dz; dz = dz->dz_next, m++) {
 		if (m < s_m)
 			continue;
 		if (m > s_m)
-			memset(&cb->args[2], 0, sizeof(cb->args) - 2*sizeof(cb->args[0]));
+			memset(&cb->args[3], 0, sizeof(cb->args) - 3*sizeof(cb->args[0]));
 
 		if (dn_hash_dump_zone(skb, cb, tb, dz) < 0) {
-			cb->args[1] = m;
+			cb->args[2] = m;
 			read_unlock(&dn_fib_tables_lock);
 			return -1;
 		}
 	}
 	read_unlock(&dn_fib_tables_lock);
-	cb->args[1] = m;
+	cb->args[2] = m;
 
         return skb->len;
+}
+
+int dn_fib_dump(struct sk_buff *skb, struct netlink_callback *cb)
+{
+	unsigned int h, s_h;
+	unsigned int e = 0, s_e;
+	struct dn_fib_table *tb;
+	struct hlist_node *node;
+	int dumped = 0;
+
+	if (NLMSG_PAYLOAD(cb->nlh, 0) >= sizeof(struct rtmsg) &&
+		((struct rtmsg *)NLMSG_DATA(cb->nlh))->rtm_flags&RTM_F_CLONED)
+			return dn_cache_dump(skb, cb);
+
+	s_h = cb->args[0];
+	s_e = cb->args[1];
+
+	for (h = s_h; h < DN_FIB_TABLE_HASHSZ; h++, s_h = 0) {
+		e = 0;
+		hlist_for_each_entry(tb, node, &dn_fib_table_hash[h], hlist) {
+			if (e < s_e)
+				goto next;
+			if (dumped)
+				memset(&cb->args[2], 0, sizeof(cb->args) -
+				                 2 * sizeof(cb->args[0]));
+			if (tb->dump(tb, skb, cb) < 0)
+				goto out;
+			dumped = 1;
+next:
+			e++;
+		}
+	}
+out:
+	cb->args[1] = e;
+	cb->args[0] = h;
+
+	return skb->len;
 }
 
 static int dn_fib_table_insert(struct dn_fib_table *tb, struct rtmsg *r, struct dn_kern_rta *rta, struct nlmsghdr *n, struct netlink_skb_parms *req)
@@ -533,7 +590,7 @@ create:
 
 replace:
 	err = -ENOBUFS;
-	new_f = kmem_cache_alloc(dn_hash_kmem, SLAB_KERNEL);
+	new_f = kmem_cache_alloc(dn_hash_kmem, GFP_KERNEL);
 	if (new_f == NULL)
 		goto out;
 
@@ -745,9 +802,11 @@ out:
 }
 
 
-struct dn_fib_table *dn_fib_get_table(int n, int create)
+struct dn_fib_table *dn_fib_get_table(u32 n, int create)
 {
         struct dn_fib_table *t;
+	struct hlist_node *node;
+	unsigned int h;
 
         if (n < RT_TABLE_MIN)
                 return NULL;
@@ -755,8 +814,15 @@ struct dn_fib_table *dn_fib_get_table(int n, int create)
         if (n > RT_TABLE_MAX)
                 return NULL;
 
-        if (dn_fib_tables[n]) 
-                return dn_fib_tables[n];
+	h = n & (DN_FIB_TABLE_HASHSZ - 1);
+	rcu_read_lock();
+	hlist_for_each_entry_rcu(t, node, &dn_fib_table_hash[h], hlist) {
+		if (t->n == n) {
+			rcu_read_unlock();
+			return t;
+		}
+	}
+	rcu_read_unlock();
 
         if (!create)
                 return NULL;
@@ -765,10 +831,11 @@ struct dn_fib_table *dn_fib_get_table(int n, int create)
                 printk(KERN_DEBUG "DECnet: BUG! Attempt to create routing table from interrupt\n"); 
                 return NULL;
         }
-        if ((t = kmalloc(sizeof(struct dn_fib_table) + sizeof(struct dn_hash), GFP_KERNEL)) == NULL)
-                return NULL;
 
-        memset(t, 0, sizeof(struct dn_fib_table));
+        t = kzalloc(sizeof(struct dn_fib_table) + sizeof(struct dn_hash),
+		    GFP_KERNEL);
+        if (t == NULL)
+                return NULL;
 
         t->n = n;
         t->insert = dn_fib_table_insert;
@@ -776,32 +843,35 @@ struct dn_fib_table *dn_fib_get_table(int n, int create)
         t->lookup = dn_fib_table_lookup;
         t->flush  = dn_fib_table_flush;
         t->dump = dn_fib_table_dump;
-	memset(t->data, 0, sizeof(struct dn_hash));
-        dn_fib_tables[n] = t;
+	hlist_add_head_rcu(&t->hlist, &dn_fib_table_hash[h]);
 
         return t;
 }
 
-static void dn_fib_del_tree(int n)
-{
-	struct dn_fib_table *t;
-
-	write_lock(&dn_fib_tables_lock);
-	t = dn_fib_tables[n];
-	dn_fib_tables[n] = NULL;
-	write_unlock(&dn_fib_tables_lock);
-
-	kfree(t);
-}
-
 struct dn_fib_table *dn_fib_empty_table(void)
 {
-        int id;
+        u32 id;
 
         for(id = RT_TABLE_MIN; id <= RT_TABLE_MAX; id++)
-                if (dn_fib_tables[id] == NULL)
+		if (dn_fib_get_table(id, 0) == NULL)
                         return dn_fib_get_table(id, 1);
         return NULL;
+}
+
+void dn_fib_flush(void)
+{
+        int flushed = 0;
+        struct dn_fib_table *tb;
+	struct hlist_node *node;
+	unsigned int h;
+
+	for (h = 0; h < DN_FIB_TABLE_HASHSZ; h++) {
+		hlist_for_each_entry(tb, node, &dn_fib_table_hash[h], hlist)
+	                flushed += tb->flush(tb);
+        }
+
+        if (flushed)
+                dn_rt_cache_flush(-1);
 }
 
 void __init dn_fib_table_init(void)
@@ -814,10 +884,17 @@ void __init dn_fib_table_init(void)
 
 void __exit dn_fib_table_cleanup(void)
 {
-	int i;
+	struct dn_fib_table *t;
+	struct hlist_node *node, *next;
+	unsigned int h;
 
-	for (i = RT_TABLE_MIN; i <= RT_TABLE_MAX; ++i)
-		dn_fib_del_tree(i);
-
-	return;
+	write_lock(&dn_fib_tables_lock);
+	for (h = 0; h < DN_FIB_TABLE_HASHSZ; h++) {
+		hlist_for_each_entry_safe(t, node, next, &dn_fib_table_hash[h],
+		                          hlist) {
+			hlist_del(&t->hlist);
+			kfree(t);
+		}
+	}
+	write_unlock(&dn_fib_tables_lock);
 }

@@ -66,7 +66,7 @@ MODULE_SUPPORTED_DEVICE("{{Intel,82801AA-ICH},"
 
 static int index = SNDRV_DEFAULT_IDX1;	/* Index 0-MAX */
 static char *id = SNDRV_DEFAULT_STR1;	/* ID for this card */
-static int ac97_clock = 0;
+static int ac97_clock;
 static char *ac97_quirk;
 static int buggy_semaphore;
 static int buggy_irq = -1; /* auto-check */
@@ -413,7 +413,7 @@ struct intel8x0 {
 	u32 int_sta_mask;		/* interrupt status mask */
 };
 
-static struct pci_device_id snd_intel8x0_ids[] __devinitdata = {
+static struct pci_device_id snd_intel8x0_ids[] = {
 	{ 0x8086, 0x2415, PCI_ANY_ID, PCI_ANY_ID, 0, 0, DEVICE_INTEL },	/* 82801AA */
 	{ 0x8086, 0x2425, PCI_ANY_ID, PCI_ANY_ID, 0, 0, DEVICE_INTEL },	/* 82901AB */
 	{ 0x8086, 0x2445, PCI_ANY_ID, PCI_ANY_ID, 0, 0, DEVICE_INTEL },	/* 82801BA */
@@ -801,7 +801,7 @@ static inline void snd_intel8x0_update(struct intel8x0 *chip, struct ichdev *ich
 		 status & (ICH_FIFOE | ICH_BCIS | ICH_LVBCI));
 }
 
-static irqreturn_t snd_intel8x0_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t snd_intel8x0_interrupt(int irq, void *dev_id)
 {
 	struct intel8x0 *chip = dev_id;
 	struct ichdev *ichdev;
@@ -1807,6 +1807,12 @@ static struct ac97_quirk ac97_quirks[] __devinitdata = {
 	},
 	{
 		.subvendor = 0x1028,
+		.subdevice = 0x014e,
+		.name = "Dell D800", /* STAC9750/51 */
+		.type = AC97_TUNE_HP_ONLY
+	},
+	{
+		.subvendor = 0x1028,
 		.subdevice = 0x0163,
 		.name = "Dell Unknown",	/* STAC9750/51 */
 		.type = AC97_TUNE_HP_ONLY
@@ -1948,6 +1954,18 @@ static struct ac97_quirk ac97_quirks[] __devinitdata = {
 		.subdevice = 0x2885,
 		.name = "AMD64 Mobo",	/* ALC650 */
 		.type = AC97_TUNE_HP_ONLY
+	},
+	{
+		.subvendor = 0x10f1,
+		.subdevice = 0x2895,
+		.name = "Tyan Thunder K8WE",
+		.type = AC97_TUNE_HP_ONLY
+	},
+	{
+		.subvendor = 0x10f7,
+		.subdevice = 0x834c,
+		.name = "Panasonic CF-R4",
+		.type = AC97_TUNE_HP_ONLY,
 	},
 	{
 		.subvendor = 0x110a,
@@ -2239,6 +2257,16 @@ static int snd_intel8x0_ich_chip_init(struct intel8x0 *chip, int probing)
 	/* ACLink on, 2 channels */
 	cnt = igetdword(chip, ICHREG(GLOB_CNT));
 	cnt &= ~(ICH_ACLINK | ICH_PCM_246_MASK);
+#ifdef CONFIG_SND_AC97_POWER_SAVE
+	/* do cold reset - the full ac97 powerdown may leave the controller
+	 * in a warm state but actually it cannot communicate with the codec.
+	 */
+	iputdword(chip, ICHREG(GLOB_CNT), cnt & ~ICH_AC97COLD);
+	cnt = igetdword(chip, ICHREG(GLOB_CNT));
+	udelay(10);
+	iputdword(chip, ICHREG(GLOB_CNT), cnt | ICH_AC97COLD);
+	msleep(1);
+#else
 	/* finish cold or do warm reset */
 	cnt |= (cnt & ICH_AC97COLD) == 0 ? ICH_AC97COLD : ICH_AC97WARM;
 	iputdword(chip, ICHREG(GLOB_CNT), cnt);
@@ -2253,6 +2281,7 @@ static int snd_intel8x0_ich_chip_init(struct intel8x0 *chip, int probing)
 	return -EIO;
 
       __ok:
+#endif
 	if (probing) {
 		/* wait for any codec ready status.
 		 * Once it becomes ready it should remain ready
@@ -2453,10 +2482,14 @@ static int intel8x0_suspend(struct pci_dev *pci, pm_message_t state)
 	if (chip->device_type == DEVICE_INTEL_ICH4)
 		chip->sdm_saved = igetbyte(chip, ICHREG(SDM));
 
-	if (chip->irq >= 0)
+	if (chip->irq >= 0) {
+		synchronize_irq(chip->irq);
 		free_irq(chip->irq, chip);
+		chip->irq = -1;
+	}
 	pci_disable_device(pci);
 	pci_save_state(pci);
+	pci_set_power_state(pci, pci_choose_state(pci, state));
 	return 0;
 }
 
@@ -2466,14 +2499,25 @@ static int intel8x0_resume(struct pci_dev *pci)
 	struct intel8x0 *chip = card->private_data;
 	int i;
 
+	pci_set_power_state(pci, PCI_D0);
 	pci_restore_state(pci);
-	pci_enable_device(pci);
+	if (pci_enable_device(pci) < 0) {
+		printk(KERN_ERR "intel8x0: pci_enable_device failed, "
+		       "disabling device\n");
+		snd_card_disconnect(card);
+		return -EIO;
+	}
 	pci_set_master(pci);
-	request_irq(pci->irq, snd_intel8x0_interrupt, SA_INTERRUPT|SA_SHIRQ,
-		    card->shortname, chip);
+	if (request_irq(pci->irq, snd_intel8x0_interrupt,
+			IRQF_SHARED, card->shortname, chip)) {
+		printk(KERN_ERR "intel8x0: unable to grab IRQ %d, "
+		       "disabling device\n", pci->irq);
+		snd_card_disconnect(card);
+		return -EIO;
+	}
 	chip->irq = pci->irq;
 	synchronize_irq(chip->irq);
-	snd_intel8x0_chip_init(chip, 1);
+	snd_intel8x0_chip_init(chip, 0);
 
 	/* re-initialize mixer stuff */
 	if (chip->device_type == DEVICE_INTEL_ICH4) {
@@ -2603,6 +2647,7 @@ static void __devinit intel8x0_measure_ac97_clock(struct intel8x0 *chip)
 		/* not 48000Hz, tuning the clock.. */
 		chip->ac97_bus->clock = (chip->ac97_bus->clock * 48000) / pos;
 	printk(KERN_INFO "intel8x0: clocking to %d\n", chip->ac97_bus->clock);
+	snd_ac97_update_power(chip->ac97[0], AC97_PCM_FRONT_DAC_RATE, 0);
 }
 
 #ifdef CONFIG_PROC_FS
@@ -2645,7 +2690,7 @@ static void __devinit snd_intel8x0_proc_init(struct intel8x0 * chip)
 	struct snd_info_entry *entry;
 
 	if (! snd_card_proc_new(chip->card, "intel8x0", &entry))
-		snd_info_set_text_ops(entry, chip, 1024, snd_intel8x0_proc_read);
+		snd_info_set_text_ops(entry, chip, snd_intel8x0_proc_read);
 }
 #else
 #define snd_intel8x0_proc_init(x)
@@ -2842,7 +2887,7 @@ static int __devinit snd_intel8x0_create(struct snd_card *card,
 
 	/* request irq after initializaing int_sta_mask, etc */
 	if (request_irq(pci->irq, snd_intel8x0_interrupt,
-			SA_INTERRUPT|SA_SHIRQ, card->shortname, chip)) {
+			IRQF_SHARED, card->shortname, chip)) {
 		snd_printk(KERN_ERR "unable to grab IRQ %d\n", pci->irq);
 		snd_intel8x0_free(chip);
 		return -EBUSY;

@@ -10,7 +10,8 @@
  * that is iMac G5 and latest single CPU desktop.
  */
 
-#include <linux/config.h>
+#undef DEBUG
+
 #include <linux/module.h>
 #include <linux/types.h>
 #include <linux/errno.h>
@@ -31,13 +32,7 @@
 #include <asm/smu.h>
 #include <asm/pmac_pfunc.h>
 
-#undef DEBUG
-
-#ifdef DEBUG
-#define DBG(fmt...) printk(fmt)
-#else
-#define DBG(fmt...)
-#endif
+#define DBG(fmt...) pr_debug(fmt)
 
 /* see 970FX user manual */
 
@@ -83,8 +78,6 @@ static struct freq_attr* g5_cpu_freqs_attr[] = {
 /* Power mode data is an array of the 32 bits PCR values to use for
  * the various frequencies, retrieved from the device-tree
  */
-static u32 *g5_pmode_data;
-static int g5_pmode_max;
 static int g5_pmode_cur;
 
 static void (*g5_switch_volt)(int speed_mode);
@@ -93,6 +86,11 @@ static int (*g5_query_freq)(void);
 
 static DEFINE_MUTEX(g5_switch_mutex);
 
+
+#ifdef CONFIG_PMAC_SMU
+
+static const u32 *g5_pmode_data;
+static int g5_pmode_max;
 
 static struct smu_sdbp_fvt *g5_fvt_table;	/* table of op. points */
 static int g5_fvt_count;			/* number of op. points */
@@ -106,7 +104,7 @@ static void g5_smu_switch_volt(int speed_mode)
 {
 	struct smu_simple_cmd	cmd;
 
-	DECLARE_COMPLETION(comp);
+	DECLARE_COMPLETION_ONSTACK(comp);
 	smu_queue_simple(&cmd, SMU_CMD_POWER_COMMAND, 8, smu_done_complete,
 			 &comp, 'V', 'S', 'L', 'E', 'W',
 			 0xff, g5_fvt_cur+1, speed_mode);
@@ -211,6 +209,16 @@ static int g5_scom_query_freq(void)
 }
 
 /*
+ * Fake voltage switching for platforms with missing support
+ */
+
+static void g5_dummy_switch_volt(int speed_mode)
+{
+}
+
+#endif /* CONFIG_PMAC_SMU */
+
+/*
  * Platform function based voltage switching for PowerMac7,2 & 7,3
  */
 
@@ -249,6 +257,9 @@ static int g5_pfunc_switch_freq(int speed_mode)
 	struct pmf_args args;
 	u32 done = 0;
 	unsigned long timeout;
+	int rc;
+
+	DBG("g5_pfunc_switch_freq(%d)\n", speed_mode);
 
 	/* If frequency is going up, first ramp up the voltage */
 	if (speed_mode < g5_pmode_cur)
@@ -256,9 +267,12 @@ static int g5_pfunc_switch_freq(int speed_mode)
 
 	/* Do it */
 	if (speed_mode == CPUFREQ_HIGH)
-		pmf_call_one(pfunc_cpu_setfreq_high, NULL);
+		rc = pmf_call_one(pfunc_cpu_setfreq_high, NULL);
 	else
-		pmf_call_one(pfunc_cpu_setfreq_low, NULL);
+		rc = pmf_call_one(pfunc_cpu_setfreq_low, NULL);
+
+	if (rc)
+		printk(KERN_WARNING "cpufreq: pfunc switch error %d\n", rc);
 
 	/* It's an irq GPIO so we should be able to just block here,
 	 * I'll do that later after I've properly tested the IRQ code for
@@ -297,13 +311,6 @@ static int g5_pfunc_query_freq(void)
 	return val ? CPUFREQ_HIGH : CPUFREQ_LOW;
 }
 
-/*
- * Fake voltage switching for platforms with missing support
- */
-
-static void g5_dummy_switch_volt(int speed_mode)
-{
-}
 
 /*
  * Common interface to the cpufreq core
@@ -376,13 +383,16 @@ static struct cpufreq_driver g5_cpufreq_driver = {
 };
 
 
+#ifdef CONFIG_PMAC_SMU
+
 static int __init g5_neo2_cpufreq_init(struct device_node *cpus)
 {
 	struct device_node *cpunode;
 	unsigned int psize, ssize;
 	unsigned long max_freq;
 	char *freq_method, *volt_method;
-	u32 *valp, pvr_hi;
+	const u32 *valp;
+	u32 pvr_hi;
 	int use_volts_vdnap = 0;
 	int use_volts_smu = 0;
 	int rc = -ENODEV;
@@ -400,8 +410,7 @@ static int __init g5_neo2_cpufreq_init(struct device_node *cpus)
 	/* Get first CPU node */
 	for (cpunode = NULL;
 	     (cpunode = of_get_next_child(cpus, cpunode)) != NULL;) {
-		u32 *reg =
-			(u32 *)get_property(cpunode, "reg", NULL);
+		const u32 *reg = get_property(cpunode, "reg", NULL);
 		if (reg == NULL || (*reg) != 0)
 			continue;
 		if (!strcmp(cpunode->type, "cpu"))
@@ -413,7 +422,7 @@ static int __init g5_neo2_cpufreq_init(struct device_node *cpus)
 	}
 
 	/* Check 970FX for now */
-	valp = (u32 *)get_property(cpunode, "cpu-version", NULL);
+	valp = get_property(cpunode, "cpu-version", NULL);
 	if (!valp) {
 		DBG("No cpu-version property !\n");
 		goto bail_noprops;
@@ -425,7 +434,7 @@ static int __init g5_neo2_cpufreq_init(struct device_node *cpus)
 	}
 
 	/* Look for the powertune data in the device-tree */
-	g5_pmode_data = (u32 *)get_property(cpunode, "power-mode-data",&psize);
+	g5_pmode_data = get_property(cpunode, "power-mode-data",&psize);
 	if (!g5_pmode_data) {
 		DBG("No power-mode-data !\n");
 		goto bail_noprops;
@@ -433,7 +442,7 @@ static int __init g5_neo2_cpufreq_init(struct device_node *cpus)
 	g5_pmode_max = psize / sizeof(u32) - 1;
 
 	if (use_volts_smu) {
-		struct smu_sdbp_header *shdr;
+		const struct smu_sdbp_header *shdr;
 
 		/* Look for the FVT table */
 		shdr = smu_get_sdb_partition(SMU_SDB_FVT_ID, NULL);
@@ -484,7 +493,7 @@ static int __init g5_neo2_cpufreq_init(struct device_node *cpus)
 	 * half freq in this version. So far, I haven't yet seen a machine
 	 * supporting anything else.
 	 */
-	valp = (u32 *)get_property(cpunode, "clock-frequency", NULL);
+	valp = get_property(cpunode, "clock-frequency", NULL);
 	if (!valp)
 		return -ENODEV;
 	max_freq = (*valp)/1000;
@@ -526,13 +535,19 @@ static int __init g5_neo2_cpufreq_init(struct device_node *cpus)
 	return rc;
 }
 
+#endif /* CONFIG_PMAC_SMU */
+
+
 static int __init g5_pm72_cpufreq_init(struct device_node *cpus)
 {
 	struct device_node *cpuid = NULL, *hwclock = NULL, *cpunode = NULL;
-	u8 *eeprom = NULL;
-	u32 *valp;
+	const u8 *eeprom = NULL;
+	const u32 *valp;
 	u64 max_freq, min_freq, ih, il;
 	int has_volt = 1, rc = 0;
+
+	DBG("cpufreq: Initializing for PowerMac7,2, PowerMac7,3 and"
+	    " RackMac3,1...\n");
 
 	/* Get first CPU node */
 	for (cpunode = NULL;
@@ -548,7 +563,7 @@ static int __init g5_pm72_cpufreq_init(struct device_node *cpus)
 	/* Lookup the cpuid eeprom node */
         cpuid = of_find_node_by_path("/u3@0,f8000000/i2c@f8001000/cpuid@a0");
 	if (cpuid != NULL)
-		eeprom = (u8 *)get_property(cpuid, "cpuid", NULL);
+		eeprom = get_property(cpuid, "cpuid", NULL);
 	if (eeprom == NULL) {
 		printk(KERN_ERR "cpufreq: Can't find cpuid EEPROM !\n");
 		rc = -ENODEV;
@@ -558,7 +573,8 @@ static int __init g5_pm72_cpufreq_init(struct device_node *cpus)
 	/* Lookup the i2c hwclock */
 	for (hwclock = NULL;
 	     (hwclock = of_find_node_by_name(hwclock, "i2c-hwclock")) != NULL;){
-		char *loc = get_property(hwclock, "hwctrl-location", NULL);
+		const char *loc = get_property(hwclock,
+				"hwctrl-location", NULL);
 		if (loc == NULL)
 			continue;
 		if (strcmp(loc, "CPU CLOCK"))
@@ -622,7 +638,7 @@ static int __init g5_pm72_cpufreq_init(struct device_node *cpus)
 	 */
 
 	/* Get max frequency from device-tree */
-	valp = (u32 *)get_property(cpunode, "clock-frequency", NULL);
+	valp = get_property(cpunode, "clock-frequency", NULL);
 	if (!valp) {
 		printk(KERN_ERR "cpufreq: Can't find CPU frequency !\n");
 		rc = -ENODEV;
@@ -637,6 +653,15 @@ static int __init g5_pm72_cpufreq_init(struct device_node *cpus)
 	 */
 	ih = *((u32 *)(eeprom + 0x10));
 	il = *((u32 *)(eeprom + 0x20));
+
+	/* Check for machines with no useful settings */
+	if (il == ih) {
+		printk(KERN_WARNING "cpufreq: No low frequency mode available"
+		       " on this model !\n");
+		rc = -ENODEV;
+		goto bail;
+	}
+
 	min_freq = 0;
 	if (ih != 0 && il != 0)
 		min_freq = (max_freq * il) / ih;
@@ -644,7 +669,7 @@ static int __init g5_pm72_cpufreq_init(struct device_node *cpus)
 	/* Sanity check */
 	if (min_freq >= max_freq || min_freq < 1000) {
 		printk(KERN_ERR "cpufreq: Can't calculate low frequency !\n");
-		rc = -ENODEV;
+		rc = -ENXIO;
 		goto bail;
 	}
 	g5_cpu_freqs[0].frequency = max_freq;
@@ -691,16 +716,10 @@ static int __init g5_pm72_cpufreq_init(struct device_node *cpus)
 	return rc;
 }
 
-static int __init g5_rm31_cpufreq_init(struct device_node *cpus)
-{
-	/* NYI */
-	return 0;
-}
-
 static int __init g5_cpufreq_init(void)
 {
 	struct device_node *cpus;
-	int rc;
+	int rc = 0;
 
 	cpus = of_find_node_by_path("/cpus");
 	if (cpus == NULL) {
@@ -709,12 +728,13 @@ static int __init g5_cpufreq_init(void)
 	}
 
 	if (machine_is_compatible("PowerMac7,2") ||
-	    machine_is_compatible("PowerMac7,3"))
+	    machine_is_compatible("PowerMac7,3") ||
+	    machine_is_compatible("RackMac3,1"))
 		rc = g5_pm72_cpufreq_init(cpus);
-	else if (machine_is_compatible("RackMac3,1"))
-		rc = g5_rm31_cpufreq_init(cpus);
+#ifdef CONFIG_PMAC_SMU
 	else
 		rc = g5_neo2_cpufreq_init(cpus);
+#endif /* CONFIG_PMAC_SMU */
 
 	of_node_put(cpus);
 	return rc;

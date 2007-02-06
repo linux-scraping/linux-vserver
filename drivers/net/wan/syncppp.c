@@ -37,7 +37,6 @@
  */
 #undef DEBUG
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/errno.h>
@@ -470,7 +469,7 @@ static void sppp_lcp_input (struct sppp *sp, struct sk_buff *skb)
 	struct net_device *dev = sp->pp_if;
 	int len = skb->len;
 	u8 *p, opt[6];
-	u32 rmagic;
+	u32 rmagic = 0;
 
 	if (!pskb_may_pull(skb, sizeof(struct lcp_header))) {
 		if (sp->pp_flags & PP_DEBUG)
@@ -764,7 +763,7 @@ static void sppp_cisco_input (struct sppp *sp, struct sk_buff *skb)
 		{
 		struct in_device *in_dev;
 		struct in_ifaddr *ifa;
-		u32 addr = 0, mask = ~0; /* FIXME: is the mask correct? */
+		__be32 addr = 0, mask = ~0; /* FIXME: is the mask correct? */
 #ifdef CONFIG_INET
 		rcu_read_lock();
 		if ((in_dev = __in_dev_get_rcu(dev)) != NULL)

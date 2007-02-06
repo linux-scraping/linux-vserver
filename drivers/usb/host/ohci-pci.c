@@ -3,17 +3,17 @@
  *
  * (C) Copyright 1999 Roman Weissgaerber <weissg@vienna.at>
  * (C) Copyright 2000-2002 David Brownell <dbrownell@users.sourceforge.net>
- * 
+ *
  * [ Initialisation is based on Linus'  ]
  * [ uhci code and gregs ohci fragments ]
  * [ (C) Copyright 1999 Linus Torvalds  ]
  * [ (C) Copyright 1999 Gregory P. Smith]
- * 
+ *
  * PCI Bus Glue
  *
  * This file is licenced under the GPL.
  */
- 
+
 #ifndef CONFIG_PCI
 #error "This file is PCI bus glue.  CONFIG_PCI must be defined."
 #endif
@@ -73,16 +73,17 @@ ohci_pci_start (struct usb_hcd *hcd)
 		else if (pdev->vendor == PCI_VENDOR_ID_NS) {
 			struct pci_dev	*b;
 
-			b  = pci_find_slot (pdev->bus->number,
+			b  = pci_get_slot (pdev->bus,
 					PCI_DEVFN (PCI_SLOT (pdev->devfn), 1));
 			if (b && b->device == PCI_DEVICE_ID_NS_87560_LIO
 					&& b->vendor == PCI_VENDOR_ID_NS) {
 				ohci->flags |= OHCI_QUIRK_SUPERIO;
 				ohci_dbg (ohci, "Using NSC SuperIO setup\n");
 			}
+			pci_dev_put(b);
 		}
 
-		/* Check for Compaq's ZFMicro chipset, which needs short 
+		/* Check for Compaq's ZFMicro chipset, which needs short
 		 * delays before control or bulk queues get re-activated
 		 * in finish_unlinks()
 		 */
@@ -135,6 +136,11 @@ static int ohci_pci_suspend (struct usb_hcd *hcd, pm_message_t message)
 	}
 	ohci_writel(ohci, OHCI_INTR_MIE, &ohci->regs->intrdisable);
 	(void)ohci_readl(ohci, &ohci->regs->intrdisable);
+
+	/* make sure snapshot being resumed re-enumerates everything */
+	if (message.event == PM_EVENT_PRETHAW)
+		ohci_usb_reset(ohci);
+
 	clear_bit(HCD_FLAG_HW_ACCESSIBLE, &hcd->flags);
  bail:
 	spin_unlock_irqrestore (&ohci->lock, flags);
@@ -171,11 +177,14 @@ static const struct hc_driver ohci_pci_hc_driver = {
 	 */
 	.reset =		ohci_pci_reset,
 	.start =		ohci_pci_start,
+	.stop =			ohci_stop,
+	.shutdown =		ohci_shutdown,
+
 #ifdef	CONFIG_PM
+	/* these suspend/resume entries are for upstream PCI glue ONLY */
 	.suspend =		ohci_pci_suspend,
 	.resume =		ohci_pci_resume,
 #endif
-	.stop =			ohci_stop,
 
 	/*
 	 * managing i/o requests and associated device resources
@@ -194,6 +203,7 @@ static const struct hc_driver ohci_pci_hc_driver = {
 	 */
 	.hub_status_data =	ohci_hub_status_data,
 	.hub_control =		ohci_hub_control,
+	.hub_irq_enable =	ohci_rhsc_enable,
 #ifdef	CONFIG_PM
 	.bus_suspend =		ohci_bus_suspend,
 	.bus_resume =		ohci_bus_resume,
@@ -224,10 +234,12 @@ static struct pci_driver ohci_pci_driver = {
 	.suspend =	usb_hcd_pci_suspend,
 	.resume =	usb_hcd_pci_resume,
 #endif
+
+	.shutdown =	usb_hcd_pci_shutdown,
 };
 
- 
-static int __init ohci_hcd_pci_init (void) 
+
+static int __init ohci_hcd_pci_init (void)
 {
 	printk (KERN_DEBUG "%s: " DRIVER_INFO " (PCI)\n", hcd_name);
 	if (usb_disabled())
@@ -241,8 +253,8 @@ module_init (ohci_hcd_pci_init);
 
 /*-------------------------------------------------------------------------*/
 
-static void __exit ohci_hcd_pci_cleanup (void) 
-{	
+static void __exit ohci_hcd_pci_cleanup (void)
+{
 	pci_unregister_driver (&ohci_pci_driver);
 }
 module_exit (ohci_hcd_pci_cleanup);

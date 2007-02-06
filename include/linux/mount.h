@@ -17,19 +17,27 @@
 #include <linux/spinlock.h>
 #include <asm/atomic.h>
 
+struct super_block;
+struct vfsmount;
+struct dentry;
+struct mnt_namespace;
+
 #define MNT_NOSUID	0x01
 #define MNT_NODEV	0x02
 #define MNT_NOEXEC	0x04
 #define MNT_NOATIME	0x08
 #define MNT_NODIRATIME	0x10
-#define MNT_RDONLY	0x20
+#define MNT_RELATIME	0x20
+#define MNT_RDONLY	0x40
 
 #define MNT_IS_RDONLY(m)	((m) && ((m)->mnt_flags & MNT_RDONLY))
+
+#define MNT_SHRINKABLE	0x100
 
 #define MNT_SHARED	0x1000	/* if the vfsmount is a shared mount */
 #define MNT_UNBINDABLE	0x2000	/* if the vfsmount is a unbindable mount */
 #define MNT_PNODE_MASK	0x3000	/* propogation flag mask */
-#define MNT_XID		0x8000
+#define MNT_TAGID	0x8000
 
 struct vfsmount {
 	struct list_head mnt_hash;
@@ -49,9 +57,9 @@ struct vfsmount {
 	struct list_head mnt_slave_list;/* list of slave mounts */
 	struct list_head mnt_slave;	/* slave list entry */
 	struct vfsmount *mnt_master;	/* slave is on master->mnt_slave_list */
-	struct namespace *mnt_namespace; /* containing namespace */
+	struct mnt_namespace *mnt_ns;	/* containing namespace */
 	int mnt_pinned;
-	xid_t mnt_xid;			/* xid tagging used for vfsmount */
+	tag_t mnt_tag;			/* tagging used for vfsmount */
 };
 
 static inline struct vfsmount *mntget(struct vfsmount *mnt)
@@ -78,12 +86,18 @@ extern struct vfsmount *alloc_vfsmnt(const char *name);
 extern struct vfsmount *do_kern_mount(const char *fstype, int flags,
 				      const char *name, void *data);
 
+struct file_system_type;
+extern struct vfsmount *vfs_kern_mount(struct file_system_type *type,
+				      int flags, const char *name,
+				      void *data);
+
 struct nameidata;
 
 extern int do_add_mount(struct vfsmount *newmnt, struct nameidata *nd,
 			int mnt_flags, struct list_head *fslist);
 
 extern void mark_mounts_for_expiry(struct list_head *mounts);
+extern void shrink_submounts(struct vfsmount *mountpoint, struct list_head *mounts);
 
 extern spinlock_t vfsmount_lock;
 extern dev_t name_to_dev_t(char *name);

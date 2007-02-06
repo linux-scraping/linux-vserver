@@ -1498,7 +1498,7 @@ do_bottom_half_rx(struct fst_card_info *card)
  *      Dev_id is our fst_card_info pointer
  */
 static irqreturn_t
-fst_intr(int irq, void *dev_id, struct pt_regs *regs)
+fst_intr(int irq, void *dev_id)
 {
 	struct fst_card_info *card;
 	struct fst_port_info *port;
@@ -2519,7 +2519,7 @@ fst_add_one(struct pci_dev *pdev, const struct pci_device_id *ent)
 	dbg(DBG_PCI, "kernel mem %p, ctlmem %p\n", card->mem, card->ctlmem);
 
 	/* Register the interrupt handler */
-	if (request_irq(pdev->irq, fst_intr, SA_SHIRQ, FST_DEV_NAME, card)) {
+	if (request_irq(pdev->irq, fst_intr, IRQF_SHARED, FST_DEV_NAME, card)) {
 		printk_err("Unable to register interrupt %d\n", card->irq);
 		pci_release_regions(pdev);
 		pci_disable_device(pdev);
@@ -2697,7 +2697,7 @@ fst_init(void)
 	for (i = 0; i < FST_MAX_CARDS; i++)
 		fst_card_array[i] = NULL;
 	spin_lock_init(&fst_work_q_lock);
-	return pci_module_init(&fst_driver);
+	return pci_register_driver(&fst_driver);
 }
 
 static void __exit

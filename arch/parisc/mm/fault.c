@@ -152,7 +152,7 @@ void do_page_fault(struct pt_regs *regs, unsigned long code,
 	const struct exception_table_entry *fix;
 	unsigned long acc_type;
 
-	if (in_interrupt() || !mm)
+	if (in_atomic() || !mm)
 		goto no_context;
 
 	down_read(&mm->mmap_sem);
@@ -213,8 +213,9 @@ bad_area:
 
 #ifdef PRINT_USER_FAULTS
 		printk(KERN_DEBUG "\n");
-		printk(KERN_DEBUG "do_page_fault() pid=%d command='%s' type=%lu address=0x%08lx\n",
-		    tsk->pid, tsk->comm, code, address);
+		printk(KERN_DEBUG "do_page_fault() pid=%d:#%u "
+		    "command='%s' type=%lu address=0x%08lx\n",
+		    tsk->pid, tsk->xid, tsk->comm, code, address);
 		if (vma) {
 			printk(KERN_DEBUG "vm_start = 0x%08lx, vm_end = 0x%08lx\n",
 					vma->vm_start, vma->vm_end);

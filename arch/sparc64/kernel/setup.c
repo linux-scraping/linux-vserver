@@ -16,9 +16,8 @@
 #include <asm/smp.h>
 #include <linux/user.h>
 #include <linux/a.out.h>
-#include <linux/tty.h>
+#include <linux/screen_info.h>
 #include <linux/delay.h>
-#include <linux/config.h>
 #include <linux/fs.h>
 #include <linux/seq_file.h>
 #include <linux/syscalls.h>
@@ -75,7 +74,6 @@ prom_console_write(struct console *con, const char *s, unsigned n)
 
 unsigned int boot_flags = 0;
 #define BOOTME_DEBUG  0x1
-#define BOOTME_SINGLE 0x2
 
 /* Exported for mm/init.c:paging_init. */
 unsigned long cmdline_memory_size = 0;
@@ -92,16 +90,6 @@ void kernel_enter_debugger(void)
 {
 }
 
-int obp_system_intr(void)
-{
-	if (boot_flags & BOOTME_DEBUG) {
-		printk("OBP: system interrupted\n");
-		prom_halt();
-		return 1;
-	}
-	return 0;
-}
-
 /* 
  * Process kernel command line switches that are specific to the
  * SPARC or that require special low-level processing.
@@ -113,7 +101,6 @@ static void __init process_switch(char c)
 		boot_flags |= BOOTME_DEBUG;
 		break;
 	case 's':
-		boot_flags |= BOOTME_SINGLE;
 		break;
 	case 'h':
 		prom_printf("boot_flags_init: Halt!\n");
@@ -376,12 +363,12 @@ void __init setup_arch(char **cmdline_p)
 	}
 #endif
 
-	smp_setup_cpu_possible_map();
-
 	/* Get boot processor trap_block[] setup.  */
 	init_cur_cpu_trap(current_thread_info());
 
 	paging_init();
+
+	smp_setup_cpu_possible_map();
 }
 
 static int __init set_preferred_console(void)
@@ -537,7 +524,7 @@ static int __init topology_init(void)
 	for_each_possible_cpu(i) {
 		struct cpu *p = kzalloc(sizeof(*p), GFP_KERNEL);
 		if (p) {
-			register_cpu(p, i, NULL);
+			register_cpu(p, i);
 			err = 0;
 		}
 	}

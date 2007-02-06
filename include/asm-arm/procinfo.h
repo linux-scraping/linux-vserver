@@ -10,7 +10,7 @@
 #ifndef __ASM_PROCINFO_H
 #define __ASM_PROCINFO_H
 
-#ifndef __ASSEMBLY__
+#ifdef __KERNEL__
 
 struct cpu_tlb_fns;
 struct cpu_user_fns;
@@ -29,7 +29,8 @@ struct processor;
 struct proc_info_list {
 	unsigned int		cpu_val;
 	unsigned int		cpu_mask;
-	unsigned long		__cpu_mmu_flags;	/* used by head.S */
+	unsigned long		__cpu_mm_mmu_flags;	/* used by head.S */
+	unsigned long		__cpu_io_mmu_flags;	/* used by head.S */
 	unsigned long		__cpu_flush;		/* used by head.S */
 	const char		*arch_name;
 	const char		*elf_name;
@@ -41,18 +42,8 @@ struct proc_info_list {
 	struct cpu_cache_fns	*cache;
 };
 
-extern unsigned int elf_hwcap;
-
-#endif	/* __ASSEMBLY__ */
-
-#define HWCAP_SWP	1
-#define HWCAP_HALF	2
-#define HWCAP_THUMB	4
-#define HWCAP_26BIT	8	/* Play it safe */
-#define HWCAP_FAST_MULT	16
-#define HWCAP_FPA	32
-#define HWCAP_VFP	64
-#define HWCAP_EDSP	128
-#define HWCAP_JAVA	256
-
+#else	/* __KERNEL__ */
+#include <asm/elf.h>
+#warning "Please include asm/elf.h instead"
+#endif	/* __KERNEL__ */
 #endif

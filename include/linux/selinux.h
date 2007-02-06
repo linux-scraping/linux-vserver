@@ -46,7 +46,7 @@ void selinux_audit_rule_free(struct selinux_audit_rule *rule);
 
 /**
  *	selinux_audit_rule_match - determine if a context ID matches a rule.
- *	@ctxid: the context ID to check
+ *	@sid: the context ID to check
  *	@field: the field this rule refers to
  *	@op: the operater the rule uses
  *	@rule: pointer to the audit rule to check against
@@ -55,7 +55,7 @@ void selinux_audit_rule_free(struct selinux_audit_rule *rule);
  *	Returns 1 if the context id matches the rule, 0 if it does not, and
  *	-errno on failure.
  */
-int selinux_audit_rule_match(u32 ctxid, u32 field, u32 op,
+int selinux_audit_rule_match(u32 sid, u32 field, u32 op,
                              struct selinux_audit_rule *rule,
                              struct audit_context *actx);
 
@@ -70,18 +70,8 @@ int selinux_audit_rule_match(u32 ctxid, u32 field, u32 op,
 void selinux_audit_set_callback(int (*callback)(void));
 
 /**
- *	selinux_task_ctxid - determine a context ID for a process.
- *	@tsk: the task object
- *	@ctxid: ID value returned via this
- *
- *	On return, ctxid will contain an ID for the context.  This value
- *	should only be used opaquely.
- */
-void selinux_task_ctxid(struct task_struct *tsk, u32 *ctxid);
-
-/**
- *     selinux_ctxid_to_string - map a security context ID to a string
- *     @ctxid: security context ID to be converted.
+ *     selinux_sid_to_string - map a security context ID to a string
+ *     @sid: security context ID to be converted.
  *     @ctx: address of context string to be returned
  *     @ctxlen: length of returned context string.
  *
@@ -89,7 +79,7 @@ void selinux_task_ctxid(struct task_struct *tsk, u32 *ctxid);
  *     string will be allocated internally, and the caller must call
  *     kfree() on it after use.
  */
-int selinux_ctxid_to_string(u32 ctxid, char **ctx, u32 *ctxlen);
+int selinux_sid_to_string(u32 sid, char **ctx, u32 *ctxlen);
 
 /**
  *     selinux_get_inode_sid - get the inode's security context ID
@@ -118,6 +108,27 @@ void selinux_get_ipc_sid(const struct kern_ipc_perm *ipcp, u32 *sid);
  */
 void selinux_get_task_sid(struct task_struct *tsk, u32 *sid);
 
+/**
+ *     selinux_string_to_sid - map a security context string to a security ID
+ *     @str: the security context string to be mapped
+ *     @sid: ID value returned via this.
+ *
+ *     Returns 0 if successful, with the SID stored in sid.  A value
+ *     of zero for sid indicates no SID could be determined (but no error
+ *     occurred).
+ */
+int selinux_string_to_sid(char *str, u32 *sid);
+
+/**
+ *     selinux_relabel_packet_permission - check permission to relabel a packet
+ *     @sid: ID value to be applied to network packet (via SECMARK, most likely)
+ *
+ *     Returns 0 if the current task is allowed to label packets with the
+ *     supplied security ID.  Note that it is implicit that the packet is always
+ *     being relabeled from the default unlabled value, and that the access
+ *     control decision is made in the AVC.
+ */
+int selinux_relabel_packet_permission(u32 sid);
 
 #else
 
@@ -133,7 +144,7 @@ static inline void selinux_audit_rule_free(struct selinux_audit_rule *rule)
 	return;
 }
 
-static inline int selinux_audit_rule_match(u32 ctxid, u32 field, u32 op,
+static inline int selinux_audit_rule_match(u32 sid, u32 field, u32 op,
                                            struct selinux_audit_rule *rule,
                                            struct audit_context *actx)
 {
@@ -145,12 +156,7 @@ static inline void selinux_audit_set_callback(int (*callback)(void))
 	return;
 }
 
-static inline void selinux_task_ctxid(struct task_struct *tsk, u32 *ctxid)
-{
-	*ctxid = 0;
-}
-
-static inline int selinux_ctxid_to_string(u32 ctxid, char **ctx, u32 *ctxlen)
+static inline int selinux_sid_to_string(u32 sid, char **ctx, u32 *ctxlen)
 {
        *ctx = NULL;
        *ctxlen = 0;
@@ -170,6 +176,17 @@ static inline void selinux_get_ipc_sid(const struct kern_ipc_perm *ipcp, u32 *si
 static inline void selinux_get_task_sid(struct task_struct *tsk, u32 *sid)
 {
 	*sid = 0;
+}
+
+static inline int selinux_string_to_sid(const char *str, u32 *sid)
+{
+       *sid = 0;
+       return 0;
+}
+
+static inline int selinux_relabel_packet_permission(u32 sid)
+{
+	return 0;
 }
 
 #endif	/* CONFIG_SECURITY_SELINUX */

@@ -192,7 +192,7 @@
         - Don't walk the entire list in qla1280_putq_t() just to directly
 	  grab the pointer to the last element afterwards
     Rev  3.23.5 Beta August 9, 2001, Jes Sorensen
-	- Don't use SA_INTERRUPT, it's use is deprecated for this kinda driver
+	- Don't use IRQF_DISABLED, it's use is deprecated for this kinda driver
     Rev  3.23.4 Beta August 8, 2001, Jes Sorensen
 	- Set dev->max_sectors to 1024
     Rev  3.23.3 Beta August 6, 2001, Jes Sorensen
@@ -331,7 +331,6 @@
 *****************************************************************************/
 
 
-#include <linux/config.h>
 #include <linux/module.h>
 
 #include <linux/version.h>
@@ -396,30 +395,6 @@
 #include "ql12160_fw.h"		/* ISP RISC codes */
 #include "ql1280_fw.h"
 #include "ql1040_fw.h"
-
-
-/*
- * Missing PCI ID's
- */
-#ifndef PCI_DEVICE_ID_QLOGIC_ISP1080
-#define PCI_DEVICE_ID_QLOGIC_ISP1080	0x1080
-#endif
-#ifndef PCI_DEVICE_ID_QLOGIC_ISP1240
-#define PCI_DEVICE_ID_QLOGIC_ISP1240	0x1240
-#endif
-#ifndef PCI_DEVICE_ID_QLOGIC_ISP1280
-#define PCI_DEVICE_ID_QLOGIC_ISP1280	0x1280
-#endif
-#ifndef PCI_DEVICE_ID_QLOGIC_ISP10160
-#define PCI_DEVICE_ID_QLOGIC_ISP10160	0x1016
-#endif
-#ifndef PCI_DEVICE_ID_QLOGIC_ISP12160
-#define PCI_DEVICE_ID_QLOGIC_ISP12160	0x1216
-#endif
-
-#ifndef PCI_VENDOR_ID_AMI
-#define PCI_VENDOR_ID_AMI               0x101e
-#endif
 
 #ifndef BITS_PER_LONG
 #error "BITS_PER_LONG not defined!"
@@ -838,7 +813,7 @@ qla1280_error_action(struct scsi_cmnd *cmd, enum action action)
 	uint16_t data;
 	unsigned char *handle;
 	int result, i;
-	DECLARE_COMPLETION(wait);
+	DECLARE_COMPLETION_ONSTACK(wait);
 	struct timer_list timer;
 
 	ha = (struct scsi_qla_host *)(CMD_HOST(cmd)->hostdata);
@@ -956,11 +931,10 @@ qla1280_error_action(struct scsi_cmnd *cmd, enum action action)
 
 	case BUS_RESET:
 		if (qla1280_verbose)
-			printk(KERN_INFO "qla1280(%ld:%d): Issuing BUS "
-			       "DEVICE RESET\n", ha->host_no, bus);
-		if (qla1280_bus_reset(ha, bus == 0))
+			printk(KERN_INFO "qla1280(%ld:%d): Issued bus "
+			       "reset.\n", ha->host_no, bus);
+		if (qla1280_bus_reset(ha, bus) == 0)
 			result = SUCCESS;
-
 		break;
 
 	case ADAPTER_RESET:
@@ -1138,7 +1112,7 @@ qla1280_enable_intrs(struct scsi_qla_host *ha)
  *   Handles the H/W interrupt
  **************************************************************************/
 static irqreturn_t
-qla1280_intr_handler(int irq, void *dev_id, struct pt_regs *regs)
+qla1280_intr_handler(int irq, void *dev_id)
 {
 	struct scsi_qla_host *ha;
 	struct device_reg __iomem *reg;
@@ -1367,7 +1341,7 @@ qla1280_return_status(struct response * sts, struct scsi_cmnd *cp)
 	int host_status = DID_ERROR;
 	uint16_t comp_status = le16_to_cpu(sts->comp_status);
 	uint16_t state_flags = le16_to_cpu(sts->state_flags);
-	uint16_t residual_length = le32_to_cpu(sts->residual_length);
+	uint32_t residual_length = le32_to_cpu(sts->residual_length);
 	uint16_t scsi_status = le16_to_cpu(sts->scsi_status);
 #if DEBUG_QLA1280_INTR
 	static char *reason[] = {
@@ -1439,8 +1413,10 @@ qla1280_return_status(struct response * sts, struct scsi_cmnd *cp)
 			       "scsi: Underflow detected - retrying "
 			       "command.\n");
 			host_status = DID_ERROR;
-		} else
+		} else {
+			cp->resid = residual_length;
 			host_status = DID_OK;
+		}
 		break;
 
 	default:
@@ -2431,7 +2407,7 @@ qla1280_mailbox_command(struct scsi_qla_host *ha, uint8_t mr, uint16_t *mb)
 	uint16_t *optr, *iptr;
 	uint16_t __iomem *mptr;
 	uint16_t data;
-	DECLARE_COMPLETION(wait);
+	DECLARE_COMPLETION_ONSTACK(wait);
 	struct timer_list timer;
 
 	ENTER("qla1280_mailbox_command");
@@ -2887,7 +2863,7 @@ qla1280_64bit_start_scsi(struct scsi_qla_host *ha, struct srb * sp)
 	memset(((char *)pkt + 8), 0, (REQUEST_ENTRY_SIZE - 8));
 
 	/* Set ISP command timeout. */
-	pkt->timeout = cpu_to_le16(30);
+	pkt->timeout = cpu_to_le16(cmd->timeout_per_command/HZ);
 
 	/* Set device target ID and LUN */
 	pkt->lun = SCSI_LUN_32(cmd);
@@ -3186,7 +3162,7 @@ qla1280_32bit_start_scsi(struct scsi_qla_host *ha, struct srb * sp)
 	memset(((char *)pkt + 8), 0, (REQUEST_ENTRY_SIZE - 8));
 
 	/* Set ISP command timeout. */
-	pkt->timeout = cpu_to_le16(30);
+	pkt->timeout = cpu_to_le16(cmd->timeout_per_command/HZ);
 
 	/* Set device target ID and LUN */
 	pkt->lun = SCSI_LUN_32(cmd);
@@ -4234,20 +4210,17 @@ qla1280_setup(char *s)
 }
 
 
-static int
+static int __init
 qla1280_get_token(char *str)
 {
 	char *sep;
 	long ret = -1;
-	int i, len;
-
-	len = sizeof(setup_token)/sizeof(struct setup_tokens);
+	int i;
 
 	sep = strchr(str, ':');
 
 	if (sep) {
-		for (i = 0; i < len; i++){
-
+		for (i = 0; i < ARRAY_SIZE(setup_token); i++) {
 			if (!strncmp(setup_token[i].token, str, (sep - str))) {
 				ret =  setup_token[i].val;
 				break;
@@ -4397,7 +4370,7 @@ qla1280_probe_one(struct pci_dev *pdev, const struct pci_device_id *id)
 	/* Disable ISP interrupts. */
 	qla1280_disable_intrs(ha);
 
-	if (request_irq(pdev->irq, qla1280_intr_handler, SA_SHIRQ,
+	if (request_irq(pdev->irq, qla1280_intr_handler, IRQF_SHARED,
 				"qla1280", ha)) {
 		printk("qla1280 : Failed to reserve interrupt %d already "
 		       "in use\n", pdev->irq);
@@ -4512,7 +4485,7 @@ qla1280_init(void)
 		qla1280_setup(qla1280);
 #endif
 
-	return pci_module_init(&qla1280_pci_driver);
+	return pci_register_driver(&qla1280_pci_driver);
 }
 
 static void __exit

@@ -21,7 +21,7 @@
  */
 
 /*
- *	A bells and whistles driver is available from: 
+ *	A bells and whistles driver is available from:
  *	http://www.kernel.org/pub/linux/kernel/people/wim/pcwd/pcwd_pci/
  *
  *	More info available at http://www.berkprod.com/ or http://www.pcwatchdog.com/
@@ -31,7 +31,6 @@
  *	Includes, defines, variables, module parameters, ...
  */
 
-#include <linux/config.h>	/* For CONFIG_WATCHDOG_NOWAYOUT/... */
 #include <linux/module.h>	/* For module specific items */
 #include <linux/moduleparam.h>	/* For new moduleparam's */
 #include <linux/types.h>	/* For standard types (like size_t) */
@@ -390,6 +389,24 @@ static int pcipcwd_get_temperature(int *temperature)
 	return 0;
 }
 
+static int pcipcwd_get_timeleft(int *time_left)
+{
+	int msb;
+	int lsb;
+
+	/* Read the time that's left before rebooting */
+	/* Note: if the board is not yet armed then we will read 0xFFFF */
+	send_command(CMD_READ_WATCHDOG_TIMEOUT, &msb, &lsb);
+
+	*time_left = (msb << 8) + lsb;
+
+	if (debug >= VERBOSE)
+		printk(KERN_DEBUG PFX "Time left before next reboot: %d\n",
+		       *time_left);
+
+	return 0;
+}
+
 /*
  *	/dev/watchdog handling
  */
@@ -512,8 +529,18 @@ static int pcipcwd_ioctl(struct inode *inode, struct file *file,
 		case WDIOC_GETTIMEOUT:
 			return put_user(heartbeat, p);
 
+		case WDIOC_GETTIMELEFT:
+		{
+			int time_left;
+
+			if (pcipcwd_get_timeleft(&time_left))
+				return -EFAULT;
+
+			return put_user(time_left, p);
+		}
+
 		default:
-			return -ENOIOCTLCMD;
+			return -ENOTTY;
 	}
 }
 
@@ -597,7 +624,7 @@ static int pcipcwd_notify_sys(struct notifier_block *this, unsigned long code, v
  *	Kernel Interfaces
  */
 
-static struct file_operations pcipcwd_fops = {
+static const struct file_operations pcipcwd_fops = {
 	.owner =	THIS_MODULE,
 	.llseek =	no_llseek,
 	.write =	pcipcwd_write,
@@ -612,7 +639,7 @@ static struct miscdevice pcipcwd_miscdev = {
 	.fops =		&pcipcwd_fops,
 };
 
-static struct file_operations pcipcwd_temp_fops = {
+static const struct file_operations pcipcwd_temp_fops = {
 	.owner =	THIS_MODULE,
 	.llseek =	no_llseek,
 	.read =		pcipcwd_temp_read,

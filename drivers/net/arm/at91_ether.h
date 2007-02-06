@@ -80,12 +80,14 @@ struct at91_private
 	struct net_device_stats stats;
 	struct mii_if_info mii;			/* ethtool support */
 	struct at91_eth_data board_data;	/* board-specific configuration */
+	struct clk *ether_clk;			/* clock */
 
 	/* PHY */
 	unsigned long phy_type;			/* type of PHY (PHY_ID) */
 	spinlock_t lock;			/* lock for MDI interface */
 	short phy_media;			/* media interface type */
 	unsigned short phy_address;		/* 5-bit MDI address of PHY (0..31) */
+	struct timer_list check_timer;		/* Poll link status */
 
 	/* Transmit */
 	struct sk_buff *skb;			/* holds skb until xmit interrupt completes */

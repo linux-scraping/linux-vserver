@@ -8,7 +8,6 @@
  */
 
 .text
-#include <linux/config.h>
 #include <linux/threads.h>
 #include <linux/linkage.h>
 #include <asm/segment.h>
@@ -55,6 +54,12 @@
  * can.
  */
 ENTRY(startup_32)
+
+#ifdef CONFIG_PARAVIRT
+        movl %cs, %eax
+        testl $0x3, %eax
+        jnz startup_paravirt
+#endif
 
 /*
  * Set segments to known values.
@@ -303,6 +308,7 @@ is386:	movl $2,%ecx		# set MP
 	movl %eax,%cr0
 
 	call check_x87
+	call setup_pda
 	lgdt cpu_gdt_descr
 	lidt idt_descr
 	ljmp $(__KERNEL_CS),$1f
@@ -313,25 +319,22 @@ is386:	movl $2,%ecx		# set MP
 	movl %eax,%ds
 	movl %eax,%es
 
-	xorl %eax,%eax			# Clear FS/GS and LDT
+	xorl %eax,%eax			# Clear FS and LDT
 	movl %eax,%fs
-	movl %eax,%gs
 	lldt %ax
+
+	movl $(__KERNEL_PDA),%eax
+	mov  %eax,%gs
+
 	cld			# gcc2 wants the direction flag cleared at all times
+	pushl $0		# fake return address for unwinder
 #ifdef CONFIG_SMP
 	movb ready, %cl
 	movb $1, ready
-	cmpb $0,%cl
-	je 1f			# the first CPU calls start_kernel
-				# all other CPUs call initialize_secondary
-	call initialize_secondary
-	jmp L6
-1:
+	cmpb $0,%cl		# the first CPU calls start_kernel
+	jne initialize_secondary # all other CPUs call initialize_secondary
 #endif /* CONFIG_SMP */
-	call start_kernel
-L6:
-	jmp L6			# main should never return here, but
-				# just in case, we know what happens.
+	jmp start_kernel
 
 /*
  * We depend on ET to be correct. This checks for 287/387.
@@ -350,6 +353,23 @@ check_x87:
 	ALIGN
 1:	movb $1,X86_HARD_MATH
 	.byte 0xDB,0xE4		/* fsetpm for 287, ignored by 387 */
+	ret
+
+/*
+ * Point the GDT at this CPU's PDA.  On boot this will be
+ * cpu_gdt_table and boot_pda; for secondary CPUs, these will be
+ * that CPU's GDT and PDA.
+ */
+setup_pda:
+	/* get the PDA pointer */
+	movl start_pda, %eax
+
+	/* slot the PDA address into the GDT */
+	mov cpu_gdt_descr+2, %ecx
+	mov %ax, (__KERNEL_PDA+0+2)(%ecx)		/* base & 0x0000ffff */
+	shr $16, %eax
+	mov %al, (__KERNEL_PDA+4+0)(%ecx)		/* base & 0x00ff0000 */
+	mov %ah, (__KERNEL_PDA+4+3)(%ecx)		/* base & 0xff000000 */
 	ret
 
 /*
@@ -378,7 +398,64 @@ rp_sidt:
 	addl $8,%edi
 	dec %ecx
 	jne rp_sidt
+
+.macro	set_early_handler handler,trapno
+	lea \handler,%edx
+	movl $(__KERNEL_CS << 16),%eax
+	movw %dx,%ax
+	movw $0x8E00,%dx	/* interrupt gate - dpl=0, present */
+	lea idt_table,%edi
+	movl %eax,8*\trapno(%edi)
+	movl %edx,8*\trapno+4(%edi)
+.endm
+
+	set_early_handler handler=early_divide_err,trapno=0
+	set_early_handler handler=early_illegal_opcode,trapno=6
+	set_early_handler handler=early_protection_fault,trapno=13
+	set_early_handler handler=early_page_fault,trapno=14
+
 	ret
+
+early_divide_err:
+	xor %edx,%edx
+	pushl $0	/* fake errcode */
+	jmp early_fault
+
+early_illegal_opcode:
+	movl $6,%edx
+	pushl $0	/* fake errcode */
+	jmp early_fault
+
+early_protection_fault:
+	movl $13,%edx
+	jmp early_fault
+
+early_page_fault:
+	movl $14,%edx
+	jmp early_fault
+
+early_fault:
+	cld
+#ifdef CONFIG_PRINTK
+	movl $(__KERNEL_DS),%eax
+	movl %eax,%ds
+	movl %eax,%es
+	cmpl $2,early_recursion_flag
+	je hlt_loop
+	incl early_recursion_flag
+	movl %cr2,%eax
+	pushl %eax
+	pushl %edx		/* trapno */
+	pushl $fault_msg
+#ifdef CONFIG_EARLY_PRINTK
+	call early_printk
+#else
+	call printk
+#endif
+#endif
+hlt_loop:
+	hlt
+	jmp hlt_loop
 
 /* This is the default interrupt "handler" :-) */
 	ALIGN
@@ -393,6 +470,9 @@ ignore_int:
 	movl $(__KERNEL_DS),%eax
 	movl %eax,%ds
 	movl %eax,%es
+	cmpl $2,early_recursion_flag
+	je hlt_loop
+	incl early_recursion_flag
 	pushl 16(%esp)
 	pushl 24(%esp)
 	pushl 32(%esp)
@@ -411,6 +491,33 @@ ignore_int:
 	popl %eax
 #endif
 	iret
+
+#ifdef CONFIG_PARAVIRT
+startup_paravirt:
+	cld
+ 	movl $(init_thread_union+THREAD_SIZE),%esp
+
+	/* We take pains to preserve all the regs. */
+	pushl	%edx
+	pushl	%ecx
+	pushl	%eax
+
+	/* paravirt.o is last in link, and that probe fn never returns */
+	pushl	$__start_paravirtprobe
+1:
+	movl	0(%esp), %eax
+	pushl	(%eax)
+	movl	8(%esp), %eax
+	call	*(%esp)
+	popl	%eax
+
+	movl	4(%esp), %eax
+	movl	8(%esp), %ecx
+	movl	12(%esp), %edx
+
+	addl	$4, (%esp)
+	jmp	1b
+#endif
 
 /*
  * Real beginning of normal "text" segment
@@ -431,6 +538,8 @@ ENTRY(empty_zero_page)
  * This starts the data section.
  */
 .data
+ENTRY(start_pda)
+	.long boot_pda
 
 ENTRY(stack_start)
 	.long init_thread_union+THREAD_SIZE
@@ -438,8 +547,15 @@ ENTRY(stack_start)
 
 ready:	.byte 0
 
+early_recursion_flag:
+	.long 0
+
 int_msg:
 	.asciz "Unknown interrupt or fault at EIP %p %p %p\n"
+
+fault_msg:
+	.ascii "Int %d: CR2 %p  err %p  EIP %p  CS %p  flags %p\n"
+	.asciz "Stack: %p %p %p %p %p %p %p %p\n"
 
 /*
  * The IDT and GDT 'descriptors' are a strange 48-bit object
@@ -465,7 +581,7 @@ idt_descr:
 
 # boot GDT descriptor (later on used by CPU#0):
 	.word 0				# 32 bit align gdt_desc.address
-cpu_gdt_descr:
+ENTRY(cpu_gdt_descr)
 	.word GDT_ENTRIES*8-1
 	.long cpu_gdt_table
 
@@ -524,8 +640,8 @@ ENTRY(cpu_gdt_table)
 	.quad 0x00009a000000ffff	/* 0xc0 APM CS 16 code (16 bit) */
 	.quad 0x004092000000ffff	/* 0xc8 APM DS    data */
 
-	.quad 0x0000920000000000	/* 0xd0 - ESPFIX 16-bit SS */
-	.quad 0x0000000000000000	/* 0xd8 - unused */
+	.quad 0x00c0920000000000	/* 0xd0 - ESPFIX SS */
+	.quad 0x00cf92000000ffff	/* 0xd8 - PDA */
 	.quad 0x0000000000000000	/* 0xe0 - unused */
 	.quad 0x0000000000000000	/* 0xe8 - unused */
 	.quad 0x0000000000000000	/* 0xf0 - unused */

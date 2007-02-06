@@ -78,7 +78,7 @@ struct platform_device ppc_sys_platform_devices[] = {
 			{
 				.name 	= "pram",
 				.start 	= 0x3c00,
-				.end 	= 0x3c80,
+				.end 	= 0x3c7f,
 				.flags 	= IORESOURCE_MEM,
 			},
 			{
@@ -103,7 +103,7 @@ struct platform_device ppc_sys_platform_devices[] = {
 			{
 				.name 	= "pram",
 				.start 	= 0x3d00,
-				.end 	= 0x3d80,
+				.end 	= 0x3d7f,
 				.flags 	= IORESOURCE_MEM,
 			},
 
@@ -129,7 +129,7 @@ struct platform_device ppc_sys_platform_devices[] = {
 			{
 				.name 	= "pram",
 				.start 	= 0x3e00,
-				.end 	= 0x3e80,
+				.end 	= 0x3e7f,
 				.flags 	= IORESOURCE_MEM,
 			},
 
@@ -155,7 +155,7 @@ struct platform_device ppc_sys_platform_devices[] = {
 			{
 				.name 	= "pram",
 				.start 	= 0x3f00,
-				.end 	= 0x3f80,
+				.end 	= 0x3f7f,
 				.flags 	= IORESOURCE_MEM,
 			},
 
@@ -218,6 +218,14 @@ struct platform_device ppc_sys_platform_devices[] = {
 			},
 		},
 	},
+
+        [MPC8xx_MDIO_FEC] = {
+                .name = "fsl-cpm-fec-mdio",
+                .id = 0,
+                .num_resources = 0,
+
+        },
+
 };
 
 static int __init mach_mpc8xx_fixup(struct platform_device *pdev)

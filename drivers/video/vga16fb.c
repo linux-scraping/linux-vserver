@@ -15,13 +15,13 @@
 #include <linux/errno.h>
 #include <linux/string.h>
 #include <linux/mm.h>
-#include <linux/tty.h>
 #include <linux/slab.h>
 #include <linux/delay.h>
 #include <linux/fb.h>
 #include <linux/ioport.h>
 #include <linux/init.h>
 #include <linux/platform_device.h>
+#include <linux/screen_info.h>
 
 #include <asm/io.h>
 #include <video/vga.h>
@@ -264,7 +264,7 @@ static void vga16fb_clock_chip(struct vga16fb_par *par,
 			       const struct fb_info *info,
 			       int mul, int div)
 {
-	static struct {
+	static const struct {
 		u32 pixclock;
 		u8  misc;
 		u8  seq_clock_mode;
@@ -652,7 +652,7 @@ static int vga16fb_set_par(struct fb_info *info)
 
 static void ega16_setpalette(int regno, unsigned red, unsigned green, unsigned blue)
 {
-	static unsigned char map[] = { 000, 001, 010, 011 };
+	static const unsigned char map[] = { 000, 001, 010, 011 };
 	int val;
 	
 	if (regno >= 16)
@@ -1139,22 +1139,18 @@ static void vga16fb_copyarea(struct fb_info *info, const struct fb_copyarea *are
 	}
 }
 
-#ifdef __LITTLE_ENDIAN
-static unsigned int transl_l[] =
-{0x0,0x8,0x4,0xC,0x2,0xA,0x6,0xE,0x1,0x9,0x5,0xD,0x3,0xB,0x7,0xF};
-static unsigned int transl_h[] =
-{0x000, 0x800, 0x400, 0xC00, 0x200, 0xA00, 0x600, 0xE00,
- 0x100, 0x900, 0x500, 0xD00, 0x300, 0xB00, 0x700, 0xF00};
-#else
-#ifdef __BIG_ENDIAN
-static unsigned int transl_h[] =
-{0x0,0x8,0x4,0xC,0x2,0xA,0x6,0xE,0x1,0x9,0x5,0xD,0x3,0xB,0x7,0xF};
-static unsigned int transl_l[] =
-{0x000, 0x800, 0x400, 0xC00, 0x200, 0xA00, 0x600, 0xE00,
- 0x100, 0x900, 0x500, 0xD00, 0x300, 0xB00, 0x700, 0xF00};
+#define TRANS_MASK_LOW  {0x0,0x8,0x4,0xC,0x2,0xA,0x6,0xE,0x1,0x9,0x5,0xD,0x3,0xB,0x7,0xF}
+#define TRANS_MASK_HIGH {0x000, 0x800, 0x400, 0xC00, 0x200, 0xA00, 0x600, 0xE00, \
+			 0x100, 0x900, 0x500, 0xD00, 0x300, 0xB00, 0x700, 0xF00}
+
+#if defined(__LITTLE_ENDIAN)
+static const u16 transl_l[] = TRANS_MASK_LOW;
+static const u16 transl_h[] = TRANS_MASK_HIGH;
+#elif defined(__BIG_ENDIAN)
+static const u16 transl_l[] = TRANS_MASK_HIGH;
+static const u16 transl_h[] = TRANS_MASK_LOW;
 #else
 #error "Only __BIG_ENDIAN and __LITTLE_ENDIAN are supported in vga-planes"
-#endif
 #endif
 
 static void vga_8planes_imageblit(struct fb_info *info, const struct fb_image *image)
@@ -1334,9 +1330,8 @@ static int vga16fb_setup(char *options)
 }
 #endif
 
-static int __init vga16fb_probe(struct device *device)
+static int __init vga16fb_probe(struct platform_device *dev)
 {
-	struct platform_device *dev = to_platform_device(device);
 	struct fb_info *info;
 	struct vga16fb_par *par;
 	int i;
@@ -1351,7 +1346,7 @@ static int __init vga16fb_probe(struct device *device)
 	}
 
 	/* XXX share VGA_FB_PHYS and I/O region with vgacon and others */
-	info->screen_base = (void __iomem *)VGA_MAP_MEM(VGA_FB_PHYS);
+	info->screen_base = (void __iomem *)VGA_MAP_MEM(VGA_FB_PHYS, 0);
 
 	if (!info->screen_base) {
 		printk(KERN_ERR "vga16fb: unable to map device\n");
@@ -1403,7 +1398,7 @@ static int __init vga16fb_probe(struct device *device)
 
 	printk(KERN_INFO "fb%d: %s frame buffer device\n",
 	       info->node, info->fix.id);
-	dev_set_drvdata(device, info);
+	platform_set_drvdata(dev, info);
 
 	return 0;
 
@@ -1417,9 +1412,9 @@ static int __init vga16fb_probe(struct device *device)
 	return ret;
 }
 
-static int vga16fb_remove(struct device *device)
+static int vga16fb_remove(struct platform_device *dev)
 {
-	struct fb_info *info = dev_get_drvdata(device);
+	struct fb_info *info = platform_get_drvdata(dev);
 
 	if (info) {
 		unregister_framebuffer(info);
@@ -1432,16 +1427,15 @@ static int vga16fb_remove(struct device *device)
 	return 0;
 }
 
-static struct device_driver vga16fb_driver = {
-	.name = "vga16fb",
-	.bus  = &platform_bus_type,
+static struct platform_driver vga16fb_driver = {
 	.probe = vga16fb_probe,
 	.remove = vga16fb_remove,
+	.driver = {
+		.name = "vga16fb",
+	},
 };
 
-static struct platform_device vga16fb_device = {
-	.name = "vga16fb",
-};
+static struct platform_device *vga16fb_device;
 
 static int __init vga16fb_init(void)
 {
@@ -1454,12 +1448,20 @@ static int __init vga16fb_init(void)
 
 	vga16fb_setup(option);
 #endif
-	ret = driver_register(&vga16fb_driver);
+	ret = platform_driver_register(&vga16fb_driver);
 
 	if (!ret) {
-		ret = platform_device_register(&vga16fb_device);
-		if (ret)
-			driver_unregister(&vga16fb_driver);
+		vga16fb_device = platform_device_alloc("vga16fb", 0);
+
+		if (vga16fb_device)
+			ret = platform_device_add(vga16fb_device);
+		else
+			ret = -ENOMEM;
+
+		if (ret) {
+			platform_device_put(vga16fb_device);
+			platform_driver_unregister(&vga16fb_driver);
+		}
 	}
 
 	return ret;
@@ -1467,8 +1469,8 @@ static int __init vga16fb_init(void)
 
 static void __exit vga16fb_exit(void)
 {
-	platform_device_unregister(&vga16fb_device);
-	driver_unregister(&vga16fb_driver);
+	platform_device_unregister(vga16fb_device);
+	platform_driver_unregister(&vga16fb_driver);
 }
 
 MODULE_LICENSE("GPL");

@@ -17,14 +17,14 @@
 #include <asm/tlbflush.h>
 #include <asm/cacheflush.h>
 
+#include "mm.h"
+
 #if SHMLBA > 16384
 #error FIX ME
 #endif
 
 #define from_address	(0xffff8000)
 #define to_address	(0xffffc000)
-
-#define TOP_PTE(x)	pte_offset_kernel(top_pmd, x)
 
 static DEFINE_SPINLOCK(v6_lock);
 
@@ -53,6 +53,10 @@ static void v6_copy_user_page_aliasing(void *kto, const void *kfrom, unsigned lo
 {
 	unsigned int offset = CACHE_COLOUR(vaddr);
 	unsigned long from, to;
+	struct page *page = virt_to_page(kfrom);
+
+	if (test_and_clear_bit(PG_dcache_dirty, &page->flags))
+		__flush_dcache_page(page_mapping(page), page);
 
 	/*
 	 * Discard data in the kernel mapping for the new page.
@@ -70,8 +74,8 @@ static void v6_copy_user_page_aliasing(void *kto, const void *kfrom, unsigned lo
 	 */
 	spin_lock(&v6_lock);
 
-	set_pte(TOP_PTE(from_address) + offset, pfn_pte(__pa(kfrom) >> PAGE_SHIFT, PAGE_KERNEL));
-	set_pte(TOP_PTE(to_address) + offset, pfn_pte(__pa(kto) >> PAGE_SHIFT, PAGE_KERNEL));
+	set_pte_ext(TOP_PTE(from_address) + offset, pfn_pte(__pa(kfrom) >> PAGE_SHIFT, PAGE_KERNEL), 0);
+	set_pte_ext(TOP_PTE(to_address) + offset, pfn_pte(__pa(kto) >> PAGE_SHIFT, PAGE_KERNEL), 0);
 
 	from = from_address + (offset << PAGE_SHIFT);
 	to   = to_address + (offset << PAGE_SHIFT);
@@ -110,7 +114,7 @@ static void v6_clear_user_page_aliasing(void *kaddr, unsigned long vaddr)
 	 */
 	spin_lock(&v6_lock);
 
-	set_pte(TOP_PTE(to_address) + offset, pfn_pte(__pa(kaddr) >> PAGE_SHIFT, PAGE_KERNEL));
+	set_pte_ext(TOP_PTE(to_address) + offset, pfn_pte(__pa(kaddr) >> PAGE_SHIFT, PAGE_KERNEL), 0);
 	flush_tlb_kernel_page(to);
 	clear_page((void *)to);
 

@@ -21,7 +21,6 @@
  * 05/01/30 Suresh Siddha <suresh.b.siddha@intel.com>
  *						Setup cpu_sibling_map and cpu_core_map
  */
-#include <linux/config.h>
 
 #include <linux/module.h>
 #include <linux/acpi.h>
@@ -125,7 +124,7 @@ extern void __devinit calibrate_delay (void);
 extern void start_ap (void);
 extern unsigned long ia64_iobase;
 
-task_t *task_for_booting_cpu;
+struct task_struct *task_for_booting_cpu;
 
 /*
  * State for each CPU
@@ -464,15 +463,17 @@ struct pt_regs * __devinit idle_regs(struct pt_regs *regs)
 }
 
 struct create_idle {
+	struct work_struct work;
 	struct task_struct *idle;
 	struct completion done;
 	int cpu;
 };
 
 void
-do_fork_idle(void *_c_idle)
+do_fork_idle(struct work_struct *work)
 {
-	struct create_idle *c_idle = _c_idle;
+	struct create_idle *c_idle =
+		container_of(work, struct create_idle, work);
 
 	c_idle->idle = fork_idle(c_idle->cpu);
 	complete(&c_idle->done);
@@ -483,10 +484,10 @@ do_boot_cpu (int sapicid, int cpu)
 {
 	int timeout;
 	struct create_idle c_idle = {
+		.work = __WORK_INITIALIZER(c_idle.work, do_fork_idle),
 		.cpu	= cpu,
 		.done	= COMPLETION_INITIALIZER(c_idle.done),
 	};
-	DECLARE_WORK(work, do_fork_idle, &c_idle);
 
  	c_idle.idle = get_idle_for_cpu(cpu);
  	if (c_idle.idle) {
@@ -498,9 +499,9 @@ do_boot_cpu (int sapicid, int cpu)
 	 * We can't use kernel_thread since we must avoid to reschedule the child.
 	 */
 	if (!keventd_up() || current_is_keventd())
-		work.func(work.data);
+		c_idle.work.func(&c_idle.work);
 	else {
-		schedule_work(&work);
+		schedule_work(&c_idle.work);
 		wait_for_completion(&c_idle.done);
 	}
 
@@ -677,16 +678,16 @@ int migrate_platform_irqs(unsigned int cpu)
 			new_cpei_cpu = any_online_cpu(cpu_online_map);
 			mask = cpumask_of_cpu(new_cpei_cpu);
 			set_cpei_target_cpu(new_cpei_cpu);
-			desc = irq_descp(ia64_cpe_irq);
+			desc = irq_desc + ia64_cpe_irq;
 			/*
 			 * Switch for now, immediatly, we need to do fake intr
 			 * as other interrupts, but need to study CPEI behaviour with
 			 * polling before making changes.
 			 */
 			if (desc) {
-				desc->handler->disable(ia64_cpe_irq);
-				desc->handler->set_affinity(ia64_cpe_irq, mask);
-				desc->handler->enable(ia64_cpe_irq);
+				desc->chip->disable(ia64_cpe_irq);
+				desc->chip->set_affinity(ia64_cpe_irq, mask);
+				desc->chip->enable(ia64_cpe_irq);
 				printk ("Re-targetting CPEI to cpu %d\n", new_cpei_cpu);
 			}
 		}
@@ -880,3 +881,27 @@ identify_siblings(struct cpuinfo_ia64 *c)
 	c->core_id = info.log1_cid;
 	c->thread_id = info.log1_tid;
 }
+
+/*
+ * returns non zero, if multi-threading is enabled
+ * on at least one physical package. Due to hotplug cpu
+ * and (maxcpus=), all threads may not necessarily be enabled
+ * even though the processor supports multi-threading.
+ */
+int is_multithreading_enabled(void)
+{
+	int i, j;
+
+	for_each_present_cpu(i) {
+		for_each_present_cpu(j) {
+			if (j == i)
+				continue;
+			if ((cpu_data(j)->socket_id == cpu_data(i)->socket_id)) {
+				if (cpu_data(j)->core_id == cpu_data(i)->core_id)
+					return 1;
+			}
+		}
+	}
+	return 0;
+}
+EXPORT_SYMBOL_GPL(is_multithreading_enabled);

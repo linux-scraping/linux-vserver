@@ -43,7 +43,6 @@
 #define RTC_VERSION	"1.07"
 
 #include <linux/module.h>
-#include <linux/config.h>
 #include <linux/errno.h>
 #include <linux/miscdevice.h>
 #include <linux/fcntl.h>
@@ -103,7 +102,7 @@ static void gen_rtc_interrupt(unsigned long arg);
  * Routine to poll RTC seconds field for change as often as possible,
  * after first RTC_UIE use timer to reduce polling
  */
-static void genrtc_troutine(void *data)
+static void genrtc_troutine(struct work_struct *work)
 {
 	unsigned int tmp = get_rtc_ss();
 	
@@ -256,7 +255,7 @@ static inline int gen_set_rtc_irq_bit(unsigned char bit)
 		irq_active = 1;
 		stop_rtc_timers = 0;
 		lostint = 0;
-		INIT_WORK(&genrtc_task, genrtc_troutine, NULL);
+		INIT_WORK(&genrtc_task, genrtc_troutine);
 		oldsecs = get_rtc_ss();
 		init_timer(&timer_task);
 
@@ -483,7 +482,7 @@ static inline int gen_rtc_proc_init(void) { return 0; }
  *	The various file operations we support.
  */
 
-static struct file_operations gen_rtc_fops = {
+static const struct file_operations gen_rtc_fops = {
 	.owner		= THIS_MODULE,
 #ifdef CONFIG_GEN_RTC_X
 	.read		= gen_rtc_read,

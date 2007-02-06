@@ -76,7 +76,7 @@ int show_interrupts(struct seq_file *p, void *v)
 			seq_printf(p, "%10u ", kstat_cpu(j).irqs[i]);
 		}
 #endif
-		seq_printf(p, " %14s", irq_desc[i].handler->typename);
+		seq_printf(p, " %14s", irq_desc[i].chip->name);
 		seq_printf(p, "  %s", action->name);
 
 		for (action=action->next; action; action = action->next)
@@ -100,7 +100,7 @@ void set_irq_affinity_info (unsigned int irq, int hwid, int redir)
 	cpu_set(cpu_logical_id(hwid), mask);
 
 	if (irq < NR_IRQS) {
-		irq_affinity[irq] = mask;
+		irq_desc[irq].affinity = mask;
 		irq_redir[irq] = (char) (redir & 0xff);
 	}
 }
@@ -120,7 +120,10 @@ static void migrate_irqs(void)
 	int 		irq, new_cpu;
 
 	for (irq=0; irq < NR_IRQS; irq++) {
-		desc = irq_descp(irq);
+		desc = irq_desc + irq;
+
+		if (desc->status == IRQ_DISABLED)
+			continue;
 
 		/*
 		 * No handling for now.
@@ -131,7 +134,7 @@ static void migrate_irqs(void)
 		if (desc->status == IRQ_PER_CPU)
 			continue;
 
-		cpus_and(mask, irq_affinity[irq], cpu_online_map);
+		cpus_and(mask, irq_desc[irq].affinity, cpu_online_map);
 		if (any_online_cpu(mask) == NR_CPUS) {
 			/*
 			 * Save it for phase 2 processing
@@ -144,15 +147,15 @@ static void migrate_irqs(void)
 			/*
 			 * Al three are essential, currently WARN_ON.. maybe panic?
 			 */
-			if (desc->handler && desc->handler->disable &&
-				desc->handler->enable && desc->handler->set_affinity) {
-				desc->handler->disable(irq);
-				desc->handler->set_affinity(irq, mask);
-				desc->handler->enable(irq);
+			if (desc->chip && desc->chip->disable &&
+				desc->chip->enable && desc->chip->set_affinity) {
+				desc->chip->disable(irq);
+				desc->chip->set_affinity(irq, mask);
+				desc->chip->enable(irq);
 			} else {
-				WARN_ON((!(desc->handler) || !(desc->handler->disable) ||
-						!(desc->handler->enable) ||
-						!(desc->handler->set_affinity)));
+				WARN_ON((!(desc->chip) || !(desc->chip->disable) ||
+						!(desc->chip->enable) ||
+						!(desc->chip->set_affinity)));
 			}
 		}
 	}
@@ -194,8 +197,11 @@ void fixup_irqs(void)
 	 */
 	for (irq=0; irq < NR_IRQS; irq++) {
 		if (vectors_in_migration[irq]) {
+			struct pt_regs *old_regs = set_irq_regs(NULL);
+
 			vectors_in_migration[irq]=0;
-			__do_IRQ(irq, NULL);
+			generic_handle_irq(irq);
+			set_irq_regs(old_regs);
 		}
 	}
 

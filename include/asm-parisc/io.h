@@ -1,7 +1,6 @@
 #ifndef _ASM_IO_H
 #define _ASM_IO_H
 
-#include <linux/config.h>
 #include <linux/types.h>
 #include <asm/pgtable.h>
 
@@ -135,7 +134,7 @@ extern inline void __iomem * ioremap(unsigned long offset, unsigned long size)
 }
 #define ioremap_nocache(off, sz)	ioremap((off), (sz))
 
-extern void iounmap(void __iomem *addr);
+extern void iounmap(const volatile void __iomem *addr);
 
 static inline unsigned char __raw_readb(const volatile void __iomem *addr)
 {

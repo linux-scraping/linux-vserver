@@ -4,7 +4,6 @@
  *  Copyright (C) 1991, 1992  Linus Torvalds
  */
 
-#include <linux/config.h>
 #include <linux/syscalls.h>
 #include <linux/mm.h>
 #include <linux/smp_lock.h>
@@ -15,7 +14,7 @@
 #include <linux/module.h>
 #include <linux/proc_fs.h>
 #include <linux/vserver/inode.h>
-#include <linux/vserver/xid.h>
+#include <linux/vs_tag.h>
 
 #include <asm/uaccess.h>
 #include <asm/ioctls.h>
@@ -41,7 +40,7 @@ static long do_ioctl(struct file *filp, unsigned int cmd,
 		goto out;
 	} else if (filp->f_op->ioctl) {
 		lock_kernel();
-		error = filp->f_op->ioctl(filp->f_dentry->d_inode,
+		error = filp->f_op->ioctl(filp->f_path.dentry->d_inode,
 					  filp, cmd, arg);
 		unlock_kernel();
 	}
@@ -55,7 +54,7 @@ static int file_ioctl(struct file *filp, unsigned int cmd,
 {
 	int error;
 	int block;
-	struct inode * inode = filp->f_dentry->d_inode;
+	struct inode * inode = filp->f_path.dentry->d_inode;
 	int __user *p = (int __user *)arg;
 
 	switch (cmd) {
@@ -147,29 +146,29 @@ int vfs_ioctl(struct file *filp, unsigned int fd, unsigned int cmd, unsigned lon
 			break;
 
 		case FIOQSIZE:
-			if (S_ISDIR(filp->f_dentry->d_inode->i_mode) ||
-			    S_ISREG(filp->f_dentry->d_inode->i_mode) ||
-			    S_ISLNK(filp->f_dentry->d_inode->i_mode)) {
-				loff_t res = inode_get_bytes(filp->f_dentry->d_inode);
+			if (S_ISDIR(filp->f_path.dentry->d_inode->i_mode) ||
+			    S_ISREG(filp->f_path.dentry->d_inode->i_mode) ||
+			    S_ISLNK(filp->f_path.dentry->d_inode->i_mode)) {
+				loff_t res = inode_get_bytes(filp->f_path.dentry->d_inode);
 				error = copy_to_user((loff_t __user *)arg, &res, sizeof(res)) ? -EFAULT : 0;
 			}
 			else
 				error = -ENOTTY;
 			break;
 #ifdef	CONFIG_VSERVER_LEGACY
-#ifndef CONFIG_INOXID_NONE
-		case FIOC_GETXID: {
+#ifndef CONFIG_TAGGING_NONE
+		case FIOC_GETTAG: {
 			struct inode *inode = filp->f_dentry->d_inode;
 
 			/* fixme: if stealth, return -ENOTTY */
 			error = -EPERM;
 			if (capable(CAP_CONTEXT))
-				error = put_user(inode->i_xid, (int __user *) arg);
+				error = put_user(inode->i_tag, (int __user *) arg);
 			break;
 		}
-		case FIOC_SETXID: {
+		case FIOC_SETTAG: {
 			struct inode *inode = filp->f_dentry->d_inode;
-			int xid;
+			int tag;
 
 			/* fixme: if stealth, return -ENOTTY */
 			error = -EPERM;
@@ -179,13 +178,13 @@ int vfs_ioctl(struct file *filp, unsigned int fd, unsigned int cmd, unsigned lon
 			if (IS_RDONLY(inode))
 				break;
 			error = -ENOSYS;
-			if (!(inode->i_sb->s_flags & MS_TAGXID))
+			if (!(inode->i_sb->s_flags & MS_TAGGED))
 				break;
 			error = -EFAULT;
-			if (get_user(xid, (int __user *) arg))
+			if (get_user(tag, (int __user *) arg))
 				break;
 			error = 0;
-			inode->i_xid = (xid & 0xFFFF);
+			inode->i_tag = (tag & 0xFFFF);
 			inode->i_ctime = CURRENT_TIME;
 			mark_inode_dirty(inode);
 			break;
@@ -199,7 +198,7 @@ int vfs_ioctl(struct file *filp, unsigned int fd, unsigned int cmd, unsigned lon
 			break;
 #endif
 		default:
-			if (S_ISREG(filp->f_dentry->d_inode->i_mode))
+			if (S_ISREG(filp->f_path.dentry->d_inode->i_mode))
 				error = file_ioctl(filp, cmd, arg);
 			else
 				error = do_ioctl(filp, cmd, arg);

@@ -21,12 +21,10 @@
  *	 - making it shorter - scr_readw are macros which expand in PRETTY long code
  */
 
-#include <linux/config.h>
 #include <linux/kernel.h>
 #include <linux/major.h>
 #include <linux/errno.h>
 #include <linux/tty.h>
-#include <linux/devfs_fs_kernel.h>
 #include <linux/sched.h>
 #include <linux/interrupt.h>
 #include <linux/mm.h>
@@ -74,7 +72,7 @@ static loff_t vcs_lseek(struct file *file, loff_t offset, int orig)
 	int size;
 
 	down(&con_buf_sem);
-	size = vcs_size(file->f_dentry->d_inode);
+	size = vcs_size(file->f_path.dentry->d_inode);
 	switch (orig) {
 		default:
 			up(&con_buf_sem);
@@ -100,7 +98,7 @@ static loff_t vcs_lseek(struct file *file, loff_t offset, int orig)
 static ssize_t
 vcs_read(struct file *file, char __user *buf, size_t count, loff_t *ppos)
 {
-	struct inode *inode = file->f_dentry->d_inode;
+	struct inode *inode = file->f_path.dentry->d_inode;
 	unsigned int currcons = iminor(inode);
 	struct vc_data *vc;
 	long pos;
@@ -273,7 +271,7 @@ unlock_out:
 static ssize_t
 vcs_write(struct file *file, const char __user *buf, size_t count, loff_t *ppos)
 {
-	struct inode *inode = file->f_dentry->d_inode;
+	struct inode *inode = file->f_path.dentry->d_inode;
 	unsigned int currcons = iminor(inode);
 	struct vc_data *vc;
 	long pos;
@@ -467,7 +465,7 @@ vcs_open(struct inode *inode, struct file *filp)
 	return 0;
 }
 
-static struct file_operations vcs_fops = {
+static const struct file_operations vcs_fops = {
 	.llseek		= vcs_lseek,
 	.read		= vcs_read,
 	.write		= vcs_write,
@@ -476,25 +474,18 @@ static struct file_operations vcs_fops = {
 
 static struct class *vc_class;
 
-void vcs_make_devfs(struct tty_struct *tty)
+void vcs_make_sysfs(struct tty_struct *tty)
 {
-	devfs_mk_cdev(MKDEV(VCS_MAJOR, tty->index + 1),
-			S_IFCHR|S_IRUSR|S_IWUSR,
-			"vcc/%u", tty->index + 1);
-	devfs_mk_cdev(MKDEV(VCS_MAJOR, tty->index + 129),
-			S_IFCHR|S_IRUSR|S_IWUSR,
-			"vcc/a%u", tty->index + 1);
-	class_device_create(vc_class, NULL, MKDEV(VCS_MAJOR, tty->index + 1),
-			NULL, "vcs%u", tty->index + 1);
-	class_device_create(vc_class, NULL, MKDEV(VCS_MAJOR, tty->index + 129),
-			NULL, "vcsa%u", tty->index + 1);
+	device_create(vc_class, NULL, MKDEV(VCS_MAJOR, tty->index + 1),
+			"vcs%u", tty->index + 1);
+	device_create(vc_class, NULL, MKDEV(VCS_MAJOR, tty->index + 129),
+			"vcsa%u", tty->index + 1);
 }
-void vcs_remove_devfs(struct tty_struct *tty)
+
+void vcs_remove_sysfs(struct tty_struct *tty)
 {
-	devfs_remove("vcc/%u", tty->index + 1);
-	devfs_remove("vcc/a%u", tty->index + 1);
-	class_device_destroy(vc_class, MKDEV(VCS_MAJOR, tty->index + 1));
-	class_device_destroy(vc_class, MKDEV(VCS_MAJOR, tty->index + 129));
+	device_destroy(vc_class, MKDEV(VCS_MAJOR, tty->index + 1));
+	device_destroy(vc_class, MKDEV(VCS_MAJOR, tty->index + 129));
 }
 
 int __init vcs_init(void)
@@ -503,9 +494,7 @@ int __init vcs_init(void)
 		panic("unable to get major %d for vcs device", VCS_MAJOR);
 	vc_class = class_create(THIS_MODULE, "vc");
 
-	devfs_mk_cdev(MKDEV(VCS_MAJOR, 0), S_IFCHR|S_IRUSR|S_IWUSR, "vcc/0");
-	devfs_mk_cdev(MKDEV(VCS_MAJOR, 128), S_IFCHR|S_IRUSR|S_IWUSR, "vcc/a0");
-	class_device_create(vc_class, NULL, MKDEV(VCS_MAJOR, 0), NULL, "vcs");
-	class_device_create(vc_class, NULL, MKDEV(VCS_MAJOR, 128), NULL, "vcsa");
+	device_create(vc_class, NULL, MKDEV(VCS_MAJOR, 0), "vcs");
+	device_create(vc_class, NULL, MKDEV(VCS_MAJOR, 128), "vcsa");
 	return 0;
 }

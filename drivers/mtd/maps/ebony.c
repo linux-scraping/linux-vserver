@@ -20,7 +20,6 @@
 #include <linux/mtd/mtd.h>
 #include <linux/mtd/map.h>
 #include <linux/mtd/partitions.h>
-#include <linux/config.h>
 #include <asm/io.h>
 #include <asm/ibm44x.h>
 #include <platforms/4xx/ebony.h>
@@ -109,6 +108,7 @@ int __init init_ebony(void)
 					ARRAY_SIZE(ebony_small_partitions));
 	} else {
 		printk("map probe failed for flash\n");
+		iounmap(ebony_small_map.virt);
 		return -ENXIO;
 	}
 
@@ -118,6 +118,7 @@ int __init init_ebony(void)
 
 	if (!ebony_large_map.virt) {
 		printk("Failed to ioremap flash\n");
+		iounmap(ebony_small_map.virt);
 		return -EIO;
 	}
 
@@ -130,6 +131,8 @@ int __init init_ebony(void)
 					ARRAY_SIZE(ebony_large_partitions));
 	} else {
 		printk("map probe failed for flash\n");
+		iounmap(ebony_small_map.virt);
+		iounmap(ebony_large_map.virt);
 		return -ENXIO;
 	}
 

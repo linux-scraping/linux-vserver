@@ -24,7 +24,6 @@
  *
  */
 
-#include <linux/config.h>
 #include <linux/kernel.h>
 #include <linux/jiffies.h>
 #include <linux/errno.h>
@@ -40,8 +39,8 @@
 #include <asm/uaccess.h>
 #include <asm/semaphore.h>
 #include <linux/usb.h>
+#include <linux/usb/serial.h>
 
-#include "usb-serial.h"
 #include "io_16654.h"
 #include "io_usbvend.h"
 #include "io_ti.h"
@@ -239,7 +238,7 @@ static void edge_tty_recv(struct device *dev, struct tty_struct *tty, unsigned c
 static void stop_read(struct edgeport_port *edge_port);
 static int restart_read(struct edgeport_port *edge_port);
 
-static void edge_set_termios (struct usb_serial_port *port, struct termios *old_termios);
+static void edge_set_termios (struct usb_serial_port *port, struct ktermios *old_termios);
 static void edge_send(struct usb_serial_port *port);
 
 /* circular buffer */
@@ -1698,7 +1697,7 @@ static void handle_new_lsr (struct edgeport_port *edge_port, int lsr_data, __u8 
 }
 
 
-static void edge_interrupt_callback (struct urb *urb, struct pt_regs *regs)
+static void edge_interrupt_callback (struct urb *urb)
 {
 	struct edgeport_serial *edge_serial = (struct edgeport_serial *)urb->context;
 	struct usb_serial_port *port;
@@ -1788,7 +1787,7 @@ exit:
 			 __FUNCTION__, status);
 }
 
-static void edge_bulk_in_callback (struct urb *urb, struct pt_regs *regs)
+static void edge_bulk_in_callback (struct urb *urb)
 {
 	struct edgeport_port *edge_port = (struct edgeport_port *)urb->context;
 	unsigned char *data = urb->transfer_buffer;
@@ -1880,7 +1879,7 @@ static void edge_tty_recv(struct device *dev, struct tty_struct *tty, unsigned c
 	tty_flip_buffer_push(tty);
 }
 
-static void edge_bulk_out_callback (struct urb *urb, struct pt_regs *regs)
+static void edge_bulk_out_callback (struct urb *urb)
 {
 	struct usb_serial_port *port = (struct usb_serial_port *)urb->context;
 	struct edgeport_port *edge_port = usb_get_serial_port_data(port);
@@ -2362,7 +2361,7 @@ static int restart_read(struct edgeport_port *edge_port)
 	return status;
 }
 
-static void change_port_settings (struct edgeport_port *edge_port, struct termios *old_termios)
+static void change_port_settings (struct edgeport_port *edge_port, struct ktermios *old_termios)
 {
 	struct ump_uart_config *config;
 	struct tty_struct *tty;
@@ -2513,7 +2512,7 @@ static void change_port_settings (struct edgeport_port *edge_port, struct termio
 	return;
 }
 
-static void edge_set_termios (struct usb_serial_port *port, struct termios *old_termios)
+static void edge_set_termios (struct usb_serial_port *port, struct ktermios *old_termios)
 {
 	struct edgeport_port *edge_port = usb_get_serial_port_data(port);
 	struct tty_struct *tty = port->tty;
@@ -2812,7 +2811,7 @@ static struct edge_buf *edge_buf_alloc(unsigned int size)
 	if (size == 0)
 		return NULL;
 
-	eb = (struct edge_buf *)kmalloc(sizeof(struct edge_buf), GFP_KERNEL);
+	eb = kmalloc(sizeof(struct edge_buf), GFP_KERNEL);
 	if (eb == NULL)
 		return NULL;
 

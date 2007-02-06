@@ -24,14 +24,10 @@ do {									\
 	typecheck_fn(fastcall void (*)(atomic_t *), fail_fn);		\
 									\
 	__asm__ __volatile__(						\
-		LOCK	"   decl (%%rdi)	\n"			\
-			"   js 2f		\n"			\
-			"1:			\n"			\
-									\
-		LOCK_SECTION_START("")					\
-			"2: call "#fail_fn"	\n"			\
-			"   jmp 1b		\n"			\
-		LOCK_SECTION_END					\
+		LOCK_PREFIX "   decl (%%rdi)	\n"			\
+			"   jns 1f		\n"			\
+			"   call "#fail_fn"	\n"			\
+			"1:"						\
 									\
 		:"=D" (dummy)						\
 		: "D" (v)						\
@@ -74,14 +70,10 @@ do {									\
 	typecheck_fn(fastcall void (*)(atomic_t *), fail_fn);		\
 									\
 	__asm__ __volatile__(						\
-		LOCK	"   incl (%%rdi)	\n"			\
-			"   jle 2f		\n"			\
-			"1:			\n"			\
-									\
-		LOCK_SECTION_START("")					\
-			"2: call "#fail_fn"	\n"			\
-			"   jmp 1b		\n"			\
-		LOCK_SECTION_END					\
+		LOCK_PREFIX "   incl (%%rdi)	\n"			\
+			"   jg 1f		\n"			\
+			"   call "#fail_fn"	\n"			\
+			"1:			  "			\
 									\
 		:"=D" (dummy)						\
 		: "D" (v)						\

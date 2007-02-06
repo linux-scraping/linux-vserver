@@ -5,7 +5,6 @@
  * SCLP Control-Program Identification.
  */
 
-#include <linux/config.h>
 #include <linux/version.h>
 #include <linux/kmod.h>
 #include <linux/module.h>
@@ -49,6 +48,8 @@ static struct sclp_register sclp_cpi_event =
 {
 	.send_mask = EvTyp_CtlProgIdent_Mask
 };
+
+MODULE_LICENSE("GPL");
 
 MODULE_AUTHOR(
 	"Martin Peschke, IBM Deutschland Entwicklung GmbH "
@@ -128,7 +129,7 @@ cpi_prepare_req(void)
 	struct cpi_sccb *sccb;
 	struct cpi_evbuf *evb;
 
-	req = (struct sclp_req *) kmalloc(sizeof(struct sclp_req), GFP_KERNEL);
+	req = kmalloc(sizeof(struct sclp_req), GFP_KERNEL);
 	if (req == NULL)
 		return ERR_PTR(-ENOMEM);
 	sccb = (struct cpi_sccb *) __get_free_page(GFP_KERNEL | GFP_DMA);

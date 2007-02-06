@@ -27,7 +27,6 @@
 #include <linux/poll.h>
 #include <linux/fs.h>
 #include <linux/list.h>
-#include <linux/devfs_fs_kernel.h>
 #include <linux/smp_lock.h>
 
 #define DVB_MAJOR 212
@@ -50,6 +49,8 @@ struct dvb_adapter {
 	const char *name;
 	u8 proposed_mac [6];
 	void* priv;
+
+	struct device *device;
 
 	struct module *module;
 };
@@ -76,7 +77,7 @@ struct dvb_device {
 };
 
 
-extern int dvb_register_adapter (struct dvb_adapter *adap, const char *name, struct module *module);
+extern int dvb_register_adapter (struct dvb_adapter *adap, const char *name, struct module *module, struct device *device);
 extern int dvb_unregister_adapter (struct dvb_adapter *adap);
 
 extern int dvb_register_device (struct dvb_adapter *adap,
@@ -100,5 +101,27 @@ extern int dvb_usercopy(struct inode *inode, struct file *file,
 			    unsigned int cmd, unsigned long arg,
 			    int (*func)(struct inode *inode, struct file *file,
 			    unsigned int cmd, void *arg));
+
+/** generic DVB attach function. */
+#ifdef CONFIG_DVB_CORE_ATTACH
+#define dvb_attach(FUNCTION, ARGS...) ({ \
+	void *__r = NULL; \
+	typeof(&FUNCTION) __a = symbol_request(FUNCTION); \
+	if (__a) { \
+		__r = (void *) __a(ARGS); \
+		if (__r == NULL) \
+			symbol_put(FUNCTION); \
+	} else { \
+		printk(KERN_ERR "DVB: Unable to find symbol "#FUNCTION"()\n"); \
+	} \
+	__r; \
+})
+
+#else
+#define dvb_attach(FUNCTION, ARGS...) ({ \
+	FUNCTION(ARGS); \
+})
+
+#endif
 
 #endif /* #ifndef _DVBDEV_H_ */

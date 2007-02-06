@@ -1,13 +1,12 @@
-/* myri_sbus.h: MyriCOM MyriNET SBUS card driver.
+/* myri_sbus.c: MyriCOM MyriNET SBUS card driver.
  *
- * Copyright (C) 1996, 1999 David S. Miller (davem@redhat.com)
+ * Copyright (C) 1996, 1999, 2006 David S. Miller (davem@davemloft.net)
  */
 
 static char version[] =
-        "myri_sbus.c:v1.9 12/Sep/99 David S. Miller (davem@redhat.com)\n";
+        "myri_sbus.c:v2.0 June 23, 2006 David S. Miller (davem@davemloft.net)\n";
 
 #include <linux/module.h>
-#include <linux/config.h>
 #include <linux/errno.h>
 #include <linux/kernel.h>
 #include <linux/types.h>
@@ -40,7 +39,6 @@ static char version[] =
 #include <asm/auxio.h>
 #include <asm/pgtable.h>
 #include <asm/irq.h>
-#include <asm/checksum.h>
 
 #include "myri_sbus.h"
 #include "myri_code.h"
@@ -79,10 +77,6 @@ static char version[] =
 #define DHDR(x) printk x
 #else
 #define DHDR(x)
-#endif
-
-#ifdef MODULE
-static struct myri_eth *root_myri_dev;
 #endif
 
 static void myri_reset_off(void __iomem *lp, void __iomem *cregs)
@@ -173,7 +167,7 @@ static int myri_do_handshake(struct myri_eth *mp)
 	return 0;
 }
 
-static int myri_load_lanai(struct myri_eth *mp)
+static int __devinit myri_load_lanai(struct myri_eth *mp)
 {
 	struct net_device	*dev = mp->dev;
 	struct myri_shmem __iomem *shmem = mp->shmem;
@@ -365,7 +359,7 @@ static void myri_tx(struct myri_eth *mp, struct net_device *dev)
 	mp->tx_old = entry;
 }
 
-/* Determine the packet's protocol ID. The rule here is that we 
+/* Determine the packet's protocol ID. The rule here is that we
  * assume 802.3 if the type field is short enough to be a length.
  * This is normal practice and works for any 'now in use' protocol.
  */
@@ -373,11 +367,11 @@ static __be16 myri_type_trans(struct sk_buff *skb, struct net_device *dev)
 {
 	struct ethhdr *eth;
 	unsigned char *rawp;
-	
+
 	skb->mac.raw = (((unsigned char *)skb->data) + MYRI_PAD_LEN);
 	skb_pull(skb, dev->hard_header_len);
 	eth = eth_hdr(skb);
-	
+
 #ifdef DEBUG_HEADER
 	DHDR(("myri_type_trans: "));
 	dump_ehdr(eth);
@@ -391,12 +385,12 @@ static __be16 myri_type_trans(struct sk_buff *skb, struct net_device *dev)
 		if (memcmp(eth->h_dest, dev->dev_addr, ETH_ALEN))
 			skb->pkt_type = PACKET_OTHERHOST;
 	}
-	
+
 	if (ntohs(eth->h_proto) >= 1536)
 		return eth->h_proto;
-		
+
 	rawp = skb->data;
-	
+
 	/* This is a magic hack to spot IPX packets. Older Novell breaks
 	 * the protocol design and runs IPX over 802.3 without an 802.2 LLC
 	 * layer. We look for FFFF which isn't a used 802.2 SSAP/DSAP. This
@@ -404,7 +398,7 @@ static __be16 myri_type_trans(struct sk_buff *skb, struct net_device *dev)
 	 */
 	if (*(unsigned short *)rawp == 0xFFFF)
 		return htons(ETH_P_802_3);
-		
+
 	/* Real 802.2 LLC */
 	return htons(ETH_P_802_2);
 }
@@ -541,7 +535,7 @@ static void myri_rx(struct myri_eth *mp, struct net_device *dev)
 	}
 }
 
-static irqreturn_t myri_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t myri_interrupt(int irq, void *dev_id)
 {
 	struct net_device *dev		= (struct net_device *) dev_id;
 	struct myri_eth *mp		= (struct myri_eth *) dev->priv;
@@ -683,7 +677,7 @@ static int myri_start_xmit(struct sk_buff *skb, struct net_device *dev)
 	return 0;
 }
 
-/* Create the MyriNet MAC header for an arbitrary protocol layer 
+/* Create the MyriNet MAC header for an arbitrary protocol layer
  *
  * saddr=NULL	means use device source address
  * daddr=NULL	means leave destination address (eg unresolved arp)
@@ -706,7 +700,7 @@ static int myri_header(struct sk_buff *skb, struct net_device *dev, unsigned sho
 	/* Set the protocol type. For a packet of type ETH_P_802_3 we put the length
 	 * in here instead. It is up to the 802.2 layer to carry protocol information.
 	 */
-	if (type != ETH_P_802_3) 
+	if (type != ETH_P_802_3)
 		eth->h_proto = htons(type);
 	else
 		eth->h_proto = htons(len);
@@ -724,7 +718,7 @@ static int myri_header(struct sk_buff *skb, struct net_device *dev, unsigned sho
 			eth->h_dest[i] = 0;
 		return(dev->hard_header_len);
 	}
-	
+
 	if (daddr) {
 		memcpy(eth->h_dest, daddr, dev->addr_len);
 		return dev->hard_header_len;
@@ -759,16 +753,16 @@ static int myri_rebuild_header(struct sk_buff *skb)
 #endif
 
 	default:
-		printk(KERN_DEBUG 
-		       "%s: unable to resolve type %X addresses.\n", 
+		printk(KERN_DEBUG
+		       "%s: unable to resolve type %X addresses.\n",
 		       dev->name, (int)eth->h_proto);
-		
+
 		memcpy(eth->h_source, dev->dev_addr, dev->addr_len);
 		return 0;
 		break;
 	}
 
-	return 0;	
+	return 0;
 }
 
 int myri_header_cache(struct neighbour *neigh, struct hh_cache *hh)
@@ -896,8 +890,9 @@ static void dump_eeprom(struct myri_eth *mp)
 }
 #endif
 
-static int __init myri_ether_init(struct sbus_dev *sdev, int num)
+static int __devinit myri_ether_init(struct sbus_dev *sdev)
 {
+	static int num;
 	static unsigned version_printed;
 	struct net_device *dev;
 	struct myri_eth *mp;
@@ -912,6 +907,9 @@ static int __init myri_ether_init(struct sbus_dev *sdev, int num)
 
 	if (version_printed++ == 0)
 		printk(version);
+
+	SET_MODULE_OWNER(dev);
+	SET_NETDEV_DEV(dev, &sdev->ofdev.dev);
 
 	mp = (struct myri_eth *) dev->priv;
 	spin_lock_init(&mp->irq_lock);
@@ -1070,7 +1068,7 @@ static int __init myri_ether_init(struct sbus_dev *sdev, int num)
 	/* Register interrupt handler now. */
 	DET(("Requesting MYRIcom IRQ line.\n"));
 	if (request_irq(dev->irq, &myri_interrupt,
-			SA_SHIRQ, "MyriCOM Ethernet", (void *) dev)) {
+			IRQF_SHARED, "MyriCOM Ethernet", (void *) dev)) {
 		printk("MyriCOM: Cannot register interrupt handler.\n");
 		goto err;
 	}
@@ -1092,10 +1090,9 @@ static int __init myri_ether_init(struct sbus_dev *sdev, int num)
 		goto err_free_irq;
 	}
 
-#ifdef MODULE
-	mp->next_module = root_myri_dev;
-	root_myri_dev = mp;
-#endif
+	dev_set_drvdata(&sdev->ofdev.dev, mp);
+
+	num++;
 
 	printk("%s: MyriCOM MyriNET Ethernet ", dev->name);
 
@@ -1114,61 +1111,68 @@ err:
 	return -ENODEV;
 }
 
-static int __init myri_sbus_match(struct sbus_dev *sdev)
-{
-	char *name = sdev->prom_name;
 
-	if (!strcmp(name, "MYRICOM,mlanai") ||
-	    !strcmp(name, "myri"))
-		return 1;
+static int __devinit myri_sbus_probe(struct of_device *dev, const struct of_device_id *match)
+{
+	struct sbus_dev *sdev = to_sbus_device(&dev->dev);
+
+	return myri_ether_init(sdev);
+}
+
+static int __devexit myri_sbus_remove(struct of_device *dev)
+{
+	struct myri_eth *mp = dev_get_drvdata(&dev->dev);
+	struct net_device *net_dev = mp->dev;
+
+	unregister_netdevice(net_dev);
+
+	free_irq(net_dev->irq, net_dev);
+
+	if (mp->eeprom.cpuvers < CPUVERS_4_0) {
+		sbus_iounmap(mp->regs, mp->reg_size);
+	} else {
+		sbus_iounmap(mp->cregs, PAGE_SIZE);
+		sbus_iounmap(mp->lregs, (256 * 1024));
+		sbus_iounmap(mp->lanai, (512 * 1024));
+	}
+
+	free_netdev(net_dev);
+
+	dev_set_drvdata(&dev->dev, NULL);
 
 	return 0;
 }
 
-static int __init myri_sbus_probe(void)
+static struct of_device_id myri_sbus_match[] = {
+	{
+		.name = "MYRICOM,mlanai",
+	},
+	{
+		.name = "myri",
+	},
+	{},
+};
+
+MODULE_DEVICE_TABLE(of, myri_sbus_match);
+
+static struct of_platform_driver myri_sbus_driver = {
+	.name		= "myri",
+	.match_table	= myri_sbus_match,
+	.probe		= myri_sbus_probe,
+	.remove		= __devexit_p(myri_sbus_remove),
+};
+
+static int __init myri_sbus_init(void)
 {
-	struct sbus_bus *bus;
-	struct sbus_dev *sdev = NULL;
-	static int called;
-	int cards = 0, v;
-
-#ifdef MODULE
-	root_myri_dev = NULL;
-#endif
-
-	if (called)
-		return -ENODEV;
-	called++;
-
-	for_each_sbus(bus) {
-		for_each_sbusdev(sdev, bus) {
-			if (myri_sbus_match(sdev)) {
-				cards++;
-				DET(("Found myricom myrinet as %s\n", sdev->prom_name));
-				if ((v = myri_ether_init(sdev, (cards - 1))))
-					return v;
-			}
-		}
-	}
-	if (!cards)
-		return -ENODEV;
-	return 0;
+	return of_register_driver(&myri_sbus_driver, &sbus_bus_type);
 }
 
-static void __exit myri_sbus_cleanup(void)
+static void __exit myri_sbus_exit(void)
 {
-#ifdef MODULE
-	while (root_myri_dev) {
-		struct myri_eth *next = root_myri_dev->next_module;
-
-		unregister_netdev(root_myri_dev->dev);
-		/* this will also free the co-allocated 'root_myri_dev' */
-		free_netdev(root_myri_dev->dev);
-		root_myri_dev = next;
-	}
-#endif /* MODULE */
+	of_unregister_driver(&myri_sbus_driver);
 }
 
-module_init(myri_sbus_probe);
-module_exit(myri_sbus_cleanup);
+module_init(myri_sbus_init);
+module_exit(myri_sbus_exit);
+
 MODULE_LICENSE("GPL");

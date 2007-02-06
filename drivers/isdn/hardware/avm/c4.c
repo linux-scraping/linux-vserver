@@ -9,7 +9,6 @@
  *
  */
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/skbuff.h>
@@ -714,7 +713,7 @@ static irqreturn_t c4_handle_interrupt(avmcard *card)
 	return IRQ_HANDLED;
 }
 
-static irqreturn_t c4_interrupt(int interrupt, void *devptr, struct pt_regs *regs)
+static irqreturn_t c4_interrupt(int interrupt, void *devptr)
 {
 	avmcard *card = devptr;
 
@@ -1173,7 +1172,7 @@ static int c4_add_card(struct capicardparams *p, struct pci_dev *dev,
 	}
 	c4_reset(card);
 
-	retval = request_irq(card->irq, c4_interrupt, SA_SHIRQ, card->name, card);
+	retval = request_irq(card->irq, c4_interrupt, IRQF_SHARED, card->name, card);
 	if (retval) {
 		printk(KERN_ERR "c4: unable to get IRQ %d.\n",card->irq);
 		retval = -EBUSY;

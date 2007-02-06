@@ -355,7 +355,7 @@ static int pca_init(struct i2c_algo_pca_data *adap)
 	return 0;
 }
 
-static struct i2c_algorithm pca_algo = {
+static const struct i2c_algorithm pca_algo = {
 	.master_xfer	= pca_xfer,
 	.functionality	= pca_func,
 };
@@ -374,21 +374,14 @@ int i2c_pca_add_bus(struct i2c_adapter *adap)
 	adap->timeout = 100;		/* default values, should	*/
 	adap->retries = 3;		/* be replaced by defines	*/
 
-	rval = pca_init(pca_adap);
+	if ((rval = pca_init(pca_adap)))
+		return rval;
 
-	if (!rval)
-		i2c_add_adapter(adap);
+	rval = i2c_add_adapter(adap);
 
 	return rval;
 }
-
-int i2c_pca_del_bus(struct i2c_adapter *adap)
-{
-	return i2c_del_adapter(adap);
-}
-
 EXPORT_SYMBOL(i2c_pca_add_bus);
-EXPORT_SYMBOL(i2c_pca_del_bus);
 
 MODULE_AUTHOR("Ian Campbell <icampbell@arcom.com>");
 MODULE_DESCRIPTION("I2C-Bus PCA9564 algorithm");

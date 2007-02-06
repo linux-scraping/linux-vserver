@@ -6,7 +6,6 @@
  *
  */
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/sched.h>
@@ -16,6 +15,7 @@
 #include <linux/timer.h>
 #include <linux/major.h>
 #include <linux/fs.h>
+#include <linux/err.h>
 #include <linux/ioctl.h>
 #include <linux/init.h>
 #include <linux/mtd/compatmac.h>
@@ -47,6 +47,7 @@ int add_mtd_device(struct mtd_info *mtd)
 {
 	int i;
 
+	BUG_ON(mtd->writesize == 0);
 	mutex_lock(&mtd_table_mutex);
 
 	for (i=0; i < MAX_MTD_DEVICES; i++)
@@ -56,6 +57,16 @@ int add_mtd_device(struct mtd_info *mtd)
 			mtd_table[i] = mtd;
 			mtd->index = i;
 			mtd->usecount = 0;
+
+			/* Some chips always power up locked. Unlock them now */
+			if ((mtd->flags & MTD_WRITEABLE)
+			    && (mtd->flags & MTD_STUPID_LOCK) && mtd->unlock) {
+				if (mtd->unlock(mtd, 0, mtd->size))
+					printk(KERN_WARNING
+					       "%s: unlock failed, "
+					       "writes may not work\n",
+					       mtd->name);
+			}
 
 			DEBUG(0, "mtd: Giving out device %d to %s\n",i, mtd->name);
 			/* No need to get a refcount on the module containing
@@ -182,14 +193,14 @@ int unregister_mtd_user (struct mtd_notifier *old)
  *	Given a number and NULL address, return the num'th entry in the device
  *	table, if any.	Given an address and num == -1, search the device table
  *	for a device with that address and return if it's still present. Given
- *	both, return the num'th driver only if its address matches. Return NULL
- *	if not.
+ *	both, return the num'th driver only if its address matches. Return
+ *	error code if not.
  */
 
 struct mtd_info *get_mtd_device(struct mtd_info *mtd, int num)
 {
 	struct mtd_info *ret = NULL;
-	int i;
+	int i, err = -ENODEV;
 
 	mutex_lock(&mtd_table_mutex);
 
@@ -203,14 +214,73 @@ struct mtd_info *get_mtd_device(struct mtd_info *mtd, int num)
 			ret = NULL;
 	}
 
-	if (ret && !try_module_get(ret->owner))
-		ret = NULL;
+	if (!ret)
+		goto out_unlock;
 
-	if (ret)
-		ret->usecount++;
+	if (!try_module_get(ret->owner))
+		goto out_unlock;
 
+	if (ret->get_device) {
+		err = ret->get_device(ret);
+		if (err)
+			goto out_put;
+	}
+
+	ret->usecount++;
 	mutex_unlock(&mtd_table_mutex);
 	return ret;
+
+out_put:
+	module_put(ret->owner);
+out_unlock:
+	mutex_unlock(&mtd_table_mutex);
+	return ERR_PTR(err);
+}
+
+/**
+ *	get_mtd_device_nm - obtain a validated handle for an MTD device by
+ *	device name
+ *	@name: MTD device name to open
+ *
+ * 	This function returns MTD device description structure in case of
+ * 	success and an error code in case of failure.
+ */
+
+struct mtd_info *get_mtd_device_nm(const char *name)
+{
+	int i, err = -ENODEV;
+	struct mtd_info *mtd = NULL;
+
+	mutex_lock(&mtd_table_mutex);
+
+	for (i = 0; i < MAX_MTD_DEVICES; i++) {
+		if (mtd_table[i] && !strcmp(name, mtd_table[i]->name)) {
+			mtd = mtd_table[i];
+			break;
+		}
+	}
+
+	if (!mtd)
+		goto out_unlock;
+
+	if (!try_module_get(mtd->owner))
+		goto out_unlock;
+
+	if (mtd->get_device) {
+		err = mtd->get_device(mtd);
+		if (err)
+			goto out_put;
+	}
+
+	mtd->usecount++;
+	mutex_unlock(&mtd_table_mutex);
+	return mtd;
+
+out_put:
+	module_put(mtd->owner);
+out_unlock:
+	mutex_unlock(&mtd_table_mutex);
+	return ERR_PTR(err);
 }
 
 void put_mtd_device(struct mtd_info *mtd)
@@ -219,6 +289,8 @@ void put_mtd_device(struct mtd_info *mtd)
 
 	mutex_lock(&mtd_table_mutex);
 	c = --mtd->usecount;
+	if (mtd->put_device)
+		mtd->put_device(mtd);
 	mutex_unlock(&mtd_table_mutex);
 	BUG_ON(c < 0);
 
@@ -226,7 +298,7 @@ void put_mtd_device(struct mtd_info *mtd)
 }
 
 /* default_mtd_writev - default mtd writev method for MTD devices that
- *			dont implement their own
+ *			don't implement their own
  */
 
 int default_mtd_writev(struct mtd_info *mtd, const struct kvec *vecs,
@@ -254,45 +326,14 @@ int default_mtd_writev(struct mtd_info *mtd, const struct kvec *vecs,
 	return ret;
 }
 
-
-/* default_mtd_readv - default mtd readv method for MTD devices that dont
- *		       implement their own
- */
-
-int default_mtd_readv(struct mtd_info *mtd, struct kvec *vecs,
-		      unsigned long count, loff_t from, size_t *retlen)
-{
-	unsigned long i;
-	size_t totlen = 0, thislen;
-	int ret = 0;
-
-	if(!mtd->read) {
-		ret = -EIO;
-	} else {
-		for (i=0; i<count; i++) {
-			if (!vecs[i].iov_len)
-				continue;
-			ret = mtd->read(mtd, from, vecs[i].iov_len, &thislen, vecs[i].iov_base);
-			totlen += thislen;
-			if (ret || thislen != vecs[i].iov_len)
-				break;
-			from += vecs[i].iov_len;
-		}
-	}
-	if (retlen)
-		*retlen = totlen;
-	return ret;
-}
-
-
-EXPORT_SYMBOL(add_mtd_device);
-EXPORT_SYMBOL(del_mtd_device);
-EXPORT_SYMBOL(get_mtd_device);
-EXPORT_SYMBOL(put_mtd_device);
-EXPORT_SYMBOL(register_mtd_user);
-EXPORT_SYMBOL(unregister_mtd_user);
-EXPORT_SYMBOL(default_mtd_writev);
-EXPORT_SYMBOL(default_mtd_readv);
+EXPORT_SYMBOL_GPL(add_mtd_device);
+EXPORT_SYMBOL_GPL(del_mtd_device);
+EXPORT_SYMBOL_GPL(get_mtd_device);
+EXPORT_SYMBOL_GPL(get_mtd_device_nm);
+EXPORT_SYMBOL_GPL(put_mtd_device);
+EXPORT_SYMBOL_GPL(register_mtd_user);
+EXPORT_SYMBOL_GPL(unregister_mtd_user);
+EXPORT_SYMBOL_GPL(default_mtd_writev);
 
 #ifdef CONFIG_PROC_FS
 

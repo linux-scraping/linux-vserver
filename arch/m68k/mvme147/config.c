@@ -36,16 +36,9 @@
 #include <asm/mvme147hw.h>
 
 
-extern irqreturn_t mvme147_process_int (int level, struct pt_regs *regs);
-extern void mvme147_init_IRQ (void);
-extern void mvme147_free_irq (unsigned int, void *);
-extern int  show_mvme147_interrupts (struct seq_file *, void *);
-extern void mvme147_enable_irq (unsigned int);
-extern void mvme147_disable_irq (unsigned int);
 static void mvme147_get_model(char *model);
 static int  mvme147_get_hardware_list(char *buffer);
-extern int mvme147_request_irq (unsigned int irq, irqreturn_t (*handler)(int, void *, struct pt_regs *), unsigned long flags, const char *devname, void *dev_id);
-extern void mvme147_sched_init(irqreturn_t (*handler)(int, void *, struct pt_regs *));
+extern void mvme147_sched_init(irq_handler_t handler);
 extern unsigned long mvme147_gettimeoffset (void);
 extern int mvme147_hwclk (int, struct rtc_time *);
 extern int mvme147_set_clock_mmss (unsigned long);
@@ -58,7 +51,7 @@ static int bcd2int (unsigned char b);
 /* Save tick handler routine pointer, will point to do_timer() in
  * kernel/sched.c, called via mvme147_process_int() */
 
-irqreturn_t (*tick_handler)(int, void *, struct pt_regs *);
+irq_handler_t tick_handler;
 
 
 int mvme147_parse_bootinfo(const struct bi_record *bi)
@@ -91,6 +84,15 @@ static int mvme147_get_hardware_list(char *buffer)
 	return 0;
 }
 
+/*
+ * This function is called during kernel startup to initialize
+ * the mvme147 IRQ handling routines.
+ */
+
+void mvme147_init_IRQ(void)
+{
+	m68k_setup_user_interrupt(VEC_USER, 192, NULL);
+}
 
 void __init config_mvme147(void)
 {
@@ -101,12 +103,6 @@ void __init config_mvme147(void)
 	mach_hwclk		= mvme147_hwclk;
 	mach_set_clock_mmss	= mvme147_set_clock_mmss;
 	mach_reset		= mvme147_reset;
-	mach_free_irq		= mvme147_free_irq;
-	mach_process_int	= mvme147_process_int;
-	mach_get_irq_list	= show_mvme147_interrupts;
-	mach_request_irq	= mvme147_request_irq;
-	enable_irq		= mvme147_enable_irq;
-	disable_irq		= mvme147_disable_irq;
 	mach_get_model		= mvme147_get_model;
 	mach_get_hardware_list	= mvme147_get_hardware_list;
 
@@ -118,15 +114,15 @@ void __init config_mvme147(void)
 
 /* Using pcc tick timer 1 */
 
-static irqreturn_t mvme147_timer_int (int irq, void *dev_id, struct pt_regs *fp)
+static irqreturn_t mvme147_timer_int (int irq, void *dev_id)
 {
 	m147_pcc->t1_int_cntrl = PCC_TIMER_INT_CLR;
 	m147_pcc->t1_int_cntrl = PCC_INT_ENAB|PCC_LEVEL_TIMER1;
-	return tick_handler(irq, dev_id, fp);
+	return tick_handler(irq, dev_id);
 }
 
 
-void mvme147_sched_init (irqreturn_t (*timer_routine)(int, void *, struct pt_regs *))
+void mvme147_sched_init (irq_handler_t timer_routine)
 {
 	tick_handler = timer_routine;
 	request_irq (PCC_IRQ_TIMER1, mvme147_timer_int,

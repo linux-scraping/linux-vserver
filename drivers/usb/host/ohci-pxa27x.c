@@ -47,7 +47,7 @@ static int pxa27x_ohci_select_pmm( int mode )
 	switch ( mode ) {
 	case PMM_NPS_MODE:
 		UHCRHDA |= RH_A_NPS;
-		break; 
+		break;
 	case PMM_GLOBAL_MODE:
 		UHCRHDA &= ~(RH_A_NPS & RH_A_PSM);
 		break;
@@ -60,7 +60,7 @@ static int pxa27x_ohci_select_pmm( int mode )
 		break;
 	default:
 		printk( KERN_ERR
-			"Invalid mode %d, set to non-power switch mode.\n", 
+			"Invalid mode %d, set to non-power switch mode.\n",
 			mode );
 
 		UHCRHDA |= RH_A_NPS;
@@ -190,7 +190,7 @@ int usb_hcd_pxa27x_probe (const struct hc_driver *driver, struct platform_device
 
 	ohci_hcd_init(hcd_to_ohci(hcd));
 
-	retval = usb_add_hcd(hcd, pdev->resource[1].start, SA_INTERRUPT);
+	retval = usb_add_hcd(hcd, pdev->resource[1].start, IRQF_DISABLED);
 	if (retval == 0)
 		return retval;
 
@@ -270,6 +270,7 @@ static const struct hc_driver ohci_pxa27x_hc_driver = {
 	 */
 	.start =		ohci_pxa27x_start,
 	.stop =			ohci_stop,
+	.shutdown =		ohci_shutdown,
 
 	/*
 	 * managing i/o requests and associated device resources
@@ -288,6 +289,7 @@ static const struct hc_driver ohci_pxa27x_hc_driver = {
 	 */
 	.hub_status_data =	ohci_hub_status_data,
 	.hub_control =		ohci_hub_control,
+	.hub_irq_enable =	ohci_rhsc_enable,
 #ifdef  CONFIG_PM
 	.bus_suspend =		ohci_bus_suspend,
 	.bus_resume =		ohci_bus_resume,
@@ -357,8 +359,9 @@ static int ohci_hcd_pxa27x_drv_resume(struct platform_device *pdev)
 static struct platform_driver ohci_hcd_pxa27x_driver = {
 	.probe		= ohci_hcd_pxa27x_drv_probe,
 	.remove		= ohci_hcd_pxa27x_drv_remove,
+	.shutdown	= usb_hcd_platform_shutdown,
 #ifdef CONFIG_PM
-	.suspend	= ohci_hcd_pxa27x_drv_suspend, 
+	.suspend	= ohci_hcd_pxa27x_drv_suspend,
 	.resume		= ohci_hcd_pxa27x_drv_resume,
 #endif
 	.driver		= {

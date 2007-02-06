@@ -5,30 +5,29 @@
  * Exports appldata_register_ops() and appldata_unregister_ops() for the
  * data gathering modules.
  *
- * Copyright (C) 2003 IBM Corporation, IBM Deutschland Entwicklung GmbH.
+ * Copyright (C) 2003,2006 IBM Corporation, IBM Deutschland Entwicklung GmbH.
  *
- * Author: Gerald Schaefer <geraldsc@de.ibm.com>
+ * Author: Gerald Schaefer <gerald.schaefer@de.ibm.com>
  */
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/slab.h>
 #include <linux/errno.h>
-#include <asm/uaccess.h>
-#include <asm/io.h>
-#include <asm/smp.h>
 #include <linux/interrupt.h>
 #include <linux/proc_fs.h>
-#include <linux/page-flags.h>
+#include <linux/mm.h>
 #include <linux/swap.h>
 #include <linux/pagemap.h>
 #include <linux/sysctl.h>
-#include <asm/timer.h>
-//#include <linux/kernel_stat.h>
 #include <linux/notifier.h>
 #include <linux/cpu.h>
 #include <linux/workqueue.h>
+#include <asm/appldata.h>
+#include <asm/timer.h>
+#include <asm/uaccess.h>
+#include <asm/io.h>
+#include <asm/smp.h>
 
 #include "appldata.h"
 
@@ -40,50 +39,6 @@
 
 #define TOD_MICRO	0x01000			/* nr. of TOD clock units
 						   for 1 microsecond */
-#ifndef CONFIG_64BIT
-
-#define APPLDATA_START_INTERVAL_REC 0x00   	/* Function codes for */
-#define APPLDATA_STOP_REC	    0x01	/* DIAG 0xDC	  */
-#define APPLDATA_GEN_EVENT_RECORD   0x02
-#define APPLDATA_START_CONFIG_REC   0x03
-
-#else
-
-#define APPLDATA_START_INTERVAL_REC 0x80
-#define APPLDATA_STOP_REC   	    0x81
-#define APPLDATA_GEN_EVENT_RECORD   0x82
-#define APPLDATA_START_CONFIG_REC   0x83
-
-#endif /* CONFIG_64BIT */
-
-
-/*
- * Parameter list for DIAGNOSE X'DC'
- */
-#ifndef CONFIG_64BIT
-struct appldata_parameter_list {
-	u16 diag;		/* The DIAGNOSE code X'00DC'          */
-	u8  function;		/* The function code for the DIAGNOSE */
-	u8  parlist_length;	/* Length of the parameter list       */
-	u32 product_id_addr;	/* Address of the 16-byte product ID  */
-	u16 reserved;
-	u16 buffer_length;	/* Length of the application data buffer  */
-	u32 buffer_addr;	/* Address of the application data buffer */
-};
-#else
-struct appldata_parameter_list {
-	u16 diag;
-	u8  function;
-	u8  parlist_length;
-	u32 unused01;
-	u16 reserved;
-	u16 buffer_length;
-	u32 unused02;
-	u64 product_id_addr;
-	u64 buffer_addr;
-};
-#endif /* CONFIG_64BIT */
-
 /*
  * /proc entries (sysctl)
  */
@@ -137,8 +92,8 @@ static int appldata_timer_active;
  * Work queue
  */
 static struct workqueue_struct *appldata_wq;
-static void appldata_work_fn(void *data);
-static DECLARE_WORK(appldata_work, appldata_work_fn, NULL);
+static void appldata_work_fn(struct work_struct *work);
+static DECLARE_WORK(appldata_work, appldata_work_fn);
 
 
 /*
@@ -154,7 +109,7 @@ static LIST_HEAD(appldata_ops_list);
  *
  * schedule work and reschedule timer
  */
-static void appldata_timer_function(unsigned long data, struct pt_regs *regs)
+static void appldata_timer_function(unsigned long data)
 {
 	P_DEBUG("   -= Timer =-\n");
 	P_DEBUG("CPU: %i, expire_count: %i\n", smp_processor_id(),
@@ -170,7 +125,7 @@ static void appldata_timer_function(unsigned long data, struct pt_regs *regs)
  *
  * call data gathering function for each (active) module
  */
-static void appldata_work_fn(void *data)
+static void appldata_work_fn(struct work_struct *work)
 {
 	struct list_head *lh;
 	struct appldata_ops *ops;
@@ -195,49 +150,20 @@ static void appldata_work_fn(void *data)
  *
  * prepare parameter list, issue DIAG 0xDC
  */
-static int appldata_diag(char record_nr, u16 function, unsigned long buffer,
-			u16 length)
+int appldata_diag(char record_nr, u16 function, unsigned long buffer,
+			u16 length, char *mod_lvl)
 {
-	unsigned long ry;
-	struct appldata_product_id {
-		char prod_nr[7];			/* product nr. */
-		char prod_fn[2];			/* product function */
-		char record_nr;				/* record nr. */
-		char version_nr[2];			/* version */
-		char release_nr[2];			/* release */
-		char mod_lvl[2];			/* modification lvl. */
-	} appldata_product_id = {
-	/* all strings are EBCDIC, record_nr is byte */
+	struct appldata_product_id id = {
 		.prod_nr    = {0xD3, 0xC9, 0xD5, 0xE4,
-				0xE7, 0xD2, 0xD9},	/* "LINUXKR" */
-		.prod_fn    = {0xD5, 0xD3},		/* "NL" */
-		.record_nr  = record_nr,
-		.version_nr = {0xF2, 0xF6},		/* "26" */
-		.release_nr = {0xF0, 0xF1},		/* "01" */
-		.mod_lvl    = {0xF0, 0xF0},		/* "00" */
-	};
-	struct appldata_parameter_list appldata_parameter_list = {
-				.diag = 0xDC,
-				.function = function,
-				.parlist_length =
-					sizeof(appldata_parameter_list),
-				.buffer_length = length,
-				.product_id_addr =
-					(unsigned long) &appldata_product_id,
-				.buffer_addr = virt_to_phys((void *) buffer)
+			       0xE7, 0xD2, 0xD9},	/* "LINUXKR" */
+		.prod_fn    = 0xD5D3,			/* "NL" */
+		.version_nr = 0xF2F6,			/* "26" */
+		.release_nr = 0xF0F1,			/* "01" */
 	};
 
-	if (!MACHINE_IS_VM)
-		return -ENOSYS;
-	ry = -1;
-	asm volatile(
-			"diag %1,%0,0xDC\n\t"
-			: "=d" (ry)
-			: "d" (&appldata_parameter_list),
-			  "m" (appldata_parameter_list),
-			  "m" (appldata_product_id)
-			: "cc");
-	return (int) ry;
+	id.record_nr = record_nr;
+	id.mod_lvl = (mod_lvl[0]) << 8 | mod_lvl[1];
+	return appldata_asm(&id, function, (void *) buffer, length);
 }
 /************************ timer, work, DIAG <END> ****************************/
 
@@ -384,6 +310,7 @@ appldata_interval_handler(ctl_table *ctl, int write, struct file *filp,
 	if (copy_from_user(buf, buffer, len > sizeof(buf) ? sizeof(buf) : len)) {
 		return -EFAULT;
 	}
+	interval = 0;
 	sscanf(buf, "%i", &interval);
 	if (interval <= 0) {
 		P_ERROR("Timer CPU interval has to be > 0!\n");
@@ -467,24 +394,25 @@ appldata_generic_handler(ctl_table *ctl, int write, struct file *filp,
 			module_put(ops->owner);
 			return -ENODEV;
 		}
-		ops->active = 1;
 		ops->callback(ops->data);	// init record
 		rc = appldata_diag(ops->record_nr,
 					APPLDATA_START_INTERVAL_REC,
-					(unsigned long) ops->data, ops->size);
+					(unsigned long) ops->data, ops->size,
+					ops->mod_lvl);
 		if (rc != 0) {
 			P_ERROR("START DIAG 0xDC for %s failed, "
 				"return code: %d\n", ops->name, rc);
 			module_put(ops->owner);
-			ops->active = 0;
 		} else {
 			P_INFO("Monitoring %s data enabled, "
 				"DIAG 0xDC started.\n", ops->name);
+			ops->active = 1;
 		}
 	} else if ((buf[0] == '0') && (ops->active == 1)) {
 		ops->active = 0;
 		rc = appldata_diag(ops->record_nr, APPLDATA_STOP_REC,
-				(unsigned long) ops->data, ops->size);
+				(unsigned long) ops->data, ops->size,
+				ops->mod_lvl);
 		if (rc != 0) {
 			P_ERROR("STOP DIAG 0xDC for %s failed, "
 				"return code: %d\n", ops->name, rc);
@@ -633,7 +561,7 @@ appldata_offline_cpu(int cpu)
 	spin_unlock(&appldata_timer_lock);
 }
 
-static int
+static int __cpuinit
 appldata_cpu_notify(struct notifier_block *self,
 		    unsigned long action, void *hcpu)
 {
@@ -641,11 +569,9 @@ appldata_cpu_notify(struct notifier_block *self,
 	case CPU_ONLINE:
 		appldata_online_cpu((long) hcpu);
 		break;
-#ifdef CONFIG_HOTPLUG_CPU
 	case CPU_DEAD:
 		appldata_offline_cpu((long) hcpu);
 		break;
-#endif
 	default:
 		break;
 	}
@@ -678,7 +604,7 @@ static int __init appldata_init(void)
 		appldata_online_cpu(i);
 
 	/* Register cpu hotplug notifier */
-	register_cpu_notifier(&appldata_nb);
+	register_hotcpu_notifier(&appldata_nb);
 
 	appldata_sysctl_header = register_sysctl_table(appldata_dir_table, 1);
 #ifdef MODULE
@@ -710,7 +636,8 @@ static void __exit appldata_exit(void)
 	list_for_each(lh, &appldata_ops_list) {
 		ops = list_entry(lh, struct appldata_ops, list);
 		rc = appldata_diag(ops->record_nr, APPLDATA_STOP_REC,
-				(unsigned long) ops->data, ops->size);
+				(unsigned long) ops->data, ops->size,
+				ops->mod_lvl);
 		if (rc != 0) {
 			P_ERROR("STOP DIAG 0xDC for %s failed, "
 				"return code: %d\n", ops->name, rc);
@@ -739,6 +666,7 @@ MODULE_DESCRIPTION("Linux-VM Monitor Stream, base infrastructure");
 
 EXPORT_SYMBOL_GPL(appldata_register_ops);
 EXPORT_SYMBOL_GPL(appldata_unregister_ops);
+EXPORT_SYMBOL_GPL(appldata_diag);
 
 #ifdef MODULE
 /*
@@ -779,8 +707,6 @@ unsigned long nr_iowait(void)
 #endif /* MODULE */
 EXPORT_SYMBOL_GPL(si_swapinfo);
 EXPORT_SYMBOL_GPL(nr_threads);
-EXPORT_SYMBOL_GPL(avenrun);
-EXPORT_SYMBOL_GPL(get_full_page_state);
 EXPORT_SYMBOL_GPL(nr_running);
 EXPORT_SYMBOL_GPL(nr_iowait);
 //EXPORT_SYMBOL_GPL(nr_context_switches);

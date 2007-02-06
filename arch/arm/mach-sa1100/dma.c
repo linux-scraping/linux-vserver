@@ -1,5 +1,5 @@
 /*
- * arch/arm/kernel/dma-sa1100.c
+ * arch/arm/mach-sa1100/dma.c
  *
  * Support functions for the SA11x0 internal DMA channels.
  *
@@ -42,7 +42,7 @@ static sa1100_dma_t dma_chan[SA1100_DMA_CHANNELS];
 static spinlock_t dma_list_lock;
 
 
-static irqreturn_t dma_irq_handler(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t dma_irq_handler(int irq, void *dev_id)
 {
 	dma_regs_t *dma_regs = dev_id;
 	sa1100_dma_t *dma = dma_chan + (((u_int)dma_regs >> 5) & 7);
@@ -124,7 +124,7 @@ int sa1100_request_dma (dma_device_t device, const char *device_id,
 
 	i = dma - dma_chan;
 	regs = (dma_regs_t *)&DDAR(i);
-	err = request_irq(IRQ_DMA0 + i, dma_irq_handler, SA_INTERRUPT,
+	err = request_irq(IRQ_DMA0 + i, dma_irq_handler, IRQF_DISABLED,
 			  device_id, regs);
 	if (err) {
 		printk(KERN_ERR

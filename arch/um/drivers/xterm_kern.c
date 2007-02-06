@@ -21,7 +21,7 @@ struct xterm_wait {
 	int new_fd;
 };
 
-static irqreturn_t xterm_interrupt(int irq, void *data, struct pt_regs *regs)
+static irqreturn_t xterm_interrupt(int irq, void *data)
 {
 	struct xterm_wait *xterm = data;
 	int fd;
@@ -54,7 +54,7 @@ int xterm_fd(int socket, int *pid_out)
 	init_completion(&data->ready);
 
 	err = um_request_irq(XTERM_IRQ, socket, IRQ_READ, xterm_interrupt, 
-			     SA_INTERRUPT | SA_SHIRQ | SA_SAMPLE_RANDOM, 
+			     IRQF_DISABLED | IRQF_SHARED | IRQF_SAMPLE_RANDOM,
 			     "xterm", data);
 	if (err){
 		printk(KERN_ERR "xterm_fd : failed to get IRQ for xterm, "

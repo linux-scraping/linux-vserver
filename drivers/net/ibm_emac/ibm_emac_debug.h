@@ -1,5 +1,5 @@
 /*
- * drivers/net/ibm_emac/ibm_ocp_debug.h
+ * drivers/net/ibm_emac/ibm_emac_debug.h
  *
  * Driver for PowerPC 4xx on-chip ethernet controller, debug print routines.
  *
@@ -15,7 +15,6 @@
 #ifndef __IBM_EMAC_DEBUG_H_
 #define __IBM_EMAC_DEBUG_H_
 
-#include <linux/config.h>
 #include <linux/init.h>
 #include "ibm_emac_core.h"
 #include "ibm_emac_mal.h"

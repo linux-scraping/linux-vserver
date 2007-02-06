@@ -26,7 +26,6 @@
 
 /*****************************************************************************/
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/slab.h>
 #include <linux/interrupt.h>
@@ -40,16 +39,14 @@
 #include <linux/ioport.h>
 #include <linux/init.h>
 #include <linux/smp_lock.h>
-#include <linux/devfs_fs_kernel.h>
 #include <linux/device.h>
 #include <linux/delay.h>
+#include <linux/ctype.h>
 
 #include <asm/io.h>
 #include <asm/uaccess.h>
 
-#ifdef CONFIG_PCI
 #include <linux/pci.h>
-#endif
 
 /*****************************************************************************/
 
@@ -65,45 +62,16 @@
 #define	BRD_ECH64PCI	27
 #define	BRD_EASYIOPCI	28
 
-/*
- *	Define a configuration structure to hold the board configuration.
- *	Need to set this up in the code (for now) with the boards that are
- *	to be configured into the system. This is what needs to be modified
- *	when adding/removing/modifying boards. Each line entry in the
- *	stl_brdconf[] array is a board. Each line contains io/irq/memory
- *	ranges for that board (as well as what type of board it is).
- *	Some examples:
- *		{ BRD_EASYIO, 0x2a0, 0, 0, 10, 0 },
- *	This line would configure an EasyIO board (4 or 8, no difference),
- *	at io address 2a0 and irq 10.
- *	Another example:
- *		{ BRD_ECH, 0x2a8, 0x280, 0, 12, 0 },
- *	This line will configure an EasyConnection 8/32 board at primary io
- *	address 2a8, secondary io address 280 and irq 12.
- *	Enter as many lines into this array as you want (only the first 4
- *	will actually be used!). Any combination of EasyIO and EasyConnection
- *	boards can be specified. EasyConnection 8/32 boards can share their
- *	secondary io addresses between each other.
- *
- *	NOTE: there is no need to put any entries in this table for PCI
- *	boards. They will be found automatically by the driver - provided
- *	PCI BIOS32 support is compiled into the kernel.
- */
-
-typedef struct {
-	int		brdtype;
+struct stlconf {
+	unsigned int	brdtype;
 	int		ioaddr1;
 	int		ioaddr2;
 	unsigned long	memaddr;
 	int		irq;
 	int		irqtype;
-} stlconf_t;
-
-static stlconf_t	stl_brdconf[] = {
-	/*{ BRD_EASYIO, 0x2a0, 0, 0, 10, 0 },*/
 };
 
-static int	stl_nrbrds = ARRAY_SIZE(stl_brdconf);
+static unsigned int stl_nrbrds;
 
 /*****************************************************************************/
 
@@ -141,32 +109,16 @@ static char	*stl_drvversion = "5.6.0";
 static struct tty_driver	*stl_serial;
 
 /*
- *	We will need to allocate a temporary write buffer for chars that
- *	come direct from user space. The problem is that a copy from user
- *	space might cause a page fault (typically on a system that is
- *	swapping!). All ports will share one buffer - since if the system
- *	is already swapping a shared buffer won't make things any worse.
- */
-static char			*stl_tmpwritebuf;
-
-/*
  *	Define a local default termios struct. All ports will be created
  *	with this termios initially. Basically all it defines is a raw port
  *	at 9600, 8 data bits, 1 stop bit.
  */
-static struct termios		stl_deftermios = {
+static struct ktermios		stl_deftermios = {
 	.c_cflag	= (B9600 | CS8 | CREAD | HUPCL | CLOCAL),
 	.c_cc		= INIT_C_CC,
+	.c_ispeed	= 9600,
+	.c_ospeed	= 9600,
 };
-
-/*
- *	Define global stats structures. Not used often, and can be
- *	re-used for each stats call.
- */
-static comstats_t	stl_comstats;
-static combrd_t		stl_brdstats;
-static stlbrd_t		stl_dummybrd;
-static stlport_t	stl_dummyport;
 
 /*
  *	Define global place to put buffer overflow characters.
@@ -175,13 +127,16 @@ static char		stl_unwanted[SC26198_RXFIFOSIZE];
 
 /*****************************************************************************/
 
-static stlbrd_t		*stl_brds[STL_MAXBRDS];
+static DEFINE_MUTEX(stl_brdslock);
+static struct stlbrd		*stl_brds[STL_MAXBRDS];
 
 /*
  *	Per board state flags. Used with the state field of the board struct.
  *	Not really much here!
  */
 #define	BRD_FOUND	0x1
+#define STL_PROBED	0x2
+
 
 /*
  *	Define the port structure istate flags. These set of flags are
@@ -198,32 +153,32 @@ static stlbrd_t		*stl_brds[STL_MAXBRDS];
  *	referencing boards when printing trace and stuff.
  */
 static char	*stl_brdnames[] = {
-	(char *) NULL,
-	(char *) NULL,
-	(char *) NULL,
-	(char *) NULL,
-	(char *) NULL,
-	(char *) NULL,
-	(char *) NULL,
-	(char *) NULL,
-	(char *) NULL,
-	(char *) NULL,
-	(char *) NULL,
-	(char *) NULL,
-	(char *) NULL,
-	(char *) NULL,
-	(char *) NULL,
-	(char *) NULL,
-	(char *) NULL,
-	(char *) NULL,
-	(char *) NULL,
-	(char *) NULL,
+	NULL,
+	NULL,
+	NULL,
+	NULL,
+	NULL,
+	NULL,
+	NULL,
+	NULL,
+	NULL,
+	NULL,
+	NULL,
+	NULL,
+	NULL,
+	NULL,
+	NULL,
+	NULL,
+	NULL,
+	NULL,
+	NULL,
+	NULL,
 	"EasyIO",
 	"EC8/32-AT",
 	"EC8/32-MC",
-	(char *) NULL,
-	(char *) NULL,
-	(char *) NULL,
+	NULL,
+	NULL,
+	NULL,
 	"EC8/32-PCI",
 	"EC8/64-PCI",
 	"EasyIO-PCI",
@@ -236,7 +191,7 @@ static char	*stl_brdnames[] = {
  *	load line. These allow for easy board definitions, and easy
  *	modification of the io, memory and irq resoucres.
  */
-static int	stl_nargs = 0;
+static unsigned int stl_nargs;
 static char	*board0[4];
 static char	*board1[4];
 static char	*board2[4];
@@ -254,12 +209,10 @@ static char	**stl_brdsp[] = {
  *	parse any module arguments.
  */
 
-typedef struct stlbrdtype {
+static struct {
 	char	*name;
 	int	type;
-} stlbrdtype_t;
-
-static stlbrdtype_t	stl_brdstr[] = {
+} stl_brdstr[] = {
 	{ "easyio", BRD_EASYIO },
 	{ "eio", BRD_EASYIO },
 	{ "20", BRD_EASYIO },
@@ -293,9 +246,6 @@ static stlbrdtype_t	stl_brdstr[] = {
 /*
  *	Define the module agruments.
  */
-MODULE_AUTHOR("Greg Ungerer");
-MODULE_DESCRIPTION("Stallion Multiport Serial Driver");
-MODULE_LICENSE("GPL");
 
 module_param_array(board0, charp, &stl_nargs, 0);
 MODULE_PARM_DESC(board0, "Board 0 config -> name[,ioaddr[,ioaddr2][,irq]]");
@@ -363,6 +313,14 @@ static unsigned char	stl_vecmap[] = {
 };
 
 /*
+ *	Lock ordering is that you may not take stallion_lock holding
+ *	brd_lock.
+ */
+
+static spinlock_t brd_lock; 		/* Guard the board mapping */
+static spinlock_t stallion_lock;	/* Guard the tty driver */
+
+/*
  *	Set up enable and disable macros for the ECH boards. They require
  *	the secondary io address space to be activated and deactivated.
  *	This way all ECH boards can share their secondary io region.
@@ -389,8 +347,6 @@ static unsigned char	stl_vecmap[] = {
 
 /*****************************************************************************/
 
-#ifdef CONFIG_PCI
-
 /*
  *	Define the Stallion PCI vendor and device IDs.
  */
@@ -410,22 +366,19 @@ static unsigned char	stl_vecmap[] = {
 /*
  *	Define structure to hold all Stallion PCI boards.
  */
-typedef struct stlpcibrd {
-	unsigned short		vendid;
-	unsigned short		devid;
-	int			brdtype;
-} stlpcibrd_t;
 
-static stlpcibrd_t	stl_pcibrds[] = {
-	{ PCI_VENDOR_ID_STALLION, PCI_DEVICE_ID_ECHPCI864, BRD_ECH64PCI },
-	{ PCI_VENDOR_ID_STALLION, PCI_DEVICE_ID_EIOPCI, BRD_EASYIOPCI },
-	{ PCI_VENDOR_ID_STALLION, PCI_DEVICE_ID_ECHPCI832, BRD_ECHPCI },
-	{ PCI_VENDOR_ID_NS, PCI_DEVICE_ID_NS_87410, BRD_ECHPCI },
+static struct pci_device_id stl_pcibrds[] = {
+	{ PCI_DEVICE(PCI_VENDOR_ID_STALLION, PCI_DEVICE_ID_ECHPCI864),
+		.driver_data = BRD_ECH64PCI },
+	{ PCI_DEVICE(PCI_VENDOR_ID_STALLION, PCI_DEVICE_ID_EIOPCI),
+		.driver_data = BRD_EASYIOPCI },
+	{ PCI_DEVICE(PCI_VENDOR_ID_STALLION, PCI_DEVICE_ID_ECHPCI832),
+		.driver_data = BRD_ECHPCI },
+	{ PCI_DEVICE(PCI_VENDOR_ID_NS, PCI_DEVICE_ID_NS_87410),
+		.driver_data = BRD_ECHPCI },
+	{ }
 };
-
-static int	stl_nrpcibrds = ARRAY_SIZE(stl_pcibrds);
-
-#endif
+MODULE_DEVICE_TABLE(pci, stl_pcibrds);
 
 /*****************************************************************************/
 
@@ -445,134 +398,74 @@ static unsigned int	stl_baudrates[] = {
 	9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600
 };
 
-/*
- *	Define some handy local macros...
- */
-#undef	MIN
-#define	MIN(a,b)	(((a) <= (b)) ? (a) : (b))
-
-#undef	TOLOWER
-#define	TOLOWER(x)	((((x) >= 'A') && ((x) <= 'Z')) ? ((x) + 0x20) : (x))
-
 /*****************************************************************************/
 
 /*
  *	Declare all those functions in this driver!
  */
 
-static void	stl_argbrds(void);
-static int	stl_parsebrd(stlconf_t *confp, char **argp);
-
-static unsigned long stl_atol(char *str);
-
-static int	stl_init(void);
-static int	stl_open(struct tty_struct *tty, struct file *filp);
-static void	stl_close(struct tty_struct *tty, struct file *filp);
-static int	stl_write(struct tty_struct *tty, const unsigned char *buf, int count);
-static void	stl_putchar(struct tty_struct *tty, unsigned char ch);
-static void	stl_flushchars(struct tty_struct *tty);
-static int	stl_writeroom(struct tty_struct *tty);
-static int	stl_charsinbuffer(struct tty_struct *tty);
-static int	stl_ioctl(struct tty_struct *tty, struct file *file, unsigned int cmd, unsigned long arg);
-static void	stl_settermios(struct tty_struct *tty, struct termios *old);
-static void	stl_throttle(struct tty_struct *tty);
-static void	stl_unthrottle(struct tty_struct *tty);
-static void	stl_stop(struct tty_struct *tty);
-static void	stl_start(struct tty_struct *tty);
-static void	stl_flushbuffer(struct tty_struct *tty);
-static void	stl_breakctl(struct tty_struct *tty, int state);
-static void	stl_waituntilsent(struct tty_struct *tty, int timeout);
-static void	stl_sendxchar(struct tty_struct *tty, char ch);
-static void	stl_hangup(struct tty_struct *tty);
 static int	stl_memioctl(struct inode *ip, struct file *fp, unsigned int cmd, unsigned long arg);
-static int	stl_portinfo(stlport_t *portp, int portnr, char *pos);
-static int	stl_readproc(char *page, char **start, off_t off, int count, int *eof, void *data);
-
-static int	stl_brdinit(stlbrd_t *brdp);
-static int	stl_initports(stlbrd_t *brdp, stlpanel_t *panelp);
-static int	stl_getserial(stlport_t *portp, struct serial_struct __user *sp);
-static int	stl_setserial(stlport_t *portp, struct serial_struct __user *sp);
-static int	stl_getbrdstats(combrd_t __user *bp);
-static int	stl_getportstats(stlport_t *portp, comstats_t __user *cp);
-static int	stl_clrportstats(stlport_t *portp, comstats_t __user *cp);
-static int	stl_getportstruct(stlport_t __user *arg);
-static int	stl_getbrdstruct(stlbrd_t __user *arg);
-static int	stl_waitcarrier(stlport_t *portp, struct file *filp);
-static int	stl_eiointr(stlbrd_t *brdp);
-static int	stl_echatintr(stlbrd_t *brdp);
-static int	stl_echmcaintr(stlbrd_t *brdp);
-static int	stl_echpciintr(stlbrd_t *brdp);
-static int	stl_echpci64intr(stlbrd_t *brdp);
-static void	stl_offintr(void *private);
-static stlbrd_t *stl_allocbrd(void);
-static stlport_t *stl_getport(int brdnr, int panelnr, int portnr);
-
-static inline int	stl_initbrds(void);
-static inline int	stl_initeio(stlbrd_t *brdp);
-static inline int	stl_initech(stlbrd_t *brdp);
-static inline int	stl_getbrdnr(void);
-
-#ifdef	CONFIG_PCI
-static inline int	stl_findpcibrds(void);
-static inline int	stl_initpcibrd(int brdtype, struct pci_dev *devp);
-#endif
+static int	stl_brdinit(struct stlbrd *brdp);
+static int	stl_getportstats(struct stlport *portp, comstats_t __user *cp);
+static int	stl_clrportstats(struct stlport *portp, comstats_t __user *cp);
+static int	stl_waitcarrier(struct stlport *portp, struct file *filp);
 
 /*
  *	CD1400 uart specific handling functions.
  */
-static void	stl_cd1400setreg(stlport_t *portp, int regnr, int value);
-static int	stl_cd1400getreg(stlport_t *portp, int regnr);
-static int	stl_cd1400updatereg(stlport_t *portp, int regnr, int value);
-static int	stl_cd1400panelinit(stlbrd_t *brdp, stlpanel_t *panelp);
-static void	stl_cd1400portinit(stlbrd_t *brdp, stlpanel_t *panelp, stlport_t *portp);
-static void	stl_cd1400setport(stlport_t *portp, struct termios *tiosp);
-static int	stl_cd1400getsignals(stlport_t *portp);
-static void	stl_cd1400setsignals(stlport_t *portp, int dtr, int rts);
-static void	stl_cd1400ccrwait(stlport_t *portp);
-static void	stl_cd1400enablerxtx(stlport_t *portp, int rx, int tx);
-static void	stl_cd1400startrxtx(stlport_t *portp, int rx, int tx);
-static void	stl_cd1400disableintrs(stlport_t *portp);
-static void	stl_cd1400sendbreak(stlport_t *portp, int len);
-static void	stl_cd1400flowctrl(stlport_t *portp, int state);
-static void	stl_cd1400sendflow(stlport_t *portp, int state);
-static void	stl_cd1400flush(stlport_t *portp);
-static int	stl_cd1400datastate(stlport_t *portp);
-static void	stl_cd1400eiointr(stlpanel_t *panelp, unsigned int iobase);
-static void	stl_cd1400echintr(stlpanel_t *panelp, unsigned int iobase);
-static void	stl_cd1400txisr(stlpanel_t *panelp, int ioaddr);
-static void	stl_cd1400rxisr(stlpanel_t *panelp, int ioaddr);
-static void	stl_cd1400mdmisr(stlpanel_t *panelp, int ioaddr);
+static void	stl_cd1400setreg(struct stlport *portp, int regnr, int value);
+static int	stl_cd1400getreg(struct stlport *portp, int regnr);
+static int	stl_cd1400updatereg(struct stlport *portp, int regnr, int value);
+static int	stl_cd1400panelinit(struct stlbrd *brdp, struct stlpanel *panelp);
+static void	stl_cd1400portinit(struct stlbrd *brdp, struct stlpanel *panelp, struct stlport *portp);
+static void	stl_cd1400setport(struct stlport *portp, struct ktermios *tiosp);
+static int	stl_cd1400getsignals(struct stlport *portp);
+static void	stl_cd1400setsignals(struct stlport *portp, int dtr, int rts);
+static void	stl_cd1400ccrwait(struct stlport *portp);
+static void	stl_cd1400enablerxtx(struct stlport *portp, int rx, int tx);
+static void	stl_cd1400startrxtx(struct stlport *portp, int rx, int tx);
+static void	stl_cd1400disableintrs(struct stlport *portp);
+static void	stl_cd1400sendbreak(struct stlport *portp, int len);
+static void	stl_cd1400flowctrl(struct stlport *portp, int state);
+static void	stl_cd1400sendflow(struct stlport *portp, int state);
+static void	stl_cd1400flush(struct stlport *portp);
+static int	stl_cd1400datastate(struct stlport *portp);
+static void	stl_cd1400eiointr(struct stlpanel *panelp, unsigned int iobase);
+static void	stl_cd1400echintr(struct stlpanel *panelp, unsigned int iobase);
+static void	stl_cd1400txisr(struct stlpanel *panelp, int ioaddr);
+static void	stl_cd1400rxisr(struct stlpanel *panelp, int ioaddr);
+static void	stl_cd1400mdmisr(struct stlpanel *panelp, int ioaddr);
 
-static inline int	stl_cd1400breakisr(stlport_t *portp, int ioaddr);
+static inline int	stl_cd1400breakisr(struct stlport *portp, int ioaddr);
 
 /*
  *	SC26198 uart specific handling functions.
  */
-static void	stl_sc26198setreg(stlport_t *portp, int regnr, int value);
-static int	stl_sc26198getreg(stlport_t *portp, int regnr);
-static int	stl_sc26198updatereg(stlport_t *portp, int regnr, int value);
-static int	stl_sc26198getglobreg(stlport_t *portp, int regnr);
-static int	stl_sc26198panelinit(stlbrd_t *brdp, stlpanel_t *panelp);
-static void	stl_sc26198portinit(stlbrd_t *brdp, stlpanel_t *panelp, stlport_t *portp);
-static void	stl_sc26198setport(stlport_t *portp, struct termios *tiosp);
-static int	stl_sc26198getsignals(stlport_t *portp);
-static void	stl_sc26198setsignals(stlport_t *portp, int dtr, int rts);
-static void	stl_sc26198enablerxtx(stlport_t *portp, int rx, int tx);
-static void	stl_sc26198startrxtx(stlport_t *portp, int rx, int tx);
-static void	stl_sc26198disableintrs(stlport_t *portp);
-static void	stl_sc26198sendbreak(stlport_t *portp, int len);
-static void	stl_sc26198flowctrl(stlport_t *portp, int state);
-static void	stl_sc26198sendflow(stlport_t *portp, int state);
-static void	stl_sc26198flush(stlport_t *portp);
-static int	stl_sc26198datastate(stlport_t *portp);
-static void	stl_sc26198wait(stlport_t *portp);
-static void	stl_sc26198txunflow(stlport_t *portp, struct tty_struct *tty);
-static void	stl_sc26198intr(stlpanel_t *panelp, unsigned int iobase);
-static void	stl_sc26198txisr(stlport_t *port);
-static void	stl_sc26198rxisr(stlport_t *port, unsigned int iack);
-static void	stl_sc26198rxbadch(stlport_t *portp, unsigned char status, char ch);
-static void	stl_sc26198rxbadchars(stlport_t *portp);
-static void	stl_sc26198otherisr(stlport_t *port, unsigned int iack);
+static void	stl_sc26198setreg(struct stlport *portp, int regnr, int value);
+static int	stl_sc26198getreg(struct stlport *portp, int regnr);
+static int	stl_sc26198updatereg(struct stlport *portp, int regnr, int value);
+static int	stl_sc26198getglobreg(struct stlport *portp, int regnr);
+static int	stl_sc26198panelinit(struct stlbrd *brdp, struct stlpanel *panelp);
+static void	stl_sc26198portinit(struct stlbrd *brdp, struct stlpanel *panelp, struct stlport *portp);
+static void	stl_sc26198setport(struct stlport *portp, struct ktermios *tiosp);
+static int	stl_sc26198getsignals(struct stlport *portp);
+static void	stl_sc26198setsignals(struct stlport *portp, int dtr, int rts);
+static void	stl_sc26198enablerxtx(struct stlport *portp, int rx, int tx);
+static void	stl_sc26198startrxtx(struct stlport *portp, int rx, int tx);
+static void	stl_sc26198disableintrs(struct stlport *portp);
+static void	stl_sc26198sendbreak(struct stlport *portp, int len);
+static void	stl_sc26198flowctrl(struct stlport *portp, int state);
+static void	stl_sc26198sendflow(struct stlport *portp, int state);
+static void	stl_sc26198flush(struct stlport *portp);
+static int	stl_sc26198datastate(struct stlport *portp);
+static void	stl_sc26198wait(struct stlport *portp);
+static void	stl_sc26198txunflow(struct stlport *portp, struct tty_struct *tty);
+static void	stl_sc26198intr(struct stlpanel *panelp, unsigned int iobase);
+static void	stl_sc26198txisr(struct stlport *port);
+static void	stl_sc26198rxisr(struct stlport *port, unsigned int iack);
+static void	stl_sc26198rxbadch(struct stlport *portp, unsigned char status, char ch);
+static void	stl_sc26198rxbadchars(struct stlport *portp);
+static void	stl_sc26198otherisr(struct stlport *port, unsigned int iack);
 
 /*****************************************************************************/
 
@@ -580,20 +473,20 @@ static void	stl_sc26198otherisr(stlport_t *port, unsigned int iack);
  *	Generic UART support structure.
  */
 typedef struct uart {
-	int	(*panelinit)(stlbrd_t *brdp, stlpanel_t *panelp);
-	void	(*portinit)(stlbrd_t *brdp, stlpanel_t *panelp, stlport_t *portp);
-	void	(*setport)(stlport_t *portp, struct termios *tiosp);
-	int	(*getsignals)(stlport_t *portp);
-	void	(*setsignals)(stlport_t *portp, int dtr, int rts);
-	void	(*enablerxtx)(stlport_t *portp, int rx, int tx);
-	void	(*startrxtx)(stlport_t *portp, int rx, int tx);
-	void	(*disableintrs)(stlport_t *portp);
-	void	(*sendbreak)(stlport_t *portp, int len);
-	void	(*flowctrl)(stlport_t *portp, int state);
-	void	(*sendflow)(stlport_t *portp, int state);
-	void	(*flush)(stlport_t *portp);
-	int	(*datastate)(stlport_t *portp);
-	void	(*intr)(stlpanel_t *panelp, unsigned int iobase);
+	int	(*panelinit)(struct stlbrd *brdp, struct stlpanel *panelp);
+	void	(*portinit)(struct stlbrd *brdp, struct stlpanel *panelp, struct stlport *portp);
+	void	(*setport)(struct stlport *portp, struct ktermios *tiosp);
+	int	(*getsignals)(struct stlport *portp);
+	void	(*setsignals)(struct stlport *portp, int dtr, int rts);
+	void	(*enablerxtx)(struct stlport *portp, int rx, int tx);
+	void	(*startrxtx)(struct stlport *portp, int rx, int tx);
+	void	(*disableintrs)(struct stlport *portp);
+	void	(*sendbreak)(struct stlport *portp, int len);
+	void	(*flowctrl)(struct stlport *portp, int state);
+	void	(*sendflow)(struct stlport *portp, int state);
+	void	(*flush)(struct stlport *portp);
+	int	(*datastate)(struct stlport *portp);
+	void	(*intr)(struct stlpanel *panelp, unsigned int iobase);
 } uart_t;
 
 /*
@@ -710,185 +603,16 @@ static unsigned int	sc26198_baudtable[] = {
  *	Define the driver info for a user level control device. Used mainly
  *	to get at port stats - only not using the port device itself.
  */
-static struct file_operations	stl_fsiomem = {
+static const struct file_operations	stl_fsiomem = {
 	.owner		= THIS_MODULE,
 	.ioctl		= stl_memioctl,
 };
 
-/*****************************************************************************/
-
 static struct class *stallion_class;
-
-/*
- *	Loadable module initialization stuff.
- */
-
-static int __init stallion_module_init(void)
-{
-	unsigned long	flags;
-
-#ifdef DEBUG
-	printk("init_module()\n");
-#endif
-
-	save_flags(flags);
-	cli();
-	stl_init();
-	restore_flags(flags);
-
-	return 0;
-}
-
-/*****************************************************************************/
-
-static void __exit stallion_module_exit(void)
-{
-	stlbrd_t	*brdp;
-	stlpanel_t	*panelp;
-	stlport_t	*portp;
-	unsigned long	flags;
-	int		i, j, k;
-
-#ifdef DEBUG
-	printk("cleanup_module()\n");
-#endif
-
-	printk(KERN_INFO "Unloading %s: version %s\n", stl_drvtitle,
-		stl_drvversion);
-
-	save_flags(flags);
-	cli();
-
-/*
- *	Free up all allocated resources used by the ports. This includes
- *	memory and interrupts. As part of this process we will also do
- *	a hangup on every open port - to try to flush out any processes
- *	hanging onto ports.
- */
-	i = tty_unregister_driver(stl_serial);
-	put_tty_driver(stl_serial);
-	if (i) {
-		printk("STALLION: failed to un-register tty driver, "
-			"errno=%d\n", -i);
-		restore_flags(flags);
-		return;
-	}
-	for (i = 0; i < 4; i++) {
-		devfs_remove("staliomem/%d", i);
-		class_device_destroy(stallion_class, MKDEV(STL_SIOMEMMAJOR, i));
-	}
-	devfs_remove("staliomem");
-	if ((i = unregister_chrdev(STL_SIOMEMMAJOR, "staliomem")))
-		printk("STALLION: failed to un-register serial memory device, "
-			"errno=%d\n", -i);
-	class_destroy(stallion_class);
-
-	kfree(stl_tmpwritebuf);
-
-	for (i = 0; (i < stl_nrbrds); i++) {
-		if ((brdp = stl_brds[i]) == (stlbrd_t *) NULL)
-			continue;
-
-		free_irq(brdp->irq, brdp);
-
-		for (j = 0; (j < STL_MAXPANELS); j++) {
-			panelp = brdp->panels[j];
-			if (panelp == (stlpanel_t *) NULL)
-				continue;
-			for (k = 0; (k < STL_PORTSPERPANEL); k++) {
-				portp = panelp->ports[k];
-				if (portp == (stlport_t *) NULL)
-					continue;
-				if (portp->tty != (struct tty_struct *) NULL)
-					stl_hangup(portp->tty);
-				kfree(portp->tx.buf);
-				kfree(portp);
-			}
-			kfree(panelp);
-		}
-
-		release_region(brdp->ioaddr1, brdp->iosize1);
-		if (brdp->iosize2 > 0)
-			release_region(brdp->ioaddr2, brdp->iosize2);
-
-		kfree(brdp);
-		stl_brds[i] = (stlbrd_t *) NULL;
-	}
-
-	restore_flags(flags);
-}
-
-module_init(stallion_module_init);
-module_exit(stallion_module_exit);
-
-/*****************************************************************************/
 
 /*
  *	Check for any arguments passed in on the module load command line.
  */
-
-static void stl_argbrds(void)
-{
-	stlconf_t	conf;
-	stlbrd_t	*brdp;
-	int		i;
-
-#ifdef DEBUG
-	printk("stl_argbrds()\n");
-#endif
-
-	for (i = stl_nrbrds; (i < stl_nargs); i++) {
-		memset(&conf, 0, sizeof(conf));
-		if (stl_parsebrd(&conf, stl_brdsp[i]) == 0)
-			continue;
-		if ((brdp = stl_allocbrd()) == (stlbrd_t *) NULL)
-			continue;
-		stl_nrbrds = i + 1;
-		brdp->brdnr = i;
-		brdp->brdtype = conf.brdtype;
-		brdp->ioaddr1 = conf.ioaddr1;
-		brdp->ioaddr2 = conf.ioaddr2;
-		brdp->irq = conf.irq;
-		brdp->irqtype = conf.irqtype;
-		stl_brdinit(brdp);
-	}
-}
-
-/*****************************************************************************/
-
-/*
- *	Convert an ascii string number into an unsigned long.
- */
-
-static unsigned long stl_atol(char *str)
-{
-	unsigned long	val;
-	int		base, c;
-	char		*sp;
-
-	val = 0;
-	sp = str;
-	if ((*sp == '0') && (*(sp+1) == 'x')) {
-		base = 16;
-		sp += 2;
-	} else if (*sp == '0') {
-		base = 8;
-		sp++;
-	} else {
-		base = 10;
-	}
-
-	for (; (*sp != 0); sp++) {
-		c = (*sp > '9') ? (TOLOWER(*sp) - 'a' + 10) : (*sp - '0');
-		if ((c < 0) || (c >= base)) {
-			printk("STALLION: invalid argument %s\n", str);
-			val = 0;
-			break;
-		}
-		val = (val * base) + c;
-	}
-	return val;
-}
 
 /*****************************************************************************/
 
@@ -896,25 +620,23 @@ static unsigned long stl_atol(char *str)
  *	Parse the supplied argument string, into the board conf struct.
  */
 
-static int stl_parsebrd(stlconf_t *confp, char **argp)
+static int __init stl_parsebrd(struct stlconf *confp, char **argp)
 {
 	char	*sp;
-	int	i;
+	unsigned int i;
 
-#ifdef DEBUG
-	printk("stl_parsebrd(confp=%x,argp=%x)\n", (int) confp, (int) argp);
-#endif
+	pr_debug("stl_parsebrd(confp=%p,argp=%p)\n", confp, argp);
 
-	if ((argp[0] == (char *) NULL) || (*argp[0] == 0))
+	if ((argp[0] == NULL) || (*argp[0] == 0))
 		return 0;
 
-	for (sp = argp[0], i = 0; ((*sp != 0) && (i < 25)); sp++, i++)
-		*sp = TOLOWER(*sp);
+	for (sp = argp[0], i = 0; (*sp != 0) && (i < 25); sp++, i++)
+		*sp = tolower(*sp);
 
-	for (i = 0; i < ARRAY_SIZE(stl_brdstr); i++) {
+	for (i = 0; i < ARRAY_SIZE(stl_brdstr); i++)
 		if (strcmp(stl_brdstr[i].name, argp[0]) == 0)
 			break;
-	}
+
 	if (i == ARRAY_SIZE(stl_brdstr)) {
 		printk("STALLION: unknown board name, %s?\n", argp[0]);
 		return 0;
@@ -923,16 +645,16 @@ static int stl_parsebrd(stlconf_t *confp, char **argp)
 	confp->brdtype = stl_brdstr[i].type;
 
 	i = 1;
-	if ((argp[i] != (char *) NULL) && (*argp[i] != 0))
-		confp->ioaddr1 = stl_atol(argp[i]);
+	if ((argp[i] != NULL) && (*argp[i] != 0))
+		confp->ioaddr1 = simple_strtoul(argp[i], NULL, 0);
 	i++;
 	if (confp->brdtype == BRD_ECH) {
-		if ((argp[i] != (char *) NULL) && (*argp[i] != 0))
-			confp->ioaddr2 = stl_atol(argp[i]);
+		if ((argp[i] != NULL) && (*argp[i] != 0))
+			confp->ioaddr2 = simple_strtoul(argp[i], NULL, 0);
 		i++;
 	}
-	if ((argp[i] != (char *) NULL) && (*argp[i] != 0))
-		confp->irq = stl_atol(argp[i]);
+	if ((argp[i] != NULL) && (*argp[i] != 0))
+		confp->irq = simple_strtoul(argp[i], NULL, 0);
 	return 1;
 }
 
@@ -942,14 +664,14 @@ static int stl_parsebrd(stlconf_t *confp, char **argp)
  *	Allocate a new board structure. Fill out the basic info in it.
  */
 
-static stlbrd_t *stl_allocbrd(void)
+static struct stlbrd *stl_allocbrd(void)
 {
-	stlbrd_t	*brdp;
+	struct stlbrd	*brdp;
 
-	brdp = kzalloc(sizeof(stlbrd_t), GFP_KERNEL);
+	brdp = kzalloc(sizeof(struct stlbrd), GFP_KERNEL);
 	if (!brdp) {
-		printk("STALLION: failed to allocate memory (size=%d)\n",
-			sizeof(stlbrd_t));
+		printk("STALLION: failed to allocate memory (size=%Zd)\n",
+			sizeof(struct stlbrd));
 		return NULL;
 	}
 
@@ -961,26 +683,23 @@ static stlbrd_t *stl_allocbrd(void)
 
 static int stl_open(struct tty_struct *tty, struct file *filp)
 {
-	stlport_t	*portp;
-	stlbrd_t	*brdp;
-	unsigned int	minordev;
-	int		brdnr, panelnr, portnr, rc;
+	struct stlport	*portp;
+	struct stlbrd	*brdp;
+	unsigned int	minordev, brdnr, panelnr;
+	int		portnr, rc;
 
-#ifdef DEBUG
-	printk("stl_open(tty=%x,filp=%x): device=%s\n", (int) tty,
-		(int) filp, tty->name);
-#endif
+	pr_debug("stl_open(tty=%p,filp=%p): device=%s\n", tty, filp, tty->name);
 
 	minordev = tty->index;
 	brdnr = MINOR2BRD(minordev);
 	if (brdnr >= stl_nrbrds)
 		return -ENODEV;
 	brdp = stl_brds[brdnr];
-	if (brdp == (stlbrd_t *) NULL)
+	if (brdp == NULL)
 		return -ENODEV;
 	minordev = MINOR2PORT(minordev);
-	for (portnr = -1, panelnr = 0; (panelnr < STL_MAXPANELS); panelnr++) {
-		if (brdp->panels[panelnr] == (stlpanel_t *) NULL)
+	for (portnr = -1, panelnr = 0; panelnr < STL_MAXPANELS; panelnr++) {
+		if (brdp->panels[panelnr] == NULL)
 			break;
 		if (minordev < brdp->panels[panelnr]->nrports) {
 			portnr = minordev;
@@ -992,7 +711,7 @@ static int stl_open(struct tty_struct *tty, struct file *filp)
 		return -ENODEV;
 
 	portp = brdp->panels[panelnr]->ports[portnr];
-	if (portp == (stlport_t *) NULL)
+	if (portp == NULL)
 		return -ENODEV;
 
 /*
@@ -1038,10 +757,10 @@ static int stl_open(struct tty_struct *tty, struct file *filp)
  *	previous opens still in effect. If we are a normal serial device
  *	then also we might have to wait for carrier.
  */
-	if (!(filp->f_flags & O_NONBLOCK)) {
+	if (!(filp->f_flags & O_NONBLOCK))
 		if ((rc = stl_waitcarrier(portp, filp)) != 0)
 			return rc;
-	}
+
 	portp->flags |= ASYNC_NORMAL_ACTIVE;
 
 	return 0;
@@ -1054,28 +773,27 @@ static int stl_open(struct tty_struct *tty, struct file *filp)
  *	maybe because if we are clocal then we don't need to wait...
  */
 
-static int stl_waitcarrier(stlport_t *portp, struct file *filp)
+static int stl_waitcarrier(struct stlport *portp, struct file *filp)
 {
 	unsigned long	flags;
 	int		rc, doclocal;
 
-#ifdef DEBUG
-	printk("stl_waitcarrier(portp=%x,filp=%x)\n", (int) portp, (int) filp);
-#endif
+	pr_debug("stl_waitcarrier(portp=%p,filp=%p)\n", portp, filp);
 
 	rc = 0;
 	doclocal = 0;
 
+	spin_lock_irqsave(&stallion_lock, flags);
+
 	if (portp->tty->termios->c_cflag & CLOCAL)
 		doclocal++;
 
-	save_flags(flags);
-	cli();
 	portp->openwaitcnt++;
 	if (! tty_hung_up_p(filp))
 		portp->refcount--;
 
 	for (;;) {
+		/* Takes brd_lock internally */
 		stl_setsignals(portp, 1, 1);
 		if (tty_hung_up_p(filp) ||
 		    ((portp->flags & ASYNC_INITIALIZED) == 0)) {
@@ -1086,49 +804,92 @@ static int stl_waitcarrier(stlport_t *portp, struct file *filp)
 			break;
 		}
 		if (((portp->flags & ASYNC_CLOSING) == 0) &&
-		    (doclocal || (portp->sigs & TIOCM_CD))) {
+		    (doclocal || (portp->sigs & TIOCM_CD)))
 			break;
-		}
 		if (signal_pending(current)) {
 			rc = -ERESTARTSYS;
 			break;
 		}
+		/* FIXME */
 		interruptible_sleep_on(&portp->open_wait);
 	}
 
 	if (! tty_hung_up_p(filp))
 		portp->refcount++;
 	portp->openwaitcnt--;
-	restore_flags(flags);
+	spin_unlock_irqrestore(&stallion_lock, flags);
 
 	return rc;
 }
 
 /*****************************************************************************/
 
-static void stl_close(struct tty_struct *tty, struct file *filp)
+static void stl_flushbuffer(struct tty_struct *tty)
 {
-	stlport_t	*portp;
-	unsigned long	flags;
+	struct stlport	*portp;
 
-#ifdef DEBUG
-	printk("stl_close(tty=%x,filp=%x)\n", (int) tty, (int) filp);
-#endif
+	pr_debug("stl_flushbuffer(tty=%p)\n", tty);
 
+	if (tty == NULL)
+		return;
 	portp = tty->driver_data;
-	if (portp == (stlport_t *) NULL)
+	if (portp == NULL)
 		return;
 
-	save_flags(flags);
-	cli();
+	stl_flush(portp);
+	tty_wakeup(tty);
+}
+
+/*****************************************************************************/
+
+static void stl_waituntilsent(struct tty_struct *tty, int timeout)
+{
+	struct stlport	*portp;
+	unsigned long	tend;
+
+	pr_debug("stl_waituntilsent(tty=%p,timeout=%d)\n", tty, timeout);
+
+	if (tty == NULL)
+		return;
+	portp = tty->driver_data;
+	if (portp == NULL)
+		return;
+
+	if (timeout == 0)
+		timeout = HZ;
+	tend = jiffies + timeout;
+
+	while (stl_datastate(portp)) {
+		if (signal_pending(current))
+			break;
+		msleep_interruptible(20);
+		if (time_after_eq(jiffies, tend))
+			break;
+	}
+}
+
+/*****************************************************************************/
+
+static void stl_close(struct tty_struct *tty, struct file *filp)
+{
+	struct stlport	*portp;
+	unsigned long	flags;
+
+	pr_debug("stl_close(tty=%p,filp=%p)\n", tty, filp);
+
+	portp = tty->driver_data;
+	if (portp == NULL)
+		return;
+
+	spin_lock_irqsave(&stallion_lock, flags);
 	if (tty_hung_up_p(filp)) {
-		restore_flags(flags);
+		spin_unlock_irqrestore(&stallion_lock, flags);
 		return;
 	}
 	if ((tty->count == 1) && (portp->refcount != 1))
 		portp->refcount = 1;
 	if (portp->refcount-- > 1) {
-		restore_flags(flags);
+		spin_unlock_irqrestore(&stallion_lock, flags);
 		return;
 	}
 
@@ -1142,28 +903,35 @@ static void stl_close(struct tty_struct *tty, struct file *filp)
  *	(The sc26198 has no "end-of-data" interrupt only empty FIFO)
  */
 	tty->closing = 1;
+
+	spin_unlock_irqrestore(&stallion_lock, flags);
+
 	if (portp->closing_wait != ASYNC_CLOSING_WAIT_NONE)
 		tty_wait_until_sent(tty, portp->closing_wait);
 	stl_waituntilsent(tty, (HZ / 2));
 
+
+	spin_lock_irqsave(&stallion_lock, flags);
 	portp->flags &= ~ASYNC_INITIALIZED;
+	spin_unlock_irqrestore(&stallion_lock, flags);
+
 	stl_disableintrs(portp);
 	if (tty->termios->c_cflag & HUPCL)
 		stl_setsignals(portp, 0, 0);
 	stl_enablerxtx(portp, 0, 0);
 	stl_flushbuffer(tty);
 	portp->istate = 0;
-	if (portp->tx.buf != (char *) NULL) {
+	if (portp->tx.buf != NULL) {
 		kfree(portp->tx.buf);
-		portp->tx.buf = (char *) NULL;
-		portp->tx.head = (char *) NULL;
-		portp->tx.tail = (char *) NULL;
+		portp->tx.buf = NULL;
+		portp->tx.head = NULL;
+		portp->tx.tail = NULL;
 	}
 	set_bit(TTY_IO_ERROR, &tty->flags);
 	tty_ldisc_flush(tty);
 
 	tty->closing = 0;
-	portp->tty = (struct tty_struct *) NULL;
+	portp->tty = NULL;
 
 	if (portp->openwaitcnt) {
 		if (portp->close_delay)
@@ -1173,7 +941,6 @@ static void stl_close(struct tty_struct *tty, struct file *filp)
 
 	portp->flags &= ~(ASYNC_NORMAL_ACTIVE|ASYNC_CLOSING);
 	wake_up_interruptible(&portp->close_wait);
-	restore_flags(flags);
 }
 
 /*****************************************************************************/
@@ -1185,23 +952,17 @@ static void stl_close(struct tty_struct *tty, struct file *filp)
 
 static int stl_write(struct tty_struct *tty, const unsigned char *buf, int count)
 {
-	stlport_t	*portp;
+	struct stlport	*portp;
 	unsigned int	len, stlen;
 	unsigned char	*chbuf;
 	char		*head, *tail;
 
-#ifdef DEBUG
-	printk("stl_write(tty=%x,buf=%x,count=%d)\n",
-		(int) tty, (int) buf, count);
-#endif
+	pr_debug("stl_write(tty=%p,buf=%p,count=%d)\n", tty, buf, count);
 
-	if ((tty == (struct tty_struct *) NULL) ||
-	    (stl_tmpwritebuf == (char *) NULL))
-		return 0;
 	portp = tty->driver_data;
-	if (portp == (stlport_t *) NULL)
+	if (portp == NULL)
 		return 0;
-	if (portp->tx.buf == (char *) NULL)
+	if (portp->tx.buf == NULL)
 		return 0;
 
 /*
@@ -1222,10 +983,10 @@ static int stl_write(struct tty_struct *tty, const unsigned char *buf, int count
 		stlen = len;
 	}
 
-	len = MIN(len, count);
+	len = min(len, (unsigned int)count);
 	count = 0;
 	while (len > 0) {
-		stlen = MIN(len, stlen);
+		stlen = min(len, stlen);
 		memcpy(head, chbuf, stlen);
 		len -= stlen;
 		chbuf += stlen;
@@ -1248,20 +1009,18 @@ static int stl_write(struct tty_struct *tty, const unsigned char *buf, int count
 
 static void stl_putchar(struct tty_struct *tty, unsigned char ch)
 {
-	stlport_t	*portp;
+	struct stlport	*portp;
 	unsigned int	len;
 	char		*head, *tail;
 
-#ifdef DEBUG
-	printk("stl_putchar(tty=%x,ch=%x)\n", (int) tty, (int) ch);
-#endif
+	pr_debug("stl_putchar(tty=%p,ch=%x)\n", tty, ch);
 
-	if (tty == (struct tty_struct *) NULL)
+	if (tty == NULL)
 		return;
 	portp = tty->driver_data;
-	if (portp == (stlport_t *) NULL)
+	if (portp == NULL)
 		return;
-	if (portp->tx.buf == (char *) NULL)
+	if (portp->tx.buf == NULL)
 		return;
 
 	head = portp->tx.head;
@@ -1288,25 +1047,18 @@ static void stl_putchar(struct tty_struct *tty, unsigned char ch)
 
 static void stl_flushchars(struct tty_struct *tty)
 {
-	stlport_t	*portp;
+	struct stlport	*portp;
 
-#ifdef DEBUG
-	printk("stl_flushchars(tty=%x)\n", (int) tty);
-#endif
+	pr_debug("stl_flushchars(tty=%p)\n", tty);
 
-	if (tty == (struct tty_struct *) NULL)
+	if (tty == NULL)
 		return;
 	portp = tty->driver_data;
-	if (portp == (stlport_t *) NULL)
+	if (portp == NULL)
 		return;
-	if (portp->tx.buf == (char *) NULL)
+	if (portp->tx.buf == NULL)
 		return;
 
-#if 0
-	if (tty->stopped || tty->hw_stopped ||
-	    (portp->tx.head == portp->tx.tail))
-		return;
-#endif
 	stl_startrxtx(portp, -1, 1);
 }
 
@@ -1314,24 +1066,22 @@ static void stl_flushchars(struct tty_struct *tty)
 
 static int stl_writeroom(struct tty_struct *tty)
 {
-	stlport_t	*portp;
+	struct stlport	*portp;
 	char		*head, *tail;
 
-#ifdef DEBUG
-	printk("stl_writeroom(tty=%x)\n", (int) tty);
-#endif
+	pr_debug("stl_writeroom(tty=%p)\n", tty);
 
-	if (tty == (struct tty_struct *) NULL)
+	if (tty == NULL)
 		return 0;
 	portp = tty->driver_data;
-	if (portp == (stlport_t *) NULL)
+	if (portp == NULL)
 		return 0;
-	if (portp->tx.buf == (char *) NULL)
+	if (portp->tx.buf == NULL)
 		return 0;
 
 	head = portp->tx.head;
 	tail = portp->tx.tail;
-	return ((head >= tail) ? (STL_TXBUFSIZE - (head - tail) - 1) : (tail - head - 1));
+	return (head >= tail) ? (STL_TXBUFSIZE - (head - tail) - 1) : (tail - head - 1);
 }
 
 /*****************************************************************************/
@@ -1347,20 +1097,18 @@ static int stl_writeroom(struct tty_struct *tty)
 
 static int stl_charsinbuffer(struct tty_struct *tty)
 {
-	stlport_t	*portp;
+	struct stlport	*portp;
 	unsigned int	size;
 	char		*head, *tail;
 
-#ifdef DEBUG
-	printk("stl_charsinbuffer(tty=%x)\n", (int) tty);
-#endif
+	pr_debug("stl_charsinbuffer(tty=%p)\n", tty);
 
-	if (tty == (struct tty_struct *) NULL)
+	if (tty == NULL)
 		return 0;
 	portp = tty->driver_data;
-	if (portp == (stlport_t *) NULL)
+	if (portp == NULL)
 		return 0;
-	if (portp->tx.buf == (char *) NULL)
+	if (portp->tx.buf == NULL)
 		return 0;
 
 	head = portp->tx.head;
@@ -1377,14 +1125,12 @@ static int stl_charsinbuffer(struct tty_struct *tty)
  *	Generate the serial struct info.
  */
 
-static int stl_getserial(stlport_t *portp, struct serial_struct __user *sp)
+static int stl_getserial(struct stlport *portp, struct serial_struct __user *sp)
 {
 	struct serial_struct	sio;
-	stlbrd_t		*brdp;
+	struct stlbrd		*brdp;
 
-#ifdef DEBUG
-	printk("stl_getserial(portp=%x,sp=%x)\n", (int) portp, (int) sp);
-#endif
+	pr_debug("stl_getserial(portp=%p,sp=%p)\n", portp, sp);
 
 	memset(&sio, 0, sizeof(struct serial_struct));
 	sio.line = portp->portnr;
@@ -1404,7 +1150,7 @@ static int stl_getserial(stlport_t *portp, struct serial_struct __user *sp)
 	}
 
 	brdp = stl_brds[portp->brdnr];
-	if (brdp != (stlbrd_t *) NULL)
+	if (brdp != NULL)
 		sio.irq = brdp->irq;
 
 	return copy_to_user(sp, &sio, sizeof(struct serial_struct)) ? -EFAULT : 0;
@@ -1418,13 +1164,11 @@ static int stl_getserial(stlport_t *portp, struct serial_struct __user *sp)
  *	just quietly ignore any requests to change irq, etc.
  */
 
-static int stl_setserial(stlport_t *portp, struct serial_struct __user *sp)
+static int stl_setserial(struct stlport *portp, struct serial_struct __user *sp)
 {
 	struct serial_struct	sio;
 
-#ifdef DEBUG
-	printk("stl_setserial(portp=%x,sp=%x)\n", (int) portp, (int) sp);
-#endif
+	pr_debug("stl_setserial(portp=%p,sp=%p)\n", portp, sp);
 
 	if (copy_from_user(&sio, sp, sizeof(struct serial_struct)))
 		return -EFAULT;
@@ -1450,12 +1194,12 @@ static int stl_setserial(stlport_t *portp, struct serial_struct __user *sp)
 
 static int stl_tiocmget(struct tty_struct *tty, struct file *file)
 {
-	stlport_t	*portp;
+	struct stlport	*portp;
 
-	if (tty == (struct tty_struct *) NULL)
+	if (tty == NULL)
 		return -ENODEV;
 	portp = tty->driver_data;
-	if (portp == (stlport_t *) NULL)
+	if (portp == NULL)
 		return -ENODEV;
 	if (tty->flags & (1 << TTY_IO_ERROR))
 		return -EIO;
@@ -1466,13 +1210,13 @@ static int stl_tiocmget(struct tty_struct *tty, struct file *file)
 static int stl_tiocmset(struct tty_struct *tty, struct file *file,
 			unsigned int set, unsigned int clear)
 {
-	stlport_t	*portp;
+	struct stlport	*portp;
 	int rts = -1, dtr = -1;
 
-	if (tty == (struct tty_struct *) NULL)
+	if (tty == NULL)
 		return -ENODEV;
 	portp = tty->driver_data;
-	if (portp == (stlport_t *) NULL)
+	if (portp == NULL)
 		return -ENODEV;
 	if (tty->flags & (1 << TTY_IO_ERROR))
 		return -EIO;
@@ -1492,27 +1236,24 @@ static int stl_tiocmset(struct tty_struct *tty, struct file *file,
 
 static int stl_ioctl(struct tty_struct *tty, struct file *file, unsigned int cmd, unsigned long arg)
 {
-	stlport_t	*portp;
+	struct stlport	*portp;
 	unsigned int	ival;
 	int		rc;
 	void __user *argp = (void __user *)arg;
 
-#ifdef DEBUG
-	printk("stl_ioctl(tty=%x,file=%x,cmd=%x,arg=%x)\n",
-		(int) tty, (int) file, cmd, (int) arg);
-#endif
+	pr_debug("stl_ioctl(tty=%p,file=%p,cmd=%x,arg=%lx)\n", tty, file, cmd,
+			arg);
 
-	if (tty == (struct tty_struct *) NULL)
+	if (tty == NULL)
 		return -ENODEV;
 	portp = tty->driver_data;
-	if (portp == (stlport_t *) NULL)
+	if (portp == NULL)
 		return -ENODEV;
 
 	if ((cmd != TIOCGSERIAL) && (cmd != TIOCSSERIAL) &&
- 	    (cmd != COM_GETPORTSTATS) && (cmd != COM_CLRPORTSTATS)) {
+ 	    (cmd != COM_GETPORTSTATS) && (cmd != COM_CLRPORTSTATS))
 		if (tty->flags & (1 << TTY_IO_ERROR))
 			return -EIO;
-	}
 
 	rc = 0;
 
@@ -1557,19 +1298,37 @@ static int stl_ioctl(struct tty_struct *tty, struct file *file, unsigned int cmd
 
 /*****************************************************************************/
 
-static void stl_settermios(struct tty_struct *tty, struct termios *old)
+/*
+ *	Start the transmitter again. Just turn TX interrupts back on.
+ */
+
+static void stl_start(struct tty_struct *tty)
 {
-	stlport_t	*portp;
-	struct termios	*tiosp;
+	struct stlport	*portp;
 
-#ifdef DEBUG
-	printk("stl_settermios(tty=%x,old=%x)\n", (int) tty, (int) old);
-#endif
+	pr_debug("stl_start(tty=%p)\n", tty);
 
-	if (tty == (struct tty_struct *) NULL)
+	if (tty == NULL)
 		return;
 	portp = tty->driver_data;
-	if (portp == (stlport_t *) NULL)
+	if (portp == NULL)
+		return;
+	stl_startrxtx(portp, -1, 1);
+}
+
+/*****************************************************************************/
+
+static void stl_settermios(struct tty_struct *tty, struct ktermios *old)
+{
+	struct stlport	*portp;
+	struct ktermios	*tiosp;
+
+	pr_debug("stl_settermios(tty=%p,old=%p)\n", tty, old);
+
+	if (tty == NULL)
+		return;
+	portp = tty->driver_data;
+	if (portp == NULL)
 		return;
 
 	tiosp = tty->termios;
@@ -1597,16 +1356,14 @@ static void stl_settermios(struct tty_struct *tty, struct termios *old)
 
 static void stl_throttle(struct tty_struct *tty)
 {
-	stlport_t	*portp;
+	struct stlport	*portp;
 
-#ifdef DEBUG
-	printk("stl_throttle(tty=%x)\n", (int) tty);
-#endif
+	pr_debug("stl_throttle(tty=%p)\n", tty);
 
-	if (tty == (struct tty_struct *) NULL)
+	if (tty == NULL)
 		return;
 	portp = tty->driver_data;
-	if (portp == (stlport_t *) NULL)
+	if (portp == NULL)
 		return;
 	stl_flowctrl(portp, 0);
 }
@@ -1619,16 +1376,14 @@ static void stl_throttle(struct tty_struct *tty)
 
 static void stl_unthrottle(struct tty_struct *tty)
 {
-	stlport_t	*portp;
+	struct stlport	*portp;
 
-#ifdef DEBUG
-	printk("stl_unthrottle(tty=%x)\n", (int) tty);
-#endif
+	pr_debug("stl_unthrottle(tty=%p)\n", tty);
 
-	if (tty == (struct tty_struct *) NULL)
+	if (tty == NULL)
 		return;
 	portp = tty->driver_data;
-	if (portp == (stlport_t *) NULL)
+	if (portp == NULL)
 		return;
 	stl_flowctrl(portp, 1);
 }
@@ -1642,40 +1397,16 @@ static void stl_unthrottle(struct tty_struct *tty)
 
 static void stl_stop(struct tty_struct *tty)
 {
-	stlport_t	*portp;
+	struct stlport	*portp;
 
-#ifdef DEBUG
-	printk("stl_stop(tty=%x)\n", (int) tty);
-#endif
+	pr_debug("stl_stop(tty=%p)\n", tty);
 
-	if (tty == (struct tty_struct *) NULL)
+	if (tty == NULL)
 		return;
 	portp = tty->driver_data;
-	if (portp == (stlport_t *) NULL)
+	if (portp == NULL)
 		return;
 	stl_startrxtx(portp, -1, 0);
-}
-
-/*****************************************************************************/
-
-/*
- *	Start the transmitter again. Just turn TX interrupts back on.
- */
-
-static void stl_start(struct tty_struct *tty)
-{
-	stlport_t	*portp;
-
-#ifdef DEBUG
-	printk("stl_start(tty=%x)\n", (int) tty);
-#endif
-
-	if (tty == (struct tty_struct *) NULL)
-		return;
-	portp = tty->driver_data;
-	if (portp == (stlport_t *) NULL)
-		return;
-	stl_startrxtx(portp, -1, 1);
 }
 
 /*****************************************************************************/
@@ -1688,16 +1419,14 @@ static void stl_start(struct tty_struct *tty)
 
 static void stl_hangup(struct tty_struct *tty)
 {
-	stlport_t	*portp;
+	struct stlport	*portp;
 
-#ifdef DEBUG
-	printk("stl_hangup(tty=%x)\n", (int) tty);
-#endif
+	pr_debug("stl_hangup(tty=%p)\n", tty);
 
-	if (tty == (struct tty_struct *) NULL)
+	if (tty == NULL)
 		return;
 	portp = tty->driver_data;
-	if (portp == (stlport_t *) NULL)
+	if (portp == NULL)
 		return;
 
 	portp->flags &= ~ASYNC_INITIALIZED;
@@ -1708,13 +1437,13 @@ static void stl_hangup(struct tty_struct *tty)
 	stl_flushbuffer(tty);
 	portp->istate = 0;
 	set_bit(TTY_IO_ERROR, &tty->flags);
-	if (portp->tx.buf != (char *) NULL) {
+	if (portp->tx.buf != NULL) {
 		kfree(portp->tx.buf);
-		portp->tx.buf = (char *) NULL;
-		portp->tx.head = (char *) NULL;
-		portp->tx.tail = (char *) NULL;
+		portp->tx.buf = NULL;
+		portp->tx.head = NULL;
+		portp->tx.tail = NULL;
 	}
-	portp->tty = (struct tty_struct *) NULL;
+	portp->tty = NULL;
 	portp->flags &= ~ASYNC_NORMAL_ACTIVE;
 	portp->refcount = 0;
 	wake_up_interruptible(&portp->open_wait);
@@ -1722,38 +1451,16 @@ static void stl_hangup(struct tty_struct *tty)
 
 /*****************************************************************************/
 
-static void stl_flushbuffer(struct tty_struct *tty)
-{
-	stlport_t	*portp;
-
-#ifdef DEBUG
-	printk("stl_flushbuffer(tty=%x)\n", (int) tty);
-#endif
-
-	if (tty == (struct tty_struct *) NULL)
-		return;
-	portp = tty->driver_data;
-	if (portp == (stlport_t *) NULL)
-		return;
-
-	stl_flush(portp);
-	tty_wakeup(tty);
-}
-
-/*****************************************************************************/
-
 static void stl_breakctl(struct tty_struct *tty, int state)
 {
-	stlport_t	*portp;
+	struct stlport	*portp;
 
-#ifdef DEBUG
-	printk("stl_breakctl(tty=%x,state=%d)\n", (int) tty, state);
-#endif
+	pr_debug("stl_breakctl(tty=%p,state=%d)\n", tty, state);
 
-	if (tty == (struct tty_struct *) NULL)
+	if (tty == NULL)
 		return;
 	portp = tty->driver_data;
-	if (portp == (stlport_t *) NULL)
+	if (portp == NULL)
 		return;
 
 	stl_sendbreak(portp, ((state == -1) ? 1 : 2));
@@ -1761,48 +1468,16 @@ static void stl_breakctl(struct tty_struct *tty, int state)
 
 /*****************************************************************************/
 
-static void stl_waituntilsent(struct tty_struct *tty, int timeout)
-{
-	stlport_t	*portp;
-	unsigned long	tend;
-
-#ifdef DEBUG
-	printk("stl_waituntilsent(tty=%x,timeout=%d)\n", (int) tty, timeout);
-#endif
-
-	if (tty == (struct tty_struct *) NULL)
-		return;
-	portp = tty->driver_data;
-	if (portp == (stlport_t *) NULL)
-		return;
-
-	if (timeout == 0)
-		timeout = HZ;
-	tend = jiffies + timeout;
-
-	while (stl_datastate(portp)) {
-		if (signal_pending(current))
-			break;
-		msleep_interruptible(20);
-		if (time_after_eq(jiffies, tend))
-			break;
-	}
-}
-
-/*****************************************************************************/
-
 static void stl_sendxchar(struct tty_struct *tty, char ch)
 {
-	stlport_t	*portp;
+	struct stlport	*portp;
 
-#ifdef DEBUG
-	printk("stl_sendxchar(tty=%x,ch=%x)\n", (int) tty, ch);
-#endif
+	pr_debug("stl_sendxchar(tty=%p,ch=%x)\n", tty, ch);
 
-	if (tty == (struct tty_struct *) NULL)
+	if (tty == NULL)
 		return;
 	portp = tty->driver_data;
-	if (portp == (stlport_t *) NULL)
+	if (portp == NULL)
 		return;
 
 	if (ch == STOP_CHAR(tty))
@@ -1823,7 +1498,7 @@ static void stl_sendxchar(struct tty_struct *tty, char ch)
  *	short then padded with spaces).
  */
 
-static int stl_portinfo(stlport_t *portp, int portnr, char *pos)
+static int stl_portinfo(struct stlport *portp, int portnr, char *pos)
 {
 	char	*sp;
 	int	sigs, cnt;
@@ -1852,7 +1527,7 @@ static int stl_portinfo(stlport_t *portp, int portnr, char *pos)
 	*sp = ' ';
 	sp += cnt;
 
-	for (cnt = (sp - pos); (cnt < (MAXLINE - 1)); cnt++)
+	for (cnt = sp - pos; cnt < (MAXLINE - 1); cnt++)
 		*sp++ = ' ';
 	if (cnt >= MAXLINE)
 		pos[(MAXLINE - 2)] = '+';
@@ -1869,18 +1544,15 @@ static int stl_portinfo(stlport_t *portp, int portnr, char *pos)
 
 static int stl_readproc(char *page, char **start, off_t off, int count, int *eof, void *data)
 {
-	stlbrd_t	*brdp;
-	stlpanel_t	*panelp;
-	stlport_t	*portp;
-	int		brdnr, panelnr, portnr, totalport;
-	int		curoff, maxoff;
+	struct stlbrd	*brdp;
+	struct stlpanel	*panelp;
+	struct stlport	*portp;
+	unsigned int	brdnr, panelnr, portnr;
+	int		totalport, curoff, maxoff;
 	char		*pos;
 
-#ifdef DEBUG
-	printk("stl_readproc(page=%x,start=%x,off=%x,count=%d,eof=%x,"
-		"data=%x\n", (int) page, (int) start, (int) off, count,
-		(int) eof, (int) data);
-#endif
+	pr_debug("stl_readproc(page=%p,start=%p,off=%lx,count=%d,eof=%p,"
+		"data=%p\n", page, start, off, count, eof, data);
 
 	pos = page;
 	totalport = 0;
@@ -1899,9 +1571,9 @@ static int stl_readproc(char *page, char **start, off_t off, int count, int *eof
  *	We scan through for each board, panel and port. The offset is
  *	calculated on the fly, and irrelevant ports are skipped.
  */
-	for (brdnr = 0; (brdnr < stl_nrbrds); brdnr++) {
+	for (brdnr = 0; brdnr < stl_nrbrds; brdnr++) {
 		brdp = stl_brds[brdnr];
-		if (brdp == (stlbrd_t *) NULL)
+		if (brdp == NULL)
 			continue;
 		if (brdp->state == 0)
 			continue;
@@ -1913,9 +1585,9 @@ static int stl_readproc(char *page, char **start, off_t off, int count, int *eof
 		}
 
 		totalport = brdnr * STL_MAXPORTS;
-		for (panelnr = 0; (panelnr < brdp->nrpanels); panelnr++) {
+		for (panelnr = 0; panelnr < brdp->nrpanels; panelnr++) {
 			panelp = brdp->panels[panelnr];
-			if (panelp == (stlpanel_t *) NULL)
+			if (panelp == NULL)
 				continue;
 
 			maxoff = curoff + (panelp->nrports * MAXLINE);
@@ -1925,10 +1597,10 @@ static int stl_readproc(char *page, char **start, off_t off, int count, int *eof
 				continue;
 			}
 
-			for (portnr = 0; (portnr < panelp->nrports); portnr++,
+			for (portnr = 0; portnr < panelp->nrports; portnr++,
 			    totalport++) {
 				portp = panelp->ports[portnr];
-				if (portp == (stlport_t *) NULL)
+				if (portp == NULL)
 					continue;
 				if (off >= (curoff += MAXLINE))
 					continue;
@@ -1943,7 +1615,7 @@ static int stl_readproc(char *page, char **start, off_t off, int count, int *eof
 
 stl_readdone:
 	*start = page;
-	return (pos - page);
+	return pos - page;
 }
 
 /*****************************************************************************/
@@ -1953,14 +1625,11 @@ stl_readdone:
  *	calls off to the approrpriate board interrupt handlers.
  */
 
-static irqreturn_t stl_intr(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t stl_intr(int irq, void *dev_id)
 {
-	stlbrd_t	*brdp = (stlbrd_t *) dev_id;
+	struct stlbrd *brdp = dev_id;
 
-#ifdef DEBUG
-	printk("stl_intr(brdp=%x,irq=%d,regs=%x)\n", (int) brdp, irq,
-	    (int) regs);
-#endif
+	pr_debug("stl_intr(brdp=%p,irq=%d)\n", brdp, irq);
 
 	return IRQ_RETVAL((* brdp->isr)(brdp));
 }
@@ -1971,18 +1640,20 @@ static irqreturn_t stl_intr(int irq, void *dev_id, struct pt_regs *regs)
  *	Interrupt service routine for EasyIO board types.
  */
 
-static int stl_eiointr(stlbrd_t *brdp)
+static int stl_eiointr(struct stlbrd *brdp)
 {
-	stlpanel_t	*panelp;
+	struct stlpanel	*panelp;
 	unsigned int	iobase;
 	int		handled = 0;
 
+	spin_lock(&brd_lock);
 	panelp = brdp->panels[0];
 	iobase = panelp->iobase;
 	while (inb(brdp->iostatus) & EIO_INTRPEND) {
 		handled = 1;
 		(* panelp->isr)(panelp, iobase);
 	}
+	spin_unlock(&brd_lock);
 	return handled;
 }
 
@@ -1992,18 +1663,17 @@ static int stl_eiointr(stlbrd_t *brdp)
  *	Interrupt service routine for ECH-AT board types.
  */
 
-static int stl_echatintr(stlbrd_t *brdp)
+static int stl_echatintr(struct stlbrd *brdp)
 {
-	stlpanel_t	*panelp;
-	unsigned int	ioaddr;
-	int		bnknr;
+	struct stlpanel	*panelp;
+	unsigned int	ioaddr, bnknr;
 	int		handled = 0;
 
 	outb((brdp->ioctrlval | ECH_BRDENABLE), brdp->ioctrl);
 
 	while (inb(brdp->iostatus) & ECH_INTRPEND) {
 		handled = 1;
-		for (bnknr = 0; (bnknr < brdp->nrbnks); bnknr++) {
+		for (bnknr = 0; bnknr < brdp->nrbnks; bnknr++) {
 			ioaddr = brdp->bnkstataddr[bnknr];
 			if (inb(ioaddr) & ECH_PNLINTRPEND) {
 				panelp = brdp->bnk2panel[bnknr];
@@ -2023,16 +1693,15 @@ static int stl_echatintr(stlbrd_t *brdp)
  *	Interrupt service routine for ECH-MCA board types.
  */
 
-static int stl_echmcaintr(stlbrd_t *brdp)
+static int stl_echmcaintr(struct stlbrd *brdp)
 {
-	stlpanel_t	*panelp;
-	unsigned int	ioaddr;
-	int		bnknr;
+	struct stlpanel	*panelp;
+	unsigned int	ioaddr, bnknr;
 	int		handled = 0;
 
 	while (inb(brdp->iostatus) & ECH_INTRPEND) {
 		handled = 1;
-		for (bnknr = 0; (bnknr < brdp->nrbnks); bnknr++) {
+		for (bnknr = 0; bnknr < brdp->nrbnks; bnknr++) {
 			ioaddr = brdp->bnkstataddr[bnknr];
 			if (inb(ioaddr) & ECH_PNLINTRPEND) {
 				panelp = brdp->bnk2panel[bnknr];
@@ -2049,16 +1718,15 @@ static int stl_echmcaintr(stlbrd_t *brdp)
  *	Interrupt service routine for ECH-PCI board types.
  */
 
-static int stl_echpciintr(stlbrd_t *brdp)
+static int stl_echpciintr(struct stlbrd *brdp)
 {
-	stlpanel_t	*panelp;
-	unsigned int	ioaddr;
-	int		bnknr, recheck;
+	struct stlpanel	*panelp;
+	unsigned int	ioaddr, bnknr, recheck;
 	int		handled = 0;
 
 	while (1) {
 		recheck = 0;
-		for (bnknr = 0; (bnknr < brdp->nrbnks); bnknr++) {
+		for (bnknr = 0; bnknr < brdp->nrbnks; bnknr++) {
 			outb(brdp->bnkpageaddr[bnknr], brdp->ioctrl);
 			ioaddr = brdp->bnkstataddr[bnknr];
 			if (inb(ioaddr) & ECH_PNLINTRPEND) {
@@ -2080,16 +1748,15 @@ static int stl_echpciintr(stlbrd_t *brdp)
  *	Interrupt service routine for ECH-8/64-PCI board types.
  */
 
-static int stl_echpci64intr(stlbrd_t *brdp)
+static int stl_echpci64intr(struct stlbrd *brdp)
 {
-	stlpanel_t	*panelp;
-	unsigned int	ioaddr;
-	int		bnknr;
+	struct stlpanel	*panelp;
+	unsigned int	ioaddr, bnknr;
 	int		handled = 0;
 
 	while (inb(brdp->ioctrl) & 0x1) {
 		handled = 1;
-		for (bnknr = 0; (bnknr < brdp->nrbnks); bnknr++) {
+		for (bnknr = 0; bnknr < brdp->nrbnks; bnknr++) {
 			ioaddr = brdp->bnkstataddr[bnknr];
 			if (inb(ioaddr) & ECH_PNLINTRPEND) {
 				panelp = brdp->bnk2panel[bnknr];
@@ -2106,39 +1773,34 @@ static int stl_echpci64intr(stlbrd_t *brdp)
 /*
  *	Service an off-level request for some channel.
  */
-static void stl_offintr(void *private)
+static void stl_offintr(struct work_struct *work)
 {
-	stlport_t		*portp;
+	struct stlport		*portp = container_of(work, struct stlport, tqueue);
 	struct tty_struct	*tty;
 	unsigned int		oldsigs;
 
-	portp = private;
+	pr_debug("stl_offintr(portp=%p)\n", portp);
 
-#ifdef DEBUG
-	printk("stl_offintr(portp=%x)\n", (int) portp);
-#endif
-
-	if (portp == (stlport_t *) NULL)
+	if (portp == NULL)
 		return;
 
 	tty = portp->tty;
-	if (tty == (struct tty_struct *) NULL)
+	if (tty == NULL)
 		return;
 
 	lock_kernel();
-	if (test_bit(ASYI_TXLOW, &portp->istate)) {
+	if (test_bit(ASYI_TXLOW, &portp->istate))
 		tty_wakeup(tty);
-	}
+
 	if (test_bit(ASYI_DCDCHANGE, &portp->istate)) {
 		clear_bit(ASYI_DCDCHANGE, &portp->istate);
 		oldsigs = portp->sigs;
 		portp->sigs = stl_getsignals(portp);
 		if ((portp->sigs & TIOCM_CD) && ((oldsigs & TIOCM_CD) == 0))
 			wake_up_interruptible(&portp->open_wait);
-		if ((oldsigs & TIOCM_CD) && ((portp->sigs & TIOCM_CD) == 0)) {
+		if ((oldsigs & TIOCM_CD) && ((portp->sigs & TIOCM_CD) == 0))
 			if (portp->flags & ASYNC_CHECK_CD)
 				tty_hangup(tty);	/* FIXME: module removal race here - AKPM */
-		}
 	}
 	unlock_kernel();
 }
@@ -2149,14 +1811,13 @@ static void stl_offintr(void *private)
  *	Initialize all the ports on a panel.
  */
 
-static int __init stl_initports(stlbrd_t *brdp, stlpanel_t *panelp)
+static int __devinit stl_initports(struct stlbrd *brdp, struct stlpanel *panelp)
 {
-	stlport_t	*portp;
-	int		chipmask, i;
+	struct stlport *portp;
+	unsigned int i;
+	int chipmask;
 
-#ifdef DEBUG
-	printk("stl_initports(brdp=%x,panelp=%x)\n", (int) brdp, (int) panelp);
-#endif
+	pr_debug("stl_initports(brdp=%p,panelp=%p)\n", brdp, panelp);
 
 	chipmask = stl_panelinit(brdp, panelp);
 
@@ -2164,11 +1825,11 @@ static int __init stl_initports(stlbrd_t *brdp, stlpanel_t *panelp)
  *	All UART's are initialized (if found!). Now go through and setup
  *	each ports data structures.
  */
-	for (i = 0; (i < panelp->nrports); i++) {
-		portp = kzalloc(sizeof(stlport_t), GFP_KERNEL);
+	for (i = 0; i < panelp->nrports; i++) {
+		portp = kzalloc(sizeof(struct stlport), GFP_KERNEL);
 		if (!portp) {
 			printk("STALLION: failed to allocate memory "
-				"(size=%d)\n", sizeof(stlport_t));
+				"(size=%Zd)\n", sizeof(struct stlport));
 			break;
 		}
 
@@ -2181,7 +1842,7 @@ static int __init stl_initports(stlbrd_t *brdp, stlpanel_t *panelp)
 		portp->baud_base = STL_BAUDBASE;
 		portp->close_delay = STL_CLOSEDELAY;
 		portp->closing_wait = 30 * HZ;
-		INIT_WORK(&portp->tqueue, stl_offintr, portp);
+		INIT_WORK(&portp->tqueue, stl_offintr);
 		init_waitqueue_head(&portp->open_wait);
 		init_waitqueue_head(&portp->close_wait);
 		portp->stats.brd = portp->brdnr;
@@ -2191,7 +1852,30 @@ static int __init stl_initports(stlbrd_t *brdp, stlpanel_t *panelp)
 		stl_portinit(brdp, panelp, portp);
 	}
 
-	return(0);
+	return 0;
+}
+
+static void stl_cleanup_panels(struct stlbrd *brdp)
+{
+	struct stlpanel *panelp;
+	struct stlport *portp;
+	unsigned int j, k;
+
+	for (j = 0; j < STL_MAXPANELS; j++) {
+		panelp = brdp->panels[j];
+		if (panelp == NULL)
+			continue;
+		for (k = 0; k < STL_PORTSPERPANEL; k++) {
+			portp = panelp->ports[k];
+			if (portp == NULL)
+				continue;
+			if (portp->tty != NULL)
+				stl_hangup(portp->tty);
+			kfree(portp->tx.buf);
+			kfree(portp);
+		}
+		kfree(panelp);
+	}
 }
 
 /*****************************************************************************/
@@ -2200,16 +1884,14 @@ static int __init stl_initports(stlbrd_t *brdp, stlpanel_t *panelp)
  *	Try to find and initialize an EasyIO board.
  */
 
-static inline int stl_initeio(stlbrd_t *brdp)
+static int __devinit stl_initeio(struct stlbrd *brdp)
 {
-	stlpanel_t	*panelp;
+	struct stlpanel	*panelp;
 	unsigned int	status;
 	char		*name;
-	int		rc;
+	int		retval;
 
-#ifdef DEBUG
-	printk("stl_initeio(brdp=%x)\n", (int) brdp);
-#endif
+	pr_debug("stl_initeio(brdp=%p)\n", brdp);
 
 	brdp->ioctrl = brdp->ioaddr1 + 1;
 	brdp->iostatus = brdp->ioaddr1 + 2;
@@ -2234,18 +1916,20 @@ static inline int stl_initeio(stlbrd_t *brdp)
 		    (stl_vecmap[brdp->irq] == (unsigned char) 0xff)) {
 			printk("STALLION: invalid irq=%d for brd=%d\n",
 				brdp->irq, brdp->brdnr);
-			return(-EINVAL);
+			retval = -EINVAL;
+			goto err;
 		}
 		outb((stl_vecmap[brdp->irq] | EIO_0WS |
 			((brdp->irqtype) ? EIO_INTLEVEL : EIO_INTEDGE)),
 			brdp->ioctrl);
 	}
 
+	retval = -EBUSY;
 	if (!request_region(brdp->ioaddr1, brdp->iosize1, name)) {
 		printk(KERN_WARNING "STALLION: Warning, board %d I/O address "
 			"%x conflicts with another device\n", brdp->brdnr, 
 			brdp->ioaddr1);
-		return(-EBUSY);
+		goto err;
 	}
 	
 	if (brdp->iosize2 > 0)
@@ -2256,8 +1940,7 @@ static inline int stl_initeio(stlbrd_t *brdp)
 			printk(KERN_WARNING "STALLION: Warning, also "
 				"releasing board %d I/O address %x \n", 
 				brdp->brdnr, brdp->ioaddr1);
-			release_region(brdp->ioaddr1, brdp->iosize1);
-        		return(-EBUSY);
+			goto err_rel1;
 		}
 
 /*
@@ -2266,6 +1949,7 @@ static inline int stl_initeio(stlbrd_t *brdp)
 	brdp->clk = CD1400_CLK;
 	brdp->isr = stl_eiointr;
 
+	retval = -ENODEV;
 	switch (status & EIO_IDBITMASK) {
 	case EIO_8PORTM:
 		brdp->clk = CD1400_CLK8M;
@@ -2289,11 +1973,11 @@ static inline int stl_initeio(stlbrd_t *brdp)
 			brdp->nrports = 16;
 			break;
 		default:
-			return(-ENODEV);
+			goto err_rel2;
 		}
 		break;
 	default:
-		return(-ENODEV);
+		goto err_rel2;
 	}
 
 /*
@@ -2301,11 +1985,12 @@ static inline int stl_initeio(stlbrd_t *brdp)
  *	can complete the setup.
  */
 
-	panelp = kzalloc(sizeof(stlpanel_t), GFP_KERNEL);
+	panelp = kzalloc(sizeof(struct stlpanel), GFP_KERNEL);
 	if (!panelp) {
 		printk(KERN_WARNING "STALLION: failed to allocate memory "
-			"(size=%d)\n", sizeof(stlpanel_t));
-		return -ENOMEM;
+			"(size=%Zd)\n", sizeof(struct stlpanel));
+		retval = -ENOMEM;
+		goto err_rel2;
 	}
 
 	panelp->magic = STL_PANELMAGIC;
@@ -2315,10 +2000,10 @@ static inline int stl_initeio(stlbrd_t *brdp)
 	panelp->iobase = brdp->ioaddr1;
 	panelp->hwid = status;
 	if ((status & EIO_IDBITMASK) == EIO_MK3) {
-		panelp->uartp = (void *) &stl_sc26198uart;
+		panelp->uartp = &stl_sc26198uart;
 		panelp->isr = stl_sc26198intr;
 	} else {
-		panelp->uartp = (void *) &stl_cd1400uart;
+		panelp->uartp = &stl_cd1400uart;
 		panelp->isr = stl_cd1400eiointr;
 	}
 
@@ -2326,14 +2011,23 @@ static inline int stl_initeio(stlbrd_t *brdp)
 	brdp->nrpanels = 1;
 	brdp->state |= BRD_FOUND;
 	brdp->hwid = status;
-	if (request_irq(brdp->irq, stl_intr, SA_SHIRQ, name, brdp) != 0) {
+	if (request_irq(brdp->irq, stl_intr, IRQF_SHARED, name, brdp) != 0) {
 		printk("STALLION: failed to register interrupt "
 		    "routine for %s irq=%d\n", name, brdp->irq);
-		rc = -ENODEV;
-	} else {
-		rc = 0;
+		retval = -ENODEV;
+		goto err_fr;
 	}
-	return rc;
+
+	return 0;
+err_fr:
+	stl_cleanup_panels(brdp);
+err_rel2:
+	if (brdp->iosize2 > 0)
+		release_region(brdp->ioaddr2, brdp->iosize2);
+err_rel1:
+	release_region(brdp->ioaddr1, brdp->iosize1);
+err:
+	return retval;
 }
 
 /*****************************************************************************/
@@ -2343,16 +2037,14 @@ static inline int stl_initeio(stlbrd_t *brdp)
  *	dealing with all types of ECH board.
  */
 
-static inline int stl_initech(stlbrd_t *brdp)
+static int __devinit stl_initech(struct stlbrd *brdp)
 {
-	stlpanel_t	*panelp;
-	unsigned int	status, nxtid, ioaddr, conflict;
-	int		panelnr, banknr, i;
+	struct stlpanel	*panelp;
+	unsigned int	status, nxtid, ioaddr, conflict, panelnr, banknr, i;
+	int		retval;
 	char		*name;
 
-#ifdef DEBUG
-	printk("stl_initech(brdp=%x)\n", (int) brdp);
-#endif
+	pr_debug("stl_initech(brdp=%p)\n", brdp);
 
 	status = 0;
 	conflict = 0;
@@ -2369,20 +2061,23 @@ static inline int stl_initech(stlbrd_t *brdp)
 		brdp->ioctrl = brdp->ioaddr1 + 1;
 		brdp->iostatus = brdp->ioaddr1 + 1;
 		status = inb(brdp->iostatus);
-		if ((status & ECH_IDBITMASK) != ECH_ID)
-			return(-ENODEV);
+		if ((status & ECH_IDBITMASK) != ECH_ID) {
+			retval = -ENODEV;
+			goto err;
+		}
 		if ((brdp->irq < 0) || (brdp->irq > 15) ||
 		    (stl_vecmap[brdp->irq] == (unsigned char) 0xff)) {
 			printk("STALLION: invalid irq=%d for brd=%d\n",
 				brdp->irq, brdp->brdnr);
-			return(-EINVAL);
+			retval = -EINVAL;
+			goto err;
 		}
 		status = ((brdp->ioaddr2 & ECH_ADDR2MASK) >> 1);
 		status |= (stl_vecmap[brdp->irq] << 1);
 		outb((status | ECH_BRDRESET), brdp->ioaddr1);
 		brdp->ioctrlval = ECH_INTENABLE |
 			((brdp->irqtype) ? ECH_INTLEVEL : ECH_INTEDGE);
-		for (i = 0; (i < 10); i++)
+		for (i = 0; i < 10; i++)
 			outb((brdp->ioctrlval | ECH_BRDENABLE), brdp->ioctrl);
 		brdp->iosize1 = 2;
 		brdp->iosize2 = 32;
@@ -2395,13 +2090,16 @@ static inline int stl_initech(stlbrd_t *brdp)
 		brdp->ioctrl = brdp->ioaddr1 + 0x20;
 		brdp->iostatus = brdp->ioctrl;
 		status = inb(brdp->iostatus);
-		if ((status & ECH_IDBITMASK) != ECH_ID)
-			return(-ENODEV);
+		if ((status & ECH_IDBITMASK) != ECH_ID) {
+			retval = -ENODEV;
+			goto err;
+		}
 		if ((brdp->irq < 0) || (brdp->irq > 15) ||
 		    (stl_vecmap[brdp->irq] == (unsigned char) 0xff)) {
 			printk("STALLION: invalid irq=%d for brd=%d\n",
 				brdp->irq, brdp->brdnr);
-			return(-EINVAL);
+			retval = -EINVAL;
+			goto err;
 		}
 		outb(ECHMC_BRDRESET, brdp->ioctrl);
 		outb(ECHMC_INTENABLE, brdp->ioctrl);
@@ -2428,19 +2126,20 @@ static inline int stl_initech(stlbrd_t *brdp)
 
 	default:
 		printk("STALLION: unknown board type=%d\n", brdp->brdtype);
-		return(-EINVAL);
-		break;
+		retval = -EINVAL;
+		goto err;
 	}
 
 /*
  *	Check boards for possible IO address conflicts and return fail status 
  * 	if an IO conflict found.
  */
+	retval = -EBUSY;
 	if (!request_region(brdp->ioaddr1, brdp->iosize1, name)) {
 		printk(KERN_WARNING "STALLION: Warning, board %d I/O address "
 			"%x conflicts with another device\n", brdp->brdnr, 
 			brdp->ioaddr1);
-		return(-EBUSY);
+		goto err;
 	}
 	
 	if (brdp->iosize2 > 0)
@@ -2451,8 +2150,7 @@ static inline int stl_initech(stlbrd_t *brdp)
 			printk(KERN_WARNING "STALLION: Warning, also "
 				"releasing board %d I/O address %x \n", 
 				brdp->brdnr, brdp->ioaddr1);
-			release_region(brdp->ioaddr1, brdp->iosize1);
-			return(-EBUSY);
+			goto err_rel1;
 		}
 
 /*
@@ -2467,19 +2165,19 @@ static inline int stl_initech(stlbrd_t *brdp)
 	panelnr = 0;
 	nxtid = 0;
 
-	for (i = 0; (i < STL_MAXPANELS); i++) {
+	for (i = 0; i < STL_MAXPANELS; i++) {
 		if (brdp->brdtype == BRD_ECHPCI) {
 			outb(nxtid, brdp->ioctrl);
 			ioaddr = brdp->ioaddr2;
 		}
 		status = inb(ioaddr + ECH_PNLSTATUS);
 		if ((status & ECH_PNLIDMASK) != nxtid)
-			break;
-		panelp = kzalloc(sizeof(stlpanel_t), GFP_KERNEL);
+			goto err_fr;
+		panelp = kzalloc(sizeof(struct stlpanel), GFP_KERNEL);
 		if (!panelp) {
 			printk("STALLION: failed to allocate memory "
-				"(size=%d)\n", sizeof(stlpanel_t));
-			break;
+				"(size=%Zd)\n", sizeof(struct stlpanel));
+			goto err_fr;
 		}
 		panelp->magic = STL_PANELMAGIC;
 		panelp->brdnr = brdp->brdnr;
@@ -2492,7 +2190,7 @@ static inline int stl_initech(stlbrd_t *brdp)
 		brdp->bnkstataddr[banknr++] = ioaddr + ECH_PNLSTATUS;
 
 		if (status & ECH_PNLXPID) {
-			panelp->uartp = (void *) &stl_sc26198uart;
+			panelp->uartp = &stl_sc26198uart;
 			panelp->isr = stl_sc26198intr;
 			if (status & ECH_PNL16PORT) {
 				panelp->nrports = 16;
@@ -2500,11 +2198,10 @@ static inline int stl_initech(stlbrd_t *brdp)
 				brdp->bnkpageaddr[banknr] = nxtid;
 				brdp->bnkstataddr[banknr++] = ioaddr + 4 +
 					ECH_PNLSTATUS;
-			} else {
+			} else
 				panelp->nrports = 8;
-			}
 		} else {
-			panelp->uartp = (void *) &stl_cd1400uart;
+			panelp->uartp = &stl_cd1400uart;
 			panelp->isr = stl_cd1400echintr;
 			if (status & ECH_PNL16PORT) {
 				panelp->nrports = 16;
@@ -2527,7 +2224,7 @@ static inline int stl_initech(stlbrd_t *brdp)
 		brdp->panels[panelnr++] = panelp;
 		if ((brdp->brdtype != BRD_ECHPCI) &&
 		    (ioaddr >= (brdp->ioaddr2 + brdp->iosize2)))
-			break;
+			goto err_fr;
 	}
 
 	brdp->nrpanels = panelnr;
@@ -2536,15 +2233,22 @@ static inline int stl_initech(stlbrd_t *brdp)
 		outb((brdp->ioctrlval | ECH_BRDDISABLE), brdp->ioctrl);
 
 	brdp->state |= BRD_FOUND;
-	if (request_irq(brdp->irq, stl_intr, SA_SHIRQ, name, brdp) != 0) {
+	if (request_irq(brdp->irq, stl_intr, IRQF_SHARED, name, brdp) != 0) {
 		printk("STALLION: failed to register interrupt "
 		    "routine for %s irq=%d\n", name, brdp->irq);
-		i = -ENODEV;
-	} else {
-		i = 0;
+		retval = -ENODEV;
+		goto err_fr;
 	}
 
-	return(i);
+	return 0;
+err_fr:
+	stl_cleanup_panels(brdp);
+	if (brdp->iosize2 > 0)
+		release_region(brdp->ioaddr2, brdp->iosize2);
+err_rel1:
+	release_region(brdp->ioaddr1, brdp->iosize1);
+err:
+	return retval;
 }
 
 /*****************************************************************************/
@@ -2556,48 +2260,61 @@ static inline int stl_initech(stlbrd_t *brdp)
  *	since the initial search and setup is very different.
  */
 
-static int __init stl_brdinit(stlbrd_t *brdp)
+static int __devinit stl_brdinit(struct stlbrd *brdp)
 {
-	int	i;
+	int i, retval;
 
-#ifdef DEBUG
-	printk("stl_brdinit(brdp=%x)\n", (int) brdp);
-#endif
+	pr_debug("stl_brdinit(brdp=%p)\n", brdp);
 
 	switch (brdp->brdtype) {
 	case BRD_EASYIO:
 	case BRD_EASYIOPCI:
-		stl_initeio(brdp);
+		retval = stl_initeio(brdp);
+		if (retval)
+			goto err;
 		break;
 	case BRD_ECH:
 	case BRD_ECHMC:
 	case BRD_ECHPCI:
 	case BRD_ECH64PCI:
-		stl_initech(brdp);
+		retval = stl_initech(brdp);
+		if (retval)
+			goto err;
 		break;
 	default:
 		printk("STALLION: board=%d is unknown board type=%d\n",
 			brdp->brdnr, brdp->brdtype);
-		return(ENODEV);
+		retval = -ENODEV;
+		goto err;
 	}
 
-	stl_brds[brdp->brdnr] = brdp;
 	if ((brdp->state & BRD_FOUND) == 0) {
 		printk("STALLION: %s board not found, board=%d io=%x irq=%d\n",
 			stl_brdnames[brdp->brdtype], brdp->brdnr,
 			brdp->ioaddr1, brdp->irq);
-		return(ENODEV);
+		goto err_free;
 	}
 
-	for (i = 0; (i < STL_MAXPANELS); i++)
-		if (brdp->panels[i] != (stlpanel_t *) NULL)
+	for (i = 0; i < STL_MAXPANELS; i++)
+		if (brdp->panels[i] != NULL)
 			stl_initports(brdp, brdp->panels[i]);
 
 	printk("STALLION: %s found, board=%d io=%x irq=%d "
 		"nrpanels=%d nrports=%d\n", stl_brdnames[brdp->brdtype],
 		brdp->brdnr, brdp->ioaddr1, brdp->irq, brdp->nrpanels,
 		brdp->nrports);
-	return(0);
+
+	return 0;
+err_free:
+	free_irq(brdp->irq, brdp);
+
+	stl_cleanup_panels(brdp);
+
+	release_region(brdp->ioaddr1, brdp->iosize1);
+	if (brdp->iosize2 > 0)
+		release_region(brdp->ioaddr2, brdp->iosize2);
+err:
+	return retval;
 }
 
 /*****************************************************************************/
@@ -2606,59 +2323,62 @@ static int __init stl_brdinit(stlbrd_t *brdp)
  *	Find the next available board number that is free.
  */
 
-static inline int stl_getbrdnr(void)
+static int __devinit stl_getbrdnr(void)
 {
-	int	i;
+	unsigned int i;
 
-	for (i = 0; (i < STL_MAXBRDS); i++) {
-		if (stl_brds[i] == (stlbrd_t *) NULL) {
+	for (i = 0; i < STL_MAXBRDS; i++)
+		if (stl_brds[i] == NULL) {
 			if (i >= stl_nrbrds)
 				stl_nrbrds = i + 1;
-			return(i);
+			return i;
 		}
-	}
-	return(-1);
+
+	return -1;
 }
 
 /*****************************************************************************/
-
-#ifdef	CONFIG_PCI
-
 /*
  *	We have a Stallion board. Allocate a board structure and
  *	initialize it. Read its IO and IRQ resources from PCI
  *	configuration space.
  */
 
-static inline int stl_initpcibrd(int brdtype, struct pci_dev *devp)
+static int __devinit stl_pciprobe(struct pci_dev *pdev,
+		const struct pci_device_id *ent)
 {
-	stlbrd_t	*brdp;
+	struct stlbrd *brdp;
+	unsigned int i, brdtype = ent->driver_data;
+	int brdnr, retval = -ENODEV;
 
-#ifdef DEBUG
-	printk("stl_initpcibrd(brdtype=%d,busnr=%x,devnr=%x)\n", brdtype,
-		devp->bus->number, devp->devfn);
-#endif
+	if ((pdev->class >> 8) == PCI_CLASS_STORAGE_IDE)
+		goto err;
 
-	if (pci_enable_device(devp))
-		return(-EIO);
-	if ((brdp = stl_allocbrd()) == (stlbrd_t *) NULL)
-		return(-ENOMEM);
-	if ((brdp->brdnr = stl_getbrdnr()) < 0) {
-		printk("STALLION: too many boards found, "
-			"maximum supported %d\n", STL_MAXBRDS);
-		return(0);
+	dev_info(&pdev->dev, "please, report this to LKML: %x/%x/%x\n",
+			pdev->vendor, pdev->device, pdev->class);
+
+	retval = pci_enable_device(pdev);
+	if (retval)
+		goto err;
+	brdp = stl_allocbrd();
+	if (brdp == NULL) {
+		retval = -ENOMEM;
+		goto err;
 	}
-	brdp->brdtype = brdtype;
+	mutex_lock(&stl_brdslock);
+	brdnr = stl_getbrdnr();
+	if (brdnr < 0) {
+		dev_err(&pdev->dev, "too many boards found, "
+			"maximum supported %d\n", STL_MAXBRDS);
+		mutex_unlock(&stl_brdslock);
+		goto err_fr;
+	}
+	brdp->brdnr = (unsigned int)brdnr;
+	stl_brds[brdp->brdnr] = brdp;
+	mutex_unlock(&stl_brdslock);
 
-/*
- *	Different Stallion boards use the BAR registers in different ways,
- *	so set up io addresses based on board type.
- */
-#ifdef DEBUG
-	printk("%s(%d): BAR[]=%x,%x,%x,%x IRQ=%x\n", __FILE__, __LINE__,
-		pci_resource_start(devp, 0), pci_resource_start(devp, 1),
-		pci_resource_start(devp, 2), pci_resource_start(devp, 3), devp->irq);
-#endif
+	brdp->brdtype = brdtype;
+	brdp->state |= STL_PROBED;
 
 /*
  *	We have all resources from the board, so let's setup the actual
@@ -2666,119 +2386,69 @@ static inline int stl_initpcibrd(int brdtype, struct pci_dev *devp)
  */
 	switch (brdtype) {
 	case BRD_ECHPCI:
-		brdp->ioaddr2 = pci_resource_start(devp, 0);
-		brdp->ioaddr1 = pci_resource_start(devp, 1);
+		brdp->ioaddr2 = pci_resource_start(pdev, 0);
+		brdp->ioaddr1 = pci_resource_start(pdev, 1);
 		break;
 	case BRD_ECH64PCI:
-		brdp->ioaddr2 = pci_resource_start(devp, 2);
-		brdp->ioaddr1 = pci_resource_start(devp, 1);
+		brdp->ioaddr2 = pci_resource_start(pdev, 2);
+		brdp->ioaddr1 = pci_resource_start(pdev, 1);
 		break;
 	case BRD_EASYIOPCI:
-		brdp->ioaddr1 = pci_resource_start(devp, 2);
-		brdp->ioaddr2 = pci_resource_start(devp, 1);
+		brdp->ioaddr1 = pci_resource_start(pdev, 2);
+		brdp->ioaddr2 = pci_resource_start(pdev, 1);
 		break;
 	default:
-		printk("STALLION: unknown PCI board type=%d\n", brdtype);
+		dev_err(&pdev->dev, "unknown PCI board type=%u\n", brdtype);
 		break;
 	}
 
-	brdp->irq = devp->irq;
-	stl_brdinit(brdp);
+	brdp->irq = pdev->irq;
+	retval = stl_brdinit(brdp);
+	if (retval)
+		goto err_null;
 
-	return(0);
+	pci_set_drvdata(pdev, brdp);
+
+	for (i = 0; i < brdp->nrports; i++)
+		tty_register_device(stl_serial,
+				brdp->brdnr * STL_MAXPORTS + i, &pdev->dev);
+
+	return 0;
+err_null:
+	stl_brds[brdp->brdnr] = NULL;
+err_fr:
+	kfree(brdp);
+err:
+	return retval;
 }
 
-/*****************************************************************************/
-
-/*
- *	Find all Stallion PCI boards that might be installed. Initialize each
- *	one as it is found.
- */
-
-
-static inline int stl_findpcibrds(void)
+static void __devexit stl_pciremove(struct pci_dev *pdev)
 {
-	struct pci_dev	*dev = NULL;
-	int		i, rc;
+	struct stlbrd *brdp = pci_get_drvdata(pdev);
+	unsigned int i;
 
-#ifdef DEBUG
-	printk("stl_findpcibrds()\n");
-#endif
+	free_irq(brdp->irq, brdp);
 
-	for (i = 0; (i < stl_nrpcibrds); i++)
-		while ((dev = pci_find_device(stl_pcibrds[i].vendid,
-		    stl_pcibrds[i].devid, dev))) {
+	stl_cleanup_panels(brdp);
 
-/*
- *			Found a device on the PCI bus that has our vendor and
- *			device ID. Need to check now that it is really us.
- */
-			if ((dev->class >> 8) == PCI_CLASS_STORAGE_IDE)
-				continue;
+	release_region(brdp->ioaddr1, brdp->iosize1);
+	if (brdp->iosize2 > 0)
+		release_region(brdp->ioaddr2, brdp->iosize2);
 
-			rc = stl_initpcibrd(stl_pcibrds[i].brdtype, dev);
-			if (rc)
-				return(rc);
-		}
+	for (i = 0; i < brdp->nrports; i++)
+		tty_unregister_device(stl_serial,
+				brdp->brdnr * STL_MAXPORTS + i);
 
-	return(0);
+	stl_brds[brdp->brdnr] = NULL;
+	kfree(brdp);
 }
 
-#endif
-
-/*****************************************************************************/
-
-/*
- *	Scan through all the boards in the configuration and see what we
- *	can find. Handle EIO and the ECH boards a little differently here
- *	since the initial search and setup is too different.
- */
-
-static inline int stl_initbrds(void)
-{
-	stlbrd_t	*brdp;
-	stlconf_t	*confp;
-	int		i;
-
-#ifdef DEBUG
-	printk("stl_initbrds()\n");
-#endif
-
-	if (stl_nrbrds > STL_MAXBRDS) {
-		printk("STALLION: too many boards in configuration table, "
-			"truncating to %d\n", STL_MAXBRDS);
-		stl_nrbrds = STL_MAXBRDS;
-	}
-
-/*
- *	Firstly scan the list of static boards configured. Allocate
- *	resources and initialize the boards as found.
- */
-	for (i = 0; (i < stl_nrbrds); i++) {
-		confp = &stl_brdconf[i];
-		stl_parsebrd(confp, stl_brdsp[i]);
-		if ((brdp = stl_allocbrd()) == (stlbrd_t *) NULL)
-			return(-ENOMEM);
-		brdp->brdnr = i;
-		brdp->brdtype = confp->brdtype;
-		brdp->ioaddr1 = confp->ioaddr1;
-		brdp->ioaddr2 = confp->ioaddr2;
-		brdp->irq = confp->irq;
-		brdp->irqtype = confp->irqtype;
-		stl_brdinit(brdp);
-	}
-
-/*
- *	Find any dynamically supported boards. That is via module load
- *	line options or auto-detected on the PCI bus.
- */
-	stl_argbrds();
-#ifdef CONFIG_PCI
-	stl_findpcibrds();
-#endif
-
-	return(0);
-}
+static struct pci_driver stl_pcidriver = {
+	.name = "stallion",
+	.id_table = stl_pcibrds,
+	.probe = stl_pciprobe,
+	.remove = __devexit_p(stl_pciremove)
+};
 
 /*****************************************************************************/
 
@@ -2788,17 +2458,18 @@ static inline int stl_initbrds(void)
 
 static int stl_getbrdstats(combrd_t __user *bp)
 {
-	stlbrd_t	*brdp;
-	stlpanel_t	*panelp;
-	int		i;
+	combrd_t	stl_brdstats;
+	struct stlbrd	*brdp;
+	struct stlpanel	*panelp;
+	unsigned int i;
 
 	if (copy_from_user(&stl_brdstats, bp, sizeof(combrd_t)))
 		return -EFAULT;
 	if (stl_brdstats.brd >= STL_MAXBRDS)
-		return(-ENODEV);
+		return -ENODEV;
 	brdp = stl_brds[stl_brdstats.brd];
-	if (brdp == (stlbrd_t *) NULL)
-		return(-ENODEV);
+	if (brdp == NULL)
+		return -ENODEV;
 
 	memset(&stl_brdstats, 0, sizeof(combrd_t));
 	stl_brdstats.brd = brdp->brdnr;
@@ -2810,7 +2481,7 @@ static int stl_getbrdstats(combrd_t __user *bp)
 	stl_brdstats.irq = brdp->irq;
 	stl_brdstats.nrpanels = brdp->nrpanels;
 	stl_brdstats.nrports = brdp->nrports;
-	for (i = 0; (i < brdp->nrpanels); i++) {
+	for (i = 0; i < brdp->nrpanels; i++) {
 		panelp = brdp->panels[i];
 		stl_brdstats.panels[i].panel = i;
 		stl_brdstats.panels[i].hwid = panelp->hwid;
@@ -2826,24 +2497,24 @@ static int stl_getbrdstats(combrd_t __user *bp)
  *	Resolve the referenced port number into a port struct pointer.
  */
 
-static stlport_t *stl_getport(int brdnr, int panelnr, int portnr)
+static struct stlport *stl_getport(int brdnr, int panelnr, int portnr)
 {
-	stlbrd_t	*brdp;
-	stlpanel_t	*panelp;
+	struct stlbrd	*brdp;
+	struct stlpanel	*panelp;
 
-	if ((brdnr < 0) || (brdnr >= STL_MAXBRDS))
-		return((stlport_t *) NULL);
+	if (brdnr < 0 || brdnr >= STL_MAXBRDS)
+		return NULL;
 	brdp = stl_brds[brdnr];
-	if (brdp == (stlbrd_t *) NULL)
-		return((stlport_t *) NULL);
-	if ((panelnr < 0) || (panelnr >= brdp->nrpanels))
-		return((stlport_t *) NULL);
+	if (brdp == NULL)
+		return NULL;
+	if (panelnr < 0 || (unsigned int)panelnr >= brdp->nrpanels)
+		return NULL;
 	panelp = brdp->panels[panelnr];
-	if (panelp == (stlpanel_t *) NULL)
-		return((stlport_t *) NULL);
-	if ((portnr < 0) || (portnr >= panelp->nrports))
-		return((stlport_t *) NULL);
-	return(panelp->ports[portnr]);
+	if (panelp == NULL)
+		return NULL;
+	if (portnr < 0 || (unsigned int)portnr >= panelp->nrports)
+		return NULL;
+	return panelp->ports[portnr];
 }
 
 /*****************************************************************************/
@@ -2854,8 +2525,9 @@ static stlport_t *stl_getport(int brdnr, int panelnr, int portnr)
  *	what port to get stats for (used through board control device).
  */
 
-static int stl_getportstats(stlport_t *portp, comstats_t __user *cp)
+static int stl_getportstats(struct stlport *portp, comstats_t __user *cp)
 {
+	comstats_t	stl_comstats;
 	unsigned char	*head, *tail;
 	unsigned long	flags;
 
@@ -2864,8 +2536,8 @@ static int stl_getportstats(stlport_t *portp, comstats_t __user *cp)
 			return -EFAULT;
 		portp = stl_getport(stl_comstats.brd, stl_comstats.panel,
 			stl_comstats.port);
-		if (portp == (stlport_t *) NULL)
-			return(-ENODEV);
+		if (portp == NULL)
+			return -ENODEV;
 	}
 
 	portp->stats.state = portp->istate;
@@ -2879,27 +2551,25 @@ static int stl_getportstats(stlport_t *portp, comstats_t __user *cp)
 	portp->stats.lflags = 0;
 	portp->stats.rxbuffered = 0;
 
-	save_flags(flags);
-	cli();
-	if (portp->tty != (struct tty_struct *) NULL) {
+	spin_lock_irqsave(&stallion_lock, flags);
+	if (portp->tty != NULL)
 		if (portp->tty->driver_data == portp) {
 			portp->stats.ttystate = portp->tty->flags;
 			/* No longer available as a statistic */
 			portp->stats.rxbuffered = 1; /*portp->tty->flip.count; */
-			if (portp->tty->termios != (struct termios *) NULL) {
+			if (portp->tty->termios != NULL) {
 				portp->stats.cflags = portp->tty->termios->c_cflag;
 				portp->stats.iflags = portp->tty->termios->c_iflag;
 				portp->stats.oflags = portp->tty->termios->c_oflag;
 				portp->stats.lflags = portp->tty->termios->c_lflag;
 			}
 		}
-	}
-	restore_flags(flags);
+	spin_unlock_irqrestore(&stallion_lock, flags);
 
 	head = portp->tx.head;
 	tail = portp->tx.tail;
-	portp->stats.txbuffered = ((head >= tail) ? (head - tail) :
-		(STL_TXBUFSIZE - (tail - head)));
+	portp->stats.txbuffered = (head >= tail) ? (head - tail) :
+		(STL_TXBUFSIZE - (tail - head));
 
 	portp->stats.signals = (unsigned long) stl_getsignals(portp);
 
@@ -2913,15 +2583,17 @@ static int stl_getportstats(stlport_t *portp, comstats_t __user *cp)
  *	Clear the port stats structure. We also return it zeroed out...
  */
 
-static int stl_clrportstats(stlport_t *portp, comstats_t __user *cp)
+static int stl_clrportstats(struct stlport *portp, comstats_t __user *cp)
 {
+	comstats_t	stl_comstats;
+
 	if (!portp) {
 		if (copy_from_user(&stl_comstats, cp, sizeof(comstats_t)))
 			return -EFAULT;
 		portp = stl_getport(stl_comstats.brd, stl_comstats.panel,
 			stl_comstats.port);
-		if (portp == (stlport_t *) NULL)
-			return(-ENODEV);
+		if (portp == NULL)
+			return -ENODEV;
 	}
 
 	memset(&portp->stats, 0, sizeof(comstats_t));
@@ -2938,17 +2610,18 @@ static int stl_clrportstats(stlport_t *portp, comstats_t __user *cp)
  *	Return the entire driver ports structure to a user app.
  */
 
-static int stl_getportstruct(stlport_t __user *arg)
+static int stl_getportstruct(struct stlport __user *arg)
 {
-	stlport_t	*portp;
+	struct stlport	stl_dummyport;
+	struct stlport	*portp;
 
-	if (copy_from_user(&stl_dummyport, arg, sizeof(stlport_t)))
+	if (copy_from_user(&stl_dummyport, arg, sizeof(struct stlport)))
 		return -EFAULT;
 	portp = stl_getport(stl_dummyport.brdnr, stl_dummyport.panelnr,
 		 stl_dummyport.portnr);
 	if (!portp)
 		return -ENODEV;
-	return copy_to_user(arg, portp, sizeof(stlport_t)) ? -EFAULT : 0;
+	return copy_to_user(arg, portp, sizeof(struct stlport)) ? -EFAULT : 0;
 }
 
 /*****************************************************************************/
@@ -2957,18 +2630,19 @@ static int stl_getportstruct(stlport_t __user *arg)
  *	Return the entire driver board structure to a user app.
  */
 
-static int stl_getbrdstruct(stlbrd_t __user *arg)
+static int stl_getbrdstruct(struct stlbrd __user *arg)
 {
-	stlbrd_t	*brdp;
+	struct stlbrd	stl_dummybrd;
+	struct stlbrd	*brdp;
 
-	if (copy_from_user(&stl_dummybrd, arg, sizeof(stlbrd_t)))
+	if (copy_from_user(&stl_dummybrd, arg, sizeof(struct stlbrd)))
 		return -EFAULT;
-	if ((stl_dummybrd.brdnr < 0) || (stl_dummybrd.brdnr >= STL_MAXBRDS))
+	if (stl_dummybrd.brdnr >= STL_MAXBRDS)
 		return -ENODEV;
 	brdp = stl_brds[stl_dummybrd.brdnr];
 	if (!brdp)
-		return(-ENODEV);
-	return copy_to_user(arg, brdp, sizeof(stlbrd_t)) ? -EFAULT : 0;
+		return -ENODEV;
+	return copy_to_user(arg, brdp, sizeof(struct stlbrd)) ? -EFAULT : 0;
 }
 
 /*****************************************************************************/
@@ -2984,14 +2658,11 @@ static int stl_memioctl(struct inode *ip, struct file *fp, unsigned int cmd, uns
 	int	brdnr, rc;
 	void __user *argp = (void __user *)arg;
 
-#ifdef DEBUG
-	printk("stl_memioctl(ip=%x,fp=%x,cmd=%x,arg=%x)\n", (int) ip,
-		(int) fp, cmd, (int) arg);
-#endif
+	pr_debug("stl_memioctl(ip=%p,fp=%p,cmd=%x,arg=%lx)\n", ip, fp, cmd,arg);
 
 	brdnr = iminor(ip);
 	if (brdnr >= STL_MAXBRDS)
-		return(-ENODEV);
+		return -ENODEV;
 	rc = 0;
 
 	switch (cmd) {
@@ -3015,10 +2686,10 @@ static int stl_memioctl(struct inode *ip, struct file *fp, unsigned int cmd, uns
 		break;
 	}
 
-	return(rc);
+	return rc;
 }
 
-static struct tty_operations stl_ops = {
+static const struct tty_operations stl_ops = {
 	.open = stl_open,
 	.close = stl_close,
 	.write = stl_write,
@@ -3043,66 +2714,6 @@ static struct tty_operations stl_ops = {
 };
 
 /*****************************************************************************/
-
-static int __init stl_init(void)
-{
-	int i;
-	printk(KERN_INFO "%s: version %s\n", stl_drvtitle, stl_drvversion);
-
-	stl_initbrds();
-
-	stl_serial = alloc_tty_driver(STL_MAXBRDS * STL_MAXPORTS);
-	if (!stl_serial)
-		return -1;
-
-/*
- *	Allocate a temporary write buffer.
- */
-	stl_tmpwritebuf = kmalloc(STL_TXBUFSIZE, GFP_KERNEL);
-	if (!stl_tmpwritebuf)
-		printk("STALLION: failed to allocate memory (size=%d)\n",
-			STL_TXBUFSIZE);
-
-/*
- *	Set up a character driver for per board stuff. This is mainly used
- *	to do stats ioctls on the ports.
- */
-	if (register_chrdev(STL_SIOMEMMAJOR, "staliomem", &stl_fsiomem))
-		printk("STALLION: failed to register serial board device\n");
-	devfs_mk_dir("staliomem");
-
-	stallion_class = class_create(THIS_MODULE, "staliomem");
-	for (i = 0; i < 4; i++) {
-		devfs_mk_cdev(MKDEV(STL_SIOMEMMAJOR, i),
-				S_IFCHR|S_IRUSR|S_IWUSR,
-				"staliomem/%d", i);
-		class_device_create(stallion_class, NULL,
-				    MKDEV(STL_SIOMEMMAJOR, i), NULL,
-				    "staliomem%d", i);
-	}
-
-	stl_serial->owner = THIS_MODULE;
-	stl_serial->driver_name = stl_drvname;
-	stl_serial->name = "ttyE";
-	stl_serial->devfs_name = "tts/E";
-	stl_serial->major = STL_SERIALMAJOR;
-	stl_serial->minor_start = 0;
-	stl_serial->type = TTY_DRIVER_TYPE_SERIAL;
-	stl_serial->subtype = SERIAL_TYPE_NORMAL;
-	stl_serial->init_termios = stl_deftermios;
-	stl_serial->flags = TTY_DRIVER_REAL_RAW;
-	tty_set_operations(stl_serial, &stl_ops);
-
-	if (tty_register_driver(stl_serial)) {
-		put_tty_driver(stl_serial);
-		printk("STALLION: failed to register serial driver\n");
-		return -1;
-	}
-
-	return 0;
-}
-
-/*****************************************************************************/
 /*                       CD1400 HARDWARE FUNCTIONS                           */
 /*****************************************************************************/
 
@@ -3112,21 +2723,21 @@ static int __init stl_init(void)
  *	(Maybe should make this inline...)
  */
 
-static int stl_cd1400getreg(stlport_t *portp, int regnr)
+static int stl_cd1400getreg(struct stlport *portp, int regnr)
 {
 	outb((regnr + portp->uartaddr), portp->ioaddr);
 	return inb(portp->ioaddr + EREG_DATA);
 }
 
-static void stl_cd1400setreg(stlport_t *portp, int regnr, int value)
+static void stl_cd1400setreg(struct stlport *portp, int regnr, int value)
 {
-	outb((regnr + portp->uartaddr), portp->ioaddr);
+	outb(regnr + portp->uartaddr, portp->ioaddr);
 	outb(value, portp->ioaddr + EREG_DATA);
 }
 
-static int stl_cd1400updatereg(stlport_t *portp, int regnr, int value)
+static int stl_cd1400updatereg(struct stlport *portp, int regnr, int value)
 {
-	outb((regnr + portp->uartaddr), portp->ioaddr);
+	outb(regnr + portp->uartaddr, portp->ioaddr);
 	if (inb(portp->ioaddr + EREG_DATA) != value) {
 		outb(value, portp->ioaddr + EREG_DATA);
 		return 1;
@@ -3142,16 +2753,16 @@ static int stl_cd1400updatereg(stlport_t *portp, int regnr, int value)
  *	identical when dealing with ports.
  */
 
-static int stl_cd1400panelinit(stlbrd_t *brdp, stlpanel_t *panelp)
+static int stl_cd1400panelinit(struct stlbrd *brdp, struct stlpanel *panelp)
 {
 	unsigned int	gfrcr;
 	int		chipmask, i, j;
 	int		nrchips, uartaddr, ioaddr;
+	unsigned long   flags;
 
-#ifdef DEBUG
-	printk("stl_panelinit(brdp=%x,panelp=%x)\n", (int) brdp, (int) panelp);
-#endif
+	pr_debug("stl_panelinit(brdp=%p,panelp=%p)\n", brdp, panelp);
 
+	spin_lock_irqsave(&brd_lock, flags);
 	BRDENABLE(panelp->brdnr, panelp->pagenr);
 
 /*
@@ -3159,13 +2770,12 @@ static int stl_cd1400panelinit(stlbrd_t *brdp, stlpanel_t *panelp)
  */
 	chipmask = 0;
 	nrchips = panelp->nrports / CD1400_PORTS;
-	for (i = 0; (i < nrchips); i++) {
+	for (i = 0; i < nrchips; i++) {
 		if (brdp->brdtype == BRD_ECHPCI) {
 			outb((panelp->pagenr + (i >> 1)), brdp->ioctrl);
 			ioaddr = panelp->iobase;
-		} else {
+		} else
 			ioaddr = panelp->iobase + (EREG_BANKSIZE * (i >> 1));
-		}
 		uartaddr = (i & 0x01) ? 0x080 : 0;
 		outb((GFRCR + uartaddr), ioaddr);
 		outb(0, (ioaddr + EREG_DATA));
@@ -3173,10 +2783,10 @@ static int stl_cd1400panelinit(stlbrd_t *brdp, stlpanel_t *panelp)
 		outb(CCR_RESETFULL, (ioaddr + EREG_DATA));
 		outb(CCR_RESETFULL, (ioaddr + EREG_DATA));
 		outb((GFRCR + uartaddr), ioaddr);
-		for (j = 0; (j < CCR_MAXWAIT); j++) {
+		for (j = 0; j < CCR_MAXWAIT; j++)
 			if ((gfrcr = inb(ioaddr + EREG_DATA)) != 0)
 				break;
-		}
+
 		if ((j >= CCR_MAXWAIT) || (gfrcr < 0x40) || (gfrcr > 0x60)) {
 			printk("STALLION: cd1400 not responding, "
 				"brd=%d panel=%d chip=%d\n",
@@ -3189,6 +2799,7 @@ static int stl_cd1400panelinit(stlbrd_t *brdp, stlpanel_t *panelp)
 	}
 
 	BRDDISABLE(panelp->brdnr);
+	spin_unlock_irqrestore(&brd_lock, flags);
 	return chipmask;
 }
 
@@ -3198,17 +2809,17 @@ static int stl_cd1400panelinit(stlbrd_t *brdp, stlpanel_t *panelp)
  *	Initialize hardware specific port registers.
  */
 
-static void stl_cd1400portinit(stlbrd_t *brdp, stlpanel_t *panelp, stlport_t *portp)
+static void stl_cd1400portinit(struct stlbrd *brdp, struct stlpanel *panelp, struct stlport *portp)
 {
-#ifdef DEBUG
-	printk("stl_cd1400portinit(brdp=%x,panelp=%x,portp=%x)\n",
-		(int) brdp, (int) panelp, (int) portp);
-#endif
+	unsigned long flags;
+	pr_debug("stl_cd1400portinit(brdp=%p,panelp=%p,portp=%p)\n", brdp,
+			panelp, portp);
 
-	if ((brdp == (stlbrd_t *) NULL) || (panelp == (stlpanel_t *) NULL) ||
-	    (portp == (stlport_t *) NULL))
+	if ((brdp == NULL) || (panelp == NULL) ||
+	    (portp == NULL))
 		return;
 
+	spin_lock_irqsave(&brd_lock, flags);
 	portp->ioaddr = panelp->iobase + (((brdp->brdtype == BRD_ECHPCI) ||
 		(portp->portnr < 8)) ? 0 : EREG_BANKSIZE);
 	portp->uartaddr = (portp->portnr & 0x04) << 5;
@@ -3219,6 +2830,7 @@ static void stl_cd1400portinit(stlbrd_t *brdp, stlpanel_t *panelp, stlport_t *po
 	stl_cd1400setreg(portp, LIVR, (portp->portnr << 3));
 	portp->hwid = stl_cd1400getreg(portp, GFRCR);
 	BRDDISABLE(portp->brdnr);
+	spin_unlock_irqrestore(&brd_lock, flags);
 }
 
 /*****************************************************************************/
@@ -3228,15 +2840,13 @@ static void stl_cd1400portinit(stlbrd_t *brdp, stlpanel_t *panelp, stlport_t *po
  *	since it won't usually take too long to be ready.
  */
 
-static void stl_cd1400ccrwait(stlport_t *portp)
+static void stl_cd1400ccrwait(struct stlport *portp)
 {
 	int	i;
 
-	for (i = 0; (i < CCR_MAXWAIT); i++) {
-		if (stl_cd1400getreg(portp, CCR) == 0) {
+	for (i = 0; i < CCR_MAXWAIT; i++)
+		if (stl_cd1400getreg(portp, CCR) == 0)
 			return;
-		}
-	}
 
 	printk("STALLION: cd1400 not responding, port=%d panel=%d brd=%d\n",
 		portp->portnr, portp->panelnr, portp->brdnr);
@@ -3249,9 +2859,9 @@ static void stl_cd1400ccrwait(stlport_t *portp)
  *	settings.
  */
 
-static void stl_cd1400setport(stlport_t *portp, struct termios *tiosp)
+static void stl_cd1400setport(struct stlport *portp, struct ktermios *tiosp)
 {
-	stlbrd_t	*brdp;
+	struct stlbrd	*brdp;
 	unsigned long	flags;
 	unsigned int	clkdiv, baudrate;
 	unsigned char	cor1, cor2, cor3;
@@ -3275,7 +2885,7 @@ static void stl_cd1400setport(stlport_t *portp, struct termios *tiosp)
 	sreroff = 0;
 
 	brdp = stl_brds[portp->brdnr];
-	if (brdp == (stlbrd_t *) NULL)
+	if (brdp == NULL)
 		return;
 
 /*
@@ -3372,8 +2982,8 @@ static void stl_cd1400setport(stlport_t *portp, struct termios *tiosp)
 		baudrate = STL_CD1400MAXBAUD;
 
 	if (baudrate > 0) {
-		for (clk = 0; (clk < CD1400_NUMCLKS); clk++) {
-			clkdiv = ((portp->clk / stl_cd1400clkdivs[clk]) / baudrate);
+		for (clk = 0; clk < CD1400_NUMCLKS; clk++) {
+			clkdiv = (portp->clk / stl_cd1400clkdivs[clk]) / baudrate;
 			if (clkdiv < 0x100)
 				break;
 		}
@@ -3388,9 +2998,8 @@ static void stl_cd1400setport(stlport_t *portp, struct termios *tiosp)
 		mcor2 |= MCOR2_DCD;
 		sreron |= SRER_MODEM;
 		portp->flags |= ASYNC_CHECK_CD;
-	} else {
+	} else
 		portp->flags &= ~ASYNC_CHECK_CD;
-	}
 
 /*
  *	Setup cd1400 enhanced modes if we can. In particular we want to
@@ -3415,21 +3024,18 @@ static void stl_cd1400setport(stlport_t *portp, struct termios *tiosp)
  *	them all up.
  */
 
-#ifdef DEBUG
-	printk("SETPORT: portnr=%d panelnr=%d brdnr=%d\n",
+	pr_debug("SETPORT: portnr=%d panelnr=%d brdnr=%d\n",
 		portp->portnr, portp->panelnr, portp->brdnr);
-	printk("    cor1=%x cor2=%x cor3=%x cor4=%x cor5=%x\n",
+	pr_debug("    cor1=%x cor2=%x cor3=%x cor4=%x cor5=%x\n",
 		cor1, cor2, cor3, cor4, cor5);
-	printk("    mcor1=%x mcor2=%x rtpr=%x sreron=%x sreroff=%x\n",
+	pr_debug("    mcor1=%x mcor2=%x rtpr=%x sreron=%x sreroff=%x\n",
 		mcor1, mcor2, rtpr, sreron, sreroff);
-	printk("    tcor=%x tbpr=%x rcor=%x rbpr=%x\n", clk, div, clk, div);
-	printk("    schr1=%x schr2=%x schr3=%x schr4=%x\n",
+	pr_debug("    tcor=%x tbpr=%x rcor=%x rbpr=%x\n", clk, div, clk, div);
+	pr_debug("    schr1=%x schr2=%x schr3=%x schr4=%x\n",
 		tiosp->c_cc[VSTART], tiosp->c_cc[VSTOP],
 		tiosp->c_cc[VSTART], tiosp->c_cc[VSTOP]);
-#endif
 
-	save_flags(flags);
-	cli();
+	spin_lock_irqsave(&brd_lock, flags);
 	BRDENABLE(portp->brdnr, portp->pagenr);
 	stl_cd1400setreg(portp, CAR, (portp->portnr & 0x3));
 	srer = stl_cd1400getreg(portp, SRER);
@@ -3466,7 +3072,7 @@ static void stl_cd1400setport(stlport_t *portp, struct termios *tiosp)
 		portp->sigs &= ~TIOCM_CD;
 	stl_cd1400setreg(portp, SRER, ((srer & ~sreroff) | sreron));
 	BRDDISABLE(portp->brdnr);
-	restore_flags(flags);
+	spin_unlock_irqrestore(&brd_lock, flags);
 }
 
 /*****************************************************************************/
@@ -3475,15 +3081,13 @@ static void stl_cd1400setport(stlport_t *portp, struct termios *tiosp)
  *	Set the state of the DTR and RTS signals.
  */
 
-static void stl_cd1400setsignals(stlport_t *portp, int dtr, int rts)
+static void stl_cd1400setsignals(struct stlport *portp, int dtr, int rts)
 {
 	unsigned char	msvr1, msvr2;
 	unsigned long	flags;
 
-#ifdef DEBUG
-	printk("stl_cd1400setsignals(portp=%x,dtr=%d,rts=%d)\n",
-		(int) portp, dtr, rts);
-#endif
+	pr_debug("stl_cd1400setsignals(portp=%p,dtr=%d,rts=%d)\n",
+			portp, dtr, rts);
 
 	msvr1 = 0;
 	msvr2 = 0;
@@ -3492,8 +3096,7 @@ static void stl_cd1400setsignals(stlport_t *portp, int dtr, int rts)
 	if (rts > 0)
 		msvr2 = MSVR2_RTS;
 
-	save_flags(flags);
-	cli();
+	spin_lock_irqsave(&brd_lock, flags);
 	BRDENABLE(portp->brdnr, portp->pagenr);
 	stl_cd1400setreg(portp, CAR, (portp->portnr & 0x03));
 	if (rts >= 0)
@@ -3501,7 +3104,7 @@ static void stl_cd1400setsignals(stlport_t *portp, int dtr, int rts)
 	if (dtr >= 0)
 		stl_cd1400setreg(portp, MSVR1, msvr1);
 	BRDDISABLE(portp->brdnr);
-	restore_flags(flags);
+	spin_unlock_irqrestore(&brd_lock, flags);
 }
 
 /*****************************************************************************/
@@ -3510,24 +3113,21 @@ static void stl_cd1400setsignals(stlport_t *portp, int dtr, int rts)
  *	Return the state of the signals.
  */
 
-static int stl_cd1400getsignals(stlport_t *portp)
+static int stl_cd1400getsignals(struct stlport *portp)
 {
 	unsigned char	msvr1, msvr2;
 	unsigned long	flags;
 	int		sigs;
 
-#ifdef DEBUG
-	printk("stl_cd1400getsignals(portp=%x)\n", (int) portp);
-#endif
+	pr_debug("stl_cd1400getsignals(portp=%p)\n", portp);
 
-	save_flags(flags);
-	cli();
+	spin_lock_irqsave(&brd_lock, flags);
 	BRDENABLE(portp->brdnr, portp->pagenr);
 	stl_cd1400setreg(portp, CAR, (portp->portnr & 0x03));
 	msvr1 = stl_cd1400getreg(portp, MSVR1);
 	msvr2 = stl_cd1400getreg(portp, MSVR2);
 	BRDDISABLE(portp->brdnr);
-	restore_flags(flags);
+	spin_unlock_irqrestore(&brd_lock, flags);
 
 	sigs = 0;
 	sigs |= (msvr1 & MSVR1_DCD) ? TIOCM_CD : 0;
@@ -3549,15 +3149,13 @@ static int stl_cd1400getsignals(stlport_t *portp)
  *	Enable/Disable the Transmitter and/or Receiver.
  */
 
-static void stl_cd1400enablerxtx(stlport_t *portp, int rx, int tx)
+static void stl_cd1400enablerxtx(struct stlport *portp, int rx, int tx)
 {
 	unsigned char	ccr;
 	unsigned long	flags;
 
-#ifdef DEBUG
-	printk("stl_cd1400enablerxtx(portp=%x,rx=%d,tx=%d)\n",
-		(int) portp, rx, tx);
-#endif
+	pr_debug("stl_cd1400enablerxtx(portp=%p,rx=%d,tx=%d)\n", portp, rx, tx);
+
 	ccr = 0;
 
 	if (tx == 0)
@@ -3569,15 +3167,14 @@ static void stl_cd1400enablerxtx(stlport_t *portp, int rx, int tx)
 	else if (rx > 0)
 		ccr |= CCR_RXENABLE;
 
-	save_flags(flags);
-	cli();
+	spin_lock_irqsave(&brd_lock, flags);
 	BRDENABLE(portp->brdnr, portp->pagenr);
 	stl_cd1400setreg(portp, CAR, (portp->portnr & 0x03));
 	stl_cd1400ccrwait(portp);
 	stl_cd1400setreg(portp, CCR, ccr);
 	stl_cd1400ccrwait(portp);
 	BRDDISABLE(portp->brdnr);
-	restore_flags(flags);
+	spin_unlock_irqrestore(&brd_lock, flags);
 }
 
 /*****************************************************************************/
@@ -3586,15 +3183,12 @@ static void stl_cd1400enablerxtx(stlport_t *portp, int rx, int tx)
  *	Start/stop the Transmitter and/or Receiver.
  */
 
-static void stl_cd1400startrxtx(stlport_t *portp, int rx, int tx)
+static void stl_cd1400startrxtx(struct stlport *portp, int rx, int tx)
 {
 	unsigned char	sreron, sreroff;
 	unsigned long	flags;
 
-#ifdef DEBUG
-	printk("stl_cd1400startrxtx(portp=%x,rx=%d,tx=%d)\n",
-		(int) portp, rx, tx);
-#endif
+	pr_debug("stl_cd1400startrxtx(portp=%p,rx=%d,tx=%d)\n", portp, rx, tx);
 
 	sreron = 0;
 	sreroff = 0;
@@ -3609,8 +3203,7 @@ static void stl_cd1400startrxtx(stlport_t *portp, int rx, int tx)
 	else if (rx > 0)
 		sreron |= SRER_RXDATA;
 
-	save_flags(flags);
-	cli();
+	spin_lock_irqsave(&brd_lock, flags);
 	BRDENABLE(portp->brdnr, portp->pagenr);
 	stl_cd1400setreg(portp, CAR, (portp->portnr & 0x03));
 	stl_cd1400setreg(portp, SRER,
@@ -3618,7 +3211,7 @@ static void stl_cd1400startrxtx(stlport_t *portp, int rx, int tx)
 	BRDDISABLE(portp->brdnr);
 	if (tx > 0)
 		set_bit(ASYI_TXBUSY, &portp->istate);
-	restore_flags(flags);
+	spin_unlock_irqrestore(&brd_lock, flags);
 }
 
 /*****************************************************************************/
@@ -3627,34 +3220,29 @@ static void stl_cd1400startrxtx(stlport_t *portp, int rx, int tx)
  *	Disable all interrupts from this port.
  */
 
-static void stl_cd1400disableintrs(stlport_t *portp)
+static void stl_cd1400disableintrs(struct stlport *portp)
 {
 	unsigned long	flags;
 
-#ifdef DEBUG
-	printk("stl_cd1400disableintrs(portp=%x)\n", (int) portp);
-#endif
-	save_flags(flags);
-	cli();
+	pr_debug("stl_cd1400disableintrs(portp=%p)\n", portp);
+
+	spin_lock_irqsave(&brd_lock, flags);
 	BRDENABLE(portp->brdnr, portp->pagenr);
 	stl_cd1400setreg(portp, CAR, (portp->portnr & 0x03));
 	stl_cd1400setreg(portp, SRER, 0);
 	BRDDISABLE(portp->brdnr);
-	restore_flags(flags);
+	spin_unlock_irqrestore(&brd_lock, flags);
 }
 
 /*****************************************************************************/
 
-static void stl_cd1400sendbreak(stlport_t *portp, int len)
+static void stl_cd1400sendbreak(struct stlport *portp, int len)
 {
 	unsigned long	flags;
 
-#ifdef DEBUG
-	printk("stl_cd1400sendbreak(portp=%x,len=%d)\n", (int) portp, len);
-#endif
+	pr_debug("stl_cd1400sendbreak(portp=%p,len=%d)\n", portp, len);
 
-	save_flags(flags);
-	cli();
+	spin_lock_irqsave(&brd_lock, flags);
 	BRDENABLE(portp->brdnr, portp->pagenr);
 	stl_cd1400setreg(portp, CAR, (portp->portnr & 0x03));
 	stl_cd1400setreg(portp, SRER,
@@ -3664,7 +3252,7 @@ static void stl_cd1400sendbreak(stlport_t *portp, int len)
 	portp->brklen = len;
 	if (len == 1)
 		portp->stats.txbreaks++;
-	restore_flags(flags);
+	spin_unlock_irqrestore(&brd_lock, flags);
 }
 
 /*****************************************************************************/
@@ -3673,23 +3261,20 @@ static void stl_cd1400sendbreak(stlport_t *portp, int len)
  *	Take flow control actions...
  */
 
-static void stl_cd1400flowctrl(stlport_t *portp, int state)
+static void stl_cd1400flowctrl(struct stlport *portp, int state)
 {
 	struct tty_struct	*tty;
 	unsigned long		flags;
 
-#ifdef DEBUG
-	printk("stl_cd1400flowctrl(portp=%x,state=%x)\n", (int) portp, state);
-#endif
+	pr_debug("stl_cd1400flowctrl(portp=%p,state=%x)\n", portp, state);
 
-	if (portp == (stlport_t *) NULL)
+	if (portp == NULL)
 		return;
 	tty = portp->tty;
-	if (tty == (struct tty_struct *) NULL)
+	if (tty == NULL)
 		return;
 
-	save_flags(flags);
-	cli();
+	spin_lock_irqsave(&brd_lock, flags);
 	BRDENABLE(portp->brdnr, portp->pagenr);
 	stl_cd1400setreg(portp, CAR, (portp->portnr & 0x03));
 
@@ -3729,7 +3314,7 @@ static void stl_cd1400flowctrl(stlport_t *portp, int state)
 	}
 
 	BRDDISABLE(portp->brdnr);
-	restore_flags(flags);
+	spin_unlock_irqrestore(&brd_lock, flags);
 }
 
 /*****************************************************************************/
@@ -3738,23 +3323,20 @@ static void stl_cd1400flowctrl(stlport_t *portp, int state)
  *	Send a flow control character...
  */
 
-static void stl_cd1400sendflow(stlport_t *portp, int state)
+static void stl_cd1400sendflow(struct stlport *portp, int state)
 {
 	struct tty_struct	*tty;
 	unsigned long		flags;
 
-#ifdef DEBUG
-	printk("stl_cd1400sendflow(portp=%x,state=%x)\n", (int) portp, state);
-#endif
+	pr_debug("stl_cd1400sendflow(portp=%p,state=%x)\n", portp, state);
 
-	if (portp == (stlport_t *) NULL)
+	if (portp == NULL)
 		return;
 	tty = portp->tty;
-	if (tty == (struct tty_struct *) NULL)
+	if (tty == NULL)
 		return;
 
-	save_flags(flags);
-	cli();
+	spin_lock_irqsave(&brd_lock, flags);
 	BRDENABLE(portp->brdnr, portp->pagenr);
 	stl_cd1400setreg(portp, CAR, (portp->portnr & 0x03));
 	if (state) {
@@ -3769,24 +3351,21 @@ static void stl_cd1400sendflow(stlport_t *portp, int state)
 		stl_cd1400ccrwait(portp);
 	}
 	BRDDISABLE(portp->brdnr);
-	restore_flags(flags);
+	spin_unlock_irqrestore(&brd_lock, flags);
 }
 
 /*****************************************************************************/
 
-static void stl_cd1400flush(stlport_t *portp)
+static void stl_cd1400flush(struct stlport *portp)
 {
 	unsigned long	flags;
 
-#ifdef DEBUG
-	printk("stl_cd1400flush(portp=%x)\n", (int) portp);
-#endif
+	pr_debug("stl_cd1400flush(portp=%p)\n", portp);
 
-	if (portp == (stlport_t *) NULL)
+	if (portp == NULL)
 		return;
 
-	save_flags(flags);
-	cli();
+	spin_lock_irqsave(&brd_lock, flags);
 	BRDENABLE(portp->brdnr, portp->pagenr);
 	stl_cd1400setreg(portp, CAR, (portp->portnr & 0x03));
 	stl_cd1400ccrwait(portp);
@@ -3794,7 +3373,7 @@ static void stl_cd1400flush(stlport_t *portp)
 	stl_cd1400ccrwait(portp);
 	portp->tx.tail = portp->tx.head;
 	BRDDISABLE(portp->brdnr);
-	restore_flags(flags);
+	spin_unlock_irqrestore(&brd_lock, flags);
 }
 
 /*****************************************************************************/
@@ -3806,13 +3385,11 @@ static void stl_cd1400flush(stlport_t *portp)
  *	maintains the busy port flag.
  */
 
-static int stl_cd1400datastate(stlport_t *portp)
+static int stl_cd1400datastate(struct stlport *portp)
 {
-#ifdef DEBUG
-	printk("stl_cd1400datastate(portp=%x)\n", (int) portp);
-#endif
+	pr_debug("stl_cd1400datastate(portp=%p)\n", portp);
 
-	if (portp == (stlport_t *) NULL)
+	if (portp == NULL)
 		return 0;
 
 	return test_bit(ASYI_TXBUSY, &portp->istate) ? 1 : 0;
@@ -3824,15 +3401,13 @@ static int stl_cd1400datastate(stlport_t *portp)
  *	Interrupt service routine for cd1400 EasyIO boards.
  */
 
-static void stl_cd1400eiointr(stlpanel_t *panelp, unsigned int iobase)
+static void stl_cd1400eiointr(struct stlpanel *panelp, unsigned int iobase)
 {
 	unsigned char	svrtype;
 
-#ifdef DEBUG
-	printk("stl_cd1400eiointr(panelp=%x,iobase=%x)\n",
-		(int) panelp, iobase);
-#endif
+	pr_debug("stl_cd1400eiointr(panelp=%p,iobase=%x)\n", panelp, iobase);
 
+	spin_lock(&brd_lock);
 	outb(SVRR, iobase);
 	svrtype = inb(iobase + EREG_DATA);
 	if (panelp->nrports > 4) {
@@ -3846,6 +3421,8 @@ static void stl_cd1400eiointr(stlpanel_t *panelp, unsigned int iobase)
 		stl_cd1400txisr(panelp, iobase);
 	else if (svrtype & SVRR_MDM)
 		stl_cd1400mdmisr(panelp, iobase);
+
+	spin_unlock(&brd_lock);
 }
 
 /*****************************************************************************/
@@ -3854,14 +3431,11 @@ static void stl_cd1400eiointr(stlpanel_t *panelp, unsigned int iobase)
  *	Interrupt service routine for cd1400 panels.
  */
 
-static void stl_cd1400echintr(stlpanel_t *panelp, unsigned int iobase)
+static void stl_cd1400echintr(struct stlpanel *panelp, unsigned int iobase)
 {
 	unsigned char	svrtype;
 
-#ifdef DEBUG
-	printk("stl_cd1400echintr(panelp=%x,iobase=%x)\n", (int) panelp,
-		iobase);
-#endif
+	pr_debug("stl_cd1400echintr(panelp=%p,iobase=%x)\n", panelp, iobase);
 
 	outb(SVRR, iobase);
 	svrtype = inb(iobase + EREG_DATA);
@@ -3883,7 +3457,7 @@ static void stl_cd1400echintr(stlpanel_t *panelp, unsigned int iobase)
  *	this is the only way to generate them on the cd1400.
  */
 
-static inline int stl_cd1400breakisr(stlport_t *portp, int ioaddr)
+static int stl_cd1400breakisr(struct stlport *portp, int ioaddr)
 {
 	if (portp->brklen == 1) {
 		outb((COR2 + portp->uartaddr), ioaddr);
@@ -3925,16 +3499,14 @@ static inline int stl_cd1400breakisr(stlport_t *portp, int ioaddr)
  *	be NULL if the buffer has been freed.
  */
 
-static void stl_cd1400txisr(stlpanel_t *panelp, int ioaddr)
+static void stl_cd1400txisr(struct stlpanel *panelp, int ioaddr)
 {
-	stlport_t	*portp;
+	struct stlport	*portp;
 	int		len, stlen;
 	char		*head, *tail;
 	unsigned char	ioack, srer;
 
-#ifdef DEBUG
-	printk("stl_cd1400txisr(panelp=%x,ioaddr=%x)\n", (int) panelp, ioaddr);
-#endif
+	pr_debug("stl_cd1400txisr(panelp=%p,ioaddr=%x)\n", panelp, ioaddr);
 
 	ioack = inb(ioaddr + EREG_TXACK);
 	if (((ioack & panelp->ackmask) != 0) ||
@@ -3973,9 +3545,9 @@ static void stl_cd1400txisr(stlpanel_t *panelp, int ioaddr)
 		}
 		outb(srer, (ioaddr + EREG_DATA));
 	} else {
-		len = MIN(len, CD1400_TXFIFOSIZE);
+		len = min(len, CD1400_TXFIFOSIZE);
 		portp->stats.txtotal += len;
-		stlen = MIN(len, ((portp->tx.buf + STL_TXBUFSIZE) - tail));
+		stlen = min(len, ((portp->tx.buf + STL_TXBUFSIZE) - tail));
 		outb((TDR + portp->uartaddr), ioaddr);
 		outsb((ioaddr + EREG_DATA), tail, stlen);
 		len -= stlen;
@@ -4006,17 +3578,15 @@ stl_txalldone:
  *	shutdown a port not in user context. Need to handle this case.
  */
 
-static void stl_cd1400rxisr(stlpanel_t *panelp, int ioaddr)
+static void stl_cd1400rxisr(struct stlpanel *panelp, int ioaddr)
 {
-	stlport_t		*portp;
+	struct stlport		*portp;
 	struct tty_struct	*tty;
 	unsigned int		ioack, len, buflen;
 	unsigned char		status;
 	char			ch;
 
-#ifdef DEBUG
-	printk("stl_cd1400rxisr(panelp=%x,ioaddr=%x)\n", (int) panelp, ioaddr);
-#endif
+	pr_debug("stl_cd1400rxisr(panelp=%p,ioaddr=%x)\n", panelp, ioaddr);
 
 	ioack = inb(ioaddr + EREG_RXACK);
 	if ((ioack & panelp->ackmask) != 0) {
@@ -4030,13 +3600,13 @@ static void stl_cd1400rxisr(stlpanel_t *panelp, int ioaddr)
 		outb((RDCR + portp->uartaddr), ioaddr);
 		len = inb(ioaddr + EREG_DATA);
 		if (tty == NULL || (buflen = tty_buffer_request_room(tty, len)) == 0) {
-			len = MIN(len, sizeof(stl_unwanted));
+			len = min(len, sizeof(stl_unwanted));
 			outb((RDSR + portp->uartaddr), ioaddr);
 			insb((ioaddr + EREG_DATA), &stl_unwanted[0], len);
 			portp->stats.rxlost += len;
 			portp->stats.rxtotal += len;
 		} else {
-			len = MIN(len, buflen);
+			len = min(len, buflen);
 			if (len > 0) {
 				unsigned char *ptr;
 				outb((RDSR + portp->uartaddr), ioaddr);
@@ -4073,18 +3643,16 @@ static void stl_cd1400rxisr(stlpanel_t *panelp, int ioaddr)
 						do_SAK(tty);
 						BRDENABLE(portp->brdnr, portp->pagenr);
 					}
-				} else if (status & ST_PARITY) {
+				} else if (status & ST_PARITY)
 					status = TTY_PARITY;
-				} else if (status & ST_FRAMING) {
+				else if (status & ST_FRAMING)
 					status = TTY_FRAME;
-				} else if(status & ST_OVERRUN) {
+				else if(status & ST_OVERRUN)
 					status = TTY_OVERRUN;
-				} else {
+				else
 					status = 0;
-				}
-			} else {
+			} else
 				status = 0;
-			}
 			tty_insert_flip_char(tty, ch, status);
 			tty_schedule_flip(tty);
 		}
@@ -4106,15 +3674,13 @@ stl_rxalldone:
  *	processing routine.
  */
 
-static void stl_cd1400mdmisr(stlpanel_t *panelp, int ioaddr)
+static void stl_cd1400mdmisr(struct stlpanel *panelp, int ioaddr)
 {
-	stlport_t	*portp;
+	struct stlport	*portp;
 	unsigned int	ioack;
 	unsigned char	misr;
 
-#ifdef DEBUG
-	printk("stl_cd1400mdmisr(panelp=%x)\n", (int) panelp);
-#endif
+	pr_debug("stl_cd1400mdmisr(panelp=%p)\n", panelp);
 
 	ioack = inb(ioaddr + EREG_MDACK);
 	if (((ioack & panelp->ackmask) != 0) ||
@@ -4146,19 +3712,19 @@ static void stl_cd1400mdmisr(stlpanel_t *panelp, int ioaddr)
  *	(Maybe should make this inline...)
  */
 
-static int stl_sc26198getreg(stlport_t *portp, int regnr)
+static int stl_sc26198getreg(struct stlport *portp, int regnr)
 {
 	outb((regnr | portp->uartaddr), (portp->ioaddr + XP_ADDR));
 	return inb(portp->ioaddr + XP_DATA);
 }
 
-static void stl_sc26198setreg(stlport_t *portp, int regnr, int value)
+static void stl_sc26198setreg(struct stlport *portp, int regnr, int value)
 {
 	outb((regnr | portp->uartaddr), (portp->ioaddr + XP_ADDR));
 	outb(value, (portp->ioaddr + XP_DATA));
 }
 
-static int stl_sc26198updatereg(stlport_t *portp, int regnr, int value)
+static int stl_sc26198updatereg(struct stlport *portp, int regnr, int value)
 {
 	outb((regnr | portp->uartaddr), (portp->ioaddr + XP_ADDR));
 	if (inb(portp->ioaddr + XP_DATA) != value) {
@@ -4174,14 +3740,14 @@ static int stl_sc26198updatereg(stlport_t *portp, int regnr, int value)
  *	Functions to get and set the sc26198 global registers.
  */
 
-static int stl_sc26198getglobreg(stlport_t *portp, int regnr)
+static int stl_sc26198getglobreg(struct stlport *portp, int regnr)
 {
 	outb(regnr, (portp->ioaddr + XP_ADDR));
 	return inb(portp->ioaddr + XP_DATA);
 }
 
 #if 0
-static void stl_sc26198setglobreg(stlport_t *portp, int regnr, int value)
+static void stl_sc26198setglobreg(struct stlport *portp, int regnr, int value)
 {
 	outb(regnr, (portp->ioaddr + XP_ADDR));
 	outb(value, (portp->ioaddr + XP_DATA));
@@ -4196,15 +3762,12 @@ static void stl_sc26198setglobreg(stlport_t *portp, int regnr, int value)
  *	identical when dealing with ports.
  */
 
-static int stl_sc26198panelinit(stlbrd_t *brdp, stlpanel_t *panelp)
+static int stl_sc26198panelinit(struct stlbrd *brdp, struct stlpanel *panelp)
 {
 	int	chipmask, i;
 	int	nrchips, ioaddr;
 
-#ifdef DEBUG
-	printk("stl_sc26198panelinit(brdp=%x,panelp=%x)\n",
-		(int) brdp, (int) panelp);
-#endif
+	pr_debug("stl_sc26198panelinit(brdp=%p,panelp=%p)\n", brdp, panelp);
 
 	BRDENABLE(panelp->brdnr, panelp->pagenr);
 
@@ -4216,7 +3779,7 @@ static int stl_sc26198panelinit(stlbrd_t *brdp, stlpanel_t *panelp)
 	if (brdp->brdtype == BRD_ECHPCI)
 		outb(panelp->pagenr, brdp->ioctrl);
 
-	for (i = 0; (i < nrchips); i++) {
+	for (i = 0; i < nrchips; i++) {
 		ioaddr = panelp->iobase + (i * 4); 
 		outb(SCCR, (ioaddr + XP_ADDR));
 		outb(CR_RESETALL, (ioaddr + XP_DATA));
@@ -4244,15 +3807,13 @@ static int stl_sc26198panelinit(stlbrd_t *brdp, stlpanel_t *panelp)
  *	Initialize hardware specific port registers.
  */
 
-static void stl_sc26198portinit(stlbrd_t *brdp, stlpanel_t *panelp, stlport_t *portp)
+static void stl_sc26198portinit(struct stlbrd *brdp, struct stlpanel *panelp, struct stlport *portp)
 {
-#ifdef DEBUG
-	printk("stl_sc26198portinit(brdp=%x,panelp=%x,portp=%x)\n",
-		(int) brdp, (int) panelp, (int) portp);
-#endif
+	pr_debug("stl_sc26198portinit(brdp=%p,panelp=%p,portp=%p)\n", brdp,
+			panelp, portp);
 
-	if ((brdp == (stlbrd_t *) NULL) || (panelp == (stlpanel_t *) NULL) ||
-	    (portp == (stlport_t *) NULL))
+	if ((brdp == NULL) || (panelp == NULL) ||
+	    (portp == NULL))
 		return;
 
 	portp->ioaddr = panelp->iobase + ((portp->portnr < 8) ? 0 : 4);
@@ -4272,9 +3833,9 @@ static void stl_sc26198portinit(stlbrd_t *brdp, stlpanel_t *panelp, stlport_t *p
  *	settings.
  */
 
-static void stl_sc26198setport(stlport_t *portp, struct termios *tiosp)
+static void stl_sc26198setport(struct stlport *portp, struct ktermios *tiosp)
 {
-	stlbrd_t	*brdp;
+	struct stlbrd	*brdp;
 	unsigned long	flags;
 	unsigned int	baudrate;
 	unsigned char	mr0, mr1, mr2, clk;
@@ -4289,7 +3850,7 @@ static void stl_sc26198setport(stlport_t *portp, struct termios *tiosp)
 	imroff = 0;
 
 	brdp = stl_brds[portp->brdnr];
-	if (brdp == (stlbrd_t *) NULL)
+	if (brdp == NULL)
 		return;
 
 /*
@@ -4338,9 +3899,8 @@ static void stl_sc26198setport(stlport_t *portp, struct termios *tiosp)
 			mr1 |= (MR1_PARENB | MR1_PARODD);
 		else
 			mr1 |= (MR1_PARENB | MR1_PAREVEN);
-	} else {
+	} else
 		mr1 |= MR1_PARNONE;
-	}
 
 	mr1 |= MR1_ERRBLOCK;
 
@@ -4380,12 +3940,10 @@ static void stl_sc26198setport(stlport_t *portp, struct termios *tiosp)
 	if (baudrate > STL_SC26198MAXBAUD)
 		baudrate = STL_SC26198MAXBAUD;
 
-	if (baudrate > 0) {
-		for (clk = 0; (clk < SC26198_NRBAUDS); clk++) {
+	if (baudrate > 0)
+		for (clk = 0; clk < SC26198_NRBAUDS; clk++)
 			if (baudrate <= sc26198_baudtable[clk])
 				break;
-		}
-	}
 
 /*
  *	Check what form of modem signaling is required and set it up.
@@ -4407,9 +3965,9 @@ static void stl_sc26198setport(stlport_t *portp, struct termios *tiosp)
 	if (tiosp->c_iflag & IXON) {
 		mr0 |= MR0_SWFTX | MR0_SWFT;
 		imron |= IR_XONXOFF;
-	} else {
+	} else
 		imroff |= IR_XONXOFF;
-	}
+
 	if (tiosp->c_iflag & IXOFF)
 		mr0 |= MR0_SWFRX;
 
@@ -4423,18 +3981,15 @@ static void stl_sc26198setport(stlport_t *portp, struct termios *tiosp)
  *	them all up.
  */
 
-#ifdef DEBUG
-	printk("SETPORT: portnr=%d panelnr=%d brdnr=%d\n",
+	pr_debug("SETPORT: portnr=%d panelnr=%d brdnr=%d\n",
 		portp->portnr, portp->panelnr, portp->brdnr);
-	printk("    mr0=%x mr1=%x mr2=%x clk=%x\n", mr0, mr1, mr2, clk);
-	printk("    iopr=%x imron=%x imroff=%x\n", iopr, imron, imroff);
-	printk("    schr1=%x schr2=%x schr3=%x schr4=%x\n",
+	pr_debug("    mr0=%x mr1=%x mr2=%x clk=%x\n", mr0, mr1, mr2, clk);
+	pr_debug("    iopr=%x imron=%x imroff=%x\n", iopr, imron, imroff);
+	pr_debug("    schr1=%x schr2=%x schr3=%x schr4=%x\n",
 		tiosp->c_cc[VSTART], tiosp->c_cc[VSTOP],
 		tiosp->c_cc[VSTART], tiosp->c_cc[VSTOP]);
-#endif
 
-	save_flags(flags);
-	cli();
+	spin_lock_irqsave(&brd_lock, flags);
 	BRDENABLE(portp->brdnr, portp->pagenr);
 	stl_sc26198setreg(portp, IMR, 0);
 	stl_sc26198updatereg(portp, MR0, mr0);
@@ -4461,7 +4016,7 @@ static void stl_sc26198setport(stlport_t *portp, struct termios *tiosp)
 	portp->imr = (portp->imr & ~imroff) | imron;
 	stl_sc26198setreg(portp, IMR, portp->imr);
 	BRDDISABLE(portp->brdnr);
-	restore_flags(flags);
+	spin_unlock_irqrestore(&brd_lock, flags);
 }
 
 /*****************************************************************************/
@@ -4470,15 +4025,13 @@ static void stl_sc26198setport(stlport_t *portp, struct termios *tiosp)
  *	Set the state of the DTR and RTS signals.
  */
 
-static void stl_sc26198setsignals(stlport_t *portp, int dtr, int rts)
+static void stl_sc26198setsignals(struct stlport *portp, int dtr, int rts)
 {
 	unsigned char	iopioron, iopioroff;
 	unsigned long	flags;
 
-#ifdef DEBUG
-	printk("stl_sc26198setsignals(portp=%x,dtr=%d,rts=%d)\n",
-		(int) portp, dtr, rts);
-#endif
+	pr_debug("stl_sc26198setsignals(portp=%p,dtr=%d,rts=%d)\n", portp,
+			dtr, rts);
 
 	iopioron = 0;
 	iopioroff = 0;
@@ -4491,13 +4044,12 @@ static void stl_sc26198setsignals(stlport_t *portp, int dtr, int rts)
 	else if (rts > 0)
 		iopioron |= IPR_RTS;
 
-	save_flags(flags);
-	cli();
+	spin_lock_irqsave(&brd_lock, flags);
 	BRDENABLE(portp->brdnr, portp->pagenr);
 	stl_sc26198setreg(portp, IOPIOR,
 		((stl_sc26198getreg(portp, IOPIOR) & ~iopioroff) | iopioron));
 	BRDDISABLE(portp->brdnr);
-	restore_flags(flags);
+	spin_unlock_irqrestore(&brd_lock, flags);
 }
 
 /*****************************************************************************/
@@ -4506,22 +4058,19 @@ static void stl_sc26198setsignals(stlport_t *portp, int dtr, int rts)
  *	Return the state of the signals.
  */
 
-static int stl_sc26198getsignals(stlport_t *portp)
+static int stl_sc26198getsignals(struct stlport *portp)
 {
 	unsigned char	ipr;
 	unsigned long	flags;
 	int		sigs;
 
-#ifdef DEBUG
-	printk("stl_sc26198getsignals(portp=%x)\n", (int) portp);
-#endif
+	pr_debug("stl_sc26198getsignals(portp=%p)\n", portp);
 
-	save_flags(flags);
-	cli();
+	spin_lock_irqsave(&brd_lock, flags);
 	BRDENABLE(portp->brdnr, portp->pagenr);
 	ipr = stl_sc26198getreg(portp, IPR);
 	BRDDISABLE(portp->brdnr);
-	restore_flags(flags);
+	spin_unlock_irqrestore(&brd_lock, flags);
 
 	sigs = 0;
 	sigs |= (ipr & IPR_DCD) ? 0 : TIOCM_CD;
@@ -4538,15 +4087,12 @@ static int stl_sc26198getsignals(stlport_t *portp)
  *	Enable/Disable the Transmitter and/or Receiver.
  */
 
-static void stl_sc26198enablerxtx(stlport_t *portp, int rx, int tx)
+static void stl_sc26198enablerxtx(struct stlport *portp, int rx, int tx)
 {
 	unsigned char	ccr;
 	unsigned long	flags;
 
-#ifdef DEBUG
-	printk("stl_sc26198enablerxtx(portp=%x,rx=%d,tx=%d)\n",
-		(int) portp, rx, tx);
-#endif
+	pr_debug("stl_sc26198enablerxtx(portp=%p,rx=%d,tx=%d)\n", portp, rx,tx);
 
 	ccr = portp->crenable;
 	if (tx == 0)
@@ -4558,13 +4104,12 @@ static void stl_sc26198enablerxtx(stlport_t *portp, int rx, int tx)
 	else if (rx > 0)
 		ccr |= CR_RXENABLE;
 
-	save_flags(flags);
-	cli();
+	spin_lock_irqsave(&brd_lock, flags);
 	BRDENABLE(portp->brdnr, portp->pagenr);
 	stl_sc26198setreg(portp, SCCR, ccr);
 	BRDDISABLE(portp->brdnr);
 	portp->crenable = ccr;
-	restore_flags(flags);
+	spin_unlock_irqrestore(&brd_lock, flags);
 }
 
 /*****************************************************************************/
@@ -4573,15 +4118,12 @@ static void stl_sc26198enablerxtx(stlport_t *portp, int rx, int tx)
  *	Start/stop the Transmitter and/or Receiver.
  */
 
-static void stl_sc26198startrxtx(stlport_t *portp, int rx, int tx)
+static void stl_sc26198startrxtx(struct stlport *portp, int rx, int tx)
 {
 	unsigned char	imr;
 	unsigned long	flags;
 
-#ifdef DEBUG
-	printk("stl_sc26198startrxtx(portp=%x,rx=%d,tx=%d)\n",
-		(int) portp, rx, tx);
-#endif
+	pr_debug("stl_sc26198startrxtx(portp=%p,rx=%d,tx=%d)\n", portp, rx, tx);
 
 	imr = portp->imr;
 	if (tx == 0)
@@ -4593,15 +4135,14 @@ static void stl_sc26198startrxtx(stlport_t *portp, int rx, int tx)
 	else if (rx > 0)
 		imr |= IR_RXRDY | IR_RXBREAK | IR_RXWATCHDOG;
 
-	save_flags(flags);
-	cli();
+	spin_lock_irqsave(&brd_lock, flags);
 	BRDENABLE(portp->brdnr, portp->pagenr);
 	stl_sc26198setreg(portp, IMR, imr);
 	BRDDISABLE(portp->brdnr);
 	portp->imr = imr;
 	if (tx > 0)
 		set_bit(ASYI_TXBUSY, &portp->istate);
-	restore_flags(flags);
+	spin_unlock_irqrestore(&brd_lock, flags);
 }
 
 /*****************************************************************************/
@@ -4610,44 +4151,38 @@ static void stl_sc26198startrxtx(stlport_t *portp, int rx, int tx)
  *	Disable all interrupts from this port.
  */
 
-static void stl_sc26198disableintrs(stlport_t *portp)
+static void stl_sc26198disableintrs(struct stlport *portp)
 {
 	unsigned long	flags;
 
-#ifdef DEBUG
-	printk("stl_sc26198disableintrs(portp=%x)\n", (int) portp);
-#endif
+	pr_debug("stl_sc26198disableintrs(portp=%p)\n", portp);
 
-	save_flags(flags);
-	cli();
+	spin_lock_irqsave(&brd_lock, flags);
 	BRDENABLE(portp->brdnr, portp->pagenr);
 	portp->imr = 0;
 	stl_sc26198setreg(portp, IMR, 0);
 	BRDDISABLE(portp->brdnr);
-	restore_flags(flags);
+	spin_unlock_irqrestore(&brd_lock, flags);
 }
 
 /*****************************************************************************/
 
-static void stl_sc26198sendbreak(stlport_t *portp, int len)
+static void stl_sc26198sendbreak(struct stlport *portp, int len)
 {
 	unsigned long	flags;
 
-#ifdef DEBUG
-	printk("stl_sc26198sendbreak(portp=%x,len=%d)\n", (int) portp, len);
-#endif
+	pr_debug("stl_sc26198sendbreak(portp=%p,len=%d)\n", portp, len);
 
-	save_flags(flags);
-	cli();
+	spin_lock_irqsave(&brd_lock, flags);
 	BRDENABLE(portp->brdnr, portp->pagenr);
 	if (len == 1) {
 		stl_sc26198setreg(portp, SCCR, CR_TXSTARTBREAK);
 		portp->stats.txbreaks++;
-	} else {
+	} else
 		stl_sc26198setreg(portp, SCCR, CR_TXSTOPBREAK);
-	}
+
 	BRDDISABLE(portp->brdnr);
-	restore_flags(flags);
+	spin_unlock_irqrestore(&brd_lock, flags);
 }
 
 /*****************************************************************************/
@@ -4656,24 +4191,21 @@ static void stl_sc26198sendbreak(stlport_t *portp, int len)
  *	Take flow control actions...
  */
 
-static void stl_sc26198flowctrl(stlport_t *portp, int state)
+static void stl_sc26198flowctrl(struct stlport *portp, int state)
 {
 	struct tty_struct	*tty;
 	unsigned long		flags;
 	unsigned char		mr0;
 
-#ifdef DEBUG
-	printk("stl_sc26198flowctrl(portp=%x,state=%x)\n", (int) portp, state);
-#endif
+	pr_debug("stl_sc26198flowctrl(portp=%p,state=%x)\n", portp, state);
 
-	if (portp == (stlport_t *) NULL)
+	if (portp == NULL)
 		return;
 	tty = portp->tty;
-	if (tty == (struct tty_struct *) NULL)
+	if (tty == NULL)
 		return;
 
-	save_flags(flags);
-	cli();
+	spin_lock_irqsave(&brd_lock, flags);
 	BRDENABLE(portp->brdnr, portp->pagenr);
 
 	if (state) {
@@ -4719,7 +4251,7 @@ static void stl_sc26198flowctrl(stlport_t *portp, int state)
 	}
 
 	BRDDISABLE(portp->brdnr);
-	restore_flags(flags);
+	spin_unlock_irqrestore(&brd_lock, flags);
 }
 
 /*****************************************************************************/
@@ -4728,24 +4260,21 @@ static void stl_sc26198flowctrl(stlport_t *portp, int state)
  *	Send a flow control character.
  */
 
-static void stl_sc26198sendflow(stlport_t *portp, int state)
+static void stl_sc26198sendflow(struct stlport *portp, int state)
 {
 	struct tty_struct	*tty;
 	unsigned long		flags;
 	unsigned char		mr0;
 
-#ifdef DEBUG
-	printk("stl_sc26198sendflow(portp=%x,state=%x)\n", (int) portp, state);
-#endif
+	pr_debug("stl_sc26198sendflow(portp=%p,state=%x)\n", portp, state);
 
-	if (portp == (stlport_t *) NULL)
+	if (portp == NULL)
 		return;
 	tty = portp->tty;
-	if (tty == (struct tty_struct *) NULL)
+	if (tty == NULL)
 		return;
 
-	save_flags(flags);
-	cli();
+	spin_lock_irqsave(&brd_lock, flags);
 	BRDENABLE(portp->brdnr, portp->pagenr);
 	if (state) {
 		mr0 = stl_sc26198getreg(portp, MR0);
@@ -4765,30 +4294,27 @@ static void stl_sc26198sendflow(stlport_t *portp, int state)
 		stl_sc26198setreg(portp, MR0, mr0);
 	}
 	BRDDISABLE(portp->brdnr);
-	restore_flags(flags);
+	spin_unlock_irqrestore(&brd_lock, flags);
 }
 
 /*****************************************************************************/
 
-static void stl_sc26198flush(stlport_t *portp)
+static void stl_sc26198flush(struct stlport *portp)
 {
 	unsigned long	flags;
 
-#ifdef DEBUG
-	printk("stl_sc26198flush(portp=%x)\n", (int) portp);
-#endif
+	pr_debug("stl_sc26198flush(portp=%p)\n", portp);
 
-	if (portp == (stlport_t *) NULL)
+	if (portp == NULL)
 		return;
 
-	save_flags(flags);
-	cli();
+	spin_lock_irqsave(&brd_lock, flags);
 	BRDENABLE(portp->brdnr, portp->pagenr);
 	stl_sc26198setreg(portp, SCCR, CR_TXRESET);
 	stl_sc26198setreg(portp, SCCR, portp->crenable);
 	BRDDISABLE(portp->brdnr);
 	portp->tx.tail = portp->tx.head;
-	restore_flags(flags);
+	spin_unlock_irqrestore(&brd_lock, flags);
 }
 
 /*****************************************************************************/
@@ -4801,26 +4327,23 @@ static void stl_sc26198flush(stlport_t *portp)
  *	check the port statusy register to be sure.
  */
 
-static int stl_sc26198datastate(stlport_t *portp)
+static int stl_sc26198datastate(struct stlport *portp)
 {
 	unsigned long	flags;
 	unsigned char	sr;
 
-#ifdef DEBUG
-	printk("stl_sc26198datastate(portp=%x)\n", (int) portp);
-#endif
+	pr_debug("stl_sc26198datastate(portp=%p)\n", portp);
 
-	if (portp == (stlport_t *) NULL)
+	if (portp == NULL)
 		return 0;
 	if (test_bit(ASYI_TXBUSY, &portp->istate))
 		return 1;
 
-	save_flags(flags);
-	cli();
+	spin_lock_irqsave(&brd_lock, flags);
 	BRDENABLE(portp->brdnr, portp->pagenr);
 	sr = stl_sc26198getreg(portp, SR);
 	BRDDISABLE(portp->brdnr);
-	restore_flags(flags);
+	spin_unlock_irqrestore(&brd_lock, flags);
 
 	return (sr & SR_TXEMPTY) ? 0 : 1;
 }
@@ -4832,18 +4355,16 @@ static int stl_sc26198datastate(stlport_t *portp)
  *	to process a command...
  */
 
-static void stl_sc26198wait(stlport_t *portp)
+static void stl_sc26198wait(struct stlport *portp)
 {
 	int	i;
 
-#ifdef DEBUG
-	printk("stl_sc26198wait(portp=%x)\n", (int) portp);
-#endif
+	pr_debug("stl_sc26198wait(portp=%p)\n", portp);
 
-	if (portp == (stlport_t *) NULL)
+	if (portp == NULL)
 		return;
 
-	for (i = 0; (i < 20); i++)
+	for (i = 0; i < 20; i++)
 		stl_sc26198getglobreg(portp, TSTR);
 }
 
@@ -4855,7 +4376,7 @@ static void stl_sc26198wait(stlport_t *portp)
  *	automatic flow control modes of the sc26198.
  */
 
-static inline void stl_sc26198txunflow(stlport_t *portp, struct tty_struct *tty)
+static void stl_sc26198txunflow(struct stlport *portp, struct tty_struct *tty)
 {
 	unsigned char	mr0;
 
@@ -4873,10 +4394,12 @@ static inline void stl_sc26198txunflow(stlport_t *portp, struct tty_struct *tty)
  *	Interrupt service routine for sc26198 panels.
  */
 
-static void stl_sc26198intr(stlpanel_t *panelp, unsigned int iobase)
+static void stl_sc26198intr(struct stlpanel *panelp, unsigned int iobase)
 {
-	stlport_t	*portp;
+	struct stlport	*portp;
 	unsigned int	iack;
+
+	spin_lock(&brd_lock);
 
 /* 
  *	Work around bug in sc26198 chip... Cannot have A6 address
@@ -4893,6 +4416,8 @@ static void stl_sc26198intr(stlpanel_t *panelp, unsigned int iobase)
 		stl_sc26198txisr(portp);
 	else
 		stl_sc26198otherisr(portp, iack);
+
+	spin_unlock(&brd_lock);
 }
 
 /*****************************************************************************/
@@ -4907,16 +4432,14 @@ static void stl_sc26198intr(stlpanel_t *panelp, unsigned int iobase)
  *	be NULL if the buffer has been freed.
  */
 
-static void stl_sc26198txisr(stlport_t *portp)
+static void stl_sc26198txisr(struct stlport *portp)
 {
 	unsigned int	ioaddr;
 	unsigned char	mr0;
 	int		len, stlen;
 	char		*head, *tail;
 
-#ifdef DEBUG
-	printk("stl_sc26198txisr(portp=%x)\n", (int) portp);
-#endif
+	pr_debug("stl_sc26198txisr(portp=%p)\n", portp);
 
 	ioaddr = portp->ioaddr;
 	head = portp->tx.head;
@@ -4941,9 +4464,9 @@ static void stl_sc26198txisr(stlport_t *portp)
 			outb(mr0, (ioaddr + XP_DATA));
 		}
 	} else {
-		len = MIN(len, SC26198_TXFIFOSIZE);
+		len = min(len, SC26198_TXFIFOSIZE);
 		portp->stats.txtotal += len;
-		stlen = MIN(len, ((portp->tx.buf + STL_TXBUFSIZE) - tail));
+		stlen = min(len, ((portp->tx.buf + STL_TXBUFSIZE) - tail));
 		outb(GTXFIFO, (ioaddr + XP_ADDR));
 		outsb((ioaddr + XP_DATA), tail, stlen);
 		len -= stlen;
@@ -4970,14 +4493,12 @@ static void stl_sc26198txisr(stlport_t *portp)
  *	shutdown a port not in user context. Need to handle this case.
  */
 
-static void stl_sc26198rxisr(stlport_t *portp, unsigned int iack)
+static void stl_sc26198rxisr(struct stlport *portp, unsigned int iack)
 {
 	struct tty_struct	*tty;
 	unsigned int		len, buflen, ioaddr;
 
-#ifdef DEBUG
-	printk("stl_sc26198rxisr(portp=%x,iack=%x)\n", (int) portp, iack);
-#endif
+	pr_debug("stl_sc26198rxisr(portp=%p,iack=%x)\n", portp, iack);
 
 	tty = portp->tty;
 	ioaddr = portp->ioaddr;
@@ -4986,13 +4507,13 @@ static void stl_sc26198rxisr(stlport_t *portp, unsigned int iack)
 
 	if ((iack & IVR_TYPEMASK) == IVR_RXDATA) {
 		if (tty == NULL || (buflen = tty_buffer_request_room(tty, len)) == 0) {
-			len = MIN(len, sizeof(stl_unwanted));
+			len = min(len, sizeof(stl_unwanted));
 			outb(GRXFIFO, (ioaddr + XP_ADDR));
 			insb((ioaddr + XP_DATA), &stl_unwanted[0], len);
 			portp->stats.rxlost += len;
 			portp->stats.rxtotal += len;
 		} else {
-			len = MIN(len, buflen);
+			len = min(len, buflen);
 			if (len > 0) {
 				unsigned char *ptr;
 				outb(GRXFIFO, (ioaddr + XP_ADDR));
@@ -5012,8 +4533,8 @@ static void stl_sc26198rxisr(stlport_t *portp, unsigned int iack)
  *	flow control modes of the sc26198.
  */
 	if (test_bit(ASYI_TXFLOWED, &portp->istate)) {
-		if ((tty != (struct tty_struct *) NULL) &&
-		    (tty->termios != (struct termios *) NULL) &&
+		if ((tty != NULL) &&
+		    (tty->termios != NULL) &&
 		    (tty->termios->c_iflag & IXANY)) {
 			stl_sc26198txunflow(portp, tty);
 		}
@@ -5026,7 +4547,7 @@ static void stl_sc26198rxisr(stlport_t *portp, unsigned int iack)
  *	Process an RX bad character.
  */
 
-static inline void stl_sc26198rxbadch(stlport_t *portp, unsigned char status, char ch)
+static void stl_sc26198rxbadch(struct stlport *portp, unsigned char status, char ch)
 {
 	struct tty_struct	*tty;
 	unsigned int		ioaddr;
@@ -5043,7 +4564,7 @@ static inline void stl_sc26198rxbadch(stlport_t *portp, unsigned char status, ch
 	if (status & SR_RXBREAK)
 		portp->stats.rxbreaks++;
 
-	if ((tty != (struct tty_struct *) NULL) &&
+	if ((tty != NULL) &&
 	    ((portp->rxignoremsk & status) == 0)) {
 		if (portp->rxmarkmsk & status) {
 			if (status & SR_RXBREAK) {
@@ -5052,18 +4573,16 @@ static inline void stl_sc26198rxbadch(stlport_t *portp, unsigned char status, ch
 					do_SAK(tty);
 					BRDENABLE(portp->brdnr, portp->pagenr);
 				}
-			} else if (status & SR_RXPARITY) {
+			} else if (status & SR_RXPARITY)
 				status = TTY_PARITY;
-			} else if (status & SR_RXFRAMING) {
+			else if (status & SR_RXFRAMING)
 				status = TTY_FRAME;
-			} else if(status & SR_RXOVERRUN) {
+			else if(status & SR_RXOVERRUN)
 				status = TTY_OVERRUN;
-			} else {
+			else
 				status = 0;
-			}
-		} else {
+		} else
 			status = 0;
-		}
 
 		tty_insert_flip_char(tty, ch, status);
 		tty_schedule_flip(tty);
@@ -5084,7 +4603,7 @@ static inline void stl_sc26198rxbadch(stlport_t *portp, unsigned char status, ch
  *	the FIFO).
  */
 
-static void stl_sc26198rxbadchars(stlport_t *portp)
+static void stl_sc26198rxbadchars(struct stlport *portp)
 {
 	unsigned char	status, mr1;
 	char		ch;
@@ -5117,13 +4636,11 @@ static void stl_sc26198rxbadchars(stlport_t *portp)
  *	processing time.
  */
 
-static void stl_sc26198otherisr(stlport_t *portp, unsigned int iack)
+static void stl_sc26198otherisr(struct stlport *portp, unsigned int iack)
 {
 	unsigned char	cir, ipr, xisr;
 
-#ifdef DEBUG
-	printk("stl_sc26198otherisr(portp=%x,iack=%x)\n", (int) portp, iack);
-#endif
+	pr_debug("stl_sc26198otherisr(portp=%p,iack=%x)\n", portp, iack);
 
 	cir = stl_sc26198getglobreg(portp, CIR);
 
@@ -5156,4 +4673,172 @@ static void stl_sc26198otherisr(stlport_t *portp, unsigned int iack)
 	}
 }
 
-/*****************************************************************************/
+static void stl_free_isabrds(void)
+{
+	struct stlbrd *brdp;
+	unsigned int i;
+
+	for (i = 0; i < stl_nrbrds; i++) {
+		if ((brdp = stl_brds[i]) == NULL || (brdp->state & STL_PROBED))
+			continue;
+
+		free_irq(brdp->irq, brdp);
+
+		stl_cleanup_panels(brdp);
+
+		release_region(brdp->ioaddr1, brdp->iosize1);
+		if (brdp->iosize2 > 0)
+			release_region(brdp->ioaddr2, brdp->iosize2);
+
+		kfree(brdp);
+		stl_brds[i] = NULL;
+	}
+}
+
+/*
+ *	Loadable module initialization stuff.
+ */
+static int __init stallion_module_init(void)
+{
+	struct stlbrd	*brdp;
+	struct stlconf	conf;
+	unsigned int i, j;
+	int retval;
+
+	printk(KERN_INFO "%s: version %s\n", stl_drvtitle, stl_drvversion);
+
+	spin_lock_init(&stallion_lock);
+	spin_lock_init(&brd_lock);
+
+/*
+ *	Find any dynamically supported boards. That is via module load
+ *	line options.
+ */
+	for (i = stl_nrbrds; i < stl_nargs; i++) {
+		memset(&conf, 0, sizeof(conf));
+		if (stl_parsebrd(&conf, stl_brdsp[i]) == 0)
+			continue;
+		if ((brdp = stl_allocbrd()) == NULL)
+			continue;
+		brdp->brdnr = i;
+		brdp->brdtype = conf.brdtype;
+		brdp->ioaddr1 = conf.ioaddr1;
+		brdp->ioaddr2 = conf.ioaddr2;
+		brdp->irq = conf.irq;
+		brdp->irqtype = conf.irqtype;
+		if (stl_brdinit(brdp))
+			kfree(brdp);
+		else {
+			for (j = 0; j < brdp->nrports; j++)
+				tty_register_device(stl_serial,
+					brdp->brdnr * STL_MAXPORTS + j, NULL);
+			stl_brds[brdp->brdnr] = brdp;
+			stl_nrbrds = i + 1;
+		}
+	}
+
+	/* this has to be _after_ isa finding because of locking */
+	retval = pci_register_driver(&stl_pcidriver);
+	if (retval && stl_nrbrds == 0)
+		goto err;
+
+	stl_serial = alloc_tty_driver(STL_MAXBRDS * STL_MAXPORTS);
+	if (!stl_serial) {
+		retval = -ENOMEM;
+		goto err_pcidr;
+	}
+
+/*
+ *	Set up a character driver for per board stuff. This is mainly used
+ *	to do stats ioctls on the ports.
+ */
+	if (register_chrdev(STL_SIOMEMMAJOR, "staliomem", &stl_fsiomem))
+		printk("STALLION: failed to register serial board device\n");
+
+	stallion_class = class_create(THIS_MODULE, "staliomem");
+	if (IS_ERR(stallion_class)) {
+		retval = PTR_ERR(stallion_class);
+		goto err_reg;
+	}
+	for (i = 0; i < 4; i++)
+		class_device_create(stallion_class, NULL,
+				    MKDEV(STL_SIOMEMMAJOR, i), NULL,
+				    "staliomem%d", i);
+
+	stl_serial->owner = THIS_MODULE;
+	stl_serial->driver_name = stl_drvname;
+	stl_serial->name = "ttyE";
+	stl_serial->major = STL_SERIALMAJOR;
+	stl_serial->minor_start = 0;
+	stl_serial->type = TTY_DRIVER_TYPE_SERIAL;
+	stl_serial->subtype = SERIAL_TYPE_NORMAL;
+	stl_serial->init_termios = stl_deftermios;
+	stl_serial->flags = TTY_DRIVER_REAL_RAW | TTY_DRIVER_DYNAMIC_DEV;
+	tty_set_operations(stl_serial, &stl_ops);
+
+	retval = tty_register_driver(stl_serial);
+	if (retval) {
+		printk("STALLION: failed to register serial driver\n");
+		goto err_clsdev;
+	}
+
+	return 0;
+err_clsdev:
+	for (i = 0; i < 4; i++)
+		class_device_destroy(stallion_class, MKDEV(STL_SIOMEMMAJOR, i));
+	class_destroy(stallion_class);
+err_reg:
+	unregister_chrdev(STL_SIOMEMMAJOR, "staliomem");
+	put_tty_driver(stl_serial);
+err_pcidr:
+	pci_unregister_driver(&stl_pcidriver);
+	stl_free_isabrds();
+err:
+	return retval;
+}
+
+static void __exit stallion_module_exit(void)
+{
+	struct stlbrd *brdp;
+	unsigned int i, j;
+	int retval;
+
+	pr_debug("cleanup_module()\n");
+
+	printk(KERN_INFO "Unloading %s: version %s\n", stl_drvtitle,
+		stl_drvversion);
+
+/*
+ *	Free up all allocated resources used by the ports. This includes
+ *	memory and interrupts. As part of this process we will also do
+ *	a hangup on every open port - to try to flush out any processes
+ *	hanging onto ports.
+ */
+	for (i = 0; i < stl_nrbrds; i++) {
+		if ((brdp = stl_brds[i]) == NULL || (brdp->state & STL_PROBED))
+			continue;
+		for (j = 0; j < brdp->nrports; j++)
+			tty_unregister_device(stl_serial,
+				brdp->brdnr * STL_MAXPORTS + j);
+	}
+	tty_unregister_driver(stl_serial);
+	put_tty_driver(stl_serial);
+
+	for (i = 0; i < 4; i++)
+		class_device_destroy(stallion_class, MKDEV(STL_SIOMEMMAJOR, i));
+	if ((retval = unregister_chrdev(STL_SIOMEMMAJOR, "staliomem")))
+		printk("STALLION: failed to un-register serial memory device, "
+			"errno=%d\n", -retval);
+	class_destroy(stallion_class);
+
+	pci_unregister_driver(&stl_pcidriver);
+
+	stl_free_isabrds();
+}
+
+module_init(stallion_module_init);
+module_exit(stallion_module_exit);
+
+MODULE_AUTHOR("Greg Ungerer");
+MODULE_DESCRIPTION("Stallion Multiport Serial Driver");
+MODULE_LICENSE("GPL");

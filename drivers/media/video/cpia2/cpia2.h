@@ -33,6 +33,7 @@
 
 #include <linux/version.h>
 #include <linux/videodev.h>
+#include <media/v4l2-common.h>
 #include <linux/usb.h>
 #include <linux/poll.h>
 
@@ -49,10 +50,6 @@
 /***
  * Image defines
  ***/
-#ifndef true
-#define true 1
-#define false 0
-#endif
 
 /*  Misc constants */
 #define ALLOW_CORRUPT 0		/* Causes collater to discard checksum */

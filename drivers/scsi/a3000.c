@@ -26,7 +26,7 @@
 
 static struct Scsi_Host *a3000_host = NULL;
 
-static irqreturn_t a3000_intr (int irq, void *dummy, struct pt_regs *fp)
+static irqreturn_t a3000_intr (int irq, void *dummy)
 {
 	unsigned long flags;
 	unsigned int status = DMA(a3000_host)->ISTR;
@@ -44,7 +44,7 @@ static irqreturn_t a3000_intr (int irq, void *dummy, struct pt_regs *fp)
 	return IRQ_NONE;
 }
 
-static int dma_setup (Scsi_Cmnd *cmd, int dir_in)
+static int dma_setup(struct scsi_cmnd *cmd, int dir_in)
 {
     unsigned short cntr = CNTR_PDMD | CNTR_INTEN;
     unsigned long addr = virt_to_bus(cmd->SCp.ptr);
@@ -110,8 +110,8 @@ static int dma_setup (Scsi_Cmnd *cmd, int dir_in)
     return 0;
 }
 
-static void dma_stop (struct Scsi_Host *instance, Scsi_Cmnd *SCpnt,
-		      int status)
+static void dma_stop(struct Scsi_Host *instance, struct scsi_cmnd *SCpnt,
+		     int status)
 {
     /* disable SCSI interrupts */
     unsigned short cntr = CNTR_PDMD;
@@ -190,7 +190,7 @@ int __init a3000_detect(struct scsi_host_template *tpnt)
     regs.SASR = &(DMA(a3000_host)->SASR);
     regs.SCMD = &(DMA(a3000_host)->SCMD);
     wd33c93_init(a3000_host, regs, dma_setup, dma_stop, WD33C93_FS_12_15);
-    if (request_irq(IRQ_AMIGA_PORTS, a3000_intr, SA_SHIRQ, "A3000 SCSI",
+    if (request_irq(IRQ_AMIGA_PORTS, a3000_intr, IRQF_SHARED, "A3000 SCSI",
 		    a3000_intr))
         goto fail_irq;
     DMA(a3000_host)->CNTR = CNTR_PDMD | CNTR_INTEN;
@@ -205,7 +205,7 @@ fail_register:
     return 0;
 }
 
-static int a3000_bus_reset(Scsi_Cmnd *cmd)
+static int a3000_bus_reset(struct scsi_cmnd *cmd)
 {
 	/* FIXME perform bus-specific reset */
 	

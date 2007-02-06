@@ -15,7 +15,6 @@
  *		- make ip_nat_resize_packet more generic (TCP and UDP)
  *		- add ip_nat_mangle_udp_packet
  */
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/kmod.h>
 #include <linux/types.h>
@@ -28,16 +27,12 @@
 #include <net/tcp.h>
 #include <net/udp.h>
 
-#define ASSERT_READ_LOCK(x)
-#define ASSERT_WRITE_LOCK(x)
-
 #include <linux/netfilter_ipv4/ip_conntrack.h>
 #include <linux/netfilter_ipv4/ip_conntrack_helper.h>
 #include <linux/netfilter_ipv4/ip_nat.h>
 #include <linux/netfilter_ipv4/ip_nat_protocol.h>
 #include <linux/netfilter_ipv4/ip_nat_core.h>
 #include <linux/netfilter_ipv4/ip_nat_helper.h>
-#include <linux/netfilter_ipv4/listhelp.h>
 
 #if 0
 #define DEBUGP printk
@@ -166,7 +161,7 @@ ip_nat_mangle_tcp_packet(struct sk_buff **pskb,
 {
 	struct iphdr *iph;
 	struct tcphdr *tcph;
-	int datalen;
+	int oldlen, datalen;
 
 	if (!skb_make_writable(pskb, (*pskb)->len))
 		return 0;
@@ -181,13 +176,20 @@ ip_nat_mangle_tcp_packet(struct sk_buff **pskb,
 	iph = (*pskb)->nh.iph;
 	tcph = (void *)iph + iph->ihl*4;
 
+	oldlen = (*pskb)->len - iph->ihl*4;
 	mangle_contents(*pskb, iph->ihl*4 + tcph->doff*4,
 			match_offset, match_len, rep_buffer, rep_len);
 
 	datalen = (*pskb)->len - iph->ihl*4;
-	tcph->check = 0;
-	tcph->check = tcp_v4_check(tcph, datalen, iph->saddr, iph->daddr,
-				   csum_partial((char *)tcph, datalen, 0));
+	if ((*pskb)->ip_summed != CHECKSUM_PARTIAL) {
+		tcph->check = 0;
+		tcph->check = tcp_v4_check(tcph, datalen,
+					   iph->saddr, iph->daddr,
+					   csum_partial((char *)tcph,
+					   		datalen, 0));
+	} else
+		nf_proto_csum_replace2(&tcph->check, *pskb,
+					htons(oldlen), htons(datalen), 1);
 
 	if (rep_len != match_len) {
 		set_bit(IPS_SEQ_ADJUST_BIT, &ct->status);
@@ -222,6 +224,7 @@ ip_nat_mangle_udp_packet(struct sk_buff **pskb,
 {
 	struct iphdr *iph;
 	struct udphdr *udph;
+	int datalen, oldlen;
 
 	/* UDP helpers might accidentally mangle the wrong packet */
 	iph = (*pskb)->nh.iph;
@@ -239,22 +242,30 @@ ip_nat_mangle_udp_packet(struct sk_buff **pskb,
 
 	iph = (*pskb)->nh.iph;
 	udph = (void *)iph + iph->ihl*4;
+
+	oldlen = (*pskb)->len - iph->ihl*4;
 	mangle_contents(*pskb, iph->ihl*4 + sizeof(*udph),
 			match_offset, match_len, rep_buffer, rep_len);
 
 	/* update the length of the UDP packet */
-	udph->len = htons((*pskb)->len - iph->ihl*4);
+	datalen = (*pskb)->len - iph->ihl*4;
+	udph->len = htons(datalen);
 
 	/* fix udp checksum if udp checksum was previously calculated */
-	if (udph->check) {
-		int datalen = (*pskb)->len - iph->ihl * 4;
+	if (!udph->check && (*pskb)->ip_summed != CHECKSUM_PARTIAL)
+		return 1;
+
+	if ((*pskb)->ip_summed != CHECKSUM_PARTIAL) {
 		udph->check = 0;
 		udph->check = csum_tcpudp_magic(iph->saddr, iph->daddr,
 		                                datalen, IPPROTO_UDP,
 		                                csum_partial((char *)udph,
 		                                             datalen, 0));
-	}
-
+		if (!udph->check)
+			udph->check = CSUM_MANGLED_0;
+	} else
+		nf_proto_csum_replace2(&udph->check, *pskb,
+					htons(oldlen), htons(datalen), 1);
 	return 1;
 }
 EXPORT_SYMBOL(ip_nat_mangle_udp_packet);
@@ -268,37 +279,34 @@ sack_adjust(struct sk_buff *skb,
 	    struct ip_nat_seq *natseq)
 {
 	while (sackoff < sackend) {
-		struct tcp_sack_block *sack;
-		u_int32_t new_start_seq, new_end_seq;
+		struct tcp_sack_block_wire *sack;
+		__be32 new_start_seq, new_end_seq;
 
 		sack = (void *)skb->data + sackoff;
 		if (after(ntohl(sack->start_seq) - natseq->offset_before,
 			  natseq->correction_pos))
-			new_start_seq = ntohl(sack->start_seq) 
-					- natseq->offset_after;
+			new_start_seq = htonl(ntohl(sack->start_seq)
+					- natseq->offset_after);
 		else
-			new_start_seq = ntohl(sack->start_seq) 
-					- natseq->offset_before;
-		new_start_seq = htonl(new_start_seq);
+			new_start_seq = htonl(ntohl(sack->start_seq)
+					- natseq->offset_before);
 
 		if (after(ntohl(sack->end_seq) - natseq->offset_before,
 			  natseq->correction_pos))
-			new_end_seq = ntohl(sack->end_seq)
-				      - natseq->offset_after;
+			new_end_seq = htonl(ntohl(sack->end_seq)
+				      - natseq->offset_after);
 		else
-			new_end_seq = ntohl(sack->end_seq)
-				      - natseq->offset_before;
-		new_end_seq = htonl(new_end_seq);
+			new_end_seq = htonl(ntohl(sack->end_seq)
+				      - natseq->offset_before);
 
 		DEBUGP("sack_adjust: start_seq: %d->%d, end_seq: %d->%d\n",
 			ntohl(sack->start_seq), new_start_seq,
 			ntohl(sack->end_seq), new_end_seq);
 
-		tcph->check = 
-			ip_nat_cheat_check(~sack->start_seq, new_start_seq,
-					   ip_nat_cheat_check(~sack->end_seq, 
-						   	      new_end_seq,
-							      tcph->check));
+		nf_proto_csum_replace4(&tcph->check, skb,
+					sack->start_seq, new_start_seq, 0);
+		nf_proto_csum_replace4(&tcph->check, skb,
+					sack->end_seq, new_end_seq, 0);
 		sack->start_seq = new_start_seq;
 		sack->end_seq = new_end_seq;
 		sackoff += sizeof(*sack);
@@ -357,7 +365,8 @@ ip_nat_seq_adjust(struct sk_buff **pskb,
 		  enum ip_conntrack_info ctinfo)
 {
 	struct tcphdr *tcph;
-	int dir, newseq, newack;
+	int dir;
+	__be32 newseq, newack;
 	struct ip_nat_seq *this_way, *other_way;	
 
 	dir = CTINFO2DIR(ctinfo);
@@ -370,22 +379,18 @@ ip_nat_seq_adjust(struct sk_buff **pskb,
 
 	tcph = (void *)(*pskb)->data + (*pskb)->nh.iph->ihl*4;
 	if (after(ntohl(tcph->seq), this_way->correction_pos))
-		newseq = ntohl(tcph->seq) + this_way->offset_after;
+		newseq = htonl(ntohl(tcph->seq) + this_way->offset_after);
 	else
-		newseq = ntohl(tcph->seq) + this_way->offset_before;
-	newseq = htonl(newseq);
+		newseq = htonl(ntohl(tcph->seq) + this_way->offset_before);
 
 	if (after(ntohl(tcph->ack_seq) - other_way->offset_before,
 		  other_way->correction_pos))
-		newack = ntohl(tcph->ack_seq) - other_way->offset_after;
+		newack = htonl(ntohl(tcph->ack_seq) - other_way->offset_after);
 	else
-		newack = ntohl(tcph->ack_seq) - other_way->offset_before;
-	newack = htonl(newack);
+		newack = htonl(ntohl(tcph->ack_seq) - other_way->offset_before);
 
-	tcph->check = ip_nat_cheat_check(~tcph->seq, newseq,
-					 ip_nat_cheat_check(~tcph->ack_seq, 
-					 		    newack, 
-							    tcph->check));
+	nf_proto_csum_replace4(&tcph->check, *pskb, tcph->seq, newseq, 0);
+	nf_proto_csum_replace4(&tcph->check, *pskb, tcph->ack_seq, newack, 0);
 
 	DEBUGP("Adjusting sequence number from %u->%u, ack from %u->%u\n",
 		ntohl(tcph->seq), ntohl(newseq), ntohl(tcph->ack_seq),

@@ -67,13 +67,13 @@ init_srm_irqs(long max, unsigned long ignore_mask)
 		if (i < 64 && ((ignore_mask >> i) & 1))
 			continue;
 		irq_desc[i].status = IRQ_DISABLED | IRQ_LEVEL;
-		irq_desc[i].handler = &srm_irq_type;
+		irq_desc[i].chip = &srm_irq_type;
 	}
 }
 
 void 
-srm_device_interrupt(unsigned long vector, struct pt_regs * regs)
+srm_device_interrupt(unsigned long vector)
 {
 	int irq = (vector - 0x800) >> 4;
-	handle_irq(irq, regs);
+	handle_irq(irq);
 }

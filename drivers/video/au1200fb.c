@@ -1545,7 +1545,7 @@ static struct fb_ops au1200fb_fb_ops = {
 
 /*-------------------------------------------------------------------------*/
 
-static irqreturn_t au1200fb_handle_irq(int irq, void* dev_id, struct pt_regs *regs)
+static irqreturn_t au1200fb_handle_irq(int irq, void* dev_id)
 {
 	/* Nothing to do for now, just clear any pending interrupt */
 	lcd->intstatus = lcd->intstatus;
@@ -1694,7 +1694,7 @@ static int au1200fb_drv_probe(struct device *dev)
 
 	/* Now hook interrupt too */
 	if ((ret = request_irq(AU1200_LCD_INT, au1200fb_handle_irq,
-		 	  SA_INTERRUPT | SA_SHIRQ, "lcd", (void *)dev)) < 0) {
+		 	  IRQF_DISABLED | IRQF_SHARED, "lcd", (void *)dev)) < 0) {
 		print_err("fail to request interrupt line %d (err: %d)",
 			  AU1200_LCD_INT, ret);
 		goto failed;

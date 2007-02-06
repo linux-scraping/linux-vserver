@@ -568,7 +568,7 @@ static void snd_hammerfall_free_buffer(struct snd_dma_buffer *dmab, struct pci_d
 }
 
 
-static struct pci_device_id snd_hdsp_ids[] __devinitdata = {
+static struct pci_device_id snd_hdsp_ids[] = {
 	{
 		.vendor = PCI_VENDOR_ID_XILINX,
 		.device = PCI_DEVICE_ID_XILINX_HAMMERFALL_DSP, 
@@ -726,22 +726,36 @@ static int hdsp_get_iobox_version (struct hdsp *hdsp)
 }
 
 
-static int hdsp_check_for_firmware (struct hdsp *hdsp, int show_err)
+#ifdef HDSP_FW_LOADER
+static int __devinit hdsp_request_fw_loader(struct hdsp *hdsp);
+#endif
+
+static int hdsp_check_for_firmware (struct hdsp *hdsp, int load_on_demand)
 {
-	if (hdsp->io_type == H9652 || hdsp->io_type == H9632) return 0;
+	if (hdsp->io_type == H9652 || hdsp->io_type == H9632)
+		return 0;
 	if ((hdsp_read (hdsp, HDSP_statusRegister) & HDSP_DllError) != 0) {
-		snd_printk(KERN_ERR "Hammerfall-DSP: firmware not present.\n");
 		hdsp->state &= ~HDSP_FirmwareLoaded;
-		if (! show_err)
+		if (! load_on_demand)
 			return -EIO;
+		snd_printk(KERN_ERR "Hammerfall-DSP: firmware not present.\n");
 		/* try to load firmware */
-		if (hdsp->state & HDSP_FirmwareCached) {
-			if (snd_hdsp_load_firmware_from_cache(hdsp) != 0)
-				snd_printk(KERN_ERR "Hammerfall-DSP: Firmware loading from cache failed, please upload manually.\n");
-		} else {
-			snd_printk(KERN_ERR "Hammerfall-DSP: No firmware loaded nor cached, please upload firmware.\n");
+		if (! (hdsp->state & HDSP_FirmwareCached)) {
+#ifdef HDSP_FW_LOADER
+			if (! hdsp_request_fw_loader(hdsp))
+				return 0;
+#endif
+			snd_printk(KERN_ERR
+				   "Hammerfall-DSP: No firmware loaded nor "
+				   "cached, please upload firmware.\n");
+			return -EIO;
 		}
-		return -EIO;
+		if (snd_hdsp_load_firmware_from_cache(hdsp) != 0) {
+			snd_printk(KERN_ERR
+				   "Hammerfall-DSP: Firmware loading from "
+				   "cache failed, please upload manually.\n");
+			return -EIO;
+		}
 	}
 	return 0;
 }
@@ -1356,7 +1370,7 @@ static struct snd_rawmidi_ops snd_hdsp_midi_input =
 	.trigger =	snd_hdsp_midi_input_trigger,
 };
 
-static int __devinit snd_hdsp_create_midi (struct snd_card *card, struct hdsp *hdsp, int id)
+static int snd_hdsp_create_midi (struct snd_card *card, struct hdsp *hdsp, int id)
 {
 	char buf[32];
 
@@ -3181,8 +3195,16 @@ snd_hdsp_proc_read(struct snd_info_entry *entry, struct snd_info_buffer *buffer)
 				return;
 			}
 		} else {
-			snd_iprintf(buffer, "No firmware loaded nor cached, please upload firmware.\n");
-			return;
+			int err = -EINVAL;
+#ifdef HDSP_FW_LOADER
+			err = hdsp_request_fw_loader(hdsp);
+#endif
+			if (err < 0) {
+				snd_iprintf(buffer,
+					    "No firmware loaded nor cached, "
+					    "please upload firmware.\n");
+				return;
+			}
 		}
 	}
 	
@@ -3471,7 +3493,7 @@ static void __devinit snd_hdsp_proc_init(struct hdsp *hdsp)
 	struct snd_info_entry *entry;
 
 	if (! snd_card_proc_new(hdsp->card, "hdsp", &entry))
-		snd_info_set_text_ops(entry, hdsp, 1024, snd_hdsp_proc_read);
+		snd_info_set_text_ops(entry, hdsp, snd_hdsp_proc_read);
 }
 
 static void snd_hdsp_free_buffers(struct hdsp *hdsp)
@@ -3494,8 +3516,8 @@ static int __devinit snd_hdsp_initialize_memory(struct hdsp *hdsp)
 
 	/* Align to bus-space 64K boundary */
 
-	cb_bus = (hdsp->capture_dma_buf.addr + 0xFFFF) & ~0xFFFFl;
-	pb_bus = (hdsp->playback_dma_buf.addr + 0xFFFF) & ~0xFFFFl;
+	cb_bus = ALIGN(hdsp->capture_dma_buf.addr, 0x10000ul);
+	pb_bus = ALIGN(hdsp->playback_dma_buf.addr, 0x10000ul);
 
 	/* Tell the card where it is */
 
@@ -3581,7 +3603,7 @@ static void hdsp_midi_tasklet(unsigned long arg)
 		snd_hdsp_midi_input_read (&hdsp->midi[1]);
 } 
 
-static irqreturn_t snd_hdsp_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t snd_hdsp_interrupt(int irq, void *dev_id)
 {
 	struct hdsp *hdsp = (struct hdsp *) dev_id;
 	unsigned int status;
@@ -3851,7 +3873,7 @@ static int snd_hdsp_trigger(struct snd_pcm_substream *substream, int cmd)
 	if (hdsp_check_for_iobox (hdsp))
 		return -EIO;
 
-	if (hdsp_check_for_firmware(hdsp, 1))
+	if (hdsp_check_for_firmware(hdsp, 0)) /* no auto-loading in trigger */
 		return -EIO;
 
 	spin_lock(&hdsp->lock);
@@ -4912,13 +4934,14 @@ static int __devinit snd_hdsp_create(struct snd_card *card,
 		return -EBUSY;
 	}
 
-	if (request_irq(pci->irq, snd_hdsp_interrupt, SA_INTERRUPT|SA_SHIRQ, "hdsp", (void *)hdsp)) {
+	if (request_irq(pci->irq, snd_hdsp_interrupt, IRQF_SHARED,
+			"hdsp", hdsp)) {
 		snd_printk(KERN_ERR "Hammerfall-DSP: unable to use IRQ %d\n", pci->irq);
 		return -EBUSY;
 	}
 
 	hdsp->irq = pci->irq;
-	hdsp->precise_ptr = 1;
+	hdsp->precise_ptr = 0;
 	hdsp->use_midi_tasklet = 1;
 
 	if ((err = snd_hdsp_initialize_memory(hdsp)) < 0)

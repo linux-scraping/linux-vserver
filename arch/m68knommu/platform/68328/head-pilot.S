@@ -1,5 +1,5 @@
 /*
- * linux/arch/m68knommu/platform/68328/head-rom.S
+ * linux/arch/m68knommu/platform/68328/head-pilot.S
  * - A startup file for the MC68328
  *
  * Copyright (C) 1998  D. Jeff Dionne <jeff@ryeham.ee.ryerson.ca>,
@@ -15,13 +15,11 @@
 #define IMMED #
 #define	DBG_PUTC(x)	moveb IMMED x, 0xfffff907
 
-#include <linux/config.h>
 
 .global _stext
 .global _start
 
 .global _rambase
-.global __ramvec
 .global _ramvec
 .global _ramstart
 .global _ramend
@@ -121,7 +119,7 @@ L0:
 	DBG_PUTC('B')
 
 	/* Copy command line from beginning of RAM (+16) to end of bss */
-	movel	#__ramvec, %d7
+	movel	#CONFIG_VECTORBASE, %d7
 	addl	#16, %d7
 	moveal	%d7, %a0
 	moveal	#_ebss, %a1

@@ -10,9 +10,8 @@ menu "ACPI (Advanced Configuration and Power Interface) Support"
 config ACPI
 	bool "ACPI Support"
 	depends on IA64 || X86
-	select PM
-	select PCI
-
+	depends on PCI
+	depends on PM
 	default y
 	---help---
 	  Advanced Configuration and Power Interface (ACPI) support for 
@@ -98,6 +97,7 @@ config ACPI_BATTERY
 
 config ACPI_BUTTON
 	tristate "Button"
+	depends on INPUT
 	default y
 	help
 	  This driver handles events on the power, sleep and lid buttons.
@@ -108,7 +108,6 @@ config ACPI_BUTTON
 config ACPI_VIDEO
 	tristate "Video"
 	depends on X86
-	default y
 	help
 	  This driver implement the ACPI Extensions For Display Adapters
 	  for integrated graphics devices on motherboard, as specified in
@@ -133,6 +132,12 @@ config ACPI_FAN
 	help
 	  This driver adds support for ACPI fan devices, allowing user-mode 
 	  applications to perform basic fan control (on, off, status).
+
+config ACPI_DOCK
+	tristate "Dock"
+	depends on EXPERIMENTAL
+	help
+	  This driver adds support for ACPI controlled docking stations
 
 config ACPI_PROCESSOR
 	tristate "Processor"
@@ -162,12 +167,13 @@ config ACPI_THERMAL
 config ACPI_NUMA
 	bool "NUMA support"
 	depends on NUMA
-	depends on (IA64 || X86_64)
+	depends on (X86 || IA64)
 	default y if IA64_GENERIC || IA64_SGI_SN2
 
 config ACPI_ASUS
         tristate "ASUS/Medion Laptop Extras"
 	depends on X86
+	select BACKLIGHT_CLASS_DEVICE
         ---help---
           This driver provides support for extra features of ACPI-compatible
           ASUS laptops. As some of Medion laptops are made by ASUS, it may also
@@ -196,6 +202,7 @@ config ACPI_ASUS
 config ACPI_IBM
 	tristate "IBM ThinkPad Laptop Extras"
 	depends on X86
+	select BACKLIGHT_CLASS_DEVICE
 	---help---
 	  This is a Linux ACPI driver for the IBM ThinkPad laptops. It adds
 	  support for Fn-Fx key combinations, Bluetooth control, video
@@ -208,6 +215,7 @@ config ACPI_IBM
 config ACPI_IBM_DOCK
 	bool "Legacy Docking Station Support"
 	depends on ACPI_IBM
+	depends on ACPI_DOCK=n
 	default n
 	---help---
 	  Allows the ibm_acpi driver to handle docking station events.
@@ -220,6 +228,7 @@ config ACPI_IBM_DOCK
 config ACPI_TOSHIBA
 	tristate "Toshiba Laptop Extras"
 	depends on X86
+	select BACKLIGHT_CLASS_DEVICE
 	---help---
 	  This driver adds support for access to certain system settings
 	  on "legacy free" Toshiba laptops.  These laptops can be recognized by
@@ -248,7 +257,7 @@ config ACPI_CUSTOM_DSDT
 	depends on !STANDALONE
 	default n 
 	help
-	  Thist option is to load a custom ACPI DSDT
+	  This option is to load a custom ACPI DSDT
 	  If you don't know what that is, say N.
 
 config ACPI_CUSTOM_DSDT_FILE
@@ -305,7 +314,7 @@ config X86_PM_TIMER
 	  The Power Management Timer is available on all ACPI-capable,
 	  in most cases even if ACPI is unusable or blacklisted.
 
-	  This timing source is not affected by powermanagement features
+	  This timing source is not affected by power management features
 	  like aggressive processor idling, throttling, frequency and/or
 	  voltage scaling, unlike the commonly used Time Stamp Counter
 	  (TSC) timing source.
@@ -329,7 +338,7 @@ config ACPI_CONTAINER
 config ACPI_HOTPLUG_MEMORY
 	tristate "Memory Hotplug"
 	depends on ACPI
-	depends on MEMORY_HOTPLUG || X86_64
+	depends on MEMORY_HOTPLUG
 	default n
 	help
 	  This driver adds supports for ACPI Memory Hotplug.  This driver
@@ -340,12 +349,23 @@ config ACPI_HOTPLUG_MEMORY
 	  Enabling this driver assumes that your platform hardware
 	  and firmware have support for hot-plugging physical memory. If
 	  your system does not support physically adding or ripping out 
-	  memory DIMMs at some platfrom defined granularity (individually 
+	  memory DIMMs at some platform defined granularity (individually 
 	  or as a bank) at runtime, then you need not enable this driver.
 
 	  If one selects "m," this driver can be loaded using the following
 	  command: 
 		$>modprobe acpi_memhotplug 
+
+config ACPI_SBS
+	tristate "Smart Battery System (EXPERIMENTAL)"
+	depends on X86 && I2C
+	depends on EXPERIMENTAL
+	help
+	  This driver adds support for the Smart Battery System.
+	  Depends on I2C (Device Drivers ---> I2C support)
+	  A "Smart Battery" is quite old and quite rare compared
+	  to today's ACPI "Control Method" battery.
+
 endif	# ACPI
 
 endmenu

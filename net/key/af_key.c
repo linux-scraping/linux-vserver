@@ -14,7 +14,6 @@
  *		Derek Atkins <derek@ihtfp.com>
  */
 
-#include <linux/config.h>
 #include <linux/capability.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
@@ -28,6 +27,7 @@
 #include <linux/proc_fs.h>
 #include <linux/init.h>
 #include <net/xfrm.h>
+#include <linux/audit.h>
 
 #include <net/sock.h>
 
@@ -1421,6 +1421,9 @@ static int pfkey_add(struct sock *sk, struct sk_buff *skb, struct sadb_msg *hdr,
 	else
 		err = xfrm_state_update(x);
 
+	xfrm_audit_log(audit_get_loginuid(current->audit_context), 0,
+		       AUDIT_MAC_IPSEC_ADDSA, err ? 0 : 1, NULL, x);
+
 	if (err < 0) {
 		x->km.state = XFRM_STATE_DEAD;
 		__xfrm_state_put(x);
@@ -1454,21 +1457,27 @@ static int pfkey_delete(struct sock *sk, struct sk_buff *skb, struct sadb_msg *h
 	if (x == NULL)
 		return -ESRCH;
 
+	if ((err = security_xfrm_state_delete(x)))
+		goto out;
+
 	if (xfrm_state_kern(x)) {
-		xfrm_state_put(x);
-		return -EPERM;
+		err = -EPERM;
+		goto out;
 	}
-	
+
 	err = xfrm_state_delete(x);
-	if (err < 0) {
-		xfrm_state_put(x);
-		return err;
-	}
+
+	xfrm_audit_log(audit_get_loginuid(current->audit_context), 0,
+		       AUDIT_MAC_IPSEC_DELSA, err ? 0 : 1, NULL, x);
+
+	if (err < 0)
+		goto out;
 
 	c.seq = hdr->sadb_msg_seq;
 	c.pid = hdr->sadb_msg_pid;
 	c.event = XFRM_MSG_DELSA;
 	km_state_notify(x, &c);
+out:
 	xfrm_state_put(x);
 
 	return err;
@@ -1636,12 +1645,15 @@ static int pfkey_flush(struct sock *sk, struct sk_buff *skb, struct sadb_msg *hd
 {
 	unsigned proto;
 	struct km_event c;
+	struct xfrm_audit audit_info;
 
 	proto = pfkey_satype2proto(hdr->sadb_msg_satype);
 	if (proto == 0)
 		return -EINVAL;
 
-	xfrm_state_flush(proto);
+	audit_info.loginuid = audit_get_loginuid(current->audit_context);
+	audit_info.secid = 0;
+	xfrm_state_flush(proto, &audit_info);
 	c.data.proto = proto;
 	c.seq = hdr->sadb_msg_seq;
 	c.pid = hdr->sadb_msg_pid;
@@ -1730,7 +1742,8 @@ static u32 gen_reqid(void)
 		++reqid;
 		if (reqid == 0)
 			reqid = IPSEC_MANUAL_REQID_MAX+1;
-		if (xfrm_policy_walk(check_reqid, (void*)&reqid) != -EEXIST)
+		if (xfrm_policy_walk(XFRM_POLICY_TYPE_MAIN, check_reqid,
+				     (void*)&reqid) != -EEXIST)
 			return reqid;
 	} while (reqid != start);
 	return 0;
@@ -1764,12 +1777,12 @@ parse_ipsecrequest(struct xfrm_policy *xp, struct sadb_x_ipsecrequest *rq)
 	}
 
 	/* addresses present only in tunnel mode */
-	if (t->mode) {
-		switch (xp->family) {
+	if (t->mode == XFRM_MODE_TUNNEL) {
+		struct sockaddr *sa;
+		sa = (struct sockaddr *)(rq+1);
+		switch(sa->sa_family) {
 		case AF_INET:
-			sin = (void*)(rq+1);
-			if (sin->sin_family != AF_INET)
-				return -EINVAL;
+			sin = (struct sockaddr_in*)sa;
 			t->saddr.a4 = sin->sin_addr.s_addr;
 			sin++;
 			if (sin->sin_family != AF_INET)
@@ -1778,9 +1791,7 @@ parse_ipsecrequest(struct xfrm_policy *xp, struct sadb_x_ipsecrequest *rq)
 			break;
 #if defined(CONFIG_IPV6) || defined(CONFIG_IPV6_MODULE)
 		case AF_INET6:
-			sin6 = (void *)(rq+1);
-			if (sin6->sin6_family != AF_INET6)
-				return -EINVAL;
+			sin6 = (struct sockaddr_in6*)sa;
 			memcpy(t->saddr.a6, &sin6->sin6_addr, sizeof(struct in6_addr));
 			sin6++;
 			if (sin6->sin6_family != AF_INET6)
@@ -1791,7 +1802,10 @@ parse_ipsecrequest(struct xfrm_policy *xp, struct sadb_x_ipsecrequest *rq)
 		default:
 			return -EINVAL;
 		}
-	}
+		t->encap_family = sa->sa_family;
+	} else
+		t->encap_family = xp->family;
+
 	/* No way to set this via kame pfkey */
 	t->aalgos = t->ealgos = t->calgos = ~0;
 	xp->xfrm_nr++;
@@ -1828,18 +1842,25 @@ static inline int pfkey_xfrm_policy2sec_ctx_size(struct xfrm_policy *xp)
 
 static int pfkey_xfrm_policy2msg_size(struct xfrm_policy *xp)
 {
+	struct xfrm_tmpl *t;
 	int sockaddr_size = pfkey_sockaddr_size(xp->family);
-	int socklen = (xp->family == AF_INET ?
-		       sizeof(struct sockaddr_in) :
-		       sizeof(struct sockaddr_in6));
+	int socklen = 0;
+	int i;
+
+	for (i=0; i<xp->xfrm_nr; i++) {
+		t = xp->xfrm_vec + i;
+		socklen += (t->encap_family == AF_INET ?
+			    sizeof(struct sockaddr_in) :
+			    sizeof(struct sockaddr_in6));
+	}
 
 	return sizeof(struct sadb_msg) +
 		(sizeof(struct sadb_lifetime) * 3) +
 		(sizeof(struct sadb_address) * 2) + 
 		(sockaddr_size * 2) +
 		sizeof(struct sadb_x_policy) +
-		(xp->xfrm_nr * (sizeof(struct sadb_x_ipsecrequest) +
-				(socklen * 2))) +
+		(xp->xfrm_nr * sizeof(struct sadb_x_ipsecrequest)) +
+		(socklen * 2) +
 		pfkey_xfrm_policy2sec_ctx_size(xp);
 }
 
@@ -1996,8 +2017,10 @@ static void pfkey_xfrm_policy2msg(struct sk_buff *skb, struct xfrm_policy *xp, i
 		int req_size;
 
 		req_size = sizeof(struct sadb_x_ipsecrequest);
-		if (t->mode)
-			req_size += 2*socklen;
+		if (t->mode == XFRM_MODE_TUNNEL)
+			req_size += ((t->encap_family == AF_INET ?
+		       		     sizeof(struct sockaddr_in) :
+		       		     sizeof(struct sockaddr_in6)) * 2);
 		else
 			size -= 2*socklen;
 		rq = (void*)skb_put(skb, req_size);
@@ -2012,8 +2035,8 @@ static void pfkey_xfrm_policy2msg(struct sk_buff *skb, struct xfrm_policy *xp, i
 		if (t->optional)
 			rq->sadb_x_ipsecrequest_level = IPSEC_LEVEL_USE;
 		rq->sadb_x_ipsecrequest_reqid = t->reqid;
-		if (t->mode) {
-			switch (xp->family) {
+		if (t->mode == XFRM_MODE_TUNNEL) {
+			switch (t->encap_family) {
 			case AF_INET:
 				sin = (void*)(rq+1);
 				sin->sin_family = AF_INET;
@@ -2138,7 +2161,7 @@ static int pfkey_spdadd(struct sock *sk, struct sk_buff *skb, struct sadb_msg *h
 	xp->selector.proto = pfkey_proto_to_xfrm(sa->sadb_address_proto);
 	xp->selector.sport = ((struct sockaddr_in *)(sa+1))->sin_port;
 	if (xp->selector.sport)
-		xp->selector.sport_mask = ~0;
+		xp->selector.sport_mask = htons(0xffff);
 
 	sa = ext_hdrs[SADB_EXT_ADDRESS_DST-1], 
 	pfkey_sadb_addr2xfrm_addr(sa, &xp->selector.daddr);
@@ -2151,7 +2174,7 @@ static int pfkey_spdadd(struct sock *sk, struct sk_buff *skb, struct sadb_msg *h
 
 	xp->selector.dport = ((struct sockaddr_in *)(sa+1))->sin_port;
 	if (xp->selector.dport)
-		xp->selector.dport_mask = ~0;
+		xp->selector.dport_mask = htons(0xffff);
 
 	sec_ctx = (struct sadb_x_sec_ctx *) ext_hdrs[SADB_X_EXT_SEC_CTX-1];
 	if (sec_ctx != NULL) {
@@ -2192,6 +2215,9 @@ static int pfkey_spdadd(struct sock *sk, struct sk_buff *skb, struct sadb_msg *h
 
 	err = xfrm_policy_insert(pol->sadb_x_policy_dir-1, xp,
 				 hdr->sadb_msg_type != SADB_X_SPDUPDATE);
+
+	xfrm_audit_log(audit_get_loginuid(current->audit_context), 0,
+		       AUDIT_MAC_IPSEC_ADDSPD, err ? 0 : 1, xp, NULL);
 
 	if (err)
 		goto out;
@@ -2241,7 +2267,7 @@ static int pfkey_spddelete(struct sock *sk, struct sk_buff *skb, struct sadb_msg
 	sel.proto = pfkey_proto_to_xfrm(sa->sadb_address_proto);
 	sel.sport = ((struct sockaddr_in *)(sa+1))->sin_port;
 	if (sel.sport)
-		sel.sport_mask = ~0;
+		sel.sport_mask = htons(0xffff);
 
 	sa = ext_hdrs[SADB_EXT_ADDRESS_DST-1], 
 	pfkey_sadb_addr2xfrm_addr(sa, &sel.daddr);
@@ -2249,7 +2275,7 @@ static int pfkey_spddelete(struct sock *sk, struct sk_buff *skb, struct sadb_msg
 	sel.proto = pfkey_proto_to_xfrm(sa->sadb_address_proto);
 	sel.dport = ((struct sockaddr_in *)(sa+1))->sin_port;
 	if (sel.dport)
-		sel.dport_mask = ~0;
+		sel.dport_mask = htons(0xffff);
 
 	sec_ctx = (struct sadb_x_sec_ctx *) ext_hdrs[SADB_X_EXT_SEC_CTX-1];
 	memset(&tmp, 0, sizeof(struct xfrm_policy));
@@ -2267,18 +2293,26 @@ static int pfkey_spddelete(struct sock *sk, struct sk_buff *skb, struct sadb_msg
 			return err;
 	}
 
-	xp = xfrm_policy_bysel_ctx(pol->sadb_x_policy_dir-1, &sel, tmp.security, 1);
+	xp = xfrm_policy_bysel_ctx(XFRM_POLICY_TYPE_MAIN, pol->sadb_x_policy_dir-1,
+				   &sel, tmp.security, 1);
 	security_xfrm_policy_free(&tmp);
+
+	xfrm_audit_log(audit_get_loginuid(current->audit_context), 0,
+		       AUDIT_MAC_IPSEC_DELSPD, (xp) ? 1 : 0, xp, NULL);
+
 	if (xp == NULL)
 		return -ENOENT;
 
 	err = 0;
 
+	if ((err = security_xfrm_policy_delete(xp)))
+		goto out;
 	c.seq = hdr->sadb_msg_seq;
 	c.pid = hdr->sadb_msg_pid;
 	c.event = XFRM_MSG_DELPOLICY;
 	km_policy_notify(xp, pol->sadb_x_policy_dir-1, &c);
 
+out:
 	xfrm_pol_put(xp);
 	return err;
 }
@@ -2326,7 +2360,7 @@ static int pfkey_spdget(struct sock *sk, struct sk_buff *skb, struct sadb_msg *h
 	if (dir >= XFRM_POLICY_MAX)
 		return -EINVAL;
 
-	xp = xfrm_policy_byid(dir, pol->sadb_x_policy_id,
+	xp = xfrm_policy_byid(XFRM_POLICY_TYPE_MAIN, dir, pol->sadb_x_policy_id,
 			      hdr->sadb_msg_type == SADB_X_SPDDELETE2);
 	if (xp == NULL)
 		return -ENOENT;
@@ -2374,7 +2408,7 @@ static int pfkey_spddump(struct sock *sk, struct sk_buff *skb, struct sadb_msg *
 {
 	struct pfkey_dump_data data = { .skb = skb, .hdr = hdr, .sk = sk };
 
-	return xfrm_policy_walk(dump_sp, &data);
+	return xfrm_policy_walk(XFRM_POLICY_TYPE_MAIN, dump_sp, &data);
 }
 
 static int key_notify_policy_flush(struct km_event *c)
@@ -2400,8 +2434,12 @@ static int key_notify_policy_flush(struct km_event *c)
 static int pfkey_spdflush(struct sock *sk, struct sk_buff *skb, struct sadb_msg *hdr, void **ext_hdrs)
 {
 	struct km_event c;
+	struct xfrm_audit audit_info;
 
-	xfrm_policy_flush();
+	audit_info.loginuid = audit_get_loginuid(current->audit_context);
+	audit_info.secid = 0;
+	xfrm_policy_flush(XFRM_POLICY_TYPE_MAIN, &audit_info);
+	c.data.type = XFRM_POLICY_TYPE_MAIN;
 	c.event = XFRM_MSG_FLUSHPOLICY;
 	c.pid = hdr->sadb_msg_pid;
 	c.seq = hdr->sadb_msg_seq;
@@ -2663,6 +2701,9 @@ static int pfkey_send_notify(struct xfrm_state *x, struct km_event *c)
 
 static int pfkey_send_policy_notify(struct xfrm_policy *xp, int dir, struct km_event *c)
 {
+	if (xp && xp->type != XFRM_POLICY_TYPE_MAIN)
+		return 0;
+
 	switch (c->event) {
 	case XFRM_MSG_POLEXPIRE:
 		return key_notify_policy_expire(xp, c);
@@ -2671,6 +2712,8 @@ static int pfkey_send_policy_notify(struct xfrm_policy *xp, int dir, struct km_e
 	case XFRM_MSG_UPDPOLICY:
 		return key_notify_policy(xp, dir, c);
 	case XFRM_MSG_FLUSHPOLICY:
+		if (c->data.type != XFRM_POLICY_TYPE_MAIN)
+			break;
 		return key_notify_policy_flush(c);
 	default:
 		printk("pfkey: Unknown policy event %d\n", c->event);
@@ -2704,6 +2747,9 @@ static int pfkey_send_acquire(struct xfrm_state *x, struct xfrm_tmpl *t, struct 
 #endif
 	int sockaddr_size;
 	int size;
+	struct sadb_x_sec_ctx *sec_ctx;
+	struct xfrm_sec_ctx *xfrm_ctx;
+	int ctx_size = 0;
 	
 	sockaddr_size = pfkey_sockaddr_size(x->props.family);
 	if (!sockaddr_size)
@@ -2718,6 +2764,11 @@ static int pfkey_send_acquire(struct xfrm_state *x, struct xfrm_tmpl *t, struct 
 		size += count_ah_combs(t);
 	else if (x->id.proto == IPPROTO_ESP)
 		size += count_esp_combs(t);
+
+	if ((xfrm_ctx = x->security)) {
+		ctx_size = PFKEY_ALIGN8(xfrm_ctx->ctx_len);
+		size +=  sizeof(struct sadb_x_sec_ctx) + ctx_size;
+	}
 
 	skb =  alloc_skb(size + 16, GFP_ATOMIC);
 	if (skb == NULL)
@@ -2814,17 +2865,31 @@ static int pfkey_send_acquire(struct xfrm_state *x, struct xfrm_tmpl *t, struct 
 	else if (x->id.proto == IPPROTO_ESP)
 		dump_esp_combs(skb, t);
 
+	/* security context */
+	if (xfrm_ctx) {
+		sec_ctx = (struct sadb_x_sec_ctx *) skb_put(skb,
+				sizeof(struct sadb_x_sec_ctx) + ctx_size);
+		sec_ctx->sadb_x_sec_len =
+		  (sizeof(struct sadb_x_sec_ctx) + ctx_size) / sizeof(uint64_t);
+		sec_ctx->sadb_x_sec_exttype = SADB_X_EXT_SEC_CTX;
+		sec_ctx->sadb_x_ctx_doi = xfrm_ctx->ctx_doi;
+		sec_ctx->sadb_x_ctx_alg = xfrm_ctx->ctx_alg;
+		sec_ctx->sadb_x_ctx_len = xfrm_ctx->ctx_len;
+		memcpy(sec_ctx + 1, xfrm_ctx->ctx_str,
+		       xfrm_ctx->ctx_len);
+	}
+
 	return pfkey_broadcast(skb, GFP_ATOMIC, BROADCAST_REGISTERED, NULL);
 }
 
-static struct xfrm_policy *pfkey_compile_policy(u16 family, int opt,
+static struct xfrm_policy *pfkey_compile_policy(struct sock *sk, int opt,
                                                 u8 *data, int len, int *dir)
 {
 	struct xfrm_policy *xp;
 	struct sadb_x_policy *pol = (struct sadb_x_policy*)data;
 	struct sadb_x_sec_ctx *sec_ctx;
 
-	switch (family) {
+	switch (sk->sk_family) {
 	case AF_INET:
 		if (opt != IP_IPSEC_POLICY) {
 			*dir = -EOPNOTSUPP;
@@ -2865,7 +2930,7 @@ static struct xfrm_policy *pfkey_compile_policy(u16 family, int opt,
 	xp->lft.hard_byte_limit = XFRM_INF;
 	xp->lft.soft_packet_limit = XFRM_INF;
 	xp->lft.hard_packet_limit = XFRM_INF;
-	xp->family = family;
+	xp->family = sk->sk_family;
 
 	xp->xfrm_nr = 0;
 	if (pol->sadb_x_policy_type == IPSEC_POLICY_IPSEC &&
@@ -2881,8 +2946,10 @@ static struct xfrm_policy *pfkey_compile_policy(u16 family, int opt,
 		p += pol->sadb_x_policy_len*8;
 		sec_ctx = (struct sadb_x_sec_ctx *)p;
 		if (len < pol->sadb_x_policy_len*8 +
-		    sec_ctx->sadb_x_sec_len)
+		    sec_ctx->sadb_x_sec_len) {
+			*dir = -EINVAL;
 			goto out;
+		}
 		if ((*dir = verify_sec_ctx_len(p)))
 			goto out;
 		uctx = pfkey_sadb2xfrm_user_sec_ctx(sec_ctx);
@@ -2902,7 +2969,7 @@ out:
 	return NULL;
 }
 
-static int pfkey_send_new_mapping(struct xfrm_state *x, xfrm_address_t *ipaddr, u16 sport)
+static int pfkey_send_new_mapping(struct xfrm_state *x, xfrm_address_t *ipaddr, __be16 sport)
 {
 	struct sk_buff *skb;
 	struct sadb_msg *hdr;

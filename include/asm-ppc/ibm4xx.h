@@ -14,7 +14,6 @@
 #ifndef __ASM_IBM4XX_H__
 #define __ASM_IBM4XX_H__
 
-#include <linux/config.h>
 #include <asm/types.h>
 
 #ifdef CONFIG_40x
@@ -87,7 +86,7 @@ void ppc4xx_init(unsigned long r3, unsigned long r4, unsigned long r5,
 #define PCI_DRAM_OFFSET	0
 #endif
 
-#elif CONFIG_44x
+#elif defined(CONFIG_44x)
 
 #if defined(CONFIG_BAMBOO)
 #include <platforms/4xx/bamboo.h>

@@ -12,7 +12,6 @@
  * 30-06-1998 by Frank Denis : first step to write inodes.
  */
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/types.h>
 #include <linux/string.h>
@@ -128,7 +127,7 @@ static struct inode *qnx4_alloc_inode(struct super_block *sb);
 static void qnx4_destroy_inode(struct inode *inode);
 static void qnx4_read_inode(struct inode *);
 static int qnx4_remount(struct super_block *sb, int *flags, char *data);
-static int qnx4_statfs(struct super_block *, struct kstatfs *);
+static int qnx4_statfs(struct dentry *, struct kstatfs *);
 
 static struct super_operations qnx4_sops =
 {
@@ -282,8 +281,10 @@ unsigned long qnx4_block_map( struct inode *inode, long iblock )
 	return block;
 }
 
-static int qnx4_statfs(struct super_block *sb, struct kstatfs *buf)
+static int qnx4_statfs(struct dentry *dentry, struct kstatfs *buf)
 {
+	struct super_block *sb = dentry->d_sb;
+
 	lock_kernel();
 
 	buf->f_type    = sb->s_magic;
@@ -357,11 +358,10 @@ static int qnx4_fill_super(struct super_block *s, void *data, int silent)
 	const char *errmsg;
 	struct qnx4_sb_info *qs;
 
-	qs = kmalloc(sizeof(struct qnx4_sb_info), GFP_KERNEL);
+	qs = kzalloc(sizeof(struct qnx4_sb_info), GFP_KERNEL);
 	if (!qs)
 		return -ENOMEM;
 	s->s_fs_info = qs;
-	memset(qs, 0, sizeof(struct qnx4_sb_info));
 
 	sb_set_blocksize(s, QNX4_BLOCK_SIZE);
 
@@ -448,7 +448,7 @@ static sector_t qnx4_bmap(struct address_space *mapping, sector_t block)
 {
 	return generic_block_bmap(mapping,block,qnx4_get_block);
 }
-static struct address_space_operations qnx4_aops = {
+static const struct address_space_operations qnx4_aops = {
 	.readpage	= qnx4_readpage,
 	.writepage	= qnx4_writepage,
 	.sync_page	= block_sync_page,
@@ -496,7 +496,6 @@ static void qnx4_read_inode(struct inode *inode)
 	inode->i_ctime.tv_sec   = le32_to_cpu(raw_inode->di_ctime);
 	inode->i_ctime.tv_nsec = 0;
 	inode->i_blocks  = le32_to_cpu(raw_inode->di_first_xtnt.xtnt_size);
-	inode->i_blksize = QNX4_DIR_ENTRY_SIZE;
 
 	memcpy(qnx4_inode, raw_inode, QNX4_DIR_ENTRY_SIZE);
 	if (S_ISREG(inode->i_mode)) {
@@ -516,12 +515,12 @@ static void qnx4_read_inode(struct inode *inode)
 	brelse(bh);
 }
 
-static kmem_cache_t *qnx4_inode_cachep;
+static struct kmem_cache *qnx4_inode_cachep;
 
 static struct inode *qnx4_alloc_inode(struct super_block *sb)
 {
 	struct qnx4_inode_info *ei;
-	ei = kmem_cache_alloc(qnx4_inode_cachep, SLAB_KERNEL);
+	ei = kmem_cache_alloc(qnx4_inode_cachep, GFP_KERNEL);
 	if (!ei)
 		return NULL;
 	return &ei->vfs_inode;
@@ -532,7 +531,7 @@ static void qnx4_destroy_inode(struct inode *inode)
 	kmem_cache_free(qnx4_inode_cachep, qnx4_i(inode));
 }
 
-static void init_once(void *foo, kmem_cache_t * cachep,
+static void init_once(void *foo, struct kmem_cache * cachep,
 		      unsigned long flags)
 {
 	struct qnx4_inode_info *ei = (struct qnx4_inode_info *) foo;
@@ -556,15 +555,14 @@ static int init_inodecache(void)
 
 static void destroy_inodecache(void)
 {
-	if (kmem_cache_destroy(qnx4_inode_cachep))
-		printk(KERN_INFO
-		       "qnx4_inode_cache: not all structures were freed\n");
+	kmem_cache_destroy(qnx4_inode_cachep);
 }
 
-static struct super_block *qnx4_get_sb(struct file_system_type *fs_type,
-	int flags, const char *dev_name, void *data)
+static int qnx4_get_sb(struct file_system_type *fs_type,
+	int flags, const char *dev_name, void *data, struct vfsmount *mnt)
 {
-	return get_sb_bdev(fs_type, flags, dev_name, data, qnx4_fill_super);
+	return get_sb_bdev(fs_type, flags, dev_name, data, qnx4_fill_super,
+			   mnt);
 }
 
 static struct file_system_type qnx4_fs_type = {

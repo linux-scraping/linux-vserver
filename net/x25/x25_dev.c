@@ -17,7 +17,6 @@
  *      2000-09-04	Henner Eisen	Prevent freeing a dangling skb.
  */
 
-#include <linux/config.h>
 #include <linux/kernel.h>
 #include <linux/netdevice.h>
 #include <linux/skbuff.h>
@@ -57,6 +56,7 @@ static int x25_receive_data(struct sk_buff *skb, struct x25_neigh *nb)
 			sk_add_backlog(sk, skb);
 		}
 		bh_unlock_sock(sk);
+		sock_put(sk);
 		return queued;
 	}
 

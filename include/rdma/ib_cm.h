@@ -32,7 +32,7 @@
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  *
- * $Id: ib_cm.h 2730 2005-06-28 16:43:03Z sean.hefty $
+ * $Id: ib_cm.h 4311 2005-12-05 18:42:01Z sean.hefty $
  */
 #if !defined(IB_CM_H)
 #define IB_CM_H
@@ -60,6 +60,7 @@ enum ib_cm_state {
 };
 
 enum ib_cm_lap_state {
+	IB_CM_LAP_UNINIT,
 	IB_CM_LAP_IDLE,
 	IB_CM_LAP_SENT,
 	IB_CM_LAP_RCVD,
@@ -102,7 +103,8 @@ enum ib_cm_data_size {
 	IB_CM_APR_INFO_LENGTH		 = 72,
 	IB_CM_SIDR_REQ_PRIVATE_DATA_SIZE = 216,
 	IB_CM_SIDR_REP_PRIVATE_DATA_SIZE = 136,
-	IB_CM_SIDR_REP_INFO_LENGTH	 = 72
+	IB_CM_SIDR_REP_INFO_LENGTH	 = 72,
+	IB_CM_COMPARE_SIZE		 = 64
 };
 
 struct ib_cm_id;
@@ -238,7 +240,6 @@ struct ib_cm_sidr_rep_event_param {
 	u32			qpn;
 	void			*info;
 	u8			info_len;
-
 };
 
 struct ib_cm_event {
@@ -317,6 +318,15 @@ void ib_destroy_cm_id(struct ib_cm_id *cm_id);
 
 #define IB_SERVICE_ID_AGN_MASK	__constant_cpu_to_be64(0xFF00000000000000ULL)
 #define IB_CM_ASSIGN_SERVICE_ID __constant_cpu_to_be64(0x0200000000000000ULL)
+#define IB_CMA_SERVICE_ID	__constant_cpu_to_be64(0x0000000001000000ULL)
+#define IB_CMA_SERVICE_ID_MASK	__constant_cpu_to_be64(0xFFFFFFFFFF000000ULL)
+#define IB_SDP_SERVICE_ID	__constant_cpu_to_be64(0x0000000000010000ULL)
+#define IB_SDP_SERVICE_ID_MASK	__constant_cpu_to_be64(0xFFFFFFFFFFFF0000ULL)
+
+struct ib_cm_compare_data {
+	u8  data[IB_CM_COMPARE_SIZE];
+	u8  mask[IB_CM_COMPARE_SIZE];
+};
 
 /**
  * ib_cm_listen - Initiates listening on the specified service ID for
@@ -330,10 +340,12 @@ void ib_destroy_cm_id(struct ib_cm_id *cm_id);
  *   range of service IDs.  If set to 0, the service ID is matched
  *   exactly.  This parameter is ignored if %service_id is set to
  *   IB_CM_ASSIGN_SERVICE_ID.
+ * @compare_data: This parameter is optional.  It specifies data that must
+ *   appear in the private data of a connection request for the specified
+ *   listen request.
  */
-int ib_cm_listen(struct ib_cm_id *cm_id,
-		 __be64 service_id,
-		 __be64 service_mask);
+int ib_cm_listen(struct ib_cm_id *cm_id, __be64 service_id, __be64 service_mask,
+		 struct ib_cm_compare_data *compare_data);
 
 struct ib_cm_req_param {
 	struct ib_sa_path_rec	*primary_path;
@@ -432,13 +444,20 @@ int ib_send_cm_drep(struct ib_cm_id *cm_id,
 		    u8 private_data_len);
 
 /**
- * ib_cm_establish - Forces a connection state to established.
+ * ib_cm_notify - Notifies the CM of an event reported to the consumer.
  * @cm_id: Connection identifier to transition to established.
+ * @event: Type of event.
  *
- * This routine should be invoked by users who receive messages on a
- * connected QP before an RTU has been received.
+ * This routine should be invoked by users to notify the CM of relevant
+ * communication events.  Events that should be reported to the CM and
+ * when to report them are:
+ *
+ * IB_EVENT_COMM_EST - Used when a message is received on a connected
+ *    QP before an RTU has been received.
+ * IB_EVENT_PATH_MIG - Notifies the CM that the connection has failed over
+ *   to the alternate path.
  */
-int ib_cm_establish(struct ib_cm_id *cm_id);
+int ib_cm_notify(struct ib_cm_id *cm_id, enum ib_event_type event);
 
 /**
  * ib_send_cm_rej - Sends a connection rejection message to the
@@ -535,7 +554,6 @@ struct ib_cm_sidr_req_param {
 	const void		*private_data;
 	u8			private_data_len;
 	u8			max_cm_retries;
-	u16			pkey;
 };
 
 /**
@@ -559,7 +577,7 @@ struct ib_cm_sidr_rep_param {
 };
 
 /**
- * ib_send_cm_sidr_rep - Sends a service ID resolution request to the
+ * ib_send_cm_sidr_rep - Sends a service ID resolution reply to the
  *   remote node.
  * @cm_id: Communication identifier associated with the received service ID
  *   resolution request.

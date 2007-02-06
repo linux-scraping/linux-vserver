@@ -7,12 +7,28 @@ config MMU
 	bool
 	default y
 
+config LOCKDEP_SUPPORT
+	bool
+	default y
+
+config STACKTRACE_SUPPORT
+	bool
+	default y
+
 config RWSEM_GENERIC_SPINLOCK
 	bool
 
 config RWSEM_XCHGADD_ALGORITHM
 	bool
 	default y
+
+config ARCH_HAS_ILOG2_U32
+	bool
+	default n
+
+config ARCH_HAS_ILOG2_U64
+	bool
+	default n
 
 config GENERIC_HWEIGHT
 	bool
@@ -22,8 +38,8 @@ config GENERIC_CALIBRATE_DELAY
 	bool
 	default y
 
-config GENERIC_BUST_SPINLOCK
-	bool
+config GENERIC_TIME
+	def_bool y
 
 mainmenu "Linux Kernel Configuration"
 
@@ -42,6 +58,10 @@ config 64BIT
 	help
 	  Select this option if you have a 64 bit IBM zSeries machine
 	  and want to use the 64 bit addressing mode.
+
+config 32BIT
+	bool
+	default y if !64BIT
 
 config SMP
 	bool "Symmetric multi-processing support"
@@ -110,12 +130,9 @@ config SYSVIPC_COMPAT
 	depends on COMPAT && SYSVIPC
 	default y
 
-config BINFMT_ELF32
-	tristate "Kernel support for 31 bit ELF binaries"
-	depends on COMPAT
-	help
-	  This allows you to run 32-bit Linux/ELF binaries on your zSeries
-	  in 64 bit mode. Everybody wants this; say Y.
+config AUDIT_ARCH
+	bool
+	default y
 
 comment "Code generation options"
 
@@ -144,6 +161,14 @@ config MARCH_Z990
 	  This will be slightly faster but does not work on
 	  older machines such as the z900.
 
+config MARCH_Z9_109
+	bool "IBM System z9"
+	help
+	  Select this to enable optimizations for IBM System z9-109, IBM
+	  System z9 Enterprise Class (z9 EC), and IBM System z9 Business
+	  Class (z9 BC). The kernel will be slightly faster but will not
+	  work on older machines such as the z990, z890, z900, and z800.
+
 endchoice
 
 config PACK_STACK
@@ -161,7 +186,7 @@ config PACK_STACK
 
 config SMALL_STACK
 	bool "Use 4kb/8kb for kernel stack instead of 8kb/16kb"
-	depends on PACK_STACK
+	depends on PACK_STACK && !LOCKDEP
 	help
 	  If you say Y here and the compiler supports the -mkernel-backchain
 	  option the kernel will use a smaller kernel stack size. For 31 bit
@@ -216,7 +241,13 @@ config WARN_STACK_SIZE
 	  This allows you to specify the maximum frame size a function may
 	  have without the compiler complaining about it.
 
+config ARCH_POPULATES_NODE_MAP
+	def_bool y
+
 source "mm/Kconfig"
+
+config HOLES_IN_ZONE
+	def_bool y
 
 comment "I/O subsystem configuration"
 
@@ -240,14 +271,6 @@ config QDIO
 	  module will be called qdio.
 
 	  If unsure, say Y.
-
-config QDIO_PERF_STATS
-	bool "Performance statistics in /proc"
-	depends on QDIO
-	help
-	  Say Y here to get performance statistics in /proc/qdio_perf
-
-	  If unsure, say N.
 
 config QDIO_DEBUG
 	bool "Extended debugging information"
@@ -384,7 +407,7 @@ config APPLDATA_BASE
 
 config APPLDATA_MEM
 	tristate "Monitor memory management statistics"
-	depends on APPLDATA_BASE
+	depends on APPLDATA_BASE && VM_EVENT_COUNTERS
 	help
 	  This provides memory management related data to the Linux - VM Monitor
 	  Stream, like paging/swapping rate, memory utilisation, etc.
@@ -446,9 +469,16 @@ config NO_IDLE_HZ_INIT
 	  The HZ timer is switched off in idle by default. That means the
 	  HZ timer is already disabled at boot time.
 
+config S390_HYPFS_FS
+	bool "s390 hypervisor file system support"
+	select SYS_HYPERVISOR
+	default y
+	help
+	  This is a virtual file system intended to provide accounting
+	  information in an s390 hypervisor environment.
+
 config KEXEC
-	bool "kexec system call (EXPERIMENTAL)"
-	depends on EXPERIMENTAL
+	bool "kexec system call"
 	help
 	  kexec is a system call that implements the ability to shutdown your
 	  current kernel, and to start another kernel.  It is like a reboot
@@ -474,7 +504,21 @@ source "drivers/net/Kconfig"
 
 source "fs/Kconfig"
 
+menu "Instrumentation Support"
+
 source "arch/s390/oprofile/Kconfig"
+
+config KPROBES
+	bool "Kprobes (EXPERIMENTAL)"
+	depends on EXPERIMENTAL && MODULES
+	help
+	  Kprobes allows you to trap at almost any kernel address and
+	  execute a callback function.	register_kprobe() establishes
+	  a probepoint and specifies the callback.  Kprobes is useful
+	  for kernel debugging, non-intrusive instrumentation and testing.
+	  If in doubt, say "N".
+
+endmenu
 
 source "arch/s390/Kconfig.debug"
 

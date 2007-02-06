@@ -507,7 +507,7 @@ static __inline__ void initialize_SCp(Scsi_Cmnd *cmd)
      */
 
     if (cmd->use_sg) {
-	cmd->SCp.buffer = (struct scatterlist *) cmd->buffer;
+	cmd->SCp.buffer = (struct scatterlist *) cmd->request_buffer;
 	cmd->SCp.buffers_residual = cmd->use_sg - 1;
 	cmd->SCp.ptr = (char *)page_address(cmd->SCp.buffer->page)+
 		       cmd->SCp.buffer->offset;
@@ -524,7 +524,6 @@ static __inline__ void initialize_SCp(Scsi_Cmnd *cmd)
     }
 }
 
-#include <linux/config.h>
 #include <linux/delay.h>
 
 #if NDEBUG
@@ -1263,7 +1262,7 @@ static void NCR5380_dma_complete( struct Scsi_Host *instance )
  *
  */
 
-static irqreturn_t NCR5380_intr (int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t NCR5380_intr (int irq, void *dev_id)
 {
     struct Scsi_Host *instance = first_instance;
     int done = 1, handled = 0;

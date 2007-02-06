@@ -36,7 +36,6 @@
 #include <linux/file.h>
 #include <linux/init.h>
 #include <linux/personality.h>
-#include <linux/vs_cvirt.h>
 
 #include <asm/uaccess.h>
 #include <asm/ipc.h>
@@ -261,7 +260,7 @@ long ppc_newuname(struct new_utsname __user * name)
 	int err = 0;
 
 	down_read(&uts_sem);
-	if (copy_to_user(name, vx_new_utsname(), sizeof(*name)))
+	if (copy_to_user(name, utsname(), sizeof(*name)))
 		err = -EFAULT;
 	up_read(&uts_sem);
 	if (!err)
@@ -274,7 +273,7 @@ int sys_uname(struct old_utsname __user *name)
 	int err = 0;
 	
 	down_read(&uts_sem);
-	if (copy_to_user(name, vx_new_utsname(), sizeof(*name)))
+	if (copy_to_user(name, utsname(), sizeof(*name)))
 		err = -EFAULT;
 	up_read(&uts_sem);
 	if (!err)
@@ -285,22 +284,25 @@ int sys_uname(struct old_utsname __user *name)
 int sys_olduname(struct oldold_utsname __user *name)
 {
 	int error;
-	struct new_utsname *ptr;
 
 	if (!access_ok(VERIFY_WRITE, name, sizeof(struct oldold_utsname)))
 		return -EFAULT;
   
 	down_read(&uts_sem);
-	ptr = vx_new_utsname();
-	error = __copy_to_user(&name->sysname, ptr->sysname, __OLD_UTS_LEN);
+	error = __copy_to_user(&name->sysname, &utsname()->sysname,
+			       __OLD_UTS_LEN);
 	error |= __put_user(0, name->sysname + __OLD_UTS_LEN);
-	error |= __copy_to_user(&name->nodename, ptr->nodename, __OLD_UTS_LEN);
+	error |= __copy_to_user(&name->nodename, &utsname()->nodename,
+				__OLD_UTS_LEN);
 	error |= __put_user(0, name->nodename + __OLD_UTS_LEN);
-	error |= __copy_to_user(&name->release, ptr->release, __OLD_UTS_LEN);
+	error |= __copy_to_user(&name->release, &utsname()->release,
+				__OLD_UTS_LEN);
 	error |= __put_user(0, name->release + __OLD_UTS_LEN);
-	error |= __copy_to_user(&name->version, ptr->version, __OLD_UTS_LEN);
+	error |= __copy_to_user(&name->version, &utsname()->version,
+				__OLD_UTS_LEN);
 	error |= __put_user(0, name->version + __OLD_UTS_LEN);
-	error |= __copy_to_user(&name->machine, ptr->machine, __OLD_UTS_LEN);
+	error |= __copy_to_user(&name->machine, &utsname()->machine,
+				__OLD_UTS_LEN);
 	error |= override_machine(name->machine);
 	up_read(&uts_sem);
 

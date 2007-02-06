@@ -3,22 +3,28 @@
  *
  *  Virtual Server: Network Support
  *
- *  Copyright (C) 2003-2005  Herbert Pötzl
+ *  Copyright (C) 2003-2006  Herbert Pötzl
  *
  *  V0.01  broken out from vcontext V0.05
  *  V0.02  cleaned up implementation
  *  V0.03  added equiv nx commands
  *  V0.04  switch to RCU based hash
  *  V0.05  and back to locking again
+ *  V0.06  changed vcmds to nxi arg
  *
  */
 
 #include <linux/slab.h>
-#include <linux/vserver/network_cmd.h>
 #include <linux/rcupdate.h>
 #include <net/tcp.h>
 
 #include <asm/errno.h>
+#include <linux/vserver/base.h>
+#include <linux/vserver/network_cmd.h>
+
+
+atomic_t nx_global_ctotal	= ATOMIC_INIT(0);
+atomic_t nx_global_cactive	= ATOMIC_INIT(0);
 
 
 /*	__alloc_nx_info()
@@ -50,6 +56,7 @@ static struct nx_info *__alloc_nx_info(nid_t nid)
 
 	vxdprintk(VXD_CBIT(nid, 0),
 		"alloc_nx_info(%d) = %p", nid, new);
+	atomic_inc(&nx_global_ctotal);
 	return new;
 }
 
@@ -70,6 +77,7 @@ static void __dealloc_nx_info(struct nx_info *nxi)
 
 	nxi->nx_state |= NXS_RELEASED;
 	kfree(nxi);
+	atomic_dec(&nx_global_ctotal);
 }
 
 static void __shutdown_nx_info(struct nx_info *nxi)
@@ -130,6 +138,7 @@ static inline void __hash_nx_info(struct nx_info *nxi)
 	nxi->nx_state |= NXS_HASHED;
 	head = &nx_info_hash[__hashval(nxi->nx_id)];
 	hlist_add_head(&nxi->nx_hlist, head);
+	atomic_inc(&nx_global_cactive);
 }
 
 /*	__unhash_nx_info()
@@ -141,13 +150,17 @@ static inline void __unhash_nx_info(struct nx_info *nxi)
 {
 	vxd_assert_lock(&nx_info_hash_lock);
 	vxdprintk(VXD_CBIT(nid, 4),
-		"__unhash_nx_info: %p[#%d]", nxi, nxi->nx_id);
+		"__unhash_nx_info: %p[#%d.%d.%d]", nxi, nxi->nx_id,
+		atomic_read(&nxi->nx_usecnt), atomic_read(&nxi->nx_tasks));
 
 	/* context must be hashed */
 	BUG_ON(!nx_info_state(nxi, NXS_HASHED));
+	/* but without tasks */
+	BUG_ON(atomic_read(&nxi->nx_tasks));
 
 	nxi->nx_state &= ~NXS_HASHED;
 	hlist_del(&nxi->nx_hlist);
+	atomic_dec(&nx_global_cactive);
 }
 
 
@@ -220,6 +233,7 @@ static struct nx_info * __create_nx_info(int id)
 
 	/* dynamic context requested */
 	if (id == NX_DYNAMIC_ID) {
+#ifdef	CONFIG_VSERVER_DYNAMIC_IDS
 		id = __nx_dynamic_id();
 		if (!id) {
 			printk(KERN_ERR "no dynamic context available.\n");
@@ -227,6 +241,11 @@ static struct nx_info * __create_nx_info(int id)
 			goto out_unlock;
 		}
 		new->nx_id = id;
+#else
+		printk(KERN_ERR "dynamic contexts disabled.\n");
+		nxi = ERR_PTR(-EINVAL);
+		goto out_unlock;
+#endif
 	}
 	/* static context requested */
 	else if ((nxi = __lookup_nx_info(id))) {
@@ -317,9 +336,22 @@ int nid_is_hashed(nid_t nid)
 
 #ifdef	CONFIG_PROC_FS
 
+/*	get_nid_list()
+
+	* get a subset of hashed nids for proc
+	* assumes size is at least one				*/
+
 int get_nid_list(int index, unsigned int *nids, int size)
 {
 	int hindex, nr_nids = 0;
+
+	/* only show current and children */
+	if (!nx_check(0, VS_ADMIN|VS_WATCH)) {
+		if (index > 0)
+			return 0;
+		nids[nr_nids] = nx_current_nid();
+		return 1;
+	}
 
 	for (hindex = 0; hindex < NX_HASH_SIZE; hindex++) {
 		struct hlist_head *head = &nx_info_hash[hindex];
@@ -367,6 +399,13 @@ int nx_migrate_task(struct task_struct *p, struct nx_info *nxi)
 		atomic_read(&nxi->nx_usecnt),
 		atomic_read(&nxi->nx_tasks));
 
+	if (nx_info_flags(nxi, NXF_INFO_PRIVATE, 0) &&
+		!nx_info_flags(nxi, NXF_STATE_SETUP, 0))
+		return -EACCES;
+
+	if (nx_info_state(nxi, NXS_SHUTDOWN))
+		return -EFAULT;
+
 	/* maybe disallow this completely? */
 	old_nxi = task_get_nx_info(p);
 	if (old_nxi == nxi)
@@ -386,6 +425,7 @@ int nx_migrate_task(struct task_struct *p, struct nx_info *nxi)
 
 	if (old_nxi)
 		release_nx_info(old_nxi, p);
+	ret = 0;
 out:
 	put_nx_info(old_nxi);
 	return ret;
@@ -523,7 +563,7 @@ int vc_task_nid(uint32_t id, void __user *data)
 	if (id) {
 		struct task_struct *tsk;
 
-		if (!vx_check(0, VX_ADMIN|VX_WATCH))
+		if (!nx_check(0, VS_ADMIN|VS_WATCH))
 			return -EPERM;
 
 		read_lock(&tasklist_lock);
@@ -537,22 +577,11 @@ int vc_task_nid(uint32_t id, void __user *data)
 }
 
 
-int vc_nx_info(uint32_t id, void __user *data)
+int vc_nx_info(struct nx_info *nxi, void __user *data)
 {
-	struct nx_info *nxi;
 	struct vcmd_nx_info_v0 vc_data;
 
-	if (!vx_check(0, VX_ADMIN))
-		return -ENOSYS;
-	if (!capable(CAP_SYS_ADMIN) || !capable(CAP_SYS_RESOURCE))
-		return -EPERM;
-
-	nxi = lookup_nx_info(id);
-	if (!nxi)
-		return -ESRCH;
-
 	vc_data.nid = nxi->nx_id;
-	put_nx_info(nxi);
 
 	if (copy_to_user (data, &vc_data, sizeof(vc_data)))
 		return -EFAULT;
@@ -568,12 +597,10 @@ int vc_net_create(uint32_t nid, void __user *data)
 	struct nx_info *new_nxi;
 	int ret;
 
-	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
 	if (data && copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
-	if ((nid > MAX_S_CONTEXT) && (nid != VX_DYNAMIC_ID))
+	if ((nid > MAX_S_CONTEXT) && (nid != NX_DYNAMIC_ID))
 		return -EINVAL;
 	if (nid < 2)
 		return -EINVAL;
@@ -591,48 +618,36 @@ int vc_net_create(uint32_t nid, void __user *data)
 
 	ret = -ENOEXEC;
 	if (vs_net_change(new_nxi, VSC_NETUP))
-		goto out_unhash;
+		goto out_err;
+
 	ret = nx_migrate_task(current, new_nxi);
 	if (!ret) {
 		/* return context id on success */
 		ret = new_nxi->nx_id;
 		goto out;
 	}
-out_unhash:
+out_err:
 	/* prepare for context disposal */
 	new_nxi->nx_state |= NXS_SHUTDOWN;
+	new_nxi->nx_flags &= NXF_PERSISTENT;
 	if ((vc_data.flagword & NXF_PERSISTENT))
 		nx_clear_persistent(new_nxi);
-	__unhash_nx_info(new_nxi);
 out:
 	put_nx_info(new_nxi);
 	return ret;
 }
 
 
-int vc_net_migrate(uint32_t id, void __user *data)
+int vc_net_migrate(struct nx_info *nxi, void __user *data)
 {
-	struct nx_info *nxi;
-
-	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
-
-	nxi = lookup_nx_info(id);
-	if (!nxi)
-		return -ESRCH;
-	nx_migrate_task(current, nxi);
-	put_nx_info(nxi);
-	return 0;
+	return nx_migrate_task(current, nxi);
 }
 
-int vc_net_add(uint32_t nid, void __user *data)
+int vc_net_add(struct nx_info *nxi, void __user *data)
 {
 	struct vcmd_net_addr_v0 vc_data;
-	struct nx_info *nxi;
 	int index, pos, ret = 0;
 
-	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
 	if (data && copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
@@ -645,10 +660,6 @@ int vc_net_add(uint32_t nid, void __user *data)
 	default:
 		break;
 	}
-
-	nxi = lookup_nx_info(nid);
-	if (!nxi)
-		return -ESRCH;
 
 	switch (vc_data.type) {
 	case NXA_TYPE_IPV4:
@@ -672,25 +683,15 @@ int vc_net_add(uint32_t nid, void __user *data)
 		ret = -EINVAL;
 		break;
 	}
-
-	put_nx_info(nxi);
 	return ret;
 }
 
-int vc_net_remove(uint32_t nid, void __user *data)
+int vc_net_remove(struct nx_info * nxi, void __user *data)
 {
 	struct vcmd_net_addr_v0 vc_data;
-	struct nx_info *nxi;
-	int ret = 0;
 
-	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
 	if (data && copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
-
-	nxi = lookup_nx_info(nid);
-	if (!nxi)
-		return -ESRCH;
 
 	switch (vc_data.type) {
 	case NXA_TYPE_ANY:
@@ -698,104 +699,66 @@ int vc_net_remove(uint32_t nid, void __user *data)
 		break;
 
 	default:
-		ret = -EINVAL;
-		break;
+		return -EINVAL;
 	}
-
-	put_nx_info(nxi);
-	return ret;
+	return 0;
 }
 
-int vc_get_nflags(uint32_t id, void __user *data)
+int vc_get_nflags(struct nx_info *nxi, void __user *data)
 {
-	struct nx_info *nxi;
 	struct vcmd_net_flags_v0 vc_data;
-
-	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
-
-	nxi = lookup_nx_info(id);
-	if (!nxi)
-		return -ESRCH;
 
 	vc_data.flagword = nxi->nx_flags;
 
 	/* special STATE flag handling */
-	vc_data.mask = vx_mask_flags(~0UL, nxi->nx_flags, NXF_ONE_TIME);
-
-	put_nx_info(nxi);
+	vc_data.mask = vs_mask_flags(~0UL, nxi->nx_flags, NXF_ONE_TIME);
 
 	if (copy_to_user (data, &vc_data, sizeof(vc_data)))
 		return -EFAULT;
 	return 0;
 }
 
-int vc_set_nflags(uint32_t id, void __user *data)
+int vc_set_nflags(struct nx_info *nxi, void __user *data)
 {
-	struct nx_info *nxi;
 	struct vcmd_net_flags_v0 vc_data;
 	uint64_t mask, trigger;
 
-	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
 	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
-	nxi = lookup_nx_info(id);
-	if (!nxi)
-		return -ESRCH;
-
 	/* special STATE flag handling */
-	mask = vx_mask_mask(vc_data.mask, nxi->nx_flags, NXF_ONE_TIME);
+	mask = vs_mask_mask(vc_data.mask, nxi->nx_flags, NXF_ONE_TIME);
 	trigger = (mask & nxi->nx_flags) ^ (mask & vc_data.flagword);
 
-	nxi->nx_flags = vx_mask_flags(nxi->nx_flags,
+	nxi->nx_flags = vs_mask_flags(nxi->nx_flags,
 		vc_data.flagword, mask);
 	if (trigger & NXF_PERSISTENT)
 		nx_update_persistent(nxi);
 
-	put_nx_info(nxi);
 	return 0;
 }
 
-int vc_get_ncaps(uint32_t id, void __user *data)
+int vc_get_ncaps(struct nx_info *nxi, void __user *data)
 {
-	struct nx_info *nxi;
 	struct vcmd_net_caps_v0 vc_data;
-
-	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
-
-	nxi = lookup_nx_info(id);
-	if (!nxi)
-		return -ESRCH;
 
 	vc_data.ncaps = nxi->nx_ncaps;
 	vc_data.cmask = ~0UL;
-	put_nx_info(nxi);
 
 	if (copy_to_user (data, &vc_data, sizeof(vc_data)))
 		return -EFAULT;
 	return 0;
 }
 
-int vc_set_ncaps(uint32_t id, void __user *data)
+int vc_set_ncaps(struct nx_info *nxi, void __user *data)
 {
-	struct nx_info *nxi;
 	struct vcmd_net_caps_v0 vc_data;
 
-	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
 	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
-	nxi = lookup_nx_info(id);
-	if (!nxi)
-		return -ESRCH;
-
-	nxi->nx_ncaps = vx_mask_flags(nxi->nx_ncaps,
+	nxi->nx_ncaps = vs_mask_flags(nxi->nx_ncaps,
 		vc_data.ncaps, vc_data.cmask);
-	put_nx_info(nxi);
 	return 0;
 }
 

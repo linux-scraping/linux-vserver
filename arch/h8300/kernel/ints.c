@@ -1,5 +1,5 @@
 /*
- * linux/arch/h8300/platform/h8300h/ints.c
+ * linux/arch/h8300/kernel/ints.c
  *
  * Yoshinori Sato <ysato@users.sourceforge.jp>
  *
@@ -141,7 +141,7 @@ int request_irq(unsigned int irq,
 		return -EBUSY;
 
 	if (use_kmalloc)
-		irq_handle = (irq_handler_t *)kmalloc(sizeof(irq_handler_t), GFP_ATOMIC);
+		irq_handle = kmalloc(sizeof(irq_handler_t), GFP_ATOMIC);
 	else {
 		/* use bootmem allocater */
 		irq_handle = (irq_handler_t *)alloc_bootmem(sizeof(irq_handler_t));
@@ -158,7 +158,7 @@ int request_irq(unsigned int irq,
 	irq_handle->devname = devname;
 	irq_list[irq] = irq_handle;
 
-	if (irq_handle->flags & SA_SAMPLE_RANDOM)
+	if (irq_handle->flags & IRQF_SAMPLE_RANDOM)
 		rand_initialize_irq(irq);
 
 	enable_irq(irq);
@@ -222,7 +222,7 @@ asmlinkage void process_int(int irq, struct pt_regs *fp)
 		if (irq_list[irq]) {
 			irq_list[irq]->handler(irq, irq_list[irq]->dev_id, fp);
 			irq_list[irq]->count++;
-			if (irq_list[irq]->flags & SA_SAMPLE_RANDOM)
+			if (irq_list[irq]->flags & IRQF_SAMPLE_RANDOM)
 				add_interrupt_randomness(irq);
 		}
 	} else {

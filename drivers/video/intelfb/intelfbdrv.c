@@ -1,11 +1,12 @@
 /*
  * intelfb
  *
- * Linux framebuffer driver for Intel(R) 830M/845G/852GM/855GM/865G/915G/915GM
- * integrated graphics chips.
+ * Linux framebuffer driver for Intel(R) 830M/845G/852GM/855GM/865G/915G/915GM/
+ * 945G/945GM integrated graphics chips.
  *
  * Copyright © 2002, 2003 David Dawes <dawes@xfree86.org>
  *                   2004 Sylvain Meyer
+ *                   2006 David Airlie
  *
  * This driver consists of two parts.  The first part (intelfbdrv.c) provides
  * the basic fbdev interfaces, is derived in part from the radeonfb and
@@ -107,13 +108,11 @@
  *
  */
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/errno.h>
 #include <linux/string.h>
 #include <linux/mm.h>
-#include <linux/tty.h>
 #include <linux/slab.h>
 #include <linux/delay.h>
 #include <linux/fb.h>
@@ -122,6 +121,7 @@
 #include <linux/pci.h>
 #include <linux/vmalloc.h>
 #include <linux/pagemap.h>
+#include <linux/screen_info.h>
 
 #include <asm/io.h>
 
@@ -131,10 +131,13 @@
 
 #include "intelfb.h"
 #include "intelfbhw.h"
+#include "../edid.h"
 
 static void __devinit get_initial_mode(struct intelfb_info *dinfo);
 static void update_dinfo(struct intelfb_info *dinfo,
 			 struct fb_var_screeninfo *var);
+static int intelfb_open(struct fb_info *info, int user);
+static int intelfb_release(struct fb_info *info, int user);
 static int intelfb_check_var(struct fb_var_screeninfo *var,
 			     struct fb_info *info);
 static int intelfb_set_par(struct fb_info *info);
@@ -182,6 +185,8 @@ static struct pci_device_id intelfb_pci_table[] __devinitdata = {
 	{ PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_INTEL_865G, PCI_ANY_ID, PCI_ANY_ID, PCI_CLASS_DISPLAY_VGA << 8, INTELFB_CLASS_MASK, INTEL_865G },
 	{ PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_INTEL_915G, PCI_ANY_ID, PCI_ANY_ID, PCI_CLASS_DISPLAY_VGA << 8, INTELFB_CLASS_MASK, INTEL_915G },
 	{ PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_INTEL_915GM, PCI_ANY_ID, PCI_ANY_ID, PCI_CLASS_DISPLAY_VGA << 8, INTELFB_CLASS_MASK, INTEL_915GM },
+	{ PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_INTEL_945G, PCI_ANY_ID, PCI_ANY_ID, PCI_CLASS_DISPLAY_VGA << 8, INTELFB_CLASS_MASK, INTEL_945G },
+	{ PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_INTEL_945GM, PCI_ANY_ID, PCI_ANY_ID, PCI_CLASS_DISPLAY_VGA << 8, INTELFB_CLASS_MASK, INTEL_945GM },
 	{ 0, }
 };
 
@@ -191,6 +196,8 @@ static int num_registered = 0;
 /* fb ops */
 static struct fb_ops intel_fb_ops = {
 	.owner =		THIS_MODULE,
+	.fb_open =              intelfb_open,
+	.fb_release =           intelfb_release,
 	.fb_check_var =         intelfb_check_var,
 	.fb_set_par =           intelfb_set_par,
 	.fb_setcolreg =		intelfb_setcolreg,
@@ -261,7 +268,7 @@ MODULE_PARM_DESC(mode,
 
 #ifndef MODULE
 #define OPT_EQUAL(opt, name) (!strncmp(opt, name, strlen(name)))
-#define OPT_INTVAL(opt, name) simple_strtoul(opt + strlen(name), NULL, 0)
+#define OPT_INTVAL(opt, name) simple_strtoul(opt + strlen(name) + 1, NULL, 0)
 #define OPT_STRVAL(opt, name) (opt + strlen(name))
 
 static __inline__ char *
@@ -443,6 +450,8 @@ cleanup(struct intelfb_info *dinfo)
 	if (!dinfo)
 		return;
 
+	intelfbhw_disable_irq(dinfo);
+
 	fb_dealloc_cmap(&dinfo->info->cmap);
 	kfree(dinfo->info->pixmap.addr);
 
@@ -463,6 +472,11 @@ cleanup(struct intelfb_info *dinfo)
 		agp_unbind_memory(dinfo->gtt_ring_mem);
 		agp_free_memory(dinfo->gtt_ring_mem);
 	}
+
+#ifdef CONFIG_FB_INTEL_I2C
+	/* un-register I2C bus */
+	intelfb_delete_i2c_busses(dinfo);
+#endif
 
 	if (dinfo->mmio_base)
 		iounmap((void __iomem *)dinfo->mmio_base);
@@ -546,11 +560,11 @@ intelfb_pci_register(struct pci_dev *pdev, const struct pci_device_id *ent)
 
 	/* Set base addresses. */
 	if ((ent->device == PCI_DEVICE_ID_INTEL_915G) ||
-			(ent->device == PCI_DEVICE_ID_INTEL_915GM)) {
+	    (ent->device == PCI_DEVICE_ID_INTEL_915GM) ||
+	    (ent->device == PCI_DEVICE_ID_INTEL_945G)  ||
+	    (ent->device == PCI_DEVICE_ID_INTEL_945GM)) {
 		aperture_bar = 2;
 		mmio_bar = 0;
-		/* Disable HW cursor on 915G/M (not implemented yet) */
-		hwcursor = 0;
 	}
 	dinfo->aperture.physical = pci_resource_start(pdev, aperture_bar);
 	dinfo->aperture.size     = pci_resource_len(pdev, aperture_bar);
@@ -584,8 +598,7 @@ intelfb_pci_register(struct pci_dev *pdev, const struct pci_device_id *ent)
 	/* Get the chipset info. */
 	dinfo->pci_chipset = pdev->device;
 
-	if (intelfbhw_get_chipset(pdev, &dinfo->name, &dinfo->chipset,
-				  &dinfo->mobile)) {
+	if (intelfbhw_get_chipset(pdev, dinfo)) {
 		cleanup(dinfo);
 		return -ENODEV;
 	}
@@ -704,7 +717,7 @@ intelfb_pci_register(struct pci_dev *pdev, const struct pci_device_id *ent)
 			+ (dinfo->ring.offset << 12);
 		dinfo->ring.virtual  = dinfo->aperture.virtual
 			+ (dinfo->ring.offset << 12);
-		dinfo->ring_head = dinfo->ring.virtual;
+		dinfo->ring_head = 0;
 	}
 	if (dinfo->hwcursor) {
 		agp_memtype = dinfo->mobile ? AGP_PHYSICAL_MEMORY
@@ -763,18 +776,18 @@ intelfb_pci_register(struct pci_dev *pdev, const struct pci_device_id *ent)
 	if (mtrr)
 		set_mtrr(dinfo);
 
-	DBG_MSG("fb: 0x%x(+ 0x%x)/0x%x (0x%x)\n",
+	DBG_MSG("fb: 0x%x(+ 0x%x)/0x%x (0x%p)\n",
 		dinfo->fb.physical, dinfo->fb.offset, dinfo->fb.size,
-		(u32 __iomem ) dinfo->fb.virtual);
-	DBG_MSG("MMIO: 0x%x/0x%x (0x%x)\n",
+		dinfo->fb.virtual);
+	DBG_MSG("MMIO: 0x%x/0x%x (0x%p)\n",
 		dinfo->mmio_base_phys, INTEL_REG_SIZE,
-		(u32 __iomem) dinfo->mmio_base);
-	DBG_MSG("ring buffer: 0x%x/0x%x (0x%x)\n",
+		dinfo->mmio_base);
+	DBG_MSG("ring buffer: 0x%x/0x%x (0x%p)\n",
 		dinfo->ring.physical, dinfo->ring.size,
-		(u32 __iomem ) dinfo->ring.virtual);
-	DBG_MSG("HW cursor: 0x%x/0x%x (0x%x) (offset 0x%x) (phys 0x%x)\n",
+		dinfo->ring.virtual);
+	DBG_MSG("HW cursor: 0x%x/0x%x (0x%p) (offset 0x%x) (phys 0x%x)\n",
 		dinfo->cursor.physical, dinfo->cursor.size,
-		(u32 __iomem ) dinfo->cursor.virtual, dinfo->cursor.offset,
+		dinfo->cursor.virtual, dinfo->cursor.offset,
 		dinfo->cursor.physical);
 
 	DBG_MSG("options: vram = %d, accel = %d, hwcursor = %d, fixed = %d, "
@@ -842,6 +855,11 @@ intelfb_pci_register(struct pci_dev *pdev, const struct pci_device_id *ent)
 	if (bailearly == 5)
 		bailout(dinfo);
 
+#ifdef CONFIG_FB_INTEL_I2C
+	/* register I2C bus */
+	intelfb_create_i2c_busses(dinfo);
+#endif
+
 	if (bailearly == 6)
 		bailout(dinfo);
 
@@ -886,6 +904,13 @@ intelfb_pci_register(struct pci_dev *pdev, const struct pci_device_id *ent)
 	}
 
 	dinfo->registered = 1;
+	dinfo->open = 0;
+
+	init_waitqueue_head(&dinfo->vsync.wait);
+	spin_lock_init(&dinfo->int_lock);
+	dinfo->irq_flags = 0;
+	dinfo->vsync.pan_display = 0;
+	dinfo->vsync.pan_offset = 0;
 
 	return 0;
 
@@ -1029,17 +1054,43 @@ intelfb_init_var(struct intelfb_info *dinfo)
 		       sizeof(struct fb_var_screeninfo));
 		msrc = 5;
 	} else {
-		if (mode) {
-			msrc = fb_find_mode(var, dinfo->info, mode,
-					    vesa_modes, VESA_MODEDB_SIZE,
-					    NULL, 0);
-			if (msrc)
-				msrc |= 8;
+		const u8 *edid_s = fb_firmware_edid(&dinfo->pdev->dev);
+		u8 *edid_d = NULL;
+
+		if (edid_s) {
+			edid_d = kmemdup(edid_s, EDID_LENGTH, GFP_KERNEL);
+
+			if (edid_d) {
+				fb_edid_to_monspecs(edid_d,
+						    &dinfo->info->monspecs);
+				kfree(edid_d);
+			}
 		}
+
+		if (mode) {
+			printk("intelfb: Looking for mode in private "
+			       "database\n");
+			msrc = fb_find_mode(var, dinfo->info, mode,
+					    dinfo->info->monspecs.modedb,
+					    dinfo->info->monspecs.modedb_len,
+					    NULL, 0);
+
+			if (msrc && msrc > 1) {
+				printk("intelfb: No mode in private database, "
+				       "intelfb: looking for mode in global "
+				       "database ");
+				msrc = fb_find_mode(var, dinfo->info, mode,
+						    NULL, 0, NULL, 0);
+
+				if (msrc)
+					msrc |= 8;
+			}
+
+		}
+
 		if (!msrc) {
 			msrc = fb_find_mode(var, dinfo->info, PREFERRED_MODE,
-					    vesa_modes, VESA_MODEDB_SIZE,
-					    NULL, 0);
+					    NULL, 0, NULL, 0);
 		}
 	}
 
@@ -1139,7 +1190,10 @@ update_dinfo(struct intelfb_info *dinfo, struct fb_var_screeninfo *var)
 	}
 
 	/* Make sure the line length is a aligned correctly. */
-	dinfo->pitch = ROUND_UP_TO(dinfo->pitch, STRIDE_ALIGNMENT);
+	if (IS_I9XX(dinfo))
+		dinfo->pitch = ROUND_UP_TO(dinfo->pitch, STRIDE_ALIGNMENT_I9XX);
+	else
+		dinfo->pitch = ROUND_UP_TO(dinfo->pitch, STRIDE_ALIGNMENT);
 
 	if (FIXED_MODE(dinfo))
 		dinfo->pitch = dinfo->initial_pitch;
@@ -1156,21 +1210,66 @@ update_dinfo(struct intelfb_info *dinfo, struct fb_var_screeninfo *var)
  ***************************************************************/
 
 static int
+intelfb_open(struct fb_info *info, int user)
+{
+	struct intelfb_info *dinfo = GET_DINFO(info);
+
+	if (user) {
+		dinfo->open++;
+	}
+
+	return 0;
+}
+
+static int
+intelfb_release(struct fb_info *info, int user)
+{
+	struct intelfb_info *dinfo = GET_DINFO(info);
+
+	if (user) {
+		dinfo->open--;
+		msleep(1);
+		if (!dinfo->open) {
+			intelfbhw_disable_irq(dinfo);
+		}
+	}
+
+	return 0;
+}
+
+static int
 intelfb_check_var(struct fb_var_screeninfo *var, struct fb_info *info)
 {
 	int change_var = 0;
 	struct fb_var_screeninfo v;
 	struct intelfb_info *dinfo;
 	static int first = 1;
+	int i;
+	/* Good pitches to allow tiling.  Don't care about pitches < 1024. */
+	static const int pitches[] = {
+		128 * 8,
+		128 * 16,
+		128 * 32,
+		128 * 64,
+		0
+	};
 
 	DBG_MSG("intelfb_check_var: accel_flags is %d\n", var->accel_flags);
 
 	dinfo = GET_DINFO(info);
 
+	/* update the pitch */
 	if (intelfbhw_validate_mode(dinfo, var) != 0)
 		return -EINVAL;
 
 	v = *var;
+
+	for (i = 0; pitches[i] != 0; i++) {
+		if (pitches[i] >= v.xres_virtual) {
+			v.xres_virtual = pitches[i];
+			break;
+		}
+	}
 
 	/* Check for a supported bpp. */
 	if (v.bits_per_pixel <= 8) {
@@ -1384,6 +1483,19 @@ static int
 intelfb_ioctl(struct fb_info *info, unsigned int cmd, unsigned long arg)
 {
 	int retval = 0;
+	struct intelfb_info *dinfo = GET_DINFO(info);
+	u32 pipe = 0;
+
+	switch (cmd) {
+		case FBIO_WAITFORVSYNC:
+			if (get_user(pipe, (__u32 __user *)arg))
+				return -EFAULT;
+
+			retval = intelfbhw_wait_for_vsync(dinfo, pipe);
+			break;
+		default:
+			break;
+	}
 
 	return retval;
 }
@@ -1467,7 +1579,7 @@ static int
 intelfb_cursor(struct fb_info *info, struct fb_cursor *cursor)
 {
         struct intelfb_info *dinfo = GET_DINFO(info);
-
+	u32 physical;
 #if VERBOSE > 0
 	DBG_MSG("intelfb_cursor\n");
 #endif
@@ -1478,7 +1590,10 @@ intelfb_cursor(struct fb_info *info, struct fb_cursor *cursor)
 	intelfbhw_cursor_hide(dinfo);
 
 	/* If XFree killed the cursor - restore it */
-	if (INREG(CURSOR_A_BASEADDR) != dinfo->cursor.offset << 12) {
+	physical = (dinfo->mobile || IS_I9XX(dinfo)) ? dinfo->cursor.physical :
+		   (dinfo->cursor.offset << 12);
+
+	if (INREG(CURSOR_A_BASEADDR) != physical) {
 		u32 fg, bg;
 
 		DBG_MSG("the cursor was killed - restore it !!\n");

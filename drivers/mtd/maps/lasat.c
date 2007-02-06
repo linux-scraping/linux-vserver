@@ -19,7 +19,6 @@
 #include <linux/mtd/mtd.h>
 #include <linux/mtd/map.h>
 #include <linux/mtd/partitions.h>
-#include <linux/config.h>
 #include <asm/lasat/lasat.h>
 
 static struct mtd_info *lasat_mtd;
@@ -80,6 +79,7 @@ static int __init init_lasat(void)
 		return 0;
 	}
 
+	iounmap(lasat_map.virt);
 	return -ENXIO;
 }
 
@@ -90,6 +90,7 @@ static void __exit cleanup_lasat(void)
 		map_destroy(lasat_mtd);
 	}
 	if (lasat_map.virt) {
+		iounmap(lasat_map.virt);
 		lasat_map.virt = 0;
 	}
 }

@@ -1,8 +1,8 @@
 /**
  * $Id: phram.c,v 1.16 2005/11/07 11:14:25 gleixner Exp $
  *
- * Copyright (c) ????		Jochen Schäuble <psionic@psionic.de>
- * Copyright (c) 2003-2004	Jörn Engel <joern@wh.fh-wedel.de>
+ * Copyright (c) ????		Jochen SchÃ¤uble <psionic@psionic.de>
+ * Copyright (c) 2003-2004	JÃ¶rn Engel <joern@wh.fh-wedel.de>
  *
  * Usage:
  *
@@ -126,11 +126,9 @@ static int register_device(char *name, unsigned long start, unsigned long len)
 	struct phram_mtd_list *new;
 	int ret = -ENOMEM;
 
-	new = kmalloc(sizeof(*new), GFP_KERNEL);
+	new = kzalloc(sizeof(*new), GFP_KERNEL);
 	if (!new)
 		goto out0;
-
-	memset(new, 0, sizeof(*new));
 
 	ret = -EIO;
 	new->mtd.priv = ioremap(start, len);
@@ -142,7 +140,7 @@ static int register_device(char *name, unsigned long start, unsigned long len)
 
 	new->mtd.name = name;
 	new->mtd.size = len;
-	new->mtd.flags = MTD_CAP_RAM | MTD_ERASEABLE | MTD_VOLATILE;
+	new->mtd.flags = MTD_CAP_RAM;
         new->mtd.erase = phram_erase;
 	new->mtd.point = phram_point;
 	new->mtd.unpoint = phram_unpoint;
@@ -151,6 +149,7 @@ static int register_device(char *name, unsigned long start, unsigned long len)
 	new->mtd.owner = THIS_MODULE;
 	new->mtd.type = MTD_RAM;
 	new->mtd.erasesize = PAGE_SIZE;
+	new->mtd.writesize = 1;
 
 	ret = -EAGAIN;
 	if (add_mtd_device(&new->mtd)) {
@@ -266,12 +265,16 @@ static int phram_setup(const char *val, struct kernel_param *kp)
 		return 0;
 
 	ret = parse_num32(&start, token[1]);
-	if (ret)
+	if (ret) {
+		kfree(name);
 		parse_err("illegal start address\n");
+	}
 
 	ret = parse_num32(&len, token[2]);
-	if (ret)
+	if (ret) {
+		kfree(name);
 		parse_err("illegal device length\n");
+	}
 
 	register_device(name, start, len);
 
@@ -296,5 +299,5 @@ module_init(init_phram);
 module_exit(cleanup_phram);
 
 MODULE_LICENSE("GPL");
-MODULE_AUTHOR("Jörn Engel <joern@wh.fh-wedel.de>");
+MODULE_AUTHOR("JÃ¶rn Engel <joern@wh.fh-wedel.de>");
 MODULE_DESCRIPTION("MTD driver for physical RAM");

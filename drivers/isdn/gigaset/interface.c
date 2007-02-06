@@ -127,14 +127,14 @@ static int  if_write_room(struct tty_struct *tty);
 static int  if_chars_in_buffer(struct tty_struct *tty);
 static void if_throttle(struct tty_struct *tty);
 static void if_unthrottle(struct tty_struct *tty);
-static void if_set_termios(struct tty_struct *tty, struct termios *old);
+static void if_set_termios(struct tty_struct *tty, struct ktermios *old);
 static int  if_tiocmget(struct tty_struct *tty, struct file *file);
 static int  if_tiocmset(struct tty_struct *tty, struct file *file,
 			unsigned int set, unsigned int clear);
 static int  if_write(struct tty_struct *tty,
 		     const unsigned char *buf, int count);
 
-static struct tty_operations if_ops = {
+static const struct tty_operations if_ops = {
 	.open =			if_open,
 	.close =		if_close,
 	.ioctl =		if_ioctl,
@@ -490,7 +490,7 @@ static void if_unthrottle(struct tty_struct *tty)
 	mutex_unlock(&cs->mutex);
 }
 
-static void if_set_termios(struct tty_struct *tty, struct termios *old)
+static void if_set_termios(struct tty_struct *tty, struct ktermios *old)
 {
 	struct cardstate *cs;
 	unsigned int iflag;
@@ -625,7 +625,14 @@ void gigaset_if_init(struct cardstate *cs)
 		return;
 
 	tasklet_init(&cs->if_wake_tasklet, &if_wake, (unsigned long) cs);
-	tty_register_device(drv->tty, cs->minor_index, NULL);
+	cs->tty_dev = tty_register_device(drv->tty, cs->minor_index, NULL);
+
+	if (!IS_ERR(cs->tty_dev))
+		dev_set_drvdata(cs->tty_dev, cs);
+	else {
+		warn("could not register device to the tty subsystem");
+		cs->tty_dev = NULL;
+	}
 }
 
 void gigaset_if_free(struct cardstate *cs)
@@ -638,6 +645,7 @@ void gigaset_if_free(struct cardstate *cs)
 
 	tasklet_disable(&cs->if_wake_tasklet);
 	tasklet_kill(&cs->if_wake_tasklet);
+	cs->tty_dev = NULL;
 	tty_unregister_device(drv->tty, cs->minor_index);
 }
 
@@ -665,10 +673,9 @@ EXPORT_SYMBOL_GPL(gigaset_if_receive);
  *	drv		Driver
  *	procname	Name of the driver (e.g. for /proc/tty/drivers)
  *	devname		Name of the device files (prefix without minor number)
- *	devfsname	Devfs name of the device files without %d
  */
 void gigaset_if_initdriver(struct gigaset_driver *drv, const char *procname,
-			   const char *devname, const char *devfsname)
+			   const char *devname)
 {
 	unsigned minors = drv->minors;
 	int ret;
@@ -684,7 +691,7 @@ void gigaset_if_initdriver(struct gigaset_driver *drv, const char *procname,
 	tty->major =		GIG_MAJOR,
 	tty->type =		TTY_DRIVER_TYPE_SERIAL,
 	tty->subtype =		SERIAL_TYPE_NORMAL,
-	tty->flags =		TTY_DRIVER_REAL_RAW | TTY_DRIVER_NO_DEVFS,
+	tty->flags =		TTY_DRIVER_REAL_RAW | TTY_DRIVER_DYNAMIC_DEV;
 
 	tty->driver_name =	procname;
 	tty->name =		devname;
@@ -692,7 +699,6 @@ void gigaset_if_initdriver(struct gigaset_driver *drv, const char *procname,
 	tty->num =		drv->minors;
 
 	tty->owner =		THIS_MODULE;
-	tty->devfs_name =	devfsname;
 
 	tty->init_termios          = tty_std_termios; //FIXME
 	tty->init_termios.c_cflag  = B9600 | CS8 | CREAD | HUPCL | CLOCAL; //FIXME

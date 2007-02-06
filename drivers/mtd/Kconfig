@@ -78,7 +78,7 @@ config MTD_REDBOOT_DIRECTORY_BLOCK
 	  option.
 
 	  The option specifies which Flash sectors holds the RedBoot
-	  partition table.  A zero or positive value gives an absolete
+	  partition table.  A zero or positive value gives an absolute
 	  erase block number. A negative value specifies a number of
 	  sectors before the end of the device.
 
@@ -86,14 +86,14 @@ config MTD_REDBOOT_DIRECTORY_BLOCK
 	  block and "-2" means the penultimate block.
 
 config MTD_REDBOOT_PARTS_UNALLOCATED
-	bool "  Include unallocated flash regions"
+	bool "Include unallocated flash regions"
 	depends on MTD_REDBOOT_PARTS
 	help
 	  If you need to register each unallocated flash region as a MTD
 	  'partition', enable this option.
 
 config MTD_REDBOOT_PARTS_READONLY
-	bool "  Force read-only for RedBoot system images"
+	bool "Force read-only for RedBoot system images"
 	depends on MTD_REDBOOT_PARTS
 	help
 	  If you need to force read-only for 'RedBoot', 'RedBoot Config' and
@@ -101,9 +101,9 @@ config MTD_REDBOOT_PARTS_READONLY
 
 config MTD_CMDLINE_PARTS
 	bool "Command line partition table parsing"
-	depends on MTD_PARTITIONS = "y"
+	depends on MTD_PARTITIONS = "y" && MTD = "y"
 	---help---
-	  Allow generic configuration of the MTD paritition tables via the kernel
+	  Allow generic configuration of the MTD partition tables via the kernel
 	  command line. Multiple flash resources are supported for hardware where
 	  different kinds of flash memory are available.
 
@@ -164,9 +164,15 @@ config MTD_CHAR
 	  memory chips, and also use ioctl() to obtain information about
 	  the device, or to erase parts of it.
 
+config MTD_BLKDEVS
+	tristate "Common interface to block layer for MTD 'translation layers'"
+	depends on MTD && BLOCK
+	default n
+
 config MTD_BLOCK
 	tristate "Caching block device access to MTD devices"
-	depends on MTD
+	depends on MTD && BLOCK
+	select MTD_BLKDEVS
 	---help---
 	  Although most flash chips have an erase size too large to be useful
 	  as block devices, it is possible to use MTD devices which are based
@@ -188,7 +194,8 @@ config MTD_BLOCK
 
 config MTD_BLOCK_RO
 	tristate "Readonly block device access to MTD devices"
-	depends on MTD_BLOCK!=y && MTD
+	depends on MTD_BLOCK!=y && MTD && BLOCK
+	select MTD_BLKDEVS
 	help
 	  This allows you to mount read-only file systems (such as cramfs)
 	  from an MTD device, without the overhead (and danger) of the caching
@@ -199,7 +206,8 @@ config MTD_BLOCK_RO
 
 config FTL
 	tristate "FTL (Flash Translation Layer) support"
-	depends on MTD
+	depends on MTD && BLOCK
+	select MTD_BLKDEVS
 	---help---
 	  This provides support for the original Flash Translation Layer which
 	  is part of the PCMCIA specification. It uses a kind of pseudo-
@@ -215,7 +223,8 @@ config FTL
 
 config NFTL
 	tristate "NFTL (NAND Flash Translation Layer) support"
-	depends on MTD
+	depends on MTD && BLOCK
+	select MTD_BLKDEVS
 	---help---
 	  This provides support for the NAND Flash Translation Layer which is
 	  used on M-Systems' DiskOnChip devices. It uses a kind of pseudo-
@@ -238,7 +247,8 @@ config NFTL_RW
 
 config INFTL
 	tristate "INFTL (Inverse NAND Flash Translation Layer) support"
-	depends on MTD
+	depends on MTD && BLOCK
+	select MTD_BLKDEVS
 	---help---
 	  This provides support for the Inverse NAND Flash Translation
 	  Layer which is used on M-Systems' newer DiskOnChip devices. It
@@ -255,13 +265,22 @@ config INFTL
 
 config RFD_FTL
         tristate "Resident Flash Disk (Flash Translation Layer) support"
-	depends on MTD
+	depends on MTD && BLOCK
+	select MTD_BLKDEVS
 	---help---
 	  This provides support for the flash translation layer known
 	  as the Resident Flash Disk (RFD), as used by the Embedded BIOS
 	  of General Software. There is a blurb at:
 
 		http://www.gensw.com/pages/prod/bios/rfd.htm
+
+config SSFDC
+	tristate "NAND SSFDC (SmartMedia) read only translation layer"
+	depends on MTD && BLOCK
+	select MTD_BLKDEVS
+	help
+	  This enables read only access to SmartMedia formatted NAND
+	  flash. You can mount it with FAT file system.
 
 source "drivers/mtd/chips/Kconfig"
 

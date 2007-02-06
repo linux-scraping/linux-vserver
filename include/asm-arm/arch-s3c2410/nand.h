@@ -1,16 +1,13 @@
 /* linux/include/asm-arm/arch-s3c2410/nand.h
  *
- * (c) 2004 Simtec Electronics
- *  Ben Dooks <ben@simtec.co.uk>
+ * Copyright (c) 2004 Simtec Electronics
+ *	Ben Dooks <ben@simtec.co.uk>
  *
  * S3C2410 - NAND device controller platfrom_device info
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
- *
- * Changelog:
- *	23-Sep-2004 BJD  Created file
 */
 
 /* struct s3c2410_nand_set

@@ -31,6 +31,7 @@
 #include <asm/cpudata.h>
 
 #include <asm/irq.h>
+#include <asm/irq_regs.h>
 #include <asm/page.h>
 #include <asm/pgtable.h>
 #include <asm/oplib.h>
@@ -39,6 +40,7 @@
 #include <asm/starfire.h>
 #include <asm/tlb.h>
 #include <asm/sections.h>
+#include <asm/prom.h>
 
 extern void calibrate_delay(void);
 
@@ -76,41 +78,42 @@ void smp_bogo(struct seq_file *m)
 
 void __init smp_store_cpu_info(int id)
 {
-	int cpu_node, def;
+	struct device_node *dp;
+	int def;
 
 	/* multiplier and counter set by
 	   smp_setup_percpu_timer()  */
 	cpu_data(id).udelay_val			= loops_per_jiffy;
 
-	cpu_find_by_mid(id, &cpu_node);
-	cpu_data(id).clock_tick = prom_getintdefault(cpu_node,
-						     "clock-frequency", 0);
+	cpu_find_by_mid(id, &dp);
+	cpu_data(id).clock_tick =
+		of_getintprop_default(dp, "clock-frequency", 0);
 
 	def = ((tlb_type == hypervisor) ? (8 * 1024) : (16 * 1024));
-	cpu_data(id).dcache_size = prom_getintdefault(cpu_node, "dcache-size",
-						      def);
+	cpu_data(id).dcache_size =
+		of_getintprop_default(dp, "dcache-size", def);
 
 	def = 32;
 	cpu_data(id).dcache_line_size =
-		prom_getintdefault(cpu_node, "dcache-line-size", def);
+		of_getintprop_default(dp, "dcache-line-size", def);
 
 	def = 16 * 1024;
-	cpu_data(id).icache_size = prom_getintdefault(cpu_node, "icache-size",
-						      def);
+	cpu_data(id).icache_size =
+		of_getintprop_default(dp, "icache-size", def);
 
 	def = 32;
 	cpu_data(id).icache_line_size =
-		prom_getintdefault(cpu_node, "icache-line-size", def);
+		of_getintprop_default(dp, "icache-line-size", def);
 
 	def = ((tlb_type == hypervisor) ?
 	       (3 * 1024 * 1024) :
 	       (4 * 1024 * 1024));
-	cpu_data(id).ecache_size = prom_getintdefault(cpu_node, "ecache-size",
-						      def);
+	cpu_data(id).ecache_size =
+		of_getintprop_default(dp, "ecache-size", def);
 
 	def = 64;
 	cpu_data(id).ecache_line_size =
-		prom_getintdefault(cpu_node, "ecache-line-size", def);
+		of_getintprop_default(dp, "ecache-line-size", def);
 
 	printk("CPU[%d]: Caches "
 	       "D[sz(%d):line_sz(%d)] "
@@ -342,10 +345,10 @@ static int __devinit smp_boot_one_cpu(unsigned int cpu)
 
 		prom_startcpu_cpuid(cpu, entry, cookie);
 	} else {
-		int cpu_node;
+		struct device_node *dp;
 
-		cpu_find_by_mid(cpu, &cpu_node);
-		prom_startcpu(cpu_node, entry, cookie);
+		cpu_find_by_mid(cpu, &dp);
+		prom_startcpu(dp->node, entry, cookie);
 	}
 
 	for (timeout = 0; timeout < 5000000; timeout++) {
@@ -1185,6 +1188,7 @@ void smp_percpu_timer_interrupt(struct pt_regs *regs)
 	unsigned long compare, tick, pstate;
 	int cpu = smp_processor_id();
 	int user = user_mode(regs);
+	struct pt_regs *old_regs;
 
 	/*
 	 * Check for level 14 softint.
@@ -1201,8 +1205,9 @@ void smp_percpu_timer_interrupt(struct pt_regs *regs)
 		clear_softint(tick_mask);
 	}
 
+	old_regs = set_irq_regs(regs);
 	do {
-		profile_tick(CPU_PROFILING, regs);
+		profile_tick(CPU_PROFILING);
 		if (!--prof_counter(cpu)) {
 			irq_enter();
 
@@ -1234,6 +1239,7 @@ void smp_percpu_timer_interrupt(struct pt_regs *regs)
 				     : /* no outputs */
 				     : "r" (pstate));
 	} while (time_after_eq(tick, compare));
+	set_irq_regs(old_regs);
 }
 
 static void __init smp_setup_percpu_timer(void)
@@ -1289,7 +1295,8 @@ int setup_profiling_timer(unsigned int multiplier)
 
 static void __init smp_tune_scheduling(void)
 {
-	int instance, node;
+	struct device_node *dp;
+	int instance;
 	unsigned int def, smallest = ~0U;
 
 	def = ((tlb_type == hypervisor) ?
@@ -1297,10 +1304,10 @@ static void __init smp_tune_scheduling(void)
 	       (4 * 1024 * 1024));
 
 	instance = 0;
-	while (!cpu_find_by_instance(instance, &node, NULL)) {
+	while (!cpu_find_by_instance(instance, &dp, NULL)) {
 		unsigned int val;
 
-		val = prom_getintdefault(node, "ecache-size", def);
+		val = of_getintprop_default(dp, "ecache-size", def);
 		if (val < smallest)
 			smallest = val;
 
@@ -1381,7 +1388,7 @@ void __devinit smp_prepare_boot_cpu(void)
 {
 }
 
-int __devinit __cpu_up(unsigned int cpu)
+int __cpuinit __cpu_up(unsigned int cpu)
 {
 	int ret = smp_boot_one_cpu(cpu);
 
@@ -1440,11 +1447,8 @@ void __init setup_per_cpu_areas(void)
 	char *ptr;
 
 	/* Copy section for each CPU (we discard the original) */
-	goal = ALIGN(__per_cpu_end - __per_cpu_start, SMP_CACHE_BYTES);
-#ifdef CONFIG_MODULES
-	if (goal < PERCPU_ENOUGH_ROOM)
-		goal = PERCPU_ENOUGH_ROOM;
-#endif
+	goal = PERCPU_ENOUGH_ROOM;
+
 	__per_cpu_shift = 0;
 	for (size = 1UL; size < goal; size <<= 1UL)
 		__per_cpu_shift++;

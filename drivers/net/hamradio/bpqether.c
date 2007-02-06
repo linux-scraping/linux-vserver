@@ -54,7 +54,6 @@
  *	BPQ   004	Joerg(DL1BKE)		Fixed to not lock up on ifconfig.
  */
 
-#include <linux/config.h>
 #include <linux/errno.h>
 #include <linux/types.h>
 #include <linux/socket.h>
@@ -89,11 +88,6 @@
 
 static char banner[] __initdata = KERN_INFO "AX.25: bpqether driver version 004\n";
 
-static unsigned char ax25_bcast[AX25_ADDR_LEN] =
-	{'Q' << 1, 'S' << 1, 'T' << 1, ' ' << 1, ' ' << 1, ' ' << 1, '0' << 1};
-static unsigned char ax25_defaddr[AX25_ADDR_LEN] =
-	{'L' << 1, 'I' << 1, 'N' << 1, 'U' << 1, 'X' << 1, ' ' << 1, '1' << 1};
-
 static char bcast_addr[6]={0xFF,0xFF,0xFF,0xFF,0xFF,0xFF};
 
 static char bpq_eth_addr[6];
@@ -123,6 +117,12 @@ struct bpqdev {
 
 static LIST_HEAD(bpq_devices);
 
+/*
+ * bpqether network devices are paired with ethernet devices below them, so
+ * form a special "super class" of normal ethernet devices; split their locks
+ * off into a separate class since they always nest.
+ */
+static struct lock_class_key bpq_netdev_xmit_lock_key;
 
 /* ------------------------------------------------------------------------ */
 
@@ -482,8 +482,8 @@ static void bpq_setup(struct net_device *dev)
 	dev->do_ioctl	     = bpq_ioctl;
 	dev->destructor	     = free_netdev;
 
-	memcpy(dev->broadcast, ax25_bcast, AX25_ADDR_LEN);
-	memcpy(dev->dev_addr,  ax25_defaddr, AX25_ADDR_LEN);
+	memcpy(dev->broadcast, &ax25_bcast, AX25_ADDR_LEN);
+	memcpy(dev->dev_addr,  &ax25_defaddr, AX25_ADDR_LEN);
 
 	dev->flags      = 0;
 
@@ -529,6 +529,7 @@ static int bpq_new_device(struct net_device *edev)
 	err = register_netdevice(ndev);
 	if (err)
 		goto error;
+	lockdep_set_class(&ndev->_xmit_lock, &bpq_netdev_xmit_lock_key);
 
 	/* List protected by RTNL */
 	list_add_rcu(&bpq->bpq_list, &bpq_devices);

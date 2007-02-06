@@ -15,7 +15,6 @@
  * this archive for more details.
  */
 
-#include <linux/config.h>
 #include <linux/kernel.h>
 #include <linux/sched.h>
 #include <linux/mm.h>
@@ -404,7 +403,6 @@ long arch_ptrace(struct task_struct *child, long request, long addr, long data)
 		ret = ptrace_detach(child, data);
 		break;
 
-#ifdef CONFIG_PPC64
 	case PPC_PTRACE_GETREGS: { /* Get GPRs 0 - 31. */
 		int i;
 		unsigned long *reg = &((unsigned long *)child->thread.regs)[0];
@@ -468,7 +466,6 @@ long arch_ptrace(struct task_struct *child, long request, long addr, long data)
 		}
 		break;
 	}
-#endif /* CONFIG_PPC64 */
 
 #ifdef CONFIG_ALTIVEC
 	case PTRACE_GETVRREGS:
@@ -529,9 +526,7 @@ static void do_syscall_trace(void)
 
 void do_syscall_trace_enter(struct pt_regs *regs)
 {
-#ifdef CONFIG_PPC64
 	secure_computing(regs->gpr[0]);
-#endif
 
 	if (test_thread_flag(TIF_SYSCALL_TRACE)
 	    && (current->ptrace & PT_PTRACED))
@@ -551,12 +546,8 @@ void do_syscall_trace_enter(struct pt_regs *regs)
 
 void do_syscall_trace_leave(struct pt_regs *regs)
 {
-#ifdef CONFIG_PPC32
-	secure_computing(regs->gpr[0]);
-#endif
-
 	if (unlikely(current->audit_context))
-		audit_syscall_exit((regs->ccr&0x1000)?AUDITSC_FAILURE:AUDITSC_SUCCESS,
+		audit_syscall_exit((regs->ccr&0x10000000)?AUDITSC_FAILURE:AUDITSC_SUCCESS,
 				   regs->result);
 
 	if ((test_thread_flag(TIF_SYSCALL_TRACE)
@@ -564,8 +555,3 @@ void do_syscall_trace_leave(struct pt_regs *regs)
 	    && (current->ptrace & PT_PTRACED))
 		do_syscall_trace();
 }
-
-#ifdef CONFIG_PPC32
-EXPORT_SYMBOL(do_syscall_trace_enter);
-EXPORT_SYMBOL(do_syscall_trace_leave);
-#endif

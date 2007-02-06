@@ -236,7 +236,7 @@ struct nm256 {
 
 	int irq;
 	int irq_acks;
-	irqreturn_t (*interrupt)(int, void *, struct pt_regs *);
+	irq_handler_t interrupt;
 	int badintrcount;		/* counter to check bogus interrupts */
 	struct mutex irq_mutex;
 
@@ -263,7 +263,7 @@ struct nm256 {
 /*
  * PCI ids
  */
-static struct pci_device_id snd_nm256_ids[] __devinitdata = {
+static struct pci_device_id snd_nm256_ids[] = {
 	{PCI_VENDOR_ID_NEOMAGIC, PCI_DEVICE_ID_NEOMAGIC_NM256AV_AUDIO, PCI_ANY_ID, PCI_ANY_ID, 0, 0, 0},
 	{PCI_VENDOR_ID_NEOMAGIC, PCI_DEVICE_ID_NEOMAGIC_NM256ZX_AUDIO, PCI_ANY_ID, PCI_ANY_ID, 0, 0, 0},
 	{PCI_VENDOR_ID_NEOMAGIC, PCI_DEVICE_ID_NEOMAGIC_NM256XL_PLUS_AUDIO, PCI_ANY_ID, PCI_ANY_ID, 0, 0, 0},
@@ -465,7 +465,7 @@ static int snd_nm256_acquire_irq(struct nm256 *chip)
 {
 	mutex_lock(&chip->irq_mutex);
 	if (chip->irq < 0) {
-		if (request_irq(chip->pci->irq, chip->interrupt, SA_INTERRUPT|SA_SHIRQ,
+		if (request_irq(chip->pci->irq, chip->interrupt, IRQF_SHARED,
 				chip->card->driver, chip)) {
 			snd_printk(KERN_ERR "unable to grab IRQ %d\n", chip->pci->irq);
 			mutex_unlock(&chip->irq_mutex);
@@ -1004,7 +1004,7 @@ snd_nm256_intr_check(struct nm256 *chip)
  */
 
 static irqreturn_t
-snd_nm256_interrupt(int irq, void *dev_id, struct pt_regs *dummy)
+snd_nm256_interrupt(int irq, void *dev_id)
 {
 	struct nm256 *chip = dev_id;
 	u16 status;
@@ -1069,7 +1069,7 @@ snd_nm256_interrupt(int irq, void *dev_id, struct pt_regs *dummy)
  */
 
 static irqreturn_t
-snd_nm256_interrupt_zx(int irq, void *dev_id, struct pt_regs *dummy)
+snd_nm256_interrupt_zx(int irq, void *dev_id)
 {
 	struct nm256 *chip = dev_id;
 	u32 status;
@@ -1390,6 +1390,7 @@ static int nm256_suspend(struct pci_dev *pci, pm_message_t state)
 	chip->coeffs_current = 0;
 	pci_disable_device(pci);
 	pci_save_state(pci);
+	pci_set_power_state(pci, pci_choose_state(pci, state));
 	return 0;
 }
 
@@ -1401,8 +1402,17 @@ static int nm256_resume(struct pci_dev *pci)
 
 	/* Perform a full reset on the hardware */
 	chip->in_resume = 1;
+
+	pci_set_power_state(pci, PCI_D0);
 	pci_restore_state(pci);
-	pci_enable_device(pci);
+	if (pci_enable_device(pci) < 0) {
+		printk(KERN_ERR "nm256: pci_enable_device failed, "
+		       "disabling device\n");
+		snd_card_disconnect(card);
+		return -EIO;
+	}
+	pci_set_master(pci);
+
 	snd_nm256_init_chip(chip);
 
 	/* restore ac97 */

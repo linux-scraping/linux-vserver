@@ -83,7 +83,7 @@ WriteISAR(struct IsdnCardState *cs, int mode, u_char offset, u_char value)
 }
 
 static irqreturn_t
-isurf_interrupt(int intno, void *dev_id, struct pt_regs *regs)
+isurf_interrupt(int intno, void *dev_id)
 {
 	struct IsdnCardState *cs = dev_id;
 	u_char val;
@@ -196,10 +196,10 @@ isurf_auxcmd(struct IsdnCardState *cs, isdn_ctrl *ic) {
 }
 
 #ifdef __ISAPNP__
-static struct pnp_card *pnp_c __initdata = NULL;
+static struct pnp_card *pnp_c __devinitdata = NULL;
 #endif
 
-int __init
+int __devinit
 setup_isurf(struct IsdnCard *card)
 {
 	int ver;

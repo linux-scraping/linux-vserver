@@ -13,7 +13,6 @@
 
 #include <linux/module.h>
 #include <linux/moduleparam.h>
-#include <linux/config.h>
 #include <linux/types.h>
 #include <linux/kernel.h>
 #include <linux/fs.h>
@@ -113,7 +112,7 @@ static int indydog_ioctl(struct inode *inode, struct file *file,
 
 	switch (cmd) {
 		default:
-			return -ENOIOCTLCMD;
+			return -ENOTTY;
 		case WDIOC_GETSUPPORT:
 			if (copy_to_user((struct watchdog_info *)arg,
 					 &ident, sizeof(ident)))
@@ -155,7 +154,7 @@ static int indydog_notify_sys(struct notifier_block *this, unsigned long code, v
 	return NOTIFY_DONE;
 }
 
-static struct file_operations indydog_fops = {
+static const struct file_operations indydog_fops = {
 	.owner		= THIS_MODULE,
 	.llseek		= no_llseek,
 	.write		= indydog_write,

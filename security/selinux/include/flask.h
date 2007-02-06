@@ -60,6 +60,11 @@
 #define SECCLASS_NSCD                                    53
 #define SECCLASS_ASSOCIATION                             54
 #define SECCLASS_NETLINK_KOBJECT_UEVENT_SOCKET           55
+#define SECCLASS_APPLETALK_SOCKET                        56
+#define SECCLASS_PACKET                                  57
+#define SECCLASS_KEY                                     58
+#define SECCLASS_CONTEXT                                 59
+#define SECCLASS_DCCP_SOCKET                             60
 
 /*
  * Security identifier indices for initial entities

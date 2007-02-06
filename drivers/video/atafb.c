@@ -53,7 +53,6 @@
 #include <linux/errno.h>
 #include <linux/string.h>
 #include <linux/mm.h>
-#include <linux/tty.h>
 #include <linux/slab.h>
 #include <linux/delay.h>
 #include <linux/init.h>
@@ -1522,7 +1521,7 @@ static void falcon_set_par( struct atafb_par *par )
 }
 
 
-static irqreturn_t falcon_vbl_switcher( int irq, void *dummy, struct pt_regs *fp )
+static irqreturn_t falcon_vbl_switcher( int irq, void *dummy )
 {
 	struct falcon_hw *hw = &f_new_mode;
 
@@ -2805,8 +2804,19 @@ int __init atafb_init(void)
 	atafb_set_disp(-1, &fb_info);
 	do_install_cmap(0, &fb_info);
 
-	if (register_framebuffer(&fb_info) < 0)
+	if (register_framebuffer(&fb_info) < 0) {
+#ifdef ATAFB_EXT
+		if (external_addr) {
+			iounmap(external_addr);
+			external_addr = NULL;
+		}
+		if (external_vgaiobase) {
+			iounmap((void*)external_vgaiobase);
+			external_vgaiobase = 0;
+		}
+#endif
 		return -EINVAL;
+	}
 
 	printk("Determined %dx%d, depth %d\n",
 	       disp.var.xres, disp.var.yres, disp.var.bits_per_pixel);

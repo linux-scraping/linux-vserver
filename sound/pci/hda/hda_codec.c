@@ -29,6 +29,7 @@
 #include <sound/core.h>
 #include "hda_codec.h"
 #include <sound/asoundef.h>
+#include <sound/tlv.h>
 #include <sound/initval.h>
 #include "hda_local.h"
 
@@ -50,8 +51,10 @@ struct hda_vendor_id {
 /* codec vendor labels */
 static struct hda_vendor_id hda_vendor_ids[] = {
 	{ 0x10ec, "Realtek" },
+	{ 0x1057, "Motorola" },
 	{ 0x11d4, "Analog Devices" },
 	{ 0x13f6, "C-Media" },
+	{ 0x14f1, "Conexant" },
 	{ 0x434d, "C-Media" },
 	{ 0x8384, "SigmaTel" },
 	{} /* terminator */
@@ -86,6 +89,8 @@ unsigned int snd_hda_codec_read(struct hda_codec *codec, hda_nid_t nid, int dire
 	return res;
 }
 
+EXPORT_SYMBOL(snd_hda_codec_read);
+
 /**
  * snd_hda_codec_write - send a single command without waiting for response
  * @codec: the HDA codec
@@ -108,6 +113,8 @@ int snd_hda_codec_write(struct hda_codec *codec, hda_nid_t nid, int direct,
 	return err;
 }
 
+EXPORT_SYMBOL(snd_hda_codec_write);
+
 /**
  * snd_hda_sequence_write - sequence writes
  * @codec: the HDA codec
@@ -121,6 +128,8 @@ void snd_hda_sequence_write(struct hda_codec *codec, const struct hda_verb *seq)
 	for (; seq->nid; seq++)
 		snd_hda_codec_write(codec, seq->nid, 0, seq->verb, seq->param);
 }
+
+EXPORT_SYMBOL(snd_hda_sequence_write);
 
 /**
  * snd_hda_get_sub_nodes - get the range of sub nodes
@@ -139,6 +148,8 @@ int snd_hda_get_sub_nodes(struct hda_codec *codec, hda_nid_t nid, hda_nid_t *sta
 	*start_id = (parm >> 16) & 0x7fff;
 	return (int)(parm & 0x7fff);
 }
+
+EXPORT_SYMBOL(snd_hda_get_sub_nodes);
 
 /**
  * snd_hda_get_connections - get connection list
@@ -256,13 +267,16 @@ int snd_hda_queue_unsol_event(struct hda_bus *bus, u32 res, u32 res_ex)
 	return 0;
 }
 
+EXPORT_SYMBOL(snd_hda_queue_unsol_event);
+
 /*
  * process queueud unsolicited events
  */
-static void process_unsol_events(void *data)
+static void process_unsol_events(struct work_struct *work)
 {
-	struct hda_bus *bus = data;
-	struct hda_bus_unsolicited *unsol = bus->unsol;
+	struct hda_bus_unsolicited *unsol =
+		container_of(work, struct hda_bus_unsolicited, work);
+	struct hda_bus *bus = unsol->bus;
 	struct hda_codec *codec;
 	unsigned int rp, caddr, res;
 
@@ -301,7 +315,8 @@ static int init_unsol_queue(struct hda_bus *bus)
 		kfree(unsol);
 		return -ENOMEM;
 	}
-	INIT_WORK(&unsol->work, process_unsol_events, bus);
+	INIT_WORK(&unsol->work, process_unsol_events);
+	unsol->bus = bus;
 	bus->unsol = unsol;
 	return 0;
 }
@@ -384,6 +399,7 @@ int snd_hda_bus_new(struct snd_card *card, const struct hda_bus_template *temp,
 	return 0;
 }
 
+EXPORT_SYMBOL(snd_hda_bus_new);
 
 /*
  * find a matching codec preset
@@ -397,7 +413,9 @@ static const struct hda_codec_preset *find_codec_preset(struct hda_codec *codec)
 			u32 mask = preset->mask;
 			if (! mask)
 				mask = ~0;
-			if (preset->id == (codec->vendor_id & mask))
+			if (preset->id == (codec->vendor_id & mask) &&
+			    (! preset->rev ||
+			     preset->rev == codec->revision_id))
 				return preset;
 		}
 	}
@@ -587,6 +605,8 @@ int snd_hda_codec_new(struct hda_bus *bus, unsigned int codec_addr,
 	return 0;
 }
 
+EXPORT_SYMBOL(snd_hda_codec_new);
+
 /**
  * snd_hda_codec_setup_stream - set up the codec for streaming
  * @codec: the CODEC to set up
@@ -609,6 +629,7 @@ void snd_hda_codec_setup_stream(struct hda_codec *codec, hda_nid_t nid, u32 stre
 	snd_hda_codec_write(codec, nid, 0, AC_VERB_SET_STREAM_FORMAT, format);
 }
 
+EXPORT_SYMBOL(snd_hda_codec_setup_stream);
 
 /*
  * amp access functions
@@ -823,6 +844,31 @@ int snd_hda_mixer_amp_volume_put(struct snd_kcontrol *kcontrol, struct snd_ctl_e
 		change |= snd_hda_codec_amp_update(codec, nid, 1, dir, idx,
 						   0x7f, *valp);
 	return change;
+}
+
+int snd_hda_mixer_amp_tlv(struct snd_kcontrol *kcontrol, int op_flag,
+			  unsigned int size, unsigned int __user *_tlv)
+{
+	struct hda_codec *codec = snd_kcontrol_chip(kcontrol);
+	hda_nid_t nid = get_amp_nid(kcontrol);
+	int dir = get_amp_direction(kcontrol);
+	u32 caps, val1, val2;
+
+	if (size < 4 * sizeof(unsigned int))
+		return -ENOMEM;
+	caps = query_amp_caps(codec, nid, dir);
+	val2 = (((caps & AC_AMPCAP_STEP_SIZE) >> AC_AMPCAP_STEP_SIZE_SHIFT) + 1) * 25;
+	val1 = -((caps & AC_AMPCAP_OFFSET) >> AC_AMPCAP_OFFSET_SHIFT);
+	val1 = ((int)val1) * ((int)val2);
+	if (put_user(SNDRV_CTL_TLVT_DB_SCALE, _tlv))
+		return -EFAULT;
+	if (put_user(2 * sizeof(unsigned int), _tlv + 1))
+		return -EFAULT;
+	if (put_user(val1, _tlv + 2))
+		return -EFAULT;
+	if (put_user(val2, _tlv + 3))
+		return -EFAULT;
+	return 0;
 }
 
 /* switch */
@@ -1294,6 +1340,7 @@ int snd_hda_build_controls(struct hda_bus *bus)
 	return 0;
 }
 
+EXPORT_SYMBOL(snd_hda_build_controls);
 
 /*
  * stream formats
@@ -1319,9 +1366,6 @@ static struct hda_rate_tbl rate_bits[] = {
 	{ 96000, SNDRV_PCM_RATE_96000, 0x0800 }, /* 2 x 48 */
 	{ 176400, SNDRV_PCM_RATE_176400, 0x5800 },/* 4 x 44 */
 	{ 192000, SNDRV_PCM_RATE_192000, 0x1800 }, /* 4 x 48 */
-
-	/* not autodetected value */
-	{ 9600, SNDRV_PCM_RATE_KNOT, 0x0400 }, /* 1/5 x 48 */
 
 	{ 0 } /* terminator */
 };
@@ -1381,6 +1425,8 @@ unsigned int snd_hda_calc_stream_format(unsigned int rate,
 
 	return val;
 }
+
+EXPORT_SYMBOL(snd_hda_calc_stream_format);
 
 /**
  * snd_hda_query_supported_pcm - query the supported PCM rates and formats
@@ -1458,10 +1504,10 @@ int snd_hda_query_supported_pcm(struct hda_codec *codec, hda_nid_t nid,
 				formats |= SNDRV_PCM_FMTBIT_S32_LE;
 				if (val & AC_SUPPCM_BITS_32)
 					bps = 32;
-				else if (val & AC_SUPPCM_BITS_20)
-					bps = 20;
 				else if (val & AC_SUPPCM_BITS_24)
 					bps = 24;
+				else if (val & AC_SUPPCM_BITS_20)
+					bps = 20;
 			}
 		}
 		else if (streams == AC_SUPFMT_FLOAT32) { /* should be exclusive */
@@ -1663,6 +1709,7 @@ int snd_hda_build_pcms(struct hda_bus *bus)
 	return 0;
 }
 
+EXPORT_SYMBOL(snd_hda_build_pcms);
 
 /**
  * snd_hda_check_board_config - compare the current codec with the config table
@@ -1896,7 +1943,7 @@ int snd_hda_multi_out_analog_prepare(struct hda_codec *codec, struct hda_multi_o
 
 	/* front */
 	snd_hda_codec_setup_stream(codec, nids[HDA_FRONT], stream_tag, 0, format);
-	if (mout->hp_nid)
+	if (mout->hp_nid && mout->hp_nid != nids[HDA_FRONT])
 		/* headphone out will just decode front left/right (stereo) */
 		snd_hda_codec_setup_stream(codec, mout->hp_nid, stream_tag, 0, format);
 	/* extra outputs copied from front */
@@ -1964,7 +2011,7 @@ static int is_in_nid_list(hda_nid_t nid, hda_nid_t *list)
  * in the order of front, rear, CLFE, side, ...
  *
  * If more extra outputs (speaker and headphone) are found, the pins are
- * assisnged to hp_pin and speaker_pins[], respectively.  If no line-out jack
+ * assisnged to hp_pins[] and speaker_pins[], respectively.  If no line-out jack
  * is detected, one of speaker of HP pins is assigned as the primary
  * output, i.e. to line_out_pins[0].  So, line_outs is always positive
  * if any analog output exists.
@@ -2026,14 +2073,26 @@ int snd_hda_parse_pin_def_config(struct hda_codec *codec, struct auto_pin_cfg *c
 			cfg->speaker_outs++;
 			break;
 		case AC_JACK_HP_OUT:
-			cfg->hp_pin = nid;
+			if (cfg->hp_outs >= ARRAY_SIZE(cfg->hp_pins))
+				continue;
+			cfg->hp_pins[cfg->hp_outs] = nid;
+			cfg->hp_outs++;
 			break;
-		case AC_JACK_MIC_IN:
-			if (loc == AC_JACK_LOC_FRONT)
-				cfg->input_pins[AUTO_PIN_FRONT_MIC] = nid;
-			else
-				cfg->input_pins[AUTO_PIN_MIC] = nid;
+		case AC_JACK_MIC_IN: {
+			int preferred, alt;
+			if (loc == AC_JACK_LOC_FRONT) {
+				preferred = AUTO_PIN_FRONT_MIC;
+				alt = AUTO_PIN_MIC;
+			} else {
+				preferred = AUTO_PIN_MIC;
+				alt = AUTO_PIN_FRONT_MIC;
+			}
+			if (!cfg->input_pins[preferred])
+				cfg->input_pins[preferred] = nid;
+			else if (!cfg->input_pins[alt])
+				cfg->input_pins[alt] = nid;
 			break;
+		}
 		case AC_JACK_LINE_IN:
 			if (loc == AC_JACK_LOC_FRONT)
 				cfg->input_pins[AUTO_PIN_FRONT_LINE] = nid;
@@ -2099,8 +2158,10 @@ int snd_hda_parse_pin_def_config(struct hda_codec *codec, struct auto_pin_cfg *c
 		   cfg->speaker_outs, cfg->speaker_pins[0],
 		   cfg->speaker_pins[1], cfg->speaker_pins[2],
 		   cfg->speaker_pins[3], cfg->speaker_pins[4]);
-	snd_printd("   hp=0x%x, dig_out=0x%x, din_in=0x%x\n",
-		   cfg->hp_pin, cfg->dig_out_pin, cfg->dig_in_pin);
+	snd_printd("   hp_outs=%d (0x%x/0x%x/0x%x/0x%x/0x%x)\n",
+		   cfg->hp_outs, cfg->hp_pins[0],
+		   cfg->hp_pins[1], cfg->hp_pins[2],
+		   cfg->hp_pins[3], cfg->hp_pins[4]);
 	snd_printd("   inputs: mic=0x%x, fmic=0x%x, line=0x%x, fline=0x%x,"
 		   " cd=0x%x, aux=0x%x\n",
 		   cfg->input_pins[AUTO_PIN_MIC],
@@ -2121,10 +2182,12 @@ int snd_hda_parse_pin_def_config(struct hda_codec *codec, struct auto_pin_cfg *c
 			       sizeof(cfg->speaker_pins));
 			cfg->speaker_outs = 0;
 			memset(cfg->speaker_pins, 0, sizeof(cfg->speaker_pins));
-		} else if (cfg->hp_pin) {
-			cfg->line_outs = 1;
-			cfg->line_out_pins[0] = cfg->hp_pin;
-			cfg->hp_pin = 0;
+		} else if (cfg->hp_outs) {
+			cfg->line_outs = cfg->hp_outs;
+			memcpy(cfg->line_out_pins, cfg->hp_pins,
+			       sizeof(cfg->hp_pins));
+			cfg->hp_outs = 0;
+			memset(cfg->hp_pins, 0, sizeof(cfg->hp_pins));
 		}
 	}
 
@@ -2165,6 +2228,8 @@ int snd_hda_suspend(struct hda_bus *bus, pm_message_t state)
 	return 0;
 }
 
+EXPORT_SYMBOL(snd_hda_suspend);
+
 /**
  * snd_hda_resume - resume the codecs
  * @bus: the HDA bus
@@ -2186,6 +2251,8 @@ int snd_hda_resume(struct hda_bus *bus)
 	}
 	return 0;
 }
+
+EXPORT_SYMBOL(snd_hda_resume);
 
 /**
  * snd_hda_resume_ctls - resume controls in the new control list
@@ -2244,25 +2311,6 @@ int snd_hda_resume_spdif_in(struct hda_codec *codec)
 {
 	return snd_hda_resume_ctls(codec, dig_in_ctls);
 }
-#endif
-
-/*
- * symbols exported for controller modules
- */
-EXPORT_SYMBOL(snd_hda_codec_read);
-EXPORT_SYMBOL(snd_hda_codec_write);
-EXPORT_SYMBOL(snd_hda_sequence_write);
-EXPORT_SYMBOL(snd_hda_get_sub_nodes);
-EXPORT_SYMBOL(snd_hda_queue_unsol_event);
-EXPORT_SYMBOL(snd_hda_bus_new);
-EXPORT_SYMBOL(snd_hda_codec_new);
-EXPORT_SYMBOL(snd_hda_codec_setup_stream);
-EXPORT_SYMBOL(snd_hda_calc_stream_format);
-EXPORT_SYMBOL(snd_hda_build_pcms);
-EXPORT_SYMBOL(snd_hda_build_controls);
-#ifdef CONFIG_PM
-EXPORT_SYMBOL(snd_hda_suspend);
-EXPORT_SYMBOL(snd_hda_resume);
 #endif
 
 /*

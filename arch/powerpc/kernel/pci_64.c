@@ -13,7 +13,6 @@
 
 #undef DEBUG
 
-#include <linux/config.h>
 #include <linux/kernel.h>
 #include <linux/pci.h>
 #include <linux/string.h>
@@ -22,15 +21,16 @@
 #include <linux/mm.h>
 #include <linux/list.h>
 #include <linux/syscalls.h>
+#include <linux/irq.h>
 
 #include <asm/processor.h>
 #include <asm/io.h>
 #include <asm/prom.h>
 #include <asm/pci-bridge.h>
 #include <asm/byteorder.h>
-#include <asm/irq.h>
 #include <asm/machdep.h>
 #include <asm/ppc-pci.h>
+#include <asm/firmware.h>
 
 #ifdef DEBUG
 #include <asm/udbg.h>
@@ -42,19 +42,9 @@
 unsigned long pci_probe_only = 1;
 int pci_assign_all_buses = 0;
 
-/*
- * legal IO pages under MAX_ISA_PORT.  This is to ensure we don't touch
- * devices we don't have access to.
- */
-unsigned long io_page_mask;
-
-EXPORT_SYMBOL(io_page_mask);
-
-#ifdef CONFIG_PPC_MULTIPLATFORM
 static void fixup_resource(struct resource *res, struct pci_dev *dev);
 static void do_bus_setup(struct pci_bus *bus);
 static void phbs_remap_io(void);
-#endif
 
 /* pci_io_base -- the base address from which io bars are offsets.
  * This is the lowest I/O base address (so bar values are always positive),
@@ -71,7 +61,7 @@ void iSeries_pcibios_init(void);
 
 LIST_HEAD(hose_list);
 
-struct dma_mapping_ops pci_dma_ops;
+struct dma_mapping_ops *pci_dma_ops;
 EXPORT_SYMBOL(pci_dma_ops);
 
 int global_phb_number;		/* Global phb counter */
@@ -146,11 +136,11 @@ EXPORT_SYMBOL(pcibios_bus_to_resource);
  * which might have be mirrored at 0x0100-0x03ff..
  */
 void pcibios_align_resource(void *data, struct resource *res,
-			    unsigned long size, unsigned long align)
+			    resource_size_t size, resource_size_t align)
 {
 	struct pci_dev *dev = data;
 	struct pci_controller *hose = pci_bus_to_host(dev->bus);
-	unsigned long start = res->start;
+	resource_size_t start = res->start;
 	unsigned long alignto;
 
 	if (res->flags & IORESOURCE_IO) {
@@ -194,34 +184,6 @@ static void __devinit pci_setup_pci_controller(struct pci_controller *hose)
 	spin_unlock(&hose_spinlock);
 }
 
-static void add_linux_pci_domain(struct device_node *dev,
-				 struct pci_controller *phb)
-{
-	struct property *of_prop;
-	unsigned int size;
-
-	of_prop = (struct property *)
-		get_property(dev, "linux,pci-domain", &size);
-	if (of_prop != NULL)
-		return;
-	WARN_ON(of_prop && size < sizeof(int));
-	if (of_prop && size < sizeof(int))
-		of_prop = NULL;
-	size = sizeof(struct property) + sizeof(int);
-	if (of_prop == NULL) {
-		if (mem_init_done)
-			of_prop = kmalloc(size, GFP_KERNEL);
-		else
-			of_prop = alloc_bootmem(size);
-	}
-	memset(of_prop, 0, sizeof(struct property));
-	of_prop->name = "linux,pci-domain";
-	of_prop->length = sizeof(int);
-	of_prop->value = (unsigned char *)&of_prop[1];
-	*((int *)of_prop->value) = phb->global_number;
-	prom_add_property(dev, of_prop);
-}
-
 struct pci_controller * pcibios_alloc_controller(struct device_node *dev)
 {
 	struct pci_controller *phb;
@@ -235,25 +197,27 @@ struct pci_controller * pcibios_alloc_controller(struct device_node *dev)
 	pci_setup_pci_controller(phb);
 	phb->arch_data = dev;
 	phb->is_dynamic = mem_init_done;
-	if (dev)
-		add_linux_pci_domain(dev, phb);
+	if (dev) {
+		int nid = of_node_to_nid(dev);
+
+		if (nid < 0 || !node_online(nid))
+			nid = -1;
+
+		PHB_SET_NODE(phb, nid);
+	}
 	return phb;
 }
 
 void pcibios_free_controller(struct pci_controller *phb)
 {
-	if (phb->arch_data) {
-		struct device_node *np = phb->arch_data;
-		int *domain = (int *)get_property(np,
-						  "linux,pci-domain", NULL);
-		if (domain)
-			*domain = -1;
-	}
+	spin_lock(&hose_spinlock);
+	list_del(&phb->list_node);
+	spin_unlock(&hose_spinlock);
+
 	if (phb->is_dynamic)
 		kfree(phb);
 }
 
-#ifndef CONFIG_PPC_ISERIES
 void __devinit pcibios_claim_one_bus(struct pci_bus *b)
 {
 	struct pci_dev *dev;
@@ -282,18 +246,19 @@ static void __init pcibios_claim_of_setup(void)
 {
 	struct pci_bus *b;
 
+	if (firmware_has_feature(FW_FEATURE_ISERIES))
+		return;
+
 	list_for_each_entry(b, &pci_root_buses, node)
 		pcibios_claim_one_bus(b);
 }
-#endif
 
-#ifdef CONFIG_PPC_MULTIPLATFORM
 static u32 get_int_prop(struct device_node *np, const char *name, u32 def)
 {
-	u32 *prop;
+	const u32 *prop;
 	int len;
 
-	prop = (u32 *) get_property(np, name, &len);
+	prop = get_property(np, name, &len);
 	if (prop && len >= 4)
 		return *prop;
 	return def;
@@ -322,10 +287,11 @@ static void pci_parse_of_addrs(struct device_node *node, struct pci_dev *dev)
 	u64 base, size;
 	unsigned int flags;
 	struct resource *res;
-	u32 *addrs, i;
+	const u32 *addrs;
+	u32 i;
 	int proplen;
 
-	addrs = (u32 *) get_property(node, "assigned-addresses", &proplen);
+	addrs = get_property(node, "assigned-addresses", &proplen);
 	if (!addrs)
 		return;
 	DBG("    parse addresses (%d bytes) @ %p\n", proplen, addrs);
@@ -364,7 +330,7 @@ struct pci_dev *of_create_pci_dev(struct device_node *node,
 	struct pci_dev *dev;
 	const char *type;
 
-	dev = kmalloc(sizeof(struct pci_dev), GFP_KERNEL);
+	dev = kzalloc(sizeof(struct pci_dev), GFP_KERNEL);
 	if (!dev)
 		return NULL;
 	type = get_property(node, "device_type", NULL);
@@ -373,7 +339,6 @@ struct pci_dev *of_create_pci_dev(struct device_node *node,
 
 	DBG("    create device, devfn: %x, type: %s\n", devfn, type);
 
-	memset(dev, 0, sizeof(struct pci_dev));
 	dev->bus = bus;
 	dev->sysdata = node;
 	dev->dev.parent = bus->bridge;
@@ -395,8 +360,9 @@ struct pci_dev *of_create_pci_dev(struct device_node *node,
 	DBG("    class: 0x%x\n", dev->class);
 
 	dev->current_state = 4;		/* unknown power state */
+	dev->error_state = pci_channel_io_normal;
 
-	if (!strcmp(type, "pci")) {
+	if (!strcmp(type, "pci") || !strcmp(type, "pciex")) {
 		/* a PCI-PCI bridge */
 		dev->hdr_type = PCI_HEADER_TYPE_BRIDGE;
 		dev->rom_base_reg = PCI_ROM_ADDRESS1;
@@ -405,12 +371,8 @@ struct pci_dev *of_create_pci_dev(struct device_node *node,
 	} else {
 		dev->hdr_type = PCI_HEADER_TYPE_NORMAL;
 		dev->rom_base_reg = PCI_ROM_ADDRESS;
+		/* Maybe do a default OF mapping here */
 		dev->irq = NO_IRQ;
-		if (node->n_intrs > 0) {
-			dev->irq = node->intrs[0].line;
-			pci_write_config_byte(dev, PCI_INTERRUPT_LINE,
-					      dev->irq);
-		}
 	}
 
 	pci_parse_of_addrs(node, dev);
@@ -429,7 +391,7 @@ void __devinit of_scan_bus(struct device_node *node,
 				  struct pci_bus *bus)
 {
 	struct device_node *child = NULL;
-	u32 *reg;
+	const u32 *reg;
 	int reglen, devfn;
 	struct pci_dev *dev;
 
@@ -437,7 +399,7 @@ void __devinit of_scan_bus(struct device_node *node,
 
 	while ((child = of_get_next_child(node, child)) != NULL) {
 		DBG("  * %s\n", child->full_name);
-		reg = (u32 *) get_property(child, "reg", &reglen);
+		reg = get_property(child, "reg", &reglen);
 		if (reg == NULL || reglen < 20)
 			continue;
 		devfn = (reg[0] >> 8) & 0xff;
@@ -461,7 +423,7 @@ void __devinit of_scan_pci_bridge(struct device_node *node,
 			 	struct pci_dev *dev)
 {
 	struct pci_bus *bus;
-	u32 *busrange, *ranges;
+	const u32 *busrange, *ranges;
 	int len, i, mode;
 	struct resource *res;
 	unsigned int flags;
@@ -470,13 +432,13 @@ void __devinit of_scan_pci_bridge(struct device_node *node,
 	DBG("of_scan_pci_bridge(%s)\n", node->full_name);
 
 	/* parse bus-range property */
-	busrange = (u32 *) get_property(node, "bus-range", &len);
+	busrange = get_property(node, "bus-range", &len);
 	if (busrange == NULL || len != 8) {
 		printk(KERN_DEBUG "Can't get bus-range for PCI-PCI bridge %s\n",
 		       node->full_name);
 		return;
 	}
-	ranges = (u32 *) get_property(node, "ranges", &len);
+	ranges = get_property(node, "ranges", &len);
 	if (ranges == NULL) {
 		printk(KERN_DEBUG "Can't get ranges for PCI-PCI bridge %s\n",
 		       node->full_name);
@@ -545,7 +507,6 @@ void __devinit of_scan_pci_bridge(struct device_node *node,
 		pci_scan_child_bus(bus);
 }
 EXPORT_SYMBOL(of_scan_pci_bridge);
-#endif /* CONFIG_PPC_MULTIPLATFORM */
 
 void __devinit scan_phb(struct pci_controller *hose)
 {
@@ -556,7 +517,7 @@ void __devinit scan_phb(struct pci_controller *hose)
 
 	DBG("Scanning PHB %s\n", node ? node->full_name : "<NO NAME>");
 
-	bus = pci_create_bus(NULL, hose->first_busno, hose->ops, node);
+	bus = pci_create_bus(hose->parent, hose->first_busno, hose->ops, node);
 	if (bus == NULL) {
 		printk(KERN_ERR "Failed to create bus for PCI domain %04x\n",
 		       hose->global_number);
@@ -579,7 +540,7 @@ void __devinit scan_phb(struct pci_controller *hose)
 	}
 
 	mode = PCI_PROBE_NORMAL;
-#ifdef CONFIG_PPC_MULTIPLATFORM
+
 	if (node && ppc_md.pci_probe_mode)
 		mode = ppc_md.pci_probe_mode(bus);
 	DBG("    probe mode: %d\n", mode);
@@ -587,7 +548,7 @@ void __devinit scan_phb(struct pci_controller *hose)
 		bus->subordinate = hose->last_busno;
 		of_scan_bus(node, bus);
 	}
-#endif /* CONFIG_PPC_MULTIPLATFORM */
+
 	if (mode == PCI_PROBE_NORMAL)
 		hose->last_busno = bus->subordinate = pci_scan_child_bus(bus);
 }
@@ -601,11 +562,10 @@ static int __init pcibios_init(void)
 	 */
 	ppc_md.phys_mem_access_prot = pci_phys_mem_access_prot;
 
-#ifdef CONFIG_PPC_ISERIES
-	iSeries_pcibios_init(); 
-#endif
+	if (firmware_has_feature(FW_FEATURE_ISERIES))
+		iSeries_pcibios_init();
 
-	printk("PCI: Probing PCI hardware\n");
+	printk(KERN_DEBUG "PCI: Probing PCI hardware\n");
 
 	/* Scan all of the recorded PCI controllers.  */
 	list_for_each_entry_safe(hose, tmp, &hose_list, list_node) {
@@ -613,15 +573,15 @@ static int __init pcibios_init(void)
 		pci_bus_add_devices(hose->bus);
 	}
 
-#ifndef CONFIG_PPC_ISERIES
-	if (pci_probe_only)
-		pcibios_claim_of_setup();
-	else
-		/* FIXME: `else' will be removed when
-		   pci_assign_unassigned_resources() is able to work
-		   correctly with [partially] allocated PCI tree. */
-		pci_assign_unassigned_resources();
-#endif /* !CONFIG_PPC_ISERIES */
+	if (!firmware_has_feature(FW_FEATURE_ISERIES)) {
+		if (pci_probe_only)
+			pcibios_claim_of_setup();
+		else
+			/* FIXME: `else' will be removed when
+			   pci_assign_unassigned_resources() is able to work
+			   correctly with [partially] allocated PCI tree. */
+			pci_assign_unassigned_resources();
+	}
 
 	/* Call machine dependent final fixup */
 	if (ppc_md.pcibios_fixup)
@@ -630,14 +590,13 @@ static int __init pcibios_init(void)
 	/* Cache the location of the ISA bridge (if we have one) */
 	ppc64_isabridge_dev = pci_get_class(PCI_CLASS_BRIDGE_ISA << 8, NULL);
 	if (ppc64_isabridge_dev != NULL)
-		printk("ISA bridge at %s\n", pci_name(ppc64_isabridge_dev));
+		printk(KERN_DEBUG "ISA bridge at %s\n", pci_name(ppc64_isabridge_dev));
 
-#ifdef CONFIG_PPC_MULTIPLATFORM
-	/* map in PCI I/O space */
-	phbs_remap_io();
-#endif
+	if (!firmware_has_feature(FW_FEATURE_ISERIES))
+		/* map in PCI I/O space */
+		phbs_remap_io();
 
-	printk("PCI: Probing PCI hardware done\n");
+	printk(KERN_DEBUG "PCI: Probing PCI hardware done\n");
 
 	return 0;
 }
@@ -684,13 +643,13 @@ int pcibios_enable_device(struct pci_dev *dev, int mask)
  */
 int pci_domain_nr(struct pci_bus *bus)
 {
-#ifdef CONFIG_PPC_ISERIES
-	return 0;
-#else
-	struct pci_controller *hose = pci_bus_to_host(bus);
+	if (firmware_has_feature(FW_FEATURE_ISERIES))
+		return 0;
+	else {
+		struct pci_controller *hose = pci_bus_to_host(bus);
 
-	return hose->global_number;
-#endif
+		return hose->global_number;
+	}
 }
 
 EXPORT_SYMBOL(pci_domain_nr);
@@ -698,12 +657,12 @@ EXPORT_SYMBOL(pci_domain_nr);
 /* Decide whether to display the domain number in /proc */
 int pci_proc_domain(struct pci_bus *bus)
 {
-#ifdef CONFIG_PPC_ISERIES
-	return 0;
-#else
-	struct pci_controller *hose = pci_bus_to_host(bus);
-	return hose->buid;
-#endif
+	if (firmware_has_feature(FW_FEATURE_ISERIES))
+		return 0;
+	else {
+		struct pci_controller *hose = pci_bus_to_host(bus);
+		return hose->buid;
+	}
 }
 
 /*
@@ -724,7 +683,7 @@ int pci_proc_domain(struct pci_bus *bus)
  * Returns negative error code on failure, zero on success.
  */
 static struct resource *__pci_mmap_make_offset(struct pci_dev *dev,
-					       unsigned long *offset,
+					       resource_size_t *offset,
 					       enum pci_mmap_state mmap_state)
 {
 	struct pci_controller *hose = pci_bus_to_host(dev->bus);
@@ -736,7 +695,9 @@ static struct resource *__pci_mmap_make_offset(struct pci_dev *dev,
 
 	/* If memory, add on the PCI bridge address offset */
 	if (mmap_state == pci_mmap_mem) {
+#if 0 /* See comment in pci_resource_to_user() for why this is disabled */
 		*offset += hose->pci_mem_offset;
+#endif
 		res_bit = IORESOURCE_MEM;
 	} else {
 		io_offset = (unsigned long)hose->io_base_virt - pci_io_base;
@@ -803,9 +764,6 @@ static pgprot_t __pci_mmap_set_pgprot(struct pci_dev *dev, struct resource *rp,
 		prot &= ~_PAGE_GUARDED;
 	else
 		prot |= _PAGE_GUARDED;
-
-	printk("PCI map for %s:%lx, prot: %lx\n", pci_name(dev), rp->start,
-	       prot);
 
 	return __pgprot(prot);
 }
@@ -874,7 +832,7 @@ pgprot_t pci_phys_mem_access_prot(struct file *file,
 int pci_mmap_page_range(struct pci_dev *dev, struct vm_area_struct *vma,
 			enum pci_mmap_state mmap_state, int write_combine)
 {
-	unsigned long offset = vma->vm_pgoff << PAGE_SHIFT;
+	resource_size_t offset = vma->vm_pgoff << PAGE_SHIFT;
 	struct resource *rp;
 	int ret;
 
@@ -883,7 +841,6 @@ int pci_mmap_page_range(struct pci_dev *dev, struct vm_area_struct *vma,
 		return -EINVAL;
 
 	vma->vm_pgoff = offset >> PAGE_SHIFT;
-	vma->vm_flags |= VM_SHM | VM_LOCKED | VM_IO;
 	vma->vm_page_prot = __pci_mmap_set_pgprot(dev, rp,
 						  vma->vm_page_prot,
 						  mmap_state, write_combine);
@@ -894,8 +851,8 @@ int pci_mmap_page_range(struct pci_dev *dev, struct vm_area_struct *vma,
 	return ret;
 }
 
-#ifdef CONFIG_PPC_MULTIPLATFORM
-static ssize_t pci_show_devspec(struct device *dev, struct device_attribute *attr, char *buf)
+static ssize_t pci_show_devspec(struct device *dev,
+		struct device_attribute *attr, char *buf)
 {
 	struct pci_dev *pdev;
 	struct device_node *np;
@@ -907,16 +864,11 @@ static ssize_t pci_show_devspec(struct device *dev, struct device_attribute *att
 	return sprintf(buf, "%s", np->full_name);
 }
 static DEVICE_ATTR(devspec, S_IRUGO, pci_show_devspec, NULL);
-#endif /* CONFIG_PPC_MULTIPLATFORM */
 
 void pcibios_add_platform_entries(struct pci_dev *pdev)
 {
-#ifdef CONFIG_PPC_MULTIPLATFORM
 	device_create_file(&pdev->dev, &dev_attr_devspec);
-#endif /* CONFIG_PPC_MULTIPLATFORM */
 }
-
-#ifdef CONFIG_PPC_MULTIPLATFORM
 
 #define ISA_SPACE_MASK 0x1
 #define ISA_SPACE_IO 0x1
@@ -944,13 +896,13 @@ static void __devinit pci_process_ISA_OF_ranges(struct device_node *isa_node,
 		unsigned int size;
 	};
 
-	struct isa_range *range;
+	const struct isa_range *range;
 	unsigned long pci_addr;
 	unsigned int isa_addr;
 	unsigned int size;
 	int rlen = 0;
 
-	range = (struct isa_range *) get_property(isa_node, "ranges", &rlen);
+	range = get_property(isa_node, "ranges", &rlen);
 	if (range == NULL || (rlen < sizeof(struct isa_range))) {
 		printk(KERN_ERR "no ISA ranges or unexpected isa range size,"
 		       "mapping 64k\n");
@@ -991,7 +943,8 @@ static void __devinit pci_process_ISA_OF_ranges(struct device_node *isa_node,
 void __devinit pci_process_bridge_OF_ranges(struct pci_controller *hose,
 					    struct device_node *dev, int prim)
 {
-	unsigned int *ranges, pci_space;
+	const unsigned int *ranges;
+	unsigned int pci_space;
 	unsigned long size;
 	int rlen = 0;
 	int memno = 0;
@@ -1009,7 +962,7 @@ void __devinit pci_process_bridge_OF_ranges(struct pci_controller *hose,
 	 *			(size depending on dev->n_addr_cells)
 	 *   cells 4+5 or 5+6:	the size of the range
 	 */
-	ranges = (unsigned int *) get_property(dev, "ranges", &rlen);
+	ranges = get_property(dev, "ranges", &rlen);
 	if (ranges == NULL)
 		return;
 	hose->io_base_phys = 0;
@@ -1017,11 +970,7 @@ void __devinit pci_process_bridge_OF_ranges(struct pci_controller *hose,
 		res = NULL;
 		pci_space = ranges[0];
 		pci_addr = ((unsigned long)ranges[1] << 32) | ranges[2];
-
-		cpu_phys_addr = ranges[3];
-		if (na >= 2)
-			cpu_phys_addr = (cpu_phys_addr << 32) | ranges[4];
-
+		cpu_phys_addr = of_translate_address(dev, &ranges[3]);
 		size = ((unsigned long)ranges[na+3] << 32) | ranges[na+4];
 		ranges += np;
 		if (size == 0)
@@ -1104,8 +1053,6 @@ void __init pci_setup_phb_io(struct pci_controller *hose, int primary)
 			pci_process_ISA_OF_ranges(isa_dn, hose->io_base_phys,
 						hose->io_base_virt);
 			of_node_put(isa_dn);
-			/* Allow all IO */
-			io_page_mask = -1;
 		}
 	}
 
@@ -1189,7 +1136,7 @@ int unmap_bus_range(struct pci_bus *bus)
 	
 	if (get_bus_io_range(bus, &start_phys, &start_virt, &size))
 		return 1;
-	if (iounmap_explicit((void __iomem *) start_virt, size))
+	if (__iounmap_explicit((void __iomem *) start_virt, size))
 		return 1;
 
 	return 0;
@@ -1212,7 +1159,7 @@ int remap_bus_range(struct pci_bus *bus)
 		return 1;
 	if (start_phys == 0)
 		return 1;
-	printk("mapping IO %lx -> %lx, size: %lx\n", start_phys, start_virt, size);
+	printk(KERN_DEBUG "mapping IO %lx -> %lx, size: %lx\n", start_phys, start_virt, size);
 	if (__ioremap_explicit(start_phys, start_virt, size,
 			       _PAGE_NO_CACHE | _PAGE_GUARDED))
 		return 1;
@@ -1232,27 +1179,13 @@ static void phbs_remap_io(void)
 static void __devinit fixup_resource(struct resource *res, struct pci_dev *dev)
 {
 	struct pci_controller *hose = pci_bus_to_host(dev->bus);
-	unsigned long start, end, mask, offset;
+	unsigned long offset;
 
 	if (res->flags & IORESOURCE_IO) {
 		offset = (unsigned long)hose->io_base_virt - pci_io_base;
 
-		start = res->start += offset;
-		end = res->end += offset;
-
-		/* Need to allow IO access to pages that are in the
-		   ISA range */
-		if (start < MAX_ISA_PORT) {
-			if (end > MAX_ISA_PORT)
-				end = MAX_ISA_PORT;
-
-			start >>= PAGE_SHIFT;
-			end >>= PAGE_SHIFT;
-
-			/* get the range of pages for the map */
-			mask = ((1 << (end+1)) - 1) ^ ((1 << start) - 1);
-			io_page_mask |= mask;
-		}
+		res->start += offset;
+		res->end += offset;
 	} else if (res->flags & IORESOURCE_MEM) {
 		res->start += hose->pci_mem_offset;
 		res->end += hose->pci_mem_offset;
@@ -1271,23 +1204,52 @@ void __devinit pcibios_fixup_device_resources(struct pci_dev *dev,
 }
 EXPORT_SYMBOL(pcibios_fixup_device_resources);
 
+void __devinit pcibios_setup_new_device(struct pci_dev *dev)
+{
+	struct dev_archdata *sd = &dev->dev.archdata;
+
+	sd->of_node = pci_device_to_OF_node(dev);
+
+	DBG("PCI device %s OF node: %s\n", pci_name(dev),
+	    sd->of_node ? sd->of_node->full_name : "<none>");
+
+	sd->dma_ops = pci_dma_ops;
+#ifdef CONFIG_NUMA
+	sd->numa_node = pcibus_to_node(dev->bus);
+#else
+	sd->numa_node = -1;
+#endif
+	if (ppc_md.pci_dma_dev_setup)
+		ppc_md.pci_dma_dev_setup(dev);
+}
+EXPORT_SYMBOL(pcibios_setup_new_device);
 
 static void __devinit do_bus_setup(struct pci_bus *bus)
 {
 	struct pci_dev *dev;
 
-	ppc_md.iommu_bus_setup(bus);
+	if (ppc_md.pci_dma_bus_setup)
+		ppc_md.pci_dma_bus_setup(bus);
 
 	list_for_each_entry(dev, &bus->devices, bus_list)
-		ppc_md.iommu_dev_setup(dev);
+		pcibios_setup_new_device(dev);
 
-	if (ppc_md.irq_bus_setup)
-		ppc_md.irq_bus_setup(bus);
+	/* Read default IRQs and fixup if necessary */
+	list_for_each_entry(dev, &bus->devices, bus_list) {
+		pci_read_irq_line(dev);
+		if (ppc_md.pci_irq_fixup)
+			ppc_md.pci_irq_fixup(dev);
+	}
 }
 
 void __devinit pcibios_fixup_bus(struct pci_bus *bus)
 {
 	struct pci_dev *dev = bus->self;
+	struct device_node *np;
+
+	np = pci_bus_to_OF_node(bus);
+
+	DBG("pcibios_fixup_bus(%s)\n", np ? np->full_name : "<???>");
 
 	if (dev && pci_probe_only &&
 	    (dev->class >> 8) == PCI_CLASS_BRIDGE_PCI) {
@@ -1315,23 +1277,55 @@ EXPORT_SYMBOL(pcibios_fixup_bus);
  */
 int pci_read_irq_line(struct pci_dev *pci_dev)
 {
-	u8 intpin;
-	struct device_node *node;
+	struct of_irq oirq;
+	unsigned int virq;
 
-    	pci_read_config_byte(pci_dev, PCI_INTERRUPT_PIN, &intpin);
-	if (intpin == 0)
-		return 0;
+	DBG("Try to map irq for %s...\n", pci_name(pci_dev));
 
-	node = pci_device_to_OF_node(pci_dev);
-	if (node == NULL)
+#ifdef DEBUG
+	memset(&oirq, 0xff, sizeof(oirq));
+#endif
+	/* Try to get a mapping from the device-tree */
+	if (of_irq_map_pci(pci_dev, &oirq)) {
+		u8 line, pin;
+
+		/* If that fails, lets fallback to what is in the config
+		 * space and map that through the default controller. We
+		 * also set the type to level low since that's what PCI
+		 * interrupts are. If your platform does differently, then
+		 * either provide a proper interrupt tree or don't use this
+		 * function.
+		 */
+		if (pci_read_config_byte(pci_dev, PCI_INTERRUPT_PIN, &pin))
+			return -1;
+		if (pin == 0)
+			return -1;
+		if (pci_read_config_byte(pci_dev, PCI_INTERRUPT_LINE, &line) ||
+		    line == 0xff) {
+			return -1;
+		}
+		DBG(" -> no map ! Using irq line %d from PCI config\n", line);
+
+		virq = irq_create_mapping(NULL, line);
+		if (virq != NO_IRQ)
+			set_irq_type(virq, IRQ_TYPE_LEVEL_LOW);
+	} else {
+		DBG(" -> got one, spec %d cells (0x%08x 0x%08x...) on %s\n",
+		    oirq.size, oirq.specifier[0], oirq.specifier[1],
+		    oirq.controller->full_name);
+
+		virq = irq_create_of_mapping(oirq.controller, oirq.specifier,
+					     oirq.size);
+	}
+	if(virq == NO_IRQ) {
+		DBG(" -> failed to map !\n");
 		return -1;
+	}
 
-	if (node->n_intrs == 0)
-		return -1;
+	DBG(" -> mapped to linux irq %d\n", virq);
 
-	pci_dev->irq = node->intrs[0].line;
-
-	pci_write_config_byte(pci_dev, PCI_INTERRUPT_LINE, pci_dev->irq);
+	pci_dev->irq = virq;
+	pci_write_config_byte(pci_dev, PCI_INTERRUPT_LINE, virq);
 
 	return 0;
 }
@@ -1339,20 +1333,41 @@ EXPORT_SYMBOL(pci_read_irq_line);
 
 void pci_resource_to_user(const struct pci_dev *dev, int bar,
 			  const struct resource *rsrc,
-			  u64 *start, u64 *end)
+			  resource_size_t *start, resource_size_t *end)
 {
 	struct pci_controller *hose = pci_bus_to_host(dev->bus);
-	unsigned long offset = 0;
+	resource_size_t offset = 0;
 
 	if (hose == NULL)
 		return;
 
 	if (rsrc->flags & IORESOURCE_IO)
-		offset = pci_io_base - (unsigned long)hose->io_base_virt +
-			hose->io_base_phys;
+		offset = (unsigned long)hose->io_base_virt - pci_io_base;
 
-	*start = rsrc->start + offset;
-	*end = rsrc->end + offset;
+	/* We pass a fully fixed up address to userland for MMIO instead of
+	 * a BAR value because X is lame and expects to be able to use that
+	 * to pass to /dev/mem !
+	 *
+	 * That means that we'll have potentially 64 bits values where some
+	 * userland apps only expect 32 (like X itself since it thinks only
+	 * Sparc has 64 bits MMIO) but if we don't do that, we break it on
+	 * 32 bits CHRPs :-(
+	 *
+	 * Hopefully, the sysfs insterface is immune to that gunk. Once X
+	 * has been fixed (and the fix spread enough), we can re-enable the
+	 * 2 lines below and pass down a BAR value to userland. In that case
+	 * we'll also have to re-enable the matching code in
+	 * __pci_mmap_make_offset().
+	 *
+	 * BenH.
+	 */
+#if 0
+	else if (rsrc->flags & IORESOURCE_MEM)
+		offset = hose->pci_mem_offset;
+#endif
+
+	*start = rsrc->start - offset;
+	*end = rsrc->end - offset;
 }
 
 struct pci_controller* pci_find_hose_for_OF_device(struct device_node* node)
@@ -1368,8 +1383,6 @@ struct pci_controller* pci_find_hose_for_OF_device(struct device_node* node)
 	}
 	return NULL;
 }
-
-#endif /* CONFIG_PPC_MULTIPLATFORM */
 
 unsigned long pci_address_to_pio(phys_addr_t address)
 {
@@ -1417,7 +1430,7 @@ long sys_pciconfig_iobase(long which, unsigned long in_bus,
 
 	for (ln = pci_root_buses.next; ln != &pci_root_buses; ln = ln->next) {
 		bus = pci_bus_b(ln);
-		if (in_bus >= bus->number && in_bus < (bus->number + bus->subordinate))
+		if (in_bus >= bus->number && in_bus <= bus->subordinate)
 			break;
 		bus = NULL;
 	}
@@ -1442,3 +1455,12 @@ long sys_pciconfig_iobase(long which, unsigned long in_bus,
 
 	return -EOPNOTSUPP;
 }
+
+#ifdef CONFIG_NUMA
+int pcibus_to_node(struct pci_bus *bus)
+{
+	struct pci_controller *phb = pci_bus_to_host(bus);
+	return phb->node;
+}
+EXPORT_SYMBOL(pcibus_to_node);
+#endif

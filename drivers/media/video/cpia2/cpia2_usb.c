@@ -49,7 +49,7 @@ static int frame_sizes[] = {
 #define FRAME_SIZE_PER_DESC   frame_sizes[cam->cur_alt]
 
 static void process_frame(struct camera_data *cam);
-static void cpia2_usb_complete(struct urb *urb, struct pt_regs *);
+static void cpia2_usb_complete(struct urb *urb);
 static int cpia2_usb_probe(struct usb_interface *intf,
 			   const struct usb_device_id *id);
 static void cpia2_usb_disconnect(struct usb_interface *intf);
@@ -199,7 +199,7 @@ static void add_COM(struct camera_data *cam)
  *
  *  callback when incoming packet is received
  *****************************************************************************/
-static void cpia2_usb_complete(struct urb *urb, struct pt_regs *regs)
+static void cpia2_usb_complete(struct urb *urb)
 {
 	int i;
 	unsigned char *cdata;
@@ -640,6 +640,10 @@ static int submit_urbs(struct camera_data *cam)
 		cam->sbuf[i].data =
 		    kmalloc(FRAMES_PER_DESC * FRAME_SIZE_PER_DESC, GFP_KERNEL);
 		if (!cam->sbuf[i].data) {
+			while (--i >= 0) {
+				kfree(cam->sbuf[i].data);
+				cam->sbuf[i].data = NULL;
+			}
 			return -ENOMEM;
 		}
 	}

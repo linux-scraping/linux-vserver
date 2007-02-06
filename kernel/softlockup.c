@@ -36,7 +36,7 @@ static struct notifier_block panic_block = {
 
 void touch_softlockup_watchdog(void)
 {
-	per_cpu(touch_timestamp, raw_smp_processor_id()) = jiffies;
+	__raw_get_cpu_var(touch_timestamp) = jiffies;
 }
 EXPORT_SYMBOL(touch_softlockup_watchdog);
 
@@ -104,7 +104,7 @@ static int watchdog(void * __bind_cpu)
 /*
  * Create/destroy watchdog threads as CPUs come and go:
  */
-static int
+static int __cpuinit
 cpu_callback(struct notifier_block *nfb, unsigned long action, void *hcpu)
 {
 	int hotcpu = (unsigned long)hcpu;
@@ -127,6 +127,8 @@ cpu_callback(struct notifier_block *nfb, unsigned long action, void *hcpu)
 		break;
 #ifdef CONFIG_HOTPLUG_CPU
 	case CPU_UP_CANCELED:
+		if (!per_cpu(watchdog_task, hotcpu))
+			break;
 		/* Unbind so it can run.  Fall thru. */
 		kthread_bind(per_cpu(watchdog_task, hotcpu),
 			     any_online_cpu(cpu_online_map));
@@ -140,15 +142,16 @@ cpu_callback(struct notifier_block *nfb, unsigned long action, void *hcpu)
 	return NOTIFY_OK;
 }
 
-static struct notifier_block cpu_nfb = {
+static struct notifier_block __cpuinitdata cpu_nfb = {
 	.notifier_call = cpu_callback
 };
 
 __init void spawn_softlockup_task(void)
 {
 	void *cpu = (void *)(long)smp_processor_id();
+	int err = cpu_callback(&cpu_nfb, CPU_UP_PREPARE, cpu);
 
-	cpu_callback(&cpu_nfb, CPU_UP_PREPARE, cpu);
+	BUG_ON(err == NOTIFY_BAD);
 	cpu_callback(&cpu_nfb, CPU_ONLINE, cpu);
 	register_cpu_notifier(&cpu_nfb);
 

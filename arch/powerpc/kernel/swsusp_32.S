@@ -1,4 +1,3 @@
-#include <linux/config.h>
 #include <linux/threads.h>
 #include <asm/processor.h>
 #include <asm/page.h>
@@ -160,8 +159,8 @@ END_FTR_SECTION_IFSET(CPU_FTR_ALTIVEC)
 	isync
 
 	/* Load ptr the list of pages to copy in r3 */
-	lis	r11,(pagedir_nosave - KERNELBASE)@h
-	ori	r11,r11,pagedir_nosave@l
+	lis	r11,(restore_pblist - KERNELBASE)@h
+	ori	r11,r11,restore_pblist@l
 	lwz	r10,0(r11)
 
 	/* Copy the pages. This is a very basic implementation, to

@@ -7,6 +7,7 @@
 
 #include <linux/module.h>
 #include <linux/types.h>
+#include <linux/version.h>
 #include <linux/kernel.h>
 #include <linux/init.h>
 #include <asm/io.h>
@@ -14,7 +15,6 @@
 #include <linux/mtd/map.h>
 #include <linux/mtd/cfi.h>
 #include <linux/mtd/flashchip.h>
-#include <linux/config.h>
 #include <linux/pci.h>
 #include <linux/pci_ids.h>
 #include <linux/list.h>
@@ -45,6 +45,23 @@ struct amd76xrom_map_info {
 	char map_name[sizeof(MOD_NAME) + 2 + ADDRESS_NAME_LEN];
 };
 
+/* The 2 bits controlling the window size are often set to allow reading
+ * the BIOS, but too small to allow writing, since the lock registers are
+ * 4MiB lower in the address space than the data.
+ *
+ * This is intended to prevent flashing the bios, perhaps accidentally.
+ *
+ * This parameter allows the normal driver to over-ride the BIOS settings.
+ *
+ * The bits are 6 and 7.  If both bits are set, it is a 5MiB window.
+ * If only the 7 Bit is set, it is a 4MiB window.  Otherwise, a
+ * 64KiB window.
+ *
+ */
+static uint win_size_bits;
+module_param(win_size_bits, uint, 0);
+MODULE_PARM_DESC(win_size_bits, "ROM window size bits override for 0x43 byte, normally set by BIOS.");
+
 static struct amd76xrom_window amd76xrom_window = {
 	.maps = LIST_HEAD_INIT(amd76xrom_window.maps),
 };
@@ -58,6 +75,7 @@ static void amd76xrom_cleanup(struct amd76xrom_window *window)
 		/* Disable writes through the rom window */
 		pci_read_config_byte(window->pdev, 0x40, &byte);
 		pci_write_config_byte(window->pdev, 0x40, byte & ~1);
+		pci_dev_put(window->pdev);
 	}
 
 	/* Free all of the mtd devices */
@@ -92,8 +110,18 @@ static int __devinit amd76xrom_init_one (struct pci_dev *pdev,
 	struct amd76xrom_map_info *map = NULL;
 	unsigned long map_top;
 
-	/* Remember the pci dev I find the window in */
+	/* Remember the pci dev I find the window in - already have a ref */
 	window->pdev = pdev;
+
+	/* Enable the selected rom window.  This is often incorrectly
+	 * set up by the BIOS, and the 4MiB offset for the lock registers
+	 * requires the full 5MiB of window space.
+	 *
+	 * This 'write, then read' approach leaves the bits for
+	 * other uses of the hardware info.
+	 */
+	pci_read_config_byte(pdev, 0x43, &byte);
+	pci_write_config_byte(pdev, 0x43, byte | win_size_bits );
 
 	/* Assume the rom window is properly setup, and find it's size */
 	pci_read_config_byte(pdev, 0x43, &byte);
@@ -123,17 +151,12 @@ static int __devinit amd76xrom_init_one (struct pci_dev *pdev,
 		window->rsrc.parent = NULL;
 		printk(KERN_ERR MOD_NAME
 			" %s(): Unable to register resource"
-			" 0x%.08lx-0x%.08lx - kernel bug?\n",
+			" 0x%.16llx-0x%.16llx - kernel bug?\n",
 			__func__,
-			window->rsrc.start, window->rsrc.end);
+			(unsigned long long)window->rsrc.start,
+			(unsigned long long)window->rsrc.end);
 	}
 
-#if 0
-
-	/* Enable the selected rom window */
-	pci_read_config_byte(pdev, 0x43, &byte);
-	pci_write_config_byte(pdev, 0x43, byte | rwindow->segen_bits);
-#endif
 
 	/* Enable writes through the rom window */
 	pci_read_config_byte(pdev, 0x40, &byte);
@@ -302,7 +325,7 @@ static int __init init_amd76xrom(void)
 	struct pci_device_id *id;
 	pdev = NULL;
 	for(id = amd76xrom_pci_tbl; id->vendor; id++) {
-		pdev = pci_find_device(id->vendor, id->device, NULL);
+		pdev = pci_get_device(id->vendor, id->device, NULL);
 		if (pdev) {
 			break;
 		}

@@ -16,7 +16,6 @@
 
 
 #include <linux/module.h>
-#include <linux/config.h>
 #include <linux/mm.h>
 #include <linux/init.h>
 #include <linux/ioport.h>
@@ -83,7 +82,7 @@ static int AmiSetVolume(int volume);
 static int AmiSetTreble(int treble);
 static void AmiPlayNextFrame(int index);
 static void AmiPlay(void);
-static irqreturn_t AmiInterrupt(int irq, void *dummy, struct pt_regs *fp);
+static irqreturn_t AmiInterrupt(int irq, void *dummy);
 
 #ifdef CONFIG_HEARTBEAT
 
@@ -557,7 +556,7 @@ static void AmiPlay(void)
 }
 
 
-static irqreturn_t AmiInterrupt(int irq, void *dummy, struct pt_regs *fp)
+static irqreturn_t AmiInterrupt(int irq, void *dummy)
 {
 	int minframes = 1;
 

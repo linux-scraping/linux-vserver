@@ -18,9 +18,16 @@
 /**
  * MegaRAID SAS Driver meta data
  */
-#define MEGASAS_VERSION				"00.00.02.04"
-#define MEGASAS_RELDATE				"Feb 03, 2006"
-#define MEGASAS_EXT_VERSION			"Fri Feb 03 14:31:44 PST 2006"
+#define MEGASAS_VERSION				"00.00.03.05"
+#define MEGASAS_RELDATE				"Oct 02, 2006"
+#define MEGASAS_EXT_VERSION			"Mon Oct 02 11:21:32 PDT 2006"
+
+/*
+ * Device IDs
+ */
+#define	PCI_DEVICE_ID_LSI_SAS1078R		0x0060
+#define	PCI_DEVICE_ID_LSI_VERDE_ZCR		0x0413
+
 /*
  * =====================================
  * MegaRAID SAS MFI firmware definitions
@@ -43,6 +50,7 @@
 #define MFI_STATE_WAIT_HANDSHAKE		0x60000000
 #define MFI_STATE_FW_INIT_2			0x70000000
 #define MFI_STATE_DEVICE_SCAN			0x80000000
+#define MFI_STATE_BOOT_MESSAGE_PENDING		0x90000000
 #define MFI_STATE_FLUSH_CACHE			0xA0000000
 #define MFI_STATE_READY				0xB0000000
 #define MFI_STATE_OPERATIONAL			0xC0000000
@@ -57,12 +65,18 @@
  * READY	: Move from OPERATIONAL to READY state; discard queue info
  * MFIMODE	: Discard (possible) low MFA posted in 64-bit mode (??)
  * CLR_HANDSHAKE: FW is waiting for HANDSHAKE from BIOS or Driver
+ * HOTPLUG	: Resume from Hotplug
+ * MFI_STOP_ADP	: Send signal to FW to stop processing
  */
-#define MFI_INIT_ABORT				0x00000000
+#define MFI_INIT_ABORT				0x00000001
 #define MFI_INIT_READY				0x00000002
 #define MFI_INIT_MFIMODE			0x00000004
 #define MFI_INIT_CLEAR_HANDSHAKE		0x00000008
-#define MFI_RESET_FLAGS				MFI_INIT_READY|MFI_INIT_MFIMODE
+#define MFI_INIT_HOTPLUG			0x00000010
+#define MFI_STOP_ADP				0x00000020
+#define MFI_RESET_FLAGS				MFI_INIT_READY| \
+						MFI_INIT_MFIMODE| \
+						MFI_INIT_ABORT
 
 /**
  * MFI frame flags
@@ -523,6 +537,8 @@ struct megasas_ctrl_info {
 #define MEGASAS_MAX_LUN				8
 #define MEGASAS_MAX_LD				64
 
+#define MEGASAS_DBG_LVL				1
+
 /*
  * When SCSI mid-layer calls driver's reset routine, driver waits for
  * MEGASAS_RESET_WAIT_TIME seconds for all outstanding IO to complete. Note
@@ -531,6 +547,7 @@ struct megasas_ctrl_info {
  * every MEGASAS_RESET_NOTICE_INTERVAL seconds
  */
 #define MEGASAS_RESET_WAIT_TIME			180
+#define MEGASAS_INTERNAL_CMD_WAIT_TIME		180
 #define	MEGASAS_RESET_NOTICE_INTERVAL		5
 
 #define MEGASAS_IOCTL_CMD			0
@@ -554,7 +571,11 @@ struct megasas_ctrl_info {
 #define MFI_POLL_TIMEOUT_SECS			10
 
 #define MFI_REPLY_1078_MESSAGE_INTERRUPT	0x80000000
-#define PCI_DEVICE_ID_LSI_SAS1078R		0x00000060
+
+/*
+* register set for both 1068 and 1078 controllers
+* structure extended for 1078 registers
+*/
  
 struct megasas_register_set {
 	u32 	reserved_0[4];			/*0000h*/
@@ -1031,6 +1052,7 @@ struct megasas_evt_detail {
 	void (*fire_cmd)(dma_addr_t ,u32 ,struct megasas_register_set __iomem *);
 
 	void (*enable_intr)(struct megasas_register_set __iomem *) ;
+	void (*disable_intr)(struct megasas_register_set __iomem *);
 
 	int (*clear_intr)(struct megasas_register_set __iomem *);
 
@@ -1077,11 +1099,11 @@ struct megasas_instance {
 	struct pci_dev *pdev;
 	u32 unique_id;
 
-	u32 fw_outstanding;
+	atomic_t fw_outstanding;
 	u32 hw_crit_error;
-	spinlock_t instance_lock;
 
 	struct megasas_instance_template *instancet;
+	struct tasklet_struct isr_tasklet;
 };
 
 #define MEGASAS_IS_LOGICAL(scp)						\
@@ -1151,10 +1173,10 @@ struct compat_megasas_iocpacket {
 	struct compat_iovec sgl[MAX_IOCTL_SGE];
 } __attribute__ ((packed));
 
+#define MEGASAS_IOC_FIRMWARE32	_IOWR('M', 1, struct compat_megasas_iocpacket)
 #endif
 
 #define MEGASAS_IOC_FIRMWARE	_IOWR('M', 1, struct megasas_iocpacket)
-#define MEGASAS_IOC_FIRMWARE32	_IOWR('M', 1, struct compat_megasas_iocpacket)
 #define MEGASAS_IOC_GET_AEN	_IOW('M', 3, struct megasas_aen)
 
 struct megasas_mgmt_info {

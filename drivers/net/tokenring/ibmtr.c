@@ -140,7 +140,7 @@ in the event that chatty debug messages are desired - jjs 12/30/98 */
 
 /* version and credits */
 #ifndef PCMCIA
-static char version[] __initdata =
+static char version[] __devinitdata =
     "\nibmtr.c: v1.3.57   8/ 7/94 Peter De Schrijver and Mark Swanson\n"
     "         v2.1.125 10/20/98 Paul Norton    <pnorton@ieee.org>\n"
     "         v2.2.0   12/30/98 Joel Sloan     <jjs@c-me.com>\n"
@@ -197,7 +197,7 @@ static void 	open_sap(unsigned char type, struct net_device *dev);
 static void 	tok_set_multicast_list(struct net_device *dev);
 static int 	tok_send_packet(struct sk_buff *skb, struct net_device *dev);
 static int 	tok_close(struct net_device *dev);
-static irqreturn_t tok_interrupt(int irq, void *dev_id, struct pt_regs *regs);
+static irqreturn_t tok_interrupt(int irq, void *dev_id);
 static void 	initial_tok_int(struct net_device *dev);
 static void 	tr_tx(struct net_device *dev);
 static void 	tr_rx(struct net_device *dev);
@@ -216,7 +216,7 @@ static int __devinitdata turbo_irq[IBMTR_MAX_ADAPTERS] = {0};
 static int __devinitdata turbo_searched = 0;
 
 #ifndef PCMCIA
-static __u32 ibmtr_mem_base __initdata = 0xd0000;
+static __u32 ibmtr_mem_base __devinitdata = 0xd0000;
 #endif
 
 static void __devinit PrtChanID(char *pcid, short stride)
@@ -1166,7 +1166,7 @@ static void dir_open_adapter (struct net_device *dev)
 
 /******************************************************************************/
 
-static irqreturn_t tok_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t tok_interrupt(int irq, void *dev_id)
 {
 	unsigned char status;
 	/*  unsigned char status_even ; */
@@ -1178,7 +1178,7 @@ static irqreturn_t tok_interrupt(int irq, void *dev_id, struct pt_regs *regs)
 
 	dev = dev_id;
 #if TR_VERBOSE
-	DPRINTK("Int from tok_driver, dev : %p irq%d regs=%p\n", dev,irq,regs);
+	DPRINTK("Int from tok_driver, dev : %p irq%d\n", dev,irq);
 #endif
 	ti = (struct tok_info *) dev->priv;
 	if (ti->sram_phys & 1)
@@ -1826,7 +1826,7 @@ static void tr_rx(struct net_device *dev)
 	skb->protocol = tr_type_trans(skb, dev);
 	if (IPv4_p) {
 		skb->csum = chksum;
-		skb->ip_summed = 1;
+		skb->ip_summed = CHECKSUM_COMPLETE;
 	}
 	netif_rx(skb);
 	dev->last_rx = jiffies;

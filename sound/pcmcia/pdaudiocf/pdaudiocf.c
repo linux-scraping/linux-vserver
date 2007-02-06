@@ -206,7 +206,7 @@ static void snd_pdacf_detach(struct pcmcia_device *link)
 		snd_pdacf_powerdown(chip);
 	chip->chip_status |= PDAUDIOCF_STAT_IS_STALE; /* to be sure */
 	snd_card_disconnect(chip->card);
-	snd_card_free_in_thread(chip->card);
+	snd_card_free_when_closed(chip->card);
 }
 
 /*
@@ -219,29 +219,10 @@ do { last_fn = (fn); if ((last_ret = (ret)) != 0) goto cs_failed; } while (0)
 static int pdacf_config(struct pcmcia_device *link)
 {
 	struct snd_pdacf *pdacf = link->priv;
-	tuple_t tuple;
-	cisparse_t *parse = NULL;
-	u_short buf[32];
 	int last_fn, last_ret;
 
 	snd_printdd(KERN_DEBUG "pdacf_config called\n");
-	parse = kmalloc(sizeof(*parse), GFP_KERNEL);
-	if (! parse) {
-		snd_printk(KERN_ERR "pdacf_config: cannot allocate\n");
-		return -ENOMEM;
-	}
-	tuple.DesiredTuple = CISTPL_CFTABLE_ENTRY;
-	tuple.Attributes = 0;
-	tuple.TupleData = (cisdata_t *)buf;
-	tuple.TupleDataMax = sizeof(buf);
-	tuple.TupleOffset = 0;
-	tuple.DesiredTuple = CISTPL_CONFIG;
-	CS_CHECK(GetFirstTuple, pcmcia_get_first_tuple(link, &tuple));
-	CS_CHECK(GetTupleData, pcmcia_get_tuple_data(link, &tuple));
-	CS_CHECK(ParseTuple, pcmcia_parse_tuple(link, &tuple, parse));
-	link->conf.ConfigBase = parse->config.base;
 	link->conf.ConfigIndex = 0x5;
-	kfree(parse);
 
 	CS_CHECK(RequestIO, pcmcia_request_io(link, &link->io));
 	CS_CHECK(RequestIRQ, pcmcia_request_irq(link, &link->irq));
@@ -297,7 +278,8 @@ static int pdacf_resume(struct pcmcia_device *link)
  * Module entry points
  */
 static struct pcmcia_device_id snd_pdacf_ids[] = {
-	PCMCIA_DEVICE_MANF_CARD(0x015d, 0x4c45),
+	/* this is too general PCMCIA_DEVICE_MANF_CARD(0x015d, 0x4c45), */
+	PCMCIA_DEVICE_PROD_ID12("Core Sound","PDAudio-CF",0x396d19d2,0x71717b49),
 	PCMCIA_DEVICE_NULL
 };
 MODULE_DEVICE_TABLE(pcmcia, snd_pdacf_ids);

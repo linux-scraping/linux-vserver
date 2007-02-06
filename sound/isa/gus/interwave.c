@@ -70,9 +70,9 @@ static int dma1[SNDRV_CARDS] = SNDRV_DEFAULT_DMA;	/* 0,1,3,5,6,7 */
 static int dma2[SNDRV_CARDS] = SNDRV_DEFAULT_DMA;	/* 0,1,3,5,6,7 */
 static int joystick_dac[SNDRV_CARDS] = {[0 ... (SNDRV_CARDS - 1)] = 29};
 				/* 0 to 31, (0.59V-4.52V or 0.389V-2.98V) */
-static int midi[SNDRV_CARDS] = {[0 ... (SNDRV_CARDS - 1)] = 0};
+static int midi[SNDRV_CARDS];
 static int pcm_channels[SNDRV_CARDS] = {[0 ... (SNDRV_CARDS - 1)] = 2};
-static int effect[SNDRV_CARDS] = {[0 ... (SNDRV_CARDS - 1)] = 0};
+static int effect[SNDRV_CARDS];
 
 #ifdef SNDRV_STB
 #define PFX "interwave-stb: "
@@ -299,9 +299,9 @@ static int __devinit snd_interwave_detect(struct snd_interwave *iwcard,
 	return -ENODEV;
 }
 
-static irqreturn_t snd_interwave_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t snd_interwave_interrupt(int irq, void *dev_id)
 {
-	struct snd_interwave *iwcard = (struct snd_interwave *) dev_id;
+	struct snd_interwave *iwcard = dev_id;
 	int loop, max = 5;
 	int handled = 0;
 
@@ -309,12 +309,12 @@ static irqreturn_t snd_interwave_interrupt(int irq, void *dev_id, struct pt_regs
 		loop = 0;
 		if (inb(iwcard->gus_status_reg)) {
 			handled = 1;
-			snd_gus_interrupt(irq, iwcard->gus, regs);
+			snd_gus_interrupt(irq, iwcard->gus);
 			loop++;
 		}
 		if (inb(iwcard->pcm_status_reg) & 0x01) {	/* IRQ bit is set? */
 			handled = 1;
-			snd_cs4231_interrupt(irq, iwcard->cs4231, regs);
+			snd_cs4231_interrupt(irq, iwcard->cs4231);
 			loop++;
 		}
 	} while (loop && --max > 0);
@@ -564,6 +564,8 @@ static int __devinit snd_interwave_pnp(int dev, struct snd_interwave *iwcard,
 	struct pnp_resource_table * cfg = kmalloc(sizeof(struct pnp_resource_table), GFP_KERNEL);
 	int err;
 
+	if (!cfg)
+		return -ENOMEM;
 	iwcard->dev = pnp_request_card_device(card, id->devs[0].id, NULL);
 	if (iwcard->dev == NULL) {
 		kfree(cfg);
@@ -611,10 +613,10 @@ static int __devinit snd_interwave_pnp(int dev, struct snd_interwave *iwcard,
 	if (dma2[dev] >= 0)
 		dma2[dev] = pnp_dma(pdev, 1);
 	irq[dev] = pnp_irq(pdev, 0);
-	snd_printdd("isapnp IW: sb port=0x%lx, gf1 port=0x%lx, codec port=0x%lx\n",
-				pnp_port_start(pdev, 0),
-				pnp_port_start(pdev, 1),
-				pnp_port_start(pdev, 2));
+	snd_printdd("isapnp IW: sb port=0x%llx, gf1 port=0x%llx, codec port=0x%llx\n",
+			(unsigned long long)pnp_port_start(pdev, 0),
+			(unsigned long long)pnp_port_start(pdev, 1),
+			(unsigned long long)pnp_port_start(pdev, 2));
 	snd_printdd("isapnp IW: dma1=%i, dma2=%i, irq=%i\n", dma1[dev], dma2[dev], irq[dev]);
 #ifdef SNDRV_STB
 	/* Tone Control initialization */
@@ -706,7 +708,7 @@ static int __devinit snd_interwave_probe(struct snd_card *card, int dev)
 	if ((err = snd_gus_initialize(gus)) < 0)
 		return err;
 
-	if (request_irq(xirq, snd_interwave_interrupt, SA_INTERRUPT,
+	if (request_irq(xirq, snd_interwave_interrupt, IRQF_DISABLED,
 			"InterWave", iwcard)) {
 		snd_printk(KERN_ERR PFX "unable to grab IRQ %d\n", xirq);
 		return -EBUSY;

@@ -28,7 +28,9 @@ Currently, these files are in /proc/sys/vm:
 - block_dump
 - drop-caches
 - zone_reclaim_mode
-- zone_reclaim_interval
+- min_unmapped_ratio
+- min_slab_ratio
+- panic_on_oom
 
 ==============================================================
 
@@ -127,7 +129,7 @@ the high water marks for each per cpu page list.
 
 zone_reclaim_mode:
 
-Zone_reclaim_mode allows to set more or less agressive approaches to
+Zone_reclaim_mode allows someone to set more or less aggressive approaches to
 reclaim memory when a zone runs out of memory. If it is set to zero then no
 zone reclaim occurs. Allocations will be satisfied from other zones / nodes
 in the system.
@@ -137,7 +139,6 @@ This is value ORed together of
 1	= Zone reclaim on
 2	= Zone reclaim writes dirty pages out
 4	= Zone reclaim swaps pages
-8	= Also do a global slab reclaim pass
 
 zone_reclaim_mode is set during bootup to 1 if it is determined that pages
 from remote zones will cause a measurable performance reduction. The
@@ -161,20 +162,46 @@ Allowing regular swap effectively restricts allocations to the local
 node unless explicitly overridden by memory policies or cpuset
 configurations.
 
-It may be advisable to allow slab reclaim if the system makes heavy
-use of files and builds up large slab caches. However, the slab
-shrink operation is global, may take a long time and free slabs
-in all nodes of the system.
+=============================================================
 
-================================================================
+min_unmapped_ratio:
 
-zone_reclaim_interval:
+This is available only on NUMA kernels.
 
-The time allowed for off node allocations after zone reclaim
-has failed to reclaim enough pages to allow a local allocation.
+A percentage of the total pages in each zone.  Zone reclaim will only
+occur if more than this percentage of pages are file backed and unmapped.
+This is to insure that a minimal amount of local pages is still available for
+file I/O even if the node is overallocated.
 
-Time is set in seconds and set by default to 30 seconds.
+The default is 1 percent.
 
-Reduce the interval if undesired off node allocations occur. However, too
-frequent scans will have a negative impact onoff node allocation performance.
+=============================================================
+
+min_slab_ratio:
+
+This is available only on NUMA kernels.
+
+A percentage of the total pages in each zone.  On Zone reclaim
+(fallback from the local zone occurs) slabs will be reclaimed if more
+than this percentage of pages in a zone are reclaimable slab pages.
+This insures that the slab growth stays under control even in NUMA
+systems that rarely perform global reclaim.
+
+The default is 5 percent.
+
+Note that slab reclaim is triggered in a per zone / node fashion.
+The process of reclaiming slab memory is currently not node specific
+and may not be fast.
+
+=============================================================
+
+panic_on_oom
+
+This enables or disables panic on out-of-memory feature.  If this is set to 1,
+the kernel panics when out-of-memory happens.  If this is set to 0, the kernel
+will kill some rogue process, called oom_killer.  Usually, oom_killer can kill
+rogue processes and system will survive.  If you want to panic the system
+rather than killing rogue processes, set this to 1.
+
+The default value is 0.
 

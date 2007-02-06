@@ -306,7 +306,7 @@ static void pluto_dma_end(struct pluto *pluto, unsigned int nbpackets)
 			TS_DMA_BYTES, PCI_DMA_FROMDEVICE);
 }
 
-static irqreturn_t pluto_irq(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t pluto_irq(int irq, void *dev_id)
 {
 	struct pluto *pluto = dev_id;
 	u32 tscr;
@@ -424,8 +424,8 @@ static inline u32 divide(u32 numerator, u32 denominator)
 }
 
 /* LG Innotek TDTE-E001P (Infineon TUA6034) */
-static int lg_tdtpe001p_pll_set(struct dvb_frontend *fe,
-				struct dvb_frontend_parameters *p)
+static int lg_tdtpe001p_tuner_set_params(struct dvb_frontend *fe,
+					 struct dvb_frontend_parameters *p)
 {
 	struct pluto *pluto = frontend_to_pluto(fe);
 	struct i2c_msg msg;
@@ -473,6 +473,8 @@ static int lg_tdtpe001p_pll_set(struct dvb_frontend *fe,
 	msg.buf = buf;
 	msg.len = sizeof(buf);
 
+	if (fe->ops.i2c_gate_ctrl)
+		fe->ops.i2c_gate_ctrl(fe, 1);
 	ret = i2c_transfer(&pluto->i2c_adap, &msg, 1);
 	if (ret < 0)
 		return ret;
@@ -497,8 +499,6 @@ static struct tda1004x_config pluto2_fe_config __devinitdata = {
 	.xtal_freq = TDA10046_XTAL_16M,
 	.agc_config = TDA10046_AGC_DEFAULT,
 	.if_freq = TDA10046_FREQ_3617,
-	.pll_set = lg_tdtpe001p_pll_set,
-	.pll_sleep = NULL,
 	.request_firmware = pluto2_request_firmware,
 };
 
@@ -511,11 +511,12 @@ static int __devinit frontend_init(struct pluto *pluto)
 		dev_err(&pluto->pdev->dev, "could not attach frontend\n");
 		return -ENODEV;
 	}
+	pluto->fe->ops.tuner_ops.set_params = lg_tdtpe001p_tuner_set_params;
 
 	ret = dvb_register_frontend(&pluto->dvb_adapter, pluto->fe);
 	if (ret < 0) {
-		if (pluto->fe->ops->release)
-			pluto->fe->ops->release(pluto->fe);
+		if (pluto->fe->ops.release)
+			pluto->fe->ops.release(pluto->fe);
 		return ret;
 	}
 
@@ -615,7 +616,7 @@ static int __devinit pluto2_probe(struct pci_dev *pdev,
 
 	pci_set_drvdata(pdev, pluto);
 
-	ret = request_irq(pdev->irq, pluto_irq, SA_SHIRQ, DRIVER_NAME, pluto);
+	ret = request_irq(pdev->irq, pluto_irq, IRQF_SHARED, DRIVER_NAME, pluto);
 	if (ret < 0)
 		goto err_pci_iounmap;
 
@@ -647,9 +648,9 @@ static int __devinit pluto2_probe(struct pci_dev *pdev,
 		goto err_pluto_hw_exit;
 
 	/* dvb */
-	ret = dvb_register_adapter(&pluto->dvb_adapter, DRIVER_NAME, THIS_MODULE);
+	ret = dvb_register_adapter(&pluto->dvb_adapter, DRIVER_NAME, THIS_MODULE, &pdev->dev);
 	if (ret < 0)
-		goto err_i2c_bit_del_bus;
+		goto err_i2c_del_adapter;
 
 	dvb_adapter = &pluto->dvb_adapter;
 
@@ -711,8 +712,8 @@ err_dvb_dmx_release:
 	dvb_dmx_release(dvbdemux);
 err_dvb_unregister_adapter:
 	dvb_unregister_adapter(dvb_adapter);
-err_i2c_bit_del_bus:
-	i2c_bit_del_bus(&pluto->i2c_adap);
+err_i2c_del_adapter:
+	i2c_del_adapter(&pluto->i2c_adap);
 err_pluto_hw_exit:
 	pluto_hw_exit(pluto);
 err_free_irq:
@@ -747,7 +748,7 @@ static void __devexit pluto2_remove(struct pci_dev *pdev)
 	dvb_dmxdev_release(&pluto->dmxdev);
 	dvb_dmx_release(dvbdemux);
 	dvb_unregister_adapter(dvb_adapter);
-	i2c_bit_del_bus(&pluto->i2c_adap);
+	i2c_del_adapter(&pluto->i2c_adap);
 	pluto_hw_exit(pluto);
 	free_irq(pdev->irq, pluto);
 	pci_iounmap(pdev, pluto->io_mem);

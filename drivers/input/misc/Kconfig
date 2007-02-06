@@ -26,7 +26,7 @@ config INPUT_PCSPKR
 
 config INPUT_SPARCSPKR
 	tristate "SPARC Speaker support"
-	depends on PCI && SPARC
+	depends on PCI && SPARC64
 	help
 	  Say Y here if you want the standard Speaker on Sparc PCI systems
 	  to be used for bells and whistles.
@@ -73,7 +73,7 @@ config INPUT_UINPUT
 
 config HP_SDC_RTC
 	tristate "HP SDC Real Time Clock"       
-	depends on GSC
+	depends on GSC || HP300
 	select HP_SDC
 	help
 	  Say Y here if you want to support the built-in real time clock

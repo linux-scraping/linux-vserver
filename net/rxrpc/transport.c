@@ -31,7 +31,6 @@
 #endif
 #include <linux/errqueue.h>
 #include <asm/uaccess.h>
-#include <asm/checksum.h>
 #include "internal.h"
 
 struct errormsg {
@@ -68,11 +67,10 @@ int rxrpc_create_transport(unsigned short port,
 
 	_enter("%hu", port);
 
-	trans = kmalloc(sizeof(struct rxrpc_transport), GFP_KERNEL);
+	trans = kzalloc(sizeof(struct rxrpc_transport), GFP_KERNEL);
 	if (!trans)
 		return -ENOMEM;
 
-	memset(trans, 0, sizeof(struct rxrpc_transport));
 	atomic_set(&trans->usage, 1);
 	INIT_LIST_HEAD(&trans->services);
 	INIT_LIST_HEAD(&trans->link);
@@ -312,13 +310,12 @@ static int rxrpc_incoming_msg(struct rxrpc_transport *trans,
 
 	_enter("");
 
-	msg = kmalloc(sizeof(struct rxrpc_message), GFP_KERNEL);
+	msg = kzalloc(sizeof(struct rxrpc_message), GFP_KERNEL);
 	if (!msg) {
 		_leave(" = -ENOMEM");
 		return -ENOMEM;
 	}
 
-	memset(msg, 0, sizeof(*msg));
 	atomic_set(&msg->usage, 1);
 	list_add_tail(&msg->link,msgq);
 
@@ -383,11 +380,10 @@ static int rxrpc_incoming_msg(struct rxrpc_transport *trans,
 
 		/* allocate a new message record */
 		ret = -ENOMEM;
-		msg = kmalloc(sizeof(struct rxrpc_message), GFP_KERNEL);
+		msg = kmemdup(jumbomsg, sizeof(struct rxrpc_message), GFP_KERNEL);
 		if (!msg)
 			goto error;
 
-		memcpy(msg, jumbomsg, sizeof(*msg));
 		list_add_tail(&msg->link, msgq);
 
 		/* adjust the jumbo packet */

@@ -2,7 +2,6 @@
  * Default generic APIC driver. This handles upto 8 CPUs.
  */
 #define APIC_DEFINITION 1
-#include <linux/config.h>
 #include <linux/threads.h>
 #include <linux/cpumask.h>
 #include <asm/mpspec.h>
@@ -19,7 +18,7 @@
 #include <asm/mach-default/mach_mpparse.h>
 
 /* should be called last. */
-static __init int probe_default(void)
+static int probe_default(void)
 { 
 	return 1;
 } 

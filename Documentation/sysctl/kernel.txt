@@ -27,6 +27,7 @@ show up in /proc/sys/kernel:
 - hotplug
 - java-appletviewer           [ binfmt_java, obsolete ]
 - java-interpreter            [ binfmt_java, obsolete ]
+- kstack_depth_to_print       [ X86 only ]
 - l2cr                        [ PPC only ]
 - modprobe                    ==> Documentation/kmod.txt
 - msgmax
@@ -50,7 +51,6 @@ show up in /proc/sys/kernel:
 - shmmax                      [ sysv ipc ]
 - shmmni
 - stop-a                      [ SPARC only ]
-- suid_dumpable
 - sysrq                       ==> Documentation/sysrq.txt
 - tainted
 - threads-max
@@ -87,7 +87,7 @@ valid for 30 seconds.
 core_pattern:
 
 core_pattern is used to specify a core dumpfile pattern name.
-. max length 64 characters; default value is "core"
+. max length 128 characters; default value is "core"
 . core_pattern is used as a pattern template for the output filename;
   certain string patterns (beginning with '%') are substituted with
   their actual values.
@@ -106,6 +106,9 @@ core_pattern is used to specify a core dumpfile pattern name.
 	%h	hostname
 	%e	executable filename
 	%<OTHER> both are dropped
+. If the first character of the pattern is a '|', the kernel will treat
+  the rest of the pattern as a command to run.  The core dump will be
+  written to the standard input of that program instead of to a file.
 
 ==============================================================
 
@@ -168,6 +171,13 @@ This flag controls the L2 cache of G3 processor boards. If
 
 ==============================================================
 
+kstack_depth_to_print: (X86 only)
+
+Controls the number of words to print when dumping the raw
+kernel stack.
+
+==============================================================
+
 osrelease, ostype & version:
 
 # cat osrelease
@@ -211,9 +221,8 @@ Controls the kernel's behaviour when an oops or BUG is encountered.
 
 0: try to continue operation
 
-1: delay a few seconds (to give klogd time to record the oops output) and
-   then panic.  If the `panic' sysctl is also non-zero then the machine will
-   be rebooted.
+1: panic immediatly.  If the `panic' sysctl is also non-zero then the
+   machine will be rebooted.
 
 ==============================================================
 
@@ -308,25 +317,6 @@ This value can be used to query and set the run time limit
 on the maximum shared memory segment size that can be created.
 Shared memory segments up to 1Gb are now supported in the 
 kernel.  This value defaults to SHMMAX.
-
-==============================================================
-
-suid_dumpable:
-
-This value can be used to query and set the core dump mode for setuid
-or otherwise protected/tainted binaries. The modes are
-
-0 - (default) - traditional behaviour. Any process which has changed
-	privilege levels or is execute only will not be dumped
-1 - (debug) - all processes dump core when possible. The core dump is
-	owned by the current user and no security is applied. This is
-	intended for system debugging situations only. Ptrace is unchecked.
-2 - (suidsafe) - any binary which normally would not be dumped is dumped
-	readable by root only. This allows the end user to remove
-	such a dump but not access it directly. For security reasons
-	core dumps in this mode will not overwrite one another or
-	other files. This mode is appropriate when adminstrators are
-	attempting to debug problems in a normal environment.
 
 ==============================================================
 

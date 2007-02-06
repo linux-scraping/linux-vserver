@@ -433,7 +433,7 @@ void snd_ac97_proc_init(struct snd_ac97 * ac97)
 	prefix = ac97_is_audio(ac97) ? "ac97" : "mc97";
 	sprintf(name, "%s#%d-%d", prefix, ac97->addr, ac97->num);
 	if ((entry = snd_info_create_card_entry(ac97->bus->card, name, ac97->bus->proc)) != NULL) {
-		snd_info_set_text_ops(entry, ac97, 1024, snd_ac97_proc_read);
+		snd_info_set_text_ops(entry, ac97, snd_ac97_proc_read);
 		if (snd_info_register(entry) < 0) {
 			snd_info_free_entry(entry);
 			entry = NULL;
@@ -442,10 +442,9 @@ void snd_ac97_proc_init(struct snd_ac97 * ac97)
 	ac97->proc = entry;
 	sprintf(name, "%s#%d-%d+regs", prefix, ac97->addr, ac97->num);
 	if ((entry = snd_info_create_card_entry(ac97->bus->card, name, ac97->bus->proc)) != NULL) {
-		snd_info_set_text_ops(entry, ac97, 1024, snd_ac97_proc_regs_read);
+		snd_info_set_text_ops(entry, ac97, snd_ac97_proc_regs_read);
 #ifdef CONFIG_SND_DEBUG
 		entry->mode |= S_IWUSR;
-		entry->c.text.write_size = 1024;
 		entry->c.text.write = snd_ac97_proc_regs_write;
 #endif
 		if (snd_info_register(entry) < 0) {
@@ -458,14 +457,10 @@ void snd_ac97_proc_init(struct snd_ac97 * ac97)
 
 void snd_ac97_proc_done(struct snd_ac97 * ac97)
 {
-	if (ac97->proc_regs) {
-		snd_info_unregister(ac97->proc_regs);
-		ac97->proc_regs = NULL;
-	}
-	if (ac97->proc) {
-		snd_info_unregister(ac97->proc);
-		ac97->proc = NULL;
-	}
+	snd_info_free_entry(ac97->proc_regs);
+	ac97->proc_regs = NULL;
+	snd_info_free_entry(ac97->proc);
+	ac97->proc = NULL;
 }
 
 void snd_ac97_bus_proc_init(struct snd_ac97_bus * bus)
@@ -486,8 +481,6 @@ void snd_ac97_bus_proc_init(struct snd_ac97_bus * bus)
 
 void snd_ac97_bus_proc_done(struct snd_ac97_bus * bus)
 {
-	if (bus->proc) {
-		snd_info_unregister(bus->proc);
-		bus->proc = NULL;
-	}
+	snd_info_free_entry(bus->proc);
+	bus->proc = NULL;
 }

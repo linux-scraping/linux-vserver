@@ -238,7 +238,7 @@
 #include <linux/module.h>
 #include <linux/sched.h>
 #include <asm/irq.h>
-#include <asm/io.h>
+#include <linux/io.h>
 #include <linux/blkdev.h>
 #include <asm/system.h>
 #include <linux/errno.h>
@@ -253,6 +253,7 @@
 #include <linux/isapnp.h>
 #include <linux/spinlock.h>
 #include <linux/workqueue.h>
+#include <linux/list.h>
 #include <asm/semaphore.h>
 #include <scsi/scsicam.h>
 
@@ -261,6 +262,8 @@
 #include <scsi/scsi_host.h>
 #include <scsi/scsi_transport_spi.h>
 #include "aha152x.h"
+
+static LIST_HEAD(aha152x_host_list);
 
 
 /* DEFINES */
@@ -423,8 +426,6 @@ MODULE_DEVICE_TABLE(isapnp, id_table);
 
 #endif /* !PCMCIA */
 
-static int registered_count=0;
-static struct Scsi_Host *aha152x_host[2];
 static struct scsi_host_template aha152x_driver_template;
 
 /*
@@ -541,6 +542,7 @@ struct aha152x_hostdata {
 #ifdef __ISAPNP__
 	struct pnp_dev *pnpdev;
 #endif
+	struct list_head host_list;
 };
 
 
@@ -551,6 +553,11 @@ struct aha152x_hostdata {
 struct aha152x_scdata {
 	Scsi_Cmnd *next;	/* next sc in queue */
 	struct semaphore *sem;	/* semaphore to block on */
+	unsigned char cmd_len;
+	unsigned char cmnd[MAX_COMMAND_SIZE];
+	unsigned short use_sg;
+	unsigned request_bufflen;
+	void *request_buffer;
 };
 
 
@@ -666,7 +673,7 @@ static struct {
 };
 
 /* setup & interrupt */
-static irqreturn_t intr(int irq, void *dev_id, struct pt_regs *);
+static irqreturn_t intr(int irq, void *dev_id);
 static void reset_ports(struct Scsi_Host *shpnt);
 static void aha152x_error(struct Scsi_Host *shpnt, char *msg);
 static void done(struct Scsi_Host *shpnt, int error);
@@ -750,25 +757,9 @@ static inline Scsi_Cmnd *remove_SC(Scsi_Cmnd **SC, Scsi_Cmnd *SCp)
 	return ptr;
 }
 
-static inline struct Scsi_Host *lookup_irq(int irqno)
+static irqreturn_t swintr(int irqno, void *dev_id)
 {
-	int i;
-
-	for(i=0; i<ARRAY_SIZE(aha152x_host); i++)
-		if(aha152x_host[i] && aha152x_host[i]->irq==irqno)
-			return aha152x_host[i];
-
-	return NULL;
-}
-
-static irqreturn_t swintr(int irqno, void *dev_id, struct pt_regs *regs)
-{
-	struct Scsi_Host *shpnt = lookup_irq(irqno);
-
-	if (!shpnt) {
-        	printk(KERN_ERR "aha152x: catched software interrupt %d for unknown controller.\n", irqno);
-		return IRQ_NONE;
-	}
+	struct Scsi_Host *shpnt = dev_id;
 
 	HOSTDATA(shpnt)->swint++;
 
@@ -786,10 +777,11 @@ struct Scsi_Host *aha152x_probe_one(struct aha152x_setup *setup)
 		return NULL;
 	}
 
-	/* need to have host registered before triggering any interrupt */
-	aha152x_host[registered_count] = shpnt;
-
 	memset(HOSTDATA(shpnt), 0, sizeof *HOSTDATA(shpnt));
+	INIT_LIST_HEAD(&HOSTDATA(shpnt)->host_list);
+
+	/* need to have host registered before triggering any interrupt */
+	list_add_tail(&HOSTDATA(shpnt)->host_list, &aha152x_host_list);
 
 	shpnt->io_port   = setup->io_port;
 	shpnt->n_io_port = IO_RANGE;
@@ -855,7 +847,7 @@ struct Scsi_Host *aha152x_probe_one(struct aha152x_setup *setup)
 	SETPORT(SIMODE0, 0);
 	SETPORT(SIMODE1, 0);
 
-	if( request_irq(shpnt->irq, swintr, SA_INTERRUPT|SA_SHIRQ, "aha152x", shpnt) ) {
+	if( request_irq(shpnt->irq, swintr, IRQF_DISABLED|IRQF_SHARED, "aha152x", shpnt) ) {
 		printk(KERN_ERR "aha152x%d: irq %d busy.\n", shpnt->host_no, shpnt->irq);
 		goto out_host_put;
 	}
@@ -889,7 +881,7 @@ struct Scsi_Host *aha152x_probe_one(struct aha152x_setup *setup)
 	SETPORT(SSTAT0, 0x7f);
 	SETPORT(SSTAT1, 0xef);
 
-	if ( request_irq(shpnt->irq, intr, SA_INTERRUPT|SA_SHIRQ, "aha152x", shpnt) ) {
+	if ( request_irq(shpnt->irq, intr, IRQF_DISABLED|IRQF_SHARED, "aha152x", shpnt) ) {
 		printk(KERN_ERR "aha152x%d: failed to reassign irq %d.\n", shpnt->host_no, shpnt->irq);
 		goto out_host_put;
 	}
@@ -902,12 +894,10 @@ struct Scsi_Host *aha152x_probe_one(struct aha152x_setup *setup)
 
 	scsi_scan_host(shpnt);
 
-	registered_count++;
-
 	return shpnt;
 
 out_host_put:
-	aha152x_host[registered_count]=NULL;
+	list_del(&HOSTDATA(shpnt)->host_list);
 	scsi_host_put(shpnt);
 
 	return NULL;
@@ -932,6 +922,7 @@ void aha152x_release(struct Scsi_Host *shpnt)
 #endif
 
 	scsi_remove_host(shpnt);
+	list_del(&HOSTDATA(shpnt)->host_list);
 	scsi_host_put(shpnt);
 }
 
@@ -1006,11 +997,20 @@ static int aha152x_internal_queue(Scsi_Cmnd *SCpnt, struct semaphore *sem, int p
 			return FAILED;
 		}
 	} else {
+		struct aha152x_scdata *sc;
+
 		SCpnt->host_scribble = kmalloc(sizeof(struct aha152x_scdata), GFP_ATOMIC);
 		if(SCpnt->host_scribble==0) {
 			printk(ERR_LEAD "allocation failed\n", CMDINFO(SCpnt));
 			return FAILED;
 		}
+
+		sc = SCDATA(SCpnt);
+		memcpy(sc->cmnd, SCpnt->cmnd, sizeof(sc->cmnd));
+		sc->request_buffer  = SCpnt->request_buffer;
+		sc->request_bufflen = SCpnt->request_bufflen;
+		sc->use_sg          = SCpnt->use_sg;
+		sc->cmd_len         = SCpnt->cmd_len;
 	}
 
 	SCNEXT(SCpnt)		= NULL;
@@ -1165,6 +1165,10 @@ static int aha152x_device_reset(Scsi_Cmnd * SCpnt)
 	DECLARE_MUTEX_LOCKED(sem);
 	struct timer_list timer;
 	int ret, issued, disconnected;
+	unsigned char old_cmd_len = SCpnt->cmd_len;
+	unsigned short old_use_sg = SCpnt->use_sg;
+	void *old_buffer = SCpnt->request_buffer;
+	unsigned old_bufflen = SCpnt->request_bufflen;
 	unsigned long flags;
 
 #if defined(AHA152X_DEBUG)
@@ -1198,11 +1202,11 @@ static int aha152x_device_reset(Scsi_Cmnd * SCpnt)
 	add_timer(&timer);
 	down(&sem);
 	del_timer(&timer);
-	
-	SCpnt->cmd_len         = SCpnt->old_cmd_len;
-	SCpnt->use_sg          = SCpnt->old_use_sg;
-  	SCpnt->request_buffer  = SCpnt->buffer;
-       	SCpnt->request_bufflen = SCpnt->bufflen;
+
+	SCpnt->cmd_len         = old_cmd_len;
+	SCpnt->use_sg          = old_use_sg;
+  	SCpnt->request_buffer  = old_buffer;
+       	SCpnt->request_bufflen = old_bufflen;
 
 	DO_LOCK(flags);
 
@@ -1439,11 +1443,14 @@ static struct work_struct aha152x_tq;
  * Run service completions on the card with interrupts enabled.
  *
  */
-static void run(void)
+static void run(struct work_struct *work)
 {
-	int i;
-	for (i = 0; i<ARRAY_SIZE(aha152x_host); i++) {
-		is_complete(aha152x_host[i]);
+	struct aha152x_hostdata *hd;
+
+	list_for_each_entry(hd, &aha152x_host_list, host_list) {
+		struct Scsi_Host *shost = container_of((void *)hd, struct Scsi_Host, hostdata);
+
+		is_complete(shost);
 	}
 }
 
@@ -1451,9 +1458,9 @@ static void run(void)
  * Interrupt handler
  *
  */
-static irqreturn_t intr(int irqno, void *dev_id, struct pt_regs *regs)
+static irqreturn_t intr(int irqno, void *dev_id)
 {
-	struct Scsi_Host *shpnt = lookup_irq(irqno);
+	struct Scsi_Host *shpnt = (struct Scsi_Host *)dev_id;
 	unsigned long flags;
 	unsigned char rev, dmacntrl0;
 
@@ -1492,7 +1499,7 @@ static irqreturn_t intr(int irqno, void *dev_id, struct pt_regs *regs)
 		HOSTDATA(shpnt)->service=1;
 
 		/* Poke the BH handler */
-		INIT_WORK(&aha152x_tq, (void *) run, NULL);
+		INIT_WORK(&aha152x_tq, run);
 		schedule_work(&aha152x_tq);
 	}
 	DO_UNLOCK(flags);
@@ -1565,6 +1572,9 @@ static void busfree_run(struct Scsi_Host *shpnt)
 #endif
 
 		if(DONE_SC->SCp.phase & check_condition) {
+			struct scsi_cmnd *cmd = HOSTDATA(shpnt)->done_SC;
+			struct aha152x_scdata *sc = SCDATA(cmd);
+
 #if 0
 			if(HOSTDATA(shpnt)->debug & debug_eh) {
 				printk(ERR_LEAD "received sense: ", CMDINFO(DONE_SC));
@@ -1573,13 +1583,13 @@ static void busfree_run(struct Scsi_Host *shpnt)
 #endif
 
 			/* restore old command */
-			memcpy((void *) DONE_SC->cmnd, (void *) DONE_SC->data_cmnd, sizeof(DONE_SC->data_cmnd));
-			DONE_SC->request_buffer  = DONE_SC->buffer;
-			DONE_SC->request_bufflen = DONE_SC->bufflen;
-			DONE_SC->use_sg          = DONE_SC->old_use_sg;
-			DONE_SC->cmd_len         = DONE_SC->old_cmd_len;
+			memcpy(cmd->cmnd, sc->cmnd, sizeof(sc->cmnd));
+			cmd->request_buffer  = sc->request_buffer;
+			cmd->request_bufflen = sc->request_bufflen;
+			cmd->use_sg          = sc->use_sg;
+			cmd->cmd_len         = sc->cmd_len;
 
-			DONE_SC->SCp.Status = 0x02;
+			cmd->SCp.Status = 0x02;
 
 			HOSTDATA(shpnt)->commands--;
 			if (!HOSTDATA(shpnt)->commands)
@@ -3932,16 +3942,17 @@ static int __init aha152x_init(void)
 #endif
 	}
 
-	return registered_count>0;
+	return 1;
 }
 
 static void __exit aha152x_exit(void)
 {
-	int i;
+	struct aha152x_hostdata *hd;
 
-	for(i=0; i<ARRAY_SIZE(setup); i++) {
-		aha152x_release(aha152x_host[i]);
-		aha152x_host[i]=NULL;
+	list_for_each_entry(hd, &aha152x_host_list, host_list) {
+		struct Scsi_Host *shost = container_of((void *)hd, struct Scsi_Host, hostdata);
+
+		aha152x_release(shost);
 	}
 }
 

@@ -311,7 +311,7 @@ static int core_sys_select(int n, fd_set __user *inp, fd_set __user *outp,
 {
 	fd_set_bits fds;
 	void *bits;
-	int ret, max_fdset;
+	int ret, max_fds;
 	unsigned int size;
 	struct fdtable *fdt;
 	/* Allocate small arguments on the stack to save memory and be faster */
@@ -321,13 +321,13 @@ static int core_sys_select(int n, fd_set __user *inp, fd_set __user *outp,
 	if (n < 0)
 		goto out_nofds;
 
-	/* max_fdset can increase, so grab it once to avoid race */
+	/* max_fds can increase, so grab it once to avoid race */
 	rcu_read_lock();
 	fdt = files_fdtable(current->files);
-	max_fdset = fdt->max_fdset;
+	max_fds = fdt->max_fds;
 	rcu_read_unlock();
-	if (n > max_fdset)
-		n = max_fdset;
+	if (n > max_fds)
+		n = max_fds;
 
 	/*
 	 * We need 6 bitmaps (in/out/ex for both incoming and outgoing),
@@ -546,37 +546,38 @@ struct poll_list {
 
 #define POLLFD_PER_PAGE  ((PAGE_SIZE-sizeof(struct poll_list)) / sizeof(struct pollfd))
 
-static void do_pollfd(unsigned int num, struct pollfd * fdpage,
-	poll_table ** pwait, int *count)
+/*
+ * Fish for pollable events on the pollfd->fd file descriptor. We're only
+ * interested in events matching the pollfd->events mask, and the result
+ * matching that mask is both recorded in pollfd->revents and returned. The
+ * pwait poll_table will be used by the fd-provided poll handler for waiting,
+ * if non-NULL.
+ */
+static inline unsigned int do_pollfd(struct pollfd *pollfd, poll_table *pwait)
 {
-	int i;
+	unsigned int mask;
+	int fd;
 
-	for (i = 0; i < num; i++) {
-		int fd;
-		unsigned int mask;
-		struct pollfd *fdp;
+	mask = 0;
+	fd = pollfd->fd;
+	if (fd >= 0) {
+		int fput_needed;
+		struct file * file;
 
-		mask = 0;
-		fdp = fdpage+i;
-		fd = fdp->fd;
-		if (fd >= 0) {
-			int fput_needed;
-			struct file * file = fget_light(fd, &fput_needed);
-			mask = POLLNVAL;
-			if (file != NULL) {
-				mask = DEFAULT_POLLMASK;
-				if (file->f_op && file->f_op->poll)
-					mask = file->f_op->poll(file, *pwait);
-				mask &= fdp->events | POLLERR | POLLHUP;
-				fput_light(file, fput_needed);
-			}
-			if (mask) {
-				*pwait = NULL;
-				(*count)++;
-			}
+		file = fget_light(fd, &fput_needed);
+		mask = POLLNVAL;
+		if (file != NULL) {
+			mask = DEFAULT_POLLMASK;
+			if (file->f_op && file->f_op->poll)
+				mask = file->f_op->poll(file, pwait);
+			/* Mask out unneeded events. */
+			mask &= pollfd->events | POLLERR | POLLHUP;
+			fput_light(file, fput_needed);
 		}
-		fdp->revents = mask;
 	}
+	pollfd->revents = mask;
+
+	return mask;
 }
 
 static int do_poll(unsigned int nfds,  struct poll_list *list,
@@ -594,11 +595,29 @@ static int do_poll(unsigned int nfds,  struct poll_list *list,
 		long __timeout;
 
 		set_current_state(TASK_INTERRUPTIBLE);
-		walk = list;
-		while(walk != NULL) {
-			do_pollfd( walk->len, walk->entries, &pt, &count);
-			walk = walk->next;
+		for (walk = list; walk != NULL; walk = walk->next) {
+			struct pollfd * pfd, * pfd_end;
+
+			pfd = walk->entries;
+			pfd_end = pfd + walk->len;
+			for (; pfd != pfd_end; pfd++) {
+				/*
+				 * Fish for events. If we found one, record it
+				 * and kill the poll_table, so we don't
+				 * needlessly register any other waiters after
+				 * this. They'll get immediately deregistered
+				 * when we break out and return.
+				 */
+				if (do_pollfd(pfd, pt)) {
+					count++;
+					pt = NULL;
+				}
+			}
 		}
+		/*
+		 * All waiters have already been registered, so don't provide
+		 * a poll_table to them on the next loop iteration.
+		 */
 		pt = NULL;
 		if (count || !*timeout || signal_pending(current))
 			break;
@@ -639,8 +658,6 @@ int do_sys_poll(struct pollfd __user *ufds, unsigned int nfds, s64 *timeout)
  	unsigned int i;
 	struct poll_list *head;
  	struct poll_list *walk;
-	struct fdtable *fdt;
-	int max_fdset;
 	/* Allocate small arguments on the stack to save memory and be
 	   faster - use long to make sure the buffer is aligned properly
 	   on 64 bit archs to avoid unaligned access */
@@ -648,11 +665,7 @@ int do_sys_poll(struct pollfd __user *ufds, unsigned int nfds, s64 *timeout)
 	struct poll_list *stack_pp = NULL;
 
 	/* Do a sanity check on nfds ... */
-	rcu_read_lock();
-	fdt = files_fdtable(current->files);
-	max_fdset = fdt->max_fdset;
-	rcu_read_unlock();
-	if (nfds > max_fdset && nfds > OPEN_MAX)
+	if (nfds > current->signal->rlim[RLIMIT_NOFILE].rlim_cur)
 		return -EINVAL;
 
 	poll_initwait(&table);
@@ -727,9 +740,9 @@ out_fds:
 asmlinkage long sys_poll(struct pollfd __user *ufds, unsigned int nfds,
 			long timeout_msecs)
 {
-	s64 timeout_jiffies = 0;
+	s64 timeout_jiffies;
 
-	if (timeout_msecs) {
+	if (timeout_msecs > 0) {
 #if HZ > 1000
 		/* We can only overflow if HZ > 1000 */
 		if (timeout_msecs / 1000 > (s64)0x7fffffffffffffffULL / (s64)HZ)
@@ -737,6 +750,9 @@ asmlinkage long sys_poll(struct pollfd __user *ufds, unsigned int nfds,
 		else
 #endif
 			timeout_jiffies = msecs_to_jiffies(timeout_msecs);
+	} else {
+		/* Infinite (< 0) or no (0) timeout */
+		timeout_jiffies = timeout_msecs;
 	}
 
 	return do_sys_poll(ufds, nfds, &timeout_jiffies);

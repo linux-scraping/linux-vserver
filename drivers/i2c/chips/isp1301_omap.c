@@ -21,7 +21,6 @@
 #undef	DEBUG
 #undef	VERBOSE
 
-#include <linux/config.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/init.h>
@@ -31,7 +30,7 @@
 #include <linux/usb_ch9.h>
 #include <linux/usb_gadget.h>
 #include <linux/usb.h>
-#include <linux/usb_otg.h>
+#include <linux/usb/otg.h>
 #include <linux/i2c.h>
 #include <linux/workqueue.h>
 
@@ -670,7 +669,7 @@ pulldown:
 	dump_regs(isp, "otg->isp1301");
 }
 
-static irqreturn_t omap_otg_irq(int irq, void *_isp, struct pt_regs *regs)
+static irqreturn_t omap_otg_irq(int irq, void *_isp)
 {
 	u16		otg_irq = OTG_IRQ_SRC_REG;
 	u32		otg_ctrl;
@@ -909,7 +908,7 @@ static int otg_bind(struct isp1301 *isp)
 
 	if (otg_dev)
 		status = request_irq(otg_dev->resource[1].start, omap_otg_irq,
-				SA_INTERRUPT, DRIVER_NAME, isp);
+				IRQF_DISABLED, DRIVER_NAME, isp);
 	else
 		status = -ENODEV;
 
@@ -1182,7 +1181,7 @@ isp1301_work(void *data)
 	isp->working = 0;
 }
 
-static irqreturn_t isp1301_irq(int irq, void *isp, struct pt_regs *regs)
+static irqreturn_t isp1301_irq(int irq, void *isp)
 {
 	isp1301_defer_work(isp, WORK_UPDATE_OTG);
 	return IRQ_HANDLED;
@@ -1579,7 +1578,7 @@ fail1:
 	}
 
 	status = request_irq(isp->irq, isp1301_irq,
-			SA_SAMPLE_RANDOM, DRIVER_NAME, isp);
+			IRQF_SAMPLE_RANDOM, DRIVER_NAME, isp);
 	if (status < 0) {
 		dev_dbg(&i2c->dev, "can't get IRQ %d, err %d\n",
 				isp->irq, status);

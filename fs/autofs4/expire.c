@@ -32,7 +32,7 @@ static inline int autofs4_can_expire(struct dentry *dentry,
 
 	if (!do_now) {
 		/* Too young to die */
-		if (time_after(ino->last_used + timeout, now))
+		if (!timeout || time_after(ino->last_used + timeout, now))
 			return 0;
 
 		/* update last_used here :-
@@ -174,6 +174,12 @@ static int autofs4_tree_busy(struct vfsmount *mnt,
 			struct autofs_info *ino = autofs4_dentry_ino(p);
 			unsigned int ino_count = atomic_read(&ino->count);
 
+			/*
+			 * Clean stale dentries below that have not been
+			 * invalidated after a mount fail during lookup
+			 */
+			d_invalidate(p);
+
 			/* allow for dget above and top is already dgot */
 			if (p == top)
 				ino_count += 2;
@@ -247,7 +253,7 @@ static struct dentry *autofs4_expire_direct(struct super_block *sb,
 	struct dentry *root = dget(sb->s_root);
 	int do_now = how & AUTOFS_EXP_IMMEDIATE;
 
-	if (!sbi->exp_timeout || !root)
+	if (!root)
 		return NULL;
 
 	now = jiffies;
@@ -287,7 +293,7 @@ static struct dentry *autofs4_expire_indirect(struct super_block *sb,
 	int do_now = how & AUTOFS_EXP_IMMEDIATE;
 	int exp_leaves = how & AUTOFS_EXP_LEAVES;
 
-	if ( !sbi->exp_timeout || !root )
+	if (!root)
 		return NULL;
 
 	now = jiffies;
@@ -370,8 +376,7 @@ next:
 		DPRINTK("returning %p %.*s",
 			expired, (int)expired->d_name.len, expired->d_name.name);
 		spin_lock(&dcache_lock);
-		list_del(&expired->d_parent->d_subdirs);
-		list_add(&expired->d_parent->d_subdirs, &expired->d_u.d_child);
+		list_move(&expired->d_parent->d_subdirs, &expired->d_u.d_child);
 		spin_unlock(&dcache_lock);
 		return expired;
 	}

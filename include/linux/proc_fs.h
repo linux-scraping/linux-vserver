@@ -1,10 +1,10 @@
 #ifndef _LINUX_PROC_FS_H
 #define _LINUX_PROC_FS_H
 
-#include <linux/config.h>
 #include <linux/slab.h>
 #include <linux/fs.h>
 #include <linux/spinlock.h>
+#include <linux/magic.h>
 #include <asm/atomic.h>
 
 /*
@@ -24,8 +24,6 @@
 enum {
 	PROC_ROOT_INO = 1,
 };
-
-#define PROC_SUPER_MAGIC 0x9fa0
 
 /*
  * This is not completely implemented yet. The idea is to
@@ -101,9 +99,8 @@ extern void proc_misc_init(void);
 
 struct mm_struct;
 
+void proc_flush_task(struct task_struct *task);
 struct dentry *proc_pid_lookup(struct inode *dir, struct dentry * dentry, struct nameidata *);
-struct dentry *proc_pid_unhash(struct task_struct *p);
-void proc_pid_flush(struct dentry *proc_dentry);
 int proc_pid_readdir(struct file * filp, void * dirent, filldir_t filldir);
 unsigned long task_vsize(struct mm_struct *);
 int task_statm(struct mm_struct *, int *, int *, int *, int *);
@@ -213,8 +210,7 @@ static inline void proc_net_remove(const char *name)
 #define proc_net_create(name, mode, info)	({ (void)(mode), NULL; })
 static inline void proc_net_remove(const char *name) {}
 
-static inline struct dentry *proc_pid_unhash(struct task_struct *p) { return NULL; }
-static inline void proc_pid_flush(struct dentry *proc_dentry) { }
+static inline void proc_flush_task(struct task_struct *task) { }
 
 static inline struct proc_dir_entry *create_proc_entry(const char *name,
 	mode_t mode, struct proc_dir_entry *parent) { return NULL; }
@@ -249,15 +245,22 @@ static inline void kclist_add(struct kcore_list *new, void *addr, size_t size)
 extern void kclist_add(struct kcore_list *, void *, size_t);
 #endif
 
+struct vx_info;
+struct nx_info;
+
+union proc_op {
+	int (*proc_get_link)(struct inode *, struct dentry **, struct vfsmount **);
+	int (*proc_read)(struct task_struct *task, char *page);
+	int (*proc_vs_read)(char *page);
+	int (*proc_vxi_read)(struct vx_info *vxi, char *page);
+	int (*proc_nxi_read)(struct nx_info *nxi, char *page);
+};
+
 struct proc_inode {
-	struct task_struct *task;
-	int type;
+	struct pid *pid;
 	int vx_flags;
-	union {
-		int (*proc_get_link)(struct inode *, struct dentry **, struct vfsmount **);
-		int (*proc_read)(struct task_struct *task, char *page);
-		int (*proc_vid_read)(int vid, char *page);
-	} op;
+	int fd;
+	union proc_op op;
 	struct proc_dir_entry *pde;
 	struct inode vfs_inode;
 };
@@ -271,5 +274,13 @@ static inline struct proc_dir_entry *PDE(const struct inode *inode)
 {
 	return PROC_I(inode)->pde;
 }
+
+struct proc_maps_private {
+	struct pid *pid;
+	struct task_struct *task;
+#ifdef CONFIG_MMU
+	struct vm_area_struct *tail_vma;
+#endif
+};
 
 #endif /* _LINUX_PROC_FS_H */

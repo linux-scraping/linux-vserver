@@ -28,11 +28,12 @@ ENTRY(swsusp_arch_suspend)
 	call swsusp_save
 	ret
 
-ENTRY(swsusp_arch_resume)
-	movl	$swsusp_pg_dir-__PAGE_OFFSET, %ecx
+ENTRY(restore_image)
+	movl	resume_pg_dir, %ecx
+	subl	$__PAGE_OFFSET, %ecx
 	movl	%ecx, %cr3
 
-	movl	pagedir_nosave, %edx
+	movl	restore_pblist, %edx
 	.p2align 4,,7
 
 copy_loop:
@@ -51,6 +52,10 @@ copy_loop:
 	.p2align 4,,7
 
 done:
+	/* go back to the original page tables */
+	movl	$swapper_pg_dir, %ecx
+	subl	$__PAGE_OFFSET, %ecx
+	movl	%ecx, %cr3
 	/* Flush TLB, including "global" things (vmalloc) */
 	movl	mmu_cr4_features, %eax
 	movl	%eax, %edx

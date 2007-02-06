@@ -3,10 +3,11 @@
  *
  *  Virtual Server: Context Virtualization
  *
- *  Copyright (C) 2004-2005  Herbert Pötzl
+ *  Copyright (C) 2004-2006  Herbert Pötzl
  *
  *  V0.01  broken out from limit.c
  *  V0.02  added utsname stuff
+ *  V0.03  changed vcmds to vxi arg
  *
  */
 
@@ -17,6 +18,7 @@
 #include <linux/vs_cvirt.h>
 #include <linux/vserver/switch.h>
 #include <linux/vserver/cvirt_cmd.h>
+//#include <linux/vserver/cacct_cmd.h>
 
 #include <asm/errno.h>
 #include <asm/uaccess.h>
@@ -97,32 +99,6 @@ out:
 }
 
 
-int vx_uts_virt_handler(struct ctl_table *ctl, int write, xid_t xid,
-	void **datap, size_t *lenp)
-{
-	switch (ctl->ctl_name) {
-	case KERN_OSTYPE:
-		*datap = vx_new_uts(sysname);
-		break;
-	case KERN_OSRELEASE:
-		*datap = vx_new_uts(release);
-		break;
-	case KERN_VERSION:
-		*datap = vx_new_uts(version);
-		break;
-	case KERN_NODENAME:
-		*datap = vx_new_uts(nodename);
-		break;
-	case KERN_DOMAINNAME:
-		*datap = vx_new_uts(domainname);
-		break;
-	}
-
-	return 0;
-}
-
-
-
 /*
  * Commands to do_syslog:
  *
@@ -191,70 +167,139 @@ int vx_do_syslog(int type, char __user *buf, int len)
 
 static char * vx_vhi_name(struct vx_info *vxi, int id)
 {
-	switch (id) {
-	case VHIN_CONTEXT:
+	struct nsproxy *nsproxy;
+	struct uts_namespace *uts;
+
+
+	if (id == VHIN_CONTEXT)
 		return vxi->vx_name;
+
+	nsproxy = vxi->vx_nsproxy;
+	if (!nsproxy)
+		return NULL;
+
+	uts = nsproxy->uts_ns;
+	if (!uts)
+		return NULL;
+
+	switch (id) {
 	case VHIN_SYSNAME:
-		return vxi->cvirt.utsname.sysname;
+		return uts->name.sysname;
 	case VHIN_NODENAME:
-		return vxi->cvirt.utsname.nodename;
+		return uts->name.nodename;
 	case VHIN_RELEASE:
-		return vxi->cvirt.utsname.release;
+		return uts->name.release;
 	case VHIN_VERSION:
-		return vxi->cvirt.utsname.version;
+		return uts->name.version;
 	case VHIN_MACHINE:
-		return vxi->cvirt.utsname.machine;
+		return uts->name.machine;
 	case VHIN_DOMAINNAME:
-		return vxi->cvirt.utsname.domainname;
+		return uts->name.domainname;
 	default:
 		return NULL;
 	}
 	return NULL;
 }
 
-int vc_set_vhi_name(uint32_t id, void __user *data)
+int vc_set_vhi_name(struct vx_info *vxi, void __user *data)
 {
-	struct vx_info *vxi;
-	struct vcmd_vhi_name_v0 vc_data;
-	char *name;
-
-	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
-	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
-		return -EFAULT;
-
-	vxi = lookup_vx_info(id);
-	if (!vxi)
-		return -ESRCH;
-
-	name = vx_vhi_name(vxi, vc_data.field);
-	if (name)
-		memcpy(name, vc_data.name, 65);
-	put_vx_info(vxi);
-	return (name ? 0 : -EFAULT);
-}
-
-int vc_get_vhi_name(uint32_t id, void __user *data)
-{
-	struct vx_info *vxi;
 	struct vcmd_vhi_name_v0 vc_data;
 	char *name;
 
 	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
-
-	vxi = lookup_vx_info(id);
-	if (!vxi)
-		return -ESRCH;
 
 	name = vx_vhi_name(vxi, vc_data.field);
 	if (!name)
-		goto out_put;
+		return -EINVAL;
+
+	memcpy(name, vc_data.name, 65);
+	return 0;
+}
+
+int vc_get_vhi_name(struct vx_info *vxi, void __user *data)
+{
+	struct vcmd_vhi_name_v0 vc_data;
+	char *name;
+
+	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
+		return -EFAULT;
+
+	name = vx_vhi_name(vxi, vc_data.field);
+	if (!name)
+		return -EINVAL;
 
 	memcpy(vc_data.name, name, 65);
 	if (copy_to_user (data, &vc_data, sizeof(vc_data)))
 		return -EFAULT;
-out_put:
-	put_vx_info(vxi);
-	return (name ? 0 : -EFAULT);
+	return 0;
 }
+
+
+int vc_virt_stat(struct vx_info *vxi, void __user *data)
+{
+	struct vcmd_virt_stat_v0 vc_data;
+	struct _vx_cvirt *cvirt = &vxi->cvirt;
+	struct timespec uptime;
+
+	do_posix_clock_monotonic_gettime(&uptime);
+	set_normalized_timespec(&uptime,
+		uptime.tv_sec - cvirt->bias_uptime.tv_sec,
+		uptime.tv_nsec - cvirt->bias_uptime.tv_nsec);
+
+	vc_data.offset = timeval_to_ns(&cvirt->bias_tv);
+	vc_data.uptime = timespec_to_ns(&uptime);
+	vc_data.nr_threads = atomic_read(&cvirt->nr_threads);
+	vc_data.nr_running = atomic_read(&cvirt->nr_running);
+	vc_data.nr_uninterruptible = atomic_read(&cvirt->nr_uninterruptible);
+	vc_data.nr_onhold = atomic_read(&cvirt->nr_onhold);
+	vc_data.nr_forks = atomic_read(&cvirt->total_forks);
+	vc_data.load[0] = cvirt->load[0];
+	vc_data.load[1] = cvirt->load[1];
+	vc_data.load[2] = cvirt->load[2];
+
+	if (copy_to_user (data, &vc_data, sizeof(vc_data)))
+		return -EFAULT;
+	return 0;
+}
+
+
+#ifdef CONFIG_VSERVER_VTIME
+
+/* virtualized time base */
+
+void vx_gettimeofday(struct timeval *tv)
+{
+	do_gettimeofday(tv);
+	if (!vx_flags(VXF_VIRT_TIME, 0))
+		return;
+
+	tv->tv_sec += current->vx_info->cvirt.bias_tv.tv_sec;
+	tv->tv_usec += current->vx_info->cvirt.bias_tv.tv_usec;
+
+	if (tv->tv_usec >= USEC_PER_SEC) {
+		tv->tv_sec++;
+		tv->tv_usec -= USEC_PER_SEC;
+	} else if (tv->tv_usec < 0) {
+		tv->tv_sec--;
+		tv->tv_usec += USEC_PER_SEC;
+	}
+}
+
+int vx_settimeofday(struct timespec *ts)
+{
+	struct timeval tv;
+
+	if (!vx_flags(VXF_VIRT_TIME, 0))
+		return do_settimeofday(ts);
+
+	do_gettimeofday(&tv);
+	current->vx_info->cvirt.bias_tv.tv_sec =
+		ts->tv_sec - tv.tv_sec;
+	current->vx_info->cvirt.bias_tv.tv_usec =
+		(ts->tv_nsec/NSEC_PER_USEC) - tv.tv_usec;
+	return 0;
+}
+
+#endif
+

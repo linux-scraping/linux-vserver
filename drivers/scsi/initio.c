@@ -118,7 +118,6 @@
 #include <linux/blkdev.h>
 #include <linux/spinlock.h>
 #include <linux/stat.h>
-#include <linux/config.h>
 #include <linux/kernel.h>
 #include <linux/proc_fs.h>
 #include <linux/string.h>
@@ -143,8 +142,6 @@
 #define i91u_MAXQUEUE		2
 #define i91u_REVID "Initio INI-9X00U/UW SCSI device driver; Revision: 1.04a"
 
-#define INI_VENDOR_ID   0x1101	/* Initio's PCI vendor ID       */
-#define DMX_VENDOR_ID	0x134a	/* Domex's PCI vendor ID	*/
 #define I950_DEVICE_ID	0x9500	/* Initio's inic-950 product ID   */
 #define I940_DEVICE_ID	0x9400	/* Initio's inic-940 product ID   */
 #define I935_DEVICE_ID	0x9401	/* Initio's inic-935 product ID   */
@@ -154,7 +151,6 @@
 static unsigned int i91u_debug = DEBUG_DEFAULT;
 #endif
 
-#define TULSZ(sz)     (sizeof(sz) / sizeof(sz[0]))
 #define TUL_RDWORD(x,y)         (short)(inl((int)((ULONG)((ULONG)x+(UCHAR)y)) ))
 
 typedef struct PCI_ID_Struc {
@@ -173,13 +169,16 @@ static int setup_debug = 0;
 
 static void i91uSCBPost(BYTE * pHcb, BYTE * pScb);
 
-static const PCI_ID i91u_pci_devices[] = {
-	{ INI_VENDOR_ID, I950_DEVICE_ID },
-	{ INI_VENDOR_ID, I940_DEVICE_ID },
-	{ INI_VENDOR_ID, I935_DEVICE_ID },
-	{ INI_VENDOR_ID, I920_DEVICE_ID },
-	{ DMX_VENDOR_ID, I920_DEVICE_ID },
+/* PCI Devices supported by this driver */
+static struct pci_device_id i91u_pci_devices[] = {
+	{ PCI_VENDOR_ID_INIT,  I950_DEVICE_ID, PCI_ANY_ID, PCI_ANY_ID, 0, 0, 0},
+	{ PCI_VENDOR_ID_INIT,  I940_DEVICE_ID, PCI_ANY_ID, PCI_ANY_ID, 0, 0, 0},
+	{ PCI_VENDOR_ID_INIT,  I935_DEVICE_ID, PCI_ANY_ID, PCI_ANY_ID, 0, 0, 0},
+	{ PCI_VENDOR_ID_INIT,  I920_DEVICE_ID, PCI_ANY_ID, PCI_ANY_ID, 0, 0, 0},
+	{ PCI_VENDOR_ID_DOMEX, I920_DEVICE_ID, PCI_ANY_ID, PCI_ANY_ID, 0, 0, 0},
+	{ }
 };
+MODULE_DEVICE_TABLE(pci, i91u_pci_devices);
 
 #define DEBUG_INTERRUPT 0
 #define DEBUG_QUEUE     0
@@ -2750,7 +2749,7 @@ int tul_wait_done_disc(HCS * pCurHcb)
 	return (tul_bad_seq(pCurHcb));
 }
 
-static irqreturn_t i91u_intr(int irqno, void *dev_id, struct pt_regs *regs)
+static irqreturn_t i91u_intr(int irqno, void *dev_id)
 {
 	struct Scsi_Host *dev = dev_id;
 	unsigned long flags;
@@ -2771,9 +2770,9 @@ static int tul_NewReturnNumberOfAdapters(void)
 
 	init_i91uAdapter_table();
 
-	for (i = 0; i < TULSZ(i91u_pci_devices); i++)
+	for (i = 0; i < ARRAY_SIZE(i91u_pci_devices); i++)
 	{
-		while ((pDev = pci_find_device(i91u_pci_devices[i].vendor_id, i91u_pci_devices[i].device_id, pDev)) != NULL) {
+		while ((pDev = pci_find_device(i91u_pci_devices[i].vendor, i91u_pci_devices[i].device, pDev)) != NULL) {
 			if (pci_enable_device(pDev))
 				continue;
 			pci_read_config_dword(pDev, 0x44, (u32 *) & dRegValue);
@@ -2829,7 +2828,7 @@ static int i91u_detect(struct scsi_host_template * tpnt)
 
 	for (; tul_num_scb >= MAX_TARGETS + 3; tul_num_scb--) {
 		i = tul_num_ch * tul_num_scb * sizeof(SCB);
-		if ((tul_scb = (SCB *) kmalloc(i, GFP_ATOMIC | GFP_DMA)) != NULL)
+		if ((tul_scb = kmalloc(i, GFP_ATOMIC | GFP_DMA)) != NULL)
 			break;
 	}
 	if (tul_scb == NULL) {
@@ -2869,7 +2868,7 @@ static int i91u_detect(struct scsi_host_template * tpnt)
 		hreg->sg_tablesize = TOTAL_SG_ENTRY;	/* Maximun support is 32 */
 
 		/* Initial tulip chip           */
-		ok = request_irq(pHCB->HCS_Intr, i91u_intr, SA_INTERRUPT | SA_SHIRQ, "i91u", hreg);
+		ok = request_irq(pHCB->HCS_Intr, i91u_intr, IRQF_DISABLED | IRQF_SHARED, "i91u", hreg);
 		if (ok < 0) {
 			printk(KERN_WARNING "i91u: unable to request IRQ %d\n\n", pHCB->HCS_Intr);
 			return 0;

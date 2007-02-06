@@ -116,7 +116,7 @@ struct snd_card_als4000 {
 #endif
 };
 
-static struct pci_device_id snd_als4000_ids[] __devinitdata = {
+static struct pci_device_id snd_als4000_ids[] = {
 	{ 0x4005, 0x4000, PCI_ANY_ID, PCI_ANY_ID, 0, 0, 0, },   /* ALS4000 */
 	{ 0, }
 };
@@ -385,7 +385,7 @@ static snd_pcm_uframes_t snd_als4000_playback_pointer(struct snd_pcm_substream *
  * SB IRQ status.
  * And do we *really* need the lock here for *reading* SB_DSP4_IRQSTATUS??
  * */
-static irqreturn_t snd_als4000_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t snd_als4000_interrupt(int irq, void *dev_id)
 {
 	struct snd_sb *chip = dev_id;
 	unsigned gcr_status;
@@ -399,7 +399,7 @@ static irqreturn_t snd_als4000_interrupt(int irq, void *dev_id, struct pt_regs *
 	if ((gcr_status & 0x40) && (chip->capture_substream)) /* capturing */
 		snd_pcm_period_elapsed(chip->capture_substream);
 	if ((gcr_status & 0x10) && (chip->rmidi)) /* MPU401 interrupt */
-		snd_mpu401_uart_interrupt(irq, chip->rmidi->private_data, regs);
+		snd_mpu401_uart_interrupt(irq, chip->rmidi->private_data);
 	/* release the gcr */
 	outb(gcr_status, chip->alt_port + 0xe);
 	
@@ -746,8 +746,8 @@ static int __devinit snd_card_als4000_probe(struct pci_dev *pci,
 		card->shortname, chip->alt_port, chip->irq);
 
 	if ((err = snd_mpu401_uart_new( card, 0, MPU401_HW_ALS4000,
-				        gcr+0x30, 1, pci->irq, 0,
-				        &chip->rmidi)) < 0) {
+				        gcr+0x30, MPU401_INFO_INTEGRATED,
+					pci->irq, 0, &chip->rmidi)) < 0) {
 		printk(KERN_ERR "als4000: no MPU-401 device at 0x%lx?\n", gcr+0x30);
 		goto out_err;
 	}
@@ -804,9 +804,9 @@ static int snd_als4000_suspend(struct pci_dev *pci, pm_message_t state)
 	snd_pcm_suspend_all(chip->pcm);
 	snd_sbmixer_suspend(chip);
 
-	pci_set_power_state(pci, PCI_D3hot);
 	pci_disable_device(pci);
 	pci_save_state(pci);
+	pci_set_power_state(pci, pci_choose_state(pci, state));
 	return 0;
 }
 
@@ -816,9 +816,14 @@ static int snd_als4000_resume(struct pci_dev *pci)
 	struct snd_card_als4000 *acard = card->private_data;
 	struct snd_sb *chip = acard->chip;
 
-	pci_restore_state(pci);
-	pci_enable_device(pci);
 	pci_set_power_state(pci, PCI_D0);
+	pci_restore_state(pci);
+	if (pci_enable_device(pci) < 0) {
+		printk(KERN_ERR "als4000: pci_enable_device failed, "
+		       "disabling device\n");
+		snd_card_disconnect(card);
+		return -EIO;
+	}
 	pci_set_master(pci);
 
 	snd_als4000_configure(chip);

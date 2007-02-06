@@ -28,9 +28,8 @@
  */
 
 #define IOC3_NAME	"ioc3-eth"
-#define IOC3_VERSION	"2.6.3-3"
+#define IOC3_VERSION	"2.6.3-4"
 
-#include <linux/config.h>
 #include <linux/init.h>
 #include <linux/delay.h>
 #include <linux/kernel.h>
@@ -58,7 +57,6 @@
 #include <net/ip.h>
 
 #include <asm/byteorder.h>
-#include <asm/checksum.h>
 #include <asm/io.h>
 #include <asm/pgtable.h>
 #include <asm/uaccess.h>
@@ -116,7 +114,7 @@ static inline void ioc3_stop(struct ioc3_private *ip);
 static void ioc3_init(struct net_device *dev);
 
 static const char ioc3_str[] = "IOC3 Ethernet";
-static struct ethtool_ops ioc3_ethtool_ops;
+static const struct ethtool_ops ioc3_ethtool_ops;
 
 /* We use this to acquire receive skb's that we can DMA directly into. */
 
@@ -145,7 +143,7 @@ static inline struct sk_buff * ioc3_alloc_skb(unsigned long length,
 static inline unsigned long ioc3_map(void *ptr, unsigned long vdev)
 {
 #ifdef CONFIG_SGI_IP27
-	vdev <<= 58;   /* Shift to PCI64_ATTR_VIRTUAL */
+	vdev <<= 57;   /* Shift to PCI64_ATTR_VIRTUAL */
 
 	return vdev | (0xaUL << PCI64_ATTR_TARG_SHFT) | PCI64_ATTR_PREF |
 	       ((unsigned long)ptr & TO_PHYS_MASK);
@@ -751,7 +749,7 @@ static void ioc3_error(struct ioc3_private *ip, u32 eisr)
 
 /* The interrupt handler does all of the Rx thread work and cleans up
    after the Tx thread.  */
-static irqreturn_t ioc3_interrupt(int irq, void *_dev, struct pt_regs *regs)
+static irqreturn_t ioc3_interrupt(int irq, void *_dev)
 {
 	struct net_device *dev = (struct net_device *)_dev;
 	struct ioc3_private *ip = netdev_priv(dev);
@@ -1018,7 +1016,7 @@ static void ioc3_init(struct net_device *dev)
 	struct ioc3_private *ip = netdev_priv(dev);
 	struct ioc3 *ioc3 = ip->regs;
 
-	del_timer(&ip->ioc3_timer);		/* Kill if running	*/
+	del_timer_sync(&ip->ioc3_timer);	/* Kill if running	*/
 
 	ioc3_w_emcr(EMCR_RST);			/* Reset		*/
 	(void) ioc3_r_emcr();			/* Flush WB		*/
@@ -1064,7 +1062,7 @@ static int ioc3_open(struct net_device *dev)
 {
 	struct ioc3_private *ip = netdev_priv(dev);
 
-	if (request_irq(dev->irq, ioc3_interrupt, SA_SHIRQ, ioc3_str, dev)) {
+	if (request_irq(dev->irq, ioc3_interrupt, IRQF_SHARED, ioc3_str, dev)) {
 		printk(KERN_ERR "%s: Can't get irq %d\n", dev->name, dev->irq);
 
 		return -EAGAIN;
@@ -1082,7 +1080,7 @@ static int ioc3_close(struct net_device *dev)
 {
 	struct ioc3_private *ip = netdev_priv(dev);
 
-	del_timer(&ip->ioc3_timer);
+	del_timer_sync(&ip->ioc3_timer);
 
 	netif_stop_queue(dev);
 
@@ -1388,7 +1386,7 @@ static int ioc3_start_xmit(struct sk_buff *skb, struct net_device *dev)
 	 * MAC header which should not be summed and the TCP/UDP pseudo headers
 	 * manually.
 	 */
-	if (skb->ip_summed == CHECKSUM_HW) {
+	if (skb->ip_summed == CHECKSUM_PARTIAL) {
 		int proto = ntohs(skb->nh.iph->protocol);
 		unsigned int csoff;
 		struct iphdr *ih = skb->nh.iph;
@@ -1581,7 +1579,7 @@ static u32 ioc3_get_link(struct net_device *dev)
 	return rc;
 }
 
-static struct ethtool_ops ioc3_ethtool_ops = {
+static const struct ethtool_ops ioc3_ethtool_ops = {
 	.get_drvinfo		= ioc3_get_drvinfo,
 	.get_settings		= ioc3_get_settings,
 	.set_settings		= ioc3_set_settings,
@@ -1612,8 +1610,6 @@ static void ioc3_set_multicast_list(struct net_device *dev)
 	netif_stop_queue(dev);				/* Lock out others. */
 
 	if (dev->flags & IFF_PROMISC) {			/* Set promiscuous.  */
-		/* Unconditionally log net taps.  */
-		printk(KERN_INFO "%s: Promiscuous mode enabled.\n", dev->name);
 		ip->emcr |= EMCR_PROMISC;
 		ioc3_w_emcr(ip->emcr);
 		(void) ioc3_r_emcr();

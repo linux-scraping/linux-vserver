@@ -85,8 +85,8 @@
 #define OCFS2_CLEAR_INCOMPAT_FEATURE(sb,mask)			\
 	OCFS2_SB(sb)->s_feature_incompat &= ~(mask)
 
-#define OCFS2_FEATURE_COMPAT_SUPP	0
-#define OCFS2_FEATURE_INCOMPAT_SUPP	0
+#define OCFS2_FEATURE_COMPAT_SUPP	OCFS2_FEATURE_COMPAT_BACKUP_SB
+#define OCFS2_FEATURE_INCOMPAT_SUPP	OCFS2_FEATURE_INCOMPAT_LOCAL_MOUNT
 #define OCFS2_FEATURE_RO_COMPAT_SUPP	0
 
 /*
@@ -96,6 +96,32 @@
  */
 #define OCFS2_FEATURE_INCOMPAT_HEARTBEAT_DEV	0x0002
 
+/*
+ * tunefs sets this incompat flag before starting the resize and clears it
+ * at the end. This flag protects users from inadvertently mounting the fs
+ * after an aborted run without fsck-ing.
+ */
+#define OCFS2_FEATURE_INCOMPAT_RESIZE_INPROG    0x0004
+
+/* Used to denote a non-clustered volume */
+#define OCFS2_FEATURE_INCOMPAT_LOCAL_MOUNT	0x0008
+
+/* Support for sparse allocation in b-trees */
+#define OCFS2_FEATURE_INCOMPAT_SPARSE_ALLOC	0x0010
+
+/*
+ * backup superblock flag is used to indicate that this volume
+ * has backup superblocks.
+ */
+#define OCFS2_FEATURE_COMPAT_BACKUP_SB		0x0001
+
+/* The byte offset of the first backup block will be 1G.
+ * The following will be 4G, 16G, 64G, 256G and 1T.
+ */
+#define OCFS2_BACKUP_SB_START			1 << 30
+
+/* the max backup superblock nums */
+#define OCFS2_MAX_BACKUP_SUPERBLOCKS	6
 
 /*
  * Flags on ocfs2_dinode.i_flags
@@ -113,6 +139,30 @@
 #define OCFS2_HEARTBEAT_FL	(0x00000200)	/* Heartbeat area */
 #define OCFS2_CHAIN_FL		(0x00000400)	/* Chain allocator */
 #define OCFS2_DEALLOC_FL	(0x00000800)	/* Truncate log */
+
+/* Inode attributes, keep in sync with EXT2 */
+#define OCFS2_SECRM_FL		(0x00000001)	/* Secure deletion */
+#define OCFS2_UNRM_FL		(0x00000002)	/* Undelete */
+#define OCFS2_COMPR_FL		(0x00000004)	/* Compress file */
+#define OCFS2_SYNC_FL		(0x00000008)	/* Synchronous updates */
+#define OCFS2_IMMUTABLE_FL	(0x00000010)	/* Immutable file */
+#define OCFS2_APPEND_FL		(0x00000020)	/* writes to file may only append */
+#define OCFS2_NODUMP_FL		(0x00000040)	/* do not dump file */
+#define OCFS2_NOATIME_FL	(0x00000080)	/* do not update atime */
+#define OCFS2_DIRSYNC_FL	(0x00010000)	/* dirsync behaviour (directories only) */
+
+#define OCFS2_BARRIER_FL	(0x04000000)	/* Barrier for chroot() */
+#define OCFS2_IUNLINK_FL	(0x08000000)	/* Immutable unlink */
+
+#define OCFS2_FL_VISIBLE	(0x000100FF)	/* User visible flags */
+#define OCFS2_FL_MODIFIABLE	(0x000100FF)	/* User modifiable flags */
+#define OCFS2_FL_MASK		(0x0F0100FF)
+
+/*
+ * ioctl commands
+ */
+#define OCFS2_IOC_GETFLAGS	_IOR('f', 1, long)
+#define OCFS2_IOC_SETFLAGS	_IOW('f', 2, long)
 
 /*
  * Journal Flags (ocfs2_dinode.id1.journal1.i_flags)
@@ -399,7 +449,9 @@ struct ocfs2_dinode {
 	__le32 i_atime_nsec;
 	__le32 i_ctime_nsec;
 	__le32 i_mtime_nsec;
-/*70*/	__le64 i_reserved1[9];
+	__le32 i_attr;
+	__le32 i_reserved1;
+/*70*/	__le64 i_reserved2[8];
 /*B8*/	union {
 		__le64 i_pad1;		/* Generic way to refer to this
 					   64bit union */
@@ -532,6 +584,20 @@ static inline int ocfs2_truncate_recs_per_inode(struct super_block *sb)
 
 	return size / sizeof(struct ocfs2_truncate_rec);
 }
+
+static inline u64 ocfs2_backup_super_blkno(struct super_block *sb, int index)
+{
+	u64 offset = OCFS2_BACKUP_SB_START;
+
+	if (index >= 0 && index < OCFS2_MAX_BACKUP_SUPERBLOCKS) {
+		offset <<= (2 * index);
+		offset >>= sb->s_blocksize_bits;
+		return offset;
+	}
+
+	return 0;
+
+}
 #else
 static inline int ocfs2_fast_symlink_chars(int blocksize)
 {
@@ -596,6 +662,19 @@ static inline int ocfs2_truncate_recs_per_inode(int blocksize)
 		offsetof(struct ocfs2_dinode, id2.i_dealloc.tl_recs);
 
 	return size / sizeof(struct ocfs2_truncate_rec);
+}
+
+static inline uint64_t ocfs2_backup_super_blkno(int blocksize, int index)
+{
+	uint64_t offset = OCFS2_BACKUP_SB_START;
+
+	if (index >= 0 && index < OCFS2_MAX_BACKUP_SUPERBLOCKS) {
+		offset <<= (2 * index);
+		offset /= blocksize;
+		return offset;
+	}
+
+	return 0;
 }
 #endif  /* __KERNEL__ */
 

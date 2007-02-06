@@ -1,5 +1,5 @@
 /*
- * arch/sh/boards/dreamcast/dma-pvr2.c
+ * arch/sh/drivers/dma/dma-pvr2.c
  *
  * NEC PowerVR 2 (Dreamcast) DMA support
  *
@@ -18,10 +18,10 @@
 #include <asm/dma.h>
 #include <asm/io.h>
 
-static unsigned int xfer_complete = 0;
-static int count = 0;
+static unsigned int xfer_complete;
+static int count;
 
-static irqreturn_t pvr2_dma_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t pvr2_dma_interrupt(int irq, void *dev_id)
 {
 	if (get_dma_residue(PVR2_CASCADE_CHAN)) {
 		printk(KERN_WARNING "DMA: SH DMAC did not complete transfer "
@@ -70,7 +70,7 @@ static int pvr2_xfer_dma(struct dma_channel *chan)
 static struct irqaction pvr2_dma_irq = {
 	.name		= "pvr2 DMA handler",
 	.handler	= pvr2_dma_interrupt,
-	.flags		= SA_INTERRUPT,
+	.flags		= IRQF_DISABLED,
 };
 
 static struct dma_ops pvr2_dma_ops = {
@@ -107,4 +107,3 @@ module_exit(pvr2_dma_exit);
 MODULE_AUTHOR("Paul Mundt <lethal@linux-sh.org>");
 MODULE_DESCRIPTION("NEC PowerVR 2 DMA driver");
 MODULE_LICENSE("GPL");
-

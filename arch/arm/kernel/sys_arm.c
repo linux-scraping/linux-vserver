@@ -279,7 +279,7 @@ out:
 	return error;
 }
 
-long execve(const char *filename, char **argv, char **envp)
+int kernel_execve(const char *filename, char *const argv[], char *const envp[])
 {
 	struct pt_regs regs;
 	int ret;
@@ -317,7 +317,7 @@ long execve(const char *filename, char **argv, char **envp)
  out:
 	return ret;
 }
-EXPORT_SYMBOL(execve);
+EXPORT_SYMBOL(kernel_execve);
 
 /*
  * Since loff_t is a 64 bit type we avoid a lot of ABI hastle
@@ -327,4 +327,17 @@ asmlinkage long sys_arm_fadvise64_64(int fd, int advice,
 				     loff_t offset, loff_t len)
 {
 	return sys_fadvise64_64(fd, offset, len, advice);
+}
+
+/*
+ * Yet more syscall fsckage - we can't fit sys_sync_file_range's
+ * arguments into the available registers with EABI.  So, let's
+ * create an ARM specific syscall for this which has _sane_
+ * arguments.  (This incidentally also has an ABI-independent
+ * argument layout.)
+ */
+asmlinkage long sys_arm_sync_file_range(int fd, unsigned int flags,
+					loff_t offset, loff_t nbytes)
+{
+	return sys_sync_file_range(fd, offset, nbytes, flags);
 }

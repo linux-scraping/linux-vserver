@@ -8,9 +8,6 @@
  * 2005-10-07 Keith Owens <kaos@sgi.com>
  *	      Add notify_die() hooks.
  */
-#define __KERNEL_SYSCALLS__	/* see <asm/unistd.h> */
-#include <linux/config.h>
-
 #include <linux/cpu.h>
 #include <linux/pm.h>
 #include <linux/elf.h>
@@ -108,7 +105,8 @@ show_regs (struct pt_regs *regs)
 	unsigned long ip = regs->cr_iip + ia64_psr(regs)->ri;
 
 	print_modules();
-	printk("\nPid: %d, CPU %d, comm: %20s\n", current->pid, smp_processor_id(), current->comm);
+	printk("\nPid: %d[#%u], CPU %d, comm: %20s\n",
+		current->pid, current->xid, smp_processor_id(), current->comm);
 	printk("psr : %016lx ifs : %016lx ip  : [<%016lx>]    %s\n",
 	       regs->cr_ipsr, regs->cr_ifs, ip, print_tainted());
 	print_symbol("ip is at %s\n", ip);
@@ -271,10 +269,16 @@ cpu_idle (void)
 
 	/* endless idle loop with no priority at all */
 	while (1) {
-		if (can_do_pal_halt)
-			clear_thread_flag(TIF_POLLING_NRFLAG);
-		else
-			set_thread_flag(TIF_POLLING_NRFLAG);
+		if (can_do_pal_halt) {
+			current_thread_info()->status &= ~TS_POLLING;
+			/*
+			 * TS_POLLING-cleared state must be visible before we
+			 * test NEED_RESCHED:
+			 */
+			smp_mb();
+		} else {
+			current_thread_info()->status |= TS_POLLING;
+		}
 
 		if (!need_resched()) {
 			void (*idle)(void);
@@ -691,7 +695,8 @@ kernel_thread (int (*fn)(void *), void *arg, unsigned long flags)
 	regs.sw.ar_fpsr = regs.pt.ar_fpsr = ia64_getreg(_IA64_REG_AR_FPSR);
 	regs.sw.ar_bspstore = (unsigned long) current + IA64_RBS_OFFSET;
 	regs.sw.pr = (1 << PRED_KERNEL_STACK);
-	return do_fork(flags | CLONE_VM | CLONE_UNTRACED, 0, &regs.pt, 0, NULL, NULL);
+	return do_fork(flags | CLONE_VM | CLONE_UNTRACED | CLONE_KTHREAD,
+		0, &regs.pt, 0, NULL, NULL);
 }
 EXPORT_SYMBOL(kernel_thread);
 

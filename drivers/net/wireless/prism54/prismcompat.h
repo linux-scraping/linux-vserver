@@ -1,4 +1,4 @@
-/*  
+/*
  *  (C) 2004 Margit Schubert-While <margitsw@t-online.de>
  *
  *  This program is free software; you can redistribute it and/or modify
@@ -16,7 +16,7 @@
  *
  */
 
-/*  
+/*
  *	Compatibility header file to aid support of different kernel versions
  */
 
@@ -29,7 +29,6 @@
 
 #include <linux/device.h>
 #include <linux/firmware.h>
-#include <linux/config.h>
 #include <linux/moduleparam.h>
 #include <linux/workqueue.h>
 #include <linux/compiler.h>

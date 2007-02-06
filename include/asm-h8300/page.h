@@ -1,15 +1,13 @@
 #ifndef _H8300_PAGE_H
 #define _H8300_PAGE_H
 
-#include <linux/config.h>
+#ifdef __KERNEL__
 
 /* PAGE_SHIFT determines the page size */
 
 #define PAGE_SHIFT	(12)
 #define PAGE_SIZE	(1UL << PAGE_SHIFT)
 #define PAGE_MASK	(~(PAGE_SIZE-1))
-
-#ifdef __KERNEL__
 
 #include <asm/setup.h>
 
@@ -67,7 +65,6 @@ extern unsigned long memory_end;
 
 #define MAP_NR(addr)		(((unsigned long)(addr)-PAGE_OFFSET) >> PAGE_SHIFT)
 #define virt_to_page(addr)	(mem_map + (((unsigned long)(addr)-PAGE_OFFSET) >> PAGE_SHIFT))
-#define virt_to_page(addr)	(mem_map + (((unsigned long)(addr)-PAGE_OFFSET) >> PAGE_SHIFT))
 #define page_to_virt(page)	((((page) - mem_map) << PAGE_SHIFT) + PAGE_OFFSET)
 #define pfn_valid(page)	        (page < max_mapnr)
 
@@ -78,9 +75,9 @@ extern unsigned long memory_end;
 
 #endif /* __ASSEMBLY__ */
 
-#endif /* __KERNEL__ */
-
 #include <asm-generic/memory_model.h>
 #include <asm-generic/page.h>
+
+#endif /* __KERNEL__ */
 
 #endif /* _H8300_PAGE_H */

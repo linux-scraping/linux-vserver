@@ -80,7 +80,7 @@ static LIST_HEAD(opslist);
 static int num_ops;
 static DEFINE_MUTEX(ops_mutex);
 #ifdef CONFIG_PROC_FS
-static struct snd_info_entry *info_entry = NULL;
+static struct snd_info_entry *info_entry;
 #endif
 
 /*
@@ -90,7 +90,6 @@ static int snd_seq_device_free(struct snd_seq_device *dev);
 static int snd_seq_device_dev_free(struct snd_device *device);
 static int snd_seq_device_dev_register(struct snd_device *device);
 static int snd_seq_device_dev_disconnect(struct snd_device *device);
-static int snd_seq_device_dev_unregister(struct snd_device *device);
 
 static int init_device(struct snd_seq_device *dev, struct ops_list *ops);
 static int free_device(struct snd_seq_device *dev, struct ops_list *ops);
@@ -189,7 +188,6 @@ int snd_seq_device_new(struct snd_card *card, int device, char *id, int argsize,
 		.dev_free = snd_seq_device_dev_free,
 		.dev_register = snd_seq_device_dev_register,
 		.dev_disconnect = snd_seq_device_dev_disconnect,
-		.dev_unregister = snd_seq_device_dev_unregister
 	};
 
 	if (result)
@@ -309,15 +307,6 @@ static int snd_seq_device_dev_disconnect(struct snd_device *device)
 }
 
 /*
- * unregister the existing device
- */
-static int snd_seq_device_dev_unregister(struct snd_device *device)
-{
-	struct snd_seq_device *dev = device->device_data;
-	return snd_seq_device_free(dev);
-}
-
-/*
  * register device driver
  * id = driver id
  * entry = driver operators - duplicated to each instance
@@ -372,14 +361,19 @@ static struct ops_list * create_driver(char *id)
 {
 	struct ops_list *ops;
 
-	ops = kmalloc(sizeof(*ops), GFP_KERNEL);
+	ops = kzalloc(sizeof(*ops), GFP_KERNEL);
 	if (ops == NULL)
 		return ops;
-	memset(ops, 0, sizeof(*ops));
 
 	/* set up driver entry */
 	strlcpy(ops->id, id, sizeof(ops->id));
 	mutex_init(&ops->reg_mutex);
+	/*
+	 * The ->reg_mutex locking rules are per-driver, so we create
+	 * separate per-driver lock classes:
+	 */
+	lockdep_set_class(&ops->reg_mutex, (struct lock_class_key *)id);
+
 	ops->driver = DRIVER_EMPTY;
 	INIT_LIST_HEAD(&ops->dev_list);
 	/* lock this instance */
@@ -555,7 +549,6 @@ static int __init alsa_seq_device_init(void)
 	if (info_entry == NULL)
 		return -ENOMEM;
 	info_entry->content = SNDRV_INFO_CONTENT_TEXT;
-	info_entry->c.text.read_size = 2048;
 	info_entry->c.text.read = snd_seq_device_info;
 	if (snd_info_register(info_entry) < 0) {
 		snd_info_free_entry(info_entry);
@@ -569,7 +562,7 @@ static void __exit alsa_seq_device_exit(void)
 {
 	remove_drivers();
 #ifdef CONFIG_PROC_FS
-	snd_info_unregister(info_entry);
+	snd_info_free_entry(info_entry);
 #endif
 	if (num_ops)
 		snd_printk(KERN_ERR "drivers not released (%d)\n", num_ops);

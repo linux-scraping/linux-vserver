@@ -1,5 +1,5 @@
 /*
- * drivers/watchdog/ixp2000_wdt.c
+ * drivers/char/watchdog/ixp2000_wdt.c
  *
  * Watchdog driver for Intel IXP2000 network processors
  *
@@ -16,7 +16,6 @@
  * warranty of any kind, whether express or implied.
  */
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/moduleparam.h>
 #include <linux/types.h>
@@ -108,7 +107,7 @@ static int
 ixp2000_wdt_ioctl(struct inode *inode, struct file *file, unsigned int cmd,
 			unsigned long arg)
 {
-	int ret = -ENOIOCTLCMD;
+	int ret = -ENOTTY;
 	int time;
 
 	switch (cmd) {
@@ -169,7 +168,7 @@ ixp2000_wdt_release(struct inode *inode, struct file *file)
 }
 
 
-static struct file_operations ixp2000_wdt_fops =
+static const struct file_operations ixp2000_wdt_fops =
 {
 	.owner		= THIS_MODULE,
 	.llseek		= no_llseek,

@@ -6,7 +6,6 @@
  * http://www.hamilton.ie/net/htcp3.pdf
  */
 
-#include <linux/config.h>
 #include <linux/mm.h>
 #include <linux/module.h>
 #include <net/tcp.h>
@@ -24,15 +23,15 @@ module_param(use_bandwidth_switch, int, 0644);
 MODULE_PARM_DESC(use_bandwidth_switch, "turn on/off bandwidth switcher");
 
 struct htcp {
-	u16	alpha;		/* Fixed point arith, << 7 */
+	u32	alpha;		/* Fixed point arith, << 7 */
 	u8	beta;           /* Fixed point arith, << 7 */
 	u8	modeswitch;     /* Delay modeswitch until we had at least one congestion event */
-	u32	last_cong;	/* Time since last congestion event end */
-	u32	undo_last_cong;
 	u16	pkts_acked;
 	u32	packetcount;
 	u32	minRTT;
 	u32	maxRTT;
+	u32	last_cong;	/* Time since last congestion event end */
+	u32	undo_last_cong;
 
 	u32	undo_maxRTT;
 	u32	undo_old_maxB;
@@ -246,14 +245,6 @@ static void htcp_cong_avoid(struct sock *sk, u32 ack, u32 rtt,
 	}
 }
 
-/* Lower bound on congestion window. */
-static u32 htcp_min_cwnd(struct sock *sk)
-{
-	const struct tcp_sock *tp = tcp_sk(sk);
-	return tp->snd_ssthresh;
-}
-
-
 static void htcp_init(struct sock *sk)
 {
 	struct htcp *ca = inet_csk_ca(sk);
@@ -285,7 +276,6 @@ static void htcp_state(struct sock *sk, u8 new_state)
 static struct tcp_congestion_ops htcp = {
 	.init		= htcp_init,
 	.ssthresh	= htcp_recalc_ssthresh,
-	.min_cwnd	= htcp_min_cwnd,
 	.cong_avoid	= htcp_cong_avoid,
 	.set_state	= htcp_state,
 	.undo_cwnd	= htcp_cwnd_undo,
@@ -296,7 +286,7 @@ static struct tcp_congestion_ops htcp = {
 
 static int __init htcp_register(void)
 {
-	BUG_ON(sizeof(struct htcp) > ICSK_CA_PRIV_SIZE);
+	BUILD_BUG_ON(sizeof(struct htcp) > ICSK_CA_PRIV_SIZE);
 	BUILD_BUG_ON(BETA_MIN >= BETA_MAX);
 	return tcp_register_congestion_control(&htcp);
 }

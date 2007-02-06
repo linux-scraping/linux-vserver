@@ -18,7 +18,7 @@
 #include <linux/ptrace.h>
 #include <linux/security.h>
 #include <linux/signal.h>
-#include <linux/vs_cvirt.h>
+#include <linux/vs_context.h>
 
 #include <asm/pgtable.h>
 #include <asm/uaccess.h>
@@ -29,7 +29,7 @@
  *
  * Must be called with the tasklist lock write-held.
  */
-void __ptrace_link(task_t *child, task_t *new_parent)
+void __ptrace_link(struct task_struct *child, struct task_struct *new_parent)
 {
 	BUG_ON(!list_empty(&child->ptrace_list));
 	if (child->parent == new_parent)
@@ -47,7 +47,7 @@ void __ptrace_link(task_t *child, task_t *new_parent)
  * TASK_TRACED, resume it now.
  * Requires that irqs be disabled.
  */
-void ptrace_untrace(task_t *child)
+void ptrace_untrace(struct task_struct *child)
 {
 	spin_lock(&child->sighand->siglock);
 	if (child->state == TASK_TRACED) {
@@ -66,7 +66,7 @@ void ptrace_untrace(task_t *child)
  *
  * Must be called with the tasklist lock write-held.
  */
-void __ptrace_unlink(task_t *child)
+void __ptrace_unlink(struct task_struct *child)
 {
 	BUG_ON(!child->ptrace);
 
@@ -121,8 +121,18 @@ int ptrace_check_attach(struct task_struct *child, int kill)
 
 static int may_attach(struct task_struct *task)
 {
-	if (!task->mm)
-		return -EPERM;
+	/* May we inspect the given task?
+	 * This check is used both for attaching with ptrace
+	 * and for allowing access to sensitive information in /proc.
+	 *
+	 * ptrace_attach denies several cases that /proc allows
+	 * because setting up the necessary parent/child relationship
+	 * or halting the specified task is impossible.
+	 */
+	int dumpable = 0;
+	/* Don't let security modules deny introspection */
+	if (task == current)
+		return 0;
 	if (((current->uid != task->euid) ||
 	     (current->uid != task->suid) ||
 	     (current->uid != task->uid) ||
@@ -131,8 +141,15 @@ static int may_attach(struct task_struct *task)
 	     (current->gid != task->gid)) && !capable(CAP_SYS_PTRACE))
 		return -EPERM;
 	smp_rmb();
-	if (!task->mm->dumpable && !capable(CAP_SYS_PTRACE))
+	if (task->mm)
+		dumpable = task->mm->dumpable;
+	if (!dumpable && !capable(CAP_SYS_PTRACE))
 		return -EPERM;
+	if (!vx_check(task->xid, VS_ADMIN_P|VS_IDENT))
+		return -EPERM;
+	if (!vx_check(task->xid, VS_IDENT) &&
+		!task_vx_flags(task, VXF_STATE_ADMIN, 0))
+		return -EACCES;
 
 	return security_ptrace(current, task);
 }
@@ -177,6 +194,8 @@ repeat:
 		goto repeat;
 	}
 
+	if (!task->mm)
+		goto bad;
 	/* the same process cannot be attached many times */
 	if (task->ptrace & PT_PTRACED)
 		goto bad;
@@ -201,7 +220,7 @@ out:
 	return retval;
 }
 
-void __ptrace_detach(struct task_struct *child, unsigned int data)
+static inline void __ptrace_detach(struct task_struct *child, unsigned int data)
 {
 	child->exit_code = data;
 	/* .. re-parent .. */
@@ -220,65 +239,12 @@ int ptrace_detach(struct task_struct *child, unsigned int data)
 	ptrace_disable(child);
 
 	write_lock_irq(&tasklist_lock);
+	/* protect against de_thread()->release_task() */
 	if (child->ptrace)
 		__ptrace_detach(child, data);
 	write_unlock_irq(&tasklist_lock);
 
 	return 0;
-}
-
-/*
- * Access another process' address space.
- * Source/target buffer must be kernel space, 
- * Do not walk the page table directly, use get_user_pages
- */
-
-int access_process_vm(struct task_struct *tsk, unsigned long addr, void *buf, int len, int write)
-{
-	struct mm_struct *mm;
-	struct vm_area_struct *vma;
-	struct page *page;
-	void *old_buf = buf;
-
-	mm = get_task_mm(tsk);
-	if (!mm)
-		return 0;
-
-	down_read(&mm->mmap_sem);
-	/* ignore errors, just check how much was sucessfully transfered */
-	while (len) {
-		int bytes, ret, offset;
-		void *maddr;
-
-		ret = get_user_pages(tsk, mm, addr, 1,
-				write, 1, &page, &vma);
-		if (ret <= 0)
-			break;
-
-		bytes = len;
-		offset = addr & (PAGE_SIZE-1);
-		if (bytes > PAGE_SIZE-offset)
-			bytes = PAGE_SIZE-offset;
-
-		maddr = kmap(page);
-		if (write) {
-			copy_to_user_page(vma, page, addr,
-					  maddr + offset, buf, bytes);
-			set_page_dirty_lock(page);
-		} else {
-			copy_from_user_page(vma, page, addr,
-					    buf, maddr + offset, bytes);
-		}
-		kunmap(page);
-		page_cache_release(page);
-		len -= bytes;
-		buf += bytes;
-		addr += bytes;
-	}
-	up_read(&mm->mmap_sem);
-	mmput(mm);
-	
-	return buf - old_buf;
 }
 
 int ptrace_readdata(struct task_struct *tsk, unsigned long src, char __user *dst, int len)
@@ -480,6 +446,7 @@ struct task_struct *ptrace_get_task_struct(pid_t pid)
 	child = find_task_by_pid(pid);
 	if (child)
 		get_task_struct(child);
+
 	read_unlock(&tasklist_lock);
 	if (!child)
 		return ERR_PTR(-ESRCH);
@@ -508,7 +475,7 @@ asmlinkage long sys_ptrace(long request, long pid, long addr, long data)
 	}
 
 	ret = -EPERM;
-	if (!vx_check(vx_task_xid(child), VX_WATCH|VX_IDENT))
+	if (!vx_check(vx_task_xid(child), VS_WATCH_P|VS_IDENT))
 		goto out_put_task_struct;
 
 	if (request == PTRACE_ATTACH) {

@@ -20,6 +20,7 @@ CROSS32_COMPILE ?=
 CROSS32CC		:= $(CROSS32_COMPILE)gcc
 CROSS32AS		:= $(CROSS32_COMPILE)as
 CROSS32LD		:= $(CROSS32_COMPILE)ld
+CROSS32AR		:= $(CROSS32_COMPILE)ar
 CROSS32OBJCOPY		:= $(CROSS32_COMPILE)objcopy
 
 ifeq ($(HAS_BIARCH),y)
@@ -28,10 +29,11 @@ CROSS32CC	:= $(CC) -m32
 CROSS32AS	:= $(AS) -a32
 CROSS32LD	:= $(LD) -m elf32ppc
 CROSS32OBJCOPY	:= $(OBJCOPY)
+CROSS32AR	:= $(AR)
 endif
 endif
 
-export CROSS32CC CROSS32AS CROSS32LD CROSS32OBJCOPY
+export CROSS32CC CROSS32AS CROSS32LD CROSS32AR CROSS32OBJCOPY
 
 KBUILD_DEFCONFIG := $(shell uname -m)_defconfig
 
@@ -108,7 +110,6 @@ ifeq ($(CONFIG_6xx),y)
 CFLAGS		+= -mcpu=powerpc
 endif
 
-cpu-as-$(CONFIG_PPC64BRIDGE)	+= -Wa,-mppc64bridge
 cpu-as-$(CONFIG_4xx)		+= -Wa,-m405
 cpu-as-$(CONFIG_6xx)		+= -Wa,-maltivec
 cpu-as-$(CONFIG_POWER4)		+= -Wa,-maltivec
@@ -147,7 +148,7 @@ all: $(KBUILD_IMAGE)
 
 CPPFLAGS_vmlinux.lds	:= -Upowerpc
 
-BOOT_TARGETS = zImage zImage.initrd znetboot znetboot.initrd vmlinux.sm uImage vmlinux.bin
+BOOT_TARGETS = zImage zImage.initrd uImage
 
 PHONY += $(BOOT_TARGETS)
 

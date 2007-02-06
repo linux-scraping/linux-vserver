@@ -73,6 +73,8 @@ struct pt_regs {
 #ifndef __ASSEMBLY__
 
 #define instruction_pointer(regs) ((regs)->nip)
+#define regs_return_value(regs) ((regs)->gpr[3])
+
 #ifdef CONFIG_SMP
 extern unsigned long profile_pc(struct pt_regs *regs);
 #else
@@ -215,12 +217,10 @@ do {									      \
 #define PTRACE_GETVRREGS	18
 #define PTRACE_SETVRREGS	19
 
-#ifndef __powerpc64__
 /* Get/set all the upper 32-bits of the SPE registers, accumulator, and
  * spefscr, in one go */
 #define PTRACE_GETEVRREGS	20
 #define PTRACE_SETEVRREGS	21
-#endif /* __powerpc64__ */
 
 /*
  * Get or set a debug register. The first 16 are DABR registers and the
@@ -229,7 +229,6 @@ do {									      \
 #define PTRACE_GET_DEBUGREG	25
 #define PTRACE_SET_DEBUGREG	26
 
-#ifdef __powerpc64__
 /* Additional PTRACE requests implemented on PowerPC. */
 #define PPC_PTRACE_GETREGS	0x99	/* Get GPRs 0 - 31 */
 #define PPC_PTRACE_SETREGS	0x98	/* Set GPRs 0 - 31 */
@@ -243,6 +242,5 @@ do {									      \
 #define PPC_PTRACE_POKEDATA_3264 0x92
 #define PPC_PTRACE_PEEKUSR_3264  0x91
 #define PPC_PTRACE_POKEUSR_3264  0x90
-#endif /* __powerpc64__ */
 
 #endif /* _ASM_POWERPC_PTRACE_H */

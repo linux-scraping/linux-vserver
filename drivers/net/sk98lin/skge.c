@@ -113,6 +113,8 @@
 #include	<linux/init.h>
 #include	<linux/dma-mapping.h>
 #include	<linux/ip.h>
+#include	<linux/mii.h>
+#include	<linux/mm.h>
 
 #include	"h/skdrv1st.h"
 #include	"h/skdrv2nd.h"
@@ -196,8 +198,8 @@ static SK_BOOL	BoardAllocMem(SK_AC *pAC);
 static void	BoardFreeMem(SK_AC *pAC);
 static void	BoardInitMem(SK_AC *pAC);
 static void	SetupRing(SK_AC*, void*, uintptr_t, RXD**, RXD**, RXD**, int*, SK_BOOL);
-static SkIsrRetVar	SkGeIsr(int irq, void *dev_id, struct pt_regs *ptregs);
-static SkIsrRetVar	SkGeIsrOnePort(int irq, void *dev_id, struct pt_regs *ptregs);
+static SkIsrRetVar	SkGeIsr(int irq, void *dev_id);
+static SkIsrRetVar	SkGeIsrOnePort(int irq, void *dev_id);
 static int	SkGeOpen(struct SK_NET_DEVICE *dev);
 static int	SkGeClose(struct SK_NET_DEVICE *dev);
 static int	SkGeXmit(struct sk_buff *skb, struct SK_NET_DEVICE *dev);
@@ -248,7 +250,7 @@ static void	DumpLong(char*, int);
 
 /* global variables *********************************************************/
 static SK_BOOL DoPrintInterfaceChange = SK_TRUE;
-extern  struct ethtool_ops SkGeEthtoolOps;
+extern const struct ethtool_ops SkGeEthtoolOps;
 
 /* local variables **********************************************************/
 static uintptr_t TxQueueAddr[SK_MAX_MACS][2] = {{0x680, 0x600},{0x780, 0x700}};
@@ -570,9 +572,9 @@ SK_BOOL	DualNet;
 	spin_unlock_irqrestore(&pAC->SlowPathLock, Flags);
 
 	if (pAC->GIni.GIMacsFound == 2) {
-		 Ret = request_irq(dev->irq, SkGeIsr, SA_SHIRQ, "sk98lin", dev);
+		 Ret = request_irq(dev->irq, SkGeIsr, IRQF_SHARED, "sk98lin", dev);
 	} else if (pAC->GIni.GIMacsFound == 1) {
-		Ret = request_irq(dev->irq, SkGeIsrOnePort, SA_SHIRQ,
+		Ret = request_irq(dev->irq, SkGeIsrOnePort, IRQF_SHARED,
 			"sk98lin", dev);
 	} else {
 		printk(KERN_WARNING "sk98lin: Illegal number of ports: %d\n",
@@ -880,7 +882,7 @@ int	PortIndex)	/* index of the port for which to re-init */
  * Returns: N/A
  *
  */
-static SkIsrRetVar SkGeIsr(int irq, void *dev_id, struct pt_regs *ptregs)
+static SkIsrRetVar SkGeIsr(int irq, void *dev_id)
 {
 struct SK_NET_DEVICE *dev = (struct SK_NET_DEVICE *)dev_id;
 DEV_NET		*pNet;
@@ -1029,7 +1031,7 @@ SK_U32		IntSrc;		/* interrupts source register contents */
  * Returns: N/A
  *
  */
-static SkIsrRetVar SkGeIsrOnePort(int irq, void *dev_id, struct pt_regs *ptregs)
+static SkIsrRetVar SkGeIsrOnePort(int irq, void *dev_id)
 {
 struct SK_NET_DEVICE *dev = (struct SK_NET_DEVICE *)dev_id;
 DEV_NET		*pNet;
@@ -1140,7 +1142,7 @@ SK_U32		IntSrc;		/* interrupts source register contents */
 static void SkGePollController(struct net_device *dev)
 {
 	disable_irq(dev->irq);
-	SkGeIsr(dev->irq, dev, NULL);
+	SkGeIsr(dev->irq, dev);
 	enable_irq(dev->irq);
 }
 #endif
@@ -1525,7 +1527,7 @@ struct sk_buff	*pMessage)	/* pointer to send-message              */
 	** This is to resolve faulty padding by the HW with 0xaa bytes.
 	*/
 	if (BytesSend < C_LEN_ETHERNET_MINSIZE) {
-		if ((pMessage = skb_padto(pMessage, C_LEN_ETHERNET_MINSIZE)) == NULL) {
+		if (skb_padto(pMessage, C_LEN_ETHERNET_MINSIZE)) {
 			spin_unlock_irqrestore(&pTxPort->TxDesRingLock, Flags);
 			return 0;
 		}
@@ -1559,9 +1561,9 @@ struct sk_buff	*pMessage)	/* pointer to send-message              */
 	pTxd->VDataHigh = (SK_U32) (PhysAddr >> 32);
 	pTxd->pMBuf     = pMessage;
 
-	if (pMessage->ip_summed == CHECKSUM_HW) {
+	if (pMessage->ip_summed == CHECKSUM_PARTIAL) {
 		u16 hdrlen = pMessage->h.raw - pMessage->data;
-		u16 offset = hdrlen + pMessage->csum;
+		u16 offset = hdrlen + pMessage->csum_offset;
 
 		if ((pMessage->h.ipiph->protocol == IPPROTO_UDP ) &&
 			(pAC->GIni.GIChipRev == 0) &&
@@ -1678,9 +1680,9 @@ struct sk_buff	*pMessage)	/* pointer to send-message              */
 	/* 
 	** Does the HW need to evaluate checksum for TCP or UDP packets? 
 	*/
-	if (pMessage->ip_summed == CHECKSUM_HW) {
+	if (pMessage->ip_summed == CHECKSUM_PARTIAL) {
 		u16 hdrlen = pMessage->h.raw - pMessage->data;
-		u16 offset = hdrlen + pMessage->csum;
+		u16 offset = hdrlen + pMessage->csum_offset;
 
 		Control = BMU_STFWD;
 
@@ -2158,7 +2160,7 @@ rx_start:
 
 #ifdef USE_SK_RX_CHECKSUM
 		pMsg->csum = pRxd->TcpSums & 0xffff;
-		pMsg->ip_summed = CHECKSUM_HW;
+		pMsg->ip_summed = CHECKSUM_COMPLETE;
 #else
 		pMsg->ip_summed = CHECKSUM_NONE;
 #endif
@@ -2843,6 +2845,56 @@ unsigned long	Flags;			/* for spin lock */
 	return(&pAC->stats);
 } /* SkGeStats */
 
+/*
+ * Basic MII register access
+ */
+static int SkGeMiiIoctl(struct net_device *dev,
+			struct mii_ioctl_data *data, int cmd)
+{
+	DEV_NET *pNet = netdev_priv(dev);
+	SK_AC *pAC = pNet->pAC;
+	SK_IOC IoC = pAC->IoBase;
+	int Port = pNet->PortNr;
+	SK_GEPORT *pPrt = &pAC->GIni.GP[Port];
+	unsigned long Flags;
+	int err = 0;
+	int reg = data->reg_num & 0x1f;
+	SK_U16 val = data->val_in;
+
+	if (!netif_running(dev))
+		return -ENODEV;	/* Phy still in reset */
+
+	spin_lock_irqsave(&pAC->SlowPathLock, Flags);
+	switch(cmd) {
+	case SIOCGMIIPHY:
+		data->phy_id = pPrt->PhyAddr;
+
+		/* fallthru */
+	case SIOCGMIIREG:
+		if (pAC->GIni.GIGenesis)
+			SkXmPhyRead(pAC, IoC, Port, reg, &val);
+		else
+			SkGmPhyRead(pAC, IoC, Port, reg, &val);
+
+		data->val_out = val;
+		break;
+
+	case SIOCSMIIREG:
+		if (!capable(CAP_NET_ADMIN))
+			err = -EPERM;
+
+		else if (pAC->GIni.GIGenesis)
+			SkXmPhyWrite(pAC, IoC, Port, reg, val);
+		else
+			SkGmPhyWrite(pAC, IoC, Port, reg, val);
+		break;
+	default:
+		err = -EOPNOTSUPP;
+	}
+        spin_unlock_irqrestore(&pAC->SlowPathLock, Flags);
+	return err;
+}
+
 
 /*****************************************************************************
  *
@@ -2876,6 +2928,9 @@ int		HeaderLength = sizeof(SK_U32) + sizeof(SK_U32);
 	pNet = netdev_priv(dev);
 	pAC = pNet->pAC;
 	
+	if (cmd == SIOCGMIIPHY || cmd == SIOCSMIIREG || cmd == SIOCGMIIREG)
+	    return SkGeMiiIoctl(dev, if_mii(rq), cmd);
+
 	if(copy_from_user(&Ioctl, rq->ifr_data, sizeof(SK_GE_IOCTL))) {
 		return -EFAULT;
 	}
@@ -5073,9 +5128,9 @@ static int skge_resume(struct pci_dev *pdev)
 	pci_enable_device(pdev);
 	pci_set_master(pdev);
 	if (pAC->GIni.GIMacsFound == 2)
-		ret = request_irq(dev->irq, SkGeIsr, SA_SHIRQ, "sk98lin", dev);
+		ret = request_irq(dev->irq, SkGeIsr, IRQF_SHARED, "sk98lin", dev);
 	else
-		ret = request_irq(dev->irq, SkGeIsrOnePort, SA_SHIRQ, "sk98lin", dev);
+		ret = request_irq(dev->irq, SkGeIsrOnePort, IRQF_SHARED, "sk98lin", dev);
 	if (ret) {
 		printk(KERN_WARNING "sk98lin: unable to acquire IRQ %d\n", dev->irq);
 		pAC->AllocFlag &= ~SK_ALLOC_IRQ;
@@ -5133,7 +5188,7 @@ static struct pci_driver skge_driver = {
 
 static int __init skge_init(void)
 {
-	return pci_module_init(&skge_driver);
+	return pci_register_driver(&skge_driver);
 }
 
 static void __exit skge_exit(void)

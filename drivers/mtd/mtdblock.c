@@ -7,7 +7,6 @@
  * (C) 1999-2003 David Woodhouse <dwmw2@infradead.org>
  */
 
-#include <linux/config.h>
 #include <linux/fs.h>
 #include <linux/init.h>
 #include <linux/kernel.h>
@@ -71,7 +70,7 @@ static int erase_write (struct mtd_info *mtd, unsigned long pos,
 	set_current_state(TASK_INTERRUPTIBLE);
 	add_wait_queue(&wait_q, &wait);
 
-	ret = MTD_ERASE(mtd, &erase);
+	ret = mtd->erase(mtd, &erase);
 	if (ret) {
 		set_current_state(TASK_RUNNING);
 		remove_wait_queue(&wait_q, &wait);
@@ -88,7 +87,7 @@ static int erase_write (struct mtd_info *mtd, unsigned long pos,
 	 * Next, writhe data to flash.
 	 */
 
-	ret = MTD_WRITE (mtd, pos, len, &retlen, buf);
+	ret = mtd->write(mtd, pos, len, &retlen, buf);
 	if (ret)
 		return ret;
 	if (retlen != len)
@@ -138,7 +137,7 @@ static int do_cached_write (struct mtdblk_dev *mtdblk, unsigned long pos,
 		mtd->name, pos, len);
 
 	if (!sect_size)
-		return MTD_WRITE (mtd, pos, len, &retlen, buf);
+		return mtd->write(mtd, pos, len, &retlen, buf);
 
 	while (len > 0) {
 		unsigned long sect_start = (pos/sect_size)*sect_size;
@@ -170,7 +169,8 @@ static int do_cached_write (struct mtdblk_dev *mtdblk, unsigned long pos,
 			    mtdblk->cache_offset != sect_start) {
 				/* fill the cache with the current sector */
 				mtdblk->cache_state = STATE_EMPTY;
-				ret = MTD_READ(mtd, sect_start, sect_size, &retlen, mtdblk->cache_data);
+				ret = mtd->read(mtd, sect_start, sect_size,
+						&retlen, mtdblk->cache_data);
 				if (ret)
 					return ret;
 				if (retlen != sect_size)
@@ -207,7 +207,7 @@ static int do_cached_read (struct mtdblk_dev *mtdblk, unsigned long pos,
 			mtd->name, pos, len);
 
 	if (!sect_size)
-		return MTD_READ (mtd, pos, len, &retlen, buf);
+		return mtd->read(mtd, pos, len, &retlen, buf);
 
 	while (len > 0) {
 		unsigned long sect_start = (pos/sect_size)*sect_size;
@@ -226,7 +226,7 @@ static int do_cached_read (struct mtdblk_dev *mtdblk, unsigned long pos,
 		    mtdblk->cache_offset == sect_start) {
 			memcpy (buf, mtdblk->cache_data + offset, size);
 		} else {
-			ret = MTD_READ (mtd, pos, size, &retlen, buf);
+			ret = mtd->read(mtd, pos, size, &retlen, buf);
 			if (ret)
 				return ret;
 			if (retlen != size)
@@ -278,18 +278,16 @@ static int mtdblock_open(struct mtd_blktrans_dev *mbd)
 	}
 
 	/* OK, it's not open. Create cache info for it */
-	mtdblk = kmalloc(sizeof(struct mtdblk_dev), GFP_KERNEL);
+	mtdblk = kzalloc(sizeof(struct mtdblk_dev), GFP_KERNEL);
 	if (!mtdblk)
 		return -ENOMEM;
 
-	memset(mtdblk, 0, sizeof(*mtdblk));
 	mtdblk->count = 1;
 	mtdblk->mtd = mtd;
 
 	mutex_init(&mtdblk->cache_mutex);
 	mtdblk->cache_state = STATE_EMPTY;
-	if ((mtdblk->mtd->flags & MTD_CAP_RAM) != MTD_CAP_RAM &&
-	    mtdblk->mtd->erasesize) {
+	if ( !(mtdblk->mtd->flags & MTD_NO_ERASE) && mtdblk->mtd->erasesize) {
 		mtdblk->cache_size = mtdblk->mtd->erasesize;
 		mtdblk->cache_data = NULL;
 	}
@@ -340,16 +338,14 @@ static int mtdblock_flush(struct mtd_blktrans_dev *dev)
 
 static void mtdblock_add_mtd(struct mtd_blktrans_ops *tr, struct mtd_info *mtd)
 {
-	struct mtd_blktrans_dev *dev = kmalloc(sizeof(*dev), GFP_KERNEL);
+	struct mtd_blktrans_dev *dev = kzalloc(sizeof(*dev), GFP_KERNEL);
 
 	if (!dev)
 		return;
 
-	memset(dev, 0, sizeof(*dev));
-
 	dev->mtd = mtd;
 	dev->devnum = mtd->index;
-	dev->blksize = 512;
+
 	dev->size = mtd->size >> 9;
 	dev->tr = tr;
 
@@ -369,6 +365,7 @@ static struct mtd_blktrans_ops mtdblock_tr = {
 	.name		= "mtdblock",
 	.major		= 31,
 	.part_bits	= 0,
+	.blksize 	= 512,
 	.open		= mtdblock_open,
 	.flush		= mtdblock_flush,
 	.release	= mtdblock_release,

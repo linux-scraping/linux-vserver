@@ -7,7 +7,6 @@
  * Support functions for the ST40 PCI hardware.
  */
 
-#include <linux/config.h>
 #include <linux/kernel.h>
 #include <linux/smp.h>
 #include <linux/smp_lock.h>
@@ -70,12 +69,6 @@
 
 static void pci_set_rbar_region(unsigned int region,     unsigned long localAddr,
 			 unsigned long pciOffset, unsigned long regionSize);
-
-/*
- * The pcibios_map_platform_irq function is defined in the appropriate
- * board specific code and referenced here
- */
-extern int __init pcibios_map_platform_irq(struct pci_dev *dev, u8 slot, u8 pin);
 
 static __init void SetPCIPLL(void)
 {
@@ -168,7 +161,7 @@ static char * pci_commands[16]={
 	"Memory Write-and-Invalidate"
 };
 
-static irqreturn_t st40_pci_irq(int irq, void *dev_instance, struct pt_regs *regs)
+static irqreturn_t st40_pci_irq(int irq, void *dev_instance)
 {
 	unsigned pci_int, pci_air, pci_cir, pci_aint;
 	static int count=0;
@@ -423,13 +416,6 @@ struct pci_ops st40pci_config_ops = {
 /* Everything hangs off this */
 static struct pci_bus *pci_root_bus;
 
-
-static u8 __init no_swizzle(struct pci_dev *dev, u8 * pin)
-{
-	return PCI_SLOT(dev->devfn);
-}
-
-
 static int __init pcibios_init(void)
 {
 	extern unsigned long memory_start, memory_end;
@@ -448,7 +434,7 @@ static int __init pcibios_init(void)
 		     PHYSADDR(memory_end) - PHYSADDR(memory_start));
 
 	if (request_irq(ST40PCI_ERR_IRQ, st40_pci_irq, 
-                        SA_INTERRUPT, "st40pci", NULL)) {
+                        IRQF_DISABLED, "st40pci", NULL)) {
 		printk(KERN_ERR "st40pci: Cannot hook interrupt\n");
 		return -EIO;
 	}
@@ -466,16 +452,10 @@ static int __init pcibios_init(void)
 	/* ok, do the scan man */
 	pci_root_bus = pci_scan_bus(0, &st40pci_config_ops, NULL);
 	pci_assign_unassigned_resources();
-	pci_fixup_irqs(no_swizzle, pcibios_map_platform_irq);
 
 	return 0;
 }
-
 subsys_initcall(pcibios_init);
-
-void __init pcibios_fixup_bus(struct pci_bus *bus)
-{
-}
 
 /*
  * Publish a region of local address space over the PCI bus

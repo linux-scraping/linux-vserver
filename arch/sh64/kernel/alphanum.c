@@ -1,5 +1,5 @@
 /*
- * arch/sh64/kernel/alpanum.c
+ * arch/sh64/kernel/alphanum.c
  *
  * Copyright (C) 2002 Stuart Menefy <stuart.menefy@st.com>
  *
@@ -9,7 +9,6 @@
  * Machine-independent functions for handling 8-digit alphanumeric display
  * (e.g. Agilent HDSP-253x)
  */
-#include <linux/config.h>
 #include <linux/stddef.h>
 #include <linux/sched.h>
 

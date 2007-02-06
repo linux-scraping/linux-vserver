@@ -24,9 +24,9 @@
  *
  ********************************************************************/
 
-#include <linux/config.h>
 #include <linux/skbuff.h>
 #include <linux/init.h>
+#include <linux/fs.h>
 #include <linux/seq_file.h>
 
 #include <asm/byteorder.h>
@@ -86,10 +86,9 @@ static pi_param_info_t param_info = { pi_major_call_table, 1, 0x0f, 4 };
  */
 int __init irttp_init(void)
 {
-	irttp = kmalloc(sizeof(struct irttp_cb), GFP_KERNEL);
+	irttp = kzalloc(sizeof(struct irttp_cb), GFP_KERNEL);
 	if (irttp == NULL)
 		return -ENOMEM;
-	memset(irttp, 0, sizeof(struct irttp_cb));
 
 	irttp->magic = TTP_MAGIC;
 
@@ -307,7 +306,8 @@ static inline void irttp_fragment_skb(struct tsap_cb *self,
 		IRDA_DEBUG(2, "%s(), fragmenting ...\n", __FUNCTION__);
 
 		/* Make new segment */
-		frag = dev_alloc_skb(self->max_seg_size+self->max_header_size);
+		frag = alloc_skb(self->max_seg_size+self->max_header_size,
+				 GFP_ATOMIC);
 		if (!frag)
 			return;
 
@@ -390,12 +390,11 @@ struct tsap_cb *irttp_open_tsap(__u8 stsap_sel, int credit, notify_t *notify)
 		return NULL;
 	}
 
-	self = kmalloc(sizeof(struct tsap_cb), GFP_ATOMIC);
+	self = kzalloc(sizeof(struct tsap_cb), GFP_ATOMIC);
 	if (self == NULL) {
 		IRDA_DEBUG(0, "%s(), unable to kmalloc!\n", __FUNCTION__);
 		return NULL;
 	}
-	memset(self, 0, sizeof(struct tsap_cb));
 	spin_lock_init(&self->lock);
 
 	/* Initialise todo timer */
@@ -806,12 +805,12 @@ static inline void irttp_give_credit(struct tsap_cb *self)
 		   self->send_credit, self->avail_credit, self->remote_credit);
 
 	/* Give credit to peer */
-	tx_skb = dev_alloc_skb(64);
+	tx_skb = alloc_skb(TTP_MAX_HEADER, GFP_ATOMIC);
 	if (!tx_skb)
 		return;
 
 	/* Reserve space for LMP, and LAP header */
-	skb_reserve(tx_skb, self->max_header_size);
+	skb_reserve(tx_skb, LMP_MAX_HEADER);
 
 	/*
 	 *  Since we can transmit and receive frames concurrently,
@@ -1095,12 +1094,13 @@ int irttp_connect_request(struct tsap_cb *self, __u8 dtsap_sel,
 
 	/* Any userdata supplied? */
 	if (userdata == NULL) {
-		tx_skb = dev_alloc_skb(64);
+		tx_skb = alloc_skb(TTP_MAX_HEADER + TTP_SAR_HEADER,
+				   GFP_ATOMIC);
 		if (!tx_skb)
 			return -ENOMEM;
 
 		/* Reserve space for MUX_CONTROL and LAP header */
-		skb_reserve(tx_skb, TTP_MAX_HEADER);
+		skb_reserve(tx_skb, TTP_MAX_HEADER + TTP_SAR_HEADER);
 	} else {
 		tx_skb = userdata;
 		/*
@@ -1148,7 +1148,7 @@ int irttp_connect_request(struct tsap_cb *self, __u8 dtsap_sel,
 		frame[3] = 0x02; /* Value length */
 
 		put_unaligned(cpu_to_be16((__u16) max_sdu_size),
-			      (__u16 *)(frame+4));
+			      (__be16 *)(frame+4));
 	} else {
 		/* Insert plain TTP header */
 		frame = skb_push(tx_skb, TTP_HEADER);
@@ -1343,12 +1343,13 @@ int irttp_connect_response(struct tsap_cb *self, __u32 max_sdu_size,
 
 	/* Any userdata supplied? */
 	if (userdata == NULL) {
-		tx_skb = dev_alloc_skb(64);
+		tx_skb = alloc_skb(TTP_MAX_HEADER + TTP_SAR_HEADER,
+				   GFP_ATOMIC);
 		if (!tx_skb)
 			return -ENOMEM;
 
 		/* Reserve space for MUX_CONTROL and LAP header */
-		skb_reserve(tx_skb, TTP_MAX_HEADER);
+		skb_reserve(tx_skb, TTP_MAX_HEADER + TTP_SAR_HEADER);
 	} else {
 		tx_skb = userdata;
 		/*
@@ -1394,7 +1395,7 @@ int irttp_connect_response(struct tsap_cb *self, __u32 max_sdu_size,
 		frame[3] = 0x02; /* Value length */
 
 		put_unaligned(cpu_to_be16((__u16) max_sdu_size),
-			      (__u16 *)(frame+4));
+			      (__be16 *)(frame+4));
 	} else {
 		/* Insert TTP header */
 		frame = skb_push(tx_skb, TTP_HEADER);
@@ -1542,14 +1543,14 @@ int irttp_disconnect_request(struct tsap_cb *self, struct sk_buff *userdata,
 
 	if (!userdata) {
 		struct sk_buff *tx_skb;
-		tx_skb = dev_alloc_skb(64);
+		tx_skb = alloc_skb(LMP_MAX_HEADER, GFP_ATOMIC);
 		if (!tx_skb)
 			return -ENOMEM;
 
 		/*
 		 *  Reserve space for MUX and LAP header
 		 */
-		skb_reserve(tx_skb, TTP_MAX_HEADER);
+		skb_reserve(tx_skb, LMP_MAX_HEADER);
 
 		userdata = tx_skb;
 	}
@@ -1877,7 +1878,7 @@ static int irttp_seq_open(struct inode *inode, struct file *file)
 	int rc = -ENOMEM;
 	struct irttp_iter_state *s;
 
-	s = kmalloc(sizeof(*s), GFP_KERNEL);
+	s = kzalloc(sizeof(*s), GFP_KERNEL);
 	if (!s)
 		goto out;
 
@@ -1887,7 +1888,6 @@ static int irttp_seq_open(struct inode *inode, struct file *file)
 
 	seq	     = file->private_data;
 	seq->private = s;
-	memset(s, 0, sizeof(*s));
 out:
 	return rc;
 out_kfree:

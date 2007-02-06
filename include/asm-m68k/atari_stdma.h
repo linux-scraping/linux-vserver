@@ -3,13 +3,12 @@
 #define _atari_stdma_h
 
 
-#include <asm/irq.h>
+#include <linux/interrupt.h>
 
 
 /***************************** Prototypes *****************************/
 
-void stdma_lock(irqreturn_t (*handler)(int, void *, struct pt_regs *),
-		void *data);
+void stdma_lock(irq_handler_t handler, void *data);
 void stdma_release( void );
 int stdma_others_waiting( void );
 int stdma_islocked( void );

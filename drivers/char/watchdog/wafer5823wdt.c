@@ -174,7 +174,7 @@ static int wafwdt_ioctl(struct inode *inode, struct file *file, unsigned int cmd
 	}
 
 	default:
-		return -ENOIOCTLCMD;
+		return -ENOTTY;
 	}
 	return 0;
 }
@@ -222,7 +222,7 @@ static int wafwdt_notify_sys(struct notifier_block *this, unsigned long code, vo
  *	Kernel Interfaces
  */
 
-static struct file_operations wafwdt_fops = {
+static const struct file_operations wafwdt_fops = {
 	.owner		= THIS_MODULE,
 	.llseek		= no_llseek,
 	.write		= wafwdt_write,

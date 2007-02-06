@@ -1,18 +1,29 @@
 
-enum {
-	VCI_KCBIT_LEGACY = 1,
-	VCI_KCBIT_LEGACYNET,
-	VCI_KCBIT_NGNET,
+/*  interface version */
 
-	VCI_KCBIT_PROC_SECURE,
-	VCI_KCBIT_HARDCPU,
-	VCI_KCBIT_HARDCPU_IDLE,
+#define VCI_VERSION		0x00020200
+#define VCI_LEGACY_VERSION	0x000100FF
+
+
+enum {
+	VCI_KCBIT_NO_DYNAMIC = 0,
+	VCI_KCBIT_LEGACY = 1,
+	VCI_KCBIT_LEGACYNET = 2,
+	VCI_KCBIT_NGNET = 3,
+
+	VCI_KCBIT_PROC_SECURE = 4,
+	VCI_KCBIT_HARDCPU = 5,
+	VCI_KCBIT_IDLELIMIT = 6,
+	VCI_KCBIT_IDLETIME = 7,
+
+	VCI_KCBIT_COWBL = 8,
+	VCI_KCBIT_FULLCOWBL = 9,
+	VCI_KCBIT_SPACES = 10,
 
 	VCI_KCBIT_LEGACY_VERSION = 15,
-
 	VCI_KCBIT_DEBUG = 16,
 	VCI_KCBIT_HISTORY = 20,
-	VCI_KCBIT_TAGXID = 24,
+	VCI_KCBIT_TAGGED = 24,
 };
 
 
@@ -20,6 +31,9 @@ static inline uint32_t vci_kernel_config(void)
 {
 	return
 	/* various legacy options */
+#ifndef CONFIG_VSERVER_DYNAMIC_IDS
+	(1 << VCI_KCBIT_NO_DYNAMIC) |
+#endif
 #ifdef	CONFIG_VSERVER_LEGACY
 	(1 << VCI_KCBIT_LEGACY) |
 #endif
@@ -37,9 +51,17 @@ static inline uint32_t vci_kernel_config(void)
 #ifdef	CONFIG_VSERVER_HARDCPU
 	(1 << VCI_KCBIT_HARDCPU) |
 #endif
-#ifdef	CONFIG_VSERVER_HARDCPU_IDLE
-	(1 << VCI_KCBIT_HARDCPU_IDLE) |
+#ifdef	CONFIG_VSERVER_IDLELIMIT
+	(1 << VCI_KCBIT_IDLELIMIT) |
 #endif
+#ifdef	CONFIG_VSERVER_IDLETIME
+	(1 << VCI_KCBIT_IDLETIME) |
+#endif
+#ifdef	CONFIG_VSERVER_COWBL
+	(1 << VCI_KCBIT_COWBL) |
+	(1 << VCI_KCBIT_FULLCOWBL) |
+#endif
+	(1 << VCI_KCBIT_SPACES) |
 
 	/* debug options */
 #ifdef	CONFIG_VSERVER_DEBUG
@@ -49,21 +71,21 @@ static inline uint32_t vci_kernel_config(void)
 	(1 << VCI_KCBIT_HISTORY) |
 #endif
 
-	/* inode xid tagging */
-#if	defined(CONFIG_INOXID_NONE)
-	(0 << VCI_KCBIT_TAGXID) |
-#elif	defined(CONFIG_INOXID_UID16)
-	(1 << VCI_KCBIT_TAGXID) |
-#elif	defined(CONFIG_INOXID_GID16)
-	(2 << VCI_KCBIT_TAGXID) |
-#elif	defined(CONFIG_INOXID_UGID24)
-	(3 << VCI_KCBIT_TAGXID) |
-#elif	defined(CONFIG_INOXID_INTERN)
-	(4 << VCI_KCBIT_TAGXID) |
-#elif	defined(CONFIG_INOXID_RUNTIME)
-	(5 << VCI_KCBIT_TAGXID) |
+	/* inode context tagging */
+#if	defined(CONFIG_TAGGING_NONE)
+	(0 << VCI_KCBIT_TAGGED) |
+#elif	defined(CONFIG_TAGGING_UID16)
+	(1 << VCI_KCBIT_TAGGED) |
+#elif	defined(CONFIG_TAGGING_GID16)
+	(2 << VCI_KCBIT_TAGGED) |
+#elif	defined(CONFIG_TAGGING_ID24)
+	(3 << VCI_KCBIT_TAGGED) |
+#elif	defined(CONFIG_TAGGING_INTERN)
+	(4 << VCI_KCBIT_TAGGED) |
+#elif	defined(CONFIG_TAGGING_RUNTIME)
+	(5 << VCI_KCBIT_TAGGED) |
 #else
-	(7 << VCI_KCBIT_TAGXID) |
+	(7 << VCI_KCBIT_TAGGED) |
 #endif
 	0;
 }

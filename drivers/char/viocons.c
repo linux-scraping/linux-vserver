@@ -25,7 +25,6 @@
  * along with this program; if not, write to the Free Software Foundation,
  * Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
  */
-#include <linux/config.h>
 #include <linux/kernel.h>
 #include <linux/proc_fs.h>
 #include <linux/errno.h>
@@ -43,8 +42,8 @@
 #include <linux/tty_flip.h>
 #include <linux/sysrq.h>
 
+#include <asm/firmware.h>
 #include <asm/iseries/vio.h>
-
 #include <asm/iseries/hv_lp_event.h>
 #include <asm/iseries/hv_call_event.h>
 #include <asm/iseries/hv_lp_config.h>
@@ -63,39 +62,7 @@
 static DEFINE_SPINLOCK(consolelock);
 static DEFINE_SPINLOCK(consoleloglock);
 
-#ifdef CONFIG_MAGIC_SYSRQ
 static int vio_sysrq_pressed;
-extern int sysrq_enabled;
-#endif
-
-/*
- * The structure of the events that flow between us and OS/400.  You can't
- * mess with this unless the OS/400 side changes too
- */
-struct viocharlpevent {
-	struct HvLpEvent event;
-	u32 reserved;
-	u16 version;
-	u16 subtype_result_code;
-	u8 virtual_device;
-	u8 len;
-	u8 data[VIOCHAR_MAX_DATA];
-};
-
-#define VIOCHAR_WINDOW		10
-#define VIOCHAR_HIGHWATERMARK	3
-
-enum viocharsubtype {
-	viocharopen = 0x0001,
-	viocharclose = 0x0002,
-	viochardata = 0x0003,
-	viocharack = 0x0004,
-	viocharconfig = 0x0005
-};
-
-enum viochar_rc {
-	viochar_rc_ebusy = 1
-};
 
 #define VIOCHAR_NUM_BUF		16
 
@@ -967,8 +934,10 @@ static void vioHandleData(struct HvLpEvent *event)
 	 */
 	num_pushed = 0;
 	for (index = 0; index < cevent->len; index++) {
-#ifdef CONFIG_MAGIC_SYSRQ
-		if (sysrq_enabled) {
+		/*
+		 * Will be optimized away if !CONFIG_MAGIC_SYSRQ:
+		 */
+		if (sysrq_on()) {
 			/* 0x0f is the ascii character for ^O */
 			if (cevent->data[index] == '\x0f') {
 				vio_sysrq_pressed = 1;
@@ -978,7 +947,7 @@ static void vioHandleData(struct HvLpEvent *event)
 				 */
 				continue;
 			} else if (vio_sysrq_pressed) {
-				handle_sysrq(cevent->data[index], NULL, tty);
+				handle_sysrq(cevent->data[index], tty);
 				vio_sysrq_pressed = 0;
 				/*
 				 * continue because we don't want to add
@@ -987,7 +956,6 @@ static void vioHandleData(struct HvLpEvent *event)
 				continue;
 			}
 		}
-#endif
 		/*
 		 * The sysrq sequence isn't included in this check if
 		 * sysrq is enabled and compiled into the kernel because
@@ -1078,7 +1046,7 @@ static int send_open(HvLpIndex remoteLp, void *sem)
 			0, 0, 0, 0);
 }
 
-static struct tty_operations serial_ops = {
+static const struct tty_operations serial_ops = {
 	.open = viotty_open,
 	.close = viotty_close,
 	.write = viotty_write,
@@ -1092,6 +1060,9 @@ static int __init viocons_init2(void)
 {
 	atomic_t wait_flag;
 	int rc;
+
+	if (!firmware_has_feature(FW_FEATURE_ISERIES))
+		return -ENODEV;
 
 	/* +2 for fudge */
 	rc = viopath_open(HvLpConfig_getPrimaryLpIndex(),
@@ -1152,7 +1123,6 @@ static int __init viocons_init2(void)
 	viotty_driver = alloc_tty_driver(VTTY_PORTS);
 	viotty_driver->owner = THIS_MODULE;
 	viotty_driver->driver_name = "vioconsole";
-	viotty_driver->devfs_name = "vcs/";
 	viotty_driver->name = "tty";
 	viotty_driver->name_base = 1;
 	viotty_driver->major = TTY_MAJOR;
@@ -1179,12 +1149,16 @@ static int __init viocons_init(void)
 {
 	int i;
 
+	if (!firmware_has_feature(FW_FEATURE_ISERIES))
+		return -ENODEV;
+
 	printk(VIOCONS_KERN_INFO "registering console\n");
 	for (i = 0; i < VTTY_PORTS; i++) {
 		port_info[i].lp = HvLpIndexInvalid;
 		port_info[i].magic = VIOTTY_MAGIC;
 	}
 	HvCall_setLogBufferFormatAndCodepage(HvCall_LogBuffer_ASCII, 437);
+	add_preferred_console("viocons", 0, NULL);
 	register_console(&viocons_early);
 	return 0;
 }

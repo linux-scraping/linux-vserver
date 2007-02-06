@@ -35,7 +35,6 @@
  *					response
  */
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/capability.h>
 #include <linux/errno.h>
@@ -484,8 +483,6 @@ static struct sock *x25_alloc_socket(void)
 out:
 	return sk;
 }
-
-void x25_init_timers(struct sock *sk);
 
 static int x25_create(struct socket *sock, int protocol)
 {

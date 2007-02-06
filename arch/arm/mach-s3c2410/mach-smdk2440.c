@@ -11,15 +11,6 @@
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
  *
- * Modifications:
- *	01-Nov-2004 BJD   Initial version
- *	12-Nov-2004 BJD   Updated for release
- *	04-Jan-2005 BJD   Fixes for pre-release
- *	22-Feb-2005 BJD   Updated for 2.6.11-rc5 relesa
- *	10-Mar-2005 LCVR  Replaced S3C2410_VA by S3C24XX_VA
- *	14-Mar-2005 BJD	  void __iomem fixes
- *	20-Sep-2005 BJD   Added static to non-exported items
- *	26-Oct-2005 BJD   Added framebuffer data
 */
 
 #include <linux/kernel.h>
@@ -28,6 +19,7 @@
 #include <linux/list.h>
 #include <linux/timer.h>
 #include <linux/init.h>
+#include <linux/serial_core.h>
 #include <linux/platform_device.h>
 
 #include <asm/mach/arch.h>
@@ -86,7 +78,7 @@ static struct map_desc smdk2440_iodesc[] __initdata = {
 #define ULCON S3C2410_LCON_CS8 | S3C2410_LCON_PNONE | S3C2410_LCON_STOPB
 #define UFCON S3C2410_UFCON_RXTRIG8 | S3C2410_UFCON_FIFOMODE
 
-static struct s3c2410_uartcfg smdk2440_uartcfgs[] = {
+static struct s3c2410_uartcfg smdk2440_uartcfgs[] __initdata = {
 	[0] = {
 		.hwport	     = 0,
 		.flags	     = 0,

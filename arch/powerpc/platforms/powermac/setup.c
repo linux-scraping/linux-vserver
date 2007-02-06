@@ -23,7 +23,6 @@
  * bootup setup stuff..
  */
 
-#include <linux/config.h>
 #include <linux/init.h>
 #include <linux/errno.h>
 #include <linux/sched.h>
@@ -71,6 +70,7 @@
 #include <asm/pmac_feature.h>
 #include <asm/time.h>
 #include <asm/of_device.h>
+#include <asm/of_platform.h>
 #include <asm/mmu_context.h>
 #include <asm/iommu.h>
 #include <asm/smu.h>
@@ -117,7 +117,7 @@ extern struct smp_ops_t core99_smp_ops;
 static void pmac_show_cpuinfo(struct seq_file *m)
 {
 	struct device_node *np;
-	char *pp;
+	const char *pp;
 	int plen;
 	int mbmodel;
 	unsigned int mbflags;
@@ -135,12 +135,12 @@ static void pmac_show_cpuinfo(struct seq_file *m)
 	seq_printf(m, "machine\t\t: ");
 	np = of_find_node_by_path("/");
 	if (np != NULL) {
-		pp = (char *) get_property(np, "model", NULL);
+		pp = get_property(np, "model", NULL);
 		if (pp != NULL)
 			seq_printf(m, "%s\n", pp);
 		else
 			seq_printf(m, "PowerMac\n");
-		pp = (char *) get_property(np, "compatible", &plen);
+		pp = get_property(np, "compatible", &plen);
 		if (pp != NULL) {
 			seq_printf(m, "motherboard\t:");
 			while (plen > 0) {
@@ -164,10 +164,8 @@ static void pmac_show_cpuinfo(struct seq_file *m)
 	if (np == NULL)
 		np = of_find_node_by_type(NULL, "cache");
 	if (np != NULL) {
-		unsigned int *ic = (unsigned int *)
-			get_property(np, "i-cache-size", NULL);
-		unsigned int *dc = (unsigned int *)
-			get_property(np, "d-cache-size", NULL);
+		const unsigned int *ic = get_property(np, "i-cache-size", NULL);
+		const unsigned int *dc = get_property(np, "d-cache-size", NULL);
 		seq_printf(m, "L2 cache\t:");
 		has_l2cache = 1;
 		if (get_property(np, "cache-unified", NULL) != 0 && dc) {
@@ -255,7 +253,7 @@ static void __init l2cr_init(void)
 		if (np == 0)
 			np = find_type_devices("cpu");
 		if (np != 0) {
-			unsigned int *l2cr = (unsigned int *)
+			const unsigned int *l2cr =
 				get_property(np, "l2cr-value", NULL);
 			if (l2cr != 0) {
 				ppc_override_l2cr = 1;
@@ -278,7 +276,7 @@ static void __init l2cr_init(void)
 static void __init pmac_setup_arch(void)
 {
 	struct device_node *cpu, *ic;
-	int *fp;
+	const int *fp;
 	unsigned long pvr;
 
 	pvr = PVR_VER(mfspr(SPRN_PVR));
@@ -288,7 +286,7 @@ static void __init pmac_setup_arch(void)
 	loops_per_jiffy = 50000000 / HZ;
 	cpu = of_find_node_by_type(NULL, "cpu");
 	if (cpu != NULL) {
-		fp = (int *) get_property(cpu, "clock-frequency", NULL);
+		fp = get_property(cpu, "clock-frequency", NULL);
 		if (fp != NULL) {
 			if (pvr >= 0x30 && pvr < 0x80)
 				/* PPC970 etc. */
@@ -364,7 +362,7 @@ char *bootdevice;
 void *boot_host;
 int boot_target;
 int boot_part;
-extern dev_t boot_dev;
+static dev_t boot_dev;
 
 #ifdef CONFIG_SCSI
 void __init note_scsi_host(struct device_node *node, void *host)
@@ -458,7 +456,7 @@ static int pmac_pm_finish(suspend_state_t state)
 	printk(KERN_DEBUG "%s(%d)\n", __FUNCTION__, state);
 
 	/* Restore userland MMU context */
-	set_context(current->active_mm->context, current->active_mm->pgd);
+	set_context(current->active_mm->context.id, current->active_mm->pgd);
 
 	return 0;
 }
@@ -600,13 +598,6 @@ pmac_halt(void)
  */
 static void __init pmac_init_early(void)
 {
-#ifdef CONFIG_PPC64
-	/* Initialize hash table, from now on, we can take hash faults
-	 * and call ioremap
-	 */
-	hpte_init_native();
-#endif
-
 	/* Enable early btext debug if requested */
 	if (strstr(cmd_line, "btextdbg")) {
 		udbg_adb_init_early();
@@ -621,9 +612,6 @@ static void __init pmac_init_early(void)
 	udbg_adb_init(!!strstr(cmd_line, "btextdbg"));
 
 #ifdef CONFIG_PPC64
-	/* Setup interrupt mapping options */
-	ppc64_interrupt_controller = IC_OPEN_PIC;
-
 	iommu_init_early_dart();
 #endif
 }
@@ -683,12 +671,12 @@ static int __init pmac_probe(void)
 	 * part of the cacheable linar mapping
 	 */
 	alloc_dart_table();
+
+	hpte_init_native();
 #endif
 
 #ifdef CONFIG_PPC32
 	/* isa_io_base gets set in pmac_pci_init */
-	isa_mem_base = PMAC_ISA_MEM_BASE;
-	pci_dram_offset = PMAC_PCI_DRAM_OFFSET;
 	ISA_DMA_THRESHOLD = ~0L;
 	DMA_MODE_READ = 1;
 	DMA_MODE_WRITE = 2;
@@ -738,7 +726,7 @@ define_machine(powermac) {
 	.show_cpuinfo		= pmac_show_cpuinfo,
 	.init_IRQ		= pmac_pic_init,
 	.get_irq		= NULL,	/* changed later */
-	.pcibios_fixup		= pmac_pcibios_fixup,
+	.pci_irq_fixup		= pmac_pci_irq_fixup,
 	.restart		= pmac_restart,
 	.power_off		= pmac_power_off,
 	.halt			= pmac_halt,

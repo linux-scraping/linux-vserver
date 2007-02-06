@@ -10,7 +10,6 @@
  * for more details.
  */
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/sched.h>
@@ -33,7 +32,7 @@ int nvidia_probe_of_connector(struct fb_info *info, int conn, u8 **out_edid)
 {
 	struct nvidia_par *par = info->par;
 	struct device_node *parent, *dp;
-	unsigned char *pedid = NULL;
+	const unsigned char *pedid = NULL;
 	static char *propnames[] = {
 		"DFP,EDID", "LCD,EDID", "EDID", "EDID1",
 		"EDID,B", "EDID,A", NULL };
@@ -43,20 +42,19 @@ int nvidia_probe_of_connector(struct fb_info *info, int conn, u8 **out_edid)
 	if (parent == NULL)
 		return -1;
 	if (par->twoHeads) {
-		char *pname;
+		const char *pname;
 		int len;
 
 		for (dp = NULL;
 		     (dp = of_get_next_child(parent, dp)) != NULL;) {
-			pname = (char *)get_property(dp, "name", NULL);
+			pname = get_property(dp, "name", NULL);
 			if (!pname)
 				continue;
 			len = strlen(pname);
 			if ((pname[len-1] == 'A' && conn == 1) ||
 			    (pname[len-1] == 'B' && conn == 2)) {
 				for (i = 0; propnames[i] != NULL; ++i) {
-					pedid = (unsigned char *)
-						get_property(dp, propnames[i],
+					pedid = get_property(dp, propnames[i],
 							     NULL);
 					if (pedid != NULL)
 						break;
@@ -68,17 +66,15 @@ int nvidia_probe_of_connector(struct fb_info *info, int conn, u8 **out_edid)
 	}
 	if (pedid == NULL) {
 		for (i = 0; propnames[i] != NULL; ++i) {
-			pedid = (unsigned char *)
-				get_property(parent, propnames[i], NULL);
+			pedid = get_property(parent, propnames[i], NULL);
 			if (pedid != NULL)
 				break;
 		}
 	}
 	if (pedid) {
-		*out_edid = kmalloc(EDID_LENGTH, GFP_KERNEL);
+		*out_edid = kmemdup(pedid, EDID_LENGTH, GFP_KERNEL);
 		if (*out_edid == NULL)
 			return -1;
-		memcpy(*out_edid, pedid, EDID_LENGTH);
 		printk(KERN_DEBUG "nvidiafb: Found OF EDID for head %d\n", conn);
 		return 0;
 	}

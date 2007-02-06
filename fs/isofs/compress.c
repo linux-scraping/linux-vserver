@@ -16,7 +16,6 @@
  * Transparent decompression of files on an iso9660 filesystem
  */
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/init.h>
 
@@ -43,7 +42,7 @@ static struct semaphore zisofs_zlib_semaphore;
  */
 static int zisofs_readpage(struct file *file, struct page *page)
 {
-	struct inode *inode = file->f_dentry->d_inode;
+	struct inode *inode = file->f_path.dentry->d_inode;
 	struct address_space *mapping = inode->i_mapping;
 	unsigned int maxpage, xpage, fpage, blockindex;
 	unsigned long offset;
@@ -312,7 +311,7 @@ eio:
 	return err;
 }
 
-struct address_space_operations zisofs_aops = {
+const struct address_space_operations zisofs_aops = {
 	.readpage = zisofs_readpage,
 	/* No sync_page operation supported? */
 	/* No bmap operation supported */

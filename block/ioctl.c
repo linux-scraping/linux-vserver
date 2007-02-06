@@ -199,8 +199,8 @@ static int blkdev_locked_ioctl(struct file *file, struct block_device *bdev,
 	return -ENOIOCTLCMD;
 }
 
-static int blkdev_driver_ioctl(struct inode *inode, struct file *file,
-		struct gendisk *disk, unsigned cmd, unsigned long arg)
+int blkdev_driver_ioctl(struct inode *inode, struct file *file,
+			struct gendisk *disk, unsigned cmd, unsigned long arg)
 {
 	int ret;
 	if (disk->fops->unlocked_ioctl)
@@ -215,6 +215,7 @@ static int blkdev_driver_ioctl(struct inode *inode, struct file *file,
 
 	return -ENOTTY;
 }
+EXPORT_SYMBOL_GPL(blkdev_driver_ioctl);
 
 int blkdev_ioctl(struct inode *inode, struct file *file, unsigned cmd,
 			unsigned long arg)
@@ -289,7 +290,7 @@ int blkdev_ioctl(struct inode *inode, struct file *file, unsigned cmd,
    ENOIOCTLCMD for unknown ioctls. */
 long compat_blkdev_ioctl(struct file *file, unsigned cmd, unsigned long arg)
 {
-	struct block_device *bdev = file->f_dentry->d_inode->i_bdev;
+	struct block_device *bdev = file->f_path.dentry->d_inode->i_bdev;
 	struct gendisk *disk = bdev->bd_disk;
 	int ret = -ENOIOCTLCMD;
 	if (disk->fops->compat_ioctl) {

@@ -323,8 +323,23 @@ static const struct pnp_device_id pnp_dev_table[] = {
 	{	"USR9180",		0	},
 	/* U.S. Robotics 56K Voice INT PnP*/
 	{	"USR9190",		0	},
-	/* HP Compaq Tablet PC tc1100 Wacom tablet */
+	/* Wacom tablets */
+	{	"WACF004",		0	},
 	{	"WACF005",		0	},
+	{       "WACF006",              0       },
+	/* Compaq touchscreen */
+	{       "FPI2002",              0 },
+	/* Fujitsu Stylistic touchscreens */
+	{       "FUJ02B2",              0 },
+	{       "FUJ02B3",              0 },
+	/* Fujitsu Stylistic LT touchscreens */
+	{       "FUJ02B4",              0 },
+	/* Passive Fujitsu Stylistic touchscreens */
+	{       "FUJ02B6",              0 },
+	{       "FUJ02B7",              0 },
+	{       "FUJ02B8",              0 },
+	{       "FUJ02B9",              0 },
+	{       "FUJ02BC",              0 },
 	/* Rockwell's (PORALiNK) 33600 INT PNP */
 	{	"WCI0003",		0	},
 	/* Unkown PnP modems */
@@ -429,6 +444,8 @@ serial_pnp_probe(struct pnp_dev *dev, const struct pnp_device_id *dev_id)
 #endif
 
 	port.flags |= UPF_SKIP_TEST | UPF_BOOT_AUTOCONF;
+	if (pnp_irq_flags(dev, 0) & IORESOURCE_IRQ_SHAREABLE)
+		port.flags |= UPF_SHARE_IRQ;
 	port.uartclk = 1843200;
 	port.dev = &dev->dev;
 
@@ -447,11 +464,38 @@ static void __devexit serial_pnp_remove(struct pnp_dev *dev)
 		serial8250_unregister_port(line - 1);
 }
 
+#ifdef CONFIG_PM
+static int serial_pnp_suspend(struct pnp_dev *dev, pm_message_t state)
+{
+	long line = (long)pnp_get_drvdata(dev);
+
+	if (!line)
+		return -ENODEV;
+	serial8250_suspend_port(line - 1);
+	return 0;
+}
+
+static int serial_pnp_resume(struct pnp_dev *dev)
+{
+	long line = (long)pnp_get_drvdata(dev);
+
+	if (!line)
+		return -ENODEV;
+	serial8250_resume_port(line - 1);
+	return 0;
+}
+#else
+#define serial_pnp_suspend NULL
+#define serial_pnp_resume NULL
+#endif /* CONFIG_PM */
+
 static struct pnp_driver serial_pnp_driver = {
 	.name		= "serial",
-	.id_table	= pnp_dev_table,
 	.probe		= serial_pnp_probe,
 	.remove		= __devexit_p(serial_pnp_remove),
+	.suspend	= serial_pnp_suspend,
+	.resume		= serial_pnp_resume,
+	.id_table	= pnp_dev_table,
 };
 
 static int __init serial8250_pnp_init(void)

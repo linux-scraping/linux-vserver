@@ -5,15 +5,15 @@
  * Copyright 1992, Linus Torvalds.
  */
 
-#include <linux/config.h>
+#include <asm/alternative.h>
 
-#ifdef CONFIG_SMP
-#define LOCK_PREFIX "lock ; "
+#if __GNUC__ < 4 || __GNUC_MINOR__ < 1
+/* Technically wrong, but this avoids compilation errors on some gcc
+   versions. */
+#define ADDR "=m" (*(volatile long *) addr)
 #else
-#define LOCK_PREFIX ""
+#define ADDR "+m" (*(volatile long *) addr)
 #endif
-
-#define ADDR (*(volatile long *) addr)
 
 /**
  * set_bit - Atomically set a bit in memory
@@ -29,7 +29,7 @@ static __inline__ void set_bit(int nr, volatile void * addr)
 {
 	__asm__ __volatile__( LOCK_PREFIX
 		"btsl %1,%0"
-		:"+m" (ADDR)
+		:ADDR
 		:"dIr" (nr) : "memory");
 }
 
@@ -46,7 +46,7 @@ static __inline__ void __set_bit(int nr, volatile void * addr)
 {
 	__asm__ volatile(
 		"btsl %1,%0"
-		:"+m" (ADDR)
+		:ADDR
 		:"dIr" (nr) : "memory");
 }
 
@@ -64,7 +64,7 @@ static __inline__ void clear_bit(int nr, volatile void * addr)
 {
 	__asm__ __volatile__( LOCK_PREFIX
 		"btrl %1,%0"
-		:"+m" (ADDR)
+		:ADDR
 		:"dIr" (nr));
 }
 
@@ -72,7 +72,7 @@ static __inline__ void __clear_bit(int nr, volatile void * addr)
 {
 	__asm__ __volatile__(
 		"btrl %1,%0"
-		:"+m" (ADDR)
+		:ADDR
 		:"dIr" (nr));
 }
 
@@ -92,7 +92,7 @@ static __inline__ void __change_bit(int nr, volatile void * addr)
 {
 	__asm__ __volatile__(
 		"btcl %1,%0"
-		:"+m" (ADDR)
+		:ADDR
 		:"dIr" (nr));
 }
 
@@ -109,7 +109,7 @@ static __inline__ void change_bit(int nr, volatile void * addr)
 {
 	__asm__ __volatile__( LOCK_PREFIX
 		"btcl %1,%0"
-		:"+m" (ADDR)
+		:ADDR
 		:"dIr" (nr));
 }
 
@@ -127,7 +127,7 @@ static __inline__ int test_and_set_bit(int nr, volatile void * addr)
 
 	__asm__ __volatile__( LOCK_PREFIX
 		"btsl %2,%1\n\tsbbl %0,%0"
-		:"=r" (oldbit),"+m" (ADDR)
+		:"=r" (oldbit),ADDR
 		:"dIr" (nr) : "memory");
 	return oldbit;
 }
@@ -147,7 +147,7 @@ static __inline__ int __test_and_set_bit(int nr, volatile void * addr)
 
 	__asm__(
 		"btsl %2,%1\n\tsbbl %0,%0"
-		:"=r" (oldbit),"+m" (ADDR)
+		:"=r" (oldbit),ADDR
 		:"dIr" (nr));
 	return oldbit;
 }
@@ -166,7 +166,7 @@ static __inline__ int test_and_clear_bit(int nr, volatile void * addr)
 
 	__asm__ __volatile__( LOCK_PREFIX
 		"btrl %2,%1\n\tsbbl %0,%0"
-		:"=r" (oldbit),"+m" (ADDR)
+		:"=r" (oldbit),ADDR
 		:"dIr" (nr) : "memory");
 	return oldbit;
 }
@@ -186,7 +186,7 @@ static __inline__ int __test_and_clear_bit(int nr, volatile void * addr)
 
 	__asm__(
 		"btrl %2,%1\n\tsbbl %0,%0"
-		:"=r" (oldbit),"+m" (ADDR)
+		:"=r" (oldbit),ADDR
 		:"dIr" (nr));
 	return oldbit;
 }
@@ -198,7 +198,7 @@ static __inline__ int __test_and_change_bit(int nr, volatile void * addr)
 
 	__asm__ __volatile__(
 		"btcl %2,%1\n\tsbbl %0,%0"
-		:"=r" (oldbit),"+m" (ADDR)
+		:"=r" (oldbit),ADDR
 		:"dIr" (nr) : "memory");
 	return oldbit;
 }
@@ -217,7 +217,7 @@ static __inline__ int test_and_change_bit(int nr, volatile void * addr)
 
 	__asm__ __volatile__( LOCK_PREFIX
 		"btcl %2,%1\n\tsbbl %0,%0"
-		:"=r" (oldbit),"+m" (ADDR)
+		:"=r" (oldbit),ADDR
 		:"dIr" (nr) : "memory");
 	return oldbit;
 }
@@ -243,7 +243,7 @@ static __inline__ int variable_test_bit(int nr, volatile const void * addr)
 	__asm__ __volatile__(
 		"btl %2,%1\n\tsbbl %0,%0"
 		:"=r" (oldbit)
-		:"m" (ADDR),"dIr" (nr));
+		:"m" (*(volatile long *)addr),"dIr" (nr));
 	return oldbit;
 }
 
@@ -404,6 +404,8 @@ static __inline__ int fls(int x)
 		: "=&r" (r) : "rm" (x), "rm" (-1));
 	return r+1;
 }
+
+#define ARCH_HAS_FAST_MULTIPLIER 1
 
 #include <asm-generic/bitops/hweight.h>
 

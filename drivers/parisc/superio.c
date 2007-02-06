@@ -94,7 +94,7 @@ static struct superio_device sio_dev;
 #define PFX	SUPERIO ": "
 
 static irqreturn_t
-superio_interrupt(int parent_irq, void *devp, struct pt_regs *regs)
+superio_interrupt(int parent_irq, void *devp)
 {
 	u8 results;
 	u8 local_irq;
@@ -138,7 +138,7 @@ superio_interrupt(int parent_irq, void *devp, struct pt_regs *regs)
 	}
 
 	/* Call the appropriate device's interrupt */
-	__do_IRQ(local_irq, regs);
+	__do_IRQ(local_irq);
 
 	/* set EOI - forces a new interrupt if a lower priority device
 	 * still needs service.
@@ -271,7 +271,7 @@ superio_init(struct pci_dev *pcidev)
 	else
 		printk(KERN_ERR PFX "USB regulator not initialized!\n");
 
-	if (request_irq(pdev->irq, superio_interrupt, SA_INTERRUPT,
+	if (request_irq(pdev->irq, superio_interrupt, IRQF_DISABLED,
 			SUPERIO, (void *)sio)) {
 
 		printk(KERN_ERR PFX "could not get irq\n");
@@ -360,7 +360,7 @@ int superio_fixup_irq(struct pci_dev *pcidev)
 #endif
 
 	for (i = 0; i < 16; i++) {
-		irq_desc[i].handler = &superio_interrupt_type;
+		irq_desc[i].chip = &superio_interrupt_type;
 	}
 
 	/*

@@ -226,7 +226,7 @@ static u8 tpm_nsc_status(struct tpm_chip *chip)
 	return inb(chip->vendor.base + NSC_STATUS);
 }
 
-static struct file_operations nsc_ops = {
+static const struct file_operations nsc_ops = {
 	.owner = THIS_MODULE,
 	.llseek = no_llseek,
 	.open = tpm_open,
@@ -284,7 +284,7 @@ static struct device_driver nsc_drv = {
 static int __init init_nsc(void)
 {
 	int rc = 0;
-	int lo, hi;
+	int lo, hi, err;
 	int nscAddrBase = TPM_ADDR;
 	struct tpm_chip *chip;
 	unsigned long base;
@@ -297,7 +297,9 @@ static int __init init_nsc(void)
 			return -ENODEV;
 	}
 
-	driver_register(&nsc_drv);
+	err = driver_register(&nsc_drv);
+	if (err)
+		return err;
 
 	hi = tpm_read_index(nscAddrBase, TPM_NSC_BASE0_HI);
 	lo = tpm_read_index(nscAddrBase, TPM_NSC_BASE0_LO);

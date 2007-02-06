@@ -11,7 +11,6 @@
  * Written by Miles Bader <miles@gnu.org>
  */
 
-#include <linux/config.h>
 #include <linux/errno.h>
 #include <linux/sched.h>
 #include <linux/kernel.h>
@@ -84,7 +83,7 @@ int kernel_thread (int (*fn)(void *), void *arg, unsigned long flags)
 	/* Clone this thread.  Note that we don't pass the clone syscall's
 	   second argument -- it's ignored for calls from kernel mode (the
 	   child's SP is always set to the top of the kernel stack).  */
-	arg0 = flags | CLONE_VM;
+	arg0 = flags | CLONE_VM | CLONE_KTHREAD;
 	syscall = __NR_clone;
 	asm volatile ("trap " SYSCALL_SHORT_TRAP
 		      : "=r" (ret), "=r" (syscall)

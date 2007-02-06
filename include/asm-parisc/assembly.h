@@ -29,7 +29,8 @@
 #define LDREGX  ldd,s
 #define LDREGM	ldd,mb
 #define STREGM	std,ma
-#define SHRREG  shrd
+#define SHRREG	shrd
+#define SHLREG	shld
 #define RP_OFFSET	16
 #define FRAME_SIZE	128
 #define CALLEE_REG_FRAME_SIZE	144
@@ -39,7 +40,8 @@
 #define LDREGX  ldwx,s
 #define LDREGM	ldwm
 #define STREGM	stwm
-#define SHRREG  shr
+#define SHRREG	shr
+#define SHLREG	shlw
 #define RP_OFFSET	20
 #define FRAME_SIZE	64
 #define CALLEE_REG_FRAME_SIZE	128
@@ -48,6 +50,7 @@
 #define CALLEE_SAVE_FRAME_SIZE (CALLEE_REG_FRAME_SIZE + CALLEE_FLOAT_FRAME_SIZE)
 
 #ifdef CONFIG_PA20
+#define LDCW		ldcw,co
 #define BL		b,l
 # ifdef CONFIG_64BIT
 #  define LEVEL		2.0w
@@ -55,6 +58,7 @@
 #  define LEVEL		2.0
 # endif
 #else
+#define LDCW		ldcw
 #define BL		bl
 #define LEVEL		1.1
 #endif

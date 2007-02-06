@@ -25,7 +25,6 @@
  *
  */
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/slab.h>
@@ -51,6 +50,7 @@ ACPI_MODULE_NAME("osl")
 struct acpi_os_dpc {
 	acpi_osd_exec_callback function;
 	void *context;
+	struct work_struct work;
 };
 
 #ifdef CONFIG_ACPI_CUSTOM_DSDT
@@ -135,22 +135,6 @@ void acpi_os_vprintf(const char *fmt, va_list args)
 	printk("%s", buffer);
 #endif
 }
-
-extern int acpi_in_resume;
-void *acpi_os_allocate(acpi_size size)
-{
-	if (acpi_in_resume)
-		return kmalloc(size, GFP_ATOMIC);
-	else
-		return kmalloc(size, GFP_KERNEL);
-}
-
-void acpi_os_free(void *ptr)
-{
-	kfree(ptr);
-}
-
-EXPORT_SYMBOL(acpi_os_free);
 
 acpi_status acpi_os_get_root_pointer(u32 flags, struct acpi_pointer *addr)
 {
@@ -254,7 +238,7 @@ acpi_os_table_override(struct acpi_table_header * existing_table,
 	return AE_OK;
 }
 
-static irqreturn_t acpi_irq(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t acpi_irq(int irq, void *dev_id)
 {
 	return (*acpi_irq_handler) (acpi_irq_context) ? IRQ_HANDLED : IRQ_NONE;
 }
@@ -279,7 +263,7 @@ acpi_os_install_interrupt_handler(u32 gsi, acpi_osd_handler handler,
 
 	acpi_irq_handler = handler;
 	acpi_irq_context = context;
-	if (request_irq(irq, acpi_irq, SA_SHIRQ, "acpi", acpi_irq)) {
+	if (request_irq(irq, acpi_irq, IRQF_SHARED, "acpi", acpi_irq)) {
 		printk(KERN_ERR PREFIX "SCI (IRQ%d) allocation failed\n", irq);
 		return AE_NOT_ACQUIRED;
 	}
@@ -581,32 +565,42 @@ void acpi_os_derive_pci_id(acpi_handle rhandle,	/* upper bound  */
 	acpi_os_derive_pci_id_2(rhandle, chandle, id, &is_bridge, &bus_number);
 }
 
-static void acpi_os_execute_deferred(void *context)
+static void acpi_os_execute_deferred(struct work_struct *work)
 {
-	struct acpi_os_dpc *dpc = NULL;
+	struct acpi_os_dpc *dpc = container_of(work, struct acpi_os_dpc, work);
 
-	ACPI_FUNCTION_TRACE("os_execute_deferred");
-
-	dpc = (struct acpi_os_dpc *)context;
 	if (!dpc) {
-		ACPI_DEBUG_PRINT((ACPI_DB_ERROR, "Invalid (NULL) context.\n"));
-		return_VOID;
+		printk(KERN_ERR PREFIX "Invalid (NULL) context\n");
+		return;
 	}
 
 	dpc->function(dpc->context);
 
 	kfree(dpc);
 
-	return_VOID;
+	return;
 }
 
-acpi_status
-acpi_os_queue_for_execution(u32 priority,
+/*******************************************************************************
+ *
+ * FUNCTION:    acpi_os_execute
+ *
+ * PARAMETERS:  Type               - Type of the callback
+ *              Function           - Function to be executed
+ *              Context            - Function parameters
+ *
+ * RETURN:      Status
+ *
+ * DESCRIPTION: Depending on type, either queues function for deferred execution or
+ *              immediately executes function on a separate thread.
+ *
+ ******************************************************************************/
+
+acpi_status acpi_os_execute(acpi_execute_type type,
 			    acpi_osd_exec_callback function, void *context)
 {
 	acpi_status status = AE_OK;
 	struct acpi_os_dpc *dpc;
-	struct work_struct *task;
 
 	ACPI_FUNCTION_TRACE("os_queue_for_execution");
 
@@ -619,28 +613,22 @@ acpi_os_queue_for_execution(u32 priority,
 
 	/*
 	 * Allocate/initialize DPC structure.  Note that this memory will be
-	 * freed by the callee.  The kernel handles the tq_struct list  in a
+	 * freed by the callee.  The kernel handles the work_struct list  in a
 	 * way that allows us to also free its memory inside the callee.
 	 * Because we may want to schedule several tasks with different
 	 * parameters we can't use the approach some kernel code uses of
-	 * having a static tq_struct.
-	 * We can save time and code by allocating the DPC and tq_structs
-	 * from the same memory.
+	 * having a static work_struct.
 	 */
 
-	dpc =
-	    kmalloc(sizeof(struct acpi_os_dpc) + sizeof(struct work_struct),
-		    GFP_ATOMIC);
+	dpc = kmalloc(sizeof(struct acpi_os_dpc), GFP_ATOMIC);
 	if (!dpc)
 		return_ACPI_STATUS(AE_NO_MEMORY);
 
 	dpc->function = function;
 	dpc->context = context;
 
-	task = (void *)(dpc + 1);
-	INIT_WORK(task, acpi_os_execute_deferred, (void *)dpc);
-
-	if (!queue_work(kacpid_wq, task)) {
+	INIT_WORK(&dpc->work, acpi_os_execute_deferred);
+	if (!queue_work(kacpid_wq, &dpc->work)) {
 		ACPI_DEBUG_PRINT((ACPI_DB_ERROR,
 				  "Call to queue_work() failed.\n"));
 		kfree(dpc);
@@ -650,7 +638,7 @@ acpi_os_queue_for_execution(u32 priority,
 	return_ACPI_STATUS(status);
 }
 
-EXPORT_SYMBOL(acpi_os_queue_for_execution);
+EXPORT_SYMBOL(acpi_os_execute);
 
 void acpi_os_wait_events_complete(void *context)
 {
@@ -662,35 +650,19 @@ EXPORT_SYMBOL(acpi_os_wait_events_complete);
 /*
  * Allocate the memory for a spinlock and initialize it.
  */
-acpi_status acpi_os_create_lock(acpi_handle * out_handle)
+acpi_status acpi_os_create_lock(acpi_spinlock * handle)
 {
-	spinlock_t *lock_ptr;
+	spin_lock_init(*handle);
 
-	ACPI_FUNCTION_TRACE("os_create_lock");
-
-	lock_ptr = acpi_os_allocate(sizeof(spinlock_t));
-
-	spin_lock_init(lock_ptr);
-
-	ACPI_DEBUG_PRINT((ACPI_DB_MUTEX, "Creating spinlock[%p].\n", lock_ptr));
-
-	*out_handle = lock_ptr;
-
-	return_ACPI_STATUS(AE_OK);
+	return AE_OK;
 }
 
 /*
  * Deallocate the memory for a spinlock.
  */
-void acpi_os_delete_lock(acpi_handle handle)
+void acpi_os_delete_lock(acpi_spinlock handle)
 {
-	ACPI_FUNCTION_TRACE("os_create_lock");
-
-	ACPI_DEBUG_PRINT((ACPI_DB_MUTEX, "Deleting spinlock[%p].\n", handle));
-
-	acpi_os_free(handle);
-
-	return_VOID;
+	return;
 }
 
 acpi_status
@@ -698,11 +670,10 @@ acpi_os_create_semaphore(u32 max_units, u32 initial_units, acpi_handle * handle)
 {
 	struct semaphore *sem = NULL;
 
-	ACPI_FUNCTION_TRACE("os_create_semaphore");
 
 	sem = acpi_os_allocate(sizeof(struct semaphore));
 	if (!sem)
-		return_ACPI_STATUS(AE_NO_MEMORY);
+		return AE_NO_MEMORY;
 	memset(sem, 0, sizeof(struct semaphore));
 
 	sema_init(sem, initial_units);
@@ -712,7 +683,7 @@ acpi_os_create_semaphore(u32 max_units, u32 initial_units, acpi_handle * handle)
 	ACPI_DEBUG_PRINT((ACPI_DB_MUTEX, "Creating semaphore[%p|%d].\n",
 			  *handle, initial_units));
 
-	return_ACPI_STATUS(AE_OK);
+	return AE_OK;
 }
 
 EXPORT_SYMBOL(acpi_os_create_semaphore);
@@ -728,17 +699,16 @@ acpi_status acpi_os_delete_semaphore(acpi_handle handle)
 {
 	struct semaphore *sem = (struct semaphore *)handle;
 
-	ACPI_FUNCTION_TRACE("os_delete_semaphore");
 
 	if (!sem)
-		return_ACPI_STATUS(AE_BAD_PARAMETER);
+		return AE_BAD_PARAMETER;
 
 	ACPI_DEBUG_PRINT((ACPI_DB_MUTEX, "Deleting semaphore[%p].\n", handle));
 
-	acpi_os_free(sem);
+	kfree(sem);
 	sem = NULL;
 
-	return_ACPI_STATUS(AE_OK);
+	return AE_OK;
 }
 
 EXPORT_SYMBOL(acpi_os_delete_semaphore);
@@ -758,19 +728,25 @@ acpi_status acpi_os_wait_semaphore(acpi_handle handle, u32 units, u16 timeout)
 	struct semaphore *sem = (struct semaphore *)handle;
 	int ret = 0;
 
-	ACPI_FUNCTION_TRACE("os_wait_semaphore");
 
 	if (!sem || (units < 1))
-		return_ACPI_STATUS(AE_BAD_PARAMETER);
+		return AE_BAD_PARAMETER;
 
 	if (units > 1)
-		return_ACPI_STATUS(AE_SUPPORT);
+		return AE_SUPPORT;
 
 	ACPI_DEBUG_PRINT((ACPI_DB_MUTEX, "Waiting for semaphore[%p|%d|%d]\n",
 			  handle, units, timeout));
 
-	if (in_atomic())
-		timeout = 0;
+	/*
+	 * This can be called during resume with interrupts off.
+	 * Like boot-time, we should be single threaded and will
+	 * always get the lock if we try -- timeout or not.
+	 * If this doesn't succeed, then we will oops courtesy of
+	 * might_sleep() in down().
+	 */
+	if (!down_trylock(sem))
+		return AE_OK;
 
 	switch (timeout) {
 		/*
@@ -816,17 +792,17 @@ acpi_status acpi_os_wait_semaphore(acpi_handle handle, u32 units, u16 timeout)
 	}
 
 	if (ACPI_FAILURE(status)) {
-		ACPI_DEBUG_PRINT((ACPI_DB_ERROR,
-				  "Failed to acquire semaphore[%p|%d|%d], %s\n",
+		ACPI_DEBUG_PRINT((ACPI_DB_MUTEX,
+				  "Failed to acquire semaphore[%p|%d|%d], %s",
 				  handle, units, timeout,
 				  acpi_format_exception(status)));
 	} else {
 		ACPI_DEBUG_PRINT((ACPI_DB_MUTEX,
-				  "Acquired semaphore[%p|%d|%d]\n", handle,
+				  "Acquired semaphore[%p|%d|%d]", handle,
 				  units, timeout));
 	}
 
-	return_ACPI_STATUS(status);
+	return status;
 }
 
 EXPORT_SYMBOL(acpi_os_wait_semaphore);
@@ -838,20 +814,19 @@ acpi_status acpi_os_signal_semaphore(acpi_handle handle, u32 units)
 {
 	struct semaphore *sem = (struct semaphore *)handle;
 
-	ACPI_FUNCTION_TRACE("os_signal_semaphore");
 
 	if (!sem || (units < 1))
-		return_ACPI_STATUS(AE_BAD_PARAMETER);
+		return AE_BAD_PARAMETER;
 
 	if (units > 1)
-		return_ACPI_STATUS(AE_SUPPORT);
+		return AE_SUPPORT;
 
 	ACPI_DEBUG_PRINT((ACPI_DB_MUTEX, "Signaling semaphore[%p|%d]\n", handle,
 			  units));
 
 	up(sem);
 
-	return_ACPI_STATUS(AE_OK);
+	return AE_OK;
 }
 
 EXPORT_SYMBOL(acpi_os_signal_semaphore);
@@ -895,14 +870,6 @@ u8 acpi_os_writable(void *ptr, acpi_size len)
 	return 1;
 }
 #endif
-
-u32 acpi_os_get_thread_id(void)
-{
-	if (!in_atomic())
-		return current->pid;
-
-	return 0;
-}
 
 acpi_status acpi_os_signal(u32 function, void *info)
 {
@@ -1028,10 +995,10 @@ EXPORT_SYMBOL(max_cstate);
  * handle is a pointer to the spinlock_t.
  */
 
-acpi_cpu_flags acpi_os_acquire_lock(acpi_handle handle)
+acpi_cpu_flags acpi_os_acquire_lock(acpi_spinlock lockp)
 {
 	acpi_cpu_flags flags;
-	spin_lock_irqsave((spinlock_t *) handle, flags);
+	spin_lock_irqsave(lockp, flags);
 	return flags;
 }
 
@@ -1039,9 +1006,9 @@ acpi_cpu_flags acpi_os_acquire_lock(acpi_handle handle)
  * Release a spinlock. See above.
  */
 
-void acpi_os_release_lock(acpi_handle handle, acpi_cpu_flags flags)
+void acpi_os_release_lock(acpi_spinlock lockp, acpi_cpu_flags flags)
 {
-	spin_unlock_irqrestore((spinlock_t *) handle, flags);
+	spin_unlock_irqrestore(lockp, flags);
 }
 
 #ifndef ACPI_USE_LOCAL_CACHE
@@ -1050,12 +1017,12 @@ void acpi_os_release_lock(acpi_handle handle, acpi_cpu_flags flags)
  *
  * FUNCTION:    acpi_os_create_cache
  *
- * PARAMETERS:  CacheName       - Ascii name for the cache
- *              ObjectSize      - Size of each cached object
- *              MaxDepth        - Maximum depth of the cache (in objects)
- *              ReturnCache     - Where the new cache object is returned
+ * PARAMETERS:  name      - Ascii name for the cache
+ *              size      - Size of each cached object
+ *              depth     - Maximum depth of the cache (in objects) <ignored>
+ *              cache     - Where the new cache object is returned
  *
- * RETURN:      Status
+ * RETURN:      status
  *
  * DESCRIPTION: Create a cache object
  *
@@ -1065,7 +1032,10 @@ acpi_status
 acpi_os_create_cache(char *name, u16 size, u16 depth, acpi_cache_t ** cache)
 {
 	*cache = kmem_cache_create(name, size, 0, 0, NULL, NULL);
-	return AE_OK;
+	if (*cache == NULL)
+		return AE_ERROR;
+	else
+		return AE_OK;
 }
 
 /*******************************************************************************
@@ -1082,7 +1052,7 @@ acpi_os_create_cache(char *name, u16 size, u16 depth, acpi_cache_t ** cache)
 
 acpi_status acpi_os_purge_cache(acpi_cache_t * cache)
 {
-	(void)kmem_cache_shrink(cache);
+	kmem_cache_shrink(cache);
 	return (AE_OK);
 }
 
@@ -1101,7 +1071,7 @@ acpi_status acpi_os_purge_cache(acpi_cache_t * cache)
 
 acpi_status acpi_os_delete_cache(acpi_cache_t * cache)
 {
-	(void)kmem_cache_destroy(cache);
+	kmem_cache_destroy(cache);
 	return (AE_OK);
 }
 
@@ -1125,25 +1095,52 @@ acpi_status acpi_os_release_object(acpi_cache_t * cache, void *object)
 	return (AE_OK);
 }
 
-/*******************************************************************************
+/******************************************************************************
  *
- * FUNCTION:    acpi_os_acquire_object
+ * FUNCTION:    acpi_os_validate_interface
  *
- * PARAMETERS:  Cache           - Handle to cache object
- *              ReturnObject    - Where the object is returned
+ * PARAMETERS:  interface           - Requested interface to be validated
  *
- * RETURN:      Status
+ * RETURN:      AE_OK if interface is supported, AE_SUPPORT otherwise
  *
- * DESCRIPTION: Get an object from the specified cache.  If cache is empty,
- *              the object is allocated.
+ * DESCRIPTION: Match an interface string to the interfaces supported by the
+ *              host. Strings originate from an AML call to the _OSI method.
  *
- ******************************************************************************/
+ *****************************************************************************/
 
-void *acpi_os_acquire_object(acpi_cache_t * cache)
+acpi_status
+acpi_os_validate_interface (char *interface)
 {
-	void *object = kmem_cache_alloc(cache, GFP_KERNEL);
-	WARN_ON(!object);
-	return object;
+
+    return AE_SUPPORT;
 }
+
+
+/******************************************************************************
+ *
+ * FUNCTION:    acpi_os_validate_address
+ *
+ * PARAMETERS:  space_id             - ACPI space ID
+ *              address             - Physical address
+ *              length              - Address length
+ *
+ * RETURN:      AE_OK if address/length is valid for the space_id. Otherwise,
+ *              should return AE_AML_ILLEGAL_ADDRESS.
+ *
+ * DESCRIPTION: Validate a system address via the host OS. Used to validate
+ *              the addresses accessed by AML operation regions.
+ *
+ *****************************************************************************/
+
+acpi_status
+acpi_os_validate_address (
+    u8                   space_id,
+    acpi_physical_address   address,
+    acpi_size               length)
+{
+
+    return AE_OK;
+}
+
 
 #endif

@@ -18,6 +18,8 @@
 /* and dm-bio-list.h is not under include/linux because.... ??? */
 #include "../../../drivers/md/dm-bio-list.h"
 
+#ifdef CONFIG_BLOCK
+
 #define	LEVEL_MULTIPATH		(-4)
 #define	LEVEL_LINEAR		(-1)
 #define	LEVEL_FAULTY		(-5)
@@ -29,18 +31,16 @@
 #define	LEVEL_NONE		(-1000000)
 
 #define MaxSector (~(sector_t)0)
-#define MD_THREAD_NAME_MAX 14
 
 typedef struct mddev_s mddev_t;
 typedef struct mdk_rdev_s mdk_rdev_t;
-
-#define MAX_MD_DEVS  256	/* Max number of md dev */
 
 /*
  * options passed in raidrun:
  */
 
-#define MAX_CHUNK_SIZE (4096*1024)
+/* Currently this must fit in an 'int' */
+#define MAX_CHUNK_SIZE (1<<30)
 
 /*
  * MD's 'extended' device
@@ -57,6 +57,7 @@ struct mdk_rdev_s
 
 	struct page	*sb_page;
 	int		sb_loaded;
+	__u64		sb_events;
 	sector_t	data_offset;	/* start of data in array */
 	sector_t	sb_offset;
 	int		sb_size;	/* bytes in the superblock */
@@ -87,6 +88,10 @@ struct mdk_rdev_s
 					 * array and could again if we did a partial
 					 * resync from the bitmap
 					 */
+	sector_t	recovery_offset;/* If this device has been partially
+					 * recovered, this is where we were
+					 * up to.
+					 */
 
 	atomic_t	nr_pending;	/* number of pending requests.
 					 * only maintained for arrays that
@@ -108,7 +113,11 @@ struct mddev_s
 	dev_t				unit;
 	int				md_minor;
 	struct list_head 		disks;
-	int				sb_dirty;
+	unsigned long			flags;
+#define MD_CHANGE_DEVS	0	/* Some device status has changed */
+#define MD_CHANGE_CLEAN 1	/* transition to or from 'clean' */
+#define MD_CHANGE_PENDING 2	/* superblock update in progress */
+
 	int				ro;
 
 	struct gendisk			*gendisk;
@@ -142,9 +151,10 @@ struct mddev_s
 
 	struct mdk_thread_s		*thread;	/* management thread */
 	struct mdk_thread_s		*sync_thread;	/* doing resync or reconstruct */
-	sector_t			curr_resync;	/* blocks scheduled */
+	sector_t			curr_resync;	/* last block scheduled */
 	unsigned long			resync_mark;	/* a recent timestamp */
 	sector_t			resync_mark_cnt;/* blocks written at resync_mark */
+	sector_t			curr_mark_cnt; /* blocks scheduled now */
 
 	sector_t			resync_max_sectors; /* may be set by personality */
 
@@ -182,6 +192,8 @@ struct mddev_s
 #define	MD_RECOVERY_REQUESTED	6
 #define	MD_RECOVERY_CHECK	7
 #define MD_RECOVERY_RESHAPE	8
+#define	MD_RECOVERY_FROZEN	9
+
 	unsigned long			recovery;
 
 	int				in_sync;	/* know to not need resync */
@@ -353,5 +365,6 @@ static inline void safe_put_page(struct page *p)
 	if (p) put_page(p);
 }
 
+#endif /* CONFIG_BLOCK */
 #endif
 

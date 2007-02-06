@@ -13,21 +13,21 @@ enum nfqnl_msg_types {
 };
 
 struct nfqnl_msg_packet_hdr {
-	u_int32_t	packet_id;	/* unique ID of packet in queue */
-	u_int16_t	hw_protocol;	/* hw protocol (network order) */
+	__be32		packet_id;	/* unique ID of packet in queue */
+	__be16		hw_protocol;	/* hw protocol (network order) */
 	u_int8_t	hook;		/* netfilter hook */
 } __attribute__ ((packed));
 
 struct nfqnl_msg_packet_hw {
-	u_int16_t	hw_addrlen;
+	__be16		hw_addrlen;
 	u_int16_t	_pad;
 	u_int8_t	hw_addr[8];
-} __attribute__ ((packed));
+};
 
 struct nfqnl_msg_packet_timestamp {
-	aligned_u64	sec;
-	aligned_u64	usec;
-} __attribute__ ((packed));
+	aligned_be64	sec;
+	aligned_be64	usec;
+};
 
 enum nfqnl_attr_type {
 	NFQA_UNSPEC,
@@ -47,9 +47,9 @@ enum nfqnl_attr_type {
 #define NFQA_MAX (__NFQA_MAX - 1)
 
 struct nfqnl_msg_verdict_hdr {
-	u_int32_t verdict;
-	u_int32_t id;
-} __attribute__ ((packed));
+	__be32 verdict;
+	__be32 id;
+};
 
 
 enum nfqnl_msg_config_cmds {
@@ -63,8 +63,8 @@ enum nfqnl_msg_config_cmds {
 struct nfqnl_msg_config_cmd {
 	u_int8_t	command;	/* nfqnl_msg_config_cmds */
 	u_int8_t	_pad;
-	u_int16_t	pf;		/* AF_xxx for PF_[UN]BIND */
-} __attribute__ ((packed));
+	__be16		pf;		/* AF_xxx for PF_[UN]BIND */
+};
 
 enum nfqnl_config_mode {
 	NFQNL_COPY_NONE,
@@ -73,7 +73,7 @@ enum nfqnl_config_mode {
 };
 
 struct nfqnl_msg_config_params {
-	u_int32_t	copy_range;
+	__be32		copy_range;
 	u_int8_t	copy_mode;	/* enum nfqnl_config_mode */
 } __attribute__ ((packed));
 
@@ -82,6 +82,7 @@ enum nfqnl_attr_config {
 	NFQA_CFG_UNSPEC,
 	NFQA_CFG_CMD,			/* nfqnl_msg_config_cmd */
 	NFQA_CFG_PARAMS,		/* nfqnl_msg_config_params */
+	NFQA_CFG_QUEUE_MAXLEN,		/* u_int32_t */
 	__NFQA_CFG_MAX
 };
 #define NFQA_CFG_MAX (__NFQA_CFG_MAX-1)

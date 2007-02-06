@@ -7,7 +7,6 @@
  * Copyright (C) 1999, 2000 Silicon Graphics, Inc.
  * Copyright (C) 2001 MIPS Technologies, Inc.
  */
-#include <linux/config.h>
 #include <linux/a.out.h>
 #include <linux/capability.h>
 #include <linux/errno.h>
@@ -29,7 +28,6 @@
 #include <linux/shm.h>
 #include <linux/compiler.h>
 #include <linux/module.h>
-#include <linux/vs_cvirt.h>
 
 #include <asm/branch.h>
 #include <asm/cachectl.h>
@@ -233,7 +231,7 @@ out:
  */
 asmlinkage int sys_uname(struct old_utsname __user * name)
 {
-	if (name && !copy_to_user(name, vx_new_utsname(), sizeof (*name)))
+	if (name && !copy_to_user(name, utsname(), sizeof (*name)))
 		return 0;
 	return -EFAULT;
 }
@@ -244,30 +242,33 @@ asmlinkage int sys_uname(struct old_utsname __user * name)
 asmlinkage int sys_olduname(struct oldold_utsname __user * name)
 {
 	int error;
-	struct new_utsname *ptr;
 
 	if (!name)
 		return -EFAULT;
 	if (!access_ok(VERIFY_WRITE,name,sizeof(struct oldold_utsname)))
 		return -EFAULT;
 
-	ptr = vx_new_utsname();
-	error = __copy_to_user(&name->sysname,ptr->sysname,__OLD_UTS_LEN);
-	error -= __put_user(0,name->sysname+__OLD_UTS_LEN);
-	error -= __copy_to_user(&name->nodename,ptr->nodename,__OLD_UTS_LEN);
-	error -= __put_user(0,name->nodename+__OLD_UTS_LEN);
-	error -= __copy_to_user(&name->release,ptr->release,__OLD_UTS_LEN);
-	error -= __put_user(0,name->release+__OLD_UTS_LEN);
-	error -= __copy_to_user(&name->version,ptr->version,__OLD_UTS_LEN);
-	error -= __put_user(0,name->version+__OLD_UTS_LEN);
-	error -= __copy_to_user(&name->machine,ptr->machine,__OLD_UTS_LEN);
-	error = __put_user(0,name->machine+__OLD_UTS_LEN);
+	error = __copy_to_user(&name->sysname, &utsname()->sysname,
+			       __OLD_UTS_LEN);
+	error -= __put_user(0, name->sysname + __OLD_UTS_LEN);
+	error -= __copy_to_user(&name->nodename, &utsname()->nodename,
+				__OLD_UTS_LEN);
+	error -= __put_user(0, name->nodename + __OLD_UTS_LEN);
+	error -= __copy_to_user(&name->release, &utsname()->release,
+				__OLD_UTS_LEN);
+	error -= __put_user(0, name->release + __OLD_UTS_LEN);
+	error -= __copy_to_user(&name->version, &utsname()->version,
+				__OLD_UTS_LEN);
+	error -= __put_user(0, name->version + __OLD_UTS_LEN);
+	error -= __copy_to_user(&name->machine, &utsname()->machine,
+				__OLD_UTS_LEN);
+	error = __put_user(0, name->machine + __OLD_UTS_LEN);
 	error = error ? -EFAULT : 0;
 
 	return error;
 }
 
-void sys_set_thread_area(unsigned long addr)
+asmlinkage int sys_set_thread_area(unsigned long addr)
 {
 	struct thread_info *ti = task_thread_info(current);
 
@@ -275,6 +276,8 @@ void sys_set_thread_area(unsigned long addr)
 
 	/* If some future MIPS implementation has this register in hardware,
 	 * we will need to update it here (and in context switches).  */
+
+	return 0;
 }
 
 asmlinkage int _sys_sysmips(int cmd, long arg1, int arg2, int arg3)
@@ -304,7 +307,7 @@ asmlinkage int _sys_sysmips(int cmd, long arg1, int arg2, int arg3)
  *
  * This is really horribly ugly.
  */
-asmlinkage int sys_ipc (uint call, int first, int second,
+asmlinkage int sys_ipc (unsigned int call, int first, int second,
 			unsigned long third, void __user *ptr, long fifth)
 {
 	int version, ret;
@@ -362,18 +365,18 @@ asmlinkage int sys_ipc (uint call, int first, int second,
 	case SHMAT:
 		switch (version) {
 		default: {
-			ulong raddr;
+			unsigned long raddr;
 			ret = do_shmat (first, (char __user *) ptr, second,
 					&raddr);
 			if (ret)
 				return ret;
-			return put_user (raddr, (ulong __user *) third);
+			return put_user (raddr, (unsigned long __user *) third);
 		}
 		case 1:	/* iBCS2 emulator entry point */
 			if (!segment_eq(get_fs(), get_ds()))
 				return -EINVAL;
 			return do_shmat (first, (char __user *) ptr, second,
-					 (ulong *) third);
+					 (unsigned long *) third);
 		}
 	case SHMDT:
 		return sys_shmdt ((char __user *)ptr);
@@ -402,4 +405,33 @@ asmlinkage int sys_cachectl(char *addr, int nbytes, int op)
 asmlinkage void bad_stack(void)
 {
 	do_exit(SIGSEGV);
+}
+
+/*
+ * Do a system call from kernel instead of calling sys_execve so we
+ * end up with proper pt_regs.
+ */
+int kernel_execve(const char *filename, char *const argv[], char *const envp[])
+{
+	register unsigned long __a0 asm("$4") = (unsigned long) filename;
+	register unsigned long __a1 asm("$5") = (unsigned long) argv;
+	register unsigned long __a2 asm("$6") = (unsigned long) envp;
+	register unsigned long __a3 asm("$7");
+	unsigned long __v0;
+
+	__asm__ volatile ("					\n"
+	"	.set	noreorder				\n"
+	"	li	$2, %5		# __NR_execve		\n"
+	"	syscall						\n"
+	"	move	%0, $2					\n"
+	"	.set	reorder					\n"
+	: "=&r" (__v0), "=r" (__a3)
+	: "r" (__a0), "r" (__a1), "r" (__a2), "i" (__NR_execve)
+	: "$2", "$8", "$9", "$10", "$11", "$12", "$13", "$14", "$15", "$24",
+	  "memory");
+
+	if (__a3 == 0)
+		return __v0;
+
+	return -__v0;
 }

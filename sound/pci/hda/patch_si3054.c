@@ -243,7 +243,8 @@ static int si3054_init(struct hda_codec *codec)
 
 	if((val&SI3054_MEI_READY) != SI3054_MEI_READY) {
 		snd_printk(KERN_ERR "si3054: cannot initialize. EXT MID = %04x\n", val);
-		return -EACCES;
+		/* let's pray that this is no fatal error */
+		/* return -EACCES; */
 	}
 
 	SET_REG(codec, SI3054_GPIO_POLARITY, 0xffff);
@@ -297,7 +298,13 @@ static int patch_si3054(struct hda_codec *codec)
 struct hda_codec_preset snd_hda_preset_si3054[] = {
  	{ .id = 0x163c3055, .name = "Si3054", .patch = patch_si3054 },
  	{ .id = 0x163c3155, .name = "Si3054", .patch = patch_si3054 },
+ 	{ .id = 0x11c11040, .name = "Si3054", .patch = patch_si3054 },
  	{ .id = 0x11c13026, .name = "Si3054", .patch = patch_si3054 },
+ 	{ .id = 0x11c13055, .name = "Si3054", .patch = patch_si3054 },
+ 	{ .id = 0x11c13155, .name = "Si3054", .patch = patch_si3054 },
+ 	{ .id = 0x10573055, .name = "Si3054", .patch = patch_si3054 },
+ 	{ .id = 0x10573057, .name = "Si3054", .patch = patch_si3054 },
+ 	{ .id = 0x10573155, .name = "Si3054", .patch = patch_si3054 },
 	{}
 };
 

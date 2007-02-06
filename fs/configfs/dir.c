@@ -86,6 +86,32 @@ static struct configfs_dirent *configfs_new_dirent(struct configfs_dirent * pare
 	return sd;
 }
 
+/*
+ *
+ * Return -EEXIST if there is already a configfs element with the same
+ * name for the same parent.
+ *
+ * called with parent inode's i_mutex held
+ */
+static int configfs_dirent_exists(struct configfs_dirent *parent_sd,
+				  const unsigned char *new)
+{
+	struct configfs_dirent * sd;
+
+	list_for_each_entry(sd, &parent_sd->s_children, s_sibling) {
+		if (sd->s_element) {
+			const unsigned char *existing = configfs_get_name(sd);
+			if (strcmp(existing, new))
+				continue;
+			else
+				return -EEXIST;
+		}
+	}
+
+	return 0;
+}
+
+
 int configfs_make_dirent(struct configfs_dirent * parent_sd,
 			 struct dentry * dentry, void * element,
 			 umode_t mode, int type)
@@ -113,7 +139,7 @@ static int init_dir(struct inode * inode)
 	inode->i_fop = &configfs_dir_operations;
 
 	/* directory inodes start off with i_nlink == 2 (for "." entry) */
-	inode->i_nlink++;
+	inc_nlink(inode);
 	return 0;
 }
 
@@ -136,12 +162,14 @@ static int create_dir(struct config_item * k, struct dentry * p,
 	int error;
 	umode_t mode = S_IFDIR| S_IRWXU | S_IRUGO | S_IXUGO;
 
-	error = configfs_make_dirent(p->d_fsdata, d, k, mode,
-				     CONFIGFS_DIR);
+	error = configfs_dirent_exists(p->d_fsdata, d->d_name.name);
+	if (!error)
+		error = configfs_make_dirent(p->d_fsdata, d, k, mode,
+					     CONFIGFS_DIR);
 	if (!error) {
 		error = configfs_create(d, mode, init_dir);
 		if (!error) {
-			p->d_inode->i_nlink++;
+			inc_nlink(p->d_inode);
 			(d)->d_op = &configfs_dentry_ops;
 		} else {
 			struct configfs_dirent *sd = d->d_fsdata;
@@ -211,7 +239,7 @@ static void remove_dir(struct dentry * d)
 	struct configfs_dirent * sd;
 
 	sd = d->d_fsdata;
- 	list_del_init(&sd->s_sibling);
+	list_del_init(&sd->s_sibling);
 	configfs_put(sd);
 	if (d->d_inode)
 		simple_rmdir(parent->d_inode,d);
@@ -330,7 +358,7 @@ static int configfs_detach_prep(struct dentry *dentry)
 
 			ret = configfs_detach_prep(sd->s_dentry);
 			if (!ret)
-			       	continue;
+				continue;
 		} else
 			ret = -ENOTEMPTY;
 
@@ -931,7 +959,7 @@ int configfs_rename_dir(struct config_item * item, const char *new_name)
 
 	new_dentry = lookup_one_len(new_name, parent, strlen(new_name));
 	if (!IS_ERR(new_dentry)) {
-  		if (!new_dentry->d_inode) {
+		if (!new_dentry->d_inode) {
 			error = config_item_set_name(item, "%s", new_name);
 			if (!error) {
 				d_add(new_dentry, NULL);
@@ -952,7 +980,7 @@ int configfs_rename_dir(struct config_item * item, const char *new_name)
 
 static int configfs_dir_open(struct inode *inode, struct file *file)
 {
-	struct dentry * dentry = file->f_dentry;
+	struct dentry * dentry = file->f_path.dentry;
 	struct configfs_dirent * parent_sd = dentry->d_fsdata;
 
 	mutex_lock(&dentry->d_inode->i_mutex);
@@ -965,7 +993,7 @@ static int configfs_dir_open(struct inode *inode, struct file *file)
 
 static int configfs_dir_close(struct inode *inode, struct file *file)
 {
-	struct dentry * dentry = file->f_dentry;
+	struct dentry * dentry = file->f_path.dentry;
 	struct configfs_dirent * cursor = file->private_data;
 
 	mutex_lock(&dentry->d_inode->i_mutex);
@@ -985,7 +1013,7 @@ static inline unsigned char dt_type(struct configfs_dirent *sd)
 
 static int configfs_readdir(struct file * filp, void * dirent, filldir_t filldir)
 {
-	struct dentry *dentry = filp->f_dentry;
+	struct dentry *dentry = filp->f_path.dentry;
 	struct configfs_dirent * parent_sd = dentry->d_fsdata;
 	struct configfs_dirent *cursor = filp->private_data;
 	struct list_head *p, *q = &cursor->s_sibling;
@@ -1009,8 +1037,7 @@ static int configfs_readdir(struct file * filp, void * dirent, filldir_t filldir
 			/* fallthrough */
 		default:
 			if (filp->f_pos == 2) {
-				list_del(q);
-				list_add(q, &parent_sd->s_children);
+				list_move(q, &parent_sd->s_children);
 			}
 			for (p=q->next; p!= &parent_sd->s_children; p=p->next) {
 				struct configfs_dirent *next;
@@ -1033,8 +1060,7 @@ static int configfs_readdir(struct file * filp, void * dirent, filldir_t filldir
 						 dt_type(next)) < 0)
 					return 0;
 
-				list_del(q);
-				list_add(q, p);
+				list_move(q, p);
 				p = q;
 				filp->f_pos++;
 			}
@@ -1044,7 +1070,7 @@ static int configfs_readdir(struct file * filp, void * dirent, filldir_t filldir
 
 static loff_t configfs_dir_lseek(struct file * file, loff_t offset, int origin)
 {
-	struct dentry * dentry = file->f_dentry;
+	struct dentry * dentry = file->f_path.dentry;
 
 	mutex_lock(&dentry->d_inode->i_mutex);
 	switch (origin) {
@@ -1054,7 +1080,7 @@ static loff_t configfs_dir_lseek(struct file * file, loff_t offset, int origin)
 			if (offset >= 0)
 				break;
 		default:
-			mutex_unlock(&file->f_dentry->d_inode->i_mutex);
+			mutex_unlock(&file->f_path.dentry->d_inode->i_mutex);
 			return -EINVAL;
 	}
 	if (offset != file->f_pos) {
@@ -1150,8 +1176,9 @@ void configfs_unregister_subsystem(struct configfs_subsystem *subsys)
 		return;
 	}
 
-	mutex_lock(&configfs_sb->s_root->d_inode->i_mutex);
-	mutex_lock(&dentry->d_inode->i_mutex);
+	mutex_lock_nested(&configfs_sb->s_root->d_inode->i_mutex,
+			  I_MUTEX_PARENT);
+	mutex_lock_nested(&dentry->d_inode->i_mutex, I_MUTEX_CHILD);
 	if (configfs_detach_prep(dentry)) {
 		printk(KERN_ERR "configfs: Tried to unregister non-empty subsystem!\n");
 	}

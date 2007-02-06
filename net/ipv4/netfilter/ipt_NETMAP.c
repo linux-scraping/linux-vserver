@@ -10,13 +10,16 @@
  * published by the Free Software Foundation.
  */
 
-#include <linux/config.h>
 #include <linux/ip.h>
 #include <linux/module.h>
 #include <linux/netdevice.h>
 #include <linux/netfilter.h>
 #include <linux/netfilter_ipv4.h>
+#ifdef CONFIG_NF_NAT_NEEDED
+#include <net/netfilter/nf_nat_rule.h>
+#else
 #include <linux/netfilter_ipv4/ip_nat_rule.h>
+#endif
 
 #define MODULENAME "NETMAP"
 MODULE_LICENSE("GPL");
@@ -34,7 +37,6 @@ check(const char *tablename,
       const void *e,
       const struct xt_target *target,
       void *targinfo,
-      unsigned int targinfosize,
       unsigned int hook_mask)
 {
 	const struct ip_nat_multi_range_compat *mr = targinfo;
@@ -56,12 +58,11 @@ target(struct sk_buff **pskb,
        const struct net_device *out,
        unsigned int hooknum,
        const struct xt_target *target,
-       const void *targinfo,
-       void *userinfo)
+       const void *targinfo)
 {
 	struct ip_conntrack *ct;
 	enum ip_conntrack_info ctinfo;
-	u_int32_t new_ip, netmask;
+	__be32 new_ip, netmask;
 	const struct ip_nat_multi_range_compat *mr = targinfo;
 	struct ip_nat_range newrange;
 

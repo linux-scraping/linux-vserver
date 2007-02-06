@@ -5,7 +5,6 @@
  * This module provides support for the Arlan 655 card made by Aironet
  */
 
-#include <linux/config.h>
 #include "arlan.h"
 
 #if BITS_PER_LONG != 32
@@ -79,7 +78,7 @@ static int arlans_found;
 
 static  int 	arlan_open(struct net_device *dev);
 static  int 	arlan_tx(struct sk_buff *skb, struct net_device *dev);
-static  irqreturn_t arlan_interrupt(int irq, void *dev_id, struct pt_regs *regs);
+static  irqreturn_t arlan_interrupt(int irq, void *dev_id);
 static  int 	arlan_close(struct net_device *dev);
 static  struct net_device_stats *
 		arlan_statistics		(struct net_device *dev);
@@ -1652,7 +1651,7 @@ end_int_process:
 	return;
 }
 
-static irqreturn_t arlan_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t arlan_interrupt(int irq, void *dev_id)
 {
 	struct net_device *dev = dev_id;
 	struct arlan_private *priv = netdev_priv(dev);

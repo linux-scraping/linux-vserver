@@ -75,7 +75,7 @@ static void hp_init_card(struct net_device *dev);
 /* My default is IRQ5	             0  1  2  3  4  5  6  7  8  9 10 11 */
 static char irqmap[16] __initdata= { 0, 0, 4, 6, 8,10, 0,14, 0, 4, 2,12,0,0,0,0};
 
-
+
 /*	Probe for an HP LAN adaptor.
 	Also initialize the card and fill in STATION_ADDR with the station
 	address. */
@@ -384,7 +384,7 @@ hp_block_output(struct net_device *dev, int count,
 }
 
 /* This function resets the ethercard if something screws up. */
-static void
+static void __init
 hp_init_card(struct net_device *dev)
 {
 	int irq = dev->irq;
@@ -409,7 +409,7 @@ MODULE_LICENSE("GPL");
 
 /* This is set up so that only a single autoprobe takes place per call.
 ISA device autoprobes on a running machine are not recommended. */
-int
+int __init
 init_module(void)
 {
 	struct net_device *dev;
@@ -444,7 +444,7 @@ static void cleanup_card(struct net_device *dev)
 	release_region(dev->base_addr - NIC_OFFSET, HP_IO_EXTENT);
 }
 
-void
+void __exit
 cleanup_module(void)
 {
 	int this_dev;

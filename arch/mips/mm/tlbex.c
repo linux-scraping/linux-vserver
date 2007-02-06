@@ -5,7 +5,7 @@
  *
  * Synthesize TLB refill handlers at runtime.
  *
- * Copyright (C) 2004,2005 by Thiemo Seufer
+ * Copyright (C) 2004,2005,2006 by Thiemo Seufer
  * Copyright (C) 2005  Maciej W. Rozycki
  * Copyright (C) 2006  Ralf Baechle (ralf@linux-mips.org)
  *
@@ -21,7 +21,6 @@
 
 #include <stdarg.h>
 
-#include <linux/config.h>
 #include <linux/mm.h>
 #include <linux/kernel.h>
 #include <linux/types.h>
@@ -35,8 +34,6 @@
 #include <asm/elf.h>
 #include <asm/smp.h>
 #include <asm/war.h>
-
-/* #define DEBUG_TLB */
 
 static __init int __attribute__((unused)) r45k_bvahwbug(void)
 {
@@ -105,7 +102,7 @@ enum opcode {
 	insn_addu, insn_addiu, insn_and, insn_andi, insn_beq,
 	insn_beql, insn_bgez, insn_bgezl, insn_bltz, insn_bltzl,
 	insn_bne, insn_daddu, insn_daddiu, insn_dmfc0, insn_dmtc0,
-	insn_dsll, insn_dsll32, insn_dsra, insn_dsrl,
+	insn_dsll, insn_dsll32, insn_dsra, insn_dsrl, insn_dsrl32,
 	insn_dsubu, insn_eret, insn_j, insn_jal, insn_jr, insn_ld,
 	insn_ll, insn_lld, insn_lui, insn_lw, insn_mfc0, insn_mtc0,
 	insn_ori, insn_rfe, insn_sc, insn_scd, insn_sd, insn_sll,
@@ -148,6 +145,7 @@ static __initdata struct insn insn_table[] = {
 	{ insn_dsll32, M(spec_op,0,0,0,0,dsll32_op), RT | RD | RE },
 	{ insn_dsra, M(spec_op,0,0,0,0,dsra_op), RT | RD | RE },
 	{ insn_dsrl, M(spec_op,0,0,0,0,dsrl_op), RT | RD | RE },
+	{ insn_dsrl32, M(spec_op,0,0,0,0,dsrl32_op), RT | RD | RE },
 	{ insn_dsubu, M(spec_op,0,0,0,0,dsubu_op), RS | RT | RD },
 	{ insn_eret, M(cop0_op,cop_op,0,0,0,eret_op), 0 },
 	{ insn_j, M(j_op,0,0,0,0,0), JIMM },
@@ -388,6 +386,7 @@ I_u2u1u3(_dsll);
 I_u2u1u3(_dsll32);
 I_u2u1u3(_dsra);
 I_u2u1u3(_dsrl);
+I_u2u1u3(_dsrl32);
 I_u3u1u2(_dsubu);
 I_0(_eret);
 I_u1(_j);
@@ -424,6 +423,9 @@ enum label_id {
 	label_invalid,
 	label_second_part,
 	label_leave,
+#ifdef MODULE_START
+	label_module_alloc,
+#endif
 	label_vmalloc,
 	label_vmalloc_done,
 	label_tlbw_hazard,
@@ -456,6 +458,9 @@ static __init void build_label(struct label **lab, u32 *addr,
 
 L_LA(_second_part)
 L_LA(_leave)
+#ifdef MODULE_START
+L_LA(_module_alloc)
+#endif
 L_LA(_vmalloc)
 L_LA(_vmalloc_done)
 L_LA(_tlbw_hazard)
@@ -687,6 +692,13 @@ static void __init il_bgezl(u32 **p, struct reloc **r, unsigned int reg,
 	i_bgezl(p, reg, 0);
 }
 
+static void __init __attribute__((unused))
+il_bgez(u32 **p, struct reloc **r, unsigned int reg, enum label_id l)
+{
+	r_mips_pc16(r, *p, l);
+	i_bgez(p, reg, 0);
+}
+
 /* The only general purpose registers allowed in TLB handlers. */
 #define K0		26
 #define K1		27
@@ -729,6 +741,7 @@ static void __init build_r3000_tlb_refill_handler(void)
 {
 	long pgdc = (long)pgd_current;
 	u32 *p;
+	int i;
 
 	memset(tlb_handler, 0, sizeof(tlb_handler));
 	p = tlb_handler;
@@ -754,16 +767,14 @@ static void __init build_r3000_tlb_refill_handler(void)
 	if (p > tlb_handler + 32)
 		panic("TLB refill handler space exceeded");
 
-	printk("Synthesized TLB refill handler (%u instructions).\n",
-	       (unsigned int)(p - tlb_handler));
-#ifdef DEBUG_TLB
-	{
-		int i;
+	pr_info("Synthesized TLB refill handler (%u instructions).\n",
+		(unsigned int)(p - tlb_handler));
 
-		for (i = 0; i < (p - tlb_handler); i++)
-			printk("%08x\n", tlb_handler[i]);
-	}
-#endif
+	pr_debug("\t.set push\n");
+	pr_debug("\t.set noreorder\n");
+	for (i = 0; i < (p - tlb_handler); i++)
+		pr_debug("\t.word 0x%08x\n", tlb_handler[i]);
+	pr_debug("\t.set pop\n");
 
 	memcpy((void *)ebase, tlb_handler, 0x80);
 }
@@ -972,7 +983,11 @@ build_get_pmde64(u32 **p, struct label **l, struct reloc **r,
 	 * The vmalloc handling is not in the hotpath.
 	 */
 	i_dmfc0(p, tmp, C0_BADVADDR);
+#ifdef MODULE_START
+	il_bltz(p, r, tmp, label_module_alloc);
+#else
 	il_bltz(p, r, tmp, label_vmalloc);
+#endif
 	/* No i_nop needed here, since the next insn doesn't touch TMP. */
 
 #ifdef CONFIG_SMP
@@ -1000,7 +1015,12 @@ build_get_pmde64(u32 **p, struct label **l, struct reloc **r,
 #endif
 
 	l_vmalloc_done(l, *p);
-	i_dsrl(p, tmp, tmp, PGDIR_SHIFT-3); /* get pgd offset in bytes */
+
+	if (PGDIR_SHIFT - 3 < 32)		/* get pgd offset in bytes */
+		i_dsrl(p, tmp, tmp, PGDIR_SHIFT-3);
+	else
+		i_dsrl32(p, tmp, tmp, PGDIR_SHIFT - 3 - 32);
+
 	i_andi(p, tmp, tmp, (PTRS_PER_PGD - 1)<<3);
 	i_daddu(p, ptr, ptr, tmp); /* add in pgd offset */
 	i_dmfc0(p, tmp, C0_BADVADDR); /* get faulting address */
@@ -1020,8 +1040,46 @@ build_get_pgd_vmalloc64(u32 **p, struct label **l, struct reloc **r,
 {
 	long swpd = (long)swapper_pg_dir;
 
+#ifdef MODULE_START
+	long modd = (long)module_pg_dir;
+
+	l_module_alloc(l, *p);
+	/*
+	 * Assumption:
+	 * VMALLOC_START >= 0xc000000000000000UL
+	 * MODULE_START >= 0xe000000000000000UL
+	 */
+	i_SLL(p, ptr, bvaddr, 2);
+	il_bgez(p, r, ptr, label_vmalloc);
+
+	if (in_compat_space_p(MODULE_START) && !rel_lo(MODULE_START)) {
+		i_lui(p, ptr, rel_hi(MODULE_START)); /* delay slot */
+	} else {
+		/* unlikely configuration */
+		i_nop(p); /* delay slot */
+		i_LA(p, ptr, MODULE_START);
+	}
+	i_dsubu(p, bvaddr, bvaddr, ptr);
+
+	if (in_compat_space_p(modd) && !rel_lo(modd)) {
+		il_b(p, r, label_vmalloc_done);
+		i_lui(p, ptr, rel_hi(modd));
+	} else {
+		i_LA_mostly(p, ptr, modd);
+		il_b(p, r, label_vmalloc_done);
+		i_daddiu(p, ptr, ptr, rel_lo(modd));
+	}
+
+	l_vmalloc(l, *p);
+	if (in_compat_space_p(MODULE_START) && !rel_lo(MODULE_START) &&
+	    MODULE_START << 32 == VMALLOC_START)
+		i_dsll32(p, ptr, ptr, 0);	/* typical case */
+	else
+		i_LA(p, ptr, VMALLOC_START);
+#else
 	l_vmalloc(l, *p);
 	i_LA(p, ptr, VMALLOC_START);
+#endif
 	i_dsubu(p, bvaddr, bvaddr, ptr);
 
 	if (in_compat_space_p(swpd) && !rel_lo(swpd)) {
@@ -1077,7 +1135,7 @@ build_get_pgde32(u32 **p, unsigned int tmp, unsigned int ptr)
 
 static __init void build_adjust_context(u32 **p, unsigned int ctx)
 {
-	unsigned int shift = 4 - (PTE_T_LOG2 + 1);
+	unsigned int shift = 4 - (PTE_T_LOG2 + 1) + PAGE_SHIFT - 12;
 	unsigned int mask = (PTRS_PER_PTE / 2 - 1) << (PTE_T_LOG2 + 1);
 
 	switch (current_cpu_data.cputype) {
@@ -1176,6 +1234,7 @@ static void __init build_r4000_tlb_refill_handler(void)
 	struct reloc *r = relocs;
 	u32 *f;
 	unsigned int final_len;
+	int i;
 
 	memset(tlb_handler, 0, sizeof(tlb_handler));
 	memset(labels, 0, sizeof(labels));
@@ -1214,7 +1273,7 @@ static void __init build_r4000_tlb_refill_handler(void)
 	 * Overflow check: For the 64bit handler, we need at least one
 	 * free instruction slot for the wrap-around branch. In worst
 	 * case, if the intended insertion point is a delay slot, we
-	 * need three, with the the second nop'ed and the third being
+	 * need three, with the second nop'ed and the third being
 	 * unused.
 	 */
 #ifdef CONFIG_32BIT
@@ -1273,24 +1332,21 @@ static void __init build_r4000_tlb_refill_handler(void)
 #endif /* CONFIG_64BIT */
 
 	resolve_relocs(relocs, labels);
-	printk("Synthesized TLB refill handler (%u instructions).\n",
-	       final_len);
+	pr_info("Synthesized TLB refill handler (%u instructions).\n",
+		final_len);
 
-#ifdef DEBUG_TLB
-	{
-		int i;
-
-		f = final_handler;
+	f = final_handler;
 #ifdef CONFIG_64BIT
-		if (final_len > 32)
-			final_len = 64;
-		else
-			f = final_handler + 32;
+	if (final_len > 32)
+		final_len = 64;
+	else
+		f = final_handler + 32;
 #endif /* CONFIG_64BIT */
-		for (i = 0; i < final_len; i++)
-			printk("%08x\n", f[i]);
-	}
-#endif
+	pr_debug("\t.set push\n");
+	pr_debug("\t.set noreorder\n");
+	for (i = 0; i < final_len; i++)
+		pr_debug("\t.word 0x%08x\n", f[i]);
+	pr_debug("\t.set pop\n");
 
 	memcpy((void *)ebase, final_handler, 0x100);
 }
@@ -1523,6 +1579,7 @@ static void __init build_r3000_tlb_load_handler(void)
 	u32 *p = handle_tlbl;
 	struct label *l = labels;
 	struct reloc *r = relocs;
+	int i;
 
 	memset(handle_tlbl, 0, sizeof(handle_tlbl));
 	memset(labels, 0, sizeof(labels));
@@ -1542,17 +1599,14 @@ static void __init build_r3000_tlb_load_handler(void)
 		panic("TLB load handler fastpath space exceeded");
 
 	resolve_relocs(relocs, labels);
-	printk("Synthesized TLB load handler fastpath (%u instructions).\n",
-	       (unsigned int)(p - handle_tlbl));
+	pr_info("Synthesized TLB load handler fastpath (%u instructions).\n",
+		(unsigned int)(p - handle_tlbl));
 
-#ifdef DEBUG_TLB
-	{
-		int i;
-
-		for (i = 0; i < (p - handle_tlbl); i++)
-			printk("%08x\n", handle_tlbl[i]);
-	}
-#endif
+	pr_debug("\t.set push\n");
+	pr_debug("\t.set noreorder\n");
+	for (i = 0; i < (p - handle_tlbl); i++)
+		pr_debug("\t.word 0x%08x\n", handle_tlbl[i]);
+	pr_debug("\t.set pop\n");
 }
 
 static void __init build_r3000_tlb_store_handler(void)
@@ -1560,6 +1614,7 @@ static void __init build_r3000_tlb_store_handler(void)
 	u32 *p = handle_tlbs;
 	struct label *l = labels;
 	struct reloc *r = relocs;
+	int i;
 
 	memset(handle_tlbs, 0, sizeof(handle_tlbs));
 	memset(labels, 0, sizeof(labels));
@@ -1579,17 +1634,14 @@ static void __init build_r3000_tlb_store_handler(void)
 		panic("TLB store handler fastpath space exceeded");
 
 	resolve_relocs(relocs, labels);
-	printk("Synthesized TLB store handler fastpath (%u instructions).\n",
-	       (unsigned int)(p - handle_tlbs));
+	pr_info("Synthesized TLB store handler fastpath (%u instructions).\n",
+		(unsigned int)(p - handle_tlbs));
 
-#ifdef DEBUG_TLB
-	{
-		int i;
-
-		for (i = 0; i < (p - handle_tlbs); i++)
-			printk("%08x\n", handle_tlbs[i]);
-	}
-#endif
+	pr_debug("\t.set push\n");
+	pr_debug("\t.set noreorder\n");
+	for (i = 0; i < (p - handle_tlbs); i++)
+		pr_debug("\t.word 0x%08x\n", handle_tlbs[i]);
+	pr_debug("\t.set pop\n");
 }
 
 static void __init build_r3000_tlb_modify_handler(void)
@@ -1597,6 +1649,7 @@ static void __init build_r3000_tlb_modify_handler(void)
 	u32 *p = handle_tlbm;
 	struct label *l = labels;
 	struct reloc *r = relocs;
+	int i;
 
 	memset(handle_tlbm, 0, sizeof(handle_tlbm));
 	memset(labels, 0, sizeof(labels));
@@ -1616,17 +1669,14 @@ static void __init build_r3000_tlb_modify_handler(void)
 		panic("TLB modify handler fastpath space exceeded");
 
 	resolve_relocs(relocs, labels);
-	printk("Synthesized TLB modify handler fastpath (%u instructions).\n",
-	       (unsigned int)(p - handle_tlbm));
+	pr_info("Synthesized TLB modify handler fastpath (%u instructions).\n",
+		(unsigned int)(p - handle_tlbm));
 
-#ifdef DEBUG_TLB
-	{
-		int i;
-
-		for (i = 0; i < (p - handle_tlbm); i++)
-			printk("%08x\n", handle_tlbm[i]);
-	}
-#endif
+	pr_debug("\t.set push\n");
+	pr_debug("\t.set noreorder\n");
+	for (i = 0; i < (p - handle_tlbm); i++)
+		pr_debug("\t.word 0x%08x\n", handle_tlbm[i]);
+	pr_debug("\t.set pop\n");
 }
 
 /*
@@ -1678,6 +1728,7 @@ static void __init build_r4000_tlb_load_handler(void)
 	u32 *p = handle_tlbl;
 	struct label *l = labels;
 	struct reloc *r = relocs;
+	int i;
 
 	memset(handle_tlbl, 0, sizeof(handle_tlbl));
 	memset(labels, 0, sizeof(labels));
@@ -1705,17 +1756,14 @@ static void __init build_r4000_tlb_load_handler(void)
 		panic("TLB load handler fastpath space exceeded");
 
 	resolve_relocs(relocs, labels);
-	printk("Synthesized TLB load handler fastpath (%u instructions).\n",
-	       (unsigned int)(p - handle_tlbl));
+	pr_info("Synthesized TLB load handler fastpath (%u instructions).\n",
+		(unsigned int)(p - handle_tlbl));
 
-#ifdef DEBUG_TLB
-	{
-		int i;
-
-		for (i = 0; i < (p - handle_tlbl); i++)
-			printk("%08x\n", handle_tlbl[i]);
-	}
-#endif
+	pr_debug("\t.set push\n");
+	pr_debug("\t.set noreorder\n");
+	for (i = 0; i < (p - handle_tlbl); i++)
+		pr_debug("\t.word 0x%08x\n", handle_tlbl[i]);
+	pr_debug("\t.set pop\n");
 }
 
 static void __init build_r4000_tlb_store_handler(void)
@@ -1723,6 +1771,7 @@ static void __init build_r4000_tlb_store_handler(void)
 	u32 *p = handle_tlbs;
 	struct label *l = labels;
 	struct reloc *r = relocs;
+	int i;
 
 	memset(handle_tlbs, 0, sizeof(handle_tlbs));
 	memset(labels, 0, sizeof(labels));
@@ -1741,17 +1790,14 @@ static void __init build_r4000_tlb_store_handler(void)
 		panic("TLB store handler fastpath space exceeded");
 
 	resolve_relocs(relocs, labels);
-	printk("Synthesized TLB store handler fastpath (%u instructions).\n",
-	       (unsigned int)(p - handle_tlbs));
+	pr_info("Synthesized TLB store handler fastpath (%u instructions).\n",
+		(unsigned int)(p - handle_tlbs));
 
-#ifdef DEBUG_TLB
-	{
-		int i;
-
-		for (i = 0; i < (p - handle_tlbs); i++)
-			printk("%08x\n", handle_tlbs[i]);
-	}
-#endif
+	pr_debug("\t.set push\n");
+	pr_debug("\t.set noreorder\n");
+	for (i = 0; i < (p - handle_tlbs); i++)
+		pr_debug("\t.word 0x%08x\n", handle_tlbs[i]);
+	pr_debug("\t.set pop\n");
 }
 
 static void __init build_r4000_tlb_modify_handler(void)
@@ -1759,6 +1805,7 @@ static void __init build_r4000_tlb_modify_handler(void)
 	u32 *p = handle_tlbm;
 	struct label *l = labels;
 	struct reloc *r = relocs;
+	int i;
 
 	memset(handle_tlbm, 0, sizeof(handle_tlbm));
 	memset(labels, 0, sizeof(labels));
@@ -1778,17 +1825,14 @@ static void __init build_r4000_tlb_modify_handler(void)
 		panic("TLB modify handler fastpath space exceeded");
 
 	resolve_relocs(relocs, labels);
-	printk("Synthesized TLB modify handler fastpath (%u instructions).\n",
-	       (unsigned int)(p - handle_tlbm));
+	pr_info("Synthesized TLB modify handler fastpath (%u instructions).\n",
+		(unsigned int)(p - handle_tlbm));
 
-#ifdef DEBUG_TLB
-	{
-		int i;
-
-		for (i = 0; i < (p - handle_tlbm); i++)
-			printk("%08x\n", handle_tlbm[i]);
-	}
-#endif
+	pr_debug("\t.set push\n");
+	pr_debug("\t.set noreorder\n");
+	for (i = 0; i < (p - handle_tlbm); i++)
+		pr_debug("\t.word 0x%08x\n", handle_tlbm[i]);
+	pr_debug("\t.set pop\n");
 }
 
 void __init build_tlb_refill_handler(void)

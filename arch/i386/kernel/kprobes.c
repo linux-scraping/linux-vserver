@@ -28,7 +28,6 @@
  *		<prasanna@in.ibm.com> added function-return probes.
  */
 
-#include <linux/config.h>
 #include <linux/kprobes.h>
 #include <linux/ptrace.h>
 #include <linux/preempt.h>
@@ -57,33 +56,84 @@ static __always_inline void set_jmp_op(void *from, void *to)
 /*
  * returns non-zero if opcodes can be boosted.
  */
-static __always_inline int can_boost(kprobe_opcode_t opcode)
+static __always_inline int can_boost(kprobe_opcode_t *opcodes)
 {
-	switch (opcode & 0xf0 ) {
+#define W(row,b0,b1,b2,b3,b4,b5,b6,b7,b8,b9,ba,bb,bc,bd,be,bf)		      \
+	(((b0##UL << 0x0)|(b1##UL << 0x1)|(b2##UL << 0x2)|(b3##UL << 0x3) |   \
+	  (b4##UL << 0x4)|(b5##UL << 0x5)|(b6##UL << 0x6)|(b7##UL << 0x7) |   \
+	  (b8##UL << 0x8)|(b9##UL << 0x9)|(ba##UL << 0xa)|(bb##UL << 0xb) |   \
+	  (bc##UL << 0xc)|(bd##UL << 0xd)|(be##UL << 0xe)|(bf##UL << 0xf))    \
+	 << (row % 32))
+	/*
+	 * Undefined/reserved opcodes, conditional jump, Opcode Extension
+	 * Groups, and some special opcodes can not be boost.
+	 */
+	static const unsigned long twobyte_is_boostable[256 / 32] = {
+		/*      0 1 2 3 4 5 6 7 8 9 a b c d e f         */
+		/*      -------------------------------         */
+		W(0x00, 0,0,1,1,0,0,1,0,1,1,0,0,0,0,0,0)| /* 00 */
+		W(0x10, 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0), /* 10 */
+		W(0x20, 1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0)| /* 20 */
+		W(0x30, 0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0), /* 30 */
+		W(0x40, 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1)| /* 40 */
+		W(0x50, 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0), /* 50 */
+		W(0x60, 1,1,1,1,1,1,1,1,1,1,1,1,0,0,1,1)| /* 60 */
+		W(0x70, 0,0,0,0,1,1,1,1,0,0,0,0,0,0,1,1), /* 70 */
+		W(0x80, 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0)| /* 80 */
+		W(0x90, 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1), /* 90 */
+		W(0xa0, 1,1,0,1,1,1,0,0,1,1,0,1,1,1,0,1)| /* a0 */
+		W(0xb0, 1,1,1,1,1,1,1,1,0,0,0,1,1,1,1,1), /* b0 */
+		W(0xc0, 1,1,0,0,0,0,0,0,1,1,1,1,1,1,1,1)| /* c0 */
+		W(0xd0, 0,1,1,1,0,1,0,0,1,1,0,1,1,1,0,1), /* d0 */
+		W(0xe0, 0,1,1,0,0,1,0,0,1,1,0,1,1,1,0,1)| /* e0 */
+		W(0xf0, 0,1,1,1,0,1,0,0,1,1,1,0,1,1,1,0)  /* f0 */
+		/*      -------------------------------         */
+		/*      0 1 2 3 4 5 6 7 8 9 a b c d e f         */
+	};
+#undef W
+	kprobe_opcode_t opcode;
+	kprobe_opcode_t *orig_opcodes = opcodes;
+retry:
+	if (opcodes - orig_opcodes > MAX_INSN_SIZE - 1)
+		return 0;
+	opcode = *(opcodes++);
+
+	/* 2nd-byte opcode */
+	if (opcode == 0x0f) {
+		if (opcodes - orig_opcodes > MAX_INSN_SIZE - 1)
+			return 0;
+		return test_bit(*opcodes, twobyte_is_boostable);
+	}
+
+	switch (opcode & 0xf0) {
+	case 0x60:
+		if (0x63 < opcode && opcode < 0x67)
+			goto retry; /* prefixes */
+		/* can't boost Address-size override and bound */
+		return (opcode != 0x62 && opcode != 0x67);
 	case 0x70:
 		return 0; /* can't boost conditional jump */
-	case 0x90:
-		/* can't boost call and pushf */
-		return opcode != 0x9a && opcode != 0x9c;
 	case 0xc0:
-		/* can't boost undefined opcodes and soft-interruptions */
-		return (0xc1 < opcode && opcode < 0xc6) ||
-			(0xc7 < opcode && opcode < 0xcc) || opcode == 0xcf;
+		/* can't boost software-interruptions */
+		return (0xc1 < opcode && opcode < 0xcc) || opcode == 0xcf;
 	case 0xd0:
 		/* can boost AA* and XLAT */
 		return (opcode == 0xd4 || opcode == 0xd5 || opcode == 0xd7);
 	case 0xe0:
-		/* can boost in/out and (may be) jmps */
-		return (0xe3 < opcode && opcode != 0xe8);
+		/* can boost in/out and absolute jmps */
+		return ((opcode & 0x04) || opcode == 0xea);
 	case 0xf0:
+		if ((opcode & 0x0c) == 0 && opcode != 0xf1)
+			goto retry; /* lock/rep(ne) prefix */
 		/* clear and set flags can be boost */
 		return (opcode == 0xf5 || (0xf7 < opcode && opcode < 0xfe));
 	default:
-		/* currently, can't boost 2 bytes opcodes */
-		return opcode != 0x0f;
+		if (opcode == 0x26 || opcode == 0x36 || opcode == 0x3e)
+			goto retry; /* prefixes */
+		/* can't boost CS override and call */
+		return (opcode != 0x2e && opcode != 0x9a);
 	}
 }
-
 
 /*
  * returns non-zero if opcode modifies the interrupt flag.
@@ -109,7 +159,7 @@ int __kprobes arch_prepare_kprobe(struct kprobe *p)
 
 	memcpy(p->ainsn.insn, p->addr, MAX_INSN_SIZE * sizeof(kprobe_opcode_t));
 	p->opcode = *p->addr;
-	if (can_boost(p->opcode)) {
+	if (can_boost(p->addr)) {
 		p->ainsn.boostable = 0;
 	} else {
 		p->ainsn.boostable = -1;
@@ -134,7 +184,7 @@ void __kprobes arch_disarm_kprobe(struct kprobe *p)
 void __kprobes arch_remove_kprobe(struct kprobe *p)
 {
 	mutex_lock(&kprobe_mutex);
-	free_insn_slot(p->ainsn.insn);
+	free_insn_slot(p->ainsn.insn, (p->ainsn.boostable == 1));
 	mutex_unlock(&kprobe_mutex);
 }
 
@@ -180,20 +230,20 @@ void __kprobes arch_prepare_kretprobe(struct kretprobe *rp,
 				      struct pt_regs *regs)
 {
 	unsigned long *sara = (unsigned long *)&regs->esp;
-        struct kretprobe_instance *ri;
 
-        if ((ri = get_free_rp_inst(rp)) != NULL) {
-                ri->rp = rp;
-                ri->task = current;
+	struct kretprobe_instance *ri;
+
+	if ((ri = get_free_rp_inst(rp)) != NULL) {
+		ri->rp = rp;
+		ri->task = current;
 		ri->ret_addr = (kprobe_opcode_t *) *sara;
 
 		/* Replace the return addr with trampoline addr */
 		*sara = (unsigned long) &kretprobe_trampoline;
-
-                add_rp_inst(ri);
-        } else {
-                rp->nmissed++;
-        }
+		add_rp_inst(ri);
+	} else {
+		rp->nmissed++;
+	}
 }
 
 /*
@@ -206,9 +256,6 @@ static int __kprobes kprobe_handler(struct pt_regs *regs)
 	int ret = 0;
 	kprobe_opcode_t *addr;
 	struct kprobe_ctlblk *kcb;
-#ifdef CONFIG_PREEMPT
-	unsigned pre_preempt_count = preempt_count();
-#endif /* CONFIG_PREEMPT */
 
 	addr = (kprobe_opcode_t *)(regs->eip - sizeof(kprobe_opcode_t));
 
@@ -285,22 +332,16 @@ static int __kprobes kprobe_handler(struct pt_regs *regs)
 		/* handler has already set things up, so skip ss setup */
 		return 1;
 
-	if (p->ainsn.boostable == 1 &&
-#ifdef CONFIG_PREEMPT
-	    !(pre_preempt_count) && /*
-				       * This enables booster when the direct
-				       * execution path aren't preempted.
-				       */
-#endif /* CONFIG_PREEMPT */
-	    !p->post_handler && !p->break_handler ) {
+ss_probe:
+#if !defined(CONFIG_PREEMPT) || defined(CONFIG_PM)
+	if (p->ainsn.boostable == 1 && !p->post_handler){
 		/* Boost up -- we can execute copied instructions directly */
 		reset_current_kprobe();
 		regs->eip = (unsigned long)p->ainsn.insn;
 		preempt_enable_no_resched();
 		return 1;
 	}
-
-ss_probe:
+#endif
 	prepare_singlestep(p, regs);
 	kcb->kprobe_status = KPROBE_HIT_SS;
 	return 1;
@@ -318,10 +359,13 @@ no_kprobe:
  void __kprobes kretprobe_trampoline_holder(void)
  {
 	asm volatile ( ".global kretprobe_trampoline\n"
- 			"kretprobe_trampoline: \n"
+			"kretprobe_trampoline: \n"
 			"	pushf\n"
-			/* skip cs, eip, orig_eax, es, ds */
-			"	subl $20, %esp\n"
+			/* skip cs, eip, orig_eax */
+			"	subl $12, %esp\n"
+			"	pushl %gs\n"
+			"	pushl %ds\n"
+			"	pushl %es\n"
 			"	pushl %eax\n"
 			"	pushl %ebp\n"
 			"	pushl %edi\n"
@@ -332,10 +376,10 @@ no_kprobe:
 			"	movl %esp, %eax\n"
 			"	call trampoline_handler\n"
 			/* move eflags to cs */
-			"	movl 48(%esp), %edx\n"
-			"	movl %edx, 44(%esp)\n"
+			"	movl 52(%esp), %edx\n"
+			"	movl %edx, 48(%esp)\n"
 			/* save true return address on eflags */
-			"	movl %eax, 48(%esp)\n"
+			"	movl %eax, 52(%esp)\n"
 			"	popl %ebx\n"
 			"	popl %ecx\n"
 			"	popl %edx\n"
@@ -343,8 +387,8 @@ no_kprobe:
 			"	popl %edi\n"
 			"	popl %ebp\n"
 			"	popl %eax\n"
-			/* skip eip, orig_eax, es, ds */
-			"	addl $16, %esp\n"
+			/* skip eip, orig_eax, es, ds, gs */
+			"	addl $20, %esp\n"
 			"	popf\n"
 			"	ret\n");
 }
@@ -354,14 +398,19 @@ no_kprobe:
  */
 fastcall void *__kprobes trampoline_handler(struct pt_regs *regs)
 {
-        struct kretprobe_instance *ri = NULL;
-        struct hlist_head *head;
-        struct hlist_node *node, *tmp;
+	struct kretprobe_instance *ri = NULL;
+	struct hlist_head *head, empty_rp;
+	struct hlist_node *node, *tmp;
 	unsigned long flags, orig_ret_address = 0;
 	unsigned long trampoline_address =(unsigned long)&kretprobe_trampoline;
 
+	INIT_HLIST_HEAD(&empty_rp);
 	spin_lock_irqsave(&kretprobe_lock, flags);
-        head = kretprobe_inst_table_head(current);
+	head = kretprobe_inst_table_head(current);
+	/* fixup registers */
+	regs->xcs = __KERNEL_CS;
+	regs->eip = trampoline_address;
+	regs->orig_eax = 0xffffffff;
 
 	/*
 	 * It is possible to have multiple instances associated with a given
@@ -372,23 +421,24 @@ fastcall void *__kprobes trampoline_handler(struct pt_regs *regs)
 	 * We can handle this because:
 	 *     - instances are always inserted at the head of the list
 	 *     - when multiple return probes are registered for the same
-         *       function, the first instance's ret_addr will point to the
+	 *       function, the first instance's ret_addr will point to the
 	 *       real return address, and all the rest will point to
 	 *       kretprobe_trampoline
 	 */
 	hlist_for_each_entry_safe(ri, node, tmp, head, hlist) {
-                if (ri->task != current)
+		if (ri->task != current)
 			/* another task is sharing our hash bucket */
-                        continue;
+			continue;
 
 		if (ri->rp && ri->rp->handler){
 			__get_cpu_var(current_kprobe) = &ri->rp->kp;
+			get_kprobe_ctlblk()->kprobe_status = KPROBE_HIT_ACTIVE;
 			ri->rp->handler(ri, regs);
 			__get_cpu_var(current_kprobe) = NULL;
 		}
 
 		orig_ret_address = (unsigned long)ri->ret_addr;
-		recycle_rp_inst(ri);
+		recycle_rp_inst(ri, &empty_rp);
 
 		if (orig_ret_address != trampoline_address)
 			/*
@@ -403,6 +453,10 @@ fastcall void *__kprobes trampoline_handler(struct pt_regs *regs)
 
 	spin_unlock_irqrestore(&kretprobe_lock, flags);
 
+	hlist_for_each_entry_safe(ri, node, tmp, &empty_rp, hlist) {
+		hlist_del(&ri->hlist);
+		kfree(ri);
+	}
 	return (void*)orig_ret_address;
 }
 
@@ -607,7 +661,7 @@ int __kprobes kprobe_exceptions_notify(struct notifier_block *self,
 	struct die_args *args = (struct die_args *)data;
 	int ret = NOTIFY_DONE;
 
-	if (args->regs && user_mode(args->regs))
+	if (args->regs && user_mode_vm(args->regs))
 		return ret;
 
 	switch (val) {

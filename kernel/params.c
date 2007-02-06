@@ -15,7 +15,6 @@
     along with this program; if not, write to the Free Software
     Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 */
-#include <linux/config.h>
 #include <linux/moduleparam.h>
 #include <linux/kernel.h>
 #include <linux/string.h>
@@ -144,9 +143,15 @@ int parse_args(const char *name,
 
 	while (*args) {
 		int ret;
+		int irq_was_disabled;
 
 		args = next_arg(args, &param, &val);
+		irq_was_disabled = irqs_disabled();
 		ret = parse_one(param, val, params, num, unknown);
+		if (irq_was_disabled && !irqs_disabled()) {
+			printk(KERN_WARNING "parse_args(): option '%s' enabled "
+					"irq's!\n", param);
+		}
 		switch (ret) {
 		case -ENOENT:
 			printk(KERN_ERR "%s: Unknown parameter `%s'\n",
@@ -548,6 +553,7 @@ static void __init kernel_param_sysfs_setup(const char *name,
 					    unsigned int name_skip)
 {
 	struct module_kobject *mk;
+	int ret;
 
 	mk = kzalloc(sizeof(struct module_kobject), GFP_KERNEL);
 	BUG_ON(!mk);
@@ -555,7 +561,8 @@ static void __init kernel_param_sysfs_setup(const char *name,
 	mk->mod = THIS_MODULE;
 	kobj_set_kset_s(mk, module_subsys);
 	kobject_set_name(&mk->kobj, name);
-	kobject_register(&mk->kobj);
+	ret = kobject_register(&mk->kobj);
+	BUG_ON(ret < 0);
 
 	/* no need to keep the kobject if no parameter is exported */
 	if (!param_sysfs_setup(mk, kparam, num_params, name_skip)) {
@@ -685,13 +692,20 @@ decl_subsys(module, &module_ktype, NULL);
  */
 static int __init param_sysfs_init(void)
 {
-	subsystem_register(&module_subsys);
+	int ret;
+
+	ret = subsystem_register(&module_subsys);
+	if (ret < 0) {
+		printk(KERN_WARNING "%s (%d): subsystem_register error: %d\n",
+			__FILE__, __LINE__, ret);
+		return ret;
+	}
 
 	param_sysfs_builtin();
 
 	return 0;
 }
-__initcall(param_sysfs_init);
+subsys_initcall(param_sysfs_init);
 
 EXPORT_SYMBOL(param_set_byte);
 EXPORT_SYMBOL(param_get_byte);

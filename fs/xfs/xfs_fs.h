@@ -22,8 +22,6 @@
  * SGI's XFS filesystem's major stuff (constants, structures)
  */
 
-#define XFS_NAME	"xfs"
-
 /*
  * Direct I/O attribute record used with XFS_IOC_DIOINFO
  * d_miniosz is the min xfer size, xfer size multiple and file seek offset
@@ -67,6 +65,7 @@ struct fsxattr {
 #define XFS_XFLAG_NOSYMLINKS	0x00000400	/* disallow symlink creation */
 #define XFS_XFLAG_EXTSIZE	0x00000800	/* extent size allocator hint */
 #define XFS_XFLAG_EXTSZINHERIT	0x00001000	/* inherit inode extent size */
+#define XFS_XFLAG_NODEFRAG	0x00002000  	/* do not defragment */
 #define XFS_XFLAG_BARRIER	0x00004000	/* chroot() barrier */
 #define XFS_XFLAG_IUNLINK	0x00008000	/* immutable unlink */
 #define XFS_XFLAG_HASATTR	0x80000000	/* no DIFLAG for this	*/
@@ -74,9 +73,9 @@ struct fsxattr {
 /*
  * Structure for XFS_IOC_GETBMAP.
  * On input, fill in bmv_offset and bmv_length of the first structure
- * to indicate the area of interest in the file, and bmv_entry with the
- * number of array elements given.  The first structure is updated on
- * return to give the offset and length for the next call.
+ * to indicate the area of interest in the file, and bmv_entries with
+ * the number of array elements given back.  The first structure is
+ * updated on return to give the offset and length for the next call.
  */
 #ifndef HAVE_GETBMAP
 struct getbmap {
@@ -297,7 +296,7 @@ typedef struct xfs_bstat {
 	__s32		bs_extents;	/* number of extents		*/
 	__u32		bs_gen;		/* generation count		*/
 	__u16		bs_projid;	/* project id			*/
-	__u16		bs_xid;		/* context id			*/
+	__u16		bs_tag;		/* context tagging		*/
 	unsigned char	bs_pad[12];	/* pad space, unused		*/
 	__u32		bs_dmevmask;	/* DMIG event mask		*/
 	__u16		bs_dmstate;	/* DMIG state info		*/
@@ -428,11 +427,7 @@ typedef struct xfs_handle {
 				 - (char *) &(handle))			  \
 				 + (handle).ha_fid.xfs_fid_len)
 
-#define XFS_HANDLE_CMP(h1, h2)	memcmp(h1, h2, sizeof(xfs_handle_t))
-
-#define FSHSIZE		sizeof(fsid_t)
-
-/* 
+/*
  * Flags for going down operation
  */
 #define XFS_FSOP_GOING_FLAGS_DEFAULT		0x0	/* going down */

@@ -27,7 +27,6 @@
  */
 #define ECARD_C
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/types.h>
@@ -296,7 +295,7 @@ ecard_task(void * unused)
  */
 static void ecard_call(struct ecard_request *req)
 {
-	DECLARE_COMPLETION(completion);
+	DECLARE_COMPLETION_ONSTACK(completion);
 
 	req->complete = &completion;
 
@@ -354,7 +353,7 @@ int ecard_readchunk(struct in_chunk_dir *cd, ecard_t *ec, int id, int num)
 		}
 		if (c_id(&excd) == 0x80) { /* loader */
 			if (!ec->loader) {
-				ec->loader = (loader_t)kmalloc(c_len(&excd),
+				ec->loader = kmalloc(c_len(&excd),
 							       GFP_KERNEL);
 				if (ec->loader)
 					ecard_readbytes(ec->loader, ec,
@@ -471,7 +470,8 @@ static void ecard_irq_mask(unsigned int irqnr)
 	}
 }
 
-static struct irqchip ecard_chip = {
+static struct irq_chip ecard_chip = {
+	.name	= "ECARD",
 	.ack	= ecard_irq_mask,
 	.mask	= ecard_irq_mask,
 	.unmask = ecard_irq_unmask,
@@ -529,7 +529,7 @@ static void ecard_dump_irq_state(void)
 	}
 }
 
-static void ecard_check_lockup(struct irqdesc *desc)
+static void ecard_check_lockup(struct irq_desc *desc)
 {
 	static unsigned long last;
 	static int lockup;
@@ -567,7 +567,7 @@ static void ecard_check_lockup(struct irqdesc *desc)
 }
 
 static void
-ecard_irq_handler(unsigned int irq, struct irqdesc *desc, struct pt_regs *regs)
+ecard_irq_handler(unsigned int irq, struct irq_desc *desc)
 {
 	ecard_t *ec;
 	int called = 0;
@@ -585,8 +585,8 @@ ecard_irq_handler(unsigned int irq, struct irqdesc *desc, struct pt_regs *regs)
 			pending = ecard_default_ops.irqpending(ec);
 
 		if (pending) {
-			struct irqdesc *d = irq_desc + ec->irq;
-			desc_handle_irq(ec->irq, d, regs);
+			struct irq_desc *d = irq_desc + ec->irq;
+			desc_handle_irq(ec->irq, d);
 			called ++;
 		}
 	}
@@ -609,7 +609,7 @@ static unsigned char first_set[] =
 };
 
 static void
-ecard_irqexp_handler(unsigned int irq, struct irqdesc *desc, struct pt_regs *regs)
+ecard_irqexp_handler(unsigned int irq, struct irq_desc *desc)
 {
 	const unsigned int statusmask = 15;
 	unsigned int status;
@@ -620,7 +620,7 @@ ecard_irqexp_handler(unsigned int irq, struct irqdesc *desc, struct pt_regs *reg
 		ecard_t *ec = slot_to_ecard(slot);
 
 		if (ec->claimed) {
-			struct irqdesc *d = irqdesc + ec->irq;
+			struct irq_desc *d = irq_desc + ec->irq;
 			/*
 			 * this ugly code is so that we can operate a
 			 * prioritorising system:
@@ -633,7 +633,7 @@ ecard_irqexp_handler(unsigned int irq, struct irqdesc *desc, struct pt_regs *reg
 			 * Serial cards should go in 0/1, ethernet/scsi in 2/3
 			 * otherwise you will lose serial data at high speeds!
 			 */
-			desc_handle_irq(ec->irq, d, regs);
+			desc_handle_irq(ec->irq, d);
 		} else {
 			printk(KERN_WARNING "card%d: interrupt from unclaimed "
 			       "card???\n", slot);
@@ -884,7 +884,7 @@ static ssize_t ecard_show_resources(struct device *dev, struct device_attribute 
 	int i;
 
 	for (i = 0; i < ECARD_NUM_RESOURCES; i++)
-		str += sprintf(str, "%08lx %08lx %08lx\n",
+		str += sprintf(str, "%08x %08x %08lx\n",
 				ec->resource[i].start,
 				ec->resource[i].end,
 				ec->resource[i].flags);
@@ -1022,7 +1022,7 @@ ecard_probe(int slot, card_type_t type)
 	if (slot < 8) {
 		ec->irq = 32 + slot;
 		set_irq_chip(ec->irq, &ecard_chip);
-		set_irq_handler(ec->irq, do_level_IRQ);
+		set_irq_handler(ec->irq, handle_level_irq);
 		set_irq_flags(ec->irq, IRQF_VALID);
 	}
 

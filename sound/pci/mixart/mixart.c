@@ -61,7 +61,7 @@ MODULE_PARM_DESC(enable, "Enable Digigram " CARD_NAME " soundcard.");
 /*
  */
 
-static struct pci_device_id snd_mixart_ids[] __devinitdata = {
+static struct pci_device_id snd_mixart_ids[] = {
 	{ 0x1057, 0x0003, PCI_ANY_ID, PCI_ANY_ID, 0, 0, 0, }, /* MC8240 */
 	{ 0, }
 };
@@ -1066,7 +1066,7 @@ static int snd_mixart_free(struct mixart_mgr *mgr)
 
 	/* release irq  */
 	if (mgr->irq >= 0)
-		free_irq(mgr->irq, (void *)mgr);
+		free_irq(mgr->irq, mgr);
 
 	/* reset board if some firmware was loaded */
 	if(mgr->dsp_loaded) {
@@ -1109,13 +1109,13 @@ static long long snd_mixart_BA0_llseek(struct snd_info_entry *entry,
 	offset = offset & ~3; /* 4 bytes aligned */
 
 	switch(orig) {
-	case 0:  /* SEEK_SET */
+	case SEEK_SET:
 		file->f_pos = offset;
 		break;
-	case 1:  /* SEEK_CUR */
+	case SEEK_CUR:
 		file->f_pos += offset;
 		break;
-	case 2:  /* SEEK_END, offset is negative */
+	case SEEK_END: /* offset is negative */
 		file->f_pos = MIXART_BA0_SIZE + offset;
 		break;
 	default:
@@ -1135,13 +1135,13 @@ static long long snd_mixart_BA1_llseek(struct snd_info_entry *entry,
 	offset = offset & ~3; /* 4 bytes aligned */
 
 	switch(orig) {
-	case 0:  /* SEEK_SET */
+	case SEEK_SET:
 		file->f_pos = offset;
 		break;
-	case 1:  /* SEEK_CUR */
+	case SEEK_CUR:
 		file->f_pos += offset;
 		break;
-	case 2: /* SEEK_END, offset is negative */
+	case SEEK_END: /* offset is negative */
 		file->f_pos = MIXART_BA1_SIZE + offset;
 		break;
 	default:
@@ -1244,7 +1244,6 @@ static void __devinit snd_mixart_proc_init(struct snd_mixart *chip)
 	/* text interface to read perf and temp meters */
 	if (! snd_card_proc_new(chip->card, "board_info", &entry)) {
 		entry->private_data = chip;
-		entry->c.text.read_size = 1024;
 		entry->c.text.read = snd_mixart_proc_read;
 	}
 
@@ -1320,7 +1319,8 @@ static int __devinit snd_mixart_probe(struct pci_dev *pci,
 						   pci_resource_len(pci, i));
 	}
 
-	if (request_irq(pci->irq, snd_mixart_interrupt, SA_INTERRUPT|SA_SHIRQ, CARD_NAME, (void *)mgr)) {
+	if (request_irq(pci->irq, snd_mixart_interrupt, IRQF_SHARED,
+			CARD_NAME, mgr)) {
 		snd_printk(KERN_ERR "unable to grab IRQ %d\n", pci->irq);
 		snd_mixart_free(mgr);
 		return -EBUSY;

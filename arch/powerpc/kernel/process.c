@@ -14,7 +14,6 @@
  *  2 of the License, or (at your option) any later version.
  */
 
-#include <linux/config.h>
 #include <linux/errno.h>
 #include <linux/sched.h>
 #include <linux/kernel.h>
@@ -342,13 +341,6 @@ struct task_struct *__switch_to(struct task_struct *prev,
 
 static int instructions_to_print = 16;
 
-#ifdef CONFIG_PPC64
-#define BAD_PC(pc)	((REGION_ID(pc) != KERNEL_REGION_ID) && \
-		         (REGION_ID(pc) != VMALLOC_REGION_ID))
-#else
-#define BAD_PC(pc)	((pc) < KERNELBASE)
-#endif
-
 static void show_instructions(struct pt_regs *regs)
 {
 	int i;
@@ -367,7 +359,8 @@ static void show_instructions(struct pt_regs *regs)
 		 * bad address because the pc *should* only be a
 		 * kernel address.
 		 */
-		if (BAD_PC(pc) || __get_user(instr, (unsigned int __user *)pc)) {
+		if (!__kernel_text_address(pc) ||
+		     __get_user(instr, (unsigned int __user *)pc)) {
 			printk("XXXXXXXX ");
 		} else {
 			if (regs->nip == pc)
@@ -425,7 +418,7 @@ void show_regs(struct pt_regs * regs)
 	printk("NIP: "REG" LR: "REG" CTR: "REG"\n",
 	       regs->nip, regs->link, regs->ctr);
 	printk("REGS: %p TRAP: %04lx   %s  (%s)\n",
-	       regs, regs->trap, print_tainted(), system_utsname.release);
+	       regs, regs->trap, print_tainted(), init_utsname()->release);
 	printk("MSR: "REG" ", regs->msr);
 	printbits(regs->msr, msr_bits);
 	printk("  CR: %08lX  XER: %08lX\n", regs->ccr, regs->xer);
@@ -707,6 +700,61 @@ int get_fpexc_mode(struct task_struct *tsk, unsigned long adr)
 	else
 		val = __unpack_fe01(tsk->thread.fpexc_mode);
 	return put_user(val, (unsigned int __user *) adr);
+}
+
+int set_endian(struct task_struct *tsk, unsigned int val)
+{
+	struct pt_regs *regs = tsk->thread.regs;
+
+	if ((val == PR_ENDIAN_LITTLE && !cpu_has_feature(CPU_FTR_REAL_LE)) ||
+	    (val == PR_ENDIAN_PPC_LITTLE && !cpu_has_feature(CPU_FTR_PPC_LE)))
+		return -EINVAL;
+
+	if (regs == NULL)
+		return -EINVAL;
+
+	if (val == PR_ENDIAN_BIG)
+		regs->msr &= ~MSR_LE;
+	else if (val == PR_ENDIAN_LITTLE || val == PR_ENDIAN_PPC_LITTLE)
+		regs->msr |= MSR_LE;
+	else
+		return -EINVAL;
+
+	return 0;
+}
+
+int get_endian(struct task_struct *tsk, unsigned long adr)
+{
+	struct pt_regs *regs = tsk->thread.regs;
+	unsigned int val;
+
+	if (!cpu_has_feature(CPU_FTR_PPC_LE) &&
+	    !cpu_has_feature(CPU_FTR_REAL_LE))
+		return -EINVAL;
+
+	if (regs == NULL)
+		return -EINVAL;
+
+	if (regs->msr & MSR_LE) {
+		if (cpu_has_feature(CPU_FTR_REAL_LE))
+			val = PR_ENDIAN_LITTLE;
+		else
+			val = PR_ENDIAN_PPC_LITTLE;
+	} else
+		val = PR_ENDIAN_BIG;
+
+	return put_user(val, (unsigned int __user *)adr);
+}
+
+int set_unalign_ctl(struct task_struct *tsk, unsigned int val)
+{
+	tsk->thread.align_ctl = val;
+	return 0;
+}
+
+int get_unalign_ctl(struct task_struct *tsk, unsigned long adr)
+{
+	return put_user(tsk->thread.align_ctl, (unsigned int __user *)adr);
 }
 
 #define TRUNC_PTR(x)	((typeof(x))(((unsigned long)(x)) & 0xffffffff))

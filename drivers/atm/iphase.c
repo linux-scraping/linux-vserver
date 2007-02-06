@@ -305,7 +305,7 @@ static void clear_lockup (struct atm_vcc *vcc, IADEV *dev) {
 **  |  R | NZ |  5-bit exponent  |        9-bit mantissa         |
 **  +----+----+------------------+-------------------------------+
 ** 
-**    R = reserverd (written as 0)
+**    R = reserved (written as 0)
 **    NZ = 0 if 0 cells/sec; 1 otherwise
 **
 **    if NZ = 1, rate = 1.mmmmmmmmm x 2^(eeeee) cells/sec
@@ -2195,7 +2195,7 @@ err_out:
 	return -ENOMEM;
 }   
    
-static irqreturn_t ia_int(int irq, void *dev_id, struct pt_regs *regs)  
+static irqreturn_t ia_int(int irq, void *dev_id)  
 {  
    struct atm_dev *dev;  
    IADEV *iadev;  
@@ -2284,7 +2284,7 @@ static int reset_sar(struct atm_dev *dev)
 }  
 	  
 	  
-static int __init ia_init(struct atm_dev *dev)
+static int __devinit ia_init(struct atm_dev *dev)
 {  
 	IADEV *iadev;  
 	unsigned long real_base;
@@ -2480,7 +2480,7 @@ static void ia_free_rx(IADEV *iadev)
 			  iadev->rx_dle_dma);  
 }
 
-static int __init ia_start(struct atm_dev *dev)
+static int __devinit ia_start(struct atm_dev *dev)
 {  
 	IADEV *iadev;  
 	int error;  
@@ -2488,7 +2488,7 @@ static int __init ia_start(struct atm_dev *dev)
 	u32 ctrl_reg;  
 	IF_EVENT(printk(">ia_start\n");)  
 	iadev = INPH_IA_DEV(dev);  
-        if (request_irq(iadev->irq, &ia_int, SA_SHIRQ, DEV_LABEL, dev)) {  
+        if (request_irq(iadev->irq, &ia_int, IRQF_SHARED, DEV_LABEL, dev)) {
                 printk(KERN_ERR DEV_LABEL "(itf %d): IRQ%d is already in use\n",  
                     dev->number, iadev->irq);  
 		error = -EAGAIN;

@@ -62,6 +62,23 @@ config HW_CONSOLE
 	depends on VT && !S390 && !UML
 	default y
 
+config VT_HW_CONSOLE_BINDING
+       bool "Support for binding and unbinding console drivers"
+       depends on HW_CONSOLE
+       default n
+       ---help---
+         The virtual terminal is the device that interacts with the physical
+         terminal through console drivers. On these systems, at least one
+         console driver is loaded. In other configurations, additional console
+         drivers may be enabled, such as the framebuffer console. If more than
+         1 console driver is enabled, setting this to 'y' will allow you to
+         select the console driver that will serve as the backend for the
+         virtual terminals.
+
+	 See <file:Documentation/console/console.txt> for more
+	 information. For framebuffer console users, please refer to
+	 <file:Documentation/fb/fbcon.txt>.
+
 config SERIAL_NONSTANDARD
 	bool "Non-standard serial port support"
 	---help---
@@ -80,7 +97,7 @@ config SERIAL_NONSTANDARD
 
 config COMPUTONE
 	tristate "Computone IntelliPort Plus serial support"
-	depends on SERIAL_NONSTANDARD
+	depends on SERIAL_NONSTANDARD && (ISA || EISA || PCI)
 	---help---
 	  This driver supports the entire family of Intelliport II/Plus
 	  controllers with the exception of the MicroChannel controllers and
@@ -184,9 +201,24 @@ config MOXA_SMARTIO
 	  The module will be called mxser. If you want to do that, say M
 	  here.
 
+config MOXA_SMARTIO_NEW
+	tristate "Moxa SmartIO support v. 2.0 (EXPERIMENTAL)"
+	depends on SERIAL_NONSTANDARD && (PCI || EISA || ISA)
+	help
+	  Say Y here if you have a Moxa SmartIO multiport serial card and/or
+	  want to help develop a new version of this driver.
+
+	  This is upgraded (1.9.1) driver from original Moxa drivers with
+	  changes finally resulting in PCI probing.
+
+	  Use at your own risk.
+
+	  This driver can also be built as a module. The module will be called
+	  mxser_new. If you want to do that, say M here.
+
 config ISI
 	tristate "Multi-Tech multiport card support (EXPERIMENTAL)"
-	depends on SERIAL_NONSTANDARD
+	depends on SERIAL_NONSTANDARD && PCI
 	select FW_LOADER
 	help
 	  This is a driver for the Multi-Tech cards which provide several
@@ -280,7 +312,7 @@ config SPECIALIX_RTSCTS
 
 config SX
 	tristate "Specialix SX (and SI) card support"
-	depends on SERIAL_NONSTANDARD
+	depends on SERIAL_NONSTANDARD && (PCI || EISA || ISA)
 	help
 	  This is a driver for the SX and SI multiport serial cards.
 	  Please read the file <file:Documentation/sx.txt> for details.
@@ -353,36 +385,6 @@ config AU1000_SERIAL_CONSOLE
 	help
 	  If you have an Alchemy AU1000 processor (MIPS based) and you want
 	  to use a console on a serial port, say Y.  Otherwise, say N.
-
-config QTRONIX_KEYBOARD
-	bool "Enable Qtronix 990P Keyboard Support"
-	depends on IT8712
-	help
-	  Images of Qtronix keyboards are at
-	  <http://www.qtronix.com/keyboard.html>.
-
-config IT8172_CIR
-	bool
-	depends on QTRONIX_KEYBOARD
-	default y
-
-config IT8172_SCR0
-	bool "Enable Smart Card Reader 0 Support "
-	depends on IT8712
-	help
-	  Say Y here to support smart-card reader 0 (SCR0) on the Integrated
-	  Technology Express, Inc. ITE8172 SBC.  Vendor page at
-	  <http://www.ite.com.tw/ia/brief_it8172bsp.htm>; picture of the
-	  board at <http://www.mvista.com/partners/semiconductor/ite.html>.
-
-config IT8172_SCR1
-	bool "Enable Smart Card Reader 1 Support "
-	depends on IT8712
-	help
-	  Say Y here to support smart-card reader 1 (SCR1) on the Integrated
-	  Technology Express, Inc. ITE8172 SBC.  Vendor page at
-	  <http://www.ite.com.tw/ia/brief_it8172bsp.htm>; picture of the
-	  board at <http://www.mvista.com/partners/semiconductor/ite.html>.
 
 config A2232
 	tristate "Commodore A2232 serial support (EXPERIMENTAL)"
@@ -477,6 +479,21 @@ config LEGACY_PTY_COUNT
 
 	  When not in use, each legacy PTY occupies 12 bytes on 32-bit
 	  architectures and 24 bytes on 64-bit architectures.
+
+config BRIQ_PANEL
+	tristate 'Total Impact briQ front panel driver'
+	depends on PPC_CHRP
+	---help---
+	  The briQ is a small footprint CHRP computer with a frontpanel VFD, a
+	  tristate led and two switches. It is the size of a CDROM drive.
+
+	  If you have such one and want anything showing on the VFD then you
+	  must answer Y here.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called briq_panel.
+
+	  It's safe to say N here.
 
 config PRINTER
 	tristate "Parallel printer support"
@@ -579,6 +596,13 @@ config HVC_CONSOLE
 	  console. This driver allows each pSeries partition to have a console
 	  which is accessed via the HMC.
 
+config HVC_ISERIES
+	bool "iSeries Hypervisor Virtual Console support"
+	depends on PPC_ISERIES && !VIOCONS
+	select HVC_DRIVER
+	help
+	  iSeries machines support a hypervisor virtual console.
+
 config HVC_RTAS
 	bool "IBM RTAS Console support"
 	depends on PPC_RTAS
@@ -670,20 +694,7 @@ config NWFLASH
 
 	  If you're not sure, say N.
 
-config HW_RANDOM
-	tristate "Intel/AMD/VIA HW Random Number Generator support"
-	depends on (X86 || IA64) && PCI
-	---help---
-	  This driver provides kernel-side support for the Random Number
-	  Generator hardware found on Intel i8xx-based motherboards,
-	  AMD 76x-based motherboards, and Via Nehemiah CPUs.
-
-	  Provides a character driver, used to read() entropy data.
-
-	  To compile this driver as a module, choose M here: the
-	  module will be called hw_random.
-
-	  If unsure, say N.
+source "drivers/char/hw_random/Kconfig"
 
 config NVRAM
 	tristate "/dev/nvram support"
@@ -713,7 +724,7 @@ config NVRAM
 
 config RTC
 	tristate "Enhanced Real Time Clock Support"
-	depends on !PPC && !PARISC && !IA64 && !M68K && (!SPARC || PCI) && !FRV && !ARM
+	depends on !PPC && !PARISC && !IA64 && !M68K && (!SPARC || PCI) && !FRV && !ARM && !SUPERH
 	---help---
 	  If you say Y here and create a character special file /dev/rtc with
 	  major number 10 and minor number 135 using mknod ("man mknod"), you
@@ -797,14 +808,6 @@ config DS1302
 	  will get access to the real time clock (or hardware clock) built
 	  into your computer.
 
-config S3C2410_RTC
-	bool "S3C2410 RTC Driver"
-	depends on ARCH_S3C2410
-	help
-	  RTC (Realtime Clock) driver for the clock inbuilt into the
-	  Samsung S3C2410. This can provide periodic interrupt rates
-	  from 1Hz to 64Hz for user programs, and wakeup from Alarm.
-
 config COBALT_LCD
 	bool "Support for Cobalt LCD"
 	depends on MIPS_COBALT
@@ -864,40 +867,8 @@ config SONYPI
 
 config TANBAC_TB0219
 	tristate "TANBAC TB0219 base board support"
-	depends TANBAC_TB022X
-
-menu "Ftape, the floppy tape device driver"
-
-config FTAPE
-	tristate "Ftape (QIC-80/Travan) support"
-	depends on BROKEN_ON_SMP && (ALPHA || X86)
-	---help---
-	  If you have a tape drive that is connected to your floppy
-	  controller, say Y here.
-
-	  Some tape drives (like the Seagate "Tape Store 3200" or the Iomega
-	  "Ditto 3200" or the Exabyte "Eagle TR-3") come with a "high speed"
-	  controller of their own. These drives (and their companion
-	  controllers) are also supported if you say Y here.
-
-	  If you have a special controller (such as the CMS FC-10, FC-20,
-	  Mountain Mach-II, or any controller that is based on the Intel 82078
-	  FDC like the high speed controllers by Seagate and Exabyte and
-	  Iomega's "Ditto Dash") you must configure it by selecting the
-	  appropriate entries from the "Floppy tape controllers" sub-menu
-	  below and possibly modify the default values for the IRQ and DMA
-	  channel and the IO base in ftape's configuration menu.
-
-	  If you want to use your floppy tape drive on a PCI-bus based system,
-	  please read the file <file:drivers/char/ftape/README.PCI>.
-
-	  The ftape kernel driver is also available as a runtime loadable
-	  module. To compile this driver as a module, choose M here: the
-	  module will be called ftape.
-
-source "drivers/char/ftape/Kconfig"
-
-endmenu
+	depends on TANBAC_TB022X
+	select GPIO_VR41XX
 
 source "drivers/char/agp/Kconfig"
 
@@ -934,11 +905,35 @@ config MWAVE
 config SCx200_GPIO
 	tristate "NatSemi SCx200 GPIO Support"
 	depends on SCx200
+	select NSC_GPIO
 	help
 	  Give userspace access to the GPIO pins on the National
 	  Semiconductor SCx200 processors.
 
 	  If compiled as a module, it will be called scx200_gpio.
+
+config PC8736x_GPIO
+	tristate "NatSemi PC8736x GPIO Support"
+	depends on X86
+	default SCx200_GPIO	# mostly N
+	select NSC_GPIO		# needed for support routines
+	help
+	  Give userspace access to the GPIO pins on the National
+	  Semiconductor PC-8736x (x=[03456]) SuperIO chip.  The chip
+	  has multiple functional units, inc several managed by
+	  hwmon/pc87360 driver.  Tested with PC-87366
+
+	  If compiled as a module, it will be called pc8736x_gpio.
+
+config NSC_GPIO
+	tristate "NatSemi Base GPIO Support"
+	depends on X86_32
+	# selected by SCx200_GPIO and PC8736x_GPIO
+	# what about 2 selectors differing: m != y
+	help
+	  Common support used (and needed) by scx200_gpio and
+	  pc8736x_gpio drivers.  If those drivers are built as
+	  modules, this one will be too, named nsc_gpio
 
 config CS5535_GPIO
 	tristate "AMD CS5535/CS5536 GPIO (Geode Companion Device)"
@@ -955,6 +950,7 @@ config GPIO_VR41XX
 
 config RAW_DRIVER
 	tristate "RAW driver (/dev/raw/rawN) (OBSOLETE)"
+	depends on BLOCK
 	help
 	  The raw driver permits block devices to be bound to /dev/raw/rawN. 
 	  Once bound, I/O against /dev/raw/rawN uses efficient zero-copy I/O. 
@@ -980,7 +976,7 @@ config HPET
 	help
 	  If you say Y here, you will have a miscdevice named "/dev/hpet/".  Each
 	  open selects one of the timers supported by the HPET.  The timers are
-	  non-periodioc and/or periodic.
+	  non-periodic and/or periodic.
 
 config HPET_RTC_IRQ
 	bool "HPET Control RTC IRQ" if !HPET_EMULATE_RTC
@@ -1024,7 +1020,7 @@ source "drivers/char/tpm/Kconfig"
 
 config TELCLOCK
 	tristate "Telecom clock driver for MPBL0010 ATCA SBC"
-	depends on EXPERIMENTAL
+	depends on EXPERIMENTAL && X86
 	default n
 	help
 	  The telecom clock device is specific to the MPBL0010 ATCA computer and

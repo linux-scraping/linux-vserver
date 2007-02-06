@@ -17,6 +17,8 @@
 #include <linux/mutex.h>
 #include <asm/atomic.h>
 
+#define DM_MSG_PREFIX "table"
+
 #define MAX_DEPTH 16
 #define NODE_SIZE L1_CACHE_BYTES
 #define KEYS_PER_NODE (NODE_SIZE / sizeof(sector_t))
@@ -236,6 +238,44 @@ int dm_table_create(struct dm_table **result, int mode,
 	*result = t;
 	return 0;
 }
+
+int dm_create_error_table(struct dm_table **result, struct mapped_device *md)
+{
+	struct dm_table *t;
+	sector_t dev_size = 1;
+	int r;
+
+	/*
+	 * Find current size of device.
+	 * Default to 1 sector if inactive.
+	 */
+	t = dm_get_table(md);
+	if (t) {
+		dev_size = dm_table_get_size(t);
+		dm_table_put(t);
+	}
+
+	r = dm_table_create(&t, FMODE_READ, 1, md);
+	if (r)
+		return r;
+
+	r = dm_table_add_target(t, "error", 0, dev_size, NULL);
+	if (r)
+		goto out;
+
+	r = dm_table_complete(t);
+	if (r)
+		goto out;
+
+	*result = t;
+
+out:
+	if (r)
+		dm_table_put(t);
+
+	return r;
+}
+EXPORT_SYMBOL_GPL(dm_create_error_table);
 
 static void free_devices(struct list_head *devices)
 {
@@ -482,56 +522,61 @@ static int __table_get_device(struct dm_table *t, struct dm_target *ti,
 	return 0;
 }
 
+void dm_set_device_limits(struct dm_target *ti, struct block_device *bdev)
+{
+	request_queue_t *q = bdev_get_queue(bdev);
+	struct io_restrictions *rs = &ti->limits;
+
+	/*
+	 * Combine the device limits low.
+	 *
+	 * FIXME: if we move an io_restriction struct
+	 *        into q this would just be a call to
+	 *        combine_restrictions_low()
+	 */
+	rs->max_sectors =
+		min_not_zero(rs->max_sectors, q->max_sectors);
+
+	/* FIXME: Device-Mapper on top of RAID-0 breaks because DM
+	 *        currently doesn't honor MD's merge_bvec_fn routine.
+	 *        In this case, we'll force DM to use PAGE_SIZE or
+	 *        smaller I/O, just to be safe. A better fix is in the
+	 *        works, but add this for the time being so it will at
+	 *        least operate correctly.
+	 */
+	if (q->merge_bvec_fn)
+		rs->max_sectors =
+			min_not_zero(rs->max_sectors,
+				     (unsigned int) (PAGE_SIZE >> 9));
+
+	rs->max_phys_segments =
+		min_not_zero(rs->max_phys_segments,
+			     q->max_phys_segments);
+
+	rs->max_hw_segments =
+		min_not_zero(rs->max_hw_segments, q->max_hw_segments);
+
+	rs->hardsect_size = max(rs->hardsect_size, q->hardsect_size);
+
+	rs->max_segment_size =
+		min_not_zero(rs->max_segment_size, q->max_segment_size);
+
+	rs->seg_boundary_mask =
+		min_not_zero(rs->seg_boundary_mask,
+			     q->seg_boundary_mask);
+
+	rs->no_cluster |= !test_bit(QUEUE_FLAG_CLUSTER, &q->queue_flags);
+}
+EXPORT_SYMBOL_GPL(dm_set_device_limits);
 
 int dm_get_device(struct dm_target *ti, const char *path, sector_t start,
 		  sector_t len, int mode, struct dm_dev **result)
 {
 	int r = __table_get_device(ti->table, ti, path,
 				   start, len, mode, result);
-	if (!r) {
-		request_queue_t *q = bdev_get_queue((*result)->bdev);
-		struct io_restrictions *rs = &ti->limits;
 
-		/*
-		 * Combine the device limits low.
-		 *
-		 * FIXME: if we move an io_restriction struct
-		 *        into q this would just be a call to
-		 *        combine_restrictions_low()
-		 */
-		rs->max_sectors =
-			min_not_zero(rs->max_sectors, q->max_sectors);
-
-		/* FIXME: Device-Mapper on top of RAID-0 breaks because DM
-		 *        currently doesn't honor MD's merge_bvec_fn routine.
-		 *        In this case, we'll force DM to use PAGE_SIZE or
-		 *        smaller I/O, just to be safe. A better fix is in the
-		 *        works, but add this for the time being so it will at
-		 *        least operate correctly.
-		 */
-		if (q->merge_bvec_fn)
-			rs->max_sectors =
-				min_not_zero(rs->max_sectors,
-					     (unsigned int) (PAGE_SIZE >> 9));
-
-		rs->max_phys_segments =
-			min_not_zero(rs->max_phys_segments,
-				     q->max_phys_segments);
-
-		rs->max_hw_segments =
-			min_not_zero(rs->max_hw_segments, q->max_hw_segments);
-
-		rs->hardsect_size = max(rs->hardsect_size, q->hardsect_size);
-
-		rs->max_segment_size =
-			min_not_zero(rs->max_segment_size, q->max_segment_size);
-
-		rs->seg_boundary_mask =
-			min_not_zero(rs->seg_boundary_mask,
-				     q->seg_boundary_mask);
-
-		rs->no_cluster |= !test_bit(QUEUE_FLAG_CLUSTER, &q->queue_flags);
-	}
+	if (!r)
+		dm_set_device_limits(ti, (*result)->bdev);
 
 	return r;
 }
@@ -590,6 +635,12 @@ int dm_split_args(int *argc, char ***argvp, char *input)
 	unsigned array_size = 0;
 
 	*argc = 0;
+
+	if (!input) {
+		*argvp = NULL;
+		return 0;
+	}
+
 	argv = realloc_argv(&array_size, argv);
 	if (!argv)
 		return -ENOMEM;
@@ -671,15 +722,14 @@ int dm_table_add_target(struct dm_table *t, const char *type,
 	memset(tgt, 0, sizeof(*tgt));
 
 	if (!len) {
-		tgt->error = "zero-length target";
-		DMERR("%s", tgt->error);
+		DMERR("%s: zero-length target", dm_device_name(t->md));
 		return -EINVAL;
 	}
 
 	tgt->type = dm_get_target_type(type);
 	if (!tgt->type) {
-		tgt->error = "unknown target type";
-		DMERR("%s", tgt->error);
+		DMERR("%s: %s: unknown target type", dm_device_name(t->md),
+		      type);
 		return -EINVAL;
 	}
 
@@ -716,7 +766,7 @@ int dm_table_add_target(struct dm_table *t, const char *type,
 	return 0;
 
  bad:
-	DMERR("%s", tgt->error);
+	DMERR("%s: %s: %s", dm_device_name(t->md), type, tgt->error);
 	dm_put_target_type(tgt->type);
 	return r;
 }
@@ -802,7 +852,7 @@ sector_t dm_table_get_size(struct dm_table *t)
 
 struct dm_target *dm_table_get_target(struct dm_table *t, unsigned int index)
 {
-	if (index > t->num_targets)
+	if (index >= t->num_targets)
 		return NULL;
 
 	return t->targets + index;
@@ -894,9 +944,20 @@ void dm_table_postsuspend_targets(struct dm_table *t)
 	return suspend_targets(t, 1);
 }
 
-void dm_table_resume_targets(struct dm_table *t)
+int dm_table_resume_targets(struct dm_table *t)
 {
-	int i;
+	int i, r = 0;
+
+	for (i = 0; i < t->num_targets; i++) {
+		struct dm_target *ti = t->targets + i;
+
+		if (!ti->type->preresume)
+			continue;
+
+		r = ti->type->preresume(ti);
+		if (r)
+			return r;
+	}
 
 	for (i = 0; i < t->num_targets; i++) {
 		struct dm_target *ti = t->targets + i;
@@ -904,6 +965,8 @@ void dm_table_resume_targets(struct dm_table *t)
 		if (ti->type->resume)
 			ti->type->resume(ti);
 	}
+
+	return 0;
 }
 
 int dm_table_any_congested(struct dm_table *t, int bdi_bits)
@@ -938,6 +1001,11 @@ int dm_table_flush_all(struct dm_table *t)
 {
 	struct list_head *d, *devices = dm_table_get_devices(t);
 	int ret = 0;
+	unsigned i;
+
+	for (i = 0; i < t->num_targets; i++)
+		if (t->targets[i].type->flush)
+			t->targets[i].type->flush(&t->targets[i]);
 
 	for (d = devices->next; d != devices; d = d->next) {
 		struct dm_dev *dd = list_entry(d, struct dm_dev, list);

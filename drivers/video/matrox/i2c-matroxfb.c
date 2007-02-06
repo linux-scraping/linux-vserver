@@ -95,12 +95,12 @@ static struct i2c_adapter matrox_i2c_adapter_template =
 
 static struct i2c_algo_bit_data matrox_i2c_algo_template =
 {
-	NULL,
-	matroxfb_gpio_setsda,
-	matroxfb_gpio_setscl,
-	matroxfb_gpio_getsda,
-	matroxfb_gpio_getscl,
-	10, 10, 100,
+	.setsda		= matroxfb_gpio_setsda,
+	.setscl		= matroxfb_gpio_setscl,
+	.getsda		= matroxfb_gpio_getsda,
+	.getscl		= matroxfb_gpio_getscl,
+	.udelay		= 10,
+	.timeout	= 100,
 };
 
 static int i2c_bus_reg(struct i2c_bit_adapter* b, struct matrox_fb_info* minfo, 
@@ -124,7 +124,7 @@ static int i2c_bus_reg(struct i2c_bit_adapter* b, struct matrox_fb_info* minfo,
 
 static void i2c_bit_bus_del(struct i2c_bit_adapter* b) {
 	if (b->initialized) {
-		i2c_bit_del_bus(&b->adapter);
+		i2c_del_adapter(&b->adapter);
 		b->initialized = 0;
 	}
 }
@@ -146,7 +146,7 @@ static void* i2c_matroxfb_probe(struct matrox_fb_info* minfo) {
 	unsigned long flags;
 	struct matroxfb_dh_maven_info* m2info;
 
-	m2info = (struct matroxfb_dh_maven_info*)kmalloc(sizeof(*m2info), GFP_KERNEL);
+	m2info = kmalloc(sizeof(*m2info), GFP_KERNEL);
 	if (!m2info)
 		return NULL;
 

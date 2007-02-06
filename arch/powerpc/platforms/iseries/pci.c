@@ -34,39 +34,22 @@
 #include <asm/pci-bridge.h>
 #include <asm/iommu.h>
 #include <asm/abs_addr.h>
+#include <asm/firmware.h>
 
 #include <asm/iseries/hv_call_xm.h>
 #include <asm/iseries/mf.h>
+#include <asm/iseries/iommu.h>
 
 #include <asm/ppc-pci.h>
 
 #include "irq.h"
 #include "pci.h"
 #include "call_pci.h"
-#include "iommu.h"
-
-extern unsigned long io_page_mask;
 
 /*
  * Forward declares of prototypes.
  */
 static struct device_node *find_Device_Node(int bus, int devfn);
-static void scan_PHB_slots(struct pci_controller *Phb);
-static void scan_EADS_bridge(HvBusNumber Bus, HvSubBusNumber SubBus, int IdSel);
-static int scan_bridge_slot(HvBusNumber Bus, struct HvCallPci_BridgeInfo *Info);
-
-LIST_HEAD(iSeries_Global_Device_List);
-
-static int DeviceCount;
-
-/* Counters and control flags. */
-static long Pci_Io_Read_Count;
-static long Pci_Io_Write_Count;
-#if 0
-static long Pci_Cfg_Read_Count;
-static long Pci_Cfg_Write_Count;
-#endif
-static long Pci_Error_Count;
 
 static int Pci_Retry_Max = 3;	/* Only retry 3 times  */
 static int Pci_Error_Flag = 1;	/* Set Retry Error on. */
@@ -81,39 +64,17 @@ static struct pci_ops iSeries_pci_ops;
 #define IOMM_TABLE_ENTRY_SIZE	0x0000000000400000UL
 #define BASE_IO_MEMORY		0xE000000000000000UL
 
-static unsigned long max_io_memory = 0xE000000000000000UL;
+static unsigned long max_io_memory = BASE_IO_MEMORY;
 static long current_iomm_table_entry;
 
 /*
  * Lookup Tables.
  */
-static struct device_node **iomm_table;
-static u8 *iobar_table;
+static struct device_node *iomm_table[IOMM_TABLE_MAX_ENTRIES];
+static u8 iobar_table[IOMM_TABLE_MAX_ENTRIES];
 
-/*
- * Static and Global variables
- */
-static char *pci_io_text = "iSeries PCI I/O";
+static const char pci_io_text[] = "iSeries PCI I/O";
 static DEFINE_SPINLOCK(iomm_table_lock);
-
-/*
- * iomm_table_initialize
- *
- * Allocates and initalizes the Address Translation Table and Bar
- * Tables to get them ready for use.  Must be called before any
- * I/O space is handed out to the device BARs.
- */
-static void iomm_table_initialize(void)
-{
-	spin_lock(&iomm_table_lock);
-	iomm_table = kmalloc(sizeof(*iomm_table) * IOMM_TABLE_MAX_ENTRIES,
-			GFP_KERNEL);
-	iobar_table = kmalloc(sizeof(*iobar_table) * IOMM_TABLE_MAX_ENTRIES,
-			GFP_KERNEL);
-	spin_unlock(&iomm_table_lock);
-	if ((iomm_table == NULL) || (iobar_table == NULL))
-		panic("PCI: I/O tables allocation failed.\n");
-}
 
 /*
  * iomm_table_allocate_entry
@@ -142,9 +103,8 @@ static void iomm_table_allocate_entry(struct pci_dev *dev, int bar_num)
 	 */
 	spin_lock(&iomm_table_lock);
 	bar_res->name = pci_io_text;
-	bar_res->start =
+	bar_res->start = BASE_IO_MEMORY +
 		IOMM_TABLE_ENTRY_SIZE * current_iomm_table_entry;
-	bar_res->start += BASE_IO_MEMORY;
 	bar_res->end = bar_res->start + bar_size - 1;
 	/*
 	 * Allocate the number of table entries needed for BAR.
@@ -156,7 +116,7 @@ static void iomm_table_allocate_entry(struct pci_dev *dev, int bar_num)
 		++current_iomm_table_entry;
 	}
 	max_io_memory = BASE_IO_MEMORY +
-		(IOMM_TABLE_ENTRY_SIZE * current_iomm_table_entry);
+		IOMM_TABLE_ENTRY_SIZE * current_iomm_table_entry;
 	spin_unlock(&iomm_table_lock);
 }
 
@@ -173,13 +133,10 @@ static void iomm_table_allocate_entry(struct pci_dev *dev, int bar_num)
  */
 static void allocate_device_bars(struct pci_dev *dev)
 {
-	struct resource *bar_res;
 	int bar_num;
 
-	for (bar_num = 0; bar_num <= PCI_ROM_RESOURCE; ++bar_num) {
-		bar_res = &dev->resource[bar_num];
+	for (bar_num = 0; bar_num <= PCI_ROM_RESOURCE; ++bar_num)
 		iomm_table_allocate_entry(dev, bar_num);
-	}
 }
 
 /*
@@ -196,88 +153,6 @@ static void pci_Log_Error(char *Error_Text, int Bus, int SubBus,
 		return;
 	printk(KERN_ERR "PCI: %s Failed: 0x%02X.%02X.%02X Rc: 0x%04X",
 	       Error_Text, Bus, SubBus, AgentId, HvRc);
-}
-
-/*
- * build_device_node(u16 Bus, int SubBus, u8 DevFn)
- */
-static struct device_node *build_device_node(HvBusNumber Bus,
-		HvSubBusNumber SubBus, int AgentId, int Function)
-{
-	struct device_node *node;
-	struct pci_dn *pdn;
-
-	node = kmalloc(sizeof(struct device_node), GFP_KERNEL);
-	if (node == NULL)
-		return NULL;
-	memset(node, 0, sizeof(struct device_node));
-	pdn = kzalloc(sizeof(*pdn), GFP_KERNEL);
-	if (pdn == NULL) {
-		kfree(node);
-		return NULL;
-	}
-	node->data = pdn;
-	pdn->node = node;
-	list_add_tail(&pdn->Device_List, &iSeries_Global_Device_List);
-	pdn->busno = Bus;
-	pdn->bussubno = SubBus;
-	pdn->devfn = PCI_DEVFN(ISERIES_ENCODE_DEVICE(AgentId), Function);
-	return node;
-}
-
-/*
- * unsigned long __init find_and_init_phbs(void)
- *
- * Description:
- *   This function checks for all possible system PCI host bridges that connect
- *   PCI buses.  The system hypervisor is queried as to the guest partition
- *   ownership status.  A pci_controller is built for any bus which is partially
- *   owned or fully owned by this guest partition.
- */
-unsigned long __init find_and_init_phbs(void)
-{
-	struct pci_controller *phb;
-	HvBusNumber bus;
-
-	/* Check all possible buses. */
-	for (bus = 0; bus < 256; bus++) {
-		int ret = HvCallXm_testBus(bus);
-		if (ret == 0) {
-			printk("bus %d appears to exist\n", bus);
-
-			phb = pcibios_alloc_controller(NULL);
-			if (phb == NULL)
-				return -ENOMEM;
-
-			phb->pci_mem_offset = phb->local_number = bus;
-			phb->first_busno = bus;
-			phb->last_busno = bus;
-			phb->ops = &iSeries_pci_ops;
-
-			/* Find and connect the devices. */
-			scan_PHB_slots(phb);
-		}
-		/*
-		 * Check for Unexpected Return code, a clue that something
-		 * has gone wrong.
-		 */
-		else if (ret != 0x0301)
-			printk(KERN_ERR "Unexpected Return on Probe(0x%04X): 0x%04X",
-			       bus, ret);
-	}
-	return 0;
-}
-
-/*
- * iSeries_pcibios_init
- *
- * Chance to initialize and structures or variable before PCI Bus walk.
- */
-void iSeries_pcibios_init(void)
-{
-	iomm_table_initialize();
-	find_and_init_phbs();
-	io_page_mask = -1;
 }
 
 /*
@@ -299,221 +174,59 @@ void __init iSeries_pci_final_fixup(void)
 		       pdev->bus->number, pdev->devfn, node);
 
 		if (node != NULL) {
+			struct pci_dn *pdn = PCI_DN(node);
+			const u32 *agent;
+
+			agent = get_property(node, "linux,agent-id", NULL);
+			if ((pdn != NULL) && (agent != NULL)) {
+				u8 irq = iSeries_allocate_IRQ(pdn->busno, 0,
+						pdn->bussubno);
+				int err;
+
+				err = HvCallXm_connectBusUnit(pdn->busno, pdn->bussubno,
+						*agent, irq);
+				if (err)
+					pci_Log_Error("Connect Bus Unit",
+						pdn->busno, pdn->bussubno, *agent, err);
+				else {
+					err = HvCallPci_configStore8(pdn->busno, pdn->bussubno,
+							*agent,
+							PCI_INTERRUPT_LINE,
+							irq);
+					if (err)
+						pci_Log_Error("PciCfgStore Irq Failed!",
+							pdn->busno, pdn->bussubno, *agent, err);
+				}
+				if (!err)
+					pdev->irq = irq;
+			}
+
 			++DeviceCount;
 			pdev->sysdata = (void *)node;
 			PCI_DN(node)->pcidev = pdev;
 			allocate_device_bars(pdev);
 			iSeries_Device_Information(pdev, DeviceCount);
-			iommu_devnode_init_iSeries(node);
+			iommu_devnode_init_iSeries(pdev, node);
 		} else
 			printk("PCI: Device Tree not found for 0x%016lX\n",
 					(unsigned long)pdev);
-		pdev->irq = PCI_DN(node)->Irq;
 	}
 	iSeries_activate_IRQs();
 	mf_display_src(0xC9000200);
 }
-
-void pcibios_fixup_bus(struct pci_bus *PciBus)
-{
-}
-
-void pcibios_fixup_resources(struct pci_dev *pdev)
-{
-}
-
-/*
- * Loop through each node function to find usable EADs bridges.
- */
-static void scan_PHB_slots(struct pci_controller *Phb)
-{
-	struct HvCallPci_DeviceInfo *DevInfo;
-	HvBusNumber bus = Phb->local_number;	/* System Bus */
-	const HvSubBusNumber SubBus = 0;	/* EADs is always 0. */
-	int HvRc = 0;
-	int IdSel;
-	const int MaxAgents = 8;
-
-	DevInfo = (struct HvCallPci_DeviceInfo*)
-		kmalloc(sizeof(struct HvCallPci_DeviceInfo), GFP_KERNEL);
-	if (DevInfo == NULL)
-		return;
-
-	/*
-	 * Probe for EADs Bridges
-	 */
-	for (IdSel = 1; IdSel < MaxAgents; ++IdSel) {
-		HvRc = HvCallPci_getDeviceInfo(bus, SubBus, IdSel,
-				iseries_hv_addr(DevInfo),
-				sizeof(struct HvCallPci_DeviceInfo));
-		if (HvRc == 0) {
-			if (DevInfo->deviceType == HvCallPci_NodeDevice)
-				scan_EADS_bridge(bus, SubBus, IdSel);
-			else
-				printk("PCI: Invalid System Configuration(0x%02X)"
-				       " for bus 0x%02x id 0x%02x.\n",
-				       DevInfo->deviceType, bus, IdSel);
-		}
-		else
-			pci_Log_Error("getDeviceInfo", bus, SubBus, IdSel, HvRc);
-	}
-	kfree(DevInfo);
-}
-
-static void scan_EADS_bridge(HvBusNumber bus, HvSubBusNumber SubBus,
-		int IdSel)
-{
-	struct HvCallPci_BridgeInfo *BridgeInfo;
-	HvAgentId AgentId;
-	int Function;
-	int HvRc;
-
-	BridgeInfo = (struct HvCallPci_BridgeInfo *)
-		kmalloc(sizeof(struct HvCallPci_BridgeInfo), GFP_KERNEL);
-	if (BridgeInfo == NULL)
-		return;
-
-	/* Note: hvSubBus and irq is always be 0 at this level! */
-	for (Function = 0; Function < 8; ++Function) {
-		AgentId = ISERIES_PCI_AGENTID(IdSel, Function);
-		HvRc = HvCallXm_connectBusUnit(bus, SubBus, AgentId, 0);
-		if (HvRc == 0) {
-			printk("found device at bus %d idsel %d func %d (AgentId %x)\n",
-			       bus, IdSel, Function, AgentId);
-			/*  Connect EADs: 0x18.00.12 = 0x00 */
-			HvRc = HvCallPci_getBusUnitInfo(bus, SubBus, AgentId,
-					iseries_hv_addr(BridgeInfo),
-					sizeof(struct HvCallPci_BridgeInfo));
-			if (HvRc == 0) {
-				printk("bridge info: type %x subbus %x maxAgents %x maxsubbus %x logslot %x\n",
-					BridgeInfo->busUnitInfo.deviceType,
-					BridgeInfo->subBusNumber,
-					BridgeInfo->maxAgents,
-					BridgeInfo->maxSubBusNumber,
-					BridgeInfo->logicalSlotNumber);
-				if (BridgeInfo->busUnitInfo.deviceType ==
-						HvCallPci_BridgeDevice)  {
-					/* Scan_Bridge_Slot...: 0x18.00.12 */
-					scan_bridge_slot(bus, BridgeInfo);
-				} else
-					printk("PCI: Invalid Bridge Configuration(0x%02X)",
-						BridgeInfo->busUnitInfo.deviceType);
-			}
-		} else if (HvRc != 0x000B)
-			pci_Log_Error("EADs Connect",
-					bus, SubBus, AgentId, HvRc);
-	}
-	kfree(BridgeInfo);
-}
-
-/*
- * This assumes that the node slot is always on the primary bus!
- */
-static int scan_bridge_slot(HvBusNumber Bus,
-		struct HvCallPci_BridgeInfo *BridgeInfo)
-{
-	struct device_node *node;
-	HvSubBusNumber SubBus = BridgeInfo->subBusNumber;
-	u16 VendorId = 0;
-	int HvRc = 0;
-	u8 Irq = 0;
-	int IdSel = ISERIES_GET_DEVICE_FROM_SUBBUS(SubBus);
-	int Function = ISERIES_GET_FUNCTION_FROM_SUBBUS(SubBus);
-	HvAgentId EADsIdSel = ISERIES_PCI_AGENTID(IdSel, Function);
-
-	/* iSeries_allocate_IRQ.: 0x18.00.12(0xA3) */
-	Irq = iSeries_allocate_IRQ(Bus, 0, EADsIdSel);
-
-	/*
-	 * Connect all functions of any device found.
-	 */
-	for (IdSel = 1; IdSel <= BridgeInfo->maxAgents; ++IdSel) {
-		for (Function = 0; Function < 8; ++Function) {
-			HvAgentId AgentId = ISERIES_PCI_AGENTID(IdSel, Function);
-			HvRc = HvCallXm_connectBusUnit(Bus, SubBus,
-					AgentId, Irq);
-			if (HvRc != 0) {
-				pci_Log_Error("Connect Bus Unit",
-					      Bus, SubBus, AgentId, HvRc);
-				continue;
-			}
-
-			HvRc = HvCallPci_configLoad16(Bus, SubBus, AgentId,
-						      PCI_VENDOR_ID, &VendorId);
-			if (HvRc != 0) {
-				pci_Log_Error("Read Vendor",
-					      Bus, SubBus, AgentId, HvRc);
-				continue;
-			}
-			printk("read vendor ID: %x\n", VendorId);
-
-			/* FoundDevice: 0x18.28.10 = 0x12AE */
-			HvRc = HvCallPci_configStore8(Bus, SubBus, AgentId,
-						      PCI_INTERRUPT_LINE, Irq);
-			if (HvRc != 0)
-				pci_Log_Error("PciCfgStore Irq Failed!",
-					      Bus, SubBus, AgentId, HvRc);
-
-			++DeviceCount;
-			node = build_device_node(Bus, SubBus, EADsIdSel, Function);
-			PCI_DN(node)->Irq = Irq;
-			PCI_DN(node)->LogicalSlot = BridgeInfo->logicalSlotNumber;
-
-		} /* for (Function = 0; Function < 8; ++Function) */
-	} /* for (IdSel = 1; IdSel <= MaxAgents; ++IdSel) */
-	return HvRc;
-}
-
-/*
- * I/0 Memory copy MUST use mmio commands on iSeries
- * To do; For performance, include the hv call directly
- */
-void iSeries_memset_io(volatile void __iomem *dest, char c, size_t Count)
-{
-	u8 ByteValue = c;
-	long NumberOfBytes = Count;
-
-	while (NumberOfBytes > 0) {
-		iSeries_Write_Byte(ByteValue, dest++);
-		-- NumberOfBytes;
-	}
-}
-EXPORT_SYMBOL(iSeries_memset_io);
-
-void iSeries_memcpy_toio(volatile void __iomem *dest, void *source, size_t count)
-{
-	char *src = source;
-	long NumberOfBytes = count;
-
-	while (NumberOfBytes > 0) {
-		iSeries_Write_Byte(*src++, dest++);
-		-- NumberOfBytes;
-	}
-}
-EXPORT_SYMBOL(iSeries_memcpy_toio);
-
-void iSeries_memcpy_fromio(void *dest, const volatile void __iomem *src, size_t count)
-{
-	char *dst = dest;
-	long NumberOfBytes = count;
-
-	while (NumberOfBytes > 0) {
-		*dst++ = iSeries_Read_Byte(src++);
-		-- NumberOfBytes;
-	}
-}
-EXPORT_SYMBOL(iSeries_memcpy_fromio);
 
 /*
  * Look down the chain to find the matching Device Device
  */
 static struct device_node *find_Device_Node(int bus, int devfn)
 {
-	struct pci_dn *pdn;
+	struct device_node *node;
 
-	list_for_each_entry(pdn, &iSeries_Global_Device_List, Device_List) {
-		if ((bus == pdn->busno) && (devfn == pdn->devfn))
-			return pdn->node;
+	for (node = NULL; (node = of_find_all_nodes(node)); ) {
+		struct pci_dn *pdn = PCI_DN(node);
+
+		if (pdn && (bus == pdn->busno) && (devfn == pdn->devfn))
+			return node;
 	}
 	return NULL;
 }
@@ -625,7 +338,6 @@ static int CheckReturnCode(char *TextHdr, struct device_node *DevNode,
 	if (ret != 0)  {
 		struct pci_dn *pdn = PCI_DN(DevNode);
 
-		++Pci_Error_Count;
 		(*retry)++;
 		printk("PCI: %s: Device 0x%04X:%02X  I/O Error(%2d): 0x%04X\n",
 				TextHdr, pdn->busno, pdn->devfn,
@@ -679,13 +391,9 @@ static inline struct device_node *xlate_iomm_address(
 /*
  * Read MM I/O Instructions for the iSeries
  * On MM I/O error, all ones are returned and iSeries_pci_IoError is cal
- * else, data is returned in big Endian format.
- *
- * iSeries_Read_Byte = Read Byte  ( 8 bit)
- * iSeries_Read_Word = Read Word  (16 bit)
- * iSeries_Read_Long = Read Long  (32 bit)
+ * else, data is returned in Big Endian format.
  */
-u8 iSeries_Read_Byte(const volatile void __iomem *IoAddress)
+static u8 iSeries_Read_Byte(const volatile void __iomem *IoAddress)
 {
 	u64 BarOffset;
 	u64 dsa;
@@ -703,19 +411,18 @@ u8 iSeries_Read_Byte(const volatile void __iomem *IoAddress)
 			num_printed = 0;
 		}
 		if (num_printed++ < 10)
-			printk(KERN_ERR "iSeries_Read_Byte: invalid access at IO address %p\n", IoAddress);
+			printk(KERN_ERR "iSeries_Read_Byte: invalid access at IO address %p\n",
+			       IoAddress);
 		return 0xff;
 	}
 	do {
-		++Pci_Io_Read_Count;
 		HvCall3Ret16(HvCallPciBarLoad8, &ret, dsa, BarOffset, 0);
 	} while (CheckReturnCode("RDB", DevNode, &retry, ret.rc) != 0);
 
-	return (u8)ret.value;
+	return ret.value;
 }
-EXPORT_SYMBOL(iSeries_Read_Byte);
 
-u16 iSeries_Read_Word(const volatile void __iomem *IoAddress)
+static u16 iSeries_Read_Word(const volatile void __iomem *IoAddress)
 {
 	u64 BarOffset;
 	u64 dsa;
@@ -733,20 +440,19 @@ u16 iSeries_Read_Word(const volatile void __iomem *IoAddress)
 			num_printed = 0;
 		}
 		if (num_printed++ < 10)
-			printk(KERN_ERR "iSeries_Read_Word: invalid access at IO address %p\n", IoAddress);
+			printk(KERN_ERR "iSeries_Read_Word: invalid access at IO address %p\n",
+			       IoAddress);
 		return 0xffff;
 	}
 	do {
-		++Pci_Io_Read_Count;
 		HvCall3Ret16(HvCallPciBarLoad16, &ret, dsa,
 				BarOffset, 0);
 	} while (CheckReturnCode("RDW", DevNode, &retry, ret.rc) != 0);
 
-	return swab16((u16)ret.value);
+	return ret.value;
 }
-EXPORT_SYMBOL(iSeries_Read_Word);
 
-u32 iSeries_Read_Long(const volatile void __iomem *IoAddress)
+static u32 iSeries_Read_Long(const volatile void __iomem *IoAddress)
 {
 	u64 BarOffset;
 	u64 dsa;
@@ -764,27 +470,23 @@ u32 iSeries_Read_Long(const volatile void __iomem *IoAddress)
 			num_printed = 0;
 		}
 		if (num_printed++ < 10)
-			printk(KERN_ERR "iSeries_Read_Long: invalid access at IO address %p\n", IoAddress);
+			printk(KERN_ERR "iSeries_Read_Long: invalid access at IO address %p\n",
+			       IoAddress);
 		return 0xffffffff;
 	}
 	do {
-		++Pci_Io_Read_Count;
 		HvCall3Ret16(HvCallPciBarLoad32, &ret, dsa,
 				BarOffset, 0);
 	} while (CheckReturnCode("RDL", DevNode, &retry, ret.rc) != 0);
 
-	return swab32((u32)ret.value);
+	return ret.value;
 }
-EXPORT_SYMBOL(iSeries_Read_Long);
 
 /*
  * Write MM I/O Instructions for the iSeries
  *
- * iSeries_Write_Byte = Write Byte (8 bit)
- * iSeries_Write_Word = Write Word(16 bit)
- * iSeries_Write_Long = Write Long(32 bit)
  */
-void iSeries_Write_Byte(u8 data, volatile void __iomem *IoAddress)
+static void iSeries_Write_Byte(u8 data, volatile void __iomem *IoAddress)
 {
 	u64 BarOffset;
 	u64 dsa;
@@ -806,13 +508,11 @@ void iSeries_Write_Byte(u8 data, volatile void __iomem *IoAddress)
 		return;
 	}
 	do {
-		++Pci_Io_Write_Count;
 		rc = HvCall4(HvCallPciBarStore8, dsa, BarOffset, data, 0);
 	} while (CheckReturnCode("WWB", DevNode, &retry, rc) != 0);
 }
-EXPORT_SYMBOL(iSeries_Write_Byte);
 
-void iSeries_Write_Word(u16 data, volatile void __iomem *IoAddress)
+static void iSeries_Write_Word(u16 data, volatile void __iomem *IoAddress)
 {
 	u64 BarOffset;
 	u64 dsa;
@@ -830,17 +530,16 @@ void iSeries_Write_Word(u16 data, volatile void __iomem *IoAddress)
 			num_printed = 0;
 		}
 		if (num_printed++ < 10)
-			printk(KERN_ERR "iSeries_Write_Word: invalid access at IO address %p\n", IoAddress);
+			printk(KERN_ERR "iSeries_Write_Word: invalid access at IO address %p\n",
+			       IoAddress);
 		return;
 	}
 	do {
-		++Pci_Io_Write_Count;
-		rc = HvCall4(HvCallPciBarStore16, dsa, BarOffset, swab16(data), 0);
+		rc = HvCall4(HvCallPciBarStore16, dsa, BarOffset, data, 0);
 	} while (CheckReturnCode("WWW", DevNode, &retry, rc) != 0);
 }
-EXPORT_SYMBOL(iSeries_Write_Word);
 
-void iSeries_Write_Long(u32 data, volatile void __iomem *IoAddress)
+static void iSeries_Write_Long(u32 data, volatile void __iomem *IoAddress)
 {
 	u64 BarOffset;
 	u64 dsa;
@@ -858,12 +557,221 @@ void iSeries_Write_Long(u32 data, volatile void __iomem *IoAddress)
 			num_printed = 0;
 		}
 		if (num_printed++ < 10)
-			printk(KERN_ERR "iSeries_Write_Long: invalid access at IO address %p\n", IoAddress);
+			printk(KERN_ERR "iSeries_Write_Long: invalid access at IO address %p\n",
+			       IoAddress);
 		return;
 	}
 	do {
-		++Pci_Io_Write_Count;
-		rc = HvCall4(HvCallPciBarStore32, dsa, BarOffset, swab32(data), 0);
+		rc = HvCall4(HvCallPciBarStore32, dsa, BarOffset, data, 0);
 	} while (CheckReturnCode("WWL", DevNode, &retry, rc) != 0);
 }
-EXPORT_SYMBOL(iSeries_Write_Long);
+
+static u8 iseries_readb(const volatile void __iomem *addr)
+{
+	return iSeries_Read_Byte(addr);
+}
+
+static u16 iseries_readw(const volatile void __iomem *addr)
+{
+	return le16_to_cpu(iSeries_Read_Word(addr));
+}
+
+static u32 iseries_readl(const volatile void __iomem *addr)
+{
+	return le32_to_cpu(iSeries_Read_Long(addr));
+}
+
+static u16 iseries_readw_be(const volatile void __iomem *addr)
+{
+	return iSeries_Read_Word(addr);
+}
+
+static u32 iseries_readl_be(const volatile void __iomem *addr)
+{
+	return iSeries_Read_Long(addr);
+}
+
+static void iseries_writeb(u8 data, volatile void __iomem *addr)
+{
+	iSeries_Write_Byte(data, addr);
+}
+
+static void iseries_writew(u16 data, volatile void __iomem *addr)
+{
+	iSeries_Write_Word(cpu_to_le16(data), addr);
+}
+
+static void iseries_writel(u32 data, volatile void __iomem *addr)
+{
+	iSeries_Write_Long(cpu_to_le32(data), addr);
+}
+
+static void iseries_writew_be(u16 data, volatile void __iomem *addr)
+{
+	iSeries_Write_Word(data, addr);
+}
+
+static void iseries_writel_be(u32 data, volatile void __iomem *addr)
+{
+	iSeries_Write_Long(data, addr);
+}
+
+static void iseries_readsb(const volatile void __iomem *addr, void *buf,
+			   unsigned long count)
+{
+	u8 *dst = buf;
+	while(count-- > 0)
+		*(dst++) = iSeries_Read_Byte(addr);
+}
+
+static void iseries_readsw(const volatile void __iomem *addr, void *buf,
+			   unsigned long count)
+{
+	u16 *dst = buf;
+	while(count-- > 0)
+		*(dst++) = iSeries_Read_Word(addr);
+}
+
+static void iseries_readsl(const volatile void __iomem *addr, void *buf,
+			   unsigned long count)
+{
+	u32 *dst = buf;
+	while(count-- > 0)
+		*(dst++) = iSeries_Read_Long(addr);
+}
+
+static void iseries_writesb(volatile void __iomem *addr, const void *buf,
+			    unsigned long count)
+{
+	const u8 *src = buf;
+	while(count-- > 0)
+		iSeries_Write_Byte(*(src++), addr);
+}
+
+static void iseries_writesw(volatile void __iomem *addr, const void *buf,
+			    unsigned long count)
+{
+	const u16 *src = buf;
+	while(count-- > 0)
+		iSeries_Write_Word(*(src++), addr);
+}
+
+static void iseries_writesl(volatile void __iomem *addr, const void *buf,
+			    unsigned long count)
+{
+	const u32 *src = buf;
+	while(count-- > 0)
+		iSeries_Write_Long(*(src++), addr);
+}
+
+static void iseries_memset_io(volatile void __iomem *addr, int c,
+			      unsigned long n)
+{
+	volatile char __iomem *d = addr;
+
+	while (n-- > 0)
+		iSeries_Write_Byte(c, d++);
+}
+
+static void iseries_memcpy_fromio(void *dest, const volatile void __iomem *src,
+				  unsigned long n)
+{
+	char *d = dest;
+	const volatile char __iomem *s = src;
+
+	while (n-- > 0)
+		*d++ = iSeries_Read_Byte(s++);
+}
+
+static void iseries_memcpy_toio(volatile void __iomem *dest, const void *src,
+				unsigned long n)
+{
+	const char *s = src;
+	volatile char __iomem *d = dest;
+
+	while (n-- > 0)
+		iSeries_Write_Byte(*s++, d++);
+}
+
+/* We only set MMIO ops. The default PIO ops will be default
+ * to the MMIO ops + pci_io_base which is 0 on iSeries as
+ * expected so both should work.
+ *
+ * Note that we don't implement the readq/writeq versions as
+ * I don't know of an HV call for doing so. Thus, the default
+ * operation will be used instead, which will fault a the value
+ * return by iSeries for MMIO addresses always hits a non mapped
+ * area. This is as good as the BUG() we used to have there.
+ */
+static struct ppc_pci_io __initdata iseries_pci_io = {
+	.readb = iseries_readb,
+	.readw = iseries_readw,
+	.readl = iseries_readl,
+	.readw_be = iseries_readw_be,
+	.readl_be = iseries_readl_be,
+	.writeb = iseries_writeb,
+	.writew = iseries_writew,
+	.writel = iseries_writel,
+	.writew_be = iseries_writew_be,
+	.writel_be = iseries_writel_be,
+	.readsb = iseries_readsb,
+	.readsw = iseries_readsw,
+	.readsl = iseries_readsl,
+	.writesb = iseries_writesb,
+	.writesw = iseries_writesw,
+	.writesl = iseries_writesl,
+	.memset_io = iseries_memset_io,
+	.memcpy_fromio = iseries_memcpy_fromio,
+	.memcpy_toio = iseries_memcpy_toio,
+};
+
+/*
+ * iSeries_pcibios_init
+ *
+ * Description:
+ *   This function checks for all possible system PCI host bridges that connect
+ *   PCI buses.  The system hypervisor is queried as to the guest partition
+ *   ownership status.  A pci_controller is built for any bus which is partially
+ *   owned or fully owned by this guest partition.
+ */
+void __init iSeries_pcibios_init(void)
+{
+	struct pci_controller *phb;
+	struct device_node *root = of_find_node_by_path("/");
+	struct device_node *node = NULL;
+
+	/* Install IO hooks */
+	ppc_pci_io = iseries_pci_io;
+
+	if (root == NULL) {
+		printk(KERN_CRIT "iSeries_pcibios_init: can't find root "
+				"of device tree\n");
+		return;
+	}
+	while ((node = of_get_next_child(root, node)) != NULL) {
+		HvBusNumber bus;
+		const u32 *busp;
+
+		if ((node->type == NULL) || (strcmp(node->type, "pci") != 0))
+			continue;
+
+		busp = get_property(node, "bus-range", NULL);
+		if (busp == NULL)
+			continue;
+		bus = *busp;
+		printk("bus %d appears to exist\n", bus);
+		phb = pcibios_alloc_controller(node);
+		if (phb == NULL)
+			continue;
+
+		phb->pci_mem_offset = phb->local_number = bus;
+		phb->first_busno = bus;
+		phb->last_busno = bus;
+		phb->ops = &iSeries_pci_ops;
+	}
+
+	of_node_put(root);
+
+	pci_devs_phb_init();
+}
+

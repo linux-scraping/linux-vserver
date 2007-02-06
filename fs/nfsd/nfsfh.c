@@ -24,8 +24,6 @@
 #include <linux/nfsd/nfsd.h>
 
 #define NFSDDBG_FACILITY		NFSDDBG_FH
-#define NFSD_PARANOIA 1
-/* #define NFSD_DEBUG_VERBOSE 1 */
 
 
 static int nfsd_nr_verified;
@@ -76,7 +74,7 @@ static int nfsd_acceptable(void *expv, struct dentry *dentry)
  * comment in the NFSv3 spec says this is incorrect (implementation notes for
  * the write call).
  */
-static inline int
+static inline __be32
 nfsd_mode_check(struct svc_rqst *rqstp, umode_t mode, int type)
 {
 	/* Type can be negative when creating hardlinks - not to a dir */
@@ -110,13 +108,13 @@ nfsd_mode_check(struct svc_rqst *rqstp, umode_t mode, int type)
  * This is only called at the start of an nfsproc call, so fhp points to
  * a svc_fh which is all 0 except for the over-the-wire file handle.
  */
-u32
+__be32
 fh_verify(struct svc_rqst *rqstp, struct svc_fh *fhp, int type, int access)
 {
 	struct knfsd_fh	*fh = &fhp->fh_handle;
 	struct svc_export *exp = NULL;
 	struct dentry	*dentry;
-	u32		error = 0;
+	__be32		error = 0;
 
 	dprintk("nfsd: fh_verify(%s)\n", SVCFH_fmt(fhp));
 
@@ -169,9 +167,11 @@ fh_verify(struct svc_rqst *rqstp, struct svc_fh *fhp, int type, int access)
 			exp = exp_find(rqstp->rq_client, 0, tfh, &rqstp->rq_chandle);
 		}
 
-		error = nfserr_dropit;
-		if (IS_ERR(exp) && PTR_ERR(exp) == -EAGAIN)
+		if (IS_ERR(exp) && (PTR_ERR(exp) == -EAGAIN
+				|| PTR_ERR(exp) == -ETIMEDOUT)) {
+			error = nfserrno(PTR_ERR(exp));
 			goto out;
+		}
 
 		error = nfserr_stale; 
 		if (!exp || IS_ERR(exp))
@@ -188,11 +188,9 @@ fh_verify(struct svc_rqst *rqstp, struct svc_fh *fhp, int type, int access)
 		}
 
 		/* Set user creds for this exportpoint */
-		error = nfsd_setuser(rqstp, exp);
-		if (error) {
-			error = nfserrno(error);
+		error = nfserrno(nfsd_setuser(rqstp, exp));
+		if (error)
 			goto out;
-		}
 
 		/*
 		 * Look up the dentry using the NFS file handle.
@@ -230,13 +228,12 @@ fh_verify(struct svc_rqst *rqstp, struct svc_fh *fhp, int type, int access)
 				error = nfserrno(PTR_ERR(dentry));
 			goto out;
 		}
-#ifdef NFSD_PARANOIA
+
 		if (S_ISDIR(dentry->d_inode->i_mode) &&
 		    (dentry->d_flags & DCACHE_DISCONNECTED)) {
 			printk("nfsd: find_fh_dentry returned a DISCONNECTED directory: %s/%s\n",
 			       dentry->d_parent->d_name.name, dentry->d_name.name);
 		}
-#endif
 
 		fhp->fh_dentry = dentry;
 		fhp->fh_export = exp;
@@ -248,8 +245,17 @@ fh_verify(struct svc_rqst *rqstp, struct svc_fh *fhp, int type, int access)
 		dprintk("nfsd: fh_verify - just checking\n");
 		dentry = fhp->fh_dentry;
 		exp = fhp->fh_export;
+		/* Set user creds for this exportpoint; necessary even
+		 * in the "just checking" case because this may be a
+		 * filehandle that was created by fh_compose, and that
+		 * is about to be used in another nfsv4 compound
+		 * operation */
+		error = nfserrno(nfsd_setuser(rqstp, exp));
+		if (error)
+			goto out;
 	}
 	cache_get(&exp->h);
+
 
 	error = nfsd_mode_check(rqstp, dentry->d_inode->i_mode, type);
 	if (error)
@@ -258,12 +264,13 @@ fh_verify(struct svc_rqst *rqstp, struct svc_fh *fhp, int type, int access)
 	/* Finally, check access permissions. */
 	error = nfsd_permission(exp, dentry, access);
 
-#ifdef NFSD_PARANOIA_EXTREME
 	if (error) {
-		printk("fh_verify: %s/%s permission failure, acc=%x, error=%d\n",
-		       dentry->d_parent->d_name.name, dentry->d_name.name, access, (error >> 24));
+		dprintk("fh_verify: %s/%s permission failure, "
+			"acc=%x, error=%d\n",
+			dentry->d_parent->d_name.name,
+			dentry->d_name.name,
+			access, ntohl(error));
 	}
-#endif
 out:
 	if (exp && !IS_ERR(exp))
 		exp_put(exp);
@@ -308,12 +315,12 @@ static inline void _fh_update_old(struct dentry *dentry,
 		fh->ofh_dirino = 0;
 }
 
-int
+__be32
 fh_compose(struct svc_fh *fhp, struct svc_export *exp, struct dentry *dentry, struct svc_fh *ref_fh)
 {
 	/* ref_fh is a reference file handle.
-	 * if it is non-null, then we should compose a filehandle which is
-	 * of the same version, where possible.
+	 * if it is non-null and for the same filesystem, then we should compose
+	 * a filehandle which is of the same version, where possible.
 	 * Currently, that means that if ref_fh->fh_handle.fh_version == 0xca
 	 * Then create a 32byte filehandle using nfs_fhbase_old
 	 *
@@ -332,7 +339,7 @@ fh_compose(struct svc_fh *fhp, struct svc_export *exp, struct dentry *dentry, st
 		parent->d_name.name, dentry->d_name.name,
 		(inode ? inode->i_ino : 0));
 
-	if (ref_fh) {
+	if (ref_fh && ref_fh->fh_export == exp) {
 		ref_fh_version = ref_fh->fh_handle.fh_version;
 		if (ref_fh_version == 0xca)
 			ref_fh_fsid_type = 0;
@@ -444,7 +451,7 @@ fh_compose(struct svc_fh *fhp, struct svc_export *exp, struct dentry *dentry, st
  * Update file handle information after changing a dentry.
  * This is only called by nfsd_create, nfsd_create_v3 and nfsd_proc_create
  */
-int
+__be32
 fh_update(struct svc_fh *fhp)
 {
 	struct dentry *dentry;
@@ -461,7 +468,7 @@ fh_update(struct svc_fh *fhp)
 	} else {
 		int size;
 		if (fhp->fh_handle.fh_fileid_type != 0)
-			goto out_uptodate;
+			goto out;
 		datap = fhp->fh_handle.fh_auth+
 			fhp->fh_handle.fh_size/4 -1;
 		size = (fhp->fh_maxsize - fhp->fh_handle.fh_size)/4;
@@ -479,10 +486,6 @@ out_bad:
 	goto out;
 out_negative:
 	printk(KERN_ERR "fh_update: %s/%s still negative!\n",
-		dentry->d_parent->d_name.name, dentry->d_name.name);
-	goto out;
-out_uptodate:
-	printk(KERN_ERR "fh_update: %s/%s already up-to-date!\n",
 		dentry->d_parent->d_name.name, dentry->d_name.name);
 	goto out;
 }

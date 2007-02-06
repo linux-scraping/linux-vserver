@@ -8,7 +8,6 @@
  * This file handles the architecture-dependent parts of system setup
  */
 
-#include <linux/config.h>
 #include <linux/kernel.h>
 #include <linux/mm.h>
 #include <linux/sched.h>
@@ -43,43 +42,54 @@
 
 unsigned long m68k_machtype;
 unsigned long m68k_cputype;
+EXPORT_SYMBOL(m68k_machtype);
+EXPORT_SYMBOL(m68k_cputype);
 unsigned long m68k_fputype;
 unsigned long m68k_mmutype;
 #ifdef CONFIG_VME
 unsigned long vme_brdtype;
+EXPORT_SYMBOL(vme_brdtype);
 #endif
 
 int m68k_is040or060;
+EXPORT_SYMBOL(m68k_is040or060);
 
 extern int end;
 extern unsigned long availmem;
 
 int m68k_num_memory;
 int m68k_realnum_memory;
+EXPORT_SYMBOL(m68k_realnum_memory);
+#ifdef CONFIG_SINGLE_MEMORY_CHUNK
 unsigned long m68k_memoffset;
+EXPORT_SYMBOL(m68k_memoffset);
+#endif
 struct mem_info m68k_memory[NUM_MEMINFO];
+EXPORT_SYMBOL(m68k_memory);
 
 static struct mem_info m68k_ramdisk;
 
 static char m68k_command_line[CL_SIZE];
 
 char m68k_debug_device[6] = "";
+EXPORT_SYMBOL(m68k_debug_device);
 
-void (*mach_sched_init) (irqreturn_t (*handler)(int, void *, struct pt_regs *)) __initdata = NULL;
+void (*mach_sched_init) (irq_handler_t handler) __initdata = NULL;
 /* machine dependent irq functions */
 void (*mach_init_IRQ) (void) __initdata = NULL;
-irqreturn_t (*(*mach_default_handler)[]) (int, void *, struct pt_regs *);
 void (*mach_get_model) (char *model);
 int (*mach_get_hardware_list) (char *buffer);
-int (*mach_get_irq_list) (struct seq_file *, void *);
-irqreturn_t (*mach_process_int) (int, struct pt_regs *);
 /* machine dependent timer functions */
 unsigned long (*mach_gettimeoffset) (void);
 int (*mach_hwclk) (int, struct rtc_time*);
+EXPORT_SYMBOL(mach_hwclk);
 int (*mach_set_clock_mmss) (unsigned long);
 unsigned int (*mach_get_ss)(void);
 int (*mach_get_rtc_pll)(struct rtc_pll_info *);
 int (*mach_set_rtc_pll)(struct rtc_pll_info *);
+EXPORT_SYMBOL(mach_get_ss);
+EXPORT_SYMBOL(mach_get_rtc_pll);
+EXPORT_SYMBOL(mach_set_rtc_pll);
 void (*mach_reset)( void );
 void (*mach_halt)( void );
 void (*mach_power_off)( void );
@@ -93,6 +103,7 @@ void (*mach_l2_flush) (int);
 #endif
 #if defined(CONFIG_INPUT_M68K_BEEP) || defined(CONFIG_INPUT_M68K_BEEP_MODULE)
 void (*mach_beep)(unsigned int, unsigned int);
+EXPORT_SYMBOL(mach_beep);
 #endif
 #if defined(CONFIG_ISA) && defined(MULTI_ISA)
 int isa_type;

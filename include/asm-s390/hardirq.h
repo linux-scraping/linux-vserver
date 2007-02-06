@@ -12,7 +12,6 @@
 #ifndef __ASM_HARDIRQ_H
 #define __ASM_HARDIRQ_H
 
-#include <linux/config.h>
 #include <linux/threads.h>
 #include <linux/sched.h>
 #include <linux/cache.h>
@@ -33,6 +32,6 @@ typedef struct {
 
 #define HARDIRQ_BITS	8
 
-extern void account_ticks(struct pt_regs *);
+extern void account_ticks(void);
 
 #endif /* __ASM_HARDIRQ_H */

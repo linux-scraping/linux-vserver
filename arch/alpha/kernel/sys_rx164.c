@@ -83,7 +83,7 @@ static struct hw_interrupt_type rx164_irq_type = {
 };
 
 static void 
-rx164_device_interrupt(unsigned long vector, struct pt_regs *regs)
+rx164_device_interrupt(unsigned long vector)
 {
 	unsigned long pld;
 	volatile unsigned int *dirr;
@@ -102,9 +102,9 @@ rx164_device_interrupt(unsigned long vector, struct pt_regs *regs)
 		i = ffz(~pld);
 		pld &= pld - 1; /* clear least bit set */
 		if (i == 20) {
-			isa_no_iack_sc_device_interrupt(vector, regs);
+			isa_no_iack_sc_device_interrupt(vector);
 		} else {
-			handle_irq(16+i, regs);
+			handle_irq(16+i);
 		}
 	}
 }
@@ -117,7 +117,7 @@ rx164_init_irq(void)
 	rx164_update_irq_hw(0);
 	for (i = 16; i < 40; ++i) {
 		irq_desc[i].status = IRQ_DISABLED | IRQ_LEVEL;
-		irq_desc[i].handler = &rx164_irq_type;
+		irq_desc[i].chip = &rx164_irq_type;
 	}
 
 	init_i8259a_irqs();

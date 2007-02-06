@@ -18,7 +18,6 @@
 #include <asm/system.h>
 #include <asm/traps.h>
 #include <asm/blinken.h>
-#include "ints.h"
 
 /* Clock hardware definitions */
 
@@ -37,15 +36,15 @@
 
 #define INTVAL ((10000 / 4) - 1)
 
-static irqreturn_t hp300_tick(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t hp300_tick(int irq, void *dev_id)
 {
 	unsigned long tmp;
-	irqreturn_t (*vector)(int, void *, struct pt_regs *) = dev_id;
+	irq_handler_t vector = dev_id;
 	in_8(CLOCKBASE + CLKSR);
 	asm volatile ("movpw %1@(5),%0" : "=d" (tmp) : "a" (CLOCKBASE));
 	/* Turn off the network and SCSI leds */
 	blinken_leds(0, 0xe0);
-	return vector(irq, NULL, regs);
+	return vector(irq, NULL);
 }
 
 unsigned long hp300_gettimeoffset(void)
@@ -64,14 +63,14 @@ unsigned long hp300_gettimeoffset(void)
   return (USECS_PER_JIFFY * ticks) / INTVAL;
 }
 
-void __init hp300_sched_init(irqreturn_t (*vector)(int, void *, struct pt_regs *))
+void __init hp300_sched_init(irq_handler_t vector)
 {
   out_8(CLOCKBASE + CLKCR2, 0x1);		/* select CR1 */
   out_8(CLOCKBASE + CLKCR1, 0x1);		/* reset */
 
   asm volatile(" movpw %0,%1@(5)" : : "d" (INTVAL), "a" (CLOCKBASE));
 
-  cpu_request_irq(6, hp300_tick, IRQ_FLG_STD, "timer tick", vector);
+  request_irq(IRQ_AUTO_6, hp300_tick, IRQ_FLG_STD, "timer tick", vector);
 
   out_8(CLOCKBASE + CLKCR2, 0x1);		/* select CR1 */
   out_8(CLOCKBASE + CLKCR1, 0x40);		/* enable irq */

@@ -19,8 +19,8 @@
  * IRQ functions for a Hitachi Big Sur Evaluation Board.
  *
  */
+#undef DEBUG
 
-#include <linux/config.h>
 #include <linux/sched.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
@@ -42,10 +42,8 @@
 #undef BIGSUR_DEBUG
 
 #ifdef BIGSUR_DEBUG
-#define DPRINTK(args...)        printk(args)
 #define DIPRINTK(n, args...)    if (BIGSUR_DEBUG>(n)) printk(args)
 #else
-#define DPRINTK(args...)
 #define DIPRINTK(n, args...)
 #endif /* BIGSUR_DEBUG */
 
@@ -61,45 +59,39 @@ extern int hd64465_irq_demux(int irq);
 /* Level 1 IRQ routines */
 static void disable_bigsur_l1irq(unsigned int irq)
 {
-        unsigned long flags;
         unsigned char mask;
         unsigned int mask_port = ((irq - BIGSUR_IRQ_LOW)/8) ? BIGSUR_IRLMR1 : BIGSUR_IRLMR0;
         unsigned char bit =  (1 << ((irq - MGATE_IRQ_LOW)%8) );
 
         if(irq >= BIGSUR_IRQ_LOW && irq < BIGSUR_IRQ_HIGH) {
-                DPRINTK("Disable L1 IRQ %d\n", irq);
+                pr_debug("Disable L1 IRQ %d\n", irq);
                 DIPRINTK(2,"disable_bigsur_l1irq: IMR=0x%08x mask=0x%x\n",
                         mask_port, bit);
-                local_irq_save(flags);
 
                 /* Disable IRQ - set mask bit */
                 mask = inb(mask_port) | bit;
                 outb(mask, mask_port);
-                local_irq_restore(flags);
                 return;
         }
-        DPRINTK("disable_bigsur_l1irq: Invalid IRQ %d\n", irq);
+        pr_debug("disable_bigsur_l1irq: Invalid IRQ %d\n", irq);
 }
 
 static void enable_bigsur_l1irq(unsigned int irq)
 {
-        unsigned long flags;
         unsigned char mask;
         unsigned int mask_port = ((irq - BIGSUR_IRQ_LOW)/8) ? BIGSUR_IRLMR1 : BIGSUR_IRLMR0;
         unsigned char bit =  (1 << ((irq - MGATE_IRQ_LOW)%8) );
 
         if(irq >= BIGSUR_IRQ_LOW && irq < BIGSUR_IRQ_HIGH) {
-                DPRINTK("Enable L1 IRQ %d\n", irq);
+                pr_debug("Enable L1 IRQ %d\n", irq);
                 DIPRINTK(2,"enable_bigsur_l1irq: IMR=0x%08x mask=0x%x\n",
                         mask_port, bit);
-                local_irq_save(flags);
                 /* Enable L1 IRQ - clear mask bit */
                 mask = inb(mask_port) & ~bit;
                 outb(mask, mask_port);
-                local_irq_restore(flags);
                 return;
         }
-        DPRINTK("enable_bigsur_l1irq: Invalid IRQ %d\n", irq);
+        pr_debug("enable_bigsur_l1irq: Invalid IRQ %d\n", irq);
 }
 
 
@@ -127,51 +119,45 @@ static const u32 imr_offset = BIGSUR_IMR0 - BIGSUR_IMR1;
 /* Level 2 IRQ routines */
 static void disable_bigsur_l2irq(unsigned int irq)
 {
-        unsigned long flags;
         unsigned char mask;
         unsigned char bit = 1 << ((irq-BIGSUR_2NDLVL_IRQ_LOW)%8);
         unsigned int mask_port = imr_base - REG_NUM(irq)*imr_offset;
 
-    if(irq >= BIGSUR_2NDLVL_IRQ_LOW && irq < BIGSUR_2NDLVL_IRQ_HIGH) {
-                DPRINTK("Disable L2 IRQ %d\n", irq);
+	if(irq >= BIGSUR_2NDLVL_IRQ_LOW && irq < BIGSUR_2NDLVL_IRQ_HIGH) {
+                pr_debug("Disable L2 IRQ %d\n", irq);
                 DIPRINTK(2,"disable_bigsur_l2irq: IMR=0x%08x mask=0x%x\n",
                         mask_port, bit);
-                local_irq_save(flags);
 
                 /* Disable L2 IRQ - set mask bit */
                 mask = inb(mask_port) | bit;
                 outb(mask, mask_port);
-                local_irq_restore(flags);
                 return;
         }
-        DPRINTK("disable_bigsur_l2irq: Invalid IRQ %d\n", irq);
+        pr_debug("disable_bigsur_l2irq: Invalid IRQ %d\n", irq);
 }
 
 static void enable_bigsur_l2irq(unsigned int irq)
 {
-        unsigned long flags;
         unsigned char mask;
         unsigned char bit = 1 << ((irq-BIGSUR_2NDLVL_IRQ_LOW)%8);
         unsigned int mask_port = imr_base - REG_NUM(irq)*imr_offset;
 
-    if(irq >= BIGSUR_2NDLVL_IRQ_LOW && irq < BIGSUR_2NDLVL_IRQ_HIGH) {
-                DPRINTK("Enable L2 IRQ %d\n", irq);
+	if(irq >= BIGSUR_2NDLVL_IRQ_LOW && irq < BIGSUR_2NDLVL_IRQ_HIGH) {
+                pr_debug("Enable L2 IRQ %d\n", irq);
                 DIPRINTK(2,"enable_bigsur_l2irq: IMR=0x%08x mask=0x%x\n",
                         mask_port, bit);
-                local_irq_save(flags);
 
                 /* Enable L2 IRQ - clear mask bit */
                 mask = inb(mask_port) & ~bit;
                 outb(mask, mask_port);
-                local_irq_restore(flags);
                 return;
         }
-        DPRINTK("enable_bigsur_l2irq: Invalid IRQ %d\n", irq);
+        pr_debug("enable_bigsur_l2irq: Invalid IRQ %d\n", irq);
 }
 
 static void mask_and_ack_bigsur(unsigned int irq)
 {
-        DPRINTK("mask_and_ack_bigsur IRQ %d\n", irq);
+        pr_debug("mask_and_ack_bigsur IRQ %d\n", irq);
         if(irq >= BIGSUR_IRQ_LOW && irq < BIGSUR_IRQ_HIGH)
                 disable_bigsur_l1irq(irq);
         else
@@ -180,7 +166,7 @@ static void mask_and_ack_bigsur(unsigned int irq)
 
 static void end_bigsur_irq(unsigned int irq)
 {
-        DPRINTK("end_bigsur_irq IRQ %d\n", irq);
+        pr_debug("end_bigsur_irq IRQ %d\n", irq);
         if (!(irq_desc[irq].status & (IRQ_DISABLED|IRQ_INPROGRESS))) {
                 if(irq >= BIGSUR_IRQ_LOW && irq < BIGSUR_IRQ_HIGH)
                         enable_bigsur_l1irq(irq);
@@ -194,7 +180,7 @@ static unsigned int startup_bigsur_irq(unsigned int irq)
         u8 mask;
         u32 reg;
 
-        DPRINTK("startup_bigsur_irq IRQ %d\n", irq);
+        pr_debug("startup_bigsur_irq IRQ %d\n", irq);
 
         if(irq >= BIGSUR_IRQ_LOW && irq < BIGSUR_IRQ_HIGH) {
                 /* Enable the L1 IRQ */
@@ -219,7 +205,7 @@ static unsigned int startup_bigsur_irq(unsigned int irq)
 
 static void shutdown_bigsur_irq(unsigned int irq)
 {
-        DPRINTK("shutdown_bigsur_irq IRQ %d\n", irq);
+        pr_debug("shutdown_bigsur_irq IRQ %d\n", irq);
         if(irq >= BIGSUR_IRQ_LOW && irq < BIGSUR_IRQ_HIGH)
                 disable_bigsur_l1irq(irq);
         else
@@ -253,7 +239,7 @@ static void make_bigsur_l1isr(unsigned int irq) {
         /* sanity check first */
         if(irq >= BIGSUR_IRQ_LOW && irq < BIGSUR_IRQ_HIGH) {
                 /* save the handler in the main description table */
-                irq_desc[irq].handler = &bigsur_l1irq_type;
+                irq_desc[irq].chip = &bigsur_l1irq_type;
                 irq_desc[irq].status = IRQ_DISABLED;
                 irq_desc[irq].action = 0;
                 irq_desc[irq].depth = 1;
@@ -261,7 +247,7 @@ static void make_bigsur_l1isr(unsigned int irq) {
                 disable_bigsur_l1irq(irq);
                 return;
         }
-        DPRINTK("make_bigsur_l1isr: bad irq, %d\n", irq);
+        pr_debug("make_bigsur_l1isr: bad irq, %d\n", irq);
         return;
 }
 
@@ -270,7 +256,7 @@ static void make_bigsur_l2isr(unsigned int irq) {
         /* sanity check first */
         if(irq >= BIGSUR_2NDLVL_IRQ_LOW && irq < BIGSUR_2NDLVL_IRQ_HIGH) {
                 /* save the handler in the main description table */
-                irq_desc[irq].handler = &bigsur_l2irq_type;
+                irq_desc[irq].chip = &bigsur_l2irq_type;
                 irq_desc[irq].status = IRQ_DISABLED;
                 irq_desc[irq].action = 0;
                 irq_desc[irq].depth = 1;
@@ -278,7 +264,7 @@ static void make_bigsur_l2isr(unsigned int irq) {
                 disable_bigsur_l2irq(irq);
                 return;
         }
-        DPRINTK("make_bigsur_l2isr: bad irq, %d\n", irq);
+        pr_debug("make_bigsur_l2isr: bad irq, %d\n", irq);
         return;
 }
 

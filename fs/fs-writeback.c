@@ -22,8 +22,7 @@
 #include <linux/blkdev.h>
 #include <linux/backing-dev.h>
 #include <linux/buffer_head.h>
-
-extern struct super_block *blockdev_superblock;
+#include "internal.h"
 
 /**
  *	__mark_inode_dirty -	internal function
@@ -252,8 +251,19 @@ __writeback_single_inode(struct inode *inode, struct writeback_control *wbc)
 		WARN_ON(inode->i_state & I_WILL_FREE);
 
 	if ((wbc->sync_mode != WB_SYNC_ALL) && (inode->i_state & I_LOCK)) {
+		struct address_space *mapping = inode->i_mapping;
+		int ret;
+
 		list_move(&inode->i_list, &inode->i_sb->s_dirty);
-		return 0;
+
+		/*
+		 * Even if we don't actually write the inode itself here,
+		 * we can at least start some of the data writeout..
+		 */
+		spin_unlock(&inode_lock);
+		ret = do_writepages(mapping, wbc);
+		spin_lock(&inode_lock);
+		return ret;
 	}
 
 	/*
@@ -320,7 +330,7 @@ sync_sb_inodes(struct super_block *sb, struct writeback_control *wbc)
 
 		if (!bdi_cap_writeback_dirty(bdi)) {
 			list_move(&inode->i_list, &sb->s_dirty);
-			if (sb == blockdev_superblock) {
+			if (sb_is_blkdev_sb(sb)) {
 				/*
 				 * Dirty memory-backed blockdev: the ramdisk
 				 * driver does this.  Skip just this inode
@@ -337,14 +347,14 @@ sync_sb_inodes(struct super_block *sb, struct writeback_control *wbc)
 
 		if (wbc->nonblocking && bdi_write_congested(bdi)) {
 			wbc->encountered_congestion = 1;
-			if (sb != blockdev_superblock)
+			if (!sb_is_blkdev_sb(sb))
 				break;		/* Skip a congested fs */
 			list_move(&inode->i_list, &sb->s_dirty);
 			continue;		/* Skip a congested blockdev */
 		}
 
 		if (wbc->bdi && bdi != wbc->bdi) {
-			if (sb != blockdev_superblock)
+			if (!sb_is_blkdev_sb(sb))
 				break;		/* fs has the wrong queue */
 			list_move(&inode->i_list, &sb->s_dirty);
 			continue;		/* blockdev has wrong queue */
@@ -461,9 +471,11 @@ void sync_inodes_sb(struct super_block *sb, int wait)
 {
 	struct writeback_control wbc = {
 		.sync_mode	= wait ? WB_SYNC_ALL : WB_SYNC_HOLD,
+		.range_start	= 0,
+		.range_end	= LLONG_MAX,
 	};
-	unsigned long nr_dirty = read_page_state(nr_dirty);
-	unsigned long nr_unstable = read_page_state(nr_unstable);
+	unsigned long nr_dirty = global_page_state(NR_FILE_DIRTY);
+	unsigned long nr_unstable = global_page_state(NR_UNSTABLE_NFS);
 
 	wbc.nr_to_write = nr_dirty + nr_unstable +
 			(inodes_stat.nr_inodes - inodes_stat.nr_unused) +
@@ -559,6 +571,8 @@ int write_inode_now(struct inode *inode, int sync)
 	struct writeback_control wbc = {
 		.nr_to_write = LONG_MAX,
 		.sync_mode = WB_SYNC_ALL,
+		.range_start = 0,
+		.range_end = LLONG_MAX,
 	};
 
 	if (!mapping_cap_writeback_dirty(inode->i_mapping))
@@ -619,7 +633,6 @@ int generic_osync_inode(struct inode *inode, struct address_space *mapping, int 
 	int need_write_inode_now = 0;
 	int err2;
 
-	current->flags |= PF_SYNCWRITE;
 	if (what & OSYNC_DATA)
 		err = filemap_fdatawrite(mapping);
 	if (what & (OSYNC_METADATA|OSYNC_DATA)) {
@@ -632,7 +645,6 @@ int generic_osync_inode(struct inode *inode, struct address_space *mapping, int 
 		if (!err)
 			err = err2;
 	}
-	current->flags &= ~PF_SYNCWRITE;
 
 	spin_lock(&inode_lock);
 	if ((inode->i_state & I_DIRTY) &&

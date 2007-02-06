@@ -1,5 +1,5 @@
 /*  D-Link DL2000-based Gigabit Ethernet Adapter Linux driver */
-/*  
+/*
     Copyright (c) 2001, 2002 by D-Link Corporation
     Written by Edward Peng.<edward_peng@dlink.com.tw>
     Created 03-May-2001, base on Linux' sundance.c.
@@ -216,7 +216,7 @@ enum MACCtrl_bits {
 enum ASICCtrl_LoWord_bits {
 	PhyMedia = 0x0080,
 };
-	
+
 enum ASICCtrl_HiWord_bits {
 	GlobalReset = 0x0001,
 	RxReset = 0x0002,
@@ -596,7 +596,7 @@ typedef union t_PCS_ANLPAR {
 } ANLPAR_PCS_t, *PANLPAR_PCS_t;
 
 enum _pcs_anlpar {
-	PCS_ANLPAR_NEXT_PAGE = PCS_ANAR_NEXT_PAGE, 
+	PCS_ANLPAR_NEXT_PAGE = PCS_ANAR_NEXT_PAGE,
 	PCS_ANLPAR_REMOTE_FAULT = PCS_ANAR_REMOTE_FAULT,
 	PCS_ANLPAR_ASYMMETRIC = PCS_ANAR_ASYMMETRIC,
 	PCS_ANLPAR_PAUSE = PCS_ANAR_PAUSE,
@@ -683,11 +683,6 @@ struct netdev_private {
 };
 
 /* The station address location in the EEPROM. */
-#ifdef MEM_MAPPING
-#define PCI_IOTYPE (PCI_USES_MASTER | PCI_USES_MEM | PCI_ADDR1)
-#else
-#define PCI_IOTYPE (PCI_USES_MASTER | PCI_USES_IO  | PCI_ADDR0)
-#endif
 /* The struct pci_device_id consist of:
         vendor, device          Vendor and device ID to match (or PCI_ANY_ID)
         subvendor, subdevice    Subsystem vendor and device ID to match (or PCI_ANY_ID)
@@ -695,9 +690,10 @@ struct netdev_private {
         class_mask              of the class are honored during the comparison.
         driver_data             Data private to the driver.
 */
-static struct pci_device_id rio_pci_tbl[] = {
-	{0x1186, 0x4000, PCI_ANY_ID, PCI_ANY_ID, 0, 0, 0},
-	{0,}
+
+static const struct pci_device_id rio_pci_tbl[] = {
+	{0x1186, 0x4000, PCI_ANY_ID, PCI_ANY_ID, },
+	{ }
 };
 MODULE_DEVICE_TABLE (pci, rio_pci_tbl);
 #define TX_TIMEOUT  (4*HZ)

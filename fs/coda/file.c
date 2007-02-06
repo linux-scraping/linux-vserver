@@ -66,7 +66,7 @@ coda_file_sendfile(struct file *coda_file, loff_t *ppos, size_t count,
 static ssize_t
 coda_file_write(struct file *coda_file, const char __user *buf, size_t count, loff_t *ppos)
 {
-	struct inode *host_inode, *coda_inode = coda_file->f_dentry->d_inode;
+	struct inode *host_inode, *coda_inode = coda_file->f_path.dentry->d_inode;
 	struct coda_file_info *cfi;
 	struct file *host_file;
 	ssize_t ret;
@@ -78,7 +78,7 @@ coda_file_write(struct file *coda_file, const char __user *buf, size_t count, lo
 	if (!host_file->f_op || !host_file->f_op->write)
 		return -EINVAL;
 
-	host_inode = host_file->f_dentry->d_inode;
+	host_inode = host_file->f_path.dentry->d_inode;
 	mutex_lock(&coda_inode->i_mutex);
 
 	ret = host_file->f_op->write(host_file, buf, count, ppos);
@@ -106,8 +106,8 @@ coda_file_mmap(struct file *coda_file, struct vm_area_struct *vma)
 	if (!host_file->f_op || !host_file->f_op->mmap)
 		return -ENODEV;
 
-	coda_inode = coda_file->f_dentry->d_inode;
-	host_inode = host_file->f_dentry->d_inode;
+	coda_inode = coda_file->f_path.dentry->d_inode;
+	host_inode = host_file->f_path.dentry->d_inode;
 	coda_file->f_mapping = host_file->f_mapping;
 	if (coda_inode->i_mapping == &coda_inode->i_data)
 		coda_inode->i_mapping = host_inode->i_mapping;
@@ -136,10 +136,8 @@ int coda_open(struct inode *coda_inode, struct file *coda_file)
 	coda_vfs_stat.open++;
 
 	cfi = kmalloc(sizeof(struct coda_file_info), GFP_KERNEL);
-	if (!cfi) {
-		unlock_kernel();
+	if (!cfi)
 		return -ENOMEM;
-	}
 
 	lock_kernel();
 
@@ -164,7 +162,7 @@ int coda_open(struct inode *coda_inode, struct file *coda_file)
 	return 0;
 }
 
-int coda_flush(struct file *coda_file)
+int coda_flush(struct file *coda_file, fl_owner_t id)
 {
 	unsigned short flags = coda_file->f_flags & ~O_EXCL;
 	unsigned short coda_flags = coda_flags_to_cflags(flags);
@@ -192,7 +190,7 @@ int coda_flush(struct file *coda_file)
 	cfi = CODA_FTOC(coda_file);
 	BUG_ON(!cfi || cfi->cfi_magic != CODA_MAGIC);
 
-	coda_inode = coda_file->f_dentry->d_inode;
+	coda_inode = coda_file->f_path.dentry->d_inode;
 
 	err = venus_store(coda_inode->i_sb, coda_i2f(coda_inode), coda_flags,
 			  coda_file->f_uid);
@@ -235,7 +233,7 @@ int coda_release(struct inode *coda_inode, struct file *coda_file)
 		err = venus_close(coda_inode->i_sb, coda_i2f(coda_inode),
 				  coda_flags, coda_file->f_uid);
 
-	host_inode = cfi->cfi_container->f_dentry->d_inode;
+	host_inode = cfi->cfi_container->f_path.dentry->d_inode;
 	cii = ITOC(coda_inode);
 
 	/* did we mmap this file? */
@@ -272,7 +270,7 @@ int coda_fsync(struct file *coda_file, struct dentry *coda_dentry, int datasync)
 	coda_vfs_stat.fsync++;
 
 	if (host_file->f_op && host_file->f_op->fsync) {
-		host_dentry = host_file->f_dentry;
+		host_dentry = host_file->f_path.dentry;
 		host_inode = host_dentry->d_inode;
 		mutex_lock(&host_inode->i_mutex);
 		err = host_file->f_op->fsync(host_file, host_dentry, datasync);

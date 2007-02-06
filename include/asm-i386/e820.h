@@ -18,7 +18,7 @@
 
 #define E820_RAM	1
 #define E820_RESERVED	2
-#define E820_ACPI	3 /* usable as RAM once ACPI tables have been read */
+#define E820_ACPI	3
 #define E820_NVS	4
 
 #define HIGH_MEMORY	(1024*1024)
@@ -38,6 +38,11 @@ extern struct e820map e820;
 
 extern int e820_all_mapped(unsigned long start, unsigned long end,
 			   unsigned type);
+extern void find_max_pfn(void);
+extern void register_bootmem_low_pages(unsigned long max_low_pfn);
+extern void e820_register_memory(void);
+extern void limit_regions(unsigned long long size);
+extern void print_memory_map(char *who);
 
 #endif/*!__ASSEMBLY__*/
 

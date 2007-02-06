@@ -24,7 +24,6 @@
 #include "xfs_trans.h"
 #include "xfs_sb.h"
 #include "xfs_ag.h"
-#include "xfs_dir.h"
 #include "xfs_dir2.h"
 #include "xfs_alloc.h"
 #include "xfs_dmapi.h"
@@ -33,7 +32,6 @@
 #include "xfs_bmap_btree.h"
 #include "xfs_alloc_btree.h"
 #include "xfs_ialloc_btree.h"
-#include "xfs_dir_sf.h"
 #include "xfs_dir2_sf.h"
 #include "xfs_attr_sf.h"
 #include "xfs_dinode.h"
@@ -114,17 +112,17 @@ xfs_Gqm_init(void)
 {
 	xfs_dqhash_t	*udqhash, *gdqhash;
 	xfs_qm_t	*xqm;
-	uint		i, hsize, flags = KM_SLEEP | KM_MAYFAIL;
+	size_t		hsize;
+	uint		i;
 
 	/*
 	 * Initialize the dquot hash tables.
 	 */
-	hsize = XFS_QM_HASHSIZE_HIGH;
-	while (!(udqhash = kmem_zalloc(hsize * sizeof(xfs_dqhash_t), flags))) {
-		if ((hsize >>= 1) <= XFS_QM_HASHSIZE_LOW)
-			flags = KM_SLEEP;
-	}
-	gdqhash = kmem_zalloc(hsize * sizeof(xfs_dqhash_t), KM_SLEEP);
+	udqhash = kmem_zalloc_greedy(&hsize,
+				     XFS_QM_HASHSIZE_LOW, XFS_QM_HASHSIZE_HIGH,
+				     KM_SLEEP | KM_MAYFAIL | KM_LARGE);
+	gdqhash = kmem_zalloc(hsize, KM_SLEEP | KM_LARGE);
+	hsize /= sizeof(xfs_dqhash_t);
 	ndquot = hsize << 8;
 
 	xqm = kmem_zalloc(sizeof(xfs_qm_t), KM_SLEEP);
@@ -1603,7 +1601,7 @@ xfs_qm_dqiterate(
 				  maxlblkcnt - lblkno,
 				  XFS_BMAPI_METADATA,
 				  NULL,
-				  0, map, &nmaps, NULL);
+				  0, map, &nmaps, NULL, NULL);
 		xfs_iunlock(qip, XFS_ILOCK_SHARED);
 		if (error)
 			break;
@@ -1905,9 +1903,7 @@ xfs_qm_quotacheck(
 		 */
 		if ((error = xfs_bulkstat(mp, &lastino, &count,
 				     xfs_qm_dqusage_adjust, NULL,
-				     structsz, NULL,
-				     BULKSTAT_FG_IGET|BULKSTAT_FG_VFSLOCKED,
-				     &done)))
+				     structsz, NULL, BULKSTAT_FG_IGET, &done)))
 			break;
 
 	} while (! done);

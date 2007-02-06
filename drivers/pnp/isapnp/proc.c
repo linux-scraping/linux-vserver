@@ -19,7 +19,6 @@
  *
  */
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/isapnp.h>
 #include <linux/proc_fs.h>
@@ -57,7 +56,7 @@ static loff_t isapnp_proc_bus_lseek(struct file *file, loff_t off, int whence)
 
 static ssize_t isapnp_proc_bus_read(struct file *file, char __user *buf, size_t nbytes, loff_t *ppos)
 {
-	struct inode *ino = file->f_dentry->d_inode;
+	struct inode *ino = file->f_path.dentry->d_inode;
 	struct proc_dir_entry *dp = PDE(ino);
 	struct pnp_dev *dev = dp->data;
 	int pos = *ppos;

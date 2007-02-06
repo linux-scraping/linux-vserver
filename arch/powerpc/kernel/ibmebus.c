@@ -112,7 +112,7 @@ static int ibmebus_dma_supported(struct device *dev, u64 mask)
 	return 1;
 }
 
-struct dma_mapping_ops ibmebus_dma_ops = {
+static struct dma_mapping_ops ibmebus_dma_ops = {
 	.alloc_coherent = ibmebus_alloc_coherent,
 	.free_coherent  = ibmebus_free_coherent,
 	.map_single     = ibmebus_map_single,
@@ -167,7 +167,7 @@ static DEVICE_ATTR(name, S_IRUSR | S_IRGRP | S_IROTH, ibmebusdev_show_name,
 		   NULL);
 
 static struct ibmebus_dev* __devinit ibmebus_register_device_common(
-	struct ibmebus_dev *dev, char *name)
+	struct ibmebus_dev *dev, const char *name)
 {
 	int err = 0;
 
@@ -175,6 +175,10 @@ static struct ibmebus_dev* __devinit ibmebus_register_device_common(
 	dev->ofdev.dev.parent  = &ibmebus_bus_device.ofdev.dev;
 	dev->ofdev.dev.bus     = &ibmebus_bus_type;
 	dev->ofdev.dev.release = ibmebus_dev_release;
+
+	dev->ofdev.dev.archdata.of_node = dev->ofdev.node;
+	dev->ofdev.dev.archdata.dma_ops = &ibmebus_dma_ops;
+	dev->ofdev.dev.archdata.numa_node = of_node_to_nid(dev->ofdev.node);
 
 	/* An ibmebusdev is based on a of_device. We have to change the
 	 * bus type to use our own DMA mapping operations. 
@@ -194,10 +198,10 @@ static struct ibmebus_dev* __devinit ibmebus_register_device_node(
 	struct device_node *dn)
 {
 	struct ibmebus_dev *dev;
-	char *loc_code;
+	const char *loc_code;
 	int length;
 
-	loc_code = (char *)get_property(dn, "ibm,loc-code", NULL);
+	loc_code = get_property(dn, "ibm,loc-code", NULL);
 	if (!loc_code) {
                 printk(KERN_WARNING "%s: node %s missing 'ibm,loc-code'\n",
 		       __FUNCTION__, dn->name ? dn->name : "<unknown>");
@@ -210,11 +214,10 @@ static struct ibmebus_dev* __devinit ibmebus_register_device_node(
 		return NULL;
 	}
 
-	dev = kmalloc(sizeof(struct ibmebus_dev), GFP_KERNEL);
+	dev = kzalloc(sizeof(struct ibmebus_dev), GFP_KERNEL);
 	if (!dev) {
 		return NULL;
 	}
-	memset(dev, 0, sizeof(struct ibmebus_dev));
 
 	dev->ofdev.node = of_node_get(dn);
        
@@ -319,16 +322,14 @@ EXPORT_SYMBOL(ibmebus_unregister_driver);
 
 int ibmebus_request_irq(struct ibmebus_dev *dev,
 			u32 ist, 
-			irqreturn_t (*handler)(int, void*, struct pt_regs *),
+			irq_handler_t handler,
 			unsigned long irq_flags, const char * devname,
 			void *dev_id)
 {
-	unsigned int irq = virt_irq_create_mapping(ist);
+	unsigned int irq = irq_create_mapping(NULL, ist);
 	
 	if (irq == NO_IRQ)
 		return -EINVAL;
-	
-	irq = irq_offset_up(irq);
 	
 	return request_irq(irq, handler,
 			   irq_flags, devname, dev_id);
@@ -337,12 +338,9 @@ EXPORT_SYMBOL(ibmebus_request_irq);
 
 void ibmebus_free_irq(struct ibmebus_dev *dev, u32 ist, void *dev_id)
 {
-	unsigned int irq = virt_irq_create_mapping(ist);
+	unsigned int irq = irq_find_mapping(NULL, ist);
 	
-	irq = irq_offset_up(irq);
 	free_irq(irq, dev_id);
-	
-	return;
 }
 EXPORT_SYMBOL(ibmebus_free_irq);
 

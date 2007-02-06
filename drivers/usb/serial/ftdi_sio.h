@@ -32,9 +32,18 @@
 #define FTDI_NF_RIC_PID	0x0001	/* Product Id */
 
 
+/* www.canusb.com Lawicel CANUSB device */
+#define FTDI_CANUSB_PID 0xFFA8 /* Product Id */
+
+/* AlphaMicro Components AMC-232USB01 device */
+#define FTDI_AMC232_PID 0xFF00 /* Product Id */
+
 /* ACT Solutions HomePro ZWave interface (http://www.act-solutions.com/HomePro.htm) */
 #define FTDI_ACTZWAVE_PID	0xF2D0
 
+
+/* www.starting-point-systems.com µChameleon device */
+#define FTDI_MICRO_CHAMELEON_PID	0xCAA0	/* Product Id */
 
 /* www.irtrans.de device */
 #define FTDI_IRTRANS_PID 0xFC60 /* Product Id */
@@ -45,6 +54,9 @@
 
 /* iPlus device */
 #define FTDI_IPLUS_PID 0xD070 /* Product Id */
+
+/* DMX4ALL DMX Interfaces */
+#define FTDI_DMX4ALL 0xC850
 
 /* www.crystalfontz.com devices - thanx for providing free devices for evaluation ! */
 /* they use the ftdi chipset for the USB interface and the vendor id is the same */
@@ -102,6 +114,7 @@
 #define SEALEVEL_2102_PID	0x2102	/* SeaLINK+485 (2102) */
 #define SEALEVEL_2103_PID	0x2103	/* SeaLINK+232I (2103) */
 #define SEALEVEL_2104_PID	0x2104	/* SeaLINK+485I (2104) */
+#define SEALEVEL_2106_PID	0x9020	/* SeaLINK+422 (2106) */
 #define SEALEVEL_2201_1_PID	0x2211	/* SeaPORT+2/232 (2201) Port 1 */
 #define SEALEVEL_2201_2_PID	0x2221	/* SeaPORT+2/232 (2201) Port 2 */
 #define SEALEVEL_2202_1_PID	0x2212	/* SeaPORT+2/485 (2202) Port 1 */
@@ -165,9 +178,15 @@
 #define FTDI_ASK_RDR400_PID	0xC991	/* ASK RDR 400 series card reader */
 
 /*
+ * FTDI USB UART chips used in construction projects from the
+ * Elektor Electronics magazine (http://elektor-electronics.co.uk)
+ */
+#define ELEKTOR_VID		0x0C7D
+#define ELEKTOR_FT323R_PID	0x0005	/* RFID-Reader, issue 09-2006 */
+
+/*
  * DSS-20 Sync Station for Sony Ericsson P800
  */
- 
 #define FTDI_DSS20_PID          0xFC82  
 
 /*
@@ -178,6 +197,10 @@
 /* USB-UIRT - An infrared receiver and transmitter using the 8U232AM chip */
 /* http://home.earthlink.net/~jrhees/USBUIRT/index.htm */
 #define FTDI_USB_UIRT_PID	0xF850	/* Product Id */
+
+/* TNC-X USB-to-packet-radio adapter, versions prior to 3.0 (DLP module) */
+
+#define FTDI_TNC_X_PID		0xEBE0
 
 /*
  * ELV USB devices submitted by Christian Abt of ELV (www.elv.de).
@@ -289,8 +312,9 @@
 
 /* CCS Inc. ICDU/ICDU40 product ID - the FT232BM is used in an in-circuit-debugger */
 /* unit for PIC16's/PIC18's */
-#define FTDI_CCSICDU20_0_PID    0xF9D0     
-#define FTDI_CCSICDU40_1_PID    0xF9D1     
+#define FTDI_CCSICDU20_0_PID    0xF9D0
+#define FTDI_CCSICDU40_1_PID    0xF9D1
+#define FTDI_CCSMACHX_2_PID     0xF9D2
 
 /* Inside Accesso contactless reader (http://www.insidefr.com) */
 #define INSIDE_ACCESSO		0xFAD0
@@ -435,6 +459,38 @@
  * Submitted by anton -at- goto10 -dot- org.
  */
 #define FTDI_ACG_HFDUAL_PID		0xDD20	/* HF Dual ISO Reader (RFID) */
+
+/*
+ * Yost Engineering, Inc. products (www.yostengineering.com).
+ * PID 0xE050 submitted by Aaron Prose.
+ */
+#define FTDI_YEI_SERVOCENTER31_PID	0xE050	/* YEI ServoCenter3.1 USB */
+
+/*
+ * ThorLabs USB motor drivers
+ */
+#define FTDI_THORLABS_PID		0xfaf0 /* ThorLabs USB motor drivers */
+
+/*
+ * Testo products (http://www.testo.com/)
+ * Submitted by Colin Leroy
+ */
+#define TESTO_VID			0x128D
+#define TESTO_USB_INTERFACE_PID		0x0001
+
+/*
+ * Gamma Scout (http://gamma-scout.com/). Submitted by rsc@runtux.com.
+ */
+#define FTDI_GAMMA_SCOUT_PID		0xD678	/* Gamma Scout online */
+
+/*
+ * Tactrix OpenPort (ECU) devices.
+ * OpenPort 1.3M submitted by Donour Sizemore.
+ * OpenPort 1.3S and 1.3U submitted by Ian Abbott.
+ */
+#define FTDI_TACTRIX_OPENPORT_13M_PID	0xCC48	/* OpenPort 1.3 Mitsubishi */
+#define FTDI_TACTRIX_OPENPORT_13S_PID	0xCC49	/* OpenPort 1.3 Subaru */
+#define FTDI_TACTRIX_OPENPORT_13U_PID	0xCC4A	/* OpenPort 1.3 Universal */
 
 /* Commands */
 #define FTDI_SIO_RESET 		0 /* Reset the port */

@@ -9,7 +9,6 @@
  *                    - Interrupt handling fixes
  * Copyright (C) 2001, 2003 Ladislav Michl (ladis@linux-mips.org)
  */
-#include <linux/config.h>
 #include <linux/types.h>
 #include <linux/init.h>
 #include <linux/kernel_stat.h>
@@ -41,189 +40,89 @@ extern int ip22_eisa_init(void);
 
 static void enable_local0_irq(unsigned int irq)
 {
-	unsigned long flags;
-
-	local_irq_save(flags);
 	/* don't allow mappable interrupt to be enabled from setup_irq,
 	 * we have our own way to do so */
 	if (irq != SGI_MAP_0_IRQ)
 		sgint->imask0 |= (1 << (irq - SGINT_LOCAL0));
-	local_irq_restore(flags);
-}
-
-static unsigned int startup_local0_irq(unsigned int irq)
-{
-	enable_local0_irq(irq);
-	return 0;		/* Never anything pending  */
 }
 
 static void disable_local0_irq(unsigned int irq)
 {
-	unsigned long flags;
-
-	local_irq_save(flags);
 	sgint->imask0 &= ~(1 << (irq - SGINT_LOCAL0));
-	local_irq_restore(flags);
 }
 
-#define shutdown_local0_irq	disable_local0_irq
-#define mask_and_ack_local0_irq	disable_local0_irq
-
-static void end_local0_irq (unsigned int irq)
-{
-	if (!(irq_desc[irq].status & (IRQ_DISABLED|IRQ_INPROGRESS)))
-		enable_local0_irq(irq);
-}
-
-static struct hw_interrupt_type ip22_local0_irq_type = {
+static struct irq_chip ip22_local0_irq_type = {
 	.typename	= "IP22 local 0",
-	.startup	= startup_local0_irq,
-	.shutdown	= shutdown_local0_irq,
-	.enable		= enable_local0_irq,
-	.disable	= disable_local0_irq,
-	.ack		= mask_and_ack_local0_irq,
-	.end		= end_local0_irq,
+	.ack		= disable_local0_irq,
+	.mask		= disable_local0_irq,
+	.mask_ack	= disable_local0_irq,
+	.unmask		= enable_local0_irq,
 };
 
 static void enable_local1_irq(unsigned int irq)
 {
-	unsigned long flags;
-
-	local_irq_save(flags);
 	/* don't allow mappable interrupt to be enabled from setup_irq,
 	 * we have our own way to do so */
 	if (irq != SGI_MAP_1_IRQ)
 		sgint->imask1 |= (1 << (irq - SGINT_LOCAL1));
-	local_irq_restore(flags);
-}
-
-static unsigned int startup_local1_irq(unsigned int irq)
-{
-	enable_local1_irq(irq);
-	return 0;		/* Never anything pending  */
 }
 
 void disable_local1_irq(unsigned int irq)
 {
-	unsigned long flags;
-
-	local_irq_save(flags);
 	sgint->imask1 &= ~(1 << (irq - SGINT_LOCAL1));
-	local_irq_restore(flags);
 }
 
-#define shutdown_local1_irq	disable_local1_irq
-#define mask_and_ack_local1_irq	disable_local1_irq
-
-static void end_local1_irq (unsigned int irq)
-{
-	if (!(irq_desc[irq].status & (IRQ_DISABLED|IRQ_INPROGRESS)))
-		enable_local1_irq(irq);
-}
-
-static struct hw_interrupt_type ip22_local1_irq_type = {
+static struct irq_chip ip22_local1_irq_type = {
 	.typename	= "IP22 local 1",
-	.startup	= startup_local1_irq,
-	.shutdown	= shutdown_local1_irq,
-	.enable		= enable_local1_irq,
-	.disable	= disable_local1_irq,
-	.ack		= mask_and_ack_local1_irq,
-	.end		= end_local1_irq,
+	.ack		= disable_local1_irq,
+	.mask		= disable_local1_irq,
+	.mask_ack	= disable_local1_irq,
+	.unmask		= enable_local1_irq,
 };
 
 static void enable_local2_irq(unsigned int irq)
 {
-	unsigned long flags;
-
-	local_irq_save(flags);
 	sgint->imask0 |= (1 << (SGI_MAP_0_IRQ - SGINT_LOCAL0));
 	sgint->cmeimask0 |= (1 << (irq - SGINT_LOCAL2));
-	local_irq_restore(flags);
-}
-
-static unsigned int startup_local2_irq(unsigned int irq)
-{
-	enable_local2_irq(irq);
-	return 0;		/* Never anything pending  */
 }
 
 void disable_local2_irq(unsigned int irq)
 {
-	unsigned long flags;
-
-	local_irq_save(flags);
 	sgint->cmeimask0 &= ~(1 << (irq - SGINT_LOCAL2));
 	if (!sgint->cmeimask0)
 		sgint->imask0 &= ~(1 << (SGI_MAP_0_IRQ - SGINT_LOCAL0));
-	local_irq_restore(flags);
 }
 
-#define shutdown_local2_irq disable_local2_irq
-#define mask_and_ack_local2_irq	disable_local2_irq
-
-static void end_local2_irq (unsigned int irq)
-{
-	if (!(irq_desc[irq].status & (IRQ_DISABLED|IRQ_INPROGRESS)))
-		enable_local2_irq(irq);
-}
-
-static struct hw_interrupt_type ip22_local2_irq_type = {
+static struct irq_chip ip22_local2_irq_type = {
 	.typename	= "IP22 local 2",
-	.startup	= startup_local2_irq,
-	.shutdown	= shutdown_local2_irq,
-	.enable		= enable_local2_irq,
-	.disable	= disable_local2_irq,
-	.ack		= mask_and_ack_local2_irq,
-	.end		= end_local2_irq,
+	.ack		= disable_local2_irq,
+	.mask		= disable_local2_irq,
+	.mask_ack	= disable_local2_irq,
+	.unmask		= enable_local2_irq,
 };
 
 static void enable_local3_irq(unsigned int irq)
 {
-	unsigned long flags;
-
-	local_irq_save(flags);
 	sgint->imask1 |= (1 << (SGI_MAP_1_IRQ - SGINT_LOCAL1));
 	sgint->cmeimask1 |= (1 << (irq - SGINT_LOCAL3));
-	local_irq_restore(flags);
-}
-
-static unsigned int startup_local3_irq(unsigned int irq)
-{
-	enable_local3_irq(irq);
-	return 0;		/* Never anything pending  */
 }
 
 void disable_local3_irq(unsigned int irq)
 {
-	unsigned long flags;
-
-	local_irq_save(flags);
 	sgint->cmeimask1 &= ~(1 << (irq - SGINT_LOCAL3));
 	if (!sgint->cmeimask1)
 		sgint->imask1 &= ~(1 << (SGI_MAP_1_IRQ - SGINT_LOCAL1));
-	local_irq_restore(flags);
 }
 
-#define shutdown_local3_irq disable_local3_irq
-#define mask_and_ack_local3_irq	disable_local3_irq
-
-static void end_local3_irq (unsigned int irq)
-{
-	if (!(irq_desc[irq].status & (IRQ_DISABLED|IRQ_INPROGRESS)))
-		enable_local3_irq(irq);
-}
-
-static struct hw_interrupt_type ip22_local3_irq_type = {
+static struct irq_chip ip22_local3_irq_type = {
 	.typename	= "IP22 local 3",
-	.startup	= startup_local3_irq,
-	.shutdown	= shutdown_local3_irq,
-	.enable		= enable_local3_irq,
-	.disable	= disable_local3_irq,
-	.ack		= mask_and_ack_local3_irq,
-	.end		= end_local3_irq,
+	.ack		= disable_local3_irq,
+	.mask		= disable_local3_irq,
+	.mask_ack	= disable_local3_irq,
+	.unmask		= enable_local3_irq,
 };
 
-static void indy_local0_irqdispatch(struct pt_regs *regs)
+static void indy_local0_irqdispatch(void)
 {
 	u8 mask = sgint->istat0 & sgint->imask0;
 	u8 mask2;
@@ -237,11 +136,10 @@ static void indy_local0_irqdispatch(struct pt_regs *regs)
 
 	/* if irq == 0, then the interrupt has already been cleared */
 	if (irq)
-		do_IRQ(irq, regs);
-	return;
+		do_IRQ(irq);
 }
 
-static void indy_local1_irqdispatch(struct pt_regs *regs)
+static void indy_local1_irqdispatch(void)
 {
 	u8 mask = sgint->istat1 & sgint->imask1;
 	u8 mask2;
@@ -255,50 +153,49 @@ static void indy_local1_irqdispatch(struct pt_regs *regs)
 
 	/* if irq == 0, then the interrupt has already been cleared */
 	if (irq)
-		do_IRQ(irq, regs);
-	return;
+		do_IRQ(irq);
 }
 
-extern void ip22_be_interrupt(int irq, struct pt_regs *regs);
+extern void ip22_be_interrupt(int irq);
 
-static void indy_buserror_irq(struct pt_regs *regs)
+static void indy_buserror_irq(void)
 {
 	int irq = SGI_BUSERR_IRQ;
 
 	irq_enter();
 	kstat_this_cpu.irqs[irq]++;
-	ip22_be_interrupt(irq, regs);
+	ip22_be_interrupt(irq);
 	irq_exit();
 }
 
 static struct irqaction local0_cascade = {
 	.handler	= no_action,
-	.flags		= SA_INTERRUPT,
+	.flags		= IRQF_DISABLED,
 	.name		= "local0 cascade",
 };
 
 static struct irqaction local1_cascade = {
 	.handler	= no_action,
-	.flags		= SA_INTERRUPT,
+	.flags		= IRQF_DISABLED,
 	.name		= "local1 cascade",
 };
 
 static struct irqaction buserr = {
 	.handler	= no_action,
-	.flags		= SA_INTERRUPT,
+	.flags		= IRQF_DISABLED,
 	.name		= "Bus Error",
 };
 
 static struct irqaction map0_cascade = {
 	.handler	= no_action,
-	.flags		= SA_INTERRUPT,
+	.flags		= IRQF_DISABLED,
 	.name		= "mapable0 cascade",
 };
 
 #ifdef USE_LIO3_IRQ
 static struct irqaction map1_cascade = {
 	.handler	= no_action,
-	.flags		= SA_INTERRUPT,
+	.flags		= IRQF_DISABLED,
 	.name		= "mapable1 cascade",
 };
 #define SGI_INTERRUPTS	SGINT_END
@@ -306,8 +203,8 @@ static struct irqaction map1_cascade = {
 #define SGI_INTERRUPTS	SGINT_LOCAL3
 #endif
 
-extern void indy_r4k_timer_interrupt(struct pt_regs *regs);
-extern void indy_8254timer_irq(struct pt_regs *regs);
+extern void indy_r4k_timer_interrupt(void);
+extern void indy_8254timer_irq(void);
 
 /*
  * IRQs on the INDY look basically (barring software IRQs which we don't use
@@ -337,7 +234,7 @@ extern void indy_8254timer_irq(struct pt_regs *regs);
  * another exception, big deal.
  */
 
-asmlinkage void plat_irq_dispatch(struct pt_regs *regs)
+asmlinkage void plat_irq_dispatch(void)
 {
 	unsigned int pending = read_c0_cause();
 
@@ -345,15 +242,15 @@ asmlinkage void plat_irq_dispatch(struct pt_regs *regs)
 	 * First we check for r4k counter/timer IRQ.
 	 */
 	if (pending & CAUSEF_IP7)
-		indy_r4k_timer_interrupt(regs);
+		indy_r4k_timer_interrupt();
 	else if (pending & CAUSEF_IP2)
-		indy_local0_irqdispatch(regs);
+		indy_local0_irqdispatch();
 	else if (pending & CAUSEF_IP3)
-		indy_local1_irqdispatch(regs);
+		indy_local1_irqdispatch();
 	else if (pending & CAUSEF_IP6)
-		indy_buserror_irq(regs);
+		indy_buserror_irq();
 	else if (pending & (CAUSEF_IP4 | CAUSEF_IP5))
-		indy_8254timer_irq(regs);
+		indy_8254timer_irq();
 }
 
 extern void mips_cpu_irq_init(unsigned int irq_base);
@@ -422,7 +319,7 @@ void __init arch_init_irq(void)
 	mips_cpu_irq_init(SGINT_CPU);
 
 	for (i = SGINT_LOCAL0; i < SGI_INTERRUPTS; i++) {
-		hw_irq_controller *handler;
+		struct irq_chip *handler;
 
 		if (i < SGINT_LOCAL1)
 			handler		= &ip22_local0_irq_type;
@@ -433,10 +330,7 @@ void __init arch_init_irq(void)
 		else
 			handler		= &ip22_local3_irq_type;
 
-		irq_desc[i].status	= IRQ_DISABLED;
-		irq_desc[i].action	= 0;
-		irq_desc[i].depth	= 1;
-		irq_desc[i].handler	= handler;
+		set_irq_chip_and_handler(i, handler, handle_level_irq);
 	}
 
 	/* vector handler. this register the IRQ as non-sharable */

@@ -23,7 +23,6 @@
  *
  ********************************************************************/
 
-#include <linux/config.h>
 #include <linux/module.h>
 
 #include <linux/kernel.h>
@@ -637,7 +636,8 @@ void irlan_get_provider_info(struct irlan_cb *self)
 	IRDA_ASSERT(self != NULL, return;);
 	IRDA_ASSERT(self->magic == IRLAN_MAGIC, return;);
 
-	skb = dev_alloc_skb(64);
+	skb = alloc_skb(IRLAN_MAX_HEADER + IRLAN_CMD_HEADER,
+			GFP_ATOMIC);
 	if (!skb)
 		return;
 
@@ -669,7 +669,10 @@ void irlan_open_data_channel(struct irlan_cb *self)
 	IRDA_ASSERT(self != NULL, return;);
 	IRDA_ASSERT(self->magic == IRLAN_MAGIC, return;);
 	
-	skb = dev_alloc_skb(64);
+	skb = alloc_skb(IRLAN_MAX_HEADER + IRLAN_CMD_HEADER +
+			IRLAN_STRING_PARAMETER_LEN("MEDIA", "802.3") +
+			IRLAN_STRING_PARAMETER_LEN("ACCESS_TYPE", "DIRECT"),
+			GFP_ATOMIC);
 	if (!skb)
 		return;
 
@@ -705,7 +708,9 @@ void irlan_close_data_channel(struct irlan_cb *self)
 	if (self->client.tsap_ctrl == NULL)
 		return;
 
-	skb = dev_alloc_skb(64);
+	skb = alloc_skb(IRLAN_MAX_HEADER + IRLAN_CMD_HEADER +
+			IRLAN_BYTE_PARAMETER_LEN("DATA_CHAN"),
+			GFP_ATOMIC);
 	if (!skb)
 		return;
 
@@ -716,7 +721,7 @@ void irlan_close_data_channel(struct irlan_cb *self)
 	
 	/* Build frame */
  	frame[0] = CMD_CLOSE_DATA_CHAN;
-	frame[1] = 0x01; /* Two parameters */
+	frame[1] = 0x01; /* One parameter */
 
 	irlan_insert_byte_param(skb, "DATA_CHAN", self->dtsap_sel_data);
 
@@ -740,7 +745,11 @@ static void irlan_open_unicast_addr(struct irlan_cb *self)
 	IRDA_ASSERT(self != NULL, return;);
 	IRDA_ASSERT(self->magic == IRLAN_MAGIC, return;);	
 	
-	skb = dev_alloc_skb(128);
+	skb = alloc_skb(IRLAN_MAX_HEADER + IRLAN_CMD_HEADER +
+			IRLAN_BYTE_PARAMETER_LEN("DATA_CHAN") +
+			IRLAN_STRING_PARAMETER_LEN("FILTER_TYPE", "DIRECTED") +
+			IRLAN_STRING_PARAMETER_LEN("FILTER_MODE", "FILTER"),
+			GFP_ATOMIC);
 	if (!skb)
 		return;
 
@@ -778,7 +787,12 @@ void irlan_set_broadcast_filter(struct irlan_cb *self, int status)
 	IRDA_ASSERT(self != NULL, return;);
 	IRDA_ASSERT(self->magic == IRLAN_MAGIC, return;);
 	
- 	skb = dev_alloc_skb(128);
+ 	skb = alloc_skb(IRLAN_MAX_HEADER + IRLAN_CMD_HEADER +
+			IRLAN_BYTE_PARAMETER_LEN("DATA_CHAN") +
+			IRLAN_STRING_PARAMETER_LEN("FILTER_TYPE", "BROADCAST") +
+			/* We may waste one byte here...*/
+			IRLAN_STRING_PARAMETER_LEN("FILTER_MODE", "FILTER"),
+			GFP_ATOMIC);
 	if (!skb)
 		return;
 
@@ -817,7 +831,12 @@ void irlan_set_multicast_filter(struct irlan_cb *self, int status)
 	IRDA_ASSERT(self != NULL, return;);
 	IRDA_ASSERT(self->magic == IRLAN_MAGIC, return;);
 
- 	skb = dev_alloc_skb(128);
+	skb = alloc_skb(IRLAN_MAX_HEADER + IRLAN_CMD_HEADER +
+			IRLAN_BYTE_PARAMETER_LEN("DATA_CHAN") +
+			IRLAN_STRING_PARAMETER_LEN("FILTER_TYPE", "MULTICAST") +
+			/* We may waste one byte here...*/
+			IRLAN_STRING_PARAMETER_LEN("FILTER_MODE", "NONE"),
+			GFP_ATOMIC);
 	if (!skb)
 		return;
 	
@@ -857,7 +876,12 @@ static void irlan_get_unicast_addr(struct irlan_cb *self)
 	IRDA_ASSERT(self != NULL, return;);
 	IRDA_ASSERT(self->magic == IRLAN_MAGIC, return;);
 	
-	skb = dev_alloc_skb(128);
+	skb = alloc_skb(IRLAN_MAX_HEADER + IRLAN_CMD_HEADER +
+			IRLAN_BYTE_PARAMETER_LEN("DATA_CHAN") +
+			IRLAN_STRING_PARAMETER_LEN("FILTER_TYPE", "DIRECTED") +
+			IRLAN_STRING_PARAMETER_LEN("FILTER_OPERATION",
+						   "DYNAMIC"),
+			GFP_ATOMIC);
 	if (!skb)
 		return;
 
@@ -892,7 +916,10 @@ void irlan_get_media_char(struct irlan_cb *self)
 	IRDA_ASSERT(self != NULL, return;);
 	IRDA_ASSERT(self->magic == IRLAN_MAGIC, return;);
 	
-	skb = dev_alloc_skb(64);
+	skb = alloc_skb(IRLAN_MAX_HEADER + IRLAN_CMD_HEADER +
+			IRLAN_STRING_PARAMETER_LEN("MEDIA", "802.3"),
+			GFP_ATOMIC);
+
 	if (!skb)
 		return;
 
@@ -968,7 +995,7 @@ static int __irlan_insert_param(struct sk_buff *skb, char *param, int type,
 {
 	__u8 *frame;
 	__u8 param_len;
-	__u16 tmp_le; /* Temporary value in little endian format */
+	__le16 tmp_le; /* Temporary value in little endian format */
 	int n=0;
 	
 	if (skb == NULL) {

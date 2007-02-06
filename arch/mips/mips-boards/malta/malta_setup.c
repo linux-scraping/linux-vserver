@@ -15,19 +15,11 @@
  *  with this program; if not, write to the Free Software Foundation, Inc.,
  *  59 Temple Place - Suite 330, Boston MA 02111-1307, USA.
  */
-#include <linux/config.h>
 #include <linux/init.h>
 #include <linux/sched.h>
 #include <linux/ioport.h>
 #include <linux/pci.h>
-#include <linux/tty.h>
-
-#ifdef CONFIG_MTD
-#include <linux/mtd/partitions.h>
-#include <linux/mtd/physmap.h>
-#include <linux/mtd/mtd.h>
-#include <linux/mtd/map.h>
-#endif
+#include <linux/screen_info.h>
 
 #include <asm/cpu.h>
 #include <asm/bootinfo.h>
@@ -45,7 +37,6 @@
 
 extern void mips_reboot_setup(void);
 extern void mips_time_init(void);
-extern void mips_timer_setup(struct irqaction *irq);
 extern unsigned long mips_rtc_get_time(void);
 
 #ifdef CONFIG_KGDB
@@ -53,36 +44,12 @@ extern void kgdb_config(void);
 #endif
 
 struct resource standard_io_resources[] = {
-	{ "dma1", 0x00, 0x1f, IORESOURCE_BUSY },
-	{ "timer", 0x40, 0x5f, IORESOURCE_BUSY },
-	{ "keyboard", 0x60, 0x6f, IORESOURCE_BUSY },
-	{ "dma page reg", 0x80, 0x8f, IORESOURCE_BUSY },
-	{ "dma2", 0xc0, 0xdf, IORESOURCE_BUSY },
+	{ .name = "dma1", .start = 0x00, .end = 0x1f, .flags = IORESOURCE_BUSY },
+	{ .name = "timer", .start = 0x40, .end = 0x5f, .flags = IORESOURCE_BUSY },
+	{ .name = "keyboard", .start = 0x60, .end = 0x6f, .flags = IORESOURCE_BUSY },
+	{ .name = "dma page reg", .start = 0x80, .end = 0x8f, .flags = IORESOURCE_BUSY },
+	{ .name = "dma2", .start = 0xc0, .end = 0xdf, .flags = IORESOURCE_BUSY },
 };
-
-#ifdef CONFIG_MTD
-static struct mtd_partition malta_mtd_partitions[] = {
-	{
-		.name =		"YAMON",
-		.offset =	0x0,
-		.size =		0x100000,
-		.mask_flags =	MTD_WRITEABLE
-	},
-	{
-		.name =		"User FS",
-		.offset = 	0x100000,
-		.size =		0x2e0000
-	},
-	{
-		.name =		"Board Config",
-		.offset =	0x3e0000,
-		.size =		0x020000,
-		.mask_flags =	MTD_WRITEABLE
-	}
-};
-
-#define number_partitions	(sizeof(malta_mtd_partitions)/sizeof(struct mtd_partition))
-#endif
 
 const char *get_system_type(void)
 {
@@ -111,7 +78,7 @@ void __init fd_activate(void)
 }
 #endif
 
-void __init plat_setup(void)
+void __init plat_mem_setup(void)
 {
 	unsigned int i;
 
@@ -161,7 +128,7 @@ void __init plat_setup(void)
 				BONITO_PCIMEMBASECFG |=
 					(BONITO_PCIMEMBASECFG_MEMBASE0_CACHED |
 					 BONITO_PCIMEMBASECFG_MEMBASE1_CACHED);
-				printk("Disabled Bonito IOBC coherency\n");
+				printk("Enabled Bonito IOBC coherency\n");
 			}
 		}
 		else
@@ -213,17 +180,8 @@ void __init plat_setup(void)
 #endif
 #endif
 
-#ifdef CONFIG_MTD
-	/*
-	 * Support for MTD on Malta. Use the generic physmap driver
-	 */
-	physmap_configure(0x1e000000, 0x400000, 4, NULL);
-	physmap_set_partitions(malta_mtd_partitions, number_partitions);
-#endif
-
 	mips_reboot_setup();
 
 	board_time_init = mips_time_init;
-	board_timer_setup = mips_timer_setup;
 	rtc_mips_get_time = mips_rtc_get_time;
 }

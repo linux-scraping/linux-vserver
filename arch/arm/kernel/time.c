@@ -16,7 +16,6 @@
  *  1998-12-20  Updated NTP code according to technical memorandum Jan '96
  *              "A Kernel Model for Precision Timekeeping" by Dave Mills
  */
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/interrupt.h>
@@ -28,6 +27,9 @@
 #include <linux/profile.h>
 #include <linux/sysdev.h>
 #include <linux/timer.h>
+#include <linux/irq.h>
+
+#include <linux/mc146818rtc.h>
 
 #include <asm/leds.h>
 #include <asm/thread_info.h>
@@ -37,8 +39,6 @@
  * Our system timer.
  */
 struct sys_timer *system_timer;
-
-extern unsigned long wall_jiffies;
 
 /* this needs a better home */
 DEFINE_SPINLOCK(rtc_lock);
@@ -70,10 +70,12 @@ EXPORT_SYMBOL(profile_pc);
  */
 int (*set_rtc)(void);
 
+#ifndef CONFIG_GENERIC_TIME
 static unsigned long dummy_gettimeoffset(void)
 {
 	return 0;
 }
+#endif
 
 /*
  * Scheduler clock - returns current time in nanosec units.
@@ -83,6 +85,17 @@ static unsigned long dummy_gettimeoffset(void)
 unsigned long long __attribute__((weak)) sched_clock(void)
 {
 	return (unsigned long long)jiffies * (1000000000 / HZ);
+}
+
+/*
+ * An implementation of printk_clock() independent from
+ * sched_clock().  This avoids non-bootable kernels when
+ * printk_clock is enabled.
+ */
+unsigned long long printk_clock(void)
+{
+	return (unsigned long long)(jiffies - INITIAL_JIFFIES) *
+			(1000000000 / HZ);
 }
 
 static unsigned long next_rtc_update;
@@ -220,10 +233,10 @@ EXPORT_SYMBOL(leds_event);
 #ifdef CONFIG_LEDS_TIMER
 static inline void do_leds(void)
 {
-	static unsigned int count = 50;
+	static unsigned int count = HZ/2;
 
 	if (--count == 0) {
-		count = 50;
+		count = HZ/2;
 		leds_event(led_timer);
 	}
 }
@@ -231,20 +244,16 @@ static inline void do_leds(void)
 #define	do_leds()
 #endif
 
+#ifndef CONFIG_GENERIC_TIME
 void do_gettimeofday(struct timeval *tv)
 {
 	unsigned long flags;
 	unsigned long seq;
-	unsigned long usec, sec, lost;
+	unsigned long usec, sec;
 
 	do {
 		seq = read_seqbegin_irqsave(&xtime_lock, flags);
 		usec = system_timer->offset();
-
-		lost = jiffies - wall_jiffies;
-		if (lost)
-			usec += lost * USECS_PER_JIFFY;
-
 		sec = xtime.tv_sec;
 		usec += xtime.tv_nsec / 1000;
 	} while (read_seqretry_irqrestore(&xtime_lock, seq, flags));
@@ -277,7 +286,6 @@ int do_settimeofday(struct timespec *tv)
 	 * done, and then undo it!
 	 */
 	nsec -= system_timer->offset() * NSEC_PER_USEC;
-	nsec -= (jiffies - wall_jiffies) * TICK_NSEC;
 
 	wtm_sec  = wall_to_monotonic.tv_sec + (xtime.tv_sec - sec);
 	wtm_nsec = wall_to_monotonic.tv_nsec + (xtime.tv_nsec - nsec);
@@ -292,6 +300,7 @@ int do_settimeofday(struct timespec *tv)
 }
 
 EXPORT_SYMBOL(do_settimeofday);
+#endif /* !CONFIG_GENERIC_TIME */
 
 /**
  * save_time_delta - Save the offset between system time and RTC time
@@ -329,14 +338,14 @@ EXPORT_SYMBOL(restore_time_delta);
 /*
  * Kernel system timer support.
  */
-void timer_tick(struct pt_regs *regs)
+void timer_tick(void)
 {
-	profile_tick(CPU_PROFILING, regs);
+	profile_tick(CPU_PROFILING);
 	do_leds();
 	do_set_rtc();
-	do_timer(regs);
+	do_timer(1);
 #ifndef CONFIG_SMP
-	update_process_times(user_mode(regs));
+	update_process_times(user_mode(get_irq_regs()));
 #endif
 }
 
@@ -379,7 +388,7 @@ static int timer_dyn_tick_enable(void)
 	int ret = -ENODEV;
 
 	if (dyn_tick) {
-		write_seqlock_irqsave(&xtime_lock, flags);
+		spin_lock_irqsave(&dyn_tick->lock, flags);
 		ret = 0;
 		if (!(dyn_tick->state & DYN_TICK_ENABLED)) {
 			ret = dyn_tick->enable();
@@ -387,7 +396,7 @@ static int timer_dyn_tick_enable(void)
 			if (ret == 0)
 				dyn_tick->state |= DYN_TICK_ENABLED;
 		}
-		write_sequnlock_irqrestore(&xtime_lock, flags);
+		spin_unlock_irqrestore(&dyn_tick->lock, flags);
 	}
 
 	return ret;
@@ -400,7 +409,7 @@ static int timer_dyn_tick_disable(void)
 	int ret = -ENODEV;
 
 	if (dyn_tick) {
-		write_seqlock_irqsave(&xtime_lock, flags);
+		spin_lock_irqsave(&dyn_tick->lock, flags);
 		ret = 0;
 		if (dyn_tick->state & DYN_TICK_ENABLED) {
 			ret = dyn_tick->disable();
@@ -408,7 +417,7 @@ static int timer_dyn_tick_disable(void)
 			if (ret == 0)
 				dyn_tick->state &= ~DYN_TICK_ENABLED;
 		}
-		write_sequnlock_irqrestore(&xtime_lock, flags);
+		spin_unlock_irqrestore(&dyn_tick->lock, flags);
 	}
 
 	return ret;
@@ -422,15 +431,20 @@ static int timer_dyn_tick_disable(void)
 void timer_dyn_reprogram(void)
 {
 	struct dyn_tick_timer *dyn_tick = system_timer->dyn_tick;
-	unsigned long next, seq;
+	unsigned long next, seq, flags;
 
-	if (dyn_tick && (dyn_tick->state & DYN_TICK_ENABLED)) {
+	if (!dyn_tick)
+		return;
+
+	spin_lock_irqsave(&dyn_tick->lock, flags);
+	if (dyn_tick->state & DYN_TICK_ENABLED) {
 		next = next_timer_interrupt();
 		do {
 			seq = read_seqbegin(&xtime_lock);
-			dyn_tick->reprogram(next_timer_interrupt() - jiffies);
+			dyn_tick->reprogram(next - jiffies);
 		} while (read_seqretry(&xtime_lock, seq));
 	}
+	spin_unlock_irqrestore(&dyn_tick->lock, flags);
 }
 
 static ssize_t timer_show_dyn_tick(struct sys_device *dev, char *buf)
@@ -496,8 +510,15 @@ device_initcall(timer_init_sysfs);
 
 void __init time_init(void)
 {
+#ifndef CONFIG_GENERIC_TIME
 	if (system_timer->offset == NULL)
 		system_timer->offset = dummy_gettimeoffset;
+#endif
 	system_timer->init();
+
+#ifdef CONFIG_NO_IDLE_HZ
+	if (system_timer->dyn_tick)
+		system_timer->dyn_tick->lock = SPIN_LOCK_UNLOCKED;
+#endif
 }
 

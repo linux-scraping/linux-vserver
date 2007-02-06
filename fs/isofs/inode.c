@@ -11,7 +11,6 @@
  *	2004  Paul Serice - NFS Export Operations
  */
 
-#include <linux/config.h>
 #include <linux/init.h>
 #include <linux/module.h>
 
@@ -56,14 +55,14 @@ static void isofs_put_super(struct super_block *sb)
 }
 
 static void isofs_read_inode(struct inode *);
-static int isofs_statfs (struct super_block *, struct kstatfs *);
+static int isofs_statfs (struct dentry *, struct kstatfs *);
 
-static kmem_cache_t *isofs_inode_cachep;
+static struct kmem_cache *isofs_inode_cachep;
 
 static struct inode *isofs_alloc_inode(struct super_block *sb)
 {
 	struct iso_inode_info *ei;
-	ei = kmem_cache_alloc(isofs_inode_cachep, SLAB_KERNEL);
+	ei = kmem_cache_alloc(isofs_inode_cachep, GFP_KERNEL);
 	if (!ei)
 		return NULL;
 	return &ei->vfs_inode;
@@ -74,7 +73,7 @@ static void isofs_destroy_inode(struct inode *inode)
 	kmem_cache_free(isofs_inode_cachep, ISOFS_I(inode));
 }
 
-static void init_once(void *foo, kmem_cache_t * cachep, unsigned long flags)
+static void init_once(void *foo, struct kmem_cache * cachep, unsigned long flags)
 {
 	struct iso_inode_info *ei = foo;
 
@@ -97,9 +96,7 @@ static int init_inodecache(void)
 
 static void destroy_inodecache(void)
 {
-	if (kmem_cache_destroy(isofs_inode_cachep))
-		printk(KERN_INFO "iso_inode_cache: not all structures were "
-					"freed\n");
+	kmem_cache_destroy(isofs_inode_cachep);
 }
 
 static int isofs_remount(struct super_block *sb, int *flags, char *data)
@@ -558,11 +555,10 @@ static int isofs_fill_super(struct super_block *s, void *data, int silent)
 	struct iso9660_options		opt;
 	struct isofs_sb_info	      * sbi;
 
-	sbi = kmalloc(sizeof(*sbi), GFP_KERNEL);
+	sbi = kzalloc(sizeof(*sbi), GFP_KERNEL);
 	if (!sbi)
 		return -ENOMEM;
 	s->s_fs_info = sbi;
-	memset(sbi, 0, sizeof(*sbi));
 
 	if (!parse_options((char *)data, &opt))
 		goto out_freesbi;
@@ -901,8 +897,10 @@ out_freesbi:
 	return -EINVAL;
 }
 
-static int isofs_statfs (struct super_block *sb, struct kstatfs *buf)
+static int isofs_statfs (struct dentry *dentry, struct kstatfs *buf)
 {
+	struct super_block *sb = dentry->d_sb;
+
 	buf->f_type = ISOFS_SUPER_MAGIC;
 	buf->f_bsize = sb->s_blocksize;
 	buf->f_blocks = (ISOFS_SB(sb)->s_nzones
@@ -962,30 +960,30 @@ int isofs_get_blocks(struct inode *inode, sector_t iblock_s,
 			goto abort;
 		}
 		
-		if (nextblk) {
-			while (b_off >= (offset + sect_size)) {
-				struct inode *ninode;
-				
-				offset += sect_size;
-				if (nextblk == 0)
-					goto abort;
-				ninode = isofs_iget(inode->i_sb, nextblk, nextoff);
-				if (!ninode)
-					goto abort;
-				firstext  = ISOFS_I(ninode)->i_first_extent;
-				sect_size = ISOFS_I(ninode)->i_section_size >> ISOFS_BUFFER_BITS(ninode);
-				nextblk   = ISOFS_I(ninode)->i_next_section_block;
-				nextoff   = ISOFS_I(ninode)->i_next_section_offset;
-				iput(ninode);
-				
-				if (++section > 100) {
-					printk("isofs_get_blocks: More than 100 file sections ?!?, aborting...\n");
-					printk("isofs_get_blocks: block=%ld firstext=%u sect_size=%u "
-					       "nextblk=%lu nextoff=%lu\n",
-					       iblock, firstext, (unsigned) sect_size,
-					       nextblk, nextoff);
-					goto abort;
-				}
+		/* On the last section, nextblk == 0, section size is likely to
+		 * exceed sect_size by a partial block, and access beyond the
+		 * end of the file will reach beyond the section size, too.
+		 */
+		while (nextblk && (b_off >= (offset + sect_size))) {
+			struct inode *ninode;
+
+			offset += sect_size;
+			ninode = isofs_iget(inode->i_sb, nextblk, nextoff);
+			if (!ninode)
+				goto abort;
+			firstext  = ISOFS_I(ninode)->i_first_extent;
+			sect_size = ISOFS_I(ninode)->i_section_size >> ISOFS_BUFFER_BITS(ninode);
+			nextblk   = ISOFS_I(ninode)->i_next_section_block;
+			nextoff   = ISOFS_I(ninode)->i_next_section_offset;
+			iput(ninode);
+
+			if (++section > 100) {
+				printk("isofs_get_blocks: More than 100 file sections ?!?, aborting...\n");
+				printk("isofs_get_blocks: block=%ld firstext=%u sect_size=%u "
+				       "nextblk=%lu nextoff=%lu\n",
+				       iblock, firstext, (unsigned) sect_size,
+				       nextblk, nextoff);
+				goto abort;
 			}
 		}
 		
@@ -1052,7 +1050,7 @@ static sector_t _isofs_bmap(struct address_space *mapping, sector_t block)
 	return generic_block_bmap(mapping,block,isofs_get_block);
 }
 
-static struct address_space_operations isofs_aops = {
+static const struct address_space_operations isofs_aops = {
 	.readpage = isofs_readpage,
 	.sync_page = block_sync_page,
 	.bmap = _isofs_bmap
@@ -1237,7 +1235,7 @@ static void isofs_read_inode(struct inode *inode)
 	}
 	inode->i_uid = sbi->s_uid;
 	inode->i_gid = sbi->s_gid;
-	inode->i_blocks = inode->i_blksize = 0;
+	inode->i_blocks = 0;
 
 	ei->i_format_parm[0] = 0;
 	ei->i_format_parm[1] = 0;
@@ -1293,7 +1291,6 @@ static void isofs_read_inode(struct inode *inode)
 			      isonum_711 (de->ext_attr_length));
 
 	/* Set the number of blocks for stat() - should be done before RR */
-	inode->i_blksize = PAGE_CACHE_SIZE; /* For stat() only */
 	inode->i_blocks  = (inode->i_size + 511) >> 9;
 
 	/*
@@ -1399,10 +1396,11 @@ struct inode *isofs_iget(struct super_block *sb,
 	return inode;
 }
 
-static struct super_block *isofs_get_sb(struct file_system_type *fs_type,
-	int flags, const char *dev_name, void *data)
+static int isofs_get_sb(struct file_system_type *fs_type,
+	int flags, const char *dev_name, void *data, struct vfsmount *mnt)
 {
-	return get_sb_bdev(fs_type, flags, dev_name, data, isofs_fill_super);
+	return get_sb_bdev(fs_type, flags, dev_name, data, isofs_fill_super,
+			   mnt);
 }
 
 static struct file_system_type iso9660_fs_type = {

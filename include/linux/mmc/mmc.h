@@ -42,7 +42,7 @@ struct mmc_command {
 #define MMC_RSP_R1B	(MMC_RSP_PRESENT|MMC_RSP_CRC|MMC_RSP_OPCODE|MMC_RSP_BUSY)
 #define MMC_RSP_R2	(MMC_RSP_PRESENT|MMC_RSP_136|MMC_RSP_CRC)
 #define MMC_RSP_R3	(MMC_RSP_PRESENT)
-#define MMC_RSP_R6	(MMC_RSP_PRESENT|MMC_RSP_CRC)
+#define MMC_RSP_R6	(MMC_RSP_PRESENT|MMC_RSP_CRC|MMC_RSP_OPCODE)
 
 #define mmc_resp_type(cmd)	((cmd)->flags & (MMC_RSP_PRESENT|MMC_RSP_136|MMC_RSP_CRC|MMC_RSP_BUSY|MMC_RSP_OPCODE))
 
@@ -68,7 +68,6 @@ struct mmc_command {
 struct mmc_data {
 	unsigned int		timeout_ns;	/* data timeout (in ns, max 80ms) */
 	unsigned int		timeout_clks;	/* data timeout (in clocks) */
-	unsigned int		blksz_bits;	/* data block size */
 	unsigned int		blksz;		/* data block size */
 	unsigned int		blocks;		/* number of blocks */
 	unsigned int		error;		/* data error */
@@ -104,6 +103,8 @@ extern int mmc_wait_for_req(struct mmc_host *, struct mmc_request *);
 extern int mmc_wait_for_cmd(struct mmc_host *, struct mmc_command *, int);
 extern int mmc_wait_for_app_cmd(struct mmc_host *, unsigned int,
 	struct mmc_command *, int);
+
+extern void mmc_set_data_timeout(struct mmc_data *, const struct mmc_card *, int);
 
 extern int __mmc_claim_host(struct mmc_host *host, struct mmc_card *card);
 

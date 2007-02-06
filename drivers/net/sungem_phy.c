@@ -1,12 +1,11 @@
 /*
  * PHY drivers for the sungem ethernet driver.
- * 
+ *
  * This file could be shared with other drivers.
- * 
- * (c) 2002, Benjamin Herrenscmidt (benh@kernel.crashing.org)
+ *
+ * (c) 2002-2007, Benjamin Herrenscmidt (benh@kernel.crashing.org)
  *
  * TODO:
- *  - Implement WOL
  *  - Add support for PHYs that provide an IRQ line
  *  - Eventually moved the entire polling state machine in
  *    there (out of the eth driver), so that it can easily be
@@ -19,7 +18,6 @@
  *    of darwin, still need to reverse engineer that
  */
 
-#include <linux/config.h>
 
 #include <linux/module.h>
 
@@ -74,7 +72,7 @@ static int reset_one_mii_phy(struct mii_phy* phy, int phy_id)
 {
 	u16 val;
 	int limit = 10000;
-	
+
 	val = __phy_read(phy, phy_id, MII_BMCR);
 	val &= ~(BMCR_ISOLATE | BMCR_PDOWN);
 	val |= BMCR_RESET;
@@ -90,7 +88,7 @@ static int reset_one_mii_phy(struct mii_phy* phy, int phy_id)
 	}
 	if ((val & BMCR_ISOLATE) && limit > 0)
 		__phy_write(phy, phy_id, MII_BMCR, val & ~BMCR_ISOLATE);
-	
+
 	return (limit <= 0);
 }
 
@@ -153,6 +151,44 @@ static int bcm5221_suspend(struct mii_phy* phy)
 	return 0;
 }
 
+static int bcm5241_init(struct mii_phy* phy)
+{
+	u16 data;
+
+	data = phy_read(phy, MII_BCM5221_TEST);
+	phy_write(phy, MII_BCM5221_TEST,
+		data | MII_BCM5221_TEST_ENABLE_SHADOWS);
+
+	data = phy_read(phy, MII_BCM5221_SHDOW_AUX_STAT2);
+	phy_write(phy, MII_BCM5221_SHDOW_AUX_STAT2,
+		data | MII_BCM5221_SHDOW_AUX_STAT2_APD);
+
+	data = phy_read(phy, MII_BCM5221_SHDOW_AUX_MODE4);
+	phy_write(phy, MII_BCM5221_SHDOW_AUX_MODE4,
+		data & ~MII_BCM5241_SHDOW_AUX_MODE4_STANDBYPWR);
+
+	data = phy_read(phy, MII_BCM5221_TEST);
+	phy_write(phy, MII_BCM5221_TEST,
+		data & ~MII_BCM5221_TEST_ENABLE_SHADOWS);
+
+	return 0;
+}
+
+static int bcm5241_suspend(struct mii_phy* phy)
+{
+	u16 data;
+
+	data = phy_read(phy, MII_BCM5221_TEST);
+	phy_write(phy, MII_BCM5221_TEST,
+		data | MII_BCM5221_TEST_ENABLE_SHADOWS);
+
+	data = phy_read(phy, MII_BCM5221_SHDOW_AUX_MODE4);
+	phy_write(phy, MII_BCM5221_SHDOW_AUX_MODE4,
+		  data | MII_BCM5241_SHDOW_AUX_MODE4_STANDBYPWR);
+
+	return 0;
+}
+
 static int bcm5400_init(struct mii_phy* phy)
 {
 	u16 data;
@@ -161,16 +197,16 @@ static int bcm5400_init(struct mii_phy* phy)
 	data = phy_read(phy, MII_BCM5400_AUXCONTROL);
 	data |= MII_BCM5400_AUXCONTROL_PWR10BASET;
 	phy_write(phy, MII_BCM5400_AUXCONTROL, data);
-	
+
 	data = phy_read(phy, MII_BCM5400_GB_CONTROL);
 	data |= MII_BCM5400_GB_CONTROL_FULLDUPLEXCAP;
 	phy_write(phy, MII_BCM5400_GB_CONTROL, data);
-	
+
 	udelay(100);
 
 	/* Reset and configure cascaded 10/100 PHY */
 	(void)reset_one_mii_phy(phy, 0x1f);
-	
+
 	data = __phy_read(phy, 0x1f, MII_BCM5201_MULTIPHY);
 	data |= MII_BCM5201_MULTIPHY_SERIALMODE;
 	__phy_write(phy, 0x1f, MII_BCM5201_MULTIPHY, data);
@@ -200,7 +236,7 @@ static int bcm5401_init(struct mii_phy* phy)
 		/* Some revisions of 5401 appear to need this
 		 * initialisation sequence to disable, according
 		 * to OF, "tap power management"
-		 * 
+		 *
 		 * WARNING ! OF and Darwin don't agree on the
 		 * register addresses. OF seem to interpret the
 		 * register numbers below as decimal
@@ -220,7 +256,7 @@ static int bcm5401_init(struct mii_phy* phy)
 		phy_write(phy, 0x17, 0x201f);
 		phy_write(phy, 0x15, 0x0a20);
 	}
-	
+
 	/* Configure for gigabit full duplex */
 	data = phy_read(phy, MII_BCM5400_GB_CONTROL);
 	data |= MII_BCM5400_GB_CONTROL_FULLDUPLEXCAP;
@@ -230,7 +266,7 @@ static int bcm5401_init(struct mii_phy* phy)
 
 	/* Reset and configure cascaded 10/100 PHY */
 	(void)reset_one_mii_phy(phy, 0x1f);
-	
+
 	data = __phy_read(phy, 0x1f, MII_BCM5201_MULTIPHY);
 	data |= MII_BCM5201_MULTIPHY_SERIALMODE;
 	__phy_write(phy, 0x1f, MII_BCM5201_MULTIPHY, data);
@@ -271,7 +307,7 @@ static int bcm5411_init(struct mii_phy* phy)
 
 	/* Reset and configure cascaded 10/100 PHY */
 	(void)reset_one_mii_phy(phy, 0x1f);
-	
+
 	return 0;
 }
 
@@ -345,9 +381,9 @@ static int bcm5421_enable_fiber(struct mii_phy* phy)
 
 static int bcm5461_enable_fiber(struct mii_phy* phy)
 {
-        phy_write(phy, MII_NCONFIG, 0xfc0c);
-        phy_write(phy, MII_BMCR, 0x4140);
-        phy_write(phy, MII_NCONFIG, 0xfc0b);
+	phy_write(phy, MII_NCONFIG, 0xfc0c);
+	phy_write(phy, MII_BMCR, 0x4140);
+	phy_write(phy, MII_NCONFIG, 0xfc0b);
 	phy_write(phy, MII_BMCR, 0x0140);
 
 	return 0;
@@ -356,7 +392,7 @@ static int bcm5461_enable_fiber(struct mii_phy* phy)
 static int bcm54xx_setup_aneg(struct mii_phy *phy, u32 advertise)
 {
 	u16 ctl, adv;
-	
+
 	phy->autoneg = 1;
 	phy->speed = SPEED_10;
 	phy->duplex = DUPLEX_HALF;
@@ -374,6 +410,10 @@ static int bcm54xx_setup_aneg(struct mii_phy *phy, u32 advertise)
 		adv |= ADVERTISE_100HALF;
 	if (advertise & ADVERTISED_100baseT_Full)
 		adv |= ADVERTISE_100FULL;
+	if (advertise & ADVERTISED_Pause)
+		adv |= ADVERTISE_PAUSE_CAP;
+	if (advertise & ADVERTISED_Asym_Pause)
+		adv |= ADVERTISE_PAUSE_ASYM;
 	phy_write(phy, MII_ADVERTISE, adv);
 
 	/* Setup 1000BT advertise */
@@ -396,7 +436,7 @@ static int bcm54xx_setup_aneg(struct mii_phy *phy, u32 advertise)
 static int bcm54xx_setup_forced(struct mii_phy *phy, int speed, int fd)
 {
 	u16 ctl;
-	
+
 	phy->autoneg = 0;
 	phy->speed = speed;
 	phy->duplex = fd;
@@ -422,7 +462,7 @@ static int bcm54xx_setup_forced(struct mii_phy *phy, int speed, int fd)
 		ctl |= BMCR_FULLDPLX;
 
 	// XXX Should we set the sungem to GII now on 1000BT ?
-	
+
 	phy_write(phy, MII_BMCR, ctl);
 
 	return 0;
@@ -430,19 +470,22 @@ static int bcm54xx_setup_forced(struct mii_phy *phy, int speed, int fd)
 
 static int bcm54xx_read_link(struct mii_phy *phy)
 {
-	int link_mode;	
+	int link_mode;
 	u16 val;
-	
+
 	if (phy->autoneg) {
 	    	val = phy_read(phy, MII_BCM5400_AUXSTATUS);
 		link_mode = ((val & MII_BCM5400_AUXSTATUS_LINKMODE_MASK) >>
 			     MII_BCM5400_AUXSTATUS_LINKMODE_SHIFT);
-		phy->duplex = phy_BCM5400_link_table[link_mode][0] ? DUPLEX_FULL : DUPLEX_HALF;
+		phy->duplex = phy_BCM5400_link_table[link_mode][0] ?
+			DUPLEX_FULL : DUPLEX_HALF;
 		phy->speed = phy_BCM5400_link_table[link_mode][2] ?
 				SPEED_1000 :
-				(phy_BCM5400_link_table[link_mode][1] ? SPEED_100 : SPEED_10);
+				(phy_BCM5400_link_table[link_mode][1] ?
+				 SPEED_100 : SPEED_10);
 		val = phy_read(phy, MII_LPA);
-		phy->pause = ((val & LPA_PAUSE) != 0);
+		phy->pause = (phy->duplex == DUPLEX_FULL) &&
+			((val & LPA_PAUSE) != 0);
 	}
 	/* On non-aneg, we assume what we put in BMCR is the speed,
 	 * though magic-aneg shouldn't prevent this case from occurring
@@ -451,10 +494,32 @@ static int bcm54xx_read_link(struct mii_phy *phy)
 	return 0;
 }
 
+static int marvell88e1111_init(struct mii_phy* phy)
+{
+	u16 rev;
+
+	/* magic init sequence for rev 0 */
+	rev = phy_read(phy, MII_PHYSID2) & 0x000f;
+	if (rev == 0) {
+		phy_write(phy, 0x1d, 0x000a);
+		phy_write(phy, 0x1e, 0x0821);
+
+		phy_write(phy, 0x1d, 0x0006);
+		phy_write(phy, 0x1e, 0x8600);
+
+		phy_write(phy, 0x1d, 0x000b);
+		phy_write(phy, 0x1e, 0x0100);
+
+		phy_write(phy, 0x1d, 0x0004);
+		phy_write(phy, 0x1e, 0x4850);
+	}
+	return 0;
+}
+
 static int marvell_setup_aneg(struct mii_phy *phy, u32 advertise)
 {
 	u16 ctl, adv;
-	
+
 	phy->autoneg = 1;
 	phy->speed = SPEED_10;
 	phy->duplex = DUPLEX_HALF;
@@ -472,6 +537,10 @@ static int marvell_setup_aneg(struct mii_phy *phy, u32 advertise)
 		adv |= ADVERTISE_100HALF;
 	if (advertise & ADVERTISED_100baseT_Full)
 		adv |= ADVERTISE_100FULL;
+	if (advertise & ADVERTISED_Pause)
+		adv |= ADVERTISE_PAUSE_CAP;
+	if (advertise & ADVERTISED_Asym_Pause)
+		adv |= ADVERTISE_PAUSE_ASYM;
 	phy_write(phy, MII_ADVERTISE, adv);
 
 	/* Setup 1000BT advertise & enable crossover detect
@@ -501,7 +570,7 @@ static int marvell_setup_aneg(struct mii_phy *phy, u32 advertise)
 static int marvell_setup_forced(struct mii_phy *phy, int speed, int fd)
 {
 	u16 ctl, ctl2;
-	
+
 	phy->autoneg = 0;
 	phy->speed = speed;
 	phy->duplex = fd;
@@ -542,7 +611,7 @@ static int marvell_setup_forced(struct mii_phy *phy, int speed, int fd)
 	phy_write(phy, MII_1000BASETCONTROL, ctl2);
 
 	// XXX Should we set the sungem to GII now on 1000BT ?
-	
+
 	phy_write(phy, MII_BMCR, ctl);
 
 	return 0;
@@ -550,7 +619,7 @@ static int marvell_setup_forced(struct mii_phy *phy, int speed, int fd)
 
 static int marvell_read_link(struct mii_phy *phy)
 {
-	u16 status;
+	u16 status, pmask;
 
 	if (phy->autoneg) {
 		status = phy_read(phy, MII_M1011_PHY_SPEC_STATUS);
@@ -566,7 +635,9 @@ static int marvell_read_link(struct mii_phy *phy)
 			phy->duplex = DUPLEX_FULL;
 		else
 			phy->duplex = DUPLEX_HALF;
-		phy->pause = 0; /* XXX Check against spec ! */
+		pmask = MII_M1011_PHY_SPEC_STATUS_TX_PAUSE |
+			MII_M1011_PHY_SPEC_STATUS_RX_PAUSE;
+		phy->pause = (status & pmask) == pmask;
 	}
 	/* On non-aneg, we assume what we put in BMCR is the speed,
 	 * though magic-aneg shouldn't prevent this case from occurring
@@ -578,7 +649,7 @@ static int marvell_read_link(struct mii_phy *phy)
 static int genmii_setup_aneg(struct mii_phy *phy, u32 advertise)
 {
 	u16 ctl, adv;
-	
+
 	phy->autoneg = 1;
 	phy->speed = SPEED_10;
 	phy->duplex = DUPLEX_HALF;
@@ -596,6 +667,10 @@ static int genmii_setup_aneg(struct mii_phy *phy, u32 advertise)
 		adv |= ADVERTISE_100HALF;
 	if (advertise & ADVERTISED_100baseT_Full)
 		adv |= ADVERTISE_100FULL;
+	if (advertise & ADVERTISED_Pause)
+		adv |= ADVERTISE_PAUSE_CAP;
+	if (advertise & ADVERTISED_Asym_Pause)
+		adv |= ADVERTISE_PAUSE_ASYM;
 	phy_write(phy, MII_ADVERTISE, adv);
 
 	/* Start/Restart aneg */
@@ -609,7 +684,7 @@ static int genmii_setup_aneg(struct mii_phy *phy, u32 advertise)
 static int genmii_setup_forced(struct mii_phy *phy, int speed, int fd)
 {
 	u16 ctl;
-	
+
 	phy->autoneg = 0;
 	phy->speed = speed;
 	phy->duplex = fd;
@@ -642,7 +717,7 @@ static int genmii_setup_forced(struct mii_phy *phy, int speed, int fd)
 static int genmii_poll_link(struct mii_phy *phy)
 {
 	u16 status;
-	
+
 	(void)phy_read(phy, MII_BMSR);
 	status = phy_read(phy, MII_BMSR);
 	if ((status & BMSR_LSTATUS) == 0)
@@ -667,7 +742,8 @@ static int genmii_read_link(struct mii_phy *phy)
 			phy->speed = SPEED_100;
 		else
 			phy->speed = SPEED_10;
-		phy->pause = 0;
+		phy->pause = (phy->duplex == DUPLEX_FULL) &&
+			((lpa & LPA_PAUSE) != 0);
 	}
 	/* On non-aneg, we assume what we put in BMCR is the speed,
 	 * though magic-aneg shouldn't prevent this case from occurring
@@ -677,11 +753,19 @@ static int genmii_read_link(struct mii_phy *phy)
 }
 
 
-#define MII_BASIC_FEATURES	(SUPPORTED_10baseT_Half | SUPPORTED_10baseT_Full | \
-				 SUPPORTED_100baseT_Half | SUPPORTED_100baseT_Full | \
-				 SUPPORTED_Autoneg | SUPPORTED_TP | SUPPORTED_MII)
-#define MII_GBIT_FEATURES	(MII_BASIC_FEATURES | \
-				 SUPPORTED_1000baseT_Half | SUPPORTED_1000baseT_Full)
+#define MII_BASIC_FEATURES \
+	(SUPPORTED_10baseT_Half | SUPPORTED_10baseT_Full |	\
+	 SUPPORTED_100baseT_Half | SUPPORTED_100baseT_Full |	\
+	 SUPPORTED_Autoneg | SUPPORTED_TP | SUPPORTED_MII |	\
+	 SUPPORTED_Pause)
+
+/* On gigabit capable PHYs, we advertise Pause support but not asym pause
+ * support for now as I'm not sure it's supported and Darwin doesn't do
+ * it neither. --BenH.
+ */
+#define MII_GBIT_FEATURES \
+	(MII_BASIC_FEATURES |	\
+	 SUPPORTED_1000baseT_Half | SUPPORTED_1000baseT_Full)
 
 /* Broadcom BCM 5201 */
 static struct mii_phy_ops bcm5201_phy_ops = {
@@ -719,6 +803,24 @@ static struct mii_phy_def bcm5221_phy_def = {
 	.features	= MII_BASIC_FEATURES,
 	.magic_aneg	= 1,
 	.ops		= &bcm5221_phy_ops
+};
+
+/* Broadcom BCM 5241 */
+static struct mii_phy_ops bcm5241_phy_ops = {
+	.suspend	= bcm5241_suspend,
+	.init		= bcm5241_init,
+	.setup_aneg	= genmii_setup_aneg,
+	.setup_forced	= genmii_setup_forced,
+	.poll_link	= genmii_poll_link,
+	.read_link	= genmii_read_link,
+};
+static struct mii_phy_def bcm5241_phy_def = {
+	.phy_id		= 0x0143bc30,
+	.phy_id_mask	= 0xfffffff0,
+	.name		= "BCM5241",
+	.features	= MII_BASIC_FEATURES,
+	.magic_aneg	= 1,
+	.ops		= &bcm5241_phy_ops
 };
 
 /* Broadcom BCM 5400 */
@@ -855,11 +957,8 @@ static struct mii_phy_def bcm5462V_phy_def = {
 	.ops		= &bcm5462V_phy_ops
 };
 
-/* Marvell 88E1101 (Apple seem to deal with 2 different revs,
- * I masked out the 8 last bits to get both, but some specs
- * would be useful here) --BenH.
- */
-static struct mii_phy_ops marvell_phy_ops = {
+/* Marvell 88E1101 amd 88E1111 */
+static struct mii_phy_ops marvell88e1101_phy_ops = {
 	.suspend	= generic_suspend,
 	.setup_aneg	= marvell_setup_aneg,
 	.setup_forced	= marvell_setup_forced,
@@ -867,13 +966,41 @@ static struct mii_phy_ops marvell_phy_ops = {
 	.read_link	= marvell_read_link
 };
 
-static struct mii_phy_def marvell_phy_def = {
-	.phy_id		= 0x01410c00,
-	.phy_id_mask	= 0xffffff00,
-	.name		= "Marvell 88E1101",
+static struct mii_phy_ops marvell88e1111_phy_ops = {
+	.init		= marvell88e1111_init,
+	.suspend	= generic_suspend,
+	.setup_aneg	= marvell_setup_aneg,
+	.setup_forced	= marvell_setup_forced,
+	.poll_link	= genmii_poll_link,
+	.read_link	= marvell_read_link
+};
+
+/* two revs in darwin for the 88e1101 ... I could use a datasheet
+ * to get the proper names...
+ */
+static struct mii_phy_def marvell88e1101v1_phy_def = {
+	.phy_id		= 0x01410c20,
+	.phy_id_mask	= 0xfffffff0,
+	.name		= "Marvell 88E1101v1",
 	.features	= MII_GBIT_FEATURES,
 	.magic_aneg	= 1,
-	.ops		= &marvell_phy_ops
+	.ops		= &marvell88e1101_phy_ops
+};
+static struct mii_phy_def marvell88e1101v2_phy_def = {
+	.phy_id		= 0x01410c60,
+	.phy_id_mask	= 0xfffffff0,
+	.name		= "Marvell 88E1101v2",
+	.features	= MII_GBIT_FEATURES,
+	.magic_aneg	= 1,
+	.ops		= &marvell88e1101_phy_ops
+};
+static struct mii_phy_def marvell88e1111_phy_def = {
+	.phy_id		= 0x01410cc0,
+	.phy_id_mask	= 0xfffffff0,
+	.name		= "Marvell 88E1111",
+	.features	= MII_GBIT_FEATURES,
+	.magic_aneg	= 1,
+	.ops		= &marvell88e1111_phy_ops
 };
 
 /* Generic implementation for most 10/100 PHYs */
@@ -896,6 +1023,7 @@ static struct mii_phy_def genmii_phy_def = {
 static struct mii_phy_def* mii_phy_table[] = {
 	&bcm5201_phy_def,
 	&bcm5221_phy_def,
+	&bcm5241_phy_def,
 	&bcm5400_phy_def,
 	&bcm5401_phy_def,
 	&bcm5411_phy_def,
@@ -903,7 +1031,9 @@ static struct mii_phy_def* mii_phy_table[] = {
 	&bcm5421k2_phy_def,
 	&bcm5461_phy_def,
 	&bcm5462V_phy_def,
-	&marvell_phy_def,
+	&marvell88e1101v1_phy_def,
+	&marvell88e1101v2_phy_def,
+	&marvell88e1111_phy_def,
 	&genmii_phy_def,
 	NULL
 };
@@ -919,13 +1049,13 @@ int mii_phy_probe(struct mii_phy *phy, int mii_id)
 	 * may re-probe the PHY regulary
 	 */
 	phy->mii_id = mii_id;
-	
+
 	/* Take PHY out of isloate mode and reset it. */
 	rc = reset_one_mii_phy(phy, mii_id);
 	if (rc)
 		goto fail;
 
-	/* Read ID and find matching entry */	
+	/* Read ID and find matching entry */
 	id = (phy_read(phy, MII_PHYSID1) << 16 | phy_read(phy, MII_PHYSID2));
 	printk(KERN_DEBUG "PHY ID: %x, addr: %x\n", id, mii_id);
 	for (i=0; (def = mii_phy_table[i]) != NULL; i++)
@@ -936,7 +1066,7 @@ int mii_phy_probe(struct mii_phy *phy, int mii_id)
 		goto fail;
 
 	phy->def = def;
-	
+
 	return 0;
 fail:
 	phy->speed = 0;

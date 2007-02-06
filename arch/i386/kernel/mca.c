@@ -42,11 +42,11 @@
 #include <linux/errno.h>
 #include <linux/kernel.h>
 #include <linux/mca.h>
+#include <linux/kprobes.h>
 #include <asm/system.h>
 #include <asm/io.h>
 #include <linux/proc_fs.h>
 #include <linux/mman.h>
-#include <linux/config.h>
 #include <linux/mm.h>
 #include <linux/pagemap.h>
 #include <linux/ioport.h>
@@ -283,10 +283,9 @@ static int __init mca_init(void)
 	bus->f.mca_transform_memory = mca_dummy_transform_memory;
 
 	/* get the motherboard device */
-	mca_dev = kmalloc(sizeof(struct mca_device), GFP_KERNEL);
+	mca_dev = kzalloc(sizeof(struct mca_device), GFP_KERNEL);
 	if(unlikely(!mca_dev))
 		goto out_nomem;
-	memset(mca_dev, 0, sizeof(struct mca_device));
 
 	/*
 	 * We do not expect many MCA interrupts during initialization,
@@ -310,11 +309,9 @@ static int __init mca_init(void)
 	mca_dev->slot = MCA_MOTHERBOARD;
 	mca_register_device(MCA_PRIMARY_BUS, mca_dev);
 
-	mca_dev = kmalloc(sizeof(struct mca_device), GFP_ATOMIC);
+	mca_dev = kzalloc(sizeof(struct mca_device), GFP_ATOMIC);
 	if(unlikely(!mca_dev))
 		goto out_unlock_nomem;
-	memset(mca_dev, 0, sizeof(struct mca_device));
-
 
 	/* Put motherboard into video setup mode, read integrated video
 	 * POS registers, and turn motherboard setup off.
@@ -349,10 +346,9 @@ static int __init mca_init(void)
 	}
 	if(which_scsi) {
 		/* found a scsi card */
-		mca_dev = kmalloc(sizeof(struct mca_device), GFP_ATOMIC);
+		mca_dev = kzalloc(sizeof(struct mca_device), GFP_ATOMIC);
 		if(unlikely(!mca_dev))
 			goto out_unlock_nomem;
-		memset(mca_dev, 0, sizeof(struct mca_device));
 
 		for(j = 0; j < 8; j++)
 			mca_dev->pos[j] = pos[j];
@@ -378,10 +374,9 @@ static int __init mca_init(void)
 		if(!mca_read_and_store_pos(pos))
 			continue;
 
-		mca_dev = kmalloc(sizeof(struct mca_device), GFP_ATOMIC);
+		mca_dev = kzalloc(sizeof(struct mca_device), GFP_ATOMIC);
 		if(unlikely(!mca_dev))
 			goto out_unlock_nomem;
-		memset(mca_dev, 0, sizeof(struct mca_device));
 
 		for(j=0; j<8; j++)
 			mca_dev->pos[j]=pos[j];
@@ -415,7 +410,8 @@ subsys_initcall(mca_init);
 
 /*--------------------------------------------------------------------*/
 
-static void mca_handle_nmi_device(struct mca_device *mca_dev, int check_flag)
+static __kprobes void
+mca_handle_nmi_device(struct mca_device *mca_dev, int check_flag)
 {
 	int slot = mca_dev->slot;
 
@@ -445,7 +441,7 @@ static void mca_handle_nmi_device(struct mca_device *mca_dev, int check_flag)
 
 /*--------------------------------------------------------------------*/
 
-static int mca_handle_nmi_callback(struct device *dev, void *data)
+static int __kprobes mca_handle_nmi_callback(struct device *dev, void *data)
 {
 	struct mca_device *mca_dev = to_mca_device(dev);
 	unsigned char pos5;
@@ -463,7 +459,7 @@ static int mca_handle_nmi_callback(struct device *dev, void *data)
 	return 0;
 }
 
-void mca_handle_nmi(void)
+void __kprobes mca_handle_nmi(void)
 {
 	/* First try - scan the various adapters and see if a specific
 	 * adapter was responsible for the error.

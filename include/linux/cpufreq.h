@@ -15,7 +15,6 @@
 #define _LINUX_CPUFREQ_H
 
 #include <linux/mutex.h>
-#include <linux/config.h>
 #include <linux/notifier.h>
 #include <linux/threads.h>
 #include <linux/device.h>
@@ -73,6 +72,8 @@ struct cpufreq_real_policy {
 
 struct cpufreq_policy {
 	cpumask_t		cpus;	/* affected CPUs */
+	unsigned int		shared_type; /* ANY or ALL affected CPUs
+						should set cpufreq */
 	unsigned int		cpu;    /* cpu nr of registered CPU */
 	struct cpufreq_cpuinfo	cpuinfo;/* see above */
 
@@ -99,6 +100,10 @@ struct cpufreq_policy {
 #define CPUFREQ_INCOMPATIBLE	(1)
 #define CPUFREQ_NOTIFY		(2)
 
+#define CPUFREQ_SHARED_TYPE_NONE (0) /* None */
+#define CPUFREQ_SHARED_TYPE_HW	 (1) /* HW does needed coordination */
+#define CPUFREQ_SHARED_TYPE_ALL	 (2) /* All dependent CPUs should set freq */
+#define CPUFREQ_SHARED_TYPE_ANY	 (3) /* Freq can be set from any dependent CPU*/
 
 /******************** cpufreq transition notifiers *******************/
 
@@ -167,8 +172,7 @@ extern int __cpufreq_driver_target(struct cpufreq_policy *policy,
 				   unsigned int relation);
 
 
-/* pass an event to the cpufreq governor */
-int cpufreq_governor(unsigned int cpu, unsigned int event);
+extern int cpufreq_driver_getavg(struct cpufreq_policy *policy);
 
 int cpufreq_register_governor(struct cpufreq_governor *governor);
 void cpufreq_unregister_governor(struct cpufreq_governor *governor);
@@ -202,6 +206,7 @@ struct cpufreq_driver {
 	unsigned int	(*get)	(unsigned int cpu);
 
 	/* optional */
+	unsigned int (*getavg)	(unsigned int cpu);
 	int	(*exit)		(struct cpufreq_policy *policy);
 	int	(*suspend)	(struct cpufreq_policy *policy, pm_message_t pmsg);
 	int	(*resume)	(struct cpufreq_policy *policy);

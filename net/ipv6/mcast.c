@@ -28,7 +28,6 @@
  *		- MLDv2 support
  */
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/errno.h>
 #include <linux/types.h>
@@ -84,7 +83,7 @@
 struct mld2_grec {
 	__u8		grec_type;
 	__u8		grec_auxwords;
-	__u16		grec_nsrcs;
+	__be16		grec_nsrcs;
 	struct in6_addr	grec_mca;
 	struct in6_addr	grec_src[0];
 };
@@ -92,18 +91,18 @@ struct mld2_grec {
 struct mld2_report {
 	__u8	type;
 	__u8	resv1;
-	__u16	csum;
-	__u16	resv2;
-	__u16	ngrec;
+	__sum16	csum;
+	__be16	resv2;
+	__be16	ngrec;
 	struct mld2_grec grec[0];
 };
 
 struct mld2_query {
 	__u8 type;
 	__u8 code;
-	__u16 csum;
-	__u16 mrc;
-	__u16 resv1;
+	__sum16 csum;
+	__be16 mrc;
+	__be16 resv1;
 	struct in6_addr mca;
 #if defined(__LITTLE_ENDIAN_BITFIELD)
 	__u8 qrv:3,
@@ -117,7 +116,7 @@ struct mld2_query {
 #error "Please fix <asm/byteorder.h>"
 #endif
 	__u8 qqic;
-	__u16 nsrcs;
+	__be16 nsrcs;
 	struct in6_addr srcs[0];
 };
 
@@ -172,7 +171,7 @@ static int ip6_mc_leave_src(struct sock *sk, struct ipv6_mc_socklist *iml,
 
 #define IPV6_MLD_MAX_MSF	64
 
-int sysctl_mld_max_msf = IPV6_MLD_MAX_MSF;
+int sysctl_mld_max_msf __read_mostly = IPV6_MLD_MAX_MSF;
 
 /*
  *	socket join on multicast group
@@ -269,13 +268,14 @@ int ipv6_sock_mc_drop(struct sock *sk, int ifindex, struct in6_addr *addr)
 			if ((dev = dev_get_by_index(mc_lst->ifindex)) != NULL) {
 				struct inet6_dev *idev = in6_dev_get(dev);
 
+				(void) ip6_mc_leave_src(sk, mc_lst, idev);
 				if (idev) {
-					(void) ip6_mc_leave_src(sk,mc_lst,idev);
 					__ipv6_dev_mc_dec(idev, &mc_lst->addr);
 					in6_dev_put(idev);
 				}
 				dev_put(dev);
-			}
+			} else
+				(void) ip6_mc_leave_src(sk, mc_lst, NULL);
 			sock_kfree_s(sk, mc_lst, sizeof(*mc_lst));
 			return 0;
 		}
@@ -335,13 +335,14 @@ void ipv6_sock_mc_close(struct sock *sk)
 		if (dev) {
 			struct inet6_dev *idev = in6_dev_get(dev);
 
+			(void) ip6_mc_leave_src(sk, mc_lst, idev);
 			if (idev) {
-				(void) ip6_mc_leave_src(sk, mc_lst, idev);
 				__ipv6_dev_mc_dec(idev, &mc_lst->addr);
 				in6_dev_put(idev);
 			}
 			dev_put(dev);
-		}
+		} else
+			(void) ip6_mc_leave_src(sk, mc_lst, NULL);
 
 		sock_kfree_s(sk, mc_lst, sizeof(*mc_lst));
 
@@ -1464,7 +1465,7 @@ static void mld_sendpack(struct sk_buff *skb)
 	struct inet6_dev *idev = in6_dev_get(skb->dev);
 	int err;
 
-	IP6_INC_STATS(IPSTATS_MIB_OUTREQUESTS);
+	IP6_INC_STATS(idev, IPSTATS_MIB_OUTREQUESTS);
 	payload_len = skb->tail - (unsigned char *)skb->nh.ipv6h -
 		sizeof(struct ipv6hdr);
 	mldlen = skb->tail - skb->h.raw;
@@ -1476,9 +1477,9 @@ static void mld_sendpack(struct sk_buff *skb)
 		mld_dev_queue_xmit);
 	if (!err) {
 		ICMP6_INC_STATS(idev,ICMP6_MIB_OUTMSGS);
-		IP6_INC_STATS(IPSTATS_MIB_OUTMCASTPKTS);
+		IP6_INC_STATS(idev, IPSTATS_MIB_OUTMCASTPKTS);
 	} else
-		IP6_INC_STATS(IPSTATS_MIB_OUTDISCARDS);
+		IP6_INC_STATS(idev, IPSTATS_MIB_OUTDISCARDS);
 
 	if (likely(idev != NULL))
 		in6_dev_put(idev);
@@ -1762,7 +1763,10 @@ static void igmp6_send(struct in6_addr *addr, struct net_device *dev, int type)
 		     IPV6_TLV_ROUTERALERT, 2, 0, 0,
 		     IPV6_TLV_PADN, 0 };
 
-	IP6_INC_STATS(IPSTATS_MIB_OUTREQUESTS);
+	rcu_read_lock();
+	IP6_INC_STATS(__in6_dev_get(dev),
+		      IPSTATS_MIB_OUTREQUESTS);
+	rcu_read_unlock();
 	snd_addr = addr;
 	if (type == ICMPV6_MGM_REDUCTION) {
 		snd_addr = &all_routers;
@@ -1776,7 +1780,10 @@ static void igmp6_send(struct in6_addr *addr, struct net_device *dev, int type)
 	skb = sock_alloc_send_skb(sk, LL_RESERVED_SPACE(dev) + full_len, 1, &err);
 
 	if (skb == NULL) {
-		IP6_INC_STATS(IPSTATS_MIB_OUTDISCARDS);
+		rcu_read_lock();
+		IP6_INC_STATS(__in6_dev_get(dev),
+			      IPSTATS_MIB_OUTDISCARDS);
+		rcu_read_unlock();
 		return;
 	}
 
@@ -1815,9 +1822,9 @@ static void igmp6_send(struct in6_addr *addr, struct net_device *dev, int type)
 		else
 			ICMP6_INC_STATS(idev, ICMP6_MIB_OUTGROUPMEMBRESPONSES);
 		ICMP6_INC_STATS(idev, ICMP6_MIB_OUTMSGS);
-		IP6_INC_STATS(IPSTATS_MIB_OUTMCASTPKTS);
+		IP6_INC_STATS(idev, IPSTATS_MIB_OUTMCASTPKTS);
 	} else
-		IP6_INC_STATS(IPSTATS_MIB_OUTDISCARDS);
+		IP6_INC_STATS(idev, IPSTATS_MIB_OUTDISCARDS);
 
 	if (likely(idev != NULL))
 		in6_dev_put(idev);
@@ -2251,8 +2258,6 @@ void ipv6_mc_up(struct inet6_dev *idev)
 
 void ipv6_mc_init_dev(struct inet6_dev *idev)
 {
-	struct in6_addr maddr;
-
 	write_lock_bh(&idev->lock);
 	rwlock_init(&idev->mc_lock);
 	idev->mc_gq_running = 0;
@@ -2268,10 +2273,6 @@ void ipv6_mc_init_dev(struct inet6_dev *idev)
 	idev->mc_maxdelay = IGMP6_UNSOLICITED_IVAL;
 	idev->mc_v1_seen = 0;
 	write_unlock_bh(&idev->lock);
-
-	/* Add all-nodes address. */
-	ipv6_addr_all_nodes(&maddr);
-	ipv6_dev_mc_inc(idev->dev, &maddr);
 }
 
 /*

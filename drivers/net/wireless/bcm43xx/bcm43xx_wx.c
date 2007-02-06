@@ -48,20 +48,18 @@
 
 #define MAX_WX_STRING		80
 
-
 static int bcm43xx_wx_get_name(struct net_device *net_dev,
                                struct iw_request_info *info,
 			       union iwreq_data *data,
 			       char *extra)
 {
 	struct bcm43xx_private *bcm = bcm43xx_priv(net_dev);
-	unsigned long flags;
 	int i;
 	struct bcm43xx_phyinfo *phy;
 	char suffix[7] = { 0 };
 	int have_a = 0, have_b = 0, have_g = 0;
 
-	bcm43xx_lock(bcm, flags);
+	mutex_lock(&bcm->mutex);
 	for (i = 0; i < bcm->nr_80211_available; i++) {
 		phy = &(bcm->core_80211_ext[i].phy);
 		switch (phy->type) {
@@ -77,7 +75,7 @@ static int bcm43xx_wx_get_name(struct net_device *net_dev,
 			assert(0);
 		}
 	}
-	bcm43xx_unlock(bcm, flags);
+	mutex_unlock(&bcm->mutex);
 
 	i = 0;
 	if (have_a) {
@@ -111,7 +109,9 @@ static int bcm43xx_wx_set_channelfreq(struct net_device *net_dev,
 	int freq;
 	int err = -EINVAL;
 
-	bcm43xx_lock_mmio(bcm, flags);
+	mutex_lock(&bcm->mutex);
+	spin_lock_irqsave(&bcm->irq_lock, flags);
+
 	if ((data->freq.m >= 0) && (data->freq.m <= 1000)) {
 		channel = data->freq.m;
 		freq = bcm43xx_channel_to_freq(bcm, channel);
@@ -119,9 +119,9 @@ static int bcm43xx_wx_set_channelfreq(struct net_device *net_dev,
 		channel = bcm43xx_freq_to_channel(bcm, data->freq.m);
 		freq = data->freq.m;
 	}
-	if (!bcm43xx_is_valid_channel(bcm, channel))
+	if (!ieee80211_is_valid_channel(bcm->ieee, channel))
 		goto out_unlock;
-	if (bcm->initialized) {
+	if (bcm43xx_status(bcm) == BCM43xx_STAT_INITIALIZED) {
 		//ieee80211softmac_disassoc(softmac, $REASON);
 		bcm43xx_mac_suspend(bcm);
 		err = bcm43xx_radio_selectchannel(bcm, channel, 0);
@@ -131,7 +131,8 @@ static int bcm43xx_wx_set_channelfreq(struct net_device *net_dev,
 		err = 0;
 	}
 out_unlock:
-	bcm43xx_unlock_mmio(bcm, flags);
+	spin_unlock_irqrestore(&bcm->irq_lock, flags);
+	mutex_unlock(&bcm->mutex);
 
 	return err;
 }
@@ -143,15 +144,13 @@ static int bcm43xx_wx_get_channelfreq(struct net_device *net_dev,
 {
 	struct bcm43xx_private *bcm = bcm43xx_priv(net_dev);
 	struct bcm43xx_radioinfo *radio;
-	unsigned long flags;
 	int err = -ENODEV;
 	u16 channel;
 
-	bcm43xx_lock(bcm, flags);
+	mutex_lock(&bcm->mutex);
 	radio = bcm43xx_current_radio(bcm);
 	channel = radio->channel;
 	if (channel == 0xFF) {
-		assert(!bcm->initialized);
 		channel = radio->initial_channel;
 		if (channel == 0xFF)
 			goto out_unlock;
@@ -163,7 +162,7 @@ static int bcm43xx_wx_get_channelfreq(struct net_device *net_dev,
 
 	err = 0;
 out_unlock:
-	bcm43xx_unlock(bcm, flags);
+	mutex_unlock(&bcm->mutex);
 
 	return err;
 }
@@ -181,13 +180,15 @@ static int bcm43xx_wx_set_mode(struct net_device *net_dev,
 	if (mode == IW_MODE_AUTO)
 		mode = BCM43xx_INITIAL_IWMODE;
 
-	bcm43xx_lock_mmio(bcm, flags);
-	if (bcm->initialized) {
+	mutex_lock(&bcm->mutex);
+	spin_lock_irqsave(&bcm->irq_lock, flags);
+	if (bcm43xx_status(bcm) == BCM43xx_STAT_INITIALIZED) {
 		if (bcm->ieee->iw_mode != mode)
 			bcm43xx_set_iwmode(bcm, mode);
 	} else
 		bcm->ieee->iw_mode = mode;
-	bcm43xx_unlock_mmio(bcm, flags);
+	spin_unlock_irqrestore(&bcm->irq_lock, flags);
+	mutex_unlock(&bcm->mutex);
 
 	return 0;
 }
@@ -198,11 +199,10 @@ static int bcm43xx_wx_get_mode(struct net_device *net_dev,
 			       char *extra)
 {
 	struct bcm43xx_private *bcm = bcm43xx_priv(net_dev);
-	unsigned long flags;
 
-	bcm43xx_lock(bcm, flags);
+	mutex_lock(&bcm->mutex);
 	data->mode = bcm->ieee->iw_mode;
-	bcm43xx_unlock(bcm, flags);
+	mutex_unlock(&bcm->mutex);
 
 	return 0;
 }
@@ -215,7 +215,6 @@ static int bcm43xx_wx_get_rangeparams(struct net_device *net_dev,
 	struct bcm43xx_private *bcm = bcm43xx_priv(net_dev);
 	struct iw_range *range = (struct iw_range *)extra;
 	const struct ieee80211_geo *geo;
-	unsigned long flags;
 	int i, j;
 	struct bcm43xx_phyinfo *phy;
 
@@ -227,15 +226,14 @@ static int bcm43xx_wx_get_rangeparams(struct net_device *net_dev,
 	range->throughput = 27 * 1000 * 1000;
 
 	range->max_qual.qual = 100;
-	/* TODO: Real max RSSI */
-	range->max_qual.level = 3;
-	range->max_qual.noise = 100;
-	range->max_qual.updated = 7;
+	range->max_qual.level = 146; /* set floor at -110 dBm (146 - 256) */
+	range->max_qual.noise = 146;
+	range->max_qual.updated = IW_QUAL_ALL_UPDATED;
 
-	range->avg_qual.qual = 70;
-	range->avg_qual.level = 2;
-	range->avg_qual.noise = 40;
-	range->avg_qual.updated = 7;
+	range->avg_qual.qual = 50;
+	range->avg_qual.level = 0;
+	range->avg_qual.noise = 0;
+	range->avg_qual.updated = IW_QUAL_ALL_UPDATED;
 
 	range->min_rts = BCM43xx_MIN_RTS_THRESHOLD;
 	range->max_rts = BCM43xx_MAX_RTS_THRESHOLD;
@@ -255,7 +253,7 @@ static int bcm43xx_wx_get_rangeparams(struct net_device *net_dev,
 			  IW_ENC_CAPA_CIPHER_TKIP |
 			  IW_ENC_CAPA_CIPHER_CCMP;
 
-	bcm43xx_lock(bcm, flags);
+	mutex_lock(&bcm->mutex);
 	phy = bcm43xx_current_phy(bcm);
 
 	range->num_bitrates = 0;
@@ -302,7 +300,7 @@ static int bcm43xx_wx_get_rangeparams(struct net_device *net_dev,
 	}
 	range->num_frequency = j;
 
-	bcm43xx_unlock(bcm, flags);
+	mutex_unlock(&bcm->mutex);
 
 	return 0;
 }
@@ -313,14 +311,13 @@ static int bcm43xx_wx_set_nick(struct net_device *net_dev,
 			       char *extra)
 {
 	struct bcm43xx_private *bcm = bcm43xx_priv(net_dev);
-	unsigned long flags;
 	size_t len;
 
-	bcm43xx_lock(bcm, flags);
+	mutex_lock(&bcm->mutex);
 	len =  min((size_t)data->data.length, (size_t)IW_ESSID_MAX_SIZE);
 	memcpy(bcm->nick, extra, len);
 	bcm->nick[len] = '\0';
-	bcm43xx_unlock(bcm, flags);
+	mutex_unlock(&bcm->mutex);
 
 	return 0;
 }
@@ -331,15 +328,14 @@ static int bcm43xx_wx_get_nick(struct net_device *net_dev,
 			       char *extra)
 {
 	struct bcm43xx_private *bcm = bcm43xx_priv(net_dev);
-	unsigned long flags;
 	size_t len;
 
-	bcm43xx_lock(bcm, flags);
-	len = strlen(bcm->nick) + 1;
+	mutex_lock(&bcm->mutex);
+	len = strlen(bcm->nick);
 	memcpy(extra, bcm->nick, len);
 	data->data.length = (__u16)len;
 	data->data.flags = 1;
-	bcm43xx_unlock(bcm, flags);
+	mutex_unlock(&bcm->mutex);
 
 	return 0;
 }
@@ -353,7 +349,8 @@ static int bcm43xx_wx_set_rts(struct net_device *net_dev,
 	unsigned long flags;
 	int err = -EINVAL;
 
-	bcm43xx_lock(bcm, flags);
+	mutex_lock(&bcm->mutex);
+	spin_lock_irqsave(&bcm->irq_lock, flags);
 	if (data->rts.disabled) {
 		bcm->rts_threshold = BCM43xx_MAX_RTS_THRESHOLD;
 		err = 0;
@@ -364,7 +361,8 @@ static int bcm43xx_wx_set_rts(struct net_device *net_dev,
 			err = 0;
 		}
 	}
-	bcm43xx_unlock(bcm, flags);
+	spin_unlock_irqrestore(&bcm->irq_lock, flags);
+	mutex_unlock(&bcm->mutex);
 
 	return err;
 }
@@ -375,13 +373,12 @@ static int bcm43xx_wx_get_rts(struct net_device *net_dev,
 			      char *extra)
 {
 	struct bcm43xx_private *bcm = bcm43xx_priv(net_dev);
-	unsigned long flags;
 
-	bcm43xx_lock(bcm, flags);
+	mutex_lock(&bcm->mutex);
 	data->rts.value = bcm->rts_threshold;
 	data->rts.fixed = 0;
 	data->rts.disabled = (bcm->rts_threshold == BCM43xx_MAX_RTS_THRESHOLD);
-	bcm43xx_unlock(bcm, flags);
+	mutex_unlock(&bcm->mutex);
 
 	return 0;
 }
@@ -395,7 +392,8 @@ static int bcm43xx_wx_set_frag(struct net_device *net_dev,
 	unsigned long flags;
 	int err = -EINVAL;
 
-	bcm43xx_lock(bcm, flags);
+	mutex_lock(&bcm->mutex);
+	spin_lock_irqsave(&bcm->irq_lock, flags);
 	if (data->frag.disabled) {
 		bcm->ieee->fts = MAX_FRAG_THRESHOLD;
 		err = 0;
@@ -406,7 +404,8 @@ static int bcm43xx_wx_set_frag(struct net_device *net_dev,
 			err = 0;
 		}
 	}
-	bcm43xx_unlock(bcm, flags);
+	spin_unlock_irqrestore(&bcm->irq_lock, flags);
+	mutex_unlock(&bcm->mutex);
 
 	return err;
 }
@@ -417,13 +416,12 @@ static int bcm43xx_wx_get_frag(struct net_device *net_dev,
 			       char *extra)
 {
 	struct bcm43xx_private *bcm = bcm43xx_priv(net_dev);
-	unsigned long flags;
 
-	bcm43xx_lock(bcm, flags);
+	mutex_lock(&bcm->mutex);
 	data->frag.value = bcm->ieee->fts;
 	data->frag.fixed = 0;
 	data->frag.disabled = (bcm->ieee->fts == MAX_FRAG_THRESHOLD);
-	bcm43xx_unlock(bcm, flags);
+	mutex_unlock(&bcm->mutex);
 
 	return 0;
 }
@@ -445,8 +443,9 @@ static int bcm43xx_wx_set_xmitpower(struct net_device *net_dev,
 		return -EOPNOTSUPP;
 	}
 
-	bcm43xx_lock_mmio(bcm, flags);
-	if (!bcm->initialized)
+	mutex_lock(&bcm->mutex);
+	spin_lock_irqsave(&bcm->irq_lock, flags);
+	if (bcm43xx_status(bcm) != BCM43xx_STAT_INITIALIZED)
 		goto out_unlock;
 	radio = bcm43xx_current_radio(bcm);
 	phy = bcm43xx_current_phy(bcm);
@@ -469,7 +468,8 @@ static int bcm43xx_wx_set_xmitpower(struct net_device *net_dev,
 	err = 0;
 
 out_unlock:
-	bcm43xx_unlock_mmio(bcm, flags);
+	spin_unlock_irqrestore(&bcm->irq_lock, flags);
+	mutex_unlock(&bcm->mutex);
 
 	return err;
 }
@@ -481,11 +481,10 @@ static int bcm43xx_wx_get_xmitpower(struct net_device *net_dev,
 {
 	struct bcm43xx_private *bcm = bcm43xx_priv(net_dev);
 	struct bcm43xx_radioinfo *radio;
-	unsigned long flags;
 	int err = -ENODEV;
 
-	bcm43xx_lock(bcm, flags);
-	if (!bcm->initialized)
+	mutex_lock(&bcm->mutex);
+	if (bcm43xx_status(bcm) != BCM43xx_STAT_INITIALIZED)
 		goto out_unlock;
 	radio = bcm43xx_current_radio(bcm);
 	/* desired dBm value is in Q5.2 */
@@ -496,7 +495,7 @@ static int bcm43xx_wx_get_xmitpower(struct net_device *net_dev,
 
 	err = 0;
 out_unlock:
-	bcm43xx_unlock(bcm, flags);
+	mutex_unlock(&bcm->mutex);
 
 	return err;
 }
@@ -583,8 +582,9 @@ static int bcm43xx_wx_set_interfmode(struct net_device *net_dev,
 		return -EINVAL;
 	}
 
-	bcm43xx_lock_mmio(bcm, flags);
-	if (bcm->initialized) {
+	mutex_lock(&bcm->mutex);
+	spin_lock_irqsave(&bcm->irq_lock, flags);
+	if (bcm43xx_status(bcm) == BCM43xx_STAT_INITIALIZED) {
 		err = bcm43xx_radio_set_interference_mitigation(bcm, mode);
 		if (err) {
 			printk(KERN_ERR PFX "Interference Mitigation not "
@@ -598,7 +598,8 @@ static int bcm43xx_wx_set_interfmode(struct net_device *net_dev,
 		} else
 			bcm43xx_current_radio(bcm)->interfmode = mode;
 	}
-	bcm43xx_unlock_mmio(bcm, flags);
+	spin_unlock_irqrestore(&bcm->irq_lock, flags);
+	mutex_unlock(&bcm->mutex);
 
 	return err;
 }
@@ -609,12 +610,11 @@ static int bcm43xx_wx_get_interfmode(struct net_device *net_dev,
 				     char *extra)
 {
 	struct bcm43xx_private *bcm = bcm43xx_priv(net_dev);
-	unsigned long flags;
 	int mode;
 
-	bcm43xx_lock(bcm, flags);
+	mutex_lock(&bcm->mutex);
 	mode = bcm43xx_current_radio(bcm)->interfmode;
-	bcm43xx_unlock(bcm, flags);
+	mutex_unlock(&bcm->mutex);
 
 	switch (mode) {
 	case BCM43xx_RADIO_INTERFMODE_NONE:
@@ -644,9 +644,11 @@ static int bcm43xx_wx_set_shortpreamble(struct net_device *net_dev,
 	int on;
 
 	on = *((int *)extra);
-	bcm43xx_lock(bcm, flags);
+	mutex_lock(&bcm->mutex);
+	spin_lock_irqsave(&bcm->irq_lock, flags);
 	bcm->short_preamble = !!on;
-	bcm43xx_unlock(bcm, flags);
+	spin_unlock_irqrestore(&bcm->irq_lock, flags);
+	mutex_unlock(&bcm->mutex);
 
 	return 0;
 }
@@ -657,12 +659,11 @@ static int bcm43xx_wx_get_shortpreamble(struct net_device *net_dev,
 					char *extra)
 {
 	struct bcm43xx_private *bcm = bcm43xx_priv(net_dev);
-	unsigned long flags;
 	int on;
 
-	bcm43xx_lock(bcm, flags);
+	mutex_lock(&bcm->mutex);
 	on = bcm->short_preamble;
-	bcm43xx_unlock(bcm, flags);
+	mutex_unlock(&bcm->mutex);
 
 	if (on)
 		strncpy(extra, "1 (Short Preamble enabled)", MAX_WX_STRING);
@@ -684,11 +685,14 @@ static int bcm43xx_wx_set_swencryption(struct net_device *net_dev,
 	
 	on = *((int *)extra);
 
-	bcm43xx_lock(bcm, flags);
+	mutex_lock(&bcm->mutex);
+	spin_lock_irqsave(&bcm->irq_lock, flags);
 	bcm->ieee->host_encrypt = !!on;
 	bcm->ieee->host_decrypt = !!on;
 	bcm->ieee->host_build_iv = !on;
-	bcm43xx_unlock(bcm, flags);
+	bcm->ieee->host_strip_iv_icv = !on;
+	spin_unlock_irqrestore(&bcm->irq_lock, flags);
+	mutex_unlock(&bcm->mutex);
 
 	return 0;
 }
@@ -699,12 +703,11 @@ static int bcm43xx_wx_get_swencryption(struct net_device *net_dev,
 				       char *extra)
 {
 	struct bcm43xx_private *bcm = bcm43xx_priv(net_dev);
-	unsigned long flags;
 	int on;
 
-	bcm43xx_lock(bcm, flags);
+	mutex_lock(&bcm->mutex);
 	on = bcm->ieee->host_encrypt;
-	bcm43xx_unlock(bcm, flags);
+	mutex_unlock(&bcm->mutex);
 
 	if (on)
 		strncpy(extra, "1 (SW encryption enabled) ", MAX_WX_STRING);
@@ -767,11 +770,13 @@ static int bcm43xx_wx_sprom_read(struct net_device *net_dev,
 	if (!sprom)
 		goto out;
 
-	bcm43xx_lock_mmio(bcm, flags);
+	mutex_lock(&bcm->mutex);
+	spin_lock_irqsave(&bcm->irq_lock, flags);
 	err = -ENODEV;
-	if (bcm->initialized)
+	if (bcm43xx_status(bcm) == BCM43xx_STAT_INITIALIZED)
 		err = bcm43xx_sprom_read(bcm, sprom);
-	bcm43xx_unlock_mmio(bcm, flags);
+	spin_unlock_irqrestore(&bcm->irq_lock, flags);
+	mutex_unlock(&bcm->mutex);
 	if (!err)
 		data->data.length = sprom2hex(sprom, extra);
 	kfree(sprom);
@@ -812,11 +817,15 @@ static int bcm43xx_wx_sprom_write(struct net_device *net_dev,
 	if (err)
 		goto out_kfree;
 
-	bcm43xx_lock_mmio(bcm, flags);
+	mutex_lock(&bcm->mutex);
+	spin_lock_irqsave(&bcm->irq_lock, flags);
+	spin_lock(&bcm->leds_lock);
 	err = -ENODEV;
-	if (bcm->initialized)
+	if (bcm43xx_status(bcm) == BCM43xx_STAT_INITIALIZED)
 		err = bcm43xx_sprom_write(bcm, sprom);
-	bcm43xx_unlock_mmio(bcm, flags);
+	spin_unlock(&bcm->leds_lock);
+	spin_unlock_irqrestore(&bcm->irq_lock, flags);
+	mutex_unlock(&bcm->mutex);
 out_kfree:
 	kfree(sprom);
 out:
@@ -830,9 +839,13 @@ static struct iw_statistics *bcm43xx_get_wireless_stats(struct net_device *net_d
 	struct bcm43xx_private *bcm = bcm43xx_priv(net_dev);
 	struct ieee80211softmac_device *mac = ieee80211_priv(net_dev);
 	struct iw_statistics *wstats;
+	struct ieee80211_network *network = NULL;
+	static int tmp_level = 0;
+	static int tmp_qual = 0;
+	unsigned long flags;
 
 	wstats = &bcm->stats.wstats;
-	if (!mac->associated) {
+	if (!mac->associnfo.associated) {
 		wstats->miss.beacon = 0;
 //		bcm->ieee->ieee_stats.tx_retry_limit_exceeded = 0; // FIXME: should this be cleared here?
 		wstats->discard.retries = 0;
@@ -847,16 +860,28 @@ static struct iw_statistics *bcm43xx_get_wireless_stats(struct net_device *net_d
 		wstats->qual.level = 0;
 		wstats->qual.noise = 0;
 		wstats->qual.updated = 7;
-		wstats->qual.updated |= IW_QUAL_NOISE_INVALID |
-			IW_QUAL_QUAL_INVALID | IW_QUAL_LEVEL_INVALID;
+		wstats->qual.updated |= IW_QUAL_ALL_UPDATED | IW_QUAL_DBM;
 		return wstats;
 	}
 	/* fill in the real statistics when iface associated */
-	wstats->qual.qual = 100;     // TODO: get the real signal quality
-	wstats->qual.level = 3 - bcm->stats.link_quality;
+	spin_lock_irqsave(&mac->ieee->lock, flags);
+	list_for_each_entry(network, &mac->ieee->network_list, list) {
+		if (!memcmp(mac->associnfo.bssid, network->bssid, ETH_ALEN)) {
+			if (!tmp_level)	{	/* get initial values */
+				tmp_level = network->stats.signal;
+				tmp_qual = network->stats.rssi;
+			} else {		/* smooth results */
+				tmp_level = (15 * tmp_level + network->stats.signal)/16;
+				tmp_qual = (15 * tmp_qual + network->stats.rssi)/16;
+			}
+			break;
+		}
+	}
+	spin_unlock_irqrestore(&mac->ieee->lock, flags);
+	wstats->qual.level = tmp_level;
+	wstats->qual.qual = 100 * tmp_qual / RX_RSSI_MAX;
 	wstats->qual.noise = bcm->stats.noise;
-	wstats->qual.updated = IW_QUAL_QUAL_UPDATED | IW_QUAL_LEVEL_UPDATED |
-			IW_QUAL_NOISE_UPDATED;
+	wstats->qual.updated = IW_QUAL_ALL_UPDATED | IW_QUAL_DBM;
 	wstats->discard.code = bcm->ieee->ieee_stats.rx_discards_undecryptable;
 	wstats->discard.retries = bcm->ieee->ieee_stats.tx_retry_limit_exceeded;
 	wstats->discard.nwid = bcm->ieee->ieee_stats.tx_discards_wrong_sa;

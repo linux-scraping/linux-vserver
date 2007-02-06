@@ -10,13 +10,12 @@
  * This file handles the architecture-dependent parts of initialization
  */
 
-#include <linux/config.h>
 #include <linux/init.h>
 #include <linux/mm.h>
 #include <linux/bootmem.h>
 #include <asm/pgtable.h>
 #include <linux/seq_file.h>
-#include <linux/tty.h>
+#include <linux/screen_info.h>
 #include <linux/utsname.h>
 #include <linux/pfn.h>
 
@@ -161,7 +160,7 @@ setup_arch(char **cmdline_p)
 	show_etrax_copyright();
 
 	/* Setup utsname */
-	strcpy(system_utsname.machine, cris_machine_name);
+	strcpy(init_utsname()->machine, cris_machine_name);
 }
 
 static void *c_start(struct seq_file *m, loff_t *pos)

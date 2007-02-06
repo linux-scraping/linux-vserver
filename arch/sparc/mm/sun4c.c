@@ -10,7 +10,6 @@
 
 #define NR_TASK_BUCKETS 512
 
-#include <linux/config.h>
 #include <linux/kernel.h>
 #include <linux/mm.h>
 #include <linux/init.h>
@@ -2281,5 +2280,5 @@ void __init ld_mmu_sun4c(void)
 
 	/* These should _never_ get called with two level tables. */
 	BTFIXUPSET_CALL(pgd_set, sun4c_pgd_set, BTFIXUPCALL_NOP);
-	BTFIXUPSET_CALL(pgd_page, sun4c_pgd_page, BTFIXUPCALL_RETO0);
+	BTFIXUPSET_CALL(pgd_page_vaddr, sun4c_pgd_page, BTFIXUPCALL_RETO0);
 }

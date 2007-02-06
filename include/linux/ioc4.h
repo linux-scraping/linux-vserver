@@ -147,15 +147,20 @@ struct ioc4_misc_regs {
 #define IOC4_GPCR_EDGE_6 0x40
 #define IOC4_GPCR_EDGE_7 0x80
 
+#define IOC4_VARIANT_IO9	0x0900
+#define IOC4_VARIANT_PCI_RT	0x0901
+#define IOC4_VARIANT_IO10	0x1000
+
 /* One of these per IOC4 */
 struct ioc4_driver_data {
 	struct list_head idd_list;
 	unsigned long idd_bar0;
 	struct pci_dev *idd_pdev;
 	const struct pci_device_id *idd_pci_id;
-	struct __iomem ioc4_misc_regs *idd_misc_regs;
+	struct ioc4_misc_regs __iomem *idd_misc_regs;
 	unsigned long count_period;
 	void *idd_serial_data;
+	unsigned int idd_variant;
 };
 
 /* One per submodule */

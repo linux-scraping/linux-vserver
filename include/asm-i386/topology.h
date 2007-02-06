@@ -28,10 +28,8 @@
 #define _ASM_I386_TOPOLOGY_H
 
 #ifdef CONFIG_X86_HT
-#define topology_physical_package_id(cpu)				\
-	(phys_proc_id[cpu] == BAD_APICID ? -1 : phys_proc_id[cpu])
-#define topology_core_id(cpu)						\
-	(cpu_core_id[cpu] == BAD_APICID ? 0 : cpu_core_id[cpu])
+#define topology_physical_package_id(cpu)	(cpu_data[cpu].phys_proc_id)
+#define topology_core_id(cpu)			(cpu_data[cpu].cpu_core_id)
 #define topology_core_siblings(cpu)		(cpu_core_map[cpu])
 #define topology_thread_siblings(cpu)		(cpu_sibling_map[cpu])
 #endif
@@ -76,6 +74,7 @@ static inline int node_to_first_cpu(int node)
 #define SD_NODE_INIT (struct sched_domain) {		\
 	.span			= CPU_MASK_NONE,	\
 	.parent			= NULL,			\
+	.child			= NULL,			\
 	.groups			= NULL,			\
 	.min_interval		= 8,			\
 	.max_interval		= 32,			\
@@ -90,6 +89,7 @@ static inline int node_to_first_cpu(int node)
 	.flags			= SD_LOAD_BALANCE	\
 				| SD_BALANCE_EXEC	\
 				| SD_BALANCE_FORK	\
+				| SD_SERIALIZE		\
 				| SD_WAKE_BALANCE,	\
 	.last_balance		= jiffies,		\
 	.balance_interval	= 1,			\
@@ -113,5 +113,10 @@ extern unsigned long node_remap_size[];
 #endif /* CONFIG_NUMA */
 
 extern cpumask_t cpu_coregroup_map(int cpu);
+
+#ifdef CONFIG_SMP
+#define mc_capable()	(boot_cpu_data.x86_max_cores > 1)
+#define smt_capable()	(smp_num_siblings > 1)
+#endif
 
 #endif /* _ASM_I386_TOPOLOGY_H */

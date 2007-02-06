@@ -10,7 +10,6 @@
 #include <linux/mm.h>
 #include <linux/module.h>
 #include <linux/sysctl.h>
-#include <linux/config.h>
 #include <linux/igmp.h>
 #include <linux/inetdevice.h>
 #include <net/snmp.h>
@@ -18,6 +17,7 @@
 #include <net/ip.h>
 #include <net/route.h>
 #include <net/tcp.h>
+#include <net/cipso_ipv4.h>
 
 /* From af_inet.c */
 extern int sysctl_ip_nonlocal_bind;
@@ -51,8 +51,7 @@ int ipv4_sysctl_forward(ctl_table *ctl, int write, struct file * filp,
 static int ipv4_sysctl_forward_strategy(ctl_table *table,
 			 int __user *name, int nlen,
 			 void __user *oldval, size_t __user *oldlenp,
-			 void __user *newval, size_t newlen, 
-			 void **context)
+			 void __user *newval, size_t newlen)
 {
 	int *valp = table->data;
 	int new;
@@ -111,8 +110,7 @@ static int proc_tcp_congestion_control(ctl_table *ctl, int write, struct file * 
 static int sysctl_tcp_congestion_control(ctl_table *table, int __user *name,
 					 int nlen, void __user *oldval,
 					 size_t __user *oldlenp,
-					 void __user *newval, size_t newlen,
-					 void **context)
+					 void __user *newval, size_t newlen)
 {
 	char val[TCP_CA_NAME_MAX];
 	ctl_table tbl = {
@@ -122,13 +120,71 @@ static int sysctl_tcp_congestion_control(ctl_table *table, int __user *name,
 	int ret;
 
 	tcp_get_default_congestion_control(val);
-	ret = sysctl_string(&tbl, name, nlen, oldval, oldlenp, newval, newlen,
-			    context);
+	ret = sysctl_string(&tbl, name, nlen, oldval, oldlenp, newval, newlen);
 	if (ret == 0 && newval && newlen)
 		ret = tcp_set_default_congestion_control(val);
 	return ret;
 }
 
+static int proc_tcp_available_congestion_control(ctl_table *ctl,
+						 int write, struct file * filp,
+						 void __user *buffer, size_t *lenp,
+						 loff_t *ppos)
+{
+	ctl_table tbl = { .maxlen = TCP_CA_BUF_MAX, };
+	int ret;
+
+	tbl.data = kmalloc(tbl.maxlen, GFP_USER);
+	if (!tbl.data)
+		return -ENOMEM;
+	tcp_get_available_congestion_control(tbl.data, TCP_CA_BUF_MAX);
+	ret = proc_dostring(&tbl, write, filp, buffer, lenp, ppos);
+	kfree(tbl.data);
+	return ret;
+}
+
+static int proc_allowed_congestion_control(ctl_table *ctl,
+					   int write, struct file * filp,
+					   void __user *buffer, size_t *lenp,
+					   loff_t *ppos)
+{
+	ctl_table tbl = { .maxlen = TCP_CA_BUF_MAX };
+	int ret;
+
+	tbl.data = kmalloc(tbl.maxlen, GFP_USER);
+	if (!tbl.data)
+		return -ENOMEM;
+
+	tcp_get_allowed_congestion_control(tbl.data, tbl.maxlen);
+	ret = proc_dostring(&tbl, write, filp, buffer, lenp, ppos);
+	if (write && ret == 0)
+		ret = tcp_set_allowed_congestion_control(tbl.data);
+	kfree(tbl.data);
+	return ret;
+}
+
+static int strategy_allowed_congestion_control(ctl_table *table, int __user *name,
+					       int nlen, void __user *oldval,
+					       size_t __user *oldlenp,
+					       void __user *newval,
+					       size_t newlen)
+{
+	ctl_table tbl = { .maxlen = TCP_CA_BUF_MAX };
+	int ret;
+
+	tbl.data = kmalloc(tbl.maxlen, GFP_USER);
+	if (!tbl.data)
+		return -ENOMEM;
+
+	tcp_get_available_congestion_control(tbl.data, tbl.maxlen);
+	ret = sysctl_string(&tbl, name, nlen, oldval, oldlenp, newval, newlen);
+	if (ret == 0 && newval && newlen)
+		ret = tcp_set_allowed_congestion_control(tbl.data);
+	kfree(tbl.data);
+
+	return ret;
+
+}
 
 ctl_table ipv4_table[] = {
         {
@@ -180,14 +236,6 @@ ctl_table ipv4_table[] = {
 		.mode		= 0644,
 		.proc_handler	= &ipv4_doint_and_flush,
 		.strategy	= &ipv4_doint_and_flush_strategy,
-	},
-        {
-		.ctl_name	= NET_IPV4_AUTOCONFIG,
-		.procname	= "ip_autoconfig",
-		.data		= &ipv4_config.autoconfig,
-		.maxlen		= sizeof(int),
-		.mode		= 0644,
-		.proc_handler	= &proc_dointvec
 	},
         {
 		.ctl_name	= NET_IPV4_NO_PMTU_DISC,
@@ -687,6 +735,73 @@ ctl_table ipv4_table[] = {
 		.maxlen		= sizeof(int),
 		.mode		= 0644,
 		.proc_handler	= &proc_dointvec
+	},
+#ifdef CONFIG_NET_DMA
+	{
+		.ctl_name	= NET_TCP_DMA_COPYBREAK,
+		.procname	= "tcp_dma_copybreak",
+		.data		= &sysctl_tcp_dma_copybreak,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= &proc_dointvec
+	},
+#endif
+	{
+		.ctl_name	= NET_TCP_SLOW_START_AFTER_IDLE,
+		.procname	= "tcp_slow_start_after_idle",
+		.data		= &sysctl_tcp_slow_start_after_idle,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= &proc_dointvec
+	},
+#ifdef CONFIG_NETLABEL
+	{
+		.ctl_name	= NET_CIPSOV4_CACHE_ENABLE,
+		.procname	= "cipso_cache_enable",
+		.data		= &cipso_v4_cache_enabled,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= &proc_dointvec,
+	},
+	{
+		.ctl_name	= NET_CIPSOV4_CACHE_BUCKET_SIZE,
+		.procname	= "cipso_cache_bucket_size",
+		.data		= &cipso_v4_cache_bucketsize,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= &proc_dointvec,
+	},
+	{
+		.ctl_name	= NET_CIPSOV4_RBM_OPTFMT,
+		.procname	= "cipso_rbm_optfmt",
+		.data		= &cipso_v4_rbm_optfmt,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= &proc_dointvec,
+	},
+	{
+		.ctl_name	= NET_CIPSOV4_RBM_STRICTVALID,
+		.procname	= "cipso_rbm_strictvalid",
+		.data		= &cipso_v4_rbm_strictvalid,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= &proc_dointvec,
+	},
+#endif /* CONFIG_NETLABEL */
+	{
+		.ctl_name	= NET_TCP_AVAIL_CONG_CONTROL,
+		.procname	= "tcp_available_congestion_control",
+		.maxlen		= TCP_CA_BUF_MAX,
+		.mode		= 0444,
+		.proc_handler   = &proc_tcp_available_congestion_control,
+	},
+	{
+		.ctl_name	= NET_TCP_ALLOWED_CONG_CONTROL,
+		.procname	= "tcp_allowed_congestion_control",
+		.maxlen		= TCP_CA_BUF_MAX,
+		.mode		= 0644,
+		.proc_handler   = &proc_allowed_congestion_control,
+		.strategy	= &strategy_allowed_congestion_control,
 	},
 	{ .ctl_name = 0 }
 };

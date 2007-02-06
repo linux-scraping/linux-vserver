@@ -5,7 +5,6 @@
  *
  * $Id: sa1100-flash.c,v 1.51 2005/11/07 11:14:28 gleixner Exp $
  */
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/types.h>
 #include <linux/ioport.h>
@@ -274,13 +273,11 @@ sa1100_setup_mtd(struct platform_device *pdev, struct flash_platform_data *plat)
 	/*
 	 * Allocate the map_info structs in one go.
 	 */
-	info = kmalloc(size, GFP_KERNEL);
+	info = kzalloc(size, GFP_KERNEL);
 	if (!info) {
 		ret = -ENOMEM;
 		goto out;
 	}
-
-	memset(info, 0, size);
 
 	if (plat->init) {
 		ret = plat->init();

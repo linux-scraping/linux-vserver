@@ -13,7 +13,6 @@
  *
  */
 
-#include <linux/config.h>
 #include <linux/kernel.h>
 #include <linux/errno.h>
 #include <linux/init.h>
@@ -26,7 +25,7 @@
 #include <linux/spinlock.h>
 #include <asm/uaccess.h>
 #include <linux/usb.h>
-#include "usb-serial.h"
+#include <linux/usb/serial.h>
 #include "visor.h"
 
 /*
@@ -47,10 +46,10 @@ static int  visor_probe		(struct usb_serial *serial, const struct usb_device_id 
 static int  visor_calc_num_ports(struct usb_serial *serial);
 static void visor_shutdown	(struct usb_serial *serial);
 static int  visor_ioctl		(struct usb_serial_port *port, struct file * file, unsigned int cmd, unsigned long arg);
-static void visor_set_termios	(struct usb_serial_port *port, struct termios *old_termios);
-static void visor_write_bulk_callback	(struct urb *urb, struct pt_regs *regs);
-static void visor_read_bulk_callback	(struct urb *urb, struct pt_regs *regs);
-static void visor_read_int_callback	(struct urb *urb, struct pt_regs *regs);
+static void visor_set_termios	(struct usb_serial_port *port, struct ktermios *old_termios);
+static void visor_write_bulk_callback	(struct urb *urb);
+static void visor_read_bulk_callback	(struct urb *urb);
+static void visor_read_int_callback	(struct urb *urb);
 static int  clie_3_5_startup	(struct usb_serial *serial);
 static int  treo_attach		(struct usb_serial *serial);
 static int clie_5_attach (struct usb_serial *serial);
@@ -303,7 +302,6 @@ static int visor_open (struct usb_serial_port *port, struct file *filp)
 	spin_lock_irqsave(&priv->lock, flags);
 	priv->bytes_in = 0;
 	priv->bytes_out = 0;
-	priv->outstanding_urbs = 0;
 	priv->throttled = 0;
 	spin_unlock_irqrestore(&priv->lock, flags);
 
@@ -350,8 +348,7 @@ static void visor_close (struct usb_serial_port *port, struct file * filp)
 			 
 	/* shutdown our urbs */
 	usb_kill_urb(port->read_urb);
-	if (port->interrupt_in_urb)
-		usb_kill_urb(port->interrupt_in_urb);
+	usb_kill_urb(port->interrupt_in_urb);
 
 	/* Try to send shutdown message, if the device is gone, this will just fail. */
 	transfer_buffer =  kmalloc (0x12, GFP_KERNEL);
@@ -436,13 +433,25 @@ static int visor_write (struct usb_serial_port *port, const unsigned char *buf, 
 
 static int visor_write_room (struct usb_serial_port *port)
 {
+	struct visor_private *priv = usb_get_serial_port_data(port);
+	unsigned long flags;
+
 	dbg("%s - port %d", __FUNCTION__, port->number);
 
 	/*
 	 * We really can take anything the user throws at us
 	 * but let's pick a nice big number to tell the tty
-	 * layer that we have lots of free space
+	 * layer that we have lots of free space, unless we don't.
 	 */
+
+	spin_lock_irqsave(&priv->lock, flags);
+	if (priv->outstanding_urbs > URB_UPPER_LIMIT * 2 / 3) {
+		spin_unlock_irqrestore(&priv->lock, flags);
+		dbg("%s - write limit hit\n", __FUNCTION__);
+		return 0;
+	}
+	spin_unlock_irqrestore(&priv->lock, flags);
+
 	return 2048;
 }
 
@@ -461,7 +470,7 @@ static int visor_chars_in_buffer (struct usb_serial_port *port)
 }
 
 
-static void visor_write_bulk_callback (struct urb *urb, struct pt_regs *regs)
+static void visor_write_bulk_callback (struct urb *urb)
 {
 	struct usb_serial_port *port = (struct usb_serial_port *)urb->context;
 	struct visor_private *priv = usb_get_serial_port_data(port);
@@ -480,11 +489,11 @@ static void visor_write_bulk_callback (struct urb *urb, struct pt_regs *regs)
 	--priv->outstanding_urbs;
 	spin_unlock_irqrestore(&priv->lock, flags);
 
-	schedule_work(&port->work);
+	usb_serial_port_softint(port);
 }
 
 
-static void visor_read_bulk_callback (struct urb *urb, struct pt_regs *regs)
+static void visor_read_bulk_callback (struct urb *urb)
 {
 	struct usb_serial_port *port = (struct usb_serial_port *)urb->context;
 	struct visor_private *priv = usb_get_serial_port_data(port);
@@ -529,7 +538,7 @@ static void visor_read_bulk_callback (struct urb *urb, struct pt_regs *regs)
 	return;
 }
 
-static void visor_read_int_callback (struct urb *urb, struct pt_regs *regs)
+static void visor_read_int_callback (struct urb *urb)
 {
 	struct usb_serial_port *port = (struct usb_serial_port *)urb->context;
 	int result;
@@ -759,15 +768,22 @@ static int visor_calc_num_ports (struct usb_serial *serial)
 
 static int generic_startup(struct usb_serial *serial)
 {
+	struct usb_serial_port **ports = serial->port;
 	struct visor_private *priv;
 	int i;
 
 	for (i = 0; i < serial->num_ports; ++i) {
 		priv = kzalloc (sizeof(*priv), GFP_KERNEL);
-		if (!priv)
+		if (!priv) {
+			while (i-- != 0) {
+				priv = usb_get_serial_port_data(ports[i]);
+				usb_set_serial_port_data(ports[i], NULL);
+				kfree(priv);
+			}
 			return -ENOMEM;
+		}
 		spin_lock_init(&priv->lock);
-		usb_set_serial_port_data(serial->port[i], priv);
+		usb_set_serial_port_data(ports[i], priv);
 	}
 	return 0;
 }
@@ -877,7 +893,18 @@ static int clie_5_attach (struct usb_serial *serial)
 
 static void visor_shutdown (struct usb_serial *serial)
 {
+	struct visor_private *priv;
+	int i;
+
 	dbg("%s", __FUNCTION__);
+
+	for (i = 0; i < serial->num_ports; i++) {
+		priv = usb_get_serial_port_data(serial->port[i]);
+		if (priv) {
+			usb_set_serial_port_data(serial->port[i], NULL);
+			kfree(priv);
+		}
+	}
 }
 
 static int visor_ioctl (struct usb_serial_port *port, struct file * file, unsigned int cmd, unsigned long arg)
@@ -889,7 +916,7 @@ static int visor_ioctl (struct usb_serial_port *port, struct file * file, unsign
 
 
 /* This function is all nice and good, but we don't change anything based on it :) */
-static void visor_set_termios (struct usb_serial_port *port, struct termios *old_termios)
+static void visor_set_termios (struct usb_serial_port *port, struct ktermios *old_termios)
 {
 	unsigned int cflag;
 

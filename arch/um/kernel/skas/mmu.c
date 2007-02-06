@@ -3,7 +3,6 @@
  * Licensed under the GPL
  */
 
-#include "linux/config.h"
 #include "linux/sched.h"
 #include "linux/list.h"
 #include "linux/spinlock.h"
@@ -55,14 +54,13 @@ static int init_stub_pte(struct mm_struct *mm, unsigned long proc,
 	 * destroy_context_skas.
 	 */
 
-        mm->context.skas.last_page_table = pmd_page_kernel(*pmd);
+        mm->context.skas.last_page_table = pmd_page_vaddr(*pmd);
 #ifdef CONFIG_3_LEVEL_PGTABLES
         mm->context.skas.last_pmd = (unsigned long) __va(pud_val(*pud));
 #endif
 
 	*pte = mk_pte(virt_to_page(kernel), __pgprot(_PAGE_PRESENT));
-	*pte = pte_mkexec(*pte);
-	*pte = pte_wrprotect(*pte);
+	*pte = pte_mkread(*pte);
 	return(0);
 
  out_pmd:
@@ -152,7 +150,7 @@ void destroy_context_skas(struct mm_struct *mm)
 		free_page(mmu->id.stack);
 		pte_lock_deinit(virt_to_page(mmu->last_page_table));
 		pte_free_kernel((pte_t *) mmu->last_page_table);
-                dec_page_state(nr_page_table_pages);
+		dec_zone_page_state(virt_to_page(mmu->last_page_table), NR_PAGETABLE);
 #ifdef CONFIG_3_LEVEL_PGTABLES
 		pmd_free((pmd_t *) mmu->last_pmd);
 #endif

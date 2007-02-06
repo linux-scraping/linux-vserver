@@ -292,7 +292,7 @@ static void snd_uart16550_io_loop(snd_uart16550_t * uart)
  * Note that some devices need OUT2 to be set before they will generate
  * interrupts at all. (Possibly tied to an internal pull-up on CTS?)
  */
-static irqreturn_t snd_uart16550_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t snd_uart16550_interrupt(int irq, void *dev_id)
 {
 	snd_uart16550_t *uart;
 
@@ -795,7 +795,7 @@ static int __init snd_uart16550_create(struct snd_card *card,
 
 	if (irq >= 0 && irq != SNDRV_AUTO_IRQ) {
 		if (request_irq(irq, snd_uart16550_interrupt,
-				SA_INTERRUPT, "Serial MIDI", (void *) uart)) {
+				IRQF_DISABLED, "Serial MIDI", (void *) uart)) {
 			snd_printk("irq %d busy. Using Polling.\n", irq);
 		} else {
 			uart->irq = irq;
@@ -998,6 +998,10 @@ static int __init alsa_card_serial_init(void)
 							 i, NULL, 0);
 		if (IS_ERR(device))
 			continue;
+		if (!platform_get_drvdata(device)) {
+			platform_device_unregister(device);
+			continue;
+		}
 		devices[i] = device;
 		cards++;
 	}

@@ -1,7 +1,7 @@
 /*
 	drivers/net/tulip/eeprom.c
 
-	Maintained by Jeff Garzik <jgarzik@pobox.com>
+	Maintained by Valerie Henson <val_henson@linux.intel.com>
 	Copyright 2000,2001  The Linux Kernel Team
 	Written/copyright 1994-2001 by Donald Becker.
 
@@ -96,11 +96,11 @@ static const char *block_name[] __devinitdata = {
  * tulip_build_fake_mediatable - Build a fake mediatable entry.
  * @tp: Ptr to the tulip private data.
  *
- * Some cards like the 3x5 HSC cards (J3514A) do not have a standard 
+ * Some cards like the 3x5 HSC cards (J3514A) do not have a standard
  * srom and can not be handled under the fixup routine.  These cards
- * still need a valid mediatable entry for correct csr12 setup and 
+ * still need a valid mediatable entry for correct csr12 setup and
  * mii handling.
- * 
+ *
  * Since this is currently a parisc-linux specific function, the
  * #ifdef __hppa__ should completely optimize this function away for
  * non-parisc hardware.
@@ -140,7 +140,7 @@ static void __devinit tulip_build_fake_mediatable(struct tulip_private *tp)
 		tp->flags |= HAS_PHY_IRQ;
 		tp->csr12_shadow = -1;
 	}
-#endif 
+#endif
 }
 
 void __devinit tulip_parse_eeprom(struct net_device *dev)

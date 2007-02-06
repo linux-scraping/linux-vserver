@@ -3,23 +3,23 @@
  *
  *   This program is free software;  you can redistribute it and/or modify
  *   it under the terms of the GNU General Public License as published by
- *   the Free Software Foundation; either version 2 of the License, or 
+ *   the Free Software Foundation; either version 2 of the License, or
  *   (at your option) any later version.
- * 
+ *
  *   This program is distributed in the hope that it will be useful,
  *   but WITHOUT ANY WARRANTY;  without even the implied warranty of
  *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See
  *   the GNU General Public License for more details.
  *
  *   You should have received a copy of the GNU General Public License
- *   along with this program;  if not, write to the Free Software 
+ *   along with this program;  if not, write to the Free Software
  *   Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
  */
 
 #include <linux/fs.h>
 #include <linux/quotaops.h>
 #include <linux/vs_dlimit.h>
-#include <linux/vserver/xid.h>
+#include <linux/vs_tag.h>
 #include "jfs_incore.h"
 #include "jfs_inode.h"
 #include "jfs_filsys.h"
@@ -57,27 +57,15 @@ int jfs_sync_flags(struct inode *inode)
 	unsigned int oldflags, newflags;
 
 	oldflags = JFS_IP(inode)->mode2;
-	newflags = oldflags & ~(JFS_APPEND_FL |
-		JFS_IMMUTABLE_FL | JFS_IUNLINK_FL |
-		JFS_BARRIER_FL | JFS_NOATIME_FL |
-		JFS_SYNC_FL | JFS_DIRSYNC_FL);
+	newflags = oldflags & ~(JFS_IMMUTABLE_FL |
+		JFS_IUNLINK_FL | JFS_BARRIER_FL);
 
-	if (IS_APPEND(inode))
-		newflags |= JFS_APPEND_FL;
 	if (IS_IMMUTABLE(inode))
 		newflags |= JFS_IMMUTABLE_FL;
 	if (IS_IUNLINK(inode))
 		newflags |= JFS_IUNLINK_FL;
 	if (IS_BARRIER(inode))
 		newflags |= JFS_BARRIER_FL;
-
-	/* we do not want to copy superblock flags */
-	if (inode->i_flags & S_NOATIME)
-		newflags |= JFS_NOATIME_FL;
-	if (inode->i_flags & S_SYNC)
-		newflags |= JFS_SYNC_FL;
-	if (inode->i_flags & S_DIRSYNC)
-		newflags |= JFS_DIRSYNC_FL;
 
 	if (oldflags ^ newflags) {
 		JFS_IP(inode)->mode2 = newflags;
@@ -103,7 +91,7 @@ struct inode *ialloc(struct inode *parent, umode_t mode)
 	inode = new_inode(sb);
 	if (!inode) {
 		jfs_warn("ialloc: new_inode returned NULL!");
-		return inode;
+		return ERR_PTR(-ENOMEM);
 	}
 
 	jfs_inode = JFS_IP(inode);
@@ -111,9 +99,10 @@ struct inode *ialloc(struct inode *parent, umode_t mode)
 	rc = diAlloc(parent, S_ISDIR(mode), inode);
 	if (rc) {
 		jfs_warn("ialloc: diAlloc returned %d!", rc);
-		make_bad_inode(inode);
+		if (rc == -EIO)
+			make_bad_inode(inode);
 		iput(inode);
-		return NULL;
+		return ERR_PTR(rc);
 	}
 
 	inode->i_uid = current->fsuid;
@@ -131,7 +120,7 @@ struct inode *ialloc(struct inode *parent, umode_t mode)
 	jfs_inode->saved_uid = inode->i_uid;
 	jfs_inode->saved_gid = inode->i_gid;
 
-	inode->i_xid = vx_current_fsxid(sb);
+	inode->i_tag = dx_current_fstag(sb);
 	if (DLIMIT_ALLOC_INODE(inode)) {
 		iput(inode);
 		return NULL;
@@ -146,7 +135,7 @@ struct inode *ialloc(struct inode *parent, umode_t mode)
 		inode->i_flags |= S_NOQUOTA;
 		inode->i_nlink = 0;
 		iput(inode);
-		return NULL;
+		return ERR_PTR(-EDQUOT);
 	}
 
 	inode->i_mode = mode;
@@ -164,7 +153,6 @@ struct inode *ialloc(struct inode *parent, umode_t mode)
 	}
 	jfs_inode->mode2 |= mode;
 
-	inode->i_blksize = sb->s_blocksize;
 	inode->i_blocks = 0;
 	inode->i_mtime = inode->i_atime = inode->i_ctime = CURRENT_TIME;
 	jfs_inode->otime = inode->i_ctime.tv_sec;

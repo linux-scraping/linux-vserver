@@ -28,7 +28,6 @@
  *      Added nowayout module option to override CONFIG_WATCHDOG_NOWAYOUT
  */
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/moduleparam.h>
 #include <linux/types.h>
@@ -330,7 +329,7 @@ static int zf_ioctl(struct inode *inode, struct file *file, unsigned int cmd,
 			break;
 
 		default:
-			return -ENOIOCTLCMD;
+			return -ENOTTY;
 	}
 
 	return 0;
@@ -389,7 +388,7 @@ static int zf_notify_sys(struct notifier_block *this, unsigned long code,
 
 
 
-static struct file_operations zf_fops = {
+static const struct file_operations zf_fops = {
 	.owner          = THIS_MODULE,
 	.llseek         = no_llseek,
 	.write          = zf_write,
@@ -427,8 +426,7 @@ static int __init zf_init(void)
 	printk(KERN_INFO PFX ": MachZ ZF-Logic Watchdog driver initializing.\n");
 
 	ret = zf_get_ZFL_version();
-	printk("%#x\n", ret);
-	if((!ret) || (ret != 0xffff)){
+	if ((!ret) || (ret == 0xffff)) {
 		printk(KERN_WARNING PFX ": no ZF-Logic found\n");
 		return -ENODEV;
 	}

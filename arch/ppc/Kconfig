@@ -19,6 +19,14 @@ config RWSEM_XCHGADD_ALGORITHM
 	bool
 	default y
 
+config ARCH_HAS_ILOG2_U32
+	bool
+	default y
+
+config ARCH_HAS_ILOG2_U64
+	bool
+	default n
+
 config GENERIC_HWEIGHT
 	bool
 	default y
@@ -40,6 +48,10 @@ config GENERIC_NVRAM
 	bool
 	default y
 
+config GENERIC_FIND_NEXT_BIT
+	bool
+	default y
+
 config SCHED_NO_NO_OMIT_FRAME_POINTER
 	bool
 	default y
@@ -47,6 +59,11 @@ config SCHED_NO_NO_OMIT_FRAME_POINTER
 config ARCH_MAY_HAVE_PC_FDC
 	bool
 	default y
+
+config GENERIC_BUG
+	bool
+	default y
+	depends on BUG
 
 source "init/Kconfig"
 
@@ -73,9 +90,11 @@ config 6xx
 
 config 40x
 	bool "40x"
+	select PPC_DCR_NATIVE
 
 config 44x
 	bool "44x"
+	select PPC_DCR_NATIVE
 
 config 8xx
 	bool "8xx"
@@ -90,6 +109,15 @@ endchoice
 
 config PPC_FPU
 	bool
+
+config PPC_DCR_NATIVE
+	bool
+	default n
+
+config PPC_DCR
+	bool
+	depends on PPC_DCR_NATIVE
+	default y
 
 config BOOKE
 	bool
@@ -215,10 +243,10 @@ config KEXEC
 	help
 	  kexec is a system call that implements the ability to shutdown your
 	  current kernel, and to start another kernel.  It is like a reboot
-	  but it is indepedent of the system firmware.   And like a reboot
+	  but it is independent of the system firmware.   And like a reboot
 	  you can start any kernel with it, not just Linux.
 
-	  The name comes from the similiarity to the exec system call.
+	  The name comes from the similarity to the exec system call.
 
 	  It is an ongoing process to be certain the hardware in a machine
 	  is properly shutdown, so do not be surprised if this code does not
@@ -596,7 +624,7 @@ config HDPU
 	  Select HDPU if configuring a Sky Computers Compute Blade.
 
 config HDPU_FEATURES
-	depends HDPU
+	depends on HDPU
 	tristate "HDPU-Features"
 	help
 	  Select to enable HDPU enhanced features.
@@ -707,7 +735,7 @@ config LITE5200
 
 config LITE5200B
 	bool "Freescale LITE5200B"
-	depends LITE5200
+	depends on LITE5200
 	help
 	  Support for the LITE5200B dev board for the MPC5200 from Freescale.
 	  This is the new board with 2 PCI slots.
@@ -720,7 +748,7 @@ config MPC834x_SYS
 	  Be aware that PCI buses can only function when SYS board is plugged
 	  into the PIB (Platform IO Board) board from Freescale which provide
 	  3 PCI slots.  The PIBs PCI initialization is the bootloader's
-	  responsiblilty.
+	  responsibility.
 
 config EV64360
 	bool "Marvell-EV64360BP"
@@ -948,6 +976,9 @@ config NR_CPUS
 
 config HIGHMEM
 	bool "High memory support"
+
+config ARCH_POPULATES_NODE_MAP
+	def_bool y
 
 source kernel/Kconfig.hz
 source kernel/Kconfig.preempt
@@ -1200,7 +1231,7 @@ config PCI_DOMAINS
 	default PCI
 
 config MPC83xx_PCI2
-	bool "  Supprt for 2nd PCI host controller"
+	bool "Support for 2nd PCI host controller"
 	depends on PCI && MPC834x
 	default y if MPC834x_SYS
 
@@ -1219,12 +1250,12 @@ config PCI_8260
 	default y
 
 config 8260_PCI9
-	bool "  Enable workaround for MPC826x erratum PCI 9"
+	bool "Enable workaround for MPC826x erratum PCI 9"
 	depends on PCI_8260 && !ADS8272
 	default y
 
 choice
-	prompt "  IDMA channel for PCI 9 workaround"
+	prompt "IDMA channel for PCI 9 workaround"
 	depends on 8260_PCI9
 
 config 8260_PCI9_IDMA1
@@ -1338,7 +1369,7 @@ config CONSISTENT_START_BOOL
 	depends on ADVANCED_OPTIONS && NOT_COHERENT_CACHE
 	help
 	  This option allows you to set the base virtual address
-	  of the the consistent memory pool.  This pool of virtual
+	  of the consistent memory pool.  This pool of virtual
 	  memory is used to make consistent memory allocations.
 
 config CONSISTENT_START
@@ -1349,7 +1380,7 @@ config CONSISTENT_SIZE_BOOL
 	bool "Set custom consistent memory pool size"
 	depends on ADVANCED_OPTIONS && NOT_COHERENT_CACHE
 	help
-	  This option allows you to set the size of the the
+	  This option allows you to set the size of the
 	  consistent memory pool.  This pool of virtual memory
 	  is used to make consistent memory allocations.
 

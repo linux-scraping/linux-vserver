@@ -8,7 +8,6 @@
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
  */
-#include <linux/config.h>
 #include <linux/kernel.h>
 #include <linux/stddef.h>
 #include <linux/ioport.h>
@@ -18,7 +17,7 @@
 #include <linux/console.h>
 #include <linux/bootmem.h>
 #include <linux/seq_file.h>
-#include <linux/tty.h>
+#include <linux/screen_info.h>
 #include <linux/init.h>
 #include <linux/root_dev.h>
 
@@ -144,7 +143,7 @@ static void __init setup_processor(void)
 
 	dump_cpu_info();
 
-	sprintf(system_utsname.machine, "%s", list->arch_name);
+	sprintf(init_utsname()->machine, "%s", list->arch_name);
 	sprintf(elf_platform, "%s", list->elf_name);
 	elf_hwcap = list->elf_hwcap;
 

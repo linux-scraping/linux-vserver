@@ -35,7 +35,6 @@ parameter is applicable:
 	APM	Advanced Power Management support is enabled.
 	AX25	Appropriate AX.25 support is enabled.
 	CD	Appropriate CD support is enabled.
-	DEVFS	devfs support is enabled.
 	DRM	Direct Rendering Management support is enabled.
 	EDD	BIOS Enhanced Disk Drive Services (EDD) is enabled
 	EFI	EFI Partitioning (GPT) is enabled
@@ -61,6 +60,7 @@ parameter is applicable:
 	MTD	MTD support is enabled.
 	NET	Appropriate network support is enabled.
 	NUMA	NUMA support is enabled.
+	GENERIC_TIME The generic timeofday code is enabled.
 	NFS	Appropriate NFS support is enabled.
 	OSS	OSS sound support is enabled.
 	PARIDE	The ParIDE subsystem is enabled.
@@ -110,6 +110,13 @@ be entered as an environment variable, whereas its absence indicates that
 it will appear as a kernel argument readable via /proc/cmdline by programs
 running once the system is up.
 
+The number of kernel parameters is not limited, but the length of the
+complete command line (parameters including spaces etc.) is limited to
+a fixed number of characters. This limit depends on the architecture
+and is between 256 and 4096 characters. It is defined in the file
+./include/asm/setup.h as COMMAND_LINE_SIZE.
+
+
 	53c7xx=		[HW,SCSI] Amiga SCSI controllers
 			See header of drivers/scsi/53c7xx.c.
 			See also Documentation/scsi/ncr53c7xx.txt.
@@ -147,6 +154,9 @@ running once the system is up.
 	acpi_irq_isa=	[HW,ACPI] If irq_balance, mark listed IRQs used by ISA
 			Format: <irq>,<irq>...
 
+	acpi_os_name=	[HW,ACPI] Tell ACPI BIOS the name of the OS
+			Format: To spoof as Windows 98: ="Microsoft Windows"
+
 	acpi_osi=	[HW,ACPI] empty param disables _OSI
 
 	acpi_serialize	[HW,ACPI] force serialization of AML methods
@@ -154,6 +164,10 @@ running once the system is up.
 	acpi_skip_timer_override [HW,ACPI]
 			Recognize and ignore IRQ0/pin2 Interrupt Override.
 			For broken nForce2 BIOS resulting in XT-PIC timer.
+	acpi_use_timer_override [HW,ACPI}
+			Use timer override. For some broken Nvidia NF5 boards
+			that require a timer override, but don't have
+			HPET
 
 	acpi_dbg_layer=	[HW,ACPI]
 			Format: <int>
@@ -175,6 +189,11 @@ running once the system is up.
 			Allow consolidated generic hotkey driver to
 			override platform specific driver.
 			See also Documentation/acpi-hotkey.txt.
+
+	acpi_pm_good	[IA-32,X86-64]
+			Override the pmtimer bug detection: force the kernel
+			to assume that this machine's pmtimer latches its value
+			and always returns good values.
 
 	enable_timer_pin_1 [i386,x86-64]
 			Enable PIN 1 of APIC timer
@@ -274,9 +293,6 @@ running once the system is up.
 
 	autotest	[IA64]
 
-	awe=		[HW,OSS] AWE32/SB32/AWE64 wave table synth
-			Format: <io>,<memsize>,<isapnp>
-
 	aztcd=		[HW,CD] Aztech CD268 CDROM driver
 			Format: <io>,0x79 (?)
 
@@ -338,10 +354,11 @@ running once the system is up.
 			Value can be changed at runtime via
 				/selinux/checkreqprot.
 
- 	clock=		[BUGS=IA-32,HW] gettimeofday timesource override.
-			Forces specified timesource (if avaliable) to be used
-			when calculating gettimeofday(). If specicified
-			timesource is not avalible, it defaults to PIT.
+	clock=		[BUGS=IA-32, HW] gettimeofday clocksource override.
+			[Deprecated]
+			Forces specified clocksource (if available) to be used
+			when calculating gettimeofday(). If specified
+			clocksource is not available, it defaults to PIT.
 			Format: { pit | tsc | cyclone | pmtmr }
 
 	disable_8254_timer
@@ -426,12 +443,18 @@ running once the system is up.
 
 	debug		[KNL] Enable kernel debugging (events log level).
 
+	debug_locks_verbose=
+			[KNL] verbose self-tests
+			Format=<0|1>
+			Print debugging info while doing the locking API
+			self-tests.
+			We default to 0 (no extra messages), setting it to
+			1 will print _a lot_ more information - normally
+			only useful to kernel developers.
+
 	decnet=		[HW,NET]
 			Format: <area>[,<node>]
 			See also Documentation/networking/decnet.txt.
-
-	devfs=		[DEVFS]
-			See Documentation/filesystems/devfs/boot-options.
 
 	dhash_entries=	[KNL]
 			Set number of hash buckets for dentry cache.
@@ -514,10 +537,6 @@ running once the system is up.
 			Default value is 0.
 			Value can be changed at runtime via /selinux/enforce.
 
-	es1370=		[HW,OSS]
-			Format: <lineout>[,<micbias>]
-			See also header of sound/oss/es1370.c.
-
 	es1371=		[HW,OSS]
 			Format: <spdif>,[<nomix>,[<amplifier>]]
 			See also header of sound/oss/es1371.c.
@@ -529,6 +548,13 @@ running once the system is up.
 	eurwdt=		[HW,WDT] Eurotech CPU-1220/1410 onboard watchdog.
 			Format: <io>[,<irq>]
 
+	failslab=
+	fail_page_alloc=
+	fail_make_request=[KNL]
+			General fault injection mechanism.
+			Format: <interval>,<probability>,<space>,<times>
+			See also /Documentation/fault-injection/.
+
 	fd_mcs=		[HW,SCSI]
 			See header of drivers/scsi/fd_mcs.c.
 
@@ -537,9 +563,6 @@ running once the system is up.
 
 	floppy=		[HW]
 			See Documentation/floppy.txt.
-
-	ftape=		[HW] Floppy Tape subsystem debugging options.
-			See Documentation/ftape.txt.
 
 	gamecon.map[2|3]=
 			[HW,JOY] Multisystem joystick and NES/SNES/PSX pad
@@ -557,11 +580,6 @@ running once the system is up.
 
 	gscd=		[HW,CD]
 			Format: <io>
-
-	gt96100eth=	[NET] MIPS GT96100 Advanced Communication Controller
-
-	gus=		[HW,OSS]
-			Format: <io>,<irq>,<dma>,<dma16>
 
 	gvp11=		[HW,SCSI]
 
@@ -588,11 +606,9 @@ running once the system is up.
 
 	hugepages=	[HW,IA-32,IA-64] Maximal number of HugeTLB pages.
 
-	noirqbalance	[IA-32,SMP,KNL] Disable kernel irq balancing
-
 	i8042.direct	[HW] Put keyboard port into non-translated mode
-	i8042.dumbkbd	[HW] Pretend that controlled can only read data from
-			     keyboard and can not control its state
+	i8042.dumbkbd	[HW] Pretend that controller can only read data from
+			     keyboard and cannot control its state
 			     (Don't attempt to blink the leds)
 	i8042.noaux	[HW] Don't check for auxiliary (== mouse) port
 	i8042.nokbd	[HW] Don't check/create keyboard port
@@ -639,6 +655,10 @@ running once the system is up.
 	idle=		[HW]
 			Format: idle=poll or idle=halt
 
+	ignore_loglevel	[KNL]
+			Ignore loglevel setting - this will print /all/
+			kernel messages to the console. Useful for debugging.
+
 	ihash_entries=	[KNL]
 			Set number of hash buckets for inode cache.
 
@@ -682,6 +702,12 @@ running once the system is up.
 	ips=		[HW,SCSI] Adaptec / IBM ServeRAID controller
 			See header of drivers/scsi/ips.c.
 
+	ports=		[IP_VS_FTP] IPVS ftp helper module
+			Default is 21.
+			Up to 8 (IP_VS_APP_MAX_PORTS) ports
+			may be specified.
+			Format: <port>,<port>....
+
 	irqfixup	[HW]
 			When an interrupt is not handled search all handlers
 			for it. Intended to get systems with badly broken
@@ -697,7 +723,12 @@ running once the system is up.
 			Format: <RDP>,<reset>,<pci_scan>,<verbosity>
 
 	isolcpus=	[KNL,SMP] Isolate CPUs from the general scheduler.
-			Format: <cpu number>,...,<cpu number>
+			Format:
+			<cpu number>,...,<cpu number>
+			or
+			<cpu number>-<cpu number>  (must be a positive range in ascending order)
+			or a mixture
+			<cpu number>,...,<cpu number>-<cpu number>
 			This option can be used to specify one or more CPUs
 			to isolate from the general SMP balancing and scheduling
 			algorithms. The only way to move a process onto or off
@@ -814,12 +845,6 @@ running once the system is up.
 	machvec=	[IA64] Force the use of a particular machine-vector
 			(machvec) in a generic kernel.
 			Example: machvec=hpzx1_swiotlb
-
-	mad16=		[HW,OSS] Format:
-			<io>,<irq>,<dma>,<dma16>,<mpu_io>,<mpu_irq>,<joystick>
-
-	maui=		[HW,OSS]
-			Format: <io>,<irq>
 
 	max_loop=	[LOOP] Maximum number of loopback devices that can
 			be mounted
@@ -1001,6 +1026,10 @@ running once the system is up.
 			emulation library even if a 387 maths coprocessor
 			is present.
 
+	noaliencache	[MM, NUMA] Disables the allcoation of alien caches in
+			the slab allocator.  Saves per-node memory, but will
+			impact performance on real NUMA hardware.
+
 	noalign		[KNL,ARM]
 
 	noapic		[SMP,APIC] Tells the kernel to not make use of any
@@ -1013,6 +1042,8 @@ running once the system is up.
 			on "Classic" PPC cores.
 
 	nocache		[ARM]
+
+	nodelayacct	[KNL] Disable per-task delay accounting
 
 	nodisconnect	[HW,SCSI,M68K] Disables SCSI disconnects.
 
@@ -1039,8 +1070,13 @@ running once the system is up.
 			in certain environments such as networked servers or
 			real-time systems.
 
+	noirqbalance	[IA-32,SMP,KNL] Disable kernel irq balancing
+
 	noirqdebug	[IA-32] Disables the code which attempts to detect and
 			disable unhandled interrupt sources.
+
+	no_timer_check	[IA-32,X86_64,APIC] Disables the code which tests for
+			broken timer IRQ sources.
 
 	noisapnp	[ISAPNP] Disables ISA PnP code.
 
@@ -1085,9 +1121,6 @@ running once the system is up.
 
 	opl3=		[HW,OSS]
 			Format: <io>
-
-	opl3sa=		[HW,OSS]
-			Format: <io>,<irq>,<dma>,<dma2>,<mpu_io>,<mpu_irq>
 
 	opl3sa2=	[HW,OSS] Format:
 			<io>,<irq>,<dma>,<dma2>,<mss_io>,<mpu_io>,<ymode>,<loopback>[,<isapnp>,<multiple]
@@ -1217,6 +1250,15 @@ running once the system is up.
 				bootloader. This is currently used on
 				IXP2000 systems where the bus has to be
 				configured a certain way for adjunct CPUs.
+		noearly		[X86] Don't do any early type 1 scanning.
+				This might help on some broken boards which
+				machine check when some devices' config space
+				is read. But various workarounds are disabled
+				and some IOMMU drivers will not work.
+		bfsort		Sort PCI devices into breadth-first order.
+				This sorting is done to get a device
+				order compatible with older (<= 2.4) kernels.
+		nobfsort	Don't sort PCI devices into breadth-first order.
 
 	pcmv=		[HW,PCMCIA] BadgePAD 4
 
@@ -1266,6 +1308,7 @@ running once the system is up.
 			Param: "schedule" - profile schedule points.
 			Param: <number> - step/bucket size as a power of 2 for
 				statistical time based profiling.
+			Param: "sleep" - profile D-state sleeping (millisecs)
 
 	processor.max_cstate=	[HW,ACPI]
 			Limit processor to maximum C-state
@@ -1299,7 +1342,7 @@ running once the system is up.
 	pt.		[PARIDE]
 			See Documentation/paride.txt.
 
-	quiet=		[KNL] Disable log messages
+	quiet		[KNL] Disable most log messages
 
 	r128=		[HW,DRM]
 
@@ -1325,10 +1368,6 @@ running once the system is up.
 	rcu.qlowmark=	[KNL,BOOT] Set threshold of queued
 			RCU callbacks below which batch limiting is re-enabled.
 
-	rcu.rsinterval=	[KNL,BOOT,SMP] Set the number of additional
-			RCU callbacks to queued before forcing reschedule
-			on all cpus.
-
 	rdinit=		[KNL]
 			Format: <full_path>
 			Run specified binary instead of /init from the ramdisk,
@@ -1336,12 +1375,26 @@ running once the system is up.
 
 	reboot=		[BUGS=IA-32,BUGS=ARM,BUGS=IA-64] Rebooting mode
 			Format: <reboot_mode>[,<reboot_mode2>[,...]]
-			See arch/*/kernel/reboot.c.
+			See arch/*/kernel/reboot.c or arch/*/kernel/process.c			
 
 	reserve=	[KNL,BUGS] Force the kernel to ignore some iomem area
 
+	reservetop=	[IA-32]
+			Format: nn[KMG]
+			Reserves a hole at the top of the kernel virtual
+			address space.
+
+	reset_devices	[KNL] Force drivers to reset the underlying device
+			during initialization.
+
 	resume=		[SWSUSP]
 			Specify the partition device for software suspend
+
+	resume_offset=	[SWSUSP]
+			Specify the offset from the beginning of the partition
+			given by "resume=" at which the swap header is located,
+			in <PAGE_SIZE> units (needed only for swap files).
+			See  Documentation/power/swsusp-and-swap-files.txt
 
 	rhash_entries=	[KNL,NET]
 			Set number of hash buckets for route cache
@@ -1393,6 +1446,11 @@ running once the system is up.
 
 	scsi_logging=	[SCSI]
 
+	scsi_mod.scan=	[SCSI] sync (default) scans SCSI busses as they are
+			discovered.  async scans them in kernel threads,
+			allowing boot to proceed.  none ignores them, expecting
+			user space to do the scan.
+
 	selinux		[SELINUX] Disable or enable SELinux at boot time.
 			Format: { "0" | "1" }
 			See security/selinux/Kconfig help text.
@@ -1402,12 +1460,18 @@ running once the system is up.
 			If enabled at boot time, /selinux/disable can be used
 			later to disable prior to initial policy load.
 
+	selinux_compat_net =
+			[SELINUX] Set initial selinux_compat_net flag value.
+                        Format: { "0" | "1" }
+                        0 -- use new secmark-based packet controls
+                        1 -- use legacy packet controls
+                        Default value is 0 (preferred).
+                        Value can be changed at runtime via
+                        /selinux/compat_net.
+
 	serialnumber	[BUGS=IA-32]
 
 	sg_def_reserved_size=	[SCSI]
-
-	sgalaxy=	[HW,OSS]
-			Format: <io>,<irq>,<dma>,<dma2>,<sgbase>
 
 	shapers=	[NET]
 			Maximal number of shapers.
@@ -1549,9 +1613,6 @@ running once the system is up.
 
 	snd-ymfpci=	[HW,ALSA]
 
-	sonicvibes=	[HW,OSS]
-			Format: <reverb>
-
 	sonycd535=	[HW,CD]
 			Format: <io>[,<irq>]
 
@@ -1595,6 +1656,12 @@ running once the system is up.
 	sym53c416=	[HW,SCSI]
 			See header of drivers/scsi/sym53c416.c.
 
+	sysrq_always_enabled
+			[KNL]
+			Ignore sysrq setting - this boot parameter will
+			neutralize any effect of /proc/sys/kernel/sysrq.
+			Useful for debugging.
+
 	t128=		[HW,SCSI]
 			See header of drivers/scsi/t128.c.
 
@@ -1604,6 +1671,10 @@ running once the system is up.
 			Set number of hash buckets for TCP connection
 
 	time		Show timing data prefixed to each printk message line
+
+	clocksource=	[GENERIC_TIME] Override the default clocksource
+			Override the default clocksource and use the clocksource
+			with the name specified.
 
 	tipar.timeout=	[HW,PPT]
 			Set communications timeout in tenths of a second
@@ -1643,8 +1714,20 @@ running once the system is up.
 	uart6850=	[HW,OSS]
 			Format: <io>,<irq>
 
+	uhci-hcd.ignore_oc=
+			[USB] Ignore overcurrent events (default N).
+			Some badly-designed motherboards generate lots of
+			bogus events, for ports that aren't wired to
+			anything.  Set this parameter to avoid log spamming.
+			Note that genuine overcurrent events won't be
+			reported either.
+
 	usbhid.mousepoll=
 			[USBHID] The interval which mice are to be polled at.
+
+	vdso=		[IA-32]
+			vdso=1: enable VDSO (default)
+			vdso=0: disable VDSO mapping
 
 	video=		[FB] Frame buffer configuration
 			See Documentation/fb/modedb.txt.
@@ -1662,9 +1745,14 @@ running once the system is up.
 			decrease the size and leave more room for directly
 			mapped kernel RAM.
 
-	vmhalt=		[KNL,S390]
+	vmhalt=		[KNL,S390] Perform z/VM CP command after system halt.
+			Format: <command>
 
-	vmpoff=		[KNL,S390]
+	vmpanic=	[KNL,S390] Perform z/VM CP command after kernel panic.
+			Format: <command>
+
+	vmpoff=		[KNL,S390] Perform z/VM CP command after power off.
+			Format: <command>
 
 	waveartist=	[HW,OSS]
 			Format: <io>,<irq>,<dma>,<dma2>
@@ -1688,6 +1776,9 @@ running once the system is up.
 	norandmaps	Don't use address space randomization
 			Equivalent to echo 0 > /proc/sys/kernel/randomize_va_space
 
+ 	unwind_debug=N 	N > 0 will enable dwarf2 unwinder debugging
+			This is useful to get more information why
+			you got a "dwarf2 unwinder stuck"
 
 ______________________________________________________________________
 

@@ -25,7 +25,6 @@
  *        Added proper detection of the AHA-1640 (MCA version of AHA-1540)
  */
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/interrupt.h>
 #include <linux/kernel.h>
@@ -175,9 +174,8 @@ static DEFINE_SPINLOCK(aha1542_lock);
 
 static void setup_mailboxes(int base_io, struct Scsi_Host *shpnt);
 static int aha1542_restart(struct Scsi_Host *shost);
-static void aha1542_intr_handle(struct Scsi_Host *shost, void *dev_id, struct pt_regs *regs);
-static irqreturn_t do_aha1542_intr_handle(int irq, void *dev_id,
-					struct pt_regs *regs);
+static void aha1542_intr_handle(struct Scsi_Host *shost, void *dev_id);
+static irqreturn_t do_aha1542_intr_handle(int irq, void *dev_id);
 
 #define aha1542_intr_reset(base)  outb(IRST, CONTROL(base))
 
@@ -417,8 +415,7 @@ fail:
 }
 
 /* A quick wrapper for do_aha1542_intr_handle to grab the spin lock */
-static irqreturn_t do_aha1542_intr_handle(int irq, void *dev_id,
-					struct pt_regs *regs)
+static irqreturn_t do_aha1542_intr_handle(int irq, void *dev_id)
 {
 	unsigned long flags;
 	struct Scsi_Host *shost;
@@ -428,13 +425,13 @@ static irqreturn_t do_aha1542_intr_handle(int irq, void *dev_id,
 		panic("Splunge!");
 
 	spin_lock_irqsave(shost->host_lock, flags);
-	aha1542_intr_handle(shost, dev_id, regs);
+	aha1542_intr_handle(shost, dev_id);
 	spin_unlock_irqrestore(shost->host_lock, flags);
 	return IRQ_HANDLED;
 }
 
 /* A "high" level interrupt handler */
-static void aha1542_intr_handle(struct Scsi_Host *shost, void *dev_id, struct pt_regs *regs)
+static void aha1542_intr_handle(struct Scsi_Host *shost, void *dev_id)
 {
 	void (*my_done) (Scsi_Cmnd *) = NULL;
 	int errstatus, mbi, mbo, mbistatus;
@@ -702,7 +699,7 @@ static int aha1542_queuecommand(Scsi_Cmnd * SCpnt, void (*done) (Scsi_Cmnd *))
 #endif
 		int i;
 		ccb[mbo].op = 2;	/* SCSI Initiator Command  w/scatter-gather */
-		SCpnt->host_scribble = (unsigned char *) kmalloc(512, GFP_KERNEL | GFP_DMA);
+		SCpnt->host_scribble = kmalloc(512, GFP_KERNEL | GFP_DMA);
 		sgpnt = (struct scatterlist *) SCpnt->request_buffer;
 		cptr = (struct chain *) SCpnt->host_scribble;
 		if (cptr == NULL) {
@@ -1011,7 +1008,7 @@ static int __init do_setup(char *str)
 
 	int count=setup_idx;
 
-	get_options(str, sizeof(ints)/sizeof(int), ints);
+	get_options(str, ARRAY_SIZE(ints), ints);
 	aha1542_setup(str,ints);
 
 	return count<setup_idx;
@@ -1072,8 +1069,7 @@ static int __init aha1542_detect(struct scsi_host_template * tpnt)
 		int slot = 0;
 		int pos = 0;
 
-		for (indx = 0; (slot !=  MCA_NOTFOUND) && 
-			     (indx < sizeof(bases)/sizeof(bases[0])); indx++) {
+		for (indx = 0; (slot != MCA_NOTFOUND) && (indx < ARRAY_SIZE(bases)); indx++) {
 
 			if (bases[indx])
 				continue;
@@ -1083,10 +1079,9 @@ static int __init aha1542_detect(struct scsi_host_template * tpnt)
 			if (slot == MCA_NOTFOUND)
 				break;
 
-			
 			/* Found one */
 			pos = mca_read_stored_pos(slot, 3);
-			
+
 			/* Decode address */
 			if (pos & 0x80) {
 				if (pos & 0x02) {
@@ -1118,23 +1113,22 @@ static int __init aha1542_detect(struct scsi_host_template * tpnt)
 			mca_set_adapter_name(slot, "Adapter AHA-1640");
 			mca_set_adapter_procfn(slot, NULL, NULL);
 			mca_mark_as_used(slot);
-			
+
 			/* Go on */
 			slot++;
 		}
-		
+
 	}
 #endif
 
 	/*
 	 *	Hunt for ISA Plug'n'Pray Adaptecs (AHA1535)
 	 */
-	 
+
 	if(isapnp)
 	{
 		struct pnp_dev *pdev = NULL;
-		for(indx = 0; indx <sizeof(bases)/sizeof(bases[0]);indx++)
-		{
+		for(indx = 0; indx < ARRAY_SIZE(bases); indx++) {
 			if(bases[indx])
 				continue;
 			pdev = pnp_find_dev(NULL, ISAPNP_VENDOR('A', 'D', 'P'), 
@@ -1144,29 +1138,29 @@ static int __init aha1542_detect(struct scsi_host_template * tpnt)
 			/*
 			 *	Activate the PnP card
 			 */
-			 
+
 			if(pnp_device_attach(pdev)<0)
 				continue;
-			
+
 			if(pnp_activate_dev(pdev)<0) {
 				pnp_device_detach(pdev);
 				continue;
 			}
-			
+
 			if(!pnp_port_valid(pdev, 0)) {
 				pnp_device_detach(pdev);
 				continue;
 			}
-				
+
 			bases[indx] = pnp_port_start(pdev, 0);
-			
+
 			/* The card can be queried for its DMA, we have 
 			   the DMA set up that is enough */
-			   
+
 			printk(KERN_INFO "ISAPnP found an AHA1535 at I/O 0x%03X\n", bases[indx]);
 		}
 	}
-	for (indx = 0; indx < sizeof(bases) / sizeof(bases[0]); indx++)
+	for (indx = 0; indx < ARRAY_SIZE(bases); indx++)
 		if (bases[indx] != 0 && request_region(bases[indx], 4, "aha1542")) {
 			shpnt = scsi_register(tpnt,
 					sizeof(struct aha1542_hostdata));

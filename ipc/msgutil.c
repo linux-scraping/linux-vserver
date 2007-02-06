@@ -1,5 +1,5 @@
 /*
- * linux/ipc/util.c
+ * linux/ipc/msgutil.c
  * Copyright (C) 1999, 2004 Manfred Spraul
  *
  * This file is released under GNU General Public Licence version 2 or
@@ -36,7 +36,7 @@ struct msg_msg *load_msg(const void __user *src, int len)
 	if (alen > DATALEN_MSG)
 		alen = DATALEN_MSG;
 
-	msg = (struct msg_msg *)kmalloc(sizeof(*msg) + alen, GFP_KERNEL);
+	msg = kmalloc(sizeof(*msg) + alen, GFP_KERNEL);
 	if (msg == NULL)
 		return ERR_PTR(-ENOMEM);
 
@@ -56,7 +56,7 @@ struct msg_msg *load_msg(const void __user *src, int len)
 		alen = len;
 		if (alen > DATALEN_SEG)
 			alen = DATALEN_SEG;
-		seg = (struct msg_msgseg *)kmalloc(sizeof(*seg) + alen,
+		seg = kmalloc(sizeof(*seg) + alen,
 						 GFP_KERNEL);
 		if (seg == NULL) {
 			err = -ENOMEM;

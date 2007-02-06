@@ -116,11 +116,10 @@ static struct mtd_info *jedec_probe(struct map_info *map)
    char Part[200];
    memset(&priv,0,sizeof(priv));
 
-   MTD = kmalloc(sizeof(struct mtd_info) + sizeof(struct jedec_private), GFP_KERNEL);
+   MTD = kzalloc(sizeof(struct mtd_info) + sizeof(struct jedec_private), GFP_KERNEL);
    if (!MTD)
 	   return NULL;
 
-   memset(MTD, 0, sizeof(struct mtd_info) + sizeof(struct jedec_private));
    priv = (struct jedec_private *)&MTD[1];
 
    my_bank_size = map->size;
@@ -256,6 +255,7 @@ static struct mtd_info *jedec_probe(struct map_info *map)
    MTD->name = map->name;
    MTD->type = MTD_NORFLASH;
    MTD->flags = MTD_CAP_NORFLASH;
+   MTD->writesize = 1;
    MTD->erasesize = SectorSize*(map->buswidth);
    //   printk("MTD->erasesize is %x\n",(unsigned int)MTD->erasesize);
    MTD->size = priv->size;

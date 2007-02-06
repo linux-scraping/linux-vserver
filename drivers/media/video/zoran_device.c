@@ -27,7 +27,6 @@
  * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
-#include <linux/config.h>
 #include <linux/types.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
@@ -430,7 +429,7 @@ zr36057_set_vfe (struct zoran              *zr,
 	reg |= (HorDcm << ZR36057_VFESPFR_HorDcm);
 	reg |= (VerDcm << ZR36057_VFESPFR_VerDcm);
 	reg |= (DispMode << ZR36057_VFESPFR_DispMode);
-	if (format->palette != VIDEO_PALETTE_YUV422)
+	if (format->palette != VIDEO_PALETTE_YUV422 && format->palette != VIDEO_PALETTE_YUYV)
 		reg |= ZR36057_VFESPFR_LittleEndian;
 	/* RJ: I don't know, why the following has to be the opposite
 	 * of the corresponding ZR36060 setting, but only this way
@@ -442,6 +441,7 @@ zr36057_set_vfe (struct zoran              *zr,
 	reg |= ZR36057_VFESPFR_TopField;
 	switch (format->palette) {
 
+	case VIDEO_PALETTE_YUYV:
 	case VIDEO_PALETTE_YUV422:
 		reg |= ZR36057_VFESPFR_YUV422;
 		break;
@@ -536,7 +536,7 @@ zr36057_overlay (struct zoran *zr,
 		 * All error messages are internal driver checking only! */
 
 		/* video display top and bottom registers */
-		reg = (u32) zr->buffer.base +
+		reg = (long) zr->buffer.base +
 		    zr->overlay_settings.x *
 		    ((zr->overlay_settings.format->depth + 7) / 8) +
 		    zr->overlay_settings.y *
@@ -1409,15 +1409,14 @@ error_handler (struct zoran *zr,
 
 irqreturn_t
 zoran_irq (int             irq,
-	   void           *dev_id,
-	   struct pt_regs *regs)
+	   void           *dev_id)
 {
 	u32 stat, astat;
 	int count;
 	struct zoran *zr;
 	unsigned long flags;
 
-	zr = (struct zoran *) dev_id;
+	zr = dev_id;
 	count = 0;
 
 	if (zr->testing) {

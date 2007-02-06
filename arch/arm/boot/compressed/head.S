@@ -8,7 +8,6 @@
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
  */
-#include <linux/config.h>
 #include <linux/linkage.h>
 
 /*
@@ -21,11 +20,21 @@
 #ifdef DEBUG
 
 #if defined(CONFIG_DEBUG_ICEDCC)
+
+#ifdef CONFIG_CPU_V6
+		.macro	loadsp, rb
+		.endm
+		.macro	writeb, ch, rb
+		mcr	p14, 0, \ch, c0, c5, 0
+		.endm
+#else
 		.macro	loadsp, rb
 		.endm
 		.macro	writeb, ch, rb
 		mcr	p14, 0, \ch, c0, c1, 0
 		.endm
+#endif
+
 #else
 
 #include <asm/arch/debug-macro.S>
@@ -42,12 +51,6 @@
 #else
 		add	\rb, \rb, #0x00010000	@ Ser1
 #endif
-		.endm
-#elif defined(CONFIG_ARCH_IOP331)
-		.macro loadsp, rb
-                mov   	\rb, #0xff000000
-                orr     \rb, \rb, #0x00ff0000
-                orr     \rb, \rb, #0x0000f700   @ location of the UART
 		.endm
 #elif defined(CONFIG_ARCH_S3C2410)
 		.macro loadsp, rb
@@ -79,9 +82,11 @@
 		kphex	r6, 8		/* processor id */
 		kputc	#':'
 		kphex	r7, 8		/* architecture id */
+#ifdef CONFIG_CPU_CP15
 		kputc	#':'
 		mrc	p15, 0, r0, c1, c0
 		kphex	r0, 8		/* control reg */
+#endif
 		kputc	#'\n'
 		kphex	r5, 8		/* decompressed kernel start */
 		kputc	#'-'
@@ -232,7 +237,8 @@ not_relocated:	mov	r0, #0
  */
 		cmp	r4, r2
 		bhs	wont_overwrite
-		add	r0, r4, #4096*1024	@ 4MB largest kernel size
+		sub	r3, sp, r5		@ > compressed kernel size
+		add	r0, r4, r3, lsl #2	@ allow for 4x expansion
 		cmp	r0, r5
 		bls	wont_overwrite
 
@@ -448,8 +454,11 @@ __common_mmu_cache_on:
 		mov	r1, #-1
 		mcr	p15, 0, r3, c2, c0, 0	@ load page table pointer
 		mcr	p15, 0, r1, c3, c0, 0	@ load domain access control
-		mcr	p15, 0, r0, c1, c0, 0	@ load control register
-		mov	pc, lr
+		b	1f
+		.align	5			@ cache line aligned
+1:		mcr	p15, 0, r0, c1, c0, 0	@ load control register
+		mrc	p15, 0, r0, c1, c0, 0	@ and read it back to
+		sub	pc, lr, r0, lsr #32	@ properly flush pipeline
 
 /*
  * All code following this line is relocatable.  It is relocated by
@@ -501,7 +510,11 @@ call_kernel:	bl	cache_clean_flush
  */
 
 call_cache_fn:	adr	r12, proc_types
+#ifdef CONFIG_CPU_CP15
 		mrc	p15, 0, r6, c0, c0	@ get processor ID
+#else
+		ldr	r6, =CONFIG_PROCESSOR_ID
+#endif
 1:		ldr	r1, [r12, #0]		@ get value
 		ldr	r2, [r12, #4]		@ get mask
 		eor	r1, r1, r6		@ (real ^ match)
@@ -605,8 +618,8 @@ proc_types:
 		b	__armv4_mmu_cache_off
 		b	__armv4_mmu_cache_flush
 
-		.word	0x00070000		@ ARMv6
-		.word	0x000f0000
+		.word	0x0007b000		@ ARMv6
+		.word	0x0007f000
 		b	__armv4_mmu_cache_on
 		b	__armv4_mmu_cache_off
 		b	__armv6_mmu_cache_flush

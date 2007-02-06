@@ -11,7 +11,6 @@
  *
  */
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/netdevice.h>
 #include <linux/if.h>
@@ -35,8 +34,8 @@ enum lw_bits {
 static unsigned long linkwatch_flags;
 static unsigned long linkwatch_nextevent;
 
-static void linkwatch_event(void *dummy);
-static DECLARE_WORK(linkwatch_work, linkwatch_event, NULL);
+static void linkwatch_event(struct work_struct *dummy);
+static DECLARE_DELAYED_WORK(linkwatch_work, linkwatch_event);
 
 static LIST_HEAD(lweventlist);
 static DEFINE_SPINLOCK(lweventlist_lock);
@@ -91,11 +90,10 @@ static void rfc2863_policy(struct net_device *dev)
 /* Must be called with the rtnl semaphore held */
 void linkwatch_run_queue(void)
 {
-	LIST_HEAD(head);
-	struct list_head *n, *next;
+	struct list_head head, *n, *next;
 
 	spin_lock_irq(&lweventlist_lock);
-	list_splice_init(&lweventlist, &head);
+	list_replace_init(&lweventlist, &head);
 	spin_unlock_irq(&lweventlist_lock);
 
 	list_for_each_safe(n, next, &head) {
@@ -129,7 +127,7 @@ void linkwatch_run_queue(void)
 }       
 
 
-static void linkwatch_event(void *dummy)
+static void linkwatch_event(struct work_struct *dummy)
 {
 	/* Limit the number of linkwatch events to one
 	 * per second so that a runaway driver does not
@@ -173,10 +171,9 @@ void linkwatch_fire_event(struct net_device *dev)
 			unsigned long delay = linkwatch_nextevent - jiffies;
 
 			/* If we wrap around we'll delay it by at most HZ. */
-			if (!delay || delay > HZ)
-				schedule_work(&linkwatch_work);
-			else
-				schedule_delayed_work(&linkwatch_work, delay);
+			if (delay > HZ)
+				delay = 0;
+			schedule_delayed_work(&linkwatch_work, delay);
 		}
 	}
 }

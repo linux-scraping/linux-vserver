@@ -25,24 +25,21 @@ struct rw_semaphore {
 #define RWSEM_ACTIVE_WRITE_BIAS		(RWSEM_WAITING_BIAS + RWSEM_ACTIVE_BIAS)
 	spinlock_t		wait_lock;
 	struct list_head	wait_list;
-#if RWSEM_DEBUG
-	int			debug;
+#ifdef CONFIG_DEBUG_LOCK_ALLOC
+	struct lockdep_map	dep_map;
 #endif
 };
 
-/*
- * initialisation
- */
-#if RWSEM_DEBUG
-#define __RWSEM_DEBUG_INIT      , 0
+#ifdef CONFIG_DEBUG_LOCK_ALLOC
+# define __RWSEM_DEP_MAP_INIT(lockname) , .dep_map = { .name = #lockname }
 #else
-#define __RWSEM_DEBUG_INIT	/* */
+# define __RWSEM_DEP_MAP_INIT(lockname)
 #endif
 
 #define __RWSEM_INITIALIZER(name) \
 	{ RWSEM_UNLOCKED_VALUE, SPIN_LOCK_UNLOCKED, \
 	  LIST_HEAD_INIT((name).wait_list) \
-	  __RWSEM_DEBUG_INIT }
+	  __RWSEM_DEP_MAP_INIT(name) }
 
 #define DECLARE_RWSEM(name)		\
 	struct rw_semaphore name = __RWSEM_INITIALIZER(name)
@@ -52,14 +49,21 @@ extern struct rw_semaphore *rwsem_down_write_failed(struct rw_semaphore *sem);
 extern struct rw_semaphore *rwsem_wake(struct rw_semaphore *sem);
 extern struct rw_semaphore *rwsem_downgrade_wake(struct rw_semaphore *sem);
 
+extern void __init_rwsem(struct rw_semaphore *sem, const char *name,
+			 struct lock_class_key *key);
+
+#define init_rwsem(sem)				\
+do {						\
+	static struct lock_class_key __key;	\
+						\
+	__init_rwsem((sem), #sem, &__key);	\
+} while (0)
+
 static inline void init_rwsem(struct rw_semaphore *sem)
 {
 	sem->count = RWSEM_UNLOCKED_VALUE;
 	spin_lock_init(&sem->wait_lock);
 	INIT_LIST_HEAD(&sem->wait_list);
-#if RWSEM_DEBUG
-	sem->debug = 0;
-#endif
 }
 
 /*
@@ -155,6 +159,11 @@ static inline void __downgrade_write(struct rw_semaphore *sem)
 	tmp = atomic_add_return(-RWSEM_WAITING_BIAS, (atomic_t *)(&sem->count));
 	if (tmp < 0)
 		rwsem_downgrade_wake(sem);
+}
+
+static inline void __down_write_nested(struct rw_semaphore *sem, int subclass)
+{
+	__down_write(sem);
 }
 
 /*

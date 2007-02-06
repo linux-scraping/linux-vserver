@@ -5,7 +5,6 @@
  *
  */
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/slab.h>
 #include <linux/pnp.h>
@@ -60,30 +59,34 @@ static void card_remove_first(struct pnp_dev * dev)
 	card_remove(dev);
 }
 
-static int card_probe(struct pnp_card * card, struct pnp_card_driver * drv)
+static int card_probe(struct pnp_card *card, struct pnp_card_driver *drv)
 {
-	const struct pnp_card_device_id *id = match_card(drv,card);
-	if (id) {
-		struct pnp_card_link * clink = pnp_alloc(sizeof(struct pnp_card_link));
-		if (!clink)
-			return 0;
-		clink->card = card;
-		clink->driver = drv;
-		clink->pm_state = PMSG_ON;
-		if (drv->probe) {
-			if (drv->probe(clink, id)>=0)
-				return 1;
-			else {
-				struct pnp_dev * dev;
-				card_for_each_dev(card, dev) {
-					if (dev->card_link == clink)
-						pnp_release_card_device(dev);
-				}
-				kfree(clink);
-			}
-		} else
-			return 1;
+	const struct pnp_card_device_id *id;
+	struct pnp_card_link *clink;
+	struct pnp_dev *dev;
+
+	if (!drv->probe)
+		return 0;
+	id = match_card(drv,card);
+	if (!id)
+		return 0;
+
+	clink = pnp_alloc(sizeof(*clink));
+	if (!clink)
+		return 0;
+	clink->card = card;
+	clink->driver = drv;
+	clink->pm_state = PMSG_ON;
+
+	if (drv->probe(clink, id) >= 0)
+		return 1;
+
+	/* Recovery */
+	card_for_each_dev(card, dev) {
+		if (dev->card_link == clink)
+			pnp_release_card_device(dev);
 	}
+	kfree(clink);
 	return 0;
 }
 
@@ -161,9 +164,17 @@ static DEVICE_ATTR(card_id,S_IRUGO,pnp_show_card_ids,NULL);
 
 static int pnp_interface_attach_card(struct pnp_card *card)
 {
-	device_create_file(&card->dev,&dev_attr_name);
-	device_create_file(&card->dev,&dev_attr_card_id);
+	int rc = device_create_file(&card->dev,&dev_attr_name);
+	if (rc) return rc;
+
+	rc = device_create_file(&card->dev,&dev_attr_card_id);
+	if (rc) goto err_name;
+
 	return 0;
+
+err_name:
+	device_remove_file(&card->dev,&dev_attr_name);
+	return rc;
 }
 
 /**
@@ -303,16 +314,20 @@ found:
 	down_write(&dev->dev.bus->subsys.rwsem);
 	dev->card_link = clink;
 	dev->dev.driver = &drv->link.driver;
-	if (pnp_bus_type.probe(&dev->dev)) {
-		dev->dev.driver = NULL;
-		dev->card_link = NULL;
-		up_write(&dev->dev.bus->subsys.rwsem);
-		return NULL;
-	}
-	device_bind_driver(&dev->dev);
+	if (pnp_bus_type.probe(&dev->dev))
+		goto err_out;
+	if (device_bind_driver(&dev->dev))
+		goto err_out;
+
 	up_write(&dev->dev.bus->subsys.rwsem);
 
 	return dev;
+
+err_out:
+	dev->dev.driver = NULL;
+	dev->card_link = NULL;
+	up_write(&dev->dev.bus->subsys.rwsem);
+	return NULL;
 }
 
 /**

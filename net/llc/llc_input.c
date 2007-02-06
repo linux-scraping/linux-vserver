@@ -115,8 +115,8 @@ static inline int llc_fixup_skb(struct sk_buff *skb)
 	skb->h.raw += llc_len;
 	skb_pull(skb, llc_len);
 	if (skb->protocol == htons(ETH_P_802_2)) {
-		u16 pdulen = eth_hdr(skb)->h_proto,
-		    data_size = ntohs(pdulen) - llc_len;
+		__be16 pdulen = eth_hdr(skb)->h_proto;
+		u16 data_size = ntohs(pdulen) - llc_len;
 
 		if (unlikely(pskb_trim_rcsum(skb, data_size)))
 			return 0;
@@ -142,6 +142,8 @@ int llc_rcv(struct sk_buff *skb, struct net_device *dev,
 	struct llc_sap *sap;
 	struct llc_pdu_sn *pdu;
 	int dest;
+	int (*rcv)(struct sk_buff *, struct net_device *,
+		   struct packet_type *, struct net_device *);
 
 	/*
 	 * When the interface is in promisc. mode, drop all the crap that it
@@ -169,9 +171,11 @@ int llc_rcv(struct sk_buff *skb, struct net_device *dev,
 	 * First the upper layer protocols that don't need the full
 	 * LLC functionality
 	 */
-	if (sap->rcv_func) {
-		sap->rcv_func(skb, dev, pt, orig_dev);
-		goto out_put;
+	rcv = rcu_dereference(sap->rcv_func);
+	if (rcv) {
+ 		struct sk_buff *cskb = skb_clone(skb, GFP_ATOMIC);
+ 		if (cskb)
+ 			rcv(cskb, dev, pt, orig_dev);
 	}
 	dest = llc_pdu_type(skb);
 	if (unlikely(!dest || !llc_type_handlers[dest - 1]))

@@ -36,16 +36,9 @@
 #include <asm/machdep.h>
 #include <asm/bvme6000hw.h>
 
-extern irqreturn_t bvme6000_process_int (int level, struct pt_regs *regs);
-extern void bvme6000_init_IRQ (void);
-extern void bvme6000_free_irq (unsigned int, void *);
-extern int  show_bvme6000_interrupts(struct seq_file *, void *);
-extern void bvme6000_enable_irq (unsigned int);
-extern void bvme6000_disable_irq (unsigned int);
 static void bvme6000_get_model(char *model);
 static int  bvme6000_get_hardware_list(char *buffer);
-extern int  bvme6000_request_irq(unsigned int irq, irqreturn_t (*handler)(int, void *, struct pt_regs *), unsigned long flags, const char *devname, void *dev_id);
-extern void bvme6000_sched_init(irqreturn_t (*handler)(int, void *, struct pt_regs *));
+extern void bvme6000_sched_init(irq_handler_t handler);
 extern unsigned long bvme6000_gettimeoffset (void);
 extern int bvme6000_hwclk (int, struct rtc_time *);
 extern int bvme6000_set_clock_mmss (unsigned long);
@@ -59,7 +52,7 @@ static unsigned char bin2bcd (unsigned char b);
 /* Save tick handler routine pointer, will point to do_timer() in
  * kernel/sched.c, called via bvme6000_process_int() */
 
-static irqreturn_t (*tick_handler)(int, void *, struct pt_regs *);
+static irq_handler_t tick_handler;
 
 
 int bvme6000_parse_bootinfo(const struct bi_record *bi)
@@ -100,6 +93,14 @@ static int bvme6000_get_hardware_list(char *buffer)
     return 0;
 }
 
+/*
+ * This function is called during kernel startup to initialize
+ * the bvme6000 IRQ handling routines.
+ */
+static void bvme6000_init_IRQ(void)
+{
+	m68k_setup_user_interrupt(VEC_USER, 192, NULL);
+}
 
 void __init config_bvme6000(void)
 {
@@ -127,12 +128,6 @@ void __init config_bvme6000(void)
     mach_hwclk           = bvme6000_hwclk;
     mach_set_clock_mmss	 = bvme6000_set_clock_mmss;
     mach_reset		 = bvme6000_reset;
-    mach_free_irq	 = bvme6000_free_irq;
-    mach_process_int	 = bvme6000_process_int;
-    mach_get_irq_list	 = show_bvme6000_interrupts;
-    mach_request_irq	 = bvme6000_request_irq;
-    enable_irq		 = bvme6000_enable_irq;
-    disable_irq          = bvme6000_disable_irq;
     mach_get_model       = bvme6000_get_model;
     mach_get_hardware_list = bvme6000_get_hardware_list;
 
@@ -159,7 +154,7 @@ void __init config_bvme6000(void)
 }
 
 
-irqreturn_t bvme6000_abort_int (int irq, void *dev_id, struct pt_regs *fp)
+irqreturn_t bvme6000_abort_int (int irq, void *dev_id)
 {
         unsigned long *new = (unsigned long *)vectors;
         unsigned long *old = (unsigned long *)0xf8000000;
@@ -176,14 +171,14 @@ irqreturn_t bvme6000_abort_int (int irq, void *dev_id, struct pt_regs *fp)
 }
 
 
-static irqreturn_t bvme6000_timer_int (int irq, void *dev_id, struct pt_regs *fp)
+static irqreturn_t bvme6000_timer_int (int irq, void *dev_id)
 {
     volatile RtcPtr_t rtc = (RtcPtr_t)BVME_RTC_BASE;
     unsigned char msr = rtc->msr & 0xc0;
 
     rtc->msr = msr | 0x20;		/* Ack the interrupt */
 
-    return tick_handler(irq, dev_id, fp);
+    return tick_handler(irq, dev_id);
 }
 
 /*
@@ -195,7 +190,7 @@ static irqreturn_t bvme6000_timer_int (int irq, void *dev_id, struct pt_regs *fp
  * so divide by 8 to get the microsecond result.
  */
 
-void bvme6000_sched_init (irqreturn_t (*timer_routine)(int, void *, struct pt_regs *))
+void bvme6000_sched_init (irq_handler_t timer_routine)
 {
     volatile RtcPtr_t rtc = (RtcPtr_t)BVME_RTC_BASE;
     unsigned char msr = rtc->msr & 0xc0;

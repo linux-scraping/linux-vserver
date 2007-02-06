@@ -64,13 +64,13 @@ static int __devinit radeon_parse_montype_prop(struct device_node *dp, u8 **out_
 {
         static char *propnames[] = { "DFP,EDID", "LCD,EDID", "EDID",
 				     "EDID1", "EDID2",  NULL };
-	u8 *pedid = NULL;
-	u8 *pmt = NULL;
+	const u8 *pedid = NULL;
+	const u8 *pmt = NULL;
 	u8 *tmp;
         int i, mt = MT_NONE;  
 	
 	RTRACE("analyzing OF properties...\n");
-	pmt = (u8 *)get_property(dp, "display-type", NULL);
+	pmt = get_property(dp, "display-type", NULL);
 	if (!pmt)
 		return MT_NONE;
 	RTRACE("display-type: %s\n", pmt);
@@ -89,7 +89,7 @@ static int __devinit radeon_parse_montype_prop(struct device_node *dp, u8 **out_
 	}
 
 	for (i = 0; propnames[i] != NULL; ++i) {
-		pedid = (u8 *)get_property(dp, propnames[i], NULL);
+		pedid = get_property(dp, propnames[i], NULL);
 		if (pedid != NULL)
 			break;
 	}
@@ -104,10 +104,9 @@ static int __devinit radeon_parse_montype_prop(struct device_node *dp, u8 **out_
 	if (pedid == NULL)
 		return mt;
 
-	tmp = (u8 *)kmalloc(EDID_LENGTH, GFP_KERNEL);
+	tmp = kmemdup(pedid, EDID_LENGTH, GFP_KERNEL);
 	if (!tmp)
 		return mt;
-	memcpy(tmp, pedid, EDID_LENGTH);
 	*out_EDID = tmp;
 	return mt;
 }
@@ -124,14 +123,14 @@ static int __devinit radeon_probe_OF_head(struct radeonfb_info *rinfo, int head_
 		return MT_NONE;
 
 	if (rinfo->has_CRTC2) {
-		char *pname;
+		const char *pname;
 		int len, second = 0;
 
 		dp = dp->child;
 		do {
 			if (!dp)
 				return MT_NONE;
-			pname = (char *)get_property(dp, "name", NULL);
+			pname = get_property(dp, "name", NULL);
 			if (!pname)
 				return MT_NONE;
 			len = strlen(pname);

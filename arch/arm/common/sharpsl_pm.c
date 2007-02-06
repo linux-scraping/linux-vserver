@@ -40,6 +40,7 @@
 #define SHARPSL_CHARGE_FINISH_TIME             (msecs_to_jiffies(10*60*1000)) /* 10 min */
 #define SHARPSL_BATCHK_TIME                    (msecs_to_jiffies(15*1000))    /* 15 sec */
 #define SHARPSL_BATCHK_TIME_SUSPEND            (60*10)                        /* 10 min */
+
 #define SHARPSL_WAIT_CO_TIME                   15  /* 15 sec */
 #define SHARPSL_WAIT_DISCHARGE_ON              100 /* 100 msec */
 #define SHARPSL_CHECK_BATTERY_WAIT_TIME_TEMP   10  /* 10 msec */
@@ -48,13 +49,6 @@
 #define SHARPSL_CHARGE_WAIT_TIME               15  /* 15 msec */
 #define SHARPSL_CHARGE_CO_CHECK_TIME           5   /* 5 msec */
 #define SHARPSL_CHARGE_RETRY_CNT               1   /* eqv. 10 min */
-
-#define SHARPSL_CHARGE_ON_VOLT         0x99  /* 2.9V */
-#define SHARPSL_CHARGE_ON_TEMP         0xe0  /* 2.9V */
-#define SHARPSL_CHARGE_ON_ACIN_HIGH    0x9b  /* 6V */
-#define SHARPSL_CHARGE_ON_ACIN_LOW     0x34  /* 2V */
-#define SHARPSL_FATAL_ACIN_VOLT        182   /* 3.45V */
-#define SHARPSL_FATAL_NOACIN_VOLT      170   /* 3.40V */
 
 /*
  * Prototypes
@@ -66,28 +60,29 @@ static int sharpsl_ac_check(void);
 static int sharpsl_fatal_check(void);
 static int sharpsl_average_value(int ad);
 static void sharpsl_average_clear(void);
-static void sharpsl_charge_toggle(void *private_);
-static void sharpsl_battery_thread(void *private_);
+static void sharpsl_charge_toggle(struct work_struct *private_);
+static void sharpsl_battery_thread(struct work_struct *private_);
 
 
 /*
  * Variables
  */
 struct sharpsl_pm_status sharpsl_pm;
-DECLARE_WORK(toggle_charger, sharpsl_charge_toggle, NULL);
-DECLARE_WORK(sharpsl_bat, sharpsl_battery_thread, NULL);
+DECLARE_DELAYED_WORK(toggle_charger, sharpsl_charge_toggle);
+DECLARE_DELAYED_WORK(sharpsl_bat, sharpsl_battery_thread);
 DEFINE_LED_TRIGGER(sharpsl_charge_led_trigger);
 
 
 static int get_percentage(int voltage)
 {
 	int i = sharpsl_pm.machinfo->bat_levels - 1;
+	int bl_status = sharpsl_pm.machinfo->backlight_get_status ? sharpsl_pm.machinfo->backlight_get_status() : 0;
 	struct battery_thresh *thresh;
 
 	if (sharpsl_pm.charge_mode == CHRG_ON)
-		thresh=sharpsl_pm.machinfo->bat_levels_acin;
+		thresh = bl_status ? sharpsl_pm.machinfo->bat_levels_acin_bl : sharpsl_pm.machinfo->bat_levels_acin;
 	else
-		thresh=sharpsl_pm.machinfo->bat_levels_noac;
+		thresh = bl_status ? sharpsl_pm.machinfo->bat_levels_noac_bl : sharpsl_pm.machinfo->bat_levels_noac;
 
 	while (i > 0 && (voltage > thresh[i].voltage))
 		i--;
@@ -121,7 +116,7 @@ void sharpsl_battery_kick(void)
 EXPORT_SYMBOL(sharpsl_battery_kick);
 
 
-static void sharpsl_battery_thread(void *private_)
+static void sharpsl_battery_thread(struct work_struct *private_)
 {
 	int voltage, percent, apm_status, i = 0;
 
@@ -131,9 +126,9 @@ static void sharpsl_battery_thread(void *private_)
 	sharpsl_pm.battstat.ac_status = (sharpsl_pm.machinfo->read_devdata(SHARPSL_STATUS_ACIN) ? APM_AC_ONLINE : APM_AC_OFFLINE);
 
 	/* Corgi cannot confirm when battery fully charged so periodically kick! */
-	if (machine_is_corgi() && (sharpsl_pm.charge_mode == CHRG_ON)
+	if (!sharpsl_pm.machinfo->batfull_irq && (sharpsl_pm.charge_mode == CHRG_ON)
 			&& time_after(jiffies, sharpsl_pm.charge_start_time +  SHARPSL_CHARGE_ON_TIME_INTERVAL))
-		schedule_work(&toggle_charger);
+		schedule_delayed_work(&toggle_charger, 0);
 
 	while(1) {
 		voltage = sharpsl_pm.machinfo->read_devdata(SHARPSL_BATT_VOLT);
@@ -166,11 +161,11 @@ static void sharpsl_battery_thread(void *private_)
 			&& ((sharpsl_pm.battstat.mainbat_status == APM_BATTERY_STATUS_LOW) ||
 			(sharpsl_pm.battstat.mainbat_status == APM_BATTERY_STATUS_CRITICAL))) {
 		if (!(sharpsl_pm.flags & SHARPSL_BL_LIMIT)) {
-			corgibl_limit_intensity(1);
+			sharpsl_pm.machinfo->backlight_limit(1);
 			sharpsl_pm.flags |= SHARPSL_BL_LIMIT;
 		}
 	} else if (sharpsl_pm.flags & SHARPSL_BL_LIMIT) {
-		corgibl_limit_intensity(0);
+		sharpsl_pm.machinfo->backlight_limit(0);
 		sharpsl_pm.flags &= ~SHARPSL_BL_LIMIT;
 	}
 
@@ -217,7 +212,7 @@ static void sharpsl_charge_off(void)
 	sharpsl_pm_led(SHARPSL_LED_OFF);
 	sharpsl_pm.charge_mode = CHRG_OFF;
 
-	schedule_work(&sharpsl_bat);
+	schedule_delayed_work(&sharpsl_bat, 0);
 }
 
 static void sharpsl_charge_error(void)
@@ -227,7 +222,7 @@ static void sharpsl_charge_error(void)
 	sharpsl_pm.charge_mode = CHRG_ERROR;
 }
 
-static void sharpsl_charge_toggle(void *private_)
+static void sharpsl_charge_toggle(struct work_struct *private_)
 {
 	dev_dbg(sharpsl_pm.dev, "Toogling Charger at time: %lx\n", jiffies);
 
@@ -259,11 +254,11 @@ static void sharpsl_ac_timer(unsigned long data)
 	else if (sharpsl_pm.charge_mode == CHRG_ON)
 		sharpsl_charge_off();
 
-	schedule_work(&sharpsl_bat);
+	schedule_delayed_work(&sharpsl_bat, 0);
 }
 
 
-irqreturn_t sharpsl_ac_isr(int irq, void *dev_id, struct pt_regs *fp)
+irqreturn_t sharpsl_ac_isr(int irq, void *dev_id)
 {
 	/* Delay the event slightly to debounce */
 	/* Must be a smaller delay than the chrg_full_isr below */
@@ -284,10 +279,10 @@ static void sharpsl_chrg_full_timer(unsigned long data)
 			sharpsl_charge_off();
 	} else if (sharpsl_pm.full_count < 2) {
 		dev_dbg(sharpsl_pm.dev, "Charge Full: Count too low\n");
-		schedule_work(&toggle_charger);
+		schedule_delayed_work(&toggle_charger, 0);
 	} else if (time_after(jiffies, sharpsl_pm.charge_start_time + SHARPSL_CHARGE_FINISH_TIME)) {
 		dev_dbg(sharpsl_pm.dev, "Charge Full: Interrupt generated too slowly - retry.\n");
-		schedule_work(&toggle_charger);
+		schedule_delayed_work(&toggle_charger, 0);
 	} else {
 		sharpsl_charge_off();
 		sharpsl_pm.charge_mode = CHRG_DONE;
@@ -298,7 +293,7 @@ static void sharpsl_chrg_full_timer(unsigned long data)
 /* Charging Finished Interrupt (Not present on Corgi) */
 /* Can trigger at the same time as an AC staus change so
    delay until after that has been processed */
-irqreturn_t sharpsl_chrg_full_isr(int irq, void *dev_id, struct pt_regs *fp)
+irqreturn_t sharpsl_chrg_full_isr(int irq, void *dev_id)
 {
 	if (sharpsl_pm.flags & SHARPSL_SUSPENDED)
 		return IRQ_HANDLED;
@@ -309,7 +304,7 @@ irqreturn_t sharpsl_chrg_full_isr(int irq, void *dev_id, struct pt_regs *fp)
 	return IRQ_HANDLED;
 }
 
-irqreturn_t sharpsl_fatal_isr(int irq, void *dev_id, struct pt_regs *fp)
+irqreturn_t sharpsl_fatal_isr(int irq, void *dev_id)
 {
 	int is_fatal = 0;
 
@@ -418,8 +413,10 @@ static int sharpsl_check_battery_temp(void)
 	val = get_select_val(buff);
 
 	dev_dbg(sharpsl_pm.dev, "Temperature: %d\n", val);
-	if (val > SHARPSL_CHARGE_ON_TEMP)
+	if (val > sharpsl_pm.machinfo->charge_on_temp) {
+		printk(KERN_WARNING "Not charging: temperature out of limits.\n");
 		return -1;
+	}
 
 	return 0;
 }
@@ -450,7 +447,7 @@ static int sharpsl_check_battery_voltage(void)
 	val = get_select_val(buff);
 	dev_dbg(sharpsl_pm.dev, "Battery Voltage: %d\n", val);
 
-	if (val < SHARPSL_CHARGE_ON_VOLT)
+	if (val < sharpsl_pm.machinfo->charge_on_volt)
 		return -1;
 
 	return 0;
@@ -468,7 +465,7 @@ static int sharpsl_ac_check(void)
 	temp = get_select_val(buff);
 	dev_dbg(sharpsl_pm.dev, "AC Voltage: %d\n",temp);
 
-	if ((temp > SHARPSL_CHARGE_ON_ACIN_HIGH) || (temp < SHARPSL_CHARGE_ON_ACIN_LOW)) {
+	if ((temp > sharpsl_pm.machinfo->charge_acin_high) || (temp < sharpsl_pm.machinfo->charge_acin_low)) {
 		dev_err(sharpsl_pm.dev, "Error: AC check failed.\n");
 		return -1;
 	}
@@ -579,6 +576,9 @@ static int corgi_pxa_pm_enter(suspend_state_t state)
 	while (corgi_enter_suspend(alarm_time,alarm_status,state))
 		{}
 
+	if (sharpsl_pm.machinfo->earlyresume)
+		sharpsl_pm.machinfo->earlyresume();
+
 	dev_dbg(sharpsl_pm.dev, "SharpSL resuming...\n");
 
 	return 0;
@@ -627,8 +627,8 @@ static int sharpsl_fatal_check(void)
 	temp = get_select_val(buff);
 	dev_dbg(sharpsl_pm.dev, "sharpsl_fatal_check: acin: %d, discharge voltage: %d, no discharge: %d\n", acin, temp, sharpsl_pm.machinfo->read_devdata(SHARPSL_BATT_VOLT));
 
-	if ((acin && (temp < SHARPSL_FATAL_ACIN_VOLT)) ||
-			(!acin && (temp < SHARPSL_FATAL_NOACIN_VOLT)))
+	if ((acin && (temp < sharpsl_pm.machinfo->fatal_acin_volt)) ||
+			(!acin && (temp < sharpsl_pm.machinfo->fatal_noacin_volt)))
 		return -1;
 	return 0;
 }

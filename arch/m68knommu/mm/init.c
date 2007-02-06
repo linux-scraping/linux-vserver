@@ -15,7 +15,6 @@
  *  DEC/2000 -- linux 2.4 support <davidm@snapgear.com>
  */
 
-#include <linux/config.h>
 #include <linux/signal.h>
 #include <linux/sched.h>
 #include <linux/kernel.h>
@@ -62,8 +61,6 @@ static unsigned long empty_bad_page_table;
 static unsigned long empty_bad_page;
 
 unsigned long empty_zero_page;
-
-extern unsigned long rom_length;
 
 void show_mem(void)
 {
@@ -139,7 +136,7 @@ void paging_init(void)
 #endif
 
 	{
-		unsigned long zones_size[MAX_NR_ZONES] = {0, 0, 0};
+		unsigned long zones_size[MAX_NR_ZONES] = {0, };
 
 		zones_size[ZONE_DMA] = 0 >> PAGE_SHIFT;
 		zones_size[ZONE_NORMAL] = (end_mem - PAGE_OFFSET) >> PAGE_SHIFT;
@@ -178,11 +175,9 @@ void mem_init(void)
 	initk = (&__init_begin - &__init_end) >> 10;
 
 	tmp = nr_free_pages() << PAGE_SHIFT;
-	printk(KERN_INFO "Memory available: %luk/%luk RAM, %luk/%luk ROM (%dk kernel code, %dk data)\n",
+	printk(KERN_INFO "Memory available: %luk/%luk RAM, (%dk kernel code, %dk data)\n",
 	       tmp >> 10,
 	       len >> 10,
-	       (rom_length > 0) ? ((rom_length >> 10) - codek) : 0,
-	       rom_length >> 10,
 	       codek,
 	       datak
 	       );

@@ -371,7 +371,6 @@
 #include <linux/kernel.h>
 #include <linux/cdrom.h>
 #include <linux/ioport.h>
-#include <linux/devfs_fs_kernel.h>
 #include <linux/major.h>
 #include <linux/string.h>
 #include <linux/vmalloc.h>
@@ -382,7 +381,6 @@
 #include <asm/io.h>
 #include <asm/uaccess.h>
 #include <stdarg.h>
-#include <linux/config.h>
 #include "sbpcd.h"
 
 #define MAJOR_NR MATSUSHITA_CDROM_MAJOR
@@ -772,11 +770,10 @@ static void msg(int level, const char *fmt, ...)
 	
 	msgnum++;
 	if (msgnum>99) msgnum=0;
-	sprintf(buf, MSG_LEVEL "%s-%d [%02d]:  ", major_name, current_drive - D_S, msgnum);
 	va_start(args, fmt);
-	vsprintf(&buf[18], fmt, args);
+	vsnprintf(buf, sizeof(buf), fmt, args);
 	va_end(args);
-	printk(buf);
+	printk(MSG_LEVEL "%s-%d [%02d]:  %s", major_name, current_drive - D_S, msgnum, buf);
 #if KLOGD_PAUSE
 	sbp_sleep(KLOGD_PAUSE); /* else messages get lost */
 #endif /* KLOGD_PAUSE */ 
@@ -5808,8 +5805,6 @@ int __init sbpcd_init(void)
 		return -ENOMEM;
 	}
 
-	devfs_mk_dir("sbp");
-
 	for (j=0;j<NR_SBPCD;j++)
 	{
 		struct cdrom_device_info * sbpcd_infop;
@@ -5871,7 +5866,6 @@ int __init sbpcd_init(void)
 		disk->fops = &sbpcd_bdops;
 		strcpy(disk->disk_name, sbpcd_infop->name);
 		disk->flags = GENHD_FL_CD;
-		sprintf(disk->devfs_name, "sbp/c0t%d", p->drv_id);
 		p->disk = disk;
 		if (register_cdrom(sbpcd_infop))
 		{
@@ -5906,7 +5900,6 @@ static void sbpcd_exit(void)
 		if (D_S[j].drv_id==-1) continue;
 		del_gendisk(D_S[j].disk);
 		put_disk(D_S[j].disk);
-		devfs_remove("sbp/c0t%d", j);
 		vfree(D_S[j].sbp_buf);
 		if (D_S[j].sbp_audsiz>0)
 			vfree(D_S[j].aud_buf);
@@ -5917,7 +5910,6 @@ static void sbpcd_exit(void)
 		}
 		vfree(D_S[j].sbpcd_infop);
 	}
-	devfs_remove("sbp");
 	msg(DBG_INF, "%s module released.\n", major_name);
 }
 

@@ -14,7 +14,6 @@
 
 #define RTC_IO_EXTENT	0x10	/*Only really two ports, but... */
 
-#include <linux/config.h>
 #include <linux/types.h>
 #include <linux/errno.h>
 #include <linux/miscdevice.h>
@@ -460,7 +459,7 @@ static int lcd_ioctl(struct inode *inode, struct file *file,
 			    (&display, (struct lcd_display *) arg,
 			     sizeof(struct lcd_display)))
 				return -EFAULT;
-			rom = (unsigned char *) kmalloc((128), GFP_ATOMIC);
+			rom = kmalloc((128), GFP_ATOMIC);
 			if (rom == NULL) {
 				printk(KERN_ERR LCD "kmalloc() failed in %s\n",
 						__FUNCTION__);
@@ -599,7 +598,7 @@ static ssize_t lcd_read(struct file *file, char *buf,
  *	The various file operations we support.
  */
 
-static struct file_operations lcd_fops = {
+static const struct file_operations lcd_fops = {
 	.read = lcd_read,
 	.ioctl = lcd_ioctl,
 	.open = lcd_open,

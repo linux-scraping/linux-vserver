@@ -17,6 +17,7 @@
  */
 
 #include <linux/capability.h>
+#include <linux/vs_context.h>
 
 #include "xfs.h"
 #include "xfs_fs.h"
@@ -26,7 +27,6 @@
 #include "xfs_trans.h"
 #include "xfs_sb.h"
 #include "xfs_ag.h"
-#include "xfs_dir.h"
 #include "xfs_dir2.h"
 #include "xfs_alloc.h"
 #include "xfs_dmapi.h"
@@ -35,7 +35,6 @@
 #include "xfs_bmap_btree.h"
 #include "xfs_alloc_btree.h"
 #include "xfs_ialloc_btree.h"
-#include "xfs_dir_sf.h"
 #include "xfs_dir2_sf.h"
 #include "xfs_attr_sf.h"
 #include "xfs_dinode.h"
@@ -91,8 +90,8 @@ xfs_qm_quotactl(
 	xfs_caddr_t	addr)
 {
 	xfs_mount_t	*mp;
+	bhv_vfs_t	*vfsp;
 	int		error;
-	struct vfs	*vfsp;
 
 	vfsp = bhvtovfs(bdp);
 	mp = XFS_VFSTOM(vfsp);
@@ -1035,7 +1034,7 @@ xfs_qm_dqrele_all_inodes(
 {
 	xfs_inode_t	*ip, *topino;
 	uint		ireclaims;
-	vnode_t		*vp;
+	bhv_vnode_t	*vp;
 	boolean_t	vnode_refd;
 
 	ASSERT(mp->m_quotainfo);

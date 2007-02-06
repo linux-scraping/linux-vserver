@@ -30,7 +30,7 @@
 #include <asm/div64.h>
 #include <asm/io.h>
 #include <asm/uaccess.h>
-#include <asm/vr41xx/vr41xx.h>
+#include <asm/vr41xx/irq.h>
 
 MODULE_AUTHOR("Yoichi Yuasa <yoichi_yuasa@tripeaks.co.jp>");
 MODULE_DESCRIPTION("NEC VR4100 series RTC driver");
@@ -81,7 +81,6 @@ MODULE_LICENSE("GPL");
 
 #define RTC_FREQUENCY		32768
 #define MAX_PERIODIC_RATE	6553
-#define MAX_USER_PERIODIC_RATE	64
 
 static void __iomem *rtc1_base;
 static void __iomem *rtc2_base;
@@ -94,7 +93,7 @@ static void __iomem *rtc2_base;
 
 static unsigned long epoch = 1970;	/* Jan 1 1970 00:00:00 */
 
-static spinlock_t rtc_lock = SPIN_LOCK_UNLOCKED;
+static DEFINE_SPINLOCK(rtc_lock);
 static char rtc_name[] = "RTC";
 static unsigned long periodic_frequency;
 static unsigned long periodic_count;
@@ -240,9 +239,6 @@ static int vr41xx_rtc_ioctl(struct device *dev, unsigned int cmd, unsigned long 
 		if (arg > MAX_PERIODIC_RATE)
 			return -EINVAL;
 
-		if (arg > MAX_USER_PERIODIC_RATE && capable(CAP_SYS_RESOURCE) == 0)
-			return -EACCES;
-
 		periodic_frequency = arg;
 
 		count = RTC_FREQUENCY;
@@ -263,10 +259,6 @@ static int vr41xx_rtc_ioctl(struct device *dev, unsigned int cmd, unsigned long 
 		/* Doesn't support before 1900 */
 		if (arg < 1900)
 			return -EINVAL;
-
-		if (capable(CAP_SYS_TIME) == 0)
-			return -EACCES;
-
 		epoch = arg;
 		break;
 	default:
@@ -276,7 +268,7 @@ static int vr41xx_rtc_ioctl(struct device *dev, unsigned int cmd, unsigned long 
 	return 0;
 }
 
-static irqreturn_t elapsedtime_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t elapsedtime_interrupt(int irq, void *dev_id)
 {
 	struct platform_device *pdev = (struct platform_device *)dev_id;
 	struct rtc_device *rtc = platform_get_drvdata(pdev);
@@ -288,7 +280,7 @@ static irqreturn_t elapsedtime_interrupt(int irq, void *dev_id, struct pt_regs *
 	return IRQ_HANDLED;
 }
 
-static irqreturn_t rtclong1_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t rtclong1_interrupt(int irq, void *dev_id)
 {
 	struct platform_device *pdev = (struct platform_device *)dev_id;
 	struct rtc_device *rtc = platform_get_drvdata(pdev);
@@ -304,7 +296,7 @@ static irqreturn_t rtclong1_interrupt(int irq, void *dev_id, struct pt_regs *reg
 	return IRQ_HANDLED;
 }
 
-static struct rtc_class_ops vr41xx_rtc_ops = {
+static const struct rtc_class_ops vr41xx_rtc_ops = {
 	.release	= vr41xx_rtc_release,
 	.ioctl		= vr41xx_rtc_ioctl,
 	.read_time	= vr41xx_rtc_read_time,
@@ -353,11 +345,11 @@ static int __devinit rtc_probe(struct platform_device *pdev)
 	spin_unlock_irq(&rtc_lock);
 
 	irq = ELAPSEDTIME_IRQ;
-	retval = request_irq(irq, elapsedtime_interrupt, SA_INTERRUPT,
+	retval = request_irq(irq, elapsedtime_interrupt, IRQF_DISABLED,
 	                     "elapsed_time", pdev);
 	if (retval == 0) {
 		irq = RTCLONG1_IRQ;
-		retval = request_irq(irq, rtclong1_interrupt, SA_INTERRUPT,
+		retval = request_irq(irq, rtclong1_interrupt, IRQF_DISABLED,
 		                     "rtclong1", pdev);
 	}
 

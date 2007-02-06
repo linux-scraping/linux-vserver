@@ -1149,7 +1149,7 @@ static int snd_cs46xx_capture_prepare(struct snd_pcm_substream *substream)
 	return 0;
 }
 
-static irqreturn_t snd_cs46xx_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t snd_cs46xx_interrupt(int irq, void *dev_id)
 {
 	struct snd_cs46xx *chip = dev_id;
 	u32 status1;
@@ -2317,7 +2317,7 @@ static struct snd_kcontrol_new snd_cs46xx_front_dup_ctl = {
 
 #ifdef CONFIG_SND_CS46XX_NEW_DSP
 /* Only available on the Hercules Game Theater XP soundcard */
-static struct snd_kcontrol_new snd_hercules_controls[] __devinitdata = {
+static struct snd_kcontrol_new snd_hercules_controls[] = {
 {
 	.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
 	.name = "Optical/Coaxial SPDIF Input Switch",
@@ -2877,14 +2877,15 @@ static int snd_cs46xx_free(struct snd_cs46xx *chip)
 	if (chip->region.idx[0].resource)
 		snd_cs46xx_hw_stop(chip);
 
+	if (chip->irq >= 0)
+		free_irq(chip->irq, chip);
+
 	for (idx = 0; idx < 5; idx++) {
 		struct snd_cs46xx_region *region = &chip->region.idx[idx];
 		if (region->remap_addr)
 			iounmap(region->remap_addr);
 		release_and_free_resource(region->resource);
 	}
-	if (chip->irq >= 0)
-		free_irq(chip->irq, chip);
 
 	if (chip->active_ctrl)
 		chip->active_ctrl(chip, -chip->amplifier);
@@ -3457,6 +3458,9 @@ static void hercules_mixer_init (struct snd_cs46xx *chip)
 	snd_printdd ("initializing Hercules mixer\n");
 
 #ifdef CONFIG_SND_CS46XX_NEW_DSP
+	if (chip->in_suspend)
+		return;
+
 	for (idx = 0 ; idx < ARRAY_SIZE(snd_hercules_controls); idx++) {
 		struct snd_kcontrol *kctl;
 
@@ -3668,6 +3672,7 @@ int snd_cs46xx_suspend(struct pci_dev *pci, pm_message_t state)
 	int amp_saved;
 
 	snd_power_change_state(card, SNDRV_CTL_POWER_D3hot);
+	chip->in_suspend = 1;
 	snd_pcm_suspend_all(chip->pcm);
 	// chip->ac97_powerdown = snd_cs46xx_codec_read(chip, AC97_POWER_CONTROL);
 	// chip->ac97_general_purpose = snd_cs46xx_codec_read(chip, BA0_AC97_GENERAL_PURPOSE);
@@ -3682,8 +3687,10 @@ int snd_cs46xx_suspend(struct pci_dev *pci, pm_message_t state)
 	/* disable CLKRUN */
 	chip->active_ctrl(chip, -chip->amplifier);
 	chip->amplifier = amp_saved; /* restore the status */
+
 	pci_disable_device(pci);
 	pci_save_state(pci);
+	pci_set_power_state(pci, pci_choose_state(pci, state));
 	return 0;
 }
 
@@ -3693,9 +3700,16 @@ int snd_cs46xx_resume(struct pci_dev *pci)
 	struct snd_cs46xx *chip = card->private_data;
 	int amp_saved;
 
+	pci_set_power_state(pci, PCI_D0);
 	pci_restore_state(pci);
-	pci_enable_device(pci);
+	if (pci_enable_device(pci) < 0) {
+		printk(KERN_ERR "cs46xx: pci_enable_device failed, "
+		       "disabling device\n");
+		snd_card_disconnect(card);
+		return -EIO;
+	}
 	pci_set_master(pci);
+
 	amp_saved = chip->amplifier;
 	chip->amplifier = 0;
 	chip->active_ctrl(chip, 1); /* force to on */
@@ -3721,6 +3735,7 @@ int snd_cs46xx_resume(struct pci_dev *pci)
 	else
 		chip->active_ctrl(chip, -1); /* disable CLKRUN */
 	chip->amplifier = amp_saved;
+	chip->in_suspend = 0;
 	snd_power_change_state(card, SNDRV_CTL_POWER_D0);
 	return 0;
 }
@@ -3852,7 +3867,7 @@ int __devinit snd_cs46xx_create(struct snd_card *card,
 		}
 	}
 
-	if (request_irq(pci->irq, snd_cs46xx_interrupt, SA_INTERRUPT|SA_SHIRQ,
+	if (request_irq(pci->irq, snd_cs46xx_interrupt, IRQF_SHARED,
 			"CS46XX", chip)) {
 		snd_printk(KERN_ERR "unable to grab IRQ %d\n", pci->irq);
 		snd_cs46xx_free(chip);

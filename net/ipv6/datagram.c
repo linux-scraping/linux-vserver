@@ -156,6 +156,8 @@ ipv4_connected:
 	if (!fl.oif && (addr_type&IPV6_ADDR_MULTICAST))
 		fl.oif = np->mcast_oif;
 
+	security_sk_classify_flow(sk, &fl);
+
 	if (flowlabel) {
 		if (flowlabel->opt && flowlabel->opt->srcrt) {
 			struct rt0_hdr *rt0 = (struct rt0_hdr *) flowlabel->opt->srcrt;
@@ -191,7 +193,12 @@ ipv4_connected:
 
 	ip6_dst_store(sk, dst,
 		      ipv6_addr_equal(&fl.fl6_dst, &np->daddr) ?
-		      &np->daddr : NULL);
+		      &np->daddr : NULL,
+#ifdef CONFIG_IPV6_SUBTREES
+		      ipv6_addr_equal(&fl.fl6_src, &np->saddr) ?
+		      &np->saddr :
+#endif
+		      NULL);
 
 	sk->sk_state = TCP_ESTABLISHED;
 out:
@@ -200,7 +207,7 @@ out:
 }
 
 void ipv6_icmp_error(struct sock *sk, struct sk_buff *skb, int err, 
-		     u16 port, u32 info, u8 *payload)
+		     __be16 port, u32 info, u8 *payload)
 {
 	struct ipv6_pinfo *np  = inet6_sk(sk);
 	struct icmp6hdr *icmph = (struct icmp6hdr *)skb->h.raw;
@@ -311,13 +318,13 @@ int ipv6_recv_error(struct sock *sk, struct msghdr *msg, int len)
 			ipv6_addr_copy(&sin->sin6_addr,
 			  (struct in6_addr *)(skb->nh.raw + serr->addr_offset));
 			if (np->sndflow)
-				sin->sin6_flowinfo = *(u32*)(skb->nh.raw + serr->addr_offset - 24) & IPV6_FLOWINFO_MASK;
+				sin->sin6_flowinfo = *(__be32*)(skb->nh.raw + serr->addr_offset - 24) & IPV6_FLOWINFO_MASK;
 			if (ipv6_addr_type(&sin->sin6_addr) & IPV6_ADDR_LINKLOCAL)
 				sin->sin6_scope_id = IP6CB(skb)->iif;
 		} else {
 			ipv6_addr_set(&sin->sin6_addr, 0, 0,
 				      htonl(0xffff),
-				      *(u32*)(skb->nh.raw + serr->addr_offset));
+				      *(__be32*)(skb->nh.raw + serr->addr_offset));
 		}
 	}
 
@@ -390,12 +397,12 @@ int datagram_recv_ctl(struct sock *sk, struct msghdr *msg, struct sk_buff *skb)
 	}
 
 	if (np->rxopt.bits.rxtclass) {
-		int tclass = (ntohl(*(u32 *)skb->nh.ipv6h) >> 20) & 0xff;
+		int tclass = (ntohl(*(__be32 *)skb->nh.ipv6h) >> 20) & 0xff;
 		put_cmsg(msg, SOL_IPV6, IPV6_TCLASS, sizeof(tclass), &tclass);
 	}
 
-	if (np->rxopt.bits.rxflow && (*(u32*)skb->nh.raw & IPV6_FLOWINFO_MASK)) {
-		u32 flowinfo = *(u32*)skb->nh.raw & IPV6_FLOWINFO_MASK;
+	if (np->rxopt.bits.rxflow && (*(__be32*)skb->nh.raw & IPV6_FLOWINFO_MASK)) {
+		__be32 flowinfo = *(__be32*)skb->nh.raw & IPV6_FLOWINFO_MASK;
 		put_cmsg(msg, SOL_IPV6, IPV6_FLOWINFO, sizeof(flowinfo), &flowinfo);
 	}
 
@@ -553,12 +560,12 @@ int datagram_send_ctl(struct msghdr *msg, struct flowi *fl,
 			}
 
 			if (fl->fl6_flowlabel&IPV6_FLOWINFO_MASK) {
-				if ((fl->fl6_flowlabel^*(u32 *)CMSG_DATA(cmsg))&~IPV6_FLOWINFO_MASK) {
+				if ((fl->fl6_flowlabel^*(__be32 *)CMSG_DATA(cmsg))&~IPV6_FLOWINFO_MASK) {
 					err = -EINVAL;
 					goto exit_f;
 				}
 			}
-			fl->fl6_flowlabel = IPV6_FLOWINFO_MASK & *(u32 *)CMSG_DATA(cmsg);
+			fl->fl6_flowlabel = IPV6_FLOWINFO_MASK & *(__be32 *)CMSG_DATA(cmsg);
 			break;
 
 		case IPV6_2292HOPOPTS:
@@ -641,10 +648,13 @@ int datagram_send_ctl(struct msghdr *msg, struct flowi *fl,
 
 			rthdr = (struct ipv6_rt_hdr *)CMSG_DATA(cmsg);
 
-			/*
-			 *	TYPE 0
-			 */
-			if (rthdr->type) {
+			switch (rthdr->type) {
+			case IPV6_SRCRT_TYPE_0:
+#ifdef CONFIG_IPV6_MIP6
+			case IPV6_SRCRT_TYPE_2:
+#endif
+				break;
+			default:
 				err = -EINVAL;
 				goto exit_f;
 			}
@@ -696,7 +706,7 @@ int datagram_send_ctl(struct msghdr *msg, struct flowi *fl,
 			}
 
 			tc = *(int *)CMSG_DATA(cmsg);
-			if (tc < 0 || tc > 0xff)
+			if (tc < -1 || tc > 0xff)
 				goto exit_f;
 
 			err = 0;

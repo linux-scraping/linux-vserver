@@ -1,5 +1,5 @@
 /*
- * linux/arch/arm/mach-omap2/sram.S
+ * linux/arch/arm/mach-omap2/sram-fn.S
  *
  * Omap2 specific functions that need to be run in internal SRAM
  *
@@ -22,7 +22,6 @@
  * Foundation, Inc., 59 Temple Place, Suite 330, Boston,
  * MA 02111-1307 USA
  */
-#include <linux/config.h>
 #include <linux/linkage.h>
 #include <asm/assembler.h>
 #include <asm/arch/io.h>

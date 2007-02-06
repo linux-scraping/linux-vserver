@@ -106,7 +106,7 @@ static void destroy_async(struct kref *kref)
 
 /* --------------------------------------------------------------------- */
 
-static void async_complete(struct urb *urb, struct pt_regs *ptregs)
+static void async_complete(struct urb *urb)
 {
 	struct uss720_async_request *rq;
 	struct parport *pp;
@@ -127,7 +127,7 @@ static void async_complete(struct urb *urb, struct pt_regs *ptregs)
 #endif
 		/* if nAck interrupts are enabled and we have an interrupt, call the interrupt procedure */
 		if (rq->reg[2] & rq->reg[1] & 0x10 && pp)
-			parport_generic_irq(0, pp, NULL);
+			parport_generic_irq(0, pp);
 	}
 	complete(&rq->compl);
 	kref_put(&rq->ref_count, destroy_async);
@@ -705,7 +705,7 @@ static int uss720_probe(struct usb_interface *intf,
 	/*
 	 * Allocate parport interface 
 	 */
-	if (!(priv = kcalloc(sizeof(struct parport_uss720_private), 1, GFP_KERNEL))) {
+	if (!(priv = kzalloc(sizeof(struct parport_uss720_private), GFP_KERNEL))) {
 		usb_put_dev(usbdev);
 		return -ENOMEM;
 	}

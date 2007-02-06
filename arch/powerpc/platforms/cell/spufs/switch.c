@@ -32,7 +32,6 @@
  * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/errno.h>
 #include <linux/sched.h>
@@ -46,6 +45,7 @@
 
 #include <asm/io.h>
 #include <asm/spu.h>
+#include <asm/spu_priv1.h>
 #include <asm/spu_csa.h>
 #include <asm/mmu_context.h>
 
@@ -102,7 +102,7 @@ static inline int check_spu_isolate(struct spu_state *csa, struct spu *spu)
 	 *     saved at this time.
 	 */
 	isolate_state = SPU_STATUS_ISOLATED_STATE |
-	    SPU_STATUS_ISOLATED_LOAD_STAUTUS | SPU_STATUS_ISOLATED_EXIT_STAUTUS;
+	    SPU_STATUS_ISOLATED_LOAD_STATUS | SPU_STATUS_ISOLATED_EXIT_STATUS;
 	return (in_be32(&prob->spu_status_R) & isolate_state) ? 1 : 0;
 }
 
@@ -463,7 +463,8 @@ static inline void wait_purge_complete(struct spu_state *csa, struct spu *spu)
 	 *     Poll MFC_CNTL[Ps] until value '11' is read
 	 *     (purge complete).
 	 */
-	POLL_WHILE_FALSE(in_be64(&priv2->mfc_control_RW) &
+	POLL_WHILE_FALSE((in_be64(&priv2->mfc_control_RW) &
+			 MFC_CNTL_PURGE_DMA_STATUS_MASK) ==
 			 MFC_CNTL_PURGE_DMA_COMPLETE);
 }
 
@@ -622,12 +623,17 @@ static inline void save_ppuint_mb(struct spu_state *csa, struct spu *spu)
 static inline void save_ch_part1(struct spu_state *csa, struct spu *spu)
 {
 	struct spu_priv2 __iomem *priv2 = spu->priv2;
-	u64 idx, ch_indices[7] = { 0UL, 1UL, 3UL, 4UL, 24UL, 25UL, 27UL };
+	u64 idx, ch_indices[7] = { 0UL, 3UL, 4UL, 24UL, 25UL, 27UL };
 	int i;
 
 	/* Save, Step 42:
-	 *     Save the following CH: [0,1,3,4,24,25,27]
 	 */
+
+	/* Save CH 1, without channel count */
+	out_be64(&priv2->spu_chnlcntptr_RW, 1);
+	csa->spu_chnldata_RW[1] = in_be64(&priv2->spu_chnldata_RW);
+
+	/* Save the following CH: [0,3,4,24,25,27] */
 	for (i = 0; i < 7; i++) {
 		idx = ch_indices[i];
 		out_be64(&priv2->spu_chnlcntptr_RW, idx);
@@ -718,13 +724,15 @@ static inline void invalidate_slbs(struct spu_state *csa, struct spu *spu)
 
 static inline void get_kernel_slb(u64 ea, u64 slb[2])
 {
-	slb[0] = (get_kernel_vsid(ea) << SLB_VSID_SHIFT) | SLB_VSID_KERNEL;
-	slb[1] = (ea & ESID_MASK) | SLB_ESID_V;
+	u64 llp;
 
-	/* Large pages are used for kernel text/data, but not vmalloc.  */
-	if (cpu_has_feature(CPU_FTR_16M_PAGE)
-	    && REGION_ID(ea) == KERNEL_REGION_ID)
-		slb[0] |= SLB_VSID_L;
+	if (REGION_ID(ea) == KERNEL_REGION_ID)
+		llp = mmu_psize_defs[mmu_linear_psize].sllp;
+	else
+		llp = mmu_psize_defs[mmu_virtual_psize].sllp;
+	slb[0] = (get_kernel_vsid(ea) << SLB_VSID_SHIFT) |
+		SLB_VSID_KERNEL | llp;
+	slb[1] = (ea & ESID_MASK) | SLB_ESID_V;
 }
 
 static inline void load_mfc_slb(struct spu *spu, u64 slb[2], int slbe)
@@ -1020,7 +1028,8 @@ static inline void wait_suspend_mfc_complete(struct spu_state *csa,
 	 * Restore, Step 47.
 	 *     Poll MFC_CNTL[Ss] until 11 is returned.
 	 */
-	POLL_WHILE_FALSE(in_be64(&priv2->mfc_control_RW) &
+	POLL_WHILE_FALSE((in_be64(&priv2->mfc_control_RW) &
+			 MFC_CNTL_SUSPEND_DMA_STATUS_MASK) ==
 			 MFC_CNTL_SUSPEND_COMPLETE);
 }
 
@@ -1037,12 +1046,12 @@ static inline int suspend_spe(struct spu_state *csa, struct spu *spu)
 	 */
 	if (in_be32(&prob->spu_status_R) & SPU_STATUS_RUNNING) {
 		if (in_be32(&prob->spu_status_R) &
-		    SPU_STATUS_ISOLATED_EXIT_STAUTUS) {
+		    SPU_STATUS_ISOLATED_EXIT_STATUS) {
 			POLL_WHILE_TRUE(in_be32(&prob->spu_status_R) &
 					SPU_STATUS_RUNNING);
 		}
 		if ((in_be32(&prob->spu_status_R) &
-		     SPU_STATUS_ISOLATED_LOAD_STAUTUS)
+		     SPU_STATUS_ISOLATED_LOAD_STATUS)
 		    || (in_be32(&prob->spu_status_R) &
 			SPU_STATUS_ISOLATED_STATE)) {
 			out_be32(&prob->spu_runcntl_RW, SPU_RUNCNTL_STOP);
@@ -1076,7 +1085,7 @@ static inline void clear_spu_status(struct spu_state *csa, struct spu *spu)
 	 */
 	if (!(in_be32(&prob->spu_status_R) & SPU_STATUS_RUNNING)) {
 		if (in_be32(&prob->spu_status_R) &
-		    SPU_STATUS_ISOLATED_EXIT_STAUTUS) {
+		    SPU_STATUS_ISOLATED_EXIT_STATUS) {
 			spu_mfc_sr1_set(spu,
 					MFC_STATE1_MASTER_RUN_CONTROL_MASK);
 			eieio();
@@ -1086,7 +1095,7 @@ static inline void clear_spu_status(struct spu_state *csa, struct spu *spu)
 					SPU_STATUS_RUNNING);
 		}
 		if ((in_be32(&prob->spu_status_R) &
-		     SPU_STATUS_ISOLATED_LOAD_STAUTUS)
+		     SPU_STATUS_ISOLATED_LOAD_STATUS)
 		    || (in_be32(&prob->spu_status_R) &
 			SPU_STATUS_ISOLATED_STATE)) {
 			spu_mfc_sr1_set(spu,
@@ -1103,13 +1112,18 @@ static inline void clear_spu_status(struct spu_state *csa, struct spu *spu)
 static inline void reset_ch_part1(struct spu_state *csa, struct spu *spu)
 {
 	struct spu_priv2 __iomem *priv2 = spu->priv2;
-	u64 ch_indices[7] = { 0UL, 1UL, 3UL, 4UL, 24UL, 25UL, 27UL };
+	u64 ch_indices[7] = { 0UL, 3UL, 4UL, 24UL, 25UL, 27UL };
 	u64 idx;
 	int i;
 
 	/* Restore, Step 20:
-	 *     Reset the following CH: [0,1,3,4,24,25,27]
 	 */
+
+	/* Reset CH 1 */
+	out_be64(&priv2->spu_chnlcntptr_RW, 1);
+	out_be64(&priv2->spu_chnldata_RW, 0UL);
+
+	/* Reset the following CH: [0,3,4,24,25,27] */
 	for (i = 0; i < 7; i++) {
 		idx = ch_indices[i];
 		out_be64(&priv2->spu_chnlcntptr_RW, idx);
@@ -1570,12 +1584,17 @@ static inline void restore_decr_wrapped(struct spu_state *csa, struct spu *spu)
 static inline void restore_ch_part1(struct spu_state *csa, struct spu *spu)
 {
 	struct spu_priv2 __iomem *priv2 = spu->priv2;
-	u64 idx, ch_indices[7] = { 0UL, 1UL, 3UL, 4UL, 24UL, 25UL, 27UL };
+	u64 idx, ch_indices[7] = { 0UL, 3UL, 4UL, 24UL, 25UL, 27UL };
 	int i;
 
 	/* Restore, Step 59:
-	 *     Restore the following CH: [0,1,3,4,24,25,27]
 	 */
+
+	/* Restore CH 1 without count */
+	out_be64(&priv2->spu_chnlcntptr_RW, 1);
+	out_be64(&priv2->spu_chnldata_RW, csa->spu_chnldata_RW[1]);
+
+	/* Restore the following CH: [0,3,4,24,25,27] */
 	for (i = 0; i < 7; i++) {
 		idx = ch_indices[i];
 		out_be64(&priv2->spu_chnlcntptr_RW, idx);
@@ -1760,6 +1779,15 @@ static inline void restore_mfc_cntl(struct spu_state *csa, struct spu *spu)
 	 */
 	out_be64(&priv2->mfc_control_RW, csa->priv2.mfc_control_RW);
 	eieio();
+	/*
+	 * FIXME: this is to restart a DMA that we were processing
+	 *        before the save. better remember the fault information
+	 *        in the csa instead.
+	 */
+	if ((csa->priv2.mfc_control_RW & MFC_CNTL_SUSPEND_DMA_QUEUE_MASK)) {
+		out_be64(&priv2->mfc_control_RW, MFC_CNTL_RESTART_DMA_COMMAND);
+		eieio();
+	}
 }
 
 static inline void enable_user_access(struct spu_state *csa, struct spu *spu)
@@ -1888,6 +1916,51 @@ static void save_lscsa(struct spu_state *prev, struct spu *spu)
 	wait_spu_stopped(prev, spu);	/* Step 57. */
 }
 
+static void force_spu_isolate_exit(struct spu *spu)
+{
+	struct spu_problem __iomem *prob = spu->problem;
+	struct spu_priv2 __iomem *priv2 = spu->priv2;
+
+	/* Stop SPE execution and wait for completion. */
+	out_be32(&prob->spu_runcntl_RW, SPU_RUNCNTL_STOP);
+	iobarrier_rw();
+	POLL_WHILE_TRUE(in_be32(&prob->spu_status_R) & SPU_STATUS_RUNNING);
+
+	/* Restart SPE master runcntl. */
+	spu_mfc_sr1_set(spu, MFC_STATE1_MASTER_RUN_CONTROL_MASK);
+	iobarrier_w();
+
+	/* Initiate isolate exit request and wait for completion. */
+	out_be64(&priv2->spu_privcntl_RW, 4LL);
+	iobarrier_w();
+	out_be32(&prob->spu_runcntl_RW, 2);
+	iobarrier_rw();
+	POLL_WHILE_FALSE((in_be32(&prob->spu_status_R)
+				& SPU_STATUS_STOPPED_BY_STOP));
+
+	/* Reset load request to normal. */
+	out_be64(&priv2->spu_privcntl_RW, SPU_PRIVCNT_LOAD_REQUEST_NORMAL);
+	iobarrier_w();
+}
+
+/**
+ * stop_spu_isolate
+ *	Check SPU run-control state and force isolated
+ *	exit function as necessary.
+ */
+static void stop_spu_isolate(struct spu *spu)
+{
+	struct spu_problem __iomem *prob = spu->problem;
+
+	if (in_be32(&prob->spu_status_R) & SPU_STATUS_ISOLATED_STATE) {
+		/* The SPU is in isolated state; the only way
+		 * to get it out is to perform an isolated
+		 * exit (clean) operation.
+		 */
+		force_spu_isolate_exit(spu);
+	}
+}
+
 static void harvest(struct spu_state *prev, struct spu *spu)
 {
 	/*
@@ -1900,6 +1973,7 @@ static void harvest(struct spu_state *prev, struct spu *spu)
 	inhibit_user_access(prev, spu);	        /* Step 3.  */
 	terminate_spu_app(prev, spu);	        /* Step 4.  */
 	set_switch_pending(prev, spu);	        /* Step 5.  */
+	stop_spu_isolate(spu);			/* NEW.     */
 	remove_other_spu_access(prev, spu);	/* Step 6.  */
 	suspend_mfc(prev, spu);	                /* Step 7.  */
 	wait_suspend_mfc_complete(prev, spu);	/* Step 8.  */
@@ -2068,12 +2142,13 @@ int spu_save(struct spu_state *prev, struct spu *spu)
 	acquire_spu_lock(spu);	        /* Step 1.     */
 	rc = __do_spu_save(prev, spu);	/* Steps 2-53. */
 	release_spu_lock(spu);
-	if (rc) {
+	if (rc != 0 && rc != 2 && rc != 6) {
 		panic("%s failed on SPU[%d], rc=%d.\n",
 		      __func__, spu->number, rc);
 	}
-	return rc;
+	return 0;
 }
+EXPORT_SYMBOL_GPL(spu_save);
 
 /**
  * spu_restore - SPU context restore, with harvest and locking.
@@ -2081,7 +2156,7 @@ int spu_save(struct spu_state *prev, struct spu *spu)
  * @spu: pointer to SPU iomem structure.
  *
  * Perform harvest + restore, as we may not be coming
- * from a previous succesful save operation, and the
+ * from a previous successful save operation, and the
  * hardware state is unknown.
  */
 int spu_restore(struct spu_state *new, struct spu *spu)
@@ -2090,7 +2165,6 @@ int spu_restore(struct spu_state *new, struct spu *spu)
 
 	acquire_spu_lock(spu);
 	harvest(NULL, spu);
-	spu->stop_code = 0;
 	spu->dar = 0;
 	spu->dsisr = 0;
 	spu->slb_replace = 0;
@@ -2103,6 +2177,7 @@ int spu_restore(struct spu_state *new, struct spu *spu)
 	}
 	return rc;
 }
+EXPORT_SYMBOL_GPL(spu_restore);
 
 /**
  * spu_harvest - SPU harvest (reset) operation
@@ -2125,6 +2200,7 @@ static void init_prob(struct spu_state *csa)
 	csa->spu_chnlcnt_RW[28] = 1;
 	csa->spu_chnlcnt_RW[30] = 1;
 	csa->prob.spu_runcntl_RW = SPU_RUNCNTL_STOP;
+	csa->prob.mb_stat_R = 0x000400;
 }
 
 static void init_priv1(struct spu_state *csa)
@@ -2134,9 +2210,6 @@ static void init_priv1(struct spu_state *csa)
 	    MFC_STATE1_MASTER_RUN_CONTROL_MASK |
 	    MFC_STATE1_PROBLEM_STATE_MASK |
 	    MFC_STATE1_RELOCATE_MASK | MFC_STATE1_BUS_TLBIE_MASK;
-
-	/* Set storage description.  */
-	csa->priv1.mfc_sdr_RW = mfspr(SPRN_SDR1);
 
 	/* Enable OS-specific set of interrupts. */
 	csa->priv1.int_mask_class0_RW = CLASS0_ENABLE_DMA_ALIGNMENT_INTR |
@@ -2183,7 +2256,7 @@ void spu_init_csa(struct spu_state *csa)
 
 	memset(lscsa, 0, sizeof(struct spu_lscsa));
 	csa->lscsa = lscsa;
-	csa->register_lock = SPIN_LOCK_UNLOCKED;
+	spin_lock_init(&csa->register_lock);
 
 	/* Set LS pages reserved to allow for user-space mapping. */
 	for (p = lscsa->ls; p < lscsa->ls + LS_SIZE; p += PAGE_SIZE)
@@ -2193,6 +2266,7 @@ void spu_init_csa(struct spu_state *csa)
 	init_priv1(csa);
 	init_priv2(csa);
 }
+EXPORT_SYMBOL_GPL(spu_init_csa);
 
 void spu_fini_csa(struct spu_state *csa)
 {
@@ -2203,3 +2277,4 @@ void spu_fini_csa(struct spu_state *csa)
 
 	vfree(csa->lscsa);
 }
+EXPORT_SYMBOL_GPL(spu_fini_csa);

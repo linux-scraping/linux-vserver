@@ -36,7 +36,6 @@
 
 #define DEBUG
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/delay.h>
@@ -610,7 +609,8 @@ static int dummy_dequeue (struct usb_ep *_ep, struct usb_request *_req)
 	if (!dum->driver)
 		return -ESHUTDOWN;
 
-	spin_lock_irqsave (&dum->lock, flags);
+	local_irq_save (flags);
+	spin_lock (&dum->lock);
 	list_for_each_entry (req, &ep->queue, queue) {
 		if (&req->req == _req) {
 			list_del_init (&req->queue);
@@ -619,7 +619,7 @@ static int dummy_dequeue (struct usb_ep *_ep, struct usb_request *_req)
 			break;
 		}
 	}
-	spin_unlock_irqrestore (&dum->lock, flags);
+	spin_unlock (&dum->lock);
 
 	if (retval == 0) {
 		dev_dbg (udc_dev(dum),
@@ -627,6 +627,7 @@ static int dummy_dequeue (struct usb_ep *_ep, struct usb_request *_req)
 				req, _ep->name, _req->length, _req->buf);
 		_req->complete (_ep, _req);
 	}
+	local_irq_restore (flags);
 	return retval;
 }
 
@@ -778,7 +779,7 @@ usb_gadget_register_driver (struct usb_gadget_driver *driver)
 		return -EINVAL;
 	if (dum->driver)
 		return -EBUSY;
-	if (!driver->bind || !driver->unbind || !driver->setup
+	if (!driver->bind || !driver->setup
 			|| driver->speed == USB_SPEED_UNKNOWN)
 		return -EINVAL;
 
@@ -815,15 +816,14 @@ usb_gadget_register_driver (struct usb_gadget_driver *driver)
 	dum->gadget.dev.driver = &driver->driver;
 	dev_dbg (udc_dev(dum), "binding gadget driver '%s'\n",
 			driver->driver.name);
-	if ((retval = driver->bind (&dum->gadget)) != 0) {
-		dum->driver = NULL;
-		dum->gadget.dev.driver = NULL;
-		return retval;
-	}
+	if ((retval = driver->bind (&dum->gadget)) != 0)
+		goto err_bind_gadget;
 
 	driver->driver.bus = dum->gadget.dev.parent->bus;
-	driver_register (&driver->driver);
-	device_bind_driver (&dum->gadget.dev);
+	if ((retval = driver_register (&driver->driver)) != 0)
+		goto err_register;
+	if ((retval = device_bind_driver (&dum->gadget.dev)) != 0)
+		goto err_bind_driver;
 
 	/* khubd will enumerate this in a while */
 	spin_lock_irq (&dum->lock);
@@ -833,6 +833,20 @@ usb_gadget_register_driver (struct usb_gadget_driver *driver)
 
 	usb_hcd_poll_rh_status (dummy_to_hcd (dum));
 	return 0;
+
+err_bind_driver:
+	driver_unregister (&driver->driver);
+err_register:
+	if (driver->unbind)
+		driver->unbind (&dum->gadget);
+	spin_lock_irq (&dum->lock);
+	dum->pullup = 0;
+	set_link_state (dum);
+	spin_unlock_irq (&dum->lock);
+err_bind_gadget:
+	dum->driver = NULL;
+	dum->gadget.dev.driver = NULL;
+	return retval;
 }
 EXPORT_SYMBOL (usb_gadget_register_driver);
 
@@ -844,7 +858,7 @@ usb_gadget_unregister_driver (struct usb_gadget_driver *driver)
 
 	if (!dum)
 		return -ENODEV;
-	if (!driver || driver != dum->driver)
+	if (!driver || driver != dum->driver || !driver->unbind)
 		return -EINVAL;
 
 	dev_dbg (udc_dev(dum), "unregister gadget driver '%s'\n",
@@ -888,11 +902,9 @@ EXPORT_SYMBOL (net2280_set_fifo_mode);
 static void
 dummy_gadget_release (struct device *dev)
 {
-#if 0		/* usb_bus_put isn't EXPORTed! */
 	struct dummy	*dum = gadget_dev_to_dummy (dev);
 
-	usb_bus_put (&dummy_to_hcd (dum)->self);
-#endif
+	usb_put_hcd (dummy_to_hcd (dum));
 }
 
 static int dummy_udc_probe (struct platform_device *pdev)
@@ -914,12 +926,12 @@ static int dummy_udc_probe (struct platform_device *pdev)
 	if (rc < 0)
 		return rc;
 
-#if 0		/* usb_bus_get isn't EXPORTed! */
-	usb_bus_get (&dummy_to_hcd (dum)->self);
-#endif
+	usb_get_hcd (dummy_to_hcd (dum));
 
 	platform_set_drvdata (pdev, dum);
-	device_create_file (&dum->gadget.dev, &dev_attr_function);
+	rc = device_create_file (&dum->gadget.dev, &dev_attr_function);
+	if (rc < 0)
+		device_unregister (&dum->gadget.dev);
 	return rc;
 }
 
@@ -1540,7 +1552,7 @@ return_urb:
 			ep->already_seen = ep->setup_stage = 0;
 
 		spin_unlock (&dum->lock);
-		usb_hcd_giveback_urb (dummy_to_hcd(dum), urb, NULL);
+		usb_hcd_giveback_urb (dummy_to_hcd(dum), urb);
 		spin_lock (&dum->lock);
 
 		goto restart;
@@ -1867,8 +1879,7 @@ static int dummy_start (struct usb_hcd *hcd)
 #endif
 
 	/* FIXME 'urbs' should be a per-device thing, maybe in usbcore */
-	device_create_file (dummy_dev(dum), &dev_attr_urbs);
-	return 0;
+	return device_create_file (dummy_dev(dum), &dev_attr_urbs);
 }
 
 static void dummy_stop (struct usb_hcd *hcd)

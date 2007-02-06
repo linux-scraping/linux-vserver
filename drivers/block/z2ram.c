@@ -329,7 +329,7 @@ static struct kobject *z2_find(dev_t dev, int *part, void *data)
 
 static struct request_queue *z2_queue;
 
-int __init 
+static int __init 
 z2_init(void)
 {
     int ret;
@@ -354,7 +354,6 @@ z2_init(void)
     z2ram_gendisk->first_minor = 0;
     z2ram_gendisk->fops = &z2_fops;
     sprintf(z2ram_gendisk->disk_name, "z2ram");
-    strcpy(z2ram_gendisk->devfs_name, z2ram_gendisk->disk_name);
 
     z2ram_gendisk->queue = z2_queue;
     add_disk(z2ram_gendisk);
@@ -371,26 +370,7 @@ err:
     return ret;
 }
 
-#if defined(MODULE)
-
-MODULE_LICENSE("GPL");
-
-int
-init_module( void )
-{
-    int error;
-    
-    error = z2_init();
-    if ( error == 0 )
-    {
-	printk( KERN_INFO DEVICE_NAME ": loaded as module\n" );
-    }
-    
-    return error;
-}
-
-void
-cleanup_module( void )
+static void __exit z2_exit(void)
 {
     int i, j;
     blk_unregister_region(MKDEV(Z2RAM_MAJOR, 0), 256);
@@ -426,4 +406,7 @@ cleanup_module( void )
 
     return;
 } 
-#endif
+
+module_init(z2_init);
+module_exit(z2_exit);
+MODULE_LICENSE("GPL");

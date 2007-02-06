@@ -25,8 +25,8 @@
  *
  * We have to use the sync instructions for mb(), since lwsync doesn't
  * order loads with respect to previous stores.  Lwsync is fine for
- * rmb(), though.  Note that lwsync is interpreted as sync by
- * 32-bit and older 64-bit CPUs.
+ * rmb(), though. Note that rmb() actually uses a sync on 32-bit
+ * architectures.
  *
  * For wmb(), we use sync since wmb is used in drivers to order
  * stores to system memory with respect to writes to the device.
@@ -34,12 +34,11 @@
  * SMP since it is only used to order updates to system memory.
  */
 #define mb()   __asm__ __volatile__ ("sync" : : : "memory")
-#define rmb()  __asm__ __volatile__ ("lwsync" : : : "memory")
+#define rmb()  __asm__ __volatile__ (__stringify(LWSYNC) : : : "memory")
 #define wmb()  __asm__ __volatile__ ("sync" : : : "memory")
 #define read_barrier_depends()  do { } while(0)
 
 #define set_mb(var, value)	do { var = value; mb(); } while (0)
-#define set_wmb(var, value)	do { var = value; wmb(); } while (0)
 
 #ifdef __KERNEL__
 #ifdef CONFIG_SMP
@@ -53,6 +52,15 @@
 #define smp_wmb()	barrier()
 #define smp_read_barrier_depends()	do { } while(0)
 #endif /* CONFIG_SMP */
+
+/*
+ * This is a barrier which prevents following instructions from being
+ * started until the value of the argument x is known.  For example, if
+ * x is a variable loaded from memory, this prevents following
+ * instructions from being executed until the load has been performed.
+ */
+#define data_barrier(x)	\
+	asm volatile("twi 0,%0,0; isync" : : "r" (x) : "memory");
 
 struct task_struct;
 struct pt_regs;
@@ -82,10 +90,6 @@ DEBUGGER_BOILERPLATE(debugger_sstep)
 DEBUGGER_BOILERPLATE(debugger_iabr_match)
 DEBUGGER_BOILERPLATE(debugger_dabr_match)
 DEBUGGER_BOILERPLATE(debugger_fault_handler)
-
-#ifdef CONFIG_XMON
-extern void xmon_init(int enable);
-#endif
 
 #else
 static inline int debugger(struct pt_regs *regs) { return 0; }
@@ -169,11 +173,6 @@ extern u32 booke_wdt_enabled;
 extern u32 booke_wdt_period;
 #endif /* CONFIG_BOOKE_WDT */
 
-/* EBCDIC -> ASCII conversion for [0-9A-Z] on iSeries */
-extern unsigned char e2a(unsigned char);
-extern unsigned char* strne2a(unsigned char *dest,
-		const unsigned char *src, size_t n);
-
 struct device_node;
 extern void note_scsi_host(struct device_node *, void *);
 
@@ -220,8 +219,8 @@ __xchg_u32(volatile void *p, unsigned long val)
 "	stwcx.	%3,0,%2 \n\
 	bne-	1b"
 	ISYNC_ON_SMP
-	: "=&r" (prev), "=m" (*(volatile unsigned int *)p)
-	: "r" (p), "r" (val), "m" (*(volatile unsigned int *)p)
+	: "=&r" (prev), "+m" (*(volatile unsigned int *)p)
+	: "r" (p), "r" (val)
 	: "cc", "memory");
 
 	return prev;
@@ -240,8 +239,8 @@ __xchg_u64(volatile void *p, unsigned long val)
 "	stdcx.	%3,0,%2 \n\
 	bne-	1b"
 	ISYNC_ON_SMP
-	: "=&r" (prev), "=m" (*(volatile unsigned long *)p)
-	: "r" (p), "r" (val), "m" (*(volatile unsigned long *)p)
+	: "=&r" (prev), "+m" (*(volatile unsigned long *)p)
+	: "r" (p), "r" (val)
 	: "cc", "memory");
 
 	return prev;
@@ -299,8 +298,8 @@ __cmpxchg_u32(volatile unsigned int *p, unsigned long old, unsigned long new)
 	ISYNC_ON_SMP
 	"\n\
 2:"
-	: "=&r" (prev), "=m" (*p)
-	: "r" (p), "r" (old), "r" (new), "m" (*p)
+	: "=&r" (prev), "+m" (*p)
+	: "r" (p), "r" (old), "r" (new)
 	: "cc", "memory");
 
 	return prev;
@@ -322,8 +321,8 @@ __cmpxchg_u64(volatile unsigned long *p, unsigned long old, unsigned long new)
 	ISYNC_ON_SMP
 	"\n\
 2:"
-	: "=&r" (prev), "=m" (*p)
-	: "r" (p), "r" (old), "r" (new), "m" (*p)
+	: "=&r" (prev), "+m" (*p)
+	: "r" (p), "r" (old), "r" (new)
 	: "cc", "memory");
 
 	return prev;

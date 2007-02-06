@@ -14,7 +14,7 @@ extern struct pglist_data *node_data[];
 
 #ifdef CONFIG_X86_NUMAQ
 	#include <asm/numaq.h>
-#else	/* summit or generic arch */
+#elif defined(CONFIG_ACPI_SRAT)/* summit or generic arch */
 	#include <asm/srat.h>
 #endif
 
@@ -38,10 +38,16 @@ static inline void get_memcfg_numa(void)
 }
 
 extern int early_pfn_to_nid(unsigned long pfn);
+extern void numa_kva_reserve(void);
 
 #else /* !CONFIG_NUMA */
+
 #define get_memcfg_numa get_memcfg_numa_flat
 #define get_zholes_size(n) (0)
+
+static inline void numa_kva_reserve(void)
+{
+}
 #endif /* CONFIG_NUMA */
 
 #ifdef CONFIG_DISCONTIGMEM
@@ -114,13 +120,26 @@ static inline int pfn_valid(int pfn)
 	__alloc_bootmem_node(NODE_DATA(0), (x), PAGE_SIZE, __pa(MAX_DMA_ADDRESS))
 #define alloc_bootmem_low_pages(x) \
 	__alloc_bootmem_node(NODE_DATA(0), (x), PAGE_SIZE, 0)
-#define alloc_bootmem_node(ignore, x) \
-	__alloc_bootmem_node(NODE_DATA(0), (x), SMP_CACHE_BYTES, __pa(MAX_DMA_ADDRESS))
-#define alloc_bootmem_pages_node(ignore, x) \
-	__alloc_bootmem_node(NODE_DATA(0), (x), PAGE_SIZE, __pa(MAX_DMA_ADDRESS))
-#define alloc_bootmem_low_pages_node(ignore, x) \
-	__alloc_bootmem_node(NODE_DATA(0), (x), PAGE_SIZE, 0)
-
+#define alloc_bootmem_node(pgdat, x)					\
+({									\
+	struct pglist_data  __attribute__ ((unused))			\
+				*__alloc_bootmem_node__pgdat = (pgdat);	\
+	__alloc_bootmem_node(NODE_DATA(0), (x), SMP_CACHE_BYTES,	\
+						__pa(MAX_DMA_ADDRESS));	\
+})
+#define alloc_bootmem_pages_node(pgdat, x)				\
+({									\
+	struct pglist_data  __attribute__ ((unused))			\
+				*__alloc_bootmem_node__pgdat = (pgdat);	\
+	__alloc_bootmem_node(NODE_DATA(0), (x), PAGE_SIZE,		\
+						__pa(MAX_DMA_ADDRESS))	\
+})
+#define alloc_bootmem_low_pages_node(pgdat, x)				\
+({									\
+	struct pglist_data  __attribute__ ((unused))			\
+				*__alloc_bootmem_node__pgdat = (pgdat);	\
+	__alloc_bootmem_node(NODE_DATA(0), (x), PAGE_SIZE, 0);		\
+})
 #endif /* CONFIG_NEED_MULTIPLE_NODES */
 
 #endif /* _ASM_MMZONE_H_ */

@@ -7,7 +7,6 @@
 #ifndef _NET_IP_MP_ALG_H
 #define _NET_IP_MP_ALG_H
 
-#include <linux/config.h>
 #include <linux/ip_mp_alg.h>
 #include <net/flow.h>
 #include <net/route.h>
@@ -18,7 +17,7 @@ struct ip_mp_alg_ops {
 	void	(*mp_alg_select_route)(const struct flowi *flp,
 				       struct rtable *rth, struct rtable **rp);
 	void	(*mp_alg_flush)(void);
-	void	(*mp_alg_set_nhinfo)(__u32 network, __u32 netmask,
+	void	(*mp_alg_set_nhinfo)(__be32 network, __be32 netmask,
 				     unsigned char prefixlen,
 				     const struct fib_nh *nh);
 	void	(*mp_alg_remove)(struct rtable *rth);
@@ -60,7 +59,7 @@ static inline void multipath_flush(void)
 }
 
 static inline void multipath_set_nhinfo(struct rtable *rth,
-					__u32 network, __u32 netmask,
+					__be32 network, __be32 netmask,
 					unsigned char prefixlen,
 					const struct fib_nh *nh)
 {
@@ -89,9 +88,7 @@ static inline int multipath_comparekeys(const struct flowi *flp1,
 	return flp1->fl4_dst == flp2->fl4_dst &&
 		flp1->fl4_src == flp2->fl4_src &&
 		flp1->oif == flp2->oif &&
-#ifdef CONFIG_IP_ROUTE_FWMARK
-		flp1->fl4_fwmark == flp2->fl4_fwmark &&
-#endif
+		flp1->mark == flp2->mark &&
 		!((flp1->fl4_tos ^ flp2->fl4_tos) &
 		  (IPTOS_RT_MASK | RTO_ONLINK));
 }

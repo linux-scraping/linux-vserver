@@ -246,12 +246,8 @@ struct hfsplus_readdir_data {
 
 /* ext2 ioctls (EXT2_IOC_GETFLAGS and EXT2_IOC_SETFLAGS) to support
  * chattr/lsattr */
-#define HFSPLUS_IOC_EXT2_GETFLAGS	_IOR('f', 1, long)
-#define HFSPLUS_IOC_EXT2_SETFLAGS	_IOW('f', 2, long)
-
-#define EXT2_FLAG_IMMUTABLE		0x00000010 /* Immutable file */
-#define EXT2_FLAG_APPEND		0x00000020 /* writes to file may only append */
-#define EXT2_FLAG_NODUMP		0x00000040 /* do not dump file */
+#define HFSPLUS_IOC_EXT2_GETFLAGS	FS_IOC_GETFLAGS
+#define HFSPLUS_IOC_EXT2_SETFLAGS	FS_IOC_SETFLAGS
 
 
 /*
@@ -323,8 +319,8 @@ int hfsplus_file_extend(struct inode *);
 void hfsplus_file_truncate(struct inode *);
 
 /* inode.c */
-extern struct address_space_operations hfsplus_aops;
-extern struct address_space_operations hfsplus_btree_aops;
+extern const struct address_space_operations hfsplus_aops;
+extern const struct address_space_operations hfsplus_btree_aops;
 
 void hfsplus_inode_read_fork(struct inode *, struct hfsplus_fork_raw *);
 void hfsplus_inode_write_fork(struct inode *, struct hfsplus_fork_raw *);

@@ -3,7 +3,7 @@
  * License.  See the file "COPYING" in the main directory of this archive
  * for more details.
  *
- * Copyright (C) 2003-2005 Silicon Graphics, Inc.  All Rights Reserved.
+ * Copyright (C) 2003-2006 Silicon Graphics, Inc.  All Rights Reserved.
  */
 
 #include <linux/types.h>
@@ -15,7 +15,6 @@
 #include <asm/sn/pcidev.h>
 #include <asm/sn/pcibus_provider_defs.h>
 #include <asm/sn/tioce_provider.h>
-#include <asm/sn/sn2/sn_hwperf.h>
 
 /*
  * 1/26/2006
@@ -53,7 +52,7 @@
  */
 
 static void inline
-tioce_mmr_war_pre(struct tioce_kernel *kern, void *mmr_addr)
+tioce_mmr_war_pre(struct tioce_kernel *kern, void __iomem *mmr_addr)
 {
 	u64 mmr_base;
 	u64 mmr_offset;
@@ -62,7 +61,7 @@ tioce_mmr_war_pre(struct tioce_kernel *kern, void *mmr_addr)
 		return;
 
 	mmr_base = kern->ce_common->ce_pcibus.bs_base;
-	mmr_offset = (u64)mmr_addr - mmr_base;
+	mmr_offset = (unsigned long)mmr_addr - mmr_base;
 
 	if (mmr_offset < 0x45000) {
 		u64 mmr_war_offset;
@@ -74,12 +73,12 @@ tioce_mmr_war_pre(struct tioce_kernel *kern, void *mmr_addr)
 		else
 			mmr_war_offset = 0x158;
 
-		readq_relaxed((void *)(mmr_base + mmr_war_offset));
+		readq_relaxed((void __iomem *)(mmr_base + mmr_war_offset));
 	}
 }
 
 static void inline
-tioce_mmr_war_post(struct tioce_kernel *kern, void *mmr_addr)
+tioce_mmr_war_post(struct tioce_kernel *kern, void __iomem *mmr_addr)
 {
 	u64 mmr_base;
 	u64 mmr_offset;
@@ -88,12 +87,12 @@ tioce_mmr_war_post(struct tioce_kernel *kern, void *mmr_addr)
 		return;
 
 	mmr_base = kern->ce_common->ce_pcibus.bs_base;
-	mmr_offset = (u64)mmr_addr - mmr_base;
+	mmr_offset = (unsigned long)mmr_addr - mmr_base;
 
 	if (mmr_offset < 0x45000) {
 		if (mmr_offset == 0x100)
-			readq_relaxed((void *)(mmr_base + 0x38));
-		readq_relaxed((void *)(mmr_base + 0xb050));
+			readq_relaxed((void __iomem *)(mmr_base + 0x38));
+		readq_relaxed((void __iomem *)(mmr_base + 0xb050));
 	}
 }
 
@@ -170,7 +169,8 @@ tioce_mmr_war_post(struct tioce_kernel *kern, void *mmr_addr)
 	(ATE_PAGE((start)+(len)-1, pagesize) - ATE_PAGE(start, pagesize) + 1)
 
 #define ATE_VALID(ate)	((ate) & (1UL << 63))
-#define ATE_MAKE(addr, ps) (((addr) & ~ATE_PAGEMASK(ps)) | (1UL << 63))
+#define ATE_MAKE(addr, ps, msi) \
+	(((addr) & ~ATE_PAGEMASK(ps)) | (1UL << 63) | ((msi)?(1UL << 62):0))
 
 /*
  * Flavors of ate-based mapping supported by tioce_alloc_map()
@@ -196,15 +196,17 @@ tioce_mmr_war_post(struct tioce_kernel *kern, void *mmr_addr)
  *
  * 63    - must be 1 to indicate d64 mode to CE hardware
  * 62    - barrier bit ... controlled with tioce_dma_barrier()
- * 61    - 0 since this is not an MSI transaction
+ * 61    - msi bit ... specified through dma_flags
  * 60:54 - reserved, MBZ
  */
 static u64
-tioce_dma_d64(unsigned long ct_addr)
+tioce_dma_d64(unsigned long ct_addr, int dma_flags)
 {
 	u64 bus_addr;
 
 	bus_addr = ct_addr | (1UL << 63);
+	if (dma_flags & SN_DMA_MSI)
+		bus_addr |= (1UL << 61);
 
 	return bus_addr;
 }
@@ -220,7 +222,7 @@ tioce_dma_d64(unsigned long ct_addr)
  * @pci_dev.
  */
 static inline void
-pcidev_to_tioce(struct pci_dev *pdev, struct tioce **base,
+pcidev_to_tioce(struct pci_dev *pdev, struct tioce __iomem **base,
 		struct tioce_kernel **kernel, int *port)
 {
 	struct pcidev_info *pcidev_info;
@@ -232,7 +234,7 @@ pcidev_to_tioce(struct pci_dev *pdev, struct tioce **base,
 	ce_kernel = (struct tioce_kernel *)ce_common->ce_kernel_private;
 
 	if (base)
-		*base = (struct tioce *)ce_common->ce_pcibus.bs_base;
+		*base = (struct tioce __iomem *)ce_common->ce_pcibus.bs_base;
 	if (kernel)
 		*kernel = ce_kernel;
 
@@ -261,7 +263,7 @@ pcidev_to_tioce(struct pci_dev *pdev, struct tioce **base,
  */
 static u64
 tioce_alloc_map(struct tioce_kernel *ce_kern, int type, int port,
-		u64 ct_addr, int len)
+		u64 ct_addr, int len, int dma_flags)
 {
 	int i;
 	int j;
@@ -270,14 +272,15 @@ tioce_alloc_map(struct tioce_kernel *ce_kern, int type, int port,
 	int entries;
 	int nates;
 	u64 pagesize;
+	int msi_capable, msi_wanted;
 	u64 *ate_shadow;
-	u64 *ate_reg;
+	u64 __iomem *ate_reg;
 	u64 addr;
-	struct tioce *ce_mmr;
+	struct tioce __iomem *ce_mmr;
 	u64 bus_base;
 	struct tioce_dmamap *map;
 
-	ce_mmr = (struct tioce *)ce_kern->ce_common->ce_pcibus.bs_base;
+	ce_mmr = (struct tioce __iomem *)ce_kern->ce_common->ce_pcibus.bs_base;
 
 	switch (type) {
 	case TIOCE_ATE_M32:
@@ -291,6 +294,7 @@ tioce_alloc_map(struct tioce_kernel *ce_kern, int type, int port,
 		ate_reg = ce_mmr->ce_ure_ate3240;
 		pagesize = ce_kern->ce_ate3240_pagesize;
 		bus_base = TIOCE_M32_MIN;
+		msi_capable = 1;
 		break;
 	case TIOCE_ATE_M40:
 		first = 0;
@@ -299,6 +303,7 @@ tioce_alloc_map(struct tioce_kernel *ce_kern, int type, int port,
 		ate_reg = ce_mmr->ce_ure_ate40;
 		pagesize = MB(64);
 		bus_base = TIOCE_M40_MIN;
+		msi_capable = 0;
 		break;
 	case TIOCE_ATE_M40S:
 		/*
@@ -311,10 +316,15 @@ tioce_alloc_map(struct tioce_kernel *ce_kern, int type, int port,
 		ate_reg = ce_mmr->ce_ure_ate3240;
 		pagesize = GB(16);
 		bus_base = TIOCE_M40S_MIN;
+		msi_capable = 0;
 		break;
 	default:
 		return 0;
 	}
+
+	msi_wanted = dma_flags & SN_DMA_MSI;
+	if (msi_wanted && !msi_capable)
+		return 0;
 
 	nates = ATE_NPAGES(ct_addr, len, pagesize);
 	if (nates > entries)
@@ -344,7 +354,7 @@ tioce_alloc_map(struct tioce_kernel *ce_kern, int type, int port,
 	for (j = 0; j < nates; j++) {
 		u64 ate;
 
-		ate = ATE_MAKE(addr, pagesize);
+		ate = ATE_MAKE(addr, pagesize, msi_wanted);
 		ate_shadow[i + j] = ate;
 		tioce_mmr_storei(ce_kern, &ate_reg[i + j], ate);
 		addr += pagesize;
@@ -371,15 +381,18 @@ tioce_alloc_map(struct tioce_kernel *ce_kern, int type, int port,
  * Map @paddr into 32-bit bus space of the CE associated with @pcidev_info.
  */
 static u64
-tioce_dma_d32(struct pci_dev *pdev, u64 ct_addr)
+tioce_dma_d32(struct pci_dev *pdev, u64 ct_addr, int dma_flags)
 {
 	int dma_ok;
 	int port;
-	struct tioce *ce_mmr;
+	struct tioce __iomem *ce_mmr;
 	struct tioce_kernel *ce_kern;
 	u64 ct_upper;
 	u64 ct_lower;
 	dma_addr_t bus_addr;
+
+	if (dma_flags & SN_DMA_MSI)
+		return 0;
 
 	ct_upper = ct_addr & ~0x3fffffffUL;
 	ct_lower = ct_addr & 0x3fffffffUL;
@@ -447,7 +460,7 @@ tioce_dma_unmap(struct pci_dev *pdev, dma_addr_t bus_addr, int dir)
 	int i;
 	int port;
 	struct tioce_kernel *ce_kern;
-	struct tioce *ce_mmr;
+	struct tioce __iomem *ce_mmr;
 	unsigned long flags;
 
 	bus_addr = tioce_dma_barrier(bus_addr, 0);
@@ -507,7 +520,7 @@ tioce_dma_unmap(struct pci_dev *pdev, dma_addr_t bus_addr, int dir)
  */
 static u64
 tioce_do_dma_map(struct pci_dev *pdev, u64 paddr, size_t byte_count,
-		 int barrier)
+		 int barrier, int dma_flags)
 {
 	unsigned long flags;
 	u64 ct_addr;
@@ -523,15 +536,18 @@ tioce_do_dma_map(struct pci_dev *pdev, u64 paddr, size_t byte_count,
 	if (dma_mask < 0x7fffffffUL)
 		return 0;
 
-	ct_addr = PHYS_TO_TIODMA(paddr);
+	if (SN_DMA_ADDRTYPE(dma_flags) == SN_DMA_ADDR_PHYS)
+		ct_addr = PHYS_TO_TIODMA(paddr);
+	else
+		ct_addr = paddr;
 
 	/*
 	 * If the device can generate 64 bit addresses, create a D64 map.
-	 * Since this should never fail, bypass the rest of the checks.
 	 */
 	if (dma_mask == ~0UL) {
-		mapaddr = tioce_dma_d64(ct_addr);
-		goto dma_map_done;
+		mapaddr = tioce_dma_d64(ct_addr, dma_flags);
+		if (mapaddr)
+			goto dma_map_done;
 	}
 
 	pcidev_to_tioce(pdev, NULL, &ce_kern, &port);
@@ -574,18 +590,22 @@ tioce_do_dma_map(struct pci_dev *pdev, u64 paddr, size_t byte_count,
 
 		if (byte_count > MB(64)) {
 			mapaddr = tioce_alloc_map(ce_kern, TIOCE_ATE_M40S,
-						  port, ct_addr, byte_count);
+						  port, ct_addr, byte_count,
+						  dma_flags);
 			if (!mapaddr)
 				mapaddr =
 				    tioce_alloc_map(ce_kern, TIOCE_ATE_M40, -1,
-						    ct_addr, byte_count);
+						    ct_addr, byte_count,
+						    dma_flags);
 		} else {
 			mapaddr = tioce_alloc_map(ce_kern, TIOCE_ATE_M40, -1,
-						  ct_addr, byte_count);
+						  ct_addr, byte_count,
+						  dma_flags);
 			if (!mapaddr)
 				mapaddr =
 				    tioce_alloc_map(ce_kern, TIOCE_ATE_M40S,
-						    port, ct_addr, byte_count);
+						    port, ct_addr, byte_count,
+						    dma_flags);
 		}
 	}
 
@@ -593,7 +613,7 @@ tioce_do_dma_map(struct pci_dev *pdev, u64 paddr, size_t byte_count,
 	 * 32-bit direct is the next mode to try
 	 */
 	if (!mapaddr && dma_mask >= 0xffffffffUL)
-		mapaddr = tioce_dma_d32(pdev, ct_addr);
+		mapaddr = tioce_dma_d32(pdev, ct_addr, dma_flags);
 
 	/*
 	 * Last resort, try 32-bit ATE-based map.
@@ -601,7 +621,7 @@ tioce_do_dma_map(struct pci_dev *pdev, u64 paddr, size_t byte_count,
 	if (!mapaddr)
 		mapaddr =
 		    tioce_alloc_map(ce_kern, TIOCE_ATE_M32, -1, ct_addr,
-				    byte_count);
+				    byte_count, dma_flags);
 
 	spin_unlock_irqrestore(&ce_kern->ce_lock, flags);
 
@@ -622,9 +642,9 @@ dma_map_done:
  * in the address.
  */
 static u64
-tioce_dma(struct pci_dev *pdev, u64 paddr, size_t byte_count)
+tioce_dma(struct pci_dev *pdev, u64 paddr, size_t byte_count, int dma_flags)
 {
-	return tioce_do_dma_map(pdev, paddr, byte_count, 0);
+	return tioce_do_dma_map(pdev, paddr, byte_count, 0, dma_flags);
 }
 
 /**
@@ -636,21 +656,20 @@ tioce_dma(struct pci_dev *pdev, u64 paddr, size_t byte_count)
  * Simply call tioce_do_dma_map() to create a map with the barrier bit set
  * in the address.
  */ static u64
-tioce_dma_consistent(struct pci_dev *pdev, u64 paddr, size_t byte_count)
+tioce_dma_consistent(struct pci_dev *pdev, u64 paddr, size_t byte_count, int dma_flags)
 {
-	return tioce_do_dma_map(pdev, paddr, byte_count, 1);
+	return tioce_do_dma_map(pdev, paddr, byte_count, 1, dma_flags);
 }
 
 /**
  * tioce_error_intr_handler - SGI TIO CE error interrupt handler
  * @irq: unused
  * @arg: pointer to tioce_common struct for the given CE
- * @pt: unused
  *
  * Handle a CE error interrupt.  Simply a wrapper around a SAL call which
  * defers processing to the SGI prom.
  */ static irqreturn_t
-tioce_error_intr_handler(int irq, void *arg, struct pt_regs *pt)
+tioce_error_intr_handler(int irq, void *arg)
 {
 	struct tioce_common *soft = arg;
 	struct ia64_sal_retval ret_stuff;
@@ -680,9 +699,9 @@ static void
 tioce_reserve_m32(struct tioce_kernel *ce_kern, u64 base, u64 limit)
 {
 	int ate_index, last_ate, ps;
-	struct tioce *ce_mmr;
+	struct tioce __iomem *ce_mmr;
 
-	ce_mmr = (struct tioce *)ce_kern->ce_common->ce_pcibus.bs_base;
+	ce_mmr = (struct tioce __iomem *)ce_kern->ce_common->ce_pcibus.bs_base;
 	ps = ce_kern->ce_ate3240_pagesize;
 	ate_index = ATE_PAGE(base, ps);
 	last_ate = ate_index + ATE_NPAGES(base, limit-base+1, ps) - 1;
@@ -696,7 +715,7 @@ tioce_reserve_m32(struct tioce_kernel *ce_kern, u64 base, u64 limit)
 	while (ate_index <= last_ate) {
 		u64 ate;
 
-		ate = ATE_MAKE(0xdeadbeef, ps);
+		ate = ATE_MAKE(0xdeadbeef, ps, 0);
 		ce_kern->ce_ate3240_shadow[ate_index] = ate;
 		tioce_mmr_storei(ce_kern, &ce_mmr->ce_ure_ate3240[ate_index],
 				 ate);
@@ -716,7 +735,7 @@ tioce_kern_init(struct tioce_common *tioce_common)
 	int dev;
 	u32 tmp;
 	unsigned int seg, bus;
-	struct tioce *tioce_mmr;
+	struct tioce __iomem *tioce_mmr;
 	struct tioce_kernel *tioce_kern;
 
 	tioce_kern = kzalloc(sizeof(struct tioce_kernel), GFP_KERNEL);
@@ -747,7 +766,7 @@ tioce_kern_init(struct tioce_common *tioce_common)
 	 * the ate's.
 	 */
 
-	tioce_mmr = (struct tioce *)tioce_common->ce_pcibus.bs_base;
+	tioce_mmr = (struct tioce __iomem *)tioce_common->ce_pcibus.bs_base;
 	tioce_mmr_clri(tioce_kern, &tioce_mmr->ce_ure_page_map,
 		       CE_URE_PAGESIZE_MASK);
 	tioce_mmr_seti(tioce_kern, &tioce_mmr->ce_ure_page_map,
@@ -838,7 +857,7 @@ tioce_force_interrupt(struct sn_irq_info *sn_irq_info)
 	struct pcidev_info *pcidev_info;
 	struct tioce_common *ce_common;
 	struct tioce_kernel *ce_kern;
-	struct tioce *ce_mmr;
+	struct tioce __iomem *ce_mmr;
 	u64 force_int_val;
 
 	if (!sn_irq_info->irq_bridge)
@@ -852,7 +871,7 @@ tioce_force_interrupt(struct sn_irq_info *sn_irq_info)
 		return;
 
 	ce_common = (struct tioce_common *)pcidev_info->pdi_pcibus_info;
-	ce_mmr = (struct tioce *)ce_common->ce_pcibus.bs_base;
+	ce_mmr = (struct tioce __iomem *)ce_common->ce_pcibus.bs_base;
 	ce_kern = (struct tioce_kernel *)ce_common->ce_kernel_private;
 
 	/*
@@ -933,7 +952,7 @@ tioce_target_interrupt(struct sn_irq_info *sn_irq_info)
 	struct pcidev_info *pcidev_info;
 	struct tioce_common *ce_common;
 	struct tioce_kernel *ce_kern;
-	struct tioce *ce_mmr;
+	struct tioce __iomem *ce_mmr;
 	int bit;
 	u64 vector;
 
@@ -942,7 +961,7 @@ tioce_target_interrupt(struct sn_irq_info *sn_irq_info)
 		return;
 
 	ce_common = (struct tioce_common *)pcidev_info->pdi_pcibus_info;
-	ce_mmr = (struct tioce *)ce_common->ce_pcibus.bs_base;
+	ce_mmr = (struct tioce __iomem *)ce_common->ce_pcibus.bs_base;
 	ce_kern = (struct tioce_kernel *)ce_common->ce_kernel_private;
 
 	bit = sn_irq_info->irq_int_bit;
@@ -970,11 +989,9 @@ tioce_target_interrupt(struct sn_irq_info *sn_irq_info)
 static void *
 tioce_bus_fixup(struct pcibus_bussoft *prom_bussoft, struct pci_controller *controller)
 {
-	int my_nasid;
-	cnodeid_t my_cnode, mem_cnode;
 	struct tioce_common *tioce_common;
 	struct tioce_kernel *tioce_kern;
-	struct tioce *tioce_mmr;
+	struct tioce __iomem *tioce_mmr;
 
 	/*
 	 * Allocate kernel bus soft and copy from prom.
@@ -998,15 +1015,15 @@ tioce_bus_fixup(struct pcibus_bussoft *prom_bussoft, struct pci_controller *cont
 	 * interrupt handler.
 	 */
 
-	tioce_mmr = (struct tioce *)tioce_common->ce_pcibus.bs_base;
+	tioce_mmr = (struct tioce __iomem *)tioce_common->ce_pcibus.bs_base;
 	tioce_mmr_seti(tioce_kern, &tioce_mmr->ce_adm_int_status_alias, ~0ULL);
 	tioce_mmr_seti(tioce_kern, &tioce_mmr->ce_adm_error_summary_alias,
 		       ~0ULL);
-	tioce_mmr_seti(tioce_kern, &tioce_mmr->ce_dre_comp_err_addr, ~0ULL);
+	tioce_mmr_seti(tioce_kern, &tioce_mmr->ce_dre_comp_err_addr, 0ULL);
 
 	if (request_irq(SGI_PCIASIC_ERROR,
 			tioce_error_intr_handler,
-			SA_SHIRQ, "TIOCE error", (void *)tioce_common))
+			IRQF_SHARED, "TIOCE error", (void *)tioce_common))
 		printk(KERN_WARNING
 		       "%s:  Unable to get irq %d.  "
 		       "Error interrupts won't be routed for "
@@ -1014,21 +1031,6 @@ tioce_bus_fixup(struct pcibus_bussoft *prom_bussoft, struct pci_controller *cont
 		       __FUNCTION__, SGI_PCIASIC_ERROR,
 		       tioce_common->ce_pcibus.bs_persist_segment,
 		       tioce_common->ce_pcibus.bs_persist_busnum);
-
-	/*
-	 * identify closest nasid for memory allocations
-	 */
-
-	my_nasid = NASID_GET(tioce_common->ce_pcibus.bs_base);
-	my_cnode = nasid_to_cnodeid(my_nasid);
-
-	if (sn_hwperf_get_nearest_node(my_cnode, &mem_cnode, NULL) < 0) {
-		printk(KERN_WARNING "tioce_bus_fixup: failed to find "
-		       "closest node with MEM to TIO node %d\n", my_cnode);
-		mem_cnode = (cnodeid_t)-1; /* use any node */
-	}
-
-	controller->node = mem_cnode;
 
 	return tioce_common;
 }

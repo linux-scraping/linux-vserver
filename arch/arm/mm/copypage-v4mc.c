@@ -19,6 +19,9 @@
 #include <asm/page.h>
 #include <asm/pgtable.h>
 #include <asm/tlbflush.h>
+#include <asm/cacheflush.h>
+
+#include "mm.h"
 
 /*
  * 0xffff8000 to 0xffffffff is reserved for any ARM architecture
@@ -26,8 +29,6 @@
  */
 #define minicache_pgprot __pgprot(L_PTE_PRESENT | L_PTE_YOUNG | \
 				  L_PTE_CACHEABLE)
-
-#define TOP_PTE(x)	pte_offset_kernel(top_pmd, x)
 
 static DEFINE_SPINLOCK(minicache_lock);
 
@@ -69,9 +70,14 @@ mc_copy_user_page(void *from, void *to)
 
 void v4_mc_copy_user_page(void *kto, const void *kfrom, unsigned long vaddr)
 {
+	struct page *page = virt_to_page(kfrom);
+
+	if (test_and_clear_bit(PG_dcache_dirty, &page->flags))
+		__flush_dcache_page(page_mapping(page), page);
+
 	spin_lock(&minicache_lock);
 
-	set_pte(TOP_PTE(0xffff8000), pfn_pte(__pa(kfrom) >> PAGE_SHIFT, minicache_pgprot));
+	set_pte_ext(TOP_PTE(0xffff8000), pfn_pte(__pa(kfrom) >> PAGE_SHIFT, minicache_pgprot), 0);
 	flush_tlb_kernel_page(0xffff8000);
 
 	mc_copy_user_page((void *)0xffff8000, kto);

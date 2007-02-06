@@ -81,7 +81,7 @@ static struct hw_interrupt_type pyxis_irq_type = {
 };
 
 void 
-pyxis_device_interrupt(unsigned long vector, struct pt_regs *regs)
+pyxis_device_interrupt(unsigned long vector)
 {
 	unsigned long pld;
 	unsigned int i;
@@ -98,9 +98,9 @@ pyxis_device_interrupt(unsigned long vector, struct pt_regs *regs)
 		i = ffz(~pld);
 		pld &= pld - 1; /* clear least bit set */
 		if (i == 7)
-			isa_device_interrupt(vector, regs);
+			isa_device_interrupt(vector);
 		else
-			handle_irq(16+i, regs);
+			handle_irq(16+i);
 	}
 }
 
@@ -120,7 +120,7 @@ init_pyxis_irqs(unsigned long ignore_mask)
 		if ((ignore_mask >> i) & 1)
 			continue;
 		irq_desc[i].status = IRQ_DISABLED | IRQ_LEVEL;
-		irq_desc[i].handler = &pyxis_irq_type;
+		irq_desc[i].chip = &pyxis_irq_type;
 	}
 
 	setup_irq(16+7, &isa_cascade_irqaction);

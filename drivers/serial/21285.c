@@ -1,5 +1,5 @@
 /*
- * linux/drivers/char/21285.c
+ * linux/drivers/serial/21285.c
  *
  * Driver for the serial port on the 21285 StrongArm-110 core logic chip.
  *
@@ -7,7 +7,6 @@
  *
  *  $Id: 21285.c,v 1.37 2002/07/28 10:03:27 rmk Exp $
  */
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/tty.h>
 #include <linux/ioport.h>
@@ -86,7 +85,7 @@ static void serial21285_enable_ms(struct uart_port *port)
 {
 }
 
-static irqreturn_t serial21285_rx_chars(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t serial21285_rx_chars(int irq, void *dev_id)
 {
 	struct uart_port *port = dev_id;
 	struct tty_struct *tty = port->info->tty;
@@ -124,7 +123,7 @@ static irqreturn_t serial21285_rx_chars(int irq, void *dev_id, struct pt_regs *r
 	return IRQ_HANDLED;
 }
 
-static irqreturn_t serial21285_tx_chars(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t serial21285_tx_chars(int irq, void *dev_id)
 {
 	struct uart_port *port = dev_id;
 	struct circ_buf *xmit = &port->info->xmit;
@@ -215,8 +214,8 @@ static void serial21285_shutdown(struct uart_port *port)
 }
 
 static void
-serial21285_set_termios(struct uart_port *port, struct termios *termios,
-			struct termios *old)
+serial21285_set_termios(struct uart_port *port, struct ktermios *termios,
+			struct ktermios *old)
 {
 	unsigned long flags;
 	unsigned int baud, quot, h_lcr;
@@ -479,7 +478,6 @@ static struct uart_driver serial21285_reg = {
 	.owner			= THIS_MODULE,
 	.driver_name		= "ttyFB",
 	.dev_name		= "ttyFB",
-	.devfs_name             = "ttyFB",
 	.major			= SERIAL_21285_MAJOR,
 	.minor			= SERIAL_21285_MINOR,
 	.nr			= 1,

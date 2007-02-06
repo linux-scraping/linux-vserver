@@ -154,6 +154,7 @@ MODULE_SUPPORTED_DEVICE("{{Creative,SB CA0106 chip}}");
 static int index[SNDRV_CARDS] = SNDRV_DEFAULT_IDX;
 static char *id[SNDRV_CARDS] = SNDRV_DEFAULT_STR;
 static int enable[SNDRV_CARDS] = SNDRV_DEFAULT_ENABLE_PNP;
+static uint subsystem[SNDRV_CARDS]; /* Force card subsystem model */
 
 module_param_array(index, int, NULL, 0444);
 MODULE_PARM_DESC(index, "Index value for the CA0106 soundcard.");
@@ -161,6 +162,8 @@ module_param_array(id, charp, NULL, 0444);
 MODULE_PARM_DESC(id, "ID string for the CA0106 soundcard.");
 module_param_array(enable, bool, NULL, 0444);
 MODULE_PARM_DESC(enable, "Enable the CA0106 soundcard.");
+module_param_array(subsystem, uint, NULL, 0444);
+MODULE_PARM_DESC(subsystem, "Force card subsystem model.");
 
 #include "ca0106.h"
 
@@ -186,18 +189,34 @@ static struct snd_ca0106_details ca0106_chip_details[] = {
 	 /* New Audigy SE. Has a different DAC. */
 	 /* SB0570:
 	  * CTRL:CA0106-DAT
-	  * ADC: WM8768GEDS
-	  * DAC: WM8775EDS
+	  * ADC: WM8775EDS
+	  * DAC: WM8768GEDS
 	  */
 	 { .serial = 0x100a1102,
 	   .name   = "Audigy SE [SB0570]",
 	   .gpio_type = 1,
 	   .i2c_adc = 1,
 	   .spi_dac = 1 } ,
+	 /* New Audigy LS. Has a different DAC. */
+	 /* SB0570:
+	  * CTRL:CA0106-DAT
+	  * ADC: WM8775EDS
+	  * DAC: WM8768GEDS
+	  */
+	 { .serial = 0x10111102,
+	   .name   = "Audigy SE OEM [SB0570a]",
+	   .gpio_type = 1,
+	   .i2c_adc = 1,
+	   .spi_dac = 1 } ,
 	 /* MSI K8N Diamond Motherboard with onboard SB Live 24bit without AC97 */
+	 /* SB0438
+	  * CTRL:CA0106-DAT
+	  * ADC: WM8775SEDS
+	  * DAC: CS4382-KQZ
+	  */
 	 { .serial = 0x10091462,
 	   .name   = "MSI K8N Diamond MB [SB0438]",
-	   .gpio_type = 1,
+	   .gpio_type = 2,
 	   .i2c_adc = 1 } ,
 	 /* Shuttle XPC SD31P which has an onboard Creative Labs
 	  * Sound Blaster Live! 24-bit EAX
@@ -326,6 +345,7 @@ int snd_ca0106_spi_write(struct snd_ca0106 * emu,
 	return 0;
 }
 
+/* The ADC does not support i2c read, so only write is implemented */
 int snd_ca0106_i2c_write(struct snd_ca0106 *emu,
 				u32 reg,
 				u32 value)
@@ -340,6 +360,7 @@ int snd_ca0106_i2c_write(struct snd_ca0106 *emu,
 	}
 
 	tmp = reg << 25 | value << 16;
+	// snd_printk("I2C-write:reg=0x%x, value=0x%x\n", reg, value);
 	/* Not sure what this I2C channel controls. */
 	/* snd_ca0106_ptr_write(emu, I2C_D0, 0, tmp); */
 
@@ -348,8 +369,9 @@ int snd_ca0106_i2c_write(struct snd_ca0106 *emu,
 
 	for (retry = 0; retry < 10; retry++) {
 		/* Send the data to i2c */
-		tmp = snd_ca0106_ptr_read(emu, I2C_A, 0);
-		tmp = tmp & ~(I2C_A_ADC_READ|I2C_A_ADC_LAST|I2C_A_ADC_START|I2C_A_ADC_ADD_MASK);
+		//tmp = snd_ca0106_ptr_read(emu, I2C_A, 0);
+		//tmp = tmp & ~(I2C_A_ADC_READ|I2C_A_ADC_LAST|I2C_A_ADC_START|I2C_A_ADC_ADD_MASK);
+		tmp = 0;
 		tmp = tmp | (I2C_A_ADC_LAST|I2C_A_ADC_START|I2C_A_ADC_ADD);
 		snd_ca0106_ptr_write(emu, I2C_A, 0, tmp);
 
@@ -1038,7 +1060,7 @@ static int snd_ca0106_free(struct snd_ca0106 *chip)
 
 	// release the irq
 	if (chip->irq >= 0)
-		free_irq(chip->irq, (void *)chip);
+		free_irq(chip->irq, chip);
 	pci_disable_device(chip->pci);
 	kfree(chip);
 	return 0;
@@ -1050,8 +1072,7 @@ static int snd_ca0106_dev_free(struct snd_device *device)
 	return snd_ca0106_free(chip);
 }
 
-static irqreturn_t snd_ca0106_interrupt(int irq, void *dev_id,
-					  struct pt_regs *regs)
+static irqreturn_t snd_ca0106_interrupt(int irq, void *dev_id)
 {
 	unsigned int status;
 
@@ -1181,7 +1202,7 @@ static unsigned int spi_dac_init[] = {
 	0x02ff,
 	0x0400,
 	0x0520,
-	0x0600,
+	0x0620, /* Set 24 bit. Was 0x0600 */
 	0x08ff,
 	0x0aff,
 	0x0cff,
@@ -1200,7 +1221,23 @@ static unsigned int spi_dac_init[] = {
 	0x1400,
 };
 
-static int __devinit snd_ca0106_create(struct snd_card *card,
+static unsigned int i2c_adc_init[][2] = {
+	{ 0x17, 0x00 }, /* Reset */
+	{ 0x07, 0x00 }, /* Timeout */
+	{ 0x0b, 0x22 },  /* Interface control */
+	{ 0x0c, 0x22 },  /* Master mode control */
+	{ 0x0d, 0x08 },  /* Powerdown control */
+	{ 0x0e, 0xcf },  /* Attenuation Left  0x01 = -103dB, 0xff = 24dB */
+	{ 0x0f, 0xcf },  /* Attenuation Right 0.5dB steps */
+	{ 0x10, 0x7b },  /* ALC Control 1 */
+	{ 0x11, 0x00 },  /* ALC Control 2 */
+	{ 0x12, 0x32 },  /* ALC Control 3 */
+	{ 0x13, 0x00 },  /* Noise gate control */
+	{ 0x14, 0xa6 },  /* Limiter control */
+	{ 0x15, ADC_MUX_LINEIN },  /* ADC Mixer control */
+};
+
+static int __devinit snd_ca0106_create(int dev, struct snd_card *card,
 					 struct pci_dev *pci,
 					 struct snd_ca0106 **rchip)
 {
@@ -1244,8 +1281,7 @@ static int __devinit snd_ca0106_create(struct snd_card *card,
 	}
 
 	if (request_irq(pci->irq, snd_ca0106_interrupt,
-			SA_INTERRUPT|SA_SHIRQ, "snd_ca0106",
-			(void *)chip)) {
+			IRQF_SHARED, "snd_ca0106", chip)) {
 		snd_ca0106_free(chip);
 		printk(KERN_ERR "cannot grab irq\n");
 		return -EBUSY;
@@ -1260,21 +1296,29 @@ static int __devinit snd_ca0106_create(struct snd_card *card,
 
 	pci_set_master(pci);
 	/* read revision & serial */
-	pci_read_config_byte(pci, PCI_REVISION_ID, (char *)&chip->revision);
+	pci_read_config_byte(pci, PCI_REVISION_ID, &chip->revision);
 	pci_read_config_dword(pci, PCI_SUBSYSTEM_VENDOR_ID, &chip->serial);
 	pci_read_config_word(pci, PCI_SUBSYSTEM_ID, &chip->model);
 #if 1
-	printk(KERN_INFO "Model %04x Rev %08x Serial %08x\n", chip->model,
+	printk(KERN_INFO "snd-ca0106: Model %04x Rev %08x Serial %08x\n", chip->model,
 	       chip->revision, chip->serial);
 #endif
 	strcpy(card->driver, "CA0106");
 	strcpy(card->shortname, "CA0106");
 
 	for (c = ca0106_chip_details; c->serial; c++) {
-		if (c->serial == chip->serial)
+		if (subsystem[dev]) {
+			if (c->serial == subsystem[dev])
+				break;
+		} else if (c->serial == chip->serial)
 			break;
 	}
 	chip->details = c;
+	if (subsystem[dev]) {
+		printk(KERN_INFO "snd-ca0106: Sound card name=%s, subsystem=0x%x. Forced to subsystem=0x%x\n",
+                        c->name, chip->serial, subsystem[dev]);
+	}
+
 	sprintf(card->longname, "%s at 0x%lx irq %i",
 		c->name, chip->port, chip->irq);
 
@@ -1361,7 +1405,12 @@ static int __devinit snd_ca0106_create(struct snd_card *card,
         snd_ca0106_ptr_write(chip, CAPTURE_SOURCE, 0x0, 0x333300e4); /* Select MIC, Line in, TAD in, AUX in */
 	chip->capture_source = 3; /* Set CAPTURE_SOURCE */
 
-        if (chip->details->gpio_type == 1) { /* The SB0410 and SB0413 use GPIO differently. */
+        if (chip->details->gpio_type == 2) { /* The SB0438 use GPIO differently. */
+		/* FIXME: Still need to find out what the other GPIO bits do. E.g. For digital spdif out. */
+		outl(0x0, chip->port+GPIO);
+		//outl(0x00f0e000, chip->port+GPIO); /* Analog */
+		outl(0x005f5301, chip->port+GPIO); /* Analog */
+	} else if (chip->details->gpio_type == 1) { /* The SB0410 and SB0413 use GPIO differently. */
 		/* FIXME: Still need to find out what the other GPIO bits do. E.g. For digital spdif out. */
 		outl(0x0, chip->port+GPIO);
 		//outl(0x00f0e000, chip->port+GPIO); /* Analog */
@@ -1379,7 +1428,19 @@ static int __devinit snd_ca0106_create(struct snd_card *card,
 	outl(HCFG_AC97 | HCFG_AUDIOENABLE, chip->port+HCFG); /* AC97 2.0, Enable outputs. */
 
         if (chip->details->i2c_adc == 1) { /* The SB0410 and SB0413 use I2C to control ADC. */
-	        snd_ca0106_i2c_write(chip, ADC_MUX, ADC_MUX_LINEIN); /* Enable Line-in capture. MIC in currently untested. */
+		int size, n;
+
+		size = ARRAY_SIZE(i2c_adc_init);
+                //snd_printk("I2C:array size=0x%x\n", size);
+		for (n=0; n < size; n++) {
+			snd_ca0106_i2c_write(chip, i2c_adc_init[n][0], i2c_adc_init[n][1]);
+		}
+		for (n=0; n < 4; n++) {
+			chip->i2c_capture_volume[n][0]= 0xcf;
+			chip->i2c_capture_volume[n][1]= 0xcf;
+		}
+		chip->i2c_capture_source=2; /* Line in */
+	        //snd_ca0106_i2c_write(chip, ADC_MUX, ADC_MUX_LINEIN); /* Enable Line-in capture. MIC in currently untested. */
 	}
         if (chip->details->spi_dac == 1) { /* The SB0570 use SPI to control DAC. */
 		int size, n;
@@ -1500,7 +1561,7 @@ static int __devinit snd_ca0106_probe(struct pci_dev *pci,
 	if (card == NULL)
 		return -ENOMEM;
 
-	if ((err = snd_ca0106_create(card, pci, &chip)) < 0) {
+	if ((err = snd_ca0106_create(dev, card, pci, &chip)) < 0) {
 		snd_card_free(card);
 		return err;
 	}
@@ -1561,7 +1622,7 @@ static void __devexit snd_ca0106_remove(struct pci_dev *pci)
 }
 
 // PCI IDs
-static struct pci_device_id snd_ca0106_ids[] __devinitdata = {
+static struct pci_device_id snd_ca0106_ids[] = {
 	{ 0x1102, 0x0007, PCI_ANY_ID, PCI_ANY_ID, 0, 0, 0 },	/* Audigy LS or Live 24bit */
 	{ 0, }
 };

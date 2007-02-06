@@ -19,7 +19,6 @@
  *				   and abstracted EGPIO interface.
  *
  */
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/kernel.h>
@@ -703,7 +702,7 @@ static u32 gpio_irq_mask[] = {
 	GPIO2_SD_CON_SLT,
 };
 
-static void h3800_IRQ_demux(unsigned int irq, struct irqdesc *desc, struct pt_regs *regs)
+static void h3800_IRQ_demux(unsigned int irq, struct irq_desc *desc)
 {
 	int i;
 
@@ -720,14 +719,14 @@ static void h3800_IRQ_demux(unsigned int irq, struct irqdesc *desc, struct pt_re
 		if (0) printk("%s KPIO 0x%08X\n", __FUNCTION__, irq);
 		for (j = 0; j < H3800_KPIO_IRQ_COUNT; j++)
 			if (irq & kpio_irq_mask[j])
-				do_edge_IRQ(H3800_KPIO_IRQ_COUNT + j, irq_desc + H3800_KPIO_IRQ_COUNT + j, regs);
+				handle_edge_irq(H3800_KPIO_IRQ_COUNT + j, irq_desc + H3800_KPIO_IRQ_COUNT + j);
 
 		/* GPIO2 */
 		irq = H3800_ASIC2_GPIINTFLAG;
 		if (0) printk("%s GPIO 0x%08X\n", __FUNCTION__, irq);
 		for (j = 0; j < H3800_GPIO_IRQ_COUNT; j++)
 			if (irq & gpio_irq_mask[j])
-				do_edge_IRQ(H3800_GPIO_IRQ_COUNT + j, irq_desc + H3800_GPIO_IRQ_COUNT + j , regs);
+				handle_edge_irq(H3800_GPIO_IRQ_COUNT + j, irq_desc + H3800_GPIO_IRQ_COUNT + j);
 	}
 
 	if (i >= MAX_ASIC_ISR_LOOPS)
@@ -741,7 +740,7 @@ static void h3800_IRQ_demux(unsigned int irq, struct irqdesc *desc, struct pt_re
 static struct irqaction h3800_irq = {
 	.name		= "h3800_asic",
 	.handler	= h3800_IRQ_demux,
-	.flags		= SA_INTERRUPT | SA_TIMER,
+	.flags		= IRQF_DISABLED | IRQF_TIMER,
 };
 
 u32 kpio_int_shadow = 0;
@@ -836,7 +835,7 @@ static void __init h3800_init_irq(void)
 	}
 #endif
 	set_irq_type(IRQ_GPIO_H3800_ASIC, IRQT_RISING);
-	set_irq_chained_handler(IRQ_GPIO_H3800_ASIC, &h3800_IRQ_demux);
+	set_irq_chained_handler(IRQ_GPIO_H3800_ASIC, h3800_IRQ_demux);
 }
 
 

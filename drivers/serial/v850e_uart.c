@@ -271,14 +271,14 @@ void v850e_uart_tx (struct uart_port *port)
 		v850e_uart_stop_tx (port, stopped);
 }
 
-static irqreturn_t v850e_uart_tx_irq(int irq, void *data, struct pt_regs *regs)
+static irqreturn_t v850e_uart_tx_irq(int irq, void *data)
 {
 	struct uart_port *port = data;
 	v850e_uart_tx (port);
 	return IRQ_HANDLED;
 }
 
-static irqreturn_t v850e_uart_rx_irq(int irq, void *data, struct pt_regs *regs)
+static irqreturn_t v850e_uart_rx_irq(int irq, void *data)
 {
 	struct uart_port *port = data;
 	unsigned ch_stat = TTY_NORMAL;
@@ -372,13 +372,13 @@ static int v850e_uart_startup (struct uart_port *port)
 
 	/* Alloc RX irq.  */
 	err = request_irq (V850E_UART_RX_IRQ (port->line), v850e_uart_rx_irq,
-			   SA_INTERRUPT, "v850e_uart", port);
+			   IRQF_DISABLED, "v850e_uart", port);
 	if (err)
 		return err;
 
 	/* Alloc TX irq.  */
 	err = request_irq (V850E_UART_TX_IRQ (port->line), v850e_uart_tx_irq,
-			   SA_INTERRUPT, "v850e_uart", port);
+			   IRQF_DISABLED, "v850e_uart", port);
 	if (err) {
 		free_irq (V850E_UART_RX_IRQ (port->line), port);
 		return err;
@@ -404,8 +404,8 @@ static void v850e_uart_shutdown (struct uart_port *port)
 }
 
 static void
-v850e_uart_set_termios (struct uart_port *port, struct termios *termios,
-		        struct termios *old)
+v850e_uart_set_termios (struct uart_port *port, struct ktermios *termios,
+		        struct ktermios *old)
 {
 	unsigned cflags = termios->c_cflag;
 
@@ -468,7 +468,6 @@ static struct uart_ops v850e_uart_ops = {
 static struct uart_driver v850e_uart_driver = {
 	.owner			= THIS_MODULE,
 	.driver_name		= "v850e_uart",
-	.devfs_name		= "tts/",
 	.dev_name		= "ttyS",
 	.major			= TTY_MAJOR,
 	.minor			= V850E_UART_MINOR_BASE,

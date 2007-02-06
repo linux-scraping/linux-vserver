@@ -11,9 +11,7 @@
 #ifndef _XTENSA_DMA_H
 #define _XTENSA_DMA_H
 
-#include <linux/config.h>
 #include <asm/io.h>		/* need byte IO */
-#include <xtensa/config/core.h>
 
 /*
  * This is only to be defined if we have PC-like DMA.
@@ -45,7 +43,9 @@
  *	enters another area, and virt_to_phys() may not return
  *	the value desired).
  */
-#define MAX_DMA_ADDRESS		(PAGE_OFFSET + XCHAL_KSEG_CACHED_SIZE - 1)
+
+#define MAX_DMA_ADDRESS		(PAGE_OFFSET + XCHAL_KIO_SIZE - 1)
+
 
 /* Reserve and release a DMA channel */
 extern int request_dma(unsigned int dmanr, const char * device_id);

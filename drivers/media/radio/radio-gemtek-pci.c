@@ -1,6 +1,6 @@
 /*
  ***************************************************************************
- *     
+ *
  *     radio-gemtek-pci.c - Gemtek PCI Radio driver
  *     (C) 2001 Vladimir Shebordaev <vshebordaev@mail.ru>
  *
@@ -31,20 +31,44 @@
  *     radio device driver.
  *
  *     Please, let me know if this piece of code was useful :)
- * 
+ *
  *     TODO: multiple device support and portability were not tested
+ *
+ *     Converted to V4L2 API by Mauro Carvalho Chehab <mchehab@infradead.org>
  *
  ***************************************************************************
  */
 
-#include <linux/config.h>
 #include <linux/types.h>
 #include <linux/list.h>
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/pci.h>
-#include <linux/videodev.h>
+#include <linux/videodev2.h>
+#include <media/v4l2-common.h>
 #include <linux/errno.h>
+
+#include <linux/version.h>      /* for KERNEL_VERSION MACRO     */
+#define RADIO_VERSION KERNEL_VERSION(0,0,2)
+
+static struct v4l2_queryctrl radio_qctrl[] = {
+	{
+		.id            = V4L2_CID_AUDIO_MUTE,
+		.name          = "Mute",
+		.minimum       = 0,
+		.maximum       = 1,
+		.default_value = 1,
+		.type          = V4L2_CTRL_TYPE_BOOLEAN,
+	},{
+		.id            = V4L2_CID_AUDIO_VOLUME,
+		.name          = "Volume",
+		.minimum       = 0,
+		.maximum       = 65535,
+		.step          = 65535,
+		.default_value = 0xff,
+		.type          = V4L2_CTRL_TYPE_INTEGER,
+	}
+};
 
 #include <asm/io.h>
 #include <asm/uaccess.h>
@@ -69,18 +93,18 @@
 #define TRUE (1)
 #endif
 
-#ifndef FALSE 
+#ifndef FALSE
 #define FALSE (0)
 #endif
 
 struct gemtek_pci_card {
 	struct video_device *videodev;
-	
+
 	u32 iobase;
 	u32 length;
 	u8  chiprev;
 	u16 model;
-	
+
 	u32 current_frequency;
 	u8  mute;
 };
@@ -96,7 +120,7 @@ static inline u8 gemtek_pci_out( u16 value, u32 port )
 	return (u8)value;
 }
 
-#define _b0( v ) *((u8 *)&v)  
+#define _b0( v ) *((u8 *)&v)
 static void __gemtek_pci_cmd( u16 value, u32 port, u8 *last_byte, int keep )
 {
 	register u8 byte = *last_byte;
@@ -104,7 +128,7 @@ static void __gemtek_pci_cmd( u16 value, u32 port, u8 *last_byte, int keep )
 	if ( !value ) {
 		if ( !keep )
 			value = (u16)port;
-		byte &= 0xfd;	
+		byte &= 0xfd;
 	} else
 		byte |= 2;
 
@@ -116,7 +140,7 @@ static void __gemtek_pci_cmd( u16 value, u32 port, u8 *last_byte, int keep )
 	byte &= 0xfe;
 	_b0( value ) = byte;
 	outw( value, port );
-	
+
 	*last_byte = byte;
 }
 
@@ -183,91 +207,117 @@ static int gemtek_pci_do_ioctl(struct inode *inode, struct file *file,
 	struct gemtek_pci_card *card = dev->priv;
 
 	switch ( cmd ) {
-		case VIDIOCGCAP:
+		case VIDIOC_QUERYCAP:
 		{
-			struct video_capability *c = arg;
+			struct v4l2_capability *v = arg;
+			memset(v,0,sizeof(*v));
+			strlcpy(v->driver, "radio-gemtek-pci", sizeof (v->driver));
+			strlcpy(v->card, "GemTek PCI Radio", sizeof (v->card));
+			sprintf(v->bus_info,"ISA");
+			v->version = RADIO_VERSION;
+			v->capabilities = V4L2_CAP_TUNER;
 
-			memset(c,0,sizeof(*c));
-			c->type = VID_TYPE_TUNER;
-			c->channels = 1;
-			c->audios = 1;
-			strcpy( c->name, "Gemtek PCI Radio" );
-			return 0;
-		} 
-
-		case VIDIOCGTUNER:
-		{
-			struct video_tuner *t = arg;
-
-			if ( t->tuner ) 
-				return -EINVAL;
-
-			t->rangelow = GEMTEK_PCI_RANGE_LOW;
-			t->rangehigh = GEMTEK_PCI_RANGE_HIGH;
-			t->flags = VIDEO_TUNER_LOW;
-			t->mode = VIDEO_MODE_AUTO;
-			t->signal = 0xFFFF * gemtek_pci_getsignal( card );
-			strcpy( t->name, "FM" );
 			return 0;
 		}
+		case VIDIOC_G_TUNER:
+		{
+			struct v4l2_tuner *v = arg;
 
-		case VIDIOCSTUNER:
-		{
-			struct video_tuner *t = arg;
-			if ( t->tuner )
-				return -EINVAL;
-			return 0;
-		}
-
-		case VIDIOCGFREQ:
-		{
-			unsigned long *freq = arg;
-			*freq = card->current_frequency;
-			return 0;
-		}
-		case VIDIOCSFREQ:
-		{
-			unsigned long *freq = arg;
-	 
-			if ( (*freq < GEMTEK_PCI_RANGE_LOW) ||
-			     (*freq > GEMTEK_PCI_RANGE_HIGH) )
+			if (v->index > 0)
 				return -EINVAL;
 
-			gemtek_pci_setfrequency( card, *freq );
-			card->current_frequency = *freq;
+			memset(v,0,sizeof(*v));
+			strcpy(v->name, "FM");
+			v->type = V4L2_TUNER_RADIO;
+
+			v->rangelow = GEMTEK_PCI_RANGE_LOW;
+			v->rangehigh = GEMTEK_PCI_RANGE_HIGH;
+			v->rxsubchans =V4L2_TUNER_SUB_MONO;
+			v->capability=V4L2_TUNER_CAP_LOW;
+			v->audmode = V4L2_TUNER_MODE_MONO;
+			v->signal=0xFFFF*gemtek_pci_getsignal( card );
+
+			return 0;
+		}
+		case VIDIOC_S_TUNER:
+		{
+			struct v4l2_tuner *v = arg;
+
+			if (v->index > 0)
+				return -EINVAL;
+
+			return 0;
+		}
+		case VIDIOC_S_FREQUENCY:
+		{
+			struct v4l2_frequency *f = arg;
+
+			if ( (f->frequency < GEMTEK_PCI_RANGE_LOW) ||
+			     (f->frequency > GEMTEK_PCI_RANGE_HIGH) )
+				return -EINVAL;
+
+
+			gemtek_pci_setfrequency( card, f->frequency );
+			card->current_frequency = f->frequency;
 			card->mute = FALSE;
-
 			return 0;
 		}
-  
-		case VIDIOCGAUDIO:
-		{	
-			struct video_audio *a = arg;
-
-			memset( a, 0, sizeof( *a ) );
-			a->flags |= VIDEO_AUDIO_MUTABLE;
-			a->volume = 1;
-			a->step = 65535;
-			strcpy( a->name, "Radio" );
-			return 0;			
-		}
-
-		case VIDIOCSAUDIO:
+		case VIDIOC_QUERYCTRL:
 		{
-			struct video_audio *a = arg;
+			struct v4l2_queryctrl *qc = arg;
+			int i;
 
-			if ( a->audio ) 
-				return -EINVAL;
-
-			if ( a->flags & VIDEO_AUDIO_MUTE ) 
-				gemtek_pci_mute( card );
-			else
-				gemtek_pci_unmute( card );
-			return 0;
+			for (i = 0; i < ARRAY_SIZE(radio_qctrl); i++) {
+				if (qc->id && qc->id == radio_qctrl[i].id) {
+					memcpy(qc, &(radio_qctrl[i]),
+								sizeof(*qc));
+					return (0);
+				}
+			}
+			return -EINVAL;
 		}
+		case VIDIOC_G_CTRL:
+		{
+			struct v4l2_control *ctrl= arg;
 
+			switch (ctrl->id) {
+				case V4L2_CID_AUDIO_MUTE:
+					ctrl->value=card->mute;
+					return (0);
+				case V4L2_CID_AUDIO_VOLUME:
+					if (card->mute)
+						ctrl->value=0;
+					else
+						ctrl->value=65535;
+					return (0);
+			}
+			return -EINVAL;
+		}
+		case VIDIOC_S_CTRL:
+		{
+			struct v4l2_control *ctrl= arg;
+
+			switch (ctrl->id) {
+				case V4L2_CID_AUDIO_MUTE:
+					if (ctrl->value) {
+						gemtek_pci_mute(card);
+					} else {
+						gemtek_pci_unmute(card);
+					}
+					return (0);
+				case V4L2_CID_AUDIO_VOLUME:
+					if (ctrl->value) {
+						gemtek_pci_unmute(card);
+					} else {
+						gemtek_pci_mute(card);
+					}
+					return (0);
+			}
+			return -EINVAL;
+		}
 		default:
-			return -ENOIOCTLCMD;
+			return v4l_compat_translate_ioctl(inode,file,cmd,arg,
+							  gemtek_pci_do_ioctl);
 	}
 }
 
@@ -309,7 +359,7 @@ static struct video_device vdev_template = {
 	.owner         = THIS_MODULE,
 	.name          = "Gemtek PCI Radio",
 	.type          = VID_TYPE_TUNER,
-	.hardware      = VID_HARDWARE_GEMTEK,
+	.hardware      = 0,
 	.fops          = &gemtek_pci_fops,
 };
 
@@ -323,9 +373,9 @@ static int __devinit gemtek_pci_probe( struct pci_dev *pci_dev, const struct pci
 		return -ENOMEM;
 	}
 
-	if ( pci_enable_device( pci_dev ) ) 
+	if ( pci_enable_device( pci_dev ) )
 		goto err_pci;
-	
+
 	card->iobase = pci_resource_start( pci_dev, 0 );
 	card->length = pci_resource_len( pci_dev, 0 );
 
@@ -338,7 +388,7 @@ static int __devinit gemtek_pci_probe( struct pci_dev *pci_dev, const struct pci
 	pci_read_config_word( pci_dev, PCI_SUBSYSTEM_ID, &card->model );
 
 	pci_set_drvdata( pci_dev, card );
- 
+
 	if ( (devradio = kmalloc( sizeof( struct video_device ), GFP_KERNEL )) == NULL ) {
 		printk( KERN_ERR "gemtek_pci: out of memory\n" );
 		goto err_video;
@@ -354,7 +404,7 @@ static int __devinit gemtek_pci_probe( struct pci_dev *pci_dev, const struct pci
 	devradio->priv = card;
 	gemtek_pci_mute( card );
 
-	printk( KERN_INFO "Gemtek PCI Radio (rev. %d) found at 0x%04x-0x%04x.\n", 
+	printk( KERN_INFO "Gemtek PCI Radio (rev. %d) found at 0x%04x-0x%04x.\n",
 		card->chiprev, card->iobase, card->iobase + card->length - 1 );
 
 	return 0;
@@ -364,7 +414,7 @@ err_video:
 
 err_pci:
 	kfree( card );
-	return -ENODEV;        
+	return -ENODEV;
 }
 
 static void __devexit gemtek_pci_remove( struct pci_dev *pci_dev )
@@ -375,12 +425,12 @@ static void __devexit gemtek_pci_remove( struct pci_dev *pci_dev )
 	kfree( card->videodev );
 
 	release_region( card->iobase, card->length );
-	
+
 	if ( mx )
 		gemtek_pci_mute( card );
 
 	kfree( card );
-	
+
 	pci_set_drvdata( pci_dev, NULL );
 }
 
@@ -399,7 +449,7 @@ static int __init gemtek_pci_init_module( void )
 
 static void __exit gemtek_pci_cleanup_module( void )
 {
-	return pci_unregister_driver( &gemtek_pci_driver );
+	pci_unregister_driver(&gemtek_pci_driver);
 }
 
 MODULE_AUTHOR( "Vladimir Shebordaev <vshebordaev@mail.ru>" );
