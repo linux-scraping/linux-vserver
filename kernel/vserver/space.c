@@ -115,6 +115,7 @@ struct nsproxy * __vs_merge_nsproxy(struct nsproxy *old,
 	if (mask)
 		return vs_mix_nsproxy(old ? old : &null_proxy,
 			proxy, mask);
+	get_nsproxy(proxy);
 	return proxy;
 }
 
@@ -127,8 +128,11 @@ static inline
 struct fs_struct * __vs_merge_fs(struct fs_struct *old,
 	struct fs_struct *fs, unsigned long mask)
 {
-	if (!(mask & CLONE_FS))
+	if (!(mask & CLONE_FS)) {
+		if (old)
+			atomic_inc(&old->count);
 		return old;
+	}
 
 	if (!fs)
 		return NULL;

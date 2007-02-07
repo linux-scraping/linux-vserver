@@ -2783,11 +2783,14 @@ retry:
 	vxdprintk(VXD_CBIT(misc, 2),
 		"vfs_create(new): %d", ret);
 	if (ret == -EEXIST) {
-
 		mutex_unlock(&dir_nd.dentry->d_inode->i_mutex);
 		dput(new_dentry);
 		path_release(&dir_nd);
 		goto retry;
+	}
+	else if (ret < 0) {
+		res = ERR_PTR(ret);
+		goto out_rel_both;
 	}
 
 	new_mnt = dir_nd.mnt;

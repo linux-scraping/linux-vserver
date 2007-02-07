@@ -6,6 +6,7 @@ menu "Linux VServer"
 
 config	VSERVER_LEGACY
 	bool	"Enable Legacy Kernel API"
+	depends on EXPERIMENTAL
 	default n
 	help
 	  This enables the legacy API used in vs1.xx, maintaining
@@ -35,6 +36,7 @@ config	VSERVER_DYNAMIC_IDS
 
 config	VSERVER_LEGACYNET
 	bool	"Enable Legacy Networking Kernel API"
+	depends on EXPERIMENTAL
 	default n
 	help
 	  This enables the legacy networking API which is used
@@ -52,7 +54,6 @@ config	VSERVER_REMAP_SADDR
 
 config	VSERVER_COWBL
 	bool	"Enable COW Immutable Link Breaking"
-	depends on EXPERIMENTAL
 	default y
 	help
 	  This enables the COW (Copy-On-Write) link break code.
@@ -84,7 +85,6 @@ config	VSERVER_PROC_SECURE
 
 config	VSERVER_HARDCPU
 	bool	"Enable Hard CPU Limits"
-	depends on EXPERIMENTAL
 	default n
 	help
 	  Activate the Hard CPU Limits
