@@ -26,6 +26,7 @@
 #include <linux/slab.h>
 #include <linux/types.h>
 #include <linux/mnt_namespace.h>
+#include <linux/pid_namespace.h>
 
 #include <linux/sched.h>
 #include <linux/vserver/context.h>
@@ -92,8 +93,8 @@ static struct vx_info *__alloc_vx_info(xid_t xid)
 	init_waitqueue_head(&new->vx_wait);
 
 	/* prepare reaper */
-	get_task_struct(&init_task);
-	new->vx_reaper = &init_task;
+	get_task_struct(init_pid_ns.child_reaper);
+	new->vx_reaper = init_pid_ns.child_reaper;
 
 	/* rest of init goes here */
 	vx_info_init_limit(&new->limit);
@@ -818,7 +819,7 @@ void	exit_vx_info_early(struct task_struct *p, int code)
 		if (vxi->vx_initpid == p->tgid)
 			vx_exit_init(vxi, p, code);
 		if (vxi->vx_reaper == p)
-			vx_set_reaper(vxi, &init_task);
+			vx_set_reaper(vxi, init_pid_ns.child_reaper);
 	}
 }
 

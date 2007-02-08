@@ -595,7 +595,7 @@ static inline void
 choose_new_parent(struct task_struct *p, struct task_struct *reaper)
 {
 	/* check for reaper context */
-	vxwprintk((p->xid != reaper->xid) && (reaper != &init_task),
+	vxwprintk((p->xid != reaper->xid) && (reaper != child_reaper(p)),
 		"rogue reaper: %p[%d,#%u] <> %p[%d,#%u]",
 		p, p->pid, p->xid, reaper, reaper->pid, reaper->xid);
 

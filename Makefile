@@ -1,7 +1,7 @@
 VERSION = 2
 PATCHLEVEL = 6
 SUBLEVEL = 20
-EXTRAVERSION = -vs2.2.0-pre2
+EXTRAVERSION = -vs2.2.0-pre3
 NAME = Homicidal Dwarf Hamster
 
 # *DOCUMENTATION*
