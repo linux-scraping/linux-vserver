@@ -363,8 +363,8 @@ long do_vserver(uint32_t cmd, uint32_t id, void __user *data, int compat)
 
 	/* legacy commands */
 #ifdef	CONFIG_VSERVER_LEGACY
+	__VCMD(new_s_context,	 1, VCA_NONE,	0);
 	__VCMD(create_context,	 5, VCA_NONE,	0);
-	__VCMD(new_s_context,	 5, VCA_NONE,	0);
 #endif
 #ifdef	CONFIG_VSERVER_LEGACYNET
 	__VCMD(set_ipv4root,	 5, VCA_NONE,	0);

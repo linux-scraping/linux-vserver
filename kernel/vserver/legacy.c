@@ -88,9 +88,10 @@ int vc_new_s_context(uint32_t ctx, void __user *data)
 		vx_info_flags(new_vxi, VX_INFO_PRIVATE, 0))
 		goto out_put;
 
+	ret = vx_migrate_task(current, new_vxi,
+		vx_info_flags(new_vxi, VXF_STATE_SETUP, 0));
 	new_vxi->vx_flags &= ~VXF_STATE_SETUP;
 
-	ret = vx_migrate_task(current, new_vxi, 1);
 	if (ret == 0) {
 		current->vx_info->vx_bcaps &= (~vc_data.remove_cap);
 		new_vxi->vx_flags |= vc_data.flags;
