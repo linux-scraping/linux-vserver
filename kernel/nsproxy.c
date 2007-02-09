@@ -19,6 +19,7 @@
 #include <linux/init_task.h>
 #include <linux/namespace.h>
 #include <linux/utsname.h>
+#include <linux/vserver/global.h>
 
 struct nsproxy init_nsproxy = INIT_NSPROXY(init_nsproxy);
 
@@ -42,6 +43,7 @@ static inline struct nsproxy *clone_namespaces(struct nsproxy *orig)
 	ns = kmemdup(orig, sizeof(struct nsproxy), GFP_KERNEL);
 	if (ns)
 		atomic_set(&ns->count, 1);
+	atomic_inc(&vs_global_nsproxy);
 	return ns;
 }
 
@@ -62,7 +64,6 @@ struct nsproxy *dup_namespaces(struct nsproxy *orig)
 		if (ns->ipc_ns)
 			get_ipc_ns(ns->ipc_ns);
 	}
-
 	return ns;
 }
 
@@ -136,11 +137,13 @@ struct nsproxy *put_nsproxy(struct nsproxy *ns)
 
 void free_nsproxy(struct nsproxy *ns)
 {
-		if (ns->namespace)
-			put_namespace(ns->namespace);
-		if (ns->uts_ns)
-			put_uts_ns(ns->uts_ns);
-		if (ns->ipc_ns)
-			put_ipc_ns(ns->ipc_ns);
-		kfree(ns);
+	if (ns->namespace)
+		put_namespace(ns->namespace);
+	if (ns->uts_ns)
+		put_uts_ns(ns->uts_ns);
+	if (ns->ipc_ns)
+		put_ipc_ns(ns->ipc_ns);
+	atomic_dec(&vs_global_nsproxy);
+	kfree(ns);
 }
+

@@ -52,6 +52,7 @@
 #include <linux/vs_network.h>
 #include <linux/vs_limit.h>
 #include <linux/vs_memory.h>
+#include <linux/vserver/global.h>
 
 #include <asm/pgtable.h>
 #include <asm/pgalloc.h>
@@ -581,6 +582,7 @@ static inline struct fs_struct *__copy_fs_struct(struct fs_struct *old)
 			fs->altroot = NULL;
 		}
 		read_unlock(&old->lock);
+		atomic_inc(&vs_global_fs);
 	}
 	return fs;
 }

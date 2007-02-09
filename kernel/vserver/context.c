@@ -174,10 +174,10 @@ static void __shutdown_vx_info(struct vx_info *vxi)
 	vs_state_change(vxi, VSC_SHUTDOWN);
 
 	nsproxy = xchg(&vxi->vx_nsproxy, NULL);
-	if (nsproxy)
-		put_nsproxy(nsproxy);
-
 	fs = xchg(&vxi->vx_fs, NULL);
+
+	if (nsproxy)
+		vs_put_nsproxy(nsproxy);
 	if (fs)
 		put_fs_struct(fs);
 }

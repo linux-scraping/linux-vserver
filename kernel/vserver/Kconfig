@@ -25,7 +25,6 @@ config	VSERVER_SINGLE_IP
 
 config	VSERVER_COWBL
 	bool	"Enable COW Immutable Link Breaking"
-	depends on EXPERIMENTAL
 	default y
 	help
 	  This enables the COW (Copy-On-Write) link break code.
@@ -57,7 +56,6 @@ config	VSERVER_PROC_SECURE
 
 config	VSERVER_HARDCPU
 	bool	"Enable Hard CPU Limits"
-	depends on EXPERIMENTAL
 	default n
 	help
 	  Activate the Hard CPU Limits
@@ -227,6 +225,7 @@ config	VSERVER
 	bool
 	default y
 	select UTS_NS
+	select SYSVIPC
 	select IPC_NS
 
 config	VSERVER_SECURITY
