@@ -1279,7 +1279,6 @@ extern struct task_struct init_task;
 
 extern struct   mm_struct init_mm;
 
-
 #define find_task_by_real_pid(nr) \
 	find_task_by_pid_type(PIDTYPE_REALPID, nr)
 #define find_task_by_pid(nr) \

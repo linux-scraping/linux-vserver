@@ -736,6 +736,7 @@ static int jffs2_garbage_collect_metadata(struct jffs2_sb_info *c, struct jffs2_
 	ri.mode = cpu_to_jemode(JFFS2_F_I_MODE(f));
 	ri.uid = cpu_to_je16(JFFS2_F_I_UID(f));
 	ri.gid = cpu_to_je16(JFFS2_F_I_GID(f));
+	ri.tag = cpu_to_je16(JFFS2_F_I_TAG(f));
 	ri.isize = cpu_to_je32(ilen);
 	ri.atime = cpu_to_je32(JFFS2_F_I_ATIME(f));
 	ri.ctime = cpu_to_je32(JFFS2_F_I_CTIME(f));
@@ -837,6 +838,8 @@ static int jffs2_garbage_collect_deletion_dirent(struct jffs2_sb_info *c, struct
 		down(&c->erase_free_sem);
 
 		for (raw = f->inocache->nodes; raw != (void *)f->inocache; raw = raw->next_in_ino) {
+
+			cond_resched();
 
 			/* We only care about obsolete ones */
 			if (!(ref_obsolete(raw)))
@@ -997,6 +1000,7 @@ static int jffs2_garbage_collect_hole(struct jffs2_sb_info *c, struct jffs2_eras
 	ri.mode = cpu_to_jemode(JFFS2_F_I_MODE(f));
 	ri.uid = cpu_to_je16(JFFS2_F_I_UID(f));
 	ri.gid = cpu_to_je16(JFFS2_F_I_GID(f));
+	ri.tag = cpu_to_je16(JFFS2_F_I_TAG(f));
 	ri.isize = cpu_to_je32(ilen);
 	ri.atime = cpu_to_je32(JFFS2_F_I_ATIME(f));
 	ri.ctime = cpu_to_je32(JFFS2_F_I_CTIME(f));
@@ -1255,6 +1259,7 @@ static int jffs2_garbage_collect_dnode(struct jffs2_sb_info *c, struct jffs2_era
 		ri.mode = cpu_to_jemode(JFFS2_F_I_MODE(f));
 		ri.uid = cpu_to_je16(JFFS2_F_I_UID(f));
 		ri.gid = cpu_to_je16(JFFS2_F_I_GID(f));
+		ri.tag = cpu_to_je16(JFFS2_F_I_TAG(f));
 		ri.isize = cpu_to_je32(JFFS2_F_I_SIZE(f));
 		ri.atime = cpu_to_je32(JFFS2_F_I_ATIME(f));
 		ri.ctime = cpu_to_je32(JFFS2_F_I_CTIME(f));

@@ -53,6 +53,7 @@
 #include <linux/vs_network.h>
 #include <linux/vs_limit.h>
 #include <linux/vs_memory.h>
+#include <linux/vserver/global.h>
 
 #include <asm/pgtable.h>
 #include <asm/pgalloc.h>
@@ -599,6 +600,7 @@ static inline struct fs_struct *__copy_fs_struct(struct fs_struct *old)
 			fs->altroot = NULL;
 		}
 		read_unlock(&old->lock);
+		atomic_inc(&vs_global_fs);
 	}
 	return fs;
 }
@@ -1360,7 +1362,7 @@ noinline struct pt_regs * __devinit __attribute__((weak)) idle_regs(struct pt_re
 	return regs;
 }
 
-struct task_struct * __devinit fork_idle(int cpu)
+struct task_struct * __cpuinit fork_idle(int cpu)
 {
 	struct task_struct *task;
 	struct pt_regs regs;
@@ -1416,10 +1418,6 @@ long do_fork(unsigned long clone_flags,
 		free_pid(pid);
 		return -EPERM;
 	}
-
-	/* fake ipc/uts on namespace */
-	if (clone_flags & CLONE_NEWNS)
-		clone_flags |= CLONE_NEWUTS|CLONE_NEWIPC;
 
 	nr = pid->nr;
 	if (unlikely(current->ptrace)) {

@@ -2,8 +2,7 @@
  *  drivers/s390/cio/cio.c
  *   S/390 common I/O routines -- low level i/o calls
  *
- *    Copyright (C) 1999-2002 IBM Deutschland Entwicklung GmbH,
- *			      IBM Corporation
+ *    Copyright (C) IBM Corp. 1999,2006
  *    Author(s): Ingo Adlung (adlung@de.ibm.com)
  *		 Cornelia Huck (cornelia.huck@de.ibm.com)
  *		 Arnd Bergmann (arndb@de.ibm.com)
@@ -886,6 +885,10 @@ static int stsch_reset(struct subchannel_id schid, volatile struct schib *addr)
 	s390_reset_pgm_handler = cio_reset_pgm_check_handler;
 	rc = stsch(schid, addr);
 	s390_reset_pgm_handler = NULL;
+
+	/* The program check handler could have changed pgm_check_occured */
+	barrier();
+
 	if (pgm_check_occured)
 		return -EIO;
 	else

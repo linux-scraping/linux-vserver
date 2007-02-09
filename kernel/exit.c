@@ -42,10 +42,11 @@
 #include <linux/audit.h> /* for audit_free() */
 #include <linux/resource.h>
 #include <linux/blkdev.h>
+#include <linux/vs_limit.h>
 #include <linux/vs_context.h>
 #include <linux/vs_network.h>
-#include <linux/vs_limit.h>
 #include <linux/vs_pid.h>
+#include <linux/vserver/global.h>
 
 #include <asm/uaccess.h>
 #include <asm/unistd.h>
@@ -521,6 +522,7 @@ static inline void __put_fs_struct(struct fs_struct *fs)
 			dput(fs->altroot);
 			mntput(fs->altrootmnt);
 		}
+		atomic_dec(&vs_global_fs);
 		kmem_cache_free(fs_cachep, fs);
 	}
 }
@@ -593,7 +595,7 @@ static inline void
 choose_new_parent(struct task_struct *p, struct task_struct *reaper)
 {
 	/* check for reaper context */
-	vxwprintk((p->xid != reaper->xid) && (reaper != &init_task),
+	vxwprintk((p->xid != reaper->xid) && (reaper != child_reaper(p)),
 		"rogue reaper: %p[%d,#%u] <> %p[%d,#%u]",
 		p, p->pid, p->xid, reaper, reaper->pid, reaper->xid);
 
@@ -608,6 +610,10 @@ choose_new_parent(struct task_struct *p, struct task_struct *reaper)
 static void
 reparent_thread(struct task_struct *p, struct task_struct *father, int traced)
 {
+	if (p->pdeath_signal)
+		/* We already hold the tasklist_lock here.  */
+		group_send_sig_info(p->pdeath_signal, SEND_SIG_NOINFO, p);
+
 	/* Move the child from its dying parent to the new one.  */
 	if (unlikely(traced)) {
 		/* Preserve ptrace links if someone else is tracing this child.  */
@@ -642,10 +648,6 @@ reparent_thread(struct task_struct *p, struct task_struct *father, int traced)
 	/* We don't want people slaying init.  */
 	if (p->exit_signal != -1)
 		p->exit_signal = SIGCHLD;
-		
-	if (p->pdeath_signal)
-		/* We already hold the tasklist_lock here.  */
-		group_send_sig_info(p->pdeath_signal, SEND_SIG_NOINFO, p);
 
 	/* If we'd notified the old parent about this child's death,
 	 * also notify the new parent.
@@ -950,10 +952,12 @@ fastcall NORET_TYPE void do_exit(long code)
 
 	tsk->exit_code = code;
 	proc_exit_connector(tsk);
+	exit_task_namespaces(tsk);
+	// ns = exit_task_namespaces_early(tsk);
 	/* needs to stay before exit_notify() */
 	exit_vx_info_early(tsk, code);
 	exit_notify(tsk);
-	exit_task_namespaces(tsk);
+	// exit_task_namespaces(tsk, ns);
 #ifdef CONFIG_NUMA
 	mpol_free(tsk->mempolicy);
 	tsk->mempolicy = NULL;

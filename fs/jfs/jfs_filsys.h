@@ -73,7 +73,7 @@
 
 /* Directory index */
 #define JFS_DIR_INDEX	0x00200000	/* Persistent index for */
-					/* directory entries    */
+
 /* platform options */
 #define JFS_LINUX	0x10000000	/* Linux support */
 #define JFS_DFS		0x20000000	/* DCE DFS LFS support */
@@ -84,8 +84,6 @@
 
 #define JFS_AIX		0x80000000	/* AIX support */
 /*	POSIX name/directory  support - Never implemented*/
-
-#define JFS_TAGGED		0x00800000	/* Context Tagging */
 
 /*
  *	buffer cache configuration
@@ -266,6 +264,7 @@
 #define JFS_NAME_MAX	255
 #define JFS_PATH_MAX	BPSIZE
 
+#define JFS_TAGGED		0x00800000	/* Context Tagging */
 
 /*
  *	file system state (superblock state)

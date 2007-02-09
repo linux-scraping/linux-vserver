@@ -4,21 +4,17 @@
 
 menu "Linux VServer"
 
-config	VSERVER_SINGLE_IP
-	bool	"Single IP Special Casing"
-	depends on EXPERIMENTAL
-	default n
-	help
-	  This allows to have network contexts with a single
-	  IP to remap 0.0.0.0 bindings to that IP, avoiding
-	  further network checks and improving performance.
-
-	  (note: such guests do not allow to change the ip
-	   on the fly and do not show loopback addresses)
-
 config	VSERVER_AUTO_LBACK
 	bool	"Automatically Assign Loopback IP"
 	default y
+	help
+	  Automatically assign a guest specific loopback
+	  IP and add it to the kernel network stack on startup.
+
+config	VSERVER_SINGLE_IP
+	bool	"Single IP Special Casing"
+	depends on EXPERIMENTAL && !VSERVER_AUTO_LBACK
+	default n
 	help
 	  This allows to have network contexts with a single
 	  IP to remap 0.0.0.0 bindings to that IP, avoiding
@@ -29,7 +25,6 @@ config	VSERVER_AUTO_LBACK
 
 config	VSERVER_COWBL
 	bool	"Enable COW Immutable Link Breaking"
-	depends on EXPERIMENTAL
 	default y
 	help
 	  This enables the COW (Copy-On-Write) link break code.
@@ -61,7 +56,6 @@ config	VSERVER_PROC_SECURE
 
 config	VSERVER_HARDCPU
 	bool	"Enable Hard CPU Limits"
-	depends on EXPERIMENTAL
 	default n
 	help
 	  Activate the Hard CPU Limits
@@ -231,6 +225,7 @@ config	VSERVER
 	bool
 	default y
 	select UTS_NS
+	select SYSVIPC
 	select IPC_NS
 
 config	VSERVER_SECURITY

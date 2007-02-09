@@ -308,7 +308,7 @@ override:
 		sk->sk_reuse = 1;
 
 	inet = inet_sk(sk);
-	inet->is_icsk = INET_PROTOSW_ICSK & answer_flags;
+	inet->is_icsk = (INET_PROTOSW_ICSK & answer_flags) != 0;
 
 	if (SOCK_RAW == sock->type) {
 		inet->num = protocol;

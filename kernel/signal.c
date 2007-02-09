@@ -590,6 +590,10 @@ static int check_kill_permission(int sig, struct siginfo *info,
 		(is_si_special(info) || !SI_FROMUSER(info)))
 		goto skip;
 
+	vxdprintk(VXD_CBIT(misc, 7),
+		"check_kill_permission(%d,%p,%p[#%u,%u])",
+		sig, info, t, vx_task_xid(t), t->pid);
+
 	error = -EPERM;
 	if (((sig != SIGCONT) ||
 		(process_session(current) != process_session(t)))
@@ -600,9 +604,9 @@ static int check_kill_permission(int sig, struct siginfo *info,
 
 	error = -ESRCH;
 	if (!vx_check(vx_task_xid(t), VS_WATCH_P|VS_IDENT)) {
-		vxwprintk(current->xid,
-			"signal xid mismatch %p[#%u,%u] xid=#%u\n",
-			t, vx_task_xid(t), t->pid, current->xid);
+		vxwprintk(current->xid || VXD_CBIT(misc, 7),
+			"signal %d[%p] xid mismatch %p[#%u,%u] xid=#%u",
+			sig, info, t, vx_task_xid(t), t->pid, current->xid);
 		return error;
 	}
 skip:

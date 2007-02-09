@@ -341,6 +341,7 @@ void in6_dev_finish_destroy(struct inet6_dev *idev)
 static struct inet6_dev * ipv6_add_dev(struct net_device *dev)
 {
 	struct inet6_dev *ndev;
+	struct in6_addr maddr;
 
 	ASSERT_RTNL();
 
@@ -413,8 +414,6 @@ static struct inet6_dev * ipv6_add_dev(struct net_device *dev)
 	if (netif_carrier_ok(dev))
 		ndev->if_flags |= IF_READY;
 
-	/* protected by rtnl_lock */
-	rcu_assign_pointer(dev->ip6_ptr, ndev);
 
 	ipv6_mc_init_dev(ndev);
 	ndev->tstamp = jiffies;
@@ -425,6 +424,13 @@ static struct inet6_dev * ipv6_add_dev(struct net_device *dev)
 			      NULL);
 	addrconf_sysctl_register(ndev, &ndev->cnf);
 #endif
+	/* protected by rtnl_lock */
+	rcu_assign_pointer(dev->ip6_ptr, ndev);
+
+	/* Join all-node multicast group */
+	ipv6_addr_all_nodes(&maddr);
+	ipv6_dev_mc_inc(dev, &maddr);
+
 	return ndev;
 }
 
@@ -2732,7 +2738,7 @@ static int if6_seq_show(struct seq_file *seq, void *v)
 	struct inet6_ifaddr *ifp = (struct inet6_ifaddr *)v;
 
 	/* no ipv6 inside a vserver for now */
-	if (vx_check(0, VS_ADMIN|VS_WATCH))
+	if (nx_check(0, VS_ADMIN|VS_WATCH))
 		seq_printf(seq,
 		   NIP6_SEQFMT " %02x %02x %02x %02x %8s\n",
 		   NIP6(ifp->addr),
@@ -3394,7 +3400,7 @@ static void inline ipv6_store_devconf(struct ipv6_devconf *cnf,
 #ifdef CONFIG_IPV6_ROUTER_PREF
 	array[DEVCONF_ACCEPT_RA_RTR_PREF] = cnf->accept_ra_rtr_pref;
 	array[DEVCONF_RTR_PROBE_INTERVAL] = cnf->rtr_probe_interval;
-#ifdef CONFIV_IPV6_ROUTE_INFO
+#ifdef CONFIG_IPV6_ROUTE_INFO
 	array[DEVCONF_ACCEPT_RA_RT_INFO_MAX_PLEN] = cnf->accept_ra_rt_info_max_plen;
 #endif
 #endif
@@ -3903,7 +3909,7 @@ static struct addrconf_sysctl_table
 			.proc_handler	=	&proc_dointvec_jiffies,
 			.strategy	=	&sysctl_jiffies,
 		},
-#ifdef CONFIV_IPV6_ROUTE_INFO
+#ifdef CONFIG_IPV6_ROUTE_INFO
 		{
 			.ctl_name	=	NET_IPV6_ACCEPT_RA_RT_INFO_MAX_PLEN,
 			.procname	=	"accept_ra_rt_info_max_plen",

@@ -4,6 +4,7 @@
 #include "vserver/base.h"
 #include "vserver/context.h"
 #include "vserver/debug.h"
+#include <linux/pid_namespace.h>
 
 
 /* pid faking stuff */
@@ -107,7 +108,7 @@ static inline
 struct task_struct *vx_child_reaper(struct task_struct *p)
 {
 	struct vx_info *vxi = p->vx_info;
-	struct task_struct *reaper = &init_task;
+	struct task_struct *reaper = child_reaper(p);
 
 	if (!vxi)
 		goto out;
@@ -120,8 +121,8 @@ struct task_struct *vx_child_reaper(struct task_struct *p)
 
 	reaper = vxi->vx_reaper;
 out:
-	vxdprintk(VXD_CBIT(xid, 3),
-		"vx_child_reaper(%p[#%u,%u]) = %p[#%u,%u]\n",
+	vxdprintk(VXD_CBIT(xid, 7),
+		"vx_child_reaper(%p[#%u,%u]) = %p[#%u,%u]",
 		p, p->xid, p->pid, reaper, reaper->xid, reaper->pid);
 	return reaper;
 }

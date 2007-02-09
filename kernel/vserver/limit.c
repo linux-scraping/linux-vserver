@@ -70,6 +70,7 @@ const struct vcmd_ctx_rlimit_mask_v0 vlimit_mask = {
 uint32_t account_mask =
 	MASK_ENTRY( VLIMIT_SEMARY	) |
 	MASK_ENTRY( VLIMIT_NSEMS	) |
+	MASK_ENTRY( VLIMIT_MAPPED	) |
 	0;
 
 
@@ -237,6 +238,7 @@ int vc_rlimit_stat(struct vx_info *vxi, void __user *data)
 	if (!is_accounted_vlimit(id))
 		return -EINVAL;
 
+	vx_limit_fixup(limit, id);
 	vc_data.hits = atomic_read(&__rlim_lhit(limit, id));
 	vc_data.value = __rlim_get(limit, id);
 	vc_data.minimum = __rlim_rmin(limit, id);

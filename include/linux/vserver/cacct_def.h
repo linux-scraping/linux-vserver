@@ -6,8 +6,8 @@
 
 
 struct _vx_sock_acc {
-	atomic_t count;
-	atomic_t total;
+	atomic_long_t count;
+	atomic_long_t total;
 };
 
 /* context sub struct */
@@ -30,9 +30,9 @@ static inline void __dump_vx_cacct(struct _vx_cacct *cacct)
 
 		printk("\t [%d] =", i);
 		for (j=0; j<3; j++) {
-			printk(" [%d] = %8d, %8d", j,
-				atomic_read(&ptr[j].count),
-				atomic_read(&ptr[j].total));
+			printk(" [%d] = %8lu, %8lu", j,
+				atomic_long_read(&ptr[j].count),
+				atomic_long_read(&ptr[j].total));
 		}
 		printk("\n");
 	}

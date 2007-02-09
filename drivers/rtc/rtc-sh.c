@@ -264,8 +264,6 @@ static int sh_rtc_proc(struct device *dev, struct seq_file *seq)
 	unsigned int tmp;
 
 	tmp = readb(rtc->regbase + RCR1);
-	seq_printf(seq, "alarm_IRQ\t: %s\n",
-		   (tmp & RCR1_AIE) ? "yes" : "no");
 	seq_printf(seq, "carry_IRQ\t: %s\n",
 		   (tmp & RCR1_CIE) ? "yes" : "no");
 
@@ -428,6 +426,8 @@ static int sh_rtc_read_alarm(struct device *dev, struct rtc_wkalrm *wkalrm)
 		tm->tm_mon -= 1; /* RTC is 1-12, tm_mon is 0-11 */
 	tm->tm_year     = 0xffff;
 
+	wkalrm->enabled = (readb(rtc->regbase + RCR1) & RCR1_AIE) ? 1 : 0;
+
 	spin_unlock_irq(&rtc->lock);
 
 	return 0;
@@ -492,10 +492,10 @@ static int sh_rtc_set_alarm(struct device *dev, struct rtc_wkalrm *wkalrm)
 
 	spin_lock_irq(&rtc->lock);
 
-	/* disable alarm interrupt and clear flag */
+	/* disable alarm interrupt and clear the alarm flag */
 	rcr1 = readb(rtc->regbase + RCR1);
-	rcr1 &= ~RCR1_AF;
-	writeb(rcr1 & ~RCR1_AIE, rtc->regbase + RCR1);
+	rcr1 &= ~(RCR1_AF|RCR1_AIE);
+	writeb(rcr1, rtc->regbase + RCR1);
 
 	rtc->rearm_aie = 0;
 
@@ -510,8 +510,10 @@ static int sh_rtc_set_alarm(struct device *dev, struct rtc_wkalrm *wkalrm)
 		mon += 1;
 	sh_rtc_write_alarm_value(rtc, mon, RMONAR);
 
-	/* Restore interrupt activation status */
-	writeb(rcr1, rtc->regbase + RCR1);
+	if (wkalrm->enabled) {
+		rcr1 |= RCR1_AIE;
+		writeb(rcr1, rtc->regbase + RCR1);
+	}
 
 	spin_unlock_irq(&rtc->lock);
 

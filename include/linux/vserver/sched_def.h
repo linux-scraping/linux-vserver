@@ -19,11 +19,10 @@ struct _vx_sched {
 	int tokens_min;			/* Limit:     minimum for unhold */
 	int tokens_max;			/* Limit:     no more than N tokens */
 
+	int prio_bias;			/* bias offset for priority */
+
 	unsigned update_mask;		/* which features should be updated */
 	cpumask_t update;		/* CPUs which should update */
-
-	int prio_bias;			/* bias offset for priority */
-	int vavavoom;			/* last calculated vavavoom */
 };
 
 struct _vx_sched_pc {
@@ -34,6 +33,9 @@ struct _vx_sched_pc {
 	int interval[2];		/* Divisor:   per Y jiffies   */
 	int tokens_min;			/* Limit:     minimum for unhold */
 	int tokens_max;			/* Limit:     no more than N tokens */
+
+	int prio_bias;			/* bias offset for priority */
+	int vavavoom;			/* last calculated vavavoom */
 
 	unsigned long norm_time;	/* last time accounted */
 	unsigned long idle_time;	/* non linear time for fair sched */
@@ -58,8 +60,7 @@ static inline void __dump_vx_sched(struct _vx_sched *sched)
 		sched->fill_rate[0], sched->interval[0],
 		sched->fill_rate[1], sched->interval[1],
 		sched->tokens_min, sched->tokens_max);
-	printk("\t priority = %4d, %4d\n",
-		sched->prio_bias, sched->vavavoom);
+	printk("\t priority = %4d\n", sched->prio_bias);
 }
 
 #endif

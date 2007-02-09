@@ -12,8 +12,8 @@
 #include <linux/kernel_stat.h>
 #include <linux/seq_file.h>
 #include <linux/io.h>
-#include <linux/vs_context.h>
 #include <linux/irq.h>
+#include <linux/vs_context.h>
 #include <asm/processor.h>
 #include <asm/uaccess.h>
 #include <asm/thread_info.h>

@@ -26,9 +26,13 @@
 
 static LIST_HEAD(dqhash_list);
 
+static spinlock_t dqhash_lock = SPIN_LOCK_UNLOCKED;
+
+
 struct dqhash *new_dqhash(struct super_block *sb, unsigned int id)
 {
 	struct dqhash *hash;
+	unsigned long flags;
 	int err;
 
 	err = -ENOMEM;
@@ -49,9 +53,9 @@ struct dqhash *new_dqhash(struct super_block *sb, unsigned int id)
 	hash->dqh_qcop = sb->s_qcop;
 	hash->dqh_sb = sb;
 
-	lock_kernel();
+	spin_lock_irqsave(&dqhash_lock, flags);
 	list_add(&hash->dqh_list, &dqhash_list);
-	unlock_kernel();
+	spin_unlock_irqrestore(&dqhash_lock, flags);
 	vxdprintk(VXD_CBIT(misc, 0),
 		"new_dqhash: %p [#0x%08x]", hash, hash->dqh_id);
 	return hash;
@@ -63,12 +67,14 @@ out:
 
 void destroy_dqhash(struct dqhash *hash)
 {
+	unsigned long flags;
+
 	vxdprintk(VXD_CBIT(misc, 0),
 		"destroy_dqhash: %p [#0x%08x] c=%d",
 		hash, hash->dqh_id, atomic_read(&hash->dqh_count));
-	lock_kernel();
+	spin_lock_irqsave(&dqhash_lock, flags);
 	list_del_init(&hash->dqh_list);
-	unlock_kernel();
+	spin_unlock_irqrestore(&dqhash_lock, flags);
 	kfree(hash);
 }
 
@@ -76,20 +82,21 @@ void destroy_dqhash(struct dqhash *hash)
 struct dqhash *find_dqhash(unsigned int id)
 {
 	struct list_head *head;
+	unsigned long flags;
 	struct dqhash *hash;
 
-	lock_kernel();
+	spin_lock_irqsave(&dqhash_lock, flags);
 	list_for_each(head, &dqhash_list) {
 		hash = list_entry(head, struct dqhash, dqh_list);
 		if (hash->dqh_id == id)
 			goto dqh_found;
 	}
-	unlock_kernel();
-	return NULL;
-
+	hash = NULL;
 dqh_found:
-	unlock_kernel();
-	return dqhget(hash);
+	spin_unlock_irqrestore(&dqhash_lock, flags);
+	if (hash)
+		dqhget(hash);
+	return hash;
 }
 
 

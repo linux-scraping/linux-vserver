@@ -62,12 +62,6 @@ unsigned long badness(struct task_struct *p, unsigned long uptime)
 	}
 
 	/*
-	 * swapoff can easily use up all memory, so kill those first.
-	 */
-	if (p->flags & PF_SWAPOFF)
-		return ULONG_MAX;
-
-	/*
 	 * The memory size of the process is the basis for the badness.
 	 */
 	points = mm->total_vm;
@@ -82,6 +76,12 @@ unsigned long badness(struct task_struct *p, unsigned long uptime)
 	 * After this unlock we can no longer dereference local variable `mm'
 	 */
 	task_unlock(p);
+
+	/*
+	 * swapoff can easily use up all memory, so kill those first.
+	 */
+	if (p->flags & PF_SWAPOFF)
+		return ULONG_MAX;
 
 	/*
 	 * Processes which fork a lot of child processes are likely
@@ -181,7 +181,12 @@ static inline int constrained_alloc(struct zonelist *zonelist, gfp_t gfp_mask)
 {
 #ifdef CONFIG_NUMA
 	struct zone **z;
-	nodemask_t nodes = node_online_map;
+	nodemask_t nodes;
+	int node;
+	/* node has memory ? */
+	for_each_online_node(node)
+		if (NODE_DATA(node)->node_present_pages)
+			node_set(node, nodes);
 
 	for (z = zonelist->zones; *z; z++)
 		if (cpuset_zone_allowed_softwall(*z, gfp_mask))
@@ -287,7 +292,7 @@ static void __oom_kill_task(struct task_struct *p, int verbose)
 
 	if (verbose)
 		printk(KERN_ERR "Killed process %d:#%u (%s)\n",
-			p->xid, p->pid, p->comm);
+				p->pid, p->xid, p->comm);
 
 	/*
 	 * We give our sacrificial lamb high priority and access to
@@ -359,6 +364,7 @@ static int oom_kill_process(struct task_struct *p, unsigned long points,
 
 	printk(KERN_ERR "%s: kill process %d:#%u (%s) score %li or a child\n",
 				message, p->pid, p->xid, p->comm, points);
+
 	/* Try to kill a child first */
 	list_for_each(tsk, &p->children) {
 		c = list_entry(tsk, struct task_struct, sibling);

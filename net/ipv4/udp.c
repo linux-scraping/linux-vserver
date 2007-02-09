@@ -1553,7 +1553,6 @@ static struct sock *udp_get_first(struct seq_file *seq)
 
 	for (state->bucket = 0; state->bucket < UDP_HTABLE_SIZE; ++state->bucket) {
 		struct hlist_node *node;
-
 		sk_for_each(sk, node, state->hashtable + state->bucket) {
 			if (sk->sk_family == state->family &&
 				nx_check(sk->sk_nid, VS_WATCH_P|VS_IDENT))

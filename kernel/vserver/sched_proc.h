@@ -13,7 +13,6 @@ int vx_info_proc_sched(struct _vx_sched *sched, char *buffer)
 		"TokensMin:\t%8d\n"
 		"TokensMax:\t%8d\n"
 		"PrioBias:\t%8d\n"
-		"VaVaVoom:\t%8d\n"
 		,sched->fill_rate[0]
 		,sched->fill_rate[1]
 		,sched->interval[0]
@@ -21,7 +20,6 @@ int vx_info_proc_sched(struct _vx_sched *sched, char *buffer)
 		,sched->tokens_min
 		,sched->tokens_max
 		,sched->prio_bias
-		,sched->vavavoom
 		);
 	return length;
 }
@@ -42,7 +40,7 @@ int vx_info_proc_sched_pc(struct _vx_sched_pc *sched_pc,
 		,sched_pc->idle_time
 		);
 	length += sprintf(buffer + length,
-		" %c%c %d %d %d %d/%d %d/%d\n"
+		" %c%c %d %d %d %d/%d %d/%d"
 		,(sched_pc->flags & VXSF_ONHOLD) ? 'H' : 'R'
 		,(sched_pc->flags & VXSF_IDLE_TIME) ? 'I' : '-'
 		,sched_pc->tokens
@@ -52,6 +50,11 @@ int vx_info_proc_sched_pc(struct _vx_sched_pc *sched_pc,
 		,sched_pc->interval[0]
 		,sched_pc->fill_rate[1]
 		,sched_pc->interval[1]
+		);
+	length += sprintf(buffer + length,
+		" %d %d\n"
+		,sched_pc->prio_bias
+		,sched_pc->vavavoom
 		);
 	return length;
 }

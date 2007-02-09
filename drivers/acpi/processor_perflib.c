@@ -322,10 +322,6 @@ static int acpi_processor_get_performance_info(struct acpi_processor *pr)
 	if (result)
 		return result;
 
-	result = acpi_processor_get_platform_limit(pr);
-	if (result)
-		return result;
-
 	return 0;
 }
 
@@ -736,10 +732,6 @@ int acpi_processor_preregister_performance(
 	}
 
 err_ret:
-	if (retval) {
-		ACPI_DEBUG_PRINT((ACPI_DB_ERROR, "Error while parsing _PSD domain information. Assuming no coordination\n"));
-	}
-
 	for_each_possible_cpu(i) {
 		pr = processors[i];
 		if (!pr || !pr->performance)

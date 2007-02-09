@@ -5,6 +5,7 @@
 #include "vserver/base.h"
 #include "vserver/cacct.h"
 #include "vserver/context.h"
+#include "vserver/tag.h"
 
 
 /* socket accounting */
@@ -38,8 +39,8 @@ static inline void __vx_acc_sock(struct vx_info *vxi,
 	if (vxi) {
 		int type = vx_sock_type(family);
 
-		atomic_inc(&vxi->cacct.sock[type][pos].count);
-		atomic_add(size, &vxi->cacct.sock[type][pos].total);
+		atomic_long_inc(&vxi->cacct.sock[type][pos].count);
+		atomic_long_add(size, &vxi->cacct.sock[type][pos].total);
 	}
 }
 
@@ -61,6 +62,18 @@ static inline void __vx_acc_sock(struct vx_info *vxi,
 	(s)->sk_nx_info = NULL;		\
 	} while (0)
 
+static inline
+int vx_socket_peer_tag(struct socket *sock, int level,
+	char __user *optval, int __user *optlen, int len)
+{
+	struct peer_tag tag;
+
+	tag.xid = sock->sk->sk_xid;
+	tag.nid = sock->sk->sk_nid;
+	if (copy_to_user(optval, &tag, sizeof(tag)))
+		return -EFAULT;
+	return 0;
+}
 
 #else
 #warning duplicate inclusion

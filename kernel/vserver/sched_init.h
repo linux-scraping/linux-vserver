@@ -13,7 +13,6 @@ static inline void vx_info_init_sched(struct _vx_sched *sched)
 	sched->tokens_max	= HZ >> 1;
 	sched->tokens_lock	= SPIN_LOCK_UNLOCKED;
 	sched->prio_bias	= 0;
-	sched->vavavoom		= 0;
 
 	lockdep_set_class(&sched->tokens_lock, &tokens_lock_key);
 }
@@ -28,6 +27,8 @@ void vx_info_init_sched_pc(struct _vx_sched_pc *sched_pc, int cpu)
 	sched_pc->tokens	= HZ >> 2;
 	sched_pc->tokens_min	= HZ >> 4;
 	sched_pc->tokens_max	= HZ >> 1;
+	sched_pc->prio_bias	= 0;
+	sched_pc->vavavoom	= 0;
 	sched_pc->token_time	= 0;
 	sched_pc->idle_time	= 0;
 	sched_pc->norm_time	= jiffies;

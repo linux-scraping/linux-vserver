@@ -10,11 +10,11 @@
 static inline
 int vx_info_proc_nsproxy(struct nsproxy *nsproxy, char *buffer)
 {
-	struct mnt_namespace *mnt;
+	struct mnt_namespace *ns;
 	struct uts_namespace *uts;
 	struct ipc_namespace *ipc;
-	struct vfsmount *root;
-	char *path, *d_root;
+	struct vfsmount *mnt;
+	char *path, *root;
 	int length = 0;
 
 	if (!nsproxy)
@@ -25,23 +25,23 @@ int vx_info_proc_nsproxy(struct nsproxy *nsproxy, char *buffer)
 		nsproxy, nsproxy->mnt_ns,
 		nsproxy->uts_ns, nsproxy->ipc_ns);
 
-	mnt = nsproxy->mnt_ns;
-	if (!mnt)
-		goto skip_mnt;
+	ns = nsproxy->mnt_ns;
+	if (!ns)
+		goto skip_ns;
 
 	path = kmalloc(PATH_MAX, GFP_KERNEL);
 	if (!path)
-		goto skip_mnt;
+		goto skip_ns;
 
-	root = mnt->root;
-	d_root = d_path(root->mnt_root, root->mnt_parent, path, PATH_MAX-2);
+	mnt = ns->root;
+	root = d_path(mnt->mnt_root, mnt->mnt_parent, path, PATH_MAX-2);
 	length += sprintf(buffer + length,
 		"Namespace:\t%p [#%u]\n"
 		"RootPath:\t%s\n"
-		,mnt , atomic_read(&mnt->count)
-		,d_root);
+		,ns , atomic_read(&ns->count)
+		,root);
 	kfree(path);
-skip_mnt:
+skip_ns:
 
 	uts = nsproxy->uts_ns;
 	if (!uts)

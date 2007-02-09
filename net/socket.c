@@ -1097,7 +1097,7 @@ static int __sock_create(int family, int type, int protocol,
 		return -EINVAL;
 
 	/* disable IPv6 inside vservers for now */
-	if (family == PF_INET6 && !vx_check(0, VS_ADMIN))
+	if (family == PF_INET6 && !nx_check(0, VS_ADMIN))
 		return -EAFNOSUPPORT;
 
 	/* Compatibility.

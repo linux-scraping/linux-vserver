@@ -30,11 +30,15 @@
 #include <linux/module.h>
 #include <linux/slab.h>
 #include <linux/kernel.h>
-#include <linux/usb/input.h>
 
 #undef DEBUG
 
 #include <linux/hid.h>
+
+static int hid_pb_fnmode = 1;
+module_param_named(pb_fnmode, hid_pb_fnmode, int, 0644);
+MODULE_PARM_DESC(pb_fnmode,
+		"Mode of fn key on PowerBooks (0 = disabled, 1 = fkeyslast, 2 = fkeysfirst)");
 
 #define unk	KEY_UNKNOWN
 
@@ -68,6 +72,7 @@ static const struct {
 #define map_led(c)	do { usage->code = c; usage->type = EV_LED; bit = input->ledbit; max = LED_MAX; } while (0)
 
 #define map_abs_clear(c)	do { map_abs(c); clear_bit(c, bit); } while (0)
+#define map_rel_clear(c)	do { map_rel(c); clear_bit(c, bit); } while (0)
 #define map_key_clear(c)	do { map_key(c); clear_bit(c, bit); } while (0)
 
 #ifdef CONFIG_USB_HIDINPUT_POWERBOOK
@@ -154,7 +159,7 @@ static int hidinput_pb_event(struct hid_device *hid, struct input_dev *input,
 		return 1;
 	}
 
-	if (hid->pb_fnmode) {
+	if (hid_pb_fnmode) {
 		int do_translate;
 
 		trans = find_translation(powerbook_fn_keys, usage->code);
@@ -163,8 +168,8 @@ static int hidinput_pb_event(struct hid_device *hid, struct input_dev *input,
 				do_translate = 1;
 			else if (trans->flags & POWERBOOK_FLAG_FKEY)
 				do_translate =
-					(hid->pb_fnmode == 2 &&  (hid->quirks & HID_QUIRK_POWERBOOK_FN_ON)) ||
-					(hid->pb_fnmode == 1 && !(hid->quirks & HID_QUIRK_POWERBOOK_FN_ON));
+					(hid_pb_fnmode == 2 &&  (hid->quirks & HID_QUIRK_POWERBOOK_FN_ON)) ||
+					(hid_pb_fnmode == 1 && !(hid->quirks & HID_QUIRK_POWERBOOK_FN_ON));
 			else
 				do_translate = (hid->quirks & HID_QUIRK_POWERBOOK_FN_ON);
 
@@ -292,7 +297,7 @@ static void hidinput_configure_usage(struct hid_input *hidinput, struct hid_fiel
 					}
 			}
 
-			map_key(code);
+			map_key_clear(code);
 			break;
 
 
@@ -343,9 +348,9 @@ static void hidinput_configure_usage(struct hid_input *hidinput, struct hid_fiel
 				case HID_GD_RX: case HID_GD_RY: case HID_GD_RZ:
 				case HID_GD_SLIDER: case HID_GD_DIAL: case HID_GD_WHEEL:
 					if (field->flags & HID_MAIN_ITEM_RELATIVE)
-						map_rel(usage->hid & 0xf);
+						map_rel_clear(usage->hid & 0xf);
 					else
-						map_abs(usage->hid & 0xf);
+						map_abs_clear(usage->hid & 0xf);
 					break;
 
 				case HID_GD_HATSWITCH:
@@ -363,9 +368,22 @@ static void hidinput_configure_usage(struct hid_input *hidinput, struct hid_fiel
 			break;
 
 		case HID_UP_LED:
-			if (((usage->hid - 1) & 0xffff) >= LED_MAX)
-				goto ignore;
-			map_led((usage->hid - 1) & 0xffff);
+
+			switch (usage->hid & 0xffff) {                        /* HID-Value:                   */
+				case 0x01:  map_led (LED_NUML);     break;    /*   "Num Lock"                 */
+				case 0x02:  map_led (LED_CAPSL);    break;    /*   "Caps Lock"                */
+				case 0x03:  map_led (LED_SCROLLL);  break;    /*   "Scroll Lock"              */
+				case 0x04:  map_led (LED_COMPOSE);  break;    /*   "Compose"                  */
+				case 0x05:  map_led (LED_KANA);     break;    /*   "Kana"                     */
+				case 0x27:  map_led (LED_SLEEP);    break;    /*   "Stand-By"                 */
+				case 0x4c:  map_led (LED_SUSPEND);  break;    /*   "System Suspend"           */
+				case 0x09:  map_led (LED_MUTE);     break;    /*   "Mute"                     */
+				case 0x4b:  map_led (LED_MISC);     break;    /*   "Generic Indicator"        */
+				case 0x19:  map_led (LED_MAIL);     break;    /*   "Message Waiting"          */
+				case 0x4d:  map_led (LED_CHARGING); break;    /*   "External Power Connected" */
+
+				default: goto ignore;
+			}
 			break;
 
 		case HID_UP_DIGITIZER:
@@ -418,6 +436,7 @@ static void hidinput_configure_usage(struct hid_input *hidinput, struct hid_fiel
 				case 0x040: map_key_clear(KEY_MENU);		break;
 				case 0x045: map_key_clear(KEY_RADIO);		break;
 
+				case 0x083: map_key_clear(KEY_LAST);		break;
 				case 0x088: map_key_clear(KEY_PC);		break;
 				case 0x089: map_key_clear(KEY_TV);		break;
 				case 0x08a: map_key_clear(KEY_WWW);		break;
@@ -435,6 +454,7 @@ static void hidinput_configure_usage(struct hid_input *hidinput, struct hid_fiel
 				case 0x096: map_key_clear(KEY_TAPE);		break;
 				case 0x097: map_key_clear(KEY_TV2);		break;
 				case 0x098: map_key_clear(KEY_SAT);		break;
+				case 0x09a: map_key_clear(KEY_PVR);		break;
 
 				case 0x09c: map_key_clear(KEY_CHANNELUP);	break;
 				case 0x09d: map_key_clear(KEY_CHANNELDOWN);	break;
@@ -500,7 +520,7 @@ static void hidinput_configure_usage(struct hid_input *hidinput, struct hid_fiel
 				case 0x22f: map_key_clear(KEY_ZOOMRESET);	break;
 				case 0x233: map_key_clear(KEY_SCROLLUP);	break;
 				case 0x234: map_key_clear(KEY_SCROLLDOWN);	break;
-				case 0x238: map_rel(REL_HWHEEL);		break;
+				case 0x238: map_rel_clear(REL_HWHEEL);		break;
 				case 0x25f: map_key_clear(KEY_CANCEL);		break;
 				case 0x279: map_key_clear(KEY_REDO);		break;
 

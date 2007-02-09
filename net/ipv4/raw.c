@@ -315,7 +315,7 @@ static int raw_send_hdrinc(struct sock *sk, void *from, size_t length,
 	}
 
 	err = -EPERM;
-	if (!vx_check(0, VS_ADMIN) && !capable(CAP_NET_RAW)
+	if (!nx_check(0, VS_ADMIN) && !capable(CAP_NET_RAW)
 		&& (!addr_in_nx_info(sk->sk_nx_info, iph->saddr)))
 		goto error_free;
 

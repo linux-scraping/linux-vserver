@@ -360,8 +360,9 @@ handle_fpu_swa (int fp_fault, struct pt_regs *regs, unsigned long isr)
 			if ((last.count & 15) < 5 && (ia64_fetchadd(1, &last.count, acq) & 15) < 5) {
 				last.time = current_jiffies + 5 * HZ;
 				printk(KERN_WARNING
-		       			"%s(%d): floating-point assist fault at ip %016lx, isr %016lx\n",
-		       			current->comm, current->pid, regs->cr_iip + ia64_psr(regs)->ri, isr);
+					"%s(%d[#%u]): floating-point assist fault at ip %016lx, isr %016lx\n",
+					current->comm, current->pid, current->xid,
+					regs->cr_iip + ia64_psr(regs)->ri, isr);
 			}
 		}
 	}

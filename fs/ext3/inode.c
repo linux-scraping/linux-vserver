@@ -2660,27 +2660,15 @@ int ext3_sync_flags(struct inode *inode)
 	int err = 0;
 
 	oldflags = EXT3_I(inode)->i_flags;
-	newflags = oldflags & ~(EXT3_APPEND_FL |
-		EXT3_IMMUTABLE_FL | EXT3_IUNLINK_FL |
-		EXT3_BARRIER_FL | EXT3_NOATIME_FL |
-		EXT3_SYNC_FL | EXT3_DIRSYNC_FL);
+	newflags = oldflags & ~(EXT3_IMMUTABLE_FL |
+		EXT3_IUNLINK_FL | EXT3_BARRIER_FL);
 
-	if (IS_APPEND(inode))
-		newflags |= EXT3_APPEND_FL;
 	if (IS_IMMUTABLE(inode))
 		newflags |= EXT3_IMMUTABLE_FL;
 	if (IS_IUNLINK(inode))
 		newflags |= EXT3_IUNLINK_FL;
 	if (IS_BARRIER(inode))
 		newflags |= EXT3_BARRIER_FL;
-
-	/* we do not want to copy superblock flags */
-	if (inode->i_flags & S_NOATIME)
-		newflags |= EXT3_NOATIME_FL;
-	if (inode->i_flags & S_SYNC)
-		newflags |= EXT3_SYNC_FL;
-	if (inode->i_flags & S_DIRSYNC)
-		newflags |= EXT3_DIRSYNC_FL;
 
 	if (oldflags ^ newflags) {
 		handle_t *handle;

@@ -26,9 +26,10 @@
 #include <linux/mount.h>
 #include <linux/ramfs.h>
 #include <linux/vs_base.h>
-#include <linux/vserver/space.h>
 #include <linux/vs_context.h>
 #include <linux/vs_tag.h>
+#include <linux/vserver/space.h>
+#include <linux/vserver/global.h>
 #include <asm/uaccess.h>
 #include <asm/unistd.h>
 #include "pnode.h"
@@ -363,7 +364,7 @@ static int mnt_is_reachable(struct vfsmount *mnt)
 	if (mnt == mnt->mnt_ns->root)
 		return 1;
 
-	spin_lock(&dcache_lock);
+	spin_lock(&vfsmount_lock);
 	root_mnt = current->fs->rootmnt;
 	root = current->fs->root;
 	point = root;
@@ -375,7 +376,7 @@ static int mnt_is_reachable(struct vfsmount *mnt)
 
 	ret = (mnt == root_mnt) && is_subdir(point, root);
 
-	spin_unlock(&dcache_lock);
+	spin_unlock(&vfsmount_lock);
 
 	return ret;
 }
@@ -397,7 +398,7 @@ static int show_vfsmnt(struct seq_file *m, void *v)
 		{ MS_TAGGED, 0, ",tag", NULL },
 		{ MS_NOATIME, MNT_NOATIME, ",noatime", NULL },
 		{ MS_NODIRATIME, MNT_NODIRATIME, ",nodiratime", NULL },
-		{ 0, MNT_RELATIME, ",relatime", NULL },
+		{ MS_RELATIME, MNT_RELATIME, ",relatime", NULL },
 		{ 0, MNT_NOSUID, ",nosuid", NULL },
 		{ 0, MNT_NODEV, ",nodev", NULL },
 		{ 0, MNT_NOEXEC, ",noexec", NULL },
@@ -1580,6 +1581,7 @@ struct mnt_namespace *dup_mnt_ns(struct task_struct *tsk,
 		q = next_mnt(q, new_ns->root);
 	}
 	up_write(&namespace_sem);
+	atomic_inc(&vs_global_mnt_ns);
 
 	if (rootmnt)
 		mntput(rootmnt);
@@ -1957,5 +1959,6 @@ void __put_mnt_ns(struct mnt_namespace *ns)
 	spin_unlock(&vfsmount_lock);
 	up_write(&namespace_sem);
 	release_mounts(&umount_list);
+	atomic_dec(&vs_global_mnt_ns);
 	kfree(ns);
 }

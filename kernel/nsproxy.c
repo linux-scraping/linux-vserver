@@ -20,6 +20,7 @@
 #include <linux/mnt_namespace.h>
 #include <linux/utsname.h>
 #include <linux/pid_namespace.h>
+#include <linux/vserver/global.h>
 
 struct nsproxy init_nsproxy = INIT_NSPROXY(init_nsproxy);
 
@@ -43,6 +44,7 @@ static inline struct nsproxy *clone_namespaces(struct nsproxy *orig)
 	ns = kmemdup(orig, sizeof(struct nsproxy), GFP_KERNEL);
 	if (ns)
 		atomic_set(&ns->count, 1);
+	atomic_inc(&vs_global_nsproxy);
 	return ns;
 }
 
@@ -65,7 +67,6 @@ struct nsproxy *dup_namespaces(struct nsproxy *orig)
 		if (ns->pid_ns)
 			get_pid_ns(ns->pid_ns);
 	}
-
 	return ns;
 }
 
@@ -140,5 +141,6 @@ void free_nsproxy(struct nsproxy *ns)
 		put_ipc_ns(ns->ipc_ns);
 	if (ns->pid_ns)
 		put_pid_ns(ns->pid_ns);
+	atomic_dec(&vs_global_nsproxy);
 	kfree(ns);
 }

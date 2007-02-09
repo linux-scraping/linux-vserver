@@ -197,6 +197,13 @@ UNUSUAL_DEV(  0x0421, 0x047c, 0x0370, 0x0370,
 		US_SC_DEVICE, US_PR_DEVICE, NULL,
 		US_FL_MAX_SECTORS_64 ),
 
+/* Reported by Manuel Osdoba <manuel.osdoba@tu-ilmenau.de> */
+UNUSUAL_DEV( 0x0421, 0x0492, 0x0452, 0x0452,
+		"Nokia",
+		"Nokia 6233",
+		US_SC_DEVICE, US_PR_DEVICE, NULL,
+		US_FL_MAX_SECTORS_64 ),
+
 /* Reported by Alex Corcoles <alex@corcoles.net> */
 UNUSUAL_DEV(  0x0421, 0x0495, 0x0370, 0x0370,
 		"Nokia",
@@ -253,6 +260,18 @@ UNUSUAL_DEV(  0x045a, 0x5210, 0x0101, 0x0101,
 		"Rio Karma",
 		US_SC_SCSI, US_PR_KARMA, rio_karma_init, 0),
 #endif
+
+/*
+ * This virtual floppy is found in Sun equipment (x4600, x4200m2, etc.)
+ * Reported by Pete Zaitcev <zaitcev@redhat.com>
+ * This device chokes on both version of MODE SENSE which we have, so
+ * use_10_for_ms is not effective, and we use US_FL_NO_WP_DETECT.
+ */
+UNUSUAL_DEV(  0x046b, 0xff40, 0x0100, 0x0100,
+		"AMI",
+		"Virtual Floppy",
+		US_SC_DEVICE, US_PR_DEVICE, NULL,
+		US_FL_NO_WP_DETECT),
 
 /* Patch submitted by Philipp Friedrich <philipp@void.at> */
 UNUSUAL_DEV(  0x0482, 0x0100, 0x0100, 0x0100,
@@ -728,7 +747,7 @@ UNUSUAL_DEV( 0x05ac, 0x1204, 0x0000, 0x9999,
 		"Apple",
 		"iPod",
 		US_SC_DEVICE, US_PR_DEVICE, NULL,
-		US_FL_FIX_CAPACITY ),
+		US_FL_FIX_CAPACITY | US_FL_NOT_LOCKABLE ),
 
 UNUSUAL_DEV( 0x05ac, 0x1205, 0x0000, 0x9999,
 		"Apple",
@@ -1355,6 +1374,21 @@ UNUSUAL_DEV(  0x132b, 0x000b, 0x0001, 0x0001,
 UNUSUAL_DEV(  0x1370, 0x6828, 0x0110, 0x0110,
 		"SWISSBIT",
 		"Black Silver",
+		US_SC_DEVICE, US_PR_DEVICE, NULL,
+		US_FL_IGNORE_RESIDUE ),
+
+/* Reported by Francesco Foresti <frafore@tiscali.it> */
+UNUSUAL_DEV(  0x14cd, 0x6600, 0x0201, 0x0201,
+		"Super Top",
+		"IDE DEVICE",
+		US_SC_DEVICE, US_PR_DEVICE, NULL,
+		US_FL_IGNORE_RESIDUE ),
+
+/* Reported by Robert Schedel <r.schedel@yahoo.de>
+ * Note: this is a 'super top' device like the above 14cd/6600 device */
+UNUSUAL_DEV(  0x1652, 0x6600, 0x0201, 0x0201,
+		"Teac",
+		"HD-35PUK-B",
 		US_SC_DEVICE, US_PR_DEVICE, NULL,
 		US_FL_IGNORE_RESIDUE ),
 

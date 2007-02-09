@@ -56,5 +56,6 @@
 
 #define SO_PEERSEC		31
 #define SO_PASSSEC		34
+#define SO_PEERTAG		35
 
 #endif	/* _ASM_POWERPC_SOCKET_H */

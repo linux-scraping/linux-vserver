@@ -36,6 +36,11 @@ int copy_namespaces(int flags, struct task_struct *tsk);
 void get_task_namespaces(struct task_struct *tsk);
 void free_nsproxy(struct nsproxy *ns);
 
+static inline void get_nsproxy(struct nsproxy *ns)
+{
+	atomic_inc(&ns->count);
+}
+
 static inline void put_nsproxy(struct nsproxy *ns)
 {
 	if (atomic_dec_and_test(&ns->count)) {
@@ -53,10 +58,4 @@ static inline void exit_task_namespaces(struct task_struct *p)
 		put_nsproxy(ns);
 	}
 }
-
-static inline void get_nsproxy(struct nsproxy *ns)
-{
-	atomic_inc(&ns->count);
-}
-
 #endif

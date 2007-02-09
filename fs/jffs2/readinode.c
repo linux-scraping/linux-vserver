@@ -759,6 +759,7 @@ static int jffs2_do_read_inode_internal(struct jffs2_sb_info *c,
 		latest_node->isize = cpu_to_je32(0);
 		latest_node->gid = cpu_to_je16(0);
 		latest_node->uid = cpu_to_je16(0);
+		latest_node->tag = cpu_to_je16(0);
 		latest_node->flags = cpu_to_je16(0);
 		if (f->inocache->state == INO_STATE_READING)
 			jffs2_set_inocache_state(c, f->inocache, INO_STATE_PRESENT);
@@ -945,13 +946,12 @@ int jffs2_do_read_inode(struct jffs2_sb_info *c, struct jffs2_inode_info *f,
 int jffs2_do_crccheck_inode(struct jffs2_sb_info *c, struct jffs2_inode_cache *ic)
 {
 	struct jffs2_raw_inode n;
-	struct jffs2_inode_info *f = kmalloc(sizeof(*f), GFP_KERNEL);
+	struct jffs2_inode_info *f = kzalloc(sizeof(*f), GFP_KERNEL);
 	int ret;
 
 	if (!f)
 		return -ENOMEM;
 
-	memset(f, 0, sizeof(*f));
 	init_MUTEX_LOCKED(&f->sem);
 	f->inocache = ic;
 
