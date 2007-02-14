@@ -246,7 +246,7 @@ struct rpc_clnt *rpc_create(struct rpc_create_args *args)
 		clnt->cl_autobind = 1;
 	if (args->flags & RPC_CLNT_CREATE_ONESHOT)
 		clnt->cl_oneshot = 1;
-	/* FIXME: handle RPC_CLNT_CREATE_TAGGED
+	/* TODO: handle RPC_CLNT_CREATE_TAGGED
 	if (args->flags & RPC_CLNT_CREATE_TAGGED)
 		clnt->cl_tag = 1; */
 	return clnt;

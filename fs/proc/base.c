@@ -1478,7 +1478,7 @@ static struct dentry *proc_pident_lookup(struct inode *dir,
 	if (!task)
 		goto out_no_task;
 
-	/* FIXME: maybe we can come up with a generic approach? */
+	/* TODO: maybe we can come up with a generic approach? */
 	if (task_vx_flags(task, VXF_HIDE_VINFO, 0) &&
 		(dentry->d_name.len == 5) &&
 		(!memcmp(dentry->d_name.name, "vinfo", 5) ||

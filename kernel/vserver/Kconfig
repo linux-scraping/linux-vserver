@@ -21,9 +21,10 @@ config	VSERVER_LEGACY_VERSION
 	  This shows a special legacy version to very old tools
 	  which do not handle the current version correctly.
 
-	  This will probably disable some features of newer tools
-	  so better avoid it, unless you really, really need it
-	  for backwards compatibility.
+	  Warning: recent tools are not able to utilize the
+	  newer APIs when this is enabled, so some features will
+	  not be available. Better avoid it, unless you really,
+	  really need it for backwards compatibility.
 
 config	VSERVER_DYNAMIC_IDS
 	bool	"Enable dynamic context IDs"

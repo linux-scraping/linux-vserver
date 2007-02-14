@@ -478,7 +478,7 @@ out:
  *	sk:	the socket to check against
  *	addr:	the address in question (must be != 0)
  */
-static inline int __addr_in_socket(struct sock *sk, uint32_t addr)
+static inline int __addr_in_socket(const struct sock *sk, uint32_t addr)
 {
 	struct nx_info *nxi = sk->sk_nx_info;
 	uint32_t saddr = inet_rcv_saddr(sk);
@@ -501,7 +501,7 @@ static inline int __addr_in_socket(struct sock *sk, uint32_t addr)
 }
 
 
-int nx_addr_conflict(struct nx_info *nxi, uint32_t addr, struct sock *sk)
+int nx_addr_conflict(struct nx_info *nxi, uint32_t addr, const struct sock *sk)
 {
 	vxdprintk(VXD_CBIT(net, 2),
 		"nx_addr_conflict(%p,%p) %d.%d,%d.%d",

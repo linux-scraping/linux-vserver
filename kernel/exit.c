@@ -599,6 +599,9 @@ choose_new_parent(struct task_struct *p, struct task_struct *reaper)
 		"rogue reaper: %p[%d,#%u] <> %p[%d,#%u]",
 		p, p->pid, p->xid, reaper, reaper->pid, reaper->xid);
 
+	if (p == reaper)
+		reaper = vx_child_reaper(p);
+
 	/*
 	 * Make sure we're not reparenting to ourselves and that
 	 * the parent is not a zombie.
@@ -715,7 +718,7 @@ forget_original_parent(struct task_struct *father, struct list_head *to_release)
 
 		if (father == p->real_parent) {
 			/* reparent with a reaper, real father it's us */
-			choose_new_parent(p, vx_child_reaper(p));
+			choose_new_parent(p, reaper);
 			reparent_thread(p, father, 0);
 		} else {
 			/* reparent ptraced task to its real parent */

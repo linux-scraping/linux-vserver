@@ -196,8 +196,6 @@ gotit:
 			    (!sk2->sk_reuse        || !sk->sk_reuse)         &&
 			    (!sk2->sk_bound_dev_if || !sk->sk_bound_dev_if
 			     || sk2->sk_bound_dev_if == sk->sk_bound_dev_if) &&
-				/* FIXME: nx_addr_conflict(sk->sk_nx_info,
-					inet_rcv_saddr(sk), sk2) &&	*/
 			    (*saddr_comp)(sk, sk2)                             )
 				goto fail;
 	}
@@ -221,11 +219,8 @@ __inline__ int udp_get_port(struct sock *sk, unsigned short snum,
 
 inline int ipv4_rcv_saddr_equal(const struct sock *sk1, const struct sock *sk2)
 {
-	struct inet_sock *inet1 = inet_sk(sk1), *inet2 = inet_sk(sk2);
-
 	return 	( !ipv6_only_sock(sk2)  &&
-		  (!inet1->rcv_saddr || !inet2->rcv_saddr ||
-		   inet1->rcv_saddr == inet2->rcv_saddr      ));
+		   nx_addr_conflict(sk1->sk_nx_info, inet_rcv_saddr(sk1), sk2));
 }
 
 static inline int udp_v4_get_port(struct sock *sk, unsigned short snum)
