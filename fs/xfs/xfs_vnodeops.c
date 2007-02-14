@@ -318,7 +318,7 @@ xfs_setattr(
 	    (mask & (XFS_AT_UID|XFS_AT_GID|XFS_AT_PROJID))) {
 		uint	qflags = 0;
 
-		/* FIXME: handle tagging? */
+		/* TODO: handle tagging? */
 		if ((mask & XFS_AT_UID) && XFS_IS_UQUOTA_ON(mp)) {
 			uid = vap->va_uid;
 			qflags |= XFS_QMOPT_UQUOTA;
@@ -398,7 +398,7 @@ xfs_setattr(
 	if (mask &
 	    (XFS_AT_MODE|XFS_AT_XFLAGS|XFS_AT_EXTSIZE|XFS_AT_UID|
 	     XFS_AT_GID|XFS_AT_PROJID)) {
-		/* FIXME: handle tagging? */
+		/* TODO: handle tagging? */
 
 		/*
 		 * CAP_FOWNER overrides the following restrictions:
@@ -489,7 +489,7 @@ xfs_setattr(
 		if ((XFS_IS_UQUOTA_ON(mp) && iuid != uid) ||
 		    (XFS_IS_PQUOTA_ON(mp) && iprojid != projid) ||
 		    (XFS_IS_GQUOTA_ON(mp) && igid != gid)) {
-			/* FIXME: handle tagging? */
+			/* TODO: handle tagging? */
 			ASSERT(tp);
 			code = XFS_QM_DQVOPCHOWNRESV(mp, tp, ip, udqp, gdqp,
 						capable(CAP_FOWNER) ?
