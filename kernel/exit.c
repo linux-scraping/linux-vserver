@@ -604,14 +604,8 @@ choose_new_parent(struct task_struct *p, struct task_struct *reaper)
 		"rogue reaper: %p[%d,#%u] <> %p[%d,#%u]",
 		p, p->pid, p->xid, reaper, reaper->pid, reaper->xid);
 
-	if (p == reaper) {
-		struct task_struct *new = vx_child_reaper(p);
-
-		printk("p=reaper: %p[%d,#%u] replaced with %p[%d,#%u]",
-			reaper, reaper->pid, reaper->xid,
-			new, new->pid, new->xid);
-		reaper = new;
-	}
+	if (p == reaper)
+		reaper = vx_child_reaper(p);
 
 	/*
 	 * Make sure we're not reparenting to ourselves and that
