@@ -203,8 +203,12 @@ int proc_nxi_status (struct nx_info *nxi, char *buffer)
 	length = sprintf(buffer,
 		"UseCnt:\t%d\n"
 		"Tasks:\t%d\n"
+		"Flags:\t%016llx\n"
+		"NCaps:\t%016llx\n"
 		,atomic_read(&nxi->nx_usecnt)
 		,atomic_read(&nxi->nx_tasks)
+		,(unsigned long long)nxi->nx_flags
+		,(unsigned long long)nxi->nx_ncaps
 		);
 	return length;
 }
@@ -994,6 +998,11 @@ int proc_pid_nx_info(struct task_struct *p, char *buffer)
 	nxi = task_get_nx_info(p);
 	if (!nxi)
 		goto out;
+
+	buffer += sprintf (buffer,"NCaps:\t%016llx\n"
+		,(unsigned long long)nxi->nx_ncaps);
+	buffer += sprintf (buffer,"NFlags:\t%016llx\n"
+		,(unsigned long long)nxi->nx_flags);
 
 	for (i=0; i<nxi->nbipv4; i++){
 		buffer += sprintf (buffer,

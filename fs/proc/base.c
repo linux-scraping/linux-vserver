@@ -1415,7 +1415,7 @@ static struct dentry *proc_pident_lookup(struct inode *dir,
 	if (!task)
 		goto out_no_task;
 
-	/* FIXME: maybe we can come up with a generic approach? */
+	/* TODO: maybe we can come up with a generic approach? */
 	if (task_vx_flags(task, VXF_HIDE_VINFO, 0) &&
 		(dentry->d_name.len == 5) &&
 		(!memcmp(dentry->d_name.name, "vinfo", 5) ||
@@ -2297,9 +2297,10 @@ static int proc_task_readdir(struct file * filp, void * dirent, filldir_t filldi
 	     task;
 	     task = next_tid(task), pos++) {
 		tid = vx_map_pid(task->pid);
-		/* FIXME: could go away now! */
+		/* FIXME: could go away now
 		if (!vx_proc_task_visible(task))
-			continue;
+			continue; */
+		WARN_ON(!vx_proc_task_visible(task));
 		if (proc_task_fill_cache(filp, dirent, filldir, task, tid) < 0) {
 			/* returning this tgid failed, save it as the first
 			 * pid for the next readir call */

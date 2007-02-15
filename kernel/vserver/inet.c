@@ -3,7 +3,7 @@
 #include <linux/vs_inet.h>
 
 
-int nx_addr_conflict(struct nx_info *nxi, uint32_t addr, struct sock *sk)
+int nx_addr_conflict(struct nx_info *nxi, uint32_t addr, const struct sock *sk)
 {
 	vxdprintk(VXD_CBIT(net, 2),
 		"nx_addr_conflict(%p,%p) %d.%d,%d.%d",

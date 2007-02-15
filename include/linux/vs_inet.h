@@ -60,7 +60,7 @@ struct sock;
 
 
 int dev_in_nx_info(struct net_device *, struct nx_info *);
-int nx_addr_conflict(struct nx_info *, uint32_t, struct sock *);
+int nx_addr_conflict(struct nx_info *, uint32_t, const struct sock *);
 
 
 /*
@@ -71,7 +71,7 @@ int nx_addr_conflict(struct nx_info *, uint32_t, struct sock *);
  */
 
 static inline
-int __addr_in_socket(struct sock *sk, uint32_t addr)
+int __addr_in_socket(const struct sock *sk, uint32_t addr)
 {
 	struct nx_info *nxi = sk->sk_nx_info;
 	uint32_t saddr = inet_rcv_saddr(sk);
@@ -136,7 +136,7 @@ int nx_dev_visible(struct nx_info *n, struct net_device *d)
 
 
 static inline
-int nx_addr_conflict(struct nx_info *n, uint32_t a, struct sock *s)
+int nx_addr_conflict(struct nx_info *n, uint32_t a, const struct sock *s)
 {
 	return 1;
 }
