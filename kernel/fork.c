@@ -719,7 +719,7 @@ static struct files_struct *dup_fd(struct files_struct *oldf, int *errorp)
 		struct file *f = *old_fds++;
 		if (f) {
 			get_file(f);
-			/* FIXME: sum it first for check and performance */
+			/* TODO: sum it first for check and performance */
 			vx_openfd_inc(open_files - i);
 		} else {
 			/*

@@ -767,7 +767,7 @@ static __always_inline void follow_dotdot(struct nameidata *nd)
 		if (nd->dentry == fs->root &&
 		    nd->mnt == fs->rootmnt) {
                         read_unlock(&fs->lock);
-			/* FIXME: for sane '/' avoid follow_mount() */
+			/* for sane '/' avoid follow_mount() */
 			return;
 		}
                 read_unlock(&fs->lock);
