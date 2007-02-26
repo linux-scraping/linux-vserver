@@ -1048,7 +1048,8 @@ static int pid_revalidate(struct dentry *dentry, struct nameidata *nd)
 	out_put:
 		put_task_struct(task);
 	}
-	d_drop(dentry);
+	if (!ret)
+		d_drop(dentry);
 	return ret;
 }
 
