@@ -851,6 +851,15 @@ out:
 	return 0;
 }
 
+static int proc_virtual_getattr(struct vfsmount *mnt,
+	struct dentry *dentry, struct kstat *stat)
+{
+	struct inode *inode = dentry->d_inode;
+
+	generic_fillattr(inode, stat);
+	stat->nlink = 2 + atomic_read(&vx_global_cactive);
+	return 0;
+}
 
 static struct file_operations proc_virtual_dir_operations = {
 	.read =		generic_read_dir,
@@ -858,6 +867,7 @@ static struct file_operations proc_virtual_dir_operations = {
 };
 
 static struct inode_operations proc_virtual_dir_inode_operations = {
+	.getattr =	proc_virtual_getattr,
 	.lookup =	proc_virtual_lookup,
 };
 
@@ -924,6 +934,15 @@ out:
 	return 0;
 }
 
+static int proc_virtnet_getattr(struct vfsmount *mnt,
+	struct dentry *dentry, struct kstat *stat)
+{
+	struct inode *inode = dentry->d_inode;
+
+	generic_fillattr(inode, stat);
+	stat->nlink = 2 + atomic_read(&nx_global_cactive);
+	return 0;
+}
 
 static struct file_operations proc_virtnet_dir_operations = {
 	.read =		generic_read_dir,
@@ -931,6 +950,7 @@ static struct file_operations proc_virtnet_dir_operations = {
 };
 
 static struct inode_operations proc_virtnet_dir_inode_operations = {
+	.getattr = 	proc_virtnet_getattr,
 	.lookup =	proc_virtnet_lookup,
 };
 
