@@ -214,7 +214,7 @@ static int do_set_sched(struct vx_info *vxi, struct vcmd_sched_v5 *data)
 {
 	unsigned int set_mask = data->mask;
 	unsigned int update_mask;
-	int i;
+	int i, cpu;
 
 	/* Sanity check data values */
 	if (data->tokens_max <= 0)
@@ -230,6 +230,11 @@ static int do_set_sched(struct vx_info *vxi, struct vcmd_sched_v5 *data)
 		data->prio_bias = MIN_PRIO_BIAS;
 
 	spin_lock(&vxi->sched.tokens_lock);
+
+	/* sync up on delayed updates */
+	for_each_cpu_mask(cpu, vxi->sched.update)
+		vx_update_sched_param(&vxi->sched,
+			&vx_per_cpu(vxi, sched_pc, cpu));
 
 	if (set_mask & VXSM_FILL_RATE)
 		vxi->sched.fill_rate[0] = data->fill_rate[0];
@@ -263,17 +268,20 @@ static int do_set_sched(struct vx_info *vxi, struct vcmd_sched_v5 *data)
 	vxi->sched.update_mask = update_mask;
 #ifdef	CONFIG_SMP
 	rmb();
-	if (set_mask & VXSM_CPU_ID)
+	if (set_mask & VXSM_CPU_ID) {
 		vxi->sched.update = cpumask_of_cpu(data->cpu_id);
+		cpus_and(vxi->sched.update, cpu_online_map,
+			vxi->sched.update);
+	}
 	else
-		vxi->sched.update = CPU_MASK_ALL;
+		vxi->sched.update = cpu_online_map;
+
 	/* forced reload? */
 	if (set_mask & VXSM_FORCE) {
-		int cpu;
-
-		for_each_possible_cpu(cpu)
+		for_each_cpu_mask(cpu, vxi->sched.update)
 			vx_update_sched_param(&vxi->sched,
 				&vx_per_cpu(vxi, sched_pc, cpu));
+		vxi->sched.update = CPU_MASK_NONE;
 	}
 #else
 	/* on UP we update immediately */

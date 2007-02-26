@@ -16,6 +16,7 @@
 #include <linux/mount.h>
 #include <linux/jffs2.h>
 #include <linux/uaccess.h>
+#include <linux/vs_base.h>
 #include "jffs2_fs_sb.h"
 #include "jffs2_fs_i.h"
 #include "acl.h"

@@ -791,6 +791,7 @@ static int flock_lock_file(struct file *filp, struct file_lock *request)
 	if (found)
 		cond_resched();
 
+	new_fl->fl_xid = -1;
 find_conflict:
 	for_each_lock(inode, before) {
 		struct file_lock *fl = *before;
@@ -808,8 +809,8 @@ find_conflict:
 	if (request->fl_flags & FL_ACCESS)
 		goto out;
 	locks_copy_lock(new_fl, request);
-	vx_locks_inc(new_fl);
 	locks_insert_lock(&inode->i_flock, new_fl);
+	vx_locks_inc(new_fl);
 	new_fl = NULL;
 	error = 0;
 
@@ -1455,8 +1456,8 @@ static int __setlease(struct file *filp, long arg, struct file_lock **flp)
 		goto out;
 
 	locks_copy_lock(fl, lease);
-
 	locks_insert_lock(before, fl);
+	vx_locks_inc(fl);
 
 	*flp = fl;
 	error = 0;
