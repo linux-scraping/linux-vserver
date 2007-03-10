@@ -484,7 +484,8 @@ handle_kernel_fault:
 out_of_memory:
 	insn = get_fault_insn(regs, insn);
 	up_read(&mm->mmap_sem);
-	printk("VM: killing process %s\n", current->comm);
+	printk("VM: killing process %s(%d:#%u)\n",
+		current->comm, current->pid, current->xid);
 	if (!(regs->tstate & TSTATE_PRIV))
 		do_exit(SIGKILL);
 	goto handle_kernel_fault;

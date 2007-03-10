@@ -15,7 +15,6 @@
 #include "linux/unistd.h"
 #include "linux/slab.h"
 #include "linux/utime.h"
-
 #include "asm/mman.h"
 #include "asm/uaccess.h"
 #include "kern_util.h"
@@ -119,7 +118,6 @@ long sys_uname(struct old_utsname __user * name)
 long sys_olduname(struct oldold_utsname __user * name)
 {
 	long error;
-	struct new_utsname *ptr;
 
 	if (!name)
 		return -EFAULT;
