@@ -123,6 +123,7 @@ asmlinkage unsigned int do_IRQ(struct pt_regs *regs)
 	else if (printk_ratelimit())
 		printk(KERN_EMERG "%s: %d.%d No irq handler for vector\n",
 			__func__, smp_processor_id(), vector);
+
 	irq_exit();
 
 	set_irq_regs(old_regs);

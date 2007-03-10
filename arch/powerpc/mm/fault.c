@@ -391,7 +391,8 @@ out_of_memory:
 		down_read(&mm->mmap_sem);
 		goto survive;
 	}
-	printk("VM: killing process %s\n", current->comm);
+	printk("VM: killing process %s(%d:#%u)\n",
+		current->comm, current->pid, current->xid);
 	if (user_mode(regs))
 		do_exit(SIGKILL);
 	return SIGKILL;

@@ -78,7 +78,6 @@ skip:
 asmlinkage unsigned int do_IRQ(int irq, struct pt_regs *regs)
 {
 	struct pt_regs *old_regs;
-
 	old_regs = set_irq_regs(regs);
 	irq_enter();
 

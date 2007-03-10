@@ -328,7 +328,7 @@ int posix_timer_event(struct k_itimer *timr,int si_private)
 	}
 
 	ret = send_group_sigqueue(timr->it_sigev_signo, timr->sigq,
-				  timr->it_process);
+				   timr->it_process);
 out:
 	leave_vx_info(&vxis);
 	put_vx_info(vxis.vxi);

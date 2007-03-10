@@ -67,6 +67,7 @@ struct nsproxy *dup_namespaces(struct nsproxy *orig)
 		if (ns->pid_ns)
 			get_pid_ns(ns->pid_ns);
 	}
+
 	return ns;
 }
 

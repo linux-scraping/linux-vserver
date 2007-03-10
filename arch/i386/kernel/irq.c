@@ -84,6 +84,7 @@ fastcall unsigned int do_IRQ(struct pt_regs *regs)
 		}
 	}
 #endif
+
 #ifdef CONFIG_4KSTACKS
 
 	curctx = (union irq_ctx *) current_thread_info();
@@ -123,6 +124,7 @@ fastcall unsigned int do_IRQ(struct pt_regs *regs)
 	} else
 #endif
 		desc->handle_irq(irq, desc);
+
 	irq_exit();
 	set_irq_regs(old_regs);
 	return 1;

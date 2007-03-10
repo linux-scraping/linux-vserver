@@ -107,7 +107,6 @@ static inline pid_t pid_nr(struct pid *pid)
 }
 
 
-
 #define do_each_task_pid(who, type, task)				\
 	do {								\
 		struct hlist_node *pos___;				\
