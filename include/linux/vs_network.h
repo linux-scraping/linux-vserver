@@ -154,6 +154,8 @@ static __inline__ struct nx_info *__task_get_nx_info(struct task_struct *p,
 
 #define nx_current_nid() nx_task_nid(current)
 
+#define current_nx_info() (current->nx_info)
+
 #define nx_check(c,m)	__nx_check(nx_current_nid(),c,m)
 
 #define nx_weak_check(c,m)	((m) ? nx_check(c,m) : 1)
@@ -196,6 +198,8 @@ static inline int addr_in_nx_info(struct nx_info *nxi, uint32_t addr)
 		return 1;
 
 	n = nxi->nbipv4;
+	if (n && nxi->ipv4[0] == 0)
+		return 1;
 	for (i=0; i<n; i++) {
 		if (nxi->ipv4[i] == addr)
 			return 1;

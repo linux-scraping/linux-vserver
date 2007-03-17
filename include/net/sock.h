@@ -116,9 +116,9 @@ struct sock_common {
 	unsigned int		skc_hash;
 	struct proto		*skc_prot;
 	xid_t			skc_xid;
-	struct vx_info	*skc_vx_info;
+	struct vx_info		*skc_vx_info;
 	nid_t			skc_nid;
-	struct nx_info	*skc_nx_info;
+	struct nx_info		*skc_nx_info;
 };
 
 /**

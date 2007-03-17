@@ -1061,7 +1061,6 @@ static inline int blocknrs_and_prealloc_arrays_from_search_start
 			if (quota_ret)
 				hint->preallocate = hint->prealloc_size = 0;
 		}
-
 		/* for unformatted nodes, force large allocations */
 		bigalloc = amount_needed;
 	}

@@ -139,6 +139,7 @@
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
 #include <linux/wait.h>
+#include <linux/completion.h>
 #include <linux/etherdevice.h>
 #include <net/checksum.h>
 #include <net/ipv6.h>
@@ -193,6 +194,11 @@
 static struct proc_dir_entry *pg_proc_dir = NULL;
 
 #define MAX_CFLOWS  65536
+
+struct pktgen_thread_info {
+	struct pktgen_thread *t;
+	struct completion *c;
+};
 
 struct flow_state
 {
@@ -1902,6 +1908,8 @@ static struct sk_buff *fill_packet_ipv4(struct net_device *odev,
 	skb->mac.raw = ((u8 *)iph) - 14;
 	skb->dev = odev;
 	skb->pkt_type = PACKET_HOST;
+	skb->nh.iph = iph;
+	skb->h.uh = udph;
 
 	if (pkt_dev->nfrags <= 0) 
                 pgh = (struct pktgen_hdr *)skb_put(skb, datalen);
@@ -2177,6 +2185,8 @@ static struct sk_buff *fill_packet_ipv6(struct net_device *odev,
 	skb->protocol = __constant_htons(ETH_P_IPV6);
 	skb->dev = odev;
 	skb->pkt_type = PACKET_HOST;
+	skb->nh.ipv6h = iph;
+	skb->h.uh = udph;
 
 	if (pkt_dev->nfrags <= 0) 
                 pgh = (struct pktgen_hdr *)skb_put(skb, datalen);
@@ -2652,10 +2662,11 @@ retry_now:
  * Main loop of the thread goes here
  */
 
-static void pktgen_thread_worker(struct pktgen_thread *t) 
+static void pktgen_thread_worker(struct pktgen_thread_info *info)
 {
 	DEFINE_WAIT(wait);
         struct pktgen_dev *pkt_dev = NULL;
+	struct pktgen_thread *t = info->t;
 	int cpu = t->cpu;
 	sigset_t tmpsig;
 	u32 max_before_softirq;
@@ -2695,6 +2706,8 @@ static void pktgen_thread_worker(struct pktgen_thread *t)
         
         __set_current_state(TASK_INTERRUPTIBLE);
         mb();
+
+        complete(info->c);
 
         while (1) {
 		
@@ -2890,6 +2903,8 @@ static struct pktgen_thread * __init pktgen_find_thread(const char* name)
 
 static int __init pktgen_create_thread(const char* name, int cpu) 
 {
+	struct pktgen_thread_info info;
+	struct completion started;
         struct pktgen_thread *t = NULL;
 	struct proc_dir_entry *pe;
 
@@ -2927,10 +2942,15 @@ static int __init pktgen_create_thread(const char* name, int cpu)
         t->next = pktgen_threads;
         pktgen_threads = t;
 
-	if (kernel_thread((void *) pktgen_thread_worker, (void *) t, 
+	init_completion(&started);
+	info.t = t;
+	info.c = &started;
+
+	if (kernel_thread((void *) pktgen_thread_worker, (void *)&info, 
 			  CLONE_FS | CLONE_FILES | CLONE_SIGHAND) < 0)
 		printk("pktgen: kernel_thread() failed for cpu %d\n", t->cpu);
 
+	wait_for_completion(&started);
 	return 0;
 }
 

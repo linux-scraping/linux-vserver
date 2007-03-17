@@ -15,7 +15,6 @@
 #include <linux/vs_context.h>
 #include <linux/vs_network.h>
 #include <linux/vserver/legacy.h>
-// #include <linux/vserver/namespace.h>
 #include <linux/namespace.h>
 #include <linux/err.h>
 
@@ -78,6 +77,7 @@ int vc_set_ipv4root(uint32_t nbip, void __user *data)
 		printk("!!! switching nx_info %p->%p\n", nxi, new_nxi);
 
 	nx_migrate_task(current, new_nxi);
+	release_nx_info(new_nxi, NULL);
 	put_nx_info(new_nxi);
 	return 0;
 }

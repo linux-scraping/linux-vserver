@@ -229,7 +229,7 @@ static inline int ip_route_connect(struct rtable **rp, u32 dst,
 			return err;
 		if (fl.fl4_dst == IPI_LOOPBACK && !vx_check(0, VX_ADMIN))
 			fl.fl4_dst = nx_info->ipv4[0];
-#ifdef CONFIG_VSERVER_REMAP_SADDR
+#ifdef VSERVER_REMAP_SADDR
 		if (fl.fl4_src == IPI_LOOPBACK && !vx_check(0, VX_ADMIN))
 			fl.fl4_src = nx_info->ipv4[0];
 #endif

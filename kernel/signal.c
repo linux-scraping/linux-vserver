@@ -1204,7 +1204,7 @@ kill_proc_info(int sig, struct siginfo *info, pid_t pid)
 	}
 	p = find_task_by_pid(pid);
 	error = -ESRCH;
-	if (p)
+	if (p && vx_check(vx_task_xid(p), VX_IDENT))
 		error = group_send_sig_info(sig, info, p);
 	if (unlikely(acquired_tasklist_lock))
 		read_unlock(&tasklist_lock);
@@ -1263,7 +1263,8 @@ static int kill_something_info(int sig, struct siginfo *info, int pid)
 
 		read_lock(&tasklist_lock);
 		for_each_process(p) {
-			if (p->pid > 1 && p->tgid != current->tgid) {
+			if (vx_check(vx_task_xid(p), VX_ADMIN|VX_IDENT)&&
+				p->pid > 1 && p->tgid != current->tgid) {
 				int err = group_send_sig_info(sig, info, p);
 				++count;
 				if (err != -EPERM)

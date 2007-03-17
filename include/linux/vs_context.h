@@ -171,6 +171,7 @@ static inline void __wakeup_vx_info(struct vx_info *vxi)
 }
 
 extern void exit_vx_info(struct task_struct *, int);
+extern void exit_vx_info_early(struct task_struct *, int);
 
 static inline
 struct task_struct *vx_child_reaper(struct task_struct *p)

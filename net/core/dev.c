@@ -1174,6 +1174,7 @@ int __skb_linearize(struct sk_buff *skb, gfp_t gfp_mask)
 	atomic_set(&ninfo->dataref, 1);
 	ninfo->tso_size = skb_shinfo(skb)->tso_size;
 	ninfo->tso_segs = skb_shinfo(skb)->tso_segs;
+	ninfo->ufo_size = skb_shinfo(skb)->ufo_size;
 	ninfo->nr_frags = 0;
 	ninfo->frag_list = NULL;
 
@@ -1297,14 +1298,16 @@ int dev_queue_xmit(struct sk_buff *skb)
 	if (q->enqueue) {
 		/* Grab device queue */
 		spin_lock(&dev->queue_lock);
+		q = dev->qdisc;
+		if (q->enqueue) {
+			rc = q->enqueue(skb, q);
+			qdisc_run(dev);
+			spin_unlock(&dev->queue_lock);
 
-		rc = q->enqueue(skb, q);
-
-		qdisc_run(dev);
-
+			rc = rc == NET_XMIT_BYPASS ? NET_XMIT_SUCCESS : rc;
+			goto out;
+		}
 		spin_unlock(&dev->queue_lock);
-		rc = rc == NET_XMIT_BYPASS ? NET_XMIT_SUCCESS : rc;
-		goto out;
 	}
 
 	/* The device has no queue. Common case for software devices:

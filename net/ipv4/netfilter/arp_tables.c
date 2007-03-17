@@ -236,7 +236,7 @@ unsigned int arpt_do_table(struct sk_buff **pskb,
 	struct arpt_entry *e, *back;
 	const char *indev, *outdev;
 	void *table_base;
-	struct xt_table_info *private = table->private;
+	struct xt_table_info *private;
 
 	/* ARP header, plus 2 device addresses, plus 2 IP addresses.  */
 	if (!pskb_may_pull((*pskb), (sizeof(struct arphdr) +
@@ -248,6 +248,7 @@ unsigned int arpt_do_table(struct sk_buff **pskb,
 	outdev = out ? out->name : nulldevname;
 
 	read_lock_bh(&table->lock);
+	private = table->private;
 	table_base = (void *)private->entries[smp_processor_id()];
 	e = get_entry(table_base, private->hook_entry[hook]);
 	back = get_entry(table_base, private->underflow[hook]);
@@ -1179,6 +1180,8 @@ static int __init init(void)
 static void __exit fini(void)
 {
 	nf_unregister_sockopt(&arpt_sockopts);
+	xt_unregister_target(NF_ARP, &arpt_error_target);
+	xt_unregister_target(NF_ARP, &arpt_standard_target);
 	xt_proto_fini(NF_ARP);
 }
 

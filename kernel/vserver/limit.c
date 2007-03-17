@@ -3,9 +3,10 @@
  *
  *  Virtual Server: Context Limits
  *
- *  Copyright (C) 2004-2005  Herbert Pötzl
+ *  Copyright (C) 2004-2006  Herbert Pötzl
  *
  *  V0.01  broken out from vcontext V0.05
+ *  V0.02  sync to valid limit check from 2.1.1
  *
  */
 
@@ -40,25 +41,33 @@ const char *vlimit_name[NUM_LIMITS] = {
 EXPORT_SYMBOL_GPL(vlimit_name);
 
 
-static int is_valid_rlimit(int id)
+#define MASK_ENTRY(x)	(1 << (x))
+
+const struct vcmd_ctx_rlimit_mask_v0 vlimit_mask = {
+		/* minimum */
+	0
+	,	/* softlimit */
+	0
+	,       /* maximum */
+	MASK_ENTRY( RLIMIT_RSS		) |
+	MASK_ENTRY( RLIMIT_NPROC	) |
+	MASK_ENTRY( RLIMIT_NOFILE	) |
+	MASK_ENTRY( RLIMIT_MEMLOCK	) |
+	MASK_ENTRY( RLIMIT_AS		) |
+	MASK_ENTRY( RLIMIT_LOCKS	) |
+	MASK_ENTRY( RLIMIT_MSGQUEUE	) |
+
+	MASK_ENTRY( VLIMIT_ANON		) |
+	MASK_ENTRY( VLIMIT_SHMEM	) |
+	0
+};
+
+
+static int is_valid_vlimit(int id)
 {
-	int valid = 0;
-
-	switch (id) {
-	case RLIMIT_RSS:
-	case RLIMIT_NPROC:
-	case RLIMIT_NOFILE:
-	case RLIMIT_MEMLOCK:
-	case RLIMIT_AS:
-
-	case VLIMIT_NSOCK:
-	case VLIMIT_OPENFD:
-	case VLIMIT_ANON:
-	case VLIMIT_SHMEM:
-		valid = 1;
-		break;
-	}
-	return valid;
+	uint32_t mask = vlimit_mask.minimum |
+		vlimit_mask.softlimit | vlimit_mask.maximum;
+	return mask & (1 << id);
 }
 
 static inline uint64_t vc_get_rlim(struct vx_info *vxi, int id)
@@ -76,7 +85,7 @@ static int do_get_rlimit(xid_t xid, uint32_t id,
 {
 	struct vx_info *vxi;
 
-	if (!is_valid_rlimit(id))
+	if (!is_valid_vlimit(id))
 		return -EINVAL;
 
 	vxi = lookup_vx_info(xid);
@@ -116,7 +125,7 @@ static int do_set_rlimit(xid_t xid, uint32_t id,
 {
 	struct vx_info *vxi;
 
-	if (!is_valid_rlimit(id))
+	if (!is_valid_vlimit(id))
 		return -EINVAL;
 
 	vxi = lookup_vx_info(xid);
@@ -181,25 +190,7 @@ int vc_get_rlimit_x32(uint32_t id, void __user *data)
 
 int vc_get_rlimit_mask(uint32_t id, void __user *data)
 {
-	static struct vcmd_ctx_rlimit_mask_v0 mask = {
-			/* minimum */
-		0
-		,	/* softlimit */
-		0
-		,	/* maximum */
-		(1 << RLIMIT_RSS) |
-		(1 << RLIMIT_NPROC) |
-		(1 << RLIMIT_NOFILE) |
-		(1 << RLIMIT_MEMLOCK) |
-		(1 << RLIMIT_LOCKS) |
-		(1 << RLIMIT_AS) |
-		(1 << VLIMIT_ANON) |
-		0
-		};
-
-	if (!capable(CAP_SYS_ADMIN) || !capable(CAP_SYS_RESOURCE))
-		return -EPERM;
-	if (copy_to_user(data, &mask, sizeof(mask)))
+	if (copy_to_user(data, &vlimit_mask, sizeof(vlimit_mask)))
 		return -EFAULT;
 	return 0;
 }

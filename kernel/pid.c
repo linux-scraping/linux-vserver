@@ -26,6 +26,7 @@
 #include <linux/init.h>
 #include <linux/bootmem.h>
 #include <linux/hash.h>
+#include <linux/vs_cvirt.h>
 
 #define pid_hashfn(nr) hash_long((unsigned long)nr, pidhash_shift)
 static struct hlist_head *pid_hash[PIDTYPE_MAX];
@@ -207,6 +208,11 @@ void fastcall detach_pid(task_t *task, enum pid_type type)
 task_t *find_task_by_pid_type(int type, int nr)
 {
 	struct pid *pid;
+
+	if (type == PIDTYPE_REALPID)
+		type = PIDTYPE_PID;
+	else if (type == PIDTYPE_PID)
+		nr = vx_rmap_pid(nr);
 
 	pid = find_pid(type, nr);
 	if (!pid)

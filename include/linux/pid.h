@@ -7,7 +7,8 @@ enum pid_type
 	PIDTYPE_TGID,
 	PIDTYPE_PGID,
 	PIDTYPE_SID,
-	PIDTYPE_MAX
+	PIDTYPE_MAX,
+	PIDTYPE_REALPID
 };
 
 struct pid

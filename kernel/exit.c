@@ -543,6 +543,9 @@ static void exit_mm(struct task_struct * tsk)
 
 static inline void choose_new_parent(task_t *p, task_t *reaper)
 {
+	if (p == reaper)
+		p = vx_child_reaper(p);
+
 	/* check for reaper context */
 	vxwprintk((p->xid != reaper->xid) && (reaper != child_reaper),
 		"rogue reaper: %p[%d,#%u] <> %p[%d,#%u]",
@@ -653,7 +656,7 @@ static void forget_original_parent(struct task_struct * father,
 
 		if (father == p->real_parent) {
 			/* reparent with a reaper, real father it's us */
-			choose_new_parent(p, vx_child_reaper(p));
+			choose_new_parent(p, reaper);
 			reparent_thread(p, father, 0);
 		} else {
 			/* reparent ptraced task to its real parent */
@@ -839,14 +842,6 @@ fastcall NORET_TYPE void do_exit(long code)
 
 	tsk->flags |= PF_EXITING;
 
-	/*
-	 * Make sure we don't try to process any timer firings
-	 * while we are already exiting.
-	 */
- 	tsk->it_virt_expires = cputime_zero;
- 	tsk->it_prof_expires = cputime_zero;
-	tsk->it_sched_expires = 0;
-
 	if (unlikely(in_atomic()))
 		printk(KERN_INFO "note: %s[%d] exited with preempt_count %d\n",
 				current->comm, current->pid,
@@ -869,8 +864,6 @@ fastcall NORET_TYPE void do_exit(long code)
 	__exit_files(tsk);
 	__exit_fs(tsk);
 	exit_namespace(tsk);
-	exit_vx_info(tsk, code);
-	exit_nx_info(tsk);
 	exit_thread();
 	cpuset_exit(tsk);
 	exit_keys(tsk);
@@ -884,6 +877,8 @@ fastcall NORET_TYPE void do_exit(long code)
 
 	tsk->exit_code = code;
 	proc_exit_connector(tsk);
+	/* needs to stay before exit_notify() */
+	exit_vx_info_early(tsk, code);
 	exit_notify(tsk);
 #ifdef CONFIG_NUMA
 	mpol_free(tsk->mempolicy);
@@ -893,6 +888,10 @@ fastcall NORET_TYPE void do_exit(long code)
 	 * If DEBUG_MUTEXES is on, make sure we are holding no locks:
 	 */
 	mutex_debug_check_no_locks_held(tsk);
+
+	/* needs to stay after exit_notify() */
+	exit_vx_info(tsk, code);
+	exit_nx_info(tsk);
 
 	/* PF_DEAD causes final put_task_struct after we schedule. */
 	preempt_disable();

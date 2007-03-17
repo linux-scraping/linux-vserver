@@ -319,7 +319,7 @@ int diRead(struct inode *ip)
 	struct inomap *imap;
 	int block_offset;
 	int inodes_left;
-	uint pageno;
+	unsigned long pageno;
 	int rel_inode;
 
 	jfs_info("diRead: ino = %ld", ip->i_ino);
@@ -607,7 +607,7 @@ int diWrite(tid_t tid, struct inode *ip)
 	int block_offset;
 	int inodes_left;
 	struct metapage *mp;
-	uint pageno;
+	unsigned long pageno;
 	int rel_inode;
 	int dioffset;
 	struct inode *ipimap;

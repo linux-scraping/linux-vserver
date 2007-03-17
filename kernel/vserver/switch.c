@@ -111,8 +111,6 @@ long do_vserver(uint32_t cmd, uint32_t id, void __user *data, int compat)
 		return vc_set_namespace(-1, data);
 	case VCMD_set_namespace:
 		return vc_set_namespace(id, data);
-	case VCMD_cleanup_namespace:
-		return vc_cleanup_namespace(id, data);
 	}
 
 	/* those are allowed while in setup too */
@@ -241,7 +239,7 @@ long do_vserver(uint32_t cmd, uint32_t id, void __user *data, int compat)
 	return -ENOSYS;
 }
 
-extern asmlinkage long
+asmlinkage long
 sys_vserver(uint32_t cmd, uint32_t id, void __user *data)
 {
 	long ret = do_vserver(cmd, id, data, 0);
@@ -255,7 +253,7 @@ sys_vserver(uint32_t cmd, uint32_t id, void __user *data)
 
 #ifdef	CONFIG_COMPAT
 
-extern asmlinkage long
+asmlinkage long
 sys32_vserver(uint32_t cmd, uint32_t id, void __user *data)
 {
 	long ret = do_vserver(cmd, id, data, 1);

@@ -520,10 +520,14 @@ void release_mounts(struct list_head *head)
 	}
 }
 
-static inline void __umount_list(struct vfsmount *mnt,
-	int propagate, struct list_head *kill)
+void umount_tree(struct vfsmount *mnt, int propagate, struct list_head *kill)
 {
 	struct vfsmount *p;
+
+	for (p = mnt; p; p = next_mnt(p, mnt)) {
+		list_del(&p->mnt_hash);
+		list_add(&p->mnt_hash, kill);
+	}
 
 	if (propagate)
 		propagate_umount(kill);
@@ -538,33 +542,6 @@ static inline void __umount_list(struct vfsmount *mnt,
 			p->mnt_mountpoint->d_mounted--;
 		change_mnt_propagation(p, MS_PRIVATE);
 	}
-}
-
-void umount_tree(struct vfsmount *mnt, int propagate, struct list_head *kill)
-{
-	struct vfsmount *p;
-
-	for (p = mnt; p; p = next_mnt(p, mnt)) {
-		list_del(&p->mnt_hash);
-		list_add(&p->mnt_hash, kill);
-		// p->mnt_namespace = NULL;
-	}
-	__umount_list(mnt, propagate, kill);
-}
-
-void umount_unused(struct vfsmount *mnt, struct fs_struct *fs)
-{
-	struct vfsmount *p;
-	LIST_HEAD(kill);
-
-	for (p = mnt; p; p = next_mnt(p, mnt)) {
-		if (p == fs->rootmnt || p == fs->pwdmnt)
-			continue;
-		list_del(&p->mnt_list);
-		list_add(&p->mnt_list, &kill);
-		p->mnt_namespace = NULL;
-	}
-	__umount_list(mnt, 0, &kill);
 }
 
 static int do_umount(struct vfsmount *mnt, int flags)
@@ -1384,7 +1361,7 @@ long do_mount(char *dev_name, char *dir_name, char *type_page,
 	if (flags & MS_NODIRATIME)
 		mnt_flags |= MNT_NODIRATIME;
 
-	if (vx_ccaps(VXC_SECURE_MOUNT))
+	if (!capable(CAP_SYS_ADMIN))
 		mnt_flags |= MNT_NODEV;
 	flags &= ~(MS_NOSUID | MS_NOEXEC | MS_NODEV | MS_ACTIVE |
 		   MS_NOATIME | MS_NODIRATIME);

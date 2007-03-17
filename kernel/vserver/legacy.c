@@ -30,8 +30,6 @@ static int vx_set_initpid(struct vx_info *vxi, int pid)
 	init = find_task_by_real_pid(pid);
 	if (!init)
 		return -ESRCH;
-
-	vxi->vx_flags &= ~VXF_STATE_INIT;
 	return vx_set_init(vxi, init);
 }
 
@@ -61,9 +59,7 @@ int vc_new_s_context(uint32_t ctx, void __user *data)
 		return ret;
 	}
 
-	if (!vx_check(0, VX_ADMIN) || !capable(CAP_SYS_ADMIN)
-		/* might make sense in the future, or not ... */
-		|| vx_flags(VX_INFO_LOCK, 0))
+	if (!vx_check(0, VX_ADMIN) || !capable(CAP_SYS_ADMIN))
 		return -EPERM;
 
 	/* ugly hack for Spectator */

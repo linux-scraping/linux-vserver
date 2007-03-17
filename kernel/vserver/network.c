@@ -3,13 +3,14 @@
  *
  *  Virtual Server: Network Support
  *
- *  Copyright (C) 2003-2005  Herbert Pötzl
+ *  Copyright (C) 2003-2006  Herbert Pötzl
  *
  *  V0.01  broken out from vcontext V0.05
  *  V0.02  cleaned up implementation
  *  V0.03  added equiv nx commands
  *  V0.04  switch to RCU based hash
  *  V0.05  and back to locking again
+ *  V0.06  have __create claim() the nxi
  *
  */
 
@@ -139,15 +140,16 @@ static inline void __hash_nx_info(struct nx_info *nxi)
 
 static inline void __unhash_nx_info(struct nx_info *nxi)
 {
-	vxd_assert_lock(&nx_info_hash_lock);
 	vxdprintk(VXD_CBIT(nid, 4),
 		"__unhash_nx_info: %p[#%d]", nxi, nxi->nx_id);
 
+	spin_lock(&nx_info_hash_lock);
 	/* context must be hashed */
 	BUG_ON(!nx_info_state(nxi, NXS_HASHED));
 
 	nxi->nx_state &= ~NXS_HASHED;
 	hlist_del(&nxi->nx_hlist);
+	spin_unlock(&nx_info_hash_lock);
 }
 
 
@@ -204,7 +206,7 @@ static inline nid_t __nx_dynamic_id(void)
 /*	__create_nx_info()
 
 	* create the requested context
-	* get() and hash it					*/
+	* get(), claim() and hash it				*/
 
 static struct nx_info * __create_nx_info(int id)
 {
@@ -249,6 +251,7 @@ static struct nx_info * __create_nx_info(int id)
 	/* new context */
 	vxdprintk(VXD_CBIT(nid, 0),
 		"create_nx_info(%d) = %p (new)", id, new);
+	claim_nx_info(new, NULL);
 	__hash_nx_info(get_nx_info(new));
 	nxi = new, new = NULL;
 
@@ -267,9 +270,7 @@ out_unlock:
 void unhash_nx_info(struct nx_info *nxi)
 {
 	__shutdown_nx_info(nxi);
-	spin_lock(&nx_info_hash_lock);
 	__unhash_nx_info(nxi);
-	spin_unlock(&nx_info_hash_lock);
 }
 
 #ifdef  CONFIG_VSERVER_LEGACYNET
@@ -386,6 +387,7 @@ int nx_migrate_task(struct task_struct *p, struct nx_info *nxi)
 
 	if (old_nxi)
 		release_nx_info(old_nxi, p);
+	ret = 0;
 out:
 	put_nx_info(old_nxi);
 	return ret;
@@ -403,7 +405,7 @@ int ifa_in_nx_info(struct in_ifaddr *ifa, struct nx_info *nxi)
 		return 1;
 	if (!ifa)
 		return 0;
-	return addr_in_nx_info(nxi, ifa->ifa_address);
+	return addr_in_nx_info(nxi, ifa->ifa_local);
 }
 
 int dev_in_nx_info(struct net_device *dev, struct nx_info *nxi)
@@ -416,13 +418,15 @@ int dev_in_nx_info(struct net_device *dev, struct nx_info *nxi)
 	if (!nxi)
 		return 1;
 
+	if (!dev)
+		goto out;
 	in_dev = in_dev_get(dev);
 	if (!in_dev)
 		goto out;
 
 	for (ifap = &in_dev->ifa_list; (ifa = *ifap) != NULL;
 		ifap = &ifa->ifa_next) {
-		if (addr_in_nx_info(nxi, ifa->ifa_address)) {
+		if (addr_in_nx_info(nxi, ifa->ifa_local)) {
 			ret = 1;
 			break;
 		}
@@ -488,13 +492,28 @@ int nx_addr_conflict(struct nx_info *nxi, uint32_t addr, struct sock *sk)
 
 void nx_set_persistent(struct nx_info *nxi)
 {
-	if (nx_info_flags(nxi, NXF_PERSISTENT, 0)) {
-		get_nx_info(nxi);
-		claim_nx_info(nxi, current);
-	} else {
-		release_nx_info(nxi, current);
-		put_nx_info(nxi);
-	}
+	vxdprintk(VXD_CBIT(nid, 6),
+		"nx_set_persistent(%p[#%d])", nxi, nxi->nx_id);
+
+	get_nx_info(nxi);
+	claim_nx_info(nxi, NULL);
+}
+
+void nx_clear_persistent(struct nx_info *nxi)
+{
+	vxdprintk(VXD_CBIT(nid, 6),
+		"nx_clear_persistent(%p[#%d])", nxi, nxi->nx_id);
+
+	release_nx_info(nxi, NULL);
+	put_nx_info(nxi);
+}
+
+void nx_update_persistent(struct nx_info *nxi)
+{
+	if (nx_info_flags(nxi, NXF_PERSISTENT, 0))
+		nx_set_persistent(nxi);
+	else
+		nx_clear_persistent(nxi);
 }
 
 /* vserver syscall commands below here */
@@ -573,14 +592,22 @@ int vc_net_create(uint32_t nid, void __user *data)
 	/* initial flags */
 	new_nxi->nx_flags = vc_data.flagword;
 
+	ret = -ENOEXEC;
+	if (vs_net_change(new_nxi, VSC_NETUP))
+		goto out;
+
+	ret = nx_migrate_task(current, new_nxi);
+	if (ret)
+		goto out;
+
+	/* return context id on success */
+	ret = new_nxi->nx_id;
+
 	/* get a reference for persistent contexts */
 	if ((vc_data.flagword & NXF_PERSISTENT))
 		nx_set_persistent(new_nxi);
-
-	vs_net_change(new_nxi, VSC_NETUP);
-	ret = new_nxi->nx_id;
-	nx_migrate_task(current, new_nxi);
-	/* if this fails, we might end up with a hashed nx_info */
+out:
+	release_nx_info(new_nxi, NULL);
 	put_nx_info(new_nxi);
 	return ret;
 }
@@ -668,7 +695,7 @@ int vc_net_remove(uint32_t nid, void __user *data)
 	if (!nxi)
 		return -ESRCH;
 
-	switch ((unsigned)vc_data.type) {
+	switch (vc_data.type) {
 	case NXA_TYPE_ANY:
 		nxi->nbipv4 = 0;
 		break;
@@ -728,7 +755,7 @@ int vc_set_nflags(uint32_t id, void __user *data)
 	nxi->nx_flags = vx_mask_flags(nxi->nx_flags,
 		vc_data.flagword, mask);
 	if (trigger & NXF_PERSISTENT)
-		nx_set_persistent(nxi);
+		nx_update_persistent(nxi);
 
 	put_nx_info(nxi);
 	return 0;

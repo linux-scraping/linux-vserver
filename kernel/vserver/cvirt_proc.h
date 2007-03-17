@@ -58,13 +58,13 @@ static inline int vx_info_proc_cvirt(struct _vx_cvirt *cvirt, char *buffer)
 
 static inline long vx_sock_count(struct _vx_cacct *cacct, int type, int pos)
 {
-	return atomic_read(&cacct->sock[type][pos].count);
+	return atomic_long_read(&cacct->sock[type][pos].count);
 }
 
 
 static inline long vx_sock_total(struct _vx_cacct *cacct, int type, int pos)
 {
-	return atomic_read(&cacct->sock[type][pos].total);
+	return atomic_long_read(&cacct->sock[type][pos].total);
 }
 
 static inline int vx_info_proc_cacct(struct _vx_cacct *cacct, char *buffer)
