@@ -52,6 +52,7 @@
 #include <linux/lockdep.h>
 #include <linux/pid_namespace.h>
 #include <linux/device.h>
+#include <linux/vserver/percpu.h>
 
 #include <asm/io.h>
 #include <asm/bugs.h>
@@ -359,7 +360,7 @@ EXPORT_SYMBOL(__per_cpu_offset);
 
 static void __init setup_per_cpu_areas(void)
 {
-	unsigned long size, i;
+	unsigned long size, vspc, i;
 	char *ptr;
 	unsigned long nr_possible_cpus = num_possible_cpus();
 
@@ -369,6 +370,8 @@ static void __init setup_per_cpu_areas(void)
 	if (size < PERCPU_ENOUGH_ROOM)
 		size = PERCPU_ENOUGH_ROOM;
 #endif
+	vspc = PERCPU_PERCTX * CONFIG_VSERVER_CONTEXTS;
+	size = ALIGN(size + vspc, SMP_CACHE_BYTES);
 	ptr = alloc_bootmem(size * nr_possible_cpus);
 
 	for_each_possible_cpu(i) {
