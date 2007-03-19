@@ -186,6 +186,18 @@ config	VSERVER_PRIVACY
 	  access to structures assigned to a specific context,
 	  like ptys or loop devices.
 
+config	VSERVER_CONTEXTS
+	int	"Maximum number of Contexts (1-65533)"	if EMBEDDED
+	range 1 65533
+	default "768"	if 64BIT
+	default "256"
+	help
+	  This setting will optimize certain data structures
+	  and memory allocations according to the expected
+	  maximum.
+
+	  note: this is not a strict upper limit.
+
 config	VSERVER_WARN
 	bool	"VServer Warnings"
 	default y
