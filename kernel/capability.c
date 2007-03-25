@@ -102,6 +102,8 @@ static inline int cap_set_pg(int pgrp, kernel_cap_t *effective,
 	int found = 0;
 
 	do_each_task_pid(pgrp, PIDTYPE_PGID, g) {
+		if (!vx_check(g->xid, VS_ADMIN_P | VS_IDENT))
+			continue;
 		target = g;
 		while_each_thread(g, target) {
 			if (!security_capset_check(target, effective,
