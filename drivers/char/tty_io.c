@@ -184,6 +184,7 @@ static inline void free_tty_struct(struct tty_struct *tty)
 {
 	kfree(tty->write_buf);
 	tty_buffer_free_all(tty);
+	memset(tty, 0xDEADDEAD, sizeof(struct tty_struct));
 	kfree(tty);
 }
 

@@ -101,6 +101,8 @@ asmlinkage long sys_ioprio_set(int which, int who, int ioprio)
 			if (!who)
 				who = process_group(current);
 			do_each_task_pid(who, PIDTYPE_PGID, p) {
+				if (!vx_check(p->xid, VS_ADMIN_P | VS_IDENT))
+					continue;
 				ret = set_task_ioprio(p, ioprio);
 				if (ret)
 					break;
@@ -185,6 +187,8 @@ asmlinkage long sys_ioprio_get(int which, int who)
 			if (!who)
 				who = process_group(current);
 			do_each_task_pid(who, PIDTYPE_PGID, p) {
+				if (!vx_check(p->xid, VS_ADMIN_P | VS_IDENT))
+					continue;
 				tmpio = get_task_ioprio(p);
 				if (tmpio < 0)
 					continue;
