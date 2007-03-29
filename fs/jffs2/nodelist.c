@@ -24,7 +24,8 @@
 static void jffs2_obsolete_node_frag(struct jffs2_sb_info *c,
 				     struct jffs2_node_frag *this);
 
-void jffs2_add_fd_to_list(struct jffs2_sb_info *c, struct jffs2_full_dirent *new, struct jffs2_full_dirent **list)
+void jffs2_add_fd_to_list(struct jffs2_sb_info *c, struct jffs2_full_dirent *new,
+	struct jffs2_full_dirent **list, tag_t tag)
 {
 	struct jffs2_full_dirent **prev = list;
 
@@ -36,13 +37,13 @@ void jffs2_add_fd_to_list(struct jffs2_sb_info *c, struct jffs2_full_dirent *new
 			if (new->version < (*prev)->version) {
 				dbg_dentlist("Eep! Marking new dirent node is obsolete, old is \"%s\", ino #%u\n",
 					(*prev)->name, (*prev)->ino);
-				jffs2_mark_node_obsolete(c, new->raw);
+				jffs2_mark_node_obsolete(c, new->raw, tag);
 				jffs2_free_full_dirent(new);
 			} else {
-				dbg_dentlist("marking old dirent \"%s\", ino #%u bsolete\n",
+				dbg_dentlist("marking old dirent \"%s\", ino #%u obsolete\n",
 					(*prev)->name, (*prev)->ino);
 				new->next = (*prev)->next;
-				jffs2_mark_node_obsolete(c, ((*prev)->raw));
+				jffs2_mark_node_obsolete(c, ((*prev)->raw), tag);
 				jffs2_free_full_dirent(*prev);
 				*prev = new;
 			}
@@ -99,7 +100,7 @@ static void jffs2_obsolete_node_frag(struct jffs2_sb_info *c,
 			/* The node has no valid frags left. It's totally obsoleted */
 			dbg_fragtree2("marking old node @0x%08x (0x%04x-0x%04x) obsolete\n",
 				ref_offset(this->node->raw), this->node->ofs, this->node->ofs+this->node->size);
-			jffs2_mark_node_obsolete(c, this->node->raw);
+			jffs2_mark_node_obsolete(c, this->node->raw, -2);
 			jffs2_free_full_dnode(this->node);
 		} else {
 			dbg_fragtree2("marking old node @0x%08x (0x%04x-0x%04x) REF_NORMAL. frags is %d\n",
@@ -537,7 +538,7 @@ static int check_node(struct jffs2_sb_info *c, struct jffs2_inode_info *f, struc
 			ret);
 	} else if (unlikely(ret > 0)) {
 		dbg_fragtree2("CRC error, mark it obsolete.\n");
-		jffs2_mark_node_obsolete(c, tn->fn->raw);
+		jffs2_mark_node_obsolete(c, tn->fn->raw, OFNI_EDONI_2SFFJ(f)->i_tag);
 	}
 
 	return ret;
@@ -843,7 +844,7 @@ out_ok:
 	if (ref_flag == REF_OBSOLETE) {
 		dbg_fragtree2("the node is obsolete now\n");
 		/* jffs2_mark_node_obsolete() will adjust space accounting */
-		jffs2_mark_node_obsolete(c, fn->raw);
+		jffs2_mark_node_obsolete(c, fn->raw, OFNI_EDONI_2SFFJ(f)->i_tag);
 		return 1;
 	}
 
@@ -1014,7 +1015,7 @@ struct jffs2_node_frag *jffs2_lookup_node_frag(struct rb_root *fragtree, uint32_
 
 /* Pass 'c' argument to indicate that nodes should be marked obsolete as
    they're killed. */
-void jffs2_kill_fragtree(struct rb_root *root, struct jffs2_sb_info *c)
+void jffs2_kill_fragtree(struct rb_root *root, struct jffs2_sb_info *c, tag_t tag)
 {
 	struct jffs2_node_frag *frag;
 	struct jffs2_node_frag *parent;
@@ -1039,7 +1040,7 @@ void jffs2_kill_fragtree(struct rb_root *root, struct jffs2_sb_info *c)
 			/* Not a hole, and it's the final remaining frag
 			   of this node. Free the node */
 			if (c)
-				jffs2_mark_node_obsolete(c, frag->node->raw);
+				jffs2_mark_node_obsolete(c, frag->node->raw, tag);
 
 			jffs2_free_full_dnode(frag->node);
 		}

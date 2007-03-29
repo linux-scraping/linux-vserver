@@ -341,6 +341,8 @@ static struct mm_struct * mm_init(struct mm_struct * mm)
 	INIT_LIST_HEAD(&mm->mmlist);
 	mm->core_waiters = 0;
 	mm->nr_ptes = 0;
+	__set_mm_counter(mm, file_rss, 0);
+	__set_mm_counter(mm, anon_rss, 0);
 	spin_lock_init(&mm->page_table_lock);
 	rwlock_init(&mm->ioctx_list_lock);
 	mm->ioctx_list = NULL;

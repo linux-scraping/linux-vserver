@@ -39,10 +39,10 @@
  */
 
 static int jffs2_do_reserve_space(struct jffs2_sb_info *c,  uint32_t minsize,
-				  uint32_t *len, uint32_t sumsize);
+				  uint32_t *len, uint32_t sumsize, tag_t tag);
 
 int jffs2_reserve_space(struct jffs2_sb_info *c, uint32_t minsize,
-			uint32_t *len, int prio, uint32_t sumsize)
+			uint32_t *len, int prio, uint32_t sumsize, tag_t tag)
 {
 	int ret = -EAGAIN;
 	int blocksneeded = c->resv_blocks_write;
@@ -131,7 +131,7 @@ int jffs2_reserve_space(struct jffs2_sb_info *c, uint32_t minsize,
 			spin_lock(&c->erase_completion_lock);
 		}
 
-		ret = jffs2_do_reserve_space(c, minsize, len, sumsize);
+		ret = jffs2_do_reserve_space(c, minsize, len, sumsize, tag);
 		if (ret) {
 			D1(printk(KERN_DEBUG "jffs2_reserve_space: ret is %d\n", ret));
 		}
@@ -154,7 +154,7 @@ int jffs2_reserve_space_gc(struct jffs2_sb_info *c, uint32_t minsize,
 
 	spin_lock(&c->erase_completion_lock);
 	while(ret == -EAGAIN) {
-		ret = jffs2_do_reserve_space(c, minsize, len, sumsize);
+		ret = jffs2_do_reserve_space(c, minsize, len, sumsize, -1);
 		if (ret) {
 		        D1(printk(KERN_DEBUG "jffs2_reserve_space_gc: looping, ret is %d\n", ret));
 		}
@@ -263,7 +263,7 @@ static int jffs2_find_nextblock(struct jffs2_sb_info *c)
 
 /* Called with alloc sem _and_ erase_completion_lock */
 static int jffs2_do_reserve_space(struct jffs2_sb_info *c, uint32_t minsize,
-				  uint32_t *len, uint32_t sumsize)
+				  uint32_t *len, uint32_t sumsize, tag_t tag)
 {
 	struct jffs2_eraseblock *jeb = c->nextblock;
 	uint32_t reserved_size;				/* for summary information at the end of the jeb */
@@ -372,6 +372,7 @@ static int jffs2_do_reserve_space(struct jffs2_sb_info *c, uint32_t minsize,
 	/* OK, jeb (==c->nextblock) is now pointing at a block which definitely has
 	   enough space */
 	*len = jeb->free_size - reserved_size;
+	printk("... jffs2_do_reserve_space([%d]) += %d/%d\n", tag, minsize, *len);
 
 	if (c->cleanmarker_size && jeb->used_size == c->cleanmarker_size &&
 	    !jeb->first_node->next_in_ino) {
@@ -382,7 +383,7 @@ static int jffs2_do_reserve_space(struct jffs2_sb_info *c, uint32_t minsize,
 		   won't try to refile it to the dirty_list.
 		*/
 		spin_unlock(&c->erase_completion_lock);
-		jffs2_mark_node_obsolete(c, jeb->first_node);
+		jffs2_mark_node_obsolete(c, jeb->first_node, -1);
 		spin_lock(&c->erase_completion_lock);
 	}
 
@@ -472,7 +473,15 @@ static inline int on_list(struct list_head *obj, struct list_head *head)
 	return 0;
 }
 
-void jffs2_mark_node_obsolete(struct jffs2_sb_info *c, struct jffs2_raw_node_ref *ref)
+
+static inline tag_t jffs2_tag_from_raw_node_ref(struct jffs2_raw_node_ref *ref)
+{
+	struct jffs2_inode_cache *ic = jffs2_raw_ref_to_ic(ref);
+
+	return ic->tag;
+}
+
+void jffs2_mark_node_obsolete(struct jffs2_sb_info *c, struct jffs2_raw_node_ref *ref, tag_t tag)
 {
 	struct jffs2_eraseblock *jeb;
 	int blocknr;
@@ -510,6 +519,9 @@ void jffs2_mark_node_obsolete(struct jffs2_sb_info *c, struct jffs2_raw_node_ref
 	spin_lock(&c->erase_completion_lock);
 
 	freed_len = ref_totlen(c, jeb, ref);
+	printk("... jffs2_mark_node_obsolete([#%d/%d]) - %d\n", tag,
+		jffs2_tag_from_raw_node_ref(ref), freed_len);
+	WARN_ON((int)tag < -1);
 
 	if (ref_flags(ref) == REF_UNCHECKED) {
 		D1(if (unlikely(jeb->unchecked_size < freed_len)) {

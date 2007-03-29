@@ -10,7 +10,6 @@
 #include <linux/mman.h>
 #include <linux/smp_lock.h>
 #include <linux/notifier.h>
-#include <linux/kmod.h>
 #include <linux/reboot.h>
 #include <linux/prctl.h>
 #include <linux/highuid.h>
@@ -618,6 +617,8 @@ asmlinkage long sys_setpriority(int which, int who, int niceval)
 			if (!who)
 				who = process_group(current);
 			do_each_task_pid(who, PIDTYPE_PGID, p) {
+				if (!vx_check(p->xid, VS_ADMIN_P | VS_IDENT))
+					continue;
 				error = set_one_prio(p, niceval, error);
 			} while_each_task_pid(who, PIDTYPE_PGID, p);
 			break;
@@ -675,6 +676,8 @@ asmlinkage long sys_getpriority(int which, int who)
 			if (!who)
 				who = process_group(current);
 			do_each_task_pid(who, PIDTYPE_PGID, p) {
+				if (!vx_check(p->xid, VS_ADMIN_P | VS_IDENT))
+					continue;
 				niceval = 20 - task_nice(p);
 				if (niceval > retval)
 					retval = niceval;

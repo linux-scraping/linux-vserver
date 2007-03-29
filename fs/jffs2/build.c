@@ -66,7 +66,7 @@ static void jffs2_build_inode_pass1(struct jffs2_sb_info *c,
 		if (!child_ic) {
 			dbg_fsbuild("child \"%s\" (ino #%u) of dir ino #%u doesn't exist!\n",
 				  fd->name, fd->ino, ic->ino);
-			jffs2_mark_node_obsolete(c, fd->raw);
+			jffs2_mark_node_obsolete(c, fd->raw, -2);
 			continue;
 		}
 
@@ -198,7 +198,7 @@ static void jffs2_build_remove_unlinked_inode(struct jffs2_sb_info *c,
 	while (raw != (void *)ic) {
 		struct jffs2_raw_node_ref *next = raw->next_in_ino;
 		dbg_fsbuild("obsoleting node at 0x%08x\n", ref_offset(raw));
-		jffs2_mark_node_obsolete(c, raw);
+		jffs2_mark_node_obsolete(c, raw, -2);
 		raw = next;
 	}
 

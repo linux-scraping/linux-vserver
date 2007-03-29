@@ -17,6 +17,7 @@
 #include <asm/bug.h>
 
 extern const char linux_banner[];
+extern const char linux_proc_banner[];
 
 #define INT_MAX		((int)(~0U>>1))
 #define INT_MIN		(-INT_MAX - 1)

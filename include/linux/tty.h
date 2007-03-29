@@ -338,6 +338,9 @@ extern int vt_ioctl(struct tty_struct *tty, struct file * file,
 
 static inline dev_t tty_devnum(struct tty_struct *tty)
 {
+	WARN_ON(!tty);
+	WARN_ON(!tty->magic);
+	WARN_ON(!tty->driver);
 	return MKDEV(tty->driver->major, tty->driver->minor_start) + tty->index;
 }
 

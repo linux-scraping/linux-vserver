@@ -780,7 +780,7 @@ void jffs2_build_xattr_subsystem(struct jffs2_sb_info *c)
 			if (verify_xattr_ref(c, ref)) {
 				BUG_ON(ref->node->next_in_ino != (void *)ref);
 				ref->node->next_in_ino = NULL;
-				jffs2_mark_node_obsolete(c, ref->node);
+				jffs2_mark_node_obsolete(c, ref->node, -2);
 				jffs2_free_xattr_ref(ref);
 				continue;
 			}
@@ -1083,7 +1083,7 @@ int do_jffs2_setxattr(struct inode *inode, int xprefix, const char *xname,
 
 	request = PAD(sizeof(struct jffs2_raw_xattr) + strlen(xname) + 1 + size);
 	rc = jffs2_reserve_space(c, request, &length,
-				 ALLOC_NORMAL, JFFS2_SUMMARY_XATTR_SIZE);
+				 ALLOC_NORMAL, JFFS2_SUMMARY_XATTR_SIZE, -4);
 	if (rc) {
 		JFFS2_WARNING("jffs2_reserve_space()=%d, request=%u\n", rc, request);
 		return rc;
@@ -1153,7 +1153,7 @@ int do_jffs2_setxattr(struct inode *inode, int xprefix, const char *xname,
 	/* create xattr_ref */
 	request = PAD(sizeof(struct jffs2_raw_xref));
 	rc = jffs2_reserve_space(c, request, &length,
-				 ALLOC_NORMAL, JFFS2_SUMMARY_XREF_SIZE);
+				 ALLOC_NORMAL, JFFS2_SUMMARY_XREF_SIZE, -4);
 	down_write(&c->xattr_sem);
 	if (rc) {
 		JFFS2_WARNING("jffs2_reserve_space()=%d, request=%u\n", rc, request);
@@ -1223,7 +1223,7 @@ int jffs2_garbage_collect_xattr_datum(struct jffs2_sb_info *c, struct jffs2_xatt
 			  xd->xid, xd->version, old_ofs, ref_offset(xd->node));
  out:
 	if (!rc)
-		jffs2_mark_node_obsolete(c, raw);
+		jffs2_mark_node_obsolete(c, raw, -2);
 	up_write(&c->xattr_sem);
 	return rc;
 }
@@ -1258,7 +1258,7 @@ int jffs2_garbage_collect_xattr_ref(struct jffs2_sb_info *c, struct jffs2_xattr_
 			  ref->ic->ino, ref->xd->xid, old_ofs, ref_offset(ref->node));
  out:
 	if (!rc)
-		jffs2_mark_node_obsolete(c, raw);
+		jffs2_mark_node_obsolete(c, raw, -2);
 	up_write(&c->xattr_sem);
 	return rc;
 }

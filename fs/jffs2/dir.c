@@ -20,6 +20,7 @@
 #include "jffs2_fs_i.h"
 #include "jffs2_fs_sb.h"
 #include <linux/time.h>
+#include <linux/vs_tag.h>
 #include "nodelist.h"
 
 static int jffs2_readdir (struct file *, void *, filldir_t);
@@ -188,6 +189,7 @@ static int jffs2_create(struct inode *dir_i, struct dentry *dentry, int mode,
 	struct jffs2_inode_info *f, *dir_f;
 	struct jffs2_sb_info *c;
 	struct inode *inode;
+	tag_t tag = dx_current_tag();
 	int ret;
 
 	ri = jffs2_alloc_raw_inode();
@@ -198,7 +200,7 @@ static int jffs2_create(struct inode *dir_i, struct dentry *dentry, int mode,
 
 	D1(printk(KERN_DEBUG "jffs2_create()\n"));
 
-	inode = jffs2_new_inode(dir_i, mode, ri);
+	inode = jffs2_new_inode(dir_i, mode, ri, tag);
 
 	if (IS_ERR(inode)) {
 		D1(printk(KERN_DEBUG "jffs2_new_inode() failed\n"));
@@ -254,6 +256,7 @@ static int jffs2_unlink(struct inode *dir_i, struct dentry *dentry)
 	int ret;
 	uint32_t now = get_seconds();
 
+	printk("... jffs2_unlink(%p[#%u])\n", dead_f, OFNI_EDONI_2SFFJ(dead_f)->i_tag);
 	ret = jffs2_do_unlink(c, dir_f, dentry->d_name.name,
 			      dentry->d_name.len, dead_f, now);
 	if (dead_f->inocache)
@@ -312,6 +315,8 @@ static int jffs2_symlink (struct inode *dir_i, struct dentry *dentry, const char
 	struct jffs2_full_dirent *fd;
 	int namelen;
 	uint32_t alloclen;
+	tag_t tag = dx_current_tag();
+	tag_t dir_tag = dir_i->i_tag;
 	int ret, targetlen = strlen(target);
 
 	/* FIXME: If you care. We'd need to use frags for the target
@@ -331,14 +336,14 @@ static int jffs2_symlink (struct inode *dir_i, struct dentry *dentry, const char
 	 */
 	namelen = dentry->d_name.len;
 	ret = jffs2_reserve_space(c, sizeof(*ri) + targetlen, &alloclen,
-				  ALLOC_NORMAL, JFFS2_SUMMARY_INODE_SIZE);
+				  ALLOC_NORMAL, JFFS2_SUMMARY_INODE_SIZE, tag);
 
 	if (ret) {
 		jffs2_free_raw_inode(ri);
 		return ret;
 	}
 
-	inode = jffs2_new_inode(dir_i, S_IFLNK | S_IRWXUGO, ri);
+	inode = jffs2_new_inode(dir_i, S_IFLNK | S_IRWXUGO, ri, tag);
 
 	if (IS_ERR(inode)) {
 		jffs2_free_raw_inode(ri);
@@ -404,7 +409,8 @@ static int jffs2_symlink (struct inode *dir_i, struct dentry *dentry, const char
 	}
 
 	ret = jffs2_reserve_space(c, sizeof(*rd)+namelen, &alloclen,
-				  ALLOC_NORMAL, JFFS2_SUMMARY_DIRENT_SIZE(namelen));
+				  ALLOC_NORMAL, JFFS2_SUMMARY_DIRENT_SIZE(namelen),
+				  dir_tag);
 	if (ret) {
 		/* Eep. */
 		jffs2_clear_inode(inode);
@@ -454,7 +460,7 @@ static int jffs2_symlink (struct inode *dir_i, struct dentry *dentry, const char
 
 	/* Link the fd into the inode's list, obsoleting an old
 	   one if necessary. */
-	jffs2_add_fd_to_list(c, fd, &dir_f->dents);
+	jffs2_add_fd_to_list(c, fd, &dir_f->dents, dir_tag);
 
 	up(&dir_f->sem);
 	jffs2_complete_reservation(c);
@@ -475,6 +481,8 @@ static int jffs2_mkdir (struct inode *dir_i, struct dentry *dentry, int mode)
 	struct jffs2_full_dirent *fd;
 	int namelen;
 	uint32_t alloclen;
+	tag_t tag = dx_current_tag();
+	tag_t dir_tag = dir_i->i_tag;
 	int ret;
 
 	mode |= S_IFDIR;
@@ -490,14 +498,14 @@ static int jffs2_mkdir (struct inode *dir_i, struct dentry *dentry, int mode)
 	 */
 	namelen = dentry->d_name.len;
 	ret = jffs2_reserve_space(c, sizeof(*ri), &alloclen, ALLOC_NORMAL,
-				  JFFS2_SUMMARY_INODE_SIZE);
+				  JFFS2_SUMMARY_INODE_SIZE, tag);
 
 	if (ret) {
 		jffs2_free_raw_inode(ri);
 		return ret;
 	}
 
-	inode = jffs2_new_inode(dir_i, mode, ri);
+	inode = jffs2_new_inode(dir_i, mode, ri, tag);
 
 	if (IS_ERR(inode)) {
 		jffs2_free_raw_inode(ri);
@@ -546,7 +554,7 @@ static int jffs2_mkdir (struct inode *dir_i, struct dentry *dentry, int mode)
 	}
 
 	ret = jffs2_reserve_space(c, sizeof(*rd)+namelen, &alloclen,
-				  ALLOC_NORMAL, JFFS2_SUMMARY_DIRENT_SIZE(namelen));
+				  ALLOC_NORMAL, JFFS2_SUMMARY_DIRENT_SIZE(namelen), dir_tag);
 	if (ret) {
 		/* Eep. */
 		jffs2_clear_inode(inode);
@@ -597,7 +605,7 @@ static int jffs2_mkdir (struct inode *dir_i, struct dentry *dentry, int mode)
 
 	/* Link the fd into the inode's list, obsoleting an old
 	   one if necessary. */
-	jffs2_add_fd_to_list(c, fd, &dir_f->dents);
+	jffs2_add_fd_to_list(c, fd, &dir_f->dents, dir_tag);
 
 	up(&dir_f->sem);
 	jffs2_complete_reservation(c);
@@ -635,6 +643,8 @@ static int jffs2_mknod (struct inode *dir_i, struct dentry *dentry, int mode, de
 	union jffs2_device_node dev;
 	int devlen = 0;
 	uint32_t alloclen;
+	tag_t tag = dx_current_tag();
+	tag_t dir_tag = dir_i->i_tag;
 	int ret;
 
 	if (!new_valid_dev(rdev))
@@ -654,14 +664,14 @@ static int jffs2_mknod (struct inode *dir_i, struct dentry *dentry, int mode, de
 	 */
 	namelen = dentry->d_name.len;
 	ret = jffs2_reserve_space(c, sizeof(*ri) + devlen, &alloclen,
-				  ALLOC_NORMAL, JFFS2_SUMMARY_INODE_SIZE);
+				  ALLOC_NORMAL, JFFS2_SUMMARY_INODE_SIZE, tag);
 
 	if (ret) {
 		jffs2_free_raw_inode(ri);
 		return ret;
 	}
 
-	inode = jffs2_new_inode(dir_i, mode, ri);
+	inode = jffs2_new_inode(dir_i, mode, ri, tag);
 
 	if (IS_ERR(inode)) {
 		jffs2_free_raw_inode(ri);
@@ -712,7 +722,8 @@ static int jffs2_mknod (struct inode *dir_i, struct dentry *dentry, int mode, de
 	}
 
 	ret = jffs2_reserve_space(c, sizeof(*rd)+namelen, &alloclen,
-				  ALLOC_NORMAL, JFFS2_SUMMARY_DIRENT_SIZE(namelen));
+				  ALLOC_NORMAL, JFFS2_SUMMARY_DIRENT_SIZE(namelen),
+				  dir_tag);
 	if (ret) {
 		/* Eep. */
 		jffs2_clear_inode(inode);
@@ -765,7 +776,7 @@ static int jffs2_mknod (struct inode *dir_i, struct dentry *dentry, int mode, de
 
 	/* Link the fd into the inode's list, obsoleting an old
 	   one if necessary. */
-	jffs2_add_fd_to_list(c, fd, &dir_f->dents);
+	jffs2_add_fd_to_list(c, fd, &dir_f->dents, dir_tag);
 
 	up(&dir_f->sem);
 	jffs2_complete_reservation(c);

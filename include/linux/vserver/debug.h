@@ -19,6 +19,14 @@
 #define __FUNC__	__func__
 
 
+#define vxd_path(d,m)						\
+	({ static char _buffer[PATH_MAX];			\
+	   d_path((d), (m), _buffer, sizeof(_buffer)); })
+
+#define vxd_cond_path(n)					\
+	((n) ? vxd_path((n)->dentry, (n)->mnt) : "<null>" )
+
+
 #ifdef	CONFIG_VSERVER_DEBUG
 
 extern unsigned int vx_debug_switch;
@@ -35,7 +43,6 @@ extern unsigned int vx_debug_misc;
 
 
 #define VX_LOGLEVEL	"vxD: "
-#define VX_WARNLEVEL	KERN_WARNING "vxW: "
 
 #define vxdprintk(c,f,x...)					\
 	do {							\
@@ -54,21 +61,6 @@ extern unsigned int vx_debug_misc;
 		if (c)						\
 			printk(VX_LOGLEVEL f " %s@%s:%d\n", x); \
 	} while (0)
-
-
-#define vxwprintk(c,f,x...)					\
-	do {							\
-		if (c)						\
-			printk(VX_WARNLEVEL f "\n" , ##x);	\
-	} while (0)
-
-
-#define vxd_path(d,m)						\
-	({ static char _buffer[PATH_MAX];			\
-	   d_path((d), (m), _buffer, sizeof(_buffer)); })
-
-#define vxd_cond_path(n)					\
-	((n) ? vxd_path((n)->dentry, (n)->mnt) : "<null>" )
 
 
 struct vx_info;
@@ -91,12 +83,25 @@ void dump_vx_info_inactive(int);
 #define vxdprintk(x...) do { } while (0)
 #define vxlprintk(x...) do { } while (0)
 #define vxfprintk(x...) do { } while (0)
-#define vxwprintk(x...) do { } while (0)
-
-#define vxd_path	"<none>"
-#define vxd_cond_path	vxd_path
 
 #endif	/* CONFIG_VSERVER_DEBUG */
+
+
+#ifdef	CONFIG_VSERVER_WARN
+
+#define VX_WARNLEVEL	KERN_WARNING "vxW: "
+
+#define vxwprintk(c,f,x...)					\
+	do {							\
+		if (c)						\
+			printk(VX_WARNLEVEL f "\n" , ##x);	\
+	} while (0)
+
+#else	/* CONFIG_VSERVER_WARN */
+
+#define vxwprintk(x...) do { } while (0)
+
+#endif	/* CONFIG_VSERVER_WARN */
 
 
 #ifdef	CONFIG_VSERVER_DEBUG

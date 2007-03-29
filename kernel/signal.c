@@ -24,6 +24,7 @@
 #include <linux/signal.h>
 #include <linux/capability.h>
 #include <linux/vs_context.h>
+#include <linux/vs_pid.h>
 #include <asm/param.h>
 #include <asm/uaccess.h>
 #include <asm/unistd.h>
@@ -600,7 +601,7 @@ static int check_kill_permission(int sig, struct siginfo *info,
 
 	error = -ESRCH;
 	if (!vx_check(vx_task_xid(t), VS_WATCH_P|VS_IDENT)) {
-		vxwprintk(current->xid || VXD_CBIT(misc, 7),
+		vxdprintk(current->xid || VXD_CBIT(misc, 7),
 			"signal %d[%p] xid mismatch %p[#%u,%u] xid=#%u",
 			sig, info, t, vx_task_xid(t), t->pid, current->xid);
 		return error;
@@ -1156,7 +1157,7 @@ kill_proc_info(int sig, struct siginfo *info, pid_t pid)
 {
 	int error;
 	rcu_read_lock();
-	error = kill_pid_info(sig, info, find_pid(pid));
+	error = kill_pid_info(sig, info, find_pid(vx_rmap_pid(pid)));
 	rcu_read_unlock();
 	return error;
 }

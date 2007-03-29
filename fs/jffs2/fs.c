@@ -38,7 +38,9 @@ static int jffs2_do_setattr (struct inode *inode, struct iattr *iattr)
 	int mdatalen = 0;
 	unsigned int ivalid;
 	uint32_t alloclen;
+	tag_t tag = JFFS2_F_I_TAG(f);
 	int ret;
+
 	D1(printk(KERN_DEBUG "jffs2_setattr(): ino #%lu\n", inode->i_ino));
 	ret = inode_change_ok(inode, iattr);
 	if (ret)
@@ -80,7 +82,7 @@ static int jffs2_do_setattr (struct inode *inode, struct iattr *iattr)
 	}
 
 	ret = jffs2_reserve_space(c, sizeof(*ri) + mdatalen, &alloclen,
-				  ALLOC_NORMAL, JFFS2_SUMMARY_INODE_SIZE);
+				  ALLOC_NORMAL, JFFS2_SUMMARY_INODE_SIZE, tag);
 	if (ret) {
 		jffs2_free_raw_inode(ri);
 		if (S_ISLNK(inode->i_mode & S_IFMT))
@@ -153,7 +155,6 @@ static int jffs2_do_setattr (struct inode *inode, struct iattr *iattr)
 	inode->i_gid = je16_to_cpu(ri->gid);
 	inode->i_tag = je16_to_cpu(ri->tag);
 
-
 	old_metadata = f->metadata;
 
 	if (ivalid & ATTR_SIZE && inode->i_size > iattr->ia_size)
@@ -167,7 +168,7 @@ static int jffs2_do_setattr (struct inode *inode, struct iattr *iattr)
 		f->metadata = new_metadata;
 	}
 	if (old_metadata) {
-		jffs2_mark_node_obsolete(c, old_metadata->raw);
+		jffs2_mark_node_obsolete(c, old_metadata->raw, tag);
 		jffs2_free_full_dnode(old_metadata);
 	}
 	jffs2_free_raw_inode(ri);
@@ -452,7 +453,8 @@ void jffs2_write_super (struct super_block *sb)
 
 /* jffs2_new_inode: allocate a new inode and inocache, add it to the hash,
    fill in the raw_inode while you're at it. */
-struct inode *jffs2_new_inode (struct inode *dir_i, int mode, struct jffs2_raw_inode *ri)
+struct inode *jffs2_new_inode (struct inode *dir_i, int mode,
+	struct jffs2_raw_inode *ri, tag_t tag)
 {
 	struct inode *inode;
 	struct super_block *sb = dir_i->i_sb;
@@ -475,7 +477,6 @@ struct inode *jffs2_new_inode (struct inode *dir_i, int mode, struct jffs2_raw_i
 
 	memset(ri, 0, sizeof(*ri));
 	/* Set OS-specific defaults for new inodes */
-	ri->tag = cpu_to_je16(dx_current_tag());
 	ri->uid = cpu_to_je16(current->fsuid);
 
 	if (dir_i->i_mode & S_ISGID) {
@@ -486,7 +487,7 @@ struct inode *jffs2_new_inode (struct inode *dir_i, int mode, struct jffs2_raw_i
 		ri->gid = cpu_to_je16(current->fsgid);
 	}
 	ri->mode =  cpu_to_jemode(mode);
-	ret = jffs2_do_new_inode (c, f, mode, ri);
+	ret = jffs2_do_new_inode (c, f, mode, ri, tag);
 	if (ret) {
 		make_bad_inode(inode);
 		iput(inode);

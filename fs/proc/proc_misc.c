@@ -39,6 +39,7 @@
 #include <linux/seq_file.h>
 #include <linux/times.h>
 #include <linux/profile.h>
+#include <linux/utsname.h>
 #include <linux/blkdev.h>
 #include <linux/hugetlb.h>
 #include <linux/jiffies.h>
@@ -272,8 +273,10 @@ static int version_read_proc(char *page, char **start, off_t off,
 {
 	int len;
 
-	len = sprintf(page, linux_banner,
-		utsname()->release, utsname()->version);
+	len = snprintf(page, PAGE_SIZE, linux_proc_banner,
+		utsname()->sysname,
+		utsname()->release,
+		utsname()->version);
 	return proc_calc_metrics(page, start, off, count, eof, len);
 }
 

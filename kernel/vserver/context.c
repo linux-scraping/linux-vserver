@@ -20,6 +20,7 @@
  *  V0.13  separate per cpu data
  *  V0.14  changed vcmds to vxi arg
  *  V0.15  added context stat
+ *  V0.16  have __create claim() the vxi
  *
  */
 
@@ -307,7 +308,7 @@ found:
 /*	__create_vx_info()
 
 	* create the requested context
-	* get() and hash it					*/
+	* get(), claim() and hash it				*/
 
 static struct vx_info * __create_vx_info(int id)
 {
@@ -334,6 +335,7 @@ static struct vx_info * __create_vx_info(int id)
 	/* new context */
 	vxdprintk(VXD_CBIT(xid, 0),
 		"create_vx_info(%d) = %p (new)", id, new);
+	claim_vx_info(new, NULL);
 	__hash_vx_info(get_vx_info(new));
 	vxi = new, new = NULL;
 
@@ -644,7 +646,7 @@ void vx_set_persistent(struct vx_info *vxi)
 		"vx_set_persistent(%p[#%d])", vxi, vxi->vx_id);
 
 	get_vx_info(vxi);
-	claim_vx_info(vxi, current);
+	claim_vx_info(vxi, NULL);
 }
 
 void vx_clear_persistent(struct vx_info *vxi)
@@ -652,7 +654,7 @@ void vx_clear_persistent(struct vx_info *vxi)
 	vxdprintk(VXD_CBIT(xid, 6),
 		"vx_clear_persistent(%p[#%d])", vxi, vxi->vx_id);
 
-	release_vx_info(vxi, current);
+	release_vx_info(vxi, NULL);
 	put_vx_info(vxi);
 }
 
@@ -768,27 +770,22 @@ int vc_ctx_create(uint32_t xid, void __user *data)
 	/* initial flags */
 	new_vxi->vx_flags = vc_data.flagword;
 
+	ret = -ENOEXEC;
+	if (vs_state_change(new_vxi, VSC_STARTUP))
+		goto out;
+
+	ret = vx_migrate_task(current, new_vxi, (!data));
+	if (ret)
+		goto out;
+
+	/* return context id on success */
+	ret = new_vxi->vx_id;
+
 	/* get a reference for persistent contexts */
 	if ((vc_data.flagword & VXF_PERSISTENT))
 		vx_set_persistent(new_vxi);
-
-	ret = -ENOEXEC;
-	if (vs_state_change(new_vxi, VSC_STARTUP))
-		goto out_err;
-
-	ret = vx_migrate_task(current, new_vxi, (!data));
-	if (!ret) {
-		/* return context id on success */
-		ret = new_vxi->vx_id;
-		goto out;
-	}
-out_err:
-	/* prepare for context disposal */
-	new_vxi->vx_state |= VXS_SHUTDOWN;
-	new_vxi->vx_flags &= ~VXF_PERSISTENT;
-	if ((vc_data.flagword & VXF_PERSISTENT))
-		vx_clear_persistent(new_vxi);
 out:
+	release_vx_info(new_vxi, NULL);
 	put_vx_info(new_vxi);
 	return ret;
 }

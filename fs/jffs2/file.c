@@ -146,7 +146,8 @@ static int jffs2_prepare_write (struct file *filp, struct page *pg,
 			  (unsigned int)inode->i_size, pageofs));
 
 		ret = jffs2_reserve_space(c, sizeof(ri), &alloc_len,
-					  ALLOC_NORMAL, JFFS2_SUMMARY_INODE_SIZE);
+					  ALLOC_NORMAL, JFFS2_SUMMARY_INODE_SIZE,
+					  OFNI_EDONI_2SFFJ(f)->i_tag);
 		if (ret)
 			return ret;
 
@@ -184,13 +185,13 @@ static int jffs2_prepare_write (struct file *filp, struct page *pg,
 		}
 		ret = jffs2_add_full_dnode_to_inode(c, f, fn);
 		if (f->metadata) {
-			jffs2_mark_node_obsolete(c, f->metadata->raw);
+			jffs2_mark_node_obsolete(c, f->metadata->raw, OFNI_EDONI_2SFFJ(f)->i_tag);
 			jffs2_free_full_dnode(f->metadata);
 			f->metadata = NULL;
 		}
 		if (ret) {
 			D1(printk(KERN_DEBUG "Eep. add_full_dnode_to_inode() failed in prepare_write, returned %d\n", ret));
-			jffs2_mark_node_obsolete(c, fn->raw);
+			jffs2_mark_node_obsolete(c, fn->raw, OFNI_EDONI_2SFFJ(f)->i_tag);
 			jffs2_free_full_dnode(fn);
 			jffs2_complete_reservation(c);
 			up(&f->sem);

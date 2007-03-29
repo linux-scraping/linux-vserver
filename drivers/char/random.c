@@ -1178,7 +1178,7 @@ static char sysctl_bootid[16];
 static int proc_do_uuid(ctl_table *table, int write, struct file *filp,
 			void __user *buffer, size_t *lenp, loff_t *ppos)
 {
-	ctl_table fake_table = {0};
+	ctl_table fake_table;
 	unsigned char buf[64], tmp_uuid[16], *uuid;
 
 	uuid = table->data;

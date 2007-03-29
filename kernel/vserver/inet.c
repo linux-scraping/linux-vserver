@@ -37,6 +37,8 @@ int dev_in_nx_info(struct net_device *dev, struct nx_info *nxi)
 	if (!nxi)
 		return 1;
 
+	if (!dev)
+		goto out;
 	in_dev = in_dev_get(dev);
 	if (!in_dev)
 		goto out;

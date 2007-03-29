@@ -461,7 +461,7 @@ static int jffs2_sum_process_sum_data(struct jffs2_sb_info *c, struct jffs2_eras
 				fd->nhash = full_name_hash(fd->name, spd->nsize);
 				fd->type = spd->type;
 
-				jffs2_add_fd_to_list(c, fd, &ic->scan_dents);
+				jffs2_add_fd_to_list(c, fd, &ic->scan_dents, -3);
 
 				*pseudo_random += je32_to_cpu(spd->version);
 

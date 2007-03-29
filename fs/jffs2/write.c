@@ -21,7 +21,8 @@
 #include "compr.h"
 
 
-int jffs2_do_new_inode(struct jffs2_sb_info *c, struct jffs2_inode_info *f, uint32_t mode, struct jffs2_raw_inode *ri)
+int jffs2_do_new_inode(struct jffs2_sb_info *c, struct jffs2_inode_info *f, uint32_t mode,
+	struct jffs2_raw_inode *ri, tag_t tag)
 {
 	struct jffs2_inode_cache *ic;
 
@@ -36,10 +37,12 @@ int jffs2_do_new_inode(struct jffs2_sb_info *c, struct jffs2_inode_info *f, uint
 	f->inocache->nlink = 1;
 	f->inocache->nodes = (struct jffs2_raw_node_ref *)f->inocache;
 	f->inocache->state = INO_STATE_PRESENT;
+	f->inocache->tag = tag;
 
 	jffs2_add_ino_cache(c, f->inocache);
 	D1(printk(KERN_DEBUG "jffs2_do_new_inode(): Assigned ino# %d\n", f->inocache->ino));
 	ri->ino = cpu_to_je32(f->inocache->ino);
+	printk("... jffs2_do_new_inode(%p[#%u]) + \n", f, tag);
 
 	ri->magic = cpu_to_je16(JFFS2_MAGIC_BITMASK);
 	ri->nodetype = cpu_to_je16(JFFS2_NODETYPE_INODE);
@@ -47,6 +50,7 @@ int jffs2_do_new_inode(struct jffs2_sb_info *c, struct jffs2_inode_info *f, uint
 	ri->hdr_crc = cpu_to_je32(crc32(0, ri, sizeof(struct jffs2_unknown_node)-4));
 	ri->mode = cpu_to_jemode(mode);
 	ri->flags = cpu_to_je16(0);
+	ri->tag = cpu_to_je16(tag);
 
 	f->highest_version = 1;
 	ri->version = cpu_to_je32(f->highest_version);
@@ -144,7 +148,7 @@ struct jffs2_full_dnode *jffs2_write_dnode(struct jffs2_sb_info *c, struct jffs2
 				jffs2_complete_reservation(c);
 
 				ret = jffs2_reserve_space(c, sizeof(*ri) + datalen, &dummy,
-							  alloc_mode, JFFS2_SUMMARY_INODE_SIZE);
+							  alloc_mode, JFFS2_SUMMARY_INODE_SIZE, -2);
 				down(&f->sem);
 			}
 
@@ -275,7 +279,7 @@ struct jffs2_full_dirent *jffs2_write_dirent(struct jffs2_sb_info *c, struct jff
 				jffs2_complete_reservation(c);
 
 				ret = jffs2_reserve_space(c, sizeof(*rd) + namelen, &dummy,
-							  alloc_mode, JFFS2_SUMMARY_DIRENT_SIZE(namelen));
+							  alloc_mode, JFFS2_SUMMARY_DIRENT_SIZE(namelen), -2);
 				down(&f->sem);
 			}
 
@@ -311,6 +315,7 @@ int jffs2_write_inode_range(struct jffs2_sb_info *c, struct jffs2_inode_info *f,
 {
 	int ret = 0;
 	uint32_t writtenlen = 0;
+	tag_t tag = JFFS2_F_I_TAG(f);
 
        	D1(printk(KERN_DEBUG "jffs2_write_inode_range(): Ino #%u, ofs 0x%x, len 0x%x\n",
 		  f->inocache->ino, offset, writelen));
@@ -327,7 +332,7 @@ int jffs2_write_inode_range(struct jffs2_sb_info *c, struct jffs2_inode_info *f,
 		D2(printk(KERN_DEBUG "jffs2_commit_write() loop: 0x%x to write to 0x%x\n", writelen, offset));
 
 		ret = jffs2_reserve_space(c, sizeof(*ri) + JFFS2_MIN_DATA_LEN,
-					&alloclen, ALLOC_NORMAL, JFFS2_SUMMARY_INODE_SIZE);
+					&alloclen, ALLOC_NORMAL, JFFS2_SUMMARY_INODE_SIZE, tag);
 		if (ret) {
 			D1(printk(KERN_DEBUG "jffs2_reserve_space returned %d\n", ret));
 			break;
@@ -337,6 +342,8 @@ int jffs2_write_inode_range(struct jffs2_sb_info *c, struct jffs2_inode_info *f,
 		cdatalen = min_t(uint32_t, alloclen - sizeof(*ri), datalen);
 
 		comprtype = jffs2_compress(c, f, buf, &comprbuf, &datalen, &cdatalen);
+		printk("... jffs2_write_inode_range(%p[#%u]) - %d:%d:%d\n",
+			f, tag, datalen, cdatalen, sizeof(*ri) + JFFS2_MIN_DATA_LEN);
 
 		ri->magic = cpu_to_je16(JFFS2_MAGIC_BITMASK);
 		ri->nodetype = cpu_to_je16(JFFS2_NODETYPE_INODE);
@@ -362,6 +369,7 @@ int jffs2_write_inode_range(struct jffs2_sb_info *c, struct jffs2_inode_info *f,
 			ret = PTR_ERR(fn);
 			up(&f->sem);
 			jffs2_complete_reservation(c);
+			printk("... jffs2_write_inode_range(%p[#%u]) -\n", f, tag);
 			if (!retried) {
 				/* Write error to be retried */
 				retried = 1;
@@ -372,14 +380,14 @@ int jffs2_write_inode_range(struct jffs2_sb_info *c, struct jffs2_inode_info *f,
 		}
 		ret = jffs2_add_full_dnode_to_inode(c, f, fn);
 		if (f->metadata) {
-			jffs2_mark_node_obsolete(c, f->metadata->raw);
+			jffs2_mark_node_obsolete(c, f->metadata->raw, tag);
 			jffs2_free_full_dnode(f->metadata);
 			f->metadata = NULL;
 		}
 		if (ret) {
 			/* Eep */
 			D1(printk(KERN_DEBUG "Eep. add_full_dnode_to_inode() failed in commit_write, returned %d\n", ret));
-			jffs2_mark_node_obsolete(c, fn->raw);
+			jffs2_mark_node_obsolete(c, fn->raw, tag);
 			jffs2_free_full_dnode(fn);
 
 			up(&f->sem);
@@ -409,18 +417,22 @@ int jffs2_do_create(struct jffs2_sb_info *c, struct jffs2_inode_info *dir_f, str
 	struct jffs2_full_dnode *fn;
 	struct jffs2_full_dirent *fd;
 	uint32_t alloclen;
+	tag_t tag = JFFS2_F_I_TAG(f);
+	tag_t dir_tag = JFFS2_F_I_TAG(dir_f);
 	int ret;
 
 	/* Try to reserve enough space for both node and dirent.
 	 * Just the node will do for now, though
 	 */
 	ret = jffs2_reserve_space(c, sizeof(*ri), &alloclen, ALLOC_NORMAL,
-				JFFS2_SUMMARY_INODE_SIZE);
+				JFFS2_SUMMARY_INODE_SIZE,
+				OFNI_EDONI_2SFFJ(f)->i_tag);
 	D1(printk(KERN_DEBUG "jffs2_do_create(): reserved 0x%x bytes\n", alloclen));
 	if (ret) {
 		up(&f->sem);
 		return ret;
 	}
+	printk("... jffs2_do_create(%p[#%u]) i+\n", f, tag);
 
 	ri->data_crc = cpu_to_je32(0);
 	ri->node_crc = cpu_to_je32(crc32(0, ri, sizeof(*ri)-8));
@@ -435,6 +447,7 @@ int jffs2_do_create(struct jffs2_sb_info *c, struct jffs2_inode_info *dir_f, str
 		/* Eeek. Wave bye bye */
 		up(&f->sem);
 		jffs2_complete_reservation(c);
+		printk("... jffs2_do_create(%p[#%u]) i-\n", f, tag);
 		return PTR_ERR(fn);
 	}
 	/* No data here. Only a metadata node, which will be
@@ -445,18 +458,21 @@ int jffs2_do_create(struct jffs2_sb_info *c, struct jffs2_inode_info *dir_f, str
 	up(&f->sem);
 	jffs2_complete_reservation(c);
 	ret = jffs2_reserve_space(c, sizeof(*rd)+namelen, &alloclen,
-				ALLOC_NORMAL, JFFS2_SUMMARY_DIRENT_SIZE(namelen));
+				ALLOC_NORMAL, JFFS2_SUMMARY_DIRENT_SIZE(namelen),
+				OFNI_EDONI_2SFFJ(dir_f)->i_tag);
 
 	if (ret) {
 		/* Eep. */
 		D1(printk(KERN_DEBUG "jffs2_reserve_space() for dirent failed\n"));
 		return ret;
 	}
+	printk("... jffs2_do_create(%p[#%u]) d+\n", dir_f, dir_tag);
 
 	rd = jffs2_alloc_raw_dirent();
 	if (!rd) {
 		/* Argh. Now we treat it like a normal delete */
 		jffs2_complete_reservation(c);
+		printk("... jffs2_do_create(%p[#%u]) d-\n", dir_f, dir_tag);
 		return -ENOMEM;
 	}
 
@@ -485,12 +501,13 @@ int jffs2_do_create(struct jffs2_sb_info *c, struct jffs2_inode_info *dir_f, str
 		   as if it were the final unlink() */
 		jffs2_complete_reservation(c);
 		up(&dir_f->sem);
+		printk("... jffs2_do_create(%p[#%u]) i- \n", f, tag);
 		return PTR_ERR(fd);
 	}
 
 	/* Link the fd into the inode's list, obsoleting an old
 	   one if necessary. */
-	jffs2_add_fd_to_list(c, fd, &dir_f->dents);
+	jffs2_add_fd_to_list(c, fd, &dir_f->dents, dir_tag);
 
 	jffs2_complete_reservation(c);
 	up(&dir_f->sem);
@@ -506,6 +523,7 @@ int jffs2_do_unlink(struct jffs2_sb_info *c, struct jffs2_inode_info *dir_f,
 	struct jffs2_raw_dirent *rd;
 	struct jffs2_full_dirent *fd;
 	uint32_t alloclen;
+	tag_t dir_tag = JFFS2_F_I_TAG(dir_f);
 	int ret;
 
 	if (1 /* alternative branch needs testing */ ||
@@ -517,11 +535,13 @@ int jffs2_do_unlink(struct jffs2_sb_info *c, struct jffs2_inode_info *dir_f,
 			return -ENOMEM;
 
 		ret = jffs2_reserve_space(c, sizeof(*rd)+namelen, &alloclen,
-					ALLOC_DELETION, JFFS2_SUMMARY_DIRENT_SIZE(namelen));
+					ALLOC_DELETION, JFFS2_SUMMARY_DIRENT_SIZE(namelen),
+					-5);
 		if (ret) {
 			jffs2_free_raw_dirent(rd);
 			return ret;
 		}
+		printk("... jffs2_do_unlink(%p[#%d]) d+\n", dir_f, -5);
 
 		down(&dir_f->sem);
 
@@ -547,11 +567,12 @@ int jffs2_do_unlink(struct jffs2_sb_info *c, struct jffs2_inode_info *dir_f,
 		if (IS_ERR(fd)) {
 			jffs2_complete_reservation(c);
 			up(&dir_f->sem);
+			printk("... jffs2_do_unlink(%p[#%d]) d-\n", dir_f, -5);
 			return PTR_ERR(fd);
 		}
 
 		/* File it. This will mark the old one obsolete. */
-		jffs2_add_fd_to_list(c, fd, &dir_f->dents);
+		jffs2_add_fd_to_list(c, fd, &dir_f->dents, dir_tag);
 		up(&dir_f->sem);
 	} else {
 		struct jffs2_full_dirent **prev = &dir_f->dents;
@@ -569,7 +590,7 @@ int jffs2_do_unlink(struct jffs2_sb_info *c, struct jffs2_inode_info *dir_f,
 					  this->ino, ref_offset(this->raw)));
 
 				*prev = this->next;
-				jffs2_mark_node_obsolete(c, (this->raw));
+				jffs2_mark_node_obsolete(c, (this->raw), dir_tag);
 				jffs2_free_full_dirent(this);
 				break;
 			}
@@ -599,7 +620,7 @@ int jffs2_do_unlink(struct jffs2_sb_info *c, struct jffs2_inode_info *dir_f,
 					D1(printk(KERN_DEBUG "Removing deletion dirent for \"%s\" from dir ino #%u\n",
 						fd->name, dead_f->inocache->ino));
 				}
-				jffs2_mark_node_obsolete(c, fd->raw);
+				jffs2_mark_node_obsolete(c, fd->raw, dir_tag);
 				jffs2_free_full_dirent(fd);
 			}
 		}
@@ -620,6 +641,7 @@ int jffs2_do_link (struct jffs2_sb_info *c, struct jffs2_inode_info *dir_f, uint
 	struct jffs2_raw_dirent *rd;
 	struct jffs2_full_dirent *fd;
 	uint32_t alloclen;
+	tag_t dir_tag = JFFS2_F_I_TAG(dir_f);
 	int ret;
 
 	rd = jffs2_alloc_raw_dirent();
@@ -627,11 +649,13 @@ int jffs2_do_link (struct jffs2_sb_info *c, struct jffs2_inode_info *dir_f, uint
 		return -ENOMEM;
 
 	ret = jffs2_reserve_space(c, sizeof(*rd)+namelen, &alloclen,
-				ALLOC_NORMAL, JFFS2_SUMMARY_DIRENT_SIZE(namelen));
+				ALLOC_NORMAL, JFFS2_SUMMARY_DIRENT_SIZE(namelen),
+				dir_tag);
 	if (ret) {
 		jffs2_free_raw_dirent(rd);
 		return ret;
 	}
+	printk("... jffs2_do_link(%p[#%u]) d+\n", dir_f, dir_tag);
 
 	down(&dir_f->sem);
 
@@ -659,11 +683,12 @@ int jffs2_do_link (struct jffs2_sb_info *c, struct jffs2_inode_info *dir_f, uint
 	if (IS_ERR(fd)) {
 		jffs2_complete_reservation(c);
 		up(&dir_f->sem);
+		printk("... jffs2_do_link(%p[#%u]) d-\n", dir_f, dir_tag);
 		return PTR_ERR(fd);
 	}
 
 	/* File it. This will mark the old one obsolete. */
-	jffs2_add_fd_to_list(c, fd, &dir_f->dents);
+	jffs2_add_fd_to_list(c, fd, &dir_f->dents, dir_tag);
 
 	jffs2_complete_reservation(c);
 	up(&dir_f->sem);

@@ -166,6 +166,7 @@ struct jffs2_inode_cache {
 	struct jffs2_xattr_ref *xref;
 #endif
 	int nlink;
+	tag_t tag;
 };
 
 /* Inode states for 'state' above. We need the 'GC' state to prevent
@@ -322,7 +323,7 @@ static inline struct jffs2_node_frag *frag_last(struct rb_root *root)
 #define frag_erase(frag, list) rb_erase(&frag->rb, list);
 
 /* nodelist.c */
-void jffs2_add_fd_to_list(struct jffs2_sb_info *c, struct jffs2_full_dirent *new, struct jffs2_full_dirent **list);
+void jffs2_add_fd_to_list(struct jffs2_sb_info *c, struct jffs2_full_dirent *new, struct jffs2_full_dirent **list, tag_t tag);
 void jffs2_set_inocache_state(struct jffs2_sb_info *c, struct jffs2_inode_cache *ic, int state);
 struct jffs2_inode_cache *jffs2_get_ino_cache(struct jffs2_sb_info *c, uint32_t ino);
 void jffs2_add_ino_cache (struct jffs2_sb_info *c, struct jffs2_inode_cache *new);
@@ -330,7 +331,7 @@ void jffs2_del_ino_cache(struct jffs2_sb_info *c, struct jffs2_inode_cache *old)
 void jffs2_free_ino_caches(struct jffs2_sb_info *c);
 void jffs2_free_raw_node_refs(struct jffs2_sb_info *c);
 struct jffs2_node_frag *jffs2_lookup_node_frag(struct rb_root *fragtree, uint32_t offset);
-void jffs2_kill_fragtree(struct rb_root *root, struct jffs2_sb_info *c_delete);
+void jffs2_kill_fragtree(struct rb_root *root, struct jffs2_sb_info *c_delete, tag_t tag);
 struct rb_node *rb_next(struct rb_node *);
 struct rb_node *rb_prev(struct rb_node *);
 void rb_replace_node(struct rb_node *victim, struct rb_node *new, struct rb_root *root);
@@ -348,17 +349,18 @@ extern uint32_t __jffs2_ref_totlen(struct jffs2_sb_info *c,
 /* nodemgmt.c */
 int jffs2_thread_should_wake(struct jffs2_sb_info *c);
 int jffs2_reserve_space(struct jffs2_sb_info *c, uint32_t minsize,
-			uint32_t *len, int prio, uint32_t sumsize);
+			uint32_t *len, int prio, uint32_t sumsize, tag_t tag);
 int jffs2_reserve_space_gc(struct jffs2_sb_info *c, uint32_t minsize,
 			uint32_t *len, uint32_t sumsize);
 struct jffs2_raw_node_ref *jffs2_add_physical_node_ref(struct jffs2_sb_info *c, 
 						       uint32_t ofs, uint32_t len,
 						       struct jffs2_inode_cache *ic);
 void jffs2_complete_reservation(struct jffs2_sb_info *c);
-void jffs2_mark_node_obsolete(struct jffs2_sb_info *c, struct jffs2_raw_node_ref *raw);
+void jffs2_mark_node_obsolete(struct jffs2_sb_info *c, struct jffs2_raw_node_ref *raw, tag_t tag);
 
 /* write.c */
-int jffs2_do_new_inode(struct jffs2_sb_info *c, struct jffs2_inode_info *f, uint32_t mode, struct jffs2_raw_inode *ri);
+int jffs2_do_new_inode(struct jffs2_sb_info *c, struct jffs2_inode_info *f, uint32_t mode,
+		       struct jffs2_raw_inode *ri, tag_t tag);
 
 struct jffs2_full_dnode *jffs2_write_dnode(struct jffs2_sb_info *c, struct jffs2_inode_info *f,
 					   struct jffs2_raw_inode *ri, const unsigned char *data,

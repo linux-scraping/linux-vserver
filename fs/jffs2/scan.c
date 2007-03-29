@@ -927,6 +927,7 @@ struct jffs2_inode_cache *jffs2_scan_make_ino_cache(struct jffs2_sb_info *c, uin
 
 	ic->ino = ino;
 	ic->nodes = (void *)ic;
+	ic->tag = -2;
 	jffs2_add_ino_cache(c, ic);
 	if (ino == 1)
 		ic->nlink = 1;
@@ -1045,7 +1046,7 @@ static int jffs2_scan_dirent_node(struct jffs2_sb_info *c, struct jffs2_eraseblo
 	fd->ino = je32_to_cpu(rd->ino);
 	fd->nhash = full_name_hash(fd->name, rd->nsize);
 	fd->type = rd->type;
-	jffs2_add_fd_to_list(c, fd, &ic->scan_dents);
+	jffs2_add_fd_to_list(c, fd, &ic->scan_dents, -3);
 
 	if (jffs2_sum_active()) {
 		jffs2_sum_add_dirent_mem(s, rd, ofs - jeb->offset);

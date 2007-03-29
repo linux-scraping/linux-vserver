@@ -263,7 +263,7 @@ int jffs2_garbage_collect_pass(struct jffs2_sb_info *c)
 			jffs2_garbage_collect_pristine(c, NULL, raw);
 		} else {
 			/* Just mark it obsolete */
-			jffs2_mark_node_obsolete(c, raw);
+			jffs2_mark_node_obsolete(c, raw, -3);
 		}
 		up(&c->alloc_sem);
 		goto eraseit_lock;
@@ -664,7 +664,7 @@ static int jffs2_garbage_collect_pristine(struct jffs2_sb_info *c,
 	}
 	jffs2_add_physical_node_ref(c, phys_ofs | REF_PRISTINE, rawlen, ic);
 
-	jffs2_mark_node_obsolete(c, raw);
+	jffs2_mark_node_obsolete(c, raw, -3);
 	D1(printk(KERN_DEBUG "WHEEE! GC REF_PRISTINE node at 0x%08x succeeded\n", ref_offset(raw)));
 
  out_node:
@@ -755,7 +755,7 @@ static int jffs2_garbage_collect_metadata(struct jffs2_sb_info *c, struct jffs2_
 		ret = PTR_ERR(new_fn);
 		goto out;
 	}
-	jffs2_mark_node_obsolete(c, fn->raw);
+	jffs2_mark_node_obsolete(c, fn->raw, -3);
 	jffs2_free_full_dnode(fn);
 	f->metadata = new_fn;
  out:
@@ -804,7 +804,7 @@ static int jffs2_garbage_collect_dirent(struct jffs2_sb_info *c, struct jffs2_er
 		printk(KERN_WARNING "jffs2_write_dirent in garbage_collect_dirent failed: %ld\n", PTR_ERR(new_fd));
 		return PTR_ERR(new_fd);
 	}
-	jffs2_add_fd_to_list(c, new_fd, &f->dents);
+	jffs2_add_fd_to_list(c, new_fd, &f->dents, -3);
 	return 0;
 }
 
@@ -914,7 +914,7 @@ static int jffs2_garbage_collect_deletion_dirent(struct jffs2_sb_info *c, struct
 	if (!found) {
 		printk(KERN_WARNING "Deletion dirent \"%s\" not found in list for ino #%u\n", fd->name, f->inocache->ino);
 	}
-	jffs2_mark_node_obsolete(c, fd->raw);
+	jffs2_mark_node_obsolete(c, fd->raw, -3);
 	jffs2_free_full_dirent(fd);
 	return 0;
 }
@@ -1022,7 +1022,7 @@ static int jffs2_garbage_collect_hole(struct jffs2_sb_info *c, struct jffs2_eras
 	if (je32_to_cpu(ri.version) == f->highest_version) {
 		jffs2_add_full_dnode_to_inode(c, f, new_fn);
 		if (f->metadata) {
-			jffs2_mark_node_obsolete(c, f->metadata->raw);
+			jffs2_mark_node_obsolete(c, f->metadata->raw, -3);
 			jffs2_free_full_dnode(f->metadata);
 			f->metadata = NULL;
 		}
@@ -1063,7 +1063,7 @@ static int jffs2_garbage_collect_hole(struct jffs2_sb_info *c, struct jffs2_eras
 		BUG();
 	}
 
-	jffs2_mark_node_obsolete(c, fn->raw);
+	jffs2_mark_node_obsolete(c, fn->raw, -3);
 	jffs2_free_full_dnode(fn);
 
 	return 0;
@@ -1282,7 +1282,7 @@ static int jffs2_garbage_collect_dnode(struct jffs2_sb_info *c, struct jffs2_era
 		ret = jffs2_add_full_dnode_to_inode(c, f, new_fn);
 		offset += datalen;
 		if (f->metadata) {
-			jffs2_mark_node_obsolete(c, f->metadata->raw);
+			jffs2_mark_node_obsolete(c, f->metadata->raw, -3);
 			jffs2_free_full_dnode(f->metadata);
 			f->metadata = NULL;
 		}

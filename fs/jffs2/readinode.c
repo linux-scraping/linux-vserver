@@ -201,7 +201,7 @@ static inline int read_direntry(struct jffs2_sb_info *c, struct jffs2_raw_node_r
 	 * Wheee. We now have a complete jffs2_full_dirent structure, with
 	 * the name in it and everything. Link it into the list
 	 */
-	jffs2_add_fd_to_list(c, fd, fdp);
+	jffs2_add_fd_to_list(c, fd, fdp, -3);
 
 	return 0;
 }
@@ -573,7 +573,7 @@ static int jffs2_get_inode_nodes(struct jffs2_sb_info *c, struct jffs2_inode_inf
 				     je32_to_cpu(node->u.totlen),
 				     je32_to_cpu(node->u.hdr_crc));
 			jffs2_dbg_dump_node(c, ref_offset(ref));
-			jffs2_mark_node_obsolete(c, ref);
+			jffs2_mark_node_obsolete(c, ref, -2);
 			goto cont;
 		}
 
@@ -589,7 +589,7 @@ static int jffs2_get_inode_nodes(struct jffs2_sb_info *c, struct jffs2_inode_inf
 
 			err = read_direntry(c, ref, &node->d, retlen, &ret_fd, latest_mctime, mctime_ver);
 			if (err == 1) {
-				jffs2_mark_node_obsolete(c, ref);
+				jffs2_mark_node_obsolete(c, ref, -2);
 				break;
 			} else if (unlikely(err))
 				goto free_out;
@@ -609,7 +609,7 @@ static int jffs2_get_inode_nodes(struct jffs2_sb_info *c, struct jffs2_inode_inf
 
 			err = read_dnode(c, ref, &node->i, &ret_tn, len, latest_mctime, mctime_ver);
 			if (err == 1) {
-				jffs2_mark_node_obsolete(c, ref);
+				jffs2_mark_node_obsolete(c, ref, -2);
 				break;
 			} else if (unlikely(err))
 				goto free_out;
@@ -628,7 +628,7 @@ static int jffs2_get_inode_nodes(struct jffs2_sb_info *c, struct jffs2_inode_inf
 
 			err = read_unknown(c, ref, &node->u);
 			if (err == 1) {
-				jffs2_mark_node_obsolete(c, ref);
+				jffs2_mark_node_obsolete(c, ref, -2);
 				break;
 			} else if (unlikely(err))
 				goto free_out;
@@ -705,7 +705,7 @@ static int jffs2_do_read_inode_internal(struct jffs2_sb_info *c,
 			f->metadata = fn;
 			ret = 0; /* Prevent freeing the metadata update node */
 		} else
-			jffs2_mark_node_obsolete(c, fn->raw);
+			jffs2_mark_node_obsolete(c, fn->raw, OFNI_EDONI_2SFFJ(f)->i_tag);
 
 		BUG_ON(rb->rb_left);
 		if (rb_parent(rb) && rb_parent(rb)->rb_left == rb) {
@@ -933,6 +933,7 @@ int jffs2_do_read_inode(struct jffs2_sb_info *c, struct jffs2_inode_info *f,
 		f->inocache->ino = f->inocache->nlink = 1;
 		f->inocache->nodes = (struct jffs2_raw_node_ref *)f->inocache;
 		f->inocache->state = INO_STATE_READING;
+		f->inocache->tag = 0;
 		jffs2_add_ino_cache(c, f->inocache);
 	}
 	if (!f->inocache) {
@@ -968,6 +969,7 @@ int jffs2_do_crccheck_inode(struct jffs2_sb_info *c, struct jffs2_inode_cache *i
 void jffs2_do_clear_inode(struct jffs2_sb_info *c, struct jffs2_inode_info *f)
 {
 	struct jffs2_full_dirent *fd, *fds;
+	tag_t tag = JFFS2_F_I_TAG(f);
 	int deleted;
 
 	jffs2_clear_acl(f);
@@ -980,11 +982,11 @@ void jffs2_do_clear_inode(struct jffs2_sb_info *c, struct jffs2_inode_info *f)
 
 	if (f->metadata) {
 		if (deleted)
-			jffs2_mark_node_obsolete(c, f->metadata->raw);
+			jffs2_mark_node_obsolete(c, f->metadata->raw, tag);
 		jffs2_free_full_dnode(f->metadata);
 	}
 
-	jffs2_kill_fragtree(&f->fragtree, deleted?c:NULL);
+	jffs2_kill_fragtree(&f->fragtree, deleted?c:NULL, tag);
 
 	if (f->target) {
 		kfree(f->target);
