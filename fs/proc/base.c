@@ -1091,13 +1091,7 @@ static int pid_revalidate(struct dentry *dentry, struct nameidata *nd)
 {
 	struct inode *inode = dentry->d_inode;
 	struct task_struct *task = get_proc_task(inode);
-	int ret = 0;
-
 	if (task) {
-		if (!vx_proc_task_visible(task))
-			goto out_put;
-
-		ret = 1;
 		if ((inode->i_mode == (S_IFDIR|S_IRUGO|S_IXUGO)) ||
 		    task_dumpable(task)) {
 			inode->i_uid = task->euid;
@@ -1108,12 +1102,11 @@ static int pid_revalidate(struct dentry *dentry, struct nameidata *nd)
 		}
 		inode->i_mode &= ~(S_ISUID | S_ISGID);
 		security_task_to_inode(task, inode);
-	out_put:
 		put_task_struct(task);
+		return 1;
 	}
-	if (!ret)
-		d_drop(dentry);
-	return ret;
+	d_drop(dentry);
+	return 0;
 }
 
 static int pid_delete_dentry(struct dentry * dentry)
@@ -2127,8 +2120,7 @@ int proc_pid_readdir(struct file * filp, void * dirent, filldir_t filldir)
 		filp->f_pos = tgid + TGID_OFFSET;
 		if (!vx_proc_task_visible(task))
 			continue;
-		if (proc_pid_fill_cache(filp, dirent, filldir, task,
-			vx_map_tgid(tgid)) < 0) {
+		if (proc_pid_fill_cache(filp, dirent, filldir, task, tgid) < 0) {
 			put_task_struct(task);
 			goto out;
 		}

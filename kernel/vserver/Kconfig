@@ -56,7 +56,7 @@ config	VSERVER_PROC_SECURE
 
 config	VSERVER_HARDCPU
 	bool	"Enable Hard CPU Limits"
-	default n
+	default y
 	help
 	  Activate the Hard CPU Limits
 
@@ -72,7 +72,7 @@ config	VSERVER_HARDCPU
 config	VSERVER_IDLETIME
 	bool	"Avoid idle CPUs by skipping Time"
 	depends on VSERVER_HARDCPU
-	default n
+	default y
 	help
 	  This option allows the scheduler to artificially
 	  advance time (per cpu) when otherwise the idle
@@ -129,14 +129,6 @@ config	TAGGING_INTERN
 	  disk representation, which limits the use to a few
 	  filesystems (currently ext2 and ext3)
 
-config	TAGGING_RUNTIME
-	bool	"Runtime"
-	depends on EXPERIMENTAL
-	help
-	  inodes are tagged when first accessed, this doesn't
-	  require any persistant information, but might give
-	  funny results for mixed access.
-
 endchoice
 
 config	TAG_NFSD
@@ -164,12 +156,33 @@ config	VSERVER_PRIVACY
 	  access to structures assigned to a specific context,
 	  like ptys or loop devices.
 
+config	VSERVER_CONTEXTS
+	int	"Maximum number of Contexts (1-65533)"	if EMBEDDED
+	range 1 65533
+	default "768"	if 64BIT
+	default "256"
+	help
+	  This setting will optimize certain data structures
+	  and memory allocations according to the expected
+	  maximum.
+
+	  note: this is not a strict upper limit.
+
+config	VSERVER_WARN
+	bool	"VServer Warnings"
+	default y
+	help
+	  This enables various runtime warnings, which will
+	  notify about potential manipulation attempts or
+	  resource shortage. It is generally considered to
+	  be a good idea to have that enabled.
+
 config	VSERVER_DEBUG
 	bool	"VServer Debugging Code"
 	default n
 	help
 	  Set this to yes if you want to be able to activate
-	  debugging output at runtime. It adds a probably small
+	  debugging output at runtime. It adds a very small
 	  overhead to all vserver related functions and
 	  increases the kernel size by about 20k.
 

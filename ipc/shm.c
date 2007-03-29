@@ -1006,9 +1006,6 @@ static int sysvipc_shm_proc_show(struct seq_file *s, void *it)
 #define SMALL_STRING "%10d %10d  %4o %10u %5u %5u  %5d %5u %5u %5u %5u %10lu %10lu %10lu\n"
 #define BIG_STRING   "%10d %10d  %4o %21u %5u %5u  %5d %5u %5u %5u %5u %10lu %10lu %10lu\n"
 
-	if (!vx_check(shp->shm_perm.xid, VS_WATCH_P|VS_IDENT))
-		return 0;
-
 	if (sizeof(size_t) <= sizeof(int))
 		format = SMALL_STRING;
 	else

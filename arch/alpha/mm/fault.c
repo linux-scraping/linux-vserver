@@ -198,8 +198,8 @@ do_page_fault(unsigned long address, unsigned long mmcsr,
 		down_read(&mm->mmap_sem);
 		goto survive;
 	}
-	printk(KERN_ALERT "VM: killing process %s(%d)\n",
-	       current->comm, current->pid);
+	printk(KERN_ALERT "VM: killing process %s(%d:#%u)\n",
+	       current->comm, current->pid, current->xid);
 	if (!user_mode(regs))
 		goto no_context;
 	do_exit(SIGKILL);

@@ -106,13 +106,6 @@ static inline int __dl_alloc_inode(struct super_block *sb,
 	ret = (dli->dl_inodes_used >= dli->dl_inodes_total);
 	if (!ret)
 		dli->dl_inodes_used++;
-#if 0
-	else
-		vxwprintk("DLIMIT hit (%p,#%d), inode %d>=%d @ %s:%d",
-			sb, tag,
-			dli->dl_inodes_used, dli->dl_inodes_total,
-			file, line);
-#endif
 	spin_unlock(&dli->dl_lock);
 	put_dl_info(dli);
 out:

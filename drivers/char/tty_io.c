@@ -186,6 +186,7 @@ static inline void free_tty_struct(struct tty_struct *tty)
 {
 	kfree(tty->write_buf);
 	tty_buffer_free_all(tty);
+	memset(tty, 0xDEADDEAD, sizeof(struct tty_struct));
 	kfree(tty);
 }
 
@@ -1892,6 +1893,20 @@ static int init_dev(struct tty_driver *driver, int idx,
 	/* check whether we're reopening an existing tty */
 	if (driver->flags & TTY_DRIVER_DEVPTS_MEM) {
 		tty = devpts_get_tty(idx);
+		/*
+		 * If we don't have a tty here on a slave open, it's because
+		 * the master already started the close process and there's
+		 * no relation between devpts file and tty anymore.
+		 */
+		if (!tty && driver->subtype == PTY_TYPE_SLAVE) {
+			retval = -EIO;
+			goto end_init;
+		}
+		/*
+		 * It's safe from now on because init_dev() is called with
+		 * tty_mutex held and release_dev() won't change tty->count
+		 * or tty->flags without having to grab tty_mutex
+		 */
 		if (tty && driver->subtype == PTY_TYPE_MASTER)
 			tty = tty->link;
 	} else {
@@ -3780,6 +3795,9 @@ EXPORT_SYMBOL(tty_unregister_driver);
 
 dev_t tty_devnum(struct tty_struct *tty)
 {
+	WARN_ON(!tty);
+	WARN_ON(!tty->magic);
+	WARN_ON(!tty->driver);
 	return MKDEV(tty->driver->major, tty->driver->minor_start) + tty->index;
 }
 EXPORT_SYMBOL(tty_devnum);
