@@ -3,7 +3,7 @@
  *
  *  Virtual Server: Syscall Switch
  *
- *  Copyright (C) 2003-2006  Herbert Pötzl
+ *  Copyright (C) 2003-2007  Herbert Pötzl
  *
  *  V0.01  syscall switch
  *  V0.02  added signal to context

@@ -3,7 +3,7 @@
  *
  *  Virtual Server Init
  *
- *  Copyright (C) 2004-2005  Herbert Pötzl
+ *  Copyright (C) 2004-2007  Herbert Pötzl
  *
  *  V0.01  basic structure
  *

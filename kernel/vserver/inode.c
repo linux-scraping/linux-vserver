@@ -3,7 +3,7 @@
  *
  *  Virtual Server: File System Support
  *
- *  Copyright (C) 2004-2005  Herbert Pötzl
+ *  Copyright (C) 2004-2007  Herbert Pötzl
  *
  *  V0.01  separated from vcontext V0.05
  *

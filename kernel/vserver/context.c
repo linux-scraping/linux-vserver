@@ -3,7 +3,7 @@
  *
  *  Virtual Server: Context Support
  *
- *  Copyright (C) 2003-2006  Herbert Pötzl
+ *  Copyright (C) 2003-2007  Herbert Pötzl
  *
  *  V0.01  context helper
  *  V0.02  vx_ctx_kill syscall command
@@ -641,7 +641,7 @@ static int vx_openfd_task(struct task_struct *tsk)
 }
 
 
-/* 	for *space compatibility */
+/*	for *space compatibility */
 
 asmlinkage long sys_unshare(unsigned long);
 

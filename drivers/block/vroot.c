@@ -6,7 +6,7 @@
  *
  *  based on the loop.c code by Theodore Ts'o.
  *
- * Copyright (C) 2002-2006 by Herbert Pötzl.
+ * Copyright (C) 2002-2007 by Herbert Pötzl.
  * Redistribution of this file is permitted under the
  * GNU General Public License.
  *

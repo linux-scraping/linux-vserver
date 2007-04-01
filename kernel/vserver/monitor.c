@@ -3,7 +3,7 @@
  *
  *  Virtual Context Scheduler Monitor
  *
- *  Copyright (C) 2006 Herbert Pötzl
+ *  Copyright (C) 2006-2007 Herbert Pötzl
  *
  *  V0.01  basic design
  *

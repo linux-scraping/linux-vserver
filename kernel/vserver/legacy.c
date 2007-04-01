@@ -4,7 +4,7 @@
  *  Virtual Server: Legacy Funtions
  *
  *  Copyright (C) 2001-2003  Jacques Gelinas
- *  Copyright (C) 2003-2006  Herbert Pötzl
+ *  Copyright (C) 2003-2007  Herbert Pötzl
  *
  *  V0.01  broken out from vcontext.c V0.05
  *  V0.02  updated to spaces *sigh*
