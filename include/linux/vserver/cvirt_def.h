@@ -35,7 +35,6 @@ struct _vx_syslog {
 /* context sub struct */
 
 struct _vx_cvirt {
-//	int max_threads;		/* maximum allowed threads */
 	atomic_t nr_threads;		/* number of current threads */
 	atomic_t nr_running;		/* number of running threads */
 	atomic_t nr_uninterruptible;	/* number of uninterruptible threads */

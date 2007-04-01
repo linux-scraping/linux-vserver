@@ -3,7 +3,7 @@
  *
  *  Virtual Context Support
  *
- *  Copyright (C) 2003-2006  Herbert Pötzl
+ *  Copyright (C) 2003-2007  Herbert Pötzl
  *
  *  V0.01  basic structure
  *  V0.02  adaptation vs1.3.0
@@ -38,10 +38,6 @@
 static struct proc_dir_entry *proc_virtual;
 
 static struct proc_dir_entry *proc_virtnet;
-
-
-
-// #define PROC_VID_MASK	0x60
 
 
 /* first the actual feeds */
@@ -108,14 +104,12 @@ int proc_vxi_status (struct vx_info *vxi, char *buffer)
 		"BCaps:\t%016llx\n"
 		"CCaps:\t%016llx\n"
 		"Spaces:\t%08lx\n"
-//		"Ticks:\t%d\n"
 		,atomic_read(&vxi->vx_usecnt)
 		,atomic_read(&vxi->vx_tasks)
 		,(unsigned long long)vxi->vx_flags
 		,(unsigned long long)vxi->vx_bcaps
 		,(unsigned long long)vxi->vx_ccaps
 		,vxi->vx_nsmask
-//		,atomic_read(&vxi->limit.ticks)
 		);
 	return length;
 }
@@ -950,7 +944,7 @@ static struct file_operations proc_virtnet_dir_operations = {
 };
 
 static struct inode_operations proc_virtnet_dir_inode_operations = {
-	.getattr = 	proc_virtnet_getattr,
+	.getattr =	proc_virtnet_getattr,
 	.lookup =	proc_virtnet_lookup,
 };
 

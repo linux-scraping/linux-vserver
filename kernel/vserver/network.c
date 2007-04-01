@@ -3,7 +3,7 @@
  *
  *  Virtual Server: Network Support
  *
- *  Copyright (C) 2003-2006  Herbert Pötzl
+ *  Copyright (C) 2003-2007  Herbert Pötzl
  *
  *  V0.01  broken out from vcontext V0.05
  *  V0.02  cleaned up implementation

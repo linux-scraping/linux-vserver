@@ -3,7 +3,7 @@
  *
  *  Virtual Server: Context Space Support
  *
- *  Copyright (C) 2003-2006  Herbert Pötzl
+ *  Copyright (C) 2003-2007  Herbert Pötzl
  *
  *  V0.01  broken out from context.c 0.07
  *  V0.02  added task locking for namespace
