@@ -944,7 +944,7 @@ static struct file_operations proc_virtnet_dir_operations = {
 };
 
 static struct inode_operations proc_virtnet_dir_inode_operations = {
-	.getattr =	proc_virtnet_getattr,
+	.getattr = 	proc_virtnet_getattr,
 	.lookup =	proc_virtnet_lookup,
 };
 

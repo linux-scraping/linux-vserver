@@ -876,10 +876,6 @@ static void hid_output_field(struct hid_field *field, __u8 *data)
 	unsigned size = field->report_size;
 	unsigned n;
 
-	/* make sure the unused bits in the last byte are zeros */
-	if (count > 0 && size > 0)
-		data[(count*size-1)/8] = 0;
-
 	for (n = 0; n < count; n++) {
 		if (field->logical_minimum < 0)	/* signed values */
 			implement(data, offset + n * size, size, s32ton(field->value[n], size));
@@ -975,7 +971,7 @@ int hid_input_report(struct hid_device *hid, int type, u8 *data, int size, int i
 
 	if (size < rsize) {
 		dbg("report %d is too short, (%d < %d)", report->id, size, rsize);
-		return -1;
+		memset(data + size, 0, rsize - size);
 	}
 
 	if ((hid->claimed & HID_CLAIMED_HIDDEV) && hid->hiddev_report_event)

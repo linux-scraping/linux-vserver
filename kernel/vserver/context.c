@@ -642,7 +642,7 @@ static int vx_openfd_task(struct task_struct *tsk)
 }
 
 
-/*	for *space compatibility */
+/* 	for *space compatibility */
 
 asmlinkage long sys_unshare(unsigned long);
 
