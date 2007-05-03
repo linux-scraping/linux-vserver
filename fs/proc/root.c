@@ -22,10 +22,6 @@
 #include "internal.h"
 
 struct proc_dir_entry *proc_net, *proc_net_stat, *proc_bus, *proc_root_fs, *proc_root_driver;
-
-#ifdef CONFIG_SYSCTL
-struct proc_dir_entry *proc_sys_root;
-#endif
 struct proc_dir_entry *proc_virtual;
 
 extern void proc_vx_init(void);
@@ -74,13 +70,6 @@ void __init proc_root_init(void)
 #ifdef CONFIG_SYSVIPC
 	proc_mkdir("sysvipc", NULL);
 #endif
-#ifdef CONFIG_SYSCTL
-	proc_sys_root = proc_mkdir("sys", NULL);
-#endif
-#if defined(CONFIG_BINFMT_MISC) || defined(CONFIG_BINFMT_MISC_MODULE)
-	proc_mkdir("sys/fs", NULL);
-	proc_mkdir("sys/fs/binfmt_misc", NULL);
-#endif
 	proc_root_fs = proc_mkdir("fs", NULL);
 	proc_root_driver = proc_mkdir("driver", NULL);
 	proc_mkdir("fs/nfsd", NULL); /* somewhere for the nfsd filesystem to be mounted */
@@ -94,6 +83,7 @@ void __init proc_root_init(void)
 #endif
 	proc_bus = proc_mkdir("bus", NULL);
 	proc_vx_init();
+	proc_sys_init();
 }
 
 static int proc_root_getattr(struct vfsmount *mnt, struct dentry *dentry, struct kstat *stat
@@ -140,7 +130,7 @@ static int proc_root_readdir(struct file * filp,
  * <pid> directories. Thus we don't use the generic
  * directory handling functions for that..
  */
-static struct file_operations proc_root_operations = {
+static const struct file_operations proc_root_operations = {
 	.read		 = generic_read_dir,
 	.readdir	 = proc_root_readdir,
 };
@@ -148,7 +138,7 @@ static struct file_operations proc_root_operations = {
 /*
  * proc root can do almost nothing..
  */
-static struct inode_operations proc_root_inode_operations = {
+static const struct inode_operations proc_root_inode_operations = {
 	.lookup		= proc_root_lookup,
 	.getattr	= proc_root_getattr,
 };

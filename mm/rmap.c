@@ -184,7 +184,7 @@ void __init anon_vma_init(void)
  */
 static struct anon_vma *page_lock_anon_vma(struct page *page)
 {
-	struct anon_vma *anon_vma = NULL;
+	struct anon_vma *anon_vma;
 	unsigned long anon_mapping;
 
 	rcu_read_lock();
@@ -196,9 +196,16 @@ static struct anon_vma *page_lock_anon_vma(struct page *page)
 
 	anon_vma = (struct anon_vma *) (anon_mapping - PAGE_MAPPING_ANON);
 	spin_lock(&anon_vma->lock);
+	return anon_vma;
 out:
 	rcu_read_unlock();
-	return anon_vma;
+	return NULL;
+}
+
+static void page_unlock_anon_vma(struct anon_vma *anon_vma)
+{
+	spin_unlock(&anon_vma->lock);
+	rcu_read_unlock();
 }
 
 /*
@@ -334,7 +341,8 @@ static int page_referenced_anon(struct page *page)
 		if (!mapcount)
 			break;
 	}
-	spin_unlock(&anon_vma->lock);
+
+	page_unlock_anon_vma(anon_vma);
 	return referenced;
 }
 
@@ -491,9 +499,9 @@ int page_mkclean(struct page *page)
 		struct address_space *mapping = page_mapping(page);
 		if (mapping)
 			ret = page_mkclean_file(mapping, page);
+		if (page_test_and_clear_dirty(page))
+			ret = 1;
 	}
-	if (page_test_and_clear_dirty(page))
-		ret = 1;
 
 	return ret;
 }
@@ -803,7 +811,8 @@ static int try_to_unmap_anon(struct page *page, int migration)
 		if (ret == SWAP_FAIL || !page_mapped(page))
 			break;
 	}
-	spin_unlock(&anon_vma->lock);
+
+	page_unlock_anon_vma(anon_vma);
 	return ret;
 }
 

@@ -59,7 +59,7 @@ static ctl_table vserver_table[];
 void vserver_register_sysctl(void)
 {
 	if (!vserver_table_header) {
-		vserver_table_header = register_sysctl_table(vserver_table, 1);
+		vserver_table_header = register_sysctl_table(vserver_table);
 	}
 
 }

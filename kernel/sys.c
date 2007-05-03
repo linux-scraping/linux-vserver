@@ -216,7 +216,7 @@ EXPORT_SYMBOL_GPL(atomic_notifier_chain_unregister);
  *	This routine uses RCU to synchronize with changes to the chain.
  *
  *	If the return value of the notifier can be and'ed
- *	with %NOTIFY_STOP_MASK then atomic_notifier_call_chain
+ *	with %NOTIFY_STOP_MASK then atomic_notifier_call_chain()
  *	will return immediately, with the return value of
  *	the notifier function which halted execution.
  *	Otherwise the return value is the return value
@@ -314,7 +314,7 @@ EXPORT_SYMBOL_GPL(blocking_notifier_chain_unregister);
  *	run in a process context, so they are allowed to block.
  *
  *	If the return value of the notifier can be and'ed
- *	with %NOTIFY_STOP_MASK then blocking_notifier_call_chain
+ *	with %NOTIFY_STOP_MASK then blocking_notifier_call_chain()
  *	will return immediately, with the return value of
  *	the notifier function which halted execution.
  *	Otherwise the return value is the return value
@@ -394,7 +394,7 @@ EXPORT_SYMBOL_GPL(raw_notifier_chain_unregister);
  *	All locking must be provided by the caller.
  *
  *	If the return value of the notifier can be and'ed
- *	with %NOTIFY_STOP_MASK then raw_notifier_call_chain
+ *	with %NOTIFY_STOP_MASK then raw_notifier_call_chain()
  *	will return immediately, with the return value of
  *	the notifier function which halted execution.
  *	Otherwise the return value is the return value
@@ -488,7 +488,7 @@ EXPORT_SYMBOL_GPL(srcu_notifier_chain_unregister);
  *	run in a process context, so they are allowed to block.
  *
  *	If the return value of the notifier can be and'ed
- *	with %NOTIFY_STOP_MASK then srcu_notifier_call_chain
+ *	with %NOTIFY_STOP_MASK then srcu_notifier_call_chain()
  *	will return immediately, with the return value of
  *	the notifier function which halted execution.
  *	Otherwise the return value is the return value
@@ -539,7 +539,7 @@ EXPORT_SYMBOL_GPL(srcu_init_notifier_head);
  *	Registers a function with the list of functions
  *	to be called at reboot time.
  *
- *	Currently always returns zero, as blocking_notifier_chain_register
+ *	Currently always returns zero, as blocking_notifier_chain_register()
  *	always returns zero.
  */
  
@@ -600,6 +600,7 @@ asmlinkage long sys_setpriority(int which, int who, int niceval)
 	struct task_struct *g, *p;
 	struct user_struct *user;
 	int error = -EINVAL;
+	struct pid *pgrp;
 
 	if (which > 2 || which < 0)
 		goto out;
@@ -614,20 +615,23 @@ asmlinkage long sys_setpriority(int which, int who, int niceval)
 	read_lock(&tasklist_lock);
 	switch (which) {
 		case PRIO_PROCESS:
-			if (!who)
-				who = current->pid;
-			p = find_task_by_pid(who);
+			if (who)
+				p = find_task_by_pid(who);
+			else
+				p = current;
 			if (p)
 				error = set_one_prio(p, niceval, error);
 			break;
 		case PRIO_PGRP:
-			if (!who)
-				who = process_group(current);
-			do_each_task_pid(who, PIDTYPE_PGID, p) {
+			if (who)
+				pgrp = find_pid(who);
+			else
+				pgrp = task_pgrp(current);
+			do_each_pid_task(pgrp, PIDTYPE_PGID, p) {
 				if (!vx_check(p->xid, VS_ADMIN_P | VS_IDENT))
 					continue;
 				error = set_one_prio(p, niceval, error);
-			} while_each_task_pid(who, PIDTYPE_PGID, p);
+			} while_each_pid_task(pgrp, PIDTYPE_PGID, p);
 			break;
 		case PRIO_USER:
 			user = current->user;
@@ -663,6 +667,7 @@ asmlinkage long sys_getpriority(int which, int who)
 	struct task_struct *g, *p;
 	struct user_struct *user;
 	long niceval, retval = -ESRCH;
+	struct pid *pgrp;
 
 	if (which > 2 || which < 0)
 		return -EINVAL;
@@ -670,9 +675,10 @@ asmlinkage long sys_getpriority(int which, int who)
 	read_lock(&tasklist_lock);
 	switch (which) {
 		case PRIO_PROCESS:
-			if (!who)
-				who = current->pid;
-			p = find_task_by_pid(who);
+			if (who)
+				p = find_task_by_pid(who);
+			else
+				p = current;
 			if (p) {
 				niceval = 20 - task_nice(p);
 				if (niceval > retval)
@@ -680,15 +686,17 @@ asmlinkage long sys_getpriority(int which, int who)
 			}
 			break;
 		case PRIO_PGRP:
-			if (!who)
-				who = process_group(current);
-			do_each_task_pid(who, PIDTYPE_PGID, p) {
+			if (who)
+				pgrp = find_pid(who);
+			else
+				pgrp = task_pgrp(current);
+			do_each_pid_task(pgrp, PIDTYPE_PGID, p) {
 				if (!vx_check(p->xid, VS_ADMIN_P | VS_IDENT))
 					continue;
 				niceval = 20 - task_nice(p);
 				if (niceval > retval)
 					retval = niceval;
-			} while_each_task_pid(who, PIDTYPE_PGID, p);
+			} while_each_pid_task(pgrp, PIDTYPE_PGID, p);
 			break;
 		case PRIO_USER:
 			user = current->user;
@@ -1407,7 +1415,7 @@ asmlinkage long sys_setpgid(pid_t pid, pid_t pgid)
 
 	if (p->real_parent == group_leader) {
 		err = -EPERM;
-		if (process_session(p) != process_session(group_leader))
+		if (task_session(p) != task_session(group_leader))
 			goto out;
 		err = -EACCES;
 		if (p->did_exec)
@@ -1426,7 +1434,7 @@ asmlinkage long sys_setpgid(pid_t pid, pid_t pgid)
 		struct task_struct *g =
 			find_task_by_pid_type(PIDTYPE_PGID, rpgid);
 
-		if (!g || process_session(g) != process_session(group_leader))
+		if (!g || task_session(g) != task_session(group_leader))
 			goto out;
 	}
 
@@ -1529,7 +1537,6 @@ asmlinkage long sys_setsid(void)
 
 	spin_lock(&group_leader->sighand->siglock);
 	group_leader->signal->tty = NULL;
-	group_leader->signal->tty_old_pgrp = 0;
 	spin_unlock(&group_leader->sighand->siglock);
 
 	err = process_group(group_leader);

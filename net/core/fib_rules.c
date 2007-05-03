@@ -143,7 +143,7 @@ int fib_rules_lookup(struct fib_rules_ops *ops, struct flowi *fl,
 		}
 	}
 
-	err = -ENETUNREACH;
+	err = -ESRCH;
 out:
 	rcu_read_unlock();
 
@@ -361,7 +361,7 @@ static int fib_nl_fill_rule(struct sk_buff *skb, struct fib_rule *rule,
 
 	nlh = nlmsg_put(skb, pid, seq, type, sizeof(*frh), flags);
 	if (nlh == NULL)
-		return -1;
+		return -EMSGSIZE;
 
 	frh = nlmsg_data(nlh);
 	frh->table = rule->table;
@@ -389,7 +389,8 @@ static int fib_nl_fill_rule(struct sk_buff *skb, struct fib_rule *rule,
 	return nlmsg_end(skb, nlh);
 
 nla_put_failure:
-	return nlmsg_cancel(skb, nlh);
+	nlmsg_cancel(skb, nlh);
+	return -EMSGSIZE;
 }
 
 int fib_rules_dump(struct sk_buff *skb, struct netlink_callback *cb, int family)
@@ -403,7 +404,7 @@ int fib_rules_dump(struct sk_buff *skb, struct netlink_callback *cb, int family)
 		return -EAFNOSUPPORT;
 
 	rcu_read_lock();
-	list_for_each_entry(rule, ops->rules_list, list) {
+	list_for_each_entry_rcu(rule, ops->rules_list, list) {
 		if (idx < cb->args[0])
 			goto skip;
 
@@ -435,9 +436,12 @@ static void notify_rule_change(int event, struct fib_rule *rule,
 		goto errout;
 
 	err = fib_nl_fill_rule(skb, rule, pid, nlh->nlmsg_seq, event, 0, ops);
-	/* failure implies BUG in fib_rule_nlmsg_size() */
-	BUG_ON(err < 0);
-
+	if (err < 0) {
+		/* -EMSGSIZE implies BUG in fib_rule_nlmsg_size() */
+		WARN_ON(err == -EMSGSIZE);
+		kfree_skb(skb);
+		goto errout;
+	}
 	err = rtnl_notify(skb, pid, ops->nlgroup, nlh, GFP_KERNEL);
 errout:
 	if (err < 0)

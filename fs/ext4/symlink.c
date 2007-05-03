@@ -30,7 +30,7 @@ static void * ext4_follow_link(struct dentry *dentry, struct nameidata *nd)
 	return NULL;
 }
 
-struct inode_operations ext4_symlink_inode_operations = {
+const struct inode_operations ext4_symlink_inode_operations = {
 	.readlink	= generic_readlink,
 	.follow_link	= page_follow_link_light,
 	.put_link	= page_put_link,
@@ -43,7 +43,7 @@ struct inode_operations ext4_symlink_inode_operations = {
 	.sync_flags	= ext4_sync_flags,
 };
 
-struct inode_operations ext4_fast_symlink_inode_operations = {
+const struct inode_operations ext4_fast_symlink_inode_operations = {
 	.readlink	= generic_readlink,
 	.follow_link	= ext4_follow_link,
 #ifdef CONFIG_EXT4DEV_FS_XATTR

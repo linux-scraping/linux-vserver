@@ -1962,9 +1962,9 @@ int reiserfs_global_version_in_proc(char *buffer, char **start, off_t offset,
 #endif
 
 /* dir.c */
-extern struct inode_operations reiserfs_dir_inode_operations;
-extern struct inode_operations reiserfs_symlink_inode_operations;
-extern struct inode_operations reiserfs_special_inode_operations;
+extern const struct inode_operations reiserfs_dir_inode_operations;
+extern const struct inode_operations reiserfs_symlink_inode_operations;
+extern const struct inode_operations reiserfs_special_inode_operations;
 extern const struct file_operations reiserfs_dir_operations;
 
 /* tail_conversion.c */
@@ -1976,7 +1976,7 @@ int indirect2direct(struct reiserfs_transaction_handle *, struct inode *,
 void reiserfs_unmap_buffer(struct buffer_head *);
 
 /* file.c */
-extern struct inode_operations reiserfs_file_inode_operations;
+extern const struct inode_operations reiserfs_file_inode_operations;
 extern const struct file_operations reiserfs_file_operations;
 extern const struct address_space_operations reiserfs_address_space_operations;
 

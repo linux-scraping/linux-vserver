@@ -735,6 +735,15 @@ static int cdrom_decode_status(ide_drive_t *drive, int good_stat, int *stat_ret)
 			cdrom_saw_media_change (drive);
 			/*printk("%s: media changed\n",drive->name);*/
 			return 0;
+ 		} else if ((sense_key == ILLEGAL_REQUEST) &&
+ 			   (rq->cmd[0] == GPCMD_START_STOP_UNIT)) {
+ 			/*
+ 			 * Don't print error message for this condition--
+ 			 * SFF8090i indicates that 5/24/00 is the correct
+ 			 * response to a request to close the tray if the
+ 			 * drive doesn't have that capability.
+ 			 * cdrom_log_sense() knows this!
+ 			 */
 		} else if (!(rq->cmd_flags & REQ_QUIET)) {
 			/* Otherwise, print an error. */
 			ide_dump_status(drive, "packet command error", stat);
@@ -1104,7 +1113,7 @@ static ide_startstop_t cdrom_read_intr (ide_drive_t *drive)
 	if (dma) {
 		info->dma = 0;
 		if ((dma_error = HWIF(drive)->ide_dma_end(drive)))
-			__ide_dma_off(drive);
+			ide_dma_off(drive);
 	}
 
 	if (cdrom_decode_status(drive, 0, &stat))
@@ -1700,7 +1709,7 @@ static ide_startstop_t cdrom_newpc_intr(ide_drive_t *drive)
 	if (dma) {
 		if (dma_error) {
 			printk(KERN_ERR "ide-cd: dma error\n");
-			__ide_dma_off(drive);
+			ide_dma_off(drive);
 			return ide_error(drive, "dma error", stat);
 		}
 
@@ -1826,7 +1835,7 @@ static ide_startstop_t cdrom_write_intr(ide_drive_t *drive)
 		info->dma = 0;
 		if ((dma_error = HWIF(drive)->ide_dma_end(drive))) {
 			printk(KERN_ERR "ide-cd: write dma error\n");
-			__ide_dma_off(drive);
+			ide_dma_off(drive);
 		}
 	}
 
@@ -3255,14 +3264,6 @@ int ide_cdrom_setup (ide_drive_t *drive)
 	if (drive->autotune == IDE_TUNE_DEFAULT ||
 	    drive->autotune == IDE_TUNE_AUTO)
 		drive->dsc_overlap = (drive->next != drive);
-#if 0
-	drive->dsc_overlap = (HWIF(drive)->no_dsc) ? 0 : 1;
-	if (HWIF(drive)->no_dsc) {
-		printk(KERN_INFO "ide-cd: %s: disabling DSC overlap\n",
-			drive->name);
-		drive->dsc_overlap = 0;
-	}
-#endif
 
 	if (ide_cdrom_register(drive, nslots)) {
 		printk (KERN_ERR "%s: ide_cdrom_setup failed to register device with the cdrom driver.\n", drive->name);
@@ -3361,21 +3362,16 @@ static int idecd_open(struct inode * inode, struct file * file)
 {
 	struct gendisk *disk = inode->i_bdev->bd_disk;
 	struct cdrom_info *info;
-	ide_drive_t *drive;
 	int rc = -ENOMEM;
 
 	if (!(info = ide_cd_get(disk)))
 		return -ENXIO;
 
-	drive = info->drive;
-
-	drive->usage++;
-
 	if (!info->buffer)
-		info->buffer = kmalloc(SECTOR_BUFFER_SIZE,
-					GFP_KERNEL|__GFP_REPEAT);
-        if (!info->buffer || (rc = cdrom_open(&info->devinfo, inode, file)))
-		drive->usage--;
+		info->buffer = kmalloc(SECTOR_BUFFER_SIZE, GFP_KERNEL|__GFP_REPEAT);
+
+	if (info->buffer)
+		rc = cdrom_open(&info->devinfo, inode, file);
 
 	if (rc < 0)
 		ide_cd_put(info);
@@ -3387,10 +3383,8 @@ static int idecd_release(struct inode * inode, struct file * file)
 {
 	struct gendisk *disk = inode->i_bdev->bd_disk;
 	struct cdrom_info *info = ide_cd_g(disk);
-	ide_drive_t *drive = info->drive;
 
 	cdrom_release (&info->devinfo, file);
-	drive->usage--;
 
 	ide_cd_put(info);
 
