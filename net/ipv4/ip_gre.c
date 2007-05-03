@@ -1,5 +1,5 @@
 /*
- *	Linux NET3:	GRE over IP protocol decoder. 
+ *	Linux NET3:	GRE over IP protocol decoder.
  *
  *	Authors: Alexey Kuznetsov (kuznet@ms2.inr.ac.ru)
  *
@@ -13,7 +13,6 @@
 #include <linux/capability.h>
 #include <linux/module.h>
 #include <linux/types.h>
-#include <linux/sched.h>
 #include <linux/kernel.h>
 #include <asm/uaccess.h>
 #include <linux/skbuff.h>
@@ -63,7 +62,7 @@
    solution, but it supposes maintaing new variable in ALL
    skb, even if no tunneling is used.
 
-   Current solution: t->recursion lock breaks dead loops. It looks 
+   Current solution: t->recursion lock breaks dead loops. It looks
    like dev->tbusy flag, but I preferred new variable, because
    the semantics is different. One day, when hard_start_xmit
    will be multithreaded we will have to use skb->encapsulation.
@@ -144,7 +143,7 @@ static struct net_device *ipgre_fb_tunnel_dev;
  */
 
 #define HASH_SIZE  16
-#define HASH(addr) ((addr^(addr>>4))&0xF)
+#define HASH(addr) (((__force u32)addr^((__force u32)addr>>4))&0xF)
 
 static struct ip_tunnel *tunnels[4][HASH_SIZE];
 
@@ -157,7 +156,7 @@ static DEFINE_RWLOCK(ipgre_lock);
 
 /* Given src, dst and key, find appropriate for input tunnel. */
 
-static struct ip_tunnel * ipgre_tunnel_lookup(u32 remote, u32 local, u32 key)
+static struct ip_tunnel * ipgre_tunnel_lookup(__be32 remote, __be32 local, __be32 key)
 {
 	unsigned h0 = HASH(remote);
 	unsigned h1 = HASH(key);
@@ -194,9 +193,9 @@ static struct ip_tunnel * ipgre_tunnel_lookup(u32 remote, u32 local, u32 key)
 
 static struct ip_tunnel **ipgre_bucket(struct ip_tunnel *t)
 {
-	u32 remote = t->parms.iph.daddr;
-	u32 local = t->parms.iph.saddr;
-	u32 key = t->parms.i_key;
+	__be32 remote = t->parms.iph.daddr;
+	__be32 local = t->parms.iph.saddr;
+	__be32 key = t->parms.i_key;
 	unsigned h = HASH(key);
 	int prio = 0;
 
@@ -236,9 +235,9 @@ static void ipgre_tunnel_unlink(struct ip_tunnel *t)
 
 static struct ip_tunnel * ipgre_tunnel_locate(struct ip_tunnel_parm *parms, int create)
 {
-	u32 remote = parms->iph.daddr;
-	u32 local = parms->iph.saddr;
-	u32 key = parms->i_key;
+	__be32 remote = parms->iph.daddr;
+	__be32 local = parms->iph.saddr;
+	__be32 key = parms->i_key;
 	struct ip_tunnel *t, **tp, *nt;
 	struct net_device *dev;
 	unsigned h = HASH(key);
@@ -319,12 +318,12 @@ static void ipgre_err(struct sk_buff *skb, u32 info)
  */
 
 	struct iphdr *iph = (struct iphdr*)skb->data;
-	u16	     *p = (u16*)(skb->data+(iph->ihl<<2));
+	__be16	     *p = (__be16*)(skb->data+(iph->ihl<<2));
 	int grehlen = (iph->ihl<<2) + 4;
 	int type = skb->h.icmph->type;
 	int code = skb->h.icmph->code;
 	struct ip_tunnel *t;
-	u16 flags;
+	__be16 flags;
 
 	flags = p[0];
 	if (flags&(GRE_CSUM|GRE_KEY|GRE_SEQ|GRE_ROUTING|GRE_VERSION)) {
@@ -370,7 +369,7 @@ static void ipgre_err(struct sk_buff *skb, u32 info)
 	}
 
 	read_lock(&ipgre_lock);
-	t = ipgre_tunnel_lookup(iph->daddr, iph->saddr, (flags&GRE_KEY) ? *(((u32*)p) + (grehlen>>2) - 1) : 0);
+	t = ipgre_tunnel_lookup(iph->daddr, iph->saddr, (flags&GRE_KEY) ? *(((__be32*)p) + (grehlen>>2) - 1) : 0);
 	if (t == NULL || t->parms.iph.daddr == 0 || MULTICAST(t->parms.iph.daddr))
 		goto out;
 
@@ -388,14 +387,14 @@ out:
 #else
 	struct iphdr *iph = (struct iphdr*)dp;
 	struct iphdr *eiph;
-	u16	     *p = (u16*)(dp+(iph->ihl<<2));
+	__be16	     *p = (__be16*)(dp+(iph->ihl<<2));
 	int type = skb->h.icmph->type;
 	int code = skb->h.icmph->code;
 	int rel_type = 0;
 	int rel_code = 0;
 	__be32 rel_info = 0;
 	__u32 n = 0;
-	u16 flags;
+	__be16 flags;
 	int grehlen = (iph->ihl<<2) + 4;
 	struct sk_buff *skb2;
 	struct flowi fl;
@@ -556,9 +555,9 @@ static int ipgre_rcv(struct sk_buff *skb)
 {
 	struct iphdr *iph;
 	u8     *h;
-	u16    flags;
-	u16    csum = 0;
-	u32    key = 0;
+	__be16    flags;
+	__sum16   csum = 0;
+	__be32 key = 0;
 	u32    seqno = 0;
 	struct ip_tunnel *tunnel;
 	int    offset = 4;
@@ -568,7 +567,7 @@ static int ipgre_rcv(struct sk_buff *skb)
 
 	iph = skb->nh.iph;
 	h = skb->data;
-	flags = *(u16*)h;
+	flags = *(__be16*)h;
 
 	if (flags&(GRE_CSUM|GRE_KEY|GRE_ROUTING|GRE_SEQ|GRE_VERSION)) {
 		/* - Version must be 0.
@@ -580,7 +579,7 @@ static int ipgre_rcv(struct sk_buff *skb)
 		if (flags&GRE_CSUM) {
 			switch (skb->ip_summed) {
 			case CHECKSUM_COMPLETE:
-				csum = (u16)csum_fold(skb->csum);
+				csum = csum_fold(skb->csum);
 				if (!csum)
 					break;
 				/* fall through */
@@ -592,11 +591,11 @@ static int ipgre_rcv(struct sk_buff *skb)
 			offset += 4;
 		}
 		if (flags&GRE_KEY) {
-			key = *(u32*)(h + offset);
+			key = *(__be32*)(h + offset);
 			offset += 4;
 		}
 		if (flags&GRE_SEQ) {
-			seqno = ntohl(*(u32*)(h + offset));
+			seqno = ntohl(*(__be32*)(h + offset));
 			offset += 4;
 		}
 	}
@@ -605,7 +604,7 @@ static int ipgre_rcv(struct sk_buff *skb)
 	if ((tunnel = ipgre_tunnel_lookup(iph->saddr, iph->daddr, key)) != NULL) {
 		secpath_reset(skb);
 
-		skb->protocol = *(u16*)(h + 2);
+		skb->protocol = *(__be16*)(h + 2);
 		/* WCCP version 1 and 2 protocol decoding.
 		 * - Change protocol to IP
 		 * - When dealing with WCCPv2, Skip extra 4 bytes in GRE header
@@ -613,7 +612,7 @@ static int ipgre_rcv(struct sk_buff *skb)
 		if (flags == 0 &&
 		    skb->protocol == htons(ETH_P_WCCP)) {
 			skb->protocol = htons(ETH_P_IP);
-			if ((*(h + offset) & 0xF0) != 0x40) 
+			if ((*(h + offset) & 0xF0) != 0x40)
 				offset += 4;
 		}
 
@@ -673,13 +672,13 @@ static int ipgre_tunnel_xmit(struct sk_buff *skb, struct net_device *dev)
 	struct iphdr  *old_iph = skb->nh.iph;
 	struct iphdr  *tiph;
 	u8     tos;
-	u16    df;
+	__be16 df;
 	struct rtable *rt;     			/* Route to the other host */
 	struct net_device *tdev;			/* Device to other host */
 	struct iphdr  *iph;			/* Our new IP header */
 	int    max_headroom;			/* The extra header space needed */
 	int    gre_hlen;
-	u32    dst;
+	__be32 dst;
 	int    mtu;
 
 	if (tunnel->recursion++) {
@@ -816,7 +815,7 @@ static int ipgre_tunnel_xmit(struct sk_buff *skb, struct net_device *dev)
 		struct sk_buff *new_skb = skb_realloc_headroom(skb, max_headroom);
 		if (!new_skb) {
 			ip_rt_put(rt);
-  			stats->tx_dropped++;
+			stats->tx_dropped++;
 			dev_kfree_skb(skb);
 			tunnel->recursion--;
 			return 0;
@@ -860,11 +859,11 @@ static int ipgre_tunnel_xmit(struct sk_buff *skb, struct net_device *dev)
 			iph->ttl = dst_metric(&rt->u.dst, RTAX_HOPLIMIT);
 	}
 
-	((u16*)(iph+1))[0] = tunnel->parms.o_flags;
-	((u16*)(iph+1))[1] = skb->protocol;
+	((__be16*)(iph+1))[0] = tunnel->parms.o_flags;
+	((__be16*)(iph+1))[1] = skb->protocol;
 
 	if (tunnel->parms.o_flags&(GRE_KEY|GRE_CSUM|GRE_SEQ)) {
-		u32 *ptr = (u32*)(((u8*)iph) + tunnel->hlen - 4);
+		__be32 *ptr = (__be32*)(((u8*)iph) + tunnel->hlen - 4);
 
 		if (tunnel->parms.o_flags&GRE_SEQ) {
 			++tunnel->o_seqno;
@@ -877,7 +876,7 @@ static int ipgre_tunnel_xmit(struct sk_buff *skb, struct net_device *dev)
 		}
 		if (tunnel->parms.o_flags&GRE_CSUM) {
 			*ptr = 0;
-			*(__u16*)ptr = ip_compute_csum((void*)(iph+1), skb->len - sizeof(struct iphdr));
+			*(__sum16*)ptr = ip_compute_csum((void*)(iph+1), skb->len - sizeof(struct iphdr));
 		}
 	}
 
@@ -1008,7 +1007,8 @@ ipgre_tunnel_ioctl (struct net_device *dev, struct ifreq *ifr, int cmd)
 				goto done;
 			dev = t->dev;
 		}
-		err = unregister_netdevice(dev);
+		unregister_netdevice(dev);
+		err = 0;
 		break;
 
 	default:
@@ -1043,7 +1043,7 @@ static int ipgre_tunnel_change_mtu(struct net_device *dev, int new_mtu)
    so that I had to set ARPHRD_IPGRE to a random value.
    I have an impression, that Cisco could make something similar,
    but this feature is apparently missing in IOS<=11.2(8).
-   
+
    I set up 10.66.66/24 and fec0:6666:6666::0/96 as virtual networks
    with broadcast 224.66.66.66. If you have access to mbone, play with me :-)
 
@@ -1068,16 +1068,16 @@ static int ipgre_header(struct sk_buff *skb, struct net_device *dev, unsigned sh
 {
 	struct ip_tunnel *t = netdev_priv(dev);
 	struct iphdr *iph = (struct iphdr *)skb_push(skb, t->hlen);
-	u16 *p = (u16*)(iph+1);
+	__be16 *p = (__be16*)(iph+1);
 
 	memcpy(iph, &t->parms.iph, sizeof(struct iphdr));
 	p[0]		= t->parms.o_flags;
 	p[1]		= htons(type);
 
 	/*
-	 *	Set the source hardware address. 
+	 *	Set the source hardware address.
 	 */
-	 
+
 	if (saddr)
 		memcpy(&iph->saddr, saddr, 4);
 
@@ -1087,7 +1087,7 @@ static int ipgre_header(struct sk_buff *skb, struct net_device *dev, unsigned sh
 	}
 	if (iph->daddr && !MULTICAST(iph->daddr))
 		return t->hlen;
-	
+
 	return -t->hlen;
 }
 

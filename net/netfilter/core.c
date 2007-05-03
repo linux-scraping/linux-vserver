@@ -1,4 +1,4 @@
-/* netfilter.c: look after the filters for various protocols. 
+/* netfilter.c: look after the filters for various protocols.
  * Heavily influenced by the old firewall.c by David Bonn and Alan Cox.
  *
  * Thanks to Rob `CmdrTaco' Malda for not influencing this code in any
@@ -22,29 +22,34 @@
 #include <linux/netdevice.h>
 #include <linux/inetdevice.h>
 #include <linux/proc_fs.h>
+#include <linux/mutex.h>
 #include <net/sock.h>
 
 #include "nf_internals.h"
 
-static DEFINE_SPINLOCK(afinfo_lock);
+static DEFINE_MUTEX(afinfo_mutex);
 
-struct nf_afinfo *nf_afinfo[NPROTO];
+struct nf_afinfo *nf_afinfo[NPROTO] __read_mostly;
 EXPORT_SYMBOL(nf_afinfo);
 
 int nf_register_afinfo(struct nf_afinfo *afinfo)
 {
-	spin_lock(&afinfo_lock);
+	int err;
+
+	err = mutex_lock_interruptible(&afinfo_mutex);
+	if (err < 0)
+		return err;
 	rcu_assign_pointer(nf_afinfo[afinfo->family], afinfo);
-	spin_unlock(&afinfo_lock);
+	mutex_unlock(&afinfo_mutex);
 	return 0;
 }
 EXPORT_SYMBOL_GPL(nf_register_afinfo);
 
 void nf_unregister_afinfo(struct nf_afinfo *afinfo)
 {
-	spin_lock(&afinfo_lock);
+	mutex_lock(&afinfo_mutex);
 	rcu_assign_pointer(nf_afinfo[afinfo->family], NULL);
-	spin_unlock(&afinfo_lock);
+	mutex_unlock(&afinfo_mutex);
 	synchronize_rcu();
 }
 EXPORT_SYMBOL_GPL(nf_unregister_afinfo);
@@ -54,32 +59,33 @@ EXPORT_SYMBOL_GPL(nf_unregister_afinfo);
  * of skbuffs queued for userspace, and not deregister a hook unless
  * this is zero, but that sucks.  Now, we simply check when the
  * packets come back: if the hook is gone, the packet is discarded. */
-struct list_head nf_hooks[NPROTO][NF_MAX_HOOKS];
+struct list_head nf_hooks[NPROTO][NF_MAX_HOOKS] __read_mostly;
 EXPORT_SYMBOL(nf_hooks);
-static DEFINE_SPINLOCK(nf_hook_lock);
+static DEFINE_MUTEX(nf_hook_mutex);
 
 int nf_register_hook(struct nf_hook_ops *reg)
 {
 	struct list_head *i;
+	int err;
 
-	spin_lock_bh(&nf_hook_lock);
+	err = mutex_lock_interruptible(&nf_hook_mutex);
+	if (err < 0)
+		return err;
 	list_for_each(i, &nf_hooks[reg->pf][reg->hooknum]) {
 		if (reg->priority < ((struct nf_hook_ops *)i)->priority)
 			break;
 	}
 	list_add_rcu(&reg->list, i->prev);
-	spin_unlock_bh(&nf_hook_lock);
-
-	synchronize_net();
+	mutex_unlock(&nf_hook_mutex);
 	return 0;
 }
 EXPORT_SYMBOL(nf_register_hook);
 
 void nf_unregister_hook(struct nf_hook_ops *reg)
 {
-	spin_lock_bh(&nf_hook_lock);
+	mutex_lock(&nf_hook_mutex);
 	list_del_rcu(&reg->list);
-	spin_unlock_bh(&nf_hook_lock);
+	mutex_unlock(&nf_hook_mutex);
 
 	synchronize_net();
 }
@@ -135,14 +141,14 @@ unsigned int nf_iterate(struct list_head *head,
 			continue;
 
 		/* Optimization: we don't need to hold module
-                   reference here, since function can't sleep. --RR */
+		   reference here, since function can't sleep. --RR */
 		verdict = elem->hook(hook, skb, indev, outdev, okfn);
 		if (verdict != NF_ACCEPT) {
 #ifdef CONFIG_NETFILTER_DEBUG
 			if (unlikely((verdict & NF_VERDICT_MASK)
 							> NF_MAX_VERDICT)) {
 				NFDEBUG("Evil return from %p(%u).\n",
-				        elem->hook, hook);
+					elem->hook, hook);
 				continue;
 			}
 #endif
@@ -222,28 +228,21 @@ copy_skb:
 }
 EXPORT_SYMBOL(skb_make_writable);
 
-u_int16_t nf_csum_update(u_int32_t oldval, u_int32_t newval, u_int32_t csum)
+void nf_proto_csum_replace4(__sum16 *sum, struct sk_buff *skb,
+			    __be32 from, __be32 to, int pseudohdr)
 {
-	u_int32_t diff[] = { oldval, newval };
-
-	return csum_fold(csum_partial((char *)diff, sizeof(diff), ~csum));
-}
-EXPORT_SYMBOL(nf_csum_update);
-
-u_int16_t nf_proto_csum_update(struct sk_buff *skb,
-			       u_int32_t oldval, u_int32_t newval,
-			       u_int16_t csum, int pseudohdr)
-{
+	__be32 diff[] = { ~from, to };
 	if (skb->ip_summed != CHECKSUM_PARTIAL) {
-		csum = nf_csum_update(oldval, newval, csum);
+		*sum = csum_fold(csum_partial((char *)diff, sizeof(diff),
+				~csum_unfold(*sum)));
 		if (skb->ip_summed == CHECKSUM_COMPLETE && pseudohdr)
-			skb->csum = nf_csum_update(oldval, newval, skb->csum);
+			skb->csum = ~csum_partial((char *)diff, sizeof(diff),
+						~skb->csum);
 	} else if (pseudohdr)
-		csum = ~nf_csum_update(oldval, newval, ~csum);
-
-	return csum;
+		*sum = ~csum_fold(csum_partial((char *)diff, sizeof(diff),
+				csum_unfold(*sum)));
 }
-EXPORT_SYMBOL(nf_proto_csum_update);
+EXPORT_SYMBOL(nf_proto_csum_replace4);
 
 /* This does not belong here, but locally generated errors need it if connection
    tracking in use: without this, connection may not be in hash table, and hence
@@ -255,9 +254,12 @@ void nf_ct_attach(struct sk_buff *new, struct sk_buff *skb)
 {
 	void (*attach)(struct sk_buff *, struct sk_buff *);
 
-	if (skb->nfct && (attach = ip_ct_attach) != NULL) {
-		mb(); /* Just to be sure: must be read before executing this */
-		attach(new, skb);
+	if (skb->nfct) {
+		rcu_read_lock();
+		attach = rcu_dereference(ip_ct_attach);
+		if (attach)
+			attach(new, skb);
+		rcu_read_unlock();
 	}
 }
 EXPORT_SYMBOL(nf_ct_attach);

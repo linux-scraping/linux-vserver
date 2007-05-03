@@ -52,7 +52,7 @@ ext3_file_write(struct kiocb *iocb, const struct iovec *iov,
 		unsigned long nr_segs, loff_t pos)
 {
 	struct file *file = iocb->ki_filp;
-	struct inode *inode = file->f_dentry->d_inode;
+	struct inode *inode = file->f_path.dentry->d_inode;
 	ssize_t ret;
 	int err;
 
@@ -126,7 +126,7 @@ const struct file_operations ext3_file_operations = {
 	.splice_write	= generic_file_splice_write,
 };
 
-struct inode_operations ext3_file_inode_operations = {
+const struct inode_operations ext3_file_inode_operations = {
 	.truncate	= ext3_truncate,
 	.setattr	= ext3_setattr,
 #ifdef CONFIG_EXT3_FS_XATTR

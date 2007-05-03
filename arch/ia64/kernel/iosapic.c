@@ -288,6 +288,27 @@ nop (unsigned int irq)
 	/* do nothing... */
 }
 
+
+#ifdef CONFIG_KEXEC
+void
+kexec_disable_iosapic(void)
+{
+	struct iosapic_intr_info *info;
+	struct iosapic_rte_info *rte;
+	u8 vec = 0;
+	for (info = iosapic_intr_info; info <
+			iosapic_intr_info + IA64_NUM_VECTORS; ++info, ++vec) {
+		list_for_each_entry(rte, &info->rtes,
+				rte_list) {
+			iosapic_write(rte->addr,
+					IOSAPIC_RTE_LOW(rte->rte_index),
+					IOSAPIC_MASK|vec);
+			iosapic_eoi(rte->addr, vec);
+		}
+	}
+}
+#endif
+
 static void
 mask_irq (unsigned int irq)
 {
@@ -425,7 +446,7 @@ iosapic_end_level_irq (unsigned int irq)
 #define iosapic_disable_level_irq	mask_irq
 #define iosapic_ack_level_irq		nop
 
-struct hw_interrupt_type irq_type_iosapic_level = {
+struct irq_chip irq_type_iosapic_level = {
 	.name =		"IO-SAPIC-level",
 	.startup =	iosapic_startup_level_irq,
 	.shutdown =	iosapic_shutdown_level_irq,
@@ -433,6 +454,8 @@ struct hw_interrupt_type irq_type_iosapic_level = {
 	.disable =	iosapic_disable_level_irq,
 	.ack =		iosapic_ack_level_irq,
 	.end =		iosapic_end_level_irq,
+	.mask =		mask_irq,
+	.unmask =	unmask_irq,
 	.set_affinity =	iosapic_set_affinity
 };
 
@@ -472,7 +495,7 @@ iosapic_ack_edge_irq (unsigned int irq)
 #define iosapic_disable_edge_irq	nop
 #define iosapic_end_edge_irq		nop
 
-struct hw_interrupt_type irq_type_iosapic_edge = {
+struct irq_chip irq_type_iosapic_edge = {
 	.name =		"IO-SAPIC-edge",
 	.startup =	iosapic_startup_edge_irq,
 	.shutdown =	iosapic_disable_edge_irq,
@@ -480,6 +503,8 @@ struct hw_interrupt_type irq_type_iosapic_edge = {
 	.disable =	iosapic_disable_edge_irq,
 	.ack =		iosapic_ack_edge_irq,
 	.end =		iosapic_end_edge_irq,
+	.mask =		mask_irq,
+	.unmask =	unmask_irq,
 	.set_affinity =	iosapic_set_affinity
 };
 
@@ -903,6 +928,11 @@ iosapic_unregister_intr (unsigned int gsi)
 
 			/* Clear the interrupt controller descriptor */
 			idesc->chip = &no_irq_type;
+
+#ifdef CONFIG_SMP
+			/* Clear affinity */
+			cpus_setall(idesc->affinity);
+#endif
 
 			/* Clear the interrupt information */
 			memset(&iosapic_intr_info[vector], 0,

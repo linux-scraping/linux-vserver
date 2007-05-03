@@ -75,7 +75,7 @@ extern irqreturn_t xmon_irq(int, void *);
 extern unsigned long loops_per_jiffy;
 
 /* To be replaced by RTAS when available */
-static unsigned int *briq_SPOR;
+static unsigned int __iomem *briq_SPOR;
 
 #ifdef CONFIG_SMP
 extern struct smp_ops_t chrp_smp_ops;
@@ -267,7 +267,7 @@ void __init chrp_setup_arch(void)
 	} else if (machine && strncmp(machine, "TotalImpact,BRIQ-1", 18) == 0) {
 		_chrp_type = _CHRP_briq;
 		/* Map the SPOR register on briq and change the restart hook */
-		briq_SPOR = (unsigned int *)ioremap(0xff0000e8, 4);
+		briq_SPOR = ioremap(0xff0000e8, 4);
 		ppc_md.restart = briq_restart;
 	} else {
 		/* Let's assume it is an IBM chrp if all else fails */
@@ -588,7 +588,6 @@ static int __init chrp_probe(void)
 	ISA_DMA_THRESHOLD = ~0L;
 	DMA_MODE_READ = 0x44;
 	DMA_MODE_WRITE = 0x48;
-	isa_io_base = CHRP_ISA_IO_BASE;		/* default value */
 
 	return 1;
 }
@@ -600,7 +599,6 @@ define_machine(chrp) {
 	.init			= chrp_init2,
 	.show_cpuinfo		= chrp_show_cpuinfo,
 	.init_IRQ		= chrp_init_IRQ,
-	.pcibios_fixup		= chrp_pcibios_fixup,
 	.restart		= rtas_restart,
 	.power_off		= rtas_power_off,
 	.halt			= rtas_halt,

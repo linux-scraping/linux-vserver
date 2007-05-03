@@ -20,6 +20,7 @@
 
 #include <linux/netfilter/x_tables.h>
 #include <linux/netfilter/xt_conntrack.h>
+#include <net/netfilter/nf_conntrack_compat.h>
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Marc Boucher <marc@mbsi.ca>");
@@ -50,10 +51,10 @@ match(const struct sk_buff *skb,
 	if (ct == &ip_conntrack_untracked)
 		statebit = XT_CONNTRACK_STATE_UNTRACKED;
 	else if (ct)
- 		statebit = XT_CONNTRACK_STATE_BIT(ctinfo);
- 	else
- 		statebit = XT_CONNTRACK_STATE_INVALID;
- 
+		statebit = XT_CONNTRACK_STATE_BIT(ctinfo);
+	else
+		statebit = XT_CONNTRACK_STATE_INVALID;
+
 	if (sinfo->flags & XT_CONNTRACK_STATE) {
 		if (ct) {
 			if (test_bit(IPS_SRC_NAT_BIT, &ct->status))
@@ -76,7 +77,7 @@ match(const struct sk_buff *skb,
 	    FWINV(ct->tuplehash[IP_CT_DIR_ORIGINAL].tuple.dst.protonum !=
 		  sinfo->tuple[IP_CT_DIR_ORIGINAL].dst.protonum,
 		  XT_CONNTRACK_PROTO))
-                return 0;
+		return 0;
 
 	if (sinfo->flags & XT_CONNTRACK_ORIGSRC &&
 	    FWINV((ct->tuplehash[IP_CT_DIR_ORIGINAL].tuple.src.ip &
@@ -146,10 +147,10 @@ match(const struct sk_buff *skb,
 	if (ct == &nf_conntrack_untracked)
 		statebit = XT_CONNTRACK_STATE_UNTRACKED;
 	else if (ct)
- 		statebit = XT_CONNTRACK_STATE_BIT(ctinfo);
- 	else
- 		statebit = XT_CONNTRACK_STATE_INVALID;
- 
+		statebit = XT_CONNTRACK_STATE_BIT(ctinfo);
+	else
+		statebit = XT_CONNTRACK_STATE_INVALID;
+
 	if (sinfo->flags & XT_CONNTRACK_STATE) {
 		if (ct) {
 			if (test_bit(IPS_SRC_NAT_BIT, &ct->status))
@@ -170,41 +171,41 @@ match(const struct sk_buff *skb,
 
 	if (sinfo->flags & XT_CONNTRACK_PROTO &&
 	    FWINV(ct->tuplehash[IP_CT_DIR_ORIGINAL].tuple.dst.protonum !=
-	    	  sinfo->tuple[IP_CT_DIR_ORIGINAL].dst.protonum,
+		  sinfo->tuple[IP_CT_DIR_ORIGINAL].dst.protonum,
 		  XT_CONNTRACK_PROTO))
-                return 0;
+		return 0;
 
 	if (sinfo->flags & XT_CONNTRACK_ORIGSRC &&
 	    FWINV((ct->tuplehash[IP_CT_DIR_ORIGINAL].tuple.src.u3.ip &
-	    	   sinfo->sipmsk[IP_CT_DIR_ORIGINAL].s_addr) !=
+		   sinfo->sipmsk[IP_CT_DIR_ORIGINAL].s_addr) !=
 		  sinfo->tuple[IP_CT_DIR_ORIGINAL].src.ip,
 		  XT_CONNTRACK_ORIGSRC))
 		return 0;
 
 	if (sinfo->flags & XT_CONNTRACK_ORIGDST &&
 	    FWINV((ct->tuplehash[IP_CT_DIR_ORIGINAL].tuple.dst.u3.ip &
-	    	   sinfo->dipmsk[IP_CT_DIR_ORIGINAL].s_addr) !=
+		   sinfo->dipmsk[IP_CT_DIR_ORIGINAL].s_addr) !=
 		  sinfo->tuple[IP_CT_DIR_ORIGINAL].dst.ip,
 		  XT_CONNTRACK_ORIGDST))
 		return 0;
 
 	if (sinfo->flags & XT_CONNTRACK_REPLSRC &&
 	    FWINV((ct->tuplehash[IP_CT_DIR_REPLY].tuple.src.u3.ip &
-	    	   sinfo->sipmsk[IP_CT_DIR_REPLY].s_addr) !=
+		   sinfo->sipmsk[IP_CT_DIR_REPLY].s_addr) !=
 		  sinfo->tuple[IP_CT_DIR_REPLY].src.ip,
 		  XT_CONNTRACK_REPLSRC))
 		return 0;
 
 	if (sinfo->flags & XT_CONNTRACK_REPLDST &&
 	    FWINV((ct->tuplehash[IP_CT_DIR_REPLY].tuple.dst.u3.ip &
-	    	   sinfo->dipmsk[IP_CT_DIR_REPLY].s_addr) !=
+		   sinfo->dipmsk[IP_CT_DIR_REPLY].s_addr) !=
 		  sinfo->tuple[IP_CT_DIR_REPLY].dst.ip,
 		  XT_CONNTRACK_REPLDST))
 		return 0;
 
 	if (sinfo->flags & XT_CONNTRACK_STATUS &&
 	    FWINV((ct->status & sinfo->statusmask) == 0,
-	    	  XT_CONNTRACK_STATUS))
+		  XT_CONNTRACK_STATUS))
 		return 0;
 
 	if(sinfo->flags & XT_CONNTRACK_EXPIRES) {
@@ -228,21 +229,17 @@ checkentry(const char *tablename,
 	   void *matchinfo,
 	   unsigned int hook_mask)
 {
-#if defined(CONFIG_NF_CONNTRACK) || defined(CONFIG_NF_CONNTRACK_MODULE)
 	if (nf_ct_l3proto_try_module_get(match->family) < 0) {
-		printk(KERN_WARNING "can't load nf_conntrack support for "
+		printk(KERN_WARNING "can't load conntrack support for "
 				    "proto=%d\n", match->family);
 		return 0;
 	}
-#endif
 	return 1;
 }
 
 static void destroy(const struct xt_match *match, void *matchinfo)
 {
-#if defined(CONFIG_NF_CONNTRACK) || defined(CONFIG_NF_CONNTRACK_MODULE)
 	nf_ct_l3proto_module_put(match->family);
-#endif
 }
 
 static struct xt_match conntrack_match = {
@@ -257,7 +254,6 @@ static struct xt_match conntrack_match = {
 
 static int __init xt_conntrack_init(void)
 {
-	need_conntrack();
 	return xt_register_match(&conntrack_match);
 }
 

@@ -4,7 +4,7 @@
  *  Virtual Server: Legacy Funtions
  *
  *  Copyright (C) 2001-2003  Jacques Gelinas
- *  Copyright (C) 2003-2006  Herbert Pötzl
+ *  Copyright (C) 2003-2007  Herbert Pötzl
  *
  *  V0.01  broken out from vcontext.c V0.05
  *  V0.02  updated to spaces *sigh*
@@ -16,7 +16,7 @@
 #include <linux/vs_network.h>
 #include <linux/vserver/legacy.h>
 #include <linux/vserver/space.h>
-#include <linux/namespace.h>
+// #include <linux/mnt_namespace.h>
 
 #include <asm/errno.h>
 #include <asm/uaccess.h>
@@ -88,18 +88,17 @@ int vc_new_s_context(uint32_t ctx, void __user *data)
 		vx_info_flags(new_vxi, VX_INFO_PRIVATE, 0))
 		goto out_put;
 
+	ret = vx_migrate_task(current, new_vxi,
+		vx_info_flags(new_vxi, VXF_STATE_SETUP, 0));
 	new_vxi->vx_flags &= ~VXF_STATE_SETUP;
 
-	ret = vx_migrate_task(current, new_vxi, 1);
 	if (ret == 0) {
 		current->vx_info->vx_bcaps &= (~vc_data.remove_cap);
 		new_vxi->vx_flags |= vc_data.flags;
 		if (vc_data.flags & VX_INFO_INIT)
 			vx_set_initpid(new_vxi, current->tgid);
-		/* FIXME: nsproxy
 		if (vc_data.flags & VX_INFO_NAMESPACE)
-			vx_set_namespace(new_vxi,
-				current->namespace, current->fs); */
+			vx_set_space(new_vxi, CLONE_NEWNS|CLONE_FS);
 		if (vc_data.flags & VX_INFO_NPROC)
 			__rlim_set(&new_vxi->limit, RLIMIT_NPROC,
 				current->signal->rlim[RLIMIT_NPROC].rlim_max);

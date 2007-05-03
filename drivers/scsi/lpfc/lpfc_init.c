@@ -268,6 +268,8 @@ lpfc_config_port_post(struct lpfc_hba * phba)
 	kfree(mp);
 	pmb->context1 = NULL;
 
+	if (phba->cfg_soft_wwnn)
+		u64_to_wwn(phba->cfg_soft_wwnn, phba->fc_sparam.nodeName.u.wwn);
 	if (phba->cfg_soft_wwpn)
 		u64_to_wwn(phba->cfg_soft_wwpn, phba->fc_sparam.portName.u.wwn);
 	memcpy(&phba->fc_nodename, &phba->fc_sparam.nodeName,
@@ -349,8 +351,8 @@ lpfc_config_port_post(struct lpfc_hba * phba)
 	phba->hba_state = LPFC_LINK_DOWN;
 
 	/* Only process IOCBs on ring 0 till hba_state is READY */
-	if (psli->ring[psli->ip_ring].cmdringaddr)
-		psli->ring[psli->ip_ring].flag |= LPFC_STOP_IOCB_EVENT;
+	if (psli->ring[psli->extra_ring].cmdringaddr)
+		psli->ring[psli->extra_ring].flag |= LPFC_STOP_IOCB_EVENT;
 	if (psli->ring[psli->fcp_ring].cmdringaddr)
 		psli->ring[psli->fcp_ring].flag |= LPFC_STOP_IOCB_EVENT;
 	if (psli->ring[psli->next_ring].cmdringaddr)
@@ -516,8 +518,13 @@ lpfc_handle_eratt(struct lpfc_hba * phba)
 	struct lpfc_sli *psli = &phba->sli;
 	struct lpfc_sli_ring  *pring;
 	uint32_t event_data;
+	/* If the pci channel is offline, ignore possible errors,
+	 * since we cannot communicate with the pci card anyway. */
+	if (pci_channel_offline(phba->pcidev))
+		return;
 
-	if (phba->work_hs & HS_FFER6) {
+	if (phba->work_hs & HS_FFER6 ||
+	    phba->work_hs & HS_FFER5) {
 		/* Re-establishing Link */
 		lpfc_printf_log(phba, KERN_INFO, LOG_LINK_EVENT,
 				"%d:1301 Re-establishing Link "
@@ -611,7 +618,7 @@ lpfc_handle_latt(struct lpfc_hba * phba)
 	pmb->mbox_cmpl = lpfc_mbx_cmpl_read_la;
 	rc = lpfc_sli_issue_mbox (phba, pmb, (MBX_NOWAIT | MBX_STOP_IOCB));
 	if (rc == MBX_NOT_FINISHED)
-		goto lpfc_handle_latt_free_mp;
+		goto lpfc_handle_latt_free_mbuf;
 
 	/* Clear Link Attention in HA REG */
 	spin_lock_irq(phba->host->host_lock);
@@ -621,6 +628,8 @@ lpfc_handle_latt(struct lpfc_hba * phba)
 
 	return;
 
+lpfc_handle_latt_free_mbuf:
+	lpfc_mbuf_free(phba, mp->virt, mp->phys);
 lpfc_handle_latt_free_mp:
 	kfree(mp);
 lpfc_handle_latt_free_pmb:
@@ -802,19 +811,13 @@ lpfc_get_hba_model_desc(struct lpfc_hba * phba, uint8_t * mdp, uint8_t * descp)
 {
 	lpfc_vpd_t *vp;
 	uint16_t dev_id = phba->pcidev->device;
-	uint16_t dev_subid = phba->pcidev->subsystem_device;
-	uint8_t hdrtype;
 	int max_speed;
-	char * ports;
 	struct {
 		char * name;
 		int    max_speed;
-		char * ports;
 		char * bus;
-	} m = {"<Unknown>", 0, "", ""};
+	} m = {"<Unknown>", 0, ""};
 
-	pci_read_config_byte(phba->pcidev, PCI_HEADER_TYPE, &hdrtype);
-	ports = (hdrtype == 0x80) ? "2-port " : "";
 	if (mdp && mdp[0] != '\0'
 		&& descp && descp[0] != '\0')
 		return;
@@ -834,130 +837,93 @@ lpfc_get_hba_model_desc(struct lpfc_hba * phba, uint8_t * mdp, uint8_t * descp)
 
 	switch (dev_id) {
 	case PCI_DEVICE_ID_FIREFLY:
-		m = (typeof(m)){"LP6000", max_speed, "", "PCI"};
+		m = (typeof(m)){"LP6000", max_speed, "PCI"};
 		break;
 	case PCI_DEVICE_ID_SUPERFLY:
 		if (vp->rev.biuRev >= 1 && vp->rev.biuRev <= 3)
-			m = (typeof(m)){"LP7000", max_speed, "", "PCI"};
+			m = (typeof(m)){"LP7000", max_speed,  "PCI"};
 		else
-			m = (typeof(m)){"LP7000E", max_speed, "", "PCI"};
+			m = (typeof(m)){"LP7000E", max_speed, "PCI"};
 		break;
 	case PCI_DEVICE_ID_DRAGONFLY:
-		m = (typeof(m)){"LP8000", max_speed, "", "PCI"};
+		m = (typeof(m)){"LP8000", max_speed, "PCI"};
 		break;
 	case PCI_DEVICE_ID_CENTAUR:
 		if (FC_JEDEC_ID(vp->rev.biuRev) == CENTAUR_2G_JEDEC_ID)
-			m = (typeof(m)){"LP9002", max_speed, "", "PCI"};
+			m = (typeof(m)){"LP9002", max_speed, "PCI"};
 		else
-			m = (typeof(m)){"LP9000", max_speed, "", "PCI"};
+			m = (typeof(m)){"LP9000", max_speed, "PCI"};
 		break;
 	case PCI_DEVICE_ID_RFLY:
-		m = (typeof(m)){"LP952", max_speed, "", "PCI"};
+		m = (typeof(m)){"LP952", max_speed, "PCI"};
 		break;
 	case PCI_DEVICE_ID_PEGASUS:
-		m = (typeof(m)){"LP9802", max_speed, "", "PCI-X"};
+		m = (typeof(m)){"LP9802", max_speed, "PCI-X"};
 		break;
 	case PCI_DEVICE_ID_THOR:
-		if (hdrtype == 0x80)
-			m = (typeof(m)){"LP10000DC",
-					max_speed, ports, "PCI-X"};
-		else
-			m = (typeof(m)){"LP10000",
-					max_speed, ports, "PCI-X"};
+		m = (typeof(m)){"LP10000", max_speed, "PCI-X"};
 		break;
 	case PCI_DEVICE_ID_VIPER:
-		m = (typeof(m)){"LPX1000", max_speed, "", "PCI-X"};
+		m = (typeof(m)){"LPX1000", max_speed,  "PCI-X"};
 		break;
 	case PCI_DEVICE_ID_PFLY:
-		m = (typeof(m)){"LP982", max_speed, "", "PCI-X"};
+		m = (typeof(m)){"LP982", max_speed, "PCI-X"};
 		break;
 	case PCI_DEVICE_ID_TFLY:
-		if (hdrtype == 0x80)
-			m = (typeof(m)){"LP1050DC", max_speed, ports, "PCI-X"};
-		else
-			m = (typeof(m)){"LP1050", max_speed, ports, "PCI-X"};
+		m = (typeof(m)){"LP1050", max_speed, "PCI-X"};
 		break;
 	case PCI_DEVICE_ID_HELIOS:
-		if (hdrtype == 0x80)
-			m = (typeof(m)){"LP11002", max_speed, ports, "PCI-X2"};
-		else
-			m = (typeof(m)){"LP11000", max_speed, ports, "PCI-X2"};
+		m = (typeof(m)){"LP11000", max_speed, "PCI-X2"};
 		break;
 	case PCI_DEVICE_ID_HELIOS_SCSP:
-		m = (typeof(m)){"LP11000-SP", max_speed, ports, "PCI-X2"};
+		m = (typeof(m)){"LP11000-SP", max_speed, "PCI-X2"};
 		break;
 	case PCI_DEVICE_ID_HELIOS_DCSP:
-		m = (typeof(m)){"LP11002-SP", max_speed, ports, "PCI-X2"};
+		m = (typeof(m)){"LP11002-SP", max_speed, "PCI-X2"};
 		break;
 	case PCI_DEVICE_ID_NEPTUNE:
-		if (hdrtype == 0x80)
-			m = (typeof(m)){"LPe1002", max_speed, ports, "PCIe"};
-		else
-			m = (typeof(m)){"LPe1000", max_speed, ports, "PCIe"};
+		m = (typeof(m)){"LPe1000", max_speed, "PCIe"};
 		break;
 	case PCI_DEVICE_ID_NEPTUNE_SCSP:
-		m = (typeof(m)){"LPe1000-SP", max_speed, ports, "PCIe"};
+		m = (typeof(m)){"LPe1000-SP", max_speed, "PCIe"};
 		break;
 	case PCI_DEVICE_ID_NEPTUNE_DCSP:
-		m = (typeof(m)){"LPe1002-SP", max_speed, ports, "PCIe"};
+		m = (typeof(m)){"LPe1002-SP", max_speed, "PCIe"};
 		break;
 	case PCI_DEVICE_ID_BMID:
-		m = (typeof(m)){"LP1150", max_speed, ports, "PCI-X2"};
+		m = (typeof(m)){"LP1150", max_speed, "PCI-X2"};
 		break;
 	case PCI_DEVICE_ID_BSMB:
-		m = (typeof(m)){"LP111", max_speed, ports, "PCI-X2"};
+		m = (typeof(m)){"LP111", max_speed, "PCI-X2"};
 		break;
 	case PCI_DEVICE_ID_ZEPHYR:
-		if (hdrtype == 0x80)
-			m = (typeof(m)){"LPe11002", max_speed, ports, "PCIe"};
-		else
-			m = (typeof(m)){"LPe11000", max_speed, ports, "PCIe"};
+		m = (typeof(m)){"LPe11000", max_speed, "PCIe"};
 		break;
 	case PCI_DEVICE_ID_ZEPHYR_SCSP:
-		m = (typeof(m)){"LPe11000", max_speed, ports, "PCIe"};
+		m = (typeof(m)){"LPe11000", max_speed, "PCIe"};
 		break;
 	case PCI_DEVICE_ID_ZEPHYR_DCSP:
-		m = (typeof(m)){"LPe11002-SP", max_speed, ports, "PCIe"};
+		m = (typeof(m)){"LPe11002-SP", max_speed, "PCIe"};
 		break;
 	case PCI_DEVICE_ID_ZMID:
-		m = (typeof(m)){"LPe1150", max_speed, ports, "PCIe"};
+		m = (typeof(m)){"LPe1150", max_speed, "PCIe"};
 		break;
 	case PCI_DEVICE_ID_ZSMB:
-		m = (typeof(m)){"LPe111", max_speed, ports, "PCIe"};
+		m = (typeof(m)){"LPe111", max_speed, "PCIe"};
 		break;
 	case PCI_DEVICE_ID_LP101:
-		m = (typeof(m)){"LP101", max_speed, ports, "PCI-X"};
+		m = (typeof(m)){"LP101", max_speed, "PCI-X"};
 		break;
 	case PCI_DEVICE_ID_LP10000S:
-		m = (typeof(m)){"LP10000-S", max_speed, ports, "PCI"};
+		m = (typeof(m)){"LP10000-S", max_speed, "PCI"};
 		break;
 	case PCI_DEVICE_ID_LP11000S:
+		m = (typeof(m)){"LP11000-S", max_speed,
+			"PCI-X2"};
+		break;
 	case PCI_DEVICE_ID_LPE11000S:
-		switch (dev_subid) {
-		case PCI_SUBSYSTEM_ID_LP11000S:
-			m = (typeof(m)){"LP11000-S", max_speed,
-					ports, "PCI-X2"};
-			break;
-		case PCI_SUBSYSTEM_ID_LP11002S:
-			m = (typeof(m)){"LP11002-S", max_speed,
-					ports, "PCI-X2"};
-			break;
-		case PCI_SUBSYSTEM_ID_LPE11000S:
-			m = (typeof(m)){"LPe11000-S", max_speed,
-					ports, "PCIe"};
-			break;
-		case PCI_SUBSYSTEM_ID_LPE11002S:
-			m = (typeof(m)){"LPe11002-S", max_speed,
-					ports, "PCIe"};
-			break;
-		case PCI_SUBSYSTEM_ID_LPE11010S:
-			m = (typeof(m)){"LPe11010-S", max_speed,
-					"10-port ", "PCIe"};
-			break;
-		default:
-			m = (typeof(m)){ NULL };
-			break;
-		}
+		m = (typeof(m)){"LPe11000-S", max_speed,
+			"PCIe"};
 		break;
 	default:
 		m = (typeof(m)){ NULL };
@@ -968,8 +934,8 @@ lpfc_get_hba_model_desc(struct lpfc_hba * phba, uint8_t * mdp, uint8_t * descp)
 		snprintf(mdp, 79,"%s", m.name);
 	if (descp && descp[0] == '\0')
 		snprintf(descp, 255,
-			 "Emulex %s %dGb %s%s Fibre Channel Adapter",
-			 m.name, m.max_speed, m.ports, m.bus);
+			 "Emulex %s %dGb %s Fibre Channel Adapter",
+			 m.name, m.max_speed, m.bus);
 }
 
 /**************************************************/
@@ -1651,6 +1617,14 @@ lpfc_pci_probe_one(struct pci_dev *pdev, const struct pci_device_id *pid)
 	if (error)
 		goto out_remove_host;
 
+	if (phba->cfg_use_msi) {
+		error = pci_enable_msi(phba->pcidev);
+		if (error)
+			lpfc_printf_log(phba, KERN_INFO, LOG_INIT, "%d:0452 "
+					"Enable MSI failed, continuing with "
+					"IRQ\n", phba->brd_no);
+	}
+
 	error =	request_irq(phba->pcidev->irq, lpfc_intr_handler, IRQF_SHARED,
 							LPFC_DRIVER_NAME, phba);
 	if (error) {
@@ -1730,6 +1704,7 @@ out_free_irq:
 	lpfc_stop_timer(phba);
 	phba->work_hba_events = 0;
 	free_irq(phba->pcidev->irq, phba);
+	pci_disable_msi(phba->pcidev);
 out_free_sysfs_attr:
 	lpfc_free_sysfs_attr(phba);
 out_remove_host:
@@ -1796,6 +1771,7 @@ lpfc_pci_remove_one(struct pci_dev *pdev)
 
 	/* Release the irq reservation */
 	free_irq(phba->pcidev->irq, phba);
+	pci_disable_msi(phba->pcidev);
 
 	lpfc_cleanup(phba, 0);
 	lpfc_stop_timer(phba);
@@ -1823,6 +1799,91 @@ lpfc_pci_remove_one(struct pci_dev *pdev)
 	scsi_host_put(phba->host);
 
 	pci_set_drvdata(pdev, NULL);
+}
+
+/**
+ * lpfc_io_error_detected - called when PCI error is detected
+ * @pdev: Pointer to PCI device
+ * @state: The current pci conneection state
+ *
+ * This function is called after a PCI bus error affecting
+ * this device has been detected.
+ */
+static pci_ers_result_t lpfc_io_error_detected(struct pci_dev *pdev,
+				pci_channel_state_t state)
+{
+	struct Scsi_Host *host = pci_get_drvdata(pdev);
+	struct lpfc_hba *phba = (struct lpfc_hba *)host->hostdata;
+	struct lpfc_sli *psli = &phba->sli;
+	struct lpfc_sli_ring  *pring;
+
+	if (state == pci_channel_io_perm_failure)
+		return PCI_ERS_RESULT_DISCONNECT;
+
+	pci_disable_device(pdev);
+	/*
+	 * There may be I/Os dropped by the firmware.
+	 * Error iocb (I/O) on txcmplq and let the SCSI layer
+	 * retry it after re-establishing link.
+	 */
+	pring = &psli->ring[psli->fcp_ring];
+	lpfc_sli_abort_iocb_ring(phba, pring);
+
+	/* Request a slot reset. */
+	return PCI_ERS_RESULT_NEED_RESET;
+}
+
+/**
+ * lpfc_io_slot_reset - called after the pci bus has been reset.
+ * @pdev: Pointer to PCI device
+ *
+ * Restart the card from scratch, as if from a cold-boot.
+ */
+static pci_ers_result_t lpfc_io_slot_reset(struct pci_dev *pdev)
+{
+	struct Scsi_Host *host = pci_get_drvdata(pdev);
+	struct lpfc_hba *phba = (struct lpfc_hba *)host->hostdata;
+	struct lpfc_sli *psli = &phba->sli;
+	int bars = pci_select_bars(pdev, IORESOURCE_MEM);
+
+	dev_printk(KERN_INFO, &pdev->dev, "recovering from a slot reset.\n");
+	if (pci_enable_device_bars(pdev, bars)) {
+		printk(KERN_ERR "lpfc: Cannot re-enable "
+			"PCI device after reset.\n");
+		return PCI_ERS_RESULT_DISCONNECT;
+	}
+
+	pci_set_master(pdev);
+
+	/* Re-establishing Link */
+	spin_lock_irq(phba->host->host_lock);
+	phba->fc_flag |= FC_ESTABLISH_LINK;
+	psli->sli_flag &= ~LPFC_SLI2_ACTIVE;
+	spin_unlock_irq(phba->host->host_lock);
+
+
+	/* Take device offline; this will perform cleanup */
+	lpfc_offline(phba);
+	lpfc_sli_brdrestart(phba);
+
+	return PCI_ERS_RESULT_RECOVERED;
+}
+
+/**
+ * lpfc_io_resume - called when traffic can start flowing again.
+ * @pdev: Pointer to PCI device
+ *
+ * This callback is called when the error recovery driver tells us that
+ * its OK to resume normal operation.
+ */
+static void lpfc_io_resume(struct pci_dev *pdev)
+{
+	struct Scsi_Host *host = pci_get_drvdata(pdev);
+	struct lpfc_hba *phba = (struct lpfc_hba *)host->hostdata;
+
+	if (lpfc_online(phba) == 0) {
+		mod_timer(&phba->fc_estabtmo, jiffies + HZ * 60);
+	}
 }
 
 static struct pci_device_id lpfc_id_table[] = {
@@ -1885,11 +1946,18 @@ static struct pci_device_id lpfc_id_table[] = {
 
 MODULE_DEVICE_TABLE(pci, lpfc_id_table);
 
+static struct pci_error_handlers lpfc_err_handler = {
+	.error_detected = lpfc_io_error_detected,
+	.slot_reset = lpfc_io_slot_reset,
+	.resume = lpfc_io_resume,
+};
+
 static struct pci_driver lpfc_driver = {
 	.name		= LPFC_DRIVER_NAME,
 	.id_table	= lpfc_id_table,
 	.probe		= lpfc_pci_probe_one,
 	.remove		= __devexit_p(lpfc_pci_remove_one),
+	.err_handler = &lpfc_err_handler,
 };
 
 static int __init

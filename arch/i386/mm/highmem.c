@@ -32,15 +32,17 @@ void *kmap_atomic(struct page *page, enum km_type type)
 	unsigned long vaddr;
 
 	/* even !CONFIG_PREEMPT needs this, for in_atomic in do_page_fault */
-	inc_preempt_count();
+	pagefault_disable();
+
+	idx = type + KM_TYPE_NR*smp_processor_id();
+	BUG_ON(!pte_none(*(kmap_pte-idx)));
+
 	if (!PageHighMem(page))
 		return page_address(page);
 
-	idx = type + KM_TYPE_NR*smp_processor_id();
 	vaddr = __fix_to_virt(FIX_KMAP_BEGIN + idx);
-	if (!pte_none(*(kmap_pte-idx)))
-		BUG();
 	set_pte(kmap_pte-idx, mk_pte(page, kmap_prot));
+	arch_flush_lazy_mmu_mode();
 
 	return (void*) vaddr;
 }
@@ -50,26 +52,22 @@ void kunmap_atomic(void *kvaddr, enum km_type type)
 	unsigned long vaddr = (unsigned long) kvaddr & PAGE_MASK;
 	enum fixed_addresses idx = type + KM_TYPE_NR*smp_processor_id();
 
-#ifdef CONFIG_DEBUG_HIGHMEM
-	if (vaddr >= PAGE_OFFSET && vaddr < (unsigned long)high_memory) {
-		dec_preempt_count();
-		preempt_check_resched();
-		return;
-	}
-
-	if (vaddr != __fix_to_virt(FIX_KMAP_BEGIN+idx))
-		BUG();
-#endif
 	/*
 	 * Force other mappings to Oops if they'll try to access this pte
 	 * without first remap it.  Keeping stale mappings around is a bad idea
 	 * also, in case the page changes cacheability attributes or becomes
 	 * a protected page in a hypervisor.
 	 */
-	kpte_clear_flush(kmap_pte-idx, vaddr);
+	if (vaddr == __fix_to_virt(FIX_KMAP_BEGIN+idx))
+		kpte_clear_flush(kmap_pte-idx, vaddr);
+	else {
+#ifdef CONFIG_DEBUG_HIGHMEM
+		BUG_ON(vaddr < PAGE_OFFSET);
+		BUG_ON(vaddr >= (unsigned long)high_memory);
+#endif
+	}
 
-	dec_preempt_count();
-	preempt_check_resched();
+	pagefault_enable();
 }
 
 /* This is the same as kmap_atomic() but can map memory that doesn't
@@ -80,11 +78,12 @@ void *kmap_atomic_pfn(unsigned long pfn, enum km_type type)
 	enum fixed_addresses idx;
 	unsigned long vaddr;
 
-	inc_preempt_count();
+	pagefault_disable();
 
 	idx = type + KM_TYPE_NR*smp_processor_id();
 	vaddr = __fix_to_virt(FIX_KMAP_BEGIN + idx);
 	set_pte(kmap_pte-idx, pfn_pte(pfn, kmap_prot));
+	arch_flush_lazy_mmu_mode();
 
 	return (void*) vaddr;
 }

@@ -1,8 +1,6 @@
 #ifndef _ASM_M32R_TERMBITS_H
 #define _ASM_M32R_TERMBITS_H
 
-/* $Id$ */
-
 #include <linux/posix_types.h>
 
 typedef unsigned char	cc_t;
@@ -17,6 +15,17 @@ struct termios {
 	tcflag_t c_lflag;		/* local mode flags */
 	cc_t c_line;			/* line discipline */
 	cc_t c_cc[NCCS];		/* control characters */
+};
+
+struct ktermios {
+	tcflag_t c_iflag;		/* input mode flags */
+	tcflag_t c_oflag;		/* output mode flags */
+	tcflag_t c_cflag;		/* control mode flags */
+	tcflag_t c_lflag;		/* local mode flags */
+	cc_t c_line;			/* line discipline */
+	cc_t c_cc[NCCS];		/* control characters */
+	speed_t c_ispeed;		/* input speed */
+	speed_t c_ospeed;		/* output speed */
 };
 
 /* c_cc characters */
@@ -173,4 +182,4 @@ struct termios {
 #define	TCSADRAIN	1
 #define	TCSAFLUSH	2
 
-#endif  /* _ASM_M32R_TERMBITS_H */
+#endif /* _ASM_M32R_TERMBITS_H */

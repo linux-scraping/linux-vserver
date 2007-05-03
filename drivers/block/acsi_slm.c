@@ -269,7 +269,7 @@ static int slm_get_pagesize( int device, int *w, int *h );
 
 static DEFINE_TIMER(slm_timer, slm_test_ready, 0, 0);
 
-static struct file_operations slm_fops = {
+static const struct file_operations slm_fops = {
 	.owner =	THIS_MODULE,
 	.read =		slm_read,
 	.write =	slm_write,
@@ -363,7 +363,7 @@ static ssize_t slm_read( struct file *file, char *buf, size_t count,
 						 loff_t *ppos )
 
 {
-	struct inode *node = file->f_dentry->d_inode;
+	struct inode *node = file->f_path.dentry->d_inode;
 	unsigned long page;
 	int length;
 	int end;
@@ -618,7 +618,7 @@ static ssize_t slm_write( struct file *file, const char *buf, size_t count,
 						  loff_t *ppos )
 
 {
-	struct inode *node = file->f_dentry->d_inode;
+	struct inode *node = file->f_path.dentry->d_inode;
 	int		device = iminor(node);
 	int		n, filled, w, h;
 

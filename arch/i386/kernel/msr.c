@@ -68,7 +68,6 @@ static inline int rdmsr_eio(u32 reg, u32 *eax, u32 *edx)
 #ifdef CONFIG_SMP
 
 struct msr_command {
-	int cpu;
 	int err;
 	u32 reg;
 	u32 data[2];
@@ -78,16 +77,14 @@ static void msr_smp_wrmsr(void *cmd_block)
 {
 	struct msr_command *cmd = (struct msr_command *)cmd_block;
 
-	if (cmd->cpu == smp_processor_id())
-		cmd->err = wrmsr_eio(cmd->reg, cmd->data[0], cmd->data[1]);
+	cmd->err = wrmsr_eio(cmd->reg, cmd->data[0], cmd->data[1]);
 }
 
 static void msr_smp_rdmsr(void *cmd_block)
 {
 	struct msr_command *cmd = (struct msr_command *)cmd_block;
 
-	if (cmd->cpu == smp_processor_id())
-		cmd->err = rdmsr_eio(cmd->reg, &cmd->data[0], &cmd->data[1]);
+	cmd->err = rdmsr_eio(cmd->reg, &cmd->data[0], &cmd->data[1]);
 }
 
 static inline int do_wrmsr(int cpu, u32 reg, u32 eax, u32 edx)
@@ -99,12 +96,11 @@ static inline int do_wrmsr(int cpu, u32 reg, u32 eax, u32 edx)
 	if (cpu == smp_processor_id()) {
 		ret = wrmsr_eio(reg, eax, edx);
 	} else {
-		cmd.cpu = cpu;
 		cmd.reg = reg;
 		cmd.data[0] = eax;
 		cmd.data[1] = edx;
 
-		smp_call_function(msr_smp_wrmsr, &cmd, 1, 1);
+		smp_call_function_single(cpu, msr_smp_wrmsr, &cmd, 1, 1);
 		ret = cmd.err;
 	}
 	preempt_enable();
@@ -120,10 +116,9 @@ static inline int do_rdmsr(int cpu, u32 reg, u32 * eax, u32 * edx)
 	if (cpu == smp_processor_id()) {
 		ret = rdmsr_eio(reg, eax, edx);
 	} else {
-		cmd.cpu = cpu;
 		cmd.reg = reg;
 
-		smp_call_function(msr_smp_rdmsr, &cmd, 1, 1);
+		smp_call_function_single(cpu, msr_smp_rdmsr, &cmd, 1, 1);
 
 		*eax = cmd.data[0];
 		*edx = cmd.data[1];
@@ -172,7 +167,7 @@ static ssize_t msr_read(struct file *file, char __user * buf,
 	u32 __user *tmp = (u32 __user *) buf;
 	u32 data[2];
 	u32 reg = *ppos;
-	int cpu = iminor(file->f_dentry->d_inode);
+	int cpu = iminor(file->f_path.dentry->d_inode);
 	int err;
 
 	if (count % 8)
@@ -195,15 +190,14 @@ static ssize_t msr_write(struct file *file, const char __user *buf,
 {
 	const u32 __user *tmp = (const u32 __user *)buf;
 	u32 data[2];
-	size_t rv;
 	u32 reg = *ppos;
-	int cpu = iminor(file->f_dentry->d_inode);
+	int cpu = iminor(file->f_path.dentry->d_inode);
 	int err;
 
 	if (count % 8)
 		return -EINVAL;	/* Invalid chunk size */
 
-	for (rv = 0; count; count -= 8) {
+	for (; count; count -= 8) {
 		if (copy_from_user(&data, tmp, 8))
 			return -EFAULT;
 		err = do_wrmsr(cpu, reg, data[0], data[1]);
@@ -217,7 +211,7 @@ static ssize_t msr_write(struct file *file, const char __user *buf,
 
 static int msr_open(struct inode *inode, struct file *file)
 {
-	unsigned int cpu = iminor(file->f_dentry->d_inode);
+	unsigned int cpu = iminor(file->f_path.dentry->d_inode);
 	struct cpuinfo_x86 *c = &(cpu_data)[cpu];
 
 	if (cpu >= NR_CPUS || !cpu_online(cpu))
@@ -231,7 +225,7 @@ static int msr_open(struct inode *inode, struct file *file)
 /*
  * File operations we support
  */
-static struct file_operations msr_fops = {
+static const struct file_operations msr_fops = {
 	.owner = THIS_MODULE,
 	.llseek = msr_seek,
 	.read = msr_read,
@@ -239,18 +233,17 @@ static struct file_operations msr_fops = {
 	.open = msr_open,
 };
 
-static int msr_class_device_create(int i)
+static int msr_device_create(int i)
 {
 	int err = 0;
-	struct class_device *class_err;
+	struct device *dev;
 
-	class_err = class_device_create(msr_class, NULL, MKDEV(MSR_MAJOR, i), NULL, "msr%d",i);
-	if (IS_ERR(class_err)) 
-		err = PTR_ERR(class_err);
+	dev = device_create(msr_class, NULL, MKDEV(MSR_MAJOR, i), "msr%d",i);
+	if (IS_ERR(dev))
+		err = PTR_ERR(dev);
 	return err;
 }
 
-#ifdef CONFIG_HOTPLUG_CPU
 static int msr_class_cpu_callback(struct notifier_block *nfb,
 				unsigned long action, void *hcpu)
 {
@@ -258,10 +251,10 @@ static int msr_class_cpu_callback(struct notifier_block *nfb,
 
 	switch (action) {
 	case CPU_ONLINE:
-		msr_class_device_create(cpu);
+		msr_device_create(cpu);
 		break;
 	case CPU_DEAD:
-		class_device_destroy(msr_class, MKDEV(MSR_MAJOR, cpu));
+		device_destroy(msr_class, MKDEV(MSR_MAJOR, cpu));
 		break;
 	}
 	return NOTIFY_OK;
@@ -271,7 +264,6 @@ static struct notifier_block __cpuinitdata msr_class_cpu_notifier =
 {
 	.notifier_call = msr_class_cpu_callback,
 };
-#endif
 
 static int __init msr_init(void)
 {
@@ -290,7 +282,7 @@ static int __init msr_init(void)
 		goto out_chrdev;
 	}
 	for_each_online_cpu(i) {
-		err = msr_class_device_create(i);
+		err = msr_device_create(i);
 		if (err != 0)
 			goto out_class;
 	}
@@ -302,7 +294,7 @@ static int __init msr_init(void)
 out_class:
 	i = 0;
 	for_each_online_cpu(i)
-		class_device_destroy(msr_class, MKDEV(MSR_MAJOR, i));
+		device_destroy(msr_class, MKDEV(MSR_MAJOR, i));
 	class_destroy(msr_class);
 out_chrdev:
 	unregister_chrdev(MSR_MAJOR, "cpu/msr");
@@ -314,7 +306,7 @@ static void __exit msr_exit(void)
 {
 	int cpu = 0;
 	for_each_online_cpu(cpu)
-		class_device_destroy(msr_class, MKDEV(MSR_MAJOR, cpu));
+		device_destroy(msr_class, MKDEV(MSR_MAJOR, cpu));
 	class_destroy(msr_class);
 	unregister_chrdev(MSR_MAJOR, "cpu/msr");
 	unregister_hotcpu_notifier(&msr_class_cpu_notifier);

@@ -597,10 +597,15 @@ static struct domain_device *sas_ex_discover_end_dev(
 	child->iproto = phy->attached_iproto;
 	memcpy(child->sas_addr, phy->attached_sas_addr, SAS_ADDR_SIZE);
 	sas_hash_addr(child->hashed_sas_addr, child->sas_addr);
-	phy->port = sas_port_alloc(&parent->rphy->dev, phy_id);
-	BUG_ON(!phy->port);
-	/* FIXME: better error handling*/
-	BUG_ON(sas_port_add(phy->port) != 0);
+	if (!phy->port) {
+		phy->port = sas_port_alloc(&parent->rphy->dev, phy_id);
+		if (unlikely(!phy->port))
+			goto out_err;
+		if (unlikely(sas_port_add(phy->port) != 0)) {
+			sas_port_free(phy->port);
+			goto out_err;
+		}
+	}
 	sas_ex_get_linkrate(parent, child, phy);
 
 	if ((phy->attached_tproto & SAS_PROTO_STP) || phy->attached_sata_dev) {
@@ -615,8 +620,7 @@ static struct domain_device *sas_ex_discover_end_dev(
 			SAS_DPRINTK("report phy sata to %016llx:0x%x returned "
 				    "0x%x\n", SAS_ADDR(parent->sas_addr),
 				    phy_id, res);
-			kfree(child);
-			return NULL;
+			goto out_free;
 		}
 		memcpy(child->frame_rcvd, &child->sata_dev.rps_resp.rps.fis,
 		       sizeof(struct dev_to_host_fis));
@@ -627,14 +631,14 @@ static struct domain_device *sas_ex_discover_end_dev(
 				    "%016llx:0x%x returned 0x%x\n",
 				    SAS_ADDR(child->sas_addr),
 				    SAS_ADDR(parent->sas_addr), phy_id, res);
-			kfree(child);
-			return NULL;
+			goto out_free;
 		}
 	} else if (phy->attached_tproto & SAS_PROTO_SSP) {
 		child->dev_type = SAS_END_DEV;
 		rphy = sas_end_device_alloc(phy->port);
 		/* FIXME: error handling */
-		BUG_ON(!rphy);
+		if (unlikely(!rphy))
+			goto out_free;
 		child->tproto = phy->attached_tproto;
 		sas_init_dev(child);
 
@@ -651,9 +655,7 @@ static struct domain_device *sas_ex_discover_end_dev(
 				    "at %016llx:0x%x returned 0x%x\n",
 				    SAS_ADDR(child->sas_addr),
 				    SAS_ADDR(parent->sas_addr), phy_id, res);
-			/* FIXME: this kfrees list elements without removing them */
-			//kfree(child);
-			return NULL;
+			goto out_list_del;
 		}
 	} else {
 		SAS_DPRINTK("target proto 0x%x at %016llx:0x%x not handled\n",
@@ -663,6 +665,40 @@ static struct domain_device *sas_ex_discover_end_dev(
 
 	list_add_tail(&child->siblings, &parent_ex->children);
 	return child;
+
+ out_list_del:
+	sas_rphy_free(child->rphy);
+	child->rphy = NULL;
+	list_del(&child->dev_list_node);
+ out_free:
+	sas_port_delete(phy->port);
+ out_err:
+	phy->port = NULL;
+	kfree(child);
+	return NULL;
+}
+
+/* See if this phy is part of a wide port */
+static int sas_ex_join_wide_port(struct domain_device *parent, int phy_id)
+{
+	struct ex_phy *phy = &parent->ex_dev.ex_phy[phy_id];
+	int i;
+
+	for (i = 0; i < parent->ex_dev.num_phys; i++) {
+		struct ex_phy *ephy = &parent->ex_dev.ex_phy[i];
+
+		if (ephy == phy)
+			continue;
+
+		if (!memcmp(phy->attached_sas_addr, ephy->attached_sas_addr,
+			    SAS_ADDR_SIZE) && ephy->port) {
+			sas_port_add_phy(ephy->port, phy->phy);
+			phy->phy_state = PHY_DEVICE_DISCOVERED;
+			return 0;
+		}
+	}
+
+	return -ENODEV;
 }
 
 static struct domain_device *sas_ex_discover_expander(
@@ -794,6 +830,13 @@ static int sas_ex_discover_dev(struct domain_device *dev, int phy_id)
 			    "reported 0x%x. Forgotten\n",
 			    SAS_ADDR(ex_phy->attached_sas_addr), res);
 		sas_disable_routing(dev, ex_phy->attached_sas_addr);
+		return res;
+	}
+
+	res = sas_ex_join_wide_port(dev, phy_id);
+	if (!res) {
+		SAS_DPRINTK("Attaching ex phy%d to wide port %016llx\n",
+			    phy_id, SAS_ADDR(ex_phy->attached_sas_addr));
 		return res;
 	}
 
@@ -1419,13 +1462,22 @@ int sas_discover_root_expander(struct domain_device *dev)
 	int res;
 	struct sas_expander_device *ex = rphy_to_expander_device(dev->rphy);
 
-	sas_rphy_add(dev->rphy);
+	res = sas_rphy_add(dev->rphy);
+	if (res)
+		goto out_err;
 
 	ex->level = dev->port->disc.max_level; /* 0 */
 	res = sas_discover_expander(dev);
-	if (!res)
-		sas_ex_bfs_disc(dev->port);
+	if (res)
+		goto out_err2;
 
+	sas_ex_bfs_disc(dev->port);
+
+	return res;
+
+out_err2:
+	sas_rphy_remove(dev->rphy);
+out_err:
 	return res;
 }
 

@@ -351,7 +351,7 @@ struct sctp_ulpevent *sctp_ulpevent_make_remote_error(
 	struct sctp_remote_error *sre;
 	struct sk_buff *skb;
 	sctp_errhdr_t *ch;
-	__u16 cause;
+	__be16 cause;
 	int elen;
 
 	ch = (sctp_errhdr_t *)(chunk->skb->data);
@@ -609,31 +609,31 @@ fail:
 	return NULL;
 }
 
-/* Create and initialize a SCTP_ADAPTION_INDICATION notification.
+/* Create and initialize a SCTP_ADAPTATION_INDICATION notification.
  *
  * Socket Extensions for SCTP
- * 5.3.1.6 SCTP_ADAPTION_INDICATION
+ * 5.3.1.6 SCTP_ADAPTATION_INDICATION
  */
-struct sctp_ulpevent *sctp_ulpevent_make_adaption_indication(
+struct sctp_ulpevent *sctp_ulpevent_make_adaptation_indication(
 	const struct sctp_association *asoc, gfp_t gfp)
 {
 	struct sctp_ulpevent *event;
-	struct sctp_adaption_event *sai;
+	struct sctp_adaptation_event *sai;
 	struct sk_buff *skb;
 
-	event = sctp_ulpevent_new(sizeof(struct sctp_adaption_event),
+	event = sctp_ulpevent_new(sizeof(struct sctp_adaptation_event),
 				  MSG_NOTIFICATION, gfp);
 	if (!event)
 		goto fail;
 
 	skb = sctp_event2skb(event);
-	sai = (struct sctp_adaption_event *)
-		skb_put(skb, sizeof(struct sctp_adaption_event));
+	sai = (struct sctp_adaptation_event *)
+		skb_put(skb, sizeof(struct sctp_adaptation_event));
 
-	sai->sai_type = SCTP_ADAPTION_INDICATION;
+	sai->sai_type = SCTP_ADAPTATION_INDICATION;
 	sai->sai_flags = 0;
-	sai->sai_length = sizeof(struct sctp_adaption_event);
-	sai->sai_adaption_ind = asoc->peer.adaption_ind;
+	sai->sai_length = sizeof(struct sctp_adaptation_event);
+	sai->sai_adaptation_ind = asoc->peer.adaptation_ind;
 	sctp_ulpevent_set_owner(event, asoc);
 	sai->sai_assoc_id = sctp_assoc2id(asoc);
 
@@ -749,7 +749,7 @@ struct sctp_ulpevent *sctp_ulpevent_make_pdapi(
 	 */
 	pd->pdapi_length = sizeof(struct sctp_pdapi_event);
 
-        /*  pdapi_indication: 32 bits (unsigned integer)
+	/*  pdapi_indication: 32 bits (unsigned integer)
 	 *
 	 * This field holds the indication being sent to the application.
 	 */
@@ -790,13 +790,13 @@ void sctp_ulpevent_read_sndrcvinfo(const struct sctp_ulpevent *event,
 		return;
 
 	/* Sockets API Extensions for SCTP
- 	 * Section 5.2.2 SCTP Header Information Structure (SCTP_SNDRCV)
- 	 *
- 	 * sinfo_stream: 16 bits (unsigned integer)
- 	 *
- 	 * For recvmsg() the SCTP stack places the message's stream number in
- 	 * this value.
- 	*/
+	 * Section 5.2.2 SCTP Header Information Structure (SCTP_SNDRCV)
+	 *
+	 * sinfo_stream: 16 bits (unsigned integer)
+	 *
+	 * For recvmsg() the SCTP stack places the message's stream number in
+	 * this value.
+	*/
 	sinfo.sinfo_stream = event->stream;
 	/* sinfo_ssn: 16 bits (unsigned integer)
 	 *
@@ -828,7 +828,7 @@ void sctp_ulpevent_read_sndrcvinfo(const struct sctp_ulpevent *event,
 	sinfo.sinfo_flags = event->flags;
 	/* sinfo_tsn: 32 bit (unsigned integer)
 	 *
-	 * For the receiving side, this field holds a TSN that was 
+	 * For the receiving side, this field holds a TSN that was
 	 * assigned to one of the SCTP Data Chunks.
 	 */
 	sinfo.sinfo_tsn = event->tsn;
@@ -849,8 +849,10 @@ void sctp_ulpevent_read_sndrcvinfo(const struct sctp_ulpevent *event,
 	 */
 	sinfo.sinfo_assoc_id = sctp_assoc2id(event->asoc);
 
+	/* context value that is set via SCTP_CONTEXT socket option. */
+	sinfo.sinfo_context = event->asoc->default_rcv_context;
+
 	/* These fields are not used while receiving. */
-	sinfo.sinfo_context = 0;
 	sinfo.sinfo_timetolive = 0;
 
 	put_cmsg(msghdr, IPPROTO_SCTP, SCTP_SNDRCV,
@@ -877,7 +879,7 @@ static void sctp_ulpevent_receive_data(struct sctp_ulpevent *event,
 	 * fragment of the real event.  However, we still need to do rwnd
 	 * accounting.
 	 * In general, the skb passed from IP can have only 1 level of
-	 * fragments. But we allow multiple levels of fragments. 
+	 * fragments. But we allow multiple levels of fragments.
 	 */
 	for (frag = skb_shinfo(skb)->frag_list; frag; frag = frag->next) {
 		sctp_ulpevent_receive_data(sctp_skb2event(frag), asoc);
@@ -886,7 +888,7 @@ static void sctp_ulpevent_receive_data(struct sctp_ulpevent *event,
 
 /* Do accounting for bytes just read by user and release the references to
  * the association.
- */ 
+ */
 static void sctp_ulpevent_release_data(struct sctp_ulpevent *event)
 {
 	struct sk_buff *skb, *frag;

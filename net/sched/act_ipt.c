@@ -16,7 +16,6 @@
 #include <asm/bitops.h>
 #include <linux/types.h>
 #include <linux/kernel.h>
-#include <linux/sched.h>
 #include <linux/string.h>
 #include <linux/mm.h>
 #include <linux/socket.h>
@@ -52,10 +51,11 @@ static struct tcf_hashinfo ipt_hash_info = {
 
 static int ipt_init_target(struct ipt_entry_target *t, char *table, unsigned int hook)
 {
-	struct ipt_target *target;
+	struct xt_target *target;
 	int ret = 0;
 
-	target = xt_find_target(AF_INET, t->u.user.name, t->u.user.revision);
+	target = xt_request_find_target(AF_INET, t->u.user.name,
+					t->u.user.revision);
 	if (!target)
 		return -ENOENT;
 
@@ -63,12 +63,13 @@ static int ipt_init_target(struct ipt_entry_target *t, char *table, unsigned int
 
 	ret = xt_check_target(target, AF_INET, t->u.target_size - sizeof(*t),
 			      table, hook, 0, 0);
-	if (ret)
+	if (ret) {
+		module_put(t->u.kernel.target->me);
 		return ret;
-
+	}
 	if (t->u.kernel.target->checkentry
 	    && !t->u.kernel.target->checkentry(table, NULL,
-		    			       t->u.kernel.target, t->data,
+					       t->u.kernel.target, t->data,
 					       hook)) {
 		module_put(t->u.kernel.target->me);
 		ret = -EINVAL;
@@ -81,7 +82,7 @@ static void ipt_destroy_target(struct ipt_entry_target *t)
 {
 	if (t->u.kernel.target->destroy)
 		t->u.kernel.target->destroy(t->u.kernel.target, t->data);
-        module_put(t->u.kernel.target->me);
+	module_put(t->u.kernel.target->me);
 }
 
 static int tcf_ipt_release(struct tcf_ipt *ipt, int bind)
@@ -156,10 +157,9 @@ static int tcf_ipt_init(struct rtattr *rta, struct rtattr *est,
 	    rtattr_strlcpy(tname, tb[TCA_IPT_TABLE-1], IFNAMSIZ) >= IFNAMSIZ)
 		strcpy(tname, "mangle");
 
-	t = kmalloc(td->u.target_size, GFP_KERNEL);
+	t = kmemdup(td, td->u.target_size, GFP_KERNEL);
 	if (unlikely(!t))
 		goto err2;
-	memcpy(t, td, td->u.target_size);
 
 	if ((err = ipt_init_target(t, tname, hook)) < 0)
 		goto err3;
@@ -256,13 +256,12 @@ static int tcf_ipt_dump(struct sk_buff *skb, struct tc_action *a, int bind, int 
 	** for foolproof you need to not assume this
 	*/
 
-	t = kmalloc(ipt->tcfi_t->u.user.target_size, GFP_ATOMIC);
+	t = kmemdup(ipt->tcfi_t, ipt->tcfi_t->u.user.target_size, GFP_ATOMIC);
 	if (unlikely(!t))
 		goto rtattr_failure;
 
 	c.bindcnt = ipt->tcf_bindcnt - bind;
 	c.refcnt = ipt->tcf_refcnt - ref;
-	memcpy(t, ipt->tcfi_t, ipt->tcfi_t->u.user.target_size);
 	strcpy(t->u.user.name, ipt->tcfi_t->u.kernel.target->name);
 
 	RTA_PUT(skb, TCA_IPT_TARG, ipt->tcfi_t->u.user.target_size, t);

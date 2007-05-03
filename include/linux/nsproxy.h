@@ -4,9 +4,10 @@
 #include <linux/spinlock.h>
 #include <linux/sched.h>
 
-struct namespace;
+struct mnt_namespace;
 struct uts_namespace;
 struct ipc_namespace;
+struct pid_namespace;
 
 /*
  * A structure to contain pointers to all per-process
@@ -25,7 +26,8 @@ struct nsproxy {
 	spinlock_t nslock;
 	struct uts_namespace *uts_ns;
 	struct ipc_namespace *ipc_ns;
-	struct namespace *namespace;
+	struct mnt_namespace *mnt_ns;
+	struct pid_namespace *pid_ns;
 };
 extern struct nsproxy init_nsproxy;
 
@@ -33,6 +35,11 @@ struct nsproxy *dup_namespaces(struct nsproxy *orig);
 int copy_namespaces(int flags, struct task_struct *tsk);
 void get_task_namespaces(struct task_struct *tsk);
 void free_nsproxy(struct nsproxy *ns);
+
+static inline void get_nsproxy(struct nsproxy *ns)
+{
+	atomic_inc(&ns->count);
+}
 
 static inline void put_nsproxy(struct nsproxy *ns)
 {
@@ -51,10 +58,4 @@ static inline void exit_task_namespaces(struct task_struct *p)
 		put_nsproxy(ns);
 	}
 }
-
-static inline void get_nsproxy(struct nsproxy *ns)
-{
-	atomic_inc(&ns->count);
-}
-
 #endif

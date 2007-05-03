@@ -182,6 +182,10 @@ static int __init do_collect(void)
 
 static int __init do_header(void)
 {
+	if (memcmp(collected, "070707", 6)==0) {
+		error("incorrect cpio method used: use -H newc option");
+		return 1;
+	}
 	if (memcmp(collected, "070701", 6)) {
 		error("no cpio magic");
 		return 1;
@@ -487,6 +491,17 @@ static char * __init unpack_to_rootfs(char *buf, unsigned len, int check_only)
 	return message;
 }
 
+static int __initdata do_retain_initrd;
+
+static int __init retain_initrd_param(char *str)
+{
+	if (*str)
+		return 0;
+	do_retain_initrd = 1;
+	return 1;
+}
+__setup("retain_initrd", retain_initrd_param);
+
 extern char __initramfs_start[], __initramfs_end[];
 #ifdef CONFIG_BLK_DEV_INITRD
 #include <linux/initrd.h>
@@ -497,7 +512,11 @@ static void __init free_initrd(void)
 #ifdef CONFIG_KEXEC
 	unsigned long crashk_start = (unsigned long)__va(crashk_res.start);
 	unsigned long crashk_end   = (unsigned long)__va(crashk_res.end);
+#endif
+	if (do_retain_initrd)
+		goto skip;
 
+#ifdef CONFIG_KEXEC
 	/*
 	 * If the initrd region is overlapped with crashkernel reserved region,
 	 * free only memory that is not part of crashkernel region.
@@ -515,14 +534,14 @@ static void __init free_initrd(void)
 	} else
 #endif
 		free_initrd_mem(initrd_start, initrd_end);
-
+skip:
 	initrd_start = 0;
 	initrd_end = 0;
 }
 
 #endif
 
-void __init populate_rootfs(void)
+static int __init populate_rootfs(void)
 {
 	char *err = unpack_to_rootfs(__initramfs_start,
 			 __initramfs_end - __initramfs_start, 0);
@@ -540,7 +559,7 @@ void __init populate_rootfs(void)
 			unpack_to_rootfs((char *)initrd_start,
 				initrd_end - initrd_start, 0);
 			free_initrd();
-			return;
+			return 0;
 		}
 		printk("it isn't (%s); looks like an initrd\n", err);
 		fd = sys_open("/initrd.image", O_WRONLY|O_CREAT, 0700);
@@ -561,4 +580,6 @@ void __init populate_rootfs(void)
 #endif
 	}
 #endif
+	return 0;
 }
+rootfs_initcall(populate_rootfs);

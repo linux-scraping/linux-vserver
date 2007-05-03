@@ -16,7 +16,6 @@
 #include <linux/bitops.h>
 #include <linux/types.h>
 #include <linux/kernel.h>
-#include <linux/sched.h>
 #include <linux/string.h>
 #include <linux/mm.h>
 #include <linux/socket.h>
@@ -40,12 +39,12 @@
 	=======================================
 
 	Sources: [1] Sally Floyd and Van Jacobson, "Link-sharing and Resource
-	         Management Models for Packet Networks",
+		 Management Models for Packet Networks",
 		 IEEE/ACM Transactions on Networking, Vol.3, No.4, 1995
 
-	         [2] Sally Floyd, "Notes on CBQ and Guaranteed Service", 1995
+		 [2] Sally Floyd, "Notes on CBQ and Guaranteed Service", 1995
 
-	         [3] Sally Floyd, "Notes on Class-Based Queueing: Setting
+		 [3] Sally Floyd, "Notes on Class-Based Queueing: Setting
 		 Parameters", 1996
 
 		 [4] Sally Floyd and Michael Speer, "Experimental Results
@@ -59,12 +58,12 @@
 	the implementation is different. Particularly:
 
 	--- The WRR algorithm is different. Our version looks more
-        reasonable (I hope) and works when quanta are allowed to be
-        less than MTU, which is always the case when real time classes
-        have small rates. Note, that the statement of [3] is
-        incomplete, delay may actually be estimated even if class
-        per-round allotment is less than MTU. Namely, if per-round
-        allotment is W*r_i, and r_1+...+r_k = r < 1
+	reasonable (I hope) and works when quanta are allowed to be
+	less than MTU, which is always the case when real time classes
+	have small rates. Note, that the statement of [3] is
+	incomplete, delay may actually be estimated even if class
+	per-round allotment is less than MTU. Namely, if per-round
+	allotment is W*r_i, and r_1+...+r_k = r < 1
 
 	delay_i <= ([MTU/(W*r_i)]*W*r + W*r + k*MTU)/B
 
@@ -280,7 +279,7 @@ cbq_classify(struct sk_buff *skb, struct Qdisc *sch, int *qerr)
 #ifdef CONFIG_NET_CLS_ACT
 		switch (result) {
 		case TC_ACT_QUEUED:
-		case TC_ACT_STOLEN: 
+		case TC_ACT_STOLEN:
 			*qerr = NET_XMIT_SUCCESS;
 		case TC_ACT_SHOT:
 			return NULL;
@@ -371,8 +370,6 @@ static void cbq_deactivate_class(struct cbq_class *this)
 					return;
 				}
 			}
-
-			cl = cl_prev->next_alive;
 			return;
 		}
 	} while ((cl_prev = cl) != q->active[prio]);
@@ -481,7 +478,7 @@ static void cbq_ovl_classic(struct cbq_class *cl)
 	if (!cl->delayed) {
 		delay += cl->offtime;
 
-		/* 
+		/*
 		   Class goes to sleep, so that it will have no
 		   chance to work avgidle. Let's forgive it 8)
 
@@ -719,7 +716,7 @@ static int cbq_reshape_fail(struct sk_buff *skb, struct Qdisc *child)
 }
 #endif
 
-/* 
+/*
    It is mission critical procedure.
 
    We "regenerate" toplevel cutoff, if transmitting class
@@ -741,7 +738,7 @@ cbq_update_toplevel(struct cbq_sched_data *q, struct cbq_class *cl,
 				}
 			} while ((borrowed=borrowed->borrow) != NULL);
 		}
-#if 0	
+#if 0
 	/* It is not necessary now. Uncommenting it
 	   will save CPU cycles, but decrease fairness.
 	 */
@@ -770,7 +767,7 @@ cbq_update(struct cbq_sched_data *q)
 		   (now - last) is total time between packet right edges.
 		   (last_pktlen/rate) is "virtual" busy time, so that
 
-		         idle = (now - last) - last_pktlen/rate
+			 idle = (now - last) - last_pktlen/rate
 		 */
 
 		idle = PSCHED_TDIFF(q->now, cl->last);
@@ -909,7 +906,7 @@ cbq_dequeue_prio(struct Qdisc *sch, int prio)
 			skb = cl->q->dequeue(cl->q);
 
 			/* Class did not give us any skb :-(
-			   It could occur even if cl->q->q.qlen != 0 
+			   It could occur even if cl->q->q.qlen != 0
 			   f.e. if cl->q == "tbf"
 			 */
 			if (skb == NULL)
@@ -1258,6 +1255,8 @@ static unsigned int cbq_drop(struct Qdisc* sch)
 		do {
 			if (cl->q->ops->drop && (len = cl->q->ops->drop(cl->q))) {
 				sch->q.qlen--;
+				if (!cl->q->q.qlen)
+					cbq_deactivate_class(cl);
 				return len;
 			}
 		} while ((cl = cl->next_alive) != cl_head);
@@ -1429,7 +1428,8 @@ static int cbq_init(struct Qdisc *sch, struct rtattr *opt)
 	q->link.sibling = &q->link;
 	q->link.classid = sch->handle;
 	q->link.qdisc = sch;
-	if (!(q->link.q = qdisc_create_dflt(sch->dev, &pfifo_qdisc_ops)))
+	if (!(q->link.q = qdisc_create_dflt(sch->dev, &pfifo_qdisc_ops,
+					    sch->handle)))
 		q->link.q = &noop_qdisc;
 
 	q->link.priority = TC_CBQ_MAXPRIO-1;
@@ -1674,7 +1674,8 @@ static int cbq_graft(struct Qdisc *sch, unsigned long arg, struct Qdisc *new,
 
 	if (cl) {
 		if (new == NULL) {
-			if ((new = qdisc_create_dflt(sch->dev, &pfifo_qdisc_ops)) == NULL)
+			if ((new = qdisc_create_dflt(sch->dev, &pfifo_qdisc_ops,
+						     cl->classid)) == NULL)
 				return -ENOBUFS;
 		} else {
 #ifdef CONFIG_NET_CLS_POLICE
@@ -1683,9 +1684,8 @@ static int cbq_graft(struct Qdisc *sch, unsigned long arg, struct Qdisc *new,
 #endif
 		}
 		sch_tree_lock(sch);
-		*old = cl->q;
-		cl->q = new;
-		sch->q.qlen -= (*old)->q.qlen;
+		*old = xchg(&cl->q, new);
+		qdisc_tree_decrease_qlen(*old, (*old)->q.qlen);
 		qdisc_reset(*old);
 		sch_tree_unlock(sch);
 
@@ -1700,6 +1700,14 @@ cbq_leaf(struct Qdisc *sch, unsigned long arg)
 	struct cbq_class *cl = (struct cbq_class*)arg;
 
 	return cl ? cl->q : NULL;
+}
+
+static void cbq_qlen_notify(struct Qdisc *sch, unsigned long arg)
+{
+	struct cbq_class *cl = (struct cbq_class *)arg;
+
+	if (cl->q->q.qlen == 0)
+		cbq_deactivate_class(cl);
 }
 
 static unsigned long cbq_get(struct Qdisc *sch, u32 classid)
@@ -1932,7 +1940,7 @@ cbq_change_class(struct Qdisc *sch, u32 classid, u32 parentid, struct rtattr **t
 	cl->R_tab = rtab;
 	rtab = NULL;
 	cl->refcnt = 1;
-	if (!(cl->q = qdisc_create_dflt(sch->dev, &pfifo_qdisc_ops)))
+	if (!(cl->q = qdisc_create_dflt(sch->dev, &pfifo_qdisc_ops, classid)))
 		cl->q = &noop_qdisc;
 	cl->classid = classid;
 	cl->tparent = parent;
@@ -1986,11 +1994,16 @@ static int cbq_delete(struct Qdisc *sch, unsigned long arg)
 {
 	struct cbq_sched_data *q = qdisc_priv(sch);
 	struct cbq_class *cl = (struct cbq_class*)arg;
+	unsigned int qlen;
 
 	if (cl->filters || cl->children || cl == &q->link)
 		return -EBUSY;
 
 	sch_tree_lock(sch);
+
+	qlen = cl->q->q.qlen;
+	qdisc_reset(cl->q);
+	qdisc_tree_decrease_qlen(cl->q, qlen);
 
 	if (cl->next_alive)
 		cbq_deactivate_class(cl);
@@ -2082,6 +2095,7 @@ static void cbq_walk(struct Qdisc *sch, struct qdisc_walker *arg)
 static struct Qdisc_class_ops cbq_class_ops = {
 	.graft		=	cbq_graft,
 	.leaf		=	cbq_leaf,
+	.qlen_notify	=	cbq_qlen_notify,
 	.get		=	cbq_get,
 	.put		=	cbq_put,
 	.change		=	cbq_change_class,
@@ -2116,7 +2130,7 @@ static int __init cbq_module_init(void)
 {
 	return register_qdisc(&cbq_qdisc_ops);
 }
-static void __exit cbq_module_exit(void) 
+static void __exit cbq_module_exit(void)
 {
 	unregister_qdisc(&cbq_qdisc_ops);
 }

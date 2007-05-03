@@ -173,8 +173,8 @@ static unsigned long __initdata dt_string_start, dt_string_end;
 static unsigned long __initdata prom_initrd_start, prom_initrd_end;
 
 #ifdef CONFIG_PPC64
-static int __initdata iommu_force_on;
-static int __initdata ppc64_iommu_off;
+static int __initdata prom_iommu_force_on;
+static int __initdata prom_iommu_off;
 static unsigned long __initdata prom_tce_alloc_start;
 static unsigned long __initdata prom_tce_alloc_end;
 #endif
@@ -582,9 +582,9 @@ static void __init early_cmdline_parse(void)
 		while (*opt && *opt == ' ')
 			opt++;
 		if (!strncmp(opt, RELOC("off"), 3))
-			RELOC(ppc64_iommu_off) = 1;
+			RELOC(prom_iommu_off) = 1;
 		else if (!strncmp(opt, RELOC("force"), 5))
-			RELOC(iommu_force_on) = 1;
+			RELOC(prom_iommu_force_on) = 1;
 	}
 #endif
 }
@@ -627,6 +627,7 @@ static void __init early_cmdline_parse(void)
 /* Option vector 3: processor options supported */
 #define OV3_FP			0x80	/* floating point */
 #define OV3_VMX			0x40	/* VMX/Altivec */
+#define OV3_DFP			0x20	/* decimal FP */
 
 /* Option vector 5: PAPR/OF options supported */
 #define OV5_LPAR		0x80	/* logical partitioning supported */
@@ -642,6 +643,7 @@ static void __init early_cmdline_parse(void)
 static unsigned char ibm_architecture_vec[] = {
 	W(0xfffe0000), W(0x003a0000),	/* POWER5/POWER5+ */
 	W(0xffff0000), W(0x003e0000),	/* POWER6 */
+	W(0xffffffff), W(0x0f000002),	/* all 2.05-compliant */
 	W(0xfffffffe), W(0x0f000001),	/* all 2.04-compliant and earlier */
 	5 - 1,				/* 5 option vectors */
 
@@ -668,7 +670,7 @@ static unsigned char ibm_architecture_vec[] = {
 	/* option vector 3: processor options supported */
 	3 - 2,				/* length */
 	0,				/* don't ignore, don't halt */
-	OV3_FP | OV3_VMX,
+	OV3_FP | OV3_VMX | OV3_DFP,
 
 	/* option vector 4: IBM PAPR implementation */
 	2 - 2,				/* length */
@@ -677,7 +679,7 @@ static unsigned char ibm_architecture_vec[] = {
 	/* option vector 5: PAPR/OF options */
 	3 - 2,				/* length */
 	0,				/* don't ignore, don't halt */
-	OV5_LPAR | OV5_SPLPAR | OV5_LARGE_PAGES,
+	OV5_LPAR | OV5_SPLPAR | OV5_LARGE_PAGES | OV5_DRCONF_MEMORY,
 };
 
 /* Old method - ELF header with PT_NOTE sections */
@@ -1167,7 +1169,7 @@ static void __init prom_initialize_tce_table(void)
 	u64 local_alloc_top, local_alloc_bottom;
 	u64 i;
 
-	if (RELOC(ppc64_iommu_off))
+	if (RELOC(prom_iommu_off))
 		return;
 
 	prom_debug("starting prom_initialize_tce_table\n");
@@ -2115,11 +2117,92 @@ static void __init fixup_device_tree_pmac(void)
 #define fixup_device_tree_pmac()
 #endif
 
+#ifdef CONFIG_PPC_EFIKA
+/* The current fw of the Efika has a device tree needs quite a few
+ * fixups to be compliant with the mpc52xx bindings. It's currently
+ * unknown if it will ever be compliant (come on bPlan ...) so we do fixups.
+ * NOTE that we (barely) tolerate it because the EFIKA was out before
+ * the bindings were finished, for any new boards -> RTFM ! */
+
+struct subst_entry {
+	char *path;
+	char *property;
+	void *value;
+	int value_len;
+};
+
+static void __init fixup_device_tree_efika(void)
+{
+	/* Substitution table */
+	#define prop_cstr(x) x, sizeof(x)
+	int prop_sound_irq[3] = { 2, 2, 0 };
+	int prop_bcomm_irq[3*16] = { 3,0,0, 3,1,0, 3,2,0, 3,3,0,
+	                             3,4,0, 3,5,0, 3,6,0, 3,7,0,
+	                             3,8,0, 3,9,0, 3,10,0, 3,11,0,
+	                             3,12,0, 3,13,0, 3,14,0, 3,15,0 };
+	struct subst_entry efika_subst_table[] = {
+		{ "/",			"device_type",	prop_cstr("efika") },
+		{ "/builtin",		"compatible",	prop_cstr("soc") },
+		{ "/builtin/ata",	"compatible",	prop_cstr("mpc5200b-ata\0mpc5200-ata"), },
+		{ "/builtin/bestcomm",	"compatible",	prop_cstr("mpc5200b-bestcomm\0mpc5200-bestcomm") },
+		{ "/builtin/bestcomm",	"interrupts",	prop_bcomm_irq, sizeof(prop_bcomm_irq) },
+		{ "/builtin/ethernet",	"compatible",	prop_cstr("mpc5200b-fec\0mpc5200-fec") },
+		{ "/builtin/pic",	"compatible",	prop_cstr("mpc5200b-pic\0mpc5200-pic") },
+		{ "/builtin/serial",	"compatible",	prop_cstr("mpc5200b-psc-uart\0mpc5200-psc-uart") },
+		{ "/builtin/sound",	"compatible",	prop_cstr("mpc5200b-psc-ac97\0mpc5200-psc-ac97") },
+		{ "/builtin/sound",	"interrupts",	prop_sound_irq, sizeof(prop_sound_irq) },
+		{ "/builtin/sram",	"compatible",	prop_cstr("mpc5200b-sram\0mpc5200-sram") },
+		{ "/builtin/sram",	"device_type",	prop_cstr("sram") },
+		{}
+	};
+	#undef prop_cstr
+
+	/* Vars */
+	u32 node;
+	char prop[64];
+	int rv, i;
+
+	/* Check if we're really running on a EFIKA */
+	node = call_prom("finddevice", 1, 1, ADDR("/"));
+	if (!PHANDLE_VALID(node))
+		return;
+
+	rv = prom_getprop(node, "model", prop, sizeof(prop));
+	if (rv == PROM_ERROR)
+		return;
+	if (strcmp(prop, "EFIKA5K2"))
+		return;
+
+	prom_printf("Applying EFIKA device tree fixups\n");
+
+	/* Process substitution table */
+	for (i=0; efika_subst_table[i].path; i++) {
+		struct subst_entry *se = &efika_subst_table[i];
+
+		node = call_prom("finddevice", 1, 1, ADDR(se->path));
+		if (!PHANDLE_VALID(node)) {
+			prom_printf("fixup_device_tree_efika: ",
+				"skipped entry %x - not found\n", i);
+			continue;
+		}
+
+		rv = prom_setprop(node, se->path, se->property,
+					se->value, se->value_len );
+		if (rv == PROM_ERROR)
+			prom_printf("fixup_device_tree_efika: ",
+				"skipped entry %x - setprop error\n", i);
+	}
+}
+#else
+#define fixup_device_tree_efika()
+#endif
+
 static void __init fixup_device_tree(void)
 {
 	fixup_device_tree_maple();
 	fixup_device_tree_chrp();
 	fixup_device_tree_pmac();
+	fixup_device_tree_efika();
 }
 
 static void __init prom_find_boot_cpu(void)
@@ -2283,11 +2366,11 @@ unsigned long __init prom_init(unsigned long r3, unsigned long r4,
 	 * Fill in some infos for use by the kernel later on
 	 */
 #ifdef CONFIG_PPC64
-	if (RELOC(ppc64_iommu_off))
+	if (RELOC(prom_iommu_off))
 		prom_setprop(_prom->chosen, "/chosen", "linux,iommu-off",
 			     NULL, 0);
 
-	if (RELOC(iommu_force_on))
+	if (RELOC(prom_iommu_force_on))
 		prom_setprop(_prom->chosen, "/chosen", "linux,iommu-force-on",
 			     NULL, 0);
 

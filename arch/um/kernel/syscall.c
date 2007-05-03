@@ -15,7 +15,6 @@
 #include "linux/unistd.h"
 #include "linux/slab.h"
 #include "linux/utime.h"
-
 #include "asm/mman.h"
 #include "asm/uaccess.h"
 #include "kern_util.h"
@@ -119,7 +118,6 @@ long sys_uname(struct old_utsname __user * name)
 long sys_olduname(struct oldold_utsname __user * name)
 {
 	long error;
-	struct new_utsname *ptr;
 
 	if (!name)
 		return -EFAULT;
@@ -149,22 +147,6 @@ long sys_olduname(struct oldold_utsname __user * name)
 	error = error ? -EFAULT : 0;
 
 	return error;
-}
-
-DEFINE_SPINLOCK(syscall_lock);
-
-static int syscall_index = 0;
-
-int next_syscall_index(int limit)
-{
-	int ret;
-
-	spin_lock(&syscall_lock);
-	ret = syscall_index;
-	if(++syscall_index == limit)
-		syscall_index = 0;
-	spin_unlock(&syscall_lock);
-	return(ret);
 }
 
 int kernel_execve(const char *filename, char *const argv[], char *const envp[])

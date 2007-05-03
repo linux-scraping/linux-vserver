@@ -34,6 +34,7 @@
 #include <linux/audit.h>
 #include <linux/nsproxy.h>
 #include <linux/vs_base.h>
+#include <linux/vserver/global.h>
 
 #include <asm/unistd.h>
 
@@ -74,6 +75,7 @@ static struct ipc_namespace *clone_ipc_ns(struct ipc_namespace *old_ns)
 		goto err_shm;
 
 	kref_init(&ns->kref);
+	atomic_inc(&vs_global_ipc_ns);
 	return ns;
 
 err_shm:
@@ -143,7 +145,15 @@ void free_ipc_ns(struct kref *kref)
 	sem_exit_ns(ns);
 	msg_exit_ns(ns);
 	shm_exit_ns(ns);
+	atomic_dec(&vs_global_ipc_ns);
 	kfree(ns);
+}
+#else
+int copy_ipcs(unsigned long flags, struct task_struct *tsk)
+{
+	if (flags & CLONE_NEWIPC)
+		return -EINVAL;
+	return 0;
 }
 #endif
 
@@ -151,7 +161,7 @@ void free_ipc_ns(struct kref *kref)
  *	ipc_init	-	initialise IPC subsystem
  *
  *	The various system5 IPC resources (semaphores, messages and shared
- *	memory are initialised
+ *	memory) are initialised
  */
  
 static int __init ipc_init(void)
@@ -206,10 +216,9 @@ void __ipc_init ipc_init_ids(struct ipc_ids* ids, int size)
 }
 
 #ifdef CONFIG_PROC_FS
-static struct file_operations sysvipc_proc_fops;
+static const struct file_operations sysvipc_proc_fops;
 /**
- *	ipc_init_proc_interface	-  Create a proc interface for sysipc types
- *				   using a seq_file interface.
+ *	ipc_init_proc_interface	-  Create a proc interface for sysipc types using a seq_file interface.
  *	@path: Path in procfs
  *	@header: Banner to be printed at the beginning of the file.
  *	@ids: ipc id table to iterate.
@@ -262,9 +271,7 @@ int ipc_findkey(struct ipc_ids* ids, key_t key)
 	 */
 	for (id = 0; id <= max_id; id++) {
 		p = ids->entries->p[id];
-		if (p==NULL)
-			continue;
-		if (!vx_check(p->xid, VS_WATCH_P|VS_IDENT))
+		if(p==NULL)
 			continue;
 		if (key == p->key)
 			return id;
@@ -420,7 +427,7 @@ void* ipc_alloc(int size)
  *	@ptr: pointer returned by ipc_alloc
  *	@size: size of block
  *
- *	Free a block created with ipc_alloc. The caller must know the size
+ *	Free a block created with ipc_alloc(). The caller must know the size
  *	used in the allocation call.
  */
 
@@ -517,12 +524,17 @@ void ipc_rcu_getref(void *ptr)
 	container_of(ptr, struct ipc_rcu_hdr, data)->refcount++;
 }
 
+static void ipc_do_vfree(struct work_struct *work)
+{
+	vfree(container_of(work, struct ipc_rcu_sched, work));
+}
+
 /**
  * ipc_schedule_free - free ipc + rcu space
  * @head: RCU callback structure for queued work
  * 
  * Since RCU callback function is called in bh,
- * we need to defer the vfree to schedule_work
+ * we need to defer the vfree to schedule_work().
  */
 static void ipc_schedule_free(struct rcu_head *head)
 {
@@ -531,7 +543,7 @@ static void ipc_schedule_free(struct rcu_head *head)
 	struct ipc_rcu_sched *sched =
 			container_of(&(grace->data[0]), struct ipc_rcu_sched, data[0]);
 
-	INIT_WORK(&sched->work, vfree, sched);
+	INIT_WORK(&sched->work, ipc_do_vfree);
 	schedule_work(&sched->work);
 }
 
@@ -539,7 +551,7 @@ static void ipc_schedule_free(struct rcu_head *head)
  * ipc_immediate_free - free ipc + rcu space
  * @head: RCU callback structure that contains pointer to be freed
  *
- * Free from the RCU callback context
+ * Free from the RCU callback context.
  */
 static void ipc_immediate_free(struct rcu_head *head)
 {
@@ -577,9 +589,6 @@ int ipcperms (struct kern_ipc_perm *ipcp, short flag)
 
 	if (unlikely((err = audit_ipc_obj(ipcp))))
 		return err;
-
-	if (!vx_check(ipcp->xid, VS_WATCH_P|VS_IDENT)) /* maybe just VS_IDENT? */
-		return -1;
 	requested_mode = (flag >> 6) | (flag >> 3) | flag;
 	granted_mode = ipcp->mode;
 	if (current->euid == ipcp->cuid || current->euid == ipcp->uid)
@@ -604,8 +613,8 @@ int ipcperms (struct kern_ipc_perm *ipcp, short flag)
  *	@in: kernel permissions
  *	@out: new style IPC permissions
  *
- *	Turn the kernel object 'in' into a set of permissions descriptions
- *	for returning to userspace (out).
+ *	Turn the kernel object @in into a set of permissions descriptions
+ *	for returning to userspace (@out).
  */
  
 
@@ -625,8 +634,8 @@ void kernel_to_ipc64_perm (struct kern_ipc_perm *in, struct ipc64_perm *out)
  *	@in: new style IPC permissions
  *	@out: old style IPC permissions
  *
- *	Turn the new style permissions object in into a compatibility
- *	object and store it into the 'out' pointer.
+ *	Turn the new style permissions object @in into a compatibility
+ *	object and store it into the @out pointer.
  */
  
 void ipc64_perm_to_ipc_perm (struct ipc64_perm *in, struct ipc_perm *out)
@@ -723,7 +732,7 @@ int ipc_checkid(struct ipc_ids* ids, struct kern_ipc_perm* ipcp, int uid)
  *	@cmd: pointer to command
  *
  *	Return IPC_64 for new style IPC and IPC_OLD for old style IPC. 
- *	The cmd value is turned from an encoding command and version into
+ *	The @cmd value is turned from an encoding command and version into
  *	just the command code.
  */
  
@@ -740,14 +749,20 @@ int ipc_parse_version (int *cmd)
 #endif /* __ARCH_WANT_IPC_PARSE_VERSION */
 
 #ifdef CONFIG_PROC_FS
+struct ipc_proc_iter {
+	struct ipc_namespace *ns;
+	struct ipc_proc_iface *iface;
+};
+
 static void *sysvipc_proc_next(struct seq_file *s, void *it, loff_t *pos)
 {
-	struct ipc_proc_iface *iface = s->private;
+	struct ipc_proc_iter *iter = s->private;
+	struct ipc_proc_iface *iface = iter->iface;
 	struct kern_ipc_perm *ipc = it;
 	loff_t p;
 	struct ipc_ids *ids;
 
-	ids = current->nsproxy->ipc_ns->ids[iface->ids];
+	ids = iter->ns->ids[iface->ids];
 
 	/* If we had an ipc id locked before, unlock it */
 	if (ipc && ipc != SEQ_START_TOKEN)
@@ -774,12 +789,13 @@ static void *sysvipc_proc_next(struct seq_file *s, void *it, loff_t *pos)
  */
 static void *sysvipc_proc_start(struct seq_file *s, loff_t *pos)
 {
-	struct ipc_proc_iface *iface = s->private;
+	struct ipc_proc_iter *iter = s->private;
+	struct ipc_proc_iface *iface = iter->iface;
 	struct kern_ipc_perm *ipc;
 	loff_t p;
 	struct ipc_ids *ids;
 
-	ids = current->nsproxy->ipc_ns->ids[iface->ids];
+	ids = iter->ns->ids[iface->ids];
 
 	/*
 	 * Take the lock - this will be released by the corresponding
@@ -808,21 +824,23 @@ static void *sysvipc_proc_start(struct seq_file *s, loff_t *pos)
 static void sysvipc_proc_stop(struct seq_file *s, void *it)
 {
 	struct kern_ipc_perm *ipc = it;
-	struct ipc_proc_iface *iface = s->private;
+	struct ipc_proc_iter *iter = s->private;
+	struct ipc_proc_iface *iface = iter->iface;
 	struct ipc_ids *ids;
 
 	/* If we had a locked segment, release it */
 	if (ipc && ipc != SEQ_START_TOKEN)
 		ipc_unlock(ipc);
 
-	ids = current->nsproxy->ipc_ns->ids[iface->ids];
+	ids = iter->ns->ids[iface->ids];
 	/* Release the lock we took in start() */
 	mutex_unlock(&ids->mutex);
 }
 
 static int sysvipc_proc_show(struct seq_file *s, void *it)
 {
-	struct ipc_proc_iface *iface = s->private;
+	struct ipc_proc_iter *iter = s->private;
+	struct ipc_proc_iface *iface = iter->iface;
 
 	if (it == SEQ_START_TOKEN)
 		return seq_puts(s, iface->header);
@@ -837,22 +855,45 @@ static struct seq_operations sysvipc_proc_seqops = {
 	.show  = sysvipc_proc_show,
 };
 
-static int sysvipc_proc_open(struct inode *inode, struct file *file) {
+static int sysvipc_proc_open(struct inode *inode, struct file *file)
+{
 	int ret;
 	struct seq_file *seq;
+	struct ipc_proc_iter *iter;
+
+	ret = -ENOMEM;
+	iter = kmalloc(sizeof(*iter), GFP_KERNEL);
+	if (!iter)
+		goto out;
 
 	ret = seq_open(file, &sysvipc_proc_seqops);
-	if (!ret) {
-		seq = file->private_data;
-		seq->private = PDE(inode)->data;
-	}
+	if (ret)
+		goto out_kfree;
+
+	seq = file->private_data;
+	seq->private = iter;
+
+	iter->iface = PDE(inode)->data;
+	iter->ns    = get_ipc_ns(current->nsproxy->ipc_ns);
+out:
 	return ret;
+out_kfree:
+	kfree(iter);
+	goto out;
 }
 
-static struct file_operations sysvipc_proc_fops = {
+static int sysvipc_proc_release(struct inode *inode, struct file *file)
+{
+	struct seq_file *seq = file->private_data;
+	struct ipc_proc_iter *iter = seq->private;
+	put_ipc_ns(iter->ns);
+	return seq_release_private(inode, file);
+}
+
+static const struct file_operations sysvipc_proc_fops = {
 	.open    = sysvipc_proc_open,
 	.read    = seq_read,
 	.llseek  = seq_lseek,
-	.release = seq_release,
+	.release = sysvipc_proc_release,
 };
 #endif /* CONFIG_PROC_FS */

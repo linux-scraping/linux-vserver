@@ -1,6 +1,10 @@
 #ifndef __ASM_MSR_H
 #define __ASM_MSR_H
 
+#ifdef CONFIG_PARAVIRT
+#include <asm/paravirt.h>
+#else
+
 /*
  * Access to machine-specific registers (available on 586 and better only)
  * Note: the rd* operations modify the parameters directly (without using
@@ -77,6 +81,21 @@ static inline void wrmsrl (unsigned long msr, unsigned long long val)
      __asm__ __volatile__("rdpmc" \
 			  : "=a" (low), "=d" (high) \
 			  : "c" (counter))
+#endif	/* !CONFIG_PARAVIRT */
+
+#ifdef CONFIG_SMP
+void rdmsr_on_cpu(unsigned int cpu, u32 msr_no, u32 *l, u32 *h);
+void wrmsr_on_cpu(unsigned int cpu, u32 msr_no, u32 l, u32 h);
+#else  /*  CONFIG_SMP  */
+static inline void rdmsr_on_cpu(unsigned int cpu, u32 msr_no, u32 *l, u32 *h)
+{
+	rdmsr(msr_no, *l, *h);
+}
+static inline void wrmsr_on_cpu(unsigned int cpu, u32 msr_no, u32 l, u32 h)
+{
+	wrmsr(msr_no, l, h);
+}
+#endif  /*  CONFIG_SMP  */
 
 /* symbolic names for some interesting MSRs */
 /* Intel defined MSRs. */
@@ -95,6 +114,8 @@ static inline void wrmsrl (unsigned long msr, unsigned long long val)
 
 #define MSR_P6_PERFCTR0		0xc1
 #define MSR_P6_PERFCTR1		0xc2
+#define MSR_FSB_FREQ		0xcd
+
 
 #define MSR_IA32_BBL_CR_CTL		0x119
 
@@ -125,6 +146,9 @@ static inline void wrmsrl (unsigned long msr, unsigned long long val)
 #define MSR_IA32_PERF_STATUS		0x198
 #define MSR_IA32_PERF_CTL		0x199
 
+#define MSR_IA32_MPERF			0xE7
+#define MSR_IA32_APERF			0xE8
+
 #define MSR_IA32_THERM_CONTROL		0x19a
 #define MSR_IA32_THERM_INTERRUPT	0x19b
 #define MSR_IA32_THERM_STATUS		0x19c
@@ -140,6 +164,10 @@ static inline void wrmsrl (unsigned long msr, unsigned long long val)
 #define MSR_IA32_MC0_STATUS		0x401
 #define MSR_IA32_MC0_ADDR		0x402
 #define MSR_IA32_MC0_MISC		0x403
+
+#define MSR_IA32_PEBS_ENABLE		0x3f1
+#define MSR_IA32_DS_AREA		0x600
+#define MSR_IA32_PERF_CAPABILITIES	0x345
 
 /* Pentium IV performance counter MSRs */
 #define MSR_P4_BPU_PERFCTR0 		0x300
@@ -247,6 +275,8 @@ static inline void wrmsrl (unsigned long msr, unsigned long long val)
 #define MSR_K7_FID_VID_CTL		0xC0010041
 #define MSR_K7_FID_VID_STATUS		0xC0010042
 
+#define MSR_K8_ENABLE_C1E		0xC0010055
+
 /* extended feature register */
 #define MSR_EFER 			0xc0000080
 
@@ -283,5 +313,17 @@ static inline void wrmsrl (unsigned long msr, unsigned long long val)
 #define MSR_TMTA_LONGRUN_FLAGS		0x80868011
 #define MSR_TMTA_LRTI_READOUT		0x80868018
 #define MSR_TMTA_LRTI_VOLT_MHZ		0x8086801a
+
+/* Intel Core-based CPU performance counters */
+#define MSR_CORE_PERF_FIXED_CTR0	0x309
+#define MSR_CORE_PERF_FIXED_CTR1	0x30a
+#define MSR_CORE_PERF_FIXED_CTR2	0x30b
+#define MSR_CORE_PERF_FIXED_CTR_CTRL	0x38d
+#define MSR_CORE_PERF_GLOBAL_STATUS	0x38e
+#define MSR_CORE_PERF_GLOBAL_CTRL	0x38f
+#define MSR_CORE_PERF_GLOBAL_OVF_CTRL	0x390
+
+/* Geode defined MSRs */
+#define MSR_GEODE_BUSCONT_CONF0         0x1900
 
 #endif /* __ASM_MSR_H */

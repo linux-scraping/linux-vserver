@@ -1536,27 +1536,20 @@ static ssize_t dv1394_read(struct file *file,  char __user *buffer, size_t count
 
 static long dv1394_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
-	struct video_card *video;
+	struct video_card *video = file_to_video_card(file);
 	unsigned long flags;
 	int ret = -EINVAL;
 	void __user *argp = (void __user *)arg;
 
 	DECLARE_WAITQUEUE(wait, current);
 
-	lock_kernel();
-	video = file_to_video_card(file);
-
 	/* serialize this to prevent multi-threaded mayhem */
 	if (file->f_flags & O_NONBLOCK) {
-		if (!mutex_trylock(&video->mtx)) {
-			unlock_kernel();
+		if (!mutex_trylock(&video->mtx))
 			return -EAGAIN;
-		}
 	} else {
-		if (mutex_lock_interruptible(&video->mtx)) {
-			unlock_kernel();
+		if (mutex_lock_interruptible(&video->mtx))
 			return -ERESTARTSYS;
-		}
 	}
 
 	switch(cmd)
@@ -1780,7 +1773,6 @@ static long dv1394_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 
  out:
 	mutex_unlock(&video->mtx);
-	unlock_kernel();
 	return ret;
 }
 
@@ -2155,7 +2147,7 @@ out:
 }
 
 static struct cdev dv1394_cdev;
-static struct file_operations dv1394_fops=
+static const struct file_operations dv1394_fops=
 {
 	.owner =	THIS_MODULE,
 	.poll =         dv1394_poll,
@@ -2188,12 +2180,8 @@ static struct ieee1394_device_id dv1394_id_table[] = {
 MODULE_DEVICE_TABLE(ieee1394, dv1394_id_table);
 
 static struct hpsb_protocol_driver dv1394_driver = {
-	.name		= "DV/1394 Driver",
+	.name		= "dv1394",
 	.id_table	= dv1394_id_table,
-	.driver         = {
-		.name	= "dv1394",
-		.bus	= &ieee1394_bus_type,
-	},
 };
 
 
@@ -2267,49 +2255,37 @@ static int dv1394_init(struct ti_ohci *ohci, enum pal_or_ntsc format, enum modes
 	return 0;
 }
 
-static void dv1394_un_init(struct video_card *video)
+static void dv1394_remove_host(struct hpsb_host *host)
 {
-	/* obviously nobody has the driver open at this point */
-	do_dv1394_shutdown(video, 1);
-	kfree(video);
-}
-
-
-static void dv1394_remove_host (struct hpsb_host *host)
-{
-	struct video_card *video;
+	struct video_card *video, *tmp_video;
 	unsigned long flags;
-	int id = host->id;
+	int found_ohci_card = 0;
 
-	/* We only work with the OHCI-1394 driver */
-	if (strcmp(host->driver->name, OHCI1394_DRIVER_NAME))
-		return;
-
-	/* find the corresponding video_cards */
 	do {
-		struct video_card *tmp_vid;
-
 		video = NULL;
-
 		spin_lock_irqsave(&dv1394_cards_lock, flags);
-		list_for_each_entry(tmp_vid, &dv1394_cards, list) {
-			if ((tmp_vid->id >> 2) == id) {
-				list_del(&tmp_vid->list);
-				video = tmp_vid;
+		list_for_each_entry(tmp_video, &dv1394_cards, list) {
+			if ((tmp_video->id >> 2) == host->id) {
+				list_del(&tmp_video->list);
+				video = tmp_video;
+				found_ohci_card = 1;
 				break;
 			}
 		}
 		spin_unlock_irqrestore(&dv1394_cards_lock, flags);
 
-		if (video)
-			dv1394_un_init(video);
-	} while (video != NULL);
+		if (video) {
+			do_dv1394_shutdown(video, 1);
+			kfree(video);
+		}
+	} while (video);
 
-	class_device_destroy(hpsb_protocol_class,
-		MKDEV(IEEE1394_MAJOR, IEEE1394_MINOR_BLOCK_DV1394 * 16 + (id<<2)));
+	if (found_ohci_card)
+		class_device_destroy(hpsb_protocol_class, MKDEV(IEEE1394_MAJOR,
+			   IEEE1394_MINOR_BLOCK_DV1394 * 16 + (host->id << 2)));
 }
 
-static void dv1394_add_host (struct hpsb_host *host)
+static void dv1394_add_host(struct hpsb_host *host)
 {
 	struct ti_ohci *ohci;
 	int id = host->id;
@@ -2586,6 +2562,10 @@ static void __exit dv1394_exit_module(void)
 static int __init dv1394_init_module(void)
 {
 	int ret;
+
+	printk(KERN_WARNING
+	       "NOTE: The dv1394 driver is unsupported and may be removed in a "
+	       "future Linux release. Use raw1394 instead.\n");
 
 	cdev_init(&dv1394_cdev, &dv1394_fops);
 	dv1394_cdev.owner = THIS_MODULE;

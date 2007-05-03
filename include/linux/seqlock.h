@@ -2,7 +2,7 @@
 #define __LINUX_SEQLOCK_H
 /*
  * Reader/writer consistent mechanism without starving writers. This type of
- * lock for data where the reader wants a consitent set of information
+ * lock for data where the reader wants a consistent set of information
  * and is willing to retry if the information changes.  Readers never
  * block but they may have to retry if a writer is in
  * progress. Writers do not wait for readers. 
@@ -44,8 +44,11 @@ typedef struct {
 #define SEQLOCK_UNLOCKED \
 		 __SEQLOCK_UNLOCKED(old_style_seqlock_init)
 
-#define seqlock_init(x) \
-		do { *(x) = (seqlock_t) __SEQLOCK_UNLOCKED(x); } while (0)
+#define seqlock_init(x)					\
+	do {						\
+		(x)->sequence = 0;			\
+		spin_lock_init(&(x)->lock);		\
+	} while (0)
 
 #define DEFINE_SEQLOCK(x) \
 		seqlock_t x = __SEQLOCK_UNLOCKED(x)

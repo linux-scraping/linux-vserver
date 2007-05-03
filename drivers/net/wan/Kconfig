@@ -26,7 +26,7 @@ config WAN
 # There is no way to detect a comtrol sv11 - force it modular for now.
 config HOSTESS_SV11
 	tristate "Comtrol Hostess SV-11 support"
-	depends on WAN && ISA && m && ISA_DMA_API
+	depends on WAN && ISA && m && ISA_DMA_API && INET
 	help
 	  Driver for Comtrol Hostess SV-11 network card which
 	  operates on low speed synchronous serial links at up to
@@ -56,44 +56,6 @@ config COSA
 
 	  The driver will be compiled as a module: the
 	  module will be called cosa.
-
-config DSCC4
-	tristate "Etinc PCISYNC serial board support"
-	depends on WAN && PCI && m
-	help
-	  Driver for Etinc PCISYNC boards based on the Infineon (ex. Siemens)
-	  DSCC4 chipset.
-
-	  This is supposed to work with the four port card. Take a look at
-	  <http://www.cogenit.fr/dscc4/> for further information about the
-	  driver.
-
-	  To compile this driver as a module, choose M here: the
-	  module will be called dscc4.
-
-config DSCC4_PCISYNC
-	bool "Etinc PCISYNC features"
-	depends on DSCC4
-	help
-	  Due to Etinc's design choice for its PCISYNC cards, some operations
-	  are only allowed on specific ports of the DSCC4. This option is the
-	  only way for the driver to know that it shouldn't return a success
-	  code for these operations.
-
-	  Please say Y if your card is an Etinc's PCISYNC.
-
-config DSCC4_PCI_RST
-	bool "Hard reset support"
-	depends on DSCC4
-	help
-	  Various DSCC4 bugs forbid any reliable software reset of the ASIC.
-	  As a replacement, some vendors provide a way to assert the PCI #RST
-	  pin of DSCC4 through the GPIO port of the card. If you choose Y,
-	  the driver will make use of this feature before module removal
-	  (i.e. rmmod). The feature is known to be available on Commtech's
-	  cards. Contact your manufacturer for details.
-
-	  Say Y if your card supports this feature.
 
 #
 # Lan Media's board. Currently 1000, 1200, 5200, 5245
@@ -273,6 +235,19 @@ comment "Cyclades-PC300 MLPPP support is disabled."
 comment "Refer to the file README.mlppp, provided by PC300 package."
 	depends on WAN && HDLC && PC300 && (PPP=n || !PPP_MULTILINK || PPP_SYNC_TTY=n || !HDLC_PPP)
 
+config PC300TOO
+	tristate "Cyclades PC300 RSV/X21 alternative support"
+	depends on HDLC && PCI
+	help
+	  Alternative driver for PC300 RSV/X21 PCI cards made by
+	  Cyclades, Inc. If you have such a card, say Y here and see
+	  <http://www.kernel.org/pub/linux/utils/net/hdlc/>.
+
+	  To compile this as a module, choose M here: the module
+	  will be called pc300too.
+
+	  If unsure, say N here.
+
 config N2
 	tristate "SDL RISCom/N2 support"
 	depends on HDLC && ISA
@@ -323,6 +298,44 @@ config FARSYNC
 	  To compile this driver as a module, choose M here: the
 	  module will be called farsync.
 
+config DSCC4
+	tristate "Etinc PCISYNC serial board support"
+	depends on HDLC && PCI && m
+	help
+	  Driver for Etinc PCISYNC boards based on the Infineon (ex. Siemens)
+	  DSCC4 chipset.
+
+	  This is supposed to work with the four port card. Take a look at
+	  <http://www.cogenit.fr/dscc4/> for further information about the
+	  driver.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called dscc4.
+
+config DSCC4_PCISYNC
+	bool "Etinc PCISYNC features"
+	depends on DSCC4
+	help
+	  Due to Etinc's design choice for its PCISYNC cards, some operations
+	  are only allowed on specific ports of the DSCC4. This option is the
+	  only way for the driver to know that it shouldn't return a success
+	  code for these operations.
+
+	  Please say Y if your card is an Etinc's PCISYNC.
+
+config DSCC4_PCI_RST
+	bool "Hard reset support"
+	depends on DSCC4
+	help
+	  Various DSCC4 bugs forbid any reliable software reset of the ASIC.
+	  As a replacement, some vendors provide a way to assert the PCI #RST
+	  pin of DSCC4 through the GPIO port of the card. If you choose Y,
+	  the driver will make use of this feature before module removal
+	  (i.e. rmmod). The feature is known to be available on Commtech's
+	  cards. Contact your manufacturer for details.
+
+	  Say Y if your card supports this feature.
+
 config DLCI
 	tristate "Frame Relay DLCI support"
 	depends on WAN
@@ -343,17 +356,6 @@ config DLCI
 
 	  To compile this driver as a module, choose M here: the
 	  module will be called dlci.
-
-config DLCI_COUNT
-	int "Max open DLCI"
-	depends on DLCI
-	default "24"
-	help
-	  Maximal number of logical point-to-point frame relay connections
-	  (the identifiers of which are called DCLIs) that the driver can
-	  handle.
-
-	  The default is probably fine.
 
 config DLCI_MAX
 	int "Max DLCI per device"
@@ -382,7 +384,7 @@ config SDLA
 
 # Wan router core.
 config WAN_ROUTER_DRIVERS
-	bool "WAN router drivers"
+	tristate "WAN router drivers"
 	depends on WAN && WAN_ROUTER
 	---help---
 	  Connect LAN to WAN via Linux box.
@@ -393,7 +395,8 @@ config WAN_ROUTER_DRIVERS
 	  <file:Documentation/networking/wan-router.txt>.
 
 	  Note that the answer to this question won't directly affect the
-	  kernel: saying N will just cause the configurator to skip all
+	  kernel except for how subordinate drivers may be built:
+	  saying N will just cause the configurator to skip all
 	  the questions about WAN router drivers.
 
 	  If unsure, say N.

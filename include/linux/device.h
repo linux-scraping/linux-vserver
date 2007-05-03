@@ -2,6 +2,7 @@
  * device.h - generic, centralized driver model
  *
  * Copyright (c) 2001-2003 Patrick Mochel <mochel@osdl.org>
+ * Copyright (c) 2004-2007 Greg Kroah-Hartman <gregkh@suse.de>
  *
  * This file is released under the GPLv2
  *
@@ -21,6 +22,7 @@
 #include <linux/pm.h>
 #include <asm/semaphore.h>
 #include <asm/atomic.h>
+#include <asm/device.h>
 
 #define DEVICE_NAME_SIZE	50
 #define DEVICE_NAME_HALF	__stringify(20)	/* Less than half to accommodate slop */
@@ -41,6 +43,8 @@ struct bus_type {
 	struct kset		devices;
 	struct klist		klist_devices;
 	struct klist		klist_drivers;
+
+	struct blocking_notifier_head bus_notifier;
 
 	struct bus_attribute	* bus_attrs;
 	struct device_attribute	* dev_attrs;
@@ -75,7 +79,30 @@ int __must_check bus_for_each_drv(struct bus_type *bus,
 		struct device_driver *start, void *data,
 		int (*fn)(struct device_driver *, void *));
 
-/* driverfs interface for exporting bus attributes */
+/*
+ * Bus notifiers: Get notified of addition/removal of devices
+ * and binding/unbinding of drivers to devices.
+ * In the long run, it should be a replacement for the platform
+ * notify hooks.
+ */
+struct notifier_block;
+
+extern int bus_register_notifier(struct bus_type *bus,
+				 struct notifier_block *nb);
+extern int bus_unregister_notifier(struct bus_type *bus,
+				   struct notifier_block *nb);
+
+/* All 4 notifers below get called with the target struct device *
+ * as an argument. Note that those functions are likely to be called
+ * with the device semaphore held in the core, so be careful.
+ */
+#define BUS_NOTIFY_ADD_DEVICE		0x00000001 /* device added */
+#define BUS_NOTIFY_DEL_DEVICE		0x00000002 /* device removed */
+#define BUS_NOTIFY_BOUND_DRIVER		0x00000003 /* driver bound to device */
+#define BUS_NOTIFY_UNBIND_DRIVER	0x00000004 /* driver about to be
+						      unbound */
+
+/* sysfs interface for exporting bus attributes */
 
 struct bus_attribute {
 	struct attribute	attr;
@@ -100,6 +127,8 @@ struct device_driver {
 	struct klist_node	knode_bus;
 
 	struct module		* owner;
+	const char 		* mod_name;	/* used for built-in modules */
+	struct module_kobject	* mkobj;
 
 	int	(*probe)	(struct device * dev);
 	int	(*remove)	(struct device * dev);
@@ -119,7 +148,7 @@ extern void put_driver(struct device_driver * drv);
 extern struct device_driver *driver_find(const char *name, struct bus_type *bus);
 extern int driver_probe_done(void);
 
-/* driverfs interface for exporting driver attributes */
+/* sysfs interface for exporting driver attributes */
 
 struct driver_attribute {
 	struct attribute	attr;
@@ -266,8 +295,6 @@ extern void class_device_initialize(struct class_device *);
 extern int __must_check class_device_add(struct class_device *);
 extern void class_device_del(struct class_device *);
 
-extern int class_device_rename(struct class_device *, char *);
-
 extern struct class_device * class_device_get(struct class_device *);
 extern void class_device_put(struct class_device *);
 
@@ -301,6 +328,13 @@ extern struct class_device *class_device_create(struct class *cls,
 					__attribute__((format(printf,5,6)));
 extern void class_device_destroy(struct class *cls, dev_t devt);
 
+struct device_type {
+	struct device_attribute *attrs;
+	int (*uevent)(struct device *dev, char **envp, int num_envp,
+		      char *buffer, int buffer_size);
+	void (*release)(struct device *dev);
+};
+
 /* interface for exporting device attributes */
 struct device_attribute {
 	struct attribute	attr;
@@ -320,6 +354,43 @@ extern int __must_check device_create_bin_file(struct device *dev,
 					       struct bin_attribute *attr);
 extern void device_remove_bin_file(struct device *dev,
 				   struct bin_attribute *attr);
+extern int device_schedule_callback(struct device *dev,
+		void (*func)(struct device *));
+
+/* device resource management */
+typedef void (*dr_release_t)(struct device *dev, void *res);
+typedef int (*dr_match_t)(struct device *dev, void *res, void *match_data);
+
+#ifdef CONFIG_DEBUG_DEVRES
+extern void * __devres_alloc(dr_release_t release, size_t size, gfp_t gfp,
+			     const char *name);
+#define devres_alloc(release, size, gfp) \
+	__devres_alloc(release, size, gfp, #release)
+#else
+extern void * devres_alloc(dr_release_t release, size_t size, gfp_t gfp);
+#endif
+extern void devres_free(void *res);
+extern void devres_add(struct device *dev, void *res);
+extern void * devres_find(struct device *dev, dr_release_t release,
+			  dr_match_t match, void *match_data);
+extern void * devres_get(struct device *dev, void *new_res,
+			 dr_match_t match, void *match_data);
+extern void * devres_remove(struct device *dev, dr_release_t release,
+			    dr_match_t match, void *match_data);
+extern int devres_destroy(struct device *dev, dr_release_t release,
+			  dr_match_t match, void *match_data);
+
+/* devres group */
+extern void * __must_check devres_open_group(struct device *dev, void *id,
+					     gfp_t gfp);
+extern void devres_close_group(struct device *dev, void *id);
+extern void devres_remove_group(struct device *dev, void *id);
+extern int devres_release_group(struct device *dev, void *id);
+
+/* managed kzalloc/kfree for device drivers, no kmalloc, always use kzalloc */
+extern void *devm_kzalloc(struct device *dev, size_t size, gfp_t gfp);
+extern void devm_kfree(struct device *dev, void *p);
+
 struct device {
 	struct klist		klist_children;
 	struct klist_node	knode_parent;		/* node in sibling list */
@@ -329,6 +400,7 @@ struct device {
 
 	struct kobject kobj;
 	char	bus_id[BUS_ID_SIZE];	/* position on parent bus */
+	struct device_type	*type;
 	unsigned		is_registered:1;
 	struct device_attribute uevent_attr;
 	struct device_attribute *devt_attr;
@@ -343,10 +415,11 @@ struct device {
 	void		*driver_data;	/* data private to the driver */
 	void		*platform_data;	/* Platform specific data, device
 					   core doesn't touch it */
-	void		*firmware_data; /* Firmware specific data (e.g. ACPI,
-					   BIOS data),reserved for device core*/
 	struct dev_pm_info	power;
 
+#ifdef CONFIG_NUMA
+	int		numa_node;	/* NUMA node this device is close to */
+#endif
 	u64		*dma_mask;	/* dma mask (if dma'able device) */
 	u64		coherent_dma_mask;/* Like dma_mask, but for
 					     alloc_coherent mappings as
@@ -358,15 +431,40 @@ struct device {
 
 	struct dma_coherent_mem	*dma_mem; /* internal for coherent mem
 					     override */
+	/* arch specific additions */
+	struct dev_archdata	archdata;
+
+	spinlock_t		devres_lock;
+	struct list_head	devres_head;
 
 	/* class_device migration path */
 	struct list_head	node;
-	struct class		*class;		/* optional*/
+	struct class		*class;
 	dev_t			devt;		/* dev_t, creates the sysfs "dev" */
 	struct attribute_group	**groups;	/* optional groups */
+	int			uevent_suppress;
 
 	void	(*release)(struct device * dev);
 };
+
+#ifdef CONFIG_NUMA
+static inline int dev_to_node(struct device *dev)
+{
+	return dev->numa_node;
+}
+static inline void set_dev_node(struct device *dev, int node)
+{
+	dev->numa_node = node;
+}
+#else
+static inline int dev_to_node(struct device *dev)
+{
+	return -1;
+}
+static inline void set_dev_node(struct device *dev, int node)
+{
+}
+#endif
 
 static inline void *
 dev_get_drvdata (struct device *dev)
@@ -385,6 +483,8 @@ static inline int device_is_registered(struct device *dev)
 	return dev->is_registered;
 }
 
+void driver_init(void);
+
 /*
  * High level routines for use by the bus drivers
  */
@@ -395,7 +495,10 @@ extern int __must_check device_add(struct device * dev);
 extern void device_del(struct device * dev);
 extern int device_for_each_child(struct device *, void *,
 		     int (*fn)(struct device *, void *));
+extern struct device *device_find_child(struct device *, void *data,
+					int (*match)(struct device *, void *));
 extern int device_rename(struct device *dev, char *new_name);
+extern int device_move(struct device *dev, struct device *new_parent);
 
 /*
  * Manual binding of a device to driver. See drivers/base/bus.c
@@ -414,8 +517,6 @@ extern struct device *device_create(struct class *cls, struct device *parent,
 				    dev_t devt, const char *fmt, ...)
 				    __attribute__((format(printf,4,5)));
 extern void device_destroy(struct class *cls, dev_t devt);
-
-extern int virtual_device_parent(struct device *dev);
 
 /*
  * Platform "fixup" functions - allow the platform to have their say

@@ -395,8 +395,7 @@ static void ultra32_block_input(struct net_device *dev,
 			memcpy_fromio(skb->data + semi_count, ei_status.mem + TX_PAGES * 256, count);
 		}
 	} else {
-		/* Packet is in one chunk -- we can copy + cksum. */
-		eth_io_copy_and_sum(skb, xfer_start, count, 0);
+		memcpy_fromio(skb->data, xfer_start, count);
 	}
 }
 
@@ -437,7 +436,7 @@ int __init init_module(void)
 	return -ENXIO;
 }
 
-void cleanup_module(void)
+void __exit cleanup_module(void)
 {
 	int this_dev;
 

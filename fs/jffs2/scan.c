@@ -128,16 +128,18 @@ int jffs2_scan_medium(struct jffs2_sb_info *c)
 	}
 
 	if (jffs2_sum_active()) {
-		s = kmalloc(sizeof(struct jffs2_summary), GFP_KERNEL);
+		s = kzalloc(sizeof(struct jffs2_summary), GFP_KERNEL);
 		if (!s) {
+			kfree(flashbuf);
 			JFFS2_WARNING("Can't allocate memory for summary\n");
 			return -ENOMEM;
 		}
-		memset(s, 0, sizeof(struct jffs2_summary));
 	}
 
 	for (i=0; i<c->nr_blocks; i++) {
 		struct jffs2_eraseblock *jeb = &c->blocks[i];
+
+		cond_resched();
 
 		/* reset summary info for next eraseblock scan */
 		jffs2_sum_reset_collected(s);
@@ -448,16 +450,20 @@ static int jffs2_scan_eraseblock (struct jffs2_sb_info *c, struct jffs2_eraseblo
 
 #ifdef CONFIG_JFFS2_FS_WRITEBUFFER
 	if (jffs2_cleanmarker_oob(c)) {
-		int ret = jffs2_check_nand_cleanmarker(c, jeb);
+		int ret;
+
+		if (c->mtd->block_isbad(c->mtd, jeb->offset))
+			return BLK_STATE_BADBLOCK;
+
+		ret = jffs2_check_nand_cleanmarker(c, jeb);
 		D2(printk(KERN_NOTICE "jffs_check_nand_cleanmarker returned %d\n",ret));
+
 		/* Even if it's not found, we still scan to see
 		   if the block is empty. We use this information
 		   to decide whether to erase it or not. */
 		switch (ret) {
 		case 0:		cleanmarkerfound = 1; break;
 		case 1: 	break;
-		case 2: 	return BLK_STATE_BADBLOCK;
-		case 3:		return BLK_STATE_ALLDIRTY; /* Block has failed to erase min. once */
 		default: 	return ret;
 		}
 	}
@@ -723,6 +729,15 @@ scan_more:
 				     je32_to_cpu(node->totlen),
 				     je32_to_cpu(node->hdr_crc),
 				     hdr_crc);
+			if ((err = jffs2_scan_dirty_space(c, jeb, 4)))
+				return err;
+			ofs += 4;
+			continue;
+		}
+		/* Due to poor choice of crc32 seed, an all-zero node will have a correct CRC */
+		if (!je32_to_cpu(node->hdr_crc) && !je16_to_cpu(node->nodetype) &&
+		    !je16_to_cpu(node->magic) && !je32_to_cpu(node->totlen)) {
+			noisy_printk(&noise, "jffs2_scan_eraseblock(): All zero node header at 0x%08x.\n", ofs);
 			if ((err = jffs2_scan_dirty_space(c, jeb, 4)))
 				return err;
 			ofs += 4;

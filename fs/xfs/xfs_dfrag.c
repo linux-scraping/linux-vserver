@@ -41,7 +41,6 @@
 #include "xfs_itable.h"
 #include "xfs_dfrag.h"
 #include "xfs_error.h"
-#include "xfs_mac.h"
 #include "xfs_rw.h"
 
 /*
@@ -71,7 +70,7 @@ xfs_swapext(
 
 	/* Pull information for the target fd */
 	if (((fp = fget((int)sxp->sx_fdtarget)) == NULL) ||
-	    ((vp = vn_from_inode(fp->f_dentry->d_inode)) == NULL))  {
+	    ((vp = vn_from_inode(fp->f_path.dentry->d_inode)) == NULL))  {
 		error = XFS_ERROR(EINVAL);
 		goto error0;
 	}
@@ -83,7 +82,7 @@ xfs_swapext(
 	}
 
 	if (((tfp = fget((int)sxp->sx_fdtmp)) == NULL) ||
-	    ((tvp = vn_from_inode(tfp->f_dentry->d_inode)) == NULL)) {
+	    ((tvp = vn_from_inode(tfp->f_path.dentry->d_inode)) == NULL)) {
 		error = XFS_ERROR(EINVAL);
 		goto error0;
 	}

@@ -25,7 +25,6 @@
 
 #include <linux/module.h>
 #include <linux/kmod.h>
-#include <linux/sched.h>
 #include <linux/init.h>
 #include <linux/netdevice.h>
 #include <linux/etherdevice.h>
@@ -249,9 +248,9 @@ asix_write_cmd_async(struct usbnet *dev, u8 cmd, u16 value, u16 index,
 
 	req->bRequestType = USB_DIR_OUT | USB_TYPE_VENDOR | USB_RECIP_DEVICE;
 	req->bRequest = cmd;
-	req->wValue = value;
-	req->wIndex = index;
-	req->wLength = size;
+	req->wValue = cpu_to_le16(value);
+	req->wIndex = cpu_to_le16(index);
+	req->wLength = cpu_to_le16(size);
 
 	usb_fill_control_urb(urb, dev->udev,
 			     usb_sndctrlpipe(dev->udev, 0),
@@ -352,9 +351,11 @@ static struct sk_buff *asix_tx_fixup(struct usbnet *dev, struct sk_buff *skb,
 
 	skb_push(skb, 4);
 	packet_len = (((skb->len - 4) ^ 0x0000ffff) << 16) + (skb->len - 4);
+	cpu_to_le32s(&packet_len);
 	memcpy(skb->data, &packet_len, sizeof(packet_len));
 
 	if ((skb->len % 512) == 0) {
+		cpu_to_le32s(&padbytes);
 		memcpy( skb->tail, &padbytes, sizeof(padbytes));
 		skb_put(skb, sizeof(padbytes));
 	}
@@ -898,7 +899,7 @@ static int ax88772_link_reset(struct usbnet *dev)
 
 static int ax88772_bind(struct usbnet *dev, struct usb_interface *intf)
 {
-	int ret;
+	int ret, embd_phy;
 	void *buf;
 	u16 rx_ctl;
 	struct asix_data *data = (struct asix_data *)&dev->data;
@@ -919,13 +920,15 @@ static int ax88772_bind(struct usbnet *dev, struct usb_interface *intf)
 			AX_GPIO_RSE | AX_GPIO_GPO_2 | AX_GPIO_GPO2EN, 5)) < 0)
 		goto out2;
 
+	/* 0x10 is the phy id of the embedded 10/100 ethernet phy */
+	embd_phy = ((asix_get_phy_addr(dev) & 0x1f) == 0x10 ? 1 : 0);
 	if ((ret = asix_write_cmd(dev, AX_CMD_SW_PHY_SELECT,
-				0x0000, 0, 0, buf)) < 0) {
+				embd_phy, 0, 0, buf)) < 0) {
 		dbg("Select PHY #1 failed: %d", ret);
 		goto out2;
 	}
 
-	if ((ret = asix_sw_reset(dev, AX_SWRESET_IPPD)) < 0)
+	if ((ret = asix_sw_reset(dev, AX_SWRESET_IPPD | AX_SWRESET_PRL)) < 0)
 		goto out2;
 
 	msleep(150);
@@ -933,8 +936,14 @@ static int ax88772_bind(struct usbnet *dev, struct usb_interface *intf)
 		goto out2;
 
 	msleep(150);
-	if ((ret = asix_sw_reset(dev, AX_SWRESET_IPRL | AX_SWRESET_PRL)) < 0)
-		goto out2;
+	if (embd_phy) {
+		if ((ret = asix_sw_reset(dev, AX_SWRESET_IPRL)) < 0)
+			goto out2;
+	}
+	else {
+		if ((ret = asix_sw_reset(dev, AX_SWRESET_PRTE)) < 0)
+			goto out2;
+	}
 
 	msleep(150);
 	rx_ctl = asix_read_rx_ctl(dev);
@@ -1386,9 +1395,9 @@ static const struct usb_device_id	products [] = {
 	USB_DEVICE (0x07b8, 0x420a),
 	.driver_info =  (unsigned long) &hawking_uf200_info,
 }, {
-        // Billionton Systems, USB2AR
-        USB_DEVICE (0x08dd, 0x90ff),
-        .driver_info =  (unsigned long) &ax8817x_info,
+	// Billionton Systems, USB2AR
+	USB_DEVICE (0x08dd, 0x90ff),
+	.driver_info =  (unsigned long) &ax8817x_info,
 }, {
 	// ATEN UC210T
 	USB_DEVICE (0x0557, 0x2009),
@@ -1414,9 +1423,13 @@ static const struct usb_device_id	products [] = {
 	USB_DEVICE (0x1631, 0x6200),
 	.driver_info = (unsigned long) &ax8817x_info,
 }, {
+	// JVC MP-PRX1 Port Replicator
+	USB_DEVICE (0x04f1, 0x3008),
+	.driver_info = (unsigned long) &ax8817x_info,
+}, {
 	// ASIX AX88772 10/100
-        USB_DEVICE (0x0b95, 0x7720),
-        .driver_info = (unsigned long) &ax88772_info,
+	USB_DEVICE (0x0b95, 0x7720),
+	.driver_info = (unsigned long) &ax88772_info,
 }, {
 	// ASIX AX88178 10/100/1000
 	USB_DEVICE (0x0b95, 0x1780),
@@ -1440,6 +1453,10 @@ static const struct usb_device_id	products [] = {
 }, {
 	// Linksys USB1000
 	USB_DEVICE (0x1737, 0x0039),
+	.driver_info = (unsigned long) &ax88178_info,
+}, {
+	// IO-DATA ETG-US2
+	USB_DEVICE (0x04bb, 0x0930),
 	.driver_info = (unsigned long) &ax88178_info,
 },
 	{ },		// END

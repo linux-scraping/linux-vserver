@@ -154,6 +154,9 @@ int ocfs2_register_hb_callbacks(struct ocfs2_super *osb)
 {
 	int status;
 
+	if (ocfs2_mount_local(osb))
+		return 0;
+
 	status = o2hb_register_callback(&osb->osb_hb_down);
 	if (status < 0) {
 		mlog_errno(status);
@@ -161,8 +164,10 @@ int ocfs2_register_hb_callbacks(struct ocfs2_super *osb)
 	}
 
 	status = o2hb_register_callback(&osb->osb_hb_up);
-	if (status < 0)
+	if (status < 0) {
 		mlog_errno(status);
+		o2hb_unregister_callback(&osb->osb_hb_down);
+	}
 
 bail:
 	return status;
@@ -170,21 +175,20 @@ bail:
 
 void ocfs2_clear_hb_callbacks(struct ocfs2_super *osb)
 {
-	int status;
+	if (ocfs2_mount_local(osb))
+		return;
 
-	status = o2hb_unregister_callback(&osb->osb_hb_down);
-	if (status < 0)
-		mlog_errno(status);
-
-	status = o2hb_unregister_callback(&osb->osb_hb_up);
-	if (status < 0)
-		mlog_errno(status);
+	o2hb_unregister_callback(&osb->osb_hb_down);
+	o2hb_unregister_callback(&osb->osb_hb_up);
 }
 
 void ocfs2_stop_heartbeat(struct ocfs2_super *osb)
 {
 	int ret;
 	char *argv[5], *envp[3];
+
+	if (ocfs2_mount_local(osb))
+		return;
 
 	if (!osb->uuid_str) {
 		/* This can happen if we don't get far enough in mount... */

@@ -11,6 +11,9 @@ menu "Processor type and features"
 
 config IA64
 	bool
+	select PCI if (!IA64_HP_SIM)
+	select ACPI if (!IA64_HP_SIM)
+	select PM if (!IA64_HP_SIM)
 	default y
 	help
 	  The Itanium Processor Family is Intel's 64-bit successor to
@@ -20,7 +23,12 @@ config IA64
 
 config 64BIT
 	bool
+	select ATA_NONSTANDARD if ATA
 	default y
+
+config ZONE_DMA
+	def_bool y
+	depends on !IA64_SGI_SN2
 
 config MMU
 	bool
@@ -28,11 +36,18 @@ config MMU
 
 config SWIOTLB
        bool
-       default y
 
 config RWSEM_XCHGADD_ALGORITHM
 	bool
 	default y
+
+config ARCH_HAS_ILOG2_U32
+	bool
+	default n
+
+config ARCH_HAS_ILOG2_U64
+	bool
+	default n
 
 config GENERIC_FIND_NEXT_BIT
 	bool
@@ -76,10 +91,9 @@ choice
 
 config IA64_GENERIC
 	bool "generic"
-	select ACPI
-	select PCI
 	select NUMA
 	select ACPI_NUMA
+	select SWIOTLB
 	help
 	  This selects the system type of your hardware.  A "generic" kernel
 	  will run on any supported IA-64 system.  However, if you configure
@@ -96,6 +110,7 @@ config IA64_GENERIC
 
 config IA64_DIG
 	bool "DIG-compliant"
+	select SWIOTLB
 
 config IA64_HP_ZX1
 	bool "HP-zx1/sx1000"
@@ -105,6 +120,7 @@ config IA64_HP_ZX1
 
 config IA64_HP_ZX1_SWIOTLB
 	bool "HP-zx1/sx1000 with software I/O TLB"
+	select SWIOTLB
 	help
 	  Build a kernel that runs on HP zx1 and sx1000 systems even when they
 	  have broken PCI devices which cannot DMA to full 32 bits.  Apart
@@ -123,6 +139,7 @@ config IA64_SGI_SN2
 
 config IA64_HP_SIM
 	bool "Ski-simulator"
+	select SWIOTLB
 
 endchoice
 
@@ -433,6 +450,29 @@ config IA64_ESI
 	  for test-purposes.  If you're unsure, say N.
 
 source "drivers/sn/Kconfig"
+
+config KEXEC
+	bool "kexec system call (EXPERIMENTAL)"
+	depends on EXPERIMENTAL && !IA64_HP_SIM && (!SMP || HOTPLUG_CPU)
+	help
+	  kexec is a system call that implements the ability to shutdown your
+	  current kernel, and to start another kernel.  It is like a reboot
+	  but it is indepedent of the system firmware.   And like a reboot
+	  you can start any kernel with it, not just Linux.
+
+	  The name comes from the similiarity to the exec system call.
+
+	  It is an ongoing process to be certain the hardware in a machine
+	  is properly shutdown, so do not be surprised if this code does not
+	  initially work for you.  It may help to enable device hotplugging
+	  support.  As of this writing the exact hardware interface is
+	  strongly in flux, so no good recommendation can be made.
+
+config CRASH_DUMP
+	  bool "kernel crash dumps (EXPERIMENTAL)"
+	  depends on EXPERIMENTAL && IA64_MCA_RECOVERY && !IA64_HP_SIM && (!SMP || HOTPLUG_CPU)
+	  help
+	    Generate crash dump after being started by kexec.
 
 source "drivers/firmware/Kconfig"
 

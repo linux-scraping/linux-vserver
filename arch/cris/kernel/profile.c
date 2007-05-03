@@ -50,7 +50,7 @@ write_cris_profile(struct file *file, const char __user *buf,
   memset(sample_buffer, 0, SAMPLE_BUFFER_SIZE);
 }
 
-static struct file_operations cris_proc_profile_operations = {
+static const struct file_operations cris_proc_profile_operations = {
 	.read		= read_cris_profile,
 	.write		= write_cris_profile,
 };
@@ -59,7 +59,7 @@ static int
 __init init_cris_profile(void)
 {
   struct proc_dir_entry *entry;
-  sample_buffer = (char*)kmalloc(SAMPLE_BUFFER_SIZE, GFP_KERNEL);
+  sample_buffer = kmalloc(SAMPLE_BUFFER_SIZE, GFP_KERNEL);
   sample_buffer_pos = sample_buffer;
   entry = create_proc_entry("system_profile", S_IWUSR | S_IRUGO, NULL);
   if (entry) {

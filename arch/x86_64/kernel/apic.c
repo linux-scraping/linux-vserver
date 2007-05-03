@@ -25,6 +25,7 @@
 #include <linux/kernel_stat.h>
 #include <linux/sysdev.h>
 #include <linux/module.h>
+#include <linux/ioport.h>
 
 #include <asm/atomic.h>
 #include <asm/smp.h>
@@ -36,6 +37,7 @@
 #include <asm/idle.h>
 #include <asm/proto.h>
 #include <asm/timex.h>
+#include <asm/hpet.h>
 #include <asm/apic.h>
 
 int apic_mapped;
@@ -44,6 +46,16 @@ int apic_runs_main_timer;
 int apic_calibrate_pmtmr __initdata;
 
 int disable_apic_timer __initdata;
+
+/* Local APIC timer works in C2? */
+int local_apic_timer_c2_ok;
+EXPORT_SYMBOL_GPL(local_apic_timer_c2_ok);
+
+static struct resource *ioapic_resources;
+static struct resource lapic_resource = {
+	.name = "Local APIC",
+	.flags = IORESOURCE_MEM | IORESOURCE_BUSY,
+};
 
 /*
  * cpu_mask that denotes the CPUs that needs timer interrupt coming in as
@@ -133,7 +145,6 @@ void clear_local_APIC(void)
 		apic_write(APIC_LVTERR, APIC_LVT_MASKED);
 	if (maxlvt >= 4)
 		apic_write(APIC_LVTPC, APIC_LVT_MASKED);
-	v = GET_APIC_VERSION(apic_read(APIC_LVR));
 	apic_write(APIC_ESR, 0);
 	apic_read(APIC_ESR);
 }
@@ -452,9 +463,12 @@ static struct {
 static int lapic_suspend(struct sys_device *dev, pm_message_t state)
 {
 	unsigned long flags;
+	int maxlvt;
 
 	if (!apic_pm_state.active)
 		return 0;
+
+	maxlvt = get_maxlvt();
 
 	apic_pm_state.apic_id = apic_read(APIC_ID);
 	apic_pm_state.apic_taskpri = apic_read(APIC_TASKPRI);
@@ -462,13 +476,17 @@ static int lapic_suspend(struct sys_device *dev, pm_message_t state)
 	apic_pm_state.apic_dfr = apic_read(APIC_DFR);
 	apic_pm_state.apic_spiv = apic_read(APIC_SPIV);
 	apic_pm_state.apic_lvtt = apic_read(APIC_LVTT);
-	apic_pm_state.apic_lvtpc = apic_read(APIC_LVTPC);
+	if (maxlvt >= 4)
+		apic_pm_state.apic_lvtpc = apic_read(APIC_LVTPC);
 	apic_pm_state.apic_lvt0 = apic_read(APIC_LVT0);
 	apic_pm_state.apic_lvt1 = apic_read(APIC_LVT1);
 	apic_pm_state.apic_lvterr = apic_read(APIC_LVTERR);
 	apic_pm_state.apic_tmict = apic_read(APIC_TMICT);
 	apic_pm_state.apic_tdcr = apic_read(APIC_TDCR);
-	apic_pm_state.apic_thmr = apic_read(APIC_LVTTHMR);
+#ifdef CONFIG_X86_MCE_INTEL
+	if (maxlvt >= 5)
+		apic_pm_state.apic_thmr = apic_read(APIC_LVTTHMR);
+#endif
 	local_irq_save(flags);
 	disable_local_APIC();
 	local_irq_restore(flags);
@@ -479,9 +497,12 @@ static int lapic_resume(struct sys_device *dev)
 {
 	unsigned int l, h;
 	unsigned long flags;
+	int maxlvt;
 
 	if (!apic_pm_state.active)
 		return 0;
+
+	maxlvt = get_maxlvt();
 
 	local_irq_save(flags);
 	rdmsr(MSR_IA32_APICBASE, l, h);
@@ -496,8 +517,12 @@ static int lapic_resume(struct sys_device *dev)
 	apic_write(APIC_SPIV, apic_pm_state.apic_spiv);
 	apic_write(APIC_LVT0, apic_pm_state.apic_lvt0);
 	apic_write(APIC_LVT1, apic_pm_state.apic_lvt1);
-	apic_write(APIC_LVTTHMR, apic_pm_state.apic_thmr);
-	apic_write(APIC_LVTPC, apic_pm_state.apic_lvtpc);
+#ifdef CONFIG_X86_MCE_INTEL
+	if (maxlvt >= 5)
+		apic_write(APIC_LVTTHMR, apic_pm_state.apic_thmr);
+#endif
+	if (maxlvt >= 4)
+		apic_write(APIC_LVTPC, apic_pm_state.apic_lvtpc);
 	apic_write(APIC_LVTT, apic_pm_state.apic_lvtt);
 	apic_write(APIC_TDCR, apic_pm_state.apic_tdcr);
 	apic_write(APIC_TMICT, apic_pm_state.apic_tmict);
@@ -585,6 +610,64 @@ static int __init detect_init_APIC (void)
 	return 0;
 }
 
+#ifdef CONFIG_X86_IO_APIC
+static struct resource * __init ioapic_setup_resources(void)
+{
+#define IOAPIC_RESOURCE_NAME_SIZE 11
+	unsigned long n;
+	struct resource *res;
+	char *mem;
+	int i;
+
+	if (nr_ioapics <= 0)
+		return NULL;
+
+	n = IOAPIC_RESOURCE_NAME_SIZE + sizeof(struct resource);
+	n *= nr_ioapics;
+
+	mem = alloc_bootmem(n);
+	res = (void *)mem;
+
+	if (mem != NULL) {
+		memset(mem, 0, n);
+		mem += sizeof(struct resource) * nr_ioapics;
+
+		for (i = 0; i < nr_ioapics; i++) {
+			res[i].name = mem;
+			res[i].flags = IORESOURCE_MEM | IORESOURCE_BUSY;
+			sprintf(mem,  "IOAPIC %u", i);
+			mem += IOAPIC_RESOURCE_NAME_SIZE;
+		}
+	}
+
+	ioapic_resources = res;
+
+	return res;
+}
+
+static int __init ioapic_insert_resources(void)
+{
+	int i;
+	struct resource *r = ioapic_resources;
+
+	if (!r) {
+		printk("IO APIC resources could be not be allocated.\n");
+		return -1;
+	}
+
+	for (i = 0; i < nr_ioapics; i++) {
+		insert_resource(&iomem_resource, r);
+		r++;
+	}
+
+	return 0;
+}
+
+/* Insert the IO APIC resources after PCI initialization has occured to handle
+ * IO APICS that are mapped in on a BAR in PCI space. */
+late_initcall(ioapic_insert_resources);
+#endif
+
 void __init init_apic_mappings(void)
 {
 	unsigned long apic_phys;
@@ -604,6 +687,11 @@ void __init init_apic_mappings(void)
 	apic_mapped = 1;
 	apic_printk(APIC_VERBOSE,"mapped APIC to %16lx (%16lx)\n", APIC_BASE, apic_phys);
 
+	/* Put local APIC into the resource map. */
+	lapic_resource.start = apic_phys;
+	lapic_resource.end = lapic_resource.start + PAGE_SIZE - 1;
+	insert_resource(&iomem_resource, &lapic_resource);
+
 	/*
 	 * Fetch the APIC ID of the BSP in case we have a
 	 * default configuration (or the MP table is broken).
@@ -613,7 +701,9 @@ void __init init_apic_mappings(void)
 	{
 		unsigned long ioapic_phys, idx = FIX_IO_APIC_BASE_0;
 		int i;
+		struct resource *ioapic_res;
 
+		ioapic_res = ioapic_setup_resources();
 		for (i = 0; i < nr_ioapics; i++) {
 			if (smp_found_config) {
 				ioapic_phys = mp_ioapics[i].mpc_apicaddr;
@@ -625,6 +715,12 @@ void __init init_apic_mappings(void)
 			apic_printk(APIC_VERBOSE,"mapped IOAPIC to %016lx (%016lx)\n",
 					__fix_to_virt(idx), ioapic_phys);
 			idx++;
+
+			if (ioapic_res != NULL) {
+				ioapic_res->start = ioapic_phys;
+				ioapic_res->end = ioapic_phys + (4 * 1024) - 1;
+				ioapic_res++;
+			}
 		}
 	}
 }
@@ -644,10 +740,9 @@ void __init init_apic_mappings(void)
 
 static void __setup_APIC_LVTT(unsigned int clocks)
 {
-	unsigned int lvtt_value, tmp_value, ver;
+	unsigned int lvtt_value, tmp_value;
 	int cpu = smp_processor_id();
 
-	ver = GET_APIC_VERSION(apic_read(APIC_LVR));
 	lvtt_value = APIC_LVT_TIMER_PERIODIC | LOCAL_TIMER_VECTOR;
 
 	if (cpu_isset(cpu, timer_interrupt_broadcast_ipi_mask))
@@ -673,7 +768,7 @@ static void setup_APIC_timer(unsigned int clocks)
 	local_irq_save(flags);
 
 	/* wait for irq slice */
- 	if (vxtime.hpet_address && hpet_use_timer) {
+ 	if (hpet_address && hpet_use_timer) {
  		int trigger = hpet_readl(HPET_T0_CMP);
  		while (hpet_readl(HPET_COUNTER) >= trigger)
  			/* do nothing */ ;
@@ -695,7 +790,7 @@ static void setup_APIC_timer(unsigned int clocks)
 	/* Turn off PIT interrupt if we use APIC timer as main timer.
 	   Only works with the PM timer right now
 	   TBD fix it for HPET too. */
-	if (vxtime.mode == VXTIME_PMTMR &&
+	if ((pmtmr_ioport != 0) &&
 		smp_processor_id() == boot_cpu_id &&
 		apic_runs_main_timer == 1 &&
 		!cpu_isset(boot_cpu_id, timer_interrupt_broadcast_ipi_mask)) {
@@ -839,9 +934,17 @@ EXPORT_SYMBOL(switch_APIC_timer_to_ipi);
 
 void smp_send_timer_broadcast_ipi(void)
 {
+	int cpu = smp_processor_id();
 	cpumask_t mask;
 
 	cpus_and(mask, cpu_online_map, timer_interrupt_broadcast_ipi_mask);
+
+	if (cpu_isset(cpu, mask)) {
+		cpu_clear(cpu, mask);
+		add_pda(apic_timer_irqs, 1);
+		smp_local_timer_interrupt();
+	}
+
 	if (!cpus_empty(mask)) {
 		send_IPI_mask(mask, LOCAL_TIMER_VECTOR);
 	}
@@ -1100,6 +1203,13 @@ static __init int setup_nolapic(char *str)
 	return setup_disableapic(str);
 } 
 early_param("nolapic", setup_nolapic);
+
+static int __init parse_lapic_timer_c2_ok(char *arg)
+{
+	local_apic_timer_c2_ok = 1;
+	return 0;
+}
+early_param("lapic_timer_c2_ok", parse_lapic_timer_c2_ok);
 
 static __init int setup_noapictimer(char *str) 
 { 

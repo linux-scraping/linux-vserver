@@ -340,6 +340,9 @@ static const struct pnp_device_id pnp_dev_table[] = {
 	{       "FUJ02B8",              0 },
 	{       "FUJ02B9",              0 },
 	{       "FUJ02BC",              0 },
+	/* Fujitsu Wacom Tablet PC devices */
+	{	"FUJ02E5",		0	},
+	{	"FUJ02E6",		0	},
 	/* Rockwell's (PORALiNK) 33600 INT PNP */
 	{	"WCI0003",		0	},
 	/* Unkown PnP modems */
@@ -450,11 +453,11 @@ serial_pnp_probe(struct pnp_dev *dev, const struct pnp_device_id *dev_id)
 	port.dev = &dev->dev;
 
 	line = serial8250_register_port(&port);
+	if (line < 0)
+		return -ENODEV;
 
-	if (line >= 0)
-		pnp_set_drvdata(dev, (void *)((long)line + 1));
-	return line >= 0 ? 0 : -ENODEV;
-
+	pnp_set_drvdata(dev, (void *)((long)line + 1));
+	return 0;
 }
 
 static void __devexit serial_pnp_remove(struct pnp_dev *dev)
@@ -464,11 +467,38 @@ static void __devexit serial_pnp_remove(struct pnp_dev *dev)
 		serial8250_unregister_port(line - 1);
 }
 
+#ifdef CONFIG_PM
+static int serial_pnp_suspend(struct pnp_dev *dev, pm_message_t state)
+{
+	long line = (long)pnp_get_drvdata(dev);
+
+	if (!line)
+		return -ENODEV;
+	serial8250_suspend_port(line - 1);
+	return 0;
+}
+
+static int serial_pnp_resume(struct pnp_dev *dev)
+{
+	long line = (long)pnp_get_drvdata(dev);
+
+	if (!line)
+		return -ENODEV;
+	serial8250_resume_port(line - 1);
+	return 0;
+}
+#else
+#define serial_pnp_suspend NULL
+#define serial_pnp_resume NULL
+#endif /* CONFIG_PM */
+
 static struct pnp_driver serial_pnp_driver = {
 	.name		= "serial",
-	.id_table	= pnp_dev_table,
 	.probe		= serial_pnp_probe,
 	.remove		= __devexit_p(serial_pnp_remove),
+	.suspend	= serial_pnp_suspend,
+	.resume		= serial_pnp_resume,
+	.id_table	= pnp_dev_table,
 };
 
 static int __init serial8250_pnp_init(void)

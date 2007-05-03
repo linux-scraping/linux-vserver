@@ -1,5 +1,5 @@
 /*
- *	Linux NET3:	IP/IP protocol decoder. 
+ *	Linux NET3:	IP/IP protocol decoder.
  *
  *	Version: $Id: ipip.c,v 1.50 2001/10/02 02:22:36 davem Exp $
  *
@@ -35,14 +35,14 @@
 	Thanks for the great code!
 
 		-Sam Lantinga	(slouken@cs.ucdavis.edu)  02/01/95
-		
+
 	Minor tweaks:
 		Cleaned up the code a little and added some pre-1.3.0 tweaks.
 		dev->hard_header/hard_header_len changed to use no headers.
 		Comments/bracketing tweaked.
 		Made the tunnels use dev->name not tunnel: when error reporting.
 		Added tx_dropped stat
-		
+
 		-Alan Cox	(Alan.Cox@linux.org) 21 March 95
 
 	Reworked:
@@ -52,7 +52,7 @@
 		Note:  There is currently no firewall or ICMP handling done.
 
 		-Sam Lantinga	(slouken@cs.ucdavis.edu) 02/13/96
-		
+
 */
 
 /* Things I wish I had known when writing the tunnel driver:
@@ -75,7 +75,7 @@
 	"allocated" with skb_put().  You can then write up to skb->len
 	bytes to that buffer.  If you need more, you can call skb_put()
 	again with the additional amount of space you need.  You can
-	find out how much more space you can allocate by calling 
+	find out how much more space you can allocate by calling
 	"skb_tailroom(skb)".
 	Now, to add header space, call "skb_push(skb, header_len)".
 	This creates space at the beginning of the buffer and returns
@@ -92,11 +92,10 @@
    For comments look at net/ipv4/ip_gre.c --ANK
  */
 
- 
+
 #include <linux/capability.h>
 #include <linux/module.h>
 #include <linux/types.h>
-#include <linux/sched.h>
 #include <linux/kernel.h>
 #include <asm/uaccess.h>
 #include <linux/skbuff.h>
@@ -118,7 +117,7 @@
 #include <net/xfrm.h>
 
 #define HASH_SIZE  16
-#define HASH(addr) ((addr^(addr>>4))&0xF)
+#define HASH(addr) (((__force u32)addr^((__force u32)addr>>4))&0xF)
 
 static int ipip_fb_tunnel_init(struct net_device *dev);
 static int ipip_tunnel_init(struct net_device *dev);
@@ -134,7 +133,7 @@ static struct ip_tunnel **tunnels[4] = { tunnels_wc, tunnels_l, tunnels_r, tunne
 
 static DEFINE_RWLOCK(ipip_lock);
 
-static struct ip_tunnel * ipip_tunnel_lookup(u32 remote, u32 local)
+static struct ip_tunnel * ipip_tunnel_lookup(__be32 remote, __be32 local)
 {
 	unsigned h0 = HASH(remote);
 	unsigned h1 = HASH(local);
@@ -160,8 +159,8 @@ static struct ip_tunnel * ipip_tunnel_lookup(u32 remote, u32 local)
 
 static struct ip_tunnel **ipip_bucket(struct ip_tunnel *t)
 {
-	u32 remote = t->parms.iph.daddr;
-	u32 local = t->parms.iph.saddr;
+	__be32 remote = t->parms.iph.daddr;
+	__be32 local = t->parms.iph.saddr;
 	unsigned h = 0;
 	int prio = 0;
 
@@ -203,8 +202,8 @@ static void ipip_tunnel_link(struct ip_tunnel *t)
 
 static struct ip_tunnel * ipip_tunnel_locate(struct ip_tunnel_parm *parms, int create)
 {
-	u32 remote = parms->iph.daddr;
-	u32 local = parms->iph.saddr;
+	__be32 remote = parms->iph.daddr;
+	__be32 local = parms->iph.saddr;
 	struct ip_tunnel *t, **tp, *nt;
 	struct net_device *dev;
 	unsigned h = 0;
@@ -519,13 +518,13 @@ static int ipip_tunnel_xmit(struct sk_buff *skb, struct net_device *dev)
 	struct net_device_stats *stats = &tunnel->stat;
 	struct iphdr  *tiph = &tunnel->parms.iph;
 	u8     tos = tunnel->parms.iph.tos;
-	u16    df = tiph->frag_off;
+	__be16 df = tiph->frag_off;
 	struct rtable *rt;     			/* Route to the other host */
 	struct net_device *tdev;			/* Device to other host */
 	struct iphdr  *old_iph = skb->nh.iph;
 	struct iphdr  *iph;			/* Our new IP header */
 	int    max_headroom;			/* The extra header space needed */
-	u32    dst = tiph->daddr;
+	__be32 dst = tiph->daddr;
 	int    mtu;
 
 	if (tunnel->recursion++) {
@@ -607,7 +606,7 @@ static int ipip_tunnel_xmit(struct sk_buff *skb, struct net_device *dev)
 		struct sk_buff *new_skb = skb_realloc_headroom(skb, max_headroom);
 		if (!new_skb) {
 			ip_rt_put(rt);
-  			stats->tx_dropped++;
+			stats->tx_dropped++;
 			dev_kfree_skb(skb);
 			tunnel->recursion--;
 			return 0;
@@ -754,7 +753,8 @@ ipip_tunnel_ioctl (struct net_device *dev, struct ifreq *ifr, int cmd)
 				goto done;
 			dev = t->dev;
 		}
-		err = unregister_netdevice(dev);
+		unregister_netdevice(dev);
+		err = 0;
 		break;
 
 	default:
@@ -870,7 +870,7 @@ static int __init ipip_init(void)
 
 	printk(banner);
 
-	if (xfrm4_tunnel_register(&ipip_handler)) {
+	if (xfrm4_tunnel_register(&ipip_handler, AF_INET)) {
 		printk(KERN_INFO "ipip init: can't register tunnel\n");
 		return -EAGAIN;
 	}
@@ -892,7 +892,7 @@ static int __init ipip_init(void)
  err2:
 	free_netdev(ipip_fb_tunnel_dev);
  err1:
-	xfrm4_tunnel_deregister(&ipip_handler);
+	xfrm4_tunnel_deregister(&ipip_handler, AF_INET);
 	goto out;
 }
 
@@ -912,7 +912,7 @@ static void __exit ipip_destroy_tunnels(void)
 
 static void __exit ipip_fini(void)
 {
-	if (xfrm4_tunnel_deregister(&ipip_handler))
+	if (xfrm4_tunnel_deregister(&ipip_handler, AF_INET))
 		printk(KERN_INFO "ipip close: can't deregister tunnel\n");
 
 	rtnl_lock();

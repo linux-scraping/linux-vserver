@@ -35,7 +35,6 @@
 #include <linux/module.h>
 #include <linux/fs.h>
 #include <linux/kernel.h>
-#include <linux/sched.h>
 #include <linux/mm.h>
 #include <linux/bio.h>
 #include <linux/string.h>
@@ -468,7 +467,7 @@ static int sr_block_ioctl(struct inode *inode, struct file *file, unsigned cmd,
 	}
 
 	ret = cdrom_ioctl(file, &cd->cdi, inode, cmd, arg);
-	if (ret != ENOSYS)
+	if (ret != -ENOSYS)
 		return ret;
 
 	/*

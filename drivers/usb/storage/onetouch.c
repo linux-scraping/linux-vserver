@@ -33,7 +33,6 @@
 #include <linux/init.h>
 #include <linux/slab.h>
 #include <linux/module.h>
-#include <linux/usb_ch9.h>
 #include <linux/usb/input.h>
 #include "usb.h"
 #include "onetouch.h"
@@ -76,7 +75,7 @@ static void usb_onetouch_irq(struct urb *urb)
 	input_sync(dev);
 
 resubmit:
-	status = usb_submit_urb (urb, SLAB_ATOMIC);
+	status = usb_submit_urb (urb, GFP_ATOMIC);
 	if (status)
 		err ("can't resubmit intr, %s-%s/input0, status %d",
 			onetouch->udev->bus->bus_name,
@@ -142,10 +141,7 @@ int onetouch_connect_input(struct us_data *ss)
 		return -ENODEV;
 
 	endpoint = &interface->endpoint[2].desc;
-	if (!(endpoint->bEndpointAddress & USB_DIR_IN))
-		return -ENODEV;
-	if ((endpoint->bmAttributes & USB_ENDPOINT_XFERTYPE_MASK)
-			!= USB_ENDPOINT_XFER_INT)
+	if (!usb_endpoint_is_int_in(endpoint))
 		return -ENODEV;
 
 	pipe = usb_rcvintpipe(udev, endpoint->bEndpointAddress);
@@ -157,7 +153,7 @@ int onetouch_connect_input(struct us_data *ss)
 		goto fail1;
 
 	onetouch->data = usb_buffer_alloc(udev, ONETOUCH_PKT_LEN,
-					  SLAB_ATOMIC, &onetouch->data_dma);
+					  GFP_ATOMIC, &onetouch->data_dma);
 	if (!onetouch->data)
 		goto fail1;
 

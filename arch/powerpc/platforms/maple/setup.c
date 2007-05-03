@@ -60,7 +60,9 @@
 #include <asm/of_device.h>
 #include <asm/lmb.h>
 #include <asm/mpic.h>
+#include <asm/rtas.h>
 #include <asm/udbg.h>
+#include <asm/nvram.h>
 
 #include "maple.h"
 
@@ -166,6 +168,16 @@ struct smp_ops_t maple_smp_ops = {
 };
 #endif /* CONFIG_SMP */
 
+static void __init maple_use_rtas_reboot_and_halt_if_present(void)
+{
+	if (rtas_service_present("system-reboot") &&
+	    rtas_service_present("power-off")) {
+		ppc_md.restart = rtas_restart;
+		ppc_md.power_off = rtas_power_off;
+		ppc_md.halt = rtas_halt;
+	}
+}
+
 void __init maple_setup_arch(void)
 {
 	/* init to some ~sane value until calibrate_delay() runs */
@@ -181,8 +193,11 @@ void __init maple_setup_arch(void)
 #ifdef CONFIG_DUMMY_CONSOLE
 	conswitchp = &dummy_con;
 #endif
+	maple_use_rtas_reboot_and_halt_if_present();
 
 	printk(KERN_DEBUG "Using native/NAP idle loop\n");
+
+	mmio_nvram_init();
 }
 
 /* 
@@ -242,7 +257,6 @@ static void __init maple_init_IRQ(void)
 		printk(KERN_DEBUG "OpenPIC addr: %lx, has ISUs: %d\n",
 		       openpic_addr, has_isus);
 	}
-	of_node_put(root);
 
 	BUG_ON(openpic_addr == 0);
 
@@ -312,7 +326,7 @@ define_machine(maple_md) {
 	.setup_arch		= maple_setup_arch,
 	.init_early		= maple_init_early,
 	.init_IRQ		= maple_init_IRQ,
-	.pcibios_fixup		= maple_pcibios_fixup,
+	.pci_irq_fixup		= maple_pci_irq_fixup,
 	.pci_get_legacy_ide_irq	= maple_pci_get_legacy_ide_irq,
 	.restart		= maple_restart,
 	.power_off		= maple_power_off,

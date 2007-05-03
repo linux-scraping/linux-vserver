@@ -142,7 +142,7 @@ static void jsm_tty_send_xchar(struct uart_port *port, char ch)
 {
 	unsigned long lock_flags;
 	struct jsm_channel *channel = (struct jsm_channel *)port;
-	struct termios *termios;
+	struct ktermios *termios;
 
 	spin_lock_irqsave(&port->lock, lock_flags);
 	termios = port->info->tty->termios;
@@ -180,7 +180,7 @@ static int jsm_tty_open(struct uart_port *port)
 	struct jsm_board *brd;
 	int rc = 0;
 	struct jsm_channel *channel = (struct jsm_channel *)port;
-	struct termios *termios;
+	struct ktermios *termios;
 
 	/* Get board pointer from our array of majors we have allocated */
 	brd = channel->ch_bd;
@@ -194,31 +194,28 @@ static int jsm_tty_open(struct uart_port *port)
 	/* Drop locks, as malloc with GFP_KERNEL can sleep */
 
 	if (!channel->ch_rqueue) {
-		channel->ch_rqueue = (u8 *) kmalloc(RQUEUESIZE, GFP_KERNEL);
+		channel->ch_rqueue = kzalloc(RQUEUESIZE, GFP_KERNEL);
 		if (!channel->ch_rqueue) {
 			jsm_printk(INIT, ERR, &channel->ch_bd->pci_dev,
 				"unable to allocate read queue buf");
 			return -ENOMEM;
 		}
-		memset(channel->ch_rqueue, 0, RQUEUESIZE);
 	}
 	if (!channel->ch_equeue) {
-		channel->ch_equeue = (u8 *) kmalloc(EQUEUESIZE, GFP_KERNEL);
+		channel->ch_equeue = kzalloc(EQUEUESIZE, GFP_KERNEL);
 		if (!channel->ch_equeue) {
 			jsm_printk(INIT, ERR, &channel->ch_bd->pci_dev,
 				"unable to allocate error queue buf");
 			return -ENOMEM;
 		}
-		memset(channel->ch_equeue, 0, EQUEUESIZE);
 	}
 	if (!channel->ch_wqueue) {
-		channel->ch_wqueue = (u8 *) kmalloc(WQUEUESIZE, GFP_KERNEL);
+		channel->ch_wqueue = kzalloc(WQUEUESIZE, GFP_KERNEL);
 		if (!channel->ch_wqueue) {
 			jsm_printk(INIT, ERR, &channel->ch_bd->pci_dev,
 				"unable to allocate write queue buf");
 			return -ENOMEM;
 		}
-		memset(channel->ch_wqueue, 0, WQUEUESIZE);
 	}
 
 	channel->ch_flags &= ~(CH_OPENING);
@@ -269,7 +266,7 @@ static int jsm_tty_open(struct uart_port *port)
 static void jsm_tty_close(struct uart_port *port)
 {
 	struct jsm_board *bd;
-	struct termios *ts;
+	struct ktermios *ts;
 	struct jsm_channel *channel = (struct jsm_channel *)port;
 
 	jsm_printk(CLOSE, INFO, &channel->ch_bd->pci_dev, "start\n");
@@ -302,8 +299,8 @@ static void jsm_tty_close(struct uart_port *port)
 }
 
 static void jsm_tty_set_termios(struct uart_port *port,
-				 struct termios *termios,
-				 struct termios *old_termios)
+				 struct ktermios *termios,
+				 struct ktermios *old_termios)
 {
 	unsigned long lock_flags;
 	struct jsm_channel *channel = (struct jsm_channel *)port;
@@ -392,13 +389,12 @@ int jsm_tty_init(struct jsm_board *brd)
 			 * Okay to malloc with GFP_KERNEL, we are not at
 			 * interrupt context, and there are no locks held.
 			 */
-			brd->channels[i] = kmalloc(sizeof(struct jsm_channel), GFP_KERNEL);
+			brd->channels[i] = kzalloc(sizeof(struct jsm_channel), GFP_KERNEL);
 			if (!brd->channels[i]) {
 				jsm_printk(CORE, ERR, &brd->pci_dev,
 					"%s:%d Unable to allocate memory for channel struct\n",
 							 __FILE__, __LINE__);
 			}
-			memset(brd->channels[i], 0, sizeof(struct jsm_channel));
 		}
 	}
 

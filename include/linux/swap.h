@@ -170,10 +170,12 @@ extern void swapin_readahead(swp_entry_t, unsigned long, struct vm_area_struct *
 extern unsigned long totalram_pages;
 extern unsigned long totalreserve_pages;
 extern long nr_swap_pages;
-extern unsigned int nr_free_pages(void);
-extern unsigned int nr_free_pages_pgdat(pg_data_t *pgdat);
 extern unsigned int nr_free_buffer_pages(void);
 extern unsigned int nr_free_pagecache_pages(void);
+
+/* Definition of global_page_state not available yet */
+#define nr_free_pages() global_page_state(NR_FREE_PAGES)
+
 
 /* linux/mm/swap.c */
 extern void FASTCALL(lru_cache_add(struct page *));
@@ -218,8 +220,6 @@ extern void swap_unplug_io_fn(struct backing_dev_info *, struct page *);
 /* linux/mm/page_io.c */
 extern int swap_readpage(struct file *, struct page *);
 extern int swap_writepage(struct page *page, struct writeback_control *wbc);
-extern int rw_swap_page_sync(int rw, swp_entry_t entry, struct page *page,
-				struct bio **bio_chain);
 extern int end_swap_bio_read(struct bio *bio, unsigned int bytes_done, int err);
 
 /* linux/mm/swap_state.c */
@@ -247,9 +247,10 @@ extern int swap_duplicate(swp_entry_t);
 extern int valid_swaphandles(swp_entry_t, unsigned long *);
 extern void swap_free(swp_entry_t);
 extern void free_swap_and_cache(swp_entry_t);
-extern int swap_type_of(dev_t);
+extern int swap_type_of(dev_t, sector_t, struct block_device **);
 extern unsigned int count_swap_pages(int, int);
 extern sector_t map_swap_page(struct swap_info_struct *, pgoff_t);
+extern sector_t swapdev_block(int, pgoff_t);
 extern struct swap_info_struct *get_swap_info_struct(unsigned);
 extern int can_share_swap_page(struct page *);
 extern int remove_exclusive_swap_page(struct page *);
@@ -259,7 +260,6 @@ extern spinlock_t swap_lock;
 
 /* linux/mm/thrash.c */
 extern struct mm_struct * swap_token_mm;
-extern unsigned long swap_token_default_timeout;
 extern void grab_swap_token(void);
 extern void __put_swap_token(struct mm_struct *);
 

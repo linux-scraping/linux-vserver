@@ -8,7 +8,8 @@
 #include <asm/cacheflush.h>
 #include <asm/io.h>
 
-extern void dma_cache_sync(void *vaddr, size_t size, int direction);
+extern void dma_cache_sync(struct device *dev, void *vaddr, size_t size,
+	int direction);
 
 /*
  * Return whether the given device DMA address mask can be supported
@@ -28,6 +29,14 @@ static inline int dma_set_mask(struct device *dev, u64 dma_mask)
 		return -EIO;
 
 	*dev->dma_mask = dma_mask;
+	return 0;
+}
+
+/*
+ * dma_map_single can't fail as it is implemented now.
+ */
+static inline int dma_mapping_error(dma_addr_t addr)
+{
 	return 0;
 }
 
@@ -108,7 +117,7 @@ static inline dma_addr_t
 dma_map_single(struct device *dev, void *cpu_addr, size_t size,
 	       enum dma_data_direction direction)
 {
-	dma_cache_sync(cpu_addr, size, direction);
+	dma_cache_sync(dev, cpu_addr, size, direction);
 	return virt_to_bus(cpu_addr);
 }
 
@@ -210,7 +219,7 @@ dma_map_sg(struct device *dev, struct scatterlist *sg, int nents,
 
 		sg[i].dma_address = page_to_bus(sg[i].page) + sg[i].offset;
 		virt = page_address(sg[i].page) + sg[i].offset;
-		dma_cache_sync(virt, sg[i].length, direction);
+		dma_cache_sync(dev, virt, sg[i].length, direction);
 	}
 
 	return nents;
@@ -255,14 +264,32 @@ static inline void
 dma_sync_single_for_cpu(struct device *dev, dma_addr_t dma_handle,
 			size_t size, enum dma_data_direction direction)
 {
-	dma_cache_sync(bus_to_virt(dma_handle), size, direction);
+	dma_cache_sync(dev, bus_to_virt(dma_handle), size, direction);
 }
 
 static inline void
 dma_sync_single_for_device(struct device *dev, dma_addr_t dma_handle,
 			   size_t size, enum dma_data_direction direction)
 {
-	dma_cache_sync(bus_to_virt(dma_handle), size, direction);
+	dma_cache_sync(dev, bus_to_virt(dma_handle), size, direction);
+}
+
+static inline void
+dma_sync_single_range_for_cpu(struct device *dev, dma_addr_t dma_handle,
+			      unsigned long offset, size_t size,
+			      enum dma_data_direction direction)
+{
+	/* just sync everything, that's all the pci API can do */
+	dma_sync_single_for_cpu(dev, dma_handle, offset+size, direction);
+}
+
+static inline void
+dma_sync_single_range_for_device(struct device *dev, dma_addr_t dma_handle,
+				 unsigned long offset, size_t size,
+				 enum dma_data_direction direction)
+{
+	/* just sync everything, that's all the pci API can do */
+	dma_sync_single_for_device(dev, dma_handle, offset+size, direction);
 }
 
 /**
@@ -285,7 +312,7 @@ dma_sync_sg_for_cpu(struct device *dev, struct scatterlist *sg,
 	int i;
 
 	for (i = 0; i < nents; i++) {
-		dma_cache_sync(page_address(sg[i].page) + sg[i].offset,
+		dma_cache_sync(dev, page_address(sg[i].page) + sg[i].offset,
 			       sg[i].length, direction);
 	}
 }
@@ -297,7 +324,7 @@ dma_sync_sg_for_device(struct device *dev, struct scatterlist *sg,
 	int i;
 
 	for (i = 0; i < nents; i++) {
-		dma_cache_sync(page_address(sg[i].page) + sg[i].offset,
+		dma_cache_sync(dev, page_address(sg[i].page) + sg[i].offset,
 			       sg[i].length, direction);
 	}
 }
@@ -307,7 +334,7 @@ dma_sync_sg_for_device(struct device *dev, struct scatterlist *sg,
 #define dma_alloc_noncoherent(d, s, h, f) dma_alloc_coherent(d, s, h, f)
 #define dma_free_noncoherent(d, s, v, h) dma_free_coherent(d, s, v, h)
 
-static inline int dma_is_consistent(dma_addr_t dma_addr)
+static inline int dma_is_consistent(struct device *dev, dma_addr_t dma_addr)
 {
 	return 1;
 }

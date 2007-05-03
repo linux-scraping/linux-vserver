@@ -29,7 +29,6 @@
 #include <linux/pci.h>
 #include <linux/delay.h>
 #include <linux/ioport.h>
-#include <linux/sched.h>
 #include <linux/slab.h>
 #include <linux/smp_lock.h>
 #include <linux/errno.h>
@@ -39,7 +38,7 @@
 #include <linux/interrupt.h>
 #include <linux/proc_fs.h>
 #include <linux/device.h>
-#include <linux/usb_ch9.h>
+#include <linux/usb/ch9.h>
 #include <linux/usb_gadget.h>
 
 #include <asm/byteorder.h>
@@ -298,27 +297,6 @@ goku_free_request(struct usb_ep *_ep, struct usb_request *_req)
 
 /*-------------------------------------------------------------------------*/
 
-#undef USE_KMALLOC
-
-/* many common platforms have dma-coherent caches, which means that it's
- * safe to use kmalloc() memory for all i/o buffers without using any
- * cache flushing calls.  (unless you're trying to share cache lines
- * between dma and non-dma activities, which is a slow idea in any case.)
- *
- * other platforms need more care, with 2.6 having a moderately general
- * solution except for the common "buffer is smaller than a page" case.
- */
-#if	defined(CONFIG_X86)
-#define USE_KMALLOC
-
-#elif	defined(CONFIG_MIPS) && !defined(CONFIG_DMA_NONCOHERENT)
-#define USE_KMALLOC
-
-#elif	defined(CONFIG_PPC) && !defined(CONFIG_NOT_COHERENT_CACHE)
-#define USE_KMALLOC
-
-#endif
-
 /* allocating buffers this way eliminates dma mapping overhead, which
  * on some platforms will mean eliminating a per-io buffer copy.  with
  * some kinds of system caches, further tweaks may still be needed.
@@ -335,11 +313,6 @@ goku_alloc_buffer(struct usb_ep *_ep, unsigned bytes,
 		return NULL;
 	*dma = DMA_ADDR_INVALID;
 
-#if	defined(USE_KMALLOC)
-	retval = kmalloc(bytes, gfp_flags);
-	if (retval)
-		*dma = virt_to_phys(retval);
-#else
 	if (ep->dma) {
 		/* the main problem with this call is that it wastes memory
 		 * on typical 1/N page allocations: it allocates 1-N pages.
@@ -349,7 +322,6 @@ goku_alloc_buffer(struct usb_ep *_ep, unsigned bytes,
 				bytes, dma, gfp_flags);
 	} else
 		retval = kmalloc(bytes, gfp_flags);
-#endif
 	return retval;
 }
 
@@ -357,7 +329,6 @@ static void
 goku_free_buffer(struct usb_ep *_ep, void *buf, dma_addr_t dma, unsigned bytes)
 {
 	/* free memory into the right allocator */
-#ifndef	USE_KMALLOC
 	if (dma != DMA_ADDR_INVALID) {
 		struct goku_ep	*ep;
 
@@ -366,7 +337,6 @@ goku_free_buffer(struct usb_ep *_ep, void *buf, dma_addr_t dma, unsigned bytes)
 			return;
 		dma_free_coherent(&ep->dev->pdev->dev, bytes, buf, dma);
 	} else
-#endif
 		kfree (buf);
 }
 
@@ -1432,7 +1402,6 @@ int usb_gadget_register_driver(struct usb_gadget_driver *driver)
 	if (!driver
 			|| driver->speed != USB_SPEED_FULL
 			|| !driver->bind
-			|| !driver->unbind
 			|| !driver->disconnect
 			|| !driver->setup)
 		return -EINVAL;
@@ -1495,7 +1464,7 @@ int usb_gadget_unregister_driver(struct usb_gadget_driver *driver)
 
 	if (!dev)
 		return -ENODEV;
-	if (!driver || driver != dev->driver)
+	if (!driver || driver != dev->driver || !driver->unbind)
 		return -EINVAL;
 
 	spin_lock_irqsave(&dev->lock, flags);
@@ -1808,13 +1777,8 @@ static void goku_remove(struct pci_dev *pdev)
 	struct goku_udc		*dev = pci_get_drvdata(pdev);
 
 	DBG(dev, "%s\n", __FUNCTION__);
-	/* start with the driver above us */
-	if (dev->driver) {
-		/* should have been done already by driver model core */
-		WARN(dev, "pci remove, driver '%s' is still registered\n",
-				dev->driver->driver.name);
-		usb_gadget_unregister_driver(dev->driver);
-	}
+
+	BUG_ON(dev->driver);
 
 #ifdef CONFIG_USB_GADGET_DEBUG_FILES
 	remove_proc_entry(proc_node_name, NULL);
@@ -1864,7 +1828,7 @@ static int goku_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	}
 
 	/* alloc, and start init */
-	dev = kmalloc (sizeof *dev, SLAB_KERNEL);
+	dev = kmalloc (sizeof *dev, GFP_KERNEL);
 	if (dev == NULL){
 		pr_debug("enomem %s\n", pci_name(pdev));
 		retval = -ENOMEM;

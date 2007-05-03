@@ -76,7 +76,7 @@
 #define PG_active		 6
 #define PG_slab			 7	/* slab debug (Suparna wants this) */
 
-#define PG_checked		 8	/* kill me in 2.5.<early>. */
+#define PG_owner_priv_1		 8	/* Owner use. If pagecache, fs may use*/
 #define PG_arch_1		 9
 #define PG_reserved		10
 #define PG_private		11	/* If pagecache, has fs-private data */
@@ -91,6 +91,8 @@
 #define PG_nosave_free		18	/* Used for system suspend/resume */
 #define PG_buddy		19	/* Page is free, on buddy lists */
 
+/* PG_owner_priv_1 users should have descriptive aliases */
+#define PG_checked		PG_owner_priv_1 /* Used by some filesystems */
 
 #if (BITS_PER_LONG > 32)
 /*
@@ -253,14 +255,10 @@ static inline void SetPageUptodate(struct page *page)
 
 struct page;	/* forward declaration */
 
-int test_clear_page_dirty(struct page *page);
+extern void cancel_dirty_page(struct page *page, unsigned int account_size);
+
 int test_clear_page_writeback(struct page *page);
 int test_set_page_writeback(struct page *page);
-
-static inline void clear_page_dirty(struct page *page)
-{
-	test_clear_page_dirty(page);
-}
 
 static inline void set_page_writeback(struct page *page)
 {

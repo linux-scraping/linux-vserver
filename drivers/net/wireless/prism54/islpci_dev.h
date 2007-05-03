@@ -1,6 +1,5 @@
 /*
- *  
- *  Copyright (C) 2002 Intersil Americas Inc. 
+ *  Copyright (C) 2002 Intersil Americas Inc.
  *  Copyright (C) 2003 Herbert Valerio Riedel <hvr@gnu.org>
  *  Copyright (C) 2003 Luis R. Rodriguez <mcgrof@ruslug.rutgers.edu>
  *  Copyright (C) 2003 Aurelien Alleaume <slts@free.fr>
@@ -72,12 +71,12 @@ struct islpci_bss_wpa_ie {
 	u8 bssid[ETH_ALEN];
 	u8 wpa_ie[MAX_WPA_IE_LEN];
 	size_t wpa_ie_len;
-	
+
 };
 
 typedef struct {
 	spinlock_t slock;	/* generic spinlock; */
-	
+
 	u32 priv_oid;
 
 	/* our mib cache */
@@ -85,7 +84,7 @@ typedef struct {
         struct rw_semaphore mib_sem;
 	void **mib;
 	char nickname[IW_ESSID_MAX_SIZE+1];
-	
+
 	/* Take care of the wireless stats */
 	struct work_struct stats_work;
 	struct semaphore stats_sem;
@@ -120,7 +119,7 @@ typedef struct {
 	struct net_device *ndev;
 
 	/* device queue interface members */
-	struct isl38xx_cb *control_block;	/* device control block 
+	struct isl38xx_cb *control_block;	/* device control block
 							   (== driver_mem_address!) */
 
 	/* Each queue has three indexes:
@@ -212,4 +211,8 @@ islpci_trigger(islpci_private *priv)
 
 int islpci_free_memory(islpci_private *);
 struct net_device *islpci_setup(struct pci_dev *);
+
+#define DRV_NAME	"prism54"
+#define DRV_VERSION	"1.2"
+
 #endif				/* _ISLPCI_DEV_H */

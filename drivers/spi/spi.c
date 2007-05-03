@@ -32,7 +32,7 @@
  */
 static void spidev_release(struct device *dev)
 {
-	const struct spi_device	*spi = to_spi_device(dev);
+	struct spi_device	*spi = to_spi_device(dev);
 
 	/* spi masters may cleanup for released devices */
 	if (spi->master->cleanup)
@@ -189,8 +189,8 @@ static DECLARE_MUTEX(board_lock);
  * this is exported so that for example a USB or parport based adapter
  * driver could add devices (which it would learn about out-of-band).
  */
-struct spi_device *__init_or_module
-spi_new_device(struct spi_master *master, struct spi_board_info *chip)
+struct spi_device *spi_new_device(struct spi_master *master,
+				  struct spi_board_info *chip)
 {
 	struct spi_device	*proxy;
 	struct device		*dev = master->cdev.dev;
@@ -352,15 +352,14 @@ static struct class spi_master_class = {
  * the master's methods before calling spi_register_master(); and (after errors
  * adding the device) calling spi_master_put() to prevent a memory leak.
  */
-struct spi_master * __init_or_module
-spi_alloc_master(struct device *dev, unsigned size)
+struct spi_master *spi_alloc_master(struct device *dev, unsigned size)
 {
 	struct spi_master	*master;
 
 	if (!dev)
 		return NULL;
 
-	master = kzalloc(size + sizeof *master, SLAB_KERNEL);
+	master = kzalloc(size + sizeof *master, GFP_KERNEL);
 	if (!master)
 		return NULL;
 
@@ -392,8 +391,7 @@ EXPORT_SYMBOL_GPL(spi_alloc_master);
  * After a successful return, the caller is responsible for calling
  * spi_unregister_master().
  */
-int __init_or_module
-spi_register_master(struct spi_master *master)
+int spi_register_master(struct spi_master *master)
 {
 	static atomic_t		dyn_bus_id = ATOMIC_INIT((1<<16) - 1);
 	struct device		*dev = master->cdev.dev;
@@ -447,7 +445,9 @@ static int __unregister(struct device *dev, void *unused)
  */
 void spi_unregister_master(struct spi_master *master)
 {
-	(void) device_for_each_child(master->cdev.dev, NULL, __unregister);
+	int dummy;
+
+	dummy = device_for_each_child(master->cdev.dev, NULL, __unregister);
 	class_device_unregister(&master->cdev);
 }
 EXPORT_SYMBOL_GPL(spi_unregister_master);
@@ -463,16 +463,20 @@ EXPORT_SYMBOL_GPL(spi_unregister_master);
  */
 struct spi_master *spi_busnum_to_master(u16 bus_num)
 {
-	if (bus_num) {
-		char			name[8];
-		struct kobject		*bus;
+	struct class_device	*cdev;
+	struct spi_master	*master = NULL;
+	struct spi_master	*m;
 
-		snprintf(name, sizeof name, "spi%u", bus_num);
-		bus = kset_find_obj(&spi_master_class.subsys.kset, name);
-		if (bus)
-			return container_of(bus, struct spi_master, cdev.kobj);
+	down(&spi_master_class.sem);
+	list_for_each_entry(cdev, &spi_master_class.children, node) {
+		m = container_of(cdev, struct spi_master, cdev);
+		if (m->bus_num == bus_num) {
+			master = spi_master_get(m);
+			break;
+		}
 	}
-	return NULL;
+	up(&spi_master_class.sem);
+	return master;
 }
 EXPORT_SYMBOL_GPL(spi_busnum_to_master);
 
@@ -607,7 +611,7 @@ static int __init spi_init(void)
 {
 	int	status;
 
-	buf = kmalloc(SPI_BUFSIZ, SLAB_KERNEL);
+	buf = kmalloc(SPI_BUFSIZ, GFP_KERNEL);
 	if (!buf) {
 		status = -ENOMEM;
 		goto err0;

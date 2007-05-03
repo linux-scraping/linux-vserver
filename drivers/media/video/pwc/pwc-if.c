@@ -128,7 +128,7 @@ static int default_size = PSZ_QCIF;
 static int default_fps = 10;
 static int default_fbufs = 3;   /* Default number of frame buffers */
        int pwc_mbufs = 2;	/* Default number of mmap() buffers */
-#if CONFIG_PWC_DEBUG
+#ifdef CONFIG_USB_PWC_DEBUG
        int pwc_trace = PWC_DEBUG_LEVEL;
 #endif
 static int power_save = 0;
@@ -152,7 +152,7 @@ static int  pwc_video_ioctl(struct inode *inode, struct file *file,
 			    unsigned int ioctlnr, unsigned long arg);
 static int  pwc_video_mmap(struct file *file, struct vm_area_struct *vma);
 
-static struct file_operations pwc_fops = {
+static const struct file_operations pwc_fops = {
 	.owner =	THIS_MODULE,
 	.open =		pwc_video_open,
 	.release =     	pwc_video_close,
@@ -866,11 +866,9 @@ int pwc_isoc_init(struct pwc_device *pdev)
 	}
 	if (ret) {
 		/* De-allocate in reverse order */
-		while (i >= 0) {
-			if (pdev->sbuf[i].urb != NULL)
-				usb_free_urb(pdev->sbuf[i].urb);
+		while (i--) {
+			usb_free_urb(pdev->sbuf[i].urb);
 			pdev->sbuf[i].urb = NULL;
-			i--;
 		}
 		return ret;
 	}
@@ -1053,7 +1051,7 @@ static void pwc_remove_sysfs_files(struct video_device *vdev)
 	video_device_remove_file(vdev, &class_device_attr_button);
 }
 
-#if CONFIG_PWC_DEBUG
+#ifdef CONFIG_USB_PWC_DEBUG
 static const char *pwc_sensor_type_to_string(unsigned int sensor_type)
 {
 	switch(sensor_type) {
@@ -1095,8 +1093,7 @@ static int pwc_video_open(struct inode *inode, struct file *file)
 	PWC_DEBUG_OPEN(">> video_open called(vdev = 0x%p).\n", vdev);
 
 	pdev = (struct pwc_device *)vdev->priv;
-	if (pdev == NULL)
-		BUG();
+	BUG_ON(!pdev);
 	if (pdev->vopen) {
 		PWC_DEBUG_OPEN("I'm busy, someone is using the device.\n");
 		return -EBUSY;
@@ -1838,7 +1835,7 @@ module_param(size, charp, 0444);
 module_param(fps, int, 0444);
 module_param(fbufs, int, 0444);
 module_param(mbufs, int, 0444);
-#if CONFIG_PWC_DEBUG
+#ifdef CONFIG_USB_PWC_DEBUG
 module_param_named(trace, pwc_trace, int, 0644);
 #endif
 module_param(power_save, int, 0444);
@@ -1911,7 +1908,7 @@ static int __init usb_pwc_init(void)
 		default_fbufs = fbufs;
 		PWC_DEBUG_MODULE("Number of frame buffers set to %d.\n", default_fbufs);
 	}
-#if CONFIG_PWC_DEBUG
+#ifdef CONFIG_USB_PWC_DEBUG
 	if (pwc_trace >= 0) {
 		PWC_DEBUG_MODULE("Trace options: 0x%04x\n", pwc_trace);
 	}

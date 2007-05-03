@@ -21,6 +21,7 @@
 #include <linux/writeback.h>
 #include <linux/init.h>
 #include <linux/backing-dev.h>
+#include <linux/task_io_accounting_ops.h>
 #include <linux/blkdev.h>
 #include <linux/mpage.h>
 #include <linux/rmap.h>
@@ -132,11 +133,9 @@ get_dirty_limits(long *pbackground, long *pdirty,
 
 #ifdef CONFIG_HIGHMEM
 	/*
-	 * If this mapping can only allocate from low memory,
-	 * we exclude high memory from our count.
+	 * We always exclude high memory from our count.
 	 */
-	if (mapping && !(mapping_gfp_mask(mapping) & __GFP_HIGHMEM))
-		available_memory -= totalhigh_pages;
+	available_memory -= totalhigh_pages;
 #endif
 
 
@@ -297,10 +296,20 @@ void balance_dirty_pages_ratelimited_nr(struct address_space *mapping,
 }
 EXPORT_SYMBOL(balance_dirty_pages_ratelimited_nr);
 
-void throttle_vm_writeout(void)
+void throttle_vm_writeout(gfp_t gfp_mask)
 {
 	long background_thresh;
 	long dirty_thresh;
+
+	if ((gfp_mask & (__GFP_FS|__GFP_IO)) != (__GFP_FS|__GFP_IO)) {
+		/*
+		 * The caller might hold locks which can prevent IO completion
+		 * or progress in the filesystem.  So we cannot just sit here
+		 * waiting for IO to complete.
+		 */
+		congestion_wait(WRITE, HZ/10);
+		return;
+	}
 
         for ( ; ; ) {
 		get_dirty_limits(&background_thresh, &dirty_thresh, NULL);
@@ -317,7 +326,6 @@ void throttle_vm_writeout(void)
                 congestion_wait(WRITE, HZ/10);
         }
 }
-
 
 /*
  * writeback at least _min_pages, and keep writing until the amount of dirty
@@ -516,7 +524,7 @@ static int __cpuinit
 ratelimit_handler(struct notifier_block *self, unsigned long u, void *v)
 {
 	writeback_set_ratelimit();
-	return 0;
+	return NOTIFY_DONE;
 }
 
 static struct notifier_block __cpuinitdata ratelimit_nb = {
@@ -525,37 +533,32 @@ static struct notifier_block __cpuinitdata ratelimit_nb = {
 };
 
 /*
- * If the machine has a large highmem:lowmem ratio then scale back the default
- * dirty memory thresholds: allowing too much dirty highmem pins an excessive
- * number of buffer_heads.
+ * Called early on to tune the page writeback dirty limits.
+ *
+ * We used to scale dirty pages according to how total memory
+ * related to pages that could be allocated for buffers (by
+ * comparing nr_free_buffer_pages() to vm_total_pages.
+ *
+ * However, that was when we used "dirty_ratio" to scale with
+ * all memory, and we don't do that any more. "dirty_ratio"
+ * is now applied to total non-HIGHPAGE memory (by subtracting
+ * totalhigh_pages from vm_total_pages), and as such we can't
+ * get into the old insane situation any more where we had
+ * large amounts of dirty pages compared to a small amount of
+ * non-HIGHMEM memory.
+ *
+ * But we might still want to scale the dirty_ratio by how
+ * much memory the box has..
  */
 void __init page_writeback_init(void)
 {
-	long buffer_pages = nr_free_buffer_pages();
-	long correction;
-
-	correction = (100 * 4 * buffer_pages) / vm_total_pages;
-
-	if (correction < 100) {
-		dirty_background_ratio *= correction;
-		dirty_background_ratio /= 100;
-		vm_dirty_ratio *= correction;
-		vm_dirty_ratio /= 100;
-
-		if (dirty_background_ratio <= 0)
-			dirty_background_ratio = 1;
-		if (vm_dirty_ratio <= 0)
-			vm_dirty_ratio = 1;
-	}
 	mod_timer(&wb_timer, jiffies + dirty_writeback_interval);
 	writeback_set_ratelimit();
 	register_cpu_notifier(&ratelimit_nb);
 }
 
 /**
- * generic_writepages - walk the list of dirty pages of the given
- *                      address space and writepage() all of them.
- *
+ * generic_writepages - walk the list of dirty pages of the given address space and writepage() all of them.
  * @mapping: address space structure to write
  * @wbc: subtract the number of written pages from *@wbc->nr_to_write
  *
@@ -702,7 +705,6 @@ int do_writepages(struct address_space *mapping, struct writeback_control *wbc)
 
 /**
  * write_one_page - write out a single page and optionally wait on I/O
- *
  * @page: the page to write
  * @wait: if true, wait on writeout
  *
@@ -741,6 +743,16 @@ int write_one_page(struct page *page, int wait)
 EXPORT_SYMBOL(write_one_page);
 
 /*
+ * For address_spaces which do not use buffers nor write back.
+ */
+int __set_page_dirty_no_writeback(struct page *page)
+{
+	if (!PageDirty(page))
+		SetPageDirty(page);
+	return 0;
+}
+
+/*
  * For address_spaces which do not use buffers.  Just tag the page as dirty in
  * its radix tree.
  *
@@ -761,23 +773,24 @@ int __set_page_dirty_nobuffers(struct page *page)
 		struct address_space *mapping = page_mapping(page);
 		struct address_space *mapping2;
 
-		if (mapping) {
-			write_lock_irq(&mapping->tree_lock);
-			mapping2 = page_mapping(page);
-			if (mapping2) { /* Race with truncate? */
-				BUG_ON(mapping2 != mapping);
-				if (mapping_cap_account_dirty(mapping))
-					__inc_zone_page_state(page,
-								NR_FILE_DIRTY);
-				radix_tree_tag_set(&mapping->page_tree,
-					page_index(page), PAGECACHE_TAG_DIRTY);
+		if (!mapping)
+			return 1;
+
+		write_lock_irq(&mapping->tree_lock);
+		mapping2 = page_mapping(page);
+		if (mapping2) { /* Race with truncate? */
+			BUG_ON(mapping2 != mapping);
+			if (mapping_cap_account_dirty(mapping)) {
+				__inc_zone_page_state(page, NR_FILE_DIRTY);
+				task_io_account_write(PAGE_CACHE_SIZE);
 			}
-			write_unlock_irq(&mapping->tree_lock);
-			if (mapping->host) {
-				/* !PageAnon && !swapper_space */
-				__mark_inode_dirty(mapping->host,
-							I_DIRTY_PAGES);
-			}
+			radix_tree_tag_set(&mapping->page_tree,
+				page_index(page), PAGECACHE_TAG_DIRTY);
+		}
+		write_unlock_irq(&mapping->tree_lock);
+		if (mapping->host) {
+			/* !PageAnon && !swapper_space */
+			__mark_inode_dirty(mapping->host, I_DIRTY_PAGES);
 		}
 		return 1;
 	}
@@ -843,39 +856,6 @@ int set_page_dirty_lock(struct page *page)
 EXPORT_SYMBOL(set_page_dirty_lock);
 
 /*
- * Clear a page's dirty flag, while caring for dirty memory accounting. 
- * Returns true if the page was previously dirty.
- */
-int test_clear_page_dirty(struct page *page)
-{
-	struct address_space *mapping = page_mapping(page);
-	unsigned long flags;
-
-	if (mapping) {
-		write_lock_irqsave(&mapping->tree_lock, flags);
-		if (TestClearPageDirty(page)) {
-			radix_tree_tag_clear(&mapping->page_tree,
-						page_index(page),
-						PAGECACHE_TAG_DIRTY);
-			write_unlock_irqrestore(&mapping->tree_lock, flags);
-			/*
-			 * We can continue to use `mapping' here because the
-			 * page is locked, which pins the address_space
-			 */
-			if (mapping_cap_account_dirty(mapping)) {
-				page_mkclean(page);
-				dec_zone_page_state(page, NR_FILE_DIRTY);
-			}
-			return 1;
-		}
-		write_unlock_irqrestore(&mapping->tree_lock, flags);
-		return 0;
-	}
-	return TestClearPageDirty(page);
-}
-EXPORT_SYMBOL(test_clear_page_dirty);
-
-/*
  * Clear a page's dirty flag, while caring for dirty memory accounting.
  * Returns true if the page was previously dirty.
  *
@@ -893,12 +873,41 @@ int clear_page_dirty_for_io(struct page *page)
 {
 	struct address_space *mapping = page_mapping(page);
 
-	if (mapping) {
+	if (mapping && mapping_cap_account_dirty(mapping)) {
+		/*
+		 * Yes, Virginia, this is indeed insane.
+		 *
+		 * We use this sequence to make sure that
+		 *  (a) we account for dirty stats properly
+		 *  (b) we tell the low-level filesystem to
+		 *      mark the whole page dirty if it was
+		 *      dirty in a pagetable. Only to then
+		 *  (c) clean the page again and return 1 to
+		 *      cause the writeback.
+		 *
+		 * This way we avoid all nasty races with the
+		 * dirty bit in multiple places and clearing
+		 * them concurrently from different threads.
+		 *
+		 * Note! Normally the "set_page_dirty(page)"
+		 * has no effect on the actual dirty bit - since
+		 * that will already usually be set. But we
+		 * need the side effects, and it can help us
+		 * avoid races.
+		 *
+		 * We basically use the page "master dirty bit"
+		 * as a serialization point for all the different
+		 * threads doing their things.
+		 *
+		 * FIXME! We still have a race here: if somebody
+		 * adds the page back to the page tables in
+		 * between the "page_mkclean()" and the "TestClearPageDirty()",
+		 * we might have it mapped without the dirty bit set.
+		 */
+		if (page_mkclean(page))
+			set_page_dirty(page);
 		if (TestClearPageDirty(page)) {
-			if (mapping_cap_account_dirty(mapping)) {
-				page_mkclean(page);
-				dec_zone_page_state(page, NR_FILE_DIRTY);
-			}
+			dec_zone_page_state(page, NR_FILE_DIRTY);
 			return 1;
 		}
 		return 0;

@@ -42,8 +42,8 @@
  * with V_PARAM_SHIFT bits to the right of the binary point.
  */
 #define V_PARAM_SHIFT 1
-static int alpha = 1<<V_PARAM_SHIFT;
-static int beta  = 3<<V_PARAM_SHIFT;
+static int alpha = 2<<V_PARAM_SHIFT;
+static int beta  = 4<<V_PARAM_SHIFT;
 static int gamma = 1<<V_PARAM_SHIFT;
 
 module_param(alpha, int, 0644);
@@ -330,9 +330,9 @@ static void tcp_vegas_cong_avoid(struct sock *sk, u32 ack,
 		vegas->minRTT = 0x7fffffff;
 	}
 	/* Use normal slow start */
-	else if (tp->snd_cwnd <= tp->snd_ssthresh) 
+	else if (tp->snd_cwnd <= tp->snd_ssthresh)
 		tcp_slow_start(tp);
-	
+
 }
 
 /* Extract info for Tcp socket info provided via netlink. */

@@ -173,10 +173,12 @@ static ssize_t fat_direct_IO(int rw, struct kiocb *iocb,
 		 *
 		 * But we must fill the remaining area or hole by nul for
 		 * updating ->mmu_private.
+		 *
+		 * Return 0, and fallback to normal buffered write.
 		 */
 		loff_t size = offset + iov_length(iov, nr_segs);
 		if (MSDOS_I(inode)->mmu_private < size)
-			return -EINVAL;
+			return 0;
 	}
 
 	/*
@@ -477,12 +479,12 @@ static void fat_put_super(struct super_block *sb)
 	kfree(sbi);
 }
 
-static kmem_cache_t *fat_inode_cachep;
+static struct kmem_cache *fat_inode_cachep;
 
 static struct inode *fat_alloc_inode(struct super_block *sb)
 {
 	struct msdos_inode_info *ei;
-	ei = kmem_cache_alloc(fat_inode_cachep, SLAB_KERNEL);
+	ei = kmem_cache_alloc(fat_inode_cachep, GFP_KERNEL);
 	if (!ei)
 		return NULL;
 	return &ei->vfs_inode;
@@ -493,7 +495,7 @@ static void fat_destroy_inode(struct inode *inode)
 	kmem_cache_free(fat_inode_cachep, MSDOS_I(inode));
 }
 
-static void init_once(void * foo, kmem_cache_t * cachep, unsigned long flags)
+static void init_once(void * foo, struct kmem_cache * cachep, unsigned long flags)
 {
 	struct msdos_inode_info *ei = (struct msdos_inode_info *)foo;
 
@@ -618,7 +620,7 @@ int fat_sync_inode(struct inode *inode)
 EXPORT_SYMBOL_GPL(fat_sync_inode);
 
 static int fat_show_options(struct seq_file *m, struct vfsmount *mnt);
-static struct super_operations fat_sops = {
+static const struct super_operations fat_sops = {
 	.alloc_inode	= fat_alloc_inode,
 	.destroy_inode	= fat_destroy_inode,
 	.write_inode	= fat_write_inode,
@@ -1151,7 +1153,7 @@ static int fat_read_root(struct inode *inode)
  * Read the super block of an MS-DOS FS.
  */
 int fat_fill_super(struct super_block *sb, void *data, int silent,
-		   struct inode_operations *fs_dir_inode_ops, int isvfat)
+		   const struct inode_operations *fs_dir_inode_ops, int isvfat)
 {
 	struct inode *root_inode = NULL;
 	struct buffer_head *bh;

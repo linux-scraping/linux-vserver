@@ -174,8 +174,7 @@ void qe_setbrg(u32 brg, u32 rate)
 	u32 divisor, tempval;
 	int div16 = 0;
 
-	bp = &qe_immr->brg.brgc1;
-	bp += brg;
+	bp = &qe_immr->brg.brgc[brg];
 
 	divisor = (get_brg_clk() / rate);
 	if (divisor > QE_BRGC_DIVISOR_MAX + 1) {
@@ -252,13 +251,13 @@ static int qe_sdma_init(void)
 
 	/* allocate 2 internal temporary buffers (512 bytes size each) for
 	 * the SDMA */
-	sdma_buf_offset = qe_muram_alloc(512 * 2, 64);
+ 	sdma_buf_offset = qe_muram_alloc(512 * 2, 4096);
 	if (IS_MURAM_ERR(sdma_buf_offset))
 		return -ENOMEM;
 
 	out_be32(&sdma->sdebcr, sdma_buf_offset & QE_SDEBCR_BA_MASK);
-	out_be32(&sdma->sdmr, (QE_SDMR_GLB_1_MSK | (0x1 >>
-					QE_SDMR_CEN_SHIFT)));
+ 	out_be32(&sdma->sdmr, (QE_SDMR_GLB_1_MSK |
+ 					(0x1 << QE_SDMR_CEN_SHIFT)));
 
 	return 0;
 }

@@ -26,6 +26,50 @@
 #define to_drv(node) container_of(node, struct device_driver, kobj.entry)
 
 
+static void driver_bound(struct device *dev)
+{
+	if (klist_node_attached(&dev->knode_driver)) {
+		printk(KERN_WARNING "%s: device %s already bound\n",
+			__FUNCTION__, kobject_name(&dev->kobj));
+		return;
+	}
+
+	pr_debug("bound device '%s' to driver '%s'\n",
+		 dev->bus_id, dev->driver->name);
+
+	if (dev->bus)
+		blocking_notifier_call_chain(&dev->bus->bus_notifier,
+					     BUS_NOTIFY_BOUND_DRIVER, dev);
+
+	klist_add_tail(&dev->knode_driver, &dev->driver->klist_devices);
+}
+
+static int driver_sysfs_add(struct device *dev)
+{
+	int ret;
+
+	ret = sysfs_create_link(&dev->driver->kobj, &dev->kobj,
+			  kobject_name(&dev->kobj));
+	if (ret == 0) {
+		ret = sysfs_create_link(&dev->kobj, &dev->driver->kobj,
+					"driver");
+		if (ret)
+			sysfs_remove_link(&dev->driver->kobj,
+					kobject_name(&dev->kobj));
+	}
+	return ret;
+}
+
+static void driver_sysfs_remove(struct device *dev)
+{
+	struct device_driver *drv = dev->driver;
+
+	if (drv) {
+		sysfs_remove_link(&drv->kobj, kobject_name(&dev->kobj));
+		sysfs_remove_link(&dev->kobj, "driver");
+	}
+}
+
 /**
  *	device_bind_driver - bind a driver to one device.
  *	@dev:	device.
@@ -44,24 +88,9 @@ int device_bind_driver(struct device *dev)
 {
 	int ret;
 
-	if (klist_node_attached(&dev->knode_driver)) {
-		printk(KERN_WARNING "%s: device %s already bound\n",
-			__FUNCTION__, kobject_name(&dev->kobj));
-		return 0;
-	}
-
-	pr_debug("bound device '%s' to driver '%s'\n",
-		 dev->bus_id, dev->driver->name);
-	klist_add_tail(&dev->knode_driver, &dev->driver->klist_devices);
-	ret = sysfs_create_link(&dev->driver->kobj, &dev->kobj,
-			  kobject_name(&dev->kobj));
-	if (ret == 0) {
-		ret = sysfs_create_link(&dev->kobj, &dev->driver->kobj,
-					"driver");
-		if (ret)
-			sysfs_remove_link(&dev->driver->kobj,
-					kobject_name(&dev->kobj));
-	}
+	ret = driver_sysfs_add(dev);
+	if (!ret)
+		driver_bound(dev);
 	return ret;
 }
 
@@ -83,44 +112,47 @@ static int really_probe(void *void_data)
 	atomic_inc(&probe_count);
 	pr_debug("%s: Probing driver %s with device %s\n",
 		 drv->bus->name, drv->name, dev->bus_id);
+	WARN_ON(!list_empty(&dev->devres_head));
 
 	dev->driver = drv;
+	if (driver_sysfs_add(dev)) {
+		printk(KERN_ERR "%s: driver_sysfs_add(%s) failed\n",
+			__FUNCTION__, dev->bus_id);
+		goto probe_failed;
+	}
+
 	if (dev->bus->probe) {
 		ret = dev->bus->probe(dev);
-		if (ret) {
-			dev->driver = NULL;
+		if (ret)
 			goto probe_failed;
-		}
 	} else if (drv->probe) {
 		ret = drv->probe(dev);
-		if (ret) {
-			dev->driver = NULL;
+		if (ret)
 			goto probe_failed;
-		}
 	}
-	if (device_bind_driver(dev)) {
-		printk(KERN_ERR "%s: device_bind_driver(%s) failed\n",
-			__FUNCTION__, dev->bus_id);
-		/* How does undo a ->probe?  We're screwed. */
-	}
+
+	driver_bound(dev);
 	ret = 1;
 	pr_debug("%s: Bound Device %s to Driver %s\n",
 		 drv->bus->name, dev->bus_id, drv->name);
 	goto done;
 
 probe_failed:
-	if (ret == -ENODEV || ret == -ENXIO) {
-		/* Driver matched, but didn't support device
-		 * or device not found.
-		 * Not an error; keep going.
-		 */
-		ret = 0;
-	} else {
+	devres_release_all(dev);
+	driver_sysfs_remove(dev);
+	dev->driver = NULL;
+
+	if (ret != -ENODEV && ret != -ENXIO) {
 		/* driver matched but the probe failed */
 		printk(KERN_WARNING
 		       "%s: probe of %s failed with error %d\n",
 		       drv->name, dev->bus_id, ret);
 	}
+	/*
+	 * Ignore errors returned by ->probe so that the next driver can try
+	 * its luck.
+	 */
+	ret = 0;
 done:
 	kfree(data);
 	atomic_dec(&probe_count);
@@ -284,14 +316,20 @@ static void __device_release_driver(struct device * dev)
 	drv = dev->driver;
 	if (drv) {
 		get_driver(drv);
-		sysfs_remove_link(&drv->kobj, kobject_name(&dev->kobj));
+		driver_sysfs_remove(dev);
 		sysfs_remove_link(&dev->kobj, "driver");
 		klist_remove(&dev->knode_driver);
+
+		if (dev->bus)
+			blocking_notifier_call_chain(&dev->bus->bus_notifier,
+						     BUS_NOTIFY_UNBIND_DRIVER,
+						     dev);
 
 		if (dev->bus && dev->bus->remove)
 			dev->bus->remove(dev);
 		else if (drv->remove)
 			drv->remove(dev);
+		devres_release_all(dev);
 		dev->driver = NULL;
 		put_driver(drv);
 	}

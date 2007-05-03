@@ -218,7 +218,9 @@ via_fire_dmablit(drm_device_t *dev, drm_via_sg_info_t *vsg, int engine)
 	VIA_WRITE(VIA_PCI_DMA_MR0  + engine*0x04, VIA_DMA_MR_CM | VIA_DMA_MR_TDIE);
 	VIA_WRITE(VIA_PCI_DMA_BCR0 + engine*0x10, 0);
 	VIA_WRITE(VIA_PCI_DMA_DPR0 + engine*0x10, vsg->chain_start);
+	DRM_WRITEMEMORYBARRIER();
 	VIA_WRITE(VIA_PCI_DMA_CSR0 + engine*0x04, VIA_DMA_CSR_DE | VIA_DMA_CSR_TS);
+	VIA_READ(VIA_PCI_DMA_CSR0 + engine*0x04);
 }
 
 /*
@@ -374,10 +376,8 @@ via_dmablit_handler(drm_device_t *dev, int engine, int from_irq)
 			blitq->cur = cur;
 			blitq->num_outstanding--;
 			blitq->end = jiffies + DRM_HZ;
-			if (!timer_pending(&blitq->poll_timer)) {
-				blitq->poll_timer.expires = jiffies+1;
-				add_timer(&blitq->poll_timer);
-			}
+			if (!timer_pending(&blitq->poll_timer))
+				mod_timer(&blitq->poll_timer, jiffies + 1);
 		} else {
 			if (timer_pending(&blitq->poll_timer)) {
 				del_timer(&blitq->poll_timer);
@@ -476,8 +476,7 @@ via_dmablit_timer(unsigned long data)
 	via_dmablit_handler(dev, engine, 0);
 	
 	if (!timer_pending(&blitq->poll_timer)) {
-		blitq->poll_timer.expires = jiffies+1;
-		add_timer(&blitq->poll_timer);
+		mod_timer(&blitq->poll_timer, jiffies + 1);
 
 	       /*
 		* Rerun handler to delete timer if engines are off, and
@@ -500,9 +499,9 @@ via_dmablit_timer(unsigned long data)
 
 
 static void 
-via_dmablit_workqueue(void *data)
+via_dmablit_workqueue(struct work_struct *work)
 {
-	drm_via_blitq_t *blitq = (drm_via_blitq_t *) data;
+	drm_via_blitq_t *blitq = container_of(work, drm_via_blitq_t, wq);
 	drm_device_t *dev = blitq->dev;
 	unsigned long irqsave;
 	drm_via_sg_info_t *cur_sg;
@@ -571,10 +570,9 @@ via_init_dmablit(drm_device_t *dev)
 			DRM_INIT_WAITQUEUE(blitq->blit_queue + j);
 		}
 		DRM_INIT_WAITQUEUE(&blitq->busy_queue);
-		INIT_WORK(&blitq->wq, via_dmablit_workqueue, blitq);
-		init_timer(&blitq->poll_timer);
-		blitq->poll_timer.function = &via_dmablit_timer;
-		blitq->poll_timer.data = (unsigned long) blitq;
+		INIT_WORK(&blitq->wq, via_dmablit_workqueue);
+		setup_timer(&blitq->poll_timer, via_dmablit_timer,
+				(unsigned long)blitq);
 	}	
 }
 

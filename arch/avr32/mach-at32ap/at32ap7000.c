@@ -8,9 +8,11 @@
 #include <linux/clk.h>
 #include <linux/init.h>
 #include <linux/platform_device.h>
+#include <linux/spi/spi.h>
 
 #include <asm/io.h>
 
+#include <asm/arch/at32ap7000.h>
 #include <asm/arch/board.h>
 #include <asm/arch/portmux.h>
 #include <asm/arch/sm.h>
@@ -57,6 +59,9 @@ static struct platform_device _name##_id##_device = {		\
 	.num_resources	= ARRAY_SIZE(_name##_id##_resource),	\
 }
 
+#define select_peripheral(pin, periph, flags)			\
+	at32_select_periph(GPIO_PIN_##pin, GPIO_##periph, flags)
+
 #define DEV_CLK(_name, devname, bus, _index)			\
 static struct clk devname##_##_name = {				\
 	.name		= #_name,				\
@@ -66,18 +71,6 @@ static struct clk devname##_##_name = {				\
 	.get_rate	= bus##_clk_get_rate,			\
 	.index		= _index,				\
 }
-
-enum {
-	PIOA,
-	PIOB,
-	PIOC,
-	PIOD,
-};
-
-enum {
-	FUNC_A,
-	FUNC_B,
-};
 
 unsigned long at32ap7000_osc_rates[3] = {
 	[0] = 32768,
@@ -318,8 +311,6 @@ static void genclk_mode(struct clk *clk, int enabled)
 {
 	u32 control;
 
-	BUG_ON(clk->index > 7);
-
 	control = sm_readl(&system_manager, PM_GCCTRL + 4 * clk->index);
 	if (enabled)
 		control |= SM_BIT(CEN);
@@ -333,11 +324,6 @@ static unsigned long genclk_get_rate(struct clk *clk)
 	u32 control;
 	unsigned long div = 1;
 
-	BUG_ON(clk->index > 7);
-
-	if (!clk->parent)
-		return 0;
-
 	control = sm_readl(&system_manager, PM_GCCTRL + 4 * clk->index);
 	if (control & SM_BIT(DIVEN))
 		div = 2 * (SM_BFEXT(DIV, control) + 1);
@@ -349,11 +335,6 @@ static long genclk_set_rate(struct clk *clk, unsigned long rate, int apply)
 {
 	u32 control;
 	unsigned long parent_rate, actual_rate, div;
-
-	BUG_ON(clk->index > 7);
-
-	if (!clk->parent)
-		return 0;
 
 	parent_rate = clk->parent->get_rate(clk->parent);
 	control = sm_readl(&system_manager, PM_GCCTRL + 4 * clk->index);
@@ -381,11 +362,8 @@ int genclk_set_parent(struct clk *clk, struct clk *parent)
 {
 	u32 control;
 
-	BUG_ON(clk->index > 7);
-
 	printk("clk %s: new parent %s (was %s)\n",
-	       clk->name, parent->name,
-	       clk->parent ? clk->parent->name : "(null)");
+	       clk->name, parent->name, clk->parent->name);
 
 	control = sm_readl(&system_manager, PM_GCCTRL + 4 * clk->index);
 
@@ -405,6 +383,22 @@ int genclk_set_parent(struct clk *clk, struct clk *parent)
 	clk->parent = parent;
 
 	return 0;
+}
+
+static void __init genclk_init_parent(struct clk *clk)
+{
+	u32 control;
+	struct clk *parent;
+
+	BUG_ON(clk->index > 7);
+
+	control = sm_readl(&system_manager, PM_GCCTRL + 4 * clk->index);
+	if (control & SM_BIT(OSCSEL))
+		parent = (control & SM_BIT(PLLSEL)) ? &pll1 : &osc1;
+	else
+		parent = (control & SM_BIT(PLLSEL)) ? &pll0 : &osc0;
+
+	clk->parent = parent;
 }
 
 /* --------------------------------------------------------------------
@@ -504,9 +498,16 @@ static struct resource pio3_resource[] = {
 DEFINE_DEV(pio, 3);
 DEV_CLK(mck, pio3, pba, 13);
 
+static struct resource pio4_resource[] = {
+	PBMEM(0xffe03800),
+	IRQ(17),
+};
+DEFINE_DEV(pio, 4);
+DEV_CLK(mck, pio4, pba, 14);
+
 void __init at32_add_system_devices(void)
 {
-	system_manager.eim_first_irq = NR_INTERNAL_IRQS;
+	system_manager.eim_first_irq = EIM_IRQ_BASE;
 
 	platform_device_register(&at32_sm_device);
 	platform_device_register(&at32_intc0_device);
@@ -517,6 +518,7 @@ void __init at32_add_system_devices(void)
 	platform_device_register(&pio1_device);
 	platform_device_register(&pio2_device);
 	platform_device_register(&pio3_device);
+	platform_device_register(&pio4_device);
 }
 
 /* --------------------------------------------------------------------
@@ -529,7 +531,7 @@ static struct atmel_uart_data atmel_usart0_data = {
 };
 static struct resource atmel_usart0_resource[] = {
 	PBMEM(0xffe00c00),
-	IRQ(7),
+	IRQ(6),
 };
 DEFINE_DEV_DATA(atmel_usart, 0);
 DEV_CLK(usart, atmel_usart0, pba, 4);
@@ -569,29 +571,29 @@ DEV_CLK(usart, atmel_usart3, pba, 6);
 
 static inline void configure_usart0_pins(void)
 {
-	portmux_set_func(PIOA,  8, FUNC_B);	/* RXD	*/
-	portmux_set_func(PIOA,  9, FUNC_B);	/* TXD	*/
+	select_peripheral(PA(8),  PERIPH_B, 0);	/* RXD	*/
+	select_peripheral(PA(9),  PERIPH_B, 0);	/* TXD	*/
 }
 
 static inline void configure_usart1_pins(void)
 {
-	portmux_set_func(PIOA, 17, FUNC_A);	/* RXD	*/
-	portmux_set_func(PIOA, 18, FUNC_A);	/* TXD	*/
+	select_peripheral(PA(17), PERIPH_A, 0);	/* RXD	*/
+	select_peripheral(PA(18), PERIPH_A, 0);	/* TXD	*/
 }
 
 static inline void configure_usart2_pins(void)
 {
-	portmux_set_func(PIOB, 26, FUNC_B);	/* RXD	*/
-	portmux_set_func(PIOB, 27, FUNC_B);	/* TXD	*/
+	select_peripheral(PB(26), PERIPH_B, 0);	/* RXD	*/
+	select_peripheral(PB(27), PERIPH_B, 0);	/* TXD	*/
 }
 
 static inline void configure_usart3_pins(void)
 {
-	portmux_set_func(PIOB, 18, FUNC_B);	/* RXD	*/
-	portmux_set_func(PIOB, 17, FUNC_B);	/* TXD	*/
+	select_peripheral(PB(18), PERIPH_B, 0);	/* RXD	*/
+	select_peripheral(PB(17), PERIPH_B, 0);	/* TXD	*/
 }
 
-static struct platform_device *at32_usarts[4];
+static struct platform_device *__initdata at32_usarts[4];
 
 void __init at32_map_usart(unsigned int hw_id, unsigned int line)
 {
@@ -654,6 +656,15 @@ DEFINE_DEV_DATA(macb, 0);
 DEV_CLK(hclk, macb0, hsb, 8);
 DEV_CLK(pclk, macb0, pbb, 6);
 
+static struct eth_platform_data macb1_data;
+static struct resource macb1_resource[] = {
+	PBMEM(0xfff01c00),
+	IRQ(26),
+};
+DEFINE_DEV_DATA(macb, 1);
+DEV_CLK(hclk, macb1, hsb, 9);
+DEV_CLK(pclk, macb1, pbb, 7);
+
 struct platform_device *__init
 at32_add_device_eth(unsigned int id, struct eth_platform_data *data)
 {
@@ -663,27 +674,54 @@ at32_add_device_eth(unsigned int id, struct eth_platform_data *data)
 	case 0:
 		pdev = &macb0_device;
 
-		portmux_set_func(PIOC,  3, FUNC_A);	/* TXD0	*/
-		portmux_set_func(PIOC,  4, FUNC_A);	/* TXD1	*/
-		portmux_set_func(PIOC,  7, FUNC_A);	/* TXEN	*/
-		portmux_set_func(PIOC,  8, FUNC_A);	/* TXCK */
-		portmux_set_func(PIOC,  9, FUNC_A);	/* RXD0	*/
-		portmux_set_func(PIOC, 10, FUNC_A);	/* RXD1	*/
-		portmux_set_func(PIOC, 13, FUNC_A);	/* RXER	*/
-		portmux_set_func(PIOC, 15, FUNC_A);	/* RXDV	*/
-		portmux_set_func(PIOC, 16, FUNC_A);	/* MDC	*/
-		portmux_set_func(PIOC, 17, FUNC_A);	/* MDIO	*/
+		select_peripheral(PC(3),  PERIPH_A, 0);	/* TXD0	*/
+		select_peripheral(PC(4),  PERIPH_A, 0);	/* TXD1	*/
+		select_peripheral(PC(7),  PERIPH_A, 0);	/* TXEN	*/
+		select_peripheral(PC(8),  PERIPH_A, 0);	/* TXCK */
+		select_peripheral(PC(9),  PERIPH_A, 0);	/* RXD0	*/
+		select_peripheral(PC(10), PERIPH_A, 0);	/* RXD1	*/
+		select_peripheral(PC(13), PERIPH_A, 0);	/* RXER	*/
+		select_peripheral(PC(15), PERIPH_A, 0);	/* RXDV	*/
+		select_peripheral(PC(16), PERIPH_A, 0);	/* MDC	*/
+		select_peripheral(PC(17), PERIPH_A, 0);	/* MDIO	*/
 
 		if (!data->is_rmii) {
-			portmux_set_func(PIOC,  0, FUNC_A);	/* COL	*/
-			portmux_set_func(PIOC,  1, FUNC_A);	/* CRS	*/
-			portmux_set_func(PIOC,  2, FUNC_A);	/* TXER	*/
-			portmux_set_func(PIOC,  5, FUNC_A);	/* TXD2	*/
-			portmux_set_func(PIOC,  6, FUNC_A);	/* TXD3 */
-			portmux_set_func(PIOC, 11, FUNC_A);	/* RXD2	*/
-			portmux_set_func(PIOC, 12, FUNC_A);	/* RXD3	*/
-			portmux_set_func(PIOC, 14, FUNC_A);	/* RXCK	*/
-			portmux_set_func(PIOC, 18, FUNC_A);	/* SPD	*/
+			select_peripheral(PC(0),  PERIPH_A, 0);	/* COL	*/
+			select_peripheral(PC(1),  PERIPH_A, 0);	/* CRS	*/
+			select_peripheral(PC(2),  PERIPH_A, 0);	/* TXER	*/
+			select_peripheral(PC(5),  PERIPH_A, 0);	/* TXD2	*/
+			select_peripheral(PC(6),  PERIPH_A, 0);	/* TXD3 */
+			select_peripheral(PC(11), PERIPH_A, 0);	/* RXD2	*/
+			select_peripheral(PC(12), PERIPH_A, 0);	/* RXD3	*/
+			select_peripheral(PC(14), PERIPH_A, 0);	/* RXCK	*/
+			select_peripheral(PC(18), PERIPH_A, 0);	/* SPD	*/
+		}
+		break;
+
+	case 1:
+		pdev = &macb1_device;
+
+		select_peripheral(PD(13), PERIPH_B, 0);		/* TXD0	*/
+		select_peripheral(PD(14), PERIPH_B, 0);		/* TXD1	*/
+		select_peripheral(PD(11), PERIPH_B, 0);		/* TXEN	*/
+		select_peripheral(PD(12), PERIPH_B, 0);		/* TXCK */
+		select_peripheral(PD(10), PERIPH_B, 0);		/* RXD0	*/
+		select_peripheral(PD(6),  PERIPH_B, 0);		/* RXD1	*/
+		select_peripheral(PD(5),  PERIPH_B, 0);		/* RXER	*/
+		select_peripheral(PD(4),  PERIPH_B, 0);		/* RXDV	*/
+		select_peripheral(PD(3),  PERIPH_B, 0);		/* MDC	*/
+		select_peripheral(PD(2),  PERIPH_B, 0);		/* MDIO	*/
+
+		if (!data->is_rmii) {
+			select_peripheral(PC(19), PERIPH_B, 0);	/* COL	*/
+			select_peripheral(PC(23), PERIPH_B, 0);	/* CRS	*/
+			select_peripheral(PC(26), PERIPH_B, 0);	/* TXER	*/
+			select_peripheral(PC(27), PERIPH_B, 0);	/* TXD2	*/
+			select_peripheral(PC(28), PERIPH_B, 0);	/* TXD3 */
+			select_peripheral(PC(29), PERIPH_B, 0);	/* RXD2	*/
+			select_peripheral(PC(30), PERIPH_B, 0);	/* RXD3	*/
+			select_peripheral(PC(24), PERIPH_B, 0);	/* RXCK	*/
+			select_peripheral(PD(15), PERIPH_B, 0);	/* SPD	*/
 		}
 		break;
 
@@ -700,32 +738,79 @@ at32_add_device_eth(unsigned int id, struct eth_platform_data *data)
 /* --------------------------------------------------------------------
  *  SPI
  * -------------------------------------------------------------------- */
-static struct resource spi0_resource[] = {
+static struct resource atmel_spi0_resource[] = {
 	PBMEM(0xffe00000),
 	IRQ(3),
 };
-DEFINE_DEV(spi, 0);
-DEV_CLK(mck, spi0, pba, 0);
+DEFINE_DEV(atmel_spi, 0);
+DEV_CLK(spi_clk, atmel_spi0, pba, 0);
 
-struct platform_device *__init at32_add_device_spi(unsigned int id)
+static struct resource atmel_spi1_resource[] = {
+	PBMEM(0xffe00400),
+	IRQ(4),
+};
+DEFINE_DEV(atmel_spi, 1);
+DEV_CLK(spi_clk, atmel_spi1, pba, 1);
+
+static void __init
+at32_spi_setup_slaves(unsigned int bus_num, struct spi_board_info *b,
+		      unsigned int n, const u8 *pins)
 {
+	unsigned int pin, mode;
+
+	for (; n; n--, b++) {
+		b->bus_num = bus_num;
+		if (b->chip_select >= 4)
+			continue;
+		pin = (unsigned)b->controller_data;
+		if (!pin) {
+			pin = pins[b->chip_select];
+			b->controller_data = (void *)pin;
+		}
+		mode = AT32_GPIOF_OUTPUT;
+		if (!(b->mode & SPI_CS_HIGH))
+			mode |= AT32_GPIOF_HIGH;
+		at32_select_gpio(pin, mode);
+	}
+}
+
+struct platform_device *__init
+at32_add_device_spi(unsigned int id, struct spi_board_info *b, unsigned int n)
+{
+	/*
+	 * Manage the chipselects as GPIOs, normally using the same pins
+	 * the SPI controller expects; but boards can use other pins.
+	 */
+	static u8 __initdata spi0_pins[] =
+		{ GPIO_PIN_PA(3), GPIO_PIN_PA(4),
+		  GPIO_PIN_PA(5), GPIO_PIN_PA(20), };
+	static u8 __initdata spi1_pins[] =
+		{ GPIO_PIN_PB(2), GPIO_PIN_PB(3),
+		  GPIO_PIN_PB(4), GPIO_PIN_PA(27), };
 	struct platform_device *pdev;
 
 	switch (id) {
 	case 0:
-		pdev = &spi0_device;
-		portmux_set_func(PIOA,  0, FUNC_A);	/* MISO	 */
-		portmux_set_func(PIOA,  1, FUNC_A);	/* MOSI	 */
-		portmux_set_func(PIOA,  2, FUNC_A);	/* SCK	 */
-		portmux_set_func(PIOA,  3, FUNC_A);	/* NPCS0 */
-		portmux_set_func(PIOA,  4, FUNC_A);	/* NPCS1 */
-		portmux_set_func(PIOA,  5, FUNC_A);	/* NPCS2 */
+		pdev = &atmel_spi0_device;
+		select_peripheral(PA(0),  PERIPH_A, 0);	/* MISO	 */
+		select_peripheral(PA(1),  PERIPH_A, 0);	/* MOSI	 */
+		select_peripheral(PA(2),  PERIPH_A, 0);	/* SCK	 */
+		at32_spi_setup_slaves(0, b, n, spi0_pins);
+		break;
+
+	case 1:
+		pdev = &atmel_spi1_device;
+		select_peripheral(PB(0),  PERIPH_B, 0);	/* MISO  */
+		select_peripheral(PB(1),  PERIPH_B, 0);	/* MOSI  */
+		select_peripheral(PB(5),  PERIPH_B, 0);	/* SCK   */
+		at32_spi_setup_slaves(1, b, n, spi1_pins);
 		break;
 
 	default:
 		return NULL;
 	}
 
+	spi_register_board_info(b, n);
 	platform_device_register(pdev);
 	return pdev;
 }
@@ -762,37 +847,37 @@ at32_add_device_lcdc(unsigned int id, struct lcdc_platform_data *data)
 	switch (id) {
 	case 0:
 		pdev = &lcdc0_device;
-		portmux_set_func(PIOC, 19, FUNC_A);	/* CC	  */
-		portmux_set_func(PIOC, 20, FUNC_A);	/* HSYNC  */
-		portmux_set_func(PIOC, 21, FUNC_A);	/* PCLK	  */
-		portmux_set_func(PIOC, 22, FUNC_A);	/* VSYNC  */
-		portmux_set_func(PIOC, 23, FUNC_A);	/* DVAL	  */
-		portmux_set_func(PIOC, 24, FUNC_A);	/* MODE	  */
-		portmux_set_func(PIOC, 25, FUNC_A);	/* PWR	  */
-		portmux_set_func(PIOC, 26, FUNC_A);	/* DATA0  */
-		portmux_set_func(PIOC, 27, FUNC_A);	/* DATA1  */
-		portmux_set_func(PIOC, 28, FUNC_A);	/* DATA2  */
-		portmux_set_func(PIOC, 29, FUNC_A);	/* DATA3  */
-		portmux_set_func(PIOC, 30, FUNC_A);	/* DATA4  */
-		portmux_set_func(PIOC, 31, FUNC_A);	/* DATA5  */
-		portmux_set_func(PIOD,  0, FUNC_A);	/* DATA6  */
-		portmux_set_func(PIOD,  1, FUNC_A);	/* DATA7  */
-		portmux_set_func(PIOD,  2, FUNC_A);	/* DATA8  */
-		portmux_set_func(PIOD,  3, FUNC_A);	/* DATA9  */
-		portmux_set_func(PIOD,  4, FUNC_A);	/* DATA10 */
-		portmux_set_func(PIOD,  5, FUNC_A);	/* DATA11 */
-		portmux_set_func(PIOD,  6, FUNC_A);	/* DATA12 */
-		portmux_set_func(PIOD,  7, FUNC_A);	/* DATA13 */
-		portmux_set_func(PIOD,  8, FUNC_A);	/* DATA14 */
-		portmux_set_func(PIOD,  9, FUNC_A);	/* DATA15 */
-		portmux_set_func(PIOD, 10, FUNC_A);	/* DATA16 */
-		portmux_set_func(PIOD, 11, FUNC_A);	/* DATA17 */
-		portmux_set_func(PIOD, 12, FUNC_A);	/* DATA18 */
-		portmux_set_func(PIOD, 13, FUNC_A);	/* DATA19 */
-		portmux_set_func(PIOD, 14, FUNC_A);	/* DATA20 */
-		portmux_set_func(PIOD, 15, FUNC_A);	/* DATA21 */
-		portmux_set_func(PIOD, 16, FUNC_A);	/* DATA22 */
-		portmux_set_func(PIOD, 17, FUNC_A);	/* DATA23 */
+		select_peripheral(PC(19), PERIPH_A, 0);	/* CC	  */
+		select_peripheral(PC(20), PERIPH_A, 0);	/* HSYNC  */
+		select_peripheral(PC(21), PERIPH_A, 0);	/* PCLK	  */
+		select_peripheral(PC(22), PERIPH_A, 0);	/* VSYNC  */
+		select_peripheral(PC(23), PERIPH_A, 0);	/* DVAL	  */
+		select_peripheral(PC(24), PERIPH_A, 0);	/* MODE	  */
+		select_peripheral(PC(25), PERIPH_A, 0);	/* PWR	  */
+		select_peripheral(PC(26), PERIPH_A, 0);	/* DATA0  */
+		select_peripheral(PC(27), PERIPH_A, 0);	/* DATA1  */
+		select_peripheral(PC(28), PERIPH_A, 0);	/* DATA2  */
+		select_peripheral(PC(29), PERIPH_A, 0);	/* DATA3  */
+		select_peripheral(PC(30), PERIPH_A, 0);	/* DATA4  */
+		select_peripheral(PC(31), PERIPH_A, 0);	/* DATA5  */
+		select_peripheral(PD(0),  PERIPH_A, 0);	/* DATA6  */
+		select_peripheral(PD(1),  PERIPH_A, 0);	/* DATA7  */
+		select_peripheral(PD(2),  PERIPH_A, 0);	/* DATA8  */
+		select_peripheral(PD(3),  PERIPH_A, 0);	/* DATA9  */
+		select_peripheral(PD(4),  PERIPH_A, 0);	/* DATA10 */
+		select_peripheral(PD(5),  PERIPH_A, 0);	/* DATA11 */
+		select_peripheral(PD(6),  PERIPH_A, 0);	/* DATA12 */
+		select_peripheral(PD(7),  PERIPH_A, 0);	/* DATA13 */
+		select_peripheral(PD(8),  PERIPH_A, 0);	/* DATA14 */
+		select_peripheral(PD(9),  PERIPH_A, 0);	/* DATA15 */
+		select_peripheral(PD(10), PERIPH_A, 0);	/* DATA16 */
+		select_peripheral(PD(11), PERIPH_A, 0);	/* DATA17 */
+		select_peripheral(PD(12), PERIPH_A, 0);	/* DATA18 */
+		select_peripheral(PD(13), PERIPH_A, 0);	/* DATA19 */
+		select_peripheral(PD(14), PERIPH_A, 0);	/* DATA20 */
+		select_peripheral(PD(15), PERIPH_A, 0);	/* DATA21 */
+		select_peripheral(PD(16), PERIPH_A, 0);	/* DATA22 */
+		select_peripheral(PD(17), PERIPH_A, 0);	/* DATA23 */
 
 		clk_set_parent(&lcdc0_pixclk, &pll0);
 		clk_set_rate(&lcdc0_pixclk, clk_get_rate(&pll0));
@@ -808,6 +893,50 @@ at32_add_device_lcdc(unsigned int id, struct lcdc_platform_data *data)
 	platform_device_register(pdev);
 	return pdev;
 }
+
+/* --------------------------------------------------------------------
+ *  GCLK
+ * -------------------------------------------------------------------- */
+static struct clk gclk0 = {
+	.name		= "gclk0",
+	.mode		= genclk_mode,
+	.get_rate	= genclk_get_rate,
+	.set_rate	= genclk_set_rate,
+	.set_parent	= genclk_set_parent,
+	.index		= 0,
+};
+static struct clk gclk1 = {
+	.name		= "gclk1",
+	.mode		= genclk_mode,
+	.get_rate	= genclk_get_rate,
+	.set_rate	= genclk_set_rate,
+	.set_parent	= genclk_set_parent,
+	.index		= 1,
+};
+static struct clk gclk2 = {
+	.name		= "gclk2",
+	.mode		= genclk_mode,
+	.get_rate	= genclk_get_rate,
+	.set_rate	= genclk_set_rate,
+	.set_parent	= genclk_set_parent,
+	.index		= 2,
+};
+static struct clk gclk3 = {
+	.name		= "gclk3",
+	.mode		= genclk_mode,
+	.get_rate	= genclk_get_rate,
+	.set_rate	= genclk_set_rate,
+	.set_parent	= genclk_set_parent,
+	.index		= 3,
+};
+static struct clk gclk4 = {
+	.name		= "gclk4",
+	.mode		= genclk_mode,
+	.get_rate	= genclk_get_rate,
+	.set_rate	= genclk_set_rate,
+	.set_parent	= genclk_set_parent,
+	.index		= 4,
+};
 
 struct clk *at32_clock_list[] = {
 	&osc32k,
@@ -832,15 +961,24 @@ struct clk *at32_clock_list[] = {
 	&pio1_mck,
 	&pio2_mck,
 	&pio3_mck,
+	&pio4_mck,
 	&atmel_usart0_usart,
 	&atmel_usart1_usart,
 	&atmel_usart2_usart,
 	&atmel_usart3_usart,
 	&macb0_hclk,
 	&macb0_pclk,
-	&spi0_mck,
+	&macb1_hclk,
+	&macb1_pclk,
+	&atmel_spi0_spi_clk,
+	&atmel_spi1_spi_clk,
 	&lcdc0_hclk,
 	&lcdc0_pixclk,
+	&gclk0,
+	&gclk1,
+	&gclk2,
+	&gclk3,
+	&gclk4,
 };
 unsigned int at32_nr_clocks = ARRAY_SIZE(at32_clock_list);
 
@@ -850,6 +988,7 @@ void __init at32_portmux_init(void)
 	at32_init_pio(&pio1_device);
 	at32_init_pio(&pio2_device);
 	at32_init_pio(&pio3_device);
+	at32_init_pio(&pio4_device);
 }
 
 void __init at32_clock_init(void)
@@ -867,6 +1006,13 @@ void __init at32_clock_init(void)
 		pll0.parent = &osc1;
 	if (sm_readl(sm, PM_PLL1) & SM_BIT(PLLOSC))
 		pll1.parent = &osc1;
+
+	genclk_init_parent(&gclk0);
+	genclk_init_parent(&gclk1);
+	genclk_init_parent(&gclk2);
+	genclk_init_parent(&gclk3);
+	genclk_init_parent(&gclk4);
+	genclk_init_parent(&lcdc0_pixclk);
 
 	/*
 	 * Turn on all clocks that have at least one user already, and

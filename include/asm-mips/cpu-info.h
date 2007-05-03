@@ -22,12 +22,12 @@
  * Descriptor for a cache
  */
 struct cache_desc {
-	unsigned short linesz;	/* Size of line in bytes */
-	unsigned short ways;	/* Number of ways */
-	unsigned short sets;	/* Number of lines per set */
 	unsigned int waysize;	/* Bytes per way */
-	unsigned int waybit;	/* Bits to select in a cache set */
-	unsigned int flags;	/* Flags describing cache properties */
+	unsigned short sets;	/* Number of lines per set */
+	unsigned char ways;	/* Number of ways */
+	unsigned char linesz;	/* Size of line in bytes */
+	unsigned char waybit;	/* Bits to select in a cache set */
+	unsigned char flags;	/* Flags describing cache properties */
 };
 
 /*
@@ -87,6 +87,7 @@ struct cpuinfo_mips {
 
 extern struct cpuinfo_mips cpu_data[];
 #define current_cpu_data cpu_data[smp_processor_id()]
+#define raw_current_cpu_data cpu_data[raw_smp_processor_id()]
 
 extern void cpu_probe(void);
 extern void cpu_report(void);

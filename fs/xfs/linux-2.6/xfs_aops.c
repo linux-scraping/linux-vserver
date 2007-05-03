@@ -56,8 +56,6 @@ xfs_count_page_state(
 	do {
 		if (buffer_uptodate(bh) && !buffer_mapped(bh))
 			(*unmapped) = 1;
-		else if (buffer_unwritten(bh) && !buffer_delay(bh))
-			clear_buffer_unwritten(bh);
 		else if (buffer_unwritten(bh))
 			(*unwritten) = 1;
 		else if (buffer_delay(bh))
@@ -149,9 +147,10 @@ xfs_destroy_ioend(
  */
 STATIC void
 xfs_end_bio_delalloc(
-	void			*data)
+	struct work_struct	*work)
 {
-	xfs_ioend_t		*ioend = data;
+	xfs_ioend_t		*ioend =
+		container_of(work, xfs_ioend_t, io_work);
 
 	xfs_destroy_ioend(ioend);
 }
@@ -161,9 +160,10 @@ xfs_end_bio_delalloc(
  */
 STATIC void
 xfs_end_bio_written(
-	void			*data)
+	struct work_struct	*work)
 {
-	xfs_ioend_t		*ioend = data;
+	xfs_ioend_t		*ioend =
+		container_of(work, xfs_ioend_t, io_work);
 
 	xfs_destroy_ioend(ioend);
 }
@@ -176,9 +176,10 @@ xfs_end_bio_written(
  */
 STATIC void
 xfs_end_bio_unwritten(
-	void			*data)
+	struct work_struct	*work)
 {
-	xfs_ioend_t		*ioend = data;
+	xfs_ioend_t		*ioend =
+		container_of(work, xfs_ioend_t, io_work);
 	bhv_vnode_t		*vp = ioend->io_vnode;
 	xfs_off_t		offset = ioend->io_offset;
 	size_t			size = ioend->io_size;
@@ -220,11 +221,11 @@ xfs_alloc_ioend(
 	ioend->io_size = 0;
 
 	if (type == IOMAP_UNWRITTEN)
-		INIT_WORK(&ioend->io_work, xfs_end_bio_unwritten, ioend);
+		INIT_WORK(&ioend->io_work, xfs_end_bio_unwritten);
 	else if (type == IOMAP_DELAY)
-		INIT_WORK(&ioend->io_work, xfs_end_bio_delalloc, ioend);
+		INIT_WORK(&ioend->io_work, xfs_end_bio_delalloc);
 	else
-		INIT_WORK(&ioend->io_work, xfs_end_bio_written, ioend);
+		INIT_WORK(&ioend->io_work, xfs_end_bio_written);
 
 	return ioend;
 }
@@ -246,7 +247,7 @@ xfs_map_blocks(
 	return -error;
 }
 
-STATIC inline int
+STATIC_INLINE int
 xfs_iomap_valid(
 	xfs_iomap_t		*iomapp,
 	loff_t			offset)
@@ -338,9 +339,9 @@ xfs_start_page_writeback(
 {
 	ASSERT(PageLocked(page));
 	ASSERT(!PageWriteback(page));
-	set_page_writeback(page);
 	if (clear_dirty)
-		clear_page_dirty(page);
+		clear_page_dirty_for_io(page);
+	set_page_writeback(page);
 	unlock_page(page);
 	if (!buffers) {
 		end_page_writeback(page);
@@ -1269,7 +1270,6 @@ __xfs_get_blocks(
 			if (direct)
 				bh_result->b_private = inode;
 			set_buffer_unwritten(bh_result);
-			set_buffer_delay(bh_result);
 		}
 	}
 
@@ -1280,13 +1280,18 @@ __xfs_get_blocks(
 	bh_result->b_bdev = iomap.iomap_target->bt_bdev;
 
 	/*
-	 * If we previously allocated a block out beyond eof and we are
-	 * now coming back to use it then we will need to flag it as new
-	 * even if it has a disk address.
+	 * If we previously allocated a block out beyond eof and we are now
+	 * coming back to use it then we will need to flag it as new even if it
+	 * has a disk address.
+	 *
+	 * With sub-block writes into unwritten extents we also need to mark
+	 * the buffer as new so that the unwritten parts of the buffer gets
+	 * correctly zeroed.
 	 */
 	if (create &&
 	    ((!buffer_mapped(bh_result) && !buffer_uptodate(bh_result)) ||
-	     (offset >= i_size_read(inode)) || (iomap.iomap_flags & IOMAP_NEW)))
+	     (offset >= i_size_read(inode)) ||
+	     (iomap.iomap_flags & (IOMAP_NEW|IOMAP_UNWRITTEN))))
 		set_buffer_new(bh_result);
 
 	if (iomap.iomap_flags & IOMAP_DELAY) {
@@ -1403,7 +1408,7 @@ xfs_vm_direct_IO(
 			xfs_end_io_direct);
 	}
 
-	if (unlikely(ret <= 0 && iocb->private))
+	if (unlikely(ret != -EIOCBQUEUED && iocb->private))
 		xfs_destroy_ioend(iocb->private);
 	return ret;
 }

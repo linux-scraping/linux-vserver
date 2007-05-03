@@ -44,10 +44,6 @@ struct fib4_rule
 	__be32			srcmask;
 	__be32			dst;
 	__be32			dstmask;
-#ifdef CONFIG_IP_ROUTE_FWMARK
-	u32			fwmark;
-	u32			fwmask;
-#endif
 #ifdef CONFIG_NET_CLS_ROUTE
 	u32			tclassid;
 #endif
@@ -160,11 +156,6 @@ static int fib4_rule_match(struct fib_rule *rule, struct flowi *fl, int flags)
 	if (r->tos && (r->tos != fl->fl4_tos))
 		return 0;
 
-#ifdef CONFIG_IP_ROUTE_FWMARK
-	if ((r->fwmark ^ fl->fl4_fwmark) & r->fwmask)
-		return 0;
-#endif
-
 	return 1;
 }
 
@@ -179,14 +170,8 @@ static struct fib_table *fib_empty_table(void)
 }
 
 static struct nla_policy fib4_rule_policy[FRA_MAX+1] __read_mostly = {
-	[FRA_IFNAME]	= { .type = NLA_STRING, .len = IFNAMSIZ - 1 },
-	[FRA_PRIORITY]	= { .type = NLA_U32 },
-	[FRA_SRC]	= { .type = NLA_U32 },
-	[FRA_DST]	= { .type = NLA_U32 },
-	[FRA_FWMARK]	= { .type = NLA_U32 },
-	[FRA_FWMASK]	= { .type = NLA_U32 },
+	FRA_GENERIC_POLICY,
 	[FRA_FLOW]	= { .type = NLA_U32 },
-	[FRA_TABLE]	= { .type = NLA_U32 },
 };
 
 static int fib4_rule_configure(struct fib_rule *rule, struct sk_buff *skb,
@@ -196,8 +181,7 @@ static int fib4_rule_configure(struct fib_rule *rule, struct sk_buff *skb,
 	int err = -EINVAL;
 	struct fib4_rule *rule4 = (struct fib4_rule *) rule;
 
-	if (frh->src_len > 32 || frh->dst_len > 32 ||
-	    (frh->tos & ~IPTOS_TOS_MASK))
+	if (frh->tos & ~IPTOS_TOS_MASK)
 		goto errout;
 
 	if (rule->table == RT_TABLE_UNSPEC) {
@@ -214,25 +198,11 @@ static int fib4_rule_configure(struct fib_rule *rule, struct sk_buff *skb,
 		}
 	}
 
-	if (tb[FRA_SRC])
+	if (frh->src_len)
 		rule4->src = nla_get_be32(tb[FRA_SRC]);
 
-	if (tb[FRA_DST])
+	if (frh->dst_len)
 		rule4->dst = nla_get_be32(tb[FRA_DST]);
-
-#ifdef CONFIG_IP_ROUTE_FWMARK
-	if (tb[FRA_FWMARK]) {
-		rule4->fwmark = nla_get_u32(tb[FRA_FWMARK]);
-		if (rule4->fwmark)
-			/* compatibility: if the mark value is non-zero all bits
-			 * are compared unless a mask is explicitly specified.
-			 */
-			rule4->fwmask = 0xFFFFFFFF;
-	}
-
-	if (tb[FRA_FWMASK])
-		rule4->fwmask = nla_get_u32(tb[FRA_FWMASK]);
-#endif
 
 #ifdef CONFIG_NET_CLS_ROUTE
 	if (tb[FRA_FLOW])
@@ -264,23 +234,15 @@ static int fib4_rule_compare(struct fib_rule *rule, struct fib_rule_hdr *frh,
 	if (frh->tos && (rule4->tos != frh->tos))
 		return 0;
 
-#ifdef CONFIG_IP_ROUTE_FWMARK
-	if (tb[FRA_FWMARK] && (rule4->fwmark != nla_get_u32(tb[FRA_FWMARK])))
-		return 0;
-
-	if (tb[FRA_FWMASK] && (rule4->fwmask != nla_get_u32(tb[FRA_FWMASK])))
-		return 0;
-#endif
-
 #ifdef CONFIG_NET_CLS_ROUTE
 	if (tb[FRA_FLOW] && (rule4->tclassid != nla_get_u32(tb[FRA_FLOW])))
 		return 0;
 #endif
 
-	if (tb[FRA_SRC] && (rule4->src != nla_get_be32(tb[FRA_SRC])))
+	if (frh->src_len && (rule4->src != nla_get_be32(tb[FRA_SRC])))
 		return 0;
 
-	if (tb[FRA_DST] && (rule4->dst != nla_get_be32(tb[FRA_DST])))
+	if (frh->dst_len && (rule4->dst != nla_get_be32(tb[FRA_DST])))
 		return 0;
 
 	return 1;
@@ -295,14 +257,6 @@ static int fib4_rule_fill(struct fib_rule *rule, struct sk_buff *skb,
 	frh->dst_len = rule4->dst_len;
 	frh->src_len = rule4->src_len;
 	frh->tos = rule4->tos;
-
-#ifdef CONFIG_IP_ROUTE_FWMARK
-	if (rule4->fwmark)
-		NLA_PUT_U32(skb, FRA_FWMARK, rule4->fwmark);
-
-	if (rule4->fwmask || rule4->fwmark)
-		NLA_PUT_U32(skb, FRA_FWMASK, rule4->fwmask);
-#endif
 
 	if (rule4->dst_len)
 		NLA_PUT_BE32(skb, FRA_DST, rule4->dst);
@@ -342,15 +296,24 @@ static u32 fib4_rule_default_pref(void)
 	return 0;
 }
 
+static size_t fib4_rule_nlmsg_payload(struct fib_rule *rule)
+{
+	return nla_total_size(4) /* dst */
+	       + nla_total_size(4) /* src */
+	       + nla_total_size(4); /* flow */
+}
+
 static struct fib_rules_ops fib4_rules_ops = {
 	.family		= AF_INET,
 	.rule_size	= sizeof(struct fib4_rule),
+	.addr_size	= sizeof(u32),
 	.action		= fib4_rule_action,
 	.match		= fib4_rule_match,
 	.configure	= fib4_rule_configure,
 	.compare	= fib4_rule_compare,
 	.fill		= fib4_rule_fill,
 	.default_pref	= fib4_rule_default_pref,
+	.nlmsg_payload	= fib4_rule_nlmsg_payload,
 	.nlgroup	= RTNLGRP_IPV4_RULE,
 	.policy		= fib4_rule_policy,
 	.rules_list	= &fib4_rules,

@@ -26,7 +26,7 @@
  *  Pontus Fuchs   - Helper functions, cleanup
  *  Johann Wiesner - Small compile fixes
  *  John Belmonte  - ACPI code for Toshiba laptop was a good starting point.
- *  Éric Burghard  - LED display support for W1N
+ *  ï¿½ic Burghard  - LED display support for W1N
  *
  */
 
@@ -35,6 +35,7 @@
 #include <linux/init.h>
 #include <linux/types.h>
 #include <linux/proc_fs.h>
+#include <linux/backlight.h>
 #include <acpi/acpi_drivers.h>
 #include <acpi/acpi_bus.h>
 #include <asm/uaccess.h>
@@ -140,6 +141,7 @@ struct asus_hotk {
 		W5A,		//W5A
 		W3V,            //W3030V
 		xxN,		//M2400N, M3700N, M5200N, M6800N, S1300N, S5200N
+		A4S,            //Z81sp
 		//(Centrino)
 		END_MODEL
 	} model;		//Models currently supported
@@ -396,11 +398,22 @@ static struct model_data model_conf[END_MODEL] = {
 	 .brightness_set = "SPLV",
 	 .brightness_get = "GPLV",
 	 .display_set = "SDSP",
-	 .display_get = "\\ADVG"}
+	.display_get = "\\ADVG"},
+
+	{
+		.name              = "A4S",
+		.brightness_set    = "SPLV",
+		.brightness_get    = "GPLV",
+		.mt_bt_switch      = "BLED",
+		.mt_wled           = "WLED"
+	}
+
 };
 
 /* procdir we use */
 static struct proc_dir_entry *asus_proc_dir;
+
+static struct backlight_device *asus_backlight_device;
 
 /*
  * This header is made available to allow proper configuration given model,
@@ -418,7 +431,7 @@ static struct asus_hotk *hotk;
 static int asus_hotk_add(struct acpi_device *device);
 static int asus_hotk_remove(struct acpi_device *device, int type);
 static struct acpi_driver asus_hotk_driver = {
-	.name = ACPI_HOTK_NAME,
+	.name = "asus_acpi",
 	.class = ACPI_HOTK_CLASS,
 	.ids = ACPI_HOTK_HID,
 	.ops = {
@@ -779,7 +792,7 @@ proc_write_lcd(struct file *file, const char __user * buffer,
 	return rv;
 }
 
-static int read_brightness(void)
+static int read_brightness(struct backlight_device *bd)
 {
 	int value;
 
@@ -801,9 +814,10 @@ static int read_brightness(void)
 /*
  * Change the brightness level
  */
-static void set_brightness(int value)
+static int set_brightness(int value)
 {
 	acpi_status status = 0;
+	int ret = 0;
 
 	/* SPLV laptop */
 	if (hotk->methods->brightness_set) {
@@ -811,11 +825,12 @@ static void set_brightness(int value)
 				    value, NULL))
 			printk(KERN_WARNING
 			       "Asus ACPI: Error changing brightness\n");
-		return;
+			ret = -EIO;
+		goto out;
 	}
 
 	/* No SPLV method if we are here, act as appropriate */
-	value -= read_brightness();
+	value -= read_brightness(NULL);
 	while (value != 0) {
 		status = acpi_evaluate_object(NULL, (value > 0) ?
 					      hotk->methods->brightness_up :
@@ -825,15 +840,22 @@ static void set_brightness(int value)
 		if (ACPI_FAILURE(status))
 			printk(KERN_WARNING
 			       "Asus ACPI: Error changing brightness\n");
+			ret = -EIO;
 	}
-	return;
+out:
+	return ret;
+}
+
+static int set_brightness_status(struct backlight_device *bd)
+{
+	return set_brightness(bd->props.brightness);
 }
 
 static int
 proc_read_brn(char *page, char **start, off_t off, int count, int *eof,
 	      void *data)
 {
-	return sprintf(page, "%d\n", read_brightness());
+	return sprintf(page, "%d\n", read_brightness(NULL));
 }
 
 static int
@@ -1105,6 +1127,8 @@ static int asus_model_match(char *model)
 		return W3V;
 	else if (strncmp(model, "W5A", 3) == 0)
 		return W5A;
+	else if (strncmp(model, "A4S", 3) == 0)
+		return A4S;
 	else
 		return END_MODEL;
 }
@@ -1116,7 +1140,6 @@ static int asus_model_match(char *model)
 static int asus_hotk_get_info(void)
 {
 	struct acpi_buffer buffer = { ACPI_ALLOCATE_BUFFER, NULL };
-	struct acpi_buffer dsdt = { ACPI_ALLOCATE_BUFFER, NULL };
 	union acpi_object *model = NULL;
 	int bsts_result;
 	char *string = NULL;
@@ -1130,11 +1153,9 @@ static int asus_hotk_get_info(void)
 	 * HID), this bit will be moved. A global variable asus_info contains
 	 * the DSDT header.
 	 */
-	status = acpi_get_table(ACPI_TABLE_ID_DSDT, 1, &dsdt);
+	status = acpi_get_table(ACPI_SIG_DSDT, 1, &asus_info);
 	if (ACPI_FAILURE(status))
 		printk(KERN_WARNING "  Couldn't get the DSDT table header\n");
-	else
-		asus_info = (struct acpi_table_header *)dsdt.pointer;
 
 	/* We have to write 0 on init this far for all ASUS models */
 	if (!write_acpi_int(hotk->handle, "INIT", 0, &buffer)) {
@@ -1156,7 +1177,7 @@ static int asus_hotk_get_info(void)
 	 * asus_model_match() and try something completely different.
 	 */
 	if (buffer.pointer) {
-		model = (union acpi_object *)buffer.pointer;
+		model = buffer.pointer;
 		switch (model->type) {
 		case ACPI_TYPE_STRING:
 			string = model->string.pointer;
@@ -1252,11 +1273,9 @@ static int asus_hotk_add(struct acpi_device *device)
 	printk(KERN_NOTICE "Asus Laptop ACPI Extras version %s\n",
 	       ASUS_ACPI_VERSION);
 
-	hotk =
-	    (struct asus_hotk *)kmalloc(sizeof(struct asus_hotk), GFP_KERNEL);
+	hotk = kzalloc(sizeof(struct asus_hotk), GFP_KERNEL);
 	if (!hotk)
 		return -ENOMEM;
-	memset(hotk, 0, sizeof(struct asus_hotk));
 
 	hotk->handle = device->handle;
 	strcpy(acpi_device_name(device), ACPI_HOTK_DEVICE_NAME);
@@ -1333,6 +1352,22 @@ static int asus_hotk_remove(struct acpi_device *device, int type)
 	return 0;
 }
 
+static struct backlight_ops asus_backlight_data = {
+        .get_brightness = read_brightness,
+        .update_status  = set_brightness_status,
+};
+
+static void __exit asus_acpi_exit(void)
+{
+	if (asus_backlight_device)
+		backlight_device_unregister(asus_backlight_device);
+
+	acpi_bus_unregister_driver(&asus_hotk_driver);
+	remove_proc_entry(PROC_ASUS, acpi_root_dir);
+
+	return;
+}
+
 static int __init asus_acpi_init(void)
 {
 	int result;
@@ -1340,10 +1375,6 @@ static int __init asus_acpi_init(void)
 	if (acpi_disabled)
 		return -ENODEV;
 
-	if (!acpi_specific_hotkey_enabled) {
-		printk(KERN_ERR "Using generic hotkey driver\n");
-		return -ENODEV;
-	}
 	asus_proc_dir = proc_mkdir(PROC_ASUS, acpi_root_dir);
 	if (!asus_proc_dir) {
 		printk(KERN_ERR "Asus ACPI: Unable to create /proc entry\n");
@@ -1370,17 +1401,16 @@ static int __init asus_acpi_init(void)
 		return result;
 	}
 
+	asus_backlight_device = backlight_device_register("asus",NULL,NULL,
+							  &asus_backlight_data);
+        if (IS_ERR(asus_backlight_device)) {
+		printk(KERN_ERR "Could not register asus backlight device\n");
+		asus_backlight_device = NULL;
+		asus_acpi_exit();
+	}
+        asus_backlight_device->props.max_brightness = 15;
+
 	return 0;
-}
-
-static void __exit asus_acpi_exit(void)
-{
-	acpi_bus_unregister_driver(&asus_hotk_driver);
-	remove_proc_entry(PROC_ASUS, acpi_root_dir);
-
-	kfree(asus_info);
-
-	return;
 }
 
 module_init(asus_acpi_init);

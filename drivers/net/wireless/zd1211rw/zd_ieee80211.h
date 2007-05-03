@@ -2,7 +2,6 @@
 #define _ZD_IEEE80211_H
 
 #include <net/ieee80211.h>
-#include "zd_types.h"
 
 /* Additional definitions from the standards.
  */
@@ -50,6 +49,7 @@ static inline u8 zd_ofdm_plcp_header_rate(
 	return header->prefix[0] & 0xf;
 }
 
+/* These are referred to as zd_rates */
 #define ZD_OFDM_RATE_6M		0xb
 #define ZD_OFDM_RATE_9M		0xf
 #define ZD_OFDM_RATE_12M	0xa
@@ -64,7 +64,7 @@ struct cck_plcp_header {
 	u8 service;
 	__le16 length;
 	__le16 crc16;
-};
+} __attribute__((packed));
 
 static inline u8 zd_cck_plcp_header_rate(const struct cck_plcp_header *header)
 {

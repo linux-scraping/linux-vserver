@@ -82,7 +82,7 @@ debug_nid:
 	"set_nx_info(%p[#%d.%d])"
  4  10	"__hash_nx_info: %p[#%d]"
 	"__nx_dynamic_id: [#%d]"
-	"__unhash_nx_info: %p[#%d]"
+	"__unhash_nx_info: %p[#%d.%d.%d]"
  5  20	"moved task %p into nxi:%p[#%d]"
 	"nx_migrate_task(%p,%p[#%d.%d.%d])"
 	"task_get_nx_info(%p)"
@@ -128,9 +128,8 @@ debug_xid:
 	"init_vx_info(%p[#%d.%d])"
 	"release_vx_info(%p[#%d.%d.%d]) %p"
 	"set_vx_info(%p[#%d.%d])"
-	"vx_child_reaper(%p[#%u,%u]) = %p[#%u,%u]"
  4  10	"__hash_vx_info: %p[#%d]"
-	"__unhash_vx_info: %p[#%d]"
+	"__unhash_vx_info: %p[#%d.%d.%d]"
 	"__vx_dynamic_id: [#%d]"
  5  20	"enter_vx_info(%p[#%d],%p) %p[#%d,%p]"
 	"leave_vx_info(%p[#%d,%p]) %p[#%d,%p]"
@@ -142,6 +141,7 @@ debug_xid:
 	"vx_set_init(%p[#%d],%p[#%d,%d,%d])"
 	"vx_set_persistent(%p[#%d])"
 	"vx_set_reaper(%p[#%d],%p[#%d,%d])"
+ 7  80	"vx_child_reaper(%p[#%u,%u]) = %p[#%u,%u]"
 
 
 debug_limit:

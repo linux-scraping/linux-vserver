@@ -278,7 +278,8 @@ static void block2mtd_free_device(struct block2mtd_dev *dev)
 	kfree(dev->mtd.name);
 
 	if (dev->blkdev) {
-		invalidate_inode_pages(dev->blkdev->bd_inode->i_mapping);
+		invalidate_mapping_pages(dev->blkdev->bd_inode->i_mapping,
+					0, -1);
 		close_bdev_excl(dev->blkdev);
 	}
 
@@ -295,10 +296,9 @@ static struct block2mtd_dev *add_device(char *devname, int erase_size)
 	if (!devname)
 		return NULL;
 
-	dev = kmalloc(sizeof(struct block2mtd_dev), GFP_KERNEL);
+	dev = kzalloc(sizeof(struct block2mtd_dev), GFP_KERNEL);
 	if (!dev)
 		return NULL;
-	memset(dev, 0, sizeof(*dev));
 
 	/* Get a handle on the device */
 	bdev = open_bdev_excl(devname, O_RDWR, NULL);

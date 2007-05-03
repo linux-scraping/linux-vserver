@@ -24,8 +24,6 @@
 #include <asm/uaccess.h>
 #include <asm/kdebug.h>
 
-extern spinlock_t timerlist_lock;
-
 fpswa_interface_t *fpswa_interface;
 EXPORT_SYMBOL(fpswa_interface);
 
@@ -51,34 +49,6 @@ trap_init (void)
 	if (ia64_boot_param->fpswa)
 		/* FPSWA fixup: make the interface pointer a kernel virtual address: */
 		fpswa_interface = __va(ia64_boot_param->fpswa);
-}
-
-/*
- * Unlock any spinlocks which will prevent us from getting the message out (timerlist_lock
- * is acquired through the console unblank code)
- */
-void
-bust_spinlocks (int yes)
-{
-	int loglevel_save = console_loglevel;
-
-	if (yes) {
-		oops_in_progress = 1;
-		return;
-	}
-
-#ifdef CONFIG_VT
-	unblank_screen();
-#endif
-	oops_in_progress = 0;
-	/*
-	 * OK, the message is on the console.  Now we call printk() without
-	 * oops_in_progress set so that printk will give klogd a poke.  Hold onto
-	 * your hats...
-	 */
-	console_loglevel = 15;		/* NMI oopser may have shut the console up */
-	printk(" ");
-	console_loglevel = loglevel_save;
 }
 
 void
@@ -308,6 +278,15 @@ fp_emulate (int fp_fault, void *bundle, long *ipsr, long *fpsr, long *isr, long 
 	return ret.status;
 }
 
+struct fpu_swa_msg {
+	unsigned long count;
+	unsigned long time;
+};
+static DEFINE_PER_CPU(struct fpu_swa_msg, cpulast);
+DECLARE_PER_CPU(struct fpu_swa_msg, cpulast);
+static struct fpu_swa_msg last __cacheline_aligned;
+
+
 /*
  * Handle floating-point assist faults and traps.
  */
@@ -317,8 +296,6 @@ handle_fpu_swa (int fp_fault, struct pt_regs *regs, unsigned long isr)
 	long exception, bundle[2];
 	unsigned long fault_ip;
 	struct siginfo siginfo;
-	static int fpu_swa_count = 0;
-	static unsigned long last_time;
 
 	fault_ip = regs->cr_iip;
 	if (!fp_fault && (ia64_psr(regs)->ri == 0))
@@ -326,15 +303,38 @@ handle_fpu_swa (int fp_fault, struct pt_regs *regs, unsigned long isr)
 	if (copy_from_user(bundle, (void __user *) fault_ip, sizeof(bundle)))
 		return -1;
 
-	if (jiffies - last_time > 5*HZ)
-		fpu_swa_count = 0;
-	if ((fpu_swa_count < 4) && !(current->thread.flags & IA64_THREAD_FPEMU_NOPRINT)) {
-		last_time = jiffies;
-		++fpu_swa_count;
-		printk(KERN_WARNING
-		       "%s(%d[#%u]): floating-point assist fault at ip %016lx, isr %016lx\n",
-		       current->comm, current->pid, current->xid,
-		       regs->cr_iip + ia64_psr(regs)->ri, isr);
+	if (!(current->thread.flags & IA64_THREAD_FPEMU_NOPRINT))  {
+		unsigned long count, current_jiffies = jiffies;
+		struct fpu_swa_msg *cp = &__get_cpu_var(cpulast);
+
+		if (unlikely(current_jiffies > cp->time))
+			cp->count = 0;
+		if (unlikely(cp->count < 5)) {
+			cp->count++;
+			cp->time = current_jiffies + 5 * HZ;
+
+			/* minimize races by grabbing a copy of count BEFORE checking last.time. */
+			count = last.count;
+			barrier();
+
+			/*
+			 * Lower 4 bits are used as a count. Upper bits are a sequence
+			 * number that is updated when count is reset. The cmpxchg will
+			 * fail is seqno has changed. This minimizes mutiple cpus
+			 * reseting the count.
+			 */
+			if (current_jiffies > last.time)
+				(void) cmpxchg_acq(&last.count, count, 16 + (count & ~15));
+
+			/* used fetchadd to atomically update the count */
+			if ((last.count & 15) < 5 && (ia64_fetchadd(1, &last.count, acq) & 15) < 5) {
+				last.time = current_jiffies + 5 * HZ;
+				printk(KERN_WARNING
+					"%s(%d[#%u]): floating-point assist fault at ip %016lx, isr %016lx\n",
+					current->comm, current->pid, current->xid,
+					regs->cr_iip + ia64_psr(regs)->ri, isr);
+			}
+		}
 	}
 
 	exception = fp_emulate(fp_fault, bundle, &regs->cr_ipsr, &regs->ar_fpsr, &isr, &regs->pr,

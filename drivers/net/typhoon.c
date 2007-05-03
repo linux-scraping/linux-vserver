@@ -117,6 +117,7 @@ static const int multicast_filter_limit = 32;
 #include <linux/netdevice.h>
 #include <linux/etherdevice.h>
 #include <linux/skbuff.h>
+#include <linux/mm.h>
 #include <linux/init.h>
 #include <linux/delay.h>
 #include <linux/ethtool.h>
@@ -127,7 +128,6 @@ static const int multicast_filter_limit = 32;
 #include <asm/io.h>
 #include <asm/uaccess.h>
 #include <linux/in6.h>
-#include <asm/checksum.h>
 #include <linux/version.h>
 #include <linux/dma-mapping.h>
 
@@ -746,8 +746,7 @@ typhoon_vlan_rx_kill_vid(struct net_device *dev, unsigned short vid)
 {
 	struct typhoon *tp = netdev_priv(dev);
 	spin_lock_bh(&tp->state_lock);
-	if(tp->vlgrp)
-		tp->vlgrp->vlan_devices[vid] = NULL;
+	vlan_group_set_device(tp->vlgrp, vid, NULL);
 	spin_unlock_bh(&tp->state_lock);
 }
 

@@ -798,7 +798,7 @@ static unsigned int get_baud(struct tty_struct *tty)
  */
 static void set_baud(struct tty_struct *tty, unsigned int baudcode)
 {
-	struct termios old_termios = *(tty->termios);
+	struct ktermios old_termios = *(tty->termios);
 	tty->termios->c_cflag &= ~CBAUD;	/* Clear the old baud setting */
 	tty->termios->c_cflag |= baudcode;	/* Set the new baud setting */
 	tty->driver->set_termios(tty, &old_termios);
@@ -1160,7 +1160,7 @@ static int strip_seq_open(struct inode *inode, struct file *file)
 	return seq_open(file, &strip_seq_ops);
 }
 
-static struct file_operations strip_seq_fops = {
+static const struct file_operations strip_seq_fops = {
 	.owner	 = THIS_MODULE,
 	.open    = strip_seq_open,
 	.read    = seq_read,

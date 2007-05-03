@@ -51,31 +51,14 @@ int __cpu_logical_map[NR_CPUS];		/* Map logical to physical */
 EXPORT_SYMBOL(phys_cpu_present_map);
 EXPORT_SYMBOL(cpu_online_map);
 
+/* This happens early in bootup, can't really do it better */
 static void smp_tune_scheduling (void)
 {
 	struct cache_desc *cd = &current_cpu_data.scache;
-	unsigned long cachesize;       /* kB   */
-	unsigned long cpu_khz;
+	unsigned long cachesize = cd->linesz * cd->sets * cd->ways;
 
-	/*
-	 * Crude estimate until we actually meassure ...
-	 */
-	cpu_khz = loops_per_jiffy * 2 * HZ / 1000;
-
-	/*
-	 * Rough estimation for SMP scheduling, this is the number of
-	 * cycles it takes for a fully memory-limited process to flush
-	 * the SMP-local cache.
-	 *
-	 * (For a P5 this pretty much means we will choose another idle
-	 *  CPU almost always at wakeup time (this is due to the small
-	 *  L1 cache), on PIIs it's around 50-100 usecs, depending on
-	 *  the cache size)
-	 */
-	if (!cpu_khz)
-		return;
-
-	cachesize = cd->linesz * cd->sets * cd->ways;
+	if (cachesize > max_cache_size)
+		max_cache_size = cachesize;
 }
 
 extern void __init calibrate_delay(void);
@@ -172,7 +155,7 @@ int smp_call_function (void (*func) (void *info), void *info, int retry,
 
 	spin_lock(&smp_call_lock);
 	call_data = &data;
-	mb();
+	smp_mb();
 
 	/* Send a message to all other CPUs and wait for them to respond */
 	for_each_online_cpu(i)
@@ -204,7 +187,7 @@ void smp_call_function_interrupt(void)
 	 * Notify initiating CPU that I've grabbed the data and am
 	 * about to execute the function.
 	 */
-	mb();
+	smp_mb();
 	atomic_inc(&call_data->started);
 
 	/*
@@ -215,7 +198,7 @@ void smp_call_function_interrupt(void)
 	irq_exit();
 
 	if (wait) {
-		mb();
+		smp_mb();
 		atomic_inc(&call_data->finished);
 	}
 }
@@ -271,7 +254,7 @@ void __devinit smp_prepare_boot_cpu(void)
  * and keep control until "cpu_online(cpu)" is set.  Note: cpu is
  * physical, not logical.
  */
-int __devinit __cpu_up(unsigned int cpu)
+int __cpuinit __cpu_up(unsigned int cpu)
 {
 	struct task_struct *idle;
 

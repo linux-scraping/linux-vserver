@@ -9,12 +9,24 @@ config MMU
 	bool
 	default y
 
+config ZONE_DMA
+	bool
+	default y
+
 config RWSEM_GENERIC_SPINLOCK
 	bool
 	default y
 
 config RWSEM_XCHGADD_ALGORITHM
 	bool
+
+config ARCH_HAS_ILOG2_U32
+	bool
+	default n
+
+config ARCH_HAS_ILOG2_U64
+	bool
+	default n
 
 config GENERIC_FIND_NEXT_BIT
 	bool
@@ -31,6 +43,9 @@ config GENERIC_CALIBRATE_DELAY
 config IRQ_PER_CPU
 	bool
 	default y
+
+config NO_IOPORT
+	def_bool y
 
 config CRIS
 	bool

@@ -14,60 +14,14 @@
 
 #include <linux/mm.h>
 #include <linux/errno.h>
+#include <linux/hardirq.h>
 #include <linux/highmem.h>
+#include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/scatterlist.h>
 
 #include "internal.h"
 #include "scatterwalk.h"
-
-void crypto_digest_init(struct crypto_tfm *tfm)
-{
-	struct crypto_hash *hash = crypto_hash_cast(tfm);
-	struct hash_desc desc = { .tfm = hash, .flags = tfm->crt_flags };
-
-	crypto_hash_init(&desc);
-}
-EXPORT_SYMBOL_GPL(crypto_digest_init);
-
-void crypto_digest_update(struct crypto_tfm *tfm,
-			  struct scatterlist *sg, unsigned int nsg)
-{
-	struct crypto_hash *hash = crypto_hash_cast(tfm);
-	struct hash_desc desc = { .tfm = hash, .flags = tfm->crt_flags };
-	unsigned int nbytes = 0;
-	unsigned int i;
-
-	for (i = 0; i < nsg; i++)
-		nbytes += sg[i].length;
-
-	crypto_hash_update(&desc, sg, nbytes);
-}
-EXPORT_SYMBOL_GPL(crypto_digest_update);
-
-void crypto_digest_final(struct crypto_tfm *tfm, u8 *out)
-{
-	struct crypto_hash *hash = crypto_hash_cast(tfm);
-	struct hash_desc desc = { .tfm = hash, .flags = tfm->crt_flags };
-
-	crypto_hash_final(&desc, out);
-}
-EXPORT_SYMBOL_GPL(crypto_digest_final);
-
-void crypto_digest_digest(struct crypto_tfm *tfm,
-			  struct scatterlist *sg, unsigned int nsg, u8 *out)
-{
-	struct crypto_hash *hash = crypto_hash_cast(tfm);
-	struct hash_desc desc = { .tfm = hash, .flags = tfm->crt_flags };
-	unsigned int nbytes = 0;
-	unsigned int i;
-
-	for (i = 0; i < nsg; i++)
-		nbytes += sg[i].length;
-
-	crypto_hash_digest(&desc, sg, nbytes, out);
-}
-EXPORT_SYMBOL_GPL(crypto_digest_digest);
 
 static int init(struct hash_desc *desc)
 {
@@ -77,8 +31,8 @@ static int init(struct hash_desc *desc)
 	return 0;
 }
 
-static int update(struct hash_desc *desc,
-		  struct scatterlist *sg, unsigned int nbytes)
+static int update2(struct hash_desc *desc,
+		   struct scatterlist *sg, unsigned int nbytes)
 {
 	struct crypto_tfm *tfm = crypto_hash_tfm(desc->tfm);
 	unsigned int alignmask = crypto_tfm_alg_alignmask(tfm);
@@ -129,6 +83,14 @@ static int update(struct hash_desc *desc,
 	return 0;
 }
 
+static int update(struct hash_desc *desc,
+		  struct scatterlist *sg, unsigned int nbytes)
+{
+	if (WARN_ON_ONCE(in_irq()))
+		return -EDEADLK;
+	return update2(desc, sg, nbytes);
+}
+
 static int final(struct hash_desc *desc, u8 *out)
 {
 	struct crypto_tfm *tfm = crypto_hash_tfm(desc->tfm);
@@ -166,14 +128,12 @@ static int setkey(struct crypto_hash *hash, const u8 *key, unsigned int keylen)
 static int digest(struct hash_desc *desc,
 		  struct scatterlist *sg, unsigned int nbytes, u8 *out)
 {
-	init(desc);
-	update(desc, sg, nbytes);
-	return final(desc, out);
-}
+	if (WARN_ON_ONCE(in_irq()))
+		return -EDEADLK;
 
-int crypto_init_digest_flags(struct crypto_tfm *tfm, u32 flags)
-{
-	return flags ? -EINVAL : 0;
+	init(desc);
+	update2(desc, sg, nbytes);
+	return final(desc, out);
 }
 
 int crypto_init_digest_ops(struct crypto_tfm *tfm)

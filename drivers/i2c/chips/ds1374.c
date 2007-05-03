@@ -140,12 +140,14 @@ ulong ds1374_get_rtc_time(void)
 	return t1;
 }
 
-static void ds1374_set_work(void *arg)
+static ulong new_time;
+
+static void ds1374_set_work(struct work_struct *work)
 {
 	ulong t1, t2;
 	int limit = 10;		/* arbitrary retry limit */
 
-	t1 = *(ulong *) arg;
+	t1 = new_time;
 
 	mutex_lock(&ds1374_mutex);
 
@@ -167,11 +169,9 @@ static void ds1374_set_work(void *arg)
 			 "can't confirm time set from rtc chip\n");
 }
 
-static ulong new_time;
-
 static struct workqueue_struct *ds1374_workqueue;
 
-static DECLARE_WORK(ds1374_work, ds1374_set_work, &new_time);
+static DECLARE_WORK(ds1374_work, ds1374_set_work);
 
 int ds1374_set_rtc_time(ulong nowtime)
 {
@@ -180,7 +180,7 @@ int ds1374_set_rtc_time(ulong nowtime)
 	if (in_interrupt())
 		queue_work(ds1374_workqueue, &ds1374_work);
 	else
-		ds1374_set_work(&new_time);
+		ds1374_set_work(NULL);
 
 	return 0;
 }
@@ -207,6 +207,10 @@ static int ds1374_probe(struct i2c_adapter *adap, int addr, int kind)
 	client->driver = &ds1374_driver;
 
 	ds1374_workqueue = create_singlethread_workqueue("ds1374");
+	if (!ds1374_workqueue) {
+		kfree(client);
+		return -ENOMEM;	/* most expected reason */
+	}
 
 	if ((rc = i2c_attach_client(client)) != 0) {
 		kfree(client);

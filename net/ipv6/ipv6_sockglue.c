@@ -1,9 +1,9 @@
 /*
  *	IPv6 BSD socket options interface
- *	Linux INET6 implementation 
+ *	Linux INET6 implementation
  *
  *	Authors:
- *	Pedro Roque		<roque@di.fc.ul.pt>	
+ *	Pedro Roque		<roque@di.fc.ul.pt>
  *
  *	Based on linux/net/ipv4/ip_sockglue.c
  *
@@ -31,7 +31,6 @@
 #include <linux/types.h>
 #include <linux/socket.h>
 #include <linux/sockios.h>
-#include <linux/sched.h>
 #include <linux/net.h>
 #include <linux/in6.h>
 #include <linux/netdevice.h>
@@ -51,6 +50,7 @@
 #include <net/inet_common.h>
 #include <net/tcp.h>
 #include <net/udp.h>
+#include <net/udplite.h>
 #include <net/xfrm.h>
 
 #include <asm/uaccess.h>
@@ -163,7 +163,7 @@ out:
 }
 
 static struct packet_type ipv6_packet_type = {
-	.type = __constant_htons(ETH_P_IPV6), 
+	.type = __constant_htons(ETH_P_IPV6),
 	.func = ipv6_rcv,
 	.gso_send_check = ipv6_gso_send_check,
 	.gso_segment = ipv6_gso_segment,
@@ -239,6 +239,7 @@ static int do_ipv6_setsockopt(struct sock *sk, int level, int optname,
 			struct sk_buff *pktopt;
 
 			if (sk->sk_protocol != IPPROTO_UDP &&
+			    sk->sk_protocol != IPPROTO_UDPLITE &&
 			    sk->sk_protocol != IPPROTO_TCP)
 				break;
 
@@ -276,11 +277,15 @@ static int do_ipv6_setsockopt(struct sock *sk, int level, int optname,
 				sk->sk_family = PF_INET;
 				tcp_sync_mss(sk, icsk->icsk_pmtu_cookie);
 			} else {
+				struct proto *prot = &udp_prot;
+
+				if (sk->sk_protocol == IPPROTO_UDPLITE)
+					prot = &udplite_prot;
 				local_bh_disable();
 				sock_prot_dec_use(sk->sk_prot);
-				sock_prot_inc_use(&udp_prot);
+				sock_prot_inc_use(prot);
 				local_bh_enable();
-				sk->sk_prot = &udp_prot;
+				sk->sk_prot = prot;
 				sk->sk_socket->ops = &inet_dgram_ops;
 				sk->sk_family = PF_INET;
 			}
@@ -314,7 +319,7 @@ static int do_ipv6_setsockopt(struct sock *sk, int level, int optname,
 		np->rxopt.bits.rxinfo = valbool;
 		retv = 0;
 		break;
-		
+
 	case IPV6_2292PKTINFO:
 		np->rxopt.bits.rxoinfo = valbool;
 		retv = 0;
@@ -370,7 +375,7 @@ static int do_ipv6_setsockopt(struct sock *sk, int level, int optname,
 		np->tclass = val;
 		retv = 0;
 		break;
-		
+
 	case IPV6_RECVTCLASS:
 		np->rxopt.bits.rxtclass = valbool;
 		retv = 0;
@@ -408,7 +413,7 @@ static int do_ipv6_setsockopt(struct sock *sk, int level, int optname,
 		}
 
 		/* routing header option needs extra check */
-		if (optname == IPV6_RTHDR && opt->srcrt) {
+		if (optname == IPV6_RTHDR && opt && opt->srcrt) {
 			struct ipv6_rt_hdr *rthdr = opt->srcrt;
 			switch (rthdr->type) {
 			case IPV6_SRCRT_TYPE_0:
@@ -790,12 +795,16 @@ int compat_ipv6_setsockopt(struct sock *sk, int level, int optname,
 EXPORT_SYMBOL(compat_ipv6_setsockopt);
 #endif
 
-static int ipv6_getsockopt_sticky(struct sock *sk, struct ipv6_opt_hdr *hdr,
+static int ipv6_getsockopt_sticky(struct sock *sk, struct ipv6_txoptions *opt,
 				  char __user *optval, int len)
 {
-	if (!hdr)
+	struct ipv6_opt_hdr *hdr;
+
+	if (!opt || !opt->hopopt)
 		return 0;
-	len = min_t(int, len, ipv6_optlen(hdr));
+	hdr = opt->hopopt;
+
+	len = min_t(unsigned int, len, ipv6_optlen(hdr));
 	if (copy_to_user(optval, hdr, ipv6_optlen(hdr)))
 		return -EFAULT;
 	return len;
@@ -813,6 +822,7 @@ static int do_ipv6_getsockopt(struct sock *sk, int level, int optname,
 	switch (optname) {
 	case IPV6_ADDRFORM:
 		if (sk->sk_protocol != IPPROTO_UDP &&
+		    sk->sk_protocol != IPPROTO_UDPLITE &&
 		    sk->sk_protocol != IPPROTO_TCP)
 			return -EINVAL;
 		if (sk->sk_state != TCP_ESTABLISHED)
@@ -886,7 +896,7 @@ static int do_ipv6_getsockopt(struct sock *sk, int level, int optname,
 	case IPV6_MTU:
 	{
 		struct dst_entry *dst;
-		val = 0;	
+		val = 0;
 		lock_sock(sk);
 		dst = sk_dst_get(sk);
 		if (dst) {
@@ -934,7 +944,7 @@ static int do_ipv6_getsockopt(struct sock *sk, int level, int optname,
 	{
 
 		lock_sock(sk);
-		len = ipv6_getsockopt_sticky(sk, np->opt->hopopt,
+		len = ipv6_getsockopt_sticky(sk, np->opt,
 					     optval, len);
 		release_sock(sk);
 		return put_user(len, optlen);
@@ -971,12 +981,27 @@ static int do_ipv6_getsockopt(struct sock *sk, int level, int optname,
 		break;
 
 	case IPV6_UNICAST_HOPS:
-		val = np->hop_limit;
-		break;
-
 	case IPV6_MULTICAST_HOPS:
-		val = np->mcast_hops;
+	{
+		struct dst_entry *dst;
+
+		if (optname == IPV6_UNICAST_HOPS)
+			val = np->hop_limit;
+		else
+			val = np->mcast_hops;
+
+		dst = sk_dst_get(sk);
+		if (dst) {
+			if (val < 0)
+				val = dst_metric(dst, RTAX_HOPLIMIT);
+			if (val < 0)
+				val = ipv6_get_hoplimit(dst->dev);
+			dst_release(dst);
+		}
+		if (val < 0)
+			val = ipv6_devconf.hop_limit;
 		break;
+	}
 
 	case IPV6_MULTICAST_LOOP:
 		val = np->mc_loop;

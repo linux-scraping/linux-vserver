@@ -66,14 +66,13 @@ nfsd_cache_init(void)
 		printk (KERN_ERR "nfsd: cannot allocate all %d cache entries, only got %d\n",
 			CACHESIZE, CACHESIZE-i);
 
-	hash_list = kmalloc (HASHSIZE * sizeof(struct hlist_head), GFP_KERNEL);
+	hash_list = kcalloc (HASHSIZE, sizeof(struct hlist_head), GFP_KERNEL);
 	if (!hash_list) {
 		nfsd_cache_shutdown();
 		printk (KERN_ERR "nfsd: cannot allocate %Zd bytes for hash list\n",
 			HASHSIZE * sizeof(struct hlist_head));
 		return;
 	}
-	memset(hash_list, 0, HASHSIZE * sizeof(struct hlist_head));
 
 	cache_disabled = 0;
 }
@@ -186,7 +185,7 @@ nfsd_cache_lookup(struct svc_rqst *rqstp, int type)
 	rp->c_state = RC_INPROG;
 	rp->c_xid = xid;
 	rp->c_proc = proc;
-	rp->c_addr = rqstp->rq_addr;
+	memcpy(&rp->c_addr, svc_addr_in(rqstp), sizeof(rp->c_addr));
 	rp->c_prot = proto;
 	rp->c_vers = vers;
 	rp->c_timestamp = jiffies;

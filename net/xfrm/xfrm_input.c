@@ -4,7 +4,7 @@
  * Changes:
  * 	YOSHIFUJI Hideaki @USAGI
  * 		Split up af-specific portion
- * 	
+ *
  */
 
 #include <linux/slab.h>
@@ -12,7 +12,7 @@
 #include <net/ip.h>
 #include <net/xfrm.h>
 
-static kmem_cache_t *secpath_cachep __read_mostly;
+static struct kmem_cache *secpath_cachep __read_mostly;
 
 void __secpath_destroy(struct sec_path *sp)
 {
@@ -27,7 +27,7 @@ struct sec_path *secpath_dup(struct sec_path *src)
 {
 	struct sec_path *sp;
 
-	sp = kmem_cache_alloc(secpath_cachep, SLAB_ATOMIC);
+	sp = kmem_cache_alloc(secpath_cachep, GFP_ATOMIC);
 	if (!sp)
 		return NULL;
 

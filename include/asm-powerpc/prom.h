@@ -17,6 +17,7 @@
  */
 #include <linux/types.h>
 #include <linux/proc_fs.h>
+#include <linux/platform_device.h>
 #include <asm/atomic.h>
 
 /* Definitions used by the flattened device tree */
@@ -254,6 +255,8 @@ extern void kdump_move_device_tree(void);
 /* CPU OF node matching */
 struct device_node *of_get_cpu_node(int cpu, unsigned int *thread);
 
+/* Get the MAC address */
+extern const void *of_get_mac_address(struct device_node *np);
 
 /*
  * OF interrupt mapping
@@ -332,6 +335,20 @@ extern int of_irq_map_one(struct device_node *device, int index,
  */
 struct pci_dev;
 extern int of_irq_map_pci(struct pci_dev *pdev, struct of_irq *out_irq);
+
+static inline int of_irq_to_resource(struct device_node *dev, int index, struct resource *r)
+{
+	int irq = irq_of_parse_and_map(dev, index);
+
+	/* Only dereference the resource if both the
+	 * resource and the irq are valid. */
+	if (r && irq != NO_IRQ) {
+		r->start = r->end = irq;
+		r->flags = IORESOURCE_IRQ;
+	}
+
+	return irq;
+}
 
 
 #endif /* __KERNEL__ */

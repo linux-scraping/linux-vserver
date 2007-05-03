@@ -258,6 +258,7 @@
 #include <linux/bootmem.h>
 #include <linux/cache.h>
 #include <linux/err.h>
+#include <linux/crypto.h>
 #include <linux/in.h>
 
 #include <net/icmp.h>
@@ -463,18 +464,19 @@ static inline int forced_push(struct tcp_sock *tp)
 static inline void skb_entail(struct sock *sk, struct tcp_sock *tp,
 			      struct sk_buff *skb)
 {
-	skb->csum = 0;
-	TCP_SKB_CB(skb)->seq = tp->write_seq;
-	TCP_SKB_CB(skb)->end_seq = tp->write_seq;
-	TCP_SKB_CB(skb)->flags = TCPCB_FLAG_ACK;
-	TCP_SKB_CB(skb)->sacked = 0;
+	struct tcp_skb_cb *tcb = TCP_SKB_CB(skb);
+
+	skb->csum    = 0;
+	tcb->seq     = tcb->end_seq = tp->write_seq;
+	tcb->flags   = TCPCB_FLAG_ACK;
+	tcb->sacked  = 0;
 	skb_header_release(skb);
 	__skb_queue_tail(&sk->sk_write_queue, skb);
 	sk_charge_skb(sk, skb);
 	if (!sk->sk_send_head)
 		sk->sk_send_head = skb;
 	if (tp->nonagle & TCP_NAGLE_PUSH)
-		tp->nonagle &= ~TCP_NAGLE_PUSH; 
+		tp->nonagle &= ~TCP_NAGLE_PUSH;
 }
 
 static inline void tcp_mark_urg(struct tcp_sock *tp, int flags,
@@ -556,7 +558,7 @@ new_segment:
 		}
 		if (!sk_stream_wmem_schedule(sk, copy))
 			goto wait_for_memory;
-		
+
 		if (can_coalesce) {
 			skb_shinfo(skb)->frags[i - 1].size += copy;
 		} else {
@@ -1438,12 +1440,12 @@ skip_copy:
 		dma_async_memcpy_issue_pending(tp->ucopy.dma_chan);
 
 		while (dma_async_memcpy_complete(tp->ucopy.dma_chan,
-		                                 tp->ucopy.dma_cookie, &done,
-		                                 &used) == DMA_IN_PROGRESS) {
+						 tp->ucopy.dma_cookie, &done,
+						 &used) == DMA_IN_PROGRESS) {
 			/* do partial cleanup of sk_async_wait_queue */
 			while ((skb = skb_peek(&sk->sk_async_wait_queue)) &&
 			       (dma_async_is_complete(skb->dma_cookie, done,
-			                              used) == DMA_SUCCESS)) {
+						      used) == DMA_SUCCESS)) {
 				__skb_dequeue(&sk->sk_async_wait_queue);
 				kfree_skb(skb);
 			}
@@ -1943,6 +1945,13 @@ static int do_tcp_setsockopt(struct sock *sk, int level,
 		}
 		break;
 
+#ifdef CONFIG_TCP_MD5SIG
+	case TCP_MD5SIG:
+		/* Read the IP->Key mappings from userspace */
+		err = tp->af_specific->md5_parse(sk, optval, optlen);
+		break;
+#endif
+
 	default:
 		err = -ENOPROTOOPT;
 		break;
@@ -1998,7 +2007,7 @@ void tcp_get_info(struct sock *sk, struct tcp_info *info)
 		info->tcpi_options |= TCPI_OPT_WSCALE;
 		info->tcpi_snd_wscale = tp->rx_opt.snd_wscale;
 		info->tcpi_rcv_wscale = tp->rx_opt.rcv_wscale;
-	} 
+	}
 
 	if (tp->ecn_flags&TCP_ECN_OK)
 		info->tcpi_options |= TCPI_OPT_ECN;
@@ -2155,7 +2164,7 @@ struct sk_buff *tcp_tso_segment(struct sk_buff *skb, int features)
 	struct tcphdr *th;
 	unsigned thlen;
 	unsigned int seq;
-	unsigned int delta;
+	__be32 delta;
 	unsigned int oldlen;
 	unsigned int len;
 
@@ -2208,7 +2217,8 @@ struct sk_buff *tcp_tso_segment(struct sk_buff *skb, int features)
 	do {
 		th->fin = th->psh = 0;
 
-		th->check = ~csum_fold(th->check + delta);
+		th->check = ~csum_fold((__force __wsum)((__force u32)th->check +
+				       (__force u32)delta));
 		if (skb->ip_summed != CHECKSUM_PARTIAL)
 			th->check = csum_fold(csum_partial(skb->h.raw, thlen,
 							   skb->csum));
@@ -2222,7 +2232,8 @@ struct sk_buff *tcp_tso_segment(struct sk_buff *skb, int features)
 	} while (skb->next);
 
 	delta = htonl(oldlen + (skb->tail - skb->h.raw) + skb->data_len);
-	th->check = ~csum_fold(th->check + delta);
+	th->check = ~csum_fold((__force __wsum)((__force u32)th->check +
+				(__force u32)delta));
 	if (skb->ip_summed != CHECKSUM_PARTIAL)
 		th->check = csum_fold(csum_partial(skb->h.raw, thlen,
 						   skb->csum));
@@ -2231,6 +2242,136 @@ out:
 	return segs;
 }
 EXPORT_SYMBOL(tcp_tso_segment);
+
+#ifdef CONFIG_TCP_MD5SIG
+static unsigned long tcp_md5sig_users;
+static struct tcp_md5sig_pool **tcp_md5sig_pool;
+static DEFINE_SPINLOCK(tcp_md5sig_pool_lock);
+
+static void __tcp_free_md5sig_pool(struct tcp_md5sig_pool **pool)
+{
+	int cpu;
+	for_each_possible_cpu(cpu) {
+		struct tcp_md5sig_pool *p = *per_cpu_ptr(pool, cpu);
+		if (p) {
+			if (p->md5_desc.tfm)
+				crypto_free_hash(p->md5_desc.tfm);
+			kfree(p);
+			p = NULL;
+		}
+	}
+	free_percpu(pool);
+}
+
+void tcp_free_md5sig_pool(void)
+{
+	struct tcp_md5sig_pool **pool = NULL;
+
+	spin_lock_bh(&tcp_md5sig_pool_lock);
+	if (--tcp_md5sig_users == 0) {
+		pool = tcp_md5sig_pool;
+		tcp_md5sig_pool = NULL;
+	}
+	spin_unlock_bh(&tcp_md5sig_pool_lock);
+	if (pool)
+		__tcp_free_md5sig_pool(pool);
+}
+
+EXPORT_SYMBOL(tcp_free_md5sig_pool);
+
+static struct tcp_md5sig_pool **__tcp_alloc_md5sig_pool(void)
+{
+	int cpu;
+	struct tcp_md5sig_pool **pool;
+
+	pool = alloc_percpu(struct tcp_md5sig_pool *);
+	if (!pool)
+		return NULL;
+
+	for_each_possible_cpu(cpu) {
+		struct tcp_md5sig_pool *p;
+		struct crypto_hash *hash;
+
+		p = kzalloc(sizeof(*p), GFP_KERNEL);
+		if (!p)
+			goto out_free;
+		*per_cpu_ptr(pool, cpu) = p;
+
+		hash = crypto_alloc_hash("md5", 0, CRYPTO_ALG_ASYNC);
+		if (!hash || IS_ERR(hash))
+			goto out_free;
+
+		p->md5_desc.tfm = hash;
+	}
+	return pool;
+out_free:
+	__tcp_free_md5sig_pool(pool);
+	return NULL;
+}
+
+struct tcp_md5sig_pool **tcp_alloc_md5sig_pool(void)
+{
+	struct tcp_md5sig_pool **pool;
+	int alloc = 0;
+
+retry:
+	spin_lock_bh(&tcp_md5sig_pool_lock);
+	pool = tcp_md5sig_pool;
+	if (tcp_md5sig_users++ == 0) {
+		alloc = 1;
+		spin_unlock_bh(&tcp_md5sig_pool_lock);
+	} else if (!pool) {
+		tcp_md5sig_users--;
+		spin_unlock_bh(&tcp_md5sig_pool_lock);
+		cpu_relax();
+		goto retry;
+	} else
+		spin_unlock_bh(&tcp_md5sig_pool_lock);
+
+	if (alloc) {
+		/* we cannot hold spinlock here because this may sleep. */
+		struct tcp_md5sig_pool **p = __tcp_alloc_md5sig_pool();
+		spin_lock_bh(&tcp_md5sig_pool_lock);
+		if (!p) {
+			tcp_md5sig_users--;
+			spin_unlock_bh(&tcp_md5sig_pool_lock);
+			return NULL;
+		}
+		pool = tcp_md5sig_pool;
+		if (pool) {
+			/* oops, it has already been assigned. */
+			spin_unlock_bh(&tcp_md5sig_pool_lock);
+			__tcp_free_md5sig_pool(p);
+		} else {
+			tcp_md5sig_pool = pool = p;
+			spin_unlock_bh(&tcp_md5sig_pool_lock);
+		}
+	}
+	return pool;
+}
+
+EXPORT_SYMBOL(tcp_alloc_md5sig_pool);
+
+struct tcp_md5sig_pool *__tcp_get_md5sig_pool(int cpu)
+{
+	struct tcp_md5sig_pool **p;
+	spin_lock_bh(&tcp_md5sig_pool_lock);
+	p = tcp_md5sig_pool;
+	if (p)
+		tcp_md5sig_users++;
+	spin_unlock_bh(&tcp_md5sig_pool_lock);
+	return (p ? *per_cpu_ptr(p, cpu) : NULL);
+}
+
+EXPORT_SYMBOL(__tcp_get_md5sig_pool);
+
+void __tcp_put_md5sig_pool(void)
+{
+	tcp_free_md5sig_pool();
+}
+
+EXPORT_SYMBOL(__tcp_put_md5sig_pool);
+#endif
 
 extern void __skb_cb_too_small_for_tcp(int, int);
 extern struct tcp_congestion_ops tcp_reno;
@@ -2275,10 +2416,11 @@ void __init tcp_init(void)
 					&tcp_hashinfo.ehash_size,
 					NULL,
 					0);
-	tcp_hashinfo.ehash_size = (1 << tcp_hashinfo.ehash_size) >> 1;
-	for (i = 0; i < (tcp_hashinfo.ehash_size << 1); i++) {
+	tcp_hashinfo.ehash_size = 1 << tcp_hashinfo.ehash_size;
+	for (i = 0; i < tcp_hashinfo.ehash_size; i++) {
 		rwlock_init(&tcp_hashinfo.ehash[i].lock);
 		INIT_HLIST_HEAD(&tcp_hashinfo.ehash[i].chain);
+		INIT_HLIST_HEAD(&tcp_hashinfo.ehash[i].twchain);
 	}
 
 	tcp_hashinfo.bhash =
@@ -2317,11 +2459,18 @@ void __init tcp_init(void)
 		sysctl_max_syn_backlog = 128;
 	}
 
-	/* Allow no more than 3/4 kernel memory (usually less) allocated to TCP */
-	sysctl_tcp_mem[0] = (1536 / sizeof (struct inet_bind_hashbucket)) << order;
-	sysctl_tcp_mem[1] = sysctl_tcp_mem[0] * 4 / 3;
+	/* Set the pressure threshold to be a fraction of global memory that
+	 * is up to 1/2 at 256 MB, decreasing toward zero with the amount of
+	 * memory, with a floor of 128 pages.
+	 */
+	limit = min(nr_all_pages, 1UL<<(28-PAGE_SHIFT)) >> (20-PAGE_SHIFT);
+	limit = (limit * (nr_all_pages >> (20-PAGE_SHIFT))) >> (PAGE_SHIFT-11);
+	limit = max(limit, 128UL);
+	sysctl_tcp_mem[0] = limit / 4 * 3;
+	sysctl_tcp_mem[1] = limit;
 	sysctl_tcp_mem[2] = sysctl_tcp_mem[0] * 2;
 
+	/* Set per-socket limits to no more than 1/128 the pressure threshold */
 	limit = ((unsigned long)sysctl_tcp_mem[1]) << (PAGE_SHIFT - 7);
 	max_share = min(4UL*1024*1024, limit);
 
@@ -2335,7 +2484,7 @@ void __init tcp_init(void)
 
 	printk(KERN_INFO "TCP: Hash tables configured "
 	       "(established %d bind %d)\n",
-	       tcp_hashinfo.ehash_size << 1, tcp_hashinfo.bhash_size);
+	       tcp_hashinfo.ehash_size, tcp_hashinfo.bhash_size);
 
 	tcp_register_congestion_control(&tcp_reno);
 }

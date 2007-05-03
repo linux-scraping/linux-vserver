@@ -49,13 +49,13 @@
 
 #include <linux/sched.h>
 #include <linux/errno.h>
-#include <linux/suspend.h>
+#include <linux/freezer.h>
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/slab.h>
 #include <linux/kthread.h>
 #include <linux/mutex.h>
-#include <linux/utsrelease.h>
+#include <linux/utsname.h>
 
 #include <scsi/scsi.h>
 #include <scsi/scsi_cmnd.h>
@@ -547,7 +547,7 @@ static int get_device_info(struct us_data *us, const struct usb_device_id *id)
 				idesc->bInterfaceSubClass,
 				idesc->bInterfaceProtocol,
 				msgs[msg],
-				UTS_RELEASE);
+				utsname()->release);
 	}
 
 	return 0;
@@ -731,28 +731,27 @@ static int get_pipes(struct us_data *us)
 	struct usb_endpoint_descriptor *ep_int = NULL;
 
 	/*
-	 * Find the endpoints we need.
+	 * Find the first endpoint of each type we need.
 	 * We are expecting a minimum of 2 endpoints - in and out (bulk).
-	 * An optional interrupt is OK (necessary for CBI protocol).
+	 * An optional interrupt-in is OK (necessary for CBI protocol).
 	 * We will ignore any others.
 	 */
 	for (i = 0; i < altsetting->desc.bNumEndpoints; i++) {
 		ep = &altsetting->endpoint[i].desc;
 
-		/* Is it a BULK endpoint? */
-		if ((ep->bmAttributes & USB_ENDPOINT_XFERTYPE_MASK)
-				== USB_ENDPOINT_XFER_BULK) {
-			/* BULK in or out? */
-			if (ep->bEndpointAddress & USB_DIR_IN)
-				ep_in = ep;
-			else
-				ep_out = ep;
+		if (usb_endpoint_xfer_bulk(ep)) {
+			if (usb_endpoint_dir_in(ep)) {
+				if (!ep_in)
+					ep_in = ep;
+			} else {
+				if (!ep_out)
+					ep_out = ep;
+			}
 		}
 
-		/* Is it an interrupt endpoint? */
-		else if ((ep->bmAttributes & USB_ENDPOINT_XFERTYPE_MASK)
-				== USB_ENDPOINT_XFER_INT) {
-			ep_int = ep;
+		else if (usb_endpoint_is_int_in(ep)) {
+			if (!ep_int)
+				ep_int = ep;
 		}
 	}
 

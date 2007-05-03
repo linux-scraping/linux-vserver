@@ -2,7 +2,7 @@
 #define _VX_CVIRT_PROC_H
 
 #include <linux/nsproxy.h>
-#include <linux/namespace.h>
+#include <linux/mnt_namespace.h>
 #include <linux/utsname.h>
 #include <linux/ipc.h>
 
@@ -10,7 +10,7 @@
 static inline
 int vx_info_proc_nsproxy(struct nsproxy *nsproxy, char *buffer)
 {
-	struct namespace *ns;
+	struct mnt_namespace *ns;
 	struct uts_namespace *uts;
 	struct ipc_namespace *ipc;
 	struct vfsmount *mnt;
@@ -22,10 +22,10 @@ int vx_info_proc_nsproxy(struct nsproxy *nsproxy, char *buffer)
 
 	length += sprintf(buffer + length,
 		"NSProxy:\t%p [%p,%p,%p]\n",
-		nsproxy, nsproxy->namespace,
+		nsproxy, nsproxy->mnt_ns,
 		nsproxy->uts_ns, nsproxy->ipc_ns);
 
-	ns = nsproxy->namespace;
+	ns = nsproxy->mnt_ns;
 	if (!ns)
 		goto skip_ns;
 

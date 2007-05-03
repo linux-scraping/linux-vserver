@@ -1428,13 +1428,13 @@ static int __devinit add_card(struct pci_dev *dev,
         	struct i2c_algo_bit_data i2c_adapter_data;
 
         	error = -ENOMEM;
-		i2c_ad = kmalloc(sizeof(*i2c_ad), SLAB_KERNEL);
+		i2c_ad = kmemdup(&bit_ops, sizeof(*i2c_ad), GFP_KERNEL);
         	if (!i2c_ad) FAIL("failed to allocate I2C adapter memory");
 
-		memcpy(i2c_ad, &bit_ops, sizeof(struct i2c_adapter));
                 i2c_adapter_data = bit_data;
                 i2c_ad->algo_data = &i2c_adapter_data;
                 i2c_adapter_data.data = lynx;
+		i2c_ad->dev.parent = &dev->dev;
 
 		PRINTD(KERN_DEBUG, lynx->id,"original eeprom control: %d",
 		       reg_read(lynx, SERIAL_EEPROM_CONTROL));
@@ -1486,7 +1486,7 @@ static int __devinit add_card(struct pci_dev *dev,
 
                         }
 
-                        i2c_bit_del_bus(i2c_ad);
+			i2c_del_adapter(i2c_ad);
 			kfree(i2c_ad);
                 }
         }

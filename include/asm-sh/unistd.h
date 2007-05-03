@@ -233,6 +233,7 @@
 #define __NR_fcntl64		221
 /* 223 is unused */
 #define __NR_gettid		224
+#define __NR_readahead		225
 #define __NR_setxattr		226
 #define __NR_lsetxattr		227
 #define __NR_fsetxattr		228
@@ -292,22 +293,22 @@
 #define __NR_mq_getsetattr      (__NR_mq_open+5)
 #define __NR_kexec_load		283
 #define __NR_waitid		284
-/* #define __NR_sys_setaltroot	285 */
-#define __NR_add_key		286
-#define __NR_request_key	287
-#define __NR_keyctl		288
-#define __NR_ioprio_set		289
-#define __NR_ioprio_get		290
-#define __NR_inotify_init	291
-#define __NR_inotify_add_watch	292
-#define __NR_inotify_rm_watch	293
+#define __NR_add_key		285
+#define __NR_request_key	286
+#define __NR_keyctl		287
+#define __NR_ioprio_set		288
+#define __NR_ioprio_get		289
+#define __NR_inotify_init	290
+#define __NR_inotify_add_watch	291
+#define __NR_inotify_rm_watch	292
+/* 293 is unused */
 #define __NR_migrate_pages	294
 #define __NR_openat		295
 #define __NR_mkdirat		296
 #define __NR_mknodat		297
 #define __NR_fchownat		298
 #define __NR_futimesat		299
-#define __NR_newfstatat		300
+#define __NR_fstatat64		300
 #define __NR_unlinkat		301
 #define __NR_renameat		302
 #define __NR_linkat		303
@@ -331,125 +332,6 @@
 #define NR_syscalls 320
 
 #ifdef __KERNEL__
-
-#include <linux/err.h>
-
-/* user-visible error numbers are in the range -1 - -MAX_ERRNO:
- * see <asm-sh/errno.h> */
-
-#define __syscall_return(type, res) \
-do { \
-	if ((unsigned long)(res) >= (unsigned long)(-MAX_ERRNO)) { \
-	/* Avoid using "res" which is declared to be in register r0; \
-	   errno might expand to a function call and clobber it.  */ \
-		int __err = -(res); \
-		errno = __err; \
-		res = -1; \
-	} \
-	return (type) (res); \
-} while (0)
-
-/* XXX - _foo needs to be __foo, while __NR_bar could be _NR_bar. */
-#define _syscall0(type,name) \
-type name(void) \
-{ \
-register long __sc0 __asm__ ("r3") = __NR_##name; \
-__asm__ __volatile__ ("trapa	#0x10" \
-	: "=z" (__sc0) \
-	: "0" (__sc0) \
-	: "memory" ); \
-__syscall_return(type,__sc0); \
-}
-
-#define _syscall1(type,name,type1,arg1) \
-type name(type1 arg1) \
-{ \
-register long __sc0 __asm__ ("r3") = __NR_##name; \
-register long __sc4 __asm__ ("r4") = (long) arg1; \
-__asm__ __volatile__ ("trapa	#0x11" \
-	: "=z" (__sc0) \
-	: "0" (__sc0), "r" (__sc4) \
-	: "memory"); \
-__syscall_return(type,__sc0); \
-}
-
-#define _syscall2(type,name,type1,arg1,type2,arg2) \
-type name(type1 arg1,type2 arg2) \
-{ \
-register long __sc0 __asm__ ("r3") = __NR_##name; \
-register long __sc4 __asm__ ("r4") = (long) arg1; \
-register long __sc5 __asm__ ("r5") = (long) arg2; \
-__asm__ __volatile__ ("trapa	#0x12" \
-	: "=z" (__sc0) \
-	: "0" (__sc0), "r" (__sc4), "r" (__sc5) \
-	: "memory"); \
-__syscall_return(type,__sc0); \
-}
-
-#define _syscall3(type,name,type1,arg1,type2,arg2,type3,arg3) \
-type name(type1 arg1,type2 arg2,type3 arg3) \
-{ \
-register long __sc0 __asm__ ("r3") = __NR_##name; \
-register long __sc4 __asm__ ("r4") = (long) arg1; \
-register long __sc5 __asm__ ("r5") = (long) arg2; \
-register long __sc6 __asm__ ("r6") = (long) arg3; \
-__asm__ __volatile__ ("trapa	#0x13" \
-	: "=z" (__sc0) \
-	: "0" (__sc0), "r" (__sc4), "r" (__sc5), "r" (__sc6) \
-	: "memory"); \
-__syscall_return(type,__sc0); \
-}
-
-#define _syscall4(type,name,type1,arg1,type2,arg2,type3,arg3,type4,arg4) \
-type name (type1 arg1, type2 arg2, type3 arg3, type4 arg4) \
-{ \
-register long __sc0 __asm__ ("r3") = __NR_##name; \
-register long __sc4 __asm__ ("r4") = (long) arg1; \
-register long __sc5 __asm__ ("r5") = (long) arg2; \
-register long __sc6 __asm__ ("r6") = (long) arg3; \
-register long __sc7 __asm__ ("r7") = (long) arg4; \
-__asm__ __volatile__ ("trapa	#0x14" \
-	: "=z" (__sc0) \
-	: "0" (__sc0), "r" (__sc4), "r" (__sc5), "r" (__sc6),  \
-	  "r" (__sc7) \
-	: "memory" ); \
-__syscall_return(type,__sc0); \
-}
-
-#define _syscall5(type,name,type1,arg1,type2,arg2,type3,arg3,type4,arg4,type5,arg5) \
-type name (type1 arg1, type2 arg2, type3 arg3, type4 arg4, type5 arg5) \
-{ \
-register long __sc3 __asm__ ("r3") = __NR_##name; \
-register long __sc4 __asm__ ("r4") = (long) arg1; \
-register long __sc5 __asm__ ("r5") = (long) arg2; \
-register long __sc6 __asm__ ("r6") = (long) arg3; \
-register long __sc7 __asm__ ("r7") = (long) arg4; \
-register long __sc0 __asm__ ("r0") = (long) arg5; \
-__asm__ __volatile__ ("trapa	#0x15" \
-	: "=z" (__sc0) \
-	: "0" (__sc0), "r" (__sc4), "r" (__sc5), "r" (__sc6), "r" (__sc7),  \
-	  "r" (__sc3) \
-	: "memory" ); \
-__syscall_return(type,__sc0); \
-}
-
-#define _syscall6(type,name,type1,arg1,type2,arg2,type3,arg3,type4,arg4,type5,arg5,type6,arg6) \
-type name (type1 arg1, type2 arg2, type3 arg3, type4 arg4, type5 arg5, type6 arg6) \
-{ \
-register long __sc3 __asm__ ("r3") = __NR_##name; \
-register long __sc4 __asm__ ("r4") = (long) arg1; \
-register long __sc5 __asm__ ("r5") = (long) arg2; \
-register long __sc6 __asm__ ("r6") = (long) arg3; \
-register long __sc7 __asm__ ("r7") = (long) arg4; \
-register long __sc0 __asm__ ("r0") = (long) arg5; \
-register long __sc1 __asm__ ("r1") = (long) arg6; \
-__asm__ __volatile__ ("trapa	#0x16" \
-	: "=z" (__sc0) \
-	: "0" (__sc0), "r" (__sc4), "r" (__sc5), "r" (__sc6), "r" (__sc7),  \
-	  "r" (__sc3), "r" (__sc1) \
-	: "memory" ); \
-__syscall_return(type,__sc0); \
-}
 
 #define __ARCH_WANT_IPC_PARSE_VERSION
 #define __ARCH_WANT_OLD_READDIR

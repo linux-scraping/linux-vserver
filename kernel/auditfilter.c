@@ -636,10 +636,9 @@ static struct audit_rule *audit_krule_to_rule(struct audit_krule *krule)
 	struct audit_rule *rule;
 	int i;
 
-	rule = kmalloc(sizeof(*rule), GFP_KERNEL);
+	rule = kzalloc(sizeof(*rule), GFP_KERNEL);
 	if (unlikely(!rule))
 		return NULL;
-	memset(rule, 0, sizeof(*rule));
 
 	rule->flags = krule->flags | krule->listnr;
 	rule->action = krule->action;
@@ -801,8 +800,8 @@ static inline int audit_dupe_selinux_field(struct audit_field *df,
 
 	/* our own copy of se_str */
 	se_str = kstrdup(sf->se_str, GFP_KERNEL);
-	if (unlikely(IS_ERR(se_str)))
-	    return -ENOMEM;
+	if (unlikely(!se_str))
+		return -ENOMEM;
 	df->se_str = se_str;
 
 	/* our own (refreshed) copy of se_rule */
@@ -938,9 +937,10 @@ static void audit_update_watch(struct audit_parent *parent,
 		}
 
 		ab = audit_log_start(NULL, GFP_KERNEL, AUDIT_CONFIG_CHANGE);
-		audit_log_format(ab, "audit updated rules specifying path=");
+		audit_log_format(ab, "op=updated rules specifying path=");
 		audit_log_untrustedstring(ab, owatch->path);
 		audit_log_format(ab, " with dev=%u ino=%lu\n", dev, ino);
+		audit_log_format(ab, " list=%d res=1", r->listnr);
 		audit_log_end(ab);
 
 		audit_remove_watch(owatch);
@@ -970,14 +970,14 @@ static void audit_remove_parent_watches(struct audit_parent *parent)
 			e = container_of(r, struct audit_entry, rule);
 
 			ab = audit_log_start(NULL, GFP_KERNEL, AUDIT_CONFIG_CHANGE);
-			audit_log_format(ab, "audit implicitly removed rule path=");
+			audit_log_format(ab, "op=remove rule path=");
 			audit_log_untrustedstring(ab, w->path);
 			if (r->filterkey) {
 				audit_log_format(ab, " key=");
 				audit_log_untrustedstring(ab, r->filterkey);
 			} else
 				audit_log_format(ab, " key=(null)");
-			audit_log_format(ab, " list=%d", r->listnr);
+			audit_log_format(ab, " list=%d res=1", r->listnr);
 			audit_log_end(ab);
 
 			list_del(&r->rlist);
@@ -1411,7 +1411,7 @@ static void audit_log_rule_change(uid_t loginuid, u32 sid, char *action,
 			audit_log_format(ab, " subj=%s", ctx);
 		kfree(ctx);
 	}
-	audit_log_format(ab, " %s rule key=", action);
+	audit_log_format(ab, " op=%s rule key=", action);
 	if (rule->filterkey)
 		audit_log_untrustedstring(ab, rule->filterkey);
 	else
@@ -1602,8 +1602,8 @@ static int audit_filter_user_rules(struct netlink_skb_parms *cb,
 
 int audit_filter_user(struct netlink_skb_parms *cb, int type)
 {
+	enum audit_state state = AUDIT_DISABLED;
 	struct audit_entry *e;
-	enum audit_state   state;
 	int ret = 1;
 
 	rcu_read_lock();

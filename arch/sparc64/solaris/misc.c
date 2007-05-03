@@ -77,7 +77,7 @@ static u32 do_solaris_mmap(u32 addr, u32 len, u32 prot, u32 flags, u32 fd, u64 o
 		if (!file)
 			goto out;
 		else {
-			struct inode * inode = file->f_dentry->d_inode;
+			struct inode * inode = file->f_path.dentry->d_inode;
 			if(imajor(inode) == MEM_MAJOR &&
 			   iminor(inode) == 5) {
 				flags |= MAP_ANONYMOUS;
@@ -363,8 +363,10 @@ asmlinkage int solaris_sysconf(int id)
 {
 	switch (id) {
 	case SOLARIS_CONFIG_NGROUPS:	return NGROUPS_MAX;
-	case SOLARIS_CONFIG_CHILD_MAX:	return -1; /* no limit */
-	case SOLARIS_CONFIG_OPEN_FILES:	return OPEN_MAX;
+	case SOLARIS_CONFIG_CHILD_MAX:
+		return current->signal->rlim[RLIMIT_NPROC].rlim_cur;
+	case SOLARIS_CONFIG_OPEN_FILES:
+		return current->signal->rlim[RLIMIT_NOFILE].rlim_cur;
 	case SOLARIS_CONFIG_POSIX_VER:	return 199309;
 	case SOLARIS_CONFIG_PAGESIZE:	return PAGE_SIZE;
 	case SOLARIS_CONFIG_XOPEN_VER:	return 3;
@@ -423,9 +425,7 @@ asmlinkage int solaris_procids(int cmd, s32 pid, s32 pgid)
 			   Solaris setpgrp and setsid? */
 			ret = sys_setpgid(0, 0);
 			if (ret) return ret;
-			mutex_lock(&tty_mutex);
-			current->signal->tty = NULL;
-			mutex_unlock(&tty_mutex);
+			proc_clear_tty(current);
 			return process_group(current);
 		}
 	case 2: /* getsid */

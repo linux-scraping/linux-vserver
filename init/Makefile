@@ -2,7 +2,12 @@
 # Makefile for the linux kernel.
 #
 
-obj-y				:= main.o version.o mounts.o initramfs.o
+obj-y                          := main.o version.o mounts.o
+ifneq ($(CONFIG_BLK_DEV_INITRD),y)
+obj-y                          += noinitramfs.o
+else
+obj-$(CONFIG_BLK_DEV_INITRD)   += initramfs.o
+endif
 obj-$(CONFIG_GENERIC_CALIBRATE_DELAY) += calibrate.o
 
 mounts-y			:= do_mounts.o
@@ -15,7 +20,6 @@ clean-files := ../include/linux/compile.h
 
 # dependencies on generated files need to be listed explicitly
 
-$(obj)/main.o: include/linux/compile.h
 $(obj)/version.o: include/linux/compile.h
 
 # compile.h changes depending on hostname, generation number, etc,

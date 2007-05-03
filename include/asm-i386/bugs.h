@@ -21,6 +21,7 @@
 #include <asm/processor.h>
 #include <asm/i387.h>
 #include <asm/msr.h>
+#include <asm/paravirt.h>
 
 static int __init no_halt(char *s)
 {
@@ -91,6 +92,9 @@ static void __init check_fpu(void)
 
 static void __init check_hlt(void)
 {
+	if (paravirt_enabled())
+		return;
+
 	printk(KERN_INFO "Checking 'hlt' instruction... ");
 	if (!boot_cpu_data.hlt_works_ok) {
 		printk("disabled\n");
@@ -156,7 +160,7 @@ static void __init check_config(void)
  * If we configured ourselves for a TSC, we'd better have one!
  */
 #ifdef CONFIG_X86_TSC
-	if (!cpu_has_tsc)
+	if (!cpu_has_tsc && !tsc_disable)
 		panic("Kernel compiled for Pentium+, requires TSC feature!");
 #endif
 

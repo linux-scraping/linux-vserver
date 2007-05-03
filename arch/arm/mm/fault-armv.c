@@ -61,7 +61,7 @@ static int adjust_pte(struct vm_area_struct *vma, unsigned long address)
 	if (pte_present(entry) && pte_val(entry) & shared_pte_mask) {
 		flush_cache_page(vma, address, pte_pfn(entry));
 		pte_val(entry) &= ~shared_pte_mask;
-		set_pte(pte, entry);
+		set_pte_at(vma->vm_mm, address, pte, entry);
 		flush_tlb_page(vma, address);
 		ret = 1;
 	}
@@ -118,8 +118,6 @@ make_coherent(struct address_space *mapping, struct vm_area_struct *vma, unsigne
 	else
 		flush_cache_page(vma, addr, pfn);
 }
-
-void __flush_dcache_page(struct address_space *mapping, struct page *page);
 
 /*
  * Take care of architecture specific things when placing a new PTE into

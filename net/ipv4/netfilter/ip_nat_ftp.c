@@ -50,7 +50,7 @@ mangle_rfc959_packet(struct sk_buff **pskb,
 	DEBUGP("calling ip_nat_mangle_tcp_packet\n");
 
 	*seq += strlen(buffer) - matchlen;
-	return ip_nat_mangle_tcp_packet(pskb, ct, ctinfo, matchoff, 
+	return ip_nat_mangle_tcp_packet(pskb, ct, ctinfo, matchoff,
 					matchlen, buffer, strlen(buffer));
 }
 
@@ -72,7 +72,7 @@ mangle_eprt_packet(struct sk_buff **pskb,
 	DEBUGP("calling ip_nat_mangle_tcp_packet\n");
 
 	*seq += strlen(buffer) - matchlen;
-	return ip_nat_mangle_tcp_packet(pskb, ct, ctinfo, matchoff, 
+	return ip_nat_mangle_tcp_packet(pskb, ct, ctinfo, matchoff,
 					matchlen, buffer, strlen(buffer));
 }
 
@@ -94,7 +94,7 @@ mangle_epsv_packet(struct sk_buff **pskb,
 	DEBUGP("calling ip_nat_mangle_tcp_packet\n");
 
 	*seq += strlen(buffer) - matchlen;
-	return ip_nat_mangle_tcp_packet(pskb, ct, ctinfo, matchoff, 
+	return ip_nat_mangle_tcp_packet(pskb, ct, ctinfo, matchoff,
 					matchlen, buffer, strlen(buffer));
 }
 
@@ -156,15 +156,14 @@ static unsigned int ip_nat_ftp(struct sk_buff **pskb,
 
 static void __exit ip_nat_ftp_fini(void)
 {
-	ip_nat_ftp_hook = NULL;
-	/* Make sure noone calls it, meanwhile. */
-	synchronize_net();
+	rcu_assign_pointer(ip_nat_ftp_hook, NULL);
+	synchronize_rcu();
 }
 
 static int __init ip_nat_ftp_init(void)
 {
-	BUG_ON(ip_nat_ftp_hook);
-	ip_nat_ftp_hook = ip_nat_ftp;
+	BUG_ON(rcu_dereference(ip_nat_ftp_hook));
+	rcu_assign_pointer(ip_nat_ftp_hook, ip_nat_ftp);
 	return 0;
 }
 

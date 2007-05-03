@@ -30,7 +30,7 @@
 
 #define NR_PMB_ENTRIES	16
 
-static kmem_cache_t *pmb_cache;
+static struct kmem_cache *pmb_cache;
 static unsigned long pmb_map;
 
 static struct pmb_entry pmb_init_map[] = {
@@ -283,7 +283,7 @@ void pmb_unmap(unsigned long addr)
 	} while (pmbe);
 }
 
-static void pmb_cache_ctor(void *pmb, kmem_cache_t *cachep, unsigned long flags)
+static void pmb_cache_ctor(void *pmb, struct kmem_cache *cachep, unsigned long flags)
 {
 	struct pmb_entry *pmbe = pmb;
 
@@ -297,7 +297,7 @@ static void pmb_cache_ctor(void *pmb, kmem_cache_t *cachep, unsigned long flags)
 	spin_unlock_irq(&pmb_list_lock);
 }
 
-static void pmb_cache_dtor(void *pmb, kmem_cache_t *cachep, unsigned long flags)
+static void pmb_cache_dtor(void *pmb, struct kmem_cache *cachep, unsigned long flags)
 {
 	spin_lock_irq(&pmb_list_lock);
 	pmb_list_del(pmb);
@@ -378,7 +378,7 @@ static int pmb_debugfs_open(struct inode *inode, struct file *file)
 	return single_open(file, pmb_seq_show, NULL);
 }
 
-static struct file_operations pmb_debugfs_fops = {
+static const struct file_operations pmb_debugfs_fops = {
 	.owner		= THIS_MODULE,
 	.open		= pmb_debugfs_open,
 	.read		= seq_read,

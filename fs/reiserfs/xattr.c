@@ -42,7 +42,7 @@
 #include <linux/reiserfs_xattr.h>
 #include <linux/reiserfs_acl.h>
 #include <asm/uaccess.h>
-#include <asm/checksum.h>
+#include <net/checksum.h>
 #include <linux/smp_lock.h>
 #include <linux/stat.h>
 #include <asm/semaphore.h>
@@ -55,80 +55,46 @@
 static struct reiserfs_xattr_handler *find_xattr_handler_prefix(const char
 								*prefix);
 
-static struct dentry *create_xa_root(struct super_block *sb)
+/* Returns the dentry referring to the root of the extended attribute
+ * directory tree. If it has already been retrieved, it is used. If it
+ * hasn't been created and the flags indicate creation is allowed, we
+ * attempt to create it. On error, we return a pointer-encoded error.
+ */
+static struct dentry *get_xa_root(struct super_block *sb, int flags)
 {
 	struct dentry *privroot = dget(REISERFS_SB(sb)->priv_root);
 	struct dentry *xaroot;
 
 	/* This needs to be created at mount-time */
 	if (!privroot)
-		return ERR_PTR(-EOPNOTSUPP);
+		return ERR_PTR(-ENODATA);
+
+	mutex_lock(&privroot->d_inode->i_mutex);
+	if (REISERFS_SB(sb)->xattr_root) {
+		xaroot = dget(REISERFS_SB(sb)->xattr_root);
+		goto out;
+	}
 
 	xaroot = lookup_one_len(XAROOT_NAME, privroot, strlen(XAROOT_NAME));
 	if (IS_ERR(xaroot)) {
 		goto out;
 	} else if (!xaroot->d_inode) {
-		int err;
-		mutex_lock(&privroot->d_inode->i_mutex);
-		err =
-		    privroot->d_inode->i_op->mkdir(privroot->d_inode, xaroot,
-						   0700);
-		mutex_unlock(&privroot->d_inode->i_mutex);
-
+		int err = -ENODATA;
+		if (flags == 0 || flags & XATTR_CREATE)
+			err = privroot->d_inode->i_op->mkdir(privroot->d_inode,
+			                                     xaroot, 0700);
 		if (err) {
 			dput(xaroot);
-			dput(privroot);
-			return ERR_PTR(err);
+			xaroot = ERR_PTR(err);
+			goto out;
 		}
-		REISERFS_SB(sb)->xattr_root = dget(xaroot);
 	}
+	REISERFS_SB(sb)->xattr_root = dget(xaroot);
 
       out:
+	mutex_unlock(&privroot->d_inode->i_mutex);
 	dput(privroot);
 	return xaroot;
-}
-
-/* This will return a dentry, or error, refering to the xa root directory.
- * If the xa root doesn't exist yet, the dentry will be returned without
- * an associated inode. This dentry can be used with ->mkdir to create
- * the xa directory. */
-static struct dentry *__get_xa_root(struct super_block *s)
-{
-	struct dentry *privroot = dget(REISERFS_SB(s)->priv_root);
-	struct dentry *xaroot = NULL;
-
-	if (IS_ERR(privroot) || !privroot)
-		return privroot;
-
-	xaroot = lookup_one_len(XAROOT_NAME, privroot, strlen(XAROOT_NAME));
-	if (IS_ERR(xaroot)) {
-		goto out;
-	} else if (!xaroot->d_inode) {
-		dput(xaroot);
-		xaroot = NULL;
-		goto out;
-	}
-
-	REISERFS_SB(s)->xattr_root = dget(xaroot);
-
-      out:
-	dput(privroot);
-	return xaroot;
-}
-
-/* Returns the dentry (or NULL) referring to the root of the extended
- * attribute directory tree. If it has already been retrieved, it is used.
- * Otherwise, we attempt to retrieve it from disk. It may also return
- * a pointer-encoded error.
- */
-static inline struct dentry *get_xa_root(struct super_block *s)
-{
-	struct dentry *dentry = dget(REISERFS_SB(s)->xattr_root);
-
-	if (!dentry)
-		dentry = __get_xa_root(s);
-
-	return dentry;
 }
 
 /* Opens the directory corresponding to the inode's extended attribute store.
@@ -139,21 +105,11 @@ static struct dentry *open_xa_dir(const struct inode *inode, int flags)
 	struct dentry *xaroot, *xadir;
 	char namebuf[17];
 
-	xaroot = get_xa_root(inode->i_sb);
-	if (IS_ERR(xaroot)) {
+	xaroot = get_xa_root(inode->i_sb, flags);
+	if (IS_ERR(xaroot))
 		return xaroot;
-	} else if (!xaroot) {
-		if (flags == 0 || flags & XATTR_CREATE) {
-			xaroot = create_xa_root(inode->i_sb);
-			if (IS_ERR(xaroot))
-				return xaroot;
-		}
-		if (!xaroot)
-			return ERR_PTR(-ENODATA);
-	}
 
 	/* ok, we have xaroot open */
-
 	snprintf(namebuf, sizeof(namebuf), "%X.%X",
 		 le32_to_cpu(INODE_PKEY(inode)->k_objectid),
 		 inode->i_generation);
@@ -275,7 +231,7 @@ static struct file *open_xa_file(const struct inode *inode, const char *name,
  */
 static int __xattr_readdir(struct file *filp, void *dirent, filldir_t filldir)
 {
-	struct inode *inode = filp->f_dentry->d_inode;
+	struct inode *inode = filp->f_path.dentry->d_inode;
 	struct cpu_key pos_key;	/* key of current position in the directory (key of directory entry) */
 	INITIALIZE_PATH(path_to_entry);
 	struct buffer_head *bh;
@@ -421,7 +377,7 @@ static int __xattr_readdir(struct file *filp, void *dirent, filldir_t filldir)
 static
 int xattr_readdir(struct file *file, filldir_t filler, void *buf)
 {
-	struct inode *inode = file->f_dentry->d_inode;
+	struct inode *inode = file->f_path.dentry->d_inode;
 	int res = -ENOTDIR;
 	if (!file->f_op || !file->f_op->readdir)
 		goto out;
@@ -509,7 +465,7 @@ reiserfs_xattr_set(struct inode *inode, const char *name, const void *buffer,
 		goto out;
 	}
 
-	xinode = fp->f_dentry->d_inode;
+	xinode = fp->f_path.dentry->d_inode;
 	REISERFS_I(inode)->i_flags |= i_has_xattr_dir;
 
 	/* we need to copy it off.. */
@@ -528,7 +484,7 @@ reiserfs_xattr_set(struct inode *inode, const char *name, const void *buffer,
 	newattrs.ia_size = buffer_size;
 	newattrs.ia_valid = ATTR_SIZE | ATTR_CTIME;
 	mutex_lock(&xinode->i_mutex);
-	err = notify_change(fp->f_dentry, &newattrs);
+	err = notify_change(fp->f_path.dentry, &newattrs);
 	if (err)
 		goto out_filp;
 
@@ -627,7 +583,7 @@ reiserfs_xattr_get(const struct inode *inode, const char *name, void *buffer,
 		goto out;
 	}
 
-	xinode = fp->f_dentry->d_inode;
+	xinode = fp->f_path.dentry->d_inode;
 	isize = xinode->i_size;
 	REISERFS_I(inode)->i_flags |= i_has_xattr_dir;
 
@@ -822,7 +778,7 @@ int reiserfs_delete_xattrs(struct inode *inode)
 
 	/* Leftovers besides . and .. -- that's not good. */
 	if (dir->d_inode->i_nlink <= 2) {
-		root = get_xa_root(inode->i_sb);
+		root = get_xa_root(inode->i_sb, XATTR_REPLACE);
 		reiserfs_write_lock_xattrs(inode->i_sb);
 		err = vfs_rmdir(root->d_inode, dir, NULL);
 		reiserfs_write_unlock_xattrs(inode->i_sb);

@@ -15,6 +15,7 @@
 #include <linux/init.h>
 #include <linux/delay.h>
 #include <linux/spinlock.h>
+#include <linux/workqueue.h>
 #include <linux/platform_device.h>
 
 #include <linux/spi/spi.h>
@@ -22,7 +23,7 @@
 
 #include <asm/arch/regs-gpio.h>
 #include <asm/arch/spi-gpio.h>
-#include <asm/arch/hardware.h>
+#include <asm/hardware.h>
 
 struct s3c2410_spigpio {
 	struct spi_bitbang		 bitbang;
@@ -72,6 +73,19 @@ static u32 s3c2410_spigpio_txrx_mode1(struct spi_device *spi,
 	return bitbang_txrx_be_cpha1(spi, nsecs, 0, word, bits);
 }
 
+static u32 s3c2410_spigpio_txrx_mode2(struct spi_device *spi,
+				      unsigned nsecs, u32 word, u8 bits)
+{
+	return bitbang_txrx_be_cpha0(spi, nsecs, 1, word, bits);
+}
+
+static u32 s3c2410_spigpio_txrx_mode3(struct spi_device *spi,
+				      unsigned nsecs, u32 word, u8 bits)
+{
+	return bitbang_txrx_be_cpha1(spi, nsecs, 1, word, bits);
+}
+
+
 static void s3c2410_spigpio_chipselect(struct spi_device *dev, int value)
 {
 	struct s3c2410_spigpio *sg = spidev_to_sg(dev);
@@ -107,6 +121,8 @@ static int s3c2410_spigpio_probe(struct platform_device *dev)
 
 	sp->bitbang.txrx_word[SPI_MODE_0] = s3c2410_spigpio_txrx_mode0;
 	sp->bitbang.txrx_word[SPI_MODE_1] = s3c2410_spigpio_txrx_mode1;
+	sp->bitbang.txrx_word[SPI_MODE_2] = s3c2410_spigpio_txrx_mode2;
+	sp->bitbang.txrx_word[SPI_MODE_3] = s3c2410_spigpio_txrx_mode3;
 
 	/* set state of spi pins */
 	s3c2410_gpio_setpin(sp->info->pin_clk, 0);

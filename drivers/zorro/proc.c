@@ -47,7 +47,7 @@ proc_bus_zorro_lseek(struct file *file, loff_t off, int whence)
 static ssize_t
 proc_bus_zorro_read(struct file *file, char __user *buf, size_t nbytes, loff_t *ppos)
 {
-	struct inode *ino = file->f_dentry->d_inode;
+	struct inode *ino = file->f_path.dentry->d_inode;
 	struct proc_dir_entry *dp = PDE(ino);
 	struct zorro_dev *z = dp->data;
 	struct ConfigDev cd;
@@ -75,7 +75,7 @@ proc_bus_zorro_read(struct file *file, char __user *buf, size_t nbytes, loff_t *
 	return nbytes;
 }
 
-static struct file_operations proc_bus_zorro_operations = {
+static const struct file_operations proc_bus_zorro_operations = {
 	.llseek		= proc_bus_zorro_lseek,
 	.read		= proc_bus_zorro_read,
 };

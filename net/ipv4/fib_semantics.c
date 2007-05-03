@@ -85,12 +85,12 @@ for (nhsel=0; nhsel < 1; nhsel++)
 #define endfor_nexthops(fi) }
 
 
-static const struct 
+static const struct
 {
 	int	error;
 	u8	scope;
-} fib_props[RTA_MAX + 1] = {
-        {
+} fib_props[RTN_MAX + 1] = {
+	{
 		.error	= 0,
 		.scope	= RT_SCOPE_NOWHERE,
 	},	/* RTN_UNSPEC */
@@ -273,15 +273,41 @@ int ip_fib_check_default(__be32 gw, struct net_device *dev)
 	return -1;
 }
 
+static inline size_t fib_nlmsg_size(struct fib_info *fi)
+{
+	size_t payload = NLMSG_ALIGN(sizeof(struct rtmsg))
+			 + nla_total_size(4) /* RTA_TABLE */
+			 + nla_total_size(4) /* RTA_DST */
+			 + nla_total_size(4) /* RTA_PRIORITY */
+			 + nla_total_size(4); /* RTA_PREFSRC */
+
+	/* space for nested metrics */
+	payload += nla_total_size((RTAX_MAX * nla_total_size(4)));
+
+	if (fi->fib_nhs) {
+		/* Also handles the special case fib_nhs == 1 */
+
+		/* each nexthop is packed in an attribute */
+		size_t nhsize = nla_total_size(sizeof(struct rtnexthop));
+
+		/* may contain flow and gateway attribute */
+		nhsize += 2 * nla_total_size(4);
+
+		/* all nexthops are packed in a nested attribute */
+		payload += nla_total_size(fi->fib_nhs * nhsize);
+	}
+
+	return payload;
+}
+
 void rtmsg_fib(int event, __be32 key, struct fib_alias *fa,
 	       int dst_len, u32 tb_id, struct nl_info *info)
 {
 	struct sk_buff *skb;
-	int payload = sizeof(struct rtmsg) + 256;
 	u32 seq = info->nlh ? info->nlh->nlmsg_seq : 0;
 	int err = -ENOBUFS;
 
-	skb = nlmsg_new(nlmsg_total_size(payload), GFP_KERNEL);
+	skb = nlmsg_new(fib_nlmsg_size(fa->fa_info), GFP_KERNEL);
 	if (skb == NULL)
 		goto errout;
 
@@ -289,10 +315,11 @@ void rtmsg_fib(int event, __be32 key, struct fib_alias *fa,
 			    fa->fa_type, fa->fa_scope, key, dst_len,
 			    fa->fa_tos, fa->fa_info, 0);
 	if (err < 0) {
+		/* -EMSGSIZE implies BUG in fib_nlmsg_size() */
+		WARN_ON(err == -EMSGSIZE);
 		kfree_skb(skb);
 		goto errout;
 	}
-
 	err = rtnl_notify(skb, info->pid, RTNLGRP_IPV4_ROUTE,
 			  info->nlh, GFP_KERNEL);
 errout:
@@ -412,7 +439,7 @@ int fib_nh_match(struct fib_config *cfg, struct fib_info *fi)
 
 	rtnh = cfg->fc_mp;
 	remaining = cfg->fc_mp_len;
-	
+
 	for_nexthops(fi) {
 		int attrlen;
 
@@ -481,9 +508,9 @@ int fib_nh_match(struct fib_config *cfg, struct fib_info *fi)
    Normally it looks as following.
 
    {universe prefix}  -> (gw, oif) [scope link]
-                          |
+			  |
 			  |-> {link prefix} -> (gw, oif) [scope local]
-			                        |
+						|
 						|-> {local prefix} (terminal node)
  */
 
@@ -837,7 +864,7 @@ err_inval:
 	err = -EINVAL;
 
 failure:
-        if (fi) {
+	if (fi) {
 		fi->fib_dead = 1;
 		free_fib_info(fi);
 	}
@@ -936,7 +963,7 @@ int fib_dump_info(struct sk_buff *skb, u32 pid, u32 seq, int event,
 
 	nlh = nlmsg_put(skb, pid, seq, event, sizeof(*rtm), flags);
 	if (nlh == NULL)
-		return -ENOBUFS;
+		return -EMSGSIZE;
 
 	rtm = nlmsg_data(nlh);
 	rtm->rtm_family = AF_INET;
@@ -1007,7 +1034,8 @@ int fib_dump_info(struct sk_buff *skb, u32 pid, u32 seq, int event,
 	return nlmsg_end(skb, nlh);
 
 nla_put_failure:
-	return nlmsg_cancel(skb, nlh);
+	nlmsg_cancel(skb, nlh);
+	return -EMSGSIZE;
 }
 
 /*
@@ -1021,7 +1049,7 @@ int fib_sync_down(__be32 local, struct net_device *dev, int force)
 {
 	int ret = 0;
 	int scope = RT_SCOPE_NOWHERE;
-	
+
 	if (force)
 		scope = -1;
 

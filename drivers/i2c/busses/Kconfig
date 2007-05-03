@@ -74,6 +74,13 @@ config I2C_AMD8111
 	  This driver can also be built as a module.  If so, the module
 	  will be called i2c-amd8111.
 
+config I2C_AT91
+	tristate "Atmel AT91 I2C Two-Wire interface (TWI)"
+	depends on I2C && ARCH_AT91 && EXPERIMENTAL
+	help
+	  This supports the use of the I2C interface on Atmel AT91
+	  processors.
+
 config I2C_AU1550
 	tristate "Au1550/Au1200 SMBus interface"
 	depends on I2C && (SOC_AU1550 || SOC_AU1200)
@@ -125,6 +132,7 @@ config I2C_I801
 	    ICH7
 	    ESB2
 	    ICH8
+	    ICH9
 
 	  This driver can also be built as a module.  If so, the module
 	  will be called i2c-i801.
@@ -175,6 +183,7 @@ config I2C_PIIX4
 	    ATI IXP200
 	    ATI IXP300
 	    ATI IXP400
+	    ATI SB600
 	    Serverworks OSB4
 	    Serverworks CSB5
 	    Serverworks CSB6
@@ -195,11 +204,11 @@ config I2C_IBM_IIC
 	  will be called i2c-ibm_iic.
 
 config I2C_IOP3XX
-	tristate "Intel IOP3xx and IXP4xx on-chip I2C interface"
-	depends on (ARCH_IOP32X || ARCH_IOP33X || ARCH_IXP4XX) && I2C
+	tristate "Intel IOPx3xx and IXP4xx on-chip I2C interface"
+	depends on (ARCH_IOP32X || ARCH_IOP33X || ARCH_IXP4XX || ARCH_IOP13XX) && I2C
 	help
 	  Say Y here if you want to use the IIC bus controller on
-	  the Intel IOP3xx I/O Processors or IXP4xx Network Processors.
+	  the Intel IOPx3xx I/O Processors or IXP4xx Network Processors.
 
 	  This driver can also be built as a module.  If so, the module
 	  will be called i2c-iop3xx.
@@ -207,18 +216,6 @@ config I2C_IOP3XX
 config I2C_ISA
 	tristate
 	depends on I2C
-
-config I2C_ITE
-	tristate "ITE I2C Adapter"
-	depends on I2C && MIPS_ITE8172
-	select I2C_ALGOITE
-	help
-	  This supports the ITE8172 I2C peripheral found on some MIPS
-	  systems. Say Y if you have one of these. You should also say Y for
-	  the ITE I2C driver algorithm support above.
-
-	  This support is also available as a module.  If so, the module 
-	  will be called i2c-ite.
 
 config I2C_IXP4XX
 	tristate "IXP4xx GPIO-Based I2C Interface"
@@ -344,6 +341,12 @@ config I2C_PARPORT_LIGHT
 
 	  This support is also available as a module.  If so, the module 
 	  will be called i2c-parport-light.
+
+config I2C_PASEMI
+	tristate "PA Semi SMBus interface"
+	depends on PPC_PASEMI && I2C && PCI
+	help
+	  Supports the PA Semi PWRficient on-chip SMBus interfaces.
 
 config I2C_PROSAVAGE
 	tristate "S3/VIA (Pro)Savage"
@@ -480,6 +483,27 @@ config I2C_STUB
 
 	  If you don't know what to do here, definitely say N.
 
+config I2C_VERSATILE
+	tristate "ARM Versatile/Realview I2C bus support"
+	depends on I2C && (ARCH_VERSATILE || ARCH_REALVIEW)
+	select I2C_ALGOBIT
+	help
+	  Say yes if you want to support the I2C serial bus on ARMs Versatile
+	  range of platforms.
+
+	  This driver can also be built as a module.  If so, the module
+	  will be called i2c-versatile.
+
+config I2C_ACORN
+	bool "Acorn IOC/IOMD I2C bus support"
+	depends on I2C && ARCH_ACORN
+	default y
+	select I2C_ALGOBIT
+	help
+	  Say yes if you want to support the I2C bus on Acorn platforms.
+
+	  If you don't know, say Y.
+
 config I2C_VIA
 	tristate "VIA 82C586B"
 	depends on I2C && PCI && EXPERIMENTAL
@@ -492,11 +516,11 @@ config I2C_VIA
 	  will be called i2c-via.
 
 config I2C_VIAPRO
-	tristate "VIA 82C596/82C686/82xx"
+	tristate "VIA VT82C596/82C686/82xx and CX700"
 	depends on I2C && PCI
 	help
 	  If you say yes to this option, support will be included for the VIA
-	  82C596/82C686/82xx I2C interfaces.  Specifically, the following
+	  VT82C596 and later SMBus interface.  Specifically, the following
 	  chipsets are supported:
 	    VT82C596A/B
 	    VT82C686A/B
@@ -505,6 +529,7 @@ config I2C_VIAPRO
 	    VT8235
 	    VT8237R/A
 	    VT8251
+	    CX700
 
 	  This driver can also be built as a module.  If so, the module
 	  will be called i2c-viapro.
@@ -546,5 +571,15 @@ config I2C_MV64XXX
 
 	  This driver can also be built as a module.  If so, the module
 	  will be called i2c-mv64xxx.
+
+config I2C_PNX
+	tristate "I2C bus support for Philips PNX targets"
+	depends on ARCH_PNX4008 && I2C
+	help
+	  This driver supports the Philips IP3204 I2C IP block master and/or
+	  slave controller
+
+	  This driver can also be built as a module.  If so, the module
+	  will be called i2c-pnx.
 
 endmenu

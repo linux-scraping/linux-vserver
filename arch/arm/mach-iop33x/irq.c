@@ -24,44 +24,32 @@ static u32 iop33x_mask1;
 
 static inline void intctl0_write(u32 val)
 {
-	iop3xx_cp6_enable();
 	asm volatile("mcr p6, 0, %0, c0, c0, 0" : : "r" (val));
-	iop3xx_cp6_disable();
 }
 
 static inline void intctl1_write(u32 val)
 {
-	iop3xx_cp6_enable();
 	asm volatile("mcr p6, 0, %0, c1, c0, 0" : : "r" (val));
-	iop3xx_cp6_disable();
 }
 
 static inline void intstr0_write(u32 val)
 {
-	iop3xx_cp6_enable();
 	asm volatile("mcr p6, 0, %0, c2, c0, 0" : : "r" (val));
-	iop3xx_cp6_disable();
 }
 
 static inline void intstr1_write(u32 val)
 {
-	iop3xx_cp6_enable();
 	asm volatile("mcr p6, 0, %0, c3, c0, 0" : : "r" (val));
-	iop3xx_cp6_disable();
 }
 
 static inline void intbase_write(u32 val)
 {
-	iop3xx_cp6_enable();
 	asm volatile("mcr p6, 0, %0, c12, c0, 0" : : "r" (val));
-	iop3xx_cp6_disable();
 }
 
 static inline void intsize_write(u32 val)
 {
-	iop3xx_cp6_enable();
 	asm volatile("mcr p6, 0, %0, c13, c0, 0" : : "r" (val));
-	iop3xx_cp6_disable();
 }
 
 static void
@@ -110,6 +98,8 @@ void __init iop33x_init_irq(void)
 {
 	int i;
 
+	iop_init_cp6_handler();
+
 	intctl0_write(0);
 	intctl1_write(0);
 	intstr0_write(0);
@@ -121,7 +111,7 @@ void __init iop33x_init_irq(void)
 
 	for (i = 0; i < NR_IRQS; i++) {
 		set_irq_chip(i, (i < 32) ? &iop33x_irqchip1 : &iop33x_irqchip2);
-		set_irq_handler(i, do_level_IRQ);
+		set_irq_handler(i, handle_level_irq);
 		set_irq_flags(i, IRQF_VALID | IRQF_PROBE);
 	}
 }

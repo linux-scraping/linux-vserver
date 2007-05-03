@@ -25,7 +25,7 @@
 #include <linux/kmod.h>
 #include <linux/smp_lock.h>
 #include <linux/slab.h>
-#include <linux/namespace.h>
+#include <linux/mnt_namespace.h>
 #include <linux/completion.h>
 #include <linux/file.h>
 #include <linux/workqueue.h>
@@ -114,6 +114,7 @@ EXPORT_SYMBOL(request_module);
 #endif /* CONFIG_KMOD */
 
 struct subprocess_info {
+	struct work_struct work;
 	struct completion *complete;
 	char *path;
 	char **argv;
@@ -216,14 +217,18 @@ static int wait_for_helper(void *data)
 			sub_info->retval = ret;
 	}
 
-	complete(sub_info->complete);
+	if (sub_info->wait < 0)
+		kfree(sub_info);
+	else
+		complete(sub_info->complete);
 	return 0;
 }
 
 /* This is run by khelper thread  */
-static void __call_usermodehelper(void *data)
+static void __call_usermodehelper(struct work_struct *work)
 {
-	struct subprocess_info *sub_info = data;
+	struct subprocess_info *sub_info =
+		container_of(work, struct subprocess_info, work);
 	pid_t pid;
 	int wait = sub_info->wait;
 
@@ -236,6 +241,9 @@ static void __call_usermodehelper(void *data)
 	else
 		pid = kernel_thread(____call_usermodehelper, sub_info,
 				    CLONE_VFORK | SIGCHLD);
+
+	if (wait < 0)
+		return;
 
 	if (pid < 0) {
 		sub_info->retval = pid;
@@ -251,6 +259,9 @@ static void __call_usermodehelper(void *data)
  * @envp: null-terminated environment list
  * @session_keyring: session keyring for process (NULL for an empty keyring)
  * @wait: wait for the application to finish and return status.
+ *        when -1 don't wait at all, but you get no useful error back when
+ *        the program couldn't be exec'ed. This makes it safe to call
+ *        from interrupt context.
  *
  * Runs a user-space application.  The application is started
  * asynchronously if wait is not set, and runs as a child of keventd.
@@ -263,16 +274,8 @@ int call_usermodehelper_keys(char *path, char **argv, char **envp,
 			     struct key *session_keyring, int wait)
 {
 	DECLARE_COMPLETION_ONSTACK(done);
-	struct subprocess_info sub_info = {
-		.complete	= &done,
-		.path		= path,
-		.argv		= argv,
-		.envp		= envp,
-		.ring		= session_keyring,
-		.wait		= wait,
-		.retval		= 0,
-	};
-	DECLARE_WORK(work, __call_usermodehelper, &sub_info);
+	struct subprocess_info *sub_info;
+	int retval;
 
 	if (!khelper_wq)
 		return -EBUSY;
@@ -280,9 +283,25 @@ int call_usermodehelper_keys(char *path, char **argv, char **envp,
 	if (path[0] == '\0')
 		return 0;
 
-	queue_work(khelper_wq, &work);
+	sub_info = kzalloc(sizeof(struct subprocess_info),  GFP_ATOMIC);
+	if (!sub_info)
+		return -ENOMEM;
+
+	INIT_WORK(&sub_info->work, __call_usermodehelper);
+	sub_info->complete = &done;
+	sub_info->path = path;
+	sub_info->argv = argv;
+	sub_info->envp = envp;
+	sub_info->ring = session_keyring;
+	sub_info->wait = wait;
+
+	queue_work(khelper_wq, &sub_info->work);
+	if (wait < 0) /* task has freed sub_info */
+		return 0;
 	wait_for_completion(&done);
-	return sub_info.retval;
+	retval = sub_info->retval;
+	kfree(sub_info);
+	return retval;
 }
 EXPORT_SYMBOL(call_usermodehelper_keys);
 
@@ -291,6 +310,8 @@ int call_usermodehelper_pipe(char *path, char **argv, char **envp,
 {
 	DECLARE_COMPLETION(done);
 	struct subprocess_info sub_info = {
+		.work		= __WORK_INITIALIZER(sub_info.work,
+						     __call_usermodehelper),
 		.complete	= &done,
 		.path		= path,
 		.argv		= argv,
@@ -298,7 +319,6 @@ int call_usermodehelper_pipe(char *path, char **argv, char **envp,
 		.retval		= 0,
 	};
 	struct file *f;
-	DECLARE_WORK(work, __call_usermodehelper, &sub_info);
 
 	if (!khelper_wq)
 		return -EBUSY;
@@ -318,7 +338,7 @@ int call_usermodehelper_pipe(char *path, char **argv, char **envp,
 	}
 	sub_info.stdin = f;
 
-	queue_work(khelper_wq, &work);
+	queue_work(khelper_wq, &sub_info.work);
 	wait_for_completion(&done);
 	return sub_info.retval;
 }

@@ -47,7 +47,7 @@
 *! Update Port B register and shadow even when running with hardware support
 *!   to avoid glitches when reading bits
 *! Never set direction to out in i2c_inbyte
-*! Removed incorrect clock togling at end of i2c_inbyte
+*! Removed incorrect clock toggling at end of i2c_inbyte
 *!
 *! Revision 1.8  2002/08/13 06:31:53  starvik
 *! Made SDA and SCL line configurable
@@ -692,7 +692,7 @@ i2c_ioctl(struct inode *inode, struct file *file,
 	return 0;
 }
 
-static struct file_operations i2c_fops = {
+static const struct file_operations i2c_fops = {
 	.owner    = THIS_MODULE,
 	.ioctl    = i2c_ioctl,
 	.open     = i2c_open,

@@ -20,7 +20,6 @@
 #include <linux/major.h>
 #include <linux/init.h>
 #include <linux/miscdevice.h>
-#include <linux/sched.h>
 #include <linux/interrupt.h>
 #include <linux/ioport.h>
 #include <linux/timer.h>
@@ -404,7 +403,7 @@ static long wd_compat_ioctl(struct file *file, unsigned int cmd,
 	case WIOCSTOP:
 	case WIOCGSTAT:
 		lock_kernel();
-		rval = wd_ioctl(file->f_dentry->d_inode, file, cmd, arg);
+		rval = wd_ioctl(file->f_path.dentry->d_inode, file, cmd, arg);
 		unlock_kernel();
 		break;
 	/* everything else is handled by the generic compat layer */
@@ -459,7 +458,7 @@ static irqreturn_t wd_interrupt(int irq, void *dev_id)
 	return IRQ_HANDLED;
 }
 
-static struct file_operations wd_fops = {
+static const struct file_operations wd_fops = {
 	.owner =	THIS_MODULE,
 	.ioctl =	wd_ioctl,
 	.compat_ioctl =	wd_compat_ioctl,

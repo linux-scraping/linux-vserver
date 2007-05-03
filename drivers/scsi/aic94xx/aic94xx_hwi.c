@@ -1047,15 +1047,14 @@ irqreturn_t asd_hw_isr(int irq, void *dev_id)
 static inline struct asd_ascb *asd_ascb_alloc(struct asd_ha_struct *asd_ha,
 					      gfp_t gfp_flags)
 {
-	extern kmem_cache_t *asd_ascb_cache;
+	extern struct kmem_cache *asd_ascb_cache;
 	struct asd_seq_data *seq = &asd_ha->seq;
 	struct asd_ascb *ascb;
 	unsigned long flags;
 
-	ascb = kmem_cache_alloc(asd_ascb_cache, gfp_flags);
+	ascb = kmem_cache_zalloc(asd_ascb_cache, gfp_flags);
 
 	if (ascb) {
-		memset(ascb, 0, sizeof(*ascb));
 		ascb->dma_scb.size = sizeof(struct scb);
 		ascb->dma_scb.vaddr = dma_pool_alloc(asd_ha->scb_pool,
 						     gfp_flags,

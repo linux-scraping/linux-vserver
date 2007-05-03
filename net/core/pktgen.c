@@ -15,7 +15,7 @@
  *
  *
  * A tool for loading the network with preconfigurated packets.
- * The tool is implemented as a linux module.  Parameters are output 
+ * The tool is implemented as a linux module.  Parameters are output
  * device, delay (to hard_xmit), number of packets, and whether
  * to use multiple SKBs or just the same one.
  * pktgen uses the installed interface's output routine.
@@ -44,14 +44,14 @@
  *   *  Add IOCTL interface to easily get counters & configuration.
  *   --Ben Greear <greearb@candelatech.com>
  *
- * Renamed multiskb to clone_skb and cleaned up sending core for two distinct 
- * skb modes. A clone_skb=0 mode for Ben "ranges" work and a clone_skb != 0 
+ * Renamed multiskb to clone_skb and cleaned up sending core for two distinct
+ * skb modes. A clone_skb=0 mode for Ben "ranges" work and a clone_skb != 0
  * as a "fastpath" with a configurable number of clones after alloc's.
- * clone_skb=0 means all packets are allocated this also means ranges time 
- * stamps etc can be used. clone_skb=100 means 1 malloc is followed by 100 
+ * clone_skb=0 means all packets are allocated this also means ranges time
+ * stamps etc can be used. clone_skb=100 means 1 malloc is followed by 100
  * clones.
  *
- * Also moved to /proc/net/pktgen/ 
+ * Also moved to /proc/net/pktgen/
  * --ro
  *
  * Sept 10:  Fixed threading/locking.  Lots of bone-headed and more clever
@@ -60,28 +60,28 @@
  *
  * Integrated to 2.5.x 021029 --Lucio Maciel (luciomaciel@zipmail.com.br)
  *
- * 
+ *
  * 021124 Finished major redesign and rewrite for new functionality.
  * See Documentation/networking/pktgen.txt for how to use this.
  *
  * The new operation:
- * For each CPU one thread/process is created at start. This process checks 
- * for running devices in the if_list and sends packets until count is 0 it 
- * also the thread checks the thread->control which is used for inter-process 
- * communication. controlling process "posts" operations to the threads this 
+ * For each CPU one thread/process is created at start. This process checks
+ * for running devices in the if_list and sends packets until count is 0 it
+ * also the thread checks the thread->control which is used for inter-process
+ * communication. controlling process "posts" operations to the threads this
  * way. The if_lock should be possible to remove when add/rem_device is merged
  * into this too.
  *
- * By design there should only be *one* "controlling" process. In practice 
- * multiple write accesses gives unpredictable result. Understood by "write" 
+ * By design there should only be *one* "controlling" process. In practice
+ * multiple write accesses gives unpredictable result. Understood by "write"
  * to /proc gives result code thats should be read be the "writer".
  * For practical use this should be no problem.
  *
- * Note when adding devices to a specific CPU there good idea to also assign 
- * /proc/irq/XX/smp_affinity so TX-interrupts gets bound to the same CPU. 
+ * Note when adding devices to a specific CPU there good idea to also assign
+ * /proc/irq/XX/smp_affinity so TX-interrupts gets bound to the same CPU.
  * --ro
  *
- * Fix refcount off by one if first packet fails, potential null deref, 
+ * Fix refcount off by one if first packet fails, potential null deref,
  * memleak 030710- KJP
  *
  * First "ranges" functionality for ipv6 030726 --ro
@@ -89,22 +89,22 @@
  * Included flow support. 030802 ANK.
  *
  * Fixed unaligned access on IA-64 Grant Grundler <grundler@parisc-linux.org>
- * 
+ *
  * Remove if fix from added Harald Welte <laforge@netfilter.org> 040419
  * ia64 compilation fix from  Aron Griffis <aron@hp.com> 040604
  *
- * New xmit() return, do_div and misc clean up by Stephen Hemminger 
+ * New xmit() return, do_div and misc clean up by Stephen Hemminger
  * <shemminger@osdl.org> 040923
  *
- * Randy Dunlap fixed u64 printk compiler waring 
+ * Randy Dunlap fixed u64 printk compiler waring
  *
  * Remove FCS from BW calculation.  Lennert Buytenhek <buytenh@wantstofly.org>
  * New time handling. Lennert Buytenhek <buytenh@wantstofly.org> 041213
  *
- * Corrections from Nikolai Malykh (nmalykh@bilim.com) 
+ * Corrections from Nikolai Malykh (nmalykh@bilim.com)
  * Removed unused flags F_SET_SRCMAC & F_SET_SRCIP 041230
  *
- * interruptible_sleep_on_timeout() replaced Nishanth Aravamudan <nacc@us.ibm.com> 
+ * interruptible_sleep_on_timeout() replaced Nishanth Aravamudan <nacc@us.ibm.com>
  * 050103
  *
  * MPLS support by Steven Whitehouse <steve@chygwyn.com>
@@ -129,6 +129,7 @@
 #include <linux/ioport.h>
 #include <linux/interrupt.h>
 #include <linux/capability.h>
+#include <linux/freezer.h>
 #include <linux/delay.h>
 #include <linux/timer.h>
 #include <linux/list.h>
@@ -148,6 +149,7 @@
 #include <linux/seq_file.h>
 #include <linux/wait.h>
 #include <linux/etherdevice.h>
+#include <linux/kthread.h>
 #include <net/checksum.h>
 #include <net/ipv6.h>
 #include <net/addrconf.h>
@@ -207,7 +209,7 @@ static struct proc_dir_entry *pg_proc_dir = NULL;
 #define SVLAN_TAG_SIZE(x) ((x)->svlan_id == 0xffff ? 0 : 4)
 
 struct flow_state {
-	__u32 cur_daddr;
+	__be32 cur_daddr;
 	int count;
 };
 
@@ -282,10 +284,10 @@ struct pktgen_dev {
 	/* If we're doing ranges, random or incremental, then this
 	 * defines the min/max for those ranges.
 	 */
-	__u32 saddr_min;	/* inclusive, source IP address */
-	__u32 saddr_max;	/* exclusive, source IP address */
-	__u32 daddr_min;	/* inclusive, dest IP address */
-	__u32 daddr_max;	/* exclusive, dest IP address */
+	__be32 saddr_min;	/* inclusive, source IP address */
+	__be32 saddr_max;	/* exclusive, source IP address */
+	__be32 daddr_min;	/* inclusive, dest IP address */
+	__be32 daddr_max;	/* exclusive, dest IP address */
 
 	__u16 udp_src_min;	/* inclusive, source UDP port */
 	__u16 udp_src_max;	/* exclusive, source UDP port */
@@ -317,8 +319,8 @@ struct pktgen_dev {
 
 	__u32 cur_dst_mac_offset;
 	__u32 cur_src_mac_offset;
-	__u32 cur_saddr;
-	__u32 cur_daddr;
+	__be32 cur_saddr;
+	__be32 cur_daddr;
 	__u16 cur_udp_dst;
 	__u16 cur_udp_src;
 	__u32 cur_pkt_size;
@@ -350,18 +352,17 @@ struct pktgen_dev {
 };
 
 struct pktgen_hdr {
-	__u32 pgh_magic;
-	__u32 seq_num;
-	__u32 tv_sec;
-	__u32 tv_usec;
+	__be32 pgh_magic;
+	__be32 seq_num;
+	__be32 tv_sec;
+	__be32 tv_usec;
 };
 
 struct pktgen_thread {
 	spinlock_t if_lock;
 	struct list_head if_list;	/* All device here */
 	struct list_head th_list;
-	int removed;
-	char name[32];
+	struct task_struct *tsk;
 	char result[512];
 	u32 max_before_softirq;	/* We'll call do_softirq to prevent starvation. */
 
@@ -456,7 +457,7 @@ static inline __u64 pg_div64(__u64 n, __u64 base)
 /*
  * How do we know if the architecture we are running on
  * supports division with 64 bit base?
- * 
+ *
  */
 #if defined(__sparc_v9__) || defined(__powerpc64__) || defined(__alpha__) || defined(__x86_64__) || defined(__ia64__)
 
@@ -529,7 +530,7 @@ static struct notifier_block pktgen_notifier_block = {
 };
 
 /*
- * /proc handling functions 
+ * /proc handling functions
  *
  */
 
@@ -579,7 +580,7 @@ static int pgctrl_open(struct inode *inode, struct file *file)
 	return single_open(file, pgctrl_show, PDE(inode)->data);
 }
 
-static struct file_operations pktgen_fops = {
+static const struct file_operations pktgen_fops = {
 	.owner   = THIS_MODULE,
 	.open    = pgctrl_open,
 	.read    = seq_read,
@@ -1672,7 +1673,7 @@ static int pktgen_if_open(struct inode *inode, struct file *file)
 	return single_open(file, pktgen_if_show, PDE(inode)->data);
 }
 
-static struct file_operations pktgen_if_fops = {
+static const struct file_operations pktgen_if_fops = {
 	.owner   = THIS_MODULE,
 	.open    = pktgen_if_open,
 	.read    = seq_read,
@@ -1689,7 +1690,7 @@ static int pktgen_thread_show(struct seq_file *seq, void *v)
 	BUG_ON(!t);
 
 	seq_printf(seq, "Name: %s  max_before_softirq: %d\n",
-		   t->name, t->max_before_softirq);
+		   t->tsk->comm, t->max_before_softirq);
 
 	seq_printf(seq, "Running: ");
 
@@ -1815,7 +1816,7 @@ static int pktgen_thread_open(struct inode *inode, struct file *file)
 	return single_open(file, pktgen_thread_show, PDE(inode)->data);
 }
 
-static struct file_operations pktgen_thread_fops = {
+static const struct file_operations pktgen_thread_fops = {
 	.owner   = THIS_MODULE,
 	.open    = pktgen_thread_open,
 	.read    = seq_read,
@@ -1979,7 +1980,7 @@ static void pktgen_setup_inject(struct pktgen_dev *pkt_dev)
 
 	if (pkt_dev->flags & F_IPV6) {
 		/*
-		 * Skip this automatic address setting until locks or functions 
+		 * Skip this automatic address setting until locks or functions
 		 * gets exported
 		 */
 
@@ -2160,7 +2161,7 @@ static void mod_cur_headers(struct pktgen_dev *pkt_dev)
 		for(i = 0; i < pkt_dev->nr_labels; i++)
 			if (pkt_dev->labels[i] & MPLS_STACK_BOTTOM)
 				pkt_dev->labels[i] = MPLS_STACK_BOTTOM |
-						     (pktgen_random() &
+					     ((__force __be32)pktgen_random() &
 						      htonl(0x000fffff));
 	}
 
@@ -2220,29 +2221,25 @@ static void mod_cur_headers(struct pktgen_dev *pkt_dev)
 		if (pkt_dev->cflows && pkt_dev->flows[flow].count != 0) {
 			pkt_dev->cur_daddr = pkt_dev->flows[flow].cur_daddr;
 		} else {
-
-			if ((imn = ntohl(pkt_dev->daddr_min)) < (imx =
-								 ntohl(pkt_dev->
-								       daddr_max)))
-			{
+			imn = ntohl(pkt_dev->daddr_min);
+			imx = ntohl(pkt_dev->daddr_max);
+			if (imn < imx) {
 				__u32 t;
+				__be32 s;
 				if (pkt_dev->flags & F_IPDST_RND) {
 
-					t = ((pktgen_random() % (imx - imn)) +
-					     imn);
-					t = htonl(t);
+					t = pktgen_random() % (imx - imn) + imn;
+					s = htonl(t);
 
-					while (LOOPBACK(t) || MULTICAST(t)
-					       || BADCLASS(t) || ZERONET(t)
-					       || LOCAL_MCAST(t)) {
-						t = ((pktgen_random() %
-						      (imx - imn)) + imn);
-						t = htonl(t);
+					while (LOOPBACK(s) || MULTICAST(s)
+					       || BADCLASS(s) || ZERONET(s)
+					       || LOCAL_MCAST(s)) {
+						t = (pktgen_random() %
+						      (imx - imn)) + imn;
+						s = htonl(t);
 					}
-					pkt_dev->cur_daddr = t;
-				}
-
-				else {
+					pkt_dev->cur_daddr = s;
+				} else {
 					t = ntohl(pkt_dev->cur_daddr);
 					t++;
 					if (t > imx) {
@@ -2270,7 +2267,7 @@ static void mod_cur_headers(struct pktgen_dev *pkt_dev)
 
 			for (i = 0; i < 4; i++) {
 				pkt_dev->cur_in6_daddr.s6_addr32[i] =
-				    ((pktgen_random() |
+				    (((__force __be32)pktgen_random() |
 				      pkt_dev->min_in6_daddr.s6_addr32[i]) &
 				     pkt_dev->max_in6_daddr.s6_addr32[i]);
 			}
@@ -2377,7 +2374,7 @@ static struct sk_buff *fill_packet_ipv4(struct net_device *odev,
 	udph = (struct udphdr *)skb_put(skb, sizeof(struct udphdr));
 
 	memcpy(eth, pkt_dev->hh, 12);
-	*(u16 *) & eth[12] = protocol;
+	*(__be16 *) & eth[12] = protocol;
 
 	/* Eth + IPh + UDPh + mpls */
 	datalen = pkt_dev->cur_pkt_size - 14 - 20 - 8 -
@@ -2481,10 +2478,10 @@ static struct sk_buff *fill_packet_ipv4(struct net_device *odev,
 }
 
 /*
- * scan_ip6, fmt_ip taken from dietlibc-0.21 
+ * scan_ip6, fmt_ip taken from dietlibc-0.21
  * Author Felix von Leitner <felix-dietlibc@fefe.de>
  *
- * Slightly modified for kernel. 
+ * Slightly modified for kernel.
  * Should be candidate for net/ipv4/utils.c
  * --ro
  */
@@ -2497,7 +2494,7 @@ static unsigned int scan_ip6(const char *s, char ip[16])
 	char suffix[16];
 	unsigned int prefixlen = 0;
 	unsigned int suffixlen = 0;
-	__u32 tmp;
+	__be32 tmp;
 
 	for (i = 0; i < 16; i++)
 		ip[i] = 0;
@@ -2713,7 +2710,7 @@ static struct sk_buff *fill_packet_ipv6(struct net_device *odev,
 	udph = (struct udphdr *)skb_put(skb, sizeof(struct udphdr));
 
 	memcpy(eth, pkt_dev->hh, 12);
-	*(u16 *) & eth[12] = protocol;
+	*(__be16 *) & eth[12] = protocol;
 
 	/* Eth + IPh + UDPh + mpls */
 	datalen = pkt_dev->cur_pkt_size - 14 -
@@ -2732,11 +2729,11 @@ static struct sk_buff *fill_packet_ipv6(struct net_device *odev,
 	udph->len = htons(datalen + sizeof(struct udphdr));
 	udph->check = 0;	/* No checksum */
 
-	*(u32 *) iph = __constant_htonl(0x60000000);	/* Version + flow */
+	*(__be32 *) iph = __constant_htonl(0x60000000);	/* Version + flow */
 
 	if (pkt_dev->traffic_class) {
 		/* Version + traffic class + flow (0) */
-		*(u32 *)iph |= htonl(0x60000000 | (pkt_dev->traffic_class << 20));
+		*(__be32 *)iph |= htonl(0x60000000 | (pkt_dev->traffic_class << 20));
 	}
 
 	iph->hop_limit = 32;
@@ -3116,7 +3113,7 @@ static void pktgen_rem_thread(struct pktgen_thread *t)
 {
 	/* Remove from the thread list */
 
-	remove_proc_entry(t->name, pg_proc_dir);
+	remove_proc_entry(t->tsk->comm, pg_proc_dir);
 
 	mutex_lock(&pktgen_thread_lock);
 
@@ -3260,43 +3257,22 @@ static __inline__ void pktgen_xmit(struct pktgen_dev *pkt_dev)
 out:;
 }
 
-/* 
+/*
  * Main loop of the thread goes here
  */
 
-static void pktgen_thread_worker(struct pktgen_thread *t)
+static int pktgen_thread_worker(void *arg)
 {
 	DEFINE_WAIT(wait);
+	struct pktgen_thread *t = arg;
 	struct pktgen_dev *pkt_dev = NULL;
 	int cpu = t->cpu;
-	sigset_t tmpsig;
 	u32 max_before_softirq;
 	u32 tx_since_softirq = 0;
 
-	daemonize("pktgen/%d", cpu);
-
-	/* Block all signals except SIGKILL, SIGSTOP and SIGTERM */
-
-	spin_lock_irq(&current->sighand->siglock);
-	tmpsig = current->blocked;
-	siginitsetinv(&current->blocked,
-		      sigmask(SIGKILL) | sigmask(SIGSTOP) | sigmask(SIGTERM));
-
-	recalc_sigpending();
-	spin_unlock_irq(&current->sighand->siglock);
-
-	/* Migrate to the right CPU */
-	set_cpus_allowed(current, cpumask_of_cpu(cpu));
-	if (smp_processor_id() != cpu)
-		BUG();
+	BUG_ON(smp_processor_id() != cpu);
 
 	init_waitqueue_head(&t->queue);
-
-	t->control &= ~(T_TERMINATE);
-	t->control &= ~(T_RUN);
-	t->control &= ~(T_STOP);
-	t->control &= ~(T_REMDEVALL);
-	t->control &= ~(T_REMDEV);
 
 	t->pid = current->pid;
 
@@ -3304,18 +3280,21 @@ static void pktgen_thread_worker(struct pktgen_thread *t)
 
 	max_before_softirq = t->max_before_softirq;
 
-	__set_current_state(TASK_INTERRUPTIBLE);
-	mb();
+	set_current_state(TASK_INTERRUPTIBLE);
 
-	while (1) {
+	while (!kthread_should_stop()) {
+		pkt_dev = next_to_run(t);
+
+		if (!pkt_dev &&
+		    (t->control & (T_STOP | T_RUN | T_REMDEVALL | T_REMDEV))
+		    == 0) {
+			prepare_to_wait(&(t->queue), &wait,
+					TASK_INTERRUPTIBLE);
+			schedule_timeout(HZ / 10);
+			finish_wait(&(t->queue), &wait);
+		}
 
 		__set_current_state(TASK_RUNNING);
-
-		/*
-		 * Get next dev to xmit -- if any.
-		 */
-
-		pkt_dev = next_to_run(t);
 
 		if (pkt_dev) {
 
@@ -3333,20 +3312,7 @@ static void pktgen_thread_worker(struct pktgen_thread *t)
 					do_softirq();
 				tx_since_softirq = 0;
 			}
-		} else {
-			prepare_to_wait(&(t->queue), &wait, TASK_INTERRUPTIBLE);
-			schedule_timeout(HZ / 10);
-			finish_wait(&(t->queue), &wait);
 		}
-
-		/*
-		 * Back from sleep, either due to the timeout or signal.
-		 * We check if we have any "posted" work for us.
-		 */
-
-		if (t->control & T_TERMINATE || signal_pending(current))
-			/* we received a request to terminate ourself */
-			break;
 
 		if (t->control & T_STOP) {
 			pktgen_stop(t);
@@ -3368,20 +3334,21 @@ static void pktgen_thread_worker(struct pktgen_thread *t)
 			t->control &= ~(T_REMDEV);
 		}
 
-		if (need_resched())
-			schedule();
+		try_to_freeze();
+
+		set_current_state(TASK_INTERRUPTIBLE);
 	}
 
-	PG_DEBUG(printk("pktgen: %s stopping all device\n", t->name));
+	PG_DEBUG(printk("pktgen: %s stopping all device\n", t->tsk->comm));
 	pktgen_stop(t);
 
-	PG_DEBUG(printk("pktgen: %s removing all device\n", t->name));
+	PG_DEBUG(printk("pktgen: %s removing all device\n", t->tsk->comm));
 	pktgen_rem_all_ifs(t);
 
-	PG_DEBUG(printk("pktgen: %s removing thread.\n", t->name));
+	PG_DEBUG(printk("pktgen: %s removing thread.\n", t->tsk->comm));
 	pktgen_rem_thread(t);
 
-	t->removed = 1;
+	return 0;
 }
 
 static struct pktgen_dev *pktgen_find_dev(struct pktgen_thread *t,
@@ -3401,8 +3368,8 @@ static struct pktgen_dev *pktgen_find_dev(struct pktgen_thread *t,
 	return pkt_dev;
 }
 
-/* 
- * Adds a dev at front of if_list. 
+/*
+ * Adds a dev at front of if_list.
  */
 
 static int add_dev_to_thread(struct pktgen_thread *t,
@@ -3499,37 +3466,11 @@ static int pktgen_add_device(struct pktgen_thread *t, const char *ifname)
 	return add_dev_to_thread(t, pkt_dev);
 }
 
-static struct pktgen_thread *__init pktgen_find_thread(const char *name)
+static int __init pktgen_create_thread(int cpu)
 {
 	struct pktgen_thread *t;
-
-	mutex_lock(&pktgen_thread_lock);
-
-	list_for_each_entry(t, &pktgen_threads, th_list)
-		if (strcmp(t->name, name) == 0) {
-			mutex_unlock(&pktgen_thread_lock);
-			return t;
-		}
-
-	mutex_unlock(&pktgen_thread_lock);
-	return NULL;
-}
-
-static int __init pktgen_create_thread(const char *name, int cpu)
-{
-	int err;
-	struct pktgen_thread *t = NULL;
 	struct proc_dir_entry *pe;
-
-	if (strlen(name) > 31) {
-		printk("pktgen: ERROR:  Thread name cannot be more than 31 characters.\n");
-		return -EINVAL;
-	}
-
-	if (pktgen_find_thread(name)) {
-		printk("pktgen: ERROR: thread: %s already exists\n", name);
-		return -EINVAL;
-	}
+	struct task_struct *p;
 
 	t = kzalloc(sizeof(struct pktgen_thread), GFP_KERNEL);
 	if (!t) {
@@ -3537,14 +3478,29 @@ static int __init pktgen_create_thread(const char *name, int cpu)
 		return -ENOMEM;
 	}
 
-	strcpy(t->name, name);
 	spin_lock_init(&t->if_lock);
 	t->cpu = cpu;
 
-	pe = create_proc_entry(t->name, 0600, pg_proc_dir);
+	INIT_LIST_HEAD(&t->if_list);
+
+	list_add_tail(&t->th_list, &pktgen_threads);
+
+	p = kthread_create(pktgen_thread_worker, t, "kpktgend_%d", cpu);
+	if (IS_ERR(p)) {
+		printk("pktgen: kernel_thread() failed for cpu %d\n", t->cpu);
+		list_del(&t->th_list);
+		kfree(t);
+		return PTR_ERR(p);
+	}
+	kthread_bind(p, cpu);
+	t->tsk = p;
+
+	pe = create_proc_entry(t->tsk->comm, 0600, pg_proc_dir);
 	if (!pe) {
 		printk("pktgen: cannot create %s/%s procfs entry.\n",
-		       PG_PROC_DIR, t->name);
+		       PG_PROC_DIR, t->tsk->comm);
+		kthread_stop(p);
+		list_del(&t->th_list);
 		kfree(t);
 		return -EINVAL;
 	}
@@ -3552,27 +3508,13 @@ static int __init pktgen_create_thread(const char *name, int cpu)
 	pe->proc_fops = &pktgen_thread_fops;
 	pe->data = t;
 
-	INIT_LIST_HEAD(&t->if_list);
-
-	list_add_tail(&t->th_list, &pktgen_threads);
-
-	t->removed = 0;
-
-	err = kernel_thread((void *)pktgen_thread_worker, (void *)t,
-			  CLONE_FS | CLONE_FILES | CLONE_SIGHAND);
-	if (err < 0) {
-		printk("pktgen: kernel_thread() failed for cpu %d\n", t->cpu);
-		remove_proc_entry(t->name, pg_proc_dir);
-		list_del(&t->th_list);
-		kfree(t);
-		return err;
-	}
+	wake_up_process(p);
 
 	return 0;
 }
 
-/* 
- * Removes a device from the thread if_list. 
+/*
+ * Removes a device from the thread if_list.
  */
 static void _rem_dev_from_if_list(struct pktgen_thread *t,
 				  struct pktgen_dev *pkt_dev)
@@ -3647,10 +3589,8 @@ static int __init pg_init(void)
 
 	for_each_online_cpu(cpu) {
 		int err;
-		char buf[30];
 
-		sprintf(buf, "kpktgend_%i", cpu);
-		err = pktgen_create_thread(buf, cpu);
+		err = pktgen_create_thread(cpu);
 		if (err)
 			printk("pktgen: WARNING: Cannot create thread for cpu %d (%d)\n",
 					cpu, err);
@@ -3678,9 +3618,8 @@ static void __exit pg_cleanup(void)
 
 	list_for_each_safe(q, n, &pktgen_threads) {
 		t = list_entry(q, struct pktgen_thread, th_list);
-		t->control |= (T_TERMINATE);
-
-		wait_event_interruptible_timeout(queue, (t->removed == 1), HZ);
+		kthread_stop(t->tsk);
+		kfree(t);
 	}
 
 	/* Un-register us from receiving netdevice events */

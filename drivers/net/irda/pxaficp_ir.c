@@ -321,15 +321,22 @@ static void pxa_irda_fir_dma_tx_irq(int channel, void *data)
 		pxa_irda_set_speed(si, si->newspeed);
 		si->newspeed = 0;
 	} else {
+		int i = 64;
+
 		ICCR0 = 0;
 		pxa_irda_fir_dma_rx_start(si);
+		while ((ICSR1 & ICSR1_RNE) && i--)
+			(void)ICDR;
 		ICCR0 = ICCR0_ITR | ICCR0_RXE;
+
+		if (i < 0)
+			printk(KERN_ERR "pxa_ir: cannot clear Rx FIFO!\n");
 	}
 	netif_wake_queue(dev);
 }
 
 /* EIF(Error in FIFO/End in Frame) handler for FIR */
-static void pxa_irda_fir_irq_eif(struct pxa_irda *si, struct net_device *dev)
+static void pxa_irda_fir_irq_eif(struct pxa_irda *si, struct net_device *dev, int icsr0)
 {
 	unsigned int len, stat, data;
 
@@ -350,7 +357,7 @@ static void pxa_irda_fir_irq_eif(struct pxa_irda *si, struct net_device *dev)
 			}
 			if (stat & ICSR1_ROR) {
 				printk(KERN_DEBUG "pxa_ir: fir receive overrun\n");
-				si->stats.rx_frame_errors++;
+				si->stats.rx_over_errors++;
 			}
 		} else	{
 			si->dma_rx_buff[len++] = data;
@@ -362,7 +369,15 @@ static void pxa_irda_fir_irq_eif(struct pxa_irda *si, struct net_device *dev)
 
 	if (stat & ICSR1_EOF) {
 		/* end of frame. */
-		struct sk_buff *skb = alloc_skb(len+1,GFP_ATOMIC);
+		struct sk_buff *skb;
+
+		if (icsr0 & ICSR0_FRE) {
+			printk(KERN_ERR "pxa_ir: dropping erroneous frame\n");
+			si->stats.rx_dropped++;
+			return;
+		}
+
+		skb = alloc_skb(len+1,GFP_ATOMIC);
 		if (!skb)  {
 			printk(KERN_ERR "pxa_ir: fir out of memory for receive skb\n");
 			si->stats.rx_dropped++;
@@ -392,7 +407,7 @@ static irqreturn_t pxa_irda_fir_irq(int irq, void *dev_id)
 {
 	struct net_device *dev = dev_id;
 	struct pxa_irda *si = netdev_priv(dev);
-	int icsr0;
+	int icsr0, i = 64;
 
 	/* stop RX DMA */
 	DCSR(si->rxdma) &= ~DCSR_RUN;
@@ -412,12 +427,17 @@ static irqreturn_t pxa_irda_fir_irq(int irq, void *dev_id)
 
 	if (icsr0 & ICSR0_EIF) {
 		/* An error in FIFO occured, or there is a end of frame */
-		pxa_irda_fir_irq_eif(si, dev);
+		pxa_irda_fir_irq_eif(si, dev, icsr0);
 	}
 
 	ICCR0 = 0;
 	pxa_irda_fir_dma_rx_start(si);
+	while ((ICSR1 & ICSR1_RNE) && i--)
+		(void)ICDR;
 	ICCR0 = ICCR0_ITR | ICCR0_RXE;
+
+	if (i < 0)
+		printk(KERN_ERR "pxa_ir: cannot clear Rx FIFO!\n");
 
 	return IRQ_HANDLED;
 }
@@ -704,9 +724,9 @@ static int pxa_irda_stop(struct net_device *dev)
 	return 0;
 }
 
-static int pxa_irda_suspend(struct device *_dev, pm_message_t state)
+static int pxa_irda_suspend(struct platform_device *_dev, pm_message_t state)
 {
-	struct net_device *dev = dev_get_drvdata(_dev);
+	struct net_device *dev = platform_get_drvdata(_dev);
 	struct pxa_irda *si;
 
 	if (dev && netif_running(dev)) {
@@ -718,9 +738,9 @@ static int pxa_irda_suspend(struct device *_dev, pm_message_t state)
 	return 0;
 }
 
-static int pxa_irda_resume(struct device *_dev)
+static int pxa_irda_resume(struct platform_device *_dev)
 {
-	struct net_device *dev = dev_get_drvdata(_dev);
+	struct net_device *dev = platform_get_drvdata(_dev);
 	struct pxa_irda *si;
 
 	if (dev && netif_running(dev)) {
@@ -746,9 +766,8 @@ static int pxa_irda_init_iobuf(iobuff_t *io, int size)
 	return io->head ? 0 : -ENOMEM;
 }
 
-static int pxa_irda_probe(struct device *_dev)
+static int pxa_irda_probe(struct platform_device *pdev)
 {
-	struct platform_device *pdev = to_platform_device(_dev);
 	struct net_device *dev;
 	struct pxa_irda *si;
 	unsigned int baudrate_mask;
@@ -822,9 +841,9 @@ err_mem_1:
 	return err;
 }
 
-static int pxa_irda_remove(struct device *_dev)
+static int pxa_irda_remove(struct platform_device *_dev)
 {
-	struct net_device *dev = dev_get_drvdata(_dev);
+	struct net_device *dev = platform_get_drvdata(_dev);
 
 	if (dev) {
 		struct pxa_irda *si = netdev_priv(dev);
@@ -840,9 +859,10 @@ static int pxa_irda_remove(struct device *_dev)
 	return 0;
 }
 
-static struct device_driver pxa_ir_driver = {
-	.name		= "pxa2xx-ir",
-	.bus		= &platform_bus_type,
+static struct platform_driver pxa_ir_driver = {
+	.driver         = {
+		.name   = "pxa2xx-ir",
+	},
 	.probe		= pxa_irda_probe,
 	.remove		= pxa_irda_remove,
 	.suspend	= pxa_irda_suspend,
@@ -851,12 +871,12 @@ static struct device_driver pxa_ir_driver = {
 
 static int __init pxa_irda_init(void)
 {
-	return driver_register(&pxa_ir_driver);
+	return platform_driver_register(&pxa_ir_driver);
 }
 
 static void __exit pxa_irda_exit(void)
 {
-	driver_unregister(&pxa_ir_driver);
+	platform_driver_unregister(&pxa_ir_driver);
 }
 
 module_init(pxa_irda_init);

@@ -375,7 +375,7 @@ static int ib_uverbs_event_close(struct inode *inode, struct file *filp)
 	return 0;
 }
 
-static struct file_operations uverbs_event_fops = {
+static const struct file_operations uverbs_event_fops = {
 	.owner	 = THIS_MODULE,
 	.read 	 = ib_uverbs_event_read,
 	.poll    = ib_uverbs_event_poll,
@@ -534,9 +534,9 @@ struct file *ib_uverbs_alloc_event_file(struct ib_uverbs_file *uverbs_file,
 	 * module reference.
 	 */
 	filp->f_op 	   = fops_get(&uverbs_event_fops);
-	filp->f_vfsmnt 	   = mntget(uverbs_event_mnt);
-	filp->f_dentry 	   = dget(uverbs_event_mnt->mnt_root);
-	filp->f_mapping    = filp->f_dentry->d_inode->i_mapping;
+	filp->f_path.mnt 	   = mntget(uverbs_event_mnt);
+	filp->f_path.dentry 	   = dget(uverbs_event_mnt->mnt_root);
+	filp->f_mapping    = filp->f_path.dentry->d_inode->i_mapping;
 	filp->f_flags      = O_RDONLY;
 	filp->f_mode       = FMODE_READ;
 	filp->private_data = ev_file;
@@ -679,14 +679,14 @@ static int ib_uverbs_close(struct inode *inode, struct file *filp)
 	return 0;
 }
 
-static struct file_operations uverbs_fops = {
+static const struct file_operations uverbs_fops = {
 	.owner 	 = THIS_MODULE,
 	.write 	 = ib_uverbs_write,
 	.open 	 = ib_uverbs_open,
 	.release = ib_uverbs_close
 };
 
-static struct file_operations uverbs_mmap_fops = {
+static const struct file_operations uverbs_mmap_fops = {
 	.owner 	 = THIS_MODULE,
 	.write 	 = ib_uverbs_write,
 	.mmap    = ib_uverbs_mmap,

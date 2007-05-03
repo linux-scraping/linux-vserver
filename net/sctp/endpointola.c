@@ -50,7 +50,6 @@
  */
 
 #include <linux/types.h>
-#include <linux/sched.h>
 #include <linux/slab.h>
 #include <linux/in.h>
 #include <linux/random.h>	/* get_random_bytes() */
@@ -61,7 +60,7 @@
 #include <net/sctp/sm.h>
 
 /* Forward declarations for internal helpers. */
-static void sctp_endpoint_bh_rcv(struct sctp_endpoint *ep);
+static void sctp_endpoint_bh_rcv(struct work_struct *work);
 
 /*
  * Initialize the base fields of the endpoint structure.
@@ -71,6 +70,10 @@ static struct sctp_endpoint *sctp_endpoint_init(struct sctp_endpoint *ep,
 						gfp_t gfp)
 {
 	memset(ep, 0, sizeof(struct sctp_endpoint));
+
+	ep->digest = kzalloc(SCTP_SIGNATURE_SIZE, gfp);
+	if (!ep->digest)
+		return NULL;
 
 	/* Initialize the base structure. */
 	/* What type of endpoint are we?  */
@@ -85,8 +88,7 @@ static struct sctp_endpoint *sctp_endpoint_init(struct sctp_endpoint *ep,
 	sctp_inq_init(&ep->base.inqueue);
 
 	/* Set its top-half handler */
-	sctp_inq_set_th_handler(&ep->base.inqueue,
-				(void (*)(void *))sctp_endpoint_bh_rcv, ep);
+	sctp_inq_set_th_handler(&ep->base.inqueue, sctp_endpoint_bh_rcv);
 
 	/* Initialize the bind addr area */
 	sctp_bind_addr_init(&ep->base.bind_addr, 0);
@@ -182,6 +184,9 @@ static void sctp_endpoint_destroy(struct sctp_endpoint *ep)
 	/* Free up the HMAC transform. */
 	crypto_free_hash(sctp_sk(ep->base.sk)->hmac);
 
+	/* Free the digest buffer */
+	kfree(ep->digest);
+
 	/* Cleanup. */
 	sctp_inq_free(&ep->base.inqueue);
 	sctp_bind_addr_free(&ep->base.bind_addr);
@@ -223,7 +228,7 @@ struct sctp_endpoint *sctp_endpoint_is_match(struct sctp_endpoint *ep,
 	struct sctp_endpoint *retval;
 
 	sctp_read_lock(&ep->base.addr_lock);
-	if (ep->base.bind_addr.port == laddr->v4.sin_port) {
+	if (htons(ep->base.bind_addr.port) == laddr->v4.sin_port) {
 		if (sctp_bind_addr_match(&ep->base.bind_addr, laddr,
 					 sctp_sk(ep->base.sk))) {
 			retval = ep;
@@ -251,7 +256,7 @@ static struct sctp_association *__sctp_endpoint_lookup_assoc(
 	struct sctp_association *asoc;
 	struct list_head *pos;
 
-	rport = paddr->v4.sin_port;
+	rport = ntohs(paddr->v4.sin_port);
 
 	list_for_each(pos, &ep->asocs) {
 		asoc = list_entry(pos, struct sctp_association, asocs);
@@ -311,8 +316,11 @@ int sctp_endpoint_is_peeled_off(struct sctp_endpoint *ep,
 /* Do delayed input processing.  This is scheduled by sctp_rcv().
  * This may be called on BH or task time.
  */
-static void sctp_endpoint_bh_rcv(struct sctp_endpoint *ep)
+static void sctp_endpoint_bh_rcv(struct work_struct *work)
 {
+	struct sctp_endpoint *ep =
+		container_of(work, struct sctp_endpoint,
+			     base.inqueue.immediate);
 	struct sctp_association *asoc;
 	struct sock *sk;
 	struct sctp_transport *transport;
@@ -360,7 +368,7 @@ static void sctp_endpoint_bh_rcv(struct sctp_endpoint *ep)
 			chunk->transport->last_time_heard = jiffies;
 
 		error = sctp_do_sm(SCTP_EVENT_T_CHUNK, subtype, state,
-                                   ep, asoc, chunk, GFP_ATOMIC);
+				   ep, asoc, chunk, GFP_ATOMIC);
 
 		if (error && chunk)
 			chunk->pdiscard = 1;

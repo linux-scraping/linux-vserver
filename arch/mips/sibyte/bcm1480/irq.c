@@ -45,11 +45,9 @@
  */
 
 
-#define shutdown_bcm1480_irq	disable_bcm1480_irq
 static void end_bcm1480_irq(unsigned int irq);
 static void enable_bcm1480_irq(unsigned int irq);
 static void disable_bcm1480_irq(unsigned int irq);
-static unsigned int startup_bcm1480_irq(unsigned int irq);
 static void ack_bcm1480_irq(unsigned int irq);
 #ifdef CONFIG_SMP
 static void bcm1480_set_affinity(unsigned int irq, cpumask_t mask);
@@ -84,12 +82,11 @@ extern char sb1250_duart_present[];
 #endif
 
 static struct irq_chip bcm1480_irq_type = {
-	.typename = "BCM1480-IMR",
-	.startup = startup_bcm1480_irq,
-	.shutdown = shutdown_bcm1480_irq,
-	.enable = enable_bcm1480_irq,
-	.disable = disable_bcm1480_irq,
+	.name = "BCM1480-IMR",
 	.ack = ack_bcm1480_irq,
+	.mask = disable_bcm1480_irq,
+	.mask_ack = ack_bcm1480_irq,
+	.unmask = enable_bcm1480_irq,
 	.end = end_bcm1480_irq,
 #ifdef CONFIG_SMP
 	.set_affinity = bcm1480_set_affinity
@@ -144,11 +141,11 @@ static void bcm1480_set_affinity(unsigned int irq, cpumask_t mask)
 	unsigned long flags;
 	unsigned int irq_dirty;
 
-	i = first_cpu(mask);
-	if (next_cpu(i, mask) <= NR_CPUS) {
+	if (cpus_weight(mask) != 1) {
 		printk("attempted to set irq affinity for irq %d to multiple CPUs\n", irq);
 		return;
 	}
+	i = first_cpu(mask);
 
 	/* Convert logical CPU to physical CPU */
 	cpu = cpu_logical_map(i);
@@ -187,14 +184,6 @@ static void bcm1480_set_affinity(unsigned int irq, cpumask_t mask)
 
 
 /*****************************************************************************/
-
-static unsigned int startup_bcm1480_irq(unsigned int irq)
-{
-	bcm1480_unmask_irq(bcm1480_irq_owner[irq], irq);
-
-	return 0;		/* never anything pending */
-}
-
 
 static void disable_bcm1480_irq(unsigned int irq)
 {
@@ -270,16 +259,9 @@ void __init init_bcm1480_irqs(void)
 {
 	int i;
 
-	for (i = 0; i < NR_IRQS; i++) {
-		irq_desc[i].status = IRQ_DISABLED;
-		irq_desc[i].action = 0;
-		irq_desc[i].depth = 1;
-		if (i < BCM1480_NR_IRQS) {
-			irq_desc[i].chip = &bcm1480_irq_type;
-			bcm1480_irq_owner[i] = 0;
-		} else {
-			irq_desc[i].chip = &no_irq_chip;
-		}
+	for (i = 0; i < BCM1480_NR_IRQS; i++) {
+		set_irq_chip(i, &bcm1480_irq_type);
+		bcm1480_irq_owner[i] = 0;
 	}
 }
 
@@ -438,7 +420,7 @@ void __init arch_init_irq(void)
 #ifdef CONFIG_GDB_CONSOLE
 		register_gdb_console();
 #endif
-		prom_printf("Waiting for GDB on UART port %d\n", kgdb_port);
+		printk("Waiting for GDB on UART port %d\n", kgdb_port);
 		set_debug_traps();
 		breakpoint();
 	}

@@ -69,6 +69,8 @@ config DVB_USB_DIBUSB_MC
 config DVB_USB_DIB0700
 	tristate "DiBcom DiB0700 USB DVB devices (see help for supported devices)"
 	depends on DVB_USB
+	select DVB_DIB7000P
+	select DVB_DIB7000M
 	select DVB_DIB3000MC
 	select DVB_TUNER_MT2060 if !DVB_FE_CUSTOMISE
 	help
@@ -96,6 +98,7 @@ config DVB_USB_CXUSB
 	depends on DVB_USB
 	select DVB_CX22702 if !DVB_FE_CUSTOMISE
 	select DVB_LGDT330X if !DVB_FE_CUSTOMISE
+	select DVB_TUNER_LGH06XF if !DVB_FE_CUSTOMISE
 	select DVB_MT352 if !DVB_FE_CUSTOMISE
 	select DVB_ZL10353 if !DVB_FE_CUSTOMISE
 	help
@@ -105,6 +108,34 @@ config DVB_USB_CXUSB
 
 	  Medion MD95700 hybrid USB2.0 device.
 	  DViCO FusionHDTV (Bluebird) USB2.0 devices
+
+config DVB_USB_M920X
+	tristate "Uli m920x DVB-T USB2.0 support"
+	depends on DVB_USB
+	select DVB_MT352 if !DVB_FE_CUSTOMISE
+	select DVB_TUNER_QT1010 if !DVB_FE_CUSTOMISE
+	help
+	  Say Y here to support the MSI Mega Sky 580 USB2.0 DVB-T receiver.
+	  Currently, only devices with a product id of
+	  "DTV USB MINI" (in cold state) are supported.
+	  Firmware required.
+
+config DVB_USB_GL861
+	tristate "Genesys Logic GL861 USB2.0 support"
+	depends on DVB_USB
+	select DVB_ZL10353 if !DVB_FE_CUSTOMISE
+	select DVB_TUNER_QT1010 if !DVB_FE_CUSTOMISE
+	help
+	  Say Y here to support the MSI Megasky 580 (55801) DVB-T USB2.0
+	  receiver with USB ID 0db0:5581.
+
+config DVB_USB_AU6610
+	tristate "Alcor Micro AU6610 USB2.0 support"
+	depends on DVB_USB
+	select DVB_ZL10353 if !DVB_FE_CUSTOMISE
+	select DVB_TUNER_QT1010 if !DVB_FE_CUSTOMISE
+	help
+	  Say Y here to support the Sigmatek DVB-110 DVB-T USB2.0 receiver.
 
 config DVB_USB_DIGITV
 	tristate "Nebula Electronics uDigiTV DVB-T USB2.0 support"
@@ -156,6 +187,17 @@ config DVB_USB_NOVA_T_USB2
 	select DVB_TUNER_MT2060 if !DVB_FE_CUSTOMISE
 	help
 	  Say Y here to support the Hauppauge WinTV-NOVA-T usb2 DVB-T USB2.0 receiver.
+
+config DVB_USB_TTUSB2
+	tristate "Pinnacle 400e DVB-S USB2.0 support"
+	depends on DVB_USB
+	select DVB_TDA10086 if !DVB_FE_CUSTOMISE
+	select DVB_LNBP21 if !DVB_FE_CUSTOMISE
+	select DVB_TDA826X if !DVB_FE_CUSTOMISE
+	help
+	  Say Y here to support the Pinnacle 400e DVB-S USB2.0 receiver. The
+	  firmware protocol used by this module is similar to the one used by the
+	  old ttusb-driver - that's why the module is called dvb-usb-ttusb2.ko.
 
 config DVB_USB_DTT200U
 	tristate "WideView WT-200U and WT-220U (pen) DVB-T USB2.0 support (Yakumo/Hama/Typhoon/Yuan)"

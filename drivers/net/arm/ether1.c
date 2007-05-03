@@ -33,7 +33,6 @@
 
 #include <linux/module.h>
 #include <linux/kernel.h>
-#include <linux/sched.h>
 #include <linux/types.h>
 #include <linux/fcntl.h>
 #include <linux/interrupt.h>
@@ -254,7 +253,7 @@ ether1_readbuffer (struct net_device *dev, void *data, unsigned int start, unsig
 	} while (thislen);
 }
 
-static int __init
+static int __devinit
 ether1_ramtest(struct net_device *dev, unsigned char byte)
 {
 	unsigned char *buffer = kmalloc (BUFFER_SIZE, GFP_KERNEL);
@@ -308,7 +307,7 @@ ether1_reset (struct net_device *dev)
 	return BUS_16;
 }
 
-static int __init
+static int __devinit
 ether1_init_2(struct net_device *dev)
 {
 	int i;
@@ -986,7 +985,7 @@ ether1_setmulticastlist (struct net_device *dev)
 
 /* ------------------------------------------------------------------------- */
 
-static void __init ether1_banner(void)
+static void __devinit ether1_banner(void)
 {
 	static unsigned int version_printed = 0;
 

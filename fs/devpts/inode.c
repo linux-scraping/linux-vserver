@@ -124,7 +124,7 @@ static struct file_operations devpts_dir_operations = {
 	.readdir	= devpts_readdir,
 };
 
-static struct super_operations devpts_sops = {
+static const struct super_operations devpts_sops = {
 	.statfs		= simple_statfs,
 	.remount_fs	= devpts_remount,
 };

@@ -275,7 +275,7 @@ hysdn_conf_open(struct inode *ino, struct file *filep)
 	} else if ((filep->f_mode & (FMODE_READ | FMODE_WRITE)) == FMODE_READ) {
 		/* read access -> output card info data */
 
-		if (!(tmp = (char *) kmalloc(INFO_OUT_LEN * 2 + 2, GFP_KERNEL))) {
+		if (!(tmp = kmalloc(INFO_OUT_LEN * 2 + 2, GFP_KERNEL))) {
 			unlock_kernel();
 			return (-EFAULT);	/* out of memory */
 		}
@@ -367,7 +367,7 @@ hysdn_conf_close(struct inode *ino, struct file *filep)
 /******************************************************/
 /* table for conf filesystem functions defined above. */
 /******************************************************/
-static struct file_operations conf_fops =
+static const struct file_operations conf_fops =
 {
 	.llseek         = no_llseek,
 	.read           = hysdn_conf_read,

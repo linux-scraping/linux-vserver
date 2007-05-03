@@ -3,24 +3,6 @@
 
 #include <linux/vserver/limit_int.h>
 
-static inline void vx_limit_fixup(struct _vx_limit *limit)
-{
-	rlim_t value;
-	int res;
-
-	/* complex resources first */
-	__vx_cres_array_fixup(limit, VLA_RSS);
-
-	for (res=0; res<NUM_LIMITS; res++) {
-		value = __rlim_get(limit, res);
-		__vx_cres_fixup(limit, res, value);
-
-		/* not supposed to happen, maybe warn? */
-		if (__rlim_rmax(limit, res) > __rlim_hard(limit, res))
-			__rlim_rmax(limit, res) = __rlim_hard(limit, res);
-	}
-}
-
 
 #define VX_LIMIT_FMT	":\t%8ld\t%8ld/%8ld\t%8lld/%8lld\t%6d\n"
 #define VX_LIMIT_TOP	\
@@ -36,7 +18,7 @@ static inline void vx_limit_fixup(struct _vx_limit *limit)
 
 static inline int vx_info_proc_limit(struct _vx_limit *limit, char *buffer)
 {
-	vx_limit_fixup(limit);
+	vx_limit_fixup(limit, -1);
 	return sprintf(buffer, VX_LIMIT_TOP
 		"PROC"	VX_LIMIT_FMT
 		"VM"	VX_LIMIT_FMT

@@ -19,6 +19,7 @@
 #include <linux/sched.h>
 #include <linux/kernel_stat.h>
 #include <linux/seq_file.h>
+#include <linux/interrupt.h>
 #include <linux/init.h>
 #include <linux/random.h>
 #include <linux/bootmem.h>
@@ -141,7 +142,7 @@ int request_irq(unsigned int irq,
 		return -EBUSY;
 
 	if (use_kmalloc)
-		irq_handle = (irq_handler_t *)kmalloc(sizeof(irq_handler_t), GFP_ATOMIC);
+		irq_handle = kmalloc(sizeof(irq_handler_t), GFP_ATOMIC);
 	else {
 		/* use bootmem allocater */
 		irq_handle = (irq_handler_t *)alloc_bootmem(sizeof(irq_handler_t));

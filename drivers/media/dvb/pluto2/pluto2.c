@@ -149,6 +149,15 @@ static inline void pluto_rw(struct pluto *pluto, u32 reg, u32 mask, u32 bits)
 	writel(val, &pluto->io_mem[reg]);
 }
 
+static void pluto_write_tscr(struct pluto *pluto, u32 val)
+{
+	/* set the number of packets */
+	val &= ~TSCR_ADEF;
+	val |= TS_DMA_PACKETS / 2;
+
+	pluto_writereg(pluto, REG_TSCR, val);
+}
+
 static void pluto_setsda(void *data, int state)
 {
 	struct pluto *pluto = data;
@@ -213,11 +222,11 @@ static void pluto_reset_ts(struct pluto *pluto, int reenable)
 
 	if (val & TSCR_RSTN) {
 		val &= ~TSCR_RSTN;
-		pluto_writereg(pluto, REG_TSCR, val);
+		pluto_write_tscr(pluto, val);
 	}
 	if (reenable) {
 		val |= TSCR_RSTN;
-		pluto_writereg(pluto, REG_TSCR, val);
+		pluto_write_tscr(pluto, val);
 	}
 }
 
@@ -339,7 +348,7 @@ static irqreturn_t pluto_irq(int irq, void *dev_id)
 	}
 
 	/* ACK the interrupt */
-	pluto_writereg(pluto, REG_TSCR, tscr | TSCR_IACK);
+	pluto_write_tscr(pluto, tscr | TSCR_IACK);
 
 	return IRQ_HANDLED;
 }
@@ -348,9 +357,6 @@ static void __devinit pluto_enable_irqs(struct pluto *pluto)
 {
 	u32 val = pluto_readreg(pluto, REG_TSCR);
 
-	/* set the number of packets */
-	val &= ~TSCR_ADEF;
-	val |= TS_DMA_PACKETS / 2;
 	/* disable AFUL and LOCK interrupts */
 	val |= (TSCR_MSKA | TSCR_MSKL);
 	/* enable DMA and OVERFLOW interrupts */
@@ -358,7 +364,7 @@ static void __devinit pluto_enable_irqs(struct pluto *pluto)
 	/* clear pending interrupts */
 	val |= TSCR_IACK;
 
-	pluto_writereg(pluto, REG_TSCR, val);
+	pluto_write_tscr(pluto, val);
 }
 
 static void pluto_disable_irqs(struct pluto *pluto)
@@ -370,7 +376,7 @@ static void pluto_disable_irqs(struct pluto *pluto)
 	/* clear pending interrupts */
 	val |= TSCR_IACK;
 
-	pluto_writereg(pluto, REG_TSCR, val);
+	pluto_write_tscr(pluto, val);
 }
 
 static int __devinit pluto_hw_init(struct pluto *pluto)
@@ -650,7 +656,7 @@ static int __devinit pluto2_probe(struct pci_dev *pdev,
 	/* dvb */
 	ret = dvb_register_adapter(&pluto->dvb_adapter, DRIVER_NAME, THIS_MODULE, &pdev->dev);
 	if (ret < 0)
-		goto err_i2c_bit_del_bus;
+		goto err_i2c_del_adapter;
 
 	dvb_adapter = &pluto->dvb_adapter;
 
@@ -712,8 +718,8 @@ err_dvb_dmx_release:
 	dvb_dmx_release(dvbdemux);
 err_dvb_unregister_adapter:
 	dvb_unregister_adapter(dvb_adapter);
-err_i2c_bit_del_bus:
-	i2c_bit_del_bus(&pluto->i2c_adap);
+err_i2c_del_adapter:
+	i2c_del_adapter(&pluto->i2c_adap);
 err_pluto_hw_exit:
 	pluto_hw_exit(pluto);
 err_free_irq:
@@ -748,7 +754,7 @@ static void __devexit pluto2_remove(struct pci_dev *pdev)
 	dvb_dmxdev_release(&pluto->dmxdev);
 	dvb_dmx_release(dvbdemux);
 	dvb_unregister_adapter(dvb_adapter);
-	i2c_bit_del_bus(&pluto->i2c_adap);
+	i2c_del_adapter(&pluto->i2c_adap);
 	pluto_hw_exit(pluto);
 	free_irq(pdev->irq, pluto);
 	pci_iounmap(pdev, pluto->io_mem);

@@ -516,10 +516,11 @@ sys_pciconfig_iobase(long which, unsigned long bus, unsigned long dfn)
 		if (bus == 0 && dfn == 0) {
 			hose = pci_isa_hose;
 		} else {
-			dev = pci_find_slot(bus, dfn);
+			dev = pci_get_bus_and_slot(bus, dfn);
 			if (!dev)
 				return -ENODEV;
 			hose = dev->sysdata;
+			pci_dev_put(dev);
 		}
 	}
 
@@ -574,3 +575,7 @@ void pci_iounmap(struct pci_dev *dev, void __iomem * addr)
 
 EXPORT_SYMBOL(pci_iomap);
 EXPORT_SYMBOL(pci_iounmap);
+
+/* FIXME: Some boxes have multiple ISA bridges! */
+struct pci_dev *isa_bridge;
+EXPORT_SYMBOL(isa_bridge);

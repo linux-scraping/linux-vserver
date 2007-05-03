@@ -714,13 +714,6 @@ static int eexp_xmit(struct sk_buff *buf, struct net_device *dev)
  * check to make sure we've not become wedged.
  */
 
-/*
- * Handle an EtherExpress interrupt
- * If we've finished initializing, start the RU and CU up.
- * If we've already started, reap tx buffers, handle any received packets,
- * check to make sure we've not become wedged.
- */
-
 static unsigned short eexp_start_irq(struct net_device *dev,
 				     unsigned short status)
 {
@@ -1719,7 +1712,7 @@ int __init init_module(void)
 	return -ENXIO;
 }
 
-void cleanup_module(void)
+void __exit cleanup_module(void)
 {
 	int this_dev;
 

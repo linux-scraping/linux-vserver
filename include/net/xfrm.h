@@ -252,10 +252,13 @@ struct xfrm_state_afinfo {
 						xfrm_address_t *daddr, xfrm_address_t *saddr);
 	int			(*tmpl_sort)(struct xfrm_tmpl **dst, struct xfrm_tmpl **src, int n);
 	int			(*state_sort)(struct xfrm_state **dst, struct xfrm_state **src, int n);
+	int			(*output)(struct sk_buff *skb);
 };
 
 extern int xfrm_state_register_afinfo(struct xfrm_state_afinfo *afinfo);
 extern int xfrm_state_unregister_afinfo(struct xfrm_state_afinfo *afinfo);
+extern struct xfrm_state_afinfo *xfrm_state_get_afinfo(unsigned short family);
+extern void xfrm_state_put_afinfo(struct xfrm_state_afinfo *afinfo);
 
 extern void xfrm_state_delete_tunnel(struct xfrm_state *x);
 
@@ -310,6 +313,8 @@ struct xfrm_tmpl
 /* Source address of tunnel. Ignored, if it is not a tunnel. */
 	xfrm_address_t		saddr;
 
+	unsigned short		encap_family;
+
 	__u32			reqid;
 
 /* Mode: transport, tunnel etc. */
@@ -340,20 +345,34 @@ struct xfrm_policy
 	atomic_t		refcnt;
 	struct timer_list	timer;
 
-	u8			type;
 	u32			priority;
 	u32			index;
 	struct xfrm_selector	selector;
 	struct xfrm_lifetime_cfg lft;
 	struct xfrm_lifetime_cur curlft;
 	struct dst_entry       *bundles;
-	__u16			family;
-	__u8			action;
-	__u8			flags;
-	__u8			dead;
-	__u8			xfrm_nr;
+	u16			family;
+	u8			type;
+	u8			action;
+	u8			flags;
+	u8			dead;
+	u8			xfrm_nr;
+	/* XXX 1 byte hole, try to pack */
 	struct xfrm_sec_ctx	*security;
 	struct xfrm_tmpl       	xfrm_vec[XFRM_MAX_DEPTH];
+};
+
+struct xfrm_migrate {
+	xfrm_address_t		old_daddr;
+	xfrm_address_t		old_saddr;
+	xfrm_address_t		new_daddr;
+	xfrm_address_t		new_saddr;
+	u8			proto;
+	u8			mode;
+	u16			reserved;
+	u32			reqid;
+	u16			old_family;
+	u16			new_family;
 };
 
 #define XFRM_KM_TIMEOUT                30
@@ -379,15 +398,30 @@ struct xfrm_mgr
 	int			(*notify)(struct xfrm_state *x, struct km_event *c);
 	int			(*acquire)(struct xfrm_state *x, struct xfrm_tmpl *, struct xfrm_policy *xp, int dir);
 	struct xfrm_policy	*(*compile_policy)(struct sock *sk, int opt, u8 *data, int len, int *dir);
-	int			(*new_mapping)(struct xfrm_state *x, xfrm_address_t *ipaddr, u16 sport);
+	int			(*new_mapping)(struct xfrm_state *x, xfrm_address_t *ipaddr, __be16 sport);
 	int			(*notify_policy)(struct xfrm_policy *x, int dir, struct km_event *c);
 	int			(*report)(u8 proto, struct xfrm_selector *sel, xfrm_address_t *addr);
+	int			(*migrate)(struct xfrm_selector *sel, u8 dir, u8 type, struct xfrm_migrate *m, int num_bundles);
 };
 
 extern int xfrm_register_km(struct xfrm_mgr *km);
 extern int xfrm_unregister_km(struct xfrm_mgr *km);
 
 extern unsigned int xfrm_policy_count[XFRM_POLICY_MAX*2];
+
+/* Audit Information */
+struct xfrm_audit
+{
+	uid_t	loginuid;
+	u32	secid;
+};
+
+#ifdef CONFIG_AUDITSYSCALL
+extern void xfrm_audit_log(uid_t auid, u32 secid, int type, int result,
+		    struct xfrm_policy *xp, struct xfrm_state *x);
+#else
+#define xfrm_audit_log(a,s,t,r,p,x) do { ; } while (0)
+#endif /* CONFIG_AUDITSYSCALL */
 
 static inline void xfrm_pol_hold(struct xfrm_policy *policy)
 {
@@ -468,6 +502,7 @@ __be16 xfrm_flowi_sport(struct flowi *fl)
 	switch(fl->proto) {
 	case IPPROTO_TCP:
 	case IPPROTO_UDP:
+	case IPPROTO_UDPLITE:
 	case IPPROTO_SCTP:
 		port = fl->fl_ip_sport;
 		break;
@@ -493,6 +528,7 @@ __be16 xfrm_flowi_dport(struct flowi *fl)
 	switch(fl->proto) {
 	case IPPROTO_TCP:
 	case IPPROTO_UDP:
+	case IPPROTO_UDPLITE:
 	case IPPROTO_SCTP:
 		port = fl->fl_ip_dport;
 		break;
@@ -506,40 +542,8 @@ __be16 xfrm_flowi_dport(struct flowi *fl)
 	return port;
 }
 
-static inline int
-__xfrm4_selector_match(struct xfrm_selector *sel, struct flowi *fl)
-{
-	return  addr_match(&fl->fl4_dst, &sel->daddr, sel->prefixlen_d) &&
-		addr_match(&fl->fl4_src, &sel->saddr, sel->prefixlen_s) &&
-		!((xfrm_flowi_dport(fl) ^ sel->dport) & sel->dport_mask) &&
-		!((xfrm_flowi_sport(fl) ^ sel->sport) & sel->sport_mask) &&
-		(fl->proto == sel->proto || !sel->proto) &&
-		(fl->oif == sel->ifindex || !sel->ifindex);
-}
-
-static inline int
-__xfrm6_selector_match(struct xfrm_selector *sel, struct flowi *fl)
-{
-	return  addr_match(&fl->fl6_dst, &sel->daddr, sel->prefixlen_d) &&
-		addr_match(&fl->fl6_src, &sel->saddr, sel->prefixlen_s) &&
-		!((xfrm_flowi_dport(fl) ^ sel->dport) & sel->dport_mask) &&
-		!((xfrm_flowi_sport(fl) ^ sel->sport) & sel->sport_mask) &&
-		(fl->proto == sel->proto || !sel->proto) &&
-		(fl->oif == sel->ifindex || !sel->ifindex);
-}
-
-static inline int
-xfrm_selector_match(struct xfrm_selector *sel, struct flowi *fl,
-		    unsigned short family)
-{
-	switch (family) {
-	case AF_INET:
-		return __xfrm4_selector_match(sel, fl);
-	case AF_INET6:
-		return __xfrm6_selector_match(sel, fl);
-	}
-	return 0;
-}
+extern int xfrm_selector_match(struct xfrm_selector *sel, struct flowi *fl,
+			       unsigned short family);
 
 #ifdef CONFIG_SECURITY_NETWORK_XFRM
 /*	If neither has a context --> match
@@ -887,8 +891,7 @@ struct xfrm_tunnel {
 struct xfrm6_tunnel {
 	int (*handler)(struct sk_buff *skb);
 	int (*err_handler)(struct sk_buff *skb, struct inet6_skb_parm *opt,
-			   int type, int code, int offset, __u32 info);
-
+			   int type, int code, int offset, __be32 info);
 	struct xfrm6_tunnel *next;
 	int priority;
 };
@@ -934,7 +937,7 @@ static inline int xfrm_state_sort(struct xfrm_state **dst, struct xfrm_state **s
 #endif
 extern struct xfrm_state *xfrm_find_acq_byseq(u32 seq);
 extern int xfrm_state_delete(struct xfrm_state *x);
-extern void xfrm_state_flush(u8 proto);
+extern void xfrm_state_flush(u8 proto, struct xfrm_audit *audit_info);
 extern int xfrm_replay_check(struct xfrm_state *x, __be32 seq);
 extern void xfrm_replay_advance(struct xfrm_state *x, __be32 seq);
 extern void xfrm_replay_notify(struct xfrm_state *x, int event);
@@ -943,17 +946,17 @@ extern int xfrm_state_mtu(struct xfrm_state *x, int mtu);
 extern int xfrm_init_state(struct xfrm_state *x);
 extern int xfrm4_rcv(struct sk_buff *skb);
 extern int xfrm4_output(struct sk_buff *skb);
-extern int xfrm4_tunnel_register(struct xfrm_tunnel *handler);
-extern int xfrm4_tunnel_deregister(struct xfrm_tunnel *handler);
+extern int xfrm4_tunnel_register(struct xfrm_tunnel *handler, unsigned short family);
+extern int xfrm4_tunnel_deregister(struct xfrm_tunnel *handler, unsigned short family);
 extern int xfrm6_rcv_spi(struct sk_buff *skb, __be32 spi);
 extern int xfrm6_rcv(struct sk_buff **pskb);
 extern int xfrm6_input_addr(struct sk_buff *skb, xfrm_address_t *daddr,
 			    xfrm_address_t *saddr, u8 proto);
-extern int xfrm6_tunnel_register(struct xfrm6_tunnel *handler);
-extern int xfrm6_tunnel_deregister(struct xfrm6_tunnel *handler);
-extern u32 xfrm6_tunnel_alloc_spi(xfrm_address_t *saddr);
+extern int xfrm6_tunnel_register(struct xfrm6_tunnel *handler, unsigned short family);
+extern int xfrm6_tunnel_deregister(struct xfrm6_tunnel *handler, unsigned short family);
+extern __be32 xfrm6_tunnel_alloc_spi(xfrm_address_t *saddr);
 extern void xfrm6_tunnel_free_spi(xfrm_address_t *saddr);
-extern u32 xfrm6_tunnel_spi_lookup(xfrm_address_t *saddr);
+extern __be32 xfrm6_tunnel_spi_lookup(xfrm_address_t *saddr);
 extern int xfrm6_output(struct sk_buff *skb);
 extern int xfrm6_find_1stfragopt(struct xfrm_state *x, struct sk_buff *skb,
 				 u8 **prevhdr);
@@ -985,22 +988,33 @@ extern int xfrm_policy_walk(u8 type, int (*func)(struct xfrm_policy *, int, int,
 int xfrm_policy_insert(int dir, struct xfrm_policy *policy, int excl);
 struct xfrm_policy *xfrm_policy_bysel_ctx(u8 type, int dir,
 					  struct xfrm_selector *sel,
-					  struct xfrm_sec_ctx *ctx, int delete);
-struct xfrm_policy *xfrm_policy_byid(u8, int dir, u32 id, int delete);
-void xfrm_policy_flush(u8 type);
+					  struct xfrm_sec_ctx *ctx, int delete,
+					  int *err);
+struct xfrm_policy *xfrm_policy_byid(u8, int dir, u32 id, int delete, int *err);
+void xfrm_policy_flush(u8 type, struct xfrm_audit *audit_info);
 u32 xfrm_get_acqseq(void);
 void xfrm_alloc_spi(struct xfrm_state *x, __be32 minspi, __be32 maxspi);
-struct xfrm_state * xfrm_find_acq(u8 mode, u32 reqid, u8 proto, 
-				  xfrm_address_t *daddr, xfrm_address_t *saddr, 
+struct xfrm_state * xfrm_find_acq(u8 mode, u32 reqid, u8 proto,
+				  xfrm_address_t *daddr, xfrm_address_t *saddr,
 				  int create, unsigned short family);
-extern void xfrm_policy_flush(u8 type);
+extern void xfrm_policy_flush(u8 type, struct xfrm_audit *audit_info);
 extern int xfrm_sk_policy_insert(struct sock *sk, int dir, struct xfrm_policy *pol);
 extern int xfrm_bundle_ok(struct xfrm_policy *pol, struct xfrm_dst *xdst,
 			  struct flowi *fl, int family, int strict);
 extern void xfrm_init_pmtu(struct dst_entry *dst);
 
+#ifdef CONFIG_XFRM_MIGRATE
+extern int km_migrate(struct xfrm_selector *sel, u8 dir, u8 type,
+		      struct xfrm_migrate *m, int num_bundles);
+extern struct xfrm_state * xfrm_migrate_state_find(struct xfrm_migrate *m);
+extern struct xfrm_state * xfrm_state_migrate(struct xfrm_state *x,
+					      struct xfrm_migrate *m);
+extern int xfrm_migrate(struct xfrm_selector *sel, u8 dir, u8 type,
+			struct xfrm_migrate *m, int num_bundles);
+#endif
+
 extern wait_queue_head_t km_waitq;
-extern int km_new_mapping(struct xfrm_state *x, xfrm_address_t *ipaddr, u16 sport);
+extern int km_new_mapping(struct xfrm_state *x, xfrm_address_t *ipaddr, __be16 sport);
 extern void km_policy_expired(struct xfrm_policy *pol, int dir, int hard, u32 pid);
 extern int km_report(u8 proto, struct xfrm_selector *sel, xfrm_address_t *addr);
 
@@ -1033,7 +1047,7 @@ static inline int xfrm_addr_cmp(xfrm_address_t *a, xfrm_address_t *b,
 	switch (family) {
 	default:
 	case AF_INET:
-		return a->a4 - b->a4;
+		return (__force __u32)a->a4 - (__force __u32)b->a4;
 	case AF_INET6:
 		return ipv6_addr_cmp((struct in6_addr *)a,
 				     (struct in6_addr *)b);
@@ -1064,5 +1078,25 @@ static inline void xfrm_aevent_doreplay(struct xfrm_state *x)
 		xfrm_replay_notify(x, XFRM_REPLAY_UPDATE);
 }
 
+#ifdef CONFIG_XFRM_MIGRATE
+static inline struct xfrm_algo *xfrm_algo_clone(struct xfrm_algo *orig)
+{
+	return (struct xfrm_algo *)kmemdup(orig, sizeof(*orig) + orig->alg_key_len, GFP_KERNEL);
+}
+
+static inline void xfrm_states_put(struct xfrm_state **states, int n)
+{
+	int i;
+	for (i = 0; i < n; i++)
+		xfrm_state_put(*(states + i));
+}
+
+static inline void xfrm_states_delete(struct xfrm_state **states, int n)
+{
+	int i;
+	for (i = 0; i < n; i++)
+		xfrm_state_delete(*(states + i));
+}
+#endif
 
 #endif	/* _NET_XFRM_H */

@@ -82,11 +82,6 @@
 static struct riscom_board * IRQ_to_board[16];
 static struct tty_driver *riscom_driver;
 
-static unsigned long baud_table[] =  {
-	0, 50, 75, 110, 134, 150, 200, 300, 600, 1200, 1800, 2400, 4800,
-	9600, 19200, 38400, 57600, 76800, 0, 
-};
-
 static struct riscom_board rc_board[RC_NBOARD] =  {
 	{
 		.base	= RC_IOBASE1,
@@ -1234,7 +1229,6 @@ static void rc_flush_buffer(struct tty_struct *tty)
 	port->xmit_cnt = port->xmit_head = port->xmit_tail = 0;
 	restore_flags(flags);
 	
-	wake_up_interruptible(&tty->write_wait);
 	tty_wakeup(tty);
 }
 
@@ -1516,9 +1510,9 @@ static void rc_start(struct tty_struct * tty)
  * 	do_rc_hangup() -> tty->hangup() -> rc_hangup()
  * 
  */
-static void do_rc_hangup(void *private_)
+static void do_rc_hangup(struct work_struct *ugly_api)
 {
-	struct riscom_port	*port = (struct riscom_port *) private_;
+	struct riscom_port	*port = container_of(ugly_api, struct riscom_port, tqueue_hangup);
 	struct tty_struct	*tty;
 	
 	tty = port->tty;
@@ -1544,7 +1538,7 @@ static void rc_hangup(struct tty_struct * tty)
 	wake_up_interruptible(&port->open_wait);
 }
 
-static void rc_set_termios(struct tty_struct * tty, struct termios * old_termios)
+static void rc_set_termios(struct tty_struct * tty, struct ktermios * old_termios)
 {
 	struct riscom_port *port = (struct riscom_port *)tty->driver_data;
 	unsigned long flags;
@@ -1567,18 +1561,16 @@ static void rc_set_termios(struct tty_struct * tty, struct termios * old_termios
 	}
 }
 
-static void do_softint(void *private_)
+static void do_softint(struct work_struct *ugly_api)
 {
-	struct riscom_port	*port = (struct riscom_port *) private_;
+	struct riscom_port	*port = container_of(ugly_api, struct riscom_port, tqueue);
 	struct tty_struct	*tty;
 	
 	if(!(tty = port->tty)) 
 		return;
 
-	if (test_and_clear_bit(RS_EVENT_WRITE_WAKEUP, &port->event)) {
+	if (test_and_clear_bit(RS_EVENT_WRITE_WAKEUP, &port->event))
 		tty_wakeup(tty);
-		wake_up_interruptible(&tty->write_wait);
-	}
 }
 
 static const struct tty_operations riscom_ops = {
@@ -1619,6 +1611,8 @@ static inline int rc_init_drivers(void)
 	riscom_driver->init_termios = tty_std_termios;
 	riscom_driver->init_termios.c_cflag =
 		B9600 | CS8 | CREAD | HUPCL | CLOCAL;
+	riscom_driver->init_termios.c_ispeed = 9600;
+	riscom_driver->init_termios.c_ospeed = 9600;
 	riscom_driver->flags = TTY_DRIVER_REAL_RAW;
 	tty_set_operations(riscom_driver, &riscom_ops);
 	if ((error = tty_register_driver(riscom_driver)))  {
@@ -1632,8 +1626,8 @@ static inline int rc_init_drivers(void)
 	memset(rc_port, 0, sizeof(rc_port));
 	for (i = 0; i < RC_NPORT * RC_NBOARD; i++)  {
 		rc_port[i].magic = RISCOM8_MAGIC;
-		INIT_WORK(&rc_port[i].tqueue, do_softint, &rc_port[i]);
-		INIT_WORK(&rc_port[i].tqueue_hangup, do_rc_hangup, &rc_port[i]);
+		INIT_WORK(&rc_port[i].tqueue, do_softint);
+		INIT_WORK(&rc_port[i].tqueue_hangup, do_rc_hangup);
 		rc_port[i].close_delay = 50 * HZ/100;
 		rc_port[i].closing_wait = 3000 * HZ/100;
 		init_waitqueue_head(&rc_port[i].open_wait);

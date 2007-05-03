@@ -5,7 +5,7 @@
  * written by Herbert Pötzl, 9/11/2002
  * ported to 2.6 by Herbert Pötzl, 30/12/2004
  *
- * Copyright (C) 2002-2005 by Herbert Pötzl.
+ * Copyright (C) 2002-2007 by Herbert Pötzl.
  * Redistribution of this file is permitted under the
  * GNU General Public License.
  */

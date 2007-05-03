@@ -1970,7 +1970,7 @@ static ide_startstop_t idetape_pc_intr (ide_drive_t *drive)
 		printk(KERN_ERR "ide-tape: The tape wants to issue more "
 				"interrupts in DMA mode\n");
 		printk(KERN_ERR "ide-tape: DMA disabled, reverting to PIO\n");
-		(void)__ide_dma_off(drive);
+		ide_dma_off(drive);
 		return ide_do_reset(drive);
 	}
 	/* Get the number of bytes to transfer on this interrupt. */
@@ -2176,7 +2176,7 @@ static ide_startstop_t idetape_issue_packet_command (ide_drive_t *drive, idetape
 	if (test_and_clear_bit(PC_DMA_ERROR, &pc->flags)) {
 		printk(KERN_WARNING "ide-tape: DMA disabled, "
 				"reverting to PIO\n");
-		(void)__ide_dma_off(drive);
+		ide_dma_off(drive);
 	}
 	if (test_bit(PC_DMA_RECOMMENDED, &pc->flags) && drive->using_dma)
 		dma_ok = !hwif->dma_setup(drive);
@@ -2573,11 +2573,11 @@ static idetape_stage_t *__idetape_kmalloc_stage (idetape_tape_t *tape, int full,
 	int pages = tape->pages_per_stage;
 	char *b_data = NULL;
 
-	if ((stage = (idetape_stage_t *) kmalloc (sizeof (idetape_stage_t),GFP_KERNEL)) == NULL)
+	if ((stage = kmalloc(sizeof (idetape_stage_t),GFP_KERNEL)) == NULL)
 		return NULL;
 	stage->next = NULL;
 
-	bh = stage->bh = (struct idetape_bh *)kmalloc(sizeof(struct idetape_bh), GFP_KERNEL);
+	bh = stage->bh = kmalloc(sizeof(struct idetape_bh), GFP_KERNEL);
 	if (bh == NULL)
 		goto abort;
 	bh->b_reqnext = NULL;
@@ -2607,7 +2607,7 @@ static idetape_stage_t *__idetape_kmalloc_stage (idetape_tape_t *tape, int full,
 			continue;
 		}
 		prev_bh = bh;
-		if ((bh = (struct idetape_bh *)kmalloc(sizeof(struct idetape_bh), GFP_KERNEL)) == NULL) {
+		if ((bh = kmalloc(sizeof(struct idetape_bh), GFP_KERNEL)) == NULL) {
 			free_page((unsigned long) b_data);
 			goto abort;
 		}
@@ -4779,7 +4779,7 @@ static ide_driver_t idetape_driver = {
 /*
  *	Our character device supporting functions, passed to register_chrdev.
  */
-static struct file_operations idetape_fops = {
+static const struct file_operations idetape_fops = {
 	.owner		= THIS_MODULE,
 	.read		= idetape_chrdev_read,
 	.write		= idetape_chrdev_write,
@@ -4792,14 +4792,9 @@ static int idetape_open(struct inode *inode, struct file *filp)
 {
 	struct gendisk *disk = inode->i_bdev->bd_disk;
 	struct ide_tape_obj *tape;
-	ide_drive_t *drive;
 
 	if (!(tape = ide_tape_get(disk)))
 		return -ENXIO;
-
-	drive = tape->drive;
-
-	drive->usage++;
 
 	return 0;
 }
@@ -4808,9 +4803,6 @@ static int idetape_release(struct inode *inode, struct file *filp)
 {
 	struct gendisk *disk = inode->i_bdev->bd_disk;
 	struct ide_tape_obj *tape = ide_tape_g(disk);
-	ide_drive_t *drive = tape->drive;
-
-	drive->usage--;
 
 	ide_tape_put(tape);
 
@@ -4860,7 +4852,7 @@ static int ide_tape_probe(ide_drive_t *drive)
 		printk(KERN_WARNING "ide-tape: Use drive %s with ide-scsi emulation and osst.\n", drive->name);
 		printk(KERN_WARNING "ide-tape: OnStream support will be removed soon from ide-tape!\n");
 	}
-	tape = (idetape_tape_t *) kzalloc (sizeof (idetape_tape_t), GFP_KERNEL);
+	tape = kzalloc(sizeof (idetape_tape_t), GFP_KERNEL);
 	if (tape == NULL) {
 		printk(KERN_ERR "ide-tape: %s: Can't allocate a tape structure\n", drive->name);
 		goto failed;

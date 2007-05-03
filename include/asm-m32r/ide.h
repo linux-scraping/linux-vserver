@@ -1,8 +1,6 @@
 #ifndef _ASM_M32R_IDE_H
 #define _ASM_M32R_IDE_H
 
-/* $Id$ */
-
 /*
  *  linux/include/asm-m32r/ide.h
  *
@@ -15,6 +13,7 @@
 
 #ifdef __KERNEL__
 
+#include <asm/m32r.h>
 
 #ifndef MAX_HWIFS
 # ifdef CONFIG_BLK_DEV_IDEPCI
@@ -24,15 +23,13 @@
 # endif
 #endif
 
-#include <asm/m32r.h>
-
-
 #define IDE_ARCH_OBSOLETE_DEFAULTS
 
 static __inline__ int ide_default_irq(unsigned long base)
 {
 	switch (base) {
-#if defined(CONFIG_PLAT_M32700UT) || defined(CONFIG_PLAT_MAPPI2)
+#if defined(CONFIG_PLAT_M32700UT) || defined(CONFIG_PLAT_MAPPI2) \
+	|| defined(CONFIG_PLAT_OPSPUT)
 		case 0x1f0: return PLD_IRQ_CFIREQ;
 		default:
 			return 0;

@@ -132,12 +132,11 @@ static void cs5520_tune_drive(ide_drive_t *drive, u8 pio)
 
 static int cs5520_config_drive_xfer_rate(ide_drive_t *drive)
 {
-	ide_hwif_t *hwif = HWIF(drive);
-
 	/* Tune the drive for PIO modes up to PIO 4 */	
 	cs5520_tune_drive(drive, 4);
+
 	/* Then tell the core to use DMA operations */
-	return hwif->ide_dma_on(drive);
+	return 0;
 }
 
 /*
@@ -260,7 +259,7 @@ static struct pci_driver driver = {
 	.probe		= cs5520_init_one,
 };
 
-static int cs5520_ide_init(void)
+static int __init cs5520_ide_init(void)
 {
 	return ide_pci_register_driver(&driver);
 }

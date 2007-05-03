@@ -25,6 +25,7 @@
  */
 
 #include <linux/pci.h>
+#include <scsi/scsi_host.h>
 
 #include "aic94xx.h"
 #include "aic94xx_reg.h"
@@ -439,6 +440,118 @@ static void escb_tasklet_complete(struct asd_ascb *ascb,
 			    ascb->scb->header.opcode);
 	}
 
+	/* Catch these before we mask off the sb_opcode bits */
+	switch (sb_opcode) {
+	case REQ_TASK_ABORT: {
+		struct asd_ascb *a, *b;
+		u16 tc_abort;
+		struct domain_device *failed_dev = NULL;
+
+		ASD_DPRINTK("%s: REQ_TASK_ABORT, reason=0x%X\n",
+			    __FUNCTION__, dl->status_block[3]);
+
+		/*
+		 * Find the task that caused the abort and abort it first.
+		 * The sequencer won't put anything on the done list until
+		 * that happens.
+		 */
+		tc_abort = *((u16*)(&dl->status_block[1]));
+		tc_abort = le16_to_cpu(tc_abort);
+
+		list_for_each_entry_safe(a, b, &asd_ha->seq.pend_q, list) {
+			struct sas_task *task = ascb->uldd_task;
+
+			if (task && a->tc_index == tc_abort) {
+				failed_dev = task->dev;
+				sas_task_abort(task);
+				break;
+			}
+		}
+
+		if (!failed_dev) {
+			ASD_DPRINTK("%s: Can't find task (tc=%d) to abort!\n",
+				    __FUNCTION__, tc_abort);
+			goto out;
+		}
+
+		/*
+		 * Now abort everything else for that device (hba?) so
+		 * that the EH will wake up and do something.
+		 */
+		list_for_each_entry_safe(a, b, &asd_ha->seq.pend_q, list) {
+			struct sas_task *task = ascb->uldd_task;
+
+			if (task &&
+			    task->dev == failed_dev &&
+			    a->tc_index != tc_abort)
+				sas_task_abort(task);
+		}
+
+		goto out;
+	}
+	case REQ_DEVICE_RESET: {
+		struct asd_ascb *a;
+		u16 conn_handle;
+		unsigned long flags;
+		struct sas_task *last_dev_task = NULL;
+
+		conn_handle = *((u16*)(&dl->status_block[1]));
+		conn_handle = le16_to_cpu(conn_handle);
+
+		ASD_DPRINTK("%s: REQ_DEVICE_RESET, reason=0x%X\n", __FUNCTION__,
+			    dl->status_block[3]);
+
+		/* Find the last pending task for the device... */
+		list_for_each_entry(a, &asd_ha->seq.pend_q, list) {
+			u16 x;
+			struct domain_device *dev;
+			struct sas_task *task = a->uldd_task;
+
+			if (!task)
+				continue;
+			dev = task->dev;
+
+			x = (unsigned long)dev->lldd_dev;
+			if (x == conn_handle)
+				last_dev_task = task;
+		}
+
+		if (!last_dev_task) {
+			ASD_DPRINTK("%s: Device reset for idle device %d?\n",
+				    __FUNCTION__, conn_handle);
+			goto out;
+		}
+
+		/* ...and set the reset flag */
+		spin_lock_irqsave(&last_dev_task->task_state_lock, flags);
+		last_dev_task->task_state_flags |= SAS_TASK_NEED_DEV_RESET;
+		spin_unlock_irqrestore(&last_dev_task->task_state_lock, flags);
+
+		/* Kill all pending tasks for the device */
+		list_for_each_entry(a, &asd_ha->seq.pend_q, list) {
+			u16 x;
+			struct domain_device *dev;
+			struct sas_task *task = a->uldd_task;
+
+			if (!task)
+				continue;
+			dev = task->dev;
+
+			x = (unsigned long)dev->lldd_dev;
+			if (x == conn_handle)
+				sas_task_abort(task);
+		}
+
+		goto out;
+	}
+	case SIGNAL_NCQ_ERROR:
+		ASD_DPRINTK("%s: SIGNAL_NCQ_ERROR\n", __FUNCTION__);
+		goto out;
+	case CLEAR_NCQ_ERROR:
+		ASD_DPRINTK("%s: CLEAR_NCQ_ERROR\n", __FUNCTION__);
+		goto out;
+	}
+
 	sb_opcode &= ~DL_PHY_MASK;
 
 	switch (sb_opcode) {
@@ -469,22 +582,6 @@ static void escb_tasklet_complete(struct asd_ascb *ascb,
 		asd_deform_port(asd_ha, phy);
 		sas_ha->notify_port_event(sas_phy, PORTE_TIMER_EVENT);
 		break;
-	case REQ_TASK_ABORT:
-		ASD_DPRINTK("%s: phy%d: REQ_TASK_ABORT\n", __FUNCTION__,
-			    phy_id);
-		break;
-	case REQ_DEVICE_RESET:
-		ASD_DPRINTK("%s: phy%d: REQ_DEVICE_RESET\n", __FUNCTION__,
-			    phy_id);
-		break;
-	case SIGNAL_NCQ_ERROR:
-		ASD_DPRINTK("%s: phy%d: SIGNAL_NCQ_ERROR\n", __FUNCTION__,
-			    phy_id);
-		break;
-	case CLEAR_NCQ_ERROR:
-		ASD_DPRINTK("%s: phy%d: CLEAR_NCQ_ERROR\n", __FUNCTION__,
-			    phy_id);
-		break;
 	default:
 		ASD_DPRINTK("%s: phy%d: unknown event:0x%x\n", __FUNCTION__,
 			    phy_id, sb_opcode);
@@ -504,7 +601,7 @@ static void escb_tasklet_complete(struct asd_ascb *ascb,
 
 		break;
 	}
-
+out:
 	asd_invalidate_edb(ascb, edb);
 }
 

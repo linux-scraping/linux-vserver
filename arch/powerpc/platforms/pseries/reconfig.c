@@ -268,11 +268,10 @@ static char * parse_next_property(char *buf, char *end, char **name, int *length
 static struct property *new_property(const char *name, const int length,
 				     const unsigned char *value, struct property *last)
 {
-	struct property *new = kmalloc(sizeof(*new), GFP_KERNEL);
+	struct property *new = kzalloc(sizeof(*new), GFP_KERNEL);
 
 	if (!new)
 		return NULL;
-	memset(new, 0, sizeof(*new));
 
 	if (!(new->name = kmalloc(strlen(name) + 1, GFP_KERNEL)))
 		goto cleanup;
@@ -500,7 +499,7 @@ out:
 	return rv ? rv : count;
 }
 
-static struct file_operations ofdt_fops = {
+static const struct file_operations ofdt_fops = {
 	.write = ofdt_write
 };
 
@@ -514,7 +513,6 @@ static int proc_ppc64_create_ofdt(void)
 
 	ent = create_proc_entry("ppc64/ofdt", S_IWUSR, NULL);
 	if (ent) {
-		ent->nlink = 1;
 		ent->data = NULL;
 		ent->size = 0;
 		ent->proc_fops = &ofdt_fops;

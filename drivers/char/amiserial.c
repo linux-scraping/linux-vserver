@@ -104,7 +104,7 @@ static struct async_struct *IRQ_ports;
 
 static unsigned char current_ctl_bits;
 
-static void change_speed(struct async_struct *info, struct termios *old);
+static void change_speed(struct async_struct *info, struct ktermios *old);
 static void rs_wait_until_sent(struct tty_struct *tty, int timeout);
 
 
@@ -527,10 +527,8 @@ static void do_softint(unsigned long private_)
 	if (!tty)
 		return;
 
-	if (test_and_clear_bit(RS_EVENT_WRITE_WAKEUP, &info->event)) {
+	if (test_and_clear_bit(RS_EVENT_WRITE_WAKEUP, &info->event))
 		tty_wakeup(tty);
-		wake_up_interruptible(&tty->write_wait);
-	}
 }
 
 /*
@@ -694,7 +692,7 @@ static void shutdown(struct async_struct * info)
  * the specified baud rate for a serial port.
  */
 static void change_speed(struct async_struct *info,
-			 struct termios *old_termios)
+			 struct ktermios *old_termios)
 {
 	int	quot = 0, baud_base, baud;
 	unsigned cflag, cval = 0;
@@ -904,8 +902,7 @@ static int rs_write(struct tty_struct * tty, const unsigned char *buf, int count
 	if (!info->xmit.buf)
 		return 0;
 
-	local_save_flags(flags);
-	local_irq_disable();
+	local_irq_save(flags);
 	while (1) {
 		c = CIRC_SPACE_TO_END(info->xmit.head,
 				      info->xmit.tail,
@@ -968,7 +965,6 @@ static void rs_flush_buffer(struct tty_struct *tty)
 	local_irq_save(flags);
 	info->xmit.head = info->xmit.tail = 0;
 	local_irq_restore(flags);
-	wake_up_interruptible(&tty->write_wait);
 	tty_wakeup(tty);
 }
 
@@ -1365,7 +1361,7 @@ static int rs_ioctl(struct tty_struct *tty, struct file * file,
 	return 0;
 }
 
-static void rs_set_termios(struct tty_struct *tty, struct termios *old_termios)
+static void rs_set_termios(struct tty_struct *tty, struct ktermios *old_termios)
 {
 	struct async_struct *info = (struct async_struct *)tty->driver_data;
 	unsigned long flags;

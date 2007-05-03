@@ -13,6 +13,7 @@
 #include <linux/uts.h>
 #include <linux/utsname.h>
 #include <linux/version.h>
+#include <linux/vserver/global.h>
 
 /*
  * Clone a new ns copying an original utsname, setting refcount to 1
@@ -27,6 +28,7 @@ static struct uts_namespace *clone_uts_ns(struct uts_namespace *old_ns)
 	if (ns) {
 		memcpy(&ns->name, &old_ns->name, sizeof(ns->name));
 		kref_init(&ns->kref);
+		atomic_inc(&vs_global_uts_ns);
 	}
 	return ns;
 }
@@ -91,5 +93,6 @@ void free_uts_ns(struct kref *kref)
 	struct uts_namespace *ns;
 
 	ns = container_of(kref, struct uts_namespace, kref);
+	atomic_dec(&vs_global_uts_ns);
 	kfree(ns);
 }

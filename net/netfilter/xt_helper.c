@@ -24,6 +24,7 @@
 #endif
 #include <linux/netfilter/x_tables.h>
 #include <linux/netfilter/xt_helper.h>
+#include <net/netfilter/nf_conntrack_compat.h>
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Martin Josefsson <gandalf@netfilter.org>");
@@ -52,7 +53,7 @@ match(const struct sk_buff *skb,
 	struct ip_conntrack *ct;
 	enum ip_conntrack_info ctinfo;
 	int ret = info->invert;
-	
+
 	ct = ip_conntrack_get((struct sk_buff *)skb, &ctinfo);
 	if (!ct) {
 		DEBUGP("xt_helper: Eek! invalid conntrack?\n");
@@ -66,19 +67,19 @@ match(const struct sk_buff *skb,
 
 	read_lock_bh(&ip_conntrack_lock);
 	if (!ct->master->helper) {
-		DEBUGP("xt_helper: master ct %p has no helper\n", 
+		DEBUGP("xt_helper: master ct %p has no helper\n",
 			exp->expectant);
 		goto out_unlock;
 	}
 
-	DEBUGP("master's name = %s , info->name = %s\n", 
+	DEBUGP("master's name = %s , info->name = %s\n",
 		ct->master->helper->name, info->name);
 
 	if (info->name[0] == '\0')
 		ret ^= 1;
 	else
-		ret ^= !strncmp(ct->master->helper->name, info->name, 
-		                strlen(ct->master->helper->name));
+		ret ^= !strncmp(ct->master->helper->name, info->name,
+				strlen(ct->master->helper->name));
 out_unlock:
 	read_unlock_bh(&ip_conntrack_lock);
 	return ret;
@@ -101,7 +102,7 @@ match(const struct sk_buff *skb,
 	struct nf_conn_help *master_help;
 	enum ip_conntrack_info ctinfo;
 	int ret = info->invert;
-	
+
 	ct = nf_ct_get((struct sk_buff *)skb, &ctinfo);
 	if (!ct) {
 		DEBUGP("xt_helper: Eek! invalid conntrack?\n");
@@ -116,19 +117,19 @@ match(const struct sk_buff *skb,
 	read_lock_bh(&nf_conntrack_lock);
 	master_help = nfct_help(ct->master);
 	if (!master_help || !master_help->helper) {
-		DEBUGP("xt_helper: master ct %p has no helper\n", 
+		DEBUGP("xt_helper: master ct %p has no helper\n",
 			exp->expectant);
 		goto out_unlock;
 	}
 
-	DEBUGP("master's name = %s , info->name = %s\n", 
+	DEBUGP("master's name = %s , info->name = %s\n",
 		ct->master->helper->name, info->name);
 
 	if (info->name[0] == '\0')
 		ret ^= 1;
 	else
 		ret ^= !strncmp(master_help->helper->name, info->name,
-		                strlen(master_help->helper->name));
+				strlen(master_help->helper->name));
 out_unlock:
 	read_unlock_bh(&nf_conntrack_lock);
 	return ret;
@@ -143,13 +144,11 @@ static int check(const char *tablename,
 {
 	struct xt_helper_info *info = matchinfo;
 
-#if defined(CONFIG_NF_CONNTRACK) || defined(CONFIG_NF_CONNTRACK_MODULE)
 	if (nf_ct_l3proto_try_module_get(match->family) < 0) {
-		printk(KERN_WARNING "can't load nf_conntrack support for "
+		printk(KERN_WARNING "can't load conntrack support for "
 				    "proto=%d\n", match->family);
 		return 0;
 	}
-#endif
 	info->name[29] = '\0';
 	return 1;
 }
@@ -157,9 +156,7 @@ static int check(const char *tablename,
 static void
 destroy(const struct xt_match *match, void *matchinfo)
 {
-#if defined(CONFIG_NF_CONNTRACK) || defined(CONFIG_NF_CONNTRACK_MODULE)
 	nf_ct_l3proto_module_put(match->family);
-#endif
 }
 
 static struct xt_match xt_helper_match[] = {
@@ -185,7 +182,6 @@ static struct xt_match xt_helper_match[] = {
 
 static int __init xt_helper_init(void)
 {
-	need_conntrack();
 	return xt_register_matches(xt_helper_match,
 				   ARRAY_SIZE(xt_helper_match));
 }

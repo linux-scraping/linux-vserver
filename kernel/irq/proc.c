@@ -16,26 +16,6 @@ static struct proc_dir_entry *root_irq_dir;
 
 #ifdef CONFIG_SMP
 
-#ifdef CONFIG_GENERIC_PENDING_IRQ
-void proc_set_irq_affinity(unsigned int irq, cpumask_t mask_val)
-{
-	set_balance_irq_affinity(irq, mask_val);
-
-	/*
-	 * Save these away for later use. Re-progam when the
-	 * interrupt is pending
-	 */
-	set_pending_irq(irq, mask_val);
-}
-#else
-void proc_set_irq_affinity(unsigned int irq, cpumask_t mask_val)
-{
-	set_balance_irq_affinity(irq, mask_val);
-	irq_desc[irq].affinity = mask_val;
-	irq_desc[irq].chip->set_affinity(irq, mask_val);
-}
-#endif
-
 static int irq_affinity_read_proc(char *page, char **start, off_t off,
 				  int count, int *eof, void *data)
 {
@@ -54,7 +34,8 @@ static int irq_affinity_write_proc(struct file *file, const char __user *buffer,
 	unsigned int irq = (int)(long)data, full_count = count, err;
 	cpumask_t new_value, tmp;
 
-	if (!irq_desc[irq].chip->set_affinity || no_irq_affinity)
+	if (!irq_desc[irq].chip->set_affinity || no_irq_affinity ||
+	    irq_balancing_disabled(irq))
 		return -EIO;
 
 	err = cpumask_parse_user(buffer, count, new_value);
@@ -72,7 +53,7 @@ static int irq_affinity_write_proc(struct file *file, const char __user *buffer,
 		   code to set default SMP affinity. */
 		return select_smp_affinity(irq) ? -EINVAL : full_count;
 
-	proc_set_irq_affinity(irq, new_value);
+	irq_set_affinity(irq, new_value);
 
 	return full_count;
 }
@@ -135,7 +116,6 @@ void register_irq_proc(unsigned int irq)
 		entry = create_proc_entry("smp_affinity", 0600, irq_desc[irq].dir);
 
 		if (entry) {
-			entry->nlink = 1;
 			entry->data = (void *)(long)irq;
 			entry->read_proc = irq_affinity_read_proc;
 			entry->write_proc = irq_affinity_write_proc;

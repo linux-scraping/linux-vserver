@@ -81,14 +81,14 @@ static void proc_read_inode(struct inode * inode)
 	inode->i_mtime = inode->i_atime = inode->i_ctime = CURRENT_TIME;
 }
 
-static kmem_cache_t * proc_inode_cachep;
+static struct kmem_cache * proc_inode_cachep;
 
 static struct inode *proc_alloc_inode(struct super_block *sb)
 {
 	struct proc_inode *ei;
 	struct inode *inode;
 
-	ei = (struct proc_inode *)kmem_cache_alloc(proc_inode_cachep, SLAB_KERNEL);
+	ei = (struct proc_inode *)kmem_cache_alloc(proc_inode_cachep, GFP_KERNEL);
 	if (!ei)
 		return NULL;
 	ei->pid = NULL;
@@ -105,7 +105,7 @@ static void proc_destroy_inode(struct inode *inode)
 	kmem_cache_free(proc_inode_cachep, PROC_I(inode));
 }
 
-static void init_once(void * foo, kmem_cache_t * cachep, unsigned long flags)
+static void init_once(void * foo, struct kmem_cache * cachep, unsigned long flags)
 {
 	struct proc_inode *ei = (struct proc_inode *) foo;
 
@@ -132,7 +132,7 @@ static int proc_remount(struct super_block *sb, int *flags, char *data)
 	return 0;
 }
 
-static struct super_operations proc_sops = { 
+static const struct super_operations proc_sops = {
 	.alloc_inode	= proc_alloc_inode,
 	.destroy_inode	= proc_destroy_inode,
 	.read_inode	= proc_read_inode,
@@ -161,6 +161,7 @@ struct inode *proc_get_inode(struct super_block *sb, unsigned int ino,
 	if (!inode)
 		goto out_ino;
 
+	PROC_I(inode)->fd = 0;
 	PROC_I(inode)->pde = de;
 	if (de) {
 		if (de->mode) {

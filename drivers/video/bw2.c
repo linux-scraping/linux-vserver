@@ -186,8 +186,7 @@ static int bw2_ioctl(struct fb_info *info, unsigned int cmd, unsigned long arg)
  *  Initialisation
  */
 
-static void
-bw2_init_fix(struct fb_info *info, int linebytes)
+static void __devinit bw2_init_fix(struct fb_info *info, int linebytes)
 {
 	strlcpy(info->fix.id, "bwtwo", sizeof(info->fix.id));
 
@@ -199,43 +198,44 @@ bw2_init_fix(struct fb_info *info, int linebytes)
 	info->fix.accel = FB_ACCEL_SUN_BWTWO;
 }
 
-static u8 bw2regs_1600[] __initdata = {
+static u8 bw2regs_1600[] __devinitdata = {
 	0x14, 0x8b,	0x15, 0x28,	0x16, 0x03,	0x17, 0x13,
 	0x18, 0x7b,	0x19, 0x05,	0x1a, 0x34,	0x1b, 0x2e,
 	0x1c, 0x00,	0x1d, 0x0a,	0x1e, 0xff,	0x1f, 0x01,
 	0x10, 0x21,	0
 };
 
-static u8 bw2regs_ecl[] __initdata = {
+static u8 bw2regs_ecl[] __devinitdata = {
 	0x14, 0x65,	0x15, 0x1e,	0x16, 0x04,	0x17, 0x0c,
 	0x18, 0x5e,	0x19, 0x03,	0x1a, 0xa7,	0x1b, 0x23,
 	0x1c, 0x00,	0x1d, 0x08,	0x1e, 0xff,	0x1f, 0x01,
 	0x10, 0x20,	0
 };
 
-static u8 bw2regs_analog[] __initdata = {
+static u8 bw2regs_analog[] __devinitdata = {
 	0x14, 0xbb,	0x15, 0x2b,	0x16, 0x03,	0x17, 0x13,
 	0x18, 0xb0,	0x19, 0x03,	0x1a, 0xa6,	0x1b, 0x22,
 	0x1c, 0x01,	0x1d, 0x05,	0x1e, 0xff,	0x1f, 0x01,
 	0x10, 0x20,	0
 };
 
-static u8 bw2regs_76hz[] __initdata = {
+static u8 bw2regs_76hz[] __devinitdata = {
 	0x14, 0xb7,	0x15, 0x27,	0x16, 0x03,	0x17, 0x0f,
 	0x18, 0xae,	0x19, 0x03,	0x1a, 0xae,	0x1b, 0x2a,
 	0x1c, 0x01,	0x1d, 0x09,	0x1e, 0xff,	0x1f, 0x01,
 	0x10, 0x24,	0
 };
 
-static u8 bw2regs_66hz[] __initdata = {
+static u8 bw2regs_66hz[] __devinitdata = {
 	0x14, 0xbb,	0x15, 0x2b,	0x16, 0x04,	0x17, 0x14,
 	0x18, 0xae,	0x19, 0x03,	0x1a, 0xa8,	0x1b, 0x24,
 	0x1c, 0x01,	0x1d, 0x05,	0x1e, 0xff,	0x1f, 0x01,
 	0x10, 0x20,	0
 };
 
-static void bw2_do_default_mode(struct bw2_par *par, struct fb_info *info,
-				int *linebytes)
+static void __devinit bw2_do_default_mode(struct bw2_par *par,
+					  struct fb_info *info,
+					  int *linebytes)
 {
 	u8 status, mon;
 	u8 *p;
@@ -320,7 +320,7 @@ static int __devinit bw2_init_one(struct of_device *op)
 	all->info.fbops = &bw2_ops;
 
 	all->info.screen_base =
-		sbus_ioremap(&op->resource[0], 0, all->par.fbsize, "bw2 ram");
+		of_ioremap(&op->resource[0], 0, all->par.fbsize, "bw2 ram");
 	all->info.par = &all->par;
 
 	bw2_blank(0, &all->info);
@@ -329,8 +329,10 @@ static int __devinit bw2_init_one(struct of_device *op)
 
 	err= register_framebuffer(&all->info);
 	if (err < 0) {
-		of_iounmap(all->par.regs, sizeof(struct bw2_regs));
-		of_iounmap(all->info.screen_base, all->par.fbsize);
+		of_iounmap(&op->resource[0],
+			   all->par.regs, sizeof(struct bw2_regs));
+		of_iounmap(&op->resource[0],
+			   all->info.screen_base, all->par.fbsize);
 		kfree(all);
 		return err;
 	}
@@ -351,18 +353,18 @@ static int __devinit bw2_probe(struct of_device *dev, const struct of_device_id 
 	return bw2_init_one(op);
 }
 
-static int __devexit bw2_remove(struct of_device *dev)
+static int __devexit bw2_remove(struct of_device *op)
 {
-	struct all_info *all = dev_get_drvdata(&dev->dev);
+	struct all_info *all = dev_get_drvdata(&op->dev);
 
 	unregister_framebuffer(&all->info);
 
-	of_iounmap(all->par.regs, sizeof(struct bw2_regs));
-	of_iounmap(all->info.screen_base, all->par.fbsize);
+	of_iounmap(&op->resource[0], all->par.regs, sizeof(struct bw2_regs));
+	of_iounmap(&op->resource[0], all->info.screen_base, all->par.fbsize);
 
 	kfree(all);
 
-	dev_set_drvdata(&dev->dev, NULL);
+	dev_set_drvdata(&op->dev, NULL);
 
 	return 0;
 }

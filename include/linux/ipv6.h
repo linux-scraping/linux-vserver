@@ -177,6 +177,7 @@ struct ipv6_devconf {
 #endif
 #endif
 	__s32		proxy_ndp;
+	__s32		accept_source_route;
 	void		*sysctl;
 };
 
@@ -205,6 +206,8 @@ enum {
 	DEVCONF_RTR_PROBE_INTERVAL,
 	DEVCONF_ACCEPT_RA_RT_INFO_MAX_PLEN,
 	DEVCONF_PROXY_NDP,
+	__DEVCONF_OPTIMISTIC_DAD,
+	DEVCONF_ACCEPT_SOURCE_ROUTE,
 	DEVCONF_MAX
 };
 
@@ -274,7 +277,7 @@ struct ipv6_pinfo {
 	struct in6_addr		*saddr_cache;
 #endif
 
-	__u32			flow_label;
+	__be32			flow_label;
 	__u32			frag_size;
 	__s16			hop_limit;
 	__s16			mcast_hops;

@@ -106,8 +106,10 @@ static int jdccp_sendmsg(struct kiocb *iocb, struct sock *sk,
 }
 
 static struct jprobe dccp_send_probe = {
-	.kp	= { .addr = (kprobe_opcode_t *)&dccp_sendmsg, },
-	.entry	= (kprobe_opcode_t *)&jdccp_sendmsg,
+	.kp	= {
+		.symbol_name = "dccp_sendmsg",
+	},
+	.entry	= JPROBE_ENTRY(jdccp_sendmsg),
 };
 
 static int dccpprobe_open(struct inode *inode, struct file *file)
@@ -147,7 +149,7 @@ out_free:
 	return error ? error : cnt;
 }
 
-static struct file_operations dccpprobe_fops = {
+static const struct file_operations dccpprobe_fops = {
 	.owner	 = THIS_MODULE,
 	.open	 = dccpprobe_open,
 	.read    = dccpprobe_read,

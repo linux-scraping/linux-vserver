@@ -8,6 +8,7 @@
 
 #include <linux/types.h>
 #include <linux/init.h>
+#include <linux/random.h>
 #include <linux/netfilter.h>
 #include <linux/ip.h>
 #include <linux/udp.h>
@@ -74,6 +75,10 @@ udp_unique_tuple(struct ip_conntrack_tuple *tuple,
 		range_size = ntohs(range->max.udp.port) - min + 1;
 	}
 
+	/* Start from random port to avoid prediction */
+	if (range->flags & IP_NAT_RANGE_PROTO_RANDOM)
+		port = net_random();
+
 	for (i = 0; i < range_size; i++, port++) {
 		*portptr = htons(min + port % range_size);
 		if (!ip_nat_used_tuple(tuple, conntrack))
@@ -115,13 +120,10 @@ udp_manip_pkt(struct sk_buff **pskb,
 	}
 
 	if (hdr->check || (*pskb)->ip_summed == CHECKSUM_PARTIAL) {
-		hdr->check = nf_proto_csum_update(*pskb, ~oldip, newip,
-						  hdr->check, 1);
-		hdr->check = nf_proto_csum_update(*pskb,
-						  *portptr ^ htons(0xFFFF), newport,
-						  hdr->check, 0);
+		nf_proto_csum_replace4(&hdr->check, *pskb, oldip, newip, 1);
+		nf_proto_csum_replace2(&hdr->check, *pskb, *portptr, newport, 0);
 		if (!hdr->check)
-			hdr->check = -1;
+			hdr->check = CSUM_MANGLED_0;
 	}
 	*portptr = newport;
 	return 1;

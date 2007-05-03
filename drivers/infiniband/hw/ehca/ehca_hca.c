@@ -50,7 +50,7 @@ int ehca_query_device(struct ib_device *ibdev, struct ib_device_attr *props)
 					      ib_device);
 	struct hipz_query_hca *rblock;
 
-	rblock = ehca_alloc_fw_ctrlblock();
+	rblock = ehca_alloc_fw_ctrlblock(GFP_KERNEL);
 	if (!rblock) {
 		ehca_err(&shca->ib_device, "Can't allocate rblock memory.");
 		return -ENOMEM;
@@ -110,7 +110,7 @@ int ehca_query_port(struct ib_device *ibdev,
 					      ib_device);
 	struct hipz_query_port *rblock;
 
-	rblock = ehca_alloc_fw_ctrlblock();
+	rblock = ehca_alloc_fw_ctrlblock(GFP_KERNEL);
 	if (!rblock) {
 		ehca_err(&shca->ib_device, "Can't allocate rblock memory.");
 		return -ENOMEM;
@@ -162,6 +162,9 @@ int ehca_query_port(struct ib_device *ibdev,
 	props->active_width    = IB_WIDTH_12X;
 	props->active_speed    = 0x1;
 
+	/* at the moment (logical) link state is always LINK_UP */
+	props->phys_state      = 0x5;
+
 query_port1:
 	ehca_free_fw_ctrlblock(rblock);
 
@@ -179,7 +182,7 @@ int ehca_query_pkey(struct ib_device *ibdev, u8 port, u16 index, u16 *pkey)
 		return -EINVAL;
 	}
 
-	rblock = ehca_alloc_fw_ctrlblock();
+	rblock = ehca_alloc_fw_ctrlblock(GFP_KERNEL);
 	if (!rblock) {
 		ehca_err(&shca->ib_device,  "Can't allocate rblock memory.");
 		return -ENOMEM;
@@ -212,7 +215,7 @@ int ehca_query_gid(struct ib_device *ibdev, u8 port,
 		return -EINVAL;
 	}
 
-	rblock = ehca_alloc_fw_ctrlblock();
+	rblock = ehca_alloc_fw_ctrlblock(GFP_KERNEL);
 	if (!rblock) {
 		ehca_err(&shca->ib_device, "Can't allocate rblock memory.");
 		return -ENOMEM;

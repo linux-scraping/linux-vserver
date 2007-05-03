@@ -1523,12 +1523,11 @@ static int garmin_attach (struct usb_serial *serial)
 
 	dbg("%s", __FUNCTION__);
 
-	garmin_data_p = kmalloc (sizeof(struct garmin_data), GFP_KERNEL);
+	garmin_data_p = kzalloc(sizeof(struct garmin_data), GFP_KERNEL);
 	if (garmin_data_p == NULL) {
 		dev_err(&port->dev, "%s - Out of memory\n", __FUNCTION__);
 		return -ENOMEM;
 	}
-	memset (garmin_data_p, 0, sizeof(struct garmin_data));
 	init_timer(&garmin_data_p->timer);
 	spin_lock_init(&garmin_data_p->lock);
 	INIT_LIST_HEAD(&garmin_data_p->pktlist);
@@ -1567,6 +1566,7 @@ static struct usb_serial_driver garmin_device = {
 		.name        = "garmin_gps",
 	},
 	.description         = "Garmin GPS usb/tty",
+	.usb_driver          = &garmin_driver,
 	.id_table            = id_table,
 	.num_interrupt_in    = 1,
 	.num_bulk_in         = 1,

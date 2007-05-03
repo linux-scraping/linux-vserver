@@ -20,7 +20,6 @@
 
 #include <linux/module.h>
 #include <linux/signal.h>
-#include <linux/sched.h>
 #include <linux/ioport.h>
 #include <linux/init.h>
 #include <linux/blkdev.h>
@@ -41,9 +40,9 @@
 #define REAL_DMA
 
 #include "scsi.h"
+#include "initio.h"
 #include <scsi/scsi_host.h>
 #include "sun3_scsi.h"
-#include "NCR5380.h"
 
 extern int sun3_map_test(unsigned long, char *);
 

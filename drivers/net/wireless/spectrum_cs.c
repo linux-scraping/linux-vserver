@@ -647,21 +647,6 @@ spectrum_cs_config(struct pcmcia_device *link)
 	cisparse_t parse;
 	void __iomem *mem;
 
-	/*
-	 * This reads the card's CONFIG tuple to find its
-	 * configuration registers.
-	 */
-	tuple.DesiredTuple = CISTPL_CONFIG;
-	tuple.Attributes = 0;
-	tuple.TupleData = buf;
-	tuple.TupleDataMax = sizeof(buf);
-	tuple.TupleOffset = 0;
-	CS_CHECK(GetFirstTuple, pcmcia_get_first_tuple(link, &tuple));
-	CS_CHECK(GetTupleData, pcmcia_get_tuple_data(link, &tuple));
-	CS_CHECK(ParseTuple, pcmcia_parse_tuple(link, &tuple, &parse));
-	link->conf.ConfigBase = parse.config.base;
-	link->conf.Present = parse.config.rmask[0];
-
 	/* Look up the current Vcc */
 	CS_CHECK(GetConfigurationInfo,
 		 pcmcia_get_configuration_info(link, &conf));
@@ -681,6 +666,10 @@ spectrum_cs_config(struct pcmcia_device *link)
 	 * implementation-defined details.
 	 */
 	tuple.DesiredTuple = CISTPL_CFTABLE_ENTRY;
+	tuple.Attributes = 0;
+	tuple.TupleData = buf;
+	tuple.TupleDataMax = sizeof(buf);
+	tuple.TupleOffset = 0;
 	CS_CHECK(GetFirstTuple, pcmcia_get_first_tuple(link, &tuple));
 	while (1) {
 		cistpl_cftable_entry_t *cfg = &(parse.cftable_entry);
@@ -817,7 +806,7 @@ spectrum_cs_config(struct pcmcia_device *link)
 
 	/* Finally, report what we've done */
 	printk(KERN_DEBUG "%s: " DRIVER_NAME " at %s, irq %d, io "
-	       "0x%04x-0x%04x\n", dev->name, dev->class_dev.dev->bus_id,
+	       "0x%04x-0x%04x\n", dev->name, dev->dev.parent->bus_id,
 	       link->irq.AssignedIRQ, link->io.BasePort1,
 	       link->io.BasePort1 + link->io.NumPorts1 - 1);
 

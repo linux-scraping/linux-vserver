@@ -72,11 +72,10 @@ static struct configfs_dirent *configfs_new_dirent(struct configfs_dirent * pare
 {
 	struct configfs_dirent * sd;
 
-	sd = kmem_cache_alloc(configfs_dir_cachep, GFP_KERNEL);
+	sd = kmem_cache_zalloc(configfs_dir_cachep, GFP_KERNEL);
 	if (!sd)
 		return NULL;
 
-	memset(sd, 0, sizeof(*sd));
 	atomic_set(&sd->s_count, 1);
 	INIT_LIST_HEAD(&sd->s_links);
 	INIT_LIST_HEAD(&sd->s_children);
@@ -93,8 +92,8 @@ static struct configfs_dirent *configfs_new_dirent(struct configfs_dirent * pare
  *
  * called with parent inode's i_mutex held
  */
-int configfs_dirent_exists(struct configfs_dirent *parent_sd,
-			   const unsigned char *new)
+static int configfs_dirent_exists(struct configfs_dirent *parent_sd,
+				  const unsigned char *new)
 {
 	struct configfs_dirent * sd;
 
@@ -931,7 +930,7 @@ static int configfs_rmdir(struct inode *dir, struct dentry *dentry)
 	return 0;
 }
 
-struct inode_operations configfs_dir_inode_operations = {
+const struct inode_operations configfs_dir_inode_operations = {
 	.mkdir		= configfs_mkdir,
 	.rmdir		= configfs_rmdir,
 	.symlink	= configfs_symlink,
@@ -980,7 +979,7 @@ int configfs_rename_dir(struct config_item * item, const char *new_name)
 
 static int configfs_dir_open(struct inode *inode, struct file *file)
 {
-	struct dentry * dentry = file->f_dentry;
+	struct dentry * dentry = file->f_path.dentry;
 	struct configfs_dirent * parent_sd = dentry->d_fsdata;
 
 	mutex_lock(&dentry->d_inode->i_mutex);
@@ -993,7 +992,7 @@ static int configfs_dir_open(struct inode *inode, struct file *file)
 
 static int configfs_dir_close(struct inode *inode, struct file *file)
 {
-	struct dentry * dentry = file->f_dentry;
+	struct dentry * dentry = file->f_path.dentry;
 	struct configfs_dirent * cursor = file->private_data;
 
 	mutex_lock(&dentry->d_inode->i_mutex);
@@ -1013,7 +1012,7 @@ static inline unsigned char dt_type(struct configfs_dirent *sd)
 
 static int configfs_readdir(struct file * filp, void * dirent, filldir_t filldir)
 {
-	struct dentry *dentry = filp->f_dentry;
+	struct dentry *dentry = filp->f_path.dentry;
 	struct configfs_dirent * parent_sd = dentry->d_fsdata;
 	struct configfs_dirent *cursor = filp->private_data;
 	struct list_head *p, *q = &cursor->s_sibling;
@@ -1070,7 +1069,7 @@ static int configfs_readdir(struct file * filp, void * dirent, filldir_t filldir
 
 static loff_t configfs_dir_lseek(struct file * file, loff_t offset, int origin)
 {
-	struct dentry * dentry = file->f_dentry;
+	struct dentry * dentry = file->f_path.dentry;
 
 	mutex_lock(&dentry->d_inode->i_mutex);
 	switch (origin) {
@@ -1080,7 +1079,7 @@ static loff_t configfs_dir_lseek(struct file * file, loff_t offset, int origin)
 			if (offset >= 0)
 				break;
 		default:
-			mutex_unlock(&file->f_dentry->d_inode->i_mutex);
+			mutex_unlock(&file->f_path.dentry->d_inode->i_mutex);
 			return -EINVAL;
 	}
 	if (offset != file->f_pos) {
@@ -1142,25 +1141,22 @@ int configfs_register_subsystem(struct configfs_subsystem *subsys)
 
 	err = -ENOMEM;
 	dentry = d_alloc(configfs_sb->s_root, &name);
-	if (!dentry)
-		goto out_release;
+	if (dentry) {
+		d_add(dentry, NULL);
 
-	d_add(dentry, NULL);
-
-	err = configfs_attach_group(sd->s_element, &group->cg_item,
-				    dentry);
-	if (!err)
-		dentry = NULL;
-	else
-		d_delete(dentry);
+		err = configfs_attach_group(sd->s_element, &group->cg_item,
+					    dentry);
+		if (err) {
+			d_delete(dentry);
+			dput(dentry);
+		}
+	}
 
 	mutex_unlock(&configfs_sb->s_root->d_inode->i_mutex);
 
-	if (dentry) {
-	    dput(dentry);
-out_release:
-	    unlink_group(group);
-	    configfs_release_fs();
+	if (err) {
+		unlink_group(group);
+		configfs_release_fs();
 	}
 
 	return err;
@@ -1176,8 +1172,9 @@ void configfs_unregister_subsystem(struct configfs_subsystem *subsys)
 		return;
 	}
 
-	mutex_lock(&configfs_sb->s_root->d_inode->i_mutex);
-	mutex_lock(&dentry->d_inode->i_mutex);
+	mutex_lock_nested(&configfs_sb->s_root->d_inode->i_mutex,
+			  I_MUTEX_PARENT);
+	mutex_lock_nested(&dentry->d_inode->i_mutex, I_MUTEX_CHILD);
 	if (configfs_detach_prep(dentry)) {
 		printk(KERN_ERR "configfs: Tried to unregister non-empty subsystem!\n");
 	}

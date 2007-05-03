@@ -104,6 +104,7 @@
 #include <net/inet_connection_sock.h>
 #include <net/tcp.h>
 #include <net/udp.h>
+#include <net/udplite.h>
 #include <linux/skbuff.h>
 #include <net/sock.h>
 #include <net/raw.h>
@@ -205,7 +206,7 @@ int inet_listen(struct socket *sock, int backlog)
 	 * we can only allow the backlog to be adjusted.
 	 */
 	if (old_state != TCP_LISTEN) {
-		err = inet_csk_listen_start(sk, TCP_SYNQ_HSIZE);
+		err = inet_csk_listen_start(sk, backlog);
 		if (err)
 			goto out;
 	}
@@ -307,7 +308,7 @@ override:
 		sk->sk_reuse = 1;
 
 	inet = inet_sk(sk);
-	inet->is_icsk = INET_PROTOSW_ICSK & answer_flags;
+	inet->is_icsk = (INET_PROTOSW_ICSK & answer_flags) != 0;
 
 	if (SOCK_RAW == sock->type) {
 		inet->num = protocol;
@@ -590,7 +591,7 @@ int inet_stream_connect(struct socket *sock, struct sockaddr *uaddr,
 		if (err < 0)
 			goto out;
 
-  		sock->state = SS_CONNECTING;
+		sock->state = SS_CONNECTING;
 
 		/* Just entered SS_CONNECTING state; the only
 		 * difference is that return value in non-blocking
@@ -684,7 +685,7 @@ int inet_getname(struct socket *sock, struct sockaddr *uaddr,
 		sin->sin_port = inet->dport;
 		sin->sin_addr.s_addr = inet->daddr;
 	} else {
-		__u32 addr = inet->rcv_saddr;
+		__be32 addr = inet->rcv_saddr;
 		if (!addr)
 			addr = inet->saddr;
 		sin->sin_port = inet->sport;
@@ -918,36 +919,36 @@ static struct net_proto_family inet_family_ops = {
  */
 static struct inet_protosw inetsw_array[] =
 {
-        {
-                .type =       SOCK_STREAM,
-                .protocol =   IPPROTO_TCP,
-                .prot =       &tcp_prot,
-                .ops =        &inet_stream_ops,
-                .capability = -1,
-                .no_check =   0,
-                .flags =      INET_PROTOSW_PERMANENT |
+	{
+		.type =       SOCK_STREAM,
+		.protocol =   IPPROTO_TCP,
+		.prot =       &tcp_prot,
+		.ops =        &inet_stream_ops,
+		.capability = -1,
+		.no_check =   0,
+		.flags =      INET_PROTOSW_PERMANENT |
 			      INET_PROTOSW_ICSK,
-        },
+	},
 
-        {
-                .type =       SOCK_DGRAM,
-                .protocol =   IPPROTO_UDP,
-                .prot =       &udp_prot,
-                .ops =        &inet_dgram_ops,
-                .capability = -1,
-                .no_check =   UDP_CSUM_DEFAULT,
-                .flags =      INET_PROTOSW_PERMANENT,
+	{
+		.type =       SOCK_DGRAM,
+		.protocol =   IPPROTO_UDP,
+		.prot =       &udp_prot,
+		.ops =        &inet_dgram_ops,
+		.capability = -1,
+		.no_check =   UDP_CSUM_DEFAULT,
+		.flags =      INET_PROTOSW_PERMANENT,
        },
-        
+
 
        {
-               .type =       SOCK_RAW,
-               .protocol =   IPPROTO_IP,	/* wild card */
-               .prot =       &raw_prot,
-               .ops =        &inet_sockraw_ops,
-               .capability = CAP_NET_RAW,
-               .no_check =   UDP_CSUM_DEFAULT,
-               .flags =      INET_PROTOSW_REUSE,
+	       .type =       SOCK_RAW,
+	       .protocol =   IPPROTO_IP,	/* wild card */
+	       .prot =       &raw_prot,
+	       .ops =        &inet_sockraw_ops,
+	       .capability = CAP_NET_RAW,
+	       .no_check =   UDP_CSUM_DEFAULT,
+	       .flags =      INET_PROTOSW_REUSE,
        }
 };
 
@@ -986,7 +987,7 @@ void inet_register_protosw(struct inet_protosw *p)
 	/* Add the new entry after the last permanent entry if any, so that
 	 * the new entry does not override a permanent entry when matched with
 	 * a wild-card protocol. But it is allowed to override any existing
-	 * non-permanent entry.  This means that when we remove this entry, the 
+	 * non-permanent entry.  This means that when we remove this entry, the
 	 * system automatically returns to the old behavior.
 	 */
 	list_add_rcu(&p->list, last_perm);
@@ -1035,8 +1036,8 @@ static int inet_sk_reselect_saddr(struct sock *sk)
 	struct inet_sock *inet = inet_sk(sk);
 	int err;
 	struct rtable *rt;
-	__u32 old_saddr = inet->saddr;
-	__u32 new_saddr;
+	__be32 old_saddr = inet->saddr;
+	__be32 new_saddr;
 	__be32 daddr = inet->daddr;
 
 	if (inet->opt && inet->opt->srr)
@@ -1047,7 +1048,7 @@ static int inet_sk_reselect_saddr(struct sock *sk)
 			       RT_CONN_FLAGS(sk),
 			       sk->sk_bound_dev_if,
 			       sk->sk_protocol,
-			       inet->sport, inet->dport, sk);
+			       inet->sport, inet->dport, sk, 0);
 	if (err)
 		return err;
 
@@ -1113,7 +1114,7 @@ int inet_sk_rebuild_header(struct sock *sk)
 			},
 		},
 	};
-						
+
 	security_sk_classify_flow(sk, &fl);
 	err = ip_route_output_flow(&rt, &fl, sk, 0);
 }
@@ -1264,10 +1265,13 @@ static int __init init_ipv4_mibs(void)
 	tcp_statistics[1] = alloc_percpu(struct tcp_mib);
 	udp_statistics[0] = alloc_percpu(struct udp_mib);
 	udp_statistics[1] = alloc_percpu(struct udp_mib);
+	udplite_statistics[0] = alloc_percpu(struct udp_mib);
+	udplite_statistics[1] = alloc_percpu(struct udp_mib);
 	if (!
 	    (net_statistics[0] && net_statistics[1] && ip_statistics[0]
 	     && ip_statistics[1] && tcp_statistics[0] && tcp_statistics[1]
-	     && udp_statistics[0] && udp_statistics[1]))
+	     && udp_statistics[0] && udp_statistics[1]
+	     && udplite_statistics[0] && udplite_statistics[1]             ) )
 		return -ENOMEM;
 
 	(void) tcp_mib_init();
@@ -1310,10 +1314,10 @@ static int __init inet_init(void)
 		goto out_unregister_udp_proto;
 
 	/*
-	 *	Tell SOCKET that we are alive... 
+	 *	Tell SOCKET that we are alive...
 	 */
 
-  	(void)sock_register(&inet_family_ops);
+	(void)sock_register(&inet_family_ops);
 
 	/*
 	 *	Add all the base protocols.
@@ -1343,9 +1347,9 @@ static int __init inet_init(void)
 
 	arp_init();
 
-  	/*
-  	 *	Set the IP module up
-  	 */
+	/*
+	 *	Set the IP module up
+	 */
 
 	ip_init();
 
@@ -1354,6 +1358,8 @@ static int __init inet_init(void)
 	/* Setup TCP slab cache for open requests. */
 	tcp_init();
 
+	/* Add UDP-Lite (RFC 3828) */
+	udplite4_register();
 
 	/*
 	 *	Set the ICMP layer up
@@ -1369,11 +1375,11 @@ static int __init inet_init(void)
 #endif
 	/*
 	 *	Initialise per-cpu ipv4 mibs
-	 */ 
+	 */
 
 	if(init_ipv4_mibs())
 		printk(KERN_CRIT "inet_init: Cannot init ipv4 mibs\n"); ;
-	
+
 	ipv4_proc_init();
 
 	ipfrag_init();

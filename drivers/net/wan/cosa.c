@@ -94,7 +94,6 @@
 #include <linux/device.h>
 
 #undef COSA_SLOW_IO	/* for testing purposes only */
-#undef REALLY_SLOW_IO
 
 #include <asm/io.h>
 #include <asm/dma.h>
@@ -311,7 +310,7 @@ static int cosa_chardev_ioctl(struct inode *inode, struct file *file,
 static int cosa_fasync(struct inode *inode, struct file *file, int on);
 #endif
 
-static struct file_operations cosa_fops = {
+static const struct file_operations cosa_fops = {
 	.owner		= THIS_MODULE,
 	.llseek		= no_llseek,
 	.read		= cosa_read,
@@ -974,12 +973,12 @@ static int cosa_open(struct inode *inode, struct file *file)
 	unsigned long flags;
 	int n;
 
-	if ((n=iminor(file->f_dentry->d_inode)>>CARD_MINOR_BITS)
+	if ((n=iminor(file->f_path.dentry->d_inode)>>CARD_MINOR_BITS)
 		>= nr_cards)
 		return -ENODEV;
 	cosa = cosa_cards+n;
 
-	if ((n=iminor(file->f_dentry->d_inode)
+	if ((n=iminor(file->f_path.dentry->d_inode)
 		& ((1<<CARD_MINOR_BITS)-1)) >= cosa->nchannels)
 		return -ENODEV;
 	chan = cosa->chan + n;

@@ -30,7 +30,7 @@
 
 #include <net/tcp.h>
 
-MODULE_AUTHOR("Stephen Hemminger <shemminger@osdl.org>");
+MODULE_AUTHOR("Stephen Hemminger <shemminger@linux-foundation.org>");
 MODULE_DESCRIPTION("TCP cwnd snooper");
 MODULE_LICENSE("GPL");
 
@@ -143,7 +143,7 @@ out_free:
 	return error ? error : cnt;
 }
 
-static struct file_operations tcpprobe_fops = {
+static const struct file_operations tcpprobe_fops = {
 	.owner	 = THIS_MODULE,
 	.open	 = tcpprobe_open,
 	.read    = tcpprobe_read,

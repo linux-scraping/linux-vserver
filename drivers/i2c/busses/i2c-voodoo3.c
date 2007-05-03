@@ -165,6 +165,7 @@ static struct i2c_algo_bit_data voo_i2c_bit_data = {
 
 static struct i2c_adapter voodoo3_i2c_adapter = {
 	.owner		= THIS_MODULE,
+	.id		= I2C_HW_B_VOO,
 	.class		= I2C_CLASS_TV_ANALOG, 
 	.name		= "I2C Voodoo3/Banshee adapter",
 	.algo_data	= &voo_i2c_bit_data,
@@ -181,6 +182,7 @@ static struct i2c_algo_bit_data voo_ddc_bit_data = {
 
 static struct i2c_adapter voodoo3_ddc_adapter = {
 	.owner		= THIS_MODULE,
+	.id		= I2C_HW_B_VOO,
 	.class		= I2C_CLASS_DDC, 
 	.name		= "DDC Voodoo3/Banshee adapter",
 	.algo_data	= &voo_ddc_bit_data,
@@ -211,14 +213,14 @@ static int __devinit voodoo3_probe(struct pci_dev *dev, const struct pci_device_
 		return retval;
 	retval = i2c_bit_add_bus(&voodoo3_ddc_adapter);
 	if (retval)
-		i2c_bit_del_bus(&voodoo3_i2c_adapter);
+		i2c_del_adapter(&voodoo3_i2c_adapter);
 	return retval;
 }
 
 static void __devexit voodoo3_remove(struct pci_dev *dev)
 {
-	i2c_bit_del_bus(&voodoo3_i2c_adapter);
- 	i2c_bit_del_bus(&voodoo3_ddc_adapter);
+	i2c_del_adapter(&voodoo3_i2c_adapter);
+	i2c_del_adapter(&voodoo3_ddc_adapter);
 	iounmap(ioaddr);
 }
 

@@ -33,6 +33,7 @@
     ICH7		27DA
     ESB2		269B
     ICH8		283E
+    ICH9		2930
     This driver supports several versions of Intel's I/O Controller Hubs (ICH).
     For SMBus support, they are similar to the PIIX4 and are part
     of Intel's '810' and other chipsets.
@@ -47,7 +48,6 @@
 #include <linux/kernel.h>
 #include <linux/stddef.h>
 #include <linux/delay.h>
-#include <linux/sched.h>
 #include <linux/ioport.h>
 #include <linux/init.h>
 #include <linux/i2c.h>
@@ -97,6 +97,7 @@ static int i801_block_transaction(union i2c_smbus_data *data, char read_write,
 				  int command, int hwpec);
 
 static unsigned long i801_smba;
+static unsigned char i801_original_hstcfg;
 static struct pci_driver i801_driver;
 static struct pci_dev *I801_dev;
 static int isich4;
@@ -122,7 +123,7 @@ static int i801_transaction(void)
 			dev_dbg(&I801_dev->dev, "Failed! (%02x)\n", temp);
 			return -1;
 		} else {
-			dev_dbg(&I801_dev->dev, "Successfull!\n");
+			dev_dbg(&I801_dev->dev, "Successful!\n");
 		}
 	}
 
@@ -441,6 +442,7 @@ static const struct i2c_algorithm smbus_algorithm = {
 
 static struct i2c_adapter i801_adapter = {
 	.owner		= THIS_MODULE,
+	.id		= I2C_HW_SMBUS_I801,
 	.class		= I2C_CLASS_HWMON,
 	.algo		= &smbus_algorithm,
 };
@@ -457,6 +459,7 @@ static struct pci_device_id i801_ids[] = {
 	{ PCI_DEVICE(PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_INTEL_ICH7_17) },
 	{ PCI_DEVICE(PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_INTEL_ESB2_17) },
 	{ PCI_DEVICE(PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_INTEL_ICH8_5) },
+	{ PCI_DEVICE(PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_INTEL_ICH9_6) },
 	{ 0, }
 };
 
@@ -468,12 +471,20 @@ static int __devinit i801_probe(struct pci_dev *dev, const struct pci_device_id 
 	int err;
 
 	I801_dev = dev;
-	if ((dev->device == PCI_DEVICE_ID_INTEL_82801DB_3) ||
-	    (dev->device == PCI_DEVICE_ID_INTEL_82801EB_3) ||
-	    (dev->device == PCI_DEVICE_ID_INTEL_ESB_4))
+	switch (dev->device) {
+	case PCI_DEVICE_ID_INTEL_82801DB_3:
+	case PCI_DEVICE_ID_INTEL_82801EB_3:
+	case PCI_DEVICE_ID_INTEL_ESB_4:
+	case PCI_DEVICE_ID_INTEL_ICH6_16:
+	case PCI_DEVICE_ID_INTEL_ICH7_17:
+	case PCI_DEVICE_ID_INTEL_ESB2_17:
+	case PCI_DEVICE_ID_INTEL_ICH8_5:
+	case PCI_DEVICE_ID_INTEL_ICH9_6:
 		isich4 = 1;
-	else
+		break;
+	default:
 		isich4 = 0;
+	}
 
 	err = pci_enable_device(dev);
 	if (err) {
@@ -500,6 +511,7 @@ static int __devinit i801_probe(struct pci_dev *dev, const struct pci_device_id 
 	}
 
 	pci_read_config_byte(I801_dev, SMBHSTCFG, &temp);
+	i801_original_hstcfg = temp;
 	temp &= ~SMBHSTCFG_I2C_EN;	/* SMBus timing */
 	if (!(temp & SMBHSTCFG_HST_EN)) {
 		dev_info(&dev->dev, "Enabling SMBus device\n");
@@ -512,7 +524,7 @@ static int __devinit i801_probe(struct pci_dev *dev, const struct pci_device_id 
 	else
 		dev_dbg(&dev->dev, "SMBus using PCI Interrupt\n");
 
-	/* set up the driverfs linkage to our parent device */
+	/* set up the sysfs linkage to our parent device */
 	i801_adapter.dev.parent = &dev->dev;
 
 	snprintf(i801_adapter.name, I2C_NAME_SIZE,
@@ -533,6 +545,7 @@ exit:
 static void __devexit i801_remove(struct pci_dev *dev)
 {
 	i2c_del_adapter(&i801_adapter);
+	pci_write_config_byte(I801_dev, SMBHSTCFG, i801_original_hstcfg);
 	pci_release_region(dev, SMBBAR);
 	/*
 	 * do not call pci_disable_device(dev) since it can cause hard hangs on
@@ -540,11 +553,33 @@ static void __devexit i801_remove(struct pci_dev *dev)
 	 */
 }
 
+#ifdef CONFIG_PM
+static int i801_suspend(struct pci_dev *dev, pm_message_t mesg)
+{
+	pci_save_state(dev);
+	pci_write_config_byte(dev, SMBHSTCFG, i801_original_hstcfg);
+	pci_set_power_state(dev, pci_choose_state(dev, mesg));
+	return 0;
+}
+
+static int i801_resume(struct pci_dev *dev)
+{
+	pci_set_power_state(dev, PCI_D0);
+	pci_restore_state(dev);
+	return pci_enable_device(dev);
+}
+#else
+#define i801_suspend NULL
+#define i801_resume NULL
+#endif
+
 static struct pci_driver i801_driver = {
 	.name		= "i801_smbus",
 	.id_table	= i801_ids,
 	.probe		= i801_probe,
 	.remove		= __devexit_p(i801_remove),
+	.suspend	= i801_suspend,
+	.resume		= i801_resume,
 };
 
 static int __init i2c_i801_init(void)

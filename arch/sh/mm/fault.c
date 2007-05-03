@@ -17,6 +17,7 @@
 #include <linux/kprobes.h>
 #include <asm/system.h>
 #include <asm/mmu_context.h>
+#include <asm/tlbflush.h>
 #include <asm/kgdb.h>
 
 extern void die(const char *,struct pt_regs *,long);
@@ -26,13 +27,19 @@ extern void die(const char *,struct pt_regs *,long);
  * and the problem, and then passes it off to one of the appropriate
  * routines.
  */
-asmlinkage void do_page_fault(struct pt_regs *regs, unsigned long writeaccess,
-			      unsigned long address)
+asmlinkage void __kprobes do_page_fault(struct pt_regs *regs,
+					unsigned long writeaccess,
+					unsigned long address)
 {
 	struct task_struct *tsk;
 	struct mm_struct *mm;
 	struct vm_area_struct * vma;
 	unsigned long page;
+	int si_code;
+	siginfo_t info;
+
+	trace_hardirqs_on();
+	local_irq_enable();
 
 #ifdef CONFIG_SH_KGDB
 	if (kgdb_nofault && kgdb_bus_err_hook)
@@ -41,6 +48,46 @@ asmlinkage void do_page_fault(struct pt_regs *regs, unsigned long writeaccess,
 
 	tsk = current;
 	mm = tsk->mm;
+	si_code = SEGV_MAPERR;
+
+	if (unlikely(address >= TASK_SIZE)) {
+		/*
+		 * Synchronize this task's top level page-table
+		 * with the 'reference' page table.
+		 *
+		 * Do _not_ use "tsk" here. We might be inside
+		 * an interrupt in the middle of a task switch..
+		 */
+		int offset = pgd_index(address);
+		pgd_t *pgd, *pgd_k;
+		pud_t *pud, *pud_k;
+		pmd_t *pmd, *pmd_k;
+
+		pgd = get_TTB() + offset;
+		pgd_k = swapper_pg_dir + offset;
+
+		/* This will never happen with the folded page table. */
+		if (!pgd_present(*pgd)) {
+			if (!pgd_present(*pgd_k))
+				goto bad_area_nosemaphore;
+			set_pgd(pgd, *pgd_k);
+			return;
+		}
+
+		pud = pud_offset(pgd, address);
+		pud_k = pud_offset(pgd_k, address);
+		if (pud_present(*pud) || !pud_present(*pud_k))
+			goto bad_area_nosemaphore;
+		set_pud(pud, *pud_k);
+
+		pmd = pmd_offset(pud, address);
+		pmd_k = pmd_offset(pud_k, address);
+		if (pmd_present(*pmd) || !pmd_present(*pmd_k))
+			goto bad_area_nosemaphore;
+		set_pmd(pmd, *pmd_k);
+
+		return;
+	}
 
 	/*
 	 * If we're in an interrupt or have no user
@@ -65,6 +112,7 @@ asmlinkage void do_page_fault(struct pt_regs *regs, unsigned long writeaccess,
  * we can handle it..
  */
 good_area:
+	si_code = SEGV_ACCERR;
 	if (writeaccess) {
 		if (!(vma->vm_flags & VM_WRITE))
 			goto bad_area;
@@ -104,10 +152,13 @@ survive:
 bad_area:
 	up_read(&mm->mmap_sem);
 
+bad_area_nosemaphore:
 	if (user_mode(regs)) {
-		tsk->thread.address = address;
-		tsk->thread.error_code = writeaccess;
-		force_sig(SIGSEGV, tsk);
+		info.si_signo = SIGSEGV;
+		info.si_errno = 0;
+		info.si_code = si_code;
+		info.si_addr = (void *) address;
+		force_sig_info(SIGSEGV, &info, tsk);
 		return;
 	}
 
@@ -127,11 +178,9 @@ no_context:
 		printk(KERN_ALERT "Unable to handle kernel paging request");
 	printk(" at virtual address %08lx\n", address);
 	printk(KERN_ALERT "pc = %08lx\n", regs->pc);
-	asm volatile("mov.l	%1, %0"
-		     : "=r" (page)
-		     : "m" (__m(MMU_TTB)));
+	page = (unsigned long)get_TTB();
 	if (page) {
-		page = ((unsigned long *) page)[address >> 22];
+		page = ((unsigned long *) page)[address >> PGDIR_SHIFT];
 		printk(KERN_ALERT "*pde = %08lx\n", page);
 		if (page & _PAGE_PRESENT) {
 			page &= PAGE_MASK;
@@ -154,7 +203,8 @@ out_of_memory:
 		down_read(&mm->mmap_sem);
 		goto survive;
 	}
-	printk("VM: killing process %s\n", tsk->comm);
+	printk("VM: killing process %s(%d:#%u)\n",
+		tsk->comm, tsk->pid, tsk->xid);
 	if (user_mode(regs))
 		do_exit(SIGKILL);
 	goto no_context;
@@ -166,10 +216,11 @@ do_sigbus:
 	 * Send a sigbus, regardless of whether we were in kernel
 	 * or user mode.
 	 */
-	tsk->thread.address = address;
-	tsk->thread.error_code = writeaccess;
-	tsk->thread.trap_no = 14;
-	force_sig(SIGBUS, tsk);
+	info.si_signo = SIGBUS;
+	info.si_errno = 0;
+	info.si_code = BUS_ADRERR;
+	info.si_addr = (void *)address;
+	force_sig_info(SIGBUS, &info, tsk);
 
 	/* Kernel mode? Handle exceptions or die */
 	if (!user_mode(regs))
@@ -250,7 +301,7 @@ asmlinkage int __kprobes __do_page_fault(struct pt_regs *regs,
 	 * ITLB is not affected by "ldtlb" instruction.
 	 * So, we need to flush the entry by ourselves.
 	 */
-	__flush_tlb_page(get_asid(), address & PAGE_MASK);
+	local_flush_tlb_one(get_asid(), address & PAGE_MASK);
 #endif
 
 	set_pte(pte, entry);

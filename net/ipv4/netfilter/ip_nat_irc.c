@@ -88,8 +88,8 @@ static unsigned int help(struct sk_buff **pskb,
 	DEBUGP("ip_nat_irc: Inserting '%s' == %u.%u.%u.%u, port %u\n",
 	       buffer, NIPQUAD(exp->tuple.src.ip), port);
 
-	ret = ip_nat_mangle_tcp_packet(pskb, exp->master, ctinfo, 
-				       matchoff, matchlen, buffer, 
+	ret = ip_nat_mangle_tcp_packet(pskb, exp->master, ctinfo,
+				       matchoff, matchlen, buffer,
 				       strlen(buffer));
 	if (ret != NF_ACCEPT)
 		ip_conntrack_unexpect_related(exp);
@@ -98,15 +98,14 @@ static unsigned int help(struct sk_buff **pskb,
 
 static void __exit ip_nat_irc_fini(void)
 {
-	ip_nat_irc_hook = NULL;
-	/* Make sure noone calls it, meanwhile. */
-	synchronize_net();
+	rcu_assign_pointer(ip_nat_irc_hook, NULL);
+	synchronize_rcu();
 }
 
 static int __init ip_nat_irc_init(void)
 {
-	BUG_ON(ip_nat_irc_hook);
-	ip_nat_irc_hook = help;
+	BUG_ON(rcu_dereference(ip_nat_irc_hook));
+	rcu_assign_pointer(ip_nat_irc_hook, help);
 	return 0;
 }
 

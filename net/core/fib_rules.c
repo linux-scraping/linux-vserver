@@ -107,6 +107,22 @@ out:
 
 EXPORT_SYMBOL_GPL(fib_rules_unregister);
 
+static int fib_rule_match(struct fib_rule *rule, struct fib_rules_ops *ops,
+			  struct flowi *fl, int flags)
+{
+	int ret = 0;
+
+	if (rule->ifindex && (rule->ifindex != fl->iif))
+		goto out;
+
+	if ((rule->mark ^ fl->mark) & rule->mark_mask)
+		goto out;
+
+	ret = ops->match(rule, fl, flags);
+out:
+	return (rule->flags & FIB_RULE_INVERT) ? !ret : ret;
+}
+
 int fib_rules_lookup(struct fib_rules_ops *ops, struct flowi *fl,
 		     int flags, struct fib_lookup_arg *arg)
 {
@@ -116,10 +132,7 @@ int fib_rules_lookup(struct fib_rules_ops *ops, struct flowi *fl,
 	rcu_read_lock();
 
 	list_for_each_entry_rcu(rule, ops->rules_list, list) {
-		if (rule->ifindex && (rule->ifindex != fl->iif))
-			continue;
-
-		if (!ops->match(rule, fl, flags))
+		if (!fib_rule_match(rule, ops, fl, flags))
 			continue;
 
 		err = ops->action(rule, fl, flags, arg);
@@ -130,7 +143,7 @@ int fib_rules_lookup(struct fib_rules_ops *ops, struct flowi *fl,
 		}
 	}
 
-	err = -ENETUNREACH;
+	err = -ESRCH;
 out:
 	rcu_read_unlock();
 
@@ -138,6 +151,28 @@ out:
 }
 
 EXPORT_SYMBOL_GPL(fib_rules_lookup);
+
+static int validate_rulemsg(struct fib_rule_hdr *frh, struct nlattr **tb,
+			    struct fib_rules_ops *ops)
+{
+	int err = -EINVAL;
+
+	if (frh->src_len)
+		if (tb[FRA_SRC] == NULL ||
+		    frh->src_len > (ops->addr_size * 8) ||
+		    nla_len(tb[FRA_SRC]) != ops->addr_size)
+			goto errout;
+
+	if (frh->dst_len)
+		if (tb[FRA_DST] == NULL ||
+		    frh->dst_len > (ops->addr_size * 8) ||
+		    nla_len(tb[FRA_DST]) != ops->addr_size)
+			goto errout;
+
+	err = 0;
+errout:
+	return err;
+}
 
 int fib_nl_newrule(struct sk_buff *skb, struct nlmsghdr* nlh, void *arg)
 {
@@ -160,6 +195,10 @@ int fib_nl_newrule(struct sk_buff *skb, struct nlmsghdr* nlh, void *arg)
 	if (err < 0)
 		goto errout;
 
+	err = validate_rulemsg(frh, tb, ops);
+	if (err < 0)
+		goto errout;
+
 	rule = kzalloc(ops->rule_size, GFP_KERNEL);
 	if (rule == NULL) {
 		err = -ENOMEM;
@@ -178,6 +217,18 @@ int fib_nl_newrule(struct sk_buff *skb, struct nlmsghdr* nlh, void *arg)
 		if (dev)
 			rule->ifindex = dev->ifindex;
 	}
+
+	if (tb[FRA_FWMARK]) {
+		rule->mark = nla_get_u32(tb[FRA_FWMARK]);
+		if (rule->mark)
+			/* compatibility: if the mark value is non-zero all bits
+			 * are compared unless a mask is explicitly specified.
+			 */
+			rule->mark_mask = 0xFFFFFFFF;
+	}
+
+	if (tb[FRA_FWMASK])
+		rule->mark_mask = nla_get_u32(tb[FRA_FWMASK]);
 
 	rule->action = frh->action;
 	rule->flags = frh->flags;
@@ -235,6 +286,10 @@ int fib_nl_delrule(struct sk_buff *skb, struct nlmsghdr* nlh, void *arg)
 	if (err < 0)
 		goto errout;
 
+	err = validate_rulemsg(frh, tb, ops);
+	if (err < 0)
+		goto errout;
+
 	list_for_each_entry(rule, ops->rules_list, list) {
 		if (frh->action && (frh->action != rule->action))
 			continue;
@@ -248,6 +303,14 @@ int fib_nl_delrule(struct sk_buff *skb, struct nlmsghdr* nlh, void *arg)
 
 		if (tb[FRA_IFNAME] &&
 		    nla_strcmp(tb[FRA_IFNAME], rule->ifname))
+			continue;
+
+		if (tb[FRA_FWMARK] &&
+		    (rule->mark != nla_get_u32(tb[FRA_FWMARK])))
+			continue;
+
+		if (tb[FRA_FWMASK] &&
+		    (rule->mark_mask != nla_get_u32(tb[FRA_FWMASK])))
 			continue;
 
 		if (!ops->compare(rule, frh, tb))
@@ -273,6 +336,22 @@ errout:
 	return err;
 }
 
+static inline size_t fib_rule_nlmsg_size(struct fib_rules_ops *ops,
+					 struct fib_rule *rule)
+{
+	size_t payload = NLMSG_ALIGN(sizeof(struct fib_rule_hdr))
+			 + nla_total_size(IFNAMSIZ) /* FRA_IFNAME */
+			 + nla_total_size(4) /* FRA_PRIORITY */
+			 + nla_total_size(4) /* FRA_TABLE */
+			 + nla_total_size(4) /* FRA_FWMARK */
+			 + nla_total_size(4); /* FRA_FWMASK */
+
+	if (ops->nlmsg_payload)
+		payload += ops->nlmsg_payload(rule);
+
+	return payload;
+}
+
 static int fib_nl_fill_rule(struct sk_buff *skb, struct fib_rule *rule,
 			    u32 pid, u32 seq, int type, int flags,
 			    struct fib_rules_ops *ops)
@@ -282,7 +361,7 @@ static int fib_nl_fill_rule(struct sk_buff *skb, struct fib_rule *rule,
 
 	nlh = nlmsg_put(skb, pid, seq, type, sizeof(*frh), flags);
 	if (nlh == NULL)
-		return -1;
+		return -EMSGSIZE;
 
 	frh = nlmsg_data(nlh);
 	frh->table = rule->table;
@@ -298,13 +377,20 @@ static int fib_nl_fill_rule(struct sk_buff *skb, struct fib_rule *rule,
 	if (rule->pref)
 		NLA_PUT_U32(skb, FRA_PRIORITY, rule->pref);
 
+	if (rule->mark)
+		NLA_PUT_U32(skb, FRA_FWMARK, rule->mark);
+
+	if (rule->mark_mask || rule->mark)
+		NLA_PUT_U32(skb, FRA_FWMASK, rule->mark_mask);
+
 	if (ops->fill(rule, skb, nlh, frh) < 0)
 		goto nla_put_failure;
 
 	return nlmsg_end(skb, nlh);
 
 nla_put_failure:
-	return nlmsg_cancel(skb, nlh);
+	nlmsg_cancel(skb, nlh);
+	return -EMSGSIZE;
 }
 
 int fib_rules_dump(struct sk_buff *skb, struct netlink_callback *cb, int family)
@@ -318,7 +404,7 @@ int fib_rules_dump(struct sk_buff *skb, struct netlink_callback *cb, int family)
 		return -EAFNOSUPPORT;
 
 	rcu_read_lock();
-	list_for_each_entry(rule, ops->rules_list, list) {
+	list_for_each_entry_rcu(rule, ops->rules_list, list) {
 		if (idx < cb->args[0])
 			goto skip;
 
@@ -345,16 +431,17 @@ static void notify_rule_change(int event, struct fib_rule *rule,
 	struct sk_buff *skb;
 	int err = -ENOBUFS;
 
-	skb = nlmsg_new(NLMSG_GOODSIZE, GFP_KERNEL);
+	skb = nlmsg_new(fib_rule_nlmsg_size(ops, rule), GFP_KERNEL);
 	if (skb == NULL)
 		goto errout;
 
 	err = fib_nl_fill_rule(skb, rule, pid, nlh->nlmsg_seq, event, 0, ops);
 	if (err < 0) {
+		/* -EMSGSIZE implies BUG in fib_rule_nlmsg_size() */
+		WARN_ON(err == -EMSGSIZE);
 		kfree_skb(skb);
 		goto errout;
 	}
-
 	err = rtnl_notify(skb, pid, ops->nlgroup, nlh, GFP_KERNEL);
 errout:
 	if (err < 0)

@@ -23,6 +23,7 @@
 #define NETLINK_GENERIC		16
 /* leave room for NETLINK_DM (DM Events) */
 #define NETLINK_SCSITRANSPORT	18	/* SCSI Transports */
+#define NETLINK_ECRYPTFS	19
 
 #define MAX_LINKS 32		
 
@@ -141,7 +142,6 @@ struct netlink_skb_parms
 {
 	struct ucred		creds;		/* Skb credentials	*/
 	__u32			pid;
-	__u32			dst_pid;
 	__u32			dst_group;
 	kernel_cap_t		eff_cap;
 	__u32			loginuid;	/* Login (audit) uid */
@@ -174,6 +174,7 @@ int netlink_sendskb(struct sock *sk, struct sk_buff *skb, int protocol);
  */
 #define NLMSG_GOODORDER 0
 #define NLMSG_GOODSIZE (SKB_MAX_ORDER(0, NLMSG_GOODORDER))
+#define NLMSG_DEFAULT_SIZE (NLMSG_GOODSIZE - NLMSG_HDRLEN)
 
 
 struct netlink_callback

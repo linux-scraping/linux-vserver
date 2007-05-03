@@ -18,6 +18,7 @@
 
 #include <asm/lowcore.h>
 #include <asm/sigp.h>
+#include <asm/ptrace.h>
 
 /*
   s390 specific smp.c headers
@@ -29,6 +30,10 @@ typedef struct
 	__u32      status;
 	__u16      cpu;
 } sigp_info;
+
+extern void machine_restart_smp(char *);
+extern void machine_halt_smp(void);
+extern void machine_power_off_smp(void);
 
 extern void smp_setup_cpu_possible_map(void);
 extern int smp_call_function_on(void (*func) (void *info), void *info,
@@ -101,6 +106,13 @@ smp_call_function_on(void (*func) (void *info), void *info,
 	func(info);
 	return 0;
 }
+
+static inline void smp_send_stop(void)
+{
+	/* Disable all interrupts/machine checks */
+	__load_psw_mask(psw_kernel_bits & ~PSW_MASK_MCHECK);
+}
+
 #define smp_cpu_not_running(cpu)	1
 #define smp_get_cpu(cpu) ({ 0; })
 #define smp_put_cpu(cpu) ({ 0; })

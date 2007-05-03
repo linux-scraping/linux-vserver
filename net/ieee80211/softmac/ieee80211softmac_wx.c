@@ -122,7 +122,7 @@ ieee80211softmac_wx_set_essid(struct net_device *net_dev,
 
 	sm->associnfo.associating = 1;
 	/* queue lower level code to do work (if necessary) */
-	schedule_work(&sm->associnfo.work);
+	schedule_delayed_work(&sm->associnfo.work, 0);
 out:
 	mutex_unlock(&sm->associnfo.mutex);
 
@@ -142,14 +142,14 @@ ieee80211softmac_wx_get_essid(struct net_device *net_dev,
 	/* If all fails, return ANY (empty) */
 	data->essid.length = 0;
 	data->essid.flags = 0;  /* active */
-	
+
 	/* If we have a statically configured ESSID then return it */
 	if (sm->associnfo.static_essid) {
 		data->essid.length = sm->associnfo.req_essid.len;
 		data->essid.flags = 1;  /* active */
 		memcpy(extra, sm->associnfo.req_essid.data, sm->associnfo.req_essid.len);
 	}
-	
+
 	/* If we're associating/associated, return that */
 	if (sm->associnfo.associated || sm->associnfo.associating) {
 		data->essid.length = sm->associnfo.associate_essid.len;
@@ -177,15 +177,10 @@ ieee80211softmac_wx_set_rate(struct net_device *net_dev,
 	int err = -EINVAL;
 
 	if (in_rate == -1) {
-		/* FIXME: We don't correctly handle backing down to lower
-		   rates, so 801.11g devices start off at 11M for now. People
-		   can manually change it if they really need to, but 11M is
-		   more reliable. Note similar logic in
-		   ieee80211softmac_wx_set_rate() */	 
-		if (ieee->modulation & IEEE80211_CCK_MODULATION)
-			in_rate = 11000000;
+		if (ieee->modulation & IEEE80211_OFDM_MODULATION)
+			in_rate = 24000000;
 		else
-			in_rate = 54000000;
+			in_rate = 11000000;
 	}
 
 	switch (in_rate) {
@@ -247,7 +242,7 @@ ieee80211softmac_wx_set_rate(struct net_device *net_dev,
 	ieee80211softmac_recalc_txrates(mac);
 	err = 0;
 
-out_unlock:	
+out_unlock:
 	spin_unlock_irqrestore(&mac->lock, flags);
 out:
 	return err;
@@ -265,6 +260,12 @@ ieee80211softmac_wx_get_rate(struct net_device *net_dev,
 	int err = -EINVAL;
 
 	spin_lock_irqsave(&mac->lock, flags);
+
+	if (unlikely(!mac->running)) {
+		err = -ENODEV;
+		goto out_unlock;
+	}
+
 	switch (mac->txrates.default_rate) {
 	case IEEE80211_CCK_RATE_1MB:
 		data->bitrate.value = 1000000;
@@ -356,11 +357,11 @@ ieee80211softmac_wx_set_wap(struct net_device *net_dev,
 		/* force reassociation */
 		mac->associnfo.bssvalid = 0;
 		if (mac->associnfo.associated)
-			schedule_work(&mac->associnfo.work);
+			schedule_delayed_work(&mac->associnfo.work, 0);
 	} else if (is_zero_ether_addr(data->ap_addr.sa_data)) {
 		/* the bssid we have is no longer fixed */
 		mac->associnfo.bssfixed = 0;
-        } else {
+	} else {
 		if (!memcmp(mac->associnfo.bssid, data->ap_addr.sa_data, ETH_ALEN)) {
 			if (mac->associnfo.associating || mac->associnfo.associated) {
 			/* bssid unchanged and associated or associating - just return */
@@ -373,8 +374,8 @@ ieee80211softmac_wx_set_wap(struct net_device *net_dev,
 		/* tell the other code that this bssid should be used no matter what */
 		mac->associnfo.bssfixed = 1;
 		/* queue associate if new bssid or (old one again and not associated) */
-		schedule_work(&mac->associnfo.work);
-        }
+		schedule_delayed_work(&mac->associnfo.work, 0);
+	}
 
  out:
 	mutex_unlock(&mac->associnfo.mutex);
@@ -431,7 +432,7 @@ ieee80211softmac_wx_set_genie(struct net_device *dev,
 		mac->wpa.IEbuflen = 0;
 	}
 
- out:	
+ out:
 	spin_unlock_irqrestore(&mac->lock, flags);
 	mutex_unlock(&mac->associnfo.mutex);
 
@@ -452,9 +453,9 @@ ieee80211softmac_wx_get_genie(struct net_device *dev,
 
 	mutex_lock(&mac->associnfo.mutex);
 	spin_lock_irqsave(&mac->lock, flags);
-	
+
 	wrqu->data.length = 0;
-	
+
 	if (mac->wpa.IE && mac->wpa.IElen) {
 		wrqu->data.length = mac->wpa.IElen;
 		if (mac->wpa.IElen <= space)
@@ -463,7 +464,7 @@ ieee80211softmac_wx_get_genie(struct net_device *dev,
 			err = -E2BIG;
 	}
 	spin_unlock_irqrestore(&mac->lock, flags);
-	mutex_lock(&mac->associnfo.mutex);
+	mutex_unlock(&mac->associnfo.mutex);
 
 	return err;
 }
@@ -495,7 +496,8 @@ ieee80211softmac_wx_set_mlme(struct net_device *dev,
 			printk(KERN_DEBUG PFX "wx_set_mlme: we should know the net here...\n");
 			goto out;
 		}
-		return ieee80211softmac_deauth_req(mac, net, reason);
+		err =  ieee80211softmac_deauth_req(mac, net, reason);
+		goto out;
 	case IW_MLME_DISASSOC:
 		ieee80211softmac_send_disassoc_req(mac, reason);
 		mac->associnfo.associated = 0;

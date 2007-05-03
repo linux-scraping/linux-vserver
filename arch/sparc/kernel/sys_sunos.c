@@ -94,8 +94,8 @@ asmlinkage unsigned long sunos_mmap(unsigned long addr, unsigned long len,
 	 * SunOS is so stupid some times... hmph!
 	 */
 	if (file) {
-		if (imajor(file->f_dentry->d_inode) == MEM_MAJOR &&
-		    iminor(file->f_dentry->d_inode) == 5) {
+		if (imajor(file->f_path.dentry->d_inode) == MEM_MAJOR &&
+		    iminor(file->f_path.dentry->d_inode) == 5) {
 			flags |= MAP_ANONYMOUS;
 			fput(file);
 			file = NULL;
@@ -655,7 +655,7 @@ sunos_nfs_get_server_fd (int fd, struct sockaddr_in *addr)
 	if (!file)
 		goto out;
 
-	inode = file->f_dentry->d_inode;
+	inode = file->f_path.dentry->d_inode;
 
 	socket = SOCKET_I(inode);
 	local.sin_family = AF_INET;
@@ -859,14 +859,16 @@ asmlinkage int sunos_wait4(pid_t pid, unsigned int __user *stat_addr,
 	return ret;
 }
 
-extern int kill_pg(int, int, int);
 asmlinkage int sunos_killpg(int pgrp, int sig)
 {
 	int ret;
 
-	lock_kernel();
-	ret = kill_pg(pgrp, sig, 0);
-	unlock_kernel();
+	rcu_read_lock();
+	ret = -EINVAL;
+	if (pgrp > 0)
+		ret = kill_pgrp(find_pid(pgrp), sig, 0);
+	rcu_read_unlock();
+
 	return ret;
 }
 
@@ -908,7 +910,7 @@ asmlinkage long sunos_sysconf (int name)
 		ret = ARG_MAX;
 		break;
 	case _SC_CHILD_MAX:
-		ret = -1; /* no limit */
+		ret = current->signal->rlim[RLIMIT_NPROC].rlim_cur;
 		break;
 	case _SC_CLK_TCK:
 		ret = HZ;
@@ -917,7 +919,7 @@ asmlinkage long sunos_sysconf (int name)
 		ret = NGROUPS_MAX;
 		break;
 	case _SC_OPEN_MAX:
-		ret = OPEN_MAX;
+		ret = current->signal->rlim[RLIMIT_NOFILE].rlim_cur;
 		break;
 	case _SC_JOB_CONTROL:
 		ret = 1;	/* yes, we do support job control */

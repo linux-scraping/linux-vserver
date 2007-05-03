@@ -2162,7 +2162,7 @@ static ssize_t ntfs_file_aio_write_nolock(struct kiocb *iocb,
 		goto out;
 	if (!count)
 		goto out;
-	err = remove_suid(file->f_dentry);
+	err = remove_suid(file->f_path.dentry);
 	if (err)
 		goto out;
 	file_update_time(file);
@@ -2328,7 +2328,7 @@ const struct file_operations ntfs_file_ops = {
 						    the data source. */
 };
 
-struct inode_operations ntfs_file_inode_ops = {
+const struct inode_operations ntfs_file_inode_ops = {
 #ifdef NTFS_RW
 	.truncate	= ntfs_truncate_vfs,
 	.setattr	= ntfs_setattr,
@@ -2337,4 +2337,4 @@ struct inode_operations ntfs_file_inode_ops = {
 
 const struct file_operations ntfs_empty_file_ops = {};
 
-struct inode_operations ntfs_empty_inode_ops = {};
+const struct inode_operations ntfs_empty_inode_ops = {};

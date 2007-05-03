@@ -51,7 +51,7 @@ struct nfs_client {
 
 	unsigned long		cl_lease_time;
 	unsigned long		cl_last_renewal;
-	struct work_struct	cl_renewd;
+	struct delayed_work	cl_renewd;
 
 	struct rpc_wait_queue	cl_rpcwaitq;
 
@@ -82,6 +82,7 @@ struct nfs_server {
 	struct rpc_clnt *	client_acl;	/* ACL RPC client handle */
 	struct nfs_iostats *	io_stats;	/* I/O statistics */
 	struct backing_dev_info	backing_dev_info;
+	atomic_t		writeback;	/* number of writeback pages */
 	int			flags;		/* various flags */
 	unsigned int		caps;		/* server capabilities */
 	unsigned int		rsize;		/* read size */

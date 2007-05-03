@@ -30,7 +30,7 @@ struct igmphdr
 {
 	__u8 type;
 	__u8 code;		/* For newer IGMP */
-	__be16 csum;
+	__sum16 csum;
 	__be32 group;
 };
 
@@ -127,6 +127,7 @@ struct igmpv3_query {
 
 #ifdef __KERNEL__
 #include <linux/skbuff.h>
+#include <linux/timer.h>
 #include <linux/in.h>
 
 extern int sysctl_igmp_max_memberships;
@@ -217,5 +218,7 @@ extern void ip_mc_up(struct in_device *);
 extern void ip_mc_down(struct in_device *);
 extern void ip_mc_dec_group(struct in_device *in_dev, __be32 addr);
 extern void ip_mc_inc_group(struct in_device *in_dev, __be32 addr);
+extern void ip_mc_rejoin_group(struct ip_mc_list *im);
+
 #endif
 #endif

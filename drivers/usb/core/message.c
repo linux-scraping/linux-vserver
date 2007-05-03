@@ -11,6 +11,7 @@
 #include <linux/timer.h>
 #include <linux/ctype.h>
 #include <linux/device.h>
+#include <linux/usb/quirks.h>
 #include <asm/byteorder.h>
 #include <asm/scatterlist.h>
 
@@ -220,10 +221,15 @@ int usb_bulk_msg(struct usb_device *usb_dev, unsigned int pipe,
 
 	if ((ep->desc.bmAttributes & USB_ENDPOINT_XFERTYPE_MASK) ==
 			USB_ENDPOINT_XFER_INT) {
+		int interval;
+
+		if (usb_dev->speed == USB_SPEED_HIGH)
+			interval = 1 << min(15, ep->desc.bInterval - 1);
+		else
+			interval = ep->desc.bInterval;
 		pipe = (pipe & ~(3 << 30)) | (PIPE_INTERRUPT << 30);
 		usb_fill_int_urb(urb, usb_dev, pipe, data, len,
-				usb_api_blocking_completion, NULL,
-				ep->desc.bInterval);
+				usb_api_blocking_completion, NULL, interval);
 	} else
 		usb_fill_bulk_urb(urb, usb_dev, pipe, data, len,
 				usb_api_blocking_completion, NULL);
@@ -488,7 +494,7 @@ void usb_sg_wait (struct usb_sg_request *io)
 		int	retval;
 
 		io->urbs [i]->dev = io->dev;
-		retval = usb_submit_urb (io->urbs [i], SLAB_ATOMIC);
+		retval = usb_submit_urb (io->urbs [i], GFP_ATOMIC);
 
 		/* after we submit, let completions or cancelations fire;
 		 * we handshake using io->status.
@@ -685,7 +691,10 @@ static int usb_string_sub(struct usb_device *dev, unsigned int langid,
 
 	/* Try to read the string descriptor by asking for the maximum
 	 * possible number of bytes */
-	rc = usb_get_string(dev, langid, index, buf, 255);
+	if (dev->quirks & USB_QUIRK_STRING_FETCH_255)
+		rc = -EIO;
+	else
+		rc = usb_get_string(dev, langid, index, buf, 255);
 
 	/* If that failed try to read the descriptor length, then
 	 * ask for just that many bytes */
@@ -764,7 +773,7 @@ int usb_string(struct usb_device *dev, int index, char *buf, size_t size)
 			err = -EINVAL;
 			goto errout;
 		} else {
-			dev->have_langid = -1;
+			dev->have_langid = 1;
 			dev->string_langid = tbuf[2] | (tbuf[3]<< 8);
 				/* always use the first langid listed */
 			dev_dbg (&dev->dev, "default language 0x%04x\n",
@@ -1316,6 +1325,14 @@ static void release_interface(struct device *dev)
  * use this kind of configurability; many devices only have one
  * configuration.
  *
+ * @configuration is the value of the configuration to be installed.
+ * According to the USB spec (e.g. section 9.1.1.5), configuration values
+ * must be non-zero; a value of zero indicates that the device in
+ * unconfigured.  However some devices erroneously use 0 as one of their
+ * configuration values.  To help manage such devices, this routine will
+ * accept @configuration = -1 as indicating the device should be put in
+ * an unconfigured state.
+ *
  * USB device configurations may affect Linux interoperability,
  * power consumption and the functionality available.  For example,
  * the default configuration is limited to using 100mA of bus power,
@@ -1347,10 +1364,15 @@ int usb_set_configuration(struct usb_device *dev, int configuration)
 	struct usb_interface **new_interfaces = NULL;
 	int n, nintf;
 
-	for (i = 0; i < dev->descriptor.bNumConfigurations; i++) {
-		if (dev->config[i].desc.bConfigurationValue == configuration) {
-			cp = &dev->config[i];
-			break;
+	if (configuration == -1)
+		configuration = 0;
+	else {
+		for (i = 0; i < dev->descriptor.bNumConfigurations; i++) {
+			if (dev->config[i].desc.bConfigurationValue ==
+					configuration) {
+				cp = &dev->config[i];
+				break;
+			}
 		}
 	}
 	if ((!cp && configuration != 0))
@@ -1359,6 +1381,7 @@ int usb_set_configuration(struct usb_device *dev, int configuration)
 	/* The USB spec says configuration 0 means unconfigured.
 	 * But if a device includes a configuration numbered 0,
 	 * we will accept it as a correctly configured state.
+	 * Use -1 if you really want to unconfigure the device.
 	 */
 	if (cp && configuration == 0)
 		dev_warn(&dev->dev, "config 0 descriptor??\n");
@@ -1398,7 +1421,7 @@ free_interfaces:
 	}
 
 	/* Wake up the device so we can send it the Set-Config request */
-	ret = usb_autoresume_device(dev, 1);
+	ret = usb_autoresume_device(dev);
 	if (ret)
 		goto free_interfaces;
 
@@ -1421,7 +1444,7 @@ free_interfaces:
 	dev->actconfig = cp;
 	if (!cp) {
 		usb_set_device_state(dev, USB_STATE_ADDRESS);
-		usb_autosuspend_device(dev, 1);
+		usb_autosuspend_device(dev);
 		goto free_interfaces;
 	}
 	usb_set_device_state(dev, USB_STATE_CONFIGURED);
@@ -1490,7 +1513,7 @@ free_interfaces:
 		usb_create_sysfs_intf_files (intf);
 	}
 
-	usb_autosuspend_device(dev, 1);
+	usb_autosuspend_device(dev);
 	return 0;
 }
 
@@ -1501,9 +1524,10 @@ struct set_config_request {
 };
 
 /* Worker routine for usb_driver_set_configuration() */
-static void driver_set_config_work(void *_req)
+static void driver_set_config_work(struct work_struct *work)
 {
-	struct set_config_request *req = _req;
+	struct set_config_request *req =
+		container_of(work, struct set_config_request, work);
 
 	usb_lock_device(req->udev);
 	usb_set_configuration(req->udev, req->config);
@@ -1541,14 +1565,10 @@ int usb_driver_set_configuration(struct usb_device *udev, int config)
 		return -ENOMEM;
 	req->udev = udev;
 	req->config = config;
-	INIT_WORK(&req->work, driver_set_config_work, req);
+	INIT_WORK(&req->work, driver_set_config_work);
 
 	usb_get_dev(udev);
-	if (!schedule_work(&req->work)) {
-		usb_put_dev(udev);
-		kfree(req);
-		return -EINVAL;
-	}
+	schedule_work(&req->work);
 	return 0;
 }
 EXPORT_SYMBOL_GPL(usb_driver_set_configuration);

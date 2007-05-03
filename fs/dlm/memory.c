@@ -15,7 +15,7 @@
 #include "config.h"
 #include "memory.h"
 
-static kmem_cache_t *lkb_cache;
+static struct kmem_cache *lkb_cache;
 
 
 int dlm_memory_init(void)
@@ -76,9 +76,7 @@ struct dlm_lkb *allocate_lkb(struct dlm_ls *ls)
 {
 	struct dlm_lkb *lkb;
 
-	lkb = kmem_cache_alloc(lkb_cache, GFP_KERNEL);
-	if (lkb)
-		memset(lkb, 0, sizeof(*lkb));
+	lkb = kmem_cache_zalloc(lkb_cache, GFP_KERNEL);
 	return lkb;
 }
 

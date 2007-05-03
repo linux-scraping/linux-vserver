@@ -24,6 +24,7 @@
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/moduleparam.h>
+#include <linux/sched.h>
 #include <linux/device.h>
 #include <linux/types.h>
 #include <linux/delay.h>
@@ -140,7 +141,7 @@ static inline int w1_convert_temp(u8 rom[9], u8 fid)
 {
 	int i;
 
-	for (i=0; i<sizeof(w1_therm_families)/sizeof(w1_therm_families[0]); ++i)
+	for (i = 0; i < ARRAY_SIZE(w1_therm_families); ++i)
 		if (w1_therm_families[i].f->fid == fid)
 			return w1_therm_families[i].convert(rom);
 
@@ -237,7 +238,7 @@ static int __init w1_therm_init(void)
 {
 	int err, i;
 
-	for (i=0; i<sizeof(w1_therm_families)/sizeof(w1_therm_families[0]); ++i) {
+	for (i = 0; i < ARRAY_SIZE(w1_therm_families); ++i) {
 		err = w1_register_family(w1_therm_families[i].f);
 		if (err)
 			w1_therm_families[i].broken = 1;
@@ -250,7 +251,7 @@ static void __exit w1_therm_fini(void)
 {
 	int i;
 
-	for (i=0; i<sizeof(w1_therm_families)/sizeof(w1_therm_families[0]); ++i)
+	for (i = 0; i < ARRAY_SIZE(w1_therm_families); ++i)
 		if (!w1_therm_families[i].broken)
 			w1_unregister_family(w1_therm_families[i].f);
 }

@@ -161,7 +161,7 @@ out:
 #define sel_write_enforce NULL
 #endif
 
-static struct file_operations sel_enforce_ops = {
+static const struct file_operations sel_enforce_ops = {
 	.read		= sel_read_enforce,
 	.write		= sel_write_enforce,
 };
@@ -211,7 +211,7 @@ out:
 #define sel_write_disable NULL
 #endif
 
-static struct file_operations sel_disable_ops = {
+static const struct file_operations sel_disable_ops = {
 	.write		= sel_write_disable,
 };
 
@@ -225,7 +225,7 @@ static ssize_t sel_read_policyvers(struct file *filp, char __user *buf,
 	return simple_read_from_buffer(buf, count, ppos, tmpbuf, length);
 }
 
-static struct file_operations sel_policyvers_ops = {
+static const struct file_operations sel_policyvers_ops = {
 	.read		= sel_read_policyvers,
 };
 
@@ -242,7 +242,7 @@ static ssize_t sel_read_mls(struct file *filp, char __user *buf,
 	return simple_read_from_buffer(buf, count, ppos, tmpbuf, length);
 }
 
-static struct file_operations sel_mls_ops = {
+static const struct file_operations sel_mls_ops = {
 	.read		= sel_read_mls,
 };
 
@@ -294,7 +294,7 @@ out:
 	return length;
 }
 
-static struct file_operations sel_load_ops = {
+static const struct file_operations sel_load_ops = {
 	.write		= sel_write_load,
 };
 
@@ -374,7 +374,7 @@ out:
 	free_page((unsigned long) page);
 	return length;
 }
-static struct file_operations sel_checkreqprot_ops = {
+static const struct file_operations sel_checkreqprot_ops = {
 	.read		= sel_read_checkreqprot,
 	.write		= sel_write_checkreqprot,
 };
@@ -423,7 +423,7 @@ out:
 	free_page((unsigned long) page);
 	return length;
 }
-static struct file_operations sel_compat_net_ops = {
+static const struct file_operations sel_compat_net_ops = {
 	.read		= sel_read_compat_net,
 	.write		= sel_write_compat_net,
 };
@@ -448,7 +448,7 @@ static ssize_t (*write_op[])(struct file *, char *, size_t) = {
 
 static ssize_t selinux_transaction_write(struct file *file, const char __user *buf, size_t size, loff_t *pos)
 {
-	ino_t ino =  file->f_dentry->d_inode->i_ino;
+	ino_t ino =  file->f_path.dentry->d_inode->i_ino;
 	char *data;
 	ssize_t rv;
 
@@ -467,7 +467,7 @@ static ssize_t selinux_transaction_write(struct file *file, const char __user *b
 	return rv;
 }
 
-static struct file_operations transaction_ops = {
+static const struct file_operations transaction_ops = {
 	.write		= selinux_transaction_write,
 	.read		= simple_transaction_read,
 	.release	= simple_transaction_release,
@@ -805,7 +805,7 @@ static ssize_t sel_read_bool(struct file *filep, char __user *buf,
 		goto out;
 	}
 
-	inode = filep->f_dentry->d_inode;
+	inode = filep->f_path.dentry->d_inode;
 	cur_enforcing = security_get_bool_value(inode->i_ino - BOOL_INO_OFFSET);
 	if (cur_enforcing < 0) {
 		ret = cur_enforcing;
@@ -864,7 +864,7 @@ static ssize_t sel_write_bool(struct file *filep, const char __user *buf,
 	if (new_value)
 		new_value = 1;
 
-	inode = filep->f_dentry->d_inode;
+	inode = filep->f_path.dentry->d_inode;
 	bool_pending_values[inode->i_ino - BOOL_INO_OFFSET] = new_value;
 	length = count;
 
@@ -875,7 +875,7 @@ out:
 	return length;
 }
 
-static struct file_operations sel_bool_ops = {
+static const struct file_operations sel_bool_ops = {
 	.read           = sel_read_bool,
 	.write          = sel_write_bool,
 };
@@ -932,7 +932,7 @@ out:
 	return length;
 }
 
-static struct file_operations sel_commit_bools_ops = {
+static const struct file_operations sel_commit_bools_ops = {
 	.write          = sel_commit_bools_write,
 };
 
@@ -965,7 +965,7 @@ static void sel_remove_bools(struct dentry *de)
 	file_list_lock();
 	list_for_each(p, &sb->s_files) {
 		struct file * filp = list_entry(p, struct file, f_u.fu_list);
-		struct dentry * dentry = filp->f_dentry;
+		struct dentry * dentry = filp->f_path.dentry;
 
 		if (dentry->d_parent != de) {
 			continue;
@@ -1131,12 +1131,12 @@ out:
 	return ret;
 }
 
-static struct file_operations sel_avc_cache_threshold_ops = {
+static const struct file_operations sel_avc_cache_threshold_ops = {
 	.read		= sel_read_avc_cache_threshold,
 	.write		= sel_write_avc_cache_threshold,
 };
 
-static struct file_operations sel_avc_hash_stats_ops = {
+static const struct file_operations sel_avc_hash_stats_ops = {
 	.read		= sel_read_avc_hash_stats,
 };
 
@@ -1198,7 +1198,7 @@ static int sel_open_avc_cache_stats(struct inode *inode, struct file *file)
 	return seq_open(file, &sel_avc_cache_stats_seq_ops);
 }
 
-static struct file_operations sel_avc_cache_stats_ops = {
+static const struct file_operations sel_avc_cache_stats_ops = {
 	.open		= sel_open_avc_cache_stats,
 	.read		= seq_read,
 	.llseek		= seq_lseek,

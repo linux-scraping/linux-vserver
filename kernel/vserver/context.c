@@ -3,7 +3,7 @@
  *
  *  Virtual Server: Context Support
  *
- *  Copyright (C) 2003-2006  Herbert Pötzl
+ *  Copyright (C) 2003-2007  Herbert Pötzl
  *
  *  V0.01  context helper
  *  V0.02  vx_ctx_kill syscall command
@@ -20,12 +20,14 @@
  *  V0.13  separate per cpu data
  *  V0.14  changed vcmds to vxi arg
  *  V0.15  added context stat
+ *  V0.16  have __create claim() the vxi
  *
  */
 
 #include <linux/slab.h>
 #include <linux/types.h>
-#include <linux/namespace.h>
+#include <linux/mnt_namespace.h>
+#include <linux/pid_namespace.h>
 
 #include <linux/sched.h>
 #include <linux/vserver/context.h>
@@ -92,8 +94,8 @@ static struct vx_info *__alloc_vx_info(xid_t xid)
 	init_waitqueue_head(&new->vx_wait);
 
 	/* prepare reaper */
-	get_task_struct(child_reaper);
-	new->vx_reaper = child_reaper;
+	get_task_struct(init_pid_ns.child_reaper);
+	new->vx_reaper = init_pid_ns.child_reaper;
 
 	/* rest of init goes here */
 	vx_info_init_limit(&new->limit);
@@ -175,10 +177,10 @@ static void __shutdown_vx_info(struct vx_info *vxi)
 	vs_state_change(vxi, VSC_SHUTDOWN);
 
 	nsproxy = xchg(&vxi->vx_nsproxy, NULL);
+	fs = xchg(&vxi->vx_fs, NULL);
+
 	if (nsproxy)
 		put_nsproxy(nsproxy);
-
-	fs = xchg(&vxi->vx_fs, NULL);
 	if (fs)
 		put_fs_struct(fs);
 }
@@ -259,11 +261,14 @@ static inline void __unhash_vx_info(struct vx_info *vxi)
 
 	vxd_assert_lock(&vx_info_hash_lock);
 	vxdprintk(VXD_CBIT(xid, 4),
-		"__unhash_vx_info: %p[#%d]", vxi, vxi->vx_id);
+		"__unhash_vx_info: %p[#%d.%d.%d]", vxi, vxi->vx_id,
+		atomic_read(&vxi->vx_usecnt), atomic_read(&vxi->vx_tasks));
 	vxh_unhash_vx_info(vxi);
 
 	/* context must be hashed */
 	BUG_ON(!vx_info_state(vxi, VXS_HASHED));
+	/* but without tasks */
+	BUG_ON(atomic_read(&vxi->vx_tasks));
 
 	vxi->vx_state &= ~VXS_HASHED;
 	hlist_del_init(&vxi->vx_hlist);
@@ -397,7 +402,7 @@ out_unlock:
 /*	__create_vx_info()
 
 	* create the requested context
-	* get() and hash it					*/
+	* get(), claim() and hash it				*/
 
 static struct vx_info * __create_vx_info(int id)
 {
@@ -450,6 +455,7 @@ static struct vx_info * __create_vx_info(int id)
 	/* new context */
 	vxdprintk(VXD_CBIT(xid, 0),
 		"create_vx_info(%d) = %p (new)", id, new);
+	claim_vx_info(new, NULL);
 	__hash_vx_info(get_vx_info(new));
 	vxi = new, new = NULL;
 
@@ -662,6 +668,9 @@ int vx_migrate_task(struct task_struct *p, struct vx_info *vxi, int unshare)
 		!vx_info_flags(vxi, VXF_STATE_SETUP, 0))
 		return -EACCES;
 
+	if (vx_info_state(vxi, VXS_SHUTDOWN))
+		return -EFAULT;
+
 	old_vxi = task_get_vx_info(p);
 	if (old_vxi == vxi)
 		goto out;
@@ -707,7 +716,7 @@ int vx_migrate_task(struct task_struct *p, struct vx_info *vxi, int unshare)
 		/* hack for *spaces to provide compatibility */
 		if (unshare) {
 			ret = sys_unshare(CLONE_NEWUTS|CLONE_NEWIPC);
-			vx_set_space(vxi, 0);
+			vx_set_space(vxi, CLONE_NEWUTS|CLONE_NEWIPC);
 		}
 	}
 out:
@@ -768,7 +777,7 @@ void vx_set_persistent(struct vx_info *vxi)
 		"vx_set_persistent(%p[#%d])", vxi, vxi->vx_id);
 
 	get_vx_info(vxi);
-	claim_vx_info(vxi, current);
+	claim_vx_info(vxi, NULL);
 }
 
 void vx_clear_persistent(struct vx_info *vxi)
@@ -776,7 +785,7 @@ void vx_clear_persistent(struct vx_info *vxi)
 	vxdprintk(VXD_CBIT(xid, 6),
 		"vx_clear_persistent(%p[#%d])", vxi, vxi->vx_id);
 
-	release_vx_info(vxi, current);
+	release_vx_info(vxi, NULL);
 	put_vx_info(vxi);
 }
 
@@ -812,7 +821,7 @@ void	exit_vx_info_early(struct task_struct *p, int code)
 		if (vxi->vx_initpid == p->tgid)
 			vx_exit_init(vxi, p, code);
 		if (vxi->vx_reaper == p)
-			vx_set_reaper(vxi, child_reaper);
+			vx_set_reaper(vxi, init_pid_ns.child_reaper);
 	}
 }
 
@@ -894,26 +903,22 @@ int vc_ctx_create(uint32_t xid, void __user *data)
 	/* initial flags */
 	new_vxi->vx_flags = vc_data.flagword;
 
+	ret = -ENOEXEC;
+	if (vs_state_change(new_vxi, VSC_STARTUP))
+		goto out;
+
+	ret = vx_migrate_task(current, new_vxi, (!data));
+	if (ret)
+		goto out;
+
+	/* return context id on success */
+	ret = new_vxi->vx_id;
+
 	/* get a reference for persistent contexts */
 	if ((vc_data.flagword & VXF_PERSISTENT))
 		vx_set_persistent(new_vxi);
-
-	ret = -ENOEXEC;
-	if (vs_state_change(new_vxi, VSC_STARTUP))
-		goto out_unhash;
-	ret = vx_migrate_task(current, new_vxi, (!data));
-	if (!ret) {
-		/* return context id on success */
-		ret = new_vxi->vx_id;
-		goto out;
-	}
-out_unhash:
-	/* prepare for context disposal */
-	new_vxi->vx_state |= VXS_SHUTDOWN;
-	if ((vc_data.flagword & VXF_PERSISTENT))
-		vx_clear_persistent(new_vxi);
-	__unhash_vx_info(new_vxi);
 out:
+	release_vx_info(new_vxi, NULL);
 	put_vx_info(new_vxi);
 	return ret;
 }

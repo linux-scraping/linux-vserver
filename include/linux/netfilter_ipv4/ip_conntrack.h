@@ -9,6 +9,7 @@
 #include <linux/compiler.h>
 #include <asm/atomic.h>
 
+#include <linux/timer.h>
 #include <linux/netfilter_ipv4/ip_conntrack_tcp.h>
 #include <linux/netfilter_ipv4/ip_conntrack_icmp.h>
 #include <linux/netfilter_ipv4/ip_conntrack_proto_gre.h>
@@ -277,7 +278,7 @@ extern struct ip_conntrack_expect *
 __ip_conntrack_expect_find(const struct ip_conntrack_tuple *tuple);
 
 extern struct ip_conntrack_expect *
-ip_conntrack_expect_find(const struct ip_conntrack_tuple *tuple);
+ip_conntrack_expect_find_get(const struct ip_conntrack_tuple *tuple);
 
 extern struct ip_conntrack_tuple_hash *
 __ip_conntrack_find(const struct ip_conntrack_tuple *tuple,
@@ -300,6 +301,12 @@ extern unsigned int ip_conntrack_htable_size;
 extern int ip_conntrack_checksum;
  
 #define CONNTRACK_STAT_INC(count) (__get_cpu_var(ip_conntrack_stat).count++)
+#define CONNTRACK_STAT_INC_ATOMIC(count)		\
+do {							\
+	local_bh_disable();				\
+	__get_cpu_var(ip_conntrack_stat).count++;	\
+	local_bh_enable();				\
+} while (0)
 
 #ifdef CONFIG_IP_NF_CONNTRACK_EVENTS
 #include <linux/notifier.h>

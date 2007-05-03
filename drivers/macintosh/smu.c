@@ -46,6 +46,7 @@
 #include <asm/abs_addr.h>
 #include <asm/uaccess.h>
 #include <asm/of_device.h>
+#include <asm/of_platform.h>
 
 #define VERSION "0.7"
 #define AUTHOR  "(c) 2005 Benjamin Herrenschmidt, IBM Corp."
@@ -600,7 +601,7 @@ core_initcall(smu_late_init);
  * sysfs visibility
  */
 
-static void smu_expose_childs(void *unused)
+static void smu_expose_childs(struct work_struct *unused)
 {
 	struct device_node *np;
 
@@ -610,7 +611,7 @@ static void smu_expose_childs(void *unused)
 						  &smu->of_dev->dev);
 }
 
-static DECLARE_WORK(smu_expose_childs_work, smu_expose_childs, NULL);
+static DECLARE_WORK(smu_expose_childs_work, smu_expose_childs);
 
 static int smu_platform_probe(struct of_device* dev,
 			      const struct of_device_id *match)
@@ -653,7 +654,7 @@ static int __init smu_init_sysfs(void)
 	 * I'm a bit too far from figuring out how that works with those
 	 * new chipsets, but that will come back and bite us
 	 */
-	of_register_driver(&smu_of_platform_driver);
+	of_register_platform_driver(&smu_of_platform_driver);
 	return 0;
 }
 
@@ -944,7 +945,7 @@ static struct smu_sdbp_header *smu_create_sdb_partition(int id)
 	 */
 	tlen = sizeof(struct property) + len + 18;
 
-	prop = kcalloc(tlen, 1, GFP_KERNEL);
+	prop = kzalloc(tlen, GFP_KERNEL);
 	if (prop == NULL)
 		return NULL;
 	hdr = (struct smu_sdbp_header *)(prop + 1);
@@ -1258,9 +1259,9 @@ static int smu_release(struct inode *inode, struct file *file)
 			set_current_state(TASK_UNINTERRUPTIBLE);
 			if (pp->cmd.status != 1)
 				break;
-			spin_lock_irqsave(&pp->lock, flags);
-			schedule();
 			spin_unlock_irqrestore(&pp->lock, flags);
+			schedule();
+			spin_lock_irqsave(&pp->lock, flags);
 		}
 		set_current_state(TASK_RUNNING);
 		remove_wait_queue(&pp->wait, &wait);
@@ -1276,7 +1277,7 @@ static int smu_release(struct inode *inode, struct file *file)
 }
 
 
-static struct file_operations smu_device_fops = {
+static const struct file_operations smu_device_fops = {
 	.llseek		= no_llseek,
 	.read		= smu_read,
 	.write		= smu_write,

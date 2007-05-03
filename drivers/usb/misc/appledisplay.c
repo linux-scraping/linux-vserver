@@ -76,7 +76,7 @@ struct appledisplay {
 	char *urbdata;			/* interrupt URB data buffer */
 	char *msgdata;			/* control message data buffer */
 
-	struct work_struct work;
+	struct delayed_work work;
 	int button_pressed;
 	spinlock_t lock;
 };
@@ -117,7 +117,7 @@ static void appledisplay_complete(struct urb *urb)
 	case ACD_BTN_BRIGHT_UP:
 	case ACD_BTN_BRIGHT_DOWN:
 		pdata->button_pressed = 1;
-		queue_work(wq, &pdata->work);
+		queue_delayed_work(wq, &pdata->work, 0);
 		break;
 	case ACD_BTN_NONE:
 	default:
@@ -141,7 +141,7 @@ static int appledisplay_bl_update_status(struct backlight_device *bd)
 	int retval;
 
 	pdata->msgdata[0] = 0x10;
-	pdata->msgdata[1] = bd->props->brightness;
+	pdata->msgdata[1] = bd->props.brightness;
 
 	retval = usb_control_msg(
 		pdata->udev,
@@ -177,23 +177,20 @@ static int appledisplay_bl_get_brightness(struct backlight_device *bd)
 		return pdata->msgdata[1];
 }
 
-static struct backlight_properties appledisplay_bl_data = {
-	.owner		= THIS_MODULE,
+static struct backlight_ops appledisplay_bl_data = {
 	.get_brightness	= appledisplay_bl_get_brightness,
 	.update_status	= appledisplay_bl_update_status,
-	.max_brightness	= 0xFF
 };
 
-static void appledisplay_work(void *private)
+static void appledisplay_work(struct work_struct *work)
 {
-	struct appledisplay *pdata = private;
+	struct appledisplay *pdata =
+		container_of(work, struct appledisplay, work.work);
 	int retval;
 
-	up(&pdata->bd->sem);
 	retval = appledisplay_bl_get_brightness(pdata->bd);
 	if (retval >= 0)
-		pdata->bd->props->brightness = retval;
-	down(&pdata->bd->sem);
+		pdata->bd->props.brightness = retval;
 
 	/* Poll again in about 125ms if there's still a button pressed */
 	if (pdata->button_pressed)
@@ -216,10 +213,7 @@ static int appledisplay_probe(struct usb_interface *iface,
 	iface_desc = iface->cur_altsetting;
 	for (i = 0; i < iface_desc->desc.bNumEndpoints; i++) {
 		endpoint = &iface_desc->endpoint[i].desc;
-		if (!int_in_endpointAddr &&
-		    (endpoint->bEndpointAddress & USB_DIR_IN) &&
-		    ((endpoint->bmAttributes & USB_ENDPOINT_XFERTYPE_MASK) ==
-		     USB_ENDPOINT_XFER_INT)) {
+		if (!int_in_endpointAddr && usb_endpoint_is_int_in(endpoint)) {
 			/* we found an interrupt in endpoint */
 			int_in_endpointAddr = endpoint->bEndpointAddress;
 			break;
@@ -241,7 +235,7 @@ static int appledisplay_probe(struct usb_interface *iface,
 	pdata->udev = udev;
 
 	spin_lock_init(&pdata->lock);
-	INIT_WORK(&pdata->work, appledisplay_work, pdata);
+	INIT_DELAYED_WORK(&pdata->work, appledisplay_work);
 
 	/* Allocate buffer for control messages */
 	pdata->msgdata = kmalloc(ACD_MSG_BUFFER_LEN, GFP_KERNEL);
@@ -283,17 +277,17 @@ static int appledisplay_probe(struct usb_interface *iface,
 	/* Register backlight device */
 	snprintf(bl_name, sizeof(bl_name), "appledisplay%d",
 		atomic_inc_return(&count_displays) - 1);
-	pdata->bd = backlight_device_register(bl_name, pdata,
+	pdata->bd = backlight_device_register(bl_name, NULL, pdata,
 						&appledisplay_bl_data);
 	if (IS_ERR(pdata->bd)) {
 		err("appledisplay: Backlight registration failed");
 		goto error;
 	}
 
+	pdata->bd->props.max_brightness = 0xff;
+
 	/* Try to get brightness */
-	up(&pdata->bd->sem);
 	brightness = appledisplay_bl_get_brightness(pdata->bd);
-	down(&pdata->bd->sem);
 
 	if (brightness < 0) {
 		retval = brightness;
@@ -302,9 +296,7 @@ static int appledisplay_probe(struct usb_interface *iface,
 	}
 
 	/* Set brightness in backlight device */
-	up(&pdata->bd->sem);
-	pdata->bd->props->brightness = brightness;
-	down(&pdata->bd->sem);
+	pdata->bd->props.brightness = brightness;
 
 	/* save our data pointer in the interface device */
 	usb_set_intfdata(iface, pdata);

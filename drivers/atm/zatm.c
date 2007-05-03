@@ -4,7 +4,6 @@
 
 
 #include <linux/module.h>
-#include <linux/sched.h>
 #include <linux/kernel.h>
 #include <linux/mm.h>
 #include <linux/pci.h>
@@ -996,7 +995,7 @@ static int start_tx(struct atm_dev *dev)
 
 	DPRINTK("start_tx\n");
 	zatm_dev = ZATM_DEV(dev);
-	zatm_dev->tx_map = (struct atm_vcc **) kmalloc(sizeof(struct atm_vcc *)*
+	zatm_dev->tx_map = kmalloc(sizeof(struct atm_vcc *)*
 	    zatm_dev->chans,GFP_KERNEL);
 	if (!zatm_dev->tx_map) return -ENOMEM;
 	zatm_dev->tx_bw = ATM_OC3_PCR;
@@ -1178,7 +1177,7 @@ static void __devinit eprom_get_esi(struct atm_dev *dev)
 /*--------------------------------- entries ---------------------------------*/
 
 
-static int __init zatm_init(struct atm_dev *dev)
+static int __devinit zatm_init(struct atm_dev *dev)
 {
 	struct zatm_dev *zatm_dev;
 	struct pci_dev *pci_dev;
@@ -1257,7 +1256,7 @@ static int __init zatm_init(struct atm_dev *dev)
 }
 
 
-static int __init zatm_start(struct atm_dev *dev)
+static int __devinit zatm_start(struct atm_dev *dev)
 {
 	struct zatm_dev *zatm_dev = ZATM_DEV(dev);
 	struct pci_dev *pdev = zatm_dev->pci_dev;
@@ -1591,7 +1590,7 @@ static int __devinit zatm_init_one(struct pci_dev *pci_dev,
 	struct zatm_dev *zatm_dev;
 	int ret = -ENOMEM;
 
-	zatm_dev = (struct zatm_dev *) kmalloc(sizeof(*zatm_dev), GFP_KERNEL);
+	zatm_dev = kmalloc(sizeof(*zatm_dev), GFP_KERNEL);
 	if (!zatm_dev) {
 		printk(KERN_EMERG "%s: memory shortage\n", DEV_LABEL);
 		goto out;

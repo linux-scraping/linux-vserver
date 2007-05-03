@@ -3,7 +3,7 @@
  *
  *  Virtual Context Support
  *
- *  Copyright (C) 2003-2006  Herbert Pötzl
+ *  Copyright (C) 2003-2007  Herbert Pötzl
  *
  *  V0.01  basic structure
  *  V0.02  adaptation vs1.3.0
@@ -40,10 +40,6 @@ static struct proc_dir_entry *proc_virtual;
 static struct proc_dir_entry *proc_virtnet;
 
 
-
-// #define PROC_VID_MASK	0x60
-
-
 /* first the actual feeds */
 
 
@@ -60,18 +56,24 @@ static int proc_vci(char *buffer)
 		);
 }
 
-static int proc_virtual_info(struct vx_info *vxi, char *buffer)
+static int proc_virtual_info(char *buffer)
 {
 	return proc_vci(buffer);
 }
 
-static int proc_virtual_status(struct vx_info *vxi, char *buffer)
+static int proc_virtual_status(char *buffer)
 {
 	return sprintf(buffer,
 		"#CTotal:\t%d\n"
 		"#CActive:\t%d\n"
+		"#NSProxy:\t%d\t%d %d %d %d\n"
 		,atomic_read(&vx_global_ctotal)
 		,atomic_read(&vx_global_cactive)
+		,atomic_read(&vs_global_nsproxy)
+		,atomic_read(&vs_global_fs)
+		,atomic_read(&vs_global_mnt_ns)
+		,atomic_read(&vs_global_uts_ns)
+		,atomic_read(&vs_global_ipc_ns)
 		);
 }
 
@@ -101,13 +103,13 @@ int proc_vxi_status (struct vx_info *vxi, char *buffer)
 		"Flags:\t%016llx\n"
 		"BCaps:\t%016llx\n"
 		"CCaps:\t%016llx\n"
-//		"Ticks:\t%d\n"
+		"Spaces:\t%08lx\n"
 		,atomic_read(&vxi->vx_usecnt)
 		,atomic_read(&vxi->vx_tasks)
 		,(unsigned long long)vxi->vx_flags
 		,(unsigned long long)vxi->vx_bcaps
 		,(unsigned long long)vxi->vx_ccaps
-//		,atomic_read(&vxi->limit.ticks)
+		,vxi->vx_nsmask
 		);
 	return length;
 }
@@ -155,12 +157,12 @@ int proc_vxi_cacct (struct vx_info *vxi, char *buffer)
 }
 
 
-static int proc_virtnet_info(struct nx_info *nxi, char *buffer)
+static int proc_virtnet_info(char *buffer)
 {
 	return proc_vci(buffer);
 }
 
-static int proc_virtnet_status(struct nx_info *nxi, char *buffer)
+static int proc_virtnet_status(char *buffer)
 {
 	return sprintf(buffer,
 		"#CTotal:\t%d\n"
@@ -195,8 +197,12 @@ int proc_nxi_status (struct nx_info *nxi, char *buffer)
 	length = sprintf(buffer,
 		"UseCnt:\t%d\n"
 		"Tasks:\t%d\n"
+		"Flags:\t%016llx\n"
+		"NCaps:\t%016llx\n"
 		,atomic_read(&nxi->nx_usecnt)
 		,atomic_read(&nxi->nx_tasks)
+		,(unsigned long long)nxi->nx_flags
+		,(unsigned long long)nxi->nx_ncaps
 		);
 	return length;
 }
@@ -353,6 +359,33 @@ static int proc_nid_revalidate(struct dentry * dentry, struct nameidata *nd)
 
 #define PROC_BLOCK_SIZE (PAGE_SIZE - 1024)
 
+static ssize_t proc_vs_info_read(struct file * file, char __user * buf,
+			  size_t count, loff_t *ppos)
+{
+	struct inode *inode = file->f_dentry->d_inode;
+	unsigned long page;
+	ssize_t length = 0;
+
+	if (count > PROC_BLOCK_SIZE)
+		count = PROC_BLOCK_SIZE;
+
+	/* fade that out as soon as stable */
+	WARN_ON(PROC_I(inode)->fd);
+
+	if (!(page = __get_free_page(GFP_KERNEL)))
+		return -ENOMEM;
+
+	BUG_ON(!PROC_I(inode)->op.proc_vs_read);
+	length = PROC_I(inode)->op.proc_vs_read((char*)page);
+
+	if (length >= 0)
+		length = simple_read_from_buffer(buf, count, ppos,
+			(char *)page, length);
+
+	free_page(page);
+	return length;
+}
+
 static ssize_t proc_vx_info_read(struct file * file, char __user * buf,
 			  size_t count, loff_t *ppos)
 {
@@ -365,12 +398,11 @@ static ssize_t proc_vx_info_read(struct file * file, char __user * buf,
 	if (count > PROC_BLOCK_SIZE)
 		count = PROC_BLOCK_SIZE;
 
-	/* context entry? */
-	if (xid) {
-		vxi = lookup_vx_info(xid);
-		if (!vxi)
-			goto out;
-	}
+	/* fade that out as soon as stable */
+	WARN_ON(!xid);
+	vxi = lookup_vx_info(xid);
+	if (!vxi)
+		goto out;
 
 	length = -ENOMEM;
 	if (!(page = __get_free_page(GFP_KERNEL)))
@@ -402,12 +434,11 @@ static ssize_t proc_nx_info_read(struct file * file, char __user * buf,
 	if (count > PROC_BLOCK_SIZE)
 		count = PROC_BLOCK_SIZE;
 
-	/* context entry? */
-	if (nid) {
-		nxi = lookup_nx_info(nid);
-		if (!nxi)
-			goto out;
-	}
+	/* fade that out as soon as stable */
+	WARN_ON(!nid);
+	nxi = lookup_nx_info(nid);
+	if (!nxi)
+		goto out;
 
 	length = -ENOMEM;
 	if (!(page = __get_free_page(GFP_KERNEL)))
@@ -447,6 +478,11 @@ out:
 		&proc_##OTYPE##_inode_operations,	\
 		&proc_##OTYPE##_file_operations, { } )
 
+#define INF(NAME, MODE, OTYPE)				\
+	NOD(NAME, (S_IFREG|(MODE)), NULL,		\
+		&proc_vs_info_file_operations,		\
+		{ .proc_vs_read = &proc_##OTYPE } )
+
 #define VINF(NAME, MODE, OTYPE)				\
 	NOD(NAME, (S_IFREG|(MODE)), NULL,		\
 		&proc_vx_info_file_operations,		\
@@ -458,6 +494,9 @@ out:
 		{ .proc_nxi_read = &proc_##OTYPE } )
 
 
+static struct file_operations proc_vs_info_file_operations = {
+	.read =		proc_vs_info_read,
+};
 
 static struct file_operations proc_vx_info_file_operations = {
 	.read =		proc_vx_info_read,
@@ -668,8 +707,8 @@ static struct inode_operations proc_xid_inode_operations = {
 };
 
 static struct vs_entry vx_virtual_stuff[] = {
-	VINF("info",	S_IRUGO, virtual_info),
-	VINF("status",	S_IRUGO, virtual_status),
+	INF("info",	S_IRUGO, virtual_info),
+	INF("status",	S_IRUGO, virtual_status),
 	DIR(NULL,	S_IRUGO|S_IXUGO, xid),
 };
 
@@ -710,8 +749,8 @@ static struct inode_operations proc_nid_inode_operations = {
 };
 
 static struct vs_entry nx_virtnet_stuff[] = {
-	NINF("info",	S_IRUGO, virtnet_info),
-	NINF("status",	S_IRUGO, virtnet_status),
+	INF("info",	S_IRUGO, virtnet_info),
+	INF("status",	S_IRUGO, virtnet_status),
 	DIR(NULL,	S_IRUGO|S_IXUGO, nid),
 };
 
@@ -789,10 +828,11 @@ int proc_virtual_readdir(struct file * filp,
 		p = &vx_virtual_stuff[size-1];
 		nr_xids = get_xid_list(index, xid_array, PROC_MAXVIDS);
 		for (i = 0; i < nr_xids; i++) {
-			int xid = xid_array[i];
+			int n, xid = xid_array[i];
 			unsigned int j = PROC_NUMBUF;
 
-			do buf[--j] = '0' + (xid % 10); while (xid/=10);
+			n = xid;
+			do buf[--j] = '0' + (n % 10); while (n /= 10);
 
 			if (proc_fill_cache(filp, dirent, filldir, buf+j, PROC_NUMBUF-j,
 				vs_proc_instantiate, xid, p))
@@ -805,6 +845,15 @@ out:
 	return 0;
 }
 
+static int proc_virtual_getattr(struct vfsmount *mnt,
+	struct dentry *dentry, struct kstat *stat)
+{
+	struct inode *inode = dentry->d_inode;
+
+	generic_fillattr(inode, stat);
+	stat->nlink = 2 + atomic_read(&vx_global_cactive);
+	return 0;
+}
 
 static struct file_operations proc_virtual_dir_operations = {
 	.read =		generic_read_dir,
@@ -812,6 +861,7 @@ static struct file_operations proc_virtual_dir_operations = {
 };
 
 static struct inode_operations proc_virtual_dir_inode_operations = {
+	.getattr =	proc_virtual_getattr,
 	.lookup =	proc_virtual_lookup,
 };
 
@@ -861,10 +911,11 @@ int proc_virtnet_readdir(struct file * filp,
 		p = &nx_virtnet_stuff[size-1];
 		nr_nids = get_nid_list(index, nid_array, PROC_MAXVIDS);
 		for (i = 0; i < nr_nids; i++) {
-			int nid = nid_array[i];
+			int n, nid = nid_array[i];
 			unsigned int j = PROC_NUMBUF;
 
-			do buf[--j] = '0' + (nid % 10); while (nid/=10);
+			n = nid;
+			do buf[--j] = '0' + (n % 10); while (n /= 10);
 
 			if (proc_fill_cache(filp, dirent, filldir, buf+j, PROC_NUMBUF-j,
 				vs_proc_instantiate, nid, p))
@@ -877,6 +928,15 @@ out:
 	return 0;
 }
 
+static int proc_virtnet_getattr(struct vfsmount *mnt,
+	struct dentry *dentry, struct kstat *stat)
+{
+	struct inode *inode = dentry->d_inode;
+
+	generic_fillattr(inode, stat);
+	stat->nlink = 2 + atomic_read(&nx_global_cactive);
+	return 0;
+}
 
 static struct file_operations proc_virtnet_dir_operations = {
 	.read =		generic_read_dir,
@@ -884,6 +944,7 @@ static struct file_operations proc_virtnet_dir_operations = {
 };
 
 static struct inode_operations proc_virtnet_dir_inode_operations = {
+	.getattr = 	proc_virtnet_getattr,
 	.lookup =	proc_virtnet_lookup,
 };
 
@@ -951,6 +1012,11 @@ int proc_pid_nx_info(struct task_struct *p, char *buffer)
 	nxi = task_get_nx_info(p);
 	if (!nxi)
 		goto out;
+
+	buffer += sprintf (buffer,"NCaps:\t%016llx\n"
+		,(unsigned long long)nxi->nx_ncaps);
+	buffer += sprintf (buffer,"NFlags:\t%016llx\n"
+		,(unsigned long long)nxi->nx_flags);
 
 	for (i=0; i<nxi->nbipv4; i++){
 		buffer += sprintf (buffer,

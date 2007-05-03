@@ -13,10 +13,13 @@
 #include <linux/linkage.h>
 #include <asm/assembler.h>
 #include <asm/asm-offsets.h>
-#include <asm/hardware/arm_scu.h>
-#include <asm/procinfo.h>
+#include <asm/elf.h>
 #include <asm/pgtable-hwdef.h>
 #include <asm/pgtable.h>
+
+#ifdef CONFIG_SMP
+#include <asm/hardware/arm_scu.h>
+#endif
 
 #include "proc-macros.S"
 
@@ -29,6 +32,12 @@
 #define TTB_RGN_WBWA	(1 << 3)
 #define TTB_RGN_WT	(2 << 3)
 #define TTB_RGN_WB	(3 << 3)
+
+#ifndef CONFIG_SMP
+#define TTB_FLAGS	TTB_RGN_WBWA
+#else
+#define TTB_FLAGS	TTB_RGN_WBWA|TTB_S
+#endif
 
 ENTRY(cpu_v6_proc_init)
 	mov	pc, lr
@@ -92,9 +101,7 @@ ENTRY(cpu_v6_switch_mm)
 #ifdef CONFIG_MMU
 	mov	r2, #0
 	ldr	r1, [r1, #MM_CONTEXT_ID]	@ get mm->context.id
-#ifdef CONFIG_SMP
-	orr	r0, r0, #TTB_RGN_WBWA|TTB_S	@ mark PTWs shared, outer cacheable
-#endif
+	orr	r0, r0, #TTB_FLAGS
 	mcr	p15, 0, r2, c7, c5, 6		@ flush BTAC/BTB
 	mcr	p15, 0, r2, c7, c10, 4		@ drain write buffer
 	mcr	p15, 0, r0, c2, c0, 0		@ set TTB 0
@@ -103,13 +110,14 @@ ENTRY(cpu_v6_switch_mm)
 	mov	pc, lr
 
 /*
- *	cpu_v6_set_pte(ptep, pte)
+ *	cpu_v6_set_pte_ext(ptep, pte, ext)
  *
  *	Set a level 2 translation table entry.
  *
  *	- ptep  - pointer to level 2 translation table entry
  *		  (hardware version is stored at -1024 bytes)
  *	- pte   - PTE value to store
+ *	- ext	- value for extended PTE bits
  *
  *	Permissions:
  *	  YUWD  APX AP1 AP0	SVC	User
@@ -121,33 +129,34 @@ ENTRY(cpu_v6_switch_mm)
  *	  11x0   0   1   0	r/w	r/o
  *	  1111   0   1   1	r/w	r/w
  */
-ENTRY(cpu_v6_set_pte)
+ENTRY(cpu_v6_set_pte_ext)
 #ifdef CONFIG_MMU
 	str	r1, [r0], #-2048		@ linux version
 
-	bic	r2, r1, #0x000003f0
-	bic	r2, r2, #0x00000003
-	orr	r2, r2, #PTE_EXT_AP0 | 2
+	bic	r3, r1, #0x000003f0
+	bic	r3, r3, #0x00000003
+	orr	r3, r3, r2
+	orr	r3, r3, #PTE_EXT_AP0 | 2
 
 	tst	r1, #L_PTE_WRITE
 	tstne	r1, #L_PTE_DIRTY
-	orreq	r2, r2, #PTE_EXT_APX
+	orreq	r3, r3, #PTE_EXT_APX
 
 	tst	r1, #L_PTE_USER
-	orrne	r2, r2, #PTE_EXT_AP1
-	tstne	r2, #PTE_EXT_APX
-	bicne	r2, r2, #PTE_EXT_APX | PTE_EXT_AP0
+	orrne	r3, r3, #PTE_EXT_AP1
+	tstne	r3, #PTE_EXT_APX
+	bicne	r3, r3, #PTE_EXT_APX | PTE_EXT_AP0
 
 	tst	r1, #L_PTE_YOUNG
-	biceq	r2, r2, #PTE_EXT_APX | PTE_EXT_AP_MASK
+	biceq	r3, r3, #PTE_EXT_APX | PTE_EXT_AP_MASK
 
 	tst	r1, #L_PTE_EXEC
-	orreq	r2, r2, #PTE_EXT_XN
+	orreq	r3, r3, #PTE_EXT_XN
 
 	tst	r1, #L_PTE_PRESENT
-	moveq	r2, #0
+	moveq	r3, #0
 
-	str	r2, [r0]
+	str	r3, [r0]
 	mcr	p15, 0, r0, c7, c10, 1 @ flush_pte
 #endif
 	mov	pc, lr
@@ -156,7 +165,7 @@ ENTRY(cpu_v6_set_pte)
 
 
 cpu_v6_name:
-	.asciz	"Some Random V6 Processor"
+	.asciz	"ARMv6-compatible processor"
 	.align
 
 	.section ".text.init", #alloc, #execinstr
@@ -181,8 +190,7 @@ __v6_setup:
 	/* Set up the SCU on core 0 only */
 	mrc	p15, 0, r0, c0, c0, 5		@ CPU core number
 	ands	r0, r0, #15
-	moveq	r0, #0x10000000 @ SCU_BASE
-	orreq	r0, r0, #0x00100000
+	ldreq	r0, =SCU_BASE
 	ldreq	r5, [r0, #SCU_CTRL]
 	orreq	r5, r5, #1
 	streq	r5, [r0, #SCU_CTRL]
@@ -202,16 +210,9 @@ __v6_setup:
 #ifdef CONFIG_MMU
 	mcr	p15, 0, r0, c8, c7, 0		@ invalidate I + D TLBs
 	mcr	p15, 0, r0, c2, c0, 2		@ TTB control register
-#ifdef CONFIG_SMP
-	orr	r4, r4, #TTB_RGN_WBWA|TTB_S	@ mark PTWs shared, outer cacheable
-#endif
+	orr	r4, r4, #TTB_FLAGS
 	mcr	p15, 0, r4, c2, c0, 1		@ load TTB1
 #endif /* CONFIG_MMU */
-#ifdef CONFIG_VFP
-	mrc	p15, 0, r0, c1, c0, 2
-	orr	r0, r0, #(0xf << 20)
-	mcr	p15, 0, r0, c1, c0, 2		@ Enable full access to VFP
-#endif
 	adr	r5, v6_crval
 	ldmia	r5, {r5, r6}
 	mrc	p15, 0, r0, c1, c0, 0		@ read control register
@@ -238,7 +239,7 @@ ENTRY(v6_processor_functions)
 	.word	cpu_v6_do_idle
 	.word	cpu_v6_dcache_clean_area
 	.word	cpu_v6_switch_mm
-	.word	cpu_v6_set_pte
+	.word	cpu_v6_set_pte_ext
 	.size	v6_processor_functions, . - v6_processor_functions
 
 	.type	cpu_arch_name, #object
@@ -273,7 +274,7 @@ __v6_proc_info:
 	b	__v6_setup
 	.long	cpu_arch_name
 	.long	cpu_elf_name
-	.long	HWCAP_SWP|HWCAP_HALF|HWCAP_THUMB|HWCAP_FAST_MULT|HWCAP_VFP|HWCAP_EDSP|HWCAP_JAVA
+	.long	HWCAP_SWP|HWCAP_HALF|HWCAP_THUMB|HWCAP_FAST_MULT|HWCAP_EDSP|HWCAP_JAVA
 	.long	cpu_v6_name
 	.long	v6_processor_functions
 	.long	v6wbi_tlb_fns

@@ -97,7 +97,7 @@ static DEFINE_MUTEX(iprune_mutex);
  */
 struct inodes_stat_t inodes_stat;
 
-static kmem_cache_t * inode_cachep __read_mostly;
+static struct kmem_cache * inode_cachep __read_mostly;
 
 static struct inode *alloc_inode(struct super_block *sb)
 {
@@ -109,7 +109,7 @@ static struct inode *alloc_inode(struct super_block *sb)
 	if (sb->s_op->alloc_inode)
 		inode = sb->s_op->alloc_inode(sb);
 	else
-		inode = (struct inode *) kmem_cache_alloc(inode_cachep, SLAB_KERNEL);
+		inode = (struct inode *) kmem_cache_alloc(inode_cachep, GFP_KERNEL);
 
 	if (inode) {
 		struct address_space * const mapping = &inode->i_data;
@@ -212,7 +212,7 @@ void inode_init_once(struct inode *inode)
 
 EXPORT_SYMBOL(inode_init_once);
 
-static void init_once(void * foo, kmem_cache_t * cachep, unsigned long flags)
+static void init_once(void * foo, struct kmem_cache * cachep, unsigned long flags)
 {
 	struct inode * inode = (struct inode *) foo;
 
@@ -419,7 +419,8 @@ static void prune_icache(int nr_to_scan)
 			__iget(inode);
 			spin_unlock(&inode_lock);
 			if (remove_inode_buffers(inode))
-				reap += invalidate_inode_pages(&inode->i_data);
+				reap += invalidate_mapping_pages(&inode->i_data,
+								0, -1);
 			iput(inode);
 			spin_lock(&inode_lock);
 
@@ -714,7 +715,7 @@ EXPORT_SYMBOL(iunique);
 struct inode *igrab(struct inode *inode)
 {
 	spin_lock(&inode_lock);
-	if (!(inode->i_state & (I_FREEING|I_WILL_FREE)))
+	if (!(inode->i_state & (I_FREEING|I_CLEAR|I_WILL_FREE)))
 		__iget(inode);
 	else
 		/*
@@ -1004,7 +1005,7 @@ EXPORT_SYMBOL(remove_inode_hash);
  */
 void generic_delete_inode(struct inode *inode)
 {
-	struct super_operations *op = inode->i_sb->s_op;
+	const struct super_operations *op = inode->i_sb->s_op;
 
 	list_del_init(&inode->i_list);
 	list_del_init(&inode->i_sb_list);
@@ -1097,7 +1098,7 @@ EXPORT_SYMBOL_GPL(generic_drop_inode);
  */
 static inline void iput_final(struct inode *inode)
 {
-	struct super_operations *op = inode->i_sb->s_op;
+	const struct super_operations *op = inode->i_sb->s_op;
 	void (*drop)(struct inode *) = generic_drop_inode;
 
 	if (op && op->drop_inode)
@@ -1117,7 +1118,7 @@ static inline void iput_final(struct inode *inode)
 void iput(struct inode *inode)
 {
 	if (inode) {
-		struct super_operations *op = inode->i_sb->s_op;
+		const struct super_operations *op = inode->i_sb->s_op;
 
 		BUG_ON(inode->i_state == I_CLEAR);
 
@@ -1149,7 +1150,6 @@ sector_t bmap(struct inode * inode, sector_t block)
 		res = inode->i_mapping->a_ops->bmap(inode->i_mapping, block);
 	return res;
 }
-
 EXPORT_SYMBOL(bmap);
 
 /**
@@ -1166,29 +1166,43 @@ void touch_atime(struct vfsmount *mnt, struct dentry *dentry)
 	struct inode *inode = dentry->d_inode;
 	struct timespec now;
 
-	if (IS_RDONLY(inode))
+	if (inode->i_flags & S_NOATIME)
 		return;
-
-	if ((inode->i_flags & S_NOATIME) ||
-	    (inode->i_sb->s_flags & MS_NOATIME) ||
-	    ((inode->i_sb->s_flags & MS_NODIRATIME) && S_ISDIR(inode->i_mode)))
+	if (IS_NOATIME(inode))
+		return;
+	if ((inode->i_sb->s_flags & MS_NODIRATIME) && S_ISDIR(inode->i_mode))
 		return;
 
 	/*
 	 * We may have a NULL vfsmount when coming from NFSD
 	 */
-	if (mnt &&
-	    ((mnt->mnt_flags & MNT_NOATIME) ||
-	     ((mnt->mnt_flags & MNT_NODIRATIME) && S_ISDIR(inode->i_mode))))
-		return;
+	if (mnt) {
+		if (mnt->mnt_flags & MNT_NOATIME)
+			return;
+		if ((mnt->mnt_flags & MNT_NODIRATIME) && S_ISDIR(inode->i_mode))
+			return;
+
+		if (mnt->mnt_flags & MNT_RELATIME) {
+			/*
+			 * With relative atime, only update atime if the
+			 * previous atime is earlier than either the ctime or
+			 * mtime.
+			 */
+			if (timespec_compare(&inode->i_mtime,
+						&inode->i_atime) < 0 &&
+			    timespec_compare(&inode->i_ctime,
+						&inode->i_atime) < 0)
+				return;
+		}
+	}
 
 	now = current_fs_time(inode->i_sb);
-	if (!timespec_equal(&inode->i_atime, &now)) {
-		inode->i_atime = now;
-		mark_inode_dirty_sync(inode);
-	}
-}
+	if (timespec_equal(&inode->i_atime, &now))
+		return;
 
+	inode->i_atime = now;
+	mark_inode_dirty_sync(inode);
+}
 EXPORT_SYMBOL(touch_atime);
 
 /**
@@ -1205,7 +1219,7 @@ EXPORT_SYMBOL(touch_atime);
 
 void file_update_time(struct file *file)
 {
-	struct inode *inode = file->f_dentry->d_inode;
+	struct inode *inode = file->f_path.dentry->d_inode;
 	struct timespec now;
 	int sync_it = 0;
 
@@ -1241,36 +1255,6 @@ int inode_needs_sync(struct inode *inode)
 }
 
 EXPORT_SYMBOL(inode_needs_sync);
-
-/*
- *	Quota functions that want to walk the inode lists..
- */
-#ifdef CONFIG_QUOTA
-
-/* Function back in dquot.c */
-int remove_inode_dquot_ref(struct inode *, int, struct list_head *);
-
-void remove_dquot_ref(struct super_block *sb, int type,
-			struct list_head *tofree_head)
-{
-	struct inode *inode;
-
-	if (!sb->dq_op)
-		return;	/* nothing to do */
-	spin_lock(&inode_lock);	/* This lock is for inodes code */
-
-	/*
-	 * We don't have to lock against quota code - test IS_QUOTAINIT is
-	 * just for speedup...
-	 */
-	list_for_each_entry(inode, &sb->s_inodes, i_sb_list)
-		if (!IS_NOQUOTA(inode))
-			remove_inode_dquot_ref(inode, type, tofree_head);
-
-	spin_unlock(&inode_lock);
-}
-
-#endif
 
 int inode_wait(void *word)
 {

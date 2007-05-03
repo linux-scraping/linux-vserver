@@ -70,7 +70,8 @@ struct vga16fb_par {
 		unsigned char	ClockingMode;	  /* Seq-Controller:01h */
 	} vga_state;
 	struct vgastate state;
-	atomic_t ref_count;
+	struct mutex open_lock;
+	unsigned int ref_count;
 	int palette_blanked, vesa_blanked, mode, isVGA;
 	u8 misc, pel_msk, vss, clkdiv;
 	u8 crtc[VGA_CRT_C];
@@ -264,7 +265,7 @@ static void vga16fb_clock_chip(struct vga16fb_par *par,
 			       const struct fb_info *info,
 			       int mul, int div)
 {
-	static struct {
+	static const struct {
 		u32 pixclock;
 		u8  misc;
 		u8  seq_clock_mode;
@@ -300,28 +301,33 @@ static void vga16fb_clock_chip(struct vga16fb_par *par,
 static int vga16fb_open(struct fb_info *info, int user)
 {
 	struct vga16fb_par *par = info->par;
-	int cnt = atomic_read(&par->ref_count);
 
-	if (!cnt) {
+	mutex_lock(&par->open_lock);
+	if (!par->ref_count) {
 		memset(&par->state, 0, sizeof(struct vgastate));
 		par->state.flags = VGA_SAVE_FONTS | VGA_SAVE_MODE |
 			VGA_SAVE_CMAP;
 		save_vga(&par->state);
 	}
-	atomic_inc(&par->ref_count);
+	par->ref_count++;
+	mutex_unlock(&par->open_lock);
+
 	return 0;
 }
 
 static int vga16fb_release(struct fb_info *info, int user)
 {
 	struct vga16fb_par *par = info->par;
-	int cnt = atomic_read(&par->ref_count);
 
-	if (!cnt)
+	mutex_lock(&par->open_lock);
+	if (!par->ref_count) {
+		mutex_unlock(&par->open_lock);
 		return -EINVAL;
-	if (cnt == 1)
+	}
+	if (par->ref_count == 1)
 		restore_vga(&par->state);
-	atomic_dec(&par->ref_count);
+	par->ref_count--;
+	mutex_unlock(&par->open_lock);
 
 	return 0;
 }
@@ -652,7 +658,7 @@ static int vga16fb_set_par(struct fb_info *info)
 
 static void ega16_setpalette(int regno, unsigned red, unsigned green, unsigned blue)
 {
-	static unsigned char map[] = { 000, 001, 010, 011 };
+	static const unsigned char map[] = { 000, 001, 010, 011 };
 	int val;
 	
 	if (regno >= 16)
@@ -1139,22 +1145,18 @@ static void vga16fb_copyarea(struct fb_info *info, const struct fb_copyarea *are
 	}
 }
 
-#ifdef __LITTLE_ENDIAN
-static unsigned int transl_l[] =
-{0x0,0x8,0x4,0xC,0x2,0xA,0x6,0xE,0x1,0x9,0x5,0xD,0x3,0xB,0x7,0xF};
-static unsigned int transl_h[] =
-{0x000, 0x800, 0x400, 0xC00, 0x200, 0xA00, 0x600, 0xE00,
- 0x100, 0x900, 0x500, 0xD00, 0x300, 0xB00, 0x700, 0xF00};
-#else
-#ifdef __BIG_ENDIAN
-static unsigned int transl_h[] =
-{0x0,0x8,0x4,0xC,0x2,0xA,0x6,0xE,0x1,0x9,0x5,0xD,0x3,0xB,0x7,0xF};
-static unsigned int transl_l[] =
-{0x000, 0x800, 0x400, 0xC00, 0x200, 0xA00, 0x600, 0xE00,
- 0x100, 0x900, 0x500, 0xD00, 0x300, 0xB00, 0x700, 0xF00};
+#define TRANS_MASK_LOW  {0x0,0x8,0x4,0xC,0x2,0xA,0x6,0xE,0x1,0x9,0x5,0xD,0x3,0xB,0x7,0xF}
+#define TRANS_MASK_HIGH {0x000, 0x800, 0x400, 0xC00, 0x200, 0xA00, 0x600, 0xE00, \
+			 0x100, 0x900, 0x500, 0xD00, 0x300, 0xB00, 0x700, 0xF00}
+
+#if defined(__LITTLE_ENDIAN)
+static const u16 transl_l[] = TRANS_MASK_LOW;
+static const u16 transl_h[] = TRANS_MASK_HIGH;
+#elif defined(__BIG_ENDIAN)
+static const u16 transl_l[] = TRANS_MASK_HIGH;
+static const u16 transl_h[] = TRANS_MASK_LOW;
 #else
 #error "Only __BIG_ENDIAN and __LITTLE_ENDIAN are supported in vga-planes"
-#endif
 #endif
 
 static void vga_8planes_imageblit(struct fb_info *info, const struct fb_image *image)
@@ -1361,6 +1363,7 @@ static int __init vga16fb_probe(struct platform_device *dev)
 	printk(KERN_INFO "vga16fb: mapped to 0x%p\n", info->screen_base);
 	par = info->par;
 
+	mutex_init(&par->open_lock);
 	par->isVGA = ORIG_VIDEO_ISVGA;
 	par->palette_blanked = 0;
 	par->vesa_blanked = 0;

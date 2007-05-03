@@ -9,7 +9,6 @@
  */
 
 #include <linux/types.h>
-#include <linux/sched.h>
 #include <linux/slab.h>
 #include <linux/in.h>
 #include <linux/sunrpc/clnt.h>
@@ -36,34 +35,14 @@ static DEFINE_MUTEX(nlm_host_mutex);
 static void			nlm_gc_hosts(void);
 static struct nsm_handle *	__nsm_find(const struct sockaddr_in *,
 					const char *, int, int);
-
-/*
- * Find an NLM server handle in the cache. If there is none, create it.
- */
-struct nlm_host *
-nlmclnt_lookup_host(const struct sockaddr_in *sin, int proto, int version,
-			const char *hostname, int hostname_len)
-{
-	return nlm_lookup_host(0, sin, proto, version,
-			       hostname, hostname_len);
-}
-
-/*
- * Find an NLM client handle in the cache. If there is none, create it.
- */
-struct nlm_host *
-nlmsvc_lookup_host(struct svc_rqst *rqstp,
-			const char *hostname, int hostname_len)
-{
-	return nlm_lookup_host(1, &rqstp->rq_addr,
-			       rqstp->rq_prot, rqstp->rq_vers,
-			       hostname, hostname_len);
-}
+static struct nsm_handle *	nsm_find(const struct sockaddr_in *sin,
+					 const char *hostname,
+					 int hostname_len);
 
 /*
  * Common host lookup routine for server & client
  */
-struct nlm_host *
+static struct nlm_host *
 nlm_lookup_host(int server, const struct sockaddr_in *sin,
 					int proto, int version,
 					const char *hostname,
@@ -192,6 +171,29 @@ nlm_destroy_host(struct nlm_host *host)
 		}
 	}
 	kfree(host);
+}
+
+/*
+ * Find an NLM server handle in the cache. If there is none, create it.
+ */
+struct nlm_host *
+nlmclnt_lookup_host(const struct sockaddr_in *sin, int proto, int version,
+			const char *hostname, int hostname_len)
+{
+	return nlm_lookup_host(0, sin, proto, version,
+			       hostname, hostname_len);
+}
+
+/*
+ * Find an NLM client handle in the cache. If there is none, create it.
+ */
+struct nlm_host *
+nlmsvc_lookup_host(struct svc_rqst *rqstp,
+			const char *hostname, int hostname_len)
+{
+	return nlm_lookup_host(1, svc_addr_in(rqstp),
+			       rqstp->rq_prot, rqstp->rq_vers,
+			       hostname, hostname_len);
 }
 
 /*
@@ -495,7 +497,7 @@ out:
 	return nsm;
 }
 
-struct nsm_handle *
+static struct nsm_handle *
 nsm_find(const struct sockaddr_in *sin, const char *hostname, int hostname_len)
 {
 	return __nsm_find(sin, hostname, hostname_len, 1);

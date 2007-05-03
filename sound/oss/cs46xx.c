@@ -91,6 +91,7 @@
 #include <linux/poll.h>
 #include <linux/ac97_codec.h>
 #include <linux/mutex.h>
+#include <linux/mm.h>
 
 #include <asm/io.h>
 #include <asm/dma.h>
@@ -779,7 +780,7 @@ static unsigned int cs_set_adc_rate(struct cs_state *state, unsigned int rate)
 		rate = 48000 / 9;
 
 	/*
-	 *  We can not capture at at rate greater than the Input Rate (48000).
+	 *  We cannot capture at at rate greater than the Input Rate (48000).
 	 *  Return an error if an attempt is made to stray outside that limit.
 	 */
 	if (rate > 48000)
@@ -3047,10 +3048,9 @@ static int cs_open(struct inode *inode, struct file *file)
 		CS_DBGOUT(CS_WAVE_READ, 2, printk("cs46xx: cs_open() FMODE_READ\n") );
 		if (card->states[0] == NULL) {
 			state = card->states[0] =
-				kmalloc(sizeof(struct cs_state), GFP_KERNEL);
+				kzalloc(sizeof(struct cs_state), GFP_KERNEL);
 			if (state == NULL)
 				return -ENOMEM;
-			memset(state, 0, sizeof(struct cs_state));
 			mutex_init(&state->sem);
 			dmabuf = &state->dmabuf;
 			dmabuf->pbuf = (void *)get_zeroed_page(GFP_KERNEL | GFP_DMA);
@@ -3113,10 +3113,9 @@ static int cs_open(struct inode *inode, struct file *file)
 		CS_DBGOUT(CS_OPEN, 2, printk("cs46xx: cs_open() FMODE_WRITE\n") );
 		if (card->states[1] == NULL) {
 			state = card->states[1] =
-				kmalloc(sizeof(struct cs_state), GFP_KERNEL);
+				kzalloc(sizeof(struct cs_state), GFP_KERNEL);
 			if (state == NULL)
 				return -ENOMEM;
-			memset(state, 0, sizeof(struct cs_state));
 			mutex_init(&state->sem);
 			dmabuf = &state->dmabuf;
 			dmabuf->pbuf = (void *)get_zeroed_page(GFP_KERNEL | GFP_DMA);
@@ -4754,8 +4753,8 @@ static int cs_hardware_init(struct cs_card *card)
 	mdelay(5 * cs_laptop_wait);		/* Shouldnt be needed ?? */
 	
 /*
-* If we are resuming under 2.2.x then we can not schedule a timeout.
-* so, just spin the CPU.
+* If we are resuming under 2.2.x then we cannot schedule a timeout,
+* so just spin the CPU.
 */
 	if (card->pm.flags & CS46XX_PM_IDLE) {
 	/*
@@ -5074,11 +5073,10 @@ static int __devinit cs46xx_probe(struct pci_dev *pci_dev,
 	pci_read_config_word(pci_dev, PCI_SUBSYSTEM_VENDOR_ID, &ss_vendor);
 	pci_read_config_word(pci_dev, PCI_SUBSYSTEM_ID, &ss_card);
 
-	if ((card = kmalloc(sizeof(struct cs_card), GFP_KERNEL)) == NULL) {
+	if ((card = kzalloc(sizeof(struct cs_card), GFP_KERNEL)) == NULL) {
 		printk(KERN_ERR "cs46xx: out of memory\n");
 		return -ENOMEM;
 	}
-	memset(card, 0, sizeof(*card));
 	card->ba0_addr = RSRCADDRESS(pci_dev, 0);
 	card->ba1_addr = RSRCADDRESS(pci_dev, 1);
 	card->pci_dev = pci_dev;

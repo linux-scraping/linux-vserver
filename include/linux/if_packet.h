@@ -1,17 +1,19 @@
 #ifndef __LINUX_IF_PACKET_H
 #define __LINUX_IF_PACKET_H
 
+#include <linux/types.h>
+
 struct sockaddr_pkt
 {
 	unsigned short spkt_family;
 	unsigned char spkt_device[14];
-	unsigned short spkt_protocol;
+	__be16 spkt_protocol;
 };
 
 struct sockaddr_ll
 {
 	unsigned short	sll_family;
-	unsigned short	sll_protocol;
+	__be16		sll_protocol;
 	int		sll_ifindex;
 	unsigned short	sll_hatype;
 	unsigned char	sll_pkttype;
@@ -39,11 +41,21 @@ struct sockaddr_ll
 #define PACKET_RX_RING			5
 #define PACKET_STATISTICS		6
 #define PACKET_COPY_THRESH		7
+#define PACKET_AUXDATA			8
 
 struct tpacket_stats
 {
 	unsigned int	tp_packets;
 	unsigned int	tp_drops;
+};
+
+struct tpacket_auxdata
+{
+	__u32		tp_status;
+	__u32		tp_len;
+	__u32		tp_snaplen;
+	__u16		tp_mac;
+	__u16		tp_net;
 };
 
 struct tpacket_hdr

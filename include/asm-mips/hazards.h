@@ -52,6 +52,7 @@ ASMMACRO(tlb_probe_hazard,
 	 _ehb
 	)
 ASMMACRO(irq_enable_hazard,
+	 _ehb
 	)
 ASMMACRO(irq_disable_hazard,
 	_ehb
@@ -157,7 +158,7 @@ ASMMACRO(back_to_back_c0_hazard,
  * processors.
  */
 ASMMACRO(mtc0_tlbw_hazard,
-	nop
+	nop; nop
 	)
 ASMMACRO(tlbw_use_hazard,
 	nop; nop; nop

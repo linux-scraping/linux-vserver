@@ -321,7 +321,6 @@ static inline void leave_mm (unsigned long cpu)
 
 fastcall void smp_invalidate_interrupt(struct pt_regs *regs)
 {
-	struct pt_regs *old_regs = set_irq_regs(regs);
 	unsigned long cpu;
 
 	cpu = get_cpu();
@@ -352,7 +351,6 @@ fastcall void smp_invalidate_interrupt(struct pt_regs *regs)
 	smp_mb__after_clear_bit();
 out:
 	put_cpu_no_resched();
-	set_irq_regs(old_regs);
 }
 
 static void flush_tlb_others(cpumask_t cpumask, struct mm_struct *mm,
@@ -376,8 +374,7 @@ static void flush_tlb_others(cpumask_t cpumask, struct mm_struct *mm,
 	/*
 	 * i'm not happy about this global shared spinlock in the
 	 * MM hot path, but we'll see how contended it is.
-	 * Temporarily this turns IRQs off, so that lockups are
-	 * detected by the NMI watchdog.
+	 * AK: x86-64 has a faster method that could be ported.
 	 */
 	spin_lock(&tlbstate_lock);
 	
@@ -402,7 +399,7 @@ static void flush_tlb_others(cpumask_t cpumask, struct mm_struct *mm,
 
 	while (!cpus_empty(flush_cpumask))
 		/* nothing. lockup detection does not belong here */
-		mb();
+		cpu_relax();
 
 	flush_mm = NULL;
 	flush_va = 0;
@@ -607,14 +604,11 @@ void smp_send_stop(void)
  */
 fastcall void smp_reschedule_interrupt(struct pt_regs *regs)
 {
-	struct pt_regs *old_regs = set_irq_regs(regs);
 	ack_APIC_irq();
-	set_irq_regs(old_regs);
 }
 
 fastcall void smp_call_function_interrupt(struct pt_regs *regs)
 {
-	struct pt_regs *old_regs = set_irq_regs(regs);
 	void (*func) (void *info) = call_data->func;
 	void *info = call_data->info;
 	int wait = call_data->wait;
@@ -637,7 +631,6 @@ fastcall void smp_call_function_interrupt(struct pt_regs *regs)
 		mb();
 		atomic_inc(&call_data->finished);
 	}
-	set_irq_regs(old_regs);
 }
 
 /*
@@ -699,6 +692,10 @@ int smp_call_function_single(int cpu, void (*func) (void *info), void *info,
 		put_cpu();
 		return -EBUSY;
 	}
+
+	/* Can deadlock when called with interrupts disabled */
+	WARN_ON(irqs_disabled());
+
 	spin_lock_bh(&call_lock);
 	__smp_call_function_single(cpu, func, info, nonatomic, wait);
 	spin_unlock_bh(&call_lock);

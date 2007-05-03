@@ -3,7 +3,7 @@
 #
 
 ieee1394-objs := ieee1394_core.o ieee1394_transactions.o hosts.o \
-		 highlevel.o csr.o nodemgr.o oui.o dma.o iso.o \
+		 highlevel.o csr.o nodemgr.o dma.o iso.o \
 		 csr1212.o config_roms.o
 
 obj-$(CONFIG_IEEE1394) += ieee1394.o
@@ -15,10 +15,3 @@ obj-$(CONFIG_IEEE1394_SBP2) += sbp2.o
 obj-$(CONFIG_IEEE1394_DV1394) += dv1394.o
 obj-$(CONFIG_IEEE1394_ETH1394) += eth1394.o
 
-quiet_cmd_oui2c = OUI2C   $@
-      cmd_oui2c = $(CONFIG_SHELL) $(srctree)/$(src)/oui2c.sh < $< > $@
-
-targets := oui.c
-$(obj)/oui.o: $(obj)/oui.c
-$(obj)/oui.c: $(src)/oui.db $(src)/oui2c.sh FORCE
-	$(call if_changed,oui2c)

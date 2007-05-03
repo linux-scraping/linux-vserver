@@ -92,7 +92,7 @@ int fat_generic_ioctl(struct inode *inode, struct file *filp,
 		}
 
 		/* This MUST be done before doing anything irreversible... */
-		err = notify_change(filp->f_dentry, &ia);
+		err = notify_change(filp->f_path.dentry, &ia);
 		if (err)
 			goto up;
 
@@ -312,7 +312,7 @@ int fat_getattr(struct vfsmount *mnt, struct dentry *dentry, struct kstat *stat)
 }
 EXPORT_SYMBOL_GPL(fat_getattr);
 
-struct inode_operations fat_file_inode_operations = {
+const struct inode_operations fat_file_inode_operations = {
 	.truncate	= fat_truncate,
 	.setattr	= fat_notify_change,
 	.getattr	= fat_getattr,

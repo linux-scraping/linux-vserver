@@ -187,7 +187,8 @@ struct ucred {
 #define AF_LLC		26	/* Linux LLC			*/
 #define AF_TIPC		30	/* TIPC sockets			*/
 #define AF_BLUETOOTH	31	/* Bluetooth sockets 		*/
-#define AF_MAX		32	/* For now.. */
+#define AF_IUCV		32	/* IUCV sockets			*/
+#define AF_MAX		33	/* For now.. */
 
 /* Protocol families, same as address families. */
 #define PF_UNSPEC	AF_UNSPEC
@@ -220,6 +221,7 @@ struct ucred {
 #define PF_LLC		AF_LLC
 #define PF_TIPC		AF_TIPC
 #define PF_BLUETOOTH	AF_BLUETOOTH
+#define PF_IUCV		AF_IUCV
 #define PF_MAX		AF_MAX
 
 /* Maximum queue length specifiable by listen.  */
@@ -264,6 +266,7 @@ struct ucred {
 #define SOL_IPV6	41
 #define SOL_ICMPV6	58
 #define SOL_SCTP	132
+#define SOL_UDPLITE	136     /* UDP-Lite (RFC 3828) */
 #define SOL_RAW		255
 #define SOL_IPX		256
 #define SOL_AX25	257
@@ -292,7 +295,7 @@ extern int memcpy_fromiovecend(unsigned char *kdata, struct iovec *iov,
 extern int csum_partial_copy_fromiovecend(unsigned char *kdata, 
 					  struct iovec *iov, 
 					  int offset, 
-					  unsigned int len, int *csump);
+					  unsigned int len, __wsum *csump);
 
 extern int verify_iovec(struct msghdr *m, struct iovec *iov, char *address, int mode);
 extern int memcpy_toiovec(struct iovec *v, unsigned char *kdata, int len);

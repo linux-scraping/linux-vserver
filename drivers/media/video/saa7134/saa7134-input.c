@@ -22,7 +22,6 @@
 #include <linux/moduleparam.h>
 #include <linux/init.h>
 #include <linux/delay.h>
-#include <linux/sched.h>
 #include <linux/interrupt.h>
 #include <linux/input.h>
 
@@ -41,16 +40,24 @@ static int pinnacle_remote = 0;
 module_param(pinnacle_remote, int, 0644);    /* Choose Pinnacle PCTV remote */
 MODULE_PARM_DESC(pinnacle_remote, "Specify Pinnacle PCTV remote: 0=coloured, 1=grey (defaults to 0)");
 
+static int ir_rc5_remote_gap = 885;
+module_param(ir_rc5_remote_gap, int, 0644);
+static int ir_rc5_key_timeout = 115;
+module_param(ir_rc5_key_timeout, int, 0644);
+
 #define dprintk(fmt, arg...)	if (ir_debug) \
 	printk(KERN_DEBUG "%s/ir: " fmt, dev->name , ## arg)
 #define i2cdprintk(fmt, arg...)    if (ir_debug) \
 	printk(KERN_DEBUG "%s/ir: " fmt, ir->c.name , ## arg)
 
+/** rc5 functions */
+static int saa7134_rc5_irq(struct saa7134_dev *dev);
+
 /* -------------------- GPIO generic keycode builder -------------------- */
 
 static int build_key(struct saa7134_dev *dev)
 {
-	struct saa7134_ir *ir = dev->remote;
+	struct card_ir *ir = dev->remote;
 	u32 gpio, data;
 
 	/* rising SAA7134_GPIO_GPRESCAN reads the status */
@@ -112,18 +119,42 @@ static int get_key_purpletv(struct IR_i2c *ir, u32 *ir_key, u32 *ir_raw)
 	return 1;
 }
 
+static int get_key_hvr1110(struct IR_i2c *ir, u32 *ir_key, u32 *ir_raw)
+{
+	unsigned char buf[5], cod4, code3, code4;
+
+	/* poll IR chip */
+	if (5 != i2c_master_recv(&ir->c,buf,5))
+		return -EIO;
+
+	cod4	= buf[4];
+	code4	= (cod4 >> 2);
+	code3	= buf[3];
+	if (code3 == 0)
+		/* no key pressed */
+		return 0;
+
+	/* return key */
+	*ir_key = code4;
+	*ir_raw = code4;
+	return 1;
+}
+
 void saa7134_input_irq(struct saa7134_dev *dev)
 {
-	struct saa7134_ir *ir = dev->remote;
+	struct card_ir *ir = dev->remote;
 
-	if (!ir->polling)
+	if (!ir->polling && !ir->rc5_gpio) {
 		build_key(dev);
+	} else if (ir->rc5_gpio) {
+		saa7134_rc5_irq(dev);
+	}
 }
 
 static void saa7134_input_timer(unsigned long data)
 {
 	struct saa7134_dev *dev = (struct saa7134_dev*)data;
-	struct saa7134_ir *ir = dev->remote;
+	struct card_ir *ir = dev->remote;
 	unsigned long timeout;
 
 	build_key(dev);
@@ -131,16 +162,48 @@ static void saa7134_input_timer(unsigned long data)
 	mod_timer(&ir->timer, timeout);
 }
 
+static void saa7134_ir_start(struct saa7134_dev *dev, struct card_ir *ir)
+{
+	if (ir->polling) {
+		init_timer(&ir->timer);
+		ir->timer.function = saa7134_input_timer;
+		ir->timer.data     = (unsigned long)dev;
+		ir->timer.expires  = jiffies + HZ;
+		add_timer(&ir->timer);
+	} else if (ir->rc5_gpio) {
+		/* set timer_end for code completion */
+		init_timer(&ir->timer_end);
+		ir->timer_end.function = ir_rc5_timer_end;
+		ir->timer_end.data = (unsigned long)ir;
+		init_timer(&ir->timer_keyup);
+		ir->timer_keyup.function = ir_rc5_timer_keyup;
+		ir->timer_keyup.data = (unsigned long)ir;
+		ir->shift_by = 2;
+		ir->start = 0x2;
+		ir->addr = 0x17;
+		ir->rc5_key_timeout = ir_rc5_key_timeout;
+		ir->rc5_remote_gap = ir_rc5_remote_gap;
+	}
+}
+
+static void saa7134_ir_stop(struct saa7134_dev *dev)
+{
+	if (dev->remote->polling)
+		del_timer_sync(&dev->remote->timer);
+}
+
 int saa7134_input_init1(struct saa7134_dev *dev)
 {
-	struct saa7134_ir *ir;
+	struct card_ir *ir;
 	struct input_dev *input_dev;
 	IR_KEYTAB_TYPE *ir_codes = NULL;
 	u32 mask_keycode = 0;
 	u32 mask_keydown = 0;
 	u32 mask_keyup   = 0;
 	int polling      = 0;
+	int rc5_gpio	 = 0;
 	int ir_type      = IR_TYPE_OTHER;
+	int err;
 
 	if (dev->has_remote != SAA7134_REMOTE_GPIO)
 		return -ENODEV;
@@ -184,6 +247,7 @@ int saa7134_input_init1(struct saa7134_dev *dev)
 	case SAA7134_BOARD_AVERMEDIA_307:
 	case SAA7134_BOARD_AVERMEDIA_STUDIO_305:
 	case SAA7134_BOARD_AVERMEDIA_STUDIO_307:
+	case SAA7134_BOARD_AVERMEDIA_STUDIO_507:
 	case SAA7134_BOARD_AVERMEDIA_GO_007_FM:
 		ir_codes     = ir_codes_avermedia;
 		mask_keycode = 0x0007C8;
@@ -256,6 +320,18 @@ int saa7134_input_init1(struct saa7134_dev *dev)
 		mask_keycode = 0x0001F00;
 		mask_keydown = 0x0040000;
 		break;
+	case SAA7134_BOARD_ASUSTeK_P7131_DUAL:
+		ir_codes     = ir_codes_asus_pc39;
+		mask_keydown = 0x0040000;
+		rc5_gpio = 1;
+		break;
+	case SAA7134_BOARD_ENCORE_ENLTV:
+	case SAA7134_BOARD_ENCORE_ENLTV_FM:
+		ir_codes     = ir_codes_encore_enltv;
+		mask_keycode = 0x00007f;
+		mask_keyup   = 0x040000;
+		polling      = 50; // ms
+		break;
 	}
 	if (NULL == ir_codes) {
 		printk("%s: Oops: IR config error [card=%d]\n",
@@ -266,9 +342,8 @@ int saa7134_input_init1(struct saa7134_dev *dev)
 	ir = kzalloc(sizeof(*ir), GFP_KERNEL);
 	input_dev = input_allocate_device();
 	if (!ir || !input_dev) {
-		kfree(ir);
-		input_free_device(input_dev);
-		return -ENOMEM;
+		err = -ENOMEM;
+		goto err_out_free;
 	}
 
 	ir->dev = input_dev;
@@ -278,6 +353,7 @@ int saa7134_input_init1(struct saa7134_dev *dev)
 	ir->mask_keydown = mask_keydown;
 	ir->mask_keyup   = mask_keyup;
 	ir->polling      = polling;
+	ir->rc5_gpio	 = rc5_gpio;
 
 	/* init input device */
 	snprintf(ir->name, sizeof(ir->name), "saa7134 IR (%s)",
@@ -299,18 +375,22 @@ int saa7134_input_init1(struct saa7134_dev *dev)
 	}
 	input_dev->cdev.dev = &dev->pci->dev;
 
-	/* all done */
 	dev->remote = ir;
-	if (ir->polling) {
-		init_timer(&ir->timer);
-		ir->timer.function = saa7134_input_timer;
-		ir->timer.data     = (unsigned long)dev;
-		ir->timer.expires  = jiffies + HZ;
-		add_timer(&ir->timer);
-	}
+	saa7134_ir_start(dev, ir);
 
-	input_register_device(ir->dev);
+	err = input_register_device(ir->dev);
+	if (err)
+		goto err_out_stop;
+
 	return 0;
+
+ err_out_stop:
+	saa7134_ir_stop(dev);
+	dev->remote = NULL;
+ err_out_free:
+	input_free_device(input_dev);
+	kfree(ir);
+	return err;
 }
 
 void saa7134_input_fini(struct saa7134_dev *dev)
@@ -318,8 +398,7 @@ void saa7134_input_fini(struct saa7134_dev *dev)
 	if (NULL == dev->remote)
 		return;
 
-	if (dev->remote->polling)
-		del_timer_sync(&dev->remote->timer);
+	saa7134_ir_stop(dev);
 	input_unregister_device(dev->remote->dev);
 	kfree(dev->remote);
 	dev->remote = NULL;
@@ -335,6 +414,7 @@ void saa7134_set_i2c_ir(struct saa7134_dev *dev, struct IR_i2c *ir)
 
 	switch (dev->board) {
 	case SAA7134_BOARD_PINNACLE_PCTV_110i:
+	case SAA7134_BOARD_PINNACLE_PCTV_310i:
 		snprintf(ir->c.name, sizeof(ir->c.name), "Pinnacle PCTV");
 		if (pinnacle_remote == 0) {
 			ir->get_key   = get_key_pinnacle_color;
@@ -349,12 +429,60 @@ void saa7134_set_i2c_ir(struct saa7134_dev *dev, struct IR_i2c *ir)
 		ir->get_key   = get_key_purpletv;
 		ir->ir_codes  = ir_codes_purpletv;
 		break;
+	case SAA7134_BOARD_HAUPPAUGE_HVR1110:
+		snprintf(ir->c.name, sizeof(ir->c.name), "HVR 1110");
+		ir->get_key   = get_key_hvr1110;
+		ir->ir_codes  = ir_codes_hauppauge_new;
+		break;
 	default:
 		dprintk("Shouldn't get here: Unknown board %x for I2C IR?\n",dev->board);
 		break;
 	}
 
 }
+
+static int saa7134_rc5_irq(struct saa7134_dev *dev)
+{
+	struct card_ir *ir = dev->remote;
+	struct timeval tv;
+	u32 gap;
+	unsigned long current_jiffies, timeout;
+
+	/* get time of bit */
+	current_jiffies = jiffies;
+	do_gettimeofday(&tv);
+
+	/* avoid overflow with gap >1s */
+	if (tv.tv_sec - ir->base_time.tv_sec > 1) {
+		gap = 200000;
+	} else {
+		gap = 1000000 * (tv.tv_sec - ir->base_time.tv_sec) +
+		    tv.tv_usec - ir->base_time.tv_usec;
+	}
+
+	/* active code => add bit */
+	if (ir->active) {
+		/* only if in the code (otherwise spurious IRQ or timer
+		   late) */
+		if (ir->last_bit < 28) {
+			ir->last_bit = (gap - ir_rc5_remote_gap / 2) /
+			    ir_rc5_remote_gap;
+			ir->code |= 1 << ir->last_bit;
+		}
+		/* starting new code */
+	} else {
+		ir->active = 1;
+		ir->code = 0;
+		ir->base_time = tv;
+		ir->last_bit = 0;
+
+		timeout = current_jiffies + (500 + 30 * HZ) / 1000;
+		mod_timer(&ir->timer_end, timeout);
+	}
+
+	return 1;
+}
+
 /* ----------------------------------------------------------------------
  * Local variables:
  * c-basic-offset: 8

@@ -45,6 +45,7 @@ int heap_stack_gap = 0;
 
 EXPORT_SYMBOL(mem_map);
 EXPORT_SYMBOL(__vm_enough_memory);
+EXPORT_SYMBOL(num_physpages);
 
 /* list of shareable VMAs */
 struct rb_root nommu_vma_tree = RB_ROOT;
@@ -497,15 +498,17 @@ static int validate_mmap_request(struct file *file,
 	    (flags & MAP_TYPE) != MAP_SHARED)
 		return -EINVAL;
 
-	if (PAGE_ALIGN(len) == 0)
-		return addr;
-
-	if (len > TASK_SIZE)
+	if (!len)
 		return -EINVAL;
+
+	/* Careful about overflows.. */
+	len = PAGE_ALIGN(len);
+	if (!len || len > TASK_SIZE)
+		return -ENOMEM;
 
 	/* offset overflow? */
 	if ((pgoff + (len >> PAGE_SHIFT)) < pgoff)
-		return -EINVAL;
+		return -EOVERFLOW;
 
 	if (file) {
 		/* validate file mapping requests */
@@ -521,7 +524,7 @@ static int validate_mmap_request(struct file *file,
 		 */
 		mapping = file->f_mapping;
 		if (!mapping)
-			mapping = file->f_dentry->d_inode->i_mapping;
+			mapping = file->f_path.dentry->d_inode->i_mapping;
 
 		capabilities = 0;
 		if (mapping && mapping->backing_dev_info)
@@ -530,7 +533,7 @@ static int validate_mmap_request(struct file *file,
 		if (!capabilities) {
 			/* no explicit capabilities set, so assume some
 			 * defaults */
-			switch (file->f_dentry->d_inode->i_mode & S_IFMT) {
+			switch (file->f_path.dentry->d_inode->i_mode & S_IFMT) {
 			case S_IFREG:
 			case S_IFBLK:
 				capabilities = BDI_CAP_MAP_COPY;
@@ -561,11 +564,11 @@ static int validate_mmap_request(struct file *file,
 			    !(file->f_mode & FMODE_WRITE))
 				return -EACCES;
 
-			if (IS_APPEND(file->f_dentry->d_inode) &&
+			if (IS_APPEND(file->f_path.dentry->d_inode) &&
 			    (file->f_mode & FMODE_WRITE))
 				return -EACCES;
 
-			if (locks_verify_locked(file->f_dentry->d_inode))
+			if (locks_verify_locked(file->f_path.dentry->d_inode))
 				return -EAGAIN;
 
 			if (!(capabilities & BDI_CAP_MAP_DIRECT))
@@ -596,7 +599,7 @@ static int validate_mmap_request(struct file *file,
 
 		/* handle executable mappings and implied executable
 		 * mappings */
-		if (file->f_vfsmnt->mnt_flags & MNT_NOEXEC) {
+		if (file->f_path.mnt->mnt_flags & MNT_NOEXEC) {
 			if (prot & PROT_EXEC)
 				return -EPERM;
 		}
@@ -806,10 +809,9 @@ unsigned long do_mmap_pgoff(struct file *file,
 	vm_flags = determine_vm_flags(file, prot, flags, capabilities);
 
 	/* we're going to need to record the mapping if it works */
-	vml = kmalloc(sizeof(struct vm_list_struct), GFP_KERNEL);
+	vml = kzalloc(sizeof(struct vm_list_struct), GFP_KERNEL);
 	if (!vml)
 		goto error_getting_vml;
-	memset(vml, 0, sizeof(*vml));
 
 	down_write(&nommu_vma_sem);
 
@@ -825,6 +827,11 @@ unsigned long do_mmap_pgoff(struct file *file,
 		unsigned long pglen = (len + PAGE_SIZE - 1) >> PAGE_SHIFT;
 		unsigned long vmpglen;
 
+		/* suppress VMA sharing for shared regions */
+		if (vm_flags & VM_SHARED &&
+		    capabilities & BDI_CAP_MAP_DIRECT)
+			goto dont_share_VMAs;
+
 		for (rb = rb_first(&nommu_vma_tree); rb; rb = rb_next(rb)) {
 			vma = rb_entry(rb, struct vm_area_struct, vm_rb);
 
@@ -832,7 +839,7 @@ unsigned long do_mmap_pgoff(struct file *file,
 				continue;
 
 			/* search for overlapping mappings on the same file */
-			if (vma->vm_file->f_dentry->d_inode != file->f_dentry->d_inode)
+			if (vma->vm_file->f_path.dentry->d_inode != file->f_path.dentry->d_inode)
 				continue;
 
 			if (vma->vm_pgoff >= pgoff + pglen)
@@ -858,6 +865,7 @@ unsigned long do_mmap_pgoff(struct file *file,
 			goto shared;
 		}
 
+	dont_share_VMAs:
 		vma = NULL;
 
 		/* obtain the address at which to make a shared mapping
@@ -885,11 +893,10 @@ unsigned long do_mmap_pgoff(struct file *file,
 	}
 
 	/* we're going to need a VMA struct as well */
-	vma = kmalloc(sizeof(struct vm_area_struct), GFP_KERNEL);
+	vma = kzalloc(sizeof(struct vm_area_struct), GFP_KERNEL);
 	if (!vma)
 		goto error_getting_vma;
 
-	memset(vma, 0, sizeof(*vma));
 	INIT_LIST_HEAD(&vma->anon_vma_node);
 	atomic_set(&vma->vm_usage, 1);
 	if (file)
@@ -1191,6 +1198,28 @@ void unmap_mapping_range(struct address_space *mapping,
 {
 }
 EXPORT_SYMBOL(unmap_mapping_range);
+
+/*
+ * ask for an unmapped area at which to create a mapping on a file
+ */
+unsigned long get_unmapped_area(struct file *file, unsigned long addr,
+				unsigned long len, unsigned long pgoff,
+				unsigned long flags)
+{
+	unsigned long (*get_area)(struct file *, unsigned long, unsigned long,
+				  unsigned long, unsigned long);
+
+	get_area = current->mm->get_unmapped_area;
+	if (file && file->f_op && file->f_op->get_unmapped_area)
+		get_area = file->f_op->get_unmapped_area;
+
+	if (!get_area)
+		return -ENOSYS;
+
+	return get_area(file, addr, len, pgoff, flags);
+}
+
+EXPORT_SYMBOL(get_unmapped_area);
 
 /*
  * Check that a process has enough memory to allocate a new virtual

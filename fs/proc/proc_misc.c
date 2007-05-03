@@ -39,13 +39,14 @@
 #include <linux/seq_file.h>
 #include <linux/times.h>
 #include <linux/profile.h>
+#include <linux/utsname.h>
 #include <linux/blkdev.h>
 #include <linux/hugetlb.h>
 #include <linux/jiffies.h>
 #include <linux/sysrq.h>
 #include <linux/vmalloc.h>
 #include <linux/crash_dump.h>
-#include <linux/pspace.h>
+#include <linux/pid_namespace.h>
 #include <asm/uaccess.h>
 #include <asm/pgtable.h>
 #include <asm/io.h>
@@ -109,7 +110,7 @@ static int loadavg_read_proc(char *page, char **start, off_t off,
 		LOAD_INT(a), LOAD_FRAC(a),
 		LOAD_INT(b), LOAD_FRAC(b),
 		LOAD_INT(c), LOAD_FRAC(c),
-		running, threads, init_pspace.last_pid);
+		running, threads, current->nsproxy->pid_ns->last_pid);
 	return proc_calc_metrics(page, start, off, count, eof, len);
 }
 
@@ -140,15 +141,10 @@ static int meminfo_read_proc(char *page, char **start, off_t off,
 {
 	struct sysinfo i;
 	int len;
-	unsigned long inactive;
-	unsigned long active;
-	unsigned long free;
 	unsigned long committed;
 	unsigned long allowed;
 	struct vmalloc_info vmi;
 	long cached;
-
-	get_zone_counts(&active, &inactive, &free);
 
 /*
  * display in kilobytes.
@@ -206,8 +202,8 @@ static int meminfo_read_proc(char *page, char **start, off_t off,
 		K(i.bufferram),
 		K(cached),
 		K(total_swapcache_pages),
-		K(active),
-		K(inactive),
+		K(global_page_state(NR_ACTIVE)),
+		K(global_page_state(NR_INACTIVE)),
 #ifdef CONFIG_HIGHMEM
 		K(i.totalhigh),
 		K(i.freehigh),
@@ -247,7 +243,7 @@ static int fragmentation_open(struct inode *inode, struct file *file)
 	return seq_open(file, &fragmentation_op);
 }
 
-static struct file_operations fragmentation_file_operations = {
+static const struct file_operations fragmentation_file_operations = {
 	.open		= fragmentation_open,
 	.read		= seq_read,
 	.llseek		= seq_lseek,
@@ -260,7 +256,7 @@ static int zoneinfo_open(struct inode *inode, struct file *file)
 	return seq_open(file, &zoneinfo_op);
 }
 
-static struct file_operations proc_zoneinfo_file_operations = {
+static const struct file_operations proc_zoneinfo_file_operations = {
 	.open		= zoneinfo_open,
 	.read		= seq_read,
 	.llseek		= seq_lseek,
@@ -272,8 +268,10 @@ static int version_read_proc(char *page, char **start, off_t off,
 {
 	int len;
 
-	len = sprintf(page, linux_banner,
-		utsname()->release, utsname()->version);
+	len = snprintf(page, PAGE_SIZE, linux_proc_banner,
+		utsname()->sysname,
+		utsname()->release,
+		utsname()->version);
 	return proc_calc_metrics(page, start, off, count, eof, len);
 }
 
@@ -283,7 +281,7 @@ static int cpuinfo_open(struct inode *inode, struct file *file)
 	return seq_open(file, &cpuinfo_op);
 }
 
-static struct file_operations proc_cpuinfo_operations = {
+static const struct file_operations proc_cpuinfo_operations = {
 	.open		= cpuinfo_open,
 	.read		= seq_read,
 	.llseek		= seq_lseek,
@@ -342,7 +340,7 @@ static int devinfo_open(struct inode *inode, struct file *filp)
 	return seq_open(filp, &devinfo_ops);
 }
 
-static struct file_operations proc_devinfo_operations = {
+static const struct file_operations proc_devinfo_operations = {
 	.open		= devinfo_open,
 	.read		= seq_read,
 	.llseek		= seq_lseek,
@@ -354,7 +352,7 @@ static int vmstat_open(struct inode *inode, struct file *file)
 {
 	return seq_open(file, &vmstat_op);
 }
-static struct file_operations proc_vmstat_file_operations = {
+static const struct file_operations proc_vmstat_file_operations = {
 	.open		= vmstat_open,
 	.read		= seq_read,
 	.llseek		= seq_lseek,
@@ -385,7 +383,7 @@ static int partitions_open(struct inode *inode, struct file *file)
 {
 	return seq_open(file, &partitions_op);
 }
-static struct file_operations proc_partitions_operations = {
+static const struct file_operations proc_partitions_operations = {
 	.open		= partitions_open,
 	.read		= seq_read,
 	.llseek		= seq_lseek,
@@ -397,7 +395,7 @@ static int diskstats_open(struct inode *inode, struct file *file)
 {
 	return seq_open(file, &diskstats_op);
 }
-static struct file_operations proc_diskstats_operations = {
+static const struct file_operations proc_diskstats_operations = {
 	.open		= diskstats_open,
 	.read		= seq_read,
 	.llseek		= seq_lseek,
@@ -411,7 +409,7 @@ static int modules_open(struct inode *inode, struct file *file)
 {
 	return seq_open(file, &modules_op);
 }
-static struct file_operations proc_modules_operations = {
+static const struct file_operations proc_modules_operations = {
 	.open		= modules_open,
 	.read		= seq_read,
 	.llseek		= seq_lseek,
@@ -426,7 +424,7 @@ static int slabinfo_open(struct inode *inode, struct file *file)
 {
 	return seq_open(file, &slabinfo_op);
 }
-static struct file_operations proc_slabinfo_operations = {
+static const struct file_operations proc_slabinfo_operations = {
 	.open		= slabinfo_open,
 	.read		= seq_read,
 	.write		= slabinfo_write,
@@ -460,7 +458,7 @@ static int slabstats_release(struct inode *inode, struct file *file)
 	return seq_release(inode, file);
 }
 
-static struct file_operations proc_slabstats_operations = {
+static const struct file_operations proc_slabstats_operations = {
 	.open		= slabstats_open,
 	.read		= seq_read,
 	.llseek		= seq_lseek,
@@ -573,7 +571,7 @@ static int stat_open(struct inode *inode, struct file *file)
 		kfree(buf);
 	return res;
 }
-static struct file_operations proc_stat_operations = {
+static const struct file_operations proc_stat_operations = {
 	.open		= stat_open,
 	.read		= seq_read,
 	.llseek		= seq_lseek,
@@ -615,7 +613,7 @@ static int interrupts_open(struct inode *inode, struct file *filp)
 	return seq_open(filp, &int_seq_ops);
 }
 
-static struct file_operations proc_interrupts_operations = {
+static const struct file_operations proc_interrupts_operations = {
 	.open		= interrupts_open,
 	.read		= seq_read,
 	.llseek		= seq_lseek,
@@ -672,7 +670,7 @@ static ssize_t write_sysrq_trigger(struct file *file, const char __user *buf,
 	return count;
 }
 
-static struct file_operations proc_sysrq_trigger_operations = {
+static const struct file_operations proc_sysrq_trigger_operations = {
 	.write		= write_sysrq_trigger,
 };
 #endif
@@ -689,7 +687,6 @@ void create_seq_entry(char *name, mode_t mode, const struct file_operations *f)
 
 void __init proc_misc_init(void)
 {
-	struct proc_dir_entry *entry;
 	static struct {
 		char *name;
 		int (*read_proc)(char*,char**,off_t,int,int*,void*);
@@ -716,9 +713,14 @@ void __init proc_misc_init(void)
 	proc_symlink("mounts", NULL, "self/mounts");
 
 	/* And now for trickier ones */
-	entry = create_proc_entry("kmsg", S_IRUSR, &proc_root);
-	if (entry)
-		entry->proc_fops = &proc_kmsg_operations;
+#ifdef CONFIG_PRINTK
+	{
+		struct proc_dir_entry *entry;
+		entry = create_proc_entry("kmsg", S_IRUSR, &proc_root);
+		if (entry)
+			entry->proc_fops = &proc_kmsg_operations;
+	}
+#endif
 	create_seq_entry("devices", 0, &proc_devinfo_operations);
 	create_seq_entry("cpuinfo", 0, &proc_cpuinfo_operations);
 #ifdef CONFIG_BLOCK
@@ -758,8 +760,11 @@ void __init proc_misc_init(void)
 		proc_vmcore->proc_fops = &proc_vmcore_operations;
 #endif
 #ifdef CONFIG_MAGIC_SYSRQ
-	entry = create_proc_entry("sysrq-trigger", S_IWUSR, NULL);
-	if (entry)
-		entry->proc_fops = &proc_sysrq_trigger_operations;
+	{
+		struct proc_dir_entry *entry;
+		entry = create_proc_entry("sysrq-trigger", S_IWUSR, NULL);
+		if (entry)
+			entry->proc_fops = &proc_sysrq_trigger_operations;
+	}
 #endif
 }

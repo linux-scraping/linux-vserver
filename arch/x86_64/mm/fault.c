@@ -23,9 +23,9 @@
 #include <linux/compiler.h>
 #include <linux/module.h>
 #include <linux/kprobes.h>
+#include <linux/uaccess.h>
 
 #include <asm/system.h>
-#include <asm/uaccess.h>
 #include <asm/pgalloc.h>
 #include <asm/smp.h>
 #include <asm/tlbflush.h>
@@ -56,38 +56,17 @@ int unregister_page_fault_notifier(struct notifier_block *nb)
 }
 EXPORT_SYMBOL_GPL(unregister_page_fault_notifier);
 
-static inline int notify_page_fault(enum die_val val, const char *str,
-			struct pt_regs *regs, long err, int trap, int sig)
+static inline int notify_page_fault(struct pt_regs *regs, long err)
 {
 	struct die_args args = {
 		.regs = regs,
-		.str = str,
+		.str = "page fault",
 		.err = err,
-		.trapnr = trap,
-		.signr = sig
+		.trapnr = 14,
+		.signr = SIGSEGV
 	};
-	return atomic_notifier_call_chain(&notify_page_fault_chain, val, &args);
-}
-
-void bust_spinlocks(int yes)
-{
-	int loglevel_save = console_loglevel;
-	if (yes) {
-		oops_in_progress = 1;
-	} else {
-#ifdef CONFIG_VT
-		unblank_screen();
-#endif
-		oops_in_progress = 0;
-		/*
-		 * OK, the message is on the console.  Now we call printk()
-		 * without oops_in_progress set so that printk will give klogd
-		 * a poke.  Hold onto your hats...
-		 */
-		console_loglevel = 15;		/* NMI oopser may have shut the console up */
-		printk(" ");
-		console_loglevel = loglevel_save;
-	}
+	return atomic_notifier_call_chain(&notify_page_fault_chain,
+	                                  DIE_PAGE_FAULT, &args);
 }
 
 /* Sometimes the CPU reports invalid exceptions on prefetch.
@@ -96,7 +75,7 @@ void bust_spinlocks(int yes)
 static noinline int is_prefetch(struct pt_regs *regs, unsigned long addr,
 				unsigned long error_code)
 { 
-	unsigned char __user *instr;
+	unsigned char *instr;
 	int scan_more = 1;
 	int prefetch = 0; 
 	unsigned char *max_instr;
@@ -116,7 +95,7 @@ static noinline int is_prefetch(struct pt_regs *regs, unsigned long addr,
 		unsigned char instr_hi;
 		unsigned char instr_lo;
 
-		if (__get_user(opcode, (char __user *)instr))
+		if (probe_kernel_address(instr, opcode))
 			break; 
 
 		instr_hi = opcode & 0xf0; 
@@ -154,7 +133,7 @@ static noinline int is_prefetch(struct pt_regs *regs, unsigned long addr,
 		case 0x00:
 			/* Prefetch instruction is 0x0F0D or 0x0F18 */
 			scan_more = 0;
-			if (__get_user(opcode, (char __user *)instr))
+			if (probe_kernel_address(instr, opcode))
 				break;
 			prefetch = (instr_lo == 0xF) &&
 				(opcode == 0x0D || opcode == 0x18);
@@ -170,7 +149,7 @@ static noinline int is_prefetch(struct pt_regs *regs, unsigned long addr,
 static int bad_address(void *p) 
 { 
 	unsigned long dummy;
-	return __get_user(dummy, (unsigned long __user *)p);
+	return probe_kernel_address((unsigned long *)p, dummy);
 } 
 
 void dump_pagetable(unsigned long address)
@@ -376,8 +355,7 @@ asmlinkage void __kprobes do_page_fault(struct pt_regs *regs,
 			if (vmalloc_fault(address) >= 0)
 				return;
 		}
-		if (notify_page_fault(DIE_PAGE_FAULT, "page fault", regs, error_code, 14,
-						SIGSEGV) == NOTIFY_STOP)
+		if (notify_page_fault(regs, error_code) == NOTIFY_STOP)
 			return;
 		/*
 		 * Don't take the mm semaphore here. If we fixup a prefetch
@@ -386,8 +364,7 @@ asmlinkage void __kprobes do_page_fault(struct pt_regs *regs,
 		goto bad_area_nosemaphore;
 	}
 
-	if (notify_page_fault(DIE_PAGE_FAULT, "page fault", regs, error_code, 14,
-					SIGSEGV) == NOTIFY_STOP)
+	if (notify_page_fault(regs, error_code) == NOTIFY_STOP)
 		return;
 
 	if (likely(regs->eflags & X86_EFLAGS_IF))
@@ -584,7 +561,8 @@ out_of_memory:
 		yield();
 		goto again;
 	}
-	printk("VM: killing process %s\n", tsk->comm);
+	printk("VM: killing process %s(%d:#%u)\n",
+		tsk->comm, tsk->pid, tsk->xid);
 	if (error_code & 4)
 		do_exit(SIGKILL);
 	goto no_context;

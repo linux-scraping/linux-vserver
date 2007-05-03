@@ -105,7 +105,7 @@ static struct kmem_cache *sn_cache;
 
 /* Highest zone. An specific allocation for a zone below that is not
    policied. */
-enum zone_type policy_zone = ZONE_DMA;
+enum zone_type policy_zone = 0;
 
 struct mempolicy default_policy = {
 	.refcnt = ATOMIC_INIT(1), /* never free it */
@@ -141,9 +141,11 @@ static struct zonelist *bind_zonelist(nodemask_t *nodes)
 	enum zone_type k;
 
 	max = 1 + MAX_NR_ZONES * nodes_weight(*nodes);
+	max++;			/* space for zlcache_ptr (see mmzone.h) */
 	zl = kmalloc(sizeof(struct zone *) * max, GFP_KERNEL);
 	if (!zl)
-		return NULL;
+		return ERR_PTR(-ENOMEM);
+	zl->zlcache_ptr = NULL;
 	num = 0;
 	/* First put in the highest zones from all nodes, then all the next 
 	   lower zones etc. Avoid empty zones because the memory allocator
@@ -159,6 +161,10 @@ static struct zonelist *bind_zonelist(nodemask_t *nodes)
 		if (k == 0)
 			break;
 		k--;
+	}
+	if (num == 0) {
+		kfree(zl);
+		return ERR_PTR(-EINVAL);
 	}
 	zl->zones[num] = NULL;
 	return zl;
@@ -191,9 +197,10 @@ static struct mempolicy *mpol_new(int mode, nodemask_t *nodes)
 		break;
 	case MPOL_BIND:
 		policy->v.zonelist = bind_zonelist(nodes);
-		if (policy->v.zonelist == NULL) {
+		if (IS_ERR(policy->v.zonelist)) {
+			void *error_code = policy->v.zonelist;
 			kmem_cache_free(policy_cache, policy);
-			return ERR_PTR(-ENOMEM);
+			return error_code;
 		}
 		break;
 	}
@@ -219,7 +226,7 @@ static int check_pte_range(struct vm_area_struct *vma, pmd_t *pmd,
 	orig_pte = pte = pte_offset_map_lock(vma->vm_mm, pmd, addr, &ptl);
 	do {
 		struct page *page;
-		unsigned int nid;
+		int nid;
 
 		if (!pte_present(*pte))
 			continue;
@@ -312,15 +319,6 @@ static inline int check_pgd_range(struct vm_area_struct *vma,
 			return -EIO;
 	} while (pgd++, addr = next, addr != end);
 	return 0;
-}
-
-/* Check if a vma is migratable */
-static inline int vma_migratable(struct vm_area_struct *vma)
-{
-	if (vma->vm_flags & (
-		VM_LOCKED|VM_IO|VM_HUGETLB|VM_PFNMAP|VM_RESERVED))
-		return 0;
-	return 1;
 }
 
 /*
@@ -882,6 +880,10 @@ asmlinkage long sys_mbind(unsigned long start, unsigned long len,
 	err = get_nodes(&nodes, nmask, maxnode);
 	if (err)
 		return err;
+#ifdef CONFIG_CPUSETS
+	/* Restrict the nodes to the allowed nodes in the cpuset */
+	nodes_and(nodes, nodes, current->mems_allowed);
+#endif
 	return do_mbind(start, len, mode, &nodes, flags);
 }
 
@@ -1324,7 +1326,7 @@ struct mempolicy *__mpol_copy(struct mempolicy *old)
 	atomic_set(&new->refcnt, 1);
 	if (new->policy == MPOL_BIND) {
 		int sz = ksize(old->v.zonelist);
-		new->v.zonelist = kmemdup(old->v.zonelist, sz, SLAB_KERNEL);
+		new->v.zonelist = kmemdup(old->v.zonelist, sz, GFP_KERNEL);
 		if (!new->v.zonelist) {
 			kmem_cache_free(policy_cache, new);
 			return ERR_PTR(-ENOMEM);
@@ -1661,7 +1663,7 @@ void mpol_rebind_policy(struct mempolicy *pol, const nodemask_t *newmask)
 		 * then zonelist_policy() will "FALL THROUGH" to MPOL_DEFAULT.
 		 */
 
-		if (zonelist) {
+		if (!IS_ERR(zonelist)) {
 			/* Good - got mem - substitute new zonelist */
 			kfree(pol->v.zonelist);
 			pol->v.zonelist = zonelist;
@@ -1705,8 +1707,8 @@ void mpol_rebind_mm(struct mm_struct *mm, nodemask_t *new)
  * Display pages allocated per node and memory policy via /proc.
  */
 
-static const char *policy_types[] = { "default", "prefer", "bind",
-				      "interleave" };
+static const char * const policy_types[] =
+	{ "default", "prefer", "bind", "interleave" };
 
 /*
  * Convert a mempolicy into a string.
@@ -1855,7 +1857,7 @@ int show_numa_map(struct seq_file *m, void *v)
 
 	if (file) {
 		seq_printf(m, " file=");
-		seq_path(m, file->f_vfsmnt, file->f_dentry, "\n\t= ");
+		seq_path(m, file->f_path.mnt, file->f_path.dentry, "\n\t= ");
 	} else if (vma->vm_start <= mm->brk && vma->vm_end >= mm->start_brk) {
 		seq_printf(m, " heap");
 	} else if (vma->vm_start <= mm->start_stack &&

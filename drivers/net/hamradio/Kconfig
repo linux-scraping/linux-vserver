@@ -113,7 +113,7 @@ config SCC_TRXECHO
 
 config BAYCOM_SER_FDX
 	tristate "BAYCOM ser12 fullduplex driver for AX.25"
-	depends on AX25
+	depends on AX25 && !S390
 	select CRC_CCITT
 	---help---
 	  This is one of two drivers for Baycom style simple amateur radio
@@ -133,12 +133,12 @@ config BAYCOM_SER_FDX
 
 config BAYCOM_SER_HDX
 	tristate "BAYCOM ser12 halfduplex driver for AX.25"
-	depends on AX25
+	depends on AX25 && !S390
 	select CRC_CCITT
 	---help---
 	  This is one of two drivers for Baycom style simple amateur radio
 	  modems that connect to a serial interface. The driver supports the
-	  ser12 design in full-duplex mode. This is the old driver.  It is
+	  ser12 design in half-duplex mode. This is the old driver.  It is
 	  still provided in case your serial interface chip does not work with
 	  the full-duplex driver. This driver is depreciated.  To configure
 	  the driver, use the sethdlc utility available in the standard ax25
@@ -181,7 +181,7 @@ config BAYCOM_EPP
 
 config YAM
 	tristate "YAM driver for AX.25"
-	depends on AX25
+	depends on AX25 && !S390
 	help
 	  The YAM is a modem for packet radio which connects to the serial
 	  port and includes some of the functions of a Terminal Node
@@ -190,3 +190,4 @@ config YAM
 	  To compile this driver as a module, choose M here: the module
 	  will be called yam.
 
+ 

@@ -304,8 +304,9 @@ static int amd74xx_ide_dma_check(ide_drive_t *drive)
 	amd_set_drive(drive, speed);
 
 	if (drive->autodma && (speed & XFER_MODE) != XFER_PIO)
-		return HWIF(drive)->ide_dma_on(drive);
-	return HWIF(drive)->ide_dma_off_quietly(drive);
+		return 0;
+
+	return -1;
 }
 
 /*
@@ -544,7 +545,7 @@ static struct pci_driver driver = {
 	.probe		= amd74xx_probe,
 };
 
-static int amd74xx_ide_init(void)
+static int __init amd74xx_ide_init(void)
 {
 	return ide_pci_register_driver(&driver);
 }

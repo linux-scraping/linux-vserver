@@ -55,7 +55,6 @@
 #include <asm/dma.h>
 #include <asm/machdep.h>
 #include <asm/irq.h>
-#include <asm/kexec.h>
 #include <asm/time.h>
 #include <asm/nvram.h>
 #include "xics.h"
@@ -65,10 +64,10 @@
 #include <asm/i8259.h>
 #include <asm/udbg.h>
 #include <asm/smp.h>
+#include <asm/firmware.h>
 
 #include "plpar_wrappers.h"
-#include "ras.h"
-#include "firmware.h"
+#include "pseries.h"
 
 #ifdef DEBUG
 #define DBG(fmt...) udbg_printf(fmt)
@@ -77,8 +76,6 @@
 #endif
 
 /* move those away to a .h */
-extern void smp_init_pseries_mpic(void);
-extern void smp_init_pseries_xics(void);
 extern void find_udbg_vterm(void);
 
 int fwnmi_active;  /* TRUE if an FWNMI handler is present */
@@ -221,42 +218,6 @@ static void pseries_lpar_enable_pmcs(void)
 		get_lppaca()->pmcregs_in_use = 1;
 }
 
-#ifdef CONFIG_KEXEC
-static void pseries_kexec_cpu_down(int crash_shutdown, int secondary)
-{
-	/* Don't risk a hypervisor call if we're crashing */
-	if (firmware_has_feature(FW_FEATURE_SPLPAR) && !crash_shutdown) {
-		unsigned long addr;
-
-		addr = __pa(get_slb_shadow());
-		if (unregister_slb_shadow(hard_smp_processor_id(), addr))
-			printk("SLB shadow buffer deregistration of "
-			       "cpu %u (hw_cpu_id %d) failed\n",
-			       smp_processor_id(),
-			       hard_smp_processor_id());
-
-		addr = __pa(get_lppaca());
-		if (unregister_vpa(hard_smp_processor_id(), addr)) {
-			printk("VPA deregistration of cpu %u (hw_cpu_id %d) "
-					"failed\n", smp_processor_id(),
-					hard_smp_processor_id());
-		}
-	}
-}
-
-static void pseries_kexec_cpu_down_mpic(int crash_shutdown, int secondary)
-{
-	pseries_kexec_cpu_down(crash_shutdown, secondary);
-	mpic_teardown_this_cpu(secondary);
-}
-
-static void pseries_kexec_cpu_down_xics(int crash_shutdown, int secondary)
-{
-	pseries_kexec_cpu_down(crash_shutdown, secondary);
-	xics_teardown_cpu(secondary);
-}
-#endif /* CONFIG_KEXEC */
-
 static void __init pseries_discover_pic(void)
 {
 	struct device_node *np;
@@ -269,21 +230,13 @@ static void __init pseries_discover_pic(void)
 			pSeries_mpic_node = of_node_get(np);
 			ppc_md.init_IRQ       = pseries_mpic_init_IRQ;
 			ppc_md.get_irq        = mpic_get_irq;
-#ifdef CONFIG_KEXEC
-			ppc_md.kexec_cpu_down = pseries_kexec_cpu_down_mpic;
-#endif
-#ifdef CONFIG_SMP
+			setup_kexec_cpu_down_mpic();
 			smp_init_pseries_mpic();
-#endif
 			return;
 		} else if (strstr(typep, "ppc-xicp")) {
 			ppc_md.init_IRQ       = xics_init_IRQ;
-#ifdef CONFIG_KEXEC
-			ppc_md.kexec_cpu_down = pseries_kexec_cpu_down_xics;
-#endif
-#ifdef CONFIG_SMP
+			setup_kexec_cpu_down_xics();
 			smp_init_pseries_xics();
-#endif
 			return;
 		}
 	}
@@ -346,17 +299,6 @@ static int __init pSeries_init_panel(void)
 	return 0;
 }
 arch_initcall(pSeries_init_panel);
-
-static void pSeries_mach_cpu_die(void)
-{
-	local_irq_disable();
-	idle_task_exit();
-	xics_teardown_cpu(0);
-	rtas_stop_self();
-	/* Should never get here... */
-	BUG();
-	for(;;);
-}
 
 static int pseries_set_dabr(unsigned long dabr)
 {
@@ -433,19 +375,14 @@ static int __init pSeries_probe_hypertas(unsigned long node,
 	if (of_get_flat_dt_prop(node, "ibm,hypertas-functions", NULL) != NULL)
  		powerpc_firmware_features |= FW_FEATURE_LPAR;
 
-	if (firmware_has_feature(FW_FEATURE_LPAR))
-		hpte_init_lpar();
-	else
-		hpte_init_native();
-
  	return 1;
 }
 
 static int __init pSeries_probe(void)
 {
 	unsigned long root = of_get_flat_dt_root();
- 	char *dtype = of_get_flat_dt_prop(of_get_flat_dt_root(),
- 					  "device_type", NULL);
+ 	char *dtype = of_get_flat_dt_prop(root, "device_type", NULL);
+
  	if (dtype == NULL)
  		return 0;
  	if (strcmp(dtype, "chrp"))
@@ -462,6 +399,11 @@ static int __init pSeries_probe(void)
 
 	/* Now try to figure out if we are running on LPAR */
 	of_scan_flat_dt(pSeries_probe_hypertas, NULL);
+
+	if (firmware_has_feature(FW_FEATURE_LPAR))
+		hpte_init_lpar();
+	else
+		hpte_init_native();
 
 	DBG("Machine is%s LPAR !\n",
 	    (powerpc_firmware_features & FW_FEATURE_LPAR) ? "" : " not");
@@ -544,6 +486,34 @@ static int pSeries_pci_probe_mode(struct pci_bus *bus)
 	return PCI_PROBE_NORMAL;
 }
 
+/**
+ * pSeries_power_off - tell firmware about how to power off the system.
+ *
+ * This function calls either the power-off rtas token in normal cases
+ * or the ibm,power-off-ups token (if present & requested) in case of
+ * a power failure. If power-off token is used, power on will only be
+ * possible with power button press. If ibm,power-off-ups token is used
+ * it will allow auto poweron after power is restored.
+ */
+void pSeries_power_off(void)
+{
+	int rc;
+	int rtas_poweroff_ups_token = rtas_token("ibm,power-off-ups");
+
+	if (rtas_flash_term_hook)
+		rtas_flash_term_hook(SYS_POWER_OFF);
+
+	if (rtas_poweron_auto == 0 ||
+		rtas_poweroff_ups_token == RTAS_UNKNOWN_SERVICE) {
+		rc = rtas_call(rtas_token("power-off"), 2, 1, NULL, -1, -1);
+		printk(KERN_INFO "RTAS power-off returned %d\n", rc);
+	} else {
+		rc = rtas_call(rtas_poweroff_ups_token, 0, 1, NULL);
+		printk(KERN_INFO "RTAS ibm,power-off-ups returned %d\n", rc);
+	}
+	for (;;);
+}
+
 define_machine(pseries) {
 	.name			= "pSeries",
 	.probe			= pSeries_probe,
@@ -553,12 +523,10 @@ define_machine(pseries) {
 	.log_error		= pSeries_log_error,
 	.pcibios_fixup		= pSeries_final_fixup,
 	.pci_probe_mode		= pSeries_pci_probe_mode,
-	.irq_bus_setup		= pSeries_irq_bus_setup,
 	.restart		= rtas_restart,
-	.power_off		= rtas_power_off,
+	.power_off		= pSeries_power_off,
 	.halt			= rtas_halt,
 	.panic			= rtas_os_term,
-	.cpu_die		= pSeries_mach_cpu_die,
 	.get_boot_time		= rtas_get_boot_time,
 	.get_rtc_time		= rtas_get_rtc_time,
 	.set_rtc_time		= rtas_set_rtc_time,
@@ -567,9 +535,4 @@ define_machine(pseries) {
 	.check_legacy_ioport	= pSeries_check_legacy_ioport,
 	.system_reset_exception = pSeries_system_reset_exception,
 	.machine_check_exception = pSeries_machine_check_exception,
-#ifdef CONFIG_KEXEC
-	.machine_kexec		= default_machine_kexec,
-	.machine_kexec_prepare	= default_machine_kexec_prepare,
-	.machine_crash_shutdown	= default_machine_crash_shutdown,
-#endif
 };

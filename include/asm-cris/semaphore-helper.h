@@ -20,18 +20,17 @@
 /*
  * These two _must_ execute atomically wrt each other.
  */
-extern inline void wake_one_more(struct semaphore * sem)
+static inline void wake_one_more(struct semaphore * sem)
 {
 	atomic_inc(&sem->waking);
 }
 
-extern inline int waking_non_zero(struct semaphore *sem)
+static inline int waking_non_zero(struct semaphore *sem)
 {
 	unsigned long flags;
 	int ret = 0;
 
-	local_save_flags(flags);
-	local_irq_disable();
+	local_irq_save(flags);
 	if (read(&sem->waking) > 0) {
 		dec(&sem->waking);
 		ret = 1;
@@ -40,14 +39,13 @@ extern inline int waking_non_zero(struct semaphore *sem)
 	return ret;
 }
 
-extern inline int waking_non_zero_interruptible(struct semaphore *sem,
+static inline int waking_non_zero_interruptible(struct semaphore *sem,
 						struct task_struct *tsk)
 {
 	int ret = 0;
 	unsigned long flags;
 
-	local_save_flags(flags);
-	local_irq_disable();
+	local_irq_save(flags);
 	if (read(&sem->waking) > 0) {
 		dec(&sem->waking);
 		ret = 1;
@@ -59,13 +57,12 @@ extern inline int waking_non_zero_interruptible(struct semaphore *sem,
 	return ret;
 }
 
-extern inline int waking_non_zero_trylock(struct semaphore *sem)
+static inline int waking_non_zero_trylock(struct semaphore *sem)
 {
         int ret = 1;
 	unsigned long flags;
 
-	local_save_flags(flags);
-	local_irq_disable();
+	local_irq_save(flags);
 	if (read(&sem->waking) <= 0)
 		inc(&sem->count);
 	else {

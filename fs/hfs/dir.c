@@ -53,7 +53,7 @@ done:
  */
 static int hfs_readdir(struct file *filp, void *dirent, filldir_t filldir)
 {
-	struct inode *inode = filp->f_dentry->d_inode;
+	struct inode *inode = filp->f_path.dentry->d_inode;
 	struct super_block *sb = inode->i_sb;
 	int len, err;
 	char strbuf[HFS_MAX_NAMELEN];
@@ -320,7 +320,7 @@ const struct file_operations hfs_dir_operations = {
 	.release	= hfs_dir_release,
 };
 
-struct inode_operations hfs_dir_inode_operations = {
+const struct inode_operations hfs_dir_inode_operations = {
 	.create		= hfs_create,
 	.lookup		= hfs_lookup,
 	.unlink		= hfs_unlink,

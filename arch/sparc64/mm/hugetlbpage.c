@@ -235,6 +235,11 @@ pte_t *huge_pte_offset(struct mm_struct *mm, unsigned long addr)
 	return pte;
 }
 
+int huge_pmd_unshare(struct mm_struct *mm, unsigned long *addr, pte_t *ptep)
+{
+	return 0;
+}
+
 void set_huge_pte_at(struct mm_struct *mm, unsigned long addr,
 		     pte_t *ptep, pte_t entry)
 {
@@ -243,6 +248,7 @@ void set_huge_pte_at(struct mm_struct *mm, unsigned long addr,
 	if (!pte_present(*ptep) && pte_present(entry))
 		mm->context.huge_pte_count++;
 
+	addr &= HPAGE_MASK;
 	for (i = 0; i < (1 << HUGETLB_PAGE_ORDER); i++) {
 		set_pte_at(mm, addr, ptep, entry);
 		ptep++;
@@ -260,6 +266,8 @@ pte_t huge_ptep_get_and_clear(struct mm_struct *mm, unsigned long addr,
 	entry = *ptep;
 	if (pte_present(entry))
 		mm->context.huge_pte_count--;
+
+	addr &= HPAGE_MASK;
 
 	for (i = 0; i < (1 << HUGETLB_PAGE_ORDER); i++) {
 		pte_clear(mm, addr, ptep);

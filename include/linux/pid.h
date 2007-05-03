@@ -36,8 +36,9 @@ enum pid_type
  *
  * Holding a reference to struct pid solves both of these problems.
  * It is small so holding a reference does not consume a lot of
- * resources, and since a new struct pid is allocated when the numeric
- * pid value is reused we don't mistakenly refer to new processes.
+ * resources, and since a new struct pid is allocated when the numeric pid
+ * value is reused (when pids wrap around) we don't mistakenly refer to new
+ * processes.
  */
 
 struct pid
@@ -105,26 +106,13 @@ static inline pid_t pid_nr(struct pid *pid)
 	return nr;
 }
 
-
-#define do_each_task_pid(who, type, task)				\
-	do {								\
-		struct hlist_node *pos___;				\
-		struct pid *pid___ = find_pid(who);			\
-		if (pid___ != NULL)					\
-			hlist_for_each_entry_rcu((task), pos___,	\
-				&pid___->tasks[type], pids[type].node) {
-
-#define while_each_task_pid(who, type, task)				\
-			}						\
-	} while (0)
-
-
 #define do_each_pid_task(pid, type, task)				\
 	do {								\
 		struct hlist_node *pos___;				\
 		if (pid != NULL)					\
 			hlist_for_each_entry_rcu((task), pos___,	\
-				&pid->tasks[type], pids[type].node) {
+				&pid->tasks[type], pids[type].node)	\
+			if (vx_check((task)->xid, VS_ADMIN_P|VS_IDENT)) {
 
 #define while_each_pid_task(pid, type, task)				\
 			}						\

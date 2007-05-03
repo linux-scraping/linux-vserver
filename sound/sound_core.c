@@ -170,8 +170,8 @@ static int sound_insert_unit(struct sound_unit **list, const struct file_operati
 	else
 		sprintf(s->name, "sound/%s%d", name, r / SOUND_STEP);
 
-	class_device_create(sound_class, NULL, MKDEV(SOUND_MAJOR, s->unit_minor),
-			    dev, s->name+6);
+	device_create(sound_class, dev, MKDEV(SOUND_MAJOR, s->unit_minor),
+		      s->name+6);
 	return r;
 
  fail:
@@ -193,7 +193,7 @@ static void sound_remove_unit(struct sound_unit **list, int unit)
 	p = __sound_remove_unit(list, unit);
 	spin_unlock(&sound_loader_lock);
 	if (p) {
-		class_device_destroy(sound_class, MKDEV(SOUND_MAJOR, p->unit_minor));
+		device_destroy(sound_class, MKDEV(SOUND_MAJOR, p->unit_minor));
 		kfree(p);
 	}
 }
@@ -436,7 +436,7 @@ EXPORT_SYMBOL(unregister_sound_dsp);
 
 static int soundcore_open(struct inode *, struct file *);
 
-static struct file_operations soundcore_fops=
+static const struct file_operations soundcore_fops=
 {
 	/* We must have an owner or the module locking fails */
 	.owner	= THIS_MODULE,

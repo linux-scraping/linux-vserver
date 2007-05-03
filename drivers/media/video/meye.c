@@ -28,7 +28,6 @@
  */
 #include <linux/module.h>
 #include <linux/pci.h>
-#include <linux/sched.h>
 #include <linux/init.h>
 #include <linux/videodev.h>
 #include <media/v4l2-common.h>
@@ -923,7 +922,7 @@ static int meye_do_ioctl(struct inode *inode, struct file *file,
 		struct video_picture *p = arg;
 		if (p->depth != 16)
 			return -EINVAL;
-		if (p->palette != VIDEO_PALETTE_YUV422)
+		if (p->palette != VIDEO_PALETTE_YUV422 && p->palette != VIDEO_PALETTE_YUYV)
 			return -EINVAL;
 		mutex_lock(&meye.lock);
 		sonypi_camera_command(SONYPI_COMMAND_SETCAMERABRIGHTNESS,
@@ -978,7 +977,7 @@ static int meye_do_ioctl(struct inode *inode, struct file *file,
 
 		if (vm->frame >= gbuffers || vm->frame < 0)
 			return -EINVAL;
-		if (vm->format != VIDEO_PALETTE_YUV422)
+		if (vm->format != VIDEO_PALETTE_YUV422 && vm->format != VIDEO_PALETTE_YUYV)
 			return -EINVAL;
 		if (vm->height * vm->width * 2 > gbufsize)
 			return -EINVAL;
@@ -1748,7 +1747,7 @@ static int meye_mmap(struct file *file, struct vm_area_struct *vma)
 	return 0;
 }
 
-static struct file_operations meye_fops = {
+static const struct file_operations meye_fops = {
 	.owner		= THIS_MODULE,
 	.open		= meye_open,
 	.release	= meye_release,

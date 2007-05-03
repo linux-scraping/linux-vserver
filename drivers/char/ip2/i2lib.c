@@ -84,8 +84,8 @@ static void iiSendPendingMail(i2eBordStrPtr);
 static void serviceOutgoingFifo(i2eBordStrPtr);
 
 // Functions defined in ip2.c as part of interrupt handling
-static void do_input(void *);
-static void do_status(void *);
+static void do_input(struct work_struct *);
+static void do_status(struct work_struct *);
 
 //***************
 //* Debug  Data *
@@ -150,6 +150,13 @@ i2Validate ( i2ChanStrPtr pCh )
 			  == (CHANNEL_MAGIC | CHANNEL_SUPPORT));
 }
 
+static void iiSendPendingMail_t(unsigned long data)
+{
+	i2eBordStrPtr pB = (i2eBordStrPtr)data;
+
+	iiSendPendingMail(pB);
+}
+
 //******************************************************************************
 // Function:   iiSendPendingMail(pB)
 // Parameters: Pointer to a board structure
@@ -159,7 +166,7 @@ i2Validate ( i2ChanStrPtr pCh )
 // If any outgoing mail bits are set and there is outgoing mailbox is empty,
 // send the mail and clear the bits.
 //******************************************************************************
-static inline void
+static void
 iiSendPendingMail(i2eBordStrPtr pB)
 {
 	if (pB->i2eOutMailWaiting && (!pB->i2eWaitingForEmptyFifo) )
@@ -184,12 +191,9 @@ iiSendPendingMail(i2eBordStrPtr pB)
 			/\/\|=mhw=|\/\/				*/
 
 			if( ++pB->SendPendingRetry < 16 ) {
-
-				init_timer( &(pB->SendPendingTimer) );
-				pB->SendPendingTimer.expires  = jiffies + 1;
-				pB->SendPendingTimer.function = (void*)(unsigned long)iiSendPendingMail;
-				pB->SendPendingTimer.data     = (unsigned long)pB;
-				add_timer( &(pB->SendPendingTimer) );
+				setup_timer(&pB->SendPendingTimer,
+					iiSendPendingMail_t, (unsigned long)pB);
+				mod_timer(&pB->SendPendingTimer, jiffies + 1);
 			} else {
 				printk( KERN_ERR "IP2: iiSendPendingMail unable to queue outbound mail\n" );
 			}
@@ -331,8 +335,8 @@ i2InitChannels ( i2eBordStrPtr pB, int nChannels, i2ChanStrPtr pCh)
 		pCh->ClosingWaitTime  = 30*HZ;
 
 		// Initialize task queue objects
-		INIT_WORK(&pCh->tqueue_input, do_input, pCh);
-		INIT_WORK(&pCh->tqueue_status, do_status, pCh);
+		INIT_WORK(&pCh->tqueue_input, do_input);
+		INIT_WORK(&pCh->tqueue_status, do_status);
 
 #ifdef IP2DEBUG_TRACE
 		pCh->trace = ip2trace;
@@ -1016,7 +1020,6 @@ i2Output(i2ChanStrPtr pCh, const char *pSource, int count)
 	unsigned short channel;
 	unsigned short stuffIndex;
 	unsigned long flags;
-	int rc = 0;
 
 	int bailout = 10;
 
@@ -1266,8 +1269,10 @@ i2RetryFlushOutput(i2ChanStrPtr pCh)
 // soon as all the data is completely sent.
 //******************************************************************************
 static void
-i2DrainWakeup(i2ChanStrPtr pCh)
+i2DrainWakeup(unsigned long d)
 {
+	i2ChanStrPtr pCh = (i2ChanStrPtr)d;
+
 	ip2trace (CHANN, ITRC_DRAIN, 10, 1, pCh->BookmarkTimer.expires );
 
 	pCh->BookmarkTimer.expires = 0;
@@ -1293,14 +1298,12 @@ i2DrainOutput(i2ChanStrPtr pCh, int timeout)
 	}
 	if ((timeout > 0) && (pCh->BookmarkTimer.expires == 0 )) {
 		// One per customer (channel)
-		init_timer( &(pCh->BookmarkTimer) );
-		pCh->BookmarkTimer.expires  = jiffies + timeout;
-		pCh->BookmarkTimer.function = (void*)(unsigned long)i2DrainWakeup;
-		pCh->BookmarkTimer.data     = (unsigned long)pCh;
+		setup_timer(&pCh->BookmarkTimer, i2DrainWakeup,
+				(unsigned long)pCh);
 
 		ip2trace (CHANN, ITRC_DRAIN, 1, 1, pCh->BookmarkTimer.expires );
 
-		add_timer( &(pCh->BookmarkTimer) );
+		mod_timer(&pCh->BookmarkTimer, jiffies + timeout);
 	}
 	
 	i2QueueCommands( PTYPE_INLINE, pCh, -1, 1, CMD_BMARK_REQ );
@@ -1374,15 +1377,7 @@ ip2_owake( PTTY tp)
 	ip2trace (CHANN, ITRC_SICMD, 10, 2, tp->flags,
 			(1 << TTY_DO_WRITE_WAKEUP) );
 
-	wake_up_interruptible ( &tp->write_wait );
-	if ( ( tp->flags & (1 << TTY_DO_WRITE_WAKEUP) ) 
-	  && tp->ldisc.write_wakeup )
-	{
-		(tp->ldisc.write_wakeup) ( tp );
-
-		ip2trace (CHANN, ITRC_SICMD, 11, 0 );
-
-	}
+	tty_wakeup(tp);
 }
 
 static inline void
@@ -1573,7 +1568,7 @@ i2StripFifo(i2eBordStrPtr pB)
 #ifdef USE_IQ
 			schedule_work(&pCh->tqueue_input);
 #else
-			do_input(pCh);
+			do_input(&pCh->tqueue_input);
 #endif
 
 			// Note we do not need to maintain any flow-control credits at this
@@ -1810,7 +1805,7 @@ i2StripFifo(i2eBordStrPtr pB)
 #ifdef USE_IQ
 						schedule_work(&pCh->tqueue_status);
 #else
-						do_status(pCh);
+						do_status(&pCh->tqueue_status);
 #endif
 					}
 				}

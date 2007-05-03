@@ -488,7 +488,7 @@ static long snd_info_entry_ioctl(struct file *file, unsigned int cmd,
 
 static int snd_info_entry_mmap(struct file *file, struct vm_area_struct *vma)
 {
-	struct inode *inode = file->f_dentry->d_inode;
+	struct inode *inode = file->f_path.dentry->d_inode;
 	struct snd_info_private_data *data;
 	struct snd_info_entry *entry;
 
@@ -507,7 +507,7 @@ static int snd_info_entry_mmap(struct file *file, struct vm_area_struct *vma)
 	return -ENXIO;
 }
 
-static struct file_operations snd_info_entry_operations =
+static const struct file_operations snd_info_entry_operations =
 {
 	.owner =		THIS_MODULE,
 	.llseek =		snd_info_entry_llseek,

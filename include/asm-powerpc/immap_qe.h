@@ -136,22 +136,7 @@ struct qe_timers {
 
 /* BRG */
 struct qe_brg {
-	__be32	brgc1;		/* BRG1 configuration register */
-	__be32	brgc2;		/* BRG2 configuration register */
-	__be32	brgc3;		/* BRG3 configuration register */
-	__be32	brgc4;		/* BRG4 configuration register */
-	__be32	brgc5;		/* BRG5 configuration register */
-	__be32	brgc6;		/* BRG6 configuration register */
-	__be32	brgc7;		/* BRG7 configuration register */
-	__be32	brgc8;		/* BRG8 configuration register */
-	__be32	brgc9;		/* BRG9 configuration register */
-	__be32	brgc10;		/* BRG10 configuration register */
-	__be32	brgc11;		/* BRG11 configuration register */
-	__be32	brgc12;		/* BRG12 configuration register */
-	__be32	brgc13;		/* BRG13 configuration register */
-	__be32	brgc14;		/* BRG14 configuration register */
-	__be32	brgc15;		/* BRG15 configuration register */
-	__be32	brgc16;		/* BRG16 configuration register */
+	__be32	brgc[16];	/* BRG configuration registers */
 	u8	res0[0x40];
 } __attribute__ ((packed));
 
@@ -273,8 +258,9 @@ struct ucc_slow {
 	u8	uccs;		/* UCCx status register */
 	u8	res3[0x24];
 	__be16	utpt;
+	u8	res4[0x52];
 	u8	guemr;		/* UCC general extended mode register */
-	u8	res4[0x200 - 0x091];
+	u8	res5[0x200 - 0x091];
 } __attribute__ ((packed));
 
 /* QE UCC Fast */

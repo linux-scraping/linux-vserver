@@ -110,7 +110,7 @@ romfs_checksum(void *data, int size)
 	return sum;
 }
 
-static struct super_operations romfs_ops;
+static const struct super_operations romfs_ops;
 
 static int romfs_fill_super(struct super_block *s, void *data, int silent)
 {
@@ -276,7 +276,7 @@ static unsigned char romfs_dtype_table[] = {
 static int
 romfs_readdir(struct file *filp, void *dirent, filldir_t filldir)
 {
-	struct inode *i = filp->f_dentry->d_inode;
+	struct inode *i = filp->f_path.dentry->d_inode;
 	struct romfs_inode ri;
 	unsigned long offset, maxoff;
 	int j, ino, nextfh;
@@ -468,7 +468,7 @@ static const struct file_operations romfs_dir_operations = {
 	.readdir	= romfs_readdir,
 };
 
-static struct inode_operations romfs_dir_inode_operations = {
+static const struct inode_operations romfs_dir_inode_operations = {
 	.lookup		= romfs_lookup,
 };
 
@@ -550,12 +550,12 @@ romfs_read_inode(struct inode *i)
 	}
 }
 
-static kmem_cache_t * romfs_inode_cachep;
+static struct kmem_cache * romfs_inode_cachep;
 
 static struct inode *romfs_alloc_inode(struct super_block *sb)
 {
 	struct romfs_inode_info *ei;
-	ei = (struct romfs_inode_info *)kmem_cache_alloc(romfs_inode_cachep, SLAB_KERNEL);
+	ei = (struct romfs_inode_info *)kmem_cache_alloc(romfs_inode_cachep, GFP_KERNEL);
 	if (!ei)
 		return NULL;
 	return &ei->vfs_inode;
@@ -566,7 +566,7 @@ static void romfs_destroy_inode(struct inode *inode)
 	kmem_cache_free(romfs_inode_cachep, ROMFS_I(inode));
 }
 
-static void init_once(void * foo, kmem_cache_t * cachep, unsigned long flags)
+static void init_once(void * foo, struct kmem_cache * cachep, unsigned long flags)
 {
 	struct romfs_inode_info *ei = (struct romfs_inode_info *) foo;
 
@@ -598,7 +598,7 @@ static int romfs_remount(struct super_block *sb, int *flags, char *data)
 	return 0;
 }
 
-static struct super_operations romfs_ops = {
+static const struct super_operations romfs_ops = {
 	.alloc_inode	= romfs_alloc_inode,
 	.destroy_inode	= romfs_destroy_inode,
 	.read_inode	= romfs_read_inode,

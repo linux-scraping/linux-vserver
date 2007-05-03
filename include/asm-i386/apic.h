@@ -37,18 +37,29 @@ extern void generic_apic_probe(void);
 /*
  * Basic functions accessing APICs.
  */
+#ifdef CONFIG_PARAVIRT
+#include <asm/paravirt.h>
+#else
+#define apic_write native_apic_write
+#define apic_write_atomic native_apic_write_atomic
+#define apic_read native_apic_read
+#define setup_boot_clock setup_boot_APIC_clock
+#define setup_secondary_clock setup_secondary_APIC_clock
+#endif
 
-static __inline void apic_write(unsigned long reg, unsigned long v)
+static __inline fastcall void native_apic_write(unsigned long reg,
+						unsigned long v)
 {
 	*((volatile unsigned long *)(APIC_BASE+reg)) = v;
 }
 
-static __inline void apic_write_atomic(unsigned long reg, unsigned long v)
+static __inline fastcall void native_apic_write_atomic(unsigned long reg,
+						       unsigned long v)
 {
 	xchg((volatile unsigned long *)(APIC_BASE+reg), v);
 }
 
-static __inline unsigned long apic_read(unsigned long reg)
+static __inline fastcall unsigned long native_apic_read(unsigned long reg)
 {
 	return *((volatile unsigned long *)(APIC_BASE+reg));
 }
@@ -84,9 +95,7 @@ static inline void ack_APIC_irq(void)
 	apic_write_around(APIC_EOI, 0);
 }
 
-extern void (*wait_timer_tick)(void);
-
-extern int get_maxlvt(void);
+extern int lapic_get_maxlvt(void);
 extern void clear_local_APIC(void);
 extern void connect_bsp_APIC (void);
 extern void disconnect_bsp_APIC (int virt_wire_setup);
@@ -102,17 +111,13 @@ extern void smp_local_timer_interrupt (void);
 extern void setup_boot_APIC_clock (void);
 extern void setup_secondary_APIC_clock (void);
 extern int APIC_init_uniprocessor (void);
-extern void disable_APIC_timer(void);
-extern void enable_APIC_timer(void);
 
 extern void enable_NMI_through_LVT0 (void * dummy);
 
-void smp_send_timer_broadcast_ipi(void);
-void switch_APIC_timer_to_ipi(void *cpumask);
-void switch_ipi_to_APIC_timer(void *cpumask);
 #define ARCH_APICTIMER_STOPS_ON_C3	1
 
 extern int timer_over_8254;
+extern int local_apic_timer_c2_ok;
 
 #else /* !CONFIG_X86_LOCAL_APIC */
 static inline void lapic_shutdown(void) { }

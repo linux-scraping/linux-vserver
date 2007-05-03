@@ -47,8 +47,6 @@
 #include "xfs_error.h"
 #include "xfs_rw.h"
 #include "xfs_acl.h"
-#include "xfs_cap.h"
-#include "xfs_mac.h"
 #include "xfs_attr.h"
 #include "xfs_buf_item.h"
 #include "xfs_utils.h"
@@ -135,7 +133,7 @@ xfs_qm_quotactl(
 		break;
 
 	case Q_XQUOTASYNC:
-		return (xfs_sync_inodes(mp, SYNC_DELWRI, 0, NULL));
+		return (xfs_sync_inodes(mp, SYNC_DELWRI, NULL));
 
 	default:
 		break;
@@ -214,7 +212,7 @@ xfs_qm_scall_quotaoff(
 	xfs_qoff_logitem_t	*qoffstart;
 	int			nculprits;
 
-	if (!force && !capable(CAP_SYS_ADMIN))
+	if (!force && !vx_capable(CAP_SYS_ADMIN, VXC_QUOTA_CTL))
 		return XFS_ERROR(EPERM);
 	/*
 	 * No file system can have quotas enabled on disk but not in core.

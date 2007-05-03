@@ -6,6 +6,7 @@ menu "Security options"
 
 config KEYS
 	bool "Enable access key retention support"
+	depends on !VSERVER_SECURITY
 	help
 	  This option provides support for retaining authentication tokens and
 	  access keys in the kernel.

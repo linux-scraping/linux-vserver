@@ -158,6 +158,8 @@ struct mtd_info *cfi_cmdset_0020(struct map_info *map, int primary)
 		cfi->chips[i].word_write_time = 128;
 		cfi->chips[i].buffer_write_time = 128;
 		cfi->chips[i].erase_time = 1024;
+		cfi->chips[i].ref_point_counter = 0;
+		init_waitqueue_head(&(cfi->chips[i].wq));
 	}
 
 	return cfi_staa_setup(map);
@@ -172,7 +174,7 @@ static struct mtd_info *cfi_staa_setup(struct map_info *map)
 	int i,j;
 	unsigned long devsize = (1<<cfi->cfiq->DevSize) * cfi->interleave;
 
-	mtd = kmalloc(sizeof(*mtd), GFP_KERNEL);
+	mtd = kzalloc(sizeof(*mtd), GFP_KERNEL);
 	//printk(KERN_DEBUG "number of CFI chips: %d\n", cfi->numchips);
 
 	if (!mtd) {
@@ -181,7 +183,6 @@ static struct mtd_info *cfi_staa_setup(struct map_info *map)
 		return NULL;
 	}
 
-	memset(mtd, 0, sizeof(*mtd));
 	mtd->priv = map;
 	mtd->type = MTD_NORFLASH;
 	mtd->size = devsize * cfi->numchips;
@@ -663,7 +664,7 @@ static int cfi_staa_write_buffers (struct mtd_info *mtd, loff_t to,
  * a small buffer for this.
  * XXX: If the buffer size is not a multiple of 2, this will break
  */
-#define ECCBUF_SIZE (mtd->eccsize)
+#define ECCBUF_SIZE (mtd->writesize)
 #define ECCBUF_DIV(x) ((x) & ~(ECCBUF_SIZE - 1))
 #define ECCBUF_MOD(x) ((x) &  (ECCBUF_SIZE - 1))
 static int

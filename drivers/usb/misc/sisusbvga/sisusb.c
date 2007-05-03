@@ -40,7 +40,6 @@
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/signal.h>
-#include <linux/sched.h>
 #include <linux/errno.h>
 #include <linux/poll.h>
 #include <linux/init.h>
@@ -3168,7 +3167,7 @@ sisusb_compat_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
 		case SISUSB_GET_CONFIG:
 		case SISUSB_COMMAND:
 			lock_kernel();
-			retval = sisusb_ioctl(f->f_dentry->d_inode, f, cmd, arg);
+			retval = sisusb_ioctl(f->f_path.dentry->d_inode, f, cmd, arg);
 			unlock_kernel();
 			return retval;
 

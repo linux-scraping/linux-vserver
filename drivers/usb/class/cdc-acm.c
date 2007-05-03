@@ -326,10 +326,16 @@ static void acm_rx_tasklet(unsigned long _acm)
 	struct tty_struct *tty = acm->tty;
 	struct acm_ru *rcv;
 	unsigned long flags;
-	int i = 0;
+	unsigned char throttled;
 	dbg("Entering acm_rx_tasklet");
 
-	if (!ACM_READY(acm) || acm->throttle)
+	if (!ACM_READY(acm))
+		return;
+
+	spin_lock_irqsave(&acm->throttle_lock, flags);
+	throttled = acm->throttle;
+	spin_unlock_irqrestore(&acm->throttle_lock, flags);
+	if (throttled)
 		return;
 
 next_buffer:
@@ -346,22 +352,20 @@ next_buffer:
 	dbg("acm_rx_tasklet: procesing buf 0x%p, size = %d", buf, buf->size);
 
 	tty_buffer_request_room(tty, buf->size);
-	if (!acm->throttle)
+	spin_lock_irqsave(&acm->throttle_lock, flags);
+	throttled = acm->throttle;
+	spin_unlock_irqrestore(&acm->throttle_lock, flags);
+	if (!throttled)
 		tty_insert_flip_string(tty, buf->base, buf->size);
 	tty_flip_buffer_push(tty);
 
-	spin_lock(&acm->throttle_lock);
-	if (acm->throttle) {
-		dbg("Throtteling noticed");
-		memmove(buf->base, buf->base + i, buf->size - i);
-		buf->size -= i;
-		spin_unlock(&acm->throttle_lock);
+	if (throttled) {
+		dbg("Throttling noticed");
 		spin_lock_irqsave(&acm->read_lock, flags);
 		list_add(&buf->list, &acm->filled_read_bufs);
 		spin_unlock_irqrestore(&acm->read_lock, flags);
 		return;
 	}
-	spin_unlock(&acm->throttle_lock);
 
 	spin_lock_irqsave(&acm->read_lock, flags);
 	list_add(&buf->list, &acm->spare_read_bufs);
@@ -421,9 +425,9 @@ static void acm_write_bulk(struct urb *urb)
 		schedule_work(&acm->work);
 }
 
-static void acm_softint(void *private)
+static void acm_softint(struct work_struct *work)
 {
-	struct acm *acm = private;
+	struct acm *acm = container_of(work, struct acm, work);
 	dbg("Entering acm_softint.");
 	
 	if (!ACM_READY(acm))
@@ -467,7 +471,8 @@ static int acm_tty_open(struct tty_struct *tty, struct file *filp)
 		goto bail_out;
 	}
 
-	if (0 > acm_set_control(acm, acm->ctrlout = ACM_CTRL_DTR | ACM_CTRL_RTS))
+	if (0 > acm_set_control(acm, acm->ctrlout = ACM_CTRL_DTR | ACM_CTRL_RTS) &&
+	    (acm->ctrl_caps & USB_CDC_CAP_LINE))
 		goto full_bailout;
 
 	INIT_LIST_HEAD(&acm->spare_read_urbs);
@@ -479,6 +484,8 @@ static int acm_tty_open(struct tty_struct *tty, struct file *filp)
 	for (i = 0; i < acm->rx_buflimit; i++) {
 		list_add(&(acm->rb[i].list), &acm->spare_read_bufs);
 	}
+
+	acm->throttle = 0;
 
 	tasklet_schedule(&acm->urb_task);
 
@@ -677,10 +684,10 @@ static const __u8 acm_tty_size[] = {
 	5, 6, 7, 8
 };
 
-static void acm_tty_set_termios(struct tty_struct *tty, struct termios *termios_old)
+static void acm_tty_set_termios(struct tty_struct *tty, struct ktermios *termios_old)
 {
 	struct acm *acm = tty->driver_data;
-	struct termios *termios = tty->termios;
+	struct ktermios *termios = tty->termios;
 	struct usb_cdc_line_coding newline;
 	int newctrl = acm->ctrlout;
 
@@ -892,7 +899,7 @@ skip_normal_probe:
 
 
 	/* workaround for switched endpoints */
-	if ((epread->bEndpointAddress & USB_DIR_IN) != USB_DIR_IN) {
+	if (!usb_endpoint_dir_in(epread)) {
 		/* descriptors are swapped */
 		struct usb_endpoint_descriptor *t;
 		dev_dbg(&intf->dev,"The data interface has switched endpoints");
@@ -927,7 +934,7 @@ skip_normal_probe:
 	acm->rx_buflimit = num_rx_buf;
 	acm->urb_task.func = acm_rx_tasklet;
 	acm->urb_task.data = (unsigned long) acm;
-	INIT_WORK(&acm->work, acm_softint, acm);
+	INIT_WORK(&acm->work, acm_softint);
 	spin_lock_init(&acm->throttle_lock);
 	spin_lock_init(&acm->write_lock);
 	spin_lock_init(&acm->read_lock);
@@ -1092,6 +1099,10 @@ static struct usb_device_id acm_ids[] = {
 	{ USB_DEVICE(0x0ace, 0x1611), /* ZyDAS 56K USB MODEM - new version */
 	.driver_info = SINGLE_RX_URB, /* firmware bug */
 	},
+	{ USB_DEVICE(0x22b8, 0x7000), /* Motorola Q Phone */
+	.driver_info = NO_UNION_NORMAL, /* has no union descriptor */
+	},
+
 	/* control interfaces with various AT-command sets */
 	{ USB_INTERFACE_INFO(USB_CLASS_COMM, USB_CDC_SUBCLASS_ACM,
 		USB_CDC_ACM_PROTO_AT_V25TER) },

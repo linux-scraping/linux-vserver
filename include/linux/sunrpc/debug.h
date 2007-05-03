@@ -62,12 +62,6 @@ extern unsigned int		nlm_debug;
 # define RPC_IFDEBUG(x)
 #endif
 
-#ifdef RPC_PROFILE
-# define pprintk(args...)	printk(## args)
-#else
-# define pprintk(args...)	do ; while (0)
-#endif
-
 /*
  * Sysctl interface for RPC debugging
  */
@@ -84,7 +78,6 @@ void		rpc_unregister_sysctl(void);
  * module currently registers its sysctl table dynamically, the sysctl path
  * for module FOO is <CTL_SUNRPC, CTL_FOODEBUG>.
  */
-#define CTL_SUNRPC	7249	/* arbitrary and hopefully unused */
 
 enum {
 	CTL_RPCDEBUG = 1,

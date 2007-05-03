@@ -12,7 +12,6 @@
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/init.h>
-#include <linux/sched.h>
 #include <linux/slab.h>
 #include <linux/fs.h>
 #include <linux/pagemap.h>
@@ -37,7 +36,7 @@ const struct file_operations afs_dir_file_operations = {
 	.readdir	= afs_dir_readdir,
 };
 
-struct inode_operations afs_dir_inode_operations = {
+const struct inode_operations afs_dir_inode_operations = {
 	.lookup		= afs_dir_lookup,
 	.getattr	= afs_inode_getattr,
 #if 0 /* TODO */
@@ -392,10 +391,10 @@ static int afs_dir_readdir(struct file *file, void *cookie, filldir_t filldir)
 	unsigned fpos;
 	int ret;
 
-	_enter("{%Ld,{%lu}}", file->f_pos, file->f_dentry->d_inode->i_ino);
+	_enter("{%Ld,{%lu}}", file->f_pos, file->f_path.dentry->d_inode->i_ino);
 
 	fpos = file->f_pos;
-	ret = afs_dir_iterate(file->f_dentry->d_inode, &fpos, cookie, filldir);
+	ret = afs_dir_iterate(file->f_path.dentry->d_inode, &fpos, cookie, filldir);
 	file->f_pos = fpos;
 
 	_leave(" = %d", ret);

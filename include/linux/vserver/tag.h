@@ -85,19 +85,6 @@
 #endif
 
 
-#ifdef CONFIG_TAGGING_RUNTIME
-
-#define MAX_UID		0xFFFFFFFF
-#define MAX_GID		0xFFFFFFFF
-
-#define INOTAG_TAG(cond, uid, gid, tag)	(0)
-
-#define TAGINO_UID(cond, uid, tag)	(uid)
-#define TAGINO_GID(cond, gid, tag)	(gid)
-
-#endif
-
-
 #ifndef CONFIG_TAGGING_NONE
 #define dx_current_fstag(sb)	\
 	((sb)->s_flags & MS_TAGGED ? dx_current_tag(): 0)

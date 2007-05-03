@@ -1,5 +1,5 @@
 /*
- *  linux/drivers/char/at91_serial.c
+ *  linux/drivers/char/atmel_serial.c
  *
  *  Driver for Atmel AT91 / AT32 Serial ports
  *  Copyright (C) 2003 Rick Bronson
@@ -33,14 +33,15 @@
 #include <linux/sysrq.h>
 #include <linux/tty_flip.h>
 #include <linux/platform_device.h>
+#include <linux/atmel_pdc.h>
 
 #include <asm/io.h>
 
-#include <asm/arch/at91rm9200_pdc.h>
 #include <asm/mach/serial_at91.h>
 #include <asm/arch/board.h>
+
 #ifdef CONFIG_ARM
-#include <asm/arch/system.h>
+#include <asm/arch/cpu.h>
 #include <asm/arch/gpio.h>
 #endif
 
@@ -73,35 +74,35 @@
 
 #define ATMEL_ISR_PASS_LIMIT	256
 
-#define UART_PUT_CR(port,v)	writel(v, (port)->membase + ATMEL_US_CR)
-#define UART_GET_MR(port)	readl((port)->membase + ATMEL_US_MR)
-#define UART_PUT_MR(port,v)	writel(v, (port)->membase + ATMEL_US_MR)
-#define UART_PUT_IER(port,v)	writel(v, (port)->membase + ATMEL_US_IER)
-#define UART_PUT_IDR(port,v)	writel(v, (port)->membase + ATMEL_US_IDR)
-#define UART_GET_IMR(port)	readl((port)->membase + ATMEL_US_IMR)
-#define UART_GET_CSR(port)	readl((port)->membase + ATMEL_US_CSR)
-#define UART_GET_CHAR(port)	readl((port)->membase + ATMEL_US_RHR)
-#define UART_PUT_CHAR(port,v)	writel(v, (port)->membase + ATMEL_US_THR)
-#define UART_GET_BRGR(port)	readl((port)->membase + ATMEL_US_BRGR)
-#define UART_PUT_BRGR(port,v)	writel(v, (port)->membase + ATMEL_US_BRGR)
-#define UART_PUT_RTOR(port,v)	writel(v, (port)->membase + ATMEL_US_RTOR)
+#define UART_PUT_CR(port,v)	__raw_writel(v, (port)->membase + ATMEL_US_CR)
+#define UART_GET_MR(port)	__raw_readl((port)->membase + ATMEL_US_MR)
+#define UART_PUT_MR(port,v)	__raw_writel(v, (port)->membase + ATMEL_US_MR)
+#define UART_PUT_IER(port,v)	__raw_writel(v, (port)->membase + ATMEL_US_IER)
+#define UART_PUT_IDR(port,v)	__raw_writel(v, (port)->membase + ATMEL_US_IDR)
+#define UART_GET_IMR(port)	__raw_readl((port)->membase + ATMEL_US_IMR)
+#define UART_GET_CSR(port)	__raw_readl((port)->membase + ATMEL_US_CSR)
+#define UART_GET_CHAR(port)	__raw_readl((port)->membase + ATMEL_US_RHR)
+#define UART_PUT_CHAR(port,v)	__raw_writel(v, (port)->membase + ATMEL_US_THR)
+#define UART_GET_BRGR(port)	__raw_readl((port)->membase + ATMEL_US_BRGR)
+#define UART_PUT_BRGR(port,v)	__raw_writel(v, (port)->membase + ATMEL_US_BRGR)
+#define UART_PUT_RTOR(port,v)	__raw_writel(v, (port)->membase + ATMEL_US_RTOR)
 
-// #define UART_GET_CR(port)	readl((port)->membase + ATMEL_US_CR)		// is write-only
+// #define UART_GET_CR(port)	__raw_readl((port)->membase + ATMEL_US_CR)		// is write-only
 
  /* PDC registers */
-#define UART_PUT_PTCR(port,v)	writel(v, (port)->membase + ATMEL_PDC_PTCR)
-#define UART_GET_PTSR(port)	readl((port)->membase + ATMEL_PDC_PTSR)
+#define UART_PUT_PTCR(port,v)	__raw_writel(v, (port)->membase + ATMEL_PDC_PTCR)
+#define UART_GET_PTSR(port)	__raw_readl((port)->membase + ATMEL_PDC_PTSR)
 
-#define UART_PUT_RPR(port,v)	writel(v, (port)->membase + ATMEL_PDC_RPR)
-#define UART_GET_RPR(port)	readl((port)->membase + ATMEL_PDC_RPR)
-#define UART_PUT_RCR(port,v)	writel(v, (port)->membase + ATMEL_PDC_RCR)
-#define UART_PUT_RNPR(port,v)	writel(v, (port)->membase + ATMEL_PDC_RNPR)
-#define UART_PUT_RNCR(port,v)	writel(v, (port)->membase + ATMEL_PDC_RNCR)
+#define UART_PUT_RPR(port,v)	__raw_writel(v, (port)->membase + ATMEL_PDC_RPR)
+#define UART_GET_RPR(port)	__raw_readl((port)->membase + ATMEL_PDC_RPR)
+#define UART_PUT_RCR(port,v)	__raw_writel(v, (port)->membase + ATMEL_PDC_RCR)
+#define UART_PUT_RNPR(port,v)	__raw_writel(v, (port)->membase + ATMEL_PDC_RNPR)
+#define UART_PUT_RNCR(port,v)	__raw_writel(v, (port)->membase + ATMEL_PDC_RNCR)
 
-#define UART_PUT_TPR(port,v)	writel(v, (port)->membase + ATMEL_PDC_TPR)
-#define UART_PUT_TCR(port,v)	writel(v, (port)->membase + ATMEL_PDC_TCR)
-//#define UART_PUT_TNPR(port,v)	writel(v, (port)->membase + ATMEL_PDC_TNPR)
-//#define UART_PUT_TNCR(port,v)	writel(v, (port)->membase + ATMEL_PDC_TNCR)
+#define UART_PUT_TPR(port,v)	__raw_writel(v, (port)->membase + ATMEL_PDC_TPR)
+#define UART_PUT_TCR(port,v)	__raw_writel(v, (port)->membase + ATMEL_PDC_TCR)
+//#define UART_PUT_TNPR(port,v)	__raw_writel(v, (port)->membase + ATMEL_PDC_TNPR)
+//#define UART_PUT_TNCR(port,v)	__raw_writel(v, (port)->membase + ATMEL_PDC_TNCR)
 
 static int (*atmel_open_hook)(struct uart_port *);
 static void (*atmel_close_hook)(struct uart_port *);
@@ -137,8 +138,8 @@ static void atmel_set_mctrl(struct uart_port *port, u_int mctrl)
 	unsigned int control = 0;
 	unsigned int mode;
 
-#ifdef CONFIG_ARM
-	if (arch_identify() == ARCH_ID_AT91RM9200) {
+#ifdef CONFIG_ARCH_AT91RM9200
+	if (cpu_is_at91rm9200()) {
 		/*
 		 * AT91RM9200 Errata #39: RTS0 is not internally connected to PA21.
 		 *  We need to drive the pin manually.
@@ -478,7 +479,7 @@ static void atmel_serial_pm(struct uart_port *port, unsigned int state, unsigned
 /*
  * Change the port parameters
  */
-static void atmel_set_termios(struct uart_port *port, struct termios * termios, struct termios * old)
+static void atmel_set_termios(struct uart_port *port, struct ktermios * termios, struct ktermios * old)
 {
 	unsigned long flags;
 	unsigned int mode, imr, quot, baud;
@@ -689,9 +690,9 @@ static void __devinit atmel_init_port(struct atmel_uart_port *atmel_port, struct
 	struct atmel_uart_data *data = pdev->dev.platform_data;
 
 	port->iotype	= UPIO_MEM;
-	port->flags     = UPF_BOOT_AUTOCONF;
+	port->flags	= UPF_BOOT_AUTOCONF;
 	port->ops	= &atmel_pops;
-	port->fifosize  = 1;
+	port->fifosize	= 1;
 	port->line	= pdev->id;
 	port->dev	= &pdev->dev;
 
@@ -890,7 +891,6 @@ static int atmel_serial_suspend(struct platform_device *pdev, pm_message_t state
 	if (device_may_wakeup(&pdev->dev) && !at91_suspend_entering_slow_clock())
 		enable_irq_wake(port->irq);
 	else {
-		disable_irq_wake(port->irq);
 		uart_suspend_port(&atmel_uart, port);
 		atmel_port->suspended = 1;
 	}
@@ -907,6 +907,8 @@ static int atmel_serial_resume(struct platform_device *pdev)
 		uart_resume_port(&atmel_uart, port);
 		atmel_port->suspended = 0;
 	}
+	else
+		disable_irq_wake(port->irq);
 
 	return 0;
 }

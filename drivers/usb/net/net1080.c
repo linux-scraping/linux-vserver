@@ -21,7 +21,6 @@
 // #define	VERBOSE			// more; success messages
 
 #include <linux/module.h>
-#include <linux/sched.h>
 #include <linux/init.h>
 #include <linux/netdevice.h>
 #include <linux/etherdevice.h>
@@ -237,12 +236,12 @@ static inline void nc_dump_usbctl(struct usbnet *dev, u16 usbctl)
 #define	STATUS_CONN_OTHER	(1 << 14)
 #define	STATUS_SUSPEND_OTHER	(1 << 13)
 #define	STATUS_MAILBOX_OTHER	(1 << 12)
-#define	STATUS_PACKETS_OTHER(n)	(((n) >> 8) && 0x03)
+#define	STATUS_PACKETS_OTHER(n)	(((n) >> 8) & 0x03)
 
 #define	STATUS_CONN_THIS	(1 << 6)
 #define	STATUS_SUSPEND_THIS	(1 << 5)
 #define	STATUS_MAILBOX_THIS	(1 << 4)
-#define	STATUS_PACKETS_THIS(n)	(((n) >> 0) && 0x03)
+#define	STATUS_PACKETS_THIS(n)	(((n) >> 0) & 0x03)
 
 #define	STATUS_UNSPEC_MASK	0x0c8c
 #define	STATUS_NOISE_MASK 	((u16)~(0x0303|STATUS_UNSPEC_MASK))
@@ -383,7 +382,7 @@ static void nc_ensure_sync(struct usbnet *dev)
 		int			status;
 
 		/* Send a flush */
-		urb = usb_alloc_urb(0, SLAB_ATOMIC);
+		urb = usb_alloc_urb(0, GFP_ATOMIC);
 		if (!urb)
 			return;
 

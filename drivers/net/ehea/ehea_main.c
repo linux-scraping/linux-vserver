@@ -76,7 +76,7 @@ void ehea_dump(void *adr, int len, char *msg) {
 	int x;
 	unsigned char *deb = adr;
 	for (x = 0; x < len; x += 16) {
-		printk(DRV_NAME "%s adr=%p ofs=%04x %016lx %016lx\n", msg,
+		printk(DRV_NAME " %s adr=%p ofs=%04x %016lx %016lx\n", msg,
 			  deb, x, *((u64*)&deb[0]), *((u64*)&deb[8]));
 		deb += 16;
 	}
@@ -555,16 +555,22 @@ static irqreturn_t ehea_qp_aff_irq_handler(int irq, void *param)
 {
 	struct ehea_port *port = param;
 	struct ehea_eqe *eqe;
+	struct ehea_qp *qp;
 	u32 qp_token;
 
 	eqe = ehea_poll_eq(port->qp_eq);
-	ehea_debug("eqe=%p", eqe);
+
 	while (eqe) {
-		ehea_debug("*eqe=%lx", *(u64*)eqe);
-		eqe = ehea_poll_eq(port->qp_eq);
 		qp_token = EHEA_BMASK_GET(EHEA_EQE_QP_TOKEN, eqe->entry);
-		ehea_debug("next eqe=%p", eqe);
+		ehea_error("QP aff_err: entry=0x%lx, token=0x%x",
+			   eqe->entry, qp_token);
+
+		qp = port->port_res[qp_token].qp;
+		ehea_error_data(port->adapter, qp->fw_handle);
+		eqe = ehea_poll_eq(port->qp_eq);
 	}
+
+	queue_work(port->adapter->ehea_wq, &port->reset_task);
 
 	return IRQ_HANDLED;
 }
@@ -575,8 +581,9 @@ static struct ehea_port *ehea_get_port(struct ehea_adapter *adapter,
 	int i;
 
 	for (i = 0; i < adapter->num_ports; i++)
-		if (adapter->port[i]->logical_port_id == logical_port)
-			return adapter->port[i];
+		if (adapter->port[i])
+	                if (adapter->port[i]->logical_port_id == logical_port)
+				return adapter->port[i];
 	return NULL;
 }
 
@@ -641,6 +648,8 @@ int ehea_sense_port_attr(struct ehea_port *port)
 		port->full_duplex = 0;
 		break;
 	}
+
+	port->autoneg = 1;
 
 	/* Number of default QPs */
 	port->num_def_qps = cb0->num_default_qps;
@@ -728,10 +737,7 @@ int ehea_set_portspeed(struct ehea_port *port, u32 port_speed)
 		}
 	} else {
 		if (hret == H_AUTHORITY) {
-			ehea_info("Hypervisor denied setting port speed. Either"
-				  " this partition is not authorized to set "
-				  "port speed or another partition has modified"
-				  " port speed first.");
+			ehea_info("Hypervisor denied setting port speed");
 			ret = -EPERM;
 		} else {
 			ret = -EIO;
@@ -882,7 +888,7 @@ static int ehea_reg_interrupts(struct net_device *dev)
 			 , "%s-recv%d", dev->name, i);
 		ret = ibmebus_request_irq(NULL, pr->recv_eq->attr.ist1,
 					  ehea_recv_irq_handler,
-					  SA_INTERRUPT, pr->int_recv_name, pr);
+					  IRQF_DISABLED, pr->int_recv_name, pr);
 		if (ret) {
 			ehea_error("failed registering irq for ehea_recv_int:"
 				   "port_res_nr:%d, ist=%X", i,
@@ -899,7 +905,7 @@ static int ehea_reg_interrupts(struct net_device *dev)
 
 	ret = ibmebus_request_irq(NULL, port->qp_eq->attr.ist1,
 				  ehea_qp_aff_irq_handler,
-				  SA_INTERRUPT, port->int_aff_name, port);
+				  IRQF_DISABLED, port->int_aff_name, port);
 	if (ret) {
 		ehea_error("failed registering irq for qp_aff_irq_handler:"
 			   "ist=%X", port->qp_eq->attr.ist1);
@@ -916,7 +922,7 @@ static int ehea_reg_interrupts(struct net_device *dev)
 			 "%s-send%d", dev->name, i);
 		ret = ibmebus_request_irq(NULL, pr->send_eq->attr.ist1,
 					  ehea_send_irq_handler,
-					  SA_INTERRUPT, pr->int_send_name,
+					  IRQF_DISABLED, pr->int_send_name,
 					  pr);
 		if (ret) {
 			ehea_error("failed registering irq for ehea_send "
@@ -998,7 +1004,7 @@ static int ehea_configure_port(struct ehea_port *port)
 		     | EHEA_BMASK_SET(PXLY_RC_JUMBO_FRAME, 1);
 
 	for (i = 0; i < port->num_def_qps; i++)
-		cb0->default_qpn_arr[i] = port->port_res[i].qp->init_attr.qp_nr;
+		cb0->default_qpn_arr[i] = port->port_res[0].qp->init_attr.qp_nr;
 
 	if (netif_msg_ifup(port))
 		ehea_dump(cb0, sizeof(*cb0), "ehea_configure_port");
@@ -1485,11 +1491,12 @@ out:
 
 static void ehea_promiscuous_error(u64 hret, int enable)
 {
-	ehea_info("Hypervisor denied %sabling promiscuous mode.%s",
-		  enable == 1 ? "en" : "dis",
-		  hret != H_AUTHORITY ? "" : " Another partition owning a "
-		  "logical port on the same physical port might have altered "
-		  "promiscuous mode first.");
+	if (hret == H_AUTHORITY)
+		ehea_info("Hypervisor denied %sabling promiscuous mode",
+			  enable == 1 ? "en" : "dis");
+	else
+		ehea_error("failed %sabling promiscuous mode",
+			   enable == 1 ? "en" : "dis");
 }
 
 static void ehea_promiscuous(struct net_device *dev, int enable)
@@ -1932,8 +1939,7 @@ static void ehea_vlan_rx_kill_vid(struct net_device *dev, unsigned short vid)
 	int index;
 	u64 hret;
 
-	if (port->vgrp)
-		port->vgrp->vlan_devices[vid] = NULL;
+	vlan_group_set_device(port->vgrp, vid, NULL);
 
 	cb1 = kzalloc(PAGE_SIZE, GFP_KERNEL);
 	if (!cb1) {
@@ -2224,11 +2230,12 @@ static int ehea_stop(struct net_device *dev)
 	return ret;
 }
 
-static void ehea_reset_port(void *data)
+static void ehea_reset_port(struct work_struct *work)
 {
 	int ret;
-	struct net_device *dev = data;
-	struct ehea_port *port = netdev_priv(dev);
+	struct ehea_port *port =
+		container_of(work, struct ehea_port, reset_task);
+	struct net_device *dev = port->netdev;
 
 	port->resets++;
 	down(&port->port_lock);
@@ -2266,6 +2273,8 @@ static void ehea_tx_watchdog(struct net_device *dev)
 int ehea_sense_adapter_attr(struct ehea_adapter *adapter)
 {
 	struct hcp_query_ehea *cb;
+	struct device_node *lhea_dn = NULL;
+	struct device_node *eth_dn = NULL;
 	u64 hret;
 	int ret;
 
@@ -2282,7 +2291,18 @@ int ehea_sense_adapter_attr(struct ehea_adapter *adapter)
 		goto out_herr;
 	}
 
-	adapter->num_ports = cb->num_ports;
+	/* Determine the number of available logical ports
+	 * by counting the child nodes of the lhea OFDT entry
+	 */
+	adapter->num_ports = 0;
+	lhea_dn = of_find_node_by_name(lhea_dn, "lhea");
+	do {
+		eth_dn = of_get_next_child(lhea_dn, eth_dn);
+		if (eth_dn)
+			adapter->num_ports++;
+	} while ( eth_dn );
+	of_node_put(lhea_dn);
+
 	adapter->max_mc_mac = cb->max_mc_mac - 1;
 	ret = 0;
 
@@ -2301,6 +2321,7 @@ static int ehea_setup_single_port(struct ehea_port *port,
 	struct ehea_adapter *adapter = port->adapter;
 	struct hcp_ehea_port_cb4 *cb4;
 	u32 *dn_log_port_id;
+	int jumbo = 0;
 
 	sema_init(&port->port_lock, 1);
 	port->state = EHEA_PORT_DOWN;
@@ -2333,8 +2354,6 @@ static int ehea_setup_single_port(struct ehea_port *port,
 
 	INIT_LIST_HEAD(&port->mc_list->list);
 
-	ehea_set_portspeed(port, EHEA_SPEED_AUTONEG);
-
 	ret = ehea_sense_port_attr(port);
 	if (ret)
 		goto out;
@@ -2344,13 +2363,25 @@ static int ehea_setup_single_port(struct ehea_port *port,
 	if (!cb4) {
 		ehea_error("no mem for cb4");
 	} else {
-		cb4->jumbo_frame = 1;
-		hret = ehea_h_modify_ehea_port(adapter->handle,
-					       port->logical_port_id,
-					       H_PORT_CB4, H_PORT_CB4_JUMBO,
-					       cb4);
-		if (hret != H_SUCCESS) {
-			ehea_info("Jumbo frames not activated");
+		hret = ehea_h_query_ehea_port(adapter->handle,
+					      port->logical_port_id,
+					      H_PORT_CB4,
+					      H_PORT_CB4_JUMBO, cb4);
+
+		if (hret == H_SUCCESS) {
+			if (cb4->jumbo_frame)
+				jumbo = 1;
+			else {
+				cb4->jumbo_frame = 1;
+				hret = ehea_h_modify_ehea_port(adapter->handle,
+							       port->
+							        logical_port_id,
+							       H_PORT_CB4,
+							       H_PORT_CB4_JUMBO,
+							       cb4);
+				if (hret == H_SUCCESS)
+					jumbo = 1;
+			}
 		}
 		kfree(cb4);
 	}
@@ -2379,7 +2410,7 @@ static int ehea_setup_single_port(struct ehea_port *port,
 	dev->tx_timeout = &ehea_tx_watchdog;
 	dev->watchdog_timeo = EHEA_WATCH_DOG_TIMEOUT;
 
-	INIT_WORK(&port->reset_task, ehea_reset_port, dev);
+	INIT_WORK(&port->reset_task, ehea_reset_port);
 
 	ehea_set_ethtool_ops(dev);
 
@@ -2388,6 +2419,9 @@ static int ehea_setup_single_port(struct ehea_port *port,
 		ehea_error("register_netdev failed. ret=%d", ret);
 		goto out_free;
 	}
+
+	ehea_info("%s: Jumbo frames are %sabled", dev->name,
+		  jumbo == 1 ? "en" : "dis");
 
 	port->netdev = dev;
 	ret = 0;
@@ -2470,14 +2504,16 @@ static int __devinit ehea_probe(struct ibmebus_dev *dev,
 
 	adapter_handle = (u64*)get_property(dev->ofdev.node, "ibm,hea-handle",
 					    NULL);
-	if (!adapter_handle) {
+	if (adapter_handle)
+		adapter->handle = *adapter_handle;
+
+	if (!adapter->handle) {
 		dev_err(&dev->ofdev.dev, "failed getting handle for adapter"
 			" '%s'\n", dev->ofdev.node->full_name);
 		ret = -ENODEV;
 		goto out_free_ad;
 	}
 
-	adapter->handle = *adapter_handle;
 	adapter->pd = EHEA_PD_ID;
 
 	dev->ofdev.dev.driver_data = adapter;
@@ -2508,7 +2544,7 @@ static int __devinit ehea_probe(struct ibmebus_dev *dev,
 		     (unsigned long)adapter);
 
 	ret = ibmebus_request_irq(NULL, adapter->neq->attr.ist1,
-				  ehea_interrupt_neq, SA_INTERRUPT,
+				  ehea_interrupt_neq, IRQF_DISABLED,
 				  "ehea_neq", adapter);
 	if (ret) {
 		dev_err(&dev->ofdev.dev, "requesting NEQ IRQ failed");
@@ -2567,6 +2603,7 @@ static int __devexit ehea_remove(struct ibmebus_dev *dev)
 	destroy_workqueue(adapter->ehea_wq);
 
 	ibmebus_free_irq(NULL, adapter->neq->attr.ist1, adapter);
+	tasklet_kill(&adapter->neq_tasklet);
 
 	ehea_destroy_eq(adapter->neq);
 

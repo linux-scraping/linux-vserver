@@ -3,7 +3,7 @@
  *
  *  Virtual Server: Context Accounting
  *
- *  Copyright (C) 2006  Herbert Pötzl
+ *  Copyright (C) 2006-2007 Herbert Pötzl
  *
  *  V0.01  added accounting stats
  *

@@ -280,6 +280,7 @@ enum sis190_feature {
 struct sis190_private {
 	void __iomem *mmio_addr;
 	struct pci_dev *pci_dev;
+	struct net_device *dev;
 	struct net_device_stats stats;
 	spinlock_t lock;
 	u32 rx_buf_sz;
@@ -323,6 +324,7 @@ static struct mii_chip_info {
 	u32 feature;
 } mii_chip_table[] = {
 	{ "Broadcom PHY BCM5461", { 0x0020, 0x60c0 }, LAN, F_PHY_BCM5461 },
+	{ "Broadcom PHY AC131",   { 0x0143, 0xbc70 }, LAN, 0 },
 	{ "Agere PHY ET1101B",    { 0x0282, 0xf010 }, LAN, 0 },
 	{ "Marvell PHY 88E1111",  { 0x0141, 0x0cc0 }, LAN, F_PHY_88E1111 },
 	{ "Realtek PHY RTL8201",  { 0x0000, 0x8200 }, LAN, 0 },
@@ -897,15 +899,19 @@ static void sis190_hw_start(struct net_device *dev)
 	netif_start_queue(dev);
 }
 
-static void sis190_phy_task(void * data)
+static void sis190_phy_task(struct work_struct *work)
 {
-	struct net_device *dev = data;
-	struct sis190_private *tp = netdev_priv(dev);
+	struct sis190_private *tp =
+		container_of(work, struct sis190_private, phy_task);
+	struct net_device *dev = tp->dev;
 	void __iomem *ioaddr = tp->mmio_addr;
 	int phy_id = tp->mii_if.phy_id;
 	u16 val;
 
 	rtnl_lock();
+
+	if (!netif_running(dev))
+		goto out_unlock;
 
 	val = mdio_read(ioaddr, phy_id, MII_BMCR);
 	if (val & BMCR_RESET) {
@@ -979,6 +985,7 @@ static void sis190_phy_task(void * data)
 		netif_carrier_on(dev);
 	}
 
+out_unlock:
 	rtnl_unlock();
 }
 
@@ -1047,7 +1054,7 @@ static int sis190_open(struct net_device *dev)
 	if (rc < 0)
 		goto err_free_rx_1;
 
-	INIT_WORK(&tp->phy_task, sis190_phy_task, dev);
+	INIT_WORK(&tp->phy_task, sis190_phy_task);
 
 	sis190_request_timer(dev);
 
@@ -1099,8 +1106,6 @@ static void sis190_down(struct net_device *dev)
 	sis190_delete_timer(dev);
 
 	netif_stop_queue(dev);
-
-	flush_scheduled_work();
 
 	do {
 		spin_lock_irq(&tp->lock);
@@ -1436,6 +1441,7 @@ static struct net_device * __devinit sis190_init_board(struct pci_dev *pdev)
 	SET_NETDEV_DEV(dev, &pdev->dev);
 
 	tp = netdev_priv(dev);
+	tp->dev = dev;
 	tp->msg_enable = netif_msg_init(debug.msg_enable, SIS190_MSG_DEFAULT);
 
 	rc = pci_enable_device(pdev);
@@ -1559,7 +1565,7 @@ static int __devinit sis190_get_mac_addr_from_eeprom(struct pci_dev *pdev,
 	for (i = 0; i < MAC_ADDR_LEN / 2; i++) {
 		__le16 w = sis190_read_eeprom(ioaddr, EEPROMMACAddr + i);
 
-		((u16 *)dev->dev_addr)[0] = le16_to_cpu(w);
+		((u16 *)dev->dev_addr)[i] = le16_to_cpu(w);
 	}
 
 	sis190_set_rgmii(tp, sis190_read_eeprom(ioaddr, EEPROMInfo));
@@ -1798,7 +1804,7 @@ static int __devinit sis190_init_one(struct pci_dev *pdev,
 
 	sis190_init_rxfilter(dev);
 
-	INIT_WORK(&tp->phy_task, sis190_phy_task, dev);
+	INIT_WORK(&tp->phy_task, sis190_phy_task);
 
 	dev->open = sis190_open;
 	dev->stop = sis190_close;
@@ -1854,6 +1860,7 @@ static void __devexit sis190_remove_one(struct pci_dev *pdev)
 	struct net_device *dev = pci_get_drvdata(pdev);
 
 	sis190_mii_remove(dev);
+	flush_scheduled_work();
 	unregister_netdev(dev);
 	sis190_release_board(pdev);
 	pci_set_drvdata(pdev, NULL);

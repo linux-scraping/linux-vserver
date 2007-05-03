@@ -104,6 +104,7 @@
 
 struct spu_context;
 struct spu_runqueue;
+struct device_node;
 
 struct spu {
 	const char *name;
@@ -111,14 +112,12 @@ struct spu {
 	u8 *local_store;
 	unsigned long problem_phys;
 	struct spu_problem __iomem *problem;
-	struct spu_priv1 __iomem *priv1;
 	struct spu_priv2 __iomem *priv2;
 	struct list_head list;
 	struct list_head sched_list;
+	struct list_head full_list;
 	int number;
-	int nid;
 	unsigned int irqs[3];
-	u32 isrc;
 	u32 node;
 	u64 flags;
 	u64 dar;
@@ -130,7 +129,6 @@ struct spu {
 	struct spu_runqueue *rq;
 	unsigned long long timestamp;
 	pid_t pid;
-	int prio;
 	int class_0_pending;
 	spinlock_t register_lock;
 
@@ -144,6 +142,19 @@ struct spu {
 	char irq_c1[8];
 	char irq_c2[8];
 
+	u64 spe_id;
+
+	void* pdata; /* platform private data */
+
+	/* of based platforms only */
+	struct device_node *devnode;
+
+	/* native only */
+	struct spu_priv1 __iomem *priv1;
+
+	/* beat only */
+	u64 shadow_int_mask_RW[3];
+
 	struct sys_device sysdev;
 };
 
@@ -154,6 +165,13 @@ int spu_irq_class_0_bottom(struct spu *spu);
 int spu_irq_class_1_bottom(struct spu *spu);
 void spu_irq_setaffinity(struct spu *spu, int cpu);
 
+extern void spu_invalidate_slbs(struct spu *spu);
+extern void spu_associate_mm(struct spu *spu, struct mm_struct *mm);
+
+/* Calls from the memory management to the SPU */
+struct mm_struct;
+extern void spu_flush_all_slbs(struct mm_struct *mm);
+
 /* system callbacks from the SPU */
 struct spu_syscall_block {
 	u64 nr_ret;
@@ -162,6 +180,7 @@ struct spu_syscall_block {
 extern long spu_sys_callback(struct spu_syscall_block *s);
 
 /* syscalls implemented in spufs */
+struct file;
 extern struct spufs_calls {
 	asmlinkage long (*create_thread)(const char __user *name,
 					unsigned int flags, mode_t mode);
@@ -169,6 +188,13 @@ extern struct spufs_calls {
 						__u32 __user *ustatus);
 	struct module *owner;
 } spufs_calls;
+
+/* coredump calls implemented in spufs */
+struct spu_coredump_calls {
+	asmlinkage int (*arch_notes_size)(void);
+	asmlinkage void (*arch_write_notes)(struct file *file);
+	struct module *owner;
+};
 
 /* return status from spu_run, same as in libspe */
 #define SPE_EVENT_DMA_ALIGNMENT		0x0008	/*A DMA alignment error */
@@ -182,8 +208,10 @@ extern struct spufs_calls {
  */
 #define SPU_CREATE_EVENTS_ENABLED	0x0001
 #define SPU_CREATE_GANG			0x0002
+#define SPU_CREATE_NOSCHED		0x0004
+#define SPU_CREATE_ISOLATE		0x0008
 
-#define SPU_CREATE_FLAG_ALL		0x0003 /* mask of all valid flags */
+#define SPU_CREATE_FLAG_ALL		0x000f /* mask of all valid flags */
 
 
 #ifdef CONFIG_SPU_FS_MODULE
@@ -198,6 +226,15 @@ static inline void unregister_spu_syscalls(struct spufs_calls *calls)
 {
 }
 #endif /* MODULE */
+
+int register_arch_coredump_calls(struct spu_coredump_calls *calls);
+void unregister_arch_coredump_calls(struct spu_coredump_calls *calls);
+
+int spu_add_sysdev_attr(struct sysdev_attribute *attr);
+void spu_remove_sysdev_attr(struct sysdev_attribute *attr);
+
+int spu_add_sysdev_attr_group(struct attribute_group *attrs);
+void spu_remove_sysdev_attr_group(struct attribute_group *attrs);
 
 
 /*
@@ -215,6 +252,7 @@ static inline void unregister_spu_syscalls(struct spufs_calls *calls)
  * to object-id spufs file from user space and the notifer
  * function can assume that spu->ctx is valid.
  */
+struct notifier_block;
 int spu_switch_event_register(struct notifier_block * n);
 int spu_switch_event_unregister(struct notifier_block * n);
 
@@ -277,6 +315,7 @@ struct spu_problem {
 	u32 spu_runcntl_RW;					/* 0x401c */
 #define SPU_RUNCNTL_STOP	0L
 #define SPU_RUNCNTL_RUNNABLE	1L
+#define SPU_RUNCNTL_ISOLATE	2L
 	u8  pad_0x4020_0x4024[0x4];				/* 0x4020 */
 	u32 spu_status_R;					/* 0x4024 */
 #define SPU_STOP_STATUS_SHIFT           16
@@ -289,8 +328,8 @@ struct spu_problem {
 #define SPU_STATUS_INVALID_INSTR        0x20
 #define SPU_STATUS_INVALID_CH           0x40
 #define SPU_STATUS_ISOLATED_STATE       0x80
-#define SPU_STATUS_ISOLATED_LOAD_STAUTUS 0x200
-#define SPU_STATUS_ISOLATED_EXIT_STAUTUS 0x400
+#define SPU_STATUS_ISOLATED_LOAD_STATUS 0x200
+#define SPU_STATUS_ISOLATED_EXIT_STATUS 0x400
 	u8  pad_0x4028_0x402c[0x4];				/* 0x4028 */
 	u32 spu_spe_R;						/* 0x402c */
 	u8  pad_0x4030_0x4034[0x4];				/* 0x4030 */

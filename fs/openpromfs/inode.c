@@ -169,7 +169,7 @@ static const struct file_operations openprom_operations = {
 
 static struct dentry *openpromfs_lookup(struct inode *, struct dentry *, struct nameidata *);
 
-static struct inode_operations openprom_inode_operations = {
+static const struct inode_operations openprom_inode_operations = {
 	.lookup		= openpromfs_lookup,
 };
 
@@ -262,7 +262,7 @@ found:
 
 static int openpromfs_readdir(struct file * filp, void * dirent, filldir_t filldir)
 {
-	struct inode *inode = filp->f_dentry->d_inode;
+	struct inode *inode = filp->f_path.dentry->d_inode;
 	struct op_inode_info *oi = OP_I(inode);
 	struct device_node *dp = oi->u.node;
 	struct device_node *child;
@@ -330,13 +330,13 @@ out:
 	return 0;
 }
 
-static kmem_cache_t *op_inode_cachep;
+static struct kmem_cache *op_inode_cachep;
 
 static struct inode *openprom_alloc_inode(struct super_block *sb)
 {
 	struct op_inode_info *oi;
 
-	oi = kmem_cache_alloc(op_inode_cachep, SLAB_KERNEL);
+	oi = kmem_cache_alloc(op_inode_cachep, GFP_KERNEL);
 	if (!oi)
 		return NULL;
 
@@ -364,7 +364,7 @@ static int openprom_remount(struct super_block *sb, int *flags, char *data)
 	return 0;
 }
 
-static struct super_operations openprom_sops = { 
+static const struct super_operations openprom_sops = {
 	.alloc_inode	= openprom_alloc_inode,
 	.destroy_inode	= openprom_destroy_inode,
 	.read_inode	= openprom_read_inode,
@@ -415,7 +415,7 @@ static struct file_system_type openprom_fs_type = {
 	.kill_sb	= kill_anon_super,
 };
 
-static void op_inode_init_once(void *data, kmem_cache_t * cachep, unsigned long flags)
+static void op_inode_init_once(void *data, struct kmem_cache * cachep, unsigned long flags)
 {
 	struct op_inode_info *oi = (struct op_inode_info *) data;
 

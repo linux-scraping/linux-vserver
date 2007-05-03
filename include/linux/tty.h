@@ -24,7 +24,27 @@
 #define NR_PTYS	CONFIG_LEGACY_PTY_COUNT   /* Number of legacy ptys */
 #define NR_UNIX98_PTY_DEFAULT	4096      /* Default maximum for Unix98 ptys */
 #define NR_UNIX98_PTY_MAX	(1 << MINORBITS) /* Absolute limit */
-#define NR_LDISCS		16
+#define NR_LDISCS		17
+
+/* line disciplines */
+#define N_TTY		0
+#define N_SLIP		1
+#define N_MOUSE		2
+#define N_PPP		3
+#define N_STRIP		4
+#define N_AX25		5
+#define N_X25		6	/* X.25 async */
+#define N_6PACK		7
+#define N_MASC		8	/* Reserved for Mobitex module <kaz@cafe.net> */
+#define N_R3964		9	/* Reserved for Simatic R3964 module */
+#define N_PROFIBUS_FDL	10	/* Reserved for Profibus <Dave@mvhi.com> */
+#define N_IRDA		11	/* Linux IrDa - http://irda.sourceforge.net/ */
+#define N_SMSBLOCK	12	/* SMS block mode - for talking to GSM data */
+				/* cards about SMS messages */
+#define N_HDLC		13	/* synchronous HDLC */
+#define N_SYNC_PPP	14	/* synchronous PPP */
+#define N_HCI		15	/* Bluetooth HCI UART */
+#define N_GIGASET_M101	16	/* Siemens Gigaset M101 serial DECT adapter */
 
 /*
  * This character is the same as _POSIX_VDISABLE: it cannot be used as
@@ -53,7 +73,7 @@ struct tty_buffer {
 };
 
 struct tty_bufhead {
-	struct work_struct		work;
+	struct delayed_work work;
 	struct semaphore pty_sem;
 	spinlock_t lock;
 	struct tty_buffer *head;	/* Queue head */
@@ -175,10 +195,10 @@ struct tty_struct {
 	int index;
 	struct tty_ldisc ldisc;
 	struct mutex termios_mutex;
-	struct termios *termios, *termios_locked;
+	struct ktermios *termios, *termios_locked;
 	char name[64];
-	int pgrp;
-	int session;
+	struct pid *pgrp;
+	struct pid *session;
 	unsigned long flags;
 	int count;
 	struct winsize winsize;
@@ -258,7 +278,7 @@ struct tty_struct {
 
 extern void tty_write_flush(struct tty_struct *);
 
-extern struct termios tty_std_termios;
+extern struct ktermios tty_std_termios;
 
 extern int kmsg_redirect;
 
@@ -276,15 +296,14 @@ extern int tty_register_ldisc(int disc, struct tty_ldisc *new_ldisc);
 extern int tty_unregister_ldisc(int disc);
 extern int tty_register_driver(struct tty_driver *driver);
 extern int tty_unregister_driver(struct tty_driver *driver);
-extern struct class_device *tty_register_device(struct tty_driver *driver,
-						unsigned index,
-						struct device *dev);
+extern struct device *tty_register_device(struct tty_driver *driver,
+					  unsigned index, struct device *dev);
 extern void tty_unregister_device(struct tty_driver *driver, unsigned index);
 extern int tty_read_raw_data(struct tty_struct *tty, unsigned char *bufp,
 			     int buflen);
 extern void tty_write_message(struct tty_struct *tty, char *msg);
 
-extern int is_orphaned_pgrp(int pgrp);
+extern int is_current_pgrp_orphaned(void);
 extern int is_ignored(int sig);
 extern int tty_signal(int sig, struct tty_struct *tty);
 extern void tty_hangup(struct tty_struct * tty);
@@ -292,10 +311,12 @@ extern void tty_vhangup(struct tty_struct * tty);
 extern void tty_unhangup(struct file *filp);
 extern int tty_hung_up_p(struct file * filp);
 extern void do_SAK(struct tty_struct *tty);
+extern void __do_SAK(struct tty_struct *tty);
 extern void disassociate_ctty(int priv);
 extern void tty_flip_buffer_push(struct tty_struct *tty);
-extern int tty_get_baud_rate(struct tty_struct *tty);
-extern int tty_termios_baud_rate(struct termios *termios);
+extern speed_t tty_get_baud_rate(struct tty_struct *tty);
+extern speed_t tty_termios_baud_rate(struct ktermios *termios);
+extern speed_t tty_termios_input_baud_rate(struct ktermios *termios);
 
 extern struct tty_ldisc *tty_ldisc_ref(struct tty_struct *);
 extern void tty_ldisc_deref(struct tty_ldisc *);
@@ -309,6 +330,11 @@ extern void tty_ldisc_flush(struct tty_struct *tty);
 
 extern int tty_ioctl(struct inode *inode, struct file *file, unsigned int cmd,
 		     unsigned long arg);
+
+extern dev_t tty_devnum(struct tty_struct *tty);
+extern void proc_clear_tty(struct task_struct *p);
+extern void proc_set_tty(struct task_struct *tsk, struct tty_struct *tty);
+extern struct tty_struct *get_current_tty(void);
 
 extern struct mutex tty_mutex;
 
@@ -335,11 +361,6 @@ extern void console_print(const char *);
 
 extern int vt_ioctl(struct tty_struct *tty, struct file * file,
 		    unsigned int cmd, unsigned long arg);
-
-static inline dev_t tty_devnum(struct tty_struct *tty)
-{
-	return MKDEV(tty->driver->major, tty->driver->minor_start) + tty->index;
-}
 
 #endif /* __KERNEL__ */
 #endif

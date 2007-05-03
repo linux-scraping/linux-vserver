@@ -75,14 +75,6 @@ extern void __readwrite_bug(const char *fn);
  */
 #include <asm/arch/io.h>
 
-#ifdef __io_pci
-#warning machine class uses buggy __io_pci
-#endif
-#if defined(__arch_putb) || defined(__arch_putw) || defined(__arch_putl) || \
-    defined(__arch_getb) || defined(__arch_getw) || defined(__arch_getl)
-#warning machine class uses old __arch_putw or __arch_getw
-#endif
-
 /*
  *  IO port access primitives
  *  -------------------------
@@ -190,9 +182,6 @@ extern void _memset_io(volatile void __iomem *, int, size_t);
 #define memcpy_fromio(a,c,l)	_memcpy_fromio((a),__mem_pci(c),(l))
 #define memcpy_toio(c,a,l)	_memcpy_toio(__mem_pci(c),(a),(l))
 
-#define eth_io_copy_and_sum(s,c,l,b) \
-				eth_copy_and_sum((s),__mem_pci(c),(l),(b))
-
 #elif !defined(readb)
 
 #define readb(c)			(__readwrite_bug("readb"),0)
@@ -201,8 +190,6 @@ extern void _memset_io(volatile void __iomem *, int, size_t);
 #define writeb(v,c)			__readwrite_bug("writeb")
 #define writew(v,c)			__readwrite_bug("writew")
 #define writel(v,c)			__readwrite_bug("writel")
-
-#define eth_io_copy_and_sum(s,c,l,b)	__readwrite_bug("eth_io_copy_and_sum")
 
 #define check_signature(io,sig,len)	(0)
 

@@ -54,7 +54,7 @@ Desc. | ctrl | dura |  DA/RA  |   TA    |    SA   | Sequ |  Frame  |  fcs |
       |      | tion | (BSSID) |         |         | ence |  data   |      |
       `--------------------------------------------------|         |------'
 Total: 28 non-data bytes                                 `----.----'
-                                                              |
+							      |
        .- 'Frame data' expands, if WEP enabled, to <----------'
        |
        V
@@ -64,8 +64,8 @@ Bytes |  4  |   0-2296  |  4  |
 Desc. | IV  | Encrypted | ICV |
       |     | Packet    |     |
       `-----|           |-----'
-            `-----.-----'
-                  |
+	    `-----.-----'
+		  |
        .- 'Encrypted Packet' expands to
        |
        V
@@ -390,7 +390,7 @@ int ieee80211_xmit(struct sk_buff *skb, struct net_device *dev)
 		 * this stack is providing the full 802.11 header, one will
 		 * eventually be affixed to this fragment -- so we must account
 		 * for it when determining the amount of payload space. */
-		bytes_per_frag = frag_size - IEEE80211_3ADDR_LEN;
+		bytes_per_frag = frag_size - hdr_len;
 		if (ieee->config &
 		    (CFG_IEEE80211_COMPUTE_FCS | CFG_IEEE80211_RESERVE_FCS))
 			bytes_per_frag -= IEEE80211_FCS_LEN;
@@ -412,7 +412,7 @@ int ieee80211_xmit(struct sk_buff *skb, struct net_device *dev)
 	} else {
 		nr_frags = 1;
 		bytes_per_frag = bytes_last_frag = bytes;
-		frag_size = bytes + IEEE80211_3ADDR_LEN;
+		frag_size = bytes + hdr_len;
 	}
 
 	rts_required = (frag_size > ieee->rts
@@ -502,9 +502,6 @@ int ieee80211_xmit(struct sk_buff *skb, struct net_device *dev)
 		if (host_encrypt)
 			ieee80211_encrypt_fragment(ieee, skb_frag, hdr_len);
 		else if (host_build_iv) {
-			struct ieee80211_crypt_data *crypt;
-
-			crypt = ieee->crypt[ieee->tx_keyidx];
 			atomic_inc(&crypt->refcnt);
 			if (crypt->ops->build_iv)
 				crypt->ops->build_iv(skb_frag, hdr_len,

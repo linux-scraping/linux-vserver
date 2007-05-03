@@ -1,9 +1,9 @@
 /*
  * Connection tracking protocol helper module for SCTP.
- * 
- * SCTP is defined in RFC 2960. References to various sections in this code 
+ *
+ * SCTP is defined in RFC 2960. References to various sections in this code
  * are to this RFC.
- * 
+ *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
@@ -19,7 +19,6 @@
  */
 
 #include <linux/types.h>
-#include <linux/sched.h>
 #include <linux/timer.h>
 #include <linux/netfilter.h>
 #include <linux/module.h>
@@ -32,7 +31,8 @@
 #include <linux/interrupt.h>
 
 #include <net/netfilter/nf_conntrack.h>
-#include <net/netfilter/nf_conntrack_protocol.h>
+#include <net/netfilter/nf_conntrack_l4proto.h>
+#include <net/netfilter/nf_conntrack_ecache.h>
 
 #if 0
 #define DEBUGP(format, ...) printk(format, ## __VA_ARGS__)
@@ -44,7 +44,7 @@
 static DEFINE_RWLOCK(sctp_lock);
 
 /* FIXME: Examine ipfilter's timeouts and conntrack transitions more
-   closely.  They're more complex. --RR 
+   closely.  They're more complex. --RR
 
    And so for me for SCTP :D -Kiran */
 
@@ -93,32 +93,32 @@ static unsigned int * sctp_timeouts[]
 #define	sSA SCTP_CONNTRACK_SHUTDOWN_ACK_SENT
 #define	sIV SCTP_CONNTRACK_MAX
 
-/* 
+/*
 	These are the descriptions of the states:
 
-NOTE: These state names are tantalizingly similar to the states of an 
+NOTE: These state names are tantalizingly similar to the states of an
 SCTP endpoint. But the interpretation of the states is a little different,
-considering that these are the states of the connection and not of an end 
+considering that these are the states of the connection and not of an end
 point. Please note the subtleties. -Kiran
 
 NONE              - Nothing so far.
-COOKIE WAIT       - We have seen an INIT chunk in the original direction, or also 
-                    an INIT_ACK chunk in the reply direction.
+COOKIE WAIT       - We have seen an INIT chunk in the original direction, or also
+		    an INIT_ACK chunk in the reply direction.
 COOKIE ECHOED     - We have seen a COOKIE_ECHO chunk in the original direction.
 ESTABLISHED       - We have seen a COOKIE_ACK in the reply direction.
 SHUTDOWN_SENT     - We have seen a SHUTDOWN chunk in the original direction.
 SHUTDOWN_RECD     - We have seen a SHUTDOWN chunk in the reply directoin.
 SHUTDOWN_ACK_SENT - We have seen a SHUTDOWN_ACK chunk in the direction opposite
-                    to that of the SHUTDOWN chunk.
-CLOSED            - We have seen a SHUTDOWN_COMPLETE chunk in the direction of 
-                    the SHUTDOWN chunk. Connection is closed.
+		    to that of the SHUTDOWN chunk.
+CLOSED            - We have seen a SHUTDOWN_COMPLETE chunk in the direction of
+		    the SHUTDOWN chunk. Connection is closed.
 */
 
 /* TODO
- - I have assumed that the first INIT is in the original direction. 
+ - I have assumed that the first INIT is in the original direction.
  This messes things when an INIT comes in the reply direction in CLOSED
  state.
- - Check the error type in the reply dir before transitioning from 
+ - Check the error type in the reply dir before transitioning from
 cookie echoed to closed.
  - Sec 5.2.4 of RFC 2960
  - Multi Homing support.
@@ -216,7 +216,7 @@ static int sctp_print_conntrack(struct seq_file *s,
 for (offset = dataoff + sizeof(sctp_sctphdr_t), count = 0;		\
 	offset < skb->len &&						\
 	(sch = skb_header_pointer(skb, offset, sizeof(_sch), &_sch));	\
-	offset += (htons(sch->length) + 3) & ~3, count++)
+	offset += (ntohs(sch->length) + 3) & ~3, count++)
 
 /* Some validity checks to make sure the chunks are fine */
 static int do_basic_checks(struct nf_conn *conntrack,
@@ -236,7 +236,7 @@ static int do_basic_checks(struct nf_conn *conntrack,
 	for_each_sctp_chunk (skb, sch, _sch, offset, dataoff, count) {
 		DEBUGP("Chunk Num: %d  Type: %d\n", count, sch->type);
 
-		if (sch->type == SCTP_CID_INIT 
+		if (sch->type == SCTP_CID_INIT
 			|| sch->type == SCTP_CID_INIT_ACK
 			|| sch->type == SCTP_CID_SHUTDOWN_COMPLETE) {
 			flag = 1;
@@ -276,42 +276,42 @@ static int new_state(enum ip_conntrack_dir dir,
 	DEBUGP("Chunk type: %d\n", chunk_type);
 
 	switch (chunk_type) {
-		case SCTP_CID_INIT: 
+		case SCTP_CID_INIT:
 			DEBUGP("SCTP_CID_INIT\n");
 			i = 0; break;
-		case SCTP_CID_INIT_ACK: 
+		case SCTP_CID_INIT_ACK:
 			DEBUGP("SCTP_CID_INIT_ACK\n");
 			i = 1; break;
-		case SCTP_CID_ABORT: 
+		case SCTP_CID_ABORT:
 			DEBUGP("SCTP_CID_ABORT\n");
 			i = 2; break;
-		case SCTP_CID_SHUTDOWN: 
+		case SCTP_CID_SHUTDOWN:
 			DEBUGP("SCTP_CID_SHUTDOWN\n");
 			i = 3; break;
-		case SCTP_CID_SHUTDOWN_ACK: 
+		case SCTP_CID_SHUTDOWN_ACK:
 			DEBUGP("SCTP_CID_SHUTDOWN_ACK\n");
 			i = 4; break;
-		case SCTP_CID_ERROR: 
+		case SCTP_CID_ERROR:
 			DEBUGP("SCTP_CID_ERROR\n");
 			i = 5; break;
-		case SCTP_CID_COOKIE_ECHO: 
+		case SCTP_CID_COOKIE_ECHO:
 			DEBUGP("SCTP_CID_COOKIE_ECHO\n");
 			i = 6; break;
-		case SCTP_CID_COOKIE_ACK: 
+		case SCTP_CID_COOKIE_ACK:
 			DEBUGP("SCTP_CID_COOKIE_ACK\n");
 			i = 7; break;
-		case SCTP_CID_SHUTDOWN_COMPLETE: 
+		case SCTP_CID_SHUTDOWN_COMPLETE:
 			DEBUGP("SCTP_CID_SHUTDOWN_COMPLETE\n");
 			i = 8; break;
 		default:
 			/* Other chunks like DATA, SACK, HEARTBEAT and
 			its ACK do not cause a change in state */
-			DEBUGP("Unknown chunk type, Will stay in %s\n", 
+			DEBUGP("Unknown chunk type, Will stay in %s\n",
 						sctp_conntrack_names[cur_state]);
 			return cur_state;
 	}
 
-	DEBUGP("dir: %d   cur_state: %s  chunk_type: %d  new_state: %s\n", 
+	DEBUGP("dir: %d   cur_state: %s  chunk_type: %d  new_state: %s\n",
 			dir, sctp_conntrack_names[cur_state], chunk_type,
 			sctp_conntrack_names[sctp_conntracks[dir][i][cur_state]]);
 
@@ -376,7 +376,7 @@ static int sctp_packet(struct nf_conn *conntrack,
 			/* Sec 8.5.1 (C) */
 			if (!(sh->vtag == conntrack->proto.sctp.vtag[CTINFO2DIR(ctinfo)])
 				&& !(sh->vtag == conntrack->proto.sctp.vtag
-							[1 - CTINFO2DIR(ctinfo)] 
+							[1 - CTINFO2DIR(ctinfo)]
 					&& (sch->flags & 1))) {
 				write_unlock_bh(&sctp_lock);
 				return -1;
@@ -401,17 +401,17 @@ static int sctp_packet(struct nf_conn *conntrack,
 		}
 
 		/* If it is an INIT or an INIT ACK note down the vtag */
-		if (sch->type == SCTP_CID_INIT 
+		if (sch->type == SCTP_CID_INIT
 			|| sch->type == SCTP_CID_INIT_ACK) {
 			sctp_inithdr_t _inithdr, *ih;
 
 			ih = skb_header_pointer(skb, offset + sizeof(sctp_chunkhdr_t),
-			                        sizeof(_inithdr), &_inithdr);
+						sizeof(_inithdr), &_inithdr);
 			if (ih == NULL) {
 					write_unlock_bh(&sctp_lock);
 					return -1;
 			}
-			DEBUGP("Setting vtag %x for dir %d\n", 
+			DEBUGP("Setting vtag %x for dir %d\n",
 					ih->init_tag, !CTINFO2DIR(ctinfo));
 			conntrack->proto.sctp.vtag[!CTINFO2DIR(ctinfo)] = ih->init_tag;
 		}
@@ -465,7 +465,7 @@ static int sctp_new(struct nf_conn *conntrack, const struct sk_buff *skb,
 	newconntrack = SCTP_CONNTRACK_MAX;
 	for_each_sctp_chunk (skb, sch, _sch, offset, dataoff, count) {
 		/* Don't need lock here: this conntrack not in circulation yet */
-		newconntrack = new_state(IP_CT_DIR_ORIGINAL, 
+		newconntrack = new_state(IP_CT_DIR_ORIGINAL,
 					 SCTP_CONNTRACK_NONE, sch->type);
 
 		/* Invalid: delete conntrack */
@@ -480,14 +480,14 @@ static int sctp_new(struct nf_conn *conntrack, const struct sk_buff *skb,
 				sctp_inithdr_t _inithdr, *ih;
 
 				ih = skb_header_pointer(skb, offset + sizeof(sctp_chunkhdr_t),
-				                        sizeof(_inithdr), &_inithdr);
+							sizeof(_inithdr), &_inithdr);
 				if (ih == NULL)
 					return 0;
 
-				DEBUGP("Setting vtag %x for new conn\n", 
+				DEBUGP("Setting vtag %x for new conn\n",
 					ih->init_tag);
 
-				conntrack->proto.sctp.vtag[IP_CT_DIR_REPLY] = 
+				conntrack->proto.sctp.vtag[IP_CT_DIR_REPLY] =
 								ih->init_tag;
 			} else {
 				/* Sec 8.5.1 (A) */
@@ -497,7 +497,7 @@ static int sctp_new(struct nf_conn *conntrack, const struct sk_buff *skb,
 		/* If it is a shutdown ack OOTB packet, we expect a return
 		   shutdown complete, otherwise an ABORT Sec 8.4 (5) and (8) */
 		else {
-			DEBUGP("Setting vtag %x for new conn OOTB\n", 
+			DEBUGP("Setting vtag %x for new conn OOTB\n",
 				sh->vtag);
 			conntrack->proto.sctp.vtag[IP_CT_DIR_REPLY] = sh->vtag;
 		}
@@ -508,36 +508,10 @@ static int sctp_new(struct nf_conn *conntrack, const struct sk_buff *skb,
 	return 1;
 }
 
-struct nf_conntrack_protocol nf_conntrack_protocol_sctp4 = { 
-	.l3proto	 = PF_INET,
-	.proto 		 = IPPROTO_SCTP, 
-	.name 		 = "sctp",
-	.pkt_to_tuple 	 = sctp_pkt_to_tuple, 
-	.invert_tuple 	 = sctp_invert_tuple, 
-	.print_tuple 	 = sctp_print_tuple, 
-	.print_conntrack = sctp_print_conntrack,
-	.packet 	 = sctp_packet, 
-	.new 		 = sctp_new, 
-	.destroy 	 = NULL, 
-	.me 		 = THIS_MODULE 
-};
-
-struct nf_conntrack_protocol nf_conntrack_protocol_sctp6 = { 
-	.l3proto	 = PF_INET6,
-	.proto 		 = IPPROTO_SCTP, 
-	.name 		 = "sctp",
-	.pkt_to_tuple 	 = sctp_pkt_to_tuple, 
-	.invert_tuple 	 = sctp_invert_tuple, 
-	.print_tuple 	 = sctp_print_tuple, 
-	.print_conntrack = sctp_print_conntrack,
-	.packet 	 = sctp_packet, 
-	.new 		 = sctp_new, 
-	.destroy 	 = NULL, 
-	.me 		 = THIS_MODULE 
-};
-
 #ifdef CONFIG_SYSCTL
-static ctl_table nf_ct_sysctl_table[] = {
+static unsigned int sctp_sysctl_table_users;
+static struct ctl_table_header *sctp_sysctl_header;
+static struct ctl_table sctp_sysctl_table[] = {
 	{
 		.ctl_name	= NET_NF_CONNTRACK_SCTP_TIMEOUT_CLOSED,
 		.procname	= "nf_conntrack_sctp_timeout_closed",
@@ -594,76 +568,144 @@ static ctl_table nf_ct_sysctl_table[] = {
 		.mode		= 0644,
 		.proc_handler	= &proc_dointvec_jiffies,
 	},
-	{ .ctl_name = 0 }
-};
-
-static ctl_table nf_ct_netfilter_table[] = {
 	{
-		.ctl_name	= NET_NETFILTER,
-		.procname	= "netfilter",
-		.mode		= 0555,
-		.child		= nf_ct_sysctl_table,
-	},
-	{ .ctl_name = 0 }
+		.ctl_name = 0
+	}
 };
 
-static ctl_table nf_ct_net_table[] = {
+#ifdef CONFIG_NF_CONNTRACK_PROC_COMPAT
+static struct ctl_table sctp_compat_sysctl_table[] = {
 	{
-		.ctl_name	= CTL_NET,
-		.procname	= "net",
-		.mode		= 0555, 
-		.child		= nf_ct_netfilter_table,
+		.ctl_name	= NET_IPV4_NF_CONNTRACK_SCTP_TIMEOUT_CLOSED,
+		.procname	= "ip_conntrack_sctp_timeout_closed",
+		.data		= &nf_ct_sctp_timeout_closed,
+		.maxlen		= sizeof(unsigned int),
+		.mode		= 0644,
+		.proc_handler	= &proc_dointvec_jiffies,
 	},
-	{ .ctl_name = 0 }
+	{
+		.ctl_name	= NET_IPV4_NF_CONNTRACK_SCTP_TIMEOUT_COOKIE_WAIT,
+		.procname	= "ip_conntrack_sctp_timeout_cookie_wait",
+		.data		= &nf_ct_sctp_timeout_cookie_wait,
+		.maxlen		= sizeof(unsigned int),
+		.mode		= 0644,
+		.proc_handler	= &proc_dointvec_jiffies,
+	},
+	{
+		.ctl_name	= NET_IPV4_NF_CONNTRACK_SCTP_TIMEOUT_COOKIE_ECHOED,
+		.procname	= "ip_conntrack_sctp_timeout_cookie_echoed",
+		.data		= &nf_ct_sctp_timeout_cookie_echoed,
+		.maxlen		= sizeof(unsigned int),
+		.mode		= 0644,
+		.proc_handler	= &proc_dointvec_jiffies,
+	},
+	{
+		.ctl_name	= NET_IPV4_NF_CONNTRACK_SCTP_TIMEOUT_ESTABLISHED,
+		.procname	= "ip_conntrack_sctp_timeout_established",
+		.data		= &nf_ct_sctp_timeout_established,
+		.maxlen		= sizeof(unsigned int),
+		.mode		= 0644,
+		.proc_handler	= &proc_dointvec_jiffies,
+	},
+	{
+		.ctl_name	= NET_IPV4_NF_CONNTRACK_SCTP_TIMEOUT_SHUTDOWN_SENT,
+		.procname	= "ip_conntrack_sctp_timeout_shutdown_sent",
+		.data		= &nf_ct_sctp_timeout_shutdown_sent,
+		.maxlen		= sizeof(unsigned int),
+		.mode		= 0644,
+		.proc_handler	= &proc_dointvec_jiffies,
+	},
+	{
+		.ctl_name	= NET_IPV4_NF_CONNTRACK_SCTP_TIMEOUT_SHUTDOWN_RECD,
+		.procname	= "ip_conntrack_sctp_timeout_shutdown_recd",
+		.data		= &nf_ct_sctp_timeout_shutdown_recd,
+		.maxlen		= sizeof(unsigned int),
+		.mode		= 0644,
+		.proc_handler	= &proc_dointvec_jiffies,
+	},
+	{
+		.ctl_name	= NET_IPV4_NF_CONNTRACK_SCTP_TIMEOUT_SHUTDOWN_ACK_SENT,
+		.procname	= "ip_conntrack_sctp_timeout_shutdown_ack_sent",
+		.data		= &nf_ct_sctp_timeout_shutdown_ack_sent,
+		.maxlen		= sizeof(unsigned int),
+		.mode		= 0644,
+		.proc_handler	= &proc_dointvec_jiffies,
+	},
+	{
+		.ctl_name = 0
+	}
 };
-
-static struct ctl_table_header *nf_ct_sysctl_header;
+#endif /* CONFIG_NF_CONNTRACK_PROC_COMPAT */
 #endif
+
+struct nf_conntrack_l4proto nf_conntrack_l4proto_sctp4 = {
+	.l3proto		= PF_INET,
+	.l4proto 		= IPPROTO_SCTP,
+	.name 			= "sctp",
+	.pkt_to_tuple 		= sctp_pkt_to_tuple,
+	.invert_tuple 		= sctp_invert_tuple,
+	.print_tuple 		= sctp_print_tuple,
+	.print_conntrack	= sctp_print_conntrack,
+	.packet 		= sctp_packet,
+	.new 			= sctp_new,
+	.me 			= THIS_MODULE,
+#ifdef CONFIG_SYSCTL
+	.ctl_table_users	= &sctp_sysctl_table_users,
+	.ctl_table_header	= &sctp_sysctl_header,
+	.ctl_table		= sctp_sysctl_table,
+#ifdef CONFIG_NF_CONNTRACK_PROC_COMPAT
+	.ctl_compat_table	= sctp_compat_sysctl_table,
+#endif
+#endif
+};
+
+struct nf_conntrack_l4proto nf_conntrack_l4proto_sctp6 = {
+	.l3proto		= PF_INET6,
+	.l4proto 		= IPPROTO_SCTP,
+	.name 			= "sctp",
+	.pkt_to_tuple 		= sctp_pkt_to_tuple,
+	.invert_tuple 		= sctp_invert_tuple,
+	.print_tuple 		= sctp_print_tuple,
+	.print_conntrack	= sctp_print_conntrack,
+	.packet 		= sctp_packet,
+	.new 			= sctp_new,
+	.me 			= THIS_MODULE,
+#ifdef CONFIG_SYSCTL
+	.ctl_table_users	= &sctp_sysctl_table_users,
+	.ctl_table_header	= &sctp_sysctl_header,
+	.ctl_table		= sctp_sysctl_table,
+#endif
+};
 
 int __init nf_conntrack_proto_sctp_init(void)
 {
 	int ret;
 
-	ret = nf_conntrack_protocol_register(&nf_conntrack_protocol_sctp4);
+	ret = nf_conntrack_l4proto_register(&nf_conntrack_l4proto_sctp4);
 	if (ret) {
-		printk("nf_conntrack_proto_sctp4: protocol register failed\n");
+		printk("nf_conntrack_l4proto_sctp4: protocol register failed\n");
 		goto out;
 	}
-	ret = nf_conntrack_protocol_register(&nf_conntrack_protocol_sctp6);
+	ret = nf_conntrack_l4proto_register(&nf_conntrack_l4proto_sctp6);
 	if (ret) {
-		printk("nf_conntrack_proto_sctp6: protocol register failed\n");
+		printk("nf_conntrack_l4proto_sctp6: protocol register failed\n");
 		goto cleanup_sctp4;
 	}
 
-#ifdef CONFIG_SYSCTL
-	nf_ct_sysctl_header = register_sysctl_table(nf_ct_net_table, 0);
-	if (nf_ct_sysctl_header == NULL) {
-		printk("nf_conntrack_proto_sctp: can't register to sysctl.\n");
-		goto cleanup;
-	}
-#endif
-
 	return ret;
 
-#ifdef CONFIG_SYSCTL
- cleanup:
-	nf_conntrack_protocol_unregister(&nf_conntrack_protocol_sctp6);
-#endif
  cleanup_sctp4:
-	nf_conntrack_protocol_unregister(&nf_conntrack_protocol_sctp4);
+	nf_conntrack_l4proto_unregister(&nf_conntrack_l4proto_sctp4);
  out:
-	DEBUGP("SCTP conntrack module loading %s\n", 
+	DEBUGP("SCTP conntrack module loading %s\n",
 					ret ? "failed": "succeeded");
 	return ret;
 }
 
 void __exit nf_conntrack_proto_sctp_fini(void)
 {
-	nf_conntrack_protocol_unregister(&nf_conntrack_protocol_sctp6);
-	nf_conntrack_protocol_unregister(&nf_conntrack_protocol_sctp4);
-#ifdef CONFIG_SYSCTL
- 	unregister_sysctl_table(nf_ct_sysctl_header);
-#endif
+	nf_conntrack_l4proto_unregister(&nf_conntrack_l4proto_sctp6);
+	nf_conntrack_l4proto_unregister(&nf_conntrack_l4proto_sctp4);
 	DEBUGP("SCTP conntrack module unloaded\n");
 }
 
@@ -673,3 +715,4 @@ module_exit(nf_conntrack_proto_sctp_fini);
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Kiran Kumar Immidi");
 MODULE_DESCRIPTION("Netfilter connection tracking protocol helper for SCTP");
+MODULE_ALIAS("ip_conntrack_proto_sctp");

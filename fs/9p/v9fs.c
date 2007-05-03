@@ -26,6 +26,7 @@
 #include <linux/module.h>
 #include <linux/errno.h>
 #include <linux/fs.h>
+#include <linux/sched.h>
 #include <linux/parser.h>
 #include <linux/idr.h>
 
@@ -52,6 +53,8 @@ enum {
 	Opt_uname, Opt_remotename,
 	/* Options that take no arguments */
 	Opt_legacy, Opt_nodevmap, Opt_unix, Opt_tcp, Opt_fd,
+	/* Cache options */
+	Opt_cache_loose,
 	/* Error token */
 	Opt_err
 };
@@ -75,6 +78,8 @@ static match_table_t tokens = {
 	{Opt_fd, "fd"},
 	{Opt_legacy, "noextend"},
 	{Opt_nodevmap, "nodevmap"},
+	{Opt_cache_loose, "cache=loose"},
+	{Opt_cache_loose, "loose"},
 	{Opt_err, NULL}
 };
 
@@ -105,6 +110,7 @@ static void v9fs_parse_options(char *options, struct v9fs_session_info *v9ses)
 	v9ses->debug = 0;
 	v9ses->rfdno = ~0;
 	v9ses->wfdno = ~0;
+	v9ses->cache = 0;
 
 	if (!options)
 		return;
@@ -120,7 +126,6 @@ static void v9fs_parse_options(char *options, struct v9fs_session_info *v9ses)
 					"integer field, but no integer?\n");
 				continue;
 			}
-
 		}
 		switch (token) {
 		case Opt_port:
@@ -167,6 +172,9 @@ static void v9fs_parse_options(char *options, struct v9fs_session_info *v9ses)
 			break;
 		case Opt_nodevmap:
 			v9ses->nodev = 1;
+			break;
+		case Opt_cache_loose:
+			v9ses->cache = CACHE_LOOSE;
 			break;
 		default:
 			continue;
@@ -456,14 +464,19 @@ static int __init init_v9fs(void)
 
 	v9fs_error_init();
 
-	printk(KERN_INFO "Installing v9fs 9P2000 file system support\n");
+	printk(KERN_INFO "Installing v9fs 9p2000 file system support\n");
 
 	ret = v9fs_mux_global_init();
-	if (!ret)
+	if (ret) {
+		printk(KERN_WARNING "v9fs: starting mux failed\n");
 		return ret;
+	}
 	ret = register_filesystem(&v9fs_fs_type);
-	if (!ret)
+	if (ret) {
+		printk(KERN_WARNING "v9fs: registering file system failed\n");
 		v9fs_mux_global_exit();
+	}
+
 	return ret;
 }
 

@@ -2,6 +2,7 @@
 #include <linux/fs.h>
 #include <linux/linkage.h>
 #include <linux/namei.h>
+#include <linux/sched.h>
 #include <linux/utime.h>
 #include <linux/mount.h>
 #include <linux/vs_cowbl.h>
@@ -31,11 +32,11 @@ asmlinkage long sys_utime(char __user * filename, struct utimbuf __user * times)
 	error = user_path_walk(filename, &nd);
 	if (error)
 		goto out;
-	inode = nd.dentry->d_inode;
 
-	error = -EROFS;
-	if (IS_RDONLY(inode) || MNT_IS_RDONLY(nd.mnt))
+	error = cow_check_and_break(&nd);
+	if (error)
 		goto dput_and_out;
+	inode = nd.dentry->d_inode;
 
 	/* Don't worry, the checks are done in inode_change_ok() */
 	newattrs.ia_valid = ATTR_CTIME | ATTR_MTIME | ATTR_ATIME;

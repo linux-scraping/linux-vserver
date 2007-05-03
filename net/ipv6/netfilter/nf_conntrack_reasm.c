@@ -72,7 +72,7 @@ struct nf_ct_frag6_queue
 	struct hlist_node	list;
 	struct list_head	lru_list;	/* lru list member	*/
 
-	__u32			id;		/* fragment id		*/
+	__be32			id;		/* fragment id		*/
 	struct in6_addr		saddr;
 	struct in6_addr		daddr;
 
@@ -115,28 +115,28 @@ static __inline__ void fq_unlink(struct nf_ct_frag6_queue *fq)
 	write_unlock(&nf_ct_frag6_lock);
 }
 
-static unsigned int ip6qhashfn(u32 id, struct in6_addr *saddr,
+static unsigned int ip6qhashfn(__be32 id, struct in6_addr *saddr,
 			       struct in6_addr *daddr)
 {
 	u32 a, b, c;
 
-	a = saddr->s6_addr32[0];
-	b = saddr->s6_addr32[1];
-	c = saddr->s6_addr32[2];
+	a = (__force u32)saddr->s6_addr32[0];
+	b = (__force u32)saddr->s6_addr32[1];
+	c = (__force u32)saddr->s6_addr32[2];
 
 	a += JHASH_GOLDEN_RATIO;
 	b += JHASH_GOLDEN_RATIO;
 	c += nf_ct_frag6_hash_rnd;
 	__jhash_mix(a, b, c);
 
-	a += saddr->s6_addr32[3];
-	b += daddr->s6_addr32[0];
-	c += daddr->s6_addr32[1];
+	a += (__force u32)saddr->s6_addr32[3];
+	b += (__force u32)daddr->s6_addr32[0];
+	c += (__force u32)daddr->s6_addr32[1];
 	__jhash_mix(a, b, c);
 
-	a += daddr->s6_addr32[2];
-	b += daddr->s6_addr32[3];
-	c += id;
+	a += (__force u32)daddr->s6_addr32[2];
+	b += (__force u32)daddr->s6_addr32[3];
+	c += (__force u32)id;
 	__jhash_mix(a, b, c);
 
 	return c & (FRAG6Q_HASHSZ - 1);
@@ -311,7 +311,7 @@ static struct nf_ct_frag6_queue *nf_ct_frag6_intern(unsigned int hash,
 	write_lock(&nf_ct_frag6_lock);
 #ifdef CONFIG_SMP
 	hlist_for_each_entry(fq, n, &nf_ct_frag6_hash[hash], list) {
-		if (fq->id == fq_in->id && 
+		if (fq->id == fq_in->id &&
 		    ipv6_addr_equal(&fq_in->saddr, &fq->saddr) &&
 		    ipv6_addr_equal(&fq_in->daddr, &fq->daddr)) {
 			atomic_inc(&fq->refcnt);
@@ -338,7 +338,7 @@ static struct nf_ct_frag6_queue *nf_ct_frag6_intern(unsigned int hash,
 
 
 static struct nf_ct_frag6_queue *
-nf_ct_frag6_create(unsigned int hash, u32 id, struct in6_addr *src,				   struct in6_addr *dst)
+nf_ct_frag6_create(unsigned int hash, __be32 id, struct in6_addr *src,				   struct in6_addr *dst)
 {
 	struct nf_ct_frag6_queue *fq;
 
@@ -366,7 +366,7 @@ oom:
 }
 
 static __inline__ struct nf_ct_frag6_queue *
-fq_find(u32 id, struct in6_addr *src, struct in6_addr *dst)
+fq_find(__be32 id, struct in6_addr *src, struct in6_addr *dst)
 {
 	struct nf_ct_frag6_queue *fq;
 	struct hlist_node *n;
@@ -374,7 +374,7 @@ fq_find(u32 id, struct in6_addr *src, struct in6_addr *dst)
 
 	read_lock(&nf_ct_frag6_lock);
 	hlist_for_each_entry(fq, n, &nf_ct_frag6_hash[hash], list) {
-		if (fq->id == id && 
+		if (fq->id == id &&
 		    ipv6_addr_equal(src, &fq->saddr) &&
 		    ipv6_addr_equal(dst, &fq->daddr)) {
 			atomic_inc(&fq->refcnt);
@@ -388,7 +388,7 @@ fq_find(u32 id, struct in6_addr *src, struct in6_addr *dst)
 }
 
 
-static int nf_ct_frag6_queue(struct nf_ct_frag6_queue *fq, struct sk_buff *skb, 
+static int nf_ct_frag6_queue(struct nf_ct_frag6_queue *fq, struct sk_buff *skb,
 			     struct frag_hdr *fhdr, int nhoff)
 {
 	struct sk_buff *prev, *next;
@@ -405,12 +405,12 @@ static int nf_ct_frag6_queue(struct nf_ct_frag6_queue *fq, struct sk_buff *skb,
 
 	if ((unsigned int)end > IPV6_MAXPLEN) {
 		DEBUGP("offset is too large.\n");
- 		return -1;
+		return -1;
 	}
 
- 	if (skb->ip_summed == CHECKSUM_COMPLETE)
- 		skb->csum = csum_sub(skb->csum,
- 				     csum_partial(skb->nh.raw,
+	if (skb->ip_summed == CHECKSUM_COMPLETE)
+		skb->csum = csum_sub(skb->csum,
+				     csum_partial(skb->nh.raw,
 						  (u8*)(fhdr + 1) - skb->nh.raw,
 						  0));
 
@@ -625,7 +625,7 @@ nf_ct_frag6_reasm(struct nf_ct_frag6_queue *fq, struct net_device *dev)
 	/* We have to remove fragment header from datagram and to relocate
 	 * header in order to calculate ICV correctly. */
 	head->nh.raw[fq->nhoffset] = head->h.raw[0];
-	memmove(head->head + sizeof(struct frag_hdr), head->head, 
+	memmove(head->head + sizeof(struct frag_hdr), head->head,
 		(head->data - head->head) - sizeof(struct frag_hdr));
 	head->mac.raw += sizeof(struct frag_hdr);
 	head->nh.raw += sizeof(struct frag_hdr);
@@ -701,41 +701,41 @@ out_fail:
 static int
 find_prev_fhdr(struct sk_buff *skb, u8 *prevhdrp, int *prevhoff, int *fhoff)
 {
-        u8 nexthdr = skb->nh.ipv6h->nexthdr;
+	u8 nexthdr = skb->nh.ipv6h->nexthdr;
 	u8 prev_nhoff = (u8 *)&skb->nh.ipv6h->nexthdr - skb->data;
 	int start = (u8 *)(skb->nh.ipv6h+1) - skb->data;
 	int len = skb->len - start;
 	u8 prevhdr = NEXTHDR_IPV6;
 
-        while (nexthdr != NEXTHDR_FRAGMENT) {
-                struct ipv6_opt_hdr hdr;
-                int hdrlen;
+	while (nexthdr != NEXTHDR_FRAGMENT) {
+		struct ipv6_opt_hdr hdr;
+		int hdrlen;
 
 		if (!ipv6_ext_hdr(nexthdr)) {
 			return -1;
 		}
-                if (len < (int)sizeof(struct ipv6_opt_hdr)) {
+		if (len < (int)sizeof(struct ipv6_opt_hdr)) {
 			DEBUGP("too short\n");
 			return -1;
 		}
-                if (nexthdr == NEXTHDR_NONE) {
+		if (nexthdr == NEXTHDR_NONE) {
 			DEBUGP("next header is none\n");
 			return -1;
 		}
-                if (skb_copy_bits(skb, start, &hdr, sizeof(hdr)))
-                        BUG();
-                if (nexthdr == NEXTHDR_AUTH)
-                        hdrlen = (hdr.hdrlen+2)<<2;
-                else
-                        hdrlen = ipv6_optlen(&hdr);
+		if (skb_copy_bits(skb, start, &hdr, sizeof(hdr)))
+			BUG();
+		if (nexthdr == NEXTHDR_AUTH)
+			hdrlen = (hdr.hdrlen+2)<<2;
+		else
+			hdrlen = ipv6_optlen(&hdr);
 
 		prevhdr = nexthdr;
 		prev_nhoff = start;
 
-                nexthdr = hdr.nexthdr;
-                len -= hdrlen;
-                start += hdrlen;
-        }
+		nexthdr = hdr.nexthdr;
+		len -= hdrlen;
+		start += hdrlen;
+	}
 
 	if (len < 0)
 		return -1;
@@ -749,7 +749,7 @@ find_prev_fhdr(struct sk_buff *skb, u8 *prevhdrp, int *prevhoff, int *fhoff)
 
 struct sk_buff *nf_ct_frag6_gather(struct sk_buff *skb)
 {
-	struct sk_buff *clone; 
+	struct sk_buff *clone;
 	struct net_device *dev = skb->dev;
 	struct frag_hdr *fhdr;
 	struct nf_ct_frag6_queue *fq;
@@ -835,6 +835,8 @@ void nf_ct_frag6_output(unsigned int hooknum, struct sk_buff *skb,
 		s->nfct_reasm = skb;
 
 		s2 = s->next;
+		s->next = NULL;
+
 		NF_HOOK_THRESH(PF_INET6, hooknum, s, in, out, okfn,
 			       NF_IP6_PRI_CONNTRACK_DEFRAG + 1);
 		s = s2;

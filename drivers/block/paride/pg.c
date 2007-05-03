@@ -227,7 +227,7 @@ static struct class *pg_class;
 
 /* kernel glue structures */
 
-static struct file_operations pg_fops = {
+static const struct file_operations pg_fops = {
 	.owner = THIS_MODULE,
 	.read = pg_read,
 	.write = pg_write,
@@ -646,14 +646,14 @@ static int __init pg_init(void)
 	int err;
 
 	if (disable){
-		err = -1;
+		err = -EINVAL;
 		goto out;
 	}
 
 	pg_init_units();
 
 	if (pg_detect()) {
-		err = -1;
+		err = -ENODEV;
 		goto out;
 	}
 

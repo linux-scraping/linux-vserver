@@ -32,12 +32,12 @@
 #include <asm/io.h>
 #include <asm/semaphore.h>
 #include <asm/spu.h>
+#include <asm/spu_info.h>
 #include <asm/uaccess.h>
 
 #include "spufs.h"
 
 #define SPUFS_MMAP_4K (PAGE_SIZE == 0x1000)
-
 
 static int
 spufs_mem_open(struct inode *inode, struct file *file)
@@ -45,9 +45,18 @@ spufs_mem_open(struct inode *inode, struct file *file)
 	struct spufs_inode_info *i = SPUFS_I(inode);
 	struct spu_context *ctx = i->i_ctx;
 	file->private_data = ctx;
-	file->f_mapping = inode->i_mapping;
 	ctx->local_store = inode->i_mapping;
+	smp_wmb();
 	return 0;
+}
+
+static ssize_t
+__spufs_mem_read(struct spu_context *ctx, char __user *buffer,
+			size_t size, loff_t *pos)
+{
+	char *local_store = ctx->ops->get_ls(ctx);
+	return simple_read_from_buffer(buffer, size, pos, local_store,
+					LS_SIZE);
 }
 
 static ssize_t
@@ -55,74 +64,73 @@ spufs_mem_read(struct file *file, char __user *buffer,
 				size_t size, loff_t *pos)
 {
 	struct spu_context *ctx = file->private_data;
-	char *local_store;
-	int ret;
+	ssize_t ret;
 
 	spu_acquire(ctx);
-
-	local_store = ctx->ops->get_ls(ctx);
-	ret = simple_read_from_buffer(buffer, size, pos, local_store, LS_SIZE);
-
+	ret = __spufs_mem_read(ctx, buffer, size, pos);
 	spu_release(ctx);
 	return ret;
 }
 
 static ssize_t
 spufs_mem_write(struct file *file, const char __user *buffer,
-					size_t size, loff_t *pos)
+					size_t size, loff_t *ppos)
 {
 	struct spu_context *ctx = file->private_data;
 	char *local_store;
+	loff_t pos = *ppos;
 	int ret;
 
-	size = min_t(ssize_t, LS_SIZE - *pos, size);
-	if (size <= 0)
+	if (pos < 0)
+		return -EINVAL;
+	if (pos > LS_SIZE)
 		return -EFBIG;
-	*pos += size;
+	if (size > LS_SIZE - pos)
+		size = LS_SIZE - pos;
 
 	spu_acquire(ctx);
-
 	local_store = ctx->ops->get_ls(ctx);
-	ret = copy_from_user(local_store + *pos - size,
-			     buffer, size) ? -EFAULT : size;
-
+	ret = copy_from_user(local_store + pos, buffer, size);
 	spu_release(ctx);
-	return ret;
+
+	if (ret)
+		return -EFAULT;
+	*ppos = pos + size;
+	return size;
 }
 
-static struct page *
-spufs_mem_mmap_nopage(struct vm_area_struct *vma,
-		      unsigned long address, int *type)
+static unsigned long spufs_mem_mmap_nopfn(struct vm_area_struct *vma,
+					  unsigned long address)
 {
-	struct page *page = NOPAGE_SIGBUS;
-
 	struct spu_context *ctx = vma->vm_file->private_data;
-	unsigned long offset = address - vma->vm_start;
+	unsigned long pfn, offset = address - vma->vm_start;
+
 	offset += vma->vm_pgoff << PAGE_SHIFT;
+
+	if (offset >= LS_SIZE)
+		return NOPFN_SIGBUS;
 
 	spu_acquire(ctx);
 
 	if (ctx->state == SPU_STATE_SAVED) {
 		vma->vm_page_prot = __pgprot(pgprot_val(vma->vm_page_prot)
-					& ~(_PAGE_NO_CACHE | _PAGE_GUARDED));
-		page = vmalloc_to_page(ctx->csa.lscsa->ls + offset);
+							& ~_PAGE_NO_CACHE);
+		pfn = vmalloc_to_pfn(ctx->csa.lscsa->ls + offset);
 	} else {
 		vma->vm_page_prot = __pgprot(pgprot_val(vma->vm_page_prot)
-					| _PAGE_NO_CACHE | _PAGE_GUARDED);
-		page = pfn_to_page((ctx->spu->local_store_phys + offset)
-				   >> PAGE_SHIFT);
+					     | _PAGE_NO_CACHE);
+		pfn = (ctx->spu->local_store_phys + offset) >> PAGE_SHIFT;
 	}
+	vm_insert_pfn(vma, address, pfn);
+
 	spu_release(ctx);
 
-	if (type)
-		*type = VM_FAULT_MINOR;
-
-	page_cache_get(page);
-	return page;
+	return NOPFN_REFAULT;
 }
 
+
 static struct vm_operations_struct spufs_mem_mmap_vmops = {
-	.nopage = spufs_mem_mmap_nopage,
+	.nopfn = spufs_mem_mmap_nopfn,
 };
 
 static int
@@ -131,7 +139,7 @@ spufs_mem_mmap(struct file *file, struct vm_area_struct *vma)
 	if (!(vma->vm_flags & VM_SHARED))
 		return -EINVAL;
 
-	/* FIXME: */
+	vma->vm_flags |= VM_IO | VM_PFNMAP;
 	vma->vm_page_prot = __pgprot(pgprot_val(vma->vm_page_prot)
 				     | _PAGE_NO_CACHE);
 
@@ -139,7 +147,7 @@ spufs_mem_mmap(struct file *file, struct vm_area_struct *vma)
 	return 0;
 }
 
-static struct file_operations spufs_mem_fops = {
+static const struct file_operations spufs_mem_fops = {
 	.open	 = spufs_mem_open,
 	.read    = spufs_mem_read,
 	.write   = spufs_mem_write,
@@ -147,49 +155,42 @@ static struct file_operations spufs_mem_fops = {
 	.mmap    = spufs_mem_mmap,
 };
 
-static struct page *spufs_ps_nopage(struct vm_area_struct *vma,
+static unsigned long spufs_ps_nopfn(struct vm_area_struct *vma,
 				    unsigned long address,
-				    int *type, unsigned long ps_offs,
+				    unsigned long ps_offs,
 				    unsigned long ps_size)
 {
-	struct page *page = NOPAGE_SIGBUS;
-	int fault_type = VM_FAULT_SIGBUS;
 	struct spu_context *ctx = vma->vm_file->private_data;
-	unsigned long offset = address - vma->vm_start;
-	unsigned long area;
+	unsigned long area, offset = address - vma->vm_start;
 	int ret;
 
 	offset += vma->vm_pgoff << PAGE_SHIFT;
 	if (offset >= ps_size)
-		goto out;
+		return NOPFN_SIGBUS;
 
-	ret = spu_acquire_runnable(ctx);
+	/* error here usually means a signal.. we might want to test
+	 * the error code more precisely though
+	 */
+	ret = spu_acquire_runnable(ctx, 0);
 	if (ret)
-		goto out;
+		return NOPFN_REFAULT;
 
 	area = ctx->spu->problem_phys + ps_offs;
-	page = pfn_to_page((area + offset) >> PAGE_SHIFT);
-	fault_type = VM_FAULT_MINOR;
-	page_cache_get(page);
-
+	vm_insert_pfn(vma, address, (area + offset) >> PAGE_SHIFT);
 	spu_release(ctx);
 
-      out:
-	if (type)
-		*type = fault_type;
-
-	return page;
+	return NOPFN_REFAULT;
 }
 
 #if SPUFS_MMAP_4K
-static struct page *spufs_cntl_mmap_nopage(struct vm_area_struct *vma,
-					   unsigned long address, int *type)
+static unsigned long spufs_cntl_mmap_nopfn(struct vm_area_struct *vma,
+					   unsigned long address)
 {
-	return spufs_ps_nopage(vma, address, type, 0x4000, 0x1000);
+	return spufs_ps_nopfn(vma, address, 0x4000, 0x1000);
 }
 
 static struct vm_operations_struct spufs_cntl_mmap_vmops = {
-	.nopage = spufs_cntl_mmap_nopage,
+	.nopfn = spufs_cntl_mmap_nopfn,
 };
 
 /*
@@ -200,7 +201,7 @@ static int spufs_cntl_mmap(struct file *file, struct vm_area_struct *vma)
 	if (!(vma->vm_flags & VM_SHARED))
 		return -EINVAL;
 
-	vma->vm_flags |= VM_RESERVED;
+	vma->vm_flags |= VM_IO | VM_PFNMAP;
 	vma->vm_page_prot = __pgprot(pgprot_val(vma->vm_page_prot)
 				     | _PAGE_NO_CACHE | _PAGE_GUARDED);
 
@@ -238,13 +239,13 @@ static int spufs_cntl_open(struct inode *inode, struct file *file)
 	struct spu_context *ctx = i->i_ctx;
 
 	file->private_data = ctx;
-	file->f_mapping = inode->i_mapping;
 	ctx->cntl = inode->i_mapping;
+	smp_wmb();
 	return simple_attr_open(inode, file, spufs_cntl_get,
 					spufs_cntl_set, "0x%08lx");
 }
 
-static struct file_operations spufs_cntl_fops = {
+static const struct file_operations spufs_cntl_fops = {
 	.open = spufs_cntl_open,
 	.release = simple_attr_close,
 	.read = simple_attr_read,
@@ -261,18 +262,23 @@ spufs_regs_open(struct inode *inode, struct file *file)
 }
 
 static ssize_t
+__spufs_regs_read(struct spu_context *ctx, char __user *buffer,
+			size_t size, loff_t *pos)
+{
+	struct spu_lscsa *lscsa = ctx->csa.lscsa;
+	return simple_read_from_buffer(buffer, size, pos,
+				      lscsa->gprs, sizeof lscsa->gprs);
+}
+
+static ssize_t
 spufs_regs_read(struct file *file, char __user *buffer,
 		size_t size, loff_t *pos)
 {
-	struct spu_context *ctx = file->private_data;
-	struct spu_lscsa *lscsa = ctx->csa.lscsa;
 	int ret;
+	struct spu_context *ctx = file->private_data;
 
 	spu_acquire_saved(ctx);
-
-	ret = simple_read_from_buffer(buffer, size, pos,
-				      lscsa->gprs, sizeof lscsa->gprs);
-
+	ret = __spufs_regs_read(ctx, buffer, size, pos);
 	spu_release(ctx);
 	return ret;
 }
@@ -299,7 +305,7 @@ spufs_regs_write(struct file *file, const char __user *buffer,
 	return ret;
 }
 
-static struct file_operations spufs_regs_fops = {
+static const struct file_operations spufs_regs_fops = {
 	.open	 = spufs_regs_open,
 	.read    = spufs_regs_read,
 	.write   = spufs_regs_write,
@@ -307,18 +313,23 @@ static struct file_operations spufs_regs_fops = {
 };
 
 static ssize_t
+__spufs_fpcr_read(struct spu_context *ctx, char __user * buffer,
+			size_t size, loff_t * pos)
+{
+	struct spu_lscsa *lscsa = ctx->csa.lscsa;
+	return simple_read_from_buffer(buffer, size, pos,
+				      &lscsa->fpcr, sizeof(lscsa->fpcr));
+}
+
+static ssize_t
 spufs_fpcr_read(struct file *file, char __user * buffer,
 		size_t size, loff_t * pos)
 {
-	struct spu_context *ctx = file->private_data;
-	struct spu_lscsa *lscsa = ctx->csa.lscsa;
 	int ret;
+	struct spu_context *ctx = file->private_data;
 
 	spu_acquire_saved(ctx);
-
-	ret = simple_read_from_buffer(buffer, size, pos,
-				      &lscsa->fpcr, sizeof(lscsa->fpcr));
-
+	ret = __spufs_fpcr_read(ctx, buffer, size, pos);
 	spu_release(ctx);
 	return ret;
 }
@@ -345,7 +356,7 @@ spufs_fpcr_write(struct file *file, const char __user * buffer,
 	return ret;
 }
 
-static struct file_operations spufs_fpcr_fops = {
+static const struct file_operations spufs_fpcr_fops = {
 	.open = spufs_regs_open,
 	.read = spufs_fpcr_read,
 	.write = spufs_fpcr_write,
@@ -411,7 +422,7 @@ static ssize_t spufs_mbox_read(struct file *file, char __user *buf,
 	return count;
 }
 
-static struct file_operations spufs_mbox_fops = {
+static const struct file_operations spufs_mbox_fops = {
 	.open	= spufs_pipe_open,
 	.read	= spufs_mbox_read,
 };
@@ -437,7 +448,7 @@ static ssize_t spufs_mbox_stat_read(struct file *file, char __user *buf,
 	return 4;
 }
 
-static struct file_operations spufs_mbox_stat_fops = {
+static const struct file_operations spufs_mbox_stat_fops = {
 	.open	= spufs_pipe_open,
 	.read	= spufs_mbox_stat_read,
 };
@@ -544,7 +555,7 @@ static unsigned int spufs_ibox_poll(struct file *file, poll_table *wait)
 	return mask;
 }
 
-static struct file_operations spufs_ibox_fops = {
+static const struct file_operations spufs_ibox_fops = {
 	.open	= spufs_pipe_open,
 	.read	= spufs_ibox_read,
 	.poll	= spufs_ibox_poll,
@@ -570,7 +581,7 @@ static ssize_t spufs_ibox_stat_read(struct file *file, char __user *buf,
 	return 4;
 }
 
-static struct file_operations spufs_ibox_stat_fops = {
+static const struct file_operations spufs_ibox_stat_fops = {
 	.open	= spufs_pipe_open,
 	.read	= spufs_ibox_stat_read,
 };
@@ -677,7 +688,7 @@ static unsigned int spufs_wbox_poll(struct file *file, poll_table *wait)
 	return mask;
 }
 
-static struct file_operations spufs_wbox_fops = {
+static const struct file_operations spufs_wbox_fops = {
 	.open	= spufs_pipe_open,
 	.write	= spufs_wbox_write,
 	.poll	= spufs_wbox_poll,
@@ -703,7 +714,7 @@ static ssize_t spufs_wbox_stat_read(struct file *file, char __user *buf,
 	return 4;
 }
 
-static struct file_operations spufs_wbox_stat_fops = {
+static const struct file_operations spufs_wbox_stat_fops = {
 	.open	= spufs_pipe_open,
 	.read	= spufs_wbox_stat_read,
 };
@@ -713,28 +724,46 @@ static int spufs_signal1_open(struct inode *inode, struct file *file)
 	struct spufs_inode_info *i = SPUFS_I(inode);
 	struct spu_context *ctx = i->i_ctx;
 	file->private_data = ctx;
-	file->f_mapping = inode->i_mapping;
 	ctx->signal1 = inode->i_mapping;
+	smp_wmb();
 	return nonseekable_open(inode, file);
 }
 
-static ssize_t spufs_signal1_read(struct file *file, char __user *buf,
+static ssize_t __spufs_signal1_read(struct spu_context *ctx, char __user *buf,
 			size_t len, loff_t *pos)
 {
-	struct spu_context *ctx = file->private_data;
+	int ret = 0;
 	u32 data;
 
 	if (len < 4)
 		return -EINVAL;
 
-	spu_acquire(ctx);
-	data = ctx->ops->signal1_read(ctx);
-	spu_release(ctx);
+	if (ctx->csa.spu_chnlcnt_RW[3]) {
+		data = ctx->csa.spu_chnldata_RW[3];
+		ret = 4;
+	}
+
+	if (!ret)
+		goto out;
 
 	if (copy_to_user(buf, &data, 4))
 		return -EFAULT;
 
-	return 4;
+out:
+	return ret;
+}
+
+static ssize_t spufs_signal1_read(struct file *file, char __user *buf,
+			size_t len, loff_t *pos)
+{
+	int ret;
+	struct spu_context *ctx = file->private_data;
+
+	spu_acquire_saved(ctx);
+	ret = __spufs_signal1_read(ctx, buf, len, pos);
+	spu_release(ctx);
+
+	return ret;
 }
 
 static ssize_t spufs_signal1_write(struct file *file, const char __user *buf,
@@ -758,23 +787,23 @@ static ssize_t spufs_signal1_write(struct file *file, const char __user *buf,
 	return 4;
 }
 
-static struct page *spufs_signal1_mmap_nopage(struct vm_area_struct *vma,
-					      unsigned long address, int *type)
+static unsigned long spufs_signal1_mmap_nopfn(struct vm_area_struct *vma,
+					      unsigned long address)
 {
 #if PAGE_SIZE == 0x1000
-	return spufs_ps_nopage(vma, address, type, 0x14000, 0x1000);
+	return spufs_ps_nopfn(vma, address, 0x14000, 0x1000);
 #elif PAGE_SIZE == 0x10000
 	/* For 64k pages, both signal1 and signal2 can be used to mmap the whole
 	 * signal 1 and 2 area
 	 */
-	return spufs_ps_nopage(vma, address, type, 0x10000, 0x10000);
+	return spufs_ps_nopfn(vma, address, 0x10000, 0x10000);
 #else
 #error unsupported page size
 #endif
 }
 
 static struct vm_operations_struct spufs_signal1_mmap_vmops = {
-	.nopage = spufs_signal1_mmap_nopage,
+	.nopfn = spufs_signal1_mmap_nopfn,
 };
 
 static int spufs_signal1_mmap(struct file *file, struct vm_area_struct *vma)
@@ -782,7 +811,7 @@ static int spufs_signal1_mmap(struct file *file, struct vm_area_struct *vma)
 	if (!(vma->vm_flags & VM_SHARED))
 		return -EINVAL;
 
-	vma->vm_flags |= VM_RESERVED;
+	vma->vm_flags |= VM_IO | VM_PFNMAP;
 	vma->vm_page_prot = __pgprot(pgprot_val(vma->vm_page_prot)
 				     | _PAGE_NO_CACHE | _PAGE_GUARDED);
 
@@ -790,7 +819,7 @@ static int spufs_signal1_mmap(struct file *file, struct vm_area_struct *vma)
 	return 0;
 }
 
-static struct file_operations spufs_signal1_fops = {
+static const struct file_operations spufs_signal1_fops = {
 	.open = spufs_signal1_open,
 	.read = spufs_signal1_read,
 	.write = spufs_signal1_write,
@@ -802,30 +831,46 @@ static int spufs_signal2_open(struct inode *inode, struct file *file)
 	struct spufs_inode_info *i = SPUFS_I(inode);
 	struct spu_context *ctx = i->i_ctx;
 	file->private_data = ctx;
-	file->f_mapping = inode->i_mapping;
 	ctx->signal2 = inode->i_mapping;
+	smp_wmb();
 	return nonseekable_open(inode, file);
+}
+
+static ssize_t __spufs_signal2_read(struct spu_context *ctx, char __user *buf,
+			size_t len, loff_t *pos)
+{
+	int ret = 0;
+	u32 data;
+
+	if (len < 4)
+		return -EINVAL;
+
+	if (ctx->csa.spu_chnlcnt_RW[4]) {
+		data =  ctx->csa.spu_chnldata_RW[4];
+		ret = 4;
+	}
+
+	if (!ret)
+		goto out;
+
+	if (copy_to_user(buf, &data, 4))
+		return -EFAULT;
+
+out:
+	return ret;
 }
 
 static ssize_t spufs_signal2_read(struct file *file, char __user *buf,
 			size_t len, loff_t *pos)
 {
-	struct spu_context *ctx;
-	u32 data;
+	struct spu_context *ctx = file->private_data;
+	int ret;
 
-	ctx = file->private_data;
-
-	if (len < 4)
-		return -EINVAL;
-
-	spu_acquire(ctx);
-	data = ctx->ops->signal2_read(ctx);
+	spu_acquire_saved(ctx);
+	ret = __spufs_signal2_read(ctx, buf, len, pos);
 	spu_release(ctx);
 
-	if (copy_to_user(buf, &data, 4))
-		return -EFAULT;
-
-	return 4;
+	return ret;
 }
 
 static ssize_t spufs_signal2_write(struct file *file, const char __user *buf,
@@ -850,23 +895,23 @@ static ssize_t spufs_signal2_write(struct file *file, const char __user *buf,
 }
 
 #if SPUFS_MMAP_4K
-static struct page *spufs_signal2_mmap_nopage(struct vm_area_struct *vma,
-					      unsigned long address, int *type)
+static unsigned long spufs_signal2_mmap_nopfn(struct vm_area_struct *vma,
+					      unsigned long address)
 {
 #if PAGE_SIZE == 0x1000
-	return spufs_ps_nopage(vma, address, type, 0x1c000, 0x1000);
+	return spufs_ps_nopfn(vma, address, 0x1c000, 0x1000);
 #elif PAGE_SIZE == 0x10000
 	/* For 64k pages, both signal1 and signal2 can be used to mmap the whole
 	 * signal 1 and 2 area
 	 */
-	return spufs_ps_nopage(vma, address, type, 0x10000, 0x10000);
+	return spufs_ps_nopfn(vma, address, 0x10000, 0x10000);
 #else
 #error unsupported page size
 #endif
 }
 
 static struct vm_operations_struct spufs_signal2_mmap_vmops = {
-	.nopage = spufs_signal2_mmap_nopage,
+	.nopfn = spufs_signal2_mmap_nopfn,
 };
 
 static int spufs_signal2_mmap(struct file *file, struct vm_area_struct *vma)
@@ -874,8 +919,7 @@ static int spufs_signal2_mmap(struct file *file, struct vm_area_struct *vma)
 	if (!(vma->vm_flags & VM_SHARED))
 		return -EINVAL;
 
-	/* FIXME: */
-	vma->vm_flags |= VM_RESERVED;
+	vma->vm_flags |= VM_IO | VM_PFNMAP;
 	vma->vm_page_prot = __pgprot(pgprot_val(vma->vm_page_prot)
 				     | _PAGE_NO_CACHE | _PAGE_GUARDED);
 
@@ -886,7 +930,7 @@ static int spufs_signal2_mmap(struct file *file, struct vm_area_struct *vma)
 #define spufs_signal2_mmap NULL
 #endif /* !SPUFS_MMAP_4K */
 
-static struct file_operations spufs_signal2_fops = {
+static const struct file_operations spufs_signal2_fops = {
 	.open = spufs_signal2_open,
 	.read = spufs_signal2_read,
 	.write = spufs_signal2_write,
@@ -902,13 +946,19 @@ static void spufs_signal1_type_set(void *data, u64 val)
 	spu_release(ctx);
 }
 
+static u64 __spufs_signal1_type_get(void *data)
+{
+	struct spu_context *ctx = data;
+	return ctx->ops->signal1_type_get(ctx);
+}
+
 static u64 spufs_signal1_type_get(void *data)
 {
 	struct spu_context *ctx = data;
 	u64 ret;
 
 	spu_acquire(ctx);
-	ret = ctx->ops->signal1_type_get(ctx);
+	ret = __spufs_signal1_type_get(data);
 	spu_release(ctx);
 
 	return ret;
@@ -925,13 +975,19 @@ static void spufs_signal2_type_set(void *data, u64 val)
 	spu_release(ctx);
 }
 
+static u64 __spufs_signal2_type_get(void *data)
+{
+	struct spu_context *ctx = data;
+	return ctx->ops->signal2_type_get(ctx);
+}
+
 static u64 spufs_signal2_type_get(void *data)
 {
 	struct spu_context *ctx = data;
 	u64 ret;
 
 	spu_acquire(ctx);
-	ret = ctx->ops->signal2_type_get(ctx);
+	ret = __spufs_signal2_type_get(data);
 	spu_release(ctx);
 
 	return ret;
@@ -940,14 +996,14 @@ DEFINE_SIMPLE_ATTRIBUTE(spufs_signal2_type, spufs_signal2_type_get,
 					spufs_signal2_type_set, "%llu");
 
 #if SPUFS_MMAP_4K
-static struct page *spufs_mss_mmap_nopage(struct vm_area_struct *vma,
-					   unsigned long address, int *type)
+static unsigned long spufs_mss_mmap_nopfn(struct vm_area_struct *vma,
+					  unsigned long address)
 {
-	return spufs_ps_nopage(vma, address, type, 0x0000, 0x1000);
+	return spufs_ps_nopfn(vma, address, 0x0000, 0x1000);
 }
 
 static struct vm_operations_struct spufs_mss_mmap_vmops = {
-	.nopage = spufs_mss_mmap_nopage,
+	.nopfn = spufs_mss_mmap_nopfn,
 };
 
 /*
@@ -958,7 +1014,7 @@ static int spufs_mss_mmap(struct file *file, struct vm_area_struct *vma)
 	if (!(vma->vm_flags & VM_SHARED))
 		return -EINVAL;
 
-	vma->vm_flags |= VM_RESERVED;
+	vma->vm_flags |= VM_IO | VM_PFNMAP;
 	vma->vm_page_prot = __pgprot(pgprot_val(vma->vm_page_prot)
 				     | _PAGE_NO_CACHE | _PAGE_GUARDED);
 
@@ -972,24 +1028,27 @@ static int spufs_mss_mmap(struct file *file, struct vm_area_struct *vma)
 static int spufs_mss_open(struct inode *inode, struct file *file)
 {
 	struct spufs_inode_info *i = SPUFS_I(inode);
+	struct spu_context *ctx = i->i_ctx;
 
 	file->private_data = i->i_ctx;
+	ctx->mss = inode->i_mapping;
+	smp_wmb();
 	return nonseekable_open(inode, file);
 }
 
-static struct file_operations spufs_mss_fops = {
+static const struct file_operations spufs_mss_fops = {
 	.open	 = spufs_mss_open,
 	.mmap	 = spufs_mss_mmap,
 };
 
-static struct page *spufs_psmap_mmap_nopage(struct vm_area_struct *vma,
-					   unsigned long address, int *type)
+static unsigned long spufs_psmap_mmap_nopfn(struct vm_area_struct *vma,
+					    unsigned long address)
 {
-	return spufs_ps_nopage(vma, address, type, 0x0000, 0x20000);
+	return spufs_ps_nopfn(vma, address, 0x0000, 0x20000);
 }
 
 static struct vm_operations_struct spufs_psmap_mmap_vmops = {
-	.nopage = spufs_psmap_mmap_nopage,
+	.nopfn = spufs_psmap_mmap_nopfn,
 };
 
 /*
@@ -1000,7 +1059,7 @@ static int spufs_psmap_mmap(struct file *file, struct vm_area_struct *vma)
 	if (!(vma->vm_flags & VM_SHARED))
 		return -EINVAL;
 
-	vma->vm_flags |= VM_RESERVED;
+	vma->vm_flags |= VM_IO | VM_PFNMAP;
 	vma->vm_page_prot = __pgprot(pgprot_val(vma->vm_page_prot)
 				     | _PAGE_NO_CACHE | _PAGE_GUARDED);
 
@@ -1011,26 +1070,29 @@ static int spufs_psmap_mmap(struct file *file, struct vm_area_struct *vma)
 static int spufs_psmap_open(struct inode *inode, struct file *file)
 {
 	struct spufs_inode_info *i = SPUFS_I(inode);
+	struct spu_context *ctx = i->i_ctx;
 
 	file->private_data = i->i_ctx;
+	ctx->psmap = inode->i_mapping;
+	smp_wmb();
 	return nonseekable_open(inode, file);
 }
 
-static struct file_operations spufs_psmap_fops = {
+static const struct file_operations spufs_psmap_fops = {
 	.open	 = spufs_psmap_open,
 	.mmap	 = spufs_psmap_mmap,
 };
 
 
 #if SPUFS_MMAP_4K
-static struct page *spufs_mfc_mmap_nopage(struct vm_area_struct *vma,
-					   unsigned long address, int *type)
+static unsigned long spufs_mfc_mmap_nopfn(struct vm_area_struct *vma,
+					  unsigned long address)
 {
-	return spufs_ps_nopage(vma, address, type, 0x3000, 0x1000);
+	return spufs_ps_nopfn(vma, address, 0x3000, 0x1000);
 }
 
 static struct vm_operations_struct spufs_mfc_mmap_vmops = {
-	.nopage = spufs_mfc_mmap_nopage,
+	.nopfn = spufs_mfc_mmap_nopfn,
 };
 
 /*
@@ -1041,7 +1103,7 @@ static int spufs_mfc_mmap(struct file *file, struct vm_area_struct *vma)
 	if (!(vma->vm_flags & VM_SHARED))
 		return -EINVAL;
 
-	vma->vm_flags |= VM_RESERVED;
+	vma->vm_flags |= VM_IO | VM_PFNMAP;
 	vma->vm_page_prot = __pgprot(pgprot_val(vma->vm_page_prot)
 				     | _PAGE_NO_CACHE | _PAGE_GUARDED);
 
@@ -1065,6 +1127,8 @@ static int spufs_mfc_open(struct inode *inode, struct file *file)
 		return -EBUSY;
 
 	file->private_data = ctx;
+	ctx->mfc = inode->i_mapping;
+	smp_wmb();
 	return nonseekable_open(inode, file);
 }
 
@@ -1249,7 +1313,7 @@ static ssize_t spufs_mfc_write(struct file *file, const char __user *buffer,
 	if (ret)
 		goto out;
 
-	spu_acquire_runnable(ctx);
+	spu_acquire_runnable(ctx, 0);
 	if (file->f_flags & O_NONBLOCK) {
 		ret = ctx->ops->send_mfc_command(ctx, &cmd);
 	} else {
@@ -1265,6 +1329,7 @@ static ssize_t spufs_mfc_write(struct file *file, const char __user *buffer,
 		goto out;
 
 	ctx->tagwait |= 1 << cmd.tag;
+	ret = size;
 
 out:
 	return ret;
@@ -1332,7 +1397,7 @@ static int spufs_mfc_fasync(int fd, struct file *file, int on)
 	return fasync_helper(fd, file, on, &ctx->mfc_fasync);
 }
 
-static struct file_operations spufs_mfc_fops = {
+static const struct file_operations spufs_mfc_fops = {
 	.open	 = spufs_mfc_open,
 	.read	 = spufs_mfc_read,
 	.write	 = spufs_mfc_write,
@@ -1360,7 +1425,8 @@ static u64 spufs_npc_get(void *data)
 	spu_release(ctx);
 	return ret;
 }
-DEFINE_SIMPLE_ATTRIBUTE(spufs_npc_ops, spufs_npc_get, spufs_npc_set, "%llx\n")
+DEFINE_SIMPLE_ATTRIBUTE(spufs_npc_ops, spufs_npc_get, spufs_npc_set,
+			"0x%llx\n")
 
 static void spufs_decr_set(void *data, u64 val)
 {
@@ -1371,18 +1437,24 @@ static void spufs_decr_set(void *data, u64 val)
 	spu_release(ctx);
 }
 
-static u64 spufs_decr_get(void *data)
+static u64 __spufs_decr_get(void *data)
 {
 	struct spu_context *ctx = data;
 	struct spu_lscsa *lscsa = ctx->csa.lscsa;
+	return lscsa->decr.slot[0];
+}
+
+static u64 spufs_decr_get(void *data)
+{
+	struct spu_context *ctx = data;
 	u64 ret;
 	spu_acquire_saved(ctx);
-	ret = lscsa->decr.slot[0];
+	ret = __spufs_decr_get(data);
 	spu_release(ctx);
 	return ret;
 }
 DEFINE_SIMPLE_ATTRIBUTE(spufs_decr_ops, spufs_decr_get, spufs_decr_set,
-			"%llx\n")
+			"0x%llx\n")
 
 static void spufs_decr_status_set(void *data, u64 val)
 {
@@ -1393,40 +1465,24 @@ static void spufs_decr_status_set(void *data, u64 val)
 	spu_release(ctx);
 }
 
-static u64 spufs_decr_status_get(void *data)
+static u64 __spufs_decr_status_get(void *data)
 {
 	struct spu_context *ctx = data;
 	struct spu_lscsa *lscsa = ctx->csa.lscsa;
+	return lscsa->decr_status.slot[0];
+}
+
+static u64 spufs_decr_status_get(void *data)
+{
+	struct spu_context *ctx = data;
 	u64 ret;
 	spu_acquire_saved(ctx);
-	ret = lscsa->decr_status.slot[0];
+	ret = __spufs_decr_status_get(data);
 	spu_release(ctx);
 	return ret;
 }
 DEFINE_SIMPLE_ATTRIBUTE(spufs_decr_status_ops, spufs_decr_status_get,
-			spufs_decr_status_set, "%llx\n")
-
-static void spufs_spu_tag_mask_set(void *data, u64 val)
-{
-	struct spu_context *ctx = data;
-	struct spu_lscsa *lscsa = ctx->csa.lscsa;
-	spu_acquire_saved(ctx);
-	lscsa->tag_mask.slot[0] = (u32) val;
-	spu_release(ctx);
-}
-
-static u64 spufs_spu_tag_mask_get(void *data)
-{
-	struct spu_context *ctx = data;
-	struct spu_lscsa *lscsa = ctx->csa.lscsa;
-	u64 ret;
-	spu_acquire_saved(ctx);
-	ret = lscsa->tag_mask.slot[0];
-	spu_release(ctx);
-	return ret;
-}
-DEFINE_SIMPLE_ATTRIBUTE(spufs_spu_tag_mask_ops, spufs_spu_tag_mask_get,
-			spufs_spu_tag_mask_set, "%llx\n")
+			spufs_decr_status_set, "0x%llx\n")
 
 static void spufs_event_mask_set(void *data, u64 val)
 {
@@ -1437,18 +1493,48 @@ static void spufs_event_mask_set(void *data, u64 val)
 	spu_release(ctx);
 }
 
-static u64 spufs_event_mask_get(void *data)
+static u64 __spufs_event_mask_get(void *data)
 {
 	struct spu_context *ctx = data;
 	struct spu_lscsa *lscsa = ctx->csa.lscsa;
+	return lscsa->event_mask.slot[0];
+}
+
+static u64 spufs_event_mask_get(void *data)
+{
+	struct spu_context *ctx = data;
 	u64 ret;
 	spu_acquire_saved(ctx);
-	ret = lscsa->event_mask.slot[0];
+	ret = __spufs_event_mask_get(data);
 	spu_release(ctx);
 	return ret;
 }
 DEFINE_SIMPLE_ATTRIBUTE(spufs_event_mask_ops, spufs_event_mask_get,
-			spufs_event_mask_set, "%llx\n")
+			spufs_event_mask_set, "0x%llx\n")
+
+static u64 __spufs_event_status_get(void *data)
+{
+	struct spu_context *ctx = data;
+	struct spu_state *state = &ctx->csa;
+	u64 stat;
+	stat = state->spu_chnlcnt_RW[0];
+	if (stat)
+		return state->spu_chnldata_RW[0];
+	return 0;
+}
+
+static u64 spufs_event_status_get(void *data)
+{
+	struct spu_context *ctx = data;
+	u64 ret = 0;
+
+	spu_acquire_saved(ctx);
+	ret = __spufs_event_status_get(data);
+	spu_release(ctx);
+	return ret;
+}
+DEFINE_SIMPLE_ATTRIBUTE(spufs_event_status_ops, spufs_event_status_get,
+			NULL, "0x%llx\n")
 
 static void spufs_srr0_set(void *data, u64 val)
 {
@@ -1470,7 +1556,7 @@ static u64 spufs_srr0_get(void *data)
 	return ret;
 }
 DEFINE_SIMPLE_ATTRIBUTE(spufs_srr0_ops, spufs_srr0_get, spufs_srr0_set,
-			"%llx\n")
+			"0x%llx\n")
 
 static u64 spufs_id_get(void *data)
 {
@@ -1488,10 +1574,16 @@ static u64 spufs_id_get(void *data)
 }
 DEFINE_SIMPLE_ATTRIBUTE(spufs_id_ops, spufs_id_get, NULL, "0x%llx\n")
 
-static u64 spufs_object_id_get(void *data)
+static u64 __spufs_object_id_get(void *data)
 {
 	struct spu_context *ctx = data;
 	return ctx->object_id;
+}
+
+static u64 spufs_object_id_get(void *data)
+{
+	/* FIXME: Should there really be no locking here? */
+	return __spufs_object_id_get(data);
 }
 
 static void spufs_object_id_set(void *data, u64 id)
@@ -1502,6 +1594,250 @@ static void spufs_object_id_set(void *data, u64 id)
 
 DEFINE_SIMPLE_ATTRIBUTE(spufs_object_id_ops, spufs_object_id_get,
 		spufs_object_id_set, "0x%llx\n");
+
+static u64 __spufs_lslr_get(void *data)
+{
+	struct spu_context *ctx = data;
+	return ctx->csa.priv2.spu_lslr_RW;
+}
+
+static u64 spufs_lslr_get(void *data)
+{
+	struct spu_context *ctx = data;
+	u64 ret;
+
+	spu_acquire_saved(ctx);
+	ret = __spufs_lslr_get(data);
+	spu_release(ctx);
+
+	return ret;
+}
+DEFINE_SIMPLE_ATTRIBUTE(spufs_lslr_ops, spufs_lslr_get, NULL, "0x%llx\n")
+
+static int spufs_info_open(struct inode *inode, struct file *file)
+{
+	struct spufs_inode_info *i = SPUFS_I(inode);
+	struct spu_context *ctx = i->i_ctx;
+	file->private_data = ctx;
+	return 0;
+}
+
+static ssize_t __spufs_mbox_info_read(struct spu_context *ctx,
+			char __user *buf, size_t len, loff_t *pos)
+{
+	u32 mbox_stat;
+	u32 data;
+
+	mbox_stat = ctx->csa.prob.mb_stat_R;
+	if (mbox_stat & 0x0000ff) {
+		data = ctx->csa.prob.pu_mb_R;
+	}
+
+	return simple_read_from_buffer(buf, len, pos, &data, sizeof data);
+}
+
+static ssize_t spufs_mbox_info_read(struct file *file, char __user *buf,
+				   size_t len, loff_t *pos)
+{
+	int ret;
+	struct spu_context *ctx = file->private_data;
+
+	if (!access_ok(VERIFY_WRITE, buf, len))
+		return -EFAULT;
+
+	spu_acquire_saved(ctx);
+	spin_lock(&ctx->csa.register_lock);
+	ret = __spufs_mbox_info_read(ctx, buf, len, pos);
+	spin_unlock(&ctx->csa.register_lock);
+	spu_release(ctx);
+
+	return ret;
+}
+
+static const struct file_operations spufs_mbox_info_fops = {
+	.open = spufs_info_open,
+	.read = spufs_mbox_info_read,
+	.llseek  = generic_file_llseek,
+};
+
+static ssize_t __spufs_ibox_info_read(struct spu_context *ctx,
+				char __user *buf, size_t len, loff_t *pos)
+{
+	u32 ibox_stat;
+	u32 data;
+
+	ibox_stat = ctx->csa.prob.mb_stat_R;
+	if (ibox_stat & 0xff0000) {
+		data = ctx->csa.priv2.puint_mb_R;
+	}
+
+	return simple_read_from_buffer(buf, len, pos, &data, sizeof data);
+}
+
+static ssize_t spufs_ibox_info_read(struct file *file, char __user *buf,
+				   size_t len, loff_t *pos)
+{
+	struct spu_context *ctx = file->private_data;
+	int ret;
+
+	if (!access_ok(VERIFY_WRITE, buf, len))
+		return -EFAULT;
+
+	spu_acquire_saved(ctx);
+	spin_lock(&ctx->csa.register_lock);
+	ret = __spufs_ibox_info_read(ctx, buf, len, pos);
+	spin_unlock(&ctx->csa.register_lock);
+	spu_release(ctx);
+
+	return ret;
+}
+
+static const struct file_operations spufs_ibox_info_fops = {
+	.open = spufs_info_open,
+	.read = spufs_ibox_info_read,
+	.llseek  = generic_file_llseek,
+};
+
+static ssize_t __spufs_wbox_info_read(struct spu_context *ctx,
+			char __user *buf, size_t len, loff_t *pos)
+{
+	int i, cnt;
+	u32 data[4];
+	u32 wbox_stat;
+
+	wbox_stat = ctx->csa.prob.mb_stat_R;
+	cnt = 4 - ((wbox_stat & 0x00ff00) >> 8);
+	for (i = 0; i < cnt; i++) {
+		data[i] = ctx->csa.spu_mailbox_data[i];
+	}
+
+	return simple_read_from_buffer(buf, len, pos, &data,
+				cnt * sizeof(u32));
+}
+
+static ssize_t spufs_wbox_info_read(struct file *file, char __user *buf,
+				   size_t len, loff_t *pos)
+{
+	struct spu_context *ctx = file->private_data;
+	int ret;
+
+	if (!access_ok(VERIFY_WRITE, buf, len))
+		return -EFAULT;
+
+	spu_acquire_saved(ctx);
+	spin_lock(&ctx->csa.register_lock);
+	ret = __spufs_wbox_info_read(ctx, buf, len, pos);
+	spin_unlock(&ctx->csa.register_lock);
+	spu_release(ctx);
+
+	return ret;
+}
+
+static const struct file_operations spufs_wbox_info_fops = {
+	.open = spufs_info_open,
+	.read = spufs_wbox_info_read,
+	.llseek  = generic_file_llseek,
+};
+
+static ssize_t __spufs_dma_info_read(struct spu_context *ctx,
+			char __user *buf, size_t len, loff_t *pos)
+{
+	struct spu_dma_info info;
+	struct mfc_cq_sr *qp, *spuqp;
+	int i;
+
+	info.dma_info_type = ctx->csa.priv2.spu_tag_status_query_RW;
+	info.dma_info_mask = ctx->csa.lscsa->tag_mask.slot[0];
+	info.dma_info_status = ctx->csa.spu_chnldata_RW[24];
+	info.dma_info_stall_and_notify = ctx->csa.spu_chnldata_RW[25];
+	info.dma_info_atomic_command_status = ctx->csa.spu_chnldata_RW[27];
+	for (i = 0; i < 16; i++) {
+		qp = &info.dma_info_command_data[i];
+		spuqp = &ctx->csa.priv2.spuq[i];
+
+		qp->mfc_cq_data0_RW = spuqp->mfc_cq_data0_RW;
+		qp->mfc_cq_data1_RW = spuqp->mfc_cq_data1_RW;
+		qp->mfc_cq_data2_RW = spuqp->mfc_cq_data2_RW;
+		qp->mfc_cq_data3_RW = spuqp->mfc_cq_data3_RW;
+	}
+
+	return simple_read_from_buffer(buf, len, pos, &info,
+				sizeof info);
+}
+
+static ssize_t spufs_dma_info_read(struct file *file, char __user *buf,
+			      size_t len, loff_t *pos)
+{
+	struct spu_context *ctx = file->private_data;
+	int ret;
+
+	if (!access_ok(VERIFY_WRITE, buf, len))
+		return -EFAULT;
+
+	spu_acquire_saved(ctx);
+	spin_lock(&ctx->csa.register_lock);
+	ret = __spufs_dma_info_read(ctx, buf, len, pos);
+	spin_unlock(&ctx->csa.register_lock);
+	spu_release(ctx);
+
+	return ret;
+}
+
+static const struct file_operations spufs_dma_info_fops = {
+	.open = spufs_info_open,
+	.read = spufs_dma_info_read,
+};
+
+static ssize_t __spufs_proxydma_info_read(struct spu_context *ctx,
+			char __user *buf, size_t len, loff_t *pos)
+{
+	struct spu_proxydma_info info;
+	struct mfc_cq_sr *qp, *puqp;
+	int ret = sizeof info;
+	int i;
+
+	if (len < ret)
+		return -EINVAL;
+
+	if (!access_ok(VERIFY_WRITE, buf, len))
+		return -EFAULT;
+
+	info.proxydma_info_type = ctx->csa.prob.dma_querytype_RW;
+	info.proxydma_info_mask = ctx->csa.prob.dma_querymask_RW;
+	info.proxydma_info_status = ctx->csa.prob.dma_tagstatus_R;
+	for (i = 0; i < 8; i++) {
+		qp = &info.proxydma_info_command_data[i];
+		puqp = &ctx->csa.priv2.puq[i];
+
+		qp->mfc_cq_data0_RW = puqp->mfc_cq_data0_RW;
+		qp->mfc_cq_data1_RW = puqp->mfc_cq_data1_RW;
+		qp->mfc_cq_data2_RW = puqp->mfc_cq_data2_RW;
+		qp->mfc_cq_data3_RW = puqp->mfc_cq_data3_RW;
+	}
+
+	return simple_read_from_buffer(buf, len, pos, &info,
+				sizeof info);
+}
+
+static ssize_t spufs_proxydma_info_read(struct file *file, char __user *buf,
+				   size_t len, loff_t *pos)
+{
+	struct spu_context *ctx = file->private_data;
+	int ret;
+
+	spu_acquire_saved(ctx);
+	spin_lock(&ctx->csa.register_lock);
+	ret = __spufs_proxydma_info_read(ctx, buf, len, pos);
+	spin_unlock(&ctx->csa.register_lock);
+	spu_release(ctx);
+
+	return ret;
+}
+
+static const struct file_operations spufs_proxydma_info_fops = {
+	.open = spufs_info_open,
+	.read = spufs_proxydma_info_read,
+};
 
 struct tree_descr spufs_dir_contents[] = {
 	{ "mem",  &spufs_mem_fops,  0666, },
@@ -1516,18 +1852,70 @@ struct tree_descr spufs_dir_contents[] = {
 	{ "signal2", &spufs_signal2_fops, 0666, },
 	{ "signal1_type", &spufs_signal1_type, 0666, },
 	{ "signal2_type", &spufs_signal2_type, 0666, },
+	{ "cntl", &spufs_cntl_fops,  0666, },
+	{ "fpcr", &spufs_fpcr_fops, 0666, },
+	{ "lslr", &spufs_lslr_ops, 0444, },
+	{ "mfc", &spufs_mfc_fops, 0666, },
+	{ "mss", &spufs_mss_fops, 0666, },
+	{ "npc", &spufs_npc_ops, 0666, },
+	{ "srr0", &spufs_srr0_ops, 0666, },
+	{ "decr", &spufs_decr_ops, 0666, },
+	{ "decr_status", &spufs_decr_status_ops, 0666, },
+	{ "event_mask", &spufs_event_mask_ops, 0666, },
+	{ "event_status", &spufs_event_status_ops, 0444, },
+	{ "psmap", &spufs_psmap_fops, 0666, },
+	{ "phys-id", &spufs_id_ops, 0666, },
+	{ "object-id", &spufs_object_id_ops, 0666, },
+	{ "mbox_info", &spufs_mbox_info_fops, 0444, },
+	{ "ibox_info", &spufs_ibox_info_fops, 0444, },
+	{ "wbox_info", &spufs_wbox_info_fops, 0444, },
+	{ "dma_info", &spufs_dma_info_fops, 0444, },
+	{ "proxydma_info", &spufs_proxydma_info_fops, 0444, },
+	{},
+};
+
+struct tree_descr spufs_dir_nosched_contents[] = {
+	{ "mem",  &spufs_mem_fops,  0666, },
+	{ "mbox", &spufs_mbox_fops, 0444, },
+	{ "ibox", &spufs_ibox_fops, 0444, },
+	{ "wbox", &spufs_wbox_fops, 0222, },
+	{ "mbox_stat", &spufs_mbox_stat_fops, 0444, },
+	{ "ibox_stat", &spufs_ibox_stat_fops, 0444, },
+	{ "wbox_stat", &spufs_wbox_stat_fops, 0444, },
+	{ "signal1", &spufs_signal1_fops, 0666, },
+	{ "signal2", &spufs_signal2_fops, 0666, },
+	{ "signal1_type", &spufs_signal1_type, 0666, },
+	{ "signal2_type", &spufs_signal2_type, 0666, },
 	{ "mss", &spufs_mss_fops, 0666, },
 	{ "mfc", &spufs_mfc_fops, 0666, },
 	{ "cntl", &spufs_cntl_fops,  0666, },
 	{ "npc", &spufs_npc_ops, 0666, },
-	{ "fpcr", &spufs_fpcr_fops, 0666, },
-	{ "decr", &spufs_decr_ops, 0666, },
-	{ "decr_status", &spufs_decr_status_ops, 0666, },
-	{ "spu_tag_mask", &spufs_spu_tag_mask_ops, 0666, },
-	{ "event_mask", &spufs_event_mask_ops, 0666, },
-	{ "srr0", &spufs_srr0_ops, 0666, },
 	{ "psmap", &spufs_psmap_fops, 0666, },
 	{ "phys-id", &spufs_id_ops, 0666, },
 	{ "object-id", &spufs_object_id_ops, 0666, },
 	{},
 };
+
+struct spufs_coredump_reader spufs_coredump_read[] = {
+	{ "regs", __spufs_regs_read, NULL, 128 * 16 },
+	{ "fpcr", __spufs_fpcr_read, NULL, 16 },
+	{ "lslr", NULL, __spufs_lslr_get, 11 },
+	{ "decr", NULL, __spufs_decr_get, 11 },
+	{ "decr_status", NULL, __spufs_decr_status_get, 11 },
+	{ "mem", __spufs_mem_read, NULL, 256 * 1024, },
+	{ "signal1", __spufs_signal1_read, NULL, 4 },
+	{ "signal1_type", NULL, __spufs_signal1_type_get, 2 },
+	{ "signal2", __spufs_signal2_read, NULL, 4 },
+	{ "signal2_type", NULL, __spufs_signal2_type_get, 2 },
+	{ "event_mask", NULL, __spufs_event_mask_get, 8 },
+	{ "event_status", NULL, __spufs_event_status_get, 8 },
+	{ "mbox_info", __spufs_mbox_info_read, NULL, 4 },
+	{ "ibox_info", __spufs_ibox_info_read, NULL, 4 },
+	{ "wbox_info", __spufs_wbox_info_read, NULL, 16 },
+	{ "dma_info", __spufs_dma_info_read, NULL, 69 * 8 },
+	{ "proxydma_info", __spufs_proxydma_info_read, NULL, 35 * 8 },
+	{ "object-id", NULL, __spufs_object_id_get, 19 },
+	{ },
+};
+int spufs_coredump_num_notes = ARRAY_SIZE(spufs_coredump_read) - 1;
+

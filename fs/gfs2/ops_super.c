@@ -157,7 +157,8 @@ static void gfs2_write_super(struct super_block *sb)
 static int gfs2_sync_fs(struct super_block *sb, int wait)
 {
 	sb->s_dirt = 0;
-	gfs2_log_flush(sb->s_fs_info, NULL);
+	if (wait)
+		gfs2_log_flush(sb->s_fs_info, NULL);
 	return 0;
 }
 
@@ -171,6 +172,9 @@ static void gfs2_write_super_lockfs(struct super_block *sb)
 {
 	struct gfs2_sbd *sdp = sb->s_fs_info;
 	int error;
+
+	if (test_bit(SDF_SHUTDOWN, &sdp->sd_flags))
+		return;
 
 	for (;;) {
 		error = gfs2_freeze_fs(sdp);
@@ -215,7 +219,7 @@ static int gfs2_statfs(struct dentry *dentry, struct kstatfs *buf)
 {
 	struct super_block *sb = dentry->d_inode->i_sb;
 	struct gfs2_sbd *sdp = sb->s_fs_info;
-	struct gfs2_statfs_change sc;
+	struct gfs2_statfs_change_host sc;
 	int error;
 
 	if (gfs2_tune_get(sdp, gt_statfs_slow))
@@ -293,8 +297,6 @@ static void gfs2_clear_inode(struct inode *inode)
 	 */
 	if (inode->i_private) {
 		struct gfs2_inode *ip = GFS2_I(inode);
-		gfs2_glock_inode_squish(inode);
-		gfs2_assert(inode->i_sb->s_fs_info, ip->i_gl->gl_state == LM_ST_UNLOCKED);
 		ip->i_gl->gl_object = NULL;
 		gfs2_glock_schedule_for_reclaim(ip->i_gl);
 		gfs2_glock_put(ip->i_gl);
@@ -395,7 +397,7 @@ static void gfs2_delete_inode(struct inode *inode)
 	if (!inode->i_private)
 		goto out;
 
-	error = gfs2_glock_nq_init(ip->i_gl, LM_ST_EXCLUSIVE, LM_FLAG_TRY_1CB | GL_NOCACHE, &gh);
+	error = gfs2_glock_nq_init(ip->i_gl, LM_ST_EXCLUSIVE, LM_FLAG_TRY_1CB, &gh);
 	if (unlikely(error)) {
 		gfs2_glock_dq_uninit(&ip->i_iopen_gh);
 		goto out;
@@ -407,7 +409,7 @@ static void gfs2_delete_inode(struct inode *inode)
 	if (error)
 		goto out_uninit;
 
-	if (S_ISDIR(ip->i_di.di_mode) &&
+	if (S_ISDIR(inode->i_mode) &&
 	    (ip->i_di.di_flags & GFS2_DIF_EXHASH)) {
 		error = gfs2_dir_exhash_dealloc(ip);
 		if (error)
@@ -427,6 +429,12 @@ static void gfs2_delete_inode(struct inode *inode)
 	}
 
 	error = gfs2_dinode_dealloc(ip);
+	/*
+	 * Must do this before unlock to avoid trying to write back
+	 * potentially dirty data now that inode no longer exists
+	 * on disk.
+	 */
+	truncate_inode_pages(&inode->i_data, 0);
 
 out_unlock:
 	gfs2_glock_dq(&ip->i_iopen_gh);
@@ -444,14 +452,12 @@ out:
 
 static struct inode *gfs2_alloc_inode(struct super_block *sb)
 {
-	struct gfs2_sbd *sdp = sb->s_fs_info;
 	struct gfs2_inode *ip;
 
 	ip = kmem_cache_alloc(gfs2_inode_cachep, GFP_KERNEL);
 	if (ip) {
 		ip->i_flags = 0;
 		ip->i_gl = NULL;
-		ip->i_greedy = gfs2_tune_get(sdp, gt_greedy_default);
 		ip->i_last_pfault = jiffies;
 	}
 	return &ip->i_inode;
@@ -462,7 +468,7 @@ static void gfs2_destroy_inode(struct inode *inode)
 	kmem_cache_free(gfs2_inode_cachep, inode);
 }
 
-struct super_operations gfs2_super_ops = {
+const struct super_operations gfs2_super_ops = {
 	.alloc_inode		= gfs2_alloc_inode,
 	.destroy_inode		= gfs2_destroy_inode,
 	.write_inode		= gfs2_write_inode,

@@ -52,6 +52,7 @@ int atomic_cmpxchg(atomic_t *v, int old, int new)
 	spin_unlock_irqrestore(ATOMIC_HASH(v), flags);
 	return ret;
 }
+EXPORT_SYMBOL(atomic_cmpxchg);
 
 int atomic_add_unless(atomic_t *v, int a, int u)
 {
@@ -65,6 +66,7 @@ int atomic_add_unless(atomic_t *v, int a, int u)
 	spin_unlock_irqrestore(ATOMIC_HASH(v), flags);
 	return ret != u;
 }
+EXPORT_SYMBOL(atomic_add_unless);
 
 /* Atomic operations are already serializing */
 void atomic_set(atomic_t *v, int i)
@@ -76,3 +78,42 @@ void atomic_set(atomic_t *v, int i)
 	spin_unlock_irqrestore(ATOMIC_HASH(v), flags);
 }
 EXPORT_SYMBOL(atomic_set);
+
+unsigned long ___set_bit(unsigned long *addr, unsigned long mask)
+{
+	unsigned long old, flags;
+
+	spin_lock_irqsave(ATOMIC_HASH(addr), flags);
+	old = *addr;
+	*addr = old | mask;
+	spin_unlock_irqrestore(ATOMIC_HASH(addr), flags);
+
+	return old & mask;
+}
+EXPORT_SYMBOL(___set_bit);
+
+unsigned long ___clear_bit(unsigned long *addr, unsigned long mask)
+{
+	unsigned long old, flags;
+
+	spin_lock_irqsave(ATOMIC_HASH(addr), flags);
+	old = *addr;
+	*addr = old & ~mask;
+	spin_unlock_irqrestore(ATOMIC_HASH(addr), flags);
+
+	return old & mask;
+}
+EXPORT_SYMBOL(___clear_bit);
+
+unsigned long ___change_bit(unsigned long *addr, unsigned long mask)
+{
+	unsigned long old, flags;
+
+	spin_lock_irqsave(ATOMIC_HASH(addr), flags);
+	old = *addr;
+	*addr = old ^ mask;
+	spin_unlock_irqrestore(ATOMIC_HASH(addr), flags);
+
+	return old & mask;
+}
+EXPORT_SYMBOL(___change_bit);

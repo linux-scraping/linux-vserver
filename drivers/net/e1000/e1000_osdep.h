@@ -48,8 +48,6 @@ typedef enum {
     TRUE = 1
 } boolean_t;
 
-#define MSGOUT(S, A, B)	printk(KERN_DEBUG S "\n", A, B)
-
 #ifdef DBG
 #define DEBUGOUT(S)		printk(KERN_DEBUG S "\n")
 #define DEBUGOUT1(S, A...)	printk(KERN_DEBUG S "\n", A)
@@ -58,7 +56,7 @@ typedef enum {
 #define DEBUGOUT1(S, A...)
 #endif
 
-#define DEBUGFUNC(F) DEBUGOUT(F)
+#define DEBUGFUNC(F) DEBUGOUT(F "\n")
 #define DEBUGOUT2 DEBUGOUT1
 #define DEBUGOUT3 DEBUGOUT2
 #define DEBUGOUT7 DEBUGOUT3
@@ -107,17 +105,16 @@ typedef enum {
 
 #define E1000_WRITE_FLUSH(a) E1000_READ_REG(a, STATUS)
 
-#define E1000_WRITE_ICH8_REG(a, reg, value) ( \
+#define E1000_WRITE_ICH_FLASH_REG(a, reg, value) ( \
     writel((value), ((a)->flash_address + reg)))
 
-#define E1000_READ_ICH8_REG(a, reg) ( \
+#define E1000_READ_ICH_FLASH_REG(a, reg) ( \
     readl((a)->flash_address + reg))
 
-#define E1000_WRITE_ICH8_REG16(a, reg, value) ( \
+#define E1000_WRITE_ICH_FLASH_REG16(a, reg, value) ( \
     writew((value), ((a)->flash_address + reg)))
 
-#define E1000_READ_ICH8_REG16(a, reg) ( \
+#define E1000_READ_ICH_FLASH_REG16(a, reg) ( \
     readw((a)->flash_address + reg))
-
 
 #endif /* _E1000_OSDEP_H_ */

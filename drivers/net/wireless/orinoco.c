@@ -980,9 +980,11 @@ static void print_linkstatus(struct net_device *dev, u16 status)
 }
 
 /* Search scan results for requested BSSID, join it if found */
-static void orinoco_join_ap(struct net_device *dev)
+static void orinoco_join_ap(struct work_struct *work)
 {
-	struct orinoco_private *priv = netdev_priv(dev);
+	struct orinoco_private *priv =
+		container_of(work, struct orinoco_private, join_work);
+	struct net_device *dev = priv->ndev;
 	struct hermes *hw = &priv->hw;
 	int err;
 	unsigned long flags;
@@ -1055,9 +1057,11 @@ static void orinoco_join_ap(struct net_device *dev)
 }
 
 /* Send new BSSID to userspace */
-static void orinoco_send_wevents(struct net_device *dev)
+static void orinoco_send_wevents(struct work_struct *work)
 {
-	struct orinoco_private *priv = netdev_priv(dev);
+	struct orinoco_private *priv =
+		container_of(work, struct orinoco_private, wevent_work);
+	struct net_device *dev = priv->ndev;
 	struct hermes *hw = &priv->hw;
 	union iwreq_data wrqu;
 	int err;
@@ -1864,9 +1868,11 @@ __orinoco_set_multicast_list(struct net_device *dev)
 
 /* This must be called from user context, without locks held - use
  * schedule_work() */
-static void orinoco_reset(struct net_device *dev)
+static void orinoco_reset(struct work_struct *work)
 {
-	struct orinoco_private *priv = netdev_priv(dev);
+	struct orinoco_private *priv =
+		container_of(work, struct orinoco_private, reset_work);
+	struct net_device *dev = priv->ndev;
 	struct hermes *hw = &priv->hw;
 	int err;
 	unsigned long flags;
@@ -2053,7 +2059,7 @@ static int determine_firmware(struct net_device *dev)
 	int err;
 	struct comp_id nic_id, sta_id;
 	unsigned int firmver;
-	char tmp[SYMBOL_MAX_VER_LEN+1];
+	char tmp[SYMBOL_MAX_VER_LEN+1] __attribute__((aligned(2)));
 
 	/* Get the hardware version */
 	err = HERMES_READ_RECORD(hw, USER_BAP, HERMES_RID_NICID, &nic_id);
@@ -2434,9 +2440,9 @@ struct net_device *alloc_orinocodev(int sizeof_card,
 	priv->hw_unavailable = 1; /* orinoco_init() must clear this
 				   * before anything else touches the
 				   * hardware */
-	INIT_WORK(&priv->reset_work, (void (*)(void *))orinoco_reset, dev);
-	INIT_WORK(&priv->join_work, (void (*)(void *))orinoco_join_ap, dev);
-	INIT_WORK(&priv->wevent_work, (void (*)(void *))orinoco_send_wevents, dev);
+	INIT_WORK(&priv->reset_work, orinoco_reset);
+	INIT_WORK(&priv->join_work, orinoco_join_ap);
+	INIT_WORK(&priv->wevent_work, orinoco_send_wevents);
 
 	netif_carrier_off(dev);
 	priv->last_linkstatus = 0xffff;
@@ -3608,7 +3614,7 @@ static int orinoco_ioctl_reset(struct net_device *dev,
 		printk(KERN_DEBUG "%s: Forcing reset!\n", dev->name);
 
 		/* Firmware reset */
-		orinoco_reset(dev);
+		orinoco_reset(&priv->reset_work);
 	} else {
 		printk(KERN_DEBUG "%s: Force scheduling reset!\n", dev->name);
 
@@ -4154,7 +4160,7 @@ static int orinoco_ioctl_commit(struct net_device *dev,
 		return 0;
 
 	if (priv->broken_disableport) {
-		orinoco_reset(dev);
+		orinoco_reset(&priv->reset_work);
 		return 0;
 	}
 
@@ -4287,8 +4293,8 @@ static void orinoco_get_drvinfo(struct net_device *dev,
 	strncpy(info->driver, DRIVER_NAME, sizeof(info->driver) - 1);
 	strncpy(info->version, DRIVER_VERSION, sizeof(info->version) - 1);
 	strncpy(info->fw_version, priv->fw_name, sizeof(info->fw_version) - 1);
-	if (dev->class_dev.dev)
-		strncpy(info->bus_info, dev->class_dev.dev->bus_id,
+	if (dev->dev.parent)
+		strncpy(info->bus_info, dev->dev.parent->bus_id,
 			sizeof(info->bus_info) - 1);
 	else
 		snprintf(info->bus_info, sizeof(info->bus_info) - 1,

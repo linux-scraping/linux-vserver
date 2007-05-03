@@ -19,34 +19,26 @@
 #include <asm/io.h>
 #include "dma-sh.h"
 
-
-
-#ifdef CONFIG_CPU_SH4
-static struct ipr_data dmae_ipr_map[] = {
-	{ DMAE_IRQ, DMA_IPR_ADDR, DMA_IPR_POS, DMA_PRIORITY },
-};
+static int dmte_irq_map[] = {
+	DMTE0_IRQ,
+	DMTE1_IRQ,
+	DMTE2_IRQ,
+	DMTE3_IRQ,
+#if defined(CONFIG_CPU_SUBTYPE_SH7751R) ||	\
+    defined(CONFIG_CPU_SUBTYPE_SH7760)  ||	\
+    defined(CONFIG_CPU_SUBTYPE_SH7780)
+	DMTE4_IRQ,
+	DMTE5_IRQ,
+	DMTE6_IRQ,
+	DMTE7_IRQ,    
 #endif
-static struct ipr_data dmte_ipr_map[] = {
-	/*
-	 * Normally we could just do DMTE0_IRQ + chan outright, though in the
-	 * case of the 7751R, the DMTE IRQs for channels > 4 start right above
-	 * the SCIF
-	 */
-	{ DMTE0_IRQ + 0, DMA_IPR_ADDR, DMA_IPR_POS, DMA_PRIORITY },
-	{ DMTE0_IRQ + 1, DMA_IPR_ADDR, DMA_IPR_POS, DMA_PRIORITY },
-	{ DMTE0_IRQ + 2, DMA_IPR_ADDR, DMA_IPR_POS, DMA_PRIORITY },
-	{ DMTE0_IRQ + 3, DMA_IPR_ADDR, DMA_IPR_POS, DMA_PRIORITY },
-	{ DMTE4_IRQ + 0, DMA_IPR_ADDR, DMA_IPR_POS, DMA_PRIORITY },
-	{ DMTE4_IRQ + 1, DMA_IPR_ADDR, DMA_IPR_POS, DMA_PRIORITY },
-	{ DMTE4_IRQ + 2, DMA_IPR_ADDR, DMA_IPR_POS, DMA_PRIORITY },
-	{ DMTE4_IRQ + 3, DMA_IPR_ADDR, DMA_IPR_POS, DMA_PRIORITY },
 };
 
 static inline unsigned int get_dmte_irq(unsigned int chan)
 {
 	unsigned int irq = 0;
-	if (chan < ARRAY_SIZE(dmte_ipr_map))
-		irq = dmte_ipr_map[chan].irq;
+	if (chan < ARRAY_SIZE(dmte_irq_map))
+		irq = dmte_irq_map[chan];
 	return irq;
 }
 
@@ -94,23 +86,16 @@ static int sh_dmac_request_dma(struct dma_channel *chan)
 	if (unlikely(!chan->flags & DMA_TEI_CAPABLE))
 		return 0;
 
-	chan->name = kzalloc(32, GFP_KERNEL);
-	if (unlikely(chan->name == NULL))
-		return -ENOMEM;
-	snprintf(chan->name, 32, "DMAC Transfer End (Channel %d)",
-		 chan->chan);
-
 	return request_irq(get_dmte_irq(chan->chan), dma_tei,
-			   IRQF_DISABLED, chan->name, chan);
+			   IRQF_DISABLED, chan->dev_id, chan);
 }
 
 static void sh_dmac_free_dma(struct dma_channel *chan)
 {
 	free_irq(get_dmte_irq(chan->chan), chan);
-	kfree(chan->name);
 }
 
-static void
+static int
 sh_dmac_configure_channel(struct dma_channel *chan, unsigned long chcr)
 {
 	if (!chcr)
@@ -126,6 +111,7 @@ sh_dmac_configure_channel(struct dma_channel *chan, unsigned long chcr)
 	ctrl_outl(chcr, CHCR[chan->chan]);
 
 	chan->flags |= DMA_CONFIGURED;
+	return 0;
 }
 
 static void sh_dmac_enable_dma(struct dma_channel *chan)
@@ -269,16 +255,10 @@ static int __init sh_dmac_init(void)
 	int i;
 
 #ifdef CONFIG_CPU_SH4
-	make_ipr_irq(dmae_ipr_map, ARRAY_SIZE(dmae_ipr_map));
 	i = request_irq(DMAE_IRQ, dma_err, IRQF_DISABLED, "DMAC Address Error", 0);
 	if (unlikely(i < 0))
 		return i;
 #endif
-
-	i = info->nr_channels;
-	if (i > ARRAY_SIZE(dmte_ipr_map))
-		i = ARRAY_SIZE(dmte_ipr_map);
-	make_ipr_irq(dmte_ipr_map, i);
 
 	/*
 	 * Initialize DMAOR, and clean up any error flags that may have

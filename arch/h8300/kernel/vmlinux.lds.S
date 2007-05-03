@@ -70,6 +70,7 @@ SECTIONS
 #endif
         .text :
 	{
+	_text = .;
 #if defined(CONFIG_ROMKERNEL)
 	*(.int_redirect)
 #endif
@@ -125,10 +126,12 @@ SECTIONS
 	___con_initcall_end = .;
 		*(.exit.text)
 		*(.exit.data)
+#if defined(CONFIG_BLK_DEV_INITRD)
 		. = ALIGN(4);
 	___initramfs_start = .;
   		*(.init.ramfs)
   	___initramfs_end = .;
+#endif
 	. = ALIGN(0x4) ;
 	___init_end = .;
 	__edata = . ;

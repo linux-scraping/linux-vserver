@@ -106,6 +106,8 @@
 
 /****** RocketPort Local Variables ******/
 
+static void rp_do_poll(unsigned long dummy);
+
 static struct tty_driver *rocket_driver;
 
 static struct rocket_version driver_version = {	
@@ -116,7 +118,7 @@ static struct r_port *rp_table[MAX_RP_PORTS];	       /*  The main repository of 
 static unsigned int xmit_flags[NUM_BOARDS];	       /*  Bit significant, indicates port had data to transmit. */
 						       /*  eg.  Bit 0 indicates port 0 has xmit data, ...        */
 static atomic_t rp_num_ports_open;	               /*  Number of serial ports open                           */
-static struct timer_list rocket_timer;
+static DEFINE_TIMER(rocket_timer, rp_do_poll, 0, 0);
 
 static unsigned long board1;	                       /* ISA addresses, retrieved from rocketport.conf          */
 static unsigned long board2;
@@ -474,7 +476,6 @@ static void rp_do_transmit(struct r_port *info)
 
 	if (info->xmit_cnt < WAKEUP_CHARS) {
 		tty_wakeup(tty);
-		wake_up_interruptible(&tty->write_wait);
 #ifdef ROCKETPORT_HAVE_POLL_WAIT
 		wake_up_interruptible(&tty->poll_wait);
 #endif
@@ -712,7 +713,7 @@ static void init_r_port(int board, int aiop, int chan, struct pci_dev *pci_dev)
  *  user mode into the driver (exception handler).  *info CD manipulation is spinlock protected.
  */
 static void configure_r_port(struct r_port *info,
-			     struct termios *old_termios)
+			     struct ktermios *old_termios)
 {
 	unsigned cflag;
 	unsigned long flags;
@@ -1017,7 +1018,7 @@ static int rp_open(struct tty_struct *tty, struct file *filp)
 	/*
 	 * Info->count is now 1; so it's safe to sleep now.
 	 */
-	info->session = current->signal->session;
+	info->session = process_session(current);
 	info->pgrp = process_group(current);
 
 	if ((info->flags & ROCKET_INITIALIZED) == 0) {
@@ -1194,7 +1195,7 @@ static void rp_close(struct tty_struct *tty, struct file *filp)
 }
 
 static void rp_set_termios(struct tty_struct *tty,
-			   struct termios *old_termios)
+			   struct ktermios *old_termios)
 {
 	struct r_port *info = (struct r_port *) tty->driver_data;
 	CHANNEL_t *cp;
@@ -1772,7 +1773,6 @@ static int rp_write(struct tty_struct *tty,
 end:
  	if (info->xmit_cnt < WAKEUP_CHARS) {
  		tty_wakeup(tty);
-		wake_up_interruptible(&tty->write_wait);
 #ifdef ROCKETPORT_HAVE_POLL_WAIT
 		wake_up_interruptible(&tty->poll_wait);
 #endif
@@ -1841,7 +1841,6 @@ static void rp_flush_buffer(struct tty_struct *tty)
 	info->xmit_cnt = info->xmit_head = info->xmit_tail = 0;
 	spin_unlock_irqrestore(&info->slock, flags);
 
-	wake_up_interruptible(&tty->write_wait);
 #ifdef ROCKETPORT_HAVE_POLL_WAIT
 	wake_up_interruptible(&tty->poll_wait);
 #endif
@@ -2214,7 +2213,7 @@ static int __init init_PCI(int boards_found)
 	int count = 0;
 
 	/*  Work through the PCI device list, pulling out ours */
-	while ((dev = pci_find_device(PCI_VENDOR_ID_RP, PCI_ANY_ID, dev))) {
+	while ((dev = pci_get_device(PCI_VENDOR_ID_RP, PCI_ANY_ID, dev))) {
 		if (register_PCI(count + boards_found, dev))
 			count++;
 	}
@@ -2371,12 +2370,6 @@ static int __init rp_init(void)
 		return -ENOMEM;
 
 	/*
-	 * Set up the timer channel.
-	 */
-	init_timer(&rocket_timer);
-	rocket_timer.function = rp_do_poll;
-
-	/*
 	 * Initialize the array of pointers to our own internal state
 	 * structures.
 	 */
@@ -2436,6 +2429,8 @@ static int __init rp_init(void)
 	rocket_driver->init_termios = tty_std_termios;
 	rocket_driver->init_termios.c_cflag =
 	    B9600 | CS8 | CREAD | HUPCL | CLOCAL;
+	rocket_driver->init_termios.c_ispeed = 9600;
+	rocket_driver->init_termios.c_ospeed = 9600;
 #ifdef ROCKET_SOFT_FLOW
 	rocket_driver->flags |= TTY_DRIVER_REAL_RAW | TTY_DRIVER_DYNAMIC_DEV;
 #endif

@@ -34,7 +34,12 @@
 #include <net/protocol.h>
 #include <net/checksum.h>
 #include <linux/netfilter_ipv4.h>
+#include <linux/netfilter/x_tables.h>
+#ifdef CONFIG_NF_NAT_NEEDED
+#include <net/netfilter/nf_nat_rule.h>
+#else
 #include <linux/netfilter_ipv4/ip_nat_rule.h>
+#endif
 #include <linux/netfilter_ipv4/ipt_SAME.h>
 
 MODULE_LICENSE("GPL");
@@ -82,24 +87,24 @@ same_check(const char *tablename,
 			DEBUGP("same_check: bad MAP_IPS.\n");
 			return 0;
 		}
-		rangeip = (ntohl(mr->range[count].max_ip) - 
+		rangeip = (ntohl(mr->range[count].max_ip) -
 					ntohl(mr->range[count].min_ip) + 1);
 		mr->ipnum += rangeip;
-		
+
 		DEBUGP("same_check: range %u, ipnum = %u\n", count, rangeip);
 	}
 	DEBUGP("same_check: total ipaddresses = %u\n", mr->ipnum);
-	
+
 	mr->iparray = kmalloc((sizeof(u_int32_t) * mr->ipnum), GFP_KERNEL);
 	if (!mr->iparray) {
 		DEBUGP("same_check: Couldn't allocate %u bytes "
-			"for %u ipaddresses!\n", 
+			"for %u ipaddresses!\n",
 			(sizeof(u_int32_t) * mr->ipnum), mr->ipnum);
 		return 0;
 	}
 	DEBUGP("same_check: Allocated %u bytes for %u ipaddresses.\n",
 			(sizeof(u_int32_t) * mr->ipnum), mr->ipnum);
-	
+
 	for (count = 0; count < mr->rangesize; count++) {
 		for (countess = ntohl(mr->range[count].min_ip);
 				countess <= ntohl(mr->range[count].max_ip);
@@ -114,13 +119,13 @@ same_check(const char *tablename,
 	return 1;
 }
 
-static void 
+static void
 same_destroy(const struct xt_target *target, void *targinfo)
 {
 	struct ipt_same_info *mr = targinfo;
 
 	kfree(mr->iparray);
-	
+
 	DEBUGP("same_destroy: Deallocated %u bytes for %u ipaddresses.\n",
 			(sizeof(u_int32_t) * mr->ipnum), mr->ipnum);
 }
@@ -151,12 +156,18 @@ same_target(struct sk_buff **pskb,
 	   giving some hope for consistency across reboots.
 	   Here we calculate the index in same->iparray which
 	   holds the ipaddress we should use */
-	
+
+#ifdef CONFIG_NF_NAT_NEEDED
+	tmpip = ntohl(t->src.u3.ip);
+
+	if (!(same->info & IPT_SAME_NODST))
+		tmpip += ntohl(t->dst.u3.ip);
+#else
 	tmpip = ntohl(t->src.ip);
 
 	if (!(same->info & IPT_SAME_NODST))
 		tmpip += ntohl(t->dst.ip);
-	
+#endif
 	aindex = tmpip % same->ipnum;
 
 	new_ip = htonl(same->iparray[aindex]);
@@ -176,8 +187,9 @@ same_target(struct sk_buff **pskb,
 	return ip_nat_setup_info(ct, &newrange, hooknum);
 }
 
-static struct ipt_target same_reg = { 
+static struct xt_target same_reg = {
 	.name		= "SAME",
+	.family		= AF_INET,
 	.target		= same_target,
 	.targetsize	= sizeof(struct ipt_same_info),
 	.table		= "nat",
@@ -189,12 +201,12 @@ static struct ipt_target same_reg = {
 
 static int __init ipt_same_init(void)
 {
-	return ipt_register_target(&same_reg);
+	return xt_register_target(&same_reg);
 }
 
 static void __exit ipt_same_fini(void)
 {
-	ipt_unregister_target(&same_reg);
+	xt_unregister_target(&same_reg);
 }
 
 module_init(ipt_same_init);

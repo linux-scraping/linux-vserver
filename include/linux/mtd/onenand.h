@@ -1,7 +1,7 @@
 /*
  *  linux/include/linux/mtd/onenand.h
  *
- *  Copyright (C) 2005-2006 Samsung Electronics
+ *  Copyright (C) 2005-2007 Samsung Electronics
  *  Kyungmin Park <kyungmin.park@samsung.com>
  *
  * This program is free software; you can redistribute it and/or modify
@@ -13,6 +13,7 @@
 #define __LINUX_MTD_ONENAND_H
 
 #include <linux/spinlock.h>
+#include <linux/completion.h>
 #include <linux/mtd/onenand_regs.h>
 #include <linux/mtd/bbm.h>
 
@@ -33,7 +34,6 @@ typedef enum {
 	FL_WRITING,
 	FL_ERASING,
 	FL_SYNCING,
-	FL_UNLOCKING,
 	FL_LOCKING,
 	FL_RESETING,
 	FL_OTPING,
@@ -42,14 +42,10 @@ typedef enum {
 
 /**
  * struct onenand_bufferram - OneNAND BufferRAM Data
- * @block:		block address in BufferRAM
- * @page:		page address in BufferRAM
- * @valid:		valid flag
+ * @blockpage:		block & page address in BufferRAM
  */
 struct onenand_bufferram {
-	int block;
-	int page;
-	int valid;
+	int	blockpage;
 };
 
 /**
@@ -63,7 +59,6 @@ struct onenand_bufferram {
  *			partly be set to inform onenand_scan about
  * @erase_shift:	[INTERN] number of address bits in a block
  * @page_shift:		[INTERN] number of address bits in a page
- * @ppb_shift:		[INTERN] number of address bits in a pages per block
  * @page_mask:		[INTERN] a page per block mask
  * @bufferram_index:	[INTERN] BufferRAM index
  * @bufferram:		[INTERN] BufferRAM info
@@ -87,7 +82,9 @@ struct onenand_bufferram {
  * @wq:			[INTERN] wait queue to sleep on if a OneNAND
  *			operation is in progress
  * @state:		[INTERN] the current state of the OneNAND device
- * @page_buf:		data buffer
+ * @page_buf:		[INTERN] page main data buffer
+ * @oob_buf:		[INTERN] page oob data buffer
+ * @subpagesize:	[INTERN] holds the subpagesize
  * @ecclayout:		[REPLACEABLE] the default ecc placement scheme
  * @bbm:		[REPLACEABLE] pointer to Bad Block Management
  * @priv:		[OPTIONAL] pointer to private chip date
@@ -102,7 +99,6 @@ struct onenand_chip {
 
 	unsigned int		erase_shift;
 	unsigned int		page_shift;
-	unsigned int		ppb_shift;	/* Pages per block shift */
 	unsigned int		page_mask;
 
 	unsigned int		bufferram_index;
@@ -120,11 +116,16 @@ struct onenand_chip {
 	int (*block_markbad)(struct mtd_info *mtd, loff_t ofs);
 	int (*scan_bbt)(struct mtd_info *mtd);
 
+	struct completion	complete;
+	int			irq;
+
 	spinlock_t		chip_lock;
 	wait_queue_head_t	wq;
 	onenand_state_t		state;
 	unsigned char		*page_buf;
+	unsigned char		*oob_buf;
 
+	int			subpagesize;
 	struct nand_ecclayout	*ecclayout;
 
 	void			*bbm;
@@ -138,11 +139,15 @@ struct onenand_chip {
 #define ONENAND_CURRENT_BUFFERRAM(this)		(this->bufferram_index)
 #define ONENAND_NEXT_BUFFERRAM(this)		(this->bufferram_index ^ 1)
 #define ONENAND_SET_NEXT_BUFFERRAM(this)	(this->bufferram_index ^= 1)
+#define ONENAND_SET_PREV_BUFFERRAM(this)	(this->bufferram_index ^= 1)
 
 #define ONENAND_GET_SYS_CFG1(this)					\
 	(this->read_word(this->base + ONENAND_REG_SYS_CFG1))
 #define ONENAND_SET_SYS_CFG1(v, this)					\
 	(this->write_word(v, this->base + ONENAND_REG_SYS_CFG1))
+
+#define ONENAND_IS_DDP(this)						\
+	(this->device_id & ONENAND_DEVICE_IS_DDP)
 
 /* Check byte access in OneNAND */
 #define ONENAND_CHECK_BYTE_ACCESS(addr)		(addr & 0x1)
@@ -153,6 +158,7 @@ struct onenand_chip {
 #define ONENAND_HAS_CONT_LOCK		(0x0001)
 #define ONENAND_HAS_UNLOCK_ALL		(0x0002)
 #define ONENAND_PAGEBUF_ALLOC		(0x1000)
+#define ONENAND_OOBBUF_ALLOC		(0x2000)
 
 /*
  * OneNAND Flash Manufacturer ID Codes

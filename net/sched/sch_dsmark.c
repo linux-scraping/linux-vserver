@@ -68,7 +68,7 @@ static inline int dsmark_valid_indices(u16 indices)
 			return 0;
 		indices >>= 1;
 	}
- 
+
 	return 1;
 }
 
@@ -88,18 +88,19 @@ static int dsmark_graft(struct Qdisc *sch, unsigned long arg,
 		sch, p, new, old);
 
 	if (new == NULL) {
-		new = qdisc_create_dflt(sch->dev, &pfifo_qdisc_ops);
+		new = qdisc_create_dflt(sch->dev, &pfifo_qdisc_ops,
+					sch->handle);
 		if (new == NULL)
 			new = &noop_qdisc;
 	}
 
 	sch_tree_lock(sch);
 	*old = xchg(&p->q, new);
+	qdisc_tree_decrease_qlen(*old, (*old)->q.qlen);
 	qdisc_reset(*old);
-	sch->q.qlen = 0;
 	sch_tree_unlock(sch);
 
-        return 0;
+	return 0;
 }
 
 static struct Qdisc *dsmark_leaf(struct Qdisc *sch, unsigned long arg)
@@ -150,7 +151,7 @@ static int dsmark_change(struct Qdisc *sch, u32 classid, u32 parent,
 
 	if (tb[TCA_DSMARK_VALUE-1])
 		p->value[*arg-1] = RTA_GET_U8(tb[TCA_DSMARK_VALUE-1]);
-		
+
 	if (tb[TCA_DSMARK_MASK-1])
 		p->mask[*arg-1] = mask;
 
@@ -166,7 +167,7 @@ static int dsmark_delete(struct Qdisc *sch, unsigned long arg)
 
 	if (!dsmark_valid_index(p, arg))
 		return -EINVAL;
-	
+
 	p->mask[arg-1] = 0xff;
 	p->value[arg-1] = 0;
 
@@ -192,9 +193,9 @@ static void dsmark_walk(struct Qdisc *sch,struct qdisc_walker *walker)
 				break;
 			}
 		}
-ignore:		
+ignore:
 		walker->count++;
-        }
+	}
 }
 
 static struct tcf_proto **dsmark_find_tcf(struct Qdisc *sch,unsigned long cl)
@@ -307,7 +308,7 @@ static struct sk_buff *dsmark_dequeue(struct Qdisc *sch)
 			if (p->mask[index] != 0xff || p->value[index])
 				printk(KERN_WARNING "dsmark_dequeue: "
 				       "unsupported protocol %d\n",
-				       htons(skb->protocol));
+				       ntohs(skb->protocol));
 			break;
 	};
 
@@ -337,7 +338,7 @@ static unsigned int dsmark_drop(struct Qdisc *sch)
 {
 	struct dsmark_qdisc_data *p = PRIV(sch);
 	unsigned int len;
-	
+
 	DPRINTK("dsmark_reset(sch %p,[qdisc %p])\n", sch, p);
 
 	if (p->q->ops->drop == NULL)
@@ -387,7 +388,7 @@ static int dsmark_init(struct Qdisc *sch, struct rtattr *opt)
 	p->default_index = default_index;
 	p->set_tc_index = RTA_GET_FLAG(tb[TCA_DSMARK_SET_TC_INDEX-1]);
 
-	p->q = qdisc_create_dflt(sch->dev, &pfifo_qdisc_ops);
+	p->q = qdisc_create_dflt(sch->dev, &pfifo_qdisc_ops, sch->handle);
 	if (p->q == NULL)
 		p->q = &noop_qdisc;
 
@@ -505,7 +506,7 @@ static int __init dsmark_module_init(void)
 	return register_qdisc(&dsmark_qdisc_ops);
 }
 
-static void __exit dsmark_module_exit(void) 
+static void __exit dsmark_module_exit(void)
 {
 	unregister_qdisc(&dsmark_qdisc_ops);
 }

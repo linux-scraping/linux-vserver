@@ -154,7 +154,7 @@ enum {D_PRT, D_PRO, D_UNI, D_MOD, D_SLV, D_LUN, D_DLY};
 #include <linux/blkpg.h>
 #include <asm/uaccess.h>
 
-static spinlock_t pf_spin_lock;
+static DEFINE_SPINLOCK(pf_spin_lock);
 
 module_param(verbose, bool, 0644);
 module_param(major, int, 0);
@@ -933,25 +933,25 @@ static int __init pf_init(void)
 	int unit;
 
 	if (disable)
-		return -1;
+		return -EINVAL;
 
 	pf_init_units();
 
 	if (pf_detect())
-		return -1;
+		return -ENODEV;
 	pf_busy = 0;
 
 	if (register_blkdev(major, name)) {
 		for (pf = units, unit = 0; unit < PF_UNITS; pf++, unit++)
 			put_disk(pf->disk);
-		return -1;
+		return -EBUSY;
 	}
 	pf_queue = blk_init_queue(do_pf_request, &pf_spin_lock);
 	if (!pf_queue) {
 		unregister_blkdev(major, name);
 		for (pf = units, unit = 0; unit < PF_UNITS; pf++, unit++)
 			put_disk(pf->disk);
-		return -1;
+		return -ENOMEM;
 	}
 
 	blk_queue_max_phys_segments(pf_queue, cluster);

@@ -101,10 +101,9 @@ static void *drm_sman_mm_allocate(void *private, unsigned long size,
 
 static void drm_sman_mm_free(void *private, void *ref)
 {
-	drm_mm_t *mm = (drm_mm_t *) private;
 	drm_mm_node_t *node = (drm_mm_node_t *) ref;
 
-	drm_mm_put_block(mm, node);
+	drm_mm_put_block(node);
 }
 
 static void drm_sman_mm_destroy(void *private)
@@ -162,6 +161,7 @@ drm_sman_set_manager(drm_sman_t * sman, unsigned int manager,
 
 	return 0;
 }
+EXPORT_SYMBOL(drm_sman_set_manager);
 
 static drm_owner_item_t *drm_sman_get_owner_item(drm_sman_t * sman,
 						 unsigned long owner)

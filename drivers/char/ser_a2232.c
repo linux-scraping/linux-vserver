@@ -86,7 +86,6 @@
 #include <linux/module.h>
 
 #include <linux/types.h>
-#include <linux/sched.h>
 #include <linux/interrupt.h>
 #include <linux/kernel.h>
 #include <linux/errno.h>
@@ -695,6 +694,8 @@ static int a2232_init_drivers(void)
 	a2232_driver->init_termios = tty_std_termios;
 	a2232_driver->init_termios.c_cflag =
 		B9600 | CS8 | CREAD | HUPCL | CLOCAL;
+	a2232_driver->init_termios.c_ispeed = 9600;
+	a2232_driver->init_termios.c_ospeed = 9600;
 	a2232_driver->flags = TTY_DRIVER_REAL_RAW;
 	tty_set_operations(a2232_driver, &a2232_ops);
 	if ((error = tty_register_driver(a2232_driver))) {

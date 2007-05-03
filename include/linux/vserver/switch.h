@@ -77,11 +77,6 @@
 #define VC_CAT_SYSTEST		61
 #define VC_CAT_COMPAT		63
 
-/*  interface version */
-
-#define VCI_VERSION		0x00020102
-#define VCI_LEGACY_VERSION	0x000100FF
-
 /*  query version */
 
 #define VCMD_get_version	VC_CMD(VERSION, 0, 0)

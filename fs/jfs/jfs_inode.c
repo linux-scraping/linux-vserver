@@ -57,27 +57,15 @@ int jfs_sync_flags(struct inode *inode)
 	unsigned int oldflags, newflags;
 
 	oldflags = JFS_IP(inode)->mode2;
-	newflags = oldflags & ~(JFS_APPEND_FL |
-		JFS_IMMUTABLE_FL | JFS_IUNLINK_FL |
-		JFS_BARRIER_FL | JFS_NOATIME_FL |
-		JFS_SYNC_FL | JFS_DIRSYNC_FL);
+	newflags = oldflags & ~(JFS_IMMUTABLE_FL |
+		JFS_IUNLINK_FL | JFS_BARRIER_FL);
 
-	if (IS_APPEND(inode))
-		newflags |= JFS_APPEND_FL;
 	if (IS_IMMUTABLE(inode))
 		newflags |= JFS_IMMUTABLE_FL;
 	if (IS_IUNLINK(inode))
 		newflags |= JFS_IUNLINK_FL;
 	if (IS_BARRIER(inode))
 		newflags |= JFS_BARRIER_FL;
-
-	/* we do not want to copy superblock flags */
-	if (inode->i_flags & S_NOATIME)
-		newflags |= JFS_NOATIME_FL;
-	if (inode->i_flags & S_SYNC)
-		newflags |= JFS_SYNC_FL;
-	if (inode->i_flags & S_DIRSYNC)
-		newflags |= JFS_DIRSYNC_FL;
 
 	if (oldflags ^ newflags) {
 		JFS_IP(inode)->mode2 = newflags;

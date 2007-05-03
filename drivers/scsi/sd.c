@@ -35,7 +35,6 @@
 #include <linux/module.h>
 #include <linux/fs.h>
 #include <linux/kernel.h>
-#include <linux/sched.h>
 #include <linux/mm.h>
 #include <linux/bio.h>
 #include <linux/genhd.h>
@@ -863,7 +862,7 @@ static void sd_rescan(struct device *dev)
  */
 static long sd_compat_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
-	struct block_device *bdev = file->f_dentry->d_inode->i_bdev;
+	struct block_device *bdev = file->f_path.dentry->d_inode->i_bdev;
 	struct gendisk *disk = bdev->bd_disk;
 	struct scsi_device *sdev = scsi_disk(disk)->device;
 
@@ -1051,6 +1050,14 @@ sd_spinup_disk(struct scsi_disk *sdkp, char *diskname)
 						      &sshdr, SD_TIMEOUT,
 						      SD_MAX_RETRIES);
 
+			/*
+			 * If the drive has indicated to us that it
+			 * doesn't have any media in it, don't bother
+			 * with any more polling.
+			 */
+			if (media_not_present(sdkp, &sshdr))
+				return;
+
 			if (the_result)
 				sense_valid = scsi_sense_valid(&sshdr);
 			retries++;
@@ -1058,14 +1065,6 @@ sd_spinup_disk(struct scsi_disk *sdkp, char *diskname)
 			 (!scsi_status_is_good(the_result) ||
 			  ((driver_byte(the_result) & DRIVER_SENSE) &&
 			  sense_valid && sshdr.sense_key == UNIT_ATTENTION)));
-
-		/*
-		 * If the drive has indicated to us that it doesn't have
-		 * any media in it, don't bother with any of the rest of
-		 * this crap.
-		 */
-		if (media_not_present(sdkp, &sshdr))
-			return;
 
 		if ((driver_byte(the_result) & DRIVER_SENSE) == 0) {
 			/* no sense, TUR either succeeded or failed
@@ -1270,8 +1269,17 @@ repeat:
 
 	/* Some devices return the total number of sectors, not the
 	 * highest sector number.  Make the necessary adjustment. */
-	if (sdp->fix_capacity)
+	if (sdp->fix_capacity) {
 		--sdkp->capacity;
+
+	/* Some devices have version which report the correct sizes
+	 * and others which do not. We guess size according to a heuristic
+	 * and err on the side of lowering the capacity. */
+	} else {
+		if (sdp->guess_capacity)
+			if (sdkp->capacity & 0x01) /* odd sizes are odd */
+				--sdkp->capacity;
+	}
 
 got_data:
 	if (sector_size == 0) {
@@ -1467,7 +1475,6 @@ sd_read_cache_type(struct scsi_disk *sdkp, char *diskname,
 	res = sd_do_mode_sense(sdp, dbd, modepage, buffer, len, &data, &sshdr);
 
 	if (scsi_status_is_good(res)) {
-		int ct = 0;
 		int offset = data.header_length + data.block_descriptor_length;
 
 		if (offset >= SD_BUF_SIZE - 2) {
@@ -1496,11 +1503,13 @@ sd_read_cache_type(struct scsi_disk *sdkp, char *diskname,
 			sdkp->DPOFUA = 0;
 		}
 
-		ct =  sdkp->RCD + 2*sdkp->WCE;
-
-		printk(KERN_NOTICE "SCSI device %s: drive cache: %s%s\n",
-		       diskname, sd_cache_types[ct],
-		       sdkp->DPOFUA ? " w/ FUA" : "");
+		printk(KERN_NOTICE "SCSI device %s: "
+		       "write cache: %s, read cache: %s, %s\n",
+		       diskname,
+		       sdkp->WCE ? "enabled" : "disabled",
+		       sdkp->RCD ? "disabled" : "enabled",
+		       sdkp->DPOFUA ? "supports DPO and FUA"
+		       : "doesn't support DPO or FUA");
 
 		return;
 	}
@@ -1646,16 +1655,6 @@ static int sd_probe(struct device *dev)
 	if (error)
 		goto out_put;
 
-	class_device_initialize(&sdkp->cdev);
-	sdkp->cdev.dev = &sdp->sdev_gendev;
-	sdkp->cdev.class = &sd_disk_class;
-	strncpy(sdkp->cdev.class_id, sdp->sdev_gendev.bus_id, BUS_ID_SIZE);
-
-	if (class_device_add(&sdkp->cdev))
-		goto out_put;
-
-	get_device(&sdp->sdev_gendev);
-
 	sdkp->device = sdp;
 	sdkp->driver = &sd_template;
 	sdkp->disk = gd;
@@ -1668,6 +1667,16 @@ static int sd_probe(struct device *dev)
 		else
 			sdp->timeout = SD_MOD_TIMEOUT;
 	}
+
+	class_device_initialize(&sdkp->cdev);
+	sdkp->cdev.dev = &sdp->sdev_gendev;
+	sdkp->cdev.class = &sd_disk_class;
+	strncpy(sdkp->cdev.class_id, sdp->sdev_gendev.bus_id, BUS_ID_SIZE);
+
+	if (class_device_add(&sdkp->cdev))
+		goto out_put;
+
+	get_device(&sdp->sdev_gendev);
 
 	gd->major = sd_major((index & 0xf0) >> 4);
 	gd->first_minor = ((index & 0xf) << 4) | (index & 0xfff00);

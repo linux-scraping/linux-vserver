@@ -13,7 +13,6 @@
 #include <linux/tty.h>
 #include <linux/tty_driver.h>
 #include <linux/tty_flip.h>
-#include <linux/sched.h>
 #include <linux/wait.h>
 #include <linux/slab.h>
 #include <linux/err.h>
@@ -59,8 +58,6 @@ static unsigned char sclp_tty_chars[SCLP_TTY_BUF_SIZE];
 static unsigned short int sclp_tty_chars_count;
 
 struct tty_driver *sclp_tty_driver;
-
-extern struct termios  tty_std_termios;
 
 static struct sclp_ioctls sclp_ioctls;
 static struct sclp_ioctls sclp_ioctls_init =
@@ -723,7 +720,7 @@ static const struct tty_operations sclp_ops = {
 	.ioctl = sclp_tty_ioctl,
 };
 
-int __init
+static int __init
 sclp_tty_init(void)
 {
 	struct tty_driver *driver;

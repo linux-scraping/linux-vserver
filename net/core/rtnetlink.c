@@ -21,7 +21,6 @@
 #include <linux/types.h>
 #include <linux/socket.h>
 #include <linux/kernel.h>
-#include <linux/sched.h>
 #include <linux/timer.h>
 #include <linux/string.h>
 #include <linux/sockios.h>
@@ -109,7 +108,6 @@ static const int rtm_min[RTM_NR_FAMILIES] =
 	[RTM_FAM(RTM_NEWTCLASS)]    = NLMSG_LENGTH(sizeof(struct tcmsg)),
 	[RTM_FAM(RTM_NEWTFILTER)]   = NLMSG_LENGTH(sizeof(struct tcmsg)),
 	[RTM_FAM(RTM_NEWACTION)]    = NLMSG_LENGTH(sizeof(struct tcamsg)),
-	[RTM_FAM(RTM_NEWPREFIX)]    = NLMSG_LENGTH(sizeof(struct rtgenmsg)),
 	[RTM_FAM(RTM_GETMULTICAST)] = NLMSG_LENGTH(sizeof(struct rtgenmsg)),
 	[RTM_FAM(RTM_GETANYCAST)]   = NLMSG_LENGTH(sizeof(struct rtgenmsg)),
 };
@@ -214,6 +212,26 @@ nla_put_failure:
 	return nla_nest_cancel(skb, mx);
 }
 
+int rtnl_put_cacheinfo(struct sk_buff *skb, struct dst_entry *dst, u32 id,
+		       u32 ts, u32 tsage, long expires, u32 error)
+{
+	struct rta_cacheinfo ci = {
+		.rta_lastuse = jiffies_to_clock_t(jiffies - dst->lastuse),
+		.rta_used = dst->__use,
+		.rta_clntref = atomic_read(&(dst->__refcnt)),
+		.rta_error = error,
+		.rta_id =  id,
+		.rta_ts = ts,
+		.rta_tsage = tsage,
+	};
+
+	if (expires)
+		ci.rta_expires = jiffies_to_clock_t(expires);
+
+	return nla_put(skb, RTA_CACHEINFO, sizeof(ci), &ci);
+}
+
+EXPORT_SYMBOL_GPL(rtnl_put_cacheinfo);
 
 static void set_operstate(struct net_device *dev, unsigned char transition)
 {
@@ -274,6 +292,25 @@ static void copy_rtnl_link_stats(struct rtnl_link_stats *a,
 	a->tx_compressed = b->tx_compressed;
 };
 
+static inline size_t if_nlmsg_size(int iwbuflen)
+{
+	return NLMSG_ALIGN(sizeof(struct ifinfomsg))
+	       + nla_total_size(IFNAMSIZ) /* IFLA_IFNAME */
+	       + nla_total_size(IFNAMSIZ) /* IFLA_QDISC */
+	       + nla_total_size(sizeof(struct rtnl_link_ifmap))
+	       + nla_total_size(sizeof(struct rtnl_link_stats))
+	       + nla_total_size(MAX_ADDR_LEN) /* IFLA_ADDRESS */
+	       + nla_total_size(MAX_ADDR_LEN) /* IFLA_BROADCAST */
+	       + nla_total_size(4) /* IFLA_TXQLEN */
+	       + nla_total_size(4) /* IFLA_WEIGHT */
+	       + nla_total_size(4) /* IFLA_MTU */
+	       + nla_total_size(4) /* IFLA_LINK */
+	       + nla_total_size(4) /* IFLA_MASTER */
+	       + nla_total_size(1) /* IFLA_OPERSTATE */
+	       + nla_total_size(1) /* IFLA_LINKMODE */
+	       + nla_total_size(iwbuflen);
+}
+
 static int rtnl_fill_ifinfo(struct sk_buff *skb, struct net_device *dev,
 			    void *iwbuf, int iwbuflen, int type, u32 pid,
 			    u32 seq, u32 change, unsigned int flags)
@@ -283,7 +320,7 @@ static int rtnl_fill_ifinfo(struct sk_buff *skb, struct net_device *dev,
 
 	nlh = nlmsg_put(skb, pid, seq, type, sizeof(*ifm), flags);
 	if (nlh == NULL)
-		return -ENOBUFS;
+		return -EMSGSIZE;
 
 	ifm = nlmsg_data(nlh);
 	ifm->ifi_family = AF_UNSPEC;
@@ -347,7 +384,8 @@ static int rtnl_fill_ifinfo(struct sk_buff *skb, struct net_device *dev,
 	return nlmsg_end(skb, nlh);
 
 nla_put_failure:
-	return nlmsg_cancel(skb, nlh);
+	nlmsg_cancel(skb, nlh);
+	return -EMSGSIZE;
 }
 
 static int rtnl_dump_ifinfo(struct sk_buff *skb, struct netlink_callback *cb)
@@ -562,7 +600,7 @@ static int rtnl_getlink(struct sk_buff *skb, struct nlmsghdr* nlh, void *arg)
 	struct sk_buff *nskb;
 	char *iw_buf = NULL, *iw = NULL;
 	int iw_buf_len = 0;
-	int err, payload;
+	int err;
 
 	err = nlmsg_parse(nlh, sizeof(*ifm), tb, IFLA_MAX, ifla_policy);
 	if (err < 0)
@@ -587,13 +625,12 @@ static int rtnl_getlink(struct sk_buff *skb, struct nlmsghdr* nlh, void *arg)
 		if (err < 0)
 			goto errout;
 
-		iw += IW_EV_POINT_OFF;
+		/* Payload is at an offset in buffer */
+		iw = iw_buf + IW_EV_POINT_OFF;
 	}
 #endif	/* CONFIG_NET_WIRELESS_RTNETLINK */
 
-	payload = NLMSG_ALIGN(sizeof(struct ifinfomsg) +
-			      nla_total_size(iw_buf_len));
-	nskb = nlmsg_new(nlmsg_total_size(payload), GFP_KERNEL);
+	nskb = nlmsg_new(if_nlmsg_size(iw_buf_len), GFP_KERNEL);
 	if (nskb == NULL) {
 		err = -ENOBUFS;
 		goto errout;
@@ -601,11 +638,12 @@ static int rtnl_getlink(struct sk_buff *skb, struct nlmsghdr* nlh, void *arg)
 
 	err = rtnl_fill_ifinfo(nskb, dev, iw, iw_buf_len, RTM_NEWLINK,
 			       NETLINK_CB(skb).pid, nlh->nlmsg_seq, 0, 0);
-	if (err <= 0) {
+	if (err < 0) {
+		/* -EMSGSIZE implies BUG in if_nlmsg_size */
+		WARN_ON(err == -EMSGSIZE);
 		kfree_skb(nskb);
 		goto errout;
 	}
-
 	err = rtnl_unicast(nskb, NETLINK_CB(skb).pid);
 errout:
 	kfree(iw_buf);
@@ -643,16 +681,17 @@ void rtmsg_ifinfo(int type, struct net_device *dev, unsigned change)
 	struct sk_buff *skb;
 	int err = -ENOBUFS;
 
-	skb = nlmsg_new(NLMSG_GOODSIZE, GFP_KERNEL);
+	skb = nlmsg_new(if_nlmsg_size(0), GFP_KERNEL);
 	if (skb == NULL)
 		goto errout;
 
 	err = rtnl_fill_ifinfo(skb, dev, NULL, 0, type, 0, 0, change, 0);
 	if (err < 0) {
+		/* -EMSGSIZE implies BUG in if_nlmsg_size() */
+		WARN_ON(err == -EMSGSIZE);
 		kfree_skb(skb);
 		goto errout;
 	}
-
 	err = rtnl_notify(skb, 0, RTNLGRP_LINK, NULL, GFP_KERNEL);
 errout:
 	if (err < 0)
@@ -839,7 +878,7 @@ void __init rtnetlink_init(void)
 		panic("rtnetlink_init: cannot allocate rta_buf\n");
 
 	rtnl = netlink_kernel_create(NETLINK_ROUTE, RTNLGRP_MAX, rtnetlink_rcv,
-	                             THIS_MODULE);
+				     THIS_MODULE);
 	if (rtnl == NULL)
 		panic("rtnetlink_init: cannot initialize rtnetlink\n");
 	netlink_set_nonroot(NETLINK_ROUTE, NL_NONROOT_RECV);

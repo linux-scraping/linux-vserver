@@ -60,19 +60,19 @@ static int test_no_idle_hz;	/* Test RCU's support for tickless idle CPUs. */
 static int shuffle_interval = 5; /* Interval between shuffles (in sec)*/
 static char *torture_type = "rcu"; /* What RCU implementation to torture. */
 
-module_param(nreaders, int, 0);
+module_param(nreaders, int, 0444);
 MODULE_PARM_DESC(nreaders, "Number of RCU reader threads");
-module_param(nfakewriters, int, 0);
+module_param(nfakewriters, int, 0444);
 MODULE_PARM_DESC(nfakewriters, "Number of RCU fake writer threads");
-module_param(stat_interval, int, 0);
+module_param(stat_interval, int, 0444);
 MODULE_PARM_DESC(stat_interval, "Number of seconds between stats printk()s");
-module_param(verbose, bool, 0);
+module_param(verbose, bool, 0444);
 MODULE_PARM_DESC(verbose, "Enable verbose debugging printk()s");
-module_param(test_no_idle_hz, bool, 0);
+module_param(test_no_idle_hz, bool, 0444);
 MODULE_PARM_DESC(test_no_idle_hz, "Test support for tickless idle CPUs");
-module_param(shuffle_interval, int, 0);
+module_param(shuffle_interval, int, 0444);
 MODULE_PARM_DESC(shuffle_interval, "Number of seconds between shuffles");
-module_param(torture_type, charp, 0);
+module_param(torture_type, charp, 0444);
 MODULE_PARM_DESC(torture_type, "Type of RCU to torture (rcu, rcu_bh, srcu)");
 
 #define TORTURE_FLAG "-torture:"
@@ -401,7 +401,7 @@ static void srcu_torture_cleanup(void)
 	cleanup_srcu_struct(&srcu_ctl);
 }
 
-static int srcu_torture_read_lock(void)
+static int srcu_torture_read_lock(void) __acquires(&srcu_ctl)
 {
 	return srcu_read_lock(&srcu_ctl);
 }
@@ -419,7 +419,7 @@ static void srcu_read_delay(struct rcu_random_state *rrsp)
 		schedule_timeout_interruptible(longdelay);
 }
 
-static void srcu_torture_read_unlock(int idx)
+static void srcu_torture_read_unlock(int idx) __releases(&srcu_ctl)
 {
 	srcu_read_unlock(&srcu_ctl, idx);
 }
@@ -522,6 +522,7 @@ rcu_torture_writer(void *arg)
 
 	VERBOSE_PRINTK_STRING("rcu_torture_writer task started");
 	set_user_nice(current, 19);
+	current->flags |= PF_NOFREEZE;
 
 	do {
 		schedule_timeout_uninterruptible(1);
@@ -561,6 +562,7 @@ rcu_torture_fakewriter(void *arg)
 
 	VERBOSE_PRINTK_STRING("rcu_torture_fakewriter task started");
 	set_user_nice(current, 19);
+	current->flags |= PF_NOFREEZE;
 
 	do {
 		schedule_timeout_uninterruptible(1 + rcu_random(&rand)%10);
@@ -591,6 +593,7 @@ rcu_torture_reader(void *arg)
 
 	VERBOSE_PRINTK_STRING("rcu_torture_reader task started");
 	set_user_nice(current, 19);
+	current->flags |= PF_NOFREEZE;
 
 	do {
 		idx = cur_ops->readlock();

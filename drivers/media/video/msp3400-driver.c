@@ -56,7 +56,7 @@
 #include <media/tvaudio.h>
 #include <media/msp3400.h>
 #include <linux/kthread.h>
-#include <linux/suspend.h>
+#include <linux/freezer.h>
 #include "msp3400-driver.h"
 
 /* ---------------------------------------------------------------------- */
@@ -633,10 +633,8 @@ static int msp_command(struct i2c_client *client, unsigned int cmd, void *arg)
 			if (((rt->input >> (4 + i * 4)) & 0xf) == 0)
 				extern_input = 0;
 		}
-		if (extern_input)
-			state->mode = MSP_MODE_EXTERN;
-		else
-			state->mode = MSP_MODE_AM_DETECT;
+		state->mode = extern_input ? MSP_MODE_EXTERN : MSP_MODE_AM_DETECT;
+		state->rxsubchans = V4L2_TUNER_SUB_STEREO;
 		msp_set_scart(client, sc_in, 0);
 		msp_set_scart(client, sc1_out, 1);
 		msp_set_scart(client, sc2_out, 2);
@@ -782,18 +780,16 @@ static int msp_command(struct i2c_client *client, unsigned int cmd, void *arg)
 	return 0;
 }
 
-static int msp_suspend(struct device * dev, pm_message_t state)
+static int msp_suspend(struct i2c_client *client, pm_message_t state)
 {
-	struct i2c_client *client = container_of(dev, struct i2c_client, dev);
 
 	v4l_dbg(1, msp_debug, client, "suspend\n");
 	msp_reset(client);
 	return 0;
 }
 
-static int msp_resume(struct device * dev)
+static int msp_resume(struct i2c_client *client)
 {
-	struct i2c_client *client = container_of(dev, struct i2c_client, dev);
 
 	v4l_dbg(1, msp_debug, client, "resume\n");
 	msp_wake_thread(client);
@@ -827,7 +823,7 @@ static int msp_attach(struct i2c_adapter *adapter, int address, int kind)
 	if (msp_reset(client) == -1) {
 		v4l_dbg(1, msp_debug, client, "msp3400 not found\n");
 		kfree(client);
-		return -1;
+		return 0;
 	}
 
 	state = kmalloc(sizeof(*state), GFP_KERNEL);
@@ -861,7 +857,7 @@ static int msp_attach(struct i2c_adapter *adapter, int address, int kind)
 		v4l_dbg(1, msp_debug, client, "not an msp3400 (cannot read chip version)\n");
 		kfree(state);
 		kfree(client);
-		return -1;
+		return 0;
 	}
 
 	msp_set_audio(client);
@@ -951,7 +947,7 @@ static int msp_attach(struct i2c_adapter *adapter, int address, int kind)
 	if (thread_func) {
 		state->kthread = kthread_run(thread_func, client, "msp34xx");
 
-		if (state->kthread == NULL)
+		if (IS_ERR(state->kthread))
 			v4l_warn(client, "kernel_thread() failed\n");
 		msp_wake_thread(client);
 	}
@@ -998,11 +994,11 @@ static struct i2c_driver i2c_driver = {
 	.id             = I2C_DRIVERID_MSP3400,
 	.attach_adapter = msp_probe,
 	.detach_client  = msp_detach,
+	.suspend = msp_suspend,
+	.resume  = msp_resume,
 	.command        = msp_command,
 	.driver = {
 		.name    = "msp3400",
-		.suspend = msp_suspend,
-		.resume  = msp_resume,
 	},
 };
 

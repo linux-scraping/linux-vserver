@@ -104,8 +104,6 @@ static int automatic_resume; /* experimental .. better should be zero */
 static int rfdadd;	/* rfdadd=1 may be better for 8K MEM cards */
 static int fifo=0x8;	/* don't change */
 
-/* #define REALLY_SLOW_IO */
-
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/string.h>
@@ -1335,7 +1333,7 @@ int __init init_module(void)
 	return 0;
 }
 
-void cleanup_module(void)
+void __exit cleanup_module(void)
 {
 	unregister_netdev(dev_ni52);
 	release_region(dev_ni52->base_addr, NI52_TOTAL_SIZE);

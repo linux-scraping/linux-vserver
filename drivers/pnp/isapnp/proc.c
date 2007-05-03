@@ -56,7 +56,7 @@ static loff_t isapnp_proc_bus_lseek(struct file *file, loff_t off, int whence)
 
 static ssize_t isapnp_proc_bus_read(struct file *file, char __user *buf, size_t nbytes, loff_t *ppos)
 {
-	struct inode *ino = file->f_dentry->d_inode;
+	struct inode *ino = file->f_path.dentry->d_inode;
 	struct proc_dir_entry *dp = PDE(ino);
 	struct pnp_dev *dev = dp->data;
 	int pos = *ppos;
@@ -85,7 +85,7 @@ static ssize_t isapnp_proc_bus_read(struct file *file, char __user *buf, size_t 
 	return nbytes;
 }
 
-static struct file_operations isapnp_proc_bus_file_operations =
+static const struct file_operations isapnp_proc_bus_file_operations =
 {
 	.llseek		= isapnp_proc_bus_lseek,
 	.read		= isapnp_proc_bus_read,

@@ -24,6 +24,14 @@ config X86
 	bool
 	default y
 
+config GENERIC_TIME
+	bool
+	default y
+
+config GENERIC_TIME_VSYSCALL
+	bool
+	default y
+
 config ZONE_DMA32
 	bool
 	default y
@@ -41,6 +49,10 @@ config SEMAPHORE_SLEEPERS
 	default y
 
 config MMU
+	bool
+	default y
+
+config ZONE_DMA
 	bool
 	default y
 
@@ -96,6 +108,19 @@ config AUDIT_ARCH
 	bool
 	default y
 
+config GENERIC_BUG
+	bool
+	default y
+	depends on BUG
+
+config ARCH_HAS_ILOG2_U32
+	bool
+	default n
+
+config ARCH_HAS_ILOG2_U64
+	bool
+	default n
+
 source "init/Kconfig"
 
 
@@ -122,7 +147,7 @@ endchoice
 
 choice
 	prompt "Processor family"
-	default MK8
+	default GENERIC_CPU
 
 config MK8
 	bool "AMD-Opteron/Athlon64"
@@ -130,16 +155,31 @@ config MK8
 	  Optimize for AMD Opteron/Athlon64/Hammer/K8 CPUs.
 
 config MPSC
-       bool "Intel EM64T"
+       bool "Intel P4 / older Netburst based Xeon"
        help
-	  Optimize for Intel Pentium 4 and Xeon CPUs with Intel
-	  Extended Memory 64 Technology(EM64T). For details see
+	  Optimize for Intel Pentium 4 and older Nocona/Dempsey Xeon CPUs
+	  with Intel Extended Memory 64 Technology(EM64T). For details see
 	  <http://www.intel.com/technology/64bitextensions/>.
+	  Note that the latest Xeons (Xeon 51xx and 53xx) are not based on the
+          Netburst core and shouldn't use this option. You can distinguish them
+	  using the cpu family field
+	  in /proc/cpuinfo. Family 15 is an older Xeon, Family 6 a newer one
+	  (this rule only applies to systems that support EM64T)
+
+config MCORE2
+	bool "Intel Core2 / newer Xeon"
+	help
+	  Optimize for Intel Core2 and newer Xeons (51xx)
+	  You can distinguish the newer Xeons from the older ones using
+	  the cpu family field in /proc/cpuinfo. 15 is an older Xeon
+	  (use CONFIG_MPSC then), 6 is a newer one. This rule only
+	  applies to CPUs that support EM64T.
 
 config GENERIC_CPU
 	bool "Generic-x86-64"
 	help
 	  Generic x86-64 CPU.
+	  Run equally well on all x86-64 CPUs.
 
 endchoice
 
@@ -149,12 +189,12 @@ endchoice
 config X86_L1_CACHE_BYTES
 	int
 	default "128" if GENERIC_CPU || MPSC
-	default "64" if MK8
+	default "64" if MK8 || MCORE2
 
 config X86_L1_CACHE_SHIFT
 	int
 	default "7" if GENERIC_CPU || MPSC
-	default "6" if MK8
+	default "6" if MK8 || MCORE2
 
 config X86_INTERNODE_CACHE_BYTES
 	int
@@ -344,11 +384,6 @@ config ARCH_DISCONTIGMEM_ENABLE
        depends on NUMA
        default y
 
-
-config ARCH_DISCONTIGMEM_ENABLE
-	def_bool y
-	depends on NUMA
-
 config ARCH_DISCONTIGMEM_DEFAULT
 	def_bool y
 	depends on NUMA
@@ -431,8 +466,8 @@ config IOMMU
 	  on systems with more than 3GB. This is usually needed for USB,
 	  sound, many IDE/SATA chipsets and some other devices.
 	  Provides a driver for the AMD Athlon64/Opteron/Turion/Sempron GART
-	  based IOMMU and a software bounce buffer based IOMMU used on Intel
-	  systems and as fallback.
+	  based hardware IOMMU and a software bounce buffer based IOMMU used
+	  on Intel systems and as fallback.
 	  The code is only active when needed (enough memory and limited
 	  device) unless CONFIG_IOMMU_DEBUG or iommu=force is specified
 	  too.
@@ -455,9 +490,26 @@ config CALGARY_IOMMU
 	  Normally the kernel will make the right choice by itself.
 	  If unsure, say Y.
 
+config CALGARY_IOMMU_ENABLED_BY_DEFAULT
+	bool "Should Calgary be enabled by default?"
+	default y
+	depends on CALGARY_IOMMU
+	help
+	  Should Calgary be enabled by default? if you choose 'y', Calgary
+	  will be used (if it exists). If you choose 'n', Calgary will not be
+	  used even if it exists. If you choose 'n' and would like to use
+	  Calgary anyway, pass 'iommu=calgary' on the kernel command line.
+	  If unsure, say Y.
+
 # need this always selected by IOMMU for the VIA workaround
 config SWIOTLB
 	bool
+	help
+	  Support for software bounce buffers used on x86-64 systems
+	  which don't have a hardware IOMMU (e.g. the current generation
+	  of Intel's x86-64 CPUs). Using this PCI devices which can only
+	  access 32-bits of memory can be used on systems with more than
+	  3 GB of memory. If unsure, say Y.
 
 config X86_MCE
 	bool "Machine check support" if EMBEDDED
@@ -550,7 +602,7 @@ config SECCOMP
 	  If unsure, say Y. Only embedded should say N here.
 
 config CC_STACKPROTECTOR
-	bool "Enable -fstack-protector buffer overflow detection (EXPRIMENTAL)"
+	bool "Enable -fstack-protector buffer overflow detection (EXPERIMENTAL)"
 	depends on EXPERIMENTAL
 	help
          This option turns on the -fstack-protector GCC feature. This

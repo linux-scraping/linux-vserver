@@ -148,14 +148,6 @@ static int __init add_bridge(struct device_node *dev)
 }
 
 
-void __init pas_pcibios_fixup(void)
-{
-	struct pci_dev *dev = NULL;
-
-	for_each_pci_dev(dev)
-		pci_read_irq_line(dev);
-}
-
 static void __init pas_fixup_phb_resources(void)
 {
 	struct pci_controller *hose, *tmp;
@@ -167,6 +159,19 @@ static void __init pas_fixup_phb_resources(void)
 		printk(KERN_INFO "PCI Host %d, io start: %lx; io end: %lx\n",
 		       hose->global_number,
 		       hose->io_resource.start, hose->io_resource.end);
+	}
+}
+
+
+void __devinit pas_pci_irq_fixup(struct pci_dev *dev)
+{
+	/* DMA is special, 84 interrupts (128 -> 211), all but 128
+	 * need to be mapped by hand here.
+	 */
+	if (dev->vendor == 0x1959 && dev->device == 0xa007) {
+		int i;
+		for (i = 129; i < 212; i++)
+			irq_create_mapping(NULL, i);
 	}
 }
 

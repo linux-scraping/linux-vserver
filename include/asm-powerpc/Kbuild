@@ -23,6 +23,7 @@ header-y += linkage.h
 header-y += resource.h
 header-y += sigcontext.h
 header-y += statfs.h
+header-y += ps3fb.h
 
 unifdef-y += a.out.h
 unifdef-y += asm-compat.h
@@ -36,6 +37,7 @@ unifdef-y += posix_types.h
 unifdef-y += ptrace.h
 unifdef-y += seccomp.h
 unifdef-y += signal.h
+unifdef-y += spu_info.h
 unifdef-y += termios.h
 unifdef-y += types.h
 unifdef-y += unistd.h

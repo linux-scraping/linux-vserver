@@ -3,7 +3,7 @@
  *
  *	This is ALPHA test software. This code may break your machine,
  *	randomly fail to work with new releases, misbehave and/or generally
- *	screw up. It might even work. 
+ *	screw up. It might even work.
  *
  *	This code REQUIRES 2.1.15 or higher
  *
@@ -15,7 +15,7 @@
  *
  *	History
  *	X.25 001	Split from x25_subr.c
- *	mar/20/00	Daniela Squassoni Disabling/enabling of facilities 
+ *	mar/20/00	Daniela Squassoni Disabling/enabling of facilities
  *					  negotiation.
  *	apr/14/05	Shaun Pereira - Allow fast select with no restriction
  *					on response.
@@ -125,8 +125,8 @@ int x25_parse_facilities(struct sk_buff *skb, struct x25_facilities *facilities,
 			break;
 		case X25_FAC_CLASS_D:
 			switch (*p) {
-	 		case X25_FAC_CALLING_AE:
-	 			if (p[1] > X25_MAX_DTE_FACIL_LEN)
+			case X25_FAC_CALLING_AE:
+				if (p[1] > X25_MAX_DTE_FACIL_LEN)
 					break;
 				dte_facs->calling_len = p[2];
 				memcpy(dte_facs->calling_ae, &p[3], p[1] - 1);
@@ -254,7 +254,7 @@ int x25_negotiate_facilities(struct sk_buff *skb, struct sock *sk,
 	 *	They want reverse charging, we won't accept it.
 	 */
 	if ((theirs.reverse & 0x01 ) && (ours->reverse & 0x01)) {
-		SOCK_DEBUG(sk, "X.25: rejecting reverse charging request");
+		SOCK_DEBUG(sk, "X.25: rejecting reverse charging request\n");
 		return -1;
 	}
 
@@ -262,29 +262,29 @@ int x25_negotiate_facilities(struct sk_buff *skb, struct sock *sk,
 
 	if (theirs.throughput) {
 		if (theirs.throughput < ours->throughput) {
-			SOCK_DEBUG(sk, "X.25: throughput negotiated down");
+			SOCK_DEBUG(sk, "X.25: throughput negotiated down\n");
 			new->throughput = theirs.throughput;
 		}
 	}
 
 	if (theirs.pacsize_in && theirs.pacsize_out) {
 		if (theirs.pacsize_in < ours->pacsize_in) {
-			SOCK_DEBUG(sk, "X.25: packet size inwards negotiated down");
+			SOCK_DEBUG(sk, "X.25: packet size inwards negotiated down\n");
 			new->pacsize_in = theirs.pacsize_in;
 		}
 		if (theirs.pacsize_out < ours->pacsize_out) {
-			SOCK_DEBUG(sk, "X.25: packet size outwards negotiated down");
+			SOCK_DEBUG(sk, "X.25: packet size outwards negotiated down\n");
 			new->pacsize_out = theirs.pacsize_out;
 		}
 	}
 
 	if (theirs.winsize_in && theirs.winsize_out) {
 		if (theirs.winsize_in < ours->winsize_in) {
-			SOCK_DEBUG(sk, "X.25: window size inwards negotiated down");
+			SOCK_DEBUG(sk, "X.25: window size inwards negotiated down\n");
 			new->winsize_in = theirs.winsize_in;
 		}
 		if (theirs.winsize_out < ours->winsize_out) {
-			SOCK_DEBUG(sk, "X.25: window size outwards negotiated down");
+			SOCK_DEBUG(sk, "X.25: window size outwards negotiated down\n");
 			new->winsize_out = theirs.winsize_out;
 		}
 	}
@@ -293,7 +293,7 @@ int x25_negotiate_facilities(struct sk_buff *skb, struct sock *sk,
 }
 
 /*
- *	Limit values of certain facilities according to the capability of the 
+ *	Limit values of certain facilities according to the capability of the
  *      currently attached x25 link.
  */
 void x25_limit_facilities(struct x25_facilities *facilities,

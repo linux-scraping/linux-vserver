@@ -191,13 +191,13 @@ dma_get_cache_alignment(void)
 }
 
 static inline int
-dma_is_consistent(dma_addr_t dma_addr)
+dma_is_consistent(struct device *dev, dma_addr_t dma_addr)
 {
 	return (hppa_dma_ops->dma_sync_single_for_cpu == NULL);
 }
 
 static inline void
-dma_cache_sync(void *vaddr, size_t size,
+dma_cache_sync(struct device *dev, void *vaddr, size_t size,
 	       enum dma_data_direction direction)
 {
 	if(hppa_dma_ops->dma_sync_single_for_cpu)
@@ -236,7 +236,7 @@ int ccio_allocate_resource(const struct parisc_device *dev,
 		unsigned long min, unsigned long max, unsigned long align);
 #else /* !CONFIG_IOMMU_CCIO */
 #define ccio_get_iommu(dev) NULL
-#define ccio_request_resource(dev, res) request_resource(&iomem_resource, res)
+#define ccio_request_resource(dev, res) insert_resource(&iomem_resource, res)
 #define ccio_allocate_resource(dev, res, size, min, max, align) \
 		allocate_resource(&iomem_resource, res, size, min, max, \
 				align, NULL, NULL)
