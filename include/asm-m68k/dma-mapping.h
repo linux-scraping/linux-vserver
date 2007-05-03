@@ -21,7 +21,7 @@ static inline int dma_get_cache_alignment(void)
 	return 1 << L1_CACHE_SHIFT;
 }
 
-static inline int dma_is_consistent(dma_addr_t dma_addr)
+static inline int dma_is_consistent(struct device *dev, dma_addr_t dma_addr)
 {
 	return 0;
 }
@@ -32,7 +32,7 @@ extern void dma_free_coherent(struct device *, size_t,
 			      void *, dma_addr_t);
 
 static inline void *dma_alloc_noncoherent(struct device *dev, size_t size,
-					  dma_addr_t *handle, int flag)
+					  dma_addr_t *handle, gfp_t flag)
 {
 	return dma_alloc_coherent(dev, size, handle, flag);
 }
@@ -41,7 +41,7 @@ static inline void dma_free_noncoherent(struct device *dev, size_t size,
 {
 	dma_free_coherent(dev, size, addr, handle);
 }
-static inline void dma_cache_sync(void *vaddr, size_t size,
+static inline void dma_cache_sync(struct device *dev, void *vaddr, size_t size,
 				  enum dma_data_direction dir)
 {
 	/* we use coherent allocation, so not much to do here. */

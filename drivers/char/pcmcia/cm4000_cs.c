@@ -946,8 +946,7 @@ release_io:
 
 return_with_timer:
 	DEBUGP(7, dev, "<- monitor_card (returns with timer)\n");
-	dev->timer.expires = jiffies + dev->mdelay;
-	add_timer(&dev->timer);
+	mod_timer(&dev->timer, jiffies + dev->mdelay);
 	clear_bit(LOCK_MONITOR, &dev->flags);
 }
 
@@ -1406,12 +1405,9 @@ static void start_monitor(struct cm4000_dev *dev)
 	DEBUGP(3, dev, "-> start_monitor\n");
 	if (!dev->monitor_running) {
 		DEBUGP(5, dev, "create, init and add timer\n");
-		init_timer(&dev->timer);
+		setup_timer(&dev->timer, monitor_card, (unsigned long)dev);
 		dev->monitor_running = 1;
-		dev->timer.expires = jiffies;
-		dev->timer.data = (unsigned long) dev;
-		dev->timer.function = monitor_card;
-		add_timer(&dev->timer);
+		mod_timer(&dev->timer, jiffies);
 	} else
 		DEBUGP(5, dev, "monitor already running\n");
 	DEBUGP(3, dev, "<- start_monitor\n");
@@ -1764,28 +1760,10 @@ static int cm4000_config(struct pcmcia_device * link, int devno)
 	int rc;
 
 	/* read the config-tuples */
-	tuple.DesiredTuple = CISTPL_CONFIG;
 	tuple.Attributes = 0;
 	tuple.TupleData = buf;
 	tuple.TupleDataMax = sizeof(buf);
 	tuple.TupleOffset = 0;
-
-	if ((fail_rc = pcmcia_get_first_tuple(link, &tuple)) != CS_SUCCESS) {
-		fail_fn = GetFirstTuple;
-		goto cs_failed;
-	}
-	if ((fail_rc = pcmcia_get_tuple_data(link, &tuple)) != CS_SUCCESS) {
-		fail_fn = GetTupleData;
-		goto cs_failed;
-	}
-	if ((fail_rc =
-	     pcmcia_parse_tuple(link, &tuple, &parse)) != CS_SUCCESS) {
-		fail_fn = ParseTuple;
-		goto cs_failed;
-	}
-
-	link->conf.ConfigBase = parse.config.base;
-	link->conf.Present = parse.config.rmask[0];
 
 	link->io.BasePort2 = 0;
 	link->io.NumPorts2 = 0;
@@ -1841,8 +1819,6 @@ static int cm4000_config(struct pcmcia_device * link, int devno)
 
 	return 0;
 
-cs_failed:
-	cs_error(link, fail_fn, fail_rc);
 cs_release:
 	cm4000_release(link);
 	return -ENODEV;
@@ -1973,14 +1949,14 @@ static int __init cmm_init(void)
 	printk(KERN_INFO "%s\n", version);
 
 	cmm_class = class_create(THIS_MODULE, "cardman_4000");
-	if (!cmm_class)
-		return -1;
+	if (IS_ERR(cmm_class))
+		return PTR_ERR(cmm_class);
 
 	major = register_chrdev(0, DEVICE_NAME, &cm4000_fops);
 	if (major < 0) {
 		printk(KERN_WARNING MODULE_NAME
 			": could not get major number\n");
-		return -1;
+		return major;
 	}
 
 	rc = pcmcia_register_driver(&cm4000_driver);

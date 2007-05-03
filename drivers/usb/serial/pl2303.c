@@ -83,6 +83,7 @@ static struct usb_device_id id_table [] = {
 	{ USB_DEVICE(BELKIN_VENDOR_ID, BELKIN_PRODUCT_ID) },
 	{ USB_DEVICE(ALCOR_VENDOR_ID, ALCOR_PRODUCT_ID) },
 	{ USB_DEVICE(HUAWEI_VENDOR_ID, HUAWEI_PRODUCT_ID) },
+	{ USB_DEVICE(WS002IN_VENDOR_ID, WS002IN_PRODUCT_ID) },
 	{ }					/* Terminating entry */
 };
 
@@ -159,7 +160,7 @@ static struct pl2303_buf *pl2303_buf_alloc(unsigned int size)
 	if (size == 0)
 		return NULL;
 
-	pb = (struct pl2303_buf *)kmalloc(sizeof(struct pl2303_buf), GFP_KERNEL);
+	pb = kmalloc(sizeof(struct pl2303_buf), GFP_KERNEL);
 	if (pb == NULL)
 		return NULL;
 
@@ -455,7 +456,7 @@ static int pl2303_chars_in_buffer(struct usb_serial_port *port)
 }
 
 static void pl2303_set_termios(struct usb_serial_port *port,
-			       struct termios *old_termios)
+			       struct ktermios *old_termios)
 {
 	struct usb_serial *serial = port->serial;
 	struct pl2303_private *priv = usb_get_serial_port_data(port);
@@ -687,7 +688,7 @@ static void pl2303_close(struct usb_serial_port *port, struct file *filp)
 
 static int pl2303_open(struct usb_serial_port *port, struct file *filp)
 {
-	struct termios tmp_termios;
+	struct ktermios tmp_termios;
 	struct usb_serial *serial = port->serial;
 	struct pl2303_private *priv = usb_get_serial_port_data(port);
 	unsigned char *buf;
@@ -1118,6 +1119,7 @@ static struct usb_serial_driver pl2303_device = {
 		.name =		"pl2303",
 	},
 	.id_table =		id_table,
+	.usb_driver = 		&pl2303_driver,
 	.num_interrupt_in =	NUM_DONT_CARE,
 	.num_bulk_in =		1,
 	.num_bulk_out =		1,

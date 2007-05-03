@@ -63,7 +63,7 @@ int dcache_dir_open(struct inode *inode, struct file *file)
 {
 	static struct qstr cursor_name = {.len = 1, .name = "."};
 
-	file->private_data = d_alloc(file->f_dentry, &cursor_name);
+	file->private_data = d_alloc(file->f_path.dentry, &cursor_name);
 
 	return file->private_data ? 0 : -ENOMEM;
 }
@@ -76,7 +76,7 @@ int dcache_dir_close(struct inode *inode, struct file *file)
 
 loff_t dcache_dir_lseek(struct file *file, loff_t offset, int origin)
 {
-	mutex_lock(&file->f_dentry->d_inode->i_mutex);
+	mutex_lock(&file->f_path.dentry->d_inode->i_mutex);
 	switch (origin) {
 		case 1:
 			offset += file->f_pos;
@@ -84,7 +84,7 @@ loff_t dcache_dir_lseek(struct file *file, loff_t offset, int origin)
 			if (offset >= 0)
 				break;
 		default:
-			mutex_unlock(&file->f_dentry->d_inode->i_mutex);
+			mutex_unlock(&file->f_path.dentry->d_inode->i_mutex);
 			return -EINVAL;
 	}
 	if (offset != file->f_pos) {
@@ -96,8 +96,8 @@ loff_t dcache_dir_lseek(struct file *file, loff_t offset, int origin)
 
 			spin_lock(&dcache_lock);
 			list_del(&cursor->d_u.d_child);
-			p = file->f_dentry->d_subdirs.next;
-			while (n && p != &file->f_dentry->d_subdirs) {
+			p = file->f_path.dentry->d_subdirs.next;
+			while (n && p != &file->f_path.dentry->d_subdirs) {
 				struct dentry *next;
 				next = list_entry(p, struct dentry, d_u.d_child);
 				if (!d_unhashed(next) && next->d_inode)
@@ -108,7 +108,7 @@ loff_t dcache_dir_lseek(struct file *file, loff_t offset, int origin)
 			spin_unlock(&dcache_lock);
 		}
 	}
-	mutex_unlock(&file->f_dentry->d_inode->i_mutex);
+	mutex_unlock(&file->f_path.dentry->d_inode->i_mutex);
 	return offset;
 }
 
@@ -127,7 +127,7 @@ static inline unsigned char dt_type(struct inode *inode)
 static inline int do_dcache_readdir_filter(struct file * filp,
 	void * dirent, filldir_t filldir, int (*filter)(struct dentry *dentry))
 {
-	struct dentry *dentry = filp->f_dentry;
+	struct dentry *dentry = filp->f_path.dentry;
 	struct dentry *cursor = filp->private_data;
 	struct list_head *p, *q = &cursor->d_u.d_child;
 	ino_t ino;
@@ -201,8 +201,12 @@ const struct file_operations simple_dir_operations = {
 	.fsync		= simple_sync_file,
 };
 
-struct inode_operations simple_dir_inode_operations = {
+const struct inode_operations simple_dir_inode_operations = {
 	.lookup		= simple_lookup,
+};
+
+static const struct super_operations simple_super_operations = {
+	.statfs		= simple_statfs,
 };
 
 /*
@@ -210,11 +214,10 @@ struct inode_operations simple_dir_inode_operations = {
  * will never be mountable)
  */
 int get_sb_pseudo(struct file_system_type *fs_type, char *name,
-	struct super_operations *ops, unsigned long magic,
+	const struct super_operations *ops, unsigned long magic,
 	struct vfsmount *mnt)
 {
 	struct super_block *s = sget(fs_type, NULL, set_anon_super, NULL);
-	static struct super_operations default_ops = {.statfs = simple_statfs};
 	struct dentry *dentry;
 	struct inode *root;
 	struct qstr d_name = {.name = name, .len = strlen(name)};
@@ -227,7 +230,7 @@ int get_sb_pseudo(struct file_system_type *fs_type, char *name,
 	s->s_blocksize = 1024;
 	s->s_blocksize_bits = 10;
 	s->s_magic = magic;
-	s->s_op = ops ? ops : &default_ops;
+	s->s_op = ops ? ops : &simple_super_operations;
 	s->s_time_gran = 1;
 	root = new_inode(s);
 	if (!root)
@@ -350,17 +353,18 @@ int simple_prepare_write(struct file *file, struct page *page,
 			flush_dcache_page(page);
 			kunmap_atomic(kaddr, KM_USER0);
 		}
-		SetPageUptodate(page);
 	}
 	return 0;
 }
 
 int simple_commit_write(struct file *file, struct page *page,
-			unsigned offset, unsigned to)
+			unsigned from, unsigned to)
 {
 	struct inode *inode = page->mapping->host;
 	loff_t pos = ((loff_t)page->index << PAGE_CACHE_SHIFT) + to;
 
+	if (!PageUptodate(page))
+		SetPageUptodate(page);
 	/*
 	 * No need to use i_size_read() here, the i_size
 	 * cannot change under us because we hold the i_mutex.
@@ -373,7 +377,6 @@ int simple_commit_write(struct file *file, struct page *page,
 
 int simple_fill_super(struct super_block *s, int magic, struct tree_descr *files)
 {
-	static struct super_operations s_ops = {.statfs = simple_statfs};
 	struct inode *inode;
 	struct dentry *root;
 	struct dentry *dentry;
@@ -382,7 +385,7 @@ int simple_fill_super(struct super_block *s, int magic, struct tree_descr *files
 	s->s_blocksize = PAGE_CACHE_SIZE;
 	s->s_blocksize_bits = PAGE_CACHE_SHIFT;
 	s->s_magic = magic;
-	s->s_op = &s_ops;
+	s->s_op = &simple_super_operations;
 	s->s_time_gran = 1;
 
 	inode = new_inode(s);

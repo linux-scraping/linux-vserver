@@ -145,13 +145,12 @@ static int __init rd_start_early(char *p)
 	unsigned long start = memparse(p, &p);
 
 #ifdef CONFIG_64BIT
-	/* HACK: Guess if the sign extension was forgotten */
-	if (start > 0x0000000080000000 && start < 0x00000000ffffffff)
-		start |= 0xffffffff00000000UL;
+	/* Guess if the sign extension was forgotten by bootloader */
+	if (start < XKPHYS)
+		start = (int)start;
 #endif
 	initrd_start = start;
 	initrd_end += start;
-
 	return 0;
 }
 early_param("rd_start", rd_start_early);
@@ -159,41 +158,64 @@ early_param("rd_start", rd_start_early);
 static int __init rd_size_early(char *p)
 {
 	initrd_end += memparse(p, &p);
-
 	return 0;
 }
 early_param("rd_size", rd_size_early);
 
+/* it returns the next free pfn after initrd */
 static unsigned long __init init_initrd(void)
 {
-	unsigned long tmp, end, size;
+	unsigned long end;
 	u32 *initrd_header;
-
-	ROOT_DEV = Root_RAM0;
 
 	/*
 	 * Board specific code or command line parser should have
 	 * already set up initrd_start and initrd_end. In these cases
 	 * perfom sanity checks and use them if all looks good.
 	 */
-	size = initrd_end - initrd_start;
-	if (initrd_end == 0 || size == 0) {
-		initrd_start = 0;
-		initrd_end = 0;
-	} else
-		return initrd_end;
+	if (initrd_start && initrd_end > initrd_start)
+		goto sanitize;
 
-	end = (unsigned long)&_end;
-	tmp = PAGE_ALIGN(end) - sizeof(u32) * 2;
-	if (tmp < end)
-		tmp += PAGE_SIZE;
+	/*
+	 * See if initrd has been added to the kernel image by
+	 * arch/mips/boot/addinitrd.c. In that case a header is
+	 * prepended to initrd and is made up by 8 bytes. The fisrt
+	 * word is a magic number and the second one is the size of
+	 * initrd.  Initrd start must be page aligned in any cases.
+	 */
+	initrd_header = __va(PAGE_ALIGN(__pa_symbol(&_end) + 8)) - 8;
+	if (initrd_header[0] != 0x494E5244)
+		goto disable;
+	initrd_start = (unsigned long)(initrd_header + 2);
+	initrd_end = initrd_start + initrd_header[1];
 
-	initrd_header = (u32 *)tmp;
-	if (initrd_header[0] == 0x494E5244) {
-		initrd_start = (unsigned long)&initrd_header[2];
-		initrd_end = initrd_start + initrd_header[1];
+sanitize:
+	if (initrd_start & ~PAGE_MASK) {
+		printk(KERN_ERR "initrd start must be page aligned\n");
+		goto disable;
 	}
-	return initrd_end;
+	if (initrd_start < PAGE_OFFSET) {
+		printk(KERN_ERR "initrd start < PAGE_OFFSET\n");
+		goto disable;
+	}
+
+	/*
+	 * Sanitize initrd addresses. For example firmware
+	 * can't guess if they need to pass them through
+	 * 64-bits values if the kernel has been built in pure
+	 * 32-bit. We need also to switch from KSEG0 to XKPHYS
+	 * addresses now, so the code can now safely use __pa().
+	 */
+	end = __pa(initrd_end);
+	initrd_end = (unsigned long)__va(end);
+	initrd_start = (unsigned long)__va(__pa(initrd_start));
+
+	ROOT_DEV = Root_RAM0;
+	return PFN_UP(end);
+disable:
+	initrd_start = 0;
+	initrd_end = 0;
+	return 0;
 }
 
 static void __init finalize_initrd(void)
@@ -204,12 +226,12 @@ static void __init finalize_initrd(void)
 		printk(KERN_INFO "Initrd not found or empty");
 		goto disable;
 	}
-	if (CPHYSADDR(initrd_end) > PFN_PHYS(max_low_pfn)) {
+	if (__pa(initrd_end) > PFN_PHYS(max_low_pfn)) {
 		printk("Initrd extends beyond end of memory");
 		goto disable;
 	}
 
-	reserve_bootmem(CPHYSADDR(initrd_start), size);
+	reserve_bootmem(__pa(initrd_start), size);
 	initrd_below_start_ok = 1;
 
 	printk(KERN_INFO "Initial ramdisk at: 0x%lx (%lu bytes)\n",
@@ -249,8 +271,7 @@ static void __init bootmem_init(void)
 static void __init bootmem_init(void)
 {
 	unsigned long reserved_end;
-	unsigned long highest = 0;
-	unsigned long mapstart = -1UL;
+	unsigned long mapstart = ~0UL;
 	unsigned long bootmap_size;
 	int i;
 
@@ -259,8 +280,14 @@ static void __init bootmem_init(void)
 	 * not selected. Once that done we can determine the low bound
 	 * of usable memory.
 	 */
-	reserved_end = init_initrd();
-	reserved_end = PFN_UP(CPHYSADDR(max(reserved_end, (unsigned long)&_end)));
+	reserved_end = max(init_initrd(), PFN_UP(__pa_symbol(&_end)));
+
+	/*
+	 * max_low_pfn is not a number of pages. The number of pages
+	 * of the system is given by 'max_low_pfn - min_low_pfn'.
+	 */
+	min_low_pfn = ~0UL;
+	max_low_pfn = 0;
 
 	/*
 	 * Find the highest page frame number we have available.
@@ -275,8 +302,10 @@ static void __init bootmem_init(void)
 		end = PFN_DOWN(boot_mem_map.map[i].addr
 				+ boot_mem_map.map[i].size);
 
-		if (end > highest)
-			highest = end;
+		if (end > max_low_pfn)
+			max_low_pfn = end;
+		if (start < min_low_pfn)
+			min_low_pfn = start;
 		if (end <= reserved_end)
 			continue;
 		if (start >= mapstart)
@@ -284,22 +313,36 @@ static void __init bootmem_init(void)
 		mapstart = max(reserved_end, start);
 	}
 
+	if (min_low_pfn >= max_low_pfn)
+		panic("Incorrect memory mapping !!!");
+	if (min_low_pfn > ARCH_PFN_OFFSET) {
+		printk(KERN_INFO
+		       "Wasting %lu bytes for tracking %lu unused pages\n",
+		       (min_low_pfn - ARCH_PFN_OFFSET) * sizeof(struct page),
+		       min_low_pfn - ARCH_PFN_OFFSET);
+	} else if (min_low_pfn < ARCH_PFN_OFFSET) {
+		printk(KERN_INFO
+		       "%lu free pages won't be used\n",
+		       ARCH_PFN_OFFSET - min_low_pfn);
+	}
+	min_low_pfn = ARCH_PFN_OFFSET;
+
 	/*
 	 * Determine low and high memory ranges
 	 */
-	if (highest > PFN_DOWN(HIGHMEM_START)) {
+	if (max_low_pfn > PFN_DOWN(HIGHMEM_START)) {
 #ifdef CONFIG_HIGHMEM
 		highstart_pfn = PFN_DOWN(HIGHMEM_START);
-		highend_pfn = highest;
+		highend_pfn = max_low_pfn;
 #endif
-		highest = PFN_DOWN(HIGHMEM_START);
+		max_low_pfn = PFN_DOWN(HIGHMEM_START);
 	}
 
 	/*
 	 * Initialize the boot-time allocator with low memory only.
 	 */
-	bootmap_size = init_bootmem(mapstart, highest);
-
+	bootmap_size = init_bootmem_node(NODE_DATA(0), mapstart,
+					 min_low_pfn, max_low_pfn);
 	/*
 	 * Register fully available low RAM pages with the bootmem allocator.
 	 */
@@ -409,7 +452,7 @@ static void __init arch_mem_init(char **cmdline_p)
 	print_memory_map();
 
 	strlcpy(command_line, arcs_cmdline, sizeof(command_line));
-	strlcpy(saved_command_line, command_line, COMMAND_LINE_SIZE);
+	strlcpy(boot_command_line, command_line, COMMAND_LINE_SIZE);
 
 	*cmdline_p = command_line;
 
@@ -432,10 +475,10 @@ static void __init resource_init(void)
 	if (UNCAC_BASE != IO_BASE)
 		return;
 
-	code_resource.start = virt_to_phys(&_text);
-	code_resource.end = virt_to_phys(&_etext) - 1;
-	data_resource.start = virt_to_phys(&_etext);
-	data_resource.end = virt_to_phys(&_edata) - 1;
+	code_resource.start = __pa_symbol(&_text);
+	code_resource.end = __pa_symbol(&_etext) - 1;
+	data_resource.start = __pa_symbol(&_etext);
+	data_resource.end = __pa_symbol(&_edata) - 1;
 
 	/*
 	 * Request address space for all standard RAM.
@@ -482,13 +525,21 @@ void __init setup_arch(char **cmdline_p)
 {
 	cpu_probe();
 	prom_init();
+
+#ifdef CONFIG_EARLY_PRINTK
+	{
+		extern void setup_early_printk(void);
+
+		setup_early_printk();
+	}
+#endif
 	cpu_report();
 
 #if defined(CONFIG_VT)
 #if defined(CONFIG_VGA_CONSOLE)
-        conswitchp = &vga_con;
+	conswitchp = &vga_con;
 #elif defined(CONFIG_DUMMY_CONSOLE)
-        conswitchp = &dummy_con;
+	conswitchp = &dummy_con;
 #endif
 #endif
 
@@ -500,7 +551,7 @@ void __init setup_arch(char **cmdline_p)
 #endif
 }
 
-int __init fpu_disable(char *s)
+static int __init fpu_disable(char *s)
 {
 	int i;
 
@@ -512,7 +563,7 @@ int __init fpu_disable(char *s)
 
 __setup("nofpu", fpu_disable);
 
-int __init dsp_disable(char *s)
+static int __init dsp_disable(char *s)
 {
 	cpu_data[0].ases &= ~MIPS_ASE_DSP;
 
@@ -520,3 +571,6 @@ int __init dsp_disable(char *s)
 }
 
 __setup("nodsp", dsp_disable);
+
+unsigned long kernelsp[NR_CPUS];
+unsigned long fw_arg0, fw_arg1, fw_arg2, fw_arg3;

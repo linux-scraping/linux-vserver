@@ -32,6 +32,7 @@
 #include <linux/slab.h>
 #include <linux/interrupt.h>
 #include <linux/kernel_stat.h>
+#include <linux/kernel.h>
 
 #include <asm/gdb-stub.h>
 #include <asm/io.h>
@@ -62,16 +63,6 @@ void enable_atlas_irq(unsigned int irq_nr)
 	iob();
 }
 
-static unsigned int startup_atlas_irq(unsigned int irq)
-{
-	enable_atlas_irq(irq);
-	return 0; /* never anything pending */
-}
-
-#define shutdown_atlas_irq	disable_atlas_irq
-
-#define mask_and_ack_atlas_irq disable_atlas_irq
-
 static void end_atlas_irq(unsigned int irq)
 {
 	if (!(irq_desc[irq].status & (IRQ_DISABLED|IRQ_INPROGRESS)))
@@ -79,12 +70,12 @@ static void end_atlas_irq(unsigned int irq)
 }
 
 static struct irq_chip atlas_irq_type = {
-	.typename = "Atlas",
-	.startup = startup_atlas_irq,
-	.shutdown = shutdown_atlas_irq,
-	.enable = enable_atlas_irq,
-	.disable = disable_atlas_irq,
-	.ack = mask_and_ack_atlas_irq,
+	.name = "Atlas",
+	.ack = disable_atlas_irq,
+	.mask = disable_atlas_irq,
+	.mask_ack = disable_atlas_irq,
+	.unmask = enable_atlas_irq,
+	.eoi = enable_atlas_irq,
 	.end = end_atlas_irq,
 };
 
@@ -217,13 +208,8 @@ static inline void init_atlas_irqs (int base)
 	 */
 	atlas_hw0_icregs->intrsten = 0xffffffff;
 
-	for (i = ATLAS_INT_BASE; i <= ATLAS_INT_END; i++) {
-		irq_desc[i].status	= IRQ_DISABLED;
-		irq_desc[i].action	= 0;
-		irq_desc[i].depth	= 1;
-		irq_desc[i].chip	= &atlas_irq_type;
-		spin_lock_init(&irq_desc[i].lock);
-	}
+	for (i = ATLAS_INT_BASE; i <= ATLAS_INT_END; i++)
+		set_irq_chip_and_handler(i, &atlas_irq_type, handle_level_irq);
 }
 
 static struct irqaction atlasirq = {
@@ -235,7 +221,7 @@ msc_irqmap_t __initdata msc_irqmap[] = {
 	{MSC01C_INT_TMR,		MSC01_IRQ_EDGE, 0},
 	{MSC01C_INT_PCI,		MSC01_IRQ_LEVEL, 0},
 };
-int __initdata msc_nr_irqs = sizeof(msc_irqmap) / sizeof(*msc_irqmap);
+int __initdata msc_nr_irqs = ARRAY_SIZE(msc_irqmap);
 
 msc_irqmap_t __initdata msc_eicirqmap[] = {
 	{MSC01E_INT_SW0,		MSC01_IRQ_LEVEL, 0},
@@ -246,14 +232,14 @@ msc_irqmap_t __initdata msc_eicirqmap[] = {
 	{MSC01E_INT_PERFCTR,		MSC01_IRQ_LEVEL, 0},
 	{MSC01E_INT_CPUCTR,		MSC01_IRQ_LEVEL, 0}
 };
-int __initdata msc_nr_eicirqs = sizeof(msc_eicirqmap) / sizeof(*msc_eicirqmap);
+int __initdata msc_nr_eicirqs = ARRAY_SIZE(msc_eicirqmap);
 
 void __init arch_init_irq(void)
 {
 	init_atlas_irqs(ATLAS_INT_BASE);
 
 	if (!cpu_has_veic)
-		mips_cpu_irq_init(MIPSCPU_INT_BASE);
+		mips_cpu_irq_init();
 
 	switch(mips_revision_corid) {
 	case MIPS_REVISION_CORID_CORE_MSC:

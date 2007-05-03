@@ -31,7 +31,6 @@
 #include <asm/mipsregs.h>
 #include <asm/system.h>
 #include <asm/time.h>
-#include <asm/time.h>
 #include <asm/tx4938/rbtx4938.h>
 
 extern void toshiba_rbtx4938_setup(void);
@@ -56,14 +55,5 @@ tx4938_time_init(void)
 
 void __init plat_timer_setup(struct irqaction *irq)
 {
-	u32 count;
-	u32 c1;
-	u32 c2;
-
 	setup_irq(TX4938_IRQ_CPU_TIMER, irq);
-
-	c1 = read_c0_count();
-	count = c1 + (mips_hpt_frequency / HZ);
-	write_c0_compare(count);
-	c2 = read_c0_count();
 }

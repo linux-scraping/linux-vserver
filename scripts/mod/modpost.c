@@ -582,9 +582,19 @@ static int strrcmp(const char *s, const char *sub)
  *   tosec   = .init.text | .exit.text | .init.data
  *   fromsec = .data
  *   atsym = *driver, *_template, *_sht, *_ops, *_probe, *probe_one
+ *
+ * Pattern 3:
+ *   Some symbols belong to init section but still it is ok to reference
+ *   these from non-init sections as these symbols don't have any memory
+ *   allocated for them and symbol address and value are same. So even
+ *   if init section is freed, its ok to reference those symbols.
+ *   For ex. symbols marking the init section boundaries.
+ *   This pattern is identified by
+ *   refsymname = __init_begin, _sinittext, _einittext
  **/
 static int secref_whitelist(const char *modname, const char *tosec,
-			    const char *fromsec, const char *atsym)
+			    const char *fromsec, const char *atsym,
+			    const char *refsymname)
 {
 	int f1 = 1, f2 = 1;
 	const char **s;
@@ -595,6 +605,14 @@ static int secref_whitelist(const char *modname, const char *tosec,
 		"_ops",
 		"_probe",
 		"_probe_one",
+		"_console",
+		NULL
+	};
+
+	const char *pat3refsym[] = {
+		"__init_begin",
+		"_sinittext",
+		"_einittext",
 		NULL
 	};
 
@@ -623,11 +641,24 @@ static int secref_whitelist(const char *modname, const char *tosec,
 	if (f1 && f2)
 		return 1;
 
-	/* Whitelist all references from .pci_fixup section if vmlinux */
+	/* Whitelist all references from .pci_fixup section if vmlinux
+	 * Whitelist all refereces from .text.head to .init.data if vmlinux
+	 * Whitelist all refereces from .text.head to .init.text if vmlinux
+	 */
 	if (is_vmlinux(modname)) {
 		if ((strcmp(fromsec, ".pci_fixup") == 0) &&
 		    (strcmp(tosec, ".init.text") == 0))
 		return 1;
+
+		if ((strcmp(fromsec, ".text.head") == 0) &&
+			((strcmp(tosec, ".init.data") == 0) ||
+			(strcmp(tosec, ".init.text") == 0)))
+		return 1;
+
+		/* Check for pattern 3 */
+		for (s = pat3refsym; *s; s++)
+			if (strcmp(refsymname, *s) == 0)
+				return 1;
 	}
 	return 0;
 }
@@ -653,6 +684,30 @@ static Elf_Sym *find_elf_symbol(struct elf_info *elf, Elf_Addr addr,
 			return sym;
 	}
 	return NULL;
+}
+
+static inline int is_arm_mapping_symbol(const char *str)
+{
+	return str[0] == '$' && strchr("atd", str[1])
+	       && (str[2] == '\0' || str[2] == '.');
+}
+
+/*
+ * If there's no name there, ignore it; likewise, ignore it if it's
+ * one of the magic symbols emitted used by current ARM tools.
+ *
+ * Otherwise if find_symbols_between() returns those symbols, they'll
+ * fail the whitelist tests and cause lots of false alarms ... fixable
+ * only by merging __exit and __init sections into __text, bloating
+ * the kernel (which is especially evil on embedded platforms).
+ */
+static inline int is_valid_name(struct elf_info *elf, Elf_Sym *sym)
+{
+	const char *name = elf->strtab + sym->st_name;
+
+	if (!name || !strlen(name))
+		return 0;
+	return !is_arm_mapping_symbol(name);
 }
 
 /*
@@ -683,16 +738,15 @@ static void find_symbols_between(struct elf_info *elf, Elf_Addr addr,
 		symsec = secstrings + elf->sechdrs[sym->st_shndx].sh_name;
 		if (strcmp(symsec, sec) != 0)
 			continue;
+		if (!is_valid_name(elf, sym))
+			continue;
 		if (sym->st_value <= addr) {
 			if ((addr - sym->st_value) < beforediff) {
 				beforediff = addr - sym->st_value;
 				*before = sym;
 			}
 			else if ((addr - sym->st_value) == beforediff) {
-				/* equal offset, valid name? */
-				const char *name = elf->strtab + sym->st_name;
-				if (name && strlen(name))
-					*before = sym;
+				*before = sym;
 			}
 		}
 		else
@@ -702,10 +756,7 @@ static void find_symbols_between(struct elf_info *elf, Elf_Addr addr,
 				*after = sym;
 			}
 			else if ((sym->st_value - addr) == afterdiff) {
-				/* equal offset, valid name? */
-				const char *name = elf->strtab + sym->st_name;
-				if (name && strlen(name))
-					*after = sym;
+				*after = sym;
 			}
 		}
 	}
@@ -737,7 +788,7 @@ static void warn_sec_mismatch(const char *modname, const char *fromsec,
 	/* check whitelist - we may ignore it */
 	if (before &&
 	    secref_whitelist(modname, secname, fromsec,
-			     elf->strtab + before->st_name))
+			     elf->strtab + before->st_name, refsymname))
 		return;
 
 	if (before && after) {
@@ -910,7 +961,8 @@ static int init_section_ref_ok(const char *name)
 		".opd",   /* see comment [OPD] at exit_section_ref_ok() */
 		".toc1",  /* used by ppc64 */
 		".stab",
-		".rodata",
+		".data.rel.ro", /* used by parisc64 */
+		".parainstructions",
 		".text.lock",
 		"__bug_table", /* used by powerpc for BUG() */
 		".pci_fixup_header",
@@ -931,6 +983,8 @@ static int init_section_ref_ok(const char *name)
 		".altinstructions",
 		".eh_frame",
 		".debug",
+		".parainstructions",
+		".rodata",
 		NULL
 	};
 	/* part of section name */
@@ -995,6 +1049,7 @@ static int exit_section_ref_ok(const char *name)
 		"__bug_table", /* used by powerpc for BUG() */
 		".exitcall.exit",
 		".eh_frame",
+		".parainstructions",
 		".stab",
 		"__ex_table",
 		".fixup",

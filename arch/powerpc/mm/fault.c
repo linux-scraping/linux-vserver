@@ -391,7 +391,8 @@ out_of_memory:
 		down_read(&mm->mmap_sem);
 		goto survive;
 	}
-	printk("VM: killing process %s\n", current->comm);
+	printk("VM: killing process %s(%d:#%u)\n",
+		current->comm, current->pid, current->xid);
 	if (user_mode(regs))
 		do_exit(SIGKILL);
 	return SIGKILL;
@@ -426,18 +427,21 @@ void bad_page_fault(struct pt_regs *regs, unsigned long address, int sig)
 
 	/* kernel has accessed a bad area */
 
-	printk(KERN_ALERT "Unable to handle kernel paging request for ");
 	switch (regs->trap) {
-		case 0x300:
-		case 0x380:
-			printk("data at address 0x%08lx\n", regs->dar);
-			break;
-		case 0x400:
-		case 0x480:
-			printk("instruction fetch\n");
-			break;
-		default:
-			printk("unknown fault\n");
+	case 0x300:
+	case 0x380:
+		printk(KERN_ALERT "Unable to handle kernel paging request for "
+			"data at address 0x%08lx\n", regs->dar);
+		break;
+	case 0x400:
+	case 0x480:
+		printk(KERN_ALERT "Unable to handle kernel paging request for "
+			"instruction fetch\n");
+		break;
+	default:
+		printk(KERN_ALERT "Unable to handle kernel paging request for "
+			"unknown fault\n");
+		break;
 	}
 	printk(KERN_ALERT "Faulting instruction address: 0x%08lx\n",
 		regs->nip);

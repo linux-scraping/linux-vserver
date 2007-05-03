@@ -171,5 +171,28 @@ static inline int __vx_cres_array_avail(struct vx_info *vxi,
 }
 
 
+static inline void vx_limit_fixup(struct _vx_limit *limit, int id)
+{
+	rlim_t value;
+	int res;
+
+	/* complex resources first */
+	if ((id < 0) || (id == RLIMIT_RSS))
+		__vx_cres_array_fixup(limit, VLA_RSS);
+
+	for (res=0; res<NUM_LIMITS; res++) {
+		if ((id > 0) && (res != id))
+			continue;
+
+		value = __rlim_get(limit, res);
+		__vx_cres_fixup(limit, res, value);
+
+		/* not supposed to happen, maybe warn? */
+		if (__rlim_rmax(limit, res) > __rlim_hard(limit, res))
+			__rlim_rmax(limit, res) = __rlim_hard(limit, res);
+	}
+}
+
+
 #endif	/* __KERNEL__ */
 #endif	/* _VX_LIMIT_INT_H */

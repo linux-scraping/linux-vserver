@@ -2,43 +2,43 @@
  * Copyright (c) 1999-2000 Cisco, Inc.
  * Copyright (c) 1999-2001 Motorola, Inc.
  * Copyright (c) 2002 International Business Machines, Corp.
- * 
+ *
  * This file is part of the SCTP kernel reference Implementation
- * 
+ *
  * These functions are the methods for accessing the SCTP inqueue.
  *
  * An SCTP inqueue is a queue into which you push SCTP packets
  * (which might be bundles or fragments of chunks) and out of which you
  * pop SCTP whole chunks.
- * 
- * The SCTP reference implementation is free software; 
- * you can redistribute it and/or modify it under the terms of 
+ *
+ * The SCTP reference implementation is free software;
+ * you can redistribute it and/or modify it under the terms of
  * the GNU General Public License as published by
  * the Free Software Foundation; either version 2, or (at your option)
  * any later version.
- * 
- * The SCTP reference implementation is distributed in the hope that it 
+ *
+ * The SCTP reference implementation is distributed in the hope that it
  * will be useful, but WITHOUT ANY WARRANTY; without even the implied
  *                 ************************
  * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
  * See the GNU General Public License for more details.
- * 
+ *
  * You should have received a copy of the GNU General Public License
  * along with GNU CC; see the file COPYING.  If not, write to
  * the Free Software Foundation, 59 Temple Place - Suite 330,
- * Boston, MA 02111-1307, USA.  
- * 
+ * Boston, MA 02111-1307, USA.
+ *
  * Please send any bug reports or fixes you make to the
  * email address(es):
  *    lksctp developers <lksctp-developers@lists.sourceforge.net>
- * 
+ *
  * Or submit a bug report through the following website:
  *    http://www.sf.net/projects/lksctp
  *
- * Written or modified by: 
+ * Written or modified by:
  *    La Monte H.P. Yarroll <piggy@acm.org>
  *    Karl Knutson <karl@athena.chicago.il.us>
- * 
+ *
  * Any bugs reported given to us we will try to fix... any fixes shared will
  * be incorporated into the next SCTP release.
  */
@@ -54,7 +54,7 @@ void sctp_inq_init(struct sctp_inq *queue)
 	queue->in_progress = NULL;
 
 	/* Create a task for delivering data.  */
-	INIT_WORK(&queue->immediate, NULL, NULL);
+	INIT_WORK(&queue->immediate, NULL);
 
 	queue->malloced = 0;
 }
@@ -97,7 +97,7 @@ void sctp_inq_push(struct sctp_inq *q, struct sctp_chunk *chunk)
 	 * on the BH related data structures.
 	 */
 	list_add_tail(&chunk->list, &q->in_chunk_list);
-	q->immediate.func(q->immediate.data);
+	q->immediate.func(&q->immediate);
 }
 
 /* Extract a chunk from an SCTP inqueue.
@@ -152,8 +152,8 @@ struct sctp_chunk *sctp_inq_pop(struct sctp_inq *queue)
 		chunk->data_accepted = 0;
 	}
 
-        chunk->chunk_hdr = ch;
-        chunk->chunk_end = ((__u8 *)ch) + WORD_ROUND(ntohs(ch->length));
+	chunk->chunk_hdr = ch;
+	chunk->chunk_end = ((__u8 *)ch) + WORD_ROUND(ntohs(ch->length));
 	/* In the unlikely case of an IP reassembly, the skb could be
 	 * non-linear. If so, update chunk_end so that it doesn't go past
 	 * the skb->tail.
@@ -169,11 +169,11 @@ struct sctp_chunk *sctp_inq_pop(struct sctp_inq *queue)
 		/* This is not a singleton */
 		chunk->singleton = 0;
 	} else if (chunk->chunk_end > chunk->skb->tail) {
-                /* RFC 2960, Section 6.10  Bundling
+		/* RFC 2960, Section 6.10  Bundling
 		 *
 		 * Partial chunks MUST NOT be placed in an SCTP packet.
 		 * If the receiver detects a partial chunk, it MUST drop
-		 * the chunk.  
+		 * the chunk.
 		 *
 		 * Since the end of the chunk is past the end of our buffer
 		 * (which contains the whole packet, we can freely discard
@@ -205,9 +205,8 @@ struct sctp_chunk *sctp_inq_pop(struct sctp_inq *queue)
  * The intent is that this routine will pull stuff out of the
  * inqueue and process it.
  */
-void sctp_inq_set_th_handler(struct sctp_inq *q,
-				 void (*callback)(void *), void *arg)
+void sctp_inq_set_th_handler(struct sctp_inq *q, work_func_t callback)
 {
-	INIT_WORK(&q->immediate, callback, arg);
+	INIT_WORK(&q->immediate, callback);
 }
 

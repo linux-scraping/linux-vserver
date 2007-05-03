@@ -475,7 +475,7 @@ static void dib3000mc_set_channel_cfg(struct dib3000mc_state *state, struct dibx
 	tmp = ((chan->nfft & 0x1) << 7) | (chan->guard << 5) | (chan->nqam << 3) | chan->vit_alpha;
 	dib3000mc_write_word(state, 0, tmp);
 
-	dib3000mc_write_word(state, 5, seq);
+	dib3000mc_write_word(state, 5, (1 << 8) | ((seq & 0xf) << 4));
 
 	tmp = (chan->vit_hrch << 4) | (chan->vit_select_hp);
 	if (!chan->vit_hrch || (chan->vit_hrch && chan->vit_select_hp))
@@ -511,16 +511,11 @@ static int dib3000mc_autosearch_start(struct dvb_frontend *demod, struct dibx000
 
 
 	/* a channel for autosearch */
-	reg = 0;
-	if (chan->nfft == -1 && chan->guard == -1) reg = 7;
-	if (chan->nfft == -1 && chan->guard != -1) reg = 2;
-	if (chan->nfft != -1 && chan->guard == -1) reg = 3;
-
 	fchan.nfft = 1; fchan.guard = 0; fchan.nqam = 2;
 	fchan.vit_alpha = 1; fchan.vit_code_rate_hp = 2; fchan.vit_code_rate_lp = 2;
 	fchan.vit_hrch = 0; fchan.vit_select_hp = 1;
 
-	dib3000mc_set_channel_cfg(state, &fchan, reg);
+	dib3000mc_set_channel_cfg(state, &fchan, 11);
 
 	reg = dib3000mc_read_word(state, 0);
 	dib3000mc_write_word(state, 0, reg | (1 << 8));

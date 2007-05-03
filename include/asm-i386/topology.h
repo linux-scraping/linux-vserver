@@ -85,10 +85,10 @@ static inline int node_to_first_cpu(int node)
 	.idle_idx		= 1,			\
 	.newidle_idx		= 2,			\
 	.wake_idx		= 1,			\
-	.per_cpu_gain		= 100,			\
 	.flags			= SD_LOAD_BALANCE	\
 				| SD_BALANCE_EXEC	\
 				| SD_BALANCE_FORK	\
+				| SD_SERIALIZE		\
 				| SD_WAKE_BALANCE,	\
 	.last_balance		= jiffies,		\
 	.balance_interval	= 1,			\

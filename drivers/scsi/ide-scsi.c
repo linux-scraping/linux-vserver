@@ -110,6 +110,7 @@ typedef struct ide_scsi_obj {
 } idescsi_scsi_t;
 
 static DEFINE_MUTEX(idescsi_ref_mutex);
+static int idescsi_nocd;			/* Set by module param to skip cd */
 
 #define ide_scsi_g(disk) \
 	container_of((disk)->private_data, struct ide_scsi_obj, driver)
@@ -800,14 +801,9 @@ static int idescsi_ide_open(struct inode *inode, struct file *filp)
 {
 	struct gendisk *disk = inode->i_bdev->bd_disk;
 	struct ide_scsi_obj *scsi;
-	ide_drive_t *drive;
 
 	if (!(scsi = ide_scsi_get(disk)))
 		return -ENXIO;
-
-	drive = scsi->drive;
-
-	drive->usage++;
 
 	return 0;
 }
@@ -816,9 +812,6 @@ static int idescsi_ide_release(struct inode *inode, struct file *filp)
 {
 	struct gendisk *disk = inode->i_bdev->bd_disk;
 	struct ide_scsi_obj *scsi = ide_scsi_g(disk);
-	ide_drive_t *drive = scsi->drive;
-
-	drive->usage--;
 
 	ide_scsi_put(scsi);
 
@@ -1127,6 +1120,9 @@ static int ide_scsi_probe(ide_drive_t *drive)
 		warned = 1;
 	}
 
+	if (idescsi_nocd && drive->media == ide_cdrom)
+		return -ENODEV;
+
 	if (!strstr("ide-scsi", drive->driver_req) ||
 	    !drive->present ||
 	    drive->media == ide_disk ||
@@ -1187,6 +1183,8 @@ static void __exit exit_idescsi_module(void)
 	driver_unregister(&idescsi_driver.gen_driver);
 }
 
+module_param(idescsi_nocd, int, 0600);
+MODULE_PARM_DESC(idescsi_nocd, "Disable handling of CD-ROMs so they may be driven by ide-cd");
 module_init(init_idescsi_module);
 module_exit(exit_idescsi_module);
 MODULE_LICENSE("GPL");

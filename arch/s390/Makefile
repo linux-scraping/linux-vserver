@@ -35,6 +35,9 @@ cflags-$(CONFIG_MARCH_Z900) += $(call cc-option,-march=z900)
 cflags-$(CONFIG_MARCH_Z990) += $(call cc-option,-march=z990)
 cflags-$(CONFIG_MARCH_Z9_109) += $(call cc-option,-march=z9-109)
 
+#KBUILD_IMAGE is necessary for make rpm
+KBUILD_IMAGE	:=arch/s390/boot/image
+
 #
 # Prevent tail-call optimizations, to get clearer backtraces:
 #
@@ -79,18 +82,18 @@ AFLAGS		+= $(aflags-y)
 OBJCOPYFLAGS	:= -O binary
 LDFLAGS_vmlinux := -e start
 
-head-y		:= arch/$(ARCH)/kernel/head.o arch/$(ARCH)/kernel/init_task.o
+head-y		:= arch/s390/kernel/head.o arch/s390/kernel/init_task.o
 
-core-y		+= arch/$(ARCH)/mm/ arch/$(ARCH)/kernel/ arch/$(ARCH)/crypto/ \
-		   arch/$(ARCH)/appldata/ arch/$(ARCH)/hypfs/
-libs-y		+= arch/$(ARCH)/lib/
+core-y		+= arch/s390/mm/ arch/s390/kernel/ arch/s390/crypto/ \
+		   arch/s390/appldata/ arch/s390/hypfs/
+libs-y		+= arch/s390/lib/
 drivers-y	+= drivers/s390/
-drivers-$(CONFIG_MATHEMU) += arch/$(ARCH)/math-emu/
+drivers-$(CONFIG_MATHEMU) += arch/s390/math-emu/
 
 # must be linked after kernel
 drivers-$(CONFIG_OPROFILE)	+= arch/s390/oprofile/
 
-boot		:= arch/$(ARCH)/boot
+boot		:= arch/s390/boot
 
 all: image
 

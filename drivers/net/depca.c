@@ -1252,24 +1252,22 @@ static void set_multicast_list(struct net_device *dev)
 	struct depca_private *lp = (struct depca_private *) dev->priv;
 	u_long ioaddr = dev->base_addr;
 
-	if (dev) {
-		netif_stop_queue(dev);
-		while (lp->tx_old != lp->tx_new);	/* Wait for the ring to empty */
+	netif_stop_queue(dev);
+	while (lp->tx_old != lp->tx_new);	/* Wait for the ring to empty */
 
-		STOP_DEPCA;	/* Temporarily stop the depca.  */
-		depca_init_ring(dev);	/* Initialize the descriptor rings */
+	STOP_DEPCA;	/* Temporarily stop the depca.  */
+	depca_init_ring(dev);	/* Initialize the descriptor rings */
 
-		if (dev->flags & IFF_PROMISC) {	/* Set promiscuous mode */
-			lp->init_block.mode |= PROM;
-		} else {
-			SetMulticastFilter(dev);
-			lp->init_block.mode &= ~PROM;	/* Unset promiscuous mode */
-		}
-
-		LoadCSRs(dev);	/* Reload CSR3 */
-		InitRestartDepca(dev);	/* Resume normal operation. */
-		netif_start_queue(dev);	/* Unlock the TX ring */
+	if (dev->flags & IFF_PROMISC) {	/* Set promiscuous mode */
+		lp->init_block.mode |= PROM;
+	} else {
+		SetMulticastFilter(dev);
+		lp->init_block.mode &= ~PROM;	/* Unset promiscuous mode */
 	}
+
+	LoadCSRs(dev);	/* Reload CSR3 */
+	InitRestartDepca(dev);	/* Resume normal operation. */
+	netif_start_queue(dev);	/* Unlock the TX ring */
 }
 
 /*
@@ -1493,8 +1491,9 @@ static void __init depca_platform_probe (void)
 		depca_io_ports[i].device = pldev;
 
 		if (platform_device_add(pldev)) {
-			platform_device_put(pldev);
 			depca_io_ports[i].device = NULL;
+			pldev->dev.platform_data = NULL;
+			platform_device_put(pldev);
 			continue;
 		}
 

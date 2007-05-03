@@ -151,8 +151,6 @@ qeth_hex_dump(unsigned char *buf, size_t len)
 #define SENSE_RESETTING_EVENT_BYTE 1
 #define SENSE_RESETTING_EVENT_FLAG 0x80
 
-#define atomic_swap(a,b) xchg((int *)a.counter, b)
-
 /*
  * Common IO related definitions
  */
@@ -712,7 +710,7 @@ struct qeth_reply {
 	int (*callback)(struct qeth_card *,struct qeth_reply *,unsigned long);
  	u32 seqno;
 	unsigned long offset;
-	int received;
+	atomic_t received;
 	int rc;
 	void *param;
 	struct qeth_card *card;
@@ -875,7 +873,7 @@ qeth_realloc_headroom(struct qeth_card *card, struct sk_buff *skb, int size)
 }
 
 static inline struct sk_buff *
-qeth_pskb_unshare(struct sk_buff *skb, int pri)
+qeth_pskb_unshare(struct sk_buff *skb, gfp_t pri)
 {
         struct sk_buff *nskb;
         if (!skb_cloned(skb))

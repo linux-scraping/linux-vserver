@@ -16,37 +16,43 @@
 
 #include <asm/assembler.h>
 #include <asm/domain.h>
-#include <asm/procinfo.h>
 #include <asm/ptrace.h>
 #include <asm/asm-offsets.h>
 #include <asm/memory.h>
 #include <asm/thread_info.h>
 #include <asm/system.h>
 
-#define KERNEL_RAM_ADDR	(PAGE_OFFSET + TEXT_OFFSET)
+#if (PHYS_OFFSET & 0x001fffff)
+#error "PHYS_OFFSET must be at an even 2MiB boundary!"
+#endif
+
+#define KERNEL_RAM_VADDR	(PAGE_OFFSET + TEXT_OFFSET)
+#define KERNEL_RAM_PADDR	(PHYS_OFFSET + TEXT_OFFSET)
 
 /*
  * swapper_pg_dir is the virtual address of the initial page table.
- * We place the page tables 16K below KERNEL_RAM_ADDR.  Therefore, we must
- * make sure that KERNEL_RAM_ADDR is correctly set.  Currently, we expect
+ * We place the page tables 16K below KERNEL_RAM_VADDR.  Therefore, we must
+ * make sure that KERNEL_RAM_VADDR is correctly set.  Currently, we expect
  * the least significant 16 bits to be 0x8000, but we could probably
- * relax this restriction to KERNEL_RAM_ADDR >= PAGE_OFFSET + 0x4000.
+ * relax this restriction to KERNEL_RAM_VADDR >= PAGE_OFFSET + 0x4000.
  */
-#if (KERNEL_RAM_ADDR & 0xffff) != 0x8000
-#error KERNEL_RAM_ADDR must start at 0xXXXX8000
+#if (KERNEL_RAM_VADDR & 0xffff) != 0x8000
+#error KERNEL_RAM_VADDR must start at 0xXXXX8000
 #endif
 
 	.globl	swapper_pg_dir
-	.equ	swapper_pg_dir, KERNEL_RAM_ADDR - 0x4000
+	.equ	swapper_pg_dir, KERNEL_RAM_VADDR - 0x4000
 
 	.macro	pgtbl, rd
-	ldr	\rd, =(__virt_to_phys(KERNEL_RAM_ADDR - 0x4000))
+	ldr	\rd, =(KERNEL_RAM_PADDR - 0x4000)
 	.endm
 
 #ifdef CONFIG_XIP_KERNEL
-#define TEXTADDR  XIP_VIRT_ADDR(CONFIG_XIP_PHYS_ADDR)
+#define KERNEL_START	XIP_VIRT_ADDR(CONFIG_XIP_PHYS_ADDR)
+#define KERNEL_END	_edata_loc
 #else
-#define TEXTADDR  KERNEL_RAM_ADDR
+#define KERNEL_START	KERNEL_RAM_VADDR
+#define KERNEL_END	_end
 #endif
 
 /*
@@ -236,39 +242,40 @@ __create_page_tables:
 	 * Now setup the pagetables for our kernel direct
 	 * mapped region.
 	 */
-	add	r0, r4,  #(TEXTADDR & 0xff000000) >> 18	@ start of kernel
-	str	r3, [r0, #(TEXTADDR & 0x00f00000) >> 18]!
+	add	r0, r4,  #(KERNEL_START & 0xff000000) >> 18
+	str	r3, [r0, #(KERNEL_START & 0x00f00000) >> 18]!
+	ldr	r6, =(KERNEL_END - 1)
+	add	r0, r0, #4
+	add	r6, r4, r6, lsr #18
+1:	cmp	r0, r6
+	add	r3, r3, #1 << 20
+	strls	r3, [r0], #4
+	bls	1b
 
-	ldr	r6, =(_end - PAGE_OFFSET - 1)	@ r6 = number of sections
-	mov	r6, r6, lsr #20			@ needed for kernel minus 1
-
-1:	add	r3, r3, #1 << 20
-	str	r3, [r0, #4]!
-	subs	r6, r6, #1
-	bgt	1b
+#ifdef CONFIG_XIP_KERNEL
+	/*
+	 * Map some ram to cover our .data and .bss areas.
+	 */
+	orr	r3, r7, #(KERNEL_RAM_PADDR & 0xff000000)
+	orr	r3, r3, #(KERNEL_RAM_PADDR & 0x00f00000)
+	add	r0, r4,  #(KERNEL_RAM_VADDR & 0xff000000) >> 18
+	str	r3, [r0, #(KERNEL_RAM_VADDR & 0x00f00000) >> 18]!
+	ldr	r6, =(_end - 1)
+	add	r0, r0, #4
+	add	r6, r4, r6, lsr #18
+1:	cmp	r0, r6
+	add	r3, r3, #1 << 20
+	strls	r3, [r0], #4
+	bls	1b
+#endif
 
 	/*
 	 * Then map first 1MB of ram in case it contains our boot params.
 	 */
 	add	r0, r4, #PAGE_OFFSET >> 18
-	orr	r6, r7, #PHYS_OFFSET
+	orr	r6, r7, #(PHYS_OFFSET & 0xff000000)
+	orr	r6, r6, #(PHYS_OFFSET & 0x00e00000)
 	str	r6, [r0]
-
-#ifdef CONFIG_XIP_KERNEL
-	/*
-	 * Map some ram to cover our .data and .bss areas.
-	 * Mapping 3MB should be plenty.
-	 */
-	sub	r3, r4, #PHYS_OFFSET
-	mov	r3, r3, lsr #20
-	add	r0, r0, r3, lsl #2
-	add	r6, r6, r3, lsl #20
-	str	r6, [r0], #4
-	add	r6, r6, #(1 << 20)
-	str	r6, [r0], #4
-	add	r6, r6, #(1 << 20)
-	str	r6, [r0]
-#endif
 
 #ifdef CONFIG_DEBUG_LL
 	ldr	r7, [r10, #PROCINFO_IO_MMUFLAGS] @ io_mmuflags

@@ -120,6 +120,8 @@ struct keyspan_pda_private {
 	int			tx_throttled;
 	struct work_struct			wakeup_work;
 	struct work_struct			unthrottle_work;
+	struct usb_serial	*serial;
+	struct usb_serial_port	*port;
 };
 
 
@@ -175,20 +177,20 @@ static struct usb_device_id id_table_fake_xircom [] = {
 };
 #endif
 
-static void keyspan_pda_wakeup_write( struct usb_serial_port *port )
+static void keyspan_pda_wakeup_write(struct work_struct *work)
 {
+	struct keyspan_pda_private *priv =
+		container_of(work, struct keyspan_pda_private, wakeup_work);
+	struct usb_serial_port *port = priv->port;
 
-	struct tty_struct *tty = port->tty;
-
-	/* wake up port processes */
-	wake_up_interruptible( &port->write_wait );
-
-	/* wake up line discipline */
-	tty_wakeup(tty);
+	tty_wakeup(port->tty);
 }
 
-static void keyspan_pda_request_unthrottle( struct usb_serial *serial )
+static void keyspan_pda_request_unthrottle(struct work_struct *work)
 {
+	struct keyspan_pda_private *priv =
+		container_of(work, struct keyspan_pda_private, unthrottle_work);
+	struct usb_serial *serial = priv->serial;
 	int result;
 
 	dbg(" request_unthrottle");
@@ -358,7 +360,7 @@ static void keyspan_pda_break_ctl (struct usb_serial_port *port, int break_state
 
 
 static void keyspan_pda_set_termios (struct usb_serial_port *port, 
-				     struct termios *old_termios)
+				     struct ktermios *old_termios)
 {
 	struct usb_serial *serial = port->serial;
 	unsigned int cflag = port->tty->termios->c_cflag;
@@ -765,11 +767,10 @@ static int keyspan_pda_startup (struct usb_serial *serial)
 		return (1); /* error */
 	usb_set_serial_port_data(serial->port[0], priv);
 	init_waitqueue_head(&serial->port[0]->write_wait);
-	INIT_WORK(&priv->wakeup_work, (void *)keyspan_pda_wakeup_write,
-			(void *)(serial->port[0]));
-	INIT_WORK(&priv->unthrottle_work,
-			(void *)keyspan_pda_request_unthrottle,
-			(void *)(serial));
+	INIT_WORK(&priv->wakeup_work, keyspan_pda_wakeup_write);
+	INIT_WORK(&priv->unthrottle_work, keyspan_pda_request_unthrottle);
+	priv->serial = serial;
+	priv->port = serial->port[0];
 	return (0);
 }
 
@@ -787,6 +788,7 @@ static struct usb_serial_driver keyspan_pda_fake_device = {
 		.name =		"keyspan_pda_pre",
 	},
 	.description =		"Keyspan PDA - (prerenumeration)",
+	.usb_driver = 		&keyspan_pda_driver,
 	.id_table =		id_table_fake,
 	.num_interrupt_in =	NUM_DONT_CARE,
 	.num_bulk_in =		NUM_DONT_CARE,
@@ -803,6 +805,7 @@ static struct usb_serial_driver xircom_pgs_fake_device = {
 		.name =		"xircom_no_firm",
 	},
 	.description =		"Xircom / Entregra PGS - (prerenumeration)",
+	.usb_driver = 		&keyspan_pda_driver,
 	.id_table =		id_table_fake_xircom,
 	.num_interrupt_in =	NUM_DONT_CARE,
 	.num_bulk_in =		NUM_DONT_CARE,
@@ -818,6 +821,7 @@ static struct usb_serial_driver keyspan_pda_device = {
 		.name =		"keyspan_pda",
 	},
 	.description =		"Keyspan PDA",
+	.usb_driver = 		&keyspan_pda_driver,
 	.id_table =		id_table_std,
 	.num_interrupt_in =	1,
 	.num_bulk_in =		0,

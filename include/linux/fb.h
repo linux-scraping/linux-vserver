@@ -49,6 +49,13 @@
 #define FB_AUX_TEXT_S3_MMIO	2	/* S3 MMIO fasttext */
 #define FB_AUX_TEXT_MGA_STEP16	3	/* MGA Millenium I: text, attr, 14 reserved bytes */
 #define FB_AUX_TEXT_MGA_STEP8	4	/* other MGAs:      text, attr,  6 reserved bytes */
+#define FB_AUX_TEXT_SVGA_GROUP	8	/* 8-15: SVGA tileblit compatible modes */
+#define FB_AUX_TEXT_SVGA_MASK	7	/* lower three bits says step */
+#define FB_AUX_TEXT_SVGA_STEP2	8	/* SVGA text mode:  text, attr */
+#define FB_AUX_TEXT_SVGA_STEP4	9	/* SVGA text mode:  text, attr,  2 reserved bytes */
+#define FB_AUX_TEXT_SVGA_STEP8	10	/* SVGA text mode:  text, attr,  6 reserved bytes */
+#define FB_AUX_TEXT_SVGA_STEP16	11	/* SVGA text mode:  text, attr, 14 reserved bytes */
+#define FB_AUX_TEXT_SVGA_LAST	15	/* reserved up to 15 */
 
 #define FB_AUX_VGA_PLANES_VGA4		0	/* 16 color planes (EGA/VGA) */
 #define FB_AUX_VGA_PLANES_CFB4		1	/* CFB4 in planes (VGA) */
@@ -509,13 +516,15 @@ struct fb_cursor_user {
 #define FB_EVENT_GET_CONSOLE_MAP        0x07
 /*      CONSOLE-SPECIFIC: set console to framebuffer mapping */
 #define FB_EVENT_SET_CONSOLE_MAP        0x08
-/*      A display blank is requested       */
+/*      A hardware display blank change occured */
 #define FB_EVENT_BLANK                  0x09
 /*      Private modelist is to be replaced */
 #define FB_EVENT_NEW_MODELIST           0x0A
 /*	The resolution of the passed in fb_info about to change and
         all vc's should be changed         */
 #define FB_EVENT_MODE_CHANGE_ALL	0x0B
+/*	A software display blank change occured */
+#define FB_EVENT_CONBLANK               0x0C
 
 struct fb_event {
 	struct fb_info *info;
@@ -760,22 +769,19 @@ struct fb_info {
 	struct fb_videomode *mode;	/* current mode */
 
 #ifdef CONFIG_FB_BACKLIGHT
-	/* Lock ordering:
-	 * bl_mutex (protects bl_dev and bl_curve)
-	 *   bl_dev->sem (backlight class)
-	 */
-	struct mutex bl_mutex;
-
 	/* assigned backlight device */
+	/* set before framebuffer registration, 
+	   remove after unregister */
 	struct backlight_device *bl_dev;
 
 	/* Backlight level curve */
+	struct mutex bl_curve_mutex;	
 	u8 bl_curve[FB_BACKLIGHT_LEVELS];
 #endif
 
 	struct fb_ops *fbops;
-	struct device *device;
-	struct class_device *class_device; /* sysfs per device attrs */
+	struct device *device;		/* This is the parent */
+	struct device *dev;		/* This is this fb device */
 	int class_flag;                    /* private sysfs flags */
 #ifdef CONFIG_FB_TILEBLITTING
 	struct fb_tile_ops *tileops;    /* Tile Blitting */
@@ -910,8 +916,8 @@ static inline void __fb_pad_aligned_buffer(u8 *dst, u32 d_pitch,
 /* drivers/video/fbsysfs.c */
 extern struct fb_info *framebuffer_alloc(size_t size, struct device *dev);
 extern void framebuffer_release(struct fb_info *info);
-extern int fb_init_class_device(struct fb_info *fb_info);
-extern void fb_cleanup_class_device(struct fb_info *head);
+extern int fb_init_device(struct fb_info *fb_info);
+extern void fb_cleanup_device(struct fb_info *head);
 extern void fb_bl_default_curve(struct fb_info *fb_info, u8 off, u8 min, u8 max);
 
 /* drivers/video/fbmon.c */
@@ -929,8 +935,6 @@ extern void fb_bl_default_curve(struct fb_info *fb_info, u8 off, u8 min, u8 max)
 #define FB_MODE_IS_FIRST	16
 #define FB_MODE_IS_FROM_VAR     32
 
-extern int fbmon_valid_timings(u_int pixclock, u_int htotal, u_int vtotal,
-			       const struct fb_info *fb_info);
 extern int fbmon_dpms(const struct fb_info *fb_info);
 extern int fb_get_mode(int flags, u32 val, struct fb_var_screeninfo *var,
 		       struct fb_info *info);
@@ -947,34 +951,35 @@ extern unsigned char *fb_ddc_read(struct i2c_adapter *adapter);
 /* drivers/video/modedb.c */
 #define VESA_MODEDB_SIZE 34
 extern void fb_var_to_videomode(struct fb_videomode *mode,
-				struct fb_var_screeninfo *var);
+				const struct fb_var_screeninfo *var);
 extern void fb_videomode_to_var(struct fb_var_screeninfo *var,
-				struct fb_videomode *mode);
-extern int fb_mode_is_equal(struct fb_videomode *mode1,
-			    struct fb_videomode *mode2);
-extern int fb_add_videomode(struct fb_videomode *mode, struct list_head *head);
-extern void fb_delete_videomode(struct fb_videomode *mode,
+				const struct fb_videomode *mode);
+extern int fb_mode_is_equal(const struct fb_videomode *mode1,
+			    const struct fb_videomode *mode2);
+extern int fb_add_videomode(const struct fb_videomode *mode,
+			    struct list_head *head);
+extern void fb_delete_videomode(const struct fb_videomode *mode,
 				struct list_head *head);
-extern struct fb_videomode *fb_match_mode(struct fb_var_screeninfo *var,
-					  struct list_head *head);
-extern struct fb_videomode *fb_find_best_mode(struct fb_var_screeninfo *var,
-					      struct list_head *head);
-extern struct fb_videomode *fb_find_nearest_mode(struct fb_videomode *mode,
-						 struct list_head *head);
+extern const struct fb_videomode *fb_match_mode(const struct fb_var_screeninfo *var,
+						struct list_head *head);
+extern const struct fb_videomode *fb_find_best_mode(const struct fb_var_screeninfo *var,
+						    struct list_head *head);
+extern const struct fb_videomode *fb_find_nearest_mode(const struct fb_videomode *mode,
+						       struct list_head *head);
 extern void fb_destroy_modelist(struct list_head *head);
-extern void fb_videomode_to_modelist(struct fb_videomode *modedb, int num,
+extern void fb_videomode_to_modelist(const struct fb_videomode *modedb, int num,
 				     struct list_head *head);
-extern struct fb_videomode *fb_find_best_display(struct fb_monspecs *specs,
-						 struct list_head *head);
+extern const struct fb_videomode *fb_find_best_display(const struct fb_monspecs *specs,
+						       struct list_head *head);
 
 /* drivers/video/fbcmap.c */
 extern int fb_alloc_cmap(struct fb_cmap *cmap, int len, int transp);
 extern void fb_dealloc_cmap(struct fb_cmap *cmap);
-extern int fb_copy_cmap(struct fb_cmap *from, struct fb_cmap *to);
-extern int fb_cmap_to_user(struct fb_cmap *from, struct fb_cmap_user *to);
+extern int fb_copy_cmap(const struct fb_cmap *from, struct fb_cmap *to);
+extern int fb_cmap_to_user(const struct fb_cmap *from, struct fb_cmap_user *to);
 extern int fb_set_cmap(struct fb_cmap *cmap, struct fb_info *fb_info);
 extern int fb_set_user_cmap(struct fb_cmap_user *cmap, struct fb_info *fb_info);
-extern struct fb_cmap *fb_default_cmap(int len);
+extern const struct fb_cmap *fb_default_cmap(int len);
 extern void fb_invert_cmaps(void);
 
 struct fb_videomode {

@@ -44,7 +44,9 @@ struct op_powerpc_model {
 			   int num_counters);
 	void (*cpu_setup) (struct op_counter_config *);
 	void (*start) (struct op_counter_config *);
+        void (*global_start) (struct op_counter_config *);
 	void (*stop) (void);
+	void (*global_stop) (void);
 	void (*handle_interrupt) (struct pt_regs *,
 				  struct op_counter_config *);
 	int num_counters;
@@ -54,11 +56,10 @@ extern struct op_powerpc_model op_model_fsl_booke;
 extern struct op_powerpc_model op_model_rs64;
 extern struct op_powerpc_model op_model_power4;
 extern struct op_powerpc_model op_model_7450;
-
-#ifndef CONFIG_FSL_BOOKE
+extern struct op_powerpc_model op_model_cell;
 
 /* All the classic PPC parts use these */
-static inline unsigned int ctr_read(unsigned int i)
+static inline unsigned int classic_ctr_read(unsigned int i)
 {
 	switch(i) {
 	case 0:
@@ -86,7 +87,7 @@ static inline unsigned int ctr_read(unsigned int i)
 	}
 }
 
-static inline void ctr_write(unsigned int i, unsigned int val)
+static inline void classic_ctr_write(unsigned int i, unsigned int val)
 {
 	switch(i) {
 	case 0:
@@ -121,89 +122,6 @@ static inline void ctr_write(unsigned int i, unsigned int val)
 		break;
 	}
 }
-#else /* CONFIG_FSL_BOOKE */
-static inline u32 get_pmlca(int ctr)
-{
-	u32 pmlca;
-
-	switch (ctr) {
-		case 0:
-			pmlca = mfpmr(PMRN_PMLCA0);
-			break;
-		case 1:
-			pmlca = mfpmr(PMRN_PMLCA1);
-			break;
-		case 2:
-			pmlca = mfpmr(PMRN_PMLCA2);
-			break;
-		case 3:
-			pmlca = mfpmr(PMRN_PMLCA3);
-			break;
-		default:
-			panic("Bad ctr number\n");
-	}
-
-	return pmlca;
-}
-
-static inline void set_pmlca(int ctr, u32 pmlca)
-{
-	switch (ctr) {
-		case 0:
-			mtpmr(PMRN_PMLCA0, pmlca);
-			break;
-		case 1:
-			mtpmr(PMRN_PMLCA1, pmlca);
-			break;
-		case 2:
-			mtpmr(PMRN_PMLCA2, pmlca);
-			break;
-		case 3:
-			mtpmr(PMRN_PMLCA3, pmlca);
-			break;
-		default:
-			panic("Bad ctr number\n");
-	}
-}
-
-static inline unsigned int ctr_read(unsigned int i)
-{
-	switch(i) {
-		case 0:
-			return mfpmr(PMRN_PMC0);
-		case 1:
-			return mfpmr(PMRN_PMC1);
-		case 2:
-			return mfpmr(PMRN_PMC2);
-		case 3:
-			return mfpmr(PMRN_PMC3);
-		default:
-			return 0;
-	}
-}
-
-static inline void ctr_write(unsigned int i, unsigned int val)
-{
-	switch(i) {
-		case 0:
-			mtpmr(PMRN_PMC0, val);
-			break;
-		case 1:
-			mtpmr(PMRN_PMC1, val);
-			break;
-		case 2:
-			mtpmr(PMRN_PMC2, val);
-			break;
-		case 3:
-			mtpmr(PMRN_PMC3, val);
-			break;
-		default:
-			break;
-	}
-}
-
-
-#endif /* CONFIG_FSL_BOOKE */
 
 
 extern void op_powerpc_backtrace(struct pt_regs * const regs, unsigned int depth);

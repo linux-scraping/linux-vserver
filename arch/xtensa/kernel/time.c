@@ -38,16 +38,7 @@ unsigned long ccount_nsec;		/* nsec per ccount increment */
 unsigned int last_ccount_stamp;
 static long last_rtc_update = 0;
 
-/*
- * Scheduler clock - returns current tim in nanosec units.
- */
-
-unsigned long long sched_clock(void)
-{
-	return (unsigned long long)jiffies * (1000000000 / HZ);
-}
-
-static irqreturn_t timer_interrupt(int irq, void *dev_id, struct pt_regs *regs);
+static irqreturn_t timer_interrupt(int irq, void *dev_id);
 static struct irqaction timer_irqaction = {
 	.handler =	timer_interrupt,
 	.flags =	IRQF_DISABLED,
@@ -150,7 +141,7 @@ EXPORT_SYMBOL(do_gettimeofday);
  * The timer interrupt is called HZ times per second.
  */
 
-irqreturn_t timer_interrupt (int irq, void *dev_id, struct pt_regs *regs)
+irqreturn_t timer_interrupt (int irq, void *dev_id)
 {
 
 	unsigned long next;
@@ -160,9 +151,9 @@ irqreturn_t timer_interrupt (int irq, void *dev_id, struct pt_regs *regs)
 again:
 	while ((signed long)(get_ccount() - next) > 0) {
 
-		profile_tick(CPU_PROFILING, regs);
+		profile_tick(CPU_PROFILING);
 #ifndef CONFIG_SMP
-		update_process_times(user_mode(regs));
+		update_process_times(user_mode(get_irq_regs()));
 #endif
 
 		write_seqlock(&xtime_lock);

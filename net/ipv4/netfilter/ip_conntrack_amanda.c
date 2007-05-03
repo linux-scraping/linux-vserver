@@ -9,7 +9,7 @@
  *
  *	Module load syntax:
  * 	insmod ip_conntrack_amanda.o [master_timeout=n]
- *	
+ *
  *	Where master_timeout is the timeout (in seconds) of the master
  *	connection (port 10080).  This defaults to 5 minutes but if
  *	your clients take longer than 5 minutes to do their work
@@ -84,7 +84,7 @@ static struct {
 };
 
 static int help(struct sk_buff **pskb,
-                struct ip_conntrack *ct, enum ip_conntrack_info ctinfo)
+		struct ip_conntrack *ct, enum ip_conntrack_info ctinfo)
 {
 	struct ts_state ts;
 	struct ip_conntrack_expect *exp;
@@ -92,6 +92,7 @@ static int help(struct sk_buff **pskb,
 	char pbuf[sizeof("65535")], *tmp;
 	u_int16_t port, len;
 	int ret = NF_ACCEPT;
+	typeof(ip_nat_amanda_hook) ip_nat_amanda;
 
 	/* Only look at packets from the Amanda server */
 	if (CTINFO2DIR(ctinfo) == IP_CT_DIR_ORIGINAL)
@@ -161,9 +162,11 @@ static int help(struct sk_buff **pskb,
 		exp->mask.dst.protonum = 0xFF;
 		exp->mask.dst.u.tcp.port = htons(0xFFFF);
 
-		if (ip_nat_amanda_hook)
-			ret = ip_nat_amanda_hook(pskb, ctinfo, off - dataoff,
-						 len, exp);
+		/* RCU read locked by nf_hook_slow */
+		ip_nat_amanda = rcu_dereference(ip_nat_amanda_hook);
+		if (ip_nat_amanda)
+			ret = ip_nat_amanda(pskb, ctinfo, off - dataoff,
+					    len, exp);
 		else if (ip_conntrack_expect_related(exp) != 0)
 			ret = NF_DROP;
 		ip_conntrack_expect_put(exp);
@@ -180,7 +183,7 @@ static struct ip_conntrack_helper amanda_helper = {
 	.help = help,
 	.name = "amanda",
 
-	.tuple = { .src = { .u = { __constant_htons(10080) } },
+	.tuple = { .src = { .u = { .udp = {.port = __constant_htons(10080) } } },
 		   .dst = { .protonum = IPPROTO_UDP },
 	},
 	.mask = { .src = { .u = { 0xFFFF } },

@@ -7,7 +7,6 @@
 #include <linux/module.h>
 #include <linux/moduleparam.h>
 #include <linux/kernel.h>
-#include <linux/sched.h>
 #include <linux/string.h>
 #include <linux/timer.h>
 #include <linux/delay.h>
@@ -267,6 +266,10 @@ static int tuner_fixup_std(struct tuner *t)
 {
 	if ((t->std & V4L2_STD_PAL) == V4L2_STD_PAL) {
 		switch (pal[0]) {
+		case '6':
+			tuner_dbg ("insmod fixup: PAL => PAL-60\n");
+			t->std = V4L2_STD_PAL_60;
+			break;
 		case 'b':
 		case 'B':
 		case 'g':
@@ -443,6 +446,10 @@ static int tuner_attach(struct i2c_adapter *adap, int addr, int kind)
 			printk("%02x ",buffer[i]);
 		printk("\n");
 	}
+	/* HACK: This test were added to avoid tuner to probe tda9840 and tea6415c on the MXB card */
+	if (adap->id == I2C_HW_SAA7146 && addr < 0x4a)
+		return -ENODEV;
+
 	/* autodetection code based on the i2c addr */
 	if (!no_autodetect) {
 		switch (addr) {
@@ -797,9 +804,8 @@ static int tuner_command(struct i2c_client *client, unsigned int cmd, void *arg)
 	return 0;
 }
 
-static int tuner_suspend(struct device *dev, pm_message_t state)
+static int tuner_suspend(struct i2c_client *c, pm_message_t state)
 {
-	struct i2c_client *c = container_of (dev, struct i2c_client, dev);
 	struct tuner *t = i2c_get_clientdata (c);
 
 	tuner_dbg ("suspend\n");
@@ -807,9 +813,8 @@ static int tuner_suspend(struct device *dev, pm_message_t state)
 	return 0;
 }
 
-static int tuner_resume(struct device *dev)
+static int tuner_resume(struct i2c_client *c)
 {
-	struct i2c_client *c = container_of (dev, struct i2c_client, dev);
 	struct tuner *t = i2c_get_clientdata (c);
 
 	tuner_dbg ("resume\n");
@@ -830,10 +835,10 @@ static struct i2c_driver driver = {
 	.attach_adapter = tuner_probe,
 	.detach_client = tuner_detach,
 	.command = tuner_command,
+	.suspend = tuner_suspend,
+	.resume  = tuner_resume,
 	.driver = {
 		.name    = "tuner",
-		.suspend = tuner_suspend,
-		.resume  = tuner_resume,
 	},
 };
 static struct i2c_client client_template = {

@@ -33,7 +33,7 @@ static ssize_t page_map_read( struct file *file, char __user *buf, size_t nbytes
 			      loff_t *ppos);
 static int     page_map_mmap( struct file *file, struct vm_area_struct *vma );
 
-static struct file_operations page_map_fops = {
+static const struct file_operations page_map_fops = {
 	.llseek	= page_map_seek,
 	.read	= page_map_read,
 	.mmap	= page_map_mmap
@@ -71,7 +71,6 @@ static int __init proc_ppc64_init(void)
 	pde = create_proc_entry("ppc64/systemcfg", S_IFREG|S_IRUGO, NULL);
 	if (!pde)
 		return 1;
-	pde->nlink = 1;
 	pde->data = vdso_data;
 	pde->size = PAGE_SIZE;
 	pde->proc_fops = &page_map_fops;
@@ -83,7 +82,7 @@ __initcall(proc_ppc64_init);
 static loff_t page_map_seek( struct file *file, loff_t off, int whence)
 {
 	loff_t new;
-	struct proc_dir_entry *dp = PDE(file->f_dentry->d_inode);
+	struct proc_dir_entry *dp = PDE(file->f_path.dentry->d_inode);
 
 	switch(whence) {
 	case 0:
@@ -106,13 +105,13 @@ static loff_t page_map_seek( struct file *file, loff_t off, int whence)
 static ssize_t page_map_read( struct file *file, char __user *buf, size_t nbytes,
 			      loff_t *ppos)
 {
-	struct proc_dir_entry *dp = PDE(file->f_dentry->d_inode);
+	struct proc_dir_entry *dp = PDE(file->f_path.dentry->d_inode);
 	return simple_read_from_buffer(buf, nbytes, ppos, dp->data, dp->size);
 }
 
 static int page_map_mmap( struct file *file, struct vm_area_struct *vma )
 {
-	struct proc_dir_entry *dp = PDE(file->f_dentry->d_inode);
+	struct proc_dir_entry *dp = PDE(file->f_path.dentry->d_inode);
 
 	if ((vma->vm_end - vma->vm_start) > dp->size)
 		return -EINVAL;

@@ -51,23 +51,23 @@ const char *get_system_type(void)
 void __init plat_timer_setup(struct irqaction *irq)
 {
 	/* Load timer value for HZ (TCLK is 50MHz) */
-	GALILEO_OUTL(50*1000*1000 / HZ, GT_TC0_OFS);
+	GT_WRITE(GT_TC0_OFS, 50*1000*1000 / HZ);
 
 	/* Enable timer */
-	GALILEO_OUTL(GALILEO_ENTC0 | GALILEO_SELTC0, GT_TC_CONTROL_OFS);
+	GT_WRITE(GT_TC_CONTROL_OFS, GT_TC_CONTROL_ENTC0_MSK | GT_TC_CONTROL_SELTC0_MSK);
 
 	/* Register interrupt */
 	setup_irq(COBALT_GALILEO_IRQ, irq);
 
 	/* Enable interrupt */
-	GALILEO_OUTL(GALILEO_INTR_T0EXP | GALILEO_INL(GT_INTRMASK_OFS), GT_INTRMASK_OFS);
+	GT_WRITE(GT_INTRMASK_OFS, GT_INTR_T0EXP_MSK | GT_READ(GT_INTRMASK_OFS));
 }
 
 extern struct pci_ops gt64111_pci_ops;
 
 static struct resource cobalt_mem_resource = {
-	.start	= GT64111_MEM_BASE,
-	.end	= GT64111_MEM_END,
+	.start	= GT_DEF_PCI0_MEM0_BASE,
+	.end	= GT_DEF_PCI0_MEM0_BASE + GT_DEF_PCI0_MEM0_SIZE - 1,
 	.name	= "PCI memory",
 	.flags	= IORESOURCE_MEM
 };
@@ -79,43 +79,44 @@ static struct resource cobalt_io_resource = {
 	.flags	= IORESOURCE_IO
 };
 
-static struct resource cobalt_io_resources[] = {
-	{
+/*
+ * Cobalt doesn't have PS/2 keyboard/mouse interfaces,
+ * keyboard conntroller is never used.
+ * Also PCI-ISA bridge DMA contoroller is never used.
+ */
+static struct resource cobalt_reserved_resources[] = {
+	{	/* dma1 */
 		.start	= 0x00,
 		.end	= 0x1f,
-		.name	= "dma1",
-		.flags	= IORESOURCE_BUSY
-	}, {
-		.start	= 0x40,
-		.end	= 0x5f,
-		.name	= "timer",
-		.flags	= IORESOURCE_BUSY
-	}, {
+		.name	= "reserved",
+		.flags	= IORESOURCE_BUSY | IORESOURCE_IO,
+	},
+	{	/* keyboard */
 		.start	= 0x60,
 		.end	= 0x6f,
-		.name	= "keyboard",
-		.flags	= IORESOURCE_BUSY
-	}, {
+		.name	= "reserved",
+		.flags	= IORESOURCE_BUSY | IORESOURCE_IO,
+	},
+	{	/* dma page reg */
 		.start	= 0x80,
 		.end	= 0x8f,
-		.name	= "dma page reg",
-		.flags	= IORESOURCE_BUSY
-	}, {
+		.name	= "reserved",
+		.flags	= IORESOURCE_BUSY | IORESOURCE_IO,
+	},
+	{	/* dma2 */
 		.start	= 0xc0,
 		.end	= 0xdf,
-		.name	= "dma2",
-		.flags	= IORESOURCE_BUSY
+		.name	= "reserved",
+		.flags	= IORESOURCE_BUSY | IORESOURCE_IO,
 	},
 };
-
-#define COBALT_IO_RESOURCES (sizeof(cobalt_io_resources)/sizeof(struct resource))
 
 static struct pci_controller cobalt_pci_controller = {
 	.pci_ops	= &gt64111_pci_ops,
 	.mem_resource	= &cobalt_mem_resource,
 	.mem_offset	= 0,
 	.io_resource	= &cobalt_io_resource,
-	.io_offset	= 0 - GT64111_IO_BASE
+	.io_offset	= 0 - GT_DEF_PCI0_IO_BASE,
 };
 
 void __init plat_mem_setup(void)
@@ -128,18 +129,18 @@ void __init plat_mem_setup(void)
 	_machine_halt = cobalt_machine_halt;
 	pm_power_off = cobalt_machine_power_off;
 
-        set_io_port_base(CKSEG1ADDR(GT64111_IO_BASE));
+	set_io_port_base(CKSEG1ADDR(GT_DEF_PCI0_IO_BASE));
 
-	/* I/O port resource must include UART and LCD/buttons */
+	/* I/O port resource must include LCD/buttons */
 	ioport_resource.end = 0x0fffffff;
 
-	/* request I/O space for devices used on all i[345]86 PCs */
-	for (i = 0; i < COBALT_IO_RESOURCES; i++)
-		request_resource(&ioport_resource, cobalt_io_resources + i);
+	/* These resources have been reserved by VIA SuperI/O chip. */
+	for (i = 0; i < ARRAY_SIZE(cobalt_reserved_resources); i++)
+		request_resource(&ioport_resource, cobalt_reserved_resources + i);
 
         /* Read the cobalt id register out of the PCI config space */
         PCI_CFG_SET(devfn, (VIA_COBALT_BRD_ID_REG & ~0x3));
-        cobalt_board_id = GALILEO_INL(GT_PCI0_CFGDATA_OFS);
+        cobalt_board_id = GT_READ(GT_PCI0_CFGDATA_OFS);
         cobalt_board_id >>= ((VIA_COBALT_BRD_ID_REG & 3) * 8);
         cobalt_board_id = VIA_COBALT_BRD_REG_to_ID(cobalt_board_id);
 
@@ -149,24 +150,20 @@ void __init plat_mem_setup(void)
 	register_pci_controller(&cobalt_pci_controller);
 #endif
 
-#ifdef CONFIG_SERIAL_8250
 	if (cobalt_board_id > COBALT_BRD_ID_RAQ1) {
-
-#ifdef CONFIG_EARLY_PRINTK
-		cobalt_early_console();
-#endif
-
+#ifdef CONFIG_SERIAL_8250
 		uart.line	= 0;
 		uart.type	= PORT_UNKNOWN;
 		uart.uartclk	= 18432000;
 		uart.irq	= COBALT_SERIAL_IRQ;
-		uart.flags	= UPF_BOOT_AUTOCONF | UPF_SKIP_TEST;
-		uart.iobase	= 0xc800000;
-		uart.iotype	= UPIO_PORT;
+		uart.flags	= UPF_IOREMAP | UPF_BOOT_AUTOCONF |
+				  UPF_SKIP_TEST;
+		uart.iotype	= UPIO_MEM;
+		uart.mapbase	= 0x1c800000;
 
 		early_serial_setup(&uart);
-	}
 #endif
+	}
 }
 
 /*
@@ -204,8 +201,7 @@ void __init prom_init(void)
 	add_memory_region(0x0, memsz, BOOT_MEM_RAM);
 }
 
-unsigned long __init prom_free_prom_memory(void)
+void __init prom_free_prom_memory(void)
 {
 	/* Nothing to do! */
-	return 0;
 }

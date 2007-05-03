@@ -13,10 +13,12 @@
 #include <linux/types.h>
 #include <linux/compiler.h>
 #include <linux/bitops.h>
+#include <linux/log2.h>
 #include <asm/byteorder.h>
 #include <asm/bug.h>
 
 extern const char linux_banner[];
+extern const char linux_proc_banner[];
 
 #define INT_MAX		((int)(~0U>>1))
 #define INT_MIN		(-INT_MAX - 1)
@@ -65,7 +67,7 @@ struct user;
  * context (spinlock, irq-handler, ...).
  *
  * This is a useful debugging help to be able to catch problems early and not
- * be biten later when the calling function happens to sleep when it is not
+ * be bitten later when the calling function happens to sleep when it is not
  * supposed to.
  */
 #ifdef CONFIG_PREEMPT_VOLUNTARY
@@ -87,11 +89,6 @@ extern int cond_resched(void);
 
 #define abs(x) ({				\
 		int __x = (x);			\
-		(__x < 0) ? -__x : __x;		\
-	})
-
-#define labs(x) ({				\
-		long __x = (x);			\
 		(__x < 0) ? -__x : __x;		\
 	})
 
@@ -137,7 +134,8 @@ extern unsigned long long memparse(char *ptr, char **retptr);
 extern int core_kernel_text(unsigned long addr);
 extern int __kernel_text_address(unsigned long addr);
 extern int kernel_text_address(unsigned long addr);
-extern int session_of_pgrp(int pgrp);
+struct pid;
+extern struct pid *session_of_pgrp(struct pid *pgrp);
 
 extern void dump_thread(struct pt_regs *regs, struct user *dump);
 
@@ -157,20 +155,6 @@ static inline int printk(const char *s, ...) { return 0; }
 
 unsigned long int_sqrt(unsigned long);
 
-static inline int __attribute_pure__ long_log2(unsigned long x)
-{
-	int r = 0;
-	for (x >>= 1; x > 0; x >>= 1)
-		r++;
-	return r;
-}
-
-static inline unsigned long
-__attribute_const__ roundup_pow_of_two(unsigned long x)
-{
-	return 1UL << fls_long(x - 1);
-}
-
 extern int printk_ratelimit(void);
 extern int __printk_ratelimit(int ratelimit_jiffies, int ratelimit_burst);
 extern bool printk_timed_ratelimit(unsigned long *caller_jiffies,
@@ -188,6 +172,7 @@ static inline void console_verbose(void)
 }
 
 extern void bust_spinlocks(int yes);
+extern void wake_up_klogd(void);
 extern int oops_in_progress;		/* If set, an oops, panic(), BUG() or die() is in progress */
 extern int panic_timeout;
 extern int panic_on_oops;
@@ -212,6 +197,7 @@ extern enum system_states {
 #define TAINT_FORCED_RMMOD		(1<<3)
 #define TAINT_MACHINE_CHECK		(1<<4)
 #define TAINT_BAD_PAGE			(1<<5)
+#define TAINT_USER			(1<<6)
 
 extern void dump_stack(void);
 
@@ -323,6 +309,9 @@ static inline int __attribute__ ((format (printf, 1, 2))) pr_debug(const char * 
 ({	typeof(type) __tmp = function; \
 	(void)__tmp; \
 })
+
+struct sysinfo;
+extern int do_sysinfo(struct sysinfo *info);
 
 #endif /* __KERNEL__ */
 

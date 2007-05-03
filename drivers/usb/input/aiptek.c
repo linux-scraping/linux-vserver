@@ -76,7 +76,6 @@
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/usb/input.h>
-#include <linux/sched.h>
 #include <asm/uaccess.h>
 #include <asm/unaligned.h>
 
@@ -1988,7 +1987,7 @@ aiptek_probe(struct usb_interface *intf, const struct usb_device_id *id)
 		goto fail1;
 
 	aiptek->data = usb_buffer_alloc(usbdev, AIPTEK_PACKET_LENGTH,
-					SLAB_ATOMIC, &aiptek->data_dma);
+					GFP_ATOMIC, &aiptek->data_dma);
 	if (!aiptek->data)
 		goto fail1;
 

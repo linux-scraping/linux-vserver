@@ -12,12 +12,17 @@ menuconfig INPUT_TOUCHSCREEN
 if INPUT_TOUCHSCREEN
 
 config TOUCHSCREEN_ADS7846
-	tristate "ADS 7846 based touchscreens"
+	tristate "ADS 7846/7843 based touchscreens"
 	depends on SPI_MASTER
+	depends on HWMON = n || HWMON
 	help
 	  Say Y here if you have a touchscreen interface using the
-	  ADS7846 controller, and your board-specific initialization
+	  ADS7846 or ADS7843 controller, and your board-specific setup
 	  code includes that in its table of SPI devices.
+
+	  If HWMON is selected, and the driver is told the reference voltage
+	  on your board, you will also get hwmon interfaces for the voltage
+	  (and on ads7846, temperature) sensors of this chip.
 
 	  If unsure, say N (but it's safe to say "Y").
 
@@ -143,5 +148,20 @@ config TOUCHSCREEN_TOUCHWIN
 
 	  To compile this driver as a module, choose M here: the
 	  module will be called touchwin.
+
+config TOUCHSCREEN_UCB1400
+	tristate "Philips UCB1400 touchscreen"
+	select AC97_BUS
+	help
+	  This enables support for the Philips UCB1400 touchscreen interface.
+	  The UCB1400 is an AC97 audio codec.  The touchscreen interface
+	  will be initialized only after the ALSA subsystem has been
+	  brought up and the UCB1400 detected.  You therefore have to
+	  configure ALSA support as well (either built-in or modular,
+	  independently of whether this driver is itself built-in or
+	  modular) for this driver to work.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called ucb1400_ts.
 
 endif

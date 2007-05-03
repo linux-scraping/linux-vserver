@@ -46,7 +46,6 @@
 				 * two cc/ua clears */
 
 /* Private data accessors (keep these out of the header file) */
-#define spi_dv_pending(x) (((struct spi_transport_attrs *)&(x)->starget_data)->dv_pending)
 #define spi_dv_in_progress(x) (((struct spi_transport_attrs *)&(x)->starget_data)->dv_in_progress)
 #define spi_dv_mutex(x) (((struct spi_transport_attrs *)&(x)->starget_data)->dv_mutex)
 
@@ -122,7 +121,7 @@ static int spi_execute(struct scsi_device *sdev, const void *cmd,
 			if (!sshdr)
 				sshdr = &sshdr_tmp;
 
-			if (scsi_normalize_sense(sense, sizeof(*sense),
+			if (scsi_normalize_sense(sense, SCSI_SENSE_BUFFERSIZE,
 						 sshdr)
 			    && sshdr->sense_key == UNIT_ATTENTION)
 				continue;
@@ -964,9 +963,10 @@ struct work_queue_wrapper {
 };
 
 static void
-spi_dv_device_work_wrapper(void *data)
+spi_dv_device_work_wrapper(struct work_struct *work)
 {
-	struct work_queue_wrapper *wqw = (struct work_queue_wrapper *)data;
+	struct work_queue_wrapper *wqw =
+		container_of(work, struct work_queue_wrapper, work);
 	struct scsi_device *sdev = wqw->sdev;
 
 	kfree(wqw);
@@ -1006,7 +1006,7 @@ spi_schedule_dv_device(struct scsi_device *sdev)
 		return;
 	}
 
-	INIT_WORK(&wqw->work, spi_dv_device_work_wrapper, wqw);
+	INIT_WORK(&wqw->work, spi_dv_device_work_wrapper);
 	wqw->sdev = sdev;
 
 	schedule_work(&wqw->work);

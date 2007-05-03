@@ -90,6 +90,7 @@
 
 /* Kernel text segment, and some constant data areas.  */
 #define TEXT_CONTENTS							      \
+		_text = .;						      \
 		__stext = . ;						      \
         	*(.text)						      \
 		SCHED_TEXT						      \
@@ -189,12 +190,16 @@
 		__root_fs_image_start = . ;				      \
 		*(.root)						      \
 		__root_fs_image_end = . ;
+
+#ifdef CONFIG_BLK_DEV_INITRD
 /* The initramfs archive.  */
 #define INITRAMFS_CONTENTS						      \
 		. = ALIGN (4) ;						      \
 		___initramfs_start = . ;				      \
 			*(.init.ramfs)					      \
 		___initramfs_end = . ;
+#endif
+
 /* Where the initial bootmap (bitmap for the boot-time memory allocator) 
    should be place.  */
 #define BOOTMAP_CONTENTS						      \

@@ -44,11 +44,11 @@ static int populate_dir(struct kobject * kobj)
 	return error;
 }
 
-static int create_dir(struct kobject * kobj)
+static int create_dir(struct kobject * kobj, struct dentry *shadow_parent)
 {
 	int error = 0;
 	if (kobject_name(kobj)) {
-		error = sysfs_create_dir(kobj);
+		error = sysfs_create_dir(kobj, shadow_parent);
 		if (!error) {
 			if ((error = populate_dir(kobj)))
 				sysfs_remove_dir(kobj);
@@ -97,11 +97,12 @@ static void fill_kobj_path(struct kobject *kobj, char *path, int length)
 }
 
 /**
- * kobject_get_path - generate and return the path associated with a given kobj
- * and kset pair.  The result must be freed by the caller with kfree().
+ * kobject_get_path - generate and return the path associated with a given kobj and kset pair.
  *
  * @kobj:	kobject in question, with which to build the path
  * @gfp_mask:	the allocation type used to allocate the path
+ *
+ * The result must be freed by the caller with kfree().
  */
 char *kobject_get_path(struct kobject *kobj, gfp_t gfp_mask)
 {
@@ -111,10 +112,9 @@ char *kobject_get_path(struct kobject *kobj, gfp_t gfp_mask)
 	len = get_kobj_path_length(kobj);
 	if (len == 0)
 		return NULL;
-	path = kmalloc(len, gfp_mask);
+	path = kzalloc(len, gfp_mask);
 	if (!path)
 		return NULL;
-	memset(path, 0x00, len);
 	fill_kobj_path(kobj, path, len);
 
 	return path;
@@ -127,6 +127,8 @@ EXPORT_SYMBOL_GPL(kobject_get_path);
  */
 void kobject_init(struct kobject * kobj)
 {
+	if (!kobj)
+		return;
 	kref_init(&kobj->kref);
 	INIT_LIST_HEAD(&kobj->entry);
 	init_waitqueue_head(&kobj->poll);
@@ -157,9 +159,10 @@ static void unlink(struct kobject * kobj)
 /**
  *	kobject_add - add an object to the hierarchy.
  *	@kobj:	object.
+ *	@shadow_parent: sysfs directory to add to.
  */
 
-int kobject_add(struct kobject * kobj)
+int kobject_shadow_add(struct kobject * kobj, struct dentry *shadow_parent)
 {
 	int error = 0;
 	struct kobject * parent;
@@ -168,7 +171,7 @@ int kobject_add(struct kobject * kobj)
 		return -ENOENT;
 	if (!kobj->k_name)
 		kobj->k_name = kobj->name;
-	if (!kobj->k_name) {
+	if (!*kobj->k_name) {
 		pr_debug("kobject attempted to be registered with no name!\n");
 		WARN_ON(1);
 		return -EINVAL;
@@ -190,12 +193,11 @@ int kobject_add(struct kobject * kobj)
 	}
 	kobj->parent = parent;
 
-	error = create_dir(kobj);
+	error = create_dir(kobj, shadow_parent);
 	if (error) {
 		/* unlink does the kobject_put() for us */
 		unlink(kobj);
-		if (parent)
-			kobject_put(parent);
+		kobject_put(parent);
 
 		/* be noisy on error issues */
 		if (error == -EEXIST)
@@ -210,6 +212,15 @@ int kobject_add(struct kobject * kobj)
 	}
 
 	return error;
+}
+
+/**
+ *	kobject_add - add an object to the hierarchy.
+ *	@kobj:	object.
+ */
+int kobject_add(struct kobject * kobj)
+{
+	return kobject_shadow_add(kobj, NULL);
 }
 
 
@@ -304,9 +315,84 @@ int kobject_rename(struct kobject * kobj, const char *new_name)
 	kobj = kobject_get(kobj);
 	if (!kobj)
 		return -EINVAL;
-	error = sysfs_rename_dir(kobj, new_name);
+	if (!kobj->parent)
+		return -EINVAL;
+	error = sysfs_rename_dir(kobj, kobj->parent->dentry, new_name);
 	kobject_put(kobj);
 
+	return error;
+}
+
+/**
+ *	kobject_rename - change the name of an object
+ *	@kobj:	object in question.
+ *	@new_parent: object's new parent
+ *	@new_name: object's new name
+ */
+
+int kobject_shadow_rename(struct kobject * kobj, struct dentry *new_parent,
+			  const char *new_name)
+{
+	int error = 0;
+
+	kobj = kobject_get(kobj);
+	if (!kobj)
+		return -EINVAL;
+	error = sysfs_rename_dir(kobj, new_parent, new_name);
+	kobject_put(kobj);
+
+	return error;
+}
+
+/**
+ *	kobject_move - move object to another parent
+ *	@kobj:	object in question.
+ *	@new_parent: object's new parent (can be NULL)
+ */
+
+int kobject_move(struct kobject *kobj, struct kobject *new_parent)
+{
+	int error;
+	struct kobject *old_parent;
+	const char *devpath = NULL;
+	char *devpath_string = NULL;
+	char *envp[2];
+
+	kobj = kobject_get(kobj);
+	if (!kobj)
+		return -EINVAL;
+	new_parent = kobject_get(new_parent);
+	if (!new_parent) {
+		if (kobj->kset)
+			new_parent = kobject_get(&kobj->kset->kobj);
+	}
+	/* old object path */
+	devpath = kobject_get_path(kobj, GFP_KERNEL);
+	if (!devpath) {
+		error = -ENOMEM;
+		goto out;
+	}
+	devpath_string = kmalloc(strlen(devpath) + 15, GFP_KERNEL);
+	if (!devpath_string) {
+		error = -ENOMEM;
+		goto out;
+	}
+	sprintf(devpath_string, "DEVPATH_OLD=%s", devpath);
+	envp[0] = devpath_string;
+	envp[1] = NULL;
+	error = sysfs_move_dir(kobj, new_parent);
+	if (error)
+		goto out;
+	old_parent = kobj->parent;
+	kobj->parent = new_parent;
+	new_parent = NULL;
+	kobject_put(old_parent);
+	kobject_uevent_env(kobj, KOBJ_MOVE, envp);
+out:
+	kobject_put(new_parent);
+	kobject_put(kobj);
+	kfree(devpath_string);
+	kfree(devpath);
 	return error;
 }
 
@@ -317,6 +403,8 @@ int kobject_rename(struct kobject * kobj, const char *new_name)
 
 void kobject_del(struct kobject * kobj)
 {
+	if (!kobj)
+		return;
 	sysfs_remove_dir(kobj);
 	unlink(kobj);
 }
@@ -328,6 +416,8 @@ void kobject_del(struct kobject * kobj)
 
 void kobject_unregister(struct kobject * kobj)
 {
+	if (!kobj)
+		return;
 	pr_debug("kobject %s: unregistering\n",kobject_name(kobj));
 	kobject_uevent(kobj, KOBJ_REMOVE);
 	kobject_del(kobj);
@@ -365,8 +455,7 @@ void kobject_cleanup(struct kobject * kobj)
 		t->release(kobj);
 	if (s)
 		kset_put(s);
-	if (parent) 
-		kobject_put(parent);
+	kobject_put(parent);
 }
 
 static void kobject_release(struct kref *kref)
@@ -474,6 +563,8 @@ int kset_add(struct kset * k)
 
 int kset_register(struct kset * k)
 {
+	if (!k)
+		return -EINVAL;
 	kset_init(k);
 	return kset_add(k);
 }
@@ -486,6 +577,8 @@ int kset_register(struct kset * k)
 
 void kset_unregister(struct kset * k)
 {
+	if (!k)
+		return;
 	kobject_unregister(&k->kobj);
 }
 
@@ -537,6 +630,9 @@ int subsystem_register(struct subsystem * s)
 {
 	int error;
 
+	if (!s)
+		return -EINVAL;
+
 	subsystem_init(s);
 	pr_debug("subsystem %s: registering\n",s->kset.kobj.name);
 
@@ -549,6 +645,8 @@ int subsystem_register(struct subsystem * s)
 
 void subsystem_unregister(struct subsystem * s)
 {
+	if (!s)
+		return;
 	pr_debug("subsystem %s: unregistering\n",s->kset.kobj.name);
 	kset_unregister(&s->kset);
 }
@@ -563,6 +661,10 @@ void subsystem_unregister(struct subsystem * s)
 int subsys_create_file(struct subsystem * s, struct subsys_attribute * a)
 {
 	int error = 0;
+
+	if (!s || !a)
+		return -EINVAL;
+
 	if (subsys_get(s)) {
 		error = sysfs_create_file(&s->kset.kobj,&a->attr);
 		subsys_put(s);

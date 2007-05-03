@@ -16,7 +16,6 @@
 #include <linux/module.h>
 #include <linux/types.h>
 #include <linux/kernel.h>
-#include <linux/sched.h>
 #include <linux/string.h>
 #include <linux/mm.h>
 #include <linux/socket.h>
@@ -46,11 +45,23 @@ static struct tcf_hashinfo police_hash_info = {
 	.lock	=	&police_lock,
 };
 
+/* old policer structure from before tc actions */
+struct tc_police_compat
+{
+	u32			index;
+	int			action;
+	u32			limit;
+	u32			burst;
+	u32			mtu;
+	struct tc_ratespec	rate;
+	struct tc_ratespec	peakrate;
+};
+
 /* Each policer is serialized by its individual spinlock */
 
 #ifdef CONFIG_NET_CLS_ACT
 static int tcf_act_police_walker(struct sk_buff *skb, struct netlink_callback *cb,
-                              int type, struct tc_action *a)
+			      int type, struct tc_action *a)
 {
 	struct tcf_common *p;
 	int err = 0, index = -1, i = 0, s_i = 0, n_i = 0;
@@ -100,7 +111,7 @@ void tcf_police_destroy(struct tcf_police *p)
 {
 	unsigned int h = tcf_hash(p->tcf_index, POL_TAB_MASK);
 	struct tcf_common **p1p;
-	
+
 	for (p1p = &tcf_police_ht[h]; *p1p; p1p = &(*p1p)->tcfc_next) {
 		if (*p1p == &p->common) {
 			write_lock_bh(&police_lock);
@@ -123,7 +134,7 @@ void tcf_police_destroy(struct tcf_police *p)
 
 #ifdef CONFIG_NET_CLS_ACT
 static int tcf_act_police_locate(struct rtattr *rta, struct rtattr *est,
-                                 struct tc_action *a, int ovr, int bind)
+				 struct tc_action *a, int ovr, int bind)
 {
 	unsigned h;
 	int ret = 0, err;
@@ -131,12 +142,15 @@ static int tcf_act_police_locate(struct rtattr *rta, struct rtattr *est,
 	struct tc_police *parm;
 	struct tcf_police *police;
 	struct qdisc_rate_table *R_tab = NULL, *P_tab = NULL;
+	int size;
 
 	if (rta == NULL || rtattr_parse_nested(tb, TCA_POLICE_MAX, rta) < 0)
 		return -EINVAL;
 
-	if (tb[TCA_POLICE_TBF-1] == NULL ||
-	    RTA_PAYLOAD(tb[TCA_POLICE_TBF-1]) != sizeof(*parm))
+	if (tb[TCA_POLICE_TBF-1] == NULL)
+		return -EINVAL;
+	size = RTA_PAYLOAD(tb[TCA_POLICE_TBF-1]);
+	if (size != sizeof(*parm) && size != sizeof(struct tc_police_compat))
 		return -EINVAL;
 	parm = RTA_DATA(tb[TCA_POLICE_TBF-1]);
 
@@ -254,7 +268,7 @@ static int tcf_act_police_cleanup(struct tc_action *a, int bind)
 }
 
 static int tcf_act_police(struct sk_buff *skb, struct tc_action *a,
-                          struct tcf_result *res)
+			  struct tcf_result *res)
 {
 	struct tcf_police *police = a->priv;
 	psched_time_t now;
@@ -415,12 +429,15 @@ struct tcf_police *tcf_police_locate(struct rtattr *rta, struct rtattr *est)
 	struct tcf_police *police;
 	struct rtattr *tb[TCA_POLICE_MAX];
 	struct tc_police *parm;
+	int size;
 
 	if (rtattr_parse_nested(tb, TCA_POLICE_MAX, rta) < 0)
 		return NULL;
 
-	if (tb[TCA_POLICE_TBF-1] == NULL ||
-	    RTA_PAYLOAD(tb[TCA_POLICE_TBF-1]) != sizeof(*parm))
+	if (tb[TCA_POLICE_TBF-1] == NULL)
+		return NULL;
+	size = RTA_PAYLOAD(tb[TCA_POLICE_TBF-1]);
+	if (size != sizeof(*parm) && size != sizeof(struct tc_police_compat))
 		return NULL;
 
 	parm = RTA_DATA(tb[TCA_POLICE_TBF-1]);
@@ -588,12 +605,12 @@ rtattr_failure:
 int tcf_police_dump_stats(struct sk_buff *skb, struct tcf_police *police)
 {
 	struct gnet_dump d;
-	
+
 	if (gnet_stats_start_copy_compat(skb, TCA_STATS2, TCA_STATS,
 					 TCA_XSTATS, police->tcf_stats_lock,
 					 &d) < 0)
 		goto errout;
-	
+
 	if (gnet_stats_copy_basic(&d, &police->tcf_bstats) < 0 ||
 #ifdef CONFIG_NET_ESTIMATOR
 	    gnet_stats_copy_rate_est(&d, &police->tcf_rate_est) < 0 ||

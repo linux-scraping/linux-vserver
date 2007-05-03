@@ -108,7 +108,7 @@ int xprt_reserve_xprt(struct rpc_task *task)
 	return 1;
 
 out_sleep:
-	dprintk("RPC: %4d failed to lock transport %p\n",
+	dprintk("RPC: %5u failed to lock transport %p\n",
 			task->tk_pid, xprt);
 	task->tk_timeout = 0;
 	task->tk_status = -EAGAIN;
@@ -158,7 +158,7 @@ int xprt_reserve_xprt_cong(struct rpc_task *task)
 	}
 	xprt_clear_locked(xprt);
 out_sleep:
-	dprintk("RPC: %4d failed to lock transport %p\n", task->tk_pid, xprt);
+	dprintk("RPC: %5u failed to lock transport %p\n", task->tk_pid, xprt);
 	task->tk_timeout = 0;
 	task->tk_status = -EAGAIN;
 	if (req && req->rq_ntrans)
@@ -281,7 +281,7 @@ __xprt_get_cong(struct rpc_xprt *xprt, struct rpc_task *task)
 
 	if (req->rq_cong)
 		return 1;
-	dprintk("RPC: %4d xprt_cwnd_limited cong = %ld cwnd = %ld\n",
+	dprintk("RPC: %5u xprt_cwnd_limited cong = %lu cwnd = %lu\n",
 			task->tk_pid, xprt->cong, xprt->cwnd);
 	if (RPCXPRT_CONGESTED(xprt))
 		return 0;
@@ -340,7 +340,7 @@ void xprt_adjust_cwnd(struct rpc_task *task, int result)
 		if (cwnd < RPC_CWNDSCALE)
 			cwnd = RPC_CWNDSCALE;
 	}
-	dprintk("RPC:      cong %ld, cwnd was %ld, now %ld\n",
+	dprintk("RPC:       cong %ld, cwnd was %ld, now %ld\n",
 			xprt->cong, xprt->cwnd, cwnd);
 	xprt->cwnd = cwnd;
 	__xprt_put_cong(xprt, req);
@@ -387,8 +387,8 @@ void xprt_write_space(struct rpc_xprt *xprt)
 
 	spin_lock_bh(&xprt->transport_lock);
 	if (xprt->snd_task) {
-		dprintk("RPC:      write space: waking waiting task on xprt %p\n",
-				xprt);
+		dprintk("RPC:       write space: waking waiting task on "
+				"xprt %p\n", xprt);
 		rpc_wake_up_task(xprt->snd_task);
 	}
 	spin_unlock_bh(&xprt->transport_lock);
@@ -410,7 +410,7 @@ void xprt_set_retrans_timeout_def(struct rpc_task *task)
 /*
  * xprt_set_retrans_timeout_rtt - set a request's retransmit timeout
  * @task: task whose timeout is to be set
- * 
+ *
  * Set a request's retransmit timeout using the RTT estimator.
  */
 void xprt_set_retrans_timeout_rtt(struct rpc_task *task)
@@ -459,7 +459,6 @@ int xprt_adjust_timeout(struct rpc_rqst *req)
 		if (to->to_maxval && req->rq_timeout >= to->to_maxval)
 			req->rq_timeout = to->to_maxval;
 		req->rq_retries++;
-		pprintk("RPC: %lu retrans\n", jiffies);
 	} else {
 		req->rq_timeout = to->to_initval;
 		req->rq_retries = 0;
@@ -468,7 +467,6 @@ int xprt_adjust_timeout(struct rpc_rqst *req)
 		spin_lock_bh(&xprt->transport_lock);
 		rpc_init_rtt(req->rq_task->tk_client->cl_rtt, to->to_initval);
 		spin_unlock_bh(&xprt->transport_lock);
-		pprintk("RPC: %lu timeout\n", jiffies);
 		status = -ETIMEDOUT;
 	}
 
@@ -479,9 +477,10 @@ int xprt_adjust_timeout(struct rpc_rqst *req)
 	return status;
 }
 
-static void xprt_autoclose(void *args)
+static void xprt_autoclose(struct work_struct *work)
 {
-	struct rpc_xprt *xprt = (struct rpc_xprt *)args;
+	struct rpc_xprt *xprt =
+		container_of(work, struct rpc_xprt, task_cleanup);
 
 	xprt_disconnect(xprt);
 	xprt->ops->close(xprt);
@@ -495,7 +494,7 @@ static void xprt_autoclose(void *args)
  */
 void xprt_disconnect(struct rpc_xprt *xprt)
 {
-	dprintk("RPC:      disconnected transport %p\n", xprt);
+	dprintk("RPC:       disconnected transport %p\n", xprt);
 	spin_lock_bh(&xprt->transport_lock);
 	xprt_clear_connected(xprt);
 	xprt_wake_pending_tasks(xprt, -ENOTCONN);
@@ -531,7 +530,7 @@ void xprt_connect(struct rpc_task *task)
 {
 	struct rpc_xprt	*xprt = task->tk_xprt;
 
-	dprintk("RPC: %4d xprt_connect xprt %p %s connected\n", task->tk_pid,
+	dprintk("RPC: %5u xprt_connect xprt %p %s connected\n", task->tk_pid,
 			xprt, (xprt_connected(xprt) ? "is" : "is not"));
 
 	if (!xprt_bound(xprt)) {
@@ -561,7 +560,7 @@ static void xprt_connect_status(struct rpc_task *task)
 	if (task->tk_status >= 0) {
 		xprt->stat.connect_count++;
 		xprt->stat.connect_time += (long)jiffies - xprt->stat.connect_start;
-		dprintk("RPC: %4d xprt_connect_status: connection established\n",
+		dprintk("RPC: %5u xprt_connect_status: connection established\n",
 				task->tk_pid);
 		return;
 	}
@@ -569,20 +568,22 @@ static void xprt_connect_status(struct rpc_task *task)
 	switch (task->tk_status) {
 	case -ECONNREFUSED:
 	case -ECONNRESET:
-		dprintk("RPC: %4d xprt_connect_status: server %s refused connection\n",
-				task->tk_pid, task->tk_client->cl_server);
+		dprintk("RPC: %5u xprt_connect_status: server %s refused "
+				"connection\n", task->tk_pid,
+				task->tk_client->cl_server);
 		break;
 	case -ENOTCONN:
-		dprintk("RPC: %4d xprt_connect_status: connection broken\n",
+		dprintk("RPC: %5u xprt_connect_status: connection broken\n",
 				task->tk_pid);
 		break;
 	case -ETIMEDOUT:
-		dprintk("RPC: %4d xprt_connect_status: connect attempt timed out\n",
-				task->tk_pid);
+		dprintk("RPC: %5u xprt_connect_status: connect attempt timed "
+				"out\n", task->tk_pid);
 		break;
 	default:
-		dprintk("RPC: %4d xprt_connect_status: error %d connecting to server %s\n",
-				task->tk_pid, -task->tk_status, task->tk_client->cl_server);
+		dprintk("RPC: %5u xprt_connect_status: error %d connecting to "
+				"server %s\n", task->tk_pid, -task->tk_status,
+				task->tk_client->cl_server);
 		xprt_release_write(xprt, task);
 		task->tk_status = -EIO;
 	}
@@ -603,6 +604,9 @@ struct rpc_rqst *xprt_lookup_rqst(struct rpc_xprt *xprt, __be32 xid)
 		if (entry->rq_xid == xid)
 			return entry;
 	}
+
+	dprintk("RPC:       xprt_lookup_rqst did not find xid %08x\n",
+			ntohl(xid));
 	xprt->stat.bad_xids++;
 	return NULL;
 }
@@ -655,7 +659,7 @@ static void xprt_timer(struct rpc_task *task)
 	struct rpc_rqst *req = task->tk_rqstp;
 	struct rpc_xprt *xprt = req->rq_xprt;
 
-	dprintk("RPC: %4d xprt_timer\n", task->tk_pid);
+	dprintk("RPC: %5u xprt_timer\n", task->tk_pid);
 
 	spin_lock(&xprt->transport_lock);
 	if (!req->rq_received) {
@@ -679,7 +683,7 @@ int xprt_prepare_transmit(struct rpc_task *task)
 	struct rpc_xprt	*xprt = req->rq_xprt;
 	int err = 0;
 
-	dprintk("RPC: %4d xprt_prepare_transmit\n", task->tk_pid);
+	dprintk("RPC: %5u xprt_prepare_transmit\n", task->tk_pid);
 
 	spin_lock_bh(&xprt->transport_lock);
 	if (req->rq_received && !req->rq_bytes_sent) {
@@ -717,7 +721,7 @@ void xprt_transmit(struct rpc_task *task)
 	struct rpc_xprt	*xprt = req->rq_xprt;
 	int status;
 
-	dprintk("RPC: %4d xprt_transmit(%u)\n", task->tk_pid, req->rq_slen);
+	dprintk("RPC: %5u xprt_transmit(%u)\n", task->tk_pid, req->rq_slen);
 
 	if (!req->rq_received) {
 		if (list_empty(&req->rq_list)) {
@@ -737,7 +741,7 @@ void xprt_transmit(struct rpc_task *task)
 
 	status = xprt->ops->send_request(task);
 	if (status == 0) {
-		dprintk("RPC: %4d xmit complete\n", task->tk_pid);
+		dprintk("RPC: %5u xmit complete\n", task->tk_pid);
 		spin_lock_bh(&xprt->transport_lock);
 
 		xprt->ops->set_retrans_timeout(task);
@@ -778,7 +782,7 @@ static inline void do_xprt_reserve(struct rpc_task *task)
 		xprt_request_init(task, xprt);
 		return;
 	}
-	dprintk("RPC:      waiting for request slot\n");
+	dprintk("RPC:       waiting for request slot\n");
 	task->tk_status = -EAGAIN;
 	task->tk_timeout = 0;
 	rpc_sleep_on(&xprt->backlog, task, NULL, NULL);
@@ -823,7 +827,7 @@ static void xprt_request_init(struct rpc_task *task, struct rpc_xprt *xprt)
 	req->rq_xid     = xprt_alloc_xid(xprt);
 	req->rq_release_snd_buf = NULL;
 	xprt_reset_majortimeo(req);
-	dprintk("RPC: %4d reserved req %p xid %08x\n", task->tk_pid,
+	dprintk("RPC: %5u reserved req %p xid %08x\n", task->tk_pid,
 			req, ntohl(req->rq_xid));
 }
 
@@ -857,7 +861,7 @@ void xprt_release(struct rpc_task *task)
 		req->rq_release_snd_buf(req);
 	memset(req, 0, sizeof(*req));	/* mark unused */
 
-	dprintk("RPC: %4d release request %p\n", task->tk_pid, req);
+	dprintk("RPC: %5u release request %p\n", task->tk_pid, req);
 
 	spin_lock(&xprt->reserve_lock);
 	list_add(&req->rq_list, &xprt->free);
@@ -874,7 +878,7 @@ void xprt_release(struct rpc_task *task)
  */
 void xprt_set_timeout(struct rpc_timeout *to, unsigned int retr, unsigned long incr)
 {
-	to->to_initval   = 
+	to->to_initval   =
 	to->to_increment = incr;
 	to->to_maxval    = to->to_initval + (incr * retr);
 	to->to_retries   = retr;
@@ -891,39 +895,25 @@ void xprt_set_timeout(struct rpc_timeout *to, unsigned int retr, unsigned long i
  */
 struct rpc_xprt *xprt_create_transport(int proto, struct sockaddr *ap, size_t size, struct rpc_timeout *to)
 {
-	int result;
 	struct rpc_xprt	*xprt;
 	struct rpc_rqst	*req;
 
-	if ((xprt = kzalloc(sizeof(struct rpc_xprt), GFP_KERNEL)) == NULL) {
-		dprintk("RPC:      xprt_create_transport: no memory\n");
-		return ERR_PTR(-ENOMEM);
-	}
-	if (size <= sizeof(xprt->addr)) {
-		memcpy(&xprt->addr, ap, size);
-		xprt->addrlen = size;
-	} else {
-		kfree(xprt);
-		dprintk("RPC:      xprt_create_transport: address too large\n");
-		return ERR_PTR(-EBADF);
-	}
-
 	switch (proto) {
 	case IPPROTO_UDP:
-		result = xs_setup_udp(xprt, to);
+		xprt = xs_setup_udp(ap, size, to);
 		break;
 	case IPPROTO_TCP:
-		result = xs_setup_tcp(xprt, to);
+		xprt = xs_setup_tcp(ap, size, to);
 		break;
 	default:
 		printk(KERN_ERR "RPC: unrecognized transport protocol: %d\n",
 				proto);
 		return ERR_PTR(-EIO);
 	}
-	if (result) {
-		kfree(xprt);
-		dprintk("RPC:      xprt_create_transport: failed, %d\n", result);
-		return ERR_PTR(result);
+	if (IS_ERR(xprt)) {
+		dprintk("RPC:       xprt_create_transport: failed, %ld\n",
+				-PTR_ERR(xprt));
+		return xprt;
 	}
 
 	kref_init(&xprt->kref);
@@ -932,7 +922,7 @@ struct rpc_xprt *xprt_create_transport(int proto, struct sockaddr *ap, size_t si
 
 	INIT_LIST_HEAD(&xprt->free);
 	INIT_LIST_HEAD(&xprt->recv);
-	INIT_WORK(&xprt->task_cleanup, xprt_autoclose, xprt);
+	INIT_WORK(&xprt->task_cleanup, xprt_autoclose);
 	init_timer(&xprt->timer);
 	xprt->timer.function = xprt_init_autodisconnect;
 	xprt->timer.data = (unsigned long) xprt;
@@ -951,7 +941,7 @@ struct rpc_xprt *xprt_create_transport(int proto, struct sockaddr *ap, size_t si
 
 	xprt_init_xid(xprt);
 
-	dprintk("RPC:      created transport %p with %u slots\n", xprt,
+	dprintk("RPC:       created transport %p with %u slots\n", xprt,
 			xprt->max_reqs);
 
 	return xprt;
@@ -966,11 +956,14 @@ static void xprt_destroy(struct kref *kref)
 {
 	struct rpc_xprt *xprt = container_of(kref, struct rpc_xprt, kref);
 
-	dprintk("RPC:      destroying transport %p\n", xprt);
+	dprintk("RPC:       destroying transport %p\n", xprt);
 	xprt->shutdown = 1;
 	del_timer_sync(&xprt->timer);
+
+	/*
+	 * Tear down transport state and free the rpc_xprt
+	 */
 	xprt->ops->destroy(xprt);
-	kfree(xprt);
 }
 
 /**

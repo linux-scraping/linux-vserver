@@ -66,6 +66,7 @@ VERSION 2.2LK	<2005/01/25>
 #include <linux/init.h>
 #include <linux/dma-mapping.h>
 
+#include <asm/system.h>
 #include <asm/io.h>
 #include <asm/irq.h>
 
@@ -424,6 +425,7 @@ struct ring_info {
 struct rtl8169_private {
 	void __iomem *mmio_addr;	/* memory map physical address */
 	struct pci_dev *pci_dev;	/* Index of PCI device */
+	struct net_device *dev;
 	struct net_device_stats stats;	/* statistics of net device */
 	spinlock_t lock;		/* spin lock flag */
 	u32 msg_enable;
@@ -455,7 +457,7 @@ struct rtl8169_private {
 	void (*phy_reset_enable)(void __iomem *);
 	unsigned int (*phy_reset_pending)(void __iomem *);
 	unsigned int (*link_ok)(void __iomem *);
-	struct work_struct task;
+	struct delayed_work task;
 	unsigned wol_enabled : 1;
 };
 
@@ -485,6 +487,7 @@ static int rtl8169_rx_interrupt(struct net_device *, struct rtl8169_private *,
 				void __iomem *);
 static int rtl8169_change_mtu(struct net_device *dev, int new_mtu);
 static void rtl8169_down(struct net_device *dev);
+static void rtl8169_rx_clear(struct rtl8169_private *tp);
 
 #ifdef CONFIG_R8169_NAPI
 static int rtl8169_poll(struct net_device *dev, int *budget);
@@ -571,8 +574,8 @@ static void rtl8169_xmii_reset_enable(void __iomem *ioaddr)
 {
 	unsigned int val;
 
-	val = (mdio_read(ioaddr, MII_BMCR) | BMCR_RESET) & 0xffff;
-	mdio_write(ioaddr, MII_BMCR, val);
+	val = mdio_read(ioaddr, MII_BMCR) | BMCR_RESET;
+	mdio_write(ioaddr, MII_BMCR, val & 0xffff);
 }
 
 static void rtl8169_check_link_status(struct net_device *dev,
@@ -889,8 +892,7 @@ static void rtl8169_vlan_rx_kill_vid(struct net_device *dev, unsigned short vid)
 	unsigned long flags;
 
 	spin_lock_irqsave(&tp->lock, flags);
-	if (tp->vlgrp)
-		tp->vlgrp->vlan_devices[vid] = NULL;
+	vlan_group_set_device(tp->vlgrp, vid, NULL);
 	spin_unlock_irqrestore(&tp->lock, flags);
 }
 
@@ -1283,11 +1285,6 @@ static void rtl8169_hw_phy_config(struct net_device *dev)
 	/* Shazam ! */
 
 	if (tp->mac_version == RTL_GIGA_MAC_VER_04) {
-		mdio_write(ioaddr, 31, 0x0001);
-		mdio_write(ioaddr,  9, 0x273a);
-		mdio_write(ioaddr, 14, 0x7bfb);
-		mdio_write(ioaddr, 27, 0x841e);
-
 		mdio_write(ioaddr, 31, 0x0002);
 		mdio_write(ioaddr,  1, 0x90d0);
 		mdio_write(ioaddr, 31, 0x0000);
@@ -1373,11 +1370,7 @@ static inline void rtl8169_request_timer(struct net_device *dev)
 	    (tp->phy_version >= RTL_GIGA_PHY_VER_H))
 		return;
 
-	init_timer(timer);
-	timer->expires = jiffies + RTL8169_PHY_TIMEOUT;
-	timer->data = (unsigned long)(dev);
-	timer->function = rtl8169_phy_timer;
-	add_timer(timer);
+	mod_timer(timer, jiffies + RTL8169_PHY_TIMEOUT);
 }
 
 #ifdef CONFIG_NET_POLL_CONTROLLER
@@ -1404,6 +1397,22 @@ static void rtl8169_release_board(struct pci_dev *pdev, struct net_device *dev,
 	pci_release_regions(pdev);
 	pci_disable_device(pdev);
 	free_netdev(dev);
+}
+
+static void rtl8169_phy_reset(struct net_device *dev,
+			      struct rtl8169_private *tp)
+{
+	void __iomem *ioaddr = tp->mmio_addr;
+	int i;
+
+	tp->phy_reset_enable(ioaddr);
+	for (i = 0; i < 100; i++) {
+		if (!tp->phy_reset_pending(ioaddr))
+			return;
+		msleep(1);
+	}
+	if (netif_msg_link(tp))
+		printk(KERN_ERR "%s: PHY reset failed.\n", dev->name);
 }
 
 static void rtl8169_init_phy(struct net_device *dev, struct rtl8169_private *tp)
@@ -1433,6 +1442,8 @@ static void rtl8169_init_phy(struct net_device *dev, struct rtl8169_private *tp)
 	}
 
 	rtl8169_link_option(board_idx, &autoneg, &speed, &duplex);
+
+	rtl8169_phy_reset(dev, tp);
 
 	rtl8169_set_speed(dev, autoneg, speed, duplex);
 
@@ -1492,6 +1503,7 @@ rtl8169_init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
 	SET_MODULE_OWNER(dev);
 	SET_NETDEV_DEV(dev, &pdev->dev);
 	tp = netdev_priv(dev);
+	tp->dev = dev;
 	tp->msg_enable = netif_msg_init(debug.msg_enable, R8169_MSG_DEFAULT);
 
 	/* enable device (incl. PCI PM wakeup and hotplug setup) */
@@ -1671,6 +1683,10 @@ rtl8169_init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
 	tp->mmio_addr = ioaddr;
 	tp->align = rtl_cfg_info[ent->driver_data].align;
 
+	init_timer(&tp->timer);
+	tp->timer.data = (unsigned long) dev;
+	tp->timer.function = rtl8169_phy_timer;
+
 	spin_lock_init(&tp->lock);
 
 	rc = register_netdev(dev);
@@ -1718,6 +1734,8 @@ rtl8169_remove_one(struct pci_dev *pdev)
 	assert(dev != NULL);
 	assert(tp != NULL);
 
+	flush_scheduled_work();
+
 	unregister_netdev(dev);
 	rtl8169_release_board(pdev, dev, tp->mmio_addr);
 	pci_set_drvdata(pdev, NULL);
@@ -1735,16 +1753,10 @@ static int rtl8169_open(struct net_device *dev)
 {
 	struct rtl8169_private *tp = netdev_priv(dev);
 	struct pci_dev *pdev = tp->pci_dev;
-	int retval;
+	int retval = -ENOMEM;
+
 
 	rtl8169_set_rxbufsize(tp, dev);
-
-	retval =
-	    request_irq(dev->irq, rtl8169_interrupt, IRQF_SHARED, dev->name, dev);
-	if (retval < 0)
-		goto out;
-
-	retval = -ENOMEM;
 
 	/*
 	 * Rx and Tx desscriptors needs 256 bytes alignment.
@@ -1753,18 +1765,25 @@ static int rtl8169_open(struct net_device *dev)
 	tp->TxDescArray = pci_alloc_consistent(pdev, R8169_TX_RING_BYTES,
 					       &tp->TxPhyAddr);
 	if (!tp->TxDescArray)
-		goto err_free_irq;
+		goto out;
 
 	tp->RxDescArray = pci_alloc_consistent(pdev, R8169_RX_RING_BYTES,
 					       &tp->RxPhyAddr);
 	if (!tp->RxDescArray)
-		goto err_free_tx;
+		goto err_free_tx_0;
 
 	retval = rtl8169_init_ring(dev);
 	if (retval < 0)
-		goto err_free_rx;
+		goto err_free_rx_1;
 
-	INIT_WORK(&tp->task, NULL, dev);
+	INIT_DELAYED_WORK(&tp->task, NULL);
+
+	smp_mb();
+
+	retval = request_irq(dev->irq, rtl8169_interrupt, IRQF_SHARED,
+			     dev->name, dev);
+	if (retval < 0)
+		goto err_release_ring_2;
 
 	rtl8169_hw_start(dev);
 
@@ -1774,14 +1793,14 @@ static int rtl8169_open(struct net_device *dev)
 out:
 	return retval;
 
-err_free_rx:
+err_release_ring_2:
+	rtl8169_rx_clear(tp);
+err_free_rx_1:
 	pci_free_consistent(pdev, R8169_RX_RING_BYTES, tp->RxDescArray,
 			    tp->RxPhyAddr);
-err_free_tx:
+err_free_tx_0:
 	pci_free_consistent(pdev, R8169_TX_RING_BYTES, tp->TxDescArray,
 			    tp->TxPhyAddr);
-err_free_irq:
-	free_irq(dev->irq, dev);
 	goto out;
 }
 
@@ -1797,12 +1816,25 @@ static void rtl8169_hw_reset(void __iomem *ioaddr)
 	RTL_R8(ChipCmd);
 }
 
-static void
-rtl8169_hw_start(struct net_device *dev)
+static void rtl8169_set_rx_tx_config_registers(struct rtl8169_private *tp)
+{
+	void __iomem *ioaddr = tp->mmio_addr;
+	u32 cfg = rtl8169_rx_config;
+
+	cfg |= (RTL_R32(RxConfig) & rtl_chip_info[tp->chipset].RxConfigMask);
+	RTL_W32(RxConfig, cfg);
+
+	/* Set DMA burst size and Interframe Gap Time */
+	RTL_W32(TxConfig, (TX_DMA_BURST << TxDMAShift) |
+		(InterFrameGap << TxInterFrameGapShift));
+}
+
+static void rtl8169_hw_start(struct net_device *dev)
 {
 	struct rtl8169_private *tp = netdev_priv(dev);
 	void __iomem *ioaddr = tp->mmio_addr;
 	struct pci_dev *pdev = tp->pci_dev;
+	u16 cmd;
 	u32 i;
 
 	/* Soft reset the chip. */
@@ -1815,6 +1847,11 @@ rtl8169_hw_start(struct net_device *dev)
 		msleep_interruptible(1);
 	}
 
+	if (tp->mac_version == RTL_GIGA_MAC_VER_05) {
+		RTL_W16(CPlusCmd, RTL_R16(CPlusCmd) | PCIMulRW);
+		pci_write_config_byte(pdev, PCI_CACHE_LINE_SIZE, 0x08);
+	}
+
 	if (tp->mac_version == RTL_GIGA_MAC_VER_13) {
 		pci_write_config_word(pdev, 0x68, 0x00);
 		pci_write_config_word(pdev, 0x69, 0x08);
@@ -1822,8 +1859,6 @@ rtl8169_hw_start(struct net_device *dev)
 
 	/* Undocumented stuff. */
 	if (tp->mac_version == RTL_GIGA_MAC_VER_05) {
-		u16 cmd;
-
 		/* Realtek's r1000_n.c driver uses '&& 0x01' here. Well... */
 		if ((RTL_R8(Config2) & 0x07) & 0x01)
 			RTL_W32(0x7c, 0x0007ffff);
@@ -1835,23 +1870,28 @@ rtl8169_hw_start(struct net_device *dev)
 		pci_write_config_word(pdev, PCI_COMMAND, cmd);
 	}
 
-
 	RTL_W8(Cfg9346, Cfg9346_Unlock);
+	if ((tp->mac_version == RTL_GIGA_MAC_VER_01) ||
+	    (tp->mac_version == RTL_GIGA_MAC_VER_02) ||
+	    (tp->mac_version == RTL_GIGA_MAC_VER_03) ||
+	    (tp->mac_version == RTL_GIGA_MAC_VER_04))
+		RTL_W8(ChipCmd, CmdTxEnb | CmdRxEnb);
+
 	RTL_W8(EarlyTxThres, EarlyTxThld);
 
 	/* Low hurts. Let's disable the filtering. */
 	RTL_W16(RxMaxSize, 16383);
 
-	/* Set Rx Config register */
-	i = rtl8169_rx_config |
-		(RTL_R32(RxConfig) & rtl_chip_info[tp->chipset].RxConfigMask);
-	RTL_W32(RxConfig, i);
+	if ((tp->mac_version == RTL_GIGA_MAC_VER_01) ||
+	    (tp->mac_version == RTL_GIGA_MAC_VER_02) ||
+	    (tp->mac_version == RTL_GIGA_MAC_VER_03) ||
+	    (tp->mac_version == RTL_GIGA_MAC_VER_04))
+		rtl8169_set_rx_tx_config_registers(tp);
 
-	/* Set DMA burst size and Interframe Gap Time */
-	RTL_W32(TxConfig, (TX_DMA_BURST << TxDMAShift) |
-		(InterFrameGap << TxInterFrameGapShift));
+	cmd = RTL_R16(CPlusCmd);
+	RTL_W16(CPlusCmd, cmd);
 
-	tp->cp_cmd |= RTL_R16(CPlusCmd) | PCIMulRW;
+	tp->cp_cmd |= cmd | PCIMulRW;
 
 	if ((tp->mac_version == RTL_GIGA_MAC_VER_02) ||
 	    (tp->mac_version == RTL_GIGA_MAC_VER_03)) {
@@ -1877,7 +1917,15 @@ rtl8169_hw_start(struct net_device *dev)
 	RTL_W32(TxDescStartAddrLow, ((u64) tp->TxPhyAddr & DMA_32BIT_MASK));
 	RTL_W32(RxDescAddrHigh, ((u64) tp->RxPhyAddr >> 32));
 	RTL_W32(RxDescAddrLow, ((u64) tp->RxPhyAddr & DMA_32BIT_MASK));
-	RTL_W8(ChipCmd, CmdTxEnb | CmdRxEnb);
+
+	if ((tp->mac_version != RTL_GIGA_MAC_VER_01) &&
+	    (tp->mac_version != RTL_GIGA_MAC_VER_02) &&
+	    (tp->mac_version != RTL_GIGA_MAC_VER_03) &&
+	    (tp->mac_version != RTL_GIGA_MAC_VER_04)) {
+		RTL_W8(ChipCmd, CmdTxEnb | CmdRxEnb);
+		rtl8169_set_rx_tx_config_registers(tp);
+	}
+
 	RTL_W8(Cfg9346, Cfg9346_Lock);
 
 	/* Initially a 10 us delay. Turned it into a PCI commit. - FR */
@@ -1972,7 +2020,7 @@ static int rtl8169_alloc_rx_skb(struct pci_dev *pdev, struct sk_buff **sk_buff,
 	if (!skb)
 		goto err_out;
 
-	skb_reserve(skb, align);
+	skb_reserve(skb, (align - 1) & (unsigned long)skb->data);
 	*sk_buff = skb;
 
 	mapping = pci_map_single(pdev, skb->data, rx_buf_sz,
@@ -2087,11 +2135,11 @@ static void rtl8169_tx_clear(struct rtl8169_private *tp)
 	tp->cur_tx = tp->dirty_tx = 0;
 }
 
-static void rtl8169_schedule_work(struct net_device *dev, void (*task)(void *))
+static void rtl8169_schedule_work(struct net_device *dev, work_func_t task)
 {
 	struct rtl8169_private *tp = netdev_priv(dev);
 
-	PREPARE_WORK(&tp->task, task, dev);
+	PREPARE_DELAYED_WORK(&tp->task, task);
 	schedule_delayed_work(&tp->task, 4);
 }
 
@@ -2110,15 +2158,20 @@ static void rtl8169_wait_for_quiescence(struct net_device *dev)
 	netif_poll_enable(dev);
 }
 
-static void rtl8169_reinit_task(void *_data)
+static void rtl8169_reinit_task(struct work_struct *work)
 {
-	struct net_device *dev = _data;
+	struct rtl8169_private *tp =
+		container_of(work, struct rtl8169_private, task.work);
+	struct net_device *dev = tp->dev;
 	int ret;
 
-	if (netif_running(dev)) {
-		rtl8169_wait_for_quiescence(dev);
-		rtl8169_close(dev);
-	}
+	rtnl_lock();
+
+	if (!netif_running(dev))
+		goto out_unlock;
+
+	rtl8169_wait_for_quiescence(dev);
+	rtl8169_close(dev);
 
 	ret = rtl8169_open(dev);
 	if (unlikely(ret < 0)) {
@@ -2133,15 +2186,21 @@ static void rtl8169_reinit_task(void *_data)
 		}
 		rtl8169_schedule_work(dev, rtl8169_reinit_task);
 	}
+
+out_unlock:
+	rtnl_unlock();
 }
 
-static void rtl8169_reset_task(void *_data)
+static void rtl8169_reset_task(struct work_struct *work)
 {
-	struct net_device *dev = _data;
-	struct rtl8169_private *tp = netdev_priv(dev);
+	struct rtl8169_private *tp =
+		container_of(work, struct rtl8169_private, task.work);
+	struct net_device *dev = tp->dev;
+
+	rtnl_lock();
 
 	if (!netif_running(dev))
-		return;
+		goto out_unlock;
 
 	rtl8169_wait_for_quiescence(dev);
 
@@ -2163,6 +2222,9 @@ static void rtl8169_reset_task(void *_data)
 		}
 		rtl8169_schedule_work(dev, rtl8169_reset_task);
 	}
+
+out_unlock:
+	rtnl_unlock();
 }
 
 static void rtl8169_tx_timeout(struct net_device *dev)
@@ -2332,12 +2394,17 @@ static void rtl8169_pcierr_interrupt(struct net_device *dev)
 	/*
 	 * The recovery sequence below admits a very elaborated explanation:
 	 * - it seems to work;
-	 * - I did not see what else could be done.
+	 * - I did not see what else could be done;
+	 * - it makes iop3xx happy.
 	 *
 	 * Feel free to adjust to your needs.
 	 */
-	pci_write_config_word(pdev, PCI_COMMAND,
-			      pci_cmd | PCI_COMMAND_SERR | PCI_COMMAND_PARITY);
+	if (pdev->broken_parity_status)
+		pci_cmd &= ~PCI_COMMAND_PARITY;
+	else
+		pci_cmd |= PCI_COMMAND_SERR | PCI_COMMAND_PARITY;
+
+	pci_write_config_word(pdev, PCI_COMMAND, pci_cmd);
 
 	pci_write_config_word(pdev, PCI_STATUS,
 		pci_status & (PCI_STATUS_DETECTED_PARITY |
@@ -2351,10 +2418,11 @@ static void rtl8169_pcierr_interrupt(struct net_device *dev)
 		tp->cp_cmd &= ~PCIDAC;
 		RTL_W16(CPlusCmd, tp->cp_cmd);
 		dev->features &= ~NETIF_F_HIGHDMA;
-		rtl8169_schedule_work(dev, rtl8169_reinit_task);
 	}
 
 	rtl8169_hw_reset(ioaddr);
+
+	rtl8169_schedule_work(dev, rtl8169_reinit_task);
 }
 
 static void
@@ -2434,7 +2502,7 @@ static inline int rtl8169_try_rx_copy(struct sk_buff **sk_buff, int pkt_size,
 
 		skb = dev_alloc_skb(pkt_size + align);
 		if (skb) {
-			skb_reserve(skb, align);
+			skb_reserve(skb, (align - 1) & (unsigned long)skb->data);
 			eth_copy_and_sum(skb, sk_buff[0]->data, pkt_size, 0);
 			*sk_buff = skb;
 			rtl8169_mark_to_asic(desc, rx_buf_sz);
@@ -2669,8 +2737,6 @@ static void rtl8169_down(struct net_device *dev)
 
 	netif_stop_queue(dev);
 
-	flush_scheduled_work();
-
 core_down:
 	spin_lock_irq(&tp->lock);
 
@@ -2824,7 +2890,7 @@ static int rtl8169_suspend(struct pci_dev *pdev, pm_message_t state)
 	void __iomem *ioaddr = tp->mmio_addr;
 
 	if (!netif_running(dev))
-		goto out;
+		goto out_pci_suspend;
 
 	netif_device_detach(dev);
 	netif_stop_queue(dev);
@@ -2838,10 +2904,11 @@ static int rtl8169_suspend(struct pci_dev *pdev, pm_message_t state)
 
 	spin_unlock_irq(&tp->lock);
 
+out_pci_suspend:
 	pci_save_state(pdev);
 	pci_enable_wake(pdev, pci_choose_state(pdev, state), tp->wol_enabled);
 	pci_set_power_state(pdev, pci_choose_state(pdev, state));
-out:
+
 	return 0;
 }
 
@@ -2849,14 +2916,14 @@ static int rtl8169_resume(struct pci_dev *pdev)
 {
 	struct net_device *dev = pci_get_drvdata(pdev);
 
+	pci_set_power_state(pdev, PCI_D0);
+	pci_restore_state(pdev);
+	pci_enable_wake(pdev, PCI_D0, 0);
+
 	if (!netif_running(dev))
 		goto out;
 
 	netif_device_attach(dev);
-
-	pci_set_power_state(pdev, PCI_D0);
-	pci_restore_state(pdev);
-	pci_enable_wake(pdev, PCI_D0, 0);
 
 	rtl8169_schedule_work(dev, rtl8169_reset_task);
 out:

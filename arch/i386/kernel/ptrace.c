@@ -45,7 +45,7 @@
 /*
  * Offset of eflags on child stack..
  */
-#define EFL_OFFSET ((EFL-2)*4-sizeof(struct pt_regs))
+#define EFL_OFFSET offsetof(struct pt_regs, eflags)
 
 static inline struct pt_regs *get_child_regs(struct task_struct *task)
 {
@@ -54,24 +54,24 @@ static inline struct pt_regs *get_child_regs(struct task_struct *task)
 }
 
 /*
- * this routine will get a word off of the processes privileged stack. 
- * the offset is how far from the base addr as stored in the TSS.  
- * this routine assumes that all the privileged stacks are in our
+ * This routine will get a word off of the processes privileged stack.
+ * the offset is bytes into the pt_regs structure on the stack.
+ * This routine assumes that all the privileged stacks are in our
  * data space.
  */   
 static inline int get_stack_long(struct task_struct *task, int offset)
 {
 	unsigned char *stack;
 
-	stack = (unsigned char *)task->thread.esp0;
+	stack = (unsigned char *)task->thread.esp0 - sizeof(struct pt_regs);
 	stack += offset;
 	return (*((int *)stack));
 }
 
 /*
- * this routine will put a word on the processes privileged stack. 
- * the offset is how far from the base addr as stored in the TSS.  
- * this routine assumes that all the privileged stacks are in our
+ * This routine will put a word on the processes privileged stack.
+ * the offset is bytes into the pt_regs structure on the stack.
+ * This routine assumes that all the privileged stacks are in our
  * data space.
  */
 static inline int put_stack_long(struct task_struct *task, int offset,
@@ -79,7 +79,7 @@ static inline int put_stack_long(struct task_struct *task, int offset,
 {
 	unsigned char * stack;
 
-	stack = (unsigned char *) task->thread.esp0;
+	stack = (unsigned char *)task->thread.esp0 - sizeof(struct pt_regs);
 	stack += offset;
 	*(unsigned long *) stack = data;
 	return 0;
@@ -89,11 +89,6 @@ static int putreg(struct task_struct *child,
 	unsigned long regno, unsigned long value)
 {
 	switch (regno >> 2) {
-		case FS:
-			if (value && (value & 3) != 3)
-				return -EIO;
-			child->thread.fs = value;
-			return 0;
 		case GS:
 			if (value && (value & 3) != 3)
 				return -EIO;
@@ -101,6 +96,7 @@ static int putreg(struct task_struct *child,
 			return 0;
 		case DS:
 		case ES:
+		case FS:
 			if (value && (value & 3) != 3)
 				return -EIO;
 			value &= 0xffff;
@@ -116,9 +112,9 @@ static int putreg(struct task_struct *child,
 			value |= get_stack_long(child, EFL_OFFSET) & ~FLAG_MASK;
 			break;
 	}
-	if (regno > GS*4)
-		regno -= 2*4;
-	put_stack_long(child, regno - sizeof(struct pt_regs), value);
+	if (regno > FS*4)
+		regno -= 1*4;
+	put_stack_long(child, regno, value);
 	return 0;
 }
 
@@ -128,22 +124,19 @@ static unsigned long getreg(struct task_struct *child,
 	unsigned long retval = ~0UL;
 
 	switch (regno >> 2) {
-		case FS:
-			retval = child->thread.fs;
-			break;
 		case GS:
 			retval = child->thread.gs;
 			break;
 		case DS:
 		case ES:
+		case FS:
 		case SS:
 		case CS:
 			retval = 0xffff;
 			/* fall through */
 		default:
-			if (regno > GS*4)
-				regno -= 2*4;
-			regno = regno - sizeof(struct pt_regs);
+			if (regno > FS*4)
+				regno -= 1*4;
 			retval &= get_stack_long(child, regno);
 	}
 	return retval;

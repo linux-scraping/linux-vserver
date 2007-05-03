@@ -66,7 +66,7 @@ const struct file_operations nfs_dir_operations = {
 	.fsync		= nfs_fsync_dir,
 };
 
-struct inode_operations nfs_dir_inode_operations = {
+const struct inode_operations nfs_dir_inode_operations = {
 	.create		= nfs_create,
 	.lookup		= nfs_lookup,
 	.link		= nfs_link,
@@ -82,7 +82,7 @@ struct inode_operations nfs_dir_inode_operations = {
 };
 
 #ifdef CONFIG_NFS_V3
-struct inode_operations nfs3_dir_inode_operations = {
+const struct inode_operations nfs3_dir_inode_operations = {
 	.create		= nfs_create,
 	.lookup		= nfs_lookup,
 	.link		= nfs_link,
@@ -105,7 +105,7 @@ struct inode_operations nfs3_dir_inode_operations = {
 #ifdef CONFIG_NFS_V4
 
 static struct dentry *nfs_atomic_lookup(struct inode *, struct dentry *, struct nameidata *);
-struct inode_operations nfs4_dir_inode_operations = {
+const struct inode_operations nfs4_dir_inode_operations = {
 	.create		= nfs_create,
 	.lookup		= nfs_atomic_lookup,
 	.link		= nfs_link,
@@ -173,7 +173,7 @@ static
 int nfs_readdir_filler(nfs_readdir_descriptor_t *desc, struct page *page)
 {
 	struct file	*file = desc->file;
-	struct inode	*inode = file->f_dentry->d_inode;
+	struct inode	*inode = file->f_path.dentry->d_inode;
 	struct rpc_cred	*cred = nfs_file_cred(file);
 	unsigned long	timestamp;
 	int		error;
@@ -184,7 +184,7 @@ int nfs_readdir_filler(nfs_readdir_descriptor_t *desc, struct page *page)
 
  again:
 	timestamp = jiffies;
-	error = NFS_PROTO(inode)->readdir(file->f_dentry, cred, desc->entry->cookie, page,
+	error = NFS_PROTO(inode)->readdir(file->f_path.dentry, cred, desc->entry->cookie, page,
 					  NFS_SERVER(inode)->dtsize, desc->plus);
 	if (error < 0) {
 		/* We requested READDIRPLUS, but the server doesn't grok it */
@@ -309,7 +309,7 @@ int find_dirent_index(nfs_readdir_descriptor_t *desc)
 static inline
 int find_dirent_page(nfs_readdir_descriptor_t *desc)
 {
-	struct inode	*inode = desc->file->f_dentry->d_inode;
+	struct inode	*inode = desc->file->f_path.dentry->d_inode;
 	struct page	*page;
 	int		status;
 
@@ -465,7 +465,7 @@ int uncached_readdir(nfs_readdir_descriptor_t *desc, void *dirent,
 		     filldir_t filldir)
 {
 	struct file	*file = desc->file;
-	struct inode	*inode = file->f_dentry->d_inode;
+	struct inode	*inode = file->f_path.dentry->d_inode;
 	struct rpc_cred	*cred = nfs_file_cred(file);
 	struct page	*page = NULL;
 	int		status;
@@ -478,7 +478,7 @@ int uncached_readdir(nfs_readdir_descriptor_t *desc, void *dirent,
 		status = -ENOMEM;
 		goto out;
 	}
-	desc->error = NFS_PROTO(inode)->readdir(file->f_dentry, cred, *desc->dir_cookie,
+	desc->error = NFS_PROTO(inode)->readdir(file->f_path.dentry, cred, *desc->dir_cookie,
 						page,
 						NFS_SERVER(inode)->dtsize,
 						desc->plus);
@@ -517,7 +517,7 @@ int uncached_readdir(nfs_readdir_descriptor_t *desc, void *dirent,
  */
 static int nfs_readdir(struct file *filp, void *dirent, filldir_t filldir)
 {
-	struct dentry	*dentry = filp->f_dentry;
+	struct dentry	*dentry = filp->f_path.dentry;
 	struct inode	*inode = dentry->d_inode;
 	nfs_readdir_descriptor_t my_desc,
 			*desc = &my_desc;
@@ -533,7 +533,7 @@ static int nfs_readdir(struct file *filp, void *dirent, filldir_t filldir)
 
 	lock_kernel();
 
-	res = nfs_revalidate_mapping(inode, filp->f_mapping);
+	res = nfs_revalidate_mapping_nolock(inode, filp->f_mapping);
 	if (res < 0) {
 		unlock_kernel();
 		return res;
@@ -600,7 +600,7 @@ static int nfs_readdir(struct file *filp, void *dirent, filldir_t filldir)
 
 loff_t nfs_llseek_dir(struct file *filp, loff_t offset, int origin)
 {
-	mutex_lock(&filp->f_dentry->d_inode->i_mutex);
+	mutex_lock(&filp->f_path.dentry->d_inode->i_mutex);
 	switch (origin) {
 		case 1:
 			offset += filp->f_pos;
@@ -616,7 +616,7 @@ loff_t nfs_llseek_dir(struct file *filp, loff_t offset, int origin)
 		((struct nfs_open_context *)filp->private_data)->dir_cookie = 0;
 	}
 out:
-	mutex_unlock(&filp->f_dentry->d_inode->i_mutex);
+	mutex_unlock(&filp->f_path.dentry->d_inode->i_mutex);
 	return offset;
 }
 
@@ -638,7 +638,7 @@ int nfs_fsync_dir(struct file *filp, struct dentry *dentry, int datasync)
  * In the case it has, we assume that the dentries are untrustworthy
  * and may need to be looked up again.
  */
-static inline int nfs_check_verifier(struct inode *dir, struct dentry *dentry)
+static int nfs_check_verifier(struct inode *dir, struct dentry *dentry)
 {
 	if (IS_ROOT(dentry))
 		return 1;
@@ -651,6 +651,12 @@ static inline int nfs_check_verifier(struct inode *dir, struct dentry *dentry)
 static inline void nfs_set_verifier(struct dentry * dentry, unsigned long verf)
 {
 	dentry->d_fsdata = (void *)verf;
+}
+
+static void nfs_refresh_verifier(struct dentry * dentry, unsigned long verf)
+{
+	if (time_after(verf, (unsigned long)dentry->d_fsdata))
+		nfs_set_verifier(dentry, verf);
 }
 
 /*
@@ -786,7 +792,7 @@ static int nfs_lookup_revalidate(struct dentry * dentry, struct nameidata *nd)
 		goto out_bad;
 
 	nfs_renew_times(dentry);
-	nfs_set_verifier(dentry, verifier);
+	nfs_refresh_verifier(dentry, verifier);
  out_valid:
 	unlock_kernel();
 	dput(parent);
@@ -1088,7 +1094,7 @@ static int nfs_open_revalidate(struct dentry *dentry, struct nameidata *nd)
 	verifier = nfs_save_change_attribute(dir);
 	ret = nfs4_open_revalidate(dir, dentry, openflags, nd);
 	if (!ret)
-		nfs_set_verifier(dentry, verifier);
+		nfs_refresh_verifier(dentry, verifier);
 	unlock_kernel();
 out:
 	dput(parent);
@@ -1105,7 +1111,7 @@ no_open:
 
 static struct dentry *nfs_readdir_lookup(nfs_readdir_descriptor_t *desc)
 {
-	struct dentry *parent = desc->file->f_dentry;
+	struct dentry *parent = desc->file->f_path.dentry;
 	struct inode *dir = parent->d_inode;
 	struct nfs_entry *entry = desc->entry;
 	struct dentry *dentry, *alias;
@@ -1126,8 +1132,21 @@ static struct dentry *nfs_readdir_lookup(nfs_readdir_descriptor_t *desc)
 	}
 	name.hash = full_name_hash(name.name, name.len);
 	dentry = d_lookup(parent, &name);
-	if (dentry != NULL)
-		return dentry;
+	if (dentry != NULL) {
+		/* Is this a positive dentry that matches the readdir info? */
+		if (dentry->d_inode != NULL &&
+				(NFS_FILEID(dentry->d_inode) == entry->ino ||
+				d_mountpoint(dentry))) {
+			if (!desc->plus || entry->fh->size == 0)
+				return dentry;
+			if (nfs_compare_fh(NFS_FH(dentry->d_inode),
+						entry->fh) == 0)
+				goto out_renew;
+		}
+		/* No, so d_drop to allow one to be created */
+		d_drop(dentry);
+		dput(dentry);
+	}
 	if (!desc->plus || !(entry->fattr->valid & NFS_ATTR_FATTR))
 		return NULL;
 	/* Note: caller is already holding the dir->i_mutex! */
@@ -1151,6 +1170,10 @@ static struct dentry *nfs_readdir_lookup(nfs_readdir_descriptor_t *desc)
 
 	nfs_renew_times(dentry);
 	nfs_set_verifier(dentry, nfs_save_change_attribute(dir));
+	return dentry;
+out_renew:
+	nfs_renew_times(dentry);
+	nfs_refresh_verifier(dentry, nfs_save_change_attribute(dir));
 	return dentry;
 }
 
@@ -1446,6 +1469,8 @@ static int nfs_unlink(struct inode *dir, struct dentry *dentry)
 	if (atomic_read(&dentry->d_count) > 1) {
 		spin_unlock(&dentry->d_lock);
 		spin_unlock(&dcache_lock);
+		/* Start asynchronous writeout of the inode */
+		write_inode_now(dentry->d_inode, 0);
 		error = nfs_sillyrename(dir, dentry);
 		unlock_kernel();
 		return error;
@@ -1662,7 +1687,8 @@ go_ahead:
 	 * ... prune child dentries and writebacks if needed.
 	 */
 	if (atomic_read(&old_dentry->d_count) > 1) {
-		nfs_wb_all(old_inode);
+		if (S_ISREG(old_inode->i_mode))
+			nfs_wb_all(old_inode);
 		shrink_dcache_parent(old_dentry);
 	}
 	nfs_inode_return_delegation(old_inode);
@@ -1687,7 +1713,7 @@ out:
 	if (!error) {
 		d_move(old_dentry, new_dentry);
 		nfs_renew_times(new_dentry);
-		nfs_set_verifier(new_dentry, nfs_save_change_attribute(new_dir));
+		nfs_refresh_verifier(new_dentry, nfs_save_change_attribute(new_dir));
 	}
 
 	/* new dentry created? */

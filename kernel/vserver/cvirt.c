@@ -3,7 +3,7 @@
  *
  *  Virtual Server: Context Virtualization
  *
- *  Copyright (C) 2004-2006  Herbert Pötzl
+ *  Copyright (C) 2004-2007  Herbert Pötzl
  *
  *  V0.01  broken out from limit.c
  *  V0.02  added utsname stuff
@@ -18,7 +18,6 @@
 #include <linux/vs_cvirt.h>
 #include <linux/vserver/switch.h>
 #include <linux/vserver/cvirt_cmd.h>
-//#include <linux/vserver/cacct_cmd.h>
 
 #include <asm/errno.h>
 #include <asm/uaccess.h>

@@ -183,7 +183,6 @@ History:
 #include <linux/errno.h>	/* These include what we really need */
 #include <linux/delay.h>
 #include <linux/string.h>
-#include <linux/sched.h>
 #include <linux/interrupt.h>
 #include <linux/timer.h>
 #include <linux/cdrom.h>
@@ -1420,7 +1419,7 @@ int __init cm206_init(void)
 		return -EIO;
 	}
 	printk(" adapter at 0x%x", cm206_base);
-	cd = (struct cm206_struct *) kmalloc(size, GFP_KERNEL);
+	cd = kmalloc(size, GFP_KERNEL);
 	if (!cd)
                goto out_base;
 	/* Now we have found the adaptor card, try to reset it. As we have

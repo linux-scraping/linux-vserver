@@ -34,7 +34,7 @@
 
 #define	 RPCDBG_FACILITY RPCDBG_CACHE
 
-static void cache_defer_req(struct cache_req *req, struct cache_head *item);
+static int cache_defer_req(struct cache_req *req, struct cache_head *item);
 static void cache_revisit_request(struct cache_head *item);
 
 static void cache_init(struct cache_head *h)
@@ -185,6 +185,7 @@ static int cache_make_upcall(struct cache_detail *detail, struct cache_head *h);
  *
  * Returns 0 if the cache_head can be used, or cache_puts it and returns
  * -EAGAIN if upcall is pending,
+ * -ETIMEDOUT if upcall failed and should be retried,
  * -ENOENT if cache entry was negative
  */
 int cache_check(struct cache_detail *detail,
@@ -214,7 +215,8 @@ int cache_check(struct cache_detail *detail,
 		if (rv == -EAGAIN)
 			rv = -ENOENT;
 	} else if (rv == -EAGAIN || age > refresh_age/2) {
-		dprintk("Want update, refage=%ld, age=%ld\n", refresh_age, age);
+		dprintk("RPC:       Want update, refage=%ld, age=%ld\n",
+				refresh_age, age);
 		if (!test_and_set_bit(CACHE_PENDING, &h->flags)) {
 			switch (cache_make_upcall(detail, h)) {
 			case -EINVAL:
@@ -236,7 +238,8 @@ int cache_check(struct cache_detail *detail,
 	}
 
 	if (rv == -EAGAIN)
-		cache_defer_req(rqstp, h);
+		if (cache_defer_req(rqstp, h) != 0)
+			rv = -ETIMEDOUT;
 
 	if (rv)
 		cache_put(h, detail);
@@ -272,7 +275,7 @@ int cache_check(struct cache_detail *detail,
  *
  * A table is then only scanned if the current time is at least
  * the nextcheck time.
- * 
+ *
  */
 
 static LIST_HEAD(cache_list);
@@ -280,12 +283,12 @@ static DEFINE_SPINLOCK(cache_list_lock);
 static struct cache_detail *current_detail;
 static int current_index;
 
-static struct file_operations cache_file_operations;
-static struct file_operations content_file_operations;
-static struct file_operations cache_flush_operations;
+static const struct file_operations cache_file_operations;
+static const struct file_operations content_file_operations;
+static const struct file_operations cache_flush_operations;
 
-static void do_cache_clean(void *data);
-static DECLARE_WORK(cache_cleaner, do_cache_clean, NULL);
+static void do_cache_clean(struct work_struct *work);
+static DECLARE_DELAYED_WORK(cache_cleaner, do_cache_clean);
 
 void cache_register(struct cache_detail *cd)
 {
@@ -294,16 +297,16 @@ void cache_register(struct cache_detail *cd)
 		struct proc_dir_entry *p;
 		cd->proc_ent->owner = cd->owner;
 		cd->channel_ent = cd->content_ent = NULL;
-		
- 		p = create_proc_entry("flush", S_IFREG|S_IRUSR|S_IWUSR,
- 				      cd->proc_ent);
+
+		p = create_proc_entry("flush", S_IFREG|S_IRUSR|S_IWUSR,
+				      cd->proc_ent);
 		cd->flush_ent =  p;
- 		if (p) {
- 			p->proc_fops = &cache_flush_operations;
- 			p->owner = cd->owner;
- 			p->data = cd;
- 		}
- 
+		if (p) {
+			p->proc_fops = &cache_flush_operations;
+			p->owner = cd->owner;
+			p->data = cd;
+		}
+
 		if (cd->cache_request || cd->cache_parse) {
 			p = create_proc_entry("channel", S_IFREG|S_IRUSR|S_IWUSR,
 					      cd->proc_ent);
@@ -314,16 +317,16 @@ void cache_register(struct cache_detail *cd)
 				p->data = cd;
 			}
 		}
- 		if (cd->cache_show) {
- 			p = create_proc_entry("content", S_IFREG|S_IRUSR|S_IWUSR,
- 					      cd->proc_ent);
+		if (cd->cache_show) {
+			p = create_proc_entry("content", S_IFREG|S_IRUSR|S_IWUSR,
+					      cd->proc_ent);
 			cd->content_ent = p;
- 			if (p) {
- 				p->proc_fops = &content_file_operations;
- 				p->owner = cd->owner;
- 				p->data = cd;
- 			}
- 		}
+			if (p) {
+				p->proc_fops = &content_file_operations;
+				p->owner = cd->owner;
+				p->data = cd;
+			}
+		}
 	}
 	rwlock_init(&cd->hash_lock);
 	INIT_LIST_HEAD(&cd->queue);
@@ -337,7 +340,7 @@ void cache_register(struct cache_detail *cd)
 	spin_unlock(&cache_list_lock);
 
 	/* start the cleaning process */
-	schedule_work(&cache_cleaner);
+	schedule_delayed_work(&cache_cleaner, 0);
 }
 
 int cache_unregister(struct cache_detail *cd)
@@ -415,15 +418,15 @@ static int cache_clean(void)
 		current_index++;
 
 	/* find a cleanable entry in the bucket and clean it, or set to next bucket */
-	
+
 	if (current_detail && current_index < current_detail->hash_size) {
 		struct cache_head *ch, **cp;
 		struct cache_detail *d;
-		
+
 		write_lock(&current_detail->hash_lock);
 
 		/* Ok, now to clean this strand */
-			
+
 		cp = & current_detail->hash_table[current_index];
 		ch = *cp;
 		for (; ch; cp= & ch->next, ch= *cp) {
@@ -461,7 +464,7 @@ static int cache_clean(void)
 /*
  * We want to regularly clean the cache, so we need to schedule some work ...
  */
-static void do_cache_clean(void *data)
+static void do_cache_clean(struct work_struct *work)
 {
 	int delay = 5;
 	if (cache_clean() == -1)
@@ -475,9 +478,9 @@ static void do_cache_clean(void *data)
 }
 
 
-/* 
+/*
  * Clean all caches promptly.  This just calls cache_clean
- * repeatedly until we are sure that every cache has had a chance to 
+ * repeatedly until we are sure that every cache has had a chance to
  * be fully cleaned
  */
 void cache_flush(void)
@@ -506,7 +509,7 @@ void cache_purge(struct cache_detail *detail)
  * All deferred requests are stored in a hash table,
  * indexed by "struct cache_head *".
  * As it may be wasteful to store a whole request
- * structure, we allow the request to provide a 
+ * structure, we allow the request to provide a
  * deferred form, which must contain a
  * 'struct cache_deferred_req'
  * This cache_deferred_req contains a method to allow
@@ -523,14 +526,21 @@ static LIST_HEAD(cache_defer_list);
 static struct list_head cache_defer_hash[DFR_HASHSIZE];
 static int cache_defer_cnt;
 
-static void cache_defer_req(struct cache_req *req, struct cache_head *item)
+static int cache_defer_req(struct cache_req *req, struct cache_head *item)
 {
 	struct cache_deferred_req *dreq;
 	int hash = DFR_HASH(item);
 
+	if (cache_defer_cnt >= DFR_MAX) {
+		/* too much in the cache, randomly drop this one,
+		 * or continue and drop the oldest below
+		 */
+		if (net_random()&1)
+			return -ETIMEDOUT;
+	}
 	dreq = req->defer(req);
 	if (dreq == NULL)
-		return;
+		return -ETIMEDOUT;
 
 	dreq->item = item;
 	dreq->recv_time = get_seconds();
@@ -546,17 +556,8 @@ static void cache_defer_req(struct cache_req *req, struct cache_head *item)
 	/* it is in, now maybe clean up */
 	dreq = NULL;
 	if (++cache_defer_cnt > DFR_MAX) {
-		/* too much in the cache, randomly drop
-		 * first or last
-		 */
-		if (net_random()&1) 
-			dreq = list_entry(cache_defer_list.next,
-					  struct cache_deferred_req,
-					  recent);
-		else
-			dreq = list_entry(cache_defer_list.prev,
-					  struct cache_deferred_req,
-					  recent);
+		dreq = list_entry(cache_defer_list.prev,
+				  struct cache_deferred_req, recent);
 		list_del(&dreq->recent);
 		list_del(&dreq->hash);
 		cache_defer_cnt--;
@@ -571,6 +572,7 @@ static void cache_defer_req(struct cache_req *req, struct cache_head *item)
 		/* must have just been validated... */
 		cache_revisit_request(item);
 	}
+	return 0;
 }
 
 static void cache_revisit_request(struct cache_head *item)
@@ -583,7 +585,7 @@ static void cache_revisit_request(struct cache_head *item)
 
 	INIT_LIST_HEAD(&pending);
 	spin_lock(&cache_defer_lock);
-	
+
 	lp = cache_defer_hash[hash].next;
 	if (lp) {
 		while (lp != &cache_defer_hash[hash]) {
@@ -613,7 +615,7 @@ void cache_clean_deferred(void *owner)
 
 	INIT_LIST_HEAD(&pending);
 	spin_lock(&cache_defer_lock);
-	
+
 	list_for_each_entry_safe(dreq, tmp, &cache_defer_list, recent) {
 		if (dreq->owner == owner) {
 			list_del(&dreq->hash);
@@ -638,7 +640,7 @@ void cache_clean_deferred(void *owner)
  * On write, an update request is processed
  * Poll works if anything to read, and always allows write
  *
- * Implemented by linked list of requests.  Each open file has 
+ * Implemented by linked list of requests.  Each open file has
  * a ->private that also exists in this list.  New request are added
  * to the end and may wakeup and preceding readers.
  * New readers are added to the head.  If, on read, an item is found with
@@ -670,7 +672,7 @@ cache_read(struct file *filp, char __user *buf, size_t count, loff_t *ppos)
 {
 	struct cache_reader *rp = filp->private_data;
 	struct cache_request *rq;
-	struct cache_detail *cd = PDE(filp->f_dentry->d_inode)->data;
+	struct cache_detail *cd = PDE(filp->f_path.dentry->d_inode)->data;
 	int err;
 
 	if (count == 0)
@@ -747,7 +749,7 @@ cache_write(struct file *filp, const char __user *buf, size_t count,
 	    loff_t *ppos)
 {
 	int err;
-	struct cache_detail *cd = PDE(filp->f_dentry->d_inode)->data;
+	struct cache_detail *cd = PDE(filp->f_path.dentry->d_inode)->data;
 
 	if (count == 0)
 		return 0;
@@ -778,7 +780,7 @@ cache_poll(struct file *filp, poll_table *wait)
 	unsigned int mask;
 	struct cache_reader *rp = filp->private_data;
 	struct cache_queue *cq;
-	struct cache_detail *cd = PDE(filp->f_dentry->d_inode)->data;
+	struct cache_detail *cd = PDE(filp->f_path.dentry->d_inode)->data;
 
 	poll_wait(filp, &queue_wait, wait);
 
@@ -886,7 +888,7 @@ cache_release(struct inode *inode, struct file *filp)
 
 
 
-static struct file_operations cache_file_operations = {
+static const struct file_operations cache_file_operations = {
 	.owner		= THIS_MODULE,
 	.llseek		= no_llseek,
 	.read		= cache_read,
@@ -1058,10 +1060,10 @@ static int cache_make_upcall(struct cache_detail *detail, struct cache_head *h)
  * Messages are, like requests, separated into fields by
  * spaces and dequotes as \xHEXSTRING or embedded \nnn octal
  *
- * Message is 
+ * Message is
  *   reply cachename expiry key ... content....
  *
- * key and content are both parsed by cache 
+ * key and content are both parsed by cache
  */
 
 #define isodigit(c) (isdigit(c) && c <= '7')
@@ -1131,7 +1133,7 @@ static void *c_start(struct seq_file *m, loff_t *pos)
 	unsigned hash, entry;
 	struct cache_head *ch;
 	struct cache_detail *cd = ((struct handle*)m->private)->cd;
-	
+
 
 	read_lock(&cd->hash_lock);
 	if (!n--)
@@ -1146,7 +1148,7 @@ static void *c_start(struct seq_file *m, loff_t *pos)
 	do {
 		hash++;
 		n += 1LL<<32;
-	} while(hash < cd->hash_size && 
+	} while(hash < cd->hash_size &&
 		cd->hash_table[hash]==NULL);
 	if (hash >= cd->hash_size)
 		return NULL;
@@ -1244,7 +1246,7 @@ static int content_release(struct inode *inode, struct file *file)
 	return seq_release(inode, file);
 }
 
-static struct file_operations content_file_operations = {
+static const struct file_operations content_file_operations = {
 	.open		= content_open,
 	.read		= seq_read,
 	.llseek		= seq_lseek,
@@ -1254,7 +1256,7 @@ static struct file_operations content_file_operations = {
 static ssize_t read_flush(struct file *file, char __user *buf,
 			    size_t count, loff_t *ppos)
 {
-	struct cache_detail *cd = PDE(file->f_dentry->d_inode)->data;
+	struct cache_detail *cd = PDE(file->f_path.dentry->d_inode)->data;
 	char tbuf[20];
 	unsigned long p = *ppos;
 	int len;
@@ -1275,7 +1277,7 @@ static ssize_t read_flush(struct file *file, char __user *buf,
 static ssize_t write_flush(struct file * file, const char __user * buf,
 			     size_t count, loff_t *ppos)
 {
-	struct cache_detail *cd = PDE(file->f_dentry->d_inode)->data;
+	struct cache_detail *cd = PDE(file->f_path.dentry->d_inode)->data;
 	char tbuf[20];
 	char *ep;
 	long flushtime;
@@ -1296,7 +1298,7 @@ static ssize_t write_flush(struct file * file, const char __user * buf,
 	return count;
 }
 
-static struct file_operations cache_flush_operations = {
+static const struct file_operations cache_flush_operations = {
 	.open		= nonseekable_open,
 	.read		= read_flush,
 	.write		= write_flush,

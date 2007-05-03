@@ -125,12 +125,12 @@ static DEFINE_MUTEX(disconnect_mutex);
 
 static int idmouse_create_image(struct usb_idmouse *dev)
 {
-	int bytes_read = 0;
-	int bulk_read = 0;
-	int result = 0;
+	int bytes_read;
+	int bulk_read;
+	int result;
 
 	memcpy(dev->bulk_in_buffer, HEADER, sizeof(HEADER)-1);
-	bytes_read += sizeof(HEADER)-1;
+	bytes_read = sizeof(HEADER)-1;
 
 	/* reset the device and set a fast blink rate */
 	result = ftip_command(dev, FTIP_RELEASE, 0, 0);
@@ -208,9 +208,9 @@ static inline void idmouse_delete(struct usb_idmouse *dev)
 
 static int idmouse_open(struct inode *inode, struct file *file)
 {
-	struct usb_idmouse *dev = NULL;
+	struct usb_idmouse *dev;
 	struct usb_interface *interface;
-	int result = 0;
+	int result;
 
 	/* prevent disconnects */
 	mutex_lock(&disconnect_mutex);
@@ -269,7 +269,7 @@ static int idmouse_release(struct inode *inode, struct file *file)
 	/* prevent a race condition with open() */
 	mutex_lock(&disconnect_mutex);
 
-	dev = (struct usb_idmouse *) file->private_data;
+	dev = file->private_data;
 
 	if (dev == NULL) {
 		mutex_unlock(&disconnect_mutex);
@@ -304,17 +304,15 @@ static int idmouse_release(struct inode *inode, struct file *file)
 static ssize_t idmouse_read(struct file *file, char __user *buffer, size_t count,
 				loff_t * ppos)
 {
-	struct usb_idmouse *dev;
-	int result = 0;
-
-	dev = (struct usb_idmouse *) file->private_data;
+	struct usb_idmouse *dev = file->private_data;
+	int result;
 
 	/* lock this object */
-	down (&dev->sem);
+	down(&dev->sem);
 
 	/* verify that the device wasn't unplugged */
 	if (!dev->present) {
-		up (&dev->sem);
+		up(&dev->sem);
 		return -ENODEV;
 	}
 
@@ -329,7 +327,7 @@ static int idmouse_probe(struct usb_interface *interface,
 				const struct usb_device_id *id)
 {
 	struct usb_device *udev = interface_to_usbdev(interface);
-	struct usb_idmouse *dev = NULL;
+	struct usb_idmouse *dev;
 	struct usb_host_interface *iface_desc;
 	struct usb_endpoint_descriptor *endpoint;
 	int result;
@@ -350,11 +348,7 @@ static int idmouse_probe(struct usb_interface *interface,
 
 	/* set up the endpoint information - use only the first bulk-in endpoint */
 	endpoint = &iface_desc->endpoint[0].desc;
-	if (!dev->bulk_in_endpointAddr
-		&& (endpoint->bEndpointAddress & USB_DIR_IN)
-		&& ((endpoint->bmAttributes & USB_ENDPOINT_XFERTYPE_MASK) ==
-		USB_ENDPOINT_XFER_BULK)) {
-
+	if (!dev->bulk_in_endpointAddr && usb_endpoint_is_bulk_in(endpoint)) {
 		/* we found a bulk in endpoint */
 		dev->orig_bi_size = le16_to_cpu(endpoint->wMaxPacketSize);
 		dev->bulk_in_size = 0x200; /* works _much_ faster */

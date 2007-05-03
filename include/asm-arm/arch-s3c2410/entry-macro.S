@@ -20,7 +20,13 @@
 #define INTOFFSET	(0x14)
 
 #include <asm/hardware.h>
-#include <asm/arch/irqs.h>
+#include <asm/irq.h>
+
+	.macro  get_irqnr_preamble, base, tmp
+	.endm
+
+	.macro  arch_ret_to_user, tmp1, tmp2
+	.endm
 
 	.macro	get_irqnr_and_base, irqnr, irqstat, base, tmp
 

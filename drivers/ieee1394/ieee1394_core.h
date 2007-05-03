@@ -127,6 +127,9 @@ int hpsb_send_packet_and_wait(struct hpsb_packet *packet);
  * progress, 0 otherwise. */
 int hpsb_reset_bus(struct hpsb_host *host, int type);
 
+int hpsb_read_cycle_timer(struct hpsb_host *host, u32 *cycle_timer,
+			  u64 *local_time);
+
 /*
  * The following functions are exported for host driver module usage.  All of
  * them are safe to use in interrupt contexts, although some are quite
@@ -217,7 +220,7 @@ void hpsb_packet_received(struct hpsb_host *host, quadlet_t *data, size_t size,
 /* return the index (within a minor number block) of a file */
 static inline unsigned char ieee1394_file_to_instance(struct file *file)
 {
-	return file->f_dentry->d_inode->i_cindex;
+	return file->f_path.dentry->d_inode->i_cindex;
 }
 
 extern int hpsb_disable_irm;

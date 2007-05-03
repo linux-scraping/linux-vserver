@@ -51,7 +51,6 @@
 #include "xfs_refcache.h"
 #include "xfs_trans_space.h"
 #include "xfs_log_priv.h"
-#include "xfs_mac.h"
 
 STATIC int
 xfs_open(
@@ -318,7 +317,7 @@ xfs_setattr(
 	    (mask & (XFS_AT_UID|XFS_AT_GID|XFS_AT_PROJID))) {
 		uint	qflags = 0;
 
-		/* FIXME: handle tagging? */
+		/* TODO: handle tagging? */
 		if ((mask & XFS_AT_UID) && XFS_IS_UQUOTA_ON(mp)) {
 			uid = vap->va_uid;
 			qflags |= XFS_QMOPT_UQUOTA;
@@ -398,7 +397,7 @@ xfs_setattr(
 	if (mask &
 	    (XFS_AT_MODE|XFS_AT_XFLAGS|XFS_AT_EXTSIZE|XFS_AT_UID|
 	     XFS_AT_GID|XFS_AT_PROJID)) {
-		/* FIXME: handle tagging? */
+		/* TODO: handle tagging? */
 
 		/*
 		 * CAP_FOWNER overrides the following restrictions:
@@ -489,7 +488,7 @@ xfs_setattr(
 		if ((XFS_IS_UQUOTA_ON(mp) && iuid != uid) ||
 		    (XFS_IS_PQUOTA_ON(mp) && iprojid != projid) ||
 		    (XFS_IS_GQUOTA_ON(mp) && igid != gid)) {
-			/* FIXME: handle tagging? */
+			/* TODO: handle tagging? */
 			ASSERT(tp);
 			code = XFS_QM_DQVOPCHOWNRESV(mp, tp, ip, udqp, gdqp,
 						capable(CAP_FOWNER) ?
@@ -1396,7 +1395,7 @@ xfs_inactive_symlink_rmt(
 	/*
 	 * Commit the first transaction.  This logs the EFI and the inode.
 	 */
-	if ((error = xfs_bmap_finish(&tp, &free_list, first_block, &committed)))
+	if ((error = xfs_bmap_finish(&tp, &free_list, &committed)))
 		goto error1;
 	/*
 	 * The transaction must have been committed, since there were
@@ -1805,8 +1804,7 @@ xfs_inactive(
 		 * Just ignore errors at this point.  There is
 		 * nothing we can do except to try to keep going.
 		 */
-		(void) xfs_bmap_finish(&tp,  &free_list, first_block,
-				       &committed);
+		(void) xfs_bmap_finish(&tp,  &free_list, &committed);
 		(void) xfs_trans_commit(tp, XFS_TRANS_RELEASE_LOG_RES, NULL);
 	}
 	/*
@@ -2037,7 +2035,7 @@ xfs_create(
 	IHOLD(ip);
 	vp = XFS_ITOV(ip);
 
-	error = xfs_bmap_finish(&tp, &free_list, first_block, &committed);
+	error = xfs_bmap_finish(&tp, &free_list, &committed);
 	if (error) {
 		xfs_bmap_cancel(&free_list);
 		goto abort_rele;
@@ -2522,7 +2520,7 @@ xfs_remove(
 		xfs_trans_set_sync(tp);
 	}
 
-	error = xfs_bmap_finish(&tp, &free_list, first_block, &committed);
+	error = xfs_bmap_finish(&tp, &free_list, &committed);
 	if (error) {
 		REMOVE_DEBUG_TRACE(__LINE__);
 		goto error_rele;
@@ -2730,7 +2728,7 @@ xfs_link(
 		xfs_trans_set_sync(tp);
 	}
 
-	error = xfs_bmap_finish (&tp, &free_list, first_block, &committed);
+	error = xfs_bmap_finish (&tp, &free_list, &committed);
 	if (error) {
 		xfs_bmap_cancel(&free_list);
 		goto abort_return;
@@ -2947,7 +2945,7 @@ xfs_mkdir(
 		xfs_trans_set_sync(tp);
 	}
 
-	error = xfs_bmap_finish(&tp, &free_list, first_block, &committed);
+	error = xfs_bmap_finish(&tp, &free_list, &committed);
 	if (error) {
 		IRELE(cdp);
 		goto error2;
@@ -3198,7 +3196,7 @@ xfs_rmdir(
 		xfs_trans_set_sync(tp);
 	}
 
-	error = xfs_bmap_finish (&tp, &free_list, first_block, &committed);
+	error = xfs_bmap_finish (&tp, &free_list, &committed);
 	if (error) {
 		xfs_bmap_cancel(&free_list);
 		xfs_trans_cancel(tp, (XFS_TRANS_RELEASE_LOG_RES |
@@ -3548,7 +3546,7 @@ xfs_symlink(
 	 */
 	IHOLD(ip);
 
-	error = xfs_bmap_finish(&tp, &free_list, first_block, &committed);
+	error = xfs_bmap_finish(&tp, &free_list, &committed);
 	if (error) {
 		goto error2;
 	}
@@ -4160,7 +4158,7 @@ retry:
 		/*
 		 * Complete the transaction
 		 */
-		error = xfs_bmap_finish(&tp, &free_list, firstfsb, &committed);
+		error = xfs_bmap_finish(&tp, &free_list, &committed);
 		if (error) {
 			goto error0;
 		}
@@ -4467,7 +4465,7 @@ xfs_free_file_space(
 		/*
 		 * complete the transaction
 		 */
-		error = xfs_bmap_finish(&tp, &free_list, firstfsb, &committed);
+		error = xfs_bmap_finish(&tp, &free_list, &committed);
 		if (error) {
 			goto error0;
 		}

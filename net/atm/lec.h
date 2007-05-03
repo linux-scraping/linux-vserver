@@ -14,14 +14,14 @@
 #define LEC_HEADER_LEN 16
 
 struct lecdatahdr_8023 {
-	unsigned short le_header;
+	__be16 le_header;
 	unsigned char h_dest[ETH_ALEN];
 	unsigned char h_source[ETH_ALEN];
-	unsigned short h_type;
+	__be16 h_type;
 };
 
 struct lecdatahdr_8025 {
-	unsigned short le_header;
+	__be16 le_header;
 	unsigned char ac_pad;
 	unsigned char fc;
 	unsigned char h_dest[ETH_ALEN];
@@ -52,12 +52,12 @@ struct lane2_ops {
 
 /*
  * ATM LAN Emulation supports both LLC & Dix Ethernet EtherType
- * frames. 
+ * frames.
  *
  * 1. Dix Ethernet EtherType frames encoded by placing EtherType
  *    field in h_type field. Data follows immediatelly after header.
  * 2. LLC Data frames whose total length, including LLC field and data,
- *    but not padding required to meet the minimum data frame length, 
+ *    but not padding required to meet the minimum data frame length,
  *    is less than 1536(0x0600) MUST be encoded by placing that length
  *    in the h_type field. The LLC field follows header immediatelly.
  * 3. LLC data frames longer than this maximum MUST be encoded by placing
@@ -92,7 +92,7 @@ struct lec_priv {
 	spinlock_t lec_arp_lock;
 	struct atm_vcc *mcast_vcc;		/* Default Multicast Send VCC */
 	struct atm_vcc *lecd;
-	struct work_struct lec_arp_work;	/* C10 */
+	struct delayed_work lec_arp_work;	/* C10 */
 	unsigned int maximum_unknown_frame_count;
 						/*
 						 * Within the period of time defined by this variable, the client will send

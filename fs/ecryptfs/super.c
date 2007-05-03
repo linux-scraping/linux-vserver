@@ -50,7 +50,7 @@ static struct inode *ecryptfs_alloc_inode(struct super_block *sb)
 	struct inode *inode = NULL;
 
 	ecryptfs_inode = kmem_cache_alloc(ecryptfs_inode_info_cache,
-					  SLAB_KERNEL);
+					  GFP_KERNEL);
 	if (unlikely(!ecryptfs_inode))
 		goto out;
 	ecryptfs_init_crypt_stat(&ecryptfs_inode->crypt_stat);
@@ -168,7 +168,7 @@ out:
 	return rc;
 }
 
-struct super_operations ecryptfs_sops = {
+const struct super_operations ecryptfs_sops = {
 	.alloc_inode = ecryptfs_alloc_inode,
 	.destroy_inode = ecryptfs_destroy_inode,
 	.drop_inode = generic_delete_inode,

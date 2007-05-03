@@ -8,6 +8,7 @@
 
 #include <linux/types.h>
 #include <linux/init.h>
+#include <linux/random.h>
 #include <linux/netfilter.h>
 #include <linux/ip.h>
 #include <linux/tcp.h>
@@ -75,6 +76,10 @@ tcp_unique_tuple(struct ip_conntrack_tuple *tuple,
 		range_size = ntohs(range->max.tcp.port) - min + 1;
 	}
 
+	/* Start from random port to avoid prediction */
+	if (range->flags & IP_NAT_RANGE_PROTO_RANDOM)
+		port =  net_random();
+
 	for (i = 0; i < range_size; i++, port++) {
 		*portptr = htons(min + port % range_size);
 		if (!ip_nat_used_tuple(tuple, conntrack)) {
@@ -129,9 +134,8 @@ tcp_manip_pkt(struct sk_buff **pskb,
 	if (hdrsize < sizeof(*hdr))
 		return 1;
 
-	hdr->check = nf_proto_csum_update(*pskb, ~oldip, newip, hdr->check, 1);
-	hdr->check = nf_proto_csum_update(*pskb, oldport ^ htons(0xFFFF), newport,
-					  hdr->check, 0);
+	nf_proto_csum_replace4(&hdr->check, *pskb, oldip, newip, 1);
+	nf_proto_csum_replace2(&hdr->check, *pskb, oldport, newport, 0);
 	return 1;
 }
 

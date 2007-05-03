@@ -126,8 +126,8 @@ int proc_exe_link(struct inode *inode, struct dentry **dentry, struct vfsmount *
 	}
 
 	if (vma) {
-		*mnt = mntget(vma->vm_file->f_vfsmnt);
-		*dentry = dget(vma->vm_file->f_dentry);
+		*mnt = mntget(vma->vm_file->f_path.mnt);
+		*dentry = dget(vma->vm_file->f_path.dentry);
 		result = 0;
 	}
 
@@ -220,7 +220,7 @@ static int maps_open(struct inode *inode, struct file *file)
 	return ret;
 }
 
-struct file_operations proc_maps_operations = {
+const struct file_operations proc_maps_operations = {
 	.open		= maps_open,
 	.read		= seq_read,
 	.llseek		= seq_lseek,

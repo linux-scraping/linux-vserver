@@ -165,38 +165,91 @@ typedef struct svc_fh {
 
 } svc_fh;
 
-static inline void mk_fsid_v0(u32 *fsidv, dev_t dev, ino_t ino)
-{
-	fsidv[0] = htonl((MAJOR(dev)<<16) |
-			MINOR(dev));
-	fsidv[1] = ino_t_to_u32(ino);
-}
+enum nfsd_fsid {
+	FSID_DEV = 0,
+	FSID_NUM,
+	FSID_MAJOR_MINOR,
+	FSID_ENCODE_DEV,
+	FSID_UUID4_INUM,
+	FSID_UUID8,
+	FSID_UUID16,
+	FSID_UUID16_INUM,
+};
 
-static inline void mk_fsid_v1(u32 *fsidv, u32 fsid)
-{
-	fsidv[0] = fsid;
-}
+enum fsid_source {
+	FSIDSOURCE_DEV,
+	FSIDSOURCE_FSID,
+	FSIDSOURCE_UUID,
+};
+extern enum fsid_source fsid_source(struct svc_fh *fhp);
 
-static inline void mk_fsid_v2(u32 *fsidv, dev_t dev, ino_t ino)
-{
-	fsidv[0] = htonl(MAJOR(dev));
-	fsidv[1] = htonl(MINOR(dev));
-	fsidv[2] = ino_t_to_u32(ino);
-}
 
-static inline void mk_fsid_v3(u32 *fsidv, dev_t dev, ino_t ino)
+/* This might look a little large to "inline" but in all calls except
+ * one, 'vers' is constant so moste of the function disappears.
+ */
+static inline void mk_fsid(int vers, u32 *fsidv, dev_t dev, ino_t ino,
+			   u32 fsid, unsigned char *uuid)
 {
-	fsidv[0] = new_encode_dev(dev);
-	fsidv[1] = ino_t_to_u32(ino);
+	u32 *up;
+	switch(vers) {
+	case FSID_DEV:
+		fsidv[0] = htonl((MAJOR(dev)<<16) |
+				 MINOR(dev));
+		fsidv[1] = ino_t_to_u32(ino);
+		break;
+	case FSID_NUM:
+		fsidv[0] = fsid;
+		break;
+	case FSID_MAJOR_MINOR:
+		fsidv[0] = htonl(MAJOR(dev));
+		fsidv[1] = htonl(MINOR(dev));
+		fsidv[2] = ino_t_to_u32(ino);
+		break;
+
+	case FSID_ENCODE_DEV:
+		fsidv[0] = new_encode_dev(dev);
+		fsidv[1] = ino_t_to_u32(ino);
+		break;
+
+	case FSID_UUID4_INUM:
+		/* 4 byte fsid and inode number */
+		up = (u32*)uuid;
+		fsidv[0] = ino_t_to_u32(ino);
+		fsidv[1] = up[0] ^ up[1] ^ up[2] ^ up[3];
+		break;
+
+	case FSID_UUID8:
+		/* 8 byte fsid  */
+		up = (u32*)uuid;
+		fsidv[0] = up[0] ^ up[2];
+		fsidv[1] = up[1] ^ up[3];
+		break;
+
+	case FSID_UUID16:
+		/* 16 byte fsid - NFSv3+ only */
+		memcpy(fsidv, uuid, 16);
+		break;
+
+	case FSID_UUID16_INUM:
+		/* 8 byte inode and 16 byte fsid */
+		*(u64*)fsidv = (u64)ino;
+		memcpy(fsidv+2, uuid, 16);
+		break;
+	default: BUG();
+	}
 }
 
 static inline int key_len(int type)
 {
 	switch(type) {
-	case 0: return 8;
-	case 1: return 4;
-	case 2: return 12;
-	case 3: return 8;
+	case FSID_DEV:		return 8;
+	case FSID_NUM: 		return 4;
+	case FSID_MAJOR_MINOR:	return 12;
+	case FSID_ENCODE_DEV:	return 8;
+	case FSID_UUID4_INUM:	return 8;
+	case FSID_UUID8:	return 8;
+	case FSID_UUID16:	return 16;
+	case FSID_UUID16_INUM:	return 24;
 	default: return 0;
 	}
 }
@@ -217,11 +270,7 @@ void	fh_put(struct svc_fh *);
 static __inline__ struct svc_fh *
 fh_copy(struct svc_fh *dst, struct svc_fh *src)
 {
-	if (src->fh_dentry || src->fh_locked) {
-		struct dentry *dentry = src->fh_dentry;
-		printk(KERN_ERR "fh_copy: copying %s/%s, already verified!\n",
-			dentry->d_parent->d_name.name, dentry->d_name.name);
-	}
+	WARN_ON(src->fh_dentry || src->fh_locked);
 			
 	*dst = *src;
 	return dst;
@@ -300,10 +349,8 @@ fh_lock_nested(struct svc_fh *fhp, unsigned int subclass)
 	dfprintk(FILEOP, "nfsd: fh_lock(%s) locked = %d\n",
 			SVCFH_fmt(fhp), fhp->fh_locked);
 
-	if (!fhp->fh_dentry) {
-		printk(KERN_ERR "fh_lock: fh not verified!\n");
-		return;
-	}
+	BUG_ON(!dentry);
+
 	if (fhp->fh_locked) {
 		printk(KERN_WARNING "fh_lock: %s/%s already locked!\n",
 			dentry->d_parent->d_name.name, dentry->d_name.name);
@@ -328,8 +375,7 @@ fh_lock(struct svc_fh *fhp)
 static inline void
 fh_unlock(struct svc_fh *fhp)
 {
-	if (!fhp->fh_dentry)
-		printk(KERN_ERR "fh_unlock: fh not verified!\n");
+	BUG_ON(!fhp->fh_dentry);
 
 	if (fhp->fh_locked) {
 		fill_post_wcc(fhp);

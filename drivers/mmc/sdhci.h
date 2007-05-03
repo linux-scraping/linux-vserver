@@ -71,6 +71,7 @@
 #define SDHCI_HOST_CONTROL 	0x28
 #define  SDHCI_CTRL_LED		0x01
 #define  SDHCI_CTRL_4BITBUS	0x02
+#define  SDHCI_CTRL_HISPD	0x04
 
 #define SDHCI_POWER_CONTROL	0x29
 #define  SDHCI_POWER_ON		0x01
@@ -138,6 +139,7 @@
 #define  SDHCI_CLOCK_BASE_SHIFT	8
 #define  SDHCI_MAX_BLOCK_MASK	0x00030000
 #define  SDHCI_MAX_BLOCK_SHIFT  16
+#define  SDHCI_CAN_DO_HISPD	0x00200000
 #define  SDHCI_CAN_DO_DMA	0x00400000
 #define  SDHCI_CAN_VDD_330	0x01000000
 #define  SDHCI_CAN_VDD_300	0x02000000
@@ -172,7 +174,6 @@ struct sdhci_host {
 
 	unsigned int		max_clk;	/* Max possible freq (MHz) */
 	unsigned int		timeout_clk;	/* Timeout freq (KHz) */
-	unsigned int		max_block;	/* Max block size (bytes) */
 
 	unsigned int		clock;		/* Current clock (MHz) */
 	unsigned short		power;		/* Current voltage */
@@ -182,7 +183,6 @@ struct sdhci_host {
 	struct mmc_data		*data;		/* Current data request */
 
 	struct scatterlist	*cur_sg;	/* We're working on this */
-	char			*mapped_sg;	/* This is where it's mapped */
 	int			num_sg;		/* Entries left */
 	int			offset;		/* Offset into current sg */
 	int			remain;		/* Bytes left in current */

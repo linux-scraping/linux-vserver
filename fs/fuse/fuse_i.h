@@ -298,6 +298,9 @@ struct fuse_conn {
 	    reply, before any other request, and never cleared */
 	unsigned conn_error : 1;
 
+	/** Connection successful.  Only set in INIT */
+	unsigned conn_init : 1;
+
 	/** Do readpages asynchronously?  Only set in INIT */
 	unsigned async_read : 1;
 
@@ -339,6 +342,9 @@ struct fuse_conn {
 	/** Is interrupt not implemented by fs? */
 	unsigned no_interrupt : 1;
 
+	/** Is bmap not implemented by fs? */
+	unsigned no_bmap : 1;
+
 	/** The number of requests waiting for completion */
 	atomic_t num_waiting;
 
@@ -365,6 +371,9 @@ struct fuse_conn {
 
 	/** Key for lock owner ID scrambling */
 	u32 scramble_key[4];
+
+	/** Reserved request for the DESTROY message */
+	struct fuse_req *destroy_req;
 };
 
 static inline struct fuse_conn *get_fuse_conn_super(struct super_block *sb)
@@ -543,3 +552,8 @@ int fuse_ctl_add_conn(struct fuse_conn *fc);
  * Remove connection from control filesystem
  */
 void fuse_ctl_remove_conn(struct fuse_conn *fc);
+
+/**
+ * Is file type valid?
+ */
+int fuse_valid_type(int m);

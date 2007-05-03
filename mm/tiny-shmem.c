@@ -79,8 +79,8 @@ struct file *shmem_file_setup(char *name, loff_t size, unsigned long flags)
 	d_instantiate(dentry, inode);
 	inode->i_nlink = 0;	/* It is unlinked */
 
-	file->f_vfsmnt = mntget(shm_mnt);
-	file->f_dentry = dentry;
+	file->f_path.mnt = mntget(shm_mnt);
+	file->f_path.dentry = dentry;
 	file->f_mapping = inode->i_mapping;
 	file->f_op = &ramfs_file_operations;
 	file->f_mode = FMODE_WRITE | FMODE_READ;
@@ -126,6 +126,7 @@ int shmem_unuse(swp_entry_t entry, struct page *page)
 	return 0;
 }
 
+#if 0
 int shmem_mmap(struct file *file, struct vm_area_struct *vma)
 {
 	file_accessed(file);
@@ -135,6 +136,7 @@ int shmem_mmap(struct file *file, struct vm_area_struct *vma)
 	return 0;
 #endif
 }
+#endif  /*  0  */
 
 #ifndef CONFIG_MMU
 unsigned long shmem_get_unmapped_area(struct file *file,

@@ -57,8 +57,10 @@ struct rtable
 	union
 	{
 		struct dst_entry	dst;
-		struct rtable		*rt_next;
 	} u;
+
+	/* Cache lookup keys */
+	struct flowi		fl;
 
 	struct in_device	*idev;
 	
@@ -72,9 +74,6 @@ struct rtable
 
 	/* Info on neighbour */
 	__be32			rt_gateway;
-
-	/* Cache lookup keys */
-	struct flowi		fl;
 
 	/* Miscellaneous cached information */
 	__be32			rt_spec_dst; /* RFC1122 specific destination */
@@ -203,7 +202,8 @@ static inline int ip_find_src(struct nx_info *nxi, struct rtable **rp, struct fl
 
 static inline int ip_route_connect(struct rtable **rp, __be32 dst,
 				   __be32 src, u32 tos, int oif, u8 protocol,
-				   __be16 sport, __be16 dport, struct sock *sk)
+				   __be16 sport, __be16 dport, struct sock *sk,
+				   int flags)
 {
 	struct flowi fl = { .oif = oif,
 			    .nl_u = { .ip4_u = { .daddr = dst,
@@ -228,10 +228,10 @@ static inline int ip_route_connect(struct rtable **rp, __be32 dst,
 		err = ip_find_src(nx_info, rp, &fl);
 		if (err)
 			return err;
-		if (fl.fl4_dst == IPI_LOOPBACK && !vx_check(0, VS_ADMIN))
+		if (fl.fl4_dst == IPI_LOOPBACK && !nx_check(0, VS_ADMIN))
 			fl.fl4_dst = nx_info->ipv4[0];
 #ifdef CONFIG_VSERVER_REMAP_SADDR
-		if (fl.fl4_src == IPI_LOOPBACK && !vx_check(0, VS_ADMIN))
+		if (fl.fl4_src == IPI_LOOPBACK && !nx_check(0, VS_ADMIN))
 			fl.fl4_src = nx_info->ipv4[0];
 #endif
 	}
@@ -245,7 +245,7 @@ static inline int ip_route_connect(struct rtable **rp, __be32 dst,
 		*rp = NULL;
 	}
 	security_sk_classify_flow(sk, &fl);
-	return ip_route_output_flow(rp, &fl, sk, 0);
+	return ip_route_output_flow(rp, &fl, sk, flags);
 }
 
 static inline int ip_route_newports(struct rtable **rp, u8 protocol,

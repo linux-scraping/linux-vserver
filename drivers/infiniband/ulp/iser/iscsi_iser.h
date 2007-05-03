@@ -182,7 +182,7 @@ struct iser_regd_buf {
 	struct iser_mem_reg     reg;        /* memory registration info        */
 	void                    *virt_addr;
 	struct iser_device      *device;    /* device->device for dma_unmap    */
-	dma_addr_t              dma_addr;   /* if non zero, addr for dma_unmap */
+	u64                     dma_addr;   /* if non zero, addr for dma_unmap */
 	enum dma_data_direction direction;  /* direction for dma_unmap	       */
 	unsigned int            data_size;
 	atomic_t                ref_count;  /* refcount, freed when dec to 0   */
@@ -245,7 +245,6 @@ struct iser_conn {
 	wait_queue_head_t	     wait;          /* waitq for conn/disconn  */
 	atomic_t                     post_recv_buf_count; /* posted rx count   */
 	atomic_t                     post_send_buf_count; /* posted tx count   */
-	struct work_struct           comperror_work; /* conn term sleepable ctx*/
 	char 			     name[ISER_OBJECT_NAME_SIZE];
 	struct iser_page_vec         *page_vec;     /* represents SG to fmr maps*
 						     * maps serialized as tx is*/
@@ -283,7 +282,7 @@ struct iser_global {
 	struct mutex      connlist_mutex;
 	struct list_head  connlist;		/* all iSER IB connections */
 
-	kmem_cache_t *desc_cache;
+	struct kmem_cache *desc_cache;
 };
 
 extern struct iser_global ig;

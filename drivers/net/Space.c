@@ -33,7 +33,6 @@
 #include <linux/errno.h>
 #include <linux/init.h>
 #include <linux/netlink.h>
-#include <linux/divert.h>
 
 /* A unified ethernet device probe.  This is the easiest way to have every
    ethernet adaptor have the name "eth[0123...]".
@@ -60,7 +59,6 @@ extern struct net_device *wavelan_probe(int unit);
 extern struct net_device *arlan_probe(int unit);
 extern struct net_device *el16_probe(int unit);
 extern struct net_device *elmc_probe(int unit);
-extern struct net_device *skmca_probe(int unit);
 extern struct net_device *elplus_probe(int unit);
 extern struct net_device *ac3200_probe(int unit);
 extern struct net_device *es_probe(int unit);
@@ -153,9 +151,6 @@ static struct devprobe2 mca_probes[] __initdata = {
 #endif
 #ifdef CONFIG_ELMC_II		/* 3c527 */
 	{mc32_probe, 0},
-#endif
-#ifdef CONFIG_SKMC              /* SKnet Microchannel */
-        {skmca_probe, 0},
 #endif
 	{NULL, 0},
 };
@@ -350,21 +345,10 @@ static void __init trif_probe2(int unit)
 #endif
 
 
-/*
- *	The loopback device is global so it can be directly referenced
- *	by the network code. Also, it must be first on device list.
- */
-extern int loopback_init(void);
-
 /*  Statically configured drivers -- order matters here. */
 static int __init net_olddevs_init(void)
 {
 	int num;
-
-	if (loopback_init()) {
-		printk(KERN_ERR "Network loopback device setup failed\n");
-	}
-
 
 #ifdef CONFIG_SBNI
 	for (num = 0; num < 8; ++num)

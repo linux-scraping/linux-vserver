@@ -33,6 +33,7 @@ SECTIONS
 
 	/* Text and gots */
 	.text : {
+		_text = .;
 		*(.text .text.*)
 		SCHED_TEXT
 		LOCK_TEXT
@@ -61,11 +62,7 @@ SECTIONS
 		__stop___ex_table = .;
 	}
 
-	__bug_table : {
-		__start___bug_table = .;
-		*(__bug_table)
-		__stop___bug_table = .;
-	}
+	BUG_TABLE
 
 /*
  * Init sections discarded at runtime
@@ -134,14 +131,14 @@ SECTIONS
 		__stop___fw_ftr_fixup = .;
 	}
 #endif
-
+#ifdef CONFIG_BLK_DEV_INITRD
 	. = ALIGN(PAGE_SIZE);
 	.init.ramfs : {
 		__initramfs_start = .;
 		*(.init.ramfs)
 		__initramfs_end = .;
 	}
-
+#endif
 #ifdef CONFIG_PPC32
 	. = ALIGN(32);
 #else

@@ -948,7 +948,7 @@ out:
 static int ext3_get_block(struct inode *inode, sector_t iblock,
 			struct buffer_head *bh_result, int create)
 {
-	handle_t *handle = journal_current_handle();
+	handle_t *handle = ext3_journal_current_handle();
 	int ret = 0;
 	unsigned max_blocks = bh_result->b_size >> inode->i_blkbits;
 
@@ -1653,7 +1653,7 @@ static ssize_t ext3_direct_IO(int rw, struct kiocb *iocb,
 	/*
 	 * Reacquire the handle: ext3_get_block() can restart the transaction
 	 */
-	handle = journal_current_handle();
+	handle = ext3_journal_current_handle();
 
 out_stop:
 	if (handle) {
@@ -2595,27 +2595,15 @@ int ext3_sync_flags(struct inode *inode)
 	int err = 0;
 
 	oldflags = EXT3_I(inode)->i_flags;
-	newflags = oldflags & ~(EXT3_APPEND_FL |
-		EXT3_IMMUTABLE_FL | EXT3_IUNLINK_FL |
-		EXT3_BARRIER_FL | EXT3_NOATIME_FL |
-		EXT3_SYNC_FL | EXT3_DIRSYNC_FL);
+	newflags = oldflags & ~(EXT3_IMMUTABLE_FL |
+		EXT3_IUNLINK_FL | EXT3_BARRIER_FL);
 
-	if (IS_APPEND(inode))
-		newflags |= EXT3_APPEND_FL;
 	if (IS_IMMUTABLE(inode))
 		newflags |= EXT3_IMMUTABLE_FL;
 	if (IS_IUNLINK(inode))
 		newflags |= EXT3_IUNLINK_FL;
 	if (IS_BARRIER(inode))
 		newflags |= EXT3_BARRIER_FL;
-
-	/* we do not want to copy superblock flags */
-	if (inode->i_flags & S_NOATIME)
-		newflags |= EXT3_NOATIME_FL;
-	if (inode->i_flags & S_SYNC)
-		newflags |= EXT3_SYNC_FL;
-	if (inode->i_flags & S_DIRSYNC)
-		newflags |= EXT3_DIRSYNC_FL;
 
 	if (oldflags ^ newflags) {
 		handle_t *handle;

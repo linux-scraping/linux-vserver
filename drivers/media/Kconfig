@@ -67,8 +67,10 @@ source "drivers/media/common/Kconfig"
 
 config VIDEO_TUNER
 	tristate
+	depends on I2C
 
 config VIDEO_BUF
+	depends on PCI
 	tristate
 
 config VIDEO_BUF_DVB
@@ -82,6 +84,7 @@ config VIDEO_IR
 
 config VIDEO_TVEEPROM
 	tristate
+	depends on I2C
 
 config USB_DABUSB
 	tristate "DABUSB driver"

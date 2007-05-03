@@ -247,21 +247,7 @@ extern void htab_initialize_secondary(void);
 extern void hpte_init_native(void);
 extern void hpte_init_lpar(void);
 extern void hpte_init_iSeries(void);
-
-extern long pSeries_lpar_hpte_insert(unsigned long hpte_group,
-				     unsigned long va, unsigned long prpn,
-				     unsigned long rflags,
-				     unsigned long vflags, int psize);
-
-extern long native_hpte_insert(unsigned long hpte_group,
-			       unsigned long va, unsigned long prpn,
-			       unsigned long rflags,
-			       unsigned long vflags, int psize);
-
-extern long iSeries_hpte_insert(unsigned long hpte_group,
-				unsigned long va, unsigned long prpn,
-				unsigned long rflags,
-				unsigned long vflags, int psize);
+extern void hpte_init_beat(void);
 
 extern void stabs_alloc(void);
 extern void slb_initialize(void);

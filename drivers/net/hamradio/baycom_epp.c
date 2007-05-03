@@ -52,6 +52,7 @@
 #include <linux/hdlcdrv.h>
 #include <linux/baycom.h>
 #include <linux/jiffies.h>
+#include <linux/random.h>
 #include <net/ax25.h> 
 #include <asm/uaccess.h>
 
@@ -168,8 +169,9 @@ struct baycom_state {
 	int magic;
 
         struct pardevice *pdev;
+	struct net_device *dev;
 	unsigned int work_running;
-	struct work_struct run_work;
+	struct delayed_work run_work;
 	unsigned int modem;
 	unsigned int bitrate;
 	unsigned char stat;
@@ -432,16 +434,6 @@ static void encode_hdlc(struct baycom_state *bc)
 
 /* ---------------------------------------------------------------------- */
 
-static unsigned short random_seed;
-
-static inline unsigned short random_num(void)
-{
-	random_seed = 28629 * random_seed + 157;
-	return random_seed;
-}
-
-/* ---------------------------------------------------------------------- */
-
 static int transmit(struct baycom_state *bc, int cnt, unsigned char stat)
 {
 	struct parport *pp = bc->pdev->port;
@@ -463,7 +455,7 @@ static int transmit(struct baycom_state *bc, int cnt, unsigned char stat)
 			if ((--bc->hdlctx.slotcnt) > 0)
 				return 0;
 			bc->hdlctx.slotcnt = bc->ch_params.slottime;
-			if ((random_num() % 256) > bc->ch_params.ppersist)
+			if ((random32() % 256) > bc->ch_params.ppersist)
 				return 0;
 		}
 	}
@@ -659,16 +651,18 @@ static int receive(struct net_device *dev, int cnt)
 #define GETTICK(x)
 #endif /* __i386__ */
 
-static void epp_bh(struct net_device *dev)
+static void epp_bh(struct work_struct *work)
 {
+	struct net_device *dev;
 	struct baycom_state *bc;
 	struct parport *pp;
 	unsigned char stat;
 	unsigned char tmp[2];
 	unsigned int time1 = 0, time2 = 0, time3 = 0;
 	int cnt, cnt2;
-	
-	bc = netdev_priv(dev);
+
+	bc = container_of(work, struct baycom_state, run_work.work);
+	dev = bc->dev;
 	if (!bc->work_running)
 		return;
 	baycom_int_freq(bc);
@@ -889,7 +883,7 @@ static int epp_open(struct net_device *dev)
                 return -EBUSY;
         }
         dev->irq = /*pp->irq*/ 0;
-	INIT_WORK(&bc->run_work, (void *)(void *)epp_bh, dev);
+	INIT_DELAYED_WORK(&bc->run_work, epp_bh);
 	bc->work_running = 1;
 	bc->modem = EPP_CONVENTIONAL;
 	if (eppconfig(bc))
@@ -1138,12 +1132,6 @@ static int baycom_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
  */
 static void baycom_probe(struct net_device *dev)
 {
-	static char ax25_bcast[AX25_ADDR_LEN] = {
-		'Q' << 1, 'S' << 1, 'T' << 1, ' ' << 1, ' ' << 1, ' ' << 1, '0' << 1
-	};
-	static char ax25_nocall[AX25_ADDR_LEN] = {
-		'L' << 1, 'I' << 1, 'N' << 1, 'U' << 1, 'X' << 1, ' ' << 1, '1' << 1
-	};
 	const struct hdlcdrv_channel_params dflt_ch_params = { 
 		20, 2, 10, 40, 0 
 	};
@@ -1179,8 +1167,8 @@ static void baycom_probe(struct net_device *dev)
 	dev->hard_header_len = AX25_MAX_HEADER_LEN + AX25_BPQ_HEADER_LEN;
 	dev->mtu = AX25_DEF_PACLEN;        /* eth_mtu is the default */
 	dev->addr_len = AX25_ADDR_LEN;     /* sizeof an ax.25 address */
-	memcpy(dev->broadcast, ax25_bcast, AX25_ADDR_LEN);
-	memcpy(dev->dev_addr, ax25_nocall, AX25_ADDR_LEN);
+	memcpy(dev->broadcast, &ax25_bcast, AX25_ADDR_LEN);
+	memcpy(dev->dev_addr, &null_ax25_address, AX25_ADDR_LEN);
 	dev->tx_queue_len = 16;
 
 	/* New style flags */
@@ -1213,6 +1201,7 @@ static void __init baycom_epp_dev_setup(struct net_device *dev)
 	/*
 	 * initialize part of the baycom_state struct
 	 */
+	bc->dev = dev;
 	bc->magic = BAYCOM_MAGIC;
 	bc->cfg.fclk = 19666600;
 	bc->cfg.bps = 9600;

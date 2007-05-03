@@ -15,9 +15,21 @@
  * disables interrupts for a long time. This call is stateless.
  */
 #ifdef ARCH_HAS_NMI_WATCHDOG
+#include <asm/nmi.h>
 extern void touch_nmi_watchdog(void);
+extern void acpi_nmi_disable(void);
+extern void acpi_nmi_enable(void);
 #else
-# define touch_nmi_watchdog() touch_softlockup_watchdog()
+static inline void touch_nmi_watchdog(void)
+{
+	touch_softlockup_watchdog();
+}
+static inline void acpi_nmi_disable(void) { }
+static inline void acpi_nmi_enable(void) { }
+#endif
+
+#ifndef trigger_all_cpu_backtrace
+#define trigger_all_cpu_backtrace() do { } while (0)
 #endif
 
 #endif

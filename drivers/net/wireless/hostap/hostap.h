@@ -2,13 +2,14 @@
 #define HOSTAP_H
 
 #include <linux/ethtool.h>
+#include <linux/kernel.h>
 
 #include "hostap_wlan.h"
 #include "hostap_ap.h"
 
 static const long freq_list[] = { 2412, 2417, 2422, 2427, 2432, 2437, 2442,
 				  2447, 2452, 2457, 2462, 2467, 2472, 2484 };
-#define FREQ_COUNT (sizeof(freq_list) / sizeof(freq_list[0]))
+#define FREQ_COUNT ARRAY_SIZE(freq_list)
 
 /* hostap.c */
 
@@ -35,7 +36,7 @@ int hostap_80211_get_hdrlen(u16 fc);
 struct net_device_stats *hostap_get_stats(struct net_device *dev);
 void hostap_setup_dev(struct net_device *dev, local_info_t *local,
 		      int main_dev);
-void hostap_set_multicast_list_queue(void *data);
+void hostap_set_multicast_list_queue(struct work_struct *work);
 int hostap_set_hostapd(local_info_t *local, int val, int rtnl_locked);
 int hostap_set_hostapd_sta(local_info_t *local, int val, int rtnl_locked);
 void hostap_cleanup(local_info_t *local);

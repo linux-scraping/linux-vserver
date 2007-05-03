@@ -43,7 +43,6 @@
 
 #include <linux/module.h>
 
-#include <linux/sched.h>
 #include <linux/kernel.h>
 #include <linux/slab.h>
 #include <linux/errno.h>
@@ -133,7 +132,7 @@ struct eth1394_node_info {
 #define ETH1394_DRIVER_NAME "eth1394"
 static const char driver_name[] = ETH1394_DRIVER_NAME;
 
-static kmem_cache_t *packet_task_cache;
+static struct kmem_cache *packet_task_cache;
 
 static struct hpsb_highlevel eth1394_highlevel;
 
@@ -474,12 +473,10 @@ static struct ieee1394_device_id eth1394_id_table[] = {
 MODULE_DEVICE_TABLE(ieee1394, eth1394_id_table);
 
 static struct hpsb_protocol_driver eth1394_proto_driver = {
-	.name		= "IPv4 over 1394 Driver",
+	.name		= ETH1394_DRIVER_NAME,
 	.id_table	= eth1394_id_table,
 	.update		= eth1394_update,
 	.driver		= {
-		.name		= ETH1394_DRIVER_NAME,
-		.bus		= &ieee1394_bus_type,
 		.probe		= eth1394_probe,
 		.remove		= eth1394_remove,
 	},
@@ -587,7 +584,10 @@ static void ether1394_add_host (struct hpsb_host *host)
         }
 
 	SET_MODULE_OWNER(dev);
+#if 0
+	/* FIXME - Is this the correct parent device anyway? */
 	SET_NETDEV_DEV(dev, &host->device);
+#endif
 
 	priv = netdev_priv(dev);
 

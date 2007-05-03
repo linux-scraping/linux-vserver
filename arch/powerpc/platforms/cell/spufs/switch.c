@@ -102,7 +102,7 @@ static inline int check_spu_isolate(struct spu_state *csa, struct spu *spu)
 	 *     saved at this time.
 	 */
 	isolate_state = SPU_STATUS_ISOLATED_STATE |
-	    SPU_STATUS_ISOLATED_LOAD_STAUTUS | SPU_STATUS_ISOLATED_EXIT_STAUTUS;
+	    SPU_STATUS_ISOLATED_LOAD_STATUS | SPU_STATUS_ISOLATED_EXIT_STATUS;
 	return (in_be32(&prob->spu_status_R) & isolate_state) ? 1 : 0;
 }
 
@@ -468,26 +468,6 @@ static inline void wait_purge_complete(struct spu_state *csa, struct spu *spu)
 			 MFC_CNTL_PURGE_DMA_COMPLETE);
 }
 
-static inline void save_mfc_slbs(struct spu_state *csa, struct spu *spu)
-{
-	struct spu_priv2 __iomem *priv2 = spu->priv2;
-	int i;
-
-	/* Save, Step 29:
-	 *     If MFC_SR1[R]='1', save SLBs in CSA.
-	 */
-	if (spu_mfc_sr1_get(spu) & MFC_STATE1_RELOCATE_MASK) {
-		csa->priv2.slb_index_W = in_be64(&priv2->slb_index_W);
-		for (i = 0; i < 8; i++) {
-			out_be64(&priv2->slb_index_W, i);
-			eieio();
-			csa->slb_esid_RW[i] = in_be64(&priv2->slb_esid_RW);
-			csa->slb_vsid_RW[i] = in_be64(&priv2->slb_vsid_RW);
-			eieio();
-		}
-	}
-}
-
 static inline void setup_mfc_sr1(struct spu_state *csa, struct spu *spu)
 {
 	/* Save, Step 30:
@@ -708,20 +688,6 @@ static inline void resume_mfc_queue(struct spu_state *csa, struct spu *spu)
 	out_be64(&priv2->mfc_control_RW, MFC_CNTL_RESUME_DMA_QUEUE);
 }
 
-static inline void invalidate_slbs(struct spu_state *csa, struct spu *spu)
-{
-	struct spu_priv2 __iomem *priv2 = spu->priv2;
-
-	/* Save, Step 45:
-	 * Restore, Step 19:
-	 *     If MFC_SR1[R]=1, write 0 to SLB_Invalidate_All.
-	 */
-	if (spu_mfc_sr1_get(spu) & MFC_STATE1_RELOCATE_MASK) {
-		out_be64(&priv2->slb_invalidate_all_W, 0UL);
-		eieio();
-	}
-}
-
 static inline void get_kernel_slb(u64 ea, u64 slb[2])
 {
 	u64 llp;
@@ -765,7 +731,7 @@ static inline void setup_mfc_slbs(struct spu_state *csa, struct spu *spu)
 	 *     MFC_SR1[R]=1 (in other words, assume that
 	 *     translation is desired by OS environment).
 	 */
-	invalidate_slbs(csa, spu);
+	spu_invalidate_slbs(spu);
 	get_kernel_slb((unsigned long)&spu_save_code[0], code_slb);
 	get_kernel_slb((unsigned long)csa->lscsa, lscsa_slb);
 	load_mfc_slb(spu, code_slb, 0);
@@ -1046,12 +1012,12 @@ static inline int suspend_spe(struct spu_state *csa, struct spu *spu)
 	 */
 	if (in_be32(&prob->spu_status_R) & SPU_STATUS_RUNNING) {
 		if (in_be32(&prob->spu_status_R) &
-		    SPU_STATUS_ISOLATED_EXIT_STAUTUS) {
+		    SPU_STATUS_ISOLATED_EXIT_STATUS) {
 			POLL_WHILE_TRUE(in_be32(&prob->spu_status_R) &
 					SPU_STATUS_RUNNING);
 		}
 		if ((in_be32(&prob->spu_status_R) &
-		     SPU_STATUS_ISOLATED_LOAD_STAUTUS)
+		     SPU_STATUS_ISOLATED_LOAD_STATUS)
 		    || (in_be32(&prob->spu_status_R) &
 			SPU_STATUS_ISOLATED_STATE)) {
 			out_be32(&prob->spu_runcntl_RW, SPU_RUNCNTL_STOP);
@@ -1085,7 +1051,7 @@ static inline void clear_spu_status(struct spu_state *csa, struct spu *spu)
 	 */
 	if (!(in_be32(&prob->spu_status_R) & SPU_STATUS_RUNNING)) {
 		if (in_be32(&prob->spu_status_R) &
-		    SPU_STATUS_ISOLATED_EXIT_STAUTUS) {
+		    SPU_STATUS_ISOLATED_EXIT_STATUS) {
 			spu_mfc_sr1_set(spu,
 					MFC_STATE1_MASTER_RUN_CONTROL_MASK);
 			eieio();
@@ -1095,7 +1061,7 @@ static inline void clear_spu_status(struct spu_state *csa, struct spu *spu)
 					SPU_STATUS_RUNNING);
 		}
 		if ((in_be32(&prob->spu_status_R) &
-		     SPU_STATUS_ISOLATED_LOAD_STAUTUS)
+		     SPU_STATUS_ISOLATED_LOAD_STATUS)
 		    || (in_be32(&prob->spu_status_R) &
 			SPU_STATUS_ISOLATED_STATE)) {
 			spu_mfc_sr1_set(spu,
@@ -1718,27 +1684,6 @@ static inline void check_ppuint_mb_stat(struct spu_state *csa, struct spu *spu)
 	}
 }
 
-static inline void restore_mfc_slbs(struct spu_state *csa, struct spu *spu)
-{
-	struct spu_priv2 __iomem *priv2 = spu->priv2;
-	int i;
-
-	/* Restore, Step 68:
-	 *     If MFC_SR1[R]='1', restore SLBs from CSA.
-	 */
-	if (csa->priv1.mfc_sr1_RW & MFC_STATE1_RELOCATE_MASK) {
-		for (i = 0; i < 8; i++) {
-			out_be64(&priv2->slb_index_W, i);
-			eieio();
-			out_be64(&priv2->slb_esid_RW, csa->slb_esid_RW[i]);
-			out_be64(&priv2->slb_vsid_RW, csa->slb_vsid_RW[i]);
-			eieio();
-		}
-		out_be64(&priv2->slb_index_W, csa->priv2.slb_index_W);
-		eieio();
-	}
-}
-
 static inline void restore_mfc_sr1(struct spu_state *csa, struct spu *spu)
 {
 	/* Restore, Step 69:
@@ -1875,7 +1820,6 @@ static void save_csa(struct spu_state *prev, struct spu *spu)
 	set_mfc_tclass_id(prev, spu);	/* Step 26. */
 	purge_mfc_queue(prev, spu);	/* Step 27. */
 	wait_purge_complete(prev, spu);	/* Step 28. */
-	save_mfc_slbs(prev, spu);	/* Step 29. */
 	setup_mfc_sr1(prev, spu);	/* Step 30. */
 	save_spu_npc(prev, spu);	/* Step 31. */
 	save_spu_privcntl(prev, spu);	/* Step 32. */
@@ -1916,6 +1860,51 @@ static void save_lscsa(struct spu_state *prev, struct spu *spu)
 	wait_spu_stopped(prev, spu);	/* Step 57. */
 }
 
+static void force_spu_isolate_exit(struct spu *spu)
+{
+	struct spu_problem __iomem *prob = spu->problem;
+	struct spu_priv2 __iomem *priv2 = spu->priv2;
+
+	/* Stop SPE execution and wait for completion. */
+	out_be32(&prob->spu_runcntl_RW, SPU_RUNCNTL_STOP);
+	iobarrier_rw();
+	POLL_WHILE_TRUE(in_be32(&prob->spu_status_R) & SPU_STATUS_RUNNING);
+
+	/* Restart SPE master runcntl. */
+	spu_mfc_sr1_set(spu, MFC_STATE1_MASTER_RUN_CONTROL_MASK);
+	iobarrier_w();
+
+	/* Initiate isolate exit request and wait for completion. */
+	out_be64(&priv2->spu_privcntl_RW, 4LL);
+	iobarrier_w();
+	out_be32(&prob->spu_runcntl_RW, 2);
+	iobarrier_rw();
+	POLL_WHILE_FALSE((in_be32(&prob->spu_status_R)
+				& SPU_STATUS_STOPPED_BY_STOP));
+
+	/* Reset load request to normal. */
+	out_be64(&priv2->spu_privcntl_RW, SPU_PRIVCNT_LOAD_REQUEST_NORMAL);
+	iobarrier_w();
+}
+
+/**
+ * stop_spu_isolate
+ *	Check SPU run-control state and force isolated
+ *	exit function as necessary.
+ */
+static void stop_spu_isolate(struct spu *spu)
+{
+	struct spu_problem __iomem *prob = spu->problem;
+
+	if (in_be32(&prob->spu_status_R) & SPU_STATUS_ISOLATED_STATE) {
+		/* The SPU is in isolated state; the only way
+		 * to get it out is to perform an isolated
+		 * exit (clean) operation.
+		 */
+		force_spu_isolate_exit(spu);
+	}
+}
+
 static void harvest(struct spu_state *prev, struct spu *spu)
 {
 	/*
@@ -1928,6 +1917,7 @@ static void harvest(struct spu_state *prev, struct spu *spu)
 	inhibit_user_access(prev, spu);	        /* Step 3.  */
 	terminate_spu_app(prev, spu);	        /* Step 4.  */
 	set_switch_pending(prev, spu);	        /* Step 5.  */
+	stop_spu_isolate(spu);			/* NEW.     */
 	remove_other_spu_access(prev, spu);	/* Step 6.  */
 	suspend_mfc(prev, spu);	                /* Step 7.  */
 	wait_suspend_mfc_complete(prev, spu);	/* Step 8.  */
@@ -1941,7 +1931,7 @@ static void harvest(struct spu_state *prev, struct spu *spu)
 	reset_spu_privcntl(prev, spu);	        /* Step 16. */
 	reset_spu_lslr(prev, spu);              /* Step 17. */
 	setup_mfc_sr1(prev, spu);	        /* Step 18. */
-	invalidate_slbs(prev, spu);	        /* Step 19. */
+	spu_invalidate_slbs(spu);        	/* Step 19. */
 	reset_ch_part1(prev, spu);	        /* Step 20. */
 	reset_ch_part2(prev, spu);	        /* Step 21. */
 	enable_interrupts(prev, spu);	        /* Step 22. */
@@ -2009,7 +1999,7 @@ static void restore_csa(struct spu_state *next, struct spu *spu)
 	restore_spu_mb(next, spu);	        /* Step 65. */
 	check_ppu_mb_stat(next, spu);	        /* Step 66. */
 	check_ppuint_mb_stat(next, spu);	/* Step 67. */
-	restore_mfc_slbs(next, spu);	        /* Step 68. */
+	spu_invalidate_slbs(spu);		/* Modified Step 68. */
 	restore_mfc_sr1(next, spu);	        /* Step 69. */
 	restore_other_spu_access(next, spu);	/* Step 70. */
 	restore_spu_runcntl(next, spu);	        /* Step 71. */
@@ -2096,11 +2086,11 @@ int spu_save(struct spu_state *prev, struct spu *spu)
 	acquire_spu_lock(spu);	        /* Step 1.     */
 	rc = __do_spu_save(prev, spu);	/* Steps 2-53. */
 	release_spu_lock(spu);
-	if (rc) {
+	if (rc != 0 && rc != 2 && rc != 6) {
 		panic("%s failed on SPU[%d], rc=%d.\n",
 		      __func__, spu->number, rc);
 	}
-	return rc;
+	return 0;
 }
 EXPORT_SYMBOL_GPL(spu_save);
 
@@ -2164,9 +2154,6 @@ static void init_priv1(struct spu_state *csa)
 	    MFC_STATE1_MASTER_RUN_CONTROL_MASK |
 	    MFC_STATE1_PROBLEM_STATE_MASK |
 	    MFC_STATE1_RELOCATE_MASK | MFC_STATE1_BUS_TLBIE_MASK;
-
-	/* Set storage description.  */
-	csa->priv1.mfc_sdr_RW = mfspr(SPRN_SDR1);
 
 	/* Enable OS-specific set of interrupts. */
 	csa->priv1.int_mask_class0_RW = CLASS0_ENABLE_DMA_ALIGNMENT_INTR |

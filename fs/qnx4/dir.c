@@ -22,7 +22,7 @@
 
 static int qnx4_readdir(struct file *filp, void *dirent, filldir_t filldir)
 {
-	struct inode *inode = filp->f_dentry->d_inode;
+	struct inode *inode = filp->f_path.dentry->d_inode;
 	unsigned int offset;
 	struct buffer_head *bh;
 	struct qnx4_inode_entry *de;
@@ -87,7 +87,7 @@ const struct file_operations qnx4_dir_operations =
 	.fsync		= file_fsync,
 };
 
-struct inode_operations qnx4_dir_inode_operations =
+const struct inode_operations qnx4_dir_inode_operations =
 {
 	.lookup		= qnx4_lookup,
 #ifdef CONFIG_QNX4FS_RW

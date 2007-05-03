@@ -75,8 +75,6 @@ static int logibm_irq = LOGIBM_IRQ;
 module_param_named(irq, logibm_irq, uint, 0);
 MODULE_PARM_DESC(irq, "IRQ number (5=default)");
 
-__obsolete_setup("logibm_irq=");
-
 static struct input_dev *logibm_dev;
 
 static irqreturn_t logibm_interrupt(int irq, void *dev_id)
@@ -124,6 +122,8 @@ static void logibm_close(struct input_dev *dev)
 
 static int __init logibm_init(void)
 {
+	int err;
+
 	if (!request_region(LOGIBM_BASE, LOGIBM_EXTENT, "logibm")) {
 		printk(KERN_ERR "logibm.c: Can't allocate ports at %#x\n", LOGIBM_BASE);
 		return -EBUSY;
@@ -134,18 +134,19 @@ static int __init logibm_init(void)
 	udelay(100);
 
 	if (inb(LOGIBM_SIGNATURE_PORT) != LOGIBM_SIGNATURE_BYTE) {
-		release_region(LOGIBM_BASE, LOGIBM_EXTENT);
 		printk(KERN_ERR "logibm.c: Didn't find Logitech busmouse at %#x\n", LOGIBM_BASE);
-		return -ENODEV;
+		err = -ENODEV;
+		goto err_release_region;
 	}
 
 	outb(LOGIBM_DEFAULT_MODE, LOGIBM_CONFIG_PORT);
 	outb(LOGIBM_DISABLE_IRQ, LOGIBM_CONTROL_PORT);
 
-	if (!(logibm_dev = input_allocate_device())) {
+	logibm_dev = input_allocate_device();
+	if (!logibm_dev) {
 		printk(KERN_ERR "logibm.c: Not enough memory for input device\n");
-		release_region(LOGIBM_BASE, LOGIBM_EXTENT);
-		return -ENOMEM;
+		err = -ENOMEM;
+		goto err_release_region;
 	}
 
 	logibm_dev->name = "Logitech bus mouse";
@@ -162,9 +163,18 @@ static int __init logibm_init(void)
 	logibm_dev->open  = logibm_open;
 	logibm_dev->close = logibm_close;
 
-	input_register_device(logibm_dev);
+	err = input_register_device(logibm_dev);
+	if (err)
+		goto err_free_dev;
 
 	return 0;
+
+ err_free_dev:
+	input_free_device(logibm_dev);
+ err_release_region:
+	release_region(LOGIBM_BASE, LOGIBM_EXTENT);
+
+	return err;
 }
 
 static void __exit logibm_exit(void)

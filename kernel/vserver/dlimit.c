@@ -3,7 +3,7 @@
  *
  *  Virtual Server: Context Disk Limits
  *
- *  Copyright (C) 2004-2005  Herbert Pötzl
+ *  Copyright (C) 2004-2007  Herbert Pötzl
  *
  *  V0.01  initial version
  *  V0.02  compat32 splitup
@@ -11,7 +11,7 @@
  */
 
 #include <linux/fs.h>
-#include <linux/namespace.h>
+// #include <linux/mnt_namespace.h>
 #include <linux/namei.h>
 #include <linux/statfs.h>
 #include <linux/compat.h>

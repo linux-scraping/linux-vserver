@@ -42,10 +42,11 @@ static void sas_form_port(struct asd_sas_phy *phy)
 	struct asd_sas_port *port = phy->port;
 	struct sas_internal *si =
 		to_sas_internal(sas_ha->core.shost->transportt);
+	unsigned long flags;
 
 	if (port) {
 		if (memcmp(port->attached_sas_addr, phy->attached_sas_addr,
-			   SAS_ADDR_SIZE) == 0)
+			   SAS_ADDR_SIZE) != 0)
 			sas_deform_port(phy);
 		else {
 			SAS_DPRINTK("%s: phy%d belongs to port%d already(%d)!\n",
@@ -56,7 +57,7 @@ static void sas_form_port(struct asd_sas_phy *phy)
 	}
 
 	/* find a port */
-	spin_lock(&sas_ha->phy_port_lock);
+	spin_lock_irqsave(&sas_ha->phy_port_lock, flags);
 	for (i = 0; i < sas_ha->num_phys; i++) {
 		port = sas_ha->sas_port[i];
 		spin_lock(&port->phy_list_lock);
@@ -78,7 +79,7 @@ static void sas_form_port(struct asd_sas_phy *phy)
 	if (i >= sas_ha->num_phys) {
 		printk(KERN_NOTICE "%s: couldn't find a free port, bug?\n",
 		       __FUNCTION__);
-		spin_unlock(&sas_ha->phy_port_lock);
+		spin_unlock_irqrestore(&sas_ha->phy_port_lock, flags);
 		return;
 	}
 
@@ -105,7 +106,7 @@ static void sas_form_port(struct asd_sas_phy *phy)
 	} else
 		port->linkrate = max(port->linkrate, phy->linkrate);
 	spin_unlock(&port->phy_list_lock);
-	spin_unlock(&sas_ha->phy_port_lock);
+	spin_unlock_irqrestore(&sas_ha->phy_port_lock, flags);
 
 	if (!port->port) {
 		port->port = sas_port_alloc(phy->phy->dev.parent, port->id);
@@ -137,6 +138,7 @@ void sas_deform_port(struct asd_sas_phy *phy)
 	struct asd_sas_port *port = phy->port;
 	struct sas_internal *si =
 		to_sas_internal(sas_ha->core.shost->transportt);
+	unsigned long flags;
 
 	if (!port)
 		return;		  /* done by a phy event */
@@ -155,7 +157,7 @@ void sas_deform_port(struct asd_sas_phy *phy)
 	if (si->dft->lldd_port_deformed)
 		si->dft->lldd_port_deformed(phy);
 
-	spin_lock(&sas_ha->phy_port_lock);
+	spin_lock_irqsave(&sas_ha->phy_port_lock, flags);
 	spin_lock(&port->phy_list_lock);
 
 	list_del_init(&phy->port_phy_el);
@@ -174,16 +176,18 @@ void sas_deform_port(struct asd_sas_phy *phy)
 		port->phy_mask = 0;
 	}
 	spin_unlock(&port->phy_list_lock);
-	spin_unlock(&sas_ha->phy_port_lock);
+	spin_unlock_irqrestore(&sas_ha->phy_port_lock, flags);
 
 	return;
 }
 
 /* ---------- SAS port events ---------- */
 
-void sas_porte_bytes_dmaed(void *data)
+void sas_porte_bytes_dmaed(struct work_struct *work)
 {
-	struct asd_sas_phy *phy = data;
+	struct asd_sas_event *ev =
+		container_of(work, struct asd_sas_event, work);
+	struct asd_sas_phy *phy = ev->phy;
 
 	sas_begin_event(PORTE_BYTES_DMAED, &phy->ha->event_lock,
 			&phy->port_events_pending);
@@ -191,11 +195,13 @@ void sas_porte_bytes_dmaed(void *data)
 	sas_form_port(phy);
 }
 
-void sas_porte_broadcast_rcvd(void *data)
+void sas_porte_broadcast_rcvd(struct work_struct *work)
 {
+	struct asd_sas_event *ev =
+		container_of(work, struct asd_sas_event, work);
+	struct asd_sas_phy *phy = ev->phy;
 	unsigned long flags;
 	u32 prim;
-	struct asd_sas_phy *phy = data;
 
 	sas_begin_event(PORTE_BROADCAST_RCVD, &phy->ha->event_lock,
 			&phy->port_events_pending);
@@ -208,9 +214,11 @@ void sas_porte_broadcast_rcvd(void *data)
 	sas_discover_event(phy->port, DISCE_REVALIDATE_DOMAIN);
 }
 
-void sas_porte_link_reset_err(void *data)
+void sas_porte_link_reset_err(struct work_struct *work)
 {
-	struct asd_sas_phy *phy = data;
+	struct asd_sas_event *ev =
+		container_of(work, struct asd_sas_event, work);
+	struct asd_sas_phy *phy = ev->phy;
 
 	sas_begin_event(PORTE_LINK_RESET_ERR, &phy->ha->event_lock,
 			&phy->port_events_pending);
@@ -218,9 +226,11 @@ void sas_porte_link_reset_err(void *data)
 	sas_deform_port(phy);
 }
 
-void sas_porte_timer_event(void *data)
+void sas_porte_timer_event(struct work_struct *work)
 {
-	struct asd_sas_phy *phy = data;
+	struct asd_sas_event *ev =
+		container_of(work, struct asd_sas_event, work);
+	struct asd_sas_phy *phy = ev->phy;
 
 	sas_begin_event(PORTE_TIMER_EVENT, &phy->ha->event_lock,
 			&phy->port_events_pending);
@@ -228,9 +238,11 @@ void sas_porte_timer_event(void *data)
 	sas_deform_port(phy);
 }
 
-void sas_porte_hard_reset(void *data)
+void sas_porte_hard_reset(struct work_struct *work)
 {
-	struct asd_sas_phy *phy = data;
+	struct asd_sas_event *ev =
+		container_of(work, struct asd_sas_event, work);
+	struct asd_sas_phy *phy = ev->phy;
 
 	sas_begin_event(PORTE_HARD_RESET, &phy->ha->event_lock,
 			&phy->port_events_pending);

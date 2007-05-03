@@ -14,6 +14,7 @@
 
 #include "gigaset.h"
 #include <linux/crc-ccitt.h>
+#include <linux/bitrev.h>
 
 /* access methods for isowbuf_t */
 /* ============================ */
@@ -273,7 +274,7 @@ static inline void dump_bytes(enum debuglevel level, const char *tag,
  *        bit 12..10 = number of trailing '1' bits in result
  *        bit 14..13 = number of bits added by stuffing
  */
-static u16 stufftab[5 * 256] = {
+static const u16 stufftab[5 * 256] = {
 // previous 1s = 0:
  0x0000, 0x0001, 0x0002, 0x0003, 0x0004, 0x0005, 0x0006, 0x0007, 0x0008, 0x0009, 0x000a, 0x000b, 0x000c, 0x000d, 0x000e, 0x000f,
  0x0010, 0x0011, 0x0012, 0x0013, 0x0014, 0x0015, 0x0016, 0x0017, 0x0018, 0x0019, 0x001a, 0x001b, 0x001c, 0x001d, 0x001e, 0x201f,
@@ -487,7 +488,7 @@ static inline int trans_buildframe(struct isowbuf_t *iwb,
 	gig_dbg(DEBUG_STREAM, "put %d bytes", count);
 	write = atomic_read(&iwb->write);
 	do {
-		c = gigaset_invtab[*in++];
+		c = bitrev8(*in++);
 		iwb->data[write++] = c;
 		write %= BAS_OUTBUFSIZE;
 	} while (--count > 0);
@@ -628,7 +629,7 @@ static inline void hdlc_frag(struct bc_state *bcs, unsigned inbits)
  *		     (replacing 8 by 7 to make it fit; the algorithm won't care)
  *        bit 7 set if there are 5 or more "interior" consecutive '1' bits
  */
-static unsigned char bitcounts[256] = {
+static const unsigned char bitcounts[256] = {
   0x00, 0x01, 0x00, 0x02, 0x00, 0x01, 0x00, 0x03, 0x00, 0x01, 0x00, 0x02, 0x00, 0x01, 0x00, 0x04,
   0x00, 0x01, 0x00, 0x02, 0x00, 0x01, 0x00, 0x03, 0x00, 0x01, 0x00, 0x02, 0x00, 0x01, 0x00, 0x05,
   0x00, 0x01, 0x00, 0x02, 0x00, 0x01, 0x00, 0x03, 0x00, 0x01, 0x00, 0x02, 0x00, 0x01, 0x00, 0x04,
@@ -876,7 +877,7 @@ static inline void trans_receive(unsigned char *src, unsigned count,
 	while (count > 0) {
 		dst = skb_put(skb, count < dobytes ? count : dobytes);
 		while (count > 0 && dobytes > 0) {
-			*dst++ = gigaset_invtab[*src++];
+			*dst++ = bitrev8(*src++);
 			count--;
 			dobytes--;
 		}
@@ -920,6 +921,8 @@ static void cmd_loop(unsigned char *src, int numbytes, struct inbuf_t *inbuf)
 			/* end of line */
 			gig_dbg(DEBUG_TRANSCMD, "%s: End of Command (%d Bytes)",
 				__func__, cbytes);
+			if (cbytes >= MAX_RESP_SIZE - 1)
+				dev_warn(cs->dev, "response too large\n");
 			cs->cbytes = cbytes;
 			gigaset_handle_modem_response(cs);
 			cbytes = 0;
@@ -928,8 +931,6 @@ static void cmd_loop(unsigned char *src, int numbytes, struct inbuf_t *inbuf)
 			/* advance in line buffer, checking for overflow */
 			if (cbytes < MAX_RESP_SIZE - 1)
 				cbytes++;
-			else
-				dev_warn(cs->dev, "response too large\n");
 		}
 	}
 

@@ -3,7 +3,7 @@
  *
  *  Virtual Context Support
  *
- *  Copyright (C) 2004-2005  Herbert Pötzl
+ *  Copyright (C) 2004-2007  Herbert Pötzl
  *
  *  V0.01  basic structure
  *
@@ -59,7 +59,7 @@ static ctl_table vserver_table[];
 void vserver_register_sysctl(void)
 {
 	if (!vserver_table_header) {
-		vserver_table_header = register_sysctl_table(vserver_table, 1);
+		vserver_table_header = register_sysctl_table(vserver_table);
 	}
 
 }

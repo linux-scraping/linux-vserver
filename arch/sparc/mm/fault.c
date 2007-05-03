@@ -368,7 +368,8 @@ no_context:
  */
 out_of_memory:
 	up_read(&mm->mmap_sem);
-	printk("VM: killing process %s\n", tsk->comm);
+	printk("VM: killing process %s(%d:#%u)\n",
+		tsk->comm, tsk->pid, tsk->xid);
 	if (from_user)
 		do_exit(SIGKILL);
 	goto no_context;

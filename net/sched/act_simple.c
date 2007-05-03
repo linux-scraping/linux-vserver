@@ -43,9 +43,9 @@ static int tcf_simp(struct sk_buff *skb, struct tc_action *a, struct tcf_result 
 	d->tcf_bstats.bytes += skb->len;
 	d->tcf_bstats.packets++;
 
-	/* print policy string followed by _ then packet count 
-	 * Example if this was the 3rd packet and the string was "hello" 
-	 * then it would look like "hello_3" (without quotes) 
+	/* print policy string followed by _ then packet count
+	 * Example if this was the 3rd packet and the string was "hello"
+	 * then it would look like "hello_3" (without quotes)
 	 **/
 	printk("simple: %s_%d\n",
 	       (char *)d->tcfd_defdata, d->tcf_bstats.packets);
@@ -71,11 +71,10 @@ static int tcf_simp_release(struct tcf_defact *d, int bind)
 
 static int alloc_defdata(struct tcf_defact *d, u32 datalen, void *defdata)
 {
-	d->tcfd_defdata = kmalloc(datalen, GFP_KERNEL);
+	d->tcfd_defdata = kmemdup(defdata, datalen, GFP_KERNEL);
 	if (unlikely(!d->tcfd_defdata))
 		return -ENOMEM;
 	d->tcfd_datalen = datalen;
-	memcpy(d->tcfd_defdata, defdata, datalen);
 	return 0;
 }
 

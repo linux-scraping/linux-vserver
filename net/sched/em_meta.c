@@ -9,7 +9,7 @@
  * Authors:	Thomas Graf <tgraf@suug.ch>
  *
  * ==========================================================================
- * 
+ *
  * 	The metadata ematch compares two meta objects where each object
  * 	represents either a meta value stored in the kernel or a static
  * 	value provided by userspace. The objects are not provided by
@@ -208,13 +208,9 @@ META_COLLECTOR(int_maclen)
  * Netfilter
  **************************************************************************/
 
-META_COLLECTOR(int_nfmark)
+META_COLLECTOR(int_mark)
 {
-#ifdef CONFIG_NETFILTER
-	dst->value = skb->nfmark;
-#else
-	dst->value = 0;
-#endif
+	dst->value = skb->mark;
 }
 
 /**************************************************************************
@@ -294,7 +290,7 @@ META_COLLECTOR(var_sk_bound_if)
 		dst->len = 3;
 	 } else  {
 		struct net_device *dev;
-		
+
 		dev = dev_get_by_index(skb->sk->sk_bound_dev_if);
 		*err = var_dev(dev, dst);
 		if (dev)
@@ -490,7 +486,7 @@ static struct meta_ops __meta_ops[TCF_META_TYPE_MAX+1][TCF_META_ID_MAX+1] = {
 		[META_ID(PKTLEN)]		= META_FUNC(int_pktlen),
 		[META_ID(DATALEN)]		= META_FUNC(int_datalen),
 		[META_ID(MACLEN)]		= META_FUNC(int_maclen),
-		[META_ID(NFMARK)]		= META_FUNC(int_nfmark),
+		[META_ID(NFMARK)]		= META_FUNC(int_mark),
 		[META_ID(TCINDEX)]		= META_FUNC(int_tcindex),
 		[META_ID(RTCLASSID)]		= META_FUNC(int_rtclassid),
 		[META_ID(RTIIF)]		= META_FUNC(int_rtiif),
@@ -550,10 +546,9 @@ static int meta_var_change(struct meta_value *dst, struct rtattr *rta)
 {
 	int len = RTA_PAYLOAD(rta);
 
-	dst->val = (unsigned long) kmalloc(len, GFP_KERNEL);
+	dst->val = (unsigned long)kmemdup(RTA_DATA(rta), len, GFP_KERNEL);
 	if (dst->val == 0UL)
 		return -ENOMEM;
-	memcpy((void *) dst->val, RTA_DATA(rta), len);
 	dst->len = len;
 	return 0;
 }
@@ -676,7 +671,7 @@ static inline struct meta_type_ops * meta_type_ops(struct meta_value *v)
  * Core
  **************************************************************************/
 
-static inline int meta_get(struct sk_buff *skb, struct tcf_pkt_info *info, 
+static inline int meta_get(struct sk_buff *skb, struct tcf_pkt_info *info,
 			   struct meta_value *v, struct meta_obj *dst)
 {
 	int err = 0;
@@ -758,7 +753,7 @@ static int em_meta_change(struct tcf_proto *tp, void *data, int len,
 	struct rtattr *tb[TCA_EM_META_MAX];
 	struct tcf_meta_hdr *hdr;
 	struct meta_match *meta = NULL;
-	
+
 	if (rtattr_parse(tb, TCA_EM_META_MAX, data, len) < 0)
 		goto errout;
 
@@ -827,7 +822,7 @@ static int em_meta_dump(struct sk_buff *skb, struct tcf_ematch *em)
 
 rtattr_failure:
 	return -1;
-}		
+}
 
 static struct tcf_ematch_ops em_meta_ops = {
 	.kind	  = TCF_EM_META,
@@ -844,7 +839,7 @@ static int __init init_em_meta(void)
 	return tcf_em_register(&em_meta_ops);
 }
 
-static void __exit exit_em_meta(void) 
+static void __exit exit_em_meta(void)
 {
 	tcf_em_unregister(&em_meta_ops);
 }

@@ -56,8 +56,8 @@ struct proc_dir_entry {
 	gid_t gid;
 	int vx_flags;
 	loff_t size;
-	struct inode_operations * proc_iops;
-	const struct file_operations * proc_fops;
+	const struct inode_operations *proc_iops;
+	const struct file_operations *proc_fops;
 	get_info_t *get_info;
 	struct module *owner;
 	struct proc_dir_entry *next, *parent, *subdir;
@@ -113,8 +113,6 @@ extern void remove_proc_entry(const char *name, struct proc_dir_entry *parent);
 extern struct vfsmount *proc_mnt;
 extern int proc_fill_super(struct super_block *,void *,int);
 extern struct inode *proc_get_inode(struct super_block *, unsigned int, struct proc_dir_entry *);
-
-extern int proc_match(int, const char *,struct proc_dir_entry *);
 
 /*
  * These are generic /proc routines that use the internal
@@ -244,6 +242,9 @@ static inline void kclist_add(struct kcore_list *new, void *addr, size_t size)
 #else
 extern void kclist_add(struct kcore_list *, void *, size_t);
 #endif
+
+struct vx_info;
+struct nx_info;
 
 union proc_op {
 	int (*proc_get_link)(struct inode *, struct dentry **, struct vfsmount **);

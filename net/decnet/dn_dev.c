@@ -38,7 +38,6 @@
 #include <linux/if_arp.h>
 #include <linux/if_ether.h>
 #include <linux/skbuff.h>
-#include <linux/rtnetlink.h>
 #include <linux/sysctl.h>
 #include <linux/notifier.h>
 #include <asm/uaccess.h>
@@ -47,6 +46,7 @@
 #include <net/dst.h>
 #include <net/flow.h>
 #include <net/fib_rules.h>
+#include <net/netlink.h>
 #include <net/dn.h>
 #include <net/dn_dev.h>
 #include <net/dn_route.h>
@@ -73,7 +73,7 @@ static BLOCKING_NOTIFIER_HEAD(dnaddr_chain);
 
 static struct dn_dev *dn_dev_create(struct net_device *dev, int *err);
 static void dn_dev_delete(struct net_device *dev);
-static void rtmsg_ifa(int event, struct dn_ifaddr *ifa);
+static void dn_ifaddr_notify(int event, struct dn_ifaddr *ifa);
 
 static int dn_eth_up(struct net_device *);
 static void dn_eth_down(struct net_device *);
@@ -167,8 +167,7 @@ static int dn_forwarding_proc(ctl_table *, int, struct file *,
 			void __user *, size_t *, loff_t *);
 static int dn_forwarding_sysctl(ctl_table *table, int __user *name, int nlen,
 			void __user *oldval, size_t __user *oldlenp,
-			void __user *newval, size_t newlen,
-			void **context);
+			void __user *newval, size_t newlen);
 
 static struct dn_dev_sysctl_table {
 	struct ctl_table_header *sysctl_header;
@@ -225,27 +224,27 @@ static struct dn_dev_sysctl_table {
 	{0}
 	},
 	{{
-		.ctl_name = 0, 
-		.procname = "", 
-		.mode = 0555, 
+		.ctl_name = 0,
+		.procname = "",
+		.mode = 0555,
 		.child = dn_dev_sysctl.dn_dev_vars
 	}, {0}},
 	{{
 		.ctl_name = NET_DECNET_CONF,
-		.procname = "conf", 
-		.mode = 0555, 
+		.procname = "conf",
+		.mode = 0555,
 		.child = dn_dev_sysctl.dn_dev_dev
 	}, {0}},
 	{{
-		.ctl_name = NET_DECNET, 
-		.procname = "decnet", 
-		.mode = 0555, 
+		.ctl_name = NET_DECNET,
+		.procname = "decnet",
+		.mode = 0555,
 		.child = dn_dev_sysctl.dn_dev_conf_dir
 	}, {0}},
 	{{
-		.ctl_name = CTL_NET, 
-		.procname = "net", 
-		.mode = 0555, 
+		.ctl_name = CTL_NET,
+		.procname = "net",
+		.mode = 0555,
 		.child = dn_dev_sysctl.dn_dev_proto_dir
 	}, {0}}
 };
@@ -255,16 +254,13 @@ static void dn_dev_sysctl_register(struct net_device *dev, struct dn_dev_parms *
 	struct dn_dev_sysctl_table *t;
 	int i;
 
-	t = kmalloc(sizeof(*t), GFP_KERNEL);
+	t = kmemdup(&dn_dev_sysctl, sizeof(*t), GFP_KERNEL);
 	if (t == NULL)
 		return;
-
-	memcpy(t, &dn_dev_sysctl, sizeof(*t));
 
 	for(i = 0; i < ARRAY_SIZE(t->dn_dev_vars) - 1; i++) {
 		long offset = (long)t->dn_dev_vars[i].data;
 		t->dn_dev_vars[i].data = ((char *)parms) + offset;
-		t->dn_dev_vars[i].de = NULL;
 	}
 
 	if (dev) {
@@ -276,16 +272,12 @@ static void dn_dev_sysctl_register(struct net_device *dev, struct dn_dev_parms *
 	}
 
 	t->dn_dev_dev[0].child = t->dn_dev_vars;
-	t->dn_dev_dev[0].de = NULL;
 	t->dn_dev_conf_dir[0].child = t->dn_dev_dev;
-	t->dn_dev_conf_dir[0].de = NULL;
 	t->dn_dev_proto_dir[0].child = t->dn_dev_conf_dir;
-	t->dn_dev_proto_dir[0].de = NULL;
 	t->dn_dev_root_dir[0].child = t->dn_dev_proto_dir;
-	t->dn_dev_root_dir[0].de = NULL;
 	t->dn_dev_vars[0].extra1 = (void *)dev;
 
-	t->sysctl_header = register_sysctl_table(t->dn_dev_root_dir, 0);
+	t->sysctl_header = register_sysctl_table(t->dn_dev_root_dir);
 	if (t->sysctl_header == NULL)
 		kfree(t);
 	else
@@ -302,7 +294,7 @@ static void dn_dev_sysctl_unregister(struct dn_dev_parms *parms)
 	}
 }
 
-static int dn_forwarding_proc(ctl_table *table, int write, 
+static int dn_forwarding_proc(ctl_table *table, int write,
 				struct file *filep,
 				void __user *buffer,
 				size_t *lenp, loff_t *ppos)
@@ -349,8 +341,7 @@ static int dn_forwarding_proc(ctl_table *table, int write,
 
 static int dn_forwarding_sysctl(ctl_table *table, int __user *name, int nlen,
 			void __user *oldval, size_t __user *oldlenp,
-			void __user *newval, size_t newlen,
-			void **context)
+			void __user *newval, size_t newlen)
 {
 #ifdef CONFIG_DECNET_ROUTER
 	struct net_device *dev = table->extra1;
@@ -442,7 +433,7 @@ static void dn_dev_del_ifa(struct dn_dev *dn_db, struct dn_ifaddr **ifap, int de
 		}
 	}
 
-	rtmsg_ifa(RTM_DELADDR, ifa1);
+	dn_ifaddr_notify(RTM_DELADDR, ifa1);
 	blocking_notifier_call_chain(&dnaddr_chain, NETDEV_DOWN, ifa1);
 	if (destroy) {
 		dn_dev_free_ifa(ifa1);
@@ -460,7 +451,7 @@ static int dn_dev_insert_ifa(struct dn_dev *dn_db, struct dn_ifaddr *ifa)
 
 	ASSERT_RTNL();
 
-	/* Check for duplicates */	
+	/* Check for duplicates */
 	for(ifa1 = dn_db->ifa_list; ifa1; ifa1 = ifa1->ifa_next) {
 		if (ifa1->ifa_local == ifa->ifa_local)
 			return -EEXIST;
@@ -477,7 +468,7 @@ static int dn_dev_insert_ifa(struct dn_dev *dn_db, struct dn_ifaddr *ifa)
 	ifa->ifa_next = dn_db->ifa_list;
 	dn_db->ifa_list = ifa;
 
-	rtmsg_ifa(RTM_NEWADDR, ifa);
+	dn_ifaddr_notify(RTM_NEWADDR, ifa);
 	blocking_notifier_call_chain(&dnaddr_chain, NETDEV_UP, ifa);
 
 	return 0;
@@ -647,41 +638,62 @@ static struct dn_dev *dn_dev_by_index(int ifindex)
 	return dn_dev;
 }
 
-static int dn_dev_rtm_deladdr(struct sk_buff *skb, struct nlmsghdr *nlh, void *arg)
+static struct nla_policy dn_ifa_policy[IFA_MAX+1] __read_mostly = {
+	[IFA_ADDRESS]		= { .type = NLA_U16 },
+	[IFA_LOCAL]		= { .type = NLA_U16 },
+	[IFA_LABEL]		= { .type = NLA_STRING,
+				    .len = IFNAMSIZ - 1 },
+};
+
+static int dn_nl_deladdr(struct sk_buff *skb, struct nlmsghdr *nlh, void *arg)
 {
-	struct rtattr **rta = arg;
+	struct nlattr *tb[IFA_MAX+1];
 	struct dn_dev *dn_db;
-	struct ifaddrmsg *ifm = NLMSG_DATA(nlh);
+	struct ifaddrmsg *ifm;
 	struct dn_ifaddr *ifa, **ifap;
+	int err = -EADDRNOTAVAIL;
 
+	err = nlmsg_parse(nlh, sizeof(*ifm), tb, IFA_MAX, dn_ifa_policy);
+	if (err < 0)
+		goto errout;
+
+	ifm = nlmsg_data(nlh);
 	if ((dn_db = dn_dev_by_index(ifm->ifa_index)) == NULL)
-		return -EADDRNOTAVAIL;
+		goto errout;
 
-	for(ifap = &dn_db->ifa_list; (ifa=*ifap) != NULL; ifap = &ifa->ifa_next) {
-		void *tmp = rta[IFA_LOCAL-1];
-		if ((tmp && memcmp(RTA_DATA(tmp), &ifa->ifa_local, 2)) ||
-		    (rta[IFA_LABEL-1] && rtattr_strcmp(rta[IFA_LABEL-1], ifa->ifa_label)))
+	for (ifap = &dn_db->ifa_list; (ifa = *ifap); ifap = &ifa->ifa_next) {
+		if (tb[IFA_LOCAL] &&
+		    nla_memcmp(tb[IFA_LOCAL], &ifa->ifa_local, 2))
+			continue;
+
+		if (tb[IFA_LABEL] && nla_strcmp(tb[IFA_LABEL], ifa->ifa_label))
 			continue;
 
 		dn_dev_del_ifa(dn_db, ifap, 1);
 		return 0;
 	}
 
-	return -EADDRNOTAVAIL;
+errout:
+	return err;
 }
 
-static int dn_dev_rtm_newaddr(struct sk_buff *skb, struct nlmsghdr *nlh, void *arg)
+static int dn_nl_newaddr(struct sk_buff *skb, struct nlmsghdr *nlh, void *arg)
 {
-	struct rtattr **rta = arg;
+	struct nlattr *tb[IFA_MAX+1];
 	struct net_device *dev;
 	struct dn_dev *dn_db;
-	struct ifaddrmsg *ifm = NLMSG_DATA(nlh);
+	struct ifaddrmsg *ifm;
 	struct dn_ifaddr *ifa;
-	int rv;
+	int err;
 
-	if (rta[IFA_LOCAL-1] == NULL)
+	err = nlmsg_parse(nlh, sizeof(*ifm), tb, IFA_MAX, dn_ifa_policy);
+	if (err < 0)
+		return err;
+
+	if (tb[IFA_LOCAL] == NULL)
 		return -EINVAL;
 
+	ifm = nlmsg_data(nlh);
 	if ((dev = __dev_get_by_index(ifm->ifa_index)) == NULL)
 		return -ENODEV;
 
@@ -691,113 +703,129 @@ static int dn_dev_rtm_newaddr(struct sk_buff *skb, struct nlmsghdr *nlh, void *a
 		if (!dn_db)
 			return err;
 	}
-	
+
 	if ((ifa = dn_dev_alloc_ifa()) == NULL)
 		return -ENOBUFS;
 
-	if (!rta[IFA_ADDRESS - 1])
-		rta[IFA_ADDRESS - 1] = rta[IFA_LOCAL - 1];
-	memcpy(&ifa->ifa_local, RTA_DATA(rta[IFA_LOCAL-1]), 2);
-	memcpy(&ifa->ifa_address, RTA_DATA(rta[IFA_ADDRESS-1]), 2);
+	if (tb[IFA_ADDRESS] == NULL)
+		tb[IFA_ADDRESS] = tb[IFA_LOCAL];
+
+	ifa->ifa_local = nla_get_le16(tb[IFA_LOCAL]);
+	ifa->ifa_address = nla_get_le16(tb[IFA_ADDRESS]);
 	ifa->ifa_flags = ifm->ifa_flags;
 	ifa->ifa_scope = ifm->ifa_scope;
 	ifa->ifa_dev = dn_db;
-	if (rta[IFA_LABEL-1])
-		rtattr_strlcpy(ifa->ifa_label, rta[IFA_LABEL-1], IFNAMSIZ);
+
+	if (tb[IFA_LABEL])
+		nla_strlcpy(ifa->ifa_label, tb[IFA_LABEL], IFNAMSIZ);
 	else
 		memcpy(ifa->ifa_label, dev->name, IFNAMSIZ);
 
-	rv = dn_dev_insert_ifa(dn_db, ifa);
-	if (rv)
+	err = dn_dev_insert_ifa(dn_db, ifa);
+	if (err)
 		dn_dev_free_ifa(ifa);
-	return rv;
+
+	return err;
 }
 
-static int dn_dev_fill_ifaddr(struct sk_buff *skb, struct dn_ifaddr *ifa,
-				u32 pid, u32 seq, int event, unsigned int flags)
+static inline size_t dn_ifaddr_nlmsg_size(void)
+{
+	return NLMSG_ALIGN(sizeof(struct ifaddrmsg))
+	       + nla_total_size(IFNAMSIZ) /* IFA_LABEL */
+	       + nla_total_size(2) /* IFA_ADDRESS */
+	       + nla_total_size(2); /* IFA_LOCAL */
+}
+
+static int dn_nl_fill_ifaddr(struct sk_buff *skb, struct dn_ifaddr *ifa,
+			     u32 pid, u32 seq, int event, unsigned int flags)
 {
 	struct ifaddrmsg *ifm;
 	struct nlmsghdr *nlh;
-	unsigned char *b = skb->tail;
 
-	nlh = NLMSG_NEW(skb, pid, seq, event, sizeof(*ifm), flags);
-	ifm = NLMSG_DATA(nlh);
+	nlh = nlmsg_put(skb, pid, seq, event, sizeof(*ifm), flags);
+	if (nlh == NULL)
+		return -EMSGSIZE;
 
+	ifm = nlmsg_data(nlh);
 	ifm->ifa_family = AF_DECnet;
 	ifm->ifa_prefixlen = 16;
 	ifm->ifa_flags = ifa->ifa_flags | IFA_F_PERMANENT;
 	ifm->ifa_scope = ifa->ifa_scope;
 	ifm->ifa_index = ifa->ifa_dev->dev->ifindex;
-	if (ifa->ifa_address)
-		RTA_PUT(skb, IFA_ADDRESS, 2, &ifa->ifa_address);
-	if (ifa->ifa_local)
-		RTA_PUT(skb, IFA_LOCAL, 2, &ifa->ifa_local);
-	if (ifa->ifa_label[0])
-		RTA_PUT(skb, IFA_LABEL, IFNAMSIZ, &ifa->ifa_label);
-	nlh->nlmsg_len = skb->tail - b;
-	return skb->len;
 
-nlmsg_failure:
-rtattr_failure:
-        skb_trim(skb, b - skb->data);
-        return -1;
+	if (ifa->ifa_address)
+		NLA_PUT_LE16(skb, IFA_ADDRESS, ifa->ifa_address);
+	if (ifa->ifa_local)
+		NLA_PUT_LE16(skb, IFA_LOCAL, ifa->ifa_local);
+	if (ifa->ifa_label[0])
+		NLA_PUT_STRING(skb, IFA_LABEL, ifa->ifa_label);
+
+	return nlmsg_end(skb, nlh);
+
+nla_put_failure:
+	nlmsg_cancel(skb, nlh);
+	return -EMSGSIZE;
 }
 
-static void rtmsg_ifa(int event, struct dn_ifaddr *ifa)
+static void dn_ifaddr_notify(int event, struct dn_ifaddr *ifa)
 {
 	struct sk_buff *skb;
-	int payload = sizeof(struct ifaddrmsg) + 128;
 	int err = -ENOBUFS;
 
-	skb = alloc_skb(nlmsg_total_size(payload), GFP_KERNEL);
+	skb = alloc_skb(dn_ifaddr_nlmsg_size(), GFP_KERNEL);
 	if (skb == NULL)
 		goto errout;
 
-	err = dn_dev_fill_ifaddr(skb, ifa, 0, 0, event, 0);
+	err = dn_nl_fill_ifaddr(skb, ifa, 0, 0, event, 0);
 	if (err < 0) {
+		/* -EMSGSIZE implies BUG in dn_ifaddr_nlmsg_size() */
+		WARN_ON(err == -EMSGSIZE);
 		kfree_skb(skb);
 		goto errout;
 	}
-
 	err = rtnl_notify(skb, 0, RTNLGRP_DECnet_IFADDR, NULL, GFP_KERNEL);
 errout:
 	if (err < 0)
 		rtnl_set_sk_err(RTNLGRP_DECnet_IFADDR, err);
 }
 
-static int dn_dev_dump_ifaddr(struct sk_buff *skb, struct netlink_callback *cb)
+static int dn_nl_dump_ifaddr(struct sk_buff *skb, struct netlink_callback *cb)
 {
-	int idx, dn_idx;
-	int s_idx, s_dn_idx;
+	int idx, dn_idx = 0, skip_ndevs, skip_naddr;
 	struct net_device *dev;
 	struct dn_dev *dn_db;
 	struct dn_ifaddr *ifa;
 
-	s_idx = cb->args[0];
-	s_dn_idx = dn_idx = cb->args[1];
+	skip_ndevs = cb->args[0];
+	skip_naddr = cb->args[1];
+
 	read_lock(&dev_base_lock);
-	for(dev = dev_base, idx = 0; dev; dev = dev->next, idx++) {
-		if (idx < s_idx)
+	for (dev = dev_base, idx = 0; dev; dev = dev->next, idx++) {
+		if (idx < skip_ndevs)
 			continue;
-		if (idx > s_idx)
-			s_dn_idx = 0;
+		else if (idx > skip_ndevs) {
+			/* Only skip over addresses for first dev dumped
+			 * in this iteration (idx == skip_ndevs) */
+			skip_naddr = 0;
+		}
+
 		if ((dn_db = dev->dn_ptr) == NULL)
 			continue;
 
-		for(ifa = dn_db->ifa_list, dn_idx = 0; ifa; ifa = ifa->ifa_next, dn_idx++) {
-			if (dn_idx < s_dn_idx)
+		for (ifa = dn_db->ifa_list, dn_idx = 0; ifa;
+		     ifa = ifa->ifa_next, dn_idx++) {
+			if (dn_idx < skip_naddr)
 				continue;
 
-			if (dn_dev_fill_ifaddr(skb, ifa,
-					       NETLINK_CB(cb->skb).pid,
-					       cb->nlh->nlmsg_seq,
-					       RTM_NEWADDR,
-					       NLM_F_MULTI) <= 0)
+			if (dn_nl_fill_ifaddr(skb, ifa, NETLINK_CB(cb->skb).pid,
+					      cb->nlh->nlmsg_seq, RTM_NEWADDR,
+					      NLM_F_MULTI) < 0)
 				goto done;
 		}
 	}
 done:
 	read_unlock(&dev_base_lock);
+
 	cb->args[0] = idx;
 	cb->args[1] = dn_idx;
 
@@ -820,7 +848,7 @@ out:
 	return rv;
 }
 
-/* 
+/*
  * Find a default address to bind to.
  *
  * This is one of those areas where the initial VMS concepts don't really
@@ -851,39 +879,39 @@ last_chance:
 
 static void dn_send_endnode_hello(struct net_device *dev, struct dn_ifaddr *ifa)
 {
-        struct endnode_hello_message *msg;
-        struct sk_buff *skb = NULL;
-        __le16 *pktlen;
+	struct endnode_hello_message *msg;
+	struct sk_buff *skb = NULL;
+	__le16 *pktlen;
 	struct dn_dev *dn_db = (struct dn_dev *)dev->dn_ptr;
 
-        if ((skb = dn_alloc_skb(NULL, sizeof(*msg), GFP_ATOMIC)) == NULL)
+	if ((skb = dn_alloc_skb(NULL, sizeof(*msg), GFP_ATOMIC)) == NULL)
 		return;
 
-        skb->dev = dev;
+	skb->dev = dev;
 
-        msg = (struct endnode_hello_message *)skb_put(skb,sizeof(*msg));
+	msg = (struct endnode_hello_message *)skb_put(skb,sizeof(*msg));
 
-        msg->msgflg  = 0x0D;
-        memcpy(msg->tiver, dn_eco_version, 3);
+	msg->msgflg  = 0x0D;
+	memcpy(msg->tiver, dn_eco_version, 3);
 	dn_dn2eth(msg->id, ifa->ifa_local);
-        msg->iinfo   = DN_RT_INFO_ENDN;
-        msg->blksize = dn_htons(mtu2blksize(dev));
-        msg->area    = 0x00;
-        memset(msg->seed, 0, 8);
-        memcpy(msg->neighbor, dn_hiord, ETH_ALEN);
+	msg->iinfo   = DN_RT_INFO_ENDN;
+	msg->blksize = dn_htons(mtu2blksize(dev));
+	msg->area    = 0x00;
+	memset(msg->seed, 0, 8);
+	memcpy(msg->neighbor, dn_hiord, ETH_ALEN);
 
 	if (dn_db->router) {
 		struct dn_neigh *dn = (struct dn_neigh *)dn_db->router;
 		dn_dn2eth(msg->neighbor, dn->addr);
 	}
 
-        msg->timer   = dn_htons((unsigned short)dn_db->parms.t3);
-        msg->mpd     = 0x00;
-        msg->datalen = 0x02;
-        memset(msg->data, 0xAA, 2);
-        
-        pktlen = (__le16 *)skb_push(skb,2);
-        *pktlen = dn_htons(skb->len - 2);
+	msg->timer   = dn_htons((unsigned short)dn_db->parms.t3);
+	msg->mpd     = 0x00;
+	msg->datalen = 0x02;
+	memset(msg->data, 0xAA, 2);
+
+	pktlen = (__le16 *)skb_push(skb,2);
+	*pktlen = dn_htons(skb->len - 2);
 
 	skb->nh.raw = skb->data;
 
@@ -953,11 +981,11 @@ static void dn_send_router_hello(struct net_device *dev, struct dn_ifaddr *ifa)
 	dn_dn2eth(ptr, ifa->ifa_local);
 	src = ptr;
 	ptr += ETH_ALEN;
-	*ptr++ = dn_db->parms.forwarding == 1 ? 
+	*ptr++ = dn_db->parms.forwarding == 1 ?
 			DN_RT_INFO_L1RT : DN_RT_INFO_L2RT;
 	*((__le16 *)ptr) = dn_htons(mtu2blksize(dev));
 	ptr += 2;
-	*ptr++ = dn_db->parms.priority; /* Priority */ 
+	*ptr++ = dn_db->parms.priority; /* Priority */
 	*ptr++ = 0; /* Area: Reserved */
 	*((__le16 *)ptr) = dn_htons((unsigned short)dn_db->parms.t3);
 	ptr += 2;
@@ -1116,15 +1144,22 @@ struct dn_dev *dn_dev_create(struct net_device *dev, int *err)
 	init_timer(&dn_db->timer);
 
 	dn_db->uptime = jiffies;
+
+	dn_db->neigh_parms = neigh_parms_alloc(dev, &dn_neigh_table);
+	if (!dn_db->neigh_parms) {
+		dev->dn_ptr = NULL;
+		kfree(dn_db);
+		return NULL;
+	}
+
 	if (dn_db->parms.up) {
 		if (dn_db->parms.up(dev) < 0) {
+			neigh_parms_release(&dn_neigh_table, dn_db->neigh_parms);
 			dev->dn_ptr = NULL;
 			kfree(dn_db);
 			return NULL;
 		}
 	}
-
-	dn_db->neigh_parms = neigh_parms_alloc(dev, &dn_neigh_table);
 
 	dn_dev_sysctl_register(dev, &dn_db->parms);
 
@@ -1368,18 +1403,18 @@ static char *dn_type2asc(char type)
 static int dn_dev_seq_show(struct seq_file *seq, void *v)
 {
 	if (v == SEQ_START_TOKEN)
-        	seq_puts(seq, "Name     Flags T1   Timer1 T3   Timer3 BlkSize Pri State DevType    Router Peer\n");
+		seq_puts(seq, "Name     Flags T1   Timer1 T3   Timer3 BlkSize Pri State DevType    Router Peer\n");
 	else {
 		struct net_device *dev = v;
 		char peer_buf[DN_ASCBUF_LEN];
 		char router_buf[DN_ASCBUF_LEN];
 		struct dn_dev *dn_db = dev->dn_ptr;
 
-                seq_printf(seq, "%-8s %1s     %04u %04u   %04lu %04lu"
+		seq_printf(seq, "%-8s %1s     %04u %04u   %04lu %04lu"
 				"   %04hu    %03d %02x    %-10s %-7s %-7s\n",
-                             	dev->name ? dev->name : "???",
-                             	dn_type2asc(dn_db->parms.mode),
-                             	0, 0,
+				dev->name ? dev->name : "???",
+				dn_type2asc(dn_db->parms.mode),
+				0, 0,
 				dn_db->t3, dn_db->parms.t3,
 				mtu2blksize(dev),
 				dn_db->parms.priority,
@@ -1402,7 +1437,7 @@ static int dn_dev_seq_open(struct inode *inode, struct file *file)
 	return seq_open(file, &dn_dev_seq_ops);
 }
 
-static struct file_operations dn_dev_seq_fops = {
+static const struct file_operations dn_dev_seq_fops = {
 	.owner	 = THIS_MODULE,
 	.open	 = dn_dev_seq_open,
 	.read	 = seq_read,
@@ -1414,9 +1449,9 @@ static struct file_operations dn_dev_seq_fops = {
 
 static struct rtnetlink_link dnet_rtnetlink_table[RTM_NR_MSGTYPES] =
 {
-	[RTM_NEWADDR  - RTM_BASE] = { .doit	= dn_dev_rtm_newaddr,	},
-	[RTM_DELADDR  - RTM_BASE] = { .doit	= dn_dev_rtm_deladdr,	},
-	[RTM_GETADDR  - RTM_BASE] = { .dumpit	= dn_dev_dump_ifaddr,	},
+	[RTM_NEWADDR  - RTM_BASE] = { .doit	= dn_nl_newaddr,	},
+	[RTM_DELADDR  - RTM_BASE] = { .doit	= dn_nl_deladdr,	},
+	[RTM_GETADDR  - RTM_BASE] = { .dumpit	= dn_nl_dump_ifaddr,	},
 #ifdef CONFIG_DECNET_ROUTER
 	[RTM_NEWROUTE - RTM_BASE] = { .doit	= dn_fib_rtm_newroute,	},
 	[RTM_DELROUTE - RTM_BASE] = { .doit	= dn_fib_rtm_delroute,	},
@@ -1436,17 +1471,17 @@ MODULE_PARM_DESC(addr, "The DECnet address of this machine: area,node");
 
 void __init dn_dev_init(void)
 {
-        if (addr[0] > 63 || addr[0] < 0) {
-                printk(KERN_ERR "DECnet: Area must be between 0 and 63");
-                return;
-        }
+	if (addr[0] > 63 || addr[0] < 0) {
+		printk(KERN_ERR "DECnet: Area must be between 0 and 63");
+		return;
+	}
 
-        if (addr[1] > 1023 || addr[1] < 0) {
-                printk(KERN_ERR "DECnet: Node must be between 0 and 1023");
-                return;
-        }
+	if (addr[1] > 1023 || addr[1] < 0) {
+		printk(KERN_ERR "DECnet: Node must be between 0 and 1023");
+		return;
+	}
 
-        decnet_address = dn_htons((addr[0] << 10) | addr[1]);
+	decnet_address = dn_htons((addr[0] << 10) | addr[1]);
 
 	dn_dev_devices_on();
 

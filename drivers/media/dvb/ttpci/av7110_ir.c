@@ -4,6 +4,7 @@
 #include <linux/moduleparam.h>
 #include <linux/input.h>
 #include <linux/proc_fs.h>
+#include <linux/kernel.h>
 #include <asm/bitops.h>
 
 #include "av7110.h"
@@ -16,6 +17,7 @@
 static int av_cnt;
 static struct av7110 *av_list[4];
 static struct input_dev *input_dev;
+static char input_phys[32];
 
 static u8 delay_timer_finished;
 
@@ -48,7 +50,8 @@ static void av7110_emit_keyup(unsigned long data)
 	if (!data || !test_bit(data, input_dev->key))
 		return;
 
-	input_event(input_dev, EV_KEY, data, !!0);
+	input_report_key(input_dev, data, 0);
+	input_sync(input_dev);
 }
 
 
@@ -115,14 +118,17 @@ static void av7110_emit_key(unsigned long parm)
 		del_timer(&keyup_timer);
 		if (keyup_timer.data != keycode || new_toggle != old_toggle) {
 			delay_timer_finished = 0;
-			input_event(input_dev, EV_KEY, keyup_timer.data, !!0);
-			input_event(input_dev, EV_KEY, keycode, !0);
-		} else
-			if (delay_timer_finished)
-				input_event(input_dev, EV_KEY, keycode, 2);
+			input_event(input_dev, EV_KEY, keyup_timer.data, 0);
+			input_event(input_dev, EV_KEY, keycode, 1);
+			input_sync(input_dev);
+		} else if (delay_timer_finished) {
+			input_event(input_dev, EV_KEY, keycode, 2);
+			input_sync(input_dev);
+		}
 	} else {
 		delay_timer_finished = 0;
-		input_event(input_dev, EV_KEY, keycode, !0);
+		input_event(input_dev, EV_KEY, keycode, 1);
+		input_sync(input_dev);
 	}
 
 	keyup_timer.expires = jiffies + UP_TIMEOUT;
@@ -211,8 +217,9 @@ static void ir_handler(struct av7110 *av7110, u32 ircom)
 int __devinit av7110_ir_init(struct av7110 *av7110)
 {
 	static struct proc_dir_entry *e;
+	int err;
 
-	if (av_cnt >= sizeof av_list/sizeof av_list[0])
+	if (av_cnt >= ARRAY_SIZE(av_list))
 		return -ENOSPC;
 
 	av7110_setup_irc_config(av7110, 0x0001);
@@ -226,12 +233,30 @@ int __devinit av7110_ir_init(struct av7110 *av7110)
 		if (!input_dev)
 			return -ENOMEM;
 
+		snprintf(input_phys, sizeof(input_phys),
+			"pci-%s/ir0", pci_name(av7110->dev->pci));
+
 		input_dev->name = "DVB on-card IR receiver";
 
+		input_dev->phys = input_phys;
+		input_dev->id.bustype = BUS_PCI;
+		input_dev->id.version = 1;
+		if (av7110->dev->pci->subsystem_vendor) {
+			input_dev->id.vendor = av7110->dev->pci->subsystem_vendor;
+			input_dev->id.product = av7110->dev->pci->subsystem_device;
+		} else {
+			input_dev->id.vendor = av7110->dev->pci->vendor;
+			input_dev->id.product = av7110->dev->pci->device;
+		}
+		input_dev->cdev.dev = &av7110->dev->pci->dev;
 		set_bit(EV_KEY, input_dev->evbit);
 		set_bit(EV_REP, input_dev->evbit);
 		input_register_keys();
-		input_register_device(input_dev);
+		err = input_register_device(input_dev);
+		if (err) {
+			input_free_device(input_dev);
+			return err;
+		}
 		input_dev->timer.function = input_repeat_key;
 
 		e = create_proc_entry("av7110_ir", S_IFREG | S_IRUGO | S_IWUSR, NULL);

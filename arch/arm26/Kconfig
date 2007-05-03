@@ -41,6 +41,14 @@ config RWSEM_GENERIC_SPINLOCK
 config RWSEM_XCHGADD_ALGORITHM
 	bool
 
+config ARCH_HAS_ILOG2_U32
+	bool
+	default n
+
+config ARCH_HAS_ILOG2_U64
+	bool
+	default n
+
 config GENERIC_HWEIGHT
 	bool
 	default y
@@ -51,6 +59,10 @@ config GENERIC_CALIBRATE_DELAY
 
 config GENERIC_BUST_SPINLOCK
 	bool
+
+config ZONE_DMA
+	bool
+	default y
 
 config GENERIC_ISA_DMA
 	bool

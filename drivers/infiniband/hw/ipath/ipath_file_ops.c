@@ -54,7 +54,7 @@ static ssize_t ipath_write(struct file *, const char __user *, size_t,
 static unsigned int ipath_poll(struct file *, struct poll_table_struct *);
 static int ipath_mmap(struct file *, struct vm_area_struct *);
 
-static struct file_operations ipath_file_ops = {
+static const struct file_operations ipath_file_ops = {
 	.owner = THIS_MODULE,
 	.write = ipath_write,
 	.open = ipath_open,
@@ -699,7 +699,6 @@ static int ipath_manage_rcvq(struct ipath_portdata *pd, unsigned subport,
 			     int start_stop)
 {
 	struct ipath_devdata *dd = pd->port_dd;
-	u64 tval;
 
 	ipath_cdbg(PROC, "%sabling rcv for unit %u port %u:%u\n",
 		   start_stop ? "en" : "dis", dd->ipath_unit,
@@ -729,7 +728,7 @@ static int ipath_manage_rcvq(struct ipath_portdata *pd, unsigned subport,
 	ipath_write_kreg(dd, dd->ipath_kregs->kr_rcvctrl,
 			 dd->ipath_rcvctrl);
 	/* now be sure chip saw it before we return */
-	tval = ipath_read_kreg64(dd, dd->ipath_kregs->kr_scratch);
+	ipath_read_kreg64(dd, dd->ipath_kregs->kr_scratch);
 	if (start_stop) {
 		/*
 		 * And try to be sure that tail reg update has happened too.
@@ -738,7 +737,7 @@ static int ipath_manage_rcvq(struct ipath_portdata *pd, unsigned subport,
 		 * in memory copy, since we could overwrite an update by the
 		 * chip if we did.
 		 */
-		tval = ipath_read_ureg32(dd, ur_rcvhdrtail, pd->port_port);
+		ipath_read_ureg32(dd, ur_rcvhdrtail, pd->port_port);
 	}
 	/* always; new head should be equal to new tail; see above */
 bail:
@@ -1745,9 +1744,9 @@ static int ipath_assign_port(struct file *fp,
 		goto done;
 	}
 
-	i_minor = iminor(fp->f_dentry->d_inode) - IPATH_USER_MINOR_BASE;
+	i_minor = iminor(fp->f_path.dentry->d_inode) - IPATH_USER_MINOR_BASE;
 	ipath_cdbg(VERBOSE, "open on dev %lx (minor %d)\n",
-		   (long)fp->f_dentry->d_inode->i_rdev, i_minor);
+		   (long)fp->f_path.dentry->d_inode->i_rdev, i_minor);
 
 	if (i_minor)
 		ret = find_free_port(i_minor - 1, fp, uinfo);
@@ -2154,7 +2153,7 @@ bail:
 
 static struct class *ipath_class;
 
-static int init_cdev(int minor, char *name, struct file_operations *fops,
+static int init_cdev(int minor, char *name, const struct file_operations *fops,
 		     struct cdev **cdevp, struct class_device **class_devp)
 {
 	const dev_t dev = MKDEV(IPATH_MAJOR, minor);
@@ -2211,7 +2210,7 @@ done:
 	return ret;
 }
 
-int ipath_cdev_init(int minor, char *name, struct file_operations *fops,
+int ipath_cdev_init(int minor, char *name, const struct file_operations *fops,
 		    struct cdev **cdevp, struct class_device **class_devp)
 {
 	return init_cdev(minor, name, fops, cdevp, class_devp);

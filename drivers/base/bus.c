@@ -324,26 +324,24 @@ int bus_for_each_drv(struct bus_type * bus, struct device_driver * start,
 	return error;
 }
 
-static int device_add_attrs(struct bus_type * bus, struct device * dev)
+static int device_add_attrs(struct bus_type *bus, struct device *dev)
 {
 	int error = 0;
 	int i;
 
-	if (bus->dev_attrs) {
-		for (i = 0; attr_name(bus->dev_attrs[i]); i++) {
-			error = device_create_file(dev,&bus->dev_attrs[i]);
-			if (error)
-				goto Err;
+	if (!bus->dev_attrs)
+		return 0;
+
+	for (i = 0; attr_name(bus->dev_attrs[i]); i++) {
+		error = device_create_file(dev,&bus->dev_attrs[i]);
+		if (error) {
+			while (--i >= 0)
+				device_remove_file(dev, &bus->dev_attrs[i]);
+			break;
 		}
 	}
- Done:
 	return error;
- Err:
-	while (--i >= 0)
-		device_remove_file(dev,&bus->dev_attrs[i]);
-	goto Done;
 }
-
 
 static void device_remove_attrs(struct bus_type * bus, struct device * dev)
 {
@@ -355,6 +353,21 @@ static void device_remove_attrs(struct bus_type * bus, struct device * dev)
 	}
 }
 
+#ifdef CONFIG_SYSFS_DEPRECATED
+static int make_deprecated_bus_links(struct device *dev)
+{
+	return sysfs_create_link(&dev->kobj,
+				 &dev->bus->subsys.kset.kobj, "bus");
+}
+
+static void remove_deprecated_bus_links(struct device *dev)
+{
+	sysfs_remove_link(&dev->kobj, "bus");
+}
+#else
+static inline int make_deprecated_bus_links(struct device *dev) { return 0; }
+static inline void remove_deprecated_bus_links(struct device *dev) { }
+#endif
 
 /**
  *	bus_add_device - add device to bus
@@ -381,8 +394,7 @@ int bus_add_device(struct device * dev)
 				&dev->bus->subsys.kset.kobj, "subsystem");
 		if (error)
 			goto out_subsys;
-		error = sysfs_create_link(&dev->kobj,
-				&dev->bus->subsys.kset.kobj, "bus");
+		error = make_deprecated_bus_links(dev);
 		if (error)
 			goto out_deprecated;
 	}
@@ -436,7 +448,7 @@ void bus_remove_device(struct device * dev)
 {
 	if (dev->bus) {
 		sysfs_remove_link(&dev->kobj, "subsystem");
-		sysfs_remove_link(&dev->kobj, "bus");
+		remove_deprecated_bus_links(dev);
 		sysfs_remove_link(&dev->bus->devices.kobj, dev->bus_id);
 		device_remove_attrs(dev->bus, dev);
 		if (dev->is_registered) {
@@ -724,6 +736,8 @@ int bus_register(struct bus_type * bus)
 {
 	int retval;
 
+	BLOCKING_INIT_NOTIFIER_HEAD(&bus->bus_notifier);
+
 	retval = kobject_set_name(&bus->subsys.kset.kobj, "%s", bus->name);
 	if (retval)
 		goto out;
@@ -781,6 +795,18 @@ void bus_unregister(struct bus_type * bus)
 	kset_unregister(&bus->devices);
 	subsystem_unregister(&bus->subsys);
 }
+
+int bus_register_notifier(struct bus_type *bus, struct notifier_block *nb)
+{
+	return blocking_notifier_chain_register(&bus->bus_notifier, nb);
+}
+EXPORT_SYMBOL_GPL(bus_register_notifier);
+
+int bus_unregister_notifier(struct bus_type *bus, struct notifier_block *nb)
+{
+	return blocking_notifier_chain_unregister(&bus->bus_notifier, nb);
+}
+EXPORT_SYMBOL_GPL(bus_unregister_notifier);
 
 int __init buses_init(void)
 {

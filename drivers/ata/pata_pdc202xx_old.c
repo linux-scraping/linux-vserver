@@ -2,13 +2,14 @@
  * pata_pdc202xx_old.c 	- Promise PDC202xx PATA for new ATA layer
  *			  (C) 2005 Red Hat Inc
  *			  Alan Cox <alan@redhat.com>
+ *			  (C) 2007 Bartlomiej Zolnierkiewicz
  *
  * Based in part on linux/drivers/ide/pci/pdc202xx_old.c
  *
  * First cut with LBA48/ATAPI
  *
  * TODO:
- *	Channel interlock/reset on both required ?
+ *	Channel interlock/reset on both required
  */
 
 #include <linux/kernel.h>
@@ -21,7 +22,7 @@
 #include <linux/libata.h>
 
 #define DRV_NAME "pata_pdc202xx_old"
-#define DRV_VERSION "0.2.1"
+#define DRV_VERSION "0.4.0"
 
 /**
  *	pdc2024x_pre_reset		-	probe begin
@@ -63,7 +64,7 @@ static void pdc2026x_error_handler(struct ata_port *ap)
 }
 
 /**
- *	pdc_configure_piomode	-	set chip PIO timing
+ *	pdc202xx_configure_piomode	-	set chip PIO timing
  *	@ap: ATA interface
  *	@adev: ATA device
  *	@pio: PIO mode
@@ -73,10 +74,10 @@ static void pdc2026x_error_handler(struct ata_port *ap)
  *	versa
  */
 
-static void pdc_configure_piomode(struct ata_port *ap, struct ata_device *adev, int pio)
+static void pdc202xx_configure_piomode(struct ata_port *ap, struct ata_device *adev, int pio)
 {
 	struct pci_dev *pdev = to_pci_dev(ap->host->dev);
-	int port = 0x60 + 4 * ap->port_no + 2 * adev->devno;
+	int port = 0x60 + 8 * ap->port_no + 4 * adev->devno;
 	static u16 pio_timing[5] = {
 		0x0913, 0x050C , 0x0308, 0x0206, 0x0104
 	};
@@ -85,7 +86,7 @@ static void pdc_configure_piomode(struct ata_port *ap, struct ata_device *adev, 
 	pci_read_config_byte(pdev, port, &r_ap);
 	pci_read_config_byte(pdev, port + 1, &r_bp);
 	r_ap &= ~0x3F;	/* Preserve ERRDY_EN, SYNC_IN */
-	r_bp &= ~0x07;
+	r_bp &= ~0x1F;
 	r_ap |= (pio_timing[pio] >> 8);
 	r_bp |= (pio_timing[pio] & 0xFF);
 
@@ -98,7 +99,7 @@ static void pdc_configure_piomode(struct ata_port *ap, struct ata_device *adev, 
 }
 
 /**
- *	pdc_set_piomode	-	set initial PIO mode data
+ *	pdc202xx_set_piomode	-	set initial PIO mode data
  *	@ap: ATA interface
  *	@adev: ATA device
  *
@@ -106,13 +107,13 @@ static void pdc_configure_piomode(struct ata_port *ap, struct ata_device *adev, 
  *	but we want to set the PIO timing by default.
  */
 
-static void pdc_set_piomode(struct ata_port *ap, struct ata_device *adev)
+static void pdc202xx_set_piomode(struct ata_port *ap, struct ata_device *adev)
 {
-	pdc_configure_piomode(ap, adev, adev->pio_mode - XFER_PIO_0);
+	pdc202xx_configure_piomode(ap, adev, adev->pio_mode - XFER_PIO_0);
 }
 
 /**
- *	pdc_configure_dmamode	-	set DMA mode in chip
+ *	pdc202xx_configure_dmamode	-	set DMA mode in chip
  *	@ap: ATA interface
  *	@adev: ATA device
  *
@@ -120,10 +121,10 @@ static void pdc_set_piomode(struct ata_port *ap, struct ata_device *adev)
  *	to occur.
  */
 
-static void pdc_set_dmamode(struct ata_port *ap, struct ata_device *adev)
+static void pdc202xx_set_dmamode(struct ata_port *ap, struct ata_device *adev)
 {
 	struct pci_dev *pdev = to_pci_dev(ap->host->dev);
-	int port = 0x60 + 4 * ap->port_no + 2 * adev->devno;
+	int port = 0x60 + 8 * ap->port_no + 4 * adev->devno;
 	static u8 udma_timing[6][2] = {
 		{ 0x60, 0x03 },	/* 33 Mhz Clock */
 		{ 0x40, 0x02 },
@@ -132,12 +133,17 @@ static void pdc_set_dmamode(struct ata_port *ap, struct ata_device *adev)
 		{ 0x20, 0x01 },
 		{ 0x20, 0x01 }
 	};
+	static u8 mdma_timing[3][2] = {
+		{ 0x60, 0x03 },
+		{ 0x60, 0x04 },
+		{ 0xe0, 0x0f },
+	};
 	u8 r_bp, r_cp;
 
 	pci_read_config_byte(pdev, port + 1, &r_bp);
 	pci_read_config_byte(pdev, port + 2, &r_cp);
 
-	r_bp &= ~0xF0;
+	r_bp &= ~0xE0;
 	r_cp &= ~0x0F;
 
 	if (adev->dma_mode >= XFER_UDMA_0) {
@@ -147,8 +153,8 @@ static void pdc_set_dmamode(struct ata_port *ap, struct ata_device *adev)
 
 	} else {
 		int speed = adev->dma_mode - XFER_MW_DMA_0;
-		r_bp |= 0x60;
-		r_cp |= (5 - speed);
+		r_bp |= mdma_timing[speed][0];
+		r_cp |= mdma_timing[speed][1];
 	}
 	pci_write_config_byte(pdev, port + 1, r_bp);
 	pci_write_config_byte(pdev, port + 2, r_cp);
@@ -170,36 +176,33 @@ static void pdc2026x_bmdma_start(struct ata_queued_cmd *qc)
 	struct ata_taskfile *tf = &qc->tf;
 	int sel66 = ap->port_no ? 0x08: 0x02;
 
-	unsigned long master = ap->host->ports[0]->ioaddr.bmdma_addr;
-	unsigned long clock = master + 0x11;
-	unsigned long atapi_reg = master + 0x20 + (4 * ap->port_no);
+	void __iomem *master = ap->host->ports[0]->ioaddr.bmdma_addr;
+	void __iomem *clock = master + 0x11;
+	void __iomem *atapi_reg = master + 0x20 + (4 * ap->port_no);
 
 	u32 len;
 
 	/* Check we keep host level locking here */
 	if (adev->dma_mode >= XFER_UDMA_2)
-		outb(inb(clock) | sel66, clock);
+		iowrite8(ioread8(clock) | sel66, clock);
 	else
-		outb(inb(clock) & ~sel66, clock);
+		iowrite8(ioread8(clock) & ~sel66, clock);
 
 	/* The DMA clocks may have been trashed by a reset. FIXME: make conditional
 	   and move to qc_issue ? */
-	pdc_set_dmamode(ap, qc->dev);
+	pdc202xx_set_dmamode(ap, qc->dev);
 
 	/* Cases the state machine will not complete correctly without help */
 	if ((tf->flags & ATA_TFLAG_LBA48) ||  tf->protocol == ATA_PROT_ATAPI_DMA)
 	{
-		if (tf->flags & ATA_TFLAG_LBA48)
-			len = qc->nsect * 512;
-		else
-			len = qc->nbytes;
+		len = qc->nbytes / 2;
 
 		if (tf->flags & ATA_TFLAG_WRITE)
 			len |= 0x06000000;
 		else
 			len |= 0x05000000;
 
-		outl(len, atapi_reg);
+		iowrite32(len, atapi_reg);
 	}
 
 	/* Activate DMA */
@@ -222,19 +225,19 @@ static void pdc2026x_bmdma_stop(struct ata_queued_cmd *qc)
 
 	int sel66 = ap->port_no ? 0x08: 0x02;
 	/* The clock bits are in the same register for both channels */
-	unsigned long master = ap->host->ports[0]->ioaddr.bmdma_addr;
-	unsigned long clock = master + 0x11;
-	unsigned long atapi_reg = master + 0x20 + (4 * ap->port_no);
+	void __iomem *master = ap->host->ports[0]->ioaddr.bmdma_addr;
+	void __iomem *clock = master + 0x11;
+	void __iomem *atapi_reg = master + 0x20 + (4 * ap->port_no);
 
 	/* Cases the state machine will not complete correctly */
 	if (tf->protocol == ATA_PROT_ATAPI_DMA || ( tf->flags & ATA_TFLAG_LBA48)) {
-		outl(0, atapi_reg);
-		outb(inb(clock) & ~sel66, clock);
+		iowrite32(0, atapi_reg);
+		iowrite8(ioread8(clock) & ~sel66, clock);
 	}
 	/* Check we keep host level locking here */
 	/* Flip back to 33Mhz for PIO */
 	if (adev->dma_mode >= XFER_UDMA_2)
-		outb(inb(clock) & ~sel66, clock);
+		iowrite8(ioread8(clock) & ~sel66, clock);
 
 	ata_bmdma_stop(qc);
 }
@@ -254,7 +257,7 @@ static void pdc2026x_dev_config(struct ata_port *ap, struct ata_device *adev)
 	adev->max_sectors = 256;
 }
 
-static struct scsi_host_template pdc_sht = {
+static struct scsi_host_template pdc202xx_sht = {
 	.module			= THIS_MODULE,
 	.name			= DRV_NAME,
 	.ioctl			= ata_scsi_ioctl,
@@ -262,20 +265,24 @@ static struct scsi_host_template pdc_sht = {
 	.can_queue		= ATA_DEF_QUEUE,
 	.this_id		= ATA_SHT_THIS_ID,
 	.sg_tablesize		= LIBATA_MAX_PRD,
-	.max_sectors		= ATA_MAX_SECTORS,
 	.cmd_per_lun		= ATA_SHT_CMD_PER_LUN,
 	.emulated		= ATA_SHT_EMULATED,
 	.use_clustering		= ATA_SHT_USE_CLUSTERING,
 	.proc_name		= DRV_NAME,
 	.dma_boundary		= ATA_DMA_BOUNDARY,
 	.slave_configure	= ata_scsi_slave_config,
+	.slave_destroy		= ata_scsi_slave_destroy,
 	.bios_param		= ata_std_bios_param,
+#ifdef CONFIG_PM
+	.resume			= ata_scsi_device_resume,
+	.suspend		= ata_scsi_device_suspend,
+#endif
 };
 
 static struct ata_port_operations pdc2024x_port_ops = {
 	.port_disable	= ata_port_disable,
-	.set_piomode	= pdc_set_piomode,
-	.set_dmamode	= pdc_set_dmamode,
+	.set_piomode	= pdc202xx_set_piomode,
+	.set_dmamode	= pdc202xx_set_dmamode,
 	.mode_filter	= ata_pci_default_filter,
 	.tf_load	= ata_tf_load,
 	.tf_read	= ata_tf_read,
@@ -295,20 +302,20 @@ static struct ata_port_operations pdc2024x_port_ops = {
 
 	.qc_prep 	= ata_qc_prep,
 	.qc_issue	= ata_qc_issue_prot,
-	.data_xfer	= ata_pio_data_xfer,
+	.data_xfer	= ata_data_xfer,
 
 	.irq_handler	= ata_interrupt,
 	.irq_clear	= ata_bmdma_irq_clear,
+	.irq_on		= ata_irq_on,
+	.irq_ack	= ata_irq_ack,
 
 	.port_start	= ata_port_start,
-	.port_stop	= ata_port_stop,
-	.host_stop	= ata_host_stop
 };
 
 static struct ata_port_operations pdc2026x_port_ops = {
 	.port_disable	= ata_port_disable,
-	.set_piomode	= pdc_set_piomode,
-	.set_dmamode	= pdc_set_dmamode,
+	.set_piomode	= pdc202xx_set_piomode,
+	.set_dmamode	= pdc202xx_set_dmamode,
 	.mode_filter	= ata_pci_default_filter,
 	.tf_load	= ata_tf_load,
 	.tf_read	= ata_tf_read,
@@ -329,21 +336,21 @@ static struct ata_port_operations pdc2026x_port_ops = {
 
 	.qc_prep 	= ata_qc_prep,
 	.qc_issue	= ata_qc_issue_prot,
-	.data_xfer	= ata_pio_data_xfer,
+	.data_xfer	= ata_data_xfer,
 
 	.irq_handler	= ata_interrupt,
 	.irq_clear	= ata_bmdma_irq_clear,
+	.irq_on		= ata_irq_on,
+	.irq_ack	= ata_irq_ack,
 
 	.port_start	= ata_port_start,
-	.port_stop	= ata_port_stop,
-	.host_stop	= ata_host_stop
 };
 
-static int pdc_init_one(struct pci_dev *dev, const struct pci_device_id *id)
+static int pdc202xx_init_one(struct pci_dev *dev, const struct pci_device_id *id)
 {
 	static struct ata_port_info info[3] = {
 		{
-			.sht = &pdc_sht,
+			.sht = &pdc202xx_sht,
 			.flags = ATA_FLAG_SLAVE_POSS | ATA_FLAG_SRST,
 			.pio_mask = 0x1f,
 			.mwdma_mask = 0x07,
@@ -351,7 +358,7 @@ static int pdc_init_one(struct pci_dev *dev, const struct pci_device_id *id)
 			.port_ops = &pdc2024x_port_ops
 		},
 		{
-			.sht = &pdc_sht,
+			.sht = &pdc202xx_sht,
 			.flags = ATA_FLAG_SLAVE_POSS | ATA_FLAG_SRST,
 			.pio_mask = 0x1f,
 			.mwdma_mask = 0x07,
@@ -359,7 +366,7 @@ static int pdc_init_one(struct pci_dev *dev, const struct pci_device_id *id)
 			.port_ops = &pdc2026x_port_ops
 		},
 		{
-			.sht = &pdc_sht,
+			.sht = &pdc202xx_sht,
 			.flags = ATA_FLAG_SLAVE_POSS | ATA_FLAG_SRST,
 			.pio_mask = 0x1f,
 			.mwdma_mask = 0x07,
@@ -385,7 +392,7 @@ static int pdc_init_one(struct pci_dev *dev, const struct pci_device_id *id)
 	return ata_pci_init_one(dev, port_info, 2);
 }
 
-static const struct pci_device_id pdc[] = {
+static const struct pci_device_id pdc202xx[] = {
 	{ PCI_VDEVICE(PROMISE, PCI_DEVICE_ID_PROMISE_20246), 0 },
 	{ PCI_VDEVICE(PROMISE, PCI_DEVICE_ID_PROMISE_20262), 1 },
 	{ PCI_VDEVICE(PROMISE, PCI_DEVICE_ID_PROMISE_20263), 1 },
@@ -395,28 +402,32 @@ static const struct pci_device_id pdc[] = {
 	{ },
 };
 
-static struct pci_driver pdc_pci_driver = {
+static struct pci_driver pdc202xx_pci_driver = {
 	.name 		= DRV_NAME,
-	.id_table	= pdc,
-	.probe 		= pdc_init_one,
-	.remove		= ata_pci_remove_one
+	.id_table	= pdc202xx,
+	.probe 		= pdc202xx_init_one,
+	.remove		= ata_pci_remove_one,
+#ifdef CONFIG_PM
+	.suspend	= ata_pci_device_suspend,
+	.resume		= ata_pci_device_resume,
+#endif
 };
 
-static int __init pdc_init(void)
+static int __init pdc202xx_init(void)
 {
-	return pci_register_driver(&pdc_pci_driver);
+	return pci_register_driver(&pdc202xx_pci_driver);
 }
 
-static void __exit pdc_exit(void)
+static void __exit pdc202xx_exit(void)
 {
-	pci_unregister_driver(&pdc_pci_driver);
+	pci_unregister_driver(&pdc202xx_pci_driver);
 }
 
 MODULE_AUTHOR("Alan Cox");
 MODULE_DESCRIPTION("low-level driver for Promise 2024x and 20262-20267");
 MODULE_LICENSE("GPL");
-MODULE_DEVICE_TABLE(pci, pdc);
+MODULE_DEVICE_TABLE(pci, pdc202xx);
 MODULE_VERSION(DRV_VERSION);
 
-module_init(pdc_init);
-module_exit(pdc_exit);
+module_init(pdc202xx_init);
+module_exit(pdc202xx_exit);

@@ -204,7 +204,7 @@ int cpu_down(unsigned int cpu)
 #endif /*CONFIG_HOTPLUG_CPU*/
 
 /* Requires cpu_add_remove_lock to be held */
-static int __devinit _cpu_up(unsigned int cpu)
+static int __cpuinit _cpu_up(unsigned int cpu)
 {
 	int ret;
 	void *hcpu = (void *)(long)cpu;
@@ -239,7 +239,7 @@ out_notify:
 	return ret;
 }
 
-int __devinit cpu_up(unsigned int cpu)
+int __cpuinit cpu_up(unsigned int cpu)
 {
 	int err = 0;
 
@@ -254,27 +254,21 @@ int __devinit cpu_up(unsigned int cpu)
 }
 
 #ifdef CONFIG_SUSPEND_SMP
+/* Needed to prevent the microcode driver from requesting firmware in its CPU
+ * hotplug notifier during the suspend/resume.
+ */
+int suspend_cpu_hotplug;
+EXPORT_SYMBOL(suspend_cpu_hotplug);
+
 static cpumask_t frozen_cpus;
 
 int disable_nonboot_cpus(void)
 {
-	int cpu, first_cpu, error;
+	int cpu, first_cpu, error = 0;
 
 	mutex_lock(&cpu_add_remove_lock);
-	first_cpu = first_cpu(cpu_present_map);
-	if (!cpu_online(first_cpu)) {
-		error = _cpu_up(first_cpu);
-		if (error) {
-			printk(KERN_ERR "Could not bring CPU%d up.\n",
-				first_cpu);
-			goto out;
-		}
-	}
-	error = set_cpus_allowed(current, cpumask_of_cpu(first_cpu));
-	if (error) {
-		printk(KERN_ERR "Could not run on CPU%d\n", first_cpu);
-		goto out;
-	}
+	suspend_cpu_hotplug = 1;
+	first_cpu = first_cpu(cpu_online_map);
 	/* We take down all of the non-boot CPUs in one shot to avoid races
 	 * with the userspace trying to use the CPU hotplug at the same time
 	 */
@@ -298,9 +292,9 @@ int disable_nonboot_cpus(void)
 		/* Make sure the CPUs won't be enabled by someone else */
 		cpu_hotplug_disabled = 1;
 	} else {
-		printk(KERN_ERR "Non-boot CPUs are not disabled");
+		printk(KERN_ERR "Non-boot CPUs are not disabled\n");
 	}
-out:
+	suspend_cpu_hotplug = 0;
 	mutex_unlock(&cpu_add_remove_lock);
 	return error;
 }
@@ -312,18 +306,22 @@ void enable_nonboot_cpus(void)
 	/* Allow everyone to use the CPU hotplug again */
 	mutex_lock(&cpu_add_remove_lock);
 	cpu_hotplug_disabled = 0;
-	mutex_unlock(&cpu_add_remove_lock);
+	if (cpus_empty(frozen_cpus))
+		goto out;
 
+	suspend_cpu_hotplug = 1;
 	printk("Enabling non-boot CPUs ...\n");
 	for_each_cpu_mask(cpu, frozen_cpus) {
-		error = cpu_up(cpu);
+		error = _cpu_up(cpu);
 		if (!error) {
 			printk("CPU%d is up\n", cpu);
 			continue;
 		}
-		printk(KERN_WARNING "Error taking CPU%d up: %d\n",
-			cpu, error);
+		printk(KERN_WARNING "Error taking CPU%d up: %d\n", cpu, error);
 	}
 	cpus_clear(frozen_cpus);
+	suspend_cpu_hotplug = 0;
+out:
+	mutex_unlock(&cpu_add_remove_lock);
 }
 #endif

@@ -38,6 +38,7 @@
 #include <asm/uaccess.h>
 #include <asm/paca.h>
 #include <asm/abs_addr.h>
+#include <asm/firmware.h>
 #include <asm/iseries/vio.h>
 #include <asm/iseries/mf.h>
 #include <asm/iseries/hv_lp_config.h>
@@ -1178,7 +1179,7 @@ static ssize_t proc_mf_change_vmlinux(struct file *file,
 				      const char __user *buf,
 				      size_t count, loff_t *ppos)
 {
-	struct proc_dir_entry *dp = PDE(file->f_dentry->d_inode);
+	struct proc_dir_entry *dp = PDE(file->f_path.dentry->d_inode);
 	ssize_t rc;
 	dma_addr_t dma_addr;
 	char *page;
@@ -1223,7 +1224,7 @@ out:
 	return rc;
 }
 
-static struct file_operations proc_vmlinux_operations = {
+static const struct file_operations proc_vmlinux_operations = {
 	.write		= proc_mf_change_vmlinux,
 };
 
@@ -1234,6 +1235,9 @@ static int __init mf_proc_init(void)
 	struct proc_dir_entry *mf;
 	char name[2];
 	int i;
+
+	if (!firmware_has_feature(FW_FEATURE_ISERIES))
+		return 0;
 
 	mf_proc_root = proc_mkdir("iSeries/mf", NULL);
 	if (!mf_proc_root)
@@ -1249,7 +1253,6 @@ static int __init mf_proc_init(void)
 		ent = create_proc_entry("cmdline", S_IFREG|S_IRUSR|S_IWUSR, mf);
 		if (!ent)
 			return 1;
-		ent->nlink = 1;
 		ent->data = (void *)(long)i;
 		ent->read_proc = proc_mf_dump_cmdline;
 		ent->write_proc = proc_mf_change_cmdline;
@@ -1260,7 +1263,6 @@ static int __init mf_proc_init(void)
 		ent = create_proc_entry("vmlinux", S_IFREG|S_IWUSR, mf);
 		if (!ent)
 			return 1;
-		ent->nlink = 1;
 		ent->data = (void *)(long)i;
 		ent->proc_fops = &proc_vmlinux_operations;
 	}
@@ -1268,7 +1270,6 @@ static int __init mf_proc_init(void)
 	ent = create_proc_entry("side", S_IFREG|S_IRUSR|S_IWUSR, mf_proc_root);
 	if (!ent)
 		return 1;
-	ent->nlink = 1;
 	ent->data = (void *)0;
 	ent->read_proc = proc_mf_dump_side;
 	ent->write_proc = proc_mf_change_side;
@@ -1276,7 +1277,6 @@ static int __init mf_proc_init(void)
 	ent = create_proc_entry("src", S_IFREG|S_IRUSR|S_IWUSR, mf_proc_root);
 	if (!ent)
 		return 1;
-	ent->nlink = 1;
 	ent->data = (void *)0;
 	ent->read_proc = proc_mf_dump_src;
 	ent->write_proc = proc_mf_change_src;

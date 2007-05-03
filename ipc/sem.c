@@ -1079,14 +1079,13 @@ static struct sem_undo *find_undo(struct ipc_namespace *ns, int semid)
 	ipc_rcu_getref(sma);
 	sem_unlock(sma);
 
-	new = (struct sem_undo *) kmalloc(sizeof(struct sem_undo) + sizeof(short)*nsems, GFP_KERNEL);
+	new = kzalloc(sizeof(struct sem_undo) + sizeof(short)*nsems, GFP_KERNEL);
 	if (!new) {
 		ipc_lock_by_ptr(&sma->sem_perm);
 		ipc_rcu_putref(sma);
 		sem_unlock(sma);
 		return ERR_PTR(-ENOMEM);
 	}
-	memset(new, 0, sizeof(struct sem_undo) + sizeof(short)*nsems);
 	new->semadj = (short *) &new[1];
 	new->semid = semid;
 
@@ -1411,9 +1410,6 @@ next_entry:
 static int sysvipc_sem_proc_show(struct seq_file *s, void *it)
 {
 	struct sem_array *sma = it;
-
-	if (!vx_check(sma->sem_perm.xid, VS_WATCH_P|VS_IDENT))
-		return 0;
 
 	return seq_printf(s,
 			  "%10d %10d  %4o %10lu %5u %5u %5u %5u %10lu %10lu\n",

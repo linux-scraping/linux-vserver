@@ -1619,7 +1619,7 @@ out:
 }
 
 
-static struct file_operations via_mixer_fops = {
+static const struct file_operations via_mixer_fops = {
 	.owner		= THIS_MODULE,
 	.open		= via_mixer_open,
 	.llseek		= no_llseek,
@@ -2042,7 +2042,7 @@ static int via_interrupt_init (struct via_info *card)
  *
  */
 
-static struct file_operations via_dsp_fops = {
+static const struct file_operations via_dsp_fops = {
 	.owner		= THIS_MODULE,
 	.open		= via_dsp_open,
 	.release	= via_dsp_release,
@@ -2120,8 +2120,8 @@ static struct page * via_mm_nopage (struct vm_area_struct * vma,
 		return NOPAGE_SIGBUS; /* Disallow mremap */
 	}
         if (!card) {
-		DPRINTK ("EXIT, returning NOPAGE_OOM\n");
-		return NOPAGE_OOM;	/* Nothing allocated */
+		DPRINTK ("EXIT, returning NOPAGE_SIGBUS\n");
+		return NOPAGE_SIGBUS;	/* Nothing allocated */
 	}
 
 	pgoff = vma->vm_pgoff + ((address - vma->vm_start) >> PAGE_SHIFT);

@@ -20,6 +20,7 @@
 #include <linux/timer.h>
 #include <linux/init.h>
 #include <linux/delay.h>
+#include <linux/serial_core.h>
 #include <linux/platform_device.h>
 #include <linux/kthread.h>
 
@@ -28,7 +29,6 @@
 #include <asm/mach/irq.h>
 
 #include <asm/hardware.h>
-#include <asm/hardware/iomd.h>
 #include <asm/io.h>
 #include <asm/irq.h>
 #include <asm/mach-types.h>
@@ -37,12 +37,10 @@
 #include <asm/arch/regs-gpio.h>
 #include <asm/arch/iic.h>
 
-#include <linux/serial_core.h>
-
-#include "s3c2410.h"
-#include "clock.h"
-#include "devs.h"
-#include "cpu.h"
+#include <asm/plat-s3c24xx/s3c2410.h>
+#include <asm/plat-s3c24xx/clock.h>
+#include <asm/plat-s3c24xx/devs.h>
+#include <asm/plat-s3c24xx/cpu.h>
 
 static struct map_desc n30_iodesc[] __initdata = {
 	/* nothing here yet */

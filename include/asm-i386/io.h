@@ -219,12 +219,6 @@ static inline void memcpy_toio(volatile void __iomem *dst, const void *src, int 
 #define __ISA_IO_base ((char __iomem *)(PAGE_OFFSET))
 
 /*
- * Again, i386 does not require mem IO specific function.
- */
-
-#define eth_io_copy_and_sum(a,b,c,d)		eth_copy_and_sum((a),(void __force *)(b),(c),(d))
-
-/*
  *	Cache management
  *
  *	This needed for two cases
@@ -256,11 +250,11 @@ static inline void flush_write_buffers(void)
 
 #endif /* __KERNEL__ */
 
-#ifdef SLOW_IO_BY_JUMPING
-#define __SLOW_DOWN_IO "jmp 1f; 1: jmp 1f; 1:"
+#if defined(CONFIG_PARAVIRT)
+#include <asm/paravirt.h>
 #else
+
 #define __SLOW_DOWN_IO "outb %%al,$0x80;"
-#endif
 
 static inline void slow_down_io(void) {
 	__asm__ __volatile__(
@@ -270,6 +264,8 @@ static inline void slow_down_io(void) {
 #endif
 		: : );
 }
+
+#endif
 
 #ifdef CONFIG_X86_NUMAQ
 extern void *xquad_portio;    /* Where the IO area was mapped */

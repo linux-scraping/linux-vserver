@@ -3,7 +3,7 @@
  *
  *  Virtual Context Support
  *
- *  Copyright (C) 2003-2006  Herbert Pötzl
+ *  Copyright (C) 2003-2007  Herbert Pötzl
  *
  *  V0.01  basic structure
  *  V0.02  adaptation vs1.3.0
@@ -40,10 +40,6 @@ static struct proc_dir_entry *proc_virtual;
 static struct proc_dir_entry *proc_virtnet;
 
 
-
-// #define PROC_VID_MASK	0x60
-
-
 /* first the actual feeds */
 
 
@@ -70,8 +66,14 @@ static int proc_virtual_status(char *buffer)
 	return sprintf(buffer,
 		"#CTotal:\t%d\n"
 		"#CActive:\t%d\n"
+		"#NSProxy:\t%d\t%d %d %d %d\n"
 		,atomic_read(&vx_global_ctotal)
 		,atomic_read(&vx_global_cactive)
+		,atomic_read(&vs_global_nsproxy)
+		,atomic_read(&vs_global_fs)
+		,atomic_read(&vs_global_mnt_ns)
+		,atomic_read(&vs_global_uts_ns)
+		,atomic_read(&vs_global_ipc_ns)
 		);
 }
 
@@ -102,14 +104,12 @@ int proc_vxi_status (struct vx_info *vxi, char *buffer)
 		"BCaps:\t%016llx\n"
 		"CCaps:\t%016llx\n"
 		"Spaces:\t%08lx\n"
-//		"Ticks:\t%d\n"
 		,atomic_read(&vxi->vx_usecnt)
 		,atomic_read(&vxi->vx_tasks)
 		,(unsigned long long)vxi->vx_flags
 		,(unsigned long long)vxi->vx_bcaps
 		,(unsigned long long)vxi->vx_ccaps
 		,vxi->vx_nsmask
-//		,atomic_read(&vxi->limit.ticks)
 		);
 	return length;
 }
@@ -197,8 +197,12 @@ int proc_nxi_status (struct nx_info *nxi, char *buffer)
 	length = sprintf(buffer,
 		"UseCnt:\t%d\n"
 		"Tasks:\t%d\n"
+		"Flags:\t%016llx\n"
+		"NCaps:\t%016llx\n"
 		,atomic_read(&nxi->nx_usecnt)
 		,atomic_read(&nxi->nx_tasks)
+		,(unsigned long long)nxi->nx_flags
+		,(unsigned long long)nxi->nx_ncaps
 		);
 	return length;
 }
@@ -841,6 +845,15 @@ out:
 	return 0;
 }
 
+static int proc_virtual_getattr(struct vfsmount *mnt,
+	struct dentry *dentry, struct kstat *stat)
+{
+	struct inode *inode = dentry->d_inode;
+
+	generic_fillattr(inode, stat);
+	stat->nlink = 2 + atomic_read(&vx_global_cactive);
+	return 0;
+}
 
 static struct file_operations proc_virtual_dir_operations = {
 	.read =		generic_read_dir,
@@ -848,6 +861,7 @@ static struct file_operations proc_virtual_dir_operations = {
 };
 
 static struct inode_operations proc_virtual_dir_inode_operations = {
+	.getattr =	proc_virtual_getattr,
 	.lookup =	proc_virtual_lookup,
 };
 
@@ -914,6 +928,15 @@ out:
 	return 0;
 }
 
+static int proc_virtnet_getattr(struct vfsmount *mnt,
+	struct dentry *dentry, struct kstat *stat)
+{
+	struct inode *inode = dentry->d_inode;
+
+	generic_fillattr(inode, stat);
+	stat->nlink = 2 + atomic_read(&nx_global_cactive);
+	return 0;
+}
 
 static struct file_operations proc_virtnet_dir_operations = {
 	.read =		generic_read_dir,
@@ -921,6 +944,7 @@ static struct file_operations proc_virtnet_dir_operations = {
 };
 
 static struct inode_operations proc_virtnet_dir_inode_operations = {
+	.getattr = 	proc_virtnet_getattr,
 	.lookup =	proc_virtnet_lookup,
 };
 
@@ -988,6 +1012,11 @@ int proc_pid_nx_info(struct task_struct *p, char *buffer)
 	nxi = task_get_nx_info(p);
 	if (!nxi)
 		goto out;
+
+	buffer += sprintf (buffer,"NCaps:\t%016llx\n"
+		,(unsigned long long)nxi->nx_ncaps);
+	buffer += sprintf (buffer,"NFlags:\t%016llx\n"
+		,(unsigned long long)nxi->nx_flags);
 
 	for (i=0; i<nxi->nbipv4; i++){
 		buffer += sprintf (buffer,

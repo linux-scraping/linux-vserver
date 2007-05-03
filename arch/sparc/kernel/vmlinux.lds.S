@@ -11,6 +11,7 @@ SECTIONS
   . = 0x10000 + SIZEOF_HEADERS;
   .text 0xf0004000 :
   {
+    _text = .;
     *(.text)
     SCHED_TEXT
     LOCK_TEXT
@@ -56,10 +57,14 @@ SECTIONS
   .con_initcall.init : { *(.con_initcall.init) }
   __con_initcall_end = .;
   SECURITY_INIT
+
+#ifdef CONFIG_BLK_DEV_INITRD
   . = ALIGN(4096);
   __initramfs_start = .;
   .init.ramfs : { *(.init.ramfs) }
   __initramfs_end = .;
+#endif
+
   . = ALIGN(32);
   __per_cpu_start = .;
   .data.percpu  : { *(.data.percpu) }

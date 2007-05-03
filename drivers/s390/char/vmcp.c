@@ -117,7 +117,7 @@ vmcp_write(struct file *file, const char __user * buff, size_t count,
 		return -ENOMEM;
 	}
 	debug_text_event(vmcp_debug, 1, cmd);
-	session->resp_size = __cpcmd(cmd, session->response,
+	session->resp_size = cpcmd(cmd, session->response,
 				     session->bufsize,
 				     &session->resp_code);
 	up(&session->mutex);
@@ -173,7 +173,7 @@ static long vmcp_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 	}
 }
 
-static struct file_operations vmcp_fops = {
+static const struct file_operations vmcp_fops = {
 	.owner		= THIS_MODULE,
 	.open		= &vmcp_open,
 	.release	= &vmcp_release,

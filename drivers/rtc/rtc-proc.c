@@ -65,7 +65,7 @@ static int rtc_proc_show(struct seq_file *seq, void *offset)
 			seq_printf(seq, "%02d\n", alrm.time.tm_mday);
 		else
 			seq_printf(seq, "**\n");
-		seq_printf(seq, "alrm_wakeup\t: %s\n",
+		seq_printf(seq, "alarm_IRQ\t: %s\n",
 				alrm.enabled ? "yes" : "no");
 		seq_printf(seq, "alrm_pending\t: %s\n",
 				alrm.pending ? "yes" : "no");
@@ -96,7 +96,7 @@ static int rtc_proc_release(struct inode *inode, struct file *file)
 	return res;
 }
 
-static struct file_operations rtc_proc_fops = {
+static const struct file_operations rtc_proc_fops = {
 	.open		= rtc_proc_open,
 	.read		= seq_read,
 	.llseek		= seq_lseek,
@@ -120,7 +120,7 @@ static int rtc_proc_add_device(struct class_device *class_dev,
 			ent->owner = rtc->owner;
 			ent->data = class_dev;
 
-			dev_info(class_dev->dev, "rtc intf: proc\n");
+			dev_dbg(class_dev->dev, "rtc intf: proc\n");
 		}
 		else
 			rtc_dev = NULL;

@@ -26,6 +26,7 @@
 #include <sound/asound.h>
 #include <sound/memalloc.h>
 #include <linux/poll.h>
+#include <linux/mm.h>
 #include <linux/bitops.h>
 
 #define snd_pcm_substream_chip(substream) ((substream)->private_data)
@@ -54,6 +55,8 @@ struct snd_pcm_hardware {
 	unsigned int periods_max;	/* max # of periods */
 	size_t fifo_size;		/* fifo size in bytes */
 };
+
+struct snd_pcm_substream;
 
 struct snd_pcm_ops {
 	int (*open)(struct snd_pcm_substream *substream);
@@ -383,6 +386,7 @@ struct snd_pcm_substream {
 	struct snd_info_entry *proc_sw_params_entry;
 	struct snd_info_entry *proc_status_entry;
 	struct snd_info_entry *proc_prealloc_entry;
+	struct snd_info_entry *proc_prealloc_max_entry;
 #endif
 	/* misc flags */
 	unsigned int hw_opened: 1;
@@ -426,6 +430,7 @@ struct snd_pcm {
 	wait_queue_head_t open_wait;
 	void *private_data;
 	void (*private_free) (struct snd_pcm *pcm);
+	struct device *dev; /* actual hw device this belongs to */
 #if defined(CONFIG_SND_PCM_OSS) || defined(CONFIG_SND_PCM_OSS_MODULE)
 	struct snd_pcm_oss oss;
 #endif
@@ -442,7 +447,7 @@ struct snd_pcm_notify {
  *  Registering
  */
 
-extern struct file_operations snd_pcm_f_ops[2];
+extern const struct file_operations snd_pcm_f_ops[2];
 
 int snd_pcm_new(struct snd_card *card, char *id, int device,
 		int playback_count, int capture_count,

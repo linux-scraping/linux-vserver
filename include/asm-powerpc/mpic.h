@@ -3,6 +3,7 @@
 #ifdef __KERNEL__
 
 #include <linux/irq.h>
+#include <asm/dcr.h>
 
 /*
  * Global registers
@@ -100,21 +101,6 @@
 #define MPIC_MAX_IRQ_SOURCES	2048
 #define MPIC_MAX_CPUS		32
 #define MPIC_MAX_ISU		32
-
-/*
- * Special vector numbers (internal use only)
- */
-#define MPIC_VEC_SPURRIOUS	255
-#define MPIC_VEC_IPI_3		254
-#define MPIC_VEC_IPI_2		253
-#define MPIC_VEC_IPI_1		252
-#define MPIC_VEC_IPI_0		251
-
-/* unused */
-#define MPIC_VEC_TIMER_3	250
-#define MPIC_VEC_TIMER_2	249
-#define MPIC_VEC_TIMER_1	248
-#define MPIC_VEC_TIMER_0	247
 
 /*
  * Tsi108 implementation of MPIC has many differences from the original one
@@ -225,6 +211,23 @@ struct mpic_irq_fixup
 #endif /* CONFIG_MPIC_BROKEN_U3 */
 
 
+enum mpic_reg_type {
+	mpic_access_mmio_le,
+	mpic_access_mmio_be,
+#ifdef CONFIG_PPC_DCR
+	mpic_access_dcr
+#endif
+};
+
+struct mpic_reg_bank {
+	u32 __iomem	*base;
+#ifdef CONFIG_PPC_DCR
+	dcr_host_t	dhost;
+	unsigned int	dbase;
+	unsigned int	doff;
+#endif /* CONFIG_PPC_DCR */
+};
+
 /* The instance data of a given MPIC */
 struct mpic
 {
@@ -258,17 +261,31 @@ struct mpic
 	unsigned char		*senses;
 	unsigned int		senses_count;
 
+	/* vector numbers used for internal sources (ipi/timers) */
+	unsigned int		ipi_vecs[4];
+	unsigned int		timer_vecs[4];
+
+	/* Spurious vector to program into unused sources */
+	unsigned int		spurious_vec;
+
 #ifdef CONFIG_MPIC_BROKEN_U3
 	/* The fixup table */
 	struct mpic_irq_fixup	*fixups;
 	spinlock_t		fixup_lock;
 #endif
 
+	/* Register access method */
+	enum mpic_reg_type	reg_type;
+
 	/* The various ioremap'ed bases */
-	volatile u32 __iomem	*gregs;
-	volatile u32 __iomem	*tmregs;
-	volatile u32 __iomem	*cpuregs[MPIC_MAX_CPUS];
-	volatile u32 __iomem	*isus[MPIC_MAX_ISU];
+	struct mpic_reg_bank	gregs;
+	struct mpic_reg_bank	tmregs;
+	struct mpic_reg_bank	cpuregs[MPIC_MAX_CPUS];
+	struct mpic_reg_bank	isus[MPIC_MAX_ISU];
+
+#ifdef CONFIG_PPC_DCR
+	unsigned int		dcr_base;
+#endif
 
 #ifdef CONFIG_MPIC_WEIRD
 	/* Pointer to HW info array */
@@ -305,6 +322,10 @@ struct mpic
 #define MPIC_SPV_EOI			0x00000020
 /* No passthrough disable */
 #define MPIC_NO_PTHROU_DIS		0x00000040
+/* DCR based MPIC */
+#define MPIC_USES_DCR			0x00000080
+/* MPIC has 11-bit vector fields (or larger) */
+#define MPIC_LARGE_VECTORS		0x00000100
 
 /* MPIC HW modification ID */
 #define MPIC_REGSET_MASK		0xf0000000
@@ -337,7 +358,7 @@ struct mpic
  * that is senses[0] correspond to linux irq "irq_offset".
  */
 extern struct mpic *mpic_alloc(struct device_node *node,
-			       unsigned long phys_addr,
+			       phys_addr_t phys_addr,
 			       unsigned int flags,
 			       unsigned int isu_size,
 			       unsigned int irq_count,
@@ -350,7 +371,7 @@ extern struct mpic *mpic_alloc(struct device_node *node,
  * @phys_addr:	physical address of the ISU
  */
 extern void mpic_assign_isu(struct mpic *mpic, unsigned int isu_num,
-			    unsigned long phys_addr);
+			    phys_addr_t phys_addr);
 
 /* Set default sense codes
  *

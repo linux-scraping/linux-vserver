@@ -3,7 +3,8 @@
  * License.  See the file "COPYING" in the main directory of this archive
  * for more details.
  *
- * Copyright (C) 1994 - 2003 by Ralf Baechle
+ * Copyright (C) 1994 - 2003, 07 by Ralf Baechle (ralf@linux-mips.org)
+ * Copyright (C) 2007 MIPS Technologies, Inc.
  */
 #include <linux/init.h>
 #include <linux/kernel.h>
@@ -32,6 +33,7 @@ void (*local_flush_data_cache_page)(void * addr);
 void (*flush_data_cache_page)(unsigned long addr);
 void (*flush_icache_all)(void);
 
+EXPORT_SYMBOL_GPL(local_flush_data_cache_page);
 EXPORT_SYMBOL(flush_data_cache_page);
 
 #ifdef CONFIG_DMA_NONCOHERENT
@@ -87,6 +89,19 @@ void __flush_dcache_page(struct page *page)
 
 EXPORT_SYMBOL(__flush_dcache_page);
 
+void __flush_anon_page(struct page *page, unsigned long vmaddr)
+{
+	if (pages_do_alias((unsigned long)page_address(page), vmaddr)) {
+		void *kaddr;
+
+		kaddr = kmap_coherent(page, vmaddr);
+		flush_data_cache_page((unsigned long)kaddr);
+		kunmap_coherent(kaddr);
+	}
+}
+
+EXPORT_SYMBOL(__flush_anon_page);
+
 void __update_cache(struct vm_area_struct *vma, unsigned long address,
 	pte_t pte)
 {
@@ -105,8 +120,6 @@ void __update_cache(struct vm_area_struct *vma, unsigned long address,
 		ClearPageDcacheDirty(page);
 	}
 }
-
-#define __weak __attribute__((weak))
 
 static char cache_panic[] __initdata = "Yeee, unsupported cache architecture.";
 

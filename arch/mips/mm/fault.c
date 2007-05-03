@@ -42,7 +42,7 @@ asmlinkage void do_page_fault(struct pt_regs *regs, unsigned long write,
 	siginfo_t info;
 
 #if 0
-	printk("Cpu%d[%s:%d:%0*lx:%ld:%0*lx]\n", smp_processor_id(),
+	printk("Cpu%d[%s:%d:%0*lx:%ld:%0*lx]\n", raw_smp_processor_id(),
 	       current->comm, current->pid, field, address, write,
 	       field, regs->cp0_epc);
 #endif
@@ -60,6 +60,10 @@ asmlinkage void do_page_fault(struct pt_regs *regs, unsigned long write,
 	 */
 	if (unlikely(address >= VMALLOC_START && address <= VMALLOC_END))
 		goto vmalloc_fault;
+#ifdef MODULE_START
+	if (unlikely(address >= MODULE_START && address < MODULE_END))
+		goto vmalloc_fault;
+#endif
 
 	/*
 	 * If we're in an interrupt or have no user
@@ -161,7 +165,7 @@ no_context:
 
 	printk(KERN_ALERT "CPU %d Unable to handle kernel paging request at "
 	       "virtual address %0*lx, epc == %0*lx, ra == %0*lx\n",
-	       smp_processor_id(), field, address, field, regs->cp0_epc,
+	       raw_smp_processor_id(), field, address, field, regs->cp0_epc,
 	       field,  regs->regs[31]);
 	die("Oops", regs);
 
@@ -176,7 +180,8 @@ out_of_memory:
 		down_read(&mm->mmap_sem);
 		goto survive;
 	}
-	printk("VM: killing process %s\n", tsk->comm);
+	printk("VM: killing process %s(%d:#%u)\n",
+		tsk->comm, tsk->pid, tsk->xid);
 	if (user_mode(regs))
 		do_exit(SIGKILL);
 	goto no_context;
@@ -224,7 +229,7 @@ vmalloc_fault:
 		pmd_t *pmd, *pmd_k;
 		pte_t *pte_k;
 
-		pgd = (pgd_t *) pgd_current[smp_processor_id()] + offset;
+		pgd = (pgd_t *) pgd_current[raw_smp_processor_id()] + offset;
 		pgd_k = init_mm.pgd + offset;
 
 		if (!pgd_present(*pgd_k))

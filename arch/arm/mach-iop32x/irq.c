@@ -23,16 +23,12 @@ static u32 iop32x_mask;
 
 static inline void intctl_write(u32 val)
 {
-	iop3xx_cp6_enable();
 	asm volatile("mcr p6, 0, %0, c0, c0, 0" : : "r" (val));
-	iop3xx_cp6_disable();
 }
 
 static inline void intstr_write(u32 val)
 {
-	iop3xx_cp6_enable();
 	asm volatile("mcr p6, 0, %0, c4, c0, 0" : : "r" (val));
-	iop3xx_cp6_disable();
 }
 
 static void
@@ -60,6 +56,8 @@ void __init iop32x_init_irq(void)
 {
 	int i;
 
+	iop_init_cp6_handler();
+
 	intctl_write(0);
 	intstr_write(0);
 	if (machine_is_glantank() ||
@@ -70,7 +68,7 @@ void __init iop32x_init_irq(void)
 
 	for (i = 0; i < NR_IRQS; i++) {
 		set_irq_chip(i, &ext_chip);
-		set_irq_handler(i, do_level_IRQ);
+		set_irq_handler(i, handle_level_irq);
 		set_irq_flags(i, IRQF_VALID | IRQF_PROBE);
 	}
 }

@@ -63,12 +63,9 @@ unsigned int DMA_MODE_WRITE;
 
 int have_of = 1;
 
-#ifdef CONFIG_PPC_MULTIPLATFORM
-dev_t boot_dev;
-#endif /* CONFIG_PPC_MULTIPLATFORM */
-
 #ifdef CONFIG_VGA_CONSOLE
 unsigned long vgacon_remap_base;
+EXPORT_SYMBOL(vgacon_remap_base);
 #endif
 
 /*
@@ -101,7 +98,7 @@ unsigned long __init early_init(unsigned long dt_ptr)
 	 * Identify the CPU type and fix up code sections
 	 * that depend on which cpu we have.
 	 */
-	spec = identify_cpu(offset);
+	spec = identify_cpu(offset, mfspr(SPRN_PVR));
 
 	do_feature_fixups(spec->cpu_features,
 			  PTRRELOC(&__start___ftr_fixup),
@@ -119,12 +116,8 @@ unsigned long __init early_init(unsigned long dt_ptr)
  */
 void __init machine_init(unsigned long dt_ptr, unsigned long phys)
 {
-	/* If btext is enabled, we might have a BAT setup for early display,
-	 * thus we do enable some very basic udbg output
-	 */
-#ifdef CONFIG_BOOTX_TEXT
-	udbg_putc = btext_drawchar;
-#endif
+	/* Enable early debugging if any specified (see udbg.h) */
+	udbg_early_init();
 
 	/* Do some early initialization based on the flat device tree */
 	early_init_devtree(__va(dt_ptr));

@@ -1,7 +1,7 @@
 /*!*****************************************************************************
 *!
-*!  Implements an interface for i2c compatible eeproms to run under linux.
-*!  Supports 2k, 8k(?) and 16k. Uses adaptive timing adjustents by
+*!  Implements an interface for i2c compatible eeproms to run under Linux.
+*!  Supports 2k, 8k(?) and 16k. Uses adaptive timing adjustments by
 *!  Johan.Adolfsson@axis.com
 *!
 *!  Probing results:
@@ -51,7 +51,7 @@
 *!  Revision 1.8  2001/06/15 13:24:29  jonashg
 *!  * Added verification of pointers from userspace in read and write.
 *!  * Made busy counter volatile.
-*!  * Added define for inital write delay.
+*!  * Added define for initial write delay.
 *!  * Removed warnings by using loff_t instead of unsigned long.
 *!
 *!  Revision 1.7  2001/06/14 15:26:54  jonashg
@@ -172,7 +172,7 @@ static const char eeprom_name[] = "eeprom";
 static struct eeprom_type eeprom;
 
 /* This is the exported file-operations structure for this device. */
-struct file_operations eeprom_fops =
+const struct file_operations eeprom_fops =
 {
   .llseek  = eeprom_lseek,
   .read    = eeprom_read,

@@ -48,6 +48,8 @@ struct autofs_info *autofs4_init_ino(struct autofs_info *ino,
 	ino->dentry = NULL;
 	ino->size = 0;
 
+	INIT_LIST_HEAD(&ino->rehash);
+
 	ino->last_used = jiffies;
 	atomic_set(&ino->count, 0);
 
@@ -152,21 +154,22 @@ void autofs4_kill_sb(struct super_block *sb)
 	/*
 	 * In the event of a failure in get_sb_nodev the superblock
 	 * info is not present so nothing else has been setup, so
-	 * just exit when we are called from deactivate_super.
+	 * just call kill_anon_super when we are called from
+	 * deactivate_super.
 	 */
 	if (!sbi)
-		return;
+		goto out_kill_sb;
 
-	sb->s_fs_info = NULL;
-
-	if ( !sbi->catatonic )
+	if (!sbi->catatonic)
 		autofs4_catatonic_mode(sbi); /* Free wait queues, close pipe */
 
 	/* Clean up and release dangling references */
 	autofs4_force_release(sbi);
 
+	sb->s_fs_info = NULL;
 	kfree(sbi);
 
+out_kill_sb:
 	DPRINTK("shutting down");
 	kill_anon_super(sb);
 }
@@ -194,7 +197,7 @@ static int autofs4_show_options(struct seq_file *m, struct vfsmount *mnt)
 	return 0;
 }
 
-static struct super_operations autofs4_sops = {
+static const struct super_operations autofs4_sops = {
 	.statfs		= simple_statfs,
 	.show_options	= autofs4_show_options,
 };
@@ -311,7 +314,7 @@ int autofs4_fill_super(struct super_block *s, void *data, int silent)
 	struct autofs_sb_info *sbi;
 	struct autofs_info *ino;
 
-	sbi = (struct autofs_sb_info *) kmalloc(sizeof(*sbi), GFP_KERNEL);
+	sbi = kmalloc(sizeof(*sbi), GFP_KERNEL);
 	if ( !sbi )
 		goto fail_unlock;
 	DPRINTK("starting up, sbi = %p",sbi);
@@ -334,6 +337,8 @@ int autofs4_fill_super(struct super_block *s, void *data, int silent)
 	mutex_init(&sbi->wq_mutex);
 	spin_lock_init(&sbi->fs_lock);
 	sbi->queues = NULL;
+	spin_lock_init(&sbi->rehash_lock);
+	INIT_LIST_HEAD(&sbi->rehash_list);
 	s->s_blocksize = 1024;
 	s->s_blocksize_bits = 10;
 	s->s_magic = AUTOFS_SUPER_MAGIC;
@@ -426,7 +431,6 @@ fail_ino:
 fail_free:
 	kfree(sbi);
 	s->s_fs_info = NULL;
-	kill_anon_super(s);
 fail_unlock:
 	return -EINVAL;
 }

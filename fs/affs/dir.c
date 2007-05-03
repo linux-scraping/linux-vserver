@@ -26,7 +26,7 @@ const struct file_operations affs_dir_operations = {
 /*
  * directories can handle most operations...
  */
-struct inode_operations affs_dir_inode_operations = {
+const struct inode_operations affs_dir_inode_operations = {
 	.create		= affs_create,
 	.lookup		= affs_lookup,
 	.link		= affs_link,
@@ -41,7 +41,7 @@ struct inode_operations affs_dir_inode_operations = {
 static int
 affs_readdir(struct file *filp, void *dirent, filldir_t filldir)
 {
-	struct inode		*inode = filp->f_dentry->d_inode;
+	struct inode		*inode = filp->f_path.dentry->d_inode;
 	struct super_block	*sb = inode->i_sb;
 	struct buffer_head	*dir_bh;
 	struct buffer_head	*fh_bh;
@@ -71,7 +71,7 @@ affs_readdir(struct file *filp, void *dirent, filldir_t filldir)
 		stored++;
 	}
 	if (f_pos == 1) {
-		if (filldir(dirent, "..", 2, f_pos, parent_ino(filp->f_dentry), DT_DIR) < 0)
+		if (filldir(dirent, "..", 2, f_pos, parent_ino(filp->f_path.dentry), DT_DIR) < 0)
 			return stored;
 		filp->f_pos = f_pos = 2;
 		stored++;

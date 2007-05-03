@@ -579,7 +579,7 @@ static int tda1004x_decode_fec(int tdafec)
 	return -1;
 }
 
-int tda1004x_write(struct dvb_frontend* fe, u8 *buf, int len)
+static int tda1004x_write(struct dvb_frontend* fe, u8 *buf, int len)
 {
 	struct tda1004x_state* state = fe->demodulator_priv;
 
@@ -648,17 +648,23 @@ static int tda10046_init(struct dvb_frontend* fe)
 		tda1004x_write_byteI(state, TDA10046H_AGC_CONF, 0x0a); // AGC setup
 		tda1004x_write_byteI(state, TDA10046H_CONF_POLARITY, 0x00); // set AGC polarities
 		break;
-	case TDA10046_AGC_TDA827X:
+	case TDA10046_AGC_TDA827X_GP11:
 		tda1004x_write_byteI(state, TDA10046H_AGC_CONF, 0x02);   // AGC setup
 		tda1004x_write_byteI(state, TDA10046H_AGC_THR, 0x70);    // AGC Threshold
 		tda1004x_write_byteI(state, TDA10046H_AGC_RENORM, 0x08); // Gain Renormalize
 		tda1004x_write_byteI(state, TDA10046H_CONF_POLARITY, 0x6a); // set AGC polarities
 		break;
-	case TDA10046_AGC_TDA827X_GPL:
+	case TDA10046_AGC_TDA827X_GP00:
 		tda1004x_write_byteI(state, TDA10046H_AGC_CONF, 0x02);   // AGC setup
 		tda1004x_write_byteI(state, TDA10046H_AGC_THR, 0x70);    // AGC Threshold
 		tda1004x_write_byteI(state, TDA10046H_AGC_RENORM, 0x08); // Gain Renormalize
 		tda1004x_write_byteI(state, TDA10046H_CONF_POLARITY, 0x60); // set AGC polarities
+		break;
+	case TDA10046_AGC_TDA827X_GP01:
+		tda1004x_write_byteI(state, TDA10046H_AGC_CONF, 0x02);   // AGC setup
+		tda1004x_write_byteI(state, TDA10046H_AGC_THR, 0x70);    // AGC Threshold
+		tda1004x_write_byteI(state, TDA10046H_AGC_RENORM, 0x08); // Gain Renormalize
+		tda1004x_write_byteI(state, TDA10046H_CONF_POLARITY, 0x62); // set AGC polarities
 		break;
 	}
 	tda1004x_write_byteI(state, TDA1004X_CONFADC2, 0x38);

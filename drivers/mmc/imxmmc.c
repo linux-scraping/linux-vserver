@@ -351,9 +351,6 @@ static void imxmci_start_cmd(struct imxmci_host *host, struct mmc_command *cmd, 
 	case MMC_RSP_R3: /* short */
 		cmdat |= CMD_DAT_CONT_RESPONSE_FORMAT_R3;
 		break;
-	case MMC_RSP_R6: /* short CRC */
-		cmdat |= CMD_DAT_CONT_RESPONSE_FORMAT_R6;
-		break;
 	default:
 		break;
 	}
@@ -572,10 +569,12 @@ static int imxmci_cpu_driven_data(struct imxmci_host *host, unsigned int *pstat)
 
 	if(host->dma_dir == DMA_FROM_DEVICE) {
 		imxmci_busy_wait_for_status(host, &stat,
-				STATUS_APPL_BUFF_FF | STATUS_DATA_TRANS_DONE,
+				STATUS_APPL_BUFF_FF | STATUS_DATA_TRANS_DONE |
+				STATUS_TIME_OUT_READ,
 				50, "imxmci_cpu_driven_data read");
 
 		while((stat & (STATUS_APPL_BUFF_FF |  STATUS_DATA_TRANS_DONE)) &&
+		      !(stat & STATUS_TIME_OUT_READ) &&
 		      (host->data_cnt < 512)) {
 
 			udelay(20);	/* required for clocks < 8MHz*/
@@ -604,6 +603,12 @@ static int imxmci_cpu_driven_data(struct imxmci_host *host, unsigned int *pstat)
 
 		if(host->dma_size & 0x1ff)
 			stat &= ~STATUS_CRC_READ_ERR;
+
+		if(stat & STATUS_TIME_OUT_READ) {
+			dev_dbg(mmc_dev(host->mmc), "imxmci_cpu_driven_data read timeout STATUS = 0x%x\n",
+				stat);
+			trans_done = -1;
+		}
 
 	} else {
 		imxmci_busy_wait_for_status(host, &stat,
@@ -711,6 +716,9 @@ static void imxmci_tasklet_fnc(unsigned long data)
 		 * stat from IRQ time so do I
 		 */
 		stat |= host->status_reg;
+
+		if(test_bit(IMXMCI_PEND_CPU_DATA_b, &host->pending_events))
+			stat &= ~STATUS_CRC_READ_ERR;
 
 		if(test_bit(IMXMCI_PEND_WAIT_RESP_b, &host->pending_events)) {
 			imxmci_busy_wait_for_status(host, &stat,
@@ -877,7 +885,7 @@ static void imxmci_set_ios(struct mmc_host *mmc, struct mmc_ios *ios)
 	}
 }
 
-static struct mmc_host_ops imxmci_ops = {
+static const struct mmc_host_ops imxmci_ops = {
 	.request	= imxmci_request,
 	.set_ios	= imxmci_set_ios,
 };
@@ -961,8 +969,10 @@ static int imxmci_probe(struct platform_device *pdev)
 	/* MMC core transfer sizes tunable parameters */
 	mmc->max_hw_segs = 64;
 	mmc->max_phys_segs = 64;
-	mmc->max_sectors = 64;		/* default 1 << (PAGE_CACHE_SHIFT - 9) */
 	mmc->max_seg_size = 64*512;	/* default PAGE_CACHE_SIZE */
+	mmc->max_req_size = 64*512;	/* default PAGE_CACHE_SIZE */
+	mmc->max_blk_size = 2048;
+	mmc->max_blk_count = 65535;
 
 	host = mmc_priv(mmc);
 	host->mmc = mmc;

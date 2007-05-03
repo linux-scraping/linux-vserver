@@ -20,14 +20,15 @@
 struct super_block;
 struct vfsmount;
 struct dentry;
-struct namespace;
+struct mnt_namespace;
 
 #define MNT_NOSUID	0x01
 #define MNT_NODEV	0x02
 #define MNT_NOEXEC	0x04
 #define MNT_NOATIME	0x08
 #define MNT_NODIRATIME	0x10
-#define MNT_RDONLY	0x20
+#define MNT_RELATIME	0x20
+#define MNT_RDONLY	0x40
 
 #define MNT_IS_RDONLY(m)	((m) && ((m)->mnt_flags & MNT_RDONLY))
 
@@ -36,7 +37,7 @@ struct namespace;
 #define MNT_SHARED	0x1000	/* if the vfsmount is a shared mount */
 #define MNT_UNBINDABLE	0x2000	/* if the vfsmount is a unbindable mount */
 #define MNT_PNODE_MASK	0x3000	/* propogation flag mask */
-#define MNT_TAGID		0x8000
+#define MNT_TAGID	0x8000
 
 struct vfsmount {
 	struct list_head mnt_hash;
@@ -46,9 +47,8 @@ struct vfsmount {
 	struct super_block *mnt_sb;	/* pointer to superblock */
 	struct list_head mnt_mounts;	/* list of children, anchored here */
 	struct list_head mnt_child;	/* and going through their mnt_child */
-	atomic_t mnt_count;
 	int mnt_flags;
-	int mnt_expiry_mark;		/* true if marked for expiry */
+	/* 4 bytes hole on 64bits arches */
 	char *mnt_devname;		/* Name of device e.g. /dev/dsk/hda1 */
 	struct list_head mnt_list;
 	struct list_head mnt_expire;	/* link in fs-specific expiry list */
@@ -56,7 +56,14 @@ struct vfsmount {
 	struct list_head mnt_slave_list;/* list of slave mounts */
 	struct list_head mnt_slave;	/* slave list entry */
 	struct vfsmount *mnt_master;	/* slave is on master->mnt_slave_list */
-	struct namespace *mnt_namespace; /* containing namespace */
+	struct mnt_namespace *mnt_ns;	/* containing namespace */
+	/*
+	 * We put mnt_count & mnt_expiry_mark at the end of struct vfsmount
+	 * to let these frequently modified fields in a separate cache line
+	 * (so that reads of mnt_flags wont ping-pong on SMP machines)
+	 */
+	atomic_t mnt_count;
+	int mnt_expiry_mark;		/* true if marked for expiry */
 	int mnt_pinned;
 	tag_t mnt_tag;			/* tagging used for vfsmount */
 };

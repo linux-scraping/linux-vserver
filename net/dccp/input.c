@@ -1,6 +1,6 @@
 /*
  *  net/dccp/input.c
- * 
+ *
  *  An implementation of the DCCP protocol
  *  Arnaldo Carvalho de Melo <acme@conectiva.com.br>
  *
@@ -82,7 +82,7 @@ static int dccp_check_seqno(struct sock *sk, struct sk_buff *skb)
 	 *	  Otherwise,
 	 *	     Drop packet and return
 	 */
-	if (dh->dccph_type == DCCP_PKT_SYNC || 
+	if (dh->dccph_type == DCCP_PKT_SYNC ||
 	    dh->dccph_type == DCCP_PKT_SYNCACK) {
 		if (between48(DCCP_SKB_CB(skb)->dccpd_ack_seq,
 			      dp->dccps_awl, dp->dccps_awh) &&
@@ -91,7 +91,7 @@ static int dccp_check_seqno(struct sock *sk, struct sk_buff *skb)
 		else
 			return -1;
 	}
-	
+
 	/*
 	 *   Step 6: Check sequence numbers
 	 *      Let LSWL = S.SWL and LAWL = S.AWL
@@ -128,21 +128,18 @@ static int dccp_check_seqno(struct sock *sk, struct sk_buff *skb)
 		     DCCP_PKT_WITHOUT_ACK_SEQ))
 			dp->dccps_gar = DCCP_SKB_CB(skb)->dccpd_ack_seq;
 	} else {
-		LIMIT_NETDEBUG(KERN_WARNING "DCCP: Step 6 failed for %s packet, "
-					    "(LSWL(%llu) <= P.seqno(%llu) <= S.SWH(%llu)) and "
-					    "(P.ackno %s or LAWL(%llu) <= P.ackno(%llu) <= S.AWH(%llu), "
-					    "sending SYNC...\n",
-			       dccp_packet_name(dh->dccph_type),
-			       (unsigned long long) lswl,
-			       (unsigned long long)
-			       DCCP_SKB_CB(skb)->dccpd_seq,
-			       (unsigned long long) dp->dccps_swh,
-			       (DCCP_SKB_CB(skb)->dccpd_ack_seq ==
-			        DCCP_PKT_WITHOUT_ACK_SEQ) ? "doesn't exist" : "exists",
-			       (unsigned long long) lawl,
-			       (unsigned long long)
-			       DCCP_SKB_CB(skb)->dccpd_ack_seq,
-			       (unsigned long long) dp->dccps_awh);
+		DCCP_WARN("DCCP: Step 6 failed for %s packet, "
+			  "(LSWL(%llu) <= P.seqno(%llu) <= S.SWH(%llu)) and "
+			  "(P.ackno %s or LAWL(%llu) <= P.ackno(%llu) <= S.AWH(%llu), "
+			  "sending SYNC...\n",  dccp_packet_name(dh->dccph_type),
+			  (unsigned long long) lswl,
+			  (unsigned long long) DCCP_SKB_CB(skb)->dccpd_seq,
+			  (unsigned long long) dp->dccps_swh,
+			  (DCCP_SKB_CB(skb)->dccpd_ack_seq ==
+				DCCP_PKT_WITHOUT_ACK_SEQ) ? "doesn't exist" : "exists",
+			  (unsigned long long) lawl,
+			  (unsigned long long) DCCP_SKB_CB(skb)->dccpd_ack_seq,
+			  (unsigned long long) dp->dccps_awh);
 		dccp_send_sync(sk, DCCP_SKB_CB(skb)->dccpd_seq, DCCP_PKT_SYNC);
 		return -1;
 	}
@@ -188,8 +185,8 @@ static int __dccp_rcv_established(struct sock *sk, struct sk_buff *skb,
 		dccp_rcv_close(sk, skb);
 		return 0;
 	case DCCP_PKT_REQUEST:
-		/* Step 7 
-            	 *   or (S.is_server and P.type == Response)
+		/* Step 7
+		 *   or (S.is_server and P.type == Response)
 		 *   or (S.is_client and P.type == Request)
 		 *   or (S.state >= OPEN and P.type == Request
 		 *	and P.seqno >= S.OSR)
@@ -267,7 +264,7 @@ static int dccp_rcv_request_sent_state_process(struct sock *sk,
 					       const struct dccp_hdr *dh,
 					       const unsigned len)
 {
-	/* 
+	/*
 	 *  Step 4: Prepare sequence numbers in REQUEST
 	 *     If S.state == REQUEST,
 	 *	  If (P.type == Response or P.type == Reset)
@@ -301,11 +298,11 @@ static int dccp_rcv_request_sent_state_process(struct sock *sk,
 		if (dccp_parse_options(sk, skb))
 			goto out_invalid_packet;
 
-                if (dccp_msk(sk)->dccpms_send_ack_vector &&
-                    dccp_ackvec_add(dp->dccps_hc_rx_ackvec, sk,
-                                    DCCP_SKB_CB(skb)->dccpd_seq,
-                                    DCCP_ACKVEC_STATE_RECEIVED))
-                        goto out_invalid_packet; /* FIXME: change error code */
+		if (dccp_msk(sk)->dccpms_send_ack_vector &&
+		    dccp_ackvec_add(dp->dccps_hc_rx_ackvec, sk,
+				    DCCP_SKB_CB(skb)->dccpd_seq,
+				    DCCP_ACKVEC_STATE_RECEIVED))
+			goto out_invalid_packet; /* FIXME: change error code */
 
 		dp->dccps_isr = DCCP_SKB_CB(skb)->dccpd_seq;
 		dccp_update_gsr(sk, dp->dccps_isr);
@@ -335,7 +332,7 @@ static int dccp_rcv_request_sent_state_process(struct sock *sk,
 		 *	      from the Response * /
 		 *	  S.state := PARTOPEN
 		 *	  Set PARTOPEN timer
-		 * 	  Continue with S.state == PARTOPEN
+		 *	  Continue with S.state == PARTOPEN
 		 *	  / * Step 12 will send the Ack completing the
 		 *	      three-way handshake * /
 		 */
@@ -366,7 +363,7 @@ static int dccp_rcv_request_sent_state_process(struct sock *sk,
 			 */
 			__kfree_skb(skb);
 			return 0;
-		} 
+		}
 		dccp_send_ack(sk);
 		return -1;
 	}
@@ -374,7 +371,7 @@ static int dccp_rcv_request_sent_state_process(struct sock *sk,
 out_invalid_packet:
 	/* dccp_v4_do_rcv will send a reset */
 	DCCP_SKB_CB(skb)->dccpd_reset_code = DCCP_RESET_CODE_PACKET_ERROR;
-	return 1; 
+	return 1;
 }
 
 static int dccp_rcv_respond_partopen_state_process(struct sock *sk,
@@ -431,29 +428,25 @@ int dccp_rcv_state_process(struct sock *sk, struct sk_buff *skb,
 
 	/*
 	 *  Step 3: Process LISTEN state
-	 *  	(Continuing from dccp_v4_do_rcv and dccp_v6_do_rcv)
 	 *
 	 *     If S.state == LISTEN,
-	 *	  If P.type == Request or P contains a valid Init Cookie
-	 *	  	option,
-	 *	     * Must scan the packet's options to check for an Init
-	 *		Cookie.  Only the Init Cookie is processed here,
-	 *		however; other options are processed in Step 8.  This
-	 *		scan need only be performed if the endpoint uses Init
-	 *		Cookies *
-	 *	     * Generate a new socket and switch to that socket *
-	 *	     Set S := new socket for this port pair
-	 *	     S.state = RESPOND
-	 *	     Choose S.ISS (initial seqno) or set from Init Cookie
-	 *	     Set S.ISR, S.GSR, S.SWL, S.SWH from packet or Init Cookie
-	 *	     Continue with S.state == RESPOND
-	 *	     * A Response packet will be generated in Step 11 *
-	 *	  Otherwise,
-	 *	     Generate Reset(No Connection) unless P.type == Reset
-	 *	     Drop packet and return
-	 *
-	 * NOTE: the check for the packet types is done in
-	 *	 dccp_rcv_state_process
+	 *	 If P.type == Request or P contains a valid Init Cookie option,
+	 *	      (* Must scan the packet's options to check for Init
+	 *		 Cookies.  Only Init Cookies are processed here,
+	 *		 however; other options are processed in Step 8.  This
+	 *		 scan need only be performed if the endpoint uses Init
+	 *		 Cookies *)
+	 *	      (* Generate a new socket and switch to that socket *)
+	 *	      Set S := new socket for this port pair
+	 *	      S.state = RESPOND
+	 *	      Choose S.ISS (initial seqno) or set from Init Cookies
+	 *	      Initialize S.GAR := S.ISS
+	 *	      Set S.ISR, S.GSR, S.SWL, S.SWH from packet or Init
+	 *	      Cookies Continue with S.state == RESPOND
+	 *	      (* A Response packet will be generated in Step 11 *)
+	 *	 Otherwise,
+	 *	      Generate Reset(No Connection) unless P.type == Reset
+	 *	      Drop packet and return
 	 */
 	if (sk->sk_state == DCCP_LISTEN) {
 		if (dh->dccph_type == DCCP_PKT_REQUEST) {
@@ -485,11 +478,11 @@ int dccp_rcv_state_process(struct sock *sk, struct sk_buff *skb,
 		if (dcb->dccpd_ack_seq != DCCP_PKT_WITHOUT_ACK_SEQ)
 			dccp_event_ack_recv(sk, skb);
 
- 		if (dccp_msk(sk)->dccpms_send_ack_vector &&
+		if (dccp_msk(sk)->dccpms_send_ack_vector &&
 		    dccp_ackvec_add(dp->dccps_hc_rx_ackvec, sk,
- 				    DCCP_SKB_CB(skb)->dccpd_seq,
- 				    DCCP_ACKVEC_STATE_RECEIVED))
- 			goto discard;
+				    DCCP_SKB_CB(skb)->dccpd_seq,
+				    DCCP_ACKVEC_STATE_RECEIVED))
+			goto discard;
 
 		ccid_hc_rx_packet_recv(dp->dccps_hc_rx_ccid, sk, skb);
 		ccid_hc_tx_packet_recv(dp->dccps_hc_tx_ccid, sk, skb);
@@ -574,7 +567,7 @@ int dccp_rcv_state_process(struct sock *sk, struct sk_buff *skb,
 		}
 	}
 
-	if (!queued) { 
+	if (!queued) {
 discard:
 		__kfree_skb(skb);
 	}

@@ -96,17 +96,24 @@ static void ri_tasklet(unsigned long dev)
 		skb->tc_verd = SET_TC_NCLS(skb->tc_verd);
 		stats->tx_packets++;
 		stats->tx_bytes +=skb->len;
+
+		skb->dev = __dev_get_by_index(skb->iif);
+		if (!skb->dev) {
+			dev_kfree_skb(skb);
+			stats->tx_dropped++;
+			break;
+		}
+		skb->iif = _dev->ifindex;
+
 		if (from & AT_EGRESS) {
 			dp->st_rx_frm_egr++;
 			dev_queue_xmit(skb);
 		} else if (from & AT_INGRESS) {
-
 			dp->st_rx_frm_ing++;
+			skb_pull(skb, skb->dev->hard_header_len);
 			netif_rx(skb);
-		} else {
-			dev_kfree_skb(skb);
-			stats->tx_dropped++;
-		}
+		} else
+			BUG();
 	}
 
 	if (netif_tx_trylock(_dev)) {
@@ -154,29 +161,13 @@ static int ifb_xmit(struct sk_buff *skb, struct net_device *dev)
 	int ret = 0;
 	u32 from = G_TC_FROM(skb->tc_verd);
 
-	stats->tx_packets++;
-	stats->tx_bytes+=skb->len;
+	stats->rx_packets++;
+	stats->rx_bytes+=skb->len;
 
-	if (!from || !skb->input_dev) {
-dropped:
+	if (!(from & (AT_INGRESS|AT_EGRESS)) || !skb->iif) {
 		dev_kfree_skb(skb);
 		stats->rx_dropped++;
 		return ret;
-	} else {
-		/*
-		 * note we could be going
-		 * ingress -> egress or
-		 * egress -> ingress
-		*/
-		skb->dev = skb->input_dev;
-		skb->input_dev = dev;
-		if (from & AT_INGRESS) {
-			skb_pull(skb, skb->dev->hard_header_len);
-		} else {
-			if (!(from & AT_EGRESS)) {
-				goto dropped;
-			}
-		}
 	}
 
 	if (skb_queue_len(&dp->rq) >= dev->tx_queue_len) {

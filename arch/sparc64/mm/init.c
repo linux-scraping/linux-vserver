@@ -59,8 +59,10 @@ unsigned long kern_linear_pte_xor[2] __read_mostly;
  */
 unsigned long kpte_linear_bitmap[KPTE_BITMAP_BYTES / sizeof(unsigned long)];
 
+#ifndef CONFIG_DEBUG_PAGEALLOC
 /* A special kernel TSB for 4MB and 256MB linear mappings.  */
 struct tsb swapper_4m_tsb[KERNEL_TSB4M_NENTRIES];
+#endif
 
 #define MAX_BANKS	32
 
@@ -176,9 +178,9 @@ unsigned long sparc64_kern_sec_context __read_mostly;
 
 int bigkernel = 0;
 
-kmem_cache_t *pgtable_cache __read_mostly;
+struct kmem_cache *pgtable_cache __read_mostly;
 
-static void zero_ctor(void *addr, kmem_cache_t *cache, unsigned long flags)
+static void zero_ctor(void *addr, struct kmem_cache *cache, unsigned long flags)
 {
 	clear_page(addr);
 }
@@ -416,7 +418,7 @@ void show_mem(void)
 	printk("Free swap:       %6ldkB\n",
 	       nr_swap_pages << (PAGE_SHIFT-10));
 	printk("%ld pages of RAM\n", num_physpages);
-	printk("%d free pages\n", nr_free_pages());
+	printk("%lu free pages\n", nr_free_pages());
 }
 
 void mmu_info(struct seq_file *m)
@@ -872,6 +874,115 @@ static unsigned long __init choose_bootmap_pfn(unsigned long start_pfn,
 	prom_halt();
 }
 
+static void __init trim_pavail(unsigned long *cur_size_p,
+			       unsigned long *end_of_phys_p)
+{
+	unsigned long to_trim = *cur_size_p - cmdline_memory_size;
+	unsigned long avoid_start, avoid_end;
+	int i;
+
+	to_trim = PAGE_ALIGN(to_trim);
+
+	avoid_start = avoid_end = 0;
+#ifdef CONFIG_BLK_DEV_INITRD
+	avoid_start = initrd_start;
+	avoid_end = PAGE_ALIGN(initrd_end);
+#endif
+
+	/* Trim some pavail[] entries in order to satisfy the
+	 * requested "mem=xxx" kernel command line specification.
+	 *
+	 * We must not trim off the kernel image area nor the
+	 * initial ramdisk range (if any).  Also, we must not trim
+	 * any pavail[] entry down to zero in order to preserve
+	 * the invariant that all pavail[] entries have a non-zero
+	 * size which is assumed by all of the code in here.
+	 */
+	for (i = 0; i < pavail_ents; i++) {
+		unsigned long start, end, kern_end;
+		unsigned long trim_low, trim_high, n;
+
+		kern_end = PAGE_ALIGN(kern_base + kern_size);
+
+		trim_low = start = pavail[i].phys_addr;
+		trim_high = end = start + pavail[i].reg_size;
+
+		if (kern_base >= start &&
+		    kern_base < end) {
+			trim_low = kern_base;
+			if (kern_end >= end)
+				continue;
+		}
+		if (kern_end >= start &&
+		    kern_end < end) {
+			trim_high = kern_end;
+		}
+		if (avoid_start &&
+		    avoid_start >= start &&
+		    avoid_start < end) {
+			if (trim_low > avoid_start)
+				trim_low = avoid_start;
+			if (avoid_end >= end)
+				continue;
+		}
+		if (avoid_end &&
+		    avoid_end >= start &&
+		    avoid_end < end) {
+			if (trim_high < avoid_end)
+				trim_high = avoid_end;
+		}
+
+		if (trim_high <= trim_low)
+			continue;
+
+		if (trim_low == start && trim_high == end) {
+			/* Whole chunk is available for trimming.
+			 * Trim all except one page, in order to keep
+			 * entry non-empty.
+			 */
+			n = (end - start) - PAGE_SIZE;
+			if (n > to_trim)
+				n = to_trim;
+
+			if (n) {
+				pavail[i].phys_addr += n;
+				pavail[i].reg_size -= n;
+				to_trim -= n;
+			}
+		} else {
+			n = (trim_low - start);
+			if (n > to_trim)
+				n = to_trim;
+
+			if (n) {
+				pavail[i].phys_addr += n;
+				pavail[i].reg_size -= n;
+				to_trim -= n;
+			}
+			if (to_trim) {
+				n = end - trim_high;
+				if (n > to_trim)
+					n = to_trim;
+				if (n) {
+					pavail[i].reg_size -= n;
+					to_trim -= n;
+				}
+			}
+		}
+
+		if (!to_trim)
+			break;
+	}
+
+	/* Recalculate.  */
+	*cur_size_p = 0UL;
+	for (i = 0; i < pavail_ents; i++) {
+		*end_of_phys_p = pavail[i].phys_addr +
+			pavail[i].reg_size;
+		*cur_size_p += pavail[i].reg_size;
+	}
+}
+
 static unsigned long __init bootmem_init(unsigned long *pages_avail,
 					 unsigned long phys_base)
 {
@@ -889,31 +1000,13 @@ static unsigned long __init bootmem_init(unsigned long *pages_avail,
 		end_of_phys_memory = pavail[i].phys_addr +
 			pavail[i].reg_size;
 		bytes_avail += pavail[i].reg_size;
-		if (cmdline_memory_size) {
-			if (bytes_avail > cmdline_memory_size) {
-				unsigned long slack = bytes_avail - cmdline_memory_size;
-
-				bytes_avail -= slack;
-				end_of_phys_memory -= slack;
-
-				pavail[i].reg_size -= slack;
-				if ((long)pavail[i].reg_size <= 0L) {
-					pavail[i].phys_addr = 0xdeadbeefUL;
-					pavail[i].reg_size = 0UL;
-					pavail_ents = i;
-				} else {
-					pavail[i+1].reg_size = 0Ul;
-					pavail[i+1].phys_addr = 0xdeadbeefUL;
-					pavail_ents = i + 1;
-				}
-				break;
-			}
-		}
 	}
 
-	*pages_avail = bytes_avail >> PAGE_SHIFT;
-
-	end_pfn = end_of_phys_memory >> PAGE_SHIFT;
+	/* Determine the location of the initial ramdisk before trying
+	 * to honor the "mem=xxx" command line argument.  We must know
+	 * where the kernel image and the ramdisk image are so that we
+	 * do not trim those two areas from the physical memory map.
+	 */
 
 #ifdef CONFIG_BLK_DEV_INITRD
 	/* Now have to check initial ramdisk, so that bootmap does not overwrite it */
@@ -932,6 +1025,16 @@ static unsigned long __init bootmem_init(unsigned long *pages_avail,
 		}
 	}
 #endif	
+
+	if (cmdline_memory_size &&
+	    bytes_avail > cmdline_memory_size)
+		trim_pavail(&bytes_avail,
+			    &end_of_phys_memory);
+
+	*pages_avail = bytes_avail >> PAGE_SHIFT;
+
+	end_pfn = end_of_phys_memory >> PAGE_SHIFT;
+
 	/* Initialize the boot-time allocator. */
 	max_pfn = max_low_pfn = end_pfn;
 	min_low_pfn = (phys_base >> PAGE_SHIFT);
@@ -1200,7 +1303,12 @@ static void __init tsb_phys_patch(void)
 }
 
 /* Don't mark as init, we give this to the Hypervisor.  */
-static struct hv_tsb_descr ktsb_descr[2];
+#ifndef CONFIG_DEBUG_PAGEALLOC
+#define NUM_KTSB_DESCR	2
+#else
+#define NUM_KTSB_DESCR	1
+#endif
+static struct hv_tsb_descr ktsb_descr[NUM_KTSB_DESCR];
 extern struct tsb swapper_tsb[KERNEL_TSB_NENTRIES];
 
 static void __init sun4v_ktsb_init(void)
@@ -1239,6 +1347,7 @@ static void __init sun4v_ktsb_init(void)
 	ktsb_descr[0].tsb_base = ktsb_pa;
 	ktsb_descr[0].resv = 0;
 
+#ifndef CONFIG_DEBUG_PAGEALLOC
 	/* Second KTSB for 4MB/256MB mappings.  */
 	ktsb_pa = (kern_base +
 		   ((unsigned long)&swapper_4m_tsb[0] - KERNBASE));
@@ -1251,6 +1360,7 @@ static void __init sun4v_ktsb_init(void)
 	ktsb_descr[1].ctx_idx = 0;
 	ktsb_descr[1].tsb_base = ktsb_pa;
 	ktsb_descr[1].resv = 0;
+#endif
 }
 
 void __cpuinit sun4v_ktsb_register(void)
@@ -1263,7 +1373,7 @@ void __cpuinit sun4v_ktsb_register(void)
 	pa = kern_base + ((unsigned long)&ktsb_descr[0] - KERNBASE);
 
 	func = HV_FAST_MMU_TSB_CTX0;
-	arg0 = 2;
+	arg0 = NUM_KTSB_DESCR;
 	arg1 = pa;
 	__asm__ __volatile__("ta	%6"
 			     : "=&r" (func), "=&r" (arg0), "=&r" (arg1)
@@ -1292,7 +1402,9 @@ void __init paging_init(void)
 
 	/* Invalidate both kernel TSBs.  */
 	memset(swapper_tsb, 0x40, sizeof(swapper_tsb));
+#ifndef CONFIG_DEBUG_PAGEALLOC
 	memset(swapper_4m_tsb, 0x40, sizeof(swapper_4m_tsb));
+#endif
 
 	if (tlb_type == hypervisor)
 		sun4v_pgprot_init();
@@ -1366,8 +1478,8 @@ void __init paging_init(void)
 		for (znum = 0; znum < MAX_NR_ZONES; znum++)
 			zones_size[znum] = zholes_size[znum] = 0;
 
-		zones_size[ZONE_DMA] = end_pfn;
-		zholes_size[ZONE_DMA] = end_pfn - pages_avail;
+		zones_size[ZONE_NORMAL] = end_pfn;
+		zholes_size[ZONE_NORMAL] = end_pfn - pages_avail;
 
 		free_area_init_node(0, &contig_page_data, zones_size,
 				    __pa(PAGE_OFFSET) >> PAGE_SHIFT,
@@ -1492,7 +1604,7 @@ void __init mem_init(void)
 	initpages = (((unsigned long) __init_end) - ((unsigned long) __init_begin));
 	initpages = PAGE_ALIGN(initpages) >> PAGE_SHIFT;
 
-	printk("Memory: %uk available (%ldk kernel code, %ldk data, %ldk init) [%016lx,%016lx]\n",
+	printk("Memory: %luk available (%ldk kernel code, %ldk data, %ldk init) [%016lx,%016lx]\n",
 	       nr_free_pages() << (PAGE_SHIFT-10),
 	       codepages << (PAGE_SHIFT-10),
 	       datapages << (PAGE_SHIFT-10), 
@@ -1624,8 +1736,13 @@ static void __init sun4u_pgprot_init(void)
 	pg_iobits = (_PAGE_VALID | _PAGE_PRESENT_4U | __DIRTY_BITS_4U |
 		     __ACCESS_BITS_4U | _PAGE_E_4U);
 
+#ifdef CONFIG_DEBUG_PAGEALLOC
+	kern_linear_pte_xor[0] = (_PAGE_VALID | _PAGE_SZBITS_4U) ^
+		0xfffff80000000000;
+#else
 	kern_linear_pte_xor[0] = (_PAGE_VALID | _PAGE_SZ4MB_4U) ^
 		0xfffff80000000000;
+#endif
 	kern_linear_pte_xor[0] |= (_PAGE_CP_4U | _PAGE_CV_4U |
 				   _PAGE_P_4U | _PAGE_W_4U);
 
@@ -1668,13 +1785,23 @@ static void __init sun4v_pgprot_init(void)
 	_PAGE_E = _PAGE_E_4V;
 	_PAGE_CACHE = _PAGE_CACHE_4V;
 
+#ifdef CONFIG_DEBUG_PAGEALLOC
+	kern_linear_pte_xor[0] = (_PAGE_VALID | _PAGE_SZBITS_4V) ^
+		0xfffff80000000000;
+#else
 	kern_linear_pte_xor[0] = (_PAGE_VALID | _PAGE_SZ4MB_4V) ^
 		0xfffff80000000000;
+#endif
 	kern_linear_pte_xor[0] |= (_PAGE_CP_4V | _PAGE_CV_4V |
 				   _PAGE_P_4V | _PAGE_W_4V);
 
+#ifdef CONFIG_DEBUG_PAGEALLOC
+	kern_linear_pte_xor[1] = (_PAGE_VALID | _PAGE_SZBITS_4V) ^
+		0xfffff80000000000;
+#else
 	kern_linear_pte_xor[1] = (_PAGE_VALID | _PAGE_SZ256MB_4V) ^
 		0xfffff80000000000;
+#endif
 	kern_linear_pte_xor[1] |= (_PAGE_CP_4V | _PAGE_CV_4V |
 				   _PAGE_P_4V | _PAGE_W_4V);
 

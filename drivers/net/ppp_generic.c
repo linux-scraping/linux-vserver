@@ -83,7 +83,7 @@ struct ppp_file {
 	int		dead;		/* unit/channel has been shut down */
 };
 
-#define PF_TO_X(pf, X)		((X *)((char *)(pf) - offsetof(X, file)))
+#define PF_TO_X(pf, X)		container_of(pf, X, file)
 
 #define PF_TO_PPP(pf)		PF_TO_X(pf, struct ppp)
 #define PF_TO_CHANNEL(pf)	PF_TO_X(pf, struct channel)
@@ -834,7 +834,7 @@ static int ppp_unattached_ioctl(struct ppp_file *pf, struct file *file,
 	return err;
 }
 
-static struct file_operations ppp_device_fops = {
+static const struct file_operations ppp_device_fops = {
 	.owner		= THIS_MODULE,
 	.read		= ppp_read,
 	.write		= ppp_write,
@@ -860,7 +860,7 @@ static int __init ppp_init(void)
 			err = PTR_ERR(ppp_class);
 			goto out_chrdev;
 		}
-		class_device_create(ppp_class, NULL, MKDEV(PPP_MAJOR, 0), NULL, "ppp");
+		device_create(ppp_class, NULL, MKDEV(PPP_MAJOR, 0), "ppp");
 	}
 
 out:
@@ -2544,6 +2544,9 @@ static void ppp_destroy_interface(struct ppp *ppp)
 	ppp->active_filter = NULL;
 #endif /* CONFIG_PPP_FILTER */
 
+	if (ppp->xmit_pending)
+		kfree_skb(ppp->xmit_pending);
+
 	kfree(ppp);
 }
 
@@ -2675,7 +2678,7 @@ static void __exit ppp_cleanup(void)
 	cardmap_destroy(&all_ppp_units);
 	if (unregister_chrdev(PPP_MAJOR, "ppp") != 0)
 		printk(KERN_ERR "PPP: failed to unregister PPP device\n");
-	class_device_destroy(ppp_class, MKDEV(PPP_MAJOR, 0));
+	device_destroy(ppp_class, MKDEV(PPP_MAJOR, 0));
 	class_destroy(ppp_class);
 }
 

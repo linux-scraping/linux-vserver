@@ -169,6 +169,11 @@ static ssize_t __attribute_used__ \
 	return count; \
 }
 
+
+/* Let's define all possible registers, we'll only hook up the ones
+ * that are implemented on the current processor
+ */
+
 SYSFS_PMCSETUP(mmcr0, SPRN_MMCR0);
 SYSFS_PMCSETUP(mmcr1, SPRN_MMCR1);
 SYSFS_PMCSETUP(mmcra, SPRN_MMCRA);
@@ -181,57 +186,98 @@ SYSFS_PMCSETUP(pmc6, SPRN_PMC6);
 SYSFS_PMCSETUP(pmc7, SPRN_PMC7);
 SYSFS_PMCSETUP(pmc8, SPRN_PMC8);
 SYSFS_PMCSETUP(purr, SPRN_PURR);
+SYSFS_PMCSETUP(spurr, SPRN_SPURR);
+SYSFS_PMCSETUP(dscr, SPRN_DSCR);
 
-static SYSDEV_ATTR(mmcr0, 0600, show_mmcr0, store_mmcr0);
-static SYSDEV_ATTR(mmcr1, 0600, show_mmcr1, store_mmcr1);
+SYSFS_PMCSETUP(pa6t_pmc0, PA6T_SPRN_PMC0);
+SYSFS_PMCSETUP(pa6t_pmc1, PA6T_SPRN_PMC1);
+SYSFS_PMCSETUP(pa6t_pmc2, PA6T_SPRN_PMC2);
+SYSFS_PMCSETUP(pa6t_pmc3, PA6T_SPRN_PMC3);
+SYSFS_PMCSETUP(pa6t_pmc4, PA6T_SPRN_PMC4);
+SYSFS_PMCSETUP(pa6t_pmc5, PA6T_SPRN_PMC5);
+
+
 static SYSDEV_ATTR(mmcra, 0600, show_mmcra, store_mmcra);
-static SYSDEV_ATTR(pmc1, 0600, show_pmc1, store_pmc1);
-static SYSDEV_ATTR(pmc2, 0600, show_pmc2, store_pmc2);
-static SYSDEV_ATTR(pmc3, 0600, show_pmc3, store_pmc3);
-static SYSDEV_ATTR(pmc4, 0600, show_pmc4, store_pmc4);
-static SYSDEV_ATTR(pmc5, 0600, show_pmc5, store_pmc5);
-static SYSDEV_ATTR(pmc6, 0600, show_pmc6, store_pmc6);
-static SYSDEV_ATTR(pmc7, 0600, show_pmc7, store_pmc7);
-static SYSDEV_ATTR(pmc8, 0600, show_pmc8, store_pmc8);
-static SYSDEV_ATTR(purr, 0600, show_purr, NULL);
+static SYSDEV_ATTR(spurr, 0600, show_spurr, NULL);
+static SYSDEV_ATTR(dscr, 0600, show_dscr, store_dscr);
+static SYSDEV_ATTR(purr, 0600, show_purr, store_purr);
+
+static struct sysdev_attribute ibm_common_attrs[] = {
+	_SYSDEV_ATTR(mmcr0, 0600, show_mmcr0, store_mmcr0),
+	_SYSDEV_ATTR(mmcr1, 0600, show_mmcr1, store_mmcr1),
+};
+
+static struct sysdev_attribute ibm_pmc_attrs[] = {
+	_SYSDEV_ATTR(pmc1, 0600, show_pmc1, store_pmc1),
+	_SYSDEV_ATTR(pmc2, 0600, show_pmc2, store_pmc2),
+	_SYSDEV_ATTR(pmc3, 0600, show_pmc3, store_pmc3),
+	_SYSDEV_ATTR(pmc4, 0600, show_pmc4, store_pmc4),
+	_SYSDEV_ATTR(pmc5, 0600, show_pmc5, store_pmc5),
+	_SYSDEV_ATTR(pmc6, 0600, show_pmc6, store_pmc6),
+	_SYSDEV_ATTR(pmc7, 0600, show_pmc7, store_pmc7),
+	_SYSDEV_ATTR(pmc8, 0600, show_pmc8, store_pmc8),
+};
+
+static struct sysdev_attribute pa6t_attrs[] = {
+	_SYSDEV_ATTR(mmcr0, 0600, show_mmcr0, store_mmcr0),
+	_SYSDEV_ATTR(mmcr1, 0600, show_mmcr1, store_mmcr1),
+	_SYSDEV_ATTR(pmc0, 0600, show_pa6t_pmc0, store_pa6t_pmc0),
+	_SYSDEV_ATTR(pmc1, 0600, show_pa6t_pmc1, store_pa6t_pmc1),
+	_SYSDEV_ATTR(pmc2, 0600, show_pa6t_pmc2, store_pa6t_pmc2),
+	_SYSDEV_ATTR(pmc3, 0600, show_pa6t_pmc3, store_pa6t_pmc3),
+	_SYSDEV_ATTR(pmc4, 0600, show_pa6t_pmc4, store_pa6t_pmc4),
+	_SYSDEV_ATTR(pmc5, 0600, show_pa6t_pmc5, store_pa6t_pmc5),
+};
+
 
 static void register_cpu_online(unsigned int cpu)
 {
 	struct cpu *c = &per_cpu(cpu_devices, cpu);
 	struct sys_device *s = &c->sysdev;
+	struct sysdev_attribute *attrs, *pmc_attrs;
+	int i, nattrs;
 
-#ifndef CONFIG_PPC_ISERIES
-	if (cpu_has_feature(CPU_FTR_SMT))
+	if (!firmware_has_feature(FW_FEATURE_ISERIES) &&
+			cpu_has_feature(CPU_FTR_SMT))
 		sysdev_create_file(s, &attr_smt_snooze_delay);
-#endif
 
 	/* PMC stuff */
+	switch (cur_cpu_spec->pmc_type) {
+	case PPC_PMC_IBM:
+		attrs = ibm_common_attrs;
+		nattrs = sizeof(ibm_common_attrs) / sizeof(struct sysdev_attribute);
+		pmc_attrs = ibm_pmc_attrs;
+		break;
+	case PPC_PMC_PA6T:
+		/* PA Semi starts counting at PMC0 */
+		attrs = pa6t_attrs;
+		nattrs = sizeof(pa6t_attrs) / sizeof(struct sysdev_attribute);
+		pmc_attrs = NULL;
+		break;
+	default:
+		attrs = NULL;
+		nattrs = 0;
+		pmc_attrs = NULL;
+	}
 
-	sysdev_create_file(s, &attr_mmcr0);
-	sysdev_create_file(s, &attr_mmcr1);
+	for (i = 0; i < nattrs; i++)
+		sysdev_create_file(s, &attrs[i]);
+
+	if (pmc_attrs)
+		for (i = 0; i < cur_cpu_spec->num_pmcs; i++)
+			sysdev_create_file(s, &pmc_attrs[i]);
 
 	if (cpu_has_feature(CPU_FTR_MMCRA))
 		sysdev_create_file(s, &attr_mmcra);
 
-	if (cur_cpu_spec->num_pmcs >= 1)
-		sysdev_create_file(s, &attr_pmc1);
-	if (cur_cpu_spec->num_pmcs >= 2)
-		sysdev_create_file(s, &attr_pmc2);
-	if (cur_cpu_spec->num_pmcs >= 3)
-		sysdev_create_file(s, &attr_pmc3);
-	if (cur_cpu_spec->num_pmcs >= 4)
-		sysdev_create_file(s, &attr_pmc4);
-	if (cur_cpu_spec->num_pmcs >= 5)
-		sysdev_create_file(s, &attr_pmc5);
-	if (cur_cpu_spec->num_pmcs >= 6)
-		sysdev_create_file(s, &attr_pmc6);
-	if (cur_cpu_spec->num_pmcs >= 7)
-		sysdev_create_file(s, &attr_pmc7);
-	if (cur_cpu_spec->num_pmcs >= 8)
-		sysdev_create_file(s, &attr_pmc8);
-
 	if (cpu_has_feature(CPU_FTR_PURR))
 		sysdev_create_file(s, &attr_purr);
+
+	if (cpu_has_feature(CPU_FTR_SPURR))
+		sysdev_create_file(s, &attr_spurr);
+
+	if (cpu_has_feature(CPU_FTR_DSCR))
+		sysdev_create_file(s, &attr_dscr);
 }
 
 #ifdef CONFIG_HOTPLUG_CPU
@@ -239,41 +285,52 @@ static void unregister_cpu_online(unsigned int cpu)
 {
 	struct cpu *c = &per_cpu(cpu_devices, cpu);
 	struct sys_device *s = &c->sysdev;
+	struct sysdev_attribute *attrs, *pmc_attrs;
+	int i, nattrs;
 
-	BUG_ON(c->no_control);
+	BUG_ON(!c->hotpluggable);
 
-#ifndef CONFIG_PPC_ISERIES
-	if (cpu_has_feature(CPU_FTR_SMT))
+	if (!firmware_has_feature(FW_FEATURE_ISERIES) &&
+			cpu_has_feature(CPU_FTR_SMT))
 		sysdev_remove_file(s, &attr_smt_snooze_delay);
-#endif
 
 	/* PMC stuff */
+	switch (cur_cpu_spec->pmc_type) {
+	case PPC_PMC_IBM:
+		attrs = ibm_common_attrs;
+		nattrs = sizeof(ibm_common_attrs) / sizeof(struct sysdev_attribute);
+		pmc_attrs = ibm_pmc_attrs;
+		break;
+	case PPC_PMC_PA6T:
+		/* PA Semi starts counting at PMC0 */
+		attrs = pa6t_attrs;
+		nattrs = sizeof(pa6t_attrs) / sizeof(struct sysdev_attribute);
+		pmc_attrs = NULL;
+		break;
+	default:
+		attrs = NULL;
+		nattrs = 0;
+		pmc_attrs = NULL;
+	}
 
-	sysdev_remove_file(s, &attr_mmcr0);
-	sysdev_remove_file(s, &attr_mmcr1);
+	for (i = 0; i < nattrs; i++)
+		sysdev_remove_file(s, &attrs[i]);
+
+	if (pmc_attrs)
+		for (i = 0; i < cur_cpu_spec->num_pmcs; i++)
+			sysdev_remove_file(s, &pmc_attrs[i]);
 
 	if (cpu_has_feature(CPU_FTR_MMCRA))
 		sysdev_remove_file(s, &attr_mmcra);
 
-	if (cur_cpu_spec->num_pmcs >= 1)
-		sysdev_remove_file(s, &attr_pmc1);
-	if (cur_cpu_spec->num_pmcs >= 2)
-		sysdev_remove_file(s, &attr_pmc2);
-	if (cur_cpu_spec->num_pmcs >= 3)
-		sysdev_remove_file(s, &attr_pmc3);
-	if (cur_cpu_spec->num_pmcs >= 4)
-		sysdev_remove_file(s, &attr_pmc4);
-	if (cur_cpu_spec->num_pmcs >= 5)
-		sysdev_remove_file(s, &attr_pmc5);
-	if (cur_cpu_spec->num_pmcs >= 6)
-		sysdev_remove_file(s, &attr_pmc6);
-	if (cur_cpu_spec->num_pmcs >= 7)
-		sysdev_remove_file(s, &attr_pmc7);
-	if (cur_cpu_spec->num_pmcs >= 8)
-		sysdev_remove_file(s, &attr_pmc8);
-
 	if (cpu_has_feature(CPU_FTR_PURR))
 		sysdev_remove_file(s, &attr_purr);
+
+	if (cpu_has_feature(CPU_FTR_SPURR))
+		sysdev_remove_file(s, &attr_spurr);
+
+	if (cpu_has_feature(CPU_FTR_DSCR))
+		sysdev_remove_file(s, &attr_dscr);
 }
 #endif /* CONFIG_HOTPLUG_CPU */
 
@@ -298,6 +355,72 @@ static int __cpuinit sysfs_cpu_notify(struct notifier_block *self,
 static struct notifier_block __cpuinitdata sysfs_cpu_nb = {
 	.notifier_call	= sysfs_cpu_notify,
 };
+
+static DEFINE_MUTEX(cpu_mutex);
+
+int cpu_add_sysdev_attr(struct sysdev_attribute *attr)
+{
+	int cpu;
+
+	mutex_lock(&cpu_mutex);
+
+	for_each_possible_cpu(cpu) {
+		sysdev_create_file(get_cpu_sysdev(cpu), attr);
+	}
+
+	mutex_unlock(&cpu_mutex);
+	return 0;
+}
+EXPORT_SYMBOL_GPL(cpu_add_sysdev_attr);
+
+int cpu_add_sysdev_attr_group(struct attribute_group *attrs)
+{
+	int cpu;
+	struct sys_device *sysdev;
+
+	mutex_lock(&cpu_mutex);
+
+	for_each_possible_cpu(cpu) {
+		sysdev = get_cpu_sysdev(cpu);
+		sysfs_create_group(&sysdev->kobj, attrs);
+	}
+
+	mutex_unlock(&cpu_mutex);
+	return 0;
+}
+EXPORT_SYMBOL_GPL(cpu_add_sysdev_attr_group);
+
+
+void cpu_remove_sysdev_attr(struct sysdev_attribute *attr)
+{
+	int cpu;
+
+	mutex_lock(&cpu_mutex);
+
+	for_each_possible_cpu(cpu) {
+		sysdev_remove_file(get_cpu_sysdev(cpu), attr);
+	}
+
+	mutex_unlock(&cpu_mutex);
+}
+EXPORT_SYMBOL_GPL(cpu_remove_sysdev_attr);
+
+void cpu_remove_sysdev_attr_group(struct attribute_group *attrs)
+{
+	int cpu;
+	struct sys_device *sysdev;
+
+	mutex_lock(&cpu_mutex);
+
+	for_each_possible_cpu(cpu) {
+		sysdev = get_cpu_sysdev(cpu);
+		sysfs_remove_group(&sysdev->kobj, attrs);
+	}
+
+	mutex_unlock(&cpu_mutex);
+}
+EXPORT_SYMBOL_GPL(cpu_remove_sysdev_attr_group);
+
 
 /* NUMA stuff */
 
@@ -360,10 +483,10 @@ static int __init topology_init(void)
 		 * CPU.  For instance, the boot cpu might never be valid
 		 * for hotplugging.
 		 */
-		if (!ppc_md.cpu_die)
-			c->no_control = 1;
+		if (ppc_md.cpu_die)
+			c->hotpluggable = 1;
 
-		if (cpu_online(cpu) || (c->no_control == 0)) {
+		if (cpu_online(cpu) || c->hotpluggable) {
 			register_cpu(c, cpu);
 
 			sysdev_create_file(&c->sysdev, &attr_physical_id);

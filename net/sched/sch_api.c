@@ -18,7 +18,6 @@
 #include <linux/module.h>
 #include <linux/types.h>
 #include <linux/kernel.h>
-#include <linux/sched.h>
 #include <linux/string.h>
 #include <linux/mm.h>
 #include <linux/socket.h>
@@ -191,19 +190,25 @@ int unregister_qdisc(struct Qdisc_ops *qops)
    (root qdisc, all its children, children of children etc.)
  */
 
+static struct Qdisc *__qdisc_lookup(struct net_device *dev, u32 handle)
+{
+	struct Qdisc *q;
+
+	list_for_each_entry(q, &dev->qdisc_list, list) {
+		if (q->handle == handle)
+			return q;
+	}
+	return NULL;
+}
+
 struct Qdisc *qdisc_lookup(struct net_device *dev, u32 handle)
 {
 	struct Qdisc *q;
 
 	read_lock(&qdisc_tree_lock);
-	list_for_each_entry(q, &dev->qdisc_list, list) {
-		if (q->handle == handle) {
-			read_unlock(&qdisc_tree_lock);
-			return q;
-		}
-	}
+	q = __qdisc_lookup(dev, handle);
 	read_unlock(&qdisc_tree_lock);
-	return NULL;
+	return q;
 }
 
 static struct Qdisc *qdisc_leaf(struct Qdisc *p, u32 classid)
@@ -348,6 +353,26 @@ dev_graft_qdisc(struct net_device *dev, struct Qdisc *qdisc)
 	return oqdisc;
 }
 
+void qdisc_tree_decrease_qlen(struct Qdisc *sch, unsigned int n)
+{
+	struct Qdisc_class_ops *cops;
+	unsigned long cl;
+	u32 parentid;
+
+	if (n == 0)
+		return;
+	while ((parentid = sch->parent)) {
+		sch = __qdisc_lookup(sch->dev, TC_H_MAJ(parentid));
+		cops = sch->ops->cl_ops;
+		if (cops->qlen_notify) {
+			cl = cops->get(sch, parentid);
+			cops->qlen_notify(sch, cl);
+			cops->put(sch, cl);
+		}
+		sch->q.qlen -= n;
+	}
+}
+EXPORT_SYMBOL(qdisc_tree_decrease_qlen);
 
 /* Graft qdisc "new" to class "classid" of qdisc "parent" or
    to device "dev".
@@ -363,7 +388,7 @@ static int qdisc_graft(struct net_device *dev, struct Qdisc *parent,
 	struct Qdisc *q = *old;
 
 
-	if (parent == NULL) { 
+	if (parent == NULL) {
 		if (q && q->flags&TCQ_F_INGRESS) {
 			*old = dev_graft_qdisc(dev, q);
 		} else {
@@ -570,7 +595,7 @@ static int tc_get_qdisc(struct sk_buff *skb, struct nlmsghdr *n, void *arg)
 				q = qdisc_leaf(p, clid);
 			} else { /* ingress */
 				q = dev->qdisc_ingress;
-                        }
+			}
 		} else {
 			q = dev->qdisc_sleeping;
 		}
@@ -717,7 +742,7 @@ create_n_graft:
 		return -ENOENT;
 	if (clid == TC_H_INGRESS)
 		q = qdisc_create(dev, tcm->tcm_parent, tca, &err);
-        else
+	else
 		q = qdisc_create(dev, tcm->tcm_handle, tca, &err);
 	if (q == NULL) {
 		if (err == -EAGAIN)
@@ -782,10 +807,10 @@ static int tc_fill_qdisc(struct sk_buff *skb, struct Qdisc *q, u32 clid,
 #endif
 	    gnet_stats_copy_queue(&d, &q->qstats) < 0)
 		goto rtattr_failure;
-	
+
 	if (gnet_stats_finish_copy(&d) < 0)
 		goto rtattr_failure;
-	
+
 	nlh->nlmsg_len = skb->tail - b;
 	return skb->len;
 
@@ -928,7 +953,7 @@ static int tc_ctl_tclass(struct sk_buff *skb, struct nlmsghdr *n, void *arg)
 	}
 
 	/* OK. Locate qdisc */
-	if ((q = qdisc_lookup(dev, qid)) == NULL) 
+	if ((q = qdisc_lookup(dev, qid)) == NULL)
 		return -ENOENT;
 
 	/* An check that it supports classes */
@@ -952,7 +977,7 @@ static int tc_ctl_tclass(struct sk_buff *skb, struct nlmsghdr *n, void *arg)
 			goto out;
 	} else {
 		switch (n->nlmsg_type) {
-		case RTM_NEWTCLASS:	
+		case RTM_NEWTCLASS:
 			err = -EEXIST;
 			if (n->nlmsg_flags&NLM_F_EXCL)
 				goto out;
@@ -1112,7 +1137,7 @@ int tc_classify(struct sk_buff *skb, struct tcf_proto *tp,
 	struct tcf_result *res)
 {
 	int err = 0;
-	u32 protocol = skb->protocol;
+	__be16 protocol = skb->protocol;
 #ifdef CONFIG_NET_CLS_ACT
 	struct tcf_proto *otp = tp;
 reclassify:
@@ -1136,7 +1161,7 @@ reclassify:
 				skb->tc_verd = SET_TC_VERD(skb->tc_verd,verd);
 				goto reclassify;
 			} else {
-				if (skb->tc_verd) 
+				if (skb->tc_verd)
 					skb->tc_verd = SET_TC_VERD(skb->tc_verd,0);
 				return err;
 			}
@@ -1168,13 +1193,13 @@ static int psched_open(struct inode *inode, struct file *file)
 	return single_open(file, psched_show, PDE(inode)->data);
 }
 
-static struct file_operations psched_fops = {
+static const struct file_operations psched_fops = {
 	.owner = THIS_MODULE,
 	.open = psched_open,
 	.read  = seq_read,
 	.llseek = seq_lseek,
 	.release = single_release,
-};	
+};
 #endif
 
 #ifdef CONFIG_NET_SCH_CLK_CPU
@@ -1277,7 +1302,6 @@ static int __init pktsched_init(void)
 
 subsys_initcall(pktsched_init);
 
-EXPORT_SYMBOL(qdisc_lookup);
 EXPORT_SYMBOL(qdisc_get_rtab);
 EXPORT_SYMBOL(qdisc_put_rtab);
 EXPORT_SYMBOL(register_qdisc);

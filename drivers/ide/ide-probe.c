@@ -31,8 +31,6 @@
  *			valid after probe time even with noprobe
  */
 
-#undef REALLY_SLOW_IO		/* most systems can safely undef this */
-
 #include <linux/module.h>
 #include <linux/types.h>
 #include <linux/string.h>
@@ -853,11 +851,11 @@ static void probe_hwif(ide_hwif_t *hwif)
 				 * things, if not checked and cleared.
 				 *   PARANOIA!!!
 				 */
-				hwif->ide_dma_off_quietly(drive);
+				hwif->dma_off_quietly(drive);
 #ifdef CONFIG_IDEDMA_ONLYDISK
 				if (drive->media == ide_disk)
 #endif
-					hwif->ide_dma_check(drive);
+					ide_set_dma(drive);
 			}
 		}
 	}
@@ -999,10 +997,6 @@ static int ide_init_queue(ide_drive_t *drive)
 
 	/* needs drive->queue to be set */
 	ide_toggle_bounce(drive, 1);
-
-	/* enable led activity for disk drives only */
-	if (drive->media == ide_disk && hwif->led_act)
-		blk_queue_activity_fn(q, hwif->led_act, drive);
 
 	return 0;
 }
@@ -1388,6 +1382,9 @@ static int hwif_init(ide_hwif_t *hwif)
 
 done:
 	init_gendisk(hwif);
+
+	ide_acpi_init(hwif);
+
 	hwif->present = 1;	/* success */
 	return 1;
 

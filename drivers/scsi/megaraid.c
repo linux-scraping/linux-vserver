@@ -73,10 +73,10 @@ static unsigned short int max_mbox_busy_wait = MBOX_BUSY_WAIT;
 module_param(max_mbox_busy_wait, ushort, 0);
 MODULE_PARM_DESC(max_mbox_busy_wait, "Maximum wait for mailbox in microseconds if busy (default=MBOX_BUSY_WAIT=10)");
 
-#define RDINDOOR(adapter)		readl((adapter)->base + 0x20)
-#define RDOUTDOOR(adapter)		readl((adapter)->base + 0x2C)
-#define WRINDOOR(adapter,value)		writel(value, (adapter)->base + 0x20)
-#define WROUTDOOR(adapter,value)	writel(value, (adapter)->base + 0x2C)
+#define RDINDOOR(adapter)	readl((adapter)->mmio_base + 0x20)
+#define RDOUTDOOR(adapter)	readl((adapter)->mmio_base + 0x2C)
+#define WRINDOOR(adapter,value)	 writel(value, (adapter)->mmio_base + 0x20)
+#define WROUTDOOR(adapter,value) writel(value, (adapter)->mmio_base + 0x2C)
 
 /*
  * Global variables
@@ -92,7 +92,7 @@ static struct mega_hbas mega_hbas[MAX_CONTROLLERS];
 /*
  * The File Operations structure for the serial/ioctl interface of the driver
  */
-static struct file_operations megadev_fops = {
+static const struct file_operations megadev_fops = {
 	.owner		= THIS_MODULE,
 	.ioctl		= megadev_ioctl,
 	.open		= megadev_open,
@@ -1386,7 +1386,8 @@ megaraid_isr_memmapped(int irq, void *devp)
 
 		handled = 1;
 
-		while( RDINDOOR(adapter) & 0x02 ) cpu_relax();
+		while( RDINDOOR(adapter) & 0x02 )
+			cpu_relax();
 
 		mega_cmd_done(adapter, completed, nstatus, status);
 
@@ -4668,6 +4669,8 @@ megaraid_probe_one(struct pci_dev *pdev, const struct pci_device_id *id)
 		host->host_no, mega_baseport, irq);
 
 	adapter->base = mega_baseport;
+	if (flag & BOARD_MEMMAP)
+		adapter->mmio_base = (void __iomem *) mega_baseport;
 
 	INIT_LIST_HEAD(&adapter->free_list);
 	INIT_LIST_HEAD(&adapter->pending_list);
@@ -5069,7 +5072,7 @@ static int __init megaraid_init(void)
 				"megaraid: failed to create megaraid root\n");
 	}
 #endif
-	error = pci_module_init(&megaraid_pci_driver);
+	error = pci_register_driver(&megaraid_pci_driver);
 	if (error) {
 #ifdef CONFIG_PROC_FS
 		remove_proc_entry("megaraid", &proc_root);

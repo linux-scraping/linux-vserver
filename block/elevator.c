@@ -51,6 +51,21 @@ static const int elv_hash_shift = 6;
 #define ELV_ON_HASH(rq)		(!hlist_unhashed(&(rq)->hash))
 
 /*
+ * Query io scheduler to see if the current process issuing bio may be
+ * merged with rq.
+ */
+static int elv_iosched_allow_merge(struct request *rq, struct bio *bio)
+{
+	request_queue_t *q = rq->q;
+	elevator_t *e = q->elevator;
+
+	if (e->ops->elevator_allow_merge_fn)
+		return e->ops->elevator_allow_merge_fn(q, rq, bio);
+
+	return 1;
+}
+
+/*
  * can we safely merge with this request?
  */
 inline int elv_rq_merge_ok(struct request *rq, struct bio *bio)
@@ -65,12 +80,15 @@ inline int elv_rq_merge_ok(struct request *rq, struct bio *bio)
 		return 0;
 
 	/*
-	 * same device and no special stuff set, merge is ok
+	 * must be same device and not a special request
 	 */
-	if (rq->rq_disk == bio->bi_bdev->bd_disk && !rq->special)
-		return 1;
+	if (rq->rq_disk != bio->bi_bdev->bd_disk || rq->special)
+		return 0;
 
-	return 0;
+	if (!elv_iosched_allow_merge(rq, bio))
+		return 0;
+
+	return 1;
 }
 EXPORT_SYMBOL(elv_rq_merge_ok);
 
@@ -129,7 +147,7 @@ static struct elevator_type *elevator_get(const char *name)
 
 static void *elevator_init_queue(request_queue_t *q, struct elevator_queue *eq)
 {
-	return eq->ops->elevator_init_fn(q, eq);
+	return eq->ops->elevator_init_fn(q);
 }
 
 static void elevator_attach(request_queue_t *q, struct elevator_queue *eq,
@@ -250,6 +268,22 @@ void elevator_exit(elevator_t *e)
 }
 
 EXPORT_SYMBOL(elevator_exit);
+
+static void elv_activate_rq(request_queue_t *q, struct request *rq)
+{
+	elevator_t *e = q->elevator;
+
+	if (e->ops->elevator_activate_req_fn)
+		e->ops->elevator_activate_req_fn(q, rq);
+}
+
+static void elv_deactivate_rq(request_queue_t *q, struct request *rq)
+{
+	elevator_t *e = q->elevator;
+
+	if (e->ops->elevator_deactivate_req_fn)
+		e->ops->elevator_deactivate_req_fn(q, rq);
+}
 
 static inline void __elv_rqhash_del(struct request *rq)
 {
@@ -379,6 +413,8 @@ void elv_dispatch_sort(request_queue_t *q, struct request *rq)
 	list_for_each_prev(entry, &q->queue_head) {
 		struct request *pos = list_entry_rq(entry);
 
+		if (rq_data_dir(rq) != rq_data_dir(pos))
+			break;
 		if (pos->cmd_flags & (REQ_SOFTBARRIER|REQ_HARDBARRIER|REQ_STARTED))
 			break;
 		if (rq->sector >= boundary) {
@@ -480,16 +516,14 @@ void elv_merge_requests(request_queue_t *q, struct request *rq,
 
 void elv_requeue_request(request_queue_t *q, struct request *rq)
 {
-	elevator_t *e = q->elevator;
-
 	/*
 	 * it already went through dequeue, we need to decrement the
 	 * in_flight count again
 	 */
 	if (blk_account_rq(rq)) {
 		q->in_flight--;
-		if (blk_sorted_rq(rq) && e->ops->elevator_deactivate_req_fn)
-			e->ops->elevator_deactivate_req_fn(q, rq);
+		if (blk_sorted_rq(rq))
+			elv_deactivate_rq(q, rq);
 	}
 
 	rq->cmd_flags &= ~REQ_STARTED;
@@ -572,6 +606,12 @@ void elv_insert(request_queue_t *q, struct request *rq, int where)
 		 */
 		rq->cmd_flags |= REQ_SOFTBARRIER;
 
+		/*
+		 * Most requeues happen because of a busy condition,
+		 * don't force unplug of the queue for that case.
+		 */
+		unplug_it = 0;
+
 		if (q->ordseq == 0) {
 			list_add(&rq->queuelist, &q->queue_head);
 			break;
@@ -586,11 +626,6 @@ void elv_insert(request_queue_t *q, struct request *rq, int where)
 		}
 
 		list_add_tail(&rq->queuelist, pos);
-		/*
-		 * most requeues happen because of a busy condition, don't
-		 * force unplug of the queue for that case.
-		 */
-		unplug_it = 0;
 		break;
 
 	default:
@@ -681,16 +716,13 @@ struct request *elv_next_request(request_queue_t *q)
 
 	while ((rq = __elv_next_request(q)) != NULL) {
 		if (!(rq->cmd_flags & REQ_STARTED)) {
-			elevator_t *e = q->elevator;
-
 			/*
 			 * This is the first time the device driver
 			 * sees this request (possibly after
 			 * requeueing).  Notify IO scheduler.
 			 */
-			if (blk_sorted_rq(rq) &&
-			    e->ops->elevator_activate_req_fn)
-				e->ops->elevator_activate_req_fn(q, rq);
+			if (blk_sorted_rq(rq))
+				elv_activate_rq(q, rq);
 
 			/*
 			 * just mark as started even if we don't start
@@ -810,7 +842,7 @@ void elv_put_request(request_queue_t *q, struct request *rq)
 	elevator_t *e = q->elevator;
 
 	if (e->ops->elevator_put_req_fn)
-		e->ops->elevator_put_req_fn(q, rq);
+		e->ops->elevator_put_req_fn(rq);
 }
 
 int elv_may_queue(request_queue_t *q, int rw)
@@ -932,17 +964,18 @@ void elv_unregister_queue(struct request_queue *q)
 
 int elv_register(struct elevator_type *e)
 {
+	char *def = "";
 	spin_lock_irq(&elv_list_lock);
 	BUG_ON(elevator_find(e->elevator_name));
 	list_add_tail(&e->list, &elv_list);
 	spin_unlock_irq(&elv_list_lock);
 
-	printk(KERN_INFO "io scheduler %s registered", e->elevator_name);
 	if (!strcmp(e->elevator_name, chosen_elevator) ||
 			(!*chosen_elevator &&
 			 !strcmp(e->elevator_name, CONFIG_DEFAULT_IOSCHED)))
-				printk(" (default)");
-	printk("\n");
+				def = " (default)";
+
+	printk(KERN_INFO "io scheduler %s registered%s\n", e->elevator_name, def);
 	return 0;
 }
 EXPORT_SYMBOL_GPL(elv_register);

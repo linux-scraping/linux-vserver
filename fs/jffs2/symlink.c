@@ -20,7 +20,7 @@
 
 static void *jffs2_follow_link(struct dentry *dentry, struct nameidata *nd);
 
-struct inode_operations jffs2_symlink_inode_operations =
+const struct inode_operations jffs2_symlink_inode_operations =
 {
 	.readlink =	generic_readlink,
 	.follow_link =	jffs2_follow_link,
@@ -51,7 +51,7 @@ static void *jffs2_follow_link(struct dentry *dentry, struct nameidata *nd)
 	 */
 
 	if (!p) {
-		printk(KERN_ERR "jffs2_follow_link(): can't find symlink taerget\n");
+		printk(KERN_ERR "jffs2_follow_link(): can't find symlink target\n");
 		p = ERR_PTR(-EIO);
 	}
 	D1(printk(KERN_DEBUG "jffs2_follow_link(): target path is '%s'\n", (char *) f->target));

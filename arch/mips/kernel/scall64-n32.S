@@ -149,8 +149,8 @@ EXPORT(sysn32_call_table)
 	PTR	sys_mincore
 	PTR	sys_madvise
 	PTR	sys_shmget
-	PTR	sys32_shmat
-	PTR	sys_shmctl			/* 6030 */
+	PTR	sys_shmat
+	PTR	compat_sys_shmctl			/* 6030 */
 	PTR	sys_dup
 	PTR	sys_dup2
 	PTR	sys_pause
@@ -184,12 +184,12 @@ EXPORT(sysn32_call_table)
 	PTR	sys32_newuname
 	PTR	sys_semget
 	PTR	sys_semop
-	PTR	sys_semctl
+	PTR	sysn32_semctl
 	PTR	sys_shmdt			/* 6065 */
 	PTR	sys_msgget
-	PTR	sys_msgsnd
-	PTR	sys_msgrcv
-	PTR	sys_msgctl
+	PTR	sysn32_msgsnd
+	PTR	sysn32_msgrcv
+	PTR	compat_sys_msgctl
 	PTR	compat_sys_fcntl		/* 6070 */
 	PTR	sys_flock
 	PTR	sys_fsync
@@ -217,7 +217,7 @@ EXPORT(sysn32_call_table)
 	PTR	sys32_gettimeofday
 	PTR	compat_sys_getrlimit		/* 6095 */
 	PTR	compat_sys_getrusage
-	PTR	sys32_sysinfo
+	PTR	compat_sys_sysinfo
 	PTR	compat_sys_times
 	PTR	sys32_ptrace
 	PTR	sys_getuid			/* 6100 */
@@ -335,12 +335,12 @@ EXPORT(sysn32_call_table)
 	PTR	compat_sys_fcntl64
 	PTR	sys_set_tid_address
 	PTR	sys_restart_syscall
-	PTR	sys_semtimedop			/* 6215 */
+	PTR	compat_sys_semtimedop			/* 6215 */
 	PTR	sys_fadvise64_64
 	PTR	compat_sys_statfs64
 	PTR	compat_sys_fstatfs64
 	PTR	sys_sendfile64
-	PTR	sys32_timer_create		/* 6220 */
+	PTR	compat_sys_timer_create		/* 6220 */
 	PTR	compat_sys_timer_settime
 	PTR	compat_sys_timer_gettime
 	PTR	sys_timer_getoverrun
@@ -361,7 +361,7 @@ EXPORT(sysn32_call_table)
 	PTR	compat_sys_mq_notify
 	PTR	compat_sys_mq_getsetattr
 	PTR	sys32_vserver			/* 6240 */
-	PTR	sysn32_waitid
+	PTR	compat_sys_waitid
 	PTR	sys_ni_syscall			/* available, was setaltroot */
 	PTR	sys_add_key
 	PTR	sys_request_key
@@ -384,7 +384,7 @@ EXPORT(sysn32_call_table)
 	PTR	sys_readlinkat
 	PTR	sys_fchmodat
 	PTR	sys_faccessat
-	PTR	sys_pselect6
+	PTR	compat_sys_pselect6
 	PTR	sys_ppoll			/* 6265 */
 	PTR	sys_unshare
 	PTR	sys_splice
@@ -394,6 +394,9 @@ EXPORT(sysn32_call_table)
 	PTR	sys_move_pages
 	PTR	compat_sys_set_robust_list
 	PTR	compat_sys_get_robust_list
-	PTR	sys_ni_syscall
-	PTR	sys_getcpu
-	PTR	sys_epoll_pwait
+	PTR	compat_sys_kexec_load
+	PTR	sys_getcpu			/* 6275 */
+	PTR	compat_sys_epoll_pwait
+	PTR	sys_ioprio_set
+	PTR	sys_ioprio_get
+	.size	sysn32_call_table,.-sysn32_call_table

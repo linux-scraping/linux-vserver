@@ -49,7 +49,7 @@ struct configfs_dirent {
 #define CONFIGFS_NOT_PINNED	(CONFIGFS_ITEM_ATTR)
 
 extern struct vfsmount * configfs_mount;
-extern kmem_cache_t *configfs_dir_cachep;
+extern struct kmem_cache *configfs_dir_cachep;
 
 extern int configfs_is_root(struct config_item *item);
 
@@ -75,8 +75,8 @@ extern struct super_block * configfs_sb;
 extern const struct file_operations configfs_dir_operations;
 extern const struct file_operations configfs_file_operations;
 extern const struct file_operations bin_fops;
-extern struct inode_operations configfs_dir_inode_operations;
-extern struct inode_operations configfs_symlink_inode_operations;
+extern const struct inode_operations configfs_dir_inode_operations;
+extern const struct inode_operations configfs_symlink_inode_operations;
 
 extern int configfs_symlink(struct inode *dir, struct dentry *dentry,
 			    const char *symname);

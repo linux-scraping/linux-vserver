@@ -67,7 +67,7 @@ const char * const medianame[32] = {
 
 /* Set the copy breakpoint for the copy-only-tiny-buffer Rx structure. */
 #if defined(__alpha__) || defined(__arm__) || defined(__hppa__) \
-	|| defined(__sparc_) || defined(__ia64__) \
+	|| defined(__sparc__) || defined(__ia64__) \
 	|| defined(__sh__) || defined(__mips__)
 static int rx_copybreak = 1518;
 #else
@@ -1367,6 +1367,7 @@ static int __devinit tulip_init_one (struct pci_dev *pdev,
 	 * it is zeroed and aligned in alloc_etherdev
 	 */
 	tp = netdev_priv(dev);
+	tp->dev = dev;
 
 	tp->rx_ring = pci_alloc_consistent(pdev,
 					   sizeof(struct tulip_rx_desc) * RX_RING_SIZE +
@@ -1389,7 +1390,7 @@ static int __devinit tulip_init_one (struct pci_dev *pdev,
 	tp->timer.data = (unsigned long)dev;
 	tp->timer.function = tulip_tbl[tp->chip_id].media_timer;
 
-	INIT_WORK(&tp->media_work, tulip_tbl[tp->chip_id].media_task, dev);
+	INIT_WORK(&tp->media_work, tulip_tbl[tp->chip_id].media_task);
 
 	dev->base_addr = (unsigned long)ioaddr;
 

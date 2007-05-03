@@ -31,7 +31,9 @@
 #include <media/video-buf.h>
 #include <media/cx2341x.h>
 #include <media/audiochip.h>
+#if defined(CONFIG_VIDEO_BUF_DVB) || defined(CONFIG_VIDEO_BUF_DVB_MODULE)
 #include <media/video-buf-dvb.h>
+#endif
 
 #include "btcx-risc.h"
 #include "cx88-reg.h"
@@ -49,6 +51,13 @@
 
 /* ----------------------------------------------------------- */
 /* defines and enums                                           */
+
+/* Currently unsupported by the driver: PAL/H, NTSC/Kr, SECAM B/G/H/LC */
+#define CX88_NORMS (\
+	V4L2_STD_NTSC_M|  V4L2_STD_NTSC_M_JP|  V4L2_STD_NTSC_443 | \
+	V4L2_STD_PAL_BG|  V4L2_STD_PAL_DK   |  V4L2_STD_PAL_I    | \
+	V4L2_STD_PAL_M |  V4L2_STD_PAL_N    |  V4L2_STD_PAL_Nc   | \
+	V4L2_STD_PAL_60|  V4L2_STD_SECAM_L  |  V4L2_STD_SECAM_DK )
 
 #define FORMAT_FLAGS_PACKED       0x01
 #define FORMAT_FLAGS_PLANAR       0x02
@@ -74,25 +83,23 @@ enum cx88_board_type {
 	CX88_MPEG_BLACKBIRD
 };
 
+enum cx8802_board_access {
+	CX8802_DRVCTL_SHARED    = 1,
+	CX8802_DRVCTL_EXCLUSIVE = 2,
+};
+
 /* ----------------------------------------------------------- */
 /* tv norms                                                    */
 
-struct cx88_tvnorm {
-	char                   *name;
-	v4l2_std_id            id;
-	u32                    cxiformat;
-	u32                    cxoformat;
-};
-
-static unsigned int inline norm_maxw(struct cx88_tvnorm *norm)
+static unsigned int inline norm_maxw(v4l2_std_id norm)
 {
-	return (norm->id & V4L2_STD_625_50) ? 768 : 640;
+	return (norm & (V4L2_STD_MN & ~V4L2_STD_PAL_Nc)) ? 720 : 768;
 }
 
 
-static unsigned int inline norm_maxh(struct cx88_tvnorm *norm)
+static unsigned int inline norm_maxh(v4l2_std_id norm)
 {
-	return (norm->id & V4L2_STD_625_50) ? 576 : 480;
+	return (norm & V4L2_STD_625_50) ? 576 : 480;
 }
 
 /* ----------------------------------------------------------- */
@@ -220,6 +227,7 @@ struct cx88_input {
 	enum cx88_itype type;
 	unsigned int    vmux;
 	u32             gpio0, gpio1, gpio2, gpio3;
+	unsigned int    extadc:1;
 };
 
 struct cx88_board {
@@ -307,13 +315,15 @@ struct cx88_core {
 	unsigned int               tuner_formats;
 
 	/* config info -- dvb */
+#if defined(CONFIG_VIDEO_BUF_DVB) || defined(CONFIG_VIDEO_BUF_DVB_MODULE)
 	struct dvb_pll_desc        *pll_desc;
 	unsigned int               pll_addr;
 	int 			   (*prev_set_voltage)(struct dvb_frontend* fe, fe_sec_voltage_t voltage);
+#endif
 
 	/* state info */
 	struct task_struct         *kthread;
-	struct cx88_tvnorm         *tvnorm;
+	v4l2_std_id                tvnorm;
 	u32                        tvaudio;
 	u32                        audiomode_manual;
 	u32                        audiomode_current;
@@ -330,6 +340,7 @@ struct cx88_core {
 
 	/* cx88-video needs to access cx8802 for hybrid tuner pll access. */
 	struct cx8802_dev          *dvbdev;
+	enum cx88_board_type       active_type_id;
 };
 
 struct cx8800_dev;
@@ -405,6 +416,31 @@ struct cx8802_suspend_state {
 	int                        disabled;
 };
 
+struct cx8802_driver {
+	struct cx88_core *core;
+	struct list_head devlist;
+
+	/* Type of driver and access required */
+	enum cx88_board_type type_id;
+	enum cx8802_board_access hw_access;
+
+	/* MPEG 8802 internal only */
+	int (*suspend)(struct pci_dev *pci_dev, pm_message_t state);
+	int (*resume)(struct pci_dev *pci_dev);
+
+	/* MPEG 8802 -> mini driver - Driver probe and configuration */
+	int (*probe)(struct cx8802_driver *drv);
+	int (*remove)(struct cx8802_driver *drv);
+
+	/* MPEG 8802 -> mini driver - Access for hardware control */
+	int (*advise_acquire)(struct cx8802_driver *drv);
+	int (*advise_release)(struct cx8802_driver *drv);
+
+	/* MPEG 8802 <- mini driver - Access for hardware control */
+	int (*request_acquire)(struct cx8802_driver *drv);
+	int (*request_release)(struct cx8802_driver *drv);
+};
+
 struct cx8802_dev {
 	struct cx88_core           *core;
 	spinlock_t                 slock;
@@ -427,18 +463,24 @@ struct cx8802_dev {
 	u32                        mailbox;
 	int                        width;
 	int                        height;
+	int                        fw_size;
 
+#if defined(CONFIG_VIDEO_BUF_DVB) || defined(CONFIG_VIDEO_BUF_DVB_MODULE)
 	/* for dvb only */
 	struct videobuf_dvb        dvb;
 	void*                      fe_handle;
 	int                        (*fe_release)(void *handle);
 
 	void			   *card_priv;
+#endif
 	/* for switching modulation types */
 	unsigned char              ts_gen_cntrl;
 
 	/* mpeg params */
 	struct cx2341x_mpeg_params params;
+
+	/* List of attached drivers */
+	struct cx8802_driver       drvlist;
 };
 
 /* ----------------------------------------------------------- */
@@ -501,7 +543,7 @@ extern void cx88_sram_channel_dump(struct cx88_core *core,
 
 extern int cx88_set_scale(struct cx88_core *core, unsigned int width,
 			  unsigned int height, enum v4l2_field field);
-extern int cx88_set_tvnorm(struct cx88_core *core, struct cx88_tvnorm *norm);
+extern int cx88_set_tvnorm(struct cx88_core *core, v4l2_std_id norm);
 
 extern struct video_device *cx88_vdev_init(struct cx88_core *core,
 					   struct pci_dev *pci,
@@ -518,7 +560,10 @@ extern int cx88_stop_audio_dma(struct cx88_core *core);
 /* ----------------------------------------------------------- */
 /* cx88-vbi.c                                                  */
 
-void cx8800_vbi_fmt(struct cx8800_dev *dev, struct v4l2_format *f);
+/* Can be used as g_vbi_fmt, try_vbi_fmt and s_vbi_fmt */
+int cx8800_vbi_fmt (struct file *file, void *priv,
+					struct v4l2_format *f);
+
 /*
 int cx8800_start_vbi_dma(struct cx8800_dev    *dev,
 			 struct cx88_dmaqueue *q,
@@ -571,6 +616,11 @@ void cx88_get_stereo(struct cx88_core *core, struct v4l2_tuner *t);
 void cx88_set_stereo(struct cx88_core *core, u32 mode, int manual);
 int cx88_audio_thread(void *data);
 
+int cx8802_register_driver(struct cx8802_driver *drv);
+int cx8802_unregister_driver(struct cx8802_driver *drv);
+struct cx8802_dev * cx8802_get_device(struct inode *inode);
+struct cx8802_driver * cx8802_get_driver(struct cx8802_dev *dev, enum cx88_board_type btype);
+
 /* ----------------------------------------------------------- */
 /* cx88-input.c                                                */
 
@@ -593,12 +643,14 @@ int cx8802_suspend_common(struct pci_dev *pci_dev, pm_message_t state);
 int cx8802_resume_common(struct pci_dev *pci_dev);
 
 /* ----------------------------------------------------------- */
-/* cx88-video.c                                                */
-extern int cx88_do_ioctl(struct inode *inode, struct file *file, int radio,
-				struct cx88_core *core, unsigned int cmd,
-				void *arg, v4l2_kioctl driver_ioctl);
+/* cx88-video.c*/
 extern const u32 cx88_user_ctrls[];
 extern int cx8800_ctrl_query(struct v4l2_queryctrl *qctrl);
+int cx88_enum_input (struct cx88_core  *core,struct v4l2_input *i);
+int cx88_set_freq (struct cx88_core  *core,struct v4l2_frequency *f);
+int cx88_get_control(struct cx88_core *core, struct v4l2_control *ctl);
+int cx88_set_control(struct cx88_core *core, struct v4l2_control *ctl);
+int cx88_video_mux(struct cx88_core *core, unsigned int input);
 
 /*
  * Local variables:

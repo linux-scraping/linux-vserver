@@ -33,14 +33,14 @@ static loff_t proc_file_lseek(struct file *, loff_t, int);
 
 DEFINE_SPINLOCK(proc_subdir_lock);
 
-int proc_match(int len, const char *name, struct proc_dir_entry *de)
+static int proc_match(int len, const char *name, struct proc_dir_entry *de)
 {
 	if (de->namelen != len)
 		return 0;
 	return !memcmp(name, de->name, len);
 }
 
-static struct file_operations proc_file_operations = {
+static const struct file_operations proc_file_operations = {
 	.llseek		= proc_file_lseek,
 	.read		= proc_file_read,
 	.write		= proc_file_write,
@@ -53,7 +53,7 @@ static ssize_t
 proc_file_read(struct file *file, char __user *buf, size_t nbytes,
 	       loff_t *ppos)
 {
-	struct inode * inode = file->f_dentry->d_inode;
+	struct inode * inode = file->f_path.dentry->d_inode;
 	char 	*page;
 	ssize_t	retval=0;
 	int	eof=0;
@@ -204,7 +204,7 @@ static ssize_t
 proc_file_write(struct file *file, const char __user *buffer,
 		size_t count, loff_t *ppos)
 {
-	struct inode *inode = file->f_dentry->d_inode;
+	struct inode *inode = file->f_path.dentry->d_inode;
 	struct proc_dir_entry * dp;
 	
 	dp = PDE(inode);
@@ -266,7 +266,7 @@ static int proc_getattr(struct vfsmount *mnt, struct dentry *dentry,
 	return 0;
 }
 
-static struct inode_operations proc_file_inode_operations = {
+static const struct inode_operations proc_file_inode_operations = {
 	.setattr	= proc_notify_change,
 };
 
@@ -358,7 +358,7 @@ static void *proc_follow_link(struct dentry *dentry, struct nameidata *nd)
 	return NULL;
 }
 
-static struct inode_operations proc_link_inode_operations = {
+static const struct inode_operations proc_link_inode_operations = {
 	.readlink	= generic_readlink,
 	.follow_link	= proc_follow_link,
 };
@@ -437,7 +437,7 @@ int proc_readdir(struct file * filp,
 	struct proc_dir_entry * de;
 	unsigned int ino;
 	int i;
-	struct inode *inode = filp->f_dentry->d_inode;
+	struct inode *inode = filp->f_path.dentry->d_inode;
 	int ret = 0;
 
 	lock_kernel();
@@ -458,7 +458,7 @@ int proc_readdir(struct file * filp,
 			/* fall through */
 		case 1:
 			if (filldir(dirent, "..", 2, i,
-				    parent_ino(filp->f_dentry),
+				    parent_ino(filp->f_path.dentry),
 				    DT_DIR) < 0)
 				goto out;
 			i++;
@@ -505,7 +505,7 @@ out:	unlock_kernel();
  * use the in-memory "struct proc_dir_entry" tree to parse
  * the /proc directory.
  */
-static struct file_operations proc_dir_operations = {
+static const struct file_operations proc_dir_operations = {
 	.read			= generic_read_dir,
 	.readdir		= proc_readdir,
 };
@@ -513,7 +513,7 @@ static struct file_operations proc_dir_operations = {
 /*
  * proc directories can do almost nothing..
  */
-static struct inode_operations proc_dir_inode_operations = {
+static const struct inode_operations proc_dir_inode_operations = {
 	.lookup		= proc_lookup,
 	.getattr	= proc_getattr,
 	.setattr	= proc_notify_change,
@@ -566,7 +566,7 @@ static void proc_kill_inodes(struct proc_dir_entry *de)
 	file_list_lock();
 	list_for_each(p, &sb->s_files) {
 		struct file * filp = list_entry(p, struct file, f_u.fu_list);
-		struct dentry * dentry = filp->f_dentry;
+		struct dentry * dentry = filp->f_path.dentry;
 		struct inode * inode;
 		const struct file_operations *fops;
 

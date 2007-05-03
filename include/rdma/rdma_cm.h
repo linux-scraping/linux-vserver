@@ -52,10 +52,13 @@ enum rdma_cm_event_type {
 	RDMA_CM_EVENT_ESTABLISHED,
 	RDMA_CM_EVENT_DISCONNECTED,
 	RDMA_CM_EVENT_DEVICE_REMOVAL,
+	RDMA_CM_EVENT_MULTICAST_JOIN,
+	RDMA_CM_EVENT_MULTICAST_ERROR
 };
 
 enum rdma_port_space {
 	RDMA_PS_SDP  = 0x0001,
+	RDMA_PS_IPOIB= 0x0002,
 	RDMA_PS_TCP  = 0x0106,
 	RDMA_PS_UDP  = 0x0111,
 	RDMA_PS_SCTP = 0x0183
@@ -77,11 +80,34 @@ struct rdma_route {
 	int num_paths;
 };
 
+struct rdma_conn_param {
+	const void *private_data;
+	u8 private_data_len;
+	u8 responder_resources;
+	u8 initiator_depth;
+	u8 flow_control;
+	u8 retry_count;		/* ignored when accepting */
+	u8 rnr_retry_count;
+	/* Fields below ignored if a QP is created on the rdma_cm_id. */
+	u8 srq;
+	u32 qp_num;
+};
+
+struct rdma_ud_param {
+	const void *private_data;
+	u8 private_data_len;
+	struct ib_ah_attr ah_attr;
+	u32 qp_num;
+	u32 qkey;
+};
+
 struct rdma_cm_event {
 	enum rdma_cm_event_type	 event;
 	int			 status;
-	void			*private_data;
-	u8			 private_data_len;
+	union {
+		struct rdma_conn_param	conn;
+		struct rdma_ud_param	ud;
+	} param;
 };
 
 struct rdma_cm_id;
@@ -204,25 +230,17 @@ void rdma_destroy_qp(struct rdma_cm_id *id);
 int rdma_init_qp_attr(struct rdma_cm_id *id, struct ib_qp_attr *qp_attr,
 		       int *qp_attr_mask);
 
-struct rdma_conn_param {
-	const void *private_data;
-	u8 private_data_len;
-	u8 responder_resources;
-	u8 initiator_depth;
-	u8 flow_control;
-	u8 retry_count;		/* ignored when accepting */
-	u8 rnr_retry_count;
-	/* Fields below ignored if a QP is created on the rdma_cm_id. */
-	u8 srq;
-	u32 qp_num;
-	enum ib_qp_type qp_type;
-};
-
 /**
  * rdma_connect - Initiate an active connection request.
+ * @id: Connection identifier to connect.
+ * @conn_param: Connection information used for connected QPs.
  *
  * Users must have resolved a route for the rdma_cm_id to connect with
  * by having called rdma_resolve_route before calling this routine.
+ *
+ * This call will either connect to a remote QP or obtain remote QP
+ * information for unconnected rdma_cm_id's.  The actual operation is
+ * based on the rdma_cm_id's port space.
  */
 int rdma_connect(struct rdma_cm_id *id, struct rdma_conn_param *conn_param);
 
@@ -253,6 +271,21 @@ int rdma_listen(struct rdma_cm_id *id, int backlog);
 int rdma_accept(struct rdma_cm_id *id, struct rdma_conn_param *conn_param);
 
 /**
+ * rdma_notify - Notifies the RDMA CM of an asynchronous event that has
+ * occurred on the connection.
+ * @id: Connection identifier to transition to established.
+ * @event: Asynchronous event.
+ *
+ * This routine should be invoked by users to notify the CM of relevant
+ * communication events.  Events that should be reported to the CM and
+ * when to report them are:
+ *
+ * IB_EVENT_COMM_EST - Used when a message is received on a connected
+ *    QP before an RTU has been received.
+ */
+int rdma_notify(struct rdma_cm_id *id, enum ib_event_type event);
+
+/**
  * rdma_reject - Called to reject a connection request or response.
  */
 int rdma_reject(struct rdma_cm_id *id, const void *private_data,
@@ -264,5 +297,21 @@ int rdma_reject(struct rdma_cm_id *id, const void *private_data,
  */
 int rdma_disconnect(struct rdma_cm_id *id);
 
-#endif /* RDMA_CM_H */
+/**
+ * rdma_join_multicast - Join the multicast group specified by the given
+ *   address.
+ * @id: Communication identifier associated with the request.
+ * @addr: Multicast address identifying the group to join.
+ * @context: User-defined context associated with the join request, returned
+ * to the user through the private_data pointer in multicast events.
+ */
+int rdma_join_multicast(struct rdma_cm_id *id, struct sockaddr *addr,
+			void *context);
 
+/**
+ * rdma_leave_multicast - Leave the multicast group specified by the given
+ *   address.
+ */
+void rdma_leave_multicast(struct rdma_cm_id *id, struct sockaddr *addr);
+
+#endif /* RDMA_CM_H */

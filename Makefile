@@ -1,8 +1,8 @@
 VERSION = 2
 PATCHLEVEL = 6
-SUBLEVEL = 19
-EXTRAVERSION = -vs2.2.0-rc4
-NAME=Avast! A bilge rat!
+SUBLEVEL = 21
+EXTRAVERSION = -vs2.2.0-rc1
+NAME = Nocturnal Monster Puppy
 
 # *DOCUMENTATION*
 # To see a list of typical targets execute "make help"
@@ -10,8 +10,11 @@ NAME=Avast! A bilge rat!
 # Comments in this file are targeted only to the developer, do not
 # expect to learn how to build the kernel reading this file.
 
-# Do not print "Entering directory ..."
-MAKEFLAGS += --no-print-directory
+# Do not:
+# o  use make's built-in rules and variables
+#    (this increases performance and avoid hard-to-debug behavour);
+# o  print "Entering directory ...";
+MAKEFLAGS += -rR --no-print-directory
 
 # We are using a recursive build, so we need to do a little thinking
 # to get the ordering right.
@@ -271,12 +274,8 @@ export quiet Q KBUILD_VERBOSE
 # Look for make include files relative to root of kernel src
 MAKEFLAGS += --include-dir=$(srctree)
 
-# We need some generic definitions
-include  $(srctree)/scripts/Kbuild.include
-
-# Do not use make's built-in rules and variables
-# This increases performance and avoid hard-to-debug behavour
-MAKEFLAGS += -rR
+# We need some generic definitions.
+include $(srctree)/scripts/Kbuild.include
 
 # Make variables (CC, etc...)
 
@@ -495,11 +494,6 @@ ifdef CONFIG_FRAME_POINTER
 CFLAGS		+= -fno-omit-frame-pointer $(call cc-option,-fno-optimize-sibling-calls,)
 else
 CFLAGS		+= -fomit-frame-pointer
-endif
-
-ifdef CONFIG_UNWIND_INFO
-CFLAGS		+= -fasynchronous-unwind-tables
-LDFLAGS_vmlinux	+= --eh-frame-hdr
 endif
 
 ifdef CONFIG_DEBUG_INFO
@@ -782,7 +776,7 @@ $(vmlinux-dirs): prepare scripts
 #	  $(EXTRAVERSION)		eg, -rc6
 #	$(localver-full)
 #	  $(localver)
-#	    localversion*		(all localversion* files)
+#	    localversion*		(files without backups, containing '~')
 #	    $(CONFIG_LOCALVERSION)	(from kernel config setting)
 #	  $(localver-auto)		(only if CONFIG_LOCALVERSION_AUTO is set)
 #	    ./scripts/setlocalversion	(SCM tag, if one exists)
@@ -793,17 +787,12 @@ $(vmlinux-dirs): prepare scripts
 # moment, only git is supported but other SCMs can edit the script
 # scripts/setlocalversion and add the appropriate checks as needed.
 
-nullstring :=
-space      := $(nullstring) # end of line
+pattern = ".*/localversion[^~]*"
+string  = $(shell cat /dev/null \
+	   `find $(objtree) $(srctree) -maxdepth 1 -regex $(pattern) | sort -u`)
 
-___localver = $(objtree)/localversion* $(srctree)/localversion*
-__localver  = $(sort $(wildcard $(___localver)))
-# skip backup files (containing '~')
-_localver = $(foreach f, $(__localver), $(if $(findstring ~, $(f)),,$(f)))
-
-localver = $(subst $(space),, \
-	   $(shell cat /dev/null $(_localver)) \
-	   $(patsubst "%",%,$(CONFIG_LOCALVERSION)))
+localver = $(subst $(space),, $(string) \
+			      $(patsubst "%",%,$(CONFIG_LOCALVERSION)))
 
 # If CONFIG_LOCALVERSION_AUTO is set scripts/setlocalversion is called
 # and if the SCM is know a tag from the SCM is appended.
@@ -835,9 +824,6 @@ include/config/kernel.release: include/config/auto.conf FORCE
 
 # Listed in dependency order
 PHONY += prepare archprepare prepare0 prepare1 prepare2 prepare3
-
-# prepare-all is deprecated, use prepare as valid replacement
-PHONY += prepare-all
 
 # prepare3 is used to check if we are building in a separate output directory,
 # and if so do:
@@ -871,7 +857,7 @@ prepare0: archprepare FORCE
 	$(Q)$(MAKE) $(build)=.
 
 # All the preparing..
-prepare prepare-all: prepare0
+prepare: prepare0
 
 # Leave this as default for preprocessing vmlinux.lds.S, which is now
 # done in arch/$(ARCH)/kernel/Makefile
@@ -941,6 +927,12 @@ headers_install: include/linux/version.h scripts_basic FORCE
 	  exit 1 ; fi
 	$(Q)$(MAKE) $(build)=scripts scripts/unifdef
 	$(Q)$(MAKE) -f $(srctree)/scripts/Makefile.headersinst obj=include
+
+PHONY += headers_check_all
+headers_check_all: headers_install_all
+	$(Q)for arch in $(HDRARCHES); do \
+	 $(MAKE) ARCH=$$arch -f $(srctree)/scripts/Makefile.headersinst obj=include BIASMDIR=-bi-$$arch HDRCHECK=1 ;\
+	 done
 
 PHONY += headers_check
 headers_check: headers_install
@@ -1101,9 +1093,9 @@ boards := $(notdir $(boards))
 
 help:
 	@echo  'Cleaning targets:'
-	@echo  '  clean		  - remove most generated files but keep the config and'
+	@echo  '  clean		  - Remove most generated files but keep the config and'
 	@echo  '                    enough build support to build external modules'
-	@echo  '  mrproper	  - remove all generated files + config + various backup files'
+	@echo  '  mrproper	  - Remove all generated files + config + various backup files'
 	@echo  '  distclean	  - mrproper + remove editor backup and patch files'
 	@echo  ''
 	@echo  'Configuration targets:'
@@ -1122,15 +1114,15 @@ help:
 	@echo  '  cscope	  - Generate cscope index'
 	@echo  '  kernelrelease	  - Output the release version string'
 	@echo  '  kernelversion	  - Output the version stored in Makefile'
-	@if [ -r include/asm-$(ARCH)/Kbuild ]; then \
+	@if [ -r $(srctree)/include/asm-$(ARCH)/Kbuild ]; then \
 	 echo  '  headers_install - Install sanitised kernel headers to INSTALL_HDR_PATH'; \
+	 echo  '                    (default: $(INSTALL_HDR_PATH))'; \
 	 fi
-	@echo  '                    (default: $(INSTALL_HDR_PATH))'
 	@echo  ''
 	@echo  'Static analysers'
 	@echo  '  checkstack      - Generate a list of stack hogs'
 	@echo  '  namespacecheck  - Name space analysis on compiled kernel'
-	@if [ -r include/asm-$(ARCH)/Kbuild ]; then \
+	@if [ -r $(srctree)/include/asm-$(ARCH)/Kbuild ]; then \
 	 echo  '  headers_check   - Sanity check on exported headers'; \
 	 fi
 	@echo  ''
@@ -1391,12 +1383,18 @@ endif #ifeq ($(mixed-targets),1)
 
 PHONY += checkstack kernelrelease kernelversion
 
-# Use $(SUBARCH) here instead of $(ARCH) so that this works for UML.
-# In the UML case, $(SUBARCH) is the name of the underlying
-# architecture, while for all other arches, it is the same as $(ARCH).
+# UML needs a little special treatment here.  It wants to use the host
+# toolchain, so needs $(SUBARCH) passed to checkstack.pl.  Everyone
+# else wants $(ARCH), including people doing cross-builds, which means
+# that $(SUBARCH) doesn't work here.
+ifeq ($(ARCH), um)
+CHECKSTACK_ARCH := $(SUBARCH)
+else
+CHECKSTACK_ARCH := $(ARCH)
+endif
 checkstack:
 	$(OBJDUMP) -d vmlinux $$(find . -name '*.ko') | \
-	$(PERL) $(src)/scripts/checkstack.pl $(SUBARCH)
+	$(PERL) $(src)/scripts/checkstack.pl $(CHECKSTACK_ARCH)
 
 kernelrelease:
 	$(if $(wildcard include/config/kernel.release), $(Q)echo $(KERNELRELEASE), \
@@ -1484,6 +1482,8 @@ endif	# skip-makefile
 PHONY += FORCE
 FORCE:
 
+# Cancel implicit rules on top Makefile, `-rR' will apply to sub-makes.
+Makefile: ;
 
 # Declare the contents of the .PHONY variable as phony.  We keep that
 # information in a variable se we can use it in if_changed and friends.

@@ -141,9 +141,6 @@ static int fuse_dentry_revalidate(struct dentry *entry, struct nameidata *nd)
 		struct fuse_req *forget_req;
 		struct dentry *parent;
 
-		/* Doesn't hurt to "reset" the validity timeout */
-		fuse_invalidate_entry_cache(entry);
-
 		/* For negative dentries, always do a fresh lookup */
 		if (!inode)
 			return 0;
@@ -198,7 +195,7 @@ static struct dentry_operations fuse_dentry_operations = {
 	.d_revalidate	= fuse_dentry_revalidate,
 };
 
-static int valid_mode(int m)
+int fuse_valid_type(int m)
 {
 	return S_ISREG(m) || S_ISDIR(m) || S_ISLNK(m) || S_ISCHR(m) ||
 		S_ISBLK(m) || S_ISFIFO(m) || S_ISSOCK(m);
@@ -251,7 +248,8 @@ static struct dentry *fuse_lookup(struct inode *dir, struct dentry *entry,
 	fuse_put_request(fc, req);
 	/* Zero nodeid is same as -ENOENT, but with valid timeout */
 	if (!err && outarg.nodeid &&
-	    (invalid_nodeid(outarg.nodeid) || !valid_mode(outarg.attr.mode)))
+	    (invalid_nodeid(outarg.nodeid) ||
+	     !fuse_valid_type(outarg.attr.mode)))
 		err = -EIO;
 	if (!err && outarg.nodeid) {
 		inode = fuse_iget(dir->i_sb, outarg.nodeid, outarg.generation,
@@ -859,7 +857,7 @@ static int fuse_readdir(struct file *file, void *dstbuf, filldir_t filldir)
 	int err;
 	size_t nbytes;
 	struct page *page;
-	struct inode *inode = file->f_dentry->d_inode;
+	struct inode *inode = file->f_path.dentry->d_inode;
 	struct fuse_conn *fc = get_fuse_conn(inode);
 	struct fuse_req *req;
 
@@ -1027,6 +1025,8 @@ static int fuse_setattr(struct dentry *entry, struct iattr *attr)
 	if (attr->ia_valid & ATTR_SIZE) {
 		unsigned long limit;
 		is_truncate = 1;
+		if (IS_SWAPFILE(inode))
+			return -ETXTBSY;
 		limit = current->signal->rlim[RLIMIT_FSIZE].rlim_cur;
 		if (limit != RLIM_INFINITY && attr->ia_size > (loff_t) limit) {
 			send_sig(SIGXFSZ, current, 0);
@@ -1243,7 +1243,7 @@ static int fuse_removexattr(struct dentry *entry, const char *name)
 	return err;
 }
 
-static struct inode_operations fuse_dir_inode_operations = {
+static const struct inode_operations fuse_dir_inode_operations = {
 	.lookup		= fuse_lookup,
 	.mkdir		= fuse_mkdir,
 	.symlink	= fuse_symlink,
@@ -1271,7 +1271,7 @@ static const struct file_operations fuse_dir_operations = {
 	.fsync		= fuse_dir_fsync,
 };
 
-static struct inode_operations fuse_common_inode_operations = {
+static const struct inode_operations fuse_common_inode_operations = {
 	.setattr	= fuse_setattr,
 	.permission	= fuse_permission,
 	.getattr	= fuse_getattr,
@@ -1281,7 +1281,7 @@ static struct inode_operations fuse_common_inode_operations = {
 	.removexattr	= fuse_removexattr,
 };
 
-static struct inode_operations fuse_symlink_inode_operations = {
+static const struct inode_operations fuse_symlink_inode_operations = {
 	.setattr	= fuse_setattr,
 	.follow_link	= fuse_follow_link,
 	.put_link	= fuse_put_link,

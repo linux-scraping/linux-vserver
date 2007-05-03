@@ -83,8 +83,10 @@
 
 #include "linux/synclink.h"
 
-#ifdef CONFIG_HDLC_MODULE
-#define CONFIG_HDLC 1
+#if defined(CONFIG_HDLC) || (defined(CONFIG_HDLC_MODULE) && defined(CONFIG_SYNCLINK_GT_MODULE))
+#define SYNCLINK_GENERIC_HDLC 1
+#else
+#define SYNCLINK_GENERIC_HDLC 0
 #endif
 
 /*
@@ -149,7 +151,7 @@ static struct tty_driver *serial_driver;
 static int  open(struct tty_struct *tty, struct file * filp);
 static void close(struct tty_struct *tty, struct file * filp);
 static void hangup(struct tty_struct *tty);
-static void set_termios(struct tty_struct *tty, struct termios *old_termios);
+static void set_termios(struct tty_struct *tty, struct ktermios *old_termios);
 
 static int  write(struct tty_struct *tty, const unsigned char *buf, int count);
 static void put_char(struct tty_struct *tty, unsigned char ch);
@@ -171,7 +173,7 @@ static void set_break(struct tty_struct *tty, int break_state);
 /*
  * generic HDLC support and callbacks
  */
-#ifdef CONFIG_HDLC
+#if SYNCLINK_GENERIC_HDLC
 #define dev_to_port(D) (dev_to_hdlc(D)->priv)
 static void hdlcdev_tx_done(struct slgt_info *info);
 static void hdlcdev_rx(struct slgt_info *info, char *buf, int size);
@@ -359,7 +361,7 @@ struct slgt_info {
 	int netcount;
 	int dosyncppp;
 	spinlock_t netlock;
-#ifdef CONFIG_HDLC
+#if SYNCLINK_GENERIC_HDLC
 	struct net_device *netdev;
 #endif
 
@@ -485,7 +487,7 @@ static void enable_loopback(struct slgt_info *info);
 static void set_rate(struct slgt_info *info, u32 data_rate);
 
 static int  bh_action(struct slgt_info *info);
-static void bh_handler(void* context);
+static void bh_handler(struct work_struct *work);
 static void bh_transmit(struct slgt_info *info);
 static void isr_serial(struct slgt_info *info);
 static void isr_rdma(struct slgt_info *info);
@@ -814,7 +816,7 @@ static void hangup(struct tty_struct *tty)
 	wake_up_interruptible(&info->open_wait);
 }
 
-static void set_termios(struct tty_struct *tty, struct termios *old_termios)
+static void set_termios(struct tty_struct *tty, struct ktermios *old_termios)
 {
 	struct slgt_info *info = tty->driver_data;
 	unsigned long flags;
@@ -1043,7 +1045,6 @@ static void flush_buffer(struct tty_struct *tty)
 		info->tx_count = 0;
 	spin_unlock_irqrestore(&info->lock,flags);
 
-	wake_up_interruptible(&tty->write_wait);
 	tty_wakeup(tty);
 }
 
@@ -1354,7 +1355,7 @@ static void set_break(struct tty_struct *tty, int break_state)
 	spin_unlock_irqrestore(&info->lock,flags);
 }
 
-#ifdef CONFIG_HDLC
+#if SYNCLINK_GENERIC_HDLC
 
 /**
  * called by generic HDLC layer when protocol selected (PPP, frame relay, etc.)
@@ -1824,8 +1825,7 @@ static void rx_async(struct slgt_info *info)
 		if (i < count) {
 			/* receive buffer not completed */
 			info->rbuf_index += i;
-			info->rx_timer.expires = jiffies + 1;
-			add_timer(&info->rx_timer);
+			mod_timer(&info->rx_timer, jiffies + 1);
 			break;
 		}
 
@@ -1878,9 +1878,9 @@ static int bh_action(struct slgt_info *info)
 /*
  * perform bottom half processing
  */
-static void bh_handler(void* context)
+static void bh_handler(struct work_struct *work)
 {
-	struct slgt_info *info = context;
+	struct slgt_info *info = container_of(work, struct slgt_info, task);
 	int action;
 
 	if (!info)
@@ -1931,10 +1931,8 @@ static void bh_transmit(struct slgt_info *info)
 	struct tty_struct *tty = info->tty;
 
 	DBGBH(("%s bh_transmit\n", info->device_name));
-	if (tty) {
+	if (tty)
 		tty_wakeup(tty);
-		wake_up_interruptible(&tty->write_wait);
-	}
 }
 
 static void dsr_change(struct slgt_info *info)
@@ -2002,7 +2000,7 @@ static void dcd_change(struct slgt_info *info)
 	} else {
 		info->input_signal_events.dcd_down++;
 	}
-#ifdef CONFIG_HDLC
+#if SYNCLINK_GENERIC_HDLC
 	if (info->netcount) {
 		if (info->signals & SerialSignal_DCD)
 			netif_carrier_on(info->netdev);
@@ -2180,7 +2178,7 @@ static void isr_txeom(struct slgt_info *info, unsigned short status)
 			set_signals(info);
 		}
 
-#ifdef CONFIG_HDLC
+#if SYNCLINK_GENERIC_HDLC
 		if (info->netcount)
 			hdlcdev_tx_done(info);
 		else
@@ -3306,7 +3304,7 @@ static void add_device(struct slgt_info *info)
 		devstr, info->device_name, info->phys_reg_addr,
 		info->irq_level, info->max_frame_size);
 
-#ifdef CONFIG_HDLC
+#if SYNCLINK_GENERIC_HDLC
 	hdlcdev_init(info);
 #endif
 }
@@ -3326,7 +3324,7 @@ static struct slgt_info *alloc_dev(int adapter_num, int port_num, struct pci_dev
 	} else {
 		memset(info, 0, sizeof(struct slgt_info));
 		info->magic = MGSL_MAGIC;
-		INIT_WORK(&info->task, bh_handler, info);
+		INIT_WORK(&info->task, bh_handler);
 		info->max_frame_size = 4096;
 		info->raw_rx_size = DMABUFSIZE;
 		info->close_delay = 5*HZ/10;
@@ -3341,13 +3339,8 @@ static struct slgt_info *alloc_dev(int adapter_num, int port_num, struct pci_dev
 		info->adapter_num = adapter_num;
 		info->port_num = port_num;
 
-		init_timer(&info->tx_timer);
-		info->tx_timer.data = (unsigned long)info;
-		info->tx_timer.function = tx_timeout;
-
-		init_timer(&info->rx_timer);
-		info->rx_timer.data = (unsigned long)info;
-		info->rx_timer.function = rx_timeout;
+		setup_timer(&info->tx_timer, tx_timeout, (unsigned long)info);
+		setup_timer(&info->rx_timer, rx_timeout, (unsigned long)info);
 
 		/* Copy configuration info to device instance data */
 		info->pdev = pdev;
@@ -3488,7 +3481,7 @@ static void slgt_cleanup(void)
 	/* release devices */
 	info = slgt_device_list;
 	while(info) {
-#ifdef CONFIG_HDLC
+#if SYNCLINK_GENERIC_HDLC
 		hdlcdev_exit(info);
 #endif
 		free_dma_bufs(info);
@@ -3522,6 +3515,7 @@ static int __init slgt_init(void)
 
 	if (!slgt_device_list) {
 		printk("%s no devices found\n",driver_name);
+		pci_unregister_driver(&pci_driver);
 		return -ENODEV;
 	}
 
@@ -3543,6 +3537,8 @@ static int __init slgt_init(void)
 	serial_driver->init_termios = tty_std_termios;
 	serial_driver->init_termios.c_cflag =
 		B9600 | CS8 | CREAD | HUPCL | CLOCAL;
+	serial_driver->init_termios.c_ispeed = 9600;
+	serial_driver->init_termios.c_ospeed = 9600;
 	serial_driver->flags = TTY_DRIVER_REAL_RAW;
 	tty_set_operations(serial_driver, &ops);
 	if ((rc = tty_register_driver(serial_driver)) < 0) {
@@ -3792,10 +3788,9 @@ static void tx_start(struct slgt_info *info)
 				}
 			}
 
-			if (info->params.mode == MGSL_MODE_HDLC) {
-				info->tx_timer.expires = jiffies + msecs_to_jiffies(5000);
-				add_timer(&info->tx_timer);
-			}
+			if (info->params.mode == MGSL_MODE_HDLC)
+				mod_timer(&info->tx_timer, jiffies +
+						msecs_to_jiffies(5000));
 		} else {
 			tdma_reset(info);
 			/* set 1st descriptor address */
@@ -4433,7 +4428,7 @@ check_again:
 			framesize = 0;
 	}
 
-#ifdef CONFIG_HDLC
+#if SYNCLINK_GENERIC_HDLC
 	if (framesize == 0) {
 		struct net_device_stats *stats = hdlc_stats(info->netdev);
 		stats->rx_errors++;
@@ -4476,7 +4471,7 @@ check_again:
 				framesize++;
 			}
 
-#ifdef CONFIG_HDLC
+#if SYNCLINK_GENERIC_HDLC
 			if (info->netcount)
 				hdlcdev_rx(info,info->tmp_rbuf, framesize);
 			else
@@ -4779,7 +4774,7 @@ static void tx_timeout(unsigned long context)
 	info->tx_count = 0;
 	spin_unlock_irqrestore(&info->lock,flags);
 
-#ifdef CONFIG_HDLC
+#if SYNCLINK_GENERIC_HDLC
 	if (info->netcount)
 		hdlcdev_tx_done(info);
 	else
@@ -4799,6 +4794,6 @@ static void rx_timeout(unsigned long context)
 	spin_lock_irqsave(&info->lock, flags);
 	info->pending_bh |= BH_RECEIVE;
 	spin_unlock_irqrestore(&info->lock, flags);
-	bh_handler(info);
+	bh_handler(&info->task);
 }
 

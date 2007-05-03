@@ -66,7 +66,7 @@ static struct pci_error_handlers aer_error_handlers = {
 	.resume = aer_error_resume,
 };
 
-static struct pcie_port_service_driver aerdrv = {
+static struct pcie_port_service_driver aerdriver = {
 	.name		= "aer",
 	.id_table	= &aer_id[0],
 
@@ -148,7 +148,7 @@ static struct aer_rpc* aer_alloc_rpc(struct pcie_device *dev)
 {
 	struct aer_rpc *rpc;
 
-	if (!(rpc = (struct aer_rpc *)kmalloc(sizeof(struct aer_rpc),
+	if (!(rpc = kmalloc(sizeof(struct aer_rpc),
 		GFP_KERNEL)))
 		return NULL;
 
@@ -160,7 +160,7 @@ static struct aer_rpc* aer_alloc_rpc(struct pcie_device *dev)
 	rpc->e_lock = SPIN_LOCK_UNLOCKED;
 
 	rpc->rpd = dev;
-	INIT_WORK(&rpc->dpc_handler, aer_isr, (void *)dev);
+	INIT_WORK(&rpc->dpc_handler, aer_isr);
 	rpc->prod_idx = rpc->cons_idx = 0;
 	mutex_init(&rpc->rpc_mutex);
 	init_waitqueue_head(&rpc->wait_release);
@@ -220,7 +220,7 @@ static int __devinit aer_probe (struct pcie_device *dev,
 	}
 
 	/* Request IRQ ISR */
-	if ((status = request_irq(dev->irq, aer_irq, SA_SHIRQ, "aerdrv",
+	if ((status = request_irq(dev->irq, aer_irq, IRQF_SHARED, "aerdrv",
 				dev))) {
 		printk(KERN_DEBUG "%s: Request ISR fails on PCIE device[%s]\n",
 			__FUNCTION__, device->bus_id);
@@ -328,7 +328,7 @@ static void aer_error_resume(struct pci_dev *dev)
  **/
 static int __init aer_service_init(void)
 {
-	return pcie_port_service_register(&aerdrv);
+	return pcie_port_service_register(&aerdriver);
 }
 
 /**
@@ -338,7 +338,7 @@ static int __init aer_service_init(void)
  **/
 static void __exit aer_service_exit(void)
 {
-	pcie_port_service_unregister(&aerdrv);
+	pcie_port_service_unregister(&aerdriver);
 }
 
 module_init(aer_service_init);

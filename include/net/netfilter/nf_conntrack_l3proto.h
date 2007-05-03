@@ -18,9 +18,6 @@ struct nfattr;
 
 struct nf_conntrack_l3proto
 {
-	/* Next pointer. */
-	struct list_head list;
-
 	/* L3 Protocol Family number. ex) PF_INET */
 	u_int16_t l3proto;
 
@@ -78,6 +75,12 @@ struct nf_conntrack_l3proto
 	int (*nfattr_to_tuple)(struct nfattr *tb[],
 			       struct nf_conntrack_tuple *t);
 
+#ifdef CONFIG_SYSCTL
+	struct ctl_table_header	*ctl_table_header;
+	struct ctl_table	*ctl_table_path;
+	struct ctl_table	*ctl_table;
+#endif /* CONFIG_SYSCTL */
+
 	/* Module (if any) which this is connected to. */
 	struct module *me;
 };
@@ -96,14 +99,14 @@ extern void nf_ct_l3proto_put(struct nf_conntrack_l3proto *p);
 /* Existing built-in protocols */
 extern struct nf_conntrack_l3proto nf_conntrack_l3proto_ipv4;
 extern struct nf_conntrack_l3proto nf_conntrack_l3proto_ipv6;
-extern struct nf_conntrack_l3proto nf_conntrack_generic_l3proto;
+extern struct nf_conntrack_l3proto nf_conntrack_l3proto_generic;
 
 static inline struct nf_conntrack_l3proto *
 __nf_ct_l3proto_find(u_int16_t l3proto)
 {
 	if (unlikely(l3proto >= AF_MAX))
-		return &nf_conntrack_generic_l3proto;
-	return nf_ct_l3protos[l3proto];
+		return &nf_conntrack_l3proto_generic;
+	return rcu_dereference(nf_ct_l3protos[l3proto]);
 }
 
 #endif /*_NF_CONNTRACK_L3PROTO_H*/

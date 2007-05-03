@@ -115,7 +115,7 @@ static ssize_t hpfs_file_write(struct file *file, const char __user *buf,
 
 	retval = do_sync_write(file, buf, count, ppos);
 	if (retval > 0)
-		hpfs_i(file->f_dentry->d_inode)->i_dirty = 1;
+		hpfs_i(file->f_path.dentry->d_inode)->i_dirty = 1;
 	return retval;
 }
 
@@ -132,7 +132,7 @@ const struct file_operations hpfs_file_ops =
 	.sendfile	= generic_file_sendfile,
 };
 
-struct inode_operations hpfs_file_iops =
+const struct inode_operations hpfs_file_iops =
 {
 	.truncate	= hpfs_truncate,
 	.setattr	= hpfs_notify_change,

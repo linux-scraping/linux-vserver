@@ -486,10 +486,6 @@ static long heathrow_sound_enable(struct device_node *node, long param,
 
 static u32 save_fcr[6];
 static u32 save_mbcr;
-static u32 save_gpio_levels[2];
-static u8 save_gpio_extint[KEYLARGO_GPIO_EXTINT_CNT];
-static u8 save_gpio_normal[KEYLARGO_GPIO_CNT];
-static u32 save_unin_clock_ctl;
 static struct dbdma_regs save_dbdma[13];
 static struct dbdma_regs save_alt_dbdma[13];
 
@@ -814,6 +810,7 @@ core99_ata100_enable(struct device_node *node, long value)
 	unsigned long flags;
 	struct pci_dev *pdev = NULL;
 	u8 pbus, pid;
+	int rc;
 
 	if (uninorth_rev < 0x24)
 		return -ENODEV;
@@ -832,7 +829,9 @@ core99_ata100_enable(struct device_node *node, long value)
 			pdev = pci_find_slot(pbus, pid);
 		if (pdev == NULL)
 			return 0;
-		pci_enable_device(pdev);
+		rc = pci_enable_device(pdev);
+		if (rc)
+			return rc;
 		pci_set_master(pdev);
 	}
 	return 0;
@@ -1548,6 +1547,10 @@ void g5_phy_disable_cpu1(void)
 
 
 #ifdef CONFIG_PM
+static u32 save_gpio_levels[2];
+static u8 save_gpio_extint[KEYLARGO_GPIO_EXTINT_CNT];
+static u8 save_gpio_normal[KEYLARGO_GPIO_CNT];
+static u32 save_unin_clock_ctl;
 
 static void keylargo_shutdown(struct macio_chip *macio, int sleep_mode)
 {

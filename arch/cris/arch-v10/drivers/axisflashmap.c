@@ -359,8 +359,7 @@ static struct mtd_info *flash_probe(void)
 		 * So we use the MTD concatenation layer instead of further
 		 * complicating the probing procedure.
 		 */
-		mtd_cse = mtd_concat_create(mtds,
-					    sizeof(mtds) / sizeof(mtds[0]),
+		mtd_cse = mtd_concat_create(mtds, ARRAY_SIZE(mtds),
 					    "cse0+cse1");
 #else
 		printk(KERN_ERR "%s and %s: Cannot concatenate due to kernel "
@@ -516,7 +515,7 @@ static int __init init_axis_flash(void)
 #else
 		struct mtd_info *mtd_ram;
 
-		mtd_ram = (struct mtd_info *)kmalloc(sizeof(struct mtd_info),
+		mtd_ram = kmalloc(sizeof(struct mtd_info),
 						     GFP_KERNEL);
 		if (!mtd_ram) {
 			panic("axisflashmap couldn't allocate memory for "

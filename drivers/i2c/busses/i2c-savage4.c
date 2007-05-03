@@ -145,6 +145,7 @@ static struct i2c_algo_bit_data sav_i2c_bit_data = {
 
 static struct i2c_adapter savage4_i2c_adapter = {
 	.owner		= THIS_MODULE,
+	.id		= I2C_HW_B_SAVAGE,
 	.name		= "I2C Savage4 adapter",
 	.algo_data	= &sav_i2c_bit_data,
 };
@@ -173,7 +174,7 @@ static int __devinit savage4_probe(struct pci_dev *dev, const struct pci_device_
 
 static void __devexit savage4_remove(struct pci_dev *dev)
 {
-	i2c_bit_del_bus(&savage4_i2c_adapter);
+	i2c_del_adapter(&savage4_i2c_adapter);
 	iounmap(ioaddr);
 }
 

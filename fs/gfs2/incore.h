@@ -14,8 +14,6 @@
 
 #define DIO_WAIT	0x00000010
 #define DIO_METADATA	0x00000020
-#define DIO_DATA	0x00000040
-#define DIO_RELEASE	0x00000080
 #define DIO_ALL		0x00000100
 
 struct gfs2_log_operations;
@@ -41,7 +39,7 @@ struct gfs2_log_operations {
 	void (*lo_before_commit) (struct gfs2_sbd *sdp);
 	void (*lo_after_commit) (struct gfs2_sbd *sdp, struct gfs2_ail *ai);
 	void (*lo_before_scan) (struct gfs2_jdesc *jd,
-				struct gfs2_log_header *head, int pass);
+				struct gfs2_log_header_host *head, int pass);
 	int (*lo_scan_elements) (struct gfs2_jdesc *jd, unsigned int start,
 				 struct gfs2_log_descriptor *ld, __be64 *ptr,
 				 int pass);
@@ -67,8 +65,8 @@ struct gfs2_rgrpd {
 	struct list_head rd_list_mru;
 	struct list_head rd_recent;	/* Recently used rgrps */
 	struct gfs2_glock *rd_gl;	/* Glock for this rgrp */
-	struct gfs2_rindex rd_ri;
-	struct gfs2_rgrp rd_rg;
+	struct gfs2_rindex_host rd_ri;
+	struct gfs2_rgrp_host rd_rg;
 	u64 rd_rg_vn;
 	struct gfs2_bitmap *rd_bits;
 	unsigned int rd_bh_count;
@@ -103,18 +101,13 @@ struct gfs2_bufdata {
 };
 
 struct gfs2_glock_operations {
-	void (*go_xmote_th) (struct gfs2_glock * gl, unsigned int state,
-			     int flags);
-	void (*go_xmote_bh) (struct gfs2_glock * gl);
-	void (*go_drop_th) (struct gfs2_glock * gl);
-	void (*go_drop_bh) (struct gfs2_glock * gl);
-	void (*go_sync) (struct gfs2_glock * gl, int flags);
-	void (*go_inval) (struct gfs2_glock * gl, int flags);
-	int (*go_demote_ok) (struct gfs2_glock * gl);
-	int (*go_lock) (struct gfs2_holder * gh);
-	void (*go_unlock) (struct gfs2_holder * gh);
-	void (*go_callback) (struct gfs2_glock * gl, unsigned int state);
-	void (*go_greedy) (struct gfs2_glock * gl);
+	void (*go_xmote_th) (struct gfs2_glock *gl);
+	void (*go_xmote_bh) (struct gfs2_glock *gl);
+	void (*go_drop_th) (struct gfs2_glock *gl);
+	void (*go_inval) (struct gfs2_glock *gl, int flags);
+	int (*go_demote_ok) (struct gfs2_glock *gl);
+	int (*go_lock) (struct gfs2_holder *gh);
+	void (*go_unlock) (struct gfs2_holder *gh);
 	const int go_type;
 };
 
@@ -123,7 +116,6 @@ enum {
 	HIF_MUTEX		= 0,
 	HIF_PROMOTE		= 1,
 	HIF_DEMOTE		= 2,
-	HIF_GREEDY		= 3,
 
 	/* States */
 	HIF_ALLOCED		= 4,
@@ -131,6 +123,7 @@ enum {
 	HIF_HOLDER		= 6,
 	HIF_FIRST		= 7,
 	HIF_ABORTED		= 9,
+	HIF_WAIT		= 10,
 };
 
 struct gfs2_holder {
@@ -143,17 +136,14 @@ struct gfs2_holder {
 
 	int gh_error;
 	unsigned long gh_iflags;
-	struct completion gh_wait;
 	unsigned long gh_ip;
 };
 
 enum {
 	GLF_LOCK		= 1,
 	GLF_STICKY		= 2,
-	GLF_PREFETCH		= 3,
 	GLF_DIRTY		= 5,
 	GLF_SKIP_WAITERS2	= 6,
-	GLF_GREEDY		= 7,
 };
 
 struct gfs2_glock {
@@ -170,7 +160,7 @@ struct gfs2_glock {
 	unsigned long gl_ip;
 	struct list_head gl_holders;
 	struct list_head gl_waiters1;	/* HIF_MUTEX */
-	struct list_head gl_waiters2;	/* HIF_DEMOTE, HIF_GREEDY */
+	struct list_head gl_waiters2;	/* HIF_DEMOTE */
 	struct list_head gl_waiters3;	/* HIF_PROMOTE */
 
 	const struct gfs2_glock_operations *gl_ops;
@@ -217,6 +207,7 @@ struct gfs2_alloc {
 };
 
 enum {
+	GIF_INVALID		= 0,
 	GIF_QD_LOCKED		= 1,
 	GIF_PAGED		= 2,
 	GIF_SW_PAGED		= 3,
@@ -224,12 +215,11 @@ enum {
 
 struct gfs2_inode {
 	struct inode i_inode;
-	struct gfs2_inum i_num;
+	struct gfs2_inum_host i_num;
 
 	unsigned long i_flags;		/* GIF_... */
 
-	u64 i_vn;
-	struct gfs2_dinode i_di; /* To be replaced by ref to block */
+	struct gfs2_dinode_host i_di; /* To be replaced by ref to block */
 
 	struct gfs2_glock *i_gl; /* Move into i_gh? */
 	struct gfs2_holder i_iopen_gh;
@@ -239,7 +229,6 @@ struct gfs2_inode {
 
 	spinlock_t i_spin;
 	struct rw_semaphore i_rw_mutex;
-	unsigned int i_greedy;
 	unsigned long i_last_pfault;
 
 	struct buffer_head *i_cache[GFS2_MAX_META_HEIGHT];
@@ -421,17 +410,11 @@ struct gfs2_tune {
 	unsigned int gt_atime_quantum; /* Min secs between atime updates */
 	unsigned int gt_new_files_jdata;
 	unsigned int gt_new_files_directio;
-	unsigned int gt_max_atomic_write; /* Split big writes into this size */
 	unsigned int gt_max_readahead; /* Max bytes to read-ahead from disk */
 	unsigned int gt_lockdump_size;
 	unsigned int gt_stall_secs; /* Detects trouble! */
 	unsigned int gt_complain_secs;
 	unsigned int gt_reclaim_limit; /* Max num of glocks in reclaim list */
-	unsigned int gt_entries_per_readdir;
-	unsigned int gt_prefetch_secs; /* Usage window for prefetched glocks */
-	unsigned int gt_greedy_default;
-	unsigned int gt_greedy_quantum;
-	unsigned int gt_greedy_max;
 	unsigned int gt_statfs_quantum;
 	unsigned int gt_statfs_slow;
 };
@@ -450,7 +433,7 @@ struct gfs2_sbd {
 	struct super_block *sd_vfs_meta;
 	struct kobject sd_kobj;
 	unsigned long sd_flags;	/* SDF_... */
-	struct gfs2_sb sd_sb;
+	struct gfs2_sb_host sd_sb;
 
 	/* Constants computed on mount */
 
@@ -503,8 +486,8 @@ struct gfs2_sbd {
 
 	spinlock_t sd_statfs_spin;
 	struct mutex sd_statfs_mutex;
-	struct gfs2_statfs_change sd_statfs_master;
-	struct gfs2_statfs_change sd_statfs_local;
+	struct gfs2_statfs_change_host sd_statfs_master;
+	struct gfs2_statfs_change_host sd_statfs_local;
 	unsigned long sd_statfs_sync_time;
 
 	/* Resource group stuff */

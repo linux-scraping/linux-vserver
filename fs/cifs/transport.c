@@ -34,7 +34,7 @@
 #include "cifs_debug.h"
   
 extern mempool_t *cifs_mid_poolp;
-extern kmem_cache_t *cifs_oplock_cachep;
+extern struct kmem_cache *cifs_oplock_cachep;
 
 static struct mid_q_entry *
 AllocMidQEntry(const struct smb_hdr *smb_buffer, struct cifsSesInfo *ses)
@@ -51,7 +51,7 @@ AllocMidQEntry(const struct smb_hdr *smb_buffer, struct cifsSesInfo *ses)
 	}
 	
 	temp = (struct mid_q_entry *) mempool_alloc(cifs_mid_poolp,
-						    SLAB_KERNEL | SLAB_NOFS);
+						    GFP_KERNEL | GFP_NOFS);
 	if (temp == NULL)
 		return temp;
 	else {
@@ -118,7 +118,7 @@ AllocOplockQEntry(struct inode * pinode, __u16 fid, struct cifsTconInfo * tcon)
 		return NULL;
 	}
 	temp = (struct oplock_q_entry *) kmem_cache_alloc(cifs_oplock_cachep,
-						       SLAB_KERNEL);
+						       GFP_KERNEL);
 	if (temp == NULL)
 		return temp;
 	else {
@@ -499,7 +499,7 @@ SendReceive2(const unsigned int xid, struct cifsSesInfo *ses,
 	   due to last connection to this server being unmounted */
 	if (signal_pending(current)) {
 		/* if signal pending do not hold up user for full smb timeout
-		but we still give response a change to complete */
+		but we still give response a chance to complete */
 		timeout = 2 * HZ;
 	}   
 
@@ -587,7 +587,6 @@ SendReceive2(const unsigned int xid, struct cifsSesInfo *ses,
 	}
 
 out:
-
 	DeleteMidQEntry(midQ);
 	atomic_dec(&ses->server->inFlight); 
 	wake_up(&ses->server->request_q);
@@ -681,7 +680,7 @@ SendReceive(const unsigned int xid, struct cifsSesInfo *ses,
 	   due to last connection to this server being unmounted */
 	if (signal_pending(current)) {
 		/* if signal pending do not hold up user for full smb timeout
-		but we still give response a change to complete */
+		but we still give response a chance to complete */
 		timeout = 2 * HZ;
 	}   
 
@@ -765,7 +764,6 @@ SendReceive(const unsigned int xid, struct cifsSesInfo *ses,
 	}
 
 out:
-
 	DeleteMidQEntry(midQ);
 	atomic_dec(&ses->server->inFlight); 
 	wake_up(&ses->server->request_q);

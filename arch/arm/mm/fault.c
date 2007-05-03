@@ -230,7 +230,7 @@ do_page_fault(unsigned long addr, unsigned int fsr, struct pt_regs *regs)
 	 * If we're in an interrupt or have no user
 	 * context, we must not take the fault..
 	 */
-	if (in_interrupt() || !mm)
+	if (in_atomic() || !mm)
 		goto no_context;
 
 	/*
@@ -267,7 +267,8 @@ do_page_fault(unsigned long addr, unsigned int fsr, struct pt_regs *regs)
 		 * happened to us that made us unable to handle
 		 * the page fault gracefully.
 		 */
-		printk("VM: killing process %s\n", tsk->comm);
+		printk("VM: killing process %s(%d:#%u)\n",
+			tsk->comm, tsk->pid, tsk->xid);
 		do_exit(SIGKILL);
 		return 0;
 

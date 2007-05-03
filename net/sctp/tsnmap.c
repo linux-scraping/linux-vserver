@@ -277,7 +277,7 @@ static void sctp_tsnmap_update(struct sctp_tsnmap *map)
 			/* Now tsn_map must have been all '1's,
 			 * so we swap the map and check the overflow table
 			 */
-        		__u8 *tmp = map->tsn_map;
+			__u8 *tmp = map->tsn_map;
 			memset(tmp, 0, map->len);
 			map->tsn_map = map->overflow_map;
 			map->overflow_map = tmp;
@@ -401,13 +401,14 @@ __u16 sctp_tsnmap_num_gabs(struct sctp_tsnmap *map)
 
 	/* Refresh the gap ack information. */
 	if (sctp_tsnmap_has_gap(map)) {
+		__u16 start, end;
 		sctp_tsnmap_iter_init(map, &iter);
 		while (sctp_tsnmap_next_gap_ack(map, &iter,
-						&map->gabs[gabs].start,
-						&map->gabs[gabs].end)) {
+						&start,
+						&end)) {
 
-			map->gabs[gabs].start = htons(map->gabs[gabs].start);
-			map->gabs[gabs].end = htons(map->gabs[gabs].end);
+			map->gabs[gabs].start = htons(start);
+			map->gabs[gabs].end = htons(end);
 			gabs++;
 			if (gabs >= SCTP_MAX_GABS)
 				break;

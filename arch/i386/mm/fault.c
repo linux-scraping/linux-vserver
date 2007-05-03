@@ -22,9 +22,9 @@
 #include <linux/highmem.h>
 #include <linux/module.h>
 #include <linux/kprobes.h>
+#include <linux/uaccess.h>
 
 #include <asm/system.h>
-#include <asm/uaccess.h>
 #include <asm/desc.h>
 #include <asm/kdebug.h>
 #include <asm/segment.h>
@@ -46,43 +46,17 @@ int unregister_page_fault_notifier(struct notifier_block *nb)
 }
 EXPORT_SYMBOL_GPL(unregister_page_fault_notifier);
 
-static inline int notify_page_fault(enum die_val val, const char *str,
-			struct pt_regs *regs, long err, int trap, int sig)
+static inline int notify_page_fault(struct pt_regs *regs, long err)
 {
 	struct die_args args = {
 		.regs = regs,
-		.str = str,
+		.str = "page fault",
 		.err = err,
-		.trapnr = trap,
-		.signr = sig
+		.trapnr = 14,
+		.signr = SIGSEGV
 	};
-	return atomic_notifier_call_chain(&notify_page_fault_chain, val, &args);
-}
-
-/*
- * Unlock any spinlocks which will prevent us from getting the
- * message out 
- */
-void bust_spinlocks(int yes)
-{
-	int loglevel_save = console_loglevel;
-
-	if (yes) {
-		oops_in_progress = 1;
-		return;
-	}
-#ifdef CONFIG_VT
-	unblank_screen();
-#endif
-	oops_in_progress = 0;
-	/*
-	 * OK, the message is on the console.  Now we call printk()
-	 * without oops_in_progress set so that printk will give klogd
-	 * a poke.  Hold onto your hats...
-	 */
-	console_loglevel = 15;		/* NMI oopser may have shut the console up */
-	printk(" ");
-	console_loglevel = loglevel_save;
+	return atomic_notifier_call_chain(&notify_page_fault_chain,
+	                                  DIE_PAGE_FAULT, &args);
 }
 
 /*
@@ -167,7 +141,7 @@ static inline unsigned long get_segment_eip(struct pt_regs *regs,
 static int __is_prefetch(struct pt_regs *regs, unsigned long addr)
 { 
 	unsigned long limit;
-	unsigned long instr = get_segment_eip (regs, &limit);
+	unsigned char *instr = (unsigned char *)get_segment_eip (regs, &limit);
 	int scan_more = 1;
 	int prefetch = 0; 
 	int i;
@@ -177,9 +151,9 @@ static int __is_prefetch(struct pt_regs *regs, unsigned long addr)
 		unsigned char instr_hi;
 		unsigned char instr_lo;
 
-		if (instr > limit)
+		if (instr > (unsigned char *)limit)
 			break;
-		if (__get_user(opcode, (unsigned char __user *) instr))
+		if (probe_kernel_address(instr, opcode))
 			break; 
 
 		instr_hi = opcode & 0xf0; 
@@ -204,9 +178,9 @@ static int __is_prefetch(struct pt_regs *regs, unsigned long addr)
 		case 0x00:
 			/* Prefetch instruction is 0x0F0D or 0x0F18 */
 			scan_more = 0;
-			if (instr > limit)
+			if (instr > (unsigned char *)limit)
 				break;
-			if (__get_user(opcode, (unsigned char __user *) instr))
+			if (probe_kernel_address(instr, opcode))
 				break;
 			prefetch = (instr_lo == 0xF) &&
 				(opcode == 0x0D || opcode == 0x18);
@@ -353,8 +327,7 @@ fastcall void __kprobes do_page_fault(struct pt_regs *regs,
 	if (unlikely(address >= TASK_SIZE)) {
 		if (!(error_code & 0x0000000d) && vmalloc_fault(address) >= 0)
 			return;
-		if (notify_page_fault(DIE_PAGE_FAULT, "page fault", regs, error_code, 14,
-						SIGSEGV) == NOTIFY_STOP)
+		if (notify_page_fault(regs, error_code) == NOTIFY_STOP)
 			return;
 		/*
 		 * Don't take the mm semaphore here. If we fixup a prefetch
@@ -363,8 +336,7 @@ fastcall void __kprobes do_page_fault(struct pt_regs *regs,
 		goto bad_area_nosemaphore;
 	}
 
-	if (notify_page_fault(DIE_PAGE_FAULT, "page fault", regs, error_code, 14,
-					SIGSEGV) == NOTIFY_STOP)
+	if (notify_page_fault(regs, error_code) == NOTIFY_STOP)
 		return;
 
 	/* It's safe to allow irq's after cr2 has been saved and the vmalloc
@@ -594,7 +566,8 @@ out_of_memory:
 		down_read(&mm->mmap_sem);
 		goto survive;
 	}
-	printk("VM: killing process %s\n", tsk->comm);
+	printk("VM: killing process %s(%d:#%u)\n",
+		tsk->comm, tsk->pid, tsk->xid);
 	if (error_code & 4)
 		do_exit(SIGKILL);
 	goto no_context;

@@ -6,16 +6,12 @@ menu "Linux VServer"
 
 config	VSERVER_LEGACY
 	bool	"Enable Legacy Kernel API"
-	default y
+	depends on EXPERIMENTAL
+	default n
 	help
 	  This enables the legacy API used in vs1.xx, maintaining
 	  compatibility with older vserver tools, and guest images
-	  that are configured using the legacy method.  This is
-	  probably a good idea for now, for migration purposes.
-
-	  Note that some tools have not yet been altered to use
-	  this API, so disabling this option may reduce some
-	  functionality.
+	  that are configured using the legacy method.
 
 config	VSERVER_LEGACY_VERSION
 	bool	"Show a Legacy Version ID"
@@ -25,14 +21,15 @@ config	VSERVER_LEGACY_VERSION
 	  This shows a special legacy version to very old tools
 	  which do not handle the current version correctly.
 
-	  This will probably disable some features of newer tools
-	  so better avoid it, unless you really, really need it
-	  for backwards compatibility.
+	  Warning: recent tools are not able to utilize the
+	  newer APIs when this is enabled, so some features will
+	  not be available. Better avoid it, unless you really,
+	  really need it for backwards compatibility.
 
 config	VSERVER_DYNAMIC_IDS
 	bool	"Enable dynamic context IDs"
-	depends on VSERVER_LEGACY
-	default y
+	depends on EXPERIMENTAL && VSERVER_LEGACY
+	default n
 	help
 	  This enables support of in kernel dynamic context IDs,
 	  which is deprecated and will probably be removed in the
@@ -40,16 +37,16 @@ config	VSERVER_DYNAMIC_IDS
 
 config	VSERVER_LEGACYNET
 	bool	"Enable Legacy Networking Kernel API"
-	default y
+	depends on EXPERIMENTAL
+	default n
 	help
-	  This enables the legacy networking API which is required
-	  by the chbind tool (for util-vserver versions prior to
-	  0.30.210). If you use an older version, don't disable
-	  this option.
+	  This enables the legacy networking API which is used
+	  by older tools (pre 0.30.210) to set up the network
+	  context (chbind).
 
 config	VSERVER_REMAP_SADDR
 	bool	"Remap Source IP Address"
-	depends on EXPERIMENTAL && !VSERVER_LEGACY
+	depends on EXPERIMENTAL
 	default n
 	help
 	  This allows to remap the source IP address of 'local'
@@ -58,7 +55,6 @@ config	VSERVER_REMAP_SADDR
 
 config	VSERVER_COWBL
 	bool	"Enable COW Immutable Link Breaking"
-	depends on EXPERIMENTAL
 	default y
 	help
 	  This enables the COW (Copy-On-Write) link break code.
@@ -90,8 +86,7 @@ config	VSERVER_PROC_SECURE
 
 config	VSERVER_HARDCPU
 	bool	"Enable Hard CPU Limits"
-	depends on EXPERIMENTAL
-	default n
+	default y
 	help
 	  Activate the Hard CPU Limits
 
@@ -107,7 +102,7 @@ config	VSERVER_HARDCPU
 config	VSERVER_IDLETIME
 	bool	"Avoid idle CPUs by skipping Time"
 	depends on VSERVER_HARDCPU
-	default n
+	default y
 	help
 	  This option allows the scheduler to artificially
 	  advance time (per cpu) when otherwise the idle
@@ -164,14 +159,6 @@ config	TAGGING_INTERN
 	  disk representation, which limits the use to a few
 	  filesystems (currently ext2 and ext3)
 
-config	TAGGING_RUNTIME
-	bool	"Runtime"
-	depends on EXPERIMENTAL
-	help
-	  inodes are tagged when first accessed, this doesn't
-	  require any persistant information, but might give
-	  funny results for mixed access.
-
 endchoice
 
 config	TAG_NFSD
@@ -199,12 +186,33 @@ config	VSERVER_PRIVACY
 	  access to structures assigned to a specific context,
 	  like ptys or loop devices.
 
+config	VSERVER_CONTEXTS
+	int	"Maximum number of Contexts (1-65533)"	if EMBEDDED
+	range 1 65533
+	default "768"	if 64BIT
+	default "256"
+	help
+	  This setting will optimize certain data structures
+	  and memory allocations according to the expected
+	  maximum.
+
+	  note: this is not a strict upper limit.
+
+config	VSERVER_WARN
+	bool	"VServer Warnings"
+	default y
+	help
+	  This enables various runtime warnings, which will
+	  notify about potential manipulation attempts or
+	  resource shortage. It is generally considered to
+	  be a good idea to have that enabled.
+
 config	VSERVER_DEBUG
 	bool	"VServer Debugging Code"
 	default n
 	help
 	  Set this to yes if you want to be able to activate
-	  debugging output at runtime. It adds a probably small
+	  debugging output at runtime. It adds a very small
 	  overhead to all vserver related functions and
 	  increases the kernel size by about 20k.
 
@@ -218,7 +226,7 @@ config	VSERVER_HISTORY
 	  the event of a kernel panic or oops.
 
 config	VSERVER_HISTORY_SIZE
-	int "Per-CPU History Size (32-65536)"
+	int	"Per-CPU History Size (32-65536)"
 	depends on VSERVER_HISTORY
 	range 32 65536
 	default 64
@@ -236,7 +244,7 @@ config	VSERVER_MONITOR
 	  for detailed analysis.
 
 config	VSERVER_MONITOR_SIZE
-	int "Per-CPU Monitor Queue Size (32-65536)"
+	int	"Per-CPU Monitor Queue Size (32-65536)"
 	depends on VSERVER_MONITOR
 	range 32 65536
 	default 1024
@@ -245,7 +253,7 @@ config	VSERVER_MONITOR_SIZE
 	  the per-CPU scheduling monitor buffer.
 
 config	VSERVER_MONITOR_SYNC
-	int "Per-CPU Monitor Sync Interval (0-65536)"
+	int	"Per-CPU Monitor Sync Interval (0-65536)"
 	depends on VSERVER_MONITOR
 	range 0 65536
 	default 256
@@ -260,6 +268,7 @@ config	VSERVER
 	bool
 	default y
 	select UTS_NS
+	select SYSVIPC
 	select IPC_NS
 
 config	VSERVER_SECURITY

@@ -18,13 +18,24 @@
  *  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
+#include <linux/interrupt.h>
+#include <linux/list.h>
 #include <linux/module.h>
+#include <linux/ptrace.h>
+#include <linux/slab.h>
+#include <linux/wait.h>
+#include <linux/mm.h>
+#include <linux/io.h>
+#include <linux/mutex.h>
+#include <linux/device.h>
 
-#include <asm/io.h>
 #include <asm/spu.h>
 #include <asm/spu_priv1.h>
+#include <asm/firmware.h>
+#include <asm/prom.h>
 
 #include "interrupt.h"
+#include "spu_priv1_mmio.h"
 
 static void int_mask_and(struct spu *spu, int class, u64 mask)
 {
@@ -84,9 +95,9 @@ static void mfc_dsisr_set(struct spu *spu, u64 dsisr)
 	out_be64(&spu->priv1->mfc_dsisr_RW, dsisr);
 }
 
-static void mfc_sdr_set(struct spu *spu, u64 sdr)
+static void mfc_sdr_setup(struct spu *spu)
 {
-	out_be64(&spu->priv1->mfc_sdr_RW, sdr);
+	out_be64(&spu->priv1->mfc_sdr_RW, mfspr(SPRN_SDR1));
 }
 
 static void mfc_sr1_set(struct spu *spu, u64 sr1)
@@ -146,7 +157,7 @@ const struct spu_priv1_ops spu_priv1_mmio_ops =
 	.mfc_dar_get = mfc_dar_get,
 	.mfc_dsisr_get = mfc_dsisr_get,
 	.mfc_dsisr_set = mfc_dsisr_set,
-	.mfc_sdr_set = mfc_sdr_set,
+	.mfc_sdr_setup = mfc_sdr_setup,
 	.mfc_sr1_set = mfc_sr1_set,
 	.mfc_sr1_get = mfc_sr1_get,
 	.mfc_tclass_id_set = mfc_tclass_id_set,

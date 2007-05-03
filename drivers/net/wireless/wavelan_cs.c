@@ -603,7 +603,7 @@ static wavepoint_history *wl_new_wavepoint(unsigned short nwid, unsigned char se
   if(lp->wavepoint_table.num_wavepoints==MAX_WAVEPOINTS)
     return NULL;
   
-  new_wavepoint=(wavepoint_history *) kmalloc(sizeof(wavepoint_history),GFP_ATOMIC);
+  new_wavepoint = kmalloc(sizeof(wavepoint_history),GFP_ATOMIC);
   if(new_wavepoint==NULL)
     return NULL;
   
@@ -1168,7 +1168,7 @@ wv_mmc_show(struct net_device *	dev)
 	 m.mmr_unused0[6],
 	 m.mmr_unused0[7]);
 #endif	/* DEBUG_SHOW_UNUSED */
-  printk(KERN_DEBUG "Encryption algorythm: %02X - Status: %02X\n",
+  printk(KERN_DEBUG "Encryption algorithm: %02X - Status: %02X\n",
 	 m.mmr_des_avail, m.mmr_des_status);
 #ifdef DEBUG_SHOW_UNUSED
   printk(KERN_DEBUG "mmc_unused1[]: %02X:%02X:%02X:%02X:%02X\n",
@@ -3590,9 +3590,9 @@ wv_82593_config(struct net_device *	dev)
   cfblk.acloc = TRUE;           /* Disable source addr insertion by i82593 */
   cfblk.preamb_len = 0;         /* 2 bytes preamble (SFD) */
   cfblk.loopback = FALSE;
-  cfblk.lin_prio = 0;   	/* conform to 802.3 backoff algoritm */
-  cfblk.exp_prio = 5;	        /* conform to 802.3 backoff algoritm */
-  cfblk.bof_met = 1;	        /* conform to 802.3 backoff algoritm */
+  cfblk.lin_prio = 0;   	/* conform to 802.3 backoff algorithm */
+  cfblk.exp_prio = 5;	        /* conform to 802.3 backoff algorithm */
+  cfblk.bof_met = 1;	        /* conform to 802.3 backoff algorithm */
   cfblk.ifrm_spc = 0x20 >> 4;	/* 32 bit times interframe spacing */
   cfblk.slottim_low = 0x20 >> 5;	/* 32 bit times slot time */
   cfblk.slottim_hi = 0x0;
@@ -3939,11 +3939,8 @@ wv_hw_reset(struct net_device *	dev)
 static inline int
 wv_pcmcia_config(struct pcmcia_device *	link)
 {
-  tuple_t		tuple;
-  cisparse_t		parse;
   struct net_device *	dev = (struct net_device *) link->priv;
   int			i;
-  u_char		buf[64];
   win_req_t		req;
   memreq_t		mem;
   net_local *		lp = netdev_priv(dev);
@@ -3952,36 +3949,6 @@ wv_pcmcia_config(struct pcmcia_device *	link)
 #ifdef DEBUG_CONFIG_TRACE
   printk(KERN_DEBUG "->wv_pcmcia_config(0x%p)\n", link);
 #endif
-
-  /*
-   * This reads the card's CONFIG tuple to find its configuration
-   * registers.
-   */
-  do
-    {
-      tuple.Attributes = 0;
-      tuple.DesiredTuple = CISTPL_CONFIG;
-      i = pcmcia_get_first_tuple(link, &tuple);
-      if(i != CS_SUCCESS)
-	break;
-      tuple.TupleData = (cisdata_t *)buf;
-      tuple.TupleDataMax = 64;
-      tuple.TupleOffset = 0;
-      i = pcmcia_get_tuple_data(link, &tuple);
-      if(i != CS_SUCCESS)
-	break;
-      i = pcmcia_parse_tuple(link, &tuple, &parse);
-      if(i != CS_SUCCESS)
-	break;
-      link->conf.ConfigBase = parse.config.base;
-      link->conf.Present = parse.config.rmask[0];
-    }
-  while(0);
-  if(i != CS_SUCCESS)
-    {
-      cs_error(link, ParseTuple, i);
-      return FALSE;
-    }
 
   do
     {

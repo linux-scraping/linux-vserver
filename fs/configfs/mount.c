@@ -38,10 +38,10 @@
 
 struct vfsmount * configfs_mount = NULL;
 struct super_block * configfs_sb = NULL;
-kmem_cache_t *configfs_dir_cachep;
+struct kmem_cache *configfs_dir_cachep;
 static int configfs_mnt_count = 0;
 
-static struct super_operations configfs_ops = {
+static const struct super_operations configfs_ops = {
 	.statfs		= simple_statfs,
 	.drop_inode	= generic_delete_inode,
 };

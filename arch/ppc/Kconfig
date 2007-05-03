@@ -19,6 +19,14 @@ config RWSEM_XCHGADD_ALGORITHM
 	bool
 	default y
 
+config ARCH_HAS_ILOG2_U32
+	bool
+	default y
+
+config ARCH_HAS_ILOG2_U64
+	bool
+	default n
+
 config GENERIC_HWEIGHT
 	bool
 	default y
@@ -52,6 +60,11 @@ config ARCH_MAY_HAVE_PC_FDC
 	bool
 	default y
 
+config GENERIC_BUG
+	bool
+	default y
+	depends on BUG
+
 source "init/Kconfig"
 
 menu "Processor"
@@ -77,9 +90,11 @@ config 6xx
 
 config 40x
 	bool "40x"
+	select PPC_DCR_NATIVE
 
 config 44x
 	bool "44x"
+	select PPC_DCR_NATIVE
 
 config 8xx
 	bool "8xx"
@@ -94,6 +109,15 @@ endchoice
 
 config PPC_FPU
 	bool
+
+config PPC_DCR_NATIVE
+	bool
+	default n
+
+config PPC_DCR
+	bool
+	depends on PPC_DCR_NATIVE
+	default y
 
 config BOOKE
 	bool
@@ -600,7 +624,7 @@ config HDPU
 	  Select HDPU if configuring a Sky Computers Compute Blade.
 
 config HDPU_FEATURES
-	depends HDPU
+	depends on HDPU
 	tristate "HDPU-Features"
 	help
 	  Select to enable HDPU enhanced features.
@@ -645,15 +669,6 @@ config RADSTONE_PPC7D
 
 config PAL4
 	bool "SBS-Palomar4"
-
-config GEMINI
-	bool "Synergy-Gemini"
-	depends on BROKEN
-	select PPC_INDIRECT_PCI
-	help
-	  Select Gemini if configuring for a Synergy Microsystems' Gemini
-	  series Single Board Computer.  More information is available at:
-	  <http://www.synergymicro.com/PressRel/97_10_15.html>.
 
 config EST8260
 	bool "EST8260"
@@ -711,7 +726,7 @@ config LITE5200
 
 config LITE5200B
 	bool "Freescale LITE5200B"
-	depends LITE5200
+	depends on LITE5200
 	help
 	  Support for the LITE5200B dev board for the MPC5200 from Freescale.
 	  This is the new board with 2 PCI slots.
@@ -724,7 +739,7 @@ config MPC834x_SYS
 	  Be aware that PCI buses can only function when SYS board is plugged
 	  into the PIB (Platform IO Board) board from Freescale which provide
 	  3 PCI slots.  The PIBs PCI initialization is the bootloader's
-	  responsiblilty.
+	  responsibility.
 
 config EV64360
 	bool "Marvell-EV64360BP"
@@ -828,6 +843,21 @@ config MV64X60
 	bool
 	depends on (GT64260 || MV64360)
 	select PPC_INDIRECT_PCI
+	default y
+
+config MV643XX_ETH_0
+	bool
+	depends on MV643XX_ETH && (KATANA || RADSTONE_PPC7D || EV64360 || HDPU)
+	default y
+
+config MV643XX_ETH_1
+	bool
+	depends on MV643XX_ETH && (KATANA || RADSTONE_PPC7D || EV64360)
+	default y
+
+config MV643XX_ETH_2
+	bool
+	depends on MV643XX_ETH && (KATANA || RADSTONE_PPC7D || EV64360)
 	default y
 
 menu "Set bridge options"
@@ -1161,6 +1191,10 @@ config ISA
 	  inside your box.  If you have an Apple machine, say N here; if you
 	  have an IBM RS/6000 or pSeries machine or a PReP machine, say Y.  If
 	  you have an embedded board, consult your board documentation.
+
+config ZONE_DMA
+	bool
+	default y
 
 config GENERIC_ISA_DMA
 	bool

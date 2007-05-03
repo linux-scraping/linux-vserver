@@ -36,13 +36,41 @@
 #include <linux/workqueue.h>
 #include <linux/kexec.h>
 #include <linux/irq.h>
+#include <linux/hrtimer.h>
 #include <linux/vserver/debug.h>
 
 #include <asm/ptrace.h>
 #include <asm/irq_regs.h>
 
 /* Whether we react on sysrq keys or just ignore them */
-int sysrq_enabled = 1;
+int __read_mostly __sysrq_enabled = 1;
+
+static int __read_mostly sysrq_always_enabled;
+
+int sysrq_on(void)
+{
+	return __sysrq_enabled || sysrq_always_enabled;
+}
+
+/*
+ * A value of 1 means 'all', other nonzero values are an op mask:
+ */
+static inline int sysrq_on_mask(int mask)
+{
+	return sysrq_always_enabled || __sysrq_enabled == 1 ||
+						(__sysrq_enabled & mask);
+}
+
+static int __init sysrq_always_enabled_setup(char *str)
+{
+	sysrq_always_enabled = 1;
+	printk(KERN_INFO "debug: sysrq always enabled.\n");
+
+	return 1;
+}
+
+__setup("sysrq_always_enabled", sysrq_always_enabled_setup);
+
 
 static void sysrq_handle_loglevel(int key, struct tty_struct *tty)
 {
@@ -62,9 +90,8 @@ static struct sysrq_key_op sysrq_loglevel_op = {
 #ifdef CONFIG_VT
 static void sysrq_handle_SAK(int key, struct tty_struct *tty)
 {
-	if (tty)
-		do_SAK(tty);
-	reset_vc(vc_cons[fg_console].d);
+	struct work_struct *SAK_work = &vc_cons[fg_console].SAK_work;
+	schedule_work(SAK_work);
 }
 static struct sysrq_key_op sysrq_SAK_op = {
 	.handler	= sysrq_handle_SAK,
@@ -133,6 +160,17 @@ static struct sysrq_key_op sysrq_sync_op = {
 	.enable_mask	= SYSRQ_ENABLE_SYNC,
 };
 
+static void sysrq_handle_show_timers(int key, struct tty_struct *tty)
+{
+	sysrq_timer_list_show();
+}
+
+static struct sysrq_key_op sysrq_show_timers_op = {
+	.handler	= sysrq_handle_show_timers,
+	.help_msg	= "show-all-timers(Q)",
+	.action_msg	= "Show Pending Timers",
+};
+
 static void sysrq_handle_mountro(int key, struct tty_struct *tty)
 {
 	emergency_remount();
@@ -183,6 +221,18 @@ static struct sysrq_key_op sysrq_showstate_op = {
 	.enable_mask	= SYSRQ_ENABLE_DUMP,
 };
 
+static void sysrq_handle_showstate_blocked(int key, struct tty_struct *tty)
+{
+	show_state_filter(TASK_UNINTERRUPTIBLE);
+}
+static struct sysrq_key_op sysrq_showstate_blocked_op = {
+	.handler	= sysrq_handle_showstate_blocked,
+	.help_msg	= "shoW-blocked-tasks",
+	.action_msg	= "Show Blocked State",
+	.enable_mask	= SYSRQ_ENABLE_DUMP,
+};
+
+
 static void sysrq_handle_showmem(int key, struct tty_struct *tty)
 {
 	show_mem();
@@ -220,13 +270,13 @@ static struct sysrq_key_op sysrq_term_op = {
 	.enable_mask	= SYSRQ_ENABLE_SIGNAL,
 };
 
-static void moom_callback(void *ignored)
+static void moom_callback(struct work_struct *ignored)
 {
 	out_of_memory(&NODE_DATA(0)->node_zonelists[ZONE_NORMAL],
 			GFP_KERNEL, 0);
 }
 
-static DECLARE_WORK(moom_work, moom_callback, NULL);
+static DECLARE_WORK(moom_work, moom_callback);
 
 static void sysrq_handle_moom(int key, struct tty_struct *tty)
 {
@@ -292,15 +342,16 @@ static struct sysrq_key_op *sysrq_key_table[36] = {
 	&sysrq_loglevel_op,		/* 9 */
 
 	/*
-	 * Don't use for system provided sysrqs, it is handled specially on
-	 * sparc and will never arrive
+	 * a: Don't use for system provided sysrqs, it is handled specially on
+	 * sparc and will never arrive.
 	 */
 	NULL,				/* a */
 	&sysrq_reboot_op,		/* b */
-	&sysrq_crashdump_op,		/* c */
+	&sysrq_crashdump_op,		/* c & ibm_emac driver debug */
 	&sysrq_showlocks_op,		/* d */
 	&sysrq_term_op,			/* e */
 	&sysrq_moom_op,			/* f */
+	/* g: May be registered by ppc for kgdb */
 	NULL,				/* g */
 	NULL,				/* h */
 	&sysrq_kill_op,			/* i */
@@ -309,24 +360,25 @@ static struct sysrq_key_op *sysrq_key_table[36] = {
 	NULL,				/* l */
 	&sysrq_showmem_op,		/* m */
 	&sysrq_unrt_op,			/* n */
-	/* This will often be registered as 'Off' at init time */
+	/* o: This will often be registered as 'Off' at init time */
 	NULL,				/* o */
 	&sysrq_showregs_op,		/* p */
-	NULL,				/* q */
-	&sysrq_unraw_op,			/* r */
+	&sysrq_show_timers_op,		/* q */
+	&sysrq_unraw_op,		/* r */
 	&sysrq_sync_op,			/* s */
 	&sysrq_showstate_op,		/* t */
 	&sysrq_mountro_op,		/* u */
-	/* May be assigned at init time by SMP VOYAGER */
+	/* v: May be registered at init time by SMP VOYAGER */
 	NULL,				/* v */
-	NULL,				/* w */
-#ifdef CONFIG_VSERVER_DEBUG
-	&sysrq_showvxinfo_op,		/* x */
-#else
+	&sysrq_showstate_blocked_op,	/* w */
+	/* x: May be registered on ppc/powerpc for xmon */
 	NULL,				/* x */
-#endif
 	NULL,				/* y */
-	NULL				/* z */
+#ifdef CONFIG_VSERVER_DEBUG
+	&sysrq_showvxinfo_op,		/* z */
+#else
+	NULL,				/* z */
+#endif
 };
 
 /* key2index calculation, -1 on invalid index */
@@ -389,8 +441,7 @@ void __handle_sysrq(int key, struct tty_struct *tty, int check_mask)
 		 * Should we check for enabled operations (/proc/sysrq-trigger
 		 * should not) and is the invoked operation enabled?
 		 */
-		if (!check_mask || sysrq_enabled == 1 ||
-		    (sysrq_enabled & op_p->enable_mask)) {
+		if (!check_mask || sysrq_on_mask(op_p->enable_mask)) {
 			printk("%s\n", op_p->action_msg);
 			console_loglevel = orig_log_level;
 			op_p->handler(key, tty);
@@ -424,9 +475,8 @@ void __handle_sysrq(int key, struct tty_struct *tty, int check_mask)
  */
 void handle_sysrq(int key, struct tty_struct *tty)
 {
-	if (!sysrq_enabled)
-		return;
-	__handle_sysrq(key, tty, 1);
+	if (sysrq_on())
+		__handle_sysrq(key, tty, 1);
 }
 EXPORT_SYMBOL(handle_sysrq);
 

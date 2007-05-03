@@ -21,6 +21,7 @@
 
 #include <asm/memory.h>
 #include <asm/arch/vmalloc.h>
+#include <asm/pgtable-hwdef.h>
 
 /*
  * Just any arbitrary offset to the start of the vmalloc VM area: the
@@ -169,25 +170,33 @@ extern void __pgd_error(const char *file, int line, unsigned long val);
 #define L_PTE_WRITE		(1 << 5)
 #define L_PTE_EXEC		(1 << 6)
 #define L_PTE_DIRTY		(1 << 7)
-#define L_PTE_COHERENT		(1 << 9)	/* I/O coherent (xsc3) */
-#define L_PTE_SHARED		(1 << 10)	/* shared between CPUs (v6) */
-#define L_PTE_ASID		(1 << 11)	/* non-global (use ASID, v6) */
+#define L_PTE_SHARED		(1 << 10)	/* shared(v6), coherent(xsc3) */
 
 #ifndef __ASSEMBLY__
 
 /*
- * The following macros handle the cache and bufferable bits...
+ * The pgprot_* and protection_map entries will be fixed up in runtime
+ * to include the cachable and bufferable bits based on memory policy,
+ * as well as any architecture dependent bits like global/ASID and SMP
+ * shared mapping bits.
  */
 #define _L_PTE_DEFAULT	L_PTE_PRESENT | L_PTE_YOUNG | L_PTE_CACHEABLE | L_PTE_BUFFERABLE
 #define _L_PTE_READ	L_PTE_USER | L_PTE_EXEC
 
+extern pgprot_t		pgprot_user;
 extern pgprot_t		pgprot_kernel;
 
-#define PAGE_NONE       __pgprot(_L_PTE_DEFAULT)
-#define PAGE_COPY       __pgprot(_L_PTE_DEFAULT | _L_PTE_READ)
-#define PAGE_SHARED     __pgprot(_L_PTE_DEFAULT | _L_PTE_READ | L_PTE_WRITE)
-#define PAGE_READONLY   __pgprot(_L_PTE_DEFAULT | _L_PTE_READ)
+#define PAGE_NONE	pgprot_user
+#define PAGE_COPY	__pgprot(pgprot_val(pgprot_user) | _L_PTE_READ)
+#define PAGE_SHARED	__pgprot(pgprot_val(pgprot_user) | _L_PTE_READ | \
+				 L_PTE_WRITE)
+#define PAGE_READONLY	__pgprot(pgprot_val(pgprot_user) | _L_PTE_READ)
 #define PAGE_KERNEL	pgprot_kernel
+
+#define __PAGE_NONE	__pgprot(_L_PTE_DEFAULT)
+#define __PAGE_COPY	__pgprot(_L_PTE_DEFAULT | _L_PTE_READ)
+#define __PAGE_SHARED	__pgprot(_L_PTE_DEFAULT | _L_PTE_READ | L_PTE_WRITE)
+#define __PAGE_READONLY	__pgprot(_L_PTE_DEFAULT | _L_PTE_READ)
 
 #endif /* __ASSEMBLY__ */
 
@@ -199,23 +208,23 @@ extern pgprot_t		pgprot_kernel;
  *  2) If we could do execute protection, then read is implied
  *  3) write implies read permissions
  */
-#define __P000  PAGE_NONE
-#define __P001  PAGE_READONLY
-#define __P010  PAGE_COPY
-#define __P011  PAGE_COPY
-#define __P100  PAGE_READONLY
-#define __P101  PAGE_READONLY
-#define __P110  PAGE_COPY
-#define __P111  PAGE_COPY
+#define __P000  __PAGE_NONE
+#define __P001  __PAGE_READONLY
+#define __P010  __PAGE_COPY
+#define __P011  __PAGE_COPY
+#define __P100  __PAGE_READONLY
+#define __P101  __PAGE_READONLY
+#define __P110  __PAGE_COPY
+#define __P111  __PAGE_COPY
 
-#define __S000  PAGE_NONE
-#define __S001  PAGE_READONLY
-#define __S010  PAGE_SHARED
-#define __S011  PAGE_SHARED
-#define __S100  PAGE_READONLY
-#define __S101  PAGE_READONLY
-#define __S110  PAGE_SHARED
-#define __S111  PAGE_SHARED
+#define __S000  __PAGE_NONE
+#define __S001  __PAGE_READONLY
+#define __S010  __PAGE_SHARED
+#define __S011  __PAGE_SHARED
+#define __S100  __PAGE_READONLY
+#define __S101  __PAGE_READONLY
+#define __S110  __PAGE_SHARED
+#define __S111  __PAGE_SHARED
 
 #ifndef __ASSEMBLY__
 /*
@@ -229,7 +238,7 @@ extern struct page *empty_zero_page;
 #define pfn_pte(pfn,prot)	(__pte(((pfn) << PAGE_SHIFT) | pgprot_val(prot)))
 
 #define pte_none(pte)		(!pte_val(pte))
-#define pte_clear(mm,addr,ptep)	set_pte_at((mm),(addr),(ptep), __pte(0))
+#define pte_clear(mm,addr,ptep)	set_pte_ext(ptep, __pte(0), 0)
 #define pte_page(pte)		(pfn_to_page(pte_pfn(pte)))
 #define pte_offset_kernel(dir,addr)	(pmd_page_vaddr(*(dir)) + __pte_index(addr))
 #define pte_offset_map(dir,addr)	(pmd_page_vaddr(*(dir)) + __pte_index(addr))
@@ -237,8 +246,11 @@ extern struct page *empty_zero_page;
 #define pte_unmap(pte)		do { } while (0)
 #define pte_unmap_nested(pte)	do { } while (0)
 
-#define set_pte(ptep, pte)	cpu_set_pte(ptep,pte)
-#define set_pte_at(mm,addr,ptep,pteval) set_pte(ptep,pteval)
+#define set_pte_ext(ptep,pte,ext) cpu_set_pte_ext(ptep,pte,ext)
+
+#define set_pte_at(mm,addr,ptep,pteval) do { \
+	set_pte_ext(ptep, pteval, (addr) >= PAGE_OFFSET ? 0 : PTE_EXT_NG); \
+ } while (0)
 
 /*
  * The following only work if pte_present() is true.

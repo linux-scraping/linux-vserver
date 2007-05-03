@@ -8,6 +8,7 @@
  *
  */
 
+#include <linux/module.h>
 #include <linux/suspend.h>
 #include <linux/kobject.h>
 #include <linux/string.h>
@@ -18,16 +19,18 @@
 #include <linux/console.h>
 #include <linux/cpu.h>
 #include <linux/resume-trace.h>
+#include <linux/freezer.h>
+#include <linux/vmstat.h>
 
 #include "power.h"
 
 /*This is just an arbitrary number */
 #define FREE_PAGE_NUMBER (100)
 
-DECLARE_MUTEX(pm_sem);
+DEFINE_MUTEX(pm_mutex);
 
 struct pm_ops *pm_ops;
-suspend_disk_method_t pm_disk_mode = PM_DISK_SHUTDOWN;
+suspend_disk_method_t pm_disk_mode = PM_DISK_PLATFORM;
 
 /**
  *	pm_set_ops - Set the global power method table. 
@@ -36,11 +39,16 @@ suspend_disk_method_t pm_disk_mode = PM_DISK_SHUTDOWN;
 
 void pm_set_ops(struct pm_ops * ops)
 {
-	down(&pm_sem);
+	mutex_lock(&pm_mutex);
 	pm_ops = ops;
-	up(&pm_sem);
+	mutex_unlock(&pm_mutex);
 }
 
+static inline void pm_finish(suspend_state_t state)
+{
+	if (pm_ops->finish)
+		pm_ops->finish(state);
+}
 
 /**
  *	suspend_prepare - Do prep work before entering low-power state.
@@ -61,16 +69,13 @@ static int suspend_prepare(suspend_state_t state)
 
 	pm_prepare_console();
 
-	error = disable_nonboot_cpus();
-	if (error)
-		goto Enable_cpu;
-
 	if (freeze_processes()) {
 		error = -EAGAIN;
 		goto Thaw;
 	}
 
-	if ((free_pages = nr_free_pages()) < FREE_PAGE_NUMBER) {
+	if ((free_pages = global_page_state(NR_FREE_PAGES))
+			< FREE_PAGE_NUMBER) {
 		pr_debug("PM: free some memory\n");
 		shrink_all_memory(FREE_PAGE_NUMBER - free_pages);
 		if (nr_free_pages() < FREE_PAGE_NUMBER) {
@@ -86,18 +91,22 @@ static int suspend_prepare(suspend_state_t state)
 	}
 
 	suspend_console();
-	if ((error = device_suspend(PMSG_SUSPEND))) {
+	error = device_suspend(PMSG_SUSPEND);
+	if (error) {
 		printk(KERN_ERR "Some devices failed to suspend\n");
-		goto Finish;
+		goto Resume_devices;
 	}
-	return 0;
- Finish:
-	if (pm_ops->finish)
-		pm_ops->finish(state);
+	error = disable_nonboot_cpus();
+	if (!error)
+		return 0;
+
+	enable_nonboot_cpus();
+ Resume_devices:
+	pm_finish(state);
+	device_resume();
+	resume_console();
  Thaw:
 	thaw_processes();
- Enable_cpu:
-	enable_nonboot_cpus();
 	pm_restore_console();
 	return error;
 }
@@ -132,12 +141,11 @@ int suspend_enter(suspend_state_t state)
 
 static void suspend_finish(suspend_state_t state)
 {
+	enable_nonboot_cpus();
+	pm_finish(state);
 	device_resume();
 	resume_console();
 	thaw_processes();
-	enable_nonboot_cpus();
-	if (pm_ops && pm_ops->finish)
-		pm_ops->finish(state);
 	pm_restore_console();
 }
 
@@ -159,7 +167,10 @@ static inline int valid_state(suspend_state_t state)
 	if (state == PM_SUSPEND_DISK)
 		return 1;
 
-	if (pm_ops && pm_ops->valid && !pm_ops->valid(state))
+	/* all other states need lowlevel support and need to be
+	 * valid to the lowlevel implementation, no valid callback
+	 * implies that all are valid. */
+	if (!pm_ops || (pm_ops->valid && !pm_ops->valid(state)))
 		return 0;
 	return 1;
 }
@@ -182,7 +193,7 @@ static int enter_state(suspend_state_t state)
 
 	if (!valid_state(state))
 		return -ENODEV;
-	if (down_trylock(&pm_sem))
+	if (!mutex_trylock(&pm_mutex))
 		return -EBUSY;
 
 	if (state == PM_SUSPEND_DISK) {
@@ -200,7 +211,7 @@ static int enter_state(suspend_state_t state)
 	pr_debug("PM: Finishing wakeup.\n");
 	suspend_finish(state);
  Unlock:
-	up(&pm_sem);
+	mutex_unlock(&pm_mutex);
 	return error;
 }
 
@@ -229,7 +240,7 @@ int pm_suspend(suspend_state_t state)
 	return -EINVAL;
 }
 
-
+EXPORT_SYMBOL(pm_suspend);
 
 decl_subsys(power,NULL,NULL);
 

@@ -42,7 +42,6 @@
 #define ACPI_BATTERY_COMPONENT		0x00040000
 #define ACPI_BATTERY_CLASS		"battery"
 #define ACPI_BATTERY_HID		"PNP0C0A"
-#define ACPI_BATTERY_DRIVER_NAME	"ACPI Battery Driver"
 #define ACPI_BATTERY_DEVICE_NAME	"Battery"
 #define ACPI_BATTERY_FILE_INFO		"info"
 #define ACPI_BATTERY_FILE_STATUS	"state"
@@ -53,10 +52,10 @@
 #define ACPI_BATTERY_UNITS_AMPS		"mA"
 
 #define _COMPONENT		ACPI_BATTERY_COMPONENT
-ACPI_MODULE_NAME("acpi_battery")
+ACPI_MODULE_NAME("battery");
 
-    MODULE_AUTHOR("Paul Diefenbaugh");
-MODULE_DESCRIPTION(ACPI_BATTERY_DRIVER_NAME);
+MODULE_AUTHOR("Paul Diefenbaugh");
+MODULE_DESCRIPTION("ACPI Battery Driver");
 MODULE_LICENSE("GPL");
 
 extern struct proc_dir_entry *acpi_lock_battery_dir(void);
@@ -64,10 +63,10 @@ extern void *acpi_unlock_battery_dir(struct proc_dir_entry *acpi_battery_dir);
 
 static int acpi_battery_add(struct acpi_device *device);
 static int acpi_battery_remove(struct acpi_device *device, int type);
-static int acpi_battery_resume(struct acpi_device *device, int status);
+static int acpi_battery_resume(struct acpi_device *device);
 
 static struct acpi_driver acpi_battery_driver = {
-	.name = ACPI_BATTERY_DRIVER_NAME,
+	.name = "battery",
 	.class = ACPI_BATTERY_CLASS,
 	.ids = ACPI_BATTERY_HID,
 	.ops = {
@@ -149,7 +148,7 @@ acpi_battery_get_info(struct acpi_battery *battery,
 		return -ENODEV;
 	}
 
-	package = (union acpi_object *)buffer.pointer;
+	package = buffer.pointer;
 
 	/* Extract Package Data */
 
@@ -160,12 +159,11 @@ acpi_battery_get_info(struct acpi_battery *battery,
 		goto end;
 	}
 
-	data.pointer = kmalloc(data.length, GFP_KERNEL);
+	data.pointer = kzalloc(data.length, GFP_KERNEL);
 	if (!data.pointer) {
 		result = -ENOMEM;
 		goto end;
 	}
-	memset(data.pointer, 0, data.length);
 
 	status = acpi_extract_package(package, &format, &data);
 	if (ACPI_FAILURE(status)) {
@@ -179,7 +177,7 @@ acpi_battery_get_info(struct acpi_battery *battery,
 	kfree(buffer.pointer);
 
 	if (!result)
-		(*bif) = (struct acpi_battery_info *)data.pointer;
+		(*bif) = data.pointer;
 
 	return result;
 }
@@ -209,7 +207,7 @@ acpi_battery_get_status(struct acpi_battery *battery,
 		return -ENODEV;
 	}
 
-	package = (union acpi_object *)buffer.pointer;
+	package = buffer.pointer;
 
 	/* Extract Package Data */
 
@@ -220,12 +218,11 @@ acpi_battery_get_status(struct acpi_battery *battery,
 		goto end;
 	}
 
-	data.pointer = kmalloc(data.length, GFP_KERNEL);
+	data.pointer = kzalloc(data.length, GFP_KERNEL);
 	if (!data.pointer) {
 		result = -ENOMEM;
 		goto end;
 	}
-	memset(data.pointer, 0, data.length);
 
 	status = acpi_extract_package(package, &format, &data);
 	if (ACPI_FAILURE(status)) {
@@ -239,7 +236,7 @@ acpi_battery_get_status(struct acpi_battery *battery,
 	kfree(buffer.pointer);
 
 	if (!result)
-		(*bst) = (struct acpi_battery_status *)data.pointer;
+		(*bst) = data.pointer;
 
 	return result;
 }
@@ -326,6 +323,13 @@ static int acpi_battery_check(struct acpi_battery *battery)
 	return result;
 }
 
+static void acpi_battery_check_present(struct acpi_battery *battery)
+{
+	if (!battery->flags.present) {
+		acpi_battery_check(battery);
+	}
+}
+
 /* --------------------------------------------------------------------------
                               FS Interface (/proc)
    -------------------------------------------------------------------------- */
@@ -334,13 +338,15 @@ static struct proc_dir_entry *acpi_battery_dir;
 static int acpi_battery_read_info(struct seq_file *seq, void *offset)
 {
 	int result = 0;
-	struct acpi_battery *battery = (struct acpi_battery *)seq->private;
+	struct acpi_battery *battery = seq->private;
 	struct acpi_battery_info *bif = NULL;
 	char *units = "?";
 
 
 	if (!battery)
 		goto end;
+
+	acpi_battery_check_present(battery);
 
 	if (battery->flags.present)
 		seq_printf(seq, "present:                 yes\n");
@@ -418,13 +424,15 @@ static int acpi_battery_info_open_fs(struct inode *inode, struct file *file)
 static int acpi_battery_read_state(struct seq_file *seq, void *offset)
 {
 	int result = 0;
-	struct acpi_battery *battery = (struct acpi_battery *)seq->private;
+	struct acpi_battery *battery = seq->private;
 	struct acpi_battery_status *bst = NULL;
 	char *units = "?";
 
 
 	if (!battery)
 		goto end;
+
+	acpi_battery_check_present(battery);
 
 	if (battery->flags.present)
 		seq_printf(seq, "present:                 yes\n");
@@ -494,12 +502,14 @@ static int acpi_battery_state_open_fs(struct inode *inode, struct file *file)
 
 static int acpi_battery_read_alarm(struct seq_file *seq, void *offset)
 {
-	struct acpi_battery *battery = (struct acpi_battery *)seq->private;
+	struct acpi_battery *battery = seq->private;
 	char *units = "?";
 
 
 	if (!battery)
 		goto end;
+
+	acpi_battery_check_present(battery);
 
 	if (!battery->flags.present) {
 		seq_printf(seq, "present:                 no\n");
@@ -531,12 +541,14 @@ acpi_battery_write_alarm(struct file *file,
 {
 	int result = 0;
 	char alarm_string[12] = { '\0' };
-	struct seq_file *m = (struct seq_file *)file->private_data;
-	struct acpi_battery *battery = (struct acpi_battery *)m->private;
+	struct seq_file *m = file->private_data;
+	struct acpi_battery *battery = m->private;
 
 
 	if (!battery || (count > sizeof(alarm_string) - 1))
 		return -EINVAL;
+
+	acpi_battery_check_present(battery);
 
 	if (!battery->flags.present)
 		return -ENODEV;
@@ -658,7 +670,7 @@ static int acpi_battery_remove_fs(struct acpi_device *device)
 
 static void acpi_battery_notify(acpi_handle handle, u32 event, void *data)
 {
-	struct acpi_battery *battery = (struct acpi_battery *)data;
+	struct acpi_battery *battery = data;
 	struct acpi_device *device = NULL;
 
 
@@ -694,10 +706,9 @@ static int acpi_battery_add(struct acpi_device *device)
 	if (!device)
 		return -EINVAL;
 
-	battery = kmalloc(sizeof(struct acpi_battery), GFP_KERNEL);
+	battery = kzalloc(sizeof(struct acpi_battery), GFP_KERNEL);
 	if (!battery)
 		return -ENOMEM;
-	memset(battery, 0, sizeof(struct acpi_battery));
 
 	battery->device = device;
 	strcpy(acpi_device_name(device), ACPI_BATTERY_DEVICE_NAME);
@@ -742,7 +753,7 @@ static int acpi_battery_remove(struct acpi_device *device, int type)
 	if (!device || !acpi_driver_data(device))
 		return -EINVAL;
 
-	battery = (struct acpi_battery *)acpi_driver_data(device);
+	battery = acpi_driver_data(device);
 
 	status = acpi_remove_notify_handler(device->handle,
 					    ACPI_ALL_NOTIFY,
@@ -756,7 +767,7 @@ static int acpi_battery_remove(struct acpi_device *device, int type)
 }
 
 /* this is needed to learn about changes made in suspended state */
-static int acpi_battery_resume(struct acpi_device *device, int state)
+static int acpi_battery_resume(struct acpi_device *device)
 {
 	struct acpi_battery *battery;
 

@@ -45,7 +45,7 @@ put_info_buffer(char *cp)
 		return;
 	if (!*cp)
 		return;
-	if (!(ib = (struct divert_info *) kmalloc(sizeof(struct divert_info) + strlen(cp), GFP_ATOMIC)))
+	if (!(ib = kmalloc(sizeof(struct divert_info) + strlen(cp), GFP_ATOMIC)))
 		 return;	/* no memory */
 	strcpy(ib->info_start, cp);	/* set output string */
 	ib->next = NULL;
@@ -256,7 +256,7 @@ isdn_divert_ioctl(struct inode *inode, struct file *file,
 
 
 #ifdef CONFIG_PROC_FS
-static struct file_operations isdn_fops =
+static const struct file_operations isdn_fops =
 {
 	.owner          = THIS_MODULE,
 	.llseek         = no_llseek,

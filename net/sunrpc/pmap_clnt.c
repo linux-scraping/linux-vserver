@@ -62,7 +62,10 @@ static inline void pmap_map_free(struct portmap_args *map)
 
 static void pmap_map_release(void *data)
 {
-	pmap_map_free(data);
+	struct portmap_args *map = data;
+
+	xprt_put(map->pm_xprt);
+	pmap_map_free(map);
 }
 
 static const struct rpc_call_ops pmap_getport_ops = {
@@ -94,20 +97,20 @@ void rpc_getport(struct rpc_task *task)
 	struct rpc_task *child;
 	int status;
 
-	dprintk("RPC: %4d rpc_getport(%s, %u, %u, %d)\n",
+	dprintk("RPC: %5u rpc_getport(%s, %u, %u, %d)\n",
 			task->tk_pid, clnt->cl_server,
 			clnt->cl_prog, clnt->cl_vers, xprt->prot);
 
 	/* Autobind on cloned rpc clients is discouraged */
 	BUG_ON(clnt->cl_parent != clnt);
 
+	status = -EACCES;		/* tell caller to check again */
+	if (xprt_test_and_set_binding(xprt))
+		goto bailout_nowake;
+
 	/* Put self on queue before sending rpcbind request, in case
 	 * pmap_getport_done completes before we return from rpc_run_task */
 	rpc_sleep_on(&xprt->binding, task, NULL, NULL);
-
-	status = -EACCES;		/* tell caller to check again */
-	if (xprt_test_and_set_binding(xprt))
-		goto bailout_nofree;
 
 	/* Someone else may have bound if we slept */
 	status = 0;
@@ -133,8 +136,8 @@ void rpc_getport(struct rpc_task *task)
 	status = -EIO;
 	child = rpc_run_task(pmap_clnt, RPC_TASK_ASYNC, &pmap_getport_ops, map);
 	if (IS_ERR(child))
-		goto bailout;
-	rpc_release_task(child);
+		goto bailout_nofree;
+	rpc_put_task(child);
 
 	task->tk_xprt->stat.bind_count++;
 	return;
@@ -143,8 +146,9 @@ bailout:
 	pmap_map_free(map);
 	xprt_put(xprt);
 bailout_nofree:
-	task->tk_status = status;
 	pmap_wake_portmap_waiters(xprt, status);
+bailout_nowake:
+	task->tk_status = status;
 }
 
 #ifdef CONFIG_ROOT_NFS
@@ -174,7 +178,7 @@ int rpc_getport_external(struct sockaddr_in *sin, __u32 prog, __u32 vers, int pr
 	char		hostname[32];
 	int		status;
 
-	dprintk("RPC:      rpc_getport_external(%u.%u.%u.%u, %u, %u, %d)\n",
+	dprintk("RPC:       rpc_getport_external(%u.%u.%u.%u, %u, %u, %d)\n",
 			NIPQUAD(sin->sin_addr.s_addr), prog, vers, prot);
 
 	sprintf(hostname, "%u.%u.%u.%u", NIPQUAD(sin->sin_addr.s_addr));
@@ -217,11 +221,10 @@ static void pmap_getport_done(struct rpc_task *child, void *data)
 		status = 0;
 	}
 
-	dprintk("RPC: %4d pmap_getport_done(status %d, port %u)\n",
+	dprintk("RPC: %5u pmap_getport_done(status %d, port %u)\n",
 			child->tk_pid, status, map->pm_port);
 
 	pmap_wake_portmap_waiters(xprt, status);
-	xprt_put(xprt);
 }
 
 /**
@@ -254,13 +257,14 @@ int rpc_register(u32 prog, u32 vers, int prot, unsigned short port, int *okay)
 	struct rpc_clnt		*pmap_clnt;
 	int error = 0;
 
-	dprintk("RPC: registering (%u, %u, %d, %u) with portmapper.\n",
+	dprintk("RPC:       registering (%u, %u, %d, %u) with portmapper.\n",
 			prog, vers, prot, port);
 
 	pmap_clnt = pmap_create("localhost", &sin, IPPROTO_UDP, 1);
 	if (IS_ERR(pmap_clnt)) {
 		error = PTR_ERR(pmap_clnt);
-		dprintk("RPC: couldn't create pmap client. Error = %d\n", error);
+		dprintk("RPC:       couldn't create pmap client. Error = %d\n",
+				error);
 		return error;
 	}
 
@@ -271,7 +275,7 @@ int rpc_register(u32 prog, u32 vers, int prot, unsigned short port, int *okay)
 			"RPC: failed to contact portmap (errno %d).\n",
 			error);
 	}
-	dprintk("RPC: registration status %d/%d\n", error, *okay);
+	dprintk("RPC:       registration status %d/%d\n", error, *okay);
 
 	/* Client deleted automatically because cl_oneshot == 1 */
 	return error;
@@ -302,8 +306,9 @@ static struct rpc_clnt *pmap_create(char *hostname, struct sockaddr_in *srvaddr,
  */
 static int xdr_encode_mapping(struct rpc_rqst *req, __be32 *p, struct portmap_args *map)
 {
-	dprintk("RPC: xdr_encode_mapping(%u, %u, %u, %u)\n",
-		map->pm_prog, map->pm_vers, map->pm_prot, map->pm_port);
+	dprintk("RPC:       xdr_encode_mapping(%u, %u, %u, %u)\n",
+			map->pm_prog, map->pm_vers,
+			map->pm_prot, map->pm_port);
 	*p++ = htonl(map->pm_prog);
 	*p++ = htonl(map->pm_vers);
 	*p++ = htonl(map->pm_prot);
@@ -328,7 +333,7 @@ static int xdr_decode_bool(struct rpc_rqst *req, __be32 *p, unsigned int *boolp)
 static struct rpc_procinfo	pmap_procedures[] = {
 [PMAP_SET] = {
 	  .p_proc		= PMAP_SET,
-	  .p_encode		= (kxdrproc_t) xdr_encode_mapping,	
+	  .p_encode		= (kxdrproc_t) xdr_encode_mapping,
 	  .p_decode		= (kxdrproc_t) xdr_decode_bool,
 	  .p_bufsiz		= 4,
 	  .p_count		= 1,
@@ -337,7 +342,7 @@ static struct rpc_procinfo	pmap_procedures[] = {
 	},
 [PMAP_UNSET] = {
 	  .p_proc		= PMAP_UNSET,
-	  .p_encode		= (kxdrproc_t) xdr_encode_mapping,	
+	  .p_encode		= (kxdrproc_t) xdr_encode_mapping,
 	  .p_decode		= (kxdrproc_t) xdr_decode_bool,
 	  .p_bufsiz		= 4,
 	  .p_count		= 1,

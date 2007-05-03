@@ -128,7 +128,18 @@ out_of_memory:
 	goto out;
 }
 
-void segv_handler(int sig, union uml_pt_regs *regs)
+static void bad_segv(struct faultinfo fi, unsigned long ip)
+{
+	struct siginfo si;
+
+	si.si_signo = SIGSEGV;
+	si.si_code = SEGV_ACCERR;
+	si.si_addr = (void __user *) FAULT_ADDRESS(fi);
+	current->thread.arch.faultinfo = fi;
+	force_sig_info(SIGSEGV, &si, current);
+}
+
+static void segv_handler(int sig, union uml_pt_regs *regs)
 {
 	struct faultinfo * fi = UPT_FAULTINFO(regs);
 
@@ -193,7 +204,8 @@ unsigned long segv(struct faultinfo fi, unsigned long ip, int is_user, void *sc)
                 current->thread.arch.faultinfo = fi;
 		force_sig_info(SIGBUS, &si, current);
 	} else if (err == -ENOMEM) {
-		printk("VM: killing process %s\n", current->comm);
+		printk("VM: killing process %s(%d:#%u)\n",
+			current->comm, current->pid, current->xid);
 		do_exit(SIGKILL);
 	} else {
 		BUG_ON(err != -EFAULT);
@@ -203,17 +215,6 @@ unsigned long segv(struct faultinfo fi, unsigned long ip, int is_user, void *sc)
 		force_sig_info(SIGSEGV, &si, current);
 	}
 	return(0);
-}
-
-void bad_segv(struct faultinfo fi, unsigned long ip)
-{
-	struct siginfo si;
-
-	si.si_signo = SIGSEGV;
-	si.si_code = SEGV_ACCERR;
-	si.si_addr = (void __user *) FAULT_ADDRESS(fi);
-	current->thread.arch.faultinfo = fi;
-	force_sig_info(SIGSEGV, &si, current);
 }
 
 void relay_signal(int sig, union uml_pt_regs *regs)
@@ -232,14 +233,14 @@ void relay_signal(int sig, union uml_pt_regs *regs)
 	force_sig(sig, current);
 }
 
-void bus_handler(int sig, union uml_pt_regs *regs)
+static void bus_handler(int sig, union uml_pt_regs *regs)
 {
 	if(current->thread.fault_catcher != NULL)
 		do_longjmp(current->thread.fault_catcher, 1);
 	else relay_signal(sig, regs);
 }
 
-void winch(int sig, union uml_pt_regs *regs)
+static void winch(int sig, union uml_pt_regs *regs)
 {
 	do_IRQ(WINCH_IRQ, regs);
 }

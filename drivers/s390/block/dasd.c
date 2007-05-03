@@ -37,6 +37,7 @@
  */
 debug_info_t *dasd_debug_area;
 struct dasd_discipline *dasd_diag_discipline_pointer;
+void dasd_int_handler(struct ccw_device *, unsigned long, struct irb *);
 
 MODULE_AUTHOR("Holger Smolinski <Holger.Smolinski@de.ibm.com>");
 MODULE_DESCRIPTION("Linux on S/390 DASD device driver,"
@@ -51,10 +52,9 @@ static int  dasd_alloc_queue(struct dasd_device * device);
 static void dasd_setup_queue(struct dasd_device * device);
 static void dasd_free_queue(struct dasd_device * device);
 static void dasd_flush_request_queue(struct dasd_device *);
-static void dasd_int_handler(struct ccw_device *, unsigned long, struct irb *);
 static int dasd_flush_ccw_queue(struct dasd_device *, int);
 static void dasd_tasklet(struct dasd_device *);
-static void do_kick_device(void *data);
+static void do_kick_device(struct work_struct *);
 
 /*
  * SECTION: Operations on the device structure.
@@ -100,7 +100,7 @@ dasd_alloc_device(void)
 		     (unsigned long) device);
 	INIT_LIST_HEAD(&device->ccw_queue);
 	init_timer(&device->timer);
-	INIT_WORK(&device->kick_work, do_kick_device, device);
+	INIT_WORK(&device->kick_work, do_kick_device);
 	device->state = DASD_STATE_NEW;
 	device->target = DASD_STATE_NEW;
 
@@ -407,11 +407,9 @@ dasd_change_state(struct dasd_device *device)
  * event daemon.
  */
 static void
-do_kick_device(void *data)
+do_kick_device(struct work_struct *work)
 {
-	struct dasd_device *device;
-
-	device = (struct dasd_device *) data;
+	struct dasd_device *device = container_of(work, struct dasd_device, kick_work);
 	dasd_change_state(device);
 	dasd_schedule_bh(device);
 	dasd_put_device(device);
@@ -485,7 +483,7 @@ unsigned int dasd_profile_level = DASD_PROFILE_OFF;
 /*
  * Add profiling information for cqr before execution.
  */
-static inline void
+static void
 dasd_profile_start(struct dasd_device *device, struct dasd_ccw_req * cqr,
 		   struct request *req)
 {
@@ -507,7 +505,7 @@ dasd_profile_start(struct dasd_device *device, struct dasd_ccw_req * cqr,
 /*
  * Add profiling information for cqr after execution.
  */
-static inline void
+static void
 dasd_profile_end(struct dasd_device *device, struct dasd_ccw_req * cqr,
 		 struct request *req)
 {
@@ -1024,8 +1022,6 @@ dasd_int_handler(struct ccw_device *cdev, unsigned long intparm,
 		 irb->scsw.cstat == 0 &&
 		 !irb->esw.esw0.erw.cons)
 		era = dasd_era_none;
-	else if (!test_bit(DASD_CQR_FLAGS_USE_ERP, &cqr->flags))
- 	        era = dasd_era_fatal; /* don't recover this request */
 	else if (irb->esw.esw0.erw.cons)
 		era = device->discipline->examine_error(cqr, irb);
 	else
@@ -1052,10 +1048,10 @@ dasd_int_handler(struct ccw_device *cdev, unsigned long intparm,
 		}
 	} else {		/* error */
 		memcpy(&cqr->irb, irb, sizeof (struct irb));
-#ifdef ERP_DEBUG
-		/* dump sense data */
-		dasd_log_sense(cqr, irb);
-#endif
+		if (device->features & DASD_FEATURE_ERPLOG) {
+			/* dump sense data */
+			dasd_log_sense(cqr, irb);
+		}
 		switch (era) {
 		case dasd_era_fatal:
 			cqr->status = DASD_CQR_FAILED;
@@ -1106,7 +1102,7 @@ __dasd_process_erp(struct dasd_device *device, struct dasd_ccw_req *cqr)
 /*
  * Process ccw request queue.
  */
-static inline void
+static void
 __dasd_process_ccw_queue(struct dasd_device * device,
 			 struct list_head *final_queue)
 {
@@ -1129,7 +1125,9 @@ restart:
 				cqr->status = DASD_CQR_FAILED;
 				cqr->stopclk = get_clock();
 			} else {
-				if (cqr->irb.esw.esw0.erw.cons) {
+				if (cqr->irb.esw.esw0.erw.cons &&
+				    test_bit(DASD_CQR_FLAGS_USE_ERP,
+					     &cqr->flags)) {
 					erp_fn = device->discipline->
 						erp_action(cqr);
 					erp_fn(cqr);
@@ -1183,7 +1181,7 @@ dasd_end_request_cb(struct dasd_ccw_req * cqr, void *data)
 /*
  * Fetch requests from the block device queue.
  */
-static inline void
+static void
 __dasd_process_blk_queue(struct dasd_device * device)
 {
 	request_queue_t *queue;
@@ -1234,6 +1232,19 @@ __dasd_process_blk_queue(struct dasd_device * device)
 		if (IS_ERR(cqr)) {
 			if (PTR_ERR(cqr) == -ENOMEM)
 				break;	/* terminate request queue loop */
+			if (PTR_ERR(cqr) == -EAGAIN) {
+				/*
+				 * The current request cannot be build right
+				 * now, we have to try later. If this request
+				 * is the head-of-queue we stop the device
+				 * for 1/2 second.
+				 */
+				if (!list_empty(&device->ccw_queue))
+					break;
+				device->stopped |= DASD_STOPPED_PENDING;
+				dasd_set_timer(device, HZ/2);
+				break;
+			}
 			DBF_DEV_EVENT(DBF_ERR, device,
 				      "CCW creation failed (rc=%ld) "
 				      "on request %p",
@@ -1256,7 +1267,7 @@ __dasd_process_blk_queue(struct dasd_device * device)
  * Take a look at the first request on the ccw queue and check
  * if it reached its expire time. If so, terminate the IO.
  */
-static inline void
+static void
 __dasd_check_expire(struct dasd_device * device)
 {
 	struct dasd_ccw_req *cqr;
@@ -1264,15 +1275,21 @@ __dasd_check_expire(struct dasd_device * device)
 	if (list_empty(&device->ccw_queue))
 		return;
 	cqr = list_entry(device->ccw_queue.next, struct dasd_ccw_req, list);
-	if (cqr->status == DASD_CQR_IN_IO && cqr->expires != 0) {
-		if (time_after_eq(jiffies, cqr->expires + cqr->starttime)) {
+	if ((cqr->status == DASD_CQR_IN_IO && cqr->expires != 0) &&
+	    (time_after_eq(jiffies, cqr->expires + cqr->starttime))) {
+		if (device->discipline->term_IO(cqr) != 0) {
+			/* Hmpf, try again in 5 sec */
+			dasd_set_timer(device, 5*HZ);
+			DEV_MESSAGE(KERN_ERR, device,
+				    "internal error - timeout (%is) expired "
+				    "for cqr %p, termination failed, "
+				    "retrying in 5s",
+				    (cqr->expires/HZ), cqr);
+		} else {
 			DEV_MESSAGE(KERN_ERR, device,
 				    "internal error - timeout (%is) expired "
 				    "for cqr %p (%i retries left)",
 				    (cqr->expires/HZ), cqr, cqr->retries);
-			if (device->discipline->term_IO(cqr) != 0)
-				/* Hmpf, try again in 1/10 sec */
-				dasd_set_timer(device, 10);
 		}
 	}
 }
@@ -1281,7 +1298,7 @@ __dasd_check_expire(struct dasd_device * device)
  * Take a look at the first request on the ccw queue and check
  * if it needs to be started.
  */
-static inline void
+static void
 __dasd_start_head(struct dasd_device * device)
 {
 	struct dasd_ccw_req *cqr;

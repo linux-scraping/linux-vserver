@@ -418,8 +418,7 @@ static void rio_pollfunc(unsigned long data)
 	func_enter();
 
 	rio_interrupt(0, &p->RIOHosts[data]);
-	p->RIOHosts[data].timer.expires = jiffies + rio_poll;
-	add_timer(&p->RIOHosts[data].timer);
+	mod_timer(&p->RIOHosts[data].timer, jiffies + rio_poll);
 
 	func_exit();
 }
@@ -1026,6 +1025,7 @@ static int __init rio_init(void)
 			found++;
 		} else {
 			iounmap(p->RIOHosts[p->RIONumHosts].Caddr);
+			p->RIOHosts[p->RIONumHosts].Caddr = NULL;
 		}
 	}
 
@@ -1078,6 +1078,7 @@ static int __init rio_init(void)
 			found++;
 		} else {
 			iounmap(p->RIOHosts[p->RIONumHosts].Caddr);
+			p->RIOHosts[p->RIONumHosts].Caddr = NULL;
 		}
 #else
 		printk(KERN_ERR "Found an older RIO PCI card, but the driver is not " "compiled to support it.\n");
@@ -1117,8 +1118,10 @@ static int __init rio_init(void)
 				}
 			}
 
-			if (!okboard)
+			if (!okboard) {
 				iounmap(hp->Caddr);
+				hp->Caddr = NULL;
+			}
 		}
 	}
 
@@ -1143,20 +1146,17 @@ static int __init rio_init(void)
 				rio_dprintk(RIO_DEBUG_INIT, "Enabling interrupts on rio card.\n");
 				hp->Mode |= RIO_PCI_INT_ENABLE;
 			} else
-				hp->Mode &= !RIO_PCI_INT_ENABLE;
+				hp->Mode &= ~RIO_PCI_INT_ENABLE;
 			rio_dprintk(RIO_DEBUG_INIT, "New Mode: %x\n", hp->Mode);
 			rio_start_card_running(hp);
 		}
 		/* Init the timer "always" to make sure that it can safely be
 		   deleted when we unload... */
 
-		init_timer(&hp->timer);
+		setup_timer(&hp->timer, rio_pollfunc, i);
 		if (!hp->Ivec) {
 			rio_dprintk(RIO_DEBUG_INIT, "Starting polling at %dj intervals.\n", rio_poll);
-			hp->timer.data = i;
-			hp->timer.function = rio_pollfunc;
-			hp->timer.expires = jiffies + rio_poll;
-			add_timer(&hp->timer);
+			mod_timer(&hp->timer, jiffies + rio_poll);
 		}
 	}
 
@@ -1187,7 +1187,9 @@ static void __exit rio_exit(void)
 			rio_dprintk(RIO_DEBUG_INIT, "freed irq %d.\n", hp->Ivec);
 		}
 		/* It is safe/allowed to del_timer a non-active timer */
-		del_timer(&hp->timer);
+		del_timer_sync(&hp->timer);
+		if (hp->Caddr)
+			iounmap(hp->Caddr);
 		if (hp->Type == RIO_PCI)
 			pci_dev_put(hp->pdev);
 	}

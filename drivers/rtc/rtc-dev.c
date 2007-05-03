@@ -53,9 +53,10 @@ static int rtc_dev_open(struct inode *inode, struct file *file)
  * Routine to poll RTC seconds field for change as often as possible,
  * after first RTC_UIE use timer to reduce polling
  */
-static void rtc_uie_task(void *data)
+static void rtc_uie_task(struct work_struct *work)
 {
-	struct rtc_device *rtc = data;
+	struct rtc_device *rtc =
+		container_of(work, struct rtc_device, uie_task);
 	struct rtc_time tm;
 	int num = 0;
 	int err;
@@ -304,7 +305,7 @@ static int rtc_dev_ioctl(struct inode *inode, struct file *file,
 
 	case RTC_IRQP_READ:
 		if (ops->irq_set_freq)
-			err = put_user(rtc->irq_freq, (unsigned long *) arg);
+			err = put_user(rtc->irq_freq, (unsigned long __user *)uarg);
 		break;
 
 	case RTC_IRQP_SET:
@@ -383,7 +384,7 @@ static int rtc_dev_fasync(int fd, struct file *file, int on)
 	return fasync_helper(fd, file, on, &rtc->async_queue);
 }
 
-static struct file_operations rtc_dev_fops = {
+static const struct file_operations rtc_dev_fops = {
 	.owner		= THIS_MODULE,
 	.llseek		= no_llseek,
 	.read		= rtc_dev_read,
@@ -411,7 +412,7 @@ static int rtc_dev_add_device(struct class_device *class_dev,
 	spin_lock_init(&rtc->irq_lock);
 	init_waitqueue_head(&rtc->irq_queue);
 #ifdef CONFIG_RTC_INTF_DEV_UIE_EMUL
-	INIT_WORK(&rtc->uie_task, rtc_uie_task, rtc);
+	INIT_WORK(&rtc->uie_task, rtc_uie_task);
 	setup_timer(&rtc->uie_timer, rtc_uie_timer, (unsigned long)rtc);
 #endif
 
@@ -434,7 +435,7 @@ static int rtc_dev_add_device(struct class_device *class_dev,
 		goto err_cdev_del;
 	}
 
-	dev_info(class_dev->dev, "rtc intf: dev (%d:%d)\n",
+	dev_dbg(class_dev->dev, "rtc intf: dev (%d:%d)\n",
 		MAJOR(rtc->rtc_dev->devt),
 		MINOR(rtc->rtc_dev->devt));
 

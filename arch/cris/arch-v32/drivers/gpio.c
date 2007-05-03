@@ -423,7 +423,7 @@ gpio_open(struct inode *inode, struct file *filp)
 	if (p > GPIO_MINOR_LAST)
 		return -EINVAL;
 
-	priv = (struct gpio_private *)kmalloc(sizeof(struct gpio_private),
+	priv = kmalloc(sizeof(struct gpio_private),
 					      GFP_KERNEL);
 
 	if (!priv)
@@ -705,7 +705,7 @@ gpio_leds_ioctl(unsigned int cmd, unsigned long arg)
 	return 0;
 }
 
-struct file_operations gpio_fops = {
+const struct file_operations gpio_fops = {
 	.owner       = THIS_MODULE,
 	.poll        = gpio_poll,
 	.ioctl       = gpio_ioctl,

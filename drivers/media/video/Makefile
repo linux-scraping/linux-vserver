@@ -2,7 +2,6 @@
 # Makefile for the video capture/playback device drivers.
 #
 
-zoran-objs      :=	zr36120.o zr36120_i2c.o zr36120_mem.o
 zr36067-objs	:=	zoran_procfs.o zoran_device.o \
 			zoran_driver.o zoran_card.o
 tuner-objs	:=	tuner-core.o tuner-types.o tuner-simple.o \
@@ -23,7 +22,6 @@ obj-$(CONFIG_VIDEO_TDA7432) += tda7432.o
 obj-$(CONFIG_VIDEO_TDA9875) += tda9875.o
 obj-$(CONFIG_SOUND_TVMIXER) += tvmixer.o
 
-obj-$(CONFIG_VIDEO_ZR36120) += zoran.o
 obj-$(CONFIG_VIDEO_SAA6588) += saa6588.o
 obj-$(CONFIG_VIDEO_SAA5246A) += saa5246a.o
 obj-$(CONFIG_VIDEO_SAA5249) += saa5249.o
@@ -64,6 +62,7 @@ obj-$(CONFIG_VIDEO_MEYE) += meye.o
 obj-$(CONFIG_VIDEO_SAA7134) += ir-kbd-i2c.o saa7134/
 obj-$(CONFIG_VIDEO_CX88) += cx88/
 obj-$(CONFIG_VIDEO_EM28XX) += em28xx/
+obj-$(CONFIG_VIDEO_USBVISION) += usbvision/
 obj-$(CONFIG_VIDEO_TVP5150) += tvp5150.o
 obj-$(CONFIG_VIDEO_PVRUSB2) += pvrusb2/
 obj-$(CONFIG_VIDEO_MSP3400) += msp3400.o
@@ -92,6 +91,9 @@ obj-$(CONFIG_VIDEO_UPD64031A) += upd64031a.o
 obj-$(CONFIG_VIDEO_UPD64083) += upd64083.o
 obj-$(CONFIG_VIDEO_CX2341X) += cx2341x.o
 
+obj-$(CONFIG_VIDEO_CAFE_CCIC) += cafe_ccic.o
+obj-$(CONFIG_VIDEO_OV7670) 	+= ov7670.o
+
 obj-$(CONFIG_USB_DABUSB)        += dabusb.o
 obj-$(CONFIG_USB_OV511)         += ov511.o
 obj-$(CONFIG_USB_SE401)         += se401.o
@@ -111,4 +113,3 @@ obj-$(CONFIG_USB_QUICKCAM_MESSENGER)	+= usbvideo/
 obj-$(CONFIG_VIDEO_VIVI) += vivi.o
 
 EXTRA_CFLAGS += -Idrivers/media/dvb/dvb-core
-extra-cflags-$(CONFIG_VIDEO_V4L1_COMPAT) += -DCONFIG_VIDEO_V4L1_COMPAT

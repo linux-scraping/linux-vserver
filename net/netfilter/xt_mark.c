@@ -31,15 +31,15 @@ match(const struct sk_buff *skb,
 {
 	const struct xt_mark_info *info = matchinfo;
 
-	return ((skb->nfmark & info->mask) == info->mark) ^ info->invert;
+	return ((skb->mark & info->mask) == info->mark) ^ info->invert;
 }
 
 static int
 checkentry(const char *tablename,
-           const void *entry,
+	   const void *entry,
 	   const struct xt_match *match,
-           void *matchinfo,
-           unsigned int hook_mask)
+	   void *matchinfo,
+	   unsigned int hook_mask)
 {
 	const struct xt_mark_info *minfo = matchinfo;
 

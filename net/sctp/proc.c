@@ -77,7 +77,7 @@ static struct snmp_mib sctp_snmp_list[] = {
 
 /* Return the current value of a particular entry in the mib by adding its
  * per cpu counters.
- */ 
+ */
 static unsigned long
 fold_field(void *mib[], int nr)
 {
@@ -102,7 +102,7 @@ static int sctp_snmp_seq_show(struct seq_file *seq, void *v)
 
 	for (i = 0; sctp_snmp_list[i].name != NULL; i++)
 		seq_printf(seq, "%-32s\t%ld\n", sctp_snmp_list[i].name,
-			   fold_field((void **)sctp_statistics, 
+			   fold_field((void **)sctp_statistics,
 				      sctp_snmp_list[i].entry));
 
 	return 0;
@@ -114,7 +114,7 @@ static int sctp_snmp_seq_open(struct inode *inode, struct file *file)
 	return single_open(file, sctp_snmp_seq_show, NULL);
 }
 
-static struct file_operations sctp_snmp_seq_fops = {
+static const struct file_operations sctp_snmp_seq_fops = {
 	.owner	 = THIS_MODULE,
 	.open	 = sctp_snmp_seq_open,
 	.read	 = seq_read,
@@ -160,7 +160,7 @@ static void sctp_seq_dump_local_addrs(struct seq_file *seq, struct sctp_ep_commo
 
 	list_for_each(pos, &epb->bind_addr.address_list) {
 		laddr = list_entry(pos, struct sctp_sockaddr_entry, list);
-		addr = (union sctp_addr *)&laddr->a;
+		addr = &laddr->a;
 		af = sctp_get_af_specific(addr->sa.sa_family);
 		if (primary && af->cmp_addr(addr, primary)) {
 			seq_printf(seq, "*");
@@ -177,10 +177,10 @@ static void sctp_seq_dump_remote_addrs(struct seq_file *seq, struct sctp_associa
 	union sctp_addr *addr, *primary;
 	struct sctp_af *af;
 
-	primary = &(assoc->peer.primary_addr);
+	primary = &assoc->peer.primary_addr;
 	list_for_each(pos, &assoc->peer.transport_addr_list) {
 		transport = list_entry(pos, struct sctp_transport, transports);
-		addr = (union sctp_addr *)&transport->ipaddr;
+		addr = &transport->ipaddr;
 		af = sctp_get_af_specific(addr->sa.sa_family);
 		if (af->cmp_addr(addr, primary)) {
 			seq_printf(seq, "*");
@@ -264,7 +264,7 @@ static int sctp_eps_seq_open(struct inode *inode, struct file *file)
 	return seq_open(file, &sctp_eps_ops);
 }
 
-static struct file_operations sctp_eps_seq_fops = {
+static const struct file_operations sctp_eps_seq_fops = {
 	.open	 = sctp_eps_seq_open,
 	.read	 = seq_read,
 	.llseek	 = seq_lseek,
@@ -374,7 +374,7 @@ static int sctp_assocs_seq_open(struct inode *inode, struct file *file)
 	return seq_open(file, &sctp_assoc_ops);
 }
 
-static struct file_operations sctp_assocs_seq_fops = {
+static const struct file_operations sctp_assocs_seq_fops = {
 	.open	 = sctp_assocs_seq_open,
 	.read	 = seq_read,
 	.llseek	 = seq_lseek,

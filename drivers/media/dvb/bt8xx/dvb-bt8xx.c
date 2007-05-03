@@ -23,6 +23,7 @@
 #include <linux/module.h>
 #include <linux/moduleparam.h>
 #include <linux/init.h>
+#include <linux/kernel.h>
 #include <linux/device.h>
 #include <linux/delay.h>
 #include <linux/slab.h>
@@ -34,7 +35,6 @@
 #include "dvb_frontend.h"
 #include "dvb-bt8xx.h"
 #include "bt878.h"
-#include "dvb-pll.h"
 
 static int debug;
 
@@ -214,7 +214,7 @@ static int cx24108_tuner_set_params(struct dvb_frontend* fe, struct dvb_frontend
 		freq = 2150000; /* satellite IF is 950..2150MHz */
 
 	/* decide which VCO to use for the input frequency */
-	for(i=1;(i<sizeof(osci)/sizeof(osci[0]))&&(osci[i]<freq);i++);
+	for(i = 1; (i < ARRAY_SIZE(osci)) && (osci[i] < freq); i++);
 	printk("cx24108 debug: select vco #%d (f=%d)\n",i,freq);
 	band=bandsel[i];
 	/* the gain values must be set by SetSymbolrate */
@@ -568,12 +568,6 @@ static struct mt352_config digitv_alps_tded4_config = {
 	.demod_init = digitv_alps_tded4_demod_init,
 };
 
-static int tdvs_tua6034_tuner_set_params(struct dvb_frontend* fe, struct dvb_frontend_parameters* params)
-{
-	struct dvb_bt8xx_card *card = (struct dvb_bt8xx_card *) fe->dvb->priv;
-	return lg_h06xf_pll_set(fe, card->i2c_adapter, params);
-}
-
 static struct lgdt330x_config tdvs_tua6034_config = {
 	.demod_address    = 0x0e,
 	.demod_chip       = LGDT3303,
@@ -616,7 +610,7 @@ static void frontend_init(struct dvb_bt8xx_card *card, u32 type)
 		lgdt330x_reset(card);
 		card->fe = dvb_attach(lgdt330x_attach, &tdvs_tua6034_config, card->i2c_adapter);
 		if (card->fe != NULL) {
-			card->fe->ops.tuner_ops.set_params = tdvs_tua6034_tuner_set_params;
+			dvb_attach(lgh06xf_attach, card->fe, card->i2c_adapter);
 			dprintk ("dvb_bt8xx: lgdt330x detected\n");
 		}
 		break;
@@ -664,7 +658,7 @@ static void frontend_init(struct dvb_bt8xx_card *card, u32 type)
 
 	case BTTV_BOARD_TWINHAN_DST:
 		/*	DST is not a frontend driver !!!		*/
-		state = (struct dst_state *) kmalloc(sizeof (struct dst_state), GFP_KERNEL);
+		state = kmalloc(sizeof (struct dst_state), GFP_KERNEL);
 		if (!state) {
 			printk("dvb_bt8xx: No memory\n");
 			break;

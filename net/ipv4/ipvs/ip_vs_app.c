@@ -80,10 +80,9 @@ ip_vs_app_inc_new(struct ip_vs_app *app, __u16 proto, __u16 port)
 	if (!pp->unregister_app)
 		return -EOPNOTSUPP;
 
-	inc = kmalloc(sizeof(struct ip_vs_app), GFP_KERNEL);
+	inc = kmemdup(app, sizeof(*inc), GFP_KERNEL);
 	if (!inc)
 		return -ENOMEM;
-	memcpy(inc, app, sizeof(*inc));
 	INIT_LIST_HEAD(&inc->p_list);
 	INIT_LIST_HEAD(&inc->incs_list);
 	inc->app = app;
@@ -562,7 +561,7 @@ static int ip_vs_app_open(struct inode *inode, struct file *file)
 	return seq_open(file, &ip_vs_app_seq_ops);
 }
 
-static struct file_operations ip_vs_app_fops = {
+static const struct file_operations ip_vs_app_fops = {
 	.owner	 = THIS_MODULE,
 	.open	 = ip_vs_app_open,
 	.read	 = seq_read,

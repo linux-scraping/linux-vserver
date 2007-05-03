@@ -127,7 +127,7 @@ static int  if_write_room(struct tty_struct *tty);
 static int  if_chars_in_buffer(struct tty_struct *tty);
 static void if_throttle(struct tty_struct *tty);
 static void if_unthrottle(struct tty_struct *tty);
-static void if_set_termios(struct tty_struct *tty, struct termios *old);
+static void if_set_termios(struct tty_struct *tty, struct ktermios *old);
 static int  if_tiocmget(struct tty_struct *tty, struct file *file);
 static int  if_tiocmset(struct tty_struct *tty, struct file *file,
 			unsigned int set, unsigned int clear);
@@ -490,7 +490,7 @@ static void if_unthrottle(struct tty_struct *tty)
 	mutex_unlock(&cs->mutex);
 }
 
-static void if_set_termios(struct tty_struct *tty, struct termios *old)
+static void if_set_termios(struct tty_struct *tty, struct ktermios *old)
 {
 	struct cardstate *cs;
 	unsigned int iflag;
@@ -599,19 +599,9 @@ out:
 static void if_wake(unsigned long data)
 {
 	struct cardstate *cs = (struct cardstate *) data;
-	struct tty_struct *tty;
 
-	tty = cs->tty;
-	if (!tty)
-		return;
-
-	if ((tty->flags & (1 << TTY_DO_WRITE_WAKEUP)) &&
-	    tty->ldisc.write_wakeup) {
-		gig_dbg(DEBUG_IF, "write wakeup call");
-		tty->ldisc.write_wakeup(tty);
-	}
-
-	wake_up_interruptible(&tty->write_wait);
+	if (cs->tty)
+		tty_wakeup(cs->tty);
 }
 
 /*** interface to common ***/
@@ -625,14 +615,17 @@ void gigaset_if_init(struct cardstate *cs)
 		return;
 
 	tasklet_init(&cs->if_wake_tasklet, &if_wake, (unsigned long) cs);
-	cs->class = tty_register_device(drv->tty, cs->minor_index, NULL);
 
-	if (!IS_ERR(cs->class))
-		class_set_devdata(cs->class, cs);
+	mutex_lock(&cs->mutex);
+	cs->tty_dev = tty_register_device(drv->tty, cs->minor_index, NULL);
+
+	if (!IS_ERR(cs->tty_dev))
+		dev_set_drvdata(cs->tty_dev, cs);
 	else {
 		warn("could not register device to the tty subsystem");
-		cs->class = NULL;
+		cs->tty_dev = NULL;
 	}
+	mutex_unlock(&cs->mutex);
 }
 
 void gigaset_if_free(struct cardstate *cs)
@@ -645,7 +638,7 @@ void gigaset_if_free(struct cardstate *cs)
 
 	tasklet_disable(&cs->if_wake_tasklet);
 	tasklet_kill(&cs->if_wake_tasklet);
-	cs->class = NULL;
+	cs->tty_dev = NULL;
 	tty_unregister_device(drv->tty, cs->minor_index);
 }
 

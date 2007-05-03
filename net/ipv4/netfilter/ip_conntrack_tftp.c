@@ -33,7 +33,7 @@ MODULE_PARM_DESC(ports, "port numbers of tftp servers");
 
 #if 0
 #define DEBUGP(format, args...) printk("%s:%s:" format, \
-                                       __FILE__, __FUNCTION__ , ## args)
+				       __FILE__, __FUNCTION__ , ## args)
 #else
 #define DEBUGP(format, args...)
 #endif
@@ -50,6 +50,7 @@ static int tftp_help(struct sk_buff **pskb,
 	struct tftphdr _tftph, *tfh;
 	struct ip_conntrack_expect *exp;
 	unsigned int ret = NF_ACCEPT;
+	typeof(ip_nat_tftp_hook) ip_nat_tftp;
 
 	tfh = skb_header_pointer(*pskb,
 				 (*pskb)->nh.iph->ihl*4+sizeof(struct udphdr),
@@ -81,8 +82,9 @@ static int tftp_help(struct sk_buff **pskb,
 		DEBUGP("expect: ");
 		DUMP_TUPLE(&exp->tuple);
 		DUMP_TUPLE(&exp->mask);
-		if (ip_nat_tftp_hook)
-			ret = ip_nat_tftp_hook(pskb, ctinfo, exp);
+		ip_nat_tftp = rcu_dereference(ip_nat_tftp_hook);
+		if (ip_nat_tftp)
+			ret = ip_nat_tftp(pskb, ctinfo, exp);
 		else if (ip_conntrack_expect_related(exp) != 0)
 			ret = NF_DROP;
 		ip_conntrack_expect_put(exp);
@@ -111,7 +113,7 @@ static void ip_conntrack_tftp_fini(void)
 		DEBUGP("unregistering helper for port %d\n",
 			ports[i]);
 		ip_conntrack_helper_unregister(&tftp[i]);
-	} 
+	}
 }
 
 static int __init ip_conntrack_tftp_init(void)

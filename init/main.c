@@ -29,6 +29,7 @@
 #include <linux/percpu.h>
 #include <linux/kmod.h>
 #include <linux/kernel_stat.h>
+#include <linux/start_kernel.h>
 #include <linux/security.h>
 #include <linux/workqueue.h>
 #include <linux/profile.h>
@@ -39,6 +40,8 @@
 #include <linux/cpu.h>
 #include <linux/cpuset.h>
 #include <linux/efi.h>
+#include <linux/tick.h>
+#include <linux/interrupt.h>
 #include <linux/taskstats_kern.h>
 #include <linux/delayacct.h>
 #include <linux/unistd.h>
@@ -49,8 +52,9 @@
 #include <linux/buffer_head.h>
 #include <linux/debug_locks.h>
 #include <linux/lockdep.h>
-#include <linux/utsrelease.h>
-#include <linux/compile.h>
+#include <linux/pid_namespace.h>
+#include <linux/device.h>
+#include <linux/vserver/percpu.h>
 
 #include <asm/io.h>
 #include <asm/bugs.h>
@@ -75,21 +79,22 @@
 #error Sorry, your GCC is too old. It builds incorrect kernels.
 #endif
 
+#if __GNUC__ == 4 && __GNUC_MINOR__ == 1 && __GNUC_PATCHLEVEL__ == 0
+#warning gcc-4.1.0 is known to miscompile the kernel.  A different compiler version is recommended.
+#endif
+
 static int init(void *);
 
 extern void init_IRQ(void);
 extern void fork_init(unsigned long);
 extern void mca_init(void);
 extern void sbus_init(void);
-extern void sysctl_init(void);
 extern void signals_init(void);
 extern void pidhash_init(void);
 extern void pidmap_init(void);
 extern void prio_tree_init(void);
 extern void radix_tree_init(void);
 extern void free_initmem(void);
-extern void populate_rootfs(void);
-extern void driver_init(void);
 extern void prepare_namespace(void);
 #ifdef	CONFIG_ACPI
 extern void acpi_early_init(void);
@@ -118,8 +123,12 @@ extern void time_init(void);
 void (*late_time_init)(void);
 extern void softirq_init(void);
 
-/* Untouched command line (eg. for /proc) saved by arch-specific code. */
-char saved_command_line[COMMAND_LINE_SIZE];
+/* Untouched command line saved by arch-specific code. */
+char __initdata boot_command_line[COMMAND_LINE_SIZE];
+/* Untouched saved command line (eg. for /proc) */
+char *saved_command_line;
+/* Command line for parameter parsing */
+static char *static_command_line;
 
 static char *execute_command;
 static char *ramdisk_execute_command;
@@ -356,7 +365,7 @@ EXPORT_SYMBOL(__per_cpu_offset);
 
 static void __init setup_per_cpu_areas(void)
 {
-	unsigned long size, i;
+	unsigned long size, vspc, i;
 	char *ptr;
 	unsigned long nr_possible_cpus = num_possible_cpus();
 
@@ -366,6 +375,8 @@ static void __init setup_per_cpu_areas(void)
 	if (size < PERCPU_ENOUGH_ROOM)
 		size = PERCPU_ENOUGH_ROOM;
 #endif
+	vspc = PERCPU_PERCTX * CONFIG_VSERVER_CONTEXTS;
+	size = ALIGN(size + vspc, SMP_CACHE_BYTES);
 	ptr = alloc_bootmem(size * nr_possible_cpus);
 
 	for_each_possible_cpu(i) {
@@ -379,27 +390,41 @@ static void __init setup_per_cpu_areas(void)
 /* Called by boot processor to activate the rest. */
 static void __init smp_init(void)
 {
-	unsigned int i;
+	unsigned int cpu;
+	unsigned highest = 0;
+
+	for_each_cpu_mask(cpu, cpu_possible_map)
+		highest = cpu;
+	nr_cpu_ids = highest + 1;
 
 	/* FIXME: This should be done in userspace --RR */
-	for_each_present_cpu(i) {
+	for_each_present_cpu(cpu) {
 		if (num_online_cpus() >= max_cpus)
 			break;
-		if (!cpu_online(i))
-			cpu_up(i);
+		if (!cpu_online(cpu))
+			cpu_up(cpu);
 	}
 
 	/* Any cleanup work */
 	printk(KERN_INFO "Brought up %ld CPUs\n", (long)num_online_cpus());
 	smp_cpus_done(max_cpus);
-#if 0
-	/* Get other processors into their bootup holding patterns. */
-
-	smp_commence();
-#endif
 }
 
 #endif
+
+/*
+ * We need to store the untouched command line for future reference.
+ * We also need to store the touched command line since the parameter
+ * parsing is performed in place, and we should allow a component to
+ * store reference of name/value for future reference.
+ */
+static void __init setup_command_line(char *command_line)
+{
+	saved_command_line = alloc_bootmem(strlen (boot_command_line)+1);
+	static_command_line = alloc_bootmem(strlen (command_line)+1);
+	strcpy (saved_command_line, boot_command_line);
+	strcpy (static_command_line, command_line);
+}
 
 /*
  * We need to finalize in a non-__init function or else race conditions
@@ -455,7 +480,7 @@ void __init parse_early_param(void)
 		return;
 
 	/* All fall through to do_early_param. */
-	strlcpy(tmp_cmdline, saved_command_line, COMMAND_LINE_SIZE);
+	strlcpy(tmp_cmdline, boot_command_line, COMMAND_LINE_SIZE);
 	parse_args("early options", tmp_cmdline, NULL, 0, do_early_param);
 	done = 1;
 }
@@ -500,11 +525,13 @@ asmlinkage void __init start_kernel(void)
  * enable them
  */
 	lock_kernel();
+	tick_init();
 	boot_cpu_init();
 	page_address_init();
 	printk(KERN_NOTICE);
-	printk(linux_banner, UTS_RELEASE, UTS_VERSION);
+	printk(linux_banner);
 	setup_arch(&command_line);
+	setup_command_line(command_line);
 	unwind_setup();
 	setup_per_cpu_areas();
 	smp_prepare_boot_cpu();	/* arch-specific boot-cpu hooks */
@@ -522,11 +549,16 @@ asmlinkage void __init start_kernel(void)
 	preempt_disable();
 	build_all_zonelists();
 	page_alloc_init();
-	printk(KERN_NOTICE "Kernel command line: %s\n", saved_command_line);
+	printk(KERN_NOTICE "Kernel command line: %s\n", boot_command_line);
 	parse_early_param();
-	parse_args("Booting kernel", command_line, __start___param,
+	parse_args("Booting kernel", static_command_line, __start___param,
 		   __stop___param - __start___param,
 		   &unknown_bootoption);
+	if (!irqs_disabled()) {
+		printk(KERN_WARNING "start_kernel(): bug: interrupts were "
+				"enabled *very* early, fixing it\n");
+		local_irq_disable();
+	}
 	sort_main_extable();
 	trap_init();
 	rcu_init();
@@ -621,8 +653,6 @@ static int __init initcall_debug_setup(char *str)
 }
 __setup("initcall_debug", initcall_debug_setup);
 
-struct task_struct *child_reaper = &init_task;
-
 extern initcall_t __initcall_start[], __initcall_end[];
 
 static void __init do_initcalls(void)
@@ -681,15 +711,11 @@ static void __init do_basic_setup(void)
 	init_workqueues();
 	usermodehelper_init();
 	driver_init();
-
-#ifdef CONFIG_SYSCTL
-	sysctl_init();
-#endif
-
+	init_irq_proc();
 	do_initcalls();
 }
 
-static void do_pre_smp_initcalls(void)
+static void __init do_pre_smp_initcalls(void)
 {
 	extern int spawn_ksoftirqd(void);
 #ifdef CONFIG_SMP
@@ -707,60 +733,11 @@ static void run_init_process(char *init_filename)
 	kernel_execve(init_filename, argv_init, envp_init);
 }
 
-static int init(void * unused)
+/* This is a non __init function. Force it to be noinline otherwise gcc
+ * makes it inline to init() and it becomes part of init.text section
+ */
+static int noinline init_post(void)
 {
-	lock_kernel();
-	/*
-	 * init can run on any cpu.
-	 */
-	set_cpus_allowed(current, CPU_MASK_ALL);
-	/*
-	 * Tell the world that we're going to be the grim
-	 * reaper of innocent orphaned children.
-	 *
-	 * We don't want people to have to make incorrect
-	 * assumptions about where in the task array this
-	 * can be found.
-	 */
-	child_reaper = current;
-
-	cad_pid = task_pid(current);
-
-	smp_prepare_cpus(max_cpus);
-
-	do_pre_smp_initcalls();
-
-	smp_init();
-	sched_init_smp();
-
-	cpuset_init_smp();
-
-	/*
-	 * Do this before initcalls, because some drivers want to access
-	 * firmware files.
-	 */
-	populate_rootfs();
-
-	do_basic_setup();
-
-	/*
-	 * check if there is an early userspace init.  If yes, let it do all
-	 * the work
-	 */
-
-	if (!ramdisk_execute_command)
-		ramdisk_execute_command = "/init";
-
-	if (sys_access((const char __user *) ramdisk_execute_command, 0) != 0) {
-		ramdisk_execute_command = NULL;
-		prepare_namespace();
-	}
-
-	/*
-	 * Ok, we have completed the initial bootup, and
-	 * we're essentially up and running. Get rid of the
-	 * initmem segments and start the user-mode stuff..
-	 */
 	free_initmem();
 	unlock_kernel();
 	mark_rodata_ro();
@@ -782,7 +759,7 @@ static int init(void * unused)
 	/*
 	 * We try each of these until one succeeds.
 	 *
-	 * The Bourne shell can be used instead of init if we are 
+	 * The Bourne shell can be used instead of init if we are
 	 * trying to recover a really broken machine.
 	 */
 	if (execute_command) {
@@ -796,4 +773,56 @@ static int init(void * unused)
 	run_init_process("/bin/sh");
 
 	panic("No init found.  Try passing init= option to kernel.");
+}
+
+static int __init init(void * unused)
+{
+	lock_kernel();
+	/*
+	 * init can run on any cpu.
+	 */
+	set_cpus_allowed(current, CPU_MASK_ALL);
+	/*
+	 * Tell the world that we're going to be the grim
+	 * reaper of innocent orphaned children.
+	 *
+	 * We don't want people to have to make incorrect
+	 * assumptions about where in the task array this
+	 * can be found.
+	 */
+	init_pid_ns.child_reaper = current;
+
+	cad_pid = task_pid(current);
+
+	smp_prepare_cpus(max_cpus);
+
+	do_pre_smp_initcalls();
+
+	smp_init();
+	sched_init_smp();
+
+	cpuset_init_smp();
+
+	do_basic_setup();
+
+	/*
+	 * check if there is an early userspace init.  If yes, let it do all
+	 * the work
+	 */
+
+	if (!ramdisk_execute_command)
+		ramdisk_execute_command = "/init";
+
+	if (sys_access((const char __user *) ramdisk_execute_command, 0) != 0) {
+		ramdisk_execute_command = NULL;
+		prepare_namespace();
+	}
+
+	/*
+	 * Ok, we have completed the initial bootup, and
+	 * we're essentially up and running. Get rid of the
+	 * initmem segments and start the user-mode stuff..
+	 */
+	init_post();
+	return 0;
 }

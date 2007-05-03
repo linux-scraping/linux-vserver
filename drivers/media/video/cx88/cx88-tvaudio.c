@@ -38,6 +38,7 @@
 #include <linux/module.h>
 #include <linux/moduleparam.h>
 #include <linux/errno.h>
+#include <linux/freezer.h>
 #include <linux/kernel.h>
 #include <linux/slab.h>
 #include <linux/mm.h>
@@ -45,7 +46,6 @@
 #include <linux/pci.h>
 #include <linux/signal.h>
 #include <linux/ioport.h>
-#include <linux/sched.h>
 #include <linux/types.h>
 #include <linux/interrupt.h>
 #include <linux/vmalloc.h>
@@ -143,19 +143,6 @@ static void set_audio_finish(struct cx88_core *core, u32 ctl)
 	cx88_start_audio_dma(core);
 
 	if (cx88_boards[core->board].mpeg & CX88_MPEG_BLACKBIRD) {
-		/* sets sound input from external adc */
-		switch (core->board) {
-		case CX88_BOARD_HAUPPAUGE_ROSLYN:
-		case CX88_BOARD_KWORLD_MCE200_DELUXE:
-		case CX88_BOARD_KWORLD_HARDWARE_MPEG_TV_XPERT:
-		case CX88_BOARD_PIXELVIEW_PLAYTV_P7000:
-		case CX88_BOARD_ASUS_PVR_416:
-			cx_clear(AUD_CTL, EN_I2SIN_ENABLE);
-			break;
-		default:
-			cx_set(AUD_CTL, EN_I2SIN_ENABLE);
-		}
-
 		cx_write(AUD_I2SINPUTCNTL, 4);
 		cx_write(AUD_BAUDRATE, 1);
 		/* 'pass-thru mode': this enables the i2s output to the mpeg encoder */
@@ -810,55 +797,6 @@ void cx88_get_stereo(struct cx88_core *core, struct v4l2_tuner *t)
        Add some code here later.
 */
 
-# if 0
-	t->capability = V4L2_TUNER_CAP_STEREO | V4L2_TUNER_CAP_SAP |
-	    V4L2_TUNER_CAP_LANG1 | V4L2_TUNER_CAP_LANG2;
-	t->rxsubchans = V4L2_TUNER_SUB_MONO;
-	t->audmode = V4L2_TUNER_MODE_MONO;
-
-	switch (core->tvaudio) {
-	case WW_BTSC:
-		t->capability = V4L2_TUNER_CAP_STEREO | V4L2_TUNER_CAP_SAP;
-		t->rxsubchans = V4L2_TUNER_SUB_STEREO;
-		if (1 == pilot) {
-			/* SAP */
-			t->rxsubchans |= V4L2_TUNER_SUB_SAP;
-		}
-		break;
-	case WW_A2_BG:
-	case WW_A2_DK:
-	case WW_A2_M:
-		if (1 == pilot) {
-			/* stereo */
-			t->rxsubchans =
-			    V4L2_TUNER_SUB_MONO | V4L2_TUNER_SUB_STEREO;
-			if (0 == mode)
-				t->audmode = V4L2_TUNER_MODE_STEREO;
-		}
-		if (2 == pilot) {
-			/* dual language -- FIXME */
-			t->rxsubchans =
-			    V4L2_TUNER_SUB_LANG1 | V4L2_TUNER_SUB_LANG2;
-			t->audmode = V4L2_TUNER_MODE_LANG1;
-		}
-		break;
-	case WW_NICAM_BGDKL:
-		if (0 == mode) {
-			t->audmode = V4L2_TUNER_MODE_STEREO;
-			t->rxsubchans |= V4L2_TUNER_SUB_STEREO;
-		}
-		break;
-	case WW_SYSTEM_L_AM:
-		if (0x0 == mode && !(cx_read(AUD_INIT) & 0x04)) {
-			t->audmode = V4L2_TUNER_MODE_STEREO;
-			t->rxsubchans |= V4L2_TUNER_SUB_STEREO;
-		}
-		break;
-	default:
-		/* nothing */
-		break;
-	}
-# endif
 	return;
 }
 
@@ -974,6 +912,7 @@ int cx88_audio_thread(void *data)
 		msleep_interruptible(1000);
 		if (kthread_should_stop())
 			break;
+		try_to_freeze();
 
 		/* just monitor the audio status for now ... */
 		memset(&t, 0, sizeof(t));

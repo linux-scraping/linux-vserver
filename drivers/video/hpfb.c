@@ -7,7 +7,6 @@
 
 #include <linux/module.h>
 #include <linux/kernel.h>
-#include <linux/sched.h>
 #include <linux/errno.h>
 #include <linux/string.h>
 #include <linux/mm.h>
@@ -295,6 +294,8 @@ static int __init hpfb_init_one(unsigned long phys_base, unsigned long virt_base
 
 	if (register_framebuffer(&fb_info) < 0) {
 		fb_dealloc_cmap(&fb_info.cmap);
+		iounmap(fb_info.screen_base);
+		fb_info.screen_base = NULL;
 		return 1;
 	}
 

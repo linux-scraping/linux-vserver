@@ -263,8 +263,12 @@ static int sa1100_rtc_set_time(struct device *dev, struct rtc_time *tm)
 
 static int sa1100_rtc_read_alarm(struct device *dev, struct rtc_wkalrm *alrm)
 {
+	u32	rtsr;
+
 	memcpy(&alrm->time, &rtc_alarm, sizeof(struct rtc_time));
-	alrm->pending = RTSR & RTSR_AL ? 1 : 0;
+	rtsr = RTSR;
+	alrm->enabled = (rtsr & RTSR_ALE) ? 1 : 0;
+	alrm->pending = (rtsr & RTSR_AL) ? 1 : 0;
 	return 0;
 }
 
@@ -275,12 +279,10 @@ static int sa1100_rtc_set_alarm(struct device *dev, struct rtc_wkalrm *alrm)
 	spin_lock_irq(&sa1100_rtc_lock);
 	ret = rtc_update_alarm(&alrm->time);
 	if (ret == 0) {
-		memcpy(&rtc_alarm, &alrm->time, sizeof(struct rtc_time));
-
 		if (alrm->enabled)
-			enable_irq_wake(IRQ_RTCAlrm);
+			RTSR |= RTSR_ALE;
 		else
-			disable_irq_wake(IRQ_RTCAlrm);
+			RTSR &= ~RTSR_ALE;
 	}
 	spin_unlock_irq(&sa1100_rtc_lock);
 
@@ -289,9 +291,7 @@ static int sa1100_rtc_set_alarm(struct device *dev, struct rtc_wkalrm *alrm)
 
 static int sa1100_rtc_proc(struct device *dev, struct seq_file *seq)
 {
-	seq_printf(seq, "trim/divider\t: 0x%08lx\n", RTTR);
-	seq_printf(seq, "alarm_IRQ\t: %s\n",
-			(RTSR & RTSR_ALE) ? "yes" : "no" );
+	seq_printf(seq, "trim/divider\t: 0x%08x\n", (u32) RTTR);
 	seq_printf(seq, "update_IRQ\t: %s\n",
 			(RTSR & RTSR_HZE) ? "yes" : "no");
 	seq_printf(seq, "periodic_IRQ\t: %s\n",

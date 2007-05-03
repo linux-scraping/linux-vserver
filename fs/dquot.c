@@ -79,6 +79,7 @@
 #include <linux/buffer_head.h>
 #include <linux/capability.h>
 #include <linux/quotaops.h>
+#include <linux/writeback.h> /* for inode_lock, oddly enough.. */
 
 #include <asm/uaccess.h>
 
@@ -131,7 +132,7 @@ static struct quota_format_type *quota_formats;	/* List of registered formats */
 static struct quota_module_name module_names[] = INIT_QUOTA_MODULE_NAMES;
 
 /* SLAB cache for dquot structures */
-static kmem_cache_t *dquot_cachep;
+static struct kmem_cache *dquot_cachep;
 
 int register_quota_format(struct quota_format_type *fmt)
 {
@@ -600,11 +601,10 @@ static struct dquot *get_empty_dquot(struct super_block *sb, int type)
 {
 	struct dquot *dquot;
 
-	dquot = kmem_cache_alloc(dquot_cachep, SLAB_NOFS);
+	dquot = kmem_cache_zalloc(dquot_cachep, GFP_NOFS);
 	if(!dquot)
 		return NODQUOT;
 
-	memset((caddr_t)dquot, 0, sizeof(struct dquot));
 	mutex_init(&dquot->dq_lock);
 	INIT_LIST_HEAD(&dquot->dq_free);
 	INIT_LIST_HEAD(&dquot->dq_inuse);
@@ -688,23 +688,27 @@ static int dqinit_needed(struct inode *inode, int type)
 /* This routine is guarded by dqonoff_mutex mutex */
 static void add_dquot_ref(struct super_block *sb, int type)
 {
-	struct list_head *p;
+	struct inode *inode;
 
 restart:
-	file_list_lock();
-	list_for_each(p, &sb->s_files) {
-		struct file *filp = list_entry(p, struct file, f_u.fu_list);
-		struct inode *inode = filp->f_dentry->d_inode;
-		if (filp->f_mode & FMODE_WRITE && dqinit_needed(inode, type)) {
-			struct dentry *dentry = dget(filp->f_dentry);
-			file_list_unlock();
-			sb->dq_op->initialize(inode, type);
-			dput(dentry);
-			/* As we may have blocked we had better restart... */
-			goto restart;
-		}
+	spin_lock(&inode_lock);
+	list_for_each_entry(inode, &sb->s_inodes, i_sb_list) {
+		if (!atomic_read(&inode->i_writecount))
+			continue;
+		if (!dqinit_needed(inode, type))
+			continue;
+		if (inode->i_state & (I_FREEING|I_WILL_FREE))
+			continue;
+
+		__iget(inode);
+		spin_unlock(&inode_lock);
+
+		sb->dq_op->initialize(inode, type);
+		iput(inode);
+		/* As we may have blocked we had better restart... */
+		goto restart;
 	}
-	file_list_unlock();
+	spin_unlock(&inode_lock);
 }
 
 /* Return 0 if dqput() won't block (note that 1 doesn't necessarily mean blocking) */
@@ -756,15 +760,30 @@ static void put_dquot_list(struct list_head *tofree_head)
 	}
 }
 
+static void remove_dquot_ref(struct super_block *sb, int type,
+		struct list_head *tofree_head)
+{
+	struct inode *inode;
+
+	spin_lock(&inode_lock);
+	list_for_each_entry(inode, &sb->s_inodes, i_sb_list) {
+		if (!IS_NOQUOTA(inode))
+			remove_inode_dquot_ref(inode, type, tofree_head);
+	}
+	spin_unlock(&inode_lock);
+}
+
 /* Gather all references from inodes and drop them */
 static void drop_dquot_ref(struct super_block *sb, int type)
 {
 	LIST_HEAD(tofree_head);
 
-	down_write(&sb_dqopt(sb)->dqptr_sem);
-	remove_dquot_ref(sb, type, &tofree_head);
-	up_write(&sb_dqopt(sb)->dqptr_sem);
-	put_dquot_list(&tofree_head);
+	if (sb->dq_op) {
+		down_write(&sb_dqopt(sb)->dqptr_sem);
+		remove_dquot_ref(sb, type, &tofree_head);
+		up_write(&sb_dqopt(sb)->dqptr_sem);
+		put_dquot_list(&tofree_head);
+	}
 }
 
 static inline void dquot_incr_inodes(struct dquot *dquot, unsigned long number)
@@ -828,6 +847,7 @@ static inline int need_print_warning(struct dquot *dquot)
 static void print_warning(struct dquot *dquot, const char warntype)
 {
 	char *msg = NULL;
+	struct tty_struct *tty;
 	int flag = (warntype == BHARDWARN || warntype == BSOFTLONGWARN) ? DQ_BLKS_B :
 	  ((warntype == IHARDWARN || warntype == ISOFTLONGWARN) ? DQ_INODES_B : 0);
 
@@ -835,14 +855,15 @@ static void print_warning(struct dquot *dquot, const char warntype)
 		return;
 
 	mutex_lock(&tty_mutex);
-	if (!current->signal->tty)
+	tty = get_current_tty();
+	if (!tty)
 		goto out_lock;
-	tty_write_message(current->signal->tty, dquot->dq_sb->s_id);
+	tty_write_message(tty, dquot->dq_sb->s_id);
 	if (warntype == ISOFTWARN || warntype == BSOFTWARN)
-		tty_write_message(current->signal->tty, ": warning, ");
+		tty_write_message(tty, ": warning, ");
 	else
-		tty_write_message(current->signal->tty, ": write failed, ");
-	tty_write_message(current->signal->tty, quotatypes[dquot->dq_type]);
+		tty_write_message(tty, ": write failed, ");
+	tty_write_message(tty, quotatypes[dquot->dq_type]);
 	switch (warntype) {
 		case IHARDWARN:
 			msg = " file limit reached.\r\n";
@@ -863,7 +884,7 @@ static void print_warning(struct dquot *dquot, const char warntype)
 			msg = " block quota exceeded.\r\n";
 			break;
 	}
-	tty_write_message(current->signal->tty, msg);
+	tty_write_message(tty, msg);
 out_lock:
 	mutex_unlock(&tty_mutex);
 }
@@ -1820,7 +1841,7 @@ static int __init dquot_init(void)
 
 	printk(KERN_NOTICE "VFS: Disk quotas %s\n", __DQUOT_VERSION__);
 
-	register_sysctl_table(sys_table, 0);
+	register_sysctl_table(sys_table);
 
 	dquot_cachep = kmem_cache_create("dquot", 
 			sizeof(struct dquot), sizeof(unsigned long) * 4,

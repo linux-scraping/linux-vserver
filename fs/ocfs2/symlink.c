@@ -126,6 +126,10 @@ static int ocfs2_readlink(struct dentry *dentry,
 		goto out;
 	}
 
+	/*
+	 * Without vfsmount we can't update atime now,
+	 * but we will update atime here ultimately.
+	 */
 	ret = vfs_readlink(dentry, buffer, buflen, link);
 
 	brelse(bh);
@@ -154,8 +158,7 @@ static void *ocfs2_follow_link(struct dentry *dentry,
 	}
 
 	status = vfs_follow_link(nd, link);
-	if (status && status != -ENOENT)
-		mlog_errno(status);
+
 bail:
 	if (page) {
 		kunmap(page);
@@ -167,12 +170,12 @@ bail:
 	return ERR_PTR(status);
 }
 
-struct inode_operations ocfs2_symlink_inode_operations = {
+const struct inode_operations ocfs2_symlink_inode_operations = {
 	.readlink	= page_readlink,
 	.follow_link	= ocfs2_follow_link,
 	.getattr	= ocfs2_getattr,
 };
-struct inode_operations ocfs2_fast_symlink_inode_operations = {
+const struct inode_operations ocfs2_fast_symlink_inode_operations = {
 	.readlink	= ocfs2_readlink,
 	.follow_link	= ocfs2_follow_link,
 	.getattr	= ocfs2_getattr,

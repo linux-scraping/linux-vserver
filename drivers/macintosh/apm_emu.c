@@ -102,7 +102,7 @@ static struct pmu_sleep_notifier apm_sleep_notifier = {
 	SLEEP_LEVEL_USERLAND,
 };
 
-static char			driver_version[] = "0.5";	/* no spaces */
+static const char driver_version[] = "0.5";	/* no spaces */
 
 #ifdef DEBUG
 static char *	apm_event_name[] = {
@@ -321,7 +321,7 @@ static int do_open(struct inode * inode, struct file * filp)
 {
 	struct apm_user *	as;
 
-	as = (struct apm_user *)kmalloc(sizeof(*as), GFP_KERNEL);
+	as = kmalloc(sizeof(*as), GFP_KERNEL);
 	if (as == NULL) {
 		printk(KERN_ERR "apm: cannot allocate struct of size %d bytes\n",
 		       sizeof(*as));
@@ -501,7 +501,7 @@ static int apm_emu_get_info(char *buf, char **start, off_t fpos, int length)
 	return p - buf;
 }
 
-static struct file_operations apm_bios_fops = {
+static const struct file_operations apm_bios_fops = {
 	.owner		= THIS_MODULE,
 	.read		= do_read,
 	.poll		= do_poll,
@@ -529,7 +529,8 @@ static int __init apm_emu_init(void)
 	if (apm_proc)
 		apm_proc->owner = THIS_MODULE;
 
-	misc_register(&apm_device);
+	if (misc_register(&apm_device) != 0)
+		printk(KERN_INFO "Could not create misc. device for apm\n");
 
 	pmu_register_sleep_notifier(&apm_sleep_notifier);
 

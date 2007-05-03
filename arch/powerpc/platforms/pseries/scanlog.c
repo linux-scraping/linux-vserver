@@ -47,7 +47,7 @@ static struct proc_dir_entry *proc_ppc64_scan_log_dump;	/* The proc file */
 static ssize_t scanlog_read(struct file *file, char __user *buf,
 			    size_t count, loff_t *ppos)
 {
-        struct inode * inode = file->f_dentry->d_inode;
+        struct inode * inode = file->f_path.dentry->d_inode;
 	struct proc_dir_entry *dp;
 	unsigned int *data;
 	int status;
@@ -184,7 +184,7 @@ static int scanlog_release(struct inode * inode, struct file * file)
 	return 0;
 }
 
-struct file_operations scanlog_fops = {
+const struct file_operations scanlog_fops = {
 	.owner		= THIS_MODULE,
 	.read		= scanlog_read,
 	.write		= scanlog_write,

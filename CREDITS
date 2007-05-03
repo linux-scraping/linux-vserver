@@ -516,9 +516,10 @@ S: Orlando, Florida
 S: USA
 
 N: Lennert Buytenhek
-E: buytenh@gnu.org
-D: Rewrite of the ethernet bridging code
-S: Ravenhorst 58B
+E: kernel@wantstofly.org
+D: Original (2.4) rewrite of the ethernet bridging code
+D: Various ARM bits and pieces
+S: Ravenhorst 58
 S: 2317 AK Leiden
 S: The Netherlands
 
@@ -1808,6 +1809,14 @@ S: Kruislaan 419
 S: 1098 VA Amsterdam 
 S: The Netherlands
 
+N: Jiri Kosina
+E: jikos@jikos.cz
+E: jkosina@suse.cz
+D: Generic HID layer - original code split, fixes
+D: Various ACPI fixes, keeping correct battery state through suspend
+D: various lockdep annotations, autofs and other random bugfixes
+S: Prague, Czech Republic
+
 N: Gene Kozin
 E: 74604.152@compuserve.com
 W: http://www.sangoma.com
@@ -2562,6 +2571,16 @@ S: Subiaco, 6008
 S: Perth, Western Australia
 S: Australia
 
+N: Miguel Ojeda Sandonis
+E: maxextreme@gmail.com
+D: Author: Auxiliary LCD Controller driver (ks0108)
+D: Author: Auxiliary LCD driver (cfag12864b)
+D: Author: Auxiliary LCD framebuffer driver (cfag12864bfb)
+D: Maintainer: Auxiliary display drivers tree (drivers/auxdisplay/*)
+S: C/ Mieses 20, 9-B
+S: Valladolid 47009
+S: Spain
+
 N: Greg Page
 E: gpage@sovereign.org
 D: IPX development and support
@@ -2597,6 +2616,9 @@ D: USB (HID, ACM, Printer ...)
 S: Ucitelska 1576
 S: Prague 8
 S: 182 00 Czech Republic
+
+N: Rick Payne
+D: RFC2385 Support for TCP
 
 N: Barak A. Pearlmutter
 E: bap@cs.unm.edu
@@ -2656,7 +2678,7 @@ S: Ottawa, Ontario
 S: Canada K2P 0X8
 
 N: Mikael Pettersson
-E: mikpe@csd.uu.se
+E: mikpe@it.uu.se
 W: http://www.csd.uu.se/~mikpe/
 D: Miscellaneous fixes
 
@@ -3267,7 +3289,7 @@ S: Sevilla 41005
 S: Spain
 
 N: Linus Torvalds
-E: torvalds@osdl.org
+E: torvalds@linux-foundation.org
 D: Original kernel hacker
 S: 12725 SW Millikan Way, Suite 400
 S: Beaverton, Oregon 97005

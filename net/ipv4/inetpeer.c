@@ -14,7 +14,6 @@
 #include <linux/interrupt.h>
 #include <linux/spinlock.h>
 #include <linux/random.h>
-#include <linux/sched.h>
 #include <linux/timer.h>
 #include <linux/time.h>
 #include <linux/kernel.h>
@@ -73,7 +72,7 @@
 /* Exported for inet_getid inline function.  */
 DEFINE_SPINLOCK(inet_peer_idlock);
 
-static kmem_cache_t *peer_cachep __read_mostly;
+static struct kmem_cache *peer_cachep __read_mostly;
 
 #define node_height(x) x->avl_height
 static struct inet_peer peer_fake_node = {

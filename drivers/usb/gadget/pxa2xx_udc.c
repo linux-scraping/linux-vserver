@@ -33,7 +33,6 @@
 #include <linux/types.h>
 #include <linux/errno.h>
 #include <linux/delay.h>
-#include <linux/sched.h>
 #include <linux/slab.h>
 #include <linux/init.h>
 #include <linux/timer.h>
@@ -56,7 +55,7 @@
 #include <asm/arch/pxa-regs.h>
 #endif
 
-#include <linux/usb_ch9.h>
+#include <linux/usb/ch9.h>
 #include <linux/usb_gadget.h>
 
 #include <asm/arch/udc.h>
@@ -156,7 +155,7 @@ static int is_vbus_present(void)
 	struct pxa2xx_udc_mach_info		*mach = the_controller->mach;
 
 	if (mach->gpio_vbus)
-		return pxa_gpio_get(mach->gpio_vbus);
+		return udc_gpio_get(mach->gpio_vbus);
 	if (mach->udc_is_connected)
 		return mach->udc_is_connected();
 	return 1;
@@ -168,7 +167,7 @@ static void pullup_off(void)
 	struct pxa2xx_udc_mach_info		*mach = the_controller->mach;
 
 	if (mach->gpio_pullup)
-		pxa_gpio_set(mach->gpio_pullup, 0);
+		udc_gpio_set(mach->gpio_pullup, 0);
 	else if (mach->udc_command)
 		mach->udc_command(PXA2XX_UDC_CMD_DISCONNECT);
 }
@@ -178,7 +177,7 @@ static void pullup_on(void)
 	struct pxa2xx_udc_mach_info		*mach = the_controller->mach;
 
 	if (mach->gpio_pullup)
-		pxa_gpio_set(mach->gpio_pullup, 1);
+		udc_gpio_set(mach->gpio_pullup, 1);
 	else if (mach->udc_command)
 		mach->udc_command(PXA2XX_UDC_CMD_CONNECT);
 }
@@ -1623,7 +1622,6 @@ int usb_gadget_register_driver(struct usb_gadget_driver *driver)
 	if (!driver
 			|| driver->speed < USB_SPEED_FULL
 			|| !driver->bind
-			|| !driver->unbind
 			|| !driver->disconnect
 			|| !driver->setup)
 		return -EINVAL;
@@ -1694,7 +1692,7 @@ int usb_gadget_unregister_driver(struct usb_gadget_driver *driver)
 
 	if (!dev)
 		return -ENODEV;
-	if (!driver || driver != dev->driver)
+	if (!driver || driver != dev->driver || !driver->unbind)
 		return -EINVAL;
 
 	local_irq_disable();
@@ -1757,7 +1755,7 @@ lubbock_vbus_irq(int irq, void *_dev)
 static irqreturn_t udc_vbus_irq(int irq, void *_dev)
 {
 	struct pxa2xx_udc	*dev = _dev;
-	int			vbus = pxa_gpio_get(dev->mach->gpio_vbus);
+	int			vbus = udc_gpio_get(dev->mach->gpio_vbus);
 
 	pxa2xx_udc_vbus_session(&dev->gadget, vbus);
 	return IRQ_HANDLED;
@@ -2472,6 +2470,7 @@ static struct pxa2xx_udc memory = {
 #define PXA210_B1		0x00000123
 #define PXA210_B0		0x00000122
 #define IXP425_A0		0x000001c1
+#define IXP425_B0		0x000001f1
 #define IXP465_AD		0x00000200
 
 /*
@@ -2509,6 +2508,7 @@ static int __init pxa2xx_udc_probe(struct platform_device *pdev)
 		break;
 #elif	defined(CONFIG_ARCH_IXP4XX)
 	case IXP425_A0:
+	case IXP425_B0:
 	case IXP465_AD:
 		dev->has_cfr = 1;
 		out_dma = 0;
@@ -2545,15 +2545,13 @@ static int __init pxa2xx_udc_probe(struct platform_device *pdev)
 	dev->dev = &pdev->dev;
 	dev->mach = pdev->dev.platform_data;
 	if (dev->mach->gpio_vbus) {
-		vbus_irq = IRQ_GPIO(dev->mach->gpio_vbus & GPIO_MD_MASK_NR);
-		pxa_gpio_mode((dev->mach->gpio_vbus & GPIO_MD_MASK_NR)
-				| GPIO_IN);
+		udc_gpio_init_vbus(dev->mach->gpio_vbus);
+		vbus_irq = udc_gpio_to_irq(dev->mach->gpio_vbus);
 		set_irq_type(vbus_irq, IRQT_BOTHEDGE);
 	} else
 		vbus_irq = 0;
 	if (dev->mach->gpio_pullup)
-		pxa_gpio_mode((dev->mach->gpio_pullup & GPIO_MD_MASK_NR)
-				| GPIO_OUT | GPIO_DFLT_LOW);
+		udc_gpio_init_pullup(dev->mach->gpio_pullup);
 
 	init_timer(&dev->timer);
 	dev->timer.function = udc_watchdog;
@@ -2613,7 +2611,7 @@ lubbock_fail0:
 #endif
 	if (vbus_irq) {
 		retval = request_irq(vbus_irq, udc_vbus_irq,
-				SA_INTERRUPT | SA_SAMPLE_RANDOM,
+				IRQF_DISABLED | IRQF_SAMPLE_RANDOM,
 				driver_name, dev);
 		if (retval != 0) {
 			printk(KERN_ERR "%s: can't get irq %i, err %d\n",
@@ -2636,9 +2634,11 @@ static int __exit pxa2xx_udc_remove(struct platform_device *pdev)
 {
 	struct pxa2xx_udc *dev = platform_get_drvdata(pdev);
 
+	if (dev->driver)
+		return -EBUSY;
+
 	udc_disable(dev);
 	remove_proc_files();
-	usb_gadget_unregister_driver(dev->driver);
 
 	if (dev->got_irq) {
 		free_irq(IRQ_USB, dev);

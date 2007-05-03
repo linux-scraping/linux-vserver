@@ -229,7 +229,6 @@
 #include <linux/kernel.h>
 #include <linux/ioport.h>
 #include <linux/delay.h>
-#include <linux/sched.h>
 #include <linux/pci.h>
 #include <linux/proc_fs.h>
 #include <linux/blkdev.h>
@@ -2565,7 +2564,7 @@ aic7xxx_allocate_scb(struct aic7xxx_host *p)
       }
     }
     scb_count = min( (i-1), p->scb_data->maxscbs - p->scb_data->numscbs);
-    scb_ap = (struct aic7xxx_scb *)kmalloc(sizeof (struct aic7xxx_scb) * scb_count
+    scb_ap = kmalloc(sizeof (struct aic7xxx_scb) * scb_count
 					   + sizeof(struct aic7xxx_scb_dma), GFP_ATOMIC);
     if (scb_ap == NULL)
       return(0);

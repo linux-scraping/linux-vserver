@@ -70,6 +70,12 @@ nautilus_map_irq(struct pci_dev *dev, u8 slot, u8 pin)
 	/* Preserve the IRQ set up by the console.  */
 
 	u8 irq;
+	/* UP1500: AGP INTA is actually routed to IRQ 5, not IRQ 10 as
+	   console reports. Check the device id of AGP bridge to distinguish
+	   UP1500 from UP1000/1100. Note: 'pin' is 2 due to bridge swizzle. */
+	if (slot == 1 && pin == 2 &&
+	    dev->bus->self && dev->bus->self->device == 0x700f)
+		return 5;
 	pci_read_config_byte(dev, PCI_INTERRUPT_LINE, &irq);
 	return irq;
 }
@@ -200,7 +206,7 @@ nautilus_init_pci(void)
 	bus = pci_scan_bus(0, alpha_mv.pci_ops, hose);
 	hose->bus = bus;
 
-	irongate = pci_find_slot(0, 0);
+	irongate = pci_get_bus_and_slot(0, 0);
 	bus->self = irongate;
 	bus->resource[1] = &irongate_mem;
 

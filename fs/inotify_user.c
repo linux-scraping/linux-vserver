@@ -34,8 +34,8 @@
 
 #include <asm/ioctls.h>
 
-static kmem_cache_t *watch_cachep __read_mostly;
-static kmem_cache_t *event_cachep __read_mostly;
+static struct kmem_cache *watch_cachep __read_mostly;
+static struct kmem_cache *event_cachep __read_mostly;
 
 static struct vfsmount *inotify_mnt __read_mostly;
 
@@ -455,8 +455,16 @@ static ssize_t inotify_read(struct file *file, char __user *buf,
 			break;
 
 		kevent = inotify_dev_get_event(dev);
-		if (event_size + kevent->event.len > count)
+		if (event_size + kevent->event.len > count) {
+			if (ret == 0 && count > 0) {
+				/*
+				 * could not get a single event because we
+				 * didn't have enough buffer space.
+				 */
+				ret = -EINVAL;
+			}
 			break;
+		}
 
 		if (copy_to_user(buf, &kevent->event, event_size)) {
 			ret = -EFAULT;
@@ -570,9 +578,9 @@ asmlinkage long sys_inotify_init(void)
 	dev->ih = ih;
 
 	filp->f_op = &inotify_fops;
-	filp->f_vfsmnt = mntget(inotify_mnt);
-	filp->f_dentry = dget(inotify_mnt->mnt_root);
-	filp->f_mapping = filp->f_dentry->d_inode->i_mapping;
+	filp->f_path.mnt = mntget(inotify_mnt);
+	filp->f_path.dentry = dget(inotify_mnt->mnt_root);
+	filp->f_mapping = filp->f_path.dentry->d_inode->i_mapping;
 	filp->f_mode = FMODE_READ;
 	filp->f_flags = O_RDONLY;
 	filp->private_data = dev;

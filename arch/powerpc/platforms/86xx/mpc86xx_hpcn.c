@@ -18,7 +18,6 @@
 #include <linux/kdev_t.h>
 #include <linux/delay.h>
 #include <linux/seq_file.h>
-#include <linux/root_dev.h>
 
 #include <asm/system.h>
 #include <asm/time.h>
@@ -120,6 +119,8 @@ mpc86xx_hpcn_init_irq(void)
 	DBG("mpc86xxhpcn: cascade mapped to irq %d\n", cascade_irq);
 
 	i8259_init(cascade_node, 0);
+	of_node_put(cascade_node);
+
 	set_irq_chained_handler(cascade_irq, mpc86xx_8259_cascade);
 #endif
 }
@@ -365,12 +366,6 @@ mpc86xx_hpcn_setup_arch(void)
 
 	printk("MPC86xx HPCN board from Freescale Semiconductor\n");
 
-#ifdef  CONFIG_ROOT_NFS
-	ROOT_DEV = Root_NFS;
-#else
-	ROOT_DEV = Root_HDA1;
-#endif
-
 #ifdef CONFIG_SMP
 	mpc86xx_smp_init();
 #endif
@@ -395,15 +390,6 @@ mpc86xx_hpcn_show_cpuinfo(struct seq_file *m)
 
 	seq_printf(m, "SVR\t\t: 0x%x\n", svid);
 	seq_printf(m, "Memory\t\t: %d MB\n", memsize / (1024 * 1024));
-}
-
-
-void __init mpc86xx_hpcn_pcibios_fixup(void)
-{
-	struct pci_dev *dev = NULL;
-
-	for_each_pci_dev(dev)
-		pci_read_irq_line(dev);
 }
 
 
@@ -461,7 +447,6 @@ define_machine(mpc86xx_hpcn) {
 	.setup_arch		= mpc86xx_hpcn_setup_arch,
 	.init_IRQ		= mpc86xx_hpcn_init_irq,
 	.show_cpuinfo		= mpc86xx_hpcn_show_cpuinfo,
-	.pcibios_fixup		= mpc86xx_hpcn_pcibios_fixup,
 	.get_irq		= mpic_get_irq,
 	.restart		= mpc86xx_restart,
 	.time_init		= mpc86xx_time_init,

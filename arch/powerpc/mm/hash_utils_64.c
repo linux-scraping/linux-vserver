@@ -277,7 +277,7 @@ static void __init htab_init_page_sizes(void)
 	 * Not in the device-tree, let's fallback on known size
 	 * list for 16M capable GP & GR
 	 */
-	if (cpu_has_feature(CPU_FTR_16M_PAGE) && !machine_is(iseries))
+	if (cpu_has_feature(CPU_FTR_16M_PAGE))
 		memcpy(mmu_psize_defs, mmu_psize_defaults_gp,
 		       sizeof(mmu_psize_defaults_gp));
  found:
@@ -685,6 +685,9 @@ int hash_page(unsigned long ea, unsigned long access, unsigned long trap)
 				       "non-cacheable mapping\n");
 				psize = mmu_vmalloc_psize = MMU_PAGE_4K;
 			}
+#ifdef CONFIG_SPE_BASE
+			spu_flush_all_slbs(mm);
+#endif
 		}
 		if (user_region) {
 			if (psize != get_paca()->context.user_psize) {
@@ -759,6 +762,9 @@ void hash_preload(struct mm_struct *mm, unsigned long ea,
 				mmu_psize_defs[MMU_PAGE_4K].sllp;
 			get_paca()->context = mm->context;
 			slb_flush_and_rebolt();
+#ifdef CONFIG_SPE_BASE
+			spu_flush_all_slbs(mm);
+#endif
 		}
 	}
 	if (mm->context.user_psize == MMU_PAGE_64K)

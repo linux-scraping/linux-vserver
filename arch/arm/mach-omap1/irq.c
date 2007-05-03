@@ -229,7 +229,7 @@ void __init omap_init_irq(void)
 			omap_irq_set_cfg(j, 0, 0, irq_trigger);
 
 			set_irq_chip(j, &omap_irq_chip);
-			set_irq_handler(j, do_level_IRQ);
+			set_irq_handler(j, handle_level_irq);
 			set_irq_flags(j, IRQF_VALID);
 		}
 	}
@@ -238,7 +238,7 @@ void __init omap_init_irq(void)
 
 	if (cpu_is_omap730())
 		omap_unmask_irq(INT_730_IH2_IRQ);
-	else if (cpu_is_omap1510())
+	else if (cpu_is_omap15xx())
 		omap_unmask_irq(INT_1510_IH2_IRQ);
 	else if (cpu_is_omap16xx())
 		omap_unmask_irq(INT_1610_IH2_IRQ);

@@ -6,6 +6,8 @@
 #ifndef _i386_SETUP_H
 #define _i386_SETUP_H
 
+#define COMMAND_LINE_SIZE 2048
+
 #ifdef __KERNEL__
 #include <linux/pfn.h>
 
@@ -14,10 +16,8 @@
  */
 #define MAXMEM_PFN	PFN_DOWN(MAXMEM)
 #define MAX_NONPAE_PFN	(1 << 20)
-#endif
 
 #define PARAM_SIZE 4096
-#define COMMAND_LINE_SIZE 256
 
 #define OLD_CL_MAGIC_ADDR	0x90020
 #define OLD_CL_MAGIC		0xA33F
@@ -70,12 +70,17 @@ extern unsigned char boot_params[PARAM_SIZE];
 struct e820entry;
 
 char * __init machine_specific_memory_setup(void);
+char *memory_setup(void);
 
 int __init copy_e820_map(struct e820entry * biosmap, int nr_map);
 int __init sanitize_e820_map(struct e820entry * biosmap, char * pnr_map);
 void __init add_memory_region(unsigned long long start,
 			      unsigned long long size, int type);
 
+extern unsigned long init_pg_tables_end;
+
 #endif /* __ASSEMBLY__ */
+
+#endif  /*  __KERNEL__  */
 
 #endif /* _i386_SETUP_H */

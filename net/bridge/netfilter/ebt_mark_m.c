@@ -19,14 +19,14 @@ static int ebt_filter_mark(const struct sk_buff *skb,
 	struct ebt_mark_m_info *info = (struct ebt_mark_m_info *) data;
 
 	if (info->bitmask & EBT_MARK_OR)
-		return !(!!(skb->nfmark & info->mask) ^ info->invert);
-	return !(((skb->nfmark & info->mask) == info->mark) ^ info->invert);
+		return !(!!(skb->mark & info->mask) ^ info->invert);
+	return !(((skb->mark & info->mask) == info->mark) ^ info->invert);
 }
 
 static int ebt_mark_check(const char *tablename, unsigned int hookmask,
    const struct ebt_entry *e, void *data, unsigned int datalen)
 {
-        struct ebt_mark_m_info *info = (struct ebt_mark_m_info *) data;
+	struct ebt_mark_m_info *info = (struct ebt_mark_m_info *) data;
 
 	if (datalen != EBT_ALIGN(sizeof(struct ebt_mark_m_info)))
 		return -EINVAL;

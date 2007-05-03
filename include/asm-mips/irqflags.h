@@ -13,6 +13,7 @@
 
 #ifndef __ASSEMBLY__
 
+#include <linux/compiler.h>
 #include <asm/hazards.h>
 
 __asm__ (
@@ -184,16 +185,28 @@ __asm__ (
 	"	.set	pop						\n"
 	"	.endm							\n");
 
-#define raw_local_irq_restore(flags)					\
-do {									\
-	unsigned long __tmp1;						\
-									\
-	__asm__ __volatile__(						\
-		"raw_local_irq_restore\t%0"				\
-		: "=r" (__tmp1)						\
-		: "0" (flags)						\
-		: "memory");						\
-} while(0)
+extern void smtc_ipi_replay(void);
+
+static inline void raw_local_irq_restore(unsigned long flags)
+{
+	unsigned long __tmp1;
+
+#ifdef CONFIG_MIPS_MT_SMTC_INSTANT_REPLAY
+	/*
+	 * CONFIG_MIPS_MT_SMTC_INSTANT_REPLAY does prompt replay of deferred
+	 * IPIs, at the cost of branch and call overhead on each
+	 * local_irq_restore()
+	 */
+	if (unlikely(!(flags & 0x0400)))
+		smtc_ipi_replay();
+#endif
+
+	__asm__ __volatile__(
+		"raw_local_irq_restore\t%0"
+		: "=r" (__tmp1)
+		: "0" (flags)
+		: "memory");
+}
 
 static inline int raw_irqs_disabled_flags(unsigned long flags)
 {

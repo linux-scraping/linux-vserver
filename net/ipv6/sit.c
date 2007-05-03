@@ -3,7 +3,7 @@
  *	Linux INET6 implementation
  *
  *	Authors:
- *	Pedro Roque		<roque@di.fc.ul.pt>	
+ *	Pedro Roque		<roque@di.fc.ul.pt>
  *	Alexey Kuznetsov	<kuznet@ms2.inr.ac.ru>
  *
  *	$Id: sit.c,v 1.53 2001/09/25 05:09:53 davem Exp $
@@ -24,7 +24,6 @@
 #include <linux/types.h>
 #include <linux/socket.h>
 #include <linux/sockios.h>
-#include <linux/sched.h>
 #include <linux/net.h>
 #include <linux/in6.h>
 #include <linux/netdevice.h>
@@ -60,7 +59,7 @@
  */
 
 #define HASH_SIZE  16
-#define HASH(addr) ((addr^(addr>>4))&0xF)
+#define HASH(addr) (((__force u32)addr^((__force u32)addr>>4))&0xF)
 
 static int ipip6_fb_tunnel_init(struct net_device *dev);
 static int ipip6_tunnel_init(struct net_device *dev);
@@ -76,7 +75,7 @@ static struct ip_tunnel **tunnels[4] = { tunnels_wc, tunnels_l, tunnels_r, tunne
 
 static DEFINE_RWLOCK(ipip6_lock);
 
-static struct ip_tunnel * ipip6_tunnel_lookup(u32 remote, u32 local)
+static struct ip_tunnel * ipip6_tunnel_lookup(__be32 remote, __be32 local)
 {
 	unsigned h0 = HASH(remote);
 	unsigned h1 = HASH(local);
@@ -102,8 +101,8 @@ static struct ip_tunnel * ipip6_tunnel_lookup(u32 remote, u32 local)
 
 static struct ip_tunnel ** ipip6_bucket(struct ip_tunnel *t)
 {
-	u32 remote = t->parms.iph.daddr;
-	u32 local = t->parms.iph.saddr;
+	__be32 remote = t->parms.iph.daddr;
+	__be32 local = t->parms.iph.saddr;
 	unsigned h = 0;
 	int prio = 0;
 
@@ -144,8 +143,8 @@ static void ipip6_tunnel_link(struct ip_tunnel *t)
 
 static struct ip_tunnel * ipip6_tunnel_locate(struct ip_tunnel_parm *parms, int create)
 {
-	u32 remote = parms->iph.daddr;
-	u32 local = parms->iph.saddr;
+	__be32 remote = parms->iph.daddr;
+	__be32 local = parms->iph.saddr;
 	struct ip_tunnel *t, **tp, *nt;
 	struct net_device *dev;
 	unsigned h = 0;
@@ -216,7 +215,7 @@ static void ipip6_tunnel_uninit(struct net_device *dev)
 }
 
 
-static void ipip6_err(struct sk_buff *skb, u32 info)
+static int ipip6_err(struct sk_buff *skb, u32 info)
 {
 #ifndef I_WISH_WORLD_WERE_PERFECT
 
@@ -228,21 +227,22 @@ static void ipip6_err(struct sk_buff *skb, u32 info)
 	int type = skb->h.icmph->type;
 	int code = skb->h.icmph->code;
 	struct ip_tunnel *t;
+	int err;
 
 	switch (type) {
 	default:
 	case ICMP_PARAMETERPROB:
-		return;
+		return 0;
 
 	case ICMP_DEST_UNREACH:
 		switch (code) {
 		case ICMP_SR_FAILED:
 		case ICMP_PORT_UNREACH:
 			/* Impossible event. */
-			return;
+			return 0;
 		case ICMP_FRAG_NEEDED:
 			/* Soft state for pmtu is maintained by IP core. */
-			return;
+			return 0;
 		default:
 			/* All others are translated to HOST_UNREACH.
 			   rfc2003 contains "deep thoughts" about NET_UNREACH,
@@ -253,14 +253,18 @@ static void ipip6_err(struct sk_buff *skb, u32 info)
 		break;
 	case ICMP_TIME_EXCEEDED:
 		if (code != ICMP_EXC_TTL)
-			return;
+			return 0;
 		break;
 	}
+
+	err = -ENOENT;
 
 	read_lock(&ipip6_lock);
 	t = ipip6_tunnel_lookup(iph->daddr, iph->saddr);
 	if (t == NULL || t->parms.iph.daddr == 0)
 		goto out;
+
+	err = 0;
 	if (t->parms.iph.ttl == 0 && type == ICMP_TIME_EXCEEDED)
 		goto out;
 
@@ -271,7 +275,7 @@ static void ipip6_err(struct sk_buff *skb, u32 info)
 	t->err_time = jiffies;
 out:
 	read_unlock(&ipip6_lock);
-	return;
+	return err;
 #else
 	struct iphdr *iph = (struct iphdr*)dp;
 	int hlen = iph->ihl<<2;
@@ -332,7 +336,7 @@ out:
 	/* Prepare fake skb to feed it to icmpv6_send */
 	skb2 = skb_clone(skb, GFP_ATOMIC);
 	if (skb2 == NULL)
-		return;
+		return 0;
 	dst_release(skb2->dst);
 	skb2->dst = NULL;
 	skb_pull(skb2, skb->data - (u8*)iph6);
@@ -355,7 +359,7 @@ out:
 		}
 	}
 	kfree_skb(skb2);
-	return;
+	return 0;
 #endif
 }
 
@@ -405,12 +409,12 @@ out:
 /* Returns the embedded IPv4 address if the IPv6 address
    comes from 6to4 (RFC 3056) addr space */
 
-static inline u32 try_6to4(struct in6_addr *v6dst)
+static inline __be32 try_6to4(struct in6_addr *v6dst)
 {
-	u32 dst = 0;
+	__be32 dst = 0;
 
 	if (v6dst->s6_addr16[0] == htons(0x2002)) {
-	        /* 6to4 v6 addr has 16 bits prefix, 32 v4addr, 16 SLA, ... */
+		/* 6to4 v6 addr has 16 bits prefix, 32 v4addr, 16 SLA, ... */
 		memcpy(&dst, &v6dst->s6_addr16[1], 4);
 	}
 	return dst;
@@ -432,9 +436,9 @@ static int ipip6_tunnel_xmit(struct sk_buff *skb, struct net_device *dev)
 	struct net_device *tdev;			/* Device to other host */
 	struct iphdr  *iph;			/* Our new IP header */
 	int    max_headroom;			/* The extra header space needed */
-	u32    dst = tiph->daddr;
+	__be32 dst = tiph->daddr;
 	int    mtu;
-	struct in6_addr *addr6;	
+	struct in6_addr *addr6;
 	int addr_type;
 
 	if (tunnel->recursion++) {
@@ -537,7 +541,7 @@ static int ipip6_tunnel_xmit(struct sk_buff *skb, struct net_device *dev)
 		struct sk_buff *new_skb = skb_realloc_headroom(skb, max_headroom);
 		if (!new_skb) {
 			ip_rt_put(rt);
-  			stats->tx_dropped++;
+			stats->tx_dropped++;
 			dev_kfree_skb(skb);
 			tunnel->recursion--;
 			return 0;
@@ -686,7 +690,8 @@ ipip6_tunnel_ioctl (struct net_device *dev, struct ifreq *ifr, int cmd)
 				goto done;
 			dev = t->dev;
 		}
-		err = unregister_netdevice(dev);
+		unregister_netdevice(dev);
+		err = 0;
 		break;
 
 	default:
@@ -790,9 +795,10 @@ static int __init ipip6_fb_tunnel_init(struct net_device *dev)
 	return 0;
 }
 
-static struct net_protocol sit_protocol = {
+static struct xfrm_tunnel sit_handler = {
 	.handler	=	ipip6_rcv,
 	.err_handler	=	ipip6_err,
+	.priority	=	1,
 };
 
 static void __exit sit_destroy_tunnels(void)
@@ -809,9 +815,9 @@ static void __exit sit_destroy_tunnels(void)
 	}
 }
 
-void __exit sit_cleanup(void)
+static void __exit sit_cleanup(void)
 {
-	inet_del_protocol(&sit_protocol, IPPROTO_IPV6);
+	xfrm4_tunnel_deregister(&sit_handler, AF_INET6);
 
 	rtnl_lock();
 	sit_destroy_tunnels();
@@ -819,18 +825,18 @@ void __exit sit_cleanup(void)
 	rtnl_unlock();
 }
 
-int __init sit_init(void)
+static int __init sit_init(void)
 {
 	int err;
 
 	printk(KERN_INFO "IPv6 over IPv4 tunneling driver\n");
 
-	if (inet_add_protocol(&sit_protocol, IPPROTO_IPV6) < 0) {
+	if (xfrm4_tunnel_register(&sit_handler, AF_INET6) < 0) {
 		printk(KERN_INFO "sit init: Can't add protocol\n");
 		return -EAGAIN;
 	}
 
-	ipip6_fb_tunnel_dev = alloc_netdev(sizeof(struct ip_tunnel), "sit0", 
+	ipip6_fb_tunnel_dev = alloc_netdev(sizeof(struct ip_tunnel), "sit0",
 					   ipip6_tunnel_setup);
 	if (!ipip6_fb_tunnel_dev) {
 		err = -ENOMEM;
@@ -847,7 +853,7 @@ int __init sit_init(void)
  err2:
 	free_netdev(ipip6_fb_tunnel_dev);
  err1:
-	inet_del_protocol(&sit_protocol, IPPROTO_IPV6);
+	xfrm4_tunnel_deregister(&sit_handler, AF_INET6);
 	goto out;
 }
 

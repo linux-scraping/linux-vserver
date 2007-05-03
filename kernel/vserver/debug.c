@@ -1,7 +1,7 @@
 /*
  *  kernel/vserver/debug.c
  *
- *  Copyright (C) 2005  Herbert Pötzl
+ *  Copyright (C) 2005-2007 Herbert Pötzl
  *
  *  V0.01  vx_info dump support
  *

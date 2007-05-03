@@ -146,10 +146,24 @@ UNUSUAL_DEV(  0x0420, 0x0001, 0x0100, 0x0100,
 		US_SC_DEVICE, US_PR_DEVICE, NULL,
 		US_FL_IGNORE_RESIDUE ),
 
+/* Reported by Andrew Nayenko <relan@bk.ru> */
+UNUSUAL_DEV(  0x0421, 0x0019, 0x0592, 0x0592,
+		"Nokia",
+		"Nokia 6288",
+		US_SC_DEVICE, US_PR_DEVICE, NULL,
+		US_FL_MAX_SECTORS_64 ),
+
 /* Reported by Mario Rettig <mariorettig@web.de> */
 UNUSUAL_DEV(  0x0421, 0x042e, 0x0100, 0x0100,
 		"Nokia",
 		"Nokia 3250",
+		US_SC_DEVICE, US_PR_DEVICE, NULL,
+		US_FL_IGNORE_RESIDUE | US_FL_FIX_CAPACITY ),
+
+/* Reported by <honkkis@gmail.com> */
+UNUSUAL_DEV(  0x0421, 0x0433, 0x0100, 0x0100,
+		"Nokia",
+		"E70",
 		US_SC_DEVICE, US_PR_DEVICE, NULL,
 		US_FL_IGNORE_RESIDUE | US_FL_FIX_CAPACITY ),
 
@@ -187,6 +201,13 @@ UNUSUAL_DEV(  0x0421, 0x044e, 0x0100, 0x0100,
 UNUSUAL_DEV(  0x0421, 0x047c, 0x0370, 0x0370,
 		"Nokia",
 		"6131",
+		US_SC_DEVICE, US_PR_DEVICE, NULL,
+		US_FL_MAX_SECTORS_64 ),
+
+/* Reported by Manuel Osdoba <manuel.osdoba@tu-ilmenau.de> */
+UNUSUAL_DEV( 0x0421, 0x0492, 0x0452, 0x0452,
+		"Nokia",
+		"Nokia 6233",
 		US_SC_DEVICE, US_PR_DEVICE, NULL,
 		US_FL_MAX_SECTORS_64 ),
 
@@ -247,6 +268,18 @@ UNUSUAL_DEV(  0x045a, 0x5210, 0x0101, 0x0101,
 		US_SC_SCSI, US_PR_KARMA, rio_karma_init, 0),
 #endif
 
+/*
+ * This virtual floppy is found in Sun equipment (x4600, x4200m2, etc.)
+ * Reported by Pete Zaitcev <zaitcev@redhat.com>
+ * This device chokes on both version of MODE SENSE which we have, so
+ * use_10_for_ms is not effective, and we use US_FL_NO_WP_DETECT.
+ */
+UNUSUAL_DEV(  0x046b, 0xff40, 0x0100, 0x0100,
+		"AMI",
+		"Virtual Floppy",
+		US_SC_DEVICE, US_PR_DEVICE, NULL,
+		US_FL_NO_WP_DETECT),
+
 /* Patch submitted by Philipp Friedrich <philipp@void.at> */
 UNUSUAL_DEV(  0x0482, 0x0100, 0x0100, 0x0100,
 		"Kyocera",
@@ -291,6 +324,13 @@ UNUSUAL_DEV(  0x04b0, 0x0405, 0x0100, 0x0100,
 UNUSUAL_DEV(  0x04b0, 0x040d, 0x0100, 0x0100,
 		"NIKON",
 		"NIKON DSC D70s",
+		US_SC_DEVICE, US_PR_DEVICE, NULL,
+		US_FL_FIX_CAPACITY),
+
+/* Reported by Emil Larsson <emil@swip.net> */
+UNUSUAL_DEV(  0x04b0, 0x0411, 0x0100, 0x0100,
+		"NIKON",
+		"NIKON DSC D80",
 		US_SC_DEVICE, US_PR_DEVICE, NULL,
 		US_FL_FIX_CAPACITY),
 
@@ -547,7 +587,7 @@ UNUSUAL_DEV(  0x054c, 0x002b, 0x0100, 0x0110,
 #endif
 
 /* Submitted by Olaf Hering, <olh@suse.de> SuSE Bugzilla #49049 */
-UNUSUAL_DEV(  0x054c, 0x002c, 0x0501, 0x0501,
+UNUSUAL_DEV(  0x054c, 0x002c, 0x0501, 0x2000,
 		"Sony",
 		"USB Floppy Drive",
 		US_SC_DEVICE, US_PR_DEVICE, NULL,
@@ -721,7 +761,7 @@ UNUSUAL_DEV( 0x05ac, 0x1204, 0x0000, 0x9999,
 		"Apple",
 		"iPod",
 		US_SC_DEVICE, US_PR_DEVICE, NULL,
-		US_FL_FIX_CAPACITY ),
+		US_FL_FIX_CAPACITY | US_FL_NOT_LOCKABLE ),
 
 UNUSUAL_DEV( 0x05ac, 0x1205, 0x0000, 0x9999,
 		"Apple",
@@ -1075,6 +1115,15 @@ UNUSUAL_DEV(  0x08bd, 0x1100, 0x0000, 0x0000,
 		US_SC_DEVICE, US_PR_DEVICE, NULL,
 		US_FL_SINGLE_LUN),
 
+/* Submitted by Dylan Taft <d13f00l@gmail.com>
+ * US_FL_IGNORE_RESIDUE Needed
+ */
+UNUSUAL_DEV(  0x08ca, 0x3103, 0x0100, 0x0100,
+                "AIPTEK",
+                "Aiptek USB Keychain MP3 Player",
+                US_SC_DEVICE, US_PR_DEVICE, NULL,
+                US_FL_IGNORE_RESIDUE),
+
 /* Entry needed for flags. Moreover, all devices with this ID use
  * bulk-only transport, but _some_ falsely report Control/Bulk instead.
  * One example is "Trumpion Digital Research MYMP3".
@@ -1285,24 +1334,18 @@ UNUSUAL_DEV(  0x0fce, 0xd008, 0x0000, 0x0000,
 		US_SC_DEVICE, US_PR_DEVICE, NULL,
 		US_FL_NO_WP_DETECT ),
 
-/* Reported by Jan Mate <mate@fiit.stuba.sk> */
+/* Reported by Jan Mate <mate@fiit.stuba.sk>
+ * and by Soeren Sonnenburg <kernel@nn7.de> */
 UNUSUAL_DEV(  0x0fce, 0xe030, 0x0000, 0x0000,
 		"Sony Ericsson",
 		"P990i",
 		US_SC_DEVICE, US_PR_DEVICE, NULL,
-		US_FL_FIX_CAPACITY ),
+		US_FL_FIX_CAPACITY | US_FL_IGNORE_RESIDUE ),
 
 /* Reported by Emmanuel Vasilakis <evas@forthnet.gr> */
 UNUSUAL_DEV(  0x0fce, 0xe031, 0x0000, 0x0000,
 		"Sony Ericsson",
 		"M600i",
-		US_SC_DEVICE, US_PR_DEVICE, NULL,
-		US_FL_FIX_CAPACITY ),
-
-/* Reported by Jan Mate <mate@fiit.stuba.sk> */
-UNUSUAL_DEV(  0x0fce, 0xe030, 0x0000, 0x0000,
-		"Sony Ericsson",
-		"P990i",
 		US_SC_DEVICE, US_PR_DEVICE, NULL,
 		US_FL_FIX_CAPACITY ),
 
@@ -1318,6 +1361,25 @@ UNUSUAL_DEV(  0x1019, 0x0c55, 0x0000, 0x0110,
 		US_SC_DEVICE, US_PR_DEVICE, usb_stor_ucr61s2b_init,
 		0 ),
 
+/* Reported by Jaco Kroon <jaco@kroon.co.za>
+ * The usb-storage module found on the Digitech GNX4 (and supposedly other
+ * devices) misbehaves and causes a bunch of invalid I/O errors.
+ */
+UNUSUAL_DEV(  0x1210, 0x0003, 0x0100, 0x0100,
+		"Digitech HMG",
+		"DigiTech Mass Storage",
+		US_SC_DEVICE, US_PR_DEVICE, NULL,
+		US_FL_IGNORE_RESIDUE ),
+
+/* This prevents the kernel from detecting the virtual cd-drive with the
+ * Windows drivers.  <johann.wilhelm@student.tugraz.at>
+*/
+UNUSUAL_DEV( 0x12d1, 0x1003, 0x0000, 0xffff,
+		"HUAWEI",
+		"E220 USB-UMTS Install",
+		US_SC_DEVICE, US_PR_DEVICE, NULL,
+		US_FL_IGNORE_DEVICE),
+
 /* Reported by Vilius Bilinkevicius <vilisas AT xxx DOT lt) */
 UNUSUAL_DEV(  0x132b, 0x000b, 0x0001, 0x0001,
 		"Minolta",
@@ -1332,6 +1394,21 @@ UNUSUAL_DEV(  0x1370, 0x6828, 0x0110, 0x0110,
 		US_SC_DEVICE, US_PR_DEVICE, NULL,
 		US_FL_IGNORE_RESIDUE ),
 
+/* Reported by Francesco Foresti <frafore@tiscali.it> */
+UNUSUAL_DEV(  0x14cd, 0x6600, 0x0201, 0x0201,
+		"Super Top",
+		"IDE DEVICE",
+		US_SC_DEVICE, US_PR_DEVICE, NULL,
+		US_FL_IGNORE_RESIDUE ),
+
+/* Reported by Robert Schedel <r.schedel@yahoo.de>
+ * Note: this is a 'super top' device like the above 14cd/6600 device */
+UNUSUAL_DEV(  0x1652, 0x6600, 0x0201, 0x0201,
+		"Teac",
+		"HD-35PUK-B",
+		US_SC_DEVICE, US_PR_DEVICE, NULL,
+		US_FL_IGNORE_RESIDUE ),
+
 /* patch submitted by Davide Perini <perini.davide@dpsoftware.org>
  * and Renato Perini <rperini@email.it>
  */
@@ -1340,6 +1417,16 @@ UNUSUAL_DEV(  0x22b8, 0x3010, 0x0001, 0x0001,
 		"RAZR V3x",
 		US_SC_DEVICE, US_PR_DEVICE, NULL,
 		US_FL_FIX_CAPACITY | US_FL_IGNORE_RESIDUE ),
+
+/*
+ * Patch by Pete Zaitcev <zaitcev@redhat.com>
+ * Report by Mark Patton. Red Hat bz#208928.
+ */
+UNUSUAL_DEV(  0x22b8, 0x4810, 0x0001, 0x0001,
+		"Motorola",
+		"RAZR V3i",
+		US_SC_DEVICE, US_PR_DEVICE, NULL,
+		US_FL_FIX_CAPACITY),
 
 /* Reported by Radovan Garabik <garabik@kassiopeia.juls.savba.sk> */
 UNUSUAL_DEV(  0x2735, 0x100b, 0x0000, 0x9999,
@@ -1370,7 +1457,7 @@ UNUSUAL_DEV(  0xed06, 0x4500, 0x0001, 0x0001,
 		"DataStor",
 		"USB4500 FW1.04",
 		US_SC_DEVICE, US_PR_DEVICE, NULL,
-		US_FL_FIX_CAPACITY),
+		US_FL_CAPACITY_HEURISTICS),
 
 /* Control/Bulk transport for all SubClass values */
 USUAL_DEV(US_SC_RBC, US_PR_CB, USB_US_TYPE_STOR),

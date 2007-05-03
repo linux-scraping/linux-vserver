@@ -1,13 +1,13 @@
 /*
  *	Multicast support for IPv6
- *	Linux INET6 implementation 
+ *	Linux INET6 implementation
  *
  *	Authors:
- *	Pedro Roque		<roque@di.fc.ul.pt>	
+ *	Pedro Roque		<roque@di.fc.ul.pt>
  *
  *	$Id: mcast.c,v 1.40 2002/02/08 03:57:19 davem Exp $
  *
- *	Based on linux/ipv4/igmp.c and linux/ipv4/ip_sockglue.c 
+ *	Based on linux/ipv4/igmp.c and linux/ipv4/ip_sockglue.c
  *
  *	This program is free software; you can redistribute it and/or
  *      modify it under the terms of the GNU General Public License
@@ -83,7 +83,7 @@
 struct mld2_grec {
 	__u8		grec_type;
 	__u8		grec_auxwords;
-	__u16		grec_nsrcs;
+	__be16		grec_nsrcs;
 	struct in6_addr	grec_mca;
 	struct in6_addr	grec_src[0];
 };
@@ -91,18 +91,18 @@ struct mld2_grec {
 struct mld2_report {
 	__u8	type;
 	__u8	resv1;
-	__u16	csum;
-	__u16	resv2;
-	__u16	ngrec;
+	__sum16	csum;
+	__be16	resv2;
+	__be16	ngrec;
 	struct mld2_grec grec[0];
 };
 
 struct mld2_query {
 	__u8 type;
 	__u8 code;
-	__u16 csum;
-	__u16 mrc;
-	__u16 resv1;
+	__sum16 csum;
+	__be16 mrc;
+	__be16 resv1;
 	struct in6_addr mca;
 #if defined(__LITTLE_ENDIAN_BITFIELD)
 	__u8 qrv:3,
@@ -116,7 +116,7 @@ struct mld2_query {
 #error "Please fix <asm/byteorder.h>"
 #endif
 	__u8 qqic;
-	__u16 nsrcs;
+	__be16 nsrcs;
 	struct in6_addr srcs[0];
 };
 
@@ -644,7 +644,7 @@ int ip6_mc_msfget(struct sock *sk, struct group_filter *gsf,
 		memset(&ss, 0, sizeof(ss));
 		psin6->sin6_family = AF_INET6;
 		psin6->sin6_addr = psl->sl_addr[i];
-	    	if (copy_to_user(&optval->gf_slist[i], &ss, sizeof(ss)))
+		if (copy_to_user(&optval->gf_slist[i], &ss, sizeof(ss)))
 			return -EFAULT;
 	}
 	return 0;
@@ -1168,7 +1168,7 @@ int igmp6_event_query(struct sk_buff *skb)
 
 	/* compute payload length excluding extension headers */
 	len = ntohs(skb->nh.ipv6h->payload_len) + sizeof(struct ipv6hdr);
-	len -= (char *)skb->h.raw - (char *)skb->nh.ipv6h; 
+	len -= (char *)skb->h.raw - (char *)skb->nh.ipv6h;
 
 	/* Drop queries with not link local source */
 	if (!(ipv6_addr_type(&skb->nh.ipv6h->saddr)&IPV6_ADDR_LINKLOCAL))
@@ -1206,7 +1206,7 @@ int igmp6_event_query(struct sk_buff *skb)
 		/* clear deleted report items */
 		mld_clear_delrec(idev);
 	} else if (len >= 28) {
-		int srcs_offset = sizeof(struct mld2_query) - 
+		int srcs_offset = sizeof(struct mld2_query) -
 				  sizeof(struct icmp6hdr);
 		if (!pskb_may_pull(skb, srcs_offset)) {
 			in6_dev_put(idev);
@@ -1230,7 +1230,7 @@ int igmp6_event_query(struct sk_buff *skb)
 		}
 		/* mark sources to include, if group & source-specific */
 		if (mlh2->nsrcs != 0) {
-			if (!pskb_may_pull(skb, srcs_offset + 
+			if (!pskb_may_pull(skb, srcs_offset +
 			    ntohs(mlh2->nsrcs) * sizeof(struct in6_addr))) {
 				in6_dev_put(idev);
 				return -EINVAL;
@@ -1304,7 +1304,7 @@ int igmp6_event_report(struct sk_buff *skb)
 
 	/* Drop reports with not link local source */
 	addr_type = ipv6_addr_type(&skb->nh.ipv6h->saddr);
-	if (addr_type != IPV6_ADDR_ANY && 
+	if (addr_type != IPV6_ADDR_ANY &&
 	    !(addr_type&IPV6_ADDR_LINKLOCAL))
 		return -EINVAL;
 
@@ -1413,7 +1413,7 @@ static struct sk_buff *mld_newpack(struct net_device *dev, int size)
 
 	if (ipv6_get_lladdr(dev, &addr_buf)) {
 		/* <draft-ietf-magma-mld-source-05.txt>:
-		 * use unspecified address as the source address 
+		 * use unspecified address as the source address
 		 * when a valid link-local address is not available.
 		 */
 		memset(&addr_buf, 0, sizeof(addr_buf));
@@ -1454,7 +1454,7 @@ static inline int mld_dev_queue_xmit2(struct sk_buff *skb)
 static inline int mld_dev_queue_xmit(struct sk_buff *skb)
 {
 	return NF_HOOK(PF_INET6, NF_IP6_POST_ROUTING, skb, NULL, skb->dev,
-	               mld_dev_queue_xmit2);
+		       mld_dev_queue_xmit2);
 }
 
 static void mld_sendpack(struct sk_buff *skb)
@@ -1465,7 +1465,7 @@ static void mld_sendpack(struct sk_buff *skb)
 	struct inet6_dev *idev = in6_dev_get(skb->dev);
 	int err;
 
-	IP6_INC_STATS(IPSTATS_MIB_OUTREQUESTS);
+	IP6_INC_STATS(idev, IPSTATS_MIB_OUTREQUESTS);
 	payload_len = skb->tail - (unsigned char *)skb->nh.ipv6h -
 		sizeof(struct ipv6hdr);
 	mldlen = skb->tail - skb->h.raw;
@@ -1477,9 +1477,9 @@ static void mld_sendpack(struct sk_buff *skb)
 		mld_dev_queue_xmit);
 	if (!err) {
 		ICMP6_INC_STATS(idev,ICMP6_MIB_OUTMSGS);
-		IP6_INC_STATS(IPSTATS_MIB_OUTMCASTPKTS);
+		IP6_INC_STATS(idev, IPSTATS_MIB_OUTMCASTPKTS);
 	} else
-		IP6_INC_STATS(IPSTATS_MIB_OUTDISCARDS);
+		IP6_INC_STATS(idev, IPSTATS_MIB_OUTDISCARDS);
 
 	if (likely(idev != NULL))
 		in6_dev_put(idev);
@@ -1582,6 +1582,8 @@ static struct sk_buff *add_grec(struct sk_buff *skb, struct ifmcaddr6 *pmc,
 			skb = add_grhead(skb, pmc, type, &pgr);
 			first = 0;
 		}
+		if (!skb)
+			return NULL;
 		psrc = (struct in6_addr *)skb_put(skb, sizeof(*psrc));
 		*psrc = psf->sf_addr;
 		scount++; stotal++;
@@ -1752,8 +1754,8 @@ static void igmp6_send(struct in6_addr *addr, struct net_device *dev, int type)
 {
 	struct sock *sk = igmp6_socket->sk;
 	struct inet6_dev *idev;
-        struct sk_buff *skb;
-        struct icmp6hdr *hdr;
+	struct sk_buff *skb;
+	struct icmp6hdr *hdr;
 	struct in6_addr *snd_addr;
 	struct in6_addr *addrp;
 	struct in6_addr addr_buf;
@@ -1763,7 +1765,10 @@ static void igmp6_send(struct in6_addr *addr, struct net_device *dev, int type)
 		     IPV6_TLV_ROUTERALERT, 2, 0, 0,
 		     IPV6_TLV_PADN, 0 };
 
-	IP6_INC_STATS(IPSTATS_MIB_OUTREQUESTS);
+	rcu_read_lock();
+	IP6_INC_STATS(__in6_dev_get(dev),
+		      IPSTATS_MIB_OUTREQUESTS);
+	rcu_read_unlock();
 	snd_addr = addr;
 	if (type == ICMPV6_MGM_REDUCTION) {
 		snd_addr = &all_routers;
@@ -1777,7 +1782,10 @@ static void igmp6_send(struct in6_addr *addr, struct net_device *dev, int type)
 	skb = sock_alloc_send_skb(sk, LL_RESERVED_SPACE(dev) + full_len, 1, &err);
 
 	if (skb == NULL) {
-		IP6_INC_STATS(IPSTATS_MIB_OUTDISCARDS);
+		rcu_read_lock();
+		IP6_INC_STATS(__in6_dev_get(dev),
+			      IPSTATS_MIB_OUTDISCARDS);
+		rcu_read_unlock();
 		return;
 	}
 
@@ -1785,7 +1793,7 @@ static void igmp6_send(struct in6_addr *addr, struct net_device *dev, int type)
 
 	if (ipv6_get_lladdr(dev, &addr_buf)) {
 		/* <draft-ietf-magma-mld-source-05.txt>:
-		 * use unspecified address as the source address 
+		 * use unspecified address as the source address
 		 * when a valid link-local address is not available.
 		 */
 		memset(&addr_buf, 0, sizeof(addr_buf));
@@ -1816,9 +1824,9 @@ static void igmp6_send(struct in6_addr *addr, struct net_device *dev, int type)
 		else
 			ICMP6_INC_STATS(idev, ICMP6_MIB_OUTGROUPMEMBRESPONSES);
 		ICMP6_INC_STATS(idev, ICMP6_MIB_OUTMSGS);
-		IP6_INC_STATS(IPSTATS_MIB_OUTMCASTPKTS);
+		IP6_INC_STATS(idev, IPSTATS_MIB_OUTMCASTPKTS);
 	} else
-		IP6_INC_STATS(IPSTATS_MIB_OUTDISCARDS);
+		IP6_INC_STATS(idev, IPSTATS_MIB_OUTDISCARDS);
 
 	if (likely(idev != NULL))
 		in6_dev_put(idev);
@@ -2252,8 +2260,6 @@ void ipv6_mc_up(struct inet6_dev *idev)
 
 void ipv6_mc_init_dev(struct inet6_dev *idev)
 {
-	struct in6_addr maddr;
-
 	write_lock_bh(&idev->lock);
 	rwlock_init(&idev->mc_lock);
 	idev->mc_gq_running = 0;
@@ -2269,10 +2275,6 @@ void ipv6_mc_init_dev(struct inet6_dev *idev)
 	idev->mc_maxdelay = IGMP6_UNSOLICITED_IVAL;
 	idev->mc_v1_seen = 0;
 	write_unlock_bh(&idev->lock);
-
-	/* Add all-nodes address. */
-	ipv6_addr_all_nodes(&maddr);
-	ipv6_dev_mc_inc(idev->dev, &maddr);
 }
 
 /*
@@ -2328,7 +2330,7 @@ static inline struct ifmcaddr6 *igmp6_mc_get_first(struct seq_file *seq)
 	struct igmp6_mc_iter_state *state = igmp6_mc_seq_private(seq);
 
 	for (state->dev = dev_base, state->idev = NULL;
-	     state->dev; 
+	     state->dev;
 	     state->dev = state->dev->next) {
 		struct inet6_dev *idev;
 		idev = in6_dev_get(state->dev);
@@ -2411,7 +2413,7 @@ static int igmp6_mc_seq_show(struct seq_file *seq, void *v)
 	struct igmp6_mc_iter_state *state = igmp6_mc_seq_private(seq);
 
 	seq_printf(seq,
-		   "%-4d %-15s " NIP6_SEQFMT " %5d %08X %ld\n", 
+		   "%-4d %-15s " NIP6_SEQFMT " %5d %08X %ld\n",
 		   state->dev->ifindex, state->dev->name,
 		   NIP6(im->mca_addr),
 		   im->mca_users, im->mca_flags,
@@ -2449,7 +2451,7 @@ out_kfree:
 	goto out;
 }
 
-static struct file_operations igmp6_mc_seq_fops = {
+static const struct file_operations igmp6_mc_seq_fops = {
 	.owner		=	THIS_MODULE,
 	.open		=	igmp6_mc_seq_open,
 	.read		=	seq_read,
@@ -2472,7 +2474,7 @@ static inline struct ip6_sf_list *igmp6_mcf_get_first(struct seq_file *seq)
 	struct igmp6_mcf_iter_state *state = igmp6_mcf_seq_private(seq);
 
 	for (state->dev = dev_base, state->idev = NULL, state->im = NULL;
-	     state->dev; 
+	     state->dev;
 	     state->dev = state->dev->next) {
 		struct inet6_dev *idev;
 		idev = in6_dev_get(state->dev);
@@ -2577,7 +2579,7 @@ static int igmp6_mcf_seq_show(struct seq_file *seq, void *v)
 	struct igmp6_mcf_iter_state *state = igmp6_mcf_seq_private(seq);
 
 	if (v == SEQ_START_TOKEN) {
-		seq_printf(seq, 
+		seq_printf(seq,
 			   "%3s %6s "
 			   "%32s %32s %6s %6s\n", "Idx",
 			   "Device", "Multicast Address",
@@ -2606,7 +2608,7 @@ static int igmp6_mcf_seq_open(struct inode *inode, struct file *file)
 	struct seq_file *seq;
 	int rc = -ENOMEM;
 	struct igmp6_mcf_iter_state *s = kzalloc(sizeof(*s), GFP_KERNEL);
-	
+
 	if (!s)
 		goto out;
 
@@ -2623,7 +2625,7 @@ out_kfree:
 	goto out;
 }
 
-static struct file_operations igmp6_mcf_seq_fops = {
+static const struct file_operations igmp6_mcf_seq_fops = {
 	.owner		=	THIS_MODULE,
 	.open		=	igmp6_mcf_seq_open,
 	.read		=	seq_read,

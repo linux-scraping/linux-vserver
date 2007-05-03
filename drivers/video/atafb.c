@@ -49,7 +49,6 @@
 
 #include <linux/module.h>
 #include <linux/kernel.h>
-#include <linux/sched.h>
 #include <linux/errno.h>
 #include <linux/string.h>
 #include <linux/mm.h>
@@ -2804,8 +2803,19 @@ int __init atafb_init(void)
 	atafb_set_disp(-1, &fb_info);
 	do_install_cmap(0, &fb_info);
 
-	if (register_framebuffer(&fb_info) < 0)
+	if (register_framebuffer(&fb_info) < 0) {
+#ifdef ATAFB_EXT
+		if (external_addr) {
+			iounmap(external_addr);
+			external_addr = NULL;
+		}
+		if (external_vgaiobase) {
+			iounmap((void*)external_vgaiobase);
+			external_vgaiobase = 0;
+		}
+#endif
 		return -EINVAL;
+	}
 
 	printk("Determined %dx%d, depth %d\n",
 	       disp.var.xres, disp.var.yres, disp.var.bits_per_pixel);

@@ -33,11 +33,12 @@
 #include <linux/kthread.h>
 #include <linux/mutex.h>
 #include <asm/s390_rdev.h>
+#include <asm/reset.h>
 
 #include "ap_bus.h"
 
 /* Some prototypes. */
-static void ap_scan_bus(void *);
+static void ap_scan_bus(struct work_struct *);
 static void ap_poll_all(unsigned long);
 static void ap_poll_timeout(unsigned long);
 static int ap_poll_thread_start(void);
@@ -64,6 +65,8 @@ module_param_named(poll_thread, ap_thread_flag, int, 0000);
 MODULE_PARM_DESC(poll_thread, "Turn on/off poll thread, default is 1 (on).");
 
 static struct device *ap_root_device = NULL;
+static DEFINE_SPINLOCK(ap_device_lock);
+static LIST_HEAD(ap_device_list);
 
 /**
  * Workqueue & timer for bus rescan.
@@ -71,7 +74,7 @@ static struct device *ap_root_device = NULL;
 static struct workqueue_struct *ap_work_queue;
 static struct timer_list ap_config_timer;
 static int ap_config_time = AP_CONFIG_TIME;
-static DECLARE_WORK(ap_config_work, ap_scan_bus, NULL);
+static DECLARE_WORK(ap_config_work, ap_scan_bus);
 
 /**
  * Tasklet & timer for AP request polling.
@@ -431,7 +434,15 @@ static int ap_uevent (struct device *dev, char **envp, int num_envp,
 			   ap_dev->device_type);
 	if (buffer_size - length <= 0)
 		return -ENOMEM;
-	envp[1] = 0;
+	buffer += length;
+	buffer_size -= length;
+	/* Add MODALIAS= */
+	envp[1] = buffer;
+	length = scnprintf(buffer, buffer_size, "MODALIAS=ap:t%02X",
+			   ap_dev->device_type);
+	if (buffer_size - length <= 0)
+		return -ENOMEM;
+	envp[2] = NULL;
 	return 0;
 }
 
@@ -448,6 +459,9 @@ static int ap_device_probe(struct device *dev)
 	int rc;
 
 	ap_dev->drv = ap_drv;
+	spin_lock_bh(&ap_device_lock);
+	list_add(&ap_dev->list, &ap_device_list);
+	spin_unlock_bh(&ap_device_lock);
 	rc = ap_drv->probe ? ap_drv->probe(ap_dev) : -ENODEV;
 	return rc;
 }
@@ -456,7 +470,7 @@ static int ap_device_probe(struct device *dev)
  * Flush all requests from the request/pending queue of an AP device.
  * @ap_dev: pointer to the AP device.
  */
-static inline void __ap_flush_queue(struct ap_device *ap_dev)
+static void __ap_flush_queue(struct ap_device *ap_dev)
 {
 	struct ap_message *ap_msg, *next;
 
@@ -488,6 +502,12 @@ static int ap_device_remove(struct device *dev)
 	ap_flush_queue(ap_dev);
 	if (ap_drv->remove)
 		ap_drv->remove(ap_dev);
+	spin_lock_bh(&ap_device_lock);
+	list_del_init(&ap_dev->list);
+	spin_unlock_bh(&ap_device_lock);
+	spin_lock_bh(&ap_dev->lock);
+	atomic_sub(ap_dev->queue_count, &ap_poll_requests);
+	spin_unlock_bh(&ap_dev->lock);
 	return 0;
 }
 
@@ -578,7 +598,7 @@ static struct bus_attribute *const ap_bus_attrs[] = {
 /**
  * Pick one of the 16 ap domains.
  */
-static inline int ap_select_domain(void)
+static int ap_select_domain(void)
 {
 	int queue_depth, device_type, count, max_count, best_domain;
 	int rc, i, j;
@@ -724,7 +744,7 @@ static void ap_device_release(struct device *dev)
 	kfree(ap_dev);
 }
 
-static void ap_scan_bus(void *data)
+static void ap_scan_bus(struct work_struct *unused)
 {
 	struct ap_device *ap_dev;
 	struct device *dev;
@@ -740,10 +760,16 @@ static void ap_scan_bus(void *data)
 				      (void *)(unsigned long)qid,
 				      __ap_scan_bus);
 		rc = ap_query_queue(qid, &queue_depth, &device_type);
-		if (dev && rc) {
-			put_device(dev);
-			device_unregister(dev);
-			continue;
+		if (dev) {
+			ap_dev = to_ap_dev(dev);
+			spin_lock_bh(&ap_dev->lock);
+			if (rc || ap_dev->unregistered) {
+				spin_unlock_bh(&ap_dev->lock);
+				put_device(dev);
+				device_unregister(dev);
+				continue;
+			} else
+				spin_unlock_bh(&ap_dev->lock);
 		}
 		if (dev) {
 			put_device(dev);
@@ -763,6 +789,7 @@ static void ap_scan_bus(void *data)
 		spin_lock_init(&ap_dev->lock);
 		INIT_LIST_HEAD(&ap_dev->pendingq);
 		INIT_LIST_HEAD(&ap_dev->requestq);
+		INIT_LIST_HEAD(&ap_dev->list);
 		if (device_type == 0)
 			ap_probe_device_type(ap_dev);
 		else
@@ -816,7 +843,7 @@ static inline void ap_schedule_poll_timer(void)
  *	   required, bit 2^1 is set if the poll timer needs to get armed
  * Returns 0 if the device is still present, -ENODEV if not.
  */
-static inline int ap_poll_read(struct ap_device *ap_dev, unsigned long *flags)
+static int ap_poll_read(struct ap_device *ap_dev, unsigned long *flags)
 {
 	struct ap_queue_status status;
 	struct ap_message *ap_msg;
@@ -843,6 +870,7 @@ static inline int ap_poll_read(struct ap_device *ap_dev, unsigned long *flags)
 	case AP_RESPONSE_NO_PENDING_REPLY:
 		if (status.queue_empty) {
 			/* The card shouldn't forget requests but who knows. */
+			atomic_sub(ap_dev->queue_count, &ap_poll_requests);
 			ap_dev->queue_count = 0;
 			list_splice_init(&ap_dev->pendingq, &ap_dev->requestq);
 			ap_dev->requestq_count += ap_dev->pendingq_count;
@@ -863,7 +891,7 @@ static inline int ap_poll_read(struct ap_device *ap_dev, unsigned long *flags)
  *	   required, bit 2^1 is set if the poll timer needs to get armed
  * Returns 0 if the device is still present, -ENODEV if not.
  */
-static inline int ap_poll_write(struct ap_device *ap_dev, unsigned long *flags)
+static int ap_poll_write(struct ap_device *ap_dev, unsigned long *flags)
 {
 	struct ap_queue_status status;
 	struct ap_message *ap_msg;
@@ -976,7 +1004,7 @@ void ap_queue_message(struct ap_device *ap_dev, struct ap_message *ap_msg)
 			ap_dev->unregistered = 1;
 	} else {
 		ap_dev->drv->receive(ap_dev, ap_msg, ERR_PTR(-ENODEV));
-		rc = 0;
+		rc = -ENODEV;
 	}
 	spin_unlock_bh(&ap_dev->lock);
 	if (rc == -ENODEV)
@@ -1024,31 +1052,29 @@ static void ap_poll_timeout(unsigned long unused)
  * polling until bit 2^0 of the control flags is not set. If bit 2^1
  * of the control flags has been set arm the poll timer.
  */
-static int __ap_poll_all(struct device *dev, void *data)
+static int __ap_poll_all(struct ap_device *ap_dev, unsigned long *flags)
 {
-	struct ap_device *ap_dev = to_ap_dev(dev);
-	int rc;
-
 	spin_lock(&ap_dev->lock);
 	if (!ap_dev->unregistered) {
-		rc = ap_poll_queue(to_ap_dev(dev), (unsigned long *) data);
-		if (rc)
+		if (ap_poll_queue(ap_dev, flags))
 			ap_dev->unregistered = 1;
-	} else
-		rc = 0;
+	}
 	spin_unlock(&ap_dev->lock);
-	if (rc)
-		device_unregister(&ap_dev->device);
 	return 0;
 }
 
 static void ap_poll_all(unsigned long dummy)
 {
 	unsigned long flags;
+	struct ap_device *ap_dev;
 
 	do {
 		flags = 0;
-		bus_for_each_dev(&ap_bus_type, NULL, &flags, __ap_poll_all);
+		spin_lock(&ap_device_lock);
+		list_for_each_entry(ap_dev, &ap_device_list, list) {
+			__ap_poll_all(ap_dev, &flags);
+		}
+		spin_unlock(&ap_device_lock);
 	} while (flags & 1);
 	if (flags & 2)
 		ap_schedule_poll_timer();
@@ -1066,6 +1092,7 @@ static int ap_poll_thread(void *data)
 	DECLARE_WAITQUEUE(wait, current);
 	unsigned long flags;
 	int requests;
+	struct ap_device *ap_dev;
 
 	set_user_nice(current, 19);
 	while (1) {
@@ -1083,10 +1110,12 @@ static int ap_poll_thread(void *data)
 		set_current_state(TASK_RUNNING);
 		remove_wait_queue(&ap_poll_wait, &wait);
 
-		local_bh_disable();
 		flags = 0;
-		bus_for_each_dev(&ap_bus_type, NULL, &flags, __ap_poll_all);
-		local_bh_enable();
+		spin_lock_bh(&ap_device_lock);
+		list_for_each_entry(ap_dev, &ap_device_list, list) {
+			__ap_poll_all(ap_dev, &flags);
+		}
+		spin_unlock_bh(&ap_device_lock);
 	}
 	set_current_state(TASK_RUNNING);
 	remove_wait_queue(&ap_poll_wait, &wait);
@@ -1120,6 +1149,27 @@ static void ap_poll_thread_stop(void)
 	mutex_unlock(&ap_poll_thread_mutex);
 }
 
+static void ap_reset_domain(void)
+{
+	int i;
+
+	for (i = 0; i < AP_DEVICES; i++)
+		ap_reset_queue(AP_MKQID(i, ap_domain_index));
+}
+
+static void ap_reset_all(void)
+{
+	int i, j;
+
+	for (i = 0; i < AP_DOMAINS; i++)
+		for (j = 0; j < AP_DEVICES; j++)
+			ap_reset_queue(AP_MKQID(j, i));
+}
+
+static struct reset_call ap_reset_call = {
+	.fn = ap_reset_all,
+};
+
 /**
  * The module initialization code.
  */
@@ -1136,6 +1186,7 @@ int __init ap_module_init(void)
 		printk(KERN_WARNING "AP instructions not installed.\n");
 		return -ENODEV;
 	}
+	register_reset_call(&ap_reset_call);
 
 	/* Create /sys/bus/ap. */
 	rc = bus_register(&ap_bus_type);
@@ -1189,6 +1240,7 @@ out_bus:
 		bus_remove_file(&ap_bus_type, ap_bus_attrs[i]);
 	bus_unregister(&ap_bus_type);
 out:
+	unregister_reset_call(&ap_reset_call);
 	return rc;
 }
 
@@ -1205,10 +1257,12 @@ void ap_module_exit(void)
 	int i;
 	struct device *dev;
 
+	ap_reset_domain();
 	ap_poll_thread_stop();
 	del_timer_sync(&ap_config_timer);
 	del_timer_sync(&ap_poll_timer);
 	destroy_workqueue(ap_work_queue);
+	tasklet_kill(&ap_tasklet);
 	s390_root_dev_unregister(ap_root_device);
 	while ((dev = bus_find_device(&ap_bus_type, NULL, NULL,
 		    __ap_match_all)))
@@ -1219,6 +1273,7 @@ void ap_module_exit(void)
 	for (i = 0; ap_bus_attrs[i]; i++)
 		bus_remove_file(&ap_bus_type, ap_bus_attrs[i]);
 	bus_unregister(&ap_bus_type);
+	unregister_reset_call(&ap_reset_call);
 }
 
 #ifndef CONFIG_ZCRYPT_MONOLITHIC

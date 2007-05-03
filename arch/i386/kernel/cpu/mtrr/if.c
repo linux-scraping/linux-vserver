@@ -17,7 +17,7 @@ extern unsigned int *usage_table;
 
 #define FILE_FCOUNT(f) (((struct seq_file *)((f)->private_data))->private)
 
-static char *mtrr_strings[MTRR_NUM_TYPES] =
+static const char *const mtrr_strings[MTRR_NUM_TYPES] =
 {
     "uncachable",               /* 0 */
     "write-combining",          /* 1 */
@@ -28,7 +28,7 @@ static char *mtrr_strings[MTRR_NUM_TYPES] =
     "write-back",               /* 6 */
 };
 
-char *mtrr_attrib_to_str(int x)
+const char *mtrr_attrib_to_str(int x)
 {
 	return (x <= 6) ? mtrr_strings[x] : "?";
 }
@@ -44,10 +44,9 @@ mtrr_file_add(unsigned long base, unsigned long size,
 
 	max = num_var_ranges;
 	if (fcount == NULL) {
-		fcount = kmalloc(max * sizeof *fcount, GFP_KERNEL);
+		fcount = kzalloc(max * sizeof *fcount, GFP_KERNEL);
 		if (!fcount)
 			return -ENOMEM;
-		memset(fcount, 0, max * sizeof *fcount);
 		FILE_FCOUNT(file) = fcount;
 	}
 	if (!page) {
@@ -155,6 +154,7 @@ mtrr_ioctl(struct file *file, unsigned int cmd, unsigned long __arg)
 {
 	int err = 0;
 	mtrr_type type;
+	unsigned long size;
 	struct mtrr_sentry sentry;
 	struct mtrr_gentry gentry;
 	void __user *arg = (void __user *) __arg;
@@ -211,6 +211,9 @@ mtrr_ioctl(struct file *file, unsigned int cmd, unsigned long __arg)
 	default:
 		return -ENOTTY;
 	case MTRRIOC_ADD_ENTRY:
+#ifdef CONFIG_COMPAT
+	case MTRRIOC32_ADD_ENTRY:
+#endif
 		if (!capable(CAP_SYS_ADMIN))
 			return -EPERM;
 		err =
@@ -218,37 +221,52 @@ mtrr_ioctl(struct file *file, unsigned int cmd, unsigned long __arg)
 				  file, 0);
 		break;
 	case MTRRIOC_SET_ENTRY:
+#ifdef CONFIG_COMPAT
+	case MTRRIOC32_SET_ENTRY:
+#endif
 		if (!capable(CAP_SYS_ADMIN))
 			return -EPERM;
 		err = mtrr_add(sentry.base, sentry.size, sentry.type, 0);
 		break;
 	case MTRRIOC_DEL_ENTRY:
+#ifdef CONFIG_COMPAT
+	case MTRRIOC32_DEL_ENTRY:
+#endif
 		if (!capable(CAP_SYS_ADMIN))
 			return -EPERM;
 		err = mtrr_file_del(sentry.base, sentry.size, file, 0);
 		break;
 	case MTRRIOC_KILL_ENTRY:
+#ifdef CONFIG_COMPAT
+	case MTRRIOC32_KILL_ENTRY:
+#endif
 		if (!capable(CAP_SYS_ADMIN))
 			return -EPERM;
 		err = mtrr_del(-1, sentry.base, sentry.size);
 		break;
 	case MTRRIOC_GET_ENTRY:
+#ifdef CONFIG_COMPAT
+	case MTRRIOC32_GET_ENTRY:
+#endif
 		if (gentry.regnum >= num_var_ranges)
 			return -EINVAL;
-		mtrr_if->get(gentry.regnum, &gentry.base, &gentry.size, &type);
+		mtrr_if->get(gentry.regnum, &gentry.base, &size, &type);
 
 		/* Hide entries that go above 4GB */
-		if (gentry.base + gentry.size > 0x100000
-		    || gentry.size == 0x100000)
+		if (gentry.base + size - 1 >= (1UL << (8 * sizeof(gentry.size) - PAGE_SHIFT))
+		    || size >= (1UL << (8 * sizeof(gentry.size) - PAGE_SHIFT)))
 			gentry.base = gentry.size = gentry.type = 0;
 		else {
 			gentry.base <<= PAGE_SHIFT;
-			gentry.size <<= PAGE_SHIFT;
+			gentry.size = size << PAGE_SHIFT;
 			gentry.type = type;
 		}
 
 		break;
 	case MTRRIOC_ADD_PAGE_ENTRY:
+#ifdef CONFIG_COMPAT
+	case MTRRIOC32_ADD_PAGE_ENTRY:
+#endif
 		if (!capable(CAP_SYS_ADMIN))
 			return -EPERM;
 		err =
@@ -256,25 +274,43 @@ mtrr_ioctl(struct file *file, unsigned int cmd, unsigned long __arg)
 				  file, 1);
 		break;
 	case MTRRIOC_SET_PAGE_ENTRY:
+#ifdef CONFIG_COMPAT
+	case MTRRIOC32_SET_PAGE_ENTRY:
+#endif
 		if (!capable(CAP_SYS_ADMIN))
 			return -EPERM;
 		err = mtrr_add_page(sentry.base, sentry.size, sentry.type, 0);
 		break;
 	case MTRRIOC_DEL_PAGE_ENTRY:
+#ifdef CONFIG_COMPAT
+	case MTRRIOC32_DEL_PAGE_ENTRY:
+#endif
 		if (!capable(CAP_SYS_ADMIN))
 			return -EPERM;
 		err = mtrr_file_del(sentry.base, sentry.size, file, 1);
 		break;
 	case MTRRIOC_KILL_PAGE_ENTRY:
+#ifdef CONFIG_COMPAT
+	case MTRRIOC32_KILL_PAGE_ENTRY:
+#endif
 		if (!capable(CAP_SYS_ADMIN))
 			return -EPERM;
 		err = mtrr_del_page(-1, sentry.base, sentry.size);
 		break;
 	case MTRRIOC_GET_PAGE_ENTRY:
+#ifdef CONFIG_COMPAT
+	case MTRRIOC32_GET_PAGE_ENTRY:
+#endif
 		if (gentry.regnum >= num_var_ranges)
 			return -EINVAL;
-		mtrr_if->get(gentry.regnum, &gentry.base, &gentry.size, &type);
-		gentry.type = type;
+		mtrr_if->get(gentry.regnum, &gentry.base, &size, &type);
+		/* Hide entries that would overflow */
+		if (size != (__typeof__(gentry.size))size)
+			gentry.base = gentry.size = gentry.type = 0;
+		else {
+			gentry.size = size;
+			gentry.type = type;
+		}
 		break;
 	}
 
@@ -333,7 +369,7 @@ static int mtrr_open(struct inode *inode, struct file *file)
 	return single_open(file, mtrr_seq_show, NULL);
 }
 
-static struct file_operations mtrr_fops = {
+static const struct file_operations mtrr_fops = {
 	.owner   = THIS_MODULE,
 	.open	 = mtrr_open, 
 	.read    = seq_read,
@@ -353,8 +389,7 @@ static int mtrr_seq_show(struct seq_file *seq, void *offset)
 	char factor;
 	int i, max, len;
 	mtrr_type type;
-	unsigned long base;
-	unsigned int size;
+	unsigned long base, size;
 
 	len = 0;
 	max = num_var_ranges;
@@ -373,7 +408,7 @@ static int mtrr_seq_show(struct seq_file *seq, void *offset)
 			}
 			/* RED-PEN: base can be > 32bit */ 
 			len += seq_printf(seq, 
-				   "reg%02i: base=0x%05lx000 (%4liMB), size=%4i%cB: %s, count=%d\n",
+				   "reg%02i: base=0x%05lx000 (%4luMB), size=%4lu%cB: %s, count=%d\n",
 			     i, base, base >> (20 - PAGE_SHIFT), size, factor,
 			     mtrr_attrib_to_str(type), usage_table[i]);
 		}

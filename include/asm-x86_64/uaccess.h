@@ -6,7 +6,6 @@
  */
 #include <linux/compiler.h>
 #include <linux/errno.h>
-#include <linux/sched.h>
 #include <linux/prefetch.h>
 #include <asm/page.h>
 
@@ -38,11 +37,11 @@
  * Uhhuh, this needs 65-bit arithmetic. We have a carry..
  */
 #define __range_not_ok(addr,size) ({ \
-	unsigned long flag,sum; \
+	unsigned long flag,roksum; \
 	__chk_user_ptr(addr); \
 	asm("# range_ok\n\r" \
 		"addq %3,%1 ; sbbq %0,%0 ; cmpq %1,%4 ; sbbq $0,%0"  \
-		:"=&r" (flag), "=r" (sum) \
+		:"=&r" (flag), "=r" (roksum) \
 		:"1" (addr),"g" ((long)(size)),"g" (current_thread_info()->addr_limit.seg)); \
 	flag; })
 
@@ -158,7 +157,7 @@ do {									\
 	  case 1: __put_user_asm(x,ptr,retval,"b","b","iq",-EFAULT); break;\
 	  case 2: __put_user_asm(x,ptr,retval,"w","w","ir",-EFAULT); break;\
 	  case 4: __put_user_asm(x,ptr,retval,"l","k","ir",-EFAULT); break;\
-	  case 8: __put_user_asm(x,ptr,retval,"q","","ir",-EFAULT); break;\
+	  case 8: __put_user_asm(x,ptr,retval,"q","","Zr",-EFAULT); break;\
 	  default: __put_user_bad();					\
 	}								\
 } while (0)
@@ -366,6 +365,20 @@ static __must_check __always_inline int
 __copy_to_user_inatomic(void __user *dst, const void *src, unsigned size)
 {
 	return copy_user_generic((__force void *)dst, src, size);
+}
+
+#define ARCH_HAS_NOCACHE_UACCESS 1
+extern long __copy_user_nocache(void *dst, const void __user *src, unsigned size, int zerorest);
+
+static inline int __copy_from_user_nocache(void *dst, const void __user *src, unsigned size)
+{
+	might_sleep();
+	return __copy_user_nocache(dst, src, size, 1);
+}
+
+static inline int __copy_from_user_inatomic_nocache(void *dst, const void __user *src, unsigned size)
+{
+	return __copy_user_nocache(dst, src, size, 0);
 }
 
 #endif /* __X86_64_UACCESS_H */

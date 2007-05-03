@@ -20,7 +20,6 @@
 #include <linux/module.h>
 #include <linux/init.h>
 
-#include <linux/sched.h>
 #include <linux/kernel.h>
 #include <linux/fs.h>
 #include <linux/errno.h>
@@ -83,7 +82,6 @@ static void mmc_blk_put(struct mmc_blk_data *md)
 	md->usage--;
 	if (md->usage == 0) {
 		put_disk(md->disk);
-		mmc_cleanup_queue(&md->queue);
 		kfree(md);
 	}
 	mutex_unlock(&open_lock);
@@ -225,10 +223,10 @@ static int mmc_blk_issue_rq(struct mmc_queue *mq, struct request *req)
 	struct mmc_blk_data *md = mq->data;
 	struct mmc_card *card = md->queue.card;
 	struct mmc_blk_request brq;
-	int ret;
+	int ret = 1;
 
 	if (mmc_card_claim_host(card))
-		goto cmd_err;
+		goto flush_queue;
 
 	do {
 		struct mmc_command cmd;
@@ -238,13 +236,17 @@ static int mmc_blk_issue_rq(struct mmc_queue *mq, struct request *req)
 		brq.mrq.cmd = &brq.cmd;
 		brq.mrq.data = &brq.data;
 
-		brq.cmd.arg = req->sector << 9;
+		brq.cmd.arg = req->sector;
+		if (!mmc_card_blockaddr(card))
+			brq.cmd.arg <<= 9;
 		brq.cmd.flags = MMC_RSP_R1 | MMC_CMD_ADTC;
 		brq.data.blksz = 1 << md->block_bits;
-		brq.data.blocks = req->nr_sectors >> (md->block_bits - 9);
 		brq.stop.opcode = MMC_STOP_TRANSMISSION;
 		brq.stop.arg = 0;
 		brq.stop.flags = MMC_RSP_R1B | MMC_CMD_AC;
+		brq.data.blocks = req->nr_sectors >> (md->block_bits - 9);
+		if (brq.data.blocks > card->host->max_blk_count)
+			brq.data.blocks = card->host->max_blk_count;
 
 		mmc_set_data_timeout(&brq.data, card, rq_data_dir(req) != READ);
 
@@ -345,8 +347,6 @@ static int mmc_blk_issue_rq(struct mmc_queue *mq, struct request *req)
 	return 1;
 
  cmd_err:
-	ret = 1;
-
  	/*
  	 * If this is an SD card and we're writing, we can first
  	 * mark the known good sectors as ok.
@@ -377,6 +377,8 @@ static int mmc_blk_issue_rq(struct mmc_queue *mq, struct request *req)
 		ret = end_that_request_chunk(req, 1, brq.data.bytes_xfered);
 		spin_unlock_irq(&md->lock);
 	}
+
+flush_queue:
 
 	mmc_card_release_host(card);
 
@@ -496,6 +498,10 @@ mmc_blk_set_blksize(struct mmc_blk_data *md, struct mmc_card *card)
 	struct mmc_command cmd;
 	int err;
 
+	/* Block-addressed cards ignore MMC_SET_BLOCKLEN. */
+	if (mmc_card_blockaddr(card))
+		return 0;
+
 	mmc_card_claim_host(card);
 	cmd.opcode = MMC_SET_BLOCKLEN;
 	cmd.arg = 1 << md->block_bits;
@@ -553,12 +559,11 @@ static void mmc_blk_remove(struct mmc_card *card)
 	if (md) {
 		int devidx;
 
+		/* Stop new requests from getting into the queue */
 		del_gendisk(md->disk);
 
-		/*
-		 * I think this is needed.
-		 */
-		md->disk->queue = NULL;
+		/* Then flush out any already in there */
+		mmc_cleanup_queue(&md->queue);
 
 		devidx = md->disk->first_minor >> MMC_SHIFT;
 		__clear_bit(devidx, dev_use);

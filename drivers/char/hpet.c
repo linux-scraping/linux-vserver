@@ -21,6 +21,7 @@
 #include <linux/fcntl.h>
 #include <linux/init.h>
 #include <linux/poll.h>
+#include <linux/mm.h>
 #include <linux/proc_fs.h>
 #include <linux/spinlock.h>
 #include <linux/sysctl.h>
@@ -702,7 +703,7 @@ int hpet_control(struct hpet_task *tp, unsigned int cmd, unsigned long arg)
 
 static ctl_table hpet_table[] = {
 	{
-	 .ctl_name = 1,
+	 .ctl_name = CTL_UNNUMBERED,
 	 .procname = "max-user-freq",
 	 .data = &hpet_max_freq,
 	 .maxlen = sizeof(int),
@@ -714,7 +715,7 @@ static ctl_table hpet_table[] = {
 
 static ctl_table hpet_root[] = {
 	{
-	 .ctl_name = 1,
+	 .ctl_name = CTL_UNNUMBERED,
 	 .procname = "hpet",
 	 .maxlen = 0,
 	 .mode = 0555,
@@ -1017,7 +1018,7 @@ static int __init hpet_init(void)
 	if (result < 0)
 		return -ENODEV;
 
-	sysctl_header = register_sysctl_table(dev_root, 0);
+	sysctl_header = register_sysctl_table(dev_root);
 
 	result = acpi_bus_register_driver(&hpet_acpi_driver);
 	if (result < 0) {

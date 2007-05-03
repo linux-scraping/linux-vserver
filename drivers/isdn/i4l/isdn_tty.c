@@ -1261,7 +1261,6 @@ isdn_tty_flush_buffer(struct tty_struct *tty)
 	}
 	isdn_tty_cleanup_xmit(info);
 	info->xmit_count = 0;
-	wake_up_interruptible(&tty->write_wait);
 	tty_wakeup(tty);
 }
 
@@ -1464,7 +1463,7 @@ isdn_tty_ioctl(struct tty_struct *tty, struct file *file,
 }
 
 static void
-isdn_tty_set_termios(struct tty_struct *tty, struct termios *old_termios)
+isdn_tty_set_termios(struct tty_struct *tty, struct ktermios *old_termios)
 {
 	modem_info *info = (modem_info *) tty->driver_data;
 

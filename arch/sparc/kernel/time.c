@@ -78,7 +78,6 @@ unsigned long profile_pc(struct pt_regs *regs)
 	extern char __copy_user_begin[], __copy_user_end[];
 	extern char __atomic_begin[], __atomic_end[];
 	extern char __bzero_begin[], __bzero_end[];
-	extern char __bitops_begin[], __bitops_end[];
 
 	unsigned long pc = regs->pc;
 
@@ -88,9 +87,7 @@ unsigned long profile_pc(struct pt_regs *regs)
 	    (pc >= (unsigned long) __atomic_begin &&
 	     pc < (unsigned long) __atomic_end) ||
 	    (pc >= (unsigned long) __bzero_begin &&
-	     pc < (unsigned long) __bzero_end) ||
-	    (pc >= (unsigned long) __bitops_begin &&
-	     pc < (unsigned long) __bitops_end))
+	     pc < (unsigned long) __bzero_end))
 		pc = regs->u_regs[UREG_RETPC];
 	return pc;
 }
@@ -437,15 +434,6 @@ void __init time_init(void)
 static inline unsigned long do_gettimeoffset(void)
 {
 	return (*master_l10_counter >> 10) & 0x1fffff;
-}
-
-/*
- * Returns nanoseconds
- * XXX This is a suboptimal implementation.
- */
-unsigned long long sched_clock(void)
-{
-	return (unsigned long long)jiffies * (1000000000 / HZ);
 }
 
 /* Ok, my cute asm atomicity trick doesn't work anymore.

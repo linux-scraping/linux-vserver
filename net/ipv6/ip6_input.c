@@ -1,6 +1,6 @@
 /*
  *	IPv6 input
- *	Linux INET6 implementation 
+ *	Linux INET6 implementation
  *
  *	Authors:
  *	Pedro Roque		<roque@di.fc.ul.pt>
@@ -25,7 +25,6 @@
 #include <linux/types.h>
 #include <linux/socket.h>
 #include <linux/sockios.h>
-#include <linux/sched.h>
 #include <linux/net.h>
 #include <linux/netdevice.h>
 #include <linux/in6.h>
@@ -48,7 +47,7 @@
 
 
 
-inline int ip6_rcv_finish( struct sk_buff *skb) 
+inline int ip6_rcv_finish( struct sk_buff *skb)
 {
 	if (skb->dst == NULL)
 		ip6_route_input(skb);
@@ -60,14 +59,22 @@ int ipv6_rcv(struct sk_buff *skb, struct net_device *dev, struct packet_type *pt
 {
 	struct ipv6hdr *hdr;
 	u32 		pkt_len;
+	struct inet6_dev *idev;
 
-	if (skb->pkt_type == PACKET_OTHERHOST)
-		goto drop;
+	if (skb->pkt_type == PACKET_OTHERHOST) {
+		kfree_skb(skb);
+		return 0;
+	}
 
-	IP6_INC_STATS_BH(IPSTATS_MIB_INRECEIVES);
+	rcu_read_lock();
+
+	idev = __in6_dev_get(skb->dev);
+
+	IP6_INC_STATS_BH(idev, IPSTATS_MIB_INRECEIVES);
 
 	if ((skb = skb_share_check(skb, GFP_ATOMIC)) == NULL) {
-		IP6_INC_STATS_BH(IPSTATS_MIB_INDISCARDS);
+		IP6_INC_STATS_BH(idev, IPSTATS_MIB_INDISCARDS);
+		rcu_read_unlock();
 		goto out;
 	}
 
@@ -84,7 +91,7 @@ int ipv6_rcv(struct sk_buff *skb, struct net_device *dev, struct packet_type *pt
 	 * arrived via the sending interface (ethX), because of the
 	 * nature of scoping architecture. --yoshfuji
 	 */
-	IP6CB(skb)->iif = skb->dst ? ((struct rt6_info *)skb->dst)->rt6i_idev->dev->ifindex : dev->ifindex;
+	IP6CB(skb)->iif = skb->dst ? ip6_dst_idev(skb->dst)->dev->ifindex : dev->ifindex;
 
 	if (unlikely(!pskb_may_pull(skb, sizeof(*hdr))))
 		goto err;
@@ -101,10 +108,12 @@ int ipv6_rcv(struct sk_buff *skb, struct net_device *dev, struct packet_type *pt
 
 	/* pkt_len may be zero if Jumbo payload option is present */
 	if (pkt_len || hdr->nexthdr != NEXTHDR_HOP) {
-		if (pkt_len + sizeof(struct ipv6hdr) > skb->len)
-			goto truncated;
+		if (pkt_len + sizeof(struct ipv6hdr) > skb->len) {
+			IP6_INC_STATS_BH(idev, IPSTATS_MIB_INTRUNCATEDPKTS);
+			goto drop;
+		}
 		if (pskb_trim_rcsum(skb, pkt_len + sizeof(struct ipv6hdr))) {
-			IP6_INC_STATS_BH(IPSTATS_MIB_INHDRERRORS);
+			IP6_INC_STATS_BH(idev, IPSTATS_MIB_INHDRERRORS);
 			goto drop;
 		}
 		hdr = skb->nh.ipv6h;
@@ -112,17 +121,19 @@ int ipv6_rcv(struct sk_buff *skb, struct net_device *dev, struct packet_type *pt
 
 	if (hdr->nexthdr == NEXTHDR_HOP) {
 		if (ipv6_parse_hopopts(&skb) < 0) {
-			IP6_INC_STATS_BH(IPSTATS_MIB_INHDRERRORS);
+			IP6_INC_STATS_BH(idev, IPSTATS_MIB_INHDRERRORS);
+			rcu_read_unlock();
 			return 0;
 		}
 	}
 
+	rcu_read_unlock();
+
 	return NF_HOOK(PF_INET6,NF_IP6_PRE_ROUTING, skb, dev, NULL, ip6_rcv_finish);
-truncated:
-	IP6_INC_STATS_BH(IPSTATS_MIB_INTRUNCATEDPKTS);
 err:
-	IP6_INC_STATS_BH(IPSTATS_MIB_INHDRERRORS);
+	IP6_INC_STATS_BH(idev, IPSTATS_MIB_INHDRERRORS);
 drop:
+	rcu_read_unlock();
 	kfree_skb(skb);
 out:
 	return 0;
@@ -140,6 +151,7 @@ static inline int ip6_input_finish(struct sk_buff *skb)
 	unsigned int nhoff;
 	int nexthdr;
 	u8 hash;
+	struct inet6_dev *idev;
 
 	/*
 	 *	Parse extension headers
@@ -147,6 +159,7 @@ static inline int ip6_input_finish(struct sk_buff *skb)
 
 	rcu_read_lock();
 resubmit:
+	idev = ip6_dst_idev(skb->dst);
 	if (!pskb_pull(skb, skb->h.raw - skb->data))
 		goto discard;
 	nhoff = IP6CB(skb)->nhoff;
@@ -159,9 +172,9 @@ resubmit:
 	hash = nexthdr & (MAX_INET_PROTOS - 1);
 	if ((ipprot = rcu_dereference(inet6_protos[hash])) != NULL) {
 		int ret;
-		
+
 		if (ipprot->flags & INET6_PROTO_FINAL) {
-			struct ipv6hdr *hdr;	
+			struct ipv6hdr *hdr;
 
 			/* Free reference early: we don't need it any more,
 			   and it may hold ip_conntrack module loaded
@@ -178,31 +191,31 @@ resubmit:
 				goto discard;
 		}
 		if (!(ipprot->flags & INET6_PROTO_NOPOLICY) &&
-		    !xfrm6_policy_check(NULL, XFRM_POLICY_IN, skb)) 
+		    !xfrm6_policy_check(NULL, XFRM_POLICY_IN, skb))
 			goto discard;
-		
+
 		ret = ipprot->handler(&skb);
 		if (ret > 0)
 			goto resubmit;
 		else if (ret == 0)
-			IP6_INC_STATS_BH(IPSTATS_MIB_INDELIVERS);
+			IP6_INC_STATS_BH(idev, IPSTATS_MIB_INDELIVERS);
 	} else {
 		if (!raw_sk) {
 			if (xfrm6_policy_check(NULL, XFRM_POLICY_IN, skb)) {
-				IP6_INC_STATS_BH(IPSTATS_MIB_INUNKNOWNPROTOS);
+				IP6_INC_STATS_BH(idev, IPSTATS_MIB_INUNKNOWNPROTOS);
 				icmpv6_send(skb, ICMPV6_PARAMPROB,
-				            ICMPV6_UNK_NEXTHDR, nhoff,
-				            skb->dev);
+					    ICMPV6_UNK_NEXTHDR, nhoff,
+					    skb->dev);
 			}
 		} else
-			IP6_INC_STATS_BH(IPSTATS_MIB_INDELIVERS);
+			IP6_INC_STATS_BH(idev, IPSTATS_MIB_INDELIVERS);
 		kfree_skb(skb);
 	}
 	rcu_read_unlock();
 	return 0;
 
 discard:
-	IP6_INC_STATS_BH(IPSTATS_MIB_INDISCARDS);
+	IP6_INC_STATS_BH(idev, IPSTATS_MIB_INDISCARDS);
 	rcu_read_unlock();
 	kfree_skb(skb);
 	return 0;
@@ -219,7 +232,7 @@ int ip6_mc_input(struct sk_buff *skb)
 	struct ipv6hdr *hdr;
 	int deliver;
 
-	IP6_INC_STATS_BH(IPSTATS_MIB_INMCASTPKTS);
+	IP6_INC_STATS_BH(ip6_dst_idev(skb->dst), IPSTATS_MIB_INMCASTPKTS);
 
 	hdr = skb->nh.ipv6h;
 	deliver = likely(!(skb->dev->flags & (IFF_PROMISC|IFF_ALLMULTI))) ||
@@ -239,7 +252,7 @@ int ip6_mc_input(struct sk_buff *skb)
 			struct dst_entry *dst;
 
 			dst = skb->dst;
-			
+
 			if (deliver) {
 				skb2 = skb_clone(skb, GFP_ATOMIC);
 				dst_output(skb2);

@@ -34,12 +34,13 @@
 #include <asm/byteorder.h>
 
 /* This is for all connections with a full identity, no wildcards.
- * New scheme, half the table is for TIME_WAIT, the other half is
- * for the rest.  I'll experiment with dynamic table growth later.
+ * One chain is dedicated to TIME_WAIT sockets.
+ * I'll experiment with dynamic table growth later.
  */
 struct inet_ehash_bucket {
 	rwlock_t	  lock;
 	struct hlist_head chain;
+	struct hlist_head twchain;
 };
 
 /* There are a few simple rules, which allow for local port reuse by
@@ -97,8 +98,7 @@ struct inet_hashinfo {
 	 *
 	 *          TCP_ESTABLISHED <= sk->sk_state < TCP_CLOSE
 	 *
-	 * First half of the table is for sockets not in TIME_WAIT, second half
-	 * is for TIME_WAIT sockets only.
+	 * TIME_WAIT sockets use a separate chain (twchain).
 	 */
 	struct inet_ehash_bucket	*ehash;
 
@@ -125,7 +125,7 @@ struct inet_hashinfo {
 	rwlock_t			lhash_lock ____cacheline_aligned;
 	atomic_t			lhash_users;
 	wait_queue_head_t		lhash_wait;
-	kmem_cache_t			*bind_bucket_cachep;
+	struct kmem_cache			*bind_bucket_cachep;
 };
 
 static inline struct inet_ehash_bucket *inet_ehash_bucket(
@@ -136,10 +136,10 @@ static inline struct inet_ehash_bucket *inet_ehash_bucket(
 }
 
 extern struct inet_bind_bucket *
-		    inet_bind_bucket_create(kmem_cache_t *cachep,
+		    inet_bind_bucket_create(struct kmem_cache *cachep,
 					    struct inet_bind_hashbucket *head,
 					    const unsigned short snum);
-extern void inet_bind_bucket_destroy(kmem_cache_t *cachep,
+extern void inet_bind_bucket_destroy(struct kmem_cache *cachep,
 				     struct inet_bind_bucket *tb);
 
 static inline int inet_bhashfn(const __u16 lport, const int bhash_size)
@@ -389,7 +389,7 @@ static inline struct sock *
 	}
 
 	/* Must check for a TIME_WAIT'er before going to listener hash. */
-	sk_for_each(sk, node, &(head + hashinfo->ehash_size)->chain) {
+	sk_for_each(sk, node, &head->twchain) {
 		if (INET_TW_MATCH(sk, hash, acookie, saddr, daddr, ports, dif))
 			goto hit;
 	}

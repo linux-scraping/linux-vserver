@@ -218,7 +218,7 @@ static int dabusb_alloc_buffers (pdabusb_t s)
 		 pipesize, packets, transfer_buffer_length);
 
 	while (buffers < (s->total_buffer_size << 10)) {
-		b = (pbuff_t) kzalloc (sizeof (buff_t), GFP_KERNEL);
+		b = kzalloc(sizeof (buff_t), GFP_KERNEL);
 		if (!b) {
 			err("kzalloc(sizeof(buff_t))==NULL");
 			goto err;
@@ -659,7 +659,7 @@ static int dabusb_ioctl (struct inode *inode, struct file *file, unsigned int cm
 	switch (cmd) {
 
 	case IOCTL_DAB_BULK:
-		pbulk = (pbulk_transfer_t) kmalloc (sizeof (bulk_transfer_t), GFP_KERNEL);
+		pbulk = kmalloc(sizeof (bulk_transfer_t), GFP_KERNEL);
 
 		if (!pbulk) {
 			ret = -ENOMEM;
@@ -696,7 +696,7 @@ static int dabusb_ioctl (struct inode *inode, struct file *file, unsigned int cm
 	return ret;
 }
 
-static struct file_operations dabusb_fops =
+static const struct file_operations dabusb_fops =
 {
 	.owner =	THIS_MODULE,
 	.llseek =	no_llseek,

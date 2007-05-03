@@ -804,8 +804,8 @@ static struct e100_serial rs_table[] = {
 
 #define NR_PORTS (sizeof(rs_table)/sizeof(struct e100_serial))
 
-static struct termios *serial_termios[NR_PORTS];
-static struct termios *serial_termios_locked[NR_PORTS];
+static struct ktermios *serial_termios[NR_PORTS];
+static struct ktermios *serial_termios_locked[NR_PORTS];
 #ifdef CONFIG_ETRAX_SERIAL_FAST_TIMER
 static struct fast_timer fast_timers[NR_PORTS];
 #endif
@@ -3173,12 +3173,8 @@ do_softint(void *private_)
 	if (!tty)
 		return;
 
-	if (test_and_clear_bit(RS_EVENT_WRITE_WAKEUP, &info->event)) {
-		if ((tty->flags & (1 << TTY_DO_WRITE_WAKEUP)) &&
-		    tty->ldisc.write_wakeup)
-			(tty->ldisc.write_wakeup)(tty);
-		wake_up_interruptible(&tty->write_wait);
-	}
+	if (test_and_clear_bit(RS_EVENT_WRITE_WAKEUP, &info->event))
+		tty_wakeup(tty);
 }
 
 static int
@@ -3798,11 +3794,7 @@ rs_flush_buffer(struct tty_struct *tty)
 	info->xmit.head = info->xmit.tail = 0;
 	restore_flags(flags);
 
-	wake_up_interruptible(&tty->write_wait);
-
-	if ((tty->flags & (1 << TTY_DO_WRITE_WAKEUP)) &&
-	    tty->ldisc.write_wakeup)
-		(tty->ldisc.write_wakeup)(tty);
+	tty_wakeup(tty);
 }
 
 /*
@@ -4223,7 +4215,7 @@ rs_ioctl(struct tty_struct *tty, struct file * file,
 }
 
 static void
-rs_set_termios(struct tty_struct *tty, struct termios *old_termios)
+rs_set_termios(struct tty_struct *tty, struct ktermios *old_termios)
 {
 	struct e100_serial *info = (struct e100_serial *)tty->driver_data;
 
@@ -4877,6 +4869,8 @@ rs_init(void)
 	driver->init_termios = tty_std_termios;
 	driver->init_termios.c_cflag =
 		B115200 | CS8 | CREAD | HUPCL | CLOCAL; /* is normally B9600 default... */
+	driver->init_termios.c_ispeed = 115200;
+	driver->init_termios.c_ospeed = 115200;
 	driver->flags = TTY_DRIVER_REAL_RAW | TTY_DRIVER_DYNAMIC_DEV;
 	driver->termios = serial_termios;
 	driver->termios_locked = serial_termios_locked;

@@ -16,6 +16,7 @@
 #include <linux/module.h>
 #include <linux/root_dev.h>
 #include <linux/cpu.h>
+#include <linux/kernel.h>
 
 #include <asm/sections.h>
 #include <asm/processor.h>
@@ -44,7 +45,7 @@ struct avr32_cpuinfo boot_cpu_data = {
 };
 EXPORT_SYMBOL(boot_cpu_data);
 
-static char command_line[COMMAND_LINE_SIZE];
+static char __initdata command_line[COMMAND_LINE_SIZE];
 
 /*
  * Should be more than enough, but if you have a _really_ complex
@@ -174,8 +175,7 @@ static int __init parse_tag_mem_range(struct tag *tag,
 	 * Copy the data so the bootmem init code doesn't need to care
 	 * about it.
 	 */
-	if (mem_range_next_free >=
-	    (sizeof(mem_range_cache) / sizeof(mem_range_cache[0])))
+	if (mem_range_next_free >= ARRAY_SIZE(mem_range_cache))
 		panic("Physical memory map too complex!\n");
 
 	new = &mem_range_cache[mem_range_next_free++];
@@ -202,7 +202,7 @@ __tagtable(ATAG_MEM, parse_tag_mem);
 
 static int __init parse_tag_cmdline(struct tag *tag)
 {
-	strlcpy(saved_command_line, tag->u.cmdline.cmdline, COMMAND_LINE_SIZE);
+	strlcpy(boot_command_line, tag->u.cmdline.cmdline, COMMAND_LINE_SIZE);
 	return 0;
 }
 __tagtable(ATAG_CMDLINE, parse_tag_cmdline);
@@ -228,30 +228,6 @@ static int __init parse_tag_rsvd_mem(struct tag *tag)
 	return parse_tag_mem_range(tag, &mem_reserved);
 }
 __tagtable(ATAG_RSVD_MEM, parse_tag_rsvd_mem);
-
-static int __init parse_tag_ethernet(struct tag *tag)
-{
-#if 0
-	const struct platform_device *pdev;
-
-	/*
-	 * We really need a bus type that supports "classes"...this
-	 * will do for now (until we must handle other kinds of
-	 * ethernet controllers)
-	 */
-	pdev = platform_get_device("macb", tag->u.ethernet.mac_index);
-	if (pdev && pdev->dev.platform_data) {
-		struct eth_platform_data *data = pdev->dev.platform_data;
-
-		data->valid = 1;
-		data->mii_phy_addr = tag->u.ethernet.mii_phy_addr;
-		memcpy(data->hw_addr, tag->u.ethernet.hw_address,
-		       sizeof(data->hw_addr));
-	}
-#endif
-	return 0;
-}
-__tagtable(ATAG_ETHERNET, parse_tag_ethernet);
 
 /*
  * Scan the tag table for this tag, and call its parse function. The
@@ -318,7 +294,7 @@ void __init setup_arch (char **cmdline_p)
 	init_mm.end_data = (unsigned long) &_edata;
 	init_mm.brk = (unsigned long) &_end;
 
-	strlcpy(command_line, saved_command_line, COMMAND_LINE_SIZE);
+	strlcpy(command_line, boot_command_line, COMMAND_LINE_SIZE);
 	*cmdline_p = command_line;
 	parse_early_param();
 

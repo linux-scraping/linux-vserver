@@ -13,7 +13,6 @@
 
 #include <linux/kernel.h>
 #include <linux/slab.h>
-#include <linux/sched.h>
 #include <linux/fs.h>
 #include <linux/crc32.h>
 #include <linux/jffs2.h>
@@ -46,7 +45,7 @@ const struct file_operations jffs2_dir_operations =
 };
 
 
-struct inode_operations jffs2_dir_inode_operations =
+const struct inode_operations jffs2_dir_inode_operations =
 {
 	.create =	jffs2_create,
 	.lookup =	jffs2_lookup,
@@ -123,11 +122,11 @@ static int jffs2_readdir(struct file *filp, void *dirent, filldir_t filldir)
 {
 	struct jffs2_inode_info *f;
 	struct jffs2_sb_info *c;
-	struct inode *inode = filp->f_dentry->d_inode;
+	struct inode *inode = filp->f_path.dentry->d_inode;
 	struct jffs2_full_dirent *fd;
 	unsigned long offset, curofs;
 
-	D1(printk(KERN_DEBUG "jffs2_readdir() for dir_i #%lu\n", filp->f_dentry->d_inode->i_ino));
+	D1(printk(KERN_DEBUG "jffs2_readdir() for dir_i #%lu\n", filp->f_path.dentry->d_inode->i_ino));
 
 	f = JFFS2_INODE_INFO(inode);
 	c = JFFS2_SB_INFO(inode->i_sb);
@@ -141,7 +140,7 @@ static int jffs2_readdir(struct file *filp, void *dirent, filldir_t filldir)
 		offset++;
 	}
 	if (offset == 1) {
-		unsigned long pino = parent_ino(filp->f_dentry);
+		unsigned long pino = parent_ino(filp->f_path.dentry);
 		D1(printk(KERN_DEBUG "Dirent 1: \"..\", ino #%lu\n", pino));
 		if (filldir(dirent, "..", 2, 1, pino, DT_DIR) < 0)
 			goto out;

@@ -28,6 +28,7 @@
 #include <asm/asm-offsets.h>
 #include <asm/cputable.h>
 #include <asm/firmware.h>
+#include <asm/bug.h>
 
 /*
  * System calls.
@@ -87,15 +88,19 @@ system_call_common:
 	addi	r9,r1,STACK_FRAME_OVERHEAD
 	ld	r11,exception_marker@toc(r2)
 	std	r11,-16(r9)		/* "regshere" marker */
+	li	r10,1
+	stb	r10,PACASOFTIRQEN(r13)
+	stb	r10,PACAHARDIRQEN(r13)
+	std	r10,SOFTE(r1)
 #ifdef CONFIG_PPC_ISERIES
 BEGIN_FW_FTR_SECTION
 	/* Hack for handling interrupts when soft-enabling on iSeries */
 	cmpdi	cr1,r0,0x5555		/* syscall 0x5555 */
 	andi.	r10,r12,MSR_PR		/* from kernel */
 	crand	4*cr0+eq,4*cr1+eq,4*cr0+eq
-	beq	hardware_interrupt_entry
-	lbz	r10,PACAPROCENABLED(r13)
-	std	r10,SOFTE(r1)
+	bne	2f
+	b	hardware_interrupt_entry
+2:
 END_FW_FTR_SECTION_IFSET(FW_FEATURE_ISERIES)
 #endif
 	mfmsr	r11
@@ -167,13 +172,18 @@ syscall_error_cont:
 	stdcx.	r0,0,r1			/* to clear the reservation */
 	andi.	r6,r8,MSR_PR
 	ld	r4,_LINK(r1)
+	/*
+	 * Clear RI before restoring r13.  If we are returning to
+	 * userspace and we take an exception after restoring r13,
+	 * we end up corrupting the userspace r13 value.
+	 */
+	li	r12,MSR_RI
+	andc	r11,r10,r12
+	mtmsrd	r11,1			/* clear MSR.RI */
 	beq-	1f
 	ACCOUNT_CPU_USER_EXIT(r11, r12)
 	ld	r13,GPR13(r1)	/* only restore r13 if returning to usermode */
 1:	ld	r2,GPR2(r1)
-	li	r12,MSR_RI
-	andc	r11,r10,r12
-	mtmsrd	r11,1			/* clear MSR.RI */
 	ld	r1,GPR1(r1)
 	mtlr	r4
 	mtcr	r5
@@ -460,9 +470,9 @@ _GLOBAL(ret_from_except_lite)
 #endif
 
 restore:
+	ld	r5,SOFTE(r1)
 #ifdef CONFIG_PPC_ISERIES
 BEGIN_FW_FTR_SECTION
-	ld	r5,SOFTE(r1)
 	cmpdi	0,r5,0
 	beq	4f
 	/* Check for pending interrupts (iSeries) */
@@ -472,49 +482,55 @@ BEGIN_FW_FTR_SECTION
 	beq+	4f			/* skip do_IRQ if no interrupts */
 
 	li	r3,0
-	stb	r3,PACAPROCENABLED(r13)	/* ensure we are soft-disabled */
+	stb	r3,PACASOFTIRQEN(r13)	/* ensure we are soft-disabled */
 	ori	r10,r10,MSR_EE
 	mtmsrd	r10			/* hard-enable again */
 	addi	r3,r1,STACK_FRAME_OVERHEAD
 	bl	.do_IRQ
 	b	.ret_from_except_lite		/* loop back and handle more */
-
-4:	stb	r5,PACAPROCENABLED(r13)
+4:
 END_FW_FTR_SECTION_IFSET(FW_FEATURE_ISERIES)
 #endif
+	stb	r5,PACASOFTIRQEN(r13)
 
+	/* extract EE bit and use it to restore paca->hard_enabled */
 	ld	r3,_MSR(r1)
+	rldicl	r4,r3,49,63		/* r0 = (r3 >> 15) & 1 */
+	stb	r4,PACAHARDIRQEN(r13)
+
+	ld	r4,_CTR(r1)
+	ld	r0,_LINK(r1)
+	mtctr	r4
+	mtlr	r0
+	ld	r4,_XER(r1)
+	mtspr	SPRN_XER,r4
+
+	REST_8GPRS(5, r1)
+
 	andi.	r0,r3,MSR_RI
 	beq-	unrecov_restore
 
-	andi.	r0,r3,MSR_PR
+	stdcx.	r0,0,r1		/* to clear the reservation */
+
+	/*
+	 * Clear RI before restoring r13.  If we are returning to
+	 * userspace and we take an exception after restoring r13,
+	 * we end up corrupting the userspace r13 value.
+	 */
+	mfmsr	r4
+	andc	r4,r4,r0	/* r0 contains MSR_RI here */
+	mtmsrd	r4,1
 
 	/*
 	 * r13 is our per cpu area, only restore it if we are returning to
 	 * userspace
 	 */
+	andi.	r0,r3,MSR_PR
 	beq	1f
-	ACCOUNT_CPU_USER_EXIT(r3, r4)
+	ACCOUNT_CPU_USER_EXIT(r2, r4)
 	REST_GPR(13, r1)
 1:
-	ld	r3,_CTR(r1)
-	ld	r0,_LINK(r1)
-	mtctr	r3
-	mtlr	r0
-	ld	r3,_XER(r1)
-	mtspr	SPRN_XER,r3
-
-	REST_8GPRS(5, r1)
-
-	stdcx.	r0,0,r1		/* to clear the reservation */
-
-	mfmsr	r0
-	li	r2, MSR_RI
-	andc	r0,r0,r2
-	mtmsrd	r0,1
-
-	ld	r0,_MSR(r1)
-	mtspr	SPRN_SRR1,r0
+	mtspr	SPRN_SRR1,r3
 
 	ld	r2,_CCR(r1)
 	mtcrf	0xFF,r2
@@ -538,25 +554,15 @@ do_work:
 	/* Check that preempt_count() == 0 and interrupts are enabled */
 	lwz	r8,TI_PREEMPT(r9)
 	cmpwi	cr1,r8,0
-#ifdef CONFIG_PPC_ISERIES
-BEGIN_FW_FTR_SECTION
 	ld	r0,SOFTE(r1)
 	cmpdi	r0,0
-END_FW_FTR_SECTION_IFSET(FW_FEATURE_ISERIES)
-#endif
-BEGIN_FW_FTR_SECTION
-	andi.	r0,r3,MSR_EE
-END_FW_FTR_SECTION_IFCLR(FW_FEATURE_ISERIES)
 	crandc	eq,cr1*4+eq,eq
 	bne	restore
 	/* here we are preempting the current task */
 1:
-#ifdef CONFIG_PPC_ISERIES
-BEGIN_FW_FTR_SECTION
 	li	r0,1
-	stb	r0,PACAPROCENABLED(r13)
-END_FW_FTR_SECTION_IFSET(FW_FEATURE_ISERIES)
-#endif
+	stb	r0,PACASOFTIRQEN(r13)
+	stb	r0,PACAHARDIRQEN(r13)
 	ori	r10,r10,MSR_EE
 	mtmsrd	r10,1		/* reenable interrupts */
 	bl	.preempt_schedule
@@ -636,20 +642,21 @@ _GLOBAL(enter_rtas)
 	li	r0,0
 	mtcr	r0
 
+#ifdef CONFIG_BUG	
 	/* There is no way it is acceptable to get here with interrupts enabled,
 	 * check it with the asm equivalent of WARN_ON
 	 */
-	mfmsr	r6
-	andi.	r0,r6,MSR_EE
+	lbz	r0,PACASOFTIRQEN(r13)
 1:	tdnei	r0,0
-.section __bug_table,"a"
-	.llong	1b,__LINE__ + 0x1000000, 1f, 2f
-.previous
-.section .rodata,"a"
-1:	.asciz	__FILE__
-2:	.asciz "enter_rtas"
-.previous
+	EMIT_BUG_ENTRY 1b,__FILE__,__LINE__,BUGFLAG_WARNING
+#endif
 	
+	/* Hard-disable interrupts */
+	mfmsr	r6
+	rldicl	r7,r6,48,1
+	rotldi	r7,r7,16
+	mtmsrd	r7,1
+
 	/* Unfortunately, the stack pointer and the MSR are also clobbered,
 	 * so they are saved in the PACA which allows us to restore
 	 * our original state after RTAS returns.
@@ -735,8 +742,6 @@ _STATIC(rtas_restore_regs)
 
 #endif /* CONFIG_PPC_RTAS */
 
-#ifdef CONFIG_PPC_MULTIPLATFORM
-
 _GLOBAL(enter_prom)
 	mflr	r0
 	std	r0,16(r1)
@@ -821,5 +826,3 @@ _GLOBAL(enter_prom)
 	ld	r0,16(r1)
 	mtlr    r0
         blr
-	
-#endif	/* CONFIG_PPC_MULTIPLATFORM */

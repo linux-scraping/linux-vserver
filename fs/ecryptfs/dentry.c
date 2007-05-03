@@ -25,6 +25,7 @@
 #include <linux/dcache.h>
 #include <linux/namei.h>
 #include <linux/mount.h>
+#include <linux/fs_stack.h>
 #include "ecryptfs_kernel.h"
 
 /**
@@ -61,7 +62,7 @@ static int ecryptfs_d_revalidate(struct dentry *dentry, struct nameidata *nd)
 		struct inode *lower_inode =
 			ecryptfs_inode_to_lower(dentry->d_inode);
 
-		ecryptfs_copy_attr_all(dentry->d_inode, lower_inode);
+		fsstack_copy_attr_all(dentry->d_inode, lower_inode, NULL);
 	}
 out:
 	return rc;
@@ -77,18 +78,13 @@ struct kmem_cache *ecryptfs_dentry_info_cache;
  */
 static void ecryptfs_d_release(struct dentry *dentry)
 {
-	struct dentry *lower_dentry;
-
-	lower_dentry = ecryptfs_dentry_to_lower(dentry);
-	if (ecryptfs_dentry_to_private(dentry))
+	if (ecryptfs_dentry_to_private(dentry)) {
+		if (ecryptfs_dentry_to_lower(dentry)) {
+			mntput(ecryptfs_dentry_to_lower_mnt(dentry));
+			dput(ecryptfs_dentry_to_lower(dentry));
+		}
 		kmem_cache_free(ecryptfs_dentry_info_cache,
 				ecryptfs_dentry_to_private(dentry));
-	if (lower_dentry) {
-		struct vfsmount *lower_mnt =
-			ecryptfs_dentry_to_lower_mnt(dentry);
-
-		mntput(lower_mnt);
-		dput(lower_dentry);
 	}
 	return;
 }

@@ -26,7 +26,7 @@
 #define __uidhashfn(xid,uid)	((((uid) >> UIDHASH_BITS) + ((uid)^(xid))) & UIDHASH_MASK)
 #define uidhashentry(xid,uid)	(uidhash_table + __uidhashfn((xid),(uid)))
 
-static kmem_cache_t *uid_cachep;
+static struct kmem_cache *uid_cachep;
 static struct list_head uidhash_table[UIDHASH_SZ];
 
 /*
@@ -132,7 +132,7 @@ struct user_struct * alloc_uid(xid_t xid, uid_t uid)
 	if (!up) {
 		struct user_struct *new;
 
-		new = kmem_cache_alloc(uid_cachep, SLAB_KERNEL);
+		new = kmem_cache_alloc(uid_cachep, GFP_KERNEL);
 		if (!new)
 			return NULL;
 		new->uid = uid;

@@ -11,7 +11,6 @@
  */
 
 #include <linux/init.h>
-#include <linux/sched.h>
 #include <linux/smp_lock.h>
 #include <linux/input.h>
 #include <linux/module.h>
@@ -37,7 +36,7 @@ static struct input_handler *input_table[8];
 
 /**
  * input_event() - report new input event
- * @handle: device that generated the event
+ * @dev: device that generated the event
  * @type: type of the event
  * @code: event code
  * @value: value of the event
@@ -482,7 +481,7 @@ static int input_proc_devices_open(struct inode *inode, struct file *file)
 	return seq_open(file, &input_devices_seq_ops);
 }
 
-static struct file_operations input_devices_fileops = {
+static const struct file_operations input_devices_fileops = {
 	.owner		= THIS_MODULE,
 	.open		= input_proc_devices_open,
 	.poll		= input_proc_devices_poll,
@@ -533,7 +532,7 @@ static int input_proc_handlers_open(struct inode *inode, struct file *file)
 	return seq_open(file, &input_handlers_seq_ops);
 }
 
-static struct file_operations input_handlers_fileops = {
+static const struct file_operations input_handlers_fileops = {
 	.owner		= THIS_MODULE,
 	.open		= input_proc_handlers_open,
 	.read		= seq_read,
@@ -589,18 +588,9 @@ static inline void input_proc_exit(void) { }
 static ssize_t input_dev_show_##name(struct class_device *dev, char *buf)	\
 {										\
 	struct input_dev *input_dev = to_input_dev(dev);			\
-	int retval;								\
 										\
-	retval = mutex_lock_interruptible(&input_dev->mutex);			\
-	if (retval)								\
-		return retval;							\
-										\
-	retval = scnprintf(buf, PAGE_SIZE,					\
-			   "%s\n", input_dev->name ? input_dev->name : "");	\
-										\
-	mutex_unlock(&input_dev->mutex);					\
-										\
-	return retval;								\
+	return scnprintf(buf, PAGE_SIZE, "%s\n",				\
+			 input_dev->name ? input_dev->name : "");		\
 }										\
 static CLASS_DEVICE_ATTR(name, S_IRUGO, input_dev_show_##name, NULL);
 
@@ -900,6 +890,15 @@ struct class input_class = {
 };
 EXPORT_SYMBOL_GPL(input_class);
 
+/**
+ * input_allocate_device - allocate memory for new input device
+ *
+ * Returns prepared struct input_dev or NULL.
+ *
+ * NOTE: Use input_free_device() to free devices that have not been
+ * registered; input_unregister_device() should be used for already
+ * registered devices.
+ */
 struct input_dev *input_allocate_device(void)
 {
 	struct input_dev *dev;
@@ -919,6 +918,20 @@ struct input_dev *input_allocate_device(void)
 }
 EXPORT_SYMBOL(input_allocate_device);
 
+/**
+ * input_free_device - free memory occupied by input_dev structure
+ * @dev: input device to free
+ *
+ * This function should only be used if input_register_device()
+ * was not called yet or if it failed. Once device was registered
+ * use input_unregister_device() and memory will be freed once last
+ * refrence to the device is dropped.
+ *
+ * Device should be allocated by input_allocate_device().
+ *
+ * NOTE: If there are references to the input device then memory
+ * will not be freed until last reference is dropped.
+ */
 void input_free_device(struct input_dev *dev)
 {
 	if (dev) {
@@ -1027,10 +1040,6 @@ void input_unregister_device(struct input_dev *dev)
 	sysfs_remove_group(&dev->cdev.kobj, &input_dev_id_attr_group);
 	sysfs_remove_group(&dev->cdev.kobj, &input_dev_attr_group);
 
-	mutex_lock(&dev->mutex);
-	dev->name = dev->phys = dev->uniq = NULL;
-	mutex_unlock(&dev->mutex);
-
 	class_device_unregister(&dev->cdev);
 
 	input_wakeup_procfs_readers();
@@ -1119,7 +1128,7 @@ static int input_open_file(struct inode *inode, struct file *file)
 	return err;
 }
 
-static struct file_operations input_fops = {
+static const struct file_operations input_fops = {
 	.owner = THIS_MODULE,
 	.open = input_open_file,
 };

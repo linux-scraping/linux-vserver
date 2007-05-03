@@ -1,4 +1,4 @@
-/* ip_nat_helper.c - generic support functions for NAT helpers 
+/* ip_nat_helper.c - generic support functions for NAT helpers
  *
  * (C) 2000-2002 Harald Welte <laforge@netfilter.org>
  * (C) 2003-2004 Netfilter Core Team <coreteam@netfilter.org>
@@ -8,7 +8,7 @@
  * published by the Free Software Foundation.
  *
  * 	14 Jan 2002 Harald Welte <laforge@gnumonks.org>:
- *		- add support for SACK adjustment 
+ *		- add support for SACK adjustment
  *	14 Mar 2002 Harald Welte <laforge@gnumonks.org>:
  *		- merge SACK support into newnat API
  *	16 Aug 2002 Brian J. Murrell <netfilter@interlinx.bc.ca>:
@@ -45,10 +45,10 @@
 static DEFINE_SPINLOCK(ip_nat_seqofs_lock);
 
 /* Setup TCP sequence correction given this change at this sequence */
-static inline void 
+static inline void
 adjust_tcp_sequence(u32 seq,
 		    int sizediff,
-		    struct ip_conntrack *ct, 
+		    struct ip_conntrack *ct,
 		    enum ip_conntrack_info ctinfo)
 {
 	int dir;
@@ -150,7 +150,7 @@ static int enlarge_skb(struct sk_buff **pskb, unsigned int extra)
  * skb enlargement, ...
  *
  * */
-int 
+int
 ip_nat_mangle_tcp_packet(struct sk_buff **pskb,
 			 struct ip_conntrack *ct,
 			 enum ip_conntrack_info ctinfo,
@@ -183,15 +183,13 @@ ip_nat_mangle_tcp_packet(struct sk_buff **pskb,
 	datalen = (*pskb)->len - iph->ihl*4;
 	if ((*pskb)->ip_summed != CHECKSUM_PARTIAL) {
 		tcph->check = 0;
-		tcph->check = tcp_v4_check(tcph, datalen,
+		tcph->check = tcp_v4_check(datalen,
 					   iph->saddr, iph->daddr,
 					   csum_partial((char *)tcph,
-					   		datalen, 0));
+							datalen, 0));
 	} else
-		tcph->check = nf_proto_csum_update(*pskb,
-						   htons(oldlen) ^ htons(0xFFFF),
-						   htons(datalen),
-						   tcph->check, 1);
+		nf_proto_csum_replace2(&tcph->check, *pskb,
+					htons(oldlen), htons(datalen), 1);
 
 	if (rep_len != match_len) {
 		set_bit(IPS_SEQ_ADJUST_BIT, &ct->status);
@@ -204,7 +202,7 @@ ip_nat_mangle_tcp_packet(struct sk_buff **pskb,
 	return 1;
 }
 EXPORT_SYMBOL(ip_nat_mangle_tcp_packet);
-			
+
 /* Generic function for mangling variable-length address changes inside
  * NATed UDP connections (like the CONNECT DATA XXXXX MESG XXXXX INDEX XXXXX
  * command in the Amanda protocol)
@@ -215,7 +213,7 @@ EXPORT_SYMBOL(ip_nat_mangle_tcp_packet);
  * XXX - This function could be merged with ip_nat_mangle_tcp_packet which
  *       should be fairly easy to do.
  */
-int 
+int
 ip_nat_mangle_udp_packet(struct sk_buff **pskb,
 			 struct ip_conntrack *ct,
 			 enum ip_conntrack_info ctinfo,
@@ -230,8 +228,8 @@ ip_nat_mangle_udp_packet(struct sk_buff **pskb,
 
 	/* UDP helpers might accidentally mangle the wrong packet */
 	iph = (*pskb)->nh.iph;
-	if ((*pskb)->len < iph->ihl*4 + sizeof(*udph) + 
-	                       match_offset + match_len)
+	if ((*pskb)->len < iph->ihl*4 + sizeof(*udph) +
+			       match_offset + match_len)
 		return 0;
 
 	if (!skb_make_writable(pskb, (*pskb)->len))
@@ -260,16 +258,14 @@ ip_nat_mangle_udp_packet(struct sk_buff **pskb,
 	if ((*pskb)->ip_summed != CHECKSUM_PARTIAL) {
 		udph->check = 0;
 		udph->check = csum_tcpudp_magic(iph->saddr, iph->daddr,
-		                                datalen, IPPROTO_UDP,
-		                                csum_partial((char *)udph,
-		                                             datalen, 0));
+						datalen, IPPROTO_UDP,
+						csum_partial((char *)udph,
+							     datalen, 0));
 		if (!udph->check)
-			udph->check = -1;
+			udph->check = CSUM_MANGLED_0;
 	} else
-		udph->check = nf_proto_csum_update(*pskb,
-						   htons(oldlen) ^ htons(0xFFFF),
-						   htons(datalen),
-						   udph->check, 1);
+		nf_proto_csum_replace2(&udph->check, *pskb,
+					htons(oldlen), htons(datalen), 1);
 	return 1;
 }
 EXPORT_SYMBOL(ip_nat_mangle_udp_packet);
@@ -277,7 +273,7 @@ EXPORT_SYMBOL(ip_nat_mangle_udp_packet);
 /* Adjust one found SACK option including checksum correction */
 static void
 sack_adjust(struct sk_buff *skb,
-	    struct tcphdr *tcph, 
+	    struct tcphdr *tcph,
 	    unsigned int sackoff,
 	    unsigned int sackend,
 	    struct ip_nat_seq *natseq)
@@ -307,14 +303,10 @@ sack_adjust(struct sk_buff *skb,
 			ntohl(sack->start_seq), new_start_seq,
 			ntohl(sack->end_seq), new_end_seq);
 
-		tcph->check = nf_proto_csum_update(skb,
-						   ~sack->start_seq,
-						   new_start_seq,
-						   tcph->check, 0);
-		tcph->check = nf_proto_csum_update(skb,
-						   ~sack->end_seq,
-						   new_end_seq,
-						   tcph->check, 0);
+		nf_proto_csum_replace4(&tcph->check, skb,
+					sack->start_seq, new_start_seq, 0);
+		nf_proto_csum_replace4(&tcph->check, skb,
+					sack->end_seq, new_end_seq, 0);
 		sack->start_seq = new_start_seq;
 		sack->end_seq = new_end_seq;
 		sackoff += sizeof(*sack);
@@ -368,14 +360,14 @@ ip_nat_sack_adjust(struct sk_buff **pskb,
 
 /* TCP sequence number adjustment.  Returns 1 on success, 0 on failure */
 int
-ip_nat_seq_adjust(struct sk_buff **pskb, 
-		  struct ip_conntrack *ct, 
+ip_nat_seq_adjust(struct sk_buff **pskb,
+		  struct ip_conntrack *ct,
 		  enum ip_conntrack_info ctinfo)
 {
 	struct tcphdr *tcph;
 	int dir;
 	__be32 newseq, newack;
-	struct ip_nat_seq *this_way, *other_way;	
+	struct ip_nat_seq *this_way, *other_way;
 
 	dir = CTINFO2DIR(ctinfo);
 
@@ -397,10 +389,8 @@ ip_nat_seq_adjust(struct sk_buff **pskb,
 	else
 		newack = htonl(ntohl(tcph->ack_seq) - other_way->offset_before);
 
-	tcph->check = nf_proto_csum_update(*pskb, ~tcph->seq, newseq,
-					   tcph->check, 0);
-	tcph->check = nf_proto_csum_update(*pskb, ~tcph->ack_seq, newack,
-					   tcph->check, 0);
+	nf_proto_csum_replace4(&tcph->check, *pskb, tcph->seq, newseq, 0);
+	nf_proto_csum_replace4(&tcph->check, *pskb, tcph->ack_seq, newack, 0);
 
 	DEBUGP("Adjusting sequence number from %u->%u, ack from %u->%u\n",
 		ntohl(tcph->seq), ntohl(newseq), ntohl(tcph->ack_seq),

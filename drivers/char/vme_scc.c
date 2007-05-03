@@ -17,7 +17,6 @@
 #include <linux/kdev_t.h>
 #include <asm/io.h>
 #include <linux/kernel.h>
-#include <linux/sched.h>
 #include <linux/ioport.h>
 #include <linux/interrupt.h>
 #include <linux/errno.h>
@@ -153,6 +152,8 @@ static int scc_init_drivers(void)
 	scc_driver->init_termios = tty_std_termios;
 	scc_driver->init_termios.c_cflag =
 	  B9600 | CS8 | CREAD | HUPCL | CLOCAL;
+	scc_driver->init_termios.c_ispeed = 9600;
+	scc_driver->init_termios.c_ospeed = 9600;
 	scc_driver->flags = TTY_DRIVER_REAL_RAW;
 	tty_set_operations(scc_driver, &scc_ops);
 

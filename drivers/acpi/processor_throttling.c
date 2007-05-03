@@ -41,9 +41,8 @@
 
 #define ACPI_PROCESSOR_COMPONENT        0x01000000
 #define ACPI_PROCESSOR_CLASS            "processor"
-#define ACPI_PROCESSOR_DRIVER_NAME      "ACPI Processor Driver"
 #define _COMPONENT              ACPI_PROCESSOR_COMPONENT
-ACPI_MODULE_NAME("acpi_processor")
+ACPI_MODULE_NAME("processor_throttling");
 
 /* --------------------------------------------------------------------------
                               Throttling Control
@@ -125,7 +124,7 @@ int acpi_processor_set_throttling(struct acpi_processor *pr, int state)
 		/* Used to clear all duty_value bits */
 		duty_mask = pr->throttling.state_count - 1;
 
-		duty_mask <<= acpi_fadt.duty_offset;
+		duty_mask <<= acpi_gbl_FADT.duty_offset;
 		duty_mask = ~duty_mask;
 	}
 
@@ -208,7 +207,7 @@ int acpi_processor_get_throttling_info(struct acpi_processor *pr)
 		return 0;
 	}
 
-	pr->throttling.state_count = 1 << acpi_fadt.duty_width;
+	pr->throttling.state_count = 1 << acpi_gbl_FADT.duty_width;
 
 	/*
 	 * Compute state values. Note that throttling displays a linear power/
@@ -259,7 +258,7 @@ int acpi_processor_get_throttling_info(struct acpi_processor *pr)
 static int acpi_processor_throttling_seq_show(struct seq_file *seq,
 					      void *offset)
 {
-	struct acpi_processor *pr = (struct acpi_processor *)seq->private;
+	struct acpi_processor *pr = seq->private;
 	int i = 0;
 	int result = 0;
 
@@ -307,8 +306,8 @@ static ssize_t acpi_processor_write_throttling(struct file * file,
 					       size_t count, loff_t * data)
 {
 	int result = 0;
-	struct seq_file *m = (struct seq_file *)file->private_data;
-	struct acpi_processor *pr = (struct acpi_processor *)m->private;
+	struct seq_file *m = file->private_data;
+	struct acpi_processor *pr = m->private;
 	char state_string[12] = { '\0' };
 
 

@@ -297,17 +297,17 @@ static int initialising = 1;
 #define DRS (&drive_state[current_drive])
 #define DRWE (&write_errors[current_drive])
 #define FDCS (&fdc_state[fdc])
-#define CLEARF(x) (clear_bit(x##_BIT, &DRS->flags))
-#define SETF(x) (set_bit(x##_BIT, &DRS->flags))
-#define TESTF(x) (test_bit(x##_BIT, &DRS->flags))
+#define CLEARF(x) clear_bit(x##_BIT, &DRS->flags)
+#define SETF(x) set_bit(x##_BIT, &DRS->flags)
+#define TESTF(x) test_bit(x##_BIT, &DRS->flags)
 
 #define UDP (&drive_params[drive])
 #define UDRS (&drive_state[drive])
 #define UDRWE (&write_errors[drive])
 #define UFDCS (&fdc_state[FDC(drive)])
-#define UCLEARF(x) (clear_bit(x##_BIT, &UDRS->flags))
-#define USETF(x) (set_bit(x##_BIT, &UDRS->flags))
-#define UTESTF(x) (test_bit(x##_BIT, &UDRS->flags))
+#define UCLEARF(x) clear_bit(x##_BIT, &UDRS->flags)
+#define USETF(x) set_bit(x##_BIT, &UDRS->flags)
+#define UTESTF(x) test_bit(x##_BIT, &UDRS->flags)
 
 #define DPRINT(format, args...) printk(DEVICE_NAME "%d: " format, current_drive , ## args)
 
@@ -992,11 +992,11 @@ static void empty(void)
 {
 }
 
-static DECLARE_WORK(floppy_work, NULL, NULL);
+static DECLARE_WORK(floppy_work, NULL);
 
 static void schedule_bh(void (*handler) (void))
 {
-	PREPARE_WORK(&floppy_work, (void (*)(void *))handler, NULL);
+	PREPARE_WORK(&floppy_work, (work_func_t)handler);
 	schedule_work(&floppy_work);
 }
 
@@ -1008,7 +1008,7 @@ static void cancel_activity(void)
 
 	spin_lock_irqsave(&floppy_lock, flags);
 	do_floppy = NULL;
-	PREPARE_WORK(&floppy_work, (void *)empty, NULL);
+	PREPARE_WORK(&floppy_work, (work_func_t)empty);
 	del_timer(&fd_timer);
 	spin_unlock_irqrestore(&floppy_lock, flags);
 }
@@ -1868,7 +1868,7 @@ static void show_floppy(void)
 	printk("fdc_busy=%lu\n", fdc_busy);
 	if (do_floppy)
 		printk("do_floppy=%p\n", do_floppy);
-	if (floppy_work.pending)
+	if (work_pending(&floppy_work))
 		printk("floppy_work.func=%p\n", floppy_work.func);
 	if (timer_pending(&fd_timer))
 		printk("fd_timer.function=%p\n", fd_timer.function);
@@ -4498,7 +4498,7 @@ static void floppy_release_irq_and_dma(void)
 		printk("floppy timer still active:%s\n", timeout_message);
 	if (timer_pending(&fd_timer))
 		printk("auxiliary floppy timer still active\n");
-	if (floppy_work.pending)
+	if (work_pending(&floppy_work))
 		printk("work still pending\n");
 #endif
 	old_fdc = fdc;

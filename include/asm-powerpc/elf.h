@@ -124,12 +124,10 @@ typedef elf_greg_t32 elf_gregset_t32[ELF_NGREG];
 # define ELF_DATA	ELFDATA2MSB
   typedef elf_greg_t64 elf_greg_t;
   typedef elf_gregset_t64 elf_gregset_t;
-# define elf_addr_t unsigned long
 #else
   /* Assumption: ELF_ARCH == EM_PPC and ELF_CLASS == ELFCLASS32 */
   typedef elf_greg_t32 elf_greg_t;
   typedef elf_gregset_t32 elf_gregset_t;
-# define elf_addr_t __u32
 #endif /* ELF_ARCH */
 
 /* Floating point registers */
@@ -175,7 +173,7 @@ typedef elf_vrreg_t elf_vrregset_t32[ELF_NVRREG32];
    the loader.  We need to make sure that it is out of the way of the program
    that it will "exec", and that there is sufficient room for the brk.  */
 
-#define ELF_ET_DYN_BASE         (0x08000000)
+#define ELF_ET_DYN_BASE         (0x20000000)
 
 /* Common routine for both 32-bit and 64-bit processes */
 static inline void ppc_elf_core_copy_regs(elf_gregset_t elf_regs,
@@ -410,5 +408,18 @@ do {									\
 
 /* Keep this the last entry.  */
 #define R_PPC64_NUM		107
+
+#ifdef CONFIG_SPU_BASE
+/* Notes used in ET_CORE. Note name is "SPU/<fd>/<filename>". */
+#define NT_SPU		1
+
+extern int arch_notes_size(void);
+extern void arch_write_notes(struct file *file);
+
+#define ELF_CORE_EXTRA_NOTES_SIZE arch_notes_size()
+#define ELF_CORE_WRITE_EXTRA_NOTES arch_write_notes(file)
+
+#define ARCH_HAVE_EXTRA_ELF_NOTES
+#endif /* CONFIG_PPC_CELL */
 
 #endif /* _ASM_POWERPC_ELF_H */

@@ -17,6 +17,7 @@
  *
  *  - flush_cache_all() flushes entire cache
  *  - flush_cache_mm(mm) flushes the specified mm context's cache lines
+ *  - flush_cache_dup mm(mm) handles cache flushing when forking
  *  - flush_cache_page(mm, vmaddr, pfn) flushes a single page
  *  - flush_cache_range(vma, start, end) flushes a range of pages
  *  - flush_icache_range(start, end) flush a range of instructions
@@ -31,6 +32,7 @@
 extern void (*flush_cache_all)(void);
 extern void (*__flush_cache_all)(void);
 extern void (*flush_cache_mm)(struct mm_struct *mm);
+#define flush_cache_dup_mm(mm)	do { (void) (mm); } while (0)
 extern void (*flush_cache_range)(struct vm_area_struct *vma,
 	unsigned long start, unsigned long end);
 extern void (*flush_cache_page)(struct vm_area_struct *vma, unsigned long page, unsigned long pfn);
@@ -45,6 +47,15 @@ static inline void flush_dcache_page(struct page *page)
 
 #define flush_dcache_mmap_lock(mapping)		do { } while (0)
 #define flush_dcache_mmap_unlock(mapping)	do { } while (0)
+
+#define ARCH_HAS_FLUSH_ANON_PAGE
+extern void __flush_anon_page(struct page *, unsigned long);
+static inline void flush_anon_page(struct vm_area_struct *vma,
+	struct page *page, unsigned long vmaddr)
+{
+	if (cpu_has_dc_aliases && PageAnon(page))
+		__flush_anon_page(page, vmaddr);
+}
 
 static inline void flush_icache_page(struct vm_area_struct *vma,
 	struct page *page)
@@ -83,5 +94,8 @@ extern void (*flush_data_cache_page)(unsigned long addr);
 
 /* Run kernel code uncached, useful for cache probing functions. */
 unsigned long __init run_uncached(void *func);
+
+extern void *kmap_coherent(struct page *page, unsigned long addr);
+extern void kunmap_coherent(struct page *page);
 
 #endif /* _ASM_CACHEFLUSH_H */

@@ -1,6 +1,6 @@
 /*
  * net/tipc/config.c: TIPC configuration management code
- * 
+ *
  * Copyright (c) 2002-2006, Ericsson AB
  * Copyright (c) 2004-2006, Wind River Systems
  * All rights reserved.
@@ -86,7 +86,7 @@ struct sk_buff *tipc_cfg_reply_alloc(int payload_size)
 	return buf;
 }
 
-int tipc_cfg_append_tlv(struct sk_buff *buf, int tlv_type, 
+int tipc_cfg_append_tlv(struct sk_buff *buf, int tlv_type,
 			void *tlv_data, int tlv_data_size)
 {
 	struct tlv_desc *tlv = (struct tlv_desc *)buf->tail;
@@ -107,12 +107,12 @@ int tipc_cfg_append_tlv(struct sk_buff *buf, int tlv_type,
 struct sk_buff *tipc_cfg_reply_unsigned_type(u16 tlv_type, u32 value)
 {
 	struct sk_buff *buf;
-	u32 value_net;
+	__be32 value_net;
 
 	buf = tipc_cfg_reply_alloc(TLV_SPACE(sizeof(value)));
 	if (buf) {
 		value_net = htonl(value);
-		tipc_cfg_append_tlv(buf, tlv_type, &value_net, 
+		tipc_cfg_append_tlv(buf, tlv_type, &value_net,
 				    sizeof(value_net));
 	}
 	return buf;
@@ -182,7 +182,7 @@ int tipc_cfg_cmd(const struct tipc_cmd_msg * msg,
 
 static void cfg_cmd_event(struct tipc_cmd_msg *msg,
 			  char *data,
-			  u32 sz,        
+			  u32 sz,
 			  struct tipc_portid const *orig)
 {
 	int rv = -EINVAL;
@@ -192,7 +192,7 @@ static void cfg_cmd_event(struct tipc_cmd_msg *msg,
 
 	msg->cmd = ntohl(msg->cmd);
 
-	cfg_prepare_res_msg(msg->cmd, msg->usr_handle, rv, &rmsg, msg_sect, 
+	cfg_prepare_res_msg(msg->cmd, msg->usr_handle, rv, &rmsg, msg_sect,
 			    data, 0);
 	if (ntohl(msg->magic) != TIPC_MAGIC)
 		goto exit;
@@ -208,7 +208,7 @@ static void cfg_cmd_event(struct tipc_cmd_msg *msg,
 
 			if (mng.link_subscriptions > 64)
 				break;
-			sub = (struct subscr_data *)kmalloc(sizeof(*sub),
+			sub = kmalloc(sizeof(*sub),
 							    GFP_ATOMIC);
 			if (sub == NULL) {
 				warn("Memory squeeze; dropped remote link subscription\n");
@@ -284,8 +284,7 @@ static struct sk_buff *cfg_set_own_addr(void)
 	if (!TLV_CHECK(req_tlv_area, req_tlv_space, TIPC_TLV_NET_ADDR))
 		return tipc_cfg_reply_error_string(TIPC_CFG_TLV_ERROR);
 
-	addr = *(u32 *)TLV_DATA(req_tlv_area);
-	addr = ntohl(addr);
+	addr = ntohl(*(__be32 *)TLV_DATA(req_tlv_area));
 	if (addr == tipc_own_addr)
 		return tipc_cfg_reply_none();
 	if (!tipc_addr_node_valid(addr))
@@ -296,7 +295,7 @@ static struct sk_buff *cfg_set_own_addr(void)
 						   " (cannot change node address once assigned)");
 	tipc_own_addr = addr;
 
-	/* 
+	/*
 	 * Must release all spinlocks before calling start_net() because
 	 * Linux version of TIPC calls eth_media_start() which calls
 	 * register_netdevice_notifier() which may block!
@@ -319,8 +318,7 @@ static struct sk_buff *cfg_set_remote_mng(void)
 	if (!TLV_CHECK(req_tlv_area, req_tlv_space, TIPC_TLV_UNSIGNED))
 		return tipc_cfg_reply_error_string(TIPC_CFG_TLV_ERROR);
 
-	value = *(u32 *)TLV_DATA(req_tlv_area);
-	value = ntohl(value);
+	value = ntohl(*(__be32 *)TLV_DATA(req_tlv_area));
 	tipc_remote_management = (value != 0);
 	return tipc_cfg_reply_none();
 }
@@ -332,8 +330,7 @@ static struct sk_buff *cfg_set_max_publications(void)
 	if (!TLV_CHECK(req_tlv_area, req_tlv_space, TIPC_TLV_UNSIGNED))
 		return tipc_cfg_reply_error_string(TIPC_CFG_TLV_ERROR);
 
-	value = *(u32 *)TLV_DATA(req_tlv_area);
-	value = ntohl(value);
+	value = ntohl(*(__be32 *)TLV_DATA(req_tlv_area));
 	if (value != delimit(value, 1, 65535))
 		return tipc_cfg_reply_error_string(TIPC_CFG_INVALID_VALUE
 						   " (max publications must be 1-65535)");
@@ -348,8 +345,7 @@ static struct sk_buff *cfg_set_max_subscriptions(void)
 	if (!TLV_CHECK(req_tlv_area, req_tlv_space, TIPC_TLV_UNSIGNED))
 		return tipc_cfg_reply_error_string(TIPC_CFG_TLV_ERROR);
 
-	value = *(u32 *)TLV_DATA(req_tlv_area);
-	value = ntohl(value);
+	value = ntohl(*(__be32 *)TLV_DATA(req_tlv_area));
 	if (value != delimit(value, 1, 65535))
 		return tipc_cfg_reply_error_string(TIPC_CFG_INVALID_VALUE
 						   " (max subscriptions must be 1-65535");
@@ -363,8 +359,7 @@ static struct sk_buff *cfg_set_max_ports(void)
 
 	if (!TLV_CHECK(req_tlv_area, req_tlv_space, TIPC_TLV_UNSIGNED))
 		return tipc_cfg_reply_error_string(TIPC_CFG_TLV_ERROR);
-	value = *(u32 *)TLV_DATA(req_tlv_area);
-	value = ntohl(value);
+	value = ntohl(*(__be32 *)TLV_DATA(req_tlv_area));
 	if (value == tipc_max_ports)
 		return tipc_cfg_reply_none();
 	if (value != delimit(value, 127, 65535))
@@ -383,8 +378,7 @@ static struct sk_buff *cfg_set_max_zones(void)
 
 	if (!TLV_CHECK(req_tlv_area, req_tlv_space, TIPC_TLV_UNSIGNED))
 		return tipc_cfg_reply_error_string(TIPC_CFG_TLV_ERROR);
-	value = *(u32 *)TLV_DATA(req_tlv_area);
-	value = ntohl(value);
+	value = ntohl(*(__be32 *)TLV_DATA(req_tlv_area));
 	if (value == tipc_max_zones)
 		return tipc_cfg_reply_none();
 	if (value != delimit(value, 1, 255))
@@ -403,8 +397,7 @@ static struct sk_buff *cfg_set_max_clusters(void)
 
 	if (!TLV_CHECK(req_tlv_area, req_tlv_space, TIPC_TLV_UNSIGNED))
 		return tipc_cfg_reply_error_string(TIPC_CFG_TLV_ERROR);
-	value = *(u32 *)TLV_DATA(req_tlv_area);
-	value = ntohl(value);
+	value = ntohl(*(__be32 *)TLV_DATA(req_tlv_area));
 	if (value != delimit(value, 1, 1))
 		return tipc_cfg_reply_error_string(TIPC_CFG_INVALID_VALUE
 						   " (max clusters fixed at 1)");
@@ -417,8 +410,7 @@ static struct sk_buff *cfg_set_max_nodes(void)
 
 	if (!TLV_CHECK(req_tlv_area, req_tlv_space, TIPC_TLV_UNSIGNED))
 		return tipc_cfg_reply_error_string(TIPC_CFG_TLV_ERROR);
-	value = *(u32 *)TLV_DATA(req_tlv_area);
-	value = ntohl(value);
+	value = ntohl(*(__be32 *)TLV_DATA(req_tlv_area));
 	if (value == tipc_max_nodes)
 		return tipc_cfg_reply_none();
 	if (value != delimit(value, 8, 2047))
@@ -437,8 +429,7 @@ static struct sk_buff *cfg_set_max_slaves(void)
 
 	if (!TLV_CHECK(req_tlv_area, req_tlv_space, TIPC_TLV_UNSIGNED))
 		return tipc_cfg_reply_error_string(TIPC_CFG_TLV_ERROR);
-	value = *(u32 *)TLV_DATA(req_tlv_area);
-	value = ntohl(value);
+	value = ntohl(*(__be32 *)TLV_DATA(req_tlv_area));
 	if (value != 0)
 		return tipc_cfg_reply_error_string(TIPC_CFG_NOT_SUPPORTED
 						   " (max secondary nodes fixed at 0)");
@@ -451,8 +442,7 @@ static struct sk_buff *cfg_set_netid(void)
 
 	if (!TLV_CHECK(req_tlv_area, req_tlv_space, TIPC_TLV_UNSIGNED))
 		return tipc_cfg_reply_error_string(TIPC_CFG_TLV_ERROR);
-	value = *(u32 *)TLV_DATA(req_tlv_area);
-	value = ntohl(value);
+	value = ntohl(*(__be32 *)TLV_DATA(req_tlv_area));
 	if (value == tipc_net_id)
 		return tipc_cfg_reply_none();
 	if (value != delimit(value, 1, 9999))
@@ -629,7 +619,7 @@ static void cfg_named_msg_event(void *userdata,
 				struct sk_buff **buf,
 				const unchar *msg,
 				u32 size,
-				u32 importance, 
+				u32 importance,
 				struct tipc_portid const *orig,
 				struct tipc_name_seq const *dest)
 {
@@ -650,7 +640,7 @@ static void cfg_named_msg_event(void *userdata,
 	/* Generate reply for request (if can't, return request) */
 
 	rep_buf = tipc_cfg_do_cmd(orig->node,
-				  ntohs(req_hdr->tcm_type), 
+				  ntohs(req_hdr->tcm_type),
 				  msg + sizeof(*req_hdr),
 				  size - sizeof(*req_hdr),
 				  BUF_HEADROOM + MAX_H_SIZE + sizeof(*rep_hdr));

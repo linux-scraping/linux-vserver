@@ -71,17 +71,11 @@ void gfs2_tune_init(struct gfs2_tune *gt)
 	gt->gt_atime_quantum = 3600;
 	gt->gt_new_files_jdata = 0;
 	gt->gt_new_files_directio = 0;
-	gt->gt_max_atomic_write = 4 << 20;
 	gt->gt_max_readahead = 1 << 18;
 	gt->gt_lockdump_size = 131072;
 	gt->gt_stall_secs = 600;
 	gt->gt_complain_secs = 10;
 	gt->gt_reclaim_limit = 5000;
-	gt->gt_entries_per_readdir = 32;
-	gt->gt_prefetch_secs = 10;
-	gt->gt_greedy_default = HZ / 10;
-	gt->gt_greedy_quantum = HZ / 40;
-	gt->gt_greedy_max = HZ / 4;
 	gt->gt_statfs_quantum = 30;
 	gt->gt_statfs_slow = 0;
 }
@@ -97,7 +91,7 @@ void gfs2_tune_init(struct gfs2_tune *gt)
  * changed.
  */
 
-int gfs2_check_sb(struct gfs2_sbd *sdp, struct gfs2_sb *sb, int silent)
+int gfs2_check_sb(struct gfs2_sbd *sdp, struct gfs2_sb_host *sb, int silent)
 {
 	unsigned int x;
 
@@ -180,6 +174,24 @@ static int end_bio_io_page(struct bio *bio, unsigned int bytes_done, int error)
 	return 0;
 }
 
+/**
+ * gfs2_read_super - Read the gfs2 super block from disk
+ * @sb: The VFS super block
+ * @sector: The location of the super block
+ *
+ * This uses the bio functions to read the super block from disk
+ * because we want to be 100% sure that we never read cached data.
+ * A super block is read twice only during each GFS2 mount and is
+ * never written to by the filesystem. The first time its read no
+ * locks are held, and the only details which are looked at are those
+ * relating to the locking protocol. Once locking is up and working,
+ * the sb is read again under the lock to establish the location of
+ * the master directory (contains pointers to journals etc) and the
+ * root directory.
+ *
+ * Returns: A page containing the sb or NULL
+ */
+
 struct page *gfs2_read_super(struct super_block *sb, sector_t sector)
 {
 	struct page *page;
@@ -199,7 +211,7 @@ struct page *gfs2_read_super(struct super_block *sb, sector_t sector)
 		return NULL;
 	}
 
-	bio->bi_sector = sector;
+	bio->bi_sector = sector * (sb->s_blocksize >> 9);
 	bio->bi_bdev = sb->s_bdev;
 	bio_add_page(bio, page, PAGE_SIZE, 0);
 
@@ -341,8 +353,7 @@ int gfs2_jindex_hold(struct gfs2_sbd *sdp, struct gfs2_holder *ji_gh)
 	mutex_lock(&sdp->sd_jindex_mutex);
 
 	for (;;) {
-		error = gfs2_glock_nq_init(dip->i_gl, LM_ST_SHARED,
-					   GL_LOCAL_EXCL, ji_gh);
+		error = gfs2_glock_nq_init(dip->i_gl, LM_ST_SHARED, 0, ji_gh);
 		if (error)
 			break;
 
@@ -508,16 +519,15 @@ int gfs2_make_fs_rw(struct gfs2_sbd *sdp)
 	struct gfs2_inode *ip = GFS2_I(sdp->sd_jdesc->jd_inode);
 	struct gfs2_glock *j_gl = ip->i_gl;
 	struct gfs2_holder t_gh;
-	struct gfs2_log_header head;
+	struct gfs2_log_header_host head;
 	int error;
 
-	error = gfs2_glock_nq_init(sdp->sd_trans_gl, LM_ST_SHARED,
-				   GL_LOCAL_EXCL, &t_gh);
+	error = gfs2_glock_nq_init(sdp->sd_trans_gl, LM_ST_SHARED, 0, &t_gh);
 	if (error)
 		return error;
 
 	gfs2_meta_cache_flush(ip);
-	j_gl->gl_ops->go_inval(j_gl, DIO_METADATA | DIO_DATA);
+	j_gl->gl_ops->go_inval(j_gl, DIO_METADATA);
 
 	error = gfs2_find_jhead(sdp->sd_jdesc, &head);
 	if (error)
@@ -565,9 +575,8 @@ int gfs2_make_fs_ro(struct gfs2_sbd *sdp)
 	gfs2_quota_sync(sdp);
 	gfs2_statfs_sync(sdp);
 
-	error = gfs2_glock_nq_init(sdp->sd_trans_gl, LM_ST_SHARED,
-				GL_LOCAL_EXCL | GL_NOCACHE,
-				&t_gh);
+	error = gfs2_glock_nq_init(sdp->sd_trans_gl, LM_ST_SHARED, GL_NOCACHE,
+				   &t_gh);
 	if (error && !test_bit(SDF_SHUTDOWN, &sdp->sd_flags))
 		return error;
 
@@ -587,9 +596,9 @@ int gfs2_make_fs_ro(struct gfs2_sbd *sdp)
 int gfs2_statfs_init(struct gfs2_sbd *sdp)
 {
 	struct gfs2_inode *m_ip = GFS2_I(sdp->sd_statfs_inode);
-	struct gfs2_statfs_change *m_sc = &sdp->sd_statfs_master;
+	struct gfs2_statfs_change_host *m_sc = &sdp->sd_statfs_master;
 	struct gfs2_inode *l_ip = GFS2_I(sdp->sd_sc_inode);
-	struct gfs2_statfs_change *l_sc = &sdp->sd_statfs_local;
+	struct gfs2_statfs_change_host *l_sc = &sdp->sd_statfs_local;
 	struct buffer_head *m_bh, *l_bh;
 	struct gfs2_holder gh;
 	int error;
@@ -634,7 +643,7 @@ void gfs2_statfs_change(struct gfs2_sbd *sdp, s64 total, s64 free,
 			s64 dinodes)
 {
 	struct gfs2_inode *l_ip = GFS2_I(sdp->sd_sc_inode);
-	struct gfs2_statfs_change *l_sc = &sdp->sd_statfs_local;
+	struct gfs2_statfs_change_host *l_sc = &sdp->sd_statfs_local;
 	struct buffer_head *l_bh;
 	int error;
 
@@ -660,8 +669,8 @@ int gfs2_statfs_sync(struct gfs2_sbd *sdp)
 {
 	struct gfs2_inode *m_ip = GFS2_I(sdp->sd_statfs_inode);
 	struct gfs2_inode *l_ip = GFS2_I(sdp->sd_sc_inode);
-	struct gfs2_statfs_change *m_sc = &sdp->sd_statfs_master;
-	struct gfs2_statfs_change *l_sc = &sdp->sd_statfs_local;
+	struct gfs2_statfs_change_host *m_sc = &sdp->sd_statfs_master;
+	struct gfs2_statfs_change_host *l_sc = &sdp->sd_statfs_local;
 	struct gfs2_holder gh;
 	struct buffer_head *m_bh, *l_bh;
 	int error;
@@ -727,10 +736,10 @@ out:
  * Returns: errno
  */
 
-int gfs2_statfs_i(struct gfs2_sbd *sdp, struct gfs2_statfs_change *sc)
+int gfs2_statfs_i(struct gfs2_sbd *sdp, struct gfs2_statfs_change_host *sc)
 {
-	struct gfs2_statfs_change *m_sc = &sdp->sd_statfs_master;
-	struct gfs2_statfs_change *l_sc = &sdp->sd_statfs_local;
+	struct gfs2_statfs_change_host *m_sc = &sdp->sd_statfs_master;
+	struct gfs2_statfs_change_host *l_sc = &sdp->sd_statfs_local;
 
 	spin_lock(&sdp->sd_statfs_spin);
 
@@ -760,7 +769,7 @@ int gfs2_statfs_i(struct gfs2_sbd *sdp, struct gfs2_statfs_change *sc)
  */
 
 static int statfs_slow_fill(struct gfs2_rgrpd *rgd,
-			    struct gfs2_statfs_change *sc)
+			    struct gfs2_statfs_change_host *sc)
 {
 	gfs2_rgrp_verify(rgd);
 	sc->sc_total += rgd->rd_ri.ri_data;
@@ -782,7 +791,7 @@ static int statfs_slow_fill(struct gfs2_rgrpd *rgd,
  * Returns: errno
  */
 
-int gfs2_statfs_slow(struct gfs2_sbd *sdp, struct gfs2_statfs_change *sc)
+int gfs2_statfs_slow(struct gfs2_sbd *sdp, struct gfs2_statfs_change_host *sc)
 {
 	struct gfs2_holder ri_gh;
 	struct gfs2_rgrpd *rgd_next;
@@ -792,7 +801,7 @@ int gfs2_statfs_slow(struct gfs2_sbd *sdp, struct gfs2_statfs_change *sc)
 	int done;
 	int error = 0, err;
 
-	memset(sc, 0, sizeof(struct gfs2_statfs_change));
+	memset(sc, 0, sizeof(struct gfs2_statfs_change_host));
 	gha = kcalloc(slots, sizeof(struct gfs2_holder), GFP_KERNEL);
 	if (!gha)
 		return -ENOMEM;
@@ -873,7 +882,7 @@ static int gfs2_lock_fs_check_clean(struct gfs2_sbd *sdp,
 	struct gfs2_jdesc *jd;
 	struct lfcc *lfcc;
 	LIST_HEAD(list);
-	struct gfs2_log_header lh;
+	struct gfs2_log_header_host lh;
 	int error;
 
 	error = gfs2_jindex_hold(sdp, &ji_gh);

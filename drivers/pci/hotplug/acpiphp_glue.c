@@ -773,13 +773,13 @@ static int get_gsi_base(acpi_handle handle, u32 *gsi_base)
 		goto out;
 
 	table = obj->buffer.pointer;
-	switch (((acpi_table_entry_header *)table)->type) {
-	case ACPI_MADT_IOSAPIC:
-		*gsi_base = ((struct acpi_table_iosapic *)table)->global_irq_base;
+	switch (((struct acpi_subtable_header *)table)->type) {
+	case ACPI_MADT_TYPE_IO_SAPIC:
+		*gsi_base = ((struct acpi_madt_io_sapic *)table)->global_irq_base;
 		result = 0;
 		break;
-	case ACPI_MADT_IOAPIC:
-		*gsi_base = ((struct acpi_table_ioapic *)table)->global_irq_base;
+	case ACPI_MADT_TYPE_IO_APIC:
+		*gsi_base = ((struct acpi_madt_io_apic *)table)->global_irq_base;
 		result = 0;
 		break;
 	default:
@@ -1682,7 +1682,7 @@ int __init acpiphp_glue_init(void)
  *
  * This function frees all data allocated in acpiphp_glue_init()
  */
-void __exit acpiphp_glue_exit(void)
+void  acpiphp_glue_exit(void)
 {
 	acpi_pci_unregister_driver(&acpi_pci_hp_driver);
 }
@@ -1693,14 +1693,10 @@ void __exit acpiphp_glue_exit(void)
  */
 int __init acpiphp_get_num_slots(void)
 {
-	struct list_head *node;
 	struct acpiphp_bridge *bridge;
-	int num_slots;
+	int num_slots = 0;
 
-	num_slots = 0;
-
-	list_for_each (node, &bridge_list) {
-		bridge = (struct acpiphp_bridge *)node;
+	list_for_each_entry (bridge, &bridge_list, list) {
 		dbg("Bus %04x:%02x has %d slot%s\n",
 				pci_domain_nr(bridge->pci_bus),
 				bridge->pci_bus->number, bridge->nr_slots,

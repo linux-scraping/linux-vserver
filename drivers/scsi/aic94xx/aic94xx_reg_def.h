@@ -2000,7 +2000,7 @@
  * The host accesses this scratch in a different manner from the
  * central sequencer. The sequencer has to use CSEQ registers CSCRPAGE
  * and CMnSCRPAGE to access the scratch memory. A flat mapping of the
- * scratch memory is avaliable for software convenience and to prevent
+ * scratch memory is available for software convenience and to prevent
  * corruption while the sequencer is running. This memory is mapped
  * onto addresses 800h - BFFh, total of 400h bytes.
  *
@@ -2226,9 +2226,10 @@
 #define LmSEQ_SAS_RESET_MODE(LinkNum)		(LmSCRATCH(LinkNum) + 0x0074)
 #define LmSEQ_LINK_RESET_RETRY_COUNT(LinkNum)	(LmSCRATCH(LinkNum) + 0x0075)
 #define LmSEQ_NUM_LINK_RESET_RETRIES(LinkNum)	(LmSCRATCH(LinkNum) + 0x0076)
-#define LmSEQ_OOB_INT_ENABLES(LinkNum)		(LmSCRATCH(LinkNum) + 0x007A)
+#define LmSEQ_OOB_INT_ENABLES(LinkNum)		(LmSCRATCH(LinkNum) + 0x0078)
+#define LmSEQ_NOTIFY_TIMER_DOWN_COUNT(LinkNum)	(LmSCRATCH(LinkNum) + 0x007A)
 #define LmSEQ_NOTIFY_TIMER_TIMEOUT(LinkNum)	(LmSCRATCH(LinkNum) + 0x007C)
-#define LmSEQ_NOTIFY_TIMER_DOWN_COUNT(LinkNum)	(LmSCRATCH(LinkNum) + 0x007E)
+#define LmSEQ_NOTIFY_TIMER_INITIAL_COUNT(LinkNum) (LmSCRATCH(LinkNum) + 0x007E)
 
 /* Mode dependent scratch page 1, mode 0 and mode 1 */
 #define LmSEQ_SG_LIST_PTR_ADDR0(LinkNum)        (LmSCRATCH(LinkNum) + 0x0020)

@@ -56,6 +56,7 @@
 #include <linux/if_vlan.h>
 #include <linux/bitops.h>
 #include <linux/mutex.h>
+#include <linux/mm.h>
 
 #include <asm/system.h>
 #include <asm/io.h>
@@ -89,7 +90,8 @@
 
 #define ADVERTISE_MASK	(SUPPORTED_10baseT_Half | SUPPORTED_10baseT_Full | \
 			 SUPPORTED_100baseT_Half | SUPPORTED_100baseT_Full | \
-			 SUPPORTED_1000baseT_Half | SUPPORTED_1000baseT_Full)
+			 SUPPORTED_1000baseT_Half | SUPPORTED_1000baseT_Full | \
+			 SUPPORTED_Pause | SUPPORTED_Autoneg)
 
 #define DRV_NAME	"sungem"
 #define DRV_VERSION	"0.98"
@@ -1030,7 +1032,7 @@ static int gem_start_xmit(struct sk_buff *skb, struct net_device *dev)
 		u64 csum_start_off, csum_stuff_off;
 
 		csum_start_off = (u64) (skb->h.raw - skb->data);
-		csum_stuff_off = (u64) ((skb->h.raw + skb->csum) - skb->data);
+		csum_stuff_off = csum_start_off + skb->csum_offset;
 
 		ctrl = (TXDCTRL_CENAB |
 			(csum_start_off << 15) |
@@ -2281,9 +2283,9 @@ static void gem_do_stop(struct net_device *dev, int wol)
 	}
 }
 
-static void gem_reset_task(void *data)
+static void gem_reset_task(struct work_struct *work)
 {
-	struct gem *gp = (struct gem *) data;
+	struct gem *gp = container_of(work, struct gem, reset_task);
 
 	mutex_lock(&gp->pm_mutex);
 
@@ -2526,6 +2528,35 @@ static struct net_device_stats *gem_get_stats(struct net_device *dev)
 	spin_unlock_irq(&gp->lock);
 
 	return &gp->net_stats;
+}
+
+static int gem_set_mac_address(struct net_device *dev, void *addr)
+{
+	struct sockaddr *macaddr = (struct sockaddr *) addr;
+	struct gem *gp = dev->priv;
+	unsigned char *e = &dev->dev_addr[0];
+
+	if (!is_valid_ether_addr(macaddr->sa_data))
+		return -EADDRNOTAVAIL;
+
+	if (!netif_running(dev) || !netif_device_present(dev)) {
+		/* We'll just catch it later when the
+		 * device is up'd or resumed.
+		 */
+		memcpy(dev->dev_addr, macaddr->sa_data, dev->addr_len);
+		return 0;
+	}
+
+	mutex_lock(&gp->pm_mutex);
+	memcpy(dev->dev_addr, macaddr->sa_data, dev->addr_len);
+	if (gp->running) {
+		writel((e[4] << 8) | e[5], gp->regs + MAC_ADDR0);
+		writel((e[2] << 8) | e[3], gp->regs + MAC_ADDR1);
+		writel((e[0] << 8) | e[1], gp->regs + MAC_ADDR2);
+	}
+	mutex_unlock(&gp->pm_mutex);
+
+	return 0;
 }
 
 static void gem_set_multicast(struct net_device *dev)
@@ -3043,7 +3074,7 @@ static int __devinit gem_init_one(struct pci_dev *pdev,
 	gp->link_timer.function = gem_link_timer;
 	gp->link_timer.data = (unsigned long) gp;
 
-	INIT_WORK(&gp->reset_task, gem_reset_task, gp);
+	INIT_WORK(&gp->reset_task, gem_reset_task);
 
 	gp->lstate = link_down;
 	gp->timer_ticks = 0;
@@ -3120,6 +3151,7 @@ static int __devinit gem_init_one(struct pci_dev *pdev,
 	dev->change_mtu = gem_change_mtu;
 	dev->irq = pdev->irq;
 	dev->dma = 0;
+	dev->set_mac_address = gem_set_mac_address;
 #ifdef CONFIG_NET_POLL_CONTROLLER
 	dev->poll_controller = gem_poll_controller;
 #endif

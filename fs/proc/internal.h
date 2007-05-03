@@ -12,6 +12,12 @@
 #include <linux/proc_fs.h>
 #include <linux/vs_pid.h>
 
+#ifdef CONFIG_PROC_SYSCTL
+extern int proc_sys_init(void);
+#else
+static inline void proc_sys_init(void) { }
+#endif
+
 struct vmalloc_info {
 	unsigned long	used;
 	unsigned long	largest_chunk;
@@ -39,13 +45,13 @@ extern int proc_tgid_stat(struct task_struct *, char *);
 extern int proc_pid_status(struct task_struct *, char *);
 extern int proc_pid_statm(struct task_struct *, char *);
 
-extern struct file_operations proc_maps_operations;
-extern struct file_operations proc_numa_maps_operations;
-extern struct file_operations proc_smaps_operations;
+extern const struct file_operations proc_maps_operations;
+extern const struct file_operations proc_numa_maps_operations;
+extern const struct file_operations proc_smaps_operations;
 
-extern struct file_operations proc_maps_operations;
-extern struct file_operations proc_numa_maps_operations;
-extern struct file_operations proc_smaps_operations;
+extern const struct file_operations proc_maps_operations;
+extern const struct file_operations proc_numa_maps_operations;
+extern const struct file_operations proc_smaps_operations;
 
 
 void free_proc_entry(struct proc_dir_entry *de);

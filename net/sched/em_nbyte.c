@@ -12,7 +12,6 @@
 #include <linux/module.h>
 #include <linux/types.h>
 #include <linux/kernel.h>
-#include <linux/sched.h>
 #include <linux/string.h>
 #include <linux/skbuff.h>
 #include <linux/tc_ematch/tc_em_nbyte.h>
@@ -23,7 +22,7 @@ struct nbyte_data
 	struct tcf_em_nbyte	hdr;
 	char			pattern[0];
 };
-	
+
 static int em_nbyte_change(struct tcf_proto *tp, void *data, int data_len,
 			   struct tcf_ematch *em)
 {
@@ -34,11 +33,9 @@ static int em_nbyte_change(struct tcf_proto *tp, void *data, int data_len,
 		return -EINVAL;
 
 	em->datalen = sizeof(*nbyte) + nbyte->len;
-	em->data = (unsigned long) kmalloc(em->datalen, GFP_KERNEL);
+	em->data = (unsigned long)kmemdup(data, em->datalen, GFP_KERNEL);
 	if (em->data == 0UL)
 		return -ENOBUFS;
-
-	memcpy((void *) em->data, data, em->datalen);
 
 	return 0;
 }
@@ -70,7 +67,7 @@ static int __init init_em_nbyte(void)
 	return tcf_em_register(&em_nbyte_ops);
 }
 
-static void __exit exit_em_nbyte(void) 
+static void __exit exit_em_nbyte(void)
 {
 	tcf_em_unregister(&em_nbyte_ops);
 }

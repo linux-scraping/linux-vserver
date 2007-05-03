@@ -9,7 +9,7 @@ config IP_MULTICAST
 	  intend to participate in the MBONE, a high bandwidth network on top
 	  of the Internet which carries audio and video broadcasts. More
 	  information about the MBONE is on the WWW at
-	  <http://www-itg.lbl.gov/mbone/>. Information about the multicast
+	  <http://www.savetz.com/mbone/>. Information about the multicast
 	  capabilities of the various network cards is contained in
 	  <file:Documentation/networking/multicast.txt>. For most people, it's
 	  safe to say N.
@@ -103,13 +103,6 @@ config IP_MULTIPLE_TABLES
 	  <ftp://ftp.tux.org/pub/net/ip-routing/>.
 
 	  If unsure, say N.
-
-config IP_ROUTE_FWMARK
-	bool "IP: use netfilter MARK value as routing key"
-	depends on IP_MULTIPLE_TABLES && NETFILTER
-	help
-	  If you say Y here, you will be able to specify different routes for
-	  packets with different mark values (see iptables(8), MARK target).
 
 config IP_ROUTE_MULTIPATH
 	bool "IP: equal cost multipath"
@@ -449,7 +442,7 @@ config INET_DIAG
 	---help---
 	  Support for INET (TCP, DCCP, etc) socket monitoring interface used by
 	  native Linux tools such as ss. ss is included in iproute2, currently
-	  downloadable at <http://developer.osdl.org/dev/iproute2>. 
+	  downloadable at <http://linux-net.osdl.org/index.php/Iproute2>.
 	  
 	  If unsure, say Y.
 
@@ -557,7 +550,7 @@ config TCP_CONG_SCALABLE
 	Scalable TCP is a sender-side only change to TCP which uses a
 	MIMD congestion control algorithm which has some nice scaling
 	properties, though is known to have fairness issues.
-	See http://www-lce.eng.cam.ac.uk/~ctk21/scalable/
+	See http://www.deneholme.net/tom/scalable/
 
 config TCP_CONG_LP
 	tristate "TCP Low Priority"
@@ -624,6 +617,18 @@ config DEFAULT_TCP_CONG
 	default "westwood" if DEFAULT_WESTWOOD
 	default "reno" if DEFAULT_RENO
 	default "cubic"
+
+config TCP_MD5SIG
+	bool "TCP: MD5 Signature Option support (RFC2385) (EXPERIMENTAL)"
+	depends on EXPERIMENTAL
+	select CRYPTO
+	select CRYPTO_MD5
+	---help---
+	  RFC2385 specifices a method of giving MD5 protection to TCP sessions.
+	  Its main (only?) use is to protect BGP sessions between core routers
+	  on the Internet.
+
+	  If unsure, say N.
 
 source "net/ipv4/ipvs/Kconfig"
 

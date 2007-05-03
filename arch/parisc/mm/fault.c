@@ -24,10 +24,6 @@
 			 /*  dumped to the console via printk)          */
 
 
-/* Defines for parisc_acctyp()	*/
-#define READ		0
-#define WRITE		1
-
 /* Various important other fields */
 #define bit22set(x)		(x & 0x00000200)
 #define bits23_25set(x)		(x & 0x000001c0)
@@ -152,7 +148,7 @@ void do_page_fault(struct pt_regs *regs, unsigned long code,
 	const struct exception_table_entry *fix;
 	unsigned long acc_type;
 
-	if (in_interrupt() || !mm)
+	if (in_atomic() || !mm)
 		goto no_context;
 
 	down_read(&mm->mmap_sem);
@@ -265,7 +261,8 @@ no_context:
 
   out_of_memory:
 	up_read(&mm->mmap_sem);
-	printk(KERN_CRIT "VM: killing process %s\n", current->comm);
+	printk(KERN_CRIT "VM: killing process %s(%d:#%u)\n",
+		current->comm, current->pid, current->xid);
 	if (user_mode(regs))
 		do_exit(SIGKILL);
 	goto no_context;

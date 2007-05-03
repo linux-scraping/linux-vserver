@@ -178,6 +178,9 @@ enum {
 	XFRM_MSG_REPORT,
 #define XFRM_MSG_REPORT XFRM_MSG_REPORT
 
+	XFRM_MSG_MIGRATE,
+#define XFRM_MSG_MIGRATE XFRM_MSG_MIGRATE
+
 	__XFRM_MSG_MAX
 };
 #define XFRM_MSG_MAX (__XFRM_MSG_MAX - 1)
@@ -211,8 +214,8 @@ struct xfrm_user_tmpl {
 
 struct xfrm_encap_tmpl {
 	__u16		encap_type;
-	__u16		encap_sport;
-	__u16		encap_dport;
+	__be16		encap_sport;
+	__be16		encap_dport;
 	xfrm_address_t	encap_oa;
 };
 
@@ -256,6 +259,7 @@ enum xfrm_attr_type_t {
 	XFRMA_COADDR,		/* xfrm_address_t */
 	XFRMA_LASTUSED,
 	XFRMA_POLICY_TYPE,	/* struct xfrm_userpolicy_type */
+	XFRMA_MIGRATE,
 	__XFRMA_MAX
 
 #define XFRMA_MAX (__XFRMA_MAX - 1)
@@ -289,7 +293,9 @@ struct xfrm_usersa_id {
 
 struct xfrm_aevent_id {
 	struct xfrm_usersa_id		sa_id;
+	xfrm_address_t			saddr;
 	__u32				flags;
+	__u32				reqid;
 };
 
 struct xfrm_userspi_info {
@@ -349,13 +355,26 @@ struct xfrm_user_report {
 	struct xfrm_selector		sel;
 };
 
+struct xfrm_user_migrate {
+	xfrm_address_t			old_daddr;
+	xfrm_address_t			old_saddr;
+	xfrm_address_t			new_daddr;
+	xfrm_address_t			new_saddr;
+	__u8				proto;
+	__u8				mode;
+	__u16				reserved;
+	__u32				reqid;
+	__u16				old_family;
+	__u16				new_family;
+};
+
 #ifndef __KERNEL__
 /* backwards compatibility for userspace */
 #define XFRMGRP_ACQUIRE		1
 #define XFRMGRP_EXPIRE		2
 #define XFRMGRP_SA		4
 #define XFRMGRP_POLICY		8
-#define XFRMGRP_REPORT		0x10
+#define XFRMGRP_REPORT		0x20
 #endif
 
 enum xfrm_nlgroups {
@@ -373,6 +392,8 @@ enum xfrm_nlgroups {
 #define XFRMNLGRP_AEVENTS	XFRMNLGRP_AEVENTS
 	XFRMNLGRP_REPORT,
 #define XFRMNLGRP_REPORT	XFRMNLGRP_REPORT
+	XFRMNLGRP_MIGRATE,
+#define XFRMNLGRP_MIGRATE	XFRMNLGRP_MIGRATE
 	__XFRMNLGRP_MAX
 };
 #define XFRMNLGRP_MAX	(__XFRMNLGRP_MAX - 1)

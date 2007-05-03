@@ -505,11 +505,6 @@ static void ide_hwif_setup_dma(struct pci_dev *dev, ide_pci_device_t *d, ide_hwi
 		}
 	}
 }
-
-#ifndef CONFIG_IDEDMA_PCI_AUTO
-#warning CONFIG_IDEDMA_PCI_AUTO=n support is obsolete, and will be removed soon.
-#endif
-
 #endif /* CONFIG_BLK_DEV_IDEDMA_PCI*/
 
 /**
@@ -783,10 +778,11 @@ static LIST_HEAD(ide_pci_drivers);
  *	Returns are the same as for pci_register_driver
  */
 
-int __ide_pci_register_driver(struct pci_driver *driver, struct module *module)
+int __ide_pci_register_driver(struct pci_driver *driver, struct module *module,
+			      const char *mod_name)
 {
 	if(!pre_init)
-		return __pci_register_driver(driver, module);
+		return __pci_register_driver(driver, module, mod_name);
 	driver->driver.owner = module;
 	list_add_tail(&driver->node, &ide_pci_drivers);
 	return 0;
@@ -844,11 +840,11 @@ void __init ide_scan_pcibus (int scan_direction)
 
 	pre_init = 0;
 	if (!scan_direction) {
-		while ((dev = pci_find_device(PCI_ANY_ID, PCI_ANY_ID, dev)) != NULL) {
+		while ((dev = pci_get_device(PCI_ANY_ID, PCI_ANY_ID, dev)) != NULL) {
 			ide_scan_pcidev(dev);
 		}
 	} else {
-		while ((dev = pci_find_device_reverse(PCI_ANY_ID, PCI_ANY_ID, dev)) != NULL) {
+		while ((dev = pci_get_device_reverse(PCI_ANY_ID, PCI_ANY_ID, dev)) != NULL) {
 			ide_scan_pcidev(dev);
 		}
 	}
@@ -862,6 +858,6 @@ void __init ide_scan_pcibus (int scan_direction)
 	{
 		list_del(l);
 		d = list_entry(l, struct pci_driver, node);
-		__pci_register_driver(d, d->driver.owner);
+		__pci_register_driver(d, d->driver.owner, d->driver.mod_name);
 	}
 }

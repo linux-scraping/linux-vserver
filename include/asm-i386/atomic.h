@@ -14,7 +14,7 @@
  * on us. We need to use _exactly_ the address the user gave us,
  * not some alias that contains the same information.
  */
-typedef struct { volatile int counter; } atomic_t;
+typedef struct { int counter; } atomic_t;
 
 #define ATOMIC_INIT(i)	{ (i) }
 
@@ -187,9 +187,9 @@ static __inline__ int atomic_add_return(int i, atomic_t *v)
 	/* Modern 486+ processor */
 	__i = i;
 	__asm__ __volatile__(
-		LOCK_PREFIX "xaddl %0, %1;"
-		:"=r"(i)
-		:"m"(v->counter), "0"(i));
+		LOCK_PREFIX "xaddl %0, %1"
+		:"+r" (i), "+m" (v->counter)
+		: : "memory");
 	return i + __i;
 
 #ifdef CONFIG_M386
@@ -211,12 +211,12 @@ static __inline__ int atomic_sub_return(int i, atomic_t *v)
 #define atomic_xchg(v, new) (xchg(&((v)->counter), new))
 
 /**
- * atomic_add_unless - add unless the number is a given value
+ * atomic_add_unless - add unless the number is already a given value
  * @v: pointer of type atomic_t
  * @a: the amount to add to v...
  * @u: ...unless v is equal to u.
  *
- * Atomically adds @a to @v, so long as it was not @u.
+ * Atomically adds @a to @v, so long as @v was not already @u.
  * Returns non-zero if @v was not @u, and zero otherwise.
  */
 #define atomic_add_unless(v, a, u)				\

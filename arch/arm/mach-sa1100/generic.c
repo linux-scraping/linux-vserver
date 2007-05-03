@@ -20,12 +20,14 @@
 #include <linux/platform_device.h>
 
 #include <asm/div64.h>
+#include <asm/cnt32_to_63.h>
 #include <asm/hardware.h>
 #include <asm/system.h>
 #include <asm/pgtable.h>
 #include <asm/mach/map.h>
 #include <asm/mach/flash.h>
 #include <asm/irq.h>
+#include <asm/gpio.h>
 
 #include "generic.h"
 
@@ -118,18 +120,55 @@ EXPORT_SYMBOL(cpufreq_get);
 
 /*
  * This is the SA11x0 sched_clock implementation.  This has
- * a resolution of 271ns, and a maximum value of 1165s.
+ * a resolution of 271ns, and a maximum value of 32025597s (370 days).
+ *
+ * The return value is guaranteed to be monotonic in that range as
+ * long as there is always less than 582 seconds between successive
+ * calls to this function.
+ *
  *  ( * 1E9 / 3686400 => * 78125 / 288)
  */
 unsigned long long sched_clock(void)
 {
-	unsigned long long v;
+	unsigned long long v = cnt32_to_63(OSCR);
 
-	v = (unsigned long long)OSCR * 78125;
-	do_div(v, 288);
+	/* the <<1 gets rid of the cnt_32_to_63 top bit saving on a bic insn */
+	v *= 78125<<1;
+	do_div(v, 288<<1);
 
 	return v;
 }
+
+int gpio_direction_input(unsigned gpio)
+{
+	unsigned long flags;
+
+	if (gpio > GPIO_MAX)
+		return -EINVAL;
+
+	local_irq_save(flags);
+	GPDR &= ~GPIO_GPIO(gpio);
+	local_irq_restore(flags);
+	return 0;
+}
+
+EXPORT_SYMBOL(gpio_direction_input);
+
+int gpio_direction_output(unsigned gpio, int value)
+{
+	unsigned long flags;
+
+	if (gpio > GPIO_MAX)
+		return -EINVAL;
+
+	local_irq_save(flags);
+	gpio_set_value(gpio, value);
+	GPDR |= GPIO_GPIO(gpio);
+	local_irq_restore(flags);
+	return 0;
+}
+
+EXPORT_SYMBOL(gpio_direction_output);
 
 /*
  * Default power-off for SA1100

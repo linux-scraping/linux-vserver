@@ -20,7 +20,6 @@
 #include <linux/module.h>
 #include <linux/types.h>
 #include <linux/kernel.h>
-#include <linux/sched.h>
 #include <linux/string.h>
 #include <linux/mm.h>
 #include <linux/socket.h>
@@ -217,7 +216,7 @@ replay:
 		/* Create new proto tcf */
 
 		err = -ENOBUFS;
-		if ((tp = kmalloc(sizeof(*tp), GFP_KERNEL)) == NULL)
+		if ((tp = kzalloc(sizeof(*tp), GFP_KERNEL)) == NULL)
 			goto errout;
 		err = -EINVAL;
 		tp_ops = tcf_proto_lookup_ops(tca[TCA_KIND-1]);
@@ -247,7 +246,6 @@ replay:
 			kfree(tp);
 			goto errout;
 		}
-		memset(tp, 0, sizeof(*tp));
 		tp->ops = tp_ops;
 		tp->protocol = protocol;
 		tp->prio = nprio ? : tcf_auto_prio(*back);
@@ -287,7 +285,7 @@ replay:
 			goto errout;
 	} else {
 		switch (n->nlmsg_type) {
-		case RTM_NEWTFILTER:	
+		case RTM_NEWTFILTER:
 			err = -EEXIST;
 			if (n->nlmsg_flags&NLM_F_EXCL)
 				goto errout;
@@ -482,11 +480,11 @@ tcf_exts_destroy(struct tcf_proto *tp, struct tcf_exts *exts)
 
 int
 tcf_exts_validate(struct tcf_proto *tp, struct rtattr **tb,
-	          struct rtattr *rate_tlv, struct tcf_exts *exts,
-	          struct tcf_ext_map *map)
+		  struct rtattr *rate_tlv, struct tcf_exts *exts,
+		  struct tcf_ext_map *map)
 {
 	memset(exts, 0, sizeof(*exts));
-	
+
 #ifdef CONFIG_NET_CLS_ACT
 	{
 		int err;
@@ -512,7 +510,7 @@ tcf_exts_validate(struct tcf_proto *tp, struct rtattr **tb,
 #elif defined CONFIG_NET_CLS_POLICE
 	if (map->police && tb[map->police-1]) {
 		struct tcf_police *p;
-		
+
 		p = tcf_police_locate(tb[map->police-1], rate_tlv);
 		if (p == NULL)
 			return -EINVAL;
@@ -531,7 +529,7 @@ tcf_exts_validate(struct tcf_proto *tp, struct rtattr **tb,
 
 void
 tcf_exts_change(struct tcf_proto *tp, struct tcf_exts *dst,
-	        struct tcf_exts *src)
+		struct tcf_exts *src)
 {
 #ifdef CONFIG_NET_CLS_ACT
 	if (src->action) {
@@ -598,7 +596,7 @@ rtattr_failure: __attribute__ ((unused))
 
 int
 tcf_exts_dump_stats(struct sk_buff *skb, struct tcf_exts *exts,
-	            struct tcf_ext_map *map)
+		    struct tcf_ext_map *map)
 {
 #ifdef CONFIG_NET_CLS_ACT
 	if (exts->action)
