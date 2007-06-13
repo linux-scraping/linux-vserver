@@ -111,8 +111,7 @@ static inline pid_t pid_nr(struct pid *pid)
 		struct hlist_node *pos___;				\
 		if (pid != NULL)					\
 			hlist_for_each_entry_rcu((task), pos___,	\
-				&pid->tasks[type], pids[type].node)	\
-			if (vx_check((task)->xid, VS_ADMIN_P|VS_IDENT)) {
+				&pid->tasks[type], pids[type].node) {
 
 #define while_each_pid_task(pid, type, task)				\
 			}						\
