@@ -9,12 +9,12 @@
 	"Limit\t current\t     min/max\t\t    soft/hard\t\thits\n"
 
 #define VX_LIMIT_ARG(r)				\
-	,(unsigned long)__rlim_get(limit, r)	\
-	,(unsigned long)__rlim_rmin(limit, r)	\
-	,(unsigned long)__rlim_rmax(limit, r)	\
-	,VX_VLIM(__rlim_soft(limit, r))		\
-	,VX_VLIM(__rlim_hard(limit, r))		\
-	,atomic_read(&__rlim_lhit(limit, r))
+	(unsigned long)__rlim_get(limit, r),	\
+	(unsigned long)__rlim_rmin(limit, r),	\
+	(unsigned long)__rlim_rmax(limit, r),	\
+	VX_VLIM(__rlim_soft(limit, r)),		\
+	VX_VLIM(__rlim_hard(limit, r)),		\
+	atomic_read(&__rlim_lhit(limit, r))
 
 static inline int vx_info_proc_limit(struct _vx_limit *limit, char *buffer)
 {
@@ -34,23 +34,22 @@ static inline int vx_info_proc_limit(struct _vx_limit *limit, char *buffer)
 		"SHM"	VX_LIMIT_FMT
 		"SEMA"	VX_LIMIT_FMT
 		"SEMS"	VX_LIMIT_FMT
-		"DENT"	VX_LIMIT_FMT
-		VX_LIMIT_ARG(RLIMIT_NPROC)
-		VX_LIMIT_ARG(RLIMIT_AS)
-		VX_LIMIT_ARG(RLIMIT_MEMLOCK)
-		VX_LIMIT_ARG(RLIMIT_RSS)
-		VX_LIMIT_ARG(VLIMIT_ANON)
-		VX_LIMIT_ARG(VLIMIT_MAPPED)
-		VX_LIMIT_ARG(RLIMIT_NOFILE)
-		VX_LIMIT_ARG(VLIMIT_OPENFD)
-		VX_LIMIT_ARG(RLIMIT_LOCKS)
-		VX_LIMIT_ARG(VLIMIT_NSOCK)
-		VX_LIMIT_ARG(RLIMIT_MSGQUEUE)
-		VX_LIMIT_ARG(VLIMIT_SHMEM)
-		VX_LIMIT_ARG(VLIMIT_SEMARY)
-		VX_LIMIT_ARG(VLIMIT_NSEMS)
-		VX_LIMIT_ARG(VLIMIT_DENTRY)
-		);
+		"DENT"	VX_LIMIT_FMT,
+		VX_LIMIT_ARG(RLIMIT_NPROC),
+		VX_LIMIT_ARG(RLIMIT_AS),
+		VX_LIMIT_ARG(RLIMIT_MEMLOCK),
+		VX_LIMIT_ARG(RLIMIT_RSS),
+		VX_LIMIT_ARG(VLIMIT_ANON),
+		VX_LIMIT_ARG(VLIMIT_MAPPED),
+		VX_LIMIT_ARG(RLIMIT_NOFILE),
+		VX_LIMIT_ARG(VLIMIT_OPENFD),
+		VX_LIMIT_ARG(RLIMIT_LOCKS),
+		VX_LIMIT_ARG(VLIMIT_NSOCK),
+		VX_LIMIT_ARG(RLIMIT_MSGQUEUE),
+		VX_LIMIT_ARG(VLIMIT_SHMEM),
+		VX_LIMIT_ARG(VLIMIT_SEMARY),
+		VX_LIMIT_ARG(VLIMIT_NSEMS),
+		VX_LIMIT_ARG(VLIMIT_DENTRY));
 }
 
 #endif	/* _VX_LIMIT_PROC_H */

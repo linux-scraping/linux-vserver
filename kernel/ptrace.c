@@ -475,7 +475,7 @@ asmlinkage long sys_ptrace(long request, long pid, long addr, long data)
 	}
 
 	ret = -EPERM;
-	if (!vx_check(vx_task_xid(child), VS_WATCH_P|VS_IDENT))
+	if (!vx_check(vx_task_xid(child), VS_WATCH_P | VS_IDENT))
 		goto out_put_task_struct;
 
 	if (request == PTRACE_ATTACH) {

@@ -164,7 +164,7 @@ int vx_do_syslog(int type, char __user *buf, int len)
 
 /* virtual host info names */
 
-static char * vx_vhi_name(struct vx_info *vxi, int id)
+static char *vx_vhi_name(struct vx_info *vxi, int id)
 {
 	struct nsproxy *nsproxy;
 	struct uts_namespace *uts;
@@ -205,7 +205,7 @@ int vc_set_vhi_name(struct vx_info *vxi, void __user *data)
 	struct vcmd_vhi_name_v0 vc_data;
 	char *name;
 
-	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
+	if (copy_from_user(&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
 	name = vx_vhi_name(vxi, vc_data.field);
@@ -221,7 +221,7 @@ int vc_get_vhi_name(struct vx_info *vxi, void __user *data)
 	struct vcmd_vhi_name_v0 vc_data;
 	char *name;
 
-	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
+	if (copy_from_user(&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
 	name = vx_vhi_name(vxi, vc_data.field);
@@ -229,7 +229,7 @@ int vc_get_vhi_name(struct vx_info *vxi, void __user *data)
 		return -EINVAL;
 
 	memcpy(vc_data.name, name, 65);
-	if (copy_to_user (data, &vc_data, sizeof(vc_data)))
+	if (copy_to_user(data, &vc_data, sizeof(vc_data)))
 		return -EFAULT;
 	return 0;
 }
@@ -257,7 +257,7 @@ int vc_virt_stat(struct vx_info *vxi, void __user *data)
 	vc_data.load[1] = cvirt->load[1];
 	vc_data.load[2] = cvirt->load[2];
 
-	if (copy_to_user (data, &vc_data, sizeof(vc_data)))
+	if (copy_to_user(data, &vc_data, sizeof(vc_data)))
 		return -EFAULT;
 	return 0;
 }

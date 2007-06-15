@@ -234,7 +234,7 @@ int vx_schedule(struct task_struct *next, struct rq *rq, int cpu)
 
 	if (unlikely(vs_check_flags(flags , VXF_SCHED_PAUSE, 0)))
 		goto put_on_hold;
-	if (!vs_check_flags(flags , VXF_SCHED_HARD|VXF_SCHED_PRIO, 0))
+	if (!vs_check_flags(flags , VXF_SCHED_HARD | VXF_SCHED_PRIO, 0))
 		return 1;
 
 	sched_pc = &vx_per_cpu(vxi, sched_pc, cpu);

@@ -48,12 +48,11 @@ static int proc_vci(char *buffer)
 	return sprintf(buffer,
 		"VCIVersion:\t%04x:%04x\n"
 		"VCISyscall:\t%d\n"
-		"VCIKernel:\t%08x\n"
-		,VCI_VERSION >> 16
-		,VCI_VERSION & 0xFFFF
-		,__NR_vserver
-		,vci_kernel_config()
-		);
+		"VCIKernel:\t%08x\n",
+		VCI_VERSION >> 16,
+		VCI_VERSION & 0xFFFF,
+		__NR_vserver,
+		vci_kernel_config());
 }
 
 static int proc_virtual_info(char *buffer)
@@ -66,34 +65,32 @@ static int proc_virtual_status(char *buffer)
 	return sprintf(buffer,
 		"#CTotal:\t%d\n"
 		"#CActive:\t%d\n"
-		"#NSProxy:\t%d\t%d %d %d %d\n"
-		,atomic_read(&vx_global_ctotal)
-		,atomic_read(&vx_global_cactive)
-		,atomic_read(&vs_global_nsproxy)
-		,atomic_read(&vs_global_fs)
-		,atomic_read(&vs_global_mnt_ns)
-		,atomic_read(&vs_global_uts_ns)
-		,atomic_read(&vs_global_ipc_ns)
-		);
+		"#NSProxy:\t%d\t%d %d %d %d\n",
+		atomic_read(&vx_global_ctotal),
+		atomic_read(&vx_global_cactive),
+		atomic_read(&vs_global_nsproxy),
+		atomic_read(&vs_global_fs),
+		atomic_read(&vs_global_mnt_ns),
+		atomic_read(&vs_global_uts_ns),
+		atomic_read(&vs_global_ipc_ns));
 }
 
 
-int proc_vxi_info (struct vx_info *vxi, char *buffer)
+int proc_vxi_info(struct vx_info *vxi, char *buffer)
 {
 	int length;
 
 	length = sprintf(buffer,
 		"ID:\t%d\n"
 		"Info:\t%p\n"
-		"Init:\t%d\n"
-		,vxi->vx_id
-		,vxi
-		,vxi->vx_initpid
-		);
+		"Init:\t%d\n",
+		vxi->vx_id,
+		vxi,
+		vxi->vx_initpid);
 	return length;
 }
 
-int proc_vxi_status (struct vx_info *vxi, char *buffer)
+int proc_vxi_status(struct vx_info *vxi, char *buffer)
 {
 	int length;
 
@@ -103,23 +100,22 @@ int proc_vxi_status (struct vx_info *vxi, char *buffer)
 		"Flags:\t%016llx\n"
 		"BCaps:\t%016llx\n"
 		"CCaps:\t%016llx\n"
-		"Spaces:\t%08lx\n"
-		,atomic_read(&vxi->vx_usecnt)
-		,atomic_read(&vxi->vx_tasks)
-		,(unsigned long long)vxi->vx_flags
-		,(unsigned long long)vxi->vx_bcaps
-		,(unsigned long long)vxi->vx_ccaps
-		,vxi->vx_nsmask
-		);
+		"Spaces:\t%08lx\n",
+		atomic_read(&vxi->vx_usecnt),
+		atomic_read(&vxi->vx_tasks),
+		(unsigned long long)vxi->vx_flags,
+		(unsigned long long)vxi->vx_bcaps,
+		(unsigned long long)vxi->vx_ccaps,
+		vxi->vx_nsmask);
 	return length;
 }
 
-int proc_vxi_limit (struct vx_info *vxi, char *buffer)
+int proc_vxi_limit(struct vx_info *vxi, char *buffer)
 {
 	return vx_info_proc_limit(&vxi->limit, buffer);
 }
 
-int proc_vxi_sched (struct vx_info *vxi, char *buffer)
+int proc_vxi_sched(struct vx_info *vxi, char *buffer)
 {
 	int cpu, length;
 
@@ -132,12 +128,12 @@ int proc_vxi_sched (struct vx_info *vxi, char *buffer)
 	return length;
 }
 
-int proc_vxi_nsproxy (struct vx_info *vxi, char *buffer)
+int proc_vxi_nsproxy(struct vx_info *vxi, char *buffer)
 {
 	return vx_info_proc_nsproxy(vxi->vx_nsproxy, buffer);
 }
 
-int proc_vxi_cvirt (struct vx_info *vxi, char *buffer)
+int proc_vxi_cvirt(struct vx_info *vxi, char *buffer)
 {
 	int cpu, length;
 
@@ -151,7 +147,7 @@ int proc_vxi_cvirt (struct vx_info *vxi, char *buffer)
 	return length;
 }
 
-int proc_vxi_cacct (struct vx_info *vxi, char *buffer)
+int proc_vxi_cacct(struct vx_info *vxi, char *buffer)
 {
 	return vx_info_proc_cacct(&vxi->cacct, buffer);
 }
@@ -166,23 +162,21 @@ static int proc_virtnet_status(char *buffer)
 {
 	return sprintf(buffer,
 		"#CTotal:\t%d\n"
-		"#CActive:\t%d\n"
-		,atomic_read(&nx_global_ctotal)
-		,atomic_read(&nx_global_cactive)
-		);
+		"#CActive:\t%d\n",
+		atomic_read(&nx_global_ctotal),
+		atomic_read(&nx_global_cactive));
 }
 
-int proc_nxi_info (struct nx_info *nxi, char *buffer)
+int proc_nxi_info(struct nx_info *nxi, char *buffer)
 {
 	int length, i;
 
 	length = sprintf(buffer,
 		"ID:\t%d\n"
-		"Info:\t%p\n"
-		,nxi->nx_id
-		,nxi
-		);
-	for (i=0; i<nxi->nbipv4; i++) {
+		"Info:\t%p\n",
+		nxi->nx_id,
+		nxi);
+	for (i = 0; i < nxi->nbipv4; i++) {
 		length += sprintf(buffer + length,
 			"%d:\t" NIPQUAD_FMT "/" NIPQUAD_FMT "\n", i,
 			NIPQUAD(nxi->ipv4[i]), NIPQUAD(nxi->mask[i]));
@@ -190,7 +184,7 @@ int proc_nxi_info (struct nx_info *nxi, char *buffer)
 	return length;
 }
 
-int proc_nxi_status (struct nx_info *nxi, char *buffer)
+int proc_nxi_status(struct nx_info *nxi, char *buffer)
 {
 	int length;
 
@@ -198,12 +192,11 @@ int proc_nxi_status (struct nx_info *nxi, char *buffer)
 		"UseCnt:\t%d\n"
 		"Tasks:\t%d\n"
 		"Flags:\t%016llx\n"
-		"NCaps:\t%016llx\n"
-		,atomic_read(&nxi->nx_usecnt)
-		,atomic_read(&nxi->nx_tasks)
-		,(unsigned long long)nxi->nx_flags
-		,(unsigned long long)nxi->nx_ncaps
-		);
+		"NCaps:\t%016llx\n",
+		atomic_read(&nxi->nx_usecnt),
+		atomic_read(&nxi->nx_tasks),
+		(unsigned long long)nxi->nx_flags,
+		(unsigned long long)nxi->nx_ncaps);
 	return length;
 }
 
@@ -330,7 +323,7 @@ struct vx_info *get_proc_vx_info(struct inode *inode)
 	return lookup_vx_info(PROC_I(inode)->fd);
 }
 
-static int proc_xid_revalidate(struct dentry * dentry, struct nameidata *nd)
+static int proc_xid_revalidate(struct dentry *dentry, struct nameidata *nd)
 {
 	struct inode *inode = dentry->d_inode;
 	xid_t xid = PROC_I(inode)->fd;
@@ -344,7 +337,7 @@ static int proc_xid_revalidate(struct dentry * dentry, struct nameidata *nd)
 
 /* get and revalidate nx_info/nid */
 
-static int proc_nid_revalidate(struct dentry * dentry, struct nameidata *nd)
+static int proc_nid_revalidate(struct dentry *dentry, struct nameidata *nd)
 {
 	struct inode *inode = dentry->d_inode;
 	nid_t nid = PROC_I(inode)->fd;
@@ -359,7 +352,7 @@ static int proc_nid_revalidate(struct dentry * dentry, struct nameidata *nd)
 
 #define PROC_BLOCK_SIZE (PAGE_SIZE - 1024)
 
-static ssize_t proc_vs_info_read(struct file * file, char __user * buf,
+static ssize_t proc_vs_info_read(struct file *file, char __user *buf,
 			  size_t count, loff_t *ppos)
 {
 	struct inode *inode = file->f_dentry->d_inode;
@@ -376,7 +369,7 @@ static ssize_t proc_vs_info_read(struct file * file, char __user * buf,
 		return -ENOMEM;
 
 	BUG_ON(!PROC_I(inode)->op.proc_vs_read);
-	length = PROC_I(inode)->op.proc_vs_read((char*)page);
+	length = PROC_I(inode)->op.proc_vs_read((char *)page);
 
 	if (length >= 0)
 		length = simple_read_from_buffer(buf, count, ppos,
@@ -386,7 +379,7 @@ static ssize_t proc_vs_info_read(struct file * file, char __user * buf,
 	return length;
 }
 
-static ssize_t proc_vx_info_read(struct file * file, char __user * buf,
+static ssize_t proc_vx_info_read(struct file *file, char __user *buf,
 			  size_t count, loff_t *ppos)
 {
 	struct inode *inode = file->f_dentry->d_inode;
@@ -409,7 +402,7 @@ static ssize_t proc_vx_info_read(struct file * file, char __user * buf,
 		goto out_put;
 
 	BUG_ON(!PROC_I(inode)->op.proc_vxi_read);
-	length = PROC_I(inode)->op.proc_vxi_read(vxi, (char*)page);
+	length = PROC_I(inode)->op.proc_vxi_read(vxi, (char *)page);
 
 	if (length >= 0)
 		length = simple_read_from_buffer(buf, count, ppos,
@@ -422,7 +415,7 @@ out:
 	return length;
 }
 
-static ssize_t proc_nx_info_read(struct file * file, char __user * buf,
+static ssize_t proc_nx_info_read(struct file *file, char __user *buf,
 			  size_t count, loff_t *ppos)
 {
 	struct inode *inode = file->f_dentry->d_inode;
@@ -445,7 +438,7 @@ static ssize_t proc_nx_info_read(struct file * file, char __user * buf,
 		goto out_put;
 
 	BUG_ON(!PROC_I(inode)->op.proc_nxi_read);
-	length = PROC_I(inode)->op.proc_nxi_read(nxi, (char*)page);
+	length = PROC_I(inode)->op.proc_nxi_read(nxi, (char *)page);
 
 	if (length >= 0)
 		length = simple_read_from_buffer(buf, count, ppos,
@@ -474,22 +467,22 @@ out:
 
 
 #define DIR(NAME, MODE, OTYPE)				\
-	NOD(NAME, (S_IFDIR|(MODE)),			\
-		&proc_##OTYPE##_inode_operations,	\
-		&proc_##OTYPE##_file_operations, { } )
+	NOD(NAME, (S_IFDIR | (MODE)),			\
+		&proc_ ## OTYPE ## _inode_operations,	\
+		&proc_ ## OTYPE ## _file_operations, { } )
 
 #define INF(NAME, MODE, OTYPE)				\
-	NOD(NAME, (S_IFREG|(MODE)), NULL,		\
+	NOD(NAME, (S_IFREG | (MODE)), NULL,		\
 		&proc_vs_info_file_operations,		\
 		{ .proc_vs_read = &proc_##OTYPE } )
 
 #define VINF(NAME, MODE, OTYPE)				\
-	NOD(NAME, (S_IFREG|(MODE)), NULL,		\
+	NOD(NAME, (S_IFREG | (MODE)), NULL,		\
 		&proc_vx_info_file_operations,		\
 		{ .proc_vxi_read = &proc_##OTYPE } )
 
 #define NINF(NAME, MODE, OTYPE)				\
-	NOD(NAME, (S_IFREG|(MODE)), NULL,		\
+	NOD(NAME, (S_IFREG | (MODE)), NULL,		\
 		&proc_nx_info_file_operations,		\
 		{ .proc_nxi_read = &proc_##OTYPE } )
 
@@ -547,13 +540,13 @@ out:
 	return error;
 }
 
-static int proc_xid_readdir(struct file * filp,
-	void * dirent, filldir_t filldir)
+static int proc_xid_readdir(struct file *filp,
+	void *dirent, filldir_t filldir)
 {
 	struct dentry *dentry = filp->f_dentry;
 	struct inode *inode = dentry->d_inode;
 	struct vs_entry *p = vx_base_stuff;
-	int size = sizeof(vx_base_stuff)/sizeof(struct vs_entry);
+	int size = sizeof(vx_base_stuff) / sizeof(struct vs_entry);
 	int pos, index;
 	u64 ino;
 
@@ -631,13 +624,13 @@ out:
 	return error;
 }
 
-static int proc_nid_readdir(struct file * filp,
-	void * dirent, filldir_t filldir)
+static int proc_nid_readdir(struct file *filp,
+	void *dirent, filldir_t filldir)
 {
 	struct dentry *dentry = filp->f_dentry;
 	struct inode *inode = dentry->d_inode;
 	struct vs_entry *p = nx_base_stuff;
-	int size = sizeof(nx_base_stuff)/sizeof(struct vs_entry);
+	int size = sizeof(nx_base_stuff) / sizeof(struct vs_entry);
 	int pos, index;
 	u64 ino;
 
@@ -672,7 +665,7 @@ out:
 }
 
 
-#define MAX_MULBY10	((~0U-9)/10)
+#define MAX_MULBY10	((~0U - 9) / 10)
 
 static inline int atovid(const char *str, int len)
 {
@@ -709,7 +702,7 @@ static struct inode_operations proc_xid_inode_operations = {
 static struct vs_entry vx_virtual_stuff[] = {
 	INF("info",	S_IRUGO, virtual_info),
 	INF("status",	S_IRUGO, virtual_status),
-	DIR(NULL,	S_IRUGO|S_IXUGO, xid),
+	DIR(NULL,	S_IRUGO | S_IXUGO, xid),
 };
 
 
@@ -751,7 +744,7 @@ static struct inode_operations proc_nid_inode_operations = {
 static struct vs_entry nx_virtnet_stuff[] = {
 	INF("info",	S_IRUGO, virtnet_info),
 	INF("status",	S_IRUGO, virtnet_status),
-	DIR(NULL,	S_IRUGO|S_IXUGO, nid),
+	DIR(NULL,	S_IRUGO | S_IXUGO, nid),
 };
 
 
@@ -786,13 +779,13 @@ out:
 #define PROC_NUMBUF 10
 #define PROC_MAXVIDS 32
 
-int proc_virtual_readdir(struct file * filp,
-	void * dirent, filldir_t filldir)
+int proc_virtual_readdir(struct file *filp,
+	void *dirent, filldir_t filldir)
 {
 	struct dentry *dentry = filp->f_dentry;
 	struct inode *inode = dentry->d_inode;
 	struct vs_entry *p = vx_virtual_stuff;
-	int size = sizeof(vx_virtual_stuff)/sizeof(struct vs_entry);
+	int size = sizeof(vx_virtual_stuff) / sizeof(struct vs_entry);
 	int pos, index;
 	unsigned int xid_array[PROC_MAXVIDS];
 	char buf[PROC_NUMBUF];
@@ -825,16 +818,19 @@ int proc_virtual_readdir(struct file * filp,
 		}
 	entries:
 		index = pos - size;
-		p = &vx_virtual_stuff[size-1];
+		p = &vx_virtual_stuff[size - 1];
 		nr_xids = get_xid_list(index, xid_array, PROC_MAXVIDS);
 		for (i = 0; i < nr_xids; i++) {
 			int n, xid = xid_array[i];
 			unsigned int j = PROC_NUMBUF;
 
 			n = xid;
-			do buf[--j] = '0' + (n % 10); while (n /= 10);
+			do
+				buf[--j] = '0' + (n % 10);
+			while (n /= 10);
 
-			if (proc_fill_cache(filp, dirent, filldir, buf+j, PROC_NUMBUF-j,
+			if (proc_fill_cache(filp, dirent, filldir,
+				buf + j, PROC_NUMBUF - j,
 				vs_proc_instantiate, xid, p))
 				goto out;
 			pos++;
@@ -869,13 +865,13 @@ static struct inode_operations proc_virtual_dir_inode_operations = {
 
 
 
-int proc_virtnet_readdir(struct file * filp,
-	void * dirent, filldir_t filldir)
+int proc_virtnet_readdir(struct file *filp,
+	void *dirent, filldir_t filldir)
 {
 	struct dentry *dentry = filp->f_dentry;
 	struct inode *inode = dentry->d_inode;
 	struct vs_entry *p = nx_virtnet_stuff;
-	int size = sizeof(nx_virtnet_stuff)/sizeof(struct vs_entry);
+	int size = sizeof(nx_virtnet_stuff) / sizeof(struct vs_entry);
 	int pos, index;
 	unsigned int nid_array[PROC_MAXVIDS];
 	char buf[PROC_NUMBUF];
@@ -908,16 +904,19 @@ int proc_virtnet_readdir(struct file * filp,
 		}
 	entries:
 		index = pos - size;
-		p = &nx_virtnet_stuff[size-1];
+		p = &nx_virtnet_stuff[size - 1];
 		nr_nids = get_nid_list(index, nid_array, PROC_MAXVIDS);
 		for (i = 0; i < nr_nids; i++) {
 			int n, nid = nid_array[i];
 			unsigned int j = PROC_NUMBUF;
 
 			n = nid;
-			do buf[--j] = '0' + (n % 10); while (n /= 10);
+			do
+				buf[--j] = '0' + (n % 10);
+			while (n /= 10);
 
-			if (proc_fill_cache(filp, dirent, filldir, buf+j, PROC_NUMBUF-j,
+			if (proc_fill_cache(filp, dirent, filldir,
+				buf + j, PROC_NUMBUF - j,
 				vs_proc_instantiate, nid, p))
 				goto out;
 			pos++;
@@ -978,22 +977,21 @@ void proc_vx_init(void)
 int proc_pid_vx_info(struct task_struct *p, char *buffer)
 {
 	struct vx_info *vxi;
-	char * orig = buffer;
+	char *orig = buffer;
 
-	buffer += sprintf (buffer,"XID:\t%d\n", vx_task_xid(p));
+	buffer += sprintf(buffer, "XID:\t%d\n", vx_task_xid(p));
 
 	vxi = task_get_vx_info(p);
 	if (!vxi)
 		goto out;
 
-	buffer += sprintf (buffer,"BCaps:\t%016llx\n"
-		,(unsigned long long)vxi->vx_bcaps);
-	buffer += sprintf (buffer,"CCaps:\t%016llx\n"
-		,(unsigned long long)vxi->vx_ccaps);
-	buffer += sprintf (buffer,"CFlags:\t%016llx\n"
-		,(unsigned long long)vxi->vx_flags);
-	buffer += sprintf (buffer,"CIPid:\t%d\n"
-		,vxi->vx_initpid);
+	buffer += sprintf(buffer, "BCaps:\t%016llx\n",
+		(unsigned long long)vxi->vx_bcaps);
+	buffer += sprintf(buffer, "CCaps:\t%016llx\n",
+		(unsigned long long)vxi->vx_ccaps);
+	buffer += sprintf(buffer, "CFlags:\t%016llx\n",
+		(unsigned long long)vxi->vx_flags);
+	buffer += sprintf(buffer, "CIPid:\t%d\n", vxi->vx_initpid);
 
 	put_vx_info(vxi);
 out:
@@ -1004,29 +1002,29 @@ out:
 int proc_pid_nx_info(struct task_struct *p, char *buffer)
 {
 	struct nx_info *nxi;
-	char * orig = buffer;
+	char *orig = buffer;
 	int i;
 
-	buffer += sprintf (buffer,"NID:\t%d\n", nx_task_nid(p));
+	buffer += sprintf(buffer, "NID:\t%d\n", nx_task_nid(p));
 
 	nxi = task_get_nx_info(p);
 	if (!nxi)
 		goto out;
 
-	buffer += sprintf (buffer,"NCaps:\t%016llx\n"
-		,(unsigned long long)nxi->nx_ncaps);
-	buffer += sprintf (buffer,"NFlags:\t%016llx\n"
-		,(unsigned long long)nxi->nx_flags);
+	buffer += sprintf(buffer, "NCaps:\t%016llx\n",
+		(unsigned long long)nxi->nx_ncaps);
+	buffer += sprintf(buffer, "NFlags:\t%016llx\n",
+		(unsigned long long)nxi->nx_flags);
 
-	for (i=0; i<nxi->nbipv4; i++){
-		buffer += sprintf (buffer,
-			"V4Root[%d]:\t%d.%d.%d.%d/%d.%d.%d.%d\n", i
-			,NIPQUAD(nxi->ipv4[i])
-			,NIPQUAD(nxi->mask[i]));
+	for (i = 0; i < nxi->nbipv4; i++){
+		buffer += sprintf(buffer,
+			"V4Root[%d]:\t" NIPQUAD_FMT "/" NIPQUAD_FMT "\n", i,
+			NIPQUAD(nxi->ipv4[i]),
+			NIPQUAD(nxi->mask[i]));
 	}
-	buffer += sprintf (buffer,
-		"V4Root[bcast]:\t%d.%d.%d.%d\n"
-		,NIPQUAD(nxi->v4_bcast));
+	buffer += sprintf(buffer,
+		"V4Root[bcast]:\t" NIPQUAD_FMT "\n",
+		NIPQUAD(nxi->v4_bcast));
 
 	put_nx_info(nxi);
 out:

@@ -22,14 +22,14 @@ struct _vx_cacct {
 
 static inline void __dump_vx_cacct(struct _vx_cacct *cacct)
 {
-	int i,j;
+	int i, j;
 
 	printk("\t_vx_cacct:");
-	for (i=0; i<6; i++) {
+	for (i = 0; i < 6; i++) {
 		struct _vx_sock_acc *ptr = cacct->sock[i];
 
 		printk("\t [%d] =", i);
-		for (j=0; j<3; j++) {
+		for (j = 0; j < 3; j++) {
 			printk(" [%d] = %8lu, %8lu", j,
 				atomic_long_read(&ptr[j].count),
 				atomic_long_read(&ptr[j].total));

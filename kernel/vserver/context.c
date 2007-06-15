@@ -79,7 +79,7 @@ static struct vx_info *__alloc_vx_info(xid_t xid)
 	if (!new)
 		return 0;
 
-	memset (new, 0, sizeof(struct vx_info));
+	memset(new, 0, sizeof(struct vx_info));
 #ifdef CONFIG_SMP
 	new->ptr_pc = alloc_percpu(struct _vx_info_pc);
 	if (!new->ptr_pc)
@@ -301,7 +301,7 @@ static inline struct vx_info *__lookup_vx_info(xid_t xid)
 found:
 	vxdprintk(VXD_CBIT(xid, 0),
 		"__lookup_vx_info(#%u): %p[#%u]",
-		xid, vxi, vxi?vxi->vx_id:0);
+		xid, vxi, vxi ? vxi->vx_id : 0);
 	vxh_lookup_vx_info(vxi, xid);
 	return vxi;
 }
@@ -337,7 +337,7 @@ static inline xid_t __vx_dynamic_id(void)
 	* locate or create the requested context
 	* get() it and if new hash it				*/
 
-static struct vx_info * __loc_vx_info(int id, int *err)
+static struct vx_info *__loc_vx_info(int id, int *err)
 {
 	struct vx_info *new, *vxi = NULL;
 
@@ -404,7 +404,7 @@ out_unlock:
 	* create the requested context
 	* get(), claim() and hash it				*/
 
-static struct vx_info * __create_vx_info(int id)
+static struct vx_info *__create_vx_info(int id)
 {
 	struct vx_info *new, *vxi = NULL;
 
@@ -461,7 +461,7 @@ static struct vx_info * __create_vx_info(int id)
 
 out_unlock:
 	spin_unlock(&vx_info_hash_lock);
-	vxh_create_vx_info(IS_ERR(vxi)?NULL:vxi, id);
+	vxh_create_vx_info(IS_ERR(vxi) ? NULL : vxi, id);
 	if (new)
 		__dealloc_vx_info(new);
 	return vxi;
@@ -537,7 +537,7 @@ int get_xid_list(int index, unsigned int *xids, int size)
 	int hindex, nr_xids = 0;
 
 	/* only show current and children */
-	if (!vx_check(0, VS_ADMIN|VS_WATCH)) {
+	if (!vx_check(0, VS_ADMIN | VS_WATCH)) {
 		if (index > 0)
 			return 0;
 		xids[nr_xids] = vx_current_xid();
@@ -715,8 +715,8 @@ int vx_migrate_task(struct task_struct *p, struct vx_info *vxi, int unshare)
 
 		/* hack for *spaces to provide compatibility */
 		if (unshare) {
-			ret = sys_unshare(CLONE_NEWUTS|CLONE_NEWIPC);
-			vx_set_space(vxi, CLONE_NEWUTS|CLONE_NEWIPC);
+			ret = sys_unshare(CLONE_NEWUTS | CLONE_NEWIPC);
+			vx_set_space(vxi, CLONE_NEWUTS | CLONE_NEWIPC);
 		}
 	}
 out:
@@ -840,15 +840,14 @@ int vc_task_xid(uint32_t id, void __user *data)
 	if (id) {
 		struct task_struct *tsk;
 
-		if (!vx_check(0, VS_ADMIN|VS_WATCH))
+		if (!vx_check(0, VS_ADMIN | VS_WATCH))
 			return -EPERM;
 
 		read_lock(&tasklist_lock);
 		tsk = find_task_by_real_pid(id);
 		xid = (tsk) ? tsk->xid : -ESRCH;
 		read_unlock(&tasklist_lock);
-	}
-	else
+	} else
 		xid = vx_current_xid();
 	return xid;
 }
@@ -861,7 +860,7 @@ int vc_vx_info(struct vx_info *vxi, void __user *data)
 	vc_data.xid = vxi->vx_id;
 	vc_data.initpid = vxi->vx_initpid;
 
-	if (copy_to_user (data, &vc_data, sizeof(vc_data)))
+	if (copy_to_user(data, &vc_data, sizeof(vc_data)))
 		return -EFAULT;
 	return 0;
 }
@@ -874,7 +873,7 @@ int vc_ctx_stat(struct vx_info *vxi, void __user *data)
 	vc_data.usecnt = atomic_read(&vxi->vx_usecnt);
 	vc_data.tasks = atomic_read(&vxi->vx_tasks);
 
-	if (copy_to_user (data, &vc_data, sizeof(vc_data)))
+	if (copy_to_user(data, &vc_data, sizeof(vc_data)))
 		return -EFAULT;
 	return 0;
 }
@@ -888,7 +887,7 @@ int vc_ctx_create(uint32_t xid, void __user *data)
 	struct vx_info *new_vxi;
 	int ret;
 
-	if (data && copy_from_user (&vc_data, data, sizeof(vc_data)))
+	if (data && copy_from_user(&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
 	if ((xid > MAX_S_CONTEXT) && (xid != VX_DYNAMIC_ID))
@@ -929,7 +928,7 @@ int vc_ctx_migrate(struct vx_info *vxi, void __user *data)
 	struct vcmd_ctx_migrate vc_data = { .flagword = 0 };
 	int ret;
 
-	if (data && copy_from_user (&vc_data, data, sizeof(vc_data)))
+	if (data && copy_from_user(&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
 	ret = vx_migrate_task(current, vxi, 0);
@@ -954,7 +953,7 @@ int vc_get_cflags(struct vx_info *vxi, void __user *data)
 	/* special STATE flag handling */
 	vc_data.mask = vs_mask_flags(~0UL, vxi->vx_flags, VXF_ONE_TIME);
 
-	if (copy_to_user (data, &vc_data, sizeof(vc_data)))
+	if (copy_to_user(data, &vc_data, sizeof(vc_data)))
 		return -EFAULT;
 	return 0;
 }
@@ -964,7 +963,7 @@ int vc_set_cflags(struct vx_info *vxi, void __user *data)
 	struct vcmd_ctx_flags_v0 vc_data;
 	uint64_t mask, trigger;
 
-	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
+	if (copy_from_user(&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
 	/* special STATE flag handling */
@@ -1014,7 +1013,7 @@ int vc_get_ccaps_v0(struct vx_info *vxi, void __user *data)
 		return ret;
 	vc_data.cmask = ~0UL;
 
-	if (copy_to_user (data, &vc_data, sizeof(vc_data)))
+	if (copy_to_user(data, &vc_data, sizeof(vc_data)))
 		return -EFAULT;
 	return 0;
 }
@@ -1029,7 +1028,7 @@ int vc_get_ccaps(struct vx_info *vxi, void __user *data)
 		return ret;
 	vc_data.cmask = ~0UL;
 
-	if (copy_to_user (data, &vc_data, sizeof(vc_data)))
+	if (copy_to_user(data, &vc_data, sizeof(vc_data)))
 		return -EFAULT;
 	return 0;
 }
@@ -1047,7 +1046,7 @@ int vc_set_ccaps_v0(struct vx_info *vxi, void __user *data)
 {
 	struct vcmd_ctx_caps_v0 vc_data;
 
-	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
+	if (copy_from_user(&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
 	/* simulate old &= behaviour for bcaps */
@@ -1059,7 +1058,7 @@ int vc_set_ccaps(struct vx_info *vxi, void __user *data)
 {
 	struct vcmd_ctx_caps_v1 vc_data;
 
-	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
+	if (copy_from_user(&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
 	return do_set_caps(vxi, 0, 0, vc_data.ccaps, vc_data.cmask);
@@ -1075,7 +1074,7 @@ int vc_get_bcaps(struct vx_info *vxi, void __user *data)
 		return ret;
 	vc_data.bmask = ~0UL;
 
-	if (copy_to_user (data, &vc_data, sizeof(vc_data)))
+	if (copy_to_user(data, &vc_data, sizeof(vc_data)))
 		return -EFAULT;
 	return 0;
 }
@@ -1084,7 +1083,7 @@ int vc_set_bcaps(struct vx_info *vxi, void __user *data)
 {
 	struct vcmd_bcaps vc_data;
 
-	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
+	if (copy_from_user(&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
 	return do_set_caps(vxi, vc_data.bcaps, vc_data.bmask, 0, 0);

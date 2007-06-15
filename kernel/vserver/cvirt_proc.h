@@ -34,12 +34,12 @@ int vx_info_proc_nsproxy(struct nsproxy *nsproxy, char *buffer)
 		goto skip_ns;
 
 	mnt = ns->root;
-	root = d_path(mnt->mnt_root, mnt->mnt_parent, path, PATH_MAX-2);
+	root = d_path(mnt->mnt_root, mnt->mnt_parent, path, PATH_MAX - 2);
 	length += sprintf(buffer + length,
 		"Namespace:\t%p [#%u]\n"
-		"RootPath:\t%s\n"
-		,ns , atomic_read(&ns->count)
-		,root);
+		"RootPath:\t%s\n",
+		ns, atomic_read(&ns->count),
+		root);
 	kfree(path);
 skip_ns:
 
@@ -53,14 +53,13 @@ skip_ns:
 		"Release:\t%.*s\n"
 		"Version:\t%.*s\n"
 		"Machine:\t%.*s\n"
-		"DomainName:\t%.*s\n"
-		,__NEW_UTS_LEN, uts->name.sysname
-		,__NEW_UTS_LEN, uts->name.nodename
-		,__NEW_UTS_LEN, uts->name.release
-		,__NEW_UTS_LEN, uts->name.version
-		,__NEW_UTS_LEN, uts->name.machine
-		,__NEW_UTS_LEN, uts->name.domainname
-		);
+		"DomainName:\t%.*s\n",
+		__NEW_UTS_LEN, uts->name.sysname,
+		__NEW_UTS_LEN, uts->name.nodename,
+		__NEW_UTS_LEN, uts->name.release,
+		__NEW_UTS_LEN, uts->name.version,
+		__NEW_UTS_LEN, uts->name.machine,
+		__NEW_UTS_LEN, uts->name.domainname);
 skip_uts:
 
 	ipc = nsproxy->ipc_ns;
@@ -70,17 +69,15 @@ skip_uts:
 	length += sprintf(buffer + length,
 		"SEMS:\t\t%d %d %d %d  %d\n"
 		"MSG:\t\t%d %d %d\n"
-		"SHM:\t\t%lu %lu  %d %d\n"
-		,ipc->sem_ctls[0], ipc->sem_ctls[1]
-		,ipc->sem_ctls[2], ipc->sem_ctls[3]
-		,ipc->used_sems
-		,ipc->msg_ctlmax, ipc->msg_ctlmnb, ipc->msg_ctlmni
-		,(unsigned long)ipc->shm_ctlmax
-		,(unsigned long)ipc->shm_ctlall
-		,ipc->shm_ctlmni, ipc->shm_tot
-		);
+		"SHM:\t\t%lu %lu  %d %d\n",
+		ipc->sem_ctls[0], ipc->sem_ctls[1],
+		ipc->sem_ctls[2], ipc->sem_ctls[3],
+		ipc->used_sems,
+		ipc->msg_ctlmax, ipc->msg_ctlmnb, ipc->msg_ctlmni,
+		(unsigned long)ipc->shm_ctlmax,
+		(unsigned long)ipc->shm_ctlall,
+		ipc->shm_ctlmni, ipc->shm_tot);
 skip_ipc:
-
 out:
 	return length;
 }
@@ -89,7 +86,7 @@ out:
 #include <linux/sched.h>
 
 #define LOAD_INT(x) ((x) >> FSHIFT)
-#define LOAD_FRAC(x) LOAD_INT(((x) & (FIXED_1-1)) * 100)
+#define LOAD_FRAC(x) LOAD_INT(((x) & (FIXED_1 - 1)) * 100)
 
 static inline
 int vx_info_proc_cvirt(struct _vx_cvirt *cvirt, char *buffer)
@@ -99,12 +96,12 @@ int vx_info_proc_cvirt(struct _vx_cvirt *cvirt, char *buffer)
 
 	length += sprintf(buffer + length,
 		"BiasUptime:\t%lu.%02lu\n",
-			(unsigned long)cvirt->bias_uptime.tv_sec,
-			(cvirt->bias_uptime.tv_nsec / (NSEC_PER_SEC / 100)));
+		(unsigned long)cvirt->bias_uptime.tv_sec,
+		(cvirt->bias_uptime.tv_nsec / (NSEC_PER_SEC / 100)));
 
-	a = cvirt->load[0] + (FIXED_1/200);
-	b = cvirt->load[1] + (FIXED_1/200);
-	c = cvirt->load[2] + (FIXED_1/200);
+	a = cvirt->load[0] + (FIXED_1 / 200);
+	b = cvirt->load[1] + (FIXED_1 / 200);
+	c = cvirt->load[2] + (FIXED_1 / 200);
 	length += sprintf(buffer + length,
 		"nr_threads:\t%d\n"
 		"nr_running:\t%d\n"
@@ -112,18 +109,16 @@ int vx_info_proc_cvirt(struct _vx_cvirt *cvirt, char *buffer)
 		"nr_onhold:\t%d\n"
 		"load_updates:\t%d\n"
 		"loadavg:\t%d.%02d %d.%02d %d.%02d\n"
-		"total_forks:\t%d\n"
-		,atomic_read(&cvirt->nr_threads)
-		,atomic_read(&cvirt->nr_running)
-		,atomic_read(&cvirt->nr_uninterruptible)
-		,atomic_read(&cvirt->nr_onhold)
-		,atomic_read(&cvirt->load_updates)
-		,LOAD_INT(a), LOAD_FRAC(a)
-		,LOAD_INT(b), LOAD_FRAC(b)
-		,LOAD_INT(c), LOAD_FRAC(c)
-		,atomic_read(&cvirt->total_forks)
-		);
-
+		"total_forks:\t%d\n",
+		atomic_read(&cvirt->nr_threads),
+		atomic_read(&cvirt->nr_running),
+		atomic_read(&cvirt->nr_uninterruptible),
+		atomic_read(&cvirt->nr_onhold),
+		atomic_read(&cvirt->load_updates),
+		LOAD_INT(a), LOAD_FRAC(a),
+		LOAD_INT(b), LOAD_FRAC(b),
+		LOAD_INT(c), LOAD_FRAC(c),
+		atomic_read(&cvirt->total_forks));
 	return length;
 }
 

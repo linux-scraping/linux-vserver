@@ -34,7 +34,7 @@ int vc_set_ipv4root(uint32_t nbip, void __user *data)
 
 	if (nbip < 0 || nbip > NB_IPV4ROOT)
 		return -EINVAL;
-	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
+	if (copy_from_user(&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
 	if (!nxi || nxi->ipv4[0] == 0 || capable(CAP_NET_ADMIN))
@@ -46,10 +46,10 @@ int vc_set_ipv4root(uint32_t nbip, void __user *data)
 		/* We are allowed to select a subset of the currently
 		   installed IP numbers. No new one are allowed
 		   We can't change the broadcast address though */
-		for (i=0; i<nbip; i++) {
+		for (i = 0; i < nbip; i++) {
 			int j;
 			__u32 nxip = vc_data.nx_mask_pair[i].ip;
-			for (j=0; j<nxi->nbipv4; j++) {
+			for (j = 0; j < nxi->nbipv4; j++) {
 				if (nxip == nxi->ipv4[j]) {
 					found++;
 					break;
@@ -68,7 +68,7 @@ int vc_set_ipv4root(uint32_t nbip, void __user *data)
 		return -EINVAL;
 
 	new_nxi->nbipv4 = nbip;
-	for (i=0; i<nbip; i++) {
+	for (i = 0; i < nbip; i++) {
 		new_nxi->ipv4[i] = vc_data.nx_mask_pair[i].ip;
 		new_nxi->mask[i] = vc_data.nx_mask_pair[i].mask;
 	}

@@ -6,7 +6,7 @@
 #include "vserver/debug.h"
 
 
-#define get_dl_info(i)	__get_dl_info(i,__FILE__,__LINE__)
+#define get_dl_info(i)	__get_dl_info(i, __FILE__, __LINE__)
 
 static inline struct dl_info *__get_dl_info(struct dl_info *dli,
 	const char *_file, int _line)
@@ -14,7 +14,8 @@ static inline struct dl_info *__get_dl_info(struct dl_info *dli,
 	if (!dli)
 		return NULL;
 	vxlprintk(VXD_CBIT(dlim, 4), "get_dl_info(%p[#%d.%d])",
-		dli, dli?dli->dl_tag:0, dli?atomic_read(&dli->dl_usecnt):0,
+		dli, dli ? dli->dl_tag : 0,
+		dli ? atomic_read(&dli->dl_usecnt) : 0,
 		_file, _line);
 	atomic_inc(&dli->dl_usecnt);
 	return dli;
@@ -22,9 +23,9 @@ static inline struct dl_info *__get_dl_info(struct dl_info *dli,
 
 
 #define free_dl_info(i) \
-	call_rcu(&i->dl_rcu, rcu_free_dl_info);
+	call_rcu(&(i)->dl_rcu, rcu_free_dl_info)
 
-#define put_dl_info(i)	__put_dl_info(i,__FILE__,__LINE__)
+#define put_dl_info(i)	__put_dl_info(i, __FILE__, __LINE__)
 
 static inline void __put_dl_info(struct dl_info *dli,
 	const char *_file, int _line)
@@ -32,14 +33,15 @@ static inline void __put_dl_info(struct dl_info *dli,
 	if (!dli)
 		return;
 	vxlprintk(VXD_CBIT(dlim, 4), "put_dl_info(%p[#%d.%d])",
-		dli, dli?dli->dl_tag:0, dli?atomic_read(&dli->dl_usecnt):0,
+		dli, dli ? dli->dl_tag : 0,
+		dli ? atomic_read(&dli->dl_usecnt) : 0,
 		_file, _line);
 	if (atomic_dec_and_test(&dli->dl_usecnt))
 		free_dl_info(dli);
 }
 
 
-#define __dlimit_char(d)	((d)?'*':' ')
+#define __dlimit_char(d)	((d) ? '*' : ' ')
 
 static inline int __dl_alloc_space(struct super_block *sb,
 	tag_t tag, dlsize_t nr, const char *file, int line)

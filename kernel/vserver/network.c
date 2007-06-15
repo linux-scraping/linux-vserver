@@ -44,7 +44,7 @@ static struct nx_info *__alloc_nx_info(nid_t nid)
 	if (!new)
 		return 0;
 
-	memset (new, 0, sizeof(struct nx_info));
+	memset(new, 0, sizeof(struct nx_info));
 	new->nx_id = nid;
 	INIT_HLIST_NODE(&new->nx_hlist);
 	atomic_set(&new->nx_usecnt, 0);
@@ -187,7 +187,7 @@ static inline struct nx_info *__lookup_nx_info(nid_t nid)
 found:
 	vxdprintk(VXD_CBIT(nid, 0),
 		"__lookup_nx_info(#%u): %p[#%u]",
-		nid, nxi, nxi?nxi->nx_id:0);
+		nid, nxi, nxi ? nxi->nx_id : 0);
 	return nxi;
 }
 
@@ -220,7 +220,7 @@ static inline nid_t __nx_dynamic_id(void)
 	* create the requested context
 	* get(), claim() and hash it				*/
 
-static struct nx_info * __create_nx_info(int id)
+static struct nx_info *__create_nx_info(int id)
 {
 	struct nx_info *new, *nxi = NULL;
 
@@ -348,7 +348,7 @@ int get_nid_list(int index, unsigned int *nids, int size)
 	int hindex, nr_nids = 0;
 
 	/* only show current and children */
-	if (!nx_check(0, VS_ADMIN|VS_WATCH)) {
+	if (!nx_check(0, VS_ADMIN | VS_WATCH)) {
 		if (index > 0)
 			return 0;
 		nids[nr_nids] = nx_current_nid();
@@ -488,9 +488,9 @@ static inline int __addr_in_socket(const struct sock *sk, uint32_t addr)
 	uint32_t saddr = inet_rcv_saddr(sk);
 
 	vxdprintk(VXD_CBIT(net, 5),
-		"__addr_in_socket(%p,%d.%d.%d.%d) %p:%d.%d.%d.%d %p;%lx",
-		sk, VXD_QUAD(addr), nxi, VXD_QUAD(saddr), sk->sk_socket,
-		(sk->sk_socket?sk->sk_socket->flags:0));
+		"__addr_in_socket(%p," NIPQUAD_FMT ") %p:" NIPQUAD_FMT " %p;%lx",
+		sk, NIPQUAD(addr), nxi, NIPQUAD(saddr), sk->sk_socket,
+		(sk->sk_socket ? sk->sk_socket->flags : 0));
 
 	if (saddr) {
 		/* direct address match */
@@ -508,8 +508,8 @@ static inline int __addr_in_socket(const struct sock *sk, uint32_t addr)
 int nx_addr_conflict(struct nx_info *nxi, uint32_t addr, const struct sock *sk)
 {
 	vxdprintk(VXD_CBIT(net, 2),
-		"nx_addr_conflict(%p,%p) %d.%d,%d.%d",
-		nxi, sk, VXD_QUAD(addr));
+		"nx_addr_conflict(%p,%p) " NIPQUAD_FMT,
+		nxi, sk, NIPQUAD(addr));
 
 	if (addr) {
 		/* check real address */
@@ -518,7 +518,7 @@ int nx_addr_conflict(struct nx_info *nxi, uint32_t addr, const struct sock *sk)
 		/* check against nx_info */
 		int i, n = nxi->nbipv4;
 
-		for (i=0; i<n; i++)
+		for (i = 0; i < n; i++)
 			if (__addr_in_socket(sk, nxi->ipv4[i]))
 				return 1;
 		return 0;
@@ -570,15 +570,14 @@ int vc_task_nid(uint32_t id, void __user *data)
 	if (id) {
 		struct task_struct *tsk;
 
-		if (!nx_check(0, VS_ADMIN|VS_WATCH))
+		if (!nx_check(0, VS_ADMIN | VS_WATCH))
 			return -EPERM;
 
 		read_lock(&tasklist_lock);
 		tsk = find_task_by_real_pid(id);
 		nid = (tsk) ? tsk->nid : -ESRCH;
 		read_unlock(&tasklist_lock);
-	}
-	else
+	} else
 		nid = nx_current_nid();
 	return nid;
 }
@@ -590,7 +589,7 @@ int vc_nx_info(struct nx_info *nxi, void __user *data)
 
 	vc_data.nid = nxi->nx_id;
 
-	if (copy_to_user (data, &vc_data, sizeof(vc_data)))
+	if (copy_to_user(data, &vc_data, sizeof(vc_data)))
 		return -EFAULT;
 	return 0;
 }
@@ -604,7 +603,7 @@ int vc_net_create(uint32_t nid, void __user *data)
 	struct nx_info *new_nxi;
 	int ret;
 
-	if (data && copy_from_user (&vc_data, data, sizeof(vc_data)))
+	if (data && copy_from_user(&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
 	if ((nid > MAX_S_CONTEXT) && (nid != NX_DYNAMIC_ID))
@@ -650,7 +649,7 @@ int vc_net_add(struct nx_info *nxi, void __user *data)
 	struct vcmd_net_addr_v0 vc_data;
 	int index, pos, ret = 0;
 
-	if (data && copy_from_user (&vc_data, data, sizeof(vc_data)))
+	if (data && copy_from_user(&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
 	switch (vc_data.type) {
@@ -688,11 +687,11 @@ int vc_net_add(struct nx_info *nxi, void __user *data)
 	return ret;
 }
 
-int vc_net_remove(struct nx_info * nxi, void __user *data)
+int vc_net_remove(struct nx_info *nxi, void __user *data)
 {
 	struct vcmd_net_addr_v0 vc_data;
 
-	if (data && copy_from_user (&vc_data, data, sizeof(vc_data)))
+	if (data && copy_from_user(&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
 	switch (vc_data.type) {
@@ -715,7 +714,7 @@ int vc_get_nflags(struct nx_info *nxi, void __user *data)
 	/* special STATE flag handling */
 	vc_data.mask = vs_mask_flags(~0UL, nxi->nx_flags, NXF_ONE_TIME);
 
-	if (copy_to_user (data, &vc_data, sizeof(vc_data)))
+	if (copy_to_user(data, &vc_data, sizeof(vc_data)))
 		return -EFAULT;
 	return 0;
 }
@@ -725,7 +724,7 @@ int vc_set_nflags(struct nx_info *nxi, void __user *data)
 	struct vcmd_net_flags_v0 vc_data;
 	uint64_t mask, trigger;
 
-	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
+	if (copy_from_user(&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
 	/* special STATE flag handling */
@@ -747,7 +746,7 @@ int vc_get_ncaps(struct nx_info *nxi, void __user *data)
 	vc_data.ncaps = nxi->nx_ncaps;
 	vc_data.cmask = ~0UL;
 
-	if (copy_to_user (data, &vc_data, sizeof(vc_data)))
+	if (copy_to_user(data, &vc_data, sizeof(vc_data)))
 		return -EFAULT;
 	return 0;
 }
@@ -756,7 +755,7 @@ int vc_set_ncaps(struct nx_info *nxi, void __user *data)
 {
 	struct vcmd_net_caps_v0 vc_data;
 
-	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
+	if (copy_from_user(&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
 	nxi->nx_ncaps = vs_mask_flags(nxi->nx_ncaps,

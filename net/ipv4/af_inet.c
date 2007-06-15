@@ -424,10 +424,10 @@ int inet_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len)
 	s_addr2 = 0xffffffffl;
 
 	vxdprintk(VXD_CBIT(net, 3),
-		"inet_bind(%p)* %p,%p;%lx %d.%d.%d.%d",
+		"inet_bind(%p)* %p,%p;%lx " NIPQUAD_FMT,
 		sk, sk->sk_nx_info, sk->sk_socket,
 		(sk->sk_socket?sk->sk_socket->flags:0),
-		VXD_QUAD(s_addr));
+		NIPQUAD(s_addr));
 	if (nxi) {
 		__u32 v4_bcast = nxi->v4_bcast;
 		__u32 ipv4root = nxi->ipv4[0];
@@ -451,8 +451,8 @@ int inet_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len)
 	chk_addr_ret = inet_addr_type(s_addr);
 
 	vxdprintk(VXD_CBIT(net, 3),
-		"inet_bind(%p) %d.%d.%d.%d, %d.%d.%d.%d, %d.%d.%d.%d",
-		sk, VXD_QUAD(s_addr), VXD_QUAD(s_addr1), VXD_QUAD(s_addr2));
+		"inet_bind(%p) " NIPQUAD_FMT ", " NIPQUAD_FMT ", " NIPQUAD_FMT,
+		sk, NIPQUAD(s_addr), NIPQUAD(s_addr1), NIPQUAD(s_addr2));
 
 	/* Not specified by any standard per-se, however it breaks too
 	 * many applications when removed.  It is unfortunate since
