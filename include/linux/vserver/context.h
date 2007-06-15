@@ -32,22 +32,22 @@
 #define VXF_HIDE_NETIF		0x02000000
 #define VXF_HIDE_VINFO		0x04000000
 
-#define VXF_STATE_SETUP		(1ULL<<32)
-#define VXF_STATE_INIT		(1ULL<<33)
-#define VXF_STATE_ADMIN		(1ULL<<34)
+#define VXF_STATE_SETUP		(1ULL << 32)
+#define VXF_STATE_INIT		(1ULL << 33)
+#define VXF_STATE_ADMIN		(1ULL << 34)
 
-#define VXF_SC_HELPER		(1ULL<<36)
-#define VXF_REBOOT_KILL		(1ULL<<37)
-#define VXF_PERSISTENT		(1ULL<<38)
+#define VXF_SC_HELPER		(1ULL << 36)
+#define VXF_REBOOT_KILL		(1ULL << 37)
+#define VXF_PERSISTENT		(1ULL << 38)
 
-#define VXF_FORK_RSS		(1ULL<<48)
-#define VXF_PROLIFIC		(1ULL<<49)
+#define VXF_FORK_RSS		(1ULL << 48)
+#define VXF_PROLIFIC		(1ULL << 49)
 
-#define VXF_IGNEG_NICE		(1ULL<<52)
+#define VXF_IGNEG_NICE		(1ULL << 52)
 
-#define VXF_ONE_TIME		(0x0007ULL<<32)
+#define VXF_ONE_TIME		(0x0007ULL << 32)
 
-#define VXF_INIT_SET		(VXF_STATE_SETUP|VXF_STATE_INIT|VXF_STATE_ADMIN)
+#define VXF_INIT_SET		(VXF_STATE_SETUP | VXF_STATE_INIT | VXF_STATE_ADMIN)
 
 
 /* context migration */

@@ -63,8 +63,7 @@ enum {
 static inline int __vs_check(int cid, int id, unsigned int mode)
 {
 	if (mode & VS_ARG_MASK) {
-		if ((mode & VS_IDENT) &&
-			(id == cid))
+		if ((mode & VS_IDENT) && (id == cid))
 			return 1;
 	}
 	if (mode & VS_ATR_MASK) {
@@ -96,9 +95,9 @@ static inline int __vs_check(int cid, int id, unsigned int mode)
 #define current_vx_info() (current->vx_info)
 
 
-#define vx_check(c,m)	__vs_check(vx_current_xid(),c,(m)|VS_IRQ)
+#define vx_check(c, m)	__vs_check(vx_current_xid(), c, (m) | VS_IRQ)
 
-#define vx_weak_check(c,m)	((m) ? vx_check(c,m) : 1)
+#define vx_weak_check(c, m)	((m) ? vx_check(c, m) : 1)
 
 
 #define nx_task_nid(t)	((t)->nid)
@@ -108,21 +107,21 @@ static inline int __vs_check(int cid, int id, unsigned int mode)
 #define current_nx_info() (current->nx_info)
 
 
-#define nx_check(c,m)	__vs_check(nx_current_nid(),c,m)
+#define nx_check(c, m)	__vs_check(nx_current_nid(), c, m)
 
-#define nx_weak_check(c,m)	((m) ? nx_check(c,m) : 1)
+#define nx_weak_check(c, m)	((m) ? nx_check(c, m) : 1)
 
 
 
 /* generic flag merging */
 
-#define vs_check_flags(v,m,f)	(((v) & (m)) ^ (f))
+#define vs_check_flags(v, m, f)	(((v) & (m)) ^ (f))
 
-#define vs_mask_flags(v,f,m)	(((v) & ~(m)) | ((f) & (m)))
+#define vs_mask_flags(v, f, m)	(((v) & ~(m)) | ((f) & (m)))
 
-#define vs_mask_mask(v,f,m)	(((v) & ~(m)) | ((v) & (f) & (m)))
+#define vs_mask_mask(v, f, m)	(((v) & ~(m)) | ((v) & (f) & (m)))
 
-#define vs_check_bit(v,n)	((v) & (1LL << (n)))
+#define vs_check_bit(v, n)	((v) & (1LL << (n)))
 
 
 /* context flags */
@@ -131,13 +130,13 @@ static inline int __vs_check(int cid, int id, unsigned int mode)
 
 #define vx_current_flags()	__vx_flags(current->vx_info)
 
-#define vx_info_flags(v,m,f) \
-	vs_check_flags(__vx_flags(v),(m),(f))
+#define vx_info_flags(v, m, f) \
+	vs_check_flags(__vx_flags(v), m, f)
 
-#define task_vx_flags(t,m,f) \
-	((t) && vx_info_flags((t)->vx_info, (m), (f)))
+#define task_vx_flags(t, m, f) \
+	((t) && vx_info_flags((t)->vx_info, m, f))
 
-#define vx_flags(m,f)	vx_info_flags(current->vx_info,(m),(f))
+#define vx_flags(m, f)	vx_info_flags(current->vx_info, m, f)
 
 
 /* context caps */
@@ -146,9 +145,9 @@ static inline int __vs_check(int cid, int id, unsigned int mode)
 
 #define vx_current_ccaps()	__vx_ccaps(current->vx_info)
 
-#define vx_info_ccaps(v,c)	(__vx_ccaps(v) & (c))
+#define vx_info_ccaps(v, c)	(__vx_ccaps(v) & (c))
 
-#define vx_ccaps(c)	vx_info_ccaps(current->vx_info,(c))
+#define vx_ccaps(c)	vx_info_ccaps(current->vx_info, (c))
 
 
 
@@ -158,13 +157,13 @@ static inline int __vs_check(int cid, int id, unsigned int mode)
 
 #define nx_current_flags()	__nx_flags(current->nx_info)
 
-#define nx_info_flags(v,m,f) \
-	vs_check_flags(__nx_flags(v),(m),(f))
+#define nx_info_flags(v, m, f) \
+	vs_check_flags(__nx_flags(v), m, f)
 
-#define task_nx_flags(t,m,f) \
-	((t) && nx_info_flags((t)->nx_info, (m), (f)))
+#define task_nx_flags(t, m, f) \
+	((t) && nx_info_flags((t)->nx_info, m, f))
 
-#define nx_flags(m,f)	nx_info_flags(current->nx_info,(m),(f))
+#define nx_flags(m, f)	nx_info_flags(current->nx_info, m, f)
 
 
 /* network caps */
@@ -173,18 +172,18 @@ static inline int __vs_check(int cid, int id, unsigned int mode)
 
 #define nx_current_ncaps()	__nx_ncaps(current->nx_info)
 
-#define nx_info_ncaps(v,c)	(__nx_ncaps(v) & (c))
+#define nx_info_ncaps(v, c)	(__nx_ncaps(v) & (c))
 
-#define nx_ncaps(c)	nx_info_ncaps(current->nx_info,(c))
+#define nx_ncaps(c)	nx_info_ncaps(current->nx_info, c)
 
 
 /* context mask capabilities */
 
 #define __vx_mcaps(v)	((v) ? (v)->vx_ccaps >> 32UL : ~0 )
 
-#define vx_info_mcaps(v,c)	(__vx_mcaps(v) & (c))
+#define vx_info_mcaps(v, c)	(__vx_mcaps(v) & (c))
 
-#define vx_mcaps(c)	vx_info_mcaps(current->vx_info,(c))
+#define vx_mcaps(c)	vx_info_mcaps(current->vx_info, c)
 
 
 /* context bcap mask */
@@ -193,9 +192,9 @@ static inline int __vs_check(int cid, int id, unsigned int mode)
 
 #define vx_current_bcaps()	__vx_bcaps(current->vx_info)
 
-#define vx_info_bcaps(v,c)	(__vx_bcaps(v) & (c))
+#define vx_info_bcaps(v, c)	(__vx_bcaps(v) & (c))
 
-#define vx_bcaps(c)	vx_info_bcaps(current->vx_info,(c))
+#define vx_bcaps(c)	vx_info_bcaps(current->vx_info, c)
 
 
 #define vx_info_cap_bset(v)	((v) ? (v)->vx_cap_bset : cap_bset)
@@ -203,21 +202,21 @@ static inline int __vs_check(int cid, int id, unsigned int mode)
 #define vx_current_cap_bset()	vx_info_cap_bset(current->vx_info)
 
 
-#define __vx_info_mbcap(v,b) \
+#define __vx_info_mbcap(v, b) \
 	(!vx_info_flags(v, VXF_STATE_SETUP, 0) ? \
 	vx_info_bcaps(v, b) : (b))
 
-#define vx_info_mbcap(v,b)	__vx_info_mbcap(v,cap_t(b))
+#define vx_info_mbcap(v, b)	__vx_info_mbcap(v, cap_t(b))
 
-#define task_vx_mbcap(t,b) \
+#define task_vx_mbcap(t, b) \
 	vx_info_mbcap((t)->vx_info, (t)->b)
 
-#define vx_mbcap(b)	task_vx_mbcap(current,b)
+#define vx_mbcap(b)	task_vx_mbcap(current, b)
 
-#define vx_cap_raised(v,c,f)	(vx_info_mbcap(v,c) & CAP_TO_MASK(f))
+#define vx_cap_raised(v, c, f)	(vx_info_mbcap(v, c) & CAP_TO_MASK(f))
 
-#define vx_capable(b,c) (capable(b) || \
-	(cap_raised(current->cap_effective,b) && vx_ccaps(c)))
+#define vx_capable(b, c) (capable(b) || \
+	(cap_raised(current->cap_effective, b) && vx_ccaps(c)))
 
 
 #define vx_current_initpid(n) \
@@ -227,11 +226,11 @@ static inline int __vs_check(int cid, int id, unsigned int mode)
 
 #define __vx_state(v)	((v) ? ((v)->vx_state) : 0)
 
-#define vx_info_state(v,m)	(__vx_state(v) & (m))
+#define vx_info_state(v, m)	(__vx_state(v) & (m))
 
 
 #define __nx_state(v)	((v) ? ((v)->nx_state) : 0)
 
-#define nx_info_state(v,m)	(__nx_state(v) & (m))
+#define nx_info_state(v, m)	(__nx_state(v) & (m))
 
 #endif

@@ -9,22 +9,22 @@
 #include "vserver/limit_int.h"
 
 
-#define vx_acc_cres(v,d,p,r) \
+#define vx_acc_cres(v, d, p, r) \
 	__vx_acc_cres(v, r, d, p, __FILE__, __LINE__)
 
-#define vx_acc_cres_cond(x,d,p,r) \
+#define vx_acc_cres_cond(x, d, p, r) \
 	__vx_acc_cres(((x) == vx_current_xid()) ? current->vx_info : 0, \
 	r, d, p, __FILE__, __LINE__)
 
 
-#define vx_add_cres(v,a,p,r) \
+#define vx_add_cres(v, a, p, r) \
 	__vx_add_cres(v, r, a, p, __FILE__, __LINE__)
-#define vx_sub_cres(v,a,p,r)		vx_add_cres(v,-(a),p,r)
+#define vx_sub_cres(v, a, p, r)		vx_add_cres(v, -(a), p, r)
 
-#define vx_add_cres_cond(x,a,p,r) \
+#define vx_add_cres_cond(x, a, p, r) \
 	__vx_add_cres(((x) == vx_current_xid()) ? current->vx_info : 0, \
 	r, a, p, __FILE__, __LINE__)
-#define vx_sub_cres_cond(x,a,p,r)	vx_add_cres_cond(x,-(a),p,r)
+#define vx_sub_cres_cond(x, a, p, r)	vx_add_cres_cond(x, -(a), p, r)
 
 
 /* process and file limits */
@@ -54,7 +54,7 @@
 	vx_acc_cres(current->vx_info,-1, (void *)(long)(f), VLIMIT_OPENFD)
 
 
-#define vx_cres_avail(v,n,r) \
+#define vx_cres_avail(v, n, r) \
 	__vx_cres_avail(v, r, n, __FILE__, __LINE__)
 
 
@@ -101,23 +101,23 @@
 
 /* ipc resource limits */
 
-#define vx_ipcmsg_add(v,u,a) \
+#define vx_ipcmsg_add(v, u, a) \
 	vx_add_cres(v, a, u, RLIMIT_MSGQUEUE)
 
-#define vx_ipcmsg_sub(v,u,a) \
+#define vx_ipcmsg_sub(v, u, a) \
 	vx_sub_cres(v, a, u, RLIMIT_MSGQUEUE)
 
-#define vx_ipcmsg_avail(v,a) \
+#define vx_ipcmsg_avail(v, a) \
 	vx_cres_avail(v, a, RLIMIT_MSGQUEUE)
 
 
-#define vx_ipcshm_add(v,k,a) \
+#define vx_ipcshm_add(v, k, a) \
 	vx_add_cres(v, a, (void *)(long)(k), VLIMIT_SHMEM)
 
-#define vx_ipcshm_sub(v,k,a) \
+#define vx_ipcshm_sub(v, k, a) \
 	vx_sub_cres(v, a, (void *)(long)(k), VLIMIT_SHMEM)
 
-#define vx_ipcshm_avail(v,a) \
+#define vx_ipcshm_avail(v, a) \
 	vx_cres_avail(v, a, VLIMIT_SHMEM)
 
 
@@ -125,7 +125,7 @@
 	vx_acc_cres(current->vx_info, 1, a, VLIMIT_SEMARY)
 
 #define vx_semary_dec(a) \
-	vx_acc_cres(current->vx_info,-1, a, VLIMIT_SEMARY)
+	vx_acc_cres(current->vx_info, -1, a, VLIMIT_SEMARY)
 
 
 #define vx_nsems_add(a,n) \

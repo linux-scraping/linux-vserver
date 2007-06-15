@@ -105,7 +105,7 @@ out:
  */
 
 static inline
-struct nsproxy * __vs_merge_nsproxy(struct nsproxy *old,
+struct nsproxy *__vs_merge_nsproxy(struct nsproxy *old,
 	struct nsproxy *proxy, unsigned long mask)
 {
 	struct nsproxy null_proxy = { .mnt_ns = NULL };
@@ -126,7 +126,7 @@ struct nsproxy * __vs_merge_nsproxy(struct nsproxy *old,
  */
 
 static inline
-struct fs_struct * __vs_merge_fs(struct fs_struct *old,
+struct fs_struct *__vs_merge_fs(struct fs_struct *old,
 	struct fs_struct *fs, unsigned long mask)
 {
 	if (!(mask & CLONE_FS)) {
@@ -254,7 +254,7 @@ int vc_enter_space(struct vx_info *vxi, void __user *data)
 {
 	struct vcmd_space_mask vc_data = { .mask = 0 };
 
-	if (data && copy_from_user (&vc_data, data, sizeof(vc_data)))
+	if (data && copy_from_user(&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
 	return vx_enter_space(vxi, vc_data.mask);
@@ -264,7 +264,7 @@ int vc_set_space(struct vx_info *vxi, void __user *data)
 {
 	struct vcmd_space_mask vc_data = { .mask = 0 };
 
-	if (data && copy_from_user (&vc_data, data, sizeof(vc_data)))
+	if (data && copy_from_user(&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
 	return vx_set_space(vxi, vc_data.mask);

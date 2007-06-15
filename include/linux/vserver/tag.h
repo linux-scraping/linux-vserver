@@ -87,7 +87,7 @@
 
 #ifndef CONFIG_TAGGING_NONE
 #define dx_current_fstag(sb)	\
-	((sb)->s_flags & MS_TAGGED ? dx_current_tag(): 0)
+	((sb)->s_flags & MS_TAGGED ? dx_current_tag() : 0)
 #else
 #define dx_current_fstag(sb)	(0)
 #endif
@@ -131,10 +131,10 @@ int dx_parse_tag(char *string, tag_t *tag, int remove);
 
 void __dx_propagate_tag(struct nameidata *nd, struct inode *inode);
 
-#define dx_propagate_tag(n,i)	__dx_propagate_tag(n,i)
+#define dx_propagate_tag(n, i)	__dx_propagate_tag(n, i)
 
 #else
-#define dx_propagate_tag(n,i)	do { } while (0)
+#define dx_propagate_tag(n, i)	do { } while (0)
 #endif
 
 #endif /* _DX_TAG_H */

@@ -24,7 +24,7 @@
 #define IATTR_PROC_SYMLINK	( IATTR_ADMIN )
 #endif
 
-#define vx_hide_check(c,m)	(((m) & IATTR_HIDE) ? vx_check(c,m) : 1)
+#define vx_hide_check(c, m)	(((m) & IATTR_HIDE) ? vx_check(c, m) : 1)
 
 #endif	/* __KERNEL__ */
 

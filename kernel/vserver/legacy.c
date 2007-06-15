@@ -98,13 +98,13 @@ int vc_new_s_context(uint32_t ctx, void __user *data)
 		if (vc_data.flags & VX_INFO_INIT)
 			vx_set_initpid(new_vxi, current->tgid);
 		if (vc_data.flags & VX_INFO_NAMESPACE)
-			vx_set_space(new_vxi, CLONE_NEWNS|CLONE_FS);
+			vx_set_space(new_vxi, CLONE_NEWNS | CLONE_FS);
 		if (vc_data.flags & VX_INFO_NPROC)
 			__rlim_set(&new_vxi->limit, RLIMIT_NPROC,
 				current->signal->rlim[RLIMIT_NPROC].rlim_max);
 
 		/* tweak some defaults for legacy */
-		new_vxi->vx_flags |= (VXF_HIDE_NETIF|VXF_INFO_INIT);
+		new_vxi->vx_flags |= (VXF_HIDE_NETIF | VXF_INFO_INIT);
 		ret = new_vxi->vx_id;
 	}
 out_put:
