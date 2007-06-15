@@ -175,12 +175,10 @@ spider_net_setup_aneg(struct spider_net_card *card)
 {
 	struct mii_phy *phy = &card->phy;
 	u32 advertise = 0;
-	u16 bmcr, bmsr, stat1000, estat;
+	u16 bmsr, estat;
 
-	bmcr     = spider_net_read_phy(card->netdev, phy->mii_id, MII_BMCR);
-	bmsr     = spider_net_read_phy(card->netdev, phy->mii_id, MII_BMSR);
-	stat1000 = spider_net_read_phy(card->netdev, phy->mii_id, MII_STAT1000);
-	estat    = spider_net_read_phy(card->netdev, phy->mii_id, MII_ESTATUS);
+	bmsr  = spider_net_read_phy(card->netdev, phy->mii_id, MII_BMSR);
+	estat = spider_net_read_phy(card->netdev, phy->mii_id, MII_ESTATUS);
 
 	if (bmsr & BMSR_10HALF)
 		advertise |= ADVERTISED_10baseT_Half;
@@ -432,7 +430,8 @@ spider_net_prepare_rx_descr(struct spider_net_card *card,
 	/* and we need to have it 128 byte aligned, therefore we allocate a
 	 * bit more */
 	/* allocate an skb */
-	descr->skb = dev_alloc_skb(bufsize + SPIDER_NET_RXBUF_ALIGN - 1);
+	descr->skb = netdev_alloc_skb(card->netdev,
+				      bufsize + SPIDER_NET_RXBUF_ALIGN - 1);
 	if (!descr->skb) {
 		if (netif_msg_rx_err(card) && net_ratelimit())
 			pr_err("Not enough memory to allocate rx buffer\n");
@@ -720,7 +719,7 @@ spider_net_prepare_tx_descr(struct spider_net_card *card,
 	spin_unlock_irqrestore(&chain->lock, flags);
 
 	if (skb->protocol == htons(ETH_P_IP) && skb->ip_summed == CHECKSUM_PARTIAL)
-		switch (skb->nh.iph->protocol) {
+		switch (ip_hdr(skb)->protocol) {
 		case IPPROTO_TCP:
 			hwdescr->dmac_cmd_status |= SPIDER_NET_DMAC_TCP;
 			break;
@@ -990,7 +989,6 @@ spider_net_pass_skb_up(struct spider_net_descr *descr,
 	netdev = card->netdev;
 
 	skb = descr->skb;
-	skb->dev = netdev;
 	skb_put(skb, hwdescr->valid_size);
 
 	/* the card seems to add 2 bytes of junk in front
@@ -1016,12 +1014,12 @@ spider_net_pass_skb_up(struct spider_net_descr *descr,
 		 */
 	}
 
-	/* pass skb up to stack */
-	netif_receive_skb(skb);
-
 	/* update netdevice statistics */
 	card->netdev_stats.rx_packets++;
 	card->netdev_stats.rx_bytes += skb->len;
+
+	/* pass skb up to stack */
+	netif_receive_skb(skb);
 }
 
 #ifdef DEBUG
@@ -1190,43 +1188,6 @@ spider_net_poll(struct net_device *netdev, int *budget)
 	}
 
 	return 1;
-}
-
-/**
- * spider_net_vlan_rx_reg - initializes VLAN structures in the driver and card
- * @netdev: interface device structure
- * @grp: vlan_group structure that is registered (NULL on destroying interface)
- */
-static void
-spider_net_vlan_rx_reg(struct net_device *netdev, struct vlan_group *grp)
-{
-	/* further enhancement... yet to do */
-	return;
-}
-
-/**
- * spider_net_vlan_rx_add - adds VLAN id to the card filter
- * @netdev: interface device structure
- * @vid: VLAN id to add
- */
-static void
-spider_net_vlan_rx_add(struct net_device *netdev, uint16_t vid)
-{
-	/* further enhancement... yet to do */
-	/* add vid to card's VLAN filter table */
-	return;
-}
-
-/**
- * spider_net_vlan_rx_kill - removes VLAN id to the card filter
- * @netdev: interface device structure
- * @vid: VLAN id to remove
- */
-static void
-spider_net_vlan_rx_kill(struct net_device *netdev, uint16_t vid)
-{
-	/* further enhancement... yet to do */
-	/* remove vid from card's VLAN filter table */
 }
 
 /**
@@ -1831,7 +1792,7 @@ try_host_fw:
 	if (!dn)
 		goto out_err;
 
-	fw_prop = get_property(dn, "firmware", &fw_size);
+	fw_prop = of_get_property(dn, "firmware", &fw_size);
 	if (!fw_prop)
 		goto out_err;
 
@@ -2179,9 +2140,6 @@ spider_net_setup_netdev_ops(struct net_device *netdev)
 	netdev->poll = &spider_net_poll;
 	netdev->weight = SPIDER_NET_NAPI_WEIGHT;
 	/* HW VLAN */
-	netdev->vlan_rx_register = &spider_net_vlan_rx_reg;
-	netdev->vlan_rx_add_vid = &spider_net_vlan_rx_add;
-	netdev->vlan_rx_kill_vid = &spider_net_vlan_rx_kill;
 #ifdef CONFIG_NET_POLL_CONTROLLER
 	/* poll controller */
 	netdev->poll_controller = &spider_net_poll_controller;
@@ -2237,7 +2195,7 @@ spider_net_setup_netdev(struct spider_net_card *card)
 	if (!dn)
 		return -EIO;
 
-	mac = get_property(dn, "local-mac-address", NULL);
+	mac = of_get_property(dn, "local-mac-address", NULL);
 	if (!mac)
 		return -EIO;
 	memcpy(addr.sa_data, mac, ETH_ALEN);

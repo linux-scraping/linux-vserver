@@ -21,17 +21,20 @@
 #include <linux/cache.h>
 #include <asm/uaccess.h>
 #include <linux/audit.h>
+#include <linux/cache.h>
 
 #include "xfrm_hash.h"
 
 struct sock *xfrm_nl;
 EXPORT_SYMBOL(xfrm_nl);
 
-u32 sysctl_xfrm_aevent_etime = XFRM_AE_ETIME;
+u32 sysctl_xfrm_aevent_etime __read_mostly = XFRM_AE_ETIME;
 EXPORT_SYMBOL(sysctl_xfrm_aevent_etime);
 
-u32 sysctl_xfrm_aevent_rseqth = XFRM_AE_SEQT_SIZE;
+u32 sysctl_xfrm_aevent_rseqth __read_mostly = XFRM_AE_SEQT_SIZE;
 EXPORT_SYMBOL(sysctl_xfrm_aevent_rseqth);
+
+u32 sysctl_xfrm_acq_expires __read_mostly = 30;
 
 /* Each xfrm_state may be linked to two tables:
 
@@ -233,7 +236,7 @@ static inline unsigned long make_jiffies(long secs)
 static void xfrm_timer_handler(unsigned long data)
 {
 	struct xfrm_state *x = (struct xfrm_state*)data;
-	unsigned long now = (unsigned long)xtime.tv_sec;
+	unsigned long now = get_seconds();
 	long next = LONG_MAX;
 	int warn = 0;
 	int err = 0;
@@ -326,7 +329,7 @@ struct xfrm_state *xfrm_state_alloc(void)
 		init_timer(&x->rtimer);
 		x->rtimer.function = xfrm_replay_timer_handler;
 		x->rtimer.data     = (unsigned long)x;
-		x->curlft.add_time = (unsigned long)xtime.tv_sec;
+		x->curlft.add_time = get_seconds();
 		x->lft.soft_byte_limit = XFRM_INF;
 		x->lft.soft_packet_limit = XFRM_INF;
 		x->lft.hard_byte_limit = XFRM_INF;
@@ -421,6 +424,16 @@ restart:
 }
 EXPORT_SYMBOL(xfrm_state_flush);
 
+void xfrm_sad_getinfo(struct xfrmk_sadinfo *si)
+{
+	spin_lock_bh(&xfrm_state_lock);
+	si->sadcnt = xfrm_state_num;
+	si->sadhcnt = xfrm_state_hmask;
+	si->sadhmcnt = xfrm_state_hashmax;
+	spin_unlock_bh(&xfrm_state_lock);
+}
+EXPORT_SYMBOL(xfrm_sad_getinfo);
+
 static int
 xfrm_init_tempsel(struct xfrm_state *x, struct flowi *fl,
 		  struct xfrm_tmpl *tmpl,
@@ -458,7 +471,7 @@ static struct xfrm_state *__xfrm_state_lookup(xfrm_address_t *daddr, __be32 spi,
 					     x->id.daddr.a6))
 				continue;
 			break;
-		};
+		}
 
 		xfrm_state_hold(x);
 		return x;
@@ -493,7 +506,7 @@ static struct xfrm_state *__xfrm_state_lookup_byaddr(xfrm_address_t *daddr, xfrm
 					     x->props.saddr.a6))
 				continue;
 			break;
-		};
+		}
 
 		xfrm_state_hold(x);
 		return x;
@@ -612,8 +625,8 @@ xfrm_state_find(xfrm_address_t *daddr, xfrm_address_t *saddr,
 				h = xfrm_spi_hash(&x->id.daddr, x->id.spi, x->id.proto, family);
 				hlist_add_head(&x->byspi, xfrm_state_byspi+h);
 			}
-			x->lft.hard_add_expires_seconds = XFRM_ACQ_EXPIRES;
-			x->timer.expires = jiffies + XFRM_ACQ_EXPIRES*HZ;
+			x->lft.hard_add_expires_seconds = sysctl_xfrm_acq_expires;
+			x->timer.expires = jiffies + sysctl_xfrm_acq_expires*HZ;
 			add_timer(&x->timer);
 			xfrm_state_num++;
 			xfrm_hash_grow_check(x->bydst.next != NULL);
@@ -722,7 +735,7 @@ static struct xfrm_state *__find_acq_core(unsigned short family, u8 mode, u32 re
 					     (struct in6_addr *)saddr))
 				continue;
 			break;
-		};
+		}
 
 		xfrm_state_hold(x);
 		return x;
@@ -755,16 +768,16 @@ static struct xfrm_state *__find_acq_core(unsigned short family, u8 mode, u32 re
 			ipv6_addr_copy((struct in6_addr *)x->id.daddr.a6,
 				       (struct in6_addr *)daddr);
 			break;
-		};
+		}
 
 		x->km.state = XFRM_STATE_ACQ;
 		x->id.proto = proto;
 		x->props.family = family;
 		x->props.mode = mode;
 		x->props.reqid = reqid;
-		x->lft.hard_add_expires_seconds = XFRM_ACQ_EXPIRES;
+		x->lft.hard_add_expires_seconds = sysctl_xfrm_acq_expires;
 		xfrm_state_hold(x);
-		x->timer.expires = jiffies + XFRM_ACQ_EXPIRES*HZ;
+		x->timer.expires = jiffies + sysctl_xfrm_acq_expires*HZ;
 		add_timer(&x->timer);
 		hlist_add_head(&x->bydst, xfrm_state_bydst+h);
 		h = xfrm_src_hash(daddr, saddr, family);
@@ -1051,7 +1064,7 @@ EXPORT_SYMBOL(xfrm_state_update);
 int xfrm_state_check_expire(struct xfrm_state *x)
 {
 	if (!x->curlft.use_time)
-		x->curlft.use_time = (unsigned long)xtime.tv_sec;
+		x->curlft.use_time = get_seconds();
 
 	if (x->km.state != XFRM_STATE_VALID)
 		return -EINVAL;
@@ -1667,37 +1680,17 @@ void xfrm_state_delete_tunnel(struct xfrm_state *x)
 }
 EXPORT_SYMBOL(xfrm_state_delete_tunnel);
 
-/*
- * This function is NOT optimal.  For example, with ESP it will give an
- * MTU that's usually two bytes short of being optimal.  However, it will
- * usually give an answer that's a multiple of 4 provided the input is
- * also a multiple of 4.
- */
 int xfrm_state_mtu(struct xfrm_state *x, int mtu)
 {
-	int res = mtu;
+	int res;
 
-	res -= x->props.header_len;
-
-	for (;;) {
-		int m = res;
-
-		if (m < 68)
-			return 68;
-
-		spin_lock_bh(&x->lock);
-		if (x->km.state == XFRM_STATE_VALID &&
-		    x->type && x->type->get_max_size)
-			m = x->type->get_max_size(x, m);
-		else
-			m += x->props.header_len;
-		spin_unlock_bh(&x->lock);
-
-		if (m <= mtu)
-			break;
-		res -= (m - mtu);
-	}
-
+	spin_lock_bh(&x->lock);
+	if (x->km.state == XFRM_STATE_VALID &&
+	    x->type && x->type->get_mtu)
+		res = x->type->get_mtu(x, mtu);
+	else
+		res = mtu;
+	spin_unlock_bh(&x->lock);
 	return res;
 }
 

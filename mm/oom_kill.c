@@ -154,9 +154,11 @@ unsigned long badness(struct task_struct *p, unsigned long uptime)
 	 * Adjust the score by oomkilladj.
 	 */
 	if (p->oomkilladj) {
-		if (p->oomkilladj > 0)
+		if (p->oomkilladj > 0) {
+			if (!points)
+				points = 1;
 			points <<= p->oomkilladj;
-		else
+		} else
 			points >>= -(p->oomkilladj);
 	}
 
@@ -419,6 +421,9 @@ void out_of_memory(struct zonelist *zonelist, gfp_t gfp_mask, int order)
 		dump_stack();
 		show_mem();
 	}
+
+	if (sysctl_panic_on_oom == 2)
+		panic("out of memory. Compulsory panic_on_oom is selected.\n");
 
 	/*
 	 * Check if there were limitations on the allocation (only relevant for

@@ -334,7 +334,8 @@ static void acpi_tb_convert_fadt(void)
 				     (acpi_gbl_FADT.xpm1a_event_block.address +
 				      pm1_register_length));
 	/* Don't forget to copy space_id of the GAS */
-	acpi_gbl_xpm1a_enable.space_id = acpi_gbl_FADT.xpm1a_event_block.space_id;
+	acpi_gbl_xpm1a_enable.space_id =
+	    acpi_gbl_FADT.xpm1a_event_block.space_id;
 
 	/* The PM1B register block is optional, ignore if not present */
 
@@ -344,23 +345,22 @@ static void acpi_tb_convert_fadt(void)
 					     (acpi_gbl_FADT.xpm1b_event_block.
 					      address + pm1_register_length));
 		/* Don't forget to copy space_id of the GAS */
-		acpi_gbl_xpm1b_enable.space_id = acpi_gbl_FADT.xpm1a_event_block.space_id;
+		acpi_gbl_xpm1b_enable.space_id =
+		    acpi_gbl_FADT.xpm1a_event_block.space_id;
 
 	}
+
 	/*
-	 * _CST object and C States change notification start with
-	 * ACPI 2.0 (FADT r3).  Although the field should be Reserved
-	 * and 0 before then, some pre-r3 FADT set this field and
-	 * it results in SMM-related boot failures.  For them, clear it.
+	 * For ACPI 1.0 FADTs, ensure that reserved fields (which should be zero)
+	 * are indeed zero. This will workaround BIOSs that inadvertently placed
+	 * values in these fields.
 	 */
-	if ((acpi_gbl_FADT.header.revision < 3) &&
-		(acpi_gbl_FADT.cst_control != 0)) {
-			ACPI_WARNING((AE_INFO,
-				"Ignoring BIOS FADT r%u C-state control",
-				acpi_gbl_FADT.header.revision));
-		 	acpi_gbl_FADT.cst_control = 0;
+	if (acpi_gbl_FADT.header.revision < 3) {
+		acpi_gbl_FADT.preferred_profile = 0;
+		acpi_gbl_FADT.pstate_control = 0;
+		acpi_gbl_FADT.cst_control = 0;
+		acpi_gbl_FADT.boot_flags = 0;
 	}
-
 }
 
 /******************************************************************************

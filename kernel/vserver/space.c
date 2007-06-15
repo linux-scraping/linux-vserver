@@ -60,7 +60,7 @@ struct nsproxy *vs_mix_nsproxy(struct nsproxy *old_nsproxy,
 	struct ipc_namespace *old_ipc;
 	struct nsproxy *nsproxy;
 
-	nsproxy = dup_namespaces(old_nsproxy);
+	nsproxy = copy_nsproxy(old_nsproxy);
 	if (!nsproxy)
 		goto out;
 

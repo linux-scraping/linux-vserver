@@ -220,9 +220,7 @@ static void init_once(void *foo, struct kmem_cache * cachep, unsigned long flags
 {
 	struct mqueue_inode_info *p = (struct mqueue_inode_info *) foo;
 
-	if ((flags & (SLAB_CTOR_VERIFY | SLAB_CTOR_CONSTRUCTOR)) ==
-		SLAB_CTOR_CONSTRUCTOR)
-		inode_init_once(&p->vfs_inode);
+	inode_init_once(&p->vfs_inode);
 }
 
 static struct inode *mqueue_alloc_inode(struct super_block *sb)
@@ -691,6 +689,7 @@ asmlinkage long sys_mq_open(const char __user *u_name, int oflag, mode_t mode,
 
 	if (oflag & O_CREAT) {
 		if (dentry->d_inode) {	/* entry already exists */
+			audit_inode(name, dentry->d_inode);
 			error = -EEXIST;
 			if (oflag & O_EXCL)
 				goto out;
@@ -703,6 +702,7 @@ asmlinkage long sys_mq_open(const char __user *u_name, int oflag, mode_t mode,
 		error = -ENOENT;
 		if (!dentry->d_inode)
 			goto out;
+		audit_inode(name, dentry->d_inode);
 		filp = do_open(dentry, oflag);
 	}
 
@@ -850,6 +850,7 @@ asmlinkage long sys_mq_timedsend(mqd_t mqdes, const char __user *u_msg_ptr,
 	if (unlikely(filp->f_op != &mqueue_file_operations))
 		goto out_fput;
 	info = MQUEUE_I(inode);
+	audit_inode(NULL, inode);
 
 	if (unlikely(!(filp->f_mode & FMODE_WRITE)))
 		goto out_fput;
@@ -933,6 +934,7 @@ asmlinkage ssize_t sys_mq_timedreceive(mqd_t mqdes, char __user *u_msg_ptr,
 	if (unlikely(filp->f_op != &mqueue_file_operations))
 		goto out_fput;
 	info = MQUEUE_I(inode);
+	audit_inode(NULL, inode);
 
 	if (unlikely(!(filp->f_mode & FMODE_READ)))
 		goto out_fput;

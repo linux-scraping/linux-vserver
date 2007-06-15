@@ -31,8 +31,9 @@ extern void jfs_truncate(struct inode *);
 extern void jfs_truncate_nolock(struct inode *, loff_t);
 extern void jfs_free_zero_link(struct inode *);
 extern struct dentry *jfs_get_parent(struct dentry *dentry);
-extern int jfs_sync_flags(struct inode *);
+extern void jfs_get_inode_flags(struct jfs_inode_info *);
 extern void jfs_set_inode_flags(struct inode *);
+extern int jfs_sync_flags(struct inode *);
 extern int jfs_get_block(struct inode *, sector_t, struct buffer_head *, int);
 
 extern const struct address_space_operations jfs_aops;

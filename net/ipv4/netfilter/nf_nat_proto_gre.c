@@ -76,7 +76,7 @@ gre_unique_tuple(struct nf_conntrack_tuple *tuple,
 	   do not change tuples */
 	if (!conntrack->master)
 		return 0;
-		
+
 	if (maniptype == IP_NAT_MANIP_SRC)
 		keyptr = &tuple->src.u.gre.key;
 	else

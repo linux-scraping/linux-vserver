@@ -16,7 +16,6 @@
 #include <linux/highmem.h>
 #include <linux/init.h>
 #include <linux/string.h>
-#include <linux/smp_lock.h>
 #include <linux/backing-dev.h>
 #include <linux/ramfs.h>
 #include <linux/quotaops.h>
@@ -180,7 +179,7 @@ static int ramfs_nommu_resize(struct inode *inode, loff_t newsize, loff_t size)
 			return ret;
 	}
 
-	ret = vmtruncate(inode, size);
+	ret = vmtruncate(inode, newsize);
 
 	return ret;
 }

@@ -30,14 +30,6 @@ static struct dentry_operations sysfs_dentry_ops = {
 	.d_iput		= sysfs_d_iput,
 };
 
-static unsigned int sysfs_inode_counter;
-ino_t sysfs_get_inum(void)
-{
-	if (unlikely(sysfs_inode_counter < 3))
-		sysfs_inode_counter = 3;
-	return sysfs_inode_counter++;
-}
-
 /*
  * Allocates a new sysfs_dirent and links it to the parent sysfs_dirent
  */
@@ -49,7 +41,6 @@ static struct sysfs_dirent * __sysfs_new_dirent(void * element)
 	if (!sd)
 		return NULL;
 
-	sd->s_ino = sysfs_get_inum();
 	atomic_set(&sd->s_count, 1);
 	atomic_set(&sd->s_event, 1);
 	INIT_LIST_HEAD(&sd->s_children);
@@ -518,7 +509,7 @@ static int sysfs_readdir(struct file * filp, void * dirent, filldir_t filldir)
 
 	switch (i) {
 		case 0:
-			ino = parent_sd->s_ino;
+			ino = dentry->d_inode->i_ino;
 			if (filldir(dirent, ".", 1, i, ino, DT_DIR) < 0)
 				break;
 			filp->f_pos++;
@@ -547,7 +538,10 @@ static int sysfs_readdir(struct file * filp, void * dirent, filldir_t filldir)
 
 				name = sysfs_get_name(next);
 				len = strlen(name);
-				ino = next->s_ino;
+				if (next->s_dentry)
+					ino = next->s_dentry->d_inode->i_ino;
+				else
+					ino = iunique(sysfs_sb, 2);
 
 				if (filldir(dirent, name, len, filp->f_pos, ino,
 						 dt_type(next)) < 0)
