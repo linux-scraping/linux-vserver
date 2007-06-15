@@ -41,7 +41,7 @@ static struct dl_info *__alloc_dl_info(struct super_block *sb, tag_t tag)
 	if (!new)
 		return 0;
 
-	memset (new, 0, sizeof(struct dl_info));
+	memset(new, 0, sizeof(struct dl_info));
 	new->dl_tag = tag;
 	new->dl_sb = sb;
 	INIT_RCU_HEAD(&new->dl_rcu);
@@ -230,7 +230,7 @@ int vc_add_dlimit(uint32_t id, void __user *data)
 {
 	struct vcmd_ctx_dlimit_base_v0 vc_data;
 
-	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
+	if (copy_from_user(&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
 	return do_addrem_dlimit(id, vc_data.name, vc_data.flags, 1);
@@ -240,7 +240,7 @@ int vc_rem_dlimit(uint32_t id, void __user *data)
 {
 	struct vcmd_ctx_dlimit_base_v0 vc_data;
 
-	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
+	if (copy_from_user(&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
 	return do_addrem_dlimit(id, vc_data.name, vc_data.flags, 0);
@@ -252,7 +252,7 @@ int vc_add_dlimit_x32(uint32_t id, void __user *data)
 {
 	struct vcmd_ctx_dlimit_base_v0_x32 vc_data;
 
-	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
+	if (copy_from_user(&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
 	return do_addrem_dlimit(id,
@@ -263,7 +263,7 @@ int vc_rem_dlimit_x32(uint32_t id, void __user *data)
 {
 	struct vcmd_ctx_dlimit_base_v0_x32 vc_data;
 
-	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
+	if (copy_from_user(&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
 	return do_addrem_dlimit(id,
@@ -339,7 +339,7 @@ int vc_set_dlimit(uint32_t id, void __user *data)
 {
 	struct vcmd_ctx_dlimit_v0 vc_data;
 
-	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
+	if (copy_from_user(&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
 	return do_set_dlimit(id, vc_data.name,
@@ -354,7 +354,7 @@ int vc_set_dlimit_x32(uint32_t id, void __user *data)
 {
 	struct vcmd_ctx_dlimit_v0_x32 vc_data;
 
-	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
+	if (copy_from_user(&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
 	return do_set_dlimit(id, compat_ptr(vc_data.name_ptr),
@@ -419,7 +419,7 @@ int vc_get_dlimit(uint32_t id, void __user *data)
 	struct vcmd_ctx_dlimit_v0 vc_data;
 	int ret;
 
-	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
+	if (copy_from_user(&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
 	ret = do_get_dlimit(id, vc_data.name,
@@ -441,7 +441,7 @@ int vc_get_dlimit_x32(uint32_t id, void __user *data)
 	struct vcmd_ctx_dlimit_v0_x32 vc_data;
 	int ret;
 
-	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
+	if (copy_from_user(&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
 	ret = do_get_dlimit(id, compat_ptr(vc_data.name_ptr),

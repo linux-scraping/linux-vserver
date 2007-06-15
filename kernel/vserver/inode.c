@@ -76,7 +76,7 @@ int vc_get_iattr(uint32_t id, void __user *data)
 	struct vcmd_ctx_iattr_v1 vc_data = { .xid = -1 };
 	int ret;
 
-	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
+	if (copy_from_user(&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
 	ret = user_path_walk_link(vc_data.name, &nd);
@@ -88,7 +88,7 @@ int vc_get_iattr(uint32_t id, void __user *data)
 	if (ret)
 		return ret;
 
-	if (copy_to_user (data, &vc_data, sizeof(vc_data)))
+	if (copy_to_user(data, &vc_data, sizeof(vc_data)))
 		ret = -EFAULT;
 	return ret;
 }
@@ -103,7 +103,7 @@ int vc_get_iattr_x32(uint32_t id, void __user *data)
 
 	if (!vx_check(0, VS_ADMIN))
 		return -ENOSYS;
-	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
+	if (copy_from_user(&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
 	ret = user_path_walk_link(compat_ptr(vc_data.name_ptr), &nd);
@@ -115,7 +115,7 @@ int vc_get_iattr_x32(uint32_t id, void __user *data)
 	if (ret)
 		return ret;
 
-	if (copy_to_user (data, &vc_data, sizeof(vc_data)))
+	if (copy_to_user(data, &vc_data, sizeof(vc_data)))
 		ret = -EFAULT;
 	return ret;
 }
@@ -207,7 +207,7 @@ int vc_set_iattr(uint32_t id, void __user *data)
 
 	if (!capable(CAP_LINUX_IMMUTABLE))
 		return -EPERM;
-	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
+	if (copy_from_user(&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
 	ret = user_path_walk_link(vc_data.name, &nd);
@@ -217,7 +217,7 @@ int vc_set_iattr(uint32_t id, void __user *data)
 		path_release(&nd);
 	}
 
-	if (copy_to_user (data, &vc_data, sizeof(vc_data)))
+	if (copy_to_user(data, &vc_data, sizeof(vc_data)))
 		ret = -EFAULT;
 	return ret;
 }
@@ -232,7 +232,7 @@ int vc_set_iattr_x32(uint32_t id, void __user *data)
 
 	if (!capable(CAP_LINUX_IMMUTABLE))
 		return -EPERM;
-	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
+	if (copy_from_user(&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
 	ret = user_path_walk_link(compat_ptr(vc_data.name_ptr), &nd);
@@ -242,7 +242,7 @@ int vc_set_iattr_x32(uint32_t id, void __user *data)
 		path_release(&nd);
 	}
 
-	if (copy_to_user (data, &vc_data, sizeof(vc_data)))
+	if (copy_to_user(data, &vc_data, sizeof(vc_data)))
 		ret = -EFAULT;
 	return ret;
 }
@@ -253,7 +253,7 @@ int vc_set_iattr_x32(uint32_t id, void __user *data)
 
 #define PROC_DYNAMIC_FIRST 0xF0000000UL
 
-int vx_proc_ioctl(struct inode * inode, struct file * filp,
+int vx_proc_ioctl(struct inode *inode, struct file *filp,
 	unsigned int cmd, unsigned long arg)
 {
 	struct proc_dir_entry *entry;
@@ -355,7 +355,7 @@ void __dx_propagate_tag(struct nameidata *nd, struct inode *inode)
 	vxdprintk(VXD_CBIT(tag, 7),
 		"dx_propagate_tag(%p[#%lu.%d]): %d,%d",
 		inode, inode->i_ino, inode->i_tag,
-		new_tag, (propagate)?1:0);
+		new_tag, (propagate) ? 1 : 0);
 
 	if (propagate)
 		inode->i_tag = new_tag;

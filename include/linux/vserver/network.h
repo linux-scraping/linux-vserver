@@ -15,13 +15,13 @@
 
 #define NXF_INFO_PRIVATE	0x00000008
 
-#define NXF_STATE_SETUP		(1ULL<<32)
-#define NXF_STATE_ADMIN		(1ULL<<34)
+#define NXF_STATE_SETUP		(1ULL << 32)
+#define NXF_STATE_ADMIN		(1ULL << 34)
 
-#define NXF_SC_HELPER		(1ULL<<36)
-#define NXF_PERSISTENT		(1ULL<<38)
+#define NXF_SC_HELPER		(1ULL << 36)
+#define NXF_PERSISTENT		(1ULL << 38)
 
-#define NXF_ONE_TIME		(0x0005ULL<<32)
+#define NXF_ONE_TIME		(0x0005ULL << 32)
 
 #define NXF_INIT_SET		(NXF_STATE_ADMIN)
 
@@ -31,7 +31,7 @@
 #define NXA_TYPE_IPV4		1
 #define NXA_TYPE_IPV6		2
 
-#define NXA_MOD_BCAST		(1<<8)
+#define NXA_MOD_BCAST		(1 << 8)
 
 #define NXA_TYPE_ANY		((uint16_t)-1)
 

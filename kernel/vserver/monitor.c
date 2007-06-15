@@ -87,7 +87,7 @@ int do_read_monitor(struct __user _vx_mon_entry *data,
 			&mon->entry[idx % VXM_SIZE];
 
 		/* send entry to userspace */
-		ret = copy_to_user (&data[pos], entry, sizeof(*entry));
+		ret = copy_to_user(&data[pos], entry, sizeof(*entry));
 		if (ret)
 			break;
 	}
@@ -105,13 +105,13 @@ int vc_read_monitor(uint32_t id, void __user *data)
 	if (id >= NR_CPUS)
 		return -EINVAL;
 
-	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
+	if (copy_from_user(&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
 	ret = do_read_monitor((struct __user _vx_mon_entry *)vc_data.data,
 		id, &vc_data.index, &vc_data.count);
 
-	if (copy_to_user (data, &vc_data, sizeof(vc_data)))
+	if (copy_to_user(data, &vc_data, sizeof(vc_data)))
 		return -EFAULT;
 	return ret;
 }
@@ -126,14 +126,14 @@ int vc_read_monitor_x32(uint32_t id, void __user *data)
 	if (id >= NR_CPUS)
 		return -EINVAL;
 
-	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
+	if (copy_from_user(&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
 	ret = do_read_monitor((struct __user _vx_mon_entry *)
 		compat_ptr(vc_data.data_ptr),
 		id, &vc_data.index, &vc_data.count);
 
-	if (copy_to_user (data, &vc_data, sizeof(vc_data)))
+	if (copy_to_user(data, &vc_data, sizeof(vc_data)))
 		return -EFAULT;
 	return ret;
 }

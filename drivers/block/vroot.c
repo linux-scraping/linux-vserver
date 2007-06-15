@@ -97,7 +97,7 @@ static int vroot_clr_dev(
 }
 
 
-static int vr_ioctl(struct inode * inode, struct file * file,
+static int vr_ioctl(struct inode *inode, struct file *file,
 	unsigned int cmd, unsigned long arg)
 {
 	struct vroot_device *vr = inode->i_bdev->bd_disk->private_data;

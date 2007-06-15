@@ -108,7 +108,7 @@ extern int vc_set_ccaps(struct vx_info *, void __user *);
 /* bcaps commands */
 
 #define VCMD_get_bcaps		VC_CMD(FLAGS, 9, 0)
-#define VCMD_set_bcaps		VC_CMD(FLAGS,10, 0)
+#define VCMD_set_bcaps		VC_CMD(FLAGS, 10, 0)
 
 struct	vcmd_bcaps {
 	uint64_t bcaps;

@@ -628,7 +628,7 @@ static int check_kill_permission(int sig, struct siginfo *info,
 		return error;
 
 	error = -ESRCH;
-	if (!vx_check(vx_task_xid(t), VS_WATCH_P|VS_IDENT)) {
+	if (!vx_check(vx_task_xid(t), VS_WATCH_P | VS_IDENT)) {
 		vxdprintk(current->xid || VXD_CBIT(misc, 7),
 			"signal %d[%p] xid mismatch %p[#%u,%u] xid=#%u",
 			sig, info, t, vx_task_xid(t), t->pid, current->xid);

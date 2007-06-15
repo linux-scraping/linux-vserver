@@ -32,11 +32,11 @@ static int do_vshelper(char *name, char *argv[], char *envp[], int sync)
 		printk(	KERN_WARNING
 			"%s: (%s %s) returned %s with %d\n",
 			name, argv[1], argv[2],
-			sync?"sync":"async", ret);
+			sync ? "sync" : "async", ret);
 	}
 	vxdprintk(VXD_CBIT(switch, 4),
 		"%s: (%s %s) returned %s with %d",
-		name, argv[1], argv[2], sync?"sync":"async", ret);
+		name, argv[1], argv[2], sync ? "sync" : "async", ret);
 	return ret;
 }
 
@@ -106,14 +106,14 @@ long vs_reboot_helper(struct vx_info *vxi, int cmd, void __user *arg)
 }
 
 
-long vs_reboot(unsigned int cmd, void __user * arg)
+long vs_reboot(unsigned int cmd, void __user *arg)
 {
 	struct vx_info *vxi = current->vx_info;
 	long ret = 0;
 
 	vxdprintk(VXD_CBIT(misc, 5),
 		"vs_reboot(%p[#%d],%d)",
-		vxi, vxi?vxi->vx_id:0, cmd);
+		vxi, vxi ? vxi->vx_id : 0, cmd);
 
 	ret = vs_reboot_helper(vxi, cmd, arg);
 	if (ret)
