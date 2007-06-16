@@ -1018,12 +1018,12 @@ int proc_pid_nx_info(struct task_struct *p, char *buffer)
 
 	for (i = 0; i < nxi->nbipv4; i++){
 		buffer += sprintf(buffer,
-			"V4Root[%d]:\t%d.%d.%d.%d/%d.%d.%d.%d\n", i,
+			"V4Root[%d]:\t" NIPQUAD_FMT "/" NIPQUAD_FMT "\n", i,
 			NIPQUAD(nxi->ipv4[i]),
 			NIPQUAD(nxi->mask[i]));
 	}
 	buffer += sprintf(buffer,
-		"V4Root[bcast]:\t%d.%d.%d.%d\n",
+		"V4Root[bcast]:\t" NIPQUAD_FMT "\n",
 		NIPQUAD(nxi->v4_bcast));
 
 	put_nx_info(nxi);

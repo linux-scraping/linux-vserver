@@ -336,11 +336,11 @@ lookup:
 			if (inet->rcv_saddr != daddr)
 				continue;
 			score+=2;
-			} else if (sk->sk_nx_info) {
-				if (addr_in_nx_info(sk->sk_nx_info, daddr))
-					score+=2;
-				else
-					continue;
+		} else if (sk->sk_nx_info) {
+			if (addr_in_nx_info(sk->sk_nx_info, daddr))
+				score+=2;
+			else
+				continue;
 		}
 		if (inet->daddr) {
 			if (inet->daddr != saddr)

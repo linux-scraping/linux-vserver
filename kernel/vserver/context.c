@@ -715,8 +715,19 @@ int vx_migrate_task(struct task_struct *p, struct vx_info *vxi, int unshare)
 
 		/* hack for *spaces to provide compatibility */
 		if (unshare) {
-			ret = sys_unshare(CLONE_NEWUTS | CLONE_NEWIPC);
+			struct nsproxy *old_nsp = p->nsproxy;
+			struct nsproxy *new_nsp;
+
+			ret = unshare_nsproxy_namespaces(
+				CLONE_NEWUTS | CLONE_NEWIPC,
+				&new_nsp, NULL);
+			if (ret)
+				goto out;
+
+			new_nsp = xchg(&p->nsproxy, new_nsp);
 			vx_set_space(vxi, CLONE_NEWUTS | CLONE_NEWIPC);
+			put_nsproxy(old_nsp);
+			put_nsproxy(new_nsp);
 		}
 	}
 out:

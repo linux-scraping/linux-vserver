@@ -21,6 +21,7 @@
 #include <linux/utsname.h>
 #include <linux/pid_namespace.h>
 #include <linux/vserver/global.h>
+#include <linux/vserver/debug.h>
 
 struct nsproxy init_nsproxy = INIT_NSPROXY(init_nsproxy);
 
@@ -42,6 +43,8 @@ static inline struct nsproxy *clone_nsproxy(struct nsproxy *orig)
 	ns = kmemdup(orig, sizeof(struct nsproxy), GFP_KERNEL);
 	if (ns)
 		atomic_set(&ns->count, 1);
+	vxdprintk(VXD_CBIT(space, 2), "clone_nsproxy(%p[%u] = %p[1]",
+		orig, atomic_read(&orig->count), ns);
 	atomic_inc(&vs_global_nsproxy);
 	return ns;
 }
@@ -55,6 +58,10 @@ static struct nsproxy *unshare_namespaces(int flags, struct nsproxy *orig,
 			struct fs_struct *new_fs)
 {
 	struct nsproxy *new_nsp;
+
+	vxdprintk(VXD_CBIT(space, 4),
+		"unshare_namespaces(0x%08x,%p,%p)",
+		flags, orig, new_fs);
 
 	new_nsp = clone_nsproxy(orig);
 	if (!new_nsp)
@@ -129,6 +136,9 @@ int copy_namespaces(int flags, struct task_struct *tsk)
 	struct nsproxy *new_ns;
 	int err = 0;
 
+	vxdprintk(VXD_CBIT(space, 7), "copy_namespaces(0x%08x,%p[%p])",
+		flags, tsk, old_ns);
+
 	if (!old_ns)
 		return 0;
 
@@ -151,6 +161,9 @@ int copy_namespaces(int flags, struct task_struct *tsk)
 	tsk->nsproxy = new_ns;
 out:
 	put_nsproxy(old_ns);
+	vxdprintk(VXD_CBIT(space, 3),
+		"copy_namespaces(0x%08x,%p[%p]) = %d [%p]",
+		flags, tsk, old_ns, err, new_ns);
 	return err;
 }
 
@@ -178,6 +191,10 @@ int unshare_nsproxy_namespaces(unsigned long unshare_flags,
 {
 	struct nsproxy *old_ns = current->nsproxy;
 	int err = 0;
+
+	vxdprintk(VXD_CBIT(space, 4),
+		"unshare_nsproxy_namespaces(0x%08x,[%p])",
+		unshare_flags, old_ns);
 
 	if (!(unshare_flags & (CLONE_NEWNS | CLONE_NEWUTS | CLONE_NEWIPC)))
 		return 0;

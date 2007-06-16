@@ -3,6 +3,7 @@
 
 #include <linux/spinlock.h>
 #include <linux/sched.h>
+#include <linux/vserver/debug.h>
 
 struct mnt_namespace;
 struct uts_namespace;
@@ -38,26 +39,40 @@ void free_nsproxy(struct nsproxy *ns);
 int unshare_nsproxy_namespaces(unsigned long, struct nsproxy **,
 	struct fs_struct *);
 
-static inline void get_nsproxy(struct nsproxy *ns)
+#define	get_nsproxy(n)	__get_nsproxy(n, __FILE__, __LINE__)
+
+static inline void __get_nsproxy(struct nsproxy *ns,
+	const char *_file, int _line)
 {
+	vxlprintk(VXD_CBIT(space, 0), "get_nsproxy(%p[%u])",
+		ns, atomic_read(&ns->count), _file, _line);
 	atomic_inc(&ns->count);
 }
 
-static inline void put_nsproxy(struct nsproxy *ns)
+#define	put_nsproxy(n)	__put_nsproxy(n, __FILE__, __LINE__)
+
+static inline void __put_nsproxy(struct nsproxy *ns,
+	const char *_file, int _line)
 {
+	vxlprintk(VXD_CBIT(space, 0), "put_nsproxy(%p[%u])",
+		ns, atomic_read(&ns->count), _file, _line);
 	if (atomic_dec_and_test(&ns->count)) {
 		free_nsproxy(ns);
 	}
 }
 
-static inline void exit_task_namespaces(struct task_struct *p)
+#define	exit_task_namespaces(p)	__exit_task_namespaces(p, __FILE__, __LINE__)
+
+static inline void __exit_task_namespaces(struct task_struct *p,
+	const char *_file, int _line)
 {
 	struct nsproxy *ns = p->nsproxy;
 	if (ns) {
 		task_lock(p);
 		p->nsproxy = NULL;
 		task_unlock(p);
-		put_nsproxy(ns);
+		__put_nsproxy(ns, _file, _line);
 	}
 }
+
 #endif

@@ -34,6 +34,7 @@ extern unsigned int vx_debug_cres;
 extern unsigned int vx_debug_dlim;
 extern unsigned int vx_debug_quota;
 extern unsigned int vx_debug_cvirt;
+extern unsigned int vx_debug_space;
 extern unsigned int vx_debug_misc;
 
 
