@@ -1812,6 +1812,7 @@ static mdk_rdev_t *md_import_device(dev_t newdev, int super_format, int super_mi
 	kobject_init(&rdev->kobj);
 
 	rdev->desc_nr = -1;
+	rdev->saved_raid_disk = -1;
 	rdev->flags = 0;
 	rdev->data_offset = 0;
 	atomic_set(&rdev->nr_pending, 0);
@@ -3258,6 +3259,7 @@ static int hot_add_disk(mddev_t * mddev, dev_t dev)
 	}
 	clear_bit(In_sync, &rdev->flags);
 	rdev->desc_nr = -1;
+	rdev->saved_raid_disk = -1;
 	err = bind_rdev_to_array(rdev, mddev);
 	if (err)
 		goto abort_export;
@@ -4323,6 +4325,7 @@ static unsigned int mdstat_poll(struct file *filp, poll_table *wait)
 }
 
 static struct file_operations md_seq_fops = {
+	.owner		= THIS_MODULE,
 	.open           = md_seq_open,
 	.read           = seq_read,
 	.llseek         = seq_lseek,

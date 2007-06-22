@@ -1427,6 +1427,7 @@ static int sky2_down(struct net_device *dev)
 
 	/* Stop more packets from being queued */
 	netif_stop_queue(dev);
+	netif_carrier_off(dev);
 
  	/*
  	 * Both ports share the NAPI poll on port 0, so if necessary undo the
@@ -2286,6 +2287,10 @@ static int sky2_reset(struct sky2_hw *hw)
 		       pci_name(hw->pdev), hw->chip_id);
 		return -EOPNOTSUPP;
 	}
+
+	/* Make sure and enable all clocks */
+	if (hw->chip_id == CHIP_ID_YUKON_EC_U)
+		sky2_pci_write32(hw, PCI_DEV_REG3, 0);
 
 	/* disable ASF */
 	if (hw->chip_id <= CHIP_ID_YUKON_EC) {
@@ -3430,6 +3435,9 @@ static int sky2_resume(struct pci_dev *pdev)
 
 	pci_restore_state(pdev);
 	pci_enable_wake(pdev, PCI_D0, 0);
+
+	if (hw->chip_id == CHIP_ID_YUKON_EC_U)
+		sky2_pci_write32(hw, PCI_DEV_REG3, 0);
 	err = sky2_set_power_state(hw, PCI_D0);
 	if (err)
 		goto out;

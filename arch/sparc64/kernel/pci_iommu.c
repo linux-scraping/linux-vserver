@@ -64,7 +64,7 @@ static void __iommu_flushall(struct pci_iommu *iommu)
 #define IOPTE_IS_DUMMY(iommu, iopte)	\
 	((iopte_val(*iopte) & IOPTE_PAGE) == (iommu)->dummy_page_pa)
 
-static void inline iopte_make_dummy(struct pci_iommu *iommu, iopte_t *iopte)
+static inline void iopte_make_dummy(struct pci_iommu *iommu, iopte_t *iopte)
 {
 	unsigned long val = iopte_val(*iopte);
 
@@ -282,7 +282,7 @@ void pci_free_consistent(struct pci_dev *pdev, size_t size, void *cpu, dma_addr_
 
 	spin_lock_irqsave(&iommu->lock, flags);
 
-	free_npages(iommu, dvma, npages);
+	free_npages(iommu, dvma - iommu->page_table_map_base, npages);
 
 	spin_unlock_irqrestore(&iommu->lock, flags);
 

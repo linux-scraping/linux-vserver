@@ -1154,6 +1154,7 @@ int udp_rcv(struct sk_buff *skb)
 
 	if (pskb_trim_rcsum(skb, ulen))
 		goto short_packet;
+	uh = skb->h.uh;
 
 	udp_checksum_init(skb, uh, ulen, saddr, daddr);
 
