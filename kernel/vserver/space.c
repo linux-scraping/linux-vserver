@@ -113,9 +113,12 @@ struct nsproxy *__vs_merge_nsproxy(struct nsproxy *old,
 	if (!proxy)
 		return NULL;
 
-	if (mask)
+	if (mask) {
+		/* vs_mix_nsproxy returns with reference */
 		return vs_mix_nsproxy(old ? old : &null_proxy,
 			proxy, mask);
+	}
+	get_nsproxy(proxy);
 	return proxy;
 }
 

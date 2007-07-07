@@ -426,6 +426,30 @@ static const struct pci_device_id ahci_pci_tbl[] = {
 	{ PCI_VDEVICE(NVIDIA, 0x0559), board_ahci },		/* MCP67 */
 	{ PCI_VDEVICE(NVIDIA, 0x055a), board_ahci },		/* MCP67 */
 	{ PCI_VDEVICE(NVIDIA, 0x055b), board_ahci },		/* MCP67 */
+	{ PCI_VDEVICE(NVIDIA, 0x07f0), board_ahci },		/* MCP73 */
+	{ PCI_VDEVICE(NVIDIA, 0x07f1), board_ahci },		/* MCP73 */
+	{ PCI_VDEVICE(NVIDIA, 0x07f2), board_ahci },		/* MCP73 */
+	{ PCI_VDEVICE(NVIDIA, 0x07f3), board_ahci },		/* MCP73 */
+	{ PCI_VDEVICE(NVIDIA, 0x07f4), board_ahci },		/* MCP73 */
+	{ PCI_VDEVICE(NVIDIA, 0x07f5), board_ahci },		/* MCP73 */
+	{ PCI_VDEVICE(NVIDIA, 0x07f6), board_ahci },		/* MCP73 */
+	{ PCI_VDEVICE(NVIDIA, 0x07f7), board_ahci },		/* MCP73 */
+	{ PCI_VDEVICE(NVIDIA, 0x07f8), board_ahci },		/* MCP73 */
+	{ PCI_VDEVICE(NVIDIA, 0x07f9), board_ahci },		/* MCP73 */
+	{ PCI_VDEVICE(NVIDIA, 0x07fa), board_ahci },		/* MCP73 */
+	{ PCI_VDEVICE(NVIDIA, 0x07fb), board_ahci },		/* MCP73 */
+	{ PCI_VDEVICE(NVIDIA, 0x0ad0), board_ahci },		/* MCP77 */
+	{ PCI_VDEVICE(NVIDIA, 0x0ad1), board_ahci },		/* MCP77 */
+	{ PCI_VDEVICE(NVIDIA, 0x0ad2), board_ahci },		/* MCP77 */
+	{ PCI_VDEVICE(NVIDIA, 0x0ad3), board_ahci },		/* MCP77 */
+	{ PCI_VDEVICE(NVIDIA, 0x0ad4), board_ahci },		/* MCP77 */
+	{ PCI_VDEVICE(NVIDIA, 0x0ad5), board_ahci },		/* MCP77 */
+	{ PCI_VDEVICE(NVIDIA, 0x0ad6), board_ahci },		/* MCP77 */
+	{ PCI_VDEVICE(NVIDIA, 0x0ad7), board_ahci },		/* MCP77 */
+	{ PCI_VDEVICE(NVIDIA, 0x0ad8), board_ahci },		/* MCP77 */
+	{ PCI_VDEVICE(NVIDIA, 0x0ad9), board_ahci },		/* MCP77 */
+	{ PCI_VDEVICE(NVIDIA, 0x0ada), board_ahci },		/* MCP77 */
+	{ PCI_VDEVICE(NVIDIA, 0x0adb), board_ahci },		/* MCP77 */
 
 	/* SiS */
 	{ PCI_VDEVICE(SI, 0x1184), board_ahci }, /* SiS 966 */
@@ -503,7 +527,7 @@ static void ahci_save_initial_config(struct pci_dev *pdev,
 
 	/* fixup zero port_map */
 	if (!port_map) {
-		port_map = (1 << ahci_nr_ports(hpriv->cap)) - 1;
+		port_map = (1 << ahci_nr_ports(cap)) - 1;
 		dev_printk(KERN_WARNING, &pdev->dev,
 			   "PORTS_IMPL is zero, forcing 0x%x\n", port_map);
 

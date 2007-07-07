@@ -776,7 +776,6 @@ static inline struct kmem_cache *__find_general_cachep(size_t size,
 	 */
 	BUG_ON(malloc_sizes[INDEX_AC].cs_cachep == NULL);
 #endif
-	WARN_ON_ONCE(size == 0);
 	while (size > csizep->cs_size)
 		csizep++;
 
@@ -3544,7 +3543,7 @@ static inline void __cache_free(struct kmem_cache *cachep, void *objp)
 	objp = cache_free_debugcheck(cachep, objp, __builtin_return_address(0));
 	vx_slab_free(cachep);
 
-	if (use_alien_caches && cache_free_alien(cachep, objp))
+	if (cache_free_alien(cachep, objp))
 		return;
 
 	if (likely(ac->avail < ac->limit)) {

@@ -79,6 +79,8 @@ void show_mem(void)
 			if (unlikely(i % MAX_ORDER_NR_PAGES == 0)) {
 				touch_nmi_watchdog();
 			}
+			if (!pfn_valid(pgdat->node_start_pfn + i))
+				continue;
 			page = pfn_to_page(pgdat->node_start_pfn + i);
 			total++;
 			if (PageReserved(page))
@@ -603,6 +605,11 @@ void mark_rodata_ro(void)
 	if (num_possible_cpus() > 1)
 		start = (unsigned long)_etext;
 #endif
+
+#ifdef CONFIG_KPROBES
+	start = (unsigned long)__start_rodata;
+#endif
+	
 	end = (unsigned long)__end_rodata;
 	start = (start + PAGE_SIZE - 1) & PAGE_MASK;
 	end &= PAGE_MASK;

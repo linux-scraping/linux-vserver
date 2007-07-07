@@ -600,8 +600,9 @@ static const char *sata_spd_string(unsigned int spd)
 
 void ata_dev_disable(struct ata_device *dev)
 {
-	if (ata_dev_enabled(dev) && ata_msg_drv(dev->ap)) {
-		ata_dev_printk(dev, KERN_WARNING, "disabled\n");
+	if (ata_dev_enabled(dev)) {
+		if (ata_msg_drv(dev->ap))
+			ata_dev_printk(dev, KERN_WARNING, "disabled\n");
 		ata_down_xfermask_limit(dev, ATA_DNXFER_FORCE_PIO0 |
 					     ATA_DNXFER_QUIET);
 		dev->class++;
@@ -983,11 +984,6 @@ static u64 ata_hpa_resize(struct ata_device *dev)
 	else
 		hpa_sectors = ata_read_native_max_address(dev);
 
-	/* if no hpa, both should be equal */
-	ata_dev_printk(dev, KERN_INFO, "%s 1: sectors = %lld, "
-				"hpa_sectors = %lld\n",
-		__FUNCTION__, (long long)sectors, (long long)hpa_sectors);
-
 	if (hpa_sectors > sectors) {
 		ata_dev_printk(dev, KERN_INFO,
 			"Host Protected Area detected:\n"
@@ -1009,7 +1005,11 @@ static u64 ata_hpa_resize(struct ata_device *dev)
 				return hpa_sectors;
 			}
 		}
-	}
+	} else if (hpa_sectors < sectors)
+		ata_dev_printk(dev, KERN_WARNING, "%s 1: hpa sectors (%lld) "
+			       "is smaller than sectors (%lld)\n", __FUNCTION__,
+			       (long long)hpa_sectors, (long long)sectors);
+
 	return sectors;
 }
 
@@ -1727,7 +1727,7 @@ int ata_dev_read_id(struct ata_device *dev, unsigned int *p_class,
 
 	/* sanity check */
 	rc = -EINVAL;
-	reason = "device reports illegal type";
+	reason = "device reports invalid type";
 
 	if (class == ATA_DEV_ATA) {
 		if (!ata_id_is_ata(id) && !ata_id_is_cfa(id))
@@ -1900,6 +1900,13 @@ int ata_dev_configure(struct ata_device *dev)
 	if (ata_msg_probe(ap))
 		ata_dump_id(id);
 
+	/* SCSI only uses 4-char revisions, dump full 8 chars from ATA */
+	ata_id_c_string(dev->id, fwrevbuf, ATA_ID_FW_REV,
+			sizeof(fwrevbuf));
+
+	ata_id_c_string(dev->id, modelbuf, ATA_ID_PROD,
+			sizeof(modelbuf));
+
 	/* ATA-specific feature tests */
 	if (dev->class == ATA_DEV_ATA) {
 		if (ata_id_is_cfa(id)) {
@@ -1913,13 +1920,6 @@ int ata_dev_configure(struct ata_device *dev)
 			snprintf(revbuf, 7, "ATA-%d",  ata_id_major_version(id));
 
 		dev->n_sectors = ata_id_n_sectors(id);
-
-		/* SCSI only uses 4-char revisions, dump full 8 chars from ATA */
-		ata_id_c_string(dev->id, fwrevbuf, ATA_ID_FW_REV,
-				sizeof(fwrevbuf));
-
-		ata_id_c_string(dev->id, modelbuf, ATA_ID_PROD,
-				sizeof(modelbuf));
 
 		if (dev->id[59] & 0x100)
 			dev->multi_count = dev->id[59] & 0xff;
@@ -2009,7 +2009,9 @@ int ata_dev_configure(struct ata_device *dev)
 
 		/* print device info to dmesg */
 		if (ata_msg_drv(ap) && print_info)
-			ata_dev_printk(dev, KERN_INFO, "ATAPI, max %s%s\n",
+			ata_dev_printk(dev, KERN_INFO,
+				       "ATAPI: %s, %s, max %s%s\n",
+				       modelbuf, fwrevbuf,
 				       ata_mode_string(xfer_mask),
 				       cdb_intr_string);
 	}
@@ -2043,10 +2045,6 @@ int ata_dev_configure(struct ata_device *dev)
 	if (ata_device_blacklisted(dev) & ATA_HORKAGE_MAX_SEC_128)
 		dev->max_sectors = min_t(unsigned int, ATA_MAX_SECTORS_128,
 					 dev->max_sectors);
-
-	/* limit ATAPI DMA to R/W commands only */
-	if (ata_device_blacklisted(dev) & ATA_HORKAGE_DMA_RW_ONLY)
-		dev->horkage |= ATA_HORKAGE_DMA_RW_ONLY;
 
 	if (ap->ops->dev_config)
 		ap->ops->dev_config(dev);
@@ -3059,22 +3057,28 @@ static int ata_bus_post_reset(struct ata_port *ap, unsigned int devmask,
 		}
 	}
 
-	/* if device 1 was found in ata_devchk, wait for
-	 * register access, then wait for BSY to clear
+	/* if device 1 was found in ata_devchk, wait for register
+	 * access briefly, then wait for BSY to clear.
 	 */
-	while (dev1) {
-		u8 nsect, lbal;
+	if (dev1) {
+		int i;
 
 		ap->ops->dev_select(ap, 1);
-		nsect = ioread8(ioaddr->nsect_addr);
-		lbal = ioread8(ioaddr->lbal_addr);
-		if ((nsect == 1) && (lbal == 1))
-			break;
-		if (time_after(jiffies, deadline))
-			return -EBUSY;
-		msleep(50);	/* give drive a breather */
-	}
-	if (dev1) {
+
+		/* Wait for register access.  Some ATAPI devices fail
+		 * to set nsect/lbal after reset, so don't waste too
+		 * much time on it.  We're gonna wait for !BSY anyway.
+		 */
+		for (i = 0; i < 2; i++) {
+			u8 nsect, lbal;
+
+			nsect = ioread8(ioaddr->nsect_addr);
+			lbal = ioread8(ioaddr->lbal_addr);
+			if ((nsect == 1) && (lbal == 1))
+				break;
+			msleep(50);	/* give drive a breather */
+		}
+
 		rc = ata_wait_ready(ap, deadline);
 		if (rc) {
 			if (rc != -ENODEV)
@@ -3651,7 +3655,7 @@ static int ata_dev_same_device(struct ata_device *dev, unsigned int new_class,
 
 /**
  *	ata_dev_reread_id - Re-read IDENTIFY data
- *	@adev: target ATA device
+ *	@dev: target ATA device
  *	@readid_flags: read ID flags
  *
  *	Re-read IDENTIFY page and make sure @dev is still attached to
@@ -3769,10 +3773,10 @@ static const struct ata_blacklist_entry ata_device_blacklist [] = {
 	{ "_NEC DV5800A", 	NULL,		ATA_HORKAGE_NODMA },
 	{ "SAMSUNG CD-ROM SN-124","N001",	ATA_HORKAGE_NODMA },
 	{ "Seagate STT20000A", NULL,		ATA_HORKAGE_NODMA },
+	{ "IOMEGA  ZIP 250       ATAPI", NULL,	ATA_HORKAGE_NODMA }, /* temporary fix */
 
 	/* Weird ATAPI devices */
-	{ "TORiSAN DVD-ROM DRD-N216", NULL,	ATA_HORKAGE_MAX_SEC_128 |
-						ATA_HORKAGE_DMA_RW_ONLY },
+	{ "TORiSAN DVD-ROM DRD-N216", NULL,	ATA_HORKAGE_MAX_SEC_128 },
 
 	/* Devices we expect to fail diagnostics */
 
@@ -3791,6 +3795,10 @@ static const struct ata_blacklist_entry ata_device_blacklist [] = {
 	{ "HTS541060G9SA00",    "MB3OC60D",     ATA_HORKAGE_NONCQ, },
 	{ "HTS541080G9SA00",    "MB4OC60D",     ATA_HORKAGE_NONCQ, },
 	{ "HTS541010G9SA00",    "MBZOC60D",     ATA_HORKAGE_NONCQ, },
+	/* Drives which do spurious command completion */
+	{ "HTS541680J9SA00",	"SB2IC7EP",	ATA_HORKAGE_NONCQ, },
+	{ "HTS541612J9SA00",	"SBDIC7JP",	ATA_HORKAGE_NONCQ, },
+	{ "WDC WD740ADFD-00NLR1", NULL,		ATA_HORKAGE_NONCQ, },
 
 	/* Devices with NCQ limits */
 
@@ -4096,6 +4104,7 @@ static void ata_fill_sg(struct ata_queued_cmd *qc)
 	if (idx)
 		ap->prd[idx - 1].flags_len |= cpu_to_le32(ATA_PRD_EOT);
 }
+
 /**
  *	ata_check_atapi_dma - Check whether ATAPI DMA can be supported
  *	@qc: Metadata associated with taskfile to check
@@ -4113,33 +4122,19 @@ static void ata_fill_sg(struct ata_queued_cmd *qc)
 int ata_check_atapi_dma(struct ata_queued_cmd *qc)
 {
 	struct ata_port *ap = qc->ap;
-	int rc = 0; /* Assume ATAPI DMA is OK by default */
 
-	/* some drives can only do ATAPI DMA on read/write */
-	if (unlikely(qc->dev->horkage & ATA_HORKAGE_DMA_RW_ONLY)) {
-		struct scsi_cmnd *cmd = qc->scsicmd;
-		u8 *scsicmd = cmd->cmnd;
-
-		switch (scsicmd[0]) {
-		case READ_10:
-		case WRITE_10:
-		case READ_12:
-		case WRITE_12:
-		case READ_6:
-		case WRITE_6:
-			/* atapi dma maybe ok */
-			break;
-		default:
-			/* turn off atapi dma */
-			return 1;
-		}
-	}
+	/* Don't allow DMA if it isn't multiple of 16 bytes.  Quite a
+	 * few ATAPI devices choke on such DMA requests.
+	 */
+	if (unlikely(qc->nbytes & 15))
+		return 1;
 
 	if (ap->ops->check_atapi_dma)
-		rc = ap->ops->check_atapi_dma(qc);
+		return ap->ops->check_atapi_dma(qc);
 
-	return rc;
+	return 0;
 }
+
 /**
  *	ata_qc_prep - Prepare taskfile for submission
  *	@qc: Metadata associated with taskfile to be prepared
@@ -6313,7 +6308,8 @@ int ata_host_register(struct ata_host *host, struct scsi_host_template *sht)
 		/* init sata_spd_limit to the current value */
 		if (sata_scr_read(ap, SCR_CONTROL, &scontrol) == 0) {
 			int spd = (scontrol >> 4) & 0xf;
-			ap->hw_sata_spd_limit &= (1 << spd) - 1;
+			if (spd)
+				ap->hw_sata_spd_limit &= (1 << spd) - 1;
 		}
 		ap->sata_spd_limit = ap->hw_sata_spd_limit;
 
@@ -6432,6 +6428,9 @@ int ata_host_activate(struct ata_host *host, int irq,
 	/* if failed, just free the IRQ and leave ports alone */
 	if (rc)
 		devm_free_irq(host->dev, irq, host);
+
+	/* Used to print device info at probe */
+	host->irq = irq;
 
 	return rc;
 }
@@ -6818,6 +6817,7 @@ EXPORT_SYMBOL_GPL(ata_check_status);
 EXPORT_SYMBOL_GPL(ata_altstatus);
 EXPORT_SYMBOL_GPL(ata_exec_command);
 EXPORT_SYMBOL_GPL(ata_port_start);
+EXPORT_SYMBOL_GPL(ata_sff_port_start);
 EXPORT_SYMBOL_GPL(ata_interrupt);
 EXPORT_SYMBOL_GPL(ata_do_set_mode);
 EXPORT_SYMBOL_GPL(ata_data_xfer);

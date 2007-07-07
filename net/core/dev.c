@@ -2011,6 +2011,7 @@ static void net_rx_action(struct softirq_action *h)
 		}
 	}
 out:
+	local_irq_enable();
 #ifdef CONFIG_NET_DMA
 	/*
 	 * There may not be any more sk_buffs coming right now, so push
@@ -2024,7 +2025,6 @@ out:
 		rcu_read_unlock();
 	}
 #endif
-	local_irq_enable();
 	return;
 
 softnet_break:
@@ -2586,7 +2586,7 @@ unsigned dev_get_flags(const struct net_device *dev)
 
 int dev_change_flags(struct net_device *dev, unsigned flags)
 {
-	int ret;
+	int ret, changes;
 	int old_flags = dev->flags;
 
 	/*
@@ -2641,8 +2641,10 @@ int dev_change_flags(struct net_device *dev, unsigned flags)
 		dev_set_allmulti(dev, inc);
 	}
 
-	if (old_flags ^ dev->flags)
-		rtmsg_ifinfo(RTM_NEWLINK, dev, old_flags ^ dev->flags);
+	/* Exclude state transition flags, already notified */
+	changes = (old_flags ^ dev->flags) & ~(IFF_UP | IFF_RUNNING);
+	if (changes)
+		rtmsg_ifinfo(RTM_NEWLINK, dev, changes);
 
 	return ret;
 }

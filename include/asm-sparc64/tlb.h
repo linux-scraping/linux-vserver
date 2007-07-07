@@ -2,6 +2,7 @@
 #define _SPARC64_TLB_H
 
 #include <linux/swap.h>
+#include <linux/pagemap.h>
 #include <linux/vs_memory.h>
 #include <asm/pgalloc.h>
 #include <asm/tlbflush.h>
