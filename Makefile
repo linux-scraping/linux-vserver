@@ -1,7 +1,7 @@
 VERSION = 2
 PATCHLEVEL = 6
 SUBLEVEL = 22
-EXTRAVERSION = -vs2.2.0-rc5
+EXTRAVERSION = .1-vs2.2.0.1-rc1
 NAME = Holy Dancing Manatees, Batman!
 
 # *DOCUMENTATION*
