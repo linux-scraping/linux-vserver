@@ -1558,7 +1558,7 @@ static struct sock *udp_get_first(struct seq_file *seq)
 		struct hlist_node *node;
 		sk_for_each(sk, node, state->hashtable + state->bucket) {
 			if (sk->sk_family == state->family &&
-				nx_check(sk->sk_nid, VS_WATCH_P|VS_IDENT))
+				nx_check(sk->sk_nid, VS_WATCH_P | VS_IDENT))
 				goto found;
 		}
 	}
@@ -1576,7 +1576,7 @@ static struct sock *udp_get_next(struct seq_file *seq, struct sock *sk)
 try_again:
 		;
 	} while (sk && (sk->sk_family != state->family ||
-		!nx_check(sk->sk_nid, VS_WATCH_P|VS_IDENT)));
+		!nx_check(sk->sk_nid, VS_WATCH_P | VS_IDENT)));
 
 	if (!sk && ++state->bucket < UDP_HTABLE_SIZE) {
 		sk = sk_head(state->hashtable + state->bucket);

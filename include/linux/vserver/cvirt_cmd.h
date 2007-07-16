@@ -14,7 +14,7 @@ struct	vcmd_vhi_name_v0 {
 
 
 enum vhi_name_field {
-	VHIN_CONTEXT=0,
+	VHIN_CONTEXT = 0,
 	VHIN_SYSNAME,
 	VHIN_NODENAME,
 	VHIN_RELEASE,

@@ -10,10 +10,16 @@ struct _vx_sock_acc {
 	atomic_long_t total;
 };
 
+struct _vx_diskio_acc {
+	atomic_long_t count;
+	atomic_long_t total;
+};
+
 /* context sub struct */
 
 struct _vx_cacct {
 	struct _vx_sock_acc sock[VXA_SOCK_SIZE][3];
+	struct _vx_diskio_acc diskio[2];
 	atomic_t slab[8];
 	atomic_t page[6][8];
 };
@@ -22,14 +28,14 @@ struct _vx_cacct {
 
 static inline void __dump_vx_cacct(struct _vx_cacct *cacct)
 {
-	int i,j;
+	int i, j;
 
 	printk("\t_vx_cacct:");
-	for (i=0; i<6; i++) {
+	for (i = 0; i < 6; i++) {
 		struct _vx_sock_acc *ptr = cacct->sock[i];
 
 		printk("\t [%d] =", i);
-		for (j=0; j<3; j++) {
+		for (j = 0; j < 3; j++) {
 			printk(" [%d] = %8lu, %8lu", j,
 				atomic_long_read(&ptr[j].count),
 				atomic_long_read(&ptr[j].total));

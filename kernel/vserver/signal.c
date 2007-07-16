@@ -22,7 +22,7 @@
 
 int vx_info_kill(struct vx_info *vxi, int pid, int sig)
 {
-	int retval, count=0;
+	int retval, count = 0;
 	struct task_struct *p;
 	struct siginfo *sip = SEND_SIG_PRIV;
 
@@ -77,7 +77,7 @@ int vc_ctx_kill(struct vx_info *vxi, void __user *data)
 {
 	struct vcmd_ctx_kill_v0 vc_data;
 
-	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
+	if (copy_from_user(&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
 	/* special check to allow guest shutdown */
@@ -101,7 +101,7 @@ static int __wait_exit(struct vx_info *vxi)
 
 wait:
 	if (vx_info_state(vxi,
-		VXS_SHUTDOWN|VXS_HASHED|VXS_HELPER) == VXS_SHUTDOWN)
+		VXS_SHUTDOWN | VXS_HASHED | VXS_HELPER) == VXS_SHUTDOWN)
 		goto out;
 	if (signal_pending(current)) {
 		ret = -ERESTARTSYS;
@@ -127,7 +127,7 @@ int vc_wait_exit(struct vx_info *vxi, void __user *data)
 	vc_data.reboot_cmd = vxi->reboot_cmd;
 	vc_data.exit_code = vxi->exit_code;
 
-	if (copy_to_user (data, &vc_data, sizeof(vc_data)))
+	if (copy_to_user(data, &vc_data, sizeof(vc_data)))
 		ret = -EFAULT;
 	return ret;
 }

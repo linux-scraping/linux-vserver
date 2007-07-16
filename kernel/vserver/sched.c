@@ -20,7 +20,7 @@
 #include <asm/uaccess.h>
 
 #define vxd_check_range(val, min, max) do {		\
-	vxlprintk((val<min) || (val>max),		\
+	vxlprintk((val < min) || (val > max),		\
 		"check_range(%ld,%ld,%ld)",		\
 		(long)val, (long)min, (long)max,	\
 		__FILE__, __LINE__);			\
@@ -96,8 +96,7 @@ int vx_tokens_recalc(struct _vx_sched_pc *sched_pc,
 		/* add tokens */
 		sched_pc->tokens += tokens;
 		sched_pc->token_time += tokens;
-	}
-	else
+	} else
 		delta_min[0] = delta;
 
 #ifdef	CONFIG_VSERVER_IDLETIME
@@ -124,8 +123,7 @@ int vx_tokens_recalc(struct _vx_sched_pc *sched_pc,
 		/* add tokens */
 		sched_pc->tokens += tokens;
 		sched_pc->token_time += tokens;
-	}
-	else
+	} else
 		delta_min[1] = delta;
 skip_idle:
 #endif
@@ -141,8 +139,7 @@ skip_idle:
 			flags &= ~VXSF_ONHOLD;
 			sched_pc->hold_ticks +=
 				*norm_time - sched_pc->onhold;
-		}
-		else
+		} else
 			goto on_hold;
 	} else {
 		/* put on hold? */
@@ -220,7 +217,7 @@ static int do_set_sched(struct vx_info *vxi, struct vcmd_sched_v5 *data)
 	if (data->tokens_max <= 0)
 		data->tokens_max = HZ;
 	if (data->tokens_min < 0)
-		data->tokens_min = HZ/3;
+		data->tokens_min = HZ / 3;
 	if (data->tokens_min >= data->tokens_max)
 		data->tokens_min = data->tokens_max;
 
@@ -256,7 +253,7 @@ static int do_set_sched(struct vx_info *vxi, struct vcmd_sched_v5 *data)
 		vxi->sched.prio_bias = data->prio_bias;
 
 	/* Sanity check rate/interval */
-	for (i=0; i<2; i++) {
+	for (i = 0; i < 2; i++) {
 		if (data->fill_rate[i] < 0)
 			data->fill_rate[i] = 0;
 		if (data->interval[i] <= 0)
@@ -264,7 +261,7 @@ static int do_set_sched(struct vx_info *vxi, struct vcmd_sched_v5 *data)
 	}
 
 	update_mask = vxi->sched.update_mask & VXSM_SET_MASK;
-	update_mask |= (set_mask & (VXSM_SET_MASK|VXSM_IDLE_TIME));
+	update_mask |= (set_mask & (VXSM_SET_MASK | VXSM_IDLE_TIME));
 	vxi->sched.update_mask = update_mask;
 #ifdef	CONFIG_SMP
 	rmb();
@@ -272,8 +269,7 @@ static int do_set_sched(struct vx_info *vxi, struct vcmd_sched_v5 *data)
 		vxi->sched.update = cpumask_of_cpu(data->cpu_id);
 		cpus_and(vxi->sched.update, cpu_online_map,
 			vxi->sched.update);
-	}
-	else
+	} else
 		vxi->sched.update = cpu_online_map;
 
 	/* forced reload? */
@@ -327,7 +323,7 @@ int vc_set_sched_v2(struct vx_info *vxi, void __user *data)
 	struct vcmd_set_sched_v2 vc_data;
 	struct vcmd_set_sched_v4 vc_data_v4 = { .set_mask = 0 };
 
-	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
+	if (copy_from_user(&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
 	COPY_MASK_V2(fill_rate,	 VXSM_FILL_RATE);
@@ -347,7 +343,7 @@ int vc_set_sched_v3(struct vx_info *vxi, void __user *data)
 	struct vcmd_set_sched_v3 vc_data;
 	struct vcmd_set_sched_v4 vc_data_v4;
 
-	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
+	if (copy_from_user(&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
 	/* structures are binary compatible */
@@ -362,7 +358,7 @@ int vc_set_sched_v4(struct vx_info *vxi, void __user *data)
 {
 	struct vcmd_set_sched_v4 vc_data;
 
-	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
+	if (copy_from_user(&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
 	return do_set_sched_v4(vxi, &vc_data);
@@ -374,7 +370,7 @@ int vc_set_sched(struct vx_info *vxi, void __user *data)
 {
 	struct vcmd_sched_v5 vc_data;
 
-	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
+	if (copy_from_user(&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
 	return do_set_sched(vxi, &vc_data);
@@ -385,7 +381,7 @@ int vc_get_sched(struct vx_info *vxi, void __user *data)
 {
 	struct vcmd_sched_v5 vc_data;
 
-	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
+	if (copy_from_user(&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
 	if (vc_data.mask & VXSM_CPU_ID) {
@@ -415,7 +411,7 @@ int vc_get_sched(struct vx_info *vxi, void __user *data)
 		vc_data.interval[1] = ticks_to_msec(vc_data.interval[1]);
 	}
 
-	if (copy_to_user (data, &vc_data, sizeof(vc_data)))
+	if (copy_to_user(data, &vc_data, sizeof(vc_data)))
 		return -EFAULT;
 	return 0;
 }
@@ -426,7 +422,7 @@ int vc_sched_info(struct vx_info *vxi, void __user *data)
 	struct vcmd_sched_info vc_data;
 	int cpu;
 
-	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
+	if (copy_from_user(&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
 	cpu = vc_data.cpu_id;
@@ -444,7 +440,7 @@ int vc_sched_info(struct vx_info *vxi, void __user *data)
 	}
 	vc_data.token_usec = ticks_to_usec(1);
 
-	if (copy_to_user (data, &vc_data, sizeof(vc_data)))
+	if (copy_to_user(data, &vc_data, sizeof(vc_data)))
 		return -EFAULT;
 	return 0;
 }

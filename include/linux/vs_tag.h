@@ -18,9 +18,9 @@
 
 #define dx_current_tag() dx_task_tag(current)
 
-#define dx_check(c,m)	__dx_check(dx_current_tag(),c,m)
+#define dx_check(c, m)	__dx_check(dx_current_tag(), c, m)
 
-#define dx_weak_check(c,m)	((m) ? dx_check(c,m) : 1)
+#define dx_weak_check(c, m)	((m) ? dx_check(c, m) : 1)
 
 
 /*
@@ -30,8 +30,7 @@
 static inline int __dx_check(tag_t cid, tag_t id, unsigned int mode)
 {
 	if (mode & DX_ARG_MASK) {
-		if ((mode & DX_IDENT) &&
-			(id == cid))
+		if ((mode & DX_IDENT) && (id == cid))
 			return 1;
 	}
 	return (((mode & DX_ADMIN) && (cid == 0)) ||

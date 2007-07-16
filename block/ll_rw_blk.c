@@ -30,6 +30,7 @@
 #include <linux/cpu.h>
 #include <linux/blktrace_api.h>
 #include <linux/fault-inject.h>
+#include <linux/vs_diskio.h>
 
 /*
  * for max sense size
@@ -2674,6 +2675,8 @@ static void drive_stat_acct(struct request *rq, int nr_sectors, int new_io)
 		disk_round_stats(rq->rq_disk);
 		rq->rq_disk->in_flight++;
 	}
+
+	vx_acc_diskio(current_vx_info(), rw, new_io, nr_sectors);
 }
 
 /*

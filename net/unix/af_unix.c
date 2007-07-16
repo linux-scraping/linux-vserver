@@ -255,7 +255,7 @@ static struct sock *__unix_find_socket_byname(struct sockaddr_un *sunname,
 	sk_for_each(s, node, &unix_socket_table[hash ^ type]) {
 		struct unix_sock *u = unix_sk(s);
 
-		if (!nx_check(s->sk_nid, VS_WATCH_P|VS_IDENT))
+		if (!nx_check(s->sk_nid, VS_WATCH_P | VS_IDENT))
 			continue;
 		if (u->addr->len == len &&
 		    !memcmp(u->addr->name, sunname, len))

@@ -124,8 +124,8 @@ static inline unsigned char dt_type(struct inode *inode)
  * both impossible due to the lock on directory.
  */
 
-static inline int do_dcache_readdir_filter(struct file * filp,
-	void * dirent, filldir_t filldir, int (*filter)(struct dentry *dentry))
+static inline int do_dcache_readdir_filter(struct file *filp,
+	void *dirent, filldir_t filldir, int (*filter)(struct dentry *dentry))
 {
 	struct dentry *dentry = filp->f_path.dentry;
 	struct dentry *cursor = filp->private_data;
@@ -175,12 +175,12 @@ static inline int do_dcache_readdir_filter(struct file * filp,
 	return 0;
 }
 
-int dcache_readdir(struct file * filp, void * dirent, filldir_t filldir)
+int dcache_readdir(struct file *filp, void *dirent, filldir_t filldir)
 {
 	return do_dcache_readdir_filter(filp, dirent, filldir, NULL);
 }
 
-int dcache_readdir_filter(struct file * filp, void * dirent, filldir_t filldir,
+int dcache_readdir_filter(struct file *filp, void *dirent, filldir_t filldir,
 	int (*filter)(struct dentry *))
 {
 	return do_dcache_readdir_filter(filp, dirent, filldir, filter);

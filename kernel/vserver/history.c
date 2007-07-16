@@ -35,7 +35,7 @@
 struct _vx_history {
 	unsigned int counter;
 
-	struct _vx_hist_entry entry[VXH_SIZE+1];
+	struct _vx_hist_entry entry[VXH_SIZE + 1];
 };
 
 
@@ -75,10 +75,10 @@ EXPORT_SYMBOL_GPL(vxh_advance);
 
 #define VXH_VXI_FMTS	"%p[#%d,%d.%d]"
 
-#define VXH_VXI_ARGS(e)	(e)->vxi.ptr,			\
-			(e)->vxi.ptr?(e)->vxi.xid:0,	\
-			(e)->vxi.ptr?(e)->vxi.usecnt:0,	\
-			(e)->vxi.ptr?(e)->vxi.tasks:0
+#define VXH_VXI_ARGS(e)	(e)->vxi.ptr,				\
+			(e)->vxi.ptr ? (e)->vxi.xid : 0,	\
+			(e)->vxi.ptr ? (e)->vxi.usecnt : 0,	\
+			(e)->vxi.ptr ? (e)->vxi.tasks : 0
 
 void	vxh_dump_entry(struct _vx_hist_entry *e, unsigned cpu)
 {
@@ -91,7 +91,7 @@ void	vxh_dump_entry(struct _vx_hist_entry *e, unsigned cpu)
 	case VXH_PUT_VX_INFO:
 		printk( VXH_LOC_FMTS " %s_vx_info " VXH_VXI_FMTS "\n",
 			VXH_LOC_ARGS(e),
-			(e->type==VXH_GET_VX_INFO)?"get":"put",
+			(e->type == VXH_GET_VX_INFO) ? "get" : "put",
 			VXH_VXI_ARGS(e));
 		break;
 
@@ -100,8 +100,8 @@ void	vxh_dump_entry(struct _vx_hist_entry *e, unsigned cpu)
 	case VXH_CLR_VX_INFO:
 		printk( VXH_LOC_FMTS " %s_vx_info " VXH_VXI_FMTS " @%p\n",
 			VXH_LOC_ARGS(e),
-			(e->type==VXH_INIT_VX_INFO)?"init":
-			((e->type==VXH_SET_VX_INFO)?"set":"clr"),
+			(e->type == VXH_INIT_VX_INFO) ? "init" :
+			((e->type == VXH_SET_VX_INFO) ? "set" : "clr"),
 			VXH_VXI_ARGS(e), e->sc.data);
 		break;
 
@@ -109,7 +109,7 @@ void	vxh_dump_entry(struct _vx_hist_entry *e, unsigned cpu)
 	case VXH_RELEASE_VX_INFO:
 		printk( VXH_LOC_FMTS " %s_vx_info " VXH_VXI_FMTS " @%p\n",
 			VXH_LOC_ARGS(e),
-			(e->type==VXH_CLAIM_VX_INFO)?"claim":"release",
+			(e->type == VXH_CLAIM_VX_INFO) ? "claim" : "release",
 			VXH_VXI_ARGS(e), e->sc.data);
 		break;
 
@@ -117,7 +117,7 @@ void	vxh_dump_entry(struct _vx_hist_entry *e, unsigned cpu)
 	case VXH_DEALLOC_VX_INFO:
 		printk( VXH_LOC_FMTS " %s_vx_info " VXH_VXI_FMTS "\n",
 			VXH_LOC_ARGS(e),
-			(e->type==VXH_ALLOC_VX_INFO)?"alloc":"dealloc",
+			(e->type == VXH_ALLOC_VX_INFO) ? "alloc" : "dealloc",
 			VXH_VXI_ARGS(e));
 		break;
 
@@ -125,7 +125,7 @@ void	vxh_dump_entry(struct _vx_hist_entry *e, unsigned cpu)
 	case VXH_UNHASH_VX_INFO:
 		printk( VXH_LOC_FMTS " __%s_vx_info " VXH_VXI_FMTS "\n",
 			VXH_LOC_ARGS(e),
-			(e->type==VXH_HASH_VX_INFO)?"hash":"unhash",
+			(e->type == VXH_HASH_VX_INFO) ? "hash" : "unhash",
 			VXH_VXI_ARGS(e));
 		break;
 
@@ -134,8 +134,8 @@ void	vxh_dump_entry(struct _vx_hist_entry *e, unsigned cpu)
 	case VXH_CREATE_VX_INFO:
 		printk( VXH_LOC_FMTS " __%s_vx_info [#%d] -> " VXH_VXI_FMTS "\n",
 			VXH_LOC_ARGS(e),
-			(e->type==VXH_CREATE_VX_INFO)?"create":
-			((e->type==VXH_LOC_VX_INFO)?"loc":"lookup"),
+			(e->type == VXH_CREATE_VX_INFO) ? "create" :
+			((e->type == VXH_LOC_VX_INFO) ? "loc" : "lookup"),
 			e->ll.arg, VXH_VXI_ARGS(e));
 		break;
 	}
@@ -148,11 +148,11 @@ static void __vxh_dump_history(void)
 	printk("History:\tSEQ: %8x\tNR_CPUS: %d\n",
 		atomic_read(&sequence), NR_CPUS);
 
-	for (i=0; i < VXH_SIZE; i++) {
+	for (i = 0; i < VXH_SIZE; i++) {
 		for_each_online_cpu(cpu) {
 			struct _vx_history *hist =
 				&per_cpu(vx_history_buffer, cpu);
-			unsigned int index = (hist->counter-i) % VXH_SIZE;
+			unsigned int index = (hist->counter - i) % VXH_SIZE;
 			struct _vx_hist_entry *entry = &hist->entry[index];
 
 			vxh_dump_entry(entry, cpu);
@@ -209,7 +209,7 @@ int do_read_history(struct __user _vx_hist_entry *data,
 			&hist->entry[idx % VXH_SIZE];
 
 		/* send entry to userspace */
-		ret = copy_to_user (&data[pos], entry, sizeof(*entry));
+		ret = copy_to_user(&data[pos], entry, sizeof(*entry));
 		if (ret)
 			break;
 	}
@@ -227,13 +227,13 @@ int vc_read_history(uint32_t id, void __user *data)
 	if (id >= NR_CPUS)
 		return -EINVAL;
 
-	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
+	if (copy_from_user(&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
 	ret = do_read_history((struct __user _vx_hist_entry *)vc_data.data,
 		id, &vc_data.index, &vc_data.count);
 
-	if (copy_to_user (data, &vc_data, sizeof(vc_data)))
+	if (copy_to_user(data, &vc_data, sizeof(vc_data)))
 		return -EFAULT;
 	return ret;
 }
@@ -248,14 +248,14 @@ int vc_read_history_x32(uint32_t id, void __user *data)
 	if (id >= NR_CPUS)
 		return -EINVAL;
 
-	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
+	if (copy_from_user(&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
 	ret = do_read_history((struct __user _vx_hist_entry *)
 		compat_ptr(vc_data.data_ptr),
 		id, &vc_data.index, &vc_data.count);
 
-	if (copy_to_user (data, &vc_data, sizeof(vc_data)))
+	if (copy_to_user(data, &vc_data, sizeof(vc_data)))
 		return -EFAULT;
 	return ret;
 }

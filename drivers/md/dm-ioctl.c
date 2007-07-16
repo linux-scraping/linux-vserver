@@ -101,7 +101,7 @@ static struct hash_cell *__get_name_cell(const char *str)
 	unsigned int h = hash_str(str);
 
 	list_for_each_entry (hc, _name_buckets + h, name_list)
-		if (vx_check(dm_get_xid(hc->md), VS_WATCH_P|VS_IDENT) &&
+		if (vx_check(dm_get_xid(hc->md), VS_WATCH_P | VS_IDENT) &&
 			!strcmp(hc->name, str)) {
 			dm_get(hc->md);
 			return hc;
@@ -116,7 +116,7 @@ static struct hash_cell *__get_uuid_cell(const char *str)
 	unsigned int h = hash_str(str);
 
 	list_for_each_entry (hc, _uuid_buckets + h, uuid_list)
-		if (vx_check(dm_get_xid(hc->md), VS_WATCH_P|VS_IDENT) &&
+		if (vx_check(dm_get_xid(hc->md), VS_WATCH_P | VS_IDENT) &&
 			!strcmp(hc->uuid, str)) {
 			dm_get(hc->md);
 			return hc;
@@ -402,7 +402,7 @@ static int list_devices(struct dm_ioctl *param, size_t param_size)
 	 */
 	for (i = 0; i < NUM_BUCKETS; i++) {
 		list_for_each_entry (hc, _name_buckets + i, name_list) {
-			if (!vx_check(dm_get_xid(hc->md), VS_WATCH_P|VS_IDENT))
+			if (!vx_check(dm_get_xid(hc->md), VS_WATCH_P | VS_IDENT))
 				continue;
 			needed += sizeof(struct dm_name_list);
 			needed += strlen(hc->name) + 1;
@@ -427,7 +427,7 @@ static int list_devices(struct dm_ioctl *param, size_t param_size)
 	 */
 	for (i = 0; i < NUM_BUCKETS; i++) {
 		list_for_each_entry (hc, _name_buckets + i, name_list) {
-			if (!vx_check(dm_get_xid(hc->md), VS_WATCH_P|VS_IDENT))
+			if (!vx_check(dm_get_xid(hc->md), VS_WATCH_P | VS_IDENT))
 				continue;
 			if (old_nl)
 				old_nl->next = (uint32_t) ((void *) nl -
@@ -619,7 +619,7 @@ static struct hash_cell *__find_device_hash_cell(struct dm_ioctl *param)
 	if (!md)
 		goto out;
 
-	if (vx_check(dm_get_xid(md), VS_WATCH_P|VS_IDENT))
+	if (vx_check(dm_get_xid(md), VS_WATCH_P | VS_IDENT))
 		mdptr = dm_get_mdptr(md);
 
 	if (!mdptr)

@@ -31,7 +31,7 @@ static inline void __dump_vx_limit(struct _vx_limit *limit)
 	int i;
 
 	printk("\t_vx_limit:");
-	for (i=0; i<NUM_LIMITS; i++) {
+	for (i = 0; i < NUM_LIMITS; i++) {
 		printk("\t [%2d] = %8lu %8lu/%8lu, %8ld/%8ld, %8d\n",
 			i, (unsigned long)__rlim_get(limit, i),
 			(unsigned long)__rlim_rmin(limit, i),

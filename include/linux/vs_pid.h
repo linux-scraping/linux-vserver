@@ -10,10 +10,10 @@
 /* pid faking stuff */
 
 
-#define vx_info_map_pid(v,p) \
+#define vx_info_map_pid(v, p) \
 	__vx_info_map_pid((v), (p), __FUNC__, __FILE__, __LINE__)
 #define vx_info_map_tgid(v,p)  vx_info_map_pid(v,p)
-#define vx_map_pid(p)	vx_info_map_pid(current->vx_info, p)
+#define vx_map_pid(p) vx_info_map_pid(current->vx_info, p)
 #define vx_map_tgid(p) vx_map_pid(p)
 
 static inline int __vx_info_map_pid(struct vx_info *vxi, int pid,
@@ -23,7 +23,7 @@ static inline int __vx_info_map_pid(struct vx_info *vxi, int pid,
 		vxfprintk(VXD_CBIT(cvirt, 2),
 			"vx_map_tgid: %p/%llx: %d -> %d",
 			vxi, (long long)vxi->vx_flags, pid,
-			(pid && pid == vxi->vx_initpid)?1:pid,
+			(pid && pid == vxi->vx_initpid) ? 1 : pid,
 			func, file, line);
 		if (pid == 0)
 			return 0;
@@ -33,9 +33,9 @@ static inline int __vx_info_map_pid(struct vx_info *vxi, int pid,
 	return pid;
 }
 
-#define vx_info_rmap_pid(v,p) \
+#define vx_info_rmap_pid(v, p) \
 	__vx_info_rmap_pid((v), (p), __FUNC__, __FILE__, __LINE__)
-#define vx_rmap_pid(p)	vx_info_rmap_pid(current->vx_info, p)
+#define vx_rmap_pid(p) vx_info_rmap_pid(current->vx_info, p)
 #define vx_rmap_tgid(p) vx_rmap_pid(p)
 
 static inline int __vx_info_rmap_pid(struct vx_info *vxi, int pid,
@@ -45,7 +45,7 @@ static inline int __vx_info_rmap_pid(struct vx_info *vxi, int pid,
 		vxfprintk(VXD_CBIT(cvirt, 2),
 			"vx_rmap_tgid: %p/%llx: %d -> %d",
 			vxi, (long long)vxi->vx_flags, pid,
-			(pid == 1)?vxi->vx_initpid:pid,
+			(pid == 1) ? vxi->vx_initpid : pid,
 			func, file, line);
 		if ((pid == 1) && vxi->vx_initpid)
 			return vxi->vx_initpid;
@@ -56,7 +56,7 @@ static inline int __vx_info_rmap_pid(struct vx_info *vxi, int pid,
 }
 
 
-#define VXF_FAKE_INIT	(VXF_INFO_INIT|VXF_STATE_INIT)
+#define VXF_FAKE_INIT	(VXF_INFO_INIT | VXF_STATE_INIT)
 
 static inline
 int vx_proc_task_visible(struct task_struct *task)
@@ -65,7 +65,7 @@ int vx_proc_task_visible(struct task_struct *task)
 		!vx_flags(VXF_FAKE_INIT, VXF_FAKE_INIT))
 		/* show a blend through init */
 		goto visible;
-	if (vx_check(vx_task_xid(task), VS_WATCH|VS_IDENT))
+	if (vx_check(vx_task_xid(task), VS_WATCH | VS_IDENT))
 		goto visible;
 	return 0;
 visible:

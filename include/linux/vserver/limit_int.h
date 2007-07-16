@@ -5,8 +5,8 @@
 
 #ifdef	__KERNEL__
 
-#define VXD_RCRES_COND(r)	VXD_CBIT(cres, (r))
-#define VXD_RLIMIT_COND(r)	VXD_CBIT(limit, (r))
+#define VXD_RCRES_COND(r)	VXD_CBIT(cres, r)
+#define VXD_RLIMIT_COND(r)	VXD_CBIT(limit, r)
 
 extern const char *vlimit_name[NUM_LIMITS];
 
@@ -162,7 +162,7 @@ static inline int __vx_cres_array_avail(struct vx_info *vxi,
 
 	limit = &vxi->limit;
 	res = *array;
-	value = __vx_cres_array_sum(limit, array+1);
+	value = __vx_cres_array_sum(limit, array + 1);
 
 	__rlim_set(limit, res, value);
 	__vx_cres_fixup(limit, res, value);
@@ -180,7 +180,7 @@ static inline void vx_limit_fixup(struct _vx_limit *limit, int id)
 	if ((id < 0) || (id == RLIMIT_RSS))
 		__vx_cres_array_fixup(limit, VLA_RSS);
 
-	for (res=0; res<NUM_LIMITS; res++) {
+	for (res = 0; res < NUM_LIMITS; res++) {
 		if ((id > 0) && (res != id))
 			continue;
 

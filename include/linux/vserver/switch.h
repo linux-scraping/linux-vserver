@@ -8,7 +8,7 @@
 #define VC_COMMAND(c)		(((c) >> 16) & 0xFF)
 #define VC_VERSION(c)		((c) & 0xFFF)
 
-#define VC_CMD(c,i,v)		((((VC_CAT_ ## c) & 0x3F) << 24) \
+#define VC_CMD(c, i, v)		((((VC_CAT_ ## c) & 0x3F) << 24) \
 				| (((i) & 0xFF) << 16) | ((v) & 0xFFF))
 
 /*

@@ -1972,7 +1972,7 @@ static void *listening_get_next(struct seq_file *seq, void *cur)
 					"sk,req: %p [#%d] (from %d)", req->sk,
 					(req->sk)?req->sk->sk_nid:0, nx_current_nid());
 				if (req->sk &&
-					!nx_check(req->sk->sk_nid, VS_WATCH_P|VS_IDENT))
+					!nx_check(req->sk->sk_nid, VS_WATCH_P | VS_IDENT))
 					continue;
 				if (req->rsk_ops->family == st->family) {
 					cur = req;
@@ -2000,7 +2000,7 @@ get_sk:
 	sk_for_each_from(sk, node) {
 		vxdprintk(VXD_CBIT(net, 6), "sk: %p [#%d] (from %d)",
 			sk, sk->sk_nid, nx_current_nid());
-		if (!nx_check(sk->sk_nid, VS_WATCH_P|VS_IDENT))
+		if (!nx_check(sk->sk_nid, VS_WATCH_P | VS_IDENT))
 			continue;
 		if (sk->sk_family == st->family) {
 			cur = sk;
@@ -2056,7 +2056,7 @@ static void *established_get_first(struct seq_file *seq)
 			vxdprintk(VXD_CBIT(net, 6),
 				"sk,egf: %p [#%d] (from %d)",
 				sk, sk->sk_nid, nx_current_nid());
-			if (!nx_check(sk->sk_nid, VS_WATCH_P|VS_IDENT))
+			if (!nx_check(sk->sk_nid, VS_WATCH_P | VS_IDENT))
 				continue;
 			if (sk->sk_family != st->family)
 				continue;
@@ -2069,7 +2069,7 @@ static void *established_get_first(struct seq_file *seq)
 			vxdprintk(VXD_CBIT(net, 6),
 				"tw: %p [#%d] (from %d)",
 				tw, tw->tw_nid, nx_current_nid());
-			if (!nx_check(tw->tw_nid, VS_WATCH_P|VS_IDENT))
+			if (!nx_check(tw->tw_nid, VS_WATCH_P | VS_IDENT))
 				continue;
 			if (tw->tw_family != st->family)
 				continue;
@@ -2097,7 +2097,7 @@ static void *established_get_next(struct seq_file *seq, void *cur)
 		tw = tw_next(tw);
 get_tw:
 		while (tw && (tw->tw_family != st->family ||
-			!nx_check(tw->tw_nid, VS_WATCH_P|VS_IDENT))) {
+			!nx_check(tw->tw_nid, VS_WATCH_P | VS_IDENT))) {
 			tw = tw_next(tw);
 		}
 		if (tw) {
@@ -2124,7 +2124,7 @@ get_tw:
 		vxdprintk(VXD_CBIT(net, 6),
 			"sk,egn: %p [#%d] (from %d)",
 			sk, sk->sk_nid, nx_current_nid());
-		if (!nx_check(sk->sk_nid, VS_WATCH_P|VS_IDENT))
+		if (!nx_check(sk->sk_nid, VS_WATCH_P | VS_IDENT))
 			continue;
 		if (sk->sk_family == st->family)
 			goto found;

@@ -10,11 +10,23 @@ unsigned long vx_sock_count(struct _vx_cacct *cacct, int type, int pos)
 	return atomic_long_read(&cacct->sock[type][pos].count);
 }
 
-
 static inline
 unsigned long vx_sock_total(struct _vx_cacct *cacct, int type, int pos)
 {
 	return atomic_long_read(&cacct->sock[type][pos].total);
+}
+
+
+static inline
+unsigned long vx_diskio_count(struct _vx_cacct *cacct, int type)
+{
+	return atomic_long_read(&cacct->diskio[type].count);
+}
+
+static inline
+unsigned long vx_diskio_total(struct _vx_cacct *cacct, int type)
+{
+	return atomic_long_read(&cacct->diskio[type].total);
 }
 
 #endif	/* __KERNEL__ */

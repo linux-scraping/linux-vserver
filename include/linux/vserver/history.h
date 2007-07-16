@@ -3,8 +3,8 @@
 
 
 enum {
-	VXH_UNUSED=0,
-	VXH_THROW_OOPS=1,
+	VXH_UNUSED = 0,
+	VXH_THROW_OOPS = 1,
 
 	VXH_GET_VX_INFO,
 	VXH_PUT_VX_INFO,
@@ -128,20 +128,20 @@ void	__vxh_throw_oops(void *__here)
 
 #define vxh_throw_oops()	__vxh_throw_oops(__HERE__);
 
-#define __vxh_get_vx_info(v,h)	__vxh_smpl(v, VXH_GET_VX_INFO, h);
-#define __vxh_put_vx_info(v,h)	__vxh_smpl(v, VXH_PUT_VX_INFO, h);
+#define __vxh_get_vx_info(v, h)	__vxh_smpl(v, VXH_GET_VX_INFO, h);
+#define __vxh_put_vx_info(v, h)	__vxh_smpl(v, VXH_PUT_VX_INFO, h);
 
-#define __vxh_init_vx_info(v,d,h) \
-	__vxh_data(v,d, VXH_INIT_VX_INFO, h);
-#define __vxh_set_vx_info(v,d,h) \
-	__vxh_data(v,d, VXH_SET_VX_INFO, h);
-#define __vxh_clr_vx_info(v,d,h) \
-	__vxh_data(v,d, VXH_CLR_VX_INFO, h);
+#define __vxh_init_vx_info(v, d, h) \
+	__vxh_data(v, d, VXH_INIT_VX_INFO, h);
+#define __vxh_set_vx_info(v, d, h) \
+	__vxh_data(v, d, VXH_SET_VX_INFO, h);
+#define __vxh_clr_vx_info(v, d, h) \
+	__vxh_data(v, d, VXH_CLR_VX_INFO, h);
 
-#define __vxh_claim_vx_info(v,d,h) \
-	__vxh_data(v,d, VXH_CLAIM_VX_INFO, h);
-#define __vxh_release_vx_info(v,d,h) \
-	__vxh_data(v,d, VXH_RELEASE_VX_INFO, h);
+#define __vxh_claim_vx_info(v, d, h) \
+	__vxh_data(v, d, VXH_CLAIM_VX_INFO, h);
+#define __vxh_release_vx_info(v, d, h) \
+	__vxh_data(v, d, VXH_RELEASE_VX_INFO, h);
 
 #define vxh_alloc_vx_info(v) \
 	__vxh_smpl(v, VXH_ALLOC_VX_INFO, __HERE__);
@@ -153,12 +153,12 @@ void	__vxh_throw_oops(void *__here)
 #define vxh_unhash_vx_info(v) \
 	__vxh_smpl(v, VXH_UNHASH_VX_INFO, __HERE__);
 
-#define vxh_loc_vx_info(v,l) \
-	__vxh_long(v,l, VXH_LOC_VX_INFO, __HERE__);
-#define vxh_lookup_vx_info(v,l) \
-	__vxh_long(v,l, VXH_LOOKUP_VX_INFO, __HERE__);
-#define vxh_create_vx_info(v,l) \
-	__vxh_long(v,l, VXH_CREATE_VX_INFO, __HERE__);
+#define vxh_loc_vx_info(v, l) \
+	__vxh_long(v, l, VXH_LOC_VX_INFO, __HERE__);
+#define vxh_lookup_vx_info(v, l) \
+	__vxh_long(v, l, VXH_LOOKUP_VX_INFO, __HERE__);
+#define vxh_create_vx_info(v, l) \
+	__vxh_long(v, l, VXH_CREATE_VX_INFO, __HERE__);
 
 extern void vxh_dump_history(void);
 
@@ -169,15 +169,15 @@ extern void vxh_dump_history(void);
 
 #define vxh_throw_oops()		do { } while (0)
 
-#define __vxh_get_vx_info(v,h)		do { } while (0)
-#define __vxh_put_vx_info(v,h)		do { } while (0)
+#define __vxh_get_vx_info(v, h)		do { } while (0)
+#define __vxh_put_vx_info(v, h)		do { } while (0)
 
-#define __vxh_init_vx_info(v,d,h)	do { } while (0)
-#define __vxh_set_vx_info(v,d,h)	do { } while (0)
-#define __vxh_clr_vx_info(v,d,h)	do { } while (0)
+#define __vxh_init_vx_info(v, d, h)	do { } while (0)
+#define __vxh_set_vx_info(v, d, h)	do { } while (0)
+#define __vxh_clr_vx_info(v, d, h)	do { } while (0)
 
-#define __vxh_claim_vx_info(v,d,h)	do { } while (0)
-#define __vxh_release_vx_info(v,d,h)	do { } while (0)
+#define __vxh_claim_vx_info(v, d, h)	do { } while (0)
+#define __vxh_release_vx_info(v, d, h)	do { } while (0)
 
 #define vxh_alloc_vx_info(v)		do { } while (0)
 #define vxh_dealloc_vx_info(v)		do { } while (0)
@@ -185,9 +185,9 @@ extern void vxh_dump_history(void);
 #define vxh_hash_vx_info(v)		do { } while (0)
 #define vxh_unhash_vx_info(v)		do { } while (0)
 
-#define vxh_loc_vx_info(a,v)		do { } while (0)
-#define vxh_lookup_vx_info(a,v)		do { } while (0)
-#define vxh_create_vx_info(a,v)		do { } while (0)
+#define vxh_loc_vx_info(v, l)		do { } while (0)
+#define vxh_lookup_vx_info(v, l)	do { } while (0)
+#define vxh_create_vx_info(v, l)	do { } while (0)
 
 #define vxh_dump_history()		do { } while (0)
 

@@ -29,11 +29,11 @@ static inline int vx_sock_type(int family)
 	}
 }
 
-#define vx_acc_sock(v,f,p,s) \
-	__vx_acc_sock((v), (f), (p), (s), __FILE__, __LINE__)
+#define vx_acc_sock(v, f, p, s) \
+	__vx_acc_sock(v, f, p, s, __FILE__, __LINE__)
 
 static inline void __vx_acc_sock(struct vx_info *vxi,
-	int family, int pos, int size, char *file, int line)
+	int family, int pos, int size, char *_file, int _line)
 {
 	if (vxi) {
 		int type = vx_sock_type(family);
@@ -43,12 +43,12 @@ static inline void __vx_acc_sock(struct vx_info *vxi,
 	}
 }
 
-#define vx_sock_recv(sk,s) \
-	vx_acc_sock((sk)->sk_vx_info, (sk)->sk_family, 0, (s))
-#define vx_sock_send(sk,s) \
-	vx_acc_sock((sk)->sk_vx_info, (sk)->sk_family, 1, (s))
-#define vx_sock_fail(sk,s) \
-	vx_acc_sock((sk)->sk_vx_info, (sk)->sk_family, 2, (s))
+#define vx_sock_recv(sk, s) \
+	vx_acc_sock((sk)->sk_vx_info, (sk)->sk_family, 0, s)
+#define vx_sock_send(sk, s) \
+	vx_acc_sock((sk)->sk_vx_info, (sk)->sk_family, 1, s)
+#define vx_sock_fail(sk, s) \
+	vx_acc_sock((sk)->sk_vx_info, (sk)->sk_family, 2, s)
 
 
 #define sock_vx_init(s) do {		\

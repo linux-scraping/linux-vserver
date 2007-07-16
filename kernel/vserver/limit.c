@@ -121,7 +121,7 @@ int vc_get_rlimit(struct vx_info *vxi, void __user *data)
 	struct vcmd_ctx_rlimit_v0 vc_data;
 	int ret;
 
-	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
+	if (copy_from_user(&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
 	ret = do_get_rlimit(vxi, vc_data.id,
@@ -129,7 +129,7 @@ int vc_get_rlimit(struct vx_info *vxi, void __user *data)
 	if (ret)
 		return ret;
 
-	if (copy_to_user (data, &vc_data, sizeof(vc_data)))
+	if (copy_to_user(data, &vc_data, sizeof(vc_data)))
 		return -EFAULT;
 	return 0;
 }
@@ -156,7 +156,7 @@ int vc_set_rlimit(struct vx_info *vxi, void __user *data)
 {
 	struct vcmd_ctx_rlimit_v0 vc_data;
 
-	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
+	if (copy_from_user(&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
 	return do_set_rlimit(vxi, vc_data.id,
@@ -169,7 +169,7 @@ int vc_set_rlimit_x32(struct vx_info *vxi, void __user *data)
 {
 	struct vcmd_ctx_rlimit_v0_x32 vc_data;
 
-	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
+	if (copy_from_user(&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
 	return do_set_rlimit(vxi, vc_data.id,
@@ -181,7 +181,7 @@ int vc_get_rlimit_x32(struct vx_info *vxi, void __user *data)
 	struct vcmd_ctx_rlimit_v0_x32 vc_data;
 	int ret;
 
-	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
+	if (copy_from_user(&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
 	ret = do_get_rlimit(vxi, vc_data.id,
@@ -189,7 +189,7 @@ int vc_get_rlimit_x32(struct vx_info *vxi, void __user *data)
 	if (ret)
 		return ret;
 
-	if (copy_to_user (data, &vc_data, sizeof(vc_data)))
+	if (copy_to_user(data, &vc_data, sizeof(vc_data)))
 		return -EFAULT;
 	return 0;
 }
@@ -210,7 +210,7 @@ static inline void vx_reset_minmax(struct _vx_limit *limit)
 	rlim_t value;
 	int lim;
 
-	for (lim=0; lim<NUM_LIMITS; lim++) {
+	for (lim = 0; lim < NUM_LIMITS; lim++) {
 		value = __rlim_get(limit, lim);
 		__rlim_rmax(limit, lim) = value;
 		__rlim_rmin(limit, lim) = value;
@@ -231,7 +231,7 @@ int vc_rlimit_stat(struct vx_info *vxi, void __user *data)
 	struct _vx_limit *limit = &vxi->limit;
 	int id;
 
-	if (copy_from_user (&vc_data, data, sizeof(vc_data)))
+	if (copy_from_user(&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
 	id = vc_data.id;
@@ -244,7 +244,7 @@ int vc_rlimit_stat(struct vx_info *vxi, void __user *data)
 	vc_data.minimum = __rlim_rmin(limit, id);
 	vc_data.maximum = __rlim_rmax(limit, id);
 
-	if (copy_to_user (data, &vc_data, sizeof(vc_data)))
+	if (copy_to_user(data, &vc_data, sizeof(vc_data)))
 		return -EFAULT;
 	return 0;
 }

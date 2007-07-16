@@ -90,7 +90,7 @@ static int proc_dodebug(ctl_table *table, int write,
 	if (write) {
 		if (!access_ok(VERIFY_READ, buffer, left))
 			return -EFAULT;
-		p = (char *) buffer;
+		p = (char *)buffer;
 		while (left && __get_user(c, p) >= 0 && isspace(c))
 			left--, p++;
 		if (!left)
@@ -108,11 +108,11 @@ static int proc_dodebug(ctl_table *table, int write,
 			return -EINVAL;
 		while (left && isspace(*p))
 			left--, p++;
-		*(unsigned int *) table->data = value;
+		*(unsigned int *)table->data = value;
 	} else {
 		if (!access_ok(VERIFY_WRITE, buffer, left))
 			return -EFAULT;
-		len = sprintf(tmpbuf, "%d", *(unsigned int *) table->data);
+		len = sprintf(tmpbuf, "%d", *(unsigned int *)table->data);
 		if (len > left)
 			len = left;
 		if (__copy_to_user(buffer, tmpbuf, len))
@@ -135,24 +135,24 @@ done:
 	{						\
 		.ctl_name	= ctl,			\
 		.procname	= #name,		\
-		.data		= &vx_##name,		\
+		.data		= &vx_ ## name,		\
 		.maxlen		= sizeof(int),		\
 		.mode		= 0644,			\
 		.proc_handler	= &proc_dodebug		\
 	}
 
 static ctl_table debug_table[] = {
-	CTL_ENTRY (CTL_DEBUG_SWITCH,	debug_switch),
-	CTL_ENTRY (CTL_DEBUG_XID,	debug_xid),
-	CTL_ENTRY (CTL_DEBUG_NID,	debug_nid),
-	CTL_ENTRY (CTL_DEBUG_TAG,	debug_tag),
-	CTL_ENTRY (CTL_DEBUG_NET,	debug_net),
-	CTL_ENTRY (CTL_DEBUG_LIMIT,	debug_limit),
-	CTL_ENTRY (CTL_DEBUG_CRES,	debug_cres),
-	CTL_ENTRY (CTL_DEBUG_DLIM,	debug_dlim),
-	CTL_ENTRY (CTL_DEBUG_QUOTA,	debug_quota),
-	CTL_ENTRY (CTL_DEBUG_CVIRT,	debug_cvirt),
-	CTL_ENTRY (CTL_DEBUG_MISC,	debug_misc),
+	CTL_ENTRY(CTL_DEBUG_SWITCH,	debug_switch),
+	CTL_ENTRY(CTL_DEBUG_XID,	debug_xid),
+	CTL_ENTRY(CTL_DEBUG_NID,	debug_nid),
+	CTL_ENTRY(CTL_DEBUG_TAG,	debug_tag),
+	CTL_ENTRY(CTL_DEBUG_NET,	debug_net),
+	CTL_ENTRY(CTL_DEBUG_LIMIT,	debug_limit),
+	CTL_ENTRY(CTL_DEBUG_CRES,	debug_cres),
+	CTL_ENTRY(CTL_DEBUG_DLIM,	debug_dlim),
+	CTL_ENTRY(CTL_DEBUG_QUOTA,	debug_quota),
+	CTL_ENTRY(CTL_DEBUG_CVIRT,	debug_cvirt),
+	CTL_ENTRY(CTL_DEBUG_MISC,	debug_misc),
 	{ .ctl_name = 0 }
 };
 
@@ -203,7 +203,7 @@ static int __init vs_debug_setup(char *str)
 			continue;
 
 		token = match_token(p, tokens, args);
-		value = (token>0)?simple_strtoul(args[0].from, NULL, 0):0;
+		value = (token > 0) ? simple_strtoul(args[0].from, NULL, 0) : 0;
 
 		switch (token) {
 		HANDLE_CASE(SWITCH, switch, value);

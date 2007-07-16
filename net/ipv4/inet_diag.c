@@ -693,7 +693,7 @@ static int inet_diag_dump(struct sk_buff *skb, struct netlink_callback *cb)
 			sk_for_each(sk, node, &hashinfo->listening_hash[i]) {
 				struct inet_sock *inet = inet_sk(sk);
 
-				if (!nx_check(sk->sk_nid, VS_WATCH_P|VS_IDENT))
+				if (!nx_check(sk->sk_nid, VS_WATCH_P | VS_IDENT))
 					continue;
 				if (num < s_num) {
 					num++;
@@ -755,7 +755,7 @@ skip_listen_ht:
 		sk_for_each(sk, node, &head->chain) {
 			struct inet_sock *inet = inet_sk(sk);
 
-			if (!nx_check(sk->sk_nid, VS_WATCH_P|VS_IDENT))
+			if (!nx_check(sk->sk_nid, VS_WATCH_P | VS_IDENT))
 				continue;
 			if (num < s_num)
 				goto next_normal;
@@ -781,7 +781,7 @@ next_normal:
 			inet_twsk_for_each(tw, node,
 				    &hashinfo->ehash[i + hashinfo->ehash_size].chain) {
 
-				if (!nx_check(tw->tw_nid, VS_WATCH_P|VS_IDENT))
+				if (!nx_check(tw->tw_nid, VS_WATCH_P | VS_IDENT))
 					continue;
 				if (num < s_num)
 					goto next_dying;
