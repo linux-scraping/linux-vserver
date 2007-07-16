@@ -63,9 +63,13 @@ int vc_get_vci(uint32_t id)
 #ifdef	CONFIG_COMPAT
 #define __COMPAT(name, id, data, compat)	\
 	(compat) ? name ## _x32(id, data) : name(id, data)
+#define __COMPAT_NO_ID(name, data, compat)	\
+	(compat) ? name ## _x32(data) : name(data)
 #else
 #define __COMPAT(name, id, data, compat)	\
 	name(id, data)
+#define __COMPAT_NO_ID(name, data, compat)	\
+	name (data)
 #endif
 
 
@@ -196,9 +200,14 @@ long do_vcmd(uint32_t cmd, uint32_t id,
 #endif
 
 	case VCMD_get_iattr:
-		return __COMPAT(vc_get_iattr, id, data, compat);
+		return __COMPAT_NO_ID(vc_get_iattr, data, compat);
 	case VCMD_set_iattr:
-		return __COMPAT(vc_set_iattr, id, data, compat);
+		return __COMPAT_NO_ID(vc_set_iattr, data, compat);
+
+	case VCMD_fget_iattr:
+		return vc_fget_iattr(id, data);
+	case VCMD_fset_iattr:
+		return vc_fset_iattr(id, data);
 
 	case VCMD_enter_space_v0:
 		return vc_enter_space(vxi, NULL);
@@ -308,6 +317,7 @@ long do_vserver(uint32_t cmd, uint32_t id, void __user *data, int compat)
 	__VCMD(get_nflags,	 3, VCA_NXI,	VCF_INFO);
 
 	__VCMD(get_iattr,	 2, VCA_NONE,	0);
+	__VCMD(fget_iattr,	 2, VCA_NONE,	0);
 	__VCMD(get_dlimit,	 3, VCA_NONE,	VCF_INFO);
 	__VCMD(get_sched,	 3, VCA_VXI,	VCF_INFO);
 	__VCMD(sched_info,	 3, VCA_VXI,	VCF_INFO | VCF_ZIDOK);
@@ -348,6 +358,7 @@ long do_vserver(uint32_t cmd, uint32_t id, void __user *data, int compat)
 	__VCMD(net_remove,	 8, VCA_NXI,	VCF_ARES | VCF_SETUP);
 
 	__VCMD(set_iattr,	 7, VCA_NONE,	0);
+	__VCMD(fset_iattr,	 7, VCA_NONE,	0);
 	__VCMD(set_dlimit,	 7, VCA_NONE,	VCF_ARES);
 	__VCMD(add_dlimit,	 8, VCA_NONE,	VCF_ARES);
 	__VCMD(rem_dlimit,	 8, VCA_NONE,	VCF_ARES);

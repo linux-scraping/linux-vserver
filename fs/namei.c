@@ -2765,6 +2765,10 @@ retry:
 	vxdprintk(VXD_CBIT(misc, 1), "temp copy »%s«", to);
 	ret = path_lookup(to,
 		LOOKUP_PARENT|LOOKUP_OPEN|LOOKUP_CREATE, &dir_nd);
+	vxdprintk(VXD_CBIT(misc, 2),
+		"path_lookup(new): %d", ret);
+	if (ret < 0)
+		goto retry;
 
 	/* this puppy downs the inode sem */
 	new_dentry = lookup_create(&dir_nd, 0);
