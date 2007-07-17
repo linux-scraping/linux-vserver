@@ -5,7 +5,7 @@
 #define DX_TAG(in)	(IS_TAGGED(in))
 
 
-#ifdef CONFIG_DX_TAG_NFSD
+#ifdef CONFIG_TAG_NFSD
 #define DX_TAG_NFSD	1
 #else
 #define DX_TAG_NFSD	0

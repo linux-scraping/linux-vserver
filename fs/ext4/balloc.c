@@ -1476,7 +1476,7 @@ ext4_fsblk_t ext4_new_blocks(handle_t *handle, struct inode *inode,
 		*errp = -EDQUOT;
 		return 0;
 	}
-	if (DLIMIT_ALLOC_BLOCK(inode, 1))
+	if (DLIMIT_ALLOC_BLOCK(inode, num))
 	    goto out_dlimit;
 
 	sbi = EXT4_SB(sb);
@@ -1679,6 +1679,7 @@ allocated:
 	*errp = 0;
 	brelse(bitmap_bh);
 	DQUOT_FREE_BLOCK(inode, *count-num);
+	DLIMIT_FREE_BLOCK(inode, *count-num);
 	*count = num;
 	return ret_block;
 
@@ -1686,7 +1687,7 @@ io_error:
 	*errp = -EIO;
 out:
 	if (!performed_allocation)
-		DLIMIT_FREE_BLOCK(inode, 1);
+		DLIMIT_FREE_BLOCK(inode, *count);
 out_dlimit:
 	if (fatal) {
 		*errp = fatal;
