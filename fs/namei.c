@@ -2774,7 +2774,7 @@ retry:
 	new_dentry = lookup_create(&dir_nd, 0);
 	vxdprintk(VXD_CBIT(misc, 2),
 		"lookup_create(new): %p", new_dentry);
-	if (!new_dentry) {
+	if (!new_dentry || IS_ERR(new_dentry)) {
 		path_release(&dir_nd);
 		goto retry;
 	}
@@ -2801,8 +2801,10 @@ retry:
 	old_file = dentry_open(old_dentry, old_mnt, O_RDONLY);
 	vxdprintk(VXD_CBIT(misc, 2),
 		"dentry_open(old): %p", old_file);
-	if (!old_file)
+	if (!old_file || IS_ERR(old_file)) {
+		res = IS_ERR(old_file) ? (void *) old_file : res;
 		goto out_rel_both;
+	}
 
 	dget(new_dentry);
 	mntget(new_mnt);
@@ -2810,15 +2812,22 @@ retry:
 	new_file = dentry_open(new_dentry, new_mnt, O_WRONLY);
 	vxdprintk(VXD_CBIT(misc, 2),
 		"dentry_open(new): %p", new_file);
-	if (!new_file)
+	if (!new_file || IS_ERR(new_file)) {
+		res = IS_ERR(new_file) ? (void *) new_file : res;
 		goto out_fput_old;
+	}
 
 	size = i_size_read(old_file->f_dentry->d_inode);
 	ret = vfs_sendfile(new_file, old_file, NULL, size, 0);
 	vxdprintk(VXD_CBIT(misc, 2), "vfs_sendfile: %d", ret);
-
-	if (ret < 0)
+	if (ret < 0) {
+		res = ERR_PTR(ret);
 		goto out_fput_both;
+	}
+	else if (ret < size) {
+		res = ERR_PTR(-ENOSPC);
+		goto out_fput_both;
+	}
 
 	ret = vfs_rename(dir_nd.dentry->d_inode, new_dentry,
 		old_nd.dentry->d_parent->d_inode, old_dentry);
@@ -2827,6 +2836,8 @@ retry:
 		res = new_dentry;
 		dget(new_dentry);
 	}
+	else
+		res = ERR_PTR(ret);
 
 out_fput_both:
 	vxdprintk(VXD_CBIT(misc, 3),
@@ -2842,6 +2853,8 @@ out_fput_old:
 
 out_rel_both:
 	mutex_unlock(&dir_nd.dentry->d_inode->i_mutex);
+	if (IS_ERR(res))
+		vfs_unlink(dir_nd.dentry->d_inode, new_dentry, &dir_nd);
 	dput(new_dentry);
 
 	path_release(&dir_nd);
