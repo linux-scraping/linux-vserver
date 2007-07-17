@@ -2182,7 +2182,6 @@ int install_special_mapping(struct mm_struct *mm,
 		return -ENOMEM;
 	}
 
-	// mm->total_vm += len >> PAGE_SHIFT;
 	vx_vmpages_add(mm, len >> PAGE_SHIFT);
 	return 0;
 }
