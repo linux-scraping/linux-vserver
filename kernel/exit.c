@@ -703,7 +703,6 @@ forget_original_parent(struct task_struct *father, struct list_head *to_release)
 	do {
 		reaper = next_thread(reaper);
 		if (reaper == father) {
-			// reaper = child_reaper(father);
 			reaper = vx_child_reaper(father);
 			break;
 		}
@@ -981,11 +980,9 @@ fastcall NORET_TYPE void do_exit(long code)
 	tsk->exit_code = code;
 	proc_exit_connector(tsk);
 	exit_task_namespaces(tsk);
-	// ns = exit_task_namespaces_early(tsk);
 	/* needs to stay before exit_notify() */
 	exit_vx_info_early(tsk, code);
 	exit_notify(tsk);
-	// exit_task_namespaces(tsk, ns);
 #ifdef CONFIG_NUMA
 	mpol_free(tsk->mempolicy);
 	tsk->mempolicy = NULL;

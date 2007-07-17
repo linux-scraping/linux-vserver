@@ -192,7 +192,6 @@ static inline void free_tty_struct(struct tty_struct *tty)
 {
 	kfree(tty->write_buf);
 	tty_buffer_free_all(tty);
-	memset(tty, 0xDEADDEAD, sizeof(struct tty_struct));
 	kfree(tty);
 }
 
@@ -3915,9 +3914,6 @@ EXPORT_SYMBOL(tty_unregister_driver);
 
 dev_t tty_devnum(struct tty_struct *tty)
 {
-	WARN_ON(!tty);
-	WARN_ON(!tty->magic);
-	WARN_ON(!tty->driver);
 	return MKDEV(tty->driver->major, tty->driver->minor_start) + tty->index;
 }
 EXPORT_SYMBOL(tty_devnum);
