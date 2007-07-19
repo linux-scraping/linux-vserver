@@ -141,7 +141,7 @@ struct inode *ialloc(struct inode *parent, umode_t mode)
 	inode->i_tag = dx_current_fstag(sb);
 	if (DLIMIT_ALLOC_INODE(inode)) {
 		iput(inode);
-		return NULL;
+		return ERR_PTR(-ENOSPC);
 	}
 
 	/*

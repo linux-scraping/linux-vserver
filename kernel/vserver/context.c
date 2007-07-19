@@ -715,8 +715,7 @@ int vx_migrate_task(struct task_struct *p, struct vx_info *vxi, int unshare)
 
 		/* hack for *spaces to provide compatibility */
 		if (unshare) {
-			struct nsproxy *old_nsp = p->nsproxy;
-			struct nsproxy *new_nsp;
+			struct nsproxy *old_nsp, *new_nsp;
 
 			ret = unshare_nsproxy_namespaces(
 				CLONE_NEWUTS | CLONE_NEWIPC,
@@ -724,10 +723,9 @@ int vx_migrate_task(struct task_struct *p, struct vx_info *vxi, int unshare)
 			if (ret)
 				goto out;
 
-			new_nsp = xchg(&p->nsproxy, new_nsp);
+			old_nsp = xchg(&p->nsproxy, new_nsp);
 			vx_set_space(vxi, CLONE_NEWUTS | CLONE_NEWIPC);
 			put_nsproxy(old_nsp);
-			put_nsproxy(new_nsp);
 		}
 	}
 out:
@@ -962,7 +960,7 @@ int vc_get_cflags(struct vx_info *vxi, void __user *data)
 	vc_data.flagword = vxi->vx_flags;
 
 	/* special STATE flag handling */
-	vc_data.mask = vs_mask_flags(~0UL, vxi->vx_flags, VXF_ONE_TIME);
+	vc_data.mask = vs_mask_flags(~0ULL, vxi->vx_flags, VXF_ONE_TIME);
 
 	if (copy_to_user(data, &vc_data, sizeof(vc_data)))
 		return -EFAULT;
@@ -1022,7 +1020,7 @@ int vc_get_ccaps_v0(struct vx_info *vxi, void __user *data)
 	ret = do_get_caps(vxi, &vc_data.bcaps, &vc_data.ccaps);
 	if (ret)
 		return ret;
-	vc_data.cmask = ~0UL;
+	vc_data.cmask = ~0ULL;
 
 	if (copy_to_user(data, &vc_data, sizeof(vc_data)))
 		return -EFAULT;
@@ -1037,7 +1035,7 @@ int vc_get_ccaps(struct vx_info *vxi, void __user *data)
 	ret = do_get_caps(vxi, NULL, &vc_data.ccaps);
 	if (ret)
 		return ret;
-	vc_data.cmask = ~0UL;
+	vc_data.cmask = ~0ULL;
 
 	if (copy_to_user(data, &vc_data, sizeof(vc_data)))
 		return -EFAULT;
@@ -1083,7 +1081,7 @@ int vc_get_bcaps(struct vx_info *vxi, void __user *data)
 	ret = do_get_caps(vxi, &vc_data.bcaps, NULL);
 	if (ret)
 		return ret;
-	vc_data.bmask = ~0UL;
+	vc_data.bmask = ~0ULL;
 
 	if (copy_to_user(data, &vc_data, sizeof(vc_data)))
 		return -EFAULT;
