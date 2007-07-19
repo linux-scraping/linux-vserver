@@ -951,7 +951,7 @@ int vc_get_cflags(struct vx_info *vxi, void __user *data)
 	vc_data.flagword = vxi->vx_flags;
 
 	/* special STATE flag handling */
-	vc_data.mask = vs_mask_flags(~0UL, vxi->vx_flags, VXF_ONE_TIME);
+	vc_data.mask = vs_mask_flags(~0ULL, vxi->vx_flags, VXF_ONE_TIME);
 
 	if (copy_to_user (data, &vc_data, sizeof(vc_data)))
 		return -EFAULT;
@@ -1011,7 +1011,7 @@ int vc_get_ccaps_v0(struct vx_info *vxi, void __user *data)
 	ret = do_get_caps(vxi, &vc_data.bcaps, &vc_data.ccaps);
 	if (ret)
 		return ret;
-	vc_data.cmask = ~0UL;
+	vc_data.cmask = ~0ULL;
 
 	if (copy_to_user (data, &vc_data, sizeof(vc_data)))
 		return -EFAULT;
@@ -1026,7 +1026,7 @@ int vc_get_ccaps(struct vx_info *vxi, void __user *data)
 	ret = do_get_caps(vxi, NULL, &vc_data.ccaps);
 	if (ret)
 		return ret;
-	vc_data.cmask = ~0UL;
+	vc_data.cmask = ~0ULL;
 
 	if (copy_to_user (data, &vc_data, sizeof(vc_data)))
 		return -EFAULT;
@@ -1072,7 +1072,7 @@ int vc_get_bcaps(struct vx_info *vxi, void __user *data)
 	ret = do_get_caps(vxi, &vc_data.bcaps, NULL);
 	if (ret)
 		return ret;
-	vc_data.bmask = ~0UL;
+	vc_data.bmask = ~0ULL;
 
 	if (copy_to_user (data, &vc_data, sizeof(vc_data)))
 		return -EFAULT;

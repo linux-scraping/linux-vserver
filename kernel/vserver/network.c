@@ -713,7 +713,7 @@ int vc_get_nflags(struct nx_info *nxi, void __user *data)
 	vc_data.flagword = nxi->nx_flags;
 
 	/* special STATE flag handling */
-	vc_data.mask = vs_mask_flags(~0UL, nxi->nx_flags, NXF_ONE_TIME);
+	vc_data.mask = vs_mask_flags(~0ULL, nxi->nx_flags, NXF_ONE_TIME);
 
 	if (copy_to_user (data, &vc_data, sizeof(vc_data)))
 		return -EFAULT;
@@ -745,7 +745,7 @@ int vc_get_ncaps(struct nx_info *nxi, void __user *data)
 	struct vcmd_net_caps_v0 vc_data;
 
 	vc_data.ncaps = nxi->nx_ncaps;
-	vc_data.cmask = ~0UL;
+	vc_data.cmask = ~0ULL;
 
 	if (copy_to_user (data, &vc_data, sizeof(vc_data)))
 		return -EFAULT;
