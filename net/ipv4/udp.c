@@ -97,6 +97,7 @@
 #include <linux/skbuff.h>
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
+// #include <linux/vs_inet.h>
 #include <net/icmp.h>
 #include <net/route.h>
 #include <net/checksum.h>
@@ -222,7 +223,7 @@ int udp_get_port(struct sock *sk, unsigned short snum,
 int ipv4_rcv_saddr_equal(const struct sock *sk1, const struct sock *sk2)
 {
 	return 	( !ipv6_only_sock(sk2)  &&
-		   nx_addr_conflict(sk1->sk_nx_info, inet_rcv_saddr(sk1), sk2));
+		   nx_v4_addr_conflict(sk1->sk_nx_info, inet_rcv_saddr(sk1), sk2));
 }
 
 static inline int udp_v4_get_port(struct sock *sk, unsigned short snum)
@@ -255,7 +256,7 @@ static struct sock *__udp4_lib_lookup(__be32 saddr, __be16 sport,
 					continue;
 				score+=2;
 			} else if (sk->sk_nx_info) {
-				if (addr_in_nx_info(sk->sk_nx_info, daddr))
+				if (v4_addr_in_nx_info(sk->sk_nx_info, daddr, -1))
 					score+=2;
 				else
 					continue;
@@ -306,8 +307,7 @@ static inline struct sock *udp_v4_mcast_next(struct sock *sk,
 		if (s->sk_hash != hnum					||
 		    (inet->daddr && inet->daddr != rmt_addr)		||
 		    (inet->dport != rmt_port && inet->dport)		||
-		    (inet->rcv_saddr && inet->rcv_saddr != loc_addr &&
-		     inet->rcv_saddr2 && inet->rcv_saddr2 != loc_addr)	||
+		    !v4_sock_addr_match(sk->sk_nx_info, inet, loc_addr)	||
 		    ipv6_only_sock(s)					||
 		    (s->sk_bound_dev_if && s->sk_bound_dev_if != dif))
 			continue;
@@ -640,17 +640,11 @@ int udp_sendmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
 		struct nx_info *nxi = sk->sk_nx_info;
 
 		security_sk_classify_flow(sk, &fl);
-		if (nxi) {
-			err = ip_find_src(nxi, &rt, &fl);
-			if (err)
-				goto out;
-			if (daddr == IPI_LOOPBACK && !nx_check(0, VS_ADMIN))
-				daddr = fl.fl4_dst = nxi->ipv4[0];
-#ifdef CONFIG_VSERVER_REMAP_SADDR
-			if (saddr == IPI_LOOPBACK && !nx_check(0, VS_ADMIN))
-				saddr = fl.fl4_src = nxi->ipv4[0];
-#endif
-		}
+
+		err = ip_v4_find_src(nxi, &rt, &fl);
+		if (err)
+			goto out;
+
 		err = ip_route_output_flow(&rt, &fl, sk, 1);
 		if (err) {
 			if (err == -ENETUNREACH)

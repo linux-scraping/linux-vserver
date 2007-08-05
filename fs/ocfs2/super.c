@@ -156,7 +156,6 @@ static match_table_t tokens = {
 	{Opt_data_writeback, "data=writeback"},
 	{Opt_atime_quantum, "atime_quantum=%u"},
 	{Opt_tag, "tag"},
-	{Opt_tag, "tagxid"},
 	{Opt_notag, "notag"},
 	{Opt_tagid, "tagid=%u"},
 	{Opt_err, NULL}
@@ -367,7 +366,6 @@ static int ocfs2_remount(struct super_block *sb, int *flags, char *data)
 		goto out;
 	}
 
-	printk("ocfs2_remount: %lx,%lx\n", osb->s_mount_opt, sb->s_flags);
 	if ((parsed_options & OCFS2_MOUNT_TAGGED) &&
 		!(sb->s_flags & MS_TAGGED)) {
 		ret = -EINVAL;

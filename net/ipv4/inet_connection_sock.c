@@ -49,7 +49,7 @@ int inet_csk_bind_conflict(const struct sock *sk,
 		     sk->sk_bound_dev_if == sk2->sk_bound_dev_if)) {
 			if (!reuse || !sk2->sk_reuse ||
 			    sk2->sk_state == TCP_LISTEN) {
-				if (nx_addr_conflict(sk->sk_nx_info,
+				if (nx_v4_addr_conflict(sk->sk_nx_info,
 					inet_rcv_saddr(sk), sk2))
 					break;
 			}

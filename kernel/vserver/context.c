@@ -21,6 +21,7 @@
  *  V0.14  changed vcmds to vxi arg
  *  V0.15  added context stat
  *  V0.16  have __create claim() the vxi
+ *  V0.17  removed older and legacy stuff
  *
  */
 
@@ -32,7 +33,6 @@
 #include <linux/sched.h>
 #include <linux/vserver/context.h>
 #include <linux/vserver/network.h>
-#include <linux/vserver/legacy.h>
 #include <linux/vserver/debug.h>
 #include <linux/vserver/limit.h>
 #include <linux/vserver/limit_int.h>
@@ -307,98 +307,6 @@ found:
 }
 
 
-/*	__vx_dynamic_id()
-
-	* find unused dynamic xid
-	* requires the hash_lock to be held			*/
-
-static inline xid_t __vx_dynamic_id(void)
-{
-	static xid_t seq = MAX_S_CONTEXT;
-	xid_t barrier = seq;
-
-	vxd_assert_lock(&vx_info_hash_lock);
-	do {
-		if (++seq > MAX_S_CONTEXT)
-			seq = MIN_D_CONTEXT;
-		if (!__lookup_vx_info(seq)) {
-			vxdprintk(VXD_CBIT(xid, 4),
-				"__vx_dynamic_id: [#%d]", seq);
-			return seq;
-		}
-	} while (barrier != seq);
-	return 0;
-}
-
-#ifdef	CONFIG_VSERVER_LEGACY
-
-/*	__loc_vx_info()
-
-	* locate or create the requested context
-	* get() it and if new hash it				*/
-
-static struct vx_info *__loc_vx_info(int id, int *err)
-{
-	struct vx_info *new, *vxi = NULL;
-
-	vxdprintk(VXD_CBIT(xid, 1), "loc_vx_info(%d)*", id);
-
-	if (!(new = __alloc_vx_info(id))) {
-		*err = -ENOMEM;
-		return NULL;
-	}
-
-	/* required to make dynamic xids unique */
-	spin_lock(&vx_info_hash_lock);
-
-	/* dynamic context requested */
-	if (id == VX_DYNAMIC_ID) {
-#ifdef	CONFIG_VSERVER_DYNAMIC_IDS
-		id = __vx_dynamic_id();
-		if (!id) {
-			printk(KERN_ERR "no dynamic context available.\n");
-			goto out_unlock;
-		}
-		new->vx_id = id;
-#else
-		printk(KERN_ERR "dynamic contexts disabled.\n");
-		goto out_unlock;
-#endif
-	}
-	/* existing context requested */
-	else if ((vxi = __lookup_vx_info(id))) {
-		/* context in setup is not available */
-		if (vxi->vx_flags & VXF_STATE_SETUP) {
-			vxdprintk(VXD_CBIT(xid, 0),
-				"loc_vx_info(%d) = %p (not available)", id, vxi);
-			vxi = NULL;
-			*err = -EBUSY;
-		} else {
-			vxdprintk(VXD_CBIT(xid, 0),
-				"loc_vx_info(%d) = %p (found)", id, vxi);
-			get_vx_info(vxi);
-			*err = 0;
-		}
-		goto out_unlock;
-	}
-
-	/* new context requested */
-	vxdprintk(VXD_CBIT(xid, 0),
-		"loc_vx_info(%d) = %p (new)", id, new);
-	__hash_vx_info(get_vx_info(new));
-	vxi = new, new = NULL;
-	*err = 1;
-
-out_unlock:
-	spin_unlock(&vx_info_hash_lock);
-	vxh_loc_vx_info(vxi, id);
-	if (new)
-		__dealloc_vx_info(new);
-	return vxi;
-}
-
-#endif
-
 /*	__create_vx_info()
 
 	* create the requested context
@@ -416,24 +324,8 @@ static struct vx_info *__create_vx_info(int id)
 	/* required to make dynamic xids unique */
 	spin_lock(&vx_info_hash_lock);
 
-	/* dynamic context requested */
-	if (id == VX_DYNAMIC_ID) {
-#ifdef	CONFIG_VSERVER_DYNAMIC_IDS
-		id = __vx_dynamic_id();
-		if (!id) {
-			printk(KERN_ERR "no dynamic context available.\n");
-			vxi = ERR_PTR(-EAGAIN);
-			goto out_unlock;
-		}
-		new->vx_id = id;
-#else
-		printk(KERN_ERR "dynamic contexts disabled.\n");
-		vxi = ERR_PTR(-EINVAL);
-		goto out_unlock;
-#endif
-	}
 	/* static context requested */
-	else if ((vxi = __lookup_vx_info(id))) {
+	if ((vxi = __lookup_vx_info(id))) {
 		vxdprintk(VXD_CBIT(xid, 0),
 			"create_vx_info(%d) = %p (already there)", id, vxi);
 		if (vx_info_flags(vxi, VXF_STATE_SETUP, 0))
@@ -442,16 +334,6 @@ static struct vx_info *__create_vx_info(int id)
 			vxi = ERR_PTR(-EEXIST);
 		goto out_unlock;
 	}
-#ifdef	CONFIG_VSERVER_DYNAMIC_IDS
-	/* dynamic xid creation blocker */
-	else if (id >= MIN_D_CONTEXT) {
-		vxdprintk(VXD_CBIT(xid, 0),
-			"create_vx_info(%d) (dynamic rejected)", id);
-		vxi = ERR_PTR(-EINVAL);
-		goto out_unlock;
-	}
-#endif
-
 	/* new context */
 	vxdprintk(VXD_CBIT(xid, 0),
 		"create_vx_info(%d) = %p (new)", id, new);
@@ -513,17 +395,6 @@ int xid_is_hashed(xid_t xid)
 	spin_unlock(&vx_info_hash_lock);
 	return hashed;
 }
-
-#ifdef	CONFIG_VSERVER_LEGACY
-
-struct vx_info *lookup_or_create_vx_info(int id)
-{
-	int err;
-
-	return __loc_vx_info(id, &err);
-}
-
-#endif
 
 #ifdef	CONFIG_PROC_FS
 
@@ -899,9 +770,7 @@ int vc_ctx_create(uint32_t xid, void __user *data)
 	if (data && copy_from_user(&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
-	if ((xid > MAX_S_CONTEXT) && (xid != VX_DYNAMIC_ID))
-		return -EINVAL;
-	if (xid < 2)
+	if ((xid > MAX_S_CONTEXT) || (xid < 2))
 		return -EINVAL;
 
 	new_vxi = __create_vx_info(xid);
@@ -1012,21 +881,6 @@ static int do_get_caps(struct vx_info *vxi, uint64_t *bcaps, uint64_t *ccaps)
 	return 0;
 }
 
-int vc_get_ccaps_v0(struct vx_info *vxi, void __user *data)
-{
-	struct vcmd_ctx_caps_v0 vc_data;
-	int ret;
-
-	ret = do_get_caps(vxi, &vc_data.bcaps, &vc_data.ccaps);
-	if (ret)
-		return ret;
-	vc_data.cmask = ~0ULL;
-
-	if (copy_to_user(data, &vc_data, sizeof(vc_data)))
-		return -EFAULT;
-	return 0;
-}
-
 int vc_get_ccaps(struct vx_info *vxi, void __user *data)
 {
 	struct vcmd_ctx_caps_v1 vc_data;
@@ -1049,18 +903,6 @@ static int do_set_caps(struct vx_info *vxi,
 	vxi->vx_ccaps = vs_mask_flags(vxi->vx_ccaps, ccaps, cmask);
 
 	return 0;
-}
-
-int vc_set_ccaps_v0(struct vx_info *vxi, void __user *data)
-{
-	struct vcmd_ctx_caps_v0 vc_data;
-
-	if (copy_from_user(&vc_data, data, sizeof(vc_data)))
-		return -EFAULT;
-
-	/* simulate old &= behaviour for bcaps */
-	return do_set_caps(vxi, 0, ~vc_data.bcaps,
-		vc_data.ccaps, vc_data.cmask);
 }
 
 int vc_set_ccaps(struct vx_info *vxi, void __user *data)

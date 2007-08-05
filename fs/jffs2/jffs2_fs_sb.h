@@ -39,6 +39,7 @@ struct jffs2_sb_info {
 	uint32_t checked_ino;
 
 	unsigned int flags;
+	unsigned int s_mount_opt;
 
 	struct task_struct *gc_task;	/* GC task struct */
 	struct completion gc_thread_start; /* GC thread start completion */

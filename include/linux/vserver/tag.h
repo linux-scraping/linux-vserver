@@ -118,12 +118,10 @@ static inline gid_t dx_map_gid(gid_t gid)
 	return (gid & MAX_GID);
 }
 
-
-#ifdef	CONFIG_VSERVER_LEGACY
-#define FIOC_GETTAG	_IOR('x', 1, long)
-#define FIOC_SETTAG	_IOW('x', 2, long)
-#define FIOC_SETTAGJ	_IOW('x', 3, long)
-#endif
+struct peer_tag {
+	int32_t xid;
+	int32_t nid;
+};
 
 #ifdef	CONFIG_PROPAGATE
 

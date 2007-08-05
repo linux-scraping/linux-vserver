@@ -117,8 +117,7 @@
 #include <linux/err.h>
 #include <linux/ctype.h>
 #include <linux/if_arp.h>
-#include <linux/vs_context.h> /* remove with NXF_HIDE_NETIF */
-#include <linux/vs_network.h>
+#include <linux/vs_inet.h>
 
 /*
  *	The list of packet types we will receive (as opposed to discard)
@@ -2122,8 +2121,7 @@ static int dev_ifconf(char __user *arg)
 
 	total = 0;
 	for_each_netdev(dev) {
-		if (vx_flags(VXF_HIDE_NETIF, 0) &&
-			!dev_in_nx_info(dev, current->nx_info))
+		if (!nx_dev_visible(current->nx_info, dev))
 			continue;
 		for (i = 0; i < NPROTO; i++) {
 			if (gifconf_list[i]) {
@@ -2188,9 +2186,8 @@ void dev_seq_stop(struct seq_file *seq, void *v)
 static void dev_seq_printf_stats(struct seq_file *seq, struct net_device *dev)
 {
 	struct net_device_stats *stats = dev->get_stats(dev);
-	struct nx_info *nxi = current->nx_info;
 
-	if (vx_flags(VXF_HIDE_NETIF, 0) && !dev_in_nx_info(dev, nxi))
+	if (!nx_dev_visible(current->nx_info, dev))
 		return;
 
 	seq_printf(seq, "%6s:%8lu %7lu %4lu %4lu %4lu %5lu %10lu %9lu "

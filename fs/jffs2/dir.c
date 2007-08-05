@@ -32,7 +32,9 @@ static int jffs2_mkdir (struct inode *,struct dentry *,int);
 static int jffs2_rmdir (struct inode *,struct dentry *);
 static int jffs2_mknod (struct inode *,struct dentry *,int,dev_t);
 static int jffs2_rename (struct inode *, struct dentry *,
-                        struct inode *, struct dentry *);
+			 struct inode *, struct dentry *);
+
+extern int jffs2_sync_flags(struct inode *);
 
 const struct file_operations jffs2_dir_operations =
 {
@@ -56,6 +58,7 @@ const struct inode_operations jffs2_dir_inode_operations =
 	.rename =	jffs2_rename,
 	.permission =	jffs2_permission,
 	.setattr =	jffs2_setattr,
+	.sync_flags =	jffs2_sync_flags,
 	.setxattr =	jffs2_setxattr,
 	.getxattr =	jffs2_getxattr,
 	.listxattr =	jffs2_listxattr,

@@ -25,6 +25,9 @@ static int jffs2_prepare_write (struct file *filp, struct page *pg,
 				unsigned start, unsigned end);
 static int jffs2_readpage (struct file *filp, struct page *pg);
 
+extern int jffs2_sync_flags(struct inode *);
+
+
 int jffs2_fsync(struct file *filp, struct dentry *dentry, int datasync)
 {
 	struct inode *inode = dentry->d_inode;
@@ -56,6 +59,7 @@ const struct inode_operations jffs2_file_inode_operations =
 {
 	.permission =	jffs2_permission,
 	.setattr =	jffs2_setattr,
+	.sync_flags =	jffs2_sync_flags,
 	.setxattr =	jffs2_setxattr,
 	.getxattr =	jffs2_getxattr,
 	.listxattr =	jffs2_listxattr,
@@ -157,12 +161,14 @@ static int jffs2_prepare_write (struct file *filp, struct page *pg,
 		ri.mode = cpu_to_jemode(inode->i_mode);
 		ri.uid = cpu_to_je16(inode->i_uid);
 		ri.gid = cpu_to_je16(inode->i_gid);
+		ri.tag = cpu_to_je16(inode->i_tag);
 		ri.isize = cpu_to_je32(max((uint32_t)inode->i_size, pageofs));
 		ri.atime = ri.ctime = ri.mtime = cpu_to_je32(get_seconds());
 		ri.offset = cpu_to_je32(inode->i_size);
 		ri.dsize = cpu_to_je32(pageofs - inode->i_size);
 		ri.csize = cpu_to_je32(0);
 		ri.compr = JFFS2_COMPR_ZERO;
+		ri.flags = cpu_to_je16(f->flags);
 		ri.node_crc = cpu_to_je32(crc32(0, &ri, sizeof(ri)-8));
 		ri.data_crc = cpu_to_je32(0);
 
@@ -248,8 +254,10 @@ static int jffs2_commit_write (struct file *filp, struct page *pg,
 	ri->mode = cpu_to_jemode(inode->i_mode);
 	ri->uid = cpu_to_je16(inode->i_uid);
 	ri->gid = cpu_to_je16(inode->i_gid);
+	ri->tag = cpu_to_je16(inode->i_tag);
 	ri->isize = cpu_to_je32((uint32_t)inode->i_size);
 	ri->atime = ri->ctime = ri->mtime = cpu_to_je32(get_seconds());
+	ri->flags = cpu_to_je16(f->flags);
 
 	/* In 2.4, it was already kmapped by generic_file_write(). Doesn't
 	   hurt to do it again. The alternative is ifdefs, which are ugly. */

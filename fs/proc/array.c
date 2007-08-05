@@ -307,12 +307,6 @@ static inline char *task_cap(struct task_struct *p, char *buffer)
 int proc_pid_status(struct task_struct *task, char * buffer)
 {
 	char * orig = buffer;
-#ifdef	CONFIG_VSERVER_LEGACY
-	struct vx_info *vxi;
-#endif
-#ifdef	CONFIG_VSERVER_LEGACYNET
-	struct nx_info *nxi;
-#endif
 	struct mm_struct *mm = get_task_mm(task);
 
 	buffer = task_name(task, buffer);
@@ -328,42 +322,8 @@ int proc_pid_status(struct task_struct *task, char * buffer)
 
 	if (task_vx_flags(task, VXF_HIDE_VINFO, 0))
 		goto skip;
-#ifdef	CONFIG_VSERVER_LEGACY
-	buffer += sprintf (buffer,"s_context: %d\n", vx_task_xid(task));
-	vxi = task_get_vx_info(task);
-	if (vxi) {
-		buffer += sprintf (buffer,"ctxflags: %08llx\n"
-			,(unsigned long long)vxi->vx_flags);
-		buffer += sprintf (buffer,"initpid: %d\n"
-			,vxi->vx_initpid);
-	} else {
-		buffer += sprintf (buffer,"ctxflags: none\n");
-		buffer += sprintf (buffer,"initpid: none\n");
-	}
-	put_vx_info(vxi);
-#else
 	buffer += sprintf (buffer,"VxID: %d\n", vx_task_xid(task));
-#endif
-#ifdef	CONFIG_VSERVER_LEGACYNET
-	nxi = task_get_nx_info(task);
-	if (nxi) {
-		int i;
-
-		buffer += sprintf (buffer,"ipv4root:");
-		for (i=0; i<nxi->nbipv4; i++){
-			buffer += sprintf (buffer," %08x/%08x"
-				,nxi->ipv4[i]
-				,nxi->mask[i]);
-		}
-		*buffer++ = '\n';
-		buffer += sprintf (buffer,"ipv4root_bcast: %08x\n"
-			,nxi->v4_bcast);
-	} else {
-		buffer += sprintf (buffer,"ipv4root: 0\n");
-		buffer += sprintf (buffer,"ipv4root_bcast: 0\n");
-	}
-	put_nx_info(nxi);
-#endif
+	buffer += sprintf (buffer,"NxID: %d\n", nx_task_nid(task));
 skip:
 #if defined(CONFIG_S390)
 	buffer = task_show_regs(task, buffer);

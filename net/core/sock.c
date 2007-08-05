@@ -128,6 +128,7 @@
 #include <linux/vs_socket.h>
 #include <linux/vs_limit.h>
 #include <linux/vs_context.h>
+#include <linux/vs_network.h>
 
 #ifdef CONFIG_INET
 #include <net/tcp.h>
@@ -814,6 +815,9 @@ int sock_getsockopt(struct socket *sock, int level, int optname,
 
 	case SO_PEERSEC:
 		return security_socket_getpeersec_stream(sock, optval, optlen, len);
+
+		case SO_PEERTAG:
+			return vx_socket_peer_tag(sock, level, optval, optlen, len);
 
 	default:
 		return -ENOPROTOOPT;

@@ -19,7 +19,7 @@
 	 |STATS  |DESTROY|ALTER  |CHANGE |LIMIT  |TEST   | |       |       |
 	 |INFO   |SETUP  |       |MOVE   |       |       | |       |       |
   -------+-------+-------+-------+-------+-------+-------+ +-------+-------+
-  SYSTEM |VERSION|VSETUP |VHOST  |       |       |       | |DEVICES|       |
+  SYSTEM |VERSION|VSETUP |VHOST  |       |       |       | |DEVICE |       |
   HOST   |     00|     01|     02|     03|     04|     05| |     06|     07|
   -------+-------+-------+-------+-------+-------+-------+ +-------+-------+
   CPU    |       |VPROC  |PROCALT|PROCMIG|PROCTRL|       | |SCHED. |       |

@@ -1182,6 +1182,8 @@ static int jffs2_do_read_inode_internal(struct jffs2_sb_info *c,
 		latest_node->isize = cpu_to_je32(0);
 		latest_node->gid = cpu_to_je16(0);
 		latest_node->uid = cpu_to_je16(0);
+		latest_node->tag = cpu_to_je16(0);
+		latest_node->flags = cpu_to_je16(0);
 		if (f->inocache->state == INO_STATE_READING)
 			jffs2_set_inocache_state(c, f->inocache, INO_STATE_PRESENT);
 		return 0;
