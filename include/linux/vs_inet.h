@@ -235,14 +235,13 @@ int v4_map_sock_addr(struct inet_sock *inet, struct sockaddr_in *addr,
 		NIPQUAD(saddr));
 
 	if (nxi) {
-		if (nx_info_flags(nxi, NXF_SINGLE_IP, 0) &&
-			(saddr == INADDR_ANY))
-			baddr = nxi->v4.ip.s_addr;
-		if (nx_info_flags(nxi, NXF_LBACK_REMAP, 0) &&
-			(saddr == IPI_LOOPBACK))
-			baddr = nxi->v4_lback.s_addr;
-		if (saddr != nxi->v4_bcast.s_addr) {
-			/* normal address bind */
+		if (saddr == INADDR_ANY) {
+			if (nx_info_flags(nxi, NXF_SINGLE_IP, 0))
+				baddr = nxi->v4.ip.s_addr;
+		} else if (saddr == IPI_LOOPBACK) {
+			if (nx_info_flags(nxi, NXF_LBACK_REMAP, 0))
+				baddr = nxi->v4_lback.s_addr;
+		} else {	/* normal address bind */
 			if (!v4_addr_in_nx_info(nxi, saddr, -1))
 				return -EADDRNOTAVAIL;
 		}
@@ -292,6 +291,17 @@ static inline __be32 nx_map_sock_lback(struct nx_info *nxi, __be32 addr)
 	return addr;
 }
 
+static inline
+int nx_info_has_v4(struct nx_info *nxi)
+{
+	if (!nxi)
+		return 1;
+	if (NX_IPV4(nxi))
+		return 1;
+	if (nx_info_flags(nxi, NXF_LBACK_REMAP, 0))
+		return 1;
+	return 0;
+}
 
 #else /* CONFIG_INET */
 
@@ -313,9 +323,16 @@ int v4_ifa_in_nx_info(struct in_ifaddr *a, struct nx_info *n)
 	return 1;
 }
 
+static inline
+int nx_info_has_v4(struct nx_info *nxi)
+{
+	return 0;
+}
 
 #endif /* CONFIG_INET */
 
+#define current_nx_info_has_v4() \
+	nx_info_has_v4(current_nx_info())
 
 #else
 #warning duplicate inclusion

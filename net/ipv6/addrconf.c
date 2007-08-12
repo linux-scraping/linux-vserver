@@ -898,7 +898,8 @@ static inline int ipv6_saddr_label(const struct in6_addr *addr, int type)
 }
 
 int ipv6_dev_get_saddr(struct net_device *daddr_dev,
-		       struct in6_addr *daddr, struct in6_addr *saddr)
+		       struct in6_addr *daddr, struct in6_addr *saddr,
+		       struct nx_info *nxi)
 {
 	struct ipv6_saddr_score hiscore;
 	struct inet6_ifaddr *ifa_result = NULL;
@@ -942,6 +943,10 @@ int ipv6_dev_get_saddr(struct net_device *daddr_dev,
 			struct ipv6_saddr_score score;
 
 			score.addr_type = __ipv6_addr_type(&ifa->addr);
+
+			/* Use only addresses assigned to the context */
+			if (!v6_ifa_in_nx_info(ifa, nxi))
+				continue;
 
 			/* Rule 0:
 			 * - Tentative Address (RFC2462 section 5.4)
@@ -1156,9 +1161,10 @@ record_it:
 
 
 int ipv6_get_saddr(struct dst_entry *dst,
-		   struct in6_addr *daddr, struct in6_addr *saddr)
+		   struct in6_addr *daddr, struct in6_addr *saddr,
+		   struct nx_info *nxi)
 {
-	return ipv6_dev_get_saddr(dst ? ip6_dst_idev(dst)->dev : NULL, daddr, saddr);
+	return ipv6_dev_get_saddr(dst ? ip6_dst_idev(dst)->dev : NULL, daddr, saddr, nxi);
 }
 
 EXPORT_SYMBOL(ipv6_get_saddr);
@@ -2478,6 +2484,7 @@ static int addrconf_ifdown(struct net_device *dev, int how)
 		write_unlock_bh(&idev->lock);
 
 		__ipv6_ifa_notify(RTM_DELADDR, ifa);
+		atomic_notifier_call_chain(&inet6addr_chain, NETDEV_DOWN, ifa);
 		in6_ifa_put(ifa);
 
 		write_lock_bh(&idev->lock);
@@ -3264,9 +3271,9 @@ static int inet6_dump_addr(struct sk_buff *skb, struct netlink_callback *cb,
 	struct ifacaddr6 *ifaca;
 	struct nx_info *nxi = skb->sk ? skb->sk->sk_nx_info : NULL;
 
-	/* FIXME: maybe disable ipv6 on non v6 guests?
-	if (skb->sk && skb->sk->sk_vx_info)
-		return skb->len;	*/
+	/* disable ipv6 on non v6 guests */
+	if (nxi && !nx_info_has_v6(nxi))
+		return skb->len;
 
 	s_idx = cb->args[0];
 	s_ip_idx = ip_idx = cb->args[1];
@@ -3607,9 +3614,9 @@ static int inet6_dump_ifinfo(struct sk_buff *skb, struct netlink_callback *cb)
 	for_each_netdev(dev) {
 		if (idx < s_idx)
 			goto cont;
-		if ((idev = in6_dev_get(dev)) == NULL)
-			goto cont;
 		if (!v6_dev_in_nx_info(dev, nxi))
+			goto cont;
+		if ((idev = in6_dev_get(dev)) == NULL)
 			goto cont;
 		err = inet6_fill_ifinfo(skb, idev, NETLINK_CB(cb->skb).pid,
 				cb->nlh->nlmsg_seq, RTM_NEWLINK, NLM_F_MULTI);

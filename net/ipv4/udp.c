@@ -255,10 +255,9 @@ static struct sock *__udp4_lib_lookup(__be32 saddr, __be16 sport,
 				if (inet->rcv_saddr != daddr)
 					continue;
 				score+=2;
-			} else if (sk->sk_nx_info) {
-				if (v4_addr_in_nx_info(sk->sk_nx_info, daddr, -1))
-					score+=2;
-				else
+			} else {
+				/* block non nx_info ips */
+				if (!v4_addr_in_nx_info(sk->sk_nx_info, daddr, -1))
 					continue;
 			}
 			if (inet->daddr) {

@@ -137,6 +137,9 @@ static struct nx_info *__alloc_nx_info(nid_t nid)
 
 	/* rest of init goes here */
 
+	new->v4_lback.s_addr = htonl(INADDR_LOOPBACK);
+	new->v4_bcast.s_addr = htonl(INADDR_BROADCAST);
+
 	vxdprintk(VXD_CBIT(nid, 0),
 		"alloc_nx_info(%d) = %p", nid, new);
 	atomic_inc(&nx_global_ctotal);
@@ -594,7 +597,7 @@ int do_add_v4_addr(struct nx_info *nxi, __be32 ip, __be32 mask,
 {
 	struct nx_addr_v4 *nxa = &nxi->v4;
 
-	if (nxi->v4.type != NXA_TYPE_NONE) {
+	if (NX_IPV4(nxi)) {
 		/* locate last entry */
 		for (; nxa->next; nxa = nxa->next);
 		nxa->next = __alloc_nx_addr_v4();
@@ -686,6 +689,8 @@ int vc_net_add_ipv4(struct nx_info *nxi, void __user *data)
 
 	switch (vc_data.type) {
 	case NXA_TYPE_ADDR:
+	case NXA_TYPE_RANGE:
+	case NXA_TYPE_MASK:
 		return do_add_v4_addr(nxi, vc_data.ip.s_addr, vc_data.mask.s_addr,
 			vc_data.type, vc_data.flags);
 
@@ -734,7 +739,7 @@ int do_add_v6_addr(struct nx_info *nxi,
 {
 	struct nx_addr_v6 *nxa = &nxi->v6;
 
-	if (nxi->v6.type != NXA_TYPE_NONE) {
+	if (NX_IPV6(nxi)) {
 		/* locate last entry */
 		for (; nxa->next; nxa = nxa->next);
 		nxa->next = __alloc_nx_addr_v6();
@@ -762,6 +767,7 @@ int vc_net_add_ipv6(struct nx_info *nxi, void __user *data)
 
 	switch (vc_data.type) {
 	case NXA_TYPE_ADDR:
+	case NXA_TYPE_MASK:
 		return do_add_v6_addr(nxi, &vc_data.ip, &vc_data.mask,
 			vc_data.prefix, vc_data.type, vc_data.flags);
 	default:

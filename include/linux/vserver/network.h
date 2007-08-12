@@ -41,6 +41,11 @@ static inline uint64_t __nxf_init_set(void) {
 }
 
 
+/* network caps */
+
+#define NXC_RAW_ICMP		0x00000100
+
+
 /* address types */
 
 #define NXA_TYPE_IPV4		0x0001
@@ -49,9 +54,9 @@ static inline uint64_t __nxf_init_set(void) {
 #define NXA_TYPE_NONE		0x0000
 #define NXA_TYPE_ANY		0x00FF
 
-#define NXA_TYPE_ADDR		0x0003
-#define NXA_TYPE_MASK		0x0013
-#define NXA_TYPE_RANGE		0x0023
+#define NXA_TYPE_ADDR		0x0010
+#define NXA_TYPE_MASK		0x0020
+#define NXA_TYPE_RANGE		0x0040
 
 #define NXA_MOD_BCAST		0x0100
 #define NXA_MOD_LBACK		0x0200
@@ -121,9 +126,9 @@ extern long vs_net_change(struct nx_info *, unsigned int);
 struct sock;
 
 
-#define NX_IPV4(n)	((n)->v4.type)
+#define NX_IPV4(n)	((n)->v4.type != NXA_TYPE_NONE)
 #ifdef  CONFIG_IPV6
-#define NX_IPV6(n)	((n)->v6.type)
+#define NX_IPV6(n)	((n)->v6.type != NXA_TYPE_NONE)
 #else
 #define NX_IPV6(n)	(0)
 #endif

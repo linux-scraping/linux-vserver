@@ -309,7 +309,8 @@ lookup_protocol:
 	}
 
 	err = -EPERM;
-	if ((protocol == IPPROTO_ICMP) && vx_ccaps(VXC_RAW_ICMP))
+	if ((protocol == IPPROTO_ICMP) &&
+		nx_capable(answer->capability, NXC_RAW_ICMP))
 		goto override;
 	if (answer->capability > 0 && !capable(answer->capability))
 		goto out_rcu_unlock;

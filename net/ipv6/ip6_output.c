@@ -884,7 +884,7 @@ static int ip6_dst_lookup_tail(struct sock *sk,
 		goto out_err_release;
 
 	if (ipv6_addr_any(&fl->fl6_src)) {
-		err = ipv6_get_saddr(*dst, &fl->fl6_dst, &fl->fl6_src);
+		err = ipv6_get_saddr(*dst, &fl->fl6_dst, &fl->fl6_src, sk->sk_nx_info);
 		if (err)
 			goto out_err_release;
 	}

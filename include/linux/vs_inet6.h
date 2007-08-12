@@ -181,6 +181,15 @@ void v6_set_sock_addr(struct inet_sock *inet, struct nx_v6_sock_addr *nsa)
 	// inet->saddr = nsa->baddr;
 }
 
+static inline
+int nx_info_has_v6(struct nx_info *nxi)
+{
+	if (!nxi)
+		return 1;
+	if (NX_IPV6(nxi))
+		return 1;
+	return 0;
+}
 
 #else /* CONFIG_IPV6 */
 
@@ -203,9 +212,16 @@ int v6_ifa_in_nx_info(struct in_ifaddr *a, struct nx_info *n)
 	return 1;
 }
 
+static inline
+int nx_info_has_v6(struct nx_info *nxi)
+{
+	return 0;
+}
 
 #endif /* CONFIG_IPV6 */
 
+#define current_nx_info_has_v6() \
+	nx_info_has_v6(current_nx_info())
 
 #else
 #warning duplicate inclusion

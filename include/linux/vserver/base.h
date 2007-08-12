@@ -198,6 +198,8 @@ static inline int __vs_check(int cid, int id, unsigned int mode)
 #define vx_capable(b, c) (capable(b) || \
 	(cap_raised(current->cap_effective, b) && vx_ccaps(c)))
 
+#define nx_capable(b, c) (capable(b) || \
+	(cap_raised(current->cap_effective, b) && nx_ncaps(c)))
 
 #define vx_current_initpid(n) \
 	(current->vx_info && \

@@ -48,6 +48,7 @@
 
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
+#include <linux/vs_inet6.h>
 #include "udp_impl.h"
 
 DEFINE_SNMP_STAT(struct udp_mib, udp_stats_in6) __read_mostly;
@@ -82,6 +83,10 @@ static struct sock *__udp6_lib_lookup(struct in6_addr *saddr, __be16 sport,
 				if (!ipv6_addr_equal(&np->rcv_saddr, daddr))
 					continue;
 				score++;
+			} else {
+				/* block non nx_info ips */
+				if (!v6_addr_in_nx_info(sk->sk_nx_info, daddr, -1))
+					continue;
 			}
 			if (!ipv6_addr_any(&np->daddr)) {
 				if (!ipv6_addr_equal(&np->daddr, saddr))

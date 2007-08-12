@@ -151,9 +151,12 @@ lookup_protocol:
 	}
 
 	err = -EPERM;
+	if ((protocol == IPPROTO_ICMPV6) &&
+		nx_capable(answer->capability, NXC_RAW_ICMP))
+		goto override;
 	if (answer->capability > 0 && !capable(answer->capability))
 		goto out_rcu_unlock;
-
+override:
 	sock->ops = answer->ops;
 	answer_prot = answer->prot;
 	answer_no_check = answer->no_check;
@@ -250,7 +253,7 @@ int inet6_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len)
 	struct sockaddr_in6 *addr=(struct sockaddr_in6 *)uaddr;
 	struct sock *sk = sock->sk;
 	struct inet_sock *inet = inet_sk(sk);
-	// struct ipv6_pinfo *np = inet6_sk(sk);
+	struct ipv6_pinfo *np = inet6_sk(sk);
 	struct nx_v6_sock_addr nsa;
 	__be32 v4addr = 0;
 	unsigned short snum;
@@ -291,6 +294,10 @@ int inet6_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len)
 			err = -EADDRNOTAVAIL;
 			goto out;
 		}
+		if (!v4_addr_in_nx_info(sk->sk_nx_info, v4addr, -1)) {
+			err = -EADDRNOTAVAIL;
+			goto out;
+		}
 	} else {
 		if (addr_type != IPV6_ADDR_ANY) {
 			struct net_device *dev = NULL;
@@ -316,6 +323,11 @@ int inet6_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len)
 				}
 			}
 
+			if (!v6_addr_in_nx_info(sk->sk_nx_info, &addr->sin6_addr, -1)) {
+				err = -EADDRNOTAVAIL;
+				goto out;
+			}
+
 			/* ipv4 addr of the socket is invalid.  Only the
 			 * unspecified and mapped address have a v4 equivalent.
 			 */
@@ -330,16 +342,11 @@ int inet6_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len)
 			}
 			if (dev)
 				dev_put(dev);
-		} else {
-			if (!v6_addr_in_nx_info(sk->sk_nx_info, &addr->sin6_addr, -1)) {
-				err = -EADDRNOTAVAIL;
-				goto out;
-			}
 		}
 	}
 
 	v6_set_sock_addr(inet, &nsa);
-/*
+
 	inet->rcv_saddr = v4addr;
 	inet->saddr = v4addr;
 
@@ -347,7 +354,6 @@ int inet6_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len)
 
 	if (!(addr_type & IPV6_ADDR_MULTICAST))
 		ipv6_addr_copy(&np->saddr, &addr->sin6_addr);
-*/
 
 	/* Make sure we are allowed to bind here. */
 	if (sk->sk_prot->get_port(sk, snum)) {
