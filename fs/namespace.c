@@ -420,6 +420,11 @@ static int show_vfsmnt(struct seq_file *m, void *v)
 		seq_putc(m, ' ');
 		seq_path(m, mnt, mnt->mnt_root, " \t\n\\");
 		seq_putc(m, ' ');
+
+		if (mnt->mnt_sb->s_subtype && mnt->mnt_sb->s_subtype[0]) {
+			seq_putc(m, '.');
+			mangle(m, mnt->mnt_sb->s_subtype);
+		}
 	}
 	mangle(m, mnt->mnt_sb->s_type->name);
 	seq_putc(m, ' ');
@@ -553,7 +558,7 @@ void release_mounts(struct list_head *head)
 {
 	struct vfsmount *mnt;
 	while (!list_empty(head)) {
-		mnt = list_entry(head->next, struct vfsmount, mnt_hash);
+		mnt = list_first_entry(head, struct vfsmount, mnt_hash);
 		list_del_init(&mnt->mnt_hash);
 		if (mnt->mnt_parent != mnt) {
 			struct dentry *dentry;
@@ -940,6 +945,9 @@ static int do_change_type(struct nameidata *nd, int flag)
 	int recurse = flag & MS_REC;
 	int type = flag & ~MS_REC;
 
+	if (!capable(CAP_SYS_ADMIN))
+		return -EPERM;
+
 	if (nd->dentry != nd->mnt->mnt_root)
 		return -EINVAL;
 
@@ -1240,7 +1248,7 @@ static void expire_mount_list(struct list_head *graveyard, struct list_head *mou
 
 	while (!list_empty(graveyard)) {
 		LIST_HEAD(umounts);
-		mnt = list_entry(graveyard->next, struct vfsmount, mnt_expire);
+		mnt = list_first_entry(graveyard, struct vfsmount, mnt_expire);
 		list_del_init(&mnt->mnt_expire);
 
 		/* don't do anything if the namespace is dead - all the
@@ -1523,10 +1531,9 @@ dput_out:
  * Allocate a new namespace structure and populate it with contents
  * copied from the namespace of the passed in task structure.
  */
-struct mnt_namespace *dup_mnt_ns(struct task_struct *tsk,
+static struct mnt_namespace *dup_mnt_ns(struct mnt_namespace *mnt_ns,
 		struct fs_struct *fs)
 {
-	struct mnt_namespace *mnt_ns = tsk->nsproxy->mnt_ns;
 	struct mnt_namespace *new_ns;
 	struct vfsmount *rootmnt = NULL, *pwdmnt = NULL, *altrootmnt = NULL;
 	struct vfsmount *p, *q;
@@ -1592,36 +1599,21 @@ struct mnt_namespace *dup_mnt_ns(struct task_struct *tsk,
 	return new_ns;
 }
 
-int copy_mnt_ns(int flags, struct task_struct *tsk)
+struct mnt_namespace *copy_mnt_ns(int flags, struct mnt_namespace *ns,
+		struct fs_struct *new_fs)
 {
-	struct mnt_namespace *ns = tsk->nsproxy->mnt_ns;
 	struct mnt_namespace *new_ns;
-	int err = 0;
 
-	if (!ns)
-		return 0;
-
+	BUG_ON(!ns);
 	get_mnt_ns(ns);
 
 	if (!(flags & CLONE_NEWNS))
-		return 0;
+		return ns;
 
-	if (!vx_capable(CAP_SYS_ADMIN, VXC_SECURE_MOUNT)) {
-		err = -EPERM;
-		goto out;
-	}
+	new_ns = dup_mnt_ns(ns, new_fs);
 
-	new_ns = dup_mnt_ns(tsk, tsk->fs);
-	if (!new_ns) {
-		err = -ENOMEM;
-		goto out;
-	}
-
-	tsk->nsproxy->mnt_ns = new_ns;
-
-out:
 	put_mnt_ns(ns);
-	return err;
+	return new_ns;
 }
 
 asmlinkage long sys_mount(char __user * dev_name, char __user * dir_name,

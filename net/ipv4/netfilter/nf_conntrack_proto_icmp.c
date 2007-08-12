@@ -4,11 +4,6 @@
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
- *
- * 16 Dec 2003: Yasuyuki Kozakai @USAGI <yasuyuki.kozakai@toshiba.co.jp>
- *	- enable working with Layer 3 protocol independent connection tracking.
- *
- * Derived from net/ipv4/netfilter/ip_conntrack_proto_icmp.c
  */
 
 #include <linux/types.h>
@@ -158,7 +153,7 @@ icmp_error_message(struct sk_buff *skb,
 	NF_CT_ASSERT(skb->nfct == NULL);
 
 	/* Not enough header? */
-	inside = skb_header_pointer(skb, skb->nh.iph->ihl*4, sizeof(_in), &_in);
+	inside = skb_header_pointer(skb, ip_hdrlen(skb), sizeof(_in), &_in);
 	if (inside == NULL)
 		return -NF_ACCEPT;
 
@@ -172,7 +167,7 @@ icmp_error_message(struct sk_buff *skb,
 	/* rcu_read_lock()ed by nf_hook_slow */
 	innerproto = __nf_ct_l4proto_find(PF_INET, inside->ip.protocol);
 
-	dataoff = skb->nh.iph->ihl*4 + sizeof(inside->icmp);
+	dataoff = ip_hdrlen(skb) + sizeof(inside->icmp);
 	/* Are they talking about one of our connections? */
 	if (!nf_ct_get_tuple(skb, dataoff, dataoff + inside->ip.ihl*4, PF_INET,
 			     inside->ip.protocol, &origtuple,
@@ -194,24 +189,12 @@ icmp_error_message(struct sk_buff *skb,
 
 	h = nf_conntrack_find_get(&innertuple, NULL);
 	if (!h) {
-		/* Locally generated ICMPs will match inverted if they
-		   haven't been SNAT'ed yet */
-		/* FIXME: NAT code has to handle half-done double NAT --RR */
-		if (hooknum == NF_IP_LOCAL_OUT)
-			h = nf_conntrack_find_get(&origtuple, NULL);
-
-		if (!h) {
-			DEBUGP("icmp_error_message: no match\n");
-			return -NF_ACCEPT;
-		}
-
-		/* Reverse direction from that found */
-		if (NF_CT_DIRECTION(h) == IP_CT_DIR_REPLY)
-			*ctinfo += IP_CT_IS_REPLY;
-	} else {
-		if (NF_CT_DIRECTION(h) == IP_CT_DIR_REPLY)
-			*ctinfo += IP_CT_IS_REPLY;
+		DEBUGP("icmp_error_message: no match\n");
+		return -NF_ACCEPT;
 	}
+
+	if (NF_CT_DIRECTION(h) == IP_CT_DIR_REPLY)
+		*ctinfo += IP_CT_IS_REPLY;
 
 	/* Update skb to refer to this connection */
 	skb->nfct = &nf_ct_tuplehash_to_ctrack(h)->ct_general;
@@ -227,7 +210,7 @@ icmp_error(struct sk_buff *skb, unsigned int dataoff,
 	struct icmphdr _ih, *icmph;
 
 	/* Not enough header? */
-	icmph = skb_header_pointer(skb, skb->nh.iph->ihl*4, sizeof(_ih), &_ih);
+	icmph = skb_header_pointer(skb, ip_hdrlen(skb), sizeof(_ih), &_ih);
 	if (icmph == NULL) {
 		if (LOG_INVALID(IPPROTO_ICMP))
 			nf_log_packet(PF_INET, 0, skb, NULL, NULL, NULL,

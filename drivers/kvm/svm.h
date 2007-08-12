@@ -44,6 +44,9 @@ enum {
 	INTERCEPT_RDTSCP,
 	INTERCEPT_ICEBP,
 	INTERCEPT_WBINVD,
+	INTERCEPT_MONITOR,
+	INTERCEPT_MWAIT,
+	INTERCEPT_MWAIT_COND,
 };
 
 
@@ -172,7 +175,10 @@ struct __attribute__ ((__packed__)) vmcb {
 #define SVM_CPUID_FUNC 0x8000000a
 
 #define MSR_EFER_SVME_MASK (1ULL << 12)
+#define MSR_VM_CR       0xc0010114
 #define MSR_VM_HSAVE_PA 0xc0010117ULL
+
+#define SVM_VM_CR_SVM_DISABLE 4
 
 #define SVM_SELECTOR_S_SHIFT 4
 #define SVM_SELECTOR_DPL_SHIFT 5
@@ -298,6 +304,9 @@ struct __attribute__ ((__packed__)) vmcb {
 #define SVM_EXIT_RDTSCP		0x087
 #define SVM_EXIT_ICEBP		0x088
 #define SVM_EXIT_WBINVD		0x089
+#define SVM_EXIT_MONITOR	0x08a
+#define SVM_EXIT_MWAIT		0x08b
+#define SVM_EXIT_MWAIT_COND	0x08c
 #define SVM_EXIT_NPF  		0x400
 
 #define SVM_EXIT_ERR		-1

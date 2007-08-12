@@ -18,6 +18,7 @@
 #include <linux/ptrace.h>
 #include <linux/security.h>
 #include <linux/signal.h>
+#include <linux/audit.h>
 #include <linux/vs_context.h>
 
 #include <asm/pgtable.h>
@@ -166,6 +167,8 @@ int ptrace_may_attach(struct task_struct *task)
 int ptrace_attach(struct task_struct *task)
 {
 	int retval;
+
+	audit_ptrace(task);
 
 	retval = -EPERM;
 	if (task->pid <= 1)

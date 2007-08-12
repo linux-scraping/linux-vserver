@@ -814,6 +814,15 @@ static int dm_request(request_queue_t *q, struct bio *bio)
 	int rw = bio_data_dir(bio);
 	struct mapped_device *md = q->queuedata;
 
+	/*
+	 * There is no use in forwarding any barrier request since we can't
+	 * guarantee it is (or can be) handled by the targets correctly.
+	 */
+	if (unlikely(bio_barrier(bio))) {
+		bio_endio(bio, bio->bi_size, -EOPNOTSUPP);
+		return 0;
+	}
+
 	down_read(&md->io_lock);
 
 	disk_stat_inc(dm_disk(md), ios[rw]);
@@ -1025,7 +1034,7 @@ static struct mapped_device *alloc_dev(int minor)
 	if (!md->tio_pool)
 		goto bad3;
 
-	md->bs = bioset_create(16, 16, 4);
+	md->bs = bioset_create(16, 16);
 	if (!md->bs)
 		goto bad_no_bioset;
 
@@ -1249,6 +1258,7 @@ void dm_put(struct mapped_device *md)
 		free_dev(md);
 	}
 }
+EXPORT_SYMBOL_GPL(dm_put);
 
 /*
  * Process the deferred bios

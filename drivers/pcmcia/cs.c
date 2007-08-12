@@ -26,7 +26,6 @@
 #include <linux/ioport.h>
 #include <linux/delay.h>
 #include <linux/pm.h>
-#include <linux/pci.h>
 #include <linux/device.h>
 #include <linux/kthread.h>
 #include <linux/freezer.h>
@@ -409,6 +408,9 @@ static void socket_shutdown(struct pcmcia_socket *s)
 	cb_free(s);
 #endif
 	s->functions = 0;
+
+	/* give socket some time to power down */
+	msleep(100);
 
 	s->ops->get_status(s, &status);
 	if (status & SS_POWERON) {

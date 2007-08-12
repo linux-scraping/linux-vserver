@@ -69,7 +69,7 @@ int vc_get_vci(uint32_t id)
 #define __COMPAT(name, id, data, compat)	\
 	name(id, data)
 #define __COMPAT_NO_ID(name, data, compat)	\
-	name (data)
+	name(data)
 #endif
 
 

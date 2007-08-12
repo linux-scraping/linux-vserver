@@ -266,16 +266,12 @@ void timer_stats_update_stats(void *timer, pid_t pid, void *startf,
 
 static void print_name_offset(struct seq_file *m, unsigned long addr)
 {
-	char namebuf[KSYM_NAME_LEN+1];
-	unsigned long size, offset;
-	const char *sym_name;
-	char *modname;
+	char symname[KSYM_NAME_LEN+1];
 
-	sym_name = kallsyms_lookup(addr, &size, &offset, &modname, namebuf);
-	if (sym_name)
-		seq_printf(m, "%s", sym_name);
-	else
+	if (lookup_symbol_name(addr, symname) < 0)
 		seq_printf(m, "<%p>", (void *)addr);
+	else
+		seq_printf(m, "%s", symname);
 }
 
 static int tstats_show(struct seq_file *m, void *v)
@@ -395,7 +391,7 @@ static struct file_operations tstats_fops = {
 	.read		= seq_read,
 	.write		= tstats_write,
 	.llseek		= seq_lseek,
-	.release	= seq_release,
+	.release	= single_release,
 };
 
 void __init init_timer_stats(void)

@@ -16,7 +16,6 @@
 #include <linux/reiserfs_fs.h>
 #include <linux/reiserfs_acl.h>
 #include <linux/reiserfs_xattr.h>
-#include <linux/smp_lock.h>
 #include <linux/quotaops.h>
 #include <linux/vs_tag.h>
 

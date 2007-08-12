@@ -668,6 +668,9 @@ static int parse_hw_handler(struct arg_set *as, struct multipath *m)
 		return -EINVAL;
 	}
 
+	m->hw_handler.md = dm_table_get_md(ti->table);
+	dm_put(m->hw_handler.md);
+
 	r = hwht->create(&m->hw_handler, hw_argc - 1, as->argv);
 	if (r) {
 		dm_put_hw_handler(hwht);
@@ -794,9 +797,6 @@ static int multipath_map(struct dm_target *ti, struct bio *bio,
 	int r;
 	struct mpath_io *mpio;
 	struct multipath *m = (struct multipath *) ti->private;
-
-	if (bio_barrier(bio))
-		return -EOPNOTSUPP;
 
 	mpio = mempool_alloc(m->mpio_pool, GFP_NOIO);
 	dm_bio_record(&mpio->details, bio);

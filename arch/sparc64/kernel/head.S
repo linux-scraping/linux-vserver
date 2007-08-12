@@ -458,7 +458,6 @@ tlb_fixup_done:
 	or	%g6, %lo(init_thread_union), %g6
 	ldx	[%g6 + TI_TASK], %g4
 	mov	%sp, %l6
-	mov	%o4, %l7
 
 	wr	%g0, ASI_P, %asi
 	mov	1, %g1
@@ -523,7 +522,7 @@ tlb_fixup_done:
 #else
 	mov	0, %o0
 #endif
-	stb	%o0, [%g6 + TI_CPU]
+	sth	%o0, [%g6 + TI_CPU]
 
 	/* Off we go.... */
 	call	start_kernel

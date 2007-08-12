@@ -35,6 +35,7 @@ enum {
 	CTL_DEBUG_DLIM,
 	CTL_DEBUG_QUOTA,
 	CTL_DEBUG_CVIRT,
+	CTL_DEBUG_SPACE,
 	CTL_DEBUG_MISC,
 };
 
@@ -49,6 +50,7 @@ unsigned int vx_debug_cres	= 0;
 unsigned int vx_debug_dlim	= 0;
 unsigned int vx_debug_quota	= 0;
 unsigned int vx_debug_cvirt	= 0;
+unsigned int vx_debug_space	= 0;
 unsigned int vx_debug_misc	= 0;
 
 
@@ -152,6 +154,7 @@ static ctl_table debug_table[] = {
 	CTL_ENTRY(CTL_DEBUG_DLIM,	debug_dlim),
 	CTL_ENTRY(CTL_DEBUG_QUOTA,	debug_quota),
 	CTL_ENTRY(CTL_DEBUG_CVIRT,	debug_cvirt),
+	CTL_ENTRY(CTL_DEBUG_SPACE,	debug_space),
 	CTL_ENTRY(CTL_DEBUG_MISC,	debug_misc),
 	{ .ctl_name = 0 }
 };
@@ -178,6 +181,7 @@ static match_table_t tokens = {
 	{ CTL_DEBUG_DLIM,	"dlim=%x"	},
 	{ CTL_DEBUG_QUOTA,	"quota=%x"	},
 	{ CTL_DEBUG_CVIRT,	"cvirt=%x"	},
+	{ CTL_DEBUG_SPACE,	"space=%x"	},
 	{ CTL_DEBUG_MISC,	"misc=%x"	},
 	{ CTL_DEBUG_ERROR,	NULL		}
 };
@@ -216,6 +220,7 @@ static int __init vs_debug_setup(char *str)
 		HANDLE_CASE(DLIM,   dlim,   value);
 		HANDLE_CASE(QUOTA,  quota,  value);
 		HANDLE_CASE(CVIRT,  cvirt,  value);
+		HANDLE_CASE(SPACE,  space,  value);
 		HANDLE_CASE(MISC,   misc,   value);
 		default:
 			return -EINVAL;
@@ -238,5 +243,6 @@ EXPORT_SYMBOL_GPL(vx_debug_cres);
 EXPORT_SYMBOL_GPL(vx_debug_dlim);
 EXPORT_SYMBOL_GPL(vx_debug_quota);
 EXPORT_SYMBOL_GPL(vx_debug_cvirt);
+EXPORT_SYMBOL_GPL(vx_debug_space);
 EXPORT_SYMBOL_GPL(vx_debug_misc);
 
