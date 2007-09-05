@@ -75,7 +75,7 @@ visible:
 static inline
 struct task_struct *vx_find_proc_task_by_pid(int pid)
 {
-	struct task_struct *task = find_task_by_real_pid(pid);
+	struct task_struct *task = find_task_by_pid(pid);
 
 	if (task && !vx_proc_task_visible(task)) {
 		vxdprintk(VXD_CBIT(misc, 6),

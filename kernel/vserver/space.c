@@ -13,17 +13,13 @@
  */
 
 #include <linux/utsname.h>
-#include <linux/sched.h>
+#include <linux/nsproxy.h>
+#include <linux/err.h>
+#include <asm/uaccess.h>
+
 #include <linux/vs_context.h>
 #include <linux/vserver/space.h>
 #include <linux/vserver/space_cmd.h>
-#include <linux/dcache.h>
-#include <linux/mount.h>
-#include <linux/nsproxy.h>
-#include <linux/fs.h>
-
-#include <asm/errno.h>
-#include <asm/uaccess.h>
 
 
 atomic_t vs_global_nsproxy	= ATOMIC_INIT(0);

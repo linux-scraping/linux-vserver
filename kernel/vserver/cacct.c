@@ -10,9 +10,7 @@
  */
 
 #include <linux/types.h>
-#include <linux/sched.h>
 #include <linux/vs_context.h>
-#include <linux/vserver/switch.h>
 #include <linux/vserver/cacct_cmd.h>
 #include <linux/vserver/cacct_int.h>
 

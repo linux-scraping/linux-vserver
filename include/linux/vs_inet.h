@@ -142,7 +142,7 @@ struct sock;
 
 int dev_in_nx_info(struct net_device *, struct nx_info *);
 int v4_dev_in_nx_info(struct net_device *, struct nx_info *);
-int nx_v4_addr_conflict(struct nx_info *, __be32, const struct sock *);
+int nx_v4_addr_conflict(struct nx_info *, struct nx_info *);
 
 
 /*

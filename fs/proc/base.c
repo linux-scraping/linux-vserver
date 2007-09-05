@@ -1087,6 +1087,8 @@ static int pid_getattr(struct vfsmount *mnt, struct dentry *dentry, struct kstat
 
 /* dentry stuff */
 
+static unsigned name_to_int(struct dentry *dentry);
+
 /*
  *	Exceptional case: normally we are not allowed to unhash a busy
  * directory. In this case, however, we can do it - no aliasing problems
@@ -1107,6 +1109,12 @@ static int pid_revalidate(struct dentry *dentry, struct nameidata *nd)
 	struct inode *inode = dentry->d_inode;
 	struct task_struct *task = get_proc_task(inode);
 	if (task) {
+		unsigned pid = name_to_int(dentry);
+		if (pid != ~0U && pid != vx_map_pid(task->pid)) {
+			put_task_struct(task);
+			goto drop;
+		}
+
 		if ((inode->i_mode == (S_IFDIR|S_IRUGO|S_IXUGO)) ||
 		    task_dumpable(task)) {
 			inode->i_uid = task->euid;
@@ -1120,6 +1128,7 @@ static int pid_revalidate(struct dentry *dentry, struct nameidata *nd)
 		put_task_struct(task);
 		return 1;
 	}
+drop:
 	d_drop(dentry);
 	return 0;
 }
@@ -2158,6 +2167,8 @@ struct dentry *proc_pid_lookup(struct inode *dir, struct dentry * dentry, struct
 	tgid = name_to_int(dentry);
 	if (tgid == ~0U)
 		goto out;
+	if (vx_current_initpid(tgid))
+		goto out;
 
 	rcu_read_lock();
 	task = vx_find_proc_task_by_pid(tgid);
@@ -2215,7 +2226,7 @@ static int proc_pid_fill_cache(struct file *filp, void *dirent, filldir_t filldi
 	struct task_struct *task, int tgid)
 {
 	char name[PROC_NUMBUF];
-	int len = snprintf(name, sizeof(name), "%d", tgid);
+	int len = snprintf(name, sizeof(name), "%d", vx_map_tgid(tgid));
 	return proc_fill_cache(filp, dirent, filldir, name, len,
 				proc_pid_instantiate, task, NULL);
 }

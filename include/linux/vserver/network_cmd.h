@@ -7,7 +7,7 @@
 #define VCMD_task_nid		VC_CMD(VINFO, 2, 0)
 
 #ifdef	__KERNEL__
-extern int vc_task_nid(uint32_t, void __user *);
+extern int vc_task_nid(uint32_t);
 
 #endif	/* __KERNEL__ */
 

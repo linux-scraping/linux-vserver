@@ -17,6 +17,7 @@
 #include <linux/highmem.h>
 #include <linux/crc32.h>
 #include <linux/jffs2.h>
+#include <linux/vs_tag.h>
 #include "nodelist.h"
 
 static int jffs2_commit_write (struct file *filp, struct page *pg,
@@ -50,7 +51,8 @@ const struct file_operations jffs2_file_operations =
 	.ioctl =	jffs2_ioctl,
 	.mmap =		generic_file_readonly_mmap,
 	.fsync =	jffs2_fsync,
-	.sendfile =	generic_file_sendfile
+	.sendfile =	generic_file_sendfile,
+	.sendpage =	generic_file_sendpage,
 };
 
 /* jffs2_file_inode_operations */
@@ -161,7 +163,7 @@ static int jffs2_prepare_write (struct file *filp, struct page *pg,
 		ri.mode = cpu_to_jemode(inode->i_mode);
 		ri.uid = cpu_to_je16(inode->i_uid);
 		ri.gid = cpu_to_je16(inode->i_gid);
-		ri.tag = cpu_to_je16(inode->i_tag);
+		ri.tag = cpu_to_je16(TAGINO_TAG(DX_TAG(inode), inode->i_tag));
 		ri.isize = cpu_to_je32(max((uint32_t)inode->i_size, pageofs));
 		ri.atime = ri.ctime = ri.mtime = cpu_to_je32(get_seconds());
 		ri.offset = cpu_to_je32(inode->i_size);
@@ -254,7 +256,7 @@ static int jffs2_commit_write (struct file *filp, struct page *pg,
 	ri->mode = cpu_to_jemode(inode->i_mode);
 	ri->uid = cpu_to_je16(inode->i_uid);
 	ri->gid = cpu_to_je16(inode->i_gid);
-	ri->tag = cpu_to_je16(inode->i_tag);
+	ri->tag = cpu_to_je16(TAGINO_TAG(DX_TAG(inode), inode->i_tag));
 	ri->isize = cpu_to_je32((uint32_t)inode->i_size);
 	ri->atime = ri->ctime = ri->mtime = cpu_to_je32(get_seconds());
 	ri->flags = cpu_to_je16(f->flags);

@@ -9,16 +9,11 @@
  *
  */
 
-#include <linux/errno.h>
 #include <linux/kmod.h>
-#include <linux/sched.h>
 #include <linux/reboot.h>
 #include <linux/vs_context.h>
 #include <linux/vs_network.h>
 #include <linux/vserver/signal.h>
-
-#include <asm/uaccess.h>
-#include <asm/unistd.h>
 
 
 char vshelper_path[255] = "/sbin/vshelper";

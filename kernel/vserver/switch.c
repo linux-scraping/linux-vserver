@@ -13,19 +13,17 @@
  *  V0.06  added compat32 layer
  *  V0.07  vcmd args and perms
  *  V0.08  added status commands
+ *  V0.09  added tag commands
+ *  V0.10  added oom bias
  *
  */
-
-#include <linux/linkage.h>
-#include <linux/sched.h>
-#include <linux/compat.h>
-#include <asm/errno.h>
 
 #include <linux/vs_context.h>
 #include <linux/vs_network.h>
 #include <linux/vserver/switch.h>
 
 #include "vci_config.h"
+
 
 static inline
 int vc_get_version(uint32_t id)
@@ -50,6 +48,7 @@ int vc_get_vci(uint32_t id)
 #include <linux/vserver/dlimit_cmd.h>
 #include <linux/vserver/signal_cmd.h>
 #include <linux/vserver/space_cmd.h>
+#include <linux/vserver/tag_cmd.h>
 
 #include <linux/vserver/inode.h>
 #include <linux/vserver/dlimit.h>
@@ -81,14 +80,17 @@ long do_vcmd(uint32_t cmd, uint32_t id,
 		return vc_get_vci(id);
 
 	case VCMD_task_xid:
-		return vc_task_xid(id, data);
+		return vc_task_xid(id);
 	case VCMD_vx_info:
 		return vc_vx_info(vxi, data);
 
 	case VCMD_task_nid:
-		return vc_task_nid(id, data);
+		return vc_task_nid(id);
 	case VCMD_nx_info:
 		return vc_nx_info(nxi, data);
+
+	case VCMD_task_tag:
+		return vc_task_tag(id);
 
 	/* this is version 1 */
 	case VCMD_set_space:
@@ -142,6 +144,11 @@ long do_vcmd(uint32_t cmd, uint32_t id,
 		return vc_set_bcaps(vxi, data);
 	case VCMD_get_bcaps:
 		return vc_get_bcaps(vxi, data);
+
+	case VCMD_set_badness:
+		return vc_set_badness(vxi, data);
+	case VCMD_get_badness:
+		return vc_get_badness(vxi, data);
 
 	case VCMD_set_nflags:
 		return vc_set_nflags(nxi, data);
@@ -209,6 +216,9 @@ long do_vcmd(uint32_t cmd, uint32_t id,
 		return vc_net_create(id, data);
 	case VCMD_net_migrate:
 		return vc_net_migrate(nxi, data);
+
+	case VCMD_tag_migrate:
+		return vc_tag_migrate(id);
 
 	case VCMD_net_add:
 		return vc_net_add(nxi, data);
@@ -294,6 +304,7 @@ long do_vserver(uint32_t cmd, uint32_t id, void __user *data, int compat)
 	__VCMD(get_bcaps,	 3, VCA_VXI,	VCF_INFO);
 	__VCMD(get_ccaps,	 3, VCA_VXI,	VCF_INFO);
 	__VCMD(get_cflags,	 3, VCA_VXI,	VCF_INFO);
+	__VCMD(get_badness,	 3, VCA_VXI,	VCF_INFO);
 	__VCMD(get_vhi_name,	 3, VCA_VXI,	VCF_INFO);
 	__VCMD(get_rlimit,	 3, VCA_VXI,	VCF_INFO);
 
@@ -306,6 +317,8 @@ long do_vserver(uint32_t cmd, uint32_t id, void __user *data, int compat)
 	__VCMD(nx_info,		 3, VCA_NXI,	VCF_INFO);
 	__VCMD(get_ncaps,	 3, VCA_NXI,	VCF_INFO);
 	__VCMD(get_nflags,	 3, VCA_NXI,	VCF_INFO);
+
+	__VCMD(task_tag,	 2, VCA_NONE,	0);
 
 	__VCMD(get_iattr,	 2, VCA_NONE,	0);
 	__VCMD(fget_iattr,	 2, VCA_NONE,	0);
@@ -326,6 +339,8 @@ long do_vserver(uint32_t cmd, uint32_t id, void __user *data, int compat)
 	__VCMD(net_create,	 5, VCA_NONE,	0);
 	__VCMD(net_migrate,	 5, VCA_NXI,	VCF_ADMIN);
 
+	__VCMD(tag_migrate,	 5, VCA_NONE,	VCF_ADMIN);
+
 	/* higher admin commands */
 	__VCMD(ctx_kill,	 6, VCA_VXI,	VCF_ARES);
 	__VCMD(set_space,	 7, VCA_VXI,	VCF_ARES | VCF_SETUP);
@@ -333,6 +348,7 @@ long do_vserver(uint32_t cmd, uint32_t id, void __user *data, int compat)
 	__VCMD(set_ccaps,	 7, VCA_VXI,	VCF_ARES | VCF_SETUP);
 	__VCMD(set_bcaps,	 7, VCA_VXI,	VCF_ARES | VCF_SETUP);
 	__VCMD(set_cflags,	 7, VCA_VXI,	VCF_ARES | VCF_SETUP);
+	__VCMD(set_badness,	 7, VCA_VXI,	VCF_ARES | VCF_SETUP);
 
 	__VCMD(set_vhi_name,	 7, VCA_VXI,	VCF_ARES | VCF_SETUP);
 	__VCMD(set_rlimit,	 7, VCA_VXI,	VCF_ARES | VCF_SETUP);

@@ -107,6 +107,7 @@ struct vx_info {
 
 	struct task_struct *vx_reaper;		/* guest reaper process */
 	pid_t vx_initpid;			/* PID of guest init */
+	int64_t vx_badness_bias;		/* OOM points bias */
 
 	struct _vx_limit limit;			/* vserver limits */
 	struct _vx_sched sched;			/* vserver scheduler */

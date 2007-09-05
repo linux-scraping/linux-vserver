@@ -27,10 +27,8 @@
 
 #include <linux/slab.h>
 #include <linux/types.h>
-#include <linux/mnt_namespace.h>
 #include <linux/pid_namespace.h>
 
-#include <linux/sched.h>
 #include <linux/vserver/context.h>
 #include <linux/vserver/network.h>
 #include <linux/vserver/debug.h>
@@ -41,9 +39,6 @@
 #include <linux/vs_context.h>
 #include <linux/vs_limit.h>
 #include <linux/vserver/context_cmd.h>
-
-#include <linux/err.h>
-#include <asm/errno.h>
 
 #include "cvirt_init.h"
 #include "cacct_init.h"
@@ -96,6 +91,7 @@ static struct vx_info *__alloc_vx_info(xid_t xid)
 	/* prepare reaper */
 	get_task_struct(init_pid_ns.child_reaper);
 	new->vx_reaper = init_pid_ns.child_reaper;
+	new->vx_badness_bias = 0;
 
 	/* rest of init goes here */
 	vx_info_init_limit(&new->limit);
@@ -713,15 +709,12 @@ void	exit_vx_info_early(struct task_struct *p, int code)
 #include <asm/uaccess.h>
 
 
-int vc_task_xid(uint32_t id, void __user *data)
+int vc_task_xid(uint32_t id)
 {
 	xid_t xid;
 
 	if (id) {
 		struct task_struct *tsk;
-
-		if (!vx_check(0, VS_ADMIN | VS_WATCH))
-			return -EPERM;
 
 		read_lock(&tasklist_lock);
 		tsk = find_task_by_real_pid(id);
@@ -938,6 +931,29 @@ int vc_set_bcaps(struct vx_info *vxi, void __user *data)
 		return -EFAULT;
 
 	return do_set_caps(vxi, vc_data.bcaps, vc_data.bmask, 0, 0);
+}
+
+
+int vc_get_badness(struct vx_info *vxi, void __user *data)
+{
+	struct vcmd_badness_v0 vc_data;
+
+	vc_data.bias = vxi->vx_badness_bias;
+
+	if (copy_to_user(data, &vc_data, sizeof(vc_data)))
+		return -EFAULT;
+	return 0;
+}
+
+int vc_set_badness(struct vx_info *vxi, void __user *data)
+{
+	struct vcmd_badness_v0 vc_data;
+
+	if (copy_from_user(&vc_data, data, sizeof(vc_data)))
+		return -EFAULT;
+
+	vxi->vx_badness_bias = vc_data.bias;
+	return 0;
 }
 
 #include <linux/module.h>

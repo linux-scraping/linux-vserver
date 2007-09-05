@@ -149,7 +149,7 @@ static int jffs2_do_setattr (struct inode *inode, struct iattr *iattr)
 	inode->i_mode = jemode_to_cpu(ri->mode);
 	inode->i_uid = je16_to_cpu(ri->uid);
 	inode->i_gid = je16_to_cpu(ri->gid);
-	inode->i_tag = je16_to_cpu(ri->tag);
+	inode->i_tag = INOTAG_TAG(DX_TAG(inode), 0, 0, je16_to_cpu(ri->tag));
 
 
 	old_metadata = f->metadata;
@@ -301,7 +301,8 @@ void jffs2_read_inode (struct inode *inode)
 	inode->i_mode = jemode_to_cpu(latest_node.mode);
 	inode->i_uid = je16_to_cpu(latest_node.uid);
 	inode->i_gid = je16_to_cpu(latest_node.gid);
-	inode->i_tag = je16_to_cpu(latest_node.tag);
+	inode->i_tag = INOTAG_TAG(DX_TAG(inode), 0, 0,
+		je16_to_cpu(latest_node.tag));
 	inode->i_size = je32_to_cpu(latest_node.isize);
 	inode->i_atime = ITIME(je32_to_cpu(latest_node.atime));
 	inode->i_mtime = ITIME(je32_to_cpu(latest_node.mtime));
@@ -495,7 +496,7 @@ struct inode *jffs2_new_inode (struct inode *dir_i, int mode, struct jffs2_raw_i
 	inode->i_mode = jemode_to_cpu(ri->mode);
 	inode->i_gid = je16_to_cpu(ri->gid);
 	inode->i_uid = je16_to_cpu(ri->uid);
-	inode->i_tag = je16_to_cpu(ri->tag);
+	inode->i_tag = INOTAG_TAG(DX_TAG(inode), 0, 0, je16_to_cpu(ri->tag));
 	inode->i_atime = inode->i_ctime = inode->i_mtime = CURRENT_TIME_SEC;
 	ri->atime = ri->mtime = ri->ctime = cpu_to_je32(I_SEC(inode->i_mtime));
 

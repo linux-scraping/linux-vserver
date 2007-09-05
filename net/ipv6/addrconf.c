@@ -1260,11 +1260,12 @@ struct inet6_ifaddr * ipv6_get_ifaddr(struct in6_addr *addr, struct net_device *
 	return ifp;
 }
 
+extern int ipv4_rcv_saddr_equal(const struct sock *sk1, const struct sock *sk2);
+
 int ipv6_rcv_saddr_equal(const struct sock *sk, const struct sock *sk2)
 {
 	const struct in6_addr *sk_rcv_saddr6 = &inet6_sk(sk)->rcv_saddr;
 	const struct in6_addr *sk2_rcv_saddr6 = inet6_rcv_saddr(sk2);
-	__be32 sk_rcv_saddr = inet_sk(sk)->rcv_saddr;
 	__be32 sk2_rcv_saddr = inet_rcv_saddr(sk2);
 	int sk_ipv6only = ipv6_only_sock(sk);
 	int sk2_ipv6only = inet_v6_ipv6only(sk2);
@@ -1282,18 +1283,23 @@ int ipv6_rcv_saddr_equal(const struct sock *sk, const struct sock *sk2)
 
 	if (addr_type == IPV6_ADDR_ANY &&
 	    !(sk_ipv6only && addr_type2 == IPV6_ADDR_MAPPED) &&
-	    v6_addr_in_nx_info(sk->sk_nx_info, sk2_rcv_saddr6, -1))
+	    (sk2_rcv_saddr6 && v6_addr_in_nx_info(sk->sk_nx_info, sk2_rcv_saddr6, -1)))
+		return 1;
+
+	if (addr_type == IPV6_ADDR_ANY &&
+	    addr_type2 == IPV6_ADDR_ANY &&
+	    nx_v6_addr_conflict(sk->sk_nx_info, sk2->sk_nx_info))
 		return 1;
 
 	if (sk2_rcv_saddr6 &&
+	    addr_type != IPV6_ADDR_ANY &&
+	    addr_type != IPV6_ADDR_ANY &&
 	    ipv6_addr_equal(sk_rcv_saddr6, sk2_rcv_saddr6))
 		return 1;
 
 	if (addr_type == IPV6_ADDR_MAPPED &&
 	    !sk2_ipv6only &&
-	    /* FIXME: for now mapped IPv4 addresses disabled in guest */
-	    (!sk->sk_nx_info && !sk2->sk_nx_info) &&
-	    (!sk2_rcv_saddr || !sk_rcv_saddr || sk_rcv_saddr == sk2_rcv_saddr))
+	    ipv4_rcv_saddr_equal(sk, sk2))
 		return 1;
 
 	return 0;

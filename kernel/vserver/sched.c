@@ -12,13 +12,12 @@
  *
  */
 
-#include <linux/sched.h>
 #include <linux/vs_context.h>
 #include <linux/vs_sched.h>
 #include <linux/vserver/sched_cmd.h>
 
-#include <asm/errno.h>
 #include <asm/uaccess.h>
+
 
 #define vxd_check_range(val, min, max) do {		\
 	vxlprintk((val < min) || (val > max),		\

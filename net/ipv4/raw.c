@@ -881,7 +881,10 @@ static __inline__ char *get_raw_sock(struct sock *sp, char *tmpbuf, int i)
 
 	sprintf(tmpbuf, "%4d: %08X:%04X %08X:%04X"
 		" %02X %08X:%08X %02X:%08lX %08X %5d %8d %lu %d %p",
-		i, src, srcp, dest, destp, sp->sk_state,
+		i,
+		nx_map_sock_lback(current_nx_info(), src), srcp,
+		nx_map_sock_lback(current_nx_info(), dest), destp,
+		sp->sk_state,
 		atomic_read(&sp->sk_wmem_alloc),
 		atomic_read(&sp->sk_rmem_alloc),
 		0, 0L, 0, sock_i_uid(sp), 0, sock_i_ino(sp),

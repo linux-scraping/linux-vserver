@@ -12,13 +12,13 @@
 
 struct	vcmd_ctx_iattr_v1 {
 	const char __user *name;
-	uint32_t xid;
+	uint32_t tag;
 	uint32_t flags;
 	uint32_t mask;
 };
 
 struct	vcmd_ctx_fiattr_v0 {
-	uint32_t xid;
+	uint32_t tag;
 	uint32_t flags;
 	uint32_t mask;
 };
@@ -33,7 +33,7 @@ struct	vcmd_ctx_fiattr_v0 {
 
 struct	vcmd_ctx_iattr_v1_x32 {
 	compat_uptr_t name_ptr;
-	uint32_t xid;
+	uint32_t tag;
 	uint32_t flags;
 	uint32_t mask;
 };

@@ -98,8 +98,8 @@ static int inet_csk_diag_fill(struct sock *sk,
 
 	r->id.idiag_sport = inet->sport;
 	r->id.idiag_dport = inet->dport;
-	r->id.idiag_src[0] = inet->rcv_saddr;
-	r->id.idiag_dst[0] = inet->daddr;
+	r->id.idiag_src[0] = nx_map_sock_lback(skb->sk->sk_nx_info, inet->rcv_saddr);
+	r->id.idiag_dst[0] = nx_map_sock_lback(skb->sk->sk_nx_info, inet->daddr);
 
 #if defined(CONFIG_IPV6) || defined (CONFIG_IPV6_MODULE)
 	if (r->idiag_family == AF_INET6) {
@@ -186,8 +186,8 @@ static int inet_twsk_diag_fill(struct inet_timewait_sock *tw,
 	r->id.idiag_cookie[1] = (u32)(((unsigned long)tw >> 31) >> 1);
 	r->id.idiag_sport     = tw->tw_sport;
 	r->id.idiag_dport     = tw->tw_dport;
-	r->id.idiag_src[0]    = tw->tw_rcv_saddr;
-	r->id.idiag_dst[0]    = tw->tw_daddr;
+	r->id.idiag_src[0]    = nx_map_sock_lback(skb->sk->sk_nx_info, tw->tw_rcv_saddr);
+	r->id.idiag_dst[0]    = nx_map_sock_lback(skb->sk->sk_nx_info, tw->tw_daddr);
 	r->idiag_state	      = tw->tw_substate;
 	r->idiag_timer	      = 3;
 	r->idiag_expires      = (tmo * 1000 + HZ - 1) / HZ;
@@ -239,6 +239,7 @@ static int inet_diag_get_exact(struct sk_buff *in_skb,
 	hashinfo = handler->idiag_hashinfo;
 
 	if (req->idiag_family == AF_INET) {
+		/* TODO: lback */
 		sk = inet_lookup(hashinfo, req->id.idiag_dst[0],
 				 req->id.idiag_dport, req->id.idiag_src[0],
 				 req->id.idiag_sport, req->id.idiag_if);
@@ -478,6 +479,7 @@ static int inet_csk_diag_dump(struct sock *sk,
 		} else
 #endif
 		{
+			/* TODO: lback */
 			entry.saddr = &inet->rcv_saddr;
 			entry.daddr = &inet->daddr;
 		}
@@ -514,6 +516,7 @@ static int inet_twsk_diag_dump(struct inet_timewait_sock *tw,
 		} else
 #endif
 		{
+			/* TODO: lback */
 			entry.saddr = &tw->tw_rcv_saddr;
 			entry.daddr = &tw->tw_daddr;
 		}
@@ -560,8 +563,8 @@ static int inet_diag_fill_req(struct sk_buff *skb, struct sock *sk,
 
 	r->id.idiag_sport = inet->sport;
 	r->id.idiag_dport = ireq->rmt_port;
-	r->id.idiag_src[0] = ireq->loc_addr;
-	r->id.idiag_dst[0] = ireq->rmt_addr;
+	r->id.idiag_src[0] = nx_map_sock_lback(skb->sk->sk_nx_info, ireq->loc_addr);
+	r->id.idiag_dst[0] = nx_map_sock_lback(skb->sk->sk_nx_info, ireq->rmt_addr);
 	r->idiag_expires = jiffies_to_msecs(tmo);
 	r->idiag_rqueue = 0;
 	r->idiag_wqueue = 0;
@@ -631,6 +634,7 @@ static int inet_diag_dump_reqs(struct sk_buff *skb, struct sock *sk,
 				continue;
 
 			if (bc) {
+				/* TODO: lback */
 				entry.saddr =
 #if defined(CONFIG_IPV6) || defined (CONFIG_IPV6_MODULE)
 					(entry.family == AF_INET6) ?

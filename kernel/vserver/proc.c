@@ -16,20 +16,16 @@
  *
  */
 
-#include <linux/errno.h>
 #include <linux/proc_fs.h>
-#include <linux/sched.h>
+#include <asm/unistd.h>
+
 #include <linux/vs_context.h>
 #include <linux/vs_network.h>
 #include <linux/vs_cvirt.h>
 #include <linux/vs_inet.h>
 #include <linux/vs_inet6.h>
 
-#include <linux/vserver/switch.h>
 #include <linux/vserver/global.h>
-
-#include <asm/uaccess.h>
-#include <asm/unistd.h>
 
 #include "cvirt_proc.h"
 #include "cacct_proc.h"
@@ -85,10 +81,12 @@ int proc_vxi_info(struct vx_info *vxi, char *buffer)
 	length = sprintf(buffer,
 		"ID:\t%d\n"
 		"Info:\t%p\n"
-		"Init:\t%d\n",
+		"Init:\t%d\n"
+		"OOM:\t%lld\n",
 		vxi->vx_id,
 		vxi,
-		vxi->vx_initpid);
+		vxi->vx_initpid,
+		vxi->vx_badness_bias);
 	return length;
 }
 

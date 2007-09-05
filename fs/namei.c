@@ -243,13 +243,12 @@ static inline int dx_permission(struct inode *inode, int mask, struct nameidata 
 {
 	if (dx_barrier(inode))
 		return -EACCES;
-	if (inode->i_tag == 0)
-		return 0;
-	if (dx_check(inode->i_tag, DX_ADMIN|DX_WATCH|DX_IDENT))
+	if (dx_notagcheck(nd) ||
+	    dx_check(inode->i_tag, DX_HOSTID|DX_ADMIN|DX_WATCH|DX_IDENT))
 		return 0;
 
-	vxwprintk(1, "xid=%d denied access to %p[#%d,%lu] »%s«.",
-		vx_current_xid(), inode, inode->i_tag, inode->i_ino,
+	vxwprintk(1, "tag=%d denied access to %p[#%d,%lu] »%s«.",
+		dx_current_tag(), inode, inode->i_tag, inode->i_ino,
 		vxd_cond_path(nd));
 	return -EACCES;
 }
@@ -819,7 +818,8 @@ static int do_lookup(struct nameidata *nd, struct qstr *name,
 		if (de && !vx_hide_check(0, de->vx_flags))
 			goto hidden;
 	}
-	if (!dx_check(inode->i_tag, DX_WATCH|DX_ADMIN|DX_HOSTID|DX_IDENT))
+	if (!dx_notagcheck(nd) &&
+	    !dx_check(inode->i_tag, DX_WATCH|DX_ADMIN|DX_HOSTID|DX_IDENT))
 		goto hidden;
 done:
 	path->mnt = mnt;
@@ -827,8 +827,8 @@ done:
 	__follow_mount(path);
 	return 0;
 hidden:
-	vxwprintk(1, "xid=%d did lookup hidden %p[#%d,%lu] »%s«.",
-		vx_current_xid(), inode, inode->i_tag, inode->i_ino,
+	vxwprintk(1, "tag=%d did lookup hidden %p[#%d,%lu] »%s«.",
+		dx_current_tag(), inode, inode->i_tag, inode->i_ino,
 		vxd_path(dentry, mnt));
 	dput(dentry);
 	return -ENOENT;
@@ -2763,9 +2763,14 @@ struct dentry *cow_break_link(const char *pathname)
 
 	vxdprintk(VXD_CBIT(misc, 1), "cow_break_link(»%s«)", pathname);
 	path = kmalloc(PATH_MAX, GFP_KERNEL);
+	if (!path)
+		goto out;
 
 	ret = path_lookup(pathname, LOOKUP_FOLLOW, &old_nd);
 	vxdprintk(VXD_CBIT(misc, 2), "path_lookup(old): %d", ret);
+	if (ret < 0)
+		goto out_free_path;
+
 	old_dentry = old_nd.dentry;
 	old_mnt = old_nd.mnt;
 	mode = old_dentry->d_inode->i_mode;
@@ -2878,7 +2883,9 @@ out_rel_both:
 	path_release(&dir_nd);
 out_rel_old:
 	path_release(&old_nd);
+out_free_path:
 	kfree(path);
+out:
 	return res;
 }
 

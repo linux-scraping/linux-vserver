@@ -1,35 +1,62 @@
 
-#include <linux/sched.h>
 #include <linux/vserver/debug.h>
 #include <linux/vs_inet.h>
 #include <linux/vs_inet6.h>
 #include <net/addrconf.h>
 
 
-int nx_v4_addr_conflict(struct nx_info *nxi, __be32 addr, const struct sock *sk)
+int nx_v4_addr_conflict(struct nx_info *nxi1, struct nx_info *nxi2)
 {
-	vxdprintk(VXD_CBIT(net, 2),
-		"nx_v4_addr_conflict(%p,%p) " NIPQUAD_FMT,
-		nxi, sk, NIPQUAD(addr));
+	int ret = 0;
 
-	if (addr) {		/* check real address */
-		struct nx_addr_v4 v4a = {
-			.type = NXA_TYPE_ADDR,
-			.ip.s_addr = addr };
-
-		return __v4_addr_match_socket(sk, &v4a);
-	} else if (nxi) {	/* check against nx_info */
+	if (!nxi1 || !nxi2 || nxi1 == nxi2)
+		ret = 1;
+	else {
 		struct nx_addr_v4 *ptr;
 
-		for (ptr = &nxi->v4; ptr; ptr = ptr->next)
-			if (__v4_addr_match_socket(sk, ptr))
-				return 1;
-		return 0;
-	} else {		/* check against any */
-		return 1;
+		for (ptr = &nxi1->v4; ptr; ptr = ptr->next) {
+			if (v4_nx_addr_in_nx_info(nxi2, ptr, -1)) {
+				ret = 1;
+				break;
+			}
+		}
 	}
+
+	vxdprintk(VXD_CBIT(net, 2),
+		"nx_v4_addr_conflict(%p,%p): %d",
+		nxi1, nxi2, ret);
+
+	return ret;
 }
 
+
+#ifdef	CONFIG_IPV6
+
+int nx_v6_addr_conflict(struct nx_info *nxi1, struct nx_info *nxi2)
+{
+	int ret = 0;
+
+	if (!nxi1 || !nxi2 || nxi1 == nxi2)
+		ret = 1;
+	else {
+		struct nx_addr_v6 *ptr;
+
+		for (ptr = &nxi1->v6; ptr; ptr = ptr->next) {
+			if (v6_nx_addr_in_nx_info(nxi2, ptr, -1)) {
+				ret = 1;
+				break;
+			}
+		}
+	}
+
+	vxdprintk(VXD_CBIT(net, 2),
+		"nx_v6_addr_conflict(%p,%p): %d",
+		nxi1, nxi2, ret);
+
+	return ret;
+}
+
+#endif
 
 int v4_dev_in_nx_info(struct net_device *dev, struct nx_info *nxi)
 {

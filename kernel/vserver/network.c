@@ -15,13 +15,11 @@
  *
  */
 
+#include <linux/err.h>
 #include <linux/slab.h>
 #include <linux/rcupdate.h>
-#include <net/tcp.h>
 
-#include <asm/errno.h>
 #include <linux/vs_network.h>
-#include <linux/vserver/base.h>
 #include <linux/vserver/network_cmd.h>
 
 
@@ -511,15 +509,12 @@ void nx_update_persistent(struct nx_info *nxi)
 #include <asm/uaccess.h>
 
 
-int vc_task_nid(uint32_t id, void __user *data)
+int vc_task_nid(uint32_t id)
 {
 	nid_t nid;
 
 	if (id) {
 		struct task_struct *tsk;
-
-		if (!nx_check(0, VS_ADMIN | VS_WATCH))
-			return -EPERM;
 
 		read_lock(&tasklist_lock);
 		tsk = find_task_by_real_pid(id);

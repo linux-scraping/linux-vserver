@@ -97,7 +97,6 @@
 #include <linux/skbuff.h>
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
-// #include <linux/vs_inet.h>
 #include <net/icmp.h>
 #include <net/route.h>
 #include <net/checksum.h>
@@ -220,11 +219,7 @@ int udp_get_port(struct sock *sk, unsigned short snum,
 	return  __udp_lib_get_port(sk, snum, udp_hash, &udp_port_rover, scmp);
 }
 
-int ipv4_rcv_saddr_equal(const struct sock *sk1, const struct sock *sk2)
-{
-	return 	( !ipv6_only_sock(sk2)  &&
-		   nx_v4_addr_conflict(sk1->sk_nx_info, inet_rcv_saddr(sk1), sk2));
-}
+extern int ipv4_rcv_saddr_equal(const struct sock *sk1, const struct sock *sk2);
 
 static inline int udp_v4_get_port(struct sock *sk, unsigned short snum)
 {
@@ -1695,7 +1690,10 @@ static void udp4_format_sock(struct sock *sp, char *tmpbuf, int bucket)
 
 	sprintf(tmpbuf, "%4d: %08X:%04X %08X:%04X"
 		" %02X %08X:%08X %02X:%08lX %08X %5d %8d %lu %d %p",
-		bucket, src, srcp, dest, destp, sp->sk_state,
+		bucket,
+		nx_map_sock_lback(current_nx_info(), src), srcp,
+		nx_map_sock_lback(current_nx_info(), dest), destp,
+		sp->sk_state,
 		atomic_read(&sp->sk_wmem_alloc),
 		atomic_read(&sp->sk_rmem_alloc),
 		0, 0L, 0, sock_i_uid(sp), 0, sock_i_ino(sp),

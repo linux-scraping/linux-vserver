@@ -1,7 +1,7 @@
 
 /*  interface version */
 
-#define VCI_VERSION		0x00020301
+#define VCI_VERSION		0x00020302
 
 
 enum {
@@ -20,6 +20,9 @@ enum {
 	VCI_KCBIT_DEBUG = 16,
 	VCI_KCBIT_HISTORY = 20,
 	VCI_KCBIT_TAGGED = 24,
+	VCI_KCBIT_PPTAG = 28,
+
+	VCI_KCBIT_MORE = 31,
 };
 
 
@@ -72,6 +75,7 @@ static inline uint32_t vci_kernel_config(void)
 #else
 	(7 << VCI_KCBIT_TAGGED) |
 #endif
+	(1 << VCI_KCBIT_PPTAG) |
 	0;
 }
 

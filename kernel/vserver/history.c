@@ -11,14 +11,8 @@
  *
  */
 
-#include <linux/errno.h>
 #include <linux/module.h>
-#include <linux/types.h>
-#include <linux/ctype.h>
-
 #include <asm/uaccess.h>
-#include <asm/atomic.h>
-#include <asm/unistd.h>
 
 #include <linux/vserver/context.h>
 #include <linux/vserver/debug.h>

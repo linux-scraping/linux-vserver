@@ -983,6 +983,7 @@ struct task_struct {
 
 	xid_t xid;
 	nid_t nid;
+	tag_t tag;
 
 	seccomp_t seccomp;
 
