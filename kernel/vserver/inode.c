@@ -335,8 +335,6 @@ int __dx_parse_tag(char *string, tag_t *tag, int remove)
 		return 0;
 
 	token = match_token(string, tokens, args);
-	if (token && tag && !match_int(args, &option))
-		*tag = option;
 
 	vxdprintk(VXD_CBIT(tag, 7),
 		"dx_parse_tag(»%s«): %d:#%d",
