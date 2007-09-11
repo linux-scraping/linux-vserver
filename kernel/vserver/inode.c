@@ -301,9 +301,9 @@ enum { Opt_notagcheck, Opt_tag, Opt_notag, Opt_tagid, Opt_err };
 
 static match_table_t tokens = {
 	{Opt_notagcheck, "notagcheck"},
+#ifdef	CONFIG_PROPAGATE
 	{Opt_notag, "notag"},
 	{Opt_tag, "tag"},
-#ifdef	CONFIG_PROPAGATE
 	{Opt_tagid, "tagid=%u"},
 #endif
 	{Opt_err, NULL}
